@@ -1,0 +1,13 @@
+{
+    "Action": "RunInstances",
+    "ImageId": "ami-80827db02a7107018",
+    "InstanceType": "t3.micro",
+    "KeyName": "test-keypair.pem",
+    "SecurityGroups": [
+        "MySecurityGroup"
+    ],
+    "SubnetId": "subnet-6e7f829e",
+    "MaxCount": 1,
+    "MinCount": 1,
+    "Version": "2016-11-15"
+}
