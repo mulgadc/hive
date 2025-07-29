@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mulgadc/hive/internal/config"
+	"github.com/mulgadc/hive/hive/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -50,7 +50,7 @@ func init() {
 	cobra.OnInitialize(initConfig)
 
 	// Global flags
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (optional)")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (required)")
 
 	// Authentication (access_key, secret)
 	rootCmd.PersistentFlags().String("access-key", "", "AWS access key (overrides config file and env)")
@@ -83,6 +83,7 @@ func initConfig() {
 
 	// Load configuration
 	appConfig, err = config.LoadConfig(cfgFile)
+
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 		fmt.Fprintln(os.Stderr, "Continuing with environment variables and defaults...")

@@ -9,13 +9,23 @@ import (
 
 // Config holds all configuration for the application
 type Config struct {
-	Daemon DaemonConfig `mapstructure:"daemon"`
-	NATS   NATSConfig   `mapstructure:"nats"`
+	Daemon     DaemonConfig     `mapstructure:"daemon"`
+	NATS       NATSConfig       `mapstructure:"nats"`
+	Predastore PredastoreConfig `mapstructure:"predastore"`
 
 	// Authentication
 	AccessKey string `mapstructure:"access_key"`
 	SecretKey string `mapstructure:"secret_key"`
 	Host      string `mapstructure:"host"`
+	BaseDir   string `mapstructure:"base_dir"`
+}
+
+type PredastoreConfig struct {
+	Host      string `mapstructure:"host"`
+	Bucket    string `mapstructure:"bucket"`
+	Region    string `mapstructure:"region"`
+	AccessKey string `mapstructure:"access_key"`
+	SecretKey string `mapstructure:"secret_key"`
 	BaseDir   string `mapstructure:"base_dir"`
 }
 
@@ -41,6 +51,18 @@ type NATSACL struct {
 // NATSSub holds the NATS subscription configuration
 type NATSSub struct {
 	Subject string `mapstructure:"subject"`
+}
+
+type EBSRequest struct {
+	Name    string
+	VolType string
+	Boot    bool
+}
+
+type EBSResponse struct {
+	URI     string
+	Mounted bool
+	Error   string
 }
 
 // LoadConfig loads the configuration from file and environment variables

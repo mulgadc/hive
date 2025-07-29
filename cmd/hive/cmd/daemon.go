@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/mulgadc/hive/internal/daemon"
+	"github.com/mulgadc/hive/hive/daemon"
 	"github.com/spf13/cobra"
 )
 
@@ -20,6 +20,14 @@ and manages local resources for instance creation.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if appConfig == nil {
 			return fmt.Errorf("configuration not loaded")
+		}
+
+		// Overwrite defaults (CLI first, config second, env third)
+		baseDir, _ := cmd.Flags().GetString("base-dir")
+
+		if baseDir != "" {
+			fmt.Println("Overwriting base-dir to:", baseDir)
+			appConfig.BaseDir = baseDir
 		}
 
 		d := daemon.NewDaemon(appConfig)
@@ -35,9 +43,8 @@ func init() {
 
 	// Cobra supports Persistent Flags which will work for this command
 	// and all subcommands, e.g.:
-	daemonCmd.PersistentFlags().String("foo", "", "A help for foo")
 
 	// Cobra supports local flags which will only run when this command
 	// is called directly, e.g.:
-	daemonCmd.Flags().String("nats", "nats://0.0.0.0:4222", "NATs server address")
+	//daemonCmd.Flags().String("nats", "nats://0.0.0.0:4222", "NATs server address")
 }

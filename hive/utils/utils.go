@@ -1,0 +1,125 @@
+package utils
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"syscall"
+	"time"
+)
+
+func ReadPidFile(name string) (int, error) {
+
+	pidPath := pidPath()
+
+	pidFile, err := os.ReadFile(filepath.Join(pidPath, fmt.Sprintf("%s.pid", name)))
+
+	if err != nil {
+		return 0, err
+	}
+
+	return strconv.Atoi(string(pidFile))
+}
+
+func WritePidFile(name string) error {
+
+	// Write PID to file, check XDG, otherwise user home directory ~/hive/
+	pidPath := pidPath()
+
+	pidFile, err := os.Create(filepath.Join(pidPath, fmt.Sprintf("%s.pid", name)))
+
+	if err != nil {
+		return err
+	}
+
+	defer pidFile.Close()
+	pidFile.WriteString(fmt.Sprintf("%d", os.Getpid()))
+
+	return nil
+}
+
+func RemovePidFile(serviceName string) error {
+
+	pidPath := pidPath()
+
+	os.Remove(filepath.Join(pidPath, fmt.Sprintf("%s.pid", serviceName)))
+
+	return nil
+}
+
+func pidPath() string {
+	var pidPath string
+	if os.Getenv("XDG_RUNTIME_DIR") != "" {
+		pidPath = os.Getenv("XDG_RUNTIME_DIR")
+	} else {
+		pidPath = filepath.Join(os.Getenv("HOME"), "hive")
+	}
+
+	return pidPath
+}
+
+func StopProcess(serviceName string) error {
+	pid, err := ReadPidFile(serviceName)
+	if err != nil {
+		return err
+	}
+
+	err = KillProcess(pid)
+	if err != nil {
+		return err
+	}
+
+	// Remove PID file
+	RemovePidFile(serviceName)
+
+	return nil
+}
+
+func KillProcess(pid int) error {
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+
+	// Send SIGTERM first (graceful)
+	err = process.Signal(syscall.SIGTERM)
+	if err != nil {
+		return err
+	}
+
+	// Check process terminated
+
+	checks := 0
+	for {
+		time.Sleep(1 * time.Second)
+		process, err = os.FindProcess(pid)
+		if err != nil {
+			return err
+		}
+
+		err = process.Signal(syscall.Signal(0))
+
+		if err != nil {
+			// Process terminated, break
+			break
+		}
+
+		checks++
+
+		// If process is still running after 3 checks, force kill
+		if checks > 3 {
+			err = process.Kill() // SIGKILL
+
+			if err != nil {
+				return err
+			}
+
+			break
+		}
+	}
+
+	return nil
+
+}

@@ -2,16 +2,26 @@
 version = "1.0"
 region = "ap-southeast-2"
 
-[[daemon]]
+access_key = "AKIAIOSFODNN7EXAMPLE"
+secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+[daemon]
 host = "0.0.0.0:4432"
 sslkey = "config/server.key"
 sslcert = "config/server.pem"
 
-[[nats]]
+[nats]
 host = "0.0.0.0:4222"
 
-[[nats.acl]]
+[nats.acl]
 token = "your-nats-token"
 
-[[nats.sub]]
+[nats.sub]
 subject = "ec2.>"
+
+[predastore]
+host = "0.0.0.0:8443"
+region = "ap-southeast-2"
+bucket = "predastore"
+access_key = "AKIAIOSFODNN7EXAMPLE"
+secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"

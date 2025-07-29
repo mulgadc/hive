@@ -22,8 +22,8 @@ import (
 	"time"
 
 	"github.com/kdomanski/iso9660"
-	"github.com/mulgadc/hive/internal/config"
-	"github.com/mulgadc/hive/internal/s3client"
+	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/s3client"
 	"github.com/mulgadc/viperblock/types"
 	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/mulgadc/viperblock/viperblock/backends/s3"
@@ -368,6 +368,8 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request) error {
 	var imageId string
 	var snapshotId string
 
+	var ebsRequests []config.EBSRequest
+
 	if len(ec2Req.BlockDeviceMapping) > 0 {
 		size = ec2Req.BlockDeviceMapping[0].EBS.VolumeSize
 		deviceName = ec2Req.BlockDeviceMapping[0].DeviceName
@@ -585,6 +587,12 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request) error {
 
 	}
 
+	// Append root volume
+	ebsRequests = append(ebsRequests, config.EBSRequest{
+		Name: vbconfig.VolumeName,
+		Boot: true,
+	})
+
 	//var walNum uint64
 
 	// Step 3: Create the EFI partition if it does not yet exist
@@ -683,6 +691,11 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request) error {
 	if err != nil {
 		slog.Error("Failed to remove local files: %v", err)
 	}
+
+	ebsRequests = append(ebsRequests, config.EBSRequest{
+		Name: efiVb.VolumeName,
+		Boot: false,
+	})
 
 	// Step 4: Create the cloud-init volume, with the specified SSH key and attributes
 
@@ -898,9 +911,54 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request) error {
 			slog.Error("Failed to remove local files: %v", err)
 		}
 
+		ebsRequests = append(ebsRequests, config.EBSRequest{
+			Name: cloudInitCfg.VolumeName,
+			Boot: false,
+		})
+
 	}
 
 	// Step 5: Mount each volume via NBD, confirm running as expected for pre-flight checks.
+	// TODO: Run a goroutine for each volume
+
+	// Connect to NATS
+	nc, err := nats.Connect(d.config.NATS.Host)
+
+	if err != nil {
+		slog.Error("Failed to connect to NATS: %v", err)
+		return err
+	}
+
+	// Loop through each volume in volumes
+	for k, v := range ebsRequests {
+
+		fmt.Println(k, v)
+
+		// Send the volume payload as JSON
+		payload, err := json.Marshal(v)
+
+		if err != nil {
+			slog.Error("Failed to marshal volume payload: %v", err)
+			return err
+		}
+
+		reply, err := nc.Request("ebs.mount", payload, 10*time.Second)
+
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		fmt.Println(string(reply.Data))
+
+	}
+
+	/*
+		reply, err := nc.Request("ebs.mount", []byte(), 4*time.Second)
+
+		if err != nil {
+			log.Fatalln(err)
+		}
+	*/
 
 	// Step 6: Launch the instance via QEMU/KVM
 

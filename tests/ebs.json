@@ -1,0 +1,5 @@
+{
+    "Name": "vol-f603ed2a028801e5f-cloudinit",
+    "VolType": "gp3",
+    "Boot": false
+}

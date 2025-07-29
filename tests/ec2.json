@@ -1,8 +1,8 @@
 {
     "Action": "RunInstances",
-    "ImageId": "ami-80827db02a7107018",
+    "ImageId": "ami-185c47c7b6d31bba9",
     "InstanceType": "t3.micro",
-    "KeyName": "test-keypair.pem",
+    "KeyName": "test-keypair.pub",
     "SecurityGroups": [
         "MySecurityGroup"
     ],

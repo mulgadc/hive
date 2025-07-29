@@ -15,7 +15,7 @@ limitations under the License.
 */
 package main
 
-import "github.com/mulgadc/hive/cmd"
+import "github.com/mulgadc/hive/cmd/hivectl/cmd"
 
 func main() {
 	cmd.Execute()
