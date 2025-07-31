@@ -265,4 +265,88 @@ Publish the EC2 request using the NATS cli tool.
 cat tests/ec2.json | nats --trace pub ec2.launch
 ```
 
+# Launching services
 
+### NATS
+
+```
+go run cmd/hive/main.go service nats start
+```
+
+### Predastore
+
+```
+go run cmd/hive/main.go service predastore --base-path ~/hive/predastore/ --config-path ~/Development/mulga/hive/config/predastore/predastore.toml --tls-cert ~/Development/mulga/hive/config/server.pem --tls-key ~/Development/mulga/hive/config/server.key  --debug start
+```
+
+### Viperblock
+
+```
+go run cmd/hive/main.go service viperblock start --nats-host 0.0.0.0:4222 --access-key "AKIAIOSFODNN7EXAMPLE" --secret-key "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" --base-dir /mnt/ramdisk/ --plugin-path ~/Development/mulga/viperblock/lib/nbdkit-viperblock-plugin.so
+```
+
+### Hive (Control Plane)
+
+```
+go run cmd/hive/main.go --config config/hive.toml --base-dir /mnt/ramdisk/ daemon
+```
+
+# Example events
+
+### Mount volume
+
+```
+
+```
+
+### Unmount volume
+
+### Launch EC2
+
+```
+nats req ec2.launch '{"Action":"RunInstances","ImageId":"ami-185c47c7b6d31bba9","InstanceType":"t3.micro","KeyName":"test-keypair.pub","SecurityGroups":["MySecurityGroup"],"SubnetId":"subnet-6e7f829e","MaxCount":1,"MinCount":1,"Version":"2016-11-15"}'
+```
+
+### Describe instance
+
+```
+nats req --reply-timeout=5s ec2.describe.i-ebaf0fd46cad14c85 '{ "InstanceID": "i-ebaf0fd46cad14c85" }'
+```
+
+## QMP commands
+
+### Powerdown
+
+```
+nats req --reply-timeout=5s ec2.cmd.i-ebaf0fd46cad14c85 '{ "id": "i-ebaf0fd46cad14c85", "command": { "execute": "system_powerdown", "arguments": {} } }'
+```
+
+### Stop VM
+
+```
+nats req --reply-timeout=5s ec2.cmd.i-ebaf0fd46cad14c85 '{ "id": "i-ebaf0fd46cad14c85", "command": { "execute": "stop", "arguments": {} } }'
+```
+
+### Resume VM
+
+```
+nats req --reply-timeout=5s ec2.cmd.i-ebaf0fd46cad14c85 '{ "id": "i-ebaf0fd46cad14c85", "command": { "execute": "cont", "arguments": {} } }'
+```
+
+### Restart
+
+```
+nats req --reply-timeout=5s ec2.cmd.i-ebaf0fd46cad14c85 '{ "id": "i-ebaf0fd46cad14c85", "command": { "execute": "system_reset", "arguments": {} } }'
+```
+
+### Query status
+
+```
+nats req --reply-timeout=5s ec2.cmd.i-ebaf0fd46cad14c85 '{ "id": "i-ebaf0fd46cad14c85", "command": { "execute": "query-status", "arguments": {} } }'
+```
+
+### Query devices
+
+```
+nats req --reply-timeout=5s ec2.cmd.i-ebaf0fd46cad14c85 '{ "id": "i-ebaf0fd46cad14c85", "command": { "execute": "query-device", "arguments": {} } }'
+```

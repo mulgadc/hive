@@ -17,7 +17,6 @@ host = "0.0.0.0:4222"
 token = "your-nats-token"
 
 [nats.sub]
-subject = "ec2.>"
 
 [predastore]
 host = "0.0.0.0:8443"

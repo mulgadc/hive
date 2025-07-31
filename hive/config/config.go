@@ -1,9 +1,13 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
+	"sync"
 
+	"github.com/nats-io/nats.go"
 	"github.com/spf13/viper"
 )
 
@@ -53,16 +57,84 @@ type NATSSub struct {
 	Subject string `mapstructure:"subject"`
 }
 
-type EBSRequest struct {
-	Name    string
-	VolType string
-	Boot    bool
+type EBSRequests struct {
+	Requests []EBSRequest `mapstructure:"ebs_requests"`
+	Mu       sync.Mutex
 }
 
-type EBSResponse struct {
+type EBSRequest struct {
+	Name      string
+	VolType   string
+	Boot      bool
+	EFI       bool
+	CloudInit bool
+	NBDURI    string
+}
+
+type EBSMountResponse struct {
 	URI     string
 	Mounted bool
 	Error   string
+}
+
+type EBSUnMountResponse struct {
+	Volume  string
+	Mounted bool
+	Error   string
+}
+
+type EBSDeleteRequest struct {
+	Volume string
+}
+
+type EBSDeleteResponse struct {
+	Volume  string
+	Success bool
+	Error   string
+}
+
+// EC2, TODO: Move to vm.go or more applicable place
+type EC2Response struct {
+	InstanceID string
+	Hostname   string
+	Success    bool
+	Status     string
+	Error      string
+}
+
+type EC2DescribeRequest struct {
+	InstanceID string
+}
+
+type EC2DescribeResponse struct {
+	InstanceID string
+	Hostname   string
+	Status     string
+	Error      string
+}
+
+func (ec2DescribeResponse EC2DescribeResponse) Respond(msg *nats.Msg) {
+
+	response, err := json.Marshal(ec2DescribeResponse)
+	if err != nil {
+		slog.Error("Failed to marshal response: %v", err)
+		return
+	}
+
+	msg.Respond(response)
+
+}
+
+func (ec2Response EC2Response) Respond(msg *nats.Msg) {
+
+	response, err := json.Marshal(ec2Response)
+	if err != nil {
+		slog.Error("Failed to marshal response: %v", err)
+		return
+	}
+
+	msg.Respond(response)
+
 }
 
 // LoadConfig loads the configuration from file and environment variables

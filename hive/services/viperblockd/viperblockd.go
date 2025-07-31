@@ -6,7 +6,6 @@ import (
 	"log"
 	"log/slog"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/nbd"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/mulgadc/viperblock/viperblock/backends/s3"
@@ -33,6 +33,7 @@ type MountedVolume struct {
 
 type Config struct {
 	ConfigPath     string
+	PluginPath     string
 	Debug          bool
 	NatsHost       string
 	MountedVolumes []MountedVolume
@@ -52,23 +53,6 @@ type Service struct {
 
 //  nbdkit -p 10812 --pidfile /tmp/vb-vol-1.pid ./lib/nbdkit-viperblock-plugin.so -v -f size=67108864 volume=vol-2 bucket=predastore region=ap-southeast-2 access_key="X" secret_key="Y" base_dir="/tmp/vb/" host="https://127.0.0.1:8443" cache_size=0
 
-type NBDKitConfig struct {
-	Port       int    `json:"port"`
-	PidFile    string `json:"pid_file"`
-	PluginPath string `json:"plugin_path"`
-	Verbose    bool   `json:"verbose"`
-	Foreground bool   `json:"foreground"`
-	Size       int64  `json:"size"`
-	Volume     string `json:"volume"`
-	Bucket     string `json:"bucket"`
-	Region     string `json:"region"`
-	AccessKey  string `json:"access_key"`
-	SecretKey  string `json:"secret_key"`
-	BaseDir    string `json:"base_dir"`
-	Host       string `json:"host"`
-	CacheSize  int    `json:"cache_size"`
-}
-
 func New(config interface{}) (svc *Service, err error) {
 	svc = &Service{
 		Config: config.(*Config),
@@ -79,7 +63,7 @@ func New(config interface{}) (svc *Service, err error) {
 
 func (svc *Service) Start() (int, error) {
 
-	utils.WritePidFile(serviceName)
+	utils.WritePidFile(serviceName, os.Getpid())
 	err := launchService(svc.Config)
 
 	if err != nil {
@@ -121,6 +105,96 @@ func launchService(cfg *Config) (err error) {
 	// Subscribe to the viperblock.mount subject
 	fmt.Println("Connected. Waiting for EBS events")
 
+	// TODO: Support volume delete and predastore delete bucket
+	nc.Subscribe("ebs.delete", func(msg *nats.Msg) {
+		slog.Info("Received message: %s", string(msg.Data))
+
+		// Parse the message
+		var ebsRequest config.EBSDeleteRequest
+		err := json.Unmarshal(msg.Data, &ebsRequest)
+		if err != nil {
+			slog.Error("Failed to unmarshal message: %v", err)
+			return
+		}
+
+		/*
+
+			s3cfg := s3.S3Config{
+				VolumeName: ebsRequest.Volume,
+				Bucket:     cfg.Bucket,
+				Region:     cfg.Region,
+				AccessKey:  cfg.AccessKey,
+				SecretKey:  cfg.SecretKey,
+				Host:       cfg.S3Host,
+			}
+
+			vbconfig := viperblock.VB{
+				VolumeName: ebsRequest.Volume,
+				VolumeSize: 1, // Workaround, calculated on LoadState()
+				BaseDir:    cfg.BaseDir,
+				Cache: viperblock.Cache{
+					Config: viperblock.CacheConfig{
+						Size: 0,
+					},
+				},
+				VolumeConfig: viperblock.VolumeConfig{},
+			}
+
+			vb, err := viperblock.New(vbconfig, "s3", s3cfg)
+
+		*/
+
+	})
+
+	nc.Subscribe("ebs.unmount", func(msg *nats.Msg) {
+		slog.Info("Received message: %s", string(msg.Data))
+
+		// Parse the message
+		var ebsRequest config.EBSRequest
+		err := json.Unmarshal(msg.Data, &ebsRequest)
+		if err != nil {
+			slog.Error("Failed to unmarshal message: %v", err)
+			return
+		}
+
+		// Find the volume in the mounted volumes
+		var ebsResponse config.EBSUnMountResponse
+		var match bool
+		cfg.mu.Lock()
+		for _, volume := range cfg.MountedVolumes {
+
+			// TODO: Confirm KVM/QEMU is not using the volume first.
+			if volume.Name == ebsRequest.Name {
+				ebsResponse = config.EBSUnMountResponse{
+					Volume:  volume.Name,
+					Mounted: false,
+				}
+
+				utils.KillProcess(volume.PID)
+				match = true
+			}
+		}
+
+		cfg.mu.Unlock()
+
+		if !match {
+			ebsResponse = config.EBSUnMountResponse{
+				Volume: ebsRequest.Name,
+				Error:  fmt.Sprintf("Volume %s not found", ebsRequest.Name),
+			}
+		}
+
+		// Marshal the response
+		response, err := json.Marshal(ebsResponse)
+		if err != nil {
+			slog.Error("Failed to marshal response: %v", err)
+			return
+		}
+
+		msg.Respond(response)
+		nc.Publish("ebs.unmount.response", response)
+	})
+
 	nc.Subscribe("ebs.mount", func(msg *nats.Msg) {
 		slog.Info("Received message: %s", string(msg.Data))
 
@@ -134,7 +208,7 @@ func launchService(cfg *Config) (err error) {
 
 		fmt.Println("Request =>", ebsRequest)
 
-		var ebsResponse config.EBSResponse
+		var ebsResponse config.EBSMountResponse
 		ebsResponse.Mounted = false
 
 		s3cfg := s3.S3Config{
@@ -148,7 +222,7 @@ func launchService(cfg *Config) (err error) {
 
 		vbconfig := viperblock.VB{
 			VolumeName: ebsRequest.Name,
-			VolumeSize: 1,
+			VolumeSize: 1, // Workaround, calculated on LoadState()
 			BaseDir:    cfg.BaseDir,
 			Cache: viperblock.Cache{
 				Config: viperblock.CacheConfig{
@@ -226,10 +300,17 @@ func launchService(cfg *Config) (err error) {
 		fmt.Println("PORT =>", port)
 
 		// Execute nbdkit
-		nbdConfig := NBDKitConfig{
+
+		nbdPidFile, err := utils.GeneratePidFile(fmt.Sprintf("nbdkit-vol-%s", ebsRequest.Name))
+		if err != nil {
+			slog.Error("Failed to generate nbdkit pid file: %v", err)
+			return
+		}
+
+		nbdConfig := nbd.NBDKitConfig{
 			Port:       port,
-			PidFile:    fmt.Sprintf("/tmp/vb-vol-%s.pid", ebsRequest.Name),
-			PluginPath: "/home/ben/Development/mulga/viperblock/lib/nbdkit-viperblock-plugin.so",
+			PidFile:    nbdPidFile,
+			PluginPath: cfg.PluginPath,
 			BaseDir:    cfg.BaseDir,
 			Host:       cfg.S3Host,
 			Verbose:    true,
@@ -390,38 +471,4 @@ func launchService(cfg *Config) (err error) {
 
 	return nil
 
-}
-
-func (cfg *NBDKitConfig) Execute() (*exec.Cmd, error) {
-	args := []string{
-		"-f", // foreground required for Golang plugin via nbdkit
-		"-p", strconv.Itoa(cfg.Port),
-		"--pidfile", cfg.PidFile,
-		cfg.PluginPath,
-	}
-
-	if cfg.Verbose {
-		args = append(args, "-v")
-	}
-
-	// Add plugin-specific arguments
-	pluginArgs := []string{
-		fmt.Sprintf("size=%d", cfg.Size),
-		fmt.Sprintf("volume=%s", cfg.Volume),
-		fmt.Sprintf("bucket=%s", cfg.Bucket),
-		fmt.Sprintf("region=%s", cfg.Region),
-		fmt.Sprintf("access_key=%s", cfg.AccessKey),
-		fmt.Sprintf("secret_key=%s", cfg.SecretKey),
-		fmt.Sprintf("base_dir=%s", cfg.BaseDir),
-		fmt.Sprintf("host=%s", cfg.Host),
-		fmt.Sprintf("cache_size=%d", cfg.CacheSize),
-	}
-
-	args = append(args, pluginArgs...)
-
-	cmd := exec.Command("nbdkit", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	return cmd, cmd.Start()
 }

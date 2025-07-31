@@ -196,14 +196,30 @@ var viperblockStartCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
+		pluginPath, _ := cmd.Flags().GetString("plugin-path")
+
+		if pluginPath == "" {
+			err := fmt.Errorf("plugin-path must be defined")
+			slog.Error(err.Error())
+			os.Exit(1)
+		}
+
+		// Check plugin path exists
+		if _, err := os.Stat(pluginPath); os.IsNotExist(err) {
+			err := fmt.Errorf("plugin-path does not exist: %s", pluginPath)
+			slog.Error(err.Error())
+			os.Exit(1)
+		}
+
 		service, err := service.New("viperblock", &viperblockd.Config{
-			NatsHost:  natsHost,
-			S3Host:    s3Host,
-			Bucket:    s3Bucket,
-			Region:    s3Region,
-			AccessKey: accessKey,
-			SecretKey: secretKey,
-			BaseDir:   baseDir,
+			NatsHost:   natsHost,
+			PluginPath: pluginPath,
+			S3Host:     s3Host,
+			Bucket:     s3Bucket,
+			Region:     s3Region,
+			AccessKey:  accessKey,
+			SecretKey:  secretKey,
+			BaseDir:    baseDir,
 		})
 
 		if err != nil {
@@ -329,6 +345,7 @@ func init() {
 	viperblockCmd.PersistentFlags().String("s3-host", "0.0.0.0:8443", "Predastore (S3) host URI")
 	viperblockCmd.PersistentFlags().String("s3-bucket", "predastore", "Predastore (S3) bucket")
 	viperblockCmd.PersistentFlags().String("s3-region", "ap-southeast-2", "Predastore (S3) region")
+	viperblockCmd.PersistentFlags().String("plugin-path", "/opt/hive/lib/nbdkit-viperblock-plugin.so", "Pathname to the nbdkit viperblockplugin")
 
 	viperblockCmd.AddCommand(viperblockStartCmd)
 	viperblockCmd.AddCommand(viperblockStopCmd)

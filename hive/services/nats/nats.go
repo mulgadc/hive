@@ -33,7 +33,7 @@ func New(config interface{}) (svc *Service, err error) {
 }
 
 func (svc *Service) Start() (int, error) {
-	utils.WritePidFile(serviceName)
+	utils.WritePidFile(serviceName, os.Getpid())
 	launchService(svc.Config)
 	return os.Getpid(), nil
 }
