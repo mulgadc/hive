@@ -23,6 +23,12 @@ var CommandResponseTypes = map[string]unmarshalTarget{
 type Command struct {
 	ID         string     `json:"id"`
 	QMPCommand QMPCommand `json:"command"`
+	Attributes Attributes `json:"attributes"`
+}
+
+type Attributes struct {
+	StopInstance   bool `json:"stop_instance"`
+	DeleteInstance bool `json:"delete_instance"`
 }
 
 // (QEMU) stop / cont (resume) / system_powerdown / system_reset / system_wakeup

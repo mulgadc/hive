@@ -59,7 +59,7 @@ type NATSSub struct {
 
 type EBSRequests struct {
 	Requests []EBSRequest `mapstructure:"ebs_requests"`
-	Mu       sync.Mutex
+	Mu       sync.Mutex   `json:"-"`
 }
 
 type EBSRequest struct {

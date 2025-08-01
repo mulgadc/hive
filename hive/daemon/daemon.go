@@ -234,16 +234,20 @@ func NewResourceManager() *ResourceManager {
 func NewDaemon(cfg *config.Config) *Daemon {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Daemon{
-		config:      cfg,
-		resourceMgr: NewResourceManager(),
-		ctx:         ctx,
-		cancel:      cancel,
-		Instances:   vm.Instances{VMS: make(map[string]vm.VM)},
+		config:            cfg,
+		resourceMgr:       NewResourceManager(),
+		ctx:               ctx,
+		cancel:            cancel,
+		Instances:         vm.Instances{VMS: make(map[string]*vm.VM)},
+		natsSubscriptions: make(map[string]*nats.Subscription),
 	}
 }
 
 // Start initializes and starts the daemon
 func (d *Daemon) Start() error {
+
+	var err error
+
 	// Connect to NATS with options
 	opts := []nats.Option{
 		nats.Token(d.config.NATS.ACL.Token),
@@ -257,23 +261,56 @@ func (d *Daemon) Start() error {
 		}),
 	}
 
-	var err error
 	d.natsConn, err = nats.Connect(d.config.NATS.Host, opts...)
 	if err != nil {
 		return fmt.Errorf("failed to connect to NATS: %w", err)
 	}
 
 	log.Printf("Connected to NATS server at %s", d.config.NATS.Host)
+
+	// Load existing state for VMs
+	// Load state from disk
+	err = d.LoadState()
+	if err != nil {
+		slog.Warn("Failed to load state from disk, continuing with empty state", "error", err)
+	} else {
+
+		slog.Info("Loaded state from disk", "instance count", len(d.Instances.VMS))
+
+		//d.mu.Lock()
+		// Ensure mutex is usable after unmarshalling
+		d.Instances.Mu = sync.Mutex{}
+
+		for i := range d.Instances.VMS {
+			instance := d.Instances.VMS[i]
+			instance.EBSRequests.Mu = sync.Mutex{}
+			instance.QMPClient = &qmp.QMPClient{}
+			d.Instances.VMS[i] = instance
+			//d.Instances.VMS[i].EBSRequests.Mu = sync.Mutex{}
+			//			d.Instances.VMS[i].QMPClient.Mu = sync.Mutex{}
+
+			if instance.Status != "terminated" {
+				slog.Info("Launching instance", "instance", instance.ID)
+				err = d.LaunchInstance(instance)
+				if err != nil {
+					slog.Error("Failed to launch instance: %v", err)
+				}
+			}
+
+		}
+		//d.mu.Unlock()
+
+		// Launch running instances
+
+	}
+
 	log.Printf("Subscribing to subject pattern: %s", "ec2.launch")
 
-	// Create a map to store subscriptions
-	d.natsSubscriptions = make(map[string]*nats.Subscription)
-
 	// Subscribe to EC2 events with queue group
-	d.natsSubscriptions[d.config.NATS.Sub.Subject], err = d.natsConn.QueueSubscribe("ec2.launch", "hive-workers", d.handleEC2Launch)
+	d.natsSubscriptions["ec2.launch"], err = d.natsConn.QueueSubscribe("ec2.launch", "hive-workers", d.handleEC2Launch)
 
 	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS: %w", err)
+		return fmt.Errorf("failed to subscribe to NATS ec2.launch: %w", err)
 	}
 
 	// Setup graceful shutdown
@@ -292,6 +329,71 @@ func (d *Daemon) Start() error {
 	<-done
 	return nil
 }
+
+// Write the state to disk
+func (d *Daemon) WriteState() error {
+	d.Instances.Mu.Lock()
+	defer d.Instances.Mu.Unlock()
+
+	// Pretty print JSON with indent
+	jsonData, err := json.MarshalIndent(d.Instances, "", "  ")
+
+	if err != nil {
+		return err
+	}
+
+	// Write the state to disk
+	configPath := fmt.Sprintf("%s/%s", d.config.BaseDir, "instances.json")
+	err = os.WriteFile(configPath, jsonData, 0644)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Initalise VMs from state
+func (d *Daemon) InitaliseVMs() {
+
+	/*
+		d.Instances.Mu.Lock()
+		defer d.Instances.Mu.Unlock()
+
+		// Step 1: Loop through each instance
+		for i := range d.Instances.VMS {
+			instance := d.Instances.VMS[i]
+
+			// Step 2: Mount each EBS volume
+			for _, ebsRequest := range instance.EBSRequests.Requests {
+				instance.EBSRequests.Mu.Lock()
+				defer instance.EBSRequests.Mu.Unlock()
+
+			}
+
+			d.Instances.VMS[i] = instance
+
+		}
+	*/
+
+	// Step 2: Loop through each instance and start it
+}
+
+// Load state from disk
+func (d *Daemon) LoadState() error {
+	configPath := fmt.Sprintf("%s/%s", d.config.BaseDir, "instances.json")
+	jsonData, err := os.ReadFile(configPath)
+	if err != nil {
+		return err
+	}
+
+	if err := json.Unmarshal(jsonData, &d.Instances); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// NATS events
 
 func (d *Daemon) handleEC2Describe(msg *nats.Msg) {
 
@@ -327,6 +429,13 @@ func (d *Daemon) handleEC2Describe(msg *nats.Msg) {
 }
 
 func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId string) (*qmp.QMPResponse, error) {
+
+	// Confirm QMP client is initialized
+	if q.Encoder == nil || q.Decoder == nil {
+		return nil, fmt.Errorf("QMP client is not initialized")
+	}
+
+	// Lock the QMP client
 	q.Mu.Lock()
 	defer q.Mu.Unlock()
 
@@ -439,9 +548,22 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 	}
 
 	if !instanceRunning {
+		// TODO: Improve, return error
 		slog.Warn("Instance %s is not running on this node", command.ID)
+		msg.Respond(nil)
 		return
 	}
+
+	// Update the instance attributes
+	d.Instances.Mu.Lock()
+	instance, ok := d.Instances.VMS[command.ID]
+	if !ok {
+		slog.Warn("Instance %s not found", command.ID)
+		return
+	}
+
+	instance.Attributes = command.Attributes
+	d.Instances.Mu.Unlock()
 
 }
 
@@ -574,7 +696,7 @@ func (d *Daemon) setupShutdown() {
 						continue
 					}
 
-					msg, err := d.natsConn.Request("ebs.unmount", ebsUnMountRequest, 10*time.Second)
+					msg, err := d.natsConn.Request("ebs.unmount", ebsUnMountRequest, 30*time.Second)
 					if err != nil {
 						slog.Error("Failed to unmount volume %s for %s: %v", ebsRequest.Name, instance.ID, err)
 					} else {
@@ -600,6 +722,12 @@ func (d *Daemon) setupShutdown() {
 		// Close NATS connection
 		d.natsConn.Close()
 
+		// Write the state to disk
+		err := d.WriteState()
+		if err != nil {
+			slog.Error("Failed to write state to disk: %v", err)
+		}
+
 		// Wait for any ongoing operations to complete
 		// TODO: Implement cleanup of running instances
 		log.Println("Shutdown complete")
@@ -623,21 +751,13 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 	var imageId string
 	var snapshotId string
 
-	var instance vm.VM
-
-	instance.ID = vm.GenerateEC2InstanceID()
-	instance.Status = "provisioning"
+	instanceId := vm.GenerateEC2InstanceID()
 
 	// Add state for our new instance
-	d.Instances.Mu.Lock()
-	d.Instances.VMS[instance.ID] = instance
-	d.Instances.Mu.Unlock()
-
-	d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)], err = d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.describe.%s", instance.ID), "hive-events", d.handleEC2Describe)
-
-	if err != nil {
-		slog.Error("Failed to subscribe to NATS: %v", err)
-		return ec2Response, err
+	var instance = &vm.VM{
+		ID:           instanceId,
+		Status:       "provisioning",
+		InstanceType: ec2Req.InstanceType,
 	}
 
 	// Respond with the instance ID and status, polling required to track status
@@ -1204,60 +1324,160 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 	// Step 5: Mount each volume via NBD, confirm running as expected for pre-flight checks.
 	// TODO: Run a goroutine for each volume
 
-	// Loop through each volume in volumes
-	instance.EBSRequests.Mu.Lock()
-	for k, v := range instance.EBSRequests.Requests {
+	err = d.LaunchInstance(instance)
 
-		fmt.Println(v)
-
-		// Send the volume payload as JSON
-		ebsMountRequest, err := json.Marshal(v)
-
-		if err != nil {
-			slog.Error("Failed to marshal volume payload: %v", err)
-			return ec2Response, err
-		}
-
-		reply, err := d.natsConn.Request("ebs.mount", ebsMountRequest, 10*time.Second)
-
-		// TODO: Improve timeout handling
-		if err != nil {
-			log.Fatalln(err)
-			return ec2Response, err
-		}
-
-		// Unmarshal the response
-		var ebsMountResponse config.EBSMountResponse
-		err = json.Unmarshal(reply.Data, &ebsMountResponse)
-
-		if err != nil {
-			slog.Error("Failed to unmarshal volume response: %v", err)
-			return ec2Response, err
-		}
-
-		fmt.Println(ebsMountResponse)
-
-		if ebsMountResponse.Error == "" {
-
-			// Append the NBD URI to the request
-			instance.EBSRequests.Requests[k].NBDURI = ebsMountResponse.URI
-
-		} else {
-			slog.Error("Failed to mount volume", "error", ebsMountResponse.Error)
-			return ec2Response, fmt.Errorf("failed to mount volume: %s", ebsMountResponse.Error)
-		}
-
+	if err != nil {
+		return ec2Response, err
 	}
 
-	instance.EBSRequests.Mu.Unlock()
+	// Step 10: Return the unique instance ID on success
+	ec2Response.InstanceID = instance.ID
+	// TODO: Use AWS style hostname, ip-<a-b-c-d>.<region>.compute.internal
+	ec2Response.Hostname = instance.ID
+	ec2Response.Success = true
+
+	return ec2Response, nil
+}
+
+func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
+
+	// Create a new QMP client to communicate with the instance
+	instance.QMPClient, err = qmp.NewQMPClient(instance.Config.QMPSocket)
+
+	// Send qmp_capabilities handshake to init
+	_, err = d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "qmp_capabilities"}, instance.ID)
+
+	// Simple heartbeat to confirm QMP and the instanceis running / healthy
+	go func() {
+		for {
+			time.Sleep(30 * time.Second)
+			slog.Info("QMP heartbeat", "instance", instance.ID)
+			status, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "query-status"}, instance.ID)
+
+			if err != nil {
+				slog.Error("Failed to send QMP command: %v", err)
+
+				// Check if the instance is stopping, mark as stopped
+				d.Instances.Mu.Lock()
+				defer d.Instances.Mu.Unlock()
+
+				if instance.Status == "powering_down" {
+					instance.Status = "stopped"
+
+					slog.Info("QMP Status - Instance %s stopped, exiting heartbeat", instance.ID)
+
+					// TODO: Improve, move to SendQMPCommand
+					// Unsubscribe from the NATS subject
+					slog.Info("Unsubscribing from NATS subject", "instance", instance.ID)
+					d.natsSubscriptions[fmt.Sprintf("ec2.cmd.%s", instance.ID)].Unsubscribe()
+					d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)].Unsubscribe()
+
+					// Close the QMP client connection
+					slog.Info("Closing QMP client connection", "instance", instance.ID)
+					instance.QMPClient.Conn.Close()
+
+					// Exit the goroutine
+					break
+				}
+
+				continue
+			}
+
+			slog.Info("QMP status", "status", string(status.Return))
+
+		}
+	}()
+
+	if err != nil {
+		slog.Error("Failed to create QMP client: %v", err)
+		return err
+	}
+
+	return nil
+
+}
+
+func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
+
+	// Loop through each volume in volumes
+	err = d.MountVolumes(instance)
+
+	if err != nil {
+		slog.Error("Failed to mount volumes: %v", err)
+		return err
+	}
+
 	// Step 6: Launch the instance via QEMU/KVM
+	err = d.StartInstance(instance)
+
+	if err != nil {
+		slog.Error("Failed to launch instance: %v", err)
+		return err
+	}
+
+	/*
+		reply, err := nc.Request("ebs.mount", []byte(), 4*time.Second)
+
+		if err != nil {
+			log.Fatalln(err)
+		}
+	*/
+
+	// Step 7: Create QMP client to communicate with the instance
+	err = d.CreateQMPClient(instance)
+
+	if err != nil {
+		slog.Error("Failed to create QMP client: %v", err)
+		return err
+	}
+
+	// Step 8: Subscribe to start/stop/shutdown events
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.natsSubscriptions[instance.ID], err = d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), "hive-events", d.handleEC2Events)
+
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to NATS: %w", err)
+	}
+
+	d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)], err = d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.describe.%s", instance.ID), "hive-events", d.handleEC2Describe)
+
+	if err != nil {
+		slog.Error("Failed to subscribe to NATS ec2.describe.%s: %v", instance.ID, err)
+		return err
+	}
+
+	// Step 9: Update the instance metadata for running state and volume attached
+	// Marshal to a JSON file
+	// Update state
+	d.Instances.Mu.Lock()
+	// Update to running state
+	instance.Status = "running"
+
+	d.Instances.VMS[instance.ID] = instance
+	d.Instances.Mu.Unlock()
+
+	err = d.WriteState()
+
+	if err != nil {
+		slog.Error("Failed to marshal launchVm: %v", err)
+		return err
+	}
+
+	return nil
+}
+
+func (d *Daemon) StartInstance(instance *vm.VM) error {
 
 	pidFile, err := utils.GeneratePidFile(instance.ID)
 
 	if err != nil {
 		slog.Error("Failed to generate PID file: %v", err)
-		return ec2Response, err
+		return err
 	}
+
+	var instanceType = d.resourceMgr.instanceTypes[instance.InstanceType]
 
 	instance.Config = vm.Config{
 		Name:        instance.ID,
@@ -1338,7 +1558,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 	if err != nil {
 		slog.Error("Failed to generate QMP socket: %v", err)
-		return ec2Response, err
+		return err
 	}
 
 	instance.Config.QMPSocket = qmpSocket
@@ -1420,7 +1640,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 	pid := <-processChan
 
 	if pid == 0 {
-		return ec2Response, fmt.Errorf("failed to start qemu")
+		return fmt.Errorf("failed to start qemu")
 	}
 
 	// Wait for 1 second to confirm nbdkit is running
@@ -1430,7 +1650,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 	pts := <-ptsChan
 
 	if pts == 0 {
-		return ec2Response, fmt.Errorf("failed to get pts")
+		return fmt.Errorf("failed to get pts")
 	}
 
 	// Check if nbdkit exited immediately with an error
@@ -1438,120 +1658,75 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 	case exitErr := <-exitChan:
 		if exitErr != 0 {
 			errorMsg := fmt.Errorf("qemu failed: %v", exitErr)
-			return ec2Response, errorMsg
+			return errorMsg
 		}
 	default:
 		// nbdkit is still running after 1 second, which means it started successfully
 		fmt.Println("QEMU started successfully and is running", "pts", pts)
 	}
 
-	/*
-		reply, err := nc.Request("ebs.mount", []byte(), 4*time.Second)
-
-		if err != nil {
-			log.Fatalln(err)
-		}
-	*/
-
-	// Step 7: Update the instance metadata for running state and volume attached
-	// Marshal to a JSON file
-	jsonData, err := json.Marshal(instance.Config)
-
-	if err != nil {
-		slog.Error("Failed to marshal launchVm: %v", err)
-		return ec2Response, err
-	}
-
-	// Write to a file
-	err = os.WriteFile(fmt.Sprintf("/tmp/vm-%s.json", instance.ID), jsonData, 0644)
-
-	if err != nil {
-		slog.Error("Failed to write launchVm to file: %v", err)
-		return ec2Response, err
-	}
-
-	// Step 8: Return the unique instance ID on success
-
-	ec2Response.InstanceID = instance.ID
-	// TODO: Use AWS style hostname, ip-<a-b-c-d>.<region>.compute.internal
-	ec2Response.Hostname = instance.ID
-	ec2Response.Success = true
-
-	// Add the instance to the local instances
-	pid, err = utils.ReadPidFile(instance.ID)
+	// Confirm the instance has booted
+	_, err = utils.ReadPidFile(instance.ID)
 
 	if err != nil {
 		slog.Error("Failed to read PID file: %v", err)
-		return ec2Response, err
+		return err
 	}
 
-	instance.QMPClient, err = qmp.NewQMPClient(instance.Config.QMPSocket)
+	return nil
+}
 
-	// Send qmp_capabilities handshake
-	_, err = d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "qmp_capabilities"}, instance.ID)
+// MountVolumes mounts the volumes for an instance
+func (d *Daemon) MountVolumes(instance *vm.VM) error {
 
-	// Simple heartbeat to confirm QMP is running
-	go func() {
-		for {
-			time.Sleep(30 * time.Second)
-			slog.Info("QMP heartbeat", "instance", instance.ID)
-			status, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "query-status"}, instance.ID)
+	instance.EBSRequests.Mu.Lock()
+	for k, v := range instance.EBSRequests.Requests {
 
-			if err != nil {
-				slog.Error("Failed to send QMP command: %v", err)
+		fmt.Println(v)
 
-				// Check if the instance is stopping, mark as stopped
-				d.Instances.Mu.Lock()
-				defer d.Instances.Mu.Unlock()
+		// Send the volume payload as JSON
+		ebsMountRequest, err := json.Marshal(v)
 
-				instance, ok := d.Instances.VMS[instance.ID]
-				if !ok {
-					slog.Info("QMP Status - Instance %s not found", instance.ID)
-					continue
-				}
-
-				if instance.Status == "powering_down" {
-					instance.Status = "stopped"
-					d.Instances.VMS[instance.ID] = instance
-
-					slog.Info("QMP Status - Instance %s stopped, exiting heartbeat", instance.ID)
-
-					// Exit the goroutine
-					break
-				}
-
-				continue
-			}
-
-			slog.Info("QMP status", "status", status)
-
+		if err != nil {
+			slog.Error("Failed to marshal volume payload: %v", err)
+			return err
 		}
-	}()
 
-	if err != nil {
-		slog.Error("Failed to create QMP client: %v", err)
-		return ec2Response, err
+		reply, err := d.natsConn.Request("ebs.mount", ebsMountRequest, 10*time.Second)
+
+		// TODO: Improve timeout handling
+		if err != nil {
+			log.Fatalln(err)
+			return err
+		}
+
+		// Unmarshal the response
+		var ebsMountResponse config.EBSMountResponse
+		err = json.Unmarshal(reply.Data, &ebsMountResponse)
+
+		if err != nil {
+			slog.Error("Failed to unmarshal volume response: %v", err)
+			return err
+		}
+
+		fmt.Println(ebsMountResponse)
+
+		if ebsMountResponse.Error == "" {
+
+			// Append the NBD URI to the request
+			instance.EBSRequests.Requests[k].NBDURI = ebsMountResponse.URI
+
+		} else {
+			slog.Error("Failed to mount volume", "error", ebsMountResponse.Error)
+			return fmt.Errorf("failed to mount volume: %s", ebsMountResponse.Error)
+		}
+
 	}
 
-	// Update to running state
-	instance.Status = "running"
+	instance.EBSRequests.Mu.Unlock()
 
-	// Update state
-	d.Instances.Mu.Lock()
-	d.Instances.VMS[instance.ID] = instance
-	d.Instances.Mu.Unlock()
+	return nil
 
-	// Subscribe to start/stop/shutdown events
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	d.natsSubscriptions[instance.ID], err = d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), "hive-events", d.handleEC2Events)
-
-	if err != nil {
-		return ec2Response, fmt.Errorf("failed to subscribe to NATS: %w", err)
-	}
-
-	return ec2Response, nil
 }
 
 // canAllocate checks if there are enough resources available

@@ -29,21 +29,25 @@ qemu-system-x86_64 \
 */
 
 type VM struct {
-	ID      string `json:"id"`
-	PID     int    `json:"pid"`
-	PTS     int    `json:"pts"`
-	Running bool   `json:"running"`
-	Status  string `json:"status"`
-	Config  Config `json:"config"`
+	ID           string `json:"id"`
+	PID          int    `json:"pid"`
+	PTS          int    `json:"pts"`
+	Running      bool   `json:"running"`
+	Status       string `json:"status"`
+	InstanceType string `json:"instance_type"`
+	Config       Config `json:"config"`
 
 	EBSRequests config.EBSRequests `json:"ebs_requests"`
 
-	QMPClient *qmp.QMPClient
+	QMPClient *qmp.QMPClient `json:"-"`
+
+	// User attributes (user initiated stop/delete)
+	Attributes qmp.Attributes `json:"attributes"`
 }
 
 type Instances struct {
-	VMS map[string]VM `json:"vms"`
-	Mu  sync.Mutex
+	VMS map[string]*VM `json:"vms"`
+	Mu  sync.Mutex     `json:"-"`
 }
 
 type NetDev struct {
