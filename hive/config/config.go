@@ -113,6 +113,28 @@ type EC2DescribeResponse struct {
 	Error      string
 }
 
+type EC2StartInstancesRequest struct {
+	InstanceID string
+}
+
+type EC2StartInstancesResponse struct {
+	InstanceID string
+	Status     string
+	Error      string
+}
+
+// TODO: Make a generic function for the response
+func (ec2StartInstanceResponse EC2StartInstancesResponse) Respond(msg *nats.Msg) {
+
+	response, err := json.Marshal(ec2StartInstanceResponse)
+	if err != nil {
+		slog.Error("Failed to marshal response: %v", err)
+		return
+	}
+
+	msg.Respond(response)
+
+}
 func (ec2DescribeResponse EC2DescribeResponse) Respond(msg *nats.Msg) {
 
 	response, err := json.Marshal(ec2DescribeResponse)

@@ -313,12 +313,29 @@ nats req ec2.launch '{"Action":"RunInstances","ImageId":"ami-185c47c7b6d31bba9",
 nats req --reply-timeout=5s ec2.describe.i-ebaf0fd46cad14c85 '{ "InstanceID": "i-ebaf0fd46cad14c85" }'
 ```
 
+### Start instance
+
+```
+nats req ec2.startinstances '{"InstanceID": "i-f38ac0490f1683650"}'
+```
+
+
 ## QMP commands
 
 ### Powerdown
 
+This event is used internally be Hive when the daemon receives a SIGINT, SIGTERM, SIGHUP signal to safely powerdown an instance, or when the hardware node is rebooted.
+
 ```
 nats req --reply-timeout=5s ec2.cmd.i-ebaf0fd46cad14c85 '{ "id": "i-ebaf0fd46cad14c85", "command": { "execute": "system_powerdown", "arguments": {} } }'
+```
+
+### Terminate instance
+
+This event is for a user initiated instance termination. Note the Attributes, to flag to the Hive daemon not to start the instance again if the daemon or hardware node is restarted.
+
+```
+nats req --reply-timeout=5s ec2.cmd.i-f38ac0490f1683650 '{ "id": "i-f38ac0490f1683650", "attributes": { "stop_instance": true }, "command": { "execute": "system_powerdown", "arguments": {} } }'
 ```
 
 ### Stop VM

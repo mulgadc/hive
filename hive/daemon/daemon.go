@@ -7,6 +7,7 @@ import (
 	crand "crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -289,12 +290,17 @@ func (d *Daemon) Start() error {
 			//d.Instances.VMS[i].EBSRequests.Mu = sync.Mutex{}
 			//			d.Instances.VMS[i].QMPClient.Mu = sync.Mutex{}
 
-			if instance.Status != "terminated" {
+			if instance.Attributes.StopInstance {
+				slog.Info("Instance flagged as user initiated stop, skipping", "instance", instance.ID)
+
+			} else if instance.Status != "terminated" {
 				slog.Info("Launching instance", "instance", instance.ID)
 				err = d.LaunchInstance(instance)
 				if err != nil {
 					slog.Error("Failed to launch instance: %v", err)
 				}
+			} else {
+				slog.Info("Instance state is terminated, skipping", "instance", instance.ID)
 			}
 
 		}
@@ -308,6 +314,16 @@ func (d *Daemon) Start() error {
 
 	// Subscribe to EC2 events with queue group
 	d.natsSubscriptions["ec2.launch"], err = d.natsConn.QueueSubscribe("ec2.launch", "hive-workers", d.handleEC2Launch)
+
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to NATS ec2.launch: %w", err)
+	}
+
+	// Subscribe to EC2 start instance events
+	// TODO: The instance state needs to be shared, not pinned to a single node.
+	// TODO: Handle this in a more generic function to group similar commands (start, stop, launch)
+	// Subscribe to EC2 events with queue group
+	d.natsSubscriptions["ec2.startinstances"], err = d.natsConn.QueueSubscribe("ec2.startinstances", "hive-workers", d.handleEC2StartInstances)
 
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to NATS ec2.launch: %w", err)
@@ -394,6 +410,48 @@ func (d *Daemon) LoadState() error {
 }
 
 // NATS events
+
+func (d *Daemon) handleEC2StartInstances(msg *nats.Msg) {
+
+	var ec2StartInstance config.EC2StartInstancesRequest
+
+	if err := json.Unmarshal(msg.Data, &ec2StartInstance); err != nil {
+		log.Printf("Error unmarshaling EC2 describe request: %v", err)
+		return
+	}
+
+	slog.Info("EC2 Start Instance Request", "instanceId", ec2StartInstance.InstanceID)
+
+	var ec2StartInstanceResponse config.EC2StartInstancesResponse
+
+	// Check if the instance is running on this node
+	d.Instances.Mu.Lock()
+	defer d.Instances.Mu.Unlock()
+
+	instance, ok := d.Instances.VMS[ec2StartInstance.InstanceID]
+
+	if !ok {
+		slog.Error("EC2 Describe Request - Instance not found", "instanceId", ec2StartInstanceResponse.InstanceID)
+		ec2StartInstanceResponse.InstanceID = ec2StartInstance.InstanceID
+		ec2StartInstanceResponse.Error = fmt.Sprintf("Instance %s not found", ec2StartInstanceResponse.InstanceID)
+		ec2StartInstanceResponse.Respond(msg)
+		return
+	}
+
+	// Launch the instance
+
+	err := d.LaunchInstance(instance)
+
+	if err != nil {
+		ec2StartInstanceResponse.Error = err.Error()
+	} else {
+		ec2StartInstanceResponse.InstanceID = instance.ID
+		ec2StartInstanceResponse.Status = instance.Status
+	}
+
+	ec2StartInstanceResponse.Respond(msg)
+
+}
 
 func (d *Daemon) handleEC2Describe(msg *nats.Msg) {
 
@@ -509,59 +567,41 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 	log.Printf("Received message on subject: %s", msg.Subject)
 	log.Printf("Message data: %s", string(msg.Data))
 
-	// Confirm the instance is running on this node
-	var instanceRunning bool
+	instance, ok := d.Instances.VMS[command.ID]
 
-	//d.Instances.Mu.Lock()
-	//defer d.Instances.Mu.Unlock()
-
-	for _, instance := range d.Instances.VMS {
-		if instance.ID == command.ID {
-			instanceRunning = true
-
-			// Send the command to the instance
-			resp, err := d.SendQMPCommand(instance.QMPClient, command.QMPCommand, instance.ID)
-
-			if err != nil {
-				slog.Error("Failed to send QMP command: %v", err)
-				return
-			}
-
-			fmt.Println("RAW QMP Response: ", string(resp.Return))
-
-			// Unmarshal the response
-			target, ok := qmp.CommandResponseTypes[command.QMPCommand.Execute]
-			if !ok {
-				slog.Warn("Unhandled QMP command: %s", command.QMPCommand.Execute)
-				return
-			}
-
-			if err := json.Unmarshal(resp.Return, target); err != nil {
-				slog.Error("Failed to unmarshal QMP response for %s: %v", command.QMPCommand.Execute, err)
-				return
-			}
-
-			msg.Respond(resp.Return)
-
-		}
-
-	}
-
-	if !instanceRunning {
+	if !ok {
 		// TODO: Improve, return error
 		slog.Warn("Instance %s is not running on this node", command.ID)
 		msg.Respond(nil)
 		return
 	}
 
-	// Update the instance attributes
-	d.Instances.Mu.Lock()
-	instance, ok := d.Instances.VMS[command.ID]
-	if !ok {
-		slog.Warn("Instance %s not found", command.ID)
+	// Send the command to the instance
+	resp, err := d.SendQMPCommand(instance.QMPClient, command.QMPCommand, instance.ID)
+
+	if err != nil {
+		slog.Error("Failed to send QMP command: %v", err)
 		return
 	}
 
+	fmt.Println("RAW QMP Response: ", string(resp.Return))
+
+	// Unmarshal the response
+	target, ok := qmp.CommandResponseTypes[command.QMPCommand.Execute]
+	if !ok {
+		slog.Warn("Unhandled QMP command: %s", command.QMPCommand.Execute)
+		return
+	}
+
+	if err := json.Unmarshal(resp.Return, target); err != nil {
+		slog.Error("Failed to unmarshal QMP response for %s: %v", command.QMPCommand.Execute, err)
+		return
+	}
+
+	msg.Respond(resp.Return)
+
+	// Update the instance attributes
+	d.Instances.Mu.Lock()
 	instance.Attributes = command.Attributes
 	d.Instances.Mu.Unlock()
 
@@ -1364,6 +1404,7 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 				if instance.Status == "powering_down" {
 					instance.Status = "stopped"
 
+					// TODO: Improve, confirm QEMU PID removed
 					slog.Info("QMP Status - Instance %s stopped, exiting heartbeat", instance.ID)
 
 					// TODO: Improve, move to SendQMPCommand
@@ -1398,6 +1439,23 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 }
 
 func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
+
+	// First, confirm if the instance is already running
+	pid, err := utils.ReadPidFile(instance.ID)
+
+	if pid > 0 {
+		process, err := os.FindProcess(pid)
+		if err != nil {
+			return err
+		}
+
+		// Send a 0 signal to confirm process is running
+		err = process.Signal(syscall.Signal(0))
+		if err != nil {
+			slog.Error("Instance is already running", "InstanceID", instance.ID, "pid", pid)
+			return errors.New("instance is already running")
+		}
+	}
 
 	// Loop through each volume in volumes
 	err = d.MountVolumes(instance)
