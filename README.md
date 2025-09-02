@@ -1,6 +1,6 @@
 # Hive: An Open Source AWS-Compatible Stack for Bare-Metal, Edge, and On-Prem Deployments
 
-Hive developed by [Mulga Defense Corporation](https://mulgadc.com/) is an open source infrastructure platform that brings the core services of AWS—like EC2, VPC, EBS, and S3—to environments where running in the cloud isn't an option. Whether you're deploying to edge sites, private data-centers, or need to operate in low-connectivity or highly contested environments, Hive gives you AWS-style workflows on your own hardware.
+(Developer Preview) - Hive developed by [Mulga Defense Corporation](https://mulgadc.com/) is an open source infrastructure platform that brings the core services of AWS—like EC2, VPC, EBS, and S3—to environments where running in the cloud isn't an option. Whether you're deploying to edge sites, private data-centers, or need to operate in low-connectivity or highly contested environments, Hive gives you AWS-style workflows on your own hardware.
 
 ## What is Hive?
 
