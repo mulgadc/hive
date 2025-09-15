@@ -46,6 +46,28 @@ make bench          # Run benchmarks
 make clean          # Clean build artifacts
 ```
 
+### **MANDATORY: Unit Testing Requirements**
+
+**⚠️ CRITICAL: Always run unit tests before any commit or push operation.**
+
+```bash
+# REQUIRED before any git commit or push
+make test           # Must pass with zero failures
+
+# Example workflow:
+make test                    # Verify all tests pass
+git add .                    # Stage changes
+git commit -m "..."          # Only after tests pass
+git push origin main         # Only after tests pass
+```
+
+**Testing Policy:**
+- **All unit tests MUST pass** before committing changes
+- **No exceptions** - failing tests block commits
+- Tests must complete without errors or panics
+- Use `make test` command to run the full test suite
+- If tests fail, fix issues before proceeding with git operations
+
 ### Component Build Commands
 For detailed build instructions, see component-specific CLAUDE.md files:
 
