@@ -46,6 +46,21 @@ start_service() {
     sleep 2
 }
 
+# Function to start service in foreground (for final daemon)
+start_service_foreground() {
+    local name="$1"
+    local command="$2"
+
+    echo "📡 Starting $name in foreground..."
+    echo "   Command: $command"
+
+    # Setup signal handler to stop background services when daemon stops
+    trap 'echo ""; echo "🛑 Stopping all services..."; ./scripts/stop-dev.sh; exit 0' INT TERM
+
+    # Start the service in foreground
+    $command
+}
+
 # Function to check if service is responsive
 check_service() {
     local name="$1"
@@ -122,34 +137,42 @@ start_service "viperblock" "$VIPERBLOCK_CMD"
 echo ""
 echo "4️⃣  Starting Hive Gateway..."
 
+# Use the same base directory as Viperblock for consistency
+HIVE_BASE_DIR="$VB_BASE_DIR"
+
 # Check if we should use air for hot reloading
 if command -v air >/dev/null 2>&1 && [ -f ".air.toml" ]; then
     echo "   🔥 Using air for hot reloading"
-    echo "   Starting Hive with air..."
-    air
+    start_service_foreground "hive-air" "air"
 else
-    echo "   🔨 Building and starting Hive daemon"
-    make build
+    echo "   🔨 Starting Hive daemon with go run"
 
-    # Start Hive daemon
-    HIVE_CMD="./bin/hive daemon --config $CONFIG_DIR/dev.yaml"
-    echo "   Command: $HIVE_CMD"
-    $HIVE_CMD
+    # Check if config file exists
+    if [ ! -f "$CONFIG_DIR/hive.toml" ]; then
+        echo "   ⚠️  Config file not found at $CONFIG_DIR/hive.toml"
+        echo "   You may need to create this file or use a different config path"
+    fi
+
+    # Start Hive daemon directly with go run (in foreground)
+    HIVE_CMD="go run cmd/hive/main.go --config $CONFIG_DIR/hive.toml --base-dir $HIVE_BASE_DIR daemon"
+
+    echo ""
+    echo "🔗 Service endpoints will be:"
+    echo "   - NATS:          nats://localhost:4222"
+    echo "   - Predastore:    https://localhost:8443"
+    echo "   - Hive Gateway:  https://localhost:9999"
+    echo ""
+    echo "📊 Monitor background service logs:"
+    echo "   tail -f $LOGS_DIR/*.log"
+    echo ""
+    echo "🧪 Test with AWS CLI (once daemon is running):"
+    echo "   aws --endpoint-url https://localhost:9999 --no-verify-ssl ec2 describe-instances"
+    echo ""
+
+    # Use foreground function which includes signal handling
+    start_service_foreground "hive-daemon" "$HIVE_CMD"
 fi
 
+# This will only be reached if air/daemon exits normally
 echo ""
-echo "🎉 Hive development environment started successfully!"
-echo ""
-echo "🔗 Service endpoints:"
-echo "   - NATS:          nats://localhost:4222"
-echo "   - Predastore:    https://localhost:8443"
-echo "   - Hive Gateway:  https://localhost:9999"
-echo ""
-echo "📊 Monitor logs:"
-echo "   tail -f $LOGS_DIR/*.log"
-echo ""
-echo "🧪 Test with AWS CLI:"
-echo "   aws --endpoint-url https://localhost:9999 --no-verify-ssl ec2 describe-instances"
-echo ""
-echo "🛑 Stop services:"
-echo "   ./scripts/stop-dev.sh"
+echo "🛑 Hive development environment stopped"
