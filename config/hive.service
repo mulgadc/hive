@@ -1,0 +1,49 @@
+[Unit]
+Description=Hive Services
+Documentation=https://github.com/mulgadc/hive
+After=network.target
+Wants=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Group=root
+WorkingDirectory=/opt/hive
+Environment=PATH=/opt/hive/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Start NATS service
+ExecStart=/opt/hive/bin/hive service nats start
+ExecStartPost=/bin/sleep 3
+
+# Start Predastore service
+ExecStart=/opt/hive/bin/hive service predastore start
+ExecStartPost=/bin/sleep 2
+
+# Start Viperblock service
+ExecStart=/opt/hive/bin/hive service viperblock start
+
+# Stop services in reverse order
+ExecStop=/opt/hive/bin/hive service viperblock stop
+ExecStopPost=/bin/sleep 2
+ExecStop=/opt/hive/bin/hive service predastore stop
+ExecStopPost=/bin/sleep 2
+ExecStop=/opt/hive/bin/hive service nats stop
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+
+# Security settings
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/hive /var/log /var/run
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hive
+
+[Install]
+WantedBy=multi-user.target 

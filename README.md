@@ -52,12 +52,86 @@ AWS-Compatible Interfaces – Provision infrastructure with awscli, Terraform, o
 - Works Offline – No reliance on centralized cloud services or external networks.
 - Open Source – Licensed under Apache 2.0. Fork it, extend it, or deploy it as-is.
 
+## Development Setup
+
+### For Developers
+
+Get started with Hive development in minutes:
+
+```bash
+# Clone the repository
+git clone https://github.com/mulgadc/hive.git hive
+cd hive
+
+# Setup dependencies and development environment
+./scripts/clone-deps.sh    # Clone viperblock + predastore repositories
+./scripts/dev-setup.sh     # Setup complete development environment
+
+# Start all services (NATS, Predastore, Viperblock, Hive Gateway)
+./scripts/start-dev.sh
+
+# Test with AWS CLI
+aws --endpoint-url https://localhost:9999 --no-verify-ssl ec2 describe-instances
+
+# Stop all services when done
+./scripts/stop-dev.sh
+```
+
+**Development Features:**
+- **Hot Reloading**: Automatic service restarts during development
+- **Multi-Repository**: Seamless cross-component development workflow
+- **TLS Ready**: Auto-generated certificates for HTTPS endpoints
+- **AWS Compatible**: Test with real AWS CLI and SDKs
+
+### Component Repositories
+
+Hive coordinates these independent components:
+- **[Viperblock](../viperblock/)** - EBS-compatible block storage
+- **[Predastore](../predastore/)** - S3-compatible object storage
+
+Each component can be developed independently. See component-specific documentation for focused development guides.
+
 ## Quick Start
 
 See [Installation Guide](INSTALL.md) on how to setup a Hive node to get started.
 
-Then configure your AWS CLI to point to Hive’s endpoints and start launching VMs, buckets, and volumes using familiar commands and Terraform scripts.
+Then configure your AWS CLI to point to Hive's endpoints and start launching VMs, buckets, and volumes using familiar commands and Terraform scripts.
+
+## Development Philosophy
+
+### Built by Engineers, For Engineers
+
+Hive is developed by experienced infrastructure engineers with deep AWS expertise, including former AWS team members who understand the intricacies of building production-grade cloud services. Our team brings decades of combined experience from AWS, enterprise infrastructure, and edge computing environments.
+
+**Real-World Experience:**
+- Production AWS service development and operations
+- Large-scale infrastructure deployment and management
+- Edge computing and resource-constrained environments
+- Enterprise security and compliance requirements
+
+### AI-Assisted Development
+
+While Hive is architected and implemented by experienced engineers, we leverage **Claude Code** (Anthropic's AI coding assistant) to accelerate certain development tasks. This approach combines human expertise with AI efficiency:
+
+**How We Use Claude Code:**
+- **Code Generation**: Boilerplate AWS API structures and handlers
+- **Documentation**: Comprehensive development guides and API documentation
+- **Testing**: Test case generation and validation scenarios
+- **Refactoring**: Large-scale code restructuring and optimization
+
+**What Remains Human-Driven:**
+- **Architecture Decisions**: Core system design and scalability choices
+- **Security Implementation**: Authentication, encryption, and threat modeling
+- **Performance Optimization**: Real-world performance tuning and benchmarking
+- **Production Operations**: Deployment strategies and operational procedures
+
+**Development Artifacts:**
+- `CLAUDE.md` - Instructions for Claude Code when working on this codebase
+- `HIVE_DEVELOPMENT_PLAN.md` - Comprehensive roadmap and implementation strategy
+- Component-specific guidance in `viperblock/CLAUDE.md` and `predastore/CLAUDE.md`
+
+This hybrid approach ensures Hive benefits from both proven engineering expertise and modern development acceleration, while maintaining the quality and reliability standards required for production infrastructure.
 
 ## License
 
-Hive is open source under the Apache 2.0 License. You’re free to use, modify, and deploy it—anywhere you need reliable infrastructure without depending on centralized cloud platforms
+Hive is open source under the Apache 2.0 License. You're free to use, modify, and deploy it—anywhere you need reliable infrastructure without depending on centralized cloud platforms
