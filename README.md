@@ -70,7 +70,16 @@ cd hive
 # Start all services (NATS, Predastore, Viperblock, Hive Gateway)
 ./scripts/start-dev.sh
 
-# Test with AWS CLI
+# Provision a local EC2 instance running on Hive
+aws --endpoint-url https://localhost:9999 --no-verify-ssl ec2 run-instances \
+  --image-id ami-185c47c7b6d31bba9 \
+  --instance-type t3.micro \
+  --key-name test-keypair \
+  --security-group-ids sg-0123456789abcdef0 \
+  --subnet-id subnet-6e7f829e \
+  --count 1
+
+# Validate instance
 aws --endpoint-url https://localhost:9999 --no-verify-ssl ec2 describe-instances
 
 # Stop all services when done
@@ -78,6 +87,7 @@ aws --endpoint-url https://localhost:9999 --no-verify-ssl ec2 describe-instances
 ```
 
 **Development Features:**
+
 - **Hot Reloading**: Automatic service restarts during development
 - **Multi-Repository**: Seamless cross-component development workflow
 - **TLS Ready**: Auto-generated certificates for HTTPS endpoints
@@ -86,8 +96,9 @@ aws --endpoint-url https://localhost:9999 --no-verify-ssl ec2 describe-instances
 ### Component Repositories
 
 Hive coordinates these independent components:
-- **[Viperblock](../viperblock/)** - EBS-compatible block storage
-- **[Predastore](../predastore/)** - S3-compatible object storage
+
+- **[Predastore](https://github.com/mulgadc/predastore)** - S3-compatible object storage
+- **[Viperblock](https://github.com/mulgadc/viperblock)** - EBS-compatible block storage
 
 Each component can be developed independently. See component-specific documentation for focused development guides.
 
@@ -104,6 +115,7 @@ Then configure your AWS CLI to point to Hive's endpoints and start launching VMs
 Hive is developed by experienced infrastructure engineers with deep AWS expertise, including former AWS team members who understand the intricacies of building production-grade cloud services. Our team brings decades of combined experience from AWS, enterprise infrastructure, and edge computing environments.
 
 **Real-World Experience:**
+
 - Production AWS service development and operations
 - Large-scale infrastructure deployment and management
 - Edge computing and resource-constrained environments
@@ -114,18 +126,21 @@ Hive is developed by experienced infrastructure engineers with deep AWS expertis
 While Hive is architected and implemented by experienced engineers, we leverage **Claude Code** (Anthropic's AI coding assistant) to accelerate certain development tasks. This approach combines human expertise with AI efficiency:
 
 **How We Use Claude Code:**
+
 - **Code Generation**: Boilerplate AWS API structures and handlers
 - **Documentation**: Comprehensive development guides and API documentation
 - **Testing**: Test case generation and validation scenarios
 - **Refactoring**: Large-scale code restructuring and optimization
 
 **What Remains Human-Driven:**
+
 - **Architecture Decisions**: Core system design and scalability choices
 - **Security Implementation**: Authentication, encryption, and threat modeling
 - **Performance Optimization**: Real-world performance tuning and benchmarking
 - **Production Operations**: Deployment strategies and operational procedures
 
 **Development Artifacts:**
+
 - `CLAUDE.md` - Instructions for Claude Code when working on this codebase
 - `HIVE_DEVELOPMENT_PLAN.md` - Comprehensive roadmap and implementation strategy
 - Component-specific guidance in `viperblock/CLAUDE.md` and `predastore/CLAUDE.md`
