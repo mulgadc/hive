@@ -207,5 +207,7 @@ func LoadConfig(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("secret key is required")
 	}
 
+	//	fmt.Println("Config: ", config)
+
 	return &config, nil
 }

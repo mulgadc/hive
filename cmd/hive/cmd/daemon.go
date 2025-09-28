@@ -9,6 +9,7 @@ import (
 
 	"github.com/mulgadc/hive/hive/daemon"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 // daemonCmd represents the daemon command
@@ -23,7 +24,7 @@ and manages local resources for instance creation.`,
 		}
 
 		// Overwrite defaults (CLI first, config second, env third)
-		baseDir, _ := cmd.Flags().GetString("base-dir")
+		baseDir := viper.GetString("base-dir")
 
 		if baseDir != "" {
 			fmt.Println("Overwriting base-dir to:", baseDir)

@@ -58,7 +58,7 @@ AWS SDK (custom endpoint) → Hive API Gateway → NATS Topics → Specialized D
 - **Queue Groups**: Uses `"hive-workers"` queue group for load balancing (daemon.go:749)
 - **TLS Gateway**: Working AWS SDK integration with TLS (daemon.go:330)
 - **Service Integration**: Viperblock (EBS) and Predastore (S3) via NATS messaging
-- **VM Management**: QEMU/KVM with QMP integration for lifecycle management
+- **VM Management**: QEMU/KVM with QMP integration for lifecycle management, support " QMP event event=BLOCK_IO_ERROR" to catch corrupt disks.
 
 ### Scalability Benefits
 - **Horizontal Scaling**: Add more daemon instances to handle increased load

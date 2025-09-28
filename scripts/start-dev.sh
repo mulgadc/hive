@@ -11,7 +11,7 @@ MULGA_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"
 
 # Configuration paths
 CONFIG_DIR="$PROJECT_ROOT/config"
-DATA_DIR="$PROJECT_ROOT/data"
+DATA_DIR="$HOME/hive"
 LOGS_DIR="$DATA_DIR/logs"
 
 echo "🚀 Starting Hive development environment..."
@@ -20,7 +20,14 @@ echo "Data directory: $DATA_DIR"
 
 # Create necessary directories
 mkdir -p "$DATA_DIR"/{predastore,viperblock,logs}
+
 mkdir -p /mnt/ramdisk 2>/dev/null || echo "⚠️  /mnt/ramdisk not available, using $DATA_DIR/viperblock"
+
+# Check if /mnt/ramdisk is mounted, if not mount it as tmpfs
+if ! mountpoint -q /mnt/ramdisk; then
+    echo "💾 Mounting /mnt/ramdisk as tmpfs"
+    sudo mount -t tmpfs -o size=8G tmpfs /mnt/ramdisk/
+fi
 
 # Change to project root for all commands
 cd "$PROJECT_ROOT"
@@ -84,21 +91,44 @@ check_service() {
     return 1
 }
 
+# Pre-flight, compile latest
+echo "1️✈️ Pre-flight, compiling latest..."
+make build
+
 # 1️⃣ Start NATS server
 echo ""
 echo "1️⃣  Starting NATS server..."
-start_service "nats" "go run cmd/hive/main.go service nats start"
+
+export HIVE_NATS_HOST=0.0.0.0
+export HIVE_NATS_PORT=4222
+export HIVE_NATS_DATA_DIR=$DATA_DIR/nats/
+export HIVE_NATS_JETSTREAM=false
+export HIVE_NATS_DEBUG=true
+
+# Use air for hot reloading (dev!)
+#NATS_CMD="air -c .air-nats.toml"
+NATS_CMD="./bin/hive service nats start"
+
+start_service "nats" "$NATS_CMD"
+
+#start_service "nats" "go run cmd/hive/main.go service nats start"
 check_service "NATS" "4222"
 
 # 2️⃣ Start Predastore
 echo ""
 echo "2️⃣  Starting Predastore..."
-PREDASTORE_CMD="go run cmd/hive/main.go service predastore \
-    --base-path $DATA_DIR/predastore/ \
-    --config-path $CONFIG_DIR/predastore/predastore.toml \
-    --tls-cert $CONFIG_DIR/server.pem \
-    --tls-key $CONFIG_DIR/server.key \
-    --debug start"
+
+export HIVE_PREDASTORE_BASE_PATH=~/hive/predastore/
+export HIVE_PREDASTORE_CONFIG_PATH=$CONFIG_DIR/predastore/predastore.toml
+export HIVE_PREDASTORE_TLS_CERT=$CONFIG_DIR/server.pem
+export HIVE_PREDASTORE_TLS_KEY=$CONFIG_DIR/server.key
+export HIVE_PREDASTORE_DEBUG=true
+export HIVE_PREDASTORE_HOST=0.0.0.0
+export HIVE_PREDASTORE_PORT=8443
+
+# Use air for hot reloading (dev!)
+#PREDASTORE_CMD="air -c .air-predastore.toml"
+PREDASTORE_CMD="./bin/hive service predastore start"
 
 start_service "predastore" "$PREDASTORE_CMD"
 check_service "Predastore" "8443"
@@ -107,7 +137,7 @@ check_service "Predastore" "8443"
 echo ""
 echo "3️⃣  Starting Viperblock..."
 
-# Determine base directory for Viperblock data
+# Determine base directory for Viperblock data, dev uses /mnt/ramdisk if available
 if [ -d "/mnt/ramdisk" ] && [ -w "/mnt/ramdisk" ]; then
     VB_BASE_DIR="/mnt/ramdisk/"
 else
@@ -116,6 +146,7 @@ fi
 
 # Check if NBD plugin exists
 NBD_PLUGIN_PATH="$MULGA_ROOT/viperblock/lib/nbdkit-viperblock-plugin.so"
+
 if [ ! -f "$NBD_PLUGIN_PATH" ]; then
     echo "   ⚠️  NBD plugin not found at $NBD_PLUGIN_PATH"
     echo "   Building Viperblock first..."
@@ -124,12 +155,24 @@ if [ ! -f "$NBD_PLUGIN_PATH" ]; then
     cd "$PROJECT_ROOT"
 fi
 
-VIPERBLOCK_CMD="go run cmd/hive/main.go service viperblock start \
-    --nats-host 0.0.0.0:4222 \
-    --access-key AKIAIOSFODNN7EXAMPLE \
-    --secret-key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \
-    --base-dir $VB_BASE_DIR \
-    --plugin-path $NBD_PLUGIN_PATH"
+export HIVE_VIPERBLOCK_S3_HOST=0.0.0.0:8443
+export HIVE_VIPERBLOCK_S3_BUCKET=predastore
+export HIVE_VIPERBLOCK_S3_REGION=ap-southeast-2
+export HIVE_VIPERBLOCK_PLUGIN_PATH=$NBD_PLUGIN_PATH
+export HIVE_NATS_HOST=0.0.0.0:4222
+export HIVE_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE
+export HIVE_SECRET_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+export HIVE_BASE_DIR=$VB_BASE_DIR
+
+#VIPERBLOCK_CMD="air -c .air-viperblock.toml"
+VIPERBLOCK_CMD="./bin/hive service viperblock start"
+
+#VIPERBLOCK_CMD="go run cmd/hive/main.go service viperblock start \
+#    --nats-host 0.0.0.0:4222 \
+#    --access-key AKIAIOSFODNN7EXAMPLE \
+#    --secret-key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \
+#    --base-dir $VB_BASE_DIR \
+#    --plugin-path $NBD_PLUGIN_PATH"
 
 start_service "viperblock" "$VIPERBLOCK_CMD"
 
@@ -139,40 +182,28 @@ echo "4️⃣  Starting Hive Gateway..."
 
 # Use the same base directory as Viperblock for consistency
 HIVE_BASE_DIR="$VB_BASE_DIR"
+HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
+HIVE_BASE_DIR=$DATA_DIR/hive/
 
-# Check if we should use air for hot reloading
-if command -v air >/dev/null 2>&1 && [ -f ".air.toml" ]; then
-    echo "   🔥 Using air for hot reloading"
-    start_service_foreground "hive-air" "air"
-else
-    echo "   🔨 Starting Hive daemon with go run"
+#HIVE_CMD="air -c .air-hive.toml"
+#HIVE_CMD="./bin/hive service hive start"
+HIVE_CMD="./bin/hive daemon --config config/hive.toml --base-dir $HIVE_BASE_DIR"
 
-    # Check if config file exists
-    if [ ! -f "$CONFIG_DIR/hive.toml" ]; then
-        echo "   ⚠️  Config file not found at $CONFIG_DIR/hive.toml"
-        echo "   You may need to create this file or use a different config path"
-    fi
+start_service "hive" "$HIVE_CMD"
 
-    # Start Hive daemon directly with go run (in foreground)
-    HIVE_CMD="go run cmd/hive/main.go --config $CONFIG_DIR/hive.toml --base-dir $HIVE_BASE_DIR daemon"
-
-    echo ""
-    echo "🔗 Service endpoints will be:"
-    echo "   - NATS:          nats://localhost:4222"
-    echo "   - Predastore:    https://localhost:8443"
-    echo "   - Hive Gateway:  https://localhost:9999"
-    echo ""
-    echo "📊 Monitor background service logs:"
-    echo "   tail -f $LOGS_DIR/*.log"
-    echo ""
-    echo "🧪 Test with AWS CLI (once daemon is running):"
-    echo "   aws --endpoint-url https://localhost:9999 --no-verify-ssl ec2 describe-instances"
-    echo ""
-
-    # Use foreground function which includes signal handling
-    start_service_foreground "hive-daemon" "$HIVE_CMD"
-fi
+echo ""
+echo "🔗 Service endpoints will be:"
+echo "   - NATS:          nats://localhost:4222"
+echo "   - Predastore:    https://localhost:8443"
+echo "   - Hive Gateway:  https://localhost:9999"
+echo ""
+echo "📊 Monitor background service logs:"
+echo "   tail -f $LOGS_DIR/*.log"
+echo ""
+echo "🧪 Test with AWS CLI (once daemon is running):"
+echo "   aws --endpoint-url https://localhost:9999 --no-verify-ssl ec2 describe-instances"
+echo ""
 
 # This will only be reached if air/daemon exits normally
-echo ""
-echo "🛑 Hive development environment stopped"
+#echo ""
+#echo "🛑 Hive development environment stopped"

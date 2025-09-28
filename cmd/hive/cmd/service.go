@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/mulgadc/hive/hive/service"
 	"github.com/mulgadc/hive/hive/services/nats"
 	"github.com/mulgadc/hive/hive/services/predastore"
 	"github.com/mulgadc/hive/hive/services/viperblockd"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 var serviceCmd = &cobra.Command{
@@ -43,46 +45,35 @@ var predastoreStartCmd = &cobra.Command{
 		fmt.Println("Starting predastore service...")
 
 		// Get the port from the flags
-		port, err := cmd.Flags().GetInt("port")
-		if err != nil {
-			fmt.Println("Error getting port:", err)
+		port := viper.GetInt("port")
+		host := viper.GetString("host")
+		basePath := viper.GetString("base-path")
+		debug := viper.GetBool("debug")
+
+		// Required, no default
+		if basePath == "" {
+			fmt.Println("Base path is not set")
 			return
 		}
 
-		host, err := cmd.Flags().GetString("host")
-		if err != nil {
-			fmt.Println("Error getting host:", err)
+		configPath := viper.GetString("config-path")
+
+		if configPath == "" {
+			fmt.Println("Config path is not set")
 			return
 		}
 
-		basePath, err := cmd.Flags().GetString("base-path")
-		if err != nil {
-			fmt.Println("Error getting base-path:", err)
+		tlsCert := viper.GetString("tls-cert")
+
+		if tlsCert == "" {
+			fmt.Println("TLS cert is not set")
 			return
 		}
 
-		configPath, err := cmd.Flags().GetString("config-path")
-		if err != nil {
-			fmt.Println("Error getting config-path:", err)
-			return
-		}
+		tlsKey := viper.GetString("tls-key")
 
-		debug, err := cmd.Flags().GetBool("debug")
-		if err != nil {
-			fmt.Println("Error getting debug:", err)
-			return
-		}
-
-		// TLS
-		tlsCert, err := cmd.Flags().GetString("tls-cert")
-		if err != nil {
-			fmt.Println("Error getting tls-cert:", err)
-			return
-		}
-
-		tlsKey, err := cmd.Flags().GetString("tls-key")
-		if err != nil {
-			fmt.Println("Error getting tls-key:", err)
+		if tlsKey == "" {
+			fmt.Println("TLS key is not set")
 			return
 		}
 
@@ -143,7 +134,7 @@ var viperblockStartCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Starting viperblock service...")
 
-		natsHost, _ := cmd.Flags().GetString("nats-host")
+		natsHost := viper.GetString("nats-host")
 
 		if natsHost == "" {
 			err := fmt.Errorf("nats-host must be defined")
@@ -151,7 +142,7 @@ var viperblockStartCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		s3Host, _ := cmd.Flags().GetString("s3-host")
+		s3Host := viper.GetString("s3-host")
 
 		if s3Host == "" {
 			err := fmt.Errorf("s3-host must be defined")
@@ -159,7 +150,7 @@ var viperblockStartCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		s3Bucket, _ := cmd.Flags().GetString("s3-bucket")
+		s3Bucket := viper.GetString("s3-bucket")
 
 		if s3Bucket == "" {
 			err := fmt.Errorf("s3-bucket must be defined")
@@ -167,7 +158,7 @@ var viperblockStartCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		s3Region, _ := cmd.Flags().GetString("s3-region")
+		s3Region := viper.GetString("s3-region")
 
 		if s3Region == "" {
 			err := fmt.Errorf("s3-region must be defined")
@@ -175,28 +166,28 @@ var viperblockStartCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		accessKey, _ := cmd.Flags().GetString("access-key")
+		accessKey := viper.GetString("access-key")
 		if accessKey == "" {
 			err := fmt.Errorf("access-key must be defined")
 			slog.Error(err.Error())
 			os.Exit(1)
 		}
 
-		secretKey, _ := cmd.Flags().GetString("secret-key")
+		secretKey := viper.GetString("secret-key")
 		if secretKey == "" {
 			err := fmt.Errorf("secret-key must be defined")
 			slog.Error(err.Error())
 			os.Exit(1)
 		}
 
-		baseDir, _ := cmd.Flags().GetString("base-dir")
+		baseDir := viper.GetString("base-dir")
 		if baseDir == "" {
 			err := fmt.Errorf("base-dir must be defined")
 			slog.Error(err.Error())
 			os.Exit(1)
 		}
 
-		pluginPath, _ := cmd.Flags().GetString("plugin-path")
+		pluginPath := viper.GetString("plugin-path")
 
 		if pluginPath == "" {
 			err := fmt.Errorf("plugin-path must be defined")
@@ -243,6 +234,18 @@ var viperblockStopCmd = &cobra.Command{
 	Short: "Stop the viperblock service",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Stopping viperblock service...")
+
+		service, err := service.New("viperblock", &viperblockd.Config{})
+
+		if err != nil {
+			fmt.Println("Error stopping viperblock service:", err)
+			return
+		}
+
+		service.Stop()
+
+		fmt.Println("Viperblock service stopped", service)
+
 	},
 }
 
@@ -261,20 +264,11 @@ var natsStartCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Starting nats service...")
 
-		// Get configuration from flags or use defaults
-		port, _ := cmd.Flags().GetInt("port")
-		host, _ := cmd.Flags().GetString("host")
-		debug, _ := cmd.Flags().GetBool("debug")
-		dataDir, _ := cmd.Flags().GetString("data-dir")
-		jetStream, _ := cmd.Flags().GetBool("jetstream")
-
-		// Set defaults
-		if port == 0 {
-			port = 4222
-		}
-		if host == "" {
-			host = "0.0.0.0"
-		}
+		port := viper.GetInt("port")
+		host := viper.GetString("host")
+		debug := viper.GetBool("debug")
+		dataDir := viper.GetString("data-dir")
+		jetStream := viper.GetBool("jetstream")
 
 		service, err := service.New("nats", &nats.Config{
 			Port:      port,
@@ -322,19 +316,50 @@ var natsStatusCmd = &cobra.Command{
 }
 
 func init() {
+
+	viper.SetEnvPrefix("HIVE") // Prefix for environment variables
+	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
+
+	viper.AutomaticEnv() // Read environment variables automatically
+
 	rootCmd.AddCommand(serviceCmd)
 
 	serviceCmd.AddCommand(predastoreCmd)
 
+	// Predastore Port
 	predastoreCmd.PersistentFlags().Int("port", 8443, "Predastore (S3) port")
-	predastoreCmd.PersistentFlags().String("host", "0.0.0.0", "Predastore (S3) host")
-	predastoreCmd.PersistentFlags().String("base-path", "", "Predastore (S3) base path")
-	predastoreCmd.PersistentFlags().String("config-path", "", "Predastore (S3) config path")
-	predastoreCmd.PersistentFlags().Bool("debug", false, "Predastore (S3) debug")
+	viper.BindEnv("port", "HIVE_PREDASTORE_PORT")
+	viper.BindPFlag("port", predastoreCmd.PersistentFlags().Lookup("port"))
 
-	// TLS
+	// Predastore Host
+	predastoreCmd.PersistentFlags().String("host", "0.0.0.0", "Predastore (S3) host")
+	viper.BindEnv("host", "HIVE_PREDASTORE_HOST")
+	viper.BindPFlag("host", predastoreCmd.PersistentFlags().Lookup("host"))
+
+	// Base path
+	predastoreCmd.PersistentFlags().String("base-path", "", "Predastore (S3) base path")
+	viper.BindEnv("base-path", "HIVE_PREDASTORE_BASE_PATH")
+	viper.BindPFlag("base-path", predastoreCmd.PersistentFlags().Lookup("base-path"))
+
+	// Predastore Config Path
+	predastoreCmd.PersistentFlags().String("config-path", "", "Predastore (S3) config path")
+	viper.BindEnv("config-path", "HIVE_PREDASTORE_CONFIG_PATH")
+	viper.BindPFlag("config-path", predastoreCmd.PersistentFlags().Lookup("config-path"))
+
+	// Predastore Debug
+	predastoreCmd.PersistentFlags().Bool("debug", false, "Predastore (S3) debug")
+	viper.BindEnv("debug", "HIVE_PREDASTORE_DEBUG")
+	viper.BindPFlag("debug", predastoreCmd.PersistentFlags().Lookup("debug"))
+
+	// Predastore TLS Cert
 	predastoreCmd.PersistentFlags().String("tls-cert", "", "Predastore (S3) TLS certificate")
+	viper.BindEnv("tls-cert", "HIVE_PREDASTORE_TLS_CERT")
+	viper.BindPFlag("tls-cert", predastoreCmd.PersistentFlags().Lookup("tls-cert"))
+
+	// Predastore TLS Key
 	predastoreCmd.PersistentFlags().String("tls-key", "", "Predastore (S3) TLS key")
+	viper.BindEnv("tls-key", "HIVE_PREDASTORE_TLS_KEY")
+	viper.BindPFlag("tls-key", predastoreCmd.PersistentFlags().Lookup("tls-key"))
 
 	predastoreCmd.AddCommand(predastoreStartCmd)
 	predastoreCmd.AddCommand(predastoreStopCmd)
@@ -343,9 +368,20 @@ func init() {
 	serviceCmd.AddCommand(viperblockCmd)
 
 	viperblockCmd.PersistentFlags().String("s3-host", "0.0.0.0:8443", "Predastore (S3) host URI")
+	viper.BindEnv("s3-host", "HIVE_VIPERBLOCK_S3_HOST")
+	viper.BindPFlag("s3-host", predastoreCmd.PersistentFlags().Lookup("s3-host"))
+
 	viperblockCmd.PersistentFlags().String("s3-bucket", "predastore", "Predastore (S3) bucket")
+	viper.BindEnv("s3-bucket", "HIVE_VIPERBLOCK_S3_BUCKET")
+	viper.BindPFlag("s3-bucket", predastoreCmd.PersistentFlags().Lookup("s3-bucket"))
+
 	viperblockCmd.PersistentFlags().String("s3-region", "ap-southeast-2", "Predastore (S3) region")
+	viper.BindEnv("s3-region", "HIVE_VIPERBLOCK_S3_REGION")
+	viper.BindPFlag("s3-region", predastoreCmd.PersistentFlags().Lookup("s3-region"))
+
 	viperblockCmd.PersistentFlags().String("plugin-path", "/opt/hive/lib/nbdkit-viperblock-plugin.so", "Pathname to the nbdkit viperblockplugin")
+	viper.BindEnv("plugin-path", "HIVE_VIPERBLOCK_PLUGIN_PATH")
+	viper.BindPFlag("plugin-path", predastoreCmd.PersistentFlags().Lookup("plugin-path"))
 
 	viperblockCmd.AddCommand(viperblockStartCmd)
 	viperblockCmd.AddCommand(viperblockStopCmd)
@@ -360,8 +396,23 @@ func init() {
 
 	// Add NATS flags
 	natsCmd.PersistentFlags().Int("port", 4222, "NATS server port")
+	viper.BindEnv("port", "HIVE_NATS_PORT")
+	viper.BindPFlag("port", natsCmd.PersistentFlags().Lookup("port"))
+
 	natsCmd.PersistentFlags().String("host", "0.0.0.0", "NATS server host")
+	viper.BindEnv("host", "HIVE_NATS_HOST")
+	viper.BindPFlag("host", natsCmd.PersistentFlags().Lookup("host"))
+
 	natsCmd.PersistentFlags().Bool("debug", false, "Enable debug logging")
+	viper.BindEnv("debug", "HIVE_NATS_DEBUG")
+	viper.BindPFlag("debug", natsCmd.PersistentFlags().Lookup("debug"))
+
 	natsCmd.PersistentFlags().String("data-dir", "", "NATS data directory")
+	viper.BindEnv("data-dir", "HIVE_NATS_DATA_DIR")
+	viper.BindPFlag("data-dir", natsCmd.PersistentFlags().Lookup("data-dir"))
+
 	natsCmd.PersistentFlags().Bool("jetstream", false, "Enable JetStream")
+	viper.BindEnv("jetstream", "HIVE_NATS_JETSTREAM")
+	viper.BindPFlag("jetstream", natsCmd.PersistentFlags().Lookup("jetstream"))
+
 }

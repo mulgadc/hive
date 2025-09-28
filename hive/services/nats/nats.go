@@ -1,7 +1,6 @@
 package nats
 
 import (
-	"fmt"
 	"log"
 	"os"
 
@@ -65,7 +64,7 @@ func launchService(config *Config) {
 		JetStream: config.JetStream,
 	}
 
-	fmt.Println("opts", opts)
+	//fmt.Println("opts", opts)
 
 	// Set defaults if not provided
 	if opts.Port == 0 {

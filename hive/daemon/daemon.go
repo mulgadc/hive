@@ -836,7 +836,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 		Region:     "ap-southeast-2",
 		AccessKey:  d.config.AccessKey,
 		SecretKey:  d.config.SecretKey,
-		Host:       d.config.Host,
+		Host:       d.config.Predastore.Host,
 	}
 
 	volumeConfig := viperblock.VolumeConfig{
@@ -910,7 +910,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 			Region:     "ap-southeast-2",
 			AccessKey:  d.config.AccessKey,
 			SecretKey:  d.config.SecretKey,
-			Host:       d.config.Host,
+			Host:       d.config.Predastore.Host,
 		}
 
 		amiVbConfig := viperblock.VB{
@@ -1044,7 +1044,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 		Region:     "ap-southeast-2",
 		AccessKey:  d.config.AccessKey,
 		SecretKey:  d.config.SecretKey,
-		Host:       d.config.Host,
+		Host:       d.config.Predastore.Host,
 	}
 
 	efiVbConfig := viperblock.VB{
@@ -1156,7 +1156,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 			Region:     "ap-southeast-2",
 			AccessKey:  d.config.AccessKey,
 			SecretKey:  d.config.SecretKey,
-			Host:       d.config.Host,
+			Host:       d.config.Predastore.Host,
 		}
 
 		cloudInitVbConfig := viperblock.VB{
@@ -1226,7 +1226,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 			s3c := s3client.New(s3client.S3Config{
 				AccessKey: d.config.AccessKey,
 				SecretKey: d.config.SecretKey,
-				Host:      d.config.Host,
+				Host:      d.config.Predastore.Host,
 				Bucket:    "predastore",
 				Region:    "ap-southeast-2",
 			})
@@ -1754,7 +1754,7 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 
 		// TODO: Improve timeout handling
 		if err != nil {
-			log.Fatalln(err)
+			slog.Error("Failed to request EBS mount: %v", err)
 			return err
 		}
 
