@@ -23,8 +23,53 @@ adduser hive libvirt
 
 ## Build
 
+Compile `hive` binary which will be used throughout the installation tutorial.
+
 ```
 make
+```
+
+Confirm ./bin/hive exists and executable.
+
+```
+./bin/hive
+
+__/\\\________/\\\__/\\\\\\\\\\\__/\\\________/\\\__/\\\\\\\\\\\\\\\_
+ _\/\\\_______\/\\\_\/////\\\///__\/\\\_______\/\\\_\/\\\///////////__
+  _\/\\\_______\/\\\_____\/\\\_____\//\\\______/\\\__\/\\\_____________
+   _\/\\\\\\\\\\\\\\\_____\/\\\______\//\\\____/\\\___\/\\\\\\\\\\\_____
+    _\/\\\/////////\\\_____\/\\\_______\//\\\__/\\\____\/\\\///////______
+     _\/\\\_______\/\\\_____\/\\\________\//\\\/\\\_____\/\\\_____________
+      _\/\\\_______\/\\\_____\/\\\_________\//\\\\\______\/\\\_____________
+       _\/\\\_______\/\\\__/\\\\\\\\\\\______\//\\\_______\/\\\\\\\\\\\\\\\_
+        _\///________\///__\///////////________\///________\///////////////__
+
+Hive – Open source AWS-compatible platform for secure edge deployments.
+Run EC2, VPC, S3, and EBS-like services on bare metal with full control.
+Built for environments where running in the cloud isn’t an option.
+Whether you’re deploying to edge sites, private data-centers, or operating
+in low-connectivity or highly contested environments
+
+Usage:
+  hive [command]
+
+Available Commands:
+  completion  Generate the autocompletion script for the specified shell
+  help        Help about any command
+  service     Manage Hive services
+
+Flags:
+      --access-key string     AWS access key (overrides config file and env)
+      --base-dir string       Viperblock base directory (overrides config file and env)
+      --config string         config file (required)
+  -h, --help                  help for hive
+      --host string           AWS Endpoint (overrides config file and env)
+      --nats-host string      NATS server host (overrides config file and env)
+      --nats-subject string   NATS subscription subject (overrides config file and env)
+      --nats-token string     NATS authentication token (overrides config file and env)
+      --secret-key string     AWS secret key (overrides config file and env)
+
+Use "hive [command] --help" for more information about a command.
 ```
 
 ## Services
@@ -122,7 +167,7 @@ mount -t tmpfs -o size=8G tmpfs /mnt/ramdisk/
 Ensure predastore is currently running
 
 ```bash
-go run cmd/hive/main.go service predastore --base-path ~/hive/predastore/ --config-path ~/Development/mulga/hive/config/predastore/predastore.toml --tls-cert ~/Development/mulga/hive/config/server.pem --tls-key ~/Development/mulga/hive/config/server.key start
+./bin/hive service predastore --base-path ~/hive/predastore/ --config-path ~/Development/mulga/hive/config/predastore/predastore.toml --tls-cert ~/Development/mulga/hive/config/server.pem --tls-key ~/Development/mulga/hive/config/server.key start
 ```
 
 ## Step 5
@@ -187,7 +232,7 @@ umount /mnt/ramdisk/
 An embedded NATS server provides messaging between components of Hive and is a requirement.
 
 ```
-go run cmd/hive/main.go service nats start --debug
+./bin/hive service nats start --debug
 ```
 
 ### Hive daemon
@@ -195,7 +240,7 @@ go run cmd/hive/main.go service nats start --debug
 The background Hive daemon is a core service which accepts requests to provision services such as the AWS SDK/CLI.
 
 ```
-go run cmd/hive/main.go --config config/hive.toml daemon
+./bin/hive service hive start --config config/hive.toml
 ```
 
 ## Provision instance
@@ -270,25 +315,25 @@ cat tests/ec2.json | nats --trace pub ec2.launch
 ### NATS
 
 ```
-go run cmd/hive/main.go service nats start
+./bin/hive service nats start
 ```
 
 ### Predastore
 
 ```
-go run cmd/hive/main.go service predastore --base-path ~/hive/predastore/ --config-path ~/Development/mulga/hive/config/predastore/predastore.toml --tls-cert ~/Development/mulga/hive/config/server.pem --tls-key ~/Development/mulga/hive/config/server.key  --debug start
+./bin/hive service predastore --base-path ~/hive/predastore/ --config-path ~/Development/mulga/hive/config/predastore/predastore.toml --tls-cert ~/Development/mulga/hive/config/server.pem --tls-key ~/Development/mulga/hive/config/server.key  --debug start
 ```
 
 ### Viperblock
 
 ```
-go run cmd/hive/main.go service viperblock start --nats-host 0.0.0.0:4222 --access-key "AKIAIOSFODNN7EXAMPLE" --secret-key "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" --base-dir /mnt/ramdisk/ --plugin-path ~/Development/mulga/viperblock/lib/nbdkit-viperblock-plugin.so
+./bin/hive service viperblock start --nats-host 0.0.0.0:4222 --access-key "AKIAIOSFODNN7EXAMPLE" --secret-key "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" --base-dir /mnt/ramdisk/ --plugin-path ~/Development/mulga/viperblock/lib/nbdkit-viperblock-plugin.so
 ```
 
 ### Hive (Control Plane)
 
 ```
-go run cmd/hive/main.go --config config/hive.toml --base-dir /mnt/ramdisk/ daemon
+./bin/hive service hive start --config config/hive.toml --base-dir /mnt/ramdisk/
 ```
 
 # Example events

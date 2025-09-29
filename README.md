@@ -102,7 +102,7 @@ Hive coordinates these independent components:
 
 Each component can be developed independently. See component-specific documentation for focused development guides.
 
-## Quick Start
+## Detailed Installation method
 
 See [Installation Guide](INSTALL.md) on how to setup a Hive node to get started.
 

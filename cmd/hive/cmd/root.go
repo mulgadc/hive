@@ -32,9 +32,24 @@ var (
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "hive",
-	Short: "Hive - A NATS-based daemon service",
-	Long: `Hive is a daemon service that connects to NATS and subscribes to EC2 events.
-It can be configured via config file, environment variables, or command line flags.`,
+	Short: "Hive - Open source AWS-compatible platform for secure edge deployments",
+	Long: `
+__/\\\________/\\\__/\\\\\\\\\\\__/\\\________/\\\__/\\\\\\\\\\\\\\\_        
+ _\/\\\_______\/\\\_\/////\\\///__\/\\\_______\/\\\_\/\\\///////////__       
+  _\/\\\_______\/\\\_____\/\\\_____\//\\\______/\\\__\/\\\_____________      
+   _\/\\\\\\\\\\\\\\\_____\/\\\______\//\\\____/\\\___\/\\\\\\\\\\\_____     
+    _\/\\\/////////\\\_____\/\\\_______\//\\\__/\\\____\/\\\///////______    
+     _\/\\\_______\/\\\_____\/\\\________\//\\\/\\\_____\/\\\_____________   
+      _\/\\\_______\/\\\_____\/\\\_________\//\\\\\______\/\\\_____________  
+       _\/\\\_______\/\\\__/\\\\\\\\\\\______\//\\\_______\/\\\\\\\\\\\\\\\_ 
+        _\///________\///__\///////////________\///________\///////////////__
+		
+Hive – Open source AWS-compatible platform for secure edge deployments.
+Run EC2, VPC, S3, and EBS-like services on bare metal with full control.
+Built for environments where running in the cloud isn’t an option.
+Whether you’re deploying to edge sites, private data-centers, or operating
+in low-connectivity or highly contested environments
+`,
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -50,7 +65,7 @@ func init() {
 	cobra.OnInitialize(initConfig)
 
 	// Global flags
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (required)")
+	rootCmd.PersistentFlags().String("config", "", "config file (required)")
 	viper.BindEnv("config", "HIVE_CONFIG_PATH")
 	viper.BindPFlag("config", rootCmd.PersistentFlags().Lookup("config"))
 

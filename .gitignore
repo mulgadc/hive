@@ -1,1 +1,4 @@
+bin/hive
+tmp/
+config/dev.yaml
 .DS_Store

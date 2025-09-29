@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 
+	"github.com/mulgadc/hive/hive/services/hive"
 	"github.com/mulgadc/hive/hive/services/nats"
 	"github.com/mulgadc/hive/hive/services/predastore"
 	"github.com/mulgadc/hive/hive/services/viperblockd"
@@ -24,6 +25,9 @@ func New(btype string, config interface{}) (Service, error) {
 
 	case "nats":
 		return nats.New(config)
+
+	case "hive":
+		return hive.New(config)
 
 	case "viperblock":
 		return viperblockd.New(config)

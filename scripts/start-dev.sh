@@ -13,6 +13,7 @@ MULGA_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"
 CONFIG_DIR="$PROJECT_ROOT/config"
 DATA_DIR="$HOME/hive"
 LOGS_DIR="$DATA_DIR/logs"
+WAL_DIR="$DATA_DIR/hive"
 
 echo "🚀 Starting Hive development environment..."
 echo "Project root: $PROJECT_ROOT"
@@ -27,6 +28,11 @@ mkdir -p /mnt/ramdisk 2>/dev/null || echo "⚠️  /mnt/ramdisk not available, u
 if ! mountpoint -q /mnt/ramdisk; then
     echo "💾 Mounting /mnt/ramdisk as tmpfs"
     sudo mount -t tmpfs -o size=8G tmpfs /mnt/ramdisk/
+fi
+
+# If /mnt/ramdisk is mounted, use it for the WAL directory (for development)
+if mountpoint -q "/mnt/ramdisk"; then
+    WAL_DIR="/mnt/ramdisk/"
 fi
 
 # Change to project root for all commands
@@ -181,13 +187,14 @@ echo ""
 echo "4️⃣  Starting Hive Gateway..."
 
 # Use the same base directory as Viperblock for consistency
-HIVE_BASE_DIR="$VB_BASE_DIR"
-HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
-HIVE_BASE_DIR=$DATA_DIR/hive/
+export HIVE_BASE_DIR="$VB_BASE_DIR"
+export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
+export HIVE_BASE_DIR=$DATA_DIR/hive/
+export HIVE_WAL_DIR=$WAL_DIR
 
 #HIVE_CMD="air -c .air-hive.toml"
-#HIVE_CMD="./bin/hive service hive start"
-HIVE_CMD="./bin/hive daemon --config config/hive.toml --base-dir $HIVE_BASE_DIR"
+#HIVE_CMD="./bin/hive service hive start --config config/hive.toml --base-dir $HIVE_BASE_DIR --wal-dir $WAL_DIR"
+HIVE_CMD="./bin/hive service hive start"
 
 start_service "hive" "$HIVE_CMD"
 

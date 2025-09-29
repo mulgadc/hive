@@ -234,6 +234,12 @@ func NewResourceManager() *ResourceManager {
 // NewDaemon creates a new daemon instance
 func NewDaemon(cfg *config.Config) *Daemon {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// If WalDir is not set, use BaseDir
+	if cfg.WalDir == "" {
+		cfg.WalDir = cfg.BaseDir
+	}
+
 	return &Daemon{
 		config:            cfg,
 		resourceMgr:       NewResourceManager(),
@@ -854,7 +860,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 	vbconfig := viperblock.VB{
 		VolumeName: imageId,
 		VolumeSize: uint64(size),
-		BaseDir:    d.config.BaseDir,
+		BaseDir:    d.config.WalDir,
 		Cache: viperblock.Cache{
 			Config: viperblock.CacheConfig{
 				Size: 0,
@@ -916,7 +922,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 		amiVbConfig := viperblock.VB{
 			VolumeName: ec2Req.ImageID,
 			VolumeSize: uint64(size),
-			BaseDir:    d.config.BaseDir,
+			BaseDir:    d.config.WalDir,
 			Cache: viperblock.Cache{
 				Config: viperblock.CacheConfig{
 					Size: 0,
@@ -1050,7 +1056,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 	efiVbConfig := viperblock.VB{
 		VolumeName: efiVolumeName,
 		VolumeSize: uint64(efiSize),
-		BaseDir:    d.config.BaseDir,
+		BaseDir:    d.config.WalDir,
 		Cache: viperblock.Cache{
 			Config: viperblock.CacheConfig{
 				Size: 0,
@@ -1162,7 +1168,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 		cloudInitVbConfig := viperblock.VB{
 			VolumeName: cloudInitVolumeName,
 			VolumeSize: uint64(cloudInitSize),
-			BaseDir:    d.config.BaseDir,
+			BaseDir:    d.config.WalDir,
 			Cache: viperblock.Cache{
 				Config: viperblock.CacheConfig{
 					Size: 0,

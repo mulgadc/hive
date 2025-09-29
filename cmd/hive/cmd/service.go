@@ -1,5 +1,17 @@
 /*
-Copyright © 2025 NAME HERE <EMAIL ADDRESS>
+Copyright © 2025 Mulga Defense Corporation
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+	http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 */
 package cmd
 
@@ -9,6 +21,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/service"
 	"github.com/mulgadc/hive/hive/services/nats"
 	"github.com/mulgadc/hive/hive/services/predastore"
@@ -35,6 +48,11 @@ var viperblockCmd = &cobra.Command{
 var natsCmd = &cobra.Command{
 	Use:   "nats",
 	Short: "Manage the nats service",
+}
+
+var hiveCmd = &cobra.Command{
+	Use:   "hive",
+	Short: "Manage the hive service",
 }
 
 var predastoreStartCmd = &cobra.Command{
@@ -113,7 +131,7 @@ var predastoreStopCmd = &cobra.Command{
 
 		service.Stop()
 
-		fmt.Println("Predastore service stopped", service)
+		fmt.Println("Predastore service stopped")
 
 	},
 }
@@ -244,7 +262,7 @@ var viperblockStopCmd = &cobra.Command{
 
 		service.Stop()
 
-		fmt.Println("Viperblock service stopped", service)
+		fmt.Println("Viperblock service stopped")
 
 	},
 }
@@ -303,7 +321,7 @@ var natsStopCmd = &cobra.Command{
 
 		service.Stop()
 
-		fmt.Println("Nats service stopped", service)
+		fmt.Println("Nats service stopped")
 	},
 }
 
@@ -312,6 +330,83 @@ var natsStatusCmd = &cobra.Command{
 	Short: "Get status of the nats service",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Nats service status: ...")
+	},
+}
+
+// Repeat for hive
+var hiveStartCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Start the hive service",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println("Starting hive service...")
+
+		cfgFile := viper.GetString("config")
+
+		if cfgFile == "" {
+			fmt.Println("Config file is not set")
+			return
+		}
+
+		// TODO: Support ENV vars, CLI, otherwise revert to config.LoadConfig()
+		appConfig, err := config.LoadConfig(cfgFile)
+
+		if err != nil {
+			fmt.Println("Error loading config file:", err)
+			return
+		}
+
+		// Overwrite defaults (CLI first, config second, env third)
+		baseDir := viper.GetString("base-dir")
+
+		if baseDir != "" {
+			fmt.Println("Overwriting base-dir to:", baseDir)
+			appConfig.BaseDir = baseDir
+		}
+
+		// Overwrite defaults (CLI first, config second, env third)
+		walDir := viper.GetString("wal-dir")
+
+		if walDir != "" {
+			fmt.Println("Overwriting wal-dir to:", walDir)
+			appConfig.WalDir = walDir
+		}
+
+		service, err := service.New("hive", appConfig)
+
+		if err != nil {
+			fmt.Println("Error starting hive service:", err)
+			return
+		}
+
+		service.Start()
+		fmt.Println("HIVE service started")
+	},
+}
+
+var hiveStopCmd = &cobra.Command{
+	Use:   "stop",
+	Short: "Stop the hive service",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println("Stopping hive service...")
+
+		service, err := service.New("hive", &config.Config{})
+
+		if err != nil {
+			fmt.Println("Error stopping hive service:", err)
+			return
+		}
+
+		service.Stop()
+
+		fmt.Println("Hive service stopped")
+	},
+}
+
+var hiveStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Get status of the hive service",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println("Hive service status: ...")
 	},
 }
 
@@ -414,5 +509,16 @@ func init() {
 	natsCmd.PersistentFlags().Bool("jetstream", false, "Enable JetStream")
 	viper.BindEnv("jetstream", "HIVE_NATS_JETSTREAM")
 	viper.BindPFlag("jetstream", natsCmd.PersistentFlags().Lookup("jetstream"))
+
+	// Hive
+	serviceCmd.AddCommand(hiveCmd)
+
+	hiveCmd.AddCommand(hiveStartCmd)
+	hiveCmd.AddCommand(hiveStopCmd)
+	hiveCmd.AddCommand(hiveStatusCmd)
+
+	hiveCmd.PersistentFlags().String("wal-dir", "", "Write-ahead log (WAL) directory. Place on high-speed NVMe disk, or tmpfs for development.")
+	viper.BindEnv("wal-dir", "HIVE_WAL_DIR")
+	viper.BindPFlag("wal-dir", hiveCmd.PersistentFlags().Lookup("wal-dir"))
 
 }

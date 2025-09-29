@@ -38,6 +38,9 @@ stop_service() {
 echo ""
 echo "Stopping services..."
 
+# Stop Hive daemon/gateway first (it will terminate running instances, unmount nbd devices)
+stop_service "hive"
+
 # Stop Viperblock
 stop_service "viperblock"
 
@@ -46,9 +49,6 @@ stop_service "predastore"
 
 # Stop NATS
 stop_service "nats"
-
-# Stop Hive daemon/gateway first
-#stop_service "hive"
 
 echo ""
 echo "✅ Hive development environment stopped"

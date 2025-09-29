@@ -1,7 +1,7 @@
 package nats
 
 import (
-	"log"
+	"log/slog"
 	"os"
 
 	"github.com/mulgadc/hive/hive/utils"
@@ -54,7 +54,7 @@ func (svc *Service) Reload() (err error) {
 	return nil
 }
 
-func launchService(config *Config) {
+func launchService(config *Config) (err error) {
 	// Create proper server options
 	opts := &server.Options{
 		Port:      config.Port,
@@ -77,7 +77,8 @@ func launchService(config *Config) {
 	// Initialize new server with options
 	ns, err := server.NewServer(opts)
 	if err != nil {
-		log.Fatalf("Failed to create NATS server: %v", err)
+		slog.Error("Failed to create NATS server: %v", err)
+		return err
 	}
 
 	// Configure the logger based on the flags.
@@ -85,45 +86,20 @@ func launchService(config *Config) {
 
 	// Start things up. Block here until done.
 	if err := server.Run(ns); err != nil {
+		// Will exit() here
 		server.PrintAndDie(err.Error())
 	}
 
 	// Adjust MAXPROCS if running under linux/cgroups quotas.
 	undo, err := maxprocs.Set(maxprocs.Logger(ns.Debugf))
 	if err != nil {
-		ns.Warnf("Failed to set GOMAXPROCS: %v", err)
+		slog.Warn("Failed to set GOMAXPROCS: %v", err)
 	} else {
 		defer undo()
 	}
 
 	ns.WaitForShutdown()
 
-	/*
-		ns.ConfigureLogger()
-
-		server.Run(ns)
-
-		// Start the server
-		go ns.Start()
-
-		// Wait for server to be ready for connections
-		if !ns.ReadyForConnections(4 * time.Second) {
-			log.Fatal("NATS server not ready for connections")
-		}
-
-		log.Printf("NATS server started on %s:%d", opts.Host, opts.Port)
-
-		// Create a channel to receive shutdown signals
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-		// Wait for shutdown signal
-		<-sigChan
-		log.Println("Shutting down NATS server gracefully...")
-
-		// Graceful shutdown
-		//ns.Shutdown()
-		log.Println("NATS server stopped")
-	*/
+	return nil
 
 }

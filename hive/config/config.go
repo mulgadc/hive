@@ -22,6 +22,7 @@ type Config struct {
 	SecretKey string `mapstructure:"secret_key"`
 	Host      string `mapstructure:"host"`
 	BaseDir   string `mapstructure:"base_dir"`
+	WalDir    string `mapstructure:"wal_dir"`
 }
 
 type PredastoreConfig struct {
@@ -166,12 +167,12 @@ func LoadConfig(configPath string) (*Config, error) {
 	viper.AutomaticEnv()
 
 	// Set default values
-	viper.SetDefault("host", "https://localhost:8443/")
-	viper.SetDefault("base_dir", "/tmp/vb/")
+	//viper.SetDefault("host", "https://localhost:8443/")
+	//viper.SetDefault("base_dir", "/tmp/vb/")
 
-	viper.SetDefault("daemon.host", "0.0.0.0:4432")
-	viper.SetDefault("nats.host", "0.0.0.0:4222")
-	viper.SetDefault("nats.sub.subject", "ec2.>")
+	//viper.SetDefault("daemon.host", "0.0.0.0:4432")
+	//viper.SetDefault("nats.host", "0.0.0.0:4222")
+	//viper.SetDefault("nats.sub.subject", "ec2.>")
 
 	// Try to load config file if it exists
 	if configPath != "" {
