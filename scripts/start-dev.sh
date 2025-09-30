@@ -202,6 +202,9 @@ echo ""
 echo "4️5️⃣  Starting AWS Gateway..."
 
 # Use the same base directory as Viperblock for consistency
+
+unset HIVE_NATS_HOST
+unset HIVE_PREDASTORE_HOST
 export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
 export HIVE_AWSGW_HOST="0.0.0.0:9999"
 export HIVE_AWSGW_TLS_CERT=$CONFIG_DIR/server.pem
@@ -209,9 +212,11 @@ export HIVE_AWSGW_TLS_KEY=$CONFIG_DIR/server.key
 
 #HIVE_CMD="air -c .air-hive.toml"
 #HIVE_CMD="./bin/hive service hive start --config config/hive.toml --base-dir $HIVE_BASE_DIR --wal-dir $WAL_DIR"
-HIVE_CMD="./bin/hive service awsgw start"
+AWSGW_CMD="./bin/hive service awsgw start"
 
-start_service "awsgw" "$HIVE_CMD"
+start_service "awsgw" "$AWSGW_CMD"
+check_service "awsgw" "9999"
+
 
 echo ""
 echo "🔗 Service endpoints will be:"
