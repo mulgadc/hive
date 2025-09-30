@@ -55,6 +55,11 @@ var hiveCmd = &cobra.Command{
 	Short: "Manage the hive service",
 }
 
+var awsgwCmd = &cobra.Command{
+	Use:   "awsgw",
+	Short: "Manage the awsgw (AWS gateway) service",
+}
+
 var predastoreStartCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start the predastore service",
@@ -410,6 +415,88 @@ var hiveStatusCmd = &cobra.Command{
 	},
 }
 
+// AWS GW
+
+var awsgwStartCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Start the awsgw service",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println("Starting awsgw service...")
+
+		cfgFile := viper.GetString("config")
+
+		if cfgFile == "" {
+			fmt.Println("Config file is not set")
+			return
+		}
+
+		// TODO: Support ENV vars, CLI, otherwise revert to config.LoadConfig()
+		appConfig, err := config.LoadConfig(cfgFile)
+
+		if err != nil {
+			fmt.Println("Error loading config file:", err)
+			return
+		}
+
+		// Overwrite defaults (CLI first, config second, env third)
+		awsgwHost := viper.GetString("host")
+		if awsgwHost != "" {
+			fmt.Println("Overwriting awsgw host to:", awsgwHost)
+			appConfig.AWSGW.Host = awsgwHost
+		}
+
+		awsgwTlsCert := viper.GetString("tls-cert")
+		if awsgwTlsCert != "" {
+			fmt.Println("Overwriting awsgw tls-cert to:", awsgwTlsCert)
+			appConfig.AWSGW.TLSCert = awsgwTlsCert
+		}
+
+		awsgwTlsKey := viper.GetString("tls-key")
+
+		if awsgwTlsKey != "" {
+			fmt.Println("Overwriting awsgw tls-key to:", awsgwTlsKey)
+			appConfig.AWSGW.TLSKey = awsgwTlsKey
+		}
+
+		service, err := service.New("awsgw", appConfig)
+
+		if err != nil {
+			fmt.Println("Error starting awsgw service:", err)
+			return
+		}
+
+		service.Start()
+		fmt.Println("AWSGW service started")
+	},
+}
+
+var awsgwStopCmd = &cobra.Command{
+	Use:   "stop",
+	Short: "Stop the awsgw service",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println("Stopping awsgw service...")
+
+		service, err := service.New("awsgw", &config.Config{})
+
+		if err != nil {
+			fmt.Println("Error stopping awsgw service:", err)
+			return
+		}
+
+		service.Stop()
+
+		fmt.Println("AWSGW service stopped")
+	},
+}
+
+var awsgwStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Get status of the awsgw service",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println("AWSGW service status: ...")
+	},
+}
+
 func init() {
 
 	viper.SetEnvPrefix("HIVE") // Prefix for environment variables
@@ -520,5 +607,30 @@ func init() {
 	hiveCmd.PersistentFlags().String("wal-dir", "", "Write-ahead log (WAL) directory. Place on high-speed NVMe disk, or tmpfs for development.")
 	viper.BindEnv("wal-dir", "HIVE_WAL_DIR")
 	viper.BindPFlag("wal-dir", hiveCmd.PersistentFlags().Lookup("wal-dir"))
+
+	// AWS GW
+	serviceCmd.AddCommand(awsgwCmd)
+
+	awsgwCmd.PersistentFlags().String("host", "0.0.0.0:9999", "AWS Gateway server host")
+	viper.BindEnv("host", "HIVE_AWSGW_HOST")
+	viper.BindPFlag("host", awsgwCmd.PersistentFlags().Lookup("host"))
+
+	// AWS GW TLS Cert
+	awsgwCmd.PersistentFlags().String("tls-cert", "", "AWS Gateway TLS certificate")
+	viper.BindEnv("tls-cert", "HIVE_AWSGW_TLS_CERT")
+	viper.BindPFlag("tls-cert", awsgwCmd.PersistentFlags().Lookup("tls-cert"))
+
+	// AWS GW TLS Key
+	awsgwCmd.PersistentFlags().String("tls-key", "", "AWS Gateway TLS key")
+	viper.BindEnv("tls-key", "HIVE_AWSGW_TLS_KEY")
+	viper.BindPFlag("tls-key", awsgwCmd.PersistentFlags().Lookup("tls-key"))
+
+	awsgwCmd.PersistentFlags().Bool("debug", false, "AWS Gateway Debug")
+	viper.BindEnv("debug", "HIVE_AWSGW_DEBUG")
+	viper.BindPFlag("debug", awsgwCmd.PersistentFlags().Lookup("debug"))
+
+	awsgwCmd.AddCommand(awsgwStartCmd)
+	awsgwCmd.AddCommand(awsgwStopCmd)
+	awsgwCmd.AddCommand(awsgwStatusCmd)
 
 }

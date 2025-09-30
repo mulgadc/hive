@@ -7,8 +7,14 @@ secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 
 [daemon]
 host = "0.0.0.0:4432"
-sslkey = "config/server.key"
-sslcert = "config/server.pem"
+tlskey = "config/server.key"
+tlscert = "config/server.pem"
+
+[awsgw]
+host = "0.0.0.0:9999"
+tlskey = "config/server.key"
+tlscert = "config/server.pem"
+debug = true
 
 [nats]
 host = "0.0.0.0:4222"

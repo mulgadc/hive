@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 
+	"github.com/mulgadc/hive/hive/services/awsgw"
 	"github.com/mulgadc/hive/hive/services/hive"
 	"github.com/mulgadc/hive/hive/services/nats"
 	"github.com/mulgadc/hive/hive/services/predastore"
@@ -20,17 +21,20 @@ type Service interface {
 func New(btype string, config interface{}) (Service, error) {
 
 	switch btype {
+	case "nats":
+		return nats.New(config)
+
 	case "predastore":
 		return predastore.New(config)
 
-	case "nats":
-		return nats.New(config)
+	case "viperblock":
+		return viperblockd.New(config)
 
 	case "hive":
 		return hive.New(config)
 
-	case "viperblock":
-		return viperblockd.New(config)
+	case "awsgw":
+		return awsgw.New(config)
 
 	}
 

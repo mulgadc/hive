@@ -16,6 +16,7 @@ type Config struct {
 	Daemon     DaemonConfig     `mapstructure:"daemon"`
 	NATS       NATSConfig       `mapstructure:"nats"`
 	Predastore PredastoreConfig `mapstructure:"predastore"`
+	AWSGW      AWSGWConfig      `mapstructure:"awsgw"`
 
 	// Authentication
 	AccessKey string `mapstructure:"access_key"`
@@ -23,6 +24,14 @@ type Config struct {
 	Host      string `mapstructure:"host"`
 	BaseDir   string `mapstructure:"base_dir"`
 	WalDir    string `mapstructure:"wal_dir"`
+}
+
+type AWSGWConfig struct {
+	Host    string `mapstructure:"host"`
+	TLSKey  string `mapstructure:"tlskey"`
+	TLSCert string `mapstructure:"tlscert"`
+
+	Debug bool `mapstructure:"debug"`
 }
 
 type PredastoreConfig struct {
@@ -37,8 +46,8 @@ type PredastoreConfig struct {
 // DaemonConfig holds the daemon configuration
 type DaemonConfig struct {
 	Host    string `mapstructure:"host"`
-	SSLKey  string `mapstructure:"sslkey"`
-	SSLCert string `mapstructure:"sslcert"`
+	TLSKey  string `mapstructure:"tlskey"`
+	TLSCert string `mapstructure:"tlscert"`
 }
 
 // NATSConfig holds the NATS configuration

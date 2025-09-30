@@ -196,13 +196,28 @@ export HIVE_WAL_DIR=$WAL_DIR
 #HIVE_CMD="./bin/hive service hive start --config config/hive.toml --base-dir $HIVE_BASE_DIR --wal-dir $WAL_DIR"
 HIVE_CMD="./bin/hive service hive start"
 
-start_service "hive" "$HIVE_CMD"
+
+# 5️⃣ Start AWS Gateway
+echo ""
+echo "4️5️⃣  Starting AWS Gateway..."
+
+# Use the same base directory as Viperblock for consistency
+export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
+export HIVE_AWSGW_HOST="0.0.0.0:9999"
+export HIVE_AWSGW_TLS_CERT=$CONFIG_DIR/server.pem
+export HIVE_AWSGW_TLS_KEY=$CONFIG_DIR/server.key
+
+#HIVE_CMD="air -c .air-hive.toml"
+#HIVE_CMD="./bin/hive service hive start --config config/hive.toml --base-dir $HIVE_BASE_DIR --wal-dir $WAL_DIR"
+HIVE_CMD="./bin/hive service awsgw start"
+
+start_service "awsgw" "$HIVE_CMD"
 
 echo ""
 echo "🔗 Service endpoints will be:"
 echo "   - NATS:          nats://localhost:4222"
 echo "   - Predastore:    https://localhost:8443"
-echo "   - Hive Gateway:  https://localhost:9999"
+echo "   - AWS Gateway:   https://localhost:9999"
 echo ""
 echo "📊 Monitor background service logs:"
 echo "   tail -f $LOGS_DIR/*.log"
