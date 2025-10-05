@@ -56,7 +56,7 @@ func launchService(config *config.Config) (err error) {
 	err = d.Start()
 
 	if err != nil {
-		slog.Warn("Failed to start Hive daemon: %v", err)
+		slog.Warn("Failed to start Hive daemon", "err", err)
 		return err
 	}
 

@@ -67,7 +67,7 @@ func (svc *Service) Start() (int, error) {
 	err := launchService(svc.Config)
 
 	if err != nil {
-		slog.Error("Failed to launch service: %v", err)
+		slog.Error("Failed to launch service", "err", err)
 		return 0, err
 	}
 
@@ -98,7 +98,7 @@ func launchService(cfg *Config) (err error) {
 	nc, err := nats.Connect(cfg.NatsHost)
 
 	if err != nil {
-		slog.Error("Failed to connect to NATS: %v", err)
+		slog.Error("Failed to connect to NATS:", "err", err)
 		return err
 	}
 
@@ -107,13 +107,13 @@ func launchService(cfg *Config) (err error) {
 
 	// TODO: Support volume delete and predastore delete bucket
 	nc.Subscribe("ebs.delete", func(msg *nats.Msg) {
-		slog.Info("Received message: %s", string(msg.Data))
+		slog.Info("Received message", "data", string(msg.Data))
 
 		// Parse the message
 		var ebsRequest config.EBSDeleteRequest
 		err := json.Unmarshal(msg.Data, &ebsRequest)
 		if err != nil {
-			slog.Error("Failed to unmarshal message: %v", err)
+			slog.Error("Failed to unmarshal message", "err", err)
 			return
 		}
 
@@ -147,13 +147,13 @@ func launchService(cfg *Config) (err error) {
 	})
 
 	nc.Subscribe("ebs.unmount", func(msg *nats.Msg) {
-		slog.Info("Received message: %s", string(msg.Data))
+		slog.Info("Received message", "data", string(msg.Data))
 
 		// Parse the message
 		var ebsRequest config.EBSRequest
 		err := json.Unmarshal(msg.Data, &ebsRequest)
 		if err != nil {
-			slog.Error("Failed to unmarshal message: %v", err)
+			slog.Error("Failed to unmarshal message", "err", err)
 			return
 		}
 
@@ -187,7 +187,7 @@ func launchService(cfg *Config) (err error) {
 		// Marshal the response
 		response, err := json.Marshal(ebsResponse)
 		if err != nil {
-			slog.Error("Failed to marshal response: %v", err)
+			slog.Error("Failed to marshal response", "err", err)
 			return
 		}
 
@@ -196,13 +196,13 @@ func launchService(cfg *Config) (err error) {
 	})
 
 	nc.Subscribe("ebs.mount", func(msg *nats.Msg) {
-		slog.Info("Received message: %s", string(msg.Data))
+		slog.Info("Received message:", "data", string(msg.Data))
 
 		// Parse the message
 		var ebsRequest config.EBSRequest
 		err := json.Unmarshal(msg.Data, &ebsRequest)
 		if err != nil {
-			slog.Error("Failed to unmarshal message: %v", err)
+			slog.Error("Failed to unmarshal message", "err", err)
 			return
 		}
 
@@ -292,7 +292,7 @@ func launchService(cfg *Config) (err error) {
 		// Port is the last
 		port, err := strconv.Atoi(nbdPort[len(nbdPort)-1])
 		if err != nil {
-			slog.Error("Failed to convert port to int: %v", err)
+			slog.Error("Failed to convert port to int", "err", err)
 			return
 		}
 
@@ -303,7 +303,7 @@ func launchService(cfg *Config) (err error) {
 
 		nbdPidFile, err := utils.GeneratePidFile(fmt.Sprintf("nbdkit-vol-%s", ebsRequest.Name))
 		if err != nil {
-			slog.Error("Failed to generate nbdkit pid file: %v", err)
+			slog.Error("Failed to generate nbdkit pid file:", "err", err)
 			return
 		}
 
@@ -334,7 +334,7 @@ func launchService(cfg *Config) (err error) {
 			pid := cmd.Process.Pid
 
 			if err != nil {
-				slog.Error("Failed to execute nbdkit: %v", err)
+				slog.Error("Failed to execute nbdkit", "err", err)
 				// Signal error (no PID) to parent goroutine
 				processChan <- 0
 				return
@@ -346,7 +346,7 @@ func launchService(cfg *Config) (err error) {
 			err = cmd.Wait()
 
 			if err != nil {
-				slog.Error("Failed to wait for nbdkit: %v", err)
+				slog.Error("Failed to wait for nbdkit", "err", err)
 				exitChan <- 1
 				return
 			}
@@ -402,7 +402,7 @@ func launchService(cfg *Config) (err error) {
 		// Marshal the response
 		response, err := json.Marshal(ebsResponse)
 		if err != nil {
-			slog.Error("Failed to marshal response: %v", err)
+			slog.Error("Failed to marshal response", "err", err)
 			return
 		}
 

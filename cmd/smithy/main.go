@@ -191,7 +191,7 @@ func findShapeRecursiveList(request interface{}) error {
 	goType := smithyTypes[typeName]
 
 	if goType != "" {
-		fmt.Printf("%s %s `xml:\"%s\"`\n", goType, smithyRequest.Member.Traits.XMLName)
+		fmt.Printf("%s `xml:\"%s\"`\n", goType, smithyRequest.Member.Traits.XMLName)
 
 	} else {
 		//spew.Dump(v)

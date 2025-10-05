@@ -89,10 +89,15 @@ func RemovePidFile(serviceName string) error {
 
 func pidPath() string {
 	var pidPath string
+
+	// CHeck if a directory exists
+
 	if os.Getenv("XDG_RUNTIME_DIR") != "" {
 		pidPath = os.Getenv("XDG_RUNTIME_DIR")
-	} else {
+	} else if dirExists(fmt.Sprintf("%s/%s", os.Getenv("HOME"), "hive")) {
 		pidPath = filepath.Join(os.Getenv("HOME"), "hive")
+	} else {
+		pidPath = os.TempDir()
 	}
 
 	return pidPath
@@ -118,6 +123,7 @@ func StopProcess(serviceName string) error {
 func KillProcess(pid int) error {
 
 	process, err := os.FindProcess(pid)
+
 	if err != nil {
 		return err
 	}
@@ -180,4 +186,15 @@ func WaitForPidFileRemoval(instanceID string, timeout time.Duration) error {
 			}
 		}
 	}
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return false
+	}
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
 }

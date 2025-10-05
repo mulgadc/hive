@@ -1,0 +1,24 @@
+name: Build and Test Hive
+
+on:
+  push:
+    branches: ["main"]
+    paths: ["hive/**", ".github/workflows/**"]
+
+jobs:
+  hive_test_and_push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # this is needed as easyjson requires GOPATH to be set
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+          cache-dependency-path: "go.sum"
+
+      - name: Run Tests
+        run: make test

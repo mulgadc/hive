@@ -138,7 +138,7 @@ func (ec2StartInstanceResponse EC2StartInstancesResponse) Respond(msg *nats.Msg)
 
 	response, err := json.Marshal(ec2StartInstanceResponse)
 	if err != nil {
-		slog.Error("Failed to marshal response: %v", err)
+		slog.Error("Failed to marshal response", "err", err)
 		return
 	}
 
@@ -149,7 +149,7 @@ func (ec2DescribeResponse EC2DescribeResponse) Respond(msg *nats.Msg) {
 
 	response, err := json.Marshal(ec2DescribeResponse)
 	if err != nil {
-		slog.Error("Failed to marshal response: %v", err)
+		slog.Error("Failed to marshal response", "err", err)
 		return
 	}
 
@@ -161,7 +161,7 @@ func (ec2Response EC2Response) Respond(msg *nats.Msg) {
 
 	response, err := json.Marshal(ec2Response)
 	if err != nil {
-		slog.Error("Failed to marshal response: %v", err)
+		slog.Error("Failed to marshal response", "err", err)
 		return
 	}
 

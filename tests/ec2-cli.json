@@ -1,0 +1,11 @@
+{
+    "ImageId": "ami-185c47c7b6d31bba9",
+    "InstanceType": "t3.micro",
+    "KeyName": "test-keypair",
+    "SecurityGroupIds": [
+        "sg-0123456789abcdef0"
+    ],
+    "SubnetId": "subnet-6e7f829e",
+    "MaxCount": 1,
+    "MinCount": 1
+}

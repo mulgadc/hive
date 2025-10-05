@@ -77,7 +77,7 @@ func launchService(config *Config) (err error) {
 	// Initialize new server with options
 	ns, err := server.NewServer(opts)
 	if err != nil {
-		slog.Error("Failed to create NATS server: %v", err)
+		slog.Error("Failed to create NATS server", "err", err)
 		return err
 	}
 
@@ -93,7 +93,7 @@ func launchService(config *Config) (err error) {
 	// Adjust MAXPROCS if running under linux/cgroups quotas.
 	undo, err := maxprocs.Set(maxprocs.Logger(ns.Debugf))
 	if err != nil {
-		slog.Warn("Failed to set GOMAXPROCS: %v", err)
+		slog.Warn("Failed to set GOMAXPROCS", "err", err)
 	} else {
 		defer undo()
 	}

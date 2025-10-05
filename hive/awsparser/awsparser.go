@@ -115,7 +115,7 @@ func EC2_Process_RunInstances(jsonData []byte) (output []byte, err error) {
 
 }
 
-func EC2_RunInstances(input ec2.RunInstancesInput) (output bytes.Buffer, err error) {
+func EC2_RunInstances(input *ec2.RunInstancesInput) (output bytes.Buffer, err error) {
 
 	// Simple validation
 	if input.MinCount == nil || input.MaxCount == nil || *input.MinCount < 1 || *input.MaxCount < 1 || *input.MinCount > *input.MaxCount {

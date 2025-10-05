@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/gofiber/fiber/v2"
+	"github.com/mulgadc/hive/hive/awsec2query"
+	"github.com/mulgadc/hive/hive/awsparser"
 )
 
 func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
@@ -155,6 +158,24 @@ func (gw *GatewayConfig) EC2_DescribeInstances(ctx *fiber.Ctx, args map[string]s
 }
 
 func (gw *GatewayConfig) EC2_RunInstances(ctx *fiber.Ctx, args map[string]string) error {
+
+	slog.Info("EC2 RunInstances called")
+
+	// Convert HTTP post args, to the input struct
+	var ec2RunInstance = &ec2.RunInstancesInput{}
+	awsec2query.QueryParamsToStruct(args, ec2RunInstance)
+
+	// Send the query
+	xmlResponse, err := awsparser.EC2_RunInstances(ec2RunInstance)
+
+	if err != nil {
+		slog.Error("EC2 RunInstances error", "error", err)
+		return fiber.NewError(fiber.StatusInternalServerError, "EC2 RunInstances error")
+	}
+
+	// Return the XML response
+	ctx.Set("Content-Type", "text/xml")
+	return ctx.XML(xmlResponse)
 
 	return nil
 

@@ -74,9 +74,10 @@ type EBS struct {
 
 // InstanceType represents the resource requirements for an EC2 instance type
 type InstanceType struct {
-	Name     string
-	VCPUs    int
-	MemoryGB float64
+	Name         string
+	VCPUs        int
+	MemoryGB     float64
+	Architecture string // e.g., "x86_64", "arm64"
 }
 
 // ResourceManager handles the allocation and tracking of system resources
@@ -213,12 +214,25 @@ func NewResourceManager() *ResourceManager {
 	}
 
 	// Define supported instance types
+	// TODO: Determine host capabilities (x86_64 vs arm64) and adjust available instance types accordingly
 	instanceTypes := map[string]InstanceType{
-		"t3.nano":   {Name: "t3.nano", VCPUs: 2, MemoryGB: 0.5},
-		"t3.micro":  {Name: "t3.micro", VCPUs: 2, MemoryGB: 1.0},
-		"t3.small":  {Name: "t3.small", VCPUs: 2, MemoryGB: 2.0},
-		"t3.medium": {Name: "t3.medium", VCPUs: 2, MemoryGB: 4.0},
-		"t3.large":  {Name: "t3.large", VCPUs: 2, MemoryGB: 8.0},
+		// x86_64
+		"t3.nano":    {Name: "t3.nano", VCPUs: 2, MemoryGB: 0.5, Architecture: "x86_64"},
+		"t3.micro":   {Name: "t3.micro", VCPUs: 2, MemoryGB: 1.0, Architecture: "x86_64"},
+		"t3.small":   {Name: "t3.small", VCPUs: 2, MemoryGB: 2.0, Architecture: "x86_64"},
+		"t3.medium":  {Name: "t3.medium", VCPUs: 2, MemoryGB: 4.0, Architecture: "x86_64"},
+		"t3.large":   {Name: "t3.large", VCPUs: 2, MemoryGB: 8.0, Architecture: "x86_64"},
+		"t3.xlarge":  {Name: "t3.xlarge", VCPUs: 4, MemoryGB: 16.0, Architecture: "x86_64"},
+		"t3.2xlarge": {Name: "t3.2xlarge", VCPUs: 8, MemoryGB: 32.0, Architecture: "x86_64"},
+
+		// ARM
+		"t4g.nano":    {Name: "t4g.nano", VCPUs: 2, MemoryGB: 0.5, Architecture: "arm64"},
+		"t4g.micro":   {Name: "t4g.micro", VCPUs: 2, MemoryGB: 1.0, Architecture: "arm64"},
+		"t4g.small":   {Name: "t4g.small", VCPUs: 2, MemoryGB: 2.0, Architecture: "arm64"},
+		"t4g.medium":  {Name: "t4g.medium", VCPUs: 2, MemoryGB: 4.0, Architecture: "arm64"},
+		"t4g.large":   {Name: "t4g.large", VCPUs: 2, MemoryGB: 8.0, Architecture: "arm64"},
+		"t4g.xlarge":  {Name: "t4g.xlarge", VCPUs: 4, MemoryGB: 16.0, Architecture: "arm64"},
+		"t4g.2xlarge": {Name: "t4g.2xlarge", VCPUs: 8, MemoryGB: 32.0, Architecture: "arm64"},
 	}
 
 	log.Printf("System resources: %d vCPUs, %.2f GB RAM (detected on %s)",
@@ -303,7 +317,7 @@ func (d *Daemon) Start() error {
 				slog.Info("Launching instance", "instance", instance.ID)
 				err = d.LaunchInstance(instance)
 				if err != nil {
-					slog.Error("Failed to launch instance: %v", err)
+					slog.Error("Failed to launch instance:", "err", err)
 				}
 			} else {
 				slog.Info("Instance state is terminated, skipping", "instance", instance.ID)
@@ -534,7 +548,7 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 				d.Instances.Mu.Lock()
 				instance, ok := d.Instances.VMS[instanceId]
 				if !ok {
-					slog.Info("QMP Status - Instance %s not found", instanceId)
+					slog.Info("QMP Status - Instance not found", "id", instanceId)
 					continue
 				}
 
@@ -577,7 +591,7 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 
 	if !ok {
 		// TODO: Improve, return error
-		slog.Warn("Instance %s is not running on this node", command.ID)
+		slog.Warn("Instance is not running on this node", "id", command.ID)
 		msg.Respond(nil)
 		return
 	}
@@ -586,7 +600,7 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 	resp, err := d.SendQMPCommand(instance.QMPClient, command.QMPCommand, instance.ID)
 
 	if err != nil {
-		slog.Error("Failed to send QMP command: %v", err)
+		slog.Error("Failed to send QMP command", "err", err)
 		return
 	}
 
@@ -595,12 +609,12 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 	// Unmarshal the response
 	target, ok := qmp.CommandResponseTypes[command.QMPCommand.Execute]
 	if !ok {
-		slog.Warn("Unhandled QMP command: %s", command.QMPCommand.Execute)
+		slog.Warn("Unhandled QMP command", "cmd", command.QMPCommand.Execute)
 		return
 	}
 
 	if err := json.Unmarshal(resp.Return, target); err != nil {
-		slog.Error("Failed to unmarshal QMP response for %s: %v", command.QMPCommand.Execute, err)
+		slog.Error("Failed to unmarshal QMP response", "cmd", command.QMPCommand.Execute, "err", err)
 		return
 	}
 
@@ -707,7 +721,7 @@ func (d *Daemon) setupShutdown() {
 				_, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "system_powerdown"}, instance.ID)
 
 				if err != nil {
-					slog.Error("Failed to send system_powerdown to %s: %v", instance.ID, err)
+					slog.Error("Failed to send system_powerdown", "id", instance.ID, "err", err)
 					return
 				}
 
@@ -715,14 +729,14 @@ func (d *Daemon) setupShutdown() {
 				err = utils.WaitForPidFileRemoval(instance.ID, 60*time.Second)
 
 				if err != nil {
-					slog.Error("Timeout waiting for PID file removal for %s: %v", instance.ID, err)
+					slog.Error("Timeout waiting for PID file removal", "id", instance.ID, "err", err)
 
 					// Try force killing the process
 					pid, err := utils.ReadPidFile(instance.ID)
 					if err != nil {
-						slog.Error("Failed to read PID file for %s: %v", instance.ID, err)
+						slog.Error("Failed to read PID file", "id", instance.ID, "err", err)
 					} else {
-						slog.Warn("Killing process %d for %s", pid, instance.ID)
+						slog.Info("Killing process", "pid", pid, "id", instance.ID)
 						// Send SIG directly if QMP fails
 						utils.KillProcess(pid)
 					}
@@ -738,15 +752,15 @@ func (d *Daemon) setupShutdown() {
 					ebsUnMountRequest, err := json.Marshal(ebsRequest)
 
 					if err != nil {
-						slog.Error("Failed to marshal volume payload: %v", err)
+						slog.Error("Failed to marshal volume payload", "err", err)
 						continue
 					}
 
 					msg, err := d.natsConn.Request("ebs.unmount", ebsUnMountRequest, 30*time.Second)
 					if err != nil {
-						slog.Error("Failed to unmount volume %s for %s: %v", ebsRequest.Name, instance.ID, err)
+						slog.Error("Failed to unmount volume", "name", ebsRequest.Name, "id", instance.ID, "err", err)
 					} else {
-						slog.Info("Unmounted Viperblock volume for %s: %s", instance.ID, string(msg.Data))
+						slog.Info("Unmounted Viperblock volume", "id", instance.ID, "data", string(msg.Data))
 					}
 				}
 			}()
@@ -771,7 +785,7 @@ func (d *Daemon) setupShutdown() {
 		// Write the state to disk
 		err := d.WriteState()
 		if err != nil {
-			slog.Error("Failed to write state to disk: %v", err)
+			slog.Error("Failed to write state to disk", "err", err)
 		}
 
 		// Wait for any ongoing operations to complete
@@ -871,7 +885,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 	vb, err := viperblock.New(vbconfig, "s3", cfg)
 	if err != nil {
-		slog.Error("Failed to connect to Viperblock store: %v", err)
+		slog.Error("Failed to connect to Viperblock store", "err", err)
 		return ec2Response, err
 	}
 
@@ -881,7 +895,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 	err = vb.Backend.Init()
 
 	if err != nil {
-		slog.Error("Failed to initialize backend: %v", err)
+		slog.Error("Failed to initialize backend", "err", err)
 		return ec2Response, err
 	}
 
@@ -934,7 +948,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 		amiVb, err := viperblock.New(amiVbConfig, "s3", amiCfg)
 
 		if err != nil {
-			slog.Error("Failed to connect to Viperblock store for AMI: %v", err)
+			slog.Error("Failed to connect to Viperblock store for AMI", "err", err)
 			return ec2Response, err
 		}
 
@@ -943,7 +957,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 		err = amiVb.Backend.Init()
 
 		if err != nil {
-			slog.Error("Could not connect to AMI Viperblock store: %v", err)
+			slog.Error("Could not connect to AMI Viperblock store", "err", err)
 			return ec2Response, err
 		}
 
@@ -951,14 +965,14 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 		err = amiVb.LoadState()
 
 		if err != nil {
-			slog.Error("Could not load state for AMI Viperblock store: %v", err)
+			slog.Error("Could not load state for AMI Viperblock store", "err", err)
 			return ec2Response, err
 		}
 
 		err = amiVb.LoadBlockState()
 
 		if err != nil {
-			slog.Error("Failed to load block state: %v", err)
+			slog.Error("Failed to load block state", "err", err)
 			return ec2Response, err
 		}
 
@@ -981,7 +995,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 			data, err := amiVb.ReadAt(block*uint64(vb.BlockSize), uint64(vb.BlockSize)*1024)
 
 			if err != nil && err != viperblock.ZeroBlock {
-				slog.Error("Failed to read block from AMI source: %v", err)
+				slog.Error("Failed to read block from AMI source", "err", err)
 				return ec2Response, err
 			}
 
@@ -1021,7 +1035,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 		err = vb.RemoveLocalFiles()
 
 		if err != nil {
-			slog.Error("Failed to remove local files: %v", err)
+			slog.Error("Failed to remove local files", "err", err)
 		}
 
 		// New volume is cloned.
@@ -1070,7 +1084,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 	efiVb.SetDebug(true)
 
 	if err != nil {
-		slog.Error("Failed to connect to Viperblock store for AMI: %v", err)
+		slog.Error("Failed to connect to Viperblock store for AMI", "err", err)
 		return ec2Response, err
 	}
 
@@ -1081,7 +1095,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 	fmt.Println("Complete EFI Viperblock init", "error", err)
 
 	if err != nil {
-		slog.Error("Failed to initialize EFI Viperblock store backend: %v", err)
+		slog.Error("Failed to initialize EFI Viperblock store backend", "err", err)
 		return ec2Response, err
 	}
 
@@ -1126,13 +1140,13 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 	slog.Info("Close", "error", err)
 
 	if err != nil {
-		slog.Error("Failed to close EFI Viperblock store: %v", err)
+		slog.Error("Failed to close EFI Viperblock store", "err", err)
 	}
 
 	err = efiVb.RemoveLocalFiles()
 
 	if err != nil {
-		slog.Error("Failed to remove local files: %v", err)
+		slog.Error("Failed to remove local files", "err", err)
 	}
 
 	instance.EBSRequests.Mu.Lock()
@@ -1182,7 +1196,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 		cloudInitVb.SetDebug(true)
 
 		if err != nil {
-			slog.Error("Failed to connect to Viperblock store for AMI: %v", err)
+			slog.Error("Failed to connect to Viperblock store for AMI", "err", err)
 			return ec2Response, err
 		}
 
@@ -1217,7 +1231,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 			// Create the cloud-init disk
 			writer, err := iso9660.NewWriter()
 			if err != nil {
-				slog.Error("failed to create writer: %s", err)
+				slog.Error("failed to create writer", "err", err)
 				return ec2Response, err
 			}
 
@@ -1340,7 +1354,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 			err = os.Remove(tempFile.Name())
 
 			if err != nil {
-				slog.Error("Failed to remove temp file: %v", err)
+				slog.Error("Failed to remove temp file", "err", err)
 			}
 
 		}
@@ -1348,13 +1362,13 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 		err = cloudInitVb.Close()
 
 		if err != nil {
-			slog.Error("Failed to close cloud-init Viperblock store: %v", err)
+			slog.Error("Failed to close cloud-init Viperblock store", "err", err)
 		}
 
 		err = cloudInitVb.RemoveLocalFiles()
 
 		if err != nil {
-			slog.Error("Failed to remove local files: %v", err)
+			slog.Error("Failed to remove local files", "err", err)
 		}
 
 		instance.EBSRequests.Mu.Lock()
@@ -1401,7 +1415,7 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 			status, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "query-status"}, instance.ID)
 
 			if err != nil {
-				slog.Error("Failed to send QMP command: %v", err)
+				slog.Error("Failed to send QMP command", "err", err)
 
 				// Check if the instance is stopping, mark as stopped
 				d.Instances.Mu.Lock()
@@ -1411,7 +1425,7 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 					instance.Status = "stopped"
 
 					// TODO: Improve, confirm QEMU PID removed
-					slog.Info("QMP Status - Instance %s stopped, exiting heartbeat", instance.ID)
+					slog.Info("QMP Status - Instance stopped, exiting heartbeat", "id", instance.ID)
 
 					// TODO: Improve, move to SendQMPCommand
 					// Unsubscribe from the NATS subject
@@ -1436,7 +1450,7 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 	}()
 
 	if err != nil {
-		slog.Error("Failed to create QMP client: %v", err)
+		slog.Error("Failed to create QMP client", "err", err)
 		return err
 	}
 
@@ -1467,7 +1481,7 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	err = d.MountVolumes(instance)
 
 	if err != nil {
-		slog.Error("Failed to mount volumes: %v", err)
+		slog.Error("Failed to mount volumes", "err", err)
 		return err
 	}
 
@@ -1475,7 +1489,7 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	err = d.StartInstance(instance)
 
 	if err != nil {
-		slog.Error("Failed to launch instance: %v", err)
+		slog.Error("Failed to launch instance", "err", err)
 		return err
 	}
 
@@ -1491,7 +1505,7 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	err = d.CreateQMPClient(instance)
 
 	if err != nil {
-		slog.Error("Failed to create QMP client: %v", err)
+		slog.Error("Failed to create QMP client", "err", err)
 		return err
 	}
 
@@ -1508,7 +1522,7 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)], err = d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.describe.%s", instance.ID), "hive-events", d.handleEC2Describe)
 
 	if err != nil {
-		slog.Error("Failed to subscribe to NATS ec2.describe.%s: %v", instance.ID, err)
+		slog.Error("Failed to subscribe to NATS ec2.describe", "id", instance.ID, "err", err)
 		return err
 	}
 
@@ -1525,7 +1539,7 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	err = d.WriteState()
 
 	if err != nil {
-		slog.Error("Failed to marshal launchVm: %v", err)
+		slog.Error("Failed to marshal launchVm", "err", err)
 		return err
 	}
 
@@ -1537,23 +1551,24 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	pidFile, err := utils.GeneratePidFile(instance.ID)
 
 	if err != nil {
-		slog.Error("Failed to generate PID file: %v", err)
+		slog.Error("Failed to generate PID file", "err", err)
 		return err
 	}
 
 	var instanceType = d.resourceMgr.instanceTypes[instance.InstanceType]
 
 	instance.Config = vm.Config{
-		Name:        instance.ID,
-		Daemonize:   true,
-		PIDFile:     pidFile,
-		EnableKVM:   true,
-		NoGraphic:   false,
-		MachineType: "ubuntu",
-		Serial:      "pty",
-		CPUType:     "host",
-		Memory:      int(instanceType.MemoryGB) * 1024,
-		CPUCount:    instanceType.VCPUs,
+		Name:         instance.ID,
+		Daemonize:    true,
+		PIDFile:      pidFile,
+		EnableKVM:    true,
+		NoGraphic:    false,
+		MachineType:  "ubuntu",
+		Serial:       "pty",
+		CPUType:      "host",
+		Memory:       int(instanceType.MemoryGB) * 1024,
+		CPUCount:     instanceType.VCPUs,
+		Architecture: instanceType.Architecture,
 	}
 
 	// Loop through each volume in volumes
@@ -1621,7 +1636,7 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	qmpSocket, err := utils.GenerateSocketFile(fmt.Sprintf("qmp-%s", instance.ID))
 
 	if err != nil {
-		slog.Error("Failed to generate QMP socket: %v", err)
+		slog.Error("Failed to generate QMP socket", "err", err)
 		return err
 	}
 
@@ -1636,14 +1651,14 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		cmd, err := instance.Config.Execute()
 
 		if err != nil {
-			slog.Error("Failed to execute VM: %v", err)
+			slog.Error("Failed to execute VM", "err", err)
 			processChan <- 0
 			return
 		}
 
 		VMstdout, err := cmd.StdoutPipe()
 		if err != nil {
-			slog.Error("Failed to pipe STDERR VM: %v", err)
+			slog.Error("Failed to pipe STDERR VM", "err", err)
 			processChan <- 0
 			return
 		}
@@ -1668,7 +1683,7 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 					ptsInt, err := strconv.Atoi(matches[1])
 
 					if err != nil {
-						slog.Error("Failed to convert pts to int: %v", err)
+						slog.Error("Failed to convert pts to int:", "err", err)
 						ptsChan <- 0
 						return
 					}
@@ -1681,7 +1696,7 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		}()
 
 		if err != nil {
-			slog.Error("Failed to launch VM: %v", err)
+			slog.Error("Failed to launch VM", "err", err)
 			processChan <- 0
 			return
 		}
@@ -1693,7 +1708,7 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		err = cmd.Wait()
 
 		if err != nil {
-			slog.Error("Failed to wait for VM: %v", err)
+			slog.Error("Failed to wait for VM:", "err", err)
 			exitChan <- 1
 			return
 		}
@@ -1733,7 +1748,7 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	_, err = utils.ReadPidFile(instance.ID)
 
 	if err != nil {
-		slog.Error("Failed to read PID file: %v", err)
+		slog.Error("Failed to read PID file", "err", err)
 		return err
 	}
 
@@ -1752,7 +1767,7 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 		ebsMountRequest, err := json.Marshal(v)
 
 		if err != nil {
-			slog.Error("Failed to marshal volume payload: %v", err)
+			slog.Error("Failed to marshal volume payload", "err", err)
 			return err
 		}
 
@@ -1760,7 +1775,7 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 
 		// TODO: Improve timeout handling
 		if err != nil {
-			slog.Error("Failed to request EBS mount: %v", err)
+			slog.Error("Failed to request EBS mount", "err", err)
 			return err
 		}
 
@@ -1769,7 +1784,7 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 		err = json.Unmarshal(reply.Data, &ebsMountResponse)
 
 		if err != nil {
-			slog.Error("Failed to unmarshal volume response: %v", err)
+			slog.Error("Failed to unmarshal volume response:", "err", err)
 			return err
 		}
 

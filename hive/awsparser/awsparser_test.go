@@ -1,7 +1,6 @@
 package awsparser
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -12,7 +11,7 @@ import (
 
 func TestParseRunInstance(t *testing.T) {
 
-	runInstance := ec2.RunInstancesInput{
+	runInstance := &ec2.RunInstancesInput{
 		ImageId:      aws.String("ami-0abcdef1234567890"),
 		InstanceType: aws.String("t2.micro"),
 		MinCount:     aws.Int64(1),
@@ -23,8 +22,6 @@ func TestParseRunInstance(t *testing.T) {
 		},
 		SubnetId: aws.String("subnet-6e7f829e"),
 	}
-
-	fmt.Println(runInstance)
 
 	// Call the function to process the RunInstances request
 	response, err := EC2_RunInstances(runInstance)
@@ -37,7 +34,7 @@ func TestParseRunInstance(t *testing.T) {
 
 func TestInvalidRunInstance(t *testing.T) {
 
-	runInstance := ec2.RunInstancesInput{
+	runInstance := &ec2.RunInstancesInput{
 		ImageId:      aws.String("ami-0abcdef1234567890"),
 		InstanceType: aws.String("t2.micro"),
 		MinCount:     aws.Int64(0),
@@ -64,5 +61,5 @@ func TestGenerateEC2ErrorResponse(t *testing.T) {
 
 	xmlResponse := GenerateEC2ErrorResponse(errorCode, errorMessage, requestId)
 
-	spew.Dump(string(xmlResponse))
+	assert.Contains(t, string(xmlResponse), "InvalidInstanceID.NotFound")
 }

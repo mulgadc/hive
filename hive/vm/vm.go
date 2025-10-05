@@ -83,6 +83,10 @@ type Config struct {
 
 	Devices []Device `json:"devices"`
 	NetDevs []NetDev `json:"net_devs"`
+
+	// InstanceType is a friendly name (e.g., t3.micro, t4g.micro)
+	InstanceType string `json:"instance_type"`
+	Architecture string `json:"architecture"`
 }
 
 func (cfg *Config) Execute() (*exec.Cmd, error) {
@@ -175,7 +179,18 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 		args = append(args, "-netdev", netdev.Value)
 	}
 
-	cmd := exec.Command("qemu-system-x86_64", args...)
+	var qemuArchitecture string
+
+	if cfg.Architecture == "arm" {
+		qemuArchitecture = "qemu-system-aarch64"
+	} else if cfg.Architecture == "x86_64" {
+		qemuArchitecture = "qemu-system-x86_64"
+	} else {
+		return nil, fmt.Errorf("Architecture missing")
+	}
+
+	cmd := exec.Command(qemuArchitecture, args...)
+
 	//cmd.Stdout = os.Stdout
 	//cmd.Stderr = os.Stderr
 

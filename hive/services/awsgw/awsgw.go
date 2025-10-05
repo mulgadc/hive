@@ -66,7 +66,7 @@ func launchService(config *config.Config) (err error) {
 	app := gw.SetupRoutes()
 
 	if err != nil {
-		slog.Warn("Failed to start AWS-GW daemon: %v", err)
+		slog.Warn("Failed to start AWS-GW daemon", "err", err)
 		return err
 	}
 
