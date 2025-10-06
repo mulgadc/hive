@@ -46,15 +46,15 @@ func setupTestConfig(t *testing.T, natsURL string) *Config {
 	testDir := t.TempDir()
 
 	cfg := &Config{
-		NatsHost:   natsURL,
-		S3Host:     "https://s3.mock.local",
-		Bucket:     "test-bucket",
-		Region:     "us-east-1",
-		AccessKey:  "test-access-key",
-		SecretKey:  "test-secret-key",
-		BaseDir:    testDir,
-		PluginPath: filepath.Join(testDir, "plugins"), // Use temp dir to avoid actual nbdkit execution
-		Debug:      true,
+		NatsHost:       natsURL,
+		S3Host:         "https://s3.mock.local",
+		Bucket:         "test-bucket",
+		Region:         "us-east-1",
+		AccessKey:      "test-access-key",
+		SecretKey:      "test-secret-key",
+		BaseDir:        testDir,
+		PluginPath:     filepath.Join(testDir, "plugins"), // Use temp dir to avoid actual nbdkit execution
+		Debug:          true,
 		MountedVolumes: []MountedVolume{},
 	}
 
@@ -248,6 +248,8 @@ func TestIntegration_EBSUnmountRequest(t *testing.T) {
 
 // TestIntegration_EBSUnmountNonExistentVolume tests unmounting a volume that doesn't exist
 func TestIntegration_EBSUnmountNonExistentVolume(t *testing.T) {
+
+	// Skip
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}

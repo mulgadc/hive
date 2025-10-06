@@ -14,7 +14,7 @@ go_run:
 
 test:
 	@echo "\n....Running tests for $(GO_PROJECT_NAME)...."
-	LOG_IGNORE=1 go test -v ./...
+	LOG_IGNORE=1 go test -v -timeout 300s ./...
 
 bench:
 	@echo "\n....Running benchmarks for $(GO_PROJECT_NAME)...."
