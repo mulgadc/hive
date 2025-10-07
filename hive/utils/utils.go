@@ -2,6 +2,7 @@ package utils
 
 import (
 	"bytes"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/aws/aws-sdk-go/private/protocol/xml/xmlutil"
 )
 
 func ReadPidFile(name string) (int, error) {
@@ -197,4 +200,20 @@ func dirExists(path string) bool {
 		return false
 	}
 	return info.IsDir()
+}
+
+// Convert interface to XML
+func MarshalToXML(payload interface{}) (bytes.Buffer, error) {
+
+	var buf bytes.Buffer
+	enc := xml.NewEncoder(&buf)
+	enc.Indent("", "  ")
+
+	if err := xmlutil.BuildXML(payload, enc); err != nil {
+		panic(err)
+	}
+	enc.Flush()
+
+	return buf, nil
+
 }

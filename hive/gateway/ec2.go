@@ -1,47 +1,44 @@
 package gateway
 
 import (
-	"fmt"
-	"log/slog"
+	"errors"
 
-	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/davecgh/go-spew/spew"
 	"github.com/gofiber/fiber/v2"
-	"github.com/mulgadc/hive/hive/awsec2query"
-	"github.com/mulgadc/hive/hive/awsparser"
+	gateway_ec2_core "github.com/mulgadc/hive/hive/gateway/ec2/core"
+	gateway_ec2_instance "github.com/mulgadc/hive/hive/gateway/ec2/instance"
 )
 
 func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 
-	fmt.Println("HERE!")
+	queryArgs := ParseAWSQueryArgs(string(ctx.Body()))
 
-	fmt.Println("Body")
-	spew.Dump(ctx.Body())
-
-	fmt.Println("Request POST")
-	spew.Dump(ctx.Request())
-
-	// Headers
-	fmt.Println("Headers")
-	spew.Dump(ctx.GetReqHeaders())
-
-	queryArgs := parseAWSQueryArgs(string(ctx.Body()))
+	var xmlOutput []byte
+	var err error
 
 	// Run the action
+	// TODO: Generate for each action, unit test each, and invalid action
 	switch queryArgs["Action"] {
 	case "DescribeInstances":
-		return gw.EC2_DescribeInstances(ctx, queryArgs)
+		xmlOutput, err = gateway_ec2_instance.DescribeInstances(ctx, queryArgs)
 	case "RunInstances":
-		return gw.EC2_RunInstances(ctx, queryArgs)
+		xmlOutput, err = gateway_ec2_instance.RunInstances(ctx, queryArgs)
 	case "CreateKeyPair":
-		return gw.EC2_CreateKeyPair(ctx, queryArgs)
+		xmlOutput, err = gateway_ec2_core.CreateKeyPair(ctx, queryArgs)
 	default:
-		slog.Warn("EC2 Unsupported Action", "action", queryArgs["Action"])
+		err = errors.New("InvalidAction")
 	}
 
-	return fiber.NewError(fiber.StatusNotImplemented, "Action not implemented")
+	// Return an error XML
+	if err != nil {
+		return err
+	}
+
+	ctx.Status(fiber.StatusOK).Type("text/xml").Send(xmlOutput)
+	return nil
+
 }
 
+/*
 func (gw *GatewayConfig) EC2_DescribeInstances(ctx *fiber.Ctx, args map[string]string) error {
 
 	slog.Info("EC2 DescribeInstances called")
@@ -186,3 +183,5 @@ func (gw *GatewayConfig) EC2_CreateKeyPair(ctx *fiber.Ctx, args map[string]strin
 
 	return nil
 }
+
+*/

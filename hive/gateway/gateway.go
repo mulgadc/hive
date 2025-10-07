@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/xml"
 	"errors"
 	"log/slog"
 	"os"
@@ -22,6 +23,21 @@ var supportedServices = map[string]bool{
 	"ec2":     true,
 	"iam":     true,
 	"account": true,
+}
+
+type ErrorResponse struct {
+	XMLName   xml.Name `xml:"Response"`
+	Errors    Errors   `xml:"Errors"`
+	RequestID string   `xml:"RequestID"`
+}
+
+type Errors struct {
+	Error ErrorDetail `xml:"Error"`
+}
+
+type ErrorDetail struct {
+	Code    string `xml:"Code"`
+	Message error  `xml:"Message"`
 }
 
 func (gw *GatewayConfig) SetupRoutes() *fiber.App {
@@ -104,6 +120,37 @@ func (gw *GatewayConfig) SetupRoutes() *fiber.App {
 func (gw *GatewayConfig) Request(ctx *fiber.Ctx) error {
 
 	// Route the request to the appropriate endpoint (e.g EC2, IAM, etc)
+	svc, err := gw.GetService(ctx)
+	slog.Info("Request", "service", svc, "method", ctx.Method(), "path", ctx.Path())
+
+	if err != nil {
+		slog.Error("GetService error", "error", err)
+		return gw.ErrorHandler(ctx, err)
+	}
+
+	switch svc {
+	case "ec2":
+		err = gw.EC2_Request(ctx)
+	case "account":
+		err = gw.Account_Request(ctx)
+	case "iam":
+		err = gw.IAM_Request(ctx)
+	default:
+		err = errors.New("UnsupportedOperation")
+	}
+
+	if err != nil {
+		slog.Error("Service request error", "service", svc, "error", err)
+		return gw.ErrorHandler(ctx, err)
+	} else {
+		slog.Info("Service request completed", "service", svc)
+	}
+
+	return nil
+
+}
+
+func (gw *GatewayConfig) GetService(ctx *fiber.Ctx) (srv string, err error) {
 
 	// Determine the service from the Authorization header
 	// "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20250930/ap-southeast-2/account/aws4_request, SignedHeaders=content-type;host;x-amz-date, Signature=adb8183545a9d6f5b626908582b4ca5f9a309137b1d4bcc802f0e79ede7af7bc"
@@ -113,107 +160,64 @@ func (gw *GatewayConfig) Request(ctx *fiber.Ctx) error {
 	parts := strings.Split(authHeader, ", ")
 	if len(parts) != 3 {
 		slog.Debug("Invalid Authorization header format")
-		return errors.New("AccessDenied")
+		return srv, errors.New("AuthFailure")
 	}
 
 	// Parse credential
 	creds := strings.Split(strings.TrimPrefix(parts[0], "AWS4-HMAC-SHA256 Credential="), "/")
 	if len(creds) != 5 {
 		slog.Debug("Invalid credential scope")
-		return errors.New("AccessDenied")
+		return srv, errors.New("AuthFailure")
 	}
 
 	svc := creds[3]
 
 	if !supportedServices[svc] {
 		slog.Debug("Unsupported service", "service", svc)
-		return errors.New("UnsupportedOperation")
+		return srv, errors.New("UnsupportedOperation")
 	}
 
-	slog.Info("Request", "service", svc, "method", ctx.Method(), "path", ctx.Path())
-
-	switch svc {
-	case "ec2":
-		return gw.EC2_Request(ctx)
-	case "account":
-		return gw.Account_Request(ctx)
-	case "iam":
-		return gw.IAM_Request(ctx)
-	default:
-		return errors.New("UnsupportedOperation")
-	}
+	return svc, nil
 
 }
 
 func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {
-	// TODO: Support service type specific errors (e.g EC2, S3, etc)
+	// TODO: Support service type specific errors (e.g EC2, S3, IAM, differ)
+
+	svc, _ := gw.GetService(ctx)
+	slog.Debug("ErrorHandler", "service", svc, "error", err.Error())
+
 	// Status code defaults to 500
-	httpCode := fiber.StatusInternalServerError
-	var s3error s3.S3Error
-	var e *fiber.Error
 
-	// Check for specific error types
-	switch {
-	case strings.Contains(err.Error(), "NoSuchBucket") || strings.Contains(err.Error(), "Bucket not found"):
-		// File or bucket not found
-		httpCode = fiber.StatusNotFound
-		s3error.Code = "NoSuchBucket"
-		s3error.Message = "The specified bucket does not exist"
+	// Get the request ID
+	var requestId = uuid.NewString()
+	requestId = ctx.Get("x-amz-request-id", requestId)
 
-	case strings.Contains(err.Error(), "AccessDenied") || strings.Contains(err.Error(), "Not enough permissions"):
-		// Permission error
-		httpCode = fiber.StatusForbidden
-		s3error.Code = "AccessDenied"
-		s3error.Message = "Access Denied"
+	var errorMsg = ErrorMessage{}
 
-	case strings.Contains(err.Error(), "NoSuchObject") || strings.Contains(err.Error(), "not found") ||
-		errors.Is(err, os.ErrNotExist):
-		// File not found
-		httpCode = fiber.StatusNotFound
-		s3error.Code = "NoSuchKey"
-		s3error.Message = "The specified key does not exist"
-
-	case strings.Contains(err.Error(), "Invalid signature") || strings.Contains(err.Error(), "Invalid access key"):
-		// Authentication error
-		httpCode = fiber.StatusForbidden
-		s3error.Code = "SignatureDoesNotMatch"
-		s3error.Message = "The request signature does not match"
-
-	case strings.Contains(err.Error(), "Missing Authorization header"):
-		// Missing auth header
-		httpCode = fiber.StatusForbidden
-		s3error.Code = "AccessDenied"
-		s3error.Message = "Access Denied"
-
-	case strings.Contains(err.Error(), "UnsupportedOperation"):
-		// Unsupported operation
-		httpCode = fiber.StatusBadRequest
-		s3error.Code = "UnsupportedOperation"
-		s3error.Message = "The operation is not supported"
-		ctx.Set("X-Amzn-Errortype", "UnsupportedOperationException")
-
-	case errors.As(err, &e):
-		httpCode = e.Code
-		s3error.Message = e.Message
-		s3error.Code = "InternalError"
-	default:
-		s3error.Code = "InternalError"
-		s3error.Message = err.Error()
+	// Check if the error lookup exists
+	if _, exists := ErrorLookup[err.Error()]; !exists {
+		slog.Warn("Unknown error code", "error", err.Error())
+		err = errors.New("InternalError")
 	}
 
-	// Add request ID and host ID
+	errorMsg = ErrorLookup[err.Error()]
 
-	s3error.RequestId = ctx.GetRespHeader("x-amz-request-id", uuid.NewString())
-	s3error.HostId = ctx.Hostname()
+	xmlError := GenerateEC2ErrorResponse(err.Error(), errorMsg.Message, requestId)
+
+	slog.Debug("Generated error response", "error", err.Error(), "xml", string(xmlError), "requestId", requestId)
+
+	if errorMsg.HTTPCode == 0 {
+		errorMsg.HTTPCode = 500
+	}
 
 	// Set standard S3 error response headers
 	ctx.Set("Content-Type", "application/xml")
-
-	return ctx.Status(httpCode).XML(s3error)
+	return ctx.Status(errorMsg.HTTPCode).Send(xmlError)
 }
 
 // Parse AWS query arguments (used by some services like EC2/S3)
-func parseAWSQueryArgs(query string) map[string]string {
+func ParseAWSQueryArgs(query string) map[string]string {
 	params := make(map[string]string)
 	pairs := strings.Split(query, "&")
 	for _, pair := range pairs {
@@ -225,4 +229,29 @@ func parseAWSQueryArgs(query string) map[string]string {
 		}
 	}
 	return params
+}
+
+func GenerateEC2ErrorResponse(code, message, requestID string) (output []byte) {
+
+	errorXml := ErrorResponse{
+		Errors: Errors{
+			Error: ErrorDetail{
+				Code:    code,
+				Message: errors.New(message),
+			},
+		},
+		RequestID: requestID,
+	}
+
+	output, err := xml.MarshalIndent(errorXml, "", "  ")
+
+	if err != nil {
+		slog.Error("Failed to build XML", "error", err)
+		return nil
+	}
+
+	// Add XML header
+	output = append([]byte(xml.Header), output...)
+
+	return output
 }

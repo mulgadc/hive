@@ -53,6 +53,7 @@ func TestInvalidRunInstance(t *testing.T) {
 	spew.Dump(response)
 }
 
+/*
 func TestGenerateEC2ErrorResponse(t *testing.T) {
 
 	errorCode := "InvalidInstanceID.NotFound"
@@ -63,3 +64,4 @@ func TestGenerateEC2ErrorResponse(t *testing.T) {
 
 	assert.Contains(t, string(xmlResponse), "InvalidInstanceID.NotFound")
 }
+*/

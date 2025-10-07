@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
-	"log/slog"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/private/protocol/xml/xmlutil"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/utils"
 )
 
 /*
@@ -21,21 +21,6 @@ XML error
 b'<?xml version="1.0" encoding="UTF-8"?>\n<Response><Errors><Error><Code>InvalidParameterValue</Code><Message>Invalid value \'t3.mcro\' for InstanceType.</Message></Error></Errors><RequestID>dc74f0b6-b4dd-4aec-afb1-3d32539e0955</RequestID></Response>'
 
 */
-
-type ErrorResponse struct {
-	XMLName   xml.Name `xml:"Response"`
-	Errors    Errors   `xml:"Errors"`
-	RequestID string   `xml:"RequestID"`
-}
-
-type Errors struct {
-	Error ErrorDetail `xml:"Error"`
-}
-
-type ErrorDetail struct {
-	Code    string `xml:"Code"`
-	Message string `xml:"Message"`
-}
 
 type runInstancesResponse struct {
 	XMLName            xml.Name           `xml:"RunInstancesResponse"`
@@ -50,31 +35,6 @@ type runInstancesResult struct {
 
 type responseMetadata struct {
 	RequestID string `xml:"RequestId"`
-}
-
-func GenerateEC2ErrorResponse(code, message, requestID string) (output []byte) {
-
-	errorXml := ErrorResponse{
-		Errors: Errors{
-			Error: ErrorDetail{
-				Code:    code,
-				Message: message,
-			},
-		},
-		RequestID: requestID,
-	}
-
-	output, err := xml.MarshalIndent(errorXml, "", "  ")
-
-	if err != nil {
-		slog.Error("Failed to build XML", "error", err)
-		return nil
-	}
-
-	// Add XML header
-	output = append([]byte(xml.Header), output...)
-
-	return output
 }
 
 func EC2_Process_RunInstances(jsonData []byte) (output []byte, err error) {
@@ -159,15 +119,11 @@ func EC2_RunInstances(input *ec2.RunInstancesInput) (output bytes.Buffer, err er
 		},
 	}
 
-	var buf bytes.Buffer
-	enc := xml.NewEncoder(&buf)
-	enc.Indent("", "  ")
-
-	if err := xmlutil.BuildXML(payload, enc); err != nil {
-		panic(err)
+	output, err = utils.MarshalToXML(payload)
+	if err != nil {
+		return output, errors.New("failed to marshal response to XML")
 	}
-	enc.Flush()
 
-	return buf, nil
+	return output, nil
 
 }
