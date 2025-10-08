@@ -3,9 +3,13 @@ package gateway
 import (
 	"errors"
 
+	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/davecgh/go-spew/spew"
 	"github.com/gofiber/fiber/v2"
+	"github.com/mulgadc/hive/hive/awsec2query"
 	gateway_ec2_core "github.com/mulgadc/hive/hive/gateway/ec2/core"
 	gateway_ec2_instance "github.com/mulgadc/hive/hive/gateway/ec2/instance"
+	"github.com/mulgadc/hive/hive/utils"
 )
 
 func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
@@ -21,7 +25,39 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 	case "DescribeInstances":
 		xmlOutput, err = gateway_ec2_instance.DescribeInstances(ctx, queryArgs)
 	case "RunInstances":
-		xmlOutput, err = gateway_ec2_instance.RunInstances(ctx, queryArgs)
+
+		var input = &ec2.RunInstancesInput{}
+		err = awsec2query.QueryParamsToStruct(queryArgs, input)
+
+		if err != nil {
+			return err
+		}
+
+		output, err := gateway_ec2_instance.RunInstances(input)
+
+		if err != nil {
+			return err
+		}
+
+		// Convert to XML
+		payload := utils.GenerateXMLPayload("RunInstanceResponse", output)
+
+		spew.Dump(payload)
+
+		/*
+			payload := gateway_ec2_instance.RunInstancesResponse{
+				Reservation: &output,
+			}
+		*/
+
+		xmlBuffer, err := utils.MarshalToXML(payload)
+
+		xmlOutput = xmlBuffer.Bytes()
+
+		if err != nil {
+			return errors.New("failed to marshal response to XML")
+		}
+
 	case "CreateKeyPair":
 		xmlOutput, err = gateway_ec2_core.CreateKeyPair(ctx, queryArgs)
 	default:
@@ -34,6 +70,7 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 	}
 
 	ctx.Status(fiber.StatusOK).Type("text/xml").Send(xmlOutput)
+
 	return nil
 
 }
@@ -152,36 +189,6 @@ func (gw *GatewayConfig) EC2_DescribeInstances(ctx *fiber.Ctx, args map[string]s
 `
 
 	return ctx.SendString(response)
-}
-
-func (gw *GatewayConfig) EC2_RunInstances(ctx *fiber.Ctx, args map[string]string) error {
-
-	slog.Info("EC2 RunInstances called")
-
-	// Convert HTTP post args, to the input struct
-	var ec2RunInstance = &ec2.RunInstancesInput{}
-	awsec2query.QueryParamsToStruct(args, ec2RunInstance)
-
-	// Send the query
-	xmlResponse, err := awsparser.EC2_RunInstances(ec2RunInstance)
-
-	if err != nil {
-		slog.Error("EC2 RunInstances error", "error", err)
-		return fiber.NewError(fiber.StatusInternalServerError, "EC2 RunInstances error")
-	}
-
-	// Return the XML response
-	ctx.Set("Content-Type", "text/xml")
-	return ctx.XML(xmlResponse)
-
-	return nil
-
-}
-
-func (gw *GatewayConfig) EC2_CreateKeyPair(ctx *fiber.Ctx, args map[string]string) error {
-	slog.Info("EC2 CreateKeyPair called")
-
-	return nil
 }
 
 */

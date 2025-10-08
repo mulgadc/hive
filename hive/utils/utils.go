@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"syscall"
 	"time"
@@ -216,4 +217,19 @@ func MarshalToXML(payload interface{}) (bytes.Buffer, error) {
 
 	return buf, nil
 
+}
+
+// wrapWithLocation decorates payload with the requested locationName tag.
+func GenerateXMLPayload(locationName string, payload interface{}) interface{} {
+	t := reflect.StructOf([]reflect.StructField{
+		{
+			Name: "Value",
+			Type: reflect.TypeOf(payload),
+			Tag:  reflect.StructTag(`locationName:"` + locationName + `"`),
+		},
+	})
+
+	v := reflect.New(t).Elem()
+	v.Field(0).Set(reflect.ValueOf(payload))
+	return v.Interface()
 }

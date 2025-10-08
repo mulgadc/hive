@@ -39,4 +39,7 @@ var ErrorLookup = map[string]ErrorMessage{
 		Message:  "You are not authorized to perform this operation.",
 	},
 	"UnsupportedOperation": {HTTPCode: 400, Message: "The action requested is not supported."},
+
+	// AMI
+	"InvalidAMIID.Malformed": {HTTPCode: 400, Message: "The specified AMI ID is malformed. Ensure that you provide the full AMI ID, in the form ami-xxxxxxxxxxxxxxxxx."},
 }

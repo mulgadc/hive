@@ -4,20 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/gofiber/fiber/v2"
-	"github.com/mulgadc/hive/hive/awsec2query"
-	"github.com/mulgadc/hive/hive/utils"
 )
 
-type runInstancesResponse struct {
+type RunInstancesResponse struct {
 	Reservation *ec2.Reservation `locationName:"RunInstancesResponse"`
-}
-
-type runInstancesResult struct {
-	Reservation *ec2.Reservation `xml:"reservationSet>item"`
 }
 
 /*
@@ -134,58 +128,60 @@ Sample JSON:
     },
 */
 
-// AUTO-GENERATED: RunInstances
-// Generated from Function name: RunInstances
-func RunInstances(ctx *fiber.Ctx, args map[string]string) ([]byte, error) {
+func RunInstances(input *ec2.RunInstancesInput) (reservation ec2.Reservation, err error) {
 
 	// Check required args from JSON above
 	// required:[
 	//   "MaxCount",
 	//   "MinCount"
 	// ]
-	if _, ok := args["MaxCount"]; !ok {
-		return nil, errors.New("InvalidParameter")
-	}
-	if _, ok := args["MinCount"]; !ok {
-		return nil, errors.New("InvalidParameter")
+
+	if *input.MinCount == 0 {
+		return reservation, errors.New("InvalidParameterValue")
 	}
 
-	// Generated from input shape: RunInstancesRequest
-	var input = &ec2.RunInstancesInput{}
-	awsec2query.QueryParamsToStruct(args, input)
+	if *input.MaxCount == 0 {
+		return reservation, errors.New("InvalidParameterValue")
+	}
+
+	// Additional validation from EC2 spec
+	if *input.MinCount > *input.MaxCount {
+		return reservation, errors.New("InvalidParameterValue")
+	}
+
+	if *input.ImageId == "" {
+		return reservation, errors.New("MissingParameter")
+	}
+
+	if *input.InstanceType == "" {
+		return reservation, errors.New("MissingParameter")
+	}
+
+	if !strings.HasPrefix(*aws.String(*input.ImageId), "ami-") {
+		return reservation, errors.New("InvalidAMIID.Malformed")
+
+	}
 
 	// Marshal to JSON, to send over the wire for processing (NATS)
 	jsonData, err := json.Marshal(input)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal input to JSON: %w", err)
+		return reservation, fmt.Errorf("failed to marshal input to JSON: %w", err)
 	}
 
 	// Run the simulated JSON request via NATS, which will return a JSON response
 	jsonResp, err := EC2_Process_RunInstances(jsonData)
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to process RunInstances request: %w", err)
+		return reservation, fmt.Errorf("failed to process RunInstances request: %w", err)
 	}
 
 	// Unmarshal the JSON response back into a Reservation struct
-	var reservation ec2.Reservation
 	err = json.Unmarshal(jsonResp, &reservation)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal JSON response to Reservation: %w", err)
+		return reservation, fmt.Errorf("failed to unmarshal JSON response to Reservation: %w", err)
 	}
 
-	// Convert to XML
-	payload := runInstancesResponse{
-		Reservation: &reservation,
-	}
-
-	output, err := utils.MarshalToXML(payload)
-
-	if err != nil {
-		return output.Bytes(), errors.New("failed to marshal response to XML")
-	}
-
-	return output.Bytes(), nil
+	return reservation, nil
 
 }
 

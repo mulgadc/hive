@@ -9,6 +9,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/mulgadc/hive/hive/awsec2query"
 	"github.com/mulgadc/predastore/s3"
 
 	"github.com/google/uuid"
@@ -254,4 +255,17 @@ func GenerateEC2ErrorResponse(code, message, requestID string) (output []byte) {
 	output = append([]byte(xml.Header), output...)
 
 	return output
+}
+
+func ParseArgsToStruct(input *interface{}, args map[string]string) (err error) {
+
+	// Generated from input shape: RunInstancesRequest
+	err = awsec2query.QueryParamsToStruct(args, input)
+
+	if err != nil {
+		return errors.New("InvalidParameter")
+	}
+
+	return nil
+
 }
