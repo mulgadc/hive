@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/davecgh/go-spew/spew"
 	"github.com/gofiber/fiber/v2"
 	"github.com/mulgadc/hive/hive/awsec2query"
 	gateway_ec2_core "github.com/mulgadc/hive/hive/gateway/ec2/core"
@@ -41,18 +40,7 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 
 		// Convert to XML
 		payload := utils.GenerateXMLPayload("RunInstanceResponse", output)
-
-		spew.Dump(payload)
-
-		/*
-			payload := gateway_ec2_instance.RunInstancesResponse{
-				Reservation: &output,
-			}
-		*/
-
-		xmlBuffer, err := utils.MarshalToXML(payload)
-
-		xmlOutput = xmlBuffer.Bytes()
+		xmlOutput, err = utils.MarshalToXML(payload)
 
 		if err != nil {
 			return errors.New("failed to marshal response to XML")

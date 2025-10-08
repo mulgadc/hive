@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -204,18 +205,19 @@ func dirExists(path string) bool {
 }
 
 // Convert interface to XML
-func MarshalToXML(payload interface{}) (bytes.Buffer, error) {
+func MarshalToXML(payload interface{}) ([]byte, error) {
 
 	var buf bytes.Buffer
 	enc := xml.NewEncoder(&buf)
 	enc.Indent("", "  ")
 
 	if err := xmlutil.BuildXML(payload, enc); err != nil {
-		panic(err)
+		slog.Error("BuildXML failed", "err", err)
+		return nil, err
 	}
 	enc.Flush()
 
-	return buf, nil
+	return buf.Bytes(), nil
 
 }
 

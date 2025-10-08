@@ -604,7 +604,7 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 		return
 	}
 
-	fmt.Println("RAW QMP Response: ", string(resp.Return))
+	slog.Debug("RAW QMP Response: ", string(resp.Return))
 
 	// Unmarshal the response
 	target, ok := qmp.CommandResponseTypes[command.QMPCommand.Execute]
@@ -913,14 +913,16 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 		err = vb.OpenWAL(&vb.WAL, fmt.Sprintf("%s/%s", vb.WAL.BaseDir, types.GetFilePath(types.FileTypeWALChunk, vb.WAL.WallNum.Load(), vb.GetVolume())))
 
 		if err != nil {
-			log.Fatalf("Failed to load WAL: %v", err)
+			slog.Error("Failed to load WAL", "err", err)
+			return ec2Response, err
 		}
 
 		// Open the block to object WAL
 		err = vb.OpenWAL(&vb.BlockToObjectWAL, fmt.Sprintf("%s/%s", vb.WAL.BaseDir, types.GetFilePath(types.FileTypeWALBlock, vb.BlockToObjectWAL.WallNum.Load(), vb.GetVolume())))
 
 		if err != nil {
-			log.Fatalf("Failed to load block WAL: %v", err)
+			slog.Error("Failed to load block WAL", "err", err)
+			return ec2Response, err
 		}
 
 		amiCfg := s3.S3Config{
@@ -953,7 +955,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 		}
 
 		// Initialize the backend
-		fmt.Println("Initializing AMI Viperblock store backend")
+		slog.Debug("Initializing AMI Viperblock store backend")
 		err = amiVb.Backend.Init()
 
 		if err != nil {
@@ -961,7 +963,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 			return ec2Response, err
 		}
 
-		fmt.Println("Loading state for AMI Viperblock store")
+		slog.Debug("Loading state for AMI Viperblock store")
 		err = amiVb.LoadState()
 
 		if err != nil {
@@ -976,7 +978,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 			return ec2Response, err
 		}
 
-		fmt.Println("Starting to clone AMI to new volume")
+		slog.Debug("Starting to clone AMI to new volume")
 
 		var block uint64 = 0
 		nullBlock := make([]byte, vb.BlockSize)
@@ -984,10 +986,9 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 		// Read each block from the AMI, write to our new volume, skipping null blocks
 
 		for {
-			//fmt.Println("Reading block", block)
 
 			if block*uint64(vb.BlockSize) >= amiVb.VolumeSize {
-				fmt.Println("Reached end of AMI")
+				slog.Debug("Reached end of AMI")
 				break
 			}
 
@@ -1016,7 +1017,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 				// Flush every 4MB
 				if block%uint64(vb.BlockSize) == 0 {
-					fmt.Println("Flush", "block", block)
+					slog.Debug("Flush", "block", block)
 					vb.Flush()
 					vb.WriteWALToChunk(true)
 				}
@@ -1024,18 +1025,17 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 		}
 
-		fmt.Println("Closing")
-
 		err = vb.Close()
 
 		if err != nil {
-			log.Fatalf("Failed to close Viperblock store: %v", err)
+			slog.Error("Failed to close Viperblock store", "err", err)
+			return ec2Response, err
 		}
 
 		err = vb.RemoveLocalFiles()
 
 		if err != nil {
-			slog.Error("Failed to remove local files", "err", err)
+			slog.Warn("Failed to remove local files", "err", err)
 		}
 
 		// New volume is cloned.
@@ -1081,6 +1081,11 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 	efiVb, err := viperblock.New(efiVbConfig, "s3", efiCfg)
 
+	if err != nil {
+		slog.Error("Could not create EFI viperblock")
+		return ec2Response, err
+	}
+
 	efiVb.SetDebug(true)
 
 	if err != nil {
@@ -1089,10 +1094,8 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 	}
 
 	// Initialize the backend
-	fmt.Println("Initializing EFI Viperblock store backend")
+	slog.Debug("Initializing EFI Viperblock store backend")
 	err = efiVb.Backend.Init()
-
-	fmt.Println("Complete EFI Viperblock init", "error", err)
 
 	if err != nil {
 		slog.Error("Failed to initialize EFI Viperblock store backend", "err", err)
@@ -1115,14 +1118,17 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 		err = efiVb.OpenWAL(&efiVb.WAL, fmt.Sprintf("%s/%s", efiVb.WAL.BaseDir, types.GetFilePath(types.FileTypeWALChunk, efiVb.WAL.WallNum.Load(), efiVb.GetVolume())))
 
 		if err != nil {
-			log.Fatalf("Failed to load WAL: %v", err)
+			slog.Error("Failed to load WAL", "err", err)
+			return ec2Response, err
 		}
 
 		// Open the block to object WAL
 		err = vb.OpenWAL(&efiVb.BlockToObjectWAL, fmt.Sprintf("%s/%s", efiVb.WAL.BaseDir, types.GetFilePath(types.FileTypeWALBlock, efiVb.BlockToObjectWAL.WallNum.Load(), efiVb.GetVolume())))
 
 		if err != nil {
-			log.Fatalf("Failed to load block WAL: %v", err)
+			slog.Error("Failed to load block WAL", "err", err)
+			return ec2Response, err
+
 		}
 
 		// Write an empty block to the EFI volume
@@ -1193,6 +1199,11 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 		cloudInitVb, err := viperblock.New(cloudInitVbConfig, "s3", cloudInitCfg)
 
+		if err != nil {
+			slog.Error("Could not create cloudinit viperblock")
+			return ec2Response, err
+		}
+
 		cloudInitVb.SetDebug(true)
 
 		if err != nil {
@@ -1201,8 +1212,13 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 		}
 
 		// Initialize the backend
-		fmt.Println("Initializing cloud-init Viperblock store backend")
+		slog.Debug("Initializing cloud-init Viperblock store backend")
 		err = cloudInitVb.Backend.Init()
+
+		if err != nil {
+			slog.Error("Could not init backend")
+			return ec2Response, err
+		}
 
 		// Load the state from the remote backend
 		//err = vb.LoadState()
@@ -1218,14 +1234,16 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 			err = cloudInitVb.OpenWAL(&cloudInitVb.WAL, fmt.Sprintf("%s/%s", cloudInitVb.WAL.BaseDir, types.GetFilePath(types.FileTypeWALChunk, cloudInitVb.WAL.WallNum.Load(), cloudInitVb.GetVolume())))
 
 			if err != nil {
-				log.Fatalf("Failed to load WAL: %v", err)
+				slog.Error("Failed to load WAL", "err", err)
+				return ec2Response, err
 			}
 
 			// Open the block to object WAL
 			err = cloudInitVb.OpenWAL(&cloudInitVb.BlockToObjectWAL, fmt.Sprintf("%s/%s", cloudInitVb.WAL.BaseDir, types.GetFilePath(types.FileTypeWALBlock, cloudInitVb.BlockToObjectWAL.WallNum.Load(), cloudInitVb.GetVolume())))
 
 			if err != nil {
-				log.Fatalf("Failed to load block WAL: %v", err)
+				slog.Error("Failed to load block WAL", "err", err)
+				return ec2Response, err
 			}
 
 			// Create the cloud-init disk
@@ -1254,12 +1272,14 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 			err = s3c.Init()
 
 			if err != nil {
-				log.Fatalf("failed to initialize S3 client: %v", err)
+				slog.Error("failed to initialize S3 client", "err", err)
+				return ec2Response, err
 			}
 
 			sshKey, err := s3c.Read(fmt.Sprintf("/ssh/%s", keyName))
 			if err != nil {
-				log.Fatalf("failed to read SSH key: %v", err)
+				slog.Error("failed to read SSH key", "err", err)
+				return ec2Response, err
 			}
 
 			userData := CloudInitData{
@@ -1272,15 +1292,17 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 			t := template.Must(template.New("cloud-init").Parse(cloudInitUserDataTemplate))
 
 			if err := t.Execute(&buf, userData); err != nil {
-				log.Fatalf("failed to render template: %v", err)
+				slog.Error("failed to render template", "err", err)
+				return ec2Response, err
 			}
 
-			fmt.Println("user-data", buf.String())
+			slog.Debug("user-data", buf.String())
 
 			// Add user-data
 			err = writer.AddFile(&buf, "user-data")
 			if err != nil {
-				log.Fatalf("failed to add file: %s", err)
+				slog.Error("failed to add file", "err", err)
+				return ec2Response, err
 			}
 
 			// Add meta-data
@@ -1294,55 +1316,68 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 			buf.Reset()
 
 			if err := t.Execute(&buf, metaData); err != nil {
-				log.Fatalf("failed to render template: %v", err)
+				slog.Error("failed to render template", "err", err)
+				return ec2Response, err
 			}
 
-			fmt.Println("meta-data", buf.String())
+			slog.Debug("meta-data", buf.String())
 
 			err = writer.AddFile(&buf, "meta-data")
 			if err != nil {
-				log.Fatalf("failed to add file: %s", err)
+				slog.Error("failed to add file", "err", err)
+				return ec2Response, err
 			}
 
 			// Store temp file
 			tempFile, err := os.CreateTemp("", "cloud-init-*.iso")
 
+			if err != nil {
+				slog.Error("Could not create cloud-init temp file")
+				return ec2Response, err
+			}
+
 			slog.Info("Created temp ISO file", "file", tempFile.Name())
 
 			outputFile, err := os.OpenFile(tempFile.Name(), os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0644)
 			if err != nil {
-				log.Fatalf("failed to create file: %s", err)
+				slog.Error("failed to create file", "err", err)
+				return ec2Response, err
 			}
 
 			// Requires cidata volume label for cloud-init to recognize
 			err = writer.WriteTo(outputFile, "cidata")
 
 			if err != nil {
-				log.Fatalf("failed to write ISO image: %s", err)
+				slog.Error("failed to write ISO image", "err", err)
+				return ec2Response, err
 			}
 
 			err = writer.Cleanup()
 
 			if err != nil {
-				log.Fatalf("failed to cleanup writer: %s", err)
+				slog.Error("failed to cleanup writer", "err", err)
+				return ec2Response, err
 			}
 
 			err = outputFile.Close()
 
 			if err != nil {
-				log.Fatalf("failed to close output file: %s", err)
+				slog.Error("failed to close output file", "err", err)
+				return ec2Response, err
 			}
 
 			isoData, err := os.ReadFile(tempFile.Name())
 
 			if err != nil {
-				log.Fatalf("failed to read ISO image: %s", err)
+				slog.Error("failed to read ISO image:", "err", err)
+				return ec2Response, err
 			}
 
 			err = cloudInitVb.WriteAt(0, isoData)
 
 			if err != nil {
-				log.Fatalf("failed to write ISO image to viperblock volume: %s", err)
+				slog.Error("failed to write ISO image to viperblock volume", "err", err)
+				return ec2Response, err
 			}
 
 			// Flush
@@ -1387,6 +1422,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 	err = d.LaunchInstance(instance)
 
 	if err != nil {
+		slog.Error("Could not launch instance", "err", err)
 		return ec2Response, err
 	}
 
@@ -1404,10 +1440,15 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 	// Create a new QMP client to communicate with the instance
 	instance.QMPClient, err = qmp.NewQMPClient(instance.Config.QMPSocket)
 
+	if err != nil {
+		slog.Error("Could not connect to QMP")
+		return err
+	}
+
 	// Send qmp_capabilities handshake to init
 	_, err = d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "qmp_capabilities"}, instance.ID)
 
-	// Simple heartbeat to confirm QMP and the instanceis running / healthy
+	// Simple heartbeat to confirm QMP and the instance is running / healthy
 	go func() {
 		for {
 			time.Sleep(30 * time.Second)
@@ -1493,14 +1534,6 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 		return err
 	}
 
-	/*
-		reply, err := nc.Request("ebs.mount", []byte(), 4*time.Second)
-
-		if err != nil {
-			log.Fatalln(err)
-		}
-	*/
-
 	// Step 7: Create QMP client to communicate with the instance
 	err = d.CreateQMPClient(instance)
 
@@ -1516,7 +1549,8 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	d.natsSubscriptions[instance.ID], err = d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), "hive-events", d.handleEC2Events)
 
 	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS: %w", err)
+		slog.Error("failed to subscribe to NATS", "err", err)
+		return err
 	}
 
 	d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)], err = d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.describe.%s", instance.ID), "hive-events", d.handleEC2Describe)
@@ -1573,8 +1607,6 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 
 	// Loop through each volume in volumes
 	instance.EBSRequests.Mu.Lock()
-
-	fmt.Println("ebsRequests.Requests", instance.EBSRequests.Requests)
 
 	for _, v := range instance.EBSRequests.Requests {
 
@@ -1676,7 +1708,7 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 
 			for scanner.Scan() {
 				line := scanner.Text()
-				fmt.Println("[qemu stderr]", line)
+				slog.Debug("[qemu stderr]", line)
 
 				matches := re.FindStringSubmatch(line)
 				if len(matches) == 2 {
@@ -1736,12 +1768,13 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	select {
 	case exitErr := <-exitChan:
 		if exitErr != 0 {
-			errorMsg := fmt.Errorf("qemu failed: %v", exitErr)
+			errorMsg := fmt.Errorf("failed: %v", exitErr)
+			slog.Error("Failed to launch qemu", "err", errorMsg)
 			return errorMsg
 		}
 	default:
 		// nbdkit is still running after 1 second, which means it started successfully
-		fmt.Println("QEMU started successfully and is running", "pts", pts)
+		slog.Info("QEMU started successfully and is running", "pts", pts)
 	}
 
 	// Confirm the instance has booted
@@ -1761,8 +1794,6 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 	instance.EBSRequests.Mu.Lock()
 	for k, v := range instance.EBSRequests.Requests {
 
-		fmt.Println(v)
-
 		// Send the volume payload as JSON
 		ebsMountRequest, err := json.Marshal(v)
 
@@ -1772,6 +1803,8 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 		}
 
 		reply, err := d.natsConn.Request("ebs.mount", ebsMountRequest, 10*time.Second)
+
+		slog.Debug("Mounting volume", "NBDURI", v.NBDURI)
 
 		// TODO: Improve timeout handling
 		if err != nil {
@@ -1788,9 +1821,9 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 			return err
 		}
 
-		fmt.Println(ebsMountResponse)
-
 		if ebsMountResponse.Error == "" {
+
+			slog.Debug("Mounted volume successfully", "response", ebsMountResponse.URI)
 
 			// Append the NBD URI to the request
 			instance.EBSRequests.Requests[k].NBDURI = ebsMountResponse.URI
