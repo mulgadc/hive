@@ -605,7 +605,7 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 		return
 	}
 
-	slog.Debug("RAW QMP Response: ", string(resp.Return))
+	slog.Debug("RAW QMP Response", "resp", string(resp.Return))
 
 	// Unmarshal the response
 	target, ok := qmp.CommandResponseTypes[command.QMPCommand.Execute]
@@ -653,7 +653,7 @@ func (d *Daemon) handleEC2Launch(msg *nats.Msg) {
 	if !exists {
 		ec2Response.Error = fmt.Sprintf("Unsupported instance type: %s", ec2Req.InstanceType)
 		ec2Response.Respond(msg)
-		slog.Error("handleEC2Launch", "err")
+		slog.Error("handleEC2Launch", "err", ec2Response.Error)
 		return
 	}
 
@@ -1295,7 +1295,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 				return ec2Response, err
 			}
 
-			slog.Debug("user-data", buf.String())
+			//slog.Debug("user-data", "data", buf.String())
 
 			// Add user-data
 			err = writer.AddFile(&buf, "user-data")
@@ -1319,7 +1319,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 				return ec2Response, err
 			}
 
-			slog.Debug("meta-data", buf.String())
+			//slog.Debug("meta-data", buf.String())
 
 			err = writer.AddFile(&buf, "meta-data")
 			if err != nil {
@@ -1708,7 +1708,7 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 
 			for scanner.Scan() {
 				line := scanner.Text()
-				slog.Debug("[qemu stderr]", line)
+				slog.Debug("[qemu stderr]", "line", line)
 
 				matches := re.FindStringSubmatch(line)
 				if len(matches) == 2 {
