@@ -1,13 +1,16 @@
 package gateway_ec2_instance
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/utils"
 )
 
 type RunInstancesResponse struct {
@@ -128,7 +131,7 @@ Sample JSON:
     },
 */
 
-func RunInstances(input *ec2.RunInstancesInput) (reservation ec2.Reservation, err error) {
+func ValidateRunInstancesInput(input *ec2.RunInstancesInput) (err error) {
 
 	// Check required args from JSON above
 	// required:[
@@ -136,30 +139,51 @@ func RunInstances(input *ec2.RunInstancesInput) (reservation ec2.Reservation, er
 	//   "MinCount"
 	// ]
 
+	if input == nil {
+		return errors.New("MissingParameter")
+	}
+
+	if input.MinCount == nil {
+		return errors.New("MissingParameter")
+	}
+
 	if *input.MinCount == 0 {
-		return reservation, errors.New("InvalidParameterValue")
+		return errors.New("InvalidParameterValue")
 	}
 
 	if *input.MaxCount == 0 {
-		return reservation, errors.New("InvalidParameterValue")
+		return errors.New("InvalidParameterValue")
 	}
 
 	// Additional validation from EC2 spec
 	if *input.MinCount > *input.MaxCount {
-		return reservation, errors.New("InvalidParameterValue")
+		return errors.New("InvalidParameterValue")
 	}
 
-	if *input.ImageId == "" {
-		return reservation, errors.New("MissingParameter")
+	if input.ImageId == nil || *input.ImageId == "" {
+		return errors.New("MissingParameter")
 	}
 
-	if *input.InstanceType == "" {
-		return reservation, errors.New("MissingParameter")
+	if input.InstanceType == nil || *input.InstanceType == "" {
+		return errors.New("MissingParameter")
 	}
 
-	if !strings.HasPrefix(*aws.String(*input.ImageId), "ami-") {
-		return reservation, errors.New("InvalidAMIID.Malformed")
+	if !strings.HasPrefix(*input.ImageId, "ami-") {
+		return errors.New("InvalidAMIID.Malformed")
 
+	}
+
+	return
+
+}
+
+func RunInstances(input *ec2.RunInstancesInput) (reservation ec2.Reservation, err error) {
+
+	// Validate input
+	err = ValidateRunInstancesInput(input)
+
+	if err != nil {
+		return reservation, err
 	}
 
 	// Marshal to JSON, to send over the wire for processing (NATS)
@@ -169,10 +193,15 @@ func RunInstances(input *ec2.RunInstancesInput) (reservation ec2.Reservation, er
 	}
 
 	// Run the simulated JSON request via NATS, which will return a JSON response
-	jsonResp, err := EC2_Process_RunInstances(jsonData)
+	jsonResp := EC2_Process_RunInstances(jsonData)
+
+	// Validate if the response is successful or an error
+
+	responseError, err := utils.ValidateErrorPayload(jsonResp)
 
 	if err != nil {
-		return reservation, fmt.Errorf("failed to process RunInstances request: %w", err)
+		slog.Error("Runinstances failed", "err", responseError.Code)
+		return reservation, errors.New(*responseError.Code)
 	}
 
 	// Unmarshal the JSON response back into a Reservation struct
@@ -185,12 +214,24 @@ func RunInstances(input *ec2.RunInstancesInput) (reservation ec2.Reservation, er
 
 }
 
-func EC2_Process_RunInstances(jsonData []byte) (output []byte, err error) {
+func EC2_Process_RunInstances(jsonData []byte) (output []byte) {
 
 	var input ec2.RunInstancesInput
-	err = json.Unmarshal(jsonData, &input)
+
+	decoder := json.NewDecoder(bytes.NewReader(jsonData))
+	decoder.DisallowUnknownFields()
+
+	err := decoder.Decode(&input)
 	if err != nil {
-		return output, fmt.Errorf("failed to unmarshal JSON to RunInstancesInput: %w", err)
+		// TODO: Move error codes with vars to errors.go
+		return utils.GenerateErrorPayload("ValidationError")
+	}
+
+	// Ensure the payload provided the fields that EC2 expects before proceeding.
+	err = ValidateRunInstancesInput(&input)
+
+	if err != nil {
+		return utils.GenerateErrorPayload("ValidationError")
 	}
 
 	// Here you would add the logic to actually create the instance in your system.
@@ -216,9 +257,10 @@ func EC2_Process_RunInstances(jsonData []byte) (output []byte, err error) {
 	// Return as JSON, to simulate the NATS response
 	jsonResponse, err := json.Marshal(reservation)
 	if err != nil {
-		return output, fmt.Errorf("failed to marshal reservation to JSON: %w", err)
+		slog.Error("EC2_Process_RunInstances could not marshal reservation", "err", err)
+		return nil
 	}
 
-	return jsonResponse, nil
+	return jsonResponse
 
 }

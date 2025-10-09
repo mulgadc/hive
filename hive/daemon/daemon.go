@@ -24,6 +24,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/kdomanski/iso9660"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/qmp"
@@ -632,19 +633,16 @@ func (d *Daemon) handleEC2Launch(msg *nats.Msg) {
 	log.Printf("Received message on subject: %s", msg.Subject)
 	log.Printf("Message data: %s", string(msg.Data))
 
+	var RunInstancesInput ec2.RunInstancesInput
+	//var Reservation ec2.Reservation
+
 	var ec2Req EC2Request
 	var ec2Response config.EC2Response
 
-	if err := json.Unmarshal(msg.Data, &ec2Req); err != nil {
+	if err := json.Unmarshal(msg.Data, &RunInstancesInput); err != nil {
 		ec2Response.Error = fmt.Sprintf("Error unmarshaling EC2 request: %v", err)
 		ec2Response.Respond(msg)
-		return
-	}
-
-	// Only handle RunInstances action
-	if ec2Req.Action != "RunInstances" {
-		ec2Response.Error = fmt.Sprintf("Ignoring non-RunInstances action: %s", ec2Req.Action)
-		ec2Response.Respond(msg)
+		slog.Error("Request does not match RunInstancesInput", "err", err)
 		return
 	}
 
@@ -655,6 +653,7 @@ func (d *Daemon) handleEC2Launch(msg *nats.Msg) {
 	if !exists {
 		ec2Response.Error = fmt.Sprintf("Unsupported instance type: %s", ec2Req.InstanceType)
 		ec2Response.Respond(msg)
+		slog.Error("handleEC2Launch", "err")
 		return
 	}
 
@@ -1614,6 +1613,7 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 
 		drive.File = v.NBDURI
 		// Cleanup hostname to point to nbd://localhost from [::]
+		// TODO: Make NBD host config defined, or remote NBD server if not running locally.
 		drive.File = strings.Replace(drive.File, "[::]", "nbd://127.0.0.1", 1)
 
 		if v.Boot {

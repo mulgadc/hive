@@ -2,6 +2,7 @@ package utils
 
 import (
 	"bytes"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -13,7 +14,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/private/protocol/xml/xmlutil"
+	"github.com/aws/aws-sdk-go/service/ec2"
 )
 
 func ReadPidFile(name string) (int, error) {
@@ -234,4 +237,38 @@ func GenerateXMLPayload(locationName string, payload interface{}) interface{} {
 	v := reflect.New(t).Elem()
 	v.Field(0).Set(reflect.ValueOf(payload))
 	return v.Interface()
+}
+
+// Generate JSON Error Payload
+func GenerateErrorPayload(code string) (jsonResponse []byte) {
+
+	var responseError ec2.ResponseError
+	responseError.Code = aws.String(code)
+
+	// Return as JSON, to simulate the NATS response
+	jsonResponse, err := json.Marshal(responseError)
+	if err != nil {
+		slog.Error("GenerateErrorPayload could not marshal JSON payload", "err", err)
+		return nil
+	}
+
+	return
+
+}
+
+// Validate the payload is an ec2.ResponseError
+func ValidateErrorPayload(payload []byte) (responseError ec2.ResponseError, err error) {
+
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+
+	err = decoder.Decode(&responseError)
+
+	if err == nil {
+		// TODO: Move error codes with vars to errors.go
+		return responseError, errors.New("ResponseError detected")
+	}
+
+	return responseError, nil
+
 }
