@@ -26,6 +26,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/kdomanski/iso9660"
+	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/s3client"
@@ -633,16 +634,18 @@ func (d *Daemon) handleEC2Launch(msg *nats.Msg) {
 	log.Printf("Received message on subject: %s", msg.Subject)
 	log.Printf("Message data: %s", string(msg.Data))
 
-	var RunInstancesInput ec2.RunInstancesInput
+	var runInstancesInput ec2.RunInstancesInput
 	//var Reservation ec2.Reservation
 
 	var ec2Req EC2Request
 	var ec2Response config.EC2Response
+	var errResp []byte
 
-	if err := json.Unmarshal(msg.Data, &RunInstancesInput); err != nil {
-		ec2Response.Error = fmt.Sprintf("Error unmarshaling EC2 request: %v", err)
-		ec2Response.Respond(msg)
-		slog.Error("Request does not match RunInstancesInput", "err", err)
+	errResp = utils.UnmarshalJsonPayload(runInstancesInput, msg.Data)
+
+	if errResp != nil {
+		msg.Respond(errResp)
+		slog.Error("Request does not match RunInstancesInput")
 		return
 	}
 
@@ -651,9 +654,9 @@ func (d *Daemon) handleEC2Launch(msg *nats.Msg) {
 	// Check if instance type is supported
 	instanceType, exists := d.resourceMgr.instanceTypes[ec2Req.InstanceType]
 	if !exists {
-		ec2Response.Error = fmt.Sprintf("Unsupported instance type: %s", ec2Req.InstanceType)
-		ec2Response.Respond(msg)
-		slog.Error("handleEC2Launch", "err", ec2Response.Error)
+		slog.Error("handleEC2Launch", "err", awserrors.ErrorInvalidInstanceType)
+		errResp = utils.GenerateErrorPayload(awserrors.ErrorInvalidInstanceType)
+		msg.Respond(errResp)
 		return
 	}
 

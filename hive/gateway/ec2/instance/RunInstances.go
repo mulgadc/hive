@@ -10,6 +10,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
@@ -224,14 +225,14 @@ func EC2_Process_RunInstances(jsonData []byte) (output []byte) {
 	err := decoder.Decode(&input)
 	if err != nil {
 		// TODO: Move error codes with vars to errors.go
-		return utils.GenerateErrorPayload("ValidationError")
+		return utils.GenerateErrorPayload(awserrors.ErrorValidationError)
 	}
 
 	// Ensure the payload provided the fields that EC2 expects before proceeding.
 	err = ValidateRunInstancesInput(&input)
 
 	if err != nil {
-		return utils.GenerateErrorPayload("ValidationError")
+		return utils.GenerateErrorPayload(awserrors.ErrorValidationError)
 	}
 
 	// Here you would add the logic to actually create the instance in your system.

@@ -10,6 +10,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/mulgadc/hive/hive/awsec2query"
+	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/predastore/s3"
 
 	"github.com/google/uuid"
@@ -161,14 +162,14 @@ func (gw *GatewayConfig) GetService(ctx *fiber.Ctx) (srv string, err error) {
 	parts := strings.Split(authHeader, ", ")
 	if len(parts) != 3 {
 		slog.Debug("Invalid Authorization header format")
-		return srv, errors.New("AuthFailure")
+		return srv, errors.New(awserrors.ErrorAuthFailure)
 	}
 
 	// Parse credential
 	creds := strings.Split(strings.TrimPrefix(parts[0], "AWS4-HMAC-SHA256 Credential="), "/")
 	if len(creds) != 5 {
 		slog.Debug("Invalid credential scope")
-		return srv, errors.New("AuthFailure")
+		return srv, errors.New(awserrors.ErrorAuthFailure)
 	}
 
 	svc := creds[3]
@@ -194,15 +195,15 @@ func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {
 	var requestId = uuid.NewString()
 	requestId = ctx.Get("x-amz-request-id", requestId)
 
-	var errorMsg = ErrorMessage{}
+	var errorMsg = awserrors.ErrorMessage{}
 
 	// Check if the error lookup exists
-	if _, exists := ErrorLookup[err.Error()]; !exists {
+	if _, exists := awserrors.ErrorLookup[err.Error()]; !exists {
 		slog.Warn("Unknown error code", "error", err.Error())
 		err = errors.New("InternalError")
 	}
 
-	errorMsg = ErrorLookup[err.Error()]
+	errorMsg = awserrors.ErrorLookup[err.Error()]
 
 	xmlError := GenerateEC2ErrorResponse(err.Error(), errorMsg.Message, requestId)
 

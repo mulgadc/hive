@@ -272,3 +272,20 @@ func ValidateErrorPayload(payload []byte) (responseError ec2.ResponseError, err 
 	return responseError, nil
 
 }
+
+// Unmarshal payload
+
+func UnmarshalJsonPayload(input interface{}, jsonData []byte) []byte {
+
+	decoder := json.NewDecoder(bytes.NewReader(jsonData))
+	decoder.DisallowUnknownFields()
+
+	err := decoder.Decode(&input)
+	if err != nil {
+		// TODO: Move error codes with vars to errors.go
+		return GenerateErrorPayload("ValidationError")
+	}
+
+	return nil
+
+}
