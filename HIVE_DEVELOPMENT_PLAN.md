@@ -616,3 +616,675 @@ When working on this codebase:
 7. **Test with real AWS CLI** to ensure compatibility
 
 The existing code in `hive/daemon/daemon.go` provides an excellent foundation - it already implements TLS, AWS SDK integration, NATS coordination, and service integration patterns that should be extended rather than replaced. All original TODO items have been preserved and integrated into this comprehensive development plan.
+
+## AWS Compatibility Enhancement Recommendations
+
+This section provides detailed recommendations for improving AWS functionality replication in Hive, organized by priority and implementation complexity.
+
+### High Priority Enhancements
+
+These features provide immediate value and are relatively straightforward to implement:
+
+#### 1. Request ID Tracking
+
+**Purpose**: AWS returns a unique `RequestId` with every response for traceability and debugging.
+
+**Implementation**:
+```go
+// hive/services/common/metadata.go
+type ResponseMetadata struct {
+    RequestId string `locationName:"requestId" xml:"RequestId"`
+}
+
+// Add to all response wrappers
+type EC2Response struct {
+    XMLName  xml.Name         `xml:"RunInstancesResponse"`
+    Result   *ec2.Reservation `xml:"instancesSet"`
+    Metadata ResponseMetadata `xml:"ResponseMetadata"`
+}
+
+// Generate request IDs
+func GenerateRequestId() string {
+    return fmt.Sprintf("req-%s", uuid.New().String())
+}
+```
+
+**Benefits**:
+- Enables request tracing across distributed systems
+- Matches AWS CLI output format exactly
+- Essential for debugging multi-service operations
+- Required for AWS CloudTrail-like audit logging
+
+#### 2. DryRun Implementation
+
+**Purpose**: Allow validation-only mode for all operations without making actual changes.
+
+**Implementation**:
+```go
+// Add to each operation handler
+func ValidateCreateImageInput(input *ec2.CreateImageInput) (err error) {
+    // ... existing validation ...
+    return nil
+}
+
+func EC2_Process_CreateImage(jsonData []byte) (output []byte) {
+    var input ec2.CreateImageInput
+    err := json.Unmarshal(jsonData, &input)
+    if err != nil {
+        return utils.GenerateErrorPayload(awserrors.ErrorValidationError)
+    }
+
+    // Validate input
+    err = ValidateCreateImageInput(&input)
+    if err != nil {
+        return utils.GenerateErrorPayload(err)
+    }
+
+    // If DryRun, return success after validation
+    if input.DryRun != nil && *input.DryRun {
+        return utils.GenerateSuccessPayload(map[string]bool{"Return": true})
+    }
+
+    // ... actual implementation ...
+}
+```
+
+**Benefits**:
+- Safety feature for testing scripts and automation
+- Validates permissions and parameters without side effects
+- Standard AWS behavior expected by users
+- Critical for CI/CD pipeline validation
+
+#### 3. Comprehensive Error Code Mapping
+
+**Purpose**: Expand error types to match AWS error codes precisely.
+
+**Implementation**:
+```go
+// hive/awserrors/ec2_errors.go
+package awserrors
+
+import "github.com/aws/aws-sdk-go/aws"
+
+var (
+    // AMI Errors
+    ErrorInvalidAMIIDNotFound = ResponseError{
+        Code:    aws.String("InvalidAMIID.NotFound"),
+        Message: aws.String("The image id '[%s]' does not exist"),
+    }
+    ErrorInvalidAMIIDMalformed = ResponseError{
+        Code:    aws.String("InvalidAMIID.Malformed"),
+        Message: aws.String("Invalid id: \"%s\" (expecting \"ami-...\")"),
+    }
+    ErrorInvalidAMIIDUnavailable = ResponseError{
+        Code:    aws.String("InvalidAMIID.Unavailable"),
+        Message: aws.String("The image id '[%s]' is no longer available"),
+    }
+
+    // Instance Errors
+    ErrorInvalidInstanceIDNotFound = ResponseError{
+        Code:    aws.String("InvalidInstanceID.NotFound"),
+        Message: aws.String("The instance ID '%s' does not exist"),
+    }
+    ErrorInvalidInstanceIDMalformed = ResponseError{
+        Code:    aws.String("InvalidInstanceID.Malformed"),
+        Message: aws.String("Invalid id: \"%s\" (expecting \"i-...\")"),
+    }
+    ErrorIncorrectInstanceState = ResponseError{
+        Code:    aws.String("IncorrectInstanceState"),
+        Message: aws.String("The instance '%s' is not in a state from which this command can be executed."),
+    }
+
+    // Volume Errors
+    ErrorInvalidVolumeNotFound = ResponseError{
+        Code:    aws.String("InvalidVolume.NotFound"),
+        Message: aws.String("The volume '%s' does not exist."),
+    }
+    ErrorVolumeInUse = ResponseError{
+        Code:    aws.String("VolumeInUse"),
+        Message: aws.String("Volume %s is currently attached to %s"),
+    }
+
+    // Key Pair Errors
+    ErrorInvalidKeyPairNotFound = ResponseError{
+        Code:    aws.String("InvalidKeyPair.NotFound"),
+        Message: aws.String("The key pair '%s' does not exist"),
+    }
+    ErrorInvalidKeyPairDuplicate = ResponseError{
+        Code:    aws.String("InvalidKeyPair.Duplicate"),
+        Message: aws.String("The keypair '%s' already exists."),
+    }
+
+    // Resource Limit Errors
+    ErrorInstanceLimitExceeded = ResponseError{
+        Code:    aws.String("InstanceLimitExceeded"),
+        Message: aws.String("You have requested more instances than your current instance limit allows."),
+    }
+    ErrorVolumeLimitExceeded = ResponseError{
+        Code:    aws.String("VolumeLimitExceeded"),
+        Message: aws.String("You have exceeded the maximum number of volumes."),
+    }
+)
+
+// Helper to format error messages
+func FormatError(err ResponseError, args ...interface{}) ResponseError {
+    if err.Message != nil {
+        formatted := fmt.Sprintf(*err.Message, args...)
+        err.Message = &formatted
+    }
+    return err
+}
+```
+
+**Usage**:
+```go
+// In validation functions
+if !strings.HasPrefix(*input.ImageId, "ami-") {
+    return awserrors.FormatError(awserrors.ErrorInvalidAMIIDMalformed, *input.ImageId)
+}
+
+// In business logic
+image := findImage(imageId)
+if image == nil {
+    return utils.GenerateErrorPayload(
+        awserrors.FormatError(awserrors.ErrorInvalidAMIIDNotFound, imageId))
+}
+```
+
+#### 4. Integration Testing with AWS SDK
+
+**Purpose**: Validate Hive compatibility using real AWS SDK clients.
+
+**Implementation**:
+```go
+// tests/integration/aws_sdk_test.go
+package integration
+
+import (
+    "testing"
+
+    "github.com/aws/aws-sdk-go/aws"
+    "github.com/aws/aws-sdk-go/aws/session"
+    "github.com/aws/aws-sdk-go/service/ec2"
+    "github.com/stretchr/testify/assert"
+)
+
+func TestEC2WithRealAWSSDK(t *testing.T) {
+    // Configure SDK to point to Hive endpoint
+    sess := session.Must(session.NewSession(&aws.Config{
+        Endpoint:         aws.String("https://localhost:9999"),
+        Region:           aws.String("us-east-1"),
+        DisableSSL:       aws.Bool(false),
+        S3ForcePathStyle: aws.Bool(true),
+    }))
+
+    svc := ec2.New(sess)
+
+    t.Run("CreateKeyPair", func(t *testing.T) {
+        result, err := svc.CreateKeyPair(&ec2.CreateKeyPairInput{
+            KeyName: aws.String("test-key-" + uuid.New().String()),
+        })
+
+        assert.NoError(t, err)
+        assert.NotNil(t, result.KeyName)
+        assert.NotNil(t, result.KeyFingerprint)
+        assert.NotNil(t, result.KeyMaterial)
+        assert.NotNil(t, result.KeyPairId)
+    })
+
+    t.Run("DescribeKeyPairs", func(t *testing.T) {
+        result, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{})
+
+        assert.NoError(t, err)
+        assert.NotNil(t, result.KeyPairs)
+    })
+
+    t.Run("CreateImage", func(t *testing.T) {
+        // First create an instance
+        runResult, err := svc.RunInstances(&ec2.RunInstancesInput{
+            ImageId:      aws.String("ami-test"),
+            InstanceType: aws.String("t2.micro"),
+            MinCount:     aws.Int64(1),
+            MaxCount:     aws.Int64(1),
+        })
+        assert.NoError(t, err)
+        instanceId := runResult.Instances[0].InstanceId
+
+        // Create image from instance
+        imgResult, err := svc.CreateImage(&ec2.CreateImageInput{
+            InstanceId: instanceId,
+            Name:       aws.String("test-image"),
+        })
+
+        assert.NoError(t, err)
+        assert.NotNil(t, imgResult.ImageId)
+        assert.True(t, strings.HasPrefix(*imgResult.ImageId, "ami-"))
+    })
+}
+```
+
+### Medium Priority Enhancements
+
+These features improve reliability and correctness:
+
+#### 5. Idempotency Token Support
+
+**Purpose**: Allow safe retries of operations without creating duplicates.
+
+**What is Idempotency?**
+Idempotency means performing the same operation multiple times produces the same result as performing it once. Critical for handling network failures, timeouts, and retry logic.
+
+**Example Problem**:
+```
+Client: CreateKeyPair(name="prod-key")
+[Network timeout - did it work?]
+Client: CreateKeyPair(name="prod-key") [retry]
+Server: ERROR - key already exists
+[Client never got the private key material!]
+```
+
+**Solution with Idempotency Token**:
+```
+Client: CreateKeyPair(name="prod-key", token="abc-123")
+[Creates key, stores result with token]
+[Network timeout]
+Client: CreateKeyPair(name="prod-key", token="abc-123") [same token!]
+[Returns cached result with same private key - safe!]
+```
+
+**Implementation**:
+```go
+// hive/idempotency/idempotency.go
+package idempotency
+
+import (
+    "sync"
+    "time"
+)
+
+type TokenCache struct {
+    cache map[string]CachedResponse
+    mu    sync.RWMutex
+}
+
+type CachedResponse struct {
+    Response  []byte
+    ExpiresAt time.Time
+}
+
+var globalCache = &TokenCache{
+    cache: make(map[string]CachedResponse),
+}
+
+func (t *TokenCache) Get(token string) ([]byte, bool) {
+    t.mu.RLock()
+    defer t.mu.RUnlock()
+
+    cached, exists := t.cache[token]
+    if !exists || time.Now().After(cached.ExpiresAt) {
+        return nil, false
+    }
+    return cached.Response, true
+}
+
+func (t *TokenCache) Set(token string, response []byte, ttl time.Duration) {
+    t.mu.Lock()
+    defer t.mu.Unlock()
+
+    t.cache[token] = CachedResponse{
+        Response:  response,
+        ExpiresAt: time.Now().Add(ttl),
+    }
+}
+
+func (t *TokenCache) Cleanup() {
+    t.mu.Lock()
+    defer t.mu.Unlock()
+
+    now := time.Now()
+    for token, cached := range t.cache {
+        if now.After(cached.ExpiresAt) {
+            delete(t.cache, token)
+        }
+    }
+}
+
+// Start cleanup goroutine
+func init() {
+    go func() {
+        ticker := time.NewTicker(5 * time.Minute)
+        defer ticker.Stop()
+        for range ticker.C {
+            globalCache.Cleanup()
+        }
+    }()
+}
+```
+
+**Usage in Operations**:
+```go
+func EC2_Process_CreateImage(jsonData []byte) (output []byte) {
+    var input ec2.CreateImageInput
+    json.Unmarshal(jsonData, &input)
+
+    // Check idempotency token
+    if input.ClientToken != nil {
+        if cached, found := idempotency.globalCache.Get(*input.ClientToken); found {
+            slog.Info("Returning cached result for idempotency token",
+                "token", *input.ClientToken)
+            return cached
+        }
+    }
+
+    // Validate and process
+    err := ValidateCreateImageInput(&input)
+    if err != nil {
+        return utils.GenerateErrorPayload(err)
+    }
+
+    // Create the image
+    result := actuallyCreateImage(input)
+    jsonResponse, _ := json.Marshal(result)
+
+    // Cache result with token (24 hour TTL)
+    if input.ClientToken != nil {
+        idempotency.globalCache.Set(*input.ClientToken, jsonResponse, 24*time.Hour)
+    }
+
+    return jsonResponse
+}
+```
+
+#### 6. Resource State Machines
+
+**Purpose**: Enforce valid state transitions for resources (instances, volumes, etc.).
+
+**Implementation**:
+```go
+// hive/statemachine/instance.go
+package statemachine
+
+type InstanceState int
+
+const (
+    StatePending      InstanceState = 0
+    StateRunning      InstanceState = 16
+    StateShuttingDown InstanceState = 32
+    StateTerminated   InstanceState = 48
+    StateStopping     InstanceState = 64
+    StateStopped      InstanceState = 80
+)
+
+var stateNames = map[InstanceState]string{
+    StatePending:      "pending",
+    StateRunning:      "running",
+    StateShuttingDown: "shutting-down",
+    StateTerminated:   "terminated",
+    StateStopping:     "stopping",
+    StateStopped:      "stopped",
+}
+
+// Valid state transitions
+var validTransitions = map[InstanceState][]InstanceState{
+    StatePending: {
+        StateRunning,
+        StateTerminated, // Can terminate while pending
+    },
+    StateRunning: {
+        StateStopping,
+        StateShuttingDown,
+    },
+    StateStopping: {
+        StateStopped,
+        StateTerminated, // Force terminate
+    },
+    StateStopped: {
+        StatePending, // Restart
+        StateTerminated,
+    },
+    StateShuttingDown: {
+        StateTerminated,
+    },
+    StateTerminated: {
+        // Terminal state - no transitions
+    },
+}
+
+func (s InstanceState) String() string {
+    return stateNames[s]
+}
+
+func (s InstanceState) Code() int64 {
+    return int64(s)
+}
+
+func ValidateTransition(from, to InstanceState) error {
+    allowed, exists := validTransitions[from]
+    if !exists {
+        return fmt.Errorf("invalid current state: %s", from)
+    }
+
+    for _, valid := range allowed {
+        if valid == to {
+            return nil
+        }
+    }
+
+    return fmt.Errorf("cannot transition from %s to %s", from, to)
+}
+
+// Usage in instance operations
+func StopInstance(instanceId string) error {
+    instance := findInstance(instanceId)
+    currentState := InstanceState(instance.State.Code)
+
+    if err := ValidateTransition(currentState, StateStopping); err != nil {
+        return awserrors.FormatError(
+            awserrors.ErrorIncorrectInstanceState,
+            instanceId)
+    }
+
+    // Proceed with stop operation
+    instance.State.Code = aws.Int64(StateStopping.Code())
+    instance.State.Name = aws.String(StateStopping.String())
+    // ... perform actual stop
+
+    return nil
+}
+```
+
+#### 7. Pagination Framework
+
+**Purpose**: Handle large result sets consistently across all operations.
+
+**Implementation**:
+```go
+// hive/pagination/pagination.go
+package pagination
+
+import (
+    "encoding/base64"
+    "encoding/json"
+    "fmt"
+)
+
+type PageToken struct {
+    Offset    int    `json:"offset"`
+    Timestamp int64  `json:"timestamp"`
+}
+
+type Paginator struct {
+    MaxResults int
+    NextToken  string
+}
+
+func (p *Paginator) Paginate(items []interface{}) (page []interface{}, nextToken string, err error) {
+    maxResults := p.MaxResults
+    if maxResults == 0 {
+        maxResults = 100 // Default page size
+    }
+
+    offset := 0
+    if p.NextToken != "" {
+        var token PageToken
+        decoded, err := base64.StdEncoding.DecodeString(p.NextToken)
+        if err != nil {
+            return nil, "", fmt.Errorf("invalid next token")
+        }
+        if err := json.Unmarshal(decoded, &token); err != nil {
+            return nil, "", fmt.Errorf("invalid next token")
+        }
+        offset = token.Offset
+    }
+
+    if offset >= len(items) {
+        return []interface{}{}, "", nil
+    }
+
+    end := offset + maxResults
+    if end > len(items) {
+        end = len(items)
+    }
+
+    page = items[offset:end]
+
+    // Generate next token if more results exist
+    if end < len(items) {
+        token := PageToken{
+            Offset:    end,
+            Timestamp: time.Now().Unix(),
+        }
+        tokenJSON, _ := json.Marshal(token)
+        nextToken = base64.StdEncoding.EncodeToString(tokenJSON)
+    }
+
+    return page, nextToken, nil
+}
+```
+
+**Usage**:
+```go
+func DescribeImages(input *ec2.DescribeImagesInput) (output ec2.DescribeImagesOutput, err error) {
+    // Get all matching images
+    allImages := queryAllImages(input.Filters)
+
+    // Paginate results
+    paginator := pagination.Paginator{
+        MaxResults: aws.IntValue(input.MaxResults),
+        NextToken:  aws.StringValue(input.NextToken),
+    }
+
+    page, nextToken, err := paginator.Paginate(interfaceSlice(allImages))
+    if err != nil {
+        return output, err
+    }
+
+    output.Images = convertToImageList(page)
+    if nextToken != "" {
+        output.NextToken = aws.String(nextToken)
+    }
+
+    return output, nil
+}
+```
+
+### Lower Priority (Production Features)
+
+These features are important for production but can be implemented later:
+
+#### 8. ARN Support
+
+```go
+// hive/arn/arn.go
+func GenerateARN(service, region, accountId, resourceType, resourceId string) string {
+    return fmt.Sprintf("arn:aws:%s:%s:%s:%s/%s",
+        service, region, accountId, resourceType, resourceId)
+}
+
+// Example: arn:aws:ec2:us-east-1:123456789012:instance/i-1234567890abcdef0
+```
+
+#### 9. Tagging Framework
+
+```go
+// hive/tags/tags.go
+type TagService struct {
+    store TagStore
+}
+
+func (t *TagService) CreateTags(resourceId string, tags []*ec2.Tag) error
+func (t *TagService) DeleteTags(resourceId string, tags []*ec2.Tag) error
+func (t *TagService) DescribeTags(filters []*ec2.Filter) ([]*ec2.TagDescription, error)
+```
+
+#### 10. Audit Logging (CloudTrail-like)
+
+```go
+// hive/audit/audit.go
+type AuditLog struct {
+    Timestamp    time.Time       `json:"timestamp"`
+    RequestId    string          `json:"requestId"`
+    UserIdentity string          `json:"userIdentity"`
+    EventName    string          `json:"eventName"`
+    SourceIP     string          `json:"sourceIP"`
+    Request      json.RawMessage `json:"request"`
+    Response     json.RawMessage `json:"response"`
+}
+
+func LogAPICall(log AuditLog) {
+    // Write to audit log storage (file, database, S3)
+}
+```
+
+#### 11. Filter Engine
+
+```go
+// hive/filters/filters.go
+type FilterEngine struct{}
+
+func (f *FilterEngine) Match(filters []*ec2.Filter, resource interface{}) bool {
+    // Parse AWS filter format
+    // Support wildcards
+    // Handle tag filters
+}
+```
+
+#### 12. Resource Dependency Tracking
+
+```go
+// hive/dependencies/dependencies.go
+type DependencyGraph struct {
+    edges map[string][]string
+}
+
+func (d *DependencyGraph) AddDependency(parent, child string)
+func (d *DependencyGraph) CanDelete(resourceId string) error
+```
+
+### Implementation Strategy
+
+**Phase 1: Core Compatibility (Weeks 1-2)**
+1. Request ID tracking
+2. DryRun implementation
+3. Comprehensive error codes
+4. Integration tests with AWS SDK
+
+**Phase 2: Reliability (Weeks 3-4)**
+5. Idempotency tokens
+6. Resource state machines
+7. Pagination framework
+
+**Phase 3: Production Features (Weeks 5-8)**
+8. ARN support
+9. Tagging framework
+10. Audit logging
+11. Filter engine
+12. Dependency tracking
+
+### Success Metrics
+
+- **AWS CLI Compatibility**: 100% command format compatibility
+- **Error Handling**: All AWS error codes properly mapped
+- **Retry Safety**: All write operations support idempotency
+- **Integration Tests**: >95% pass rate with real AWS SDK
+- **State Correctness**: Zero invalid state transitions in testing
