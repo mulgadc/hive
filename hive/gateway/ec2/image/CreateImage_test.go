@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/handlers/ec2/image"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/stretchr/testify/assert"
 )
@@ -90,7 +91,7 @@ func TestEC2ProcessCreateImage(t *testing.T) {
 				Name: aws.String("test-image"),
 			},
 			wantValidationErr: true,
-			wantErrCode:       "ValidationError",
+			wantErrCode:       "MissingParameter",
 		},
 		{
 			name: "ValidCreateImage",
@@ -117,7 +118,8 @@ func TestEC2ProcessCreateImage(t *testing.T) {
 				assert.NoError(t, err)
 			}
 
-			jsonResp := EC2_Process_CreateImage(jsonData)
+			handler := handlers_ec2_image.NewCreateImageHandler(handlers_ec2_image.NewMockImageService())
+			jsonResp := handler.Process(jsonData)
 			responseError, err := utils.ValidateErrorPayload(jsonResp)
 
 			if tt.wantValidationErr {

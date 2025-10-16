@@ -1,16 +1,14 @@
 package gateway_ec2_instance
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/awserrors"
+	"github.com/mulgadc/hive/hive/handlers/ec2/instance"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
@@ -193,8 +191,9 @@ func RunInstances(input *ec2.RunInstancesInput) (reservation ec2.Reservation, er
 		return reservation, fmt.Errorf("failed to marshal input to JSON: %w", err)
 	}
 
-	// Run the simulated JSON request via NATS, which will return a JSON response
-	jsonResp := EC2_Process_RunInstances(jsonData)
+	// Run the simulated JSON request via handler, which will return a JSON response
+	handler := handlers_ec2_instance.NewRunInstancesHandler(handlers_ec2_instance.NewMockInstanceService())
+	jsonResp := handler.Process(jsonData)
 
 	// Validate if the response is successful or an error
 
@@ -212,56 +211,5 @@ func RunInstances(input *ec2.RunInstancesInput) (reservation ec2.Reservation, er
 	}
 
 	return reservation, nil
-
-}
-
-func EC2_Process_RunInstances(jsonData []byte) (output []byte) {
-
-	var input ec2.RunInstancesInput
-
-	decoder := json.NewDecoder(bytes.NewReader(jsonData))
-	decoder.DisallowUnknownFields()
-
-	err := decoder.Decode(&input)
-	if err != nil {
-		// TODO: Move error codes with vars to errors.go
-		return utils.GenerateErrorPayload(awserrors.ErrorValidationError)
-	}
-
-	// Ensure the payload provided the fields that EC2 expects before proceeding.
-	err = ValidateRunInstancesInput(&input)
-
-	if err != nil {
-		return utils.GenerateErrorPayload(awserrors.ErrorValidationError)
-	}
-
-	// Here you would add the logic to actually create the instance in your system.
-	// For this example, we'll just create a dummy response.
-
-	instance := &ec2.Instance{
-		InstanceId: aws.String("i-0123456789abcdef0"),
-		State: &ec2.InstanceState{
-			Code: aws.Int64(16),
-			Name: aws.String("running"),
-		},
-		ImageId:      input.ImageId,
-		InstanceType: input.InstanceType,
-		KeyName:      input.KeyName,
-		SubnetId:     input.SubnetId,
-	}
-
-	reservation := &ec2.Reservation{
-		Instances: []*ec2.Instance{instance},
-		OwnerId:   aws.String("123456789012"),
-	}
-
-	// Return as JSON, to simulate the NATS response
-	jsonResponse, err := json.Marshal(reservation)
-	if err != nil {
-		slog.Error("EC2_Process_RunInstances could not marshal reservation", "err", err)
-		return nil
-	}
-
-	return jsonResponse
 
 }

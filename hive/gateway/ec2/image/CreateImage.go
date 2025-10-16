@@ -1,16 +1,14 @@
 package gateway_ec2_image
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/awserrors"
+	"github.com/mulgadc/hive/hive/handlers/ec2/image"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
@@ -119,8 +117,9 @@ func CreateImage(input *ec2.CreateImageInput) (output ec2.CreateImageOutput, err
 		return output, fmt.Errorf("failed to marshal input to JSON: %w", err)
 	}
 
-	// Run the simulated JSON request via NATS, which will return a JSON response
-	jsonResp := EC2_Process_CreateImage(jsonData)
+	// Run the simulated JSON request via handler, which will return a JSON response
+	handler := handlers_ec2_image.NewCreateImageHandler(handlers_ec2_image.NewMockImageService())
+	jsonResp := handler.Process(jsonData)
 
 	// Validate if the response is successful or an error
 	responseError, err := utils.ValidateErrorPayload(jsonResp)
@@ -140,40 +139,4 @@ func CreateImage(input *ec2.CreateImageInput) (output ec2.CreateImageOutput, err
 	}
 
 	return output, nil
-}
-
-func EC2_Process_CreateImage(jsonData []byte) (output []byte) {
-
-	var input ec2.CreateImageInput
-
-	decoder := json.NewDecoder(bytes.NewReader(jsonData))
-	decoder.DisallowUnknownFields()
-
-	err := decoder.Decode(&input)
-	if err != nil {
-		return utils.GenerateErrorPayload(awserrors.ErrorValidationError)
-	}
-
-	// Ensure the payload provided the fields that EC2 expects before proceeding.
-	err = ValidateCreateImageInput(&input)
-
-	if err != nil {
-		return utils.GenerateErrorPayload(awserrors.ErrorValidationError)
-	}
-
-	// TODO: Add the logic to actually create the image from the instance.
-	// This is a placeholder response for testing the framework.
-
-	result := &ec2.CreateImageOutput{
-		ImageId: aws.String("ami-0123456789abcdef0"),
-	}
-
-	// Return as JSON, to simulate the NATS response
-	jsonResponse, err := json.Marshal(result)
-	if err != nil {
-		slog.Error("EC2_Process_CreateImage could not marshal output", "err", err)
-		return nil
-	}
-
-	return jsonResponse
 }

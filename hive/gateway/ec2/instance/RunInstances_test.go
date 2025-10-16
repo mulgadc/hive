@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/handlers/ec2/instance"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/stretchr/testify/assert"
 )
@@ -216,7 +217,7 @@ func TestEC2ProcessRunInstances(t *testing.T) {
 				MaxCount: aws.Int64(1),
 			},
 			wantValidationErr: true,
-			wantErrCode:       "ValidationError",
+			wantErrCode:       "MissingParameter",
 		},
 		{
 			name: "UnknownFieldInPayload",
@@ -263,7 +264,8 @@ func TestEC2ProcessRunInstances(t *testing.T) {
 				assert.NoError(t, err)
 			}
 
-			jsonResp := EC2_Process_RunInstances(jsonData)
+			handler := handlers_ec2_instance.NewRunInstancesHandler(handlers_ec2_instance.NewMockInstanceService())
+			jsonResp := handler.Process(jsonData)
 
 			responseError, err := utils.ValidateErrorPayload(jsonResp)
 

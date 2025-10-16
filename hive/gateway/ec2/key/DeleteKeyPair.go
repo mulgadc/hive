@@ -1,15 +1,13 @@
 package gateway_ec2_key
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/awserrors"
+	"github.com/mulgadc/hive/hive/handlers/ec2/key"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
@@ -85,8 +83,9 @@ func DeleteKeyPair(input *ec2.DeleteKeyPairInput) (output ec2.DeleteKeyPairOutpu
 		return output, fmt.Errorf("failed to marshal input to JSON: %w", err)
 	}
 
-	// Run the simulated JSON request via NATS, which will return a JSON response
-	jsonResp := EC2_Process_DeleteKeyPair(jsonData)
+	// Run the simulated JSON request via handler, which will return a JSON response
+	handler := handlers_ec2_key.NewDeleteKeyPairHandler(handlers_ec2_key.NewMockKeyService())
+	jsonResp := handler.Process(jsonData)
 
 	// Validate if the response is successful or an error
 	responseError, err := utils.ValidateErrorPayload(jsonResp)
@@ -106,41 +105,4 @@ func DeleteKeyPair(input *ec2.DeleteKeyPairInput) (output ec2.DeleteKeyPairOutpu
 	}
 
 	return output, nil
-}
-
-func EC2_Process_DeleteKeyPair(jsonData []byte) (output []byte) {
-
-	var input ec2.DeleteKeyPairInput
-
-	decoder := json.NewDecoder(bytes.NewReader(jsonData))
-	decoder.DisallowUnknownFields()
-
-	err := decoder.Decode(&input)
-	if err != nil {
-		return utils.GenerateErrorPayload(awserrors.ErrorValidationError)
-	}
-
-	// Ensure the payload provided the fields that EC2 expects before proceeding.
-	err = ValidateDeleteKeyPairInput(&input)
-
-	if err != nil {
-		return utils.GenerateErrorPayload(awserrors.ErrorValidationError)
-	}
-
-	// TODO: Add the logic to actually delete the key pair.
-	// This is a placeholder response for testing the framework.
-
-	result := &ec2.DeleteKeyPairOutput{
-		Return:    aws.Bool(true),
-		KeyPairId: input.KeyPairId,
-	}
-
-	// Return as JSON, to simulate the NATS response
-	jsonResponse, err := json.Marshal(result)
-	if err != nil {
-		slog.Error("EC2_Process_DeleteKeyPair could not marshal output", "err", err)
-		return nil
-	}
-
-	return jsonResponse
 }
