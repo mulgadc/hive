@@ -264,11 +264,13 @@ func ValidateErrorPayload(payload []byte) (responseError ec2.ResponseError, err 
 
 	err = decoder.Decode(&responseError)
 
-	if err == nil {
-		// TODO: Move error codes with vars to errors.go
+	if err == nil && responseError.Code != nil {
+		// Successfully decoded as ResponseError AND has a non-nil Code field
+		// This is a real error response
 		return responseError, errors.New("ResponseError detected")
 	}
 
+	// Either failed to decode (not an error structure) or Code is nil (empty valid response)
 	return responseError, nil
 
 }

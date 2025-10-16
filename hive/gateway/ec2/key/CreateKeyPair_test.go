@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/handlers/ec2/key"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/stretchr/testify/assert"
 )
@@ -83,7 +84,7 @@ func TestEC2ProcessCreateKeyPair(t *testing.T) {
 				KeyName: aws.String(""),
 			},
 			wantValidationErr: true,
-			wantErrCode:       "ValidationError",
+			wantErrCode:       "MissingParameter",
 		},
 		{
 			name: "ValidCreateKeyPair",
@@ -112,7 +113,8 @@ func TestEC2ProcessCreateKeyPair(t *testing.T) {
 				assert.NoError(t, err)
 			}
 
-			jsonResp := EC2_Process_CreateKeyPair(jsonData)
+			handler := handlers_ec2_key.NewCreateKeyPairHandler(handlers_ec2_key.NewMockKeyService())
+			jsonResp := handler.Process(jsonData)
 			responseError, err := utils.ValidateErrorPayload(jsonResp)
 
 			if tt.wantValidationErr {

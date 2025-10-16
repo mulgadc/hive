@@ -1,7 +1,6 @@
 package gateway_ec2_image
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/awserrors"
+	"github.com/mulgadc/hive/hive/handlers/ec2/image"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
@@ -74,8 +73,9 @@ func DeregisterImage(input *ec2.DeregisterImageInput) (output ec2.DeregisterImag
 		return output, fmt.Errorf("failed to marshal input to JSON: %w", err)
 	}
 
-	// Run the simulated JSON request via NATS, which will return a JSON response
-	jsonResp := EC2_Process_DeregisterImage(jsonData)
+	// Run the simulated JSON request via handler, which will return a JSON response
+	handler := handlers_ec2_image.NewDeregisterImageHandler(handlers_ec2_image.NewMockImageService())
+	jsonResp := handler.Process(jsonData)
 
 	// Validate if the response is successful or an error
 	responseError, err := utils.ValidateErrorPayload(jsonResp)
@@ -95,40 +95,4 @@ func DeregisterImage(input *ec2.DeregisterImageInput) (output ec2.DeregisterImag
 	}
 
 	return output, nil
-}
-
-func EC2_Process_DeregisterImage(jsonData []byte) (output []byte) {
-
-	var input ec2.DeregisterImageInput
-
-	decoder := json.NewDecoder(bytes.NewReader(jsonData))
-	decoder.DisallowUnknownFields()
-
-	err := decoder.Decode(&input)
-	if err != nil {
-		return utils.GenerateErrorPayload(awserrors.ErrorValidationError)
-	}
-
-	// Ensure the payload provided the fields that EC2 expects before proceeding.
-	err = ValidateDeregisterImageInput(&input)
-
-	if err != nil {
-		return utils.GenerateErrorPayload(awserrors.ErrorValidationError)
-	}
-
-	// TODO: Add the logic to actually deregister the image.
-	// This is a placeholder response for testing the framework.
-
-	// DeregisterImageOutput has no exported fields, so we return a simple success indicator
-	// to distinguish from error responses
-	result := map[string]bool{"Return": true}
-
-	// Return as JSON, to simulate the NATS response
-	jsonResponse, err := json.Marshal(result)
-	if err != nil {
-		slog.Error("EC2_Process_DeregisterImage could not marshal output", "err", err)
-		return nil
-	}
-
-	return jsonResponse
 }

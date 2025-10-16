@@ -1,16 +1,14 @@
 package gateway_ec2_image
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/awserrors"
+	"github.com/mulgadc/hive/hive/handlers/ec2/image"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
@@ -108,8 +106,9 @@ func DescribeImages(input *ec2.DescribeImagesInput) (output ec2.DescribeImagesOu
 		return output, fmt.Errorf("failed to marshal input to JSON: %w", err)
 	}
 
-	// Run the simulated JSON request via NATS, which will return a JSON response
-	jsonResp := EC2_Process_DescribeImages(jsonData)
+	// Run the simulated JSON request via handler, which will return a JSON response
+	handler := handlers_ec2_image.NewDescribeImagesHandler(handlers_ec2_image.NewMockImageService())
+	jsonResp := handler.Process(jsonData)
 
 	// Validate if the response is successful or an error
 	responseError, err := utils.ValidateErrorPayload(jsonResp)
@@ -129,50 +128,4 @@ func DescribeImages(input *ec2.DescribeImagesInput) (output ec2.DescribeImagesOu
 	}
 
 	return output, nil
-}
-
-func EC2_Process_DescribeImages(jsonData []byte) (output []byte) {
-
-	var input ec2.DescribeImagesInput
-
-	decoder := json.NewDecoder(bytes.NewReader(jsonData))
-	decoder.DisallowUnknownFields()
-
-	err := decoder.Decode(&input)
-	if err != nil {
-		return utils.GenerateErrorPayload(awserrors.ErrorValidationError)
-	}
-
-	// Ensure the payload provided the fields that EC2 expects before proceeding.
-	err = ValidateDescribeImagesInput(&input)
-
-	if err != nil {
-		return utils.GenerateErrorPayload(awserrors.ErrorValidationError)
-	}
-
-	// TODO: Add the logic to actually query images from the system.
-	// This is a placeholder response for testing the framework.
-
-	result := &ec2.DescribeImagesOutput{
-		Images: []*ec2.Image{
-			{
-				ImageId:      aws.String("ami-0123456789abcdef0"),
-				Name:         aws.String("test-image"),
-				State:        aws.String("available"),
-				Architecture: aws.String("x86_64"),
-				ImageType:    aws.String("machine"),
-				OwnerId:      aws.String("123456789012"),
-				Public:       aws.Bool(false),
-			},
-		},
-	}
-
-	// Return as JSON, to simulate the NATS response
-	jsonResponse, err := json.Marshal(result)
-	if err != nil {
-		slog.Error("EC2_Process_DescribeImages could not marshal output", "err", err)
-		return nil
-	}
-
-	return jsonResponse
 }
