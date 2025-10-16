@@ -28,6 +28,7 @@ import (
 	"github.com/kdomanski/iso9660"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
+	gateway_ec2_instance "github.com/mulgadc/hive/hive/gateway/ec2/instance"
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/s3client"
 	"github.com/mulgadc/hive/hive/utils"
@@ -634,11 +635,12 @@ func (d *Daemon) handleEC2Launch(msg *nats.Msg) {
 	log.Printf("Received message on subject: %s", msg.Subject)
 	log.Printf("Message data: %s", string(msg.Data))
 
-	var runInstancesInput ec2.RunInstancesInput
-	//var Reservation ec2.Reservation
+	// Initialize runInstancesInput before unmarshaling into it
+	runInstancesInput := &ec2.RunInstancesInput{}
+	var reservation ec2.Reservation
 
-	var ec2Req EC2Request
-	var ec2Response config.EC2Response
+	//var ec2Req EC2Request
+	//var ec2Response config.EC2Response
 	var errResp []byte
 
 	errResp = utils.UnmarshalJsonPayload(runInstancesInput, msg.Data)
@@ -649,12 +651,23 @@ func (d *Daemon) handleEC2Launch(msg *nats.Msg) {
 		return
 	}
 
-	slog.Info("Processing RunInstances request for instance type", "instanceType", ec2Req.InstanceType)
+	// Validate inputs
+	err := gateway_ec2_instance.ValidateRunInstancesInput(runInstancesInput)
+
+	if err != nil {
+		slog.Error("handleEC2Launch validation failed", "err", awserrors.ErrorValidationError)
+		errResp = utils.GenerateErrorPayload(awserrors.ErrorValidationError)
+		msg.Respond(errResp)
+		return
+
+	}
+
+	slog.Info("Processing RunInstances request for instance type", "instanceType", *runInstancesInput.InstanceType)
 
 	// Check if instance type is supported
-	instanceType, exists := d.resourceMgr.instanceTypes[ec2Req.InstanceType]
+	instanceType, exists := d.resourceMgr.instanceTypes[*runInstancesInput.InstanceType]
 	if !exists {
-		slog.Error("handleEC2Launch", "err", awserrors.ErrorInvalidInstanceType)
+		slog.Error("handleEC2Launch instance lookup", "err", awserrors.ErrorInvalidInstanceType, "InstanceType", *runInstancesInput.InstanceType)
 		errResp = utils.GenerateErrorPayload(awserrors.ErrorInvalidInstanceType)
 		msg.Respond(errResp)
 		return
@@ -662,36 +675,38 @@ func (d *Daemon) handleEC2Launch(msg *nats.Msg) {
 
 	// Check if we have enough resources
 	if !d.resourceMgr.canAllocate(instanceType) {
-		ec2Response.Error = fmt.Sprintf("Insufficient resources for instance type: %s", ec2Req.InstanceType)
-		ec2Response.Respond(msg)
+		slog.Error("handleEC2Launch canAllocate", "err", awserrors.ErrorInsufficientInstanceCapacity, "InstanceType", *runInstancesInput.InstanceType)
+		errResp = utils.GenerateErrorPayload(awserrors.ErrorInsufficientInstanceCapacity)
+		msg.Respond(errResp)
 		return
 	}
 
 	// Allocate resources
 	if err := d.resourceMgr.allocate(instanceType); err != nil {
-		ec2Response.Error = fmt.Sprintf("Failed to allocate resources: %v", err)
-		ec2Response.Respond(msg)
+		slog.Error("handleEC2Launch allocate", "err", awserrors.ErrorInsufficientInstanceCapacity, "InstanceType", *runInstancesInput.InstanceType)
+		errResp = utils.GenerateErrorPayload(awserrors.ErrorInsufficientInstanceCapacity)
+		msg.Respond(errResp)
 		return
 	}
 
 	// Create a new VM instance
-	slog.Info("Launching EC2 instance", "instance", ec2Req)
+	slog.Info("Launching EC2 instance", "instance", instanceType)
 
-	ec2Response, err := d.launchEC2Instance(ec2Req, msg)
+	reservation, err = d.launchEC2Instance(runInstancesInput, msg)
 
 	if err != nil {
-		ec2Response.Error = fmt.Sprintf("Failed to launch EC2 instance: %v", err)
-		ec2Response.Respond(msg)
+		slog.Error("handleEC2Launch launchEC2Instance", "err", awserrors.ErrorServerInternal)
+		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+		msg.Respond(errResp)
 		d.resourceMgr.deallocate(instanceType)
 		return
 	}
 
-	ec2Response.Respond(msg)
+	// TODO: Confirm and cleanup, launchEC2Instance responds
+	//jsonResponse, err := json.Marshal(reservation)
+	//msg.Respond(jsonResponse)
 
-	// Acknowledge the message
-	//if err := msg.Ack(); err != nil {
-	//	log.Printf("Error acknowledging message: %v", err)
-	//}
+	slog.Info("handleEC2Launch launched", "instanceId", reservation.Instances[0].InstanceId)
 
 }
 
@@ -796,13 +811,20 @@ func (d *Daemon) setupShutdown() {
 	}()
 }
 
-func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Response config.EC2Response, err error) {
+// TODO: Support multiple instances in the single request
+func (d *Daemon) launchEC2Instance(runInstancesInput *ec2.RunInstancesInput, msg *nats.Msg) (reservation ec2.Reservation, err error) {
+
+	err = gateway_ec2_instance.ValidateRunInstancesInput(runInstancesInput)
+
+	if err != nil {
+		return
+	}
 
 	// Validate input
-	instanceType := d.resourceMgr.instanceTypes[ec2Req.InstanceType]
+	instanceType := d.resourceMgr.instanceTypes[*runInstancesInput.InstanceType]
 
 	if instanceType.Name == "" {
-		return ec2Response, fmt.Errorf("invalid instance type: %s", ec2Req.InstanceType)
+		return reservation, errors.New(awserrors.ErrorInvalidInstanceType)
 	}
 
 	var size int = 4 * 1024 * 1024 * 1024 // 4GB default size
@@ -819,30 +841,49 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 	var instance = &vm.VM{
 		ID:           instanceId,
 		Status:       "provisioning",
-		InstanceType: ec2Req.InstanceType,
+		InstanceType: *runInstancesInput.InstanceType,
 	}
 
-	// Respond with the instance ID and status, polling required to track status
-	ec2Response.InstanceID = instance.ID
-	ec2Response.Status = "provisioning"
-	ec2Response.Respond(msg)
+	// Add reservation ID
+	reservation.SetReservationId(vm.GenerateEC2ReservationID())
 
-	if len(ec2Req.BlockDeviceMapping) > 0 {
-		size = ec2Req.BlockDeviceMapping[0].EBS.VolumeSize
-		deviceName = ec2Req.BlockDeviceMapping[0].DeviceName
-		volumeType = ec2Req.BlockDeviceMapping[0].EBS.VolumeType
-		iops = ec2Req.BlockDeviceMapping[0].EBS.Iops
+	// TODO: Loop through multiple instance creation based on MinCount / MaxCount
+	// Respond with the instance ID and status, polling required to track status
+	reservation.Instances = make([]*ec2.Instance, 1)
+	// Initialize the instance before setting fields
+	reservation.Instances[0] = &ec2.Instance{
+		State: &ec2.InstanceState{},
+	}
+	// TODO: Consider using Set methods
+	reservation.Instances[0].SetInstanceId(instance.ID)
+	reservation.Instances[0].State.SetCode(0)
+	reservation.Instances[0].State.SetName("pending")
+
+	// Respond to NATS immediately, to reduce lag while the instance is provisioning.
+	jsonResponse, err := json.Marshal(reservation)
+	// TODO: Consider multiple instance types
+	msg.Respond(jsonResponse)
+
+	// TODO: Support multiple mounts per request
+	if len(reservation.Instances[0].BlockDeviceMappings) > 0 {
+
+		size = int(*runInstancesInput.BlockDeviceMappings[0].Ebs.VolumeSize)
+		deviceName = *runInstancesInput.BlockDeviceMappings[0].DeviceName
+		volumeType = *runInstancesInput.BlockDeviceMappings[0].Ebs.VolumeType
+		iops = int(*runInstancesInput.BlockDeviceMappings[0].Ebs.Iops)
+
 	}
 
 	// Check if the image starts with ami-
-	if strings.HasPrefix(ec2Req.ImageID, "ami-") {
+	if strings.HasPrefix(*runInstancesInput.ImageId, "ami-") {
 		// Generate a random number to append to the volume ID ( 8 digits )
 		randomNumber := rand.Intn(100_000_000)
 
-		imageId = viperblock.GenerateVolumeID("vol", fmt.Sprintf("%d-%s", randomNumber, ec2Req.ImageID), "predastore", time.Now().Unix())
-		snapshotId = ec2Req.ImageID
+		imageId = viperblock.GenerateVolumeID("vol", fmt.Sprintf("%d-%s", randomNumber, *runInstancesInput.ImageId), "predastore", time.Now().Unix())
+		snapshotId = *runInstancesInput.ImageId
 	} else {
-		imageId = ec2Req.ImageID
+		// Allow creating an instance with an existing ImageID
+		imageId = *runInstancesInput.ImageId
 	}
 
 	// Pre-flight, confirm if the instance is already running (TODO)
@@ -854,8 +895,8 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 	cfg := s3.S3Config{
 		VolumeName: imageId,
 		VolumeSize: uint64(size),
-		Bucket:     "predastore",
-		Region:     "ap-southeast-2",
+		Bucket:     d.config.Predastore.Bucket,
+		Region:     d.config.Predastore.Region,
 		AccessKey:  d.config.AccessKey,
 		SecretKey:  d.config.SecretKey,
 		Host:       d.config.Predastore.Host,
@@ -888,7 +929,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 	vb, err := viperblock.New(vbconfig, "s3", cfg)
 	if err != nil {
 		slog.Error("Failed to connect to Viperblock store", "err", err)
-		return ec2Response, err
+		return reservation, errors.New(awserrors.ErrorServerInternal)
 	}
 
 	vb.SetDebug(true)
@@ -898,7 +939,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 	if err != nil {
 		slog.Error("Failed to initialize backend", "err", err)
-		return ec2Response, err
+		return reservation, errors.New(awserrors.ErrorServerInternal)
 	}
 
 	// Load the state from the remote backend
@@ -916,7 +957,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 		if err != nil {
 			slog.Error("Failed to load WAL", "err", err)
-			return ec2Response, err
+			return reservation, errors.New(awserrors.ErrorServerInternal)
 		}
 
 		// Open the block to object WAL
@@ -924,21 +965,21 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 		if err != nil {
 			slog.Error("Failed to load block WAL", "err", err)
-			return ec2Response, err
+			return reservation, errors.New(awserrors.ErrorServerInternal)
 		}
 
 		amiCfg := s3.S3Config{
-			VolumeName: ec2Req.ImageID,
+			VolumeName: *runInstancesInput.ImageId,
 			VolumeSize: uint64(size),
-			Bucket:     "predastore",
-			Region:     "ap-southeast-2",
+			Bucket:     d.config.Predastore.Bucket,
+			Region:     d.config.Predastore.Region,
 			AccessKey:  d.config.AccessKey,
 			SecretKey:  d.config.SecretKey,
 			Host:       d.config.Predastore.Host,
 		}
 
 		amiVbConfig := viperblock.VB{
-			VolumeName: ec2Req.ImageID,
+			VolumeName: *runInstancesInput.ImageId,
 			VolumeSize: uint64(size),
 			BaseDir:    d.config.WalDir,
 			Cache: viperblock.Cache{
@@ -953,7 +994,8 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 		if err != nil {
 			slog.Error("Failed to connect to Viperblock store for AMI", "err", err)
-			return ec2Response, err
+			return reservation, errors.New(awserrors.ErrorServerInternal)
+
 		}
 
 		// Initialize the backend
@@ -962,7 +1004,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 		if err != nil {
 			slog.Error("Could not connect to AMI Viperblock store", "err", err)
-			return ec2Response, err
+			return reservation, errors.New(awserrors.ErrorServerInternal)
 		}
 
 		slog.Debug("Loading state for AMI Viperblock store")
@@ -970,14 +1012,16 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 		if err != nil {
 			slog.Error("Could not load state for AMI Viperblock store", "err", err)
-			return ec2Response, err
+			return reservation, errors.New(awserrors.ErrorServerInternal)
+
 		}
 
 		err = amiVb.LoadBlockState()
 
 		if err != nil {
 			slog.Error("Failed to load block state", "err", err)
-			return ec2Response, err
+			return reservation, errors.New(awserrors.ErrorServerInternal)
+
 		}
 
 		slog.Debug("Starting to clone AMI to new volume")
@@ -999,7 +1043,8 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 			if err != nil && err != viperblock.ZeroBlock {
 				slog.Error("Failed to read block from AMI source", "err", err)
-				return ec2Response, err
+				return reservation, errors.New(awserrors.ErrorServerInternal)
+
 			}
 
 			numBlocks := len(data) / int(vb.BlockSize)
@@ -1031,7 +1076,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 		if err != nil {
 			slog.Error("Failed to close Viperblock store", "err", err)
-			return ec2Response, err
+			return reservation, errors.New(awserrors.ErrorServerInternal)
 		}
 
 		err = vb.RemoveLocalFiles()
@@ -1062,8 +1107,8 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 	efiCfg := s3.S3Config{
 		VolumeName: efiVolumeName,
 		VolumeSize: uint64(efiSize),
-		Bucket:     "predastore",
-		Region:     "ap-southeast-2",
+		Bucket:     d.config.Predastore.Bucket,
+		Region:     d.config.Predastore.Region,
 		AccessKey:  d.config.AccessKey,
 		SecretKey:  d.config.SecretKey,
 		Host:       d.config.Predastore.Host,
@@ -1085,14 +1130,14 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 	if err != nil {
 		slog.Error("Could not create EFI viperblock")
-		return ec2Response, err
+		return reservation, errors.New(awserrors.ErrorServerInternal)
 	}
 
 	efiVb.SetDebug(true)
 
 	if err != nil {
 		slog.Error("Failed to connect to Viperblock store for AMI", "err", err)
-		return ec2Response, err
+		return reservation, errors.New(awserrors.ErrorServerInternal)
 	}
 
 	// Initialize the backend
@@ -1101,7 +1146,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 	if err != nil {
 		slog.Error("Failed to initialize EFI Viperblock store backend", "err", err)
-		return ec2Response, err
+		return reservation, errors.New(awserrors.ErrorServerInternal)
 	}
 
 	// Load the state from the remote backend
@@ -1121,7 +1166,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 		if err != nil {
 			slog.Error("Failed to load WAL", "err", err)
-			return ec2Response, err
+			return reservation, errors.New(awserrors.ErrorServerInternal)
 		}
 
 		// Open the block to object WAL
@@ -1129,8 +1174,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 		if err != nil {
 			slog.Error("Failed to load block WAL", "err", err)
-			return ec2Response, err
-
+			return reservation, errors.New(awserrors.ErrorServerInternal)
 		}
 
 		// Write an empty block to the EFI volume
@@ -1167,8 +1211,8 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 	// Step 4: Create the cloud-init volume, with the specified SSH key and attributes
 
-	keyName := ec2Req.KeyName
-	userData := ec2Req.UserData
+	keyName := *runInstancesInput.KeyName
+	userData := *runInstancesInput.UserData
 
 	if keyName != "" || userData != "" {
 
@@ -1180,8 +1224,8 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 		cloudInitCfg := s3.S3Config{
 			VolumeName: cloudInitVolumeName,
 			VolumeSize: uint64(cloudInitSize),
-			Bucket:     "predastore",
-			Region:     "ap-southeast-2",
+			Bucket:     d.config.Predastore.Bucket,
+			Region:     d.config.Predastore.Region,
 			AccessKey:  d.config.AccessKey,
 			SecretKey:  d.config.SecretKey,
 			Host:       d.config.Predastore.Host,
@@ -1203,14 +1247,15 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 		if err != nil {
 			slog.Error("Could not create cloudinit viperblock")
-			return ec2Response, err
+			return reservation, errors.New(awserrors.ErrorServerInternal)
 		}
 
+		// TODO: Set debug flag config
 		cloudInitVb.SetDebug(true)
 
 		if err != nil {
 			slog.Error("Failed to connect to Viperblock store for AMI", "err", err)
-			return ec2Response, err
+			return reservation, errors.New(awserrors.ErrorServerInternal)
 		}
 
 		// Initialize the backend
@@ -1219,7 +1264,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 		if err != nil {
 			slog.Error("Could not init backend")
-			return ec2Response, err
+			return reservation, errors.New(awserrors.ErrorServerInternal)
 		}
 
 		// Load the state from the remote backend
@@ -1237,7 +1282,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 			if err != nil {
 				slog.Error("Failed to load WAL", "err", err)
-				return ec2Response, err
+				return reservation, errors.New(awserrors.ErrorServerInternal)
 			}
 
 			// Open the block to object WAL
@@ -1245,14 +1290,14 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 			if err != nil {
 				slog.Error("Failed to load block WAL", "err", err)
-				return ec2Response, err
+				return reservation, errors.New(awserrors.ErrorServerInternal)
 			}
 
 			// Create the cloud-init disk
 			writer, err := iso9660.NewWriter()
 			if err != nil {
 				slog.Error("failed to create writer", "err", err)
-				return ec2Response, err
+				return reservation, errors.New(awserrors.ErrorServerInternal)
 			}
 
 			defer writer.Cleanup()
@@ -1267,21 +1312,21 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 				AccessKey: d.config.AccessKey,
 				SecretKey: d.config.SecretKey,
 				Host:      d.config.Predastore.Host,
-				Bucket:    "predastore",
-				Region:    "ap-southeast-2",
+				Bucket:    d.config.Predastore.Bucket,
+				Region:    d.config.Predastore.Region,
 			})
 
 			err = s3c.Init()
 
 			if err != nil {
 				slog.Error("failed to initialize S3 client", "err", err)
-				return ec2Response, err
+				return reservation, errors.New(awserrors.ErrorServerInternal)
 			}
 
 			sshKey, err := s3c.Read(fmt.Sprintf("/ssh/%s", keyName))
 			if err != nil {
 				slog.Error("failed to read SSH key", "err", err)
-				return ec2Response, err
+				return reservation, errors.New(awserrors.ErrorServerInternal)
 			}
 
 			userData := CloudInitData{
@@ -1295,7 +1340,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 			if err := t.Execute(&buf, userData); err != nil {
 				slog.Error("failed to render template", "err", err)
-				return ec2Response, err
+				return reservation, errors.New(awserrors.ErrorServerInternal)
 			}
 
 			//slog.Debug("user-data", "data", buf.String())
@@ -1304,7 +1349,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 			err = writer.AddFile(&buf, "user-data")
 			if err != nil {
 				slog.Error("failed to add file", "err", err)
-				return ec2Response, err
+				return reservation, errors.New(awserrors.ErrorServerInternal)
 			}
 
 			// Add meta-data
@@ -1319,7 +1364,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 			if err := t.Execute(&buf, metaData); err != nil {
 				slog.Error("failed to render template", "err", err)
-				return ec2Response, err
+				return reservation, errors.New(awserrors.ErrorServerInternal)
 			}
 
 			//slog.Debug("meta-data", buf.String())
@@ -1327,7 +1372,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 			err = writer.AddFile(&buf, "meta-data")
 			if err != nil {
 				slog.Error("failed to add file", "err", err)
-				return ec2Response, err
+				return reservation, errors.New(awserrors.ErrorServerInternal)
 			}
 
 			// Store temp file
@@ -1335,7 +1380,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 			if err != nil {
 				slog.Error("Could not create cloud-init temp file")
-				return ec2Response, err
+				return reservation, errors.New(awserrors.ErrorServerInternal)
 			}
 
 			slog.Info("Created temp ISO file", "file", tempFile.Name())
@@ -1343,7 +1388,7 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 			outputFile, err := os.OpenFile(tempFile.Name(), os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0644)
 			if err != nil {
 				slog.Error("failed to create file", "err", err)
-				return ec2Response, err
+				return reservation, errors.New(awserrors.ErrorServerInternal)
 			}
 
 			// Requires cidata volume label for cloud-init to recognize
@@ -1351,35 +1396,35 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 			if err != nil {
 				slog.Error("failed to write ISO image", "err", err)
-				return ec2Response, err
+				return reservation, errors.New(awserrors.ErrorServerInternal)
 			}
 
 			err = writer.Cleanup()
 
 			if err != nil {
 				slog.Error("failed to cleanup writer", "err", err)
-				return ec2Response, err
+				return reservation, errors.New(awserrors.ErrorServerInternal)
 			}
 
 			err = outputFile.Close()
 
 			if err != nil {
 				slog.Error("failed to close output file", "err", err)
-				return ec2Response, err
+				return reservation, errors.New(awserrors.ErrorServerInternal)
 			}
 
 			isoData, err := os.ReadFile(tempFile.Name())
 
 			if err != nil {
 				slog.Error("failed to read ISO image:", "err", err)
-				return ec2Response, err
+				return reservation, errors.New(awserrors.ErrorServerInternal)
 			}
 
 			err = cloudInitVb.WriteAt(0, isoData)
 
 			if err != nil {
 				slog.Error("failed to write ISO image to viperblock volume", "err", err)
-				return ec2Response, err
+				return reservation, errors.New(awserrors.ErrorServerInternal)
 			}
 
 			// Flush
@@ -1425,16 +1470,16 @@ func (d *Daemon) launchEC2Instance(ec2Req EC2Request, msg *nats.Msg) (ec2Respons
 
 	if err != nil {
 		slog.Error("Could not launch instance", "err", err)
-		return ec2Response, err
+		return reservation, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	// Step 10: Return the unique instance ID on success
-	ec2Response.InstanceID = instance.ID
+	// Step 10: Return the unique instance ID on success, ALREADY set.
+	//ec2Response.InstanceID = instance.ID
 	// TODO: Use AWS style hostname, ip-<a-b-c-d>.<region>.compute.internal
-	ec2Response.Hostname = instance.ID
-	ec2Response.Success = true
+	//ec2Response.Hostname = instance.ID
+	//ec2Response.Success = true
 
-	return ec2Response, nil
+	return reservation, nil
 }
 
 func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {

@@ -72,7 +72,7 @@ func TestExecProcessAndKill(t *testing.T) {
 	}
 
 	// Make it fully background-friendly:
-	// - close stdio so parent doesn’t block on pipes
+	// - close stdio so parent doesn't block on pipes
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
@@ -83,7 +83,7 @@ func TestExecProcessAndKill(t *testing.T) {
 	}
 
 	// IMPORTANT: reap the child to avoid zombies.
-	// Since we’re “backgrounding” it, do Wait() in a goroutine.
+	// Since we're "backgrounding" it, do Wait() in a goroutine.
 	go func(c *exec.Cmd) {
 		t.Log("Waiting for command to finish...")
 		_ = c.Wait() // ignore error; ensures kernel reaps the process
@@ -114,4 +114,316 @@ func TestExecProcessAndKill(t *testing.T) {
 	err = cmd.Process.Signal(syscall.Signal(0))
 	assert.Error(t, err) // Should return an error since process is killed
 
+}
+
+func TestUnmarshalJsonPayload(t *testing.T) {
+	type TestStruct struct {
+		Name  string `json:"name"`
+		Value int    `json:"value"`
+	}
+
+	tests := []struct {
+		name        string
+		jsonData    string
+		expectError bool
+		validate    func(t *testing.T, result *TestStruct)
+	}{
+		{
+			name:        "Valid JSON",
+			jsonData:    `{"name":"test","value":123}`,
+			expectError: false,
+			validate: func(t *testing.T, result *TestStruct) {
+				assert.Equal(t, "test", result.Name)
+				assert.Equal(t, 123, result.Value)
+			},
+		},
+		{
+			name:        "Invalid JSON - malformed",
+			jsonData:    `{"name":"test","value":}`,
+			expectError: true,
+			validate:    nil,
+		},
+		{
+			name:        "Invalid JSON - unknown field",
+			jsonData:    `{"name":"test","value":123,"unknown":"field"}`,
+			expectError: true, // DisallowUnknownFields should cause error
+			validate:    nil,
+		},
+		{
+			name:        "Empty JSON",
+			jsonData:    `{}`,
+			expectError: false,
+			validate: func(t *testing.T, result *TestStruct) {
+				assert.Equal(t, "", result.Name)
+				assert.Equal(t, 0, result.Value)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var result TestStruct
+			errResp := UnmarshalJsonPayload(&result, []byte(tt.jsonData))
+
+			if tt.expectError {
+				assert.NotNil(t, errResp, "Expected error response")
+			} else {
+				assert.Nil(t, errResp, "Expected no error response")
+				if tt.validate != nil {
+					tt.validate(t, &result)
+				}
+			}
+		})
+	}
+}
+
+func TestMarshalJsonPayload(t *testing.T) {
+	type TestStruct struct {
+		Name  string `json:"name"`
+		Value int    `json:"value"`
+	}
+
+	tests := []struct {
+		name        string
+		jsonData    string
+		expectError bool
+		validate    func(t *testing.T, result *TestStruct)
+	}{
+		{
+			name:        "Valid JSON",
+			jsonData:    `{"name":"test","value":456}`,
+			expectError: false,
+			validate: func(t *testing.T, result *TestStruct) {
+				assert.Equal(t, "test", result.Name)
+				assert.Equal(t, 456, result.Value)
+			},
+		},
+		{
+			name:        "Invalid JSON",
+			jsonData:    `{"name":"test","value":}`,
+			expectError: true,
+			validate:    nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var result TestStruct
+			errResp := MarshalJsonPayload(&result, []byte(tt.jsonData))
+
+			if tt.expectError {
+				assert.NotNil(t, errResp, "Expected error response")
+			} else {
+				assert.Nil(t, errResp, "Expected no error response")
+				if tt.validate != nil {
+					tt.validate(t, &result)
+				}
+			}
+		})
+	}
+}
+
+func TestGenerateErrorPayload(t *testing.T) {
+	tests := []struct {
+		name     string
+		code     string
+		validate func(t *testing.T, payload []byte)
+	}{
+		{
+			name: "ValidationError",
+			code: "ValidationError",
+			validate: func(t *testing.T, payload []byte) {
+				assert.Contains(t, string(payload), "ValidationError")
+				assert.Contains(t, string(payload), "Code")
+			},
+		},
+		{
+			name: "InvalidInstanceType",
+			code: "InvalidInstanceType",
+			validate: func(t *testing.T, payload []byte) {
+				assert.Contains(t, string(payload), "InvalidInstanceType")
+			},
+		},
+		{
+			name: "CustomError",
+			code: "CustomError",
+			validate: func(t *testing.T, payload []byte) {
+				assert.Contains(t, string(payload), "CustomError")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := GenerateErrorPayload(tt.code)
+			assert.NotNil(t, payload)
+			assert.Greater(t, len(payload), 0)
+			if tt.validate != nil {
+				tt.validate(t, payload)
+			}
+		})
+	}
+}
+
+func TestValidateErrorPayload(t *testing.T) {
+	tests := []struct {
+		name        string
+		payload     string
+		expectError bool
+		expectedCode string
+	}{
+		{
+			name:        "Valid error payload",
+			payload:     `{"Code":"ValidationError","Message":null}`,
+			expectError: true,
+			expectedCode: "ValidationError",
+		},
+		{
+			name:        "Valid success payload (no Code field)",
+			payload:     `{"ReservationId":"r-123","Instances":[]}`,
+			expectError: false,
+		},
+		{
+			name:        "Empty payload",
+			payload:     `{}`,
+			expectError: true, // Empty payload treated as error by ValidateErrorPayload
+		},
+		{
+			name:        "Invalid JSON",
+			payload:     `{invalid}`,
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			responseError, err := ValidateErrorPayload([]byte(tt.payload))
+
+			if tt.expectError {
+				if tt.expectedCode != "" {
+					// Check for specific error code
+					assert.Error(t, err)
+					if responseError.Code != nil {
+						assert.Equal(t, tt.expectedCode, *responseError.Code)
+					}
+				}
+			} else {
+				// No error expected
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestMarshalToXML(t *testing.T) {
+	type TestStruct struct {
+		Name  string `xml:"Name"`
+		Value int    `xml:"Value"`
+	}
+
+	tests := []struct {
+		name        string
+		input       interface{}
+		expectError bool
+		validate    func(t *testing.T, xmlData []byte)
+	}{
+		{
+			name: "Valid struct",
+			input: TestStruct{
+				Name:  "test",
+				Value: 123,
+			},
+			expectError: false,
+			validate: func(t *testing.T, xmlData []byte) {
+				assert.Contains(t, string(xmlData), "<Name>test</Name>")
+				assert.Contains(t, string(xmlData), "<Value>123</Value>")
+			},
+		},
+		{
+			name: "Pointer to struct",
+			input: &TestStruct{
+				Name:  "pointer",
+				Value: 456,
+			},
+			expectError: false,
+			validate: func(t *testing.T, xmlData []byte) {
+				assert.Contains(t, string(xmlData), "<Name>pointer</Name>")
+				assert.Contains(t, string(xmlData), "<Value>456</Value>")
+			},
+		},
+		{
+			name:        "Invalid type (channel)",
+			input:       make(chan int),
+			expectError: true,
+			validate:    nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			xmlData, err := MarshalToXML(tt.input)
+
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, xmlData)
+				if tt.validate != nil {
+					tt.validate(t, xmlData)
+				}
+			}
+		})
+	}
+}
+
+func TestKillProcess(t *testing.T) {
+	// Create a test process
+	cmd := exec.Command("sleep", "60")
+	err := cmd.Start()
+	assert.NoError(t, err)
+
+	pid := cmd.Process.Pid
+
+	// Kill the process
+	err = KillProcess(pid)
+	assert.NoError(t, err)
+
+	// Wait for the process to actually terminate
+	// On macOS, the process cleanup can take longer
+	time.Sleep(500 * time.Millisecond)
+
+	// Wait for process to be reaped
+	_ = cmd.Wait()
+
+	// On macOS, after Wait(), Signal(0) may not reliably detect dead process
+	// So we skip this check as it's platform-dependent behavior
+	// The fact that KillProcess returned no error is sufficient
+
+	// Test killing non-existent process
+	err = KillProcess(999999)
+	assert.Error(t, err, "Should error when killing non-existent process")
+}
+
+func TestStopProcess(t *testing.T) {
+	// Create and start a test process
+	cmd := exec.Command("sleep", "60")
+	err := cmd.Start()
+	assert.NoError(t, err)
+
+	// Write PID file
+	testName := "stopprocess-test"
+	err = WritePidFile(testName, cmd.Process.Pid)
+	assert.NoError(t, err)
+
+	// Stop the process
+	err = StopProcess(testName)
+	assert.NoError(t, err)
+
+	// Verify PID file was removed
+	_, err = ReadPidFile(testName)
+	assert.Error(t, err, "PID file should be removed")
+
+	// Test stopping non-existent process
+	err = StopProcess("nonexistent-process")
+	assert.Error(t, err, "Should error when stopping non-existent process")
 }

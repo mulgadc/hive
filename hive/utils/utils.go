@@ -280,7 +280,24 @@ func UnmarshalJsonPayload(input interface{}, jsonData []byte) []byte {
 	decoder := json.NewDecoder(bytes.NewReader(jsonData))
 	decoder.DisallowUnknownFields()
 
-	err := decoder.Decode(&input)
+	// input is already a pointer, don't take address again
+	err := decoder.Decode(input)
+	if err != nil {
+		// TODO: Move error codes with vars to errors.go
+		return GenerateErrorPayload("ValidationError")
+	}
+
+	return nil
+
+}
+
+func MarshalJsonPayload(input interface{}, jsonData []byte) []byte {
+
+	decoder := json.NewDecoder(bytes.NewReader(jsonData))
+	decoder.DisallowUnknownFields()
+
+	// input is already a pointer, don't take address again
+	err := decoder.Decode(input)
 	if err != nil {
 		// TODO: Move error codes with vars to errors.go
 		return GenerateErrorPayload("ValidationError")

@@ -214,3 +214,13 @@ func GenerateEC2InstanceID() string {
 
 	return "i-" + string(bytes)
 }
+
+func GenerateEC2ReservationID() string {
+
+	id := GenerateEC2InstanceID()
+
+	id = strings.Replace(id, "i-", "r-", 1)
+
+	return id
+
+}
