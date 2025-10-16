@@ -9,16 +9,17 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/google/uuid"
 	"github.com/mulgadc/hive/hive/awsec2query"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/predastore/s3"
-
-	"github.com/google/uuid"
+	"github.com/nats-io/nats.go"
 )
 
 type GatewayConfig struct {
-	Debug          bool `json:"debug"`
-	DisableLogging bool `json:"disable_logging"`
+	Debug          bool        `json:"debug"`
+	DisableLogging bool        `json:"disable_logging"`
+	NATSConn       *nats.Conn  // Shared NATS connection for service communication
 }
 
 var supportedServices = map[string]bool{

@@ -4,10 +4,12 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/gateway"
 	"github.com/mulgadc/hive/hive/utils"
+	"github.com/nats-io/nats.go"
 )
 
 var serviceName = "awsgw"
@@ -52,21 +54,39 @@ func (svc *Service) Reload() (err error) {
 
 func launchService(config *config.Config) (err error) {
 
-	/*
-		d := daemon.NewDaemon(config)
-		slog.Info("Starting AWS-GW daemon ...")
-		err = d.Start()
-	*/
+	// Connect to NATS for service communication
+	opts := []nats.Option{
+		nats.Token(config.NATS.ACL.Token),
+		nats.ReconnectWait(time.Second),
+		nats.MaxReconnects(-1), // Infinite reconnects
+		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
+			log.Printf("NATS disconnected: %v", err)
+		}),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			log.Printf("NATS reconnected to %s", nc.ConnectedUrl())
+		}),
+	}
 
+	natsConn, err := nats.Connect(config.NATS.Host, opts...)
+	if err != nil {
+		slog.Error("Failed to connect to NATS", "err", err)
+		return err
+	}
+	defer natsConn.Close()
+
+	slog.Info("Connected to NATS server", "host", config.NATS.Host)
+
+	// Create gateway with NATS connection
 	gw := gateway.GatewayConfig{
 		Debug:          config.AWSGW.Debug,
 		DisableLogging: false,
+		NATSConn:       natsConn,
 	}
 
 	app := gw.SetupRoutes()
 
 	if err != nil {
-		slog.Warn("Failed to start AWS-GW daemon", "err", err)
+		slog.Warn("Failed to setup gateway routes", "err", err)
 		return err
 	}
 

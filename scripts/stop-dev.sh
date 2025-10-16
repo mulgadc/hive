@@ -13,13 +13,13 @@ LOGS_DIR="$PROJECT_ROOT/data/logs"
     #sudo umount /mnt/ramdisk
 #fi
 
-echo "🛑 Stopping Hive development environment..."
+echo "Stopping Hive development environment..."
 
 # Function to stop service by PID file
 stop_service() {
     local name="$1"
 
-    echo "🔻 Stopping $name..."
+    echo "🛑 Stopping $name..."
 
     $PROJECT_ROOT/bin/hive service $name stop
 
@@ -30,16 +30,19 @@ stop_service() {
         return 1
     else
         echo "✅ $name stopped"
+        echo ""
     fi
 
 }
 
 # Stop services in reverse order
-echo ""
 echo "Stopping services..."
-
+echo ""
 # Stop Hive daemon/gateway first (it will terminate running instances, unmount nbd devices)
 stop_service "hive"
+
+# Stop AWSGW
+stop_service "awsgw"
 
 # Stop Viperblock
 stop_service "viperblock"

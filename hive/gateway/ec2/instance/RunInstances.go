@@ -1,15 +1,12 @@
 package gateway_ec2_instance
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
-	"log/slog"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/handlers/ec2/instance"
-	"github.com/mulgadc/hive/hive/utils"
+	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
+	"github.com/nats-io/nats.go"
 )
 
 type RunInstancesResponse struct {
@@ -176,7 +173,7 @@ func ValidateRunInstancesInput(input *ec2.RunInstancesInput) (err error) {
 
 }
 
-func RunInstances(input *ec2.RunInstancesInput) (reservation ec2.Reservation, err error) {
+func RunInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn) (reservation ec2.Reservation, err error) {
 
 	// Validate input
 	err = ValidateRunInstancesInput(input)
@@ -185,31 +182,15 @@ func RunInstances(input *ec2.RunInstancesInput) (reservation ec2.Reservation, er
 		return reservation, err
 	}
 
-	// Marshal to JSON, to send over the wire for processing (NATS)
-	jsonData, err := json.Marshal(input)
+	// Create NATS-based instance service
+	service := handlers_ec2_instance.NewNATSInstanceService(natsConn)
+
+	// Call the service directly (no need for JSON marshaling/unmarshaling in same process)
+	reservationPtr, err := service.RunInstances(input)
 	if err != nil {
-		return reservation, fmt.Errorf("failed to marshal input to JSON: %w", err)
+		return reservation, err
 	}
 
-	// Run the simulated JSON request via handler, which will return a JSON response
-	handler := handlers_ec2_instance.NewRunInstancesHandler(handlers_ec2_instance.NewMockInstanceService())
-	jsonResp := handler.Process(jsonData)
-
-	// Validate if the response is successful or an error
-
-	responseError, err := utils.ValidateErrorPayload(jsonResp)
-
-	if err != nil {
-		slog.Error("Runinstances failed", "err", responseError.Code)
-		return reservation, errors.New(*responseError.Code)
-	}
-
-	// Unmarshal the JSON response back into a Reservation struct
-	err = json.Unmarshal(jsonResp, &reservation)
-	if err != nil {
-		return reservation, fmt.Errorf("failed to unmarshal JSON response to Reservation: %w", err)
-	}
-
-	return reservation, nil
-
+	// Dereference pointer to return value
+	return *reservationPtr, nil
 }

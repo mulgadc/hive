@@ -6,8 +6,8 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/gofiber/fiber/v2"
 	"github.com/mulgadc/hive/hive/awsec2query"
-	gateway_ec2_core "github.com/mulgadc/hive/hive/gateway/ec2/core"
 	gateway_ec2_instance "github.com/mulgadc/hive/hive/gateway/ec2/instance"
+	gateway_ec2_key "github.com/mulgadc/hive/hive/gateway/ec2/key"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
@@ -33,7 +33,7 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 			return err
 		}
 
-		output, err := gateway_ec2_instance.RunInstances(input)
+		output, err := gateway_ec2_instance.RunInstances(input, gw.NATSConn)
 
 		if err != nil {
 			return err
@@ -48,7 +48,28 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 		}
 
 	case "CreateKeyPair":
-		xmlOutput, err = gateway_ec2_core.CreateKeyPair(ctx, queryArgs)
+
+		var input = &ec2.CreateKeyPairInput{}
+		err = awsec2query.QueryParamsToStruct(queryArgs, input)
+
+		if err != nil {
+			return err
+		}
+
+		output, err := gateway_ec2_key.CreateKeyPair(input)
+
+		if err != nil {
+			return err
+		}
+
+		// Convert to XML
+		payload := utils.GenerateXMLPayload("CreateKeyPairResponse", output)
+		xmlOutput, err = utils.MarshalToXML(payload)
+
+		if err != nil {
+			return errors.New("failed to marshal response to XML")
+		}
+
 	default:
 		err = errors.New("InvalidAction")
 	}

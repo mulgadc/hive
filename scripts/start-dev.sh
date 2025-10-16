@@ -22,17 +22,21 @@ echo "Data directory: $DATA_DIR"
 # Create necessary directories
 mkdir -p "$DATA_DIR"/{predastore,viperblock,logs}
 
-mkdir -p /mnt/ramdisk 2>/dev/null || echo "⚠️  /mnt/ramdisk not available, using $DATA_DIR/viperblock"
+if [ -d "/mnt/ramdisk" ]; then
+    
+    # Check if /mnt/ramdisk is mounted, if not mount it as tmpfs
+    if ! mountpoint -q /mnt/ramdisk; then
+        echo "💾 Mounting /mnt/ramdisk as tmpfs"
+        sudo mount -t tmpfs -o size=8G tmpfs /mnt/ramdisk/
+    fi
 
-# Check if /mnt/ramdisk is mounted, if not mount it as tmpfs
-if ! mountpoint -q /mnt/ramdisk; then
-    echo "💾 Mounting /mnt/ramdisk as tmpfs"
-    sudo mount -t tmpfs -o size=8G tmpfs /mnt/ramdisk/
-fi
+    # If /mnt/ramdisk is mounted, use it for the WAL directory (for development)
+    if mountpoint -q "/mnt/ramdisk"; then
+        WAL_DIR="/mnt/ramdisk/"
+    fi
 
-# If /mnt/ramdisk is mounted, use it for the WAL directory (for development)
-if mountpoint -q "/mnt/ramdisk"; then
-    WAL_DIR="/mnt/ramdisk/"
+else
+    echo "⚠️  /mnt/ramdisk not available, using $DATA_DIR/viperblock"
 fi
 
 # Change to project root for all commands
@@ -184,7 +188,7 @@ start_service "viperblock" "$VIPERBLOCK_CMD"
 
 # 4️⃣ Start Hive Gateway/Daemon
 echo ""
-echo "4️⃣  Starting Hive Gateway..."
+echo "4️⃣. Starting Hive Gateway..."
 
 # Use the same base directory as Viperblock for consistency
 export HIVE_BASE_DIR="$VB_BASE_DIR"
@@ -193,13 +197,15 @@ export HIVE_BASE_DIR=$DATA_DIR/hive/
 export HIVE_WAL_DIR=$WAL_DIR
 
 #HIVE_CMD="air -c .air-hive.toml"
-#HIVE_CMD="./bin/hive service hive start --config config/hive.toml --base-dir $HIVE_BASE_DIR --wal-dir $WAL_DIR"
+#HIVE_CMD="./bin/hive service hive start --config $HIVE_CONFIG_PATH--base-dir $HIVE_BASE_DIR --wal-dir $HIVE_WAL_DIR"
 HIVE_CMD="./bin/hive service hive start"
+
+start_service "hive" "$HIVE_CMD"
 
 
 # 5️⃣ Start AWS Gateway
 echo ""
-echo "4️5️⃣  Starting AWS Gateway..."
+echo "5️⃣. Starting AWS Gateway..."
 
 # Use the same base directory as Viperblock for consistency
 
