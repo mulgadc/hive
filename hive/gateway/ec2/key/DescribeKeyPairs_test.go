@@ -52,11 +52,9 @@ func TestValidateDescribeKeyPairsInput(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := DescribeKeyPairs(tt.input)
+			// Test only the validation function (DescribeKeyPairs requires NATS infrastructure)
+			err := ValidateDescribeKeyPairsInput(tt.input)
 			assert.Equal(t, tt.want, err)
-			if err == nil {
-				assert.NotNil(t, result.KeyPairs)
-			}
 		})
 	}
 }

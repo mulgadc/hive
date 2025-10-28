@@ -56,7 +56,7 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 			return err
 		}
 
-		output, err := gateway_ec2_key.CreateKeyPair(input)
+		output, err := gateway_ec2_key.CreateKeyPair(input, gw.NATSConn)
 
 		if err != nil {
 			return err
@@ -64,6 +64,75 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 
 		// Convert to XML
 		payload := utils.GenerateXMLPayload("CreateKeyPairResponse", output)
+		xmlOutput, err = utils.MarshalToXML(payload)
+
+		if err != nil {
+			return errors.New("failed to marshal response to XML")
+		}
+
+	case "DeleteKeyPair":
+
+		var input = &ec2.DeleteKeyPairInput{}
+		err = awsec2query.QueryParamsToStruct(queryArgs, input)
+
+		if err != nil {
+			return err
+		}
+
+		output, err := gateway_ec2_key.DeleteKeyPair(input, gw.NATSConn)
+
+		if err != nil {
+			return err
+		}
+
+		// Convert to XML
+		payload := utils.GenerateXMLPayload("DeleteKeyPairResponse", output)
+		xmlOutput, err = utils.MarshalToXML(payload)
+
+		if err != nil {
+			return errors.New("failed to marshal response to XML")
+		}
+
+	case "DescribeKeyPairs":
+
+		var input = &ec2.DescribeKeyPairsInput{}
+		err = awsec2query.QueryParamsToStruct(queryArgs, input)
+
+		if err != nil {
+			return err
+		}
+
+		output, err := gateway_ec2_key.DescribeKeyPairs(input, gw.NATSConn)
+
+		if err != nil {
+			return err
+		}
+
+		// Convert to XML
+		payload := utils.GenerateXMLPayload("DescribeKeyPairsResponse", output)
+		xmlOutput, err = utils.MarshalToXML(payload)
+
+		if err != nil {
+			return errors.New("failed to marshal response to XML")
+		}
+
+	case "ImportKeyPair":
+
+		var input = &ec2.ImportKeyPairInput{}
+		err = awsec2query.QueryParamsToStruct(queryArgs, input)
+
+		if err != nil {
+			return err
+		}
+
+		output, err := gateway_ec2_key.ImportKeyPair(input, gw.NATSConn)
+
+		if err != nil {
+			return err
+		}
+
+		// Convert to XML
+		payload := utils.GenerateXMLPayload("ImportKeyPairResponse", output)
 		xmlOutput, err = utils.MarshalToXML(payload)
 
 		if err != nil {

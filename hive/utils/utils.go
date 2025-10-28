@@ -308,3 +308,35 @@ func MarshalJsonPayload(input interface{}, jsonData []byte) []byte {
 	return nil
 
 }
+
+// ValidateKeyPairName validates that a key pair name only contains allowed characters:
+// - Uppercase A-Z
+// - Lowercase a-z
+// - Digits 0-9
+// - Hyphen (-)
+// - Underscore (_)
+// - Period (.)
+// This prevents path traversal attacks and invalid characters like /etc/passwd, ../../../, etc.
+// Returns ErrorInvalidKeyPairFormat if validation fails
+func ValidateKeyPairName(name string) error {
+	if name == "" {
+		return errors.New("key name cannot be empty")
+	}
+
+	// Check each character is in the allowed set
+	for _, char := range name {
+		valid := (char >= 'A' && char <= 'Z') ||
+			(char >= 'a' && char <= 'z') ||
+			(char >= '0' && char <= '9') ||
+			char == '-' ||
+			char == '_' ||
+			char == '.'
+
+		if !valid {
+			// Import needed: github.com/mulgadc/hive/hive/awserrors
+			return fmt.Errorf("InvalidKeyPair.Format")
+		}
+	}
+
+	return nil
+}

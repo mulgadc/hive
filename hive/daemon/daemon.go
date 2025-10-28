@@ -24,6 +24,7 @@ import (
 	"github.com/mulgadc/hive/hive/config"
 	gateway_ec2_instance "github.com/mulgadc/hive/hive/gateway/ec2/instance"
 	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
+	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/hive/hive/vm"
@@ -72,6 +73,7 @@ type Daemon struct {
 	natsConn        *nats.Conn
 	resourceMgr     *ResourceManager
 	instanceService *handlers_ec2_instance.InstanceServiceImpl
+	keyService      *handlers_ec2_key.KeyServiceImpl
 	ctx             context.Context
 	cancel          context.CancelFunc
 	shutdownWg      sync.WaitGroup
@@ -269,6 +271,9 @@ func (d *Daemon) Start() error {
 	}
 	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, instanceTypes, d.natsConn, &d.Instances)
 
+	// Create key service for handling EC2 key pair operations
+	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
+
 	log.Printf("Subscribing to subject pattern: %s", "ec2.launch")
 
 	// Subscribe to EC2 events with queue group (legacy topic for backward compatibility)
@@ -285,6 +290,42 @@ func (d *Daemon) Start() error {
 
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to NATS ec2.RunInstances: %w", err)
+	}
+
+	log.Printf("Subscribing to subject pattern: %s", "ec2.CreateKeyPair")
+
+	// Subscribe to EC2 CreateKeyPair with queue group
+	d.natsSubscriptions["ec2.CreateKeyPair"], err = d.natsConn.QueueSubscribe("ec2.CreateKeyPair", "hive-workers", d.handleEC2CreateKeyPair)
+
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to NATS ec2.CreateKeyPair: %w", err)
+	}
+
+	log.Printf("Subscribing to subject pattern: %s", "ec2.DeleteKeyPair")
+
+	// Subscribe to EC2 DeleteKeyPair with queue group
+	d.natsSubscriptions["ec2.DeleteKeyPair"], err = d.natsConn.QueueSubscribe("ec2.DeleteKeyPair", "hive-workers", d.handleEC2DeleteKeyPair)
+
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to NATS ec2.DeleteKeyPair: %w", err)
+	}
+
+	log.Printf("Subscribing to subject pattern: %s", "ec2.DescribeKeyPairs")
+
+	// Subscribe to EC2 DescribeKeyPairs with queue group
+	d.natsSubscriptions["ec2.DescribeKeyPairs"], err = d.natsConn.QueueSubscribe("ec2.DescribeKeyPairs", "hive-workers", d.handleEC2DescribeKeyPairs)
+
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeKeyPairs: %w", err)
+	}
+
+	log.Printf("Subscribing to subject pattern: %s", "ec2.ImportKeyPair")
+
+	// Subscribe to EC2 ImportKeyPair with queue group
+	d.natsSubscriptions["ec2.ImportKeyPair"], err = d.natsConn.QueueSubscribe("ec2.ImportKeyPair", "hive-workers", d.handleEC2ImportKeyPair)
+
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to NATS ec2.ImportKeyPair: %w", err)
 	}
 
 	// Subscribe to EC2 start instance events
@@ -665,6 +706,95 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 
 	slog.Info("handleEC2RunInstances launched", "instanceId", reservation.Instances[0].InstanceId)
 
+}
+
+// handleEC2CreateKeyPair processes incoming EC2 CreateKeyPair requests
+func (d *Daemon) handleEC2CreateKeyPair(msg *nats.Msg) {
+	log.Printf("Received message on subject: %s", msg.Subject)
+	log.Printf("Message data: %s", string(msg.Data))
+
+	// Initialize createKeyPairInput before unmarshaling into it
+	createKeyPairInput := &ec2.CreateKeyPairInput{}
+	var errResp []byte
+
+	errResp = utils.UnmarshalJsonPayload(createKeyPairInput, msg.Data)
+
+	if errResp != nil {
+		msg.Respond(errResp)
+		slog.Error("Request does not match CreateKeyPairInput")
+		return
+	}
+
+	slog.Info("Processing CreateKeyPair request", "keyName", *createKeyPairInput.KeyName)
+
+	// Delegate to key service for business logic (key generation, S3 storage)
+	output, err := d.keyService.CreateKeyPair(createKeyPairInput)
+
+	if err != nil {
+		slog.Error("handleEC2CreateKeyPair service.CreateKeyPair failed", "err", err)
+		errResp = utils.GenerateErrorPayload(err.Error())
+		msg.Respond(errResp)
+		return
+	}
+
+	// Respond to NATS with CreateKeyPairOutput
+	jsonResponse, err := json.Marshal(output)
+	if err != nil {
+		slog.Error("handleEC2CreateKeyPair failed to marshal output", "err", err)
+		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+		msg.Respond(errResp)
+		return
+	}
+	msg.Respond(jsonResponse)
+
+	slog.Info("handleEC2CreateKeyPair completed", "keyName", *output.KeyName, "fingerprint", *output.KeyFingerprint)
+}
+
+// handleEC2DeleteKeyPair processes incoming EC2 DeleteKeyPair requests
+func (d *Daemon) handleEC2DeleteKeyPair(msg *nats.Msg) {
+	log.Printf("Received message on subject: %s", msg.Subject)
+	log.Printf("Message data: %s", string(msg.Data))
+
+	// Initialize deleteKeyPairInput before unmarshaling into it
+	deleteKeyPairInput := &ec2.DeleteKeyPairInput{}
+	var errResp []byte
+
+	errResp = utils.UnmarshalJsonPayload(deleteKeyPairInput, msg.Data)
+
+	if errResp != nil {
+		msg.Respond(errResp)
+		slog.Error("Request does not match DeleteKeyPairInput")
+		return
+	}
+
+	// Log which identifier was provided
+	if deleteKeyPairInput.KeyPairId != nil {
+		slog.Info("Processing DeleteKeyPair request", "keyPairId", *deleteKeyPairInput.KeyPairId)
+	} else if deleteKeyPairInput.KeyName != nil {
+		slog.Info("Processing DeleteKeyPair request", "keyName", *deleteKeyPairInput.KeyName)
+	}
+
+	// Delegate to key service for business logic (S3 deletion)
+	output, err := d.keyService.DeleteKeyPair(deleteKeyPairInput)
+
+	if err != nil {
+		slog.Error("handleEC2DeleteKeyPair service.DeleteKeyPair failed", "err", err)
+		errResp = utils.GenerateErrorPayload(err.Error())
+		msg.Respond(errResp)
+		return
+	}
+
+	// Respond to NATS with DeleteKeyPairOutput
+	jsonResponse, err := json.Marshal(output)
+	if err != nil {
+		slog.Error("handleEC2DeleteKeyPair failed to marshal output", "err", err)
+		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+		msg.Respond(errResp)
+		return
+	}
+	msg.Respond(jsonResponse)
+
+	slog.Info("handleEC2DeleteKeyPair completed")
 }
 
 func (d *Daemon) setupShutdown() {
@@ -1206,4 +1336,91 @@ func (rm *ResourceManager) deallocate(instanceType InstanceType) {
 
 	rm.allocatedVCPU -= instanceType.VCPUs
 	rm.allocatedMem -= instanceType.MemoryGB
+}
+
+// handleEC2DescribeKeyPairs processes incoming EC2 DescribeKeyPairs requests
+func (d *Daemon) handleEC2DescribeKeyPairs(msg *nats.Msg) {
+	log.Printf("Received message on subject: %s", msg.Subject)
+	log.Printf("Message data: %s", string(msg.Data))
+
+	// Initialize describeKeyPairsInput before unmarshaling into it
+	describeKeyPairsInput := &ec2.DescribeKeyPairsInput{}
+	var errResp []byte
+
+	errResp = utils.UnmarshalJsonPayload(describeKeyPairsInput, msg.Data)
+
+	if errResp != nil {
+		msg.Respond(errResp)
+		slog.Error("Request does not match DescribeKeyPairsInput")
+		return
+	}
+
+	slog.Info("Processing DescribeKeyPairs request")
+
+	// Delegate to key service for business logic (S3 listing)
+	output, err := d.keyService.DescribeKeyPairs(describeKeyPairsInput)
+
+	if err != nil {
+		slog.Error("handleEC2DescribeKeyPairs service.DescribeKeyPairs failed", "err", err)
+		errResp = utils.GenerateErrorPayload(err.Error())
+		msg.Respond(errResp)
+		return
+	}
+
+	// Respond to NATS with DescribeKeyPairsOutput
+	jsonResponse, err := json.Marshal(output)
+	if err != nil {
+		slog.Error("handleEC2DescribeKeyPairs failed to marshal output", "err", err)
+		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+		msg.Respond(errResp)
+		return
+	}
+	msg.Respond(jsonResponse)
+
+	slog.Info("handleEC2DescribeKeyPairs completed", "count", len(output.KeyPairs))
+}
+
+// handleEC2ImportKeyPair processes incoming EC2 ImportKeyPair requests
+func (d *Daemon) handleEC2ImportKeyPair(msg *nats.Msg) {
+	log.Printf("Received message on subject: %s", msg.Subject)
+	log.Printf("Message data: %s", string(msg.Data))
+
+	// Initialize importKeyPairInput before unmarshaling into it
+	importKeyPairInput := &ec2.ImportKeyPairInput{}
+	var errResp []byte
+
+	errResp = utils.UnmarshalJsonPayload(importKeyPairInput, msg.Data)
+
+	if errResp != nil {
+		msg.Respond(errResp)
+		slog.Error("Request does not match ImportKeyPairInput")
+		return
+	}
+
+	// Log which key is being imported (avoid logging the actual key material)
+	if importKeyPairInput.KeyName != nil {
+		slog.Info("Processing ImportKeyPair request", "keyName", *importKeyPairInput.KeyName)
+	}
+
+	// Delegate to key service for business logic (key parsing, S3 storage)
+	output, err := d.keyService.ImportKeyPair(importKeyPairInput)
+
+	if err != nil {
+		slog.Error("handleEC2ImportKeyPair service.ImportKeyPair failed", "err", err)
+		errResp = utils.GenerateErrorPayload(err.Error())
+		msg.Respond(errResp)
+		return
+	}
+
+	// Respond to NATS with ImportKeyPairOutput
+	jsonResponse, err := json.Marshal(output)
+	if err != nil {
+		slog.Error("handleEC2ImportKeyPair failed to marshal output", "err", err)
+		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+		msg.Respond(errResp)
+		return
+	}
+	msg.Respond(jsonResponse)
+
+	slog.Info("handleEC2ImportKeyPair completed", "keyName", *output.KeyName, "fingerprint", *output.KeyFingerprint)
 }

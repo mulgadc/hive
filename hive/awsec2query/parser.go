@@ -1,6 +1,7 @@
 package awsec2query
 
 import (
+	"encoding/base64"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -136,6 +137,21 @@ func setStructFields(v reflect.Value, params map[string]string, prefix string) e
 
 func setFieldValue(field reflect.Value, value string) error {
 	switch field.Kind() {
+	case reflect.Slice:
+		elem := field.Type().Elem()
+		// Special case: []byte
+		if elem.Kind() == reflect.Uint8 {
+			// First try base64 (what the AWS API expects for PublicKeyMaterial).
+			trimmed := strings.TrimSpace(value)
+			if decoded, err := base64.StdEncoding.DecodeString(trimmed); err == nil {
+				field.SetBytes(decoded)
+				return nil
+			}
+			// Some clients may send raw text. Fall back to raw bytes.
+			field.SetBytes([]byte(value))
+			return nil
+		}
+
 	case reflect.String:
 		field.SetString(value)
 	case reflect.Ptr:

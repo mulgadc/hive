@@ -5,21 +5,28 @@
 For running on Ubuntu 22.04
 
 ```bash
-add-apt-repository universe
-apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu-kvm libvirt-daemon-system  libvirt-clients libvirt-dev
+sudo add-apt-repository universe
+sudo apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu-kvm libvirt-daemon-system  libvirt-clients libvirt-dev
 ```
 
 Create hive user
 
 ```
-adduser --disabled-password hive
+sudo adduser --disabled-password hive
 ```
 
 Add hive to the libvirt group to manage VMs
 
 ```
-adduser hive libvirt
+sudo adduser hive libvirt
 ```
+
+Hive provided AWS API/SDK layer functionality, which requires the AWS CLI tool to be installed to interface with the system.
+
+```
+sudo apt install awscli
+```
+
 
 ## Build
 
@@ -72,18 +79,63 @@ Flags:
 Use "hive [command] --help" for more information about a command.
 ```
 
-## Services
+## Launch services
 
-Start libvirt networking (TODO, requires individual VPC support)
+Start the core services
 
 ```bash
-virsh -c qemu:///system net-start default
+./scripts/start-dev.sh
 ```
 
-## Launch
+## Create SSH key
+
+For first install users, create or import an existing key pair which can be used to launch EC2 instances.
+
+### Import existing key
+
+Import an existing key pair, replace `~/.ssh/id_rsa.pub` with your specified key.
+
+```
+aws --debug --endpoint-url https://localhost:9999 --no-verify-ssl ec2 import-key-pair --key-name "hive-key" --public-key-material fileb://~/.ssh/id_rsa.pub
+```
+
+### Create new key pair
+
+Alternatively, create a new key pair and store the JSON output of the AWS SDK using the `jq` command.
 
 ```bash
-nbdkit -p 10812 --pidfile /tmp/vb-vol-1.pid ../viperblock/lib/nbdkit-viperblock-plugin.so -v -f size=67108864 volume=vol-2 bucket=predastore region=ap-southeast-2 access_key="X" secret_key="Y" base_dir="/tmp/vb/" host="https://127.0.0.1:8443" cache_size=0
+aws --endpoint-url https://localhost:9999 --no-verify-ssl ec2 create-key-pair \
+  --key-name hive-key \
+| jq -r '.KeyMaterial | rtrimstr("\n")' > ~/.ssh/hive-key
+```
+
+Update permissions to SSH will accept reading the file.
+
+```bash
+chmod 600 ~/.ssh/hive-key
+```
+
+Next, generate a public key from the specified private key pair.
+
+```bash
+ssh-keygen -y -f ~/.ssh/hive-key > ~/.ssh/hive-key.pub
+```
+
+Validate the new key is available
+
+```json
+{
+    "KeyPairs": [
+        {
+            "KeyPairId": "key-3caa0a34f53d12a3",
+            "KeyType": "ed25519",
+            "Tags": [],
+            "CreateTime": "2025-10-28T13:39:23.458000+00:00",
+            "KeyName": "hive-key",
+            "KeyFingerprint": "SHA256:/g/A5OkeZeSydz9WUErXYVdCt00b0VbfN6RLn2YVFAY"
+        }
+    ]
+}
 ```
 
 ## Create AMI template
