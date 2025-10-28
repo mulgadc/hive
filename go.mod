@@ -1,8 +1,6 @@
 module github.com/mulgadc/hive
 
-go 1.23.0
-
-toolchain go1.23.10
+go 1.25
 
 require (
 	github.com/aws/aws-sdk-go v1.55.8
