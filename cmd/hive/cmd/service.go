@@ -21,6 +21,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/davecgh/go-spew/spew"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/service"
 	"github.com/mulgadc/hive/hive/services/nats"
@@ -430,6 +431,8 @@ var awsgwStartCmd = &cobra.Command{
 			return
 		}
 
+		fmt.Println("Loading config from:", cfgFile)
+
 		// TODO: Support ENV vars, CLI, otherwise revert to config.LoadConfig()
 		appConfig, err := config.LoadConfig(cfgFile)
 
@@ -458,7 +461,16 @@ var awsgwStartCmd = &cobra.Command{
 			appConfig.AWSGW.TLSKey = awsgwTlsKey
 		}
 
+		baseDir := viper.GetString("base-dir")
+
+		if awsgwTlsKey != "" {
+			fmt.Println("Overwriting awsgw base-dir to:", baseDir)
+			appConfig.BaseDir = baseDir
+		}
+
 		service, err := service.New("awsgw", appConfig)
+
+		spew.Dump(appConfig)
 
 		if err != nil {
 			fmt.Println("Error starting awsgw service:", err)

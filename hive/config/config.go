@@ -30,6 +30,7 @@ type AWSGWConfig struct {
 	Host    string `mapstructure:"host"`
 	TLSKey  string `mapstructure:"tlskey"`
 	TLSCert string `mapstructure:"tlscert"`
+	Config  string `mapstructure:"config"`
 
 	Debug bool `mapstructure:"debug"`
 }
@@ -205,17 +206,19 @@ func LoadConfig(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
 	}
 
-	// Validate required fields
-	if config.NATS.Host == "" {
-		return nil, fmt.Errorf("NATS host is required")
-	}
+	// Validate required fields (can be overwritten by env vars)
+	/*
+		if config.NATS.Host == "" {
+			return nil, fmt.Errorf("NATS host is required")
+		}
 
-	if config.AccessKey == "" {
-		return nil, fmt.Errorf("access key is required")
-	}
-	if config.SecretKey == "" {
-		return nil, fmt.Errorf("secret key is required")
-	}
+		if config.AccessKey == "" {
+			return nil, fmt.Errorf("access key is required")
+		}
+		if config.SecretKey == "" {
+			return nil, fmt.Errorf("secret key is required")
+		}
+	*/
 
 	//	fmt.Println("Config: ", config)
 

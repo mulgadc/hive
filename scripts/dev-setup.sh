@@ -14,7 +14,8 @@ NATS_PORT=4222
 PREDASTORE_PORT=8443
 HIVE_GATEWAY_PORT=9999
 DATA_DIR="$HOME/hive"
-CONFIG_DIR="$PROJECT_ROOT/config"
+# Use CONFIG_DIR environment variable if set, otherwise default to ~/hive/config
+CONFIG_DIR="${CONFIG_DIR:-$HOME/hive/config}"
 
 echo "🚀 Setting up Hive development environment..."
 echo "Project root: $PROJECT_ROOT"
@@ -105,58 +106,25 @@ for port_info in "${ports[@]}"; do
     fi
 done
 
-# Generate TLS certificates for development
+# Build Hive first (needed for admin init)
 echo ""
-echo "🔐 Setting up TLS certificates..."
+echo "🔨 Building Hive..."
+cd "$PROJECT_ROOT"
+make build
+echo "✅ Hive built successfully"
 
-if [[ ! -f "$CONFIG_DIR/server.pem" ]] || [[ ! -f "$CONFIG_DIR/server.key" ]]; then
-    echo "📋 Generating self-signed certificate for development..."
-    openssl req -x509 -newkey rsa:4096 -keyout "$CONFIG_DIR/server.key" -out "$CONFIG_DIR/server.pem" \
-        -days 365 -nodes -subj "/C=US/ST=Dev/L=Development/O=Hive/CN=localhost" \
-        -addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1"
-    echo "✅ TLS certificates generated"
+# Initialize Hive configuration using admin init
+echo ""
+echo "🔐 Initializing Hive configuration..."
+
+if [[ ! -f "$CONFIG_DIR/hive.toml" ]]; then
+    echo "📋 Running hive admin init..."
+    ./bin/hive admin init --config-dir "$CONFIG_DIR"
+    echo "✅ Hive configuration initialized"
 else
-    echo "✅ TLS certificates already exist"
+    echo "✅ Hive configuration already exists"
+    echo "   To re-initialize, run: ./bin/hive admin init --force"
 fi
-
-# Create development configuration
-echo ""
-echo "⚙️  Creating development configuration..."
-
-cat > "$CONFIG_DIR/dev.yaml" << EOF
-# Hive Development Configuration
-server:
-  host: "0.0.0.0"
-  port: $HIVE_GATEWAY_PORT
-  tls:
-    cert_file: "$CONFIG_DIR/server.pem"
-    key_file: "$CONFIG_DIR/server.key"
-
-nats:
-  host: "nats://localhost:$NATS_PORT"
-  acl:
-    token: "dev-token"
-
-services:
-  predastore:
-    host: "https://localhost:$PREDASTORE_PORT"
-    access_key: "EXAMPLEKEY"
-    secret_key: "EXAMPLEKEY"
-    bucket: "predastore"
-    region: "ap-southeast-2"
-
-  viperblock:
-    base_dir: "$DATA_DIR/viperblock"
-
-data:
-  base_dir: "$DATA_DIR"
-
-logging:
-  level: "info"
-  format: "json"
-EOF
-
-echo "✅ Development configuration created at $CONFIG_DIR/dev.yaml"
 
 # Build components
 echo ""
@@ -181,12 +149,6 @@ if [[ -d "$MULGA_ROOT/predastore" ]]; then
 else
     echo "⚠️  Predastore directory not found, skipping build"
 fi
-
-# Build Hive
-echo "📦 Building Hive..."
-cd "$PROJECT_ROOT"
-make build
-echo "✅ Hive built successfully"
 
 echo ""
 echo "🎉 Development environment setup complete!"

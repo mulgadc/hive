@@ -10,7 +10,9 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MULGA_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"
 
 # Configuration paths
-CONFIG_DIR="$PROJECT_ROOT/config"
+# Use CONFIG_DIR environment variable if set, otherwise default to ~/hive/config
+CONFIG_DIR="${CONFIG_DIR:-$HOME/hive/config}"
+echo "Using configuration directory: $CONFIG_DIR"
 DATA_DIR="$HOME/hive"
 LOGS_DIR="$DATA_DIR/logs"
 WAL_DIR="$DATA_DIR/hive"
@@ -19,8 +21,14 @@ echo "🚀 Starting Hive development environment..."
 echo "Project root: $PROJECT_ROOT"
 echo "Data directory: $DATA_DIR"
 
-# Create necessary directories
-mkdir -p "$DATA_DIR"/{predastore,viperblock,logs}
+# Confirm configuration directory exists
+if [ ! -d "$CONFIG_DIR" ]; then
+    echo "⚠️  Configuration directory $CONFIG_DIR does not exist."
+    echo "Please init the hive environment using the CLI."
+    echo "hive admin init"
+    exit 1
+fi
+
 
 if [ -d "/mnt/ramdisk" ]; then
     
@@ -170,8 +178,6 @@ export HIVE_VIPERBLOCK_S3_BUCKET=predastore
 export HIVE_VIPERBLOCK_S3_REGION=ap-southeast-2
 export HIVE_VIPERBLOCK_PLUGIN_PATH=$NBD_PLUGIN_PATH
 export HIVE_NATS_HOST=0.0.0.0:4222
-export HIVE_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE
-export HIVE_SECRET_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
 export HIVE_BASE_DIR=$VB_BASE_DIR
 
 #VIPERBLOCK_CMD="air -c .air-viperblock.toml"
@@ -179,8 +185,6 @@ VIPERBLOCK_CMD="./bin/hive service viperblock start"
 
 #VIPERBLOCK_CMD="go run cmd/hive/main.go service viperblock start \
 #    --nats-host 0.0.0.0:4222 \
-#    --access-key AKIAIOSFODNN7EXAMPLE \
-#    --secret-key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY \
 #    --base-dir $VB_BASE_DIR \
 #    --plugin-path $NBD_PLUGIN_PATH"
 
@@ -211,6 +215,7 @@ echo "5️⃣. Starting AWS Gateway..."
 
 unset HIVE_NATS_HOST
 unset HIVE_PREDASTORE_HOST
+export HIVE_BASE_DIR=$CONFIG_DIR
 export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
 export HIVE_AWSGW_HOST="0.0.0.0:9999"
 export HIVE_AWSGW_TLS_CERT=$CONFIG_DIR/server.pem

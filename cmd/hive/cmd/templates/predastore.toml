@@ -1,6 +1,6 @@
-# Test configuration file in TOML format.
+# Predastore S3-compatible storage configuration file in TOML format.
 version = "1.0"
-region = "ap-southeast-2"
+region = "{{.Region}}"
 
 # Optionally configure port and host, or specify via daemon CLI options
 host = "0.0.0.0"
@@ -14,15 +14,15 @@ debug = false
 
 [[buckets]]
 name = "predastore"
-region = "ap-southeast-2"
+region = "{{.Region}}"
 type = "fs"
 pathname = "data/predastore"
 public = false
 encryption = ""
 
 [[auth]]
-access_key_id = "AKIAIOSFODNN7EXAMPLE"
-secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+access_key_id = "{{.AccessKey}}"
+secret_access_key = "{{.SecretKey}}"
 policy = [
   { bucket = "predastore", actions = ["s3:ListBucket",  "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListAllMyBuckets"] },
 ]

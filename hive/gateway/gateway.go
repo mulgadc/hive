@@ -17,9 +17,10 @@ import (
 )
 
 type GatewayConfig struct {
-	Debug          bool        `json:"debug"`
-	DisableLogging bool        `json:"disable_logging"`
-	NATSConn       *nats.Conn  // Shared NATS connection for service communication
+	Debug          bool       `json:"debug"`
+	DisableLogging bool       `json:"disable_logging"`
+	NATSConn       *nats.Conn // Shared NATS connection for service communication
+	Config         string     // Shared AWS Gateway config for S3 auth
 }
 
 var supportedServices = map[string]bool{
@@ -89,7 +90,7 @@ func (gw *GatewayConfig) SetupRoutes() *fiber.App {
 	s3 := s3.New(&s3.Config{})
 
 	// TODO: Support env var for config path, and external IAM
-	s3.ConfigPath = "config/awsgw/awsgw.toml"
+	s3.ConfigPath = gw.Config
 
 	err := s3.ReadConfig()
 

@@ -1,9 +1,11 @@
 package awsgw
 
 import (
+	"fmt"
 	"log"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mulgadc/hive/hive/config"
@@ -76,11 +78,17 @@ func launchService(config *config.Config) (err error) {
 
 	slog.Info("Connected to NATS server", "host", config.NATS.Host)
 
+	// Append Base dir if config has no leading path
+	if config.BaseDir != "" && !strings.HasPrefix(config.AWSGW.Config, "/") {
+		config.AWSGW.Config = fmt.Sprintf("%s/%s", config.BaseDir, config.AWSGW.Config)
+	}
+
 	// Create gateway with NATS connection
 	gw := gateway.GatewayConfig{
 		Debug:          config.AWSGW.Debug,
 		DisableLogging: false,
 		NATSConn:       natsConn,
+		Config:         config.AWSGW.Config,
 	}
 
 	app := gw.SetupRoutes()

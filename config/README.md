@@ -16,6 +16,52 @@ This directory contains the systemd service configuration for running Hive servi
 2. Ensure the `hive` binary is available at `/opt/hive/bin/hive`
 3. Run the installation script as root
 
+### Setup Configuration
+
+```
+/opt/hive/bin/hive admin init
+```
+
+This will init the Hive environment and create the default configuration files in the home directory, e.g `~/hive/`.
+
+```
+/home/username/hive:
+amis  config  images  logs  nats  predastore  state  viperblock  volumes
+
+/home/username/hive/amis:
+
+/home/username/hive/config:
+awsgw  hive.toml  nats  predastore  server.key  server.pem
+
+/home/username/hive/config/awsgw:
+awsgw.toml
+
+/home/username/hive/config/nats:
+nats.conf
+
+/home/username/hive/config/predastore:
+predastore.toml
+
+/home/username/hive/images:
+
+/home/username/hive/logs:
+awsgw.log  awsgw.pid  hive.log  hive.pid  nats.log  nats.pid  predastore.log  predastore.pid  viperblock.log  viperblock.pid
+
+/home/username/hive/nats:
+
+/home/username/hive/predastore:
+data
+
+/home/username/hive/predastore/data:
+predastore
+
+/home/ben/hive/state:
+
+/home/ben/hive/viperblock:
+
+/home/ben/hive/volumes:
+```
+
 ### Quick Installation
 
 ```bash
