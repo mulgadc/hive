@@ -267,15 +267,15 @@ func TestGenerateErrorPayload(t *testing.T) {
 
 func TestValidateErrorPayload(t *testing.T) {
 	tests := []struct {
-		name        string
-		payload     string
-		expectError bool
+		name         string
+		payload      string
+		expectError  bool
 		expectedCode string
 	}{
 		{
-			name:        "Valid error payload",
-			payload:     `{"Code":"ValidationError","Message":null}`,
-			expectError: true,
+			name:         "Valid error payload",
+			payload:      `{"Code":"ValidationError","Message":null}`,
+			expectError:  true,
 			expectedCode: "ValidationError",
 		},
 		{
@@ -426,4 +426,95 @@ func TestStopProcess(t *testing.T) {
 	// Test stopping non-existent process
 	err = StopProcess("nonexistent-process")
 	assert.Error(t, err, "Should error when stopping non-existent process")
+}
+
+// Test file extraction process
+
+func TestExtractDiskImageFromFile(t *testing.T) {
+
+	tmpDir, err := os.MkdirTemp("", "hive-utils-test-*")
+
+	t.Log("Temp dir:", tmpDir)
+
+	assert.NoError(t, err, "Temp dir should be created")
+
+	// Sample .xz (fail)
+	imagePath, err := ExtractDiskImageFromFile("/tmp/file.xz", tmpDir)
+
+	assert.Empty(t, imagePath, "Should be blank")
+	assert.Error(t, err, "Should error")
+
+	// Sample incorrect image (fail)
+	imagePath, err = ExtractDiskImageFromFile("../../tests/ebs.json", tmpDir)
+
+	assert.Empty(t, imagePath, "Should be blank")
+	assert.Error(t, err, "Should error")
+	assert.ErrorContains(t, err, "unsupported filetype")
+
+	// Sample incorrect image (fail)
+	imagePath, err = ExtractDiskImageFromFile("../../tests/unit-test-disk-image-bad.raw", tmpDir)
+
+	assert.NotEmpty(t, imagePath, "Should be blank")
+	assert.Error(t, err, "Should error")
+	assert.ErrorContains(t, err, "no valid disk image found")
+
+	// Sample raw
+	imagePath, err = ExtractDiskImageFromFile("../../tests/unit-test-disk-image.raw", tmpDir)
+
+	assert.NotEmpty(t, imagePath, "Should not be blank")
+	assert.Contains(t, imagePath, ".raw")
+
+	assert.NoError(t, err, "Should not error")
+
+	_, err = exec.LookPath("tar")
+
+	if err == nil {
+
+		// Sample .tgz
+		imagePath, err = ExtractDiskImageFromFile("../../tests/unit-test-disk-image2.tgz", tmpDir)
+
+		assert.NotEmpty(t, imagePath, "Should not be blank")
+		assert.Contains(t, imagePath, ".img")
+
+		assert.NoError(t, err, "Should not error")
+
+		// Sample .tar
+		imagePath, err = ExtractDiskImageFromFile("../../tests/unit-test-disk-image.tar", tmpDir)
+
+		assert.NotEmpty(t, imagePath, "Should not be blank")
+		assert.Contains(t, imagePath, ".raw")
+
+		assert.NoError(t, err, "Should not error")
+
+		// Sample .tar.gz
+		imagePath, err = ExtractDiskImageFromFile("../../tests/unit-test-disk-image.tar.gz", tmpDir)
+
+		assert.NotEmpty(t, imagePath, "Should not be blank")
+		assert.Contains(t, imagePath, ".raw")
+
+		assert.NoError(t, err, "Should not error")
+
+		// Sample xz
+		imagePath, err = ExtractDiskImageFromFile("../../tests/unit-test-disk-image.tar.xz", tmpDir)
+
+		assert.NotEmpty(t, imagePath, "Should not be blank")
+		assert.Contains(t, imagePath, ".raw")
+
+		assert.NoError(t, err, "Should not error")
+
+		// Sample tgz
+		imagePath, err = ExtractDiskImageFromFile("../../tests/unit-test-disk-image.tgz", tmpDir)
+
+		assert.NotEmpty(t, imagePath, "Should not be blank")
+		assert.Contains(t, imagePath, ".raw")
+
+		assert.NoError(t, err, "Should not error")
+
+	} else {
+		t.Skip("tar command not found, skipping archive extraction tests")
+	}
+
+	err = os.RemoveAll(tmpDir)
+	assert.NoError(t, err, "Could not remove temp dir")
+
 }

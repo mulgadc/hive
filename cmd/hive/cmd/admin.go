@@ -127,7 +127,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	imageStat, err := os.Stat(imageFile)
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "File could not be found", err)
+		fmt.Fprintf(os.Stderr, "File could not be found %s", err)
 		os.Exit(1)
 	}
 
@@ -138,7 +138,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	imageDir := fmt.Sprintf("%s/images", baseDir)
 
 	if !fileExists(imageDir) {
-		fmt.Fprintf(os.Stderr, "Image directory does not exist. Base path specified correctly?", imageDir)
+		fmt.Fprintf(os.Stderr, "Image directory does not exist. Base path specified correctly? %s", imageDir)
 		os.Exit(1)
 	}
 
@@ -219,6 +219,8 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "Could not write manifest: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Next, validate if the image is raw, tar, gz, xv, etc. We need to upload the raw image
 
 }
 

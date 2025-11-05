@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"encoding/xml"
@@ -8,9 +9,11 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -339,4 +342,147 @@ func ValidateKeyPairName(name string) error {
 	}
 
 	return nil
+}
+
+// AMI / image extraction utils
+func ExtractDiskImageFromFile(imagepath string, tmpdir string) (diskimage string, err error) {
+
+	var args []string
+	var execCmd string
+
+	// Confirm file exists
+	_, err = os.Stat(imagepath)
+
+	if err != nil {
+		return
+	}
+
+	// Extract the filepath
+	imagefile := filepath.Base(imagepath)
+
+	// Provide the full path to the specified file
+	//imagedir, err := filepath.Abs(filepath.Dir(imagepath))
+
+	//if err != nil {
+	//	return
+	//}
+
+	// Already in raw/image formt, confirm the file contains a valid disk image/MBR
+	if strings.HasSuffix(imagefile, ".raw") || strings.HasSuffix(imagefile, ".img") {
+
+		path, err := filepath.Abs(imagepath)
+
+		if err != nil {
+			return path, err
+		}
+
+		// Validate the specified filename is indeed a disk image / MBR
+		err = validateDiskImagePath(path)
+
+		return path, err
+
+	} else if strings.HasSuffix(imagefile, ".tar.xz") {
+
+		args = []string{
+			"xfvJ",
+			imagepath,
+			"-C",
+			tmpdir,
+		}
+
+		execCmd = "tar"
+
+	} else if strings.HasSuffix(imagefile, ".tar.gz") || strings.HasSuffix(imagefile, ".tgz") {
+
+		args = []string{
+			"xfvz",
+			imagepath,
+			"-C",
+			tmpdir,
+		}
+
+		execCmd = "tar"
+
+	} else if strings.HasSuffix(imagefile, ".tar") {
+
+		args = []string{
+			"xfv",
+			imagepath,
+			"-C",
+			tmpdir,
+		}
+
+		execCmd = "tar"
+
+	} else if strings.HasSuffix(imagefile, ".xz") {
+
+		args = []string{
+			"-d",
+			imagepath,
+		}
+
+		execCmd = "xz"
+
+	} else {
+		err = errors.New("unsupported filetype")
+		return
+	}
+
+	cmd := exec.Command(execCmd, args...)
+	output, _ := cmd.Output()
+
+	diskimage, err = extractDiskImagePath(tmpdir, output)
+
+	return
+
+}
+
+func extractDiskImagePath(imagedir string, output []byte) (diskimage string, err error) {
+
+	reader := bytes.NewReader(output)
+
+	r := bufio.NewReader(reader)
+
+	for {
+		line, err := r.ReadString('\n')
+		line = strings.Replace(line, "\n", "", 1)
+
+		if strings.HasSuffix(line, ".raw") || strings.HasSuffix(line, ".img") {
+			diskimage := fmt.Sprintf("%s/%s", imagedir, line)
+
+			err = validateDiskImagePath(diskimage)
+
+			return diskimage, err
+		}
+
+		if err != nil && err.Error() == "EOF" {
+			break
+		}
+	}
+
+	return
+
+}
+
+func validateDiskImagePath(diskimage string) (err error) {
+
+	args := []string{
+		diskimage,
+	}
+
+	cmd := exec.Command("file", args...)
+	output, _ := cmd.Output()
+
+	filetype := strings.Split(string(output), ":")
+
+	if len(filetype) > 1 {
+
+		if strings.Contains(filetype[1], "DOS/MBR boot sector") || strings.Contains(filetype[1], "Linux ") {
+			return nil
+		}
+
+	}
+
+	return errors.New("no valid disk image found")
+
 }
