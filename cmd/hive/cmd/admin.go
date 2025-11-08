@@ -32,7 +32,11 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
+	"github.com/mulgadc/viperblock/viperblock/backends/s3"
+	vutils "github.com/mulgadc/viperblock/viperblock/utils"
 	"github.com/spf13/cobra"
 	"gopkg.in/ini.v1"
 )
@@ -117,6 +121,15 @@ func init() {
 
 func runimagesImportCmd(cmd *cobra.Command, args []string) {
 
+	cfgFile, _ := cmd.Flags().GetString("config")
+
+	if cfgFile == "" {
+
+		homeDir, _ := os.UserHomeDir()
+		cfgFile = fmt.Sprintf("%s/hive/config/hive.toml", homeDir)
+
+	}
+
 	imageFile, _ := cmd.Flags().GetString("file")
 
 	if imageFile == "" {
@@ -183,7 +196,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	manifest := viperblock.VolumeConfig{}
 
 	// Calculate the size
-	manifest.AMIMetadata.Name = fmt.Sprintf("%s-%s-%s-ami", distro, version, arch)
+	manifest.AMIMetadata.Name = fmt.Sprintf("ami-%s-%s-%s", distro, version, arch)
 
 	manifest.AMIMetadata.Description = fmt.Sprintf("%s cloud image prepared for Hive", manifest.AMIMetadata.Name)
 	manifest.AMIMetadata.Architecture = arch
@@ -221,6 +234,60 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	}
 
 	// Next, validate if the image is raw, tar, gz, xv, etc. We need to upload the raw image
+
+	tmpDir, err := os.MkdirTemp("", "hive-image-tmp-*")
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Could not create temp dir: %v\n", err)
+		os.Exit(1)
+	}
+
+	imagePath, err = utils.ExtractDiskImageFromFile(imageFile, tmpDir)
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Could not extract image: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Upload the image to S3 (predastore)
+
+	appConfig, err := config.LoadConfig(cfgFile)
+
+	if err != nil {
+		fmt.Println("Error loading config file:", err)
+		return
+	}
+
+	s3Config := s3.S3Config{
+		VolumeName: manifest.AMIMetadata.Name,
+		VolumeSize: uint64(imageStat.Size()),
+		Bucket:     appConfig.Predastore.Bucket,
+		Region:     appConfig.Predastore.Region,
+		AccessKey:  appConfig.AccessKey,
+		SecretKey:  appConfig.SecretKey,
+		Host:       appConfig.Predastore.Host,
+	}
+
+	vbConfig := viperblock.VB{
+		VolumeName: manifest.AMIMetadata.Name,
+		VolumeSize: uint64(imageStat.Size()),
+		BaseDir:    tmpDir,
+		Cache: viperblock.Cache{
+			Config: viperblock.CacheConfig{
+				Size: 0,
+			},
+		},
+		VolumeConfig: manifest,
+	}
+
+	err = vutils.ImportDiskImage(&s3Config, &vbConfig, imagePath)
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Could not import image to predastore: %v\n", err)
+		os.Exit(1)
+	}
+
+	defer os.RemoveAll(tmpDir)
 
 }
 

@@ -3,11 +3,13 @@ package utils
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,8 +20,12 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/private/protocol/xml/xmlutil"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/mulgadc/hive/hive/config"
 )
 
 func ReadPidFile(name string) (int, error) {
@@ -484,5 +490,25 @@ func validateDiskImagePath(diskimage string) (err error) {
 	}
 
 	return errors.New("no valid disk image found")
+
+}
+
+func CreateS3Client(cfg *config.Config) *s3.S3 {
+
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	httpClient := &http.Client{Transport: tr}
+
+	sess := session.Must(session.NewSession(&aws.Config{
+		Region:           aws.String(cfg.Predastore.Region),
+		Endpoint:         aws.String(fmt.Sprintf("https://%s", cfg.Predastore.Host)),
+		Credentials:      credentials.NewStaticCredentials(cfg.AccessKey, cfg.SecretKey, ""),
+		S3ForcePathStyle: aws.Bool(true),
+		DisableSSL:       aws.Bool(false),
+		HTTPClient:       httpClient,
+	}))
+
+	return s3.New(sess)
 
 }

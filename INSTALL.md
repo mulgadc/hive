@@ -138,7 +138,33 @@ Validate the new key is available
 }
 ```
 
-## Create AMI template
+## Create AMI template (new method)
+
+Use the hive CLI tool to import a selected OS image. Note, the source file can be compressed (e.g image.tar.gz, image.gz, image.tar.xz) and the tool will automatically extract and upload the raw OS image as an AMI.
+
+Note, when downloading OS images, use supported platforms that support the `cloud-init` feature to automatically bootstrap when using the Hive EC2 functionality.
+
+Example, download the Debian 12 image from the repository [https://cloud.debian.org/images/cloud/bookworm/latest/](https://cloud.debian.org/images/cloud/bookworm/latest/)
+
+Download the image:
+
+```
+wget https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-arm64.tar.xz -O ~/debian-12-genericcloud-arm64.tar.xz
+```
+
+Import as an AMI to the backend store:
+
+```
+./bin/hive admin images import --file ~/debian-12-genericcloud-arm64.tar.xz --arch aarch64 --distro debian --version 12
+```
+
+Next, verify available disk images to confirm the import was successful
+
+```
+aws ec2 describe-images
+```
+
+## Create AMI template (old method)
 
 ### Step 1
 
