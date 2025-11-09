@@ -28,7 +28,9 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"text/template"
 	"time"
 
@@ -37,6 +39,7 @@ import (
 	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/mulgadc/viperblock/viperblock/backends/s3"
 	vutils "github.com/mulgadc/viperblock/viperblock/utils"
+	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
 	"gopkg.in/ini.v1"
 )
@@ -55,7 +58,7 @@ var natsConfTemplate string
 
 var supportedArchs = map[string]bool{
 	"x86_64":  true,
-	"aarch64": true,
+	"aarch64": true, // alias for arm64
 	"arm64":   true,
 }
 
@@ -93,12 +96,39 @@ var imagesImportCmd = &cobra.Command{
 	Run:   runimagesImportCmd,
 }
 
+var imagesListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List OS images to import or download",
+	Long:  `Query the remote endpoint for common OS images available for import as AMI or locally download.`,
+	Run:   runimagesListCmd,
+}
+
+/*
+CLI ideas
+
+hive admin images list
+
+- fetches from remote endpoint for common/trusted images to bootstrap environment, or baked in from compile.
+
+// If --name specified, download
+hive admin images import --name debian-12-x86_64
+
+// List available images
+hive admin images list
+
+// Manually import a path
+hive admin images import --file /path/to/image --distro debian --version 12 --arch x86_64
+
+-> x <-
+*/
+
 func init() {
 	rootCmd.AddCommand(adminCmd)
 	adminCmd.AddCommand(adminInitCmd)
 
 	adminCmd.AddCommand(imagesCmd)
 	imagesCmd.AddCommand(imagesImportCmd)
+	imagesCmd.AddCommand(imagesListCmd)
 
 	homeDir, _ := os.UserHomeDir()
 	configDir := fmt.Sprintf("%s/hive/config", homeDir)
@@ -111,41 +141,38 @@ func init() {
 	adminInitCmd.Flags().Bool("force", false, "Force re-initialization (overwrites existing config)")
 	adminInitCmd.Flags().String("region", "ap-southeast-2", "Mulga region to create")
 
+	imagesImportCmd.Flags().String("name", "", "Import specified image by name")
 	imagesImportCmd.Flags().String("file", "", "Import file from specified path (raw, qcow2, compressed)")
 	imagesImportCmd.Flags().String("distro", "", "Specified distro name (e.g debian)")
 	imagesImportCmd.Flags().String("version", "", "Specified distro version (e.g 12)")
 	imagesImportCmd.Flags().String("arch", "", "Specified distro arch (e.g aarch64, arm64, x86_64)")
 	imagesImportCmd.Flags().String("platform", "Linux/UNIX", "Specified platform (e.g Linux/UNIX, Windows)")
+	imagesImportCmd.Flags().Bool("force", false, "Force command execution (overwrites existing files)")
 
 }
 
 func runimagesImportCmd(cmd *cobra.Command, args []string) {
 
+	var image utils.Images
+
+	var imageFile string
+	var imageStat os.FileInfo
+	var err error
+
 	cfgFile, _ := cmd.Flags().GetString("config")
+	forceCmd, _ := cmd.Flags().GetBool("force")
 
+	// Use default config path
 	if cfgFile == "" {
-
 		homeDir, _ := os.UserHomeDir()
 		cfgFile = fmt.Sprintf("%s/hive/config/hive.toml", homeDir)
-
-	}
-
-	imageFile, _ := cmd.Flags().GetString("file")
-
-	if imageFile == "" {
-		fmt.Fprintf(os.Stderr, "File required to import image")
-		os.Exit(1)
-	}
-
-	imageStat, err := os.Stat(imageFile)
-
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "File could not be found %s", err)
-		os.Exit(1)
 	}
 
 	//configDir, _ := cmd.Flags().GetString("config-dir")
 	baseDir, _ := cmd.Flags().GetString("hive-dir")
+
+	// Strip trailing slash
+	baseDir = filepath.Clean(baseDir)
 
 	// Check the base dir has our images path, and correctlty init
 	imageDir := fmt.Sprintf("%s/images", baseDir)
@@ -155,34 +182,66 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	distro, _ := cmd.Flags().GetString("distro")
-	version, _ := cmd.Flags().GetString("version")
-	arch, _ := cmd.Flags().GetString("arch")
-	platform, _ := cmd.Flags().GetString("platform")
+	// Determine, if name specified, or file
+	imageName, _ := cmd.Flags().GetString("name")
 
-	if distro == "" {
+	if imageName != "" {
+
+		var exists bool
+		// Confirm the image exists
+		image, exists = utils.AvailableImages[imageName]
+
+		if !exists {
+			fmt.Fprintf(os.Stderr, "Image name not found in available images")
+			os.Exit(1)
+		}
+
+	} else {
+
+		imageFile, _ = cmd.Flags().GetString("file")
+
+		if imageFile == "" {
+			fmt.Fprintf(os.Stderr, "File required to import image")
+			os.Exit(1)
+		}
+
+		//imageStat, err = os.Stat(imageFile)
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "File could not be found %s", err)
+			os.Exit(1)
+		}
+
+		image.Distro, _ = cmd.Flags().GetString("distro")
+		image.Version, _ = cmd.Flags().GetString("version")
+		image.Arch, _ = cmd.Flags().GetString("arch")
+		image.Platform, _ = cmd.Flags().GetString("platform")
+
+	}
+
+	if image.Distro == "" {
 		fmt.Fprintf(os.Stderr, "Specify distro name")
 		os.Exit(1)
 	}
 
 	// Check version specified
-	if version == "" {
+	if image.Version == "" {
 		fmt.Fprintf(os.Stderr, "Specify image version")
 		os.Exit(1)
 	}
 
-	if !supportedArchs[arch] {
+	if !supportedArchs[image.Arch] {
 		fmt.Fprintf(os.Stderr, "Unsupported architecture")
 		os.Exit(1)
 	}
 
-	if !supportedPlatforms[platform] {
+	if !supportedPlatforms[image.Platform] {
 		fmt.Fprintf(os.Stderr, "Unsupported platform")
 		os.Exit(1)
 	}
 
 	// Create the specified image directory
-	imagePath := fmt.Sprintf("%s/%s/%s/%s", imageDir, distro, version, arch)
+	imagePath := fmt.Sprintf("%s/%s/%s/%s", imageDir, image.Distro, image.Version, image.Arch)
 
 	// Create config directory
 	if err := os.MkdirAll(imagePath, 0700); err != nil {
@@ -192,15 +251,65 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 
 	fmt.Printf("✅ Created config directory: %s\n", imagePath)
 
+	// Next, if the file is selected to download, fetch it, extract disk image, and save to path
+	if imageName != "" {
+		// Download the file to the image path
+		filename := path.Base(image.URL)
+		imageFile = fmt.Sprintf("%s/%s", imagePath, filename)
+
+		fmt.Printf("Downloading image %s to %s\n", image.URL, imageFile)
+
+		// If image path exists, skip
+		if fileExists(imageFile) && !forceCmd {
+			fmt.Printf("Image file already exists, skipping download, use --force to overwrite: %s\n", imageFile)
+		} else {
+
+			err := utils.DownloadFileWithProgress(image.URL, image.Name, imageFile, 0)
+
+			if err != nil {
+				fmt.Printf("Download failed: %v\n", err)
+				os.Exit(1)
+			}
+
+		}
+
+		// Update image file path for later extraction
+		//imagePath = imageFilePath
+	}
+
+	// Next, validate if the image is raw, tar, gz, xv, etc. We need to upload the raw image
+	tmpDir, err := os.MkdirTemp("", "hive-image-tmp-*")
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Could not create temp dir: %v\n", err)
+		os.Exit(1)
+	}
+
+	extractedImagePath, err := utils.ExtractDiskImageFromFile(imageFile, imagePath)
+
+	fmt.Println("Extracted image to:", extractedImagePath)
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Could not extract image: %v\n", err)
+		os.Exit(1)
+	}
+
+	imageStat, err = os.Stat(extractedImagePath)
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Could not stat image: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Create the specified manifest file to describe the image/AMI
 	manifest := viperblock.VolumeConfig{}
 
 	// Calculate the size
-	manifest.AMIMetadata.Name = fmt.Sprintf("ami-%s-%s-%s", distro, version, arch)
 
+	manifest.AMIMetadata.Name = fmt.Sprintf("ami-%s-%s-%s", image.Distro, image.Version, image.Arch)
 	manifest.AMIMetadata.Description = fmt.Sprintf("%s cloud image prepared for Hive", manifest.AMIMetadata.Name)
-	manifest.AMIMetadata.Architecture = arch
-	manifest.AMIMetadata.PlatformDetails = platform
+	manifest.AMIMetadata.Architecture = image.Arch
+	manifest.AMIMetadata.PlatformDetails = image.Platform
 	manifest.AMIMetadata.CreationDate = time.Now()
 	manifest.AMIMetadata.RootDeviceType = "ebs"
 	manifest.AMIMetadata.Virtualization = "hvm"
@@ -208,6 +317,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	manifest.AMIMetadata.VolumeSizeGiB = uint64(imageStat.Size() / 1024 / 1024 / 1024)
 
 	// Volume Data
+	manifest.VolumeMetadata.VolumeID = "" // Assigned on creation
 	manifest.VolumeMetadata.VolumeName = manifest.AMIMetadata.Name
 	manifest.VolumeMetadata.TenantID = "system"
 	manifest.VolumeMetadata.SizeGiB = manifest.AMIMetadata.VolumeSizeGiB
@@ -216,6 +326,8 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	manifest.VolumeMetadata.CreatedAt = time.Now()
 	manifest.VolumeMetadata.VolumeType = "gp3"
 	manifest.VolumeMetadata.IOPS = 1000
+
+	volumeId := viperblock.GenerateVolumeID("ami", manifest.AMIMetadata.Name, appConfig.Predastore.Bucket, time.Now().Unix())
 
 	// Write the manifest to disk
 	// Save as JSON
@@ -233,22 +345,6 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Next, validate if the image is raw, tar, gz, xv, etc. We need to upload the raw image
-
-	tmpDir, err := os.MkdirTemp("", "hive-image-tmp-*")
-
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not create temp dir: %v\n", err)
-		os.Exit(1)
-	}
-
-	imagePath, err = utils.ExtractDiskImageFromFile(imageFile, tmpDir)
-
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Could not extract image: %v\n", err)
-		os.Exit(1)
-	}
-
 	// Upload the image to S3 (predastore)
 
 	appConfig, err := config.LoadConfig(cfgFile)
@@ -259,7 +355,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	}
 
 	s3Config := s3.S3Config{
-		VolumeName: manifest.AMIMetadata.Name,
+		VolumeName: volumeId,
 		VolumeSize: uint64(imageStat.Size()),
 		Bucket:     appConfig.Predastore.Bucket,
 		Region:     appConfig.Predastore.Region,
@@ -269,7 +365,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	}
 
 	vbConfig := viperblock.VB{
-		VolumeName: manifest.AMIMetadata.Name,
+		VolumeName: volumeId,
 		VolumeSize: uint64(imageStat.Size()),
 		BaseDir:    tmpDir,
 		Cache: viperblock.Cache{
@@ -280,15 +376,54 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		VolumeConfig: manifest,
 	}
 
-	err = vutils.ImportDiskImage(&s3Config, &vbConfig, imagePath)
+	err = vutils.ImportDiskImage(&s3Config, &vbConfig, extractedImagePath)
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not import image to predastore: %v\n", err)
 		os.Exit(1)
 	}
 
+	fmt.Println(tmpDir)
 	defer os.RemoveAll(tmpDir)
 
+}
+
+// List remote images available
+func runimagesListCmd(cmd *cobra.Command, args []string) {
+
+	//fmt.Println(availableImages)
+
+	tableData := pterm.TableData{
+		{"Name", "Distro", "Version", "Arch"},
+	}
+
+	// Sort A .. Z
+	// 1. Collect keys
+	keys := make([]string, 0, len(utils.AvailableImages))
+	for k := range utils.AvailableImages {
+		keys = append(keys, k)
+	}
+
+	// 2. Sort keys alphabetically (A→Z)
+	sort.Strings(keys)
+
+	// 3. Iterate in sorted order
+	for _, k := range keys {
+
+		img := utils.AvailableImages[k]
+
+		//for _, img := range utils.AvailableImages {
+		tableData = append(tableData, []string{img.Name, img.Distro, img.Version, img.Arch})
+	}
+
+	// Create a table with the defined data.
+	// The table has a header and the text in the cells is right-aligned.
+	// The Render() method is used to print the table to the console.
+	pterm.DefaultTable.WithHasHeader().WithLeftAlignment().WithData(tableData).Render()
+
+	pterm.Println("To install a selected image as an AMI use:")
+
+	pterm.Println("hive admin images import --name <image-name>")
 }
 
 func runAdminInit(cmd *cobra.Command, args []string) {

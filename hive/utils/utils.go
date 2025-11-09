@@ -3,15 +3,18 @@ package utils
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -26,7 +29,141 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/hive/hive/config"
+	"github.com/pterm/pterm"
 )
+
+// Helper functions for OS images
+
+type Images struct {
+	Name         string    `json:"name"`
+	Description  string    `json:"description"`
+	Distro       string    `json:"distro"`
+	Version      string    `json:"version"`
+	Arch         string    `json:"arch"`
+	Platform     string    `json:"platform"`
+	CreatedAt    time.Time `json:"created_at"`
+	URL          string    `json:"url"`
+	Checksum     string    `json:"checksum"`
+	ChecksumType string    `json:"checksum_type"`
+	BootMode     string    `json:"boot_mode"`
+	Starred      bool      `json:"starred"`
+}
+
+var AvailableImages = map[string]Images{
+
+	"debian-12-x86_64": {
+		Name:         "debian-12-x86_64",
+		Description:  "Debian 12 (Bookworm) x86_64 cloud image (generic cloud)",
+		Distro:       "debian",
+		Version:      "12",
+		Arch:         "x86_64",
+		Platform:     "Linux/UNIX",
+		CreatedAt:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
+		URL:          "https://cdimage.debian.org/cdimage/cloud/bookworm/latest/debian-12-generic-amd64.tar.xz",
+		Checksum:     "https://cdimage.debian.org/cdimage/cloud/bookworm/latest/SHA512SUMS",
+		ChecksumType: "sha512",
+		Starred:      true,
+	},
+
+	"debian-12-arm64": {
+		Name:         "debian-12-arm64",
+		Description:  "Debian 12 (Bookworm) arm64 cloud image (generic cloud)",
+		Distro:       "debian",
+		Version:      "12",
+		Arch:         "arm64",
+		Platform:     "Linux/UNIX",
+		CreatedAt:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
+		URL:          "https://cdimage.debian.org/cdimage/cloud/bookworm/latest/debian-12-generic-arm64.tar.xz",
+		Checksum:     "https://cdimage.debian.org/cdimage/cloud/bookworm/latest/SHA512SUMS",
+		ChecksumType: "sha512",
+		BootMode:     "uefi",
+		Starred:      true,
+	},
+
+	/*
+		"local-debian-12-arm64": {
+			Name:         "local-debian-12-arm64",
+			Description:  "Debian 12 (Bookworm) arm64 cloud image (generic cloud)",
+			Distro:       "debian",
+			Version:      "12",
+			Arch:         "arm64",
+			Platform:     "Linux/UNIX",
+			CreatedAt:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
+			URL:          "http://192.168.64.1:8000/debian-12-generic-amd64.tar.xz",
+			Checksum:     "http://192.168.64.1:8000/SHA512SUMS",
+			ChecksumType: "sha512",
+			BootMode:     "uefi",
+			Starred:      true,
+		},
+	*/
+
+	// Ubuntu
+	"ubuntu-24.04-x86_64": {
+		//Ubuntu 24.04 LTS (Noble Numbat)
+		Name:         "ubuntu-24.04-x86_64",
+		Description:  "Ubuntu 24.04 LTS (Noble Numbat) x86_64 cloud image",
+		Distro:       "ubuntu",
+		Version:      "24.04",
+		Arch:         "x86_64",
+		Platform:     "Linux/UNIX",
+		CreatedAt:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
+		URL:          "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.tar.gz",
+		Checksum:     "https://cloud-images.ubuntu.com/noble/current/SHA256SUMS",
+		ChecksumType: "sha256",
+		BootMode:     "uefi",
+		Starred:      false,
+	},
+
+	"ubuntu-24.04-arm64": {
+		//Ubuntu 24.04 LTS (Noble Numbat)
+		Name:         "ubuntu-24.04-arm64",
+		Description:  "Ubuntu 24.04 LTS (Noble Numbat) arm64 cloud image",
+		Distro:       "ubuntu",
+		Version:      "24.04",
+		Arch:         "arm64",
+		Platform:     "Linux/UNIX",
+		CreatedAt:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
+		URL:          "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.tar.gz",
+		Checksum:     "https://cloud-images.ubuntu.com/noble/current/SHA256SUMS",
+		ChecksumType: "sha256",
+		BootMode:     "uefi",
+		Starred:      false,
+	},
+
+	"alpine-3.22.2-x86_64":
+	// Alpine Linux (cloud init) x86_64
+	{
+		Name:         "alpine-3.22.2-x86_64",
+		Description:  "Alpine Linux 3.22.2 x86_64 cloud image",
+		Distro:       "alpine",
+		Version:      "3.22.2",
+		Arch:         "x86_64",
+		Platform:     "Linux/UNIX",
+		CreatedAt:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
+		URL:          "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/cloud/gcp_alpine-3.22.2-x86_64-uefi-cloudinit-metal-r0.raw.tar.gz",
+		Checksum:     "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/cloud/gcp_alpine-3.22.2-x86_64-uefi-cloudinit-metal-r0.raw.tar.gz.sha512",
+		ChecksumType: "sha512",
+		BootMode:     "uefi",
+		Starred:      false,
+	},
+
+	"alpine-3.22.2-arm64":
+	// Alpine Linux (cloud init) arm64
+	{
+		Name:         "alpine-3.22.2-arm64",
+		Description:  "Alpine Linux 3.22.2 arm64 cloud image",
+		Distro:       "alpine",
+		Version:      "3.22.2",
+		Arch:         "arm64",
+		Platform:     "Linux/UNIX",
+		CreatedAt:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
+		URL:          "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/cloud/gcp_alpine-3.22.2-aarch64-uefi-cloudinit-metal-r0.raw.tar.gz",
+		Checksum:     "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/cloud/gcp_alpine-3.22.2-aarch64-uefi-cloudinit-metal-r0.raw.tar.gz.sha512",
+		ChecksumType: "sha512",
+		BootMode:     "uefi",
+		Starred:      false,
+	},
+}
 
 func ReadPidFile(name string) (int, error) {
 
@@ -423,7 +560,7 @@ func ExtractDiskImageFromFile(imagepath string, tmpdir string) (diskimage string
 	} else if strings.HasSuffix(imagefile, ".xz") {
 
 		args = []string{
-			"-d",
+			"-dk",
 			imagepath,
 		}
 
@@ -511,4 +648,114 @@ func CreateS3Client(cfg *config.Config) *s3.S3 {
 
 	return s3.New(sess)
 
+}
+
+// Download helper
+
+func DownloadFileWithProgress(url string, name string, filename string, timeout time.Duration) (err error) {
+
+	// Context with optional timeout and Ctrl+C cancel
+	ctx, cancel := context.WithCancel(context.Background())
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+	}
+	defer cancel()
+	intCh := make(chan os.Signal, 1)
+	signal.Notify(intCh, os.Interrupt)
+	go func() {
+		<-intCh
+		cancel()
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("request error: %v", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("http error: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("unexpected status: %s", resp.Status)
+	}
+
+	f, err := os.Create(filename)
+	if err != nil {
+		return fmt.Errorf("file create error: %v", err)
+	}
+	defer f.Close()
+
+	cl := resp.ContentLength
+
+	// Known size: progress bar with total
+	if cl > 0 {
+		bar, _ := pterm.DefaultProgressbar.
+			WithTitle(fmt.Sprintf("Downloading %s", name)).
+			WithTotal(int(cl)).
+			Start()
+
+		var written int64
+		reader := io.TeeReader(resp.Body, progressWriter(func(n int) {
+			written += int64(n)
+			// Update progress bar with the number of bytes read in this chunk
+			bar.Add(n)
+		}))
+
+		_, err = io.Copy(f, reader)
+		bar.Stop()
+		if err != nil {
+			return fmt.Errorf("copy error: %v", err)
+		}
+
+		pterm.Printf("Saved %s (%s)\n", filename, humanBytes(uint64(written)))
+		return
+
+	} else {
+
+		// Unknown size: spinner that shows bytes downloaded
+		spin, _ := pterm.DefaultSpinner.
+			WithText("Downloading (size unknown)...").
+			Start()
+		defer spin.Stop()
+
+		var written int64
+		reader := io.TeeReader(resp.Body, progressWriter(func(n int) {
+			written += int64(n)
+			spin.UpdateText(fmt.Sprintf("Downloading %s (%s) ...", name, humanBytes(uint64(written))))
+		}))
+		_, err = io.Copy(f, reader)
+		spin.Stop()
+
+		if err != nil {
+			return fmt.Errorf("copy error: %v", err)
+		}
+
+		pterm.Printf("Saved %s (%s)\n", filename, humanBytes(uint64(written)))
+
+	}
+
+	return nil
+}
+
+// progressWriter turns byte counts into a callback for UI updates.
+type progressWriter func(n int)
+
+func (pw progressWriter) Write(p []byte) (int, error) {
+	pw(len(p))
+	return len(p), nil
+}
+
+func humanBytes(b uint64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := uint64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTPEZY"[exp])
 }

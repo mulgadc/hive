@@ -144,7 +144,48 @@ Use the hive CLI tool to import a selected OS image. Note, the source file can b
 
 Note, when downloading OS images, use supported platforms that support the `cloud-init` feature to automatically bootstrap when using the Hive EC2 functionality.
 
-Example, download the Debian 12 image from the repository [https://cloud.debian.org/images/cloud/bookworm/latest/](https://cloud.debian.org/images/cloud/bookworm/latest/)
+### Automatic import
+
+Discover available images to automatically download and install. This will pull the images from the distro official mirror and simplify the process to bootstrap a Hive installation with AMIs that include common operating systems.
+
+```bash
+./bin/hive admin images list
+```
+
+```
+Name                 | Distro | Version | Arch  
+alpine-3.22.2-arm64  | alpine | 3.22.2  | arm64 
+alpine-3.22.2-x86_64 | alpine | 3.22.2  | x86_64
+debian-12-arm64      | debian | 12      | arm64 
+debian-12-x86_64     | debian | 12      | x86_64
+ubuntu-24.04-arm64   | ubuntu | 24.04   | arm64 
+ubuntu-24.04-x86_64  | ubuntu | 24.04   | x86_64
+```
+
+Next, choose the image you would like to import as an AMI.
+
+```bash
+./bin/hive admin images import --name debian-12-arm64 --force
+```
+
+```
+Downloading image https://cdimage.debian.org/cdimage/cloud/bookworm/latest/debian-12-generic-arm64.tar.xz to /home/ben/hive/images/debian/12/arm64/debian-12-generic-amd64.tar.xz
+Downloading local-debian-12-arm64 [283748988/283748988] ██████████████ 100% | 1s
+Saved /home/ben/hive/images/debian/12/arm64/debian-12-generic-amd64.tar.xz (270.6 MiB)
+Extracted image to: /home/ben/hive/images/debian/12/arm64/disk.raw
+
+AMI import complete
+```
+
+Next, verify available disk images to confirm the import was successful
+
+```bash
+aws ec2 describe-images
+```
+
+### Manual import
+
+Using this method you can import any OS disk image. For example, download the Debian 12 image from the repository [https://cloud.debian.org/images/cloud/bookworm/latest/](https://cloud.debian.org/images/cloud/bookworm/latest/)
 
 Download the image:
 
@@ -155,7 +196,7 @@ wget https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericclou
 Import as an AMI to the backend store:
 
 ```
-./bin/hive admin images import --file ~/debian-12-genericcloud-arm64.tar.xz --arch aarch64 --distro debian --version 12
+./bin/hive admin images import --file ~/debian-12-genericcloud-arm64.tar.xz --arch arm64 --distro debian --version 12
 ```
 
 Next, verify available disk images to confirm the import was successful
@@ -165,6 +206,8 @@ aws ec2 describe-images
 ```
 
 ## Create AMI template (old method)
+
+Manual import method for development, suggest using new method above.
 
 ### Step 1
 
