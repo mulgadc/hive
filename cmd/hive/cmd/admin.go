@@ -141,6 +141,8 @@ func init() {
 	adminInitCmd.Flags().Bool("force", false, "Force re-initialization (overwrites existing config)")
 	adminInitCmd.Flags().String("region", "ap-southeast-2", "Mulga region to create")
 
+	imagesImportCmd.Flags().String("tmp-dir", os.TempDir(), "Temporary directory for image import processing")
+
 	imagesImportCmd.Flags().String("name", "", "Import specified image by name")
 	imagesImportCmd.Flags().String("file", "", "Import file from specified path (raw, qcow2, compressed)")
 	imagesImportCmd.Flags().String("distro", "", "Specified distro name (e.g debian)")
@@ -161,6 +163,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 
 	cfgFile, _ := cmd.Flags().GetString("config")
 	forceCmd, _ := cmd.Flags().GetBool("force")
+	ostmpDir, _ := cmd.Flags().GetString("tmp-dir")
 
 	// Use default config path
 	if cfgFile == "" {
@@ -278,7 +281,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	}
 
 	// Next, validate if the image is raw, tar, gz, xv, etc. We need to upload the raw image
-	tmpDir, err := os.MkdirTemp("", "hive-image-tmp-*")
+	tmpDir, err := os.MkdirTemp(ostmpDir, "hive-image-tmp-*")
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not create temp dir: %v\n", err)
@@ -504,8 +507,9 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	awsgwDir := filepath.Join(configDir, "awsgw")
 	predastoreDir := filepath.Join(configDir, "predastore")
 	natsDir := filepath.Join(configDir, "nats")
+	hiveDir := filepath.Join(configDir, "hive")
 
-	for _, dir := range []string{awsgwDir, predastoreDir, natsDir} {
+	for _, dir := range []string{awsgwDir, predastoreDir, natsDir, hiveDir} {
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating directory %s: %v\n", dir, err)
 			os.Exit(1)

@@ -29,6 +29,7 @@ import (
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/hive/hive/vm"
+	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/nats-io/nats.go"
 )
 
@@ -1129,8 +1130,15 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	}
 	instance.EBSRequests.Mu.Unlock()
 
+	// TODO: Toggle SSH local port forwarding based on config (debugging use)
+	sshDebugPort, err := viperblock.FindFreePort()
+
+	// Just the ipv4 port required
+	sshDebugPort = strings.Replace(sshDebugPort, "[::]:", "", 1)
+
+	// TODO: Make configurable
 	instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
-		Value: "user,id=net0",
+		Value: fmt.Sprintf("user,id=net0,hostfwd=tcp:127.0.0.1:%s-:22", sshDebugPort),
 	})
 
 	instance.Config.Devices = append(instance.Config.Devices, vm.Device{

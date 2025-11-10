@@ -182,7 +182,7 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 
 	var qemuArchitecture string
 
-	if cfg.Architecture == "arm" {
+	if cfg.Architecture == "arm64" {
 		qemuArchitecture = "qemu-system-aarch64"
 	} else if cfg.Architecture == "x86_64" {
 		qemuArchitecture = "qemu-system-x86_64"
