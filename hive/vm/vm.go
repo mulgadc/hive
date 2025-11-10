@@ -3,6 +3,7 @@ package vm
 import (
 	"crypto/rand"
 	"fmt"
+	"log/slog"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -188,6 +189,8 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 	} else {
 		return nil, fmt.Errorf("Architecture missing")
 	}
+
+	slog.Info("Executing QEMU command:", "cmd", qemuArchitecture, "args", args)
 
 	cmd := exec.Command(qemuArchitecture, args...)
 

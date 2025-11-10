@@ -307,6 +307,9 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	// Calculate the size
 
 	manifest.AMIMetadata.Name = fmt.Sprintf("ami-%s-%s-%s", image.Distro, image.Version, image.Arch)
+	volumeId := viperblock.GenerateVolumeID("ami", manifest.AMIMetadata.Name, appConfig.Predastore.Bucket, time.Now().Unix())
+	manifest.AMIMetadata.ImageID = volumeId
+
 	manifest.AMIMetadata.Description = fmt.Sprintf("%s cloud image prepared for Hive", manifest.AMIMetadata.Name)
 	manifest.AMIMetadata.Architecture = image.Arch
 	manifest.AMIMetadata.PlatformDetails = image.Platform
@@ -317,7 +320,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	manifest.AMIMetadata.VolumeSizeGiB = uint64(imageStat.Size() / 1024 / 1024 / 1024)
 
 	// Volume Data
-	manifest.VolumeMetadata.VolumeID = "" // Assigned on creation
+	manifest.VolumeMetadata.VolumeID = volumeId // TODO: Confirm if unique, e.g vol-, if ami- used
 	manifest.VolumeMetadata.VolumeName = manifest.AMIMetadata.Name
 	manifest.VolumeMetadata.TenantID = "system"
 	manifest.VolumeMetadata.SizeGiB = manifest.AMIMetadata.VolumeSizeGiB
@@ -326,8 +329,6 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	manifest.VolumeMetadata.CreatedAt = time.Now()
 	manifest.VolumeMetadata.VolumeType = "gp3"
 	manifest.VolumeMetadata.IOPS = 1000
-
-	volumeId := viperblock.GenerateVolumeID("ami", manifest.AMIMetadata.Name, appConfig.Predastore.Bucket, time.Now().Unix())
 
 	// Write the manifest to disk
 	// Save as JSON

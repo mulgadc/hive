@@ -21,7 +21,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/service"
 	"github.com/mulgadc/hive/hive/services/nats"
@@ -158,57 +157,67 @@ var viperblockStartCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Starting viperblock service...")
 
+		cfgFile := viper.GetString("config")
+
+		if cfgFile == "" {
+			fmt.Println("Config file is not set")
+			return
+		}
+
+		fmt.Println("Loading config from:", cfgFile)
+
+		// TODO: Support ENV vars, CLI, otherwise revert to config.LoadConfig()
+		appConfig, err := config.LoadConfig(cfgFile)
+
+		if err != nil {
+			fmt.Println("Error loading config file:", err)
+			return
+		}
+
 		natsHost := viper.GetString("nats-host")
 
-		if natsHost == "" {
-			err := fmt.Errorf("nats-host must be defined")
-			slog.Error(err.Error())
-			os.Exit(1)
+		if natsHost != "" {
+			fmt.Println("Overwriting natsHost:", natsHost)
+			appConfig.NATS.Host = natsHost
 		}
 
 		s3Host := viper.GetString("s3-host")
 
-		if s3Host == "" {
-			err := fmt.Errorf("s3-host must be defined")
-			slog.Error(err.Error())
-			os.Exit(1)
+		if s3Host != "" {
+			fmt.Println("Overwriting s3host:", s3Host)
+			appConfig.Predastore.Host = s3Host
 		}
 
 		s3Bucket := viper.GetString("s3-bucket")
 
-		if s3Bucket == "" {
-			err := fmt.Errorf("s3-bucket must be defined")
-			slog.Error(err.Error())
-			os.Exit(1)
+		if s3Bucket != "" {
+			fmt.Println("Overwriting s3bucket:", s3Bucket)
+			appConfig.Predastore.Bucket = s3Bucket
 		}
 
 		s3Region := viper.GetString("s3-region")
 
-		if s3Region == "" {
-			err := fmt.Errorf("s3-region must be defined")
-			slog.Error(err.Error())
-			os.Exit(1)
+		if s3Region != "" {
+			fmt.Println("Overwriting s3Region:", s3Region)
+			appConfig.Predastore.Region = s3Region
 		}
 
 		accessKey := viper.GetString("access-key")
-		if accessKey == "" {
-			err := fmt.Errorf("access-key must be defined")
-			slog.Error(err.Error())
-			os.Exit(1)
+		if accessKey != "" {
+			fmt.Println("Overwriting access-key:", accessKey)
+			appConfig.Predastore.AccessKey = accessKey
 		}
 
 		secretKey := viper.GetString("secret-key")
-		if secretKey == "" {
-			err := fmt.Errorf("secret-key must be defined")
-			slog.Error(err.Error())
-			os.Exit(1)
+		if secretKey != "" {
+			fmt.Println("Overwriting secret-key:", secretKey)
+			appConfig.Predastore.SecretKey = secretKey
 		}
 
 		baseDir := viper.GetString("base-dir")
-		if baseDir == "" {
-			err := fmt.Errorf("base-dir must be defined")
-			slog.Error(err.Error())
-			os.Exit(1)
+		if baseDir != "" {
+			fmt.Println("Overwriting base-dir:", baseDir)
+			appConfig.Predastore.BaseDir = baseDir
 		}
 
 		pluginPath := viper.GetString("plugin-path")
@@ -227,14 +236,14 @@ var viperblockStartCmd = &cobra.Command{
 		}
 
 		service, err := service.New("viperblock", &viperblockd.Config{
-			NatsHost:   natsHost,
+			NatsHost:   appConfig.NATS.Host,
 			PluginPath: pluginPath,
-			S3Host:     s3Host,
-			Bucket:     s3Bucket,
-			Region:     s3Region,
-			AccessKey:  accessKey,
-			SecretKey:  secretKey,
-			BaseDir:    baseDir,
+			S3Host:     appConfig.Predastore.Host,
+			Bucket:     appConfig.Predastore.Bucket,
+			Region:     appConfig.Predastore.Region,
+			AccessKey:  appConfig.Predastore.AccessKey,
+			SecretKey:  appConfig.Predastore.SecretKey,
+			BaseDir:    appConfig.Predastore.BaseDir,
 		})
 
 		if err != nil {
@@ -469,8 +478,6 @@ var awsgwStartCmd = &cobra.Command{
 		}
 
 		service, err := service.New("awsgw", appConfig)
-
-		spew.Dump(appConfig)
 
 		if err != nil {
 			fmt.Println("Error starting awsgw service:", err)

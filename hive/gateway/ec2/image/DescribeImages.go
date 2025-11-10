@@ -1,15 +1,12 @@
 package gateway_ec2_image
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
-	"log/slog"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/handlers/ec2/image"
-	"github.com/mulgadc/hive/hive/utils"
+	"github.com/nats-io/nats.go"
 )
 
 /*
@@ -91,7 +88,7 @@ func ValidateDescribeImagesInput(input *ec2.DescribeImagesInput) (err error) {
 	return
 }
 
-func DescribeImages(input *ec2.DescribeImagesInput) (output ec2.DescribeImagesOutput, err error) {
+func DescribeImages(input *ec2.DescribeImagesInput, natsConn *nats.Conn) (output ec2.DescribeImagesOutput, err error) {
 
 	// Validate input
 	err = ValidateDescribeImagesInput(input)
@@ -100,32 +97,15 @@ func DescribeImages(input *ec2.DescribeImagesInput) (output ec2.DescribeImagesOu
 		return output, err
 	}
 
-	// Marshal to JSON, to send over the wire for processing (NATS)
-	jsonData, err := json.Marshal(input)
-	if err != nil {
-		return output, fmt.Errorf("failed to marshal input to JSON: %w", err)
-	}
-
-	// Run the simulated JSON request via handler, which will return a JSON response
-	handler := handlers_ec2_image.NewDescribeImagesHandler(handlers_ec2_image.NewMockImageService())
-	jsonResp := handler.Process(jsonData)
-
-	// Validate if the response is successful or an error
-	responseError, err := utils.ValidateErrorPayload(jsonResp)
+	// Create NATS service and call handler
+	imageService := handlers_ec2_image.NewNATSImageService(natsConn)
+	result, err := imageService.DescribeImages(input)
 
 	if err != nil {
-		if responseError.Code != nil {
-			slog.Error("DescribeImages failed", "err", responseError.Code)
-			return output, errors.New(*responseError.Code)
-		}
 		return output, err
 	}
 
-	// Unmarshal the JSON response back into output struct
-	err = json.Unmarshal(jsonResp, &output)
-	if err != nil {
-		return output, fmt.Errorf("failed to unmarshal JSON response to DescribeImagesOutput: %w", err)
-	}
-
+	// Return result
+	output = *result
 	return output, nil
 }

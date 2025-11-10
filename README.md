@@ -72,9 +72,9 @@ cd hive
 
 # Provision a local EC2 instance running on Hive
 aws --endpoint-url https://localhost:9999 --no-verify-ssl ec2 run-instances \
-  --image-id ami-185c47c7b6d31bba9 \
+  --image-id ami-3b4e9c085d9eb0783 \
   --instance-type t3.micro \
-  --key-name test-keypair \
+  --key-name ben \
   --security-group-ids sg-0123456789abcdef0 \
   --subnet-id subnet-6e7f829e \
   --count 1

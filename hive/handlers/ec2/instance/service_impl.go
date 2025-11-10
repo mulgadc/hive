@@ -580,7 +580,8 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 		keyName = *input.KeyName
 	}
 
-	sshKey, err := s3c.Read(fmt.Sprintf("/ssh/%s", keyName))
+	// TODO: Mock for account ID, replace with real account ID retrieval
+	sshKey, err := s3c.Read(fmt.Sprintf("/keys/123456789/%s", keyName))
 	if err != nil {
 		slog.Error("failed to read SSH key", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)

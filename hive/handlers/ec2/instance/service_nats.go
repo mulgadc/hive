@@ -30,8 +30,8 @@ func (s *NATSInstanceService) RunInstances(input *ec2.RunInstancesInput) (*ec2.R
 		return nil, fmt.Errorf("failed to marshal input: %w", err)
 	}
 
-	// Send request to daemon via NATS with 30 second timeout
-	msg, err := s.natsConn.Request("ec2.RunInstances", jsonData, 30*time.Second)
+	// Send request to daemon via NATS with 5 minute timeout
+	msg, err := s.natsConn.Request("ec2.RunInstances", jsonData, 5*time.Minute)
 	if err != nil {
 		slog.Error("NATSInstanceService: Failed to send NATS request", "err", err)
 		return nil, fmt.Errorf("NATS request failed: %w", err)

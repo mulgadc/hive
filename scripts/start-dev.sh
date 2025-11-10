@@ -173,11 +173,13 @@ if [ ! -f "$NBD_PLUGIN_PATH" ]; then
     cd "$PROJECT_ROOT"
 fi
 
-export HIVE_VIPERBLOCK_S3_HOST=0.0.0.0:8443
-export HIVE_VIPERBLOCK_S3_BUCKET=predastore
-export HIVE_VIPERBLOCK_S3_REGION=ap-southeast-2
+export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
+# Use config above for Viperblock settings
+#export HIVE_VIPERBLOCK_S3_HOST=0.0.0.0:8443
+#export HIVE_VIPERBLOCK_S3_BUCKET=predastore
+#export HIVE_VIPERBLOCK_S3_REGION=ap-southeast-2
+#export HIVE_NATS_HOST=0.0.0.0:4222
 export HIVE_VIPERBLOCK_PLUGIN_PATH=$NBD_PLUGIN_PATH
-export HIVE_NATS_HOST=0.0.0.0:4222
 export HIVE_BASE_DIR=$VB_BASE_DIR
 
 #VIPERBLOCK_CMD="air -c .air-viperblock.toml"

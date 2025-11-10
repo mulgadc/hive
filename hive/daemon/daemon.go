@@ -23,6 +23,7 @@ import (
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	gateway_ec2_instance "github.com/mulgadc/hive/hive/gateway/ec2/instance"
+	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
 	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
 	"github.com/mulgadc/hive/hive/qmp"
@@ -74,6 +75,7 @@ type Daemon struct {
 	resourceMgr     *ResourceManager
 	instanceService *handlers_ec2_instance.InstanceServiceImpl
 	keyService      *handlers_ec2_key.KeyServiceImpl
+	imageService    *handlers_ec2_image.ImageServiceImpl
 	ctx             context.Context
 	cancel          context.CancelFunc
 	shutdownWg      sync.WaitGroup
@@ -274,6 +276,9 @@ func (d *Daemon) Start() error {
 	// Create key service for handling EC2 key pair operations
 	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
 
+	// Create image service for handling EC2 AMI operations
+	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config)
+
 	log.Printf("Subscribing to subject pattern: %s", "ec2.launch")
 
 	// Subscribe to EC2 events with queue group (legacy topic for backward compatibility)
@@ -326,6 +331,15 @@ func (d *Daemon) Start() error {
 
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to NATS ec2.ImportKeyPair: %w", err)
+	}
+
+	log.Printf("Subscribing to subject pattern: %s", "ec2.DescribeImages")
+
+	// Subscribe to EC2 DescribeImages with queue group
+	d.natsSubscriptions["ec2.DescribeImages"], err = d.natsConn.QueueSubscribe("ec2.DescribeImages", "hive-workers", d.handleEC2DescribeImages)
+
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeImages: %w", err)
 	}
 
 	// Subscribe to EC2 start instance events
@@ -1423,4 +1437,46 @@ func (d *Daemon) handleEC2ImportKeyPair(msg *nats.Msg) {
 	msg.Respond(jsonResponse)
 
 	slog.Info("handleEC2ImportKeyPair completed", "keyName", *output.KeyName, "fingerprint", *output.KeyFingerprint)
+}
+
+// handleEC2DescribeImages processes incoming EC2 DescribeImages requests
+func (d *Daemon) handleEC2DescribeImages(msg *nats.Msg) {
+	log.Printf("Received message on subject: %s", msg.Subject)
+	log.Printf("Message data: %s", string(msg.Data))
+
+	// Initialize describeImagesInput before unmarshaling into it
+	describeImagesInput := &ec2.DescribeImagesInput{}
+	var errResp []byte
+
+	errResp = utils.UnmarshalJsonPayload(describeImagesInput, msg.Data)
+
+	if errResp != nil {
+		msg.Respond(errResp)
+		slog.Error("Request does not match DescribeImagesInput")
+		return
+	}
+
+	slog.Info("Processing DescribeImages request")
+
+	// Delegate to image service for business logic (S3 listing)
+	output, err := d.imageService.DescribeImages(describeImagesInput)
+
+	if err != nil {
+		slog.Error("handleEC2DescribeImages service.DescribeImages failed", "err", err)
+		errResp = utils.GenerateErrorPayload(err.Error())
+		msg.Respond(errResp)
+		return
+	}
+
+	// Respond to NATS with DescribeImagesOutput
+	jsonResponse, err := json.Marshal(output)
+	if err != nil {
+		slog.Error("handleEC2DescribeImages failed to marshal output", "err", err)
+		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+		msg.Respond(errResp)
+		return
+	}
+	msg.Respond(jsonResponse)
+
+	slog.Info("handleEC2DescribeImages completed", "count", len(output.Images))
 }
