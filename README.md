@@ -66,32 +66,9 @@ cd hive
 # Setup dependencies and development environment
 ./scripts/clone-deps.sh    # Clone viperblock + predastore repositories
 ./scripts/dev-setup.sh     # Setup complete development environment
-
-# Start all services (NATS, Predastore, Viperblock, Hive Gateway)
-./scripts/start-dev.sh
-
-# Provision a local EC2 instance running on Hive
-aws --endpoint-url https://localhost:9999 --no-verify-ssl ec2 run-instances \
-  --image-id ami-3b4e9c085d9eb0783 \
-  --instance-type t3.micro \
-  --key-name ben \
-  --security-group-ids sg-0123456789abcdef0 \
-  --subnet-id subnet-6e7f829e \
-  --count 1
-
-# Validate instance
-aws --endpoint-url https://localhost:9999 --no-verify-ssl ec2 describe-instances
-
-# Stop all services when done
-./scripts/stop-dev.sh
 ```
 
-**Development Features:**
-
-- **Hot Reloading**: Automatic service restarts during development
-- **Multi-Repository**: Seamless cross-component development workflow
-- **TLS Ready**: Auto-generated certificates for HTTPS endpoints
-- **AWS Compatible**: Test with real AWS CLI and SDKs
+Next, follow the detailed [Installation Guide](./INSTALL.md) to bootstrap a new environment with SSH keys, AMI (OS images) and how to spin up new EC2 instances using Hive.
 
 ### Component Repositories
 
