@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/qmp"
 )
@@ -44,6 +45,14 @@ type VM struct {
 
 	// User attributes (user initiated stop/delete)
 	Attributes qmp.Attributes `json:"attributes"`
+
+	// EC2 API metadata - stored for AWS API compatibility
+	// RunInstancesInput contains the original request parameters (ImageId, KeyName, UserData, etc.)
+	RunInstancesInput *ec2.RunInstancesInput `json:"run_instances_input,omitempty"`
+	// Reservation contains the reservation metadata (ReservationId, OwnerId, etc.)
+	Reservation *ec2.Reservation `json:"reservation,omitempty"`
+	// Instance contains the current instance state and metadata
+	Instance *ec2.Instance `json:"instance,omitempty"`
 }
 
 type Instances struct {

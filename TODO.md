@@ -2,6 +2,21 @@
 
 This roadmap has been integrated into the comprehensive [HIVE_DEVELOPMENT_PLAN.md](HIVE_DEVELOPMENT_PLAN.md).
 
+## Update Nov 2025
+
+* Implement multi-tenant support
+* Move config settings from ~/hive/*.toml, to using Nats Jetstream for core config which can be synced between nodes.
+* Implement a lightweight IAM using Nats Jetstream, vs current config files for auth settings.
+* Implement Reed Solomon Encoding for Predastore (S3) objects and a WAL implementation, for storing multiple objects in a single shard (e.g 4MB), with the WAL referencing the location of each object (e.g 4kb min)
+    * Implement basic KY lookup, object key sha512 (bucket/key), location to shard on S3 (obj.0000124.bin), read WAL (e.g first 4096 bytes) to determine location of the object. e.g key-1234 => obj.0000124.bin, wal header (4096 bytes) > key-1234 == offset location (seek) 16384, len 32768.
+    * Read multiple nodes (e.g 5 predastore instances, k = 3 (data shards), n = 5 (total shards), n - k = 2 (parity shards) )
+* Complete core scaffolding AWS SDK/API requirements (ec2 describe-instances, run-instances, etc)
+* Implement UEFI support for image downloads and `qemu` exec in `vm.go`
+* Confirm Alpine Linux, fails import image AMI > (run-instance) ""Failed to read block from AMI source" err="request out of range" - Block size correct?
+* Improve shutdown gracefully, `./scripts/stop-dev.sh` waits 60 seconds, while qemu/nbd could still be shutting down.
+* Add delete-volume support via EBS (s3 vol-*) for terminated instance
+* Add default LRU cache support for viperblock, depending on the instance type / volume size and system memory available.
+
 ## Original TODO Items → Development Plan Integration
 
 ### ✅ **Completed Integration**

@@ -32,7 +32,8 @@ type AWSGWConfig struct {
 	TLSCert string `mapstructure:"tlscert"`
 	Config  string `mapstructure:"config"`
 
-	Debug bool `mapstructure:"debug"`
+	Debug         bool `mapstructure:"debug"`
+	ExpectedNodes int  `mapstructure:"expected_nodes"`
 }
 
 type PredastoreConfig struct {

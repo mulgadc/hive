@@ -117,32 +117,8 @@ func launchService(cfg *Config) (err error) {
 			return
 		}
 
-		/*
-
-			s3cfg := s3.S3Config{
-				VolumeName: ebsRequest.Volume,
-				Bucket:     cfg.Bucket,
-				Region:     cfg.Region,
-				AccessKey:  cfg.AccessKey,
-				SecretKey:  cfg.SecretKey,
-				Host:       cfg.S3Host,
-			}
-
-			vbconfig := viperblock.VB{
-				VolumeName: ebsRequest.Volume,
-				VolumeSize: 1, // Workaround, calculated on LoadState()
-				BaseDir:    cfg.BaseDir,
-				Cache: viperblock.Cache{
-					Config: viperblock.CacheConfig{
-						Size: 0,
-					},
-				},
-				VolumeConfig: viperblock.VolumeConfig{},
-			}
-
-			vb, err := viperblock.New(vbconfig, "s3", s3cfg)
-
-		*/
+		// TODO: Improve
+		nc.Publish("ebs.delete.response", []byte(fmt.Sprintf(`{"volume":"%s","deleted":true}`, ebsRequest.Volume)))
 
 	})
 
@@ -226,6 +202,7 @@ func launchService(cfg *Config) (err error) {
 			BaseDir:    cfg.BaseDir,
 			Cache: viperblock.Cache{
 				Config: viperblock.CacheConfig{
+					// TODO: Improve, based on system memory
 					Size: 0,
 				},
 			},
@@ -233,6 +210,13 @@ func launchService(cfg *Config) (err error) {
 		}
 
 		vb, err := viperblock.New(vbconfig, "s3", s3cfg)
+
+		// TODO: Improve
+		// 5% of system memory for cache for master volumes
+		if !strings.HasSuffix("-cloudinit", ebsRequest.Name) && !strings.HasSuffix("-efi", ebsRequest.Name) {
+			slog.Info("Setting cache size to 5% of system memory for volume", "volume", ebsRequest.Name)
+			vb.SetCacheSystemMemory(5)
+		}
 
 		if err != nil {
 			ebsResponse.Error = fmt.Sprintf("Failed to connect to Viperblock store: %v", err)
@@ -430,44 +414,6 @@ func launchService(cfg *Config) (err error) {
 		utils.KillProcess(volume.PID)
 	}
 	cfg.mu.Unlock()
-
-	/*
-		opts := &server.Options{}
-
-		// Initialize new server with options
-		ns, err := server.NewServer(opts)
-
-		if err != nil {
-			panic(err)
-		}
-
-		go func() {
-			ns.Start()
-		}()
-
-		// Wait for server to be ready for connections
-		if !ns.ReadyForConnections(4 * time.Second) {
-			panic("not ready for connection")
-		}
-
-		// Create a channel to receive shutdown signals
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-		// Wait for shutdown signal
-		<-sigChan
-		log.Println("Shutting down gracefully...")
-
-		// Graceful shutdown with timeout
-		//ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		//defer cancel()
-
-		// Shutdown the server, use a context to timeout after 4 secs
-		ns.Shutdown()
-
-		log.Println("Server stopped")
-
-	*/
 
 	return nil
 

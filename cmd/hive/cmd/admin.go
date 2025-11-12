@@ -387,8 +387,9 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Println(tmpDir)
 	defer os.RemoveAll(tmpDir)
+
+	fmt.Printf("✅ Image import complete. Image-ID (AMI): %s\n", volumeId)
 
 }
 
@@ -398,7 +399,7 @@ func runimagesListCmd(cmd *cobra.Command, args []string) {
 	//fmt.Println(availableImages)
 
 	tableData := pterm.TableData{
-		{"Name", "Distro", "Version", "Arch"},
+		{"NAME", "DISTRO", "VERSION", "ARCH", "BOOT"},
 	}
 
 	// Sort A .. Z
@@ -417,7 +418,7 @@ func runimagesListCmd(cmd *cobra.Command, args []string) {
 		img := utils.AvailableImages[k]
 
 		//for _, img := range utils.AvailableImages {
-		tableData = append(tableData, []string{img.Name, img.Distro, img.Version, img.Arch})
+		tableData = append(tableData, []string{img.Name, img.Distro, img.Version, img.Arch, img.BootMode})
 	}
 
 	// Create a table with the defined data.

@@ -132,15 +132,29 @@ func (s *InstanceServiceImpl) RunInstances(input *ec2.RunInstancesInput) (*vm.VM
 
 	// Create reservation response
 	reservation.SetReservationId(vm.GenerateEC2ReservationID())
+	reservation.SetOwnerId("123456789012") // TODO: Use actual owner ID from config
 
 	// TODO: Loop through multiple instance creation based on MinCount / MaxCount
 	reservation.Instances = make([]*ec2.Instance, 1)
-	reservation.Instances[0] = &ec2.Instance{
+	ec2Instance := &ec2.Instance{
 		State: &ec2.InstanceState{},
 	}
-	reservation.Instances[0].SetInstanceId(instance.ID)
-	reservation.Instances[0].State.SetCode(0)
-	reservation.Instances[0].State.SetName("pending")
+	ec2Instance.SetInstanceId(instance.ID)
+	ec2Instance.SetInstanceType(*input.InstanceType)
+	ec2Instance.SetImageId(*input.ImageId)
+	if input.KeyName != nil {
+		ec2Instance.SetKeyName(*input.KeyName)
+	}
+	ec2Instance.SetLaunchTime(time.Now())
+	ec2Instance.State.SetCode(0)
+	ec2Instance.State.SetName("pending")
+
+	reservation.Instances[0] = ec2Instance
+
+	// Store EC2 API metadata in VM for DescribeInstances compatibility
+	instance.RunInstancesInput = input
+	instance.Reservation = &reservation
+	instance.Instance = ec2Instance
 
 	// Handle block device mappings
 	if input.BlockDeviceMappings != nil && len(input.BlockDeviceMappings) > 0 {

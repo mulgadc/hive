@@ -283,11 +283,13 @@ func (d *Daemon) Start() error {
 	log.Printf("Subscribing to subject pattern: %s", "ec2.launch")
 
 	// Subscribe to EC2 events with queue group (legacy topic for backward compatibility)
-	d.natsSubscriptions["ec2.launch"], err = d.natsConn.QueueSubscribe("ec2.launch", "hive-workers", d.handleEC2RunInstances)
+	/*
+		d.natsSubscriptions["ec2.launch"], err = d.natsConn.QueueSubscribe("ec2.launch", "hive-workers", d.handleEC2RunInstances)
 
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.launch: %w", err)
-	}
+		if err != nil {
+			return fmt.Errorf("failed to subscribe to NATS ec2.launch: %w", err)
+		}
+	*/
 
 	log.Printf("Subscribing to subject pattern: %s", "ec2.RunInstances")
 
@@ -341,6 +343,15 @@ func (d *Daemon) Start() error {
 
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeImages: %w", err)
+	}
+
+	log.Printf("Subscribing to subject pattern: %s", "ec2.DescribeInstances")
+
+	// Subscribe to EC2 DescribeInstances - no queue group for multi-node fan-out
+	d.natsSubscriptions["ec2.DescribeInstances"], err = d.natsConn.Subscribe("ec2.DescribeInstances", d.handleEC2DescribeInstances)
+
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeInstances: %w", err)
 	}
 
 	// Subscribe to EC2 start instance events
@@ -455,9 +466,9 @@ func (d *Daemon) handleEC2StartInstances(msg *nats.Msg) {
 	instance, ok := d.Instances.VMS[ec2StartInstance.InstanceID]
 
 	if !ok {
-		slog.Error("EC2 Describe Request - Instance not found", "instanceId", ec2StartInstanceResponse.InstanceID)
+		slog.Error("EC2 Start Request - Instance not found", "instanceId", ec2StartInstanceResponse.InstanceID)
 		ec2StartInstanceResponse.InstanceID = ec2StartInstance.InstanceID
-		ec2StartInstanceResponse.Error = fmt.Sprintf("Instance %s not found", ec2StartInstanceResponse.InstanceID)
+		ec2StartInstanceResponse.Error = awserrors.ErrorInvalidInstanceIDNotFound
 		ec2StartInstanceResponse.Respond(msg)
 		return
 	}
@@ -579,10 +590,13 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 	}
 }
 
-// handleEC2Events processes incoming EC2 events
+// handleEC2Events processes incoming EC2 events (start, stop, terminate)
 func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 
 	var command qmp.Command
+	var resp *qmp.QMPResponse
+	var err error
+
 	if err := json.Unmarshal(msg.Data, &command); err != nil {
 		log.Printf("Error unmarshaling QMP command: %v", err)
 		return
@@ -600,34 +614,96 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 		return
 	}
 
-	// Send the command to the instance
-	resp, err := d.SendQMPCommand(instance.QMPClient, command.QMPCommand, instance.ID)
+	// Start an instance
+	if command.Attributes.StartInstance {
+		slog.Info("Starting instance", "id", command.ID)
 
+		// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
+		err := d.LaunchInstance(instance)
+
+		if err != nil {
+			slog.Error("handleEC2RunInstances LaunchInstance failed", "err", err)
+			// TODO: Confirm LaunchInstances does this - Free the resource
+			instanceType := d.resourceMgr.instanceTypes[instance.InstanceType]
+			d.resourceMgr.deallocate(instanceType)
+			return
+		}
+
+		slog.Info("handleEC2RunInstances launched", "instanceId", instance.ID)
+
+		resp = &qmp.QMPResponse{
+			Return: []byte(fmt.Sprintf(`{"status":"running","instanceId":"%s"}`, instance.ID)),
+		}
+
+	} else {
+
+		// Send the command to the instance
+		resp, err = d.SendQMPCommand(instance.QMPClient, command.QMPCommand, instance.ID)
+
+		if err != nil {
+			slog.Error("Failed to send QMP command", "err", err)
+			return
+		}
+
+		slog.Debug("RAW QMP Response", "resp", string(resp.Return))
+
+		// Unmarshal the response
+		target, ok := qmp.CommandResponseTypes[command.QMPCommand.Execute]
+		if !ok {
+			slog.Warn("Unhandled QMP command", "cmd", command.QMPCommand.Execute)
+			return
+		}
+
+		if err := json.Unmarshal(resp.Return, target); err != nil {
+			slog.Error("Failed to unmarshal QMP response", "cmd", command.QMPCommand.Execute, "err", err)
+			return
+		}
+
+	}
+
+	// If a terminate command, clean up resources
+	if command.Attributes.TerminateInstance {
+		slog.Info("Terminating instance", "id", command.ID)
+
+		// Improve, need to pass a map
+		terminateInstance := make(map[string]*vm.VM)
+		terminateInstance[instance.ID] = instance
+		err = d.stopInstance(terminateInstance, true)
+
+		if err != nil {
+			slog.Error("Failed to terminate instance", "err", err)
+			return
+		}
+
+		// Last, delete the instance volumes
+
+		// Free resources
+		instanceType := d.resourceMgr.instanceTypes[instance.InstanceType]
+		d.resourceMgr.deallocate(instanceType)
+
+		// Remove instance from state
+		d.Instances.Mu.Lock()
+		delete(d.Instances.VMS, instance.ID)
+		d.Instances.Mu.Unlock()
+
+		slog.Info("Instance terminated", "id", command.ID)
+	} else {
+
+		// Update the instance attributes
+		d.Instances.Mu.Lock()
+		instance.Attributes = command.Attributes
+		d.Instances.Mu.Unlock()
+
+	}
+
+	// Write the state to disk
+	err = d.WriteState()
 	if err != nil {
-		slog.Error("Failed to send QMP command", "err", err)
-		return
+		slog.Error("Failed to write state to disk", "err", err)
 	}
 
-	slog.Debug("RAW QMP Response", "resp", string(resp.Return))
-
-	// Unmarshal the response
-	target, ok := qmp.CommandResponseTypes[command.QMPCommand.Execute]
-	if !ok {
-		slog.Warn("Unhandled QMP command", "cmd", command.QMPCommand.Execute)
-		return
-	}
-
-	if err := json.Unmarshal(resp.Return, target); err != nil {
-		slog.Error("Failed to unmarshal QMP response", "cmd", command.QMPCommand.Execute, "err", err)
-		return
-	}
-
+	// Respond to NATS
 	msg.Respond(resp.Return)
-
-	// Update the instance attributes
-	d.Instances.Mu.Lock()
-	instance.Attributes = command.Attributes
-	d.Instances.Mu.Unlock()
 
 }
 
@@ -812,6 +888,105 @@ func (d *Daemon) handleEC2DeleteKeyPair(msg *nats.Msg) {
 	slog.Info("handleEC2DeleteKeyPair completed")
 }
 
+func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) error {
+
+	// Signal to shutdown each VM
+	var wg sync.WaitGroup
+
+	// Run asynchronously within a worker group
+	for _, instance := range instances {
+		instance := instance // capture loop variable
+
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			// Send shutdown command
+			_, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "system_powerdown"}, instance.ID)
+
+			if err != nil {
+				slog.Error("Failed to send system_powerdown", "id", instance.ID, "err", err)
+				return
+			}
+
+			// Wait for PID file removal
+			err = utils.WaitForPidFileRemoval(instance.ID, 60*time.Second)
+
+			if err != nil {
+				slog.Error("Timeout waiting for PID file removal", "id", instance.ID, "err", err)
+
+				// Try force killing the process
+				pid, err := utils.ReadPidFile(instance.ID)
+				if err != nil {
+					slog.Error("Failed to read PID file", "id", instance.ID, "err", err)
+				} else {
+					slog.Info("Killing process", "pid", pid, "id", instance.ID)
+					// Send SIG directly if QMP fails
+					utils.KillProcess(pid)
+				}
+			}
+
+			// Unmount all EBS volumes
+			instance.EBSRequests.Mu.Lock()
+			defer instance.EBSRequests.Mu.Unlock()
+
+			for _, ebsRequest := range instance.EBSRequests.Requests {
+
+				// Send the volume payload as JSON
+				ebsUnMountRequest, err := json.Marshal(ebsRequest)
+
+				if err != nil {
+					slog.Error("Failed to marshal volume payload", "err", err)
+					continue
+				}
+
+				msg, err := d.natsConn.Request("ebs.unmount", ebsUnMountRequest, 30*time.Second)
+				if err != nil {
+					slog.Error("Failed to unmount volume", "name", ebsRequest.Name, "id", instance.ID, "err", err)
+				} else {
+					slog.Info("Unmounted Viperblock volume", "id", instance.ID, "data", string(msg.Data))
+				}
+			}
+
+			// If flagged for termination (delete Volume)
+			if deleteVolume {
+				for _, ebsRequest := range instance.EBSRequests.Requests {
+
+					// Send the volume payload as JSON
+					ebsDeleteRequest, err := json.Marshal(ebsRequest)
+
+					if err != nil {
+						slog.Error("Failed to marshal volume payload", "err", err)
+						continue
+					}
+
+					msg, err := d.natsConn.Request("ebs.delete", ebsDeleteRequest, 30*time.Second)
+					if err != nil {
+						slog.Error("Failed to delete volume", "name", ebsRequest.Name, "id", instance.ID, "err", err)
+					} else {
+						slog.Info("Deleted Viperblock volume", "id", instance.ID, "data", string(msg.Data))
+					}
+				}
+			}
+
+		}()
+	}
+
+	// Wait for all shutdowns to finish
+	wg.Wait()
+
+	// Unsubscribe from NATS subjects that match instances
+	for _, instance := range instances {
+		slog.Info("Unsubscribing from NATS subject", "instance", instance.ID)
+		d.natsSubscriptions[fmt.Sprintf("ec2.cmd.%s", instance.ID)].Unsubscribe()
+		// TODO: Remove redundant subscription if not used
+		//d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)].Unsubscribe()
+	}
+	return nil
+
+}
+
 func (d *Daemon) setupShutdown() {
 	d.shutdownWg.Add(1)
 	go func() {
@@ -826,67 +1001,8 @@ func (d *Daemon) setupShutdown() {
 		// Cancel context
 		d.cancel()
 
-		// Signal to shutdown each VM
-		var wg sync.WaitGroup
-
-		for _, instance := range d.Instances.VMS {
-			instance := instance // capture loop variable
-			wg.Add(1)
-
-			go func() {
-				defer wg.Done()
-
-				// Send shutdown command
-				_, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "system_powerdown"}, instance.ID)
-
-				if err != nil {
-					slog.Error("Failed to send system_powerdown", "id", instance.ID, "err", err)
-					return
-				}
-
-				// Wait for PID file removal
-				err = utils.WaitForPidFileRemoval(instance.ID, 60*time.Second)
-
-				if err != nil {
-					slog.Error("Timeout waiting for PID file removal", "id", instance.ID, "err", err)
-
-					// Try force killing the process
-					pid, err := utils.ReadPidFile(instance.ID)
-					if err != nil {
-						slog.Error("Failed to read PID file", "id", instance.ID, "err", err)
-					} else {
-						slog.Info("Killing process", "pid", pid, "id", instance.ID)
-						// Send SIG directly if QMP fails
-						utils.KillProcess(pid)
-					}
-				}
-
-				// Unmount all EBS volumes
-				instance.EBSRequests.Mu.Lock()
-				defer instance.EBSRequests.Mu.Unlock()
-
-				for _, ebsRequest := range instance.EBSRequests.Requests {
-
-					// Send the volume payload as JSON
-					ebsUnMountRequest, err := json.Marshal(ebsRequest)
-
-					if err != nil {
-						slog.Error("Failed to marshal volume payload", "err", err)
-						continue
-					}
-
-					msg, err := d.natsConn.Request("ebs.unmount", ebsUnMountRequest, 30*time.Second)
-					if err != nil {
-						slog.Error("Failed to unmount volume", "name", ebsRequest.Name, "id", instance.ID, "err", err)
-					} else {
-						slog.Info("Unmounted Viperblock volume", "id", instance.ID, "data", string(msg.Data))
-					}
-				}
-			}()
-		}
-
-		// Wait for all shutdowns to finish
-		wg.Wait()
+		// Pass instances to terminate
+		d.stopInstance(d.Instances.VMS, false)
 
 		// Final cleanup
 		for _, sub := range d.natsSubscriptions {
@@ -950,7 +1066,7 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 					// Unsubscribe from the NATS subject
 					slog.Info("Unsubscribing from NATS subject", "instance", instance.ID)
 					d.natsSubscriptions[fmt.Sprintf("ec2.cmd.%s", instance.ID)].Unsubscribe()
-					d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)].Unsubscribe()
+					//d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)].Unsubscribe()
 
 					// Close the QMP client connection
 					slog.Info("Closing QMP client connection", "instance", instance.ID)
@@ -1031,12 +1147,15 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 		return err
 	}
 
-	d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)], err = d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.describe.%s", instance.ID), "hive-events", d.handleEC2Describe)
+	// TODO: Replaced with describe-instances with Inbox subscription
+	/*
+		d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)], err = d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.describe.%s", instance.ID), "hive-events", d.handleEC2Describe)
 
-	if err != nil {
-		slog.Error("Failed to subscribe to NATS ec2.describe", "id", instance.ID, "err", err)
-		return err
-	}
+		if err != nil {
+			slog.Error("Failed to subscribe to NATS ec2.describe", "id", instance.ID, "err", err)
+			return err
+		}
+	*/
 
 	// Step 9: Update the instance metadata for running state and volume attached
 	// Marshal to a JSON file
@@ -1044,6 +1163,12 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	d.Instances.Mu.Lock()
 	// Update to running state
 	instance.Status = "running"
+
+	// Update EC2 Instance state for API compatibility
+	if instance.Instance != nil {
+		instance.Instance.State.SetCode(16) // 16 = running
+		instance.Instance.State.SetName("running")
+	}
 
 	d.Instances.VMS[instance.ID] = instance
 	d.Instances.Mu.Unlock()
@@ -1487,4 +1612,98 @@ func (d *Daemon) handleEC2DescribeImages(msg *nats.Msg) {
 	msg.Respond(jsonResponse)
 
 	slog.Info("handleEC2DescribeImages completed", "count", len(output.Images))
+}
+
+// handleEC2DescribeInstances processes incoming EC2 DescribeInstances requests
+// This handler responds with all instances running on this node
+func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
+	log.Printf("Received message on subject: %s", msg.Subject)
+	log.Printf("Message data: %s", string(msg.Data))
+
+	// Initialize describeInstancesInput before unmarshaling into it
+	describeInstancesInput := &ec2.DescribeInstancesInput{}
+	var errResp []byte
+
+	errResp = utils.UnmarshalJsonPayload(describeInstancesInput, msg.Data)
+
+	if errResp != nil {
+		msg.Respond(errResp)
+		slog.Error("Request does not match DescribeInstancesInput")
+		return
+	}
+
+	slog.Info("Processing DescribeInstances request from this node")
+
+	// Build response with reservations from instances on this node
+	var reservations []*ec2.Reservation
+
+	d.Instances.Mu.Lock()
+	defer d.Instances.Mu.Unlock()
+
+	// Filter instances if specific instance IDs were requested
+	instanceIDFilter := make(map[string]bool)
+	if describeInstancesInput.InstanceIds != nil && len(describeInstancesInput.InstanceIds) > 0 {
+		for _, id := range describeInstancesInput.InstanceIds {
+			if id != nil {
+				instanceIDFilter[*id] = true
+			}
+		}
+	}
+
+	// Iterate through all instances on this node
+	for _, instance := range d.Instances.VMS {
+		// Skip if filtering by instance IDs and this instance is not in the filter
+		if len(instanceIDFilter) > 0 && !instanceIDFilter[instance.ID] {
+			continue
+		}
+
+		// Use stored reservation metadata if available
+		if instance.Reservation != nil && instance.Instance != nil {
+			// Create a copy of the reservation with updated instance state
+			reservation := *instance.Reservation
+
+			// Update the instance state to current state
+			instanceCopy := *instance.Instance
+			instanceCopy.State = &ec2.InstanceState{}
+
+			// Map internal status to EC2 state codes
+			switch instance.Status {
+			case "pending", "provisioning":
+				instanceCopy.State.SetCode(0)
+				instanceCopy.State.SetName("pending")
+			case "running":
+				instanceCopy.State.SetCode(16)
+				instanceCopy.State.SetName("running")
+			case "stopped":
+				instanceCopy.State.SetCode(80)
+				instanceCopy.State.SetName("stopped")
+			case "terminated":
+				instanceCopy.State.SetCode(48)
+				instanceCopy.State.SetName("terminated")
+			default:
+				instanceCopy.State.SetCode(0)
+				instanceCopy.State.SetName("pending")
+			}
+
+			reservation.Instances = []*ec2.Instance{&instanceCopy}
+			reservations = append(reservations, &reservation)
+		}
+	}
+
+	// Create the response
+	output := &ec2.DescribeInstancesOutput{
+		Reservations: reservations,
+	}
+
+	// Respond to NATS with DescribeInstancesOutput
+	jsonResponse, err := json.Marshal(output)
+	if err != nil {
+		slog.Error("handleEC2DescribeInstances failed to marshal output", "err", err)
+		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+		msg.Respond(errResp)
+		return
+	}
+	msg.Respond(jsonResponse)
+
+	slog.Info("handleEC2DescribeInstances completed", "count", len(reservations))
 }

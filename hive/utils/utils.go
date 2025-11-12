@@ -34,6 +34,8 @@ import (
 
 // Helper functions for OS images
 
+var ErrQCOWDetected = errors.New("qcow format detected")
+
 type Images struct {
 	Name         string    `json:"name"`
 	Description  string    `json:"description"`
@@ -62,6 +64,7 @@ var AvailableImages = map[string]Images{
 		URL:          "https://cdimage.debian.org/cdimage/cloud/bookworm/latest/debian-12-generic-amd64.tar.xz",
 		Checksum:     "https://cdimage.debian.org/cdimage/cloud/bookworm/latest/SHA512SUMS",
 		ChecksumType: "sha512",
+		BootMode:     "bios",
 		Starred:      true,
 	},
 
@@ -76,7 +79,7 @@ var AvailableImages = map[string]Images{
 		URL:          "https://cdimage.debian.org/cdimage/cloud/bookworm/latest/debian-12-generic-arm64.tar.xz",
 		Checksum:     "https://cdimage.debian.org/cdimage/cloud/bookworm/latest/SHA512SUMS",
 		ChecksumType: "sha512",
-		BootMode:     "uefi",
+		BootMode:     "bios",
 		Starred:      true,
 	},
 
@@ -107,10 +110,10 @@ var AvailableImages = map[string]Images{
 		Arch:         "x86_64",
 		Platform:     "Linux/UNIX",
 		CreatedAt:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
-		URL:          "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.tar.gz",
+		URL:          "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img",
 		Checksum:     "https://cloud-images.ubuntu.com/noble/current/SHA256SUMS",
 		ChecksumType: "sha256",
-		BootMode:     "uefi",
+		BootMode:     "bios",
 		Starred:      false,
 	},
 
@@ -123,10 +126,10 @@ var AvailableImages = map[string]Images{
 		Arch:         "arm64",
 		Platform:     "Linux/UNIX",
 		CreatedAt:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
-		URL:          "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.tar.gz",
+		URL:          "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img",
 		Checksum:     "https://cloud-images.ubuntu.com/noble/current/SHA256SUMS",
 		ChecksumType: "sha256",
-		BootMode:     "uefi",
+		BootMode:     "bios",
 		Starred:      false,
 	},
 
@@ -140,29 +143,32 @@ var AvailableImages = map[string]Images{
 		Arch:         "x86_64",
 		Platform:     "Linux/UNIX",
 		CreatedAt:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
-		URL:          "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/cloud/gcp_alpine-3.22.2-x86_64-uefi-cloudinit-metal-r0.raw.tar.gz",
-		Checksum:     "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/cloud/gcp_alpine-3.22.2-x86_64-uefi-cloudinit-metal-r0.raw.tar.gz.sha512",
+		URL:          "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/cloud/generic_alpine-3.22.2-x86_64-bios-cloudinit-r0.qcow2",
+		Checksum:     "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/cloud/generic_alpine-3.22.2-x86_64-bios-cloudinit-r0.qcow2.sha512",
 		ChecksumType: "sha512",
-		BootMode:     "uefi",
+		BootMode:     "bios",
 		Starred:      false,
 	},
 
-	"alpine-3.22.2-arm64":
-	// Alpine Linux (cloud init) arm64
-	{
-		Name:         "alpine-3.22.2-arm64",
-		Description:  "Alpine Linux 3.22.2 arm64 cloud image",
-		Distro:       "alpine",
-		Version:      "3.22.2",
-		Arch:         "arm64",
-		Platform:     "Linux/UNIX",
-		CreatedAt:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
-		URL:          "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/cloud/gcp_alpine-3.22.2-aarch64-uefi-cloudinit-metal-r0.raw.tar.gz",
-		Checksum:     "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/cloud/gcp_alpine-3.22.2-aarch64-uefi-cloudinit-metal-r0.raw.tar.gz.sha512",
-		ChecksumType: "sha512",
-		BootMode:     "uefi",
-		Starred:      false,
-	},
+	/*
+		"alpine-3.22.2-arm64":
+		// Alpine Linux (cloud init) arm64 (Requires UEFI boot, TODO)
+		{
+			Name:         "alpine-3.22.2-arm64",
+			Description:  "Alpine Linux 3.22.2 arm64 cloud image",
+			Distro:       "alpine",
+			Version:      "3.22.2",
+			Arch:         "arm64",
+			Platform:     "Linux/UNIX",
+			CreatedAt:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
+			URL:          "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/cloud/gcp_alpine-3.22.2-aarch64-uefi-cloudinit-metal-r0.raw.tar.gz",
+			Checksum:     "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/cloud/gcp_alpine-3.22.2-aarch64-uefi-cloudinit-metal-r0.raw.tar.gz.sha512",
+			ChecksumType: "sha512",
+			BootMode:     "uefi",
+			Starred:      false,
+		},
+	*/
+
 }
 
 func ReadPidFile(name string) (int, error) {
@@ -307,8 +313,8 @@ func KillProcess(pid int) error {
 
 		checks++
 
-		// If process is still running after 3 checks, force kill
-		if checks > 3 {
+		// If process is still running after 60 seconds, force kill
+		if checks > 60 {
 			err = process.Kill() // SIGKILL
 
 			if err != nil {
@@ -511,7 +517,7 @@ func ExtractDiskImageFromFile(imagepath string, tmpdir string) (diskimage string
 	//}
 
 	// Already in raw/image formt, confirm the file contains a valid disk image/MBR
-	if strings.HasSuffix(imagefile, ".raw") || strings.HasSuffix(imagefile, ".img") {
+	if strings.HasSuffix(imagefile, ".raw") || strings.HasSuffix(imagefile, ".img") || strings.HasSuffix(imagefile, ".qcow2") || strings.HasSuffix(imagefile, ".qcow") {
 
 		path, err := filepath.Abs(imagepath)
 
@@ -521,6 +527,41 @@ func ExtractDiskImageFromFile(imagepath string, tmpdir string) (diskimage string
 
 		// Validate the specified filename is indeed a disk image / MBR
 		err = validateDiskImagePath(path)
+
+		// Check error response
+
+		if errors.Is(err, ErrQCOWDetected) {
+
+			//fmt.Println("Extracting raw disk image from qcow2 file", "file", imagepath)
+
+			extractpath := fmt.Sprintf("%s/%s", tmpdir, imagefile)
+			extractpath = strings.TrimSuffix(extractpath, ".qcow2") + ".raw"
+
+			args = []string{
+				"convert",
+				"-f",
+				"qcow2",
+				"-O",
+				"raw",
+				imagepath,
+				"-C",
+				extractpath,
+			}
+
+			execCmd = "qemu-img"
+
+			//fmt.Println("Executing command:", "cmd", execCmd, "args", args)
+
+			cmd := exec.Command(execCmd, args...)
+			_, err = cmd.Output()
+
+			if err != nil {
+				return path, err
+			}
+
+			return extractpath, nil
+
+		}
 
 		return path, err
 
@@ -622,6 +663,8 @@ func validateDiskImagePath(diskimage string) (err error) {
 
 		if strings.Contains(filetype[1], "DOS/MBR boot sector") || strings.Contains(filetype[1], "Linux ") {
 			return nil
+		} else if strings.Contains(filetype[1], "QEMU QCOW") {
+			return ErrQCOWDetected
 		}
 
 	}

@@ -21,6 +21,7 @@ type GatewayConfig struct {
 	DisableLogging bool       `json:"disable_logging"`
 	NATSConn       *nats.Conn // Shared NATS connection for service communication
 	Config         string     // Shared AWS Gateway config for S3 auth
+	ExpectedNodes  int        // Number of expected hive nodes for multi-node operations
 }
 
 var supportedServices = map[string]bool{

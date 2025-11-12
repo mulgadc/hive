@@ -1,0 +1,106 @@
+package gateway_ec2_instance
+
+import (
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/qmp"
+	"github.com/nats-io/nats.go"
+)
+
+// StartInstances sends start commands to specified instances via NATS
+func StartInstances(input *ec2.StartInstancesInput, natsConn *nats.Conn) (*ec2.StartInstancesOutput, error) {
+	if input.InstanceIds == nil || len(input.InstanceIds) == 0 {
+		return nil, fmt.Errorf("no instance IDs provided")
+	}
+
+	slog.Info("StartInstances: Processing request", "instance_count", len(input.InstanceIds))
+
+	var stateChanges []*ec2.InstanceStateChange
+
+	// Process each instance
+	for _, instanceIDPtr := range input.InstanceIds {
+		if instanceIDPtr == nil {
+			continue
+		}
+		instanceID := *instanceIDPtr
+
+		// Build the QMP command to resume the instance
+		command := qmp.Command{
+			ID: instanceID,
+			QMPCommand: qmp.QMPCommand{
+				Execute:   "cont",
+				Arguments: map[string]interface{}{},
+			},
+			Attributes: qmp.Attributes{
+				StopInstance:      false,
+				TerminateInstance: false,
+				StartInstance:     true,
+			},
+		}
+
+		// Marshal the command
+		jsonData, err := json.Marshal(command)
+		if err != nil {
+			slog.Error("StartInstances: Failed to marshal command", "instance_id", instanceID, "err", err)
+			continue
+		}
+
+		// Send NATS request to the specific instance topic
+		subject := fmt.Sprintf("ec2.cmd.%s", instanceID)
+
+		// TODO: Improve, stop/termination may take significant time
+		msg, err := natsConn.Request(subject, jsonData, 30*time.Second)
+		if err != nil {
+			slog.Error("StartInstances: Failed to send command", "instance_id", instanceID, "err", err)
+			// Add failed state change
+			stateChange := &ec2.InstanceStateChange{
+				InstanceId: &instanceID,
+				CurrentState: &ec2.InstanceState{
+					Code: new(int64),
+					Name: new(string),
+				},
+				PreviousState: &ec2.InstanceState{
+					Code: new(int64),
+					Name: new(string),
+				},
+			}
+			*stateChange.CurrentState.Code = 80 // stopped
+			*stateChange.CurrentState.Name = "stopped"
+			*stateChange.PreviousState.Code = 80
+			*stateChange.PreviousState.Name = "stopped"
+			stateChanges = append(stateChanges, stateChange)
+			continue
+		}
+
+		slog.Info("StartInstances: Command sent successfully", "instance_id", instanceID, "response", string(msg.Data))
+
+		// Build state change response (stopped -> pending)
+		stateChange := &ec2.InstanceStateChange{
+			InstanceId: &instanceID,
+			CurrentState: &ec2.InstanceState{
+				Code: new(int64),
+				Name: new(string),
+			},
+			PreviousState: &ec2.InstanceState{
+				Code: new(int64),
+				Name: new(string),
+			},
+		}
+		*stateChange.CurrentState.Code = 0 // pending
+		*stateChange.CurrentState.Name = "pending"
+		*stateChange.PreviousState.Code = 80 // stopped
+		*stateChange.PreviousState.Name = "stopped"
+		stateChanges = append(stateChanges, stateChange)
+	}
+
+	output := &ec2.StartInstancesOutput{
+		StartingInstances: stateChanges,
+	}
+
+	slog.Info("StartInstances: Completed", "total_instances", len(stateChanges))
+	return output, nil
+}

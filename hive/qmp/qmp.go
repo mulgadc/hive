@@ -27,8 +27,9 @@ type Command struct {
 }
 
 type Attributes struct {
-	StopInstance   bool `json:"stop_instance"`
-	DeleteInstance bool `json:"delete_instance"`
+	StopInstance      bool `json:"stop_instance"`
+	TerminateInstance bool `json:"delete_instance"`
+	StartInstance     bool `json:"start_instance"`
 }
 
 // (QEMU) stop / cont (resume) / system_powerdown / system_reset / system_wakeup

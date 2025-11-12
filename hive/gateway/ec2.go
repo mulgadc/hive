@@ -23,8 +23,27 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 	// TODO: Generate for each action, unit test each, and invalid action
 	switch queryArgs["Action"] {
 
-	//case "DescribeInstances":
-	//	xmlOutput, err = gateway_ec2_instance.DescribeInstances(ctx, queryArgs)
+	case "DescribeInstances":
+		var input = &ec2.DescribeInstancesInput{}
+		err = awsec2query.QueryParamsToStruct(queryArgs, input)
+
+		if err != nil {
+			return err
+		}
+
+		output, err := gateway_ec2_instance.DescribeInstances(input, gw.NATSConn, gw.ExpectedNodes)
+
+		if err != nil {
+			return err
+		}
+
+		// Convert to XML
+		payload := utils.GenerateXMLPayload("DescribeInstancesResponse", output)
+		xmlOutput, err = utils.MarshalToXML(payload)
+
+		if err != nil {
+			return errors.New("failed to marshal response to XML")
+		}
 	case "RunInstances":
 
 		var input = &ec2.RunInstancesInput{}
@@ -42,6 +61,75 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 
 		// Convert to XML
 		payload := utils.GenerateXMLPayload("RunInstanceResponse", output)
+		xmlOutput, err = utils.MarshalToXML(payload)
+
+		if err != nil {
+			return errors.New("failed to marshal response to XML")
+		}
+
+	case "StartInstances":
+
+		var input = &ec2.StartInstancesInput{}
+		err = awsec2query.QueryParamsToStruct(queryArgs, input)
+
+		if err != nil {
+			return err
+		}
+
+		output, err := gateway_ec2_instance.StartInstances(input, gw.NATSConn)
+
+		if err != nil {
+			return err
+		}
+
+		// Convert to XML
+		payload := utils.GenerateXMLPayload("StartInstancesResponse", output)
+		xmlOutput, err = utils.MarshalToXML(payload)
+
+		if err != nil {
+			return errors.New("failed to marshal response to XML")
+		}
+
+	case "StopInstances":
+
+		var input = &ec2.StopInstancesInput{}
+		err = awsec2query.QueryParamsToStruct(queryArgs, input)
+
+		if err != nil {
+			return err
+		}
+
+		output, err := gateway_ec2_instance.StopInstances(input, gw.NATSConn)
+
+		if err != nil {
+			return err
+		}
+
+		// Convert to XML
+		payload := utils.GenerateXMLPayload("StopInstancesResponse", output)
+		xmlOutput, err = utils.MarshalToXML(payload)
+
+		if err != nil {
+			return errors.New("failed to marshal response to XML")
+		}
+
+	case "TerminateInstances":
+
+		var input = &ec2.TerminateInstancesInput{}
+		err = awsec2query.QueryParamsToStruct(queryArgs, input)
+
+		if err != nil {
+			return err
+		}
+
+		output, err := gateway_ec2_instance.TerminateInstances(input, gw.NATSConn)
+
+		if err != nil {
+			return err
+		}
+
+		// Convert to XML
+		payload := utils.GenerateXMLPayload("TerminateInstancesResponse", output)
 		xmlOutput, err = utils.MarshalToXML(payload)
 
 		if err != nil {

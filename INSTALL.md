@@ -11,19 +11,19 @@ sudo apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu
 
 Create hive user
 
-```
+```bash
 sudo adduser --disabled-password hive
 ```
 
 Add hive to the libvirt group to manage VMs
 
-```
+```bash
 sudo adduser hive libvirt
 ```
 
 Hive provided AWS API/SDK layer functionality, which requires the AWS CLI tool to be installed to interface with the system.
 
-```
+```bash
 sudo apt install awscli
 ```
 
@@ -38,58 +38,17 @@ make
 
 Confirm ./bin/hive exists and executable.
 
-```
-./bin/hive
-
-__/\\\________/\\\__/\\\\\\\\\\\__/\\\________/\\\__/\\\\\\\\\\\\\\\_
- _\/\\\_______\/\\\_\/////\\\///__\/\\\_______\/\\\_\/\\\///////////__
-  _\/\\\_______\/\\\_____\/\\\_____\//\\\______/\\\__\/\\\_____________
-   _\/\\\\\\\\\\\\\\\_____\/\\\______\//\\\____/\\\___\/\\\\\\\\\\\_____
-    _\/\\\/////////\\\_____\/\\\_______\//\\\__/\\\____\/\\\///////______
-     _\/\\\_______\/\\\_____\/\\\________\//\\\/\\\_____\/\\\_____________
-      _\/\\\_______\/\\\_____\/\\\_________\//\\\\\______\/\\\_____________
-       _\/\\\_______\/\\\__/\\\\\\\\\\\______\//\\\_______\/\\\\\\\\\\\\\\\_
-        _\///________\///__\///////////________\///________\///////////////__
-
-Hive – Open source AWS-compatible platform for secure edge deployments.
-Run EC2, VPC, S3, and EBS-like services on bare metal with full control.
-Built for environments where running in the cloud isn’t an option.
-Whether you’re deploying to edge sites, private data-centers, or operating
-in low-connectivity or highly contested environments
-
-Usage:
-  hive [command]
-
-Available Commands:
-  completion  Generate the autocompletion script for the specified shell
-  help        Help about any command
-  service     Manage Hive services
-
-Flags:
-      --access-key string     AWS access key (overrides config file and env)
-      --base-dir string       Viperblock base directory (overrides config file and env)
-      --config string         config file (required)
-  -h, --help                  help for hive
-      --host string           AWS Endpoint (overrides config file and env)
-      --nats-host string      NATS server host (overrides config file and env)
-      --nats-subject string   NATS subscription subject (overrides config file and env)
-      --nats-token string     NATS authentication token (overrides config file and env)
-      --secret-key string     AWS secret key (overrides config file and env)
-
-Use "hive [command] --help" for more information about a command.
-```
-
 ## Init
 
 When running Hive for the first time, run the init function to create the default directories for data, config files and layout required.
 
-```
+```bash
 ./bin/hive admin init
 ```
 
 Next, set the AWS profile to use `hive` which points to the local environment.
 
-```
+```bash
 export AWS_PROFILE=hive
 ```
 
@@ -109,7 +68,7 @@ For first install users, create or import an existing key pair which can be used
 
 Import an existing key pair, replace `~/.ssh/id_rsa.pub` with your specified key.
 
-```
+```bash
 aws ec2 import-key-pair --key-name "hive-key" --public-key-material fileb://~/.ssh/id_rsa.pub
 ```
 
@@ -137,7 +96,7 @@ ssh-keygen -y -f ~/.ssh/hive-key > ~/.ssh/hive-key.pub
 
 Validate the new key is available
 
-```
+```bash
 aws ec2 describe-key-pairs
 ```
 
@@ -170,14 +129,13 @@ Discover available images to automatically download and install. This will pull 
 ./bin/hive admin images list
 ```
 
-```
-Name                 | Distro | Version | Arch  
-alpine-3.22.2-arm64  | alpine | 3.22.2  | arm64 
-alpine-3.22.2-x86_64 | alpine | 3.22.2  | x86_64
-debian-12-arm64      | debian | 12      | arm64 
-debian-12-x86_64     | debian | 12      | x86_64
-ubuntu-24.04-arm64   | ubuntu | 24.04   | arm64 
-ubuntu-24.04-x86_64  | ubuntu | 24.04   | x86_64
+```bash
+NAME                 | DISTRO | VERSION | ARCH   | BOOT
+alpine-3.22.2-x86_64 | alpine | 3.22.2  | x86_64 | bios
+debian-12-arm64      | debian | 12      | arm64  | bios
+debian-12-x86_64     | debian | 12      | x86_64 | bios
+ubuntu-24.04-arm64   | ubuntu | 24.04   | arm64  | bios
+ubuntu-24.04-x86_64  | ubuntu | 24.04   | x86_64 | bios
 ```
 
 Next, choose the image you would like to import as an AMI.
@@ -186,25 +144,19 @@ Next, choose the image you would like to import as an AMI.
 ./bin/hive admin images import --name debian-12-arm64 --force
 ```
 
-```
+```bash
 Downloading image https://cdimage.debian.org/cdimage/cloud/bookworm/latest/debian-12-generic-arm64.tar.xz to /home/ben/hive/images/debian/12/arm64/debian-12-generic-amd64.tar.xz
 Downloading local-debian-12-arm64 [283748988/283748988] ██████████████ 100% | 1s
 Saved /home/ben/hive/images/debian/12/arm64/debian-12-generic-amd64.tar.xz (270.6 MiB)
 Extracted image to: /home/ben/hive/images/debian/12/arm64/disk.raw
 
-AMI import complete
+✅ Image import complete. Image-ID (AMI): ami-e29fcc65734aec9ea
 ```
 
 Next, verify available disk images to confirm the import was successful
 
 ```bash
-aws ec2 describe-images
-```
-
-Note the output to launch an instance, specifically the `"ImageId": ami-XXX` attribute.
-
-```
-export HIVE_AMI='ami-XXX'
+aws ec2 describe-images --image-ids ami-e29fcc65734aec9ea
 ```
 
 ### Manual import
@@ -213,19 +165,19 @@ Using this method you can import any OS disk image. For example, download the De
 
 Download the image:
 
-```
+```bash
 wget https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-arm64.tar.xz -O ~/debian-12-genericcloud-arm64.tar.xz
 ```
 
 Import as an AMI to the backend store:
 
-```
+```bash
 ./bin/hive admin images import --file ~/debian-12-genericcloud-arm64.tar.xz --arch arm64 --distro debian --version 12
 ```
 
 Next, verify available disk images to confirm the import was successful
 
-```
+```bash
 aws ec2 describe-images
 ```
 
@@ -233,7 +185,13 @@ aws ec2 describe-images
 
 Once Hive is successfully installed and bootstrapped with a system AMI and SSH keys, proceed to run an instance. Replace `ami-XXX` with your imported ImageId above.
 
+```bash
+export HIVE_AMI="ami-XXX"
 ```
+
+Launch a new instance, note `hive-key` is the SSH key specified in the previous stage.
+
+```bash
 aws ec2 run-instances \
   --image-id $HIVE_AMI \
   --instance-type t3.micro \
@@ -243,68 +201,235 @@ aws ec2 run-instances \
   --count 1
 ```
 
-## Start services
+A sample response is below from the `RunInstance` request, note the `InstanceId` attribute:
 
-### NATS
-
-An embedded NATS server provides messaging between components of Hive and is a requirement.
-
+```json
+{
+    "ReservationId": "r-f101157331e261a68",
+    "OwnerId": "123456789012",
+    "Instances": [
+        {
+            "InstanceId": "i-36765eb0c6609e4d2",
+            "ImageId": "ami-15c3dcfe607460f15",
+            "State": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "KeyName": "hive-key",
+            "InstanceType": "t3.micro",
+            "LaunchTime": "2025-11-12T13:07:47.548000+00:00"
+        }
+    ]
+}
 ```
-./bin/hive service nats start --debug
+
+Export the instance ID for following the rest of the tutorial
+
+```bash
+export INSTANCE_ID="i-XXX"
 ```
 
-### Hive daemon
+Next, validate the running instance is ready
 
-The background Hive daemon is a core service which accepts requests to provision services such as the AWS SDK/CLI.
-
-```
-./bin/hive service hive start --config config/hive.toml
+```bash
+aws ec2 describe-instances --instance-ids $INSTANCE_ID
 ```
 
-## QMP commands
+Confirm the `State.Name` attribute is set as `running`
 
-### Powerdown
-
-This event is used internally be Hive when the daemon receives a SIGINT, SIGTERM, SIGHUP signal to safely powerdown an instance, or when the hardware node is rebooted.
-
+```json
+{
+    "Reservations": [
+        {
+            "ReservationId": "r-f101157331e261a68",
+            "OwnerId": "123456789012",
+            "Instances": [
+                {
+                    "InstanceId": "i-36765eb0c6609e4d2",
+                    "ImageId": "ami-15c3dcfe607460f15",
+                    "State": {
+                        "Code": 16,
+                        "Name": "running"
+                    },
+                    "KeyName": "hive-key",
+                    "InstanceType": "t3.micro",
+                    "LaunchTime": "2025-11-12T13:07:47.548000+00:00"
+                }
+            ]
+        }
+    ]
+}
 ```
-nats req --reply-timeout=5s ec2.cmd.i-ebaf0fd46cad14c85 '{ "id": "i-ebaf0fd46cad14c85", "command": { "execute": "system_powerdown", "arguments": {} } }'
+
+## SSH connection (development)
+
+For a Hive development environment (toggled off for production), a local SSH port forwaring will be active to connect directly to the instance, regardless of the VPC and network settings.
+
+Determine the SSH port allocated
+
+```bash
+ps auxw | grep $INSTANCE_ID
+```
+
+```bash
+qemu-system-x86_64 -daemonize -pidfile /run/user/1000/i-36765eb0c6609e4d.pid -qmp unix:/run/user/1000/qmp-i-36765eb0c6609e4d2.sock,server,nowait -enable-kvm -M ubuntu -serial pty -cpu host -smp 2 -m 1024 -drive file=nbd://127.0.0.1:42653,format=raw,if=none,media=disk,id=os -drive file=nbd://127.0.0.1:44499,format=raw,if=virtio,media=cdrom,id=cloudinit -device virtio-blk-pci,drive=os,bootindex=1 -device virtio-rng-pci -device virtio-net-pci,netdev=net0 -netdev user,id=net0,hostfwd=tcp:127.0.0.1:33683-:22
+```
+
+Note the `hostfwd=tcp:127.0.0.1:33683-:22`, in this case the local port `33683` will connect to the new instance.
+
+```bash
+ssh -i ~/.ssh/hive-key ec2-user@127.0.0.1 -p 33683
+
+...
+
+Linux hive-vm-36765eb0 6.1.0-40-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.153-1 (2025-09-20) x86_64
+ec2-user@hive-vm-36765eb0:~$
+```
+
+Congratulations, your first AMI image is imported, a new EC2 instance launched, and successfully connected via SSH for the configured SSH key, using the OS `cloud-init` procedure.
+
+## Managing instances
+
+### Stop instance
+
+To stop a running instance gracefully:
+
+```bash
+aws ec2 stop-instances --instance-ids $INSTANCE_ID
+```
+
+```json
+{
+    "StoppingInstances": [
+        {
+            "InstanceId": "i-36765eb0c6609e4d2",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        }
+    ]
+```
+
+Next, confirm the instance has stopped as requested
+
+```bash
+aws ec2 describe-instances --instance-ids $INSTANCE_ID
+```
+
+```json
+{
+    "Reservations": [
+        {
+            "ReservationId": "r-f101157331e261a68",
+            "OwnerId": "123456789012",
+            "Instances": [
+                {
+                    "InstanceId": "i-36765eb0c6609e4d2",
+                    "ImageId": "ami-15c3dcfe607460f15",
+                    "State": {
+                        "Code": 80,
+                        "Name": "stopped"
+                    },
+                    "KeyName": "hive-key",
+                    "InstanceType": "t3.micro",
+                    "LaunchTime": "2025-11-12T13:07:47.548000+00:00"
+                }
+            ]
+        }
+    ]
+}
+```
+
+### Start Instance
+
+To start a previously stopped instance:
+
+```bash
+aws ec2 start-instances --instance-ids $INSTANCE_ID
+```
+
+```json
+{
+    "StartingInstances": [
+        {
+            "InstanceId": "i-36765eb0c6609e4d2",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        }
+    ]
+```
+
+Next, validate the instance is running as expected
+
+```bash
+aws ec2 describe-instances  --instance-ids "i-36765eb0c6609e4d2"
+```
+
+```json
+{
+    "Reservations": [
+        {
+            "ReservationId": "r-f101157331e261a68",
+            "OwnerId": "123456789012",
+            "Instances": [
+                {
+                    "InstanceId": "i-36765eb0c6609e4d2",
+                    "ImageId": "ami-15c3dcfe607460f15",
+                    "State": {
+                        "Code": 16,
+                        "Name": "running"
+                    },
+                    "KeyName": "hive-key",
+                    "InstanceType": "t3.micro",
+                    "LaunchTime": "2025-11-12T13:07:47.548000+00:00"
+                }
+            ]
+        }
+    ]
+}
 ```
 
 ### Terminate instance
 
-This event is for a user initiated instance termination. Note the Attributes, to flag to the Hive daemon not to start the instance again if the daemon or hardware node is restarted.
+To terminate an instance, which will first stop the instance, and on success, remove the EBS volumes and permanately remove the instance data.
 
-```
-nats req --reply-timeout=5s ec2.cmd.i-f38ac0490f1683650 '{ "id": "i-f38ac0490f1683650", "attributes": { "stop_instance": true }, "command": { "execute": "system_powerdown", "arguments": {} } }'
-```
-
-### Stop VM
-
-```
-nats req --reply-timeout=5s ec2.cmd.i-ebaf0fd46cad14c85 '{ "id": "i-ebaf0fd46cad14c85", "command": { "execute": "stop", "arguments": {} } }'
+```bash
+aws ec2 terminate-instances --instance-ids $INSTANCE_ID
 ```
 
-### Resume VM
+```json
+{
+    "TerminatingInstances": [
+        {
+            "InstanceId": "i-36765eb0c6609e4d2",
+            "CurrentState": {
+                "Code": 16,
+                "Name": "running"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        }
+    ]
+}
+```
 
-```
-nats req --reply-timeout=5s ec2.cmd.i-ebaf0fd46cad14c85 '{ "id": "i-ebaf0fd46cad14c85", "command": { "execute": "cont", "arguments": {} } }'
+Next, validate the instance is removed, this may take a few minutes depending the instance volume size. 
+
+```bash
+aws ec2 describe-instances  --instance-ids $INSTANCE_ID
 ```
 
-### Restart
-
-```
-nats req --reply-timeout=5s ec2.cmd.i-1bb0cfd0e48bfa232 '{ "id": "i-1bb0cfd0e48bfa232", "command": { "execute": "system_reset", "arguments": {} } }'
-```
-
-### Query status
-
-```
-nats req --reply-timeout=5s ec2.cmd.i-ebaf0fd46cad14c85 '{ "id": "i-ebaf0fd46cad14c85", "command": { "execute": "query-status", "arguments": {} } }'
-```
-
-### Query devices
-
-```
-nats req --reply-timeout=5s ec2.cmd.i-ebaf0fd46cad14c85 '{ "id": "i-ebaf0fd46cad14c85", "command": { "execute": "query-device", "arguments": {} } }'
-```
+On success no data will be returned, since the instance is no longer available.
