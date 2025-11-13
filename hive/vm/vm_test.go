@@ -63,7 +63,7 @@ func TestExecute(t *testing.T) {
 
 	// Toggle Instance type to ARM
 	cfg.InstanceType = "t4g.micro"
-	cfg.Architecture = "arm"
+	cfg.Architecture = "arm64"
 
 	cmd, err = cfg.Execute()
 
