@@ -17,6 +17,79 @@ This roadmap has been integrated into the comprehensive [HIVE_DEVELOPMENT_PLAN.m
 * Add delete-volume support via EBS (s3 vol-*) for terminated instance
 * Add default LRU cache support for viperblock, depending on the instance type / volume size and system memory available.
 
+## Multi-node setup
+
+- Development release - v0.1.0 (single node)
+- Production release - v0.2.0 (multi node)
+
+Design layout for multi-node configuration.
+
+```
+# node1
+hive admin init --region ap-southeast-2 --availability-zone ap-southeast-2a --nodes 3 --bind :8443 --data-dir ~/hive/
+
+# node2
+hive admin join --region ap-southeast-2 --availability-zone ap-southeast-2a --host node1.local:8443 --data-dir ~/hive/
+
+# node3, optionally toggle EBS/EC2/NATs support only
+hive admin join --region ap-southeast-2 --availability-zone ap-southeast-2a --host node1.local:8443 --data-dir ~/hive/ --cap ebs,ec2,nats
+```
+
+If --host is missing, the join command tries multicast broadcast to find parent node.
+
+Set region with `--region ap-southeast-2` which will create a new Hive cluster for the specified region.
+
+Set the availability-zone, for production it is recommended to have at least 2 availability-zones defined per region deployment of Hive.
+
+Overview:
+
+* init creates a cluster-id, node-id, and a short join token, starts a tiny control server on :8443, and writes DNS hint files if available.
+
+* init sets target size to 3 and waits until all 3 nodes join and ack.
+
+* join nodes contact node1, present the token or cluster-id, and advertise capabilities.
+
+* node1 appends them to the member set and immediately pushes the current settings bundle to them.
+
+* When member count reaches 3, node1 broadcasts the final cluster settings to all nodes.
+
+* Every node writes the same cluster.json and starts the services that match its capabilities.
+
+Node exchange payload
+
+```json
+{
+  "cluster_id": "c-82d5",
+  "node_id": "n-rpi2",
+  "addr": "rpi2.local:8443",
+  "version": "0.1.0",
+  "caps": ["ec2","s3"],
+  "ts": 1731388800
+}
+```
+
+Settings bundle (identical on all 3 once committed)
+
+```json
+{
+  "cluster_id": "c-82d5",
+  "target_size": 3,
+  "members": [
+    {"node_id":"n-rpi1","addr":"rpi1.local:8443","caps":["ec2","s3","nats","ebs"]},
+    {"node_id":"n-rpi2","addr":"rpi2.local:8443","caps":["ec2","s3"]},
+    {"node_id":"n-rpi3","addr":"rpi3.local:8443","caps":["nats","ebs"]}
+  ],
+  "services": {
+    "ec2": {"api_bind":":9001"},
+    "s3":  {"api_bind":":9002","replicas":2},
+    "nats":{"cluster":"c-82d5","quorum":2},
+    "ebs": {"replicas":3,"block_size":4096}
+  },
+  "epoch": 1,
+  "sig": "ed25519:..."  // signed by rpi1 during init
+}
+```
+
 ## Original TODO Items → Development Plan Integration
 
 ### ✅ **Completed Integration**

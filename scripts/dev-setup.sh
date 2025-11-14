@@ -114,17 +114,17 @@ make build
 echo "✅ Hive built successfully"
 
 # Initialize Hive configuration using admin init
-echo ""
-echo "🔐 Initializing Hive configuration..."
+#echo ""
+#echo "🔐 Initializing Hive configuration..."
 
-if [[ ! -f "$CONFIG_DIR/hive.toml" ]]; then
-    echo "📋 Running hive admin init..."
-    ./bin/hive admin init --config-dir "$CONFIG_DIR"
-    echo "✅ Hive configuration initialized"
-else
-    echo "✅ Hive configuration already exists"
-    echo "   To re-initialize, run: ./bin/hive admin init --force"
-fi
+#if [[ ! -f "$CONFIG_DIR/hive.toml" ]]; then
+#    echo "📋 Running hive admin init..."
+#    ./bin/hive admin init --config-dir "$CONFIG_DIR"
+#    echo "✅ Hive configuration initialized"
+#else
+#    echo "✅ Hive configuration already exists"
+#    echo "   To re-initialize, run: ./bin/hive admin init --force"
+#fi
 
 # Build components
 echo ""
@@ -152,6 +152,10 @@ fi
 
 echo ""
 echo "🎉 Development environment setup complete!"
+echo ""
+echo "When running Hive for the first time, run the init function to create the"
+echo "default directories for data, config files and layout required."
+echo "./bin/hive admin init"
 echo ""
 echo "🚀 To start the development environment:"
 echo "   ./scripts/start-dev.sh"

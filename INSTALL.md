@@ -1,24 +1,26 @@
 # Hive installation
 
+Notes for development environment installation.
+
 ## Dependencies
 
-For running on Ubuntu 22.04
+For running on Ubuntu 22.04 and 25.04 (tested)
 
 ```bash
 sudo add-apt-repository universe
-sudo apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu-kvm libvirt-daemon-system  libvirt-clients libvirt-dev
+sudo apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu-kvm libvirt-daemon-system  libvirt-clients libvirt-dev make gcc
 ```
 
-Create hive user
+Ensure the Go toolkit is installed, recommended to install the latest directly from [https://go.dev/dl/](https://go.dev/dl/)
 
-```bash
-sudo adduser --disabled-password hive
+Confirm go is correctly installed, and set in your $PATH
+
+```
+go version
 ```
 
-Add hive to the libvirt group to manage VMs
-
-```bash
-sudo adduser hive libvirt
+```
+go version go1.25.4 linux/amd64
 ```
 
 Hive provided AWS API/SDK layer functionality, which requires the AWS CLI tool to be installed to interface with the system.
@@ -27,13 +29,22 @@ Hive provided AWS API/SDK layer functionality, which requires the AWS CLI tool t
 sudo apt install awscli
 ```
 
-
 ## Build
 
-Compile `hive` binary which will be used throughout the installation tutorial.
+Create the base directory for the Hive development environment
 
 ```
-make
+mkdir ~/Development/mulga/
+cd ~/Development/mulga/
+git clone https://github.com/mulgadc/hive.git
+```
+
+Setup the dev environment and package dependencies on [viperblock](https://github.com/mulgadc/viperblock/) and [predastore](https://github.com/mulgadc/predastore/)
+
+```
+# Setup dependencies and development environment
+./scripts/clone-deps.sh    # Clone viperblock + predastore repositories
+./scripts/dev-setup.sh     # Setup complete development environment
 ```
 
 Confirm ./bin/hive exists and executable.

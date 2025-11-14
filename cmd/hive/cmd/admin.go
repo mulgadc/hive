@@ -748,7 +748,11 @@ func setupAWSCredentials(accessKey, secretKey, region, certPath string) error {
 	configPath := filepath.Join(awsDir, "config")
 
 	// Determine profile name
-	profileName := "default"
+	//profileName := "default"
+
+	// Use hive as the default profile
+	profileName := "hive"
+
 	if fileExists(credPath) {
 		// Check if default profile already exists
 		cfg, err := ini.Load(credPath)
