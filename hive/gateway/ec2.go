@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/gofiber/fiber/v2"
@@ -208,6 +209,12 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 	case "ImportKeyPair":
 
 		var input = &ec2.ImportKeyPairInput{}
+
+		// Bug in parser, end of Base64 is URL encoded
+		if strings.HasSuffix(queryArgs["PublicKeyMaterial"], "%3D%3D") {
+			queryArgs["PublicKeyMaterial"] = strings.Replace(queryArgs["PublicKeyMaterial"], "%3D%3D", "==", 1)
+		}
+
 		err = awsec2query.QueryParamsToStruct(queryArgs, input)
 
 		if err != nil {

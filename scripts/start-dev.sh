@@ -241,7 +241,8 @@ echo "📊 Monitor background service logs:"
 echo "   tail -f $LOGS_DIR/*.log"
 echo ""
 echo "🧪 Test with AWS CLI (once daemon is running):"
-echo "   aws --endpoint-url https://localhost:9999 --no-verify-ssl ec2 describe-instances"
+echo "   export AWS_PROFILE=hive"
+echo "   aws ec2 describe-instances"
 echo ""
 
 # This will only be reached if air/daemon exits normally
