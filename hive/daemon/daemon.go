@@ -1198,11 +1198,11 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		Name:         instance.ID,
 		Daemonize:    true,
 		PIDFile:      pidFile,
-		EnableKVM:    true,
-		NoGraphic:    false,
-		MachineType:  "ubuntu",
+		EnableKVM:    true, // If available, if kvm fails, will use cpu max
+		NoGraphic:    true,
+		MachineType:  "q35",
 		Serial:       "pty",
-		CPUType:      "host",
+		CPUType:      "host", // If available, if kvm fails, will use cpu max
 		Memory:       int(instanceType.MemoryGB) * 1024,
 		CPUCount:     instanceType.VCPUs,
 		Architecture: instanceType.Architecture,

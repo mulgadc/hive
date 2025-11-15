@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -115,12 +116,29 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 		args = append(args, "-qmp", fmt.Sprintf("unix:%s,server,nowait", cfg.QMPSocket))
 	}
 
-	if cfg.EnableKVM {
-		args = append(args, "-enable-kvm")
+	// Validate native kvm support
+	_, err := os.Stat("/dev/kvm")
+
+	if err != nil {
+		slog.Warn("Native KVM support not detected on host. Check permissions and host")
+		//slog.Warn("Setting -cpu max, `host` CPU type unavailable")
+		// Use qemu defaults
+		//args = append(args, "-cpu", "max")
+
+	} else {
+
+		if cfg.EnableKVM {
+			args = append(args, "-enable-kvm")
+		}
+
+		if cfg.CPUType != "" {
+			args = append(args, "-cpu", cfg.CPUType)
+		}
+
 	}
 
 	if cfg.NoGraphic {
-		args = append(args, "-nographic")
+		args = append(args, "-display none")
 	}
 
 	if cfg.MachineType != "" {
@@ -129,10 +147,6 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 
 	if cfg.Serial != "" {
 		args = append(args, "-serial", cfg.Serial)
-	}
-
-	if cfg.CPUType != "" {
-		args = append(args, "-cpu", cfg.CPUType)
 	}
 
 	if cfg.CPUCount > 0 {
