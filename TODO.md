@@ -26,22 +26,22 @@ Design layout for multi-node configuration.
 
 ```
 # node1
-hive admin init --region ap-southeast-2 --availability-zone ap-southeast-2a --nodes 3 --bind :8443 --data-dir ~/hive/
+hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1 --hive-dir ~/hive/
 
 # node2
-hive admin join --region ap-southeast-2 --availability-zone ap-southeast-2a --host node1.local:8443 --data-dir ~/hive/
+hive admin join --region ap-southeast-2 --az ap-southeast-2a --node node2 --host node1.local:8443 --data-dir ~/hive/
 
 # node3, optionally toggle EBS/EC2/NATs support only
-hive admin join --region ap-southeast-2 --availability-zone ap-southeast-2a --host node1.local:8443 --data-dir ~/hive/ --cap ebs,ec2,nats
+hive admin join --region ap-southeast-2 --az ap-southeast-2a --node node3 --host node1.local:8443 --data-dir ~/hive/ --cap ebs,ec2,nats
 ```
 
-If --host is missing, the join command tries multicast broadcast to find parent node.
+If --host is missing, the join command tries multicast broadcast to find parent (leader) node.
 
 Set region with `--region ap-southeast-2` which will create a new Hive cluster for the specified region.
 
-Set the availability-zone, for production it is recommended to have at least 2 availability-zones defined per region deployment of Hive.
+For production, it is recommended to run Hive on at least three physical nodes. In this minimum setup, Hive S3 and EBS volumes use 2 data shards and 1 parity shard RS(2,1) to distribute each chunk across the cluster. This configuration tolerates a full node failure while adding only 1.5x storage overhead.
 
-Overview:
+### Overview:
 
 * init creates a cluster-id, node-id, and a short join token, starts a tiny control server on :8443, and writes DNS hint files if available.
 

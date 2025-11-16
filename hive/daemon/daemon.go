@@ -71,6 +71,8 @@ type ResourceManager struct {
 
 // Daemon represents the main daemon service
 type Daemon struct {
+	node            string
+	clusterConfig   *config.ClusterConfig
 	config          *config.Config
 	natsConn        *nats.Conn
 	resourceMgr     *ResourceManager
@@ -178,16 +180,21 @@ func NewResourceManager() *ResourceManager {
 }
 
 // NewDaemon creates a new daemon instance
-func NewDaemon(cfg *config.Config) *Daemon {
+func NewDaemon(cfg *config.ClusterConfig) *Daemon {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// If WalDir is not set, use BaseDir
-	if cfg.WalDir == "" {
-		cfg.WalDir = cfg.BaseDir
+	config := cfg.Nodes[cfg.Node]
+	if cfg.Nodes[cfg.Node].WalDir == "" {
+		config.WalDir = config.BaseDir
+
+		cfg.Nodes[cfg.Node] = config
 	}
 
 	return &Daemon{
-		config:            cfg,
+		node:              cfg.Node,
+		clusterConfig:     cfg,
+		config:            &config,
 		resourceMgr:       NewResourceManager(),
 		ctx:               ctx,
 		cancel:            cancel,
@@ -485,39 +492,6 @@ func (d *Daemon) handleEC2StartInstances(msg *nats.Msg) {
 	}
 
 	ec2StartInstanceResponse.Respond(msg)
-
-}
-
-func (d *Daemon) handleEC2Describe(msg *nats.Msg) {
-
-	var ec2DescribeRequest config.EC2DescribeRequest
-
-	if err := json.Unmarshal(msg.Data, &ec2DescribeRequest); err != nil {
-		log.Printf("Error unmarshaling EC2 describe request: %v", err)
-		return
-	}
-
-	slog.Info("EC2 Describe Request", "instanceId", ec2DescribeRequest.InstanceID)
-
-	var ec2DescribeResponse config.EC2DescribeResponse
-
-	// Check if the instance is running on this node
-	d.Instances.Mu.Lock()
-	defer d.Instances.Mu.Unlock()
-
-	instance, ok := d.Instances.VMS[ec2DescribeRequest.InstanceID]
-
-	if !ok {
-		slog.Error("EC2 Describe Request - Instance not found", "instanceId", ec2DescribeRequest.InstanceID)
-		ec2DescribeResponse.InstanceID = ec2DescribeRequest.InstanceID
-		ec2DescribeResponse.Error = fmt.Sprintf("Instance %s not found", ec2DescribeRequest.InstanceID)
-		ec2DescribeResponse.Respond(msg)
-		return
-	}
-
-	ec2DescribeResponse.InstanceID = instance.ID
-	ec2DescribeResponse.Status = instance.Status
-	ec2DescribeResponse.Respond(msg)
 
 }
 

@@ -11,17 +11,31 @@ import (
 	"github.com/spf13/viper"
 )
 
+type ClusterConfig struct {
+	Epoch   uint64            `mapstructure:"epoch"`   // bump when leader commits changes
+	Node    string            `mapstructure:"node"`    // my node name
+	Version string            `mapstructure:"version"` // hive version
+	Nodes   map[string]Config `mapstructure:"nodes"`   // full config for every node
+}
+
 // Config holds all configuration for the application
 type Config struct {
+	// Node config
+	Node    string `mapstructure:"node"`
+	Host    string `mapstructure:"host"` // Unique hostname or IP of this node
+	Region  string `mapstructure:"region"`
+	AZ      string `mapstructure:"az"`
+	DataDir string `mapstructure:"data_dir"`
+
 	Daemon     DaemonConfig     `mapstructure:"daemon"`
 	NATS       NATSConfig       `mapstructure:"nats"`
 	Predastore PredastoreConfig `mapstructure:"predastore"`
 	AWSGW      AWSGWConfig      `mapstructure:"awsgw"`
 
 	// Authentication
+	// TODO: Move to more appropriate setting above
 	AccessKey string `mapstructure:"access_key"`
 	SecretKey string `mapstructure:"secret_key"`
-	Host      string `mapstructure:"host"`
 	BaseDir   string `mapstructure:"base_dir"`
 	WalDir    string `mapstructure:"wal_dir"`
 }
@@ -33,7 +47,7 @@ type AWSGWConfig struct {
 	Config  string `mapstructure:"config"`
 
 	Debug         bool `mapstructure:"debug"`
-	ExpectedNodes int  `mapstructure:"expected_nodes"`
+	ExpectedNodes int  `mapstructure:"expected_nodes"` // TODO: Replace with root cluster config
 }
 
 type PredastoreConfig struct {
@@ -106,25 +120,6 @@ type EBSDeleteResponse struct {
 }
 
 // EC2, TODO: Move to vm.go or more applicable place
-type EC2Response struct {
-	InstanceID string
-	Hostname   string
-	Success    bool
-	Status     string
-	Error      string
-}
-
-type EC2DescribeRequest struct {
-	InstanceID string
-}
-
-type EC2DescribeResponse struct {
-	InstanceID string
-	Hostname   string
-	Status     string
-	Error      string
-}
-
 type EC2StartInstancesRequest struct {
 	InstanceID string
 }
@@ -147,43 +142,12 @@ func (ec2StartInstanceResponse EC2StartInstancesResponse) Respond(msg *nats.Msg)
 	msg.Respond(response)
 
 }
-func (ec2DescribeResponse EC2DescribeResponse) Respond(msg *nats.Msg) {
-
-	response, err := json.Marshal(ec2DescribeResponse)
-	if err != nil {
-		slog.Error("Failed to marshal response", "err", err)
-		return
-	}
-
-	msg.Respond(response)
-
-}
-
-func (ec2Response EC2Response) Respond(msg *nats.Msg) {
-
-	response, err := json.Marshal(ec2Response)
-	if err != nil {
-		slog.Error("Failed to marshal response", "err", err)
-		return
-	}
-
-	msg.Respond(response)
-
-}
 
 // LoadConfig loads the configuration from file and environment variables
-func LoadConfig(configPath string) (*Config, error) {
+func LoadConfig(configPath string) (*ClusterConfig, error) {
 	// Set environment variable prefix
 	viper.SetEnvPrefix("HIVE")
 	viper.AutomaticEnv()
-
-	// Set default values
-	//viper.SetDefault("host", "https://localhost:8443/")
-	//viper.SetDefault("base_dir", "/tmp/vb/")
-
-	//viper.SetDefault("daemon.host", "0.0.0.0:4432")
-	//viper.SetDefault("nats.host", "0.0.0.0:4222")
-	//viper.SetDefault("nats.sub.subject", "ec2.>")
 
 	// Try to load config file if it exists
 	if configPath != "" {
@@ -202,26 +166,10 @@ func LoadConfig(configPath string) (*Config, error) {
 	}
 
 	// Create config struct
-	var config Config
+	var config ClusterConfig
 	if err := viper.Unmarshal(&config); err != nil {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
 	}
-
-	// Validate required fields (can be overwritten by env vars)
-	/*
-		if config.NATS.Host == "" {
-			return nil, fmt.Errorf("NATS host is required")
-		}
-
-		if config.AccessKey == "" {
-			return nil, fmt.Errorf("access key is required")
-		}
-		if config.SecretKey == "" {
-			return nil, fmt.Errorf("secret key is required")
-		}
-	*/
-
-	//	fmt.Println("Config: ", config)
 
 	return &config, nil
 }

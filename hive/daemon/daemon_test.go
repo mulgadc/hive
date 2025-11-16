@@ -55,6 +55,12 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 		os.RemoveAll(tmpDir)
 	})
 
+	// New cluster config
+	clusterCfg := &config.ClusterConfig{
+		Node:  "node-1",
+		Nodes: map[string]config.Config{},
+	}
+
 	cfg := &config.Config{
 		BaseDir: tmpDir,
 		WalDir:  tmpDir,
@@ -76,7 +82,9 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 		SecretKey: "test-secret-key",
 	}
 
-	daemon := NewDaemon(cfg)
+	clusterCfg.Nodes["node-1"] = *cfg
+
+	daemon := NewDaemon(clusterCfg)
 
 	// Connect to NATS
 	nc, err := nats.Connect(natsURL)
@@ -352,6 +360,12 @@ func TestDaemon_Initialization(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
+	// New cluster config
+	clusterCfg := &config.ClusterConfig{
+		Node:  "node-1",
+		Nodes: map[string]config.Config{},
+	}
+
 	cfg := &config.Config{
 		BaseDir: tmpDir,
 		WalDir:  tmpDir,
@@ -362,7 +376,9 @@ func TestDaemon_Initialization(t *testing.T) {
 		SecretKey: "test-secret",
 	}
 
-	daemon := NewDaemon(cfg)
+	clusterCfg.Nodes["node-1"] = *cfg
+
+	daemon := NewDaemon(clusterCfg)
 
 	assert.NotNil(t, daemon)
 	assert.NotNil(t, daemon.resourceMgr)

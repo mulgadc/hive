@@ -12,12 +12,12 @@ import (
 var serviceName = "hive"
 
 type Service struct {
-	Config *config.Config
+	Config *config.ClusterConfig
 }
 
 func New(cfg interface{}) (svc *Service, err error) {
 	svc = &Service{
-		Config: cfg.(*config.Config),
+		Config: cfg.(*config.ClusterConfig),
 	}
 	return svc, nil
 }
@@ -49,7 +49,7 @@ func (svc *Service) Reload() (err error) {
 	return nil
 }
 
-func launchService(config *config.Config) (err error) {
+func launchService(config *config.ClusterConfig) (err error) {
 
 	d := daemon.NewDaemon(config)
 	slog.Info("Starting Hive daemon ...")

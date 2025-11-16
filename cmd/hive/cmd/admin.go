@@ -140,6 +140,11 @@ func init() {
 	// Flags for admin init
 	adminInitCmd.Flags().Bool("force", false, "Force re-initialization (overwrites existing config)")
 	adminInitCmd.Flags().String("region", "ap-southeast-2", "Mulga region to create")
+	adminInitCmd.Flags().String("az", "ap-southeast-2a", "Mulga AZ to create")
+	adminInitCmd.Flags().String("node", "node1", "Node name, increment for additional nodes (default, node1)")
+	adminInitCmd.Flags().Int("nodes", 3, "Number of nodes to expect for cluster")
+	adminInitCmd.Flags().String("host", "", "Leader node to join (if not specified, tries multicast discovery)")
+	adminInitCmd.Flags().Int("port", 4432, "Port to bind cluster services on")
 
 	imagesImportCmd.Flags().String("tmp-dir", os.TempDir(), "Temporary directory for image import processing")
 
@@ -310,7 +315,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	// Calculate the size
 
 	manifest.AMIMetadata.Name = fmt.Sprintf("ami-%s-%s-%s", image.Distro, image.Version, image.Arch)
-	volumeId := viperblock.GenerateVolumeID("ami", manifest.AMIMetadata.Name, appConfig.Predastore.Bucket, time.Now().Unix())
+	volumeId := viperblock.GenerateVolumeID("ami", manifest.AMIMetadata.Name, "", time.Now().Unix()) // TODO: Replace with bucket
 	manifest.AMIMetadata.ImageID = volumeId
 
 	manifest.AMIMetadata.Description = fmt.Sprintf("%s cloud image prepared for Hive", manifest.AMIMetadata.Name)
@@ -361,11 +366,11 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	s3Config := s3.S3Config{
 		VolumeName: volumeId,
 		VolumeSize: uint64(imageStat.Size()),
-		Bucket:     appConfig.Predastore.Bucket,
-		Region:     appConfig.Predastore.Region,
-		AccessKey:  appConfig.AccessKey,
-		SecretKey:  appConfig.SecretKey,
-		Host:       appConfig.Predastore.Host,
+		Bucket:     appConfig.Nodes[appConfig.Node].Predastore.Bucket,
+		Region:     appConfig.Nodes[appConfig.Node].Predastore.Region,
+		AccessKey:  appConfig.Nodes[appConfig.Node].AccessKey,
+		SecretKey:  appConfig.Nodes[appConfig.Node].SecretKey,
+		Host:       appConfig.Nodes[appConfig.Node].Predastore.Host,
 	}
 
 	vbConfig := viperblock.VB{
@@ -435,6 +440,11 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	force, _ := cmd.Flags().GetBool("force")
 	configDir, _ := cmd.Flags().GetString("config-dir")
 	region, _ := cmd.Flags().GetString("region")
+	az, _ := cmd.Flags().GetString("az")
+	node, _ := cmd.Flags().GetString("node")
+	port, _ := cmd.Flags().GetInt("port")
+
+	fmt.Println("Config", az, node, port)
 
 	// Default config directory
 	if configDir == "" {
@@ -529,8 +539,10 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		{filepath.Join(natsDir, "nats.conf"), natsConfTemplate, "nats/nats.conf"},
 	}
 
+	portStr := fmt.Sprintf("%d", port)
+
 	for _, cfg := range configs {
-		if err := generateConfigFile(cfg.path, cfg.template, accessKey, secretKey, accountID, region, natsToken, hiveRoot); err != nil {
+		if err := generateConfigFile(cfg.path, cfg.template, accessKey, secretKey, accountID, region, natsToken, hiveRoot, az, node, portStr); err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", cfg.name, err)
 			os.Exit(1)
 		}
@@ -693,7 +705,7 @@ func generateSelfSignedCert(certPath, keyPath string) error {
 }
 
 // generateConfigFile creates a configuration file from a template
-func generateConfigFile(path, templateContent, accessKey, secretKey, accountID, region, natsToken, dataDir string) error {
+func generateConfigFile(path, templateContent, accessKey, secretKey, accountID, region, natsToken, dataDir, Az, Node, Port string) error {
 	// Parse the embedded template
 	tmpl, err := template.New("config").Parse(templateContent)
 	if err != nil {
@@ -708,6 +720,11 @@ func generateConfigFile(path, templateContent, accessKey, secretKey, accountID, 
 		Region    string
 		NatsToken string
 		DataDir   string
+
+		// Add more fields as needed
+		Node string
+		Az   string
+		Port string
 	}{
 		AccessKey: accessKey,
 		SecretKey: secretKey,
@@ -715,6 +732,10 @@ func generateConfigFile(path, templateContent, accessKey, secretKey, accountID, 
 		Region:    region,
 		NatsToken: natsToken,
 		DataDir:   dataDir,
+
+		Node: Node,
+		Az:   Az,
+		Port: Port,
 	}
 
 	// Create file with secure permissions

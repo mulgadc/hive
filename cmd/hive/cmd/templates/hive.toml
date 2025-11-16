@@ -1,32 +1,38 @@
 # Domain configuration file in TOML format.
 version = "1.0"
-region = "{{.Region}}"
-account_id = "{{.AccountID}}"
+epoch = 1
+node = "{{.Node}}"
 
+[nodes.{{.Node}}]
+node = "{{.Node}}"
+region = "{{.Region}}"
+az = "{{.Az}}"
+
+account_id = "{{.AccountID}}"
 access_key = "{{.AccessKey}}"
 secret_key = "{{.SecretKey}}"
 
-[daemon]
-host = "0.0.0.0:4432"
+[nodes.{{.Node}}.daemon]
+host = "0.0.0.0:{{.Port}}"
 tlskey = "config/server.key"
 tlscert = "config/server.pem"
 
-[awsgw]
+[nodes.{{.Node}}.awsgw]
 host = "0.0.0.0:9999"
 tlskey = "config/server.key"
 tlscert = "config/server.pem"
 debug = true
 config = "awsgw/awsgw.toml"
 
-[nats]
+[nodes.{{.Node}}.nats]
 host = "0.0.0.0:4222"
 
-[nats.acl]
+[nodes.{{.Node}}.nats.acl]
 token = "{{.NatsToken}}"
 
-[nats.sub]
+[nodes.{{.Node}}.nats.sub]
 
-[predastore]
+[nodes.{{.Node}}.predastore]
 host = "0.0.0.0:8443"
 region = "{{.Region}}"
 bucket = "predastore"

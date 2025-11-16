@@ -167,7 +167,8 @@ var viperblockStartCmd = &cobra.Command{
 		fmt.Println("Loading config from:", cfgFile)
 
 		// TODO: Support ENV vars, CLI, otherwise revert to config.LoadConfig()
-		appConfig, err := config.LoadConfig(cfgFile)
+		clusterConfig, err := config.LoadConfig(cfgFile)
+		nodeConfig := clusterConfig.Nodes[clusterConfig.Node]
 
 		if err != nil {
 			fmt.Println("Error loading config file:", err)
@@ -178,47 +179,50 @@ var viperblockStartCmd = &cobra.Command{
 
 		if natsHost != "" {
 			fmt.Println("Overwriting natsHost:", natsHost)
-			appConfig.NATS.Host = natsHost
+			nodeConfig.NATS.Host = natsHost
 		}
 
 		s3Host := viper.GetString("s3-host")
 
 		if s3Host != "" {
 			fmt.Println("Overwriting s3host:", s3Host)
-			appConfig.Predastore.Host = s3Host
+			nodeConfig.Predastore.Host = s3Host
 		}
 
 		s3Bucket := viper.GetString("s3-bucket")
 
 		if s3Bucket != "" {
 			fmt.Println("Overwriting s3bucket:", s3Bucket)
-			appConfig.Predastore.Bucket = s3Bucket
+			nodeConfig.Predastore.Bucket = s3Bucket
 		}
 
 		s3Region := viper.GetString("s3-region")
 
 		if s3Region != "" {
 			fmt.Println("Overwriting s3Region:", s3Region)
-			appConfig.Predastore.Region = s3Region
+			nodeConfig.Predastore.Region = s3Region
 		}
 
 		accessKey := viper.GetString("access-key")
 		if accessKey != "" {
 			fmt.Println("Overwriting access-key:", accessKey)
-			appConfig.Predastore.AccessKey = accessKey
+			nodeConfig.Predastore.AccessKey = accessKey
 		}
 
 		secretKey := viper.GetString("secret-key")
 		if secretKey != "" {
 			fmt.Println("Overwriting secret-key:", secretKey)
-			appConfig.Predastore.SecretKey = secretKey
+			nodeConfig.Predastore.SecretKey = secretKey
 		}
 
 		baseDir := viper.GetString("base-dir")
 		if baseDir != "" {
 			fmt.Println("Overwriting base-dir:", baseDir)
-			appConfig.Predastore.BaseDir = baseDir
+			nodeConfig.Predastore.BaseDir = baseDir
 		}
+
+		// Apply changes back to cluster config
+		clusterConfig.Nodes[clusterConfig.Node] = nodeConfig
 
 		pluginPath := viper.GetString("plugin-path")
 
@@ -236,14 +240,14 @@ var viperblockStartCmd = &cobra.Command{
 		}
 
 		service, err := service.New("viperblock", &viperblockd.Config{
-			NatsHost:   appConfig.NATS.Host,
+			NatsHost:   nodeConfig.NATS.Host,
 			PluginPath: pluginPath,
-			S3Host:     appConfig.Predastore.Host,
-			Bucket:     appConfig.Predastore.Bucket,
-			Region:     appConfig.Predastore.Region,
-			AccessKey:  appConfig.Predastore.AccessKey,
-			SecretKey:  appConfig.Predastore.SecretKey,
-			BaseDir:    appConfig.Predastore.BaseDir,
+			S3Host:     nodeConfig.Predastore.Host,
+			Bucket:     nodeConfig.Predastore.Bucket,
+			Region:     nodeConfig.Predastore.Region,
+			AccessKey:  nodeConfig.Predastore.AccessKey,
+			SecretKey:  nodeConfig.Predastore.SecretKey,
+			BaseDir:    nodeConfig.Predastore.BaseDir,
 		})
 
 		if err != nil {
@@ -363,7 +367,8 @@ var hiveStartCmd = &cobra.Command{
 		}
 
 		// TODO: Support ENV vars, CLI, otherwise revert to config.LoadConfig()
-		appConfig, err := config.LoadConfig(cfgFile)
+		clusterConfig, err := config.LoadConfig(cfgFile)
+		nodeConfig := clusterConfig.Nodes[clusterConfig.Node]
 
 		if err != nil {
 			fmt.Println("Error loading config file:", err)
@@ -375,7 +380,7 @@ var hiveStartCmd = &cobra.Command{
 
 		if baseDir != "" {
 			fmt.Println("Overwriting base-dir to:", baseDir)
-			appConfig.BaseDir = baseDir
+			nodeConfig.BaseDir = baseDir
 		}
 
 		// Overwrite defaults (CLI first, config second, env third)
@@ -383,10 +388,13 @@ var hiveStartCmd = &cobra.Command{
 
 		if walDir != "" {
 			fmt.Println("Overwriting wal-dir to:", walDir)
-			appConfig.WalDir = walDir
+			nodeConfig.WalDir = walDir
 		}
 
-		service, err := service.New("hive", appConfig)
+		// Apply changes back to cluster config
+		clusterConfig.Nodes[clusterConfig.Node] = nodeConfig
+
+		service, err := service.New("hive", clusterConfig)
 
 		if err != nil {
 			fmt.Println("Error starting hive service:", err)
@@ -404,7 +412,7 @@ var hiveStopCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Stopping hive service...")
 
-		service, err := service.New("hive", &config.Config{})
+		service, err := service.New("hive", &config.ClusterConfig{})
 
 		if err != nil {
 			fmt.Println("Error stopping hive service:", err)
@@ -443,7 +451,8 @@ var awsgwStartCmd = &cobra.Command{
 		fmt.Println("Loading config from:", cfgFile)
 
 		// TODO: Support ENV vars, CLI, otherwise revert to config.LoadConfig()
-		appConfig, err := config.LoadConfig(cfgFile)
+		clusterConfig, err := config.LoadConfig(cfgFile)
+		nodeConfig := clusterConfig.Nodes[clusterConfig.Node]
 
 		if err != nil {
 			fmt.Println("Error loading config file:", err)
@@ -454,30 +463,33 @@ var awsgwStartCmd = &cobra.Command{
 		awsgwHost := viper.GetString("host")
 		if awsgwHost != "" {
 			fmt.Println("Overwriting awsgw host to:", awsgwHost)
-			appConfig.AWSGW.Host = awsgwHost
+			nodeConfig.AWSGW.Host = awsgwHost
 		}
 
 		awsgwTlsCert := viper.GetString("tls-cert")
 		if awsgwTlsCert != "" {
 			fmt.Println("Overwriting awsgw tls-cert to:", awsgwTlsCert)
-			appConfig.AWSGW.TLSCert = awsgwTlsCert
+			nodeConfig.AWSGW.TLSCert = awsgwTlsCert
 		}
 
 		awsgwTlsKey := viper.GetString("tls-key")
 
 		if awsgwTlsKey != "" {
 			fmt.Println("Overwriting awsgw tls-key to:", awsgwTlsKey)
-			appConfig.AWSGW.TLSKey = awsgwTlsKey
+			nodeConfig.AWSGW.TLSKey = awsgwTlsKey
 		}
 
 		baseDir := viper.GetString("base-dir")
 
 		if awsgwTlsKey != "" {
 			fmt.Println("Overwriting awsgw base-dir to:", baseDir)
-			appConfig.BaseDir = baseDir
+			nodeConfig.BaseDir = baseDir
 		}
 
-		service, err := service.New("awsgw", appConfig)
+		// Apply changes back to cluster config
+		clusterConfig.Nodes[clusterConfig.Node] = nodeConfig
+
+		service, err := service.New("awsgw", clusterConfig)
 
 		if err != nil {
 			fmt.Println("Error starting awsgw service:", err)
@@ -495,7 +507,7 @@ var awsgwStopCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Stopping awsgw service...")
 
-		service, err := service.New("awsgw", &config.Config{})
+		service, err := service.New("awsgw", &config.ClusterConfig{})
 
 		if err != nil {
 			fmt.Println("Error stopping awsgw service:", err)

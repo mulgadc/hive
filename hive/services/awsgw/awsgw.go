@@ -17,12 +17,12 @@ import (
 var serviceName = "awsgw"
 
 type Service struct {
-	Config *config.Config
+	Config *config.ClusterConfig
 }
 
 func New(cfg interface{}) (svc *Service, err error) {
 	svc = &Service{
-		Config: cfg.(*config.Config),
+		Config: cfg.(*config.ClusterConfig),
 	}
 	return svc, nil
 }
@@ -54,11 +54,13 @@ func (svc *Service) Reload() (err error) {
 	return nil
 }
 
-func launchService(config *config.Config) (err error) {
+func launchService(config *config.ClusterConfig) (err error) {
+
+	nodeConfig := config.Nodes[config.Node]
 
 	// Connect to NATS for service communication
 	opts := []nats.Option{
-		nats.Token(config.NATS.ACL.Token),
+		nats.Token(nodeConfig.NATS.ACL.Token),
 		nats.ReconnectWait(time.Second),
 		nats.MaxReconnects(-1), // Infinite reconnects
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
@@ -69,26 +71,26 @@ func launchService(config *config.Config) (err error) {
 		}),
 	}
 
-	natsConn, err := nats.Connect(config.NATS.Host, opts...)
+	natsConn, err := nats.Connect(nodeConfig.NATS.Host, opts...)
 	if err != nil {
 		slog.Error("Failed to connect to NATS", "err", err)
 		return err
 	}
 	defer natsConn.Close()
 
-	slog.Info("Connected to NATS server", "host", config.NATS.Host)
+	slog.Info("Connected to NATS server", "host", nodeConfig.NATS.Host)
 
 	// Append Base dir if config has no leading path
-	if config.BaseDir != "" && !strings.HasPrefix(config.AWSGW.Config, "/") {
-		config.AWSGW.Config = fmt.Sprintf("%s/%s", config.BaseDir, config.AWSGW.Config)
+	if nodeConfig.BaseDir != "" && !strings.HasPrefix(nodeConfig.AWSGW.Config, "/") {
+		nodeConfig.AWSGW.Config = fmt.Sprintf("%s/%s", nodeConfig.BaseDir, nodeConfig.AWSGW.Config)
 	}
 
 	// Create gateway with NATS connection
 	gw := gateway.GatewayConfig{
-		Debug:          config.AWSGW.Debug,
+		Debug:          nodeConfig.AWSGW.Debug,
 		DisableLogging: false,
 		NATSConn:       natsConn,
-		Config:         config.AWSGW.Config,
+		Config:         nodeConfig.AWSGW.Config,
 	}
 
 	app := gw.SetupRoutes()
@@ -98,7 +100,7 @@ func launchService(config *config.Config) (err error) {
 		return err
 	}
 
-	log.Fatal(app.ListenTLS(config.AWSGW.Host, config.AWSGW.TLSCert, config.AWSGW.TLSKey))
+	log.Fatal(app.ListenTLS(nodeConfig.AWSGW.Host, nodeConfig.AWSGW.TLSCert, nodeConfig.AWSGW.TLSKey))
 
 	return nil
 

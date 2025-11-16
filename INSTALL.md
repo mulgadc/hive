@@ -53,8 +53,10 @@ Confirm ./bin/hive exists and executable.
 
 When running Hive for the first time, run the init function to create the default directories for data, config files and layout required.
 
-```bash
-./bin/hive admin init
+Example single node installation to get started:
+
+```
+/bin/hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
 ```
 
 Next, set the AWS profile to use `hive` which points to the local environment.
@@ -93,7 +95,7 @@ aws ec2 create-key-pair \
 | jq -r '.KeyMaterial | rtrimstr("\n")' > ~/.ssh/hive-key
 ```
 
-Update permissions to SSH will accept reading the file.
+Update permissions for the key for ssh to accept reading the file.
 
 ```bash
 chmod 600 ~/.ssh/hive-key
@@ -105,7 +107,7 @@ Next, generate a public key from the specified private key pair.
 ssh-keygen -y -f ~/.ssh/hive-key > ~/.ssh/hive-key.pub
 ```
 
-Validate the new key is available
+### Validate the new key is available
 
 ```bash
 aws ec2 describe-key-pairs
@@ -164,13 +166,13 @@ Extracted image to: /home/ben/hive/images/debian/12/arm64/disk.raw
 ✅ Image import complete. Image-ID (AMI): ami-e29fcc65734aec9ea
 ```
 
-Next, verify available disk images to confirm the import was successful
+Next, verify available disk images to confirm the import was successful, replace `ami-XXX` with the value from the command output.
 
 ```bash
-aws ec2 describe-images --image-ids ami-e29fcc65734aec9ea
+aws ec2 describe-images --image-ids ami-XXX
 ```
 
-### Manual import
+### Manual AMI import
 
 Using this method you can import any OS disk image. For example, download the Debian 12 image from the repository [https://cloud.debian.org/images/cloud/bookworm/latest/](https://cloud.debian.org/images/cloud/bookworm/latest/)
 
