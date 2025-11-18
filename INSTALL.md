@@ -34,7 +34,7 @@ sudo apt install awscli
 Create the base directory for the Hive development environment
 
 ```
-mkdir ~/Development/mulga/
+mkdir -p ~/Development/mulga/
 cd ~/Development/mulga/
 git clone https://github.com/mulgadc/hive.git
 ```
@@ -47,13 +47,17 @@ Setup the dev environment and package dependencies on [viperblock](https://githu
 ./scripts/dev-setup.sh     # Setup complete development environment
 ```
 
-Confirm ./bin/hive exists and executable.
+Once complete, confirm `./bin/hive` exists and executable.
+
+# Single node installation
+
+For rapid development and testing, `hive` can be installed locally as a single node instance. Follow the instructions below for a complete working environment.
 
 ## Init
 
 When running Hive for the first time, run the init function to create the default directories for data, config files and layout required.
 
-Example single node installation to get started:
+Example single node installation to get started, this will create a new region `ap-southeast-2` and availability zone `ap-southeast-2a` on your local instance:
 
 ```
 /bin/hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
@@ -67,7 +71,7 @@ export AWS_PROFILE=hive
 
 ## Launch services
 
-Start the core services
+Start the core services for development
 
 ```bash
 ./scripts/start-dev.sh
@@ -75,7 +79,7 @@ Start the core services
 
 ## Create SSH key
 
-For first install users, create or import an existing key pair which can be used to launch EC2 instances.
+For first install, create or import an existing key pair which can be used to launch EC2 instances.
 
 ### Import existing key
 
@@ -85,9 +89,15 @@ Import an existing key pair, replace `~/.ssh/id_rsa.pub` with your specified key
 aws ec2 import-key-pair --key-name "hive-key" --public-key-material fileb://~/.ssh/id_rsa.pub
 ```
 
-### Create new key pair
+If no key exists, generate one using `ssh-keygen` and repeat the command above.
 
-Alternatively, create a new key pair and store the JSON output of the AWS SDK using the `jq` command.
+```bash
+ssh-keygen -t rsa
+```
+
+### Create new key pair using the AWS cli
+
+Alternatively, create a new key pair using the AWS CLI tool and store the JSON output of the AWS SDK using the `jq` command.
 
 ```bash
 aws ec2 create-key-pair \
@@ -130,9 +140,9 @@ aws ec2 describe-key-pairs
 
 ## Create AMI template (new method)
 
-Use the hive CLI tool to import a selected OS image. Note, the source file can be compressed (e.g image.tar.gz, image.gz, image.tar.xz) and the tool will automatically extract and upload the raw OS image as an AMI.
+Use the hive CLI tool to import a selected OS image. Note, the source file can be compressed (e.g image.tar.gz, image.gz, image.tar.xz) and the tool will automatically extract and upload the raw OS image as an AMI after validation the disk image contains a UEFI/BIOS boot capability.
 
-Note, when downloading OS images, use supported platforms that support the `cloud-init` feature to automatically bootstrap when using the Hive EC2 functionality.
+Note, when downloading OS images, use supported platforms that support the `cloud-init` feature to automatically bootstrap when using the Hive EC2 functionality to access SSH and networking services.
 
 ### Automatic import
 
