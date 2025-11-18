@@ -164,15 +164,15 @@ func startPredastoreServer(t *testing.T) *Config {
 region = "us-east-1"
 host = "127.0.0.1"
 port = 18443
-debug = true
+debug = false
 disable_logging = false
-base_path = "` + testDir + `"
+base_path = "` + testDir + `/"
 
 [[buckets]]
 name = "test-bucket"
 region = "us-east-1"
 type = "fs"
-pathname = "` + testDir + `test-bucket"
+pathname = "` + testBucketDir + `"
 public = false
 encryption = ""
 
@@ -180,7 +180,7 @@ encryption = ""
 name = "public-bucket"
 region = "us-east-1"
 type = "fs"
-pathname = "` + testDir + `public-bucket"
+pathname = "` + publicBucketDir + `"
 public = true
 encryption = ""
 
@@ -202,7 +202,7 @@ policy = [
 		ConfigPath: configPath,
 		Port:       18443,
 		Host:       "127.0.0.1",
-		Debug:      true,
+		Debug:      false,
 		BasePath:   testDir,
 		TlsCert:    certPath,
 		TlsKey:     keyPath,
@@ -449,7 +449,7 @@ func TestIntegration_FileUpload_PublicBucket2(t *testing.T) {
 
 	client := createS3Client(validAccessKey, validSecretKey)
 
-	time.Sleep(20 * time.Second)
+	time.Sleep(1 * time.Second)
 
 	// Upload test file
 	key := "test1.txt"
@@ -475,7 +475,7 @@ func TestIntegration_FileUpload_PublicBucket2(t *testing.T) {
 		return
 	}
 
-	time.Sleep(30 * time.Second)
+	time.Sleep(1 * time.Second)
 
 	defer result.Body.Close()
 	downloadedContent, err := io.ReadAll(result.Body)

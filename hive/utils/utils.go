@@ -300,6 +300,7 @@ func KillProcess(pid int) error {
 	for {
 		time.Sleep(1 * time.Second)
 		process, err = os.FindProcess(pid)
+
 		if err != nil {
 			return err
 		}
@@ -313,8 +314,8 @@ func KillProcess(pid int) error {
 
 		checks++
 
-		// If process is still running after 60 seconds, force kill
-		if checks > 60 {
+		// If process is still running after 120 seconds, force kill
+		if checks > 120 {
 			err = process.Kill() // SIGKILL
 
 			if err != nil {

@@ -30,9 +30,9 @@ func TestNew(t *testing.T) {
 		case "viperblock":
 			svc, err = New(s, &viperblockd.Config{})
 		case "hive":
-			svc, err = New(s, &config.Config{})
+			svc, err = New(s, &config.ClusterConfig{})
 		case "awsgw":
-			svc, err = New(s, &config.Config{})
+			svc, err = New(s, &config.ClusterConfig{})
 			// No special setup needed
 
 		}

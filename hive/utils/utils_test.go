@@ -384,16 +384,25 @@ func TestKillProcess(t *testing.T) {
 
 	pid := cmd.Process.Pid
 
-	// Kill the process
-	err = KillProcess(pid)
-	assert.NoError(t, err)
-
 	// Wait for the process to actually terminate
 	// On macOS, the process cleanup can take longer
-	time.Sleep(500 * time.Millisecond)
+
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		// Kill the process
+		err = KillProcess(pid)
+		assert.NoError(t, err)
+
+	}()
+
+	// Reap the process so it does not stay DEFUNCT
+	if err := cmd.Wait(); err != nil {
+		// often you expect a non nil error here since it was terminated by a signal
+		t.Logf("process exited after SIGTERM: %v", err)
+	}
 
 	// Wait for process to be reaped
-	_ = cmd.Wait()
+	//_ = cmd.Wait()
 
 	// On macOS, after Wait(), Signal(0) may not reliably detect dead process
 	// So we skip this check as it's platform-dependent behavior
@@ -415,13 +424,24 @@ func TestStopProcess(t *testing.T) {
 	err = WritePidFile(testName, cmd.Process.Pid)
 	assert.NoError(t, err)
 
-	// Stop the process
-	err = StopProcess(testName)
-	assert.NoError(t, err)
+	go func() {
+		time.Sleep(500 * time.Millisecond)
 
-	// Verify PID file was removed
-	_, err = ReadPidFile(testName)
-	assert.Error(t, err, "PID file should be removed")
+		// Stop the process
+		err = StopProcess(testName)
+		assert.NoError(t, err)
+
+		// Verify PID file was removed
+		_, err = ReadPidFile(testName)
+		assert.Error(t, err, "PID file should be removed")
+
+	}()
+
+	// Reap the process so it does not stay DEFUNCT
+	if err := cmd.Wait(); err != nil {
+		// often you expect a non nil error here since it was terminated by a signal
+		t.Logf("process exited after SIGTERM: %v", err)
+	}
 
 	// Test stopping non-existent process
 	err = StopProcess("nonexistent-process")
