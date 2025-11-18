@@ -446,3 +446,7 @@ aws ec2 describe-instances  --instance-ids $INSTANCE_ID
 ```
 
 On success no data will be returned, since the instance is no longer available.
+
+# Multi-node configuration
+
+Details for setting up a multi-node configuration of Mulga for development use.
