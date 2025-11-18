@@ -421,7 +421,9 @@ func TestStopProcess(t *testing.T) {
 
 	// Write PID file
 	testName := "stopprocess-test"
+
 	err = WritePidFile(testName, cmd.Process.Pid)
+
 	assert.NoError(t, err)
 
 	go func() {
