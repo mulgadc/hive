@@ -16,32 +16,30 @@ limitations under the License.
 package cmd
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"crypto/x509/pkix"
+	"bytes"
+	"crypto/tls"
 	_ "embed"
-	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
-	"math/big"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
-	"text/template"
+	"strings"
 	"time"
 
+	"github.com/mulgadc/hive/hive/admin"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/mulgadc/viperblock/viperblock/backends/s3"
 	vutils "github.com/mulgadc/viperblock/viperblock/utils"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
-	"gopkg.in/ini.v1"
 )
 
 //go:embed templates/hive.toml
@@ -81,6 +79,15 @@ var adminInitCmd = &cobra.Command{
 and setting up AWS credentials. This creates the necessary directory structure and
 configuration files in ~/hive/config.`,
 	Run: runAdminInit,
+}
+
+var adminJoinCmd = &cobra.Command{
+	Use:   "join",
+	Short: "Join an existing Hive cluster",
+	Long: `Join an existing Hive cluster by connecting to a leader node and retrieving
+the cluster configuration. This command will configure the local node to join
+the cluster and participate in distributed operations.`,
+	Run: runAdminJoin,
 }
 
 var imagesCmd = &cobra.Command{
@@ -125,6 +132,7 @@ hive admin images import --file /path/to/image --distro debian --version 12 --ar
 func init() {
 	rootCmd.AddCommand(adminCmd)
 	adminCmd.AddCommand(adminInitCmd)
+	adminCmd.AddCommand(adminJoinCmd)
 
 	adminCmd.AddCommand(imagesCmd)
 	imagesCmd.AddCommand(imagesImportCmd)
@@ -145,6 +153,22 @@ func init() {
 	adminInitCmd.Flags().Int("nodes", 3, "Number of nodes to expect for cluster")
 	adminInitCmd.Flags().String("host", "", "Leader node to join (if not specified, tries multicast discovery)")
 	adminInitCmd.Flags().Int("port", 4432, "Port to bind cluster services on")
+	adminInitCmd.Flags().String("bind", "0.0.0.0", "IP address to bind services to (e.g., 10.11.12.1 for multi-node)")
+	adminInitCmd.Flags().String("cluster-bind", "", "IP address to bind NATS cluster services to (e.g., 10.11.12.1 for multi-node)")
+	adminInitCmd.Flags().String("cluster-routes", "", "NATS cluster hosts for routing specify multiple with comma (e.g., 10.11.12.1:4248,10.11.12.2:4248 for multi-node)")
+
+	// Flags for admin join
+	adminJoinCmd.Flags().String("region", "ap-southeast-2", "Region for this node")
+	adminJoinCmd.Flags().String("az", "ap-southeast-2a", "Availability zone for this node")
+	adminJoinCmd.Flags().String("node", "", "Node name (required)")
+	adminJoinCmd.Flags().String("host", "", "Leader node host:port (e.g., node1.local:4432) (required)")
+	adminJoinCmd.Flags().String("data-dir", "", "Data directory for this node (default: ~/hive)")
+	adminJoinCmd.Flags().Int("port", 4432, "Port to bind cluster services on")
+	adminJoinCmd.Flags().String("bind", "0.0.0.0", "IP address to bind services to (e.g., 10.11.12.2 for multi-node on single host)")
+	adminJoinCmd.Flags().String("cluster-bind", "", "IP address to bind NATS cluster services to (e.g., 10.11.12.1 for multi-node)")
+	adminJoinCmd.Flags().String("cluster-routes", "", "NATS cluster hosts for routing specify multiple with comma (e.g., 10.11.12.1:4248,10.11.12.2:4248 for multi-node)")
+	adminJoinCmd.MarkFlagRequired("node")
+	adminJoinCmd.MarkFlagRequired("host")
 
 	imagesImportCmd.Flags().String("tmp-dir", os.TempDir(), "Temporary directory for image import processing")
 
@@ -185,7 +209,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	// Check the base dir has our images path, and correctlty init
 	imageDir := fmt.Sprintf("%s/images", baseDir)
 
-	if !fileExists(imageDir) {
+	if !admin.FileExists(imageDir) {
 		fmt.Fprintf(os.Stderr, "Image directory does not exist. Base path specified correctly? %s", imageDir)
 		os.Exit(1)
 	}
@@ -268,7 +292,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		fmt.Printf("Downloading image %s to %s\n", image.URL, imageFile)
 
 		// If image path exists, skip
-		if fileExists(imageFile) && !forceCmd {
+		if admin.FileExists(imageFile) && !forceCmd {
 			fmt.Printf("Image file already exists, skipping download, use --force to overwrite: %s\n", imageFile)
 		} else {
 
@@ -436,15 +460,33 @@ func runimagesListCmd(cmd *cobra.Command, args []string) {
 	pterm.Println("hive admin images import --name <image-name>")
 }
 
+// TODO: Move all logic to a module, use minimal application logic in viper commands
 func runAdminInit(cmd *cobra.Command, args []string) {
 	force, _ := cmd.Flags().GetBool("force")
 	configDir, _ := cmd.Flags().GetString("config-dir")
+	hiveRoot, _ := cmd.Flags().GetString("hive-dir")
 	region, _ := cmd.Flags().GetString("region")
 	az, _ := cmd.Flags().GetString("az")
 	node, _ := cmd.Flags().GetString("node")
 	port, _ := cmd.Flags().GetInt("port")
+	bindIP, _ := cmd.Flags().GetString("bind")
+	clusterBind, _ := cmd.Flags().GetString("cluster-bind")
+	//clusterRoutesStr, _ := cmd.Flags().GetString("cluster-routes")
+	// := strings.Split(clusterRoutesStr, ",")
 
-	fmt.Println("Config", az, node, port)
+	// Validate IP address format
+	if net.ParseIP(bindIP) == nil {
+		fmt.Fprintf(os.Stderr, "❌ Error: Invalid IP address for --bind: %s\n", bindIP)
+		os.Exit(1)
+	}
+
+	// Validate port range
+	if port < 1 || port > 65535 {
+		fmt.Fprintf(os.Stderr, "❌ Error: Port must be between 1 and 65535, got: %d\n", port)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Initializing Hive with bind IP: %s, port: %d\n", bindIP, port)
 
 	// Default config directory
 	if configDir == "" {
@@ -461,7 +503,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 	// Check if already initialized
 	hiveTomlPath := filepath.Join(configDir, "hive.toml")
-	if !force && fileExists(hiveTomlPath) {
+	if !force && admin.FileExists(hiveTomlPath) {
 		fmt.Println("⚠️  Hive already initialized!")
 		fmt.Printf("Config file exists: %s\n", hiveTomlPath)
 		fmt.Println("\nTo re-initialize, run with --force flag:")
@@ -477,9 +519,9 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	fmt.Printf("✅ Created config directory: %s\n", configDir)
 
 	// Generate AWS credentials
-	accessKey := generateAWSAccessKey()
-	secretKey := generateAWSSecretKey()
-	accountID := generateAccountID()
+	accessKey := admin.GenerateAWSAccessKey()
+	secretKey := admin.GenerateAWSSecretKey()
+	accountID := admin.GenerateAccountID()
 
 	fmt.Println("\n🔑 Generated AWS credentials:")
 	fmt.Printf("   Access Key: %s\n", accessKey)
@@ -487,29 +529,18 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	fmt.Printf("   Account ID: %s\n", accountID)
 
 	// Generate SSL certificates
-	certPath := filepath.Join(configDir, "server.pem")
-	keyPath := filepath.Join(configDir, "server.key")
-
-	if force || !fileExists(certPath) || !fileExists(keyPath) {
-		fmt.Println("\n🔐 Generating SSL certificates...")
-		if err := generateSelfSignedCert(certPath, keyPath); err != nil {
-			fmt.Fprintf(os.Stderr, "Error generating SSL certificates: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("✅ SSL certificates generated:\n")
-		fmt.Printf("   Certificate: %s\n", certPath)
-		fmt.Printf("   Key: %s\n", keyPath)
-	} else {
-		fmt.Println("\n✅ SSL certificates already exist")
-	}
+	certPath := admin.GenerateCertificatesIfNeeded(configDir, force)
 
 	// Generate NATS token
-	natsToken := generateNATSToken()
+	natsToken := admin.GenerateNATSToken()
 	fmt.Println("\n🔒 Generated NATS authentication token")
 
-	// Get home directory for data path
-	homeDir, _ := os.UserHomeDir()
-	hiveRoot := filepath.Join(homeDir, "hive")
+	if hiveRoot == "" {
+		// Get home directory for data path
+		homeDir, _ := os.UserHomeDir()
+		hiveRoot = filepath.Join(homeDir, "hive")
+
+	}
 
 	// Create config files from embedded templates
 	fmt.Println("\n📝 Creating configuration files...")
@@ -527,55 +558,63 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	// Generate all config files
-	configs := []struct {
-		path     string
-		template string
-		name     string
-	}{
-		{hiveTomlPath, hiveTomlTemplate, "hive.toml"},
-		{filepath.Join(awsgwDir, "awsgw.toml"), awsgwTomlTemplate, "awsgw/awsgw.toml"},
-		{filepath.Join(predastoreDir, "predastore.toml"), predastoreTomlTemplate, "predastore/predastore.toml"},
-		{filepath.Join(natsDir, "nats.conf"), natsConfTemplate, "nats/nats.conf"},
-	}
-
 	portStr := fmt.Sprintf("%d", port)
 
-	for _, cfg := range configs {
-		if err := generateConfigFile(cfg.path, cfg.template, accessKey, secretKey, accountID, region, natsToken, hiveRoot, az, node, portStr); err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", cfg.name, err)
-			os.Exit(1)
-		}
-		fmt.Printf("✅ Created: %s\n", cfg.name)
+	configSettings := admin.ConfigSettings{
+		AccessKey: accessKey,
+		SecretKey: secretKey,
+		AccountID: accountID,
+		Region:    region,
+		NatsToken: natsToken,
+		DataDir:   hiveRoot,
+
+		Node:          node,
+		Az:            az,
+		Port:          portStr,
+		BindIP:        bindIP,
+		ClusterBindIP: clusterBind,
+		//ClusterRoutes: clusterRoutes,
+	}
+
+	// Generate all config files
+	configs := []admin.ConfigFile{
+		{
+			Name:     "hive.toml",
+			Path:     hiveTomlPath,
+			Template: hiveTomlTemplate,
+		},
+		{
+			Name:     filepath.Join(awsgwDir, "awsgw.toml"),
+			Path:     filepath.Join(awsgwDir, "awsgw.toml"),
+			Template: awsgwTomlTemplate,
+		},
+		{
+			Name:     filepath.Join(predastoreDir, "predastore.toml"),
+			Path:     filepath.Join(predastoreDir, "predastore.toml"),
+			Template: predastoreTomlTemplate,
+		},
+		{
+			Name:     filepath.Join(natsDir, "nats.conf"),
+			Path:     filepath.Join(natsDir, "nats.conf"),
+			Template: natsConfTemplate,
+		},
+	}
+
+	err := admin.GenerateConfigFiles(configs, configSettings)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error generating configuration files: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Update ~/.aws/credentials and ~/.aws/config
 	fmt.Println("\n🔧 Configuring AWS credentials...")
-	if err := setupAWSCredentials(accessKey, secretKey, region, certPath); err != nil {
+	if err := admin.SetupAWSCredentials(accessKey, secretKey, region, certPath); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Could not update AWS credentials: %v\n", err)
 	} else {
 		fmt.Println("✅ AWS credentials configured")
 	}
 
-	// Create additional directories
-	dirs := []string{
-		filepath.Join(hiveRoot, "images"),
-		filepath.Join(hiveRoot, "amis"),
-		filepath.Join(hiveRoot, "volumes"),
-		filepath.Join(hiveRoot, "state"),
-		filepath.Join(hiveRoot, "logs"),
-		filepath.Join(hiveRoot, "nats"),
-		filepath.Join(hiveRoot, "predastore"),
-		filepath.Join(hiveRoot, "viperblock"),
-	}
-
-	fmt.Println("\n📁 Creating directory structure...")
-	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: Could not create %s: %v\n", dir, err)
-		}
-	}
-	fmt.Printf("✅ Directory structure created in %s\n", hiveRoot)
+	admin.CreateServiceDirectories(hiveRoot)
 
 	// Print success message
 	fmt.Println("\n🎉 Hive initialization complete!")
@@ -593,263 +632,233 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	fmt.Println()
 }
 
-// generateAWSAccessKey generates an AWS-style access key
-// Format: AKIA + 16 random uppercase alphanumeric characters
-func generateAWSAccessKey() string {
-	const prefix = "AKIA"
-	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	const length = 16
+func runAdminJoin(cmd *cobra.Command, args []string) {
+	node, _ := cmd.Flags().GetString("node")
+	leaderHost, _ := cmd.Flags().GetString("host")
+	region, _ := cmd.Flags().GetString("region")
+	az, _ := cmd.Flags().GetString("az")
+	dataDir, _ := cmd.Flags().GetString("data-dir")
+	port, _ := cmd.Flags().GetInt("port")
+	bindIP, _ := cmd.Flags().GetString("bind")
+	configDir, _ := cmd.Flags().GetString("config-dir")
+	clusterBind, _ := cmd.Flags().GetString("cluster-bind")
+	// Receive as string, split later
+	// TODO: Use GetStringArray
+	clusterRoutesStr, _ := cmd.Flags().GetString("cluster-routes")
 
-	result := make([]byte, length)
-	for i := range result {
-		num, _ := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
-		result[i] = charset[num.Int64()]
+	// Supply as array to template
+	clusterRoutes := strings.Split(clusterRoutesStr, ",")
+
+	// Validate required parameters
+	if node == "" {
+		fmt.Fprintf(os.Stderr, "❌ Error: --node is required\n")
+		os.Exit(1)
+	}
+	if leaderHost == "" {
+		fmt.Fprintf(os.Stderr, "❌ Error: --host is required\n")
+		os.Exit(1)
 	}
 
-	return prefix + string(result)
-}
-
-// generateAWSSecretKey generates an AWS-style secret key
-// 40 character base64-encoded string
-func generateAWSSecretKey() string {
-	bytes := make([]byte, 30) // 30 bytes = 40 chars in base64
-	if _, err := rand.Read(bytes); err != nil {
-		panic(err)
+	// Validate IP address format
+	if net.ParseIP(bindIP) == nil {
+		fmt.Fprintf(os.Stderr, "❌ Error: Invalid IP address for --bind: %s\n", bindIP)
+		os.Exit(1)
 	}
-	return base64.StdEncoding.EncodeToString(bytes)
-}
 
-// generateAccountID generates a 12-digit AWS account ID
-func generateAccountID() string {
-	// Generate random 12-digit number
-	num, _ := rand.Int(rand.Reader, big.NewInt(900000000000))
-	accountID := num.Int64() + 100000000000 // Ensure it's 12 digits
-	return fmt.Sprintf("%012d", accountID)
-}
-
-// generateNATSToken generates a secure random token for NATS
-func generateNATSToken() string {
-	bytes := make([]byte, 32)
-	if _, err := rand.Read(bytes); err != nil {
-		panic(err)
+	// Validate port range
+	if port < 1 || port > 65535 {
+		fmt.Fprintf(os.Stderr, "❌ Error: Port must be between 1 and 65535, got: %d\n", port)
+		os.Exit(1)
 	}
-	return "nats_" + base64.URLEncoding.EncodeToString(bytes)[:32]
-}
 
-// generateSelfSignedCert generates a self-signed SSL certificate
-func generateSelfSignedCert(certPath, keyPath string) error {
-	// Generate private key
-	privateKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	// Set default data directory
+	if dataDir == "" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Error getting home directory: %v\n", err)
+			os.Exit(1)
+		}
+		dataDir = filepath.Join(homeDir, "hive")
+	}
+
+	// Set daemon host for this node
+	daemonHost := fmt.Sprintf("%s:%d", bindIP, port)
+
+	fmt.Println("🚀 Joining Hive cluster...")
+	fmt.Printf("Node: %s\n", node)
+	fmt.Printf("Leader: %s\n", leaderHost)
+	fmt.Printf("Region: %s\n", region)
+	fmt.Printf("AZ: %s\n", az)
+	fmt.Printf("Bind IP: %s\n", bindIP)
+	fmt.Printf("Port: %d\n\n", port)
+
+	// Create join request
+	joinReq := config.NodeJoinRequest{
+		Node:       node,
+		Region:     region,
+		AZ:         az,
+		DataDir:    dataDir,
+		DaemonHost: daemonHost,
+	}
+
+	reqBody, err := json.Marshal(joinReq)
 	if err != nil {
-		return fmt.Errorf("failed to generate private key: %w", err)
+		fmt.Fprintf(os.Stderr, "Error marshaling join request: %v\n", err)
+		os.Exit(1)
 	}
 
-	// Create certificate template
-	notBefore := time.Now()
-	notAfter := notBefore.Add(3650 * 24 * time.Hour) // 10 years
-
-	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return fmt.Errorf("failed to generate serial number: %w", err)
-	}
-
-	template := x509.Certificate{
-		SerialNumber: serialNumber,
-		Subject: pkix.Name{
-			CommonName:   "localhost",
-			Organization: []string{"Hive Platform"},
+	// Send join request to leader
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // Skip TLS verification for self-signed certs
 		},
-		NotBefore:             notBefore,
-		NotAfter:              notAfter,
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-		DNSNames:              []string{"localhost"},
-		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
 	}
 
-	// Create certificate
-	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &privateKey.PublicKey, privateKey)
+	joinURL := fmt.Sprintf("http://%s/join", leaderHost)
+	resp, err := client.Post(joinURL, "application/json", bytes.NewBuffer(reqBody))
 	if err != nil {
-		return fmt.Errorf("failed to create certificate: %w", err)
+		fmt.Fprintf(os.Stderr, "❌ Error connecting to leader node: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Make sure the leader node is running and accessible at %s\n", leaderHost)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != 200 {
+		var errResp config.NodeJoinResponse
+		json.Unmarshal(body, &errResp)
+		fmt.Fprintf(os.Stderr, "❌ Failed to join cluster: %s\n", errResp.Message)
+		os.Exit(1)
 	}
 
-	// Write certificate to file
-	certOut, err := os.Create(certPath)
+	var joinResp config.NodeJoinResponse
+	if err := json.Unmarshal(body, &joinResp); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing join response: %v\n", err)
+		os.Exit(1)
+	}
+
+	if !joinResp.Success {
+		fmt.Fprintf(os.Stderr, "❌ Failed to join cluster: %s\n", joinResp.Message)
+		os.Exit(1)
+	}
+
+	fmt.Println("✅ Successfully joined cluster!")
+	fmt.Printf("Epoch: %d\n", joinResp.SharedData.Epoch)
+	fmt.Printf("Config hash: %s\n\n", joinResp.ConfigHash)
+
+	// Save cluster config locally
+	// Confirm if default config directory required
+	if configDir == "" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error getting home directory: %v\n", err)
+			os.Exit(1)
+		}
+		configDir = filepath.Join(homeDir, "hive", "config")
+	}
+
+	hiveTomlPath := filepath.Join(configDir, "hive.toml")
+
+	// Create config directory if needed
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating config directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Construct local node config with THIS node's name at top level
+	localConfig := config.ClusterConfig{
+		Epoch:   joinResp.SharedData.Epoch,
+		Node:    node, // THIS node's name, not the leader's
+		Version: joinResp.SharedData.Version,
+		Nodes:   joinResp.SharedData.Nodes,
+	}
+
+	// Marshal config to TOML format
+	configTOML, err := toml.Marshal(&localConfig)
 	if err != nil {
-		return fmt.Errorf("failed to create cert file: %w", err)
-	}
-	defer certOut.Close()
-
-	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes}); err != nil {
-		return fmt.Errorf("failed to write cert: %w", err)
+		fmt.Fprintf(os.Stderr, "Error marshaling config to TOML: %v\n", err)
+		os.Exit(1)
 	}
 
-	// Write private key to file
-	keyOut, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return fmt.Errorf("failed to create key file: %w", err)
-	}
-	defer keyOut.Close()
-
-	privBytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
-	if err != nil {
-		return fmt.Errorf("failed to marshal private key: %w", err)
+	// Write config to file
+	if err := os.WriteFile(hiveTomlPath, configTOML, 0600); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing config file: %v\n", err)
+		os.Exit(1)
 	}
 
-	if err := pem.Encode(keyOut, &pem.Block{Type: "PRIVATE KEY", Bytes: privBytes}); err != nil {
-		return fmt.Errorf("failed to write key: %w", err)
-	}
+	fmt.Printf("✅ Config saved to: %s\n\n", hiveTomlPath)
 
-	return nil
-}
+	// Generate certificates if needed
+	certPath := admin.GenerateCertificatesIfNeeded(configDir, false)
 
-// generateConfigFile creates a configuration file from a template
-func generateConfigFile(path, templateContent, accessKey, secretKey, accountID, region, natsToken, dataDir, Az, Node, Port string) error {
-	// Parse the embedded template
-	tmpl, err := template.New("config").Parse(templateContent)
-	if err != nil {
-		return fmt.Errorf("failed to parse template: %w", err)
-	}
+	fmt.Printf("✅ SSL certificates available at: %s\n\n", certPath)
 
-	// Template data
-	data := struct {
-		AccessKey string
-		SecretKey string
-		AccountID string
-		Region    string
-		NatsToken string
-		DataDir   string
+	// Write individual node config files
+	portStr := fmt.Sprintf("%d", port)
 
-		// Add more fields as needed
-		Node string
-		Az   string
-		Port string
-	}{
-		AccessKey: accessKey,
-		SecretKey: secretKey,
-		AccountID: accountID,
+	configSettings := admin.ConfigSettings{
+		AccessKey: localConfig.Nodes[node].AccessKey,
+		SecretKey: localConfig.Nodes[node].SecretKey,
 		Region:    region,
-		NatsToken: natsToken,
+		NatsToken: localConfig.Nodes[node].NATS.ACL.Token,
 		DataDir:   dataDir,
 
-		Node: Node,
-		Az:   Az,
-		Port: Port,
+		Node:          node,
+		Az:            az,
+		Port:          portStr,
+		BindIP:        bindIP,
+		ClusterBindIP: clusterBind,
+		ClusterRoutes: clusterRoutes,
 	}
 
-	// Create file with secure permissions
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return fmt.Errorf("failed to create config file: %w", err)
-	}
-	defer f.Close()
+	awsgwDir := filepath.Join(configDir, "awsgw")
+	predastoreDir := filepath.Join(configDir, "predastore")
+	natsDir := filepath.Join(configDir, "nats")
 
-	// Execute template
-	if err := tmpl.Execute(f, data); err != nil {
-		return fmt.Errorf("failed to execute template: %w", err)
-	}
-
-	return nil
-}
-
-// setupAWSCredentials updates ~/.aws/credentials and ~/.aws/config
-func setupAWSCredentials(accessKey, secretKey, region, certPath string) error {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-
-	awsDir := filepath.Join(homeDir, ".aws")
-	if err := os.MkdirAll(awsDir, 0700); err != nil {
-		return err
-	}
-
-	credPath := filepath.Join(awsDir, "credentials")
-	configPath := filepath.Join(awsDir, "config")
-
-	// Determine profile name
-	//profileName := "default"
-
-	// Use hive as the default profile
-	profileName := "hive"
-
-	if fileExists(credPath) {
-		// Check if default profile already exists
-		cfg, err := ini.Load(credPath)
-		if err == nil && cfg.HasSection("default") {
-			profileName = "hive"
+	for _, dir := range []string{awsgwDir, predastoreDir, natsDir} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating directory %s: %v\n", dir, err)
+			os.Exit(1)
 		}
 	}
 
-	// Update credentials file
-	if err := updateAWSINIFile(credPath, profileName, map[string]string{
-		"aws_access_key_id":     accessKey,
-		"aws_secret_access_key": secretKey,
-	}); err != nil {
-		return err
+	// Generate all config files
+	configs := []admin.ConfigFile{
+		{
+			Name:     "hive.toml",
+			Path:     hiveTomlPath,
+			Template: hiveTomlTemplate,
+		},
+		{
+			Name:     filepath.Join(awsgwDir, "awsgw.toml"),
+			Path:     filepath.Join(awsgwDir, "awsgw.toml"),
+			Template: awsgwTomlTemplate,
+		},
+		{
+			Name:     filepath.Join(predastoreDir, "predastore.toml"),
+			Path:     filepath.Join(predastoreDir, "predastore.toml"),
+			Template: predastoreTomlTemplate,
+		},
+		{
+			Name:     filepath.Join(natsDir, "nats.conf"),
+			Path:     filepath.Join(natsDir, "nats.conf"),
+			Template: natsConfTemplate,
+		},
 	}
 
-	// Update config file
-	configSection := profileName
-	if profileName != "default" {
-		configSection = "profile " + profileName
-	}
-
-	if err := updateAWSINIFile(configPath, configSection, map[string]string{
-		"region":       region,
-		"endpoint_url": "https://localhost:9999",
-		"ca_bundle":    certPath,
-		"output":       "json",
-	}); err != nil {
-		return err
-	}
-
-	fmt.Printf("   Profile: %s\n", profileName)
-	if profileName != "default" {
-		fmt.Printf("   Use: export AWS_PROFILE=%s\n", profileName)
-	}
-
-	return nil
-}
-
-// Helper functions
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
-
-// updateAWSINIFile updates or creates an AWS INI file section with given key-value pairs
-func updateAWSINIFile(path, section string, values map[string]string) error {
-	var cfg *ini.File
-	var err error
-
-	// Load existing file or create new one
-	if fileExists(path) {
-		cfg, err = ini.Load(path)
-		if err != nil {
-			return fmt.Errorf("failed to load INI file: %w", err)
-		}
-	} else {
-		cfg = ini.Empty()
-	}
-
-	// Get or create section
-	sec, err := cfg.NewSection(section)
+	err = admin.GenerateConfigFiles(configs, configSettings)
 	if err != nil {
-		// Section already exists, get it
-		sec, err = cfg.GetSection(section)
-		if err != nil {
-			return fmt.Errorf("failed to get section: %w", err)
-		}
+		fmt.Fprintf(os.Stderr, "Error generating configuration files: %v\n", err)
+		os.Exit(1)
 	}
 
-	// Set key-value pairs
-	for key, value := range values {
-		sec.Key(key).SetValue(value)
-	}
+	admin.CreateServiceDirectories(dataDir)
 
-	// Save with proper permissions
-	return cfg.SaveTo(path)
+	fmt.Println("🎉 Node successfully joined cluster!")
+	fmt.Println("\n📋 Next steps:")
+	fmt.Println("   1. Start the hive service:")
+	fmt.Printf("      hive service hive start --config %s\n", hiveTomlPath)
+	fmt.Println()
 }

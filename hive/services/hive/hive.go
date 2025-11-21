@@ -12,7 +12,8 @@ import (
 var serviceName = "hive"
 
 type Service struct {
-	Config *config.ClusterConfig
+	Config     *config.ClusterConfig
+	ConfigPath string
 }
 
 func New(cfg interface{}) (svc *Service, err error) {
@@ -22,9 +23,13 @@ func New(cfg interface{}) (svc *Service, err error) {
 	return svc, nil
 }
 
+func (svc *Service) SetConfigPath(path string) {
+	svc.ConfigPath = path
+}
+
 func (svc *Service) Start() (int, error) {
 	utils.WritePidFile(serviceName, os.Getpid())
-	err := launchService(svc.Config)
+	err := launchService(svc.Config, svc.ConfigPath)
 	if err != nil {
 		return 0, err
 	}
@@ -49,9 +54,10 @@ func (svc *Service) Reload() (err error) {
 	return nil
 }
 
-func launchService(config *config.ClusterConfig) (err error) {
+func launchService(config *config.ClusterConfig, configPath string) (err error) {
 
 	d := daemon.NewDaemon(config)
+	d.SetConfigPath(configPath)
 	slog.Info("Starting Hive daemon ...")
 	err = d.Start()
 

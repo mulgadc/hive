@@ -2,6 +2,19 @@
 
 # Stop Hive development environment
 # This script stops all services started by start-dev.sh
+# Usage: ./scripts/stop-dev.sh
+# Note: Services are stopped using PID files, so data-dir is not required
+
+# Accept optional data directory argument
+DATA_DIR="${1:-$HOME/hive}"
+
+# If path is provided, use for pid location, else the default for Hive
+if [ -n "$1" ]; then
+    PID_DIR="$DATA_DIR/logs"
+else
+    PID_DIR=""
+fi
+
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -18,10 +31,18 @@ echo "Stopping Hive development environment..."
 # Function to stop service by PID file
 stop_service() {
     local name="$1"
+    local pidpath="$2"
 
-    echo "🛑 Stopping $name..."
+    echo "🛑 Stopping $name $pidpath..."
 
-    $PROJECT_ROOT/bin/hive service $name stop
+    # Workaround for local development for multi-node config on single instance
+    if [ -n "$pidpath" ]; then
+        kill -SIGTERM `cat $pidpath/$name.pid`
+        sleep 1
+    else
+    # Correct graceful shutdown via hive binary, waits for clean exit
+        $PROJECT_ROOT/bin/hive service $name stop
+    fi
 
     echo "Status: $?"
 
@@ -39,19 +60,19 @@ stop_service() {
 echo "Stopping services..."
 echo ""
 # Stop Hive daemon/gateway first (it will terminate running instances, unmount nbd devices)
-stop_service "hive"
+stop_service "hive" "$PID_DIR"
 
 # Stop AWSGW
-stop_service "awsgw"
+stop_service "awsgw" "$PID_DIR"
 
 # Stop Viperblock
-stop_service "viperblock"
+stop_service "viperblock" "$PID_DIR"
 
 # Stop Predastore
-stop_service "predastore"
+stop_service "predastore" "$PID_DIR"
 
 # Stop NATS
-stop_service "nats"
+stop_service "nats" "$PID_DIR"
 
 echo ""
 echo "✅ Hive development environment stopped"

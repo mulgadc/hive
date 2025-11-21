@@ -26,7 +26,7 @@ Design layout for multi-node configuration.
 
 ```
 # node1
-hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1 --hive-dir ~/hive/
+hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 3 --hive-dir ~/hive/
 
 # node2
 hive admin join --region ap-southeast-2 --az ap-southeast-2a --node node2 --host node1.local:8443 --data-dir ~/hive/

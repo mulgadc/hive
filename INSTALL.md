@@ -23,7 +23,7 @@ go version
 go version go1.25.4 linux/amd64
 ```
 
-Hive provided AWS API/SDK layer functionality, which requires the AWS CLI tool to be installed to interface with the system.
+Hive provides AWS API/SDK layer functionality, which requires the AWS CLI tool to be installed to interface with the system.
 
 ```bash
 sudo apt install awscli
@@ -459,4 +459,127 @@ On success no data will be returned, since the instance is no longer available.
 
 # Multi-node configuration
 
-Details for setting up a multi-node configuration of Mulga for development use.
+To create a simulate multi-node installation on a single server (e.g node1, node2, node3) review the script `./scripts/create-multi-node.sh`
+
+Specifically this will create 3 IPs on a specified ethernet adapter
+
+```bash
+ip addr add 10.11.12.1/24 dev eth0
+ip addr add 10.11.12.2/24 dev eth0
+ip addr add 10.11.12.3/24 dev eth0
+```
+
+Next, `hive` will be installed and initiated in `$HOME/node1` for configuration files.
+
+```bash
+# Initialize node1
+./bin/hive admin init \
+--region ap-southeast-2 \
+--az ap-southeast-2a \
+--node node1 \
+--bind 10.11.12.1 \
+--cluster-bind 10.11.12.1 \
+--port 4432 \
+--hive-dir ~/node1/ \
+--config-dir ~/node1/config/
+```
+
+Two other nodes will be created, joining node1 to exchange configuration files and identify as a new node.
+
+```bash
+# Join cluster
+./bin/hive admin join \
+--region ap-southeast-2 \
+--az ap-southeast-2a \
+--node node2 \
+--bind 10.11.12.2 \
+--cluster-bind 10.11.12.2 \
+--cluster-routes 10.11.12.1:4248 \
+--host 10.11.12.1:4432 \
+--data-dir ~/node2/ \
+--config-dir ~/node2/config/ \
+
+# Start node2
+./scripts/start-dev.sh ~/node2/
+
+echo "Node3 Setup:"
+
+./bin/hive admin join \
+--region ap-southeast-2 \
+--az ap-southeast-2a \
+--node node3 \
+--bind 10.11.12.3 \
+--cluster-bind 10.11.12.3 \
+--cluster-routes 10.11.12.1:4248 \
+--host 10.11.12.1:4432 \
+--data-dir ~/node3/ \
+--config-dir ~/node3/config/
+
+./scripts/start-dev.sh ~/node3/
+```
+
+Once configured, each node will have it's own storage for config, data and state in `~/node[1,2,3]` to simulate a unique node and network.
+
+Once the multi-node is configured, follow the original installation instructions above to:
+
+* Import an SSH key
+* Clone an AMI
+* Launch an instance
+
+Note, when using the AWS CLI tool you must specify the IP address of the node (10.11.12.1, 10.11.12.2, or 10.11.12.3 ) and ignore SSL verification for development purposes, specifically appending the arguments `--endpoint-url https://10.11.12.3:9999/ --no-verify-ssl`
+
+```bash
+aws --endpoint-url https://10.11.12.3:9999/ --no-verify-ssl ec2 describe-instances --insta
+nce-ids i-9f5f648adc57ea46d
+
+urllib3/connectionpool.py:1064: InsecureRequestWarning: Unverified HTTPS request is being made to host '10.11.12.3'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/1.26.x/advanced-usage.html#ssl-warnings
+```
+
+```json
+{
+    "Reservations": [
+        {
+            "ReservationId": "r-9d26866c3b0d53bf4",
+            "OwnerId": "123456789012",
+            "Instances": [
+                {
+                    "InstanceId": "i-9f5f648adc57ea46d",
+                    "ImageId": "ami-d0de73dd18fa33ac9",
+                    "State": {
+                        "Code": 16,
+                        "Name": "running"
+                    },
+                    "KeyName": "hive-key",
+                    "InstanceType": "t3.micro",
+                    "LaunchTime": "2025-11-21T10:36:42.834000+00:00"
+                }
+            ]
+        }
+    ]
+```
+
+For debugging, reference the node unique configuration files, e.g
+
+```bash
+tail -n 100 ~/node3/logs/hive.log
+```
+
+```bash
+...
+2025/11/21 22:59:32 Received message on subject: ec2.DescribeInstances
+2025/11/21 22:59:32 Message data: {"DryRun":null,"Filters":null,"InstanceIds":["i-9f5f648adc57ea46d"],"MaxResults":null,"NextToken":null}
+2025/11/21 22:59:32 INFO Processing DescribeInstances request from this node
+2025/11/21 22:59:32 INFO handleEC2DescribeInstances completed count=1
+...
+```
+
+### Stop multi-node instance
+
+To stop a simulated multi-node instance
+
+```bash
+./scripts/stop-multi-node.sh
+```
+
+Note if multiple EC2 instances are running, it make take a few minutes to gracefully terminate the instance, unmount the attached EBS volume (via NBD) and push the write-ahead-log (WAL) to the S3 server (predastore)
+

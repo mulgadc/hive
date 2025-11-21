@@ -307,12 +307,15 @@ var natsStartCmd = &cobra.Command{
 		dataDir := viper.GetString("data-dir")
 		jetStream := viper.GetBool("jetstream")
 
+		cfgFile := viper.GetString("config")
+
 		service, err := service.New("nats", &nats.Config{
-			Port:      port,
-			Host:      host,
-			Debug:     debug,
-			DataDir:   dataDir,
-			JetStream: jetStream,
+			ConfigFile: cfgFile,
+			Port:       port,
+			Host:       host,
+			Debug:      debug,
+			DataDir:    dataDir,
+			JetStream:  jetStream,
 		})
 
 		if err != nil {
@@ -394,14 +397,19 @@ var hiveStartCmd = &cobra.Command{
 		// Apply changes back to cluster config
 		clusterConfig.Nodes[clusterConfig.Node] = nodeConfig
 
-		service, err := service.New("hive", clusterConfig)
+		svc, err := service.New("hive", clusterConfig)
 
 		if err != nil {
 			fmt.Println("Error starting hive service:", err)
 			return
 		}
 
-		service.Start()
+		// Set config path for cluster manager
+		if hiveSvc, ok := svc.(interface{ SetConfigPath(string) }); ok {
+			hiveSvc.SetConfigPath(cfgFile)
+		}
+
+		svc.Start()
 		fmt.Println("HIVE service started")
 	},
 }
@@ -463,7 +471,7 @@ var awsgwStartCmd = &cobra.Command{
 		awsgwHost := viper.GetString("host")
 		if awsgwHost != "" {
 			fmt.Println("Overwriting awsgw host to:", awsgwHost)
-			nodeConfig.AWSGW.Host = awsgwHost
+			//nodeConfig.AWSGW.Host = awsgwHost
 		}
 
 		awsgwTlsCert := viper.GetString("tls-cert")

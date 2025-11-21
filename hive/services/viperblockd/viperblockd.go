@@ -3,7 +3,6 @@ package viperblockd
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -103,10 +102,10 @@ func launchService(cfg *Config) (err error) {
 	}
 
 	// Subscribe to the viperblock.mount subject
-	fmt.Println("Connected. Waiting for EBS events")
+	slog.Info("Connected. Waiting for EBS events")
 
 	// TODO: Support volume delete and predastore delete bucket
-	nc.Subscribe("ebs.delete", func(msg *nats.Msg) {
+	nc.QueueSubscribe("ebs.delete", "hive-workers", func(msg *nats.Msg) {
 		slog.Info("Received message", "data", string(msg.Data))
 
 		// Parse the message
@@ -122,7 +121,7 @@ func launchService(cfg *Config) (err error) {
 
 	})
 
-	nc.Subscribe("ebs.unmount", func(msg *nats.Msg) {
+	nc.QueueSubscribe("ebs.unmount", "hive-workers", func(msg *nats.Msg) {
 		slog.Info("Received message", "data", string(msg.Data))
 
 		// Parse the message
@@ -171,7 +170,7 @@ func launchService(cfg *Config) (err error) {
 		nc.Publish("ebs.unmount.response", response)
 	})
 
-	nc.Subscribe("ebs.mount", func(msg *nats.Msg) {
+	nc.QueueSubscribe("ebs.mount", "hive-workers", func(msg *nats.Msg) {
 		slog.Info("Received message:", "data", string(msg.Data))
 
 		// Parse the message
@@ -182,7 +181,7 @@ func launchService(cfg *Config) (err error) {
 			return
 		}
 
-		fmt.Println("Request =>", ebsRequest)
+		slog.Info("ebs.mount", "request", ebsRequest)
 
 		var ebsResponse config.EBSMountResponse
 		ebsResponse.Mounted = false
@@ -280,8 +279,7 @@ func launchService(cfg *Config) (err error) {
 			return
 		}
 
-		fmt.Println("NBD URI =>", nbdUri)
-		fmt.Println("PORT =>", port)
+		slog.Info("Mounting volume", "name", ebsRequest.Name, "port", port, "uri", nbdUri)
 
 		// Execute nbdkit
 
@@ -339,7 +337,7 @@ func launchService(cfg *Config) (err error) {
 
 			exitChan <- exitCode
 
-			fmt.Println("NBDKit exited,, code", exitCode)
+			slog.Error("NBDKit exited", "code", exitCode)
 		}()
 
 		// Wait for startup result
@@ -369,7 +367,7 @@ func launchService(cfg *Config) (err error) {
 			}
 		default:
 			// nbdkit is still running after 1 second, which means it started successfully
-			fmt.Println("NBDKit started successfully and is running")
+			slog.Info("NBDKit started successfully and is running")
 		}
 
 		ebsResponse.Mounted = true
@@ -394,7 +392,7 @@ func launchService(cfg *Config) (err error) {
 
 		nc.Publish("ebs.mount.response", response)
 
-		fmt.Println("Response =>", string(response))
+		slog.Debug("Sent ebs.mount response", "response", string(response))
 	})
 
 	// Create a channel to receive shutdown signals
@@ -403,14 +401,14 @@ func launchService(cfg *Config) (err error) {
 
 	// Wait for shutdown signal
 	<-sigChan
-	log.Println("Shutting down gracefully...")
+	slog.Info("Shutting down gracefully...")
 
 	nc.Close()
 
 	// Close all nbdkit processes
 	cfg.mu.Lock()
 	for _, volume := range cfg.MountedVolumes {
-		fmt.Println("Killing nbdkit process", volume.PID)
+		slog.Info("Killing nbdkit process", "pid", volume.PID)
 		utils.KillProcess(volume.PID)
 	}
 	cfg.mu.Unlock()

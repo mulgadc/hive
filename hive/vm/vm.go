@@ -138,7 +138,7 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 	}
 
 	if cfg.NoGraphic {
-		args = append(args, "-display none")
+		args = append(args, "-display", "none")
 	}
 
 	if cfg.MachineType != "" {

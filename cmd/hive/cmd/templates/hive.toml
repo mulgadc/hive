@@ -13,19 +13,19 @@ access_key = "{{.AccessKey}}"
 secret_key = "{{.SecretKey}}"
 
 [nodes.{{.Node}}.daemon]
-host = "0.0.0.0:{{.Port}}"
+host = "{{.BindIP}}:{{.Port}}"
 tlskey = "config/server.key"
 tlscert = "config/server.pem"
 
 [nodes.{{.Node}}.awsgw]
-host = "0.0.0.0:9999"
+host = "{{.BindIP}}:9999"
 tlskey = "config/server.key"
 tlscert = "config/server.pem"
 debug = true
 config = "awsgw/awsgw.toml"
 
 [nodes.{{.Node}}.nats]
-host = "0.0.0.0:4222"
+host = "{{.BindIP}}:4222"
 
 [nodes.{{.Node}}.nats.acl]
 token = "{{.NatsToken}}"
@@ -33,7 +33,7 @@ token = "{{.NatsToken}}"
 [nodes.{{.Node}}.nats.sub]
 
 [nodes.{{.Node}}.predastore]
-host = "0.0.0.0:8443"
+host = "{{.BindIP}}:8443"
 region = "{{.Region}}"
 bucket = "predastore"
 access_key = "{{.AccessKey}}"

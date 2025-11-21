@@ -2,6 +2,8 @@
 
 # Start Hive development environment
 # This script starts all required services in the correct order using Hive service commands
+# Usage: ./scripts/start-dev.sh [data-dir]
+#   data-dir: Optional data directory path (default: ~/hive)
 
 set -e
 
@@ -9,11 +11,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MULGA_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"
 
+# Accept optional data directory argument
+DATA_DIR="${1:-$HOME/hive}"
+
 # Configuration paths
-# Use CONFIG_DIR environment variable if set, otherwise default to ~/hive/config
-CONFIG_DIR="${CONFIG_DIR:-$HOME/hive/config}"
+# Use CONFIG_DIR environment variable if set, otherwise derive from DATA_DIR
+CONFIG_DIR="${CONFIG_DIR:-$DATA_DIR/config}"
+echo "Using data directory: $DATA_DIR"
 echo "Using configuration directory: $CONFIG_DIR"
-DATA_DIR="$HOME/hive"
 LOGS_DIR="$DATA_DIR/logs"
 WAL_DIR="$DATA_DIR/hive"
 
@@ -106,7 +111,7 @@ check_service() {
     done
 
     echo "   ⚠️  $name may not be responding on port $port (continuing anyway)"
-    return 1
+    
 }
 
 # Pre-flight, compile latest
@@ -117,11 +122,18 @@ make build
 echo ""
 echo "1️⃣  Starting NATS server..."
 
-export HIVE_NATS_HOST=0.0.0.0
-export HIVE_NATS_PORT=4222
-export HIVE_NATS_DATA_DIR=$DATA_DIR/nats/
-export HIVE_NATS_JETSTREAM=false
-export HIVE_NATS_DEBUG=true
+if [ -f "$CONFIG_DIR/nats/nats.conf" ]; then
+    export HIVE_CONFIG_PATH=$CONFIG_DIR/nats/nats.conf
+    echo " Using NATS config file: $CONFIG_DIR/nats/nats.conf"
+else
+    echo " ⚠️ NATS config file not found at $CONFIG_DIR/nats/nats.conf, using defaults"
+    # TODO: Confirm, settings file will overwrite env vars (e.g multi-node config)
+    export HIVE_NATS_HOST=0.0.0.0
+    export HIVE_NATS_PORT=4222
+    export HIVE_NATS_DATA_DIR=$DATA_DIR/nats/
+    export HIVE_NATS_JETSTREAM=false
+    export HIVE_NATS_DEBUG=true
+fi
 
 # Use air for hot reloading (dev!)
 #NATS_CMD="air -c .air-nats.toml"
@@ -130,13 +142,13 @@ NATS_CMD="./bin/hive service nats start"
 start_service "nats" "$NATS_CMD"
 
 #start_service "nats" "go run cmd/hive/main.go service nats start"
-check_service "NATS" "4222"
+#check_service "NATS" "4222"
 
 # 2️⃣ Start Predastore
-echo ""
 echo "2️⃣  Starting Predastore..."
+unset HIVE_CONFIG_PATH
 
-export HIVE_PREDASTORE_BASE_PATH=~/hive/predastore/
+export HIVE_PREDASTORE_BASE_PATH=$DATA_DIR/predastore/
 export HIVE_PREDASTORE_CONFIG_PATH=$CONFIG_DIR/predastore/predastore.toml
 export HIVE_PREDASTORE_TLS_CERT=$CONFIG_DIR/server.pem
 export HIVE_PREDASTORE_TLS_KEY=$CONFIG_DIR/server.key
@@ -150,6 +162,12 @@ PREDASTORE_CMD="./bin/hive service predastore start"
 
 start_service "predastore" "$PREDASTORE_CMD"
 check_service "Predastore" "8443"
+
+#else
+#    echo ""
+#    echo "2️⃣  Skipping Predastore for multi-node setup (TODO)"
+#fi
+
 
 # 3️⃣ Start Viperblock
 echo ""
@@ -219,7 +237,8 @@ unset HIVE_NATS_HOST
 unset HIVE_PREDASTORE_HOST
 export HIVE_BASE_DIR=$CONFIG_DIR
 export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
-export HIVE_AWSGW_HOST="0.0.0.0:9999"
+# Overwritten by config file
+#export HIVE_AWSGW_HOST="0.0.0.0:9999"
 export HIVE_AWSGW_TLS_CERT=$CONFIG_DIR/server.pem
 export HIVE_AWSGW_TLS_KEY=$CONFIG_DIR/server.key
 
@@ -228,7 +247,9 @@ export HIVE_AWSGW_TLS_KEY=$CONFIG_DIR/server.key
 AWSGW_CMD="./bin/hive service awsgw start"
 
 start_service "awsgw" "$AWSGW_CMD"
-check_service "awsgw" "9999"
+
+# TODO: Need host:ip support, depending on node
+#check_service "awsgw" "9999"
 
 
 echo ""

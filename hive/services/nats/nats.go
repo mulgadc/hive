@@ -1,6 +1,7 @@
 package nats
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -12,12 +13,13 @@ import (
 var serviceName = "nats"
 
 type Config struct {
-	Port      int    `json:"port"`
-	Host      string `json:"host"`
-	Debug     bool   `json:"debug"`
-	LogFile   string `json:"log_file"`
-	DataDir   string `json:"data_dir"`
-	JetStream bool   `json:"jetstream"`
+	ConfigFile string `json:"config_file"`
+	Port       int    `json:"port"`
+	Host       string `json:"host"`
+	Debug      bool   `json:"debug"`
+	LogFile    string `json:"log_file"`
+	DataDir    string `json:"data_dir"`
+	JetStream  bool   `json:"jetstream"`
 }
 
 type Service struct {
@@ -56,23 +58,40 @@ func (svc *Service) Reload() (err error) {
 
 func launchService(config *Config) (err error) {
 	// Create proper server options
-	opts := &server.Options{
-		Port:      config.Port,
-		Host:      config.Host,
-		Debug:     config.Debug,
-		LogFile:   config.LogFile,
-		JetStream: config.JetStream,
+	opts := &server.Options{}
+
+	// If configFile set use, otherwise set defaults
+	if config.ConfigFile != "" {
+
+		opts, err = server.ProcessConfigFile(config.ConfigFile)
+
+		if err != nil {
+			slog.Error("Failed to process NATS config file", "err", err)
+			return err
+		}
+
+	} else {
+
+		opts = &server.Options{
+			ConfigFile: config.ConfigFile,
+			Port:       config.Port,
+			Host:       config.Host,
+			Debug:      config.Debug,
+			LogFile:    config.LogFile,
+			JetStream:  config.JetStream,
+		}
+
+		// Set defaults if not provided
+		if opts.Port == 0 {
+			opts.Port = 4222
+		}
+		if opts.Host == "" {
+			opts.Host = "0.0.0.0"
+		}
+
 	}
 
-	//fmt.Println("opts", opts)
-
-	// Set defaults if not provided
-	if opts.Port == 0 {
-		opts.Port = 4222
-	}
-	if opts.Host == "" {
-		opts.Host = "0.0.0.0"
-	}
+	fmt.Println(opts)
 
 	// Initialize new server with options
 	ns, err := server.NewServer(opts)

@@ -3,6 +3,8 @@ package daemon
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +22,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/gofiber/fiber/v2"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	gateway_ec2_instance "github.com/mulgadc/hive/hive/gateway/ec2/instance"
@@ -31,6 +34,7 @@ import (
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/nats-io/nats.go"
+	"github.com/pelletier/go-toml/v2"
 )
 
 type BlockDeviceMapping struct {
@@ -88,6 +92,11 @@ type Daemon struct {
 
 	// NAT Subscriptions
 	natsSubscriptions map[string]*nats.Subscription
+
+	// Cluster manager
+	clusterApp *fiber.App
+	startTime  time.Time
+	configPath string
 
 	mu sync.Mutex
 }
@@ -179,6 +188,11 @@ func NewResourceManager() *ResourceManager {
 	}
 }
 
+// SetConfigPath sets the configuration file path for cluster management
+func (d *Daemon) SetConfigPath(path string) {
+	d.configPath = path
+}
+
 // NewDaemon creates a new daemon instance
 func NewDaemon(cfg *config.ClusterConfig) *Daemon {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -200,6 +214,7 @@ func NewDaemon(cfg *config.ClusterConfig) *Daemon {
 		cancel:            cancel,
 		Instances:         vm.Instances{VMS: make(map[string]*vm.VM)},
 		natsSubscriptions: make(map[string]*nats.Subscription),
+		startTime:         time.Now(),
 	}
 }
 
@@ -371,6 +386,20 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to subscribe to NATS ec2.launch: %w", err)
 	}
 
+	// Subscribe to health check for this node
+	healthSubject := fmt.Sprintf("hive.admin.%s.health", d.node)
+	log.Printf("Subscribing to health check: %s", healthSubject)
+
+	d.natsSubscriptions[healthSubject], err = d.natsConn.Subscribe(healthSubject, d.handleHealthCheck)
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to NATS %s: %w", healthSubject, err)
+	}
+
+	// Start cluster manager HTTP server
+	if err := d.ClusterManager(); err != nil {
+		return fmt.Errorf("failed to start cluster manager: %w", err)
+	}
+
 	// Setup graceful shutdown
 	d.setupShutdown()
 
@@ -385,6 +414,180 @@ func (d *Daemon) Start() error {
 
 	// Keep the main goroutine alive until shutdown
 	<-done
+	return nil
+}
+
+// computeConfigHash computes SHA256 hash of the shared cluster config (excluding node-specific fields)
+func (d *Daemon) computeConfigHash() (string, error) {
+	// Only hash the shared cluster data, not the node-specific top-level field
+	sharedData := config.SharedClusterData{
+		Epoch:   d.clusterConfig.Epoch,
+		Version: d.clusterConfig.Version,
+		Nodes:   d.clusterConfig.Nodes,
+	}
+
+	configJSON, err := json.Marshal(sharedData)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.Sum256(configJSON)
+	return hex.EncodeToString(hash[:]), nil
+}
+
+// saveClusterConfig writes the cluster config to disk in TOML format
+func (d *Daemon) saveClusterConfig() error {
+	if d.configPath == "" {
+		return fmt.Errorf("config path not set")
+	}
+
+	// Marshal to TOML
+	configTOML, err := toml.Marshal(d.clusterConfig)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config to TOML: %w", err)
+	}
+
+	// Write to config file
+	if err := os.WriteFile(d.configPath, configTOML, 0600); err != nil {
+		return fmt.Errorf("failed to write config: %w", err)
+	}
+
+	slog.Info("Cluster config saved", "path", d.configPath, "epoch", d.clusterConfig.Epoch)
+	return nil
+}
+
+// ClusterManager starts the HTTP cluster management server
+func (d *Daemon) ClusterManager() error {
+
+	// Get daemon host from config
+	daemonHost := d.config.Daemon.Host
+	if daemonHost == "" {
+		return fmt.Errorf("daemon.host not configured")
+	}
+
+	// Create Fiber app
+	d.clusterApp = fiber.New(fiber.Config{
+		DisableStartupMessage: true,
+		AppName:               "Hive Cluster Manager",
+	})
+
+	// Health endpoint - responds to HTTP and NATS
+	d.clusterApp.Get("/health", func(c *fiber.Ctx) error {
+		configHash, err := d.computeConfigHash()
+		if err != nil {
+			return c.Status(500).JSON(fiber.Map{
+				"error": "failed to compute config hash",
+			})
+		}
+
+		response := config.NodeHealthResponse{
+			Node:       d.node,
+			Status:     "running",
+			ConfigHash: configHash,
+			Epoch:      d.clusterConfig.Epoch,
+			Uptime:     int64(time.Since(d.startTime).Seconds()),
+		}
+
+		return c.JSON(response)
+	})
+
+	// Join endpoint - accepts new nodes joining the cluster
+	d.clusterApp.Post("/join", func(c *fiber.Ctx) error {
+		var req config.NodeJoinRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(config.NodeJoinResponse{
+				Success: false,
+				Message: "invalid request body",
+			})
+		}
+
+		slog.Info("Node join request received", "node", req.Node, "region", req.Region, "az", req.AZ)
+
+		// Validate request
+		if req.Node == "" || req.Region == "" || req.AZ == "" {
+			return c.Status(400).JSON(config.NodeJoinResponse{
+				Success: false,
+				Message: "node, region, and az are required",
+			})
+		}
+
+		// Check if node already exists
+		if _, exists := d.clusterConfig.Nodes[req.Node]; exists {
+			return c.Status(409).JSON(config.NodeJoinResponse{
+				Success: false,
+				Message: fmt.Sprintf("node %s already exists in cluster", req.Node),
+			})
+		}
+
+		// Add new node to cluster config
+		d.mu.Lock()
+		newNodeConfig := config.Config{
+			Node:    req.Node,
+			Region:  req.Region,
+			AZ:      req.AZ,
+			DataDir: req.DataDir,
+			Daemon: config.DaemonConfig{
+				Host: req.DaemonHost,
+			},
+			// Copy shared config from current node
+			NATS:       d.config.NATS,
+			Predastore: d.config.Predastore,
+			AWSGW:      d.config.AWSGW,
+			AccessKey:  d.config.AccessKey,
+			SecretKey:  d.config.SecretKey,
+			BaseDir:    req.DataDir,
+		}
+
+		d.clusterConfig.Nodes[req.Node] = newNodeConfig
+		d.clusterConfig.Epoch++ // Increment epoch for version tracking
+		d.mu.Unlock()
+
+		// Save updated config
+		if err := d.saveClusterConfig(); err != nil {
+			slog.Error("Failed to save cluster config", "error", err)
+			return c.Status(500).JSON(config.NodeJoinResponse{
+				Success: false,
+				Message: "failed to save cluster config",
+			})
+		}
+
+		configHash, _ := d.computeConfigHash()
+
+		slog.Info("Node joined cluster", "node", req.Node, "epoch", d.clusterConfig.Epoch)
+
+		// Send only shared cluster data (exclude node-specific top-level fields)
+		sharedData := &config.SharedClusterData{
+			Epoch:   d.clusterConfig.Epoch,
+			Version: d.clusterConfig.Version,
+			Nodes:   d.clusterConfig.Nodes,
+		}
+
+		return c.JSON(config.NodeJoinResponse{
+			Success:     true,
+			Message:     fmt.Sprintf("node %s successfully joined cluster", req.Node),
+			SharedData:  sharedData,
+			ConfigHash:  configHash,
+			JoiningNode: req.Node,
+		})
+	})
+
+	// Get cluster config endpoint
+	d.clusterApp.Get("/config", func(c *fiber.Ctx) error {
+		configHash, _ := d.computeConfigHash()
+
+		return c.JSON(fiber.Map{
+			"config":      d.clusterConfig,
+			"config_hash": configHash,
+		})
+	})
+
+	// Start HTTP server in goroutine
+	go func() {
+		slog.Info("Starting cluster manager", "host", daemonHost)
+		if err := d.clusterApp.Listen(daemonHost); err != nil {
+			slog.Error("Cluster manager failed to start", "error", err)
+		}
+	}()
+
 	return nil
 }
 
@@ -683,8 +886,8 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 
 // handleEC2RunInstances processes incoming EC2 RunInstances requests
 func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
-	log.Printf("Received message on subject: %s", msg.Subject)
-	log.Printf("Message data: %s", string(msg.Data))
+	slog.Debug("Received message on subject", "subject", msg.Subject)
+	slog.Debug("Message data", "data", string(msg.Data))
 
 	// Initialize runInstancesInput before unmarshaling into it
 	runInstancesInput := &ec2.RunInstancesInput{}
@@ -760,7 +963,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	}
 	msg.Respond(jsonResponse)
 
-	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
+	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions), this can take sometime
 	err = d.LaunchInstance(instance)
 
 	if err != nil {
@@ -991,6 +1194,14 @@ func (d *Daemon) setupShutdown() {
 		// Close NATS connection
 		d.natsConn.Close()
 
+		// Shutdown cluster manager
+		if d.clusterApp != nil {
+			log.Println("Shutting down cluster manager...")
+			if err := d.clusterApp.Shutdown(); err != nil {
+				log.Printf("Error shutting down cluster manager: %v", err)
+			}
+		}
+
 		// Write the state to disk
 		err := d.WriteState()
 		if err != nil {
@@ -1192,6 +1403,7 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		drive.File = v.NBDURI
 		// Cleanup hostname to point to nbd://localhost from [::]
 		// TODO: Make NBD host config defined, or remote NBD server if not running locally.
+		// TODO: Add socket support for nbdkit, much faster than TCP
 		drive.File = strings.Replace(drive.File, "[::]", "nbd://127.0.0.1", 1)
 
 		if v.Boot {
@@ -1259,6 +1471,9 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 
 	instance.Config.QMPSocket = qmpSocket
 
+	// Temp, wait for nbdkit to start
+	time.Sleep(2 * time.Second)
+
 	// Create a unique error channel for this specific mount request
 	processChan := make(chan int, 1)
 	exitChan := make(chan int, 1)
@@ -1280,7 +1495,22 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 			return
 		}
 
-		cmd.Start()
+		VMstderr, err := cmd.StderrPipe()
+		if err != nil {
+			slog.Error("Failed to pipe STDERR VM", "err", err)
+			processChan <- 0
+			return
+		}
+
+		err = cmd.Start()
+
+		if err != nil {
+			slog.Error("Failed to start VM", "err", err)
+			processChan <- 0
+			return
+		}
+
+		slog.Info("VM started successfully", "pid", cmd.Process.Pid)
 
 		// TODO: Consider workaround using QMP
 		//  (QEMU) query-chardev
@@ -1289,15 +1519,19 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		go func() {
 			// TODO: Add a timeout to the scanner
 			scanner := bufio.NewScanner(VMstdout)
+
+			slog.Info("QEMU stdout reader started")
+
 			re := regexp.MustCompile(`/dev/pts/(\d+)`)
 
 			for scanner.Scan() {
 				line := scanner.Text()
-				slog.Debug("[qemu stderr]", "line", line)
+				slog.Info("[qemu]", "line", line)
 
 				matches := re.FindStringSubmatch(line)
 				if len(matches) == 2 {
 					ptsInt, err := strconv.Atoi(matches[1])
+					slog.Info("Extracted pts from QEMU output", "pts", ptsInt)
 
 					if err != nil {
 						slog.Error("Failed to convert pts to int:", "err", err)
@@ -1312,16 +1546,20 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 			}
 		}()
 
-		if err != nil {
-			slog.Error("Failed to launch VM", "err", err)
-			processChan <- 0
-			return
-		}
+		// --- reader for STDERR ---
+		go func() {
+			scanner := bufio.NewScanner(VMstderr)
+			slog.Info("QEMU stderr reader started")
+
+			for scanner.Scan() {
+				line := scanner.Text()
+				slog.Error("[qemu-stderr]", "line", line)
+			}
+		}()
 
 		processChan <- cmd.Process.Pid
 
 		// Read the pts from launch
-
 		err = cmd.Wait()
 
 		if err != nil {
@@ -1680,4 +1918,30 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 	msg.Respond(jsonResponse)
 
 	slog.Info("handleEC2DescribeInstances completed", "count", len(reservations))
+}
+
+// handleHealthCheck processes NATS health check requests
+func (d *Daemon) handleHealthCheck(msg *nats.Msg) {
+	configHash, err := d.computeConfigHash()
+	if err != nil {
+		slog.Error("Failed to compute config hash for health check", "error", err)
+		configHash = "error"
+	}
+
+	response := config.NodeHealthResponse{
+		Node:       d.node,
+		Status:     "running",
+		ConfigHash: configHash,
+		Epoch:      d.clusterConfig.Epoch,
+		Uptime:     int64(time.Since(d.startTime).Seconds()),
+	}
+
+	jsonResponse, err := json.Marshal(response)
+	if err != nil {
+		slog.Error("handleHealthCheck failed to marshal response", "err", err)
+		return
+	}
+
+	msg.Respond(jsonResponse)
+	slog.Debug("Health check responded", "node", d.node, "epoch", d.clusterConfig.Epoch)
 }
