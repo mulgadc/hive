@@ -42,6 +42,7 @@ git clone https://github.com/mulgadc/hive.git
 Setup the dev environment and package dependencies on [viperblock](https://github.com/mulgadc/viperblock/) and [predastore](https://github.com/mulgadc/predastore/)
 
 ```
+cd hive
 # Setup dependencies and development environment
 ./scripts/clone-deps.sh    # Clone viperblock + predastore repositories
 ./scripts/dev-setup.sh     # Setup complete development environment
@@ -125,16 +126,16 @@ aws ec2 describe-key-pairs
 
 ```json
 {
-    "KeyPairs": [
-        {
-            "KeyPairId": "key-3caa0a34f53d12a3",
-            "KeyType": "ed25519",
-            "Tags": [],
-            "CreateTime": "2025-10-28T13:39:23.458000+00:00",
-            "KeyName": "hive-key",
-            "KeyFingerprint": "SHA256:/g/A5OkeZeSydz9WUErXYVdCt00b0VbfN6RLn2YVFAY"
-        }
-    ]
+  "KeyPairs": [
+    {
+      "KeyPairId": "key-3caa0a34f53d12a3",
+      "KeyType": "ed25519",
+      "Tags": [],
+      "CreateTime": "2025-10-28T13:39:23.458000+00:00",
+      "KeyName": "hive-key",
+      "KeyFingerprint": "SHA256:/g/A5OkeZeSydz9WUErXYVdCt00b0VbfN6RLn2YVFAY"
+    }
+  ]
 }
 ```
 
@@ -228,21 +229,21 @@ A sample response is below from the `RunInstance` request, note the `InstanceId`
 
 ```json
 {
-    "ReservationId": "r-f101157331e261a68",
-    "OwnerId": "123456789012",
-    "Instances": [
-        {
-            "InstanceId": "i-36765eb0c6609e4d2",
-            "ImageId": "ami-15c3dcfe607460f15",
-            "State": {
-                "Code": 0,
-                "Name": "pending"
-            },
-            "KeyName": "hive-key",
-            "InstanceType": "t3.micro",
-            "LaunchTime": "2025-11-12T13:07:47.548000+00:00"
-        }
-    ]
+  "ReservationId": "r-f101157331e261a68",
+  "OwnerId": "123456789012",
+  "Instances": [
+    {
+      "InstanceId": "i-36765eb0c6609e4d2",
+      "ImageId": "ami-15c3dcfe607460f15",
+      "State": {
+        "Code": 0,
+        "Name": "pending"
+      },
+      "KeyName": "hive-key",
+      "InstanceType": "t3.micro",
+      "LaunchTime": "2025-11-12T13:07:47.548000+00:00"
+    }
+  ]
 }
 ```
 
@@ -262,25 +263,25 @@ Confirm the `State.Name` attribute is set as `running`
 
 ```json
 {
-    "Reservations": [
+  "Reservations": [
+    {
+      "ReservationId": "r-f101157331e261a68",
+      "OwnerId": "123456789012",
+      "Instances": [
         {
-            "ReservationId": "r-f101157331e261a68",
-            "OwnerId": "123456789012",
-            "Instances": [
-                {
-                    "InstanceId": "i-36765eb0c6609e4d2",
-                    "ImageId": "ami-15c3dcfe607460f15",
-                    "State": {
-                        "Code": 16,
-                        "Name": "running"
-                    },
-                    "KeyName": "hive-key",
-                    "InstanceType": "t3.micro",
-                    "LaunchTime": "2025-11-12T13:07:47.548000+00:00"
-                }
-            ]
+          "InstanceId": "i-36765eb0c6609e4d2",
+          "ImageId": "ami-15c3dcfe607460f15",
+          "State": {
+            "Code": 16,
+            "Name": "running"
+          },
+          "KeyName": "hive-key",
+          "InstanceType": "t3.micro",
+          "LaunchTime": "2025-11-12T13:07:47.548000+00:00"
         }
-    ]
+      ]
+    }
+  ]
 }
 ```
 
@@ -346,25 +347,25 @@ aws ec2 describe-instances --instance-ids $INSTANCE_ID
 
 ```json
 {
-    "Reservations": [
+  "Reservations": [
+    {
+      "ReservationId": "r-f101157331e261a68",
+      "OwnerId": "123456789012",
+      "Instances": [
         {
-            "ReservationId": "r-f101157331e261a68",
-            "OwnerId": "123456789012",
-            "Instances": [
-                {
-                    "InstanceId": "i-36765eb0c6609e4d2",
-                    "ImageId": "ami-15c3dcfe607460f15",
-                    "State": {
-                        "Code": 80,
-                        "Name": "stopped"
-                    },
-                    "KeyName": "hive-key",
-                    "InstanceType": "t3.micro",
-                    "LaunchTime": "2025-11-12T13:07:47.548000+00:00"
-                }
-            ]
+          "InstanceId": "i-36765eb0c6609e4d2",
+          "ImageId": "ami-15c3dcfe607460f15",
+          "State": {
+            "Code": 80,
+            "Name": "stopped"
+          },
+          "KeyName": "hive-key",
+          "InstanceType": "t3.micro",
+          "LaunchTime": "2025-11-12T13:07:47.548000+00:00"
         }
-    ]
+      ]
+    }
+  ]
 }
 ```
 
@@ -401,25 +402,25 @@ aws ec2 describe-instances  --instance-ids "i-36765eb0c6609e4d2"
 
 ```json
 {
-    "Reservations": [
+  "Reservations": [
+    {
+      "ReservationId": "r-f101157331e261a68",
+      "OwnerId": "123456789012",
+      "Instances": [
         {
-            "ReservationId": "r-f101157331e261a68",
-            "OwnerId": "123456789012",
-            "Instances": [
-                {
-                    "InstanceId": "i-36765eb0c6609e4d2",
-                    "ImageId": "ami-15c3dcfe607460f15",
-                    "State": {
-                        "Code": 16,
-                        "Name": "running"
-                    },
-                    "KeyName": "hive-key",
-                    "InstanceType": "t3.micro",
-                    "LaunchTime": "2025-11-12T13:07:47.548000+00:00"
-                }
-            ]
+          "InstanceId": "i-36765eb0c6609e4d2",
+          "ImageId": "ami-15c3dcfe607460f15",
+          "State": {
+            "Code": 16,
+            "Name": "running"
+          },
+          "KeyName": "hive-key",
+          "InstanceType": "t3.micro",
+          "LaunchTime": "2025-11-12T13:07:47.548000+00:00"
         }
-    ]
+      ]
+    }
+  ]
 }
 ```
 
@@ -433,23 +434,23 @@ aws ec2 terminate-instances --instance-ids $INSTANCE_ID
 
 ```json
 {
-    "TerminatingInstances": [
-        {
-            "InstanceId": "i-36765eb0c6609e4d2",
-            "CurrentState": {
-                "Code": 16,
-                "Name": "running"
-            },
-            "PreviousState": {
-                "Code": 16,
-                "Name": "running"
-            }
-        }
-    ]
+  "TerminatingInstances": [
+    {
+      "InstanceId": "i-36765eb0c6609e4d2",
+      "CurrentState": {
+        "Code": 16,
+        "Name": "running"
+      },
+      "PreviousState": {
+        "Code": 16,
+        "Name": "running"
+      }
+    }
+  ]
 }
 ```
 
-Next, validate the instance is removed, this may take a few minutes depending the instance volume size. 
+Next, validate the instance is removed, this may take a few minutes depending the instance volume size.
 
 ```bash
 aws ec2 describe-instances  --instance-ids $INSTANCE_ID
@@ -522,9 +523,9 @@ Once configured, each node will have it's own storage for config, data and state
 
 Once the multi-node is configured, follow the original installation instructions above to:
 
-* Import an SSH key
-* Clone an AMI
-* Launch an instance
+- Import an SSH key
+- Clone an AMI
+- Launch an instance
 
 Note, when using the AWS CLI tool you must specify the IP address of the node (10.11.12.1, 10.11.12.2, or 10.11.12.3 ) and ignore SSL verification for development purposes, specifically appending the arguments `--endpoint-url https://10.11.12.3:9999/ --no-verify-ssl`
 
@@ -582,4 +583,3 @@ To stop a simulated multi-node instance
 ```
 
 Note if multiple EC2 instances are running, it make take a few minutes to gracefully terminate the instance, unmount the attached EBS volume (via NBD) and push the write-ahead-log (WAL) to the S3 server (predastore)
-

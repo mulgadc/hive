@@ -3,6 +3,7 @@
 # Hive Development Dependencies Setup Script
 # This script clones Viperblock and Predastore repositories for cross-repo development
 
+# TODO: Improve, remove CLAUDE readme reference, simplify next-steps
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

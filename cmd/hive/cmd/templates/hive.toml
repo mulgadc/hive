@@ -9,8 +9,8 @@ region = "{{.Region}}"
 az = "{{.Az}}"
 
 account_id = "{{.AccountID}}"
-access_key = "{{.AccessKey}}"
-secret_key = "{{.SecretKey}}"
+accesskey = "{{.AccessKey}}"
+secretkey = "{{.SecretKey}}"
 
 [nodes.{{.Node}}.daemon]
 host = "{{.BindIP}}:{{.Port}}"
@@ -36,5 +36,5 @@ token = "{{.NatsToken}}"
 host = "{{.BindIP}}:8443"
 region = "{{.Region}}"
 bucket = "predastore"
-access_key = "{{.AccessKey}}"
-secret_key = "{{.SecretKey}}"
+accesskey = "{{.AccessKey}}"
+secretkey = "{{.SecretKey}}"
