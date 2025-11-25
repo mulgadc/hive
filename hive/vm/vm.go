@@ -141,10 +141,6 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 		args = append(args, "-display", "none")
 	}
 
-	if cfg.MachineType != "" {
-		args = append(args, "-M", cfg.MachineType)
-	}
-
 	if cfg.Serial != "" {
 		args = append(args, "-serial", cfg.Serial)
 	}
@@ -207,10 +203,19 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 
 	if cfg.Architecture == "arm64" {
 		qemuArchitecture = "qemu-system-aarch64"
+
 	} else if cfg.Architecture == "x86_64" {
 		qemuArchitecture = "qemu-system-x86_64"
+
 	} else {
 		return nil, fmt.Errorf("Architecture missing")
+	}
+
+	// Note, require `-M` machine type for ARM (virt) if set to q35 (incompatible)
+	if cfg.Architecture == "arm64" && cfg.MachineType == "q35" {
+		args = append(args, "-M", "virt")
+	} else if cfg.MachineType != "" {
+		args = append(args, "-M", cfg.MachineType)
 	}
 
 	slog.Info("Executing QEMU command:", "cmd", qemuArchitecture, "args", args)
