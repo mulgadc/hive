@@ -1,26 +1,22 @@
-# Hive installation
+# Hive Installation
 
 Notes for development environment installation.
 
 ## Dependencies
 
-For running on Ubuntu 22.04 and 25.04 (tested)
+For running on Ubuntu 22.04, 25.04 and 25.10.
 
 ```bash
 sudo add-apt-repository universe
-sudo apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu-kvm libvirt-daemon-system  libvirt-clients libvirt-dev make gcc
+sudo apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu-kvm libvirt-daemon-system libvirt-clients libvirt-dev make gcc
 ```
 
-Ensure the Go toolkit is installed, recommended to install the latest directly from [https://go.dev/dl/](https://go.dev/dl/)
+Ensure the Go toolkit is installed, recommended to install the latest directly from [https://go.dev/dl/](https://go.dev/dl/).
 
-Confirm go is correctly installed, and set in your $PATH
+Confirm go is correctly installed, and set in your $PATH.
 
-```
+```bash
 go version
-```
-
-```
-go version go1.25.4 linux/amd64
 ```
 
 Hive provides AWS API/SDK layer functionality, which requires the AWS CLI tool to be installed to interface with the system.
@@ -31,26 +27,25 @@ sudo apt install awscli
 
 ## Build
 
-Create the base directory for the Hive development environment
+Create the base directory for the Hive development environment.
 
-```
+```bash
 mkdir -p ~/Development/mulga/
 cd ~/Development/mulga/
 git clone https://github.com/mulgadc/hive.git
 ```
 
-Setup the dev environment and package dependencies on [viperblock](https://github.com/mulgadc/viperblock/) and [predastore](https://github.com/mulgadc/predastore/)
+Setup the dev environment and package dependencies on [viperblock](https://github.com/mulgadc/viperblock/) and [predastore](https://github.com/mulgadc/predastore/).
 
-```
+```bash
 cd hive
-# Setup dependencies and development environment
 ./scripts/clone-deps.sh    # Clone viperblock + predastore repositories
 ./scripts/dev-setup.sh     # Setup complete development environment
 ```
 
 Once complete, confirm `./bin/hive` exists and executable.
 
-# Single node installation
+# Single Node Installation
 
 For rapid development and testing, `hive` can be installed locally as a single node instance. Follow the instructions below for a complete working environment.
 
@@ -60,8 +55,8 @@ When running Hive for the first time, run the init function to create the defaul
 
 Example single node installation to get started, this will create a new region `ap-southeast-2` and availability zone `ap-southeast-2a` on your local instance:
 
-```
-/bin/hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
+```bash
+./bin/hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
 ```
 
 Next, set the AWS profile to use `hive` which points to the local environment.
@@ -70,19 +65,19 @@ Next, set the AWS profile to use `hive` which points to the local environment.
 export AWS_PROFILE=hive
 ```
 
-## Launch services
+## Launch Services
 
-Start the core services for development
+Start the core services for development.
 
 ```bash
 ./scripts/start-dev.sh
 ```
 
-## Create SSH key
+## Create SSH Key
 
 For first install, create or import an existing key pair which can be used to launch EC2 instances.
 
-### Import existing key
+### Import Existing Key
 
 Import an existing key pair, replace `~/.ssh/id_rsa.pub` with your specified key.
 
@@ -96,7 +91,7 @@ If no key exists, generate one using `ssh-keygen` and repeat the command above.
 ssh-keygen -t rsa
 ```
 
-### Create new key pair using the AWS cli
+### Create New Key
 
 Alternatively, create a new key pair using the AWS CLI tool and store the JSON output of the AWS SDK using the `jq` command.
 
@@ -118,7 +113,7 @@ Next, generate a public key from the specified private key pair.
 ssh-keygen -y -f ~/.ssh/hive-key > ~/.ssh/hive-key.pub
 ```
 
-### Validate the new key is available
+### Validate New Key
 
 ```bash
 aws ec2 describe-key-pairs
@@ -139,13 +134,13 @@ aws ec2 describe-key-pairs
 }
 ```
 
-## Create AMI template (new method)
+## Create AMI Template
 
 Use the hive CLI tool to import a selected OS image. Note, the source file can be compressed (e.g image.tar.gz, image.gz, image.tar.xz) and the tool will automatically extract and upload the raw OS image as an AMI after validation the disk image contains a UEFI/BIOS boot capability.
 
 Note, when downloading OS images, use supported platforms that support the `cloud-init` feature to automatically bootstrap when using the Hive EC2 functionality to access SSH and networking services.
 
-### Automatic import
+### Automatic Image Import
 
 Discover available images to automatically download and install. This will pull the images from the distro official mirror and simplify the process to bootstrap a Hive installation with AMIs that include common operating systems.
 
@@ -168,12 +163,9 @@ Next, choose the image you would like to import as an AMI.
 ./bin/hive admin images import --name debian-12-arm64 --force
 ```
 
-```bash
-Downloading image https://cdimage.debian.org/cdimage/cloud/bookworm/latest/debian-12-generic-arm64.tar.xz to /home/ben/hive/images/debian/12/arm64/debian-12-generic-amd64.tar.xz
-Downloading local-debian-12-arm64 [283748988/283748988] ██████████████ 100% | 1s
-Saved /home/ben/hive/images/debian/12/arm64/debian-12-generic-amd64.tar.xz (270.6 MiB)
-Extracted image to: /home/ben/hive/images/debian/12/arm64/disk.raw
+Make note of the Image-ID `ami-XXX`
 
+```bash
 ✅ Image import complete. Image-ID (AMI): ami-e29fcc65734aec9ea
 ```
 
@@ -183,9 +175,9 @@ Next, verify available disk images to confirm the import was successful, replace
 aws ec2 describe-images --image-ids ami-XXX
 ```
 
-### Manual AMI import
+### Manual Image Import
 
-Using this method you can import any OS disk image. For example, download the Debian 12 image from the repository [https://cloud.debian.org/images/cloud/bookworm/latest/](https://cloud.debian.org/images/cloud/bookworm/latest/)
+Using this method you can import any OS disk image. For example, download the Debian 12 image from the repository [https://cloud.debian.org/images/cloud/bookworm/latest/](https://cloud.debian.org/images/cloud/bookworm/latest/).
 
 Download the image:
 
@@ -199,7 +191,7 @@ Import as an AMI to the backend store:
 ./bin/hive admin images import --file ~/debian-12-genericcloud-arm64.tar.xz --arch arm64 --distro debian --version 12
 ```
 
-Next, verify available disk images to confirm the import was successful
+Next, verify available disk images to confirm the import was successful.
 
 ```bash
 aws ec2 describe-images
@@ -247,19 +239,19 @@ A sample response is below from the `RunInstance` request, note the `InstanceId`
 }
 ```
 
-Export the instance ID for following the rest of the tutorial
+Export the instance ID for following the rest of the tutorial.
 
 ```bash
 export INSTANCE_ID="i-XXX"
 ```
 
-Next, validate the running instance is ready
+Next, validate the running instance is ready.
 
 ```bash
 aws ec2 describe-instances --instance-ids $INSTANCE_ID
 ```
 
-Confirm the `State.Name` attribute is set as `running`
+Confirm the `State.Name` attribute is set as `running`.
 
 ```json
 {
@@ -285,11 +277,11 @@ Confirm the `State.Name` attribute is set as `running`
 }
 ```
 
-## SSH connection (development)
+## SSH Connection (development)
 
 For a Hive development environment (toggled off for production), a local SSH port forwaring will be active to connect directly to the instance, regardless of the VPC and network settings.
 
-Determine the SSH port allocated
+Determine the SSH port allocated.
 
 ```bash
 ps auxw | grep $INSTANCE_ID
@@ -312,9 +304,9 @@ ec2-user@hive-vm-36765eb0:~$
 
 Congratulations, your first AMI image is imported, a new EC2 instance launched, and successfully connected via SSH for the configured SSH key, using the OS `cloud-init` procedure.
 
-## Managing instances
+## Managing Instances
 
-### Stop instance
+### Stop Instance
 
 To stop a running instance gracefully:
 
@@ -339,7 +331,7 @@ aws ec2 stop-instances --instance-ids $INSTANCE_ID
     ]
 ```
 
-Next, confirm the instance has stopped as requested
+Next, confirm the instance has stopped as requested.
 
 ```bash
 aws ec2 describe-instances --instance-ids $INSTANCE_ID
@@ -394,7 +386,7 @@ aws ec2 start-instances --instance-ids $INSTANCE_ID
     ]
 ```
 
-Next, validate the instance is running as expected
+Next, validate the instance is running as expected.
 
 ```bash
 aws ec2 describe-instances  --instance-ids "i-36765eb0c6609e4d2"
@@ -424,7 +416,7 @@ aws ec2 describe-instances  --instance-ids "i-36765eb0c6609e4d2"
 }
 ```
 
-### Terminate instance
+### Terminate Instance
 
 To terminate an instance, which will first stop the instance, and on success, remove the EBS volumes and permanately remove the instance data.
 
@@ -458,11 +450,11 @@ aws ec2 describe-instances  --instance-ids $INSTANCE_ID
 
 On success no data will be returned, since the instance is no longer available.
 
-# Multi-node configuration
+# Multi-node Configuration
 
-To create a simulate multi-node installation on a single server (e.g node1, node2, node3) review the script `./scripts/create-multi-node.sh`
+To create a simulate multi-node installation on a single server (e.g node1, node2, node3) review the script `./scripts/create-multi-node.sh`.
 
-Specifically this will create 3 IPs on a specified ethernet adapter
+Specifically this will create 3 IPs on a specified ethernet adapter.
 
 ```bash
 ip addr add 10.11.12.1/24 dev eth0
@@ -527,7 +519,7 @@ Once the multi-node is configured, follow the original installation instructions
 - Clone an AMI
 - Launch an instance
 
-Note, when using the AWS CLI tool you must specify the IP address of the node (10.11.12.1, 10.11.12.2, or 10.11.12.3 ) and ignore SSL verification for development purposes, specifically appending the arguments `--endpoint-url https://10.11.12.3:9999/ --no-verify-ssl`
+Note - when using the AWS CLI tool you must specify the IP address of the node (10.11.12.1, 10.11.12.2, or 10.11.12.3 ) and ignore SSL verification for development purposes, specifically appending the arguments `--endpoint-url https://10.11.12.3:9999/ --no-verify-ssl`.
 
 ```bash
 aws --endpoint-url https://10.11.12.3:9999/ --no-verify-ssl ec2 describe-instances --insta
@@ -574,12 +566,12 @@ tail -n 100 ~/node3/logs/hive.log
 ...
 ```
 
-### Stop multi-node instance
+### Stop multi-node Instance
 
-To stop a simulated multi-node instance
+To stop a simulated multi-node instance:
 
 ```bash
 ./scripts/stop-multi-node.sh
 ```
 
-Note if multiple EC2 instances are running, it make take a few minutes to gracefully terminate the instance, unmount the attached EBS volume (via NBD) and push the write-ahead-log (WAL) to the S3 server (predastore)
+Note if multiple EC2 instances are running, it make take a few minutes to gracefully terminate the instance, unmount the attached EBS volume (via NBD) and push the write-ahead-log (WAL) to the S3 server (predastore).
