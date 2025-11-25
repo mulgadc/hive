@@ -4,6 +4,7 @@ on:
   push:
     branches: ["main"]
     paths: ["hive/**", ".github/workflows/**"]
+  workflow_dispatch:
 
 jobs:
   hive_test_and_push:
