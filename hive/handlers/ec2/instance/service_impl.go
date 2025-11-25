@@ -103,7 +103,6 @@ func NewInstanceServiceImpl(cfg *config.Config, instanceTypes map[string]Instanc
 // This prepares all volumes (root, EFI, cloud-init) and returns the instance ready to launch
 func (s *InstanceServiceImpl) RunInstances(input *ec2.RunInstancesInput) (*vm.VM, ec2.Reservation, error) {
 	var reservation ec2.Reservation
-	var err error
 
 	// Validate input (validation is already done in daemon.handleEC2Launch)
 	// We can skip re-validation here for performance
@@ -113,13 +112,6 @@ func (s *InstanceServiceImpl) RunInstances(input *ec2.RunInstancesInput) (*vm.VM
 	if !exists {
 		return nil, reservation, errors.New(awserrors.ErrorInvalidInstanceType)
 	}
-
-	var size int = 4 * 1024 * 1024 * 1024 // 4GB default size
-	var deviceName string
-	var volumeType string
-	var iops int
-	var imageId string
-	var snapshotId string
 
 	instanceId := vm.GenerateEC2InstanceID()
 
@@ -156,6 +148,20 @@ func (s *InstanceServiceImpl) RunInstances(input *ec2.RunInstancesInput) (*vm.VM
 	instance.Reservation = &reservation
 	instance.Instance = ec2Instance
 
+	// Return instance attributes, defer disk preparation to later step
+
+	return instance, reservation, nil
+}
+
+func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, instance *vm.VM) (err error) {
+
+	var size int = 4 * 1024 * 1024 * 1024 // 4GB default size
+	var deviceName string
+	var volumeType string
+	var iops int
+	var imageId string
+	var snapshotId string
+
 	// Handle block device mappings
 	if input.BlockDeviceMappings != nil && len(input.BlockDeviceMappings) > 0 {
 		size = int(*input.BlockDeviceMappings[0].Ebs.VolumeSize)
@@ -188,24 +194,25 @@ func (s *InstanceServiceImpl) RunInstances(input *ec2.RunInstancesInput) (*vm.VM
 	// Step 1: Create or validate root volume
 	err = s.prepareRootVolume(input, imageId, size, volumeConfig, instance)
 	if err != nil {
-		return nil, reservation, err
+		return err
 	}
 
 	// Step 2: Create EFI partition
 	err = s.prepareEFIVolume(imageId, volumeConfig, instance)
 	if err != nil {
-		return nil, reservation, err
+		return err
 	}
 
 	// Step 3: Create cloud-init volume if needed
 	if input.KeyName != nil && *input.KeyName != "" || (input.UserData != nil && *input.UserData != "") {
 		err = s.prepareCloudInitVolume(input, imageId, volumeConfig, instance)
 		if err != nil {
-			return nil, reservation, err
+			return err
 		}
 	}
 
-	return instance, reservation, nil
+	return nil
+
 }
 
 // prepareRootVolume handles creation/cloning of the root volume
@@ -234,7 +241,7 @@ func (s *InstanceServiceImpl) prepareRootVolume(input *ec2.RunInstancesInput, im
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 
-	vb.SetDebug(true)
+	vb.SetDebug(false)
 
 	// Initialize the backend
 	err = vb.Backend.Init()
@@ -412,7 +419,7 @@ func (s *InstanceServiceImpl) prepareEFIVolume(imageId string, volumeConfig vipe
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 
-	efiVb.SetDebug(true)
+	efiVb.SetDebug(false)
 
 	// Initialize the backend
 	slog.Debug("Initializing EFI Viperblock store backend")
@@ -503,7 +510,7 @@ func (s *InstanceServiceImpl) prepareCloudInitVolume(input *ec2.RunInstancesInpu
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 
-	cloudInitVb.SetDebug(true)
+	cloudInitVb.SetDebug(false)
 
 	// Initialize the backend
 	slog.Debug("Initializing cloud-init Viperblock store backend")

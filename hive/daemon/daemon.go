@@ -963,6 +963,14 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	}
 	msg.Respond(jsonResponse)
 
+	// Next, prepare the root volume, cloud-init, EFI drives via NBD (AMI clone to new volume)
+	err = d.instanceService.GenerateVolumes(runInstancesInput, instance)
+	if err != nil {
+		slog.Error("handleEC2RunInstances GenerateVolumes failed", "err", err)
+		d.resourceMgr.deallocate(instanceType)
+		return
+	}
+
 	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions), this can take sometime
 	err = d.LaunchInstance(instance)
 

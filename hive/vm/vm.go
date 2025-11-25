@@ -214,6 +214,19 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 	// Note, require `-M` machine type for ARM (virt) if set to q35 (incompatible)
 	if cfg.Architecture == "arm64" && cfg.MachineType == "q35" {
 		args = append(args, "-M", "virt")
+
+		// For ARM, when using virt, preload the firmware file
+		// Note: this requires the `qemu-efi-aarch64` package to be installed on the host
+		uefiPath := "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
+
+		// TODO: Use EFI via NBD for state persistence
+		if _, err := os.Stat(uefiPath); err == nil {
+			args = append(args, "-bios", uefiPath)
+		} else {
+			slog.Warn("UEFI firmware file not found for ARM virt machine. Ensure qemu-efi-aarch64 package is installed.", "path", uefiPath)
+			return nil, fmt.Errorf("UEFI firmware file not found for ARM virt machine")
+		}
+
 	} else if cfg.MachineType != "" {
 		args = append(args, "-M", cfg.MachineType)
 	}
