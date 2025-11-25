@@ -157,7 +157,7 @@ ubuntu-24.04-arm64   | ubuntu | 24.04   | arm64  | bios
 ubuntu-24.04-x86_64  | ubuntu | 24.04   | x86_64 | bios
 ```
 
-Next, choose the image you would like to import as an AMI.
+Next, choose the image you would like to import as an AMI. Choose the appropriate `x86_64` or `arm64` architecture depending on your platform.
 
 ```bash
 ./bin/hive admin images import --name debian-12-arm64 --force
@@ -205,7 +205,7 @@ Once Hive is successfully installed and bootstrapped with a system AMI and SSH k
 export HIVE_AMI="ami-XXX"
 ```
 
-Launch a new instance, note `hive-key` is the SSH key specified in the previous stage.
+Launch a new instance, note `hive-key` is the SSH key specified in the previous stage. If using an x86_64 host specify the `--instance-type t3.micro` otherwise if running on ARM64 use `--instance-type t4g.micro`
 
 ```bash
 aws ec2 run-instances \

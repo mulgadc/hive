@@ -1584,7 +1584,10 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	pts := <-ptsChan
 
 	if pts == 0 {
-		return fmt.Errorf("failed to get pts")
+		// TODO: Improve, pts can be returned as "0" which is valid
+		// "Extracted pts from QEMU output" pts=0
+		slog.Error("Failed to get pts from QEMU output", "pts", pts)
+		//return fmt.Errorf("failed to get pts")
 	}
 
 	// Check if nbdkit exited immediately with an error

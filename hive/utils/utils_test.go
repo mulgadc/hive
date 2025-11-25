@@ -536,7 +536,7 @@ func TestExtractDiskImageFromFile(t *testing.T) {
 		t.Skip("tar command not found, skipping archive extraction tests")
 	}
 
-	err = os.RemoveAll(tmpDir)
-	assert.NoError(t, err, "Could not remove temp dir")
+	//err = os.RemoveAll(tmpDir)
+	//assert.NoError(t, err, "Could not remove temp dir")
 
 }

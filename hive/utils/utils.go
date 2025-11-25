@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -614,7 +615,11 @@ func ExtractDiskImageFromFile(imagepath string, tmpdir string) (diskimage string
 	}
 
 	cmd := exec.Command(execCmd, args...)
-	output, _ := cmd.Output()
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		return
+	}
 
 	diskimage, err = extractDiskImagePath(tmpdir, output)
 
@@ -631,6 +636,12 @@ func extractDiskImagePath(imagedir string, output []byte) (diskimage string, err
 	for {
 		line, err := r.ReadString('\n')
 		line = strings.Replace(line, "\n", "", 1)
+
+		// MacOS tar, filenames begin with `x FILE` (to STDERR)
+		if runtime.GOOS == "darwin" && strings.HasPrefix(line, "x ") {
+			line = strings.Replace(line, "x ", "", 1)
+
+		}
 
 		if strings.HasSuffix(line, ".raw") || strings.HasSuffix(line, ".img") {
 			diskimage := fmt.Sprintf("%s/%s", imagedir, line)
@@ -656,7 +667,7 @@ func validateDiskImagePath(diskimage string) (err error) {
 	}
 
 	cmd := exec.Command("file", args...)
-	output, _ := cmd.Output()
+	output, _ := cmd.CombinedOutput()
 
 	filetype := strings.Split(string(output), ":")
 
