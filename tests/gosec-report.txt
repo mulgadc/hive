@@ -1,0 +1,1749 @@
+Results:
+
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:299[0m] - G115 (CWE-190): integer overflow conversion uint64 -> int64 (Confidence: MEDIUM, Severity: HIGH)
+    298: 			Verbose:    true,
+  > 299: 			Size:       int64(vb.GetVolumeSize()),
+    300: 			Volume:     ebsRequest.Name,
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/image/service_impl.go:187[0m] - G115 (CWE-190): integer overflow conversion uint64 -> int64 (Confidence: MEDIUM, Severity: HIGH)
+    186: 					Ebs: &ec2.EbsBlockDevice{
+  > 187: 						VolumeSize:          aws.Int64(int64(amiMeta.VolumeSizeGiB)),
+    188: 						VolumeType:          aws.String("gp3"),
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/utils/utils.go:790[0m] - G115 (CWE-190): integer overflow conversion int64 -> uint64 (Confidence: MEDIUM, Severity: HIGH)
+    789: 
+  > 790: 		pterm.Printf("Saved %s (%s)\n", filename, humanBytes(uint64(written)))
+    791: 
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/utils/utils.go:781[0m] - G115 (CWE-190): integer overflow conversion int64 -> uint64 (Confidence: MEDIUM, Severity: HIGH)
+    780: 			written += int64(n)
+  > 781: 			spin.UpdateText(fmt.Sprintf("Downloading %s (%s) ...", name, humanBytes(uint64(written))))
+    782: 		}))
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/utils/utils.go:767[0m] - G115 (CWE-190): integer overflow conversion int64 -> uint64 (Confidence: MEDIUM, Severity: HIGH)
+    766: 
+  > 767: 		pterm.Printf("Saved %s (%s)\n", filename, humanBytes(uint64(written)))
+    768: 		return
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/admin.go:402[0m] - G115 (CWE-190): integer overflow conversion int64 -> uint64 (Confidence: MEDIUM, Severity: HIGH)
+    401: 		VolumeName: volumeId,
+  > 402: 		VolumeSize: uint64(imageStat.Size()),
+    403: 		BaseDir:    tmpDir,
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/admin.go:392[0m] - G115 (CWE-190): integer overflow conversion int64 -> uint64 (Confidence: MEDIUM, Severity: HIGH)
+    391: 		VolumeName: volumeId,
+  > 392: 		VolumeSize: uint64(imageStat.Size()),
+    393: 		Bucket:     appConfig.Nodes[appConfig.Node].Predastore.Bucket,
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/admin.go:352[0m] - G115 (CWE-190): integer overflow conversion int64 -> uint64 (Confidence: MEDIUM, Severity: HIGH)
+    351: 	manifest.AMIMetadata.ImageOwnerAlias = "system"
+  > 352: 	manifest.AMIMetadata.VolumeSizeGiB = uint64(imageStat.Size() / 1024 / 1024 / 1024)
+    353: 
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/instance/service_impl.go:501[0m] - G115 (CWE-190): integer overflow conversion int -> uint64 (Confidence: MEDIUM, Severity: HIGH)
+    500: 		VolumeName:   cloudInitVolumeName,
+  > 501: 		VolumeSize:   uint64(cloudInitSize),
+    502: 		BaseDir:      s.config.WalDir,
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/instance/service_impl.go:491[0m] - G115 (CWE-190): integer overflow conversion int -> uint64 (Confidence: MEDIUM, Severity: HIGH)
+    490: 		VolumeName: cloudInitVolumeName,
+  > 491: 		VolumeSize: uint64(cloudInitSize),
+    492: 		Bucket:     s.config.Predastore.Bucket,
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/instance/service_impl.go:410[0m] - G115 (CWE-190): integer overflow conversion int -> uint64 (Confidence: MEDIUM, Severity: HIGH)
+    409: 		VolumeName:   efiVolumeName,
+  > 410: 		VolumeSize:   uint64(efiSize),
+    411: 		BaseDir:      s.config.WalDir,
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/instance/service_impl.go:400[0m] - G115 (CWE-190): integer overflow conversion int -> uint64 (Confidence: MEDIUM, Severity: HIGH)
+    399: 		VolumeName: efiVolumeName,
+  > 400: 		VolumeSize: uint64(efiSize),
+    401: 		Bucket:     s.config.Predastore.Bucket,
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/instance/service_impl.go:305[0m] - G115 (CWE-190): integer overflow conversion int -> uint64 (Confidence: MEDIUM, Severity: HIGH)
+    304: 		VolumeName:   *input.ImageId,
+  > 305: 		VolumeSize:   uint64(size),
+    306: 		BaseDir:      s.config.WalDir,
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/instance/service_impl.go:295[0m] - G115 (CWE-190): integer overflow conversion int -> uint64 (Confidence: MEDIUM, Severity: HIGH)
+    294: 		VolumeName: *input.ImageId,
+  > 295: 		VolumeSize: uint64(size),
+    296: 		Bucket:     s.config.Predastore.Bucket,
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/instance/service_impl.go:232[0m] - G115 (CWE-190): integer overflow conversion int -> uint64 (Confidence: MEDIUM, Severity: HIGH)
+    231: 		VolumeName:   imageId,
+  > 232: 		VolumeSize:   uint64(size),
+    233: 		BaseDir:      s.config.WalDir,
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/instance/service_impl.go:222[0m] - G115 (CWE-190): integer overflow conversion int -> uint64 (Confidence: MEDIUM, Severity: HIGH)
+    221: 		VolumeName: imageId,
+  > 222: 		VolumeSize: uint64(size),
+    223: 		Bucket:     s.config.Predastore.Bucket,
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/instance/service_impl.go:185[0m] - G115 (CWE-190): integer overflow conversion int -> uint64 (Confidence: MEDIUM, Severity: HIGH)
+    184: 			VolumeID:   imageId,
+  > 185: 			SizeGiB:    uint64(size / 1024 / 1024 / 1024),
+    186: 			CreatedAt:  time.Now(),
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/instance/service_impl.go:175[0m] - G404 (CWE-338): Use of weak random number generator (math/rand or math/rand/v2 instead of crypto/rand) (Confidence: MEDIUM, Severity: HIGH)
+    174: 	if strings.HasPrefix(*input.ImageId, "ami-") {
+  > 175: 		randomNumber := rand.Intn(100_000_000)
+    176: 		imageId = viperblock.GenerateVolumeID("vol", fmt.Sprintf("%d-%s", randomNumber, *input.ImageId), "predastore", time.Now().Unix())
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/utils/utils.go:691[0m] - G402 (CWE-295): TLS InsecureSkipVerify set true. (Confidence: HIGH, Severity: HIGH)
+    690: 	tr := &http.Transport{
+  > 691: 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+    692: 	}
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/s3client/s3client.go:55[0m] - G402 (CWE-295): TLS InsecureSkipVerify set true. (Confidence: HIGH, Severity: HIGH)
+    54: 
+  > 55: 	tr := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+    56: 
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/key/service_impl.go:46[0m] - G402 (CWE-295): TLS InsecureSkipVerify set true. (Confidence: HIGH, Severity: HIGH)
+    45: 			TLSClientConfig: &tls.Config{
+  > 46: 				InsecureSkipVerify: true, // Skip TLS verification for self-signed certs
+    47: 			},
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/image/service_impl.go:36[0m] - G402 (CWE-295): TLS InsecureSkipVerify set true. (Confidence: HIGH, Severity: HIGH)
+    35: 			TLSClientConfig: &tls.Config{
+  > 36: 				InsecureSkipVerify: true, // Skip TLS verification for self-signed certs
+    37: 			},
+
+Autofix: 
+
+[[97;41m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/admin.go:714[0m] - G402 (CWE-295): TLS InsecureSkipVerify set true. (Confidence: HIGH, Severity: HIGH)
+    713: 		Transport: &http.Transport{
+  > 714: 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // Skip TLS verification for self-signed certs
+    715: 		},
+
+Autofix: 
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/key/service_impl.go:243[0m] - G401 (CWE-328): Use of weak cryptographic primitive (Confidence: HIGH, Severity: MEDIUM)
+    242: func generateKeyPairID() string {
+  > 243: 	hash := sha1.New()
+    244: 	hash.Write([]byte(fmt.Sprintf("%d", os.Getpid())))
+
+Autofix: 
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/key/service_impl.go:225[0m] - G401 (CWE-328): Use of weak cryptographic primitive (Confidence: HIGH, Severity: MEDIUM)
+    224: 		// AWS uses MD5 for RSA keys for backward compatibility
+  > 225: 		hash := md5.Sum(keyData)
+    226: 		return formatFingerprint(hash[:], "MD5"), nil
+
+Autofix: 
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/vm/vm.go:236[0m] - G204 (CWE-78): Subprocess launched with variable (Confidence: HIGH, Severity: MEDIUM)
+    235: 
+  > 236: 	cmd := exec.Command(qemuArchitecture, args...)
+    237: 
+
+Autofix: 
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/utils/utils.go:669[0m] - G204 (CWE-78): Subprocess launched with variable (Confidence: HIGH, Severity: MEDIUM)
+    668: 
+  > 669: 	cmd := exec.Command("file", args...)
+    670: 	output, _ := cmd.CombinedOutput()
+
+Autofix: 
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/utils/utils.go:617[0m] - G204 (CWE-78): Subprocess launched with variable (Confidence: HIGH, Severity: MEDIUM)
+    616: 
+  > 617: 	cmd := exec.Command(execCmd, args...)
+    618: 	output, err := cmd.CombinedOutput()
+
+Autofix: 
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/utils/utils.go:557[0m] - G204 (CWE-78): Subprocess launched with variable (Confidence: HIGH, Severity: MEDIUM)
+    556: 
+  > 557: 			cmd := exec.Command(execCmd, args...)
+    558: 			_, err = cmd.Output()
+
+Autofix: 
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/nbd/nbd.go:54[0m] - G204 (CWE-78): Subprocess launched with variable (Confidence: HIGH, Severity: MEDIUM)
+    53: 
+  > 54: 	cmd := exec.Command("nbdkit", args...)
+    55: 	cmd.Stdout = os.Stdout
+
+Autofix: 
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/key/service_impl.go:128[0m] - G204 (CWE-78): Subprocess launched with variable (Confidence: HIGH, Severity: MEDIUM)
+    127: 		// RSA 2048-bit key
+  > 128: 		cmd = exec.Command("ssh-keygen", "-t", "rsa", "-b", "2048", "-f", privateKeyPath, "-N", "", "-C", "")
+    129: 	}
+
+Autofix: 
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/key/service_impl.go:125[0m] - G204 (CWE-78): Subprocess launched with variable (Confidence: HIGH, Severity: MEDIUM)
+    124: 		// ED25519 key (modern, recommended)
+  > 125: 		cmd = exec.Command("ssh-keygen", "-t", "ed25519", "-f", privateKeyPath, "-N", "", "-C", "")
+    126: 	} else {
+
+Autofix: 
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/utils/utils.go:739[0m] - G304 (CWE-22): Potential file inclusion via variable (Confidence: HIGH, Severity: MEDIUM)
+    738: 
+  > 739: 	f, err := os.Create(filename)
+    740: 	if err != nil {
+
+Autofix: Consider using os.Root to scope file access under a fixed root (Go >=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal.
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/utils/utils.go:230[0m] - G304 (CWE-22): Potential file inclusion via variable (Confidence: HIGH, Severity: MEDIUM)
+    229: 
+  > 230: 	pidFile, err := os.Create(pidFilename)
+    231: 
+
+Autofix: Consider using os.Root to scope file access under a fixed root (Go >=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal.
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/utils/utils.go:179[0m] - G304 (CWE-22): Potential file inclusion via variable (Confidence: HIGH, Severity: MEDIUM)
+    178: 
+  > 179: 	pidFile, err := os.ReadFile(filepath.Join(pidPath, fmt.Sprintf("%s.pid", name)))
+    180: 
+
+Autofix: Consider using os.Root to scope file access under a fixed root (Go >=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal.
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/key/service_impl.go:147[0m] - G304 (CWE-22): Potential file inclusion via variable (Confidence: HIGH, Severity: MEDIUM)
+    146: 	// Read public key
+  > 147: 	publicKeyData, err := os.ReadFile(publicKeyPath)
+    148: 	if err != nil {
+
+Autofix: Consider using os.Root to scope file access under a fixed root (Go >=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal.
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/key/service_impl.go:140[0m] - G304 (CWE-22): Potential file inclusion via variable (Confidence: HIGH, Severity: MEDIUM)
+    139: 	// Read private key
+  > 140: 	privateKeyData, err := os.ReadFile(privateKeyPath)
+    141: 	if err != nil {
+
+Autofix: Consider using os.Root to scope file access under a fixed root (Go >=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal.
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:645[0m] - G304 (CWE-22): Potential file inclusion via variable (Confidence: HIGH, Severity: MEDIUM)
+    644: 	configPath := fmt.Sprintf("%s/%s", d.config.BaseDir, "instances.json")
+  > 645: 	jsonData, err := os.ReadFile(configPath)
+    646: 	if err != nil {
+
+Autofix: Consider using os.Root to scope file access under a fixed root (Go >=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal.
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/admin/admin.go:266[0m] - G304 (CWE-22): Potential file inclusion via variable (Confidence: HIGH, Severity: MEDIUM)
+    265: 	// Write private key to file
+  > 266: 	keyOut, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+    267: 	if err != nil {
+
+Autofix: Consider using os.Root to scope file access under a fixed root (Go >=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal.
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/admin/admin.go:255[0m] - G304 (CWE-22): Potential file inclusion via variable (Confidence: HIGH, Severity: MEDIUM)
+    254: 	// Write certificate to file
+  > 255: 	certOut, err := os.Create(certPath)
+    256: 	if err != nil {
+
+Autofix: Consider using os.Root to scope file access under a fixed root (Go >=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal.
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/admin/admin.go:67[0m] - G304 (CWE-22): Potential file inclusion via variable (Confidence: HIGH, Severity: MEDIUM)
+    66: 	// Create file with secure permissions
+  > 67: 	f, err := os.OpenFile(configPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+    68: 	if err != nil {
+
+Autofix: Consider using os.Root to scope file access under a fixed root (Go >=1.24). Prefer root.Open/root.Stat over os.Open/os.Stat to prevent directory traversal.
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/instance/service_impl.go:661[0m] - G302 (CWE-276): Expect file permissions to be 0600 or less (Confidence: HIGH, Severity: MEDIUM)
+    660: 
+  > 661: 	outputFile, err := os.OpenFile(tempFile.Name(), os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0644)
+    662: 	if err != nil {
+
+Autofix: 
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/admin/admin.go:123[0m] - G301 (CWE-276): Expect directory permissions to be 0750 or less (Confidence: HIGH, Severity: MEDIUM)
+    122: 		if _, err := os.Stat(dir); os.IsNotExist(err) {
+  > 123: 			if err := os.MkdirAll(dir, 0755); err != nil {
+    124: 				fmt.Fprintf(os.Stderr, "Warning: Could not create %s: %v\n", dir, err)
+
+Autofix: 
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:608[0m] - G306 (CWE-276): Expect WriteFile permissions to be 0600 or less (Confidence: HIGH, Severity: MEDIUM)
+    607: 	configPath := fmt.Sprintf("%s/%s", d.config.BaseDir, "instances.json")
+  > 608: 	err = os.WriteFile(configPath, jsonData, 0644)
+    609: 	if err != nil {
+
+Autofix: 
+
+[[30;43m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/admin.go:375[0m] - G306 (CWE-276): Expect WriteFile permissions to be 0600 or less (Confidence: HIGH, Severity: MEDIUM)
+    374: 	// Write to file
+  > 375: 	err = os.WriteFile(manifestFilename, jsonData, 0644)
+    376: 	if err != nil {
+
+Autofix: 
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/key/service_impl.go:6[0m] - G505 (CWE-327): Blocklisted import crypto/sha1: weak cryptographic primitive (Confidence: HIGH, Severity: MEDIUM)
+    5: 	"crypto/md5"
+  > 6: 	"crypto/sha1"
+    7: 	"crypto/sha256"
+
+Autofix: 
+
+[[30;43m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/key/service_impl.go:5[0m] - G501 (CWE-327): Blocklisted import crypto/md5: weak cryptographic primitive (Confidence: HIGH, Severity: MEDIUM)
+    4: 	"bytes"
+  > 5: 	"crypto/md5"
+    6: 	"crypto/sha1"
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/utils/utils.go:784[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    783: 		_, err = io.Copy(f, reader)
+  > 784: 		spin.Stop()
+    785: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/utils/utils.go:762[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    761: 		_, err = io.Copy(f, reader)
+  > 762: 		bar.Stop()
+    763: 		if err != nil {
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/utils/utils.go:375[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    374: 	}
+  > 375: 	enc.Flush()
+    376: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/utils/utils.go:279[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    278: 	// Remove PID file
+  > 279: 	RemovePidFile(serviceName)
+    280: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/utils/utils.go:246[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    245: 
+  > 246: 	os.Remove(filepath.Join(pidPath, fmt.Sprintf("%s.pid", serviceName)))
+    247: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/utils/utils.go:237[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    236: 	defer pidFile.Close()
+  > 237: 	pidFile.WriteString(fmt.Sprintf("%d", pid))
+    238: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:412[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    411: 		slog.Info("Killing nbdkit process", "pid", volume.PID)
+  > 412: 		utils.KillProcess(volume.PID)
+    413: 	}
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:393[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    392: 
+  > 393: 		nc.Publish("ebs.mount.response", response)
+    394: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:391[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    390: 
+  > 391: 		msg.Respond(response)
+    392: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:365[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    364: 				msg.Respond(response)
+  > 365: 				nc.Publish("ebs.mount.response", response)
+    366: 				return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:364[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    363: 				response, _ := json.Marshal(ebsResponse)
+  > 364: 				msg.Respond(response)
+    365: 				nc.Publish("ebs.mount.response", response)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:351[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    350: 			msg.Respond(response)
+  > 351: 			nc.Publish("ebs.mount.response", response)
+    352: 			return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:350[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    349: 			response, _ := json.Marshal(ebsResponse)
+  > 350: 			msg.Respond(response)
+    351: 			nc.Publish("ebs.mount.response", response)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:268[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    267: 			msg.Respond(response)
+  > 268: 			nc.Publish("ebs.mount.response", response)
+    269: 			return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:267[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    266: 			response, _ := json.Marshal(ebsResponse)
+  > 267: 			msg.Respond(response)
+    268: 			nc.Publish("ebs.mount.response", response)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:254[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    253: 			msg.Respond(response)
+  > 254: 			nc.Publish("ebs.mount.response", response)
+    255: 			return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:253[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    252: 			response, _ := json.Marshal(ebsResponse)
+  > 253: 			msg.Respond(response)
+    254: 			nc.Publish("ebs.mount.response", response)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:241[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    240: 			msg.Respond(response)
+  > 241: 			nc.Publish("ebs.mount.response", response)
+    242: 			return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:240[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    239: 			response, _ := json.Marshal(ebsResponse)
+  > 240: 			msg.Respond(response)
+    241: 			nc.Publish("ebs.mount.response", response)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:225[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    224: 			msg.Respond(response)
+  > 225: 			nc.Publish("ebs.mount.response", response)
+    226: 			return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:224[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    223: 			response, _ := json.Marshal(ebsResponse)
+  > 224: 			msg.Respond(response)
+    225: 			nc.Publish("ebs.mount.response", response)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:217[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    216: 			slog.Info("Setting cache size to 5% of system memory for volume", "volume", ebsRequest.Name)
+  > 217: 			vb.SetCacheSystemMemory(5)
+    218: 		}
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:173-396[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    172: 
+  > 173: 	nc.QueueSubscribe("ebs.mount", "hive-workers", func(msg *nats.Msg) {
+  > 174: 		slog.Info("Received message:", "data", string(msg.Data))
+  > 175: 
+  > 176: 		// Parse the message
+  > 177: 		var ebsRequest config.EBSRequest
+  > 178: 		err := json.Unmarshal(msg.Data, &ebsRequest)
+  > 179: 		if err != nil {
+  > 180: 			slog.Error("Failed to unmarshal message", "err", err)
+  > 181: 			return
+  > 182: 		}
+  > 183: 
+  > 184: 		slog.Info("ebs.mount", "request", ebsRequest)
+  > 185: 
+  > 186: 		var ebsResponse config.EBSMountResponse
+  > 187: 		ebsResponse.Mounted = false
+  > 188: 
+  > 189: 		s3cfg := s3.S3Config{
+  > 190: 			VolumeName: ebsRequest.Name,
+  > 191: 			Bucket:     cfg.Bucket,
+  > 192: 			Region:     cfg.Region,
+  > 193: 			AccessKey:  cfg.AccessKey,
+  > 194: 			SecretKey:  cfg.SecretKey,
+  > 195: 			Host:       cfg.S3Host,
+  > 196: 		}
+  > 197: 
+  > 198: 		vbconfig := viperblock.VB{
+  > 199: 			VolumeName: ebsRequest.Name,
+  > 200: 			VolumeSize: 1, // Workaround, calculated on LoadState()
+  > 201: 			BaseDir:    cfg.BaseDir,
+  > 202: 			Cache: viperblock.Cache{
+  > 203: 				Config: viperblock.CacheConfig{
+  > 204: 					// TODO: Improve, based on system memory
+  > 205: 					Size: 0,
+  > 206: 				},
+  > 207: 			},
+  > 208: 			VolumeConfig: viperblock.VolumeConfig{},
+  > 209: 		}
+  > 210: 
+  > 211: 		vb, err := viperblock.New(vbconfig, "s3", s3cfg)
+  > 212: 
+  > 213: 		// TODO: Improve
+  > 214: 		// 5% of system memory for cache for master volumes
+  > 215: 		if !strings.HasSuffix("-cloudinit", ebsRequest.Name) && !strings.HasSuffix("-efi", ebsRequest.Name) {
+  > 216: 			slog.Info("Setting cache size to 5% of system memory for volume", "volume", ebsRequest.Name)
+  > 217: 			vb.SetCacheSystemMemory(5)
+  > 218: 		}
+  > 219: 
+  > 220: 		if err != nil {
+  > 221: 			ebsResponse.Error = fmt.Sprintf("Failed to connect to Viperblock store: %v", err)
+  > 222: 			// Marshal and send error response immediately
+  > 223: 			response, _ := json.Marshal(ebsResponse)
+  > 224: 			msg.Respond(response)
+  > 225: 			nc.Publish("ebs.mount.response", response)
+  > 226: 			return
+  > 227: 		}
+  > 228: 
+  > 229: 		if cfg.Debug {
+  > 230: 			vb.SetDebug(true)
+  > 231: 		}
+  > 232: 
+  > 233: 		// Initialize the backend
+  > 234: 		err = vb.Backend.Init()
+  > 235: 
+  > 236: 		if err != nil {
+  > 237: 			ebsResponse.Error = err.Error()
+  > 238: 			// Marshal and send error response immediately
+  > 239: 			response, _ := json.Marshal(ebsResponse)
+  > 240: 			msg.Respond(response)
+  > 241: 			nc.Publish("ebs.mount.response", response)
+  > 242: 			return
+  > 243: 		}
+  > 244: 
+  > 245: 		// Next, connect to the volume and confirm the state
+  > 246: 		// First, fetch the state from the remote backend
+  > 247: 		err = vb.LoadState()
+  > 248: 
+  > 249: 		if err != nil {
+  > 250: 			ebsResponse.Error = err.Error()
+  > 251: 			// Marshal and send error response immediately
+  > 252: 			response, _ := json.Marshal(ebsResponse)
+  > 253: 			msg.Respond(response)
+  > 254: 			nc.Publish("ebs.mount.response", response)
+  > 255: 			return
+  > 256: 		}
+  > 257: 
+  > 258: 		// Next, mount the volume using nbdkit
+  > 259: 
+  > 260: 		// Step 1: Find a free port
+  > 261: 		nbdUri, err := viperblock.FindFreePort()
+  > 262: 
+  > 263: 		if err != nil {
+  > 264: 			ebsResponse.Error = err.Error()
+  > 265: 			// Marshal and send error response immediately
+  > 266: 			response, _ := json.Marshal(ebsResponse)
+  > 267: 			msg.Respond(response)
+  > 268: 			nc.Publish("ebs.mount.response", response)
+  > 269: 			return
+  > 270: 		}
+  > 271: 
+  > 272: 		// Mount the volume
+  > 273: 		nbdPort := strings.Split(nbdUri, ":")
+  > 274: 
+  > 275: 		// Port is the last
+  > 276: 		port, err := strconv.Atoi(nbdPort[len(nbdPort)-1])
+  > 277: 		if err != nil {
+  > 278: 			slog.Error("Failed to convert port to int", "err", err)
+  > 279: 			return
+  > 280: 		}
+  > 281: 
+  > 282: 		slog.Info("Mounting volume", "name", ebsRequest.Name, "port", port, "uri", nbdUri)
+  > 283: 
+  > 284: 		// Execute nbdkit
+  > 285: 
+  > 286: 		nbdPidFile, err := utils.GeneratePidFile(fmt.Sprintf("nbdkit-vol-%s", ebsRequest.Name))
+  > 287: 		if err != nil {
+  > 288: 			slog.Error("Failed to generate nbdkit pid file:", "err", err)
+  > 289: 			return
+  > 290: 		}
+  > 291: 
+  > 292: 		nbdConfig := nbd.NBDKitConfig{
+  > 293: 			Port:       port,
+  > 294: 			PidFile:    nbdPidFile,
+  > 295: 			PluginPath: cfg.PluginPath,
+  > 296: 			BaseDir:    cfg.BaseDir,
+  > 297: 			Host:       cfg.S3Host,
+  > 298: 			Verbose:    true,
+  > 299: 			Size:       int64(vb.GetVolumeSize()),
+  > 300: 			Volume:     ebsRequest.Name,
+  > 301: 			Bucket:     cfg.Bucket,
+  > 302: 			Region:     cfg.Region,
+  > 303: 			AccessKey:  cfg.AccessKey,
+  > 304: 			SecretKey:  cfg.SecretKey,
+  > 305: 		}
+  > 306: 
+  > 307: 		// Create a unique error channel for this specific mount request
+  > 308: 		processChan := make(chan int, 1)
+  > 309: 		exitChan := make(chan int, 1)
+  > 310: 
+  > 311: 		// TODO: Improve, use a process manager to track the (multiple) nbdkit process
+  > 312: 		go func() {
+  > 313: 			fmt.Println("Executing nbdkit")
+  > 314: 
+  > 315: 			cmd, err := nbdConfig.Execute()
+  > 316: 			pid := cmd.Process.Pid
+  > 317: 
+  > 318: 			if err != nil {
+  > 319: 				slog.Error("Failed to execute nbdkit", "err", err)
+  > 320: 				// Signal error (no PID) to parent goroutine
+  > 321: 				processChan <- 0
+  > 322: 				return
+  > 323: 			}
+  > 324: 
+  > 325: 			// Signal successful startup w/ PID
+  > 326: 			processChan <- pid
+  > 327: 
+  > 328: 			err = cmd.Wait()
+  > 329: 
+  > 330: 			if err != nil {
+  > 331: 				slog.Error("Failed to wait for nbdkit", "err", err)
+  > 332: 				exitChan <- 1
+  > 333: 				return
+  > 334: 			}
+  > 335: 
+  > 336: 			exitCode := cmd.ProcessState.ExitCode()
+  > 337: 
+  > 338: 			exitChan <- exitCode
+  > 339: 
+  > 340: 			slog.Error("NBDKit exited", "code", exitCode)
+  > 341: 		}()
+  > 342: 
+  > 343: 		// Wait for startup result
+  > 344: 		pid := <-processChan
+  > 345: 
+  > 346: 		if pid == 0 {
+  > 347: 			ebsResponse.Error = "Failed to start nbdkit"
+  > 348: 			// Marshal and send error response immediately
+  > 349: 			response, _ := json.Marshal(ebsResponse)
+  > 350: 			msg.Respond(response)
+  > 351: 			nc.Publish("ebs.mount.response", response)
+  > 352: 			return
+  > 353: 		}
+  > 354: 
+  > 355: 		// Wait for 1 second to confirm nbdkit is running
+  > 356: 		time.Sleep(1 * time.Second)
+  > 357: 
+  > 358: 		// Check if nbdkit exited immediately with an error
+  > 359: 		select {
+  > 360: 		case exitErr := <-exitChan:
+  > 361: 			if exitErr != 0 {
+  > 362: 				ebsResponse.Error = fmt.Sprintf("nbdkit failed: %v", exitErr)
+  > 363: 				response, _ := json.Marshal(ebsResponse)
+  > 364: 				msg.Respond(response)
+  > 365: 				nc.Publish("ebs.mount.response", response)
+  > 366: 				return
+  > 367: 			}
+  > 368: 		default:
+  > 369: 			// nbdkit is still running after 1 second, which means it started successfully
+  > 370: 			slog.Info("NBDKit started successfully and is running")
+  > 371: 		}
+  > 372: 
+  > 373: 		ebsResponse.Mounted = true
+  > 374: 		ebsResponse.URI = nbdUri
+  > 375: 
+  > 376: 		cfg.mu.Lock()
+  > 377: 		cfg.MountedVolumes = append(cfg.MountedVolumes, MountedVolume{
+  > 378: 			Name: ebsRequest.Name,
+  > 379: 			Port: port,
+  > 380: 			PID:  pid,
+  > 381: 		})
+  > 382: 		cfg.mu.Unlock()
+  > 383: 
+  > 384: 		// Marshal the response
+  > 385: 		response, err := json.Marshal(ebsResponse)
+  > 386: 		if err != nil {
+  > 387: 			slog.Error("Failed to marshal response", "err", err)
+  > 388: 			return
+  > 389: 		}
+  > 390: 
+  > 391: 		msg.Respond(response)
+  > 392: 
+  > 393: 		nc.Publish("ebs.mount.response", response)
+  > 394: 
+  > 395: 		slog.Debug("Sent ebs.mount response", "response", string(response))
+  > 396: 	})
+    397: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:170[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    169: 		msg.Respond(response)
+  > 170: 		nc.Publish("ebs.unmount.response", response)
+    171: 	})
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:169[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    168: 
+  > 169: 		msg.Respond(response)
+    170: 		nc.Publish("ebs.unmount.response", response)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:148[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    147: 
+  > 148: 				utils.KillProcess(volume.PID)
+    149: 				match = true
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:124-171[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    123: 
+  > 124: 	nc.QueueSubscribe("ebs.unmount", "hive-workers", func(msg *nats.Msg) {
+  > 125: 		slog.Info("Received message", "data", string(msg.Data))
+  > 126: 
+  > 127: 		// Parse the message
+  > 128: 		var ebsRequest config.EBSRequest
+  > 129: 		err := json.Unmarshal(msg.Data, &ebsRequest)
+  > 130: 		if err != nil {
+  > 131: 			slog.Error("Failed to unmarshal message", "err", err)
+  > 132: 			return
+  > 133: 		}
+  > 134: 
+  > 135: 		// Find the volume in the mounted volumes
+  > 136: 		var ebsResponse config.EBSUnMountResponse
+  > 137: 		var match bool
+  > 138: 		cfg.mu.Lock()
+  > 139: 		for _, volume := range cfg.MountedVolumes {
+  > 140: 
+  > 141: 			// TODO: Confirm KVM/QEMU is not using the volume first.
+  > 142: 			if volume.Name == ebsRequest.Name {
+  > 143: 				ebsResponse = config.EBSUnMountResponse{
+  > 144: 					Volume:  volume.Name,
+  > 145: 					Mounted: false,
+  > 146: 				}
+  > 147: 
+  > 148: 				utils.KillProcess(volume.PID)
+  > 149: 				match = true
+  > 150: 			}
+  > 151: 		}
+  > 152: 
+  > 153: 		cfg.mu.Unlock()
+  > 154: 
+  > 155: 		if !match {
+  > 156: 			ebsResponse = config.EBSUnMountResponse{
+  > 157: 				Volume: ebsRequest.Name,
+  > 158: 				Error:  fmt.Sprintf("Volume %s not found", ebsRequest.Name),
+  > 159: 			}
+  > 160: 		}
+  > 161: 
+  > 162: 		// Marshal the response
+  > 163: 		response, err := json.Marshal(ebsResponse)
+  > 164: 		if err != nil {
+  > 165: 			slog.Error("Failed to marshal response", "err", err)
+  > 166: 			return
+  > 167: 		}
+  > 168: 
+  > 169: 		msg.Respond(response)
+  > 170: 		nc.Publish("ebs.unmount.response", response)
+  > 171: 	})
+    172: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:120[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    119: 		// TODO: Improve
+  > 120: 		nc.Publish("ebs.delete.response", []byte(fmt.Sprintf(`{"volume":"%s","deleted":true}`, ebsRequest.Volume)))
+    121: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:108-122[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    107: 	// TODO: Support volume delete and predastore delete bucket
+  > 108: 	nc.QueueSubscribe("ebs.delete", "hive-workers", func(msg *nats.Msg) {
+  > 109: 		slog.Info("Received message", "data", string(msg.Data))
+  > 110: 
+  > 111: 		// Parse the message
+  > 112: 		var ebsRequest config.EBSDeleteRequest
+  > 113: 		err := json.Unmarshal(msg.Data, &ebsRequest)
+  > 114: 		if err != nil {
+  > 115: 			slog.Error("Failed to unmarshal message", "err", err)
+  > 116: 			return
+  > 117: 		}
+  > 118: 
+  > 119: 		// TODO: Improve
+  > 120: 		nc.Publish("ebs.delete.response", []byte(fmt.Sprintf(`{"volume":"%s","deleted":true}`, ebsRequest.Volume)))
+  > 121: 
+  > 122: 	})
+    123: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/viperblockd/viperblockd.go:65[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    64: 
+  > 65: 	utils.WritePidFile(serviceName, os.Getpid())
+    66: 	err := launchService(svc.Config)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/predastore/predastore.go:44[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    43: 
+  > 44: 	utils.WritePidFile(serviceName, os.Getpid())
+    45: 	launchService(svc.Config)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/nats/nats.go:38[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    37: 	utils.WritePidFile(serviceName, os.Getpid())
+  > 38: 	launchService(svc.Config)
+    39: 	return os.Getpid(), nil
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/nats/nats.go:37[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    36: func (svc *Service) Start() (int, error) {
+  > 37: 	utils.WritePidFile(serviceName, os.Getpid())
+    38: 	launchService(svc.Config)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/hive/hive.go:31[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    30: func (svc *Service) Start() (int, error) {
+  > 31: 	utils.WritePidFile(serviceName, os.Getpid())
+    32: 	err := launchService(svc.Config, svc.ConfigPath)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/services/awsgw/awsgw.go:31[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    30: func (svc *Service) Start() (int, error) {
+  > 31: 	utils.WritePidFile(serviceName, os.Getpid())
+    32: 	err := launchService(svc.Config)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/qmp/qmp.go:158[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    157: 	if err := client.Decoder.Decode(&greeting); err != nil {
+  > 158: 		conn.Close()
+    159: 		return nil, err
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/key/service_impl.go:663-666[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    662: 		// Try to cleanup the public key we just uploaded
+  > 663: 		s.s3Client.DeleteObject(&s3.DeleteObjectInput{
+  > 664: 			Bucket: aws.String(s.config.Predastore.Bucket),
+  > 665: 			Key:    aws.String(keyPath),
+  > 666: 		})
+    667: 		return nil, errors.New(awserrors.ErrorServerInternal)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/key/service_impl.go:491[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    490: 		body, err := io.ReadAll(getResult.Body)
+  > 491: 		getResult.Body.Close()
+    492: 		if err != nil {
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/key/service_impl.go:348[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    347: 		body, err := io.ReadAll(getResult.Body)
+  > 348: 		getResult.Body.Close()
+    349: 		if err != nil {
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/key/service_impl.go:189-192[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    188: 		// Try to cleanup the public key we just uploaded
+  > 189: 		s.s3Client.DeleteObject(&s3.DeleteObjectInput{
+  > 190: 			Bucket: aws.String(s.config.Predastore.Bucket),
+  > 191: 			Key:    aws.String(keyPath),
+  > 192: 		})
+    193: 		return nil, errors.New(awserrors.ErrorServerInternal)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/instance/service_impl.go:700[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    699: 	cloudInitVb.Flush()
+  > 700: 	cloudInitVb.WriteWALToChunk(true)
+    701: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/instance/service_impl.go:699[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    698: 	// Flush
+  > 699: 	cloudInitVb.Flush()
+    700: 	cloudInitVb.WriteWALToChunk(true)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/instance/service_impl.go:456[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    455: 		efiVb.WriteAt(0, make([]byte, efiVb.BlockSize))
+  > 456: 		efiVb.Flush()
+    457: 	}
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/instance/service_impl.go:455[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    454: 		// Write an empty block to the EFI volume
+  > 455: 		efiVb.WriteAt(0, make([]byte, efiVb.BlockSize))
+    456: 		efiVb.Flush()
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/instance/service_impl.go:374[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    373: 				destVb.Flush()
+  > 374: 				destVb.WriteWALToChunk(true)
+    375: 			}
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/instance/service_impl.go:373[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    372: 				slog.Debug("Flush", "block", block)
+  > 373: 				destVb.Flush()
+    374: 				destVb.WriteWALToChunk(true)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/instance/service_impl.go:367[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    366: 
+  > 367: 			destVb.WriteAt(block*uint64(destVb.BlockSize), data[i*int(destVb.BlockSize):(i+1)*int(destVb.BlockSize)])
+    368: 			block++
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/handlers/ec2/image/service_impl.go:112[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    111: 		body, err := io.ReadAll(getResult.Body)
+  > 112: 		getResult.Body.Close()
+    113: 		if err != nil {
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/gateway/ec2.go:270[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    269: 
+  > 270: 	ctx.Status(fiber.StatusOK).Type("text/xml").Send(xmlOutput)
+    271: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1956[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1955: 
+  > 1956: 	msg.Respond(jsonResponse)
+    1957: 	slog.Debug("Health check responded", "node", d.node, "epoch", d.clusterConfig.Epoch)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1929[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1928: 	}
+  > 1929: 	msg.Respond(jsonResponse)
+    1930: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1926[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1925: 		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+  > 1926: 		msg.Respond(errResp)
+    1927: 		return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1853[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1852: 	if errResp != nil {
+  > 1853: 		msg.Respond(errResp)
+    1854: 		slog.Error("Request does not match DescribeInstancesInput")
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1835[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1834: 	}
+  > 1835: 	msg.Respond(jsonResponse)
+    1836: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1832[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1831: 		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+  > 1832: 		msg.Respond(errResp)
+    1833: 		return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1823[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1822: 		errResp = utils.GenerateErrorPayload(err.Error())
+  > 1823: 		msg.Respond(errResp)
+    1824: 		return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1810[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1809: 	if errResp != nil {
+  > 1810: 		msg.Respond(errResp)
+    1811: 		slog.Error("Request does not match DescribeImagesInput")
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1793[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1792: 	}
+  > 1793: 	msg.Respond(jsonResponse)
+    1794: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1790[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1789: 		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+  > 1790: 		msg.Respond(errResp)
+    1791: 		return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1781[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1780: 		errResp = utils.GenerateErrorPayload(err.Error())
+  > 1781: 		msg.Respond(errResp)
+    1782: 		return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1765[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1764: 	if errResp != nil {
+  > 1765: 		msg.Respond(errResp)
+    1766: 		slog.Error("Request does not match ImportKeyPairInput")
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1748[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1747: 	}
+  > 1748: 	msg.Respond(jsonResponse)
+    1749: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1745[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1744: 		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+  > 1745: 		msg.Respond(errResp)
+    1746: 		return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1736[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1735: 		errResp = utils.GenerateErrorPayload(err.Error())
+  > 1736: 		msg.Respond(errResp)
+    1737: 		return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1723[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1722: 	if errResp != nil {
+  > 1723: 		msg.Respond(errResp)
+    1724: 		slog.Error("Request does not match DescribeKeyPairsInput")
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1266[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1265: 					slog.Info("Closing QMP client connection", "instance", instance.ID)
+  > 1266: 					instance.QMPClient.Conn.Close()
+    1267: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1261[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1260: 					slog.Info("Unsubscribing from NATS subject", "instance", instance.ID)
+  > 1261: 					d.natsSubscriptions[fmt.Sprintf("ec2.cmd.%s", instance.ID)].Unsubscribe()
+    1262: 					//d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)].Unsubscribe()
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1190[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1189: 		// Pass instances to terminate
+  > 1190: 		d.stopInstance(d.Instances.VMS, false)
+    1191: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1167[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1166: 		slog.Info("Unsubscribing from NATS subject", "instance", instance.ID)
+  > 1167: 		d.natsSubscriptions[fmt.Sprintf("ec2.cmd.%s", instance.ID)].Unsubscribe()
+    1168: 		// TODO: Remove redundant subscription if not used
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1111[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1110: 					// Send SIG directly if QMP fails
+  > 1111: 					utils.KillProcess(pid)
+    1112: 				}
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1071[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1070: 	}
+  > 1071: 	msg.Respond(jsonResponse)
+    1072: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1068[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1067: 		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+  > 1068: 		msg.Respond(errResp)
+    1069: 		return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1059[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1058: 		errResp = utils.GenerateErrorPayload(err.Error())
+  > 1059: 		msg.Respond(errResp)
+    1060: 		return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1041[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1040: 	if errResp != nil {
+  > 1041: 		msg.Respond(errResp)
+    1042: 		slog.Error("Request does not match DeleteKeyPairInput")
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1024[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1023: 	}
+  > 1024: 	msg.Respond(jsonResponse)
+    1025: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1021[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1020: 		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+  > 1021: 		msg.Respond(errResp)
+    1022: 		return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:1012[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    1011: 		errResp = utils.GenerateErrorPayload(err.Error())
+  > 1012: 		msg.Respond(errResp)
+    1013: 		return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:999[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    998: 	if errResp != nil {
+  > 999: 		msg.Respond(errResp)
+    1000: 		slog.Error("Request does not match CreateKeyPairInput")
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:964[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    963: 	}
+  > 964: 	msg.Respond(jsonResponse)
+    965: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:960[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    959: 		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+  > 960: 		msg.Respond(errResp)
+    961: 		d.resourceMgr.deallocate(instanceType)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:950[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    949: 		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+  > 950: 		msg.Respond(errResp)
+    951: 		d.resourceMgr.deallocate(instanceType)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:938[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    937: 		errResp = utils.GenerateErrorPayload(awserrors.ErrorInsufficientInstanceCapacity)
+  > 938: 		msg.Respond(errResp)
+    939: 		return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:930[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    929: 		errResp = utils.GenerateErrorPayload(awserrors.ErrorInsufficientInstanceCapacity)
+  > 930: 		msg.Respond(errResp)
+    931: 		return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:922[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    921: 		errResp = utils.GenerateErrorPayload(awserrors.ErrorInvalidInstanceType)
+  > 922: 		msg.Respond(errResp)
+    923: 		return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:910[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    909: 		errResp = utils.GenerateErrorPayload(awserrors.ErrorValidationError)
+  > 910: 		msg.Respond(errResp)
+    911: 		return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:899[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    898: 	if errResp != nil {
+  > 899: 		msg.Respond(errResp)
+    900: 		slog.Error("Request does not match RunInstancesInput")
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:883[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    882: 	// Respond to NATS
+  > 883: 	msg.Respond(resp.Return)
+    884: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/daemon/daemon.go:790[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    789: 		slog.Warn("Instance is not running on this node", "id", command.ID)
+  > 790: 		msg.Respond(nil)
+    791: 		return
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/hive/config/config.go:142[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    141: 
+  > 142: 	msg.Respond(response)
+    143: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:669[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    668: 	viper.BindEnv("debug", "HIVE_AWSGW_DEBUG")
+  > 669: 	viper.BindPFlag("debug", awsgwCmd.PersistentFlags().Lookup("debug"))
+    670: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:668[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    667: 	awsgwCmd.PersistentFlags().Bool("debug", false, "AWS Gateway Debug")
+  > 668: 	viper.BindEnv("debug", "HIVE_AWSGW_DEBUG")
+    669: 	viper.BindPFlag("debug", awsgwCmd.PersistentFlags().Lookup("debug"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:665[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    664: 	viper.BindEnv("tls-key", "HIVE_AWSGW_TLS_KEY")
+  > 665: 	viper.BindPFlag("tls-key", awsgwCmd.PersistentFlags().Lookup("tls-key"))
+    666: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:664[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    663: 	awsgwCmd.PersistentFlags().String("tls-key", "", "AWS Gateway TLS key")
+  > 664: 	viper.BindEnv("tls-key", "HIVE_AWSGW_TLS_KEY")
+    665: 	viper.BindPFlag("tls-key", awsgwCmd.PersistentFlags().Lookup("tls-key"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:660[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    659: 	viper.BindEnv("tls-cert", "HIVE_AWSGW_TLS_CERT")
+  > 660: 	viper.BindPFlag("tls-cert", awsgwCmd.PersistentFlags().Lookup("tls-cert"))
+    661: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:659[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    658: 	awsgwCmd.PersistentFlags().String("tls-cert", "", "AWS Gateway TLS certificate")
+  > 659: 	viper.BindEnv("tls-cert", "HIVE_AWSGW_TLS_CERT")
+    660: 	viper.BindPFlag("tls-cert", awsgwCmd.PersistentFlags().Lookup("tls-cert"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:655[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    654: 	viper.BindEnv("host", "HIVE_AWSGW_HOST")
+  > 655: 	viper.BindPFlag("host", awsgwCmd.PersistentFlags().Lookup("host"))
+    656: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:654[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    653: 	awsgwCmd.PersistentFlags().String("host", "0.0.0.0:9999", "AWS Gateway server host")
+  > 654: 	viper.BindEnv("host", "HIVE_AWSGW_HOST")
+    655: 	viper.BindPFlag("host", awsgwCmd.PersistentFlags().Lookup("host"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:648[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    647: 	viper.BindEnv("wal-dir", "HIVE_WAL_DIR")
+  > 648: 	viper.BindPFlag("wal-dir", hiveCmd.PersistentFlags().Lookup("wal-dir"))
+    649: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:647[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    646: 	hiveCmd.PersistentFlags().String("wal-dir", "", "Write-ahead log (WAL) directory. Place on high-speed NVMe disk, or tmpfs for development.")
+  > 647: 	viper.BindEnv("wal-dir", "HIVE_WAL_DIR")
+    648: 	viper.BindPFlag("wal-dir", hiveCmd.PersistentFlags().Lookup("wal-dir"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:637[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    636: 	viper.BindEnv("jetstream", "HIVE_NATS_JETSTREAM")
+  > 637: 	viper.BindPFlag("jetstream", natsCmd.PersistentFlags().Lookup("jetstream"))
+    638: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:636[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    635: 	natsCmd.PersistentFlags().Bool("jetstream", false, "Enable JetStream")
+  > 636: 	viper.BindEnv("jetstream", "HIVE_NATS_JETSTREAM")
+    637: 	viper.BindPFlag("jetstream", natsCmd.PersistentFlags().Lookup("jetstream"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:633[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    632: 	viper.BindEnv("data-dir", "HIVE_NATS_DATA_DIR")
+  > 633: 	viper.BindPFlag("data-dir", natsCmd.PersistentFlags().Lookup("data-dir"))
+    634: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:632[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    631: 	natsCmd.PersistentFlags().String("data-dir", "", "NATS data directory")
+  > 632: 	viper.BindEnv("data-dir", "HIVE_NATS_DATA_DIR")
+    633: 	viper.BindPFlag("data-dir", natsCmd.PersistentFlags().Lookup("data-dir"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:629[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    628: 	viper.BindEnv("debug", "HIVE_NATS_DEBUG")
+  > 629: 	viper.BindPFlag("debug", natsCmd.PersistentFlags().Lookup("debug"))
+    630: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:628[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    627: 	natsCmd.PersistentFlags().Bool("debug", false, "Enable debug logging")
+  > 628: 	viper.BindEnv("debug", "HIVE_NATS_DEBUG")
+    629: 	viper.BindPFlag("debug", natsCmd.PersistentFlags().Lookup("debug"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:625[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    624: 	viper.BindEnv("host", "HIVE_NATS_HOST")
+  > 625: 	viper.BindPFlag("host", natsCmd.PersistentFlags().Lookup("host"))
+    626: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:624[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    623: 	natsCmd.PersistentFlags().String("host", "0.0.0.0", "NATS server host")
+  > 624: 	viper.BindEnv("host", "HIVE_NATS_HOST")
+    625: 	viper.BindPFlag("host", natsCmd.PersistentFlags().Lookup("host"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:621[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    620: 	viper.BindEnv("port", "HIVE_NATS_PORT")
+  > 621: 	viper.BindPFlag("port", natsCmd.PersistentFlags().Lookup("port"))
+    622: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:620[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    619: 	natsCmd.PersistentFlags().Int("port", 4222, "NATS server port")
+  > 620: 	viper.BindEnv("port", "HIVE_NATS_PORT")
+    621: 	viper.BindPFlag("port", natsCmd.PersistentFlags().Lookup("port"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:605[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    604: 	viper.BindEnv("plugin-path", "HIVE_VIPERBLOCK_PLUGIN_PATH")
+  > 605: 	viper.BindPFlag("plugin-path", predastoreCmd.PersistentFlags().Lookup("plugin-path"))
+    606: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:604[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    603: 	viperblockCmd.PersistentFlags().String("plugin-path", "/opt/hive/lib/nbdkit-viperblock-plugin.so", "Pathname to the nbdkit viperblockplugin")
+  > 604: 	viper.BindEnv("plugin-path", "HIVE_VIPERBLOCK_PLUGIN_PATH")
+    605: 	viper.BindPFlag("plugin-path", predastoreCmd.PersistentFlags().Lookup("plugin-path"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:601[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    600: 	viper.BindEnv("s3-region", "HIVE_VIPERBLOCK_S3_REGION")
+  > 601: 	viper.BindPFlag("s3-region", predastoreCmd.PersistentFlags().Lookup("s3-region"))
+    602: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:600[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    599: 	viperblockCmd.PersistentFlags().String("s3-region", "ap-southeast-2", "Predastore (S3) region")
+  > 600: 	viper.BindEnv("s3-region", "HIVE_VIPERBLOCK_S3_REGION")
+    601: 	viper.BindPFlag("s3-region", predastoreCmd.PersistentFlags().Lookup("s3-region"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:597[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    596: 	viper.BindEnv("s3-bucket", "HIVE_VIPERBLOCK_S3_BUCKET")
+  > 597: 	viper.BindPFlag("s3-bucket", predastoreCmd.PersistentFlags().Lookup("s3-bucket"))
+    598: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:596[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    595: 	viperblockCmd.PersistentFlags().String("s3-bucket", "predastore", "Predastore (S3) bucket")
+  > 596: 	viper.BindEnv("s3-bucket", "HIVE_VIPERBLOCK_S3_BUCKET")
+    597: 	viper.BindPFlag("s3-bucket", predastoreCmd.PersistentFlags().Lookup("s3-bucket"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:593[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    592: 	viper.BindEnv("s3-host", "HIVE_VIPERBLOCK_S3_HOST")
+  > 593: 	viper.BindPFlag("s3-host", predastoreCmd.PersistentFlags().Lookup("s3-host"))
+    594: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:592[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    591: 	viperblockCmd.PersistentFlags().String("s3-host", "0.0.0.0:8443", "Predastore (S3) host URI")
+  > 592: 	viper.BindEnv("s3-host", "HIVE_VIPERBLOCK_S3_HOST")
+    593: 	viper.BindPFlag("s3-host", predastoreCmd.PersistentFlags().Lookup("s3-host"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:583[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    582: 	viper.BindEnv("tls-key", "HIVE_PREDASTORE_TLS_KEY")
+  > 583: 	viper.BindPFlag("tls-key", predastoreCmd.PersistentFlags().Lookup("tls-key"))
+    584: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:582[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    581: 	predastoreCmd.PersistentFlags().String("tls-key", "", "Predastore (S3) TLS key")
+  > 582: 	viper.BindEnv("tls-key", "HIVE_PREDASTORE_TLS_KEY")
+    583: 	viper.BindPFlag("tls-key", predastoreCmd.PersistentFlags().Lookup("tls-key"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:578[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    577: 	viper.BindEnv("tls-cert", "HIVE_PREDASTORE_TLS_CERT")
+  > 578: 	viper.BindPFlag("tls-cert", predastoreCmd.PersistentFlags().Lookup("tls-cert"))
+    579: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:577[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    576: 	predastoreCmd.PersistentFlags().String("tls-cert", "", "Predastore (S3) TLS certificate")
+  > 577: 	viper.BindEnv("tls-cert", "HIVE_PREDASTORE_TLS_CERT")
+    578: 	viper.BindPFlag("tls-cert", predastoreCmd.PersistentFlags().Lookup("tls-cert"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:573[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    572: 	viper.BindEnv("debug", "HIVE_PREDASTORE_DEBUG")
+  > 573: 	viper.BindPFlag("debug", predastoreCmd.PersistentFlags().Lookup("debug"))
+    574: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:572[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    571: 	predastoreCmd.PersistentFlags().Bool("debug", false, "Predastore (S3) debug")
+  > 572: 	viper.BindEnv("debug", "HIVE_PREDASTORE_DEBUG")
+    573: 	viper.BindPFlag("debug", predastoreCmd.PersistentFlags().Lookup("debug"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:568[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    567: 	viper.BindEnv("config-path", "HIVE_PREDASTORE_CONFIG_PATH")
+  > 568: 	viper.BindPFlag("config-path", predastoreCmd.PersistentFlags().Lookup("config-path"))
+    569: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:567[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    566: 	predastoreCmd.PersistentFlags().String("config-path", "", "Predastore (S3) config path")
+  > 567: 	viper.BindEnv("config-path", "HIVE_PREDASTORE_CONFIG_PATH")
+    568: 	viper.BindPFlag("config-path", predastoreCmd.PersistentFlags().Lookup("config-path"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:563[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    562: 	viper.BindEnv("base-path", "HIVE_PREDASTORE_BASE_PATH")
+  > 563: 	viper.BindPFlag("base-path", predastoreCmd.PersistentFlags().Lookup("base-path"))
+    564: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:562[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    561: 	predastoreCmd.PersistentFlags().String("base-path", "", "Predastore (S3) base path")
+  > 562: 	viper.BindEnv("base-path", "HIVE_PREDASTORE_BASE_PATH")
+    563: 	viper.BindPFlag("base-path", predastoreCmd.PersistentFlags().Lookup("base-path"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:558[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    557: 	viper.BindEnv("host", "HIVE_PREDASTORE_HOST")
+  > 558: 	viper.BindPFlag("host", predastoreCmd.PersistentFlags().Lookup("host"))
+    559: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:557[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    556: 	predastoreCmd.PersistentFlags().String("host", "0.0.0.0", "Predastore (S3) host")
+  > 557: 	viper.BindEnv("host", "HIVE_PREDASTORE_HOST")
+    558: 	viper.BindPFlag("host", predastoreCmd.PersistentFlags().Lookup("host"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:553[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    552: 	viper.BindEnv("port", "HIVE_PREDASTORE_PORT")
+  > 553: 	viper.BindPFlag("port", predastoreCmd.PersistentFlags().Lookup("port"))
+    554: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:552[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    551: 	predastoreCmd.PersistentFlags().Int("port", 8443, "Predastore (S3) port")
+  > 552: 	viper.BindEnv("port", "HIVE_PREDASTORE_PORT")
+    553: 	viper.BindPFlag("port", predastoreCmd.PersistentFlags().Lookup("port"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:525[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    524: 
+  > 525: 		service.Stop()
+    526: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:507[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    506: 
+  > 507: 		service.Start()
+    508: 		fmt.Println("AWSGW service started")
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:430[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    429: 
+  > 430: 		service.Stop()
+    431: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:412[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    411: 
+  > 412: 		svc.Start()
+    413: 		fmt.Println("HIVE service started")
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:344[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    343: 
+  > 344: 		service.Stop()
+    345: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:326[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    325: 
+  > 326: 		service.Start()
+    327: 		fmt.Println("NATS service started")
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:282[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    281: 
+  > 282: 		service.Stop()
+    283: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:137[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    136: 
+  > 137: 		service.Stop()
+    138: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/service.go:118[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    117: 
+  > 118: 		service.Start()
+    119: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/root.go:101[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    100: 	viper.BindEnv("nats-subject", "HIVE_NATS_SUBJECT")
+  > 101: 	viper.BindPFlag("nats-subject", rootCmd.PersistentFlags().Lookup("nats-subject"))
+    102: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/root.go:100[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    99: 	rootCmd.PersistentFlags().String("nats-subject", "", "NATS subscription subject (overrides config file and env)")
+  > 100: 	viper.BindEnv("nats-subject", "HIVE_NATS_SUBJECT")
+    101: 	viper.BindPFlag("nats-subject", rootCmd.PersistentFlags().Lookup("nats-subject"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/root.go:97[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    96: 	viper.BindEnv("nats-token", "HIVE_NATS_TOKEN")
+  > 97: 	viper.BindPFlag("nats-token", rootCmd.PersistentFlags().Lookup("nats-token"))
+    98: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/root.go:96[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    95: 	rootCmd.PersistentFlags().String("nats-token", "", "NATS authentication token (overrides config file and env)")
+  > 96: 	viper.BindEnv("nats-token", "HIVE_NATS_TOKEN")
+    97: 	viper.BindPFlag("nats-token", rootCmd.PersistentFlags().Lookup("nats-token"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/root.go:93[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    92: 	viper.BindEnv("nats-host", "HIVE_NATS_HOST")
+  > 93: 	viper.BindPFlag("nats-host", rootCmd.PersistentFlags().Lookup("nats-host"))
+    94: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/root.go:92[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    91: 	rootCmd.PersistentFlags().String("nats-host", "", "NATS server host (overrides config file and env)")
+  > 92: 	viper.BindEnv("nats-host", "HIVE_NATS_HOST")
+    93: 	viper.BindPFlag("nats-host", rootCmd.PersistentFlags().Lookup("nats-host"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/root.go:88[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    87: 	viper.BindEnv("base-dir", "HIVE_BASE_DIR")
+  > 88: 	viper.BindPFlag("base-dir", rootCmd.PersistentFlags().Lookup("base-dir"))
+    89: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/root.go:87[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    86: 	rootCmd.PersistentFlags().String("base-dir", "", "Viperblock base directory (overrides config file and env)")
+  > 87: 	viper.BindEnv("base-dir", "HIVE_BASE_DIR")
+    88: 	viper.BindPFlag("base-dir", rootCmd.PersistentFlags().Lookup("base-dir"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/root.go:83[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    82: 	viper.BindEnv("host", "HIVE_HOST")
+  > 83: 	viper.BindPFlag("host", rootCmd.PersistentFlags().Lookup("host"))
+    84: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/root.go:82[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    81: 	rootCmd.PersistentFlags().String("host", "", "AWS Endpoint (overrides config file and env)")
+  > 82: 	viper.BindEnv("host", "HIVE_HOST")
+    83: 	viper.BindPFlag("host", rootCmd.PersistentFlags().Lookup("host"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/root.go:79[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    78: 	viper.BindEnv("secret-key", "HIVE_SECRET_KEY")
+  > 79: 	viper.BindPFlag("secret-key", rootCmd.PersistentFlags().Lookup("secret-key"))
+    80: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/root.go:78[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    77: 	rootCmd.PersistentFlags().String("secret-key", "", "AWS secret key (overrides config file and env)")
+  > 78: 	viper.BindEnv("secret-key", "HIVE_SECRET_KEY")
+    79: 	viper.BindPFlag("secret-key", rootCmd.PersistentFlags().Lookup("secret-key"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/root.go:75[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    74: 	viper.BindEnv("access-key", "HIVE_ACCESS_KEY")
+  > 75: 	viper.BindPFlag("access-key", rootCmd.PersistentFlags().Lookup("access-key"))
+    76: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/root.go:74[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    73: 	rootCmd.PersistentFlags().String("access-key", "", "AWS access key (overrides config file and env)")
+  > 74: 	viper.BindEnv("access-key", "HIVE_ACCESS_KEY")
+    75: 	viper.BindPFlag("access-key", rootCmd.PersistentFlags().Lookup("access-key"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/root.go:70[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    69: 	viper.BindEnv("config", "HIVE_CONFIG_PATH")
+  > 70: 	viper.BindPFlag("config", rootCmd.PersistentFlags().Lookup("config"))
+    71: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/root.go:69[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    68: 	rootCmd.PersistentFlags().String("config", "", "config file (required)")
+  > 69: 	viper.BindEnv("config", "HIVE_CONFIG_PATH")
+    70: 	viper.BindPFlag("config", rootCmd.PersistentFlags().Lookup("config"))
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/admin.go:731[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    730: 		var errResp config.NodeJoinResponse
+  > 731: 		json.Unmarshal(body, &errResp)
+    732: 		fmt.Fprintf(os.Stderr, "❌ Failed to join cluster: %s\n", errResp.Message)
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/admin.go:456[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    455: 	// The Render() method is used to print the table to the console.
+  > 456: 	pterm.DefaultTable.WithHasHeader().WithLeftAlignment().WithData(tableData).Render()
+    457: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/admin.go:171[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    170: 	adminJoinCmd.MarkFlagRequired("node")
+  > 171: 	adminJoinCmd.MarkFlagRequired("host")
+    172: 
+
+Autofix: 
+
+[[37;40m/Users/benduncan/Development/mulga/hive/cmd/hive/cmd/admin.go:170[0m] - G104 (CWE-703): Errors unhandled (Confidence: HIGH, Severity: LOW)
+    169: 	adminJoinCmd.Flags().String("cluster-routes", "", "NATS cluster hosts for routing specify multiple with comma (e.g., 10.11.12.1:4248,10.11.12.2:4248 for multi-node)")
+  > 170: 	adminJoinCmd.MarkFlagRequired("node")
+    171: 	adminJoinCmd.MarkFlagRequired("host")
+
+Autofix: 
+
+[1;36mSummary:[0m
+  Gosec  : dev
+  Files  : 69
+  Lines  : 13210
+  Nosec  : 0
+  Issues : [1;31m207[0m
+

@@ -25,6 +25,18 @@ Hive provides AWS API/SDK layer functionality, which requires the AWS CLI tool t
 sudo apt install awscli
 ```
 
+Confirm awscli version > 2.0 is installed which is required by Hive. If your OS package manager installed an older version, e.g 1.X, install the latest version of the AWS CLI tool directly.
+
+[https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
+
+```bash
+aws --version
+```
+
+```
+aws-cli/2.32.4
+```
+
 ## Build
 
 Create the base directory for the Hive development environment.

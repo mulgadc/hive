@@ -1,5 +1,17 @@
 GO_PROJECT_NAME := hive
 
+# Where to install Go tools
+GOBIN ?= $(shell go env GOBIN)
+ifeq ($(GOBIN),)
+  GOBIN := $(shell go env GOPATH)/bin
+endif
+
+GOVULNCHECK := $(GOBIN)/govulncheck
+
+# Install govulncheck only if the binary is missing / out of date
+$(GOVULNCHECK):
+	go install golang.org/x/vuln/cmd/govulncheck@latest
+
 build:
 	$(MAKE) go_build
 
@@ -12,9 +24,10 @@ go_run:
 	@echo "\n....Running $(GO_PROJECT_NAME)...."
 	$(GOPATH)/bin/$(GO_PROJECT_NAME)
 
-test:
+test: $(GOVULNCHECK)
 	@echo "\n....Running tests for $(GO_PROJECT_NAME)...."
 	LOG_IGNORE=1 go test -v -timeout 120s ./...
+	$(GOVULNCHECK) ./...
 
 bench:
 	@echo "\n....Running benchmarks for $(GO_PROJECT_NAME)...."
@@ -27,5 +40,20 @@ run:
 
 clean:
 	rm ./bin/$(GO_PROJECT_NAME)
+
+security:
+	@echo "\n....Running security checks for $(GO_PROJECT_NAME)...."
+
+	$(GOVULNCHECK) ./... > tests/govulncheck-report.txt
+	@echo "Govulncheck report saved to tests/govulncheck-report.txt"
+
+	gosec ./... > tests/gosec-report.txt
+	@echo "Gosec report saved to gosec-report.txt"
+
+	staticcheck ./...  > tests/staticcheck-report.txt
+	@echo "Staticcheck report saved to tests/staticcheck-report.txt"
+	
+	go vet ./... 2>&1 | tee tests/govet-report.txt
+	@echo "Go vet report saved to tests/govet-report.txt"
 
 .PHONY: go_build go_run build run test clean
