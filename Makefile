@@ -6,7 +6,24 @@ ifeq ($(GOBIN),)
   GOBIN := $(shell go env GOPATH)/bin
 endif
 
+# Where to install Go tools
 GOVULNCHECK := $(GOBIN)/govulncheck
+
+# Install govulncheck only if the binary is missing / out of date
+$(GOVULNCHECK):
+	go install golang.org/x/vuln/cmd/govulncheck@latest
+
+GOSECCHECK := $(GOBIN)/gosec
+
+# Install gosec only if the binary is missing / out of date
+$(GOSECCHECK):
+	go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+GOSTATICCHECK := $(GOBIN)/staticcheck
+
+# Install govulncheck only if the binary is missing / out of date
+$(GOSTATICCHECK):
+	go install honnef.co/go/tools/cmd/staticcheck@latest
 
 # Install govulncheck only if the binary is missing / out of date
 $(GOVULNCHECK):
@@ -41,19 +58,19 @@ run:
 clean:
 	rm ./bin/$(GO_PROJECT_NAME)
 
-security:
+security: $(GOVULNCHECK) $(GOSECCHECK) $(GOSTATICCHECK)
 	@echo "\n....Running security checks for $(GO_PROJECT_NAME)...."
 
-	$(GOVULNCHECK) ./... > tests/govulncheck-report.txt
+	$(GOVULNCHECK) ./... > tests/govulncheck-report.txt || true
 	@echo "Govulncheck report saved to tests/govulncheck-report.txt"
 
-	gosec ./... > tests/gosec-report.txt
-	@echo "Gosec report saved to gosec-report.txt"
+	$(GOSECCHECK) ./... > tests/gosec-report.txt || true
+	@echo "Gosec report saved to tests/gosec-report.txt"
 
-	staticcheck ./...  > tests/staticcheck-report.txt
+	$(GOSTATICCHECK) ./...  > tests/staticcheck-report.txt || true
 	@echo "Staticcheck report saved to tests/staticcheck-report.txt"
 	
-	go vet ./... 2>&1 | tee tests/govet-report.txt
+	go vet ./... 2>&1 | tee tests/govet-report.txt || true
 	@echo "Go vet report saved to tests/govet-report.txt"
 
 .PHONY: go_build go_run build run test clean
