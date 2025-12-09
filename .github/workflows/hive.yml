@@ -25,5 +25,7 @@ jobs:
 
       - name: golang-govulncheck-action
         uses: golang/govulncheck-action@v1.0.4
+        with:
+          repo-checkout: false
 #      - name: Security reports
 #        run: make security
