@@ -1,5 +1,12 @@
 GO_PROJECT_NAME := hive
-GOFLAGS ?= -mod=mod
+# Ask Go whether workspace mode is active
+IN_WORKSPACE := $(shell go env GOWORK)
+
+ifeq ($(IN_WORKSPACE),off)
+  GO_BUILD_MOD := -mod=mod
+else
+  GO_BUILD_MOD :=
+endif
 
 # Where to install Go tools
 GOBIN ?= $(shell go env GOBIN)
@@ -36,7 +43,7 @@ build:
 # GO commands
 go_build:
 	@echo "\n....Building $(GO_PROJECT_NAME)"
-	go build -ldflags "-s -w" -o ./bin/$(GO_PROJECT_NAME) cmd/hive/main.go
+	go build $(GO_BUILD_MOD) -ldflags "-s -w" -o ./bin/$(GO_PROJECT_NAME) cmd/hive/main.go
 
 go_run:
 	@echo "\n....Running $(GO_PROJECT_NAME)...."
