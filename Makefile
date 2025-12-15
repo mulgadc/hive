@@ -1,5 +1,5 @@
 GO_PROJECT_NAME := hive
-GOFLAGS ?= -mod=readonly
+GOFLAGS ?= -mod=mod
 
 # Where to install Go tools
 GOBIN ?= $(shell go env GOBIN)
