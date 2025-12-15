@@ -21,9 +21,11 @@ jobs:
           cache-dependency-path: "go.sum"
 
       - name: Run Tests
-        run: make test
+        run: LOG_IGNORE=1 go test -v -timeout 120s ./...
 
       - name: golang-govulncheck-action
         uses: golang/govulncheck-action@v1.0.4
+        with:
+          repo-checkout: false
 #      - name: Security reports
 #        run: make security
