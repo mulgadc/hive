@@ -1,8 +1,12 @@
 GO_PROJECT_NAME := hive
+
 # Ask Go whether workspace mode is active
 IN_WORKSPACE := $(shell go env GOWORK)
 
-ifeq ($(IN_WORKSPACE),off)
+# Use -mod=mod unless Go reports an active workspace path
+ifeq ($(IN_WORKSPACE),)
+  GO_BUILD_MOD := -mod=mod
+else ifeq ($(IN_WORKSPACE),off)
   GO_BUILD_MOD := -mod=mod
 else
   GO_BUILD_MOD :=
