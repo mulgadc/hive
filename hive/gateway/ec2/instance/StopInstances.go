@@ -35,7 +35,7 @@ func StopInstances(input *ec2.StopInstancesInput, natsConn *nats.Conn) (*ec2.Sto
 			ID: instanceID,
 			QMPCommand: qmp.QMPCommand{
 				Execute:   "system_powerdown",
-				Arguments: map[string]interface{}{},
+				Arguments: map[string]any{},
 			},
 			Attributes: qmp.Attributes{
 				StopInstance:      false, // Allow restart on daemon/node restart

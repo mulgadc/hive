@@ -33,7 +33,7 @@ func StartInstances(input *ec2.StartInstancesInput, natsConn *nats.Conn) (*ec2.S
 			ID: instanceID,
 			QMPCommand: qmp.QMPCommand{
 				Execute:   "cont",
-				Arguments: map[string]interface{}{},
+				Arguments: map[string]any{},
 			},
 			Attributes: qmp.Attributes{
 				StopInstance:      false,

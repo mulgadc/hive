@@ -20,7 +20,7 @@ type Service struct {
 	Config *config.ClusterConfig
 }
 
-func New(cfg interface{}) (svc *Service, err error) {
+func New(cfg any) (svc *Service, err error) {
 	svc = &Service{
 		Config: cfg.(*config.ClusterConfig),
 	}

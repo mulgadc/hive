@@ -138,7 +138,7 @@ func TestHandleEC2RunInstances_MessageParsing(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		input          interface{}
+		input          any
 		expectError    bool
 		errorInPayload bool
 		validate       func(t *testing.T, reply *nats.Msg)

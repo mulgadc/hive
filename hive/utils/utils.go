@@ -368,7 +368,7 @@ func dirExists(path string) bool {
 }
 
 // Convert interface to XML
-func MarshalToXML(payload interface{}) ([]byte, error) {
+func MarshalToXML(payload any) ([]byte, error) {
 
 	var buf bytes.Buffer
 	enc := xml.NewEncoder(&buf)
@@ -389,7 +389,7 @@ func MarshalToXML(payload interface{}) ([]byte, error) {
 }
 
 // wrapWithLocation decorates payload with the requested locationName tag.
-func GenerateXMLPayload(locationName string, payload interface{}) interface{} {
+func GenerateXMLPayload(locationName string, payload any) any {
 	t := reflect.StructOf([]reflect.StructField{
 		{
 			Name: "Value",
@@ -441,7 +441,7 @@ func ValidateErrorPayload(payload []byte) (responseError ec2.ResponseError, err 
 
 // Unmarshal payload
 
-func UnmarshalJsonPayload(input interface{}, jsonData []byte) []byte {
+func UnmarshalJsonPayload(input any, jsonData []byte) []byte {
 
 	decoder := json.NewDecoder(bytes.NewReader(jsonData))
 	decoder.DisallowUnknownFields()
@@ -457,7 +457,7 @@ func UnmarshalJsonPayload(input interface{}, jsonData []byte) []byte {
 
 }
 
-func MarshalJsonPayload(input interface{}, jsonData []byte) []byte {
+func MarshalJsonPayload(input any, jsonData []byte) []byte {
 
 	decoder := json.NewDecoder(bytes.NewReader(jsonData))
 	decoder.DisallowUnknownFields()

@@ -69,7 +69,7 @@ func createMockVolumeState(t *testing.T, baseDir, volumeName string) {
 
 	// Create a mock state file
 	stateFile := filepath.Join(volumeDir, "state.json")
-	mockState := map[string]interface{}{
+	mockState := map[string]any{
 		"volume_name": volumeName,
 		"volume_size": 1073741824, // 1GB
 		"created_at":  time.Now().Unix(),

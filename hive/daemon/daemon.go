@@ -760,7 +760,7 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 			// Optional: handle events here
 			continue
 		}
-		if errObj, ok := msg["error"].(map[string]interface{}); ok {
+		if errObj, ok := msg["error"].(map[string]any); ok {
 			return nil, fmt.Errorf("QMP error: %s: %s", errObj["class"], errObj["desc"])
 		}
 		if _, ok := msg["return"]; ok {

@@ -323,7 +323,7 @@ func TestMarshalToXML(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		input       interface{}
+		input       any
 		expectError bool
 		validate    func(t *testing.T, xmlData []byte)
 	}{

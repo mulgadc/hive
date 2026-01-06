@@ -41,7 +41,7 @@ type Backend struct {
 	Config S3Config
 }
 
-func New(config interface{}) (backend *Backend) {
+func New(config any) (backend *Backend) {
 	return &Backend{S3Backend: S3Backend{config: config.(S3Config)}}
 }
 
