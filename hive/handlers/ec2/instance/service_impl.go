@@ -2,10 +2,11 @@ package handlers_ec2_instance
 
 import (
 	"bytes"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand"
+	"math/big"
 	"os"
 	"strings"
 	"text/template"
@@ -172,7 +173,10 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 
 	// Determine image ID and snapshot ID
 	if strings.HasPrefix(*input.ImageId, "ami-") {
-		randomNumber := rand.Intn(100_000_000)
+		randomNumber, err := rand.Int(rand.Reader, big.NewInt(100_000_000))
+		if err != nil {
+			return err
+		}
 		imageId = viperblock.GenerateVolumeID("vol", fmt.Sprintf("%d-%s", randomNumber, *input.ImageId), "predastore", time.Now().Unix())
 		snapshotId = *input.ImageId
 	} else {
