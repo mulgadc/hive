@@ -1458,6 +1458,10 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 
 	// TODO: Toggle SSH local port forwarding based on config (debugging use)
 	sshDebugPort, err := viperblock.FindFreePort()
+	if err != nil {
+		slog.Error("Failed to find free port", "err", err)
+		return err
+	}
 
 	// Just the ipv4 port required
 	sshDebugPort = strings.Replace(sshDebugPort, "[::]:", "", 1)
