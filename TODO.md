@@ -12,19 +12,29 @@ Big rocks:
   * Move `daemon.go` instances.json state to Jetstream KV
 * Add support using the `hive` CLI tool to provision a new user with AWS access-keys/IAM.
   * Support multi-tenant operations and isolation
+* Add support to include capabilities when adding a new hardware node to MulgaOS (e.g EC2 target, S3, EBS, NATs, etc) - Features can be turned on/off depending on hardware scope.
+* Add simple Web UI console, using the AWS JS SDK, communicating to local AWS gateway.
+  * Implement ShadCNblocks for UI framework
+  * Simple Go webserver, static files, easy build process.
 
 Implementation gaps:
 
+* EC2 - Support extended features for `run-instance`
+  * Volume resize of AMI
+  * Confirm cloud-init will resize volume, configured correctly.
+  * Attach additional volumes
+  * Attach to VPC / Security group (required Open vSwitch implementation)
+
 ### EC2
 
-[DONE] - create-key-pair
-[DONE] - delete-key-pair
-[DONE] - describe-images
-[DONE] - import-key-pair
-[DONE] - describe-instances
-[DONE] - start-instances
-[DONE] - stop-instances
-[DONE] - terminate-instances
+- [DONE] - create-key-pair
+- [DONE] - delete-key-pair
+- [DONE] - describe-images
+- [DONE] - import-key-pair
+- [DONE] - describe-instances
+- [DONE] - start-instances
+- [DONE] - stop-instances
+- [DONE] - terminate-instances
 
 TODO:
 
