@@ -4,7 +4,7 @@ Notes for development environment installation.
 
 ## Dependencies
 
-For running on Ubuntu 22.04, 25.04 and 25.10.
+For running on Ubuntu 22.04, 24.04 and 25.10.
 
 ```bash
 sudo add-apt-repository universe
