@@ -369,7 +369,7 @@ func (s *InstanceServiceImpl) cloneAMIToVolume(input *ec2.RunInstancesInput, siz
 
 			// Flush every 4MB
 			if block%uint64(destVb.BlockSize) == 0 {
-				slog.Debug("Flush", "block", block)
+				// slog.Debug("Flush", "block", block)
 				destVb.Flush()
 				destVb.WriteWALToChunk(true)
 			}
