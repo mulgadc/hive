@@ -243,7 +243,10 @@ func RemovePidFile(serviceName string) error {
 
 	pidPath := pidPath()
 
-	os.Remove(filepath.Join(pidPath, fmt.Sprintf("%s.pid", serviceName)))
+	err := os.Remove(filepath.Join(pidPath, fmt.Sprintf("%s.pid", serviceName)))
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -276,7 +279,10 @@ func StopProcess(serviceName string) error {
 	}
 
 	// Remove PID file
-	RemovePidFile(serviceName)
+	err = RemovePidFile(serviceName)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -372,7 +378,11 @@ func MarshalToXML(payload interface{}) ([]byte, error) {
 		slog.Error("BuildXML failed", "err", err)
 		return nil, err
 	}
-	enc.Flush()
+
+	if err := enc.Flush(); err != nil {
+		slog.Error("Flush failed", "err", err)
+		return nil, err
+	}
 
 	return buf.Bytes(), nil
 

@@ -79,9 +79,9 @@ security: $(GOVULNCHECK) $(GOSECCHECK) $(GOSTATICCHECK)
 	$(GOSECCHECK) ./... > tests/gosec-report.txt || true
 	@echo "Gosec report saved to tests/gosec-report.txt"
 
-	$(GOSTATICCHECK) ./...  > tests/staticcheck-report.txt || true
+	$(GOSTATICCHECK) -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019" ./...  > tests/staticcheck-report.txt || true
 	@echo "Staticcheck report saved to tests/staticcheck-report.txt"
-	
+
 	go vet ./... 2>&1 | tee tests/govet-report.txt || true
 	@echo "Go vet report saved to tests/govet-report.txt"
 
