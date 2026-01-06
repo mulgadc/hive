@@ -382,7 +382,6 @@ func TestDaemon_Initialization(t *testing.T) {
 
 	assert.NotNil(t, daemon)
 	assert.NotNil(t, daemon.resourceMgr)
-	assert.NotNil(t, daemon.Instances)
 	assert.NotNil(t, daemon.Instances.VMS)
 	assert.Equal(t, cfg, daemon.config)
 }

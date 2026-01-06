@@ -596,8 +596,15 @@ func (d *Daemon) WriteState() error {
 	d.Instances.Mu.Lock()
 	defer d.Instances.Mu.Unlock()
 
+	// Create a struct without the mutex to avoid copying the lock
+	state := struct {
+		VMS map[string]*vm.VM `json:"vms"`
+	}{
+		VMS: d.Instances.VMS,
+	}
+
 	// Pretty print JSON with indent
-	jsonData, err := json.MarshalIndent(d.Instances, "", "  ")
+	jsonData, err := json.MarshalIndent(state, "", "  ")
 
 	if err != nil {
 		return err
