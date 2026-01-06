@@ -1,16 +1,251 @@
 # Hive Development Roadmap
 
-This roadmap has been integrated into the comprehensive [HIVE_DEVELOPMENT_PLAN.md](HIVE_DEVELOPMENT_PLAN.md).
+## Update Jan 2026
+
+Big rocks:
+
+* Add multi-node support for predastore (S3) using reed solomon encoding
+  * Implement KV store for object lookup, WAL files, offset. Use hash-ring to determine which nodes an object belongs to.
+* Implement VPC support using Open vSwitch across multiple nodes, core VPC functionality included
+  * Add support for NVIDIA Bluefield DPU with Open vSwitch
+* Implement basic IAM using NATS Jetstream as KV store, vs IAM/access-keys in local config/TOML files for beta.
+  * Move `daemon.go` instances.json state to Jetstream KV
+* Add support using the `hive` CLI tool to provision a new user with AWS access-keys/IAM.
+  * Support multi-tenant operations and isolation
+
+Implementation gaps:
+
+### EC2
+
+[DONE] - create-key-pair
+[DONE] - delete-key-pair
+[DONE] - describe-images
+[DONE] - import-key-pair
+[DONE] - describe-instances
+[DONE] - start-instances
+[DONE] - stop-instances
+[DONE] - terminate-instances
+
+TODO:
+
+- allocate-address
+- allocate-hosts
+- assign-private-ip-addresses
+- assign-private-nat-gateway-address
+- associate-address
+- associate-nat-gateway-address
+- associate-route-server
+- associate-route-table
+- associate-security-group-vpc
+- associate-subnet-cidr-block
+- attach-internet-gateway
+- attach-network-interface
+- attach-volume
+- authorize-security-group-egress
+- authorize-security-group-ingress
+- copy-image
+- copy-snapshot
+- copy-volumes
+- create-customer-gateway
+- create-default-subnet
+- create-default-vpc
+- create-dhcp-options
+- create-egress-only-internet-gateway
+- create-image
+- create-internet-gateway
+- create-launch-template
+- create-launch-template-version
+- create-local-gateway-route
+- create-local-gateway-route-table
+- create-local-gateway-route-table-virtual-interface-group-association
+- create-local-gateway-virtual-interface
+- create-local-gateway-virtual-interface-group
+- create-nat-gateway
+- create-network-acl
+- create-network-acl-entry
+- create-public-ipv4-pool
+- create-route
+- create-route-server
+- create-route-server-endpoint
+- create-route-server-peer
+- create-route-table
+- create-security-group
+- create-snapshot
+- create-snapshots
+- create-subnet
+- create-subnet-cidr-reservation
+- create-tags
+- create-volume
+- delete-coip-cidr
+- delete-customer-gateway
+- delete-dhcp-options
+- delete-egress-only-internet-gateway
+- delete-internet-gateway
+- delete-local-gateway-route
+- delete-local-gateway-route-table
+- delete-local-gateway-route-table-virtual-interface-group-association
+- delete-local-gateway-virtual-interface
+- delete-local-gateway-virtual-interface-group
+- delete-nat-gateway
+- delete-network-acl
+- delete-network-interface
+- delete-network-interface-permission
+- delete-public-ipv4-pool
+- delete-route
+- delete-route-server
+- delete-route-server-endpoint
+- delete-route-server-peer
+- delete-route-table
+- delete-security-group
+- delete-snapshot
+- delete-subnet
+- delete-subnet-cidr-reservation
+- delete-tags
+- delete-volume
+- describe-account-attributes
+- describe-addresses
+- describe-customer-gateways
+- describe-dhcp-options
+- describe-egress-only-internet-gateways
+- describe-hosts
+- describe-internet-gateways
+- describe-key-pairs
+- describe-managed-prefix-lists
+- describe-nat-gateways
+- describe-network-acls
+- describe-regions
+- describe-route-server-endpoints
+- describe-route-server-peers
+- describe-route-servers
+- describe-route-tables
+- describe-security-group-references
+- describe-security-group-rules
+- describe-security-groups
+- describe-snapshots
+- describe-subnets
+- describe-tags
+- describe-volume-attribute
+- describe-volume-status
+- describe-volumes
+- describe-volumes-modifications
+- detach-internet-gateway
+- detach-network-interface
+- detach-volume
+- detach-vpn-gateway
+- disable-image
+- disable-route-server-propagation
+- disable-serial-console-access
+- enable-address-transfer
+- enable-capacity-manager
+- enable-ebs-encryption-by-default
+- enable-image
+- enable-image-block-public-access
+- export-image
+- get-console-output
+- get-console-screenshot
+- get-instance-metadata-defaults
+- get-instance-tpm-ek-pub
+- get-instance-types-from-instance-requirements
+- get-instance-uefi-data
+- get-launch-template-data
+- get-route-server-associations
+- get-route-server-propagations
+- get-route-server-routing-database
+- get-security-groups-for-vpc
+- get-serial-console-access-status
+- get-snapshot-block-public-access-state
+- get-spot-placement-scores
+- get-subnet-cidr-reservations
+- import-image
+- import-key-pair
+- import-snapshot
+- modify-instance-attribute
+- modify-instance-capacity-reservation-attributes
+- modify-instance-connect-endpoint
+- modify-instance-cpu-options
+- modify-instance-credit-specification
+- modify-instance-placement
+- modify-network-interface-attribute
+- modify-volume
+- modify-volume-attribute
+- modify-vpn-connection
+- modify-vpn-connection-options
+- monitor-instances
+- reboot-instances
+- register-image
+- release-address
+- release-hosts
+- replace-network-acl-association
+- replace-network-acl-entry
+- replace-route
+- replace-route-table-association
+- report-instance-status
+- revoke-security-group-egress
+- revoke-security-group-ingress
+- run-instances
+
+### EBS
+
+- complete-snapshot
+- get-snapshot-block
+- list-changed-blocks
+- list-snapshot-blocks
+- put-snapshot-block
+- start-snapshot
+
+### VPC
+
+- create-vpc
+- create-vpc-block-public-access-exclusion
+- create-vpc-encryption-control
+- create-vpc-endpoint
+- create-vpc-endpoint-connection-notification
+- create-vpc-endpoint-service-configuration
+- create-vpc-peering-connection
+- delete-vpc
+- delete-vpc-block-public-access-exclusion
+- delete-vpc-encryption-control
+- delete-vpc-endpoint-connection-notifications
+- delete-vpc-endpoint-service-configurations
+- delete-vpc-endpoints
+- delete-vpc-peering-connection
+- associate-vpc-cidr-block
+- delete-local-gateway-route-table-vpc-association
+- create-local-gateway-route-table-vpc-association
+- describe-security-group-vpc-associations
+- describe-vpc-attribute
+- describe-vpc-block-public-access-exclusions
+- describe-vpc-block-public-access-options
+- describe-vpc-encryption-controls
+- describe-vpc-endpoint-associations
+- describe-vpc-endpoint-connection-notifications
+- describe-vpc-endpoint-connections
+- describe-vpc-endpoint-service-configurations
+- describe-vpc-endpoint-service-permissions
+- describe-vpc-endpoint-services
+- describe-vpc-endpoints
+- describe-vpc-peering-connections
+- describe-vpcs
+- modify-vpc-attribute
+- modify-vpc-encryption-control
+- modify-vpc-endpoint
+- modify-vpc-endpoint-connection-notification
+- modify-vpc-endpoint-service-configuration
+- modify-vpc-tenancy
+
+### S3
+
+* Consider moving S3 control/data plane, from predastore, to Hive format.
 
 ## Update Nov 2025
 
-* Implement multi-tenant support
-* Move config settings from ~/hive/*.toml, to using Nats Jetstream for core config which can be synced between nodes.
+[PARTIAL] * Implement multi-tenant support
+[PARTIAL] * Move config settings from ~/hive/*.toml, to using Nats Jetstream for core config which can be synced between nodes.
 * Implement a lightweight IAM using Nats Jetstream, vs current config files for auth settings.
-* Implement Reed Solomon Encoding for Predastore (S3) objects and a WAL implementation, for storing multiple objects in a single shard (e.g 4MB), with the WAL referencing the location of each object (e.g 4kb min)
+[ONGOING] * Implement Reed Solomon Encoding for Predastore (S3) objects and a WAL implementation, for storing multiple objects in a single shard (e.g 4MB), with the WAL referencing the location of each object (e.g 4kb min)
     * Implement basic KY lookup, object key sha512 (bucket/key), location to shard on S3 (obj.0000124.bin), read WAL (e.g first 4096 bytes) to determine location of the object. e.g key-1234 => obj.0000124.bin, wal header (4096 bytes) > key-1234 == offset location (seek) 16384, len 32768.
     * Read multiple nodes (e.g 5 predastore instances, k = 3 (data shards), n = 5 (total shards), n - k = 2 (parity shards) )
-* Complete core scaffolding AWS SDK/API requirements (ec2 describe-instances, run-instances, etc)
+[ONGOING] * Complete core scaffolding AWS SDK/API requirements (ec2 describe-instances, run-instances, etc)
 * Implement UEFI support for image downloads and `qemu` exec in `vm.go`
 * Confirm Alpine Linux, fails import image AMI > (run-instance) ""Failed to read block from AMI source" err="request out of range" - Block size correct?
 * Improve shutdown gracefully, `./scripts/stop-dev.sh` waits 60 seconds, while qemu/nbd could still be shutting down.
@@ -19,8 +254,8 @@ This roadmap has been integrated into the comprehensive [HIVE_DEVELOPMENT_PLAN.m
 
 ## Multi-node setup
 
-- Development release - v0.1.0 (single node)
-- Production release - v0.2.0 (multi node)
+[DONE] - Development release - v0.1.0 (single node)
+[PARTIAL] - Production release - v0.2.0 (multi node)
 
 Design layout for multi-node configuration.
 
