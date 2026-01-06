@@ -724,7 +724,11 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error reading response body: %v\n", err)
+		os.Exit(1)
+	}
 
 	if resp.StatusCode != 200 {
 		var errResp config.NodeJoinResponse

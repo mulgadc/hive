@@ -596,8 +596,15 @@ func (d *Daemon) WriteState() error {
 	d.Instances.Mu.Lock()
 	defer d.Instances.Mu.Unlock()
 
+	// Create a struct without the mutex to avoid copying the lock
+	state := struct {
+		VMS map[string]*vm.VM `json:"vms"`
+	}{
+		VMS: d.Instances.VMS,
+	}
+
 	// Pretty print JSON with indent
-	jsonData, err := json.MarshalIndent(d.Instances, "", "  ")
+	jsonData, err := json.MarshalIndent(state, "", "  ")
 
 	if err != nil {
 		return err
@@ -753,7 +760,7 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 			// Optional: handle events here
 			continue
 		}
-		if errObj, ok := msg["error"].(map[string]interface{}); ok {
+		if errObj, ok := msg["error"].(map[string]any); ok {
 			return nil, fmt.Errorf("QMP error: %s: %s", errObj["class"], errObj["desc"])
 		}
 		if _, ok := msg["return"]; ok {
@@ -809,7 +816,7 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 		slog.Info("handleEC2RunInstances launched", "instanceId", instance.ID)
 
 		resp = &qmp.QMPResponse{
-			Return: []byte(fmt.Sprintf(`{"status":"running","instanceId":"%s"}`, instance.ID)),
+			Return: fmt.Appendf(nil, `{"status":"running","instanceId":"%s"}`, instance.ID),
 		}
 
 	} else {
@@ -1080,7 +1087,6 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 
 	// Run asynchronously within a worker group
 	for _, instance := range instances {
-		instance := instance // capture loop variable
 
 		wg.Add(1)
 
@@ -1451,6 +1457,10 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 
 	// TODO: Toggle SSH local port forwarding based on config (debugging use)
 	sshDebugPort, err := viperblock.FindFreePort()
+	if err != nil {
+		slog.Error("Failed to find free port", "err", err)
+		return err
+	}
 
 	// Just the ipv4 port required
 	sshDebugPort = strings.Replace(sshDebugPort, "[::]:", "", 1)
@@ -1865,7 +1875,7 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 
 	// Filter instances if specific instance IDs were requested
 	instanceIDFilter := make(map[string]bool)
-	if describeInstancesInput.InstanceIds != nil && len(describeInstancesInput.InstanceIds) > 0 {
+	if len(describeInstancesInput.InstanceIds) > 0 {
 		for _, id := range describeInstancesInput.InstanceIds {
 			if id != nil {
 				instanceIDFilter[*id] = true

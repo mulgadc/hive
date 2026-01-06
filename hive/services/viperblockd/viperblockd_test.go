@@ -124,7 +124,7 @@ func TestConfigMutexThreadSafety(t *testing.T) {
 	iterations := 100
 
 	// Spawn multiple goroutines to append volumes concurrently
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
@@ -353,7 +353,7 @@ func TestConfigConcurrentRead(t *testing.T) {
 	iterations := 50
 
 	// Spawn multiple goroutines to read volumes concurrently
-	for i := 0; i < iterations; i++ {
+	for range iterations {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

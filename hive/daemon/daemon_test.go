@@ -138,7 +138,7 @@ func TestHandleEC2RunInstances_MessageParsing(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		input          interface{}
+		input          any
 		expectError    bool
 		errorInPayload bool
 		validate       func(t *testing.T, reply *nats.Msg)
@@ -382,7 +382,6 @@ func TestDaemon_Initialization(t *testing.T) {
 
 	assert.NotNil(t, daemon)
 	assert.NotNil(t, daemon.resourceMgr)
-	assert.NotNil(t, daemon.Instances)
 	assert.NotNil(t, daemon.Instances.VMS)
 	assert.Equal(t, cfg, daemon.config)
 }

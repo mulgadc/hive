@@ -2,10 +2,11 @@ package handlers_ec2_instance
 
 import (
 	"bytes"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand"
+	"math/big"
 	"os"
 	"strings"
 	"text/template"
@@ -163,7 +164,7 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 	var snapshotId string
 
 	// Handle block device mappings
-	if input.BlockDeviceMappings != nil && len(input.BlockDeviceMappings) > 0 {
+	if len(input.BlockDeviceMappings) > 0 {
 		size = int(*input.BlockDeviceMappings[0].Ebs.VolumeSize)
 		deviceName = *input.BlockDeviceMappings[0].DeviceName
 		volumeType = *input.BlockDeviceMappings[0].Ebs.VolumeType
@@ -172,7 +173,10 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 
 	// Determine image ID and snapshot ID
 	if strings.HasPrefix(*input.ImageId, "ami-") {
-		randomNumber := rand.Intn(100_000_000)
+		randomNumber, err := rand.Int(rand.Reader, big.NewInt(100_000_000))
+		if err != nil {
+			return err
+		}
 		imageId = viperblock.GenerateVolumeID("vol", fmt.Sprintf("%d-%s", randomNumber, *input.ImageId), "predastore", time.Now().Unix())
 		snapshotId = *input.ImageId
 	} else {
@@ -357,7 +361,7 @@ func (s *InstanceServiceImpl) cloneAMIToVolume(input *ec2.RunInstancesInput, siz
 		numBlocks := len(data) / int(destVb.BlockSize)
 
 		// Write individual blocks to the new volume
-		for i := 0; i < numBlocks; i++ {
+		for i := range numBlocks {
 			// Check if the input is a Zero block
 			if bytes.Equal(data[i*int(destVb.BlockSize):(i+1)*int(destVb.BlockSize)], nullBlock) {
 				block++

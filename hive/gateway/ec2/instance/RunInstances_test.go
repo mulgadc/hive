@@ -202,7 +202,7 @@ func TestEC2ProcessRunInstances(t *testing.T) {
 
 	tests := []struct {
 		name              string
-		payload           interface{}
+		payload           any
 		rawJSON           []byte
 		wantValidationErr bool
 		wantErrCode       string

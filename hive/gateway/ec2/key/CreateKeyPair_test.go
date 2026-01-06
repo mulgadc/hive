@@ -59,7 +59,7 @@ func TestValidateCreateKeyPairInput(t *testing.T) {
 func TestEC2ProcessCreateKeyPair(t *testing.T) {
 	tests := []struct {
 		name              string
-		payload           interface{}
+		payload           any
 		rawJSON           []byte
 		wantValidationErr bool
 		wantErrCode       string

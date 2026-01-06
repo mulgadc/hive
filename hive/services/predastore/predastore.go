@@ -31,7 +31,7 @@ type Service struct {
 	Config *Config
 }
 
-func New(config interface{}) (svc *Service, err error) {
+func New(config any) (svc *Service, err error) {
 	svc = &Service{
 		Config: config.(*Config),
 	}

@@ -64,7 +64,7 @@ func ValidateImportKeyPairInput(input *ec2.ImportKeyPairInput) (err error) {
 		return errors.New("MissingParameter")
 	}
 
-	if input.PublicKeyMaterial == nil || len(input.PublicKeyMaterial) == 0 {
+	if len(input.PublicKeyMaterial) == 0 {
 		return errors.New("MissingParameter")
 	}
 

@@ -52,7 +52,7 @@ type Service struct {
 
 //  nbdkit -p 10812 --pidfile /tmp/vb-vol-1.pid ./lib/nbdkit-viperblock-plugin.so -v -f size=67108864 volume=vol-2 bucket=predastore region=ap-southeast-2 access_key="X" secret_key="Y" base_dir="/tmp/vb/" host="https://127.0.0.1:8443" cache_size=0
 
-func New(config interface{}) (svc *Service, err error) {
+func New(config any) (svc *Service, err error) {
 	svc = &Service{
 		Config: config.(*Config),
 	}
@@ -117,7 +117,7 @@ func launchService(cfg *Config) (err error) {
 		}
 
 		// TODO: Improve
-		nc.Publish("ebs.delete.response", []byte(fmt.Sprintf(`{"volume":"%s","deleted":true}`, ebsRequest.Volume)))
+		nc.Publish("ebs.delete.response", fmt.Appendf(nil, `{"volume":"%s","deleted":true}`, ebsRequest.Volume))
 
 	})
 

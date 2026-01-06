@@ -224,8 +224,8 @@ func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {
 // Parse AWS query arguments (used by some services like EC2/S3)
 func ParseAWSQueryArgs(query string) map[string]string {
 	params := make(map[string]string)
-	pairs := strings.Split(query, "&")
-	for _, pair := range pairs {
+	pairs := strings.SplitSeq(query, "&")
+	for pair := range pairs {
 		kv := strings.SplitN(pair, "=", 2)
 		if len(kv) == 2 {
 			params[kv[0]] = kv[1]
@@ -261,7 +261,7 @@ func GenerateEC2ErrorResponse(code, message, requestID string) (output []byte) {
 	return output
 }
 
-func ParseArgsToStruct(input *interface{}, args map[string]string) (err error) {
+func ParseArgsToStruct(input *any, args map[string]string) (err error) {
 
 	// Generated from input shape: RunInstancesRequest
 	err = awsec2query.QueryParamsToStruct(args, input)
