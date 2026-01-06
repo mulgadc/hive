@@ -13,7 +13,7 @@ import (
 
 // StartInstances sends start commands to specified instances via NATS
 func StartInstances(input *ec2.StartInstancesInput, natsConn *nats.Conn) (*ec2.StartInstancesOutput, error) {
-	if input.InstanceIds == nil || len(input.InstanceIds) == 0 {
+	if len(input.InstanceIds) == 0 {
 		return nil, fmt.Errorf("no instance IDs provided")
 	}
 

@@ -163,7 +163,7 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 	var snapshotId string
 
 	// Handle block device mappings
-	if input.BlockDeviceMappings != nil && len(input.BlockDeviceMappings) > 0 {
+	if len(input.BlockDeviceMappings) > 0 {
 		size = int(*input.BlockDeviceMappings[0].Ebs.VolumeSize)
 		deviceName = *input.BlockDeviceMappings[0].DeviceName
 		volumeType = *input.BlockDeviceMappings[0].Ebs.VolumeType

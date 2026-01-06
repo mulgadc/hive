@@ -14,7 +14,7 @@ import (
 // StopInstances sends stop commands to specified instances via NATS
 // Uses system_powerdown without stop_instance attribute to allow restart
 func StopInstances(input *ec2.StopInstancesInput, natsConn *nats.Conn) (*ec2.StopInstancesOutput, error) {
-	if input.InstanceIds == nil || len(input.InstanceIds) == 0 {
+	if len(input.InstanceIds) == 0 {
 		return nil, fmt.Errorf("no instance IDs provided")
 	}
 

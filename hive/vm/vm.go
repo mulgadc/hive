@@ -208,7 +208,7 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 		qemuArchitecture = "qemu-system-x86_64"
 
 	} else {
-		return nil, fmt.Errorf("Architecture missing")
+		return nil, fmt.Errorf("architecture missing")
 	}
 
 	// Note, require `-M` machine type for ARM (virt) if set to q35 (incompatible)

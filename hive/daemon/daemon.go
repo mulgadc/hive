@@ -1872,7 +1872,7 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 
 	// Filter instances if specific instance IDs were requested
 	instanceIDFilter := make(map[string]bool)
-	if describeInstancesInput.InstanceIds != nil && len(describeInstancesInput.InstanceIds) > 0 {
+	if len(describeInstancesInput.InstanceIds) > 0 {
 		for _, id := range describeInstancesInput.InstanceIds {
 			if id != nil {
 				instanceIDFilter[*id] = true

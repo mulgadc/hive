@@ -226,7 +226,7 @@ func TestKeyPairFiltering(t *testing.T) {
 			// Simulate filtering logic from DescribeKeyPairs
 			var filtered []*ec2.KeyPairInfo
 
-			if tt.input.KeyNames != nil && len(tt.input.KeyNames) > 0 {
+			if len(tt.input.KeyNames) > 0 {
 				// Filter by KeyName
 				nameSet := make(map[string]bool)
 				for _, name := range tt.input.KeyNames {
@@ -237,7 +237,7 @@ func TestKeyPairFiltering(t *testing.T) {
 						filtered = append(filtered, kp)
 					}
 				}
-			} else if tt.input.KeyPairIds != nil && len(tt.input.KeyPairIds) > 0 {
+			} else if len(tt.input.KeyPairIds) > 0 {
 				// Filter by KeyPairId
 				idSet := make(map[string]bool)
 				for _, id := range tt.input.KeyPairIds {
@@ -279,19 +279,19 @@ func TestKeyPairMetadataPath(t *testing.T) {
 	accountID := "123456789"
 
 	tests := []struct {
-		name       string
-		keyPairId  string
-		expected   string
+		name      string
+		keyPairId string
+		expected  string
 	}{
 		{
-			name:       "Standard key pair ID",
-			keyPairId:  "key-abcdef123456",
-			expected:   "keys/123456789/key-abcdef123456.json",
+			name:      "Standard key pair ID",
+			keyPairId: "key-abcdef123456",
+			expected:  "keys/123456789/key-abcdef123456.json",
 		},
 		{
-			name:       "Short key pair ID",
-			keyPairId:  "key-12345",
-			expected:   "keys/123456789/key-12345.json",
+			name:      "Short key pair ID",
+			keyPairId: "key-12345",
+			expected:  "keys/123456789/key-12345.json",
 		},
 	}
 
@@ -310,46 +310,46 @@ func TestKeyPairMetadataPath(t *testing.T) {
 // TestImportKeyPairKeyTypeDetection tests key type detection from public key material
 func TestImportKeyPairKeyTypeDetection(t *testing.T) {
 	tests := []struct {
-		name           string
-		publicKeyData  string
-		expectedType   string
-		expectError    bool
+		name          string
+		publicKeyData string
+		expectedType  string
+		expectError   bool
 	}{
 		{
-			name:           "ED25519 key",
-			publicKeyData:  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl",
-			expectedType:   "ed25519",
-			expectError:    false,
+			name:          "ED25519 key",
+			publicKeyData: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl",
+			expectedType:  "ed25519",
+			expectError:   false,
 		},
 		{
-			name:           "RSA key",
-			publicKeyData:  "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCz...",
-			expectedType:   "rsa",
-			expectError:    false,
+			name:          "RSA key",
+			publicKeyData: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCz...",
+			expectedType:  "rsa",
+			expectError:   false,
 		},
 		{
-			name:           "ECDSA key",
-			publicKeyData:  "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTY...",
-			expectedType:   "ecdsa",
-			expectError:    false,
+			name:          "ECDSA key",
+			publicKeyData: "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTY...",
+			expectedType:  "ecdsa",
+			expectError:   false,
 		},
 		{
-			name:           "Invalid format - no key data",
-			publicKeyData:  "ssh-rsa",
-			expectedType:   "",
-			expectError:    true,
+			name:          "Invalid format - no key data",
+			publicKeyData: "ssh-rsa",
+			expectedType:  "",
+			expectError:   true,
 		},
 		{
-			name:           "Empty key material",
-			publicKeyData:  "",
-			expectedType:   "",
-			expectError:    true,
+			name:          "Empty key material",
+			publicKeyData: "",
+			expectedType:  "",
+			expectError:   true,
 		},
 		{
-			name:           "Unsupported key type",
-			publicKeyData:  "ssh-dss AAAAB3NzaC1kc3MAAACB...",
-			expectedType:   "",
-			expectError:    true,
+			name:          "Unsupported key type",
+			publicKeyData: "ssh-dss AAAAB3NzaC1kc3MAAACB...",
+			expectedType:  "",
+			expectError:   true,
 		},
 	}
 
@@ -440,7 +440,7 @@ func TestImportKeyPairInputValidation(t *testing.T) {
 
 			if tt.input == nil || tt.input.KeyName == nil {
 				hasError = true
-			} else if tt.input.PublicKeyMaterial == nil || len(tt.input.PublicKeyMaterial) == 0 {
+			} else if len(tt.input.PublicKeyMaterial) == 0 {
 				hasError = true
 			}
 

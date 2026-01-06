@@ -567,7 +567,7 @@ func (s *KeyServiceImpl) ImportKeyPair(input *ec2.ImportKeyPairInput) (*ec2.Impo
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
 
-	if input.PublicKeyMaterial == nil || len(input.PublicKeyMaterial) == 0 {
+	if len(input.PublicKeyMaterial) == 0 {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
 
