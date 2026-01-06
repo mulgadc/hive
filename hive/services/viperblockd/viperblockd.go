@@ -117,7 +117,7 @@ func launchService(cfg *Config) (err error) {
 		}
 
 		// TODO: Improve
-		nc.Publish("ebs.delete.response", []byte(fmt.Sprintf(`{"volume":"%s","deleted":true}`, ebsRequest.Volume)))
+		nc.Publish("ebs.delete.response", fmt.Appendf(nil, `{"volume":"%s","deleted":true}`, ebsRequest.Volume))
 
 	})
 

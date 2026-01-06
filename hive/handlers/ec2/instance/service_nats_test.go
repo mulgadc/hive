@@ -333,7 +333,7 @@ func TestNATSInstanceService_RunInstances_MultipleInstances(t *testing.T) {
 		// Create reservation with count matching MinCount
 		count := int(*input.MinCount)
 		instances := make([]*ec2.Instance, count)
-		for i := 0; i < count; i++ {
+		for i := range count {
 			instanceId := aws.String(aws.StringValue(aws.String(fmt.Sprintf("i-%d", i))))
 			instances[i] = &ec2.Instance{
 				InstanceId:   instanceId,
@@ -409,7 +409,7 @@ func TestNATSInstanceService_RunInstances_QueueGroup(t *testing.T) {
 
 	// Send multiple requests
 	requestCount := 10
-	for i := 0; i < requestCount; i++ {
+	for range requestCount {
 		reservation, err := service.RunInstances(input)
 		require.NoError(t, err)
 		require.NotNil(t, reservation)

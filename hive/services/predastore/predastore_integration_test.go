@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -591,7 +592,7 @@ func TestIntegration_MultipleFiles(t *testing.T) {
 	fileCount := 5
 	keys := make([]string, fileCount)
 
-	for i := 0; i < fileCount; i++ {
+	for i := range fileCount {
 		keys[i] = fmt.Sprintf("multi-test-%d.txt", i)
 		content := fmt.Sprintf("content-file-%d", i)
 
@@ -611,11 +612,8 @@ func TestIntegration_MultipleFiles(t *testing.T) {
 
 	foundCount := 0
 	for _, obj := range listResult.Contents {
-		for _, key := range keys {
-			if *obj.Key == key {
-				foundCount++
-				break
-			}
+		if slices.Contains(keys, *obj.Key) {
+			foundCount++
 		}
 	}
 	assert.Equal(t, fileCount, foundCount, "All uploaded files should be listed")

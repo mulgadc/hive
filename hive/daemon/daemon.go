@@ -816,7 +816,7 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 		slog.Info("handleEC2RunInstances launched", "instanceId", instance.ID)
 
 		resp = &qmp.QMPResponse{
-			Return: []byte(fmt.Sprintf(`{"status":"running","instanceId":"%s"}`, instance.ID)),
+			Return: fmt.Appendf(nil, `{"status":"running","instanceId":"%s"}`, instance.ID),
 		}
 
 	} else {
@@ -1087,7 +1087,6 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 
 	// Run asynchronously within a worker group
 	for _, instance := range instances {
-		instance := instance // capture loop variable
 
 		wg.Add(1)
 

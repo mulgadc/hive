@@ -357,7 +357,7 @@ func (s *InstanceServiceImpl) cloneAMIToVolume(input *ec2.RunInstancesInput, siz
 		numBlocks := len(data) / int(destVb.BlockSize)
 
 		// Write individual blocks to the new volume
-		for i := 0; i < numBlocks; i++ {
+		for i := range numBlocks {
 			// Check if the input is a Zero block
 			if bytes.Equal(data[i*int(destVb.BlockSize):(i+1)*int(destVb.BlockSize)], nullBlock) {
 				block++
