@@ -372,7 +372,7 @@ func MarshalToXML(payload any) ([]byte, error) {
 
 	var buf bytes.Buffer
 	enc := xml.NewEncoder(&buf)
-	enc.Indent("", "  ")
+	// enc.Indent("", "  ")
 
 	if err := xmlutil.BuildXML(payload, enc); err != nil {
 		slog.Error("BuildXML failed", "err", err)
