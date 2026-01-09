@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -241,7 +242,7 @@ func formatFingerprint(hash []byte, algorithm string) string {
 // generateKeyPairID generates a unique key pair ID (similar to AWS key-xxxxx format)
 func generateKeyPairID() string {
 	hash := sha1.New() //#nosec G401 - need sha1 for AWS compatibility
-	hash.Write(fmt.Appendf(nil, "%d", os.Getpid()))
+	hash.Write([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))
 	return fmt.Sprintf("%x", hash.Sum(nil))[:16]
 }
 
