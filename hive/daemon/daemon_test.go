@@ -113,11 +113,17 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 	return daemon
 }
 
+// getTestInstanceType returns a valid instance type for testing based on the system's CPU
+func getTestInstanceType() string {
+	rm := NewResourceManager()
+	return rm.instanceFamily + ".micro"
+}
+
 // createValidRunInstancesInput creates a valid RunInstancesInput for testing
 func createValidRunInstancesInput() *ec2.RunInstancesInput {
 	return &ec2.RunInstancesInput{
 		ImageId:      aws.String("ami-0abcdef1234567890"),
-		InstanceType: aws.String("t3.micro"),
+		InstanceType: aws.String(getTestInstanceType()),
 		MinCount:     aws.Int64(1),
 		MaxCount:     aws.Int64(1),
 		KeyName:      aws.String("test-key-pair"),
@@ -394,9 +400,18 @@ func TestResourceManager(t *testing.T) {
 	assert.Greater(t, rm.availableVCPU, 0)
 	assert.Greater(t, rm.availableMem, float64(0))
 
-	// Test allocation
-	instanceType := rm.instanceTypes["t3.micro"]
-	require.NotNil(t, instanceType)
+	// Verify CPU model and instance family were detected
+	assert.NotEmpty(t, rm.cpuModel)
+	assert.NotEmpty(t, rm.instanceFamily)
+	t.Logf("Detected CPU: %s, Instance Family: %s", rm.cpuModel, rm.instanceFamily)
+
+	// Test allocation using the first available instance type (dynamic based on CPU)
+	require.NotEmpty(t, rm.instanceTypes, "Should have at least one instance type")
+
+	// Get the .micro size for the detected family
+	microKey := rm.instanceFamily + ".micro"
+	instanceType, exists := rm.instanceTypes[microKey]
+	require.True(t, exists, "Should have %s instance type", microKey)
 
 	// Check if can allocate
 	canAlloc := rm.canAllocate(instanceType)
@@ -414,4 +429,129 @@ func TestResourceManager(t *testing.T) {
 	rm.deallocate(instanceType)
 	assert.Equal(t, 0, rm.allocatedVCPU)
 	assert.Equal(t, float64(0), rm.allocatedMem)
+}
+
+// TestGetInstanceTypeInfos tests the GetInstanceTypeInfos method
+func TestGetInstanceTypeInfos(t *testing.T) {
+	rm := NewResourceManager()
+
+	infos := rm.GetInstanceTypeInfos()
+
+	require.NotEmpty(t, infos, "Should return at least one instance type")
+	assert.Len(t, infos, 7, "Should have 7 instance sizes (nano, micro, small, medium, large, xlarge, 2xlarge)")
+
+	// Verify structure of returned instance type info
+	for _, info := range infos {
+		assert.NotNil(t, info.InstanceType, "InstanceType should not be nil")
+		assert.NotNil(t, info.VCpuInfo, "VCpuInfo should not be nil")
+		assert.NotNil(t, info.VCpuInfo.DefaultVCpus, "DefaultVCpus should not be nil")
+		assert.NotNil(t, info.MemoryInfo, "MemoryInfo should not be nil")
+		assert.NotNil(t, info.MemoryInfo.SizeInMiB, "SizeInMiB should not be nil")
+		assert.NotNil(t, info.ProcessorInfo, "ProcessorInfo should not be nil")
+		assert.NotEmpty(t, info.ProcessorInfo.SupportedArchitectures, "SupportedArchitectures should not be empty")
+		assert.NotNil(t, info.CurrentGeneration, "CurrentGeneration should not be nil")
+		assert.True(t, *info.CurrentGeneration, "CurrentGeneration should be true")
+
+		t.Logf("Instance type: %s, vCPUs: %d, Memory: %d MiB",
+			*info.InstanceType, *info.VCpuInfo.DefaultVCpus, *info.MemoryInfo.SizeInMiB)
+	}
+}
+
+// TestCPUDetection tests CPU model detection
+func TestCPUDetection(t *testing.T) {
+	cpuModel, err := getCPUModel()
+
+	// CPU detection should succeed on Linux and macOS
+	require.NoError(t, err, "CPU detection should succeed")
+	assert.NotEmpty(t, cpuModel, "CPU model should not be empty")
+
+	t.Logf("Detected CPU model: %s", cpuModel)
+}
+
+// TestInstanceFamilyMapping tests CPU to instance family mapping
+func TestInstanceFamilyMapping(t *testing.T) {
+	tests := []struct {
+		cpuModel       string
+		expectedFamily string
+	}{
+		{"AMD EPYC 7763 64-Core Processor", "m8a"},
+		{"Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz", "m7i"},
+		{"Apple M1 Pro", "m8g"},
+		{"AWS Graviton3", "m8g"},
+		{"Unknown CPU", "t3"}, // fallback for x86_64
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.cpuModel, func(t *testing.T) {
+			family := getInstanceFamilyFromCPU(tt.cpuModel)
+			assert.Equal(t, tt.expectedFamily, family)
+		})
+	}
+}
+
+// TestGetAvailableInstanceTypeInfos_ResourceFiltering tests that instance types are filtered by available resources
+func TestGetAvailableInstanceTypeInfos_ResourceFiltering(t *testing.T) {
+	rm := NewResourceManager()
+
+	// Get initial count of all available types
+	allTypes := rm.GetInstanceTypeInfos()
+	initialAvailable := rm.GetAvailableInstanceTypeInfos()
+
+	t.Logf("System has %d vCPUs, %.2f GB RAM", rm.availableVCPU, rm.availableMem)
+	t.Logf("All instance types: %d, Initially available: %d", len(allTypes), len(initialAvailable))
+
+	// Initially available types should only include those that fit system resources
+	// (on small machines, xlarge/2xlarge may already be filtered out)
+	assert.LessOrEqual(t, len(initialAvailable), len(allTypes),
+		"Available types should be <= total types")
+	assert.Greater(t, len(initialAvailable), 0, "Should have at least one available type")
+
+	// Verify all initially available types fit within system resources
+	for _, info := range initialAvailable {
+		vcpus := int(*info.VCpuInfo.DefaultVCpus)
+		memGB := float64(*info.MemoryInfo.SizeInMiB) / 1024
+
+		assert.LessOrEqual(t, vcpus, rm.availableVCPU,
+			"Instance type %s vCPUs should fit system", *info.InstanceType)
+		assert.LessOrEqual(t, memGB, rm.availableMem,
+			"Instance type %s memory should fit system", *info.InstanceType)
+	}
+
+	// Allocate the smallest instance type (nano) to consume some resources
+	nanoKey := rm.instanceFamily + ".nano" // 2 vCPUs, 0.5GB
+	nanoType, exists := rm.instanceTypes[nanoKey]
+	require.True(t, exists, "Should have %s instance type", nanoKey)
+
+	err := rm.allocate(nanoType)
+	require.NoError(t, err, "Should be able to allocate %s", nanoKey)
+
+	t.Logf("After allocating %s: allocated %d vCPUs, %.2f GB RAM",
+		nanoKey, rm.allocatedVCPU, rm.allocatedMem)
+
+	// Now get available types - should be fewer or equal (depending on system resources)
+	afterAllocation := rm.GetAvailableInstanceTypeInfos()
+	t.Logf("Available after allocation: %d", len(afterAllocation))
+
+	// Verify all returned types fit within REMAINING resources
+	remainingVCPU := rm.availableVCPU - rm.allocatedVCPU
+	remainingMem := rm.availableMem - rm.allocatedMem
+
+	for _, info := range afterAllocation {
+		typeName := *info.InstanceType
+		vcpus := int(*info.VCpuInfo.DefaultVCpus)
+		memGB := float64(*info.MemoryInfo.SizeInMiB) / 1024
+
+		assert.LessOrEqual(t, vcpus, remainingVCPU,
+			"Instance type %s should not exceed remaining vCPUs", typeName)
+		assert.LessOrEqual(t, memGB, remainingMem,
+			"Instance type %s should not exceed remaining memory", typeName)
+
+		t.Logf("Available: %s (vCPUs: %d, Memory: %.2f GB)", typeName, vcpus, memGB)
+	}
+
+	// Deallocate and verify we get the same available types as before
+	rm.deallocate(nanoType)
+	afterDeallocation := rm.GetAvailableInstanceTypeInfos()
+	assert.Equal(t, len(initialAvailable), len(afterDeallocation),
+		"Should have same available types after deallocation")
 }

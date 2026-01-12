@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/gofiber/fiber/v2"
 	"github.com/mulgadc/hive/hive/awserrors"
@@ -55,6 +56,30 @@ type EBS struct {
 	VolumeType               string
 }
 
+// cpuToInstanceFamily maps CPU model patterns to AWS instance family prefixes
+var cpuToInstanceFamily = map[string]string{
+	"EPYC":     "m8a", // AMD EPYC processors
+	"Xeon":     "m7i", // Intel Xeon processors
+	"ARM":      "m8g", // ARM-based processors
+	"Apple":    "m8g", // Apple Silicon (ARM-based)
+	"Graviton": "m8g", // AWS Graviton
+}
+
+// getInstanceFamilyFromCPU returns the AWS instance family based on CPU model
+func getInstanceFamilyFromCPU(cpuModel string) string {
+	cpuUpper := strings.ToUpper(cpuModel)
+	for pattern, family := range cpuToInstanceFamily {
+		if strings.Contains(cpuUpper, strings.ToUpper(pattern)) {
+			return family
+		}
+	}
+	// Default fallback based on architecture
+	if runtime.GOARCH == "arm64" {
+		return "t4g"
+	}
+	return "t3" // fallback for unknown x86_64
+}
+
 // InstanceType represents the resource requirements for an EC2 instance type
 type InstanceType struct {
 	Name         string
@@ -65,12 +90,14 @@ type InstanceType struct {
 
 // ResourceManager handles the allocation and tracking of system resources
 type ResourceManager struct {
-	mu            sync.RWMutex
-	availableVCPU int
-	availableMem  float64
-	allocatedVCPU int
-	allocatedMem  float64
-	instanceTypes map[string]InstanceType
+	mu             sync.RWMutex
+	availableVCPU  int
+	availableMem   float64
+	allocatedVCPU  int
+	allocatedMem   float64
+	instanceTypes  map[string]InstanceType
+	cpuModel       string // detected CPU model
+	instanceFamily string // derived instance family (m8a, m7i, t4g, etc.)
 }
 
 // Daemon represents the main daemon service
@@ -144,6 +171,72 @@ func getSystemMemory() (float64, error) {
 	}
 }
 
+// getCPUModel returns the CPU model name for the host system
+func getCPUModel() (string, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		// macOS: use sysctl
+		cmd := exec.Command("sysctl", "-n", "machdep.cpu.brand_string")
+		output, err := cmd.Output()
+		if err != nil {
+			return "", fmt.Errorf("failed to get CPU model on macOS: %w", err)
+		}
+		return strings.TrimSpace(string(output)), nil
+
+	case "linux":
+		// Linux: read from /proc/cpuinfo
+		file, err := os.Open("/proc/cpuinfo")
+		if err != nil {
+			return "", fmt.Errorf("failed to open /proc/cpuinfo: %w", err)
+		}
+		defer file.Close()
+
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "model name") {
+				parts := strings.SplitN(line, ":", 2)
+				if len(parts) == 2 {
+					return strings.TrimSpace(parts[1]), nil
+				}
+			}
+		}
+		return "", fmt.Errorf("model name not found in /proc/cpuinfo")
+
+	default:
+		return "", fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
+	}
+}
+
+// generateInstanceTypes creates the instance type map for the detected CPU family
+func generateInstanceTypes(family, arch string) map[string]InstanceType {
+	sizes := []struct {
+		suffix   string
+		vcpus    int
+		memoryGB float64
+	}{
+		{"nano", 2, 0.5},
+		{"micro", 2, 1.0},
+		{"small", 2, 2.0},
+		{"medium", 2, 4.0},
+		{"large", 2, 8.0},
+		{"xlarge", 4, 16.0},
+		{"2xlarge", 8, 32.0},
+	}
+
+	instanceTypes := make(map[string]InstanceType)
+	for _, size := range sizes {
+		name := fmt.Sprintf("%s.%s", family, size.suffix)
+		instanceTypes[name] = InstanceType{
+			Name:         name,
+			VCPUs:        size.vcpus,
+			MemoryGB:     size.memoryGB,
+			Architecture: arch,
+		}
+	}
+	return instanceTypes
+}
+
 // NewResourceManager creates a new resource manager with system capabilities
 func NewResourceManager() *ResourceManager {
 	// Get system CPU cores
@@ -156,36 +249,110 @@ func NewResourceManager() *ResourceManager {
 		totalMemGB = 8.0 // Default to 8GB if we can't get the actual memory
 	}
 
-	// Define supported instance types
-	// TODO: Determine host capabilities (x86_64 vs arm64) and adjust available instance types accordingly
-	instanceTypes := map[string]InstanceType{
-		// x86_64
-		"t3.nano":    {Name: "t3.nano", VCPUs: 2, MemoryGB: 0.5, Architecture: "x86_64"},
-		"t3.micro":   {Name: "t3.micro", VCPUs: 2, MemoryGB: 1.0, Architecture: "x86_64"},
-		"t3.small":   {Name: "t3.small", VCPUs: 2, MemoryGB: 2.0, Architecture: "x86_64"},
-		"t3.medium":  {Name: "t3.medium", VCPUs: 2, MemoryGB: 4.0, Architecture: "x86_64"},
-		"t3.large":   {Name: "t3.large", VCPUs: 2, MemoryGB: 8.0, Architecture: "x86_64"},
-		"t3.xlarge":  {Name: "t3.xlarge", VCPUs: 4, MemoryGB: 16.0, Architecture: "x86_64"},
-		"t3.2xlarge": {Name: "t3.2xlarge", VCPUs: 8, MemoryGB: 32.0, Architecture: "x86_64"},
-
-		// ARM
-		"t4g.nano":    {Name: "t4g.nano", VCPUs: 2, MemoryGB: 0.5, Architecture: "arm64"},
-		"t4g.micro":   {Name: "t4g.micro", VCPUs: 2, MemoryGB: 1.0, Architecture: "arm64"},
-		"t4g.small":   {Name: "t4g.small", VCPUs: 2, MemoryGB: 2.0, Architecture: "arm64"},
-		"t4g.medium":  {Name: "t4g.medium", VCPUs: 2, MemoryGB: 4.0, Architecture: "arm64"},
-		"t4g.large":   {Name: "t4g.large", VCPUs: 2, MemoryGB: 8.0, Architecture: "arm64"},
-		"t4g.xlarge":  {Name: "t4g.xlarge", VCPUs: 4, MemoryGB: 16.0, Architecture: "arm64"},
-		"t4g.2xlarge": {Name: "t4g.2xlarge", VCPUs: 8, MemoryGB: 32.0, Architecture: "arm64"},
+	// Get CPU model for instance family detection
+	cpuModel, err := getCPUModel()
+	if err != nil {
+		log.Printf("Warning: Failed to get CPU model: %v, using default", err)
+		cpuModel = "Unknown"
 	}
 
-	log.Printf("System resources: %d vCPUs, %.2f GB RAM (detected on %s)",
-		numCPU, totalMemGB, runtime.GOOS)
+	// Determine instance family from CPU model
+	instanceFamily := getInstanceFamilyFromCPU(cpuModel)
+
+	// Determine architecture
+	arch := "x86_64"
+	if runtime.GOARCH == "arm64" {
+		arch = "arm64"
+	}
+
+	// Generate instance types based on detected CPU family
+	instanceTypes := generateInstanceTypes(instanceFamily, arch)
+
+	log.Printf("System resources: %d vCPUs, %.2f GB RAM, CPU: %s, Family: %s (detected on %s)",
+		numCPU, totalMemGB, cpuModel, instanceFamily, runtime.GOOS)
 
 	return &ResourceManager{
-		availableVCPU: numCPU,
-		availableMem:  totalMemGB,
-		instanceTypes: instanceTypes,
+		availableVCPU:  numCPU,
+		availableMem:   totalMemGB,
+		instanceTypes:  instanceTypes,
+		cpuModel:       cpuModel,
+		instanceFamily: instanceFamily,
 	}
+}
+
+// GetInstanceTypeInfos returns all instance types as ec2.InstanceTypeInfo for AWS API compatibility
+func (rm *ResourceManager) GetInstanceTypeInfos() []*ec2.InstanceTypeInfo {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+
+	var infos []*ec2.InstanceTypeInfo
+
+	for _, it := range rm.instanceTypes {
+		info := &ec2.InstanceTypeInfo{
+			InstanceType: aws.String(it.Name),
+			VCpuInfo: &ec2.VCpuInfo{
+				DefaultVCpus: aws.Int64(int64(it.VCPUs)),
+			},
+			MemoryInfo: &ec2.MemoryInfo{
+				SizeInMiB: aws.Int64(int64(it.MemoryGB * 1024)),
+			},
+			ProcessorInfo: &ec2.ProcessorInfo{
+				SupportedArchitectures: []*string{aws.String(it.Architecture)},
+			},
+			CurrentGeneration:             aws.Bool(true),
+			BurstablePerformanceSupported: aws.Bool(strings.HasPrefix(it.Name, "t")),
+			Hypervisor:                    aws.String("kvm"),
+			SupportedVirtualizationTypes:  []*string{aws.String("hvm")},
+			SupportedRootDeviceTypes:      []*string{aws.String("ebs")},
+		}
+		infos = append(infos, info)
+	}
+
+	return infos
+}
+
+// GetAvailableInstanceTypeInfos returns only instance types that can currently be provisioned
+// based on available resources (filters out types that exceed remaining CPU or memory)
+func (rm *ResourceManager) GetAvailableInstanceTypeInfos() []*ec2.InstanceTypeInfo {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+
+	var infos []*ec2.InstanceTypeInfo
+
+	// Calculate remaining resources
+	remainingVCPU := rm.availableVCPU - rm.allocatedVCPU
+	remainingMem := rm.availableMem - rm.allocatedMem
+
+	for _, it := range rm.instanceTypes {
+		// Skip instance types that exceed available resources
+		if it.VCPUs > remainingVCPU || it.MemoryGB > remainingMem {
+			continue
+		}
+
+		info := &ec2.InstanceTypeInfo{
+			InstanceType: aws.String(it.Name),
+			VCpuInfo: &ec2.VCpuInfo{
+				DefaultVCpus: aws.Int64(int64(it.VCPUs)),
+			},
+			MemoryInfo: &ec2.MemoryInfo{
+				SizeInMiB: aws.Int64(int64(it.MemoryGB * 1024)),
+			},
+			ProcessorInfo: &ec2.ProcessorInfo{
+				SupportedArchitectures: []*string{aws.String(it.Architecture)},
+			},
+			CurrentGeneration:             aws.Bool(true),
+			BurstablePerformanceSupported: aws.Bool(strings.HasPrefix(it.Name, "t")),
+			Hypervisor:                    aws.String("kvm"),
+			SupportedVirtualizationTypes:  []*string{aws.String("hvm")},
+			SupportedRootDeviceTypes:      []*string{aws.String("ebs")},
+		}
+		infos = append(infos, info)
+	}
+
+	slog.Info("GetAvailableInstanceTypeInfos", "total", len(rm.instanceTypes), "available", len(infos),
+		"remainingVCPU", remainingVCPU, "remainingMem", remainingMem)
+
+	return infos
 }
 
 // SetConfigPath sets the configuration file path for cluster management
@@ -374,6 +541,15 @@ func (d *Daemon) Start() error {
 
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeInstances: %w", err)
+	}
+
+	log.Printf("Subscribing to subject pattern: %s", "ec2.DescribeInstanceTypes")
+
+	// Subscribe to EC2 DescribeInstanceTypes - no queue group for multi-node fan-out
+	d.natsSubscriptions["ec2.DescribeInstanceTypes"], err = d.natsConn.Subscribe("ec2.DescribeInstanceTypes", d.handleEC2DescribeInstanceTypes)
+
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeInstanceTypes: %w", err)
 	}
 
 	// Subscribe to EC2 start instance events
@@ -731,13 +907,14 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 
 			var updatedStatus string
 
-			if msg["event"] == "STOP" {
+			switch msg["event"] {
+			case "STOP":
 				updatedStatus = "stopped"
-			} else if msg["event"] == "RESUME" {
+			case "RESUME":
 				updatedStatus = "resuming"
-			} else if msg["event"] == "RESET" {
+			case "RESET":
 				updatedStatus = "restarting"
-			} else if msg["event"] == "POWERDOWN" {
+			case "POWERDOWN":
 				updatedStatus = "powering_down"
 			}
 
@@ -1845,6 +2022,64 @@ func (d *Daemon) handleEC2DescribeImages(msg *nats.Msg) {
 	msg.Respond(jsonResponse)
 
 	slog.Info("handleEC2DescribeImages completed", "count", len(output.Images))
+}
+
+// handleEC2DescribeInstanceTypes processes incoming EC2 DescribeInstanceTypes requests
+// This handler responds with instance types that can currently be provisioned on this node
+// based on available resources (CPU and memory not already allocated to running instances)
+func (d *Daemon) handleEC2DescribeInstanceTypes(msg *nats.Msg) {
+	log.Printf("Received message on subject: %s", msg.Subject)
+
+	// Initialize input
+	describeInput := &ec2.DescribeInstanceTypesInput{}
+	var errResp []byte
+
+	errResp = utils.UnmarshalJsonPayload(describeInput, msg.Data)
+	if errResp != nil {
+		msg.Respond(errResp)
+		slog.Error("Request does not match DescribeInstanceTypesInput")
+		return
+	}
+
+	slog.Info("Processing DescribeInstanceTypes request from this node")
+
+	// Get instance types that can be provisioned with current available resources
+	availableTypes := d.resourceMgr.GetAvailableInstanceTypeInfos()
+
+	// Filter by requested instance types if specified
+	var filteredTypes []*ec2.InstanceTypeInfo
+	if len(describeInput.InstanceTypes) > 0 {
+		requestedTypes := make(map[string]bool)
+		for _, t := range describeInput.InstanceTypes {
+			if t != nil {
+				requestedTypes[*t] = true
+			}
+		}
+		for _, info := range availableTypes {
+			if info.InstanceType != nil && requestedTypes[*info.InstanceType] {
+				filteredTypes = append(filteredTypes, info)
+			}
+		}
+	} else {
+		filteredTypes = availableTypes
+	}
+
+	// Create the response
+	output := &ec2.DescribeInstanceTypesOutput{
+		InstanceTypes: filteredTypes,
+	}
+
+	// Respond to NATS
+	jsonResponse, err := json.Marshal(output)
+	if err != nil {
+		slog.Error("handleEC2DescribeInstanceTypes failed to marshal output", "err", err)
+		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+		msg.Respond(errResp)
+		return
+	}
+	msg.Respond(jsonResponse)
+
+	slog.Info("handleEC2DescribeInstanceTypes completed", "count", len(filteredTypes))
 }
 
 // handleEC2DescribeInstances processes incoming EC2 DescribeInstances requests
