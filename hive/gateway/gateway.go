@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/google/uuid"
 	"github.com/mulgadc/hive/hive/awsec2query"
@@ -99,6 +100,14 @@ func (gw *GatewayConfig) SetupRoutes() *fiber.App {
 		slog.Error("Error reading config", "error", err)
 		return nil
 	}
+
+	// Add CORS middleware for browser requests
+	app.Use(cors.New(cors.Config{
+		AllowOrigins:     "http://localhost:3000",
+		AllowMethods:     "GET,POST,PUT,DELETE,HEAD,OPTIONS",
+		AllowHeaders:     "*",
+		AllowCredentials: true,
+	}))
 
 	// Add authentication middleware for all requests
 	app.Use(s3.SigV4AuthMiddleware)
