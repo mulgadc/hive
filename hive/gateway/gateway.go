@@ -103,7 +103,7 @@ func (gw *GatewayConfig) SetupRoutes() *fiber.App {
 
 	// Add CORS middleware for browser requests
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "http://localhost:3000",
+		AllowOrigins:     "https://localhost:3000",
 		AllowMethods:     "GET,POST,PUT,DELETE,HEAD,OPTIONS",
 		AllowHeaders:     "*",
 		AllowCredentials: true,

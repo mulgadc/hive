@@ -13,7 +13,7 @@ Big rocks:
 - Add support using the `hive` CLI tool to provision a new user with AWS access-keys/IAM.
   - Support multi-tenant operations and isolation
 - Add support to include capabilities when adding a new hardware node to MulgaOS (e.g EC2 target, S3, EBS, NATs, etc) - Features can be turned on/off depending on hardware scope.
-- Add simple Web UI console, using the AWS JS SDK, communicating to local AWS gateway.
+- [DONE] Add simple Web UI console, using the AWS JS SDK, communicating to local AWS gateway.
   - Implement ShadCNblocks for UI framework
   - Simple Go webserver, static files, easy build process.
 
@@ -27,14 +27,17 @@ Implementation gaps:
 
 ### EC2
 
-- [DONE] - create-key-pair
-- [DONE] - delete-key-pair
-- [DONE] - describe-images
-- [DONE] - import-key-pair
 - [DONE] - describe-instances
+- [DONE] - run-instances (count not implemented)
 - [DONE] - start-instances
 - [DONE] - stop-instances
 - [DONE] - terminate-instances
+- [DONE] - describe-instance-types
+- [DONE] - create-key-pair
+- [DONE] - delete-key-pair
+- [DONE] - describe-key-pairs
+- [DONE] - import-key-pair
+- [DONE] - describe-images
 
 ### To implement
 
@@ -135,7 +138,6 @@ TODO:
 - describe-egress-only-internet-gateways
 - describe-hosts
 - describe-internet-gateways
-- describe-key-pairs
 - describe-managed-prefix-lists
 - describe-nat-gateways
 - describe-network-acls
@@ -173,7 +175,6 @@ TODO:
 - get-spot-placement-scores
 - get-subnet-cidr-reservations
 - import-image
-- import-key-pair
 - import-snapshot
 - modify-instance-attribute
 - modify-instance-capacity-reservation-attributes

@@ -74,24 +74,16 @@ type CloudInitMetaData struct {
 	Hostname   string
 }
 
-// InstanceType represents the resource requirements for an EC2 instance type
-type InstanceType struct {
-	Name         string
-	VCPUs        int
-	MemoryGB     float64
-	Architecture string // e.g., "x86_64", "arm64"
-}
-
 // InstanceServiceImpl handles daemon-side EC2 instance operations
 type InstanceServiceImpl struct {
 	config        *config.Config
-	instanceTypes map[string]InstanceType
+	instanceTypes map[string]*ec2.InstanceTypeInfo
 	natsConn      *nats.Conn
 	instances     *vm.Instances
 }
 
 // NewInstanceServiceImpl creates a new instance service implementation for daemon use
-func NewInstanceServiceImpl(cfg *config.Config, instanceTypes map[string]InstanceType, nc *nats.Conn, instances *vm.Instances) *InstanceServiceImpl {
+func NewInstanceServiceImpl(cfg *config.Config, instanceTypes map[string]*ec2.InstanceTypeInfo, nc *nats.Conn, instances *vm.Instances) *InstanceServiceImpl {
 	return &InstanceServiceImpl{
 		config:        cfg,
 		instanceTypes: instanceTypes,
