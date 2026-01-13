@@ -56,48 +56,14 @@ type EBS struct {
 	VolumeType               string
 }
 
-// cpuToInstanceFamily maps CPU model patterns to AWS instance family prefixes
-var cpuToInstanceFamily = map[string]string{
-	"EPYC":     "m8a", // AMD EPYC processors
-	"Xeon":     "m7i", // Intel Xeon processors
-	"ARM":      "m8g", // ARM-based processors
-	"Apple":    "m8g", // Apple Silicon (ARM-based)
-	"Graviton": "m8g", // AWS Graviton
-}
-
-// getInstanceFamilyFromCPU returns the AWS instance family based on CPU model
-func getInstanceFamilyFromCPU(cpuModel string) string {
-	cpuUpper := strings.ToUpper(cpuModel)
-	for pattern, family := range cpuToInstanceFamily {
-		if strings.Contains(cpuUpper, strings.ToUpper(pattern)) {
-			return family
-		}
-	}
-	// Default fallback based on architecture
-	if runtime.GOARCH == "arm64" {
-		return "t4g"
-	}
-	return "t3" // fallback for unknown x86_64
-}
-
-// InstanceType represents the resource requirements for an EC2 instance type
-type InstanceType struct {
-	Name         string
-	VCPUs        int
-	MemoryGB     float64
-	Architecture string // e.g., "x86_64", "arm64"
-}
-
 // ResourceManager handles the allocation and tracking of system resources
 type ResourceManager struct {
-	mu             sync.RWMutex
-	availableVCPU  int
-	availableMem   float64
-	allocatedVCPU  int
-	allocatedMem   float64
-	instanceTypes  map[string]InstanceType
-	cpuModel       string // detected CPU model
-	instanceFamily string // derived instance family (m8a, m7i, t4g, etc.)
+	mu            sync.RWMutex
+	availableVCPU int
+	availableMem  float64
+	allocatedVCPU int
+	allocatedMem  float64
+	instanceTypes map[string]*ec2.InstanceTypeInfo
 }
 
 // Daemon represents the main daemon service
@@ -126,6 +92,30 @@ type Daemon struct {
 	configPath string
 
 	mu sync.Mutex
+}
+
+// cpuToInstanceFamily maps CPU model patterns to AWS instance family prefixes
+var cpuToInstanceFamily = map[string]string{
+	"EPYC":     "m8a", // AMD EPYC processors
+	"Xeon":     "m7i", // Intel Xeon processors
+	"ARM":      "m8g", // ARM-based processors
+	"Apple":    "m8g", // Apple Silicon (ARM-based)
+	"Graviton": "m8g", // AWS Graviton
+}
+
+// getInstanceFamilyFromCPU returns the AWS instance family based on CPU model
+func getInstanceFamilyFromCPU(cpuModel string) string {
+	cpuUpper := strings.ToUpper(cpuModel)
+	for pattern, family := range cpuToInstanceFamily {
+		if strings.Contains(cpuUpper, strings.ToUpper(pattern)) {
+			return family
+		}
+	}
+	// Default fallback based on architecture
+	if runtime.GOARCH == "arm64" {
+		return "t4g"
+	}
+	return "t3" // fallback for unknown x86_64
 }
 
 // getSystemMemory returns the total system memory in GB
@@ -209,7 +199,7 @@ func getCPUModel() (string, error) {
 }
 
 // generateInstanceTypes creates the instance type map for the detected CPU family
-func generateInstanceTypes(family, arch string) map[string]InstanceType {
+func generateInstanceTypes(family, arch string) map[string]*ec2.InstanceTypeInfo {
 	sizes := []struct {
 		suffix   string
 		vcpus    int
@@ -224,14 +214,25 @@ func generateInstanceTypes(family, arch string) map[string]InstanceType {
 		{"2xlarge", 8, 32.0},
 	}
 
-	instanceTypes := make(map[string]InstanceType)
+	instanceTypes := make(map[string]*ec2.InstanceTypeInfo)
 	for _, size := range sizes {
 		name := fmt.Sprintf("%s.%s", family, size.suffix)
-		instanceTypes[name] = InstanceType{
-			Name:         name,
-			VCPUs:        size.vcpus,
-			MemoryGB:     size.memoryGB,
-			Architecture: arch,
+		instanceTypes[name] = &ec2.InstanceTypeInfo{
+			InstanceType: aws.String(name),
+			VCpuInfo: &ec2.VCpuInfo{
+				DefaultVCpus: aws.Int64(int64(size.vcpus)),
+			},
+			MemoryInfo: &ec2.MemoryInfo{
+				SizeInMiB: aws.Int64(int64(size.memoryGB * 1024)),
+			},
+			ProcessorInfo: &ec2.ProcessorInfo{
+				SupportedArchitectures: []*string{aws.String(arch)},
+			},
+			CurrentGeneration:             aws.Bool(true),
+			BurstablePerformanceSupported: aws.Bool(strings.HasPrefix(name, "t")),
+			Hypervisor:                    aws.String("kvm"),
+			SupportedVirtualizationTypes:  []*string{aws.String("hvm")},
+			SupportedRootDeviceTypes:      []*string{aws.String("ebs")},
 		}
 	}
 	return instanceTypes
@@ -272,11 +273,9 @@ func NewResourceManager() *ResourceManager {
 		numCPU, totalMemGB, cpuModel, instanceFamily, runtime.GOOS)
 
 	return &ResourceManager{
-		availableVCPU:  numCPU,
-		availableMem:   totalMemGB,
-		instanceTypes:  instanceTypes,
-		cpuModel:       cpuModel,
-		instanceFamily: instanceFamily,
+		availableVCPU: numCPU,
+		availableMem:  totalMemGB,
+		instanceTypes: instanceTypes,
 	}
 }
 
@@ -286,28 +285,9 @@ func (rm *ResourceManager) GetInstanceTypeInfos() []*ec2.InstanceTypeInfo {
 	defer rm.mu.RUnlock()
 
 	var infos []*ec2.InstanceTypeInfo
-
 	for _, it := range rm.instanceTypes {
-		info := &ec2.InstanceTypeInfo{
-			InstanceType: aws.String(it.Name),
-			VCpuInfo: &ec2.VCpuInfo{
-				DefaultVCpus: aws.Int64(int64(it.VCPUs)),
-			},
-			MemoryInfo: &ec2.MemoryInfo{
-				SizeInMiB: aws.Int64(int64(it.MemoryGB * 1024)),
-			},
-			ProcessorInfo: &ec2.ProcessorInfo{
-				SupportedArchitectures: []*string{aws.String(it.Architecture)},
-			},
-			CurrentGeneration:             aws.Bool(true),
-			BurstablePerformanceSupported: aws.Bool(strings.HasPrefix(it.Name, "t")),
-			Hypervisor:                    aws.String("kvm"),
-			SupportedVirtualizationTypes:  []*string{aws.String("hvm")},
-			SupportedRootDeviceTypes:      []*string{aws.String("ebs")},
-		}
-		infos = append(infos, info)
+		infos = append(infos, it)
 	}
-
 	return infos
 }
 
@@ -325,28 +305,19 @@ func (rm *ResourceManager) GetAvailableInstanceTypeInfos() []*ec2.InstanceTypeIn
 
 	for _, it := range rm.instanceTypes {
 		// Skip instance types that exceed available resources
-		if it.VCPUs > remainingVCPU || it.MemoryGB > remainingMem {
+		vCPUs := int64(0)
+		if it.VCpuInfo != nil && it.VCpuInfo.DefaultVCpus != nil {
+			vCPUs = *it.VCpuInfo.DefaultVCpus
+		}
+		memoryGB := float64(0)
+		if it.MemoryInfo != nil && it.MemoryInfo.SizeInMiB != nil {
+			memoryGB = float64(*it.MemoryInfo.SizeInMiB) / 1024.0
+		}
+		if int(vCPUs) > remainingVCPU || memoryGB > remainingMem {
 			continue
 		}
 
-		info := &ec2.InstanceTypeInfo{
-			InstanceType: aws.String(it.Name),
-			VCpuInfo: &ec2.VCpuInfo{
-				DefaultVCpus: aws.Int64(int64(it.VCPUs)),
-			},
-			MemoryInfo: &ec2.MemoryInfo{
-				SizeInMiB: aws.Int64(int64(it.MemoryGB * 1024)),
-			},
-			ProcessorInfo: &ec2.ProcessorInfo{
-				SupportedArchitectures: []*string{aws.String(it.Architecture)},
-			},
-			CurrentGeneration:             aws.Bool(true),
-			BurstablePerformanceSupported: aws.Bool(strings.HasPrefix(it.Name, "t")),
-			Hypervisor:                    aws.String("kvm"),
-			SupportedVirtualizationTypes:  []*string{aws.String("hvm")},
-			SupportedRootDeviceTypes:      []*string{aws.String("ebs")},
-		}
-		infos = append(infos, info)
+		infos = append(infos, it)
 	}
 
 	slog.Info("GetAvailableInstanceTypeInfos", "total", len(rm.instanceTypes), "available", len(infos),
@@ -452,16 +423,7 @@ func (d *Daemon) Start() error {
 	}
 
 	// Create instance service for handling EC2 instance operations
-	instanceTypes := make(map[string]handlers_ec2_instance.InstanceType)
-	for k, v := range d.resourceMgr.instanceTypes {
-		instanceTypes[k] = handlers_ec2_instance.InstanceType{
-			Name:         v.Name,
-			VCPUs:        v.VCPUs,
-			MemoryGB:     v.MemoryGB,
-			Architecture: v.Architecture,
-		}
-	}
-	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, instanceTypes, d.natsConn, &d.Instances)
+	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances)
 
 	// Create key service for handling EC2 key pair operations
 	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
@@ -986,7 +948,9 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 			slog.Error("handleEC2RunInstances LaunchInstance failed", "err", err)
 			// TODO: Confirm LaunchInstances does this - Free the resource
 			instanceType := d.resourceMgr.instanceTypes[instance.InstanceType]
-			d.resourceMgr.deallocate(instanceType)
+			if instanceType != nil {
+				d.resourceMgr.deallocate(instanceType)
+			}
 			return
 		}
 
@@ -1040,7 +1004,9 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 
 		// Free resources
 		instanceType := d.resourceMgr.instanceTypes[instance.InstanceType]
-		d.resourceMgr.deallocate(instanceType)
+		if instanceType != nil {
+			d.resourceMgr.deallocate(instanceType)
+		}
 
 		// Remove instance from state
 		d.Instances.Mu.Lock()
@@ -1124,7 +1090,11 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	}
 
 	// Delegate to service for business logic (volume creation, cloud-init, etc.)
-	slog.Info("Launching EC2 instance", "instance", instanceType)
+	instanceTypeName := ""
+	if instanceType.InstanceType != nil {
+		instanceTypeName = *instanceType.InstanceType
+	}
+	slog.Info("Launching EC2 instance", "instanceType", instanceTypeName)
 
 	instance, reservation, err := d.instanceService.RunInstances(runInstancesInput)
 
@@ -1568,7 +1538,23 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		return err
 	}
 
-	var instanceType = d.resourceMgr.instanceTypes[instance.InstanceType]
+	instanceType := d.resourceMgr.instanceTypes[instance.InstanceType]
+	if instanceType == nil {
+		return fmt.Errorf("instance type %s not found", instance.InstanceType)
+	}
+
+	vCPUs := int(0)
+	if instanceType.VCpuInfo != nil && instanceType.VCpuInfo.DefaultVCpus != nil {
+		vCPUs = int(*instanceType.VCpuInfo.DefaultVCpus)
+	}
+	memoryMiB := int64(0)
+	if instanceType.MemoryInfo != nil && instanceType.MemoryInfo.SizeInMiB != nil {
+		memoryMiB = *instanceType.MemoryInfo.SizeInMiB
+	}
+	architecture := "x86_64"
+	if instanceType.ProcessorInfo != nil && len(instanceType.ProcessorInfo.SupportedArchitectures) > 0 && instanceType.ProcessorInfo.SupportedArchitectures[0] != nil {
+		architecture = *instanceType.ProcessorInfo.SupportedArchitectures[0]
+	}
 
 	instance.Config = vm.Config{
 		Name:         instance.ID,
@@ -1579,9 +1565,9 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		MachineType:  "q35",
 		Serial:       "pty",
 		CPUType:      "host", // If available, if kvm fails, will use cpu max
-		Memory:       int(instanceType.MemoryGB) * 1024,
-		CPUCount:     instanceType.VCPUs,
-		Architecture: instanceType.Architecture,
+		Memory:       int(memoryMiB),
+		CPUCount:     vCPUs,
+		Architecture: architecture,
 	}
 
 	// Loop through each volume in volumes
@@ -1863,36 +1849,67 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 }
 
 // canAllocate checks if there are enough resources available
-func (rm *ResourceManager) canAllocate(instanceType InstanceType) bool {
+func (rm *ResourceManager) canAllocate(instanceType *ec2.InstanceTypeInfo) bool {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
-	return rm.availableVCPU-rm.allocatedVCPU >= instanceType.VCPUs &&
-		rm.availableMem-rm.allocatedMem >= instanceType.MemoryGB
+	vCPUs := int64(0)
+	if instanceType.VCpuInfo != nil && instanceType.VCpuInfo.DefaultVCpus != nil {
+		vCPUs = *instanceType.VCpuInfo.DefaultVCpus
+	}
+	memoryGB := float64(0)
+	if instanceType.MemoryInfo != nil && instanceType.MemoryInfo.SizeInMiB != nil {
+		memoryGB = float64(*instanceType.MemoryInfo.SizeInMiB) / 1024.0
+	}
+
+	return rm.availableVCPU-rm.allocatedVCPU >= int(vCPUs) &&
+		rm.availableMem-rm.allocatedMem >= memoryGB
 }
 
 // allocate reserves resources for an instance
-func (rm *ResourceManager) allocate(instanceType InstanceType) error {
+func (rm *ResourceManager) allocate(instanceType *ec2.InstanceTypeInfo) error {
 
 	if !rm.canAllocate(instanceType) {
-		return fmt.Errorf("insufficient resources for instance type %s", instanceType.Name)
+		instanceTypeName := ""
+		if instanceType.InstanceType != nil {
+			instanceTypeName = *instanceType.InstanceType
+		}
+		return fmt.Errorf("insufficient resources for instance type %s", instanceTypeName)
 	}
 
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	rm.allocatedVCPU += instanceType.VCPUs
-	rm.allocatedMem += instanceType.MemoryGB
+	vCPUs := int64(0)
+	if instanceType.VCpuInfo != nil && instanceType.VCpuInfo.DefaultVCpus != nil {
+		vCPUs = *instanceType.VCpuInfo.DefaultVCpus
+	}
+	memoryGB := float64(0)
+	if instanceType.MemoryInfo != nil && instanceType.MemoryInfo.SizeInMiB != nil {
+		memoryGB = float64(*instanceType.MemoryInfo.SizeInMiB) / 1024.0
+	}
+
+	rm.allocatedVCPU += int(vCPUs)
+	rm.allocatedMem += memoryGB
 	return nil
 }
 
 // deallocate releases resources for an instance
-func (rm *ResourceManager) deallocate(instanceType InstanceType) {
+func (rm *ResourceManager) deallocate(instanceType *ec2.InstanceTypeInfo) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	rm.allocatedVCPU -= instanceType.VCPUs
-	rm.allocatedMem -= instanceType.MemoryGB
+	vCPUs := int64(0)
+	if instanceType.VCpuInfo != nil && instanceType.VCpuInfo.DefaultVCpus != nil {
+		vCPUs = *instanceType.VCpuInfo.DefaultVCpus
+	}
+	memoryGB := float64(0)
+	if instanceType.MemoryInfo != nil && instanceType.MemoryInfo.SizeInMiB != nil {
+		memoryGB = float64(*instanceType.MemoryInfo.SizeInMiB) / 1024.0
+	}
+
+	rm.allocatedVCPU -= int(vCPUs)
+	rm.allocatedMem -= memoryGB
 }
 
 // handleEC2DescribeKeyPairs processes incoming EC2 DescribeKeyPairs requests
