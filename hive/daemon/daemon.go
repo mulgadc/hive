@@ -205,6 +205,7 @@ func generateInstanceTypes(family, arch string) map[string]*ec2.InstanceTypeInfo
 		vcpus    int
 		memoryGB float64
 	}{
+		{"tiny", 1, 0.5},
 		{"nano", 2, 0.5},
 		{"micro", 2, 1.0},
 		{"small", 2, 2.0},
@@ -291,20 +292,16 @@ func (rm *ResourceManager) GetInstanceTypeInfos() []*ec2.InstanceTypeInfo {
 	return infos
 }
 
-// GetAvailableInstanceTypeInfos returns only instance types that can currently be provisioned
-// based on available resources (filters out types that exceed remaining CPU or memory)
-func (rm *ResourceManager) GetAvailableInstanceTypeInfos() []*ec2.InstanceTypeInfo {
+// GetAvailableInstanceTypeInfos returns instance types based on total host capacity.
+// If showCapacity is true, it returns multiple entries representing available slots.
+// If showCapacity is false, it returns each supported type only once.
+func (rm *ResourceManager) GetAvailableInstanceTypeInfos(showCapacity bool) []*ec2.InstanceTypeInfo {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
 	var infos []*ec2.InstanceTypeInfo
 
-	// Calculate remaining resources
-	remainingVCPU := rm.availableVCPU - rm.allocatedVCPU
-	remainingMem := rm.availableMem - rm.allocatedMem
-
 	for _, it := range rm.instanceTypes {
-		// Skip instance types that exceed available resources
 		vCPUs := int64(0)
 		if it.VCpuInfo != nil && it.VCpuInfo.DefaultVCpus != nil {
 			vCPUs = *it.VCpuInfo.DefaultVCpus
@@ -313,15 +310,34 @@ func (rm *ResourceManager) GetAvailableInstanceTypeInfos() []*ec2.InstanceTypeIn
 		if it.MemoryInfo != nil && it.MemoryInfo.SizeInMiB != nil {
 			memoryGB = float64(*it.MemoryInfo.SizeInMiB) / 1024.0
 		}
-		if int(vCPUs) > remainingVCPU || memoryGB > remainingMem {
+
+		if vCPUs == 0 || memoryGB == 0 {
 			continue
 		}
 
-		infos = append(infos, it)
+		// Calculate how many instances of this type can fit based on TOTAL physical capacity
+		countVCPU := rm.availableVCPU / int(vCPUs)
+		countMem := int(rm.availableMem / memoryGB)
+
+		// Use the minimum of CPU slots and Memory slots
+		count := countVCPU
+		if countMem < count {
+			count = countMem
+		}
+
+		if showCapacity {
+			// Add to the list as many times as it can fit
+			for i := 0; i < count; i++ {
+				infos = append(infos, it)
+			}
+		} else if count > 0 {
+			// Just add it once if it fits at least once
+			infos = append(infos, it)
+		}
 	}
 
-	slog.Info("GetAvailableInstanceTypeInfos", "total", len(rm.instanceTypes), "available", len(infos),
-		"remainingVCPU", remainingVCPU, "remainingMem", remainingMem)
+	slog.Info("GetAvailableInstanceTypeInfos", "total_types", len(rm.instanceTypes), "total_available_slots", len(infos),
+		"hostVCPU", rm.availableVCPU, "hostMem", rm.availableMem, "showCapacity", showCapacity)
 
 	return infos
 }
@@ -2060,8 +2076,21 @@ func (d *Daemon) handleEC2DescribeInstanceTypes(msg *nats.Msg) {
 
 	slog.Info("Processing DescribeInstanceTypes request from this node")
 
-	// Get instance types that can be provisioned with current available resources
-	availableTypes := d.resourceMgr.GetAvailableInstanceTypeInfos()
+	// Check if "capacity" filter is set to "true"
+	showCapacity := false
+	for _, f := range describeInput.Filters {
+		if f.Name != nil && *f.Name == "capacity" {
+			for _, v := range f.Values {
+				if v != nil && *v == "true" {
+					showCapacity = true
+					break
+				}
+			}
+		}
+	}
+
+	// Get instance types based on capacity and the showCapacity flag
+	availableTypes := d.resourceMgr.GetAvailableInstanceTypeInfos(showCapacity)
 
 	// Filter by requested instance types if specified
 	var filteredTypes []*ec2.InstanceTypeInfo

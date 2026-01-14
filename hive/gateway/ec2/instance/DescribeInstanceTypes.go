@@ -99,11 +99,40 @@ func DescribeInstanceTypes(input *ec2.DescribeInstanceTypesInput, natsConn *nats
 		}
 	}
 
-	// Build final aggregated response
-	output := &ec2.DescribeInstanceTypesOutput{
-		InstanceTypes: allInstanceTypes,
+	// By default, deduplicate instance types.
+	// If the "capacity" filter is set to "true", show all available slots (duplicates).
+	showCapacity := false
+	for _, f := range input.Filters {
+		if f.Name != nil && *f.Name == "capacity" {
+			for _, v := range f.Values {
+				if v != nil && *v == "true" {
+					showCapacity = true
+					break
+				}
+			}
+		}
 	}
 
-	slog.Info("DescribeInstanceTypes: Aggregated response", "total_instance_types", len(allInstanceTypes))
+	var finalInstanceTypes []*ec2.InstanceTypeInfo
+	if showCapacity {
+		finalInstanceTypes = allInstanceTypes
+	} else {
+		seen := make(map[string]bool)
+		for _, it := range allInstanceTypes {
+			if it != nil && it.InstanceType != nil {
+				if !seen[*it.InstanceType] {
+					seen[*it.InstanceType] = true
+					finalInstanceTypes = append(finalInstanceTypes, it)
+				}
+			}
+		}
+	}
+
+	// Build final aggregated response
+	output := &ec2.DescribeInstanceTypesOutput{
+		InstanceTypes: finalInstanceTypes,
+	}
+
+	slog.Info("DescribeInstanceTypes: Aggregated response", "total_instance_types", len(finalInstanceTypes), "show_capacity", showCapacity)
 	return output, nil
 }
