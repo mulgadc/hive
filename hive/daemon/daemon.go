@@ -205,7 +205,6 @@ func generateInstanceTypes(family, arch string) map[string]*ec2.InstanceTypeInfo
 		vcpus    int
 		memoryGB float64
 	}{
-		{"tiny", 1, 0.5},
 		{"nano", 2, 0.5},
 		{"micro", 2, 1.0},
 		{"small", 2, 2.0},
@@ -315,14 +314,21 @@ func (rm *ResourceManager) GetAvailableInstanceTypeInfos(showCapacity bool) []*e
 			continue
 		}
 
-		// Calculate how many instances of this type can fit based on TOTAL physical capacity
-		countVCPU := rm.availableVCPU / int(vCPUs)
-		countMem := int(rm.availableMem / memoryGB)
+		remainingVCPU := rm.availableVCPU - rm.allocatedVCPU
+		remainingMem := rm.availableMem - rm.allocatedMem
+
+		// Calculate how many instances of this type can fit based on REMAINING host capacity
+		countVCPU := remainingVCPU / int(vCPUs)
+		countMem := int(remainingMem / memoryGB)
 
 		// Use the minimum of CPU slots and Memory slots
 		count := countVCPU
 		if countMem < count {
 			count = countMem
+		}
+
+		if count < 0 {
+			count = 0
 		}
 
 		if showCapacity {
@@ -422,6 +428,14 @@ func (d *Daemon) Start() error {
 				slog.Info("Instance flagged as user initiated stop, skipping", "instance", instance.ID)
 
 			} else if instance.Status != "terminated" {
+				instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
+				if ok {
+					slog.Info("Re-allocating resources for instance", "instanceId", instance.ID, "type", instance.InstanceType)
+					if err := d.resourceMgr.allocate(instanceType); err != nil {
+						slog.Error("Failed to re-allocate resources for instance on startup", "instanceId", instance.ID, "err", err)
+					}
+				}
+
 				slog.Info("Launching instance", "instance", instance.ID)
 				err = d.LaunchInstance(instance)
 				if err != nil {
@@ -844,11 +858,26 @@ func (d *Daemon) handleEC2StartInstances(msg *nats.Msg) {
 		return
 	}
 
-	// Launch the instance
+	// Check if we have enough resources and allocate them
+	instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
+	if ok {
+		if err := d.resourceMgr.allocate(instanceType); err != nil {
+			slog.Error("EC2 Start Request - Insufficient capacity", "instanceId", instance.ID, "err", err)
+			ec2StartInstanceResponse.InstanceID = ec2StartInstance.InstanceID
+			ec2StartInstanceResponse.Error = awserrors.ErrorInsufficientInstanceCapacity
+			ec2StartInstanceResponse.Respond(msg)
+			return
+		}
+	}
 
+	// Launch the instance
 	err := d.LaunchInstance(instance)
 
 	if err != nil {
+		// Deallocate on failure
+		if ok {
+			d.resourceMgr.deallocate(instanceType)
+		}
 		ec2StartInstanceResponse.Error = err.Error()
 	} else {
 		ec2StartInstanceResponse.InstanceID = instance.ID
@@ -957,14 +986,23 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 	if command.Attributes.StartInstance {
 		slog.Info("Starting instance", "id", command.ID)
 
+		// Allocate resources
+		instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
+		if ok {
+			if err := d.resourceMgr.allocate(instanceType); err != nil {
+				slog.Error("Failed to allocate resources for start command", "id", command.ID, "err", err)
+				msg.Respond(utils.GenerateErrorPayload(awserrors.ErrorInsufficientInstanceCapacity))
+				return
+			}
+		}
+
 		// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
 		err := d.LaunchInstance(instance)
 
 		if err != nil {
 			slog.Error("handleEC2RunInstances LaunchInstance failed", "err", err)
-			// TODO: Confirm LaunchInstances does this - Free the resource
-			instanceType := d.resourceMgr.instanceTypes[instance.InstanceType]
-			if instanceType != nil {
+			// Free the resource on failure
+			if ok {
 				d.resourceMgr.deallocate(instanceType)
 			}
 			return
@@ -1017,12 +1055,6 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 		}
 
 		// Last, delete the instance volumes
-
-		// Free resources
-		instanceType := d.resourceMgr.instanceTypes[instance.InstanceType]
-		if instanceType != nil {
-			d.resourceMgr.deallocate(instanceType)
-		}
 
 		// Remove instance from state
 		d.Instances.Mu.Lock()
@@ -1324,6 +1356,12 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				}
 			}
 
+			// Deallocate resources
+			instanceType := d.resourceMgr.instanceTypes[instance.InstanceType]
+			if instanceType != nil {
+				slog.Info("Deallocating resources for stopped instance", "instanceId", instance.ID, "type", instance.InstanceType)
+				d.resourceMgr.deallocate(instanceType)
+			}
 		}()
 	}
 
@@ -1468,7 +1506,7 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 
 		// Send a 0 signal to confirm process is running
 		err = process.Signal(syscall.Signal(0))
-		if err != nil {
+		if err == nil {
 			slog.Error("Instance is already running", "InstanceID", instance.ID, "pid", pid)
 			return errors.New("instance is already running")
 		}
@@ -2090,25 +2128,7 @@ func (d *Daemon) handleEC2DescribeInstanceTypes(msg *nats.Msg) {
 	}
 
 	// Get instance types based on capacity and the showCapacity flag
-	availableTypes := d.resourceMgr.GetAvailableInstanceTypeInfos(showCapacity)
-
-	// Filter by requested instance types if specified
-	var filteredTypes []*ec2.InstanceTypeInfo
-	if len(describeInput.InstanceTypes) > 0 {
-		requestedTypes := make(map[string]bool)
-		for _, t := range describeInput.InstanceTypes {
-			if t != nil {
-				requestedTypes[*t] = true
-			}
-		}
-		for _, info := range availableTypes {
-			if info.InstanceType != nil && requestedTypes[*info.InstanceType] {
-				filteredTypes = append(filteredTypes, info)
-			}
-		}
-	} else {
-		filteredTypes = availableTypes
-	}
+	filteredTypes := d.resourceMgr.GetAvailableInstanceTypeInfos(showCapacity)
 
 	// Create the response
 	output := &ec2.DescribeInstanceTypesOutput{
