@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"runtime"
 	"strings"
@@ -772,6 +773,32 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 
 	// Test 4: Verify "capacity" filter returns duplicates
 	t.Run("VerifyCapacityFilter_Duplicates", func(t *testing.T) {
+		// Determine instance family dynamically from ResourceManager
+		var family string
+		for name := range daemon.resourceMgr.instanceTypes {
+			parts := strings.Split(name, ".")
+			if len(parts) > 0 {
+				family = parts[0]
+				break
+			}
+		}
+		require.NotEmpty(t, family, "Should have a detected instance family")
+
+		// Force resources to a predictable state for the first part of the test (2 vCPUs)
+		daemon.resourceMgr.mu.Lock()
+		oldAvailableVCPU := daemon.resourceMgr.availableVCPU
+		oldAvailableMem := daemon.resourceMgr.availableMem
+		daemon.resourceMgr.availableVCPU = 2
+		daemon.resourceMgr.availableMem = 16.0 // Plenty of memory
+		daemon.resourceMgr.mu.Unlock()
+
+		defer func() {
+			daemon.resourceMgr.mu.Lock()
+			daemon.resourceMgr.availableVCPU = oldAvailableVCPU
+			daemon.resourceMgr.availableMem = oldAvailableMem
+			daemon.resourceMgr.mu.Unlock()
+		}()
+
 		// Create input with capacity=true filter, no specific instance types
 		input := &ec2.DescribeInstanceTypesInput{
 			Filters: []*ec2.Filter{
@@ -793,41 +820,39 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 		// With 2 vCPUs, we expect 1 slot for each 2-vCPU type (nano, micro, small, medium, large)
 		// and 0 slots for 4+ vCPU types.
 		// Total should be 5 entries.
-		assert.Equal(t, 5, len(output.InstanceTypes), "Should have 5 total slots available")
+		assert.Equal(t, 5, len(output.InstanceTypes), "Should have 5 total slots available with 2 vCPUs")
 
 		// Now let's "fake" more capacity to test multiple slots (duplicates) per type
 		daemon.resourceMgr.mu.Lock()
-		oldAvailable := daemon.resourceMgr.availableVCPU
-		daemon.resourceMgr.availableVCPU = 4 // Give us 4 cores
+		daemon.resourceMgr.availableVCPU = 4   // Give us 4 cores
+		daemon.resourceMgr.availableMem = 15.0 // Limited memory to trigger large/xlarge filtering
 		daemon.resourceMgr.mu.Unlock()
-
-		defer func() {
-			daemon.resourceMgr.mu.Lock()
-			daemon.resourceMgr.availableVCPU = oldAvailable
-			daemon.resourceMgr.mu.Unlock()
-		}()
 
 		reply, err = daemon.natsConn.Request("ec2.DescribeInstanceTypes", msgData, 5*time.Second)
 		require.NoError(t, err)
 		err = json.Unmarshal(reply.Data, &output)
+		require.NoError(t, err)
 
-		// With 4 cores:
-		// nano (2 cores): 2 slots
-		// micro (2 cores): 2 slots
-		// small (2 cores): 2 slots
-		// medium (2 cores, 4GB): 2 slots (8GB total)
-		// large  (2 cores, 8GB): 1 slot  (16GB would exceed 14.88GB)
-		// xlarge (4 cores, 16GB): 0 slots (16GB would exceed 14.88GB)
-		// 2xlarge (8 cores, 32GB): 0 slots
+		// With 4 cores and 15GB memory:
+		// nano (2 cores, 0.5GB): 2 slots
+		// micro (2 cores, 1.0GB): 2 slots
+		// small (2 cores, 2.0GB): 2 slots
+		// medium (2 cores, 4.0GB): 2 slots
+		// large  (2 cores, 8.0GB): 1 slot (15GB < 16GB)
+		// xlarge (4 cores, 16.0GB): 0 slots (15GB < 16GB)
+		// 2xlarge (8 cores, 32.0GB): 0 slots
 		// Total: 2+2+2+2+1 = 9 slots
-		assert.Equal(t, 9, len(output.InstanceTypes), "Should have 9 total slots with 4 cores (limited by memory for larger types)")
+		assert.Equal(t, 9, len(output.InstanceTypes), "Should have 9 total slots with 4 cores and 15GB memory")
 
 		// Verify duplicates exist
 		typeCounts := make(map[string]int)
 		for _, info := range output.InstanceTypes {
-			typeCounts[*info.InstanceType]++
+			if info.InstanceType != nil {
+				typeCounts[*info.InstanceType]++
+			}
 		}
-		assert.Equal(t, 2, typeCounts["m7i.nano"], "Should have 2 slots for nano")
+		nanoType := fmt.Sprintf("%s.nano", family)
+		assert.Equal(t, 2, typeCounts[nanoType], "Should have 2 slots for %s", nanoType)
 	})
 }
 
