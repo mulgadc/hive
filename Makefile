@@ -47,7 +47,7 @@ build:
 # GO commands
 go_build:
 	@echo "\n....Building $(GO_PROJECT_NAME)"
-	go build $(GO_BUILD_MOD) -ldflags "-s -w" -o ./bin/$(GO_PROJECT_NAME) cmd/hive/main.go
+	GOEXPERIMENT=greenteagc go build $(GO_BUILD_MOD) -ldflags "-s -w" -o ./bin/$(GO_PROJECT_NAME) cmd/hive/main.go
 
 go_run:
 	@echo "\n....Running $(GO_PROJECT_NAME)...."
