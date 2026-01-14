@@ -10,6 +10,7 @@ import (
 	gateway_ec2_image "github.com/mulgadc/hive/hive/gateway/ec2/image"
 	gateway_ec2_instance "github.com/mulgadc/hive/hive/gateway/ec2/instance"
 	gateway_ec2_key "github.com/mulgadc/hive/hive/gateway/ec2/key"
+	gateway_ec2_regions "github.com/mulgadc/hive/hive/gateway/ec2/regions"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
@@ -274,6 +275,27 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 
 		// Convert to XML
 		payload := utils.GenerateXMLPayload("DescribeImagesResponse", output)
+		xmlOutput, err = utils.MarshalToXML(payload)
+
+		if err != nil {
+			return errors.New("failed to marshal response to XML")
+		}
+	case "DescribeRegions":
+		var input = &ec2.DescribeRegionsInput{}
+		err = awsec2query.QueryParamsToStruct(queryArgs, input)
+
+		if err != nil {
+			return err
+		}
+
+		output, err := gateway_ec2_regions.DescribeRegions(input, gw.Region)
+
+		if err != nil {
+			return err
+		}
+
+		// Convert to XML
+		payload := utils.GenerateXMLPayload("DescribeRegionsResponse", output)
 		xmlOutput, err = utils.MarshalToXML(payload)
 
 		if err != nil {

@@ -23,6 +23,7 @@ type GatewayConfig struct {
 	NATSConn       *nats.Conn // Shared NATS connection for service communication
 	Config         string     // Shared AWS Gateway config for S3 auth
 	ExpectedNodes  int        // Number of expected hive nodes for multi-node operations
+	Region         string     // Region this gateway is running in
 }
 
 var supportedServices = map[string]bool{
