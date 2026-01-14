@@ -38,6 +38,7 @@ Implementation gaps:
 - [DONE] - describe-key-pairs
 - [DONE] - import-key-pair
 - [DONE] - describe-images
+- [DONE] - describe-regions
 
 ### To implement
 
@@ -53,7 +54,6 @@ Easier methods to implement
 - create-tags
 - create-volume
 - delete-snapshot
-- describe-regions
 - describe-snapshots
 - describe-subnets
 - describe-tags

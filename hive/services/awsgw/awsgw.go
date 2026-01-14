@@ -91,6 +91,7 @@ func launchService(config *config.ClusterConfig) (err error) {
 		DisableLogging: false,
 		NATSConn:       natsConn,
 		Config:         nodeConfig.AWSGW.Config,
+		ExpectedNodes:  len(config.Nodes),
 		Region:         nodeConfig.Region,
 	}
 
