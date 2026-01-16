@@ -349,7 +349,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	manifest.AMIMetadata.RootDeviceType = "ebs"
 	manifest.AMIMetadata.Virtualization = "hvm"
 	manifest.AMIMetadata.ImageOwnerAlias = "system"
-	manifest.AMIMetadata.VolumeSizeGiB = uint64(imageStat.Size() / 1024 / 1024 / 1024)
+	manifest.AMIMetadata.VolumeSizeGiB = utils.SafeInt64ToUint64(imageStat.Size() / 1024 / 1024 / 1024)
 
 	// Volume Data
 	manifest.VolumeMetadata.VolumeID = volumeId // TODO: Confirm if unique, e.g vol-, if ami- used
@@ -389,7 +389,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 
 	s3Config := s3.S3Config{
 		VolumeName: volumeId,
-		VolumeSize: uint64(imageStat.Size()),
+		VolumeSize: utils.SafeInt64ToUint64(imageStat.Size()),
 		Bucket:     appConfig.Nodes[appConfig.Node].Predastore.Bucket,
 		Region:     appConfig.Nodes[appConfig.Node].Predastore.Region,
 		AccessKey:  appConfig.Nodes[appConfig.Node].AccessKey,
@@ -399,7 +399,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 
 	vbConfig := viperblock.VB{
 		VolumeName: volumeId,
-		VolumeSize: uint64(imageStat.Size()),
+		VolumeSize: utils.SafeInt64ToUint64(imageStat.Size()),
 		BaseDir:    tmpDir,
 		Cache: viperblock.Cache{
 			Config: viperblock.CacheConfig{

@@ -17,6 +17,7 @@ import (
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/s3client"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/mulgadc/viperblock/types"
 	"github.com/mulgadc/viperblock/viperblock"
@@ -178,7 +179,7 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 	volumeConfig := viperblock.VolumeConfig{
 		VolumeMetadata: viperblock.VolumeMetadata{
 			VolumeID:   imageId,
-			SizeGiB:    uint64(size / 1024 / 1024 / 1024),
+			SizeGiB:    utils.SafeIntToUint64(size / 1024 / 1024 / 1024),
 			CreatedAt:  time.Now(),
 			DeviceName: deviceName,
 			VolumeType: volumeType,
@@ -215,7 +216,7 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 func (s *InstanceServiceImpl) prepareRootVolume(input *ec2.RunInstancesInput, imageId string, size int, volumeConfig viperblock.VolumeConfig, instance *vm.VM) error {
 	cfg := s3.S3Config{
 		VolumeName: imageId,
-		VolumeSize: uint64(size),
+		VolumeSize: utils.SafeIntToUint64(size),
 		Bucket:     s.config.Predastore.Bucket,
 		Region:     s.config.Predastore.Region,
 		AccessKey:  s.config.AccessKey,
@@ -225,7 +226,7 @@ func (s *InstanceServiceImpl) prepareRootVolume(input *ec2.RunInstancesInput, im
 
 	vbconfig := viperblock.VB{
 		VolumeName:   imageId,
-		VolumeSize:   uint64(size),
+		VolumeSize:   utils.SafeIntToUint64(size),
 		BaseDir:      s.config.WalDir,
 		Cache:        viperblock.Cache{Config: viperblock.CacheConfig{Size: 0}},
 		VolumeConfig: volumeConfig,
@@ -288,7 +289,7 @@ func (s *InstanceServiceImpl) cloneAMIToVolume(input *ec2.RunInstancesInput, siz
 	// Setup source AMI Viperblock
 	amiCfg := s3.S3Config{
 		VolumeName: *input.ImageId,
-		VolumeSize: uint64(size),
+		VolumeSize: utils.SafeIntToUint64(size),
 		Bucket:     s.config.Predastore.Bucket,
 		Region:     s.config.Predastore.Region,
 		AccessKey:  s.config.AccessKey,
@@ -298,7 +299,7 @@ func (s *InstanceServiceImpl) cloneAMIToVolume(input *ec2.RunInstancesInput, siz
 
 	amiVbConfig := viperblock.VB{
 		VolumeName:   *input.ImageId,
-		VolumeSize:   uint64(size),
+		VolumeSize:   utils.SafeIntToUint64(size),
 		BaseDir:      s.config.WalDir,
 		Cache:        viperblock.Cache{Config: viperblock.CacheConfig{Size: 0}},
 		VolumeConfig: volumeConfig,
@@ -393,7 +394,7 @@ func (s *InstanceServiceImpl) prepareEFIVolume(imageId string, volumeConfig vipe
 
 	efiCfg := s3.S3Config{
 		VolumeName: efiVolumeName,
-		VolumeSize: uint64(efiSize),
+		VolumeSize: utils.SafeIntToUint64(efiSize),
 		Bucket:     s.config.Predastore.Bucket,
 		Region:     s.config.Predastore.Region,
 		AccessKey:  s.config.AccessKey,
@@ -403,7 +404,7 @@ func (s *InstanceServiceImpl) prepareEFIVolume(imageId string, volumeConfig vipe
 
 	efiVbConfig := viperblock.VB{
 		VolumeName:   efiVolumeName,
-		VolumeSize:   uint64(efiSize),
+		VolumeSize:   utils.SafeIntToUint64(efiSize),
 		BaseDir:      s.config.WalDir,
 		Cache:        viperblock.Cache{Config: viperblock.CacheConfig{Size: 0}},
 		VolumeConfig: volumeConfig,
@@ -484,7 +485,7 @@ func (s *InstanceServiceImpl) prepareCloudInitVolume(input *ec2.RunInstancesInpu
 
 	cloudInitCfg := s3.S3Config{
 		VolumeName: cloudInitVolumeName,
-		VolumeSize: uint64(cloudInitSize),
+		VolumeSize: utils.SafeIntToUint64(cloudInitSize),
 		Bucket:     s.config.Predastore.Bucket,
 		Region:     s.config.Predastore.Region,
 		AccessKey:  s.config.AccessKey,
@@ -494,7 +495,7 @@ func (s *InstanceServiceImpl) prepareCloudInitVolume(input *ec2.RunInstancesInpu
 
 	cloudInitVbConfig := viperblock.VB{
 		VolumeName:   cloudInitVolumeName,
-		VolumeSize:   uint64(cloudInitSize),
+		VolumeSize:   utils.SafeIntToUint64(cloudInitSize),
 		BaseDir:      s.config.WalDir,
 		Cache:        viperblock.Cache{Config: viperblock.CacheConfig{Size: 0}},
 		VolumeConfig: volumeConfig,

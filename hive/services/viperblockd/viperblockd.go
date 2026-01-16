@@ -296,7 +296,7 @@ func launchService(cfg *Config) (err error) {
 			BaseDir:    cfg.BaseDir,
 			Host:       cfg.S3Host,
 			Verbose:    true,
-			Size:       int64(vb.GetVolumeSize()),
+			Size:       utils.SafeUint64ToInt64(vb.GetVolumeSize()),
 			Volume:     ebsRequest.Name,
 			Bucket:     cfg.Bucket,
 			Region:     cfg.Region,
