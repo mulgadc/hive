@@ -3,12 +3,12 @@ name: Build and Test Hive
 on:
   push:
     branches: [ main ]
-    paths: ["hive/**", ".github/workflows/**"]
+    paths: ["hive/**", ".github/workflows/**", "go.mod", "go.sum"]
   pull_request:
   workflow_dispatch:
 
 jobs:
-  hive_test_and_push:
+  hive_build_and_test:
     runs-on: ubuntu-latest
 
     steps:
