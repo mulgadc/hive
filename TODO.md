@@ -39,6 +39,7 @@ Implementation gaps:
 - [DONE] - import-key-pair
 - [DONE] - describe-images
 - [DONE] - describe-regions
+- [DONE] - describe-volumes
 
 ### To implement
 
@@ -59,7 +60,6 @@ Easier methods to implement
 - describe-tags
 - describe-volume-attribute
 - describe-volume-status
-- describe-volumes
 - detach-network-interface
 - detach-volume
 - get-console-output

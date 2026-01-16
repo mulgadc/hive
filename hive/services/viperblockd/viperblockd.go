@@ -208,7 +208,7 @@ func launchService(cfg *Config) (err error) {
 			VolumeConfig: viperblock.VolumeConfig{},
 		}
 
-		vb, err := viperblock.New(vbconfig, "s3", s3cfg)
+		vb, err := viperblock.New(&vbconfig, "s3", s3cfg)
 
 		// TODO: Improve
 		// 5% of system memory for cache for master volumes

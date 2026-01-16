@@ -232,7 +232,7 @@ func (s *InstanceServiceImpl) prepareRootVolume(input *ec2.RunInstancesInput, im
 		VolumeConfig: volumeConfig,
 	}
 
-	vb, err := viperblock.New(vbconfig, "s3", cfg)
+	vb, err := viperblock.New(&vbconfig, "s3", cfg)
 	if err != nil {
 		slog.Error("Failed to connect to Viperblock store", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
@@ -305,7 +305,7 @@ func (s *InstanceServiceImpl) cloneAMIToVolume(input *ec2.RunInstancesInput, siz
 		VolumeConfig: volumeConfig,
 	}
 
-	amiVb, err := viperblock.New(amiVbConfig, "s3", amiCfg)
+	amiVb, err := viperblock.New(&amiVbConfig, "s3", amiCfg)
 	if err != nil {
 		slog.Error("Failed to connect to Viperblock store for AMI", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
@@ -410,7 +410,7 @@ func (s *InstanceServiceImpl) prepareEFIVolume(imageId string, volumeConfig vipe
 		VolumeConfig: volumeConfig,
 	}
 
-	efiVb, err := viperblock.New(efiVbConfig, "s3", efiCfg)
+	efiVb, err := viperblock.New(&efiVbConfig, "s3", efiCfg)
 	if err != nil {
 		slog.Error("Could not create EFI viperblock", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
@@ -501,7 +501,7 @@ func (s *InstanceServiceImpl) prepareCloudInitVolume(input *ec2.RunInstancesInpu
 		VolumeConfig: volumeConfig,
 	}
 
-	cloudInitVb, err := viperblock.New(cloudInitVbConfig, "s3", cloudInitCfg)
+	cloudInitVb, err := viperblock.New(&cloudInitVbConfig, "s3", cloudInitCfg)
 	if err != nil {
 		slog.Error("Could not create cloudinit viperblock", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
