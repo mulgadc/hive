@@ -24,9 +24,22 @@ jobs:
       - name: Run Tests
         run: LOG_IGNORE=1 go test -v -timeout 120s ./...
 
-      - name: golang-govulncheck-action
-        uses: golang/govulncheck-action@v1.0.4
+      # - name: Go Vet
+      #   run: go vet ./...
+
+      - name: Static Check
+        uses: dominikh/staticcheck-action@v1
+        with:
+          version: 2025.1.1
+          install-go: false
+          checks: "all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005"
+
+      - name: Go Vulnerability Check
+        uses: golang/govulncheck-action@v1
         with:
           repo-checkout: false
-#      - name: Security reports
-#        run: make security
+
+      # - name: Gosec Security Scanner
+      #   run: |
+      #     go install github.com/securego/gosec/v2/cmd/gosec@latest
+      #     gosec -exclude-generated ./...
