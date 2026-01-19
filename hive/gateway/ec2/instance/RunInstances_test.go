@@ -4,43 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/handlers/ec2/instance"
+	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
 	"github.com/mulgadc/hive/hive/utils"
-	"github.com/nats-io/nats-server/v2/server"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
-
-// startTestNATSServer starts an embedded NATS server for testing
-func startTestNATSServer(t *testing.T) (*server.Server, string) {
-	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1, // Auto-allocate available port
-		JetStream: false,
-		NoLog:     true,
-		NoSigs:    true,
-	}
-
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err, "Failed to create NATS server")
-
-	// Start server in goroutine
-	go ns.Start()
-
-	// Wait for server to be ready
-	if !ns.ReadyForConnections(5 * time.Second) {
-		t.Fatal("NATS server failed to start")
-	}
-
-	url := ns.ClientURL()
-	t.Logf("Test NATS server started at: %s", url)
-
-	return ns, url
-}
 
 var defaults = ec2.RunInstancesInput{
 	ImageId:      aws.String("ami-0abcdef1234567890"),
@@ -202,7 +172,7 @@ func TestEC2ProcessRunInstances(t *testing.T) {
 
 	tests := []struct {
 		name              string
-		payload           interface{}
+		payload           any
 		rawJSON           []byte
 		wantValidationErr bool
 		wantErrCode       string

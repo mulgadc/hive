@@ -47,7 +47,7 @@ func GenerateConfigFiles(configs []ConfigFile, configSettings ConfigSettings) er
 
 	for _, cfg := range configs {
 		if err := GenerateConfigFile(cfg.Path, cfg.Template, configSettings); err != nil {
-			return fmt.Errorf("Error creating %s: %v\n", cfg.Name, err)
+			return fmt.Errorf("error creating %s: %v", cfg.Name, err)
 		}
 		fmt.Printf("✅ Created: %s\n", cfg.Name)
 	}

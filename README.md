@@ -60,7 +60,7 @@ Get started with Hive development in minutes:
 
 ```bash
 # Clone the repository
-git clone https://github.com/mulgadc/hive.git hive
+git clone https://github.com/mulgadc/hive.git
 cd hive
 
 # Setup dependencies and development environment
@@ -126,4 +126,4 @@ This hybrid approach ensures Hive benefits from both proven engineering expertis
 
 ## License
 
-Hive is open source under the Apache 2.0 License. You're free to use, modify, and deploy it—anywhere you need reliable infrastructure without depending on centralized cloud platforms
+Hive is open source under the Apache 2.0 License. You're free to use, modify, and deploy it—anywhere you need reliable infrastructure without depending on centralized cloud platforms.

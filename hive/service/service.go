@@ -18,7 +18,7 @@ type Service interface {
 	Reload() error
 }
 
-func New(btype string, config interface{}) (Service, error) {
+func New(btype string, config any) (Service, error) {
 
 	switch btype {
 	case "nats":

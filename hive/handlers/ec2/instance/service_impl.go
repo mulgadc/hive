@@ -2,10 +2,11 @@ package handlers_ec2_instance
 
 import (
 	"bytes"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand"
+	"math/big"
 	"os"
 	"strings"
 	"text/template"
@@ -16,6 +17,7 @@ import (
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/s3client"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/mulgadc/viperblock/types"
 	"github.com/mulgadc/viperblock/viperblock"
@@ -73,24 +75,16 @@ type CloudInitMetaData struct {
 	Hostname   string
 }
 
-// InstanceType represents the resource requirements for an EC2 instance type
-type InstanceType struct {
-	Name         string
-	VCPUs        int
-	MemoryGB     float64
-	Architecture string // e.g., "x86_64", "arm64"
-}
-
 // InstanceServiceImpl handles daemon-side EC2 instance operations
 type InstanceServiceImpl struct {
 	config        *config.Config
-	instanceTypes map[string]InstanceType
+	instanceTypes map[string]*ec2.InstanceTypeInfo
 	natsConn      *nats.Conn
 	instances     *vm.Instances
 }
 
 // NewInstanceServiceImpl creates a new instance service implementation for daemon use
-func NewInstanceServiceImpl(cfg *config.Config, instanceTypes map[string]InstanceType, nc *nats.Conn, instances *vm.Instances) *InstanceServiceImpl {
+func NewInstanceServiceImpl(cfg *config.Config, instanceTypes map[string]*ec2.InstanceTypeInfo, nc *nats.Conn, instances *vm.Instances) *InstanceServiceImpl {
 	return &InstanceServiceImpl{
 		config:        cfg,
 		instanceTypes: instanceTypes,
@@ -163,7 +157,7 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 	var snapshotId string
 
 	// Handle block device mappings
-	if input.BlockDeviceMappings != nil && len(input.BlockDeviceMappings) > 0 {
+	if len(input.BlockDeviceMappings) > 0 {
 		size = int(*input.BlockDeviceMappings[0].Ebs.VolumeSize)
 		deviceName = *input.BlockDeviceMappings[0].DeviceName
 		volumeType = *input.BlockDeviceMappings[0].Ebs.VolumeType
@@ -172,7 +166,10 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 
 	// Determine image ID and snapshot ID
 	if strings.HasPrefix(*input.ImageId, "ami-") {
-		randomNumber := rand.Intn(100_000_000)
+		randomNumber, err := rand.Int(rand.Reader, big.NewInt(100_000_000))
+		if err != nil {
+			return err
+		}
 		imageId = viperblock.GenerateVolumeID("vol", fmt.Sprintf("%d-%s", randomNumber, *input.ImageId), "predastore", time.Now().Unix())
 		snapshotId = *input.ImageId
 	} else {
@@ -182,7 +179,7 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 	volumeConfig := viperblock.VolumeConfig{
 		VolumeMetadata: viperblock.VolumeMetadata{
 			VolumeID:   imageId,
-			SizeGiB:    uint64(size / 1024 / 1024 / 1024),
+			SizeGiB:    utils.SafeIntToUint64(size / 1024 / 1024 / 1024),
 			CreatedAt:  time.Now(),
 			DeviceName: deviceName,
 			VolumeType: volumeType,
@@ -219,7 +216,7 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 func (s *InstanceServiceImpl) prepareRootVolume(input *ec2.RunInstancesInput, imageId string, size int, volumeConfig viperblock.VolumeConfig, instance *vm.VM) error {
 	cfg := s3.S3Config{
 		VolumeName: imageId,
-		VolumeSize: uint64(size),
+		VolumeSize: utils.SafeIntToUint64(size),
 		Bucket:     s.config.Predastore.Bucket,
 		Region:     s.config.Predastore.Region,
 		AccessKey:  s.config.AccessKey,
@@ -229,13 +226,13 @@ func (s *InstanceServiceImpl) prepareRootVolume(input *ec2.RunInstancesInput, im
 
 	vbconfig := viperblock.VB{
 		VolumeName:   imageId,
-		VolumeSize:   uint64(size),
+		VolumeSize:   utils.SafeIntToUint64(size),
 		BaseDir:      s.config.WalDir,
 		Cache:        viperblock.Cache{Config: viperblock.CacheConfig{Size: 0}},
 		VolumeConfig: volumeConfig,
 	}
 
-	vb, err := viperblock.New(vbconfig, "s3", cfg)
+	vb, err := viperblock.New(&vbconfig, "s3", cfg)
 	if err != nil {
 		slog.Error("Failed to connect to Viperblock store", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
@@ -292,7 +289,7 @@ func (s *InstanceServiceImpl) cloneAMIToVolume(input *ec2.RunInstancesInput, siz
 	// Setup source AMI Viperblock
 	amiCfg := s3.S3Config{
 		VolumeName: *input.ImageId,
-		VolumeSize: uint64(size),
+		VolumeSize: utils.SafeIntToUint64(size),
 		Bucket:     s.config.Predastore.Bucket,
 		Region:     s.config.Predastore.Region,
 		AccessKey:  s.config.AccessKey,
@@ -302,13 +299,13 @@ func (s *InstanceServiceImpl) cloneAMIToVolume(input *ec2.RunInstancesInput, siz
 
 	amiVbConfig := viperblock.VB{
 		VolumeName:   *input.ImageId,
-		VolumeSize:   uint64(size),
+		VolumeSize:   utils.SafeIntToUint64(size),
 		BaseDir:      s.config.WalDir,
 		Cache:        viperblock.Cache{Config: viperblock.CacheConfig{Size: 0}},
 		VolumeConfig: volumeConfig,
 	}
 
-	amiVb, err := viperblock.New(amiVbConfig, "s3", amiCfg)
+	amiVb, err := viperblock.New(&amiVbConfig, "s3", amiCfg)
 	if err != nil {
 		slog.Error("Failed to connect to Viperblock store for AMI", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
@@ -357,7 +354,7 @@ func (s *InstanceServiceImpl) cloneAMIToVolume(input *ec2.RunInstancesInput, siz
 		numBlocks := len(data) / int(destVb.BlockSize)
 
 		// Write individual blocks to the new volume
-		for i := 0; i < numBlocks; i++ {
+		for i := range numBlocks {
 			// Check if the input is a Zero block
 			if bytes.Equal(data[i*int(destVb.BlockSize):(i+1)*int(destVb.BlockSize)], nullBlock) {
 				block++
@@ -397,7 +394,7 @@ func (s *InstanceServiceImpl) prepareEFIVolume(imageId string, volumeConfig vipe
 
 	efiCfg := s3.S3Config{
 		VolumeName: efiVolumeName,
-		VolumeSize: uint64(efiSize),
+		VolumeSize: utils.SafeIntToUint64(efiSize),
 		Bucket:     s.config.Predastore.Bucket,
 		Region:     s.config.Predastore.Region,
 		AccessKey:  s.config.AccessKey,
@@ -407,13 +404,13 @@ func (s *InstanceServiceImpl) prepareEFIVolume(imageId string, volumeConfig vipe
 
 	efiVbConfig := viperblock.VB{
 		VolumeName:   efiVolumeName,
-		VolumeSize:   uint64(efiSize),
+		VolumeSize:   utils.SafeIntToUint64(efiSize),
 		BaseDir:      s.config.WalDir,
 		Cache:        viperblock.Cache{Config: viperblock.CacheConfig{Size: 0}},
 		VolumeConfig: volumeConfig,
 	}
 
-	efiVb, err := viperblock.New(efiVbConfig, "s3", efiCfg)
+	efiVb, err := viperblock.New(&efiVbConfig, "s3", efiCfg)
 	if err != nil {
 		slog.Error("Could not create EFI viperblock", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
@@ -488,7 +485,7 @@ func (s *InstanceServiceImpl) prepareCloudInitVolume(input *ec2.RunInstancesInpu
 
 	cloudInitCfg := s3.S3Config{
 		VolumeName: cloudInitVolumeName,
-		VolumeSize: uint64(cloudInitSize),
+		VolumeSize: utils.SafeIntToUint64(cloudInitSize),
 		Bucket:     s.config.Predastore.Bucket,
 		Region:     s.config.Predastore.Region,
 		AccessKey:  s.config.AccessKey,
@@ -498,13 +495,13 @@ func (s *InstanceServiceImpl) prepareCloudInitVolume(input *ec2.RunInstancesInpu
 
 	cloudInitVbConfig := viperblock.VB{
 		VolumeName:   cloudInitVolumeName,
-		VolumeSize:   uint64(cloudInitSize),
+		VolumeSize:   utils.SafeIntToUint64(cloudInitSize),
 		BaseDir:      s.config.WalDir,
 		Cache:        viperblock.Cache{Config: viperblock.CacheConfig{Size: 0}},
 		VolumeConfig: volumeConfig,
 	}
 
-	cloudInitVb, err := viperblock.New(cloudInitVbConfig, "s3", cloudInitCfg)
+	cloudInitVb, err := viperblock.New(&cloudInitVbConfig, "s3", cloudInitCfg)
 	if err != nil {
 		slog.Error("Could not create cloudinit viperblock", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)

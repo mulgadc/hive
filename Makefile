@@ -47,7 +47,7 @@ build:
 # GO commands
 go_build:
 	@echo "\n....Building $(GO_PROJECT_NAME)"
-	go build $(GO_BUILD_MOD) -ldflags "-s -w" -o ./bin/$(GO_PROJECT_NAME) cmd/hive/main.go
+	GOEXPERIMENT=greenteagc go build $(GO_BUILD_MOD) -ldflags "-s -w" -o ./bin/$(GO_PROJECT_NAME) cmd/hive/main.go
 
 go_run:
 	@echo "\n....Running $(GO_PROJECT_NAME)...."
@@ -79,9 +79,10 @@ security: $(GOVULNCHECK) $(GOSECCHECK) $(GOSTATICCHECK)
 	$(GOSECCHECK) ./... > tests/gosec-report.txt || true
 	@echo "Gosec report saved to tests/gosec-report.txt"
 
-	$(GOSTATICCHECK) ./...  > tests/staticcheck-report.txt || true
+	# default config + disable dep warning since we are using aws sdk v1
+	$(GOSTATICCHECK) -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./...  > tests/staticcheck-report.txt || true
 	@echo "Staticcheck report saved to tests/staticcheck-report.txt"
-	
+
 	go vet ./... 2>&1 | tee tests/govet-report.txt || true
 	@echo "Go vet report saved to tests/govet-report.txt"
 

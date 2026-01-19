@@ -29,7 +29,7 @@ args["TagSpecification.2.Tag.1.Value"] = "Production"
 
 */
 
-func QueryParamsToStruct(params map[string]string, out interface{}) error {
+func QueryParamsToStruct(params map[string]string, out any) error {
 	v := reflect.ValueOf(out)
 
 	// Must be a pointer to a struct

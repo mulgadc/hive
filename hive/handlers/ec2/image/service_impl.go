@@ -17,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
 )
 
@@ -184,7 +185,7 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput) (*ec2.
 				{
 					DeviceName: aws.String("/dev/sda1"),
 					Ebs: &ec2.EbsBlockDevice{
-						VolumeSize:          aws.Int64(int64(amiMeta.VolumeSizeGiB)),
+						VolumeSize:          aws.Int64(utils.SafeUint64ToInt64(amiMeta.VolumeSizeGiB)),
 						VolumeType:          aws.String("gp3"),
 						DeleteOnTermination: aws.Bool(true),
 						Encrypted:           aws.Bool(false),

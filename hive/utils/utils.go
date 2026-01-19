@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -36,6 +37,30 @@ import (
 // Helper functions for OS images
 
 var ErrQCOWDetected = errors.New("qcow format detected")
+
+// SafeInt64ToUint64 converts int64 to uint64, returning 0 if negative
+func SafeInt64ToUint64(v int64) uint64 {
+	if v < 0 {
+		return 0
+	}
+	return uint64(v)
+}
+
+// SafeIntToUint64 converts int to uint64, returning 0 if negative
+func SafeIntToUint64(v int) uint64 {
+	if v < 0 {
+		return 0
+	}
+	return uint64(v)
+}
+
+// SafeUint64ToInt64 converts uint64 to int64, capping at math.MaxInt64
+func SafeUint64ToInt64(v uint64) int64 {
+	if v > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(v)
+}
 
 type Images struct {
 	Name         string    `json:"name"`
@@ -234,7 +259,10 @@ func WritePidFile(name string, pid int) error {
 	}
 
 	defer pidFile.Close()
-	pidFile.WriteString(fmt.Sprintf("%d", pid))
+	_, err = pidFile.WriteString(fmt.Sprintf("%d", pid))
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -243,7 +271,10 @@ func RemovePidFile(serviceName string) error {
 
 	pidPath := pidPath()
 
-	os.Remove(filepath.Join(pidPath, fmt.Sprintf("%s.pid", serviceName)))
+	err := os.Remove(filepath.Join(pidPath, fmt.Sprintf("%s.pid", serviceName)))
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -276,7 +307,10 @@ func StopProcess(serviceName string) error {
 	}
 
 	// Remove PID file
-	RemovePidFile(serviceName)
+	err = RemovePidFile(serviceName)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -362,24 +396,28 @@ func dirExists(path string) bool {
 }
 
 // Convert interface to XML
-func MarshalToXML(payload interface{}) ([]byte, error) {
+func MarshalToXML(payload any) ([]byte, error) {
 
 	var buf bytes.Buffer
 	enc := xml.NewEncoder(&buf)
-	enc.Indent("", "  ")
+	// enc.Indent("", "  ")
 
 	if err := xmlutil.BuildXML(payload, enc); err != nil {
 		slog.Error("BuildXML failed", "err", err)
 		return nil, err
 	}
-	enc.Flush()
+
+	if err := enc.Flush(); err != nil {
+		slog.Error("Flush failed", "err", err)
+		return nil, err
+	}
 
 	return buf.Bytes(), nil
 
 }
 
 // wrapWithLocation decorates payload with the requested locationName tag.
-func GenerateXMLPayload(locationName string, payload interface{}) interface{} {
+func GenerateXMLPayload(locationName string, payload any) any {
 	t := reflect.StructOf([]reflect.StructField{
 		{
 			Name: "Value",
@@ -431,7 +469,7 @@ func ValidateErrorPayload(payload []byte) (responseError ec2.ResponseError, err 
 
 // Unmarshal payload
 
-func UnmarshalJsonPayload(input interface{}, jsonData []byte) []byte {
+func UnmarshalJsonPayload(input any, jsonData []byte) []byte {
 
 	decoder := json.NewDecoder(bytes.NewReader(jsonData))
 	decoder.DisallowUnknownFields()
@@ -447,7 +485,7 @@ func UnmarshalJsonPayload(input interface{}, jsonData []byte) []byte {
 
 }
 
-func MarshalJsonPayload(input interface{}, jsonData []byte) []byte {
+func MarshalJsonPayload(input any, jsonData []byte) []byte {
 
 	decoder := json.NewDecoder(bytes.NewReader(jsonData))
 	decoder.DisallowUnknownFields()
@@ -764,7 +802,7 @@ func DownloadFileWithProgress(url string, name string, filename string, timeout 
 			return fmt.Errorf("copy error: %v", err)
 		}
 
-		pterm.Printf("Saved %s (%s)\n", filename, humanBytes(uint64(written)))
+		pterm.Printf("Saved %s (%s)\n", filename, humanBytes(SafeInt64ToUint64(written)))
 		return
 
 	} else {
@@ -778,7 +816,7 @@ func DownloadFileWithProgress(url string, name string, filename string, timeout 
 		var written int64
 		reader := io.TeeReader(resp.Body, progressWriter(func(n int) {
 			written += int64(n)
-			spin.UpdateText(fmt.Sprintf("Downloading %s (%s) ...", name, humanBytes(uint64(written))))
+			spin.UpdateText(fmt.Sprintf("Downloading %s (%s) ...", name, humanBytes(SafeInt64ToUint64(written))))
 		}))
 		_, err = io.Copy(f, reader)
 		spin.Stop()
@@ -787,7 +825,7 @@ func DownloadFileWithProgress(url string, name string, filename string, timeout 
 			return fmt.Errorf("copy error: %v", err)
 		}
 
-		pterm.Printf("Saved %s (%s)\n", filename, humanBytes(uint64(written)))
+		pterm.Printf("Saved %s (%s)\n", filename, humanBytes(SafeInt64ToUint64(written)))
 
 	}
 

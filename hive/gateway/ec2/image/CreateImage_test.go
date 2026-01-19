@@ -73,7 +73,7 @@ func TestValidateCreateImageInput(t *testing.T) {
 func TestEC2ProcessCreateImage(t *testing.T) {
 	tests := []struct {
 		name              string
-		payload           interface{}
+		payload           any
 		rawJSON           []byte
 		wantValidationErr bool
 		wantErrCode       string

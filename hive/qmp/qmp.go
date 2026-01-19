@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-type unmarshalTarget interface{}
+type unmarshalTarget any
 
 var CommandResponseTypes = map[string]unmarshalTarget{
 	"stop":             &json.RawMessage{},
@@ -122,8 +122,8 @@ type QMPGreeting struct {
 }
 
 type QMPCommand struct {
-	Execute   string                 `json:"execute"`
-	Arguments map[string]interface{} `json:"arguments,omitempty"`
+	Execute   string         `json:"execute"`
+	Arguments map[string]any `json:"arguments,omitempty"`
 }
 
 type QMPResponse struct {

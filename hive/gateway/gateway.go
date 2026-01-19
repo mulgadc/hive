@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/google/uuid"
 	"github.com/mulgadc/hive/hive/awsec2query"
@@ -22,6 +23,7 @@ type GatewayConfig struct {
 	NATSConn       *nats.Conn // Shared NATS connection for service communication
 	Config         string     // Shared AWS Gateway config for S3 auth
 	ExpectedNodes  int        // Number of expected hive nodes for multi-node operations
+	Region         string     // Region this gateway is running in
 }
 
 var supportedServices = map[string]bool{
@@ -99,6 +101,14 @@ func (gw *GatewayConfig) SetupRoutes() *fiber.App {
 		slog.Error("Error reading config", "error", err)
 		return nil
 	}
+
+	// Add CORS middleware for browser requests
+	app.Use(cors.New(cors.Config{
+		AllowOrigins:     "https://localhost:3000",
+		AllowMethods:     "GET,POST,PUT,DELETE,HEAD,OPTIONS",
+		AllowHeaders:     "*",
+		AllowCredentials: true,
+	}))
 
 	// Add authentication middleware for all requests
 	app.Use(s3.SigV4AuthMiddleware)
@@ -224,8 +234,8 @@ func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {
 // Parse AWS query arguments (used by some services like EC2/S3)
 func ParseAWSQueryArgs(query string) map[string]string {
 	params := make(map[string]string)
-	pairs := strings.Split(query, "&")
-	for _, pair := range pairs {
+	pairs := strings.SplitSeq(query, "&")
+	for pair := range pairs {
 		kv := strings.SplitN(pair, "=", 2)
 		if len(kv) == 2 {
 			params[kv[0]] = kv[1]
@@ -261,7 +271,7 @@ func GenerateEC2ErrorResponse(code, message, requestID string) (output []byte) {
 	return output
 }
 
-func ParseArgsToStruct(input *interface{}, args map[string]string) (err error) {
+func ParseArgsToStruct(input *any, args map[string]string) (err error) {
 
 	// Generated from input shape: RunInstancesRequest
 	err = awsec2query.QueryParamsToStruct(args, input)
