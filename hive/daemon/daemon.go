@@ -852,7 +852,7 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 			return
 		}
 
-		// Last, delete the instance volumes
+		// TODO: Last, delete the instance volumes
 
 		// Free resources
 		instanceType := d.resourceMgr.instanceTypes[instance.InstanceType]

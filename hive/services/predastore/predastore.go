@@ -2,8 +2,6 @@ package predastore
 
 import (
 	"context"
-	"fmt"
-	"log"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -12,11 +10,14 @@ import (
 
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/predastore/s3"
-	"go.uber.org/automaxprocs/maxprocs"
+
+	// Import backends to trigger their init() registration
+	_ "github.com/mulgadc/predastore/backend/filesystem"
 )
 
 var serviceName = "predastore"
 
+// Config holds the configuration for the predastore service
 type Config struct {
 	ConfigPath string
 	Port       int
@@ -27,91 +28,81 @@ type Config struct {
 	TlsKey     string
 }
 
+// Service wraps the predastore S3 server
 type Service struct {
 	Config *Config
+	server *s3.Server
 }
 
+// New creates a new predastore service
 func New(config interface{}) (svc *Service, err error) {
 	svc = &Service{
 		Config: config.(*Config),
 	}
-
 	return svc, nil
 }
 
+// Start starts the predastore service
 func (svc *Service) Start() (int, error) {
-
 	utils.WritePidFile(serviceName, os.Getpid())
-	launchService(svc.Config)
+
+	server, err := s3.NewServer(
+		s3.WithConfigPath(svc.Config.ConfigPath),
+		s3.WithAddress(svc.Config.Host, svc.Config.Port),
+		s3.WithTLS(svc.Config.TlsCert, svc.Config.TlsKey),
+		s3.WithBasePath(svc.Config.BasePath),
+		s3.WithDebug(svc.Config.Debug),
+	)
+	if err != nil {
+		slog.Error("Failed to create predastore server", "error", err)
+		return 0, err
+	}
+
+	svc.server = server
+
+	// Start server asynchronously
+	if err := server.ListenAndServeAsync(); err != nil {
+		slog.Error("Failed to start predastore server", "error", err)
+		return 0, err
+	}
+
+	// Wait for shutdown signal
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+
+	slog.Info("Shutting down predastore service")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		slog.Error("Error during shutdown", "error", err)
+	}
 
 	return os.Getpid(), nil
 }
 
-func (svc *Service) Stop() (err error) {
-
-	err = utils.StopProcess(serviceName)
-	return err
+// Stop stops the predastore service
+func (svc *Service) Stop() error {
+	return utils.StopProcess(serviceName)
 }
 
+// Status returns the status of the predastore service
 func (svc *Service) Status() (string, error) {
 	return "", nil
 }
 
-func (svc *Service) Shutdown() (err error) {
+// Shutdown gracefully shuts down the predastore service
+func (svc *Service) Shutdown() error {
+	if svc.server != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return svc.server.Shutdown(ctx)
+	}
 	return svc.Stop()
 }
 
-func (svc *Service) Reload() (err error) {
+// Reload reloads the predastore service configuration
+func (svc *Service) Reload() error {
 	return nil
-}
-
-func launchService(config *Config) {
-
-	s3 := s3.New(&s3.Config{
-		ConfigPath: config.ConfigPath,
-		Port:       config.Port,
-		Host:       config.Host,
-		Debug:      config.Debug,
-		BasePath:   config.BasePath,
-	})
-
-	// Adjust MAXPROCS if running under linux/cgroups quotas.
-	undo, err := maxprocs.Set(maxprocs.Logger(log.Printf))
-	if err != nil {
-		log.Printf("Failed to set GOMAXPROCS: %v", err)
-	} else {
-		defer undo()
-	}
-
-	err = s3.ReadConfig()
-
-	if err != nil {
-		slog.Warn("Error reading config file", "error", err)
-		os.Exit(-1)
-	}
-
-	app := s3.SetupRoutes()
-
-	go func() {
-		log.Fatal(app.ListenTLS(fmt.Sprintf("%s:%d", config.Host, config.Port), config.TlsCert, config.TlsKey))
-	}()
-
-	// Create a channel to receive shutdown signals
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	// Wait for shutdown signal
-	<-sigChan
-	log.Println("Shutting down gracefully...")
-
-	// Graceful shutdown with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := app.ShutdownWithContext(ctx); err != nil {
-		log.Printf("Error during shutdown: %v", err)
-	}
-
-	log.Println("Server stopped")
-
 }
