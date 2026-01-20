@@ -1,0 +1,45 @@
+# syntax=docker/dockerfile:1
+# This image assumes hive-base:latest exists locally or in a registry
+FROM hive-base:latest
+
+# Set up working directory structure to match INSTALL.md
+WORKDIR /root/Development/mulga
+
+# 1. Pre-copy dependency manifests
+# We copy these first to create a dedicated dependency layer
+COPY hive/go.mod hive/go.sum hive/go.work hive/go.work.sum ./hive/
+COPY viperblock/go.mod viperblock/go.sum ./viperblock/
+COPY viperblock/nbd/go.mod viperblock/nbd/go.sum ./viperblock/nbd/
+COPY viperblock/nbd/libguestfs.org/nbdkit/go.mod ./viperblock/nbd/libguestfs.org/nbdkit/
+COPY predastore/go.mod predastore/go.sum ./predastore/
+
+# 2. Download dependencies (Using Cache Mount)
+RUN --mount=type=cache,target=/root/go/pkg/mod \
+    (cd hive && go mod download) && \
+    (cd viperblock && go mod download) && \
+    (cd viperblock/nbd && go mod download) && \
+    (cd viperblock/nbd/libguestfs.org/nbdkit && go mod download) && \
+    (cd predastore && go mod download)
+
+# 3. Copy the rest of the source code
+COPY hive/ ./hive/
+COPY viperblock/ ./viperblock/
+COPY predastore/ ./predastore/
+
+# Set working directory to hive
+WORKDIR /root/Development/mulga/hive
+
+# Ensure scripts are executable
+RUN chmod +x ./scripts/*.sh ./tests/e2e/run-e2e.sh
+
+# 4. Build everything
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/root/go/pkg/mod \
+    ./scripts/dev-setup.sh
+
+# Set environment variables for runtime
+ENV PATH="/root/Development/mulga/hive/bin:${PATH}"
+ENV HOME="/root"
+
+# Run the E2E test runner
+CMD ["./tests/e2e/run-e2e.sh"]

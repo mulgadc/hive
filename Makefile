@@ -70,6 +70,29 @@ run:
 clean:
 	rm ./bin/$(GO_PROJECT_NAME)
 
+quickinstall:
+	@echo "\n....Installing system dependencies...."
+	sudo apt-get update && sudo apt-get install -y \
+		nbdkit nbdkit-plugin-dev pkg-config qemu-system-x86 qemu-utils qemu-kvm \
+		libvirt-daemon-system libvirt-clients libvirt-dev make gcc jq curl \
+		iproute2 netcat-openbsd openssh-client wget git unzip sudo xz-utils file
+	@echo "\n....Installing AWS CLI v2...."
+	@if ! command -v aws >/dev/null 2>&1; then \
+		curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"; \
+		unzip -o awscliv2.zip; \
+		sudo ./aws/install; \
+		rm -rf awscliv2.zip aws/; \
+	else \
+		echo "AWS CLI already installed"; \
+	fi
+	@echo "\n....Installing Go 1.25.5...."
+	@if [ ! -d "/usr/local/go" ]; then \
+		curl -L https://go.dev/dl/go1.25.5.linux-amd64.tar.gz | sudo tar -C /usr/local -xz; \
+	else \
+		echo "Go already installed in /usr/local/go"; \
+	fi
+	@echo "\n✅ Quickinstall complete. Please ensure /usr/local/go/bin is in your PATH."
+
 security: $(GOVULNCHECK) $(GOSECCHECK) $(GOSTATICCHECK)
 	@echo "\n....Running security checks for $(GO_PROJECT_NAME)...."
 
@@ -86,4 +109,17 @@ security: $(GOVULNCHECK) $(GOSECCHECK) $(GOSTATICCHECK)
 	go vet ./... 2>&1 | tee tests/govet-report.txt || true
 	@echo "Go vet report saved to tests/govet-report.txt"
 
-.PHONY: go_build go_run build run test clean
+e2e-test:
+	@echo "\n....Ensuring E2E Base Image exists...."
+	@if ! sudo docker image inspect hive-base:latest >/dev/null 2>&1; then \
+		echo "Building hive-base:latest..."; \
+		sudo docker build -t hive-base -f tests/e2e/Dockerfile.base .; \
+	fi
+	@echo "\n....Removing old E2E image if it exists...."
+	-sudo docker rmi hive-e2e:latest 2>/dev/null || true
+	@echo "\n....Building E2E Docker image (building everything inside)...."
+	cd .. && sudo docker build -t hive-e2e -f hive/tests/e2e/Dockerfile.e2e .
+	@echo "\n....Running E2E Docker container...."
+	sudo docker run --privileged --rm -v /dev/kvm:/dev/kvm --name hive-e2e-test hive-e2e
+
+.PHONY: build go_build go_run test bench run clean quickinstall security e2e-test
