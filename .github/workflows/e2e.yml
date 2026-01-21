@@ -8,7 +8,7 @@ on:
 jobs:
   hive_e2e_test:
     name: Hive E2E Test
-    runs-on: ubuntu-24.04
+    runs-on: self-hosted
 
     steps:
       - name: Checkout Code
