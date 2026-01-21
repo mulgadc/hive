@@ -1,0 +1,33 @@
+name: E2E Test Hive
+
+on:
+  push:
+    branches: [ main, e2e ]
+  workflow_dispatch:
+
+jobs:
+  hive_e2e_test:
+    name: Hive E2E Test
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          cache-dependency-path: "go.sum"
+          go-version-file: "go.mod"
+
+      - name: Download Dependencies
+        run: make quickinstall
+
+      - name: Clone Dependencies
+        run: ./scripts/clone-deps.sh
+
+      - name: Dev Setup
+        run: ./scripts/dev-setup.sh
+
+      - name: E2E Test
+        run: ./tests/e2e/run-e2e.sh
