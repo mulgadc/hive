@@ -18,13 +18,13 @@ jobs:
       PATH: /usr/local/go/bin:$PATH
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v6
-
       - name: Install System Dependencies
         run: |
           apt-get update && apt-get install -y make sudo \
             make install-system
+
+      - name: Checkout Code
+        uses: actions/checkout@v6
 
       - name: Install Go
         run: make install-go

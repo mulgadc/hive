@@ -45,7 +45,7 @@ install-system:
 	apt-get update && apt-get install -y \
 		nbdkit nbdkit-plugin-dev pkg-config qemu-system-x86 qemu-utils qemu-kvm \
 		libvirt-daemon-system libvirt-clients libvirt-dev make gcc jq curl \
-		iproute2 netcat-openbsd openssh-client wget git unzip sudo xz-utils file
+		iproute2 netcat-openbsd openssh-client wget git unzip sudo xz-utils file tar
 
 install-go:
 	@echo "\n....Installing Go 1.25.5...."
