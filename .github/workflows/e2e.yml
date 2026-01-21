@@ -9,19 +9,34 @@ jobs:
   hive_e2e_test:
     name: Hive E2E Test
     runs-on: self-hosted
+    container:
+      image: ubuntu:24.04
+      options: --privileged -v /dev/kvm:/dev/kvm
+
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      PATH: /usr/local/go/bin:$PATH
 
     steps:
-      - name: Pre-cleanup
-        run: |
-          echo "Cleaning up previous run data..."
-          rm -rf ~/hive/* || true
-          find . -maxdepth 1 ! -name '.git' ! -name '.' -exec rm -rf {} + || true
-
       - name: Checkout Code
         uses: actions/checkout@v6
+
+      - name: Install System Dependencies
+        run: |
+          apt-get update && apt-get install -y make sudo \
+            make install-system
+
+      - name: Install Go
+        run: make install-go
+
+      - name: Install AWS CLI
+        run: make install-aws
 
       - name: Clone Dependencies
         run: ./scripts/clone-deps.sh
 
-      - name: E2E Test (Docker)
-        run: make e2e-test
+      - name: Build All Components
+        run: ./scripts/dev-setup.sh
+
+      - name: Run E2E Tests
+        run: ./tests/e2e/run-e2e.sh
