@@ -7,7 +7,7 @@ WORKDIR /root/Development/mulga
 
 # 1. Pre-copy dependency manifests
 # We copy these first to create a dedicated dependency layer
-COPY hive/go.mod hive/go.sum hive/go.work hive/go.work.sum ./hive/
+COPY hive/go.mod hive/go.sum ./hive/
 COPY viperblock/go.mod viperblock/go.sum ./viperblock/
 COPY viperblock/nbd/go.mod viperblock/nbd/go.sum ./viperblock/nbd/
 COPY viperblock/nbd/libguestfs.org/nbdkit/go.mod ./viperblock/nbd/libguestfs.org/nbdkit/
