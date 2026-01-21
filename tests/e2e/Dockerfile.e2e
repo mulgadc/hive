@@ -1,0 +1,19 @@
+FROM ubuntu:24.04
+
+# Avoid prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install make first so we can use the Makefile
+RUN apt-get update && apt-get install -y make sudo && rm -rf /var/lib/apt/lists/*
+
+# Set up working directory
+WORKDIR /app/hive
+
+# Copy only the Makefile to run quickinstall
+COPY Makefile .
+
+# Run the quickinstall target from the Makefile
+RUN make quickinstall
+
+# Ensure Go is in the PATH
+ENV PATH="/usr/local/go/bin:${PATH}"

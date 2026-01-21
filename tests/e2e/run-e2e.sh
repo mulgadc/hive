@@ -8,7 +8,7 @@ trap "./scripts/stop-dev.sh" EXIT
 export AWS_PROFILE=hive
 
 # Ensure we are in the project root
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 # Phase 1: Environment Setup
 echo "Phase 1: Environment Setup"

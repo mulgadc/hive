@@ -10,29 +10,15 @@ jobs:
     name: Hive E2E Test
     runs-on: self-hosted
     container:
-      image: ubuntu:24.04
+      image: ghcr.io/${{ github.repository }}-e2e:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
       options: --privileged -v /dev/kvm:/dev/kvm
 
-    env:
-      DEBIAN_FRONTEND: noninteractive
-
     steps:
-      - name: Bootstrap Make and Tar
-        run: apt-get update && apt-get install -y make tar
-
       - name: Checkout Code
         uses: actions/checkout@v6
-
-      - name: Install System Dependencies
-        run: make install-system
-
-      - name: Install Go
-        run: |
-          make install-go
-          echo "/usr/local/go/bin" >> $GITHUB_PATH
-
-      - name: Install AWS CLI
-        run: make install-aws
 
       - name: Clone Dependencies
         run: ./scripts/clone-deps.sh
