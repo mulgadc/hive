@@ -85,20 +85,4 @@ security:
 	go vet ./... 2>&1 | tee tests/govet-report.txt || true
 	@echo "Go vet report saved to tests/govet-report.txt"
 
-e2e-test:
-	@echo "\n....Ensuring E2E Base Image exists...."
-	@if ! sudo docker image inspect hive-base:latest >/dev/null 2>&1; then \
-		echo "Building hive-base:latest..."; \
-		sudo docker build -t hive-base -f tests/e2e/Dockerfile.base .; \
-	fi
-
-	@echo "\n....Removing old E2E image if it exists...."
-	-sudo docker rmi hive-e2e:latest 2>/dev/null || true
-
-	@echo "\n....Building E2E Docker image (building everything inside)...."
-	cd .. && sudo docker build -t hive-e2e -f hive/tests/e2e/Dockerfile.e2e .
-
-	@echo "\n....Running E2E Docker container...."
-	sudo docker run --privileged --rm -v /dev/kvm:/dev/kvm --name hive-e2e-test hive-e2e
-
-.PHONY: build go_build go_run test bench run clean install-system install-go install-aws quickinstall security e2e-test
+.PHONY: build go_build go_run test bench run clean install-system install-go install-aws quickinstall security

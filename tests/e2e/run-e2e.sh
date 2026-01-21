@@ -65,8 +65,8 @@ echo "Discovering available instance types..."
 AVAILABLE_TYPES=$($AWS_EC2 describe-instance-types --query 'InstanceTypes[*].InstanceType' --output text)
 echo "Available instance types: $AVAILABLE_TYPES"
 
-# Pick the first one as our primary test type
-INSTANCE_TYPE=$(echo $AVAILABLE_TYPES | awk '{print $1}')
+# Pick the nano instance type for minimal resource usage in tests
+INSTANCE_TYPE=$(echo $AVAILABLE_TYPES | tr ' ' '\n' | grep -m1 'nano')
 if [ -z "$INSTANCE_TYPE" ] || [ "$INSTANCE_TYPE" == "None" ]; then
     echo "No instance types found!"
     exit 1
