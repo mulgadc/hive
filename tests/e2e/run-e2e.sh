@@ -25,7 +25,7 @@ else
     exit 1
 fi
 
-./bin/hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
+./bin/hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1 --force
 
 # Start all services
 # Ensure logs directory exists for start-dev.sh
@@ -45,7 +45,6 @@ done
 
 if [ $COUNT -eq $MAX_RETRIES ]; then
     echo "Gateway failed to start"
-    ./scripts/stop-dev.sh
     exit 1
 fi
 
@@ -128,7 +127,6 @@ AMI_ID=$(echo "$IMPORT_LOG" | grep -o 'ami-[a-z0-9]\+')
 
 if [ -z "$AMI_ID" ]; then
     echo "Failed to capture AMI ID from import command"
-    ./scripts/stop-dev.sh
     exit 1
 fi
 echo "Captured AMI ID: $AMI_ID"
@@ -143,7 +141,6 @@ echo "Phase 5: Instance Lifecycle"
 INSTANCE_ID=$($AWS_EC2 run-instances --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" --key-name test-key-1 --query 'Instances[0].InstanceId' --output text)
 if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ]; then
     echo "Failed to launch instance"
-    ./scripts/stop-dev.sh
     exit 1
 fi
 echo "Launched Instance ID: $INSTANCE_ID"
@@ -178,7 +175,6 @@ while [ $COUNT -lt 60 ]; do
 
     if [ "$STATE" == "terminated" ]; then
         echo "❌ Instance terminated unexpectedly!"
-        ./scripts/stop-dev.sh
         exit 1
     fi
 
@@ -188,7 +184,6 @@ done
 
 if [ "$STATE" != "running" ]; then
     echo "Instance failed to reach running state"
-    ./scripts/stop-dev.sh
     exit 1
 fi
 
@@ -196,7 +191,6 @@ fi
 VOLUME_ID=$($AWS_EC2 describe-volumes --query 'Volumes[0].VolumeId' --output text)
 if [ -z "$VOLUME_ID" ] || [ "$VOLUME_ID" == "None" ]; then
     echo "Failed to find volume for instance $INSTANCE_ID"
-    ./scripts/stop-dev.sh
     exit 1
 fi
 echo "Volume ID: $VOLUME_ID"
@@ -217,7 +211,6 @@ done
 
 if [ "$STATE" != "stopped" ]; then
     echo "Instance failed to reach stopped state"
-    ./scripts/stop-dev.sh
     exit 1
 fi
 
@@ -237,7 +230,6 @@ done
 
 if [ "$STATE" != "running" ]; then
     echo "Instance failed to reach running state after restart"
-    ./scripts/stop-dev.sh
     exit 1
 fi
 
@@ -254,10 +246,6 @@ while [ $COUNT -lt 30 ]; do
     sleep 5
     COUNT=$((COUNT + 1))
 done
-
-# Phase 6: Cleanup (Inside Container)
-echo "Phase 6: Cleanup"
-./scripts/stop-dev.sh
 
 echo "E2E Test Completed Successfully"
 exit 0

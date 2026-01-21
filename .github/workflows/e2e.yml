@@ -33,3 +33,7 @@ jobs:
 
       - name: E2E Test
         run: ./tests/e2e/run-e2e.sh
+
+      - name: Stop Development Services
+        if: always()
+        run: ./scripts/stop-dev.sh
