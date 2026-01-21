@@ -23,13 +23,6 @@ jobs:
       - name: Clone Dependencies
         run: ./scripts/clone-deps.sh
 
-      - name: Debug Go paths
-        run: |
-          echo "GOPATH: $(go env GOPATH)"
-          echo "GOMODCACHE: $(go env GOMODCACHE)"
-          echo "GOCACHE: $(go env GOCACHE)"
-
-
       - name: Cache Go Modules
         uses: actions/cache@v4
         with:
