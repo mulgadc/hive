@@ -3,7 +3,6 @@ name: Build and Test Hive
 on:
   push:
     branches: [ main ]
-    paths: ["hive/**", ".github/workflows/**", "go.mod", "go.sum"]
   pull_request:
   workflow_dispatch:
 
