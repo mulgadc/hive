@@ -122,7 +122,7 @@ echo "Using image: $IMAGE_NAME"
 # Import a reliable Ubuntu image and capture the AMI ID from the output
 echo "Importing image $IMAGE_NAME..."
 echo "May appear stalled here, just takes a while to import..."
-IMPORT_LOG=$(./bin/hive admin images import --name "$IMAGE_NAME" --force)
+IMPORT_LOG=$(./bin/hive admin images import --name "$IMAGE_NAME" --force 2>/dev/null)
 AMI_ID=$(echo "$IMPORT_LOG" | grep -o 'ami-[a-z0-9]\+')
 
 if [ -z "$AMI_ID" ]; then
