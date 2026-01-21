@@ -49,10 +49,7 @@ if [ $COUNT -eq $MAX_RETRIES ]; then
 fi
 
 # Define common AWS CLI args
-# Use --endpoint-url and --no-verify-ssl to be safe in the container environment
-# Suppress InsecureRequestWarning from urllib3
-export PYTHONWARNINGS="ignore:Unverified HTTPS request"
-AWS_EC2="aws --endpoint-url https://localhost:9999 --no-verify-ssl ec2"
+AWS_EC2="aws --endpoint-url https://localhost:9999 ec2"
 
 # Phase 2: Discovery & Metadata
 echo "Phase 2: Discovery & Metadata"

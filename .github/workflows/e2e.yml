@@ -11,6 +11,12 @@ jobs:
     runs-on: self-hosted
 
     steps:
+      - name: Pre-cleanup
+        run: |
+          echo "Cleaning up previous run data..."
+          rm -rf ~/hive/* || true
+          find . -maxdepth 1 ! -name '.git' ! -name '.' -exec rm -rf {} + || true
+
       - name: Checkout Code
         uses: actions/checkout@v6
 
@@ -34,6 +40,8 @@ jobs:
       - name: E2E Test
         run: ./tests/e2e/run-e2e.sh
 
-      - name: Stop Development Services
+      - name: Cleanup and Stop Services
         if: always()
-        run: ./scripts/stop-dev.sh
+        run: |
+          ./scripts/stop-dev.sh || true
+          rm -rf ~/hive/* || true
