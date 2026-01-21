@@ -31,5 +31,11 @@ jobs:
       - name: Dev Setup
         run: ./scripts/dev-setup.sh
 
+      - name: Hive Admin Init
+        run: ./bin/hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
+
+      - name: Start Development Services
+        run: HIVE_SKIP_BUILD=true ./scripts/start-dev.sh
+
       - name: E2E Test
         run: ./tests/e2e/run-e2e.sh

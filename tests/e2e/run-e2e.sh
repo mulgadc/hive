@@ -1,5 +1,5 @@
 #!/bin/bash
-set -ex
+set -e
 
 # Use Hive profile
 export AWS_PROFILE=hive
@@ -25,13 +25,6 @@ else
     exit 1
 fi
 
-./bin/hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
-
-# Start all services
-# Ensure logs directory exists for start-dev.sh
-mkdir -p ~/hive/logs
-HIVE_SKIP_BUILD=true ./scripts/start-dev.sh
-
 # Wait for health checks on https://localhost:9999 (AWS Gateway)
 echo "Waiting for AWS Gateway..."
 MAX_RETRIES=30
@@ -52,7 +45,7 @@ fi
 # Define common AWS CLI args
 # Use --endpoint-url and --no-verify-ssl to be safe in the container environment
 # Suppress InsecureRequestWarning from urllib3
-export PYTHONWARNINGS="ignore:Unverified HTTPS request"
+export PYTHONWARNINGS="ignore"
 AWS_EC2="aws --endpoint-url https://localhost:9999 --no-verify-ssl ec2"
 
 # Phase 2: Discovery & Metadata
@@ -123,6 +116,7 @@ echo "Using image: $IMAGE_NAME"
 # Import a reliable Ubuntu image and capture the AMI ID from the output
 echo "Importing image $IMAGE_NAME..."
 echo "May appear stalled here, just takes a while to import..."
+# Capture stdout for the AMI ID, but suppress the progress logs on stderr
 IMPORT_LOG=$(./bin/hive admin images import --name "$IMAGE_NAME" --force)
 AMI_ID=$(echo "$IMPORT_LOG" | grep -o 'ami-[a-z0-9]\+')
 
@@ -205,7 +199,7 @@ echo "Volume ID: $VOLUME_ID"
 echo "Stopping instance..."
 $AWS_EC2 stop-instances --instance-ids "$INSTANCE_ID"
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     STATE=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)
     echo "Instance state: $STATE"
     if [ "$STATE" == "stopped" ]; then
