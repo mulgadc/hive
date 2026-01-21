@@ -20,28 +20,8 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v6
 
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          cache-dependency-path: "go.sum"
-          go-version-file: "go.mod"
-
-      - name: Download Dependencies
-        run: |
-          sudo apt-get update && sudo apt-get install -y make
-          make quickinstall
-
       - name: Clone Dependencies
         run: ./scripts/clone-deps.sh
 
-      - name: Dev Setup
-        run: ./scripts/dev-setup.sh
-
-      - name: E2E Test
-        run: ./tests/e2e/run-e2e.sh
-
-      - name: Cleanup and Stop Services
-        if: always()
-        run: |
-          ./scripts/stop-dev.sh || true
-          rm -rf ~/hive/* || true
+      - name: E2E Test (Docker)
+        run: make e2e-test
