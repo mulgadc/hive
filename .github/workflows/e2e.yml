@@ -21,7 +21,9 @@ jobs:
           go-version-file: "go.mod"
 
       - name: Download Dependencies
-        run: make quickinstall
+        run: |
+          sudo apt-get update && sudo apt-get install -y make
+          make quickinstall
 
       - name: Clone Dependencies
         run: ./scripts/clone-deps.sh
