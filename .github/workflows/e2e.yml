@@ -15,19 +15,20 @@ jobs:
 
     env:
       DEBIAN_FRONTEND: noninteractive
-      PATH: /usr/local/go/bin:$PATH
 
     steps:
-      - name: Install System Dependencies
-        run: |
-          apt-get update && apt-get install -y make sudo \
-            make install-system
+      - name: Bootstrap Make and Tar
+        run: apt-get update && apt-get install -y make tar
 
       - name: Checkout Code
         uses: actions/checkout@v6
 
+      - name: Install System Dependencies
+        run: make install-system
+
       - name: Install Go
-        run: make install-go
+        run: |
+          make install-go
 
       - name: Install AWS CLI
         run: make install-aws
