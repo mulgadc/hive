@@ -29,6 +29,7 @@ jobs:
       - name: Install Go
         run: |
           make install-go
+          echo "/usr/local/go/bin" >> $GITHUB_PATH
 
       - name: Install AWS CLI
         run: make install-aws
