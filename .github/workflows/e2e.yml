@@ -9,12 +9,6 @@ jobs:
   hive_e2e_test:
     name: Hive E2E Test
     runs-on: self-hosted
-    container:
-      image: ghcr.io/${{ github.repository }}-e2e:latest
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --privileged -v /dev/kvm:/dev/kvm
 
     steps:
       - name: Checkout Code
@@ -23,24 +17,16 @@ jobs:
       - name: Clone Dependencies
         run: ./scripts/clone-deps.sh
 
-      - name: Cache Go Modules
-        uses: actions/cache@v4
-        with:
-          path: ~/go/pkg/mod
-          key: go-mod-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            go-mod-
+      - name: Build and Run E2E Tests
+        run: |
+          # Build with BuildKit for cache mount support
+          DOCKER_BUILDKIT=1 docker build \
+            -t hive-e2e:latest \
+            -f hive/tests/e2e/Dockerfile.e2e \
+            .
 
-      - name: Cache Go Build
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/go-build
-          key: go-build-${{ github.sha }}
-          restore-keys: |
-            go-build-
-
-      - name: Build All Components
-        run: ./scripts/dev-setup.sh
-
-      - name: Run E2E Tests
-        run: ./tests/e2e/run-e2e.sh
+          # Run tests in container
+          docker run --privileged --rm \
+            -v /dev/kvm:/dev/kvm \
+            --name hive-e2e-test \
+            hive-e2e:latest

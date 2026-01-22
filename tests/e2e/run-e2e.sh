@@ -31,7 +31,7 @@ else
     exit 1
 fi
 
-./bin/hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1 --force
+./bin/hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
 
 # Start all services
 # Ensure logs directory exists for start-dev.sh
