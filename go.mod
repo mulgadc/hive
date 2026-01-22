@@ -110,7 +110,3 @@ tool (
 	golang.org/x/vuln/cmd/govulncheck
 	honnef.co/go/tools/cmd/staticcheck
 )
-
-replace github.com/mulgadc/viperblock => ../viperblock
-
-replace github.com/mulgadc/predastore => ../predastore
