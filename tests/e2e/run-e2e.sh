@@ -5,15 +5,10 @@ set -e
 cleanup() {
     EXIT_CODE=$?
     if [ $EXIT_CODE -ne 0 ]; then
-        echo ""
-        echo "=== All Service Logs ==="
-        for log in ~/hive/logs/*.log; do
-            if [ -f "$log" ]; then
-                echo ""
-                echo "--- $log ---"
-                cat "$log" 2>/dev/null
-            fi
-        done
+        echo "=== Hive Service Log ==="
+        if [ -f ~/hive/logs/hive.log ]; then
+            cat ~/hive/logs/hive.log 2>/dev/null
+        fi
     fi
     ./scripts/stop-dev.sh
 }
