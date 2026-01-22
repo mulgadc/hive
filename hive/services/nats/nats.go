@@ -79,6 +79,7 @@ func launchService(config *Config) (err error) {
 			Debug:      config.Debug,
 			LogFile:    config.LogFile,
 			JetStream:  config.JetStream,
+			StoreDir:   config.DataDir,
 		}
 
 		// Set defaults if not provided

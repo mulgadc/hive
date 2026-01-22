@@ -6,9 +6,17 @@ Notes for development environment installation.
 
 For running on Ubuntu 22.04, 24.04 and 25.10.
 
+### Quick Install
+
+```bash
+make quickinstall
+```
+
+### Manual Install
+
 ```bash
 sudo add-apt-repository universe
-sudo apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu-kvm libvirt-daemon-system libvirt-clients libvirt-dev make gcc
+sudo apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu-kvm libvirt-daemon-system libvirt-clients libvirt-dev make gcc unzip xz-utils file
 ```
 
 Ensure the Go toolkit is installed, recommended to install the latest directly from [https://go.dev/dl/](https://go.dev/dl/).
@@ -22,19 +30,17 @@ go version
 Hive provides AWS API/SDK layer functionality, which requires the AWS CLI tool to be installed to interface with the system.
 
 ```bash
-sudo apt install awscli
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
 ```
 
-Confirm awscli version > 2.0 is installed which is required by Hive. If your OS package manager installed an older version, e.g 1.X, install the latest version of the AWS CLI tool directly.
+Confirm awscli version > 2.0 is installed which is required by Hive.
 
 [https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 
 ```bash
 aws --version
-```
-
-```
-aws-cli/2.32.4
 ```
 
 ## Build

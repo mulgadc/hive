@@ -36,7 +36,7 @@ import (
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/mulgadc/viperblock/viperblock/backends/s3"
-	vutils "github.com/mulgadc/viperblock/viperblock/utils"
+	"github.com/mulgadc/viperblock/viperblock/v_utils"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
@@ -409,7 +409,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		VolumeConfig: manifest,
 	}
 
-	err = vutils.ImportDiskImage(&s3Config, &vbConfig, extractedImagePath)
+	err = v_utils.ImportDiskImage(&s3Config, &vbConfig, extractedImagePath)
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not import image to predastore: %v\n", err)

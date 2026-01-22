@@ -12,7 +12,7 @@ import (
 )
 
 // StopInstances sends stop commands to specified instances via NATS
-// Uses system_powerdown without stop_instance attribute to allow restart
+// Uses system_powerdown with stop_instance attribute to prevent auto-restart on daemon boot
 func StopInstances(input *ec2.StopInstancesInput, natsConn *nats.Conn) (*ec2.StopInstancesOutput, error) {
 	if len(input.InstanceIds) == 0 {
 		return nil, fmt.Errorf("no instance IDs provided")
@@ -30,7 +30,7 @@ func StopInstances(input *ec2.StopInstancesInput, natsConn *nats.Conn) (*ec2.Sto
 		instanceID := *instanceIDPtr
 
 		// Build the QMP command to stop the instance
-		// Note: system_powerdown without stop_instance allows restart
+		// Note: system_powerdown with stop_instance=true prevents auto-restart on daemon boot
 		command := qmp.Command{
 			ID: instanceID,
 			QMPCommand: qmp.QMPCommand{
@@ -38,7 +38,7 @@ func StopInstances(input *ec2.StopInstancesInput, natsConn *nats.Conn) (*ec2.Sto
 				Arguments: map[string]any{},
 			},
 			Attributes: qmp.Attributes{
-				StopInstance:      false, // Allow restart on daemon/node restart
+				StopInstance:      true, // Don't auto-restart on daemon boot
 				TerminateInstance: false,
 			},
 		}

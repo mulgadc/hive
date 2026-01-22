@@ -36,7 +36,7 @@ fi
 
 
 if [ -d "/mnt/ramdisk" ]; then
-    
+
     # Check if /mnt/ramdisk is mounted, if not mount it as tmpfs
     if ! mountpoint -q /mnt/ramdisk; then
         echo "💾 Mounting /mnt/ramdisk as tmpfs"
@@ -111,12 +111,16 @@ check_service() {
     done
 
     echo "   ⚠️  $name may not be responding on port $port (continuing anyway)"
-    
+
 }
 
 # Pre-flight, compile latest
-echo "1️✈️ Pre-flight, compiling latest..."
-make build
+if [ "$HIVE_SKIP_BUILD" != "true" ]; then
+    echo "1️✈️ Pre-flight, compiling latest..."
+    make build
+else
+    echo "1️✈️ Skipping build (HIVE_SKIP_BUILD=true)"
+fi
 
 # 1️⃣ Start NATS server
 echo ""

@@ -346,7 +346,7 @@ func (s *InstanceServiceImpl) cloneAMIToVolume(input *ec2.RunInstancesInput, siz
 
 		// Read 1MB
 		data, err := amiVb.ReadAt(block*uint64(destVb.BlockSize), uint64(destVb.BlockSize)*1024)
-		if err != nil && err != viperblock.ZeroBlock {
+		if err != nil && err != viperblock.ErrZeroBlock {
 			slog.Error("Failed to read block from AMI source", "err", err)
 			return errors.New(awserrors.ErrorServerInternal)
 		}

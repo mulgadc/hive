@@ -12,35 +12,6 @@ else
   GO_BUILD_MOD :=
 endif
 
-# Where to install Go tools
-GOBIN ?= $(shell go env GOBIN)
-ifeq ($(GOBIN),)
-  GOBIN := $(shell go env GOPATH)/bin
-endif
-
-# Where to install Go tools
-GOVULNCHECK := $(GOBIN)/govulncheck
-
-# Install govulncheck only if the binary is missing / out of date
-$(GOVULNCHECK):
-	go install golang.org/x/vuln/cmd/govulncheck@latest
-
-GOSECCHECK := $(GOBIN)/gosec
-
-# Install gosec only if the binary is missing / out of date
-$(GOSECCHECK):
-	go install github.com/securego/gosec/v2/cmd/gosec@latest
-
-GOSTATICCHECK := $(GOBIN)/staticcheck
-
-# Install govulncheck only if the binary is missing / out of date
-$(GOSTATICCHECK):
-	go install honnef.co/go/tools/cmd/staticcheck@latest
-
-# Install govulncheck only if the binary is missing / out of date
-$(GOVULNCHECK):
-	go install golang.org/x/vuln/cmd/govulncheck@latest
-
 build:
 	$(MAKE) go_build
 
@@ -53,10 +24,9 @@ go_run:
 	@echo "\n....Running $(GO_PROJECT_NAME)...."
 	$(GOPATH)/bin/$(GO_PROJECT_NAME)
 
-test: $(GOVULNCHECK)
+test:
 	@echo "\n....Running tests for $(GO_PROJECT_NAME)...."
 	LOG_IGNORE=1 go test -v -timeout 120s ./...
-	$(GOVULNCHECK) ./...
 
 bench:
 	@echo "\n....Running benchmarks for $(GO_PROJECT_NAME)...."
@@ -70,20 +40,49 @@ run:
 clean:
 	rm ./bin/$(GO_PROJECT_NAME)
 
-security: $(GOVULNCHECK) $(GOSECCHECK) $(GOSTATICCHECK)
+install-system:
+	@echo "\n....Installing system dependencies...."
+	apt-get update && apt-get install -y \
+		nbdkit nbdkit-plugin-dev pkg-config qemu-system-x86 qemu-utils qemu-kvm \
+		libvirt-daemon-system libvirt-clients libvirt-dev make gcc jq curl \
+		iproute2 netcat-openbsd openssh-client wget git unzip sudo xz-utils file
+
+install-go:
+	@echo "\n....Installing Go 1.25.5...."
+	@if [ ! -d "/usr/local/go" ]; then \
+		curl -L https://go.dev/dl/go1.25.5.linux-amd64.tar.gz | tar -C /usr/local -xz; \
+	else \
+		echo "Go already installed in /usr/local/go"; \
+	fi
+	@echo "Go version: $$(go version)"
+
+install-aws:
+	@echo "\n....Installing AWS CLI v2...."
+	@if ! command -v aws >/dev/null 2>&1; then \
+		curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"; \
+		unzip -o awscliv2.zip; \
+		./aws/install; \
+		rm -rf awscliv2.zip aws/; \
+	else \
+		echo "AWS CLI already installed"; \
+	fi
+
+quickinstall: install-system install-go install-aws
+	@echo "\n✅ Quickinstall complete. Please ensure /usr/local/go/bin is in your PATH."
+
+security:
 	@echo "\n....Running security checks for $(GO_PROJECT_NAME)...."
 
-	$(GOVULNCHECK) ./... > tests/govulncheck-report.txt || true
+	go tool govulncheck ./... > tests/govulncheck-report.txt || true
 	@echo "Govulncheck report saved to tests/govulncheck-report.txt"
 
-	$(GOSECCHECK) ./... > tests/gosec-report.txt || true
+	go tool gosec ./... > tests/gosec-report.txt || true
 	@echo "Gosec report saved to tests/gosec-report.txt"
 
-	# default config + disable dep warning since we are using aws sdk v1
-	$(GOSTATICCHECK) -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./...  > tests/staticcheck-report.txt || true
+	go tool staticcheck -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./...  > tests/staticcheck-report.txt || true
 	@echo "Staticcheck report saved to tests/staticcheck-report.txt"
 
 	go vet ./... 2>&1 | tee tests/govet-report.txt || true
 	@echo "Go vet report saved to tests/govet-report.txt"
 
-.PHONY: go_build go_run build run test clean
+.PHONY: build go_build go_run test bench run clean install-system install-go install-aws quickinstall security

@@ -11,6 +11,7 @@ import (
 	gateway_ec2_instance "github.com/mulgadc/hive/hive/gateway/ec2/instance"
 	gateway_ec2_key "github.com/mulgadc/hive/hive/gateway/ec2/key"
 	gateway_ec2_regions "github.com/mulgadc/hive/hive/gateway/ec2/regions"
+	gateway_ec2_volume "github.com/mulgadc/hive/hive/gateway/ec2/volume"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
@@ -301,6 +302,29 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 		if err != nil {
 			return errors.New("failed to marshal response to XML")
 		}
+
+	case "DescribeVolumes":
+		var input = &ec2.DescribeVolumesInput{}
+		err = awsec2query.QueryParamsToStruct(queryArgs, input)
+
+		if err != nil {
+			return err
+		}
+
+		output, err := gateway_ec2_volume.DescribeVolumes(input, gw.NATSConn)
+
+		if err != nil {
+			return err
+		}
+
+		// Convert to XML
+		payload := utils.GenerateXMLPayload("DescribeVolumesResponse", output)
+		xmlOutput, err = utils.MarshalToXML(payload)
+
+		if err != nil {
+			return errors.New("failed to marshal response to XML")
+		}
+
 	default:
 		err = errors.New("InvalidAction")
 	}

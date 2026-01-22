@@ -242,7 +242,7 @@ func formatFingerprint(hash []byte, algorithm string) string {
 // generateKeyPairID generates a unique key pair ID (similar to AWS key-xxxxx format)
 func generateKeyPairID() string {
 	hash := sha1.New() //#nosec G401 - need sha1 for AWS compatibility
-	hash.Write([]byte(fmt.Sprintf("%d", time.Now().UnixNano())))
+	hash.Write(fmt.Appendf(nil, "%d", time.Now().UnixNano()))
 	return fmt.Sprintf("%x", hash.Sum(nil))[:16]
 }
 

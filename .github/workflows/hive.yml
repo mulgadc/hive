@@ -3,23 +3,23 @@ name: Build and Test Hive
 on:
   push:
     branches: [ main ]
-    paths: ["hive/**", ".github/workflows/**", "go.mod", "go.sum"]
   pull_request:
   workflow_dispatch:
 
 jobs:
   hive_build_and_test:
-    runs-on: ubuntu-latest
+    name: Hive Build and Test
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
-          go-version-file: "go.mod"
           cache-dependency-path: "go.sum"
+          go-version-file: "go.mod"
 
       - name: Run Tests
         run: LOG_IGNORE=1 go test -v -timeout 120s ./...
@@ -28,18 +28,13 @@ jobs:
         run: go vet ./...
 
       - name: Static Check
-        uses: dominikh/staticcheck-action@v1
-        with:
-          version: 2025.1.1
-          install-go: false
-          checks: "all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005"
+        run: go tool staticcheck -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./...
 
       - name: Go Vulnerability Check
-        uses: golang/govulncheck-action@v1
-        with:
-          repo-checkout: false
+        run: go tool govulncheck ./...
 
       # - name: Gosec Security Scanner
-      #   run: |
-      #     go install github.com/securego/gosec/v2/cmd/gosec@latest
-      #     gosec -exclude-generated ./...
+      #   run: go tool gosec -exclude-generated ./...
+
+      - name: Build
+        run: make go_build

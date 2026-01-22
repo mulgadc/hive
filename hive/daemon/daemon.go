@@ -30,6 +30,7 @@ import (
 	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
 	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
+	handlers_ec2_volume "github.com/mulgadc/hive/hive/handlers/ec2/volume"
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/hive/hive/vm"
@@ -76,6 +77,7 @@ type Daemon struct {
 	instanceService *handlers_ec2_instance.InstanceServiceImpl
 	keyService      *handlers_ec2_key.KeyServiceImpl
 	imageService    *handlers_ec2_image.ImageServiceImpl
+	volumeService   *handlers_ec2_volume.VolumeServiceImpl
 	ctx             context.Context
 	cancel          context.CancelFunc
 	shutdownWg      sync.WaitGroup
@@ -90,6 +92,9 @@ type Daemon struct {
 	clusterApp *fiber.App
 	startTime  time.Time
 	configPath string
+
+	// JetStream manager for KV state storage (nil if JetStream disabled)
+	jsManager *JetStreamManager
 
 	mu sync.Mutex
 }
@@ -403,8 +408,19 @@ func (d *Daemon) Start() error {
 
 	log.Printf("Connected to NATS server at %s", d.config.NATS.Host)
 
-	// Load existing state for VMs
-	// Load state from disk
+	// Initialize JetStream for KV state storage (falls back to disk if unavailable)
+	d.jsManager, err = NewJetStreamManager(d.natsConn)
+	if err != nil {
+		slog.Warn("Failed to init JetStream, falling back to file", "error", err)
+		d.jsManager = nil
+	} else if err := d.jsManager.InitKVBucket(); err != nil {
+		slog.Warn("Failed to init KV bucket, falling back to file", "error", err)
+		d.jsManager = nil
+	} else {
+		slog.Info("JetStream KV store initialized successfully")
+	}
+
+	// Load existing state for VMs from JetStream or disk
 	err = d.LoadState()
 	if err != nil {
 		slog.Warn("Failed to load state from disk, continuing with empty state", "error", err)
@@ -460,6 +476,9 @@ func (d *Daemon) Start() error {
 
 	// Create image service for handling EC2 AMI operations
 	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config)
+
+	// Create volume service for handling EC2 EBS volume operations
+	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config)
 
 	log.Printf("Subscribing to subject pattern: %s", "ec2.launch")
 
@@ -524,6 +543,15 @@ func (d *Daemon) Start() error {
 
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeImages: %w", err)
+	}
+
+	log.Printf("Subscribing to subject pattern: %s", "ec2.DescribeVolumes")
+
+	// Subscribe to EC2 DescribeVolumes with queue group
+	d.natsSubscriptions["ec2.DescribeVolumes"], err = d.natsConn.QueueSubscribe("ec2.DescribeVolumes", "hive-workers", d.handleEC2DescribeVolumes)
+
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeVolumes: %w", err)
 	}
 
 	log.Printf("Subscribing to subject pattern: %s", "ec2.DescribeInstances")
@@ -759,8 +787,20 @@ func (d *Daemon) ClusterManager() error {
 	return nil
 }
 
-// Write the state to disk
+// WriteState writes the instance state to JetStream KV store (if enabled) with disk fallback
 func (d *Daemon) WriteState() error {
+	if d.jsManager != nil {
+		if err := d.jsManager.WriteState(d.node, &d.Instances); err != nil {
+			slog.Error("JetStream write failed, falling back to disk", "error", err)
+			return d.writeStateToDisk()
+		}
+		return nil
+	}
+	return d.writeStateToDisk()
+}
+
+// writeStateToDisk writes the instance state to disk (original WriteState behavior)
+func (d *Daemon) writeStateToDisk() error {
 	d.Instances.Mu.Lock()
 	defer d.Instances.Mu.Unlock()
 
@@ -814,8 +854,37 @@ func (d *Daemon) InitaliseVMs() {
 	// Step 2: Loop through each instance and start it
 }
 
-// Load state from disk
+// LoadState loads the instance state from JetStream KV store (if enabled) with disk fallback
 func (d *Daemon) LoadState() error {
+	if d.jsManager != nil {
+		instances, err := d.jsManager.LoadState(d.node)
+		if err != nil {
+			slog.Warn("JetStream load failed, trying disk", "error", err)
+			return d.loadStateFromDisk()
+		}
+
+		// If JetStream returned empty state, check if disk has data to migrate
+		if len(instances.VMS) == 0 {
+			diskErr := d.loadStateFromDisk()
+			if diskErr == nil && len(d.Instances.VMS) > 0 {
+				slog.Info("Migrating state from disk to JetStream", "instances", len(d.Instances.VMS))
+				// Write existing disk state to JetStream for future use
+				if writeErr := d.jsManager.WriteState(d.node, &d.Instances); writeErr != nil {
+					slog.Warn("Failed to migrate state to JetStream", "error", writeErr)
+				}
+				return nil // Use the disk state we just loaded
+			}
+		}
+
+		// Copy only the VMS map, not the mutex
+		d.Instances.VMS = instances.VMS
+		return nil
+	}
+	return d.loadStateFromDisk()
+}
+
+// loadStateFromDisk loads the instance state from disk (original LoadState behavior)
+func (d *Daemon) loadStateFromDisk() error {
 	configPath := fmt.Sprintf("%s/%s", d.config.BaseDir, "instances.json")
 	jsonData, err := os.ReadFile(configPath)
 	if err != nil {
@@ -1038,6 +1107,34 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 			return
 		}
 
+	}
+
+	// If a stop command, clean up resources but keep instance state
+	if command.Attributes.StopInstance && command.QMPCommand.Execute == "system_powerdown" {
+		slog.Info("Stopping instance", "id", command.ID)
+
+		// Update status to stopping
+		d.Instances.Mu.Lock()
+		instance.Status = "stopping"
+		d.Instances.Mu.Unlock()
+
+		// Stop the instance (keep volumes)
+		stopInstance := make(map[string]*vm.VM)
+		stopInstance[instance.ID] = instance
+		err = d.stopInstance(stopInstance, false)
+
+		if err != nil {
+			slog.Error("Failed to stop instance", "err", err)
+			return
+		}
+
+		// Update status to stopped
+		d.Instances.Mu.Lock()
+		instance.Status = "stopped"
+		instance.Attributes = command.Attributes
+		d.Instances.Mu.Unlock()
+
+		slog.Info("Instance stopped", "id", command.ID)
 	}
 
 	// If a terminate command, clean up resources
@@ -1406,6 +1503,12 @@ func (d *Daemon) setupShutdown() {
 
 		}
 
+		// Write state to JetStream before closing NATS connection
+		err := d.WriteState()
+		if err != nil {
+			slog.Error("Failed to write state", "err", err)
+		}
+
 		// Close NATS connection
 		d.natsConn.Close()
 
@@ -1415,12 +1518,6 @@ func (d *Daemon) setupShutdown() {
 			if err := d.clusterApp.Shutdown(); err != nil {
 				log.Printf("Error shutting down cluster manager: %v", err)
 			}
-		}
-
-		// Write the state to disk
-		err := d.WriteState()
-		if err != nil {
-			slog.Error("Failed to write state to disk", "err", err)
 		}
 
 		// Wait for any ongoing operations to complete
@@ -2093,6 +2190,48 @@ func (d *Daemon) handleEC2DescribeImages(msg *nats.Msg) {
 	msg.Respond(jsonResponse)
 
 	slog.Info("handleEC2DescribeImages completed", "count", len(output.Images))
+}
+
+// handleEC2DescribeVolumes processes incoming EC2 DescribeVolumes requests
+func (d *Daemon) handleEC2DescribeVolumes(msg *nats.Msg) {
+	log.Printf("Received message on subject: %s", msg.Subject)
+	log.Printf("Message data: %s", string(msg.Data))
+
+	// Initialize describeVolumesInput before unmarshaling into it
+	describeVolumesInput := &ec2.DescribeVolumesInput{}
+	var errResp []byte
+
+	errResp = utils.UnmarshalJsonPayload(describeVolumesInput, msg.Data)
+
+	if errResp != nil {
+		msg.Respond(errResp)
+		slog.Error("Request does not match DescribeVolumesInput")
+		return
+	}
+
+	slog.Info("Processing DescribeVolumes request")
+
+	// Delegate to volume service for business logic (S3 listing)
+	output, err := d.volumeService.DescribeVolumes(describeVolumesInput)
+
+	if err != nil {
+		slog.Error("handleEC2DescribeVolumes service.DescribeVolumes failed", "err", err)
+		errResp = utils.GenerateErrorPayload(err.Error())
+		msg.Respond(errResp)
+		return
+	}
+
+	// Respond to NATS with DescribeVolumesOutput
+	jsonResponse, err := json.Marshal(output)
+	if err != nil {
+		slog.Error("handleEC2DescribeVolumes failed to marshal output", "err", err)
+		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+		msg.Respond(errResp)
+		return
+	}
+	msg.Respond(jsonResponse)
+
+	slog.Info("handleEC2DescribeVolumes completed", "count", len(output.Volumes))
 }
 
 // handleEC2DescribeInstanceTypes processes incoming EC2 DescribeInstanceTypes requests

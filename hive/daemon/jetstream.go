@@ -1,0 +1,140 @@
+package daemon
+
+import (
+	"encoding/json"
+	"errors"
+	"log/slog"
+
+	"github.com/mulgadc/hive/hive/vm"
+	"github.com/nats-io/nats.go"
+)
+
+const (
+	// InstanceStateBucket is the name of the KV bucket for storing instance state
+	InstanceStateBucket = "hive-instance-state"
+	// InstanceStatePrefix is the key prefix for instance state entries
+	InstanceStatePrefix = "node."
+)
+
+// JetStreamManager manages JetStream KV store operations for instance state
+type JetStreamManager struct {
+	js nats.JetStreamContext
+	kv nats.KeyValue
+}
+
+// NewJetStreamManager creates a new JetStreamManager from a NATS connection
+func NewJetStreamManager(nc *nats.Conn) (*JetStreamManager, error) {
+	js, err := nc.JetStream()
+	if err != nil {
+		return nil, err
+	}
+
+	return &JetStreamManager{
+		js: js,
+	}, nil
+}
+
+// InitKVBucket initializes the KV bucket, creating it if it doesn't exist
+func (m *JetStreamManager) InitKVBucket() error {
+	// Try to get the existing bucket first
+	kv, err := m.js.KeyValue(InstanceStateBucket)
+	if err != nil {
+		if errors.Is(err, nats.ErrBucketNotFound) {
+			// Bucket doesn't exist, create it
+			slog.Info("Creating JetStream KV bucket", "bucket", InstanceStateBucket)
+			kv, err = m.js.CreateKeyValue(&nats.KeyValueConfig{
+				Bucket:      InstanceStateBucket,
+				Description: "Hive instance state storage",
+				History:     1, // Only keep latest value
+			})
+			if err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+	} else {
+		slog.Info("Connected to existing JetStream KV bucket", "bucket", InstanceStateBucket)
+	}
+
+	m.kv = kv
+	return nil
+}
+
+// WriteState writes the instance state to the KV store for the given node
+func (m *JetStreamManager) WriteState(nodeID string, instances *vm.Instances) error {
+	if m.kv == nil {
+		return errors.New("KV bucket not initialized")
+	}
+
+	instances.Mu.Lock()
+	defer instances.Mu.Unlock()
+
+	// Create a struct without the mutex to avoid copying the lock
+	state := struct {
+		VMS map[string]*vm.VM `json:"vms"`
+	}{
+		VMS: instances.VMS,
+	}
+
+	jsonData, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+
+	key := InstanceStatePrefix + nodeID
+	_, err = m.kv.Put(key, jsonData)
+	if err != nil {
+		return err
+	}
+
+	slog.Debug("Wrote state to JetStream KV", "key", key, "instances", len(instances.VMS))
+	return nil
+}
+
+// LoadState loads the instance state from the KV store for the given node
+func (m *JetStreamManager) LoadState(nodeID string) (*vm.Instances, error) {
+	if m.kv == nil {
+		return nil, errors.New("KV bucket not initialized")
+	}
+
+	key := InstanceStatePrefix + nodeID
+	entry, err := m.kv.Get(key)
+	if err != nil {
+		if errors.Is(err, nats.ErrKeyNotFound) {
+			// Key doesn't exist, return empty state
+			slog.Debug("No existing state in JetStream KV, returning empty state", "key", key)
+			return &vm.Instances{VMS: make(map[string]*vm.VM)}, nil
+		}
+		return nil, err
+	}
+
+	var instances vm.Instances
+	if err := json.Unmarshal(entry.Value(), &instances); err != nil {
+		return nil, err
+	}
+
+	// Ensure the VMS map is initialized
+	if instances.VMS == nil {
+		instances.VMS = make(map[string]*vm.VM)
+	}
+
+	slog.Debug("Loaded state from JetStream KV", "key", key, "instances", len(instances.VMS))
+	return &instances, nil
+}
+
+// DeleteState removes the instance state from the KV store for the given node
+func (m *JetStreamManager) DeleteState(nodeID string) error {
+	if m.kv == nil {
+		return errors.New("KV bucket not initialized")
+	}
+
+	key := InstanceStatePrefix + nodeID
+	err := m.kv.Delete(key)
+	if err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
+		return err
+	}
+
+	slog.Debug("Deleted state from JetStream KV", "key", key)
+	return nil
+}
