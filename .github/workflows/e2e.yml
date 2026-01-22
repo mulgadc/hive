@@ -17,16 +17,25 @@ jobs:
       - name: Clone Dependencies
         run: ./scripts/clone-deps.sh
 
-      - name: Build and Run E2E Tests
+      - name: Cleanup Stale Containers
+        run: docker rm -f hive-e2e-test 2>/dev/null || true
+
+      - name: Build E2E Image
         run: |
-          # Build with BuildKit for cache mount support
-          DOCKER_BUILDKIT=1 docker build \
+          docker build \
             -t hive-e2e:latest \
             -f hive/tests/e2e/Dockerfile.e2e \
             .
 
-          # Run tests in container
+      - name: Run E2E Tests
+        run: |
           docker run --privileged --rm \
             -v /dev/kvm:/dev/kvm \
             --name hive-e2e-test \
             hive-e2e:latest
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f hive-e2e-test 2>/dev/null || true
+          docker image prune -f
