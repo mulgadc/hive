@@ -1,11 +1,8 @@
 #!/bin/bash
 set -e
 
-# In CI (container), skip cleanup - container destruction handles it
-# Locally, ensure services are stopped on exit
-if [ -z "$CI" ]; then
-    trap "./scripts/stop-dev.sh" EXIT
-fi
+# Ensure services are stopped on exit
+trap "./scripts/stop-dev.sh" EXIT
 
 # Use Hive profile
 export AWS_PROFILE=hive
