@@ -8,7 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/kdomanski/iso9660 v0.4.0
 	github.com/mulgadc/predastore v0.1.5
-	github.com/mulgadc/viperblock v0.1.4
+	github.com/mulgadc/viperblock v0.1.5
 	github.com/nats-io/nats-server/v2 v2.11.6
 	github.com/nats-io/nats.go v1.43.0
 	github.com/pelletier/go-toml/v2 v2.2.4

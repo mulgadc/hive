@@ -130,6 +130,8 @@ github.com/mulgadc/predastore v0.1.5 h1:7SySkQQ5MQ1NTcKcB14pCUIJipq0YVgCJZeKM6yt
 github.com/mulgadc/predastore v0.1.5/go.mod h1:BhMymRV3zMTu2S+5pJnNDDm5+AGakjhSc/PKX0q8Xfg=
 github.com/mulgadc/viperblock v0.1.4 h1:YnRHEC6XNbhnSk6S+ET3X7DTMRezdO3o1O3nO/R9Syg=
 github.com/mulgadc/viperblock v0.1.4/go.mod h1:JNooDHb6ZuPvNPWaf0gChlft/D8xs5jHJFln+P3B9lQ=
+github.com/mulgadc/viperblock v0.1.5 h1:vS7ImGApQvxKuU1+fJNmwOycduwr9fx/xyofxWYKPcI=
+github.com/mulgadc/viperblock v0.1.5/go.mod h1:JNooDHb6ZuPvNPWaf0gChlft/D8xs5jHJFln+P3B9lQ=
 github.com/nats-io/jwt/v2 v2.7.4 h1:jXFuDDxs/GQjGDZGhNgH4tXzSUK6WQi2rsj4xmsNOtI=
 github.com/nats-io/jwt/v2 v2.7.4/go.mod h1:me11pOkwObtcBNR8AiMrUbtVOUGkqYjMQZ6jnSdVUIA=
 github.com/nats-io/nats-server/v2 v2.11.6 h1:4VXRjbTUFKEB+7UoaKL3F5Y83xC7MxPoIONOnGgpkHw=
