@@ -93,6 +93,9 @@ type Daemon struct {
 	startTime  time.Time
 	configPath string
 
+	// JetStream manager for KV state storage (nil if JetStream disabled)
+	jsManager *JetStreamManager
+
 	mu sync.Mutex
 }
 
@@ -405,8 +408,19 @@ func (d *Daemon) Start() error {
 
 	log.Printf("Connected to NATS server at %s", d.config.NATS.Host)
 
-	// Load existing state for VMs
-	// Load state from disk
+	// Initialize JetStream for KV state storage (falls back to disk if unavailable)
+	d.jsManager, err = NewJetStreamManager(d.natsConn)
+	if err != nil {
+		slog.Warn("Failed to init JetStream, falling back to file", "error", err)
+		d.jsManager = nil
+	} else if err := d.jsManager.InitKVBucket(); err != nil {
+		slog.Warn("Failed to init KV bucket, falling back to file", "error", err)
+		d.jsManager = nil
+	} else {
+		slog.Info("JetStream KV store initialized successfully")
+	}
+
+	// Load existing state for VMs from JetStream or disk
 	err = d.LoadState()
 	if err != nil {
 		slog.Warn("Failed to load state from disk, continuing with empty state", "error", err)
@@ -773,8 +787,20 @@ func (d *Daemon) ClusterManager() error {
 	return nil
 }
 
-// Write the state to disk
+// WriteState writes the instance state to JetStream KV store (if enabled) with disk fallback
 func (d *Daemon) WriteState() error {
+	if d.jsManager != nil {
+		if err := d.jsManager.WriteState(d.node, &d.Instances); err != nil {
+			slog.Error("JetStream write failed, falling back to disk", "error", err)
+			return d.writeStateToDisk()
+		}
+		return nil
+	}
+	return d.writeStateToDisk()
+}
+
+// writeStateToDisk writes the instance state to disk (original WriteState behavior)
+func (d *Daemon) writeStateToDisk() error {
 	d.Instances.Mu.Lock()
 	defer d.Instances.Mu.Unlock()
 
@@ -828,8 +854,37 @@ func (d *Daemon) InitaliseVMs() {
 	// Step 2: Loop through each instance and start it
 }
 
-// Load state from disk
+// LoadState loads the instance state from JetStream KV store (if enabled) with disk fallback
 func (d *Daemon) LoadState() error {
+	if d.jsManager != nil {
+		instances, err := d.jsManager.LoadState(d.node)
+		if err != nil {
+			slog.Warn("JetStream load failed, trying disk", "error", err)
+			return d.loadStateFromDisk()
+		}
+
+		// If JetStream returned empty state, check if disk has data to migrate
+		if len(instances.VMS) == 0 {
+			diskErr := d.loadStateFromDisk()
+			if diskErr == nil && len(d.Instances.VMS) > 0 {
+				slog.Info("Migrating state from disk to JetStream", "instances", len(d.Instances.VMS))
+				// Write existing disk state to JetStream for future use
+				if writeErr := d.jsManager.WriteState(d.node, &d.Instances); writeErr != nil {
+					slog.Warn("Failed to migrate state to JetStream", "error", writeErr)
+				}
+				return nil // Use the disk state we just loaded
+			}
+		}
+
+		// Copy only the VMS map, not the mutex
+		d.Instances.VMS = instances.VMS
+		return nil
+	}
+	return d.loadStateFromDisk()
+}
+
+// loadStateFromDisk loads the instance state from disk (original LoadState behavior)
+func (d *Daemon) loadStateFromDisk() error {
 	configPath := fmt.Sprintf("%s/%s", d.config.BaseDir, "instances.json")
 	jsonData, err := os.ReadFile(configPath)
 	if err != nil {
@@ -1420,6 +1475,12 @@ func (d *Daemon) setupShutdown() {
 
 		}
 
+		// Write state to JetStream before closing NATS connection
+		err := d.WriteState()
+		if err != nil {
+			slog.Error("Failed to write state", "err", err)
+		}
+
 		// Close NATS connection
 		d.natsConn.Close()
 
@@ -1429,12 +1490,6 @@ func (d *Daemon) setupShutdown() {
 			if err := d.clusterApp.Shutdown(); err != nil {
 				log.Printf("Error shutting down cluster manager: %v", err)
 			}
-		}
-
-		// Write the state to disk
-		err := d.WriteState()
-		if err != nil {
-			slog.Error("Failed to write state to disk", "err", err)
 		}
 
 		// Wait for any ongoing operations to complete
