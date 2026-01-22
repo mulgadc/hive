@@ -13,9 +13,11 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v6
+        with:
+          path: hive
 
       - name: Clone Dependencies
-        run: ./scripts/clone-deps.sh
+        run: ./hive/scripts/clone-deps.sh
 
       - name: Cleanup Stale Containers
         run: docker rm -f hive-e2e-test 2>/dev/null || true
