@@ -2,7 +2,15 @@
 set -e
 
 # Ensure services are stopped on exit
-trap "./scripts/stop-dev.sh" EXIT
+cleanup() {
+      EXIT_CODE=$?
+      if [ $EXIT_CODE -ne 0 ]; then
+          echo "=== Viperblock Logs ==="
+          cat ~/hive/logs/viperblock.log 2>/dev/null || echo "No viperblock log found"
+      fi
+      ./scripts/stop-dev.sh
+  }
+trap cleanup EXIT
 
 # Use Hive profile
 export AWS_PROFILE=hive
