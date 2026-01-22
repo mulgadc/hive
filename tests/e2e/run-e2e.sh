@@ -5,9 +5,30 @@ set -e
 cleanup() {
     EXIT_CODE=$?
     if [ $EXIT_CODE -ne 0 ]; then
-        echo "=== Hive Service Log ==="
+        echo ""
+        echo "=== NATS Service Log ==="
+        if [ -f ~/hive/logs/nats.log ]; then
+            tail -100 ~/hive/logs/nats.log 2>/dev/null
+        fi
+        echo ""
+        echo "=== Predastore Service Log ==="
+        if [ -f ~/hive/logs/predastore.log ]; then
+            tail -100 ~/hive/logs/predastore.log 2>/dev/null
+        fi
+        echo ""
+        echo "=== Viperblock Service Log ==="
+        if [ -f ~/hive/logs/viperblock.log ]; then
+            tail -100 ~/hive/logs/viperblock.log 2>/dev/null
+        fi
+        echo ""
+        echo "=== Hive Daemon Log ==="
         if [ -f ~/hive/logs/hive.log ]; then
-            cat ~/hive/logs/hive.log 2>/dev/null
+            tail -200 ~/hive/logs/hive.log 2>/dev/null
+        fi
+        echo ""
+        echo "=== AWS Gateway Log ==="
+        if [ -f ~/hive/logs/awsgw.log ]; then
+            tail -200 ~/hive/logs/awsgw.log 2>/dev/null
         fi
     fi
     ./scripts/stop-dev.sh
@@ -149,114 +170,126 @@ $AWS_EC2 describe-images --image-ids "$AMI_ID" | jq -e ".Images[0] | select(.Ima
 # Phase 5: Instance Lifecycle
 echo "Phase 5: Instance Lifecycle"
 # Launch a VM (run-instances)
-# INSTANCE_ID=$($AWS_EC2 run-instances --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" --key-name test-key-1 --query 'Instances[0].InstanceId' --output text)
-# if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ]; then
-#     echo "Failed to launch instance"
-#     exit 1
-# fi
-# echo "Launched Instance ID: $INSTANCE_ID"
+echo "Running: aws ec2 run-instances --image-id $AMI_ID --instance-type $INSTANCE_TYPE --key-name test-key-1"
+# Capture full output for debugging
+set +e  # Temporarily disable exit on error to capture output
+RUN_OUTPUT=$($AWS_EC2 run-instances --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" --key-name test-key-1 2>&1)
+RUN_EXIT_CODE=$?
+set -e  # Re-enable exit on error
+echo "Run instances exit code: $RUN_EXIT_CODE"
+echo "Run instances output: $RUN_OUTPUT"
+if [ $RUN_EXIT_CODE -ne 0 ]; then
+    echo "❌ Failed to launch instance - AWS CLI returned error"
+    exit 1
+fi
+INSTANCE_ID=$(echo "$RUN_OUTPUT" | jq -r '.Instances[0].InstanceId')
+if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ] || [ "$INSTANCE_ID" == "null" ]; then
+    echo "Failed to launch instance - no InstanceId in response"
+    exit 1
+fi
+echo "Launched Instance ID: $INSTANCE_ID"
 
 # Poll until state is running (describe-instances)
-# echo "Polling for instance running state..."
-# COUNT=0
-# STATE="unknown"
-# while [ $COUNT -lt 60 ]; do
-#     # Capture full output to check if instance even exists in the response
-#     DESCRIBE_OUTPUT=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID") || {
-#         echo "⚠️  Gateway request failed, retrying... ($COUNT/60)"
-#         sleep 5
-#         COUNT=$((COUNT + 1))
-#         continue
-#     }
+echo "Polling for instance running state..."
+COUNT=0
+STATE="unknown"
+while [ $COUNT -lt 60 ]; do
+    # Capture full output to check if instance even exists in the response
+    DESCRIBE_OUTPUT=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID") || {
+        echo "⚠️  Gateway request failed, retrying... ($COUNT/60)"
+        sleep 5
+        COUNT=$((COUNT + 1))
+        continue
+    }
 
-#     if [ -z "$DESCRIBE_OUTPUT" ]; then
-#         echo "⚠️  Gateway returned empty response, retrying..."
-#         sleep 5
-#         COUNT=$((COUNT + 1))
-#         continue
-#     fi
+    if [ -z "$DESCRIBE_OUTPUT" ]; then
+        echo "⚠️  Gateway returned empty response, retrying..."
+        sleep 5
+        COUNT=$((COUNT + 1))
+        continue
+    fi
 
-#     # Extract state using jq
-#     STATE=$(echo "$DESCRIBE_OUTPUT" | jq -r '.Reservations[0].Instances[0].State.Name // "not-found"')
+    # Extract state using jq
+    STATE=$(echo "$DESCRIBE_OUTPUT" | jq -r '.Reservations[0].Instances[0].State.Name // "not-found"')
 
-#     echo "Instance state: $STATE"
-#     if [ "$STATE" == "running" ]; then
-#         break
-#     fi
+    echo "Instance state: $STATE"
+    if [ "$STATE" == "running" ]; then
+        break
+    fi
 
-#     if [ "$STATE" == "terminated" ]; then
-#         echo "❌ Instance terminated unexpectedly!"
-#         exit 1
-#     fi
+    if [ "$STATE" == "terminated" ]; then
+        echo "❌ Instance terminated unexpectedly!"
+        exit 1
+    fi
 
-#     sleep 5
-#     COUNT=$((COUNT + 1))
-# done
+    sleep 5
+    COUNT=$((COUNT + 1))
+done
 
-# if [ "$STATE" != "running" ]; then
-#     echo "Instance failed to reach running state"
-#     exit 1
-# fi
+if [ "$STATE" != "running" ]; then
+    echo "Instance failed to reach running state"
+    exit 1
+fi
 
-# # Verify root volume attached to the instance (describe-volumes)
-# VOLUME_ID=$($AWS_EC2 describe-volumes --query 'Volumes[0].VolumeId' --output text)
-# if [ -z "$VOLUME_ID" ] || [ "$VOLUME_ID" == "None" ]; then
-#     echo "Failed to find volume for instance $INSTANCE_ID"
-#     exit 1
-# fi
-# echo "Volume ID: $VOLUME_ID"
+# Verify root volume attached to the instance (describe-volumes)
+VOLUME_ID=$($AWS_EC2 describe-volumes --query 'Volumes[0].VolumeId' --output text)
+if [ -z "$VOLUME_ID" ] || [ "$VOLUME_ID" == "None" ]; then
+    echo "Failed to find volume for instance $INSTANCE_ID"
+    exit 1
+fi
+echo "Volume ID: $VOLUME_ID"
 
-# # Stop instance (stop-instances) and verify transition to stopped (describe-instances)
-# echo "Stopping instance..."
-# $AWS_EC2 stop-instances --instance-ids "$INSTANCE_ID"
-# COUNT=0
-# while [ $COUNT -lt 30 ]; do
-#     STATE=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)
-#     echo "Instance state: $STATE"
-#     if [ "$STATE" == "stopped" ]; then
-#         break
-#     fi
-#     sleep 5
-#     COUNT=$((COUNT + 1))
-# done
+# Stop instance (stop-instances) and verify transition to stopped (describe-instances)
+echo "Stopping instance..."
+$AWS_EC2 stop-instances --instance-ids "$INSTANCE_ID"
+COUNT=0
+while [ $COUNT -lt 30 ]; do
+    STATE=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)
+    echo "Instance state: $STATE"
+    if [ "$STATE" == "stopped" ]; then
+        break
+    fi
+    sleep 5
+    COUNT=$((COUNT + 1))
+done
 
-# if [ "$STATE" != "stopped" ]; then
-#     echo "Instance failed to reach stopped state"
-#     exit 1
-# fi
+if [ "$STATE" != "stopped" ]; then
+    echo "Instance failed to reach stopped state"
+    exit 1
+fi
 
-# # Start instance (start-instances) and verify transition back to running (describe-instances)
-# echo "Starting instance..."
-# $AWS_EC2 start-instances --instance-ids "$INSTANCE_ID"
-# COUNT=0
-# while [ $COUNT -lt 30 ]; do
-#     STATE=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)
-#     echo "Instance state: $STATE"
-#     if [ "$STATE" == "running" ]; then
-#         break
-#     fi
-#     sleep 5
-#     COUNT=$((COUNT + 1))
-# done
+# Start instance (start-instances) and verify transition back to running (describe-instances)
+echo "Starting instance..."
+$AWS_EC2 start-instances --instance-ids "$INSTANCE_ID"
+COUNT=0
+while [ $COUNT -lt 30 ]; do
+    STATE=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)
+    echo "Instance state: $STATE"
+    if [ "$STATE" == "running" ]; then
+        break
+    fi
+    sleep 5
+    COUNT=$((COUNT + 1))
+done
 
-# if [ "$STATE" != "running" ]; then
-#     echo "Instance failed to reach running state after restart"
-#     exit 1
-# fi
+if [ "$STATE" != "running" ]; then
+    echo "Instance failed to reach running state after restart"
+    exit 1
+fi
 
-# # Terminate instance (terminate-instances) and verify termination (describe-instances)
-# echo "Terminating instance..."
-# $AWS_EC2 terminate-instances --instance-ids "$INSTANCE_ID"
-# COUNT=0
-# while [ $COUNT -lt 30 ]; do
-#     STATE=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)
-#     echo "Instance state: $STATE"
-#     if [ "$STATE" == "terminated" ] || [ "$STATE" == "None" ]; then
-#         break
-#     fi
-#     sleep 5
-#     COUNT=$((COUNT + 1))
-# done
+# Terminate instance (terminate-instances) and verify termination (describe-instances)
+echo "Terminating instance..."
+$AWS_EC2 terminate-instances --instance-ids "$INSTANCE_ID"
+COUNT=0
+while [ $COUNT -lt 30 ]; do
+    STATE=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)
+    echo "Instance state: $STATE"
+    if [ "$STATE" == "terminated" ] || [ "$STATE" == "None" ]; then
+        break
+    fi
+    sleep 5
+    COUNT=$((COUNT + 1))
+done
 
 echo "E2E Test Completed Successfully"
 exit 0
