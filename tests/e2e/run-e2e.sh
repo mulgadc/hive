@@ -1,15 +1,22 @@
 #!/bin/bash
 set -e
 
-# Ensure services are stopped on exit
+# Ensure services are stopped on exit and print logs on failure
 cleanup() {
-      EXIT_CODE=$?
-      if [ $EXIT_CODE -ne 0 ]; then
-          echo "=== Viperblock Logs ==="
-          cat ~/hive/logs/viperblock.log 2>/dev/null || echo "No viperblock log found"
-      fi
-      ./scripts/stop-dev.sh
-  }
+    EXIT_CODE=$?
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo ""
+        echo "=== All Service Logs ==="
+        for log in ~/hive/logs/*.log; do
+            if [ -f "$log" ]; then
+                echo ""
+                echo "--- $log ---"
+                cat "$log" 2>/dev/null
+            fi
+        done
+    fi
+    ./scripts/stop-dev.sh
+}
 trap cleanup EXIT
 
 # Use Hive profile
@@ -207,7 +214,7 @@ echo "Volume ID: $VOLUME_ID"
 echo "Stopping instance..."
 $AWS_EC2 stop-instances --instance-ids "$INSTANCE_ID"
 COUNT=0
-while [ $COUNT -lt 60 ]; do
+while [ $COUNT -lt 30 ]; do
     STATE=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)
     echo "Instance state: $STATE"
     if [ "$STATE" == "stopped" ]; then
