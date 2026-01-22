@@ -63,7 +63,7 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 		}
 
 		// Convert to XML
-		payload := utils.GenerateXMLPayload("RunInstanceResponse", output)
+		payload := utils.GenerateXMLPayload("RunInstancesResponse", output)
 		xmlOutput, err = utils.MarshalToXML(payload)
 
 		if err != nil {

@@ -5,9 +5,30 @@ set -e
 cleanup() {
     EXIT_CODE=$?
     if [ $EXIT_CODE -ne 0 ]; then
-        echo "=== Hive Service Log ==="
+        echo ""
+        echo "=== NATS Service Log ==="
+        if [ -f ~/hive/logs/nats.log ]; then
+            tail -100 ~/hive/logs/nats.log 2>/dev/null
+        fi
+        echo ""
+        echo "=== Predastore Service Log ==="
+        if [ -f ~/hive/logs/predastore.log ]; then
+            tail -100 ~/hive/logs/predastore.log 2>/dev/null
+        fi
+        echo ""
+        echo "=== Viperblock Service Log ==="
+        if [ -f ~/hive/logs/viperblock.log ]; then
+            tail -100 ~/hive/logs/viperblock.log 2>/dev/null
+        fi
+        echo ""
+        echo "=== Hive Daemon Log ==="
         if [ -f ~/hive/logs/hive.log ]; then
-            cat ~/hive/logs/hive.log 2>/dev/null
+            tail -200 ~/hive/logs/hive.log 2>/dev/null
+        fi
+        echo ""
+        echo "=== AWS Gateway Log ==="
+        if [ -f ~/hive/logs/awsgw.log ]; then
+            tail -200 ~/hive/logs/awsgw.log 2>/dev/null
         fi
     fi
     ./scripts/stop-dev.sh
@@ -149,9 +170,21 @@ $AWS_EC2 describe-images --image-ids "$AMI_ID" | jq -e ".Images[0] | select(.Ima
 # Phase 5: Instance Lifecycle
 echo "Phase 5: Instance Lifecycle"
 # Launch a VM (run-instances)
-INSTANCE_ID=$($AWS_EC2 run-instances --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" --key-name test-key-1 --query 'Instances[0].InstanceId' --output text)
-if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ]; then
-    echo "Failed to launch instance"
+echo "Running: aws ec2 run-instances --image-id $AMI_ID --instance-type $INSTANCE_TYPE --key-name test-key-1"
+# Capture full output for debugging
+set +e  # Temporarily disable exit on error to capture output
+RUN_OUTPUT=$($AWS_EC2 run-instances --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" --key-name test-key-1 2>&1)
+RUN_EXIT_CODE=$?
+set -e  # Re-enable exit on error
+echo "Run instances exit code: $RUN_EXIT_CODE"
+echo "Run instances output: $RUN_OUTPUT"
+if [ $RUN_EXIT_CODE -ne 0 ]; then
+    echo "❌ Failed to launch instance - AWS CLI returned error"
+    exit 1
+fi
+INSTANCE_ID=$(echo "$RUN_OUTPUT" | jq -r '.Instances[0].InstanceId')
+if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ] || [ "$INSTANCE_ID" == "null" ]; then
+    echo "Failed to launch instance - no InstanceId in response"
     exit 1
 fi
 echo "Launched Instance ID: $INSTANCE_ID"
