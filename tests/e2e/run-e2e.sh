@@ -189,7 +189,7 @@ if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ] || [ "$INSTANCE_ID" == 
 fi
 echo "Launched Instance ID: $INSTANCE_ID"
 
-Poll until state is running (describe-instances)
+# Poll until state is running (describe-instances)
 echo "Polling for instance running state..."
 COUNT=0
 STATE="unknown"
