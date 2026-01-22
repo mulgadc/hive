@@ -1109,6 +1109,34 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 
 	}
 
+	// If a stop command, clean up resources but keep instance state
+	if command.Attributes.StopInstance && command.QMPCommand.Execute == "system_powerdown" {
+		slog.Info("Stopping instance", "id", command.ID)
+
+		// Update status to stopping
+		d.Instances.Mu.Lock()
+		instance.Status = "stopping"
+		d.Instances.Mu.Unlock()
+
+		// Stop the instance (keep volumes)
+		stopInstance := make(map[string]*vm.VM)
+		stopInstance[instance.ID] = instance
+		err = d.stopInstance(stopInstance, false)
+
+		if err != nil {
+			slog.Error("Failed to stop instance", "err", err)
+			return
+		}
+
+		// Update status to stopped
+		d.Instances.Mu.Lock()
+		instance.Status = "stopped"
+		instance.Attributes = command.Attributes
+		d.Instances.Mu.Unlock()
+
+		slog.Info("Instance stopped", "id", command.ID)
+	}
+
 	// If a terminate command, clean up resources
 	if command.Attributes.TerminateInstance {
 		slog.Info("Terminating instance", "id", command.ID)
