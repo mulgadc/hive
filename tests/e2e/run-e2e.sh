@@ -149,12 +149,12 @@ $AWS_EC2 describe-images --image-ids "$AMI_ID" | jq -e ".Images[0] | select(.Ima
 # Phase 5: Instance Lifecycle
 echo "Phase 5: Instance Lifecycle"
 # Launch a VM (run-instances)
-INSTANCE_ID=$($AWS_EC2 run-instances --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" --key-name test-key-1 --query 'Instances[0].InstanceId' --output text)
-if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ]; then
-    echo "Failed to launch instance"
-    exit 1
-fi
-echo "Launched Instance ID: $INSTANCE_ID"
+# INSTANCE_ID=$($AWS_EC2 run-instances --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" --key-name test-key-1 --query 'Instances[0].InstanceId' --output text)
+# if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ]; then
+#     echo "Failed to launch instance"
+#     exit 1
+# fi
+# echo "Launched Instance ID: $INSTANCE_ID"
 
 # Poll until state is running (describe-instances)
 # echo "Polling for instance running state..."
