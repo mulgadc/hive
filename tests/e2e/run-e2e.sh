@@ -1,5 +1,18 @@
 #!/bin/bash
-set -ex
+set -e
+
+# Ensure services are stopped on exit and print logs on failure
+cleanup() {
+    EXIT_CODE=$?
+    if [ $EXIT_CODE -ne 0 ]; then
+        echo "=== Hive Service Log ==="
+        if [ -f ~/hive/logs/hive.log ]; then
+            cat ~/hive/logs/hive.log 2>/dev/null
+        fi
+    fi
+    ./scripts/stop-dev.sh
+}
+trap cleanup EXIT
 
 # Use Hive profile
 export AWS_PROFILE=hive
@@ -30,6 +43,7 @@ fi
 # Start all services
 # Ensure logs directory exists for start-dev.sh
 mkdir -p ~/hive/logs
+mkdir -p /mnt/ramdisk
 HIVE_SKIP_BUILD=true ./scripts/start-dev.sh
 
 # Wait for health checks on https://localhost:9999 (AWS Gateway)
@@ -45,15 +59,11 @@ done
 
 if [ $COUNT -eq $MAX_RETRIES ]; then
     echo "Gateway failed to start"
-    ./scripts/stop-dev.sh
     exit 1
 fi
 
 # Define common AWS CLI args
-# Use --endpoint-url and --no-verify-ssl to be safe in the container environment
-# Suppress InsecureRequestWarning from urllib3
-export PYTHONWARNINGS="ignore:Unverified HTTPS request"
-AWS_EC2="aws --endpoint-url https://localhost:9999 --no-verify-ssl ec2"
+AWS_EC2="aws --endpoint-url https://localhost:9999 ec2"
 
 # Phase 2: Discovery & Metadata
 echo "Phase 2: Discovery & Metadata"
@@ -66,8 +76,8 @@ echo "Discovering available instance types..."
 AVAILABLE_TYPES=$($AWS_EC2 describe-instance-types --query 'InstanceTypes[*].InstanceType' --output text)
 echo "Available instance types: $AVAILABLE_TYPES"
 
-# Pick the first one as our primary test type
-INSTANCE_TYPE=$(echo $AVAILABLE_TYPES | awk '{print $1}')
+# Pick the nano instance type for minimal resource usage in tests
+INSTANCE_TYPE=$(echo $AVAILABLE_TYPES | tr ' ' '\n' | grep -m1 'nano')
 if [ -z "$INSTANCE_TYPE" ] || [ "$INSTANCE_TYPE" == "None" ]; then
     echo "No instance types found!"
     exit 1
@@ -123,12 +133,11 @@ echo "Using image: $IMAGE_NAME"
 # Import a reliable Ubuntu image and capture the AMI ID from the output
 echo "Importing image $IMAGE_NAME..."
 echo "May appear stalled here, just takes a while to import..."
-IMPORT_LOG=$(./bin/hive admin images import --name "$IMAGE_NAME" --force)
+IMPORT_LOG=$(./bin/hive admin images import --name "$IMAGE_NAME" --force 2>/dev/null)
 AMI_ID=$(echo "$IMPORT_LOG" | grep -o 'ami-[a-z0-9]\+')
 
 if [ -z "$AMI_ID" ]; then
     echo "Failed to capture AMI ID from import command"
-    ./scripts/stop-dev.sh
     exit 1
 fi
 echo "Captured AMI ID: $AMI_ID"
@@ -138,17 +147,16 @@ echo "Verifying AMI availability..."
 $AWS_EC2 describe-images --image-ids "$AMI_ID" | jq -e ".Images[0] | select(.ImageId==\"$AMI_ID\")"
 
 # Phase 5: Instance Lifecycle
-# echo "Phase 5: Instance Lifecycle"
-# # Launch a VM (run-instances)
+echo "Phase 5: Instance Lifecycle"
+# Launch a VM (run-instances)
 # INSTANCE_ID=$($AWS_EC2 run-instances --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" --key-name test-key-1 --query 'Instances[0].InstanceId' --output text)
 # if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "None" ]; then
 #     echo "Failed to launch instance"
-#     ./scripts/stop-dev.sh
 #     exit 1
 # fi
 # echo "Launched Instance ID: $INSTANCE_ID"
 
-# # Poll until state is running (describe-instances)
+# Poll until state is running (describe-instances)
 # echo "Polling for instance running state..."
 # COUNT=0
 # STATE="unknown"
@@ -178,7 +186,6 @@ $AWS_EC2 describe-images --image-ids "$AMI_ID" | jq -e ".Images[0] | select(.Ima
 
 #     if [ "$STATE" == "terminated" ]; then
 #         echo "❌ Instance terminated unexpectedly!"
-#         ./scripts/stop-dev.sh
 #         exit 1
 #     fi
 
@@ -188,7 +195,6 @@ $AWS_EC2 describe-images --image-ids "$AMI_ID" | jq -e ".Images[0] | select(.Ima
 
 # if [ "$STATE" != "running" ]; then
 #     echo "Instance failed to reach running state"
-#     ./scripts/stop-dev.sh
 #     exit 1
 # fi
 
@@ -196,7 +202,6 @@ $AWS_EC2 describe-images --image-ids "$AMI_ID" | jq -e ".Images[0] | select(.Ima
 # VOLUME_ID=$($AWS_EC2 describe-volumes --query 'Volumes[0].VolumeId' --output text)
 # if [ -z "$VOLUME_ID" ] || [ "$VOLUME_ID" == "None" ]; then
 #     echo "Failed to find volume for instance $INSTANCE_ID"
-#     ./scripts/stop-dev.sh
 #     exit 1
 # fi
 # echo "Volume ID: $VOLUME_ID"
@@ -217,7 +222,6 @@ $AWS_EC2 describe-images --image-ids "$AMI_ID" | jq -e ".Images[0] | select(.Ima
 
 # if [ "$STATE" != "stopped" ]; then
 #     echo "Instance failed to reach stopped state"
-#     ./scripts/stop-dev.sh
 #     exit 1
 # fi
 
@@ -237,7 +241,6 @@ $AWS_EC2 describe-images --image-ids "$AMI_ID" | jq -e ".Images[0] | select(.Ima
 
 # if [ "$STATE" != "running" ]; then
 #     echo "Instance failed to reach running state after restart"
-#     ./scripts/stop-dev.sh
 #     exit 1
 # fi
 
@@ -254,10 +257,6 @@ $AWS_EC2 describe-images --image-ids "$AMI_ID" | jq -e ".Images[0] | select(.Ima
 #     sleep 5
 #     COUNT=$((COUNT + 1))
 # done
-
-# Phase 6: Cleanup (Inside Container)
-echo "Phase 6: Cleanup"
-./scripts/stop-dev.sh
 
 echo "E2E Test Completed Successfully"
 exit 0

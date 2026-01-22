@@ -1,19 +1,36 @@
-# syntax=docker/dockerfile:1
-# This image assumes hive-base:latest exists locally or in a registry
-FROM hive-base:latest
+FROM ubuntu:24.04
 
-# Set up working directory structure to match INSTALL.md
+# Avoid prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install make first so we can use the Makefile
+RUN apt-get update && apt-get install -y make sudo && rm -rf /var/lib/apt/lists/*
+
+# Set up working directory for Makefile targets
+WORKDIR /tmp/hive-setup
+
+# Copy only the Makefile for dependency installation
+COPY hive/Makefile .
+
+# Install system dependencies in separate layers for better caching
+RUN make install-system
+RUN make install-go
+RUN make install-aws
+
+# Ensure Go is in the PATH
+ENV PATH="/usr/local/go/bin:/root/go/bin:${PATH}"
+
+# Set up working directory structure to match development layout
 WORKDIR /root/Development/mulga
 
-# 1. Pre-copy dependency manifests
-# We copy these first to create a dedicated dependency layer
-COPY hive/go.mod hive/go.sum hive/go.work hive/go.work.sum ./hive/
+# 1. Pre-copy dependency manifests for cache layer
+COPY hive/go.mod hive/go.sum ./hive/
 COPY viperblock/go.mod viperblock/go.sum ./viperblock/
 COPY viperblock/nbd/go.mod viperblock/nbd/go.sum ./viperblock/nbd/
 COPY viperblock/nbd/libguestfs.org/nbdkit/go.mod ./viperblock/nbd/libguestfs.org/nbdkit/
 COPY predastore/go.mod predastore/go.sum ./predastore/
 
-# 2. Download dependencies (Using Cache Mount)
+# 2. Download dependencies (using cache mount)
 RUN --mount=type=cache,target=/root/go/pkg/mod \
     (cd hive && go mod download) && \
     (cd viperblock && go mod download) && \
@@ -32,7 +49,7 @@ WORKDIR /root/Development/mulga/hive
 # Ensure scripts are executable
 RUN chmod +x ./scripts/*.sh ./tests/e2e/run-e2e.sh
 
-# 4. Build everything
+# 4. Build everything (using cache mounts)
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/root/go/pkg/mod \
     ./scripts/dev-setup.sh
