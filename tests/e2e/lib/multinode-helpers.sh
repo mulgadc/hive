@@ -271,30 +271,6 @@ dump_all_node_logs() {
     echo "=========================================="
 }
 
-# Disable JetStream in a NATS config file
-# JetStream clustering isn't implemented yet, so disable it for multi-node tests
-# Usage: disable_jetstream_in_config <config_dir>
-disable_jetstream_in_config() {
-    local config_dir="$1"
-    local nats_conf="$config_dir/nats/nats.conf"
-
-    if [ -f "$nats_conf" ]; then
-        echo "  Disabling JetStream in $nats_conf..."
-        # Remove the entire jetstream block (handles nested content)
-        # Use awk for reliable multi-line block removal
-        awk '
-            /^jetstream \{/ { in_block=1; brace_count=1; next }
-            in_block {
-                brace_count += gsub(/{/, "{")
-                brace_count -= gsub(/}/, "}")
-                if (brace_count <= 0) { in_block=0 }
-                next
-            }
-            { print }
-        ' "$nats_conf" > "${nats_conf}.tmp" && mv "${nats_conf}.tmp" "$nats_conf"
-    fi
-}
-
 # Initialize leader node (node1)
 # Usage: init_leader_node
 init_leader_node() {
@@ -313,8 +289,6 @@ init_leader_node() {
         --hive-dir "$HOME/node1/" \
         --config-dir "$HOME/node1/config/"
 
-    # Disable JetStream until multi-node JetStream is implemented
-    disable_jetstream_in_config "$HOME/node1/config"
 
     echo "Leader node initialized"
 }
@@ -343,10 +317,7 @@ join_follower_node() {
         --region ap-southeast-2 \
         --az "ap-southeast-2a"
 
-    # Disable JetStream until multi-node JetStream is implemented
-    disable_jetstream_in_config "$data_dir/config"
-
-    # Point predastore to node1 (only node1 runs predastore in multi-node test)
+    # Point predastore to node1 (only node1 runs predastore until multi-node predastore is implemented)
     sed -i "s|host = \"${node_ip}:8443\"|host = \"${NODE1_IP}:8443\"|" "$data_dir/config/hive.toml"
 
     echo "Node$node_num joined cluster"

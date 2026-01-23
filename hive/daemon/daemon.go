@@ -409,7 +409,7 @@ func (d *Daemon) Start() error {
 	log.Printf("Connected to NATS server at %s", d.config.NATS.Host)
 
 	// Initialize JetStream for KV state storage (falls back to disk if unavailable)
-	d.jsManager, err = NewJetStreamManager(d.natsConn)
+	d.jsManager, err = NewJetStreamManager(d.natsConn, len(d.clusterConfig.Nodes))
 	if err != nil {
 		slog.Warn("Failed to init JetStream, falling back to file", "error", err)
 		d.jsManager = nil
@@ -417,7 +417,7 @@ func (d *Daemon) Start() error {
 		slog.Warn("Failed to init KV bucket, falling back to file", "error", err)
 		d.jsManager = nil
 	} else {
-		slog.Info("JetStream KV store initialized successfully")
+		slog.Info("JetStream KV store initialized successfully", "replicas", len(d.clusterConfig.Nodes))
 	}
 
 	// Load existing state for VMs from JetStream or disk

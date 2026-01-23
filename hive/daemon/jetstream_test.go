@@ -60,7 +60,7 @@ func TestJetStreamManager_WriteAndLoadState(t *testing.T) {
 	defer nc.Close()
 
 	// Create JetStreamManager
-	jsm, err := NewJetStreamManager(nc)
+	jsm, err := NewJetStreamManager(nc, 1)
 	require.NoError(t, err, "Failed to create JetStreamManager")
 
 	// Initialize the KV bucket
@@ -112,7 +112,7 @@ func TestJetStreamManager_LoadState_KeyNotFound(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	jsm, err := NewJetStreamManager(nc)
+	jsm, err := NewJetStreamManager(nc, 1)
 	require.NoError(t, err)
 
 	err = jsm.InitKVBucket()
@@ -134,7 +134,7 @@ func TestJetStreamManager_BucketCreation(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	jsm, err := NewJetStreamManager(nc)
+	jsm, err := NewJetStreamManager(nc, 1)
 	require.NoError(t, err)
 
 	// InitKVBucket should create the bucket
@@ -154,7 +154,7 @@ func TestJetStreamManager_BucketReconnection(t *testing.T) {
 	nc1, err := nats.Connect(natsURL)
 	require.NoError(t, err)
 
-	jsm1, err := NewJetStreamManager(nc1)
+	jsm1, err := NewJetStreamManager(nc1, 1)
 	require.NoError(t, err)
 
 	err = jsm1.InitKVBucket()
@@ -179,7 +179,7 @@ func TestJetStreamManager_BucketReconnection(t *testing.T) {
 	require.NoError(t, err)
 	defer nc2.Close()
 
-	jsm2, err := NewJetStreamManager(nc2)
+	jsm2, err := NewJetStreamManager(nc2, 1)
 	require.NoError(t, err)
 
 	err = jsm2.InitKVBucket()
@@ -202,7 +202,7 @@ func TestJetStreamManager_DeleteState(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	jsm, err := NewJetStreamManager(nc)
+	jsm, err := NewJetStreamManager(nc, 1)
 	require.NoError(t, err)
 
 	err = jsm.InitKVBucket()
@@ -245,7 +245,7 @@ func TestJetStreamManager_DeleteState_NonExistent(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	jsm, err := NewJetStreamManager(nc)
+	jsm, err := NewJetStreamManager(nc, 1)
 	require.NoError(t, err)
 
 	err = jsm.InitKVBucket()
@@ -265,7 +265,7 @@ func TestJetStreamManager_WriteState_UpdateExisting(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	jsm, err := NewJetStreamManager(nc)
+	jsm, err := NewJetStreamManager(nc, 1)
 	require.NoError(t, err)
 
 	err = jsm.InitKVBucket()
@@ -318,7 +318,7 @@ func TestJetStreamManager_MultipleNodes(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	jsm, err := NewJetStreamManager(nc)
+	jsm, err := NewJetStreamManager(nc, 1)
 	require.NoError(t, err)
 
 	err = jsm.InitKVBucket()
@@ -371,7 +371,7 @@ func TestJetStreamManager_KVNotInitialized(t *testing.T) {
 	defer nc.Close()
 
 	// Create JetStreamManager but don't call InitKVBucket
-	jsm, err := NewJetStreamManager(nc)
+	jsm, err := NewJetStreamManager(nc, 1)
 	require.NoError(t, err)
 
 	testInstances := &vm.Instances{VMS: make(map[string]*vm.VM)}

@@ -26,18 +26,18 @@ jobs:
             -f hive/tests/e2e/Dockerfile.e2e \
             .
 
-  # hive_e2e_test:
-  #   name: Hive Single-Node E2E Test
-  #   runs-on: self-hosted
-  #   needs: build_e2e_image
+  hive_e2e_test:
+    name: Hive Single-Node E2E Test
+    runs-on: self-hosted
+    needs: build_e2e_image
 
-  #   steps:
-  #     - name: Run E2E Tests
-  #       run: |
-  #         docker run --privileged --rm \
-  #           -v /dev/kvm:/dev/kvm \
-  #           --name hive-e2e-test \
-  #           hive-e2e:latest
+    steps:
+      - name: Run E2E Tests
+        run: |
+          docker run --privileged --rm \
+            -v /dev/kvm:/dev/kvm \
+            --name hive-e2e-test \
+            hive-e2e:latest
 
   hive_multinode_e2e_test:
     name: Hive Multi-Node E2E Test
@@ -57,8 +57,7 @@ jobs:
   cleanup:
     name: Cleanup
     runs-on: self-hosted
-    #     needs: [hive_e2e_test, hive_multinode_e2e_test]
-    needs: [hive_multinode_e2e_test]
+    needs: [hive_e2e_test, hive_multinode_e2e_test]
     if: always()
 
     steps:
