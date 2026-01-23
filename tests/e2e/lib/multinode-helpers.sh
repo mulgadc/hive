@@ -262,20 +262,52 @@ dump_all_node_logs() {
     echo "=========================================="
 }
 
+# Disable JetStream in a NATS config file
+# JetStream clustering isn't implemented yet, so disable it for multi-node tests
+# Usage: disable_jetstream_in_config <config_dir>
+disable_jetstream_in_config() {
+    local config_dir="$1"
+    local nats_conf="$config_dir/nats/nats.conf"
+
+    if [ -f "$nats_conf" ]; then
+        echo "  Disabling JetStream in $nats_conf..."
+        # Remove the entire jetstream block (handles nested content)
+        # Use awk for reliable multi-line block removal
+        awk '
+            /^jetstream \{/ { in_block=1; brace_count=1; next }
+            in_block {
+                brace_count += gsub(/{/, "{")
+                brace_count -= gsub(/}/, "}")
+                if (brace_count <= 0) { in_block=0 }
+                next
+            }
+            { print }
+        ' "$nats_conf" > "${nats_conf}.tmp" && mv "${nats_conf}.tmp" "$nats_conf"
+    fi
+}
+
 # Initialize leader node (node1)
 # Usage: init_leader_node
 init_leader_node() {
     echo "Initializing leader node (node1)..."
 
+    # Pre-configure routes for all expected cluster nodes
+    # NATS will retry connections to nodes that aren't up yet
+    local cluster_routes="${NODE2_IP}:${NATS_CLUSTER_PORT},${NODE3_IP}:${NATS_CLUSTER_PORT}"
+
     ./bin/hive admin init \
         --node node1 \
         --bind "${NODE1_IP}" \
         --cluster-bind "${NODE1_IP}" \
+        --cluster-routes "${cluster_routes}" \
         --region ap-southeast-2 \
         --az ap-southeast-2a \
         --nodes 3 \
         --hive-dir "$HOME/node1/" \
         --config-dir "$HOME/node1/config/"
+
+    # Disable JetStream until multi-node JetStream is implemented
+    disable_jetstream_in_config "$HOME/node1/config"
 
     echo "Leader node initialized"
 }
@@ -289,8 +321,16 @@ join_follower_node() {
 
     echo "Joining node$node_num ($node_ip) to cluster..."
 
-    # Build cluster routes (all other nodes)
-    local routes="${NODE1_IP}:${NATS_CLUSTER_PORT}"
+    # Build cluster routes to all OTHER nodes (not self)
+    local routes=""
+    for i in 1 2 3; do
+        if [ "$i" -ne "$node_num" ]; then
+            if [ -n "$routes" ]; then
+                routes="${routes},"
+            fi
+            routes="${routes}${SIMULATED_NETWORK}.$i:${NATS_CLUSTER_PORT}"
+        fi
+    done
 
     ./bin/hive admin join \
         --node "node$node_num" \
@@ -302,6 +342,9 @@ join_follower_node() {
         --config-dir "$data_dir/config/" \
         --region ap-southeast-2 \
         --az "ap-southeast-2a"
+
+    # Disable JetStream until multi-node JetStream is implemented
+    disable_jetstream_in_config "$data_dir/config"
 
     echo "Node$node_num joined cluster"
 }
