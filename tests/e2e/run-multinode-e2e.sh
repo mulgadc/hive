@@ -36,7 +36,12 @@ trap cleanup EXIT
 export AWS_PROFILE=hive
 
 # Suppress urllib3 InsecureRequestWarning from AWS CLI (we use --no-verify-ssl)
-export PYTHONWARNINGS="ignore:Unverified HTTPS request"
+export PYTHONWARNINGS="ignore::urllib3.exceptions.InsecureRequestWarning"
+
+# Helper to filter AWS CLI output (removes Python warnings that break jq)
+aws_json() {
+    "$@" 2>&1 | grep -v "^urllib3\|^InsecureRequestWarning\|certificate verification"
+}
 
 echo "========================================"
 echo "Multi-Node E2E Test Suite"
@@ -136,7 +141,7 @@ AWS_EC2="aws --endpoint-url https://${NODE1_IP}:${AWSGW_PORT} --no-verify-ssl ec
 # Verify gateway responds
 echo ""
 echo "Testing gateway connectivity..."
-$AWS_EC2 describe-regions | jq -e '.Regions | length > 0' || {
+aws_json $AWS_EC2 describe-regions | jq -e '.Regions | length > 0' || {
     echo "ERROR: Gateway not responding correctly"
     exit 1
 }
@@ -149,7 +154,7 @@ echo "========================================"
 
 # Discover instance types
 echo "Discovering available instance types..."
-AVAILABLE_TYPES=$($AWS_EC2 describe-instance-types --query 'InstanceTypes[*].InstanceType' --output text)
+AVAILABLE_TYPES=$(aws_json $AWS_EC2 describe-instance-types --query 'InstanceTypes[*].InstanceType' --output text)
 echo "  Available: $AVAILABLE_TYPES"
 
 # Pick nano instance type
@@ -161,14 +166,14 @@ fi
 echo "  Selected: $INSTANCE_TYPE"
 
 # Get architecture
-ARCH=$($AWS_EC2 describe-instance-types --instance-types "$INSTANCE_TYPE" \
+ARCH=$(aws_json $AWS_EC2 describe-instance-types --instance-types "$INSTANCE_TYPE" \
     --query 'InstanceTypes[0].ProcessorInfo.SupportedArchitectures[0]' --output text)
 echo "  Architecture: $ARCH"
 
 # Create test key
 echo ""
 echo "Creating test key pair..."
-KEY_MATERIAL=$($AWS_EC2 create-key-pair --key-name multinode-test-key --query 'KeyMaterial' --output text)
+KEY_MATERIAL=$(aws_json $AWS_EC2 create-key-pair --key-name multinode-test-key --query 'KeyMaterial' --output text)
 echo "$KEY_MATERIAL" > multinode-test-key.pem
 chmod 600 multinode-test-key.pem
 echo "  Key created: multinode-test-key"
@@ -194,7 +199,7 @@ fi
 echo "  AMI ID: $AMI_ID"
 
 # Verify AMI
-$AWS_EC2 describe-images --image-ids "$AMI_ID" | jq -e ".Images[0] | select(.ImageId==\"$AMI_ID\")" > /dev/null
+aws_json $AWS_EC2 describe-images --image-ids "$AMI_ID" | jq -e ".Images[0] | select(.ImageId==\"$AMI_ID\")" > /dev/null
 echo "  AMI verified"
 
 # Phase 5: Multi-Node Instance Tests
@@ -211,10 +216,10 @@ echo "Launching 3 instances to test distribution across nodes..."
 INSTANCE_IDS=()
 for i in 1 2 3; do
     echo "  Launching instance $i..."
-    RUN_OUTPUT=$($AWS_EC2 run-instances \
+    RUN_OUTPUT=$(aws_json $AWS_EC2 run-instances \
         --image-id "$AMI_ID" \
         --instance-type "$INSTANCE_TYPE" \
-        --key-name multinode-test-key 2>&1)
+        --key-name multinode-test-key)
 
     INSTANCE_ID=$(echo "$RUN_OUTPUT" | jq -r '.Instances[0].InstanceId')
     if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "null" ]; then
@@ -249,7 +254,7 @@ echo "Test 2: DescribeInstances Aggregation"
 echo "----------------------------------------"
 echo "Verifying all instances are returned via fan-out query..."
 
-DESCRIBE_OUTPUT=$($AWS_EC2 describe-instances --query 'Reservations[*].Instances[*].InstanceId' --output text)
+DESCRIBE_OUTPUT=$(aws_json $AWS_EC2 describe-instances --query 'Reservations[*].Instances[*].InstanceId' --output text)
 DESCRIBED_COUNT=$(echo "$DESCRIBE_OUTPUT" | wc -w)
 
 echo "  Launched: ${#INSTANCE_IDS[@]} instances"
@@ -274,12 +279,12 @@ echo "  Test instance: $TEST_INSTANCE"
 
 # Stop instance
 echo "  Stopping instance..."
-$AWS_EC2 stop-instances --instance-ids "$TEST_INSTANCE" > /dev/null
+aws_json $AWS_EC2 stop-instances --instance-ids "$TEST_INSTANCE" > /dev/null
 wait_for_instance_state "$TEST_INSTANCE" "stopped" 30
 
 # Start instance
 echo "  Starting instance..."
-$AWS_EC2 start-instances --instance-ids "$TEST_INSTANCE" > /dev/null
+aws_json $AWS_EC2 start-instances --instance-ids "$TEST_INSTANCE" > /dev/null
 wait_for_instance_state "$TEST_INSTANCE" "running" 30
 
 echo "  Cross-node operations test passed"
@@ -300,7 +305,7 @@ echo "Cleanup: Terminating test instances"
 echo "----------------------------------------"
 for instance_id in "${INSTANCE_IDS[@]}"; do
     echo "  Terminating $instance_id..."
-    $AWS_EC2 terminate-instances --instance-ids "$instance_id" > /dev/null
+    aws_json $AWS_EC2 terminate-instances --instance-ids "$instance_id" > /dev/null
 done
 
 # Wait for termination
