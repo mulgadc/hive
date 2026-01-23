@@ -73,10 +73,7 @@ start_node_services() {
 
     echo "Starting services for node$node_num at $node_ip..."
 
-    # Set environment variables for this node
-    export CONFIG_DIR="$data_dir/config"
-
-    # Start services using start-dev.sh with the node's data directory
+    # Start all services - each node's config binds to its specific IP
     HIVE_SKIP_BUILD=true ./scripts/start-dev.sh "$data_dir"
 
     echo "Node$node_num services started"
@@ -125,14 +122,18 @@ verify_nats_cluster() {
         return 1
     }
 
-    # Count routes (should be expected_members - 1 for a healthy cluster)
+    # Count unique remote servers (NATS creates multiple connections per peer)
     local num_routes
     num_routes=$(echo "$cluster_info" | jq -r '.num_routes // 0')
-    local expected_routes=$((expected_members - 1))
 
-    echo "  NATS cluster routes: $num_routes (expected: $expected_routes)"
+    # Count unique peer names
+    local unique_peers
+    unique_peers=$(echo "$cluster_info" | jq -r '[.routes[].remote_name] | unique | length')
+    local expected_peers=$((expected_members - 1))
 
-    if [ "$num_routes" -eq "$expected_routes" ]; then
+    echo "  NATS cluster routes: $num_routes (unique peers: $unique_peers, expected peers: $expected_peers)"
+
+    if [ "$unique_peers" -ge "$expected_peers" ]; then
         echo "  NATS cluster is healthy"
         return 0
     else
@@ -154,7 +155,7 @@ wait_for_instance_state() {
 
     while [ $attempt -lt $max_attempts ]; do
         local state
-        state=$(aws --endpoint-url https://localhost:${AWSGW_PORT} ec2 describe-instances \
+        state=$(aws --endpoint-url https://${NODE1_IP}:${AWSGW_PORT} --no-verify-ssl ec2 describe-instances \
             --instance-ids "$instance_id" \
             --query 'Reservations[0].Instances[0].State.Name' \
             --output text 2>/dev/null) || {
@@ -291,18 +292,16 @@ disable_jetstream_in_config() {
 init_leader_node() {
     echo "Initializing leader node (node1)..."
 
-    # Pre-configure routes for all expected cluster nodes
-    # NATS will retry connections to nodes that aren't up yet
-    local cluster_routes="${NODE2_IP}:${NATS_CLUSTER_PORT},${NODE3_IP}:${NATS_CLUSTER_PORT}"
+    # Remove old node directory
+    rm -rf "$HOME/node1/"
 
     ./bin/hive admin init \
         --node node1 \
         --bind "${NODE1_IP}" \
         --cluster-bind "${NODE1_IP}" \
-        --cluster-routes "${cluster_routes}" \
+        --port ${CLUSTER_PORT} \
         --region ap-southeast-2 \
         --az ap-southeast-2a \
-        --nodes 3 \
         --hive-dir "$HOME/node1/" \
         --config-dir "$HOME/node1/config/"
 
@@ -321,22 +320,15 @@ join_follower_node() {
 
     echo "Joining node$node_num ($node_ip) to cluster..."
 
-    # Build cluster routes to all OTHER nodes (not self)
-    local routes=""
-    for i in 1 2 3; do
-        if [ "$i" -ne "$node_num" ]; then
-            if [ -n "$routes" ]; then
-                routes="${routes},"
-            fi
-            routes="${routes}${SIMULATED_NETWORK}.$i:${NATS_CLUSTER_PORT}"
-        fi
-    done
+    # Remove old node directory
+    rm -rf "$data_dir/"
 
+    # Route to node1 (leader)
     ./bin/hive admin join \
         --node "node$node_num" \
         --bind "$node_ip" \
         --cluster-bind "$node_ip" \
-        --cluster-routes "$routes" \
+        --cluster-routes "${NODE1_IP}:${NATS_CLUSTER_PORT}" \
         --host "${NODE1_IP}:${CLUSTER_PORT}" \
         --data-dir "$data_dir/" \
         --config-dir "$data_dir/config/" \

@@ -70,15 +70,7 @@ echo ""
 echo "Setting up simulated network..."
 add_simulated_ips
 
-# Create node directories and ramdisk mount points
-echo ""
-echo "Creating node directories..."
-for i in 1 2 3; do
-    mkdir -p "$HOME/node$i/logs"
-    mkdir -p "$HOME/node$i/hive"
-    mkdir -p "$HOME/node$i/predastore"
-    mkdir -p "$HOME/node$i/nats"
-done
+# Create ramdisk mount point
 mkdir -p /mnt/ramdisk
 
 echo ""
@@ -135,7 +127,8 @@ echo ""
 wait_for_gateway "${NODE1_IP}" 30
 
 # Define AWS CLI args pointing to node1's gateway
-AWS_EC2="aws --endpoint-url https://${NODE1_IP}:${AWSGW_PORT} ec2"
+# Use --no-verify-ssl because the self-signed cert only has localhost SANs, not node IPs
+AWS_EC2="aws --endpoint-url https://${NODE1_IP}:${AWSGW_PORT} --no-verify-ssl ec2"
 
 # Verify gateway responds
 echo ""
