@@ -38,6 +38,18 @@ RUN --mount=type=cache,target=/root/go/pkg/mod \
     (cd viperblock/nbd/libguestfs.org/nbdkit && go mod download) && \
     (cd predastore && go mod download)
 
+# Pre-download Ubuntu cloud image for e2e tests (cached in Docker layer)
+# Placed before source copy so code changes don't invalidate this layer
+RUN mkdir -p /root/images && \
+    ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "amd64" ]; then \
+        curl -L -o /root/images/ubuntu-24.04.img \
+            https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img; \
+    elif [ "$ARCH" = "arm64" ]; then \
+        curl -L -o /root/images/ubuntu-24.04.img \
+            https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-arm64.img; \
+    fi
+
 # 3. Copy the rest of the source code
 COPY hive/ ./hive/
 COPY viperblock/ ./viperblock/

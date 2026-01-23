@@ -151,10 +151,14 @@ else
 fi
 echo "Using image: $IMAGE_NAME"
 
-# Import a reliable Ubuntu image and capture the AMI ID from the output
-echo "Importing image $IMAGE_NAME..."
-echo "May appear stalled here, just takes a while to import..."
-IMPORT_LOG=$(./bin/hive admin images import --name "$IMAGE_NAME" --force 2>/dev/null)
+# Import the pre-downloaded Ubuntu image using file-based import
+echo "Importing pre-cached Ubuntu image..."
+IMPORT_LOG=$(./bin/hive admin images import \
+    --file /root/images/ubuntu-24.04.img \
+    --arch "$ARCH" \
+    --distro ubuntu \
+    --version 24.04 \
+    --force 2>/dev/null)
 AMI_ID=$(echo "$IMPORT_LOG" | grep -o 'ami-[a-z0-9]\+')
 
 if [ -z "$AMI_ID" ]; then
