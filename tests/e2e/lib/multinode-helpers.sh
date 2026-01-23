@@ -279,10 +279,13 @@ init_leader_node() {
     # Remove old node directory
     rm -rf "$HOME/node1/"
 
+    # Node1 routes to itself to enable clustering mode (NATS ignores self-routes)
+    # Other nodes will discover each other via gossip when they connect
     ./bin/hive admin init \
         --node node1 \
         --bind "${NODE1_IP}" \
         --cluster-bind "${NODE1_IP}" \
+        --cluster-routes "${NODE1_IP}:${NATS_CLUSTER_PORT}" \
         --port ${CLUSTER_PORT} \
         --region ap-southeast-2 \
         --az ap-southeast-2a \
@@ -305,7 +308,7 @@ join_follower_node() {
     # Remove old node directory
     rm -rf "$data_dir/"
 
-    # Route to node1 (leader)
+    # Route to node1 (seed node) - other nodes discovered via NATS gossip
     ./bin/hive admin join \
         --node "node$node_num" \
         --bind "$node_ip" \
