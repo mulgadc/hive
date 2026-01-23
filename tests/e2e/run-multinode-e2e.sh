@@ -35,6 +35,9 @@ trap cleanup EXIT
 # Use Hive profile for AWS CLI
 export AWS_PROFILE=hive
 
+# Suppress urllib3 InsecureRequestWarning from AWS CLI (we use --no-verify-ssl)
+export PYTHONWARNINGS="ignore:Unverified HTTPS request"
+
 echo "========================================"
 echo "Multi-Node E2E Test Suite"
 echo "========================================"
