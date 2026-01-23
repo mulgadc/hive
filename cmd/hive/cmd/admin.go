@@ -471,8 +471,8 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	port, _ := cmd.Flags().GetInt("port")
 	bindIP, _ := cmd.Flags().GetString("bind")
 	clusterBind, _ := cmd.Flags().GetString("cluster-bind")
-	//clusterRoutesStr, _ := cmd.Flags().GetString("cluster-routes")
-	// := strings.Split(clusterRoutesStr, ",")
+	clusterRoutesStr, _ := cmd.Flags().GetString("cluster-routes")
+	clusterRoutes := strings.Split(clusterRoutesStr, ",")
 
 	// Validate IP address format
 	if net.ParseIP(bindIP) == nil {
@@ -573,7 +573,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		Port:          portStr,
 		BindIP:        bindIP,
 		ClusterBindIP: clusterBind,
-		//ClusterRoutes: clusterRoutes,
+		ClusterRoutes: clusterRoutes,
 	}
 
 	// Generate all config files
