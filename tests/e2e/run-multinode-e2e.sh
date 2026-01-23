@@ -170,7 +170,7 @@ echo "$KEY_MATERIAL" > multinode-test-key.pem
 chmod 600 multinode-test-key.pem
 echo "  Key created: multinode-test-key"
 
-# Import Ubuntu image (use node1's config)
+# Import Ubuntu image (use node1's config and hive-dir)
 echo ""
 echo "Importing Ubuntu image..."
 IMPORT_LOG=$(./bin/hive admin images import \
@@ -179,6 +179,7 @@ IMPORT_LOG=$(./bin/hive admin images import \
     --distro ubuntu \
     --version 24.04 \
     --config "$HOME/node1/config/hive.toml" \
+    --hive-dir "$HOME/node1/" \
     --force)
 echo "Import output: $IMPORT_LOG"
 AMI_ID=$(echo "$IMPORT_LOG" | grep -o 'ami-[a-z0-9]\+')
