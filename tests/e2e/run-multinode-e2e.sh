@@ -179,7 +179,8 @@ IMPORT_LOG=$(./bin/hive admin images import \
     --distro ubuntu \
     --version 24.04 \
     --hive-dir "$HOME/node1/" \
-    --force 2>/dev/null)
+    --force)
+echo "Import output: $IMPORT_LOG"
 AMI_ID=$(echo "$IMPORT_LOG" | grep -o 'ami-[a-z0-9]\+')
 
 if [ -z "$AMI_ID" ]; then
