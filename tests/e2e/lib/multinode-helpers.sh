@@ -346,5 +346,8 @@ join_follower_node() {
     # Disable JetStream until multi-node JetStream is implemented
     disable_jetstream_in_config "$data_dir/config"
 
+    # Point predastore to node1 (only node1 runs predastore in multi-node test)
+    sed -i "s|host = \"${node_ip}:8443\"|host = \"${NODE1_IP}:8443\"|" "$data_dir/config/hive.toml"
+
     echo "Node$node_num joined cluster"
 }
