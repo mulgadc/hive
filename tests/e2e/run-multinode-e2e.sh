@@ -178,7 +178,7 @@ IMPORT_LOG=$(./bin/hive admin images import \
     --arch "$ARCH" \
     --distro ubuntu \
     --version 24.04 \
-    --hive-dir "$HOME/node1/" \
+    --config "$HOME/node1/config/hive.toml" \
     --force)
 echo "Import output: $IMPORT_LOG"
 AMI_ID=$(echo "$IMPORT_LOG" | grep -o 'ami-[a-z0-9]\+')
