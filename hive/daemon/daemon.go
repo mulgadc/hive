@@ -409,7 +409,8 @@ func (d *Daemon) Start() error {
 	log.Printf("Connected to NATS server at %s", d.config.NATS.Host)
 
 	// Initialize JetStream for KV state storage (falls back to disk if unavailable)
-	d.jsManager, err = NewJetStreamManager(d.natsConn, len(d.clusterConfig.Nodes))
+	// Start with 1 replica to allow single-node startup, then upgrade if cluster has more nodes
+	d.jsManager, err = NewJetStreamManager(d.natsConn, 1)
 	if err != nil {
 		slog.Warn("Failed to init JetStream, falling back to file", "error", err)
 		d.jsManager = nil
@@ -417,7 +418,16 @@ func (d *Daemon) Start() error {
 		slog.Warn("Failed to init KV bucket, falling back to file", "error", err)
 		d.jsManager = nil
 	} else {
-		slog.Info("JetStream KV store initialized successfully", "replicas", len(d.clusterConfig.Nodes))
+		slog.Info("JetStream KV store initialized successfully", "replicas", 1)
+
+		// Try to upgrade replicas if cluster has more nodes
+		// This handles the case where this daemon starts after other NATS nodes are already up
+		clusterSize := len(d.clusterConfig.Nodes)
+		if clusterSize > 1 {
+			if err := d.jsManager.UpdateReplicas(clusterSize); err != nil {
+				slog.Warn("Failed to upgrade JetStream replicas on startup (other NATS nodes may not be ready)", "targetReplicas", clusterSize, "error", err)
+			}
+		}
 	}
 
 	// Load existing state for VMs from JetStream or disk
@@ -749,6 +759,16 @@ func (d *Daemon) ClusterManager() error {
 		configHash, _ := d.computeConfigHash()
 
 		slog.Info("Node joined cluster", "node", req.Node, "epoch", d.clusterConfig.Epoch)
+
+		// Update JetStream KV replicas to match new cluster size
+		// This may fail if the new node's NATS server isn't running yet - that's OK,
+		// replicas can be updated later when the cluster is fully formed
+		if d.jsManager != nil {
+			newReplicaCount := len(d.clusterConfig.Nodes)
+			if err := d.jsManager.UpdateReplicas(newReplicaCount); err != nil {
+				slog.Warn("Failed to update JetStream replicas (new node NATS may not be ready yet)", "targetReplicas", newReplicaCount, "error", err)
+			}
+		}
 
 		// Send only shared cluster data (exclude node-specific top-level fields)
 		sharedData := &config.SharedClusterData{

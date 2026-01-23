@@ -384,3 +384,47 @@ func TestJetStreamManager_KVNotInitialized(t *testing.T) {
 	err = jsm.DeleteState("test-node")
 	assert.Error(t, err, "DeleteState should error when KV not initialized")
 }
+
+// TestJetStreamManager_UpdateReplicas tests updating replica count for the KV bucket
+func TestJetStreamManager_UpdateReplicas(t *testing.T) {
+	ns, natsURL := startTestNATSServerWithJetStream(t)
+	defer ns.Shutdown()
+
+	nc, err := nats.Connect(natsURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	// Create with 1 replica (typical for single node startup)
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+
+	err = jsm.InitKVBucket()
+	require.NoError(t, err)
+
+	// Verify initial replica count
+	js, _ := nc.JetStream()
+	streamInfo, err := js.StreamInfo("KV_" + InstanceStateBucket)
+	require.NoError(t, err)
+	assert.Equal(t, 1, streamInfo.Config.Replicas, "Should start with 1 replica")
+
+	// Try to update to same replica count (should be a no-op)
+	err = jsm.UpdateReplicas(1)
+	assert.NoError(t, err, "Updating to same replica count should succeed")
+
+	// Note: Increasing replicas beyond 1 requires additional NATS servers in the cluster,
+	// which we don't have in the test environment. In a single-node test server,
+	// attempting to increase replicas will fail with "insufficient resources" error.
+	// This test verifies the basic functionality works.
+}
+
+// TestJetStreamManager_UpdateReplicas_NoInit tests UpdateReplicas when JS not initialized
+func TestJetStreamManager_UpdateReplicas_NoInit(t *testing.T) {
+	// Test with nil JetStream context
+	jsm := &JetStreamManager{
+		js:       nil,
+		replicas: 1,
+	}
+
+	err := jsm.UpdateReplicas(3)
+	assert.Error(t, err, "UpdateReplicas should error when JetStream not initialized")
+}
