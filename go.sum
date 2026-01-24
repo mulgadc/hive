@@ -122,12 +122,16 @@ github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D
 github.com/mattn/go-runewidth v0.0.13/go.mod h1:Jdepj2loyihRzMpdS35Xk/zdY8IAYHsh153qUoGf23w=
 github.com/mattn/go-runewidth v0.0.16 h1:E5ScNMtiwvlvB5paMFdw9p4kSQzbXFikJ5SQO6TULQc=
 github.com/mattn/go-runewidth v0.0.16/go.mod h1:Jdepj2loyihRzMpdS35Xk/zdY8IAYHsh153qUoGf23w=
+github.com/minio/crc64nvme v1.1.1 h1:8dwx/Pz49suywbO+auHCBpCtlW1OfpcLN7wYgVR6wAI=
+github.com/minio/crc64nvme v1.1.1/go.mod h1:eVfm2fAzLlxMdUGc0EEBGSMmPwmXD5XiNRpnu9J3bvg=
 github.com/minio/highwayhash v1.0.3 h1:kbnuUMoHYyVl7szWjSxJnxw11k2U709jqFPPmIUyD6Q=
 github.com/minio/highwayhash v1.0.3/go.mod h1:GGYsuwP/fPD6Y9hMiXuapVvlIUEhFhMTh0rxU3ik1LQ=
 github.com/mulgadc/predastore v0.1.5 h1:7SySkQQ5MQ1NTcKcB14pCUIJipq0YVgCJZeKM6ytrLM=
 github.com/mulgadc/predastore v0.1.5/go.mod h1:BhMymRV3zMTu2S+5pJnNDDm5+AGakjhSc/PKX0q8Xfg=
 github.com/mulgadc/viperblock v0.1.4 h1:YnRHEC6XNbhnSk6S+ET3X7DTMRezdO3o1O3nO/R9Syg=
 github.com/mulgadc/viperblock v0.1.4/go.mod h1:JNooDHb6ZuPvNPWaf0gChlft/D8xs5jHJFln+P3B9lQ=
+github.com/mulgadc/viperblock v0.1.5 h1:vS7ImGApQvxKuU1+fJNmwOycduwr9fx/xyofxWYKPcI=
+github.com/mulgadc/viperblock v0.1.5/go.mod h1:JNooDHb6ZuPvNPWaf0gChlft/D8xs5jHJFln+P3B9lQ=
 github.com/nats-io/jwt/v2 v2.7.4 h1:jXFuDDxs/GQjGDZGhNgH4tXzSUK6WQi2rsj4xmsNOtI=
 github.com/nats-io/jwt/v2 v2.7.4/go.mod h1:me11pOkwObtcBNR8AiMrUbtVOUGkqYjMQZ6jnSdVUIA=
 github.com/nats-io/nats-server/v2 v2.11.6 h1:4VXRjbTUFKEB+7UoaKL3F5Y83xC7MxPoIONOnGgpkHw=

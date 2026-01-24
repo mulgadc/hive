@@ -1465,12 +1465,15 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 	// Wait for all shutdowns to finish
 	wg.Wait()
 
-	// Unsubscribe from NATS subjects that match instances
-	for _, instance := range instances {
-		slog.Info("Unsubscribing from NATS subject", "instance", instance.ID)
-		d.natsSubscriptions[fmt.Sprintf("ec2.cmd.%s", instance.ID)].Unsubscribe()
-		// TODO: Remove redundant subscription if not used
-		//d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)].Unsubscribe()
+	// Only unsubscribe from NATS subjects when terminating (deleteVolume=true)
+	// For stop operations, keep the subscription so we can receive start commands
+	if deleteVolume {
+		for _, instance := range instances {
+			slog.Info("Unsubscribing from NATS subject", "instance", instance.ID)
+			d.natsSubscriptions[fmt.Sprintf("ec2.cmd.%s", instance.ID)].Unsubscribe()
+			// TODO: Remove redundant subscription if not used
+			//d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)].Unsubscribe()
+		}
 	}
 	return nil
 
