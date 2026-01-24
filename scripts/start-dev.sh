@@ -160,6 +160,11 @@ export HIVE_PREDASTORE_DEBUG=true
 export HIVE_PREDASTORE_HOST=0.0.0.0
 export HIVE_PREDASTORE_PORT=8443
 
+# Default, distributed backend. For testing, all nodes running locally.
+# Specify NODE_ID to run a specific node (e.g multi-server)
+export HIVE_PREDASTORE_BACKEND=distributed
+export HIVE_PREDASTORE_NODE_ID=
+
 # Use air for hot reloading (dev!)
 #PREDASTORE_CMD="air -c .air-predastore.toml"
 PREDASTORE_CMD="./bin/hive service predastore start"

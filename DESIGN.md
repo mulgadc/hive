@@ -375,3 +375,25 @@ aws --no-verify-ssl ec2 describe-instances
 # Terminate instance
 aws --no-verify-ssl ec2 terminate-instances --instance-ids i-xxxxx
 ```
+
+
+## Improvements
+
+Improve `aws ec2 stop-instances` , currently uses a ~30 sec heartbeat to detect if an instance is terminated. When the stop-instance command is sent, run the heartbeat more frequently to detect closer to realtime when the instance has stopped.
+
+Currently a ~54 second window to detect termination.
+
+```sh
+aws ec2 stop-instances --instance-ids i-1e306bb58b99e03bd
+```
+
+```sh
+2026/01/22 20:01:52 INFO QMP event event=POWERDOWN
+2026/01/22 20:02:17 INFO QMP heartbeat instance=i-1e306bb58b99e03bd
+2026/01/22 20:02:17 INFO QMP status status="{\"running\":true,\"singlestep\":false,\"status\":\"running\"}"
+2026/01/22 20:02:47 INFO QMP heartbeat instance=i-1e306bb58b99e03bd
+2026/01/22 20:02:47 ERROR Failed to send QMP command err="encode error: write unix @->/run/user/1000/qmp-i-1e306bb58b99e03bd.sock: write: broken pipe"
+2026/01/22 20:02:47 INFO QMP Status - Instance stopped, exiting heartbeat id=i-1e306bb58b99e03bd
+2026/01/22 20:02:47 INFO Unsubscribing from NATS subject instance=i-1e306bb58b99e03bd
+2026/01/22 20:02:47 INFO Closing QMP client connection instance=i-1e306bb58b99e03bd
+```

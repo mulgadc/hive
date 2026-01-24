@@ -26,6 +26,7 @@ import (
 	"github.com/mulgadc/hive/hive/services/nats"
 	"github.com/mulgadc/hive/hive/services/predastore"
 	"github.com/mulgadc/hive/hive/services/viperblockd"
+	"github.com/mulgadc/predastore/s3"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -100,6 +101,19 @@ var predastoreStartCmd = &cobra.Command{
 			return
 		}
 
+		backendType := viper.GetString("backend")
+		var backend s3.BackendType
+
+		if backendType == "distributed" {
+			backend = s3.BackendDistributed
+		} else {
+			backend = s3.BackendFilesystem
+		}
+
+		nodeID := viper.GetInt("node-id")
+		pprofEnabled := viper.GetBool("pprof")
+		pprofOutput := viper.GetString("pprof-output")
+
 		service, err := service.New("predastore", &predastore.Config{
 			Port:       port,
 			Host:       host,
@@ -108,6 +122,12 @@ var predastoreStartCmd = &cobra.Command{
 			Debug:      debug,
 			TlsCert:    tlsCert,
 			TlsKey:     tlsKey,
+
+			Backend: backend,
+			NodeID:  nodeID,
+
+			PprofEnabled:    pprofEnabled,
+			PprofOutputPath: pprofOutput,
 		})
 
 		if err != nil {
@@ -581,6 +601,26 @@ func init() {
 	predastoreCmd.PersistentFlags().String("tls-key", "", "Predastore (S3) TLS key")
 	viper.BindEnv("tls-key", "HIVE_PREDASTORE_TLS_KEY")
 	viper.BindPFlag("tls-key", predastoreCmd.PersistentFlags().Lookup("tls-key"))
+
+	// Predastore Backend
+	predastoreCmd.PersistentFlags().String("backend", "distributed", "Predastore (S3) backend")
+	viper.BindEnv("backend", "HIVE_PREDASTORE_BACKEND")
+	viper.BindPFlag("backend", predastoreCmd.PersistentFlags().Lookup("backend"))
+
+	// Predastore Node ID
+	predastoreCmd.PersistentFlags().Int("node-id", 0, "Predastore (S3) node ID")
+	viper.BindEnv("node-id", "HIVE_PREDASTORE_NODE_ID")
+	viper.BindPFlag("node-id", predastoreCmd.PersistentFlags().Lookup("node-id"))
+
+	// Predastore CPU Profiling
+	predastoreCmd.PersistentFlags().Bool("pprof", false, "Enable CPU profiling (also via PPROF_ENABLED=1)")
+	viper.BindEnv("pprof", "PPROF_ENABLED")
+	viper.BindPFlag("pprof", predastoreCmd.PersistentFlags().Lookup("pprof"))
+
+	// Predastore CPU Profile Output Path
+	predastoreCmd.PersistentFlags().String("pprof-output", "/tmp/predastore-cpu.prof", "CPU profile output path")
+	viper.BindEnv("pprof-output", "PPROF_OUTPUT")
+	viper.BindPFlag("pprof-output", predastoreCmd.PersistentFlags().Lookup("pprof-output"))
 
 	predastoreCmd.AddCommand(predastoreStartCmd)
 	predastoreCmd.AddCommand(predastoreStopCmd)

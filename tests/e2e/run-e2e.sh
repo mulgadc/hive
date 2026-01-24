@@ -131,6 +131,7 @@ fi
 echo "Using image: $IMAGE_NAME"
 
 # Import a reliable Ubuntu image and capture the AMI ID from the output
+# TODO: Cache the import image, see Docker layer or another method.
 echo "Importing image $IMAGE_NAME..."
 echo "May appear stalled here, just takes a while to import..."
 IMPORT_LOG=$(./bin/hive admin images import --name "$IMAGE_NAME" --force 2>/dev/null)

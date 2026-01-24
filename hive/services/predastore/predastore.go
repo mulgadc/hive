@@ -26,6 +26,13 @@ type Config struct {
 	BasePath   string
 	TlsCert    string
 	TlsKey     string
+
+	Backend s3.BackendType
+	NodeID  int
+
+	// Profiling
+	PprofEnabled    bool
+	PprofOutputPath string
 }
 
 // Service wraps the predastore S3 server
@@ -52,6 +59,9 @@ func (svc *Service) Start() (int, error) {
 		s3.WithTLS(svc.Config.TlsCert, svc.Config.TlsKey),
 		s3.WithBasePath(svc.Config.BasePath),
 		s3.WithDebug(svc.Config.Debug),
+		s3.WithBackend(svc.Config.Backend),
+		s3.WithNodeID(svc.Config.NodeID),
+		s3.WithPprof(svc.Config.PprofEnabled, svc.Config.PprofOutputPath),
 	)
 	if err != nil {
 		slog.Error("Failed to create predastore server", "error", err)

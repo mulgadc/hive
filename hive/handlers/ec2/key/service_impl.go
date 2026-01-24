@@ -336,9 +336,10 @@ func (s *KeyServiceImpl) findKeyPairIdFromKeyName(keyName string) (string, error
 
 		// Get the metadata file
 		// TODO: Have a more elegant solution, temporary until we have a proper key/value DB
+		// Note: obj.Key already contains the full path from ListObjectsV2
 		getResult, err := s.s3Client.GetObject(&s3.GetObjectInput{
 			Bucket: aws.String(s.config.Predastore.Bucket),
-			Key:    aws.String(fmt.Sprintf("%s/%s", prefix, *obj.Key)),
+			Key:    obj.Key,
 		})
 		if err != nil {
 			slog.Debug("Failed to get metadata file", "key", *obj.Key, "err", err)
@@ -479,9 +480,10 @@ func (s *KeyServiceImpl) DescribeKeyPairs(input *ec2.DescribeKeyPairsInput) (*ec
 		}
 
 		// Get the metadata file
+		// Note: obj.Key already contains the full path from ListObjectsV2
 		getResult, err := s.s3Client.GetObject(&s3.GetObjectInput{
 			Bucket: aws.String(s.config.Predastore.Bucket),
-			Key:    aws.String(fmt.Sprintf("%s/%s", prefix, *obj.Key)),
+			Key:    obj.Key,
 		})
 		if err != nil {
 			slog.Debug("Failed to get metadata file", "key", *obj.Key, "err", err)
