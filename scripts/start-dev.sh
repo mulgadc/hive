@@ -116,10 +116,18 @@ check_service() {
 
 # Pre-flight, compile latest
 if [ "$HIVE_SKIP_BUILD" != "true" ]; then
-    echo "1️✈️ Pre-flight, compiling latest..."
+    echo "✈️  Pre-flight, compiling latest..."
+
+    echo "   Building hive..."
     make build
+
+    echo "   Building viperblock (nbdkit plugin)..."
+    cd "$MULGA_ROOT/viperblock" && make build
+    cd "$PROJECT_ROOT"
+
+    echo "   ✅ Build complete"
 else
-    echo "1️✈️ Skipping build (HIVE_SKIP_BUILD=true)"
+    echo "✈️  Skipping build (HIVE_SKIP_BUILD=true)"
 fi
 
 # 1️⃣ Start NATS server
@@ -136,7 +144,7 @@ else
     export HIVE_NATS_PORT=4222
     export HIVE_NATS_DATA_DIR=$DATA_DIR/nats/
     export HIVE_NATS_JETSTREAM=false
-    export HIVE_NATS_DEBUG=true
+    #export HIVE_NATS_DEBUG=true
 fi
 
 # Use air for hot reloading (dev!)
@@ -156,7 +164,8 @@ export HIVE_PREDASTORE_BASE_PATH=$DATA_DIR/predastore/
 export HIVE_PREDASTORE_CONFIG_PATH=$CONFIG_DIR/predastore/predastore.toml
 export HIVE_PREDASTORE_TLS_CERT=$CONFIG_DIR/server.pem
 export HIVE_PREDASTORE_TLS_KEY=$CONFIG_DIR/server.key
-export HIVE_PREDASTORE_DEBUG=true
+# Very chatty logs, only for debugging
+#export HIVE_PREDASTORE_DEBUG=true
 export HIVE_PREDASTORE_HOST=0.0.0.0
 export HIVE_PREDASTORE_PORT=8443
 

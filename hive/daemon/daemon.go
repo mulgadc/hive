@@ -1731,11 +1731,14 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 
 		drive := vm.Drive{}
 
+		// Use the NBDURI from mount response - contains socket path or TCP address
+		// NBDURI format: "nbd:unix:/path/to/socket.sock" or "nbd://host:port"
+		if v.NBDURI == "" {
+			slog.Error("NBDURI not set for volume", "volume", v.Name)
+			return fmt.Errorf("NBDURI not set for volume %s - was volume mounted?", v.Name)
+		}
 		drive.File = v.NBDURI
-		// Cleanup hostname to point to nbd://localhost from [::]
-		// TODO: Make NBD host config defined, or remote NBD server if not running locally.
-		// TODO: Add socket support for nbdkit, much faster than TCP
-		drive.File = strings.Replace(drive.File, "[::]", "nbd://127.0.0.1", 1)
+		slog.Info("Using NBD URI for drive", "volume", v.Name, "uri", v.NBDURI)
 
 		if v.Boot {
 			drive.Format = "raw"
@@ -1807,6 +1810,7 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	instance.Config.QMPSocket = qmpSocket
 
 	// Temp, wait for nbdkit to start
+	// TODO: Improve, confirm nbdkit started for each volume
 	time.Sleep(2 * time.Second)
 
 	// Create a unique error channel for this specific mount request
@@ -1963,9 +1967,9 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 			return err
 		}
 
-		reply, err := d.natsConn.Request("ebs.mount", ebsMountRequest, 10*time.Second)
+		reply, err := d.natsConn.Request("ebs.mount", ebsMountRequest, 30*time.Second)
 
-		slog.Debug("Mounting volume", "NBDURI", v.NBDURI)
+		slog.Info("Mounting volume", "Vol", v.Name, "NBDURI", v.NBDURI)
 
 		// TODO: Improve timeout handling
 		if err != nil {

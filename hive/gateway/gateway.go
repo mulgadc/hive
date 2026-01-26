@@ -13,7 +13,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/mulgadc/hive/hive/awsec2query"
 	"github.com/mulgadc/hive/hive/awserrors"
-	"github.com/mulgadc/predastore/s3"
 	"github.com/nats-io/nats.go"
 )
 
@@ -90,18 +89,6 @@ func (gw *GatewayConfig) SetupRoutes() *fiber.App {
 		app.Use(logger.New())
 	}
 
-	s3 := s3.New(&s3.Config{})
-
-	// TODO: Support env var for config path, and external IAM
-	s3.ConfigPath = gw.Config
-
-	err := s3.ReadConfig()
-
-	if err != nil {
-		slog.Error("Error reading config", "error", err)
-		return nil
-	}
-
 	// Add CORS middleware for browser requests
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     "https://localhost:3000",
@@ -110,8 +97,8 @@ func (gw *GatewayConfig) SetupRoutes() *fiber.App {
 		AllowCredentials: true,
 	}))
 
-	// Add authentication middleware for all requests
-	app.Use(s3.SigV4AuthMiddleware)
+	// TODO: Implement AWS SigV4 authentication middleware for gateway requests
+	// The S3 auth middleware was removed when predastore migrated to net/http
 
 	// Define routes
 	app.Get("/*", func(c *fiber.Ctx) error {

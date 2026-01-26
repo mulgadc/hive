@@ -11,11 +11,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"golang.org/x/net/http2"
 )
 
 // 2. Define config structs
@@ -49,12 +51,29 @@ func (backend *Backend) Init() error {
 
 	slog.Info("Initializing S3 backend", "config", backend.config)
 
-	// Create HTTP client (skip TLS verification if requested)
-	client := &http.Client{}
+	// Create HTTP client with HTTP/2 support for connection multiplexing.
+	// HTTP/2 allows multiple requests over a single TCP connection.
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+			ClientSessionCache: tls.NewLRUClientSessionCache(256),
+			NextProtos:         []string{"h2", "http/1.1"},
+		},
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 100,
+		IdleConnTimeout:     120 * time.Second,
+		ForceAttemptHTTP2:   true,
+	}
 
-	tr := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	// CRITICAL: Configure HTTP/2 support with custom TLS config
+	if err := http2.ConfigureTransport(tr); err != nil {
+		slog.Warn("Failed to configure HTTP/2", "error", err)
+	}
 
-	client = &http.Client{Transport: tr}
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   120 * time.Second,
+	}
 
 	// Use the AWS SDK to initialize the S3 backend
 	sess, err := session.NewSession(&aws.Config{

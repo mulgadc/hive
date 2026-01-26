@@ -94,8 +94,18 @@ type EBSRequest struct {
 	Boot      bool
 	EFI       bool
 	CloudInit bool
-	NBDURI    string
+	NBDURI    string // NBD URI - socket path (nbd:unix:/path.sock) or TCP (nbd://host:port)
 }
+
+// NBDTransport defines the transport type for NBD connections
+type NBDTransport string
+
+const (
+	// NBDTransportSocket uses Unix domain sockets (faster, local only)
+	NBDTransportSocket NBDTransport = "socket"
+	// NBDTransportTCP uses TCP connections (required for remote/DPU scenarios)
+	NBDTransportTCP NBDTransport = "tcp"
+)
 
 type EBSMountResponse struct {
 	URI     string

@@ -19,6 +19,7 @@ import (
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
+	"golang.org/x/net/http2"
 )
 
 // ImageServiceImpl handles AMI image operations with S3 storage
@@ -30,14 +31,21 @@ type ImageServiceImpl struct {
 
 // NewImageServiceImpl creates a new daemon-side image service
 func NewImageServiceImpl(cfg *config.Config) *ImageServiceImpl {
-	// Create HTTP client with TLS verification disabled for local S3-compatible endpoints
-	httpClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, // Skip TLS verification for self-signed certs
-			},
+	// Create HTTP client with TLS verification disabled and HTTP/2 support
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true, // Skip TLS verification for self-signed certs
+			NextProtos:         []string{"h2", "http/1.1"},
 		},
+		ForceAttemptHTTP2: true,
 	}
+
+	// CRITICAL: Configure HTTP/2 support with custom TLS config
+	if err := http2.ConfigureTransport(tr); err != nil {
+		slog.Warn("Failed to configure HTTP/2", "error", err)
+	}
+
+	httpClient := &http.Client{Transport: tr}
 
 	// Create AWS SDK S3 client configured for Predastore endpoint
 	sess := session.Must(session.NewSession(&aws.Config{

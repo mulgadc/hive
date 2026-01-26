@@ -25,8 +25,9 @@ var serviceName = "viperblock"
 
 type MountedVolume struct {
 	Name   string
-	Port   int
-	Socket string
+	Port   int    // TCP port (when using TCP transport)
+	Socket string // Unix socket path (when using socket transport)
+	NBDURI string // Full NBD URI (nbd:unix:/path.sock or nbd://host:port)
 	PID    int
 }
 
@@ -42,6 +43,10 @@ type Config struct {
 	AccessKey      string
 	SecretKey      string
 	BaseDir        string
+
+	// NBDTransport controls the transport type: "socket" (default) or "tcp"
+	// Socket is faster for local connections, TCP required for remote/DPU scenarios
+	NBDTransport config.NBDTransport
 
 	mu sync.Mutex
 }
@@ -147,6 +152,16 @@ func launchService(cfg *Config) (err error) {
 
 				utils.KillProcess(volume.PID)
 				match = true
+
+				// Remove the socket file if using socket transport
+				if volume.Socket != "" {
+					slog.Info("Removing socket file", "socket", volume.Socket)
+					err := os.Remove(volume.Socket)
+					if err != nil && !os.IsNotExist(err) {
+						slog.Error("Failed to delete nbd socket", "err", err, "socket", volume.Socket)
+					}
+				}
+
 			}
 		}
 
@@ -195,6 +210,9 @@ func launchService(cfg *Config) (err error) {
 			Host:       cfg.S3Host,
 		}
 
+		// TODO: Improve based on system availability. Default 64MB cache
+		defaultCache := (64 * 1024 * 1024) / int(viperblock.DefaultBlockSize)
+
 		vbconfig := viperblock.VB{
 			VolumeName: ebsRequest.Name,
 			VolumeSize: 1, // Workaround, calculated on LoadState()
@@ -202,7 +220,7 @@ func launchService(cfg *Config) (err error) {
 			Cache: viperblock.Cache{
 				Config: viperblock.CacheConfig{
 					// TODO: Improve, based on system memory
-					Size: 0,
+					Size: defaultCache,
 				},
 			},
 			VolumeConfig: viperblock.VolumeConfig{},
@@ -210,11 +228,17 @@ func launchService(cfg *Config) (err error) {
 
 		vb, err := viperblock.New(&vbconfig, "s3", s3cfg)
 
-		// TODO: Improve
-		// 5% of system memory for cache for master volumes
-		if !strings.HasSuffix("-cloudinit", ebsRequest.Name) && !strings.HasSuffix("-efi", ebsRequest.Name) {
-			slog.Info("Setting cache size to 5% of system memory for volume", "volume", ebsRequest.Name)
-			vb.SetCacheSystemMemory(5)
+		// Enable 64MB cache for main volumes, disable for cloudinit/efi (small, rarely read)
+		// This cacheSize is passed to nbdkit plugin (separate viperblock instance)
+		var nbdCacheSize int
+		if strings.HasSuffix(ebsRequest.Name, "-cloudinit") || strings.HasSuffix(ebsRequest.Name, "-efi") {
+			slog.Info("Disabling cache for auxiliary volume", "volume", ebsRequest.Name)
+			vb.SetCacheSize(0, 0)
+			nbdCacheSize = 0
+		} else {
+			slog.Info("Enabling 64MB cache for main volume", "volume", ebsRequest.Name, "blocks", defaultCache)
+			vb.SetCacheSize(defaultCache, 0)
+			nbdCacheSize = defaultCache
 		}
 
 		if err != nil {
@@ -257,32 +281,50 @@ func launchService(cfg *Config) (err error) {
 
 		// Next, mount the volume using nbdkit
 
-		// Step 1: Find a free port
-		nbdUri, err := viperblock.FindFreePort()
+		// Determine transport type (default to socket)
+		useTCP := cfg.NBDTransport == config.NBDTransportTCP
 
-		if err != nil {
-			ebsResponse.Error = err.Error()
-			// Marshal and send error response immediately
-			response, _ := json.Marshal(ebsResponse)
-			msg.Respond(response)
-			nc.Publish("ebs.mount.response", response)
-			return
+		var nbdURI string
+		var nbdSocket string
+		var nbdPort int
+
+		if useTCP {
+			// TCP transport - find a free port
+			portStr, err := viperblock.FindFreePort()
+			if err != nil {
+				ebsResponse.Error = err.Error()
+				response, _ := json.Marshal(ebsResponse)
+				msg.Respond(response)
+				nc.Publish("ebs.mount.response", response)
+				return
+			}
+
+			// Parse the port from the address
+			parts := strings.Split(portStr, ":")
+			nbdPort, err = strconv.Atoi(parts[len(parts)-1])
+			if err != nil {
+				slog.Error("Failed to convert port to int", "err", err)
+				return
+			}
+
+			nbdURI = utils.FormatNBDTCPURI("127.0.0.1", nbdPort)
+			slog.Info("Mounting volume (TCP)", "name", ebsRequest.Name, "port", nbdPort, "uri", nbdURI)
+		} else {
+			// Unix socket transport (default) - generate unique socket path
+			nbdSocket, err = utils.GenerateUniqueSocketFile(ebsRequest.Name)
+			if err != nil {
+				ebsResponse.Error = err.Error()
+				response, _ := json.Marshal(ebsResponse)
+				msg.Respond(response)
+				nc.Publish("ebs.mount.response", response)
+				return
+			}
+
+			nbdURI = utils.FormatNBDSocketURI(nbdSocket)
+			slog.Info("Mounting volume (socket)", "name", ebsRequest.Name, "socket", nbdSocket, "uri", nbdURI)
 		}
 
-		// Mount the volume
-		nbdPort := strings.Split(nbdUri, ":")
-
-		// Port is the last
-		port, err := strconv.Atoi(nbdPort[len(nbdPort)-1])
-		if err != nil {
-			slog.Error("Failed to convert port to int", "err", err)
-			return
-		}
-
-		slog.Info("Mounting volume", "name", ebsRequest.Name, "port", port, "uri", nbdUri)
-
-		// Execute nbdkit
-
+		// Generate PID file for nbdkit process
 		nbdPidFile, err := utils.GeneratePidFile(fmt.Sprintf("nbdkit-vol-%s", ebsRequest.Name))
 		if err != nil {
 			slog.Error("Failed to generate nbdkit pid file:", "err", err)
@@ -290,7 +332,9 @@ func launchService(cfg *Config) (err error) {
 		}
 
 		nbdConfig := nbd.NBDKitConfig{
-			Port:       port,
+			Port:       nbdPort,
+			Socket:     nbdSocket,
+			UseTCP:     useTCP,
 			PidFile:    nbdPidFile,
 			PluginPath: cfg.PluginPath,
 			BaseDir:    cfg.BaseDir,
@@ -302,6 +346,7 @@ func launchService(cfg *Config) (err error) {
 			Region:     cfg.Region,
 			AccessKey:  cfg.AccessKey,
 			SecretKey:  cfg.SecretKey,
+			CacheSize:  nbdCacheSize,
 		}
 
 		// Create a unique error channel for this specific mount request
@@ -371,13 +416,15 @@ func launchService(cfg *Config) (err error) {
 		}
 
 		ebsResponse.Mounted = true
-		ebsResponse.URI = nbdUri
+		ebsResponse.URI = nbdURI
 
 		cfg.mu.Lock()
 		cfg.MountedVolumes = append(cfg.MountedVolumes, MountedVolume{
-			Name: ebsRequest.Name,
-			Port: port,
-			PID:  pid,
+			Name:   ebsRequest.Name,
+			Port:   nbdPort,
+			Socket: nbdSocket,
+			NBDURI: nbdURI,
+			PID:    pid,
 		})
 		cfg.mu.Unlock()
 

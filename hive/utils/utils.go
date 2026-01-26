@@ -32,6 +32,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/pterm/pterm"
+	"golang.org/x/net/http2"
 )
 
 // Helper functions for OS images
@@ -228,6 +229,8 @@ func GeneratePidFile(name string) (string, error) {
 	return filepath.Join(pidPath, fmt.Sprintf("%s.pid", name)), nil
 }
 
+// GenerateSocketFile generates a socket file path for the given name.
+// Deprecated: Use GenerateUniqueSocketFile for new code to ensure uniqueness.
 func GenerateSocketFile(name string) (string, error) {
 
 	if name == "" {
@@ -241,6 +244,42 @@ func GenerateSocketFile(name string) (string, error) {
 	}
 
 	return filepath.Join(pidPath, fmt.Sprintf("%s.sock", name)), nil
+}
+
+// GenerateUniqueSocketFile generates a unique socket file path with unix nano timestamp.
+// Format: nbd-{volname}-{unixnano}.sock
+// This ensures each mount operation gets a unique socket path.
+func GenerateUniqueSocketFile(volname string) (string, error) {
+	if volname == "" {
+		return "", errors.New("volume name is required")
+	}
+
+	pidPath := pidPath()
+	if pidPath == "" {
+		return "", errors.New("pid path is empty")
+	}
+
+	timestamp := time.Now().UnixNano()
+	filename := fmt.Sprintf("nbd-%s-%d.sock", volname, timestamp)
+	return filepath.Join(pidPath, filename), nil
+}
+
+// IsSocketURI returns true if the NBD URI is a Unix socket path.
+// Socket URIs end with ".sock" or contain "unix:".
+func IsSocketURI(nbdURI string) bool {
+	return strings.HasSuffix(nbdURI, ".sock") || strings.Contains(nbdURI, "unix:")
+}
+
+// FormatNBDSocketURI formats a socket path as an NBD URI for QEMU.
+// Returns format: nbd:unix:/path/to/socket.sock
+func FormatNBDSocketURI(socketPath string) string {
+	return fmt.Sprintf("nbd:unix:%s", socketPath)
+}
+
+// FormatNBDTCPURI formats a host:port as an NBD URI for QEMU.
+// Returns format: nbd://host:port
+func FormatNBDTCPURI(host string, port int) string {
+	return fmt.Sprintf("nbd://%s:%d", host, port)
 }
 
 func WritePidFile(name string, pid int) error {
@@ -726,8 +765,18 @@ func validateDiskImagePath(diskimage string) (err error) {
 func CreateS3Client(cfg *config.Config) *s3.S3 {
 
 	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+			NextProtos:         []string{"h2", "http/1.1"},
+		},
+		ForceAttemptHTTP2: true,
 	}
+
+	// CRITICAL: Configure HTTP/2 support with custom TLS config
+	if err := http2.ConfigureTransport(tr); err != nil {
+		slog.Warn("Failed to configure HTTP/2", "error", err)
+	}
+
 	httpClient := &http.Client{Transport: tr}
 
 	sess := session.Must(session.NewSession(&aws.Config{

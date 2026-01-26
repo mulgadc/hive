@@ -8,7 +8,8 @@ import (
 )
 
 type NBDKitConfig struct {
-	Port       int    `json:"port"`
+	Port       int    `json:"port"`        // TCP port (when using TCP transport)
+	Socket     string `json:"socket"`      // Unix socket path (when using socket transport)
 	PidFile    string `json:"pid_file"`
 	PluginPath string `json:"plugin_path"`
 	Verbose    bool   `json:"verbose"`
@@ -22,15 +23,35 @@ type NBDKitConfig struct {
 	BaseDir    string `json:"base_dir"`
 	Host       string `json:"host"`
 	CacheSize  int    `json:"cache_size"`
+	UseTCP     bool   `json:"use_tcp"` // If true, use TCP transport; otherwise use Unix socket
 }
 
 func (cfg *NBDKitConfig) Execute() (*exec.Cmd, error) {
+	// TODO: Consider setting threads to X% of the host availability (preference for VMs)
+	/*
+			--threads=THREADS
+		           Set the number of threads to be used per connection, which in turn controls the number of outstanding requests  that  can
+		           be  processed  at  once.   Only  matters  for  plugins  with  thread_model=parallel  (where it defaults to 16).  To force
+		           serialized behavior (useful if the client is not prepared for out-of-order responses), set this to 1.
+	*/
 	args := []string{
 		"-f", // foreground required for Golang plugin via nbdkit
-		"-p", strconv.Itoa(cfg.Port),
 		"--pidfile", cfg.PidFile,
-		cfg.PluginPath,
 	}
+
+	// Add transport-specific arguments
+	if cfg.UseTCP {
+		// TCP transport - for remote/DPU scenarios
+		args = append(args, "-p", strconv.Itoa(cfg.Port))
+	} else {
+		// Unix socket transport (default) - faster for local connections
+		if cfg.Socket == "" {
+			return nil, fmt.Errorf("socket path is required when not using TCP transport")
+		}
+		args = append(args, "--unix", cfg.Socket)
+	}
+
+	args = append(args, cfg.PluginPath)
 
 	if cfg.Verbose {
 		args = append(args, "-v")

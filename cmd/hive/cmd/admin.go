@@ -40,6 +40,7 @@ import (
 	"github.com/pelletier/go-toml/v2"
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
+	"golang.org/x/net/http2"
 )
 
 //go:embed templates/hive.toml
@@ -707,12 +708,21 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Send join request to leader
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // Skip TLS verification for self-signed certs
+	// Send join request to leader with HTTP/2 support
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true, // Skip TLS verification for self-signed certs
+			NextProtos:         []string{"h2", "http/1.1"},
 		},
+		ForceAttemptHTTP2: true,
+	}
+
+	// Configure HTTP/2 support with custom TLS config
+	http2.ConfigureTransport(tr)
+
+	client := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: tr,
 	}
 
 	joinURL := fmt.Sprintf("http://%s/join", leaderHost)
