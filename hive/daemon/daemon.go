@@ -1180,9 +1180,12 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 
 		// Last, delete the instance volumes
 
-		// Remove instance from state
+		// Set instance state to "terminated" instead of deleting
+		// This allows DescribeInstances to return the terminated state
+		// AWS keeps terminated instances visible for about an hour
 		d.Instances.Mu.Lock()
-		delete(d.Instances.VMS, instance.ID)
+		instance.Status = "terminated"
+		instance.Attributes = command.Attributes
 		d.Instances.Mu.Unlock()
 
 		slog.Info("Instance terminated", "id", command.ID)
