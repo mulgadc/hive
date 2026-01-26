@@ -2,12 +2,12 @@ name: E2E Test Hive
 
 on:
   push:
-    branches: [ main, e2e ]
+    branches: [main, e2e]
   workflow_dispatch:
 
 jobs:
-  hive_e2e_test:
-    name: Hive E2E Test
+  build_e2e_image:
+    name: Build E2E Image
     runs-on: self-hosted
 
     steps:
@@ -19,9 +19,6 @@ jobs:
       - name: Clone Dependencies
         run: ./hive/scripts/clone-deps.sh
 
-      - name: Cleanup Stale Containers
-        run: docker rm -f hive-e2e-test 2>/dev/null || true
-
       - name: Build E2E Image
         run: |
           docker build \
@@ -29,6 +26,12 @@ jobs:
             -f hive/tests/e2e/Dockerfile.e2e \
             .
 
+  hive_e2e_test:
+    name: Hive Single-Node E2E Test
+    runs-on: self-hosted
+    needs: build_e2e_image
+
+    steps:
       - name: Run E2E Tests
         run: |
           docker run --privileged --rm \
@@ -36,8 +39,32 @@ jobs:
             --name hive-e2e-test \
             hive-e2e:latest
 
-      - name: Cleanup
-        if: always()
+  hive_multinode_e2e_test:
+    name: Hive Multi-Node E2E Test
+    runs-on: self-hosted
+    needs: build_e2e_image
+
+    steps:
+      - name: Run Multi-Node E2E Tests
+        run: |
+          docker run --privileged --rm \
+            -v /dev/kvm:/dev/kvm \
+            --cap-add=NET_ADMIN \
+            --name hive-multinode-e2e-test \
+            hive-e2e:latest \
+            ./tests/e2e/run-multinode-e2e.sh
+
+  cleanup:
+    name: Cleanup
+    runs-on: self-hosted
+    needs: [hive_e2e_test, hive_multinode_e2e_test]
+    if: always()
+
+    steps:
+      - name: Remove Stale Containers
         run: |
           docker rm -f hive-e2e-test 2>/dev/null || true
-          docker image prune -f
+          docker rm -f hive-multinode-e2e-test 2>/dev/null || true
+
+      - name: Prune Docker Images
+        run: docker image prune -f

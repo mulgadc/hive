@@ -3,8 +3,8 @@ FROM ubuntu:24.04
 # Avoid prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install make first so we can use the Makefile
-RUN apt-get update && apt-get install -y make sudo && rm -rf /var/lib/apt/lists/*
+# Install make and iproute2 (for multi-node IP management)
+RUN apt-get update && apt-get install -y make sudo iproute2 && rm -rf /var/lib/apt/lists/*
 
 # Set up working directory for Makefile targets
 WORKDIR /tmp/hive-setup
@@ -59,7 +59,7 @@ COPY predastore/ ./predastore/
 WORKDIR /root/Development/mulga/hive
 
 # Ensure scripts are executable
-RUN chmod +x ./scripts/*.sh ./tests/e2e/run-e2e.sh
+RUN chmod +x ./scripts/*.sh ./tests/e2e/*.sh ./tests/e2e/lib/*.sh
 
 # 4. Build everything (using cache mounts)
 RUN --mount=type=cache,target=/root/.cache/go-build \

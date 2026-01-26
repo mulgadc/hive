@@ -18,19 +18,22 @@ const (
 
 // JetStreamManager manages JetStream KV store operations for instance state
 type JetStreamManager struct {
-	js nats.JetStreamContext
-	kv nats.KeyValue
+	js       nats.JetStreamContext
+	kv       nats.KeyValue
+	replicas int
 }
 
-// NewJetStreamManager creates a new JetStreamManager from a NATS connection
-func NewJetStreamManager(nc *nats.Conn) (*JetStreamManager, error) {
+// NewJetStreamManager creates a new JetStreamManager from a NATS connection.
+// replicas specifies the number of replicas for the KV bucket (typically matches cluster node count).
+func NewJetStreamManager(nc *nats.Conn, replicas int) (*JetStreamManager, error) {
 	js, err := nc.JetStream()
 	if err != nil {
 		return nil, err
 	}
 
 	return &JetStreamManager{
-		js: js,
+		js:       js,
+		replicas: replicas,
 	}, nil
 }
 
@@ -41,11 +44,12 @@ func (m *JetStreamManager) InitKVBucket() error {
 	if err != nil {
 		if errors.Is(err, nats.ErrBucketNotFound) {
 			// Bucket doesn't exist, create it
-			slog.Info("Creating JetStream KV bucket", "bucket", InstanceStateBucket)
+			slog.Info("Creating JetStream KV bucket", "bucket", InstanceStateBucket, "replicas", m.replicas)
 			kv, err = m.js.CreateKeyValue(&nats.KeyValueConfig{
 				Bucket:      InstanceStateBucket,
 				Description: "Hive instance state storage",
-				History:     1, // Only keep latest value
+				History:     1,          // Only keep latest value
+				Replicas:    m.replicas, // Replication across cluster nodes
 			})
 			if err != nil {
 				return err
@@ -136,5 +140,41 @@ func (m *JetStreamManager) DeleteState(nodeID string) error {
 	}
 
 	slog.Debug("Deleted state from JetStream KV", "key", key)
+	return nil
+}
+
+// UpdateReplicas updates the replica count for the KV bucket's underlying stream.
+// This should be called when new nodes join the cluster.
+// Note: Increasing replicas requires the new replica count of NATS servers to be available.
+func (m *JetStreamManager) UpdateReplicas(newReplicas int) error {
+	if m.js == nil {
+		return errors.New("JetStream context not initialized")
+	}
+
+	// KV buckets are backed by streams with name "KV_<bucket>"
+	streamName := "KV_" + InstanceStateBucket
+
+	// Get current stream info
+	streamInfo, err := m.js.StreamInfo(streamName)
+	if err != nil {
+		return err
+	}
+
+	currentReplicas := streamInfo.Config.Replicas
+	if currentReplicas >= newReplicas {
+		slog.Debug("Stream already has sufficient replicas", "current", currentReplicas, "requested", newReplicas)
+		return nil
+	}
+
+	// Update the stream config with new replica count
+	streamInfo.Config.Replicas = newReplicas
+
+	_, err = m.js.UpdateStream(&streamInfo.Config)
+	if err != nil {
+		return err
+	}
+
+	m.replicas = newReplicas
+	slog.Info("Updated JetStream KV bucket replicas", "bucket", InstanceStateBucket, "oldReplicas", currentReplicas, "newReplicas", newReplicas)
 	return nil
 }

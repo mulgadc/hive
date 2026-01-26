@@ -60,7 +60,7 @@ func TestJetStreamManager_WriteAndLoadState(t *testing.T) {
 	defer nc.Close()
 
 	// Create JetStreamManager
-	jsm, err := NewJetStreamManager(nc)
+	jsm, err := NewJetStreamManager(nc, 1)
 	require.NoError(t, err, "Failed to create JetStreamManager")
 
 	// Initialize the KV bucket
@@ -112,7 +112,7 @@ func TestJetStreamManager_LoadState_KeyNotFound(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	jsm, err := NewJetStreamManager(nc)
+	jsm, err := NewJetStreamManager(nc, 1)
 	require.NoError(t, err)
 
 	err = jsm.InitKVBucket()
@@ -134,7 +134,7 @@ func TestJetStreamManager_BucketCreation(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	jsm, err := NewJetStreamManager(nc)
+	jsm, err := NewJetStreamManager(nc, 1)
 	require.NoError(t, err)
 
 	// InitKVBucket should create the bucket
@@ -154,7 +154,7 @@ func TestJetStreamManager_BucketReconnection(t *testing.T) {
 	nc1, err := nats.Connect(natsURL)
 	require.NoError(t, err)
 
-	jsm1, err := NewJetStreamManager(nc1)
+	jsm1, err := NewJetStreamManager(nc1, 1)
 	require.NoError(t, err)
 
 	err = jsm1.InitKVBucket()
@@ -179,7 +179,7 @@ func TestJetStreamManager_BucketReconnection(t *testing.T) {
 	require.NoError(t, err)
 	defer nc2.Close()
 
-	jsm2, err := NewJetStreamManager(nc2)
+	jsm2, err := NewJetStreamManager(nc2, 1)
 	require.NoError(t, err)
 
 	err = jsm2.InitKVBucket()
@@ -202,7 +202,7 @@ func TestJetStreamManager_DeleteState(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	jsm, err := NewJetStreamManager(nc)
+	jsm, err := NewJetStreamManager(nc, 1)
 	require.NoError(t, err)
 
 	err = jsm.InitKVBucket()
@@ -245,7 +245,7 @@ func TestJetStreamManager_DeleteState_NonExistent(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	jsm, err := NewJetStreamManager(nc)
+	jsm, err := NewJetStreamManager(nc, 1)
 	require.NoError(t, err)
 
 	err = jsm.InitKVBucket()
@@ -265,7 +265,7 @@ func TestJetStreamManager_WriteState_UpdateExisting(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	jsm, err := NewJetStreamManager(nc)
+	jsm, err := NewJetStreamManager(nc, 1)
 	require.NoError(t, err)
 
 	err = jsm.InitKVBucket()
@@ -318,7 +318,7 @@ func TestJetStreamManager_MultipleNodes(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	jsm, err := NewJetStreamManager(nc)
+	jsm, err := NewJetStreamManager(nc, 1)
 	require.NoError(t, err)
 
 	err = jsm.InitKVBucket()
@@ -371,7 +371,7 @@ func TestJetStreamManager_KVNotInitialized(t *testing.T) {
 	defer nc.Close()
 
 	// Create JetStreamManager but don't call InitKVBucket
-	jsm, err := NewJetStreamManager(nc)
+	jsm, err := NewJetStreamManager(nc, 1)
 	require.NoError(t, err)
 
 	testInstances := &vm.Instances{VMS: make(map[string]*vm.VM)}
@@ -383,4 +383,48 @@ func TestJetStreamManager_KVNotInitialized(t *testing.T) {
 
 	err = jsm.DeleteState("test-node")
 	assert.Error(t, err, "DeleteState should error when KV not initialized")
+}
+
+// TestJetStreamManager_UpdateReplicas tests updating replica count for the KV bucket
+func TestJetStreamManager_UpdateReplicas(t *testing.T) {
+	ns, natsURL := startTestNATSServerWithJetStream(t)
+	defer ns.Shutdown()
+
+	nc, err := nats.Connect(natsURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	// Create with 1 replica (typical for single node startup)
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+
+	err = jsm.InitKVBucket()
+	require.NoError(t, err)
+
+	// Verify initial replica count
+	js, _ := nc.JetStream()
+	streamInfo, err := js.StreamInfo("KV_" + InstanceStateBucket)
+	require.NoError(t, err)
+	assert.Equal(t, 1, streamInfo.Config.Replicas, "Should start with 1 replica")
+
+	// Try to update to same replica count (should be a no-op)
+	err = jsm.UpdateReplicas(1)
+	assert.NoError(t, err, "Updating to same replica count should succeed")
+
+	// Note: Increasing replicas beyond 1 requires additional NATS servers in the cluster,
+	// which we don't have in the test environment. In a single-node test server,
+	// attempting to increase replicas will fail with "insufficient resources" error.
+	// This test verifies the basic functionality works.
+}
+
+// TestJetStreamManager_UpdateReplicas_NoInit tests UpdateReplicas when JS not initialized
+func TestJetStreamManager_UpdateReplicas_NoInit(t *testing.T) {
+	// Test with nil JetStream context
+	jsm := &JetStreamManager{
+		js:       nil,
+		replicas: 1,
+	}
+
+	err := jsm.UpdateReplicas(3)
+	assert.Error(t, err, "UpdateReplicas should error when JetStream not initialized")
 }

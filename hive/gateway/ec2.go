@@ -34,7 +34,9 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 			return err
 		}
 
-		output, err := gateway_ec2_instance.DescribeInstances(input, gw.NATSConn, gw.ExpectedNodes)
+		// Dynamically discover active nodes instead of using static config value
+		activeNodes := gw.DiscoverActiveNodes()
+		output, err := gateway_ec2_instance.DescribeInstances(input, gw.NATSConn, activeNodes)
 
 		if err != nil {
 			return err
