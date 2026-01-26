@@ -601,6 +601,13 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to subscribe to NATS %s: %w", healthSubject, err)
 	}
 
+	// Subscribe to node discovery - all daemons respond so gateway can discover active nodes
+	log.Printf("Subscribing to node discovery: hive.nodes.discover")
+	d.natsSubscriptions["hive.nodes.discover"], err = d.natsConn.Subscribe("hive.nodes.discover", d.handleNodeDiscover)
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to NATS hive.nodes.discover: %w", err)
+	}
+
 	// Start cluster manager HTTP server
 	if err := d.ClusterManager(); err != nil {
 		return fmt.Errorf("failed to start cluster manager: %w", err)
@@ -2428,4 +2435,26 @@ func (d *Daemon) handleHealthCheck(msg *nats.Msg) {
 
 	msg.Respond(jsonResponse)
 	slog.Debug("Health check responded", "node", d.node, "epoch", d.clusterConfig.Epoch)
+}
+
+// NodeDiscoverResponse is the response for node discovery requests
+type NodeDiscoverResponse struct {
+	Node string `json:"node"`
+}
+
+// handleNodeDiscover responds to node discovery requests with this node's ID
+// Used by the gateway to dynamically discover active hive nodes in the cluster
+func (d *Daemon) handleNodeDiscover(msg *nats.Msg) {
+	response := NodeDiscoverResponse{
+		Node: d.node,
+	}
+
+	jsonResponse, err := json.Marshal(response)
+	if err != nil {
+		slog.Error("handleNodeDiscover failed to marshal response", "err", err)
+		return
+	}
+
+	msg.Respond(jsonResponse)
+	slog.Debug("Node discovery responded", "node", d.node)
 }

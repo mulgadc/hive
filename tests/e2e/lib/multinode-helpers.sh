@@ -168,7 +168,7 @@ wait_for_instance_state() {
             --query 'Reservations[0].Instances[0].State.Name' \
             --output text) || {
             echo "  Attempt $((attempt + 1))/$max_attempts - Gateway request failed, retrying..."
-            sleep 5
+            sleep 2
             attempt=$((attempt + 1))
             continue
         }
@@ -185,7 +185,7 @@ wait_for_instance_state() {
             return 1
         fi
 
-        sleep 5
+        sleep 2
         attempt=$((attempt + 1))
     done
 

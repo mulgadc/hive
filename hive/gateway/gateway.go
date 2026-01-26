@@ -1,11 +1,13 @@
 package gateway
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -282,4 +284,76 @@ func ParseArgsToStruct(input *any, args map[string]string) (err error) {
 
 	return nil
 
+}
+
+// NodeDiscoverResponse is the response from a node discovery request
+type NodeDiscoverResponse struct {
+	Node string `json:"node"`
+}
+
+// DiscoverActiveNodes discovers the number of active hive daemon nodes in the cluster
+// by publishing a discovery request and counting unique responses.
+// Returns the number of active nodes (minimum 1 if fallback is needed).
+func (gw *GatewayConfig) DiscoverActiveNodes() int {
+	if gw.NATSConn == nil {
+		slog.Warn("DiscoverActiveNodes: NATS connection not available, using ExpectedNodes fallback", "fallback", gw.ExpectedNodes)
+		return gw.ExpectedNodes
+	}
+
+	// Create an inbox for collecting responses from all nodes
+	inbox := nats.NewInbox()
+	sub, err := gw.NATSConn.SubscribeSync(inbox)
+	if err != nil {
+		slog.Error("DiscoverActiveNodes: Failed to create inbox subscription", "err", err)
+		return gw.ExpectedNodes
+	}
+	defer sub.Unsubscribe()
+
+	// Publish discovery request to all nodes
+	err = gw.NATSConn.PublishRequest("hive.nodes.discover", inbox, []byte("{}"))
+	if err != nil {
+		slog.Error("DiscoverActiveNodes: Failed to publish request", "err", err)
+		return gw.ExpectedNodes
+	}
+
+	// Collect responses with a short timeout
+	// We use a short timeout since discovery should be fast
+	timeout := 500 * time.Millisecond
+	deadline := time.Now().Add(timeout)
+
+	nodesSeen := make(map[string]bool)
+
+	for time.Now().Before(deadline) {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+
+		msg, err := sub.NextMsg(remaining)
+		if err != nil {
+			if err == nats.ErrTimeout {
+				break
+			}
+			slog.Debug("DiscoverActiveNodes: Error receiving message", "err", err)
+			break
+		}
+
+		var response NodeDiscoverResponse
+		if err := json.Unmarshal(msg.Data, &response); err != nil {
+			slog.Debug("DiscoverActiveNodes: Failed to unmarshal response", "err", err)
+			continue
+		}
+
+		nodesSeen[response.Node] = true
+	}
+
+	activeNodes := len(nodesSeen)
+	if activeNodes == 0 {
+		// Fallback to configured value if no responses
+		slog.Warn("DiscoverActiveNodes: No nodes responded, using ExpectedNodes fallback", "fallback", gw.ExpectedNodes)
+		return gw.ExpectedNodes
+	}
+
+	slog.Debug("DiscoverActiveNodes: Discovered active nodes", "count", activeNodes)
+	return activeNodes
 }
