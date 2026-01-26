@@ -156,7 +156,7 @@ verify_nats_cluster() {
 wait_for_instance_state() {
     local instance_id="$1"
     local target_state="$2"
-    local max_attempts="${3:-30}"
+    local max_attempts="${3:-10}"
     local attempt=0
 
     echo "Waiting for instance $instance_id to reach state: $target_state..."

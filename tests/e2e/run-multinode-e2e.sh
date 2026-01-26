@@ -308,11 +308,22 @@ for instance_id in "${INSTANCE_IDS[@]}"; do
     aws_json $AWS_EC2 terminate-instances --instance-ids "$instance_id" > /dev/null
 done
 
-# Wait for termination
+# Wait for termination - track failures
 echo "  Waiting for termination..."
+TERMINATION_FAILED=0
 for instance_id in "${INSTANCE_IDS[@]}"; do
-    wait_for_instance_state "$instance_id" "terminated" 30 || true
+    if ! wait_for_instance_state "$instance_id" "terminated" 30; then
+        echo "  WARNING: Failed to confirm termination of $instance_id"
+        TERMINATION_FAILED=1
+    fi
 done
+
+if [ $TERMINATION_FAILED -ne 0 ]; then
+    echo ""
+    echo "ERROR: Some instances failed to terminate properly"
+    dump_all_node_logs
+    exit 1
+fi
 
 echo ""
 echo "========================================"
