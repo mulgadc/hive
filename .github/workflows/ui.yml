@@ -54,8 +54,8 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          cache-dependency-path: webserver/go.sum
-          go-version-file: webserver/go.mod
+          cache-dependency-path: hive-ui/webserver/go.sum
+          go-version-file: hive-ui/webserver/go.mod
 
       - name: Go Vet
         run: go vet ./...
