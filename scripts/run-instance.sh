@@ -7,15 +7,22 @@ export AWS_PROFILE=hive
 ARCH=$(uname -m)
 if [ "$ARCH" = "x86_64" ]; then
     IMAGE_NAME="ami-ubuntu-24.04-x86_64"
-    INSTANCE_TYPE="t3.micro"
 elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
     IMAGE_NAME="ami-ubuntu-24.04-arm64"
-    INSTANCE_TYPE="t4g.micro"
 else
     echo "Warning: Unknown architecture $ARCH, defaulting to x86_64"
     IMAGE_NAME="ami-ubuntu-24.04-x86_64"
-    INSTANCE_TYPE="t3.micro"
 fi
+
+# Query available instance types from Hive and pick the first micro type
+INSTANCE_TYPE=$(aws ec2 describe-instance-types --query "InstanceTypes[?contains(InstanceType, '.micro')].InstanceType | [0]" --output text)
+if [ -z "$INSTANCE_TYPE" ] || [ "$INSTANCE_TYPE" = "None" ]; then
+    echo "Error: Could not find available micro instance type"
+    echo "Available instance types:"
+    aws ec2 describe-instance-types --query "InstanceTypes[*].InstanceType" --output table
+    exit 1
+fi
+echo "Using instance type: $INSTANCE_TYPE"
 
 echo "Detected architecture: $ARCH"
 echo "Looking for image with Name: $IMAGE_NAME"

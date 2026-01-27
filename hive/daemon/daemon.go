@@ -1061,20 +1061,27 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 	var resp *qmp.QMPResponse
 	var err error
 
+	// Helper to ensure we always respond to NATS
+	respondWithError := func(errCode string) {
+		msg.Respond(utils.GenerateErrorPayload(errCode))
+	}
+
 	if err := json.Unmarshal(msg.Data, &command); err != nil {
 		log.Printf("Error unmarshaling QMP command: %v", err)
+		respondWithError(awserrors.ErrorServerInternal)
 		return
 	}
 
 	log.Printf("Received message on subject: %s", msg.Subject)
 	log.Printf("Message data: %s", string(msg.Data))
 
+	d.Instances.Mu.Lock()
 	instance, ok := d.Instances.VMS[command.ID]
+	d.Instances.Mu.Unlock()
 
 	if !ok {
-		// TODO: Improve, return error
 		slog.Warn("Instance is not running on this node", "id", command.ID)
-		msg.Respond(nil)
+		respondWithError(awserrors.ErrorInvalidInstanceIDNotFound)
 		return
 	}
 
@@ -1087,7 +1094,7 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 		if ok {
 			if err := d.resourceMgr.allocate(instanceType); err != nil {
 				slog.Error("Failed to allocate resources for start command", "id", command.ID, "err", err)
-				msg.Respond(utils.GenerateErrorPayload(awserrors.ErrorInsufficientInstanceCapacity))
+				respondWithError(awserrors.ErrorInsufficientInstanceCapacity)
 				return
 			}
 		}
@@ -1101,112 +1108,131 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 			if ok {
 				d.resourceMgr.deallocate(instanceType)
 			}
+			respondWithError(awserrors.ErrorServerInternal)
 			return
 		}
 
-		slog.Info("handleEC2RunInstances launched", "instanceId", instance.ID)
+		// Update instance state
+		d.Instances.Mu.Lock()
+		instance.Status = "running"
+		instance.Attributes = command.Attributes
+		if instance.Instance != nil {
+			instance.Instance.State.SetCode(16) // 16 = running
+			instance.Instance.State.SetName("running")
+		}
+		d.Instances.Mu.Unlock()
 
-		resp = &qmp.QMPResponse{
-			Return: fmt.Appendf(nil, `{"status":"running","instanceId":"%s"}`, instance.ID),
+		slog.Info("Instance started", "instanceId", instance.ID)
+
+		// Write state to disk
+		if writeErr := d.WriteState(); writeErr != nil {
+			slog.Error("Failed to write state to disk", "err", writeErr)
 		}
 
-	} else {
-
-		// Send the command to the instance
-		resp, err = d.SendQMPCommand(instance.QMPClient, command.QMPCommand, instance.ID)
-
-		if err != nil {
-			slog.Error("Failed to send QMP command", "err", err)
-			return
-		}
-
-		slog.Debug("RAW QMP Response", "resp", string(resp.Return))
-
-		// Unmarshal the response
-		target, ok := qmp.CommandResponseTypes[command.QMPCommand.Execute]
-		if !ok {
-			slog.Warn("Unhandled QMP command", "cmd", command.QMPCommand.Execute)
-			return
-		}
-
-		if err := json.Unmarshal(resp.Return, target); err != nil {
-			slog.Error("Failed to unmarshal QMP response", "cmd", command.QMPCommand.Execute, "err", err)
-			return
-		}
-
+		msg.Respond(fmt.Appendf(nil, `{"status":"running","instanceId":"%s"}`, instance.ID))
+		return
 	}
 
-	// If a stop command, clean up resources but keep instance state
-	if command.Attributes.StopInstance && command.QMPCommand.Execute == "system_powerdown" {
-		slog.Info("Stopping instance", "id", command.ID)
-
-		// Update status to stopping
-		d.Instances.Mu.Lock()
-		instance.Status = "stopping"
-		d.Instances.Mu.Unlock()
-
-		// Stop the instance (keep volumes)
-		stopInstance := make(map[string]*vm.VM)
-		stopInstance[instance.ID] = instance
-		err = d.stopInstance(stopInstance, false)
-
-		if err != nil {
-			slog.Error("Failed to stop instance", "err", err)
-			return
+	// Stop or terminate an instance
+	if command.Attributes.StopInstance || command.Attributes.TerminateInstance {
+		isTerminate := command.Attributes.TerminateInstance
+		action := "Stopping"
+		initialStatus := "stopping"
+		finalStatus := "stopped"
+		finalCode := int64(80)
+		if isTerminate {
+			action = "Terminating"
+			initialStatus = "shutting-down"
+			finalStatus = "terminated"
+			finalCode = 48
 		}
 
-		// Update status to stopped
+		slog.Info(action+" instance", "id", command.ID)
+
+		// Update status to transitional state
 		d.Instances.Mu.Lock()
-		instance.Status = "stopped"
-		instance.Attributes = command.Attributes
-		d.Instances.Mu.Unlock()
-
-		slog.Info("Instance stopped", "id", command.ID)
-	}
-
-	// If a terminate command, clean up resources
-	if command.Attributes.TerminateInstance {
-		slog.Info("Terminating instance", "id", command.ID)
-
-		// Improve, need to pass a map
-		terminateInstance := make(map[string]*vm.VM)
-		terminateInstance[instance.ID] = instance
-		err = d.stopInstance(terminateInstance, true)
-
-		if err != nil {
-			slog.Error("Failed to terminate instance", "err", err)
-			return
+		instance.Status = initialStatus
+		if instance.Instance != nil {
+			if isTerminate {
+				instance.Instance.State.SetCode(32) // 32 = shutting-down
+				instance.Instance.State.SetName("shutting-down")
+			} else {
+				instance.Instance.State.SetCode(64) // 64 = stopping
+				instance.Instance.State.SetName("stopping")
+			}
 		}
-
-		// TODO: Last, delete the instance volumes
-
-		// Set instance state to "terminated" instead of deleting
-		// This allows DescribeInstances to return the terminated state
-		// AWS keeps terminated instances visible for about an hour
-		d.Instances.Mu.Lock()
-		instance.Status = "terminated"
-		instance.Attributes = command.Attributes
 		d.Instances.Mu.Unlock()
 
-		slog.Info("Instance terminated", "id", command.ID)
-	} else {
+		// Respond immediately - operation will complete in background
+		// stopInstance() handles the QMP shutdown command, so we don't send it here
+		msg.Respond([]byte(`{}`))
 
-		// Update the instance attributes
-		d.Instances.Mu.Lock()
-		instance.Attributes = command.Attributes
-		d.Instances.Mu.Unlock()
+		// Run cleanup in goroutine to not block NATS
+		go func(inst *vm.VM, attrs qmp.Attributes) {
+			stopErr := d.stopInstance(map[string]*vm.VM{inst.ID: inst}, isTerminate)
 
+			d.Instances.Mu.Lock()
+			if stopErr != nil {
+				slog.Error("Failed to "+strings.ToLower(action)+" instance", "err", stopErr, "id", inst.ID)
+				// On error, revert to previous state or mark as error
+				inst.Status = "error"
+				if inst.Instance != nil {
+					inst.Instance.State.SetCode(0)
+					inst.Instance.State.SetName("error")
+				}
+			} else {
+				inst.Status = finalStatus
+				inst.Attributes = attrs
+				if inst.Instance != nil {
+					inst.Instance.State.SetCode(finalCode)
+					inst.Instance.State.SetName(finalStatus)
+				}
+				slog.Info("Instance "+finalStatus, "id", inst.ID)
+			}
+			d.Instances.Mu.Unlock()
+
+			if writeErr := d.WriteState(); writeErr != nil {
+				slog.Error("Failed to write state to disk", "err", writeErr)
+			}
+		}(instance, command.Attributes)
+
+		return
 	}
 
-	// Write the state to disk
-	err = d.WriteState()
+	// Regular QMP command - must succeed
+	resp, err = d.SendQMPCommand(instance.QMPClient, command.QMPCommand, instance.ID)
 	if err != nil {
+		slog.Error("Failed to send QMP command", "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	slog.Debug("RAW QMP Response", "resp", string(resp.Return))
+
+	// Unmarshal the response
+	target, ok := qmp.CommandResponseTypes[command.QMPCommand.Execute]
+	if !ok {
+		slog.Warn("Unhandled QMP command", "cmd", command.QMPCommand.Execute)
+		msg.Respond(resp.Return)
+		return
+	}
+
+	if err := json.Unmarshal(resp.Return, target); err != nil {
+		slog.Error("Failed to unmarshal QMP response", "cmd", command.QMPCommand.Execute, "err", err)
+		msg.Respond(resp.Return)
+		return
+	}
+
+	// Update attributes and respond
+	d.Instances.Mu.Lock()
+	instance.Attributes = command.Attributes
+	d.Instances.Mu.Unlock()
+
+	if err := d.WriteState(); err != nil {
 		slog.Error("Failed to write state to disk", "err", err)
 	}
 
-	// Respond to NATS
 	msg.Respond(resp.Return)
-
 }
 
 // handleEC2RunInstances processes incoming EC2 RunInstances requests
@@ -1415,27 +1441,24 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 		go func() {
 			defer wg.Done()
 
-			// Send shutdown command
+			// Send shutdown command - if it fails, VM may already be dead, continue with cleanup
 			_, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "system_powerdown"}, instance.ID)
-
 			if err != nil {
-				slog.Error("Failed to send system_powerdown", "id", instance.ID, "err", err)
-				return
+				slog.Warn("QMP system_powerdown failed (VM may already be stopped)", "id", instance.ID, "err", err)
+				// Don't return - continue with cleanup
 			}
 
-			// Wait for PID file removal
+			// Wait for PID file removal (or check if already gone)
 			err = utils.WaitForPidFileRemoval(instance.ID, 60*time.Second)
-
 			if err != nil {
-				slog.Error("Timeout waiting for PID file removal", "id", instance.ID, "err", err)
+				slog.Warn("Timeout waiting for PID file removal", "id", instance.ID, "err", err)
 
-				// Try force killing the process
-				pid, err := utils.ReadPidFile(instance.ID)
-				if err != nil {
-					slog.Error("Failed to read PID file", "id", instance.ID, "err", err)
+				// Try force killing the process if it's still running
+				pid, readErr := utils.ReadPidFile(instance.ID)
+				if readErr != nil {
+					slog.Debug("No PID file found (VM likely already stopped)", "id", instance.ID)
 				} else {
-					slog.Info("Killing process", "pid", pid, "id", instance.ID)
-					// Send SIG directly if QMP fails
+					slog.Info("Force killing process", "pid", pid, "id", instance.ID)
 					utils.KillProcess(pid)
 				}
 			}
@@ -1576,41 +1599,32 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 	go func() {
 		for {
 			time.Sleep(30 * time.Second)
-			slog.Info("QMP heartbeat", "instance", instance.ID)
-			status, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "query-status"}, instance.ID)
+
+			// Check if instance is in a terminal or transitional state - exit heartbeat
+			d.Instances.Mu.Lock()
+			status := instance.Status
+			d.Instances.Mu.Unlock()
+
+			if status == "stopping" || status == "stopped" || status == "shutting-down" || status == "terminated" || status == "error" {
+				slog.Info("QMP heartbeat exiting - instance not running", "instance", instance.ID, "status", status)
+
+				// Close the QMP client connection if it exists
+				if instance.QMPClient != nil && instance.QMPClient.Conn != nil {
+					instance.QMPClient.Conn.Close()
+				}
+				return
+			}
+
+			slog.Debug("QMP heartbeat", "instance", instance.ID)
+			qmpStatus, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "query-status"}, instance.ID)
 
 			if err != nil {
-				slog.Error("Failed to send QMP command", "err", err)
-
-				// Check if the instance is stopping, mark as stopped
-				d.Instances.Mu.Lock()
-				defer d.Instances.Mu.Unlock()
-
-				if instance.Status == "powering_down" {
-					instance.Status = "stopped"
-
-					// TODO: Improve, confirm QEMU PID removed
-					slog.Info("QMP Status - Instance stopped, exiting heartbeat", "id", instance.ID)
-
-					// TODO: Improve, move to SendQMPCommand
-					// Unsubscribe from the NATS subject
-					slog.Info("Unsubscribing from NATS subject", "instance", instance.ID)
-					d.natsSubscriptions[fmt.Sprintf("ec2.cmd.%s", instance.ID)].Unsubscribe()
-					//d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)].Unsubscribe()
-
-					// Close the QMP client connection
-					slog.Info("Closing QMP client connection", "instance", instance.ID)
-					instance.QMPClient.Conn.Close()
-
-					// Exit the goroutine
-					break
-				}
-
+				slog.Warn("QMP heartbeat failed", "instance", instance.ID, "err", err)
+				// Don't exit on transient errors - let the status check above handle terminal states
 				continue
 			}
 
-			slog.Info("QMP status", "status", string(status.Return))
-
+			slog.Debug("QMP status", "instance", instance.ID, "status", string(qmpStatus.Return))
 		}
 	}()
 
