@@ -4,22 +4,44 @@ Notes for development environment installation.
 
 ## Dependencies
 
-For running on Ubuntu 22.04, 24.04 and 25.10.
+The current supported OS that is validated and tested includes:
+
+* Ubuntu 22.04
+* Ubuntu 24.04
+* Ubuntu 25.10
+
+For the development preview please use one of the supported versions above.
+
+## Download
+
+Create the base directory for the Hive development environment.
+
+```bash
+mkdir -p ~/Development/mulga/
+cd ~/Development/mulga/
+git clone https://github.com/mulgadc/hive.git
+```
+
 
 ### Quick Install
 
+To bootstrap the dependencies of Hive in one simple step (QEMU, Go, AWS CLI)
+
 ```bash
+cd hive
 make quickinstall
 ```
 
 ### Manual Install
+
+Alternatively, run the following steps to manually setup the required dependencies.
 
 ```bash
 sudo add-apt-repository universe
 sudo apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu-kvm libvirt-daemon-system libvirt-clients libvirt-dev make gcc unzip xz-utils file
 ```
 
-Ensure the Go toolkit is installed, recommended to install the latest directly from [https://go.dev/dl/](https://go.dev/dl/).
+Ensure the Go toolkit is installed for version 1.25.5 or higher. Recommended to install the latest directly from [https://go.dev/dl/](https://go.dev/dl/).
 
 Confirm go is correctly installed, and set in your $PATH.
 
@@ -44,14 +66,6 @@ aws --version
 ```
 
 ## Build
-
-Create the base directory for the Hive development environment.
-
-```bash
-mkdir -p ~/Development/mulga/
-cd ~/Development/mulga/
-git clone https://github.com/mulgadc/hive.git
-```
 
 Setup the dev environment and package dependencies on [viperblock](https://github.com/mulgadc/viperblock/) and [predastore](https://github.com/mulgadc/predastore/).
 

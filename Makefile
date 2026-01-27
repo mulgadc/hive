@@ -1,5 +1,25 @@
 GO_PROJECT_NAME := hive
 
+# Detect architecture for cross-platform support
+ARCH := $(shell uname -m)
+ifeq ($(ARCH),x86_64)
+  GO_ARCH := amd64
+  AWS_ARCH := x86_64
+  # On x86, we can run ARM VMs via emulation
+  QEMU_PACKAGES := qemu-system-x86 qemu-system-arm
+else ifeq ($(ARCH),aarch64)
+  GO_ARCH := arm64
+  AWS_ARCH := aarch64
+  # On ARM, we can run x86 VMs via emulation
+  QEMU_PACKAGES := qemu-system-aarch64 qemu-system-x86
+else ifeq ($(ARCH),arm64)
+  GO_ARCH := arm64
+  AWS_ARCH := aarch64
+  QEMU_PACKAGES := qemu-system-aarch64 qemu-system-x86
+else
+  $(error Unsupported architecture: $(ARCH). Only x86_64 and aarch64/arm64 are supported.)
+endif
+
 # Ask Go whether workspace mode is active
 IN_WORKSPACE := $(shell go env GOWORK)
 
@@ -41,25 +61,26 @@ clean:
 	rm ./bin/$(GO_PROJECT_NAME)
 
 install-system:
-	@echo "\n....Installing system dependencies...."
+	@echo "\n....Installing system dependencies for $(ARCH)...."
+	@echo "QEMU packages: $(QEMU_PACKAGES)"
 	apt-get update && apt-get install -y \
-		nbdkit nbdkit-plugin-dev pkg-config qemu-system-x86 qemu-utils qemu-kvm \
+		nbdkit nbdkit-plugin-dev pkg-config $(QEMU_PACKAGES) qemu-utils qemu-kvm \
 		libvirt-daemon-system libvirt-clients libvirt-dev make gcc jq curl \
 		iproute2 netcat-openbsd openssh-client wget git unzip sudo xz-utils file
 
 install-go:
-	@echo "\n....Installing Go 1.25.5...."
+	@echo "\n....Installing Go 1.25.5 for $(ARCH) ($(GO_ARCH))...."
 	@if [ ! -d "/usr/local/go" ]; then \
-		curl -L https://go.dev/dl/go1.25.5.linux-amd64.tar.gz | tar -C /usr/local -xz; \
+		curl -L https://go.dev/dl/go1.25.5.linux-$(GO_ARCH).tar.gz | tar -C /usr/local -xz; \
 	else \
 		echo "Go already installed in /usr/local/go"; \
 	fi
 	@echo "Go version: $$(go version)"
 
 install-aws:
-	@echo "\n....Installing AWS CLI v2...."
+	@echo "\n....Installing AWS CLI v2 for $(ARCH) ($(AWS_ARCH))...."
 	@if ! command -v aws >/dev/null 2>&1; then \
-		curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"; \
+		curl "https://awscli.amazonaws.com/awscli-exe-linux-$(AWS_ARCH).zip" -o "awscliv2.zip"; \
 		unzip -o awscliv2.zip; \
 		./aws/install; \
 		rm -rf awscliv2.zip aws/; \
@@ -68,7 +89,9 @@ install-aws:
 	fi
 
 quickinstall: install-system install-go install-aws
-	@echo "\n✅ Quickinstall complete. Please ensure /usr/local/go/bin is in your PATH."
+	@echo "\n✅ Quickinstall complete for $(ARCH)."
+	@echo "   Please ensure /usr/local/go/bin is in your PATH."
+	@echo "   Installed: Go ($(GO_ARCH)), AWS CLI ($(AWS_ARCH)), QEMU ($(QEMU_PACKAGES))"
 
 security:
 	@echo "\n....Running security checks for $(GO_PROJECT_NAME)...."
