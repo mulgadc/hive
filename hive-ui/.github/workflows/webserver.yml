@@ -1,0 +1,44 @@
+name: Webserver Build and Test
+
+on:
+  push:
+    branches: [ main ]
+    paths: ["webserver/**", ".github/workflows/webserver.yml"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend:
+    name: Backend Build and Test
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: webserver
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          cache-dependency-path: webserver/go.sum
+          go-version-file: webserver/go.mod
+
+      # - name: Run Tests
+      #   run: go test -v ./...
+
+      - name: Go Vet
+        run: go vet ./...
+
+      - name: Static Check
+        run: go tool staticcheck ./...
+
+      - name: Go Vulnerability Check
+        run: go tool govulncheck ./...
+
+      - name: Gosec Security Scanner
+        run: go tool gosec -exclude-generated ./...
+
+      - name: Build
+        run: go build ./...
