@@ -128,6 +128,8 @@ github.com/minio/highwayhash v1.0.3 h1:kbnuUMoHYyVl7szWjSxJnxw11k2U709jqFPPmIUyD
 github.com/minio/highwayhash v1.0.3/go.mod h1:GGYsuwP/fPD6Y9hMiXuapVvlIUEhFhMTh0rxU3ik1LQ=
 github.com/mulgadc/predastore v0.1.5 h1:7SySkQQ5MQ1NTcKcB14pCUIJipq0YVgCJZeKM6ytrLM=
 github.com/mulgadc/predastore v0.1.5/go.mod h1:BhMymRV3zMTu2S+5pJnNDDm5+AGakjhSc/PKX0q8Xfg=
+github.com/mulgadc/predastore v1.0.0 h1:IZ5V/EL+k+zz0zGoTYp+1BgODb43JxHsb/kvORuydKI=
+github.com/mulgadc/predastore v1.0.0/go.mod h1:x46A1z091hlZkMt3kkcuLSy2PAzSgROr6ft04qcYOU4=
 github.com/mulgadc/viperblock v0.1.4 h1:YnRHEC6XNbhnSk6S+ET3X7DTMRezdO3o1O3nO/R9Syg=
 github.com/mulgadc/viperblock v0.1.4/go.mod h1:JNooDHb6ZuPvNPWaf0gChlft/D8xs5jHJFln+P3B9lQ=
 github.com/mulgadc/viperblock v0.1.5 h1:vS7ImGApQvxKuU1+fJNmwOycduwr9fx/xyofxWYKPcI=
