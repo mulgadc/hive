@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -19,13 +18,34 @@ func main() {
 	// Get the project root (current directory when run via make)
 	projectRoot, err := os.Getwd()
 	if err != nil {
-		log.Fatal("Failed to get project root:", err)
+		slog.Error("Failed to get project root:", "error", err)
+		os.Exit(1)
 	}
 
 	// Check if dist directory exists
 	distDir := filepath.Join(projectRoot, "frontend", "dist")
 	if _, err := os.Stat(distDir); os.IsNotExist(err) {
-		log.Fatalf("Frontend dist directory not found: %s", distDir)
+		slog.Error("Frontend dist directory not found:", "error", err)
+		os.Exit(1)
+	}
+
+	// Get home directory for certificate files
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		slog.Error("Failed to get home directory:", "error", err)
+		os.Exit(1)
+	}
+	certFile := filepath.Join(homeDir, "hive", "config", "server.pem")
+	keyFile := filepath.Join(homeDir, "hive", "config", "server.key")
+
+	// Check if certificates exist
+	if _, err := os.Stat(certFile); os.IsNotExist(err) {
+		slog.Error("Certificate file not found:", "error", err)
+		os.Exit(1)
+	}
+	if _, err := os.Stat(keyFile); os.IsNotExist(err) {
+		slog.Error("Key file not found:", "error", err)
+		os.Exit(1)
 	}
 
 	// Serve static files
@@ -53,17 +73,6 @@ func main() {
 	// Wrap handler with security headers and gzip compression
 	http.Handle("/", securityHeadersMiddleware(gzipMiddleware(handler)))
 
-	certFile := filepath.Join(projectRoot, "certs", "server.crt")
-	keyFile := filepath.Join(projectRoot, "certs", "server.key")
-
-	// Check if certificates exist
-	if _, err := os.Stat(certFile); os.IsNotExist(err) {
-		log.Fatalf("Certificate file not found: %s", certFile)
-	}
-	if _, err := os.Stat(keyFile); os.IsNotExist(err) {
-		log.Fatalf("Key file not found: %s", keyFile)
-	}
-
 	port := ":3000"
 
 	server := &http.Server{
@@ -75,7 +84,10 @@ func main() {
 	}
 
 	slog.Info("Starting server with HTTPS", "port", port)
-	log.Fatal(server.ListenAndServeTLS(certFile, keyFile))
+	if err := server.ListenAndServeTLS(certFile, keyFile); err != nil {
+		slog.Error("Failed to start server:", "error", err)
+		os.Exit(1)
+	}
 }
 
 func securityHeadersMiddleware(next http.Handler) http.Handler {
@@ -100,7 +112,8 @@ func gzipMiddleware(next http.Handler) http.Handler {
 		"text/plain",
 	}))
 	if err != nil {
-		log.Fatal("Failed to create gzip middleware:", err)
+		slog.Warn("Failed to create gzip middleware, serving uncompressed:", "error", err)
+		return next
 	}
 	return g(next)
 }
