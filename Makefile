@@ -63,7 +63,7 @@ clean:
 install-system:
 	@echo "\n....Installing system dependencies for $(ARCH)...."
 	@echo "QEMU packages: $(QEMU_PACKAGES)"
-	sudo apt-get update && apt-get install -y \
+	apt-get update && sudo apt-get install -y \
 		nbdkit nbdkit-plugin-dev pkg-config $(QEMU_PACKAGES) qemu-utils qemu-kvm \
 		libvirt-daemon-system libvirt-clients libvirt-dev make gcc jq curl \
 		iproute2 netcat-openbsd openssh-client wget git unzip sudo xz-utils file

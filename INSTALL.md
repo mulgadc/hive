@@ -28,8 +28,7 @@ git clone https://github.com/mulgadc/hive.git
 To bootstrap the dependencies of Hive in one simple step (QEMU, Go, AWS CLI)
 
 ```bash
-cd hive
-make quickinstall
+sudo make -C hive quickinstall
 ```
 
 ### Manual Install
