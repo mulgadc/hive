@@ -90,6 +90,23 @@ Example single node installation to get started, this will create a new region `
 ./bin/hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
 ```
 
+## Trust CA Certificate (Required)
+
+Hive generates a local Certificate Authority (CA) during initialization. For AWS CLI and other tools to trust Hive services over HTTPS, you must add the CA certificate to your system's trust store.
+
+```bash
+sudo cp ~/hive/config/ca.pem /usr/local/share/ca-certificates/hive-ca.crt
+sudo update-ca-certificates
+```
+
+Verify the certificate was added:
+
+```bash
+ls -la /usr/local/share/ca-certificates/hive-ca.crt
+```
+
+This step is required for AWS CLI 2.33+ which requires proper CA trust chains. Without this, you would need to use `--no-verify-ssl` for every AWS CLI command.
+
 Next, set the AWS profile to use `hive` which points to the local environment.
 
 ```bash
@@ -550,13 +567,12 @@ Once the multi-node is configured, follow the original installation instructions
 - Clone an AMI
 - Launch an instance
 
-Note - when using the AWS CLI tool you must specify the IP address of the node (10.11.12.1, 10.11.12.2, or 10.11.12.3 ) and ignore SSL verification for development purposes, specifically appending the arguments `--endpoint-url https://10.11.12.3:9999/ --no-verify-ssl`.
+Note - when using the AWS CLI tool you must specify the IP address of the node (10.11.12.1, 10.11.12.2, or 10.11.12.3).
+
+**Important**: For multi-node setups, the server certificates need to include the additional IP addresses. You may need to regenerate certificates with the `--force` flag after configuring multi-node, or ensure the CA certificate is trusted system-wide (see "Trust CA Certificate" section above).
 
 ```bash
-aws --endpoint-url https://10.11.12.3:9999/ --no-verify-ssl ec2 describe-instances --insta
-nce-ids i-9f5f648adc57ea46d
-
-urllib3/connectionpool.py:1064: InsecureRequestWarning: Unverified HTTPS request is being made to host '10.11.12.3'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/1.26.x/advanced-usage.html#ssl-warnings
+aws --endpoint-url https://10.11.12.3:9999/ ec2 describe-instances --instance-ids i-9f5f648adc57ea46d
 ```
 
 ```json

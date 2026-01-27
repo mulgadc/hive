@@ -78,26 +78,49 @@ func GenerateConfigFile(configPath string, configTemplate string, configSettings
 	return nil
 }
 
-func GenerateCertificatesIfNeeded(configDir string, force bool) (certPath string) {
-	// Generate SSL certificates
-	certPath = filepath.Join(configDir, "server.pem")
-	keyPath := filepath.Join(configDir, "server.key")
+func GenerateCertificatesIfNeeded(configDir string, force bool) (caCertPath string) {
+	// Certificate paths
+	caCertPath = filepath.Join(configDir, "ca.pem")
+	caKeyPath := filepath.Join(configDir, "ca.key")
+	serverCertPath := filepath.Join(configDir, "server.pem")
+	serverKeyPath := filepath.Join(configDir, "server.key")
 
-	if force || !FileExists(certPath) || !FileExists(keyPath) {
-		fmt.Println("\n🔐 Generating SSL certificates...")
-		if err := GenerateSelfSignedCert(certPath, keyPath); err != nil {
-			fmt.Fprintf(os.Stderr, "Error generating SSL certificates: %v\n", err)
+	// Check if we need to generate certificates
+	needsGeneration := force ||
+		!FileExists(caCertPath) || !FileExists(caKeyPath) ||
+		!FileExists(serverCertPath) || !FileExists(serverKeyPath)
+
+	if needsGeneration {
+		fmt.Println("\n🔐 Generating Certificate Authority and SSL certificates...")
+
+		// Step 1: Generate CA certificate
+		if err := GenerateCACert(caCertPath, caKeyPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error generating CA certificate: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("✅ SSL certificates generated:\n")
-		fmt.Printf("   Certificate: %s\n", certPath)
-		fmt.Printf("   Key: %s\n", keyPath)
+		fmt.Printf("✅ CA certificate generated:\n")
+		fmt.Printf("   CA Certificate: %s\n", caCertPath)
+		fmt.Printf("   CA Key: %s\n", caKeyPath)
+
+		// Step 2: Generate server certificate signed by CA
+		if err := GenerateSignedCert(serverCertPath, serverKeyPath, caCertPath, caKeyPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error generating server certificate: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("✅ Server certificate generated (signed by CA):\n")
+		fmt.Printf("   Certificate: %s\n", serverCertPath)
+		fmt.Printf("   Key: %s\n", serverKeyPath)
+
+		// Print instructions for adding CA to system trust store
+		fmt.Println("\n📋 To trust the Hive CA system-wide (recommended):")
+		fmt.Printf("   sudo cp %s /usr/local/share/ca-certificates/hive-ca.crt\n", caCertPath)
+		fmt.Println("   sudo update-ca-certificates")
+		fmt.Println("\n   This allows AWS CLI and other tools to trust Hive services automatically.")
 	} else {
-		fmt.Println("\n✅ SSL certificates already exist")
+		fmt.Println("\n✅ CA and SSL certificates already exist")
 	}
 
-	return certPath
-
+	return caCertPath
 }
 
 func CreateServiceDirectories(hiveRoot string) {
@@ -213,7 +236,179 @@ func GenerateNATSToken() string {
 	return "nats_" + base64.URLEncoding.EncodeToString(bytes)[:32]
 }
 
-// generateSelfSignedCert generates a self-signed SSL certificate
+// GenerateCACert generates a Certificate Authority certificate and key
+func GenerateCACert(caCertPath, caKeyPath string) error {
+	// Generate CA private key
+	caPrivateKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	if err != nil {
+		return fmt.Errorf("failed to generate CA private key: %w", err)
+	}
+
+	// Create CA certificate template
+	notBefore := time.Now()
+	notAfter := notBefore.Add(3650 * 24 * time.Hour) // 10 years
+
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return fmt.Errorf("failed to generate serial number: %w", err)
+	}
+
+	caTemplate := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName:   "Hive Local CA",
+			Organization: []string{"Hive Platform"},
+		},
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLen:            1,
+	}
+
+	// Self-sign the CA certificate
+	caDerBytes, err := x509.CreateCertificate(rand.Reader, &caTemplate, &caTemplate, &caPrivateKey.PublicKey, caPrivateKey)
+	if err != nil {
+		return fmt.Errorf("failed to create CA certificate: %w", err)
+	}
+
+	// Write CA certificate to file
+	caCertOut, err := os.Create(caCertPath)
+	if err != nil {
+		return fmt.Errorf("failed to create CA cert file: %w", err)
+	}
+	defer caCertOut.Close()
+
+	if err := pem.Encode(caCertOut, &pem.Block{Type: "CERTIFICATE", Bytes: caDerBytes}); err != nil {
+		return fmt.Errorf("failed to write CA cert: %w", err)
+	}
+
+	// Write CA private key to file
+	caKeyOut, err := os.OpenFile(caKeyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to create CA key file: %w", err)
+	}
+	defer caKeyOut.Close()
+
+	caPrivBytes, err := x509.MarshalPKCS8PrivateKey(caPrivateKey)
+	if err != nil {
+		return fmt.Errorf("failed to marshal CA private key: %w", err)
+	}
+
+	if err := pem.Encode(caKeyOut, &pem.Block{Type: "PRIVATE KEY", Bytes: caPrivBytes}); err != nil {
+		return fmt.Errorf("failed to write CA key: %w", err)
+	}
+
+	return nil
+}
+
+// GenerateSignedCert generates a server certificate signed by the CA
+func GenerateSignedCert(certPath, keyPath, caCertPath, caKeyPath string) error {
+	// Load CA certificate
+	caCertPEM, err := os.ReadFile(caCertPath)
+	if err != nil {
+		return fmt.Errorf("failed to read CA cert: %w", err)
+	}
+
+	caCertBlock, _ := pem.Decode(caCertPEM)
+	if caCertBlock == nil {
+		return fmt.Errorf("failed to decode CA cert PEM")
+	}
+
+	caCert, err := x509.ParseCertificate(caCertBlock.Bytes)
+	if err != nil {
+		return fmt.Errorf("failed to parse CA cert: %w", err)
+	}
+
+	// Load CA private key
+	caKeyPEM, err := os.ReadFile(caKeyPath)
+	if err != nil {
+		return fmt.Errorf("failed to read CA key: %w", err)
+	}
+
+	caKeyBlock, _ := pem.Decode(caKeyPEM)
+	if caKeyBlock == nil {
+		return fmt.Errorf("failed to decode CA key PEM")
+	}
+
+	caPrivateKey, err := x509.ParsePKCS8PrivateKey(caKeyBlock.Bytes)
+	if err != nil {
+		return fmt.Errorf("failed to parse CA private key: %w", err)
+	}
+
+	caRSAKey, ok := caPrivateKey.(*rsa.PrivateKey)
+	if !ok {
+		return fmt.Errorf("CA key is not RSA")
+	}
+
+	// Generate server private key
+	serverPrivateKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	if err != nil {
+		return fmt.Errorf("failed to generate server private key: %w", err)
+	}
+
+	// Create server certificate template
+	notBefore := time.Now()
+	notAfter := notBefore.Add(365 * 24 * time.Hour) // 1 year for server certs
+
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return fmt.Errorf("failed to generate serial number: %w", err)
+	}
+
+	serverTemplate := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			CommonName:   "localhost",
+			Organization: []string{"Hive Platform"},
+		},
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              []string{"localhost"},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+	}
+
+	// Sign the server certificate with the CA
+	serverDerBytes, err := x509.CreateCertificate(rand.Reader, &serverTemplate, caCert, &serverPrivateKey.PublicKey, caRSAKey)
+	if err != nil {
+		return fmt.Errorf("failed to create server certificate: %w", err)
+	}
+
+	// Write server certificate to file
+	certOut, err := os.Create(certPath)
+	if err != nil {
+		return fmt.Errorf("failed to create cert file: %w", err)
+	}
+	defer certOut.Close()
+
+	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: serverDerBytes}); err != nil {
+		return fmt.Errorf("failed to write cert: %w", err)
+	}
+
+	// Write server private key to file
+	keyOut, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to create key file: %w", err)
+	}
+	defer keyOut.Close()
+
+	privBytes, err := x509.MarshalPKCS8PrivateKey(serverPrivateKey)
+	if err != nil {
+		return fmt.Errorf("failed to marshal private key: %w", err)
+	}
+
+	if err := pem.Encode(keyOut, &pem.Block{Type: "PRIVATE KEY", Bytes: privBytes}); err != nil {
+		return fmt.Errorf("failed to write key: %w", err)
+	}
+
+	return nil
+}
+
+// generateSelfSignedCert generates a self-signed SSL certificate (legacy, kept for compatibility)
 func GenerateSelfSignedCert(certPath, keyPath string) error {
 	// Generate private key
 	privateKey, err := rsa.GenerateKey(rand.Reader, 4096)
