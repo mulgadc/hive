@@ -1,0 +1,73 @@
+name: UI Build and Test
+
+on:
+  push:
+    branches: [main, ui]
+    paths: ["hive-ui/**", ".github/workflows/ui.yml"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  frontend:
+    name: Frontend Build and Test
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: hive-ui/frontend
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: hive-ui/frontend/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          cache: "pnpm"
+          cache-dependency-path: hive-ui/frontend/pnpm-lock.yaml
+          node-version-file: hive-ui/frontend/.nvmrc
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Biome formatter check
+        run: pnpm check
+
+      - name: Build frontend
+        run: pnpm build
+
+  webserver:
+    name: Webserver Build and Test
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: hive-ui/webserver
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          cache-dependency-path: hive-ui/webserver/go.sum
+          go-version-file: hive-ui/webserver/go.mod
+
+      - name: Go Vet
+        run: go vet ./...
+
+      - name: Static Check
+        run: go tool staticcheck ./...
+
+      - name: Go Vulnerability Check
+        run: go tool govulncheck ./...
+
+      - name: Gosec Security Scanner
+        run: go tool gosec -exclude-generated ./...
+
+      - name: Build
+        run: go build ./...
