@@ -23,8 +23,3 @@ Thumbs.db
 
 # hive-ui
 hive-ui/certs/
-hive-ui/frontend/node_modules/
-hive-ui/frontend/dist/
-hive-ui/frontend/.tanstack/
-hive-ui/frontend/*.tsbuildinfo
-hive-ui/frontend/.pnpm-store/
