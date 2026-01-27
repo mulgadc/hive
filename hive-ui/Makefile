@@ -1,17 +1,11 @@
 GO_PROJECT_NAME := webserver
 
-# Ask Go whether workspace mode is active
-IN_WORKSPACE := $(shell go env GOWORK)
-
-# Use -mod=mod unless Go reports an active workspace path
-GO_BUILD_MOD := $(if $(filter-out off,$(IN_WORKSPACE)),,-mod=mod)
-
 build:
 	@echo "\n....Building frontend...."
 	cd frontend && pnpm build && cd ..
 
 	@echo "\n....Building $(GO_PROJECT_NAME)...."
-	go build $(GO_BUILD_MOD) -ldflags "-s -w" -o ./bin/$(GO_PROJECT_NAME) webserver/main.go
+	cd webserver && GOWORK=off go build -ldflags "-s -w" -o ../bin/$(GO_PROJECT_NAME) .
 
 run:
 	$(MAKE) build

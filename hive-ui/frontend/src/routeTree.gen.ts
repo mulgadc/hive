@@ -128,22 +128,22 @@ const AuthEc2imagesDescribeImagesIdRoute =
   } as any)
 
 export interface FileRoutesByFullPath {
-  '/login': typeof LoginRoute
   '/': typeof AuthIndexRoute
+  '/login': typeof LoginRoute
   '/s3/ls/$bucket': typeof AuthS3LsBucketRouteRouteWithChildren
   '/ec2/run-instances': typeof AuthEc2instancesRunInstancesRoute
   '/ec2/create-key-pair': typeof AuthEc2keyCreateKeyPairRoute
   '/ec2/import-key-pair': typeof AuthEc2keyImportKeyPairRoute
-  '/s3/ls': typeof AuthS3LsIndexRoute
+  '/s3/ls/': typeof AuthS3LsIndexRoute
   '/ec2/describe-images/$id': typeof AuthEc2imagesDescribeImagesIdRoute
   '/ec2/describe-instances/$id': typeof AuthEc2instancesDescribeInstancesIdRoute
   '/ec2/describe-key-pairs/$id': typeof AuthEc2keyDescribeKeyPairsIdRoute
   '/ec2/describe-volumes/$id': typeof AuthEc2volumesDescribeVolumesIdRoute
   '/s3/ls/$bucket/$': typeof AuthS3LsBucketSplatRoute
-  '/ec2/describe-images': typeof AuthEc2imagesDescribeImagesIndexRoute
-  '/ec2/describe-instances': typeof AuthEc2instancesDescribeInstancesIndexRoute
-  '/ec2/describe-key-pairs': typeof AuthEc2keyDescribeKeyPairsIndexRoute
-  '/ec2/describe-volumes': typeof AuthEc2volumesDescribeVolumesIndexRoute
+  '/ec2/describe-images/': typeof AuthEc2imagesDescribeImagesIndexRoute
+  '/ec2/describe-instances/': typeof AuthEc2instancesDescribeInstancesIndexRoute
+  '/ec2/describe-key-pairs/': typeof AuthEc2keyDescribeKeyPairsIndexRoute
+  '/ec2/describe-volumes/': typeof AuthEc2volumesDescribeVolumesIndexRoute
   '/s3/ls/$bucket/': typeof AuthS3LsBucketIndexRoute
 }
 export interface FileRoutesByTo {
@@ -188,22 +188,22 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    | '/login'
     | '/'
+    | '/login'
     | '/s3/ls/$bucket'
     | '/ec2/run-instances'
     | '/ec2/create-key-pair'
     | '/ec2/import-key-pair'
-    | '/s3/ls'
+    | '/s3/ls/'
     | '/ec2/describe-images/$id'
     | '/ec2/describe-instances/$id'
     | '/ec2/describe-key-pairs/$id'
     | '/ec2/describe-volumes/$id'
     | '/s3/ls/$bucket/$'
-    | '/ec2/describe-images'
-    | '/ec2/describe-instances'
-    | '/ec2/describe-key-pairs'
-    | '/ec2/describe-volumes'
+    | '/ec2/describe-images/'
+    | '/ec2/describe-instances/'
+    | '/ec2/describe-key-pairs/'
+    | '/ec2/describe-volumes/'
     | '/s3/ls/$bucket/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -262,7 +262,7 @@ declare module '@tanstack/react-router' {
     '/_auth': {
       id: '/_auth'
       path: ''
-      fullPath: ''
+      fullPath: '/'
       preLoaderRoute: typeof AuthRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
@@ -276,7 +276,7 @@ declare module '@tanstack/react-router' {
     '/_auth/s3/ls/': {
       id: '/_auth/s3/ls/'
       path: '/s3/ls'
-      fullPath: '/s3/ls'
+      fullPath: '/s3/ls/'
       preLoaderRoute: typeof AuthS3LsIndexRouteImport
       parentRoute: typeof AuthRouteRoute
     }
@@ -318,28 +318,28 @@ declare module '@tanstack/react-router' {
     '/_auth/ec2/(volumes)/describe-volumes/': {
       id: '/_auth/ec2/(volumes)/describe-volumes/'
       path: '/ec2/describe-volumes'
-      fullPath: '/ec2/describe-volumes'
+      fullPath: '/ec2/describe-volumes/'
       preLoaderRoute: typeof AuthEc2volumesDescribeVolumesIndexRouteImport
       parentRoute: typeof AuthRouteRoute
     }
     '/_auth/ec2/(key)/describe-key-pairs/': {
       id: '/_auth/ec2/(key)/describe-key-pairs/'
       path: '/ec2/describe-key-pairs'
-      fullPath: '/ec2/describe-key-pairs'
+      fullPath: '/ec2/describe-key-pairs/'
       preLoaderRoute: typeof AuthEc2keyDescribeKeyPairsIndexRouteImport
       parentRoute: typeof AuthRouteRoute
     }
     '/_auth/ec2/(instances)/describe-instances/': {
       id: '/_auth/ec2/(instances)/describe-instances/'
       path: '/ec2/describe-instances'
-      fullPath: '/ec2/describe-instances'
+      fullPath: '/ec2/describe-instances/'
       preLoaderRoute: typeof AuthEc2instancesDescribeInstancesIndexRouteImport
       parentRoute: typeof AuthRouteRoute
     }
     '/_auth/ec2/(images)/describe-images/': {
       id: '/_auth/ec2/(images)/describe-images/'
       path: '/ec2/describe-images'
-      fullPath: '/ec2/describe-images'
+      fullPath: '/ec2/describe-images/'
       preLoaderRoute: typeof AuthEc2imagesDescribeImagesIndexRouteImport
       parentRoute: typeof AuthRouteRoute
     }
