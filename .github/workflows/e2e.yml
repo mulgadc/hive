@@ -1,4 +1,4 @@
-name: E2E Test Hive
+name: Hive E2E Test
 
 on:
   push:

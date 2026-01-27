@@ -1,8 +1,25 @@
-.vscode
+# Go workspace
 go.work
 go.work.sum
-bin/hive
+
+# Build outputs
+bin/
 tmp/
+*.test
+*.out
+
+# Config
 config/dev.yaml
+
+# OS files
 .DS_Store
-tests/*.txt
+Thumbs.db
+
+# Environment
+.env
+
+# Test reports
+*-report.txt
+
+# hive-ui
+hive-ui/certs/
