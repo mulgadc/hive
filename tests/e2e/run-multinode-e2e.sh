@@ -91,6 +91,12 @@ echo "========================================"
 echo ""
 init_leader_node
 
+# Trust the Hive CA certificate for AWS CLI SSL verification
+echo ""
+echo "Adding Hive CA certificate to system trust store..."
+sudo cp ~/node1/config/ca.pem /usr/local/share/ca-certificates/hive-ca.crt
+sudo update-ca-certificates
+
 # Start node1 services first (leader must be running for join)
 echo ""
 echo "Starting node1 services..."
@@ -203,130 +209,130 @@ aws_json $AWS_EC2 describe-images --image-ids "$AMI_ID" | jq -e ".Images[0] | se
 echo "  AMI verified"
 
 # Phase 5: Multi-Node Instance Tests
-# echo ""
-# echo "Phase 5: Multi-Node Instance Tests"
-# echo "========================================"
+echo ""
+echo "Phase 5: Multi-Node Instance Tests"
+echo "========================================"
 
-# # Test 1: Instance Distribution
-# echo ""
-# echo "Test 1: Instance Distribution"
-# echo "----------------------------------------"
-# echo "Launching 3 instances to test distribution across nodes..."
+# Test 1: Instance Distribution
+echo ""
+echo "Test 1: Instance Distribution"
+echo "----------------------------------------"
+echo "Launching 3 instances to test distribution across nodes..."
 
-# INSTANCE_IDS=()
-# for i in 1 2 3; do
-#     echo "  Launching instance $i..."
-#     RUN_OUTPUT=$(aws_json $AWS_EC2 run-instances \
-#         --image-id "$AMI_ID" \
-#         --instance-type "$INSTANCE_TYPE" \
-#         --key-name multinode-test-key)
+INSTANCE_IDS=()
+for i in 1 2 3; do
+    echo "  Launching instance $i..."
+    RUN_OUTPUT=$(aws_json $AWS_EC2 run-instances \
+        --image-id "$AMI_ID" \
+        --instance-type "$INSTANCE_TYPE" \
+        --key-name multinode-test-key)
 
-#     INSTANCE_ID=$(echo "$RUN_OUTPUT" | jq -r '.Instances[0].InstanceId')
-#     if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "null" ]; then
-#         echo "  ERROR: Failed to launch instance $i"
-#         echo "  Output: $RUN_OUTPUT"
-#         exit 1
-#     fi
-#     echo "  Launched: $INSTANCE_ID"
-#     INSTANCE_IDS+=("$INSTANCE_ID")
+    INSTANCE_ID=$(echo "$RUN_OUTPUT" | jq -r '.Instances[0].InstanceId')
+    if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "null" ]; then
+        echo "  ERROR: Failed to launch instance $i"
+        echo "  Output: $RUN_OUTPUT"
+        exit 1
+    fi
+    echo "  Launched: $INSTANCE_ID"
+    INSTANCE_IDS+=("$INSTANCE_ID")
 
-#     # Small delay between launches to encourage distribution
-#     sleep 2
-# done
+    # Small delay between launches to encourage distribution
+    sleep 2
+done
 
-# # Wait for all instances to be running
-# echo ""
-# echo "Waiting for instances to reach running state..."
-# for instance_id in "${INSTANCE_IDS[@]}"; do
-#     wait_for_instance_state "$instance_id" "running" 60 || {
-#         echo "ERROR: Instance $instance_id failed to start"
-#         exit 1
-#     }
-# done
+# Wait for all instances to be running
+echo ""
+echo "Waiting for instances to reach running state..."
+for instance_id in "${INSTANCE_IDS[@]}"; do
+    wait_for_instance_state "$instance_id" "running" 60 || {
+        echo "ERROR: Instance $instance_id failed to start"
+        exit 1
+    }
+done
 
-# # Check distribution
-# echo ""
-# check_instance_distribution
+# Check distribution
+echo ""
+check_instance_distribution
 
-# # Test 2: DescribeInstances Aggregation
-# echo ""
-# echo "Test 2: DescribeInstances Aggregation"
-# echo "----------------------------------------"
-# echo "Verifying all instances are returned via fan-out query..."
+# Test 2: DescribeInstances Aggregation
+echo ""
+echo "Test 2: DescribeInstances Aggregation"
+echo "----------------------------------------"
+echo "Verifying all instances are returned via fan-out query..."
 
-# DESCRIBE_OUTPUT=$(aws_json $AWS_EC2 describe-instances --query 'Reservations[*].Instances[*].InstanceId' --output text)
-# DESCRIBED_COUNT=$(echo "$DESCRIBE_OUTPUT" | wc -w)
+DESCRIBE_OUTPUT=$(aws_json $AWS_EC2 describe-instances --query 'Reservations[*].Instances[*].InstanceId' --output text)
+DESCRIBED_COUNT=$(echo "$DESCRIBE_OUTPUT" | wc -w)
 
-# echo "  Launched: ${#INSTANCE_IDS[@]} instances"
-# echo "  Described: $DESCRIBED_COUNT instances"
+echo "  Launched: ${#INSTANCE_IDS[@]} instances"
+echo "  Described: $DESCRIBED_COUNT instances"
 
-# if [ "$DESCRIBED_COUNT" -lt "${#INSTANCE_IDS[@]}" ]; then
-#     echo "ERROR: DescribeInstances did not return all instances"
-#     echo "  Expected: ${#INSTANCE_IDS[@]}, Got: $DESCRIBED_COUNT"
-#     exit 1
-# fi
-# echo "  Aggregation test passed"
+if [ "$DESCRIBED_COUNT" -lt "${#INSTANCE_IDS[@]}" ]; then
+    echo "ERROR: DescribeInstances did not return all instances"
+    echo "  Expected: ${#INSTANCE_IDS[@]}, Got: $DESCRIBED_COUNT"
+    exit 1
+fi
+echo "  Aggregation test passed"
 
-# # Test 3: Cross-Node Operations
-# echo ""
-# echo "Test 3: Cross-Node Operations"
-# echo "----------------------------------------"
-# echo "Testing stop/start/terminate via gateway regardless of instance location..."
+# Test 3: Cross-Node Operations
+echo ""
+echo "Test 3: Cross-Node Operations"
+echo "----------------------------------------"
+echo "Testing stop/start/terminate via gateway regardless of instance location..."
 
-# # Pick first instance for cross-node operations
-# TEST_INSTANCE="${INSTANCE_IDS[0]}"
-# echo "  Test instance: $TEST_INSTANCE"
+# Pick first instance for cross-node operations
+TEST_INSTANCE="${INSTANCE_IDS[0]}"
+echo "  Test instance: $TEST_INSTANCE"
 
-# # Stop instance
-# echo "  Stopping instance..."
-# aws_json $AWS_EC2 stop-instances --instance-ids "$TEST_INSTANCE" > /dev/null
-# wait_for_instance_state "$TEST_INSTANCE" "stopped" 30
+# Stop instance
+echo "  Stopping instance..."
+aws_json $AWS_EC2 stop-instances --instance-ids "$TEST_INSTANCE" > /dev/null
+wait_for_instance_state "$TEST_INSTANCE" "stopped" 30
 
-# # Start instance
-# echo "  Starting instance..."
-# aws_json $AWS_EC2 start-instances --instance-ids "$TEST_INSTANCE" > /dev/null
-# wait_for_instance_state "$TEST_INSTANCE" "running" 30
+# Start instance
+echo "  Starting instance..."
+aws_json $AWS_EC2 start-instances --instance-ids "$TEST_INSTANCE" > /dev/null
+wait_for_instance_state "$TEST_INSTANCE" "running" 30
 
-# echo "  Cross-node operations test passed"
+echo "  Cross-node operations test passed"
 
-# # Test 4: NATS Cluster Health (Post-Operations)
-# echo ""
-# echo "Test 4: NATS Cluster Health (Post-Operations)"
-# echo "----------------------------------------"
-# echo "Verifying NATS cluster is still healthy after operations..."
+# Test 4: NATS Cluster Health (Post-Operations)
+echo ""
+echo "Test 4: NATS Cluster Health (Post-Operations)"
+echo "----------------------------------------"
+echo "Verifying NATS cluster is still healthy after operations..."
 
-# verify_nats_cluster 3 || {
-#     echo "WARNING: NATS cluster verification failed after operations"
-# }
+verify_nats_cluster 3 || {
+    echo "WARNING: NATS cluster verification failed after operations"
+}
 
-# # Cleanup: Terminate all test instances
-# echo ""
-# echo "Cleanup: Terminating test instances"
-# echo "----------------------------------------"
-# for instance_id in "${INSTANCE_IDS[@]}"; do
-#     echo "  Terminating $instance_id..."
-#     aws_json $AWS_EC2 terminate-instances --instance-ids "$instance_id" > /dev/null
-# done
+# Cleanup: Terminate all test instances
+echo ""
+echo "Cleanup: Terminating test instances"
+echo "----------------------------------------"
+for instance_id in "${INSTANCE_IDS[@]}"; do
+    echo "  Terminating $instance_id..."
+    aws_json $AWS_EC2 terminate-instances --instance-ids "$instance_id" > /dev/null
+done
 
-# # Wait for termination - track failures
-# echo "  Waiting for termination..."
-# TERMINATION_FAILED=0
-# for instance_id in "${INSTANCE_IDS[@]}"; do
-#     if ! wait_for_instance_state "$instance_id" "terminated" 30; then
-#         echo "  WARNING: Failed to confirm termination of $instance_id"
-#         TERMINATION_FAILED=1
-#     fi
-# done
+# Wait for termination - track failures
+echo "  Waiting for termination..."
+TERMINATION_FAILED=0
+for instance_id in "${INSTANCE_IDS[@]}"; do
+    if ! wait_for_instance_state "$instance_id" "terminated" 30; then
+        echo "  WARNING: Failed to confirm termination of $instance_id"
+        TERMINATION_FAILED=1
+    fi
+done
 
-# if [ $TERMINATION_FAILED -ne 0 ]; then
-#     echo ""
-#     echo "ERROR: Some instances failed to terminate properly"
-#     dump_all_node_logs
-#     exit 1
-# fi
+if [ $TERMINATION_FAILED -ne 0 ]; then
+    echo ""
+    echo "ERROR: Some instances failed to terminate properly"
+    dump_all_node_logs
+    exit 1
+fi
 
-# echo ""
-# echo "========================================"
-# echo "Multi-Node E2E Tests Completed Successfully"
-# echo "========================================"
-# exit 0
+echo ""
+echo "========================================"
+echo "Multi-Node E2E Tests Completed Successfully"
+echo "========================================"
+exit 0

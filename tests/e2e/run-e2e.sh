@@ -61,6 +61,11 @@ fi
 
 ./bin/hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
 
+# Trust the Hive CA certificate for AWS CLI SSL verification
+echo "Adding Hive CA certificate to system trust store..."
+sudo cp ~/hive/config/ca.pem /usr/local/share/ca-certificates/hive-ca.crt
+sudo update-ca-certificates
+
 # Start all services
 # Ensure logs directory exists for start-dev.sh
 mkdir -p ~/hive/logs
@@ -71,8 +76,8 @@ HIVE_SKIP_BUILD=true ./scripts/start-dev.sh
 echo "Waiting for AWS Gateway..."
 MAX_RETRIES=30
 COUNT=0
-# Using -k because of self-signed certs
-until curl -k -s https://localhost:9999 > /dev/null || [ $COUNT -eq $MAX_RETRIES ]; do
+
+until curl -s https://localhost:9999 > /dev/null || [ $COUNT -eq $MAX_RETRIES ]; do
     echo "Waiting for gateway... ($COUNT/$MAX_RETRIES)"
     sleep 2
     COUNT=$((COUNT + 1))
