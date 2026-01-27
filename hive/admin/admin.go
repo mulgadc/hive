@@ -78,7 +78,7 @@ func GenerateConfigFile(configPath string, configTemplate string, configSettings
 	return nil
 }
 
-func GenerateCertificatesIfNeeded(configDir string, force bool) (caCertPath string) {
+func GenerateCertificatesIfNeeded(configDir string, force bool, bindIP string) (caCertPath string) {
 	// Certificate paths
 	caCertPath = filepath.Join(configDir, "ca.pem")
 	caKeyPath := filepath.Join(configDir, "ca.key")
@@ -102,8 +102,8 @@ func GenerateCertificatesIfNeeded(configDir string, force bool) (caCertPath stri
 		fmt.Printf("   CA Certificate: %s\n", caCertPath)
 		fmt.Printf("   CA Key: %s\n", caKeyPath)
 
-		// Step 2: Generate server certificate signed by CA
-		if err := GenerateSignedCert(serverCertPath, serverKeyPath, caCertPath, caKeyPath); err != nil {
+		// Step 2: Generate server certificate signed by CA (with bind IP in SANs)
+		if err := GenerateSignedCert(serverCertPath, serverKeyPath, caCertPath, caKeyPath, bindIP); err != nil {
 			fmt.Fprintf(os.Stderr, "Error generating server certificate: %v\n", err)
 			os.Exit(1)
 		}
@@ -121,6 +121,23 @@ func GenerateCertificatesIfNeeded(configDir string, force bool) (caCertPath stri
 	}
 
 	return caCertPath
+}
+
+// GenerateServerCertOnly generates a server certificate signed by an existing CA.
+// Used by joining nodes that receive the CA from the leader.
+func GenerateServerCertOnly(configDir string, bindIP string) error {
+	caCertPath := filepath.Join(configDir, "ca.pem")
+	caKeyPath := filepath.Join(configDir, "ca.key")
+	serverCertPath := filepath.Join(configDir, "server.pem")
+	serverKeyPath := filepath.Join(configDir, "server.key")
+
+	// Verify CA files exist
+	if !FileExists(caCertPath) || !FileExists(caKeyPath) {
+		return fmt.Errorf("CA files not found in %s", configDir)
+	}
+
+	// Generate server cert signed by CA with this node's bind IP
+	return GenerateSignedCert(serverCertPath, serverKeyPath, caCertPath, caKeyPath, bindIP)
 }
 
 func CreateServiceDirectories(hiveRoot string) {
@@ -303,8 +320,9 @@ func GenerateCACert(caCertPath, caKeyPath string) error {
 	return nil
 }
 
-// GenerateSignedCert generates a server certificate signed by the CA
-func GenerateSignedCert(certPath, keyPath, caCertPath, caKeyPath string) error {
+// GenerateSignedCert generates a server certificate signed by the CA.
+// extraIPs are additional IP addresses to include in the certificate's SANs.
+func GenerateSignedCert(certPath, keyPath, caCertPath, caKeyPath string, extraIPs ...string) error {
 	// Load CA certificate
 	caCertPEM, err := os.ReadFile(caCertPath)
 	if err != nil {
@@ -357,6 +375,16 @@ func GenerateSignedCert(certPath, keyPath, caCertPath, caKeyPath string) error {
 		return fmt.Errorf("failed to generate serial number: %w", err)
 	}
 
+	// Build IP list: localhost IPs + any extra IPs (e.g., bind IP for multi-node)
+	ipAddresses := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+	for _, ip := range extraIPs {
+		if ip != "" && ip != "127.0.0.1" && ip != "::1" && ip != "0.0.0.0" {
+			if parsed := net.ParseIP(ip); parsed != nil {
+				ipAddresses = append(ipAddresses, parsed)
+			}
+		}
+	}
+
 	serverTemplate := x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
@@ -369,7 +397,7 @@ func GenerateSignedCert(certPath, keyPath, caCertPath, caKeyPath string) error {
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		DNSNames:              []string{"localhost"},
-		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+		IPAddresses:           ipAddresses,
 	}
 
 	// Sign the server certificate with the CA
