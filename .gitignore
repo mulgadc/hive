@@ -1,6 +1,6 @@
 go.work
 go.work.sum
-bin/hive
+bin
 tmp/
 config/dev.yaml
 .DS_Store
