@@ -1,6 +1,7 @@
 import { z } from "zod"
 
-const STORAGE_KEY = "aws-credentials"
+// Versioned storage key - increment version when schema changes
+const STORAGE_KEY = "hive:v1:aws-credentials"
 
 export const awsCredentialsSchema = z.object({
   accessKeyId: z
@@ -11,24 +12,46 @@ export const awsCredentialsSchema = z.object({
 
 export type AwsCredentials = z.infer<typeof awsCredentialsSchema>
 
+// In-memory cache to avoid repeated localStorage reads
+let credentialsCache: AwsCredentials | null | undefined
+
 export function getCredentials(): AwsCredentials | null {
-  const stored = localStorage.getItem(STORAGE_KEY)
-  if (!stored) {
-    return null
+  // Return cached value if available
+  if (credentialsCache !== undefined) {
+    return credentialsCache
   }
+
   try {
+    const stored = localStorage.getItem(STORAGE_KEY)
+    if (!stored) {
+      credentialsCache = null
+      return null
+    }
     const parsed = JSON.parse(stored)
     const result = awsCredentialsSchema.safeParse(parsed)
-    return result.success ? result.data : null
+    credentialsCache = result.success ? result.data : null
+    return credentialsCache
   } catch {
+    credentialsCache = null
     return null
   }
 }
 
 export function setCredentials(credentials: AwsCredentials): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(credentials))
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(credentials))
+    credentialsCache = credentials
+  } catch {
+    // localStorage might be full or disabled - cache in memory only
+    credentialsCache = credentials
+  }
 }
 
 export function clearCredentials(): void {
-  localStorage.removeItem(STORAGE_KEY)
+  try {
+    localStorage.removeItem(STORAGE_KEY)
+  } catch {
+    // Ignore errors when clearing
+  }
+  credentialsCache = null
 }
