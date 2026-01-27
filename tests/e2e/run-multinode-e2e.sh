@@ -254,6 +254,39 @@ done
 echo ""
 check_instance_distribution
 
+# Test 1b: SSH Connectivity
+echo ""
+echo "Test 1b: SSH Connectivity"
+echo "----------------------------------------"
+echo "Testing SSH connectivity to first instance..."
+
+# Test SSH on first instance
+SSH_TEST_INSTANCE="${INSTANCE_IDS[0]}"
+echo "  Test instance: $SSH_TEST_INSTANCE"
+
+# Find which node the instance is on and get its SSH port
+NODE_NUM=$(get_instance_node "$SSH_TEST_INSTANCE")
+if [ -z "$NODE_NUM" ]; then
+    # Single-node fallback - instance is local
+    SSH_HOST="127.0.0.1"
+    echo "  Instance location: local (single-node mode)"
+else
+    SSH_HOST="${SIMULATED_NETWORK}.$NODE_NUM"
+    echo "  Instance location: node$NODE_NUM ($SSH_HOST)"
+fi
+
+# Get SSH port from QEMU process
+SSH_PORT=$(get_ssh_port "$SSH_TEST_INSTANCE" 60)
+if [ -z "$SSH_PORT" ]; then
+    echo "  ERROR: Could not find SSH port for instance"
+    exit 1
+fi
+echo "  SSH port: $SSH_PORT"
+
+# Wait for SSH and test connectivity
+wait_for_ssh "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem" 120
+test_ssh_connectivity "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem"
+
 # Test 2: DescribeInstances Aggregation
 echo ""
 echo "Test 2: DescribeInstances Aggregation"
@@ -293,6 +326,18 @@ echo "  Starting instance..."
 aws_json $AWS_EC2 start-instances --instance-ids "$TEST_INSTANCE" > /dev/null
 wait_for_instance_state "$TEST_INSTANCE" "running" 30
 
+# Test SSH after cross-node restart
+echo "  Testing SSH after cross-node restart..."
+# Re-detect SSH port (may have changed)
+SSH_PORT=$(get_ssh_port "$TEST_INSTANCE" 60)
+if [ -z "$SSH_PORT" ]; then
+    echo "  ERROR: Could not find SSH port after restart"
+    exit 1
+fi
+echo "  SSH port after restart: $SSH_PORT"
+wait_for_ssh "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem" 120
+test_ssh_connectivity "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem"
+
 echo "  Cross-node operations test passed"
 
 # Test 4: NATS Cluster Health (Post-Operations)
@@ -330,6 +375,12 @@ if [ $TERMINATION_FAILED -ne 0 ]; then
     dump_all_node_logs
     exit 1
 fi
+
+# Verify SSH is no longer reachable after termination
+echo ""
+echo "Test 5: SSH Unreachable After Termination"
+echo "----------------------------------------"
+verify_ssh_unreachable "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem"
 
 echo ""
 echo "========================================"

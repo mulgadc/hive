@@ -9,13 +9,13 @@ Big rocks:
 - Implement VPC support using Open vSwitch across multiple nodes, core VPC functionality included
   - Add support for NVIDIA Bluefield DPU with Open vSwitch
 - Implement basic IAM using NATS Jetstream as KV store, vs IAM/access-keys in local config/TOML files for beta.
-  - Move `daemon.go` instances.json state to Jetstream KV
+  - [DONE] Move `daemon.go` instances.json state to Jetstream KV
 - Add support using the `hive` CLI tool to provision a new user with AWS access-keys/IAM.
   - Support multi-tenant operations and isolation
 - Add support to include capabilities when adding a new hardware node to MulgaOS (e.g EC2 target, S3, EBS, NATs, etc) - Features can be turned on/off depending on hardware scope.
 - [DONE] Add simple Web UI console, using the AWS JS SDK, communicating to local AWS gateway.
-  - Implement ShadCNblocks for UI framework
-  - Simple Go webserver, static files, easy build process.
+  - [DONE] Implement ShadCNblocks for UI framework
+  - [DONE] Simple Go webserver, static files, easy build process.
 
 Implementation gaps:
 
