@@ -1,4 +1,5 @@
 # Predastore S3-compatible storage configuration file in TOML format.
+# MULTI NODE used for testing
 version = "1.0"
 region = "{{.Region}}"
 
@@ -12,11 +13,64 @@ debug = false
 # Optionally configure base-path if full directory path not defined for "fs" buckets
 # base_path = "/home/predastore/data/"
 
+# Specify reed solomon encoding - 
+# RS(2,1), 2 data, 1 parity. Minimum
+# RS(3,2), 3 data, 2 parity. Recommended for production
+[rs]
+data = 2
+parity = 1
+
+[[db]]
+id = 1
+host = "127.0.0.1"
+port = 6660
+#raft_port = 7660       # Optional: Raft consensus port (default: port + 1000)
+#advertise_host = ""    # Optional: Address to advertise to other Raft nodes
+path = "distributed/db/node-1/"
+access_key_id = "{{.AccessKey}}"
+secret_access_key = "{{.SecretKey}}"
+leader = true      # Bootstrap leader hint
+
+[[db]]
+id = 2
+host = "127.0.0.1"
+port = 6661
+path = "distributed/db/node-2/"
+access_key_id = "{{.AccessKey}}"
+secret_access_key = "{{.SecretKey}}"
+
+[[db]]
+id = 3
+host = "127.0.0.1"
+port = 6662
+path = "distributed/db/node-3/"
+access_key_id = "{{.AccessKey}}"
+secret_access_key = "{{.SecretKey}}"
+
+# Shard nodes
+# Using distributed hash ring for object > shard placement.
+[[nodes]]
+id = 1
+host = "0.0.0.0"
+port = 9991
+path = "distributed/nodes/node-1/"
+
+[[nodes]]
+id = 2
+host = "0.0.0.0"
+port = 9992
+path = "distributed/nodes/node-2/"
+
+[[nodes]]
+id = 3
+host = "0.0.0.0"
+port = 9993
+path = "distributed/nodes/node-3/"
+
 [[buckets]]
 name = "predastore"
-region = "{{.Region}}"
-type = "fs"
-pathname = "data/predastore"
+region = "ap-southeast-2"
+type = "distributed"
 public = false
 encryption = ""
 
