@@ -22,7 +22,6 @@ cd ~/Development/mulga/
 git clone https://github.com/mulgadc/hive.git
 ```
 
-
 ### Quick Install
 
 To bootstrap the dependencies of Hive in one simple step (QEMU, Go, AWS CLI)
@@ -253,12 +252,58 @@ Once Hive is successfully installed and bootstrapped with a system AMI and SSH k
 export HIVE_AMI="ami-XXX"
 ```
 
-Launch a new instance, note `hive-key` is the SSH key specified in the previous stage. If using an x86_64 host specify the `--instance-type t3.micro` otherwise if running on ARM64 use `--instance-type t4g.micro`
+### Query instance types available
+
+Depending on the host platform Hive is installed for the CPU capabilities and vendor (e.g AMD, Intel, ARM), different compute instances will be available.
+
+Query available instance types and choose an instance type available on your host with 2 vCPUs:
+
+```bash
+aws ec2 describe-instance-types
+```
+
+```json
+{
+  "InstanceTypes": [
+    {
+      "InstanceType": "m8a.small",
+      "CurrentGeneration": true,
+      "SupportedRootDeviceTypes": [
+        "ebs"
+      ],
+      "SupportedVirtualizationTypes": [
+        "hvm"
+      ],
+      "Hypervisor": "kvm",
+      "ProcessorInfo": {
+        "SupportedArchitectures": [
+          "x86_64"
+        ]
+      },
+      "VCpuInfo": {
+        "DefaultVCpus": 2
+      },
+      "MemoryInfo": {
+        "SizeInMiB": 1024
+      },
+      "BurstablePerformanceSupported": false
+    },
+  ]
+}
+```
+
+Export the instance-type:
+
+```sh
+export HIVE_INSTANCE="m8a.small"
+```
+
+Next, launch a new instance, note `hive-key` is the SSH key specified in the previous stage. Be sure to specify the instance-type that is available from your host as above.
 
 ```bash
 aws ec2 run-instances \
   --image-id $HIVE_AMI \
-  --instance-type t3.micro \
+  --instance-type $HIVE_INSTANCE \
   --key-name hive-key \
   --security-group-ids sg-0123456789abcdef0 \
   --subnet-id subnet-6e7f829e \

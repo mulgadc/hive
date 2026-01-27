@@ -4,8 +4,8 @@
 
 Big rocks:
 
-- Add multi-node support for predastore (S3) using reed solomon encoding
-  - Implement KV store for object lookup, WAL files, offset. Use hash-ring to determine which nodes an object belongs to.
+- [DONE] Add multi-node support for predastore (S3) using reed solomon encoding
+  - [DONE] Implement KV store for object lookup, WAL files, offset. Use hash-ring to determine which nodes an object belongs to.
 - Implement VPC support using Open vSwitch across multiple nodes, core VPC functionality included
   - Add support for NVIDIA Bluefield DPU with Open vSwitch
 - Implement basic IAM using NATS Jetstream as KV store, vs IAM/access-keys in local config/TOML files for beta.
@@ -20,10 +20,28 @@ Big rocks:
 Implementation gaps:
 
 - EC2 - Support extended features for `run-instance`
-  - Volume resize of AMI
-  - Confirm cloud-init will resize volume, configured correctly.
+  - Volume resize of AMI. Note `nbd` does not support live resize events, instance needs to be stopped, resized, and started.
+  - Confirm cloud-init will resize volume on boot and configured correctly.
   - Attach additional volumes
   - Attach to VPC / Security group (required Open vSwitch implementation)
+
+### Issues to investigate
+
+- When the host disk volume is full and a new instance is launched, disk corruption will occur within the instance since the host volume is out of space. Consider a pre-flight check, check available storage on the S3 server, local viperblock for WAL cache availability and provide improved guard rails to prevent a new instance running, if available disk space is nearing to be exceeded.
+
+Host:
+
+```json
+{"time":"2026-01-27T21:30:29.368164556+10:00","level":"ERROR","msg":"WAL sync failed","error":"write /home/hive/hive/predastore/distributed/nodes/node-2/0000000000000737.wal: no space left on device"}
+```
+
+Instance `dmesg`:
+
+```
+[ 1445.573495] EXT4-fs error (device vda1): ext4_journal_check_start:83: comm systemd-journal: Detected aborted journal
+[ 1445.583565] EXT4-fs (vda1): Remounting filesystem read-only
+```
+
 
 ### EC2
 
