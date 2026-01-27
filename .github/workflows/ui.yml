@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-24.04
     defaults:
       run:
-        working-directory: frontend
+        working-directory: hive-ui/frontend
 
     steps:
       - name: Checkout Code
@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-24.04
     defaults:
       run:
-        working-directory: webserver
+        working-directory: hive-ui/webserver
 
     steps:
       - name: Checkout Code
