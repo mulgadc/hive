@@ -1,7 +1,30 @@
+# Go workspace
 go.work
 go.work.sum
-bin
+
+# Build outputs
+bin/
 tmp/
+*.test
+*.out
+
+# Config
 config/dev.yaml
+
+# OS files
 .DS_Store
-tests/*.txt
+Thumbs.db
+
+# Environment
+.env
+
+# Test reports
+*-report.txt
+
+# hive-ui
+hive-ui/certs/
+hive-ui/frontend/node_modules/
+hive-ui/frontend/dist/
+hive-ui/frontend/.tanstack/
+hive-ui/frontend/*.tsbuildinfo
+hive-ui/frontend/.pnpm-store/

@@ -1,7 +1,0 @@
-.DS_Store
-Thumbs.db
-.env
-/bin
-/certs/server.key
-/certs/server.crt
-/tests/*-report.txt
