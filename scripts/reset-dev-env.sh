@@ -22,10 +22,10 @@ PPROF_ENABLED=1 PPROF_OUTPUT=/tmp/hive-vm.prof ./scripts/start-dev.sh
 # Follow INSTALL.md steps
 echo "Importing AMI"
 
-AWS_PROFILE=hive
+export AWS_PROFILE=hive
 
 # Step 1 SSH key
-aws ec2 import-key-pair --key-name "hive-key" --public-key-material fileb://~/.ssh/id_rsa.pub
+aws ec2 import-key-pair --key-name "hive-key" --public-key-material fileb://~/.ssh/hive-key.pub
 
 echo "Validating key pair imported"
 

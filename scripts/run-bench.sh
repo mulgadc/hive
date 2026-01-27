@@ -35,15 +35,15 @@ INSTANCE_ID=""
 
 while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
     INSTANCE_JSON=$(aws ec2 describe-instances --filters "Name=image-id,Values=$HIVE_AMI" "Name=instance-state-name,Values=running" --output json 2>/dev/null)
-    
+
     # Extract InstanceId using jq (handle nested structure)
     INSTANCE_ID=$(echo "$INSTANCE_JSON" | jq -r '.Reservations[0].Instances[0].InstanceId // empty' 2>/dev/null)
-    
+
     if [ -n "$INSTANCE_ID" ] && [ "$INSTANCE_ID" != "null" ]; then
         echo "Found running instance: $INSTANCE_ID"
         break
     fi
-    
+
     ATTEMPT=$((ATTEMPT + 1))
     if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
         echo "Waiting for instance to come online... (attempt $ATTEMPT/$MAX_ATTEMPTS)"
@@ -110,7 +110,7 @@ else
     # Extract volume ID from the command line for informational purposes
     VOLUME_ID=$(echo "$NBDKIT_CMD" | sed -n 's/.*volume=\([^ ]*\).*/\1/p')
     echo "Found nbdkit process PID: $NBDKIT_PID (volume: $VOLUME_ID)"
-    
+
     # Start perf record in the background (will run until interrupted)
     echo "Starting perf profiling for nbdkit process (PID: $NBDKIT_PID)..."
     sudo perf record -g -p "$NBDKIT_PID" -o /tmp/hive-nbdkit-perf.data > /tmp/perf.log 2>&1 &
@@ -190,7 +190,7 @@ if [ -n "$PERF_PID" ]; then
     sudo kill -INT "$PERF_PID" 2>/dev/null || true
     # Wait for perf to finish writing data
     sleep 3
-    
+
     if [ -f /tmp/hive-nbdkit-perf.data ]; then
         sudo chmod 644 /tmp/hive-nbdkit-perf.data
         echo "Perf benchmarks saved to /tmp/hive-nbdkit-perf.data"
@@ -207,4 +207,3 @@ echo "Results saved to /tmp/hive-vm-disk.log"
 echo ""
 echo "=== Benchmark Results ==="
 cat /tmp/hive-vm-disk.log
-
