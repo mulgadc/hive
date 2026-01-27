@@ -1486,25 +1486,25 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 			}
 
 			// If flagged for termination (delete Volume)
-			if deleteVolume {
-				for _, ebsRequest := range instance.EBSRequests.Requests {
+			// if deleteVolume {
+			// 	for _, ebsRequest := range instance.EBSRequests.Requests {
 
-					// Send the volume payload as JSON
-					ebsDeleteRequest, err := json.Marshal(ebsRequest)
+			// 		// Send the volume payload as JSON
+			// 		ebsDeleteRequest, err := json.Marshal(ebsRequest)
 
-					if err != nil {
-						slog.Error("Failed to marshal volume payload", "err", err)
-						continue
-					}
+			// 		if err != nil {
+			// 			slog.Error("Failed to marshal volume payload", "err", err)
+			// 			continue
+			// 		}
 
-					msg, err := d.natsConn.Request("ebs.delete", ebsDeleteRequest, 30*time.Second)
-					if err != nil {
-						slog.Error("Failed to delete volume", "name", ebsRequest.Name, "id", instance.ID, "err", err)
-					} else {
-						slog.Info("Deleted Viperblock volume", "id", instance.ID, "data", string(msg.Data))
-					}
-				}
-			}
+			// 		msg, err := d.natsConn.Request("ebs.delete", ebsDeleteRequest, 30*time.Second)
+			// 		if err != nil {
+			// 			slog.Error("Failed to delete volume", "name", ebsRequest.Name, "id", instance.ID, "err", err)
+			// 		} else {
+			// 			slog.Info("Deleted Viperblock volume", "id", instance.ID, "data", string(msg.Data))
+			// 		}
+			// 	}
+			// }
 
 			// Deallocate resources
 			instanceType := d.resourceMgr.instanceTypes[instance.InstanceType]
@@ -2398,9 +2398,15 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 			case "running":
 				instanceCopy.State.SetCode(16)
 				instanceCopy.State.SetName("running")
+			case "stopping":
+				instanceCopy.State.SetCode(64)
+				instanceCopy.State.SetName("stopping")
 			case "stopped":
 				instanceCopy.State.SetCode(80)
 				instanceCopy.State.SetName("stopped")
+			case "shutting-down":
+				instanceCopy.State.SetCode(32)
+				instanceCopy.State.SetName("shutting-down")
 			case "terminated":
 				instanceCopy.State.SetCode(48)
 				instanceCopy.State.SetName("terminated")
