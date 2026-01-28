@@ -5,6 +5,7 @@ import (
 
 	"github.com/mulgadc/hive/hive/services/awsgw"
 	"github.com/mulgadc/hive/hive/services/hive"
+	"github.com/mulgadc/hive/hive/services/hiveui"
 	"github.com/mulgadc/hive/hive/services/nats"
 	"github.com/mulgadc/hive/hive/services/predastore"
 	"github.com/mulgadc/hive/hive/services/viperblockd"
@@ -35,6 +36,9 @@ func New(btype string, config any) (Service, error) {
 
 	case "awsgw":
 		return awsgw.New(config)
+
+	case "hive-ui":
+		return hiveui.New(config)
 
 	}
 

@@ -35,9 +35,18 @@ endif
 build:
 	$(MAKE) go_build
 
+# Build hive-ui frontend (requires pnpm)
+build-ui:
+	@echo "\n....Building hive-ui frontend...."
+	cd hive/services/hiveui/frontend && pnpm build
+
 # GO commands
 go_build:
 	@echo "\n....Building $(GO_PROJECT_NAME)"
+	@if [ ! -f hive/services/hiveui/frontend/dist/index.html ]; then \
+		mkdir -p hive/services/hiveui/frontend/dist && \
+		echo '<!DOCTYPE html><html><head><title>Hive UI</title></head><body><h1>Hive UI</h1><p>Frontend not built. Run <code>make build-ui</code></p></body></html>' > hive/services/hiveui/frontend/dist/index.html; \
+	fi
 	GOEXPERIMENT=greenteagc go build $(GO_BUILD_MOD) -ldflags "-s -w" -o ./bin/$(GO_PROJECT_NAME) cmd/hive/main.go
 
 go_run:
@@ -58,7 +67,8 @@ run:
 	$(MAKE) go_run
 
 clean:
-	rm ./bin/$(GO_PROJECT_NAME)
+	rm -f ./bin/$(GO_PROJECT_NAME)
+	rm -rf hive/services/hiveui/frontend/dist
 
 install-system:
 	@echo "\n....Installing system dependencies for $(ARCH)...."
@@ -108,4 +118,4 @@ security:
 	go vet ./... 2>&1 | tee tests/govet-report.txt || true
 	@echo "Go vet report saved to tests/govet-report.txt"
 
-.PHONY: build go_build go_run test bench run clean install-system install-go install-aws quickinstall security
+.PHONY: build build-ui go_build go_run test bench run clean install-system install-go install-aws quickinstall security

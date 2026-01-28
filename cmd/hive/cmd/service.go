@@ -23,6 +23,7 @@ import (
 
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/service"
+	"github.com/mulgadc/hive/hive/services/hiveui"
 	"github.com/mulgadc/hive/hive/services/nats"
 	"github.com/mulgadc/hive/hive/services/predastore"
 	"github.com/mulgadc/hive/hive/services/viperblockd"
@@ -59,6 +60,11 @@ var hiveCmd = &cobra.Command{
 var awsgwCmd = &cobra.Command{
 	Use:   "awsgw",
 	Short: "Manage the awsgw (AWS gateway) service",
+}
+
+var hiveUICmd = &cobra.Command{
+	Use:   "hive-ui",
+	Short: "Manage the hive-ui service",
 }
 
 var predastoreStartCmd = &cobra.Command{
@@ -556,6 +562,73 @@ var awsgwStatusCmd = &cobra.Command{
 	},
 }
 
+var hiveUIStartCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Start the hive-ui service",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println("Starting hive-ui service...")
+
+		port := viper.GetInt("hive-ui-port")
+		host := viper.GetString("hive-ui-host")
+		tlsCert := viper.GetString("hive-ui-tls-cert")
+		tlsKey := viper.GetString("hive-ui-tls-key")
+
+		svc, err := service.New("hive-ui", &hiveui.Config{
+			Port:    port,
+			Host:    host,
+			TLSCert: tlsCert,
+			TLSKey:  tlsKey,
+		})
+
+		if err != nil {
+			fmt.Println("Error starting hive-ui service:", err)
+			return
+		}
+
+		svc.Start()
+		fmt.Println("hive-ui service started")
+	},
+}
+
+var hiveUIStopCmd = &cobra.Command{
+	Use:   "stop",
+	Short: "Stop the hive-ui service",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println("Stopping hive-ui service...")
+
+		svc, err := service.New("hive-ui", &hiveui.Config{})
+
+		if err != nil {
+			fmt.Println("Error stopping hive-ui service:", err)
+			return
+		}
+
+		svc.Stop()
+		fmt.Println("hive-ui service stopped")
+	},
+}
+
+var hiveUIStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Get status of the hive-ui service",
+	Run: func(cmd *cobra.Command, args []string) {
+		svc, err := service.New("hive-ui", &hiveui.Config{})
+
+		if err != nil {
+			fmt.Println("Error getting hive-ui service status:", err)
+			return
+		}
+
+		status, err := svc.Status()
+		if err != nil {
+			fmt.Println("Error getting hive-ui service status:", err)
+			return
+		}
+
+		fmt.Println("hive-ui service status:", status)
+	},
+}
+
 func init() {
 
 	viper.SetEnvPrefix("HIVE") // Prefix for environment variables
@@ -711,5 +784,28 @@ func init() {
 	awsgwCmd.AddCommand(awsgwStartCmd)
 	awsgwCmd.AddCommand(awsgwStopCmd)
 	awsgwCmd.AddCommand(awsgwStatusCmd)
+
+	// hive-ui
+	serviceCmd.AddCommand(hiveUICmd)
+
+	hiveUICmd.PersistentFlags().Int("port", 3000, "hive-ui server port")
+	viper.BindEnv("hive-ui-port", "HIVE_UI_PORT")
+	viper.BindPFlag("hive-ui-port", hiveUICmd.PersistentFlags().Lookup("port"))
+
+	hiveUICmd.PersistentFlags().String("host", "0.0.0.0", "hive-ui server host")
+	viper.BindEnv("hive-ui-host", "HIVE_UI_HOST")
+	viper.BindPFlag("hive-ui-host", hiveUICmd.PersistentFlags().Lookup("host"))
+
+	hiveUICmd.PersistentFlags().String("tls-cert", "", "TLS certificate path")
+	viper.BindEnv("hive-ui-tls-cert", "HIVE_UI_TLS_CERT")
+	viper.BindPFlag("hive-ui-tls-cert", hiveUICmd.PersistentFlags().Lookup("tls-cert"))
+
+	hiveUICmd.PersistentFlags().String("tls-key", "", "TLS key path")
+	viper.BindEnv("hive-ui-tls-key", "HIVE_UI_TLS_KEY")
+	viper.BindPFlag("hive-ui-tls-key", hiveUICmd.PersistentFlags().Lookup("tls-key"))
+
+	hiveUICmd.AddCommand(hiveUIStartCmd)
+	hiveUICmd.AddCommand(hiveUIStopCmd)
+	hiveUICmd.AddCommand(hiveUIStatusCmd)
 
 }

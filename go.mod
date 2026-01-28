@@ -3,6 +3,7 @@ module github.com/mulgadc/hive
 go 1.25.5
 
 require (
+	github.com/NYTimes/gziphandler v1.1.1
 	github.com/aws/aws-sdk-go v1.55.8
 	github.com/gofiber/fiber/v2 v2.52.9
 	github.com/google/uuid v1.6.0
