@@ -24,13 +24,13 @@
     "editor.defaultFormatter": "golang.go",
     "editor.tabSize": 4
   },
-  "biome.configurationPath": "./hive-ui/frontend/biome.jsonc",
+  "biome.configurationPath": "./hive/services/hiveui/frontend/biome.jsonc",
   "biome.requireConfiguration": true,
-  "biome.lsp.bin": "./hive-ui/frontend/node_modules/.bin/biome",
+  "biome.lsp.bin": "./hive/services/hiveui/frontend/node_modules/.bin/biome",
   "editor.formatOnSave": true,
   "editor.formatOnPaste": true,
   "files.insertFinalNewline": true,
   "files.trimFinalNewlines": true,
   "files.trimTrailingWhitespace": true,
-  "typescript.tsdk": "./hive-ui/frontend/node_modules/typescript/lib"
+  "typescript.tsdk": "./hive/services/hiveui/frontend/node_modules/typescript/lib"
 }
