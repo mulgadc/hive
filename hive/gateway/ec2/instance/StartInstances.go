@@ -51,6 +51,7 @@ func StartInstances(input *ec2.StartInstancesInput, natsConn *nats.Conn) (*ec2.S
 
 		// Send NATS request to the specific instance topic
 		subject := fmt.Sprintf("ec2.cmd.%s", instanceID)
+		slog.Info("StartInstances: Sending NATS request", "subject", subject, "instance_id", instanceID)
 
 		// TODO: Improve, stop/termination may take significant time
 		msg, err := natsConn.Request(subject, jsonData, 30*time.Second)

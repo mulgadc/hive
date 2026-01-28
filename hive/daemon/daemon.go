@@ -1091,6 +1091,7 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 
 // handleEC2Events processes incoming EC2 events (start, stop, terminate)
 func (d *Daemon) handleEC2Events(msg *nats.Msg) {
+	slog.Info("handleEC2Events called", "subject", msg.Subject)
 
 	var command qmp.Command
 	var resp *qmp.QMPResponse
@@ -1107,8 +1108,7 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 		return
 	}
 
-	log.Printf("Received message on subject: %s", msg.Subject)
-	log.Printf("Message data: %s", string(msg.Data))
+	slog.Info("handleEC2Events received command", "subject", msg.Subject, "instanceId", command.ID, "start", command.Attributes.StartInstance, "stop", command.Attributes.StopInstance, "terminate", command.Attributes.TerminateInstance)
 
 	d.Instances.Mu.Lock()
 	instance, ok := d.Instances.VMS[command.ID]
