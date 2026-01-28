@@ -438,6 +438,13 @@ func (d *Daemon) Start() error {
 
 	log.Printf("Connected to NATS server at %s", d.config.NATS.Host)
 
+	// Start cluster manager HTTP server FIRST
+	// This must happen before JetStream init so other nodes can join via /join endpoint
+	// and help form the NATS cluster (avoids chicken-and-egg in multi-node setup)
+	if err := d.ClusterManager(); err != nil {
+		return fmt.Errorf("failed to start cluster manager: %w", err)
+	}
+
 	// Initialize JetStream for KV state storage (required - no disk fallback)
 	// Start with 1 replica to allow single-node startup, then upgrade if cluster has more nodes
 	// Retry with backoff if JetStream is not ready yet
@@ -662,11 +669,6 @@ func (d *Daemon) Start() error {
 	d.natsSubscriptions["hive.nodes.discover"], err = d.natsConn.Subscribe("hive.nodes.discover", d.handleNodeDiscover)
 	if err != nil {
 		return fmt.Errorf("failed to subscribe to NATS hive.nodes.discover: %w", err)
-	}
-
-	// Start cluster manager HTTP server
-	if err := d.ClusterManager(); err != nil {
-		return fmt.Errorf("failed to start cluster manager: %w", err)
 	}
 
 	// Setup graceful shutdown
