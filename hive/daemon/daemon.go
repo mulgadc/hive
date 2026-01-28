@@ -445,101 +445,9 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to start cluster manager: %w", err)
 	}
 
-	// Initialize JetStream for KV state storage (required - no disk fallback)
-	// Start with 1 replica to allow single-node startup, then upgrade if cluster has more nodes
-	// Retry with backoff if JetStream is not ready yet
-	maxRetries := 10
-	retryDelay := 500 * time.Millisecond
-
-	for attempt := 1; attempt <= maxRetries; attempt++ {
-		d.jsManager, err = NewJetStreamManager(d.natsConn, 1)
-		if err != nil {
-			slog.Warn("Failed to init JetStream", "error", err, "attempt", attempt, "maxRetries", maxRetries)
-			if attempt < maxRetries {
-				time.Sleep(retryDelay)
-				retryDelay *= 2 // Exponential backoff
-				if retryDelay > 5*time.Second {
-					retryDelay = 5 * time.Second
-				}
-				continue
-			}
-			return fmt.Errorf("failed to initialize JetStream after %d attempts: %w", maxRetries, err)
-		}
-
-		if err := d.jsManager.InitKVBucket(); err != nil {
-			slog.Warn("Failed to init KV bucket", "error", err, "attempt", attempt, "maxRetries", maxRetries)
-			if attempt < maxRetries {
-				time.Sleep(retryDelay)
-				retryDelay *= 2
-				if retryDelay > 5*time.Second {
-					retryDelay = 5 * time.Second
-				}
-				continue
-			}
-			return fmt.Errorf("failed to initialize JetStream KV bucket after %d attempts: %w", maxRetries, err)
-		}
-
-		// Success
-		slog.Info("JetStream KV store initialized successfully", "replicas", 1, "attempts", attempt)
-		break
-	}
-
-	// Try to upgrade replicas if cluster has more nodes
-	// This handles the case where this daemon starts after other NATS nodes are already up
-	clusterSize := len(d.clusterConfig.Nodes)
-	if clusterSize > 1 {
-		if err := d.jsManager.UpdateReplicas(clusterSize); err != nil {
-			slog.Warn("Failed to upgrade JetStream replicas on startup (other NATS nodes may not be ready)", "targetReplicas", clusterSize, "error", err)
-		}
-	}
-
-	// Load existing state for VMs from JetStream or disk
-	err = d.LoadState()
-	if err != nil {
-		slog.Warn("Failed to load state from disk, continuing with empty state", "error", err)
-	} else {
-
-		slog.Info("Loaded state from disk", "instance count", len(d.Instances.VMS))
-
-		//d.mu.Lock()
-		// Ensure mutex is usable after unmarshalling
-		d.Instances.Mu = sync.Mutex{}
-
-		for i := range d.Instances.VMS {
-			instance := d.Instances.VMS[i]
-			instance.EBSRequests.Mu = sync.Mutex{}
-			instance.QMPClient = &qmp.QMPClient{}
-			d.Instances.VMS[i] = instance
-			//d.Instances.VMS[i].EBSRequests.Mu = sync.Mutex{}
-			//			d.Instances.VMS[i].QMPClient.Mu = sync.Mutex{}
-
-			if instance.Attributes.StopInstance {
-				slog.Info("Instance flagged as user initiated stop, skipping", "instance", instance.ID)
-
-			} else if instance.Status != "terminated" {
-				instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
-				if ok {
-					slog.Info("Re-allocating resources for instance", "instanceId", instance.ID, "type", instance.InstanceType)
-					if err := d.resourceMgr.allocate(instanceType); err != nil {
-						slog.Error("Failed to re-allocate resources for instance on startup", "instanceId", instance.ID, "err", err)
-					}
-				}
-
-				slog.Info("Launching instance", "instance", instance.ID)
-				err = d.LaunchInstance(instance)
-				if err != nil {
-					slog.Error("Failed to launch instance:", "err", err)
-				}
-			} else {
-				slog.Info("Instance state is terminated, skipping", "instance", instance.ID)
-			}
-
-		}
-		//d.mu.Unlock()
-
-		// Launch running instances
-
-	}
+	// Initialize JetStream in background - don't block daemon startup
+	// This allows the daemon to start accepting requests while waiting for NATS cluster to form
+	go d.initJetStreamBackground()
 
 	// Create instance service for handling EC2 instance operations
 	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances)
@@ -893,10 +801,16 @@ func (d *Daemon) ClusterManager() error {
 
 // WriteState writes the instance state to JetStream KV store (required)
 func (d *Daemon) WriteState() error {
-	if d.jsManager == nil {
-		return fmt.Errorf("JetStream manager not initialized - cannot write state")
+	d.mu.Lock()
+	jsm := d.jsManager
+	d.mu.Unlock()
+
+	if jsm == nil {
+		// JetStream not ready yet - this is expected during startup
+		slog.Debug("WriteState skipped - JetStream not initialized yet")
+		return nil
 	}
-	if err := d.jsManager.WriteState(d.node, &d.Instances); err != nil {
+	if err := jsm.WriteState(d.node, &d.Instances); err != nil {
 		slog.Error("JetStream write failed", "error", err)
 		return fmt.Errorf("failed to write state to JetStream: %w", err)
 	}
@@ -931,19 +845,127 @@ func (d *Daemon) InitaliseVMs() {
 
 // LoadState loads the instance state from JetStream KV store (required)
 func (d *Daemon) LoadState() error {
-	if d.jsManager == nil {
+	d.mu.Lock()
+	jsm := d.jsManager
+	d.mu.Unlock()
+
+	if jsm == nil {
 		return fmt.Errorf("JetStream manager not initialized - cannot load state")
 	}
 
-	instances, err := d.jsManager.LoadState(d.node)
+	instances, err := jsm.LoadState(d.node)
 	if err != nil {
 		slog.Error("JetStream load failed", "error", err)
 		return fmt.Errorf("failed to load state from JetStream: %w", err)
 	}
 
 	// Copy only the VMS map, not the mutex
+	d.Instances.Mu.Lock()
 	d.Instances.VMS = instances.VMS
+	d.Instances.Mu.Unlock()
 	return nil
+}
+
+// initJetStreamBackground initializes JetStream in a background goroutine.
+// This allows the daemon to start and accept cluster join requests while waiting
+// for the NATS cluster to form and JetStream to become available.
+func (d *Daemon) initJetStreamBackground() {
+	retryDelay := 500 * time.Millisecond
+	const maxDelay = 10 * time.Second
+
+	for attempt := 1; ; attempt++ {
+		// Check for shutdown
+		select {
+		case <-d.ctx.Done():
+			slog.Info("JetStream init cancelled due to shutdown")
+			return
+		default:
+		}
+
+		// Try to create JetStream manager and init KV bucket
+		jsm, err := NewJetStreamManager(d.natsConn, 1)
+		if err != nil {
+			slog.Warn("Failed to init JetStream (will retry)", "error", err, "attempt", attempt)
+		} else if err := jsm.InitKVBucket(); err != nil {
+			slog.Warn("Failed to init KV bucket (will retry)", "error", err, "attempt", attempt)
+		} else {
+			// Success - store the manager
+			d.mu.Lock()
+			d.jsManager = jsm
+			d.mu.Unlock()
+			slog.Info("JetStream KV store initialized successfully", "replicas", 1, "attempts", attempt)
+			break
+		}
+
+		// Wait before retry (with shutdown check)
+		select {
+		case <-d.ctx.Done():
+			slog.Info("JetStream init cancelled due to shutdown")
+			return
+		case <-time.After(retryDelay):
+		}
+
+		// Exponential backoff
+		retryDelay *= 2
+		if retryDelay > maxDelay {
+			retryDelay = maxDelay
+		}
+	}
+
+	// Try to upgrade replicas if cluster has more nodes
+	d.mu.Lock()
+	clusterSize := len(d.clusterConfig.Nodes)
+	d.mu.Unlock()
+
+	if clusterSize > 1 {
+		if err := d.jsManager.UpdateReplicas(clusterSize); err != nil {
+			slog.Warn("Failed to upgrade JetStream replicas (other NATS nodes may not be ready)", "targetReplicas", clusterSize, "error", err)
+		}
+	}
+
+	// Load state and restore VMs
+	if err := d.LoadState(); err != nil {
+		slog.Warn("Failed to load state from JetStream, continuing with empty state", "error", err)
+		slog.Info("JetStream background initialization complete")
+		return
+	}
+
+	slog.Info("Loaded state from JetStream", "instance_count", len(d.Instances.VMS))
+
+	// Restore VMs from loaded state
+	d.Instances.Mu.Lock()
+	defer d.Instances.Mu.Unlock()
+
+	for id, instance := range d.Instances.VMS {
+		instance.EBSRequests.Mu = sync.Mutex{}
+		instance.QMPClient = &qmp.QMPClient{}
+		d.Instances.VMS[id] = instance
+
+		if instance.Attributes.StopInstance {
+			slog.Info("Instance flagged as user initiated stop, skipping", "instance", instance.ID)
+			continue
+		}
+
+		if instance.Status == "terminated" {
+			slog.Info("Instance state is terminated, skipping", "instance", instance.ID)
+			continue
+		}
+
+		// Re-allocate resources
+		if instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]; ok {
+			slog.Info("Re-allocating resources for instance", "instanceId", instance.ID, "type", instance.InstanceType)
+			if err := d.resourceMgr.allocate(instanceType); err != nil {
+				slog.Error("Failed to re-allocate resources for instance on startup", "instanceId", instance.ID, "err", err)
+			}
+		}
+
+		slog.Info("Launching instance", "instance", instance.ID)
+		if err := d.LaunchInstance(instance); err != nil {
+			slog.Error("Failed to launch instance", "err", err)
+		}
+	}
+
+	slog.Info("JetStream background initialization complete")
 }
 
 // NATS events
