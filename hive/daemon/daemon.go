@@ -205,6 +205,7 @@ func getCPUModel() (string, error) {
 }
 
 // generateInstanceTypes creates the instance type map for the detected CPU family
+// It includes both the CPU-specific family and the burstable family (t3 for x86, t4g for ARM)
 func generateInstanceTypes(family, arch string) map[string]*ec2.InstanceTypeInfo {
 	sizes := []struct {
 		suffix   string
@@ -220,25 +221,48 @@ func generateInstanceTypes(family, arch string) map[string]*ec2.InstanceTypeInfo
 		{"2xlarge", 8, 32.0},
 	}
 
+	// Determine the burstable family based on architecture
+	burstableFamily := "t3"
+	if arch == "arm64" {
+		burstableFamily = "t4g"
+	}
+
+	// Build list of families to generate: CPU-specific + burstable (if different)
+	families := []struct {
+		name      string
+		burstable bool
+	}{
+		{family, false},
+	}
+	if family != burstableFamily {
+		families = append(families, struct {
+			name      string
+			burstable bool
+		}{burstableFamily, true})
+	}
+
 	instanceTypes := make(map[string]*ec2.InstanceTypeInfo)
-	for _, size := range sizes {
-		name := fmt.Sprintf("%s.%s", family, size.suffix)
-		instanceTypes[name] = &ec2.InstanceTypeInfo{
-			InstanceType: aws.String(name),
-			VCpuInfo: &ec2.VCpuInfo{
-				DefaultVCpus: aws.Int64(int64(size.vcpus)),
-			},
-			MemoryInfo: &ec2.MemoryInfo{
-				SizeInMiB: aws.Int64(int64(size.memoryGB * 1024)),
-			},
-			ProcessorInfo: &ec2.ProcessorInfo{
-				SupportedArchitectures: []*string{aws.String(arch)},
-			},
-			CurrentGeneration:             aws.Bool(true),
-			BurstablePerformanceSupported: aws.Bool(strings.HasPrefix(name, "t")),
-			Hypervisor:                    aws.String("kvm"),
-			SupportedVirtualizationTypes:  []*string{aws.String("hvm")},
-			SupportedRootDeviceTypes:      []*string{aws.String("ebs")},
+	for _, fam := range families {
+		for _, size := range sizes {
+			name := fmt.Sprintf("%s.%s", fam.name, size.suffix)
+			instanceTypes[name] = &ec2.InstanceTypeInfo{
+				InstanceType: aws.String(name),
+				VCpuInfo: &ec2.VCpuInfo{
+					DefaultVCpus: aws.Int64(int64(size.vcpus)),
+				},
+				MemoryInfo: &ec2.MemoryInfo{
+					SizeInMiB: aws.Int64(int64(size.memoryGB * 1024)),
+				},
+				ProcessorInfo: &ec2.ProcessorInfo{
+					SupportedArchitectures: []*string{aws.String(arch)},
+				},
+				CurrentGeneration:             aws.Bool(true),
+				BurstablePerformanceSupported: aws.Bool(false),
+				// BurstablePerformanceSupported: aws.Bool(fam.burstable),
+				Hypervisor:                   aws.String("kvm"),
+				SupportedVirtualizationTypes: []*string{aws.String("hvm")},
+				SupportedRootDeviceTypes:     []*string{aws.String("ebs")},
+			}
 		}
 	}
 	return instanceTypes
@@ -275,8 +299,13 @@ func NewResourceManager() *ResourceManager {
 	// Generate instance types based on detected CPU family
 	instanceTypes := generateInstanceTypes(instanceFamily, arch)
 
-	log.Printf("System resources: %d vCPUs, %.2f GB RAM, CPU: %s, Family: %s (detected on %s)",
-		numCPU, totalMemGB, cpuModel, instanceFamily, runtime.GOOS)
+	// Determine burstable family for logging
+	burstableFamily := "t3"
+	if runtime.GOARCH == "arm64" {
+		burstableFamily = "t4g"
+	}
+	log.Printf("System resources: %d vCPUs, %.2f GB RAM, CPU: %s, Families: %s + %s (detected on %s)",
+		numCPU, totalMemGB, cpuModel, instanceFamily, burstableFamily, runtime.GOOS)
 
 	return &ResourceManager{
 		availableVCPU: numCPU,
