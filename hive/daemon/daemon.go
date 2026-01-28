@@ -912,16 +912,8 @@ func (d *Daemon) initJetStreamBackground() {
 		}
 	}
 
-	// Try to upgrade replicas if cluster has more nodes
-	d.mu.Lock()
-	clusterSize := len(d.clusterConfig.Nodes)
-	d.mu.Unlock()
-
-	if clusterSize > 1 {
-		if err := d.jsManager.UpdateReplicas(clusterSize); err != nil {
-			slog.Warn("Failed to upgrade JetStream replicas (other NATS nodes may not be ready)", "targetReplicas", clusterSize, "error", err)
-		}
-	}
+	// Note: Replica upgrades are handled by the /join endpoint on the leader node.
+	// Non-leader nodes should not try to update replicas to avoid race conditions.
 
 	// Load state and restore VMs
 	if err := d.LoadState(); err != nil {
