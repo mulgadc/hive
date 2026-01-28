@@ -218,23 +218,18 @@ wait_for_gateway() {
 }
 
 # Check instance distribution across nodes
-# Returns the instance counts per node
+# Counts QEMU processes per node IP from hostfwd bindings
 check_instance_distribution() {
     echo "Checking instance distribution across nodes..."
 
     local total=0
     for i in 1 2 3; do
-        local data_dir="$HOME/node$i"
-        local instances_file="$data_dir/hive/instances.json"
-
-        if [ -f "$instances_file" ]; then
-            local count
-            count=$(jq 'length' "$instances_file" 2>/dev/null || echo "0")
-            echo "  Node$i: $count instances"
-            total=$((total + count))
-        else
-            echo "  Node$i: 0 instances (no instances file)"
-        fi
+        local node_ip="${SIMULATED_NETWORK}.$i"
+        # Count QEMU processes with hostfwd bound to this node's IP
+        local count
+        count=$(ps auxw | grep qemu-system | grep -v grep | grep -c "hostfwd=tcp:${node_ip}:" 2>/dev/null || echo "0")
+        echo "  Node$i ($node_ip): $count instances"
+        total=$((total + count))
     done
 
     echo "  Total instances: $total"
@@ -270,6 +265,32 @@ get_ssh_port() {
     done
 
     return 1
+}
+
+# Find the SSH host IP for an instance from the QEMU process hostfwd setting
+# Usage: get_ssh_host <instance_id>
+# Returns: the SSH host IP (e.g., 10.11.12.1, 127.0.0.1), or "127.0.0.1" if not found/empty
+get_ssh_host() {
+    local instance_id="$1"
+
+    local qemu_cmd
+    qemu_cmd=$(ps auxw | grep "$instance_id" | grep qemu-system | grep -v grep || true)
+
+    if [ -n "$qemu_cmd" ]; then
+        # Extract host from hostfwd=tcp:HOST:PORT-:22
+        # Pattern matches: hostfwd=tcp:IP:PORT-:22 where IP can be empty
+        local ssh_host
+        ssh_host=$(echo "$qemu_cmd" | sed -n 's/.*hostfwd=tcp:\([^:]*\):[0-9]*-:22.*/\1/p')
+
+        if [ -n "$ssh_host" ]; then
+            echo "$ssh_host"
+            return 0
+        fi
+    fi
+
+    # Default to localhost if not found
+    echo "127.0.0.1"
+    return 0
 }
 
 # Find which node an instance is running on (for multi-node setups)
