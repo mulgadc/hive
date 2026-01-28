@@ -13,7 +13,7 @@ import (
 	"github.com/NYTimes/gziphandler"
 )
 
-//go:embed frontend/dist/*
+//go:embed all:frontend/dist
 var distFS embed.FS
 
 func main() {
@@ -61,7 +61,7 @@ func main() {
 		// Check if the requested path is a file that exists in embedded FS
 		file, err := contentFS.Open(path)
 		if err == nil {
-			file.Close()
+			_ = file.Close()
 			// File exists, check if it's not an HTML file for caching
 			if filepath.Ext(path) != ".html" {
 				// Vite outputs unique hashes for files so we can cache them forever
@@ -81,7 +81,9 @@ func main() {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(indexContent)
+		if _, err := w.Write(indexContent); err != nil {
+			slog.Error("Failed to write index.html response", "error", err)
+		}
 	})
 
 	// Wrap handler with security headers and gzip compression

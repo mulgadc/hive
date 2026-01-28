@@ -95,7 +95,9 @@ function BucketObjectsWithPrefix() {
                 return null
               }
 
-              const folderName = removeTrailingSlash(prefixObj.Prefix)
+              const folderName = removeTrailingSlash(
+                extractDisplayName(prefixObj.Prefix, prefix),
+              )
               const fullPrefix = buildFullS3Key(prefixObj.Prefix, prefix)
 
               return (
