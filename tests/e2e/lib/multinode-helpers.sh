@@ -4,13 +4,6 @@
 # Provides utilities for managing simulated IPs, starting/stopping node services,
 # and verifying NATS cluster health.
 
-# Suppress urllib3 InsecureRequestWarning from AWS CLI (we use --no-verify-ssl)
-export PYTHONWARNINGS="ignore::urllib3.exceptions.InsecureRequestWarning"
-
-# Helper to filter AWS CLI output (removes Python warnings that break jq)
-aws_json() {
-    "$@" 2>&1 | grep -v "^urllib3\|^InsecureRequestWarning\|certificate verification"
-}
 
 # Network configuration
 SIMULATED_NETWORK="10.11.12"
@@ -163,7 +156,7 @@ wait_for_instance_state() {
 
     while [ $attempt -lt $max_attempts ]; do
         local state
-        state=$(aws_json aws --endpoint-url https://${NODE1_IP}:${AWSGW_PORT} --no-verify-ssl ec2 describe-instances \
+        state=$(aws --endpoint-url https://${NODE1_IP}:${AWSGW_PORT} ec2 describe-instances \
             --instance-ids "$instance_id" \
             --query 'Reservations[0].Instances[0].State.Name' \
             --output text) || {
