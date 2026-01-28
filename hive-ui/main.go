@@ -1,31 +1,30 @@
 package main
 
 import (
+	"embed"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/NYTimes/gziphandler"
 )
+
+//go:embed frontend/dist/*
+var distFS embed.FS
 
 func main() {
 	// setup logger
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	// Get the project root (current directory when run via make)
-	projectRoot, err := os.Getwd()
+	// Strip the "frontend/dist" prefix from embedded filesystem
+	contentFS, err := fs.Sub(distFS, "frontend/dist")
 	if err != nil {
-		slog.Error("Failed to get project root:", "error", err)
-		os.Exit(1)
-	}
-
-	// Check if dist directory exists
-	distDir := filepath.Join(projectRoot, "frontend", "dist")
-	if _, err := os.Stat(distDir); os.IsNotExist(err) {
-		slog.Error("Frontend dist directory not found:", "error", err)
+		slog.Error("Failed to create sub filesystem:", "error", err)
 		os.Exit(1)
 	}
 
@@ -48,26 +47,41 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Serve static files
-	fs := http.FileServer(http.Dir(distDir))
+	// Serve static files from embedded filesystem
+	fileServer := http.FileServer(http.FS(contentFS))
 
 	// SPA handler: try to serve the file, fallback to index.html
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check if the requested path is a file that exists
-		requestedPath := filepath.Join(distDir, r.URL.Path)
-		info, err := os.Stat(requestedPath)
-		if err == nil && !info.IsDir() && filepath.Ext(requestedPath) != ".html" {
-			// File exists, serve it and set cache headers. vite outputs unique hashes for files
-			// so we can cache them forever. cache would only hit if it's not modified since last request
-			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-			fs.ServeHTTP(w, r)
+		// Clean the path
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			path = "index.html"
+		}
+
+		// Check if the requested path is a file that exists in embedded FS
+		file, err := contentFS.Open(path)
+		if err == nil {
+			file.Close()
+			// File exists, check if it's not an HTML file for caching
+			if filepath.Ext(path) != ".html" {
+				// Vite outputs unique hashes for files so we can cache them forever
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "no-cache")
+			}
+			fileServer.ServeHTTP(w, r)
 			return
 		}
 
 		// File doesn't exist, serve index.html for SPA routing
-		// set cache headers to no-cache so browser always fetches the latest version
 		w.Header().Set("Cache-Control", "no-cache")
-		http.ServeFile(w, r, filepath.Join(distDir, "index.html"))
+		indexContent, err := fs.ReadFile(contentFS, "index.html")
+		if err != nil {
+			http.Error(w, "index.html not found", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(indexContent)
 	})
 
 	// Wrap handler with security headers and gzip compression

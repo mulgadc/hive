@@ -8,16 +8,18 @@ on:
   workflow_dispatch:
 
 jobs:
-  frontend:
-    name: Frontend Build and Test
+  ui_build_and_test:
+    name: UI Build and Test
     runs-on: ubuntu-24.04
     defaults:
       run:
-        working-directory: hive-ui/frontend
+        working-directory: hive-ui
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v6
+        with:
+          sparse-checkout: hive-ui
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -32,30 +34,19 @@ jobs:
           node-version-file: hive-ui/frontend/.nvmrc
 
       - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
+        run: cd frontend && pnpm install --frozen-lockfile
 
       - name: Run Biome formatter check
-        run: pnpm check
+        run: cd frontend && pnpm check
 
       - name: Build frontend
-        run: pnpm build
-
-  webserver:
-    name: Webserver Build and Test
-    runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: hive-ui/webserver
-
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v6
+        run: cd frontend && pnpm build
 
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          cache-dependency-path: hive-ui/webserver/go.sum
-          go-version-file: hive-ui/webserver/go.mod
+          cache-dependency-path: hive-ui/go.sum
+          go-version-file: hive-ui/go.mod
 
       - name: Go Vet
         run: go vet ./...
@@ -69,5 +60,5 @@ jobs:
       - name: Gosec Security Scanner
         run: go tool gosec -exclude-generated ./...
 
-      - name: Build
+      - name: Go Build
         run: go build ./...
