@@ -21,6 +21,9 @@ jobs:
           cache-dependency-path: "go.sum"
           go-version-file: "go.mod"
 
+      - name: Build Hive
+        run: make go_build
+
       - name: Run Tests
         run: LOG_IGNORE=1 go test -v -timeout 120s ./...
 
@@ -35,6 +38,3 @@ jobs:
 
       # - name: Gosec Security Scanner
       #   run: go tool gosec -exclude-generated ./...
-
-      - name: Build
-        run: make go_build
