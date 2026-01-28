@@ -2,7 +2,7 @@
 
 ## Update Jan 2026
 
-Big rocks:
+### Big rocks:
 
 - [DONE] Add multi-node support for predastore (S3) using reed solomon encoding
   - [DONE] Implement KV store for object lookup, WAL files, offset. Use hash-ring to determine which nodes an object belongs to.
@@ -17,13 +17,148 @@ Big rocks:
   - Implement ShadCNblocks for UI framework
   - Simple Go webserver, static files, easy build process.
 
-Implementation gaps:
+### Implementation gaps:
 
 - EC2 - Support extended features for `run-instance`
   - Volume resize of AMI. Note `nbd` does not support live resize events, instance needs to be stopped, resized, and started.
   - Confirm cloud-init will resize volume on boot and configured correctly.
   - Attach additional volumes
   - Attach to VPC / Security group (required Open vSwitch implementation)
+
+## EC2 create-volume
+
+Allow the ability to create new volumes
+
+```sh
+aws ec2 create-volume \
+    --size 80 \
+    --availability-zone ap-southeast-2a
+```
+
+* viperblock - Create new volume for specified size (empty), push state to predastore.
+* Note `gp3` volumes are only supported at this stage (no gp3, io1/io2, etc)
+* Validate availability zone, only supports the specified value when running `hive init` - Multi AZ available Hive v2+
+
+## EC2 attach-volume
+
+```sh
+aws ec2 attach-volume --volume-id vol-1234567890abcdef0 --instance-id i-01474ef662b89480 --device /dev/sdf
+```
+
+* Validate volume exists, e.g create-volume
+* Push attach-volume request via NATS to the node running the specified instance - Run nbdkit for new volume, retrieve host:port or UNIX socket pathname, append volume to instance state, so will mount/attach on instance stop/start.
+* Issue a command via QMP for the instance, to attach the volume, e.g
+* Confirm if --device compatible, since NBD will export the drive, likely the host OS will decide the /dev/volume attributes.
+* Volume available to mount within the guest OS. Volume meta-data attached to instance.json/NATS KV and available if instance stop/started.
+
+```json
+{
+  "execute": "blockdev-add",
+  "arguments": {
+    "node-name": "nbd0",
+    "driver": "nbd",
+    "server": { "type": "unix", "path": "/run/nbd/vol0.sock" },
+    "export": "", // Note, export volume should be blank for viperblock
+    "read-only": false
+  }
+}
+```
+
+Once attached, QMP event to add the device. Likely --device argument can be specified here for /dev/block device. If --device missing, need to loop through the instance attached volumes and determine an id, e.g /dev/sda used already, /dev/sdb available.
+
+```json
+{
+  "execute": "device_add",
+  "arguments": {
+    "driver": "virtio-blk-pci",
+    "id": "vdisk1",
+    "drive": "nbd0"
+  }
+}
+```
+
+## EC2 detach-volume
+
+```sh
+aws ec2 detach-volume --volume-id vol-1234567890abcdef0
+```
+
+* Fire NATS event to node running specified instance to detach the volume
+* Use QMP to detach specified volume
+* Terminate running `nbdkit` process for specified volume, ensure WAL state synced to predastore.
+
+## EC2 delete-volume
+
+Allow a volume to be deleted once detached from any running instances.
+
+```sh
+aws ec2 delete-volume --volume-id vol-049df61146c4d7901
+```
+
+* Confirm volume detached
+* Terminate running `nbdkit` process for specified volume, ensure WAL state synced to predastore.
+* Delete volume in predastore
+
+## EC2 modify-volume
+
+Example increasing a volume to 64GiB
+
+```sh
+aws ec2 modify-volume --size 64 --volume-id vol-1234567890abcdef0
+```
+
+```json
+{
+    "VolumeModification": {
+        "TargetSize": 64,
+        "TargetVolumeType": "gp3",
+        "ModificationState": "modifying",
+        "VolumeId": " vol-1234567890abcdef0",
+        "TargetIops": 100,
+        "StartTime": "2019-05-17T11:27:19.000Z",
+        "Progress": 0,
+        "OriginalVolumeType": "gp3",
+        "OriginalIops": 100,
+        "OriginalSize": 32
+    }
+}
+```
+
+* Note `nbd` does not support resizing disks live. Requires instance to be stopped, boot/root volume, or attached volume will need to be resized, and instance started again. Limitation for Hive v1 using NBD, aiming to resolve with `vhost-user-blk` to create a `virtio-blk` device for extended functionality and performance.
+
+### EC2 describe-volume-status
+
+Required to track progress of new volumes created, deleted, detached or running.
+
+```sh
+aws ec2 describe-volume-status --volume-ids vol-1234567890abcdef0
+```
+
+```json
+{
+    "VolumeStatuses": [
+        {
+            "VolumeStatus": {
+                "Status": "ok",
+                "Details": [
+                    {
+                        "Status": "passed",
+                        "Name": "io-enabled"
+                    },
+                    {
+                        "Status": "not-applicable",
+                        "Name": "io-performance"
+                    }
+                ]
+            },
+            "AvailabilityZone": "us-east-1a",
+            "VolumeId": "vol-1234567890abcdef0",
+            "Actions": [],
+            "Events": []
+        }
+    ]
+}
+```
 
 ### Issues to investigate
 
