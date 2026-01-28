@@ -1367,11 +1367,25 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	}
 	msg.Respond(jsonResponse)
 
+	// Add instance to state immediately so DescribeInstances can find it
+	// while volumes are being prepared and VM is launching
+	d.Instances.Mu.Lock()
+	d.Instances.VMS[instance.ID] = instance
+	d.Instances.Mu.Unlock()
+
+	if err := d.WriteState(); err != nil {
+		slog.Error("handleEC2RunInstances failed to write initial state", "err", err)
+	}
+
+	slog.Info("Instance added to state with pending status", "instanceId", instance.ID)
+
 	// Next, prepare the root volume, cloud-init, EFI drives via NBD (AMI clone to new volume)
 	err = d.instanceService.GenerateVolumes(runInstancesInput, instance)
 	if err != nil {
 		slog.Error("handleEC2RunInstances GenerateVolumes failed", "err", err)
 		d.resourceMgr.deallocate(instanceType)
+		// Update instance status to failed
+		d.markInstanceFailed(instance, "volume_preparation_failed")
 		return
 	}
 
@@ -1381,6 +1395,8 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	if err != nil {
 		slog.Error("handleEC2RunInstances LaunchInstance failed", "err", err)
 		d.resourceMgr.deallocate(instanceType)
+		// Update instance status to failed
+		d.markInstanceFailed(instance, "launch_failed")
 		return
 	}
 
@@ -1774,6 +1790,32 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	}
 
 	return nil
+}
+
+// markInstanceFailed updates an instance status to indicate a failure during launch
+func (d *Daemon) markInstanceFailed(instance *vm.VM, reason string) {
+	d.Instances.Mu.Lock()
+	defer d.Instances.Mu.Unlock()
+
+	instance.Status = "shutting-down"
+
+	// Update EC2 Instance state for API compatibility
+	if instance.Instance != nil {
+		instance.Instance.State.SetCode(32) // 32 = shutting-down
+		instance.Instance.State.SetName("shutting-down")
+		// Add state reason
+		instance.Instance.StateReason = &ec2.StateReason{}
+		instance.Instance.StateReason.SetCode("Server.InternalError")
+		instance.Instance.StateReason.SetMessage(reason)
+	}
+
+	d.Instances.VMS[instance.ID] = instance
+
+	if err := d.WriteState(); err != nil {
+		slog.Error("markInstanceFailed failed to write state", "err", err)
+	}
+
+	slog.Info("Instance marked as failed", "instanceId", instance.ID, "reason", reason)
 }
 
 func (d *Daemon) StartInstance(instance *vm.VM) error {
