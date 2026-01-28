@@ -529,8 +529,8 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	fmt.Printf("   Secret Key: %s\n", secretKey)
 	fmt.Printf("   Account ID: %s\n", accountID)
 
-	// Generate SSL certificates
-	certPath := admin.GenerateCertificatesIfNeeded(configDir, force)
+	// Generate SSL certificates (with bind IP in SANs for multi-node support)
+	certPath := admin.GenerateCertificatesIfNeeded(configDir, force, bindIP)
 
 	// Generate NATS token
 	natsToken := admin.GenerateNATSToken()
@@ -804,10 +804,34 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 
 	fmt.Printf("✅ Config saved to: %s\n\n", hiveTomlPath)
 
-	// Generate certificates if needed
-	certPath := admin.GenerateCertificatesIfNeeded(configDir, false)
+	// Handle CA and server certificate generation
+	// If leader provided CA files, use those; otherwise fall back to generating our own
+	if joinResp.CACert != "" && joinResp.CAKey != "" {
+		// Write CA files received from leader
+		caCertPath := filepath.Join(configDir, "ca.pem")
+		caKeyPath := filepath.Join(configDir, "ca.key")
 
-	fmt.Printf("✅ SSL certificates available at: %s\n\n", certPath)
+		if err := os.WriteFile(caCertPath, []byte(joinResp.CACert), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing CA cert: %v\n", err)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(caKeyPath, []byte(joinResp.CAKey), 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing CA key: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("✅ CA certificate received from leader: %s\n", caCertPath)
+
+		// Generate server cert signed by CA with this node's bind IP
+		if err := admin.GenerateServerCertOnly(configDir, bindIP); err != nil {
+			fmt.Fprintf(os.Stderr, "Error generating server certificate: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("✅ Server certificate generated with bind IP: %s\n\n", bindIP)
+	} else {
+		// Fallback: generate own CA if leader didn't provide one (backwards compatibility)
+		certPath := admin.GenerateCertificatesIfNeeded(configDir, false, bindIP)
+		fmt.Printf("✅ SSL certificates available at: %s\n\n", certPath)
+	}
 
 	// Write individual node config files
 	portStr := fmt.Sprintf("%d", port)

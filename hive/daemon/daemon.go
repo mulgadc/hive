@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -784,12 +785,31 @@ func (d *Daemon) ClusterManager() error {
 			Nodes:   d.clusterConfig.Nodes,
 		}
 
+		// Read CA certificate and key to share with joining node for per-node cert generation
+		caCertPath := filepath.Join(d.config.BaseDir, "config", "ca.pem")
+		caKeyPath := filepath.Join(d.config.BaseDir, "config", "ca.key")
+
+		var caCert, caKey string
+		if caCertPEM, err := os.ReadFile(caCertPath); err == nil {
+			caCert = string(caCertPEM)
+		} else {
+			slog.Warn("Could not read CA cert for join response", "error", err)
+		}
+
+		if caKeyPEM, err := os.ReadFile(caKeyPath); err == nil {
+			caKey = string(caKeyPEM)
+		} else {
+			slog.Warn("Could not read CA key for join response", "error", err)
+		}
+
 		return c.JSON(config.NodeJoinResponse{
 			Success:     true,
 			Message:     fmt.Sprintf("node %s successfully joined cluster", req.Node),
 			SharedData:  sharedData,
 			ConfigHash:  configHash,
 			JoiningNode: req.Node,
+			CACert:      caCert,
+			CAKey:       caKey,
 		})
 	})
 

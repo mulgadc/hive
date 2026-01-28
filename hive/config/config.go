@@ -175,6 +175,9 @@ type NodeJoinResponse struct {
 	SharedData  *SharedClusterData `json:"shared_data,omitempty"`
 	ConfigHash  string             `json:"config_hash,omitempty"`
 	JoiningNode string             `json:"joining_node,omitempty"` // The node name that is joining
+	// CA distribution for per-node certificate generation
+	CACert string `json:"ca_cert,omitempty"` // PEM-encoded CA certificate
+	CAKey  string `json:"ca_key,omitempty"`  // PEM-encoded CA private key
 }
 
 type NodeHealthResponse struct {

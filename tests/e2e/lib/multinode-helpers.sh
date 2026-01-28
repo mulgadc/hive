@@ -240,6 +240,160 @@ check_instance_distribution() {
     echo "  Total instances: $total"
 }
 
+# Find the SSH port for an instance from the QEMU process
+# Usage: get_ssh_port <instance_id>
+# Returns: the SSH port number, or empty string if not found
+get_ssh_port() {
+    local instance_id="$1"
+    local max_attempts="${2:-60}"
+    local attempt=0
+
+    while [ $attempt -lt $max_attempts ]; do
+        local qemu_cmd
+        qemu_cmd=$(ps auxw | grep "$instance_id" | grep qemu-system | grep -v grep || true)
+
+        if [ -n "$qemu_cmd" ]; then
+            # Extract port from hostfwd=tcp:127.0.0.1:PORT-:22 or hostfwd=tcp::PORT-:22
+            local ssh_port
+            ssh_port=$(echo "$qemu_cmd" | sed -n 's/.*hostfwd=tcp:[^:]*:\([0-9]*\)-:22.*/\1/p')
+
+            if [ -n "$ssh_port" ]; then
+                echo "$ssh_port"
+                return 0
+            fi
+        fi
+
+        attempt=$((attempt + 1))
+        if [ $attempt -lt $max_attempts ]; then
+            sleep 1
+        fi
+    done
+
+    return 1
+}
+
+# Find which node an instance is running on (for multi-node setups)
+# Usage: get_instance_node <instance_id>
+# Returns: node number (1, 2, or 3), or empty if not found
+get_instance_node() {
+    local instance_id="$1"
+
+    for i in 1 2 3; do
+        local data_dir="$HOME/node$i"
+        local instances_file="$data_dir/hive/instances.json"
+
+        if [ -f "$instances_file" ]; then
+            if jq -e ".[\"$instance_id\"]" "$instances_file" > /dev/null 2>&1; then
+                echo "$i"
+                return 0
+            fi
+        fi
+    done
+
+    return 1
+}
+
+# Wait for SSH to be ready on an instance
+# Usage: wait_for_ssh <host> <port> <key_file> [max_attempts]
+# Returns: 0 if SSH is ready, 1 if timeout
+wait_for_ssh() {
+    local host="$1"
+    local port="$2"
+    local key_file="$3"
+    local max_attempts="${4:-120}"
+    local attempt=0
+
+    echo "  Waiting for SSH to be ready on $host:$port..."
+
+    while [ $attempt -lt $max_attempts ]; do
+        # Add host key to known_hosts (suppress errors)
+        ssh-keyscan -p "$port" "$host" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+        # Try to connect with short timeout
+        if ssh -o StrictHostKeyChecking=no \
+               -o UserKnownHostsFile=/dev/null \
+               -o ConnectTimeout=2 \
+               -o BatchMode=yes \
+               -p "$port" \
+               -i "$key_file" \
+               ec2-user@"$host" 'echo ready' > /dev/null 2>&1; then
+            echo "  SSH is ready"
+            return 0
+        fi
+
+        attempt=$((attempt + 1))
+        if [ $attempt -lt $max_attempts ]; then
+            if [ $((attempt % 10)) -eq 0 ]; then
+                echo "  Waiting for SSH... ($attempt/$max_attempts)"
+            fi
+            sleep 1
+        fi
+    done
+
+    echo "  ERROR: SSH not ready after $max_attempts attempts"
+    return 1
+}
+
+# Test SSH connectivity by running 'id' command and verifying ec2-user in output
+# Usage: test_ssh_connectivity <host> <port> <key_file>
+# Returns: 0 if successful and ec2-user found, 1 otherwise
+test_ssh_connectivity() {
+    local host="$1"
+    local port="$2"
+    local key_file="$3"
+
+    echo "  Testing SSH connectivity (running 'id' command)..."
+
+    local id_output
+    id_output=$(ssh -o StrictHostKeyChecking=no \
+                    -o UserKnownHostsFile=/dev/null \
+                    -o ConnectTimeout=5 \
+                    -o BatchMode=yes \
+                    -p "$port" \
+                    -i "$key_file" \
+                    ec2-user@"$host" 'id' 2>&1) || {
+        echo "  ERROR: SSH command failed"
+        echo "  Output: $id_output"
+        return 1
+    }
+
+    echo "  SSH 'id' output: $id_output"
+
+    if echo "$id_output" | grep -q "ec2-user"; then
+        echo "  SSH connectivity test passed (ec2-user confirmed)"
+        return 0
+    else
+        echo "  ERROR: Expected 'ec2-user' in id output"
+        return 1
+    fi
+}
+
+# Verify SSH is NOT reachable (used after instance termination)
+# Usage: verify_ssh_unreachable <host> <port> <key_file>
+# Returns: 0 if SSH is unreachable (expected), 1 if SSH is still reachable (unexpected)
+verify_ssh_unreachable() {
+    local host="$1"
+    local port="$2"
+    local key_file="$3"
+
+    echo "  Verifying SSH is no longer reachable..."
+
+    # Try to connect with 1 second timeout - should fail
+    if ssh -o StrictHostKeyChecking=no \
+           -o UserKnownHostsFile=/dev/null \
+           -o ConnectTimeout=1 \
+           -o BatchMode=yes \
+           -p "$port" \
+           -i "$key_file" \
+           ec2-user@"$host" 'echo connected' > /dev/null 2>&1; then
+        echo "  ERROR: SSH is still reachable after termination"
+        return 1
+    else
+        echo "  SSH is no longer reachable (as expected)"
+        return 0
+    fi
+}
+
 # Dump logs from all nodes (for debugging failures)
 dump_all_node_logs() {
     echo ""
