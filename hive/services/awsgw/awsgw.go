@@ -93,6 +93,8 @@ func launchService(config *config.ClusterConfig) (err error) {
 		Config:         nodeConfig.AWSGW.Config,
 		ExpectedNodes:  len(config.Nodes),
 		Region:         nodeConfig.Region,
+		AccessKey:      nodeConfig.AccessKey,
+		SecretKey:      nodeConfig.SecretKey,
 	}
 
 	app := gw.SetupRoutes()

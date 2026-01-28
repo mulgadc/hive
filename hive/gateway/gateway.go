@@ -25,6 +25,8 @@ type GatewayConfig struct {
 	Config         string     // Shared AWS Gateway config for S3 auth
 	ExpectedNodes  int        // Number of expected hive nodes for multi-node operations
 	Region         string     // Region this gateway is running in
+	AccessKey      string     // AWS Access Key ID for authentication
+	SecretKey      string     // AWS Secret Access Key for authentication
 }
 
 var supportedServices = map[string]bool{
@@ -99,9 +101,8 @@ func (gw *GatewayConfig) SetupRoutes() *fiber.App {
 		AllowCredentials: true,
 	}))
 
-	// TODO: Implement AWS SigV4 authentication middleware for gateway requests
-	// The S3 auth middleware was removed when predastore migrated to net/http
-
+	// Add AWS SigV4 authentication middleware
+	app.Use(gw.SigV4AuthMiddleware())
 	// Define routes
 	app.Get("/*", func(c *fiber.Ctx) error {
 
@@ -154,35 +155,16 @@ func (gw *GatewayConfig) Request(ctx *fiber.Ctx) error {
 
 }
 
-func (gw *GatewayConfig) GetService(ctx *fiber.Ctx) (srv string, err error) {
-
-	// Determine the service from the Authorization header
-	// "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20250930/ap-southeast-2/account/aws4_request, SignedHeaders=content-type;host;x-amz-date, Signature=adb8183545a9d6f5b626908582b4ca5f9a309137b1d4bcc802f0e79ede7af7bc"
-
-	authHeader := ctx.Get("Authorization")
-
-	parts := strings.Split(authHeader, ", ")
-	if len(parts) != 3 {
-		slog.Debug("Invalid Authorization header format")
-		return srv, errors.New(awserrors.ErrorAuthFailure)
+func (gw *GatewayConfig) GetService(ctx *fiber.Ctx) (string, error) {
+	svc, ok := ctx.Locals("sigv4.service").(string)
+	if !ok {
+		return "", errors.New(awserrors.ErrorAuthFailure)
 	}
-
-	// Parse credential
-	creds := strings.Split(strings.TrimPrefix(parts[0], "AWS4-HMAC-SHA256 Credential="), "/")
-	if len(creds) != 5 {
-		slog.Debug("Invalid credential scope")
-		return srv, errors.New(awserrors.ErrorAuthFailure)
-	}
-
-	svc := creds[3]
-
 	if !supportedServices[svc] {
 		slog.Debug("Unsupported service", "service", svc)
-		return srv, errors.New("UnsupportedOperation")
+		return "", errors.New("UnsupportedOperation")
 	}
-
 	return svc, nil
-
 }
 
 func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {
