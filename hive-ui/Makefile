@@ -5,7 +5,7 @@ build:
 	cd frontend && pnpm build && cd ..
 
 	@echo "\n....Building $(GO_PROJECT_NAME)...."
-	cd webserver && GOWORK=off go build -ldflags "-s -w" -o ../bin/$(GO_PROJECT_NAME) .
+	GOWORK=off go build -ldflags "-s -w" -o ./bin/$(GO_PROJECT_NAME) .
 
 run:
 	$(MAKE) build
@@ -17,21 +17,21 @@ clean:
 
 test:
 	@echo "\n....Running tests for $(GO_PROJECT_NAME)...."
-	cd $(GO_PROJECT_NAME) && LOG_IGNORE=1 go test -v -timeout 120s ./...
+	LOG_IGNORE=1 go test -v -timeout 120s ./...
 
 security:
 	@echo "\n....Running security checks for $(GO_PROJECT_NAME)...."
 
-	cd $(GO_PROJECT_NAME) && go tool govulncheck ./... > ../tests/govulncheck-report.txt || true
+	go tool govulncheck ./... > ./tests/govulncheck-report.txt || true
 	@echo "Govulncheck report saved to tests/govulncheck-report.txt"
 
-	cd $(GO_PROJECT_NAME) && go tool gosec -exclude-generated ./... > ../tests/gosec-report.txt || true
+	go tool gosec -exclude-generated ./... > ./tests/gosec-report.txt || true
 	@echo "Gosec report saved to tests/gosec-report.txt"
 
-	cd $(GO_PROJECT_NAME) && go tool staticcheck ./... > ../tests/staticcheck-report.txt || true
+	go tool staticcheck ./... > ./tests/staticcheck-report.txt || true
 	@echo "Staticcheck report saved to tests/staticcheck-report.txt"
 
-	cd $(GO_PROJECT_NAME) && go vet ./... 2>&1 | tee ../tests/govet-report.txt || true
+	go vet ./... 2>&1 | tee ./tests/govet-report.txt || true
 	@echo "Go vet report saved to tests/govet-report.txt"
 
 .PHONY: build run clean test security

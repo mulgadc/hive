@@ -35,21 +35,9 @@ Full-stack application for managing Hive AWS compatible products (EC2, S3)
 
 4. **Accept Certs In Browser**
 
-   Setup and run hive server. See [https://github.com/mulgadc/hive/blob/main/INSTALL.md](https://github.com/mulgadc/hive/blob/main/INSTALL.md) for installation documentation to setup a Hive cluster or single node for development purposes.
+   If you have added the CA to your machine you do not need to do this. But if you are sshd into a hive machine and want to view the ui, simply go to `https://localhost:9999` and `https://localhost:8443` and accept the certificates.
 
-   Go to `https://localhost:9999` and `https://localhost:8443` and accept the certificates
-
-   TODO: Tutorial on creating certificate authority and accepting generated certs as trusted.
-
-5. **Generate Certs**
-   ```sh
-   openssl req -x509 -out certs/server.crt -keyout certs/server.key \
-   -newkey rsa:2048 -nodes -sha256 \
-   -subj '/CN=localhost' -extensions EXT -config <( \
-      printf "[dn]\nCN=localhost\n[req]\ndistinguished_name = dn\n[EXT]\nsubjectAltName=DNS:localhost\nkeyUsage=digitalSignature\nextendedKeyUsage=serverAuth")
-   ```
-
-6. **Launch Server**
+5. **Launch Server**
 
    For production, build the static assets and launch the `go` webservice for serving traffic:
 
@@ -64,6 +52,6 @@ Full-stack application for managing Hive AWS compatible products (EC2, S3)
    pnpm dev
    ```
 
-7. **Visit WebUI**
+6. **Visit WebUI**
 
-   View [https://localhost:3000](https://localhost:3000/) in your browser to continue.
+   View [https://localhost:3000](https://localhost:3000) in your browser to continue.

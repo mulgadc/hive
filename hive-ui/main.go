@@ -1,68 +1,91 @@
 package main
 
 import (
-	"log"
+	"embed"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/NYTimes/gziphandler"
 )
+
+//go:embed frontend/dist/*
+var distFS embed.FS
 
 func main() {
 	// setup logger
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	// Get the project root (current directory when run via make)
-	projectRoot, err := os.Getwd()
+	// Strip the "frontend/dist" prefix from embedded filesystem
+	contentFS, err := fs.Sub(distFS, "frontend/dist")
 	if err != nil {
-		log.Fatal("Failed to get project root:", err)
+		slog.Error("Failed to create sub filesystem:", "error", err)
+		os.Exit(1)
 	}
 
-	// Check if dist directory exists
-	distDir := filepath.Join(projectRoot, "frontend", "dist")
-	if _, err := os.Stat(distDir); os.IsNotExist(err) {
-		log.Fatalf("Frontend dist directory not found: %s", distDir)
+	// Get home directory for certificate files
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		slog.Error("Failed to get home directory:", "error", err)
+		os.Exit(1)
+	}
+	certFile := filepath.Join(homeDir, "hive", "config", "server.pem")
+	keyFile := filepath.Join(homeDir, "hive", "config", "server.key")
+
+	// Check if certificates exist
+	if _, err := os.Stat(certFile); os.IsNotExist(err) {
+		slog.Error("Certificate file not found:", "error", err)
+		os.Exit(1)
+	}
+	if _, err := os.Stat(keyFile); os.IsNotExist(err) {
+		slog.Error("Key file not found:", "error", err)
+		os.Exit(1)
 	}
 
-	// Serve static files
-	fs := http.FileServer(http.Dir(distDir))
+	// Serve static files from embedded filesystem
+	fileServer := http.FileServer(http.FS(contentFS))
 
 	// SPA handler: try to serve the file, fallback to index.html
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check if the requested path is a file that exists
-		requestedPath := filepath.Join(distDir, r.URL.Path)
-		info, err := os.Stat(requestedPath)
-		if err == nil && !info.IsDir() && filepath.Ext(requestedPath) != ".html" {
-			// File exists, serve it and set cache headers. vite outputs unique hashes for files
-			// so we can cache them forever. cache would only hit if it's not modified since last request
-			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-			fs.ServeHTTP(w, r)
+		// Clean the path
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			path = "index.html"
+		}
+
+		// Check if the requested path is a file that exists in embedded FS
+		file, err := contentFS.Open(path)
+		if err == nil {
+			file.Close()
+			// File exists, check if it's not an HTML file for caching
+			if filepath.Ext(path) != ".html" {
+				// Vite outputs unique hashes for files so we can cache them forever
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				w.Header().Set("Cache-Control", "no-cache")
+			}
+			fileServer.ServeHTTP(w, r)
 			return
 		}
 
 		// File doesn't exist, serve index.html for SPA routing
-		// set cache headers to no-cache so browser always fetches the latest version
 		w.Header().Set("Cache-Control", "no-cache")
-		http.ServeFile(w, r, filepath.Join(distDir, "index.html"))
+		indexContent, err := fs.ReadFile(contentFS, "index.html")
+		if err != nil {
+			http.Error(w, "index.html not found", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(indexContent)
 	})
 
 	// Wrap handler with security headers and gzip compression
 	http.Handle("/", securityHeadersMiddleware(gzipMiddleware(handler)))
-
-	certFile := filepath.Join(projectRoot, "certs", "server.crt")
-	keyFile := filepath.Join(projectRoot, "certs", "server.key")
-
-	// Check if certificates exist
-	if _, err := os.Stat(certFile); os.IsNotExist(err) {
-		log.Fatalf("Certificate file not found: %s", certFile)
-	}
-	if _, err := os.Stat(keyFile); os.IsNotExist(err) {
-		log.Fatalf("Key file not found: %s", keyFile)
-	}
 
 	port := ":3000"
 
@@ -75,7 +98,10 @@ func main() {
 	}
 
 	slog.Info("Starting server with HTTPS", "port", port)
-	log.Fatal(server.ListenAndServeTLS(certFile, keyFile))
+	if err := server.ListenAndServeTLS(certFile, keyFile); err != nil {
+		slog.Error("Failed to start server:", "error", err)
+		os.Exit(1)
+	}
 }
 
 func securityHeadersMiddleware(next http.Handler) http.Handler {
@@ -100,7 +126,8 @@ func gzipMiddleware(next http.Handler) http.Handler {
 		"text/plain",
 	}))
 	if err != nil {
-		log.Fatal("Failed to create gzip middleware:", err)
+		slog.Warn("Failed to create gzip middleware, serving uncompressed:", "error", err)
+		return next
 	}
 	return g(next)
 }

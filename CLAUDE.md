@@ -167,7 +167,7 @@ discovery.services           # Service registration
 
 ### Go Module Structure
 All Go projects use:
-- Go 1.23+ with module mode
+- Go 1.25+ with module mode
 - Local replace directives for cross-component development
 - Standard build flags: `-ldflags "-s -w"` for optimized binaries
 - Test environment variable: `LOG_IGNORE=1` to suppress logs during testing
