@@ -438,7 +438,7 @@ func TestGetInstanceTypeInfos(t *testing.T) {
 	infos := rm.GetInstanceTypeInfos()
 
 	require.NotEmpty(t, infos, "Should return at least one instance type")
-	assert.Len(t, infos, 7, "Should have 7 instance sizes (nano, micro, small, medium, large, xlarge, 2xlarge)")
+	assert.Len(t, infos, 14, "Should have 14 instance types (7 sizes x 2 families: CPU-specific + burstable)")
 
 	// Verify structure of returned instance type info
 	for _, info := range infos {
@@ -818,9 +818,8 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 		require.NoError(t, err)
 
 		// With 2 vCPUs, we expect 1 slot for each 2-vCPU type (nano, micro, small, medium, large)
-		// and 0 slots for 4+ vCPU types.
-		// Total should be 5 entries.
-		assert.Equal(t, 5, len(output.InstanceTypes), "Should have 5 total slots available with 2 vCPUs")
+		// and 0 slots for 4+ vCPU types. With 2 families, that's 5 x 2 = 10 entries.
+		assert.Equal(t, 10, len(output.InstanceTypes), "Should have 10 total slots available with 2 vCPUs (5 sizes x 2 families)")
 
 		// Now let's "fake" more capacity to test multiple slots (duplicates) per type
 		daemon.resourceMgr.mu.Lock()
@@ -833,7 +832,7 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 		err = json.Unmarshal(reply.Data, &output)
 		require.NoError(t, err)
 
-		// With 4 cores and 15GB memory:
+		// With 4 cores and 15GB memory, per family:
 		// nano (2 cores, 0.5GB): 2 slots
 		// micro (2 cores, 1.0GB): 2 slots
 		// small (2 cores, 2.0GB): 2 slots
@@ -841,8 +840,9 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 		// large  (2 cores, 8.0GB): 1 slot (15GB < 16GB)
 		// xlarge (4 cores, 16.0GB): 0 slots (15GB < 16GB)
 		// 2xlarge (8 cores, 32.0GB): 0 slots
-		// Total: 2+2+2+2+1 = 9 slots
-		assert.Equal(t, 9, len(output.InstanceTypes), "Should have 9 total slots with 4 cores and 15GB memory")
+		// Total per family: 2+2+2+2+1 = 9 slots
+		// With 2 families: 9 x 2 = 18 slots
+		assert.Equal(t, 18, len(output.InstanceTypes), "Should have 18 total slots with 4 cores and 15GB memory (9 slots x 2 families)")
 
 		// Verify duplicates exist
 		typeCounts := make(map[string]int)
@@ -858,11 +858,34 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 
 // TestDaemon_BootAllocation verifies that resources are correctly reconstructed on startup
 func TestDaemon_BootAllocation(t *testing.T) {
+	// Start NATS server with JetStream
+	jsTmpDir, err := os.MkdirTemp("", "nats-js-boot-test-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(jsTmpDir)
+
+	opts := &server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		JetStream: true,
+		StoreDir:  jsTmpDir,
+		NoLog:     true,
+		NoSigs:    true,
+	}
+	ns, err := server.NewServer(opts)
+	require.NoError(t, err)
+	go ns.Start()
+	if !ns.ReadyForConnections(5 * time.Second) {
+		t.Fatal("NATS server with JetStream failed to start")
+	}
+	defer ns.Shutdown()
+	natsURL := ns.ClientURL()
+
+	// Create daemon temp directory
 	tmpDir, err := os.MkdirTemp("", "hive-daemon-boot-test-*")
 	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
-	// Create a dummy instances.json with one running and one stopped instance
+	// Create test VMs with one running and one stopped instance
 	vms := map[string]*vm.VM{
 		"i-running": {
 			ID:           "i-running",
@@ -884,22 +907,29 @@ func TestDaemon_BootAllocation(t *testing.T) {
 		},
 	}
 
-	state := struct {
-		VMS map[string]*vm.VM `json:"vms"`
-	}{VMS: vms}
-
-	jsonData, err := json.Marshal(state)
-	require.NoError(t, err)
-
-	err = os.WriteFile(tmpDir+"/instances.json", jsonData, 0644)
-	require.NoError(t, err)
-
-	// Create daemon
+	// Create daemon with NATS connection
 	clusterCfg := &config.ClusterConfig{
 		Node:  "node-1",
 		Nodes: map[string]config.Config{"node-1": {BaseDir: tmpDir}},
 	}
 	daemon := NewDaemon(clusterCfg)
+	daemon.config = &config.Config{BaseDir: tmpDir}
+
+	// Connect to NATS and initialize JetStream
+	nc, err := nats.Connect(natsURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	daemon.natsConn = nc
+	daemon.jsManager, err = NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	err = daemon.jsManager.InitKVBucket()
+	require.NoError(t, err)
+
+	// Pre-populate JetStream with test state
+	testInstances := &vm.Instances{VMS: vms}
+	err = daemon.jsManager.WriteState("node-1", testInstances)
+	require.NoError(t, err)
 
 	// Manually trigger the LoadState and allocation logic normally found in Start()
 	err = daemon.LoadState()

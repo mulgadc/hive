@@ -438,25 +438,51 @@ func (d *Daemon) Start() error {
 
 	log.Printf("Connected to NATS server at %s", d.config.NATS.Host)
 
-	// Initialize JetStream for KV state storage (falls back to disk if unavailable)
+	// Initialize JetStream for KV state storage (required - no disk fallback)
 	// Start with 1 replica to allow single-node startup, then upgrade if cluster has more nodes
-	d.jsManager, err = NewJetStreamManager(d.natsConn, 1)
-	if err != nil {
-		slog.Warn("Failed to init JetStream, falling back to file", "error", err)
-		d.jsManager = nil
-	} else if err := d.jsManager.InitKVBucket(); err != nil {
-		slog.Warn("Failed to init KV bucket, falling back to file", "error", err)
-		d.jsManager = nil
-	} else {
-		slog.Info("JetStream KV store initialized successfully", "replicas", 1)
+	// Retry with backoff if JetStream is not ready yet
+	maxRetries := 10
+	retryDelay := 500 * time.Millisecond
 
-		// Try to upgrade replicas if cluster has more nodes
-		// This handles the case where this daemon starts after other NATS nodes are already up
-		clusterSize := len(d.clusterConfig.Nodes)
-		if clusterSize > 1 {
-			if err := d.jsManager.UpdateReplicas(clusterSize); err != nil {
-				slog.Warn("Failed to upgrade JetStream replicas on startup (other NATS nodes may not be ready)", "targetReplicas", clusterSize, "error", err)
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		d.jsManager, err = NewJetStreamManager(d.natsConn, 1)
+		if err != nil {
+			slog.Warn("Failed to init JetStream", "error", err, "attempt", attempt, "maxRetries", maxRetries)
+			if attempt < maxRetries {
+				time.Sleep(retryDelay)
+				retryDelay *= 2 // Exponential backoff
+				if retryDelay > 5*time.Second {
+					retryDelay = 5 * time.Second
+				}
+				continue
 			}
+			return fmt.Errorf("failed to initialize JetStream after %d attempts: %w", maxRetries, err)
+		}
+
+		if err := d.jsManager.InitKVBucket(); err != nil {
+			slog.Warn("Failed to init KV bucket", "error", err, "attempt", attempt, "maxRetries", maxRetries)
+			if attempt < maxRetries {
+				time.Sleep(retryDelay)
+				retryDelay *= 2
+				if retryDelay > 5*time.Second {
+					retryDelay = 5 * time.Second
+				}
+				continue
+			}
+			return fmt.Errorf("failed to initialize JetStream KV bucket after %d attempts: %w", maxRetries, err)
+		}
+
+		// Success
+		slog.Info("JetStream KV store initialized successfully", "replicas", 1, "attempts", attempt)
+		break
+	}
+
+	// Try to upgrade replicas if cluster has more nodes
+	// This handles the case where this daemon starts after other NATS nodes are already up
+	clusterSize := len(d.clusterConfig.Nodes)
+	if clusterSize > 1 {
+		if err := d.jsManager.UpdateReplicas(clusterSize); err != nil {
+			slog.Warn("Failed to upgrade JetStream replicas on startup (other NATS nodes may not be ready)", "targetReplicas", clusterSize, "error", err)
 		}
 	}
 
@@ -863,44 +889,15 @@ func (d *Daemon) ClusterManager() error {
 	return nil
 }
 
-// WriteState writes the instance state to JetStream KV store (if enabled) with disk fallback
+// WriteState writes the instance state to JetStream KV store (required)
 func (d *Daemon) WriteState() error {
-	if d.jsManager != nil {
-		if err := d.jsManager.WriteState(d.node, &d.Instances); err != nil {
-			slog.Error("JetStream write failed, falling back to disk", "error", err)
-			return d.writeStateToDisk()
-		}
-		return nil
+	if d.jsManager == nil {
+		return fmt.Errorf("JetStream manager not initialized - cannot write state")
 	}
-	return d.writeStateToDisk()
-}
-
-// writeStateToDisk writes the instance state to disk (original WriteState behavior)
-func (d *Daemon) writeStateToDisk() error {
-	d.Instances.Mu.Lock()
-	defer d.Instances.Mu.Unlock()
-
-	// Create a struct without the mutex to avoid copying the lock
-	state := struct {
-		VMS map[string]*vm.VM `json:"vms"`
-	}{
-		VMS: d.Instances.VMS,
+	if err := d.jsManager.WriteState(d.node, &d.Instances); err != nil {
+		slog.Error("JetStream write failed", "error", err)
+		return fmt.Errorf("failed to write state to JetStream: %w", err)
 	}
-
-	// Pretty print JSON with indent
-	jsonData, err := json.MarshalIndent(state, "", "  ")
-
-	if err != nil {
-		return err
-	}
-
-	// Write the state to disk
-	configPath := fmt.Sprintf("%s/%s", d.config.BaseDir, "instances.json")
-	err = os.WriteFile(configPath, jsonData, 0644)
-	if err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -930,47 +927,20 @@ func (d *Daemon) InitaliseVMs() {
 	// Step 2: Loop through each instance and start it
 }
 
-// LoadState loads the instance state from JetStream KV store (if enabled) with disk fallback
+// LoadState loads the instance state from JetStream KV store (required)
 func (d *Daemon) LoadState() error {
-	if d.jsManager != nil {
-		instances, err := d.jsManager.LoadState(d.node)
-		if err != nil {
-			slog.Warn("JetStream load failed, trying disk", "error", err)
-			return d.loadStateFromDisk()
-		}
-
-		// If JetStream returned empty state, check if disk has data to migrate
-		if len(instances.VMS) == 0 {
-			diskErr := d.loadStateFromDisk()
-			if diskErr == nil && len(d.Instances.VMS) > 0 {
-				slog.Info("Migrating state from disk to JetStream", "instances", len(d.Instances.VMS))
-				// Write existing disk state to JetStream for future use
-				if writeErr := d.jsManager.WriteState(d.node, &d.Instances); writeErr != nil {
-					slog.Warn("Failed to migrate state to JetStream", "error", writeErr)
-				}
-				return nil // Use the disk state we just loaded
-			}
-		}
-
-		// Copy only the VMS map, not the mutex
-		d.Instances.VMS = instances.VMS
-		return nil
+	if d.jsManager == nil {
+		return fmt.Errorf("JetStream manager not initialized - cannot load state")
 	}
-	return d.loadStateFromDisk()
-}
 
-// loadStateFromDisk loads the instance state from disk (original LoadState behavior)
-func (d *Daemon) loadStateFromDisk() error {
-	configPath := fmt.Sprintf("%s/%s", d.config.BaseDir, "instances.json")
-	jsonData, err := os.ReadFile(configPath)
+	instances, err := d.jsManager.LoadState(d.node)
 	if err != nil {
-		return err
+		slog.Error("JetStream load failed", "error", err)
+		return fmt.Errorf("failed to load state from JetStream: %w", err)
 	}
 
-	if err := json.Unmarshal(jsonData, &d.Instances); err != nil {
-		return err
-	}
-
+	// Copy only the VMS map, not the mutex
+	d.Instances.VMS = instances.VMS
 	return nil
 }
 
@@ -2009,7 +1979,7 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 
 					if err != nil {
 						slog.Error("Failed to convert pts to int:", "err", err)
-						ptsChan <- 0
+						ptsChan <- -1
 						return
 					}
 
@@ -2057,9 +2027,8 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	// Fetch the pts
 	pts := <-ptsChan
 
-	if pts == 0 {
-		// TODO: Improve, pts can be returned as "0" which is valid
-		// "Extracted pts from QEMU output" pts=0
+	if pts < 0 {
+		// pts == -1 indicates failure to extract pts from QEMU output
 		slog.Error("Failed to get pts from QEMU output", "pts", pts)
 		//return fmt.Errorf("failed to get pts")
 	}
