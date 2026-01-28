@@ -1,4 +1,4 @@
-GO_PROJECT_NAME := webserver
+GO_PROJECT_NAME := hive-ui
 
 build:
 	@echo "\n....Building frontend...."

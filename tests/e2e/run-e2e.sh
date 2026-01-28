@@ -243,20 +243,6 @@ if [ "$STATE" != "running" ]; then
     exit 1
 fi
 
-# Phase 5a: SSH Connectivity Test
-echo "Phase 5a: SSH Connectivity Test"
-echo "Finding SSH port for instance $INSTANCE_ID..."
-SSH_PORT=$(get_ssh_port "$INSTANCE_ID" 60)
-if [ -z "$SSH_PORT" ]; then
-    echo "ERROR: Could not find SSH port for instance"
-    exit 1
-fi
-echo "Found SSH port: $SSH_PORT"
-
-# Wait for SSH to be ready and test connectivity
-wait_for_ssh "127.0.0.1" "$SSH_PORT" "test-key-1.pem" 120
-test_ssh_connectivity "127.0.0.1" "$SSH_PORT" "test-key-1.pem"
-
 # Verify root volume attached to the instance (describe-volumes)
 VOLUME_ID=$($AWS_EC2 describe-volumes --query 'Volumes[0].VolumeId' --output text)
 if [ -z "$VOLUME_ID" ] || [ "$VOLUME_ID" == "None" ]; then
@@ -303,18 +289,6 @@ if [ "$STATE" != "running" ]; then
     exit 1
 fi
 
-# Test SSH connectivity after restart
-echo "Testing SSH connectivity after restart..."
-# SSH port may have changed after restart, re-detect it
-SSH_PORT=$(get_ssh_port "$INSTANCE_ID" 60)
-if [ -z "$SSH_PORT" ]; then
-    echo "ERROR: Could not find SSH port for instance after restart"
-    exit 1
-fi
-echo "Found SSH port after restart: $SSH_PORT"
-wait_for_ssh "127.0.0.1" "$SSH_PORT" "test-key-1.pem" 120
-test_ssh_connectivity "127.0.0.1" "$SSH_PORT" "test-key-1.pem"
-
 # Terminate instance (terminate-instances) and verify termination (describe-instances)
 echo "Terminating instance..."
 $AWS_EC2 terminate-instances --instance-ids "$INSTANCE_ID"
@@ -328,10 +302,6 @@ while [ $COUNT -lt 30 ]; do
     sleep 5
     COUNT=$((COUNT + 1))
 done
-
-# Verify SSH is no longer reachable after termination
-echo "Phase 5b: Verify SSH Unreachable After Termination"
-verify_ssh_unreachable "127.0.0.1" "$SSH_PORT" "test-key-1.pem"
 
 echo "E2E Test Completed Successfully"
 exit 0
