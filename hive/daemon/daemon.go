@@ -1573,10 +1573,12 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 	// For stop operations, keep the subscription so we can receive start commands
 	if deleteVolume {
 		for _, instance := range instances {
-			slog.Info("Unsubscribing from NATS subject", "instance", instance.ID)
-			d.natsSubscriptions[fmt.Sprintf("ec2.cmd.%s", instance.ID)].Unsubscribe()
-			// TODO: Remove redundant subscription if not used
-			//d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)].Unsubscribe()
+			subKey := fmt.Sprintf("ec2.cmd.%s", instance.ID)
+			if sub, ok := d.natsSubscriptions[subKey]; ok && sub != nil {
+				slog.Info("Unsubscribing from NATS subject", "instance", instance.ID, "subject", subKey)
+				sub.Unsubscribe()
+				delete(d.natsSubscriptions, subKey)
+			}
 		}
 	}
 	return nil
@@ -1735,11 +1737,16 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	d.natsSubscriptions[instance.ID], err = d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), "hive-events", d.handleEC2Events)
-
-	if err != nil {
-		slog.Error("failed to subscribe to NATS", "err", err)
-		return err
+	// Check if subscription already exists (e.g., when restarting a stopped instance)
+	subKey := fmt.Sprintf("ec2.cmd.%s", instance.ID)
+	if existingSub, ok := d.natsSubscriptions[subKey]; ok && existingSub != nil && existingSub.IsValid() {
+		slog.Info("NATS subscription already exists for instance", "instance", instance.ID)
+	} else {
+		d.natsSubscriptions[subKey], err = d.natsConn.QueueSubscribe(subKey, "hive-events", d.handleEC2Events)
+		if err != nil {
+			slog.Error("failed to subscribe to NATS", "err", err)
+			return err
+		}
 	}
 
 	// TODO: Replaced with describe-instances with Inbox subscription
