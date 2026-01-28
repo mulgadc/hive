@@ -40,6 +40,23 @@ export function getS3Client(): S3Client {
       },
       forcePathStyle: true,
     })
+    // Remove trailing slashes from request paths to fix compatibility with
+    // path-style S3 endpoints where a trailing slash causes the request to
+    // be interpreted as GetObject instead of ListObjects
+    s3Client.middlewareStack.use({
+      applyToStack: (stack) => {
+        stack.add(
+          (next) => (args) => {
+            const request = (args as { request?: { path?: string } }).request
+            if (request?.path?.endsWith("/") && request.path !== "/") {
+              request.path = request.path.slice(0, -1)
+            }
+            return next(args)
+          },
+          { step: "build", name: "removeTrailingSlash" },
+        )
+      },
+    })
   }
   return s3Client
 }
