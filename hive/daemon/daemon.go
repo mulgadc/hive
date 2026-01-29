@@ -1420,12 +1420,25 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	var successCount int
 	for _, instance := range instances {
 		// Prepare the root volume, cloud-init, EFI drives via NBD (AMI clone to new volume)
-		err = d.instanceService.GenerateVolumes(runInstancesInput, instance)
+		volumeInfos, err := d.instanceService.GenerateVolumes(runInstancesInput, instance)
 		if err != nil {
 			slog.Error("handleEC2RunInstances GenerateVolumes failed", "instanceId", instance.ID, "err", err)
 			d.resourceMgr.deallocate(instanceType)
 			d.markInstanceFailed(instance, "volume_preparation_failed")
 			continue
+		}
+
+		// Populate BlockDeviceMappings on the ec2.Instance
+		instance.Instance.BlockDeviceMappings = make([]*ec2.InstanceBlockDeviceMapping, 0, len(volumeInfos))
+		for _, vi := range volumeInfos {
+			mapping := &ec2.InstanceBlockDeviceMapping{}
+			mapping.SetDeviceName(vi.DeviceName)
+			mapping.Ebs = &ec2.EbsInstanceBlockDevice{}
+			mapping.Ebs.SetVolumeId(vi.VolumeId)
+			mapping.Ebs.SetAttachTime(vi.AttachTime)
+			mapping.Ebs.SetDeleteOnTermination(vi.DeleteOnTermination)
+			mapping.Ebs.SetStatus("attached")
+			instance.Instance.BlockDeviceMappings = append(instance.Instance.BlockDeviceMappings, mapping)
 		}
 
 		// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)

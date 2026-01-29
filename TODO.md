@@ -24,6 +24,11 @@
   - Confirm cloud-init will resize volume on boot and configured correctly.
   - Attach additional volumes
   - Attach to VPC / Security group (required Open vSwitch implementation)
+- only allow hive to use x% of cpu and memory. dont allow allocating 100% of resources.
+- placement group instances, allow spreading instance group between nodes.
+- capabilities flag
+- more instance types - per cpu gen
+- multi part uploads on frontend
 
 ## EC2 describe-instances
 
