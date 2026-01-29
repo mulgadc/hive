@@ -106,7 +106,7 @@ AWS SDK (custom endpoint) → Hive API Gateway → NATS Topics → Specialized D
 - **Volume Lifecycle**: Coordinated through NATS between EC2 and EBS daemons
 
 ### Key Design Patterns
-- **Message-Driven**: All service communication via NATS topics (ec2.*, ebs.*, s3.*, vpc.*)
+- **Message-Driven**: All service communication via NATS topics
 - **Queue Groups**: Load balancing and fault tolerance via NATS queue groups
 - **Request-Response**: 30-second timeout pattern for AWS API compatibility
 - **Service Specialization**: Dedicated daemon types for each AWS service
@@ -114,35 +114,12 @@ AWS SDK (custom endpoint) → Hive API Gateway → NATS Topics → Specialized D
 
 ### NATS Topic Structure
 
-The system uses structured NATS topics for service communication:
+- **EC2 Daemons**: Listen on `ec2.*` topics, manage QEMU/KVM instances
+- **EBS Daemons**: Listen on `ebs.*` topics, coordinate with Viperblock
+- **S3 Daemons**: Listen on `s3.*` topics, proxy to Predastore
+- **VPC Daemons**: Listen on `vpc.*` topics, manage networking
 
 ```bash
-# EC2 Service Topics:
-ec2.runinstances              # Launch new instances
-ec2.describeinstances         # Query instance status
-ec2.startinstances           # Start stopped instances
-ec2.stopinstances            # Stop running instances
-ec2.terminateinstances       # Terminate instances
-
-# EBS Service Topics:
-ebs.createvolume             # Create new EBS volume
-ebs.attachvolume             # Attach volume to instance
-ebs.detachvolume             # Detach volume
-ebs.describevolumes          # List volumes
-ebs.mount                    # Mount volume (internal)
-ebs.unmount                  # Unmount volume (internal)
-
-# S3 Service Topics:
-s3.createbucket              # Create S3 bucket
-s3.putobject                 # Store object
-s3.getobject                 # Retrieve object
-s3.listbuckets               # List buckets
-
-# VPC Service Topics:
-vpc.createvpc                # Create VPC
-vpc.createsubnet             # Create subnet
-vpc.describevpcs             # List VPCs
-
 # Health and Discovery:
 health.ec2.daemon.{id}       # Daemon health heartbeats
 discovery.services           # Service registration
