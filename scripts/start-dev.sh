@@ -270,8 +270,18 @@ start_service "awsgw" "$AWSGW_CMD"
 #check_service "awsgw" "9999"
 
 
+# 6️⃣ Start Hive UI
+echo ""
+echo "6️⃣. Starting Hive UI..."
+
+HIVEUI_CMD="./bin/hive service hive-ui start"
+
+start_service "hive-ui" "$HIVEUI_CMD"
+
+
 echo ""
 echo "🔗 Service endpoints will be:"
+echo "   - Hive UI:       https://localhost:3000"
 echo "   - NATS:          nats://localhost:4222"
 echo "   - Predastore:    https://localhost:8443"
 echo "   - AWS Gateway:   https://localhost:9999"
