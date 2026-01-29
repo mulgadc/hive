@@ -6,9 +6,9 @@ Notes for development environment installation.
 
 The currently supported operating systems that are validated and tested include:
 
-* Ubuntu 22.04
-* Ubuntu 24.04
-* Ubuntu 25.10
+- Ubuntu 22.04
+- Ubuntu 24.04
+- Ubuntu 25.10
 
 For the development preview, please use one of the supported versions above.
 
@@ -28,6 +28,12 @@ To bootstrap the dependencies of Hive in one simple step (QEMU, Go, AWS CLI):
 
 ```bash
 sudo make -C hive quickinstall
+```
+
+Ensure Go is available in your `PATH` if not previously installed:
+
+```bash
+export PATH=$PATH:/usr/local/go/bin/
 ```
 
 ### Manual Install
@@ -258,17 +264,11 @@ aws ec2 describe-instance-types
     {
       "InstanceType": "m8a.small",
       "CurrentGeneration": true,
-      "SupportedRootDeviceTypes": [
-        "ebs"
-      ],
-      "SupportedVirtualizationTypes": [
-        "hvm"
-      ],
+      "SupportedRootDeviceTypes": ["ebs"],
+      "SupportedVirtualizationTypes": ["hvm"],
       "Hypervisor": "kvm",
       "ProcessorInfo": {
-        "SupportedArchitectures": [
-          "x86_64"
-        ]
+        "SupportedArchitectures": ["x86_64"]
       },
       "VCpuInfo": {
         "DefaultVCpus": 2
@@ -277,7 +277,7 @@ aws ec2 describe-instance-types
         "SizeInMiB": 1024
       },
       "BurstablePerformanceSupported": false
-    },
+    }
   ]
 }
 ```
@@ -411,7 +411,7 @@ aws ec2 stop-instances --instance-ids $INSTANCE_ID
         "Name": "stopping"
       },
       "PreviousState": {
-      "Code": 16,
+        "Code": 16,
         "Name": "running"
       }
     }
