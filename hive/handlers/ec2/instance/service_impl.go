@@ -144,12 +144,12 @@ func (s *InstanceServiceImpl) RunInstance(input *ec2.RunInstancesInput) (*vm.VM,
 func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, instance *vm.VM) ([]VolumeInfo, error) {
 
 	var size int = 4 * 1024 * 1024 * 1024 // 4GB default size
-	var deviceName string = "/dev/xvda"   // Default device name
+	var deviceName = "/dev/xvda" // Default device name
 	var volumeType string
 	var iops int
 	var imageId string
 	var snapshotId string
-	var deleteOnTermination bool = true // Default to true
+	var deleteOnTermination = true // Default to true
 
 	// Handle block device mappings
 	if len(input.BlockDeviceMappings) > 0 {
