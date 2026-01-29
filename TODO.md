@@ -62,7 +62,6 @@ aws ec2 describe-instances \
 }
 ```
 
-
 ## EC2 create-volume
 
 Allow the ability to create new volumes
@@ -73,9 +72,9 @@ aws ec2 create-volume \
     --availability-zone ap-southeast-2a
 ```
 
-* viperblock - Create new volume for specified size (empty), push state to predastore.
-* Note `gp3` volumes are only supported at this stage (no gp3, io1/io2, etc)
-* Validate availability zone, only supports the specified value when running `hive init` - Multi AZ available Hive v2+
+- viperblock - Create new volume for specified size (empty), push state to predastore.
+- Note `gp3` volumes are only supported at this stage (no gp3, io1/io2, etc)
+- Validate availability zone, only supports the specified value when running `hive init` - Multi AZ available Hive v2+
 
 ## EC2 attach-volume
 
@@ -83,11 +82,11 @@ aws ec2 create-volume \
 aws ec2 attach-volume --volume-id vol-1234567890abcdef0 --instance-id i-01474ef662b89480 --device /dev/sdf
 ```
 
-* Validate volume exists, e.g create-volume
-* Push attach-volume request via NATS to the node running the specified instance - Run nbdkit for new volume, retrieve host:port or UNIX socket pathname, append volume to instance state, so will mount/attach on instance stop/start.
-* Issue a command via QMP for the instance, to attach the volume, e.g
-* Confirm if --device compatible, since NBD will export the drive, likely the host OS will decide the /dev/volume attributes.
-* Volume available to mount within the guest OS. Volume meta-data attached to instance.json/NATS KV and available if instance stop/started.
+- Validate volume exists, e.g create-volume
+- Push attach-volume request via NATS to the node running the specified instance - Run nbdkit for new volume, retrieve host:port or UNIX socket pathname, append volume to instance state, so will mount/attach on instance stop/start.
+- Issue a command via QMP for the instance, to attach the volume, e.g
+- Confirm if --device compatible, since NBD will export the drive, likely the host OS will decide the /dev/volume attributes.
+- Volume available to mount within the guest OS. Volume meta-data attached to instance.json/NATS KV and available if instance stop/started.
 
 ```json
 {
@@ -121,9 +120,9 @@ Once attached, QMP event to add the device. Likely --device argument can be spec
 aws ec2 detach-volume --volume-id vol-1234567890abcdef0
 ```
 
-* Fire NATS event to node running specified instance to detach the volume
-* Use QMP to detach specified volume
-* Terminate running `nbdkit` process for specified volume, ensure WAL state synced to predastore.
+- Fire NATS event to node running specified instance to detach the volume
+- Use QMP to detach specified volume
+- Terminate running `nbdkit` process for specified volume, ensure WAL state synced to predastore.
 
 ## EC2 delete-volume
 
@@ -133,9 +132,9 @@ Allow a volume to be deleted once detached from any running instances.
 aws ec2 delete-volume --volume-id vol-049df61146c4d7901
 ```
 
-* Confirm volume detached
-* Terminate running `nbdkit` process for specified volume, ensure WAL state synced to predastore.
-* Delete volume in predastore
+- Confirm volume detached
+- Terminate running `nbdkit` process for specified volume, ensure WAL state synced to predastore.
+- Delete volume in predastore
 
 ## EC2 modify-volume
 
@@ -147,22 +146,22 @@ aws ec2 modify-volume --size 64 --volume-id vol-1234567890abcdef0
 
 ```json
 {
-    "VolumeModification": {
-        "TargetSize": 64,
-        "TargetVolumeType": "gp3",
-        "ModificationState": "modifying",
-        "VolumeId": " vol-1234567890abcdef0",
-        "TargetIops": 100,
-        "StartTime": "2019-05-17T11:27:19.000Z",
-        "Progress": 0,
-        "OriginalVolumeType": "gp3",
-        "OriginalIops": 100,
-        "OriginalSize": 32
-    }
+  "VolumeModification": {
+    "TargetSize": 64,
+    "TargetVolumeType": "gp3",
+    "ModificationState": "modifying",
+    "VolumeId": " vol-1234567890abcdef0",
+    "TargetIops": 100,
+    "StartTime": "2019-05-17T11:27:19.000Z",
+    "Progress": 0,
+    "OriginalVolumeType": "gp3",
+    "OriginalIops": 100,
+    "OriginalSize": 32
+  }
 }
 ```
 
-* Note `nbd` does not support resizing disks live. Requires instance to be stopped, boot/root volume, or attached volume will need to be resized, and instance started again. Limitation for Hive v1 using NBD, aiming to resolve with `vhost-user-blk` to create a `virtio-blk` device for extended functionality and performance.
+- Note `nbd` does not support resizing disks live. Requires instance to be stopped, boot/root volume, or attached volume will need to be resized, and instance started again. Limitation for Hive v1 using NBD, aiming to resolve with `vhost-user-blk` to create a `virtio-blk` device for extended functionality and performance.
 
 ### EC2 describe-volume-status
 
@@ -174,27 +173,27 @@ aws ec2 describe-volume-status --volume-ids vol-1234567890abcdef0
 
 ```json
 {
-    "VolumeStatuses": [
-        {
-            "VolumeStatus": {
-                "Status": "ok",
-                "Details": [
-                    {
-                        "Status": "passed",
-                        "Name": "io-enabled"
-                    },
-                    {
-                        "Status": "not-applicable",
-                        "Name": "io-performance"
-                    }
-                ]
-            },
-            "AvailabilityZone": "us-east-1a",
-            "VolumeId": "vol-1234567890abcdef0",
-            "Actions": [],
-            "Events": []
-        }
-    ]
+  "VolumeStatuses": [
+    {
+      "VolumeStatus": {
+        "Status": "ok",
+        "Details": [
+          {
+            "Status": "passed",
+            "Name": "io-enabled"
+          },
+          {
+            "Status": "not-applicable",
+            "Name": "io-performance"
+          }
+        ]
+      },
+      "AvailabilityZone": "us-east-1a",
+      "VolumeId": "vol-1234567890abcdef0",
+      "Actions": [],
+      "Events": []
+    }
+  ]
 }
 ```
 
@@ -205,7 +204,12 @@ aws ec2 describe-volume-status --volume-ids vol-1234567890abcdef0
 Host:
 
 ```json
-{"time":"2026-01-27T21:30:29.368164556+10:00","level":"ERROR","msg":"WAL sync failed","error":"write /home/hive/hive/predastore/distributed/nodes/node-2/0000000000000737.wal: no space left on device"}
+{
+  "time": "2026-01-27T21:30:29.368164556+10:00",
+  "level": "ERROR",
+  "msg": "WAL sync failed",
+  "error": "write /home/hive/hive/predastore/distributed/nodes/node-2/0000000000000737.wal: no space left on device"
+}
 ```
 
 Instance `dmesg`:
@@ -214,7 +218,6 @@ Instance `dmesg`:
 [ 1445.573495] EXT4-fs error (device vda1): ext4_journal_check_start:83: comm systemd-journal: Detected aborted journal
 [ 1445.583565] EXT4-fs (vda1): Remounting filesystem read-only
 ```
-
 
 ### EC2
 
@@ -400,7 +403,17 @@ TODO:
 - put-snapshot-block
 - start-snapshot
 
-### VPC
+# VPC
+
+Built using openvswitch.
+
+### Install deps
+
+```sh
+apt install openvswitch-switch openvswitch-common
+```
+
+### VPC sub commands
 
 - create-vpc
 - create-vpc-block-public-access-exclusion
