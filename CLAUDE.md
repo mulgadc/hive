@@ -19,23 +19,6 @@ Each component can be used independently or as part of the integrated Hive stack
 - `../viperblock/CLAUDE.md` - Viperblock development guide
 - `../predastore/CLAUDE.md` - Predastore development guide
 
-## Cross-Repository Development Setup
-
-For platform development, clone all repositories to the same parent directory:
-```bash
-mkdir mulga
-cd mulga
-git clone <hive-repo-url> hive
-git clone <viperblock-repo-url> viperblock
-git clone <predastore-repo-url> predastore
-```
-
-The `hive/go.mod` uses local replace directives for cross-component development:
-```go
-replace github.com/mulgadc/viperblock => ../viperblock
-replace github.com/mulgadc/predastore => ../predastore
-```
-
 ## Build Commands
 
 ### Hive (Platform Orchestrator)
@@ -174,22 +157,7 @@ All Go projects use:
 
 ### Development Workflow
 
-#### Quick Setup (Recommended)
-```bash
-# 1. Clone dependencies (if not already done)
-./scripts/clone-deps.sh
-
-# 2. Setup development environment
-./scripts/dev-setup.sh
-
-# 3. Start all services
-./scripts/start-dev.sh
-
-# 4. Stop all services when done
-./scripts/stop-dev.sh
-```
-
-#### Manual Development Process
+#### Development Process
 1. **Cross-repo Setup**: Clone all repositories to same parent directory
 2. **Service Dependencies**: Start services in order: NATS → Predastore → Viperblock → NBDkit → Gateway → Daemons
 3. **Build Order**: Build components: predastore → viperblock → hive
