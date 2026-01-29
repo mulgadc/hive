@@ -1,22 +1,8 @@
-import {
-  AbortMultipartUploadCommand,
-  CompleteMultipartUploadCommand,
-  CreateMultipartUploadCommand,
-  DeleteObjectCommand,
-  PutObjectCommand,
-  UploadPartCommand,
-} from "@aws-sdk/client-s3"
+import { DeleteObjectCommand } from "@aws-sdk/client-s3"
+import { Upload } from "@aws-sdk/lib-storage"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 
 import { getS3Client } from "@/lib/awsClient"
-
-const MULTIPART_THRESHOLD = 4 * 1024 * 1024 // 4 MB
-const PART_SIZE = 5 * 1024 * 1024 // 5 MB per part
-
-interface CompletedPart {
-  ETag: string
-  PartNumber: number
-}
 
 interface UploadObjectParams {
   bucket: string
@@ -24,77 +10,22 @@ interface UploadObjectParams {
   file: File
 }
 
-async function uploadMultipart(bucket: string, key: string, file: File) {
-  const client = getS3Client()
-
-  const { UploadId } = await client.send(
-    new CreateMultipartUploadCommand({
-      Bucket: bucket,
-      Key: key,
-      ContentType: file.type,
-    }),
-  )
-
-  if (!UploadId) {
-    throw new Error("Failed to initialize multipart upload: missing UploadId")
-  }
-
-  const completedParts: CompletedPart[] = []
-
-  try {
-    for (let offset = 0, partNumber = 1; offset < file.size; partNumber++) {
-      const end = Math.min(offset + PART_SIZE, file.size)
-      const body = new Uint8Array(await file.slice(offset, end).arrayBuffer())
-
-      const { ETag } = await client.send(
-        new UploadPartCommand({
-          Bucket: bucket,
-          Key: key,
-          UploadId,
-          PartNumber: partNumber,
-          Body: body,
-        }),
-      )
-
-      completedParts.push({ ETag: ETag ?? "", PartNumber: partNumber })
-      offset = end
-    }
-
-    return await client.send(
-      new CompleteMultipartUploadCommand({
-        Bucket: bucket,
-        Key: key,
-        UploadId,
-        MultipartUpload: { Parts: completedParts },
-      }),
-    )
-  } catch (error) {
-    await client.send(
-      new AbortMultipartUploadCommand({ Bucket: bucket, Key: key, UploadId }),
-    )
-    throw error
-  }
-}
-
 export function useUploadObject() {
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async ({ bucket, key, file }: UploadObjectParams) => {
-      if (file.size > MULTIPART_THRESHOLD) {
-        return await uploadMultipart(bucket, key, file)
-      }
-
-      const body = new Uint8Array(await file.arrayBuffer())
-
-      const command = new PutObjectCommand({
-        Bucket: bucket,
-        Key: key,
-        Body: body,
-        ContentType: file.type,
+      const upload = new Upload({
+        client: getS3Client(),
+        params: {
+          Bucket: bucket,
+          Key: key,
+          Body: file,
+          ContentType: file.type,
+        },
       })
 
-      return await getS3Client().send(command)
+      return await upload.done()
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({

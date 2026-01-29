@@ -46,6 +46,7 @@ export const Route = createFileRoute("/_auth/ec2/(instances)/run-instances")({
   component: CreateInstance,
 })
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: this is a complex form
 function CreateInstance() {
   const navigate = useNavigate()
   const { data: imagesData } = useSuspenseQuery(ec2ImagesQueryOptions)
@@ -100,9 +101,9 @@ function CreateInstance() {
     ),
     defaultValues: {
       count: 1,
-      imageId: defaultImageId,
-      keyName: defaultKeyName,
-      instanceType: defaultInstanceType,
+      imageId: defaultImageId ?? "",
+      keyName: defaultKeyName ?? "",
+      instanceType: defaultInstanceType ?? "",
     },
   })
 

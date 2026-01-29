@@ -39,7 +39,7 @@ function LoginPage() {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-  } = useForm<AwsCredentials>({
+  } = useForm({
     resolver: zodResolver(awsCredentialsSchema),
   })
 

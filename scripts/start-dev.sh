@@ -125,6 +125,10 @@ if [ "$HIVE_SKIP_BUILD" != "true" ]; then
     echo "   Building hive..."
     make build
 
+    echo "   Building predastore..."
+    cd "$MULGA_ROOT/predastore" && make build
+    cd "$PROJECT_ROOT"
+
     echo "   Building viperblock (nbdkit plugin)..."
     cd "$MULGA_ROOT/viperblock" && make build
     cd "$PROJECT_ROOT"
