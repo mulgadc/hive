@@ -172,10 +172,10 @@ func TestNATSInstanceService_RunInstances_DaemonError(t *testing.T) {
 	// Call RunInstances
 	reservation, err := service.RunInstances(input)
 
-	// Verify error handling
+	// Verify error handling - error should be just the AWS error code for gateway lookup
 	require.Error(t, err, "Should return error when daemon returns error")
 	assert.Nil(t, reservation, "Reservation should be nil on error")
-	assert.Contains(t, err.Error(), "daemon returned error", "Error should indicate daemon error")
+	assert.Equal(t, "InvalidInstanceType", err.Error(), "Error should be the AWS error code")
 }
 
 // TestNATSInstanceService_RunInstances_Timeout tests timeout handling

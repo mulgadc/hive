@@ -63,8 +63,9 @@ var awsgwCmd = &cobra.Command{
 }
 
 var hiveUICmd = &cobra.Command{
-	Use:   "hive-ui",
-	Short: "Manage the hive-ui service",
+	Use:     "hive-ui",
+	Aliases: []string{"ui", "hiveui"},
+	Short:   "Manage the hive-ui service",
 }
 
 var predastoreStartCmd = &cobra.Command{

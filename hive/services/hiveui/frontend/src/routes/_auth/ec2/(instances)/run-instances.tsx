@@ -75,6 +75,13 @@ function CreateInstance() {
 
   const uniqueInstanceTypes = Object.keys(instanceTypeCounts).sort()
 
+  // Compute default values from loaded data
+  const defaultImageId = images[0]?.ImageId
+  const defaultKeyName = keyPairs[0]?.KeyName
+  const defaultInstanceType =
+    uniqueInstanceTypes.find((type) => type.endsWith(".nano")) ??
+    uniqueInstanceTypes[0]
+
   const {
     control,
     handleSubmit,
@@ -93,6 +100,9 @@ function CreateInstance() {
     ),
     defaultValues: {
       count: 1,
+      imageId: defaultImageId,
+      keyName: defaultKeyName,
+      instanceType: defaultInstanceType,
     },
   })
 

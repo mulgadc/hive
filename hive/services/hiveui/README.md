@@ -2,7 +2,9 @@
 
 Full-stack application for managing Hive AWS compatible products (EC2, S3)
 
-## Setup
+## Development Setup
+
+Note: This is not needed for actually building hive-ui and running it. We commit the assets so that when you build hive, it will include hive-ui without you needing to install node and build frontend from source.
 
 1. **Install Node.js using nvm**
 
@@ -35,7 +37,7 @@ Full-stack application for managing Hive AWS compatible products (EC2, S3)
 
 4. **Accept Certs In Browser**
 
-   If you have added the CA to your machine you do not need to do this. But if you are sshd into a hive machine and want to view the ui, simply go to `https://localhost:9999` and `https://localhost:8443` and accept the certificates.
+   If you have added the CA to your machine you do not need to do this. But if you are sshd into a hive machine and want to view the ui, go to [https://localhost:9999](https://localhost:9999) and [https://localhost:8443](https://localhost:8443) and accept the certificates
 
 5. **Launch Server**
 
@@ -51,7 +53,3 @@ Full-stack application for managing Hive AWS compatible products (EC2, S3)
    cd frontend
    pnpm dev
    ```
-
-6. **Visit WebUI**
-
-   View [https://localhost:3000](https://localhost:3000) in your browser to continue.

@@ -114,6 +114,42 @@ function InstanceDetail() {
           </DetailCard.Content>
         </DetailCard> */}
 
+        {/* Block Device Mappings */}
+        {instance.BlockDeviceMappings &&
+          instance.BlockDeviceMappings.length > 0 && (
+            <DetailCard>
+              <DetailCard.Header>Block Device Mappings</DetailCard.Header>
+              <DetailCard.Content>
+                <DetailRow
+                  label="Device Name"
+                  value={instance.BlockDeviceMappings[0]?.DeviceName}
+                />
+                <DetailRow
+                  label="Volume ID"
+                  value={instance.BlockDeviceMappings[0]?.Ebs?.VolumeId}
+                />
+                <DetailRow
+                  label="Status"
+                  value={instance.BlockDeviceMappings[0]?.Ebs?.Status}
+                />
+                <DetailRow
+                  label="Attach Time"
+                  value={formatDateTime(
+                    instance.BlockDeviceMappings[0]?.Ebs?.AttachTime,
+                  )}
+                />
+                <DetailRow
+                  label="Delete on Termination"
+                  value={
+                    instance.BlockDeviceMappings[0]?.Ebs?.DeleteOnTermination
+                      ? "Yes"
+                      : "No"
+                  }
+                />
+              </DetailCard.Content>
+            </DetailCard>
+          )}
+
         {/* AMI Details */}
         {image && <AmiDetails image={image} />}
       </div>

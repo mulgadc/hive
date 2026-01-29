@@ -43,10 +43,6 @@ build-ui:
 # GO commands
 go_build:
 	@echo "\n....Building $(GO_PROJECT_NAME)"
-	@if [ ! -f hive/services/hiveui/frontend/dist/index.html ]; then \
-		mkdir -p hive/services/hiveui/frontend/dist && \
-		echo '<!DOCTYPE html><html><head><title>Hive UI</title></head><body><h1>Hive UI</h1><p>Frontend not built. Run <code>make build-ui</code></p></body></html>' > hive/services/hiveui/frontend/dist/index.html; \
-	fi
 	GOEXPERIMENT=greenteagc go build $(GO_BUILD_MOD) -ldflags "-s -w" -o ./bin/$(GO_PROJECT_NAME) cmd/hive/main.go
 
 go_run:

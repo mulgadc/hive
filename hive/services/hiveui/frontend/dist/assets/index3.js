@@ -1,0 +1,1 @@
+import{c as n,e as r,j as i}from"./index.js";import{u as a}from"./useSuspenseQuery.js";import{P as p}from"./page-heading.js";function g(){const e=n.c(2),{data:t}=a(r),s=`${t?.Regions?.[0]?.RegionName} Dashboard`;let o;return e[0]!==s?(o=i.jsx(p,{title:s}),e[0]=s,e[1]=o):o=e[1],o}export{g as component};

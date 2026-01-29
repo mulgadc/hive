@@ -62,7 +62,7 @@ for cmd in "${optional_commands[@]}"; do
         echo "⚠️  $cmd not found (optional)"
         case "$cmd" in
             "air")
-                echo "   Install air for hot reloading: go install github.com/cosmtrek/air@latest"
+                echo "   Install air for hot reloading: go install github.com/air-verse/air@latest"
                 ;;
             "nbdkit")
                 echo "   Install nbdkit: sudo apt-get install nbdkit (Ubuntu/Debian)"

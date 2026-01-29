@@ -2,6 +2,7 @@ package handlers_ec2_instance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -40,9 +41,9 @@ func (s *NATSInstanceService) RunInstances(input *ec2.RunInstancesInput) (*ec2.R
 	// Check if the response is an error
 	responseError, err := utils.ValidateErrorPayload(msg.Data)
 	if err != nil {
-		// Response is an error payload
+		// Response is an error payload - return just the error code for gateway lookup
 		slog.Error("NATSInstanceService: Received error response from daemon", "code", responseError.Code)
-		return nil, fmt.Errorf("daemon returned error: %s", *responseError.Code)
+		return nil, errors.New(*responseError.Code)
 	}
 
 	// Unmarshal successful response
