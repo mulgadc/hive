@@ -424,12 +424,16 @@ func (s *InstanceServiceImpl) prepareEFIVolume(imageId string, volumeConfig vipe
 		Host:       s.config.Predastore.Host,
 	}
 
+	// Update VolumeID to match the EFI volume name
+	efiVolumeConfig := volumeConfig
+	efiVolumeConfig.VolumeMetadata.VolumeID = efiVolumeName
+
 	efiVbConfig := viperblock.VB{
 		VolumeName:   efiVolumeName,
 		VolumeSize:   utils.SafeIntToUint64(efiSize),
 		BaseDir:      s.config.WalDir,
 		Cache:        viperblock.Cache{Config: viperblock.CacheConfig{Size: 0}},
-		VolumeConfig: volumeConfig,
+		VolumeConfig: efiVolumeConfig,
 	}
 
 	efiVb, err := viperblock.New(&efiVbConfig, "s3", efiCfg)
@@ -515,12 +519,16 @@ func (s *InstanceServiceImpl) prepareCloudInitVolume(input *ec2.RunInstancesInpu
 		Host:       s.config.Predastore.Host,
 	}
 
+	// Update VolumeID to match the cloud-init volume name
+	cloudInitVolumeConfig := volumeConfig
+	cloudInitVolumeConfig.VolumeMetadata.VolumeID = cloudInitVolumeName
+
 	cloudInitVbConfig := viperblock.VB{
 		VolumeName:   cloudInitVolumeName,
 		VolumeSize:   utils.SafeIntToUint64(cloudInitSize),
 		BaseDir:      s.config.WalDir,
 		Cache:        viperblock.Cache{Config: viperblock.CacheConfig{Size: 0}},
-		VolumeConfig: volumeConfig,
+		VolumeConfig: cloudInitVolumeConfig,
 	}
 
 	cloudInitVb, err := viperblock.New(&cloudInitVbConfig, "s3", cloudInitCfg)
