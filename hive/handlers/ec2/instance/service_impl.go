@@ -93,18 +93,13 @@ func NewInstanceServiceImpl(cfg *config.Config, instanceTypes map[string]*ec2.In
 	}
 }
 
-// RunInstances handles the business logic for launching EC2 instances
-// This prepares all volumes (root, EFI, cloud-init) and returns the instance ready to launch
-func (s *InstanceServiceImpl) RunInstances(input *ec2.RunInstancesInput) (*vm.VM, ec2.Reservation, error) {
-	var reservation ec2.Reservation
-
-	// Validate input (validation is already done in daemon.handleEC2Launch)
-	// We can skip re-validation here for performance
-
+// RunInstance creates a single EC2 instance (called per-instance by daemon)
+// Returns the VM struct and EC2 instance metadata
+func (s *InstanceServiceImpl) RunInstance(input *ec2.RunInstancesInput) (*vm.VM, *ec2.Instance, error) {
 	// Validate instance type exists
 	_, exists := s.instanceTypes[*input.InstanceType]
 	if !exists {
-		return nil, reservation, errors.New(awserrors.ErrorInvalidInstanceType)
+		return nil, nil, errors.New(awserrors.ErrorInvalidInstanceType)
 	}
 
 	instanceId := vm.GenerateEC2InstanceID()
@@ -116,12 +111,7 @@ func (s *InstanceServiceImpl) RunInstances(input *ec2.RunInstancesInput) (*vm.VM
 		InstanceType: *input.InstanceType,
 	}
 
-	// Create reservation response
-	reservation.SetReservationId(vm.GenerateEC2ReservationID())
-	reservation.SetOwnerId("123456789012") // TODO: Use actual owner ID from config
-
-	// TODO: Loop through multiple instance creation based on MinCount / MaxCount
-	reservation.Instances = make([]*ec2.Instance, 1)
+	// Create EC2 instance metadata
 	ec2Instance := &ec2.Instance{
 		State: &ec2.InstanceState{},
 	}
@@ -135,16 +125,11 @@ func (s *InstanceServiceImpl) RunInstances(input *ec2.RunInstancesInput) (*vm.VM
 	ec2Instance.State.SetCode(0)
 	ec2Instance.State.SetName("pending")
 
-	reservation.Instances[0] = ec2Instance
-
 	// Store EC2 API metadata in VM for DescribeInstances compatibility
 	instance.RunInstancesInput = input
-	instance.Reservation = &reservation
 	instance.Instance = ec2Instance
 
-	// Return instance attributes, defer disk preparation to later step
-
-	return instance, reservation, nil
+	return instance, ec2Instance, nil
 }
 
 func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, instance *vm.VM) (err error) {

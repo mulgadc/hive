@@ -1295,85 +1295,153 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		return
 	}
 
-	// Check if we have enough resources
-	if !d.resourceMgr.canAllocate(instanceType) {
-		slog.Error("handleEC2RunInstances canAllocate", "err", awserrors.ErrorInsufficientInstanceCapacity, "InstanceType", *runInstancesInput.InstanceType)
+	// Determine how many instances to launch based on MinCount/MaxCount
+	minCount := int(*runInstancesInput.MinCount)
+	maxCount := int(*runInstancesInput.MaxCount)
+
+	// Check how many we can actually launch
+	allocatableCount := d.resourceMgr.canAllocate(instanceType, maxCount)
+
+	if allocatableCount < minCount {
+		// Cannot satisfy MinCount requirement - fail entirely
+		slog.Error("handleEC2RunInstances insufficient capacity", "requested", minCount, "available", allocatableCount, "InstanceType", *runInstancesInput.InstanceType)
 		errResp = utils.GenerateErrorPayload(awserrors.ErrorInsufficientInstanceCapacity)
 		msg.Respond(errResp)
 		return
 	}
 
-	// Allocate resources
-	if err := d.resourceMgr.allocate(instanceType); err != nil {
-		slog.Error("handleEC2RunInstances allocate", "err", awserrors.ErrorInsufficientInstanceCapacity, "InstanceType", *runInstancesInput.InstanceType)
+	// Launch up to MaxCount, capped by available capacity
+	// Note: canAllocate() already caps at maxCount, so allocatableCount <= maxCount
+	launchCount := allocatableCount
+
+	slog.Info("Instance count determined", "min", minCount, "max", maxCount, "launching", launchCount)
+
+	// Allocate resources for all instances upfront
+	var allocatedCount int
+	for i := 0; i < launchCount; i++ {
+		if err := d.resourceMgr.allocate(instanceType); err != nil {
+			slog.Error("handleEC2RunInstances allocate failed mid-allocation", "allocated", allocatedCount, "err", err)
+			break
+		}
+		allocatedCount++
+	}
+
+	// Check if we still meet MinCount after allocation
+	if allocatedCount < minCount {
+		// Rollback allocations
+		for i := 0; i < allocatedCount; i++ {
+			d.resourceMgr.deallocate(instanceType)
+		}
+		slog.Error("handleEC2RunInstances insufficient capacity after allocation", "allocated", allocatedCount, "minCount", minCount)
 		errResp = utils.GenerateErrorPayload(awserrors.ErrorInsufficientInstanceCapacity)
 		msg.Respond(errResp)
 		return
 	}
+
+	// Update launchCount to what we actually allocated
+	launchCount = allocatedCount
 
 	// Delegate to service for business logic (volume creation, cloud-init, etc.)
 	instanceTypeName := ""
 	if instanceType.InstanceType != nil {
 		instanceTypeName = *instanceType.InstanceType
 	}
-	slog.Info("Launching EC2 instance", "instanceType", instanceTypeName)
+	slog.Info("Launching EC2 instances", "instanceType", instanceTypeName, "count", launchCount)
 
-	instance, reservation, err := d.instanceService.RunInstances(runInstancesInput)
+	// Create all instances
+	var instances []*vm.VM
+	var allEC2Instances []*ec2.Instance
 
-	if err != nil {
-		slog.Error("handleEC2RunInstances service.RunInstances failed", "err", err)
+	for i := 0; i < launchCount; i++ {
+		instance, ec2Instance, err := d.instanceService.RunInstance(runInstancesInput)
+		if err != nil {
+			slog.Error("handleEC2RunInstances service.RunInstance failed", "index", i, "err", err)
+			// Deallocate this instance's resources
+			d.resourceMgr.deallocate(instanceType)
+			continue
+		}
+		instances = append(instances, instance)
+		allEC2Instances = append(allEC2Instances, ec2Instance)
+	}
+
+	// Check if we still have enough instances after creation errors
+	if len(instances) < minCount {
+		// Rollback: deallocate resources for successfully created instances
+		// (failed instances already deallocated their resources above)
+		for range instances {
+			d.resourceMgr.deallocate(instanceType)
+		}
+		slog.Error("handleEC2RunInstances failed to create minimum instances", "created", len(instances), "minCount", minCount)
 		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
 		msg.Respond(errResp)
-		d.resourceMgr.deallocate(instanceType)
 		return
 	}
 
-	// Respond to NATS immediately with reservation (instance is provisioning)
+	// Build reservation with all instances
+	reservation := ec2.Reservation{}
+	reservation.SetReservationId(vm.GenerateEC2ReservationID())
+	reservation.SetOwnerId("123456789012") // TODO: Use actual owner ID from config
+	reservation.Instances = allEC2Instances
+
+	// Store reservation reference in all VMs
+	for _, instance := range instances {
+		instance.Reservation = &reservation
+	}
+
+	// Respond to NATS immediately with reservation (instances are provisioning)
 	jsonResponse, err := json.Marshal(reservation)
 	if err != nil {
 		slog.Error("handleEC2RunInstances failed to marshal reservation", "err", err)
 		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
 		msg.Respond(errResp)
-		d.resourceMgr.deallocate(instanceType)
+		// Deallocate all resources
+		for range instances {
+			d.resourceMgr.deallocate(instanceType)
+		}
 		return
 	}
 	msg.Respond(jsonResponse)
 
-	// Add instance to state immediately so DescribeInstances can find it
-	// while volumes are being prepared and VM is launching
+	// Add all instances to state immediately so DescribeInstances can find them
+	// while volumes are being prepared and VMs are launching
 	d.Instances.Mu.Lock()
-	d.Instances.VMS[instance.ID] = instance
+	for _, instance := range instances {
+		d.Instances.VMS[instance.ID] = instance
+	}
 	d.Instances.Mu.Unlock()
 
 	if err := d.WriteState(); err != nil {
 		slog.Error("handleEC2RunInstances failed to write initial state", "err", err)
 	}
 
-	slog.Info("Instance added to state with pending status", "instanceId", instance.ID)
+	slog.Info("Instances added to state with pending status", "count", len(instances))
 
-	// Next, prepare the root volume, cloud-init, EFI drives via NBD (AMI clone to new volume)
-	err = d.instanceService.GenerateVolumes(runInstancesInput, instance)
-	if err != nil {
-		slog.Error("handleEC2RunInstances GenerateVolumes failed", "err", err)
-		d.resourceMgr.deallocate(instanceType)
-		// Update instance status to failed
-		d.markInstanceFailed(instance, "volume_preparation_failed")
-		return
+	// Launch all instances (volumes and VMs)
+	var successCount int
+	for _, instance := range instances {
+		// Prepare the root volume, cloud-init, EFI drives via NBD (AMI clone to new volume)
+		err = d.instanceService.GenerateVolumes(runInstancesInput, instance)
+		if err != nil {
+			slog.Error("handleEC2RunInstances GenerateVolumes failed", "instanceId", instance.ID, "err", err)
+			d.resourceMgr.deallocate(instanceType)
+			d.markInstanceFailed(instance, "volume_preparation_failed")
+			continue
+		}
+
+		// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
+		err = d.LaunchInstance(instance)
+		if err != nil {
+			slog.Error("handleEC2RunInstances LaunchInstance failed", "instanceId", instance.ID, "err", err)
+			d.resourceMgr.deallocate(instanceType)
+			d.markInstanceFailed(instance, "launch_failed")
+			continue
+		}
+
+		successCount++
+		slog.Info("handleEC2RunInstances launched instance", "instanceId", instance.ID)
 	}
 
-	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions), this can take sometime
-	err = d.LaunchInstance(instance)
-
-	if err != nil {
-		slog.Error("handleEC2RunInstances LaunchInstance failed", "err", err)
-		d.resourceMgr.deallocate(instanceType)
-		// Update instance status to failed
-		d.markInstanceFailed(instance, "launch_failed")
-		return
-	}
-
-	slog.Info("handleEC2RunInstances launched", "instanceId", reservation.Instances[0].InstanceId)
-
+	slog.Info("handleEC2RunInstances completed", "requested", launchCount, "created", len(instances), "launched", successCount)
 }
 
 // handleEC2CreateKeyPair processes incoming EC2 CreateKeyPair requests
@@ -2112,8 +2180,9 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 
 }
 
-// canAllocate checks if there are enough resources available
-func (rm *ResourceManager) canAllocate(instanceType *ec2.InstanceTypeInfo) bool {
+// canAllocate checks how many instances of the given type can be allocated
+// Returns the count that can actually be allocated (0 to count)
+func (rm *ResourceManager) canAllocate(instanceType *ec2.InstanceTypeInfo, count int) int {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
@@ -2126,14 +2195,43 @@ func (rm *ResourceManager) canAllocate(instanceType *ec2.InstanceTypeInfo) bool 
 		memoryGB = float64(*instanceType.MemoryInfo.SizeInMiB) / 1024.0
 	}
 
-	return rm.availableVCPU-rm.allocatedVCPU >= int(vCPUs) &&
-		rm.availableMem-rm.allocatedMem >= memoryGB
+	availableVCPU := rm.availableVCPU - rm.allocatedVCPU
+	availableMem := rm.availableMem - rm.allocatedMem
+
+	// Calculate how many instances we can fit based on CPU and memory
+	countByCPU := count
+	if vCPUs > 0 {
+		countByCPU = availableVCPU / int(vCPUs)
+	}
+
+	countByMem := count
+	if memoryGB > 0 {
+		countByMem = int(availableMem / memoryGB)
+	}
+
+	// Take the minimum of CPU-limited and memory-limited counts
+	allocatableCount := countByCPU
+	if countByMem < allocatableCount {
+		allocatableCount = countByMem
+	}
+
+	// Cap at requested count
+	if allocatableCount > count {
+		allocatableCount = count
+	}
+
+	// Ensure non-negative
+	if allocatableCount < 0 {
+		allocatableCount = 0
+	}
+
+	return allocatableCount
 }
 
 // allocate reserves resources for an instance
 func (rm *ResourceManager) allocate(instanceType *ec2.InstanceTypeInfo) error {
 
-	if !rm.canAllocate(instanceType) {
+	if rm.canAllocate(instanceType, 1) < 1 {
 		instanceTypeName := ""
 		if instanceType.InstanceType != nil {
 			instanceTypeName = *instanceType.InstanceType
@@ -2420,9 +2518,6 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 
 	slog.Info("Processing DescribeInstances request from this node")
 
-	// Build response with reservations from instances on this node
-	var reservations []*ec2.Reservation
-
 	d.Instances.Mu.Lock()
 	defer d.Instances.Mu.Unlock()
 
@@ -2436,6 +2531,9 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 		}
 	}
 
+	// Group instances by reservation ID (AWS returns instances grouped by reservation)
+	reservationMap := make(map[string]*ec2.Reservation)
+
 	// Iterate through all instances on this node
 	for _, instance := range d.Instances.VMS {
 		// Skip if filtering by instance IDs and this instance is not in the filter
@@ -2445,8 +2543,21 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 
 		// Use stored reservation metadata if available
 		if instance.Reservation != nil && instance.Instance != nil {
-			// Create a copy of the reservation with updated instance state
-			reservation := *instance.Reservation
+			resID := ""
+			if instance.Reservation.ReservationId != nil {
+				resID = *instance.Reservation.ReservationId
+			}
+
+			// Create reservation entry if it doesn't exist
+			if _, exists := reservationMap[resID]; !exists {
+				reservation := &ec2.Reservation{}
+				reservation.SetReservationId(resID)
+				if instance.Reservation.OwnerId != nil {
+					reservation.SetOwnerId(*instance.Reservation.OwnerId)
+				}
+				reservation.Instances = []*ec2.Instance{}
+				reservationMap[resID] = reservation
+			}
 
 			// Update the instance state to current state
 			instanceCopy := *instance.Instance
@@ -2477,9 +2588,15 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 				instanceCopy.State.SetName("pending")
 			}
 
-			reservation.Instances = []*ec2.Instance{&instanceCopy}
-			reservations = append(reservations, &reservation)
+			// Add instance to its reservation
+			reservationMap[resID].Instances = append(reservationMap[resID].Instances, &instanceCopy)
 		}
+	}
+
+	// Convert map to slice
+	reservations := make([]*ec2.Reservation, 0, len(reservationMap))
+	for _, reservation := range reservationMap {
+		reservations = append(reservations, reservation)
 	}
 
 	// Create the response

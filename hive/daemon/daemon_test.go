@@ -406,8 +406,8 @@ func TestResourceManager(t *testing.T) {
 	require.True(t, exists, "Should have at least one .micro instance type")
 
 	// Check if can allocate
-	canAlloc := rm.canAllocate(instanceType)
-	assert.True(t, canAlloc)
+	canAlloc := rm.canAllocate(instanceType, 1)
+	assert.Equal(t, 1, canAlloc)
 
 	// Allocate
 	err := rm.allocate(instanceType)
@@ -429,6 +429,42 @@ func TestResourceManager(t *testing.T) {
 	rm.deallocate(instanceType)
 	assert.Equal(t, 0, rm.allocatedVCPU)
 	assert.Equal(t, float64(0), rm.allocatedMem)
+
+	// Test canAllocate with count parameter
+	t.Run("canAllocate_with_count", func(t *testing.T) {
+		// Fresh resource manager for predictable testing
+		rm := NewResourceManager()
+
+		// Find a .micro instance type
+		var microType *ec2.InstanceTypeInfo
+		for key, it := range rm.instanceTypes {
+			if strings.HasSuffix(key, ".micro") {
+				microType = it
+				break
+			}
+		}
+		require.NotNil(t, microType, "Should have a .micro instance type")
+
+		// Test requesting more than available
+		maxPossible := rm.canAllocate(microType, 1000)
+		assert.Greater(t, maxPossible, 0, "Should be able to allocate at least 1")
+		assert.LessOrEqual(t, maxPossible, 1000, "Should not exceed requested count")
+
+		// Test requesting exactly 1
+		oneAlloc := rm.canAllocate(microType, 1)
+		assert.Equal(t, 1, oneAlloc, "Should be able to allocate exactly 1")
+
+		// Test with 0 request
+		zeroAlloc := rm.canAllocate(microType, 0)
+		assert.Equal(t, 0, zeroAlloc, "Requesting 0 should return 0")
+
+		// Test after allocating resources
+		rm.allocate(microType)
+		afterOneAlloc := rm.canAllocate(microType, 1000)
+		assert.Equal(t, maxPossible-1, afterOneAlloc, "Should have 1 less slot available")
+
+		rm.deallocate(microType)
+	})
 }
 
 // TestGetInstanceTypeInfos tests the GetInstanceTypeInfos method
@@ -438,7 +474,10 @@ func TestGetInstanceTypeInfos(t *testing.T) {
 	infos := rm.GetInstanceTypeInfos()
 
 	require.NotEmpty(t, infos, "Should return at least one instance type")
-	assert.Len(t, infos, 14, "Should have 14 instance types (7 sizes x 2 families: CPU-specific + burstable)")
+	// Number of instance types depends on whether CPU family differs from burstable family
+	// 7 sizes per family, 1-2 families depending on detected CPU
+	assert.True(t, len(infos) == 7 || len(infos) == 14,
+		"Should have 7 or 14 instance types (7 sizes x 1-2 families), got %d", len(infos))
 
 	// Verify structure of returned instance type info
 	for _, info := range infos {
@@ -784,6 +823,17 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 		}
 		require.NotEmpty(t, family, "Should have a detected instance family")
 
+		// Count unique families in resourceMgr
+		familySet := make(map[string]bool)
+		for name := range daemon.resourceMgr.instanceTypes {
+			parts := strings.Split(name, ".")
+			if len(parts) > 0 {
+				familySet[parts[0]] = true
+			}
+		}
+		numFamilies := len(familySet)
+		t.Logf("Detected %d unique instance families", numFamilies)
+
 		// Force resources to a predictable state for the first part of the test (2 vCPUs)
 		daemon.resourceMgr.mu.Lock()
 		oldAvailableVCPU := daemon.resourceMgr.availableVCPU
@@ -818,8 +868,9 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 		require.NoError(t, err)
 
 		// With 2 vCPUs, we expect 1 slot for each 2-vCPU type (nano, micro, small, medium, large)
-		// and 0 slots for 4+ vCPU types. With 2 families, that's 5 x 2 = 10 entries.
-		assert.Equal(t, 10, len(output.InstanceTypes), "Should have 10 total slots available with 2 vCPUs (5 sizes x 2 families)")
+		// and 0 slots for 4+ vCPU types. 5 sizes per family.
+		expectedSlots := 5 * numFamilies
+		assert.Equal(t, expectedSlots, len(output.InstanceTypes), "Should have %d total slots available with 2 vCPUs (5 sizes x %d families)", expectedSlots, numFamilies)
 
 		// Now let's "fake" more capacity to test multiple slots (duplicates) per type
 		daemon.resourceMgr.mu.Lock()
@@ -841,8 +892,8 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 		// xlarge (4 cores, 16.0GB): 0 slots (15GB < 16GB)
 		// 2xlarge (8 cores, 32.0GB): 0 slots
 		// Total per family: 2+2+2+2+1 = 9 slots
-		// With 2 families: 9 x 2 = 18 slots
-		assert.Equal(t, 18, len(output.InstanceTypes), "Should have 18 total slots with 4 cores and 15GB memory (9 slots x 2 families)")
+		expectedSlots = 9 * numFamilies
+		assert.Equal(t, expectedSlots, len(output.InstanceTypes), "Should have %d total slots with 4 cores and 15GB memory (9 slots x %d families)", expectedSlots, numFamilies)
 
 		// Verify duplicates exist
 		typeCounts := make(map[string]int)
@@ -1047,4 +1098,472 @@ func createValidRunInstancesInput() *ec2.RunInstancesInput {
 		SubnetId:     aws.String("subnet-test"),
 		UserData:     aws.String(""), // Empty UserData to bypass cloud-init requirements
 	}
+}
+
+// TestCanAllocate_CountEdgeCases tests edge cases for canAllocate with count parameter
+func TestCanAllocate_CountEdgeCases(t *testing.T) {
+	t.Run("MinCount_equals_MaxCount", func(t *testing.T) {
+		rm := NewResourceManager()
+
+		var microType *ec2.InstanceTypeInfo
+		for key, it := range rm.instanceTypes {
+			if strings.HasSuffix(key, ".micro") {
+				microType = it
+				break
+			}
+		}
+		require.NotNil(t, microType)
+
+		// When min=max, canAllocate should return exactly that or less
+		result := rm.canAllocate(microType, 3)
+		assert.GreaterOrEqual(t, result, 0)
+		assert.LessOrEqual(t, result, 3)
+	})
+
+	t.Run("Request_exceeds_capacity", func(t *testing.T) {
+		rm := NewResourceManager()
+
+		// Find the largest instance type to exhaust resources faster
+		var largeType *ec2.InstanceTypeInfo
+		for key, it := range rm.instanceTypes {
+			if strings.HasSuffix(key, ".xlarge") {
+				largeType = it
+				break
+			}
+		}
+		require.NotNil(t, largeType)
+
+		// Request way more than possible
+		maxPossible := rm.canAllocate(largeType, 10000)
+		t.Logf("Can allocate %d xlarge instances", maxPossible)
+
+		// Should be capped by actual resources, not request
+		assert.Less(t, maxPossible, 10000)
+		assert.GreaterOrEqual(t, maxPossible, 0)
+	})
+
+	t.Run("Capacity_decreases_after_allocation", func(t *testing.T) {
+		rm := NewResourceManager()
+
+		var microType *ec2.InstanceTypeInfo
+		for key, it := range rm.instanceTypes {
+			if strings.HasSuffix(key, ".micro") {
+				microType = it
+				break
+			}
+		}
+		require.NotNil(t, microType)
+
+		initial := rm.canAllocate(microType, 100)
+		t.Logf("Initial capacity: %d micro instances", initial)
+
+		// Allocate one
+		err := rm.allocate(microType)
+		require.NoError(t, err)
+
+		afterOne := rm.canAllocate(microType, 100)
+		assert.Equal(t, initial-1, afterOne, "Capacity should decrease by 1")
+
+		// Allocate another
+		err = rm.allocate(microType)
+		require.NoError(t, err)
+
+		afterTwo := rm.canAllocate(microType, 100)
+		assert.Equal(t, initial-2, afterTwo, "Capacity should decrease by 2")
+
+		// Deallocate both
+		rm.deallocate(microType)
+		rm.deallocate(microType)
+
+		restored := rm.canAllocate(microType, 100)
+		assert.Equal(t, initial, restored, "Capacity should be restored")
+	})
+
+	t.Run("Mixed_instance_types", func(t *testing.T) {
+		rm := NewResourceManager()
+
+		var microType, mediumType *ec2.InstanceTypeInfo
+		for key, it := range rm.instanceTypes {
+			if strings.HasSuffix(key, ".micro") {
+				microType = it
+			}
+			if strings.HasSuffix(key, ".medium") {
+				mediumType = it
+			}
+		}
+		require.NotNil(t, microType)
+		require.NotNil(t, mediumType)
+
+		initialMicro := rm.canAllocate(microType, 100)
+		initialMedium := rm.canAllocate(mediumType, 100)
+
+		// Allocate a medium (uses more resources)
+		err := rm.allocate(mediumType)
+		require.NoError(t, err)
+
+		// Both capacities should decrease
+		afterMicro := rm.canAllocate(microType, 100)
+		afterMedium := rm.canAllocate(mediumType, 100)
+
+		assert.Less(t, afterMicro, initialMicro, "Micro capacity should decrease")
+		assert.Less(t, afterMedium, initialMedium, "Medium capacity should decrease")
+
+		rm.deallocate(mediumType)
+	})
+
+	t.Run("Zero_and_negative_counts", func(t *testing.T) {
+		rm := NewResourceManager()
+
+		var microType *ec2.InstanceTypeInfo
+		for key, it := range rm.instanceTypes {
+			if strings.HasSuffix(key, ".micro") {
+				microType = it
+				break
+			}
+		}
+		require.NotNil(t, microType)
+
+		// Zero request should return 0
+		zeroResult := rm.canAllocate(microType, 0)
+		assert.Equal(t, 0, zeroResult)
+
+		// Negative request (edge case - shouldn't happen but should handle gracefully)
+		negResult := rm.canAllocate(microType, -1)
+		assert.GreaterOrEqual(t, negResult, -1) // Implementation dependent
+	})
+}
+
+// TestDescribeInstances_ReservationGrouping tests that instances are grouped by reservation ID
+func TestDescribeInstances_ReservationGrouping(t *testing.T) {
+	ns, natsURL := startTestNATSServer(t)
+	defer ns.Shutdown()
+
+	daemon := createTestDaemon(t, natsURL)
+
+	// Create instances with shared reservation (simulating --count 3)
+	reservation1 := &ec2.Reservation{}
+	reservation1.SetReservationId("r-shared-001")
+	reservation1.SetOwnerId("123456789012")
+
+	// Add 3 instances with same reservation ID
+	for i := 1; i <= 3; i++ {
+		instanceID := fmt.Sprintf("i-group1-%03d", i)
+		ec2Instance := &ec2.Instance{}
+		ec2Instance.SetInstanceId(instanceID)
+		ec2Instance.SetInstanceType("t3.micro")
+
+		daemon.Instances.VMS[instanceID] = &vm.VM{
+			ID:          instanceID,
+			Status:      "running",
+			Reservation: reservation1,
+			Instance:    ec2Instance,
+		}
+	}
+
+	// Create another reservation with 2 instances
+	reservation2 := &ec2.Reservation{}
+	reservation2.SetReservationId("r-shared-002")
+	reservation2.SetOwnerId("123456789012")
+
+	for i := 1; i <= 2; i++ {
+		instanceID := fmt.Sprintf("i-group2-%03d", i)
+		ec2Instance := &ec2.Instance{}
+		ec2Instance.SetInstanceId(instanceID)
+		ec2Instance.SetInstanceType("t3.small")
+
+		daemon.Instances.VMS[instanceID] = &vm.VM{
+			ID:          instanceID,
+			Status:      "running",
+			Reservation: reservation2,
+			Instance:    ec2Instance,
+		}
+	}
+
+	// Create a single-instance reservation
+	reservation3 := &ec2.Reservation{}
+	reservation3.SetReservationId("r-single-003")
+	reservation3.SetOwnerId("123456789012")
+
+	ec2Instance := &ec2.Instance{}
+	ec2Instance.SetInstanceId("i-single-001")
+	ec2Instance.SetInstanceType("t3.large")
+
+	daemon.Instances.VMS["i-single-001"] = &vm.VM{
+		ID:          "i-single-001",
+		Status:      "stopped",
+		Reservation: reservation3,
+		Instance:    ec2Instance,
+	}
+
+	// Subscribe to handle DescribeInstances
+	sub, err := daemon.natsConn.Subscribe("ec2.DescribeInstances", daemon.handleEC2DescribeInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	t.Run("GroupsInstancesByReservationID", func(t *testing.T) {
+		input := &ec2.DescribeInstancesInput{}
+		inputJSON, _ := json.Marshal(input)
+
+		resp, err := daemon.natsConn.Request("ec2.DescribeInstances", inputJSON, 5*time.Second)
+		require.NoError(t, err)
+
+		var output ec2.DescribeInstancesOutput
+		err = json.Unmarshal(resp.Data, &output)
+		require.NoError(t, err)
+
+		// Should have exactly 3 reservations
+		assert.Len(t, output.Reservations, 3, "Should have 3 reservations")
+
+		// Build a map of reservation ID -> instance count
+		resMap := make(map[string]int)
+		for _, res := range output.Reservations {
+			resID := *res.ReservationId
+			resMap[resID] = len(res.Instances)
+			t.Logf("Reservation %s has %d instances", resID, len(res.Instances))
+		}
+
+		assert.Equal(t, 3, resMap["r-shared-001"], "r-shared-001 should have 3 instances")
+		assert.Equal(t, 2, resMap["r-shared-002"], "r-shared-002 should have 2 instances")
+		assert.Equal(t, 1, resMap["r-single-003"], "r-single-003 should have 1 instance")
+	})
+
+	t.Run("FilterByInstanceID_PreservesReservation", func(t *testing.T) {
+		// Request only one instance from a multi-instance reservation
+		input := &ec2.DescribeInstancesInput{
+			InstanceIds: []*string{aws.String("i-group1-001")},
+		}
+		inputJSON, _ := json.Marshal(input)
+
+		resp, err := daemon.natsConn.Request("ec2.DescribeInstances", inputJSON, 5*time.Second)
+		require.NoError(t, err)
+
+		var output ec2.DescribeInstancesOutput
+		err = json.Unmarshal(resp.Data, &output)
+		require.NoError(t, err)
+
+		// Should have 1 reservation with 1 instance
+		require.Len(t, output.Reservations, 1)
+		assert.Equal(t, "r-shared-001", *output.Reservations[0].ReservationId)
+		assert.Len(t, output.Reservations[0].Instances, 1)
+		assert.Equal(t, "i-group1-001", *output.Reservations[0].Instances[0].InstanceId)
+	})
+
+	t.Run("FilterMultipleInstances_SameReservation", func(t *testing.T) {
+		// Request 2 instances from the same reservation
+		input := &ec2.DescribeInstancesInput{
+			InstanceIds: []*string{
+				aws.String("i-group1-001"),
+				aws.String("i-group1-003"),
+			},
+		}
+		inputJSON, _ := json.Marshal(input)
+
+		resp, err := daemon.natsConn.Request("ec2.DescribeInstances", inputJSON, 5*time.Second)
+		require.NoError(t, err)
+
+		var output ec2.DescribeInstancesOutput
+		err = json.Unmarshal(resp.Data, &output)
+		require.NoError(t, err)
+
+		// Should have 1 reservation with 2 instances
+		require.Len(t, output.Reservations, 1)
+		assert.Equal(t, "r-shared-001", *output.Reservations[0].ReservationId)
+		assert.Len(t, output.Reservations[0].Instances, 2)
+	})
+
+	t.Run("FilterMultipleInstances_DifferentReservations", func(t *testing.T) {
+		// Request instances from different reservations
+		input := &ec2.DescribeInstancesInput{
+			InstanceIds: []*string{
+				aws.String("i-group1-001"),
+				aws.String("i-group2-001"),
+				aws.String("i-single-001"),
+			},
+		}
+		inputJSON, _ := json.Marshal(input)
+
+		resp, err := daemon.natsConn.Request("ec2.DescribeInstances", inputJSON, 5*time.Second)
+		require.NoError(t, err)
+
+		var output ec2.DescribeInstancesOutput
+		err = json.Unmarshal(resp.Data, &output)
+		require.NoError(t, err)
+
+		// Should have 3 reservations, each with 1 instance
+		assert.Len(t, output.Reservations, 3)
+		for _, res := range output.Reservations {
+			assert.Len(t, res.Instances, 1, "Each reservation should have 1 instance when filtered")
+		}
+	})
+
+	t.Run("InstanceStates_AreCorrect", func(t *testing.T) {
+		input := &ec2.DescribeInstancesInput{}
+		inputJSON, _ := json.Marshal(input)
+
+		resp, err := daemon.natsConn.Request("ec2.DescribeInstances", inputJSON, 5*time.Second)
+		require.NoError(t, err)
+
+		var output ec2.DescribeInstancesOutput
+		err = json.Unmarshal(resp.Data, &output)
+		require.NoError(t, err)
+
+		// Find the stopped instance and verify its state
+		for _, res := range output.Reservations {
+			for _, inst := range res.Instances {
+				if *inst.InstanceId == "i-single-001" {
+					assert.Equal(t, int64(80), *inst.State.Code, "Stopped instance should have code 80")
+					assert.Equal(t, "stopped", *inst.State.Name)
+				} else {
+					assert.Equal(t, int64(16), *inst.State.Code, "Running instance should have code 16")
+					assert.Equal(t, "running", *inst.State.Name)
+				}
+			}
+		}
+	})
+}
+
+// TestRunInstances_CountValidation tests MinCount/MaxCount validation scenarios
+func TestRunInstances_CountValidation(t *testing.T) {
+	ns, natsURL := startTestNATSServer(t)
+	defer ns.Shutdown()
+
+	daemon := createTestDaemon(t, natsURL)
+
+	// Subscribe to handle RunInstances
+	sub, err := daemon.natsConn.Subscribe("ec2.RunInstances", daemon.handleEC2RunInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	t.Run("MinCount_greater_than_MaxCount", func(t *testing.T) {
+		input := &ec2.RunInstancesInput{
+			ImageId:      aws.String("ami-test"),
+			InstanceType: aws.String(getTestInstanceType()),
+			MinCount:     aws.Int64(5),
+			MaxCount:     aws.Int64(3), // Invalid: min > max
+		}
+		inputJSON, _ := json.Marshal(input)
+
+		resp, err := daemon.natsConn.Request("ec2.RunInstances", inputJSON, 5*time.Second)
+		require.NoError(t, err)
+
+		// Should return validation error
+		var errResp map[string]interface{}
+		err = json.Unmarshal(resp.Data, &errResp)
+		require.NoError(t, err)
+		assert.Contains(t, errResp, "Code", "Should return error response")
+		t.Logf("Error response: %v", errResp)
+	})
+
+	t.Run("MinCount_zero", func(t *testing.T) {
+		input := &ec2.RunInstancesInput{
+			ImageId:      aws.String("ami-test"),
+			InstanceType: aws.String(getTestInstanceType()),
+			MinCount:     aws.Int64(0), // Invalid
+			MaxCount:     aws.Int64(1),
+		}
+		inputJSON, _ := json.Marshal(input)
+
+		resp, err := daemon.natsConn.Request("ec2.RunInstances", inputJSON, 5*time.Second)
+		require.NoError(t, err)
+
+		var errResp map[string]interface{}
+		err = json.Unmarshal(resp.Data, &errResp)
+		require.NoError(t, err)
+		assert.Contains(t, errResp, "Code")
+	})
+
+	t.Run("MaxCount_zero", func(t *testing.T) {
+		input := &ec2.RunInstancesInput{
+			ImageId:      aws.String("ami-test"),
+			InstanceType: aws.String(getTestInstanceType()),
+			MinCount:     aws.Int64(1),
+			MaxCount:     aws.Int64(0), // Invalid
+		}
+		inputJSON, _ := json.Marshal(input)
+
+		resp, err := daemon.natsConn.Request("ec2.RunInstances", inputJSON, 5*time.Second)
+		require.NoError(t, err)
+
+		var errResp map[string]interface{}
+		err = json.Unmarshal(resp.Data, &errResp)
+		require.NoError(t, err)
+		assert.Contains(t, errResp, "Code")
+	})
+
+	t.Run("InsufficientCapacity_for_MinCount", func(t *testing.T) {
+		// Request more instances than could possibly fit
+		input := &ec2.RunInstancesInput{
+			ImageId:      aws.String("ami-test"),
+			InstanceType: aws.String(getTestInstanceType()),
+			MinCount:     aws.Int64(10000), // Way more than available
+			MaxCount:     aws.Int64(10000),
+		}
+		inputJSON, _ := json.Marshal(input)
+
+		resp, err := daemon.natsConn.Request("ec2.RunInstances", inputJSON, 5*time.Second)
+		require.NoError(t, err)
+
+		var errResp map[string]interface{}
+		err = json.Unmarshal(resp.Data, &errResp)
+		require.NoError(t, err)
+		assert.Equal(t, "InsufficientInstanceCapacity", errResp["Code"])
+		t.Logf("Got expected error: %v", errResp["Code"])
+	})
+}
+
+// TestResourceManager_ConcurrentAccess tests thread safety of resource manager
+func TestResourceManager_ConcurrentAccess(t *testing.T) {
+	rm := NewResourceManager()
+
+	var microType *ec2.InstanceTypeInfo
+	for key, it := range rm.instanceTypes {
+		if strings.HasSuffix(key, ".micro") {
+			microType = it
+			break
+		}
+	}
+	require.NotNil(t, microType)
+
+	// Run concurrent allocations and deallocations
+	done := make(chan bool)
+	iterations := 100
+
+	// Goroutine 1: Allocate and deallocate
+	go func() {
+		for i := 0; i < iterations; i++ {
+			if rm.canAllocate(microType, 1) >= 1 {
+				rm.allocate(microType)
+				rm.deallocate(microType)
+			}
+		}
+		done <- true
+	}()
+
+	// Goroutine 2: Check capacity
+	go func() {
+		for i := 0; i < iterations; i++ {
+			_ = rm.canAllocate(microType, 10)
+		}
+		done <- true
+	}()
+
+	// Goroutine 3: Allocate and deallocate
+	go func() {
+		for i := 0; i < iterations; i++ {
+			if rm.canAllocate(microType, 1) >= 1 {
+				rm.allocate(microType)
+				rm.deallocate(microType)
+			}
+		}
+		done <- true
+	}()
+
+	// Wait for all goroutines
+	<-done
+	<-done
+	<-done
+
+	// Final state should be clean (no allocations)
+	assert.Equal(t, 0, rm.allocatedVCPU, "All resources should be deallocated")
+	assert.Equal(t, float64(0), rm.allocatedMem, "All memory should be deallocated")
 }

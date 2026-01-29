@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
 	"golang.org/x/net/http2"
 )
@@ -207,7 +208,7 @@ func (s *VolumeServiceImpl) getVolumeByID(volumeID string) (*ec2.Volume, error) 
 
 	volume := &ec2.Volume{
 		VolumeId:         aws.String(volMeta.VolumeID),
-		Size:             aws.Int64(int64(volMeta.SizeGiB)),
+		Size:             aws.Int64(utils.SafeUint64ToInt64(volMeta.SizeGiB)),
 		State:            aws.String(state),
 		AvailabilityZone: aws.String(volMeta.AvailabilityZone),
 		CreateTime:       aws.Time(volMeta.CreatedAt),
