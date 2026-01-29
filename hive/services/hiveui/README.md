@@ -37,7 +37,7 @@ Note: This is not needed for actually building hive-ui and running it. We commit
 
 4. **Accept Certs In Browser**
 
-   If you have added the CA to your machine you do not need to do this. But if you are sshd into a hive machine and want to view the ui, simply go to `https://localhost:9999` and `https://localhost:8443` and accept the certificates.
+   If you have added the CA to your machine you do not need to do this. But if you are sshd into a hive machine and want to view the ui, go to [https://localhost:9999](https://localhost:9999) and [https://localhost:8443](https://localhost:8443) and accept the certificates
 
 5. **Launch Server**
 
@@ -53,7 +53,3 @@ Note: This is not needed for actually building hive-ui and running it. We commit
    cd frontend
    pnpm dev
    ```
-
-6. **Visit WebUI**
-
-   View [https://localhost:3000](https://localhost:3000) in your browser to continue.
