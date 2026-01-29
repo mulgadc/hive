@@ -30,43 +30,6 @@
 - more instance types - per cpu gen
 - multi part uploads on frontend
 
-## EC2 describe-instances
-
-Require to add additional meta-data for the attached volumes to a specified running instance.
-
-```sh
-aws ec2 describe-instances \
-              --instance-ids i-1234567890abcdef0
-```
-
-```json
-{
-    "Reservations": [
-        {
-            "Groups": [],
-            "Instances": [
-                {
-                  ....
-
-                  "BlockDeviceMappings": [
-                    {
-                        "DeviceName": "/dev/xvda",
-                        "Ebs": {
-                            "AttachTime": "2022-11-15T10:49:00+00:00",
-                            "DeleteOnTermination": true,
-                            "Status": "attached",
-                            "VolumeId": "vol-02e6ccdca7de29cf2"
-                        }
-                    }
-                  ],
-
-                }
-            ]
-        }
-    ]
-}
-```
-
 ## EC2 create-volume
 
 Allow the ability to create new volumes
