@@ -1,16 +1,4 @@
 {
-  // "hooks": {
-  //   "Stop": [
-  //     {
-  //       "hooks": [
-  //         {
-  //           "type": "command",
-  //           "command": "make test"
-  //         }
-  //       ]
-  //     }
-  //   ]
-  // },
   "permissions": {
     "allow": [
       "Bash(make build)",
@@ -27,10 +15,10 @@
       "Bash(ls*)",
       "Bash(ls -la*)",
       "Bash(ls -l*)",
+      "Bash(ll*)",
       "Bash(ls -a*)",
       "Bash(ls -lh*)",
       "Bash(ls -la */)",
-      "Bash(ll*)",
       "Bash(cat *)",
       "Bash(cat -n *)",
       "Bash(less *)",
@@ -53,6 +41,13 @@
       "Bash(find . -name *)",
       "Bash(find . -type *)",
       "Bash(find . -path *)",
+      "Bash(diff *)",
+      "Bash(tree *)",
+      "Bash(pwd*)",
+      "Bash(cd *)",
+      "Bash(cd * && *)",
+      "Bash(cd ../viperblock && *)",
+      "Bash(cd ../predastore && *)",
 
       "Bash(pnpm fix)",
       "Bash(pnpm check)",

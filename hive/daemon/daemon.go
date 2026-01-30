@@ -627,6 +627,15 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeVolumes: %w", err)
 	}
 
+	slog.Info("Subscribing to subject pattern", "subject", "ec2.ModifyVolume")
+
+	// Subscribe to EC2 ModifyVolume with queue group
+	d.natsSubscriptions["ec2.ModifyVolume"], err = d.natsConn.QueueSubscribe("ec2.ModifyVolume", "hive-workers", d.handleEC2ModifyVolume)
+
+	if err != nil {
+		return fmt.Errorf("failed to subscribe to NATS ec2.ModifyVolume: %w", err)
+	}
+
 	log.Printf("Subscribing to subject pattern: %s", "ec2.DescribeInstances")
 
 	// Subscribe to EC2 DescribeInstances - no queue group for multi-node fan-out
@@ -1601,6 +1610,13 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				} else {
 					slog.Info("Unmounted Viperblock volume", "id", instance.ID, "data", string(msg.Data))
 				}
+
+				// Update volume state to "available" for boot volumes
+				if ebsRequest.Boot {
+					if err := d.volumeService.UpdateVolumeState(ebsRequest.Name, "available", ""); err != nil {
+						slog.Error("Failed to update volume state to available", "volumeId", ebsRequest.Name, "err", err)
+					}
+				}
 			}
 
 			// If flagged for termination (delete Volume)
@@ -1834,6 +1850,17 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 
 	d.Instances.VMS[instance.ID] = instance
 	d.Instances.Mu.Unlock()
+
+	// Step 10: Mark boot volumes as "in-use" now that instance is confirmed running
+	instance.EBSRequests.Mu.Lock()
+	for _, ebsReq := range instance.EBSRequests.Requests {
+		if ebsReq.Boot {
+			if err := d.volumeService.UpdateVolumeState(ebsReq.Name, "in-use", instance.ID); err != nil {
+				slog.Error("Failed to update volume state to in-use", "volumeId", ebsReq.Name, "err", err)
+			}
+		}
+	}
+	instance.EBSRequests.Mu.Unlock()
 
 	err = d.WriteState()
 
@@ -2456,6 +2483,59 @@ func (d *Daemon) handleEC2DescribeVolumes(msg *nats.Msg) {
 	msg.Respond(jsonResponse)
 
 	slog.Info("handleEC2DescribeVolumes completed", "count", len(output.Volumes))
+}
+
+// handleEC2ModifyVolume processes incoming EC2 ModifyVolume requests
+func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
+	slog.Debug("Received message", "subject", msg.Subject)
+	slog.Debug("Message data", "data", string(msg.Data))
+
+	modifyVolumeInput := &ec2.ModifyVolumeInput{}
+	var errResp []byte
+
+	errResp = utils.UnmarshalJsonPayload(modifyVolumeInput, msg.Data)
+
+	if errResp != nil {
+		msg.Respond(errResp)
+		slog.Error("Request does not match ModifyVolumeInput")
+		return
+	}
+
+	slog.Info("Processing ModifyVolume request", "volumeId", modifyVolumeInput.VolumeId)
+
+	output, err := d.volumeService.ModifyVolume(modifyVolumeInput)
+
+	if err != nil {
+		slog.Error("handleEC2ModifyVolume service.ModifyVolume failed", "err", err)
+		errResp = utils.GenerateErrorPayload(err.Error())
+		msg.Respond(errResp)
+		return
+	}
+
+	jsonResponse, err := json.Marshal(output)
+	if err != nil {
+		slog.Error("handleEC2ModifyVolume failed to marshal output", "err", err)
+		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+		msg.Respond(errResp)
+		return
+	}
+	msg.Respond(jsonResponse)
+
+	// Notify viperblockd to reload state after volume modification (e.g. resize)
+	if modifyVolumeInput.VolumeId != nil {
+		syncData, err := json.Marshal(config.EBSSyncRequest{Volume: *modifyVolumeInput.VolumeId})
+		if err != nil {
+			slog.Error("failed to marshal ebs.sync request", "volumeId", *modifyVolumeInput.VolumeId, "err", err)
+		} else {
+			_, syncErr := d.natsConn.Request("ebs.sync", syncData, 5*time.Second)
+			if syncErr != nil {
+				slog.Warn("ebs.sync notification failed (volume may not be mounted)",
+					"volumeId", *modifyVolumeInput.VolumeId, "err", syncErr)
+			}
+		}
+	}
+
+	slog.Info("handleEC2ModifyVolume completed", "volumeId", modifyVolumeInput.VolumeId)
 }
 
 // handleEC2DescribeInstanceTypes processes incoming EC2 DescribeInstanceTypes requests

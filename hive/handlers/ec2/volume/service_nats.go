@@ -2,6 +2,7 @@ package handlers_ec2_volume
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -37,11 +38,37 @@ func (s *NATSVolumeService) DescribeVolumes(input *ec2.DescribeVolumesInput) (*e
 	// Validate error response
 	responseError, err := utils.ValidateErrorPayload(msg.Data)
 	if err != nil {
-		return nil, fmt.Errorf("daemon returned error: %s", *responseError.Code)
+		return nil, errors.New(*responseError.Code)
 	}
 
 	// Unmarshal successful response
 	var output ec2.DescribeVolumesOutput
+	err = json.Unmarshal(msg.Data, &output)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return &output, nil
+}
+
+// ModifyVolume sends a ModifyVolume request via NATS and waits for response
+func (s *NATSVolumeService) ModifyVolume(input *ec2.ModifyVolumeInput) (*ec2.ModifyVolumeOutput, error) {
+	jsonData, err := json.Marshal(input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal input: %w", err)
+	}
+
+	msg, err := s.natsConn.Request("ec2.ModifyVolume", jsonData, 30*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("NATS request failed: %w", err)
+	}
+
+	responseError, err := utils.ValidateErrorPayload(msg.Data)
+	if err != nil {
+		return nil, errors.New(*responseError.Code)
+	}
+
+	var output ec2.ModifyVolumeOutput
 	err = json.Unmarshal(msg.Data, &output)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)

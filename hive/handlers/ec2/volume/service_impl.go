@@ -1,14 +1,17 @@
 package handlers_ec2_volume
 
 import (
+	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -111,7 +114,7 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput) (*e
 
 		vol, err := s.getVolumeByID(volumeID)
 		if err != nil {
-			slog.Debug("Failed to get volume", "volumeId", volumeID, "err", err)
+			slog.Error("Failed to get volume", "volumeId", volumeID, "err", err)
 			continue
 		}
 
@@ -160,40 +163,15 @@ func (s *VolumeServiceImpl) fetchVolumesByIDs(volumeIDs []*string) []*ec2.Volume
 
 // getVolumeByID fetches a single volume's config from S3 and builds an EC2 Volume
 func (s *VolumeServiceImpl) getVolumeByID(volumeID string) (*ec2.Volume, error) {
-	configKey := volumeID + "/config.json"
-
-	getResult, err := s.s3Client.GetObject(&s3.GetObjectInput{
-		Bucket: aws.String(s.config.Predastore.Bucket),
-		Key:    aws.String(configKey),
-	})
+	cfg, err := s.getVolumeConfig(volumeID)
 	if err != nil {
-		if aerr, ok := err.(awserr.Error); ok && (aerr.Code() == s3.ErrCodeNoSuchKey || aerr.Code() == "NotFound") {
-			slog.Debug("Config file not found", "key", configKey)
-			return nil, errors.New("volume not found")
-		}
-		slog.Debug("Failed to get config file", "key", configKey, "err", err)
-		return nil, err
-	}
-	defer getResult.Body.Close()
-
-	body, err := io.ReadAll(getResult.Body)
-	if err != nil {
-		slog.Debug("Failed to read config body", "key", configKey, "err", err)
 		return nil, err
 	}
 
-	var vbConfig struct {
-		VolumeConfig viperblock.VolumeConfig `json:"VolumeConfig"`
-	}
-	if err := json.Unmarshal(body, &vbConfig); err != nil {
-		slog.Debug("Failed to unmarshal config", "key", configKey, "err", err)
-		return nil, err
-	}
-
-	volMeta := vbConfig.VolumeConfig.VolumeMetadata
+	volMeta := cfg.VolumeMetadata
 
 	if volMeta.VolumeID == "" {
-		slog.Debug("Volume ID is empty in config", "key", configKey)
+		slog.Debug("Volume ID is empty in config", "key", volumeID+"/config.json")
 		return nil, errors.New("volume ID is empty")
 	}
 
@@ -252,4 +230,203 @@ func (s *VolumeServiceImpl) getVolumeByID(volumeID string) (*ec2.Volume, error) 
 	}
 
 	return volume, nil
+}
+
+// volumeConfigWrapper matches the JSON structure stored in S3 config.json files
+type volumeConfigWrapper struct {
+	VolumeConfig viperblock.VolumeConfig `json:"VolumeConfig"`
+}
+
+// getVolumeConfig reads the raw VolumeConfig from S3 for a given volume ID
+func (s *VolumeServiceImpl) getVolumeConfig(volumeID string) (*viperblock.VolumeConfig, error) {
+	configKey := volumeID + "/config.json"
+
+	getResult, err := s.s3Client.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(s.config.Predastore.Bucket),
+		Key:    aws.String(configKey),
+	})
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok && (aerr.Code() == s3.ErrCodeNoSuchKey || aerr.Code() == "NotFound") {
+			return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
+		}
+		return nil, fmt.Errorf("failed to get config: %w", err)
+	}
+	defer getResult.Body.Close()
+
+	body, err := io.ReadAll(getResult.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config body: %w", err)
+	}
+
+	var wrapper volumeConfigWrapper
+	if err := json.Unmarshal(body, &wrapper); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+
+	return &wrapper.VolumeConfig, nil
+}
+
+// putVolumeConfig writes a VolumeConfig back to S3 as config.json.
+// It performs a read-modify-write to preserve full VBState if viperblock
+// has already written state (BlockSize, SeqNum, WALNum, etc.) to config.json.
+func (s *VolumeServiceImpl) putVolumeConfig(volumeID string, cfg *viperblock.VolumeConfig) error {
+	configKey := volumeID + "/config.json"
+
+	data, err := s.mergeVolumeConfig(configKey, cfg)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.s3Client.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String(s.config.Predastore.Bucket),
+		Key:    aws.String(configKey),
+		Body:   bytes.NewReader(data),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to write config to S3: %w", err)
+	}
+
+	return nil
+}
+
+// mergeVolumeConfig reads existing config.json from S3 and merges the new
+// VolumeConfig into it, preserving full VBState when present. If no existing
+// VBState is found, it returns a plain volumeConfigWrapper.
+func (s *VolumeServiceImpl) mergeVolumeConfig(configKey string, cfg *viperblock.VolumeConfig) ([]byte, error) {
+	getResult, err := s.s3Client.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(s.config.Predastore.Bucket),
+		Key:    aws.String(configKey),
+	})
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok && (aerr.Code() == s3.ErrCodeNoSuchKey || aerr.Code() == "NotFound") {
+			// No existing config.json -- write wrapper for new volume
+			return json.Marshal(volumeConfigWrapper{VolumeConfig: *cfg})
+		}
+		return nil, fmt.Errorf("failed to read existing config for merge: %w", err)
+	}
+	defer getResult.Body.Close()
+
+	body, err := io.ReadAll(getResult.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read existing config: %w", err)
+	}
+
+	var state viperblock.VBState
+	if json.Unmarshal(body, &state) != nil || state.BlockSize == 0 {
+		// Not a full VBState (new volume or wrapper-only) -- write wrapper
+		return json.Marshal(volumeConfigWrapper{VolumeConfig: *cfg})
+	}
+
+	// Full VBState exists -- update VolumeConfig and reconcile VolumeSize
+	state.VolumeConfig = *cfg
+	configSizeBytes := uint64(cfg.VolumeMetadata.SizeGiB) * 1024 * 1024 * 1024
+	if configSizeBytes > 0 && configSizeBytes > state.VolumeSize {
+		state.VolumeSize = configSizeBytes
+	}
+
+	slog.Info("putVolumeConfig: preserved VBState", "volumeId", strings.TrimSuffix(configKey, "/config.json"),
+		"blockSize", state.BlockSize, "seqNum", state.SeqNum)
+
+	return json.Marshal(state)
+}
+
+// UpdateVolumeState updates the State and AttachedInstance fields for a volume in S3.
+func (s *VolumeServiceImpl) UpdateVolumeState(volumeID, state, attachedInstance string) error {
+	cfg, err := s.getVolumeConfig(volumeID)
+	if err != nil {
+		return fmt.Errorf("failed to get volume config for state update: %w", err)
+	}
+
+	cfg.VolumeMetadata.State = state
+	cfg.VolumeMetadata.AttachedInstance = attachedInstance
+
+	if err := s.putVolumeConfig(volumeID, cfg); err != nil {
+		return fmt.Errorf("failed to write volume config for state update: %w", err)
+	}
+
+	slog.Info("Updated volume state", "volumeId", volumeID, "state", state, "attachedInstance", attachedInstance)
+	return nil
+}
+
+// ModifyVolume modifies an EBS volume (grow-only, requires stopped instance)
+func (s *VolumeServiceImpl) ModifyVolume(input *ec2.ModifyVolumeInput) (*ec2.ModifyVolumeOutput, error) {
+	if input.VolumeId == nil || *input.VolumeId == "" {
+		return nil, errors.New(awserrors.ErrorInvalidVolumeIDMalformed)
+	}
+
+	volumeID := *input.VolumeId
+	slog.Info("ModifyVolume request", "volumeId", volumeID)
+
+	cfg, err := s.getVolumeConfig(volumeID)
+	if err != nil {
+		slog.Error("ModifyVolume failed to get volume config", "volumeId", volumeID, "err", err)
+		return nil, err
+	}
+
+	volMeta := &cfg.VolumeMetadata
+
+	// Record original values before modification
+	originalSize := utils.SafeUint64ToInt64(volMeta.SizeGiB)
+	originalType := volMeta.VolumeType
+	if originalType == "" {
+		originalType = "gp3"
+	}
+	originalIOPS := int64(volMeta.IOPS)
+
+	// Validate: grow only (new size must be greater than current)
+	if input.Size != nil && *input.Size <= originalSize {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
+	// Validate: if volume is attached, instance must not be in-use (must be stopped)
+	if volMeta.AttachedInstance != "" && volMeta.State == "in-use" {
+		return nil, errors.New(awserrors.ErrorIncorrectState)
+	}
+
+	// Apply modifications
+	if input.Size != nil {
+		volMeta.SizeGiB = utils.SafeInt64ToUint64(*input.Size)
+	}
+	if input.VolumeType != nil {
+		volMeta.VolumeType = *input.VolumeType
+	}
+	if input.Iops != nil {
+		volMeta.IOPS = int(*input.Iops)
+	}
+
+	// Persist updated config
+	if err := s.putVolumeConfig(volumeID, cfg); err != nil {
+		slog.Error("ModifyVolume failed to write config", "volumeId", volumeID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	// Build target values (after modification)
+	targetSize := utils.SafeUint64ToInt64(volMeta.SizeGiB)
+	targetType := volMeta.VolumeType
+	if targetType == "" {
+		targetType = "gp3"
+	}
+	targetIOPS := int64(volMeta.IOPS)
+
+	now := time.Now()
+	modification := &ec2.VolumeModification{
+		VolumeId:           aws.String(volumeID),
+		ModificationState:  aws.String("completed"),
+		Progress:           aws.Int64(100),
+		OriginalSize:       aws.Int64(originalSize),
+		OriginalVolumeType: aws.String(originalType),
+		OriginalIops:       aws.Int64(originalIOPS),
+		TargetSize:         aws.Int64(targetSize),
+		TargetVolumeType:   aws.String(targetType),
+		TargetIops:         aws.Int64(targetIOPS),
+		StartTime:          aws.Time(now),
+		EndTime:            aws.Time(now),
+	}
+
+	slog.Info("ModifyVolume completed", "volumeId", volumeID,
+		"originalSize", originalSize, "targetSize", targetSize)
+
+	return &ec2.ModifyVolumeOutput{
+		VolumeModification: modification,
+	}, nil
 }
