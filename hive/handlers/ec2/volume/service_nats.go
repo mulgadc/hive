@@ -2,6 +2,7 @@ package handlers_ec2_volume
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -37,7 +38,7 @@ func (s *NATSVolumeService) DescribeVolumes(input *ec2.DescribeVolumesInput) (*e
 	// Validate error response
 	responseError, err := utils.ValidateErrorPayload(msg.Data)
 	if err != nil {
-		return nil, fmt.Errorf("daemon returned error: %s", *responseError.Code)
+		return nil, errors.New(*responseError.Code)
 	}
 
 	// Unmarshal successful response
@@ -64,7 +65,7 @@ func (s *NATSVolumeService) ModifyVolume(input *ec2.ModifyVolumeInput) (*ec2.Mod
 
 	responseError, err := utils.ValidateErrorPayload(msg.Data)
 	if err != nil {
-		return nil, fmt.Errorf("daemon returned error: %s", *responseError.Code)
+		return nil, errors.New(*responseError.Code)
 	}
 
 	var output ec2.ModifyVolumeOutput

@@ -28,7 +28,9 @@
 - placement group instances, allow spreading instance group between nodes.
 - capabilities flag
 - more instance types - per cpu gen
-- multi part uploads on frontend
+- [DONE] multi part uploads on frontend
+- delete volumes on termination
+- fix describe instances
 
 ## EC2 create-volume
 

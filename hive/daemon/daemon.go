@@ -2503,6 +2503,16 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 	}
 	msg.Respond(jsonResponse)
 
+	// Notify viperblockd to reload state after volume modification (e.g. resize)
+	if modifyVolumeInput.VolumeId != nil {
+		syncData, _ := json.Marshal(config.EBSSyncRequest{Volume: *modifyVolumeInput.VolumeId})
+		_, syncErr := d.natsConn.Request("ebs.sync", syncData, 5*time.Second)
+		if syncErr != nil {
+			slog.Warn("ebs.sync notification failed (volume may not be mounted)",
+				"volumeId", *modifyVolumeInput.VolumeId, "err", syncErr)
+		}
+	}
+
 	slog.Info("handleEC2ModifyVolume completed", "volumeId", modifyVolumeInput.VolumeId)
 }
 

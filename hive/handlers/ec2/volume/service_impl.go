@@ -295,14 +295,15 @@ func (s *VolumeServiceImpl) getVolumeConfig(volumeID string) (*viperblock.Volume
 	return &wrapper.VolumeConfig, nil
 }
 
-// putVolumeConfig writes a VolumeConfig back to S3 as config.json
-func (s *VolumeServiceImpl) putVolumeConfig(volumeID string, config *viperblock.VolumeConfig) error {
+// putVolumeConfig writes a VolumeConfig back to S3 as config.json.
+// It performs a read-modify-write to preserve full VBState if viperblock
+// has already written state (BlockSize, SeqNum, WALNum, etc.) to config.json.
+func (s *VolumeServiceImpl) putVolumeConfig(volumeID string, cfg *viperblock.VolumeConfig) error {
 	configKey := volumeID + "/config.json"
 
-	wrapper := volumeConfigWrapper{VolumeConfig: *config}
-	data, err := json.Marshal(wrapper)
+	data, err := s.mergeVolumeConfig(configKey, cfg)
 	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
+		return err
 	}
 
 	_, err = s.s3Client.PutObject(&s3.PutObjectInput{
@@ -315,6 +316,44 @@ func (s *VolumeServiceImpl) putVolumeConfig(volumeID string, config *viperblock.
 	}
 
 	return nil
+}
+
+// mergeVolumeConfig reads existing config.json from S3 and merges the new
+// VolumeConfig into it, preserving full VBState when present. If no existing
+// VBState is found, it returns a plain volumeConfigWrapper.
+func (s *VolumeServiceImpl) mergeVolumeConfig(configKey string, cfg *viperblock.VolumeConfig) ([]byte, error) {
+	getResult, err := s.s3Client.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(s.config.Predastore.Bucket),
+		Key:    aws.String(configKey),
+	})
+	if err != nil {
+		// No existing config.json -- write wrapper for new volume
+		return json.Marshal(volumeConfigWrapper{VolumeConfig: *cfg})
+	}
+	defer getResult.Body.Close()
+
+	body, err := io.ReadAll(getResult.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read existing config: %w", err)
+	}
+
+	var state viperblock.VBState
+	if json.Unmarshal(body, &state) != nil || state.BlockSize == 0 {
+		// Not a full VBState (new volume or wrapper-only) -- write wrapper
+		return json.Marshal(volumeConfigWrapper{VolumeConfig: *cfg})
+	}
+
+	// Full VBState exists -- update VolumeConfig and reconcile VolumeSize
+	state.VolumeConfig = *cfg
+	configSizeBytes := uint64(cfg.VolumeMetadata.SizeGiB) * 1024 * 1024 * 1024
+	if configSizeBytes > 0 && configSizeBytes > state.VolumeSize {
+		state.VolumeSize = configSizeBytes
+	}
+
+	slog.Info("putVolumeConfig: preserved VBState", "volumeId", strings.TrimSuffix(configKey, "/config.json"),
+		"blockSize", state.BlockSize, "seqNum", state.SeqNum)
+
+	return json.Marshal(state)
 }
 
 // ModifyVolume modifies an EBS volume (grow-only, requires stopped instance)
