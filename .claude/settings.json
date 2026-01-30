@@ -1,16 +1,4 @@
 {
-  // "hooks": {
-  //   "Stop": [
-  //     {
-  //       "hooks": [
-  //         {
-  //           "type": "command",
-  //           "command": "make test"
-  //         }
-  //       ]
-  //     }
-  //   ]
-  // },
   "permissions": {
     "allow": [
       "Bash(make build)",
@@ -30,7 +18,6 @@
       "Bash(ls -a*)",
       "Bash(ls -lh*)",
       "Bash(ls -la */)",
-      "Bash(ll*)",
       "Bash(cat *)",
       "Bash(cat -n *)",
       "Bash(less *)",
