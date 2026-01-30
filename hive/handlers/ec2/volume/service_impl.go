@@ -95,8 +95,6 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput) (*e
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	fmt.Println("Result", result)
-
 	// Iterate over CommonPrefixes to find vol-* directories
 	for _, prefix := range result.CommonPrefixes {
 		if prefix.Prefix == nil {
@@ -122,8 +120,6 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput) (*e
 
 		volumes = append(volumes, vol)
 	}
-
-	fmt.Println("Volumes", volumes)
 
 	slog.Info("DescribeVolumes completed", "count", len(volumes))
 
