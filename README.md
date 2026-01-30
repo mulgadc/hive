@@ -118,7 +118,7 @@ While Hive is architected and implemented by experienced engineers, we leverage 
 
 **Development Artifacts:**
 
-- `CLAUDE.md` - Instructions for Claude Code when working on this codebase
+- `.claude/CLAUDE.md` - Instructions for Claude Code when working on this codebase
 - `HIVE_DEVELOPMENT_PLAN.md` - Comprehensive roadmap and implementation strategy
 - Component-specific guidance in `viperblock/CLAUDE.md` and `predastore/CLAUDE.md`
 

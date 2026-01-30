@@ -52,6 +52,7 @@ git push origin main         # Only after tests pass
 - If tests fail, fix issues before proceeding with git operations
 
 ### Component Build Commands
+
 For detailed build instructions, see component-specific CLAUDE.md files:
 
 **Viperblock** (`../viperblock/CLAUDE.md`):
@@ -70,6 +71,8 @@ cd nbdkit && autoreconf -i && ./configure && make && make install
 ```
 
 ## Architecture Notes
+
+Read `DESIGN.md` to understand the full architecture
 
 ### Message-Driven Microservices Architecture
 
@@ -124,13 +127,6 @@ AWS SDK (custom endpoint) → Hive API Gateway → NATS Topics → Specialized D
 health.ec2.daemon.{id}       # Daemon health heartbeats
 discovery.services           # Service registration
 ```
-
-### Go Module Structure
-All Go projects use:
-- Go 1.25+ with module mode
-- Local replace directives for cross-component development
-- Standard build flags: `-ldflags "-s -w"` for optimized binaries
-- Test environment variable: `LOG_IGNORE=1` to suppress logs during testing
 
 ### Development Workflow
 
