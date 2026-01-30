@@ -163,40 +163,15 @@ func (s *VolumeServiceImpl) fetchVolumesByIDs(volumeIDs []*string) []*ec2.Volume
 
 // getVolumeByID fetches a single volume's config from S3 and builds an EC2 Volume
 func (s *VolumeServiceImpl) getVolumeByID(volumeID string) (*ec2.Volume, error) {
-	configKey := volumeID + "/config.json"
-
-	getResult, err := s.s3Client.GetObject(&s3.GetObjectInput{
-		Bucket: aws.String(s.config.Predastore.Bucket),
-		Key:    aws.String(configKey),
-	})
+	cfg, err := s.getVolumeConfig(volumeID)
 	if err != nil {
-		if aerr, ok := err.(awserr.Error); ok && (aerr.Code() == s3.ErrCodeNoSuchKey || aerr.Code() == "NotFound") {
-			slog.Debug("Config file not found", "key", configKey)
-			return nil, errors.New("volume not found")
-		}
-		slog.Debug("Failed to get config file", "key", configKey, "err", err)
-		return nil, err
-	}
-	defer getResult.Body.Close()
-
-	body, err := io.ReadAll(getResult.Body)
-	if err != nil {
-		slog.Debug("Failed to read config body", "key", configKey, "err", err)
 		return nil, err
 	}
 
-	var vbConfig struct {
-		VolumeConfig viperblock.VolumeConfig `json:"VolumeConfig"`
-	}
-	if err := json.Unmarshal(body, &vbConfig); err != nil {
-		slog.Debug("Failed to unmarshal config", "key", configKey, "err", err)
-		return nil, err
-	}
-
-	volMeta := vbConfig.VolumeConfig.VolumeMetadata
+	volMeta := cfg.VolumeMetadata
 
 	if volMeta.VolumeID == "" {
-		slog.Debug("Volume ID is empty in config", "key", configKey)
+		slog.Debug("Volume ID is empty in config", "key", volumeID+"/config.json")
 		return nil, errors.New("volume ID is empty")
 	}
 
@@ -323,8 +298,11 @@ func (s *VolumeServiceImpl) mergeVolumeConfig(configKey string, cfg *viperblock.
 		Key:    aws.String(configKey),
 	})
 	if err != nil {
-		// No existing config.json -- write wrapper for new volume
-		return json.Marshal(volumeConfigWrapper{VolumeConfig: *cfg})
+		if aerr, ok := err.(awserr.Error); ok && (aerr.Code() == s3.ErrCodeNoSuchKey || aerr.Code() == "NotFound") {
+			// No existing config.json -- write wrapper for new volume
+			return json.Marshal(volumeConfigWrapper{VolumeConfig: *cfg})
+		}
+		return nil, fmt.Errorf("failed to read existing config for merge: %w", err)
 	}
 	defer getResult.Body.Close()
 
@@ -378,11 +356,8 @@ func (s *VolumeServiceImpl) ModifyVolume(input *ec2.ModifyVolumeInput) (*ec2.Mod
 	originalIOPS := int64(volMeta.IOPS)
 
 	// Validate: grow only (new size must be greater than current)
-	if input.Size != nil {
-		newSize := *input.Size
-		if newSize <= originalSize {
-			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
-		}
+	if input.Size != nil && *input.Size <= originalSize {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
 	// Validate: if volume is attached, instance must not be in-use (must be stopped)

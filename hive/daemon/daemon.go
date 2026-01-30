@@ -627,7 +627,7 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeVolumes: %w", err)
 	}
 
-	log.Printf("Subscribing to subject pattern: %s", "ec2.ModifyVolume")
+	slog.Info("Subscribing to subject pattern", "subject", "ec2.ModifyVolume")
 
 	// Subscribe to EC2 ModifyVolume with queue group
 	d.natsSubscriptions["ec2.ModifyVolume"], err = d.natsConn.QueueSubscribe("ec2.ModifyVolume", "hive-workers", d.handleEC2ModifyVolume)
@@ -2469,8 +2469,8 @@ func (d *Daemon) handleEC2DescribeVolumes(msg *nats.Msg) {
 
 // handleEC2ModifyVolume processes incoming EC2 ModifyVolume requests
 func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
-	log.Printf("Received message on subject: %s", msg.Subject)
-	log.Printf("Message data: %s", string(msg.Data))
+	slog.Debug("Received message", "subject", msg.Subject)
+	slog.Debug("Message data", "data", string(msg.Data))
 
 	modifyVolumeInput := &ec2.ModifyVolumeInput{}
 	var errResp []byte
@@ -2505,11 +2505,15 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 
 	// Notify viperblockd to reload state after volume modification (e.g. resize)
 	if modifyVolumeInput.VolumeId != nil {
-		syncData, _ := json.Marshal(config.EBSSyncRequest{Volume: *modifyVolumeInput.VolumeId})
-		_, syncErr := d.natsConn.Request("ebs.sync", syncData, 5*time.Second)
-		if syncErr != nil {
-			slog.Warn("ebs.sync notification failed (volume may not be mounted)",
-				"volumeId", *modifyVolumeInput.VolumeId, "err", syncErr)
+		syncData, err := json.Marshal(config.EBSSyncRequest{Volume: *modifyVolumeInput.VolumeId})
+		if err != nil {
+			slog.Error("failed to marshal ebs.sync request", "volumeId", *modifyVolumeInput.VolumeId, "err", err)
+		} else {
+			_, syncErr := d.natsConn.Request("ebs.sync", syncData, 5*time.Second)
+			if syncErr != nil {
+				slog.Warn("ebs.sync notification failed (volume may not be mounted)",
+					"volumeId", *modifyVolumeInput.VolumeId, "err", syncErr)
+			}
 		}
 	}
 

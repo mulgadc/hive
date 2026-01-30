@@ -202,6 +202,8 @@ func launchService(cfg *Config) (err error) {
 		var syncRequest config.EBSSyncRequest
 		if err := json.Unmarshal(msg.Data, &syncRequest); err != nil {
 			slog.Error("Failed to unmarshal ebs.sync message", "err", err)
+			errResp, _ := json.Marshal(config.EBSSyncResponse{Error: fmt.Sprintf("bad request: %v", err)})
+			msg.Respond(errResp)
 			return
 		}
 
@@ -233,6 +235,7 @@ func launchService(cfg *Config) (err error) {
 		response, err := json.Marshal(syncResponse)
 		if err != nil {
 			slog.Error("Failed to marshal ebs.sync response", "err", err)
+			msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
 			return
 		}
 
