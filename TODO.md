@@ -31,6 +31,8 @@
 - [DONE] multi part uploads on frontend
 - delete volumes on termination
 - fix describe instances
+- change all log into slog
+- change deleteontermination fields to false, unsupported for now.
 
 ## EC2 create-volume
 
