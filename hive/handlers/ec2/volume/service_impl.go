@@ -330,6 +330,24 @@ func (s *VolumeServiceImpl) mergeVolumeConfig(configKey string, cfg *viperblock.
 	return json.Marshal(state)
 }
 
+// UpdateVolumeState updates the State and AttachedInstance fields for a volume in S3.
+func (s *VolumeServiceImpl) UpdateVolumeState(volumeID, state, attachedInstance string) error {
+	cfg, err := s.getVolumeConfig(volumeID)
+	if err != nil {
+		return fmt.Errorf("failed to get volume config for state update: %w", err)
+	}
+
+	cfg.VolumeMetadata.State = state
+	cfg.VolumeMetadata.AttachedInstance = attachedInstance
+
+	if err := s.putVolumeConfig(volumeID, cfg); err != nil {
+		return fmt.Errorf("failed to write volume config for state update: %w", err)
+	}
+
+	slog.Info("Updated volume state", "volumeId", volumeID, "state", state, "attachedInstance", attachedInstance)
+	return nil
+}
+
 // ModifyVolume modifies an EBS volume (grow-only, requires stopped instance)
 func (s *VolumeServiceImpl) ModifyVolume(input *ec2.ModifyVolumeInput) (*ec2.ModifyVolumeOutput, error) {
 	if input.VolumeId == nil || *input.VolumeId == "" {

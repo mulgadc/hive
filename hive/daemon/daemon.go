@@ -1610,6 +1610,13 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				} else {
 					slog.Info("Unmounted Viperblock volume", "id", instance.ID, "data", string(msg.Data))
 				}
+
+				// Update volume state to "available" for boot volumes
+				if ebsRequest.Boot {
+					if err := d.volumeService.UpdateVolumeState(ebsRequest.Name, "available", ""); err != nil {
+						slog.Error("Failed to update volume state to available", "volumeId", ebsRequest.Name, "err", err)
+					}
+				}
 			}
 
 			// If flagged for termination (delete Volume)
@@ -1843,6 +1850,17 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 
 	d.Instances.VMS[instance.ID] = instance
 	d.Instances.Mu.Unlock()
+
+	// Step 10: Mark boot volumes as "in-use" now that instance is confirmed running
+	instance.EBSRequests.Mu.Lock()
+	for _, ebsReq := range instance.EBSRequests.Requests {
+		if ebsReq.Boot {
+			if err := d.volumeService.UpdateVolumeState(ebsReq.Name, "in-use", instance.ID); err != nil {
+				slog.Error("Failed to update volume state to in-use", "volumeId", ebsReq.Name, "err", err)
+			}
+		}
+	}
+	instance.EBSRequests.Mu.Unlock()
 
 	err = d.WriteState()
 
