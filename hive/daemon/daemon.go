@@ -413,6 +413,48 @@ func NewDaemon(cfg *config.ClusterConfig) *Daemon {
 	}
 }
 
+// natsSub defines a single NATS subscription entry for the table-driven setup.
+type natsSub struct {
+	topic      string
+	handler    nats.MsgHandler
+	queueGroup string // empty = plain Subscribe (fan-out)
+}
+
+// subscribeAll registers all NATS subscriptions using a table-driven approach.
+func (d *Daemon) subscribeAll() error {
+	subs := []natsSub{
+		{"ec2.RunInstances", d.handleEC2RunInstances, "hive-workers"},
+		{"ec2.CreateKeyPair", d.handleEC2CreateKeyPair, "hive-workers"},
+		{"ec2.DeleteKeyPair", d.handleEC2DeleteKeyPair, "hive-workers"},
+		{"ec2.DescribeKeyPairs", d.handleEC2DescribeKeyPairs, "hive-workers"},
+		{"ec2.ImportKeyPair", d.handleEC2ImportKeyPair, "hive-workers"},
+		{"ec2.DescribeImages", d.handleEC2DescribeImages, "hive-workers"},
+		{"ec2.DescribeVolumes", d.handleEC2DescribeVolumes, "hive-workers"},
+		{"ec2.ModifyVolume", d.handleEC2ModifyVolume, "hive-workers"},
+		{"ec2.DescribeInstances", d.handleEC2DescribeInstances, ""},
+		{"ec2.DescribeInstanceTypes", d.handleEC2DescribeInstanceTypes, ""},
+		{"ec2.startinstances", d.handleEC2StartInstances, "hive-workers"},
+		{fmt.Sprintf("hive.admin.%s.health", d.node), d.handleHealthCheck, ""},
+		{"hive.nodes.discover", d.handleNodeDiscover, ""},
+	}
+
+	for _, s := range subs {
+		var sub *nats.Subscription
+		var err error
+		if s.queueGroup != "" {
+			sub, err = d.natsConn.QueueSubscribe(s.topic, s.queueGroup, s.handler)
+		} else {
+			sub, err = d.natsConn.Subscribe(s.topic, s.handler)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to subscribe to %s: %w", s.topic, err)
+		}
+		d.natsSubscriptions[s.topic] = sub
+		slog.Info("Subscribed to NATS topic", "topic", s.topic, "queue", s.queueGroup)
+	}
+	return nil
+}
+
 // Start initializes and starts the daemon
 func (d *Daemon) Start() error {
 
@@ -547,120 +589,8 @@ func (d *Daemon) Start() error {
 
 	}
 
-	log.Printf("Subscribing to subject pattern: %s", "ec2.RunInstances")
-
-	// Subscribe to EC2 RunInstances with queue group (AWS Action name format - recommended)
-	d.natsSubscriptions["ec2.RunInstances"], err = d.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", d.handleEC2RunInstances)
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.RunInstances: %w", err)
-	}
-
-	log.Printf("Subscribing to subject pattern: %s", "ec2.CreateKeyPair")
-
-	// Subscribe to EC2 CreateKeyPair with queue group
-	d.natsSubscriptions["ec2.CreateKeyPair"], err = d.natsConn.QueueSubscribe("ec2.CreateKeyPair", "hive-workers", d.handleEC2CreateKeyPair)
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.CreateKeyPair: %w", err)
-	}
-
-	log.Printf("Subscribing to subject pattern: %s", "ec2.DeleteKeyPair")
-
-	// Subscribe to EC2 DeleteKeyPair with queue group
-	d.natsSubscriptions["ec2.DeleteKeyPair"], err = d.natsConn.QueueSubscribe("ec2.DeleteKeyPair", "hive-workers", d.handleEC2DeleteKeyPair)
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.DeleteKeyPair: %w", err)
-	}
-
-	log.Printf("Subscribing to subject pattern: %s", "ec2.DescribeKeyPairs")
-
-	// Subscribe to EC2 DescribeKeyPairs with queue group
-	d.natsSubscriptions["ec2.DescribeKeyPairs"], err = d.natsConn.QueueSubscribe("ec2.DescribeKeyPairs", "hive-workers", d.handleEC2DescribeKeyPairs)
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeKeyPairs: %w", err)
-	}
-
-	log.Printf("Subscribing to subject pattern: %s", "ec2.ImportKeyPair")
-
-	// Subscribe to EC2 ImportKeyPair with queue group
-	d.natsSubscriptions["ec2.ImportKeyPair"], err = d.natsConn.QueueSubscribe("ec2.ImportKeyPair", "hive-workers", d.handleEC2ImportKeyPair)
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.ImportKeyPair: %w", err)
-	}
-
-	log.Printf("Subscribing to subject pattern: %s", "ec2.DescribeImages")
-
-	// Subscribe to EC2 DescribeImages with queue group
-	d.natsSubscriptions["ec2.DescribeImages"], err = d.natsConn.QueueSubscribe("ec2.DescribeImages", "hive-workers", d.handleEC2DescribeImages)
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeImages: %w", err)
-	}
-
-	log.Printf("Subscribing to subject pattern: %s", "ec2.DescribeVolumes")
-
-	// Subscribe to EC2 DescribeVolumes with queue group
-	d.natsSubscriptions["ec2.DescribeVolumes"], err = d.natsConn.QueueSubscribe("ec2.DescribeVolumes", "hive-workers", d.handleEC2DescribeVolumes)
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeVolumes: %w", err)
-	}
-
-	slog.Info("Subscribing to subject pattern", "subject", "ec2.ModifyVolume")
-
-	// Subscribe to EC2 ModifyVolume with queue group
-	d.natsSubscriptions["ec2.ModifyVolume"], err = d.natsConn.QueueSubscribe("ec2.ModifyVolume", "hive-workers", d.handleEC2ModifyVolume)
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.ModifyVolume: %w", err)
-	}
-
-	log.Printf("Subscribing to subject pattern: %s", "ec2.DescribeInstances")
-
-	// Subscribe to EC2 DescribeInstances - no queue group for multi-node fan-out
-	d.natsSubscriptions["ec2.DescribeInstances"], err = d.natsConn.Subscribe("ec2.DescribeInstances", d.handleEC2DescribeInstances)
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeInstances: %w", err)
-	}
-
-	log.Printf("Subscribing to subject pattern: %s", "ec2.DescribeInstanceTypes")
-
-	// Subscribe to EC2 DescribeInstanceTypes - no queue group for multi-node fan-out
-	d.natsSubscriptions["ec2.DescribeInstanceTypes"], err = d.natsConn.Subscribe("ec2.DescribeInstanceTypes", d.handleEC2DescribeInstanceTypes)
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeInstanceTypes: %w", err)
-	}
-
-	// Subscribe to EC2 start instance events
-	// TODO: The instance state needs to be shared, not pinned to a single node.
-	// TODO: Handle this in a more generic function to group similar commands (start, stop, launch)
-	// Subscribe to EC2 events with queue group
-	d.natsSubscriptions["ec2.startinstances"], err = d.natsConn.QueueSubscribe("ec2.startinstances", "hive-workers", d.handleEC2StartInstances)
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.launch: %w", err)
-	}
-
-	// Subscribe to health check for this node
-	healthSubject := fmt.Sprintf("hive.admin.%s.health", d.node)
-	log.Printf("Subscribing to health check: %s", healthSubject)
-
-	d.natsSubscriptions[healthSubject], err = d.natsConn.Subscribe(healthSubject, d.handleHealthCheck)
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS %s: %w", healthSubject, err)
-	}
-
-	// Subscribe to node discovery - all daemons respond so gateway can discover active nodes
-	log.Printf("Subscribing to node discovery: hive.nodes.discover")
-	d.natsSubscriptions["hive.nodes.discover"], err = d.natsConn.Subscribe("hive.nodes.discover", d.handleNodeDiscover)
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS hive.nodes.discover: %w", err)
+	if err := d.subscribeAll(); err != nil {
+		return err
 	}
 
 	// Setup graceful shutdown
