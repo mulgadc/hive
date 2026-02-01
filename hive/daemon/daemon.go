@@ -493,6 +493,12 @@ func (d *Daemon) Start() error {
 		}
 	}
 
+	// Create services before loading/launching instances, since LaunchInstance depends on them
+	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances)
+	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
+	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config)
+	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config)
+
 	// Load existing state for VMs from JetStream or disk
 	err = d.LoadState()
 	if err != nil {
@@ -540,18 +546,6 @@ func (d *Daemon) Start() error {
 		// Launch running instances
 
 	}
-
-	// Create instance service for handling EC2 instance operations
-	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances)
-
-	// Create key service for handling EC2 key pair operations
-	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
-
-	// Create image service for handling EC2 AMI operations
-	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config)
-
-	// Create volume service for handling EC2 EBS volume operations
-	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config)
 
 	log.Printf("Subscribing to subject pattern: %s", "ec2.launch")
 
