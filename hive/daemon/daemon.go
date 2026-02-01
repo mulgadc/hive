@@ -547,17 +547,6 @@ func (d *Daemon) Start() error {
 
 	}
 
-	log.Printf("Subscribing to subject pattern: %s", "ec2.launch")
-
-	// Subscribe to EC2 events with queue group (legacy topic for backward compatibility)
-	/*
-		d.natsSubscriptions["ec2.launch"], err = d.natsConn.QueueSubscribe("ec2.launch", "hive-workers", d.handleEC2RunInstances)
-
-		if err != nil {
-			return fmt.Errorf("failed to subscribe to NATS ec2.launch: %w", err)
-		}
-	*/
-
 	log.Printf("Subscribing to subject pattern: %s", "ec2.RunInstances")
 
 	// Subscribe to EC2 RunInstances with queue group (AWS Action name format - recommended)
@@ -904,32 +893,6 @@ func (d *Daemon) WriteState() error {
 		return fmt.Errorf("failed to write state to JetStream: %w", err)
 	}
 	return nil
-}
-
-// Initalise VMs from state
-func (d *Daemon) InitaliseVMs() {
-
-	/*
-		d.Instances.Mu.Lock()
-		defer d.Instances.Mu.Unlock()
-
-		// Step 1: Loop through each instance
-		for i := range d.Instances.VMS {
-			instance := d.Instances.VMS[i]
-
-			// Step 2: Mount each EBS volume
-			for _, ebsRequest := range instance.EBSRequests.Requests {
-				instance.EBSRequests.Mu.Lock()
-				defer instance.EBSRequests.Mu.Unlock()
-
-			}
-
-			d.Instances.VMS[i] = instance
-
-		}
-	*/
-
-	// Step 2: Loop through each instance and start it
 }
 
 // LoadState loads the instance state from JetStream KV store (required)
@@ -1819,16 +1782,6 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 		return err
 	}
 
-	// TODO: Replaced with describe-instances with Inbox subscription
-	/*
-		d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)], err = d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.describe.%s", instance.ID), "hive-events", d.handleEC2Describe)
-
-		if err != nil {
-			slog.Error("Failed to subscribe to NATS ec2.describe", "id", instance.ID, "err", err)
-			return err
-		}
-	*/
-
 	// Step 9: Update the instance metadata for running state and volume attached
 	// Marshal to a JSON file
 	// Update state
@@ -1968,16 +1921,8 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		}
 
 		// TODO: Add EFI support
-
 		if v.EFI {
 			continue
-		}
-
-		if v.EFI {
-			drive.Format = "raw"
-			drive.If = "pflash"
-			drive.Media = "disk"
-			drive.ID = "efi"
 		}
 
 		instance.Config.Drives = append(instance.Config.Drives, drive)
