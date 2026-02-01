@@ -3,6 +3,7 @@
     "allow": [
       "Bash(make build)",
       "Bash(make build-ui)",
+      "Bash(LOG_IGNORE=1 make test:*)",
       "Bash(make test)",
       "Bash(make bench)",
       "Bash(make clean)",
@@ -52,6 +53,8 @@
       "Bash(pnpm fix)",
       "Bash(pnpm check)",
       "Bash(pnpm build)",
+      "Bash(pnpm tsc *)",
+      "Bash(pnpx @tanstack/router-cli generate*)",
 
       "Bash(git diff*)",
       "Bash(git diff --staged*)",

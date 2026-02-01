@@ -3,6 +3,7 @@ import {
   CreateKeyPairCommand,
   DeleteKeyPairCommand,
   ImportKeyPairCommand,
+  ModifyVolumeCommand,
   RebootInstancesCommand,
   RunInstancesCommand,
   StartInstancesCommand,
@@ -20,6 +21,7 @@ import type {
   CreateInstanceParams,
   CreateKeyPairData,
   ImportKeyPairData,
+  ModifyVolumeParams,
 } from "@/types/ec2"
 
 const WHITESPACE_REGEX = /\s+/
@@ -173,6 +175,22 @@ export function useDeleteKeyPair() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries(ec2KeyPairsQueryOptions)
+    },
+  })
+}
+
+export function useModifyVolume() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (params: ModifyVolumeParams) => {
+      const command = new ModifyVolumeCommand({
+        VolumeId: params.volumeId,
+        Size: params.size,
+      })
+      return await getEc2Client().send(command)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ec2", "volumes"] })
     },
   })
 }

@@ -1,0 +1,135 @@
+import { zodResolver } from "@hookform/resolvers/zod"
+import { useSuspenseQuery } from "@tanstack/react-query"
+import { createFileRoute, useNavigate } from "@tanstack/react-router"
+import { useForm } from "react-hook-form"
+
+import { BackLink } from "@/components/back-link"
+import { ErrorBanner } from "@/components/error-banner"
+import { PageHeading } from "@/components/page-heading"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { useModifyVolume } from "@/mutations/ec2"
+import { ec2VolumeQueryOptions } from "@/queries/ec2"
+import { type ModifyVolumeFormData, modifyVolumeSchema } from "@/types/ec2"
+
+export const Route = createFileRoute("/_auth/ec2/(volumes)/modify-volume/$id")({
+  loader: async ({ context, params }) => {
+    await context.queryClient.ensureQueryData(ec2VolumeQueryOptions(params.id))
+  },
+  head: ({ params }) => ({
+    meta: [
+      {
+        title: `Resize ${params.id} | EC2 | Mulga`,
+      },
+    ],
+  }),
+  component: ModifyVolume,
+})
+
+function ModifyVolume() {
+  const { id } = Route.useParams()
+  const navigate = useNavigate()
+  const { data } = useSuspenseQuery(ec2VolumeQueryOptions(id))
+  const volume = data.Volumes?.[0]
+  const volumeId = volume?.VolumeId
+  const modifyMutation = useModifyVolume()
+
+  const currentSize = volume?.Size ?? 1
+
+  const {
+    handleSubmit,
+    register,
+    formState: { errors, isSubmitting },
+  } = useForm({
+    resolver: zodResolver(
+      modifyVolumeSchema.refine((data) => data.size > currentSize, {
+        message: `New size must be greater than current size (${currentSize} GiB)`,
+        path: ["size"],
+      }),
+    ),
+    defaultValues: {
+      size: currentSize,
+    },
+  })
+
+  if (!volumeId) {
+    return (
+      <>
+        <BackLink to="/ec2/describe-volumes">Back to volumes</BackLink>
+        <p className="text-muted-foreground">Volume not found.</p>
+      </>
+    )
+  }
+
+  const onSubmit = async (data: ModifyVolumeFormData) => {
+    await modifyMutation.mutateAsync({
+      ...data,
+      volumeId,
+    })
+
+    navigate({ to: "/ec2/describe-volumes/$id", params: { id: volumeId } })
+  }
+
+  return (
+    <>
+      <BackLink params={{ id: volumeId }} to="/ec2/describe-volumes/$id">
+        Back to volume
+      </BackLink>
+
+      <PageHeading subtitle={volumeId} title="Resize Volume" />
+
+      {modifyMutation.error && (
+        <ErrorBanner
+          error={modifyMutation.error}
+          msg="Failed to resize volume"
+        />
+      )}
+
+      <form className="max-w-4xl space-y-6" onSubmit={handleSubmit(onSubmit)}>
+        <div className="space-y-2">
+          <p className="text-muted-foreground text-sm">
+            Current size: {currentSize} GiB
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="size">New size (GiB)</Label>
+          <Input
+            id="size"
+            min={currentSize + 1}
+            type="number"
+            {...register("size", { valueAsNumber: true })}
+          />
+          {errors.size && (
+            <p className="text-destructive text-sm">{errors.size.message}</p>
+          )}
+        </div>
+
+        <div className="flex gap-2">
+          <Button
+            disabled={isSubmitting || modifyMutation.isPending}
+            onClick={() =>
+              navigate({
+                to: "/ec2/describe-volumes/$id",
+                params: { id: volumeId },
+              })
+            }
+            type="button"
+            variant="outline"
+          >
+            Cancel
+          </Button>
+          <Button
+            disabled={isSubmitting || modifyMutation.isPending}
+            type="submit"
+          >
+            {isSubmitting || modifyMutation.isPending
+              ? "Resizing\u2026"
+              : "Resize Volume"}
+          </Button>
+        </div>
+      </form>
+    </>
+  )
+}

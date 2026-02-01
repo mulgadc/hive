@@ -23,6 +23,7 @@ import { Route as AuthEc2keyDescribeKeyPairsIndexRouteImport } from './routes/_a
 import { Route as AuthEc2instancesDescribeInstancesIndexRouteImport } from './routes/_auth/ec2/(instances)/describe-instances/index'
 import { Route as AuthEc2imagesDescribeImagesIndexRouteImport } from './routes/_auth/ec2/(images)/describe-images/index'
 import { Route as AuthS3LsBucketSplatRouteImport } from './routes/_auth/s3/ls/$bucket/$'
+import { Route as AuthEc2volumesModifyVolumeIdRouteImport } from './routes/_auth/ec2/(volumes)/modify-volume/$id'
 import { Route as AuthEc2volumesDescribeVolumesIdRouteImport } from './routes/_auth/ec2/(volumes)/describe-volumes/$id'
 import { Route as AuthEc2keyDescribeKeyPairsIdRouteImport } from './routes/_auth/ec2/(key)/describe-key-pairs/$id'
 import { Route as AuthEc2instancesDescribeInstancesIdRouteImport } from './routes/_auth/ec2/(instances)/describe-instances/$id'
@@ -102,6 +103,12 @@ const AuthS3LsBucketSplatRoute = AuthS3LsBucketSplatRouteImport.update({
   path: '/$',
   getParentRoute: () => AuthS3LsBucketRouteRoute,
 } as any)
+const AuthEc2volumesModifyVolumeIdRoute =
+  AuthEc2volumesModifyVolumeIdRouteImport.update({
+    id: '/ec2/(volumes)/modify-volume/$id',
+    path: '/ec2/modify-volume/$id',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
 const AuthEc2volumesDescribeVolumesIdRoute =
   AuthEc2volumesDescribeVolumesIdRouteImport.update({
     id: '/ec2/(volumes)/describe-volumes/$id',
@@ -139,6 +146,7 @@ export interface FileRoutesByFullPath {
   '/ec2/describe-instances/$id': typeof AuthEc2instancesDescribeInstancesIdRoute
   '/ec2/describe-key-pairs/$id': typeof AuthEc2keyDescribeKeyPairsIdRoute
   '/ec2/describe-volumes/$id': typeof AuthEc2volumesDescribeVolumesIdRoute
+  '/ec2/modify-volume/$id': typeof AuthEc2volumesModifyVolumeIdRoute
   '/s3/ls/$bucket/$': typeof AuthS3LsBucketSplatRoute
   '/ec2/describe-images/': typeof AuthEc2imagesDescribeImagesIndexRoute
   '/ec2/describe-instances/': typeof AuthEc2instancesDescribeInstancesIndexRoute
@@ -157,6 +165,7 @@ export interface FileRoutesByTo {
   '/ec2/describe-instances/$id': typeof AuthEc2instancesDescribeInstancesIdRoute
   '/ec2/describe-key-pairs/$id': typeof AuthEc2keyDescribeKeyPairsIdRoute
   '/ec2/describe-volumes/$id': typeof AuthEc2volumesDescribeVolumesIdRoute
+  '/ec2/modify-volume/$id': typeof AuthEc2volumesModifyVolumeIdRoute
   '/s3/ls/$bucket/$': typeof AuthS3LsBucketSplatRoute
   '/ec2/describe-images': typeof AuthEc2imagesDescribeImagesIndexRoute
   '/ec2/describe-instances': typeof AuthEc2instancesDescribeInstancesIndexRoute
@@ -178,6 +187,7 @@ export interface FileRoutesById {
   '/_auth/ec2/(instances)/describe-instances/$id': typeof AuthEc2instancesDescribeInstancesIdRoute
   '/_auth/ec2/(key)/describe-key-pairs/$id': typeof AuthEc2keyDescribeKeyPairsIdRoute
   '/_auth/ec2/(volumes)/describe-volumes/$id': typeof AuthEc2volumesDescribeVolumesIdRoute
+  '/_auth/ec2/(volumes)/modify-volume/$id': typeof AuthEc2volumesModifyVolumeIdRoute
   '/_auth/s3/ls/$bucket/$': typeof AuthS3LsBucketSplatRoute
   '/_auth/ec2/(images)/describe-images/': typeof AuthEc2imagesDescribeImagesIndexRoute
   '/_auth/ec2/(instances)/describe-instances/': typeof AuthEc2instancesDescribeInstancesIndexRoute
@@ -199,6 +209,7 @@ export interface FileRouteTypes {
     | '/ec2/describe-instances/$id'
     | '/ec2/describe-key-pairs/$id'
     | '/ec2/describe-volumes/$id'
+    | '/ec2/modify-volume/$id'
     | '/s3/ls/$bucket/$'
     | '/ec2/describe-images/'
     | '/ec2/describe-instances/'
@@ -217,6 +228,7 @@ export interface FileRouteTypes {
     | '/ec2/describe-instances/$id'
     | '/ec2/describe-key-pairs/$id'
     | '/ec2/describe-volumes/$id'
+    | '/ec2/modify-volume/$id'
     | '/s3/ls/$bucket/$'
     | '/ec2/describe-images'
     | '/ec2/describe-instances'
@@ -237,6 +249,7 @@ export interface FileRouteTypes {
     | '/_auth/ec2/(instances)/describe-instances/$id'
     | '/_auth/ec2/(key)/describe-key-pairs/$id'
     | '/_auth/ec2/(volumes)/describe-volumes/$id'
+    | '/_auth/ec2/(volumes)/modify-volume/$id'
     | '/_auth/s3/ls/$bucket/$'
     | '/_auth/ec2/(images)/describe-images/'
     | '/_auth/ec2/(instances)/describe-instances/'
@@ -350,6 +363,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthS3LsBucketSplatRouteImport
       parentRoute: typeof AuthS3LsBucketRouteRoute
     }
+    '/_auth/ec2/(volumes)/modify-volume/$id': {
+      id: '/_auth/ec2/(volumes)/modify-volume/$id'
+      path: '/ec2/modify-volume/$id'
+      fullPath: '/ec2/modify-volume/$id'
+      preLoaderRoute: typeof AuthEc2volumesModifyVolumeIdRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
     '/_auth/ec2/(volumes)/describe-volumes/$id': {
       id: '/_auth/ec2/(volumes)/describe-volumes/$id'
       path: '/ec2/describe-volumes/$id'
@@ -405,6 +425,7 @@ interface AuthRouteRouteChildren {
   AuthEc2instancesDescribeInstancesIdRoute: typeof AuthEc2instancesDescribeInstancesIdRoute
   AuthEc2keyDescribeKeyPairsIdRoute: typeof AuthEc2keyDescribeKeyPairsIdRoute
   AuthEc2volumesDescribeVolumesIdRoute: typeof AuthEc2volumesDescribeVolumesIdRoute
+  AuthEc2volumesModifyVolumeIdRoute: typeof AuthEc2volumesModifyVolumeIdRoute
   AuthEc2imagesDescribeImagesIndexRoute: typeof AuthEc2imagesDescribeImagesIndexRoute
   AuthEc2instancesDescribeInstancesIndexRoute: typeof AuthEc2instancesDescribeInstancesIndexRoute
   AuthEc2keyDescribeKeyPairsIndexRoute: typeof AuthEc2keyDescribeKeyPairsIndexRoute
@@ -423,6 +444,7 @@ const AuthRouteRouteChildren: AuthRouteRouteChildren = {
     AuthEc2instancesDescribeInstancesIdRoute,
   AuthEc2keyDescribeKeyPairsIdRoute: AuthEc2keyDescribeKeyPairsIdRoute,
   AuthEc2volumesDescribeVolumesIdRoute: AuthEc2volumesDescribeVolumesIdRoute,
+  AuthEc2volumesModifyVolumeIdRoute: AuthEc2volumesModifyVolumeIdRoute,
   AuthEc2imagesDescribeImagesIndexRoute: AuthEc2imagesDescribeImagesIndexRoute,
   AuthEc2instancesDescribeInstancesIndexRoute:
     AuthEc2instancesDescribeInstancesIndexRoute,
