@@ -82,18 +82,6 @@ aws ec2 detach-volume --volume-id vol-1234567890abcdef0
 - Use QMP to detach specified volume
 - Terminate running `nbdkit` process for specified volume, ensure WAL state synced to predastore.
 
-## EC2 delete-volume
-
-Allow a volume to be deleted once detached from any running instances.
-
-```sh
-aws ec2 delete-volume --volume-id vol-049df61146c4d7901
-```
-
-- Confirm volume detached
-- Terminate running `nbdkit` process for specified volume, ensure WAL state synced to predastore.
-- Delete volume in predastore
-
 ## EC2 modify-volume
 
 Example increasing a volume to 64GiB
@@ -226,7 +214,7 @@ Instance `dmesg`:
 | `describe-volumes` | `--volume-ids` (fast-path lookup) | `--filters`, `--max-results`, `--next-token`, `--dry-run` | None | NATS `ec2.DescribeVolumes` → daemon queries viperblock for volume metadata → returns volume list with state, size, attachments, type | 1. List all volumes<br>2. Filter by volume ID<br>3. Filter by attachment state<br>4. Non-existent volume returns empty | **DONE** |
 | `modify-volume` | `--volume-id`, `--size`, `--volume-type`, `--iops` | `--throughput`, `--dry-run`, `--multi-attach-enabled` | Volume must exist | NATS `ec2.ModifyVolume` → daemon sends resize request to viperblock → NBD does not support live resize, instance must be stopped → returns modification state | 1. Increase volume size<br>2. Modify volume type<br>3. Decrease size (error - not supported)<br>4. Modify attached volume (requires stop/start) | **DONE** |
 | `create-volume` | `--size`, `--availability-zone`, `--volume-type` (gp3 only) | `--iops`, `--encrypted`, `--snapshot-id`, `--tag-specifications` | Valid AZ configured via `hive init` | Gateway validates input → NATS `ec2.CreateVolume` → daemon generates vol-ID via viperblock → creates empty volume of specified size → persists config.json to Predastore S3 → returns vol-ID with state=available | 1. Create 80GB gp3 volume<br>2. Boundary sizes (1 GiB min, 16384 GiB max)<br>3. Invalid AZ (error)<br>4. Verify volume in describe-volumes<br>5. Unsupported volume type (error - only gp3)<br>6. Size out of range (error) | **DONE** |
-| `delete-volume` | — | `--volume-id` | Volume must exist and be detached | Confirm volume detached → terminate nbdkit process → sync WAL to Predastore → delete volume bucket in Predastore → return success | 1. Delete detached volume<br>2. Delete attached volume (error: VolumeInUse)<br>3. Delete non-existent volume (error)<br>4. Verify volume gone from describe-volumes | **NOT STARTED** |
+| `delete-volume` | `--volume-id` | `--dry-run` | Volume must exist and be detached (state=available) | Gateway validates vol- prefix → NATS `ec2.DeleteVolume` → daemon confirms state=available and no AttachedInstance → NATS `ebs.delete` to viperblockd (stops nbdkit/WAL) → deletes S3 objects under vol-id/, vol-id-efi/, vol-id-cloudinit/ → returns success | 1. Delete detached volume<br>2. Delete attached volume (error: VolumeInUse)<br>3. Delete non-existent volume (error: InvalidVolume.NotFound)<br>4. Verify volume gone from describe-volumes<br>5. Malformed volume ID (error: InvalidVolumeID.Malformed)<br>6. Double delete (idempotent NotFound) | **DONE** |
 | `attach-volume` | — | `--volume-id`, `--instance-id`, `--device` (e.g. /dev/sdf) | Volume must exist (available), instance must exist (running) | NATS to node running instance → start nbdkit for volume → QMP `blockdev-add` (NBD socket) → QMP `device_add` (virtio-blk-pci) → update instance metadata with attachment | 1. Attach volume to running instance<br>2. Verify device visible in guest OS<br>3. Attach already-attached volume (error)<br>4. Attach to non-existent instance (error)<br>5. Volume persists across stop/start | **NOT STARTED** |
 | `detach-volume` | — | `--volume-id`, `--instance-id`, `--device`, `--force` | Volume must be attached | NATS to node running instance → QMP `device_del` → QMP `blockdev-del` → terminate nbdkit for volume → sync WAL to Predastore → update instance metadata | 1. Detach from running instance<br>2. Force detach<br>3. Detach already-detached volume (error)<br>4. Verify device removed from guest OS | **NOT STARTED** |
 | `describe-volume-status` | — | `--volume-ids`, `--filters`, `--max-results` | None | Query viperblock for volume health status → return io-enabled status, availability zone, events | 1. Check healthy volume status<br>2. Check volume during modification<br>3. Filter by volume ID | **NOT STARTED** |
