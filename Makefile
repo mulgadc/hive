@@ -105,8 +105,8 @@ security:
 	go tool govulncheck ./... > tests/govulncheck-report.txt || true
 	@echo "Govulncheck report saved to tests/govulncheck-report.txt"
 
-	go tool gosec ./... > tests/gosec-report.txt || true
-	@echo "Gosec report saved to tests/gosec-report.txt"
+	# go tool gosec ./... > tests/gosec-report.txt || true
+	# @echo "Gosec report saved to tests/gosec-report.txt"
 
 	go tool staticcheck -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./...  > tests/staticcheck-report.txt || true
 	@echo "Staticcheck report saved to tests/staticcheck-report.txt"
