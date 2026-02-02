@@ -99,29 +99,21 @@ function VolumeDetail() {
         {volume.Attachments && volume.Attachments.length > 0 && (
           <DetailCard>
             <DetailCard.Header>Attachments</DetailCard.Header>
-            <DetailCard.Content>
-              {volume.Attachments.map((attachment) => (
-                <div
-                  className="space-y-2 border-b pb-2 last:border-0 last:pb-0"
-                  key={attachment.InstanceId}
-                >
-                  <DetailRow
-                    label="Instance ID"
-                    value={attachment.InstanceId}
-                  />
-                  <DetailRow label="Device" value={attachment.Device} />
-                  <DetailRow label="Status" value={attachment.State} />
-                  <DetailRow
-                    label="Attach Time"
-                    value={formatDateTime(attachment.AttachTime)}
-                  />
-                  <DetailRow
-                    label="Delete on Termination"
-                    value={attachment.DeleteOnTermination ? "Yes" : "No"}
-                  />
-                </div>
-              ))}
-            </DetailCard.Content>
+            {volume.Attachments.map((attachment) => (
+              <DetailCard.Content key={attachment.InstanceId}>
+                <DetailRow label="Instance ID" value={attachment.InstanceId} />
+                <DetailRow label="Device" value={attachment.Device} />
+                <DetailRow label="Status" value={attachment.State} />
+                <DetailRow
+                  label="Attach Time"
+                  value={formatDateTime(attachment.AttachTime)}
+                />
+                <DetailRow
+                  label="Delete on Termination"
+                  value={attachment.DeleteOnTermination ? "Yes" : "No"}
+                />
+              </DetailCard.Content>
+            ))}
           </DetailCard>
         )}
       </div>

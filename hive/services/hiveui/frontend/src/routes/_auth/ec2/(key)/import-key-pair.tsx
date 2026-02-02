@@ -6,8 +6,8 @@ import { BackLink } from "@/components/back-link"
 import { ErrorBanner } from "@/components/error-banner"
 import { PageHeading } from "@/components/page-heading"
 import { Button } from "@/components/ui/button"
+import { Field, FieldError, FieldTitle } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { useImportKeyPair } from "@/mutations/ec2"
 import { type ImportKeyPairData, importKeyPairSchema } from "@/types/ec2"
@@ -55,21 +55,24 @@ function ImportKeyPair() {
 
       <form className="max-w-4xl space-y-6" onSubmit={handleSubmit(onSubmit)}>
         {/* Key Name */}
-        <div className="space-y-2">
-          <Label htmlFor="keyName">Key Pair Name</Label>
+        <Field>
+          <FieldTitle>
+            <label htmlFor="keyName">Key Pair Name</label>
+          </FieldTitle>
           <Input
+            aria-invalid={!!errors.keyName}
             id="keyName"
             placeholder="my-key-pair…"
             {...register("keyName")}
           />
-          {errors.keyName && (
-            <p className="text-destructive text-xs">{errors.keyName.message}</p>
-          )}
-        </div>
+          <FieldError errors={[errors.keyName]} />
+        </Field>
 
         {/* Public Key Material */}
-        <div className="space-y-2">
-          <Label htmlFor="publicKeyMaterial">Public Key</Label>
+        <Field>
+          <FieldTitle>
+            <label htmlFor="publicKeyMaterial">Public Key</label>
+          </FieldTitle>
           <p
             className="text-muted-foreground text-xs"
             id="publicKey-description"
@@ -77,17 +80,14 @@ function ImportKeyPair() {
             Paste your OpenSSH public key (e.g. the contents of id_rsa.pub)
           </p>
           <Textarea
+            aria-invalid={!!errors.publicKeyMaterial}
             id="publicKeyMaterial"
             placeholder="ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC…"
             rows={8}
             {...register("publicKeyMaterial")}
           />
-          {errors.publicKeyMaterial && (
-            <p className="text-destructive text-sm">
-              {errors.publicKeyMaterial.message}
-            </p>
-          )}
-        </div>
+          <FieldError errors={[errors.publicKeyMaterial]} />
+        </Field>
 
         {/* Actions */}
         <div className="flex gap-2">

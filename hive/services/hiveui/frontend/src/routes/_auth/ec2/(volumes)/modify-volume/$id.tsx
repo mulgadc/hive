@@ -7,8 +7,8 @@ import { BackLink } from "@/components/back-link"
 import { ErrorBanner } from "@/components/error-banner"
 import { PageHeading } from "@/components/page-heading"
 import { Button } from "@/components/ui/button"
+import { Field, FieldError, FieldTitle } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { useModifyVolume } from "@/mutations/ec2"
 import { ec2VolumeQueryOptions } from "@/queries/ec2"
 import { type ModifyVolumeFormData, modifyVolumeSchema } from "@/types/ec2"
@@ -93,18 +93,19 @@ function ModifyVolume() {
           </p>
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="size">New size (GiB)</Label>
+        <Field>
+          <FieldTitle>
+            <label htmlFor="size">New size (GiB)</label>
+          </FieldTitle>
           <Input
+            aria-invalid={!!errors.size}
             id="size"
             min={currentSize + 1}
             type="number"
             {...register("size", { valueAsNumber: true })}
           />
-          {errors.size && (
-            <p className="text-destructive text-sm">{errors.size.message}</p>
-          )}
-        </div>
+          <FieldError errors={[errors.size]} />
+        </Field>
 
         <div className="flex gap-2">
           <Button

@@ -112,6 +112,11 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput) (*e
 		// Extract volume ID from prefix (remove trailing slash)
 		volumeID := strings.TrimSuffix(prefixStr, "/")
 
+		// Skip internal sub-volumes (EFI and cloud-init partitions)
+		if strings.HasSuffix(volumeID, "-efi") || strings.HasSuffix(volumeID, "-cloudinit") {
+			continue
+		}
+
 		vol, err := s.getVolumeByID(volumeID)
 		if err != nil {
 			slog.Error("Failed to get volume", "volumeId", volumeID, "err", err)

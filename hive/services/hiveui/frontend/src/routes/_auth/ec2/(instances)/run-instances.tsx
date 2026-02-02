@@ -7,8 +7,8 @@ import { BackLink } from "@/components/back-link"
 import { ErrorBanner } from "@/components/error-banner"
 import { PageHeading } from "@/components/page-heading"
 import { Button } from "@/components/ui/button"
+import { Field, FieldError, FieldTitle } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
@@ -46,7 +46,6 @@ export const Route = createFileRoute("/_auth/ec2/(instances)/run-instances")({
   component: CreateInstance,
 })
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: this is a complex form
 function CreateInstance() {
   const navigate = useNavigate()
   const { data: imagesData } = useSuspenseQuery(ec2ImagesQueryOptions)
@@ -142,8 +141,10 @@ function CreateInstance() {
 
       <form className="max-w-4xl space-y-6" onSubmit={handleSubmit(onSubmit)}>
         {/* ImageSelection */}
-        <div className="space-y-2">
-          <Label htmlFor="imageId">Image</Label>
+        <Field>
+          <FieldTitle>
+            <label htmlFor="imageId">Image</label>
+          </FieldTitle>
           <Controller
             control={control}
             name="imageId"
@@ -156,7 +157,11 @@ function CreateInstance() {
                   onValueChange={(value) => field.onChange(value)}
                   value={field.value ?? ""}
                 >
-                  <SelectTrigger className="w-full" id="imageId">
+                  <SelectTrigger
+                    aria-invalid={!!errors.imageId}
+                    className="w-full"
+                    id="imageId"
+                  >
                     <SelectValue>
                       {selectedImage
                         ? `${selectedImage.Name || "Unnamed"} (${selectedImage.Architecture})`
@@ -177,14 +182,14 @@ function CreateInstance() {
               )
             }}
           />
-          {errors.imageId && (
-            <p className="text-destructive text-sm">{errors.imageId.message}</p>
-          )}
-        </div>
+          <FieldError errors={[errors.imageId]} />
+        </Field>
 
         {/* Instance Type */}
-        <div className="space-y-2">
-          <Label htmlFor="instanceType">Instance Type</Label>
+        <Field>
+          <FieldTitle>
+            <label htmlFor="instanceType">Instance Type</label>
+          </FieldTitle>
           <Controller
             control={control}
             name="instanceType"
@@ -193,7 +198,11 @@ function CreateInstance() {
                 onValueChange={(value) => field.onChange(value)}
                 value={field.value ? field.value : ""}
               >
-                <SelectTrigger className="w-full" id="instanceType">
+                <SelectTrigger
+                  aria-invalid={!!errors.instanceType}
+                  className="w-full"
+                  id="instanceType"
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -206,16 +215,14 @@ function CreateInstance() {
               </Select>
             )}
           />
-          {errors.instanceType && (
-            <p className="text-destructive text-sm">
-              {errors.instanceType.message}
-            </p>
-          )}
-        </div>
+          <FieldError errors={[errors.instanceType]} />
+        </Field>
 
         {/* Key Pair */}
-        <div className="space-y-2">
-          <Label htmlFor="keyName">Key Pair</Label>
+        <Field>
+          <FieldTitle>
+            <label htmlFor="keyName">Key Pair</label>
+          </FieldTitle>
           <Controller
             control={control}
             name="keyName"
@@ -224,7 +231,11 @@ function CreateInstance() {
                 onValueChange={(value) => field.onChange(value)}
                 value={field.value ? field.value : ""}
               >
-                <SelectTrigger className="w-full" id="keyName">
+                <SelectTrigger
+                  aria-invalid={!!errors.keyName}
+                  className="w-full"
+                  id="keyName"
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -240,15 +251,16 @@ function CreateInstance() {
               </Select>
             )}
           />
-          {errors.keyName && (
-            <p className="text-destructive text-sm">{errors.keyName.message}</p>
-          )}
-        </div>
+          <FieldError errors={[errors.keyName]} />
+        </Field>
 
         {/* Instance Count */}
-        <div className="space-y-2">
-          <Label htmlFor="count">Number of Instances</Label>
+        <Field>
+          <FieldTitle>
+            <label htmlFor="count">Number of Instances</label>
+          </FieldTitle>
           <Input
+            aria-invalid={!!errors.count}
             id="count"
             type="number"
             {...register("count", { valueAsNumber: true })}
@@ -257,10 +269,8 @@ function CreateInstance() {
             {selectedInstanceType &&
               `Available capacity for ${selectedInstanceType}: ${maxCount}`}
           </p>
-          {errors.count && (
-            <p className="text-destructive text-sm">{errors.count.message}</p>
-          )}
-        </div>
+          <FieldError errors={[errors.count]} />
+        </Field>
 
         {/* Actions */}
         <div className="flex gap-2">
