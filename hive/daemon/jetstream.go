@@ -70,12 +70,7 @@ func (m *JetStreamManager) InitKVBucket() error {
 func (m *JetStreamManager) WriteState(nodeID string, instances *vm.Instances) error {
 	instances.Mu.Lock()
 	defer instances.Mu.Unlock()
-	return m.writeStateLocked(nodeID, instances)
-}
 
-// writeStateLocked writes instance state without acquiring instances.Mu.
-// The caller must hold instances.Mu.
-func (m *JetStreamManager) writeStateLocked(nodeID string, instances *vm.Instances) error {
 	if m.kv == nil {
 		return errors.New("KV bucket not initialized")
 	}

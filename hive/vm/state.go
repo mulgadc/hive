@@ -31,3 +31,28 @@ var EC2StateCodes = map[InstanceState]EC2StateInfo{
 	StateTerminated:   {Code: 48, Name: "terminated"},
 	StateError:        {Code: 0, Name: "error"},
 }
+
+// ValidTransitions defines the allowed state transitions for an instance.
+var ValidTransitions = map[InstanceState][]InstanceState{
+	StateProvisioning: {StateRunning, StateError, StateShuttingDown},
+	StatePending:      {StateRunning, StateError, StateShuttingDown},
+	StateRunning:      {StateStopping, StateShuttingDown, StateError},
+	StateStopping:     {StateStopped, StateShuttingDown, StateError},
+	StateStopped:      {StateRunning, StateShuttingDown, StateError},
+	StateShuttingDown: {StateTerminated, StateError},
+	StateError:        {StateRunning, StateShuttingDown},
+}
+
+// IsValidTransition checks whether moving from current to target is allowed.
+func IsValidTransition(current, target InstanceState) bool {
+	allowed, ok := ValidTransitions[current]
+	if !ok {
+		return false
+	}
+	for _, s := range allowed {
+		if s == target {
+			return true
+		}
+	}
+	return false
+}
