@@ -5,6 +5,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -19,13 +20,13 @@ func TestValidateCreateVolumeInput(t *testing.T) {
 			name:    "NilInput",
 			input:   nil,
 			wantErr: true,
-			errMsg:  "InvalidParameterValue",
+			errMsg:  awserrors.ErrorInvalidParameterValue,
 		},
 		{
 			name:    "EmptyInput",
 			input:   &ec2.CreateVolumeInput{},
 			wantErr: true,
-			errMsg:  "InvalidParameterValue",
+			errMsg:  awserrors.ErrorInvalidParameterValue,
 		},
 		{
 			name: "ValidInput",
@@ -51,7 +52,7 @@ func TestValidateCreateVolumeInput(t *testing.T) {
 				AvailabilityZone: aws.String("ap-southeast-2a"),
 			},
 			wantErr: true,
-			errMsg:  "InvalidParameterValue",
+			errMsg:  awserrors.ErrorInvalidParameterValue,
 		},
 		{
 			name: "InvalidSize_Negative",
@@ -60,7 +61,7 @@ func TestValidateCreateVolumeInput(t *testing.T) {
 				AvailabilityZone: aws.String("ap-southeast-2a"),
 			},
 			wantErr: true,
-			errMsg:  "InvalidParameterValue",
+			errMsg:  awserrors.ErrorInvalidParameterValue,
 		},
 		{
 			name: "InvalidSize_Nil",
@@ -68,7 +69,16 @@ func TestValidateCreateVolumeInput(t *testing.T) {
 				AvailabilityZone: aws.String("ap-southeast-2a"),
 			},
 			wantErr: true,
-			errMsg:  "InvalidParameterValue",
+			errMsg:  awserrors.ErrorInvalidParameterValue,
+		},
+		{
+			name: "InvalidSize_TooLarge",
+			input: &ec2.CreateVolumeInput{
+				Size:             aws.Int64(16385),
+				AvailabilityZone: aws.String("ap-southeast-2a"),
+			},
+			wantErr: true,
+			errMsg:  awserrors.ErrorInvalidParameterValue,
 		},
 		{
 			name: "InvalidAZ_Empty",
@@ -77,7 +87,7 @@ func TestValidateCreateVolumeInput(t *testing.T) {
 				AvailabilityZone: aws.String(""),
 			},
 			wantErr: true,
-			errMsg:  "InvalidParameterValue",
+			errMsg:  awserrors.ErrorInvalidParameterValue,
 		},
 		{
 			name: "InvalidAZ_Nil",
@@ -85,7 +95,7 @@ func TestValidateCreateVolumeInput(t *testing.T) {
 				Size: aws.Int64(80),
 			},
 			wantErr: true,
-			errMsg:  "InvalidParameterValue",
+			errMsg:  awserrors.ErrorInvalidParameterValue,
 		},
 		{
 			name: "InvalidVolumeType_IO1",
@@ -95,7 +105,7 @@ func TestValidateCreateVolumeInput(t *testing.T) {
 				VolumeType:       aws.String("io1"),
 			},
 			wantErr: true,
-			errMsg:  "InvalidParameterValue",
+			errMsg:  awserrors.ErrorInvalidParameterValue,
 		},
 		{
 			name: "InvalidVolumeType_GP2",
@@ -105,7 +115,7 @@ func TestValidateCreateVolumeInput(t *testing.T) {
 				VolumeType:       aws.String("gp2"),
 			},
 			wantErr: true,
-			errMsg:  "InvalidParameterValue",
+			errMsg:  awserrors.ErrorInvalidParameterValue,
 		},
 		{
 			name: "ValidInput_EmptyVolumeType",

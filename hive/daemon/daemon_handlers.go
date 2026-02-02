@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
@@ -673,17 +674,14 @@ func (d *Daemon) handleEC2CreateVolume(msg *nats.Msg) {
 	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
 
 	createVolumeInput := &ec2.CreateVolumeInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(createVolumeInput, msg.Data)
-
+	errResp := utils.UnmarshalJsonPayload(createVolumeInput, msg.Data)
 	if errResp != nil {
 		msg.Respond(errResp)
 		slog.Error("Request does not match CreateVolumeInput")
 		return
 	}
 
-	slog.Info("Processing CreateVolume request", "size", createVolumeInput.Size, "az", createVolumeInput.AvailabilityZone)
+	slog.Info("Processing CreateVolume request", "size", aws.Int64Value(createVolumeInput.Size), "az", aws.StringValue(createVolumeInput.AvailabilityZone))
 
 	output, err := d.volumeService.CreateVolume(createVolumeInput)
 
@@ -703,7 +701,7 @@ func (d *Daemon) handleEC2CreateVolume(msg *nats.Msg) {
 	}
 	msg.Respond(jsonResponse)
 
-	slog.Info("handleEC2CreateVolume completed", "volumeId", output.VolumeId)
+	slog.Info("handleEC2CreateVolume completed", "volumeId", aws.StringValue(output.VolumeId))
 }
 
 // handleEC2DescribeVolumes processes incoming EC2 DescribeVolumes requests

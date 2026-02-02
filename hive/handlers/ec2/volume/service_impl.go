@@ -29,6 +29,8 @@ import (
 	"golang.org/x/net/http2"
 )
 
+const defaultGP3IOPS = 3000
+
 // VolumeServiceImpl handles EBS volume operations with S3 storage
 type VolumeServiceImpl struct {
 	config   *config.Config
@@ -106,8 +108,7 @@ func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Vol
 	now := time.Now()
 	volumeID := viperblock.GenerateVolumeID("vol", fmt.Sprintf("%d-create", randomNumber), s.config.Predastore.Bucket, now.Unix())
 
-	// Default IOPS for gp3
-	iops := 3000
+	iops := defaultGP3IOPS
 
 	slog.Info("CreateVolume", "volumeId", volumeID, "size", size, "type", volumeType, "az", *input.AvailabilityZone)
 
