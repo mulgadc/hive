@@ -51,14 +51,17 @@ func (d *Daemon) TransitionState(instance *vm.VM, target vm.InstanceState) error
 			instance.Instance.State.SetName(info.Name)
 		}
 	}
-	d.Instances.Mu.Unlock()
 
 	slog.Info("Instance state transition", "instanceId", instance.ID, "from", string(current), "to", string(target))
 
+	// WriteState is called while holding the lock to prevent race conditions
+	// where another transition could occur between state update and persistence.
 	if err := d.WriteState(); err != nil {
+		d.Instances.Mu.Unlock()
 		slog.Error("Failed to persist state after transition", "instanceId", instance.ID, "err", err)
 		return fmt.Errorf("state persisted in-memory but write failed: %w", err)
 	}
 
+	d.Instances.Mu.Unlock()
 	return nil
 }

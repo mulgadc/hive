@@ -866,36 +866,53 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 		if _, ok := msg["event"]; ok {
 			slog.Info("QMP event", "event", msg["event"])
 
-			var updatedStatus vm.InstanceState
+			// Look up the instance to handle state transitions
+			d.Instances.Mu.Lock()
+			instance, found := d.Instances.VMS[instanceId]
+			if !found {
+				d.Instances.Mu.Unlock()
+				slog.Info("QMP event - instance not found", "id", instanceId)
+				continue
+			}
+			currentStatus := instance.Status
+			d.Instances.Mu.Unlock()
 
+			// Handle QMP events with proper state machine transitions.
+			// RESET is a transient event (VM stays running), so no state change needed.
+			// STOP/RESUME/POWERDOWN map to actual state transitions.
 			switch msg["event"] {
 			case "STOP":
-				updatedStatus = vm.StateStopped
-			case "RESUME":
-				updatedStatus = vm.InstanceState("resuming")
-			case "RESET":
-				updatedStatus = vm.InstanceState("restarting")
-			case "POWERDOWN":
-				updatedStatus = vm.InstanceState("powering_down")
-			}
-
-			if updatedStatus != "" {
-
-				// Update the instance status
-				d.Instances.Mu.Lock()
-				instance, ok := d.Instances.VMS[instanceId]
-				if !ok {
-					slog.Info("QMP Status - Instance not found", "id", instanceId)
-					continue
+				// VM execution stopped. Valid transition from StateStopping -> StateStopped.
+				if currentStatus == vm.StateStopping {
+					if err := d.TransitionState(instance, vm.StateStopped); err != nil {
+						slog.Warn("QMP STOP event: transition failed", "instanceId", instanceId, "err", err)
+					}
+				} else {
+					slog.Debug("QMP STOP event ignored", "instanceId", instanceId, "currentStatus", currentStatus)
 				}
-
-				instance.Status = updatedStatus
-
-				d.Instances.VMS[instanceId] = instance
-				d.Instances.Mu.Unlock()
+			case "RESUME":
+				// VM execution resumed. Valid transition from StateStopped -> StateRunning.
+				if currentStatus == vm.StateStopped {
+					if err := d.TransitionState(instance, vm.StateRunning); err != nil {
+						slog.Warn("QMP RESUME event: transition failed", "instanceId", instanceId, "err", err)
+					}
+				} else {
+					slog.Debug("QMP RESUME event ignored", "instanceId", instanceId, "currentStatus", currentStatus)
+				}
+			case "POWERDOWN":
+				// Guest-initiated shutdown. Valid transition from StateRunning -> StateStopping.
+				if currentStatus == vm.StateRunning {
+					if err := d.TransitionState(instance, vm.StateStopping); err != nil {
+						slog.Warn("QMP POWERDOWN event: transition failed", "instanceId", instanceId, "err", err)
+					}
+				} else {
+					slog.Debug("QMP POWERDOWN event ignored", "instanceId", instanceId, "currentStatus", currentStatus)
+				}
+			case "RESET":
+				// VM was reset but remains running. No state change needed.
+				slog.Info("QMP RESET event", "instanceId", instanceId)
 			}
 
-			// Optional: handle events here
 			continue
 		}
 		if errObj, ok := msg["error"].(map[string]any); ok {
