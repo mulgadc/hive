@@ -191,243 +191,164 @@ Instance `dmesg`:
 [ 1445.583565] EXT4-fs (vda1): Remounting filesystem read-only
 ```
 
-### EC2
+---
 
-- [DONE] - describe-instances
-- [DONE] - run-instances (count not implemented)
-- [DONE] - start-instances
-- [DONE] - stop-instances
-- [DONE] - terminate-instances
-- [DONE] - describe-instance-types
-- [DONE] - create-key-pair
-- [DONE] - delete-key-pair
-- [DONE] - describe-key-pairs
-- [DONE] - import-key-pair
-- [DONE] - describe-images
-- [DONE] - describe-regions
-- [DONE] - describe-volumes
+## AWS Command Implementation Matrix
 
-### To implement
+### EC2 - Instance Management
 
-Easier methods to implement
+| Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------------------|---------------|---------------|-------------|------------|--------|
+| `run-instances` | `--image-id`, `--instance-type`, `--count` (Min/MaxCount), `--key-name`, `--user-data`, `--block-device-mappings` (DeviceName, VolumeSize, VolumeType, Iops, DeleteOnTermination) | `--security-group-ids`, `--subnet-id`, `--placement`, `--tag-specifications`, `--dry-run`, `--client-token`, `--disable-api-termination`, `--ebs-optimized`, `--iam-instance-profile`, `--network-interfaces`, `--private-ip-address`, `--monitoring`, `--credit-specification`, `--cpu-options`, `--metadata-options`, `--launch-template`, `--hibernate-options` | `describe-images` (AMI must exist), `create-key-pair` (optional), VPC/SG (optional) | Gateway parses AWS query → NATS `ec2.runinstances` → daemon creates QEMU/KVM VM with viperblock-backed root volume via NBD → cloud-init injects user-data/keys → returns reservation with instance ID | 1. Launch with valid AMI and key pair<br>2. Launch with invalid AMI ID (error)<br>3. Launch with block device mappings (custom volume size)<br>4. Launch multiple instances (MinCount/MaxCount)<br>5. DryRun returns validation-only<br>6. Invalid instance type returns error | **DONE** |
+| `describe-instances` | *(none — aggregates all instances, no filtering)* | `--instance-ids`, `--filters`, `--max-results`, `--next-token`, `--dry-run` | None | Gateway fans out NATS `ec2.DescribeInstances` to all nodes (no queue group) → each daemon returns local instances → gateway aggregates and returns combined list | 1. Describe all instances (no filter)<br>2. Describe by instance ID<br>3. Describe with filters (e.g. instance-state-name)<br>4. Instance not found returns empty set<br>5. Multi-node aggregation returns instances from all nodes | **DONE** |
+| `start-instances` | `--instance-ids` | `--dry-run`, `--force` | `run-instances` (instance must exist in stopped state) | Gateway sends NATS `ec2.cmd.{instance-id}` → daemon restarts stopped QEMU process with same config → state transitions stopped→pending→running | 1. Start a stopped instance<br>2. Start already-running instance (error: IncorrectInstanceState)<br>3. Start with invalid instance ID<br>4. Verify volumes re-mount on start | **DONE** |
+| `stop-instances` | `--instance-ids` | `--force`, `--hibernate`, `--dry-run` | `run-instances` (instance must be running) | Gateway sends NATS to target node → daemon issues QMP `system_powerdown` for graceful shutdown → monitors heartbeat until QEMU exits → state transitions running→stopping→stopped | 1. Graceful stop of running instance<br>2. Force stop (kills QEMU process)<br>3. Stop already-stopped instance (error)<br>4. Verify ~30s heartbeat detection | **DONE** |
+| `terminate-instances` | `--instance-ids` | `--dry-run` | `run-instances` (instance must exist) | Gateway sends NATS to target node → daemon kills QEMU process → cleans up NBD mounts → optionally deletes volumes (if DeleteOnTermination) → state→terminated | 1. Terminate running instance<br>2. Terminate stopped instance<br>3. Terminate with DeleteOnTermination volumes<br>4. Terminate already-terminated (idempotent)<br>5. Invalid instance ID | **DONE** |
+| `reboot-instances` | — | `--instance-ids`, `--dry-run` | `run-instances` (instance must be running) | Gateway sends NATS to target node → daemon issues QMP `system_reset` → instance reboots without stopping | 1. Reboot running instance<br>2. Reboot stopped instance (error)<br>3. Verify instance stays in running state after reboot | **NOT STARTED** (parser test exists) |
+| `describe-instance-types` | `--filters` (capacity filter only) | `--instance-types`, `--max-results`, `--next-token`, `--dry-run`, all other filters | None | Gateway fans out NATS `ec2.DescribeInstanceTypes` to all nodes → each daemon reports supported types (t3.micro/small/medium/large) with vCPU/memory specs → gateway deduplicates and returns | 1. List all instance types<br>2. Filter by specific type<br>3. Filter with `capacity=true` shows available slots<br>4. Verify vCPU/memory specs match hardware | **DONE** |
+| `modify-instance-attribute` | — | `--instance-id`, `--instance-type`, `--user-data`, `--disable-api-termination`, `--ebs-optimized` | Instance must be stopped | Validate instance stopped → update instance metadata in NATS KV store → changes applied on next start | 1. Change instance type while stopped<br>2. Modify running instance (error)<br>3. Toggle disable-api-termination | **NOT STARTED** |
+| `get-console-output` | — | `--instance-id`, `--latest` | Instance must exist | QMP command to read serial console ring buffer → return base64-encoded output with timestamp | 1. Get output from running instance<br>2. Get output from stopped instance<br>3. Verify cloud-init boot logs visible | **NOT STARTED** |
+| `monitor-instances` | — | `--instance-ids` | Instance must exist | Enable basic monitoring (CPU, disk, network) → store metrics in NATS KV → return monitoring state | 1. Enable monitoring<br>2. Verify monitoring state in describe-instances | **NOT STARTED** |
 
-- attach-volume
-- copy-image
-- copy-snapshot
-- copy-volumes
-- create-image
-- create-snapshot
-- create-snapshots
-- create-tags
-- create-volume
-- delete-snapshot
-- describe-snapshots
-- describe-subnets
-- describe-tags
-- describe-volume-attribute
-- describe-volume-status
-- detach-network-interface
-- detach-volume
-- get-console-output
-- monitor-instances
+### EC2 - Key Pair Management
 
-TODO:
+| Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------------------|---------------|---------------|-------------|------------|--------|
+| `create-key-pair` | `--key-name`, `--key-type` (rsa/ed25519) | `--key-format` (pem/ppk), `--tag-specifications`, `--dry-run` | None | NATS `ec2.CreateKeyPair` → daemon generates SSH keypair → stores public key in Predastore S3 (`/bucket/ec2/{name}.pub`) → returns private key material (one-time) | 1. Create RSA key pair<br>2. Create ED25519 key pair<br>3. Duplicate key name (error: InvalidKeyPair.Duplicate)<br>4. Verify key material returned only on creation | **DONE** |
+| `describe-key-pairs` | `--key-names`, `--key-pair-ids` | `--filters`, `--max-results`, `--dry-run` | None | NATS `ec2.DescribeKeyPairs` → daemon lists public keys from Predastore S3 → returns key names and fingerprints | 1. List all key pairs<br>2. Filter by key name<br>3. Filter by key pair ID<br>4. Non-existent key returns empty | **DONE** |
+| `delete-key-pair` | `--key-name`, `--key-pair-id` | `--dry-run` | Key must exist | NATS `ec2.DeleteKeyPair` → daemon deletes public key from Predastore S3 → returns success | 1. Delete existing key pair<br>2. Delete non-existent key (idempotent, no error)<br>3. Verify key no longer in describe-key-pairs | **DONE** |
+| `import-key-pair` | `--key-name`, `--public-key-material` | `--tag-specifications`, `--dry-run` | None | NATS `ec2.ImportKeyPair` → daemon stores provided public key in Predastore S3 → returns key name and fingerprint | 1. Import valid SSH public key<br>2. Import invalid key material (error)<br>3. Import duplicate name (error)<br>4. Verify imported key usable with run-instances | **DONE** |
 
-- allocate-address
-- allocate-hosts
-- assign-private-ip-addresses
-- assign-private-nat-gateway-address
-- associate-address
-- associate-nat-gateway-address
-- associate-route-server
-- associate-route-table
-- associate-security-group-vpc
-- associate-subnet-cidr-block
-- attach-internet-gateway
-- attach-network-interface
-- authorize-security-group-egress
-- authorize-security-group-ingress
-- create-customer-gateway
-- create-default-subnet
-- create-default-vpc
-- create-dhcp-options
-- create-egress-only-internet-gateway
-- create-internet-gateway
-- create-launch-template
-- create-launch-template-version
-- create-local-gateway-route
-- create-local-gateway-route-table
-- create-local-gateway-route-table-virtual-interface-group-association
-- create-local-gateway-virtual-interface
-- create-local-gateway-virtual-interface-group
-- create-nat-gateway
-- create-network-acl
-- create-network-acl-entry
-- create-public-ipv4-pool
-- create-route
-- create-route-server
-- create-route-server-endpoint
-- create-route-server-peer
-- create-route-table
-- create-security-group
-- create-subnet
-- create-subnet-cidr-reservation
-- delete-coip-cidr
-- delete-customer-gateway
-- delete-dhcp-options
-- delete-egress-only-internet-gateway
-- delete-internet-gateway
-- delete-local-gateway-route
-- delete-local-gateway-route-table
-- delete-local-gateway-route-table-virtual-interface-group-association
-- delete-local-gateway-virtual-interface
-- delete-local-gateway-virtual-interface-group
-- delete-nat-gateway
-- delete-network-acl
-- delete-network-interface
-- delete-network-interface-permission
-- delete-public-ipv4-pool
-- delete-route
-- delete-route-server
-- delete-route-server-endpoint
-- delete-route-server-peer
-- delete-route-table
-- delete-security-group
-- delete-subnet
-- delete-subnet-cidr-reservation
-- delete-tags
-- delete-volume
-- describe-account-attributes
-- describe-addresses
-- describe-customer-gateways
-- describe-dhcp-options
-- describe-egress-only-internet-gateways
-- describe-hosts
-- describe-internet-gateways
-- describe-managed-prefix-lists
-- describe-nat-gateways
-- describe-network-acls
-- describe-route-server-endpoints
-- describe-route-server-peers
-- describe-route-servers
-- describe-route-tables
-- describe-security-group-references
-- describe-security-group-rules
-- describe-security-groups
-- describe-volumes-modifications
-- detach-internet-gateway
-- detach-vpn-gateway
-- disable-image
-- disable-route-server-propagation
-- disable-serial-console-access
-- enable-address-transfer
-- enable-capacity-manager
-- enable-ebs-encryption-by-default
-- enable-image
-- enable-image-block-public-access
-- export-image
-- get-console-screenshot
-- get-instance-metadata-defaults
-- get-instance-tpm-ek-pub
-- get-instance-types-from-instance-requirements
-- get-instance-uefi-data
-- get-launch-template-data
-- get-route-server-associations
-- get-route-server-propagations
-- get-route-server-routing-database
-- get-security-groups-for-vpc
-- get-serial-console-access-status
-- get-snapshot-block-public-access-state
-- get-spot-placement-scores
-- get-subnet-cidr-reservations
-- import-image
-- import-snapshot
-- modify-instance-attribute
-- modify-instance-capacity-reservation-attributes
-- modify-instance-connect-endpoint
-- modify-instance-cpu-options
-- modify-instance-credit-specification
-- modify-instance-placement
-- modify-network-interface-attribute
-- modify-volume
-- modify-volume-attribute
-- modify-vpn-connection
-- modify-vpn-connection-options
-- reboot-instances
-- register-image
-- release-address
-- release-hosts
-- replace-network-acl-association
-- replace-network-acl-entry
-- replace-route
-- replace-route-table-association
-- report-instance-status
-- revoke-security-group-egress
-- revoke-security-group-ingress
-- run-instances
+### EC2 - AMI Image Management
 
-### EBS
+| Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------------------|---------------|---------------|-------------|------------|--------|
+| `describe-images` | `--image-ids` (format validation only) | `--owners`, `--executable-users`, `--filters`, `--include-deprecated`, `--include-disabled`, `--max-results`, `--next-token`, `--dry-run` | None | NATS `ec2.DescribeImages` → daemon reads AMI metadata from Predastore S3 buckets (ami-*) → returns image list with state, architecture, block device mappings | 1. List all images<br>2. Filter by image ID<br>3. Filter by owner (self/amazon)<br>4. Non-existent AMI returns empty<br>5. Verify metadata fields (architecture, state, rootDeviceName) | **DONE** |
+| `create-image` | Parsed only (mock): `--instance-id`, `--name`, `--description`, `--no-reboot`, `--block-device-mappings`, `--tag-specifications` | All flags need real business logic (currently returns hardcoded ami-ID). Not wired to gateway. | Instance must exist | Stop instance (unless --no-reboot) → snapshot root volume via viperblock → create AMI metadata in S3 → register as new AMI → restart instance → return ami-ID | 1. Create image from running instance<br>2. Create with --no-reboot<br>3. Invalid instance ID (error)<br>4. Verify new AMI appears in describe-images<br>5. Launch new instance from created AMI | **PARTIAL** (mock service) |
+| `register-image` | Parsed only (mock): `--name`, `--description`, `--architecture`, `--root-device-name`, `--virtualization-type`, `--block-device-mappings`, `--boot-mode` | All flags need real business logic. Not wired to gateway. Also: `--ena-support`, `--sriov-net-support`, `--tpm-support`, `--imds-support` | Image data must exist in S3 | Create AMI metadata entry in Predastore → assign ami-ID → set state to available → return ami-ID | 1. Register with valid metadata<br>2. Missing required name (error)<br>3. Verify registered image in describe-images | **PARTIAL** (mock service) |
+| `deregister-image` | Parsed only (mock): `--image-id` (validated) | Real business logic needed. Not wired to gateway. `--dry-run` | AMI must exist, no instances using it | Mark AMI metadata as deregistered in S3 → AMI no longer available for new launches → existing instances unaffected | 1. Deregister existing AMI<br>2. Deregister non-existent AMI (error)<br>3. Verify deregistered AMI not in describe-images<br>4. Existing instances from AMI still run | **PARTIAL** (mock service) |
+| `copy-image` | Parsed only (mock): `--source-image-id`, `--source-region`, `--name`, `--description`, `--encrypted`, `--kms-key-id` | All flags need real business logic. Not wired to gateway. `--client-token`, `--copy-image-tags`, `--tag-specifications` | Source AMI must exist | Copy AMI data between regions/nodes in Predastore → create new AMI metadata with new ami-ID → return new ami-ID | 1. Copy image within same region<br>2. Copy non-existent image (error)<br>3. Verify copied image independent of source | **PARTIAL** (mock service) |
+| `import-image` | — | `--disk-containers` (Format, Url/S3Bucket+S3Key), `--description`, `--architecture`, `--platform` | S3 bucket with disk image | Download disk image from S3 → convert format (VMDK/VHD/RAW→QCOW2) → create viperblock volume → register as AMI | 1. Import QCOW2 image<br>2. Import RAW image<br>3. Invalid format (error)<br>4. Verify imported image launchable | **NOT STARTED** (gateway stub only) |
+| `describe-image-attribute` | Parsed only (mock): `--image-id` (validated), `--attribute` (validated) | Real business logic needed. `--dry-run` | AMI must exist | Read specific attribute from AMI metadata in S3 → return attribute value | 1. Get description attribute<br>2. Get launch permission<br>3. Invalid attribute name (error) | **PARTIAL** (mock service) |
+| `modify-image-attribute` | Parsed only (mock): `--image-id` (validated), `--launch-permission`, `--description`, `--operation-type` | Real business logic needed. `--user-ids`, `--user-groups`, `--organization-arns`, `--dry-run` | AMI must exist | Update specific attribute in AMI metadata → persist to S3 | 1. Add launch permission<br>2. Modify description<br>3. Invalid AMI (error) | **PARTIAL** (mock service) |
+| `reset-image-attribute` | Parsed only (mock): `--image-id` (validated), `--attribute` (validated) | Real business logic needed. `--dry-run` | AMI must exist | Reset attribute to default value in AMI metadata | 1. Reset launch permission to owner-only<br>2. Invalid AMI (error) | **PARTIAL** (mock service) |
 
-- complete-snapshot
-- get-snapshot-block
-- list-changed-blocks
-- list-snapshot-blocks
-- put-snapshot-block
-- start-snapshot
+### EC2 - Volume (EBS) Management
 
-# VPC
+| Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------------------|---------------|---------------|-------------|------------|--------|
+| `describe-volumes` | `--volume-ids` (fast-path lookup) | `--filters`, `--max-results`, `--next-token`, `--dry-run` | None | NATS `ec2.DescribeVolumes` → daemon queries viperblock for volume metadata → returns volume list with state, size, attachments, type | 1. List all volumes<br>2. Filter by volume ID<br>3. Filter by attachment state<br>4. Non-existent volume returns empty | **DONE** |
+| `modify-volume` | `--volume-id`, `--size`, `--volume-type`, `--iops` | `--throughput`, `--dry-run`, `--multi-attach-enabled` | Volume must exist | NATS `ec2.ModifyVolume` → daemon sends resize request to viperblock → NBD does not support live resize, instance must be stopped → returns modification state | 1. Increase volume size<br>2. Modify volume type<br>3. Decrease size (error - not supported)<br>4. Modify attached volume (requires stop/start) | **DONE** |
+| `create-volume` | — | `--size`, `--availability-zone`, `--volume-type` (gp3 only), `--iops`, `--encrypted`, `--snapshot-id`, `--tag-specifications` | Valid AZ configured via `hive init` | Gateway sends NATS `ebs.createvolume` → viperblock creates empty volume of specified size → pushes state to Predastore → returns vol-ID with state=creating→available | 1. Create 80GB gp3 volume<br>2. Create from snapshot<br>3. Invalid AZ (error)<br>4. Verify volume in describe-volumes<br>5. Unsupported volume type (error - only gp3) | **NOT STARTED** |
+| `delete-volume` | — | `--volume-id` | Volume must exist and be detached | Confirm volume detached → terminate nbdkit process → sync WAL to Predastore → delete volume bucket in Predastore → return success | 1. Delete detached volume<br>2. Delete attached volume (error: VolumeInUse)<br>3. Delete non-existent volume (error)<br>4. Verify volume gone from describe-volumes | **NOT STARTED** |
+| `attach-volume` | — | `--volume-id`, `--instance-id`, `--device` (e.g. /dev/sdf) | Volume must exist (available), instance must exist (running) | NATS to node running instance → start nbdkit for volume → QMP `blockdev-add` (NBD socket) → QMP `device_add` (virtio-blk-pci) → update instance metadata with attachment | 1. Attach volume to running instance<br>2. Verify device visible in guest OS<br>3. Attach already-attached volume (error)<br>4. Attach to non-existent instance (error)<br>5. Volume persists across stop/start | **NOT STARTED** |
+| `detach-volume` | — | `--volume-id`, `--instance-id`, `--device`, `--force` | Volume must be attached | NATS to node running instance → QMP `device_del` → QMP `blockdev-del` → terminate nbdkit for volume → sync WAL to Predastore → update instance metadata | 1. Detach from running instance<br>2. Force detach<br>3. Detach already-detached volume (error)<br>4. Verify device removed from guest OS | **NOT STARTED** |
+| `describe-volume-status` | — | `--volume-ids`, `--filters`, `--max-results` | None | Query viperblock for volume health status → return io-enabled status, availability zone, events | 1. Check healthy volume status<br>2. Check volume during modification<br>3. Filter by volume ID | **NOT STARTED** |
+| `describe-volumes-modifications` | — | `--volume-ids`, `--filters`, `--max-results` | None | Query pending/completed volume modifications → return modification state, progress, original/target size | 1. Check in-progress modification<br>2. Check completed modification<br>3. No modifications returns empty | **NOT STARTED** |
 
-Built using openvswitch.
+### EC2 - Snapshot Management
 
-### Install deps
+| Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------------------|---------------|---------------|-------------|------------|--------|
+| `create-snapshot` | — | `--volume-id`, `--description`, `--tag-specifications` | Volume must exist | Trigger viperblock WAL checkpoint → copy volume data to snapshot in Predastore → assign snap-ID → return snapshot with state=pending→completed | 1. Snapshot attached volume<br>2. Snapshot detached volume<br>3. Invalid volume ID (error)<br>4. Verify snapshot in describe-snapshots | **NOT STARTED** |
+| `create-snapshots` | — | `--instance-specification`, `--description`, `--tag-specifications` | Instance must exist | Create snapshots of all volumes attached to instance → return list of snapshot IDs | 1. Snapshot all volumes on instance<br>2. Instance with no volumes | **NOT STARTED** |
+| `delete-snapshot` | — | `--snapshot-id` | Snapshot must exist, not in use by AMI | Delete snapshot data from Predastore → return success | 1. Delete existing snapshot<br>2. Delete snapshot used by AMI (error)<br>3. Delete non-existent snapshot (error) | **NOT STARTED** |
+| `describe-snapshots` | — | `--snapshot-ids`, `--owner-ids`, `--filters`, `--max-results` | None | Query Predastore for snapshot metadata → return snapshot list with state, volume ID, size, progress | 1. List all snapshots<br>2. Filter by snapshot ID<br>3. Filter by volume ID | **NOT STARTED** |
+| `copy-snapshot` | — | `--source-snapshot-id`, `--source-region`, `--description`, `--encrypted` | Source snapshot must exist | Copy snapshot data between regions/nodes in Predastore → assign new snap-ID | 1. Copy within same region<br>2. Copy non-existent snapshot (error) | **NOT STARTED** |
 
-```sh
-apt install openvswitch-switch openvswitch-common
-```
+### EC2 - Tags
 
-### VPC sub commands
+| Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------------------|---------------|---------------|-------------|------------|--------|
+| `create-tags` | — | `--resources`, `--tags` (Key=,Value=) | Resources must exist | Store tags in NATS KV or Predastore keyed by resource ID → return success | 1. Tag an instance<br>2. Tag a volume<br>3. Tag non-existent resource (error)<br>4. Overwrite existing tag | **NOT STARTED** |
+| `delete-tags` | — | `--resources`, `--tags` | Resources must exist | Remove specified tags from resource metadata → return success | 1. Delete existing tag<br>2. Delete non-existent tag (idempotent) | **NOT STARTED** |
+| `describe-tags` | — | `--filters`, `--max-results` | None | Query tag store with filters → return tag list with resource type and ID | 1. List all tags<br>2. Filter by resource type<br>3. Filter by key/value | **NOT STARTED** |
 
-- create-vpc
-- create-vpc-block-public-access-exclusion
-- create-vpc-encryption-control
-- create-vpc-endpoint
-- create-vpc-endpoint-connection-notification
-- create-vpc-endpoint-service-configuration
-- create-vpc-peering-connection
-- delete-vpc
-- delete-vpc-block-public-access-exclusion
-- delete-vpc-encryption-control
-- delete-vpc-endpoint-connection-notifications
-- delete-vpc-endpoint-service-configurations
-- delete-vpc-endpoints
-- delete-vpc-peering-connection
-- associate-vpc-cidr-block
-- delete-local-gateway-route-table-vpc-association
-- create-local-gateway-route-table-vpc-association
-- describe-security-group-vpc-associations
-- describe-vpc-attribute
-- describe-vpc-block-public-access-exclusions
-- describe-vpc-block-public-access-options
-- describe-vpc-encryption-controls
-- describe-vpc-endpoint-associations
-- describe-vpc-endpoint-connection-notifications
-- describe-vpc-endpoint-connections
-- describe-vpc-endpoint-service-configurations
-- describe-vpc-endpoint-service-permissions
-- describe-vpc-endpoint-services
-- describe-vpc-endpoints
-- describe-vpc-peering-connections
-- describe-vpcs
-- modify-vpc-attribute
-- modify-vpc-encryption-control
-- modify-vpc-endpoint
-- modify-vpc-endpoint-connection-notification
-- modify-vpc-endpoint-service-configuration
-- modify-vpc-tenancy
+### EC2 - Regions & Availability Zones
 
-### S3
+| Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------------------|---------------|---------------|-------------|------------|--------|
+| `describe-regions` | *(returns configured region from config — all input params ignored)* | `--region-names`, `--filters`, `--all-regions`, `--dry-run` | None | Return configured region from hive init config (e.g. us-east-1) → local-only response, no NATS | 1. List all regions<br>2. Filter by region name<br>3. Verify endpoint URL returned | **DONE** |
+| `describe-availability-zones` | — | `--zone-names`, `--filters`, `--all-availability-zones` | None | Return configured AZ from hive init (e.g. ap-southeast-2a) → single AZ for Hive v1 | 1. List all AZs<br>2. Filter by zone name<br>3. Verify zone state is available | **NOT STARTED** |
 
-- Consider moving S3 control/data plane, from predastore, to Hive format.
+### EC2 - VPC Networking (Core)
+
+Requires Open vSwitch (`apt install openvswitch-switch openvswitch-common`). Single AZ for Hive v1.
+
+| Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------------------|---------------|---------------|-------------|------------|--------|
+| `create-vpc` | — | `--cidr-block`, `--tag-specifications`, `--instance-tenancy` | None | Create OVS bridge for VPC → assign vpc-ID → store VPC metadata in NATS KV → configure CIDR range → return VPC with state=available | 1. Create VPC with /16 CIDR<br>2. Overlapping CIDR (error)<br>3. Invalid CIDR format (error)<br>4. Verify in describe-vpcs | **NOT STARTED** |
+| `delete-vpc` | — | `--vpc-id` | VPC must be empty (no subnets, gateways, instances) | Verify no dependent resources → delete OVS bridge → remove metadata → return success | 1. Delete empty VPC<br>2. Delete VPC with subnets (error: DependencyViolation)<br>3. Delete non-existent VPC (error) | **NOT STARTED** |
+| `describe-vpcs` | — | `--vpc-ids`, `--filters`, `--max-results` | None | Query NATS KV for VPC metadata → return VPC list with CIDR, state, tags | 1. List all VPCs<br>2. Filter by VPC ID<br>3. Filter by CIDR block | **NOT STARTED** |
+| `create-subnet` | — | `--vpc-id`, `--cidr-block`, `--availability-zone`, `--tag-specifications` | VPC must exist | Validate CIDR within VPC range → create OVS port group with VLAN tag → assign subnet-ID → store metadata | 1. Create subnet within VPC CIDR<br>2. Subnet CIDR outside VPC range (error)<br>3. Overlapping subnet CIDRs (error) | **NOT STARTED** |
+| `delete-subnet` | — | `--subnet-id` | Subnet must be empty (no instances) | Verify no instances in subnet → remove OVS port group → delete metadata | 1. Delete empty subnet<br>2. Delete subnet with instances (error) | **NOT STARTED** |
+| `describe-subnets` | — | `--subnet-ids`, `--filters`, `--max-results` | None | Query NATS KV for subnet metadata → return subnet list | 1. List all subnets<br>2. Filter by VPC ID<br>3. Filter by AZ | **NOT STARTED** |
+| `create-security-group` | — | `--group-name`, `--description`, `--vpc-id`, `--tag-specifications` | VPC must exist | Create security group metadata → create default OVS flow rules (deny all inbound, allow all outbound) → assign sg-ID | 1. Create SG in VPC<br>2. Duplicate name in same VPC (error)<br>3. Verify default rules | **NOT STARTED** |
+| `delete-security-group` | — | `--group-id` | SG must not be in use by instances | Verify no instances reference SG → remove OVS flow rules → delete metadata | 1. Delete unused SG<br>2. Delete SG in use (error) | **NOT STARTED** |
+| `describe-security-groups` | — | `--group-ids`, `--group-names`, `--filters`, `--max-results` | None | Query NATS KV for SG metadata → return SG list with rules | 1. List all SGs<br>2. Filter by VPC ID<br>3. Filter by group name | **NOT STARTED** |
+| `authorize-security-group-ingress` | — | `--group-id`, `--protocol`, `--port`, `--cidr`, `--source-group` | SG must exist | Add inbound rule → create OVS OpenFlow rule → persist to metadata | 1. Allow SSH (port 22) from 0.0.0.0/0<br>2. Allow from specific CIDR<br>3. Duplicate rule (idempotent) | **NOT STARTED** |
+| `authorize-security-group-egress` | — | `--group-id`, `--protocol`, `--port`, `--cidr` | SG must exist | Add outbound rule → create OVS OpenFlow rule → persist to metadata | 1. Allow HTTPS outbound<br>2. Restrict to specific CIDR | **NOT STARTED** |
+| `revoke-security-group-ingress` | — | `--group-id`, `--protocol`, `--port`, `--cidr` | SG must exist, rule must exist | Remove inbound rule → delete OVS OpenFlow rule → update metadata | 1. Revoke existing rule<br>2. Revoke non-existent rule (error) | **NOT STARTED** |
+| `revoke-security-group-egress` | — | `--group-id`, `--protocol`, `--port`, `--cidr` | SG must exist, rule must exist | Remove outbound rule → delete OVS OpenFlow rule → update metadata | 1. Revoke existing rule<br>2. Revoke non-existent rule (error) | **NOT STARTED** |
+| `create-internet-gateway` | — | `--tag-specifications` | None | Create IGW metadata → assign igw-ID → configure OVS NAT bridge for external access | 1. Create IGW<br>2. Verify in describe-internet-gateways | **NOT STARTED** |
+| `attach-internet-gateway` | — | `--internet-gateway-id`, `--vpc-id` | IGW and VPC must exist | Link IGW to VPC → configure OVS flows for internet routing → update metadata | 1. Attach IGW to VPC<br>2. Attach already-attached IGW (error)<br>3. Attach to non-existent VPC (error) | **NOT STARTED** |
+| `detach-internet-gateway` | — | `--internet-gateway-id`, `--vpc-id` | IGW must be attached to VPC | Unlink IGW from VPC → remove OVS internet routing flows | 1. Detach attached IGW<br>2. Detach unattached IGW (error) | **NOT STARTED** |
+| `delete-internet-gateway` | — | `--internet-gateway-id` | IGW must be detached | Verify IGW detached → remove OVS NAT bridge → delete metadata | 1. Delete detached IGW<br>2. Delete attached IGW (error) | **NOT STARTED** |
+| `describe-internet-gateways` | — | `--internet-gateway-ids`, `--filters`, `--max-results` | None | Query NATS KV for IGW metadata → return list with attachment info | 1. List all IGWs<br>2. Filter by attachment VPC | **NOT STARTED** |
+| `create-route-table` | — | `--vpc-id`, `--tag-specifications` | VPC must exist | Create route table metadata → add default local route for VPC CIDR → assign rtb-ID | 1. Create route table<br>2. Verify default local route | **NOT STARTED** |
+| `create-route` | — | `--route-table-id`, `--destination-cidr-block`, `--gateway-id` or `--nat-gateway-id` | Route table and target must exist | Add route entry → configure OVS flow for destination CIDR → update metadata | 1. Add internet route via IGW<br>2. Add route to NAT gateway<br>3. Conflicting route (error) | **NOT STARTED** |
+| `describe-route-tables` | — | `--route-table-ids`, `--filters`, `--max-results` | None | Query NATS KV for route table metadata → return tables with routes | 1. List all route tables<br>2. Filter by VPC | **NOT STARTED** |
+| `create-nat-gateway` | — | `--subnet-id`, `--allocation-id`, `--tag-specifications` | Subnet must exist, EIP must be allocated | Create NAT gateway in subnet → configure OVS SNAT rules → assign nat-ID → state=pending→available | 1. Create NAT gateway<br>2. Invalid subnet (error)<br>3. Verify NAT connectivity from private subnet | **NOT STARTED** |
+| `allocate-address` | — | `--domain` (vpc), `--tag-specifications` | None | Allocate Elastic IP from pool → assign eipalloc-ID → store in metadata | 1. Allocate EIP<br>2. Verify in describe-addresses | **NOT STARTED** |
+| `associate-address` | — | `--allocation-id`, `--instance-id` or `--network-interface-id` | EIP and target must exist | Associate EIP with instance/ENI → configure OVS DNAT/SNAT rules | 1. Associate with instance<br>2. Re-associate (moves EIP)<br>3. Associate non-existent EIP (error) | **NOT STARTED** |
+| `release-address` | — | `--allocation-id` | EIP must exist and be disassociated | Release EIP back to pool → remove from metadata | 1. Release disassociated EIP<br>2. Release associated EIP (error) | **NOT STARTED** |
+| `describe-addresses` | — | `--allocation-ids`, `--filters`, `--public-ips` | None | Query metadata for EIP allocations → return list with association info | 1. List all EIPs<br>2. Filter by allocation ID | **NOT STARTED** |
+
+### EC2 - Network Interfaces
+
+| Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------------------|---------------|---------------|-------------|------------|--------|
+| `attach-network-interface` | — | `--network-interface-id`, `--instance-id`, `--device-index` | ENI and instance must exist | Attach OVS port to instance QEMU process → configure MAC/IP → update metadata | 1. Attach ENI to instance<br>2. Already attached (error) | **NOT STARTED** |
+| `detach-network-interface` | — | `--attachment-id`, `--force` | ENI must be attached | Detach OVS port from instance → update metadata | 1. Detach ENI<br>2. Force detach | **NOT STARTED** |
+
+### EC2 - Launch Templates
+
+| Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------------------|---------------|---------------|-------------|------------|--------|
+| `create-launch-template` | — | `--launch-template-name`, `--launch-template-data` (ImageId, InstanceType, etc.), `--tag-specifications` | None | Store template configuration in NATS KV → assign lt-ID → return template metadata | 1. Create template with full config<br>2. Duplicate name (error)<br>3. Verify in describe output | **NOT STARTED** |
+| `describe-launch-templates` | — | `--launch-template-ids`, `--launch-template-names`, `--filters` | None | Query NATS KV for template metadata → return list | 1. List all templates<br>2. Filter by name | **NOT STARTED** |
+
+### EBS Direct API
+
+| Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------------------|---------------|---------------|-------------|------------|--------|
+| `start-snapshot` | — | `--volume-size`, `--parent-snapshot-id`, `--description`, `--encrypted` | None | Initialize snapshot in viperblock → return snap-ID for block-level writes | 1. Start new snapshot<br>2. Start incremental from parent | **NOT STARTED** |
+| `put-snapshot-block` | — | `--snapshot-id`, `--block-index`, `--block-data`, `--checksum` | start-snapshot | Write block data to snapshot at specified index in viperblock → verify checksum | 1. Write single block<br>2. Write with bad checksum (error) | **NOT STARTED** |
+| `get-snapshot-block` | — | `--snapshot-id`, `--block-index` | Snapshot must exist | Read block data from snapshot at specified index → return data with checksum | 1. Read existing block<br>2. Read sparse block (zeros) | **NOT STARTED** |
+| `complete-snapshot` | — | `--snapshot-id`, `--changed-blocks-count` | start-snapshot, put-snapshot-block | Finalize snapshot → mark as completed → sync to Predastore | 1. Complete valid snapshot<br>2. Complete with wrong block count (error) | **NOT STARTED** |
+| `list-snapshot-blocks` | — | `--snapshot-id`, `--max-results`, `--next-token` | Snapshot must exist | List all non-empty blocks in snapshot with tokens and sizes | 1. List blocks of populated snapshot<br>2. List blocks of empty snapshot | **NOT STARTED** |
+| `list-changed-blocks` | — | `--second-snapshot-id`, `--first-snapshot-id`, `--max-results` | Snapshots must exist | Compare two snapshots → return list of differing block indexes | 1. Compare parent and child snapshots<br>2. Compare unrelated snapshots | **NOT STARTED** |
+
+### S3 (via Predastore)
+
+Currently S3 operations are handled directly by Predastore. Consider moving control/data plane to Hive format for AWS gateway integration.
+
+| Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------------------|---------------|---------------|-------------|------------|--------|
+| `s3 mb` (CreateBucket) | — | `s3://bucket-name` | None | NATS `s3.createbucket` → Predastore creates bucket → return success | 1. Create valid bucket<br>2. Duplicate bucket name (error)<br>3. Invalid bucket name (error) | **NOT STARTED** (Predastore handles directly) |
+| `s3 rb` (DeleteBucket) | — | `s3://bucket-name`, `--force` | Bucket must exist | NATS `s3.deletebucket` → verify bucket empty (or force) → Predastore deletes bucket | 1. Delete empty bucket<br>2. Delete non-empty bucket (error)<br>3. Force delete non-empty bucket | **NOT STARTED** |
+| `s3 ls` (ListBuckets/Objects) | — | `s3://bucket/prefix`, `--recursive` | None | NATS `s3.listobjects` → Predastore lists objects with prefix → return list | 1. List all buckets<br>2. List objects in bucket<br>3. List with prefix filter | **NOT STARTED** |
+| `s3 cp` (PutObject/GetObject) | — | `source dest`, `--recursive`, `--acl` | Bucket must exist | NATS `s3.putobject`/`s3.getobject` → Predastore stores/retrieves with Reed-Solomon encoding | 1. Upload single file<br>2. Download single file<br>3. Recursive upload/download<br>4. Large file (multipart) | **NOT STARTED** |
+| `s3 rm` (DeleteObject) | — | `s3://bucket/key`, `--recursive` | Object must exist | NATS `s3.deleteobject` → Predastore deletes object shards | 1. Delete single object<br>2. Recursive delete<br>3. Delete non-existent (idempotent) | **NOT STARTED** |
+| `s3 sync` | — | `source dest`, `--delete`, `--exclude`, `--include` | Bucket must exist | Compare source and dest → upload changed/new files → optionally delete removed files | 1. Sync local dir to S3<br>2. Sync with --delete<br>3. Sync with exclude filter | **NOT STARTED** |
+
+### IAM (Planned)
+
+| Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------------------|---------------|---------------|-------------|------------|--------|
+| `create-access-key` | — | `--user-name` | User must exist | Generate access key ID and secret → store in NATS JetStream KV → return credentials | 1. Create key for user<br>2. Max keys exceeded (error) | **NOT STARTED** (gateway stub exists) |
+| `delete-access-key` | — | `--access-key-id`, `--user-name` | Key must exist | Remove access key from NATS KV → return success | 1. Delete existing key<br>2. Delete non-existent key (error) | **NOT STARTED** |
+| `list-access-keys` | — | `--user-name`, `--max-items` | None | Query NATS KV for user's access keys → return list | 1. List keys for user<br>2. No keys returns empty | **NOT STARTED** |
 
 ## Update Nov 2025
 
