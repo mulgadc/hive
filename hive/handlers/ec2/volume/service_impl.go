@@ -219,6 +219,7 @@ func (s *VolumeServiceImpl) getVolumeByID(volumeID string) (*ec2.Volume, error) 
 				Device:              aws.String(volMeta.DeviceName),
 				State:               aws.String(attachState),
 				DeleteOnTermination: aws.Bool(false),
+				AttachTime:          aws.Time(volMeta.AttachedAt),
 			},
 		}
 	}
@@ -344,6 +345,9 @@ func (s *VolumeServiceImpl) UpdateVolumeState(volumeID, state, attachedInstance 
 
 	cfg.VolumeMetadata.State = state
 	cfg.VolumeMetadata.AttachedInstance = attachedInstance
+	if attachedInstance != "" {
+		cfg.VolumeMetadata.AttachedAt = time.Now()
+	}
 
 	if err := s.putVolumeConfig(volumeID, cfg); err != nil {
 		return fmt.Errorf("failed to write volume config for state update: %w", err)

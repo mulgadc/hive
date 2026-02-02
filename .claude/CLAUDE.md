@@ -19,30 +19,10 @@ Each component can be used independently or as part of the integrated Hive stack
 - `../viperblock/CLAUDE.md` - Viperblock development guide
 - `../predastore/CLAUDE.md` - Predastore development guide
 
-## Build Commands
+## Project Standards
 
-### Hive (Platform Orchestrator)
-```bash
-make build          # Build the hive binary
-make test           # Run Go tests
-make bench          # Run benchmarks
-make clean          # Clean build artifacts
-```
-
-### **MANDATORY: Unit Testing Requirements**
-
-**⚠️ CRITICAL: Always run unit tests before any commit or push operation.**
-
-```bash
-# REQUIRED before any git commit or push
-make test           # Must pass with zero failures
-
-# Example workflow:
-make test                    # Verify all tests pass
-git add .                    # Stage changes
-git commit -m "..."          # Only after tests pass
-git push origin main         # Only after tests pass
-```
+- Use log/slog instead of log. Use appropriate log level, eg `slog.Info`
+- All new features must have comprehensive unit tests
 
 **Testing Policy:**
 - **All unit tests MUST pass** before committing changes
@@ -50,25 +30,6 @@ git push origin main         # Only after tests pass
 - Tests must complete without errors or panics
 - Use `make test` command to run the full test suite
 - If tests fail, fix issues before proceeding with git operations
-
-### Component Build Commands
-
-For detailed build instructions, see component-specific CLAUDE.md files:
-
-**Viperblock** (`../viperblock/CLAUDE.md`):
-```bash
-cd ../viperblock && make build    # Build sfs, vblock binaries + NBD plugin
-```
-
-**Predastore** (`../predastore/CLAUDE.md`):
-```bash
-cd ../predastore && make build    # Build s3d binary
-```
-
-**NBDkit** (system dependency):
-```bash
-cd nbdkit && autoreconf -i && ./configure && make && make install
-```
 
 ## Architecture Notes
 
