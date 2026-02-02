@@ -2,7 +2,6 @@ package awsgw
 
 import (
 	"fmt"
-	"log"
 	"log/slog"
 	"os"
 	"strings"
@@ -64,10 +63,10 @@ func launchService(config *config.ClusterConfig) (err error) {
 		nats.ReconnectWait(time.Second),
 		nats.MaxReconnects(-1), // Infinite reconnects
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
-			log.Printf("NATS disconnected: %v", err)
+			slog.Warn("NATS disconnected", "err", err)
 		}),
 		nats.ReconnectHandler(func(nc *nats.Conn) {
-			log.Printf("NATS reconnected to %s", nc.ConnectedUrl())
+			slog.Info("NATS reconnected", "url", nc.ConnectedUrl())
 		}),
 	}
 
@@ -104,7 +103,10 @@ func launchService(config *config.ClusterConfig) (err error) {
 		return err
 	}
 
-	log.Fatal(app.ListenTLS(nodeConfig.AWSGW.Host, nodeConfig.AWSGW.TLSCert, nodeConfig.AWSGW.TLSKey))
+	if err := app.ListenTLS(nodeConfig.AWSGW.Host, nodeConfig.AWSGW.TLSCert, nodeConfig.AWSGW.TLSKey); err != nil {
+		slog.Error("Failed to start TLS listener", "err", err)
+		os.Exit(1)
+	}
 
 	return nil
 

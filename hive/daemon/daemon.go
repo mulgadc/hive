@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -276,14 +275,14 @@ func NewResourceManager() *ResourceManager {
 	// Get system memory (in GB)
 	totalMemGB, err := getSystemMemory()
 	if err != nil {
-		log.Printf("Warning: Failed to get system memory: %v, using default of 8GB", err)
+		slog.Warn("Failed to get system memory, using default of 8GB", "err", err)
 		totalMemGB = 8.0 // Default to 8GB if we can't get the actual memory
 	}
 
 	// Get CPU model for instance family detection
 	cpuModel, err := getCPUModel()
 	if err != nil {
-		log.Printf("Warning: Failed to get CPU model: %v, using default", err)
+		slog.Warn("Failed to get CPU model, using default", "err", err)
 		cpuModel = "Unknown"
 	}
 
@@ -304,8 +303,9 @@ func NewResourceManager() *ResourceManager {
 	if runtime.GOARCH == "arm64" {
 		burstableFamily = "t4g"
 	}
-	log.Printf("System resources: %d vCPUs, %.2f GB RAM, CPU: %s, Families: %s + %s (detected on %s)",
-		numCPU, totalMemGB, cpuModel, instanceFamily, burstableFamily, runtime.GOOS)
+	slog.Info("System resources detected",
+		"vCPUs", numCPU, "memGB", totalMemGB, "cpu", cpuModel,
+		"family", instanceFamily, "burstableFamily", burstableFamily, "os", runtime.GOOS)
 
 	return &ResourceManager{
 		availableVCPU: numCPU,
@@ -466,10 +466,10 @@ func (d *Daemon) Start() error {
 		nats.ReconnectWait(time.Second),
 		nats.MaxReconnects(-1), // Infinite reconnects
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
-			log.Printf("NATS disconnected: %v", err)
+			slog.Warn("NATS disconnected", "err", err)
 		}),
 		nats.ReconnectHandler(func(nc *nats.Conn) {
-			log.Printf("NATS reconnected to %s", nc.ConnectedUrl())
+			slog.Info("NATS reconnected", "url", nc.ConnectedUrl())
 		}),
 	}
 
@@ -478,7 +478,7 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to connect to NATS: %w", err)
 	}
 
-	log.Printf("Connected to NATS server at %s", d.config.NATS.Host)
+	slog.Info("Connected to NATS server", "host", d.config.NATS.Host)
 
 	// Start cluster manager HTTP server FIRST
 	// This must happen before JetStream init so other nodes can join via /join endpoint
@@ -849,7 +849,7 @@ func (d *Daemon) handleEC2StartInstances(msg *nats.Msg) {
 	var ec2StartInstance config.EC2StartInstancesRequest
 
 	if err := json.Unmarshal(msg.Data, &ec2StartInstance); err != nil {
-		log.Printf("Error unmarshaling EC2 describe request: %v", err)
+		slog.Error("Error unmarshaling EC2 describe request", "err", err)
 		return
 	}
 
@@ -984,13 +984,12 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 	}
 
 	if err := json.Unmarshal(msg.Data, &command); err != nil {
-		log.Printf("Error unmarshaling QMP command: %v", err)
+		slog.Error("Error unmarshaling QMP command", "err", err)
 		respondWithError(awserrors.ErrorServerInternal)
 		return
 	}
 
-	log.Printf("Received message on subject: %s", msg.Subject)
-	log.Printf("Message data: %s", string(msg.Data))
+	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
 
 	d.Instances.Mu.Lock()
 	instance, ok := d.Instances.VMS[command.ID]
@@ -1355,8 +1354,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 
 // handleEC2CreateKeyPair processes incoming EC2 CreateKeyPair requests
 func (d *Daemon) handleEC2CreateKeyPair(msg *nats.Msg) {
-	log.Printf("Received message on subject: %s", msg.Subject)
-	log.Printf("Message data: %s", string(msg.Data))
+	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
 
 	// Initialize createKeyPairInput before unmarshaling into it
 	createKeyPairInput := &ec2.CreateKeyPairInput{}
@@ -1397,8 +1395,7 @@ func (d *Daemon) handleEC2CreateKeyPair(msg *nats.Msg) {
 
 // handleEC2DeleteKeyPair processes incoming EC2 DeleteKeyPair requests
 func (d *Daemon) handleEC2DeleteKeyPair(msg *nats.Msg) {
-	log.Printf("Received message on subject: %s", msg.Subject)
-	log.Printf("Message data: %s", string(msg.Data))
+	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
 
 	// Initialize deleteKeyPairInput before unmarshaling into it
 	deleteKeyPairInput := &ec2.DeleteKeyPairInput{}
@@ -1562,7 +1559,7 @@ func (d *Daemon) setupShutdown() {
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
 		<-sigChan
-		log.Println("Received shutdown signal, cleaning up...")
+		slog.Info("Received shutdown signal, cleaning up...")
 
 		// Cancel context
 		d.cancel()
@@ -1573,9 +1570,9 @@ func (d *Daemon) setupShutdown() {
 		// Final cleanup
 		for _, sub := range d.natsSubscriptions {
 			// Unsubscribe from each subscription
-			log.Printf("Unsubscribing from NATS: %s", sub.Subject)
+			slog.Info("Unsubscribing from NATS", "subject", sub.Subject)
 			if err := sub.Unsubscribe(); err != nil {
-				log.Printf("Error unsubscribing from NATS: %v", err)
+				slog.Error("Error unsubscribing from NATS", "err", err)
 			}
 
 		}
@@ -1591,15 +1588,15 @@ func (d *Daemon) setupShutdown() {
 
 		// Shutdown cluster manager
 		if d.clusterApp != nil {
-			log.Println("Shutting down cluster manager...")
+			slog.Info("Shutting down cluster manager...")
 			if err := d.clusterApp.Shutdown(); err != nil {
-				log.Printf("Error shutting down cluster manager: %v", err)
+				slog.Error("Error shutting down cluster manager", "err", err)
 			}
 		}
 
 		// Wait for any ongoing operations to complete
 		// TODO: Implement cleanup of running instances
-		log.Println("Shutdown complete")
+		slog.Info("Shutdown complete")
 	}()
 }
 
@@ -2185,8 +2182,7 @@ func (rm *ResourceManager) deallocate(instanceType *ec2.InstanceTypeInfo) {
 
 // handleEC2DescribeKeyPairs processes incoming EC2 DescribeKeyPairs requests
 func (d *Daemon) handleEC2DescribeKeyPairs(msg *nats.Msg) {
-	log.Printf("Received message on subject: %s", msg.Subject)
-	log.Printf("Message data: %s", string(msg.Data))
+	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
 
 	// Initialize describeKeyPairsInput before unmarshaling into it
 	describeKeyPairsInput := &ec2.DescribeKeyPairsInput{}
@@ -2227,8 +2223,7 @@ func (d *Daemon) handleEC2DescribeKeyPairs(msg *nats.Msg) {
 
 // handleEC2ImportKeyPair processes incoming EC2 ImportKeyPair requests
 func (d *Daemon) handleEC2ImportKeyPair(msg *nats.Msg) {
-	log.Printf("Received message on subject: %s", msg.Subject)
-	log.Printf("Message data: %s", string(msg.Data))
+	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
 
 	// Initialize importKeyPairInput before unmarshaling into it
 	importKeyPairInput := &ec2.ImportKeyPairInput{}
@@ -2272,8 +2267,7 @@ func (d *Daemon) handleEC2ImportKeyPair(msg *nats.Msg) {
 
 // handleEC2DescribeImages processes incoming EC2 DescribeImages requests
 func (d *Daemon) handleEC2DescribeImages(msg *nats.Msg) {
-	log.Printf("Received message on subject: %s", msg.Subject)
-	log.Printf("Message data: %s", string(msg.Data))
+	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
 
 	// Initialize describeImagesInput before unmarshaling into it
 	describeImagesInput := &ec2.DescribeImagesInput{}
@@ -2314,8 +2308,7 @@ func (d *Daemon) handleEC2DescribeImages(msg *nats.Msg) {
 
 // handleEC2DescribeVolumes processes incoming EC2 DescribeVolumes requests
 func (d *Daemon) handleEC2DescribeVolumes(msg *nats.Msg) {
-	log.Printf("Received message on subject: %s", msg.Subject)
-	log.Printf("Message data: %s", string(msg.Data))
+	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
 
 	// Initialize describeVolumesInput before unmarshaling into it
 	describeVolumesInput := &ec2.DescribeVolumesInput{}
@@ -2411,7 +2404,7 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 // This handler responds with instance types that can currently be provisioned on this node
 // based on available resources (CPU and memory not already allocated to running instances)
 func (d *Daemon) handleEC2DescribeInstanceTypes(msg *nats.Msg) {
-	log.Printf("Received message on subject: %s", msg.Subject)
+	slog.Debug("Received message", "subject", msg.Subject)
 
 	// Initialize input
 	describeInput := &ec2.DescribeInstanceTypesInput{}
@@ -2463,8 +2456,7 @@ func (d *Daemon) handleEC2DescribeInstanceTypes(msg *nats.Msg) {
 // handleEC2DescribeInstances processes incoming EC2 DescribeInstances requests
 // This handler responds with all instances running on this node
 func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
-	log.Printf("Received message on subject: %s", msg.Subject)
-	log.Printf("Message data: %s", string(msg.Data))
+	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
 
 	// Initialize describeInstancesInput before unmarshaling into it
 	describeInstancesInput := &ec2.DescribeInstancesInput{}
