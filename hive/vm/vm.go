@@ -36,7 +36,7 @@ type VM struct {
 	PID          int    `json:"pid"`
 	PTS          int    `json:"pts"`
 	Running      bool   `json:"running"`
-	Status       string `json:"status"`
+	Status       InstanceState `json:"status"`
 	InstanceType string `json:"instance_type"`
 	Config       Config `json:"config"`
 

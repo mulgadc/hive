@@ -67,7 +67,7 @@ func (d *Daemon) handleEC2StartInstances(msg *nats.Msg) {
 		ec2StartInstanceResponse.Error = err.Error()
 	} else {
 		ec2StartInstanceResponse.InstanceID = instance.ID
-		ec2StartInstanceResponse.Status = instance.Status
+		ec2StartInstanceResponse.Status = string(instance.Status)
 	}
 
 	ec2StartInstanceResponse.Respond(msg)
@@ -131,22 +131,16 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 			return
 		}
 
-		// Update instance state
+		// Update instance attributes and transition state
 		d.Instances.Mu.Lock()
-		instance.Status = "running"
 		instance.Attributes = command.Attributes
-		if instance.Instance != nil {
-			instance.Instance.State.SetCode(16) // 16 = running
-			instance.Instance.State.SetName("running")
-		}
 		d.Instances.Mu.Unlock()
 
-		slog.Info("Instance started", "instanceId", instance.ID)
-
-		// Write state to disk
-		if writeErr := d.WriteState(); writeErr != nil {
-			slog.Error("Failed to write state to disk", "err", writeErr)
+		if err := d.TransitionState(instance, vm.StateRunning); err != nil {
+			slog.Error("Failed to transition instance to running", "instanceId", instance.ID, "err", err)
 		}
+
+		slog.Info("Instance started", "instanceId", instance.ID)
 
 		msg.Respond(fmt.Appendf(nil, `{"status":"running","instanceId":"%s"}`, instance.ID))
 		return
@@ -156,31 +150,20 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 	if command.Attributes.StopInstance || command.Attributes.TerminateInstance {
 		isTerminate := command.Attributes.TerminateInstance
 		action := "Stopping"
-		initialStatus := "stopping"
-		finalStatus := "stopped"
-		finalCode := int64(80)
+		initialState := vm.StateStopping
+		finalState := vm.StateStopped
 		if isTerminate {
 			action = "Terminating"
-			initialStatus = "shutting-down"
-			finalStatus = "terminated"
-			finalCode = 48
+			initialState = vm.StateShuttingDown
+			finalState = vm.StateTerminated
 		}
 
 		slog.Info(action+" instance", "id", command.ID)
 
-		// Update status to transitional state
-		d.Instances.Mu.Lock()
-		instance.Status = initialStatus
-		if instance.Instance != nil {
-			if isTerminate {
-				instance.Instance.State.SetCode(32) // 32 = shutting-down
-				instance.Instance.State.SetName("shutting-down")
-			} else {
-				instance.Instance.State.SetCode(64) // 64 = stopping
-				instance.Instance.State.SetName("stopping")
-			}
+		// Transition to the initial transitional state
+		if err := d.TransitionState(instance, initialState); err != nil {
+			slog.Error("Failed to transition to "+string(initialState), "instanceId", instance.ID, "err", err)
 		}
-		d.Instances.Mu.Unlock()
 
 		// Respond immediately - operation will complete in background
 		// stopInstance() handles the QMP shutdown command, so we don't send it here
@@ -190,28 +173,20 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 		go func(inst *vm.VM, attrs qmp.Attributes) {
 			stopErr := d.stopInstance(map[string]*vm.VM{inst.ID: inst}, isTerminate)
 
-			d.Instances.Mu.Lock()
 			if stopErr != nil {
 				slog.Error("Failed to "+strings.ToLower(action)+" instance", "err", stopErr, "id", inst.ID)
-				// On error, revert to previous state or mark as error
-				inst.Status = "error"
-				if inst.Instance != nil {
-					inst.Instance.State.SetCode(0)
-					inst.Instance.State.SetName("error")
+				if err := d.TransitionState(inst, vm.StateError); err != nil {
+					slog.Error("Failed to transition to error state", "instanceId", inst.ID, "err", err)
 				}
 			} else {
-				inst.Status = finalStatus
+				d.Instances.Mu.Lock()
 				inst.Attributes = attrs
-				if inst.Instance != nil {
-					inst.Instance.State.SetCode(finalCode)
-					inst.Instance.State.SetName(finalStatus)
-				}
-				slog.Info("Instance "+finalStatus, "id", inst.ID)
-			}
-			d.Instances.Mu.Unlock()
+				d.Instances.Mu.Unlock()
 
-			if writeErr := d.WriteState(); writeErr != nil {
-				slog.Error("Failed to write state to disk", "err", writeErr)
+				if err := d.TransitionState(inst, finalState); err != nil {
+					slog.Error("Failed to transition to final state", "instanceId", inst.ID, "err", err)
+				}
+				slog.Info("Instance "+string(finalState), "id", inst.ID)
 			}
 		}(instance, command.Attributes)
 
@@ -879,27 +854,11 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 			instanceCopy := *instance.Instance
 			instanceCopy.State = &ec2.InstanceState{}
 
-			// Map internal status to EC2 state codes
-			switch instance.Status {
-			case "pending", "provisioning":
-				instanceCopy.State.SetCode(0)
-				instanceCopy.State.SetName("pending")
-			case "running":
-				instanceCopy.State.SetCode(16)
-				instanceCopy.State.SetName("running")
-			case "stopping":
-				instanceCopy.State.SetCode(64)
-				instanceCopy.State.SetName("stopping")
-			case "stopped":
-				instanceCopy.State.SetCode(80)
-				instanceCopy.State.SetName("stopped")
-			case "shutting-down":
-				instanceCopy.State.SetCode(32)
-				instanceCopy.State.SetName("shutting-down")
-			case "terminated":
-				instanceCopy.State.SetCode(48)
-				instanceCopy.State.SetName("terminated")
-			default:
+			// Map internal status to EC2 state codes using the centralized mapping
+			if info, ok := vm.EC2StateCodes[instance.Status]; ok {
+				instanceCopy.State.SetCode(info.Code)
+				instanceCopy.State.SetName(info.Name)
+			} else {
 				instanceCopy.State.SetCode(0)
 				instanceCopy.State.SetName("pending")
 			}
