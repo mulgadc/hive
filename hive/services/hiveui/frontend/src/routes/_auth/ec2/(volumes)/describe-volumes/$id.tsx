@@ -1,13 +1,26 @@
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { createFileRoute, Link } from "@tanstack/react-router"
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
+import { Trash2 } from "lucide-react"
+import { useState } from "react"
 
 import { BackLink } from "@/components/back-link"
 import { DetailCard } from "@/components/detail-card"
 import { DetailRow } from "@/components/detail-row"
 import { PageHeading } from "@/components/page-heading"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { formatDateTime } from "@/lib/utils"
+import { useDeleteVolume } from "@/mutations/ec2"
 import { ec2VolumeQueryOptions } from "@/queries/ec2"
 
 export const Route = createFileRoute(
@@ -28,8 +41,20 @@ export const Route = createFileRoute(
 
 function VolumeDetail() {
   const { id } = Route.useParams()
+  const navigate = useNavigate()
   const { data } = useSuspenseQuery(ec2VolumeQueryOptions(id))
   const volume = data.Volumes?.[0]
+  const deleteMutation = useDeleteVolume()
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+
+  const canDelete =
+    volume?.State === "available" &&
+    (!volume.Attachments || volume.Attachments.length === 0)
+
+  const handleDelete = async () => {
+    await deleteMutation.mutateAsync(id)
+    navigate({ to: "/ec2/describe-volumes" })
+  }
 
   if (!volume?.VolumeId) {
     return (
@@ -50,6 +75,15 @@ function VolumeDetail() {
         <PageHeading
           actions={
             <div className="flex items-center gap-2">
+              <Button
+                disabled={!canDelete}
+                onClick={() => setShowDeleteDialog(true)}
+                size="sm"
+                variant="destructive"
+              >
+                <Trash2 className="size-4" />
+                Delete
+              </Button>
               {volume.State === "available" ? (
                 <Link
                   className={buttonVariants({ variant: "outline" })}
@@ -117,6 +151,27 @@ function VolumeDetail() {
           </DetailCard>
         )}
       </div>
+
+      <AlertDialog onOpenChange={setShowDeleteDialog} open={showDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Volume</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete the volume "{volume.VolumeId}"?
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleteMutation.isPending}
+              onClick={handleDelete}
+            >
+              {deleteMutation.isPending ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }

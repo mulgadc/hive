@@ -3,6 +3,7 @@ import {
   CreateKeyPairCommand,
   CreateVolumeCommand,
   DeleteKeyPairCommand,
+  DeleteVolumeCommand,
   ImportKeyPairCommand,
   ModifyVolumeCommand,
   RebootInstancesCommand,
@@ -205,6 +206,21 @@ export function useModifyVolume() {
       const command = new ModifyVolumeCommand({
         VolumeId: params.volumeId,
         Size: params.size,
+      })
+      return await getEc2Client().send(command)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ec2", "volumes"] })
+    },
+  })
+}
+
+export function useDeleteVolume() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (volumeId: string) => {
+      const command = new DeleteVolumeCommand({
+        VolumeId: volumeId,
       })
       return await getEc2Client().send(command)
     },
