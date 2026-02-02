@@ -23,7 +23,6 @@ Each component can be used independently or as part of the integrated Hive stack
 
 - Use log/slog instead of log. Use appropriate log level, eg `slog.Info`
 - All new features must have comprehensive unit tests
-- run `make security` and ensure no new code has linter errors
 
 **Testing Policy:**
 - **All unit tests MUST pass** before committing changes

@@ -2,12 +2,14 @@ package handlers_ec2_volume
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"strings"
 	"sync"
@@ -23,6 +25,7 @@ import (
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
+	s3backend "github.com/mulgadc/viperblock/viperblock/backends/s3"
 	"golang.org/x/net/http2"
 )
 
@@ -65,6 +68,118 @@ func NewVolumeServiceImpl(cfg *config.Config) *VolumeServiceImpl {
 		config:   cfg,
 		s3Client: s3Client,
 	}
+}
+
+// CreateVolume creates a new EBS volume via viperblock and persists its config to S3
+func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Volume, error) {
+	if input == nil {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
+	// Validate size (1-16384 GiB)
+	if input.Size == nil || *input.Size < 1 || *input.Size > 16384 {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	size := *input.Size
+
+	// Validate volume type: only gp3 supported (or empty defaults to gp3)
+	if input.VolumeType != nil && *input.VolumeType != "" && *input.VolumeType != "gp3" {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	volumeType := "gp3"
+
+	// Validate availability zone matches this node's AZ
+	if input.AvailabilityZone == nil || *input.AvailabilityZone == "" {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if *input.AvailabilityZone != s.config.AZ {
+		return nil, errors.New(awserrors.ErrorInvalidAvailabilityZone)
+	}
+
+	// Generate volume ID
+	randomNumber, err := rand.Int(rand.Reader, big.NewInt(100_000_000))
+	if err != nil {
+		slog.Error("CreateVolume failed to generate random number", "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	now := time.Now()
+	volumeID := viperblock.GenerateVolumeID("vol", fmt.Sprintf("%d-create", randomNumber), s.config.Predastore.Bucket, now.Unix())
+
+	// Default IOPS for gp3
+	iops := 3000
+
+	slog.Info("CreateVolume", "volumeId", volumeID, "size", size, "type", volumeType, "az", *input.AvailabilityZone)
+
+	// Volume size in bytes for viperblock
+	sizeGiB := utils.SafeInt64ToUint64(size)
+	volumeSizeBytes := sizeGiB * 1024 * 1024 * 1024
+
+	// Build VolumeConfig with metadata
+	volumeConfig := viperblock.VolumeConfig{
+		VolumeMetadata: viperblock.VolumeMetadata{
+			VolumeID:         volumeID,
+			SizeGiB:          sizeGiB,
+			State:            "available",
+			CreatedAt:        now,
+			AvailabilityZone: *input.AvailabilityZone,
+			VolumeType:       volumeType,
+			IOPS:             iops,
+			IsEncrypted:      false,
+		},
+	}
+
+	// Create S3 backend config
+	cfg := s3backend.S3Config{
+		VolumeName: volumeID,
+		VolumeSize: volumeSizeBytes,
+		Bucket:     s.config.Predastore.Bucket,
+		Region:     s.config.Predastore.Region,
+		AccessKey:  s.config.Predastore.AccessKey,
+		SecretKey:  s.config.Predastore.SecretKey,
+		Host:       s.config.Predastore.Host,
+	}
+
+	vbconfig := viperblock.VB{
+		VolumeName:   volumeID,
+		VolumeSize:   volumeSizeBytes,
+		BaseDir:      s.config.WalDir,
+		Cache:        viperblock.Cache{Config: viperblock.CacheConfig{Size: 0}},
+		VolumeConfig: volumeConfig,
+	}
+
+	vb, err := viperblock.New(&vbconfig, "s3", cfg)
+	if err != nil {
+		slog.Error("CreateVolume failed to create viperblock instance", "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	vb.SetDebug(false)
+
+	// Initialize the backend (creates bucket structure in S3)
+	if err := vb.Backend.Init(); err != nil {
+		slog.Error("CreateVolume failed to initialize backend", "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	// Persist volume state to S3 (writes config.json)
+	if err := vb.SaveState(); err != nil {
+		slog.Error("CreateVolume failed to save state", "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	slog.Info("CreateVolume completed", "volumeId", volumeID, "size", size, "type", volumeType)
+
+	return &ec2.Volume{
+		VolumeId:         aws.String(volumeID),
+		Size:             aws.Int64(size),
+		VolumeType:       aws.String(volumeType),
+		State:            aws.String("available"),
+		AvailabilityZone: input.AvailabilityZone,
+		CreateTime:       aws.Time(now),
+		Iops:             aws.Int64(int64(iops)),
+		Encrypted:        aws.Bool(false),
+	}, nil
 }
 
 // DescribeVolumes lists EBS volumes by reading config.json files from S3

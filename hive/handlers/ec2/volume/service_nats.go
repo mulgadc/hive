@@ -21,27 +21,49 @@ func NewNATSVolumeService(conn *nats.Conn) VolumeService {
 	return &NATSVolumeService{natsConn: conn}
 }
 
-// DescribeVolumes sends a request via NATS and waits for response
-func (s *NATSVolumeService) DescribeVolumes(input *ec2.DescribeVolumesInput) (*ec2.DescribeVolumesOutput, error) {
-	// Marshal input to JSON
+// CreateVolume sends a CreateVolume request via NATS and waits for response
+func (s *NATSVolumeService) CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Volume, error) {
 	jsonData, err := json.Marshal(input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal input: %w", err)
 	}
 
-	// Send NATS request with 30 second timeout
-	msg, err := s.natsConn.Request("ec2.DescribeVolumes", jsonData, 30*time.Second)
+	msg, err := s.natsConn.Request("ec2.CreateVolume", jsonData, 30*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("NATS request failed: %w", err)
 	}
 
-	// Validate error response
 	responseError, err := utils.ValidateErrorPayload(msg.Data)
 	if err != nil {
 		return nil, errors.New(*responseError.Code)
 	}
 
-	// Unmarshal successful response
+	var output ec2.Volume
+	err = json.Unmarshal(msg.Data, &output)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return &output, nil
+}
+
+// DescribeVolumes sends a DescribeVolumes request via NATS and waits for response
+func (s *NATSVolumeService) DescribeVolumes(input *ec2.DescribeVolumesInput) (*ec2.DescribeVolumesOutput, error) {
+	jsonData, err := json.Marshal(input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal input: %w", err)
+	}
+
+	msg, err := s.natsConn.Request("ec2.DescribeVolumes", jsonData, 30*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("NATS request failed: %w", err)
+	}
+
+	responseError, err := utils.ValidateErrorPayload(msg.Data)
+	if err != nil {
+		return nil, errors.New(*responseError.Code)
+	}
+
 	var output ec2.DescribeVolumesOutput
 	err = json.Unmarshal(msg.Data, &output)
 	if err != nil {

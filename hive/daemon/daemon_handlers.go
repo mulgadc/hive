@@ -668,6 +668,44 @@ func (d *Daemon) handleEC2DescribeImages(msg *nats.Msg) {
 	slog.Info("handleEC2DescribeImages completed", "count", len(output.Images))
 }
 
+// handleEC2CreateVolume processes incoming EC2 CreateVolume requests
+func (d *Daemon) handleEC2CreateVolume(msg *nats.Msg) {
+	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
+
+	createVolumeInput := &ec2.CreateVolumeInput{}
+	var errResp []byte
+
+	errResp = utils.UnmarshalJsonPayload(createVolumeInput, msg.Data)
+
+	if errResp != nil {
+		msg.Respond(errResp)
+		slog.Error("Request does not match CreateVolumeInput")
+		return
+	}
+
+	slog.Info("Processing CreateVolume request", "size", createVolumeInput.Size, "az", createVolumeInput.AvailabilityZone)
+
+	output, err := d.volumeService.CreateVolume(createVolumeInput)
+
+	if err != nil {
+		slog.Error("handleEC2CreateVolume service.CreateVolume failed", "err", err)
+		errResp = utils.GenerateErrorPayload(err.Error())
+		msg.Respond(errResp)
+		return
+	}
+
+	jsonResponse, err := json.Marshal(output)
+	if err != nil {
+		slog.Error("handleEC2CreateVolume failed to marshal output", "err", err)
+		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+		msg.Respond(errResp)
+		return
+	}
+	msg.Respond(jsonResponse)
+
+	slog.Info("handleEC2CreateVolume completed", "volumeId", output.VolumeId)
+}
+
 // handleEC2DescribeVolumes processes incoming EC2 DescribeVolumes requests
 func (d *Daemon) handleEC2DescribeVolumes(msg *nats.Msg) {
 	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
