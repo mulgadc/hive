@@ -575,7 +575,7 @@ func (d *Daemon) restoreInstances() {
 
 		instance := d.Instances.VMS[i]
 
-		if instance.Status == "terminated" {
+		if instance.Status == vm.StateTerminated {
 			slog.Info("Instance state is terminated, skipping", "instance", instance.ID)
 			continue
 		}
@@ -813,7 +813,8 @@ func (d *Daemon) ClusterManager() error {
 	return nil
 }
 
-// WriteState writes the instance state to JetStream KV store (required)
+// WriteState writes the instance state to JetStream KV store (required).
+// It acquires d.Instances.Mu internally.
 func (d *Daemon) WriteState() error {
 	if d.jsManager == nil {
 		return fmt.Errorf("JetStream manager not initialized - cannot write state")
@@ -824,6 +825,7 @@ func (d *Daemon) WriteState() error {
 	}
 	return nil
 }
+
 
 // LoadState loads the instance state from JetStream KV store (required)
 func (d *Daemon) LoadState() error {
@@ -867,36 +869,36 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 		if _, ok := msg["event"]; ok {
 			slog.Info("QMP event", "event", msg["event"])
 
-			var updatedStatus string
+			// Look up the instance to handle state transitions
+			d.Instances.Mu.Lock()
+			instance, found := d.Instances.VMS[instanceId]
+			d.Instances.Mu.Unlock()
+			if !found {
+				slog.Info("QMP event - instance not found", "id", instanceId)
+				continue
+			}
 
+			// Handle QMP events with state machine transitions.
+			// TransitionState validates the current state atomically under lock,
+			// so no pre-check is needed here.
+			// RESET indicates a reboot but the VM remains running — no state change.
 			switch msg["event"] {
 			case "STOP":
-				updatedStatus = "stopped"
-			case "RESUME":
-				updatedStatus = "resuming"
-			case "RESET":
-				updatedStatus = "restarting"
-			case "POWERDOWN":
-				updatedStatus = "powering_down"
-			}
-
-			if updatedStatus != "" {
-
-				// Update the instance status
-				d.Instances.Mu.Lock()
-				instance, ok := d.Instances.VMS[instanceId]
-				if !ok {
-					slog.Info("QMP Status - Instance not found", "id", instanceId)
-					continue
+				if err := d.TransitionState(instance, vm.StateStopped); err != nil {
+					slog.Error("QMP STOP event: transition failed", "instanceId", instanceId, "err", err)
 				}
-
-				instance.Status = updatedStatus
-
-				d.Instances.VMS[instanceId] = instance
-				d.Instances.Mu.Unlock()
+			case "RESUME":
+				if err := d.TransitionState(instance, vm.StateRunning); err != nil {
+					slog.Error("QMP RESUME event: transition failed", "instanceId", instanceId, "err", err)
+				}
+			case "POWERDOWN":
+				if err := d.TransitionState(instance, vm.StateStopping); err != nil {
+					slog.Error("QMP POWERDOWN event: transition failed", "instanceId", instanceId, "err", err)
+				}
+			case "RESET":
+				slog.Info("QMP RESET event", "instanceId", instanceId)
 			}
 
-			// Optional: handle events here
 			continue
 		}
 		if errObj, ok := msg["error"].(map[string]any); ok {
@@ -1099,7 +1101,7 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 			status := instance.Status
 			d.Instances.Mu.Unlock()
 
-			if status == "stopping" || status == "stopped" || status == "shutting-down" || status == "terminated" || status == "error" {
+			if status == vm.StateStopping || status == vm.StateStopped || status == vm.StateShuttingDown || status == vm.StateTerminated || status == vm.StateError {
 				slog.Info("QMP heartbeat exiting - instance not running", "instance", instance.ID, "status", status)
 
 				// Close the QMP client connection if it exists
@@ -1186,20 +1188,14 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	}
 
 	// Step 9: Update the instance metadata for running state and volume attached
-	// Marshal to a JSON file
-	// Update state
 	d.Instances.Mu.Lock()
-	// Update to running state
-	instance.Status = "running"
-
-	// Update EC2 Instance state for API compatibility
-	if instance.Instance != nil {
-		instance.Instance.State.SetCode(16) // 16 = running
-		instance.Instance.State.SetName("running")
-	}
-
 	d.Instances.VMS[instance.ID] = instance
 	d.Instances.Mu.Unlock()
+
+	if err := d.TransitionState(instance, vm.StateRunning); err != nil {
+		slog.Error("Failed to transition instance to running", "instanceId", instance.ID, "err", err)
+		return err
+	}
 
 	// Step 10: Mark boot volumes as "in-use" now that instance is confirmed running
 	instance.EBSRequests.Mu.Lock()
@@ -1212,37 +1208,22 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	}
 	instance.EBSRequests.Mu.Unlock()
 
-	err = d.WriteState()
-
-	if err != nil {
-		slog.Error("Failed to marshal launchVm", "err", err)
-		return err
-	}
-
 	return nil
 }
 
 // markInstanceFailed updates an instance status to indicate a failure during launch
 func (d *Daemon) markInstanceFailed(instance *vm.VM, reason string) {
+	// Set state reason before transition (requires lock)
 	d.Instances.Mu.Lock()
-	defer d.Instances.Mu.Unlock()
-
-	instance.Status = "shutting-down"
-
-	// Update EC2 Instance state for API compatibility
 	if instance.Instance != nil {
-		instance.Instance.State.SetCode(32) // 32 = shutting-down
-		instance.Instance.State.SetName("shutting-down")
-		// Add state reason
 		instance.Instance.StateReason = &ec2.StateReason{}
 		instance.Instance.StateReason.SetCode("Server.InternalError")
 		instance.Instance.StateReason.SetMessage(reason)
 	}
+	d.Instances.Mu.Unlock()
 
-	d.Instances.VMS[instance.ID] = instance
-
-	if err := d.WriteState(); err != nil {
-		slog.Error("markInstanceFailed failed to write state", "err", err)
+	if err := d.TransitionState(instance, vm.StateShuttingDown); err != nil {
+		slog.Error("markInstanceFailed transition failed", "instanceId", instance.ID, "err", err)
 	}
 
 	slog.Info("Instance marked as failed", "instanceId", instance.ID, "reason", reason)

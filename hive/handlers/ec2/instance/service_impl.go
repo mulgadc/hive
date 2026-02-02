@@ -116,7 +116,7 @@ func (s *InstanceServiceImpl) RunInstance(input *ec2.RunInstancesInput) (*vm.VM,
 	// Create new instance structure
 	instance := &vm.VM{
 		ID:           instanceId,
-		Status:       "provisioning",
+		Status:       vm.StateProvisioning,
 		InstanceType: *input.InstanceType,
 	}
 

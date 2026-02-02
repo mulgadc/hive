@@ -941,19 +941,19 @@ func TestDaemon_BootAllocation(t *testing.T) {
 		"i-running": {
 			ID:           "i-running",
 			InstanceType: getTestInstanceType(),
-			Status:       "running",
+			Status:       vm.StateRunning,
 			Attributes:   qmp.Attributes{StopInstance: false},
 		},
 		"i-stopped": {
 			ID:           "i-stopped",
 			InstanceType: getTestInstanceType(),
-			Status:       "stopped",
+			Status:       vm.StateStopped,
 			Attributes:   qmp.Attributes{StopInstance: true},
 		},
 		"i-terminated": {
 			ID:           "i-terminated",
 			InstanceType: getTestInstanceType(),
-			Status:       "terminated",
+			Status:       vm.StateTerminated,
 			Attributes:   qmp.Attributes{StopInstance: false},
 		},
 	}
@@ -988,7 +988,7 @@ func TestDaemon_BootAllocation(t *testing.T) {
 
 	// Simulate the allocation loop in Start()
 	for _, instance := range daemon.Instances.VMS {
-		if instance.Status != "terminated" && !instance.Attributes.StopInstance {
+		if instance.Status != vm.StateTerminated && !instance.Attributes.StopInstance {
 			instanceType, ok := daemon.resourceMgr.instanceTypes[instance.InstanceType]
 			if ok {
 				err := daemon.resourceMgr.allocate(instanceType)
@@ -1024,7 +1024,7 @@ func TestHandleEC2StartInstances_Allocation(t *testing.T) {
 	daemon.Instances.VMS[instanceId] = &vm.VM{
 		ID:           instanceId,
 		InstanceType: instanceType,
-		Status:       "stopped",
+		Status:       vm.StateStopped,
 	}
 
 	// Subscribe to ec2.startinstances
@@ -1070,7 +1070,7 @@ func TestStopInstance_Deallocation(t *testing.T) {
 	daemon.Instances.VMS[instanceId] = &vm.VM{
 		ID:           instanceId,
 		InstanceType: instanceTypeStr,
-		Status:       "running",
+		Status:       vm.StateRunning,
 	}
 
 	err := daemon.resourceMgr.allocate(instanceType)
@@ -1254,7 +1254,7 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 
 		daemon.Instances.VMS[instanceID] = &vm.VM{
 			ID:          instanceID,
-			Status:      "running",
+			Status:      vm.StateRunning,
 			Reservation: reservation1,
 			Instance:    ec2Instance,
 		}
@@ -1273,7 +1273,7 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 
 		daemon.Instances.VMS[instanceID] = &vm.VM{
 			ID:          instanceID,
-			Status:      "running",
+			Status:      vm.StateRunning,
 			Reservation: reservation2,
 			Instance:    ec2Instance,
 		}
@@ -1290,7 +1290,7 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 
 	daemon.Instances.VMS["i-single-001"] = &vm.VM{
 		ID:          "i-single-001",
-		Status:      "stopped",
+		Status:      vm.StateStopped,
 		Reservation: reservation3,
 		Instance:    ec2Instance,
 	}
