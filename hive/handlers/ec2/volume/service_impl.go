@@ -26,6 +26,7 @@ import (
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
 	s3backend "github.com/mulgadc/viperblock/viperblock/backends/s3"
+	"github.com/nats-io/nats.go"
 	"golang.org/x/net/http2"
 )
 
@@ -35,10 +36,11 @@ const defaultGP3IOPS = 3000
 type VolumeServiceImpl struct {
 	config   *config.Config
 	s3Client *s3.S3
+	natsConn *nats.Conn
 }
 
 // NewVolumeServiceImpl creates a new daemon-side volume service
-func NewVolumeServiceImpl(cfg *config.Config) *VolumeServiceImpl {
+func NewVolumeServiceImpl(cfg *config.Config, natsConn *nats.Conn) *VolumeServiceImpl {
 	// Create HTTP client with TLS verification disabled and HTTP/2 support
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
@@ -69,6 +71,7 @@ func NewVolumeServiceImpl(cfg *config.Config) *VolumeServiceImpl {
 	return &VolumeServiceImpl{
 		config:   cfg,
 		s3Client: s3Client,
+		natsConn: natsConn,
 	}
 }
 
@@ -554,4 +557,107 @@ func (s *VolumeServiceImpl) ModifyVolume(input *ec2.ModifyVolumeInput) (*ec2.Mod
 	return &ec2.ModifyVolumeOutput{
 		VolumeModification: modification,
 	}, nil
+}
+
+// DeleteVolume deletes an EBS volume: validates state, notifies viperblockd, and removes S3 data
+func (s *VolumeServiceImpl) DeleteVolume(input *ec2.DeleteVolumeInput) (*ec2.DeleteVolumeOutput, error) {
+	if input == nil || input.VolumeId == nil || *input.VolumeId == "" {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
+	volumeID := *input.VolumeId
+	slog.Info("DeleteVolume request", "volumeId", volumeID)
+
+	// Fetch volume config to validate state
+	cfg, err := s.getVolumeConfig(volumeID)
+	if err != nil {
+		slog.Error("DeleteVolume failed to get volume config", "volumeId", volumeID, "err", err)
+		return nil, err
+	}
+
+	// Validate: volume must be available and not attached
+	if cfg.VolumeMetadata.State != "available" || cfg.VolumeMetadata.AttachedInstance != "" {
+		slog.Error("DeleteVolume: volume is in use", "volumeId", volumeID, "state", cfg.VolumeMetadata.State, "attachedInstance", cfg.VolumeMetadata.AttachedInstance)
+		return nil, errors.New(awserrors.ErrorVolumeInUse)
+	}
+
+	// Notify viperblockd to stop nbdkit/WAL syncer (best-effort)
+	if s.natsConn != nil {
+		deleteReq := config.EBSDeleteRequest{Volume: volumeID}
+		deleteData, err := json.Marshal(deleteReq)
+		if err != nil {
+			slog.Error("DeleteVolume failed to marshal ebs.delete request", "volumeId", volumeID, "err", err)
+		} else {
+			msg, err := s.natsConn.Request("ebs.delete", deleteData, 5*time.Second)
+			if err != nil {
+				slog.Warn("ebs.delete notification failed (volume may not be mounted)", "volumeId", volumeID, "err", err)
+			} else {
+				var deleteResp config.EBSDeleteResponse
+				if json.Unmarshal(msg.Data, &deleteResp) == nil && deleteResp.Error != "" {
+					slog.Error("ebs.delete returned error", "volumeId", volumeID, "err", deleteResp.Error)
+					return nil, errors.New(awserrors.ErrorServerInternal)
+				}
+			}
+		}
+	} else {
+		slog.Warn("DeleteVolume: natsConn is nil, skipping viperblockd notification", "volumeId", volumeID)
+	}
+
+	// Delete all S3 objects for this volume and its sub-volumes.
+	// Auxiliary prefixes are deleted first so the main config.json remains
+	// available for retry if an auxiliary deletion fails.
+	prefixes := []string{
+		volumeID + "-efi/",
+		volumeID + "-cloudinit/",
+		volumeID + "/",
+	}
+
+	for _, prefix := range prefixes {
+		if err := s.deleteS3Prefix(prefix); err != nil {
+			slog.Error("DeleteVolume failed to delete S3 prefix", "prefix", prefix, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
+	}
+
+	slog.Info("DeleteVolume completed", "volumeId", volumeID)
+
+	return &ec2.DeleteVolumeOutput{}, nil
+}
+
+// deleteS3Prefix deletes all S3 objects under the given prefix
+func (s *VolumeServiceImpl) deleteS3Prefix(prefix string) error {
+	bucket := s.config.Predastore.Bucket
+
+	var continuationToken *string
+	for {
+		listOutput, err := s.s3Client.ListObjectsV2(&s3.ListObjectsV2Input{
+			Bucket:            aws.String(bucket),
+			Prefix:            aws.String(prefix),
+			ContinuationToken: continuationToken,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to list objects with prefix %s: %w", prefix, err)
+		}
+
+		if len(listOutput.Contents) == 0 {
+			break
+		}
+
+		for _, obj := range listOutput.Contents {
+			_, err := s.s3Client.DeleteObject(&s3.DeleteObjectInput{
+				Bucket: aws.String(bucket),
+				Key:    obj.Key,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to delete object %s: %w", *obj.Key, err)
+			}
+		}
+
+		if !aws.BoolValue(listOutput.IsTruncated) {
+			break
+		}
+		continuationToken = listOutput.NextContinuationToken
+	}
+
+	return nil
 }

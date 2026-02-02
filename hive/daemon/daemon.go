@@ -430,6 +430,7 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.CreateVolume", d.handleEC2CreateVolume, "hive-workers"},
 		{"ec2.DescribeVolumes", d.handleEC2DescribeVolumes, "hive-workers"},
 		{"ec2.ModifyVolume", d.handleEC2ModifyVolume, "hive-workers"},
+		{"ec2.DeleteVolume", d.handleEC2DeleteVolume, "hive-workers"},
 		{"ec2.DescribeInstances", d.handleEC2DescribeInstances, ""},
 		{"ec2.DescribeInstanceTypes", d.handleEC2DescribeInstanceTypes, ""},
 		{"ec2.startinstances", d.handleEC2StartInstances, "hive-workers"},
@@ -474,7 +475,7 @@ func (d *Daemon) Start() error {
 	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances)
 	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
 	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config)
-	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config)
+	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config, d.natsConn)
 
 	d.restoreInstances()
 
