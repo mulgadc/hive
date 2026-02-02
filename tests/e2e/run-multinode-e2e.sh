@@ -269,11 +269,13 @@ echo "  Verifying volume deletion..."
 COUNT=0
 while [ $COUNT -lt 30 ]; do
     set +e
-    DESCRIBE_OUTPUT=$($AWS_EC2 describe-volumes --volume-ids "$STANDALONE_VOLUME_ID" 2>&1)
+    VOLUME_CHECK=$($AWS_EC2 describe-volumes --volume-ids "$STANDALONE_VOLUME_ID" \
+        --query 'Volumes[0].VolumeId' --output text 2>&1)
     DESCRIBE_EXIT=$?
     set -e
 
-    if [ $DESCRIBE_EXIT -ne 0 ] || echo "$DESCRIBE_OUTPUT" | jq -e '.Volumes | length == 0' > /dev/null 2>&1; then
+    # Volume gone = describe fails, returns "None", or returns empty
+    if [ $DESCRIBE_EXIT -ne 0 ] || [ "$VOLUME_CHECK" == "None" ] || [ -z "$VOLUME_CHECK" ]; then
         echo "  Volume deleted successfully"
         break
     fi
