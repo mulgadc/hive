@@ -66,7 +66,9 @@ func (d *Daemon) handleEC2StartInstances(msg *nats.Msg) {
 		ec2StartInstanceResponse.Error = err.Error()
 	} else {
 		ec2StartInstanceResponse.InstanceID = instance.ID
+		d.Instances.Mu.Lock()
 		ec2StartInstanceResponse.Status = string(instance.Status)
+		d.Instances.Mu.Unlock()
 	}
 
 	ec2StartInstanceResponse.Respond(msg)
@@ -856,6 +858,8 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 				instanceCopy.State.SetCode(info.Code)
 				instanceCopy.State.SetName(info.Name)
 			} else {
+				slog.Warn("Instance has unmapped status, reporting as pending",
+					"instanceId", instance.ID, "status", string(instance.Status))
 				instanceCopy.State.SetCode(0)
 				instanceCopy.State.SetName("pending")
 			}

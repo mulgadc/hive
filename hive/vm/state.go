@@ -21,6 +21,8 @@ type EC2StateInfo struct {
 }
 
 // EC2StateCodes maps each InstanceState to its EC2 API code and name.
+// Note: StateError and StateProvisioning are Hive-specific states with no direct
+// AWS EC2 equivalent. Their Code/Name values are best-effort mappings.
 var EC2StateCodes = map[InstanceState]EC2StateInfo{
 	StateProvisioning: {Code: 0, Name: "pending"},
 	StatePending:      {Code: 0, Name: "pending"},
@@ -33,6 +35,7 @@ var EC2StateCodes = map[InstanceState]EC2StateInfo{
 }
 
 // ValidTransitions defines the allowed state transitions for an instance.
+// StateTerminated is intentionally absent — it is a terminal state with no valid transitions.
 var ValidTransitions = map[InstanceState][]InstanceState{
 	StateProvisioning: {StateRunning, StateError, StateShuttingDown},
 	StatePending:      {StateRunning, StateError, StateShuttingDown},
