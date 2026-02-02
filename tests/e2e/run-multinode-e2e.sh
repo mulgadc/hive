@@ -200,9 +200,71 @@ echo "  AMI ID: $AMI_ID"
 $AWS_EC2 describe-images --image-ids "$AMI_ID" | jq -e ".Images[0] | select(.ImageId==\"$AMI_ID\")" > /dev/null
 echo "  AMI verified"
 
-# Phase 5: Multi-Node Instance Tests
+# Phase 5: Volume Operations (Standalone)
 echo ""
-echo "Phase 5: Multi-Node Instance Tests"
+echo "Phase 5: Volume Operations"
+echo "========================================"
+
+# Test 0: Standalone Volume Create and Modify
+echo ""
+echo "Test 0: Standalone Volume Create and Modify"
+echo "----------------------------------------"
+echo "Creating a standalone volume and testing modify-volume..."
+
+# Create a standalone volume
+echo "  Creating 10GB volume in ap-southeast-2a..."
+CREATE_OUTPUT=$($AWS_EC2 create-volume --size 10 --availability-zone ap-southeast-2a)
+STANDALONE_VOLUME_ID=$(echo "$CREATE_OUTPUT" | jq -r '.VolumeId')
+
+if [ -z "$STANDALONE_VOLUME_ID" ] || [ "$STANDALONE_VOLUME_ID" == "null" ]; then
+    echo "  ERROR: Failed to create standalone volume"
+    echo "  Output: $CREATE_OUTPUT"
+    exit 1
+fi
+echo "  Created volume: $STANDALONE_VOLUME_ID"
+
+# Describe the volume to verify
+echo "  Verifying volume..."
+$AWS_EC2 describe-volumes --volume-ids "$STANDALONE_VOLUME_ID" \
+    --query 'Volumes[*].{VolumeId:VolumeId,State:State,Size:Size}' \
+    --output table
+
+# Get current size
+CURRENT_SIZE=$($AWS_EC2 describe-volumes --volume-ids "$STANDALONE_VOLUME_ID" \
+    --query 'Volumes[0].Size' --output text)
+echo "  Current size: ${CURRENT_SIZE}GB"
+
+# Resize to 20GB
+NEW_SIZE=20
+echo "  Modifying volume to ${NEW_SIZE}GB..."
+$AWS_EC2 modify-volume --volume-id "$STANDALONE_VOLUME_ID" --size "$NEW_SIZE"
+
+# Verify resize
+echo "  Verifying resize..."
+COUNT=0
+while [ $COUNT -lt 30 ]; do
+    VOLUME_SIZE=$($AWS_EC2 describe-volumes --volume-ids "$STANDALONE_VOLUME_ID" \
+        --query 'Volumes[0].Size' --output text)
+
+    if [ "$VOLUME_SIZE" -eq "$NEW_SIZE" ]; then
+        echo "  Volume resized successfully to ${NEW_SIZE}GB"
+        break
+    fi
+
+    sleep 2
+    COUNT=$((COUNT + 1))
+done
+
+if [ "$VOLUME_SIZE" -ne "$NEW_SIZE" ]; then
+    echo "  ERROR: Volume failed to resize to ${NEW_SIZE}GB (current: ${VOLUME_SIZE}GB)"
+    exit 1
+fi
+
+echo "  Standalone volume test passed"
+
+# Phase 6: Multi-Node Instance Tests
+echo ""
+echo "Phase 6: Multi-Node Instance Tests"
 echo "========================================"
 
 # Test 1: Instance Distribution
@@ -280,69 +342,6 @@ echo "  Stopping instance..."
 $AWS_EC2 stop-instances --instance-ids "$TEST_INSTANCE" > /dev/null
 wait_for_instance_state "$TEST_INSTANCE" "stopped" 30
 
-# Test 3b: Volume Modification (while instance is stopped)
-echo ""
-echo "Test 3b: Volume Modification"
-echo "----------------------------------------"
-echo "Testing modify-volume while instance is stopped..."
-
-# Get the volume attached to the test instance
-echo "  Listing all volumes attached to instance $TEST_INSTANCE..."
-$AWS_EC2 describe-volumes \
-    --filters "Name=attachment.instance-id,Values=$TEST_INSTANCE" \
-    --query 'Volumes[*].{VolumeId:VolumeId,State:State,Size:Size,AttachedInstance:Attachments[0].InstanceId}' \
-    --output table
-
-TEST_VOLUME_ID=$($AWS_EC2 describe-volumes \
-    --filters "Name=attachment.instance-id,Values=$TEST_INSTANCE" \
-    --query 'Volumes[0].VolumeId' --output text)
-
-if [ -z "$TEST_VOLUME_ID" ] || [ "$TEST_VOLUME_ID" == "None" ]; then
-    echo "  ERROR: Could not find volume for instance $TEST_INSTANCE"
-    exit 1
-fi
-echo "  Selected Volume ID: $TEST_VOLUME_ID"
-
-# Get current size
-CURRENT_SIZE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
-    --query 'Volumes[0].Size' --output text)
-echo "  Current size: ${CURRENT_SIZE}GB"
-
-# Calculate new size
-if [ "$CURRENT_SIZE" -lt 2 ]; then
-    NEW_SIZE=2
-else
-    NEW_SIZE=$((CURRENT_SIZE * 2))
-fi
-echo "  New size: ${NEW_SIZE}GB"
-
-# Modify volume
-echo "  Modifying volume..."
-$AWS_EC2 modify-volume --volume-id "$TEST_VOLUME_ID" --size "$NEW_SIZE" > /dev/null
-
-# Verify resize
-echo "  Verifying resize..."
-COUNT=0
-while [ $COUNT -lt 30 ]; do
-    VOLUME_SIZE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
-        --query 'Volumes[0].Size' --output text)
-
-    if [ "$VOLUME_SIZE" -eq "$NEW_SIZE" ]; then
-        echo "  Volume resized successfully to ${NEW_SIZE}GB"
-        break
-    fi
-
-    sleep 2
-    COUNT=$((COUNT + 1))
-done
-
-if [ "$VOLUME_SIZE" -ne "$NEW_SIZE" ]; then
-    echo "  ERROR: Volume failed to resize to ${NEW_SIZE}GB (current: ${VOLUME_SIZE}GB)"
-    exit 1
-fi
-
-echo "  Volume modification test passed"
-
 # Start instance
 echo "  Starting instance..."
 $AWS_EC2 start-instances --instance-ids "$TEST_INSTANCE" > /dev/null
@@ -360,10 +359,18 @@ verify_nats_cluster 3 || {
     echo "WARNING: NATS cluster verification failed after operations"
 }
 
-# Cleanup: Terminate all test instances
+# Cleanup: Delete standalone volume and terminate all test instances
 echo ""
-echo "Cleanup: Terminating test instances"
+echo "Cleanup: Deleting test resources"
 echo "----------------------------------------"
+
+# Delete the standalone volume created in Test 0 (not implemented yet)
+# if [ -n "$STANDALONE_VOLUME_ID" ]; then
+#     echo "  Deleting standalone volume $STANDALONE_VOLUME_ID..."
+#     $AWS_EC2 delete-volume --volume-id "$STANDALONE_VOLUME_ID" 2>/dev/null || true
+# fi
+
+# Terminate all instances
 for instance_id in "${INSTANCE_IDS[@]}"; do
     echo "  Terminating $instance_id..."
     $AWS_EC2 terminate-instances --instance-ids "$instance_id" > /dev/null
