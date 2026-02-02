@@ -1,10 +1,11 @@
 import type { Volume } from "@aws-sdk/client-ec2"
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, Link } from "@tanstack/react-router"
 
 import { ListCard } from "@/components/list-card"
 import { PageHeading } from "@/components/page-heading"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { ec2VolumesQueryOptions } from "@/queries/ec2"
 
 export const Route = createFileRoute("/_auth/ec2/(volumes)/describe-volumes/")({
@@ -28,7 +29,14 @@ function Volumes() {
 
   return (
     <>
-      <PageHeading title="EC2 Volumes" />
+      <PageHeading
+        actions={
+          <Link to="/ec2/create-volume">
+            <Button>Create Volume</Button>
+          </Link>
+        }
+        title="EC2 Volumes"
+      />
 
       {volumes.length > 0 ? (
         <div className="space-y-4">

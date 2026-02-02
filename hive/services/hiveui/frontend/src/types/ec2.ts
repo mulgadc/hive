@@ -46,6 +46,17 @@ export const importKeyPairSchema = z.object({
 
 export type ImportKeyPairData = z.infer<typeof importKeyPairSchema>
 
+export const createVolumeSchema = z.object({
+  size: z
+    .number()
+    .int("Size must be a whole number")
+    .min(1, "Size must be at least 1 GiB")
+    .max(16_384, "Size must be at most 16384 GiB"),
+  availabilityZone: z.string().min(1, "Availability zone is required"),
+})
+
+export type CreateVolumeFormData = z.infer<typeof createVolumeSchema>
+
 export const modifyVolumeSchema = z.object({
   size: z
     .number()

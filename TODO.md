@@ -34,20 +34,6 @@
 - [DONE] change all log into slog
 - [DONE] change deleteontermination fields to false, unsupported for now.
 
-## EC2 create-volume
-
-[DONE] Allow the ability to create new volumes
-
-```sh
-aws ec2 create-volume \
-    --size 80 \
-    --availability-zone ap-southeast-2a
-```
-
-- [DONE] viperblock - Create new volume for specified size (empty), push state to predastore.
-- [DONE] Note `gp3` volumes are only supported at this stage (no gp2, io1/io2, etc)
-- [DONE] Validate availability zone, only supports the specified value when running `hive init` - Multi AZ available Hive v2+
-
 ## EC2 attach-volume
 
 ```sh

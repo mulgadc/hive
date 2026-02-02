@@ -51,11 +51,11 @@
       "Bash(cd ../viperblock && *)",
       "Bash(cd ../predastore && *)",
 
-      "Bash(pnpm fix)",
-      "Bash(pnpm check)",
-      "Bash(pnpm build)",
+      "Bash(pnpm fix *)",
+      "Bash(pnpm check *)",
+      "Bash(pnpm build *)",
       "Bash(pnpm tsc *)",
-      "Bash(pnpx @tanstack/router-cli generate*)",
+      "Bash(pnpx @tanstack/router-cli generate *)",
 
       "Bash(git diff*)",
       "Bash(git diff --staged*)",
