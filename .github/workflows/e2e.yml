@@ -22,7 +22,6 @@ jobs:
       - name: Build E2E Image
         run: |
           docker build \
-            --no-cache \
             -t hive-e2e:latest \
             -f hive/tests/e2e/Dockerfile.e2e \
             .
