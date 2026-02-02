@@ -772,6 +772,41 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 	slog.Info("handleEC2ModifyVolume completed", "volumeId", modifyVolumeInput.VolumeId)
 }
 
+// handleEC2DeleteVolume processes incoming EC2 DeleteVolume requests
+func (d *Daemon) handleEC2DeleteVolume(msg *nats.Msg) {
+	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
+
+	deleteVolumeInput := &ec2.DeleteVolumeInput{}
+	errResp := utils.UnmarshalJsonPayload(deleteVolumeInput, msg.Data)
+	if errResp != nil {
+		msg.Respond(errResp)
+		slog.Error("Request does not match DeleteVolumeInput")
+		return
+	}
+
+	slog.Info("Processing DeleteVolume request", "volumeId", aws.StringValue(deleteVolumeInput.VolumeId))
+
+	output, err := d.volumeService.DeleteVolume(deleteVolumeInput)
+
+	if err != nil {
+		slog.Error("handleEC2DeleteVolume service.DeleteVolume failed", "err", err)
+		errResp = utils.GenerateErrorPayload(err.Error())
+		msg.Respond(errResp)
+		return
+	}
+
+	jsonResponse, err := json.Marshal(output)
+	if err != nil {
+		slog.Error("handleEC2DeleteVolume failed to marshal output", "err", err)
+		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+		msg.Respond(errResp)
+		return
+	}
+	msg.Respond(jsonResponse)
+
+	slog.Info("handleEC2DeleteVolume completed", "volumeId", aws.StringValue(deleteVolumeInput.VolumeId))
+}
+
 // handleEC2DescribeInstanceTypes processes incoming EC2 DescribeInstanceTypes requests
 // This handler responds with instance types that can currently be provisioned on this node
 // based on available resources (CPU and memory not already allocated to running instances)

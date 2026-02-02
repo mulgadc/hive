@@ -260,7 +260,36 @@ if [ "$VOLUME_SIZE" -ne "$NEW_SIZE" ]; then
     exit 1
 fi
 
-echo "  Standalone volume test passed"
+# Delete the standalone volume
+echo "  Deleting standalone volume $STANDALONE_VOLUME_ID..."
+$AWS_EC2 delete-volume --volume-id "$STANDALONE_VOLUME_ID"
+
+# Verify deletion
+echo "  Verifying volume deletion..."
+COUNT=0
+while [ $COUNT -lt 30 ]; do
+    set +e
+    VOLUME_CHECK=$($AWS_EC2 describe-volumes --volume-ids "$STANDALONE_VOLUME_ID" \
+        --query 'Volumes[0].VolumeId' --output text 2>&1)
+    DESCRIBE_EXIT=$?
+    set -e
+
+    # Volume gone = describe fails, returns "None", or returns empty
+    if [ $DESCRIBE_EXIT -ne 0 ] || [ "$VOLUME_CHECK" == "None" ] || [ -z "$VOLUME_CHECK" ]; then
+        echo "  Volume deleted successfully"
+        break
+    fi
+
+    sleep 2
+    COUNT=$((COUNT + 1))
+done
+
+if [ $COUNT -ge 30 ]; then
+    echo "  ERROR: Volume deletion verification timed out"
+    exit 1
+fi
+
+echo "  Standalone volume test passed (create -> resize -> delete)"
 
 # Phase 6: Multi-Node Instance Tests
 echo ""

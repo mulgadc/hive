@@ -8,6 +8,7 @@ import (
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func newTestVolumeService(az string) *VolumeServiceImpl {
@@ -185,3 +186,46 @@ func TestCreateVolume_PassesValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestDeleteVolume_Validation(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   *ec2.DeleteVolumeInput
+		wantErr string
+	}{
+		{
+			name:    "NilInput",
+			input:   nil,
+			wantErr: awserrors.ErrorInvalidParameterValue,
+		},
+		{
+			name:    "EmptyInput",
+			input:   &ec2.DeleteVolumeInput{},
+			wantErr: awserrors.ErrorInvalidParameterValue,
+		},
+		{
+			name: "NilVolumeId",
+			input: &ec2.DeleteVolumeInput{
+				VolumeId: nil,
+			},
+			wantErr: awserrors.ErrorInvalidParameterValue,
+		},
+		{
+			name: "EmptyVolumeId",
+			input: &ec2.DeleteVolumeInput{
+				VolumeId: aws.String(""),
+			},
+			wantErr: awserrors.ErrorInvalidParameterValue,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newTestVolumeService("ap-southeast-2a")
+			_, err := svc.DeleteVolume(tt.input)
+			require.Error(t, err)
+			assert.Equal(t, tt.wantErr, err.Error())
+		})
+	}
+}
+

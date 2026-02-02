@@ -110,21 +110,63 @@ func launchService(cfg *Config) (err error) {
 	// Subscribe to the viperblock.mount subject
 	slog.Info("Connected. Waiting for EBS events")
 
-	// TODO: Support volume delete and predastore delete bucket
 	nc.QueueSubscribe("ebs.delete", "hive-workers", func(msg *nats.Msg) {
-		slog.Info("Received message", "data", string(msg.Data))
+		slog.Info("Received ebs.delete message", "data", string(msg.Data))
 
-		// Parse the message
 		var ebsRequest config.EBSDeleteRequest
 		err := json.Unmarshal(msg.Data, &ebsRequest)
 		if err != nil {
-			slog.Error("Failed to unmarshal message", "err", err)
+			slog.Error("Failed to unmarshal ebs.delete message", "err", err)
+			errResp, _ := json.Marshal(config.EBSDeleteResponse{Error: fmt.Sprintf("bad request: %v", err)})
+			msg.Respond(errResp)
 			return
 		}
 
-		// TODO: Improve
-		nc.Publish("ebs.delete.response", fmt.Appendf(nil, `{"volume":"%s","deleted":true}`, ebsRequest.Volume))
+		response := config.EBSDeleteResponse{Volume: ebsRequest.Volume, Success: true}
 
+		// Find and clean up the mounted volume if it exists
+		cfg.mu.Lock()
+		var matched MountedVolume
+		matchIdx := -1
+		for i, volume := range cfg.MountedVolumes {
+			if volume.Name == ebsRequest.Volume {
+				matched = volume
+				matchIdx = i
+				cfg.MountedVolumes = append(cfg.MountedVolumes[:i], cfg.MountedVolumes[i+1:]...)
+				break
+			}
+		}
+		cfg.mu.Unlock()
+
+		if matchIdx >= 0 {
+			// Stop WAL syncer and kill nbdkit process
+			if matched.VB != nil {
+				matched.VB.StopWALSyncer()
+			}
+			utils.KillProcess(matched.PID)
+
+			// Remove the socket file if using socket transport
+			if matched.Socket != "" {
+				slog.Info("Removing socket file", "socket", matched.Socket)
+				if err := os.Remove(matched.Socket); err != nil && !os.IsNotExist(err) {
+					slog.Error("Failed to delete nbd socket", "err", err, "socket", matched.Socket)
+				}
+			}
+
+			slog.Info("ebs.delete: cleaned up mounted volume", "volume", ebsRequest.Volume, "pid", matched.PID)
+		} else {
+			// Volume not mounted is expected for "available" volumes
+			slog.Info("ebs.delete: volume not mounted (expected for available volumes)", "volume", ebsRequest.Volume)
+		}
+
+		respData, err := json.Marshal(response)
+		if err != nil {
+			slog.Error("Failed to marshal ebs.delete response", "err", err)
+			msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
+			return
+		}
+
+		msg.Respond(respData)
 	})
 
 	nc.QueueSubscribe("ebs.unmount", "hive-workers", func(msg *nats.Msg) {

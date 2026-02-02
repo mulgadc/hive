@@ -7,4 +7,5 @@ type VolumeService interface {
 	CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Volume, error)
 	DescribeVolumes(input *ec2.DescribeVolumesInput) (*ec2.DescribeVolumesOutput, error)
 	ModifyVolume(input *ec2.ModifyVolumeInput) (*ec2.ModifyVolumeOutput, error)
+	DeleteVolume(input *ec2.DeleteVolumeInput) (*ec2.DeleteVolumeOutput, error)
 }
