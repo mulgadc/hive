@@ -149,7 +149,7 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 	var iops int
 	var imageId string
 	var snapshotId string
-	var deleteOnTermination = true // Default to true
+	var deleteOnTermination = false // Default to false
 
 	// Handle block device mappings
 	if len(input.BlockDeviceMappings) > 0 {

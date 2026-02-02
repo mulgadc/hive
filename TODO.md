@@ -20,7 +20,7 @@
 ### Implementation gaps:
 
 - EC2 - Support extended features for `run-instance`
-  - Volume resize of AMI. Note `nbd` does not support live resize events, instance needs to be stopped, resized, and started.
+  - [DONE] Volume resize of AMI. Note `nbd` does not support live resize events, instance needs to be stopped, resized, and started.
   - Confirm cloud-init will resize volume on boot and configured correctly.
   - Attach additional volumes
   - Attach to VPC / Security group (required Open vSwitch implementation)
@@ -32,7 +32,7 @@
 - delete volumes on termination
 - fix describe instances
 - change all log into slog
-- change deleteontermination fields to false, unsupported for now.
+- [DONE] change deleteontermination fields to false, unsupported for now.
 
 ## EC2 create-volume
 
