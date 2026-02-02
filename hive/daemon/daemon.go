@@ -457,10 +457,40 @@ func (d *Daemon) subscribeAll() error {
 
 // Start initializes and starts the daemon
 func (d *Daemon) Start() error {
+	if err := d.connectNATS(); err != nil {
+		return fmt.Errorf("failed to connect to NATS: %w", err)
+	}
 
-	var err error
+	// ClusterManager must start before JetStream init so other nodes can join
+	// via /join endpoint and help form the NATS cluster.
+	if err := d.ClusterManager(); err != nil {
+		return fmt.Errorf("failed to start cluster manager: %w", err)
+	}
 
-	// Connect to NATS with options
+	if err := d.initJetStream(); err != nil {
+		return fmt.Errorf("failed to initialize JetStream: %w", err)
+	}
+
+	// Create services before loading/launching instances, since LaunchInstance depends on them
+	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances)
+	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
+	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config)
+	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config)
+
+	d.restoreInstances()
+
+	if err := d.subscribeAll(); err != nil {
+		return fmt.Errorf("failed to subscribe to NATS topics: %w", err)
+	}
+
+	d.setupShutdown()
+	d.awaitShutdown()
+
+	return nil
+}
+
+// connectNATS establishes a connection to the NATS server with reconnect handling.
+func (d *Daemon) connectNATS() error {
 	opts := []nats.Option{
 		nats.Token(d.config.NATS.ACL.Token),
 		nats.ReconnectWait(time.Second),
@@ -473,61 +503,49 @@ func (d *Daemon) Start() error {
 		}),
 	}
 
+	var err error
 	d.natsConn, err = nats.Connect(d.config.NATS.Host, opts...)
 	if err != nil {
-		return fmt.Errorf("failed to connect to NATS: %w", err)
+		return err
 	}
 
 	slog.Info("Connected to NATS server", "host", d.config.NATS.Host)
+	return nil
+}
 
-	// Start cluster manager HTTP server FIRST
-	// This must happen before JetStream init so other nodes can join via /join endpoint
-	// and help form the NATS cluster (avoids chicken-and-egg in multi-node setup)
-	if err := d.ClusterManager(); err != nil {
-		return fmt.Errorf("failed to start cluster manager: %w", err)
-	}
-
-	// Initialize JetStream for KV state storage (required - no disk fallback)
-	// Start with 1 replica to allow single-node startup, then upgrade if cluster has more nodes
-	// Retry with backoff if JetStream is not ready yet
-	maxRetries := 10
+// initJetStream initializes JetStream with retry/backoff and upgrades replicas for multi-node clusters.
+func (d *Daemon) initJetStream() error {
+	const maxRetries = 10
 	retryDelay := 500 * time.Millisecond
 
+	var lastErr error
 	for attempt := 1; attempt <= maxRetries; attempt++ {
+		var err error
 		d.jsManager, err = NewJetStreamManager(d.natsConn, 1)
-		if err != nil {
-			slog.Warn("Failed to init JetStream", "error", err, "attempt", attempt, "maxRetries", maxRetries)
-			if attempt < maxRetries {
-				time.Sleep(retryDelay)
-				retryDelay *= 2 // Exponential backoff
-				if retryDelay > 5*time.Second {
-					retryDelay = 5 * time.Second
-				}
-				continue
-			}
-			return fmt.Errorf("failed to initialize JetStream after %d attempts: %w", maxRetries, err)
+		if err == nil {
+			err = d.jsManager.InitKVBucket()
 		}
 
-		if err := d.jsManager.InitKVBucket(); err != nil {
-			slog.Warn("Failed to init KV bucket", "error", err, "attempt", attempt, "maxRetries", maxRetries)
-			if attempt < maxRetries {
-				time.Sleep(retryDelay)
-				retryDelay *= 2
-				if retryDelay > 5*time.Second {
-					retryDelay = 5 * time.Second
-				}
-				continue
-			}
-			return fmt.Errorf("failed to initialize JetStream KV bucket after %d attempts: %w", maxRetries, err)
+		if err == nil {
+			slog.Info("JetStream KV store initialized successfully", "replicas", 1, "attempts", attempt)
+			lastErr = nil
+			break
 		}
 
-		// Success
-		slog.Info("JetStream KV store initialized successfully", "replicas", 1, "attempts", attempt)
-		break
+		lastErr = err
+		slog.Warn("Failed to init JetStream", "error", err, "attempt", attempt, "maxRetries", maxRetries)
+
+		if attempt < maxRetries {
+			time.Sleep(retryDelay)
+			retryDelay = min(retryDelay*2, 5*time.Second)
+		}
 	}
 
-	// Try to upgrade replicas if cluster has more nodes
-	// This handles the case where this daemon starts after other NATS nodes are already up
+	if lastErr != nil {
+		return fmt.Errorf("failed to initialize JetStream after %d attempts: %w", maxRetries, lastErr)
+	}
+
+	// Upgrade replicas if cluster has more than one node
 	clusterSize := len(d.clusterConfig.Nodes)
 	if clusterSize > 1 {
 		if err := d.jsManager.UpdateReplicas(clusterSize); err != nil {
@@ -535,79 +553,62 @@ func (d *Daemon) Start() error {
 		}
 	}
 
-	// Create services before loading/launching instances, since LaunchInstance depends on them
-	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances)
-	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
-	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config)
-	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config)
+	return nil
+}
 
-	// Load existing state for VMs from JetStream or disk
-	err = d.LoadState()
+// restoreInstances loads persisted VM state and re-launches instances that are
+// neither terminated nor flagged as user-stopped.
+func (d *Daemon) restoreInstances() {
+	err := d.LoadState()
 	if err != nil {
-		slog.Warn("Failed to load state from disk, continuing with empty state", "error", err)
-	} else {
+		slog.Warn("Failed to load state, continuing with empty state", "error", err)
+		return
+	}
 
-		slog.Info("Loaded state from disk", "instance count", len(d.Instances.VMS))
+	slog.Info("Loaded state", "instance count", len(d.Instances.VMS))
 
-		//d.mu.Lock()
-		// Ensure mutex is usable after unmarshalling
-		d.Instances.Mu = sync.Mutex{}
+	// Ensure mutexes and QMP clients are usable after deserialization
+	d.Instances.Mu = sync.Mutex{}
 
-		for i := range d.Instances.VMS {
-			instance := d.Instances.VMS[i]
-			instance.EBSRequests.Mu = sync.Mutex{}
-			instance.QMPClient = &qmp.QMPClient{}
-			d.Instances.VMS[i] = instance
-			//d.Instances.VMS[i].EBSRequests.Mu = sync.Mutex{}
-			//			d.Instances.VMS[i].QMPClient.Mu = sync.Mutex{}
+	for i := range d.Instances.VMS {
+		d.Instances.VMS[i].EBSRequests.Mu = sync.Mutex{}
+		d.Instances.VMS[i].QMPClient = &qmp.QMPClient{}
 
-			if instance.Attributes.StopInstance {
-				slog.Info("Instance flagged as user initiated stop, skipping", "instance", instance.ID)
+		instance := d.Instances.VMS[i]
 
-			} else if instance.Status != "terminated" {
-				instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
-				if ok {
-					slog.Info("Re-allocating resources for instance", "instanceId", instance.ID, "type", instance.InstanceType)
-					if err := d.resourceMgr.allocate(instanceType); err != nil {
-						slog.Error("Failed to re-allocate resources for instance on startup", "instanceId", instance.ID, "err", err)
-					}
-				}
-
-				slog.Info("Launching instance", "instance", instance.ID)
-				err = d.LaunchInstance(instance)
-				if err != nil {
-					slog.Error("Failed to launch instance:", "err", err)
-				}
-			} else {
-				slog.Info("Instance state is terminated, skipping", "instance", instance.ID)
-			}
-
+		if instance.Status == "terminated" {
+			slog.Info("Instance state is terminated, skipping", "instance", instance.ID)
+			continue
 		}
-		//d.mu.Unlock()
 
-		// Launch running instances
+		if instance.Attributes.StopInstance {
+			slog.Info("Instance flagged as user initiated stop, skipping", "instance", instance.ID)
+			continue
+		}
 
+		instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
+		if ok {
+			slog.Info("Re-allocating resources for instance", "instanceId", instance.ID, "type", instance.InstanceType)
+			if err := d.resourceMgr.allocate(instanceType); err != nil {
+				slog.Error("Failed to re-allocate resources for instance on startup", "instanceId", instance.ID, "err", err)
+			}
+		}
+
+		slog.Info("Launching instance", "instance", instance.ID)
+		if err := d.LaunchInstance(instance); err != nil {
+			slog.Error("Failed to launch instance", "instanceId", instance.ID, "err", err)
+		}
 	}
+}
 
-	if err := d.subscribeAll(); err != nil {
-		return err
-	}
-
-	// Setup graceful shutdown
-	d.setupShutdown()
-
-	// Create a channel to keep the main goroutine alive
+// awaitShutdown blocks until the daemon's shutdown wait group completes.
+func (d *Daemon) awaitShutdown() {
 	done := make(chan struct{})
-
-	// Wait for shutdown signal
 	go func() {
 		d.shutdownWg.Wait()
 		close(done)
 	}()
-
-	// Keep the main goroutine alive until shutdown
 	<-done
-	return nil
 }
 
 // computeConfigHash computes SHA256 hash of the shared cluster config (excluding node-specific fields)
