@@ -151,13 +151,9 @@ func (svc *Service) launchService() error {
 		file, err := contentFS.Open(path)
 		if err == nil {
 			_ = file.Close()
-			// File exists, check if it's not an HTML file for caching
-			if filepath.Ext(path) != ".html" {
-				// Vite outputs unique hashes for files so we can cache them forever
-				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-			} else {
-				w.Header().Set("Cache-Control", "no-cache")
-			}
+			// Use no-cache to force revalidation; http.FileServer sets ETags
+			// so browsers will get 304 Not Modified when files haven't changed
+			w.Header().Set("Cache-Control", "no-cache")
 			fileServer.ServeHTTP(w, r)
 			return
 		}

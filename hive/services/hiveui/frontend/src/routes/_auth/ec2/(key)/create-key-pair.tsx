@@ -7,8 +7,8 @@ import { BackLink } from "@/components/back-link"
 import { ErrorBanner } from "@/components/error-banner"
 import { PageHeading } from "@/components/page-heading"
 import { Button } from "@/components/ui/button"
+import { Field, FieldError, FieldTitle } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { useCreateKeyPair } from "@/mutations/ec2"
 import { type CreateKeyPairData, createKeyPairSchema } from "@/types/ec2"
 import { PrivateKeyModal } from "../-components/private-key-modal"
@@ -66,17 +66,18 @@ function CreateKeyPair() {
 
       <form className="max-w-4xl space-y-6" onSubmit={handleSubmit(onSubmit)}>
         {/* Key Name */}
-        <div className="space-y-2">
-          <Label htmlFor="keyName">Key Pair Name</Label>
+        <Field>
+          <FieldTitle>
+            <label htmlFor="keyName">Key Pair Name</label>
+          </FieldTitle>
           <Input
+            aria-invalid={!!errors.keyName}
             id="keyName"
             placeholder="my-key-pair…"
             {...register("keyName")}
           />
-          {errors.keyName && (
-            <p className="text-destructive text-sm">{errors.keyName.message}</p>
-          )}
-        </div>
+          <FieldError errors={[errors.keyName]} />
+        </Field>
 
         {/* Actions */}
         <div className="flex gap-2">

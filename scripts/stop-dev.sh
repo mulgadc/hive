@@ -59,7 +59,10 @@ stop_service() {
 # Stop services in reverse order
 echo "Stopping services..."
 echo ""
-# Stop Hive daemon/gateway first (it will terminate running instances, unmount nbd devices)
+# Stop Hive UI first (last to start)
+stop_service "hive-ui" "$PID_DIR"
+
+# Stop Hive daemon/gateway (it will terminate running instances, unmount nbd devices)
 stop_service "hive" "$PID_DIR"
 
 # Stop AWSGW
@@ -78,7 +81,7 @@ echo ""
 echo "✅ Hive development environment stopped"
 
 # Show any remaining related processes
-remaining=$(ps aux | grep -E "(hive|nats|predastore|viperblock)" | grep -v grep | grep -v "stop-dev.sh" || true)
+remaining=$(ps aux | grep -E "(hive|hive-ui|nats|predastore|viperblock)" | grep -v grep | grep -v "stop-dev.sh" || true)
 if [[ -n "$remaining" ]]; then
     echo ""
     echo "⚠️  Some related processes may still be running:"

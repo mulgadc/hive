@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -25,9 +24,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/gofiber/fiber/v2"
-	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
-	gateway_ec2_instance "github.com/mulgadc/hive/hive/gateway/ec2/instance"
 	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
 	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
@@ -276,14 +273,14 @@ func NewResourceManager() *ResourceManager {
 	// Get system memory (in GB)
 	totalMemGB, err := getSystemMemory()
 	if err != nil {
-		log.Printf("Warning: Failed to get system memory: %v, using default of 8GB", err)
+		slog.Warn("Failed to get system memory, using default of 8GB", "err", err)
 		totalMemGB = 8.0 // Default to 8GB if we can't get the actual memory
 	}
 
 	// Get CPU model for instance family detection
 	cpuModel, err := getCPUModel()
 	if err != nil {
-		log.Printf("Warning: Failed to get CPU model: %v, using default", err)
+		slog.Warn("Failed to get CPU model, using default", "err", err)
 		cpuModel = "Unknown"
 	}
 
@@ -304,8 +301,9 @@ func NewResourceManager() *ResourceManager {
 	if runtime.GOARCH == "arm64" {
 		burstableFamily = "t4g"
 	}
-	log.Printf("System resources: %d vCPUs, %.2f GB RAM, CPU: %s, Families: %s + %s (detected on %s)",
-		numCPU, totalMemGB, cpuModel, instanceFamily, burstableFamily, runtime.GOOS)
+	slog.Info("System resources detected",
+		"vCPUs", numCPU, "memGB", totalMemGB, "cpu", cpuModel,
+		"family", instanceFamily, "burstableFamily", burstableFamily, "os", runtime.GOOS)
 
 	return &ResourceManager{
 		availableVCPU: numCPU,
@@ -413,187 +411,202 @@ func NewDaemon(cfg *config.ClusterConfig) *Daemon {
 	}
 }
 
+// natsSub defines a single NATS subscription entry for the table-driven setup.
+type natsSub struct {
+	topic      string
+	handler    nats.MsgHandler
+	queueGroup string // empty = plain Subscribe (fan-out)
+}
+
+// subscribeAll registers all NATS subscriptions using a table-driven approach.
+func (d *Daemon) subscribeAll() error {
+	subs := []natsSub{
+		{"ec2.RunInstances", d.handleEC2RunInstances, "hive-workers"},
+		{"ec2.CreateKeyPair", d.handleEC2CreateKeyPair, "hive-workers"},
+		{"ec2.DeleteKeyPair", d.handleEC2DeleteKeyPair, "hive-workers"},
+		{"ec2.DescribeKeyPairs", d.handleEC2DescribeKeyPairs, "hive-workers"},
+		{"ec2.ImportKeyPair", d.handleEC2ImportKeyPair, "hive-workers"},
+		{"ec2.DescribeImages", d.handleEC2DescribeImages, "hive-workers"},
+		{"ec2.DescribeVolumes", d.handleEC2DescribeVolumes, "hive-workers"},
+		{"ec2.ModifyVolume", d.handleEC2ModifyVolume, "hive-workers"},
+		{"ec2.DescribeInstances", d.handleEC2DescribeInstances, ""},
+		{"ec2.DescribeInstanceTypes", d.handleEC2DescribeInstanceTypes, ""},
+		{"ec2.startinstances", d.handleEC2StartInstances, "hive-workers"},
+		{fmt.Sprintf("hive.admin.%s.health", d.node), d.handleHealthCheck, ""},
+		{"hive.nodes.discover", d.handleNodeDiscover, ""},
+	}
+
+	for _, s := range subs {
+		var sub *nats.Subscription
+		var err error
+		if s.queueGroup != "" {
+			sub, err = d.natsConn.QueueSubscribe(s.topic, s.queueGroup, s.handler)
+		} else {
+			sub, err = d.natsConn.Subscribe(s.topic, s.handler)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to subscribe to %s: %w", s.topic, err)
+		}
+		d.natsSubscriptions[s.topic] = sub
+		slog.Info("Subscribed to NATS topic", "topic", s.topic, "queue", s.queueGroup)
+	}
+	return nil
+}
+
 // Start initializes and starts the daemon
 func (d *Daemon) Start() error {
+	if err := d.connectNATS(); err != nil {
+		return fmt.Errorf("failed to connect to NATS: %w", err)
+	}
 
-	var err error
+	// ClusterManager must start before JetStream init so other nodes can join
+	// via /join endpoint and help form the NATS cluster.
+	if err := d.ClusterManager(); err != nil {
+		return fmt.Errorf("failed to start cluster manager: %w", err)
+	}
 
-	// Connect to NATS with options
+	if err := d.initJetStream(); err != nil {
+		return fmt.Errorf("failed to initialize JetStream: %w", err)
+	}
+
+	// Create services before loading/launching instances, since LaunchInstance depends on them
+	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances)
+	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
+	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config)
+	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config)
+
+	d.restoreInstances()
+
+	if err := d.subscribeAll(); err != nil {
+		return fmt.Errorf("failed to subscribe to NATS topics: %w", err)
+	}
+
+	d.setupShutdown()
+	d.awaitShutdown()
+
+	return nil
+}
+
+// connectNATS establishes a connection to the NATS server with reconnect handling.
+func (d *Daemon) connectNATS() error {
 	opts := []nats.Option{
 		nats.Token(d.config.NATS.ACL.Token),
 		nats.ReconnectWait(time.Second),
 		nats.MaxReconnects(-1), // Infinite reconnects
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
-			log.Printf("NATS disconnected: %v", err)
+			slog.Warn("NATS disconnected", "err", err)
 		}),
 		nats.ReconnectHandler(func(nc *nats.Conn) {
-			log.Printf("NATS reconnected to %s", nc.ConnectedUrl())
+			slog.Info("NATS reconnected", "url", nc.ConnectedUrl())
 		}),
 	}
 
+	var err error
 	d.natsConn, err = nats.Connect(d.config.NATS.Host, opts...)
 	if err != nil {
-		return fmt.Errorf("failed to connect to NATS: %w", err)
+		return err
 	}
 
-	log.Printf("Connected to NATS server at %s", d.config.NATS.Host)
+	slog.Info("Connected to NATS server", "host", d.config.NATS.Host)
+	return nil
+}
 
-	// Start cluster manager HTTP server FIRST
-	// This must happen before JetStream init so other nodes can join via /join endpoint
-	// and help form the NATS cluster (avoids chicken-and-egg in multi-node setup)
-	if err := d.ClusterManager(); err != nil {
-		return fmt.Errorf("failed to start cluster manager: %w", err)
-	}
+// initJetStream initializes JetStream with retry/backoff and upgrades replicas for multi-node clusters.
+func (d *Daemon) initJetStream() error {
+	const maxRetries = 10
+	retryDelay := 500 * time.Millisecond
 
-	// Initialize JetStream in background - don't block daemon startup
-	// This allows the daemon to start accepting requests while waiting for NATS cluster to form
-	go d.initJetStreamBackground()
-
-	// Create instance service for handling EC2 instance operations
-	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances)
-
-	// Create key service for handling EC2 key pair operations
-	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
-
-	// Create image service for handling EC2 AMI operations
-	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config)
-
-	// Create volume service for handling EC2 EBS volume operations
-	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config)
-
-	log.Printf("Subscribing to subject pattern: %s", "ec2.launch")
-
-	// Subscribe to EC2 events with queue group (legacy topic for backward compatibility)
-	/*
-		d.natsSubscriptions["ec2.launch"], err = d.natsConn.QueueSubscribe("ec2.launch", "hive-workers", d.handleEC2RunInstances)
-
-		if err != nil {
-			return fmt.Errorf("failed to subscribe to NATS ec2.launch: %w", err)
+	var lastErr error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		var err error
+		d.jsManager, err = NewJetStreamManager(d.natsConn, 1)
+		if err == nil {
+			err = d.jsManager.InitKVBucket()
 		}
-	*/
 
-	log.Printf("Subscribing to subject pattern: %s", "ec2.RunInstances")
+		if err == nil {
+			slog.Info("JetStream KV store initialized successfully", "replicas", 1, "attempts", attempt)
+			lastErr = nil
+			break
+		}
 
-	// Subscribe to EC2 RunInstances with queue group (AWS Action name format - recommended)
-	d.natsSubscriptions["ec2.RunInstances"], err = d.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", d.handleEC2RunInstances)
+		lastErr = err
+		slog.Warn("Failed to init JetStream", "error", err, "attempt", attempt, "maxRetries", maxRetries)
 
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.RunInstances: %w", err)
+		if attempt < maxRetries {
+			time.Sleep(retryDelay)
+			retryDelay = min(retryDelay*2, 5*time.Second)
+		}
 	}
 
-	log.Printf("Subscribing to subject pattern: %s", "ec2.CreateKeyPair")
-
-	// Subscribe to EC2 CreateKeyPair with queue group
-	d.natsSubscriptions["ec2.CreateKeyPair"], err = d.natsConn.QueueSubscribe("ec2.CreateKeyPair", "hive-workers", d.handleEC2CreateKeyPair)
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.CreateKeyPair: %w", err)
+	if lastErr != nil {
+		return fmt.Errorf("failed to initialize JetStream after %d attempts: %w", maxRetries, lastErr)
 	}
 
-	log.Printf("Subscribing to subject pattern: %s", "ec2.DeleteKeyPair")
-
-	// Subscribe to EC2 DeleteKeyPair with queue group
-	d.natsSubscriptions["ec2.DeleteKeyPair"], err = d.natsConn.QueueSubscribe("ec2.DeleteKeyPair", "hive-workers", d.handleEC2DeleteKeyPair)
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.DeleteKeyPair: %w", err)
+	// Upgrade replicas if cluster has more than one node
+	clusterSize := len(d.clusterConfig.Nodes)
+	if clusterSize > 1 {
+		if err := d.jsManager.UpdateReplicas(clusterSize); err != nil {
+			slog.Warn("Failed to upgrade JetStream replicas on startup (other NATS nodes may not be ready)", "targetReplicas", clusterSize, "error", err)
+		}
 	}
 
-	log.Printf("Subscribing to subject pattern: %s", "ec2.DescribeKeyPairs")
+	return nil
+}
 
-	// Subscribe to EC2 DescribeKeyPairs with queue group
-	d.natsSubscriptions["ec2.DescribeKeyPairs"], err = d.natsConn.QueueSubscribe("ec2.DescribeKeyPairs", "hive-workers", d.handleEC2DescribeKeyPairs)
-
+// restoreInstances loads persisted VM state and re-launches instances that are
+// neither terminated nor flagged as user-stopped.
+func (d *Daemon) restoreInstances() {
+	err := d.LoadState()
 	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeKeyPairs: %w", err)
+		slog.Warn("Failed to load state, continuing with empty state", "error", err)
+		return
 	}
 
-	log.Printf("Subscribing to subject pattern: %s", "ec2.ImportKeyPair")
+	slog.Info("Loaded state", "instance count", len(d.Instances.VMS))
 
-	// Subscribe to EC2 ImportKeyPair with queue group
-	d.natsSubscriptions["ec2.ImportKeyPair"], err = d.natsConn.QueueSubscribe("ec2.ImportKeyPair", "hive-workers", d.handleEC2ImportKeyPair)
+	// Ensure mutexes and QMP clients are usable after deserialization
+	d.Instances.Mu = sync.Mutex{}
 
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.ImportKeyPair: %w", err)
+	for i := range d.Instances.VMS {
+		d.Instances.VMS[i].EBSRequests.Mu = sync.Mutex{}
+		d.Instances.VMS[i].QMPClient = &qmp.QMPClient{}
+
+		instance := d.Instances.VMS[i]
+
+		if instance.Status == "terminated" {
+			slog.Info("Instance state is terminated, skipping", "instance", instance.ID)
+			continue
+		}
+
+		if instance.Attributes.StopInstance {
+			slog.Info("Instance flagged as user initiated stop, skipping", "instance", instance.ID)
+			continue
+		}
+
+		instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
+		if ok {
+			slog.Info("Re-allocating resources for instance", "instanceId", instance.ID, "type", instance.InstanceType)
+			if err := d.resourceMgr.allocate(instanceType); err != nil {
+				slog.Error("Failed to re-allocate resources for instance on startup", "instanceId", instance.ID, "err", err)
+			}
+		}
+
+		slog.Info("Launching instance", "instance", instance.ID)
+		if err := d.LaunchInstance(instance); err != nil {
+			slog.Error("Failed to launch instance", "instanceId", instance.ID, "err", err)
+		}
 	}
+}
 
-	log.Printf("Subscribing to subject pattern: %s", "ec2.DescribeImages")
-
-	// Subscribe to EC2 DescribeImages with queue group
-	d.natsSubscriptions["ec2.DescribeImages"], err = d.natsConn.QueueSubscribe("ec2.DescribeImages", "hive-workers", d.handleEC2DescribeImages)
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeImages: %w", err)
-	}
-
-	log.Printf("Subscribing to subject pattern: %s", "ec2.DescribeVolumes")
-
-	// Subscribe to EC2 DescribeVolumes with queue group
-	d.natsSubscriptions["ec2.DescribeVolumes"], err = d.natsConn.QueueSubscribe("ec2.DescribeVolumes", "hive-workers", d.handleEC2DescribeVolumes)
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeVolumes: %w", err)
-	}
-
-	log.Printf("Subscribing to subject pattern: %s", "ec2.DescribeInstances")
-
-	// Subscribe to EC2 DescribeInstances - no queue group for multi-node fan-out
-	d.natsSubscriptions["ec2.DescribeInstances"], err = d.natsConn.Subscribe("ec2.DescribeInstances", d.handleEC2DescribeInstances)
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeInstances: %w", err)
-	}
-
-	log.Printf("Subscribing to subject pattern: %s", "ec2.DescribeInstanceTypes")
-
-	// Subscribe to EC2 DescribeInstanceTypes - no queue group for multi-node fan-out
-	d.natsSubscriptions["ec2.DescribeInstanceTypes"], err = d.natsConn.Subscribe("ec2.DescribeInstanceTypes", d.handleEC2DescribeInstanceTypes)
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.DescribeInstanceTypes: %w", err)
-	}
-
-	// Subscribe to EC2 start instance events
-	// TODO: The instance state needs to be shared, not pinned to a single node.
-	// TODO: Handle this in a more generic function to group similar commands (start, stop, launch)
-	// Subscribe to EC2 events with queue group
-	d.natsSubscriptions["ec2.startinstances"], err = d.natsConn.QueueSubscribe("ec2.startinstances", "hive-workers", d.handleEC2StartInstances)
-
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS ec2.launch: %w", err)
-	}
-
-	// Subscribe to health check for this node
-	healthSubject := fmt.Sprintf("hive.admin.%s.health", d.node)
-	log.Printf("Subscribing to health check: %s", healthSubject)
-
-	d.natsSubscriptions[healthSubject], err = d.natsConn.Subscribe(healthSubject, d.handleHealthCheck)
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS %s: %w", healthSubject, err)
-	}
-
-	// Subscribe to node discovery - all daemons respond so gateway can discover active nodes
-	log.Printf("Subscribing to node discovery: hive.nodes.discover")
-	d.natsSubscriptions["hive.nodes.discover"], err = d.natsConn.Subscribe("hive.nodes.discover", d.handleNodeDiscover)
-	if err != nil {
-		return fmt.Errorf("failed to subscribe to NATS hive.nodes.discover: %w", err)
-	}
-
-	// Setup graceful shutdown
-	d.setupShutdown()
-
-	// Create a channel to keep the main goroutine alive
+// awaitShutdown blocks until the daemon's shutdown wait group completes.
+func (d *Daemon) awaitShutdown() {
 	done := make(chan struct{})
-
-	// Wait for shutdown signal
 	go func() {
 		d.shutdownWg.Wait()
 		close(done)
 	}()
-
-	// Keep the main goroutine alive until shutdown
 	<-done
-	return nil
 }
 
 // computeConfigHash computes SHA256 hash of the shared cluster config (excluding node-specific fields)
@@ -801,223 +814,33 @@ func (d *Daemon) ClusterManager() error {
 
 // WriteState writes the instance state to JetStream KV store (required)
 func (d *Daemon) WriteState() error {
-	d.mu.Lock()
-	jsm := d.jsManager
-	d.mu.Unlock()
-
-	if jsm == nil {
-		// JetStream not ready yet - this is expected during startup
-		slog.Debug("WriteState skipped - JetStream not initialized yet")
-		return nil
+	if d.jsManager == nil {
+		return fmt.Errorf("JetStream manager not initialized - cannot write state")
 	}
-	if err := jsm.WriteState(d.node, &d.Instances); err != nil {
+	if err := d.jsManager.WriteState(d.node, &d.Instances); err != nil {
 		slog.Error("JetStream write failed", "error", err)
 		return fmt.Errorf("failed to write state to JetStream: %w", err)
 	}
 	return nil
 }
 
-// Initalise VMs from state
-func (d *Daemon) InitaliseVMs() {
-
-	/*
-		d.Instances.Mu.Lock()
-		defer d.Instances.Mu.Unlock()
-
-		// Step 1: Loop through each instance
-		for i := range d.Instances.VMS {
-			instance := d.Instances.VMS[i]
-
-			// Step 2: Mount each EBS volume
-			for _, ebsRequest := range instance.EBSRequests.Requests {
-				instance.EBSRequests.Mu.Lock()
-				defer instance.EBSRequests.Mu.Unlock()
-
-			}
-
-			d.Instances.VMS[i] = instance
-
-		}
-	*/
-
-	// Step 2: Loop through each instance and start it
-}
-
 // LoadState loads the instance state from JetStream KV store (required)
 func (d *Daemon) LoadState() error {
-	d.mu.Lock()
-	jsm := d.jsManager
-	d.mu.Unlock()
-
-	if jsm == nil {
+	if d.jsManager == nil {
 		return fmt.Errorf("JetStream manager not initialized - cannot load state")
 	}
 
-	instances, err := jsm.LoadState(d.node)
+	instances, err := d.jsManager.LoadState(d.node)
 	if err != nil {
 		slog.Error("JetStream load failed", "error", err)
 		return fmt.Errorf("failed to load state from JetStream: %w", err)
 	}
 
 	// Copy only the VMS map, not the mutex
-	d.Instances.Mu.Lock()
 	d.Instances.VMS = instances.VMS
-	d.Instances.Mu.Unlock()
 	return nil
 }
 
-// initJetStreamBackground initializes JetStream in a background goroutine.
-// This allows the daemon to start and accept cluster join requests while waiting
-// for the NATS cluster to form and JetStream to become available.
-func (d *Daemon) initJetStreamBackground() {
-	retryDelay := 500 * time.Millisecond
-	const maxDelay = 10 * time.Second
-
-	for attempt := 1; ; attempt++ {
-		// Check for shutdown
-		select {
-		case <-d.ctx.Done():
-			slog.Info("JetStream init cancelled due to shutdown")
-			return
-		default:
-		}
-
-		// Try to create JetStream manager and init KV bucket
-		jsm, err := NewJetStreamManager(d.natsConn, 1)
-		if err != nil {
-			slog.Warn("Failed to init JetStream (will retry)", "error", err, "attempt", attempt)
-		} else if err := jsm.InitKVBucket(); err != nil {
-			slog.Warn("Failed to init KV bucket (will retry)", "error", err, "attempt", attempt)
-		} else {
-			// Success - store the manager
-			d.mu.Lock()
-			d.jsManager = jsm
-			d.mu.Unlock()
-			slog.Info("JetStream KV store initialized successfully", "replicas", 1, "attempts", attempt)
-			break
-		}
-
-		// Wait before retry (with shutdown check)
-		select {
-		case <-d.ctx.Done():
-			slog.Info("JetStream init cancelled due to shutdown")
-			return
-		case <-time.After(retryDelay):
-		}
-
-		// Exponential backoff
-		retryDelay *= 2
-		if retryDelay > maxDelay {
-			retryDelay = maxDelay
-		}
-	}
-
-	// Note: Replica upgrades are handled by the /join endpoint on the leader node.
-	// Non-leader nodes should not try to update replicas to avoid race conditions.
-
-	// Load state and restore VMs
-	if err := d.LoadState(); err != nil {
-		slog.Warn("Failed to load state from JetStream, continuing with empty state", "error", err)
-		slog.Info("JetStream background initialization complete")
-		return
-	}
-
-	slog.Info("Loaded state from JetStream", "instance_count", len(d.Instances.VMS))
-
-	// Restore VMs from loaded state
-	d.Instances.Mu.Lock()
-	defer d.Instances.Mu.Unlock()
-
-	for id, instance := range d.Instances.VMS {
-		instance.EBSRequests.Mu = sync.Mutex{}
-		instance.QMPClient = &qmp.QMPClient{}
-		d.Instances.VMS[id] = instance
-
-		if instance.Attributes.StopInstance {
-			slog.Info("Instance flagged as user initiated stop, skipping", "instance", instance.ID)
-			continue
-		}
-
-		if instance.Status == "terminated" {
-			slog.Info("Instance state is terminated, skipping", "instance", instance.ID)
-			continue
-		}
-
-		// Re-allocate resources
-		if instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]; ok {
-			slog.Info("Re-allocating resources for instance", "instanceId", instance.ID, "type", instance.InstanceType)
-			if err := d.resourceMgr.allocate(instanceType); err != nil {
-				slog.Error("Failed to re-allocate resources for instance on startup", "instanceId", instance.ID, "err", err)
-			}
-		}
-
-		slog.Info("Launching instance", "instance", instance.ID)
-		if err := d.LaunchInstance(instance); err != nil {
-			slog.Error("Failed to launch instance", "err", err)
-		}
-	}
-
-	slog.Info("JetStream background initialization complete")
-}
-
-// NATS events
-
-func (d *Daemon) handleEC2StartInstances(msg *nats.Msg) {
-
-	var ec2StartInstance config.EC2StartInstancesRequest
-
-	if err := json.Unmarshal(msg.Data, &ec2StartInstance); err != nil {
-		log.Printf("Error unmarshaling EC2 describe request: %v", err)
-		return
-	}
-
-	slog.Info("EC2 Start Instance Request", "instanceId", ec2StartInstance.InstanceID)
-
-	var ec2StartInstanceResponse config.EC2StartInstancesResponse
-
-	// Check if the instance is running on this node
-	d.Instances.Mu.Lock()
-	defer d.Instances.Mu.Unlock()
-
-	instance, ok := d.Instances.VMS[ec2StartInstance.InstanceID]
-
-	if !ok {
-		slog.Error("EC2 Start Request - Instance not found", "instanceId", ec2StartInstanceResponse.InstanceID)
-		ec2StartInstanceResponse.InstanceID = ec2StartInstance.InstanceID
-		ec2StartInstanceResponse.Error = awserrors.ErrorInvalidInstanceIDNotFound
-		ec2StartInstanceResponse.Respond(msg)
-		return
-	}
-
-	// Check if we have enough resources and allocate them
-	instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
-	if ok {
-		if err := d.resourceMgr.allocate(instanceType); err != nil {
-			slog.Error("EC2 Start Request - Insufficient capacity", "instanceId", instance.ID, "err", err)
-			ec2StartInstanceResponse.InstanceID = ec2StartInstance.InstanceID
-			ec2StartInstanceResponse.Error = awserrors.ErrorInsufficientInstanceCapacity
-			ec2StartInstanceResponse.Respond(msg)
-			return
-		}
-	}
-
-	// Launch the instance
-	err := d.LaunchInstance(instance)
-
-	if err != nil {
-		// Deallocate on failure
-		if ok {
-			d.resourceMgr.deallocate(instanceType)
-		}
-		ec2StartInstanceResponse.Error = err.Error()
-	} else {
-		ec2StartInstanceResponse.InstanceID = instance.ID
-		ec2StartInstanceResponse.Status = instance.Status
-	}
-
-	ec2StartInstanceResponse.Respond(msg)
-
-}
 
 func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId string) (*qmp.QMPResponse, error) {
 
@@ -1089,395 +912,7 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 	}
 }
 
-// handleEC2Events processes incoming EC2 events (start, stop, terminate)
-func (d *Daemon) handleEC2Events(msg *nats.Msg) {
-	slog.Info("handleEC2Events called", "subject", msg.Subject)
 
-	var command qmp.Command
-	var resp *qmp.QMPResponse
-	var err error
-
-	// Helper to ensure we always respond to NATS
-	respondWithError := func(errCode string) {
-		msg.Respond(utils.GenerateErrorPayload(errCode))
-	}
-
-	if err := json.Unmarshal(msg.Data, &command); err != nil {
-		log.Printf("Error unmarshaling QMP command: %v", err)
-		respondWithError(awserrors.ErrorServerInternal)
-		return
-	}
-
-	slog.Info("handleEC2Events received command", "subject", msg.Subject, "instanceId", command.ID, "start", command.Attributes.StartInstance, "stop", command.Attributes.StopInstance, "terminate", command.Attributes.TerminateInstance)
-
-	d.Instances.Mu.Lock()
-	instance, ok := d.Instances.VMS[command.ID]
-	d.Instances.Mu.Unlock()
-
-	if !ok {
-		slog.Warn("Instance is not running on this node", "id", command.ID)
-		respondWithError(awserrors.ErrorInvalidInstanceIDNotFound)
-		return
-	}
-
-	// Start an instance
-	if command.Attributes.StartInstance {
-		slog.Info("Starting instance", "id", command.ID)
-
-		// Allocate resources
-		instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
-		if ok {
-			if err := d.resourceMgr.allocate(instanceType); err != nil {
-				slog.Error("Failed to allocate resources for start command", "id", command.ID, "err", err)
-				respondWithError(awserrors.ErrorInsufficientInstanceCapacity)
-				return
-			}
-		}
-
-		// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
-		err := d.LaunchInstance(instance)
-
-		if err != nil {
-			slog.Error("handleEC2RunInstances LaunchInstance failed", "err", err)
-			// Free the resource on failure
-			if ok {
-				d.resourceMgr.deallocate(instanceType)
-			}
-			respondWithError(awserrors.ErrorServerInternal)
-			return
-		}
-
-		// Update instance state
-		d.Instances.Mu.Lock()
-		instance.Status = "running"
-		instance.Attributes = command.Attributes
-		if instance.Instance != nil {
-			instance.Instance.State.SetCode(16) // 16 = running
-			instance.Instance.State.SetName("running")
-		}
-		d.Instances.Mu.Unlock()
-
-		slog.Info("Instance started", "instanceId", instance.ID)
-
-		// Write state to disk
-		if writeErr := d.WriteState(); writeErr != nil {
-			slog.Error("Failed to write state to disk", "err", writeErr)
-		}
-
-		msg.Respond(fmt.Appendf(nil, `{"status":"running","instanceId":"%s"}`, instance.ID))
-		return
-	}
-
-	// Stop or terminate an instance
-	if command.Attributes.StopInstance || command.Attributes.TerminateInstance {
-		isTerminate := command.Attributes.TerminateInstance
-		action := "Stopping"
-		initialStatus := "stopping"
-		finalStatus := "stopped"
-		finalCode := int64(80)
-		if isTerminate {
-			action = "Terminating"
-			initialStatus = "shutting-down"
-			finalStatus = "terminated"
-			finalCode = 48
-		}
-
-		slog.Info(action+" instance", "id", command.ID)
-
-		// Update status to transitional state
-		d.Instances.Mu.Lock()
-		instance.Status = initialStatus
-		if instance.Instance != nil {
-			if isTerminate {
-				instance.Instance.State.SetCode(32) // 32 = shutting-down
-				instance.Instance.State.SetName("shutting-down")
-			} else {
-				instance.Instance.State.SetCode(64) // 64 = stopping
-				instance.Instance.State.SetName("stopping")
-			}
-		}
-		d.Instances.Mu.Unlock()
-
-		// Respond immediately - operation will complete in background
-		// stopInstance() handles the QMP shutdown command, so we don't send it here
-		msg.Respond([]byte(`{}`))
-
-		// Run cleanup in goroutine to not block NATS
-		go func(inst *vm.VM, attrs qmp.Attributes) {
-			stopErr := d.stopInstance(map[string]*vm.VM{inst.ID: inst}, isTerminate)
-
-			d.Instances.Mu.Lock()
-			if stopErr != nil {
-				slog.Error("Failed to "+strings.ToLower(action)+" instance", "err", stopErr, "id", inst.ID)
-				// On error, revert to previous state or mark as error
-				inst.Status = "error"
-				if inst.Instance != nil {
-					inst.Instance.State.SetCode(0)
-					inst.Instance.State.SetName("error")
-				}
-			} else {
-				inst.Status = finalStatus
-				inst.Attributes = attrs
-				if inst.Instance != nil {
-					inst.Instance.State.SetCode(finalCode)
-					inst.Instance.State.SetName(finalStatus)
-				}
-				slog.Info("Instance "+finalStatus, "id", inst.ID)
-			}
-			d.Instances.Mu.Unlock()
-
-			if writeErr := d.WriteState(); writeErr != nil {
-				slog.Error("Failed to write state to disk", "err", writeErr)
-			}
-		}(instance, command.Attributes)
-
-		return
-	}
-
-	// Regular QMP command - must succeed
-	resp, err = d.SendQMPCommand(instance.QMPClient, command.QMPCommand, instance.ID)
-	if err != nil {
-		slog.Error("Failed to send QMP command", "err", err)
-		respondWithError(awserrors.ErrorServerInternal)
-		return
-	}
-
-	slog.Debug("RAW QMP Response", "resp", string(resp.Return))
-
-	// Unmarshal the response
-	target, ok := qmp.CommandResponseTypes[command.QMPCommand.Execute]
-	if !ok {
-		slog.Warn("Unhandled QMP command", "cmd", command.QMPCommand.Execute)
-		msg.Respond(resp.Return)
-		return
-	}
-
-	if err := json.Unmarshal(resp.Return, target); err != nil {
-		slog.Error("Failed to unmarshal QMP response", "cmd", command.QMPCommand.Execute, "err", err)
-		msg.Respond(resp.Return)
-		return
-	}
-
-	// Update attributes and respond
-	d.Instances.Mu.Lock()
-	instance.Attributes = command.Attributes
-	d.Instances.Mu.Unlock()
-
-	if err := d.WriteState(); err != nil {
-		slog.Error("Failed to write state to disk", "err", err)
-	}
-
-	msg.Respond(resp.Return)
-}
-
-// handleEC2RunInstances processes incoming EC2 RunInstances requests
-func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
-	slog.Debug("Received message on subject", "subject", msg.Subject)
-	slog.Debug("Message data", "data", string(msg.Data))
-
-	// Initialize runInstancesInput before unmarshaling into it
-	runInstancesInput := &ec2.RunInstancesInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(runInstancesInput, msg.Data)
-
-	if errResp != nil {
-		msg.Respond(errResp)
-		slog.Error("Request does not match RunInstancesInput")
-		return
-	}
-
-	// Validate inputs
-	err := gateway_ec2_instance.ValidateRunInstancesInput(runInstancesInput)
-
-	if err != nil {
-		slog.Error("handleEC2RunInstances validation failed", "err", awserrors.ErrorValidationError)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorValidationError)
-		msg.Respond(errResp)
-		return
-
-	}
-
-	slog.Info("Processing RunInstances request for instance type", "instanceType", *runInstancesInput.InstanceType)
-
-	// Check if instance type is supported
-	instanceType, exists := d.resourceMgr.instanceTypes[*runInstancesInput.InstanceType]
-	if !exists {
-		slog.Error("handleEC2RunInstances instance lookup", "err", awserrors.ErrorInvalidInstanceType, "InstanceType", *runInstancesInput.InstanceType)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorInvalidInstanceType)
-		msg.Respond(errResp)
-		return
-	}
-
-	// Check if we have enough resources
-	if !d.resourceMgr.canAllocate(instanceType) {
-		slog.Error("handleEC2RunInstances canAllocate", "err", awserrors.ErrorInsufficientInstanceCapacity, "InstanceType", *runInstancesInput.InstanceType)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorInsufficientInstanceCapacity)
-		msg.Respond(errResp)
-		return
-	}
-
-	// Allocate resources
-	if err := d.resourceMgr.allocate(instanceType); err != nil {
-		slog.Error("handleEC2RunInstances allocate", "err", awserrors.ErrorInsufficientInstanceCapacity, "InstanceType", *runInstancesInput.InstanceType)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorInsufficientInstanceCapacity)
-		msg.Respond(errResp)
-		return
-	}
-
-	// Delegate to service for business logic (volume creation, cloud-init, etc.)
-	instanceTypeName := ""
-	if instanceType.InstanceType != nil {
-		instanceTypeName = *instanceType.InstanceType
-	}
-	slog.Info("Launching EC2 instance", "instanceType", instanceTypeName)
-
-	instance, reservation, err := d.instanceService.RunInstances(runInstancesInput)
-
-	if err != nil {
-		slog.Error("handleEC2RunInstances service.RunInstances failed", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		d.resourceMgr.deallocate(instanceType)
-		return
-	}
-
-	// Respond to NATS immediately with reservation (instance is provisioning)
-	jsonResponse, err := json.Marshal(reservation)
-	if err != nil {
-		slog.Error("handleEC2RunInstances failed to marshal reservation", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		d.resourceMgr.deallocate(instanceType)
-		return
-	}
-	msg.Respond(jsonResponse)
-
-	// Add instance to state immediately so DescribeInstances can find it
-	// while volumes are being prepared and VM is launching
-	d.Instances.Mu.Lock()
-	d.Instances.VMS[instance.ID] = instance
-	d.Instances.Mu.Unlock()
-
-	if err := d.WriteState(); err != nil {
-		slog.Error("handleEC2RunInstances failed to write initial state", "err", err)
-	}
-
-	slog.Info("Instance added to state with pending status", "instanceId", instance.ID)
-
-	// Next, prepare the root volume, cloud-init, EFI drives via NBD (AMI clone to new volume)
-	err = d.instanceService.GenerateVolumes(runInstancesInput, instance)
-	if err != nil {
-		slog.Error("handleEC2RunInstances GenerateVolumes failed", "err", err)
-		d.resourceMgr.deallocate(instanceType)
-		// Update instance status to failed
-		d.markInstanceFailed(instance, "volume_preparation_failed")
-		return
-	}
-
-	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions), this can take sometime
-	err = d.LaunchInstance(instance)
-
-	if err != nil {
-		slog.Error("handleEC2RunInstances LaunchInstance failed", "err", err)
-		d.resourceMgr.deallocate(instanceType)
-		// Update instance status to failed
-		d.markInstanceFailed(instance, "launch_failed")
-		return
-	}
-
-	slog.Info("handleEC2RunInstances launched", "instanceId", reservation.Instances[0].InstanceId)
-
-}
-
-// handleEC2CreateKeyPair processes incoming EC2 CreateKeyPair requests
-func (d *Daemon) handleEC2CreateKeyPair(msg *nats.Msg) {
-	log.Printf("Received message on subject: %s", msg.Subject)
-	log.Printf("Message data: %s", string(msg.Data))
-
-	// Initialize createKeyPairInput before unmarshaling into it
-	createKeyPairInput := &ec2.CreateKeyPairInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(createKeyPairInput, msg.Data)
-
-	if errResp != nil {
-		msg.Respond(errResp)
-		slog.Error("Request does not match CreateKeyPairInput")
-		return
-	}
-
-	slog.Info("Processing CreateKeyPair request", "keyName", *createKeyPairInput.KeyName)
-
-	// Delegate to key service for business logic (key generation, S3 storage)
-	output, err := d.keyService.CreateKeyPair(createKeyPairInput)
-
-	if err != nil {
-		slog.Error("handleEC2CreateKeyPair service.CreateKeyPair failed", "err", err)
-		errResp = utils.GenerateErrorPayload(err.Error())
-		msg.Respond(errResp)
-		return
-	}
-
-	// Respond to NATS with CreateKeyPairOutput
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2CreateKeyPair failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		return
-	}
-	msg.Respond(jsonResponse)
-
-	slog.Info("handleEC2CreateKeyPair completed", "keyName", *output.KeyName, "fingerprint", *output.KeyFingerprint)
-}
-
-// handleEC2DeleteKeyPair processes incoming EC2 DeleteKeyPair requests
-func (d *Daemon) handleEC2DeleteKeyPair(msg *nats.Msg) {
-	log.Printf("Received message on subject: %s", msg.Subject)
-	log.Printf("Message data: %s", string(msg.Data))
-
-	// Initialize deleteKeyPairInput before unmarshaling into it
-	deleteKeyPairInput := &ec2.DeleteKeyPairInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(deleteKeyPairInput, msg.Data)
-
-	if errResp != nil {
-		msg.Respond(errResp)
-		slog.Error("Request does not match DeleteKeyPairInput")
-		return
-	}
-
-	// Log which identifier was provided
-	if deleteKeyPairInput.KeyPairId != nil {
-		slog.Info("Processing DeleteKeyPair request", "keyPairId", *deleteKeyPairInput.KeyPairId)
-	} else if deleteKeyPairInput.KeyName != nil {
-		slog.Info("Processing DeleteKeyPair request", "keyName", *deleteKeyPairInput.KeyName)
-	}
-
-	// Delegate to key service for business logic (S3 deletion)
-	output, err := d.keyService.DeleteKeyPair(deleteKeyPairInput)
-
-	if err != nil {
-		slog.Error("handleEC2DeleteKeyPair service.DeleteKeyPair failed", "err", err)
-		errResp = utils.GenerateErrorPayload(err.Error())
-		msg.Respond(errResp)
-		return
-	}
-
-	// Respond to NATS with DeleteKeyPairOutput
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2DeleteKeyPair failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		return
-	}
-	msg.Respond(jsonResponse)
-
-	slog.Info("handleEC2DeleteKeyPair completed")
-}
 
 func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) error {
 
@@ -1534,6 +969,13 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				} else {
 					slog.Info("Unmounted Viperblock volume", "id", instance.ID, "data", string(msg.Data))
 				}
+
+				// Update volume state to "available" for boot volumes
+				if ebsRequest.Boot {
+					if err := d.volumeService.UpdateVolumeState(ebsRequest.Name, "available", ""); err != nil {
+						slog.Error("Failed to update volume state to available", "volumeId", ebsRequest.Name, "err", err)
+					}
+				}
 			}
 
 			// If flagged for termination (delete Volume)
@@ -1573,12 +1015,10 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 	// For stop operations, keep the subscription so we can receive start commands
 	if deleteVolume {
 		for _, instance := range instances {
-			subKey := fmt.Sprintf("ec2.cmd.%s", instance.ID)
-			if sub, ok := d.natsSubscriptions[subKey]; ok && sub != nil {
-				slog.Info("Unsubscribing from NATS subject", "instance", instance.ID, "subject", subKey)
-				sub.Unsubscribe()
-				delete(d.natsSubscriptions, subKey)
-			}
+			slog.Info("Unsubscribing from NATS subject", "instance", instance.ID)
+			d.natsSubscriptions[fmt.Sprintf("ec2.cmd.%s", instance.ID)].Unsubscribe()
+			// TODO: Remove redundant subscription if not used
+			//d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)].Unsubscribe()
 		}
 	}
 	return nil
@@ -1594,7 +1034,7 @@ func (d *Daemon) setupShutdown() {
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
 		<-sigChan
-		log.Println("Received shutdown signal, cleaning up...")
+		slog.Info("Received shutdown signal, cleaning up...")
 
 		// Cancel context
 		d.cancel()
@@ -1605,9 +1045,9 @@ func (d *Daemon) setupShutdown() {
 		// Final cleanup
 		for _, sub := range d.natsSubscriptions {
 			// Unsubscribe from each subscription
-			log.Printf("Unsubscribing from NATS: %s", sub.Subject)
+			slog.Info("Unsubscribing from NATS", "subject", sub.Subject)
 			if err := sub.Unsubscribe(); err != nil {
-				log.Printf("Error unsubscribing from NATS: %v", err)
+				slog.Error("Error unsubscribing from NATS", "err", err)
 			}
 
 		}
@@ -1623,15 +1063,15 @@ func (d *Daemon) setupShutdown() {
 
 		// Shutdown cluster manager
 		if d.clusterApp != nil {
-			log.Println("Shutting down cluster manager...")
+			slog.Info("Shutting down cluster manager...")
 			if err := d.clusterApp.Shutdown(); err != nil {
-				log.Printf("Error shutting down cluster manager: %v", err)
+				slog.Error("Error shutting down cluster manager", "err", err)
 			}
 		}
 
 		// Wait for any ongoing operations to complete
 		// TODO: Implement cleanup of running instances
-		log.Println("Shutdown complete")
+		slog.Info("Shutdown complete")
 	}()
 }
 
@@ -1737,27 +1177,12 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// Check if subscription already exists (e.g., when restarting a stopped instance)
-	subKey := fmt.Sprintf("ec2.cmd.%s", instance.ID)
-	if existingSub, ok := d.natsSubscriptions[subKey]; ok && existingSub != nil && existingSub.IsValid() {
-		slog.Info("NATS subscription already exists for instance", "instance", instance.ID)
-	} else {
-		d.natsSubscriptions[subKey], err = d.natsConn.QueueSubscribe(subKey, "hive-events", d.handleEC2Events)
-		if err != nil {
-			slog.Error("failed to subscribe to NATS", "err", err)
-			return err
-		}
+	d.natsSubscriptions[instance.ID], err = d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), "hive-events", d.handleEC2Events)
+
+	if err != nil {
+		slog.Error("failed to subscribe to NATS", "err", err)
+		return err
 	}
-
-	// TODO: Replaced with describe-instances with Inbox subscription
-	/*
-		d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)], err = d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.describe.%s", instance.ID), "hive-events", d.handleEC2Describe)
-
-		if err != nil {
-			slog.Error("Failed to subscribe to NATS ec2.describe", "id", instance.ID, "err", err)
-			return err
-		}
-	*/
 
 	// Step 9: Update the instance metadata for running state and volume attached
 	// Marshal to a JSON file
@@ -1774,6 +1199,17 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 
 	d.Instances.VMS[instance.ID] = instance
 	d.Instances.Mu.Unlock()
+
+	// Step 10: Mark boot volumes as "in-use" now that instance is confirmed running
+	instance.EBSRequests.Mu.Lock()
+	for _, ebsReq := range instance.EBSRequests.Requests {
+		if ebsReq.Boot {
+			if err := d.volumeService.UpdateVolumeState(ebsReq.Name, "in-use", instance.ID); err != nil {
+				slog.Error("Failed to update volume state to in-use", "volumeId", ebsReq.Name, "err", err)
+			}
+		}
+	}
+	instance.EBSRequests.Mu.Unlock()
 
 	err = d.WriteState()
 
@@ -1887,16 +1323,8 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		}
 
 		// TODO: Add EFI support
-
 		if v.EFI {
 			continue
-		}
-
-		if v.EFI {
-			drive.Format = "raw"
-			drive.If = "pflash"
-			drive.Media = "disk"
-			drive.ID = "efi"
 		}
 
 		instance.Config.Drives = append(instance.Config.Drives, drive)
@@ -2133,8 +1561,9 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 
 }
 
-// canAllocate checks if there are enough resources available
-func (rm *ResourceManager) canAllocate(instanceType *ec2.InstanceTypeInfo) bool {
+// canAllocate checks how many instances of the given type can be allocated
+// Returns the count that can actually be allocated (0 to count)
+func (rm *ResourceManager) canAllocate(instanceType *ec2.InstanceTypeInfo, count int) int {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
@@ -2147,14 +1576,43 @@ func (rm *ResourceManager) canAllocate(instanceType *ec2.InstanceTypeInfo) bool 
 		memoryGB = float64(*instanceType.MemoryInfo.SizeInMiB) / 1024.0
 	}
 
-	return rm.availableVCPU-rm.allocatedVCPU >= int(vCPUs) &&
-		rm.availableMem-rm.allocatedMem >= memoryGB
+	availableVCPU := rm.availableVCPU - rm.allocatedVCPU
+	availableMem := rm.availableMem - rm.allocatedMem
+
+	// Calculate how many instances we can fit based on CPU and memory
+	countByCPU := count
+	if vCPUs > 0 {
+		countByCPU = availableVCPU / int(vCPUs)
+	}
+
+	countByMem := count
+	if memoryGB > 0 {
+		countByMem = int(availableMem / memoryGB)
+	}
+
+	// Take the minimum of CPU-limited and memory-limited counts
+	allocatableCount := countByCPU
+	if countByMem < allocatableCount {
+		allocatableCount = countByMem
+	}
+
+	// Cap at requested count
+	if allocatableCount > count {
+		allocatableCount = count
+	}
+
+	// Ensure non-negative
+	if allocatableCount < 0 {
+		allocatableCount = 0
+	}
+
+	return allocatableCount
 }
 
 // allocate reserves resources for an instance
 func (rm *ResourceManager) allocate(instanceType *ec2.InstanceTypeInfo) error {
 
-	if !rm.canAllocate(instanceType) {
+	if rm.canAllocate(instanceType, 1) < 1 {
 		instanceTypeName := ""
 		if instanceType.InstanceType != nil {
 			instanceTypeName = *instanceType.InstanceType
@@ -2197,374 +1655,3 @@ func (rm *ResourceManager) deallocate(instanceType *ec2.InstanceTypeInfo) {
 	rm.allocatedMem -= memoryGB
 }
 
-// handleEC2DescribeKeyPairs processes incoming EC2 DescribeKeyPairs requests
-func (d *Daemon) handleEC2DescribeKeyPairs(msg *nats.Msg) {
-	log.Printf("Received message on subject: %s", msg.Subject)
-	log.Printf("Message data: %s", string(msg.Data))
-
-	// Initialize describeKeyPairsInput before unmarshaling into it
-	describeKeyPairsInput := &ec2.DescribeKeyPairsInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(describeKeyPairsInput, msg.Data)
-
-	if errResp != nil {
-		msg.Respond(errResp)
-		slog.Error("Request does not match DescribeKeyPairsInput")
-		return
-	}
-
-	slog.Info("Processing DescribeKeyPairs request")
-
-	// Delegate to key service for business logic (S3 listing)
-	output, err := d.keyService.DescribeKeyPairs(describeKeyPairsInput)
-
-	if err != nil {
-		slog.Error("handleEC2DescribeKeyPairs service.DescribeKeyPairs failed", "err", err)
-		errResp = utils.GenerateErrorPayload(err.Error())
-		msg.Respond(errResp)
-		return
-	}
-
-	// Respond to NATS with DescribeKeyPairsOutput
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2DescribeKeyPairs failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		return
-	}
-	msg.Respond(jsonResponse)
-
-	slog.Info("handleEC2DescribeKeyPairs completed", "count", len(output.KeyPairs))
-}
-
-// handleEC2ImportKeyPair processes incoming EC2 ImportKeyPair requests
-func (d *Daemon) handleEC2ImportKeyPair(msg *nats.Msg) {
-	log.Printf("Received message on subject: %s", msg.Subject)
-	log.Printf("Message data: %s", string(msg.Data))
-
-	// Initialize importKeyPairInput before unmarshaling into it
-	importKeyPairInput := &ec2.ImportKeyPairInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(importKeyPairInput, msg.Data)
-
-	if errResp != nil {
-		msg.Respond(errResp)
-		slog.Error("Request does not match ImportKeyPairInput")
-		return
-	}
-
-	// Log which key is being imported (avoid logging the actual key material)
-	if importKeyPairInput.KeyName != nil {
-		slog.Info("Processing ImportKeyPair request", "keyName", *importKeyPairInput.KeyName)
-	}
-
-	// Delegate to key service for business logic (key parsing, S3 storage)
-	output, err := d.keyService.ImportKeyPair(importKeyPairInput)
-
-	if err != nil {
-		slog.Error("handleEC2ImportKeyPair service.ImportKeyPair failed", "err", err)
-		errResp = utils.GenerateErrorPayload(err.Error())
-		msg.Respond(errResp)
-		return
-	}
-
-	// Respond to NATS with ImportKeyPairOutput
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2ImportKeyPair failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		return
-	}
-	msg.Respond(jsonResponse)
-
-	slog.Info("handleEC2ImportKeyPair completed", "keyName", *output.KeyName, "fingerprint", *output.KeyFingerprint)
-}
-
-// handleEC2DescribeImages processes incoming EC2 DescribeImages requests
-func (d *Daemon) handleEC2DescribeImages(msg *nats.Msg) {
-	log.Printf("Received message on subject: %s", msg.Subject)
-	log.Printf("Message data: %s", string(msg.Data))
-
-	// Initialize describeImagesInput before unmarshaling into it
-	describeImagesInput := &ec2.DescribeImagesInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(describeImagesInput, msg.Data)
-
-	if errResp != nil {
-		msg.Respond(errResp)
-		slog.Error("Request does not match DescribeImagesInput")
-		return
-	}
-
-	slog.Info("Processing DescribeImages request")
-
-	// Delegate to image service for business logic (S3 listing)
-	output, err := d.imageService.DescribeImages(describeImagesInput)
-
-	if err != nil {
-		slog.Error("handleEC2DescribeImages service.DescribeImages failed", "err", err)
-		errResp = utils.GenerateErrorPayload(err.Error())
-		msg.Respond(errResp)
-		return
-	}
-
-	// Respond to NATS with DescribeImagesOutput
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2DescribeImages failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		return
-	}
-	msg.Respond(jsonResponse)
-
-	slog.Info("handleEC2DescribeImages completed", "count", len(output.Images))
-}
-
-// handleEC2DescribeVolumes processes incoming EC2 DescribeVolumes requests
-func (d *Daemon) handleEC2DescribeVolumes(msg *nats.Msg) {
-	log.Printf("Received message on subject: %s", msg.Subject)
-	log.Printf("Message data: %s", string(msg.Data))
-
-	// Initialize describeVolumesInput before unmarshaling into it
-	describeVolumesInput := &ec2.DescribeVolumesInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(describeVolumesInput, msg.Data)
-
-	if errResp != nil {
-		msg.Respond(errResp)
-		slog.Error("Request does not match DescribeVolumesInput")
-		return
-	}
-
-	slog.Info("Processing DescribeVolumes request")
-
-	// Delegate to volume service for business logic (S3 listing)
-	output, err := d.volumeService.DescribeVolumes(describeVolumesInput)
-
-	if err != nil {
-		slog.Error("handleEC2DescribeVolumes service.DescribeVolumes failed", "err", err)
-		errResp = utils.GenerateErrorPayload(err.Error())
-		msg.Respond(errResp)
-		return
-	}
-
-	// Respond to NATS with DescribeVolumesOutput
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2DescribeVolumes failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		return
-	}
-	msg.Respond(jsonResponse)
-
-	slog.Info("handleEC2DescribeVolumes completed", "count", len(output.Volumes))
-}
-
-// handleEC2DescribeInstanceTypes processes incoming EC2 DescribeInstanceTypes requests
-// This handler responds with instance types that can currently be provisioned on this node
-// based on available resources (CPU and memory not already allocated to running instances)
-func (d *Daemon) handleEC2DescribeInstanceTypes(msg *nats.Msg) {
-	log.Printf("Received message on subject: %s", msg.Subject)
-
-	// Initialize input
-	describeInput := &ec2.DescribeInstanceTypesInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(describeInput, msg.Data)
-	if errResp != nil {
-		msg.Respond(errResp)
-		slog.Error("Request does not match DescribeInstanceTypesInput")
-		return
-	}
-
-	slog.Info("Processing DescribeInstanceTypes request from this node")
-
-	// Check if "capacity" filter is set to "true"
-	showCapacity := false
-	for _, f := range describeInput.Filters {
-		if f.Name != nil && *f.Name == "capacity" {
-			for _, v := range f.Values {
-				if v != nil && *v == "true" {
-					showCapacity = true
-					break
-				}
-			}
-		}
-	}
-
-	// Get instance types based on capacity and the showCapacity flag
-	filteredTypes := d.resourceMgr.GetAvailableInstanceTypeInfos(showCapacity)
-
-	// Create the response
-	output := &ec2.DescribeInstanceTypesOutput{
-		InstanceTypes: filteredTypes,
-	}
-
-	// Respond to NATS
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2DescribeInstanceTypes failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		return
-	}
-	msg.Respond(jsonResponse)
-
-	slog.Info("handleEC2DescribeInstanceTypes completed", "count", len(filteredTypes))
-}
-
-// handleEC2DescribeInstances processes incoming EC2 DescribeInstances requests
-// This handler responds with all instances running on this node
-func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
-	log.Printf("Received message on subject: %s", msg.Subject)
-	log.Printf("Message data: %s", string(msg.Data))
-
-	// Initialize describeInstancesInput before unmarshaling into it
-	describeInstancesInput := &ec2.DescribeInstancesInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(describeInstancesInput, msg.Data)
-
-	if errResp != nil {
-		msg.Respond(errResp)
-		slog.Error("Request does not match DescribeInstancesInput")
-		return
-	}
-
-	slog.Info("Processing DescribeInstances request from this node")
-
-	// Build response with reservations from instances on this node
-	var reservations []*ec2.Reservation
-
-	d.Instances.Mu.Lock()
-	defer d.Instances.Mu.Unlock()
-
-	// Filter instances if specific instance IDs were requested
-	instanceIDFilter := make(map[string]bool)
-	if len(describeInstancesInput.InstanceIds) > 0 {
-		for _, id := range describeInstancesInput.InstanceIds {
-			if id != nil {
-				instanceIDFilter[*id] = true
-			}
-		}
-	}
-
-	// Iterate through all instances on this node
-	for _, instance := range d.Instances.VMS {
-		// Skip if filtering by instance IDs and this instance is not in the filter
-		if len(instanceIDFilter) > 0 && !instanceIDFilter[instance.ID] {
-			continue
-		}
-
-		// Use stored reservation metadata if available
-		if instance.Reservation != nil && instance.Instance != nil {
-			// Create a copy of the reservation with updated instance state
-			reservation := *instance.Reservation
-
-			// Update the instance state to current state
-			instanceCopy := *instance.Instance
-			instanceCopy.State = &ec2.InstanceState{}
-
-			// Map internal status to EC2 state codes
-			switch instance.Status {
-			case "pending", "provisioning":
-				instanceCopy.State.SetCode(0)
-				instanceCopy.State.SetName("pending")
-			case "running":
-				instanceCopy.State.SetCode(16)
-				instanceCopy.State.SetName("running")
-			case "stopping":
-				instanceCopy.State.SetCode(64)
-				instanceCopy.State.SetName("stopping")
-			case "stopped":
-				instanceCopy.State.SetCode(80)
-				instanceCopy.State.SetName("stopped")
-			case "shutting-down":
-				instanceCopy.State.SetCode(32)
-				instanceCopy.State.SetName("shutting-down")
-			case "terminated":
-				instanceCopy.State.SetCode(48)
-				instanceCopy.State.SetName("terminated")
-			default:
-				instanceCopy.State.SetCode(0)
-				instanceCopy.State.SetName("pending")
-			}
-
-			reservation.Instances = []*ec2.Instance{&instanceCopy}
-			reservations = append(reservations, &reservation)
-		}
-	}
-
-	// Create the response
-	output := &ec2.DescribeInstancesOutput{
-		Reservations: reservations,
-	}
-
-	// Respond to NATS with DescribeInstancesOutput
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2DescribeInstances failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		return
-	}
-	msg.Respond(jsonResponse)
-
-	slog.Info("handleEC2DescribeInstances completed", "count", len(reservations))
-}
-
-// handleHealthCheck processes NATS health check requests
-func (d *Daemon) handleHealthCheck(msg *nats.Msg) {
-	configHash, err := d.computeConfigHash()
-	if err != nil {
-		slog.Error("Failed to compute config hash for health check", "error", err)
-		configHash = "error"
-	}
-
-	response := config.NodeHealthResponse{
-		Node:       d.node,
-		Status:     "running",
-		ConfigHash: configHash,
-		Epoch:      d.clusterConfig.Epoch,
-		Uptime:     int64(time.Since(d.startTime).Seconds()),
-	}
-
-	jsonResponse, err := json.Marshal(response)
-	if err != nil {
-		slog.Error("handleHealthCheck failed to marshal response", "err", err)
-		return
-	}
-
-	msg.Respond(jsonResponse)
-	slog.Debug("Health check responded", "node", d.node, "epoch", d.clusterConfig.Epoch)
-}
-
-// NodeDiscoverResponse is the response for node discovery requests
-type NodeDiscoverResponse struct {
-	Node string `json:"node"`
-}
-
-// handleNodeDiscover responds to node discovery requests with this node's ID
-// Used by the gateway to dynamically discover active hive nodes in the cluster
-func (d *Daemon) handleNodeDiscover(msg *nats.Msg) {
-	response := NodeDiscoverResponse{
-		Node: d.node,
-	}
-
-	jsonResponse, err := json.Marshal(response)
-	if err != nil {
-		slog.Error("handleNodeDiscover failed to marshal response", "err", err)
-		return
-	}
-
-	msg.Respond(jsonResponse)
-	slog.Debug("Node discovery responded", "node", d.node)
-}

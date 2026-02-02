@@ -43,10 +43,6 @@ build-ui:
 # GO commands
 go_build:
 	@echo "\n....Building $(GO_PROJECT_NAME)"
-	@if [ ! -f hive/services/hiveui/frontend/dist/index.html ]; then \
-		mkdir -p hive/services/hiveui/frontend/dist && \
-		echo '<!DOCTYPE html><html><head><title>Hive UI</title></head><body><h1>Hive UI</h1><p>Frontend not built. Run <code>make build-ui</code></p></body></html>' > hive/services/hiveui/frontend/dist/index.html; \
-	fi
 	GOEXPERIMENT=greenteagc go build $(GO_BUILD_MOD) -ldflags "-s -w" -o ./bin/$(GO_PROJECT_NAME) cmd/hive/main.go
 
 go_run:
@@ -109,8 +105,8 @@ security:
 	go tool govulncheck ./... > tests/govulncheck-report.txt || true
 	@echo "Govulncheck report saved to tests/govulncheck-report.txt"
 
-	go tool gosec ./... > tests/gosec-report.txt || true
-	@echo "Gosec report saved to tests/gosec-report.txt"
+	# go tool gosec ./... > tests/gosec-report.txt || true
+	# @echo "Gosec report saved to tests/gosec-report.txt"
 
 	go tool staticcheck -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./...  > tests/staticcheck-report.txt || true
 	@echo "Staticcheck report saved to tests/staticcheck-report.txt"

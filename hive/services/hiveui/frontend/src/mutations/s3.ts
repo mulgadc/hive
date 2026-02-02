@@ -1,4 +1,5 @@
-import { DeleteObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3"
+import { DeleteObjectCommand } from "@aws-sdk/client-s3"
+import { Upload } from "@aws-sdk/lib-storage"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 
 import { getS3Client } from "@/lib/awsClient"
@@ -14,17 +15,17 @@ export function useUploadObject() {
 
   return useMutation({
     mutationFn: async ({ bucket, key, file }: UploadObjectParams) => {
-      const arrayBuffer = await file.arrayBuffer()
-      const body = new Uint8Array(arrayBuffer)
-
-      const command = new PutObjectCommand({
-        Bucket: bucket,
-        Key: key,
-        Body: body,
-        ContentType: file.type,
+      const upload = new Upload({
+        client: getS3Client(),
+        params: {
+          Bucket: bucket,
+          Key: key,
+          Body: file,
+          ContentType: file.type,
+        },
       })
 
-      return await getS3Client().send(command)
+      return await upload.done()
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({

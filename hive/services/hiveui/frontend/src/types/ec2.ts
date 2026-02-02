@@ -45,3 +45,14 @@ export const importKeyPairSchema = z.object({
 })
 
 export type ImportKeyPairData = z.infer<typeof importKeyPairSchema>
+
+export const modifyVolumeSchema = z.object({
+  size: z
+    .number()
+    .int("Size must be a whole number")
+    .min(1, "Size must be at least 1 GiB"),
+})
+
+export type ModifyVolumeFormData = z.infer<typeof modifyVolumeSchema>
+
+export type ModifyVolumeParams = ModifyVolumeFormData & { volumeId: string }

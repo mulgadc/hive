@@ -4,13 +4,13 @@ Notes for development environment installation.
 
 ## Dependencies
 
-The current supported OS that is validated and tested includes:
+The currently supported operating systems that are validated and tested include:
 
-* Ubuntu 22.04
-* Ubuntu 24.04
-* Ubuntu 25.10
+- Ubuntu 22.04
+- Ubuntu 24.04
+- Ubuntu 25.10
 
-For the development preview please use one of the supported versions above.
+For the development preview, please use one of the supported versions above.
 
 ## Download
 
@@ -24,15 +24,21 @@ git clone https://github.com/mulgadc/hive.git
 
 ### Quick Install
 
-To bootstrap the dependencies of Hive in one simple step (QEMU, Go, AWS CLI)
+To bootstrap the dependencies of Hive in one simple step (QEMU, Go, AWS CLI):
 
 ```bash
 sudo make -C hive quickinstall
 ```
 
+Ensure Go is available in your `PATH` if not previously installed:
+
+```bash
+export PATH=$PATH:/usr/local/go/bin/
+```
+
 ### Manual Install
 
-Alternatively, run the following steps to manually setup the required dependencies.
+Alternatively, run the following steps to manually set up the required dependencies.
 
 ```bash
 sudo add-apt-repository universe
@@ -41,7 +47,7 @@ sudo apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu
 
 Ensure the Go toolkit is installed for version 1.25.6 or higher. Recommended to install the latest directly from [https://go.dev/dl/](https://go.dev/dl/).
 
-Confirm go is correctly installed, and set in your $PATH.
+Confirm Go is correctly installed, and set in your $PATH.
 
 ```bash
 go version
@@ -55,7 +61,7 @@ unzip awscliv2.zip
 sudo ./aws/install
 ```
 
-Confirm awscli version > 2.0 is installed which is required by Hive.
+Confirm awscli version > 2.0 is installed.
 
 [https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html)
 
@@ -73,7 +79,7 @@ cd hive
 ./scripts/dev-setup.sh     # Setup complete development environment
 ```
 
-Once complete, confirm `./bin/hive` exists and executable.
+Once complete, confirm `./bin/hive` exists and is executable.
 
 # Single Node Installation
 
@@ -103,8 +109,6 @@ Verify the certificate was added:
 ```bash
 ls -la /usr/local/share/ca-certificates/hive-ca.crt
 ```
-
-This step is required for AWS CLI 2.33+ which requires proper CA trust chains. Without this, you would need to use `--no-verify-ssl` for every AWS CLI command.
 
 Next, set the AWS profile to use `hive` which points to the local environment.
 
@@ -148,7 +152,7 @@ aws ec2 create-key-pair \
 | jq -r '.KeyMaterial | rtrimstr("\n")' > ~/.ssh/hive-key
 ```
 
-Update permissions for the key for ssh to accept reading the file.
+Update permissions for the key for SSH to accept reading the file.
 
 ```bash
 chmod 600 ~/.ssh/hive-key
@@ -160,7 +164,7 @@ Next, generate a public key from the specified private key pair.
 ssh-keygen -y -f ~/.ssh/hive-key > ~/.ssh/hive-key.pub
 ```
 
-### Validate New Key
+### Verify New Key
 
 ```bash
 aws ec2 describe-key-pairs
@@ -183,13 +187,13 @@ aws ec2 describe-key-pairs
 
 ## Create AMI Template
 
-Use the hive CLI tool to import a selected OS image. Note, the source file can be compressed (e.g image.tar.gz, image.gz, image.tar.xz) and the tool will automatically extract and upload the raw OS image as an AMI after validation the disk image contains a UEFI/BIOS boot capability.
+The Hive CLI tool offers 2 ways of importing an image. You can use automatic image importing, and select from our range of images. Alternatively, provide your own image source file (e.g image.tar.gz, image.gz, image.tar.xz) and the tool will automatically extract and upload the raw OS image as an AMI (after validating the image contains UEFI/BIOS boot capability).
 
-Note, when downloading OS images, use supported platforms that support the `cloud-init` feature to automatically bootstrap when using the Hive EC2 functionality to access SSH and networking services.
+**Note:** When downloading OS images, use platforms that support the `cloud-init` feature to automatically bootstrap when using the Hive EC2 functionality to access SSH and networking services.
 
 ### Automatic Image Import
 
-Discover available images to automatically download and install. This will pull the images from the distro official mirror and simplify the process to bootstrap a Hive installation with AMIs that include common operating systems.
+Discover available images to automatically download and install. This will pull the images from the distro official mirror and simplify the process to bootstrap a Hive installation with AMIs for common operating systems.
 
 ```bash
 ./bin/hive admin images list
@@ -207,19 +211,7 @@ ubuntu-24.04-x86_64  | ubuntu | 24.04   | x86_64 | bios
 Next, choose the image you would like to import as an AMI. Choose the appropriate `x86_64` or `arm64` architecture depending on your platform.
 
 ```bash
-./bin/hive admin images import --name debian-12-arm64 --force
-```
-
-Make note of the Image-ID `ami-XXX`
-
-```bash
-✅ Image import complete. Image-ID (AMI): ami-e29fcc65734aec9ea
-```
-
-Next, verify available disk images to confirm the import was successful, replace `ami-XXX` with the value from the command output.
-
-```bash
-aws ec2 describe-images --image-ids ami-XXX
+./bin/hive admin images import --name debian-12-arm64
 ```
 
 ### Manual Image Import
@@ -238,25 +230,29 @@ Import as an AMI to the backend store:
 ./bin/hive admin images import --file ~/debian-12-genericcloud-arm64.tar.xz --arch arm64 --distro debian --version 12
 ```
 
-Next, verify available disk images to confirm the import was successful.
+### Verify Image Import
 
-```bash
-aws ec2 describe-images
-```
-
-## Run Instance
-
-Once Hive is successfully installed and bootstrapped with a system AMI and SSH keys, proceed to run an instance. Replace `ami-XXX` with your imported ImageId above.
+Export the AMI.
 
 ```bash
 export HIVE_AMI="ami-XXX"
 ```
 
-### Query instance types available
+Next, verify available disk images to confirm the import was successful.
 
-Depending on the host platform Hive is installed for the CPU capabilities and vendor (e.g AMD, Intel, ARM), different compute instances will be available.
+```bash
+aws ec2 describe-images --image-ids $HIVE_AMI
+```
 
-Query available instance types and choose an instance type available on your host with 2 vCPUs:
+## Run Instance
+
+Once Hive is successfully installed and bootstrapped with a system AMI and SSH keys, proceed to run an instance.
+
+### Query Instance Types
+
+Depending on the host platform Hive is installed, different compute instances will be available.
+
+Query available instance types and choose an instance type available on your host:
 
 ```bash
 aws ec2 describe-instance-types
@@ -268,17 +264,11 @@ aws ec2 describe-instance-types
     {
       "InstanceType": "m8a.small",
       "CurrentGeneration": true,
-      "SupportedRootDeviceTypes": [
-        "ebs"
-      ],
-      "SupportedVirtualizationTypes": [
-        "hvm"
-      ],
+      "SupportedRootDeviceTypes": ["ebs"],
+      "SupportedVirtualizationTypes": ["hvm"],
       "Hypervisor": "kvm",
       "ProcessorInfo": {
-        "SupportedArchitectures": [
-          "x86_64"
-        ]
+        "SupportedArchitectures": ["x86_64"]
       },
       "VCpuInfo": {
         "DefaultVCpus": 2
@@ -287,7 +277,7 @@ aws ec2 describe-instance-types
         "SizeInMiB": 1024
       },
       "BurstablePerformanceSupported": false
-    },
+    }
   ]
 }
 ```
@@ -298,7 +288,9 @@ Export the instance-type:
 export HIVE_INSTANCE="m8a.small"
 ```
 
-Next, launch a new instance, note `hive-key` is the SSH key specified in the previous stage. Be sure to specify the instance-type that is available from your host as above.
+### Run Instance
+
+Next, launch a new instance, note `hive-key` is the SSH key specified in the previous stage.
 
 ```bash
 aws ec2 run-instances \
@@ -332,11 +324,13 @@ A sample response is below from the `RunInstance` request, note the `InstanceId`
 }
 ```
 
-Export the instance ID for following the rest of the tutorial.
+Export the instance ID.
 
 ```bash
 export INSTANCE_ID="i-XXX"
 ```
+
+### Verify Instance
 
 Next, validate the running instance is ready.
 
@@ -372,7 +366,7 @@ Confirm the `State.Name` attribute is set as `running`.
 
 ## SSH Connection (development)
 
-For a Hive development environment (toggled off for production), a local SSH port forwaring will be active to connect directly to the instance, regardless of the VPC and network settings.
+For a Hive development environment (toggled off for production), a local SSH port forwarding will be active to connect directly to the instance, regardless of the VPC and network settings.
 
 Determine the SSH port allocated.
 
@@ -395,7 +389,7 @@ Linux hive-vm-36765eb0 6.1.0-40-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.153-1 (2
 ec2-user@hive-vm-36765eb0:~$
 ```
 
-Congratulations, your first AMI image is imported, a new EC2 instance launched, and successfully connected via SSH for the configured SSH key, using the OS `cloud-init` procedure.
+Congratulations! Your first AMI image is imported, a new EC2 instance launched, and successfully connected via SSH for the configured SSH key, using the OS `cloud-init` procedure.
 
 ## Managing Instances
 
@@ -409,19 +403,20 @@ aws ec2 stop-instances --instance-ids $INSTANCE_ID
 
 ```json
 {
-    "StoppingInstances": [
-        {
-            "InstanceId": "i-36765eb0c6609e4d2",
-            "CurrentState": {
-                "Code": 64,
-                "Name": "stopping"
-            },
-            "PreviousState": {
-                "Code": 16,
-                "Name": "running"
-            }
-        }
-    ]
+  "StoppingInstances": [
+    {
+      "InstanceId": "i-36765eb0c6609e4d2",
+      "CurrentState": {
+        "Code": 64,
+        "Name": "stopping"
+      },
+      "PreviousState": {
+        "Code": 16,
+        "Name": "running"
+      }
+    }
+  ]
+}
 ```
 
 Next, confirm the instance has stopped as requested.
@@ -464,19 +459,20 @@ aws ec2 start-instances --instance-ids $INSTANCE_ID
 
 ```json
 {
-    "StartingInstances": [
-        {
-            "InstanceId": "i-36765eb0c6609e4d2",
-            "CurrentState": {
-                "Code": 0,
-                "Name": "pending"
-            },
-            "PreviousState": {
-                "Code": 80,
-                "Name": "stopped"
-            }
-        }
-    ]
+  "StartingInstances": [
+    {
+      "InstanceId": "i-36765eb0c6609e4d2",
+      "CurrentState": {
+        "Code": 0,
+        "Name": "pending"
+      },
+      "PreviousState": {
+        "Code": 80,
+        "Name": "stopped"
+      }
+    }
+  ]
+}
 ```
 
 Next, validate the instance is running as expected.
@@ -511,7 +507,7 @@ aws ec2 describe-instances  --instance-ids "i-36765eb0c6609e4d2"
 
 ### Terminate Instance
 
-To terminate an instance, which will first stop the instance, and on success, remove the EBS volumes and permanately remove the instance data.
+To terminate an instance, which will first stop the instance, and on success, remove the EBS volumes and permanently remove the instance data.
 
 ```bash
 aws ec2 terminate-instances --instance-ids $INSTANCE_ID
@@ -535,7 +531,7 @@ aws ec2 terminate-instances --instance-ids $INSTANCE_ID
 }
 ```
 
-Next, validate the instance is removed, this may take a few minutes depending the instance volume size.
+Next, validate the instance is removed, this may take a few minutes depending on the instance volume size.
 
 ```bash
 aws ec2 describe-instances  --instance-ids $INSTANCE_ID
@@ -543,9 +539,15 @@ aws ec2 describe-instances  --instance-ids $INSTANCE_ID
 
 On success no data will be returned, since the instance is no longer available.
 
+## UI Management Panel
+
+The Hive Platform also offers a web interface for managing hive services. Simply have the hive server running and go to [https://localhost:3000](https://localhost:3000) in your browser to continue.
+
+**Note:** If you are not viewing the website on the same machine that is running the hive server, you will need to go to [https://localhost:9999](https://localhost:9999) and [https://localhost:8443](https://localhost:8443) and accept the certificates. If you have added the CA to your local machine this is not needed.
+
 # Multi-node Configuration
 
-To create a simulate multi-node installation on a single server (e.g node1, node2, node3) review the script `./scripts/create-multi-node.sh`.
+To create a simulated multi-node installation on a single server (e.g node1, node2, node3) review the script `./scripts/create-multi-node.sh`.
 
 Specifically this will create 3 IPs on a specified ethernet adapter.
 
@@ -560,14 +562,15 @@ Next, `hive` will be installed and initiated in `$HOME/node1` for configuration 
 ```bash
 # Initialize node1
 ./bin/hive admin init \
---region ap-southeast-2 \
---az ap-southeast-2a \
 --node node1 \
 --bind 10.11.12.1 \
 --cluster-bind 10.11.12.1 \
+--cluster-routes 10.11.12.1:4248 \
 --port 4432 \
 --hive-dir ~/node1/ \
---config-dir ~/node1/config/
+--config-dir ~/node1/config/ \
+--region ap-southeast-2 \
+--az ap-southeast-2a \
 ```
 
 Two other nodes will be created, joining node1 to exchange configuration files and identify as a new node.
@@ -575,8 +578,6 @@ Two other nodes will be created, joining node1 to exchange configuration files a
 ```bash
 # Join cluster
 ./bin/hive admin join \
---region ap-southeast-2 \
---az ap-southeast-2a \
 --node node2 \
 --bind 10.11.12.2 \
 --cluster-bind 10.11.12.2 \
@@ -584,6 +585,8 @@ Two other nodes will be created, joining node1 to exchange configuration files a
 --host 10.11.12.1:4432 \
 --data-dir ~/node2/ \
 --config-dir ~/node2/config/ \
+--region ap-southeast-2 \
+--az ap-southeast-2a \
 
 # Start node2
 ./scripts/start-dev.sh ~/node2/
@@ -591,8 +594,6 @@ Two other nodes will be created, joining node1 to exchange configuration files a
 echo "Node3 Setup:"
 
 ./bin/hive admin join \
---region ap-southeast-2 \
---az ap-southeast-2a \
 --node node3 \
 --bind 10.11.12.3 \
 --cluster-bind 10.11.12.3 \
@@ -600,11 +601,13 @@ echo "Node3 Setup:"
 --host 10.11.12.1:4432 \
 --data-dir ~/node3/ \
 --config-dir ~/node3/config/
+--region ap-southeast-2 \
+--az ap-southeast-2a \
 
 ./scripts/start-dev.sh ~/node3/
 ```
 
-Once configured, each node will have it's own storage for config, data and state in `~/node[1,2,3]` to simulate a unique node and network.
+Once configured, each node will have its own storage for config, data and state in `~/node[1,2,3]` to simulate a unique node and network.
 
 Once the multi-node is configured, follow the original installation instructions above to:
 
@@ -614,33 +617,32 @@ Once the multi-node is configured, follow the original installation instructions
 
 Note - when using the AWS CLI tool you must specify the IP address of the node (10.11.12.1, 10.11.12.2, or 10.11.12.3).
 
-**Important**: For multi-node setups, the server certificates need to include the additional IP addresses. You may need to regenerate certificates with the `--force` flag after configuring multi-node, or ensure the CA certificate is trusted system-wide (see "Trust CA Certificate" section above).
-
 ```bash
-aws --endpoint-url https://10.11.12.3:9999/ ec2 describe-instances --instance-ids i-9f5f648adc57ea46d
+aws --endpoint-url https://10.11.12.3:9999 ec2 describe-instances --instance-ids i-9f5f648adc57ea46d
 ```
 
 ```json
 {
-    "Reservations": [
+  "Reservations": [
+    {
+      "ReservationId": "r-9d26866c3b0d53bf4",
+      "OwnerId": "123456789012",
+      "Instances": [
         {
-            "ReservationId": "r-9d26866c3b0d53bf4",
-            "OwnerId": "123456789012",
-            "Instances": [
-                {
-                    "InstanceId": "i-9f5f648adc57ea46d",
-                    "ImageId": "ami-d0de73dd18fa33ac9",
-                    "State": {
-                        "Code": 16,
-                        "Name": "running"
-                    },
-                    "KeyName": "hive-key",
-                    "InstanceType": "t3.micro",
-                    "LaunchTime": "2025-11-21T10:36:42.834000+00:00"
-                }
-            ]
+          "InstanceId": "i-9f5f648adc57ea46d",
+          "ImageId": "ami-d0de73dd18fa33ac9",
+          "State": {
+            "Code": 16,
+            "Name": "running"
+          },
+          "KeyName": "hive-key",
+          "InstanceType": "t3.micro",
+          "LaunchTime": "2025-11-21T10:36:42.834000+00:00"
         }
-    ]
+      ]
+    }
+  ]
+}
 ```
 
 For debugging, reference the node unique configuration files, e.g
@@ -666,4 +668,4 @@ To stop a simulated multi-node instance:
 ./scripts/stop-multi-node.sh
 ```
 
-Note if multiple EC2 instances are running, it make take a few minutes to gracefully terminate the instance, unmount the attached EBS volume (via NBD) and push the write-ahead-log (WAL) to the S3 server (predastore).
+Note if multiple EC2 instances are running, it may take a few minutes to gracefully terminate the instance, unmount the attached EBS volume (via NBD) and push the write-ahead-log (WAL) to the S3 server (predastore).

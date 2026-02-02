@@ -79,7 +79,7 @@ Hive coordinates these independent components:
 
 Each component can be developed independently. See component-specific documentation for focused development guides.
 
-## Detailed Installation method
+## Detailed Installation Method
 
 See [Installation Guide](INSTALL.md) on how to setup a Hive node to get started.
 
@@ -118,7 +118,7 @@ While Hive is architected and implemented by experienced engineers, we leverage 
 
 **Development Artifacts:**
 
-- `CLAUDE.md` - Instructions for Claude Code when working on this codebase
+- `.claude/CLAUDE.md` - Instructions for Claude Code when working on this codebase
 - `HIVE_DEVELOPMENT_PLAN.md` - Comprehensive roadmap and implementation strategy
 - Component-specific guidance in `viperblock/CLAUDE.md` and `predastore/CLAUDE.md`
 

@@ -1,11 +1,12 @@
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, Link } from "@tanstack/react-router"
 
 import { BackLink } from "@/components/back-link"
 import { DetailCard } from "@/components/detail-card"
 import { DetailRow } from "@/components/detail-row"
 import { PageHeading } from "@/components/page-heading"
 import { Badge } from "@/components/ui/badge"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { formatDateTime } from "@/lib/utils"
 import { ec2VolumeQueryOptions } from "@/queries/ec2"
 
@@ -48,13 +49,28 @@ function VolumeDetail() {
       <div className="space-y-6">
         <PageHeading
           actions={
-            volume.State ? (
-              <Badge
-                variant={volume.State === "available" ? "default" : "outline"}
-              >
-                {volume.State}
-              </Badge>
-            ) : undefined
+            <div className="flex items-center gap-2">
+              {volume.State === "available" ? (
+                <Link
+                  className={buttonVariants({ variant: "outline" })}
+                  params={{ id: volume.VolumeId }}
+                  to="/ec2/modify-volume/$id"
+                >
+                  Resize Volume
+                </Link>
+              ) : (
+                <Button disabled variant="outline">
+                  Resize Volume
+                </Button>
+              )}
+              {volume.State && (
+                <Badge
+                  variant={volume.State === "available" ? "default" : "outline"}
+                >
+                  {volume.State}
+                </Badge>
+              )}
+            </div>
           }
           subtitle="EC2 Volume Details"
           title={volume.VolumeId}
@@ -83,29 +99,21 @@ function VolumeDetail() {
         {volume.Attachments && volume.Attachments.length > 0 && (
           <DetailCard>
             <DetailCard.Header>Attachments</DetailCard.Header>
-            <DetailCard.Content>
-              {volume.Attachments.map((attachment) => (
-                <div
-                  className="space-y-2 border-b pb-2 last:border-0 last:pb-0"
-                  key={attachment.InstanceId}
-                >
-                  <DetailRow
-                    label="Instance ID"
-                    value={attachment.InstanceId}
-                  />
-                  <DetailRow label="Device" value={attachment.Device} />
-                  <DetailRow label="Status" value={attachment.State} />
-                  <DetailRow
-                    label="Attach Time"
-                    value={formatDateTime(attachment.AttachTime)}
-                  />
-                  <DetailRow
-                    label="Delete on Termination"
-                    value={attachment.DeleteOnTermination ? "Yes" : "No"}
-                  />
-                </div>
-              ))}
-            </DetailCard.Content>
+            {volume.Attachments.map((attachment) => (
+              <DetailCard.Content key={attachment.InstanceId}>
+                <DetailRow label="Instance ID" value={attachment.InstanceId} />
+                <DetailRow label="Device" value={attachment.Device} />
+                <DetailRow label="Status" value={attachment.State} />
+                <DetailRow
+                  label="Attach Time"
+                  value={formatDateTime(attachment.AttachTime)}
+                />
+                <DetailRow
+                  label="Delete on Termination"
+                  value={attachment.DeleteOnTermination ? "Yes" : "No"}
+                />
+              </DetailCard.Content>
+            ))}
           </DetailCard>
         )}
       </div>

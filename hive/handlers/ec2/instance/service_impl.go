@@ -75,6 +75,15 @@ type CloudInitMetaData struct {
 	Hostname   string
 }
 
+// VolumeInfo holds volume information returned from GenerateVolumes
+// for populating BlockDeviceMappings in the EC2 API response
+type VolumeInfo struct {
+	VolumeId            string
+	DeviceName          string
+	AttachTime          time.Time
+	DeleteOnTermination bool
+}
+
 // InstanceServiceImpl handles daemon-side EC2 instance operations
 type InstanceServiceImpl struct {
 	config        *config.Config
@@ -93,18 +102,13 @@ func NewInstanceServiceImpl(cfg *config.Config, instanceTypes map[string]*ec2.In
 	}
 }
 
-// RunInstances handles the business logic for launching EC2 instances
-// This prepares all volumes (root, EFI, cloud-init) and returns the instance ready to launch
-func (s *InstanceServiceImpl) RunInstances(input *ec2.RunInstancesInput) (*vm.VM, ec2.Reservation, error) {
-	var reservation ec2.Reservation
-
-	// Validate input (validation is already done in daemon.handleEC2Launch)
-	// We can skip re-validation here for performance
-
+// RunInstance creates a single EC2 instance (called per-instance by daemon)
+// Returns the VM struct and EC2 instance metadata
+func (s *InstanceServiceImpl) RunInstance(input *ec2.RunInstancesInput) (*vm.VM, *ec2.Instance, error) {
 	// Validate instance type exists
 	_, exists := s.instanceTypes[*input.InstanceType]
 	if !exists {
-		return nil, reservation, errors.New(awserrors.ErrorInvalidInstanceType)
+		return nil, nil, errors.New(awserrors.ErrorInvalidInstanceType)
 	}
 
 	instanceId := vm.GenerateEC2InstanceID()
@@ -116,12 +120,7 @@ func (s *InstanceServiceImpl) RunInstances(input *ec2.RunInstancesInput) (*vm.VM
 		InstanceType: *input.InstanceType,
 	}
 
-	// Create reservation response
-	reservation.SetReservationId(vm.GenerateEC2ReservationID())
-	reservation.SetOwnerId("123456789012") // TODO: Use actual owner ID from config
-
-	// TODO: Loop through multiple instance creation based on MinCount / MaxCount
-	reservation.Instances = make([]*ec2.Instance, 1)
+	// Create EC2 instance metadata
 	ec2Instance := &ec2.Instance{
 		State: &ec2.InstanceState{},
 	}
@@ -135,40 +134,50 @@ func (s *InstanceServiceImpl) RunInstances(input *ec2.RunInstancesInput) (*vm.VM
 	ec2Instance.State.SetCode(0)
 	ec2Instance.State.SetName("pending")
 
-	reservation.Instances[0] = ec2Instance
-
 	// Store EC2 API metadata in VM for DescribeInstances compatibility
 	instance.RunInstancesInput = input
-	instance.Reservation = &reservation
 	instance.Instance = ec2Instance
 
-	// Return instance attributes, defer disk preparation to later step
-
-	return instance, reservation, nil
+	return instance, ec2Instance, nil
 }
 
-func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, instance *vm.VM) (err error) {
+func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, instance *vm.VM) ([]VolumeInfo, error) {
 
 	var size int = 4 * 1024 * 1024 * 1024 // 4GB default size
-	var deviceName string
+	var deviceName = "/dev/xvda" // Default device name
 	var volumeType string
 	var iops int
 	var imageId string
 	var snapshotId string
+	var deleteOnTermination = false // Default to false
 
 	// Handle block device mappings
 	if len(input.BlockDeviceMappings) > 0 {
-		size = int(*input.BlockDeviceMappings[0].Ebs.VolumeSize)
-		deviceName = *input.BlockDeviceMappings[0].DeviceName
-		volumeType = *input.BlockDeviceMappings[0].Ebs.VolumeType
-		iops = int(*input.BlockDeviceMappings[0].Ebs.Iops)
+		bdm := input.BlockDeviceMappings[0]
+		if bdm.DeviceName != nil {
+			deviceName = *bdm.DeviceName
+		}
+		if bdm.Ebs != nil {
+			if bdm.Ebs.VolumeSize != nil {
+				size = int(*bdm.Ebs.VolumeSize)
+			}
+			if bdm.Ebs.VolumeType != nil {
+				volumeType = *bdm.Ebs.VolumeType
+			}
+			if bdm.Ebs.Iops != nil {
+				iops = int(*bdm.Ebs.Iops)
+			}
+			if bdm.Ebs.DeleteOnTermination != nil {
+				deleteOnTermination = *bdm.Ebs.DeleteOnTermination
+			}
+		}
 	}
 
 	// Determine image ID and snapshot ID
 	if strings.HasPrefix(*input.ImageId, "ami-") {
 		randomNumber, err := rand.Int(rand.Reader, big.NewInt(100_000_000))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		imageId = viperblock.GenerateVolumeID("vol", fmt.Sprintf("%d-%s", randomNumber, *input.ImageId), "predastore", time.Now().Unix())
 		snapshotId = *input.ImageId
@@ -176,11 +185,14 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 		imageId = *input.ImageId
 	}
 
+	// Capture attach time for the root volume
+	attachTime := time.Now()
+
 	volumeConfig := viperblock.VolumeConfig{
 		VolumeMetadata: viperblock.VolumeMetadata{
 			VolumeID:   imageId,
 			SizeGiB:    utils.SafeIntToUint64(size / 1024 / 1024 / 1024),
-			CreatedAt:  time.Now(),
+			CreatedAt:  attachTime,
 			DeviceName: deviceName,
 			VolumeType: volumeType,
 			IOPS:       iops,
@@ -189,26 +201,36 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 	}
 
 	// Step 1: Create or validate root volume
-	err = s.prepareRootVolume(input, imageId, size, volumeConfig, instance)
+	err := s.prepareRootVolume(input, imageId, size, volumeConfig, instance)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Step 2: Create EFI partition
 	err = s.prepareEFIVolume(imageId, volumeConfig, instance)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Step 3: Create cloud-init volume if needed
 	if input.KeyName != nil && *input.KeyName != "" || (input.UserData != nil && *input.UserData != "") {
 		err = s.prepareCloudInitVolume(input, imageId, volumeConfig, instance)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
-	return nil
+	// Return volume info for the root volume only (EFI and cloud-init are internal)
+	volumeInfos := []VolumeInfo{
+		{
+			VolumeId:            imageId,
+			DeviceName:          deviceName,
+			AttachTime:          attachTime,
+			DeleteOnTermination: deleteOnTermination,
+		},
+	}
+
+	return volumeInfos, nil
 
 }
 
@@ -402,12 +424,16 @@ func (s *InstanceServiceImpl) prepareEFIVolume(imageId string, volumeConfig vipe
 		Host:       s.config.Predastore.Host,
 	}
 
+	// Update VolumeID to match the EFI volume name
+	efiVolumeConfig := volumeConfig
+	efiVolumeConfig.VolumeMetadata.VolumeID = efiVolumeName
+
 	efiVbConfig := viperblock.VB{
 		VolumeName:   efiVolumeName,
 		VolumeSize:   utils.SafeIntToUint64(efiSize),
 		BaseDir:      s.config.WalDir,
 		Cache:        viperblock.Cache{Config: viperblock.CacheConfig{Size: 0}},
-		VolumeConfig: volumeConfig,
+		VolumeConfig: efiVolumeConfig,
 	}
 
 	efiVb, err := viperblock.New(&efiVbConfig, "s3", efiCfg)
@@ -493,12 +519,16 @@ func (s *InstanceServiceImpl) prepareCloudInitVolume(input *ec2.RunInstancesInpu
 		Host:       s.config.Predastore.Host,
 	}
 
+	// Update VolumeID to match the cloud-init volume name
+	cloudInitVolumeConfig := volumeConfig
+	cloudInitVolumeConfig.VolumeMetadata.VolumeID = cloudInitVolumeName
+
 	cloudInitVbConfig := viperblock.VB{
 		VolumeName:   cloudInitVolumeName,
 		VolumeSize:   utils.SafeIntToUint64(cloudInitSize),
 		BaseDir:      s.config.WalDir,
 		Cache:        viperblock.Cache{Config: viperblock.CacheConfig{Size: 0}},
-		VolumeConfig: volumeConfig,
+		VolumeConfig: cloudInitVolumeConfig,
 	}
 
 	cloudInitVb, err := viperblock.New(&cloudInitVbConfig, "s3", cloudInitCfg)

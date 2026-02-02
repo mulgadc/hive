@@ -19,47 +19,11 @@ Each component can be used independently or as part of the integrated Hive stack
 - `../viperblock/CLAUDE.md` - Viperblock development guide
 - `../predastore/CLAUDE.md` - Predastore development guide
 
-## Cross-Repository Development Setup
+## Project Standards
 
-For platform development, clone all repositories to the same parent directory:
-```bash
-mkdir mulga
-cd mulga
-git clone <hive-repo-url> hive
-git clone <viperblock-repo-url> viperblock
-git clone <predastore-repo-url> predastore
-```
-
-The `hive/go.mod` uses local replace directives for cross-component development:
-```go
-replace github.com/mulgadc/viperblock => ../viperblock
-replace github.com/mulgadc/predastore => ../predastore
-```
-
-## Build Commands
-
-### Hive (Platform Orchestrator)
-```bash
-make build          # Build the hive binary
-make test           # Run Go tests
-make bench          # Run benchmarks
-make clean          # Clean build artifacts
-```
-
-### **MANDATORY: Unit Testing Requirements**
-
-**⚠️ CRITICAL: Always run unit tests before any commit or push operation.**
-
-```bash
-# REQUIRED before any git commit or push
-make test           # Must pass with zero failures
-
-# Example workflow:
-make test                    # Verify all tests pass
-git add .                    # Stage changes
-git commit -m "..."          # Only after tests pass
-git push origin main         # Only after tests pass
-```
+- Use log/slog instead of log. Use appropriate log level, eg `slog.Info`
+- All new features must have comprehensive unit tests
+- run `make security` and ensure no new code has linter errors
 
 **Testing Policy:**
 - **All unit tests MUST pass** before committing changes
@@ -68,25 +32,9 @@ git push origin main         # Only after tests pass
 - Use `make test` command to run the full test suite
 - If tests fail, fix issues before proceeding with git operations
 
-### Component Build Commands
-For detailed build instructions, see component-specific CLAUDE.md files:
-
-**Viperblock** (`../viperblock/CLAUDE.md`):
-```bash
-cd ../viperblock && make build    # Build sfs, vblock binaries + NBD plugin
-```
-
-**Predastore** (`../predastore/CLAUDE.md`):
-```bash
-cd ../predastore && make build    # Build s3d binary
-```
-
-**NBDkit** (system dependency):
-```bash
-cd nbdkit && autoreconf -i && ./configure && make && make install
-```
-
 ## Architecture Notes
+
+Read `DESIGN.md` to understand the full architecture
 
 ### Message-Driven Microservices Architecture
 
@@ -123,7 +71,7 @@ AWS SDK (custom endpoint) → Hive API Gateway → NATS Topics → Specialized D
 - **Volume Lifecycle**: Coordinated through NATS between EC2 and EBS daemons
 
 ### Key Design Patterns
-- **Message-Driven**: All service communication via NATS topics (ec2.*, ebs.*, s3.*, vpc.*)
+- **Message-Driven**: All service communication via NATS topics
 - **Queue Groups**: Load balancing and fault tolerance via NATS queue groups
 - **Request-Response**: 30-second timeout pattern for AWS API compatibility
 - **Service Specialization**: Dedicated daemon types for each AWS service
@@ -131,65 +79,20 @@ AWS SDK (custom endpoint) → Hive API Gateway → NATS Topics → Specialized D
 
 ### NATS Topic Structure
 
-The system uses structured NATS topics for service communication:
+- **EC2 Daemons**: Listen on `ec2.*` topics, manage QEMU/KVM instances
+- **EBS Daemons**: Listen on `ebs.*` topics, coordinate with Viperblock
+- **S3 Daemons**: Listen on `s3.*` topics, proxy to Predastore
+- **VPC Daemons**: Listen on `vpc.*` topics, manage networking
 
 ```bash
-# EC2 Service Topics:
-ec2.runinstances              # Launch new instances
-ec2.describeinstances         # Query instance status
-ec2.startinstances           # Start stopped instances
-ec2.stopinstances            # Stop running instances
-ec2.terminateinstances       # Terminate instances
-
-# EBS Service Topics:
-ebs.createvolume             # Create new EBS volume
-ebs.attachvolume             # Attach volume to instance
-ebs.detachvolume             # Detach volume
-ebs.describevolumes          # List volumes
-ebs.mount                    # Mount volume (internal)
-ebs.unmount                  # Unmount volume (internal)
-
-# S3 Service Topics:
-s3.createbucket              # Create S3 bucket
-s3.putobject                 # Store object
-s3.getobject                 # Retrieve object
-s3.listbuckets               # List buckets
-
-# VPC Service Topics:
-vpc.createvpc                # Create VPC
-vpc.createsubnet             # Create subnet
-vpc.describevpcs             # List VPCs
-
 # Health and Discovery:
 health.ec2.daemon.{id}       # Daemon health heartbeats
 discovery.services           # Service registration
 ```
 
-### Go Module Structure
-All Go projects use:
-- Go 1.25+ with module mode
-- Local replace directives for cross-component development
-- Standard build flags: `-ldflags "-s -w"` for optimized binaries
-- Test environment variable: `LOG_IGNORE=1` to suppress logs during testing
-
 ### Development Workflow
 
-#### Quick Setup (Recommended)
-```bash
-# 1. Clone dependencies (if not already done)
-./scripts/clone-deps.sh
-
-# 2. Setup development environment
-./scripts/dev-setup.sh
-
-# 3. Start all services
-./scripts/start-dev.sh
-
-# 4. Stop all services when done
-./scripts/stop-dev.sh
-```
-
-#### Manual Development Process
+#### Development Process
 1. **Cross-repo Setup**: Clone all repositories to same parent directory
 2. **Service Dependencies**: Start services in order: NATS → Predastore → Viperblock → NBDkit → Gateway → Daemons
 3. **Build Order**: Build components: predastore → viperblock → hive

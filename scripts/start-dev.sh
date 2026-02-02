@@ -4,6 +4,10 @@
 # This script starts all required services in the correct order using Hive service commands
 # Usage: ./scripts/start-dev.sh [data-dir]
 #   data-dir: Optional data directory path (default: ~/hive)
+#
+# Environment variables:
+#   UI=false              Skip starting Hive UI (e.g., UI=false ./scripts/start-dev.sh)
+#   HIVE_SKIP_BUILD=true  Skip building binaries before starting
 
 set -e
 
@@ -120,6 +124,10 @@ if [ "$HIVE_SKIP_BUILD" != "true" ]; then
 
     echo "   Building hive..."
     make build
+
+    echo "   Building predastore..."
+    cd "$MULGA_ROOT/predastore" && make build
+    cd "$PROJECT_ROOT"
 
     echo "   Building viperblock (nbdkit plugin)..."
     cd "$MULGA_ROOT/viperblock" && make build
@@ -270,8 +278,25 @@ start_service "awsgw" "$AWSGW_CMD"
 #check_service "awsgw" "9999"
 
 
+# 6️⃣ Start Hive UI (skip with UI=false)
+if [ "${UI}" != "false" ]; then
+    echo ""
+    echo "6️⃣. Starting Hive UI..."
+
+    HIVEUI_CMD="./bin/hive service hive-ui start"
+
+    start_service "hive-ui" "$HIVEUI_CMD"
+else
+    echo ""
+    echo "6️⃣. Skipping Hive UI (UI=false)"
+fi
+
+
 echo ""
 echo "🔗 Service endpoints will be:"
+if [ "${UI}" != "false" ]; then
+    echo "   - Hive UI:       https://localhost:3000"
+fi
 echo "   - NATS:          nats://localhost:4222"
 echo "   - Predastore:    https://localhost:8443"
 echo "   - AWS Gateway:   https://localhost:9999"

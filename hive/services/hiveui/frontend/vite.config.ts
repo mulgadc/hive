@@ -10,6 +10,13 @@ export default defineConfig({
   envDir: "../",
   build: {
     chunkSizeWarningLimit: 1500,
+    rollupOptions: {
+      output: {
+        entryFileNames: "assets/[name].js",
+        chunkFileNames: "assets/[name].js",
+        assetFileNames: "assets/[name].[ext]",
+      },
+    },
   },
   plugins: [
     basicSsl(),

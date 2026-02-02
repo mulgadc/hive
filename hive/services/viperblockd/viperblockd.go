@@ -29,6 +29,7 @@ type MountedVolume struct {
 	Socket string // Unix socket path (when using socket transport)
 	NBDURI string // Full NBD URI (nbd:unix:/path.sock or nbd://host:port)
 	PID    int
+	VB     *viperblock.VB // Reference to viperblock instance for state sync/flush
 }
 
 type Config struct {
@@ -137,37 +138,47 @@ func launchService(cfg *Config) (err error) {
 			return
 		}
 
-		// Find the volume in the mounted volumes
+		// Find the volume and extract references while holding the lock,
+		// then release before calling VB.Close() (which does heavy S3 I/O).
 		var ebsResponse config.EBSUnMountResponse
-		var match bool
+		var matched MountedVolume
+		var matchIdx int = -1
 		cfg.mu.Lock()
-		for _, volume := range cfg.MountedVolumes {
-
-			// TODO: Confirm KVM/QEMU is not using the volume first.
+		for i, volume := range cfg.MountedVolumes {
 			if volume.Name == ebsRequest.Name {
-				ebsResponse = config.EBSUnMountResponse{
-					Volume:  volume.Name,
-					Mounted: false,
+				matched = volume
+				matchIdx = i
+				// Remove from slice while we hold the lock
+				cfg.MountedVolumes = append(cfg.MountedVolumes[:i], cfg.MountedVolumes[i+1:]...)
+				break
+			}
+		}
+		cfg.mu.Unlock()
+
+		if matchIdx >= 0 {
+			ebsResponse = config.EBSUnMountResponse{
+				Volume:  matched.Name,
+				Mounted: false,
+			}
+
+			// Clean up the VB instance's background goroutine.
+			// This VB is state-only (LoadState/sync) — actual I/O is in the nbdkit plugin process.
+			if matched.VB != nil {
+				matched.VB.StopWALSyncer()
+			}
+
+			utils.KillProcess(matched.PID)
+
+			// Remove the socket file if using socket transport
+			if matched.Socket != "" {
+				slog.Info("Removing socket file", "socket", matched.Socket)
+				if err := os.Remove(matched.Socket); err != nil && !os.IsNotExist(err) {
+					slog.Error("Failed to delete nbd socket", "err", err, "socket", matched.Socket)
 				}
-
-				utils.KillProcess(volume.PID)
-				match = true
-
-				// Remove the socket file if using socket transport
-				if volume.Socket != "" {
-					slog.Info("Removing socket file", "socket", volume.Socket)
-					err := os.Remove(volume.Socket)
-					if err != nil && !os.IsNotExist(err) {
-						slog.Error("Failed to delete nbd socket", "err", err, "socket", volume.Socket)
-					}
-				}
-
 			}
 		}
 
-		cfg.mu.Unlock()
-
-		if !match {
+		if matchIdx < 0 {
 			ebsResponse = config.EBSUnMountResponse{
 				Volume: ebsRequest.Name,
 				Error:  fmt.Sprintf("Volume %s not found", ebsRequest.Name),
@@ -183,6 +194,52 @@ func launchService(cfg *Config) (err error) {
 
 		msg.Respond(response)
 		nc.Publish("ebs.unmount.response", response)
+	})
+
+	nc.QueueSubscribe("ebs.sync", "hive-workers", func(msg *nats.Msg) {
+		slog.Info("Received ebs.sync message", "data", string(msg.Data))
+
+		var syncRequest config.EBSSyncRequest
+		if err := json.Unmarshal(msg.Data, &syncRequest); err != nil {
+			slog.Error("Failed to unmarshal ebs.sync message", "err", err)
+			errResp, _ := json.Marshal(config.EBSSyncResponse{Error: fmt.Sprintf("bad request: %v", err)})
+			msg.Respond(errResp)
+			return
+		}
+
+		syncResponse := config.EBSSyncResponse{Volume: syncRequest.Volume}
+
+		// Find the mounted volume and reload its state from the backend
+		cfg.mu.Lock()
+		var foundVB *viperblock.VB
+		for _, volume := range cfg.MountedVolumes {
+			if volume.Name == syncRequest.Volume && volume.VB != nil {
+				foundVB = volume.VB
+				break
+			}
+		}
+		cfg.mu.Unlock()
+
+		if foundVB == nil {
+			syncResponse.Error = fmt.Sprintf("volume %s not mounted or has no VB instance", syncRequest.Volume)
+			slog.Warn("ebs.sync: volume not found", "volume", syncRequest.Volume)
+		} else if err := foundVB.LoadState(); err != nil {
+			syncResponse.Error = fmt.Sprintf("failed to reload state: %v", err)
+			slog.Error("ebs.sync: LoadState failed", "volume", syncRequest.Volume, "err", err)
+		} else {
+			syncResponse.Synced = true
+			slog.Info("ebs.sync: state reloaded", "volume", syncRequest.Volume,
+				"volumeSize", foundVB.GetVolumeSize())
+		}
+
+		response, err := json.Marshal(syncResponse)
+		if err != nil {
+			slog.Error("Failed to marshal ebs.sync response", "err", err)
+			msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
+			return
+		}
+
+		msg.Respond(response)
 	})
 
 	nc.QueueSubscribe("ebs.mount", "hive-workers", func(msg *nats.Msg) {
@@ -425,6 +482,7 @@ func launchService(cfg *Config) (err error) {
 			Socket: nbdSocket,
 			NBDURI: nbdURI,
 			PID:    pid,
+			VB:     vb,
 		})
 		cfg.mu.Unlock()
 
@@ -452,13 +510,21 @@ func launchService(cfg *Config) (err error) {
 
 	nc.Close()
 
-	// Close all nbdkit processes
+	// Snapshot mounted volumes and clear the list while holding the lock,
+	// then flush/kill outside the lock (VB.Close does heavy I/O).
 	cfg.mu.Lock()
-	for _, volume := range cfg.MountedVolumes {
+	volumes := make([]MountedVolume, len(cfg.MountedVolumes))
+	copy(volumes, cfg.MountedVolumes)
+	cfg.MountedVolumes = nil
+	cfg.mu.Unlock()
+
+	for _, volume := range volumes {
+		if volume.VB != nil {
+			volume.VB.StopWALSyncer()
+		}
 		slog.Info("Killing nbdkit process", "pid", volume.PID)
 		utils.KillProcess(volume.PID)
 	}
-	cfg.mu.Unlock()
 
 	return nil
 

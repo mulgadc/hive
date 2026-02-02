@@ -2,7 +2,6 @@ package utils
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -92,7 +91,7 @@ func TestExecProcessAndKill(t *testing.T) {
 
 	err := WritePidFile("utilsunittest", cmd.Process.Pid)
 
-	log.Print("Started process with PID: ", cmd.Process.Pid)
+	t.Log("Started process with PID:", cmd.Process.Pid)
 
 	assert.NoError(t, err)
 

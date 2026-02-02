@@ -119,6 +119,16 @@ type EBSUnMountResponse struct {
 	Error   string
 }
 
+type EBSSyncRequest struct {
+	Volume string
+}
+
+type EBSSyncResponse struct {
+	Volume  string
+	Synced  bool
+	Error   string
+}
+
 type EBSDeleteRequest struct {
 	Volume string
 }
