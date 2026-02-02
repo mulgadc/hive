@@ -270,6 +270,45 @@ if [ "$STATE" != "stopped" ]; then
     exit 1
 fi
 
+# Phase 5b: Volume Modification (while instance is stopped)
+echo "Phase 5b: Volume Modification"
+# Get current volume size
+CURRENT_SIZE=$($AWS_EC2 describe-volumes --volume-ids "$VOLUME_ID" --query 'Volumes[0].Size' --output text)
+echo "Current volume size: ${CURRENT_SIZE}GB"
+
+# Calculate new size (double the current size, minimum 2GB)
+if [ "$CURRENT_SIZE" -lt 2 ]; then
+    NEW_SIZE=2
+else
+    NEW_SIZE=$((CURRENT_SIZE * 2))
+fi
+echo "Resizing volume to: ${NEW_SIZE}GB"
+
+# Modify volume size
+$AWS_EC2 modify-volume --volume-id "$VOLUME_ID" --size "$NEW_SIZE"
+
+# Poll until volume modification is complete
+echo "Waiting for volume modification to complete..."
+COUNT=0
+while [ $COUNT -lt 30 ]; do
+    VOLUME_STATE=$($AWS_EC2 describe-volumes --volume-ids "$VOLUME_ID" --query 'Volumes[0].State' --output text)
+    VOLUME_SIZE=$($AWS_EC2 describe-volumes --volume-ids "$VOLUME_ID" --query 'Volumes[0].Size' --output text)
+    echo "Volume state: $VOLUME_STATE, size: ${VOLUME_SIZE}GB"
+
+    if [ "$VOLUME_SIZE" -eq "$NEW_SIZE" ]; then
+        echo "Volume resized successfully to ${NEW_SIZE}GB"
+        break
+    fi
+
+    sleep 2
+    COUNT=$((COUNT + 1))
+done
+
+if [ "$VOLUME_SIZE" -ne "$NEW_SIZE" ]; then
+    echo "Volume failed to resize to ${NEW_SIZE}GB"
+    exit 1
+fi
+
 # Start instance (start-instances) and verify transition back to running (describe-instances)
 echo "Starting instance..."
 $AWS_EC2 start-instances --instance-ids "$INSTANCE_ID"
