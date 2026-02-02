@@ -65,14 +65,20 @@ func (m *JetStreamManager) InitKVBucket() error {
 	return nil
 }
 
-// WriteState writes the instance state to the KV store for the given node
+// WriteState writes the instance state to the KV store for the given node.
+// It acquires instances.Mu internally.
 func (m *JetStreamManager) WriteState(nodeID string, instances *vm.Instances) error {
+	instances.Mu.Lock()
+	defer instances.Mu.Unlock()
+	return m.writeStateLocked(nodeID, instances)
+}
+
+// writeStateLocked writes instance state without acquiring instances.Mu.
+// The caller must hold instances.Mu.
+func (m *JetStreamManager) writeStateLocked(nodeID string, instances *vm.Instances) error {
 	if m.kv == nil {
 		return errors.New("KV bucket not initialized")
 	}
-
-	instances.Mu.Lock()
-	defer instances.Mu.Unlock()
 
 	// Create a struct without the mutex to avoid copying the lock
 	state := struct {

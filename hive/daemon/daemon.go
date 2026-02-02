@@ -812,12 +812,26 @@ func (d *Daemon) ClusterManager() error {
 	return nil
 }
 
-// WriteState writes the instance state to JetStream KV store (required)
+// WriteState writes the instance state to JetStream KV store (required).
+// It acquires d.Instances.Mu internally.
 func (d *Daemon) WriteState() error {
 	if d.jsManager == nil {
 		return fmt.Errorf("JetStream manager not initialized - cannot write state")
 	}
 	if err := d.jsManager.WriteState(d.node, &d.Instances); err != nil {
+		slog.Error("JetStream write failed", "error", err)
+		return fmt.Errorf("failed to write state to JetStream: %w", err)
+	}
+	return nil
+}
+
+// writeStateLocked writes instance state without acquiring d.Instances.Mu.
+// The caller must hold d.Instances.Mu.
+func (d *Daemon) writeStateLocked() error {
+	if d.jsManager == nil {
+		return fmt.Errorf("JetStream manager not initialized - cannot write state")
+	}
+	if err := d.jsManager.writeStateLocked(d.node, &d.Instances); err != nil {
 		slog.Error("JetStream write failed", "error", err)
 		return fmt.Errorf("failed to write state to JetStream: %w", err)
 	}

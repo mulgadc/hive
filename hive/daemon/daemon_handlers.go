@@ -32,9 +32,8 @@ func (d *Daemon) handleEC2StartInstances(msg *nats.Msg) {
 
 	// Check if the instance is running on this node
 	d.Instances.Mu.Lock()
-	defer d.Instances.Mu.Unlock()
-
 	instance, ok := d.Instances.VMS[ec2StartInstance.InstanceID]
+	d.Instances.Mu.Unlock()
 
 	if !ok {
 		slog.Error("EC2 Start Request - Instance not found", "instanceId", ec2StartInstanceResponse.InstanceID)
@@ -56,7 +55,7 @@ func (d *Daemon) handleEC2StartInstances(msg *nats.Msg) {
 		}
 	}
 
-	// Launch the instance
+	// Launch the instance (acquires d.Instances.Mu internally via TransitionState)
 	err := d.LaunchInstance(instance)
 
 	if err != nil {
@@ -131,14 +130,10 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 			return
 		}
 
-		// Update instance attributes and transition state
+		// Update instance attributes (LaunchInstance already transitions to StateRunning)
 		d.Instances.Mu.Lock()
 		instance.Attributes = command.Attributes
 		d.Instances.Mu.Unlock()
-
-		if err := d.TransitionState(instance, vm.StateRunning); err != nil {
-			slog.Error("Failed to transition instance to running", "instanceId", instance.ID, "err", err)
-		}
 
 		slog.Info("Instance started", "instanceId", instance.ID)
 
@@ -163,6 +158,8 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 		// Transition to the initial transitional state
 		if err := d.TransitionState(instance, initialState); err != nil {
 			slog.Error("Failed to transition to "+string(initialState), "instanceId", instance.ID, "err", err)
+			respondWithError(awserrors.ErrorServerInternal)
+			return
 		}
 
 		// Respond immediately - operation will complete in background

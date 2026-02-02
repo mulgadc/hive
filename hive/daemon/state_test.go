@@ -81,6 +81,7 @@ func TestTransitionState_ValidTransitions(t *testing.T) {
 		{"running->shutting-down", vm.StateRunning, vm.StateShuttingDown, vm.EC2StateCodes[vm.StateShuttingDown]},
 		{"running->error", vm.StateRunning, vm.StateError, vm.EC2StateCodes[vm.StateError]},
 		{"stopping->stopped", vm.StateStopping, vm.StateStopped, vm.EC2StateCodes[vm.StateStopped]},
+		{"stopping->shutting-down", vm.StateStopping, vm.StateShuttingDown, vm.EC2StateCodes[vm.StateShuttingDown]},
 		{"stopping->error", vm.StateStopping, vm.StateError, vm.EC2StateCodes[vm.StateError]},
 		{"stopped->running", vm.StateStopped, vm.StateRunning, vm.EC2StateCodes[vm.StateRunning]},
 		{"stopped->shutting-down", vm.StateStopped, vm.StateShuttingDown, vm.EC2StateCodes[vm.StateShuttingDown]},
@@ -130,7 +131,6 @@ func TestTransitionState_InvalidTransitions(t *testing.T) {
 		{"terminated->running", vm.StateTerminated, vm.StateRunning},
 		{"terminated->stopped", vm.StateTerminated, vm.StateStopped},
 		{"stopping->running", vm.StateStopping, vm.StateRunning},
-		{"stopping->shutting-down", vm.StateStopping, vm.StateShuttingDown},
 		{"shutting-down->running", vm.StateShuttingDown, vm.StateRunning},
 		{"shutting-down->stopped", vm.StateShuttingDown, vm.StateStopped},
 	}
