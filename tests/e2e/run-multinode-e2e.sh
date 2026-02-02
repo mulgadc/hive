@@ -287,6 +287,12 @@ echo "----------------------------------------"
 echo "Testing modify-volume while instance is stopped..."
 
 # Get the volume attached to the test instance
+echo "  Listing all volumes attached to instance $TEST_INSTANCE..."
+$AWS_EC2 describe-volumes \
+    --filters "Name=attachment.instance-id,Values=$TEST_INSTANCE" \
+    --query 'Volumes[*].{VolumeId:VolumeId,State:State,Size:Size,AttachedInstance:Attachments[0].InstanceId}' \
+    --output table
+
 TEST_VOLUME_ID=$($AWS_EC2 describe-volumes \
     --filters "Name=attachment.instance-id,Values=$TEST_INSTANCE" \
     --query 'Volumes[0].VolumeId' --output text)
@@ -295,7 +301,7 @@ if [ -z "$TEST_VOLUME_ID" ] || [ "$TEST_VOLUME_ID" == "None" ]; then
     echo "  ERROR: Could not find volume for instance $TEST_INSTANCE"
     exit 1
 fi
-echo "  Volume ID: $TEST_VOLUME_ID"
+echo "  Selected Volume ID: $TEST_VOLUME_ID"
 
 # Get current size
 CURRENT_SIZE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
