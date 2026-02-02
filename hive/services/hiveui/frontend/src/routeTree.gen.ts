@@ -13,6 +13,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthRouteRouteImport } from './routes/_auth/route'
 import { Route as AuthIndexRouteImport } from './routes/_auth/index'
 import { Route as AuthS3LsIndexRouteImport } from './routes/_auth/s3/ls/index'
+import { Route as AuthEc2volumesCreateVolumeRouteImport } from './routes/_auth/ec2/(volumes)/create-volume'
 import { Route as AuthEc2keyImportKeyPairRouteImport } from './routes/_auth/ec2/(key)/import-key-pair'
 import { Route as AuthEc2keyCreateKeyPairRouteImport } from './routes/_auth/ec2/(key)/create-key-pair'
 import { Route as AuthEc2instancesRunInstancesRouteImport } from './routes/_auth/ec2/(instances)/run-instances'
@@ -48,6 +49,12 @@ const AuthS3LsIndexRoute = AuthS3LsIndexRouteImport.update({
   path: '/s3/ls/',
   getParentRoute: () => AuthRouteRoute,
 } as any)
+const AuthEc2volumesCreateVolumeRoute =
+  AuthEc2volumesCreateVolumeRouteImport.update({
+    id: '/ec2/(volumes)/create-volume',
+    path: '/ec2/create-volume',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
 const AuthEc2keyImportKeyPairRoute = AuthEc2keyImportKeyPairRouteImport.update({
   id: '/ec2/(key)/import-key-pair',
   path: '/ec2/import-key-pair',
@@ -141,6 +148,7 @@ export interface FileRoutesByFullPath {
   '/ec2/run-instances': typeof AuthEc2instancesRunInstancesRoute
   '/ec2/create-key-pair': typeof AuthEc2keyCreateKeyPairRoute
   '/ec2/import-key-pair': typeof AuthEc2keyImportKeyPairRoute
+  '/ec2/create-volume': typeof AuthEc2volumesCreateVolumeRoute
   '/s3/ls/': typeof AuthS3LsIndexRoute
   '/ec2/describe-images/$id': typeof AuthEc2imagesDescribeImagesIdRoute
   '/ec2/describe-instances/$id': typeof AuthEc2instancesDescribeInstancesIdRoute
@@ -160,6 +168,7 @@ export interface FileRoutesByTo {
   '/ec2/run-instances': typeof AuthEc2instancesRunInstancesRoute
   '/ec2/create-key-pair': typeof AuthEc2keyCreateKeyPairRoute
   '/ec2/import-key-pair': typeof AuthEc2keyImportKeyPairRoute
+  '/ec2/create-volume': typeof AuthEc2volumesCreateVolumeRoute
   '/s3/ls': typeof AuthS3LsIndexRoute
   '/ec2/describe-images/$id': typeof AuthEc2imagesDescribeImagesIdRoute
   '/ec2/describe-instances/$id': typeof AuthEc2instancesDescribeInstancesIdRoute
@@ -182,6 +191,7 @@ export interface FileRoutesById {
   '/_auth/ec2/(instances)/run-instances': typeof AuthEc2instancesRunInstancesRoute
   '/_auth/ec2/(key)/create-key-pair': typeof AuthEc2keyCreateKeyPairRoute
   '/_auth/ec2/(key)/import-key-pair': typeof AuthEc2keyImportKeyPairRoute
+  '/_auth/ec2/(volumes)/create-volume': typeof AuthEc2volumesCreateVolumeRoute
   '/_auth/s3/ls/': typeof AuthS3LsIndexRoute
   '/_auth/ec2/(images)/describe-images/$id': typeof AuthEc2imagesDescribeImagesIdRoute
   '/_auth/ec2/(instances)/describe-instances/$id': typeof AuthEc2instancesDescribeInstancesIdRoute
@@ -204,6 +214,7 @@ export interface FileRouteTypes {
     | '/ec2/run-instances'
     | '/ec2/create-key-pair'
     | '/ec2/import-key-pair'
+    | '/ec2/create-volume'
     | '/s3/ls/'
     | '/ec2/describe-images/$id'
     | '/ec2/describe-instances/$id'
@@ -223,6 +234,7 @@ export interface FileRouteTypes {
     | '/ec2/run-instances'
     | '/ec2/create-key-pair'
     | '/ec2/import-key-pair'
+    | '/ec2/create-volume'
     | '/s3/ls'
     | '/ec2/describe-images/$id'
     | '/ec2/describe-instances/$id'
@@ -244,6 +256,7 @@ export interface FileRouteTypes {
     | '/_auth/ec2/(instances)/run-instances'
     | '/_auth/ec2/(key)/create-key-pair'
     | '/_auth/ec2/(key)/import-key-pair'
+    | '/_auth/ec2/(volumes)/create-volume'
     | '/_auth/s3/ls/'
     | '/_auth/ec2/(images)/describe-images/$id'
     | '/_auth/ec2/(instances)/describe-instances/$id'
@@ -291,6 +304,13 @@ declare module '@tanstack/react-router' {
       path: '/s3/ls'
       fullPath: '/s3/ls/'
       preLoaderRoute: typeof AuthS3LsIndexRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/_auth/ec2/(volumes)/create-volume': {
+      id: '/_auth/ec2/(volumes)/create-volume'
+      path: '/ec2/create-volume'
+      fullPath: '/ec2/create-volume'
+      preLoaderRoute: typeof AuthEc2volumesCreateVolumeRouteImport
       parentRoute: typeof AuthRouteRoute
     }
     '/_auth/ec2/(key)/import-key-pair': {
@@ -420,6 +440,7 @@ interface AuthRouteRouteChildren {
   AuthEc2instancesRunInstancesRoute: typeof AuthEc2instancesRunInstancesRoute
   AuthEc2keyCreateKeyPairRoute: typeof AuthEc2keyCreateKeyPairRoute
   AuthEc2keyImportKeyPairRoute: typeof AuthEc2keyImportKeyPairRoute
+  AuthEc2volumesCreateVolumeRoute: typeof AuthEc2volumesCreateVolumeRoute
   AuthS3LsIndexRoute: typeof AuthS3LsIndexRoute
   AuthEc2imagesDescribeImagesIdRoute: typeof AuthEc2imagesDescribeImagesIdRoute
   AuthEc2instancesDescribeInstancesIdRoute: typeof AuthEc2instancesDescribeInstancesIdRoute
@@ -438,6 +459,7 @@ const AuthRouteRouteChildren: AuthRouteRouteChildren = {
   AuthEc2instancesRunInstancesRoute: AuthEc2instancesRunInstancesRoute,
   AuthEc2keyCreateKeyPairRoute: AuthEc2keyCreateKeyPairRoute,
   AuthEc2keyImportKeyPairRoute: AuthEc2keyImportKeyPairRoute,
+  AuthEc2volumesCreateVolumeRoute: AuthEc2volumesCreateVolumeRoute,
   AuthS3LsIndexRoute: AuthS3LsIndexRoute,
   AuthEc2imagesDescribeImagesIdRoute: AuthEc2imagesDescribeImagesIdRoute,
   AuthEc2instancesDescribeInstancesIdRoute:

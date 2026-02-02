@@ -1,6 +1,7 @@
 import {
   type _InstanceType,
   CreateKeyPairCommand,
+  CreateVolumeCommand,
   DeleteKeyPairCommand,
   ImportKeyPairCommand,
   ModifyVolumeCommand,
@@ -20,6 +21,7 @@ import {
 import type {
   CreateInstanceParams,
   CreateKeyPairData,
+  CreateVolumeFormData,
   ImportKeyPairData,
   ModifyVolumeParams,
 } from "@/types/ec2"
@@ -175,6 +177,23 @@ export function useDeleteKeyPair() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries(ec2KeyPairsQueryOptions)
+    },
+  })
+}
+
+export function useCreateVolume() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (params: CreateVolumeFormData) => {
+      const command = new CreateVolumeCommand({
+        Size: params.size,
+        AvailabilityZone: params.availabilityZone,
+        VolumeType: "gp3",
+      })
+      return await getEc2Client().send(command)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ec2", "volumes"] })
     },
   })
 }

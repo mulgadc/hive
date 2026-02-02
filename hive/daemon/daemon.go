@@ -427,6 +427,7 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.DescribeKeyPairs", d.handleEC2DescribeKeyPairs, "hive-workers"},
 		{"ec2.ImportKeyPair", d.handleEC2ImportKeyPair, "hive-workers"},
 		{"ec2.DescribeImages", d.handleEC2DescribeImages, "hive-workers"},
+		{"ec2.CreateVolume", d.handleEC2CreateVolume, "hive-workers"},
 		{"ec2.DescribeVolumes", d.handleEC2DescribeVolumes, "hive-workers"},
 		{"ec2.ModifyVolume", d.handleEC2ModifyVolume, "hive-workers"},
 		{"ec2.DescribeInstances", d.handleEC2DescribeInstances, ""},
