@@ -454,6 +454,7 @@ init_leader_node() {
         --bind "${NODE1_IP}" \
         --cluster-bind "${NODE1_IP}" \
         --cluster-routes "${NODE1_IP}:${NATS_CLUSTER_PORT}" \
+        --predastore-nodes "${NODE1_IP},${NODE2_IP},${NODE3_IP}" \
         --port ${CLUSTER_PORT} \
         --region ap-southeast-2 \
         --az ap-southeast-2a \
@@ -488,8 +489,36 @@ join_follower_node() {
         --region ap-southeast-2 \
         --az "ap-southeast-2a"
 
-    # Point predastore to node1 (only node1 runs predastore until multi-node predastore is implemented)
-    sed -i "s|host = \"${node_ip}:8443\"|host = \"${NODE1_IP}:8443\"|" "$data_dir/config/hive.toml"
-
     echo "Node$node_num joined cluster"
+}
+
+# Verify Predastore cluster health
+# Checks that Predastore is reachable on all node IPs
+# Usage: verify_predastore_cluster [expected_nodes]
+verify_predastore_cluster() {
+    local expected_nodes="${1:-3}"
+    local healthy=0
+
+    echo "Verifying Predastore cluster health (expecting $expected_nodes nodes)..."
+
+    for i in $(seq 1 "$expected_nodes"); do
+        local node_ip="${SIMULATED_NETWORK}.$i"
+
+        if curl -k -s "https://${node_ip}:${PREDASTORE_PORT}" > /dev/null 2>&1; then
+            echo "  Node$i ($node_ip:${PREDASTORE_PORT}): reachable"
+            healthy=$((healthy + 1))
+        else
+            echo "  Node$i ($node_ip:${PREDASTORE_PORT}): NOT reachable"
+        fi
+    done
+
+    echo "  Healthy Predastore nodes: $healthy/$expected_nodes"
+
+    if [ "$healthy" -ge "$expected_nodes" ]; then
+        echo "  Predastore cluster is healthy"
+        return 0
+    else
+        echo "  WARNING: Predastore cluster may not be fully formed"
+        return 1
+    fi
 }

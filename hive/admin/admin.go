@@ -8,13 +8,16 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/template"
 	"time"
 
+	toml "github.com/pelletier/go-toml/v2"
 	"gopkg.in/ini.v1"
 )
 
@@ -35,6 +38,15 @@ type ConfigSettings struct {
 	// Cluster settings
 	ClusterBindIP string
 	ClusterRoutes []string
+
+	// Predastore multi-node
+	PredastoreNodeID int
+}
+
+// PredastoreNodeConfig describes a single Predastore node for multi-node config generation.
+type PredastoreNodeConfig struct {
+	ID   int
+	Host string
 }
 
 type ConfigFile struct {
@@ -563,3 +575,56 @@ func SetupAWSCredentials(accessKey, secretKey, region, certPath string) error {
 
 	return nil
 }
+
+// GenerateMultiNodePredastoreConfig produces a complete predastore.toml for a
+// multi-node Predastore cluster. Each node gets its own DB entry (port 6660)
+// and shard entry (port 9991) on a distinct IP. Node ID 1 is the bootstrap leader.
+func GenerateMultiNodePredastoreConfig(templateStr string, nodes []PredastoreNodeConfig, accessKey, secretKey, region string) (string, error) {
+	if len(nodes) < 3 {
+		return "", fmt.Errorf("multi-node predastore requires at least 3 nodes, got %d", len(nodes))
+	}
+
+	data := struct {
+		Nodes     []PredastoreNodeConfig
+		AccessKey string
+		SecretKey string
+		Region    string
+	}{nodes, accessKey, secretKey, region}
+
+	tmpl, err := template.New("predastore-multinode").Parse(templateStr)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse predastore template: %w", err)
+	}
+
+	var b strings.Builder
+	if err := tmpl.Execute(&b, data); err != nil {
+		return "", fmt.Errorf("failed to execute predastore template: %w", err)
+	}
+
+	return b.String(), nil
+}
+
+// FindNodeIDByIP returns the node ID for the given IP in the node list,
+// or 0 if the IP is not found.
+func FindNodeIDByIP(nodes []PredastoreNodeConfig, ip string) int {
+	for _, n := range nodes {
+		if n.Host == ip {
+			return n.ID
+		}
+	}
+	return 0
+}
+
+// ParsePredastoreNodeIDFromConfig parses a predastore.toml string and returns
+// the node ID whose host matches the given IP, or 0 if not found.
+func ParsePredastoreNodeIDFromConfig(tomlContent string, ip string) int {
+	var cfg struct {
+		DB []PredastoreNodeConfig `toml:"db"`
+	}
+	if err := toml.Unmarshal([]byte(tomlContent), &cfg); err != nil {
+		slog.Warn("Failed to parse predastore.toml content", "error", err)
+		return 0
+	}
+	return FindNodeIDByIP(cfg.DB, ip)
+}
+

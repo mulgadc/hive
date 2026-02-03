@@ -55,6 +55,9 @@ var predastoreTomlTemplate string
 //go:embed templates/nats.conf
 var natsConfTemplate string
 
+//go:embed templates/predastore-multinode.toml
+var predastoreMultiNodeTemplate string
+
 var supportedArchs = map[string]bool{
 	"x86_64":  true,
 	"aarch64": true, // alias for arm64
@@ -157,6 +160,7 @@ func init() {
 	adminInitCmd.Flags().String("bind", "0.0.0.0", "IP address to bind services to (e.g., 10.11.12.1 for multi-node)")
 	adminInitCmd.Flags().String("cluster-bind", "", "IP address to bind NATS cluster services to (e.g., 10.11.12.1 for multi-node)")
 	adminInitCmd.Flags().String("cluster-routes", "", "NATS cluster hosts for routing specify multiple with comma (e.g., 10.11.12.1:4248,10.11.12.2:4248 for multi-node)")
+	adminInitCmd.Flags().String("predastore-nodes", "", "Comma-separated IPs for multi-node Predastore cluster (e.g., 10.11.12.1,10.11.12.2,10.11.12.3). Requires >= 3 nodes.")
 
 	// Flags for admin join
 	adminJoinCmd.Flags().String("region", "ap-southeast-2", "Region for this node")
@@ -474,6 +478,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	clusterBind, _ := cmd.Flags().GetString("cluster-bind")
 	clusterRoutesStr, _ := cmd.Flags().GetString("cluster-routes")
 	clusterRoutes := strings.Split(clusterRoutesStr, ",")
+	predastoreNodesStr, _ := cmd.Flags().GetString("predastore-nodes")
 
 	// Validate IP address format
 	if net.ParseIP(bindIP) == nil {
@@ -561,6 +566,49 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 	portStr := fmt.Sprintf("%d", port)
 
+	// Parse multi-node predastore configuration
+	var predastoreNodeID int
+	if predastoreNodesStr != "" {
+		ips := strings.Split(predastoreNodesStr, ",")
+		if len(ips) < 3 {
+			fmt.Fprintf(os.Stderr, "❌ Error: --predastore-nodes requires at least 3 IPs, got %d\n", len(ips))
+			os.Exit(1)
+		}
+
+		var predastoreNodes []admin.PredastoreNodeConfig
+		for i, ip := range ips {
+			ip = strings.TrimSpace(ip)
+			if net.ParseIP(ip) == nil {
+				fmt.Fprintf(os.Stderr, "❌ Error: Invalid IP in --predastore-nodes: %s\n", ip)
+				os.Exit(1)
+			}
+			predastoreNodes = append(predastoreNodes, admin.PredastoreNodeConfig{
+				ID:   i + 1,
+				Host: ip,
+			})
+		}
+
+		predastoreNodeID = admin.FindNodeIDByIP(predastoreNodes, bindIP)
+		if predastoreNodeID == 0 {
+			fmt.Fprintf(os.Stderr, "❌ Error: --bind IP %s not found in --predastore-nodes list\n", bindIP)
+			os.Exit(1)
+		}
+
+		// Generate multi-node predastore.toml
+		predastoreContent, err := admin.GenerateMultiNodePredastoreConfig(predastoreMultiNodeTemplate, predastoreNodes, accessKey, secretKey, region)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error generating multi-node predastore config: %v\n", err)
+			os.Exit(1)
+		}
+
+		predastorePath := filepath.Join(predastoreDir, "predastore.toml")
+		if err := os.WriteFile(predastorePath, []byte(predastoreContent), 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing predastore config: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("✅ Created: multi-node predastore.toml (node ID: %d)\n", predastoreNodeID)
+	}
+
 	configSettings := admin.ConfigSettings{
 		AccessKey: accessKey,
 		SecretKey: secretKey,
@@ -575,30 +623,21 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		BindIP:        bindIP,
 		ClusterBindIP: clusterBind,
 		ClusterRoutes: clusterRoutes,
+
+		PredastoreNodeID: predastoreNodeID,
 	}
 
-	// Generate all config files
+	// Generate config files
 	configs := []admin.ConfigFile{
-		{
-			Name:     "hive.toml",
-			Path:     hiveTomlPath,
-			Template: hiveTomlTemplate,
-		},
-		{
-			Name:     filepath.Join(awsgwDir, "awsgw.toml"),
-			Path:     filepath.Join(awsgwDir, "awsgw.toml"),
-			Template: awsgwTomlTemplate,
-		},
-		{
-			Name:     filepath.Join(predastoreDir, "predastore.toml"),
-			Path:     filepath.Join(predastoreDir, "predastore.toml"),
-			Template: predastoreTomlTemplate,
-		},
-		{
-			Name:     filepath.Join(natsDir, "nats.conf"),
-			Path:     filepath.Join(natsDir, "nats.conf"),
-			Template: natsConfTemplate,
-		},
+		{Name: "hive.toml", Path: hiveTomlPath, Template: hiveTomlTemplate},
+		{Name: filepath.Join(awsgwDir, "awsgw.toml"), Path: filepath.Join(awsgwDir, "awsgw.toml"), Template: awsgwTomlTemplate},
+		{Name: filepath.Join(natsDir, "nats.conf"), Path: filepath.Join(natsDir, "nats.conf"), Template: natsConfTemplate},
+	}
+	// Skip template-based predastore.toml if multi-node was already generated
+	if predastoreNodesStr == "" {
+		configs = append(configs, admin.ConfigFile{
+			Name: filepath.Join(predastoreDir, "predastore.toml"), Path: filepath.Join(predastoreDir, "predastore.toml"), Template: predastoreTomlTemplate,
+		})
 	}
 
 	err := admin.GenerateConfigFiles(configs, configSettings)
@@ -836,6 +875,41 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	// Write individual node config files
 	portStr := fmt.Sprintf("%d", port)
 
+	awsgwDir := filepath.Join(configDir, "awsgw")
+	predastoreDir := filepath.Join(configDir, "predastore")
+	natsDir := filepath.Join(configDir, "nats")
+
+	for _, dir := range []string{awsgwDir, predastoreDir, natsDir} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating directory %s: %v\n", dir, err)
+			os.Exit(1)
+		}
+	}
+
+	// Handle multi-node predastore config from leader
+	var predastoreNodeID int
+	hasLeaderPredastoreConfig := joinResp.PredastoreConfig != ""
+
+	if hasLeaderPredastoreConfig {
+		// Write the leader's predastore.toml
+		predastorePath := filepath.Join(predastoreDir, "predastore.toml")
+		if err := os.WriteFile(predastorePath, []byte(joinResp.PredastoreConfig), 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing predastore config from leader: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("✅ Predastore config received from leader: %s\n", predastorePath)
+
+		predastoreNodeID = admin.ParsePredastoreNodeIDFromConfig(joinResp.PredastoreConfig, bindIP)
+
+		if predastoreNodeID > 0 {
+			fmt.Printf("✅ Detected Predastore node ID: %d (for bind IP %s)\n", predastoreNodeID, bindIP)
+		} else {
+			fmt.Fprintf(os.Stderr, "ERROR: Could not detect Predastore node ID for bind IP %s in leader config\n", bindIP)
+			fmt.Fprintf(os.Stderr, "This node's IP must be listed in the --predastore-nodes used during init\n")
+			os.Exit(1)
+		}
+	}
+
 	configSettings := admin.ConfigSettings{
 		AccessKey: localConfig.Nodes[node].AccessKey,
 		SecretKey: localConfig.Nodes[node].SecretKey,
@@ -849,41 +923,21 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		BindIP:        bindIP,
 		ClusterBindIP: clusterBind,
 		ClusterRoutes: clusterRoutes,
+
+		PredastoreNodeID: predastoreNodeID,
 	}
 
-	awsgwDir := filepath.Join(configDir, "awsgw")
-	predastoreDir := filepath.Join(configDir, "predastore")
-	natsDir := filepath.Join(configDir, "nats")
-
-	for _, dir := range []string{awsgwDir, predastoreDir, natsDir} {
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating directory %s: %v\n", dir, err)
-			os.Exit(1)
-		}
-	}
-
-	// Generate all config files
+	// Generate config files
 	configs := []admin.ConfigFile{
-		{
-			Name:     "hive.toml",
-			Path:     hiveTomlPath,
-			Template: hiveTomlTemplate,
-		},
-		{
-			Name:     filepath.Join(awsgwDir, "awsgw.toml"),
-			Path:     filepath.Join(awsgwDir, "awsgw.toml"),
-			Template: awsgwTomlTemplate,
-		},
-		{
-			Name:     filepath.Join(predastoreDir, "predastore.toml"),
-			Path:     filepath.Join(predastoreDir, "predastore.toml"),
-			Template: predastoreTomlTemplate,
-		},
-		{
-			Name:     filepath.Join(natsDir, "nats.conf"),
-			Path:     filepath.Join(natsDir, "nats.conf"),
-			Template: natsConfTemplate,
-		},
+		{Name: "hive.toml", Path: hiveTomlPath, Template: hiveTomlTemplate},
+		{Name: filepath.Join(awsgwDir, "awsgw.toml"), Path: filepath.Join(awsgwDir, "awsgw.toml"), Template: awsgwTomlTemplate},
+		{Name: filepath.Join(natsDir, "nats.conf"), Path: filepath.Join(natsDir, "nats.conf"), Template: natsConfTemplate},
+	}
+	// Skip template-based predastore.toml if received from leader
+	if !hasLeaderPredastoreConfig {
+		configs = append(configs, admin.ConfigFile{
+			Name: filepath.Join(predastoreDir, "predastore.toml"), Path: filepath.Join(predastoreDir, "predastore.toml"), Template: predastoreTomlTemplate,
+		})
 	}
 
 	err = admin.GenerateConfigFiles(configs, configSettings)

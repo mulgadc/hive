@@ -766,8 +766,9 @@ func (d *Daemon) ClusterManager() error {
 		}
 
 		// Read CA certificate and key to share with joining node for per-node cert generation
-		caCertPath := filepath.Join(d.config.BaseDir, "config", "ca.pem")
-		caKeyPath := filepath.Join(d.config.BaseDir, "config", "ca.key")
+		configDir := filepath.Dir(d.configPath)
+		caCertPath := filepath.Join(configDir, "ca.pem")
+		caKeyPath := filepath.Join(configDir, "ca.key")
 
 		var caCert, caKey string
 		if caCertPEM, err := os.ReadFile(caCertPath); err == nil {
@@ -782,14 +783,24 @@ func (d *Daemon) ClusterManager() error {
 			slog.Warn("Could not read CA key for join response", "error", err)
 		}
 
+		// Read predastore.toml to share with joining node (for multi-node predastore)
+		var predastoreConfig string
+		predastorePath := filepath.Join(configDir, "predastore", "predastore.toml")
+		if content, err := os.ReadFile(predastorePath); err == nil {
+			predastoreConfig = string(content)
+		} else {
+			slog.Warn("Could not read predastore.toml for join response", "path", predastorePath, "error", err)
+		}
+
 		return c.JSON(config.NodeJoinResponse{
-			Success:     true,
-			Message:     fmt.Sprintf("node %s successfully joined cluster", req.Node),
-			SharedData:  sharedData,
-			ConfigHash:  configHash,
-			JoiningNode: req.Node,
-			CACert:      caCert,
-			CAKey:       caKey,
+			Success:          true,
+			Message:          fmt.Sprintf("node %s successfully joined cluster", req.Node),
+			SharedData:       sharedData,
+			ConfigHash:       configHash,
+			JoiningNode:      req.Node,
+			CACert:           caCert,
+			CAKey:            caKey,
+			PredastoreConfig: predastoreConfig,
 		})
 	})
 

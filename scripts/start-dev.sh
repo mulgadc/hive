@@ -180,7 +180,18 @@ export HIVE_PREDASTORE_PORT=8443
 # Default, distributed backend. For testing, all nodes running locally.
 # Specify NODE_ID to run a specific node (e.g multi-server)
 export HIVE_PREDASTORE_BACKEND=distributed
-export HIVE_PREDASTORE_NODE_ID=
+
+# Auto-detect Predastore NODE_ID from hive.toml if not already set
+if [ -z "$HIVE_PREDASTORE_NODE_ID" ]; then
+    if [ -f "$CONFIG_DIR/hive.toml" ]; then
+        DETECTED_NODE_ID=$(awk -F'= *' '/node_id/{gsub(/ /,"",$2); print $2; exit}' "$CONFIG_DIR/hive.toml")
+        if [ -n "$DETECTED_NODE_ID" ] && [ "$DETECTED_NODE_ID" != "0" ]; then
+            export HIVE_PREDASTORE_NODE_ID="$DETECTED_NODE_ID"
+            echo "   Auto-detected Predastore NODE_ID=$DETECTED_NODE_ID from hive.toml"
+        fi
+    fi
+fi
+export HIVE_PREDASTORE_NODE_ID="${HIVE_PREDASTORE_NODE_ID:-}"
 
 # Use air for hot reloading (dev!)
 #PREDASTORE_CMD="air -c .air-predastore.toml"

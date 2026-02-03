@@ -129,6 +129,14 @@ verify_nats_cluster 3 || {
     echo "WARNING: NATS cluster verification failed, continuing anyway..."
 }
 
+# Verify Predastore cluster
+echo ""
+verify_predastore_cluster 3 || {
+    echo "ERROR: Predastore cluster verification failed"
+    dump_all_node_logs
+    exit 1
+}
+
 # Wait for gateway on node1 (primary gateway)
 echo ""
 wait_for_gateway "${NODE1_IP}" 30

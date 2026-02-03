@@ -557,26 +557,31 @@ ip addr add 10.11.12.2/24 dev eth0
 ip addr add 10.11.12.3/24 dev eth0
 ```
 
+### Initialize the Leader Node
+
 Next, `hive` will be installed and initiated in `$HOME/node1` for configuration files.
 
 ```bash
-# Initialize node1
 ./bin/hive admin init \
 --node node1 \
 --bind 10.11.12.1 \
 --cluster-bind 10.11.12.1 \
 --cluster-routes 10.11.12.1:4248 \
+--predastore-nodes 10.11.12.1,10.11.12.2,10.11.12.3 \
 --port 4432 \
 --hive-dir ~/node1/ \
 --config-dir ~/node1/config/ \
 --region ap-southeast-2 \
 --az ap-southeast-2a \
+
+./scripts/start-dev.sh ~/node1/
 ```
+
+### Join Follower Nodes
 
 Two other nodes will be created, joining node1 to exchange configuration files and identify as a new node.
 
 ```bash
-# Join cluster
 ./bin/hive admin join \
 --node node2 \
 --bind 10.11.12.2 \
@@ -588,11 +593,10 @@ Two other nodes will be created, joining node1 to exchange configuration files a
 --region ap-southeast-2 \
 --az ap-southeast-2a \
 
-# Start node2
 ./scripts/start-dev.sh ~/node2/
+```
 
-echo "Node3 Setup:"
-
+```bash
 ./bin/hive admin join \
 --node node3 \
 --bind 10.11.12.3 \
@@ -600,22 +604,24 @@ echo "Node3 Setup:"
 --cluster-routes 10.11.12.1:4248 \
 --host 10.11.12.1:4432 \
 --data-dir ~/node3/ \
---config-dir ~/node3/config/
+--config-dir ~/node3/config/ \
 --region ap-southeast-2 \
 --az ap-southeast-2a \
 
 ./scripts/start-dev.sh ~/node3/
 ```
 
-Once configured, each node will have its own storage for config, data and state in `~/node[1,2,3]` to simulate a unique node and network.
+### Verify the Cluster
 
-Once the multi-node is configured, follow the original installation instructions above to:
+Each node will have its own storage for config, data and state in `~/node[1,2,3]` to simulate a unique node and network.
+
+Once the multi-node cluster is configured, follow the original installation instructions above to:
 
 - Import an SSH key
-- Clone an AMI
-- Launch an instance
+- Import an AMI
+- Launch instances
 
-Note - when using the AWS CLI tool you must specify the IP address of the node (10.11.12.1, 10.11.12.2, or 10.11.12.3).
+Note - when using the AWS CLI tool you must specify the IP address of a gateway node (10.11.12.1, 10.11.12.2, or 10.11.12.3).
 
 ```bash
 aws --endpoint-url https://10.11.12.3:9999 ec2 describe-instances --instance-ids i-9f5f648adc57ea46d
