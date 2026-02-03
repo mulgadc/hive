@@ -2148,3 +2148,158 @@ func TestEBSRequest_JSON_Serialization(t *testing.T) {
 	assert.Equal(t, original.DeleteOnTermination, restored.DeleteOnTermination)
 	assert.Equal(t, original.NBDURI, restored.NBDURI)
 }
+
+// TestHandleEC2Events_DetachVolume tests the detach-volume handler in handleEC2Events
+func TestHandleEC2Events_DetachVolume(t *testing.T) {
+	ns, natsURL := startTestNATSServer(t)
+	defer ns.Shutdown()
+
+	daemon := createTestDaemon(t, natsURL)
+
+	instanceID := "i-test-detach"
+	volumeID := "vol-test-detach"
+	instanceType := getTestInstanceType()
+
+	// Create a running instance with an attached volume
+	instance := &vm.VM{
+		ID:           instanceID,
+		InstanceType: instanceType,
+		Status:       vm.StateRunning,
+		Instance: &ec2.Instance{
+			BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{
+				{
+					DeviceName: aws.String("/dev/sdf"),
+					Ebs: &ec2.EbsInstanceBlockDevice{
+						VolumeId: aws.String(volumeID),
+					},
+				},
+			},
+		},
+		QMPClient: &qmp.QMPClient{}, // nil encoder/decoder
+		EBSRequests: config.EBSRequests{
+			Requests: []config.EBSRequest{
+				{
+					Name:       volumeID,
+					DeviceName: "/dev/sdf",
+				},
+			},
+		},
+	}
+	daemon.Instances.VMS[instanceID] = instance
+
+	// Subscribe the handler to the instance's per-instance topic
+	sub, err := daemon.natsConn.QueueSubscribe(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		"hive-events",
+		daemon.handleEC2Events,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	t.Run("MissingDetachVolumeData", func(t *testing.T) {
+		command := qmp.Command{
+			ID: instanceID,
+			Attributes: qmp.Attributes{
+				DetachVolume: true,
+			},
+			// No DetachVolumeData
+		}
+		data, _ := json.Marshal(command)
+
+		resp, err := daemon.natsConn.Request(
+			fmt.Sprintf("ec2.cmd.%s", instanceID),
+			data,
+			5*time.Second,
+		)
+		require.NoError(t, err)
+		assert.Contains(t, string(resp.Data), "InvalidParameterValue")
+	})
+
+	t.Run("InstanceNotRunning", func(t *testing.T) {
+		// Temporarily set status to stopped
+		daemon.Instances.Mu.Lock()
+		instance.Status = vm.StateStopped
+		daemon.Instances.Mu.Unlock()
+
+		command := qmp.Command{
+			ID: instanceID,
+			Attributes: qmp.Attributes{
+				DetachVolume: true,
+			},
+			DetachVolumeData: &qmp.DetachVolumeData{
+				VolumeID: volumeID,
+			},
+		}
+		data, _ := json.Marshal(command)
+
+		resp, err := daemon.natsConn.Request(
+			fmt.Sprintf("ec2.cmd.%s", instanceID),
+			data,
+			5*time.Second,
+		)
+		require.NoError(t, err)
+		assert.Contains(t, string(resp.Data), "IncorrectInstanceState")
+
+		// Restore running state
+		daemon.Instances.Mu.Lock()
+		instance.Status = vm.StateRunning
+		daemon.Instances.Mu.Unlock()
+	})
+
+	t.Run("VolumeNotAttached", func(t *testing.T) {
+		command := qmp.Command{
+			ID: instanceID,
+			Attributes: qmp.Attributes{
+				DetachVolume: true,
+			},
+			DetachVolumeData: &qmp.DetachVolumeData{
+				VolumeID: "vol-nonexistent",
+			},
+		}
+		data, _ := json.Marshal(command)
+
+		resp, err := daemon.natsConn.Request(
+			fmt.Sprintf("ec2.cmd.%s", instanceID),
+			data,
+			5*time.Second,
+		)
+		require.NoError(t, err)
+		assert.Contains(t, string(resp.Data), "IncorrectState")
+	})
+
+	t.Run("BootVolumeProtection", func(t *testing.T) {
+		bootVolumeID := "vol-boot-protected"
+
+		// Add a boot volume to the instance
+		instance.EBSRequests.Mu.Lock()
+		instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, config.EBSRequest{
+			Name: bootVolumeID,
+			Boot: true,
+		})
+		instance.EBSRequests.Mu.Unlock()
+
+		command := qmp.Command{
+			ID: instanceID,
+			Attributes: qmp.Attributes{
+				DetachVolume: true,
+			},
+			DetachVolumeData: &qmp.DetachVolumeData{
+				VolumeID: bootVolumeID,
+			},
+		}
+		data, _ := json.Marshal(command)
+
+		resp, err := daemon.natsConn.Request(
+			fmt.Sprintf("ec2.cmd.%s", instanceID),
+			data,
+			5*time.Second,
+		)
+		require.NoError(t, err)
+		assert.Contains(t, string(resp.Data), "OperationNotPermitted")
+
+		// Clean up boot volume from requests
+		instance.EBSRequests.Mu.Lock()
+		instance.EBSRequests.Requests = instance.EBSRequests.Requests[:len(instance.EBSRequests.Requests)-1]
+		instance.EBSRequests.Mu.Unlock()
+	})
+}

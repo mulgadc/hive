@@ -336,6 +336,168 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 		return
 	}
 
+	// DetachVolume performs a three-phase hot-unplug (reverse of attach):
+	//   Phase 1: QMP device_del    (remove guest device)
+	//   Phase 2: QMP blockdev-del  (remove block node)
+	//   Phase 3: ebs.unmount NATS  (stop NBD server)
+	if command.Attributes.DetachVolume {
+		slog.Info("Detaching volume from instance", "instanceId", command.ID)
+
+		// Validate DetachVolumeData
+		if command.DetachVolumeData == nil || command.DetachVolumeData.VolumeID == "" {
+			slog.Error("DetachVolume: missing detach volume data")
+			respondWithError(awserrors.ErrorInvalidParameterValue)
+			return
+		}
+
+		volumeID := command.DetachVolumeData.VolumeID
+		device := command.DetachVolumeData.Device
+		force := command.DetachVolumeData.Force
+
+		// Validate instance is running
+		d.Instances.Mu.Lock()
+		status := instance.Status
+		d.Instances.Mu.Unlock()
+
+		if status != vm.StateRunning {
+			slog.Error("DetachVolume: instance not running", "instanceId", command.ID, "status", status)
+			respondWithError(awserrors.ErrorIncorrectInstanceState)
+			return
+		}
+
+		// Find the volume in EBSRequests
+		instance.EBSRequests.Mu.Lock()
+		ebsIdx := -1
+		var ebsReq config.EBSRequest
+		for i, req := range instance.EBSRequests.Requests {
+			if req.Name == volumeID {
+				ebsIdx = i
+				ebsReq = req
+				break
+			}
+		}
+		instance.EBSRequests.Mu.Unlock()
+
+		if ebsIdx == -1 {
+			slog.Error("DetachVolume: volume not attached to instance", "volumeId", volumeID, "instanceId", command.ID)
+			respondWithError(awserrors.ErrorIncorrectState)
+			return
+		}
+
+		// Reject detaching boot/EFI/CloudInit volumes
+		if ebsReq.Boot || ebsReq.EFI || ebsReq.CloudInit {
+			slog.Error("DetachVolume: cannot detach boot/EFI/CloudInit volume", "volumeId", volumeID)
+			respondWithError(awserrors.ErrorOperationNotPermitted)
+			return
+		}
+
+		// Optional device cross-check
+		if device != "" && ebsReq.DeviceName != "" && device != ebsReq.DeviceName {
+			slog.Error("DetachVolume: device mismatch", "requested", device, "actual", ebsReq.DeviceName)
+			respondWithError(awserrors.ErrorInvalidParameterValue)
+			return
+		}
+
+		deviceID := fmt.Sprintf("vdisk-%s", volumeID)
+		nodeName := fmt.Sprintf("nbd-%s", volumeID)
+
+		// Phase 1: QMP device_del (remove guest device)
+		deviceDelCmd := qmp.QMPCommand{
+			Execute:   "device_del",
+			Arguments: map[string]any{"id": deviceID},
+		}
+		_, err = d.SendQMPCommand(instance.QMPClient, deviceDelCmd, instance.ID)
+		if err != nil {
+			if !force {
+				slog.Error("DetachVolume: QMP device_del failed", "volumeId", volumeID, "err", err)
+				respondWithError(awserrors.ErrorServerInternal)
+				return
+			}
+			slog.Warn("DetachVolume: QMP device_del failed (force=true, continuing)", "volumeId", volumeID, "err", err)
+		}
+
+		// Brief pause for guest to acknowledge PCI removal
+		time.Sleep(1 * time.Second)
+
+		// Phase 2: QMP blockdev-del (remove block node)
+		blockdevDelCmd := qmp.QMPCommand{
+			Execute:   "blockdev-del",
+			Arguments: map[string]any{"node-name": nodeName},
+		}
+		_, blockdevErr := d.SendQMPCommand(instance.QMPClient, blockdevDelCmd, instance.ID)
+		if blockdevErr != nil {
+			slog.Error("DetachVolume: QMP blockdev-del failed, skipping ebs.unmount", "volumeId", volumeID, "err", blockdevErr)
+			// Skip Phase 3: block node still referenced by QEMU, unmounting would crash VM
+		} else {
+			// Phase 3: ebs.unmount via NATS
+			unmountData, marshalErr := json.Marshal(ebsReq)
+			if marshalErr != nil {
+				slog.Error("DetachVolume: failed to marshal ebs.unmount request", "volumeId", volumeID, "err", marshalErr)
+			} else {
+				unmountReply, unmountErr := d.natsConn.Request("ebs.unmount", unmountData, 30*time.Second)
+				if unmountErr != nil {
+					slog.Error("DetachVolume: ebs.unmount failed", "volumeId", volumeID, "err", unmountErr)
+				} else {
+					var unmountResp config.EBSUnMountResponse
+					if json.Unmarshal(unmountReply.Data, &unmountResp) == nil && unmountResp.Error != "" {
+						slog.Error("DetachVolume: ebs.unmount returned error", "volumeId", volumeID, "err", unmountResp.Error)
+					}
+				}
+			}
+		}
+
+		// State cleanup: remove volume from EBSRequests
+		instance.EBSRequests.Mu.Lock()
+		instance.EBSRequests.Requests = append(instance.EBSRequests.Requests[:ebsIdx], instance.EBSRequests.Requests[ebsIdx+1:]...)
+		instance.EBSRequests.Mu.Unlock()
+
+		// Remove from BlockDeviceMappings
+		d.Instances.Mu.Lock()
+		if instance.Instance != nil {
+			filtered := make([]*ec2.InstanceBlockDeviceMapping, 0, len(instance.Instance.BlockDeviceMappings))
+			for _, bdm := range instance.Instance.BlockDeviceMappings {
+				if bdm.Ebs != nil && bdm.Ebs.VolumeId != nil && *bdm.Ebs.VolumeId == volumeID {
+					continue
+				}
+				filtered = append(filtered, bdm)
+			}
+			instance.Instance.BlockDeviceMappings = filtered
+		}
+		d.Instances.Mu.Unlock()
+
+		// Update volume metadata to "available"
+		if err := d.volumeService.UpdateVolumeState(volumeID, "available", "", ""); err != nil {
+			slog.Error("DetachVolume: failed to update volume metadata", "volumeId", volumeID, "err", err)
+		}
+
+		// Persist state
+		if err := d.WriteState(); err != nil {
+			slog.Error("DetachVolume: failed to write state", "err", err)
+		}
+
+		// Respond with VolumeAttachment
+		now := time.Now()
+		attachment := ec2.VolumeAttachment{
+			VolumeId:            aws.String(volumeID),
+			InstanceId:          aws.String(command.ID),
+			Device:              aws.String(ebsReq.DeviceName),
+			State:               aws.String("detaching"),
+			AttachTime:          aws.Time(now),
+			DeleteOnTermination: aws.Bool(false),
+		}
+
+		jsonResp, err := json.Marshal(attachment)
+		if err != nil {
+			slog.Error("DetachVolume: failed to marshal response", "err", err)
+			respondWithError(awserrors.ErrorServerInternal)
+			return
+		}
+
+		msg.Respond(jsonResp)
+		slog.Info("Volume detached successfully", "volumeId", volumeID, "instanceId", command.ID)
+		return
+	}
+
 	// Start an instance
 	if command.Attributes.StartInstance {
 		slog.Info("Starting instance", "id", command.ID)

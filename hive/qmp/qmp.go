@@ -25,6 +25,7 @@ type Command struct {
 	QMPCommand       QMPCommand        `json:"command"`
 	Attributes       Attributes        `json:"attributes"`
 	AttachVolumeData *AttachVolumeData `json:"attach_volume_data,omitempty"`
+	DetachVolumeData *DetachVolumeData `json:"detach_volume_data,omitempty"`
 }
 
 type Attributes struct {
@@ -32,11 +33,18 @@ type Attributes struct {
 	TerminateInstance bool `json:"delete_instance"`
 	StartInstance     bool `json:"start_instance"`
 	AttachVolume      bool `json:"attach_volume"`
+	DetachVolume      bool `json:"detach_volume"`
 }
 
 type AttachVolumeData struct {
 	VolumeID string `json:"volume_id"`
 	Device   string `json:"device,omitempty"`
+}
+
+type DetachVolumeData struct {
+	VolumeID string `json:"volume_id"`
+	Device   string `json:"device,omitempty"`
+	Force    bool   `json:"force,omitempty"`
 }
 
 // (QEMU) stop / cont (resume) / system_powerdown / system_reset / system_wakeup
