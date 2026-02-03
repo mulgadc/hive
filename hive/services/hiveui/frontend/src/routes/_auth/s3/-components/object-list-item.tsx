@@ -3,6 +3,7 @@ import { GetObjectCommand } from "@aws-sdk/client-s3"
 import { Download, File, Trash2 } from "lucide-react"
 import { useState } from "react"
 
+import { ErrorBanner } from "@/components/error-banner"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -67,61 +68,66 @@ export function ObjectListItem({
   }
 
   return (
-    <div
-      className="flex items-center justify-between rounded-lg border bg-card p-4"
-      key={object.Key}
-    >
-      <div className="flex items-center gap-3">
-        <File className="size-5 text-muted-foreground" />
-        <div>
-          <h3 className="font-medium">{displayName}</h3>
-          {object.LastModified && (
-            <p className="text-muted-foreground text-sm">
-              Last Modified: {object.LastModified.toLocaleString()}
-            </p>
-          )}
+    <div key={object.Key}>
+      {deleteMutation.error && (
+        <ErrorBanner
+          error={deleteMutation.error}
+          msg="Failed to delete object"
+        />
+      )}
+      <div className="flex items-center justify-between rounded-lg border bg-card p-4">
+        <div className="flex items-center gap-3">
+          <File className="size-5 text-muted-foreground" />
+          <div>
+            <h3 className="font-medium">{displayName}</h3>
+            {object.LastModified && (
+              <p className="text-muted-foreground text-sm">
+                Last Modified: {object.LastModified.toLocaleString()}
+              </p>
+            )}
+          </div>
         </div>
-      </div>
-      <div className="flex items-center gap-3">
-        <div className="text-muted-foreground text-sm">
-          {formatSize(object.Size || 0)}
+        <div className="flex items-center gap-3">
+          <div className="text-muted-foreground text-sm">
+            {formatSize(object.Size || 0)}
+          </div>
+          <button
+            className="rounded-md p-2 transition-colors hover:bg-accent"
+            onClick={downloadObject}
+            type="button"
+          >
+            <Download className="size-4" />
+          </button>
+          <button
+            className="rounded-md p-2 text-destructive transition-colors hover:bg-accent"
+            onClick={() => setShowDeleteDialog(true)}
+            type="button"
+          >
+            <Trash2 className="size-4" />
+          </button>
         </div>
-        <button
-          className="rounded-md p-2 transition-colors hover:bg-accent"
-          onClick={downloadObject}
-          type="button"
-        >
-          <Download className="size-4" />
-        </button>
-        <button
-          className="rounded-md p-2 text-destructive transition-colors hover:bg-accent"
-          onClick={() => setShowDeleteDialog(true)}
-          type="button"
-        >
-          <Trash2 className="size-4" />
-        </button>
-      </div>
 
-      <AlertDialog onOpenChange={setShowDeleteDialog} open={showDeleteDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Object</AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to delete <strong>{displayName}</strong>?
-              This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive hover:bg-destructive/90"
-              onClick={handleDelete}
-            >
-              {deleteMutation.isPending ? "Deleting…" : "Delete"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        <AlertDialog onOpenChange={setShowDeleteDialog} open={showDeleteDialog}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Object</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to delete <strong>{displayName}</strong>?
+                This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className="bg-destructive hover:bg-destructive/90"
+                onClick={handleDelete}
+              >
+                {deleteMutation.isPending ? "Deleting…" : "Delete"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
     </div>
   )
 }

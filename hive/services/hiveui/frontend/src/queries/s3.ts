@@ -13,7 +13,6 @@ export const s3BucketsQueryOptions = queryOptions({
       throw new Error("Failed to fetch S3 buckets")
     }
   },
-  staleTime: 5000,
 })
 
 export const s3BucketObjectsQueryOptions = (
@@ -34,5 +33,4 @@ export const s3BucketObjectsQueryOptions = (
         throw new Error("Failed to fetch S3 bucket objects")
       }
     },
-    staleTime: 5000,
   })

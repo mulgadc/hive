@@ -6,6 +6,7 @@ import { useState } from "react"
 import { BackLink } from "@/components/back-link"
 import { DetailCard } from "@/components/detail-card"
 import { DetailRow } from "@/components/detail-row"
+import { ErrorBanner } from "@/components/error-banner"
 import { PageHeading } from "@/components/page-heading"
 import {
   AlertDialog,
@@ -70,6 +71,13 @@ function VolumeDetail() {
   return (
     <>
       <BackLink to="/ec2/describe-volumes">Back to volumes</BackLink>
+
+      {deleteMutation.error && (
+        <ErrorBanner
+          error={deleteMutation.error}
+          msg="Failed to delete volume"
+        />
+      )}
 
       <div className="space-y-6">
         <PageHeading

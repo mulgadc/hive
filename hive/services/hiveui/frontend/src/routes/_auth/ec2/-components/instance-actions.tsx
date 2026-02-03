@@ -1,5 +1,6 @@
 import { Pause, Play, RotateCw, Trash2 } from "lucide-react"
 
+import { ErrorBanner } from "@/components/error-banner"
 import { Button } from "@/components/ui/button"
 import {
   useRebootInstance,
@@ -52,6 +53,27 @@ export function InstanceActions({ instanceId, state }: InstanceActionsProps) {
   return (
     <div className="rounded-lg border bg-card p-4">
       <h2 className="mb-4 font-semibold">Instance Actions</h2>
+      {startMutation.error && (
+        <ErrorBanner
+          error={startMutation.error}
+          msg="Failed to start instance"
+        />
+      )}
+      {stopMutation.error && (
+        <ErrorBanner error={stopMutation.error} msg="Failed to stop instance" />
+      )}
+      {rebootMutation.error && (
+        <ErrorBanner
+          error={rebootMutation.error}
+          msg="Failed to reboot instance"
+        />
+      )}
+      {terminateMutation.error && (
+        <ErrorBanner
+          error={terminateMutation.error}
+          msg="Failed to terminate instance"
+        />
+      )}
       <div className="flex flex-wrap gap-2">
         {state === "stopped" && (
           <Button

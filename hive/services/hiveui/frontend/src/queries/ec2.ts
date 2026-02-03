@@ -20,7 +20,6 @@ export const ec2InstancesQueryOptions = queryOptions({
       throw new Error("Failed to fetch EC2 instances")
     }
   },
-  staleTime: 5000,
 })
 
 export const ec2InstanceQueryOptions = (instanceId: string) =>
@@ -36,7 +35,6 @@ export const ec2InstanceQueryOptions = (instanceId: string) =>
         throw new Error("Failed to fetch EC2 instance")
       }
     },
-    staleTime: 5000,
   })
 
 export const ec2InstanceTypesQueryOptions = queryOptions({
@@ -56,7 +54,6 @@ export const ec2InstanceTypesQueryOptions = queryOptions({
       throw new Error("Failed to fetch EC2 instance types")
     }
   },
-  staleTime: 5000,
 })
 
 export const ec2ImagesQueryOptions = queryOptions({
@@ -69,7 +66,6 @@ export const ec2ImagesQueryOptions = queryOptions({
       throw new Error("Failed to fetch EC2 images")
     }
   },
-  staleTime: 300_000,
 })
 
 export const ec2ImageQueryOptions = (imageId: string | undefined) =>
@@ -88,7 +84,6 @@ export const ec2ImageQueryOptions = (imageId: string | undefined) =>
         throw new Error("Failed to fetch EC2 image")
       }
     },
-    staleTime: 300_000,
   })
 
 export const ec2KeyPairsQueryOptions = queryOptions({
@@ -101,7 +96,6 @@ export const ec2KeyPairsQueryOptions = queryOptions({
       throw new Error("Failed to fetch key pairs")
     }
   },
-  staleTime: 300_000,
 })
 
 export const ec2KeyPairQueryOptions = (keyPairId: string) =>
@@ -117,7 +111,6 @@ export const ec2KeyPairQueryOptions = (keyPairId: string) =>
         throw new Error("Failed to fetch key pair")
       }
     },
-    staleTime: 300_000,
   })
 
 export const ec2RegionsQueryOptions = queryOptions({
@@ -143,7 +136,6 @@ export const ec2VolumesQueryOptions = queryOptions({
       throw new Error("Failed to fetch volumes")
     }
   },
-  staleTime: 5000,
 })
 
 export const ec2VolumeQueryOptions = (volumeId: string) =>
@@ -159,5 +151,4 @@ export const ec2VolumeQueryOptions = (volumeId: string) =>
         throw new Error("Failed to fetch volume")
       }
     },
-    staleTime: 5000,
   })

@@ -2,16 +2,25 @@ import { Upload } from "lucide-react"
 import { useRef } from "react"
 
 import { Button } from "@/components/ui/button"
-import { useUploadObject } from "@/mutations/s3"
 
 interface UploadButtonProps {
   bucket: string
   prefix?: string
+  isPending: boolean
+  onUpload: (params: {
+    bucket: string
+    key: string
+    file: File
+  }) => Promise<unknown>
 }
 
-export function UploadButton({ bucket, prefix = "" }: UploadButtonProps) {
+export function UploadButton({
+  bucket,
+  prefix = "",
+  isPending,
+  onUpload,
+}: UploadButtonProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const uploadMutation = useUploadObject()
 
   async function handleFileSelect(event: React.ChangeEvent<HTMLInputElement>) {
     const files = event.target.files
@@ -23,11 +32,7 @@ export function UploadButton({ bucket, prefix = "" }: UploadButtonProps) {
       await Promise.all(
         Array.from(files).map((file) => {
           const key = `${prefix}${file.name}`
-          return uploadMutation.mutateAsync({
-            bucket,
-            key,
-            file,
-          })
+          return onUpload({ bucket, key, file })
         }),
       )
     } finally {
@@ -50,12 +55,12 @@ export function UploadButton({ bucket, prefix = "" }: UploadButtonProps) {
         type="file"
       />
       <Button
-        disabled={uploadMutation.isPending}
+        disabled={isPending}
         onClick={() => fileInputRef.current?.click()}
         size="sm"
       >
         <Upload className="mr-2 size-4" />
-        {uploadMutation.isPending ? "Uploading…" : "Upload Files"}
+        {isPending ? "Uploading…" : "Upload Files"}
       </Button>
     </>
   )

@@ -3,12 +3,14 @@ import { useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute, Link } from "@tanstack/react-router"
 
 import { BackLink } from "@/components/back-link"
+import { ErrorBanner } from "@/components/error-banner"
 import {
   buildFullS3Key,
   ensureTrailingSlash,
   extractDisplayName,
   removeTrailingSlash,
 } from "@/lib/utils"
+import { useUploadObject } from "@/mutations/s3"
 import { s3BucketObjectsQueryOptions } from "@/queries/s3"
 import { FolderListItem } from "@/routes/_auth/s3/-components/folder-list-item"
 import { ObjectListItem } from "@/routes/_auth/s3/-components/object-list-item"
@@ -40,6 +42,7 @@ function BucketObjectsWithPrefix() {
   const prefix = ensureTrailingSlash(_splat || "")
 
   const { data } = useSuspenseQuery(s3BucketObjectsQueryOptions(bucket, prefix))
+  const uploadMutation = useUploadObject()
 
   const objects = data.Contents || []
   const commonPrefixes = data.CommonPrefixes || []
@@ -83,9 +86,20 @@ function BucketObjectsWithPrefix() {
               </div>
             ))}
           </div>
-          <UploadButton bucket={bucket} prefix={prefix} />
+          <UploadButton
+            bucket={bucket}
+            isPending={uploadMutation.isPending}
+            onUpload={uploadMutation.mutateAsync}
+            prefix={prefix}
+          />
         </div>
       </div>
+      {uploadMutation.error && (
+        <ErrorBanner
+          error={uploadMutation.error}
+          msg="Failed to upload object"
+        />
+      )}
       {commonPrefixes.length > 0 && (
         <div className="mb-6">
           <h2 className="mb-3 font-semibold text-lg">Folders</h2>

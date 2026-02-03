@@ -8,7 +8,13 @@ import { SidebarProvider } from "@/components/ui/sidebar"
 import { routeTree } from "./routeTree.gen"
 import "./styles.css"
 
-const queryClient = new QueryClient()
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 5000,
+    },
+  },
+})
 
 const router = createRouter({
   routeTree,

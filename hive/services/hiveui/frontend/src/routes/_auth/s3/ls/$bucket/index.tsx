@@ -3,8 +3,10 @@ import { useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute } from "@tanstack/react-router"
 
 import { BackLink } from "@/components/back-link"
+import { ErrorBanner } from "@/components/error-banner"
 import { PageHeading } from "@/components/page-heading"
 import { removeTrailingSlash } from "@/lib/utils"
+import { useUploadObject } from "@/mutations/s3"
 import { s3BucketObjectsQueryOptions } from "@/queries/s3"
 import { FolderListItem } from "@/routes/_auth/s3/-components/folder-list-item"
 import { ObjectListItem } from "@/routes/_auth/s3/-components/object-list-item"
@@ -29,6 +31,7 @@ export const Route = createFileRoute("/_auth/s3/ls/$bucket/")({
 function BucketObjects() {
   const { bucket: bucketName } = Route.useParams()
   const { data } = useSuspenseQuery(s3BucketObjectsQueryOptions(bucketName))
+  const uploadMutation = useUploadObject()
 
   const objects = data.Contents || []
   const commonPrefixes = data.CommonPrefixes || []
@@ -37,9 +40,21 @@ function BucketObjects() {
     <>
       <BackLink to="/s3/ls">Back to buckets</BackLink>
       <PageHeading
-        actions={<UploadButton bucket={bucketName} />}
+        actions={
+          <UploadButton
+            bucket={bucketName}
+            isPending={uploadMutation.isPending}
+            onUpload={uploadMutation.mutateAsync}
+          />
+        }
         title={bucketName}
       />
+      {uploadMutation.error && (
+        <ErrorBanner
+          error={uploadMutation.error}
+          msg="Failed to upload object"
+        />
+      )}
       {commonPrefixes.length > 0 && (
         <div className="mb-6">
           <h2 className="mb-3 font-semibold text-lg">Folders</h2>

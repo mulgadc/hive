@@ -16,17 +16,21 @@ export function useUploadObject() {
 
   return useMutation({
     mutationFn: async ({ bucket, key, file }: UploadObjectParams) => {
-      const upload = new Upload({
-        client: getS3Client(),
-        params: {
-          Bucket: bucket,
-          Key: key,
-          Body: file,
-          ContentType: file.type,
-        },
-      })
+      try {
+        const upload = new Upload({
+          client: getS3Client(),
+          params: {
+            Bucket: bucket,
+            Key: key,
+            Body: file,
+            ContentType: file.type,
+          },
+        })
 
-      return await upload.done()
+        return await upload.done()
+      } catch {
+        throw new Error("Failed to upload object")
+      }
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({
@@ -41,11 +45,15 @@ export function useCreateBucket() {
 
   return useMutation({
     mutationFn: async ({ bucketName }: CreateBucketFormData) => {
-      const command = new CreateBucketCommand({
-        Bucket: bucketName,
-      })
+      try {
+        const command = new CreateBucketCommand({
+          Bucket: bucketName,
+        })
 
-      return await getS3Client().send(command)
+        return await getS3Client().send(command)
+      } catch {
+        throw new Error("Failed to create bucket")
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({
@@ -60,12 +68,16 @@ export function useDeleteObject() {
 
   return useMutation({
     mutationFn: async ({ bucket, key }: { bucket: string; key: string }) => {
-      const command = new DeleteObjectCommand({
-        Bucket: bucket,
-        Key: key,
-      })
+      try {
+        const command = new DeleteObjectCommand({
+          Bucket: bucket,
+          Key: key,
+        })
 
-      return await getS3Client().send(command)
+        return await getS3Client().send(command)
+      } catch {
+        throw new Error("Failed to delete object")
+      }
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({
