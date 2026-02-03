@@ -1,6 +1,6 @@
 # Quick Reference
 
-Most formatting and common issues are automatically fixed by Biome. Run `pnpm fix` before committing to ensure compliance.
+Most formatting and common issues are automatically fixed by Biome. Run `pnpm fix` before committing to ensure compliance and run `pnpm build` for typechecking and route tree generation.
 
 ## Core Principles
 

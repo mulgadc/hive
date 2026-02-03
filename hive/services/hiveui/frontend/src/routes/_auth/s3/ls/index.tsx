@@ -1,9 +1,10 @@
 import type { Bucket } from "@aws-sdk/client-s3"
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, Link } from "@tanstack/react-router"
 
 import { ListCard } from "@/components/list-card"
 import { PageHeading } from "@/components/page-heading"
+import { Button } from "@/components/ui/button"
 import { s3BucketsQueryOptions } from "@/queries/s3"
 
 export const Route = createFileRoute("/_auth/s3/ls/")({
@@ -27,7 +28,14 @@ function Buckets() {
 
   return (
     <>
-      <PageHeading title="S3 Buckets" />
+      <PageHeading
+        actions={
+          <Link to="/s3/create-bucket">
+            <Button>Create Bucket</Button>
+          </Link>
+        }
+        title="S3 Buckets"
+      />
 
       {buckets.length > 0 ? (
         <div className="space-y-4">

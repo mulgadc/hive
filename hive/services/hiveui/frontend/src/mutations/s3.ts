@@ -1,8 +1,9 @@
-import { DeleteObjectCommand } from "@aws-sdk/client-s3"
+import { CreateBucketCommand, DeleteObjectCommand } from "@aws-sdk/client-s3"
 import { Upload } from "@aws-sdk/lib-storage"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 
 import { getS3Client } from "@/lib/awsClient"
+import type { CreateBucketFormData } from "@/types/s3"
 
 interface UploadObjectParams {
   bucket: string
@@ -30,6 +31,25 @@ export function useUploadObject() {
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({
         queryKey: ["s3", "buckets", variables.bucket, "objects"],
+      })
+    },
+  })
+}
+
+export function useCreateBucket() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ bucketName }: CreateBucketFormData) => {
+      const command = new CreateBucketCommand({
+        Bucket: bucketName,
+      })
+
+      return await getS3Client().send(command)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["s3", "buckets"],
       })
     },
   })

@@ -55,7 +55,6 @@
       "Bash(pnpm check:*)",
       "Bash(pnpm build:*)",
       "Bash(pnpm tsc *)",
-      "Bash(pnpx @tanstack/router-cli generate:*)",
 
       "Bash(git diff*)",
       "Bash(git diff --staged*)",

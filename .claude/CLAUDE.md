@@ -52,24 +52,28 @@ AWS SDK (custom endpoint) → Hive API Gateway → NATS Topics → Specialized D
 3. **NATS Message Broker** - Topic-based routing with queue groups for load balancing
 
 #### Current Implementation (daemon.go):
+
 - **Gateway Logic**: `StartAWSGateway()` handles AWS API calls on port 9999
 - **NATS Integration**: Uses request-response pattern: `d.natsConn.Request("ec2.runinstances", data, 30s)`
 - **Queue Groups**: Load balancing via `"hive-workers"` queue group
 - **Service Coordination**: All inter-service communication via NATS topics
 
 ### Inter-component Dependencies
+
 - **Service Startup Order**: NATS → Predastore → Viperblock → NBDkit → Gateway → Daemons
 - **Message Flow**: Gateway translates AWS calls to NATS messages, daemons process and respond
 - **Scaling**: Multiple daemon instances can subscribe to same topics for horizontal scaling
 - All Go projects use local module replacements for development
 
 ### Storage Backend Integration
+
 - **Viperblock Integration**: EBS volumes mounted via NATS messaging (`ebs.mount` topic)
 - **Predastore Integration**: S3 operations proxied through dedicated S3 daemons
 - **NBDkit Integration**: Block device access for VM storage
 - **Volume Lifecycle**: Coordinated through NATS between EC2 and EBS daemons
 
 ### Key Design Patterns
+
 - **Message-Driven**: All service communication via NATS topics
 - **Queue Groups**: Load balancing and fault tolerance via NATS queue groups
 - **Request-Response**: 30-second timeout pattern for AWS API compatibility
@@ -92,6 +96,7 @@ discovery.services           # Service registration
 ### Development Workflow
 
 #### Development Process
+
 1. **Cross-repo Setup**: Clone all repositories to same parent directory
 2. **Service Dependencies**: Start services in order: NATS → Predastore → Viperblock → NBDkit → Gateway → Daemons
 3. **Build Order**: Build components: predastore → viperblock → hive
@@ -100,17 +105,15 @@ discovery.services           # Service registration
 6. **Scaling**: Test with multiple daemon instances subscribing to same topics
 
 #### Development Tools
-- **Hot Reloading**: Use `air` for automatic restarts during development
-- **TLS Certificates**: Auto-generated self-signed certificates for HTTPS endpoints
-- **Log Monitoring**: Centralized logs in `data/logs/` directory
+
+- **Log Monitoring**: Centralized logs in `~/hive/logs/` directory
 - **AWS CLI Testing**: Test endpoints with `aws --endpoint-url https://localhost:9999`
 
 ### Development Roadmap
+
 For major feature development and architectural changes, refer to `HIVE_DEVELOPMENT_PLAN.md` which contains:
 - Comprehensive roadmap for transforming Hive from proof-of-concept to beta release
 - Detailed implementation phases with specific tasks and file structures
 - AWS API compatibility implementation guidelines
 - Development environment automation plans
 - Testing and validation frameworks
-
-When implementing new AWS services or enhancing existing functionality, follow the structured approach outlined in the development plan.
