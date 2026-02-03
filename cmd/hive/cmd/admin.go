@@ -627,14 +627,18 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		PredastoreNodeID: predastoreNodeID,
 	}
 
-	// Generate config files - skip predastore.toml if multi-node was already generated
-	configs := admin.BaseConfigFiles(
-		hiveTomlPath, hiveTomlTemplate,
-		awsgwDir, awsgwTomlTemplate,
-		natsDir, natsConfTemplate,
-		predastoreDir, predastoreTomlTemplate,
-		predastoreNodesStr == "",
-	)
+	// Generate config files
+	configs := []admin.ConfigFile{
+		{Name: "hive.toml", Path: hiveTomlPath, Template: hiveTomlTemplate},
+		{Name: filepath.Join(awsgwDir, "awsgw.toml"), Path: filepath.Join(awsgwDir, "awsgw.toml"), Template: awsgwTomlTemplate},
+		{Name: filepath.Join(natsDir, "nats.conf"), Path: filepath.Join(natsDir, "nats.conf"), Template: natsConfTemplate},
+	}
+	// Skip template-based predastore.toml if multi-node was already generated
+	if predastoreNodesStr == "" {
+		configs = append(configs, admin.ConfigFile{
+			Name: filepath.Join(predastoreDir, "predastore.toml"), Path: filepath.Join(predastoreDir, "predastore.toml"), Template: predastoreTomlTemplate,
+		})
+	}
 
 	err := admin.GenerateConfigFiles(configs, configSettings)
 	if err != nil {
@@ -923,14 +927,18 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		PredastoreNodeID: predastoreNodeID,
 	}
 
-	// Generate config files - skip predastore.toml if received from leader
-	configs := admin.BaseConfigFiles(
-		hiveTomlPath, hiveTomlTemplate,
-		awsgwDir, awsgwTomlTemplate,
-		natsDir, natsConfTemplate,
-		predastoreDir, predastoreTomlTemplate,
-		!hasLeaderPredastoreConfig,
-	)
+	// Generate config files
+	configs := []admin.ConfigFile{
+		{Name: "hive.toml", Path: hiveTomlPath, Template: hiveTomlTemplate},
+		{Name: filepath.Join(awsgwDir, "awsgw.toml"), Path: filepath.Join(awsgwDir, "awsgw.toml"), Template: awsgwTomlTemplate},
+		{Name: filepath.Join(natsDir, "nats.conf"), Path: filepath.Join(natsDir, "nats.conf"), Template: natsConfTemplate},
+	}
+	// Skip template-based predastore.toml if received from leader
+	if !hasLeaderPredastoreConfig {
+		configs = append(configs, admin.ConfigFile{
+			Name: filepath.Join(predastoreDir, "predastore.toml"), Path: filepath.Join(predastoreDir, "predastore.toml"), Template: predastoreTomlTemplate,
+		})
+	}
 
 	err = admin.GenerateConfigFiles(configs, configSettings)
 	if err != nil {

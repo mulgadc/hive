@@ -628,39 +628,3 @@ func ParsePredastoreNodeIDFromConfig(tomlContent string, ip string) int {
 	return FindNodeIDByIP(cfg.DB, ip)
 }
 
-// BaseConfigFiles returns the config file list shared by both init and join.
-// When includePredastore is true, the template-based predastore.toml entry is
-// appended (used when no multi-node config was generated or received).
-func BaseConfigFiles(
-	hiveTomlPath, hiveTemplate string,
-	awsgwDir, awsgwTemplate string,
-	natsDir, natsTemplate string,
-	predastoreDir, predastoreTemplate string,
-	includePredastore bool,
-) []ConfigFile {
-	configs := []ConfigFile{
-		{
-			Name:     "hive.toml",
-			Path:     hiveTomlPath,
-			Template: hiveTemplate,
-		},
-		{
-			Name:     filepath.Join(awsgwDir, "awsgw.toml"),
-			Path:     filepath.Join(awsgwDir, "awsgw.toml"),
-			Template: awsgwTemplate,
-		},
-		{
-			Name:     filepath.Join(natsDir, "nats.conf"),
-			Path:     filepath.Join(natsDir, "nats.conf"),
-			Template: natsTemplate,
-		},
-	}
-	if includePredastore {
-		configs = append(configs, ConfigFile{
-			Name:     filepath.Join(predastoreDir, "predastore.toml"),
-			Path:     filepath.Join(predastoreDir, "predastore.toml"),
-			Template: predastoreTemplate,
-		})
-	}
-	return configs
-}
