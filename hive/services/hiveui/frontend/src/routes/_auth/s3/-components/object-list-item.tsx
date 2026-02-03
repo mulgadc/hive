@@ -60,11 +60,14 @@ export function ObjectListItem({
   }
 
   async function handleDelete() {
-    await deleteMutation.mutateAsync({
-      bucket: bucketName,
-      key: fullKey,
-    })
-    setShowDeleteDialog(false)
+    try {
+      await deleteMutation.mutateAsync({
+        bucket: bucketName,
+        key: fullKey,
+      })
+    } finally {
+      setShowDeleteDialog(false)
+    }
   }
 
   return (

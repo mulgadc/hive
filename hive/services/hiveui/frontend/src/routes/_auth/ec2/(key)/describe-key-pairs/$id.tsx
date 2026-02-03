@@ -50,8 +50,12 @@ function KeyPairDetail() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
 
   const handleDelete = async () => {
-    await deleteMutation.mutateAsync(id)
-    navigate({ to: "/ec2/describe-key-pairs" })
+    try {
+      await deleteMutation.mutateAsync(id)
+      navigate({ to: "/ec2/describe-key-pairs" })
+    } finally {
+      setShowDeleteDialog(false)
+    }
   }
 
   if (!keyPair?.KeyPairId) {

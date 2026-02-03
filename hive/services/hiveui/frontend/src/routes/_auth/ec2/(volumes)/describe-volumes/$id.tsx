@@ -53,8 +53,12 @@ function VolumeDetail() {
     (!volume.Attachments || volume.Attachments.length === 0)
 
   const handleDelete = async () => {
-    await deleteMutation.mutateAsync(id)
-    navigate({ to: "/ec2/describe-volumes" })
+    try {
+      await deleteMutation.mutateAsync(id)
+      navigate({ to: "/ec2/describe-volumes" })
+    } finally {
+      setShowDeleteDialog(false)
+    }
   }
 
   if (!volume?.VolumeId) {
