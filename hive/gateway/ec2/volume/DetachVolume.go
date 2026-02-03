@@ -66,11 +66,6 @@ func DetachVolume(input *ec2.DetachVolumeInput, natsConn *nats.Conn) (ec2.Volume
 		device = *input.Device
 	}
 
-	force := false
-	if input.Force != nil {
-		force = *input.Force
-	}
-
 	command := qmp.Command{
 		ID: instanceID,
 		Attributes: qmp.Attributes{
@@ -79,7 +74,7 @@ func DetachVolume(input *ec2.DetachVolumeInput, natsConn *nats.Conn) (ec2.Volume
 		DetachVolumeData: &qmp.DetachVolumeData{
 			VolumeID: volumeID,
 			Device:   device,
-			Force:    force,
+			Force:    input.Force != nil && *input.Force,
 		},
 	}
 
@@ -101,7 +96,10 @@ func DetachVolume(input *ec2.DetachVolumeInput, natsConn *nats.Conn) (ec2.Volume
 
 	responseError, err := utils.ValidateErrorPayload(msg.Data)
 	if err != nil {
-		return output, errors.New(*responseError.Code)
+		if responseError.Code != nil {
+			return output, errors.New(*responseError.Code)
+		}
+		return output, errors.New(awserrors.ErrorServerInternal)
 	}
 
 	if err := json.Unmarshal(msg.Data, &output); err != nil {

@@ -1,6 +1,14 @@
 {
   "permissions": {
     "allow": [
+      "Skill(feature-dev:feature-dev)",
+      "Skill(pr-review-toolkit:review-pr)",
+
+      "Skill(frontend-design:frontend-design)",
+      "Skill(react-best-practices)",
+      "Skill(react-composition-patterns)",
+      "Skill(web-design-guidelines)",
+
       "Bash(make build)",
       "Bash(make build-ui)",
       "Bash(LOG_IGNORE=1 make test:*)",

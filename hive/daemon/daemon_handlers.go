@@ -313,25 +313,7 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 			slog.Error("AttachVolume: failed to write state", "err", err)
 		}
 
-		// Respond with VolumeAttachment
-		now := time.Now()
-		attachment := ec2.VolumeAttachment{
-			VolumeId:            aws.String(volumeID),
-			InstanceId:          aws.String(command.ID),
-			Device:              aws.String(device),
-			State:               aws.String("attached"),
-			AttachTime:          aws.Time(now),
-			DeleteOnTermination: aws.Bool(false),
-		}
-
-		jsonResp, err := json.Marshal(attachment)
-		if err != nil {
-			slog.Error("AttachVolume: failed to marshal response", "err", err)
-			respondWithError(awserrors.ErrorServerInternal)
-			return
-		}
-
-		msg.Respond(jsonResp)
+		d.respondWithVolumeAttachment(msg, respondWithError, volumeID, command.ID, device, "attached")
 		slog.Info("Volume attached successfully", "volumeId", volumeID, "instanceId", command.ID, "device", device)
 		return
 	}
@@ -367,18 +349,18 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 
 		// Find the volume in EBSRequests
 		instance.EBSRequests.Mu.Lock()
-		ebsIdx := -1
 		var ebsReq config.EBSRequest
-		for i, req := range instance.EBSRequests.Requests {
+		found := false
+		for _, req := range instance.EBSRequests.Requests {
 			if req.Name == volumeID {
-				ebsIdx = i
 				ebsReq = req
+				found = true
 				break
 			}
 		}
 		instance.EBSRequests.Mu.Unlock()
 
-		if ebsIdx == -1 {
+		if !found {
 			slog.Error("DetachVolume: volume not attached to instance", "volumeId", volumeID, "instanceId", command.ID)
 			respondWithError(awserrors.ErrorIncorrectState)
 			return
@@ -402,11 +384,10 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 		nodeName := fmt.Sprintf("nbd-%s", volumeID)
 
 		// Phase 1: QMP device_del (remove guest device)
-		deviceDelCmd := qmp.QMPCommand{
+		_, err = d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{
 			Execute:   "device_del",
 			Arguments: map[string]any{"id": deviceID},
-		}
-		_, err = d.SendQMPCommand(instance.QMPClient, deviceDelCmd, instance.ID)
+		}, instance.ID)
 		if err != nil {
 			if !force {
 				slog.Error("DetachVolume: QMP device_del failed", "volumeId", volumeID, "err", err)
@@ -420,35 +401,30 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 		time.Sleep(1 * time.Second)
 
 		// Phase 2: QMP blockdev-del (remove block node)
-		blockdevDelCmd := qmp.QMPCommand{
+		_, blockdevErr := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{
 			Execute:   "blockdev-del",
 			Arguments: map[string]any{"node-name": nodeName},
-		}
-		_, blockdevErr := d.SendQMPCommand(instance.QMPClient, blockdevDelCmd, instance.ID)
+		}, instance.ID)
 		if blockdevErr != nil {
-			slog.Error("DetachVolume: QMP blockdev-del failed, skipping ebs.unmount", "volumeId", volumeID, "err", blockdevErr)
-			// Skip Phase 3: block node still referenced by QEMU, unmounting would crash VM
-		} else {
-			// Phase 3: ebs.unmount via NATS
-			unmountData, marshalErr := json.Marshal(ebsReq)
-			if marshalErr != nil {
-				slog.Error("DetachVolume: failed to marshal ebs.unmount request", "volumeId", volumeID, "err", marshalErr)
-			} else {
-				unmountReply, unmountErr := d.natsConn.Request("ebs.unmount", unmountData, 30*time.Second)
-				if unmountErr != nil {
-					slog.Error("DetachVolume: ebs.unmount failed", "volumeId", volumeID, "err", unmountErr)
-				} else {
-					var unmountResp config.EBSUnMountResponse
-					if json.Unmarshal(unmountReply.Data, &unmountResp) == nil && unmountResp.Error != "" {
-						slog.Error("DetachVolume: ebs.unmount returned error", "volumeId", volumeID, "err", unmountResp.Error)
-					}
-				}
-			}
+			// Block node still referenced by QEMU; do not clean up state or unmount —
+			// tearing down the NBD server would crash the VM, and removing metadata
+			// would allow the volume to be double-attached.
+			slog.Error("DetachVolume: QMP blockdev-del failed, leaving volume state intact", "volumeId", volumeID, "err", blockdevErr)
+			respondWithError(awserrors.ErrorServerInternal)
+			return
 		}
 
-		// State cleanup: remove volume from EBSRequests
+		// Phase 3: ebs.unmount via NATS (best-effort)
+		d.rollbackEBSMount(ebsReq)
+
+		// State cleanup: remove volume from EBSRequests (search by name to avoid stale index)
 		instance.EBSRequests.Mu.Lock()
-		instance.EBSRequests.Requests = append(instance.EBSRequests.Requests[:ebsIdx], instance.EBSRequests.Requests[ebsIdx+1:]...)
+		for i, req := range instance.EBSRequests.Requests {
+			if req.Name == volumeID {
+				instance.EBSRequests.Requests = append(instance.EBSRequests.Requests[:i], instance.EBSRequests.Requests[i+1:]...)
+				break
+			}
+		}
 		instance.EBSRequests.Mu.Unlock()
 
 		// Remove from BlockDeviceMappings
@@ -475,25 +451,7 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 			slog.Error("DetachVolume: failed to write state", "err", err)
 		}
 
-		// Respond with VolumeAttachment
-		now := time.Now()
-		attachment := ec2.VolumeAttachment{
-			VolumeId:            aws.String(volumeID),
-			InstanceId:          aws.String(command.ID),
-			Device:              aws.String(ebsReq.DeviceName),
-			State:               aws.String("detaching"),
-			AttachTime:          aws.Time(now),
-			DeleteOnTermination: aws.Bool(false),
-		}
-
-		jsonResp, err := json.Marshal(attachment)
-		if err != nil {
-			slog.Error("DetachVolume: failed to marshal response", "err", err)
-			respondWithError(awserrors.ErrorServerInternal)
-			return
-		}
-
-		msg.Respond(jsonResp)
+		d.respondWithVolumeAttachment(msg, respondWithError, volumeID, command.ID, ebsReq.DeviceName, "detaching")
 		slog.Info("Volume detached successfully", "volumeId", volumeID, "instanceId", command.ID)
 		return
 	}
