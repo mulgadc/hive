@@ -76,7 +76,7 @@ func (d *Daemon) handleEC2StartInstances(msg *nats.Msg) {
 
 }
 
-// handleEC2Events processes incoming EC2 events (start, stop, terminate)
+// handleEC2Events processes incoming EC2 instance events (start, stop, terminate, attach-volume)
 func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 
 	var command qmp.Command
@@ -103,6 +103,236 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 	if !ok {
 		slog.Warn("Instance is not running on this node", "id", command.ID)
 		respondWithError(awserrors.ErrorInvalidInstanceIDNotFound)
+		return
+	}
+
+	// AttachVolume performs a three-phase hot-plug:
+	//   Phase 1: ebs.mount via NATS   (rolls back with ebs.unmount)
+	//   Phase 2: QMP blockdev-add     (rolls back Phase 1)
+	//   Phase 3: QMP device_add       (rolls back Phase 2 + Phase 1)
+	if command.Attributes.AttachVolume {
+		slog.Info("Attaching volume to instance", "instanceId", command.ID)
+
+		// Validate AttachVolumeData
+		if command.AttachVolumeData == nil || command.AttachVolumeData.VolumeID == "" {
+			slog.Error("AttachVolume: missing attach volume data")
+			respondWithError(awserrors.ErrorInvalidParameterValue)
+			return
+		}
+
+		volumeID := command.AttachVolumeData.VolumeID
+		device := command.AttachVolumeData.Device
+
+		// Validate instance is running
+		d.Instances.Mu.Lock()
+		status := instance.Status
+		d.Instances.Mu.Unlock()
+
+		if status != vm.StateRunning {
+			slog.Error("AttachVolume: instance not running", "instanceId", command.ID, "status", status)
+			respondWithError(awserrors.ErrorIncorrectInstanceState)
+			return
+		}
+
+		// Validate volume exists and is available
+		volCfg, err := d.volumeService.GetVolumeConfig(volumeID)
+		if err != nil {
+			slog.Error("AttachVolume: failed to get volume config", "volumeId", volumeID, "err", err)
+			respondWithError(awserrors.ErrorInvalidVolumeNotFound)
+			return
+		}
+
+		if volCfg.VolumeMetadata.State != "available" {
+			slog.Error("AttachVolume: volume not available", "volumeId", volumeID, "state", volCfg.VolumeMetadata.State)
+			respondWithError(awserrors.ErrorVolumeInUse)
+			return
+		}
+
+		// Determine device name
+		if device == "" {
+			d.Instances.Mu.Lock()
+			device = nextAvailableDevice(instance)
+			d.Instances.Mu.Unlock()
+			if device == "" {
+				slog.Error("AttachVolume: no available device names")
+				respondWithError(awserrors.ErrorAttachmentLimitExceeded)
+				return
+			}
+		}
+
+		// Create EBS mount request
+		ebsRequest := config.EBSRequest{
+			Name:       volumeID,
+			DeviceName: device,
+		}
+
+		ebsMountData, err := json.Marshal(ebsRequest)
+		if err != nil {
+			slog.Error("AttachVolume: failed to marshal ebs.mount request", "err", err)
+			respondWithError(awserrors.ErrorServerInternal)
+			return
+		}
+
+		mountReply, err := d.natsConn.Request("ebs.mount", ebsMountData, 30*time.Second)
+		if err != nil {
+			slog.Error("AttachVolume: ebs.mount failed", "volumeId", volumeID, "err", err)
+			respondWithError(awserrors.ErrorServerInternal)
+			return
+		}
+
+		var mountResp config.EBSMountResponse
+		if err := json.Unmarshal(mountReply.Data, &mountResp); err != nil {
+			slog.Error("AttachVolume: failed to unmarshal mount response", "err", err)
+			respondWithError(awserrors.ErrorServerInternal)
+			return
+		}
+
+		if mountResp.Error != "" {
+			slog.Error("AttachVolume: mount returned error", "volumeId", volumeID, "err", mountResp.Error)
+			respondWithError(awserrors.ErrorServerInternal)
+			return
+		}
+
+		nbdURI := mountResp.URI
+		if nbdURI == "" {
+			slog.Error("AttachVolume: mount response has empty URI", "volumeId", volumeID)
+			d.rollbackEBSMount(ebsRequest)
+			respondWithError(awserrors.ErrorServerInternal)
+			return
+		}
+		ebsRequest.NBDURI = nbdURI
+
+		// Parse NBDURI for QMP blockdev-add
+		serverType, socketPath, nbdHost, nbdPort, err := utils.ParseNBDURI(nbdURI)
+		if err != nil {
+			slog.Error("AttachVolume: failed to parse NBDURI", "uri", nbdURI, "err", err)
+			// Rollback: unmount
+			d.rollbackEBSMount(ebsRequest)
+			respondWithError(awserrors.ErrorServerInternal)
+			return
+		}
+
+		// Build QMP server argument
+		var serverArg map[string]any
+		if serverType == "unix" {
+			serverArg = map[string]any{"type": "unix", "path": socketPath}
+		} else {
+			serverArg = map[string]any{"type": "inet", "host": nbdHost, "port": fmt.Sprintf("%d", nbdPort)}
+		}
+
+		nodeName := fmt.Sprintf("nbd-%s", volumeID)
+		deviceID := fmt.Sprintf("vdisk-%s", volumeID)
+
+		// QMP blockdev-add
+		blockdevCmd := qmp.QMPCommand{
+			Execute: "blockdev-add",
+			Arguments: map[string]any{
+				"node-name": nodeName,
+				"driver":    "nbd",
+				"server":    serverArg,
+				"export":    "",
+				"read-only": false,
+			},
+		}
+
+		_, err = d.SendQMPCommand(instance.QMPClient, blockdevCmd, instance.ID)
+		if err != nil {
+			slog.Error("AttachVolume: QMP blockdev-add failed", "volumeId", volumeID, "err", err)
+			d.rollbackEBSMount(ebsRequest)
+			respondWithError(awserrors.ErrorServerInternal)
+			return
+		}
+
+		// Determine which hotplug root port to use based on device letter.
+		// /dev/sdf -> hotplug1, /dev/sdg -> hotplug2, etc.
+		hotplugBus := ""
+		if len(device) > 0 {
+			letter := device[len(device)-1]
+			if letter >= 'f' && letter <= 'p' {
+				hotplugBus = fmt.Sprintf("hotplug%d", letter-'f'+1)
+			}
+		}
+
+		// QMP device_add
+		deviceAddArgs := map[string]any{
+			"driver": "virtio-blk-pci",
+			"id":     deviceID,
+			"drive":  nodeName,
+		}
+		if hotplugBus != "" {
+			deviceAddArgs["bus"] = hotplugBus
+		}
+		deviceAddCmd := qmp.QMPCommand{
+			Execute:   "device_add",
+			Arguments: deviceAddArgs,
+		}
+
+		_, err = d.SendQMPCommand(instance.QMPClient, deviceAddCmd, instance.ID)
+		if err != nil {
+			slog.Error("AttachVolume: QMP device_add failed, rolling back blockdev", "volumeId", volumeID, "err", err)
+			// Rollback: blockdev-del then unmount
+			if _, delErr := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{
+				Execute:   "blockdev-del",
+				Arguments: map[string]any{"node-name": nodeName},
+			}, instance.ID); delErr != nil {
+				slog.Error("AttachVolume: rollback blockdev-del failed, skipping EBS unmount", "volumeId", volumeID, "err", delErr)
+			} else {
+				d.rollbackEBSMount(ebsRequest)
+			}
+			respondWithError(awserrors.ErrorServerInternal)
+			return
+		}
+
+		// Update instance state: append EBSRequest
+		instance.EBSRequests.Mu.Lock()
+		instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, ebsRequest)
+		instance.EBSRequests.Mu.Unlock()
+
+		// Update BlockDeviceMappings on the ec2.Instance
+		d.Instances.Mu.Lock()
+		if instance.Instance != nil {
+			now := time.Now()
+			mapping := &ec2.InstanceBlockDeviceMapping{}
+			mapping.SetDeviceName(device)
+			mapping.Ebs = &ec2.EbsInstanceBlockDevice{}
+			mapping.Ebs.SetVolumeId(volumeID)
+			mapping.Ebs.SetAttachTime(now)
+			mapping.Ebs.SetDeleteOnTermination(false)
+			mapping.Ebs.SetStatus("attached")
+			instance.Instance.BlockDeviceMappings = append(instance.Instance.BlockDeviceMappings, mapping)
+		}
+		d.Instances.Mu.Unlock()
+
+		// Update volume metadata in S3
+		if err := d.volumeService.UpdateVolumeState(volumeID, "in-use", command.ID, device); err != nil {
+			slog.Error("AttachVolume: failed to update volume metadata", "volumeId", volumeID, "err", err)
+		}
+
+		// Persist state
+		if err := d.WriteState(); err != nil {
+			slog.Error("AttachVolume: failed to write state", "err", err)
+		}
+
+		// Respond with VolumeAttachment
+		now := time.Now()
+		attachment := ec2.VolumeAttachment{
+			VolumeId:            aws.String(volumeID),
+			InstanceId:          aws.String(command.ID),
+			Device:              aws.String(device),
+			State:               aws.String("attached"),
+			AttachTime:          aws.Time(now),
+			DeleteOnTermination: aws.Bool(false),
+		}
+
+		jsonResp, err := json.Marshal(attachment)
+		if err != nil {
+			slog.Error("AttachVolume: failed to marshal response", "err", err)
+			respondWithError(awserrors.ErrorServerInternal)
+			return
+		}
+
+		msg.Respond(jsonResp)
+		slog.Info("Volume attached successfully", "volumeId", volumeID, "instanceId", command.ID, "device", device)
 		return
 	}
 

@@ -985,9 +985,9 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 					slog.Info("Unmounted Viperblock volume", "id", instance.ID, "data", string(msg.Data))
 				}
 
-				// Update volume state to "available" for boot volumes
-				if ebsRequest.Boot {
-					if err := d.volumeService.UpdateVolumeState(ebsRequest.Name, "available", ""); err != nil {
+				// Update volume state to "available" for all user-visible volumes (boot + hot-attached)
+				if !ebsRequest.EFI && !ebsRequest.CloudInit {
+					if err := d.volumeService.UpdateVolumeState(ebsRequest.Name, "available", "", ""); err != nil {
 						slog.Error("Failed to update volume state to available", "volumeId", ebsRequest.Name, "err", err)
 					}
 				}
@@ -1233,7 +1233,7 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	instance.EBSRequests.Mu.Lock()
 	for _, ebsReq := range instance.EBSRequests.Requests {
 		if ebsReq.Boot {
-			if err := d.volumeService.UpdateVolumeState(ebsReq.Name, "in-use", instance.ID); err != nil {
+			if err := d.volumeService.UpdateVolumeState(ebsReq.Name, "in-use", instance.ID, ""); err != nil {
 				slog.Error("Failed to update volume state to in-use", "volumeId", ebsReq.Name, "err", err)
 			}
 		}
@@ -1300,6 +1300,14 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		Memory:       int(memoryMiB),
 		CPUCount:     vCPUs,
 		Architecture: architecture,
+	}
+
+	// Add PCIe root ports for volume hotplug (Q35 requires explicit root ports).
+	// 11 ports for /dev/sd[f-p] hotplug slots, starting at chassis 1.
+	for i := 1; i <= 11; i++ {
+		instance.Config.Devices = append(instance.Config.Devices, vm.Device{
+			Value: fmt.Sprintf("pcie-root-port,id=hotplug%d,chassis=%d,slot=0", i, i),
+		})
 	}
 
 	// Loop through each volume in volumes
@@ -1573,6 +1581,69 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 
 	return nil
 
+}
+
+// rollbackEBSMount sends an ebs.unmount request to undo a previously successful ebs.mount.
+// Rollback failures are logged but not propagated; callers treat this as best-effort cleanup.
+func (d *Daemon) rollbackEBSMount(req config.EBSRequest) {
+	data, err := json.Marshal(req)
+	if err != nil {
+		slog.Error("rollbackEBSMount: failed to marshal unmount request", "volume", req.Name, "err", err)
+		return
+	}
+	msg, err := d.natsConn.Request("ebs.unmount", data, 10*time.Second)
+	if err != nil {
+		slog.Error("rollbackEBSMount: ebs.unmount NATS request failed", "volume", req.Name, "err", err)
+		return
+	}
+	var resp config.EBSUnMountResponse
+	if err := json.Unmarshal(msg.Data, &resp); err != nil {
+		slog.Error("rollbackEBSMount: failed to unmarshal response", "volume", req.Name, "err", err)
+		return
+	}
+	if resp.Error != "" {
+		slog.Error("rollbackEBSMount: ebs.unmount returned error", "volume", req.Name, "err", resp.Error)
+		return
+	}
+	if resp.Mounted {
+		slog.Error("rollbackEBSMount: volume still mounted after unmount", "volume", req.Name)
+		return
+	}
+	slog.Info("rollbackEBSMount: volume unmounted successfully", "volume", req.Name)
+}
+
+// nextAvailableDevice finds the next available /dev/sd[f-p] device name for an instance.
+// It checks both EBSRequests and BlockDeviceMappings to avoid conflicts.
+func nextAvailableDevice(instance *vm.VM) string {
+	usedDevices := make(map[string]bool)
+
+	// Collect devices from existing BlockDeviceMappings
+	if instance.Instance != nil {
+		for _, bdm := range instance.Instance.BlockDeviceMappings {
+			if bdm.DeviceName != nil {
+				usedDevices[*bdm.DeviceName] = true
+			}
+		}
+	}
+
+	// Collect devices from EBSRequests (may not yet be in BlockDeviceMappings)
+	instance.EBSRequests.Mu.Lock()
+	for _, req := range instance.EBSRequests.Requests {
+		if req.DeviceName != "" {
+			usedDevices[req.DeviceName] = true
+		}
+	}
+	instance.EBSRequests.Mu.Unlock()
+
+	// AWS convention: /dev/sd[f-p] for attached volumes
+	for c := 'f'; c <= 'p'; c++ {
+		dev := fmt.Sprintf("/dev/sd%c", c)
+		if !usedDevices[dev] {
+			return dev
+		}
+	}
+
+	return ""
 }
 
 // canAllocate checks how many instances of the given type can be allocated

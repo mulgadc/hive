@@ -21,15 +21,22 @@ var CommandResponseTypes = map[string]unmarshalTarget{
 }
 
 type Command struct {
-	ID         string     `json:"id"`
-	QMPCommand QMPCommand `json:"command"`
-	Attributes Attributes `json:"attributes"`
+	ID               string            `json:"id"`
+	QMPCommand       QMPCommand        `json:"command"`
+	Attributes       Attributes        `json:"attributes"`
+	AttachVolumeData *AttachVolumeData `json:"attach_volume_data,omitempty"`
 }
 
 type Attributes struct {
 	StopInstance      bool `json:"stop_instance"`
 	TerminateInstance bool `json:"delete_instance"`
 	StartInstance     bool `json:"start_instance"`
+	AttachVolume      bool `json:"attach_volume"`
+}
+
+type AttachVolumeData struct {
+	VolumeID string `json:"volume_id"`
+	Device   string `json:"device,omitempty"`
 }
 
 // (QEMU) stop / cont (resume) / system_powerdown / system_reset / system_wakeup

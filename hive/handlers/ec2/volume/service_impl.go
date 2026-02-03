@@ -287,7 +287,7 @@ func (s *VolumeServiceImpl) fetchVolumesByIDs(volumeIDs []*string) []*ec2.Volume
 
 // getVolumeByID fetches a single volume's config from S3 and builds an EC2 Volume
 func (s *VolumeServiceImpl) getVolumeByID(volumeID string) (*ec2.Volume, error) {
-	cfg, err := s.getVolumeConfig(volumeID)
+	cfg, err := s.GetVolumeConfig(volumeID)
 	if err != nil {
 		return nil, err
 	}
@@ -362,8 +362,8 @@ type volumeConfigWrapper struct {
 	VolumeConfig viperblock.VolumeConfig `json:"VolumeConfig"`
 }
 
-// getVolumeConfig reads the raw VolumeConfig from S3 for a given volume ID
-func (s *VolumeServiceImpl) getVolumeConfig(volumeID string) (*viperblock.VolumeConfig, error) {
+// GetVolumeConfig reads the raw VolumeConfig from S3 for a given volume ID.
+func (s *VolumeServiceImpl) GetVolumeConfig(volumeID string) (*viperblock.VolumeConfig, error) {
 	configKey := volumeID + "/config.json"
 
 	getResult, err := s.s3Client.GetObject(&s3.GetObjectInput{
@@ -455,15 +455,16 @@ func (s *VolumeServiceImpl) mergeVolumeConfig(configKey string, cfg *viperblock.
 	return json.Marshal(state)
 }
 
-// UpdateVolumeState updates the State and AttachedInstance fields for a volume in S3.
-func (s *VolumeServiceImpl) UpdateVolumeState(volumeID, state, attachedInstance string) error {
-	cfg, err := s.getVolumeConfig(volumeID)
+// UpdateVolumeState updates volume metadata (state, attachment, device) in the object store.
+func (s *VolumeServiceImpl) UpdateVolumeState(volumeID, state, attachedInstance, deviceName string) error {
+	cfg, err := s.GetVolumeConfig(volumeID)
 	if err != nil {
 		return fmt.Errorf("failed to get volume config for state update: %w", err)
 	}
 
 	cfg.VolumeMetadata.State = state
 	cfg.VolumeMetadata.AttachedInstance = attachedInstance
+	cfg.VolumeMetadata.DeviceName = deviceName
 	if attachedInstance != "" {
 		cfg.VolumeMetadata.AttachedAt = time.Now()
 	}
@@ -472,7 +473,7 @@ func (s *VolumeServiceImpl) UpdateVolumeState(volumeID, state, attachedInstance 
 		return fmt.Errorf("failed to write volume config for state update: %w", err)
 	}
 
-	slog.Info("Updated volume state", "volumeId", volumeID, "state", state, "attachedInstance", attachedInstance)
+	slog.Info("Updated volume state", "volumeId", volumeID, "state", state, "attachedInstance", attachedInstance, "deviceName", deviceName)
 	return nil
 }
 
@@ -485,7 +486,7 @@ func (s *VolumeServiceImpl) ModifyVolume(input *ec2.ModifyVolumeInput) (*ec2.Mod
 	volumeID := *input.VolumeId
 	slog.Info("ModifyVolume request", "volumeId", volumeID)
 
-	cfg, err := s.getVolumeConfig(volumeID)
+	cfg, err := s.GetVolumeConfig(volumeID)
 	if err != nil {
 		slog.Error("ModifyVolume failed to get volume config", "volumeId", volumeID, "err", err)
 		return nil, err
@@ -569,7 +570,7 @@ func (s *VolumeServiceImpl) DeleteVolume(input *ec2.DeleteVolumeInput) (*ec2.Del
 	slog.Info("DeleteVolume request", "volumeId", volumeID)
 
 	// Fetch volume config to validate state
-	cfg, err := s.getVolumeConfig(volumeID)
+	cfg, err := s.GetVolumeConfig(volumeID)
 	if err != nil {
 		slog.Error("DeleteVolume failed to get volume config", "volumeId", volumeID, "err", err)
 		return nil, err
