@@ -150,7 +150,9 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 
 		// Determine device name
 		if device == "" {
+			d.Instances.Mu.Lock()
 			device = nextAvailableDevice(instance)
+			d.Instances.Mu.Unlock()
 			if device == "" {
 				slog.Error("AttachVolume: no available device names")
 				respondWithError(awserrors.ErrorAttachmentLimitExceeded)
@@ -194,6 +196,7 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 		nbdURI := mountResp.URI
 		if nbdURI == "" {
 			slog.Error("AttachVolume: mount response has empty URI", "volumeId", volumeID)
+			d.rollbackEBSMount(ebsRequest)
 			respondWithError(awserrors.ErrorServerInternal)
 			return
 		}

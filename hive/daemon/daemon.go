@@ -985,8 +985,8 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 					slog.Info("Unmounted Viperblock volume", "id", instance.ID, "data", string(msg.Data))
 				}
 
-				// Update volume state to "available" for boot volumes
-				if ebsRequest.Boot {
+				// Update volume state to "available" for all user-visible volumes (boot + hot-attached)
+				if !ebsRequest.EFI && !ebsRequest.CloudInit {
 					if err := d.volumeService.UpdateVolumeState(ebsRequest.Name, "available", "", ""); err != nil {
 						slog.Error("Failed to update volume state to available", "volumeId", ebsRequest.Name, "err", err)
 					}
