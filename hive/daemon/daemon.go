@@ -24,6 +24,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/gofiber/fiber/v2"
+	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
@@ -1610,6 +1611,28 @@ func (d *Daemon) rollbackEBSMount(req config.EBSRequest) {
 		return
 	}
 	slog.Info("rollbackEBSMount: volume unmounted successfully", "volume", req.Name)
+}
+
+// respondWithVolumeAttachment builds an ec2.VolumeAttachment, marshals it to JSON, and
+// responds on the NATS message. Used by both AttachVolume and DetachVolume handlers.
+func (d *Daemon) respondWithVolumeAttachment(msg *nats.Msg, respondWithError func(string), volumeID, instanceID, device, state string) {
+	attachment := ec2.VolumeAttachment{
+		VolumeId:            aws.String(volumeID),
+		InstanceId:          aws.String(instanceID),
+		Device:              aws.String(device),
+		State:               aws.String(state),
+		AttachTime:          aws.Time(time.Now()),
+		DeleteOnTermination: aws.Bool(false),
+	}
+
+	jsonResp, err := json.Marshal(attachment)
+	if err != nil {
+		slog.Error("Failed to marshal VolumeAttachment response", "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	msg.Respond(jsonResp)
 }
 
 // nextAvailableDevice finds the next available /dev/sd[f-p] device name for an instance.

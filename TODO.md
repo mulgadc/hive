@@ -34,35 +34,6 @@
 - [DONE] change all log into slog
 - `nbd` does not support resizing disks live. Requires instance to be stopped, boot/root volume, or attached volume will need to be resized, and instance started again. Limitation for Hive v1 using NBD, aiming to resolve with `vhost-user-blk` to create a `virtio-blk` device for extended functionality and performance.
 
-## [DONE] EC2 attach-volume
-
-```sh
-aws ec2 attach-volume --volume-id vol-1234567890abcdef0 --instance-id i-01474ef662b89480 --device /dev/sdf
-```
-
-- [DONE] Validate volume exists, e.g create-volume — `GetVolumeConfig()` checks volume exists and state == "available"
-- [DONE] Push attach-volume request via NATS to the node running the specified instance — gateway sends to `ec2.cmd.{instanceId}`, daemon subscribes per-instance
-- [DONE] Run viperblock NBD server for new volume, retrieve host:port or UNIX socket pathname, append volume to instance state — `ebs.mount` via NATS returns NBD URI, volume appended to `EBSRequests`, persisted to JetStream so mounts survive stop/start
-- [DONE] Issue a command via QMP for the instance, to attach the volume — `blockdev-add` (NBD backend) + `device_add` (virtio-blk-pci) with three-phase rollback
-- [DONE] --device auto-assignment — if `--device` omitted, `nextAvailableDevice()` scans EBSRequests + BlockDeviceMappings to assign next `/dev/sd[f-p]`. Guest sees `/dev/vd*` with virtio drivers.
-- [DONE] Volume available to mount within the guest OS. Volume meta-data attached to instance.json/NATS KV and available if instance stop/started.
-
-See `docs/development/features/attach-volume-testing.md` for manual testing guide.
-See `docs/development/feature/attach-volume.md` for implementation details.
-
-## EC2 detach-volume
-
-```sh
-aws ec2 detach-volume --volume-id vol-1234567890abcdef0
-```
-
-- Fire NATS event to node running specified instance to detach the volume
-- Use QMP to detach specified volume
-- Terminate running `nbdkit` process for specified volume, ensure WAL state synced to predastore.
-
-
-- Note
-
 ### EC2 describe-volume-status
 
 Required to track progress of new volumes created, deleted, detached or running.
@@ -170,7 +141,7 @@ Instance `dmesg`:
 | `create-volume` | `--size`, `--availability-zone`, `--volume-type` (gp3 only) | `--iops`, `--encrypted`, `--snapshot-id`, `--tag-specifications` | Valid AZ configured via `hive init` | Gateway validates input → NATS `ec2.CreateVolume` → daemon generates vol-ID via viperblock → creates empty volume of specified size → persists config.json to Predastore S3 → returns vol-ID with state=available | 1. Create 80GB gp3 volume<br>2. Boundary sizes (1 GiB min, 16384 GiB max)<br>3. Invalid AZ (error)<br>4. Verify volume in describe-volumes<br>5. Unsupported volume type (error - only gp3)<br>6. Size out of range (error) | **DONE** |
 | `delete-volume` | `--volume-id` | `--dry-run` | Volume must exist and be detached (state=available) | Gateway validates vol- prefix → NATS `ec2.DeleteVolume` → daemon confirms state=available and no AttachedInstance → NATS `ebs.delete` to viperblockd (stops nbdkit/WAL) → deletes S3 objects under vol-id/, vol-id-efi/, vol-id-cloudinit/ → returns success | 1. Delete detached volume<br>2. Delete attached volume (error: VolumeInUse)<br>3. Delete non-existent volume (error: InvalidVolume.NotFound)<br>4. Verify volume gone from describe-volumes<br>5. Malformed volume ID (error: InvalidVolumeID.Malformed)<br>6. Double delete (idempotent NotFound) | **DONE** |
 | `attach-volume` | `--volume-id`, `--instance-id`, `--device` (optional, auto-assigns `/dev/sd[f-p]`) | `--dry-run` | Volume must exist (available), instance must exist (running) | Gateway sends to `ec2.cmd.{instanceId}` → daemon validates volume (Predastore) → `ebs.mount` via NATS (viperblock starts NBD server) → QMP `blockdev-add` (nbd-{volId}) → QMP `device_add` (virtio-blk-pci, vdisk-{volId}) → three-phase rollback on failure → update EBSRequests + BlockDeviceMappings → persist to JetStream + Predastore → respond with VolumeAttachment | 1. Attach volume to running instance<br>2. Auto-assign device name<br>3. Attach already-attached volume (VolumeInUse)<br>4. Attach to non-existent instance (InvalidInstanceID.NotFound)<br>5. Attach to stopped instance (IncorrectInstanceState)<br>6. Volume not found (InvalidVolume.NotFound)<br>7. All device slots full (AttachmentLimitExceeded)<br>8. Volume persists across stop/start | **DONE** |
-| `detach-volume` | — | `--volume-id`, `--instance-id`, `--device`, `--force` | Volume must be attached | NATS to node running instance → QMP `device_del` → QMP `blockdev-del` → terminate nbdkit for volume → sync WAL to Predastore → update instance metadata | 1. Detach from running instance<br>2. Force detach<br>3. Detach already-detached volume (error)<br>4. Verify device removed from guest OS | **NOT STARTED** |
+| `detach-volume` | `--volume-id`, `--instance-id` (optional, resolved via DescribeVolumes), `--device` (optional cross-check), `--force` | `--dry-run` | Volume must be attached, instance must be running | Gateway resolves InstanceId if omitted (via DescribeVolumes) → sends to `ec2.cmd.{instanceId}` → daemon validates (running, attached, not boot/EFI/CloudInit, device match) → three-phase hot-unplug: QMP `device_del` (force continues on failure) → QMP `blockdev-del` (abort if fails, preserves state to prevent double-attach) → `ebs.unmount` via NATS (best-effort) → remove from EBSRequests + BlockDeviceMappings → update volume metadata to available → persist state → respond with VolumeAttachment (state=detaching) | 1. Detach with explicit InstanceId<br>2. Detach without InstanceId (gateway resolution)<br>3. Detach with correct --device cross-check<br>4. Missing VolumeId (InvalidParameterValue)<br>5. Volume not attached (IncorrectState)<br>6. Nonexistent volume (InvalidVolume.NotFound)<br>7. Nonexistent instance (InvalidInstanceID.NotFound)<br>8. Instance not running (IncorrectInstanceState)<br>9. Device mismatch (InvalidParameterValue)<br>10. Boot volume protection (OperationNotPermitted)<br>11. Force flag (continues past device_del failure)<br>12. Volume reusability (re-attach after detach) | **DONE** |
 | `describe-volume-status` | — | `--volume-ids`, `--filters`, `--max-results` | None | Query viperblock for volume health status → return io-enabled status, availability zone, events | 1. Check healthy volume status<br>2. Check volume during modification<br>3. Filter by volume ID | **NOT STARTED** |
 | `describe-volumes-modifications` | — | `--volume-ids`, `--filters`, `--max-results` | None | Query pending/completed volume modifications → return modification state, progress, original/target size | 1. Check in-progress modification<br>2. Check completed modification<br>3. No modifications returns empty | **NOT STARTED** |
 

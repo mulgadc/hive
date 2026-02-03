@@ -309,6 +309,31 @@ func TestSigV4Auth_ValidSignatureWithQueryString(t *testing.T) {
 	}
 }
 
+func TestParseAWSQueryArgs_URLDecoding(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    string
+		key      string
+		expected string
+	}{
+		{"plain value", "Action=DescribeInstances", "Action", "DescribeInstances"},
+		{"encoded slashes", "Device=%2Fdev%2Fsdf", "Device", "/dev/sdf"},
+		{"encoded spaces", "Name=my%20volume", "Name", "my volume"},
+		{"encoded plus as space", "Name=my+volume", "Name", "my volume"},
+		{"no encoding needed", "VolumeId=vol-abc123", "VolumeId", "vol-abc123"},
+		{"multiple params", "VolumeId=vol-abc&Device=%2Fdev%2Fsdg", "Device", "/dev/sdg"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := ParseAWSQueryArgs(tc.input)
+			if result[tc.key] != tc.expected {
+				t.Errorf("Expected %q for key %q, got %q", tc.expected, tc.key, result[tc.key])
+			}
+		})
+	}
+}
+
 func TestBuildCanonicalQueryString(t *testing.T) {
 	testCases := []struct {
 		name     string
