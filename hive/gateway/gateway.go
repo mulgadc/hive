@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -209,7 +210,11 @@ func ParseAWSQueryArgs(query string) map[string]string {
 	for pair := range pairs {
 		kv := strings.SplitN(pair, "=", 2)
 		if len(kv) == 2 {
-			params[kv[0]] = kv[1]
+			val, err := url.QueryUnescape(kv[1])
+			if err != nil {
+				val = kv[1]
+			}
+			params[kv[0]] = val
 		} else if len(kv) == 1 {
 			params[kv[0]] = ""
 		}

@@ -283,9 +283,20 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 			return
 		}
 
-		// Update instance state: append EBSRequest
+		// Update instance state: replace existing entry for this volume (handles
+		// stop/start cycles that keep stale entries) or append a new one.
 		instance.EBSRequests.Mu.Lock()
-		instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, ebsRequest)
+		replaced := false
+		for i, req := range instance.EBSRequests.Requests {
+			if req.Name == volumeID {
+				instance.EBSRequests.Requests[i] = ebsRequest
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, ebsRequest)
+		}
 		instance.EBSRequests.Mu.Unlock()
 
 		// Update BlockDeviceMappings on the ec2.Instance
