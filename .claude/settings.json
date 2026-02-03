@@ -50,6 +50,7 @@
       "Bash(cd * && *)",
       "Bash(cd ../viperblock && *)",
       "Bash(cd ../predastore && *)",
+      "Bash(wc:*)",
 
       "Bash(pnpm fix:*)",
       "Bash(pnpm check:*)",

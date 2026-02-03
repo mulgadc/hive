@@ -42,6 +42,7 @@ export function UploadButton({ bucket, prefix = "" }: UploadButtonProps) {
     <>
       <input
         accept="*/*"
+        aria-label="Choose files to upload"
         className="hidden"
         multiple
         onChange={handleFileSelect}

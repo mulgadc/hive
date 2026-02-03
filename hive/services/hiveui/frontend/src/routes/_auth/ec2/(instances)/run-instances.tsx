@@ -260,6 +260,7 @@ function CreateInstance() {
             <label htmlFor="count">Number of Instances</label>
           </FieldTitle>
           <Input
+            aria-describedby="count-description"
             aria-invalid={!!errors.count}
             id="count"
             type="number"
