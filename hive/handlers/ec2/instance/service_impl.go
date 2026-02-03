@@ -149,7 +149,7 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 	var iops int
 	var imageId string
 	var snapshotId string
-	var deleteOnTermination = false // Default to false
+	var deleteOnTermination = true // Default to true (matches AWS RunInstances behavior)
 
 	// Handle block device mappings
 	if len(input.BlockDeviceMappings) > 0 {
@@ -190,18 +190,19 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 
 	volumeConfig := viperblock.VolumeConfig{
 		VolumeMetadata: viperblock.VolumeMetadata{
-			VolumeID:   imageId,
-			SizeGiB:    utils.SafeIntToUint64(size / 1024 / 1024 / 1024),
-			CreatedAt:  attachTime,
-			DeviceName: deviceName,
-			VolumeType: volumeType,
-			IOPS:       iops,
-			SnapshotID: snapshotId,
+			VolumeID:            imageId,
+			SizeGiB:             utils.SafeIntToUint64(size / 1024 / 1024 / 1024),
+			CreatedAt:           attachTime,
+			DeviceName:          deviceName,
+			VolumeType:          volumeType,
+			IOPS:                iops,
+			SnapshotID:          snapshotId,
+			DeleteOnTermination: deleteOnTermination,
 		},
 	}
 
 	// Step 1: Create or validate root volume
-	err := s.prepareRootVolume(input, imageId, size, volumeConfig, instance)
+	err := s.prepareRootVolume(input, imageId, size, volumeConfig, instance, deleteOnTermination)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +236,7 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 }
 
 // prepareRootVolume handles creation/cloning of the root volume
-func (s *InstanceServiceImpl) prepareRootVolume(input *ec2.RunInstancesInput, imageId string, size int, volumeConfig viperblock.VolumeConfig, instance *vm.VM) error {
+func (s *InstanceServiceImpl) prepareRootVolume(input *ec2.RunInstancesInput, imageId string, size int, volumeConfig viperblock.VolumeConfig, instance *vm.VM, deleteOnTermination bool) error {
 	cfg := s3.S3Config{
 		VolumeName: imageId,
 		VolumeSize: utils.SafeIntToUint64(size),
@@ -285,8 +286,9 @@ func (s *InstanceServiceImpl) prepareRootVolume(input *ec2.RunInstancesInput, im
 	// Append root volume to instance
 	instance.EBSRequests.Mu.Lock()
 	instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, config.EBSRequest{
-		Name: vbconfig.VolumeName,
-		Boot: true,
+		Name:                vbconfig.VolumeName,
+		Boot:                true,
+		DeleteOnTermination: deleteOnTermination,
 	})
 	instance.EBSRequests.Mu.Unlock()
 

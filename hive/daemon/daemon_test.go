@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/config"
 	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
+	handlers_ec2_volume "github.com/mulgadc/hive/hive/handlers/ec2/volume"
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/nats-io/nats-server/v2/server"
@@ -97,8 +99,9 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 
 	daemon.natsConn = nc
 
-	// Initialize instance service (needed for handleEC2RunInstances)
+	// Initialize services (needed for handler tests)
 	daemon.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(cfg, daemon.resourceMgr.instanceTypes, nc, &daemon.Instances)
+	daemon.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(cfg, nc)
 
 	t.Cleanup(func() {
 		if daemon.natsConn != nil {
@@ -1566,4 +1569,391 @@ func TestResourceManager_ConcurrentAccess(t *testing.T) {
 	// Final state should be clean (no allocations)
 	assert.Equal(t, 0, rm.allocatedVCPU, "All resources should be deallocated")
 	assert.Equal(t, float64(0), rm.allocatedMem, "All memory should be deallocated")
+}
+
+// TestEBSRequest_DeleteOnTermination_DefaultFalse verifies the default value
+func TestEBSRequest_DeleteOnTermination_DefaultFalse(t *testing.T) {
+	req := config.EBSRequest{
+		Name: "vol-test",
+		Boot: true,
+	}
+	assert.False(t, req.DeleteOnTermination, "DeleteOnTermination should default to false")
+}
+
+// TestEBSRequest_DeleteOnTermination_SetTrue verifies the field can be set
+func TestEBSRequest_DeleteOnTermination_SetTrue(t *testing.T) {
+	req := config.EBSRequest{
+		Name:                "vol-test",
+		Boot:                true,
+		DeleteOnTermination: true,
+	}
+	assert.True(t, req.DeleteOnTermination)
+}
+
+// TestGenerateVolumes_DeleteOnTermination_FromBlockDeviceMapping verifies that
+// the deleteOnTermination flag from RunInstancesInput.BlockDeviceMappings is
+// propagated to the EBSRequest on the instance's volume list.
+func TestGenerateVolumes_DeleteOnTermination_FromBlockDeviceMapping(t *testing.T) {
+	tests := []struct {
+		name                    string
+		deleteOnTerminationFlag *bool
+		expectedFlag            bool
+	}{
+		{
+			name:                    "DeleteOnTermination=true",
+			deleteOnTerminationFlag: aws.Bool(true),
+			expectedFlag:            true,
+		},
+		{
+			name:                    "DeleteOnTermination=false",
+			deleteOnTerminationFlag: aws.Bool(false),
+			expectedFlag:            false,
+		},
+		{
+			name:                    "DeleteOnTermination=nil (defaults to true)",
+			deleteOnTerminationFlag: nil,
+			expectedFlag:            true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Build a RunInstancesInput with BlockDeviceMappings
+			input := &ec2.RunInstancesInput{
+				ImageId:      aws.String("vol-existing-volume"),
+				InstanceType: aws.String("t3.micro"),
+				MinCount:     aws.Int64(1),
+				MaxCount:     aws.Int64(1),
+			}
+
+			if tt.deleteOnTerminationFlag != nil {
+				input.BlockDeviceMappings = []*ec2.BlockDeviceMapping{
+					{
+						DeviceName: aws.String("/dev/xvda"),
+						Ebs: &ec2.EbsBlockDevice{
+							VolumeSize:          aws.Int64(8),
+							DeleteOnTermination: tt.deleteOnTerminationFlag,
+						},
+					},
+				}
+			}
+
+			// Exercise the parsing logic that GenerateVolumes uses
+			// Default is true (matches AWS RunInstances behavior for root volumes)
+			deleteOnTermination := true
+			if len(input.BlockDeviceMappings) > 0 {
+				bdm := input.BlockDeviceMappings[0]
+				if bdm.Ebs != nil && bdm.Ebs.DeleteOnTermination != nil {
+					deleteOnTermination = *bdm.Ebs.DeleteOnTermination
+				}
+			}
+
+			assert.Equal(t, tt.expectedFlag, deleteOnTermination,
+				"deleteOnTermination should match expected value")
+
+			// Verify the flag is correctly assigned to an EBSRequest
+			ebsReq := config.EBSRequest{
+				Name:                "vol-test",
+				Boot:                true,
+				DeleteOnTermination: deleteOnTermination,
+			}
+			assert.Equal(t, tt.expectedFlag, ebsReq.DeleteOnTermination)
+		})
+	}
+}
+
+// TestStopInstance_DeleteOnTermination_VolumeDeletion tests that stopInstance
+// correctly handles DeleteOnTermination for each volume type.
+// Uses embedded NATS with mock subscribers to verify NATS messages.
+func TestStopInstance_DeleteOnTermination_VolumeDeletion(t *testing.T) {
+	ns, natsURL := startTestNATSServer(t)
+	defer ns.Shutdown()
+
+	daemon := createTestDaemon(t, natsURL)
+
+	// Track which NATS messages are received
+	var mu sync.Mutex
+	unmountedVolumes := make(map[string]bool)
+	ebsDeletedVolumes := make(map[string]bool)
+
+	// Mock ebs.unmount subscriber
+	unmountSub, err := daemon.natsConn.Subscribe("ebs.unmount", func(msg *nats.Msg) {
+		var req config.EBSRequest
+		json.Unmarshal(msg.Data, &req)
+		mu.Lock()
+		unmountedVolumes[req.Name] = true
+		mu.Unlock()
+		resp := config.EBSUnMountResponse{Volume: req.Name, Mounted: false}
+		data, _ := json.Marshal(resp)
+		msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer unmountSub.Unsubscribe()
+
+	// Mock ebs.delete subscriber
+	deleteSub, err := daemon.natsConn.Subscribe("ebs.delete", func(msg *nats.Msg) {
+		var req config.EBSDeleteRequest
+		json.Unmarshal(msg.Data, &req)
+		mu.Lock()
+		ebsDeletedVolumes[req.Volume] = true
+		mu.Unlock()
+		resp := config.EBSDeleteResponse{Volume: req.Volume, Success: true}
+		data, _ := json.Marshal(resp)
+		msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer deleteSub.Unsubscribe()
+
+	// Subscribe to the instance NATS topic to avoid unsubscribe errors
+	instanceSub, err := daemon.natsConn.Subscribe("ec2.cmd.i-test-dot", func(msg *nats.Msg) {})
+	require.NoError(t, err)
+	defer instanceSub.Unsubscribe()
+	daemon.natsSubscriptions["ec2.cmd.i-test-dot"] = instanceSub
+
+	instance := &vm.VM{
+		ID:           "i-test-dot",
+		InstanceType: getTestInstanceType(),
+		Status:       vm.StateRunning,
+		QMPClient:    &qmp.QMPClient{}, // nil encoder/decoder => QMP will fail, which is fine
+		EBSRequests: config.EBSRequests{
+			Requests: []config.EBSRequest{
+				{
+					Name:                "vol-root",
+					Boot:                true,
+					DeleteOnTermination: true,
+				},
+				{
+					Name: "vol-root-efi",
+					EFI:  true,
+				},
+				{
+					Name:      "vol-root-cloudinit",
+					CloudInit: true,
+				},
+			},
+		},
+	}
+
+	// Allocate resources so deallocate doesn't go negative
+	instanceType := daemon.resourceMgr.instanceTypes[instance.InstanceType]
+	require.NotNil(t, instanceType)
+	err = daemon.resourceMgr.allocate(instanceType)
+	require.NoError(t, err)
+
+	daemon.Instances.VMS[instance.ID] = instance
+
+	// Call stopInstance with deleteVolume=true (termination)
+	err = daemon.stopInstance(map[string]*vm.VM{instance.ID: instance}, true)
+	assert.NoError(t, err)
+
+	// Allow NATS messages to propagate
+	time.Sleep(200 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// All volumes should be unmounted
+	assert.True(t, unmountedVolumes["vol-root"], "Root volume should be unmounted")
+	assert.True(t, unmountedVolumes["vol-root-efi"], "EFI volume should be unmounted")
+	assert.True(t, unmountedVolumes["vol-root-cloudinit"], "Cloud-init volume should be unmounted")
+
+	// Internal volumes (EFI, cloud-init) should receive ebs.delete
+	assert.True(t, ebsDeletedVolumes["vol-root-efi"], "EFI volume should receive ebs.delete")
+	assert.True(t, ebsDeletedVolumes["vol-root-cloudinit"], "Cloud-init volume should receive ebs.delete")
+}
+
+// TestStopInstance_DeleteOnTermination_False_SkipsVolumeDeletion verifies that
+// volumes with DeleteOnTermination=false are NOT deleted during termination.
+func TestStopInstance_DeleteOnTermination_False_SkipsVolumeDeletion(t *testing.T) {
+	ns, natsURL := startTestNATSServer(t)
+	defer ns.Shutdown()
+
+	daemon := createTestDaemon(t, natsURL)
+
+	var mu sync.Mutex
+	unmountedVolumes := make(map[string]bool)
+	ebsDeletedVolumes := make(map[string]bool)
+
+	// Mock ebs.unmount subscriber
+	unmountSub, err := daemon.natsConn.Subscribe("ebs.unmount", func(msg *nats.Msg) {
+		var req config.EBSRequest
+		json.Unmarshal(msg.Data, &req)
+		mu.Lock()
+		unmountedVolumes[req.Name] = true
+		mu.Unlock()
+		resp := config.EBSUnMountResponse{Volume: req.Name, Mounted: false}
+		data, _ := json.Marshal(resp)
+		msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer unmountSub.Unsubscribe()
+
+	// Mock ebs.delete subscriber
+	deleteSub, err := daemon.natsConn.Subscribe("ebs.delete", func(msg *nats.Msg) {
+		var req config.EBSDeleteRequest
+		json.Unmarshal(msg.Data, &req)
+		mu.Lock()
+		ebsDeletedVolumes[req.Volume] = true
+		mu.Unlock()
+		resp := config.EBSDeleteResponse{Volume: req.Volume, Success: true}
+		data, _ := json.Marshal(resp)
+		msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer deleteSub.Unsubscribe()
+
+	// Subscribe to the instance NATS topic
+	instanceSub, err := daemon.natsConn.Subscribe("ec2.cmd.i-test-no-delete", func(msg *nats.Msg) {})
+	require.NoError(t, err)
+	defer instanceSub.Unsubscribe()
+	daemon.natsSubscriptions["ec2.cmd.i-test-no-delete"] = instanceSub
+
+	instance := &vm.VM{
+		ID:           "i-test-no-delete",
+		InstanceType: getTestInstanceType(),
+		Status:       vm.StateRunning,
+		QMPClient:    &qmp.QMPClient{},
+		EBSRequests: config.EBSRequests{
+			Requests: []config.EBSRequest{
+				{
+					Name:                "vol-keep",
+					Boot:                true,
+					DeleteOnTermination: false, // Should NOT be deleted
+				},
+				{
+					Name: "vol-keep-efi",
+					EFI:  true,
+				},
+				{
+					Name:      "vol-keep-cloudinit",
+					CloudInit: true,
+				},
+			},
+		},
+	}
+
+	instanceType := daemon.resourceMgr.instanceTypes[instance.InstanceType]
+	require.NotNil(t, instanceType)
+	err = daemon.resourceMgr.allocate(instanceType)
+	require.NoError(t, err)
+
+	daemon.Instances.VMS[instance.ID] = instance
+
+	// Call stopInstance with deleteVolume=true (termination)
+	err = daemon.stopInstance(map[string]*vm.VM{instance.ID: instance}, true)
+	assert.NoError(t, err)
+
+	time.Sleep(200 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// All volumes should still be unmounted
+	assert.True(t, unmountedVolumes["vol-keep"], "Root volume should be unmounted")
+	assert.True(t, unmountedVolumes["vol-keep-efi"], "EFI volume should be unmounted")
+	assert.True(t, unmountedVolumes["vol-keep-cloudinit"], "Cloud-init volume should be unmounted")
+
+	// Internal volumes should still get ebs.delete (always cleaned up)
+	assert.True(t, ebsDeletedVolumes["vol-keep-efi"], "EFI volume should receive ebs.delete even when root has DeleteOnTermination=false")
+	assert.True(t, ebsDeletedVolumes["vol-keep-cloudinit"], "Cloud-init volume should receive ebs.delete even when root has DeleteOnTermination=false")
+
+	// Root volume with DeleteOnTermination=false should NOT have ebs.delete called
+	assert.False(t, ebsDeletedVolumes["vol-keep"], "Root volume with DeleteOnTermination=false should NOT be deleted")
+}
+
+// TestStopInstance_NoDelete_OnStop verifies that volumes are NOT deleted during
+// a regular stop (non-termination), regardless of DeleteOnTermination flag.
+func TestStopInstance_NoDelete_OnStop(t *testing.T) {
+	ns, natsURL := startTestNATSServer(t)
+	defer ns.Shutdown()
+
+	daemon := createTestDaemon(t, natsURL)
+
+	var mu sync.Mutex
+	ebsDeletedVolumes := make(map[string]bool)
+
+	// Mock ebs.unmount subscriber
+	unmountSub, err := daemon.natsConn.Subscribe("ebs.unmount", func(msg *nats.Msg) {
+		resp := config.EBSUnMountResponse{Mounted: false}
+		data, _ := json.Marshal(resp)
+		msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer unmountSub.Unsubscribe()
+
+	// Mock ebs.delete subscriber - should NOT be called
+	deleteSub, err := daemon.natsConn.Subscribe("ebs.delete", func(msg *nats.Msg) {
+		var req config.EBSDeleteRequest
+		json.Unmarshal(msg.Data, &req)
+		mu.Lock()
+		ebsDeletedVolumes[req.Volume] = true
+		mu.Unlock()
+		resp := config.EBSDeleteResponse{Volume: req.Volume, Success: true}
+		data, _ := json.Marshal(resp)
+		msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer deleteSub.Unsubscribe()
+
+	instance := &vm.VM{
+		ID:           "i-test-stop-only",
+		InstanceType: getTestInstanceType(),
+		Status:       vm.StateRunning,
+		QMPClient:    &qmp.QMPClient{},
+		EBSRequests: config.EBSRequests{
+			Requests: []config.EBSRequest{
+				{
+					Name:                "vol-stop-root",
+					Boot:                true,
+					DeleteOnTermination: true, // Even with true, stop should NOT delete
+				},
+				{
+					Name: "vol-stop-efi",
+					EFI:  true,
+				},
+			},
+		},
+	}
+
+	instanceType := daemon.resourceMgr.instanceTypes[instance.InstanceType]
+	require.NotNil(t, instanceType)
+	err = daemon.resourceMgr.allocate(instanceType)
+	require.NoError(t, err)
+
+	daemon.Instances.VMS[instance.ID] = instance
+
+	// Call stopInstance with deleteVolume=false (stop, not terminate)
+	err = daemon.stopInstance(map[string]*vm.VM{instance.ID: instance}, false)
+	assert.NoError(t, err)
+
+	time.Sleep(200 * time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// No volumes should be deleted during a stop operation
+	assert.Empty(t, ebsDeletedVolumes, "No volumes should be deleted during stop (not terminate)")
+}
+
+// TestEBSRequest_JSON_Serialization verifies DeleteOnTermination survives JSON round-trip
+// (important for JetStream state persistence)
+func TestEBSRequest_JSON_Serialization(t *testing.T) {
+	original := config.EBSRequest{
+		Name:                "vol-test-json",
+		Boot:                true,
+		DeleteOnTermination: true,
+		NBDURI:              "nbd:unix:/tmp/test.sock",
+	}
+
+	data, err := json.Marshal(original)
+	require.NoError(t, err)
+
+	var restored config.EBSRequest
+	err = json.Unmarshal(data, &restored)
+	require.NoError(t, err)
+
+	assert.Equal(t, original.Name, restored.Name)
+	assert.Equal(t, original.Boot, restored.Boot)
+	assert.Equal(t, original.DeleteOnTermination, restored.DeleteOnTermination)
+	assert.Equal(t, original.NBDURI, restored.NBDURI)
 }

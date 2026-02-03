@@ -29,10 +29,10 @@
 - capabilities flag
 - more instance types - per cpu gen
 - [DONE] multi part uploads on frontend
-- delete volumes on termination
+- [DONE] delete volumes on termination
 - fix describe instances
 - [DONE] change all log into slog
-- [DONE] change deleteontermination fields to false, unsupported for now.
+- `nbd` does not support resizing disks live. Requires instance to be stopped, boot/root volume, or attached volume will need to be resized, and instance started again. Limitation for Hive v1 using NBD, aiming to resolve with `vhost-user-blk` to create a `virtio-blk` device for extended functionality and performance.
 
 ## EC2 attach-volume
 
@@ -82,32 +82,8 @@ aws ec2 detach-volume --volume-id vol-1234567890abcdef0
 - Use QMP to detach specified volume
 - Terminate running `nbdkit` process for specified volume, ensure WAL state synced to predastore.
 
-## EC2 modify-volume
 
-Example increasing a volume to 64GiB
-
-```sh
-aws ec2 modify-volume --size 64 --volume-id vol-1234567890abcdef0
-```
-
-```json
-{
-  "VolumeModification": {
-    "TargetSize": 64,
-    "TargetVolumeType": "gp3",
-    "ModificationState": "modifying",
-    "VolumeId": " vol-1234567890abcdef0",
-    "TargetIops": 100,
-    "StartTime": "2019-05-17T11:27:19.000Z",
-    "Progress": 0,
-    "OriginalVolumeType": "gp3",
-    "OriginalIops": 100,
-    "OriginalSize": 32
-  }
-}
-```
-
-- Note `nbd` does not support resizing disks live. Requires instance to be stopped, boot/root volume, or attached volume will need to be resized, and instance started again. Limitation for Hive v1 using NBD, aiming to resolve with `vhost-user-blk` to create a `virtio-blk` device for extended functionality and performance.
+- Note
 
 ### EC2 describe-volume-status
 
@@ -177,7 +153,7 @@ Instance `dmesg`:
 | `describe-instances` | `--instance-ids` | `--filters`, `--max-results`, `--next-token`, `--dry-run` | None | Gateway fans out NATS `ec2.DescribeInstances` to all nodes (no queue group) → each daemon returns local instances → gateway aggregates and returns combined list | 1. Describe all instances (no filter)<br>2. Describe by instance ID<br>3. Describe with filters (e.g. instance-state-name)<br>4. Instance not found returns empty set<br>5. Multi-node aggregation returns instances from all nodes | **DONE** |
 | `start-instances` | `--instance-ids` | `--dry-run`, `--force` | `run-instances` (instance must exist in stopped state) | Gateway sends NATS `ec2.cmd.{instance-id}` → daemon restarts stopped QEMU process with same config → state transitions stopped→pending→running | 1. Start a stopped instance<br>2. Start already-running instance (error: IncorrectInstanceState)<br>3. Start with invalid instance ID<br>4. Verify volumes re-mount on start | **DONE** |
 | `stop-instances` | `--instance-ids` | `--force`, `--hibernate`, `--dry-run` | `run-instances` (instance must be running) | Gateway sends NATS to target node → daemon issues QMP `system_powerdown` for graceful shutdown → monitors heartbeat until QEMU exits → state transitions running→stopping→stopped | 1. Graceful stop of running instance<br>2. Force stop (kills QEMU process)<br>3. Stop already-stopped instance (error)<br>4. Verify ~30s heartbeat detection | **DONE** |
-| `terminate-instances` | `--instance-ids` | `--dry-run` | `run-instances` (instance must exist) | Gateway sends NATS to target node → daemon kills QEMU process → cleans up NBD mounts → optionally deletes volumes (if DeleteOnTermination) → state→terminated | 1. Terminate running instance<br>2. Terminate stopped instance<br>3. Terminate with DeleteOnTermination volumes<br>4. Terminate already-terminated (idempotent)<br>5. Invalid instance ID | **DONE** |
+| `terminate-instances` | `--instance-ids`, `DeleteOnTermination` (per-volume flag, default true) | `--dry-run` | `run-instances` (instance must exist) | Gateway sends NATS to target node → daemon kills QEMU process → cleans up NBD mounts → deletes volumes with `DeleteOnTermination=true` via `volumeService.DeleteVolume()` (S3 cleanup of vol/, vol-efi/, vol-cloudinit/) → internal volumes (EFI, cloud-init) always cleaned up via `ebs.delete` NATS → volumes with `DeleteOnTermination=false` left in available state → state→terminated | 1. Terminate running instance<br>2. Terminate stopped instance<br>3. Terminate with DeleteOnTermination=true deletes volumes<br>4. Terminate with DeleteOnTermination=false preserves volumes<br>5. Terminate already-terminated (idempotent)<br>6. Internal volumes (EFI, cloud-init) always cleaned up<br>7. Invalid instance ID | **DONE** |
 | `reboot-instances` | — | `--instance-ids`, `--dry-run` | `run-instances` (instance must be running) | Gateway sends NATS to target node → daemon issues QMP `system_reset` → instance reboots without stopping | 1. Reboot running instance<br>2. Reboot stopped instance (error)<br>3. Verify instance stays in running state after reboot | **NOT STARTED** (parser test exists) |
 | `describe-instance-types` | `--filters` (capacity filter only) | `--instance-types`, `--max-results`, `--next-token`, `--dry-run`, all other filters | None | Gateway fans out NATS `ec2.DescribeInstanceTypes` to all nodes → each daemon reports supported types (t3.micro/small/medium/large) with vCPU/memory specs → gateway deduplicates and returns | 1. List all instance types<br>2. Filter by specific type<br>3. Filter with `capacity=true` shows available slots<br>4. Verify vCPU/memory specs match hardware | **DONE** |
 | `modify-instance-attribute` | — | `--instance-id`, `--instance-type`, `--user-data`, `--disable-api-termination`, `--ebs-optimized` | Instance must be stopped | Validate instance stopped → update instance metadata in NATS KV store → changes applied on next start | 1. Change instance type while stopped<br>2. Modify running instance (error)<br>3. Toggle disable-api-termination | **NOT STARTED** |
@@ -211,7 +187,7 @@ Instance `dmesg`:
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
-| `describe-volumes` | `--volume-ids` (fast-path lookup) | `--filters`, `--max-results`, `--next-token`, `--dry-run` | None | NATS `ec2.DescribeVolumes` → daemon queries viperblock for volume metadata → returns volume list with state, size, attachments, type | 1. List all volumes<br>2. Filter by volume ID<br>3. Filter by attachment state<br>4. Non-existent volume returns empty | **DONE** |
+| `describe-volumes` | `--volume-ids` (fast-path lookup), `DeleteOnTermination` (from persisted VolumeMetadata) | `--filters`, `--max-results`, `--next-token`, `--dry-run` | None | NATS `ec2.DescribeVolumes` → daemon queries viperblock for volume metadata → returns volume list with state, size, attachments, type, DeleteOnTermination flag | 1. List all volumes<br>2. Filter by volume ID<br>3. Filter by attachment state<br>4. Non-existent volume returns empty<br>5. DeleteOnTermination reflects persisted value | **DONE** |
 | `modify-volume` | `--volume-id`, `--size`, `--volume-type`, `--iops` | `--throughput`, `--dry-run`, `--multi-attach-enabled` | Volume must exist | NATS `ec2.ModifyVolume` → daemon sends resize request to viperblock → NBD does not support live resize, instance must be stopped → returns modification state | 1. Increase volume size<br>2. Modify volume type<br>3. Decrease size (error - not supported)<br>4. Modify attached volume (requires stop/start) | **DONE** |
 | `create-volume` | `--size`, `--availability-zone`, `--volume-type` (gp3 only) | `--iops`, `--encrypted`, `--snapshot-id`, `--tag-specifications` | Valid AZ configured via `hive init` | Gateway validates input → NATS `ec2.CreateVolume` → daemon generates vol-ID via viperblock → creates empty volume of specified size → persists config.json to Predastore S3 → returns vol-ID with state=available | 1. Create 80GB gp3 volume<br>2. Boundary sizes (1 GiB min, 16384 GiB max)<br>3. Invalid AZ (error)<br>4. Verify volume in describe-volumes<br>5. Unsupported volume type (error - only gp3)<br>6. Size out of range (error) | **DONE** |
 | `delete-volume` | `--volume-id` | `--dry-run` | Volume must exist and be detached (state=available) | Gateway validates vol- prefix → NATS `ec2.DeleteVolume` → daemon confirms state=available and no AttachedInstance → NATS `ebs.delete` to viperblockd (stops nbdkit/WAL) → deletes S3 objects under vol-id/, vol-id-efi/, vol-id-cloudinit/ → returns success | 1. Delete detached volume<br>2. Delete attached volume (error: VolumeInUse)<br>3. Delete non-existent volume (error: InvalidVolume.NotFound)<br>4. Verify volume gone from describe-volumes<br>5. Malformed volume ID (error: InvalidVolumeID.Malformed)<br>6. Double delete (idempotent NotFound) | **DONE** |
@@ -337,7 +313,7 @@ Currently S3 operations are handled directly by Predastore. Consider moving cont
 - Implement UEFI support for image downloads and `qemu` exec in `vm.go`
 - Confirm Alpine Linux, fails import image AMI > (run-instance) ""Failed to read block from AMI source" err="request out of range" - Block size correct?
 - Improve shutdown gracefully, `./scripts/stop-dev.sh` waits 60 seconds, while qemu/nbd could still be shutting down.
-- Add delete-volume support via EBS (s3 vol-\*) for terminated instance
+- [DONE] Add delete-volume support via EBS (s3 vol-\*) for terminated instance (DeleteOnTermination flag)
 - Add default LRU cache support for viperblock, depending on the instance type / volume size and system memory available.
 
 ## Multi-node setup

@@ -337,7 +337,7 @@ func (s *VolumeServiceImpl) getVolumeByID(volumeID string) (*ec2.Volume, error) 
 				InstanceId:          aws.String(volMeta.AttachedInstance),
 				Device:              aws.String(volMeta.DeviceName),
 				State:               aws.String(attachState),
-				DeleteOnTermination: aws.Bool(false),
+				DeleteOnTermination: aws.Bool(volMeta.DeleteOnTermination),
 				AttachTime:          aws.Time(volMeta.AttachedAt),
 			},
 		}

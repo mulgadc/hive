@@ -993,26 +993,46 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				}
 			}
 
-			// If flagged for termination (delete Volume)
-			// if deleteVolume {
-			// 	for _, ebsRequest := range instance.EBSRequests.Requests {
+			// If flagged for termination, clean up volumes
+			if deleteVolume {
+				for _, ebsRequest := range instance.EBSRequests.Requests {
+					// Internal volumes (EFI, cloud-init) are always cleaned up via ebs.delete
+					// to stop viperblockd processes. S3 data cleanup happens via DeleteVolume
+					// on the parent root volume (which deletes -efi/ and -cloudinit/ prefixes).
+					if ebsRequest.EFI || ebsRequest.CloudInit {
+						ebsDeleteData, err := json.Marshal(config.EBSDeleteRequest{Volume: ebsRequest.Name})
+						if err != nil {
+							slog.Error("Failed to marshal ebs.delete request for internal volume", "name", ebsRequest.Name, "err", err)
+							continue
+						}
+						deleteMsg, err := d.natsConn.Request("ebs.delete", ebsDeleteData, 30*time.Second)
+						if err != nil {
+							slog.Warn("Failed to send ebs.delete for internal volume", "name", ebsRequest.Name, "id", instance.ID, "err", err)
+						} else {
+							slog.Info("Sent ebs.delete for internal volume", "name", ebsRequest.Name, "id", instance.ID, "data", string(deleteMsg.Data))
+						}
+						continue
+					}
 
-			// 		// Send the volume payload as JSON
-			// 		ebsDeleteRequest, err := json.Marshal(ebsRequest)
+					// User-visible volumes: respect DeleteOnTermination flag
+					if !ebsRequest.DeleteOnTermination {
+						slog.Info("Volume has DeleteOnTermination=false, skipping deletion", "name", ebsRequest.Name, "id", instance.ID)
+						continue
+					}
 
-			// 		if err != nil {
-			// 			slog.Error("Failed to marshal volume payload", "err", err)
-			// 			continue
-			// 		}
-
-			// 		msg, err := d.natsConn.Request("ebs.delete", ebsDeleteRequest, 30*time.Second)
-			// 		if err != nil {
-			// 			slog.Error("Failed to delete volume", "name", ebsRequest.Name, "id", instance.ID, "err", err)
-			// 		} else {
-			// 			slog.Info("Deleted Viperblock volume", "id", instance.ID, "data", string(msg.Data))
-			// 		}
-			// 	}
-			// }
+					// DeleteVolume handles: NATS ebs.delete notification + S3 cleanup
+					// (including -efi/ and -cloudinit/ sub-prefixes)
+					slog.Info("Deleting volume with DeleteOnTermination=true", "name", ebsRequest.Name, "id", instance.ID)
+					_, err := d.volumeService.DeleteVolume(&ec2.DeleteVolumeInput{
+						VolumeId: &ebsRequest.Name,
+					})
+					if err != nil {
+						slog.Error("Failed to delete volume on termination", "name", ebsRequest.Name, "id", instance.ID, "err", err)
+					} else {
+						slog.Info("Deleted volume on termination", "name", ebsRequest.Name, "id", instance.ID)
+					}
+				}
+			}
 
 			// Deallocate resources
 			instanceType := d.resourceMgr.instanceTypes[instance.InstanceType]

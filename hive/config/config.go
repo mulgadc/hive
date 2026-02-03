@@ -90,12 +90,13 @@ type EBSRequests struct {
 }
 
 type EBSRequest struct {
-	Name      string
-	VolType   string
-	Boot      bool
-	EFI       bool
-	CloudInit bool
-	NBDURI    string // NBD URI - socket path (nbd:unix:/path.sock) or TCP (nbd://host:port)
+	Name                string
+	VolType             string
+	Boot                bool
+	EFI                 bool
+	CloudInit           bool
+	DeleteOnTermination bool
+	NBDURI              string // NBD URI - socket path (nbd:unix:/path.sock) or TCP (nbd://host:port)
 }
 
 // NBDTransport defines the transport type for NBD connections
