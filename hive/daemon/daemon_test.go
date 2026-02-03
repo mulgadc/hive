@@ -1935,6 +1935,197 @@ func TestStopInstance_NoDelete_OnStop(t *testing.T) {
 	assert.Empty(t, ebsDeletedVolumes, "No volumes should be deleted during stop (not terminate)")
 }
 
+// TestNextAvailableDevice tests the device name auto-assignment logic
+func TestNextAvailableDevice(t *testing.T) {
+	t.Run("EmptyInstance_ReturnsFirstDevice", func(t *testing.T) {
+		instance := &vm.VM{
+			ID:       "i-test",
+			Instance: &ec2.Instance{},
+		}
+		dev := nextAvailableDevice(instance)
+		assert.Equal(t, "/dev/sdf", dev)
+	})
+
+	t.Run("WithExistingBlockDeviceMappings", func(t *testing.T) {
+		instance := &vm.VM{
+			ID: "i-test",
+			Instance: &ec2.Instance{
+				BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{
+					{DeviceName: aws.String("/dev/sdf")},
+					{DeviceName: aws.String("/dev/sdg")},
+				},
+			},
+		}
+		dev := nextAvailableDevice(instance)
+		assert.Equal(t, "/dev/sdh", dev)
+	})
+
+	t.Run("WithExistingEBSRequests", func(t *testing.T) {
+		instance := &vm.VM{
+			ID:       "i-test",
+			Instance: &ec2.Instance{},
+			EBSRequests: config.EBSRequests{
+				Requests: []config.EBSRequest{
+					{Name: "vol-1", DeviceName: "/dev/sdf"},
+				},
+			},
+		}
+		dev := nextAvailableDevice(instance)
+		assert.Equal(t, "/dev/sdg", dev)
+	})
+
+	t.Run("AllDevicesUsed_ReturnsEmpty", func(t *testing.T) {
+		bdms := make([]*ec2.InstanceBlockDeviceMapping, 0)
+		for c := 'f'; c <= 'p'; c++ {
+			dev := fmt.Sprintf("/dev/sd%c", c)
+			bdms = append(bdms, &ec2.InstanceBlockDeviceMapping{
+				DeviceName: aws.String(dev),
+			})
+		}
+		instance := &vm.VM{
+			ID: "i-test",
+			Instance: &ec2.Instance{
+				BlockDeviceMappings: bdms,
+			},
+		}
+		dev := nextAvailableDevice(instance)
+		assert.Equal(t, "", dev)
+	})
+
+	t.Run("NilInstance_ReturnsFirstDevice", func(t *testing.T) {
+		instance := &vm.VM{
+			ID: "i-test",
+		}
+		dev := nextAvailableDevice(instance)
+		assert.Equal(t, "/dev/sdf", dev)
+	})
+
+	t.Run("MixedSources_SkipsAll", func(t *testing.T) {
+		instance := &vm.VM{
+			ID: "i-test",
+			Instance: &ec2.Instance{
+				BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{
+					{DeviceName: aws.String("/dev/sdf")},
+				},
+			},
+			EBSRequests: config.EBSRequests{
+				Requests: []config.EBSRequest{
+					{Name: "vol-1", DeviceName: "/dev/sdg"},
+				},
+			},
+		}
+		dev := nextAvailableDevice(instance)
+		assert.Equal(t, "/dev/sdh", dev)
+	})
+}
+
+// TestHandleEC2Events_AttachVolume tests the attach-volume handler in handleEC2Events
+func TestHandleEC2Events_AttachVolume(t *testing.T) {
+	ns, natsURL := startTestNATSServer(t)
+	defer ns.Shutdown()
+
+	daemon := createTestDaemon(t, natsURL)
+
+	instanceID := "i-test-attach"
+	volumeID := "vol-test-attach"
+	instanceType := getTestInstanceType()
+
+	// Create a running instance (no actual QMP client - will fail at QMP step)
+	instance := &vm.VM{
+		ID:           instanceID,
+		InstanceType: instanceType,
+		Status:       vm.StateRunning,
+		Instance:     &ec2.Instance{},
+		QMPClient:    &qmp.QMPClient{}, // nil encoder/decoder
+	}
+	daemon.Instances.VMS[instanceID] = instance
+
+	// Subscribe the handler to the instance's per-instance topic
+	sub, err := daemon.natsConn.QueueSubscribe(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		"hive-events",
+		daemon.handleEC2Events,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	t.Run("MissingAttachVolumeData", func(t *testing.T) {
+		command := qmp.Command{
+			ID: instanceID,
+			Attributes: qmp.Attributes{
+				AttachVolume: true,
+			},
+			// No AttachVolumeData
+		}
+		data, _ := json.Marshal(command)
+
+		resp, err := daemon.natsConn.Request(
+			fmt.Sprintf("ec2.cmd.%s", instanceID),
+			data,
+			5*time.Second,
+		)
+		require.NoError(t, err)
+
+		// Should return an error payload
+		assert.Contains(t, string(resp.Data), "InvalidParameterValue")
+	})
+
+	t.Run("InstanceNotRunning", func(t *testing.T) {
+		// Temporarily set status to stopped
+		daemon.Instances.Mu.Lock()
+		instance.Status = vm.StateStopped
+		daemon.Instances.Mu.Unlock()
+
+		command := qmp.Command{
+			ID: instanceID,
+			Attributes: qmp.Attributes{
+				AttachVolume: true,
+			},
+			AttachVolumeData: &qmp.AttachVolumeData{
+				VolumeID: volumeID,
+			},
+		}
+		data, _ := json.Marshal(command)
+
+		resp, err := daemon.natsConn.Request(
+			fmt.Sprintf("ec2.cmd.%s", instanceID),
+			data,
+			5*time.Second,
+		)
+		require.NoError(t, err)
+		assert.Contains(t, string(resp.Data), "IncorrectInstanceState")
+
+		// Restore running state
+		daemon.Instances.Mu.Lock()
+		instance.Status = vm.StateRunning
+		daemon.Instances.Mu.Unlock()
+	})
+
+	t.Run("VolumeNotFound", func(t *testing.T) {
+		// volumeService.GetVolumeConfig will fail since we have no S3 backend
+		command := qmp.Command{
+			ID: instanceID,
+			Attributes: qmp.Attributes{
+				AttachVolume: true,
+			},
+			AttachVolumeData: &qmp.AttachVolumeData{
+				VolumeID: "vol-nonexistent",
+				Device:   "/dev/sdf",
+			},
+		}
+		data, _ := json.Marshal(command)
+
+		resp, err := daemon.natsConn.Request(
+			fmt.Sprintf("ec2.cmd.%s", instanceID),
+			data,
+			5*time.Second,
+		)
+		require.NoError(t, err)
+		// Should fail at volume validation (no S3 backend)
+		assert.Contains(t, string(resp.Data), "InvalidVolume.NotFound")
+	})
+}
+
 // TestEBSRequest_JSON_Serialization verifies DeleteOnTermination survives JSON round-trip
 // (important for JetStream state persistence)
 func TestEBSRequest_JSON_Serialization(t *testing.T) {

@@ -314,6 +314,81 @@ func TestValidateErrorPayload(t *testing.T) {
 	}
 }
 
+func TestParseNBDURI(t *testing.T) {
+	tests := []struct {
+		name           string
+		uri            string
+		wantType       string
+		wantPath       string
+		wantHost       string
+		wantPort       int
+		wantErr        bool
+	}{
+		{
+			name:     "Unix socket",
+			uri:      "nbd:unix:/run/user/1000/nbd-vol-123.sock",
+			wantType: "unix",
+			wantPath: "/run/user/1000/nbd-vol-123.sock",
+		},
+		{
+			name:     "TCP address",
+			uri:      "nbd://127.0.0.1:34305",
+			wantType: "inet",
+			wantHost: "127.0.0.1",
+			wantPort: 34305,
+		},
+		{
+			name:     "TCP with hostname",
+			uri:      "nbd://storage.local:9000",
+			wantType: "inet",
+			wantHost: "storage.local",
+			wantPort: 9000,
+		},
+		{
+			name:    "Empty socket path",
+			uri:     "nbd:unix:",
+			wantErr: true,
+		},
+		{
+			name:    "Missing port in TCP",
+			uri:     "nbd://127.0.0.1",
+			wantErr: true,
+		},
+		{
+			name:    "Invalid port",
+			uri:     "nbd://127.0.0.1:notaport",
+			wantErr: true,
+		},
+		{
+			name:    "Unsupported format",
+			uri:     "http://example.com",
+			wantErr: true,
+		},
+		{
+			name:    "Empty string",
+			uri:     "",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			serverType, path, host, port, err := ParseNBDURI(tt.uri)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+			assert.Equal(t, tt.wantType, serverType)
+			assert.Equal(t, tt.wantPath, path)
+			assert.Equal(t, tt.wantHost, host)
+			assert.Equal(t, tt.wantPort, port)
+		})
+	}
+}
+
 func TestMarshalToXML(t *testing.T) {
 	type TestStruct struct {
 		Name  string `xml:"Name"`

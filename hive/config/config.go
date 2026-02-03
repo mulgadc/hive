@@ -97,6 +97,7 @@ type EBSRequest struct {
 	CloudInit           bool
 	DeleteOnTermination bool
 	NBDURI              string // NBD URI - socket path (nbd:unix:/path.sock) or TCP (nbd://host:port)
+	DeviceName          string // Device name (e.g. /dev/sdf) for hot-plugged volumes
 }
 
 // NBDTransport defines the transport type for NBD connections

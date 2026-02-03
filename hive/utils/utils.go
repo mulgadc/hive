@@ -282,6 +282,36 @@ func FormatNBDTCPURI(host string, port int) string {
 	return fmt.Sprintf("nbd://%s:%d", host, port)
 }
 
+// ParseNBDURI parses an NBD URI into its components for QMP blockdev-add.
+// Supported formats:
+//   - "nbd:unix:/path/to/socket.sock" → serverType="unix", path="/path/to/socket.sock"
+//   - "nbd://host:port"               → serverType="inet", host="host", port=<port>
+func ParseNBDURI(nbdURI string) (serverType, path, host string, port int, err error) {
+	if strings.HasPrefix(nbdURI, "nbd:unix:") {
+		path = strings.TrimPrefix(nbdURI, "nbd:unix:")
+		if path == "" {
+			return "", "", "", 0, fmt.Errorf("empty socket path in NBD URI: %s", nbdURI)
+		}
+		return "unix", path, "", 0, nil
+	}
+
+	if strings.HasPrefix(nbdURI, "nbd://") {
+		hostPort := strings.TrimPrefix(nbdURI, "nbd://")
+		colonIdx := strings.LastIndex(hostPort, ":")
+		if colonIdx < 0 {
+			return "", "", "", 0, fmt.Errorf("missing port in NBD TCP URI: %s", nbdURI)
+		}
+		host = hostPort[:colonIdx]
+		port, err = strconv.Atoi(hostPort[colonIdx+1:])
+		if err != nil {
+			return "", "", "", 0, fmt.Errorf("invalid port in NBD URI: %s", nbdURI)
+		}
+		return "inet", "", host, port, nil
+	}
+
+	return "", "", "", 0, fmt.Errorf("unsupported NBD URI format: %s", nbdURI)
+}
+
 func WritePidFile(name string, pid int) error {
 
 	// Write PID to file, check XDG, otherwise user home directory ~/hive/
