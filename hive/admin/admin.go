@@ -576,58 +576,10 @@ func SetupAWSCredentials(accessKey, secretKey, region, certPath string) error {
 	return nil
 }
 
-// predastoreMultiNodeTemplate is the text/template used by GenerateMultiNodePredastoreConfig.
-var predastoreMultiNodeTemplate = template.Must(template.New("predastore").Parse(`# Predastore S3-compatible storage configuration file in TOML format.
-# Generated for multi-node cluster
-version = "1.0"
-region = "{{.Region}}"
-
-host = "0.0.0.0"
-port = 8443
-
-debug = false
-
-[rs]
-data = 2
-parity = 1
-{{range .Nodes}}
-[[db]]
-id = {{.ID}}
-host = "{{.Host}}"
-port = 6660
-path = "distributed/db/node-{{.ID}}/"
-access_key_id = "{{$.AccessKey}}"
-secret_access_key = "{{$.SecretKey}}"
-{{- if eq .ID 1}}
-leader = true
-{{- end}}
-{{end}}
-{{- range .Nodes}}
-[[nodes]]
-id = {{.ID}}
-host = "{{.Host}}"
-port = 9991
-path = "distributed/nodes/node-{{.ID}}/"
-{{end}}
-[[buckets]]
-name = "predastore"
-region = "{{.Region}}"
-type = "distributed"
-public = false
-encryption = ""
-
-[[auth]]
-access_key_id = "{{.AccessKey}}"
-secret_access_key = "{{.SecretKey}}"
-policy = [
-  { bucket = "predastore", actions = ["s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListAllMyBuckets"] },
-]
-`))
-
 // GenerateMultiNodePredastoreConfig produces a complete predastore.toml for a
 // multi-node Predastore cluster. Each node gets its own DB entry (port 6660)
 // and shard entry (port 9991) on a distinct IP. Node ID 1 is the bootstrap leader.
-func GenerateMultiNodePredastoreConfig(nodes []PredastoreNodeConfig, accessKey, secretKey, region string) (string, error) {
+func GenerateMultiNodePredastoreConfig(templateStr string, nodes []PredastoreNodeConfig, accessKey, secretKey, region string) (string, error) {
 	if len(nodes) < 3 {
 		return "", fmt.Errorf("multi-node predastore requires at least 3 nodes, got %d", len(nodes))
 	}
@@ -639,8 +591,13 @@ func GenerateMultiNodePredastoreConfig(nodes []PredastoreNodeConfig, accessKey, 
 		Region    string
 	}{nodes, accessKey, secretKey, region}
 
+	tmpl, err := template.New("predastore-multinode").Parse(templateStr)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse predastore template: %w", err)
+	}
+
 	var b strings.Builder
-	if err := predastoreMultiNodeTemplate.Execute(&b, data); err != nil {
+	if err := tmpl.Execute(&b, data); err != nil {
 		return "", fmt.Errorf("failed to execute predastore template: %w", err)
 	}
 

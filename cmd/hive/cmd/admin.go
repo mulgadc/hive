@@ -55,6 +55,9 @@ var predastoreTomlTemplate string
 //go:embed templates/nats.conf
 var natsConfTemplate string
 
+//go:embed templates/predastore-multinode.toml
+var predastoreMultiNodeTemplate string
+
 var supportedArchs = map[string]bool{
 	"x86_64":  true,
 	"aarch64": true, // alias for arm64
@@ -592,7 +595,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		}
 
 		// Generate multi-node predastore.toml
-		predastoreContent, err := admin.GenerateMultiNodePredastoreConfig(predastoreNodes, accessKey, secretKey, region)
+		predastoreContent, err := admin.GenerateMultiNodePredastoreConfig(predastoreMultiNodeTemplate, predastoreNodes, accessKey, secretKey, region)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error generating multi-node predastore config: %v\n", err)
 			os.Exit(1)
