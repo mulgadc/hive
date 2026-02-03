@@ -57,6 +57,7 @@ type PredastoreConfig struct {
 	AccessKey string `mapstructure:"accesskey"`
 	SecretKey string `mapstructure:"secretkey"`
 	BaseDir   string `mapstructure:"base_dir"`
+	NodeID    int    `mapstructure:"node_id"`
 }
 
 // DaemonConfig holds the daemon configuration
@@ -188,6 +189,8 @@ type NodeJoinResponse struct {
 	// CA distribution for per-node certificate generation
 	CACert string `json:"ca_cert,omitempty"` // PEM-encoded CA certificate
 	CAKey  string `json:"ca_key,omitempty"`  // PEM-encoded CA private key
+	// Predastore config distribution for multi-node clusters
+	PredastoreConfig string `json:"predastore_config,omitempty"` // Full predastore.toml content
 }
 
 type NodeHealthResponse struct {

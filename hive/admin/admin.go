@@ -8,13 +8,16 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/template"
 	"time"
 
+	toml "github.com/pelletier/go-toml/v2"
 	"gopkg.in/ini.v1"
 )
 
@@ -35,6 +38,15 @@ type ConfigSettings struct {
 	// Cluster settings
 	ClusterBindIP string
 	ClusterRoutes []string
+
+	// Predastore multi-node
+	PredastoreNodeID int
+}
+
+// PredastoreNodeConfig describes a single Predastore node for multi-node config generation.
+type PredastoreNodeConfig struct {
+	ID   int
+	Host string
 }
 
 type ConfigFile struct {
@@ -562,4 +574,136 @@ func SetupAWSCredentials(accessKey, secretKey, region, certPath string) error {
 	}
 
 	return nil
+}
+
+// predastoreMultiNodeTemplate is the text/template used by GenerateMultiNodePredastoreConfig.
+var predastoreMultiNodeTemplate = template.Must(template.New("predastore").Parse(`# Predastore S3-compatible storage configuration file in TOML format.
+# Generated for multi-node cluster
+version = "1.0"
+region = "{{.Region}}"
+
+host = "0.0.0.0"
+port = 8443
+
+debug = false
+
+[rs]
+data = 2
+parity = 1
+{{range .Nodes}}
+[[db]]
+id = {{.ID}}
+host = "{{.Host}}"
+port = 6660
+path = "distributed/db/node-{{.ID}}/"
+access_key_id = "{{$.AccessKey}}"
+secret_access_key = "{{$.SecretKey}}"
+{{- if eq .ID 1}}
+leader = true
+{{- end}}
+{{end}}
+{{- range .Nodes}}
+[[nodes]]
+id = {{.ID}}
+host = "{{.Host}}"
+port = 9991
+path = "distributed/nodes/node-{{.ID}}/"
+{{end}}
+[[buckets]]
+name = "predastore"
+region = "{{.Region}}"
+type = "distributed"
+public = false
+encryption = ""
+
+[[auth]]
+access_key_id = "{{.AccessKey}}"
+secret_access_key = "{{.SecretKey}}"
+policy = [
+  { bucket = "predastore", actions = ["s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListAllMyBuckets"] },
+]
+`))
+
+// GenerateMultiNodePredastoreConfig produces a complete predastore.toml for a
+// multi-node Predastore cluster. Each node gets its own DB entry (port 6660)
+// and shard entry (port 9991) on a distinct IP. Node ID 1 is the bootstrap leader.
+func GenerateMultiNodePredastoreConfig(nodes []PredastoreNodeConfig, accessKey, secretKey, region string) (string, error) {
+	if len(nodes) < 3 {
+		return "", fmt.Errorf("multi-node predastore requires at least 3 nodes, got %d", len(nodes))
+	}
+
+	data := struct {
+		Nodes     []PredastoreNodeConfig
+		AccessKey string
+		SecretKey string
+		Region    string
+	}{nodes, accessKey, secretKey, region}
+
+	var b strings.Builder
+	if err := predastoreMultiNodeTemplate.Execute(&b, data); err != nil {
+		return "", fmt.Errorf("failed to execute predastore template: %w", err)
+	}
+
+	return b.String(), nil
+}
+
+// FindNodeIDByIP returns the node ID for the given IP in the node list,
+// or 0 if the IP is not found.
+func FindNodeIDByIP(nodes []PredastoreNodeConfig, ip string) int {
+	for _, n := range nodes {
+		if n.Host == ip {
+			return n.ID
+		}
+	}
+	return 0
+}
+
+// ParsePredastoreNodeIDFromConfig parses a predastore.toml string and returns
+// the node ID whose host matches the given IP, or 0 if not found.
+func ParsePredastoreNodeIDFromConfig(tomlContent string, ip string) int {
+	var cfg struct {
+		DB []PredastoreNodeConfig `toml:"db"`
+	}
+	if err := toml.Unmarshal([]byte(tomlContent), &cfg); err != nil {
+		slog.Warn("Failed to parse predastore.toml content", "error", err)
+		return 0
+	}
+	return FindNodeIDByIP(cfg.DB, ip)
+}
+
+// BaseConfigFiles returns the config file list shared by both init and join.
+// When includePredastore is true, the template-based predastore.toml entry is
+// appended (used when no multi-node config was generated or received).
+func BaseConfigFiles(
+	hiveTomlPath, hiveTemplate string,
+	awsgwDir, awsgwTemplate string,
+	natsDir, natsTemplate string,
+	predastoreDir, predastoreTemplate string,
+	includePredastore bool,
+) []ConfigFile {
+	configs := []ConfigFile{
+		{
+			Name:     "hive.toml",
+			Path:     hiveTomlPath,
+			Template: hiveTemplate,
+		},
+		{
+			Name:     filepath.Join(awsgwDir, "awsgw.toml"),
+			Path:     filepath.Join(awsgwDir, "awsgw.toml"),
+			Template: awsgwTemplate,
+		},
+		{
+			Name:     filepath.Join(natsDir, "nats.conf"),
+			Path:     filepath.Join(natsDir, "nats.conf"),
+			Template: natsTemplate,
+		},
+	}
+	if includePredastore {
+		configs = append(configs, ConfigFile{
+			Name:     filepath.Join(predastoreDir, "predastore.toml"),
+			Path:     filepath.Join(predastoreDir, "predastore.toml"),
+			Template: predastoreTemplate,
+		})
+	}
+	return configs
 }
