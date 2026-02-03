@@ -240,14 +240,28 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 			return
 		}
 
+		// Determine which hotplug root port to use based on device letter.
+		// /dev/sdf -> hotplug1, /dev/sdg -> hotplug2, etc.
+		hotplugBus := ""
+		if len(device) > 0 {
+			letter := device[len(device)-1]
+			if letter >= 'f' && letter <= 'p' {
+				hotplugBus = fmt.Sprintf("hotplug%d", letter-'f'+1)
+			}
+		}
+
 		// QMP device_add
+		deviceAddArgs := map[string]any{
+			"driver": "virtio-blk-pci",
+			"id":     deviceID,
+			"drive":  nodeName,
+		}
+		if hotplugBus != "" {
+			deviceAddArgs["bus"] = hotplugBus
+		}
 		deviceAddCmd := qmp.QMPCommand{
-			Execute: "device_add",
-			Arguments: map[string]any{
-				"driver": "virtio-blk-pci",
-				"id":     deviceID,
-				"drive":  nodeName,
-			},
+			Execute:   "device_add",
+			Arguments: deviceAddArgs,
 		}
 
 		_, err = d.SendQMPCommand(instance.QMPClient, deviceAddCmd, instance.ID)

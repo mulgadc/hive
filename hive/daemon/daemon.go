@@ -1302,6 +1302,14 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		Architecture: architecture,
 	}
 
+	// Add PCIe root ports for volume hotplug (Q35 requires explicit root ports).
+	// 11 ports for /dev/sd[f-p] hotplug slots, starting at chassis 1.
+	for i := 1; i <= 11; i++ {
+		instance.Config.Devices = append(instance.Config.Devices, vm.Device{
+			Value: fmt.Sprintf("pcie-root-port,id=hotplug%d,chassis=%d,slot=0", i, i),
+		})
+	}
+
 	// Loop through each volume in volumes
 	instance.EBSRequests.Mu.Lock()
 
