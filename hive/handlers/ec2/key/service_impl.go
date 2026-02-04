@@ -5,7 +5,6 @@ import (
 	"crypto/md5"  //#nosec G501 - need md5 for AWS compatibility
 	"crypto/sha1" //#nosec G505 - need sha256 for AWS compatibility
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -13,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,57 +19,45 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/handlers/ec2/objectstore"
 	"github.com/mulgadc/hive/hive/utils"
-	"golang.org/x/net/http2"
 )
 
 // KeyServiceImpl handles key pair operations with ssh-keygen and S3 storage
 type KeyServiceImpl struct {
-	config    *config.Config
-	s3Client  *s3.S3
-	accountID string // AWS account ID for S3 key storage path
+	config     *config.Config
+	store      objectstore.ObjectStore
+	bucketName string
+	accountID  string // AWS account ID for S3 key storage path
 }
 
 // NewKeyServiceImpl creates a new daemon-side key service
 func NewKeyServiceImpl(cfg *config.Config) *KeyServiceImpl {
-	// Create HTTP client with TLS verification disabled and HTTP/2 support
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true, // Skip TLS verification for self-signed certs
-			NextProtos:         []string{"h2", "http/1.1"},
-		},
-		ForceAttemptHTTP2: true,
-	}
-
-	// CRITICAL: Configure HTTP/2 support with custom TLS config
-	if err := http2.ConfigureTransport(tr); err != nil {
-		slog.Warn("Failed to configure HTTP/2", "error", err)
-	}
-
-	httpClient := &http.Client{Transport: tr}
-
-	// Create AWS SDK S3 client configured for Predastore endpoint
-	sess := session.Must(session.NewSession(&aws.Config{
-		Endpoint:         aws.String(cfg.Predastore.Host),
-		Region:           aws.String(cfg.Predastore.Region),
-		Credentials:      credentials.NewStaticCredentials(cfg.Predastore.AccessKey, cfg.Predastore.SecretKey, ""),
-		S3ForcePathStyle: aws.Bool(true), // Required for S3-compatible endpoints
-		HTTPClient:       httpClient,
-	}))
-
-	s3Client := s3.New(sess)
+	store := objectstore.NewS3ObjectStoreFromConfig(
+		cfg.Predastore.Host,
+		cfg.Predastore.Region,
+		cfg.Predastore.AccessKey,
+		cfg.Predastore.SecretKey,
+	)
 
 	return &KeyServiceImpl{
-		config:    cfg,
-		s3Client:  s3Client,
-		accountID: "123456789", // TODO: Implement proper account ID management
+		config:     cfg,
+		store:      store,
+		bucketName: cfg.Predastore.Bucket,
+		accountID:  "123456789", // TODO: Implement proper account ID management
+	}
+}
+
+// NewKeyServiceImplWithStore creates a key service with a custom object store (for testing)
+func NewKeyServiceImplWithStore(store objectstore.ObjectStore, bucketName, accountID string) *KeyServiceImpl {
+	return &KeyServiceImpl{
+		store:      store,
+		bucketName: bucketName,
+		accountID:  accountID,
 	}
 }
 
@@ -92,8 +78,8 @@ func (s *KeyServiceImpl) CreateKeyPair(input *ec2.CreateKeyPairInput) (*ec2.Crea
 
 	// Check if key already exists in S3
 	keyPath := fmt.Sprintf("keys/%s/%s", s.accountID, keyName)
-	_, err := s.s3Client.GetObject(&s3.GetObjectInput{
-		Bucket: aws.String(s.config.Predastore.Bucket),
+	_, err := s.store.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(keyPath),
 	})
 
@@ -167,8 +153,8 @@ func (s *KeyServiceImpl) CreateKeyPair(input *ec2.CreateKeyPairInput) (*ec2.Crea
 	}
 
 	// Upload public key to S3
-	_, err = s.s3Client.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String(s.config.Predastore.Bucket),
+	_, err = s.store.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(keyPath),
 		Body:   bytes.NewReader(publicKeyData),
 	})
@@ -195,8 +181,8 @@ func (s *KeyServiceImpl) CreateKeyPair(input *ec2.CreateKeyPairInput) (*ec2.Crea
 	if err != nil {
 		slog.Error("Failed to store key pair metadata", "err", err, "keyPairId", keyPairID)
 		// Try to cleanup the public key we just uploaded
-		s.s3Client.DeleteObject(&s3.DeleteObjectInput{
-			Bucket: aws.String(s.config.Predastore.Bucket),
+		s.store.DeleteObject(&s3.DeleteObjectInput{
+			Bucket: aws.String(s.bucketName),
 			Key:    aws.String(keyPath),
 		})
 		return nil, errors.New(awserrors.ErrorServerInternal)
@@ -266,8 +252,8 @@ func (s *KeyServiceImpl) storeKeyPairMetadata(keyPairID string, metadata *ec2.Cr
 	}
 
 	// Upload metadata to S3
-	_, err = s.s3Client.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String(s.config.Predastore.Bucket),
+	_, err = s.store.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(metadataPath),
 		Body:   bytes.NewReader(jsonData),
 	})
@@ -283,12 +269,12 @@ func (s *KeyServiceImpl) getKeyNameFromKeyPairId(keyPairID string) (string, erro
 	metadataPath := fmt.Sprintf("keys/%s/%s.json", s.accountID, keyPairID)
 
 	// Get metadata from S3
-	result, err := s.s3Client.GetObject(&s3.GetObjectInput{
-		Bucket: aws.String(s.config.Predastore.Bucket),
+	result, err := s.store.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(metadataPath),
 	})
 	if err != nil {
-		if aerr, ok := err.(awserr.Error); ok && (aerr.Code() == s3.ErrCodeNoSuchKey || aerr.Code() == "NotFound") {
+		if objectstore.IsNoSuchKeyError(err) {
 			return "", errors.New(awserrors.ErrorInvalidKeyPairNotFound)
 		}
 		slog.Error("Failed to get key pair metadata", "keyPairId", keyPairID, "err", err)
@@ -322,8 +308,8 @@ func (s *KeyServiceImpl) findKeyPairIdFromKeyName(keyName string) (string, error
 	prefix := fmt.Sprintf("keys/%s/", s.accountID)
 
 	// List all objects with the keys prefix
-	result, err := s.s3Client.ListObjectsV2(&s3.ListObjectsV2Input{
-		Bucket: aws.String(s.config.Predastore.Bucket),
+	result, err := s.store.ListObjects(&s3.ListObjectsInput{
+		Bucket: aws.String(s.bucketName),
 		Prefix: aws.String(prefix),
 	})
 	if err != nil {
@@ -344,9 +330,8 @@ func (s *KeyServiceImpl) findKeyPairIdFromKeyName(keyName string) (string, error
 
 		// Get the metadata file
 		// TODO: Have a more elegant solution, temporary until we have a proper key/value DB
-		// Note: obj.Key already contains the full path from ListObjectsV2
-		getResult, err := s.s3Client.GetObject(&s3.GetObjectInput{
-			Bucket: aws.String(s.config.Predastore.Bucket),
+		getResult, err := s.store.GetObject(&s3.GetObjectInput{
+			Bucket: aws.String(s.bucketName),
 			Key:    obj.Key,
 		})
 		if err != nil {
@@ -429,8 +414,8 @@ func (s *KeyServiceImpl) DeleteKeyPair(input *ec2.DeleteKeyPairInput) (*ec2.Dele
 
 	// Delete public key
 	publicKeyPath := fmt.Sprintf("keys/%s/%s", s.accountID, keyName)
-	_, err = s.s3Client.DeleteObject(&s3.DeleteObjectInput{
-		Bucket: aws.String(s.config.Predastore.Bucket),
+	_, err = s.store.DeleteObject(&s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(publicKeyPath),
 	})
 	if err != nil {
@@ -440,8 +425,8 @@ func (s *KeyServiceImpl) DeleteKeyPair(input *ec2.DeleteKeyPairInput) (*ec2.Dele
 
 	// Delete metadata file (stored with keyPairID)
 	metadataPath := fmt.Sprintf("keys/%s/%s.json", s.accountID, keyPairID)
-	_, err = s.s3Client.DeleteObject(&s3.DeleteObjectInput{
-		Bucket: aws.String(s.config.Predastore.Bucket),
+	_, err = s.store.DeleteObject(&s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(metadataPath),
 	})
 	if err != nil {
@@ -465,8 +450,8 @@ func (s *KeyServiceImpl) DescribeKeyPairs(input *ec2.DescribeKeyPairsInput) (*ec
 	prefix := fmt.Sprintf("keys/%s/", s.accountID)
 
 	// List all objects with the keys prefix
-	result, err := s.s3Client.ListObjectsV2(&s3.ListObjectsV2Input{
-		Bucket: aws.String(s.config.Predastore.Bucket),
+	result, err := s.store.ListObjects(&s3.ListObjectsInput{
+		Bucket: aws.String(s.bucketName),
 		Prefix: aws.String(prefix),
 	})
 	if err != nil {
@@ -488,9 +473,8 @@ func (s *KeyServiceImpl) DescribeKeyPairs(input *ec2.DescribeKeyPairsInput) (*ec
 		}
 
 		// Get the metadata file
-		// Note: obj.Key already contains the full path from ListObjectsV2
-		getResult, err := s.s3Client.GetObject(&s3.GetObjectInput{
-			Bucket: aws.String(s.config.Predastore.Bucket),
+		getResult, err := s.store.GetObject(&s3.GetObjectInput{
+			Bucket: aws.String(s.bucketName),
 			Key:    obj.Key,
 		})
 		if err != nil {
@@ -593,8 +577,8 @@ func (s *KeyServiceImpl) ImportKeyPair(input *ec2.ImportKeyPairInput) (*ec2.Impo
 
 	// Check if key already exists in S3
 	keyPath := fmt.Sprintf("keys/%s/%s", s.accountID, keyName)
-	_, err := s.s3Client.GetObject(&s3.GetObjectInput{
-		Bucket: aws.String(s.config.Predastore.Bucket),
+	_, err := s.store.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(keyPath),
 	})
 
@@ -639,8 +623,8 @@ func (s *KeyServiceImpl) ImportKeyPair(input *ec2.ImportKeyPairInput) (*ec2.Impo
 	}
 
 	// Upload public key to S3
-	_, err = s.s3Client.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String(s.config.Predastore.Bucket),
+	_, err = s.store.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(keyPath),
 		Body:   bytes.NewReader(publicKeyData),
 	})
@@ -671,8 +655,8 @@ func (s *KeyServiceImpl) ImportKeyPair(input *ec2.ImportKeyPairInput) (*ec2.Impo
 	if err != nil {
 		slog.Error("Failed to store key pair metadata", "err", err, "keyPairId", keyPairID)
 		// Try to cleanup the public key we just uploaded
-		s.s3Client.DeleteObject(&s3.DeleteObjectInput{
-			Bucket: aws.String(s.config.Predastore.Bucket),
+		s.store.DeleteObject(&s3.DeleteObjectInput{
+			Bucket: aws.String(s.bucketName),
 			Key:    aws.String(keyPath),
 		})
 		return nil, errors.New(awserrors.ErrorServerInternal)

@@ -1,67 +1,53 @@
 package handlers_ec2_image
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
-	"net/http"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/handlers/ec2/objectstore"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
-	"golang.org/x/net/http2"
 )
 
 // ImageServiceImpl handles AMI image operations with S3 storage
 type ImageServiceImpl struct {
-	config    *config.Config
-	s3Client  *s3.S3
-	accountID string // AWS account ID for S3 key storage path
+	config     *config.Config
+	store      objectstore.ObjectStore
+	bucketName string
+	accountID  string // AWS account ID for S3 key storage path
 }
 
 // NewImageServiceImpl creates a new daemon-side image service
 func NewImageServiceImpl(cfg *config.Config) *ImageServiceImpl {
-	// Create HTTP client with TLS verification disabled and HTTP/2 support
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true, // Skip TLS verification for self-signed certs
-			NextProtos:         []string{"h2", "http/1.1"},
-		},
-		ForceAttemptHTTP2: true,
-	}
-
-	// CRITICAL: Configure HTTP/2 support with custom TLS config
-	if err := http2.ConfigureTransport(tr); err != nil {
-		slog.Warn("Failed to configure HTTP/2", "error", err)
-	}
-
-	httpClient := &http.Client{Transport: tr}
-
-	// Create AWS SDK S3 client configured for Predastore endpoint
-	sess := session.Must(session.NewSession(&aws.Config{
-		Endpoint:         aws.String(cfg.Predastore.Host),
-		Region:           aws.String(cfg.Predastore.Region),
-		Credentials:      credentials.NewStaticCredentials(cfg.Predastore.AccessKey, cfg.Predastore.SecretKey, ""),
-		S3ForcePathStyle: aws.Bool(true), // Required for S3-compatible endpoints
-		HTTPClient:       httpClient,
-	}))
-
-	s3Client := s3.New(sess)
+	store := objectstore.NewS3ObjectStoreFromConfig(
+		cfg.Predastore.Host,
+		cfg.Predastore.Region,
+		cfg.Predastore.AccessKey,
+		cfg.Predastore.SecretKey,
+	)
 
 	return &ImageServiceImpl{
-		config:    cfg,
-		s3Client:  s3Client,
-		accountID: "123456789", // TODO: Implement proper account ID management
+		config:     cfg,
+		store:      store,
+		bucketName: cfg.Predastore.Bucket,
+		accountID:  "123456789", // TODO: Implement proper account ID management
+	}
+}
+
+// NewImageServiceImplWithStore creates an image service with a custom object store (for testing)
+func NewImageServiceImplWithStore(store objectstore.ObjectStore, bucketName, accountID string) *ImageServiceImpl {
+	return &ImageServiceImpl{
+		store:      store,
+		bucketName: bucketName,
+		accountID:  accountID,
 	}
 }
 
@@ -74,8 +60,8 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput) (*ec2.
 	slog.Info("Describing images", "filters", input.Filters, "imageIds", input.ImageIds)
 
 	// List all prefixes in the bucket (AMIs are stored as ami-<id>/ directories)
-	result, err := s.s3Client.ListObjects(&s3.ListObjectsInput{
-		Bucket:    aws.String(s.config.Predastore.Bucket),
+	result, err := s.store.ListObjects(&s3.ListObjectsInput{
+		Bucket:    aws.String(s.bucketName),
 		Delimiter: aws.String("/"),
 	})
 
@@ -104,12 +90,12 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput) (*ec2.
 		configKey := prefixStr + "config.json"
 
 		// Get the config.json file
-		getResult, err := s.s3Client.GetObject(&s3.GetObjectInput{
-			Bucket: aws.String(s.config.Predastore.Bucket),
+		getResult, err := s.store.GetObject(&s3.GetObjectInput{
+			Bucket: aws.String(s.bucketName),
 			Key:    aws.String(configKey),
 		})
 		if err != nil {
-			if aerr, ok := err.(awserr.Error); ok && (aerr.Code() == s3.ErrCodeNoSuchKey || aerr.Code() == "NotFound") {
+			if objectstore.IsNoSuchKeyError(err) {
 				slog.Debug("Config file not found", "key", configKey)
 			} else {
 				slog.Debug("Failed to get config file", "key", configKey, "err", err)

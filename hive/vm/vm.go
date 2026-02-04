@@ -54,6 +54,12 @@ type VM struct {
 	Reservation *ec2.Reservation `json:"reservation,omitempty"`
 	// Instance contains the current instance state and metadata
 	Instance *ec2.Instance `json:"instance,omitempty"`
+
+	// User data for cloud-init (decoded from base64)
+	UserData string `json:"user_data,omitempty"`
+
+	// Metadata server address (e.g., "127.0.0.1:12345") for EC2 metadata service
+	MetadataServerAddress string `json:"metadata_server_address,omitempty"`
 }
 
 type Instances struct {
