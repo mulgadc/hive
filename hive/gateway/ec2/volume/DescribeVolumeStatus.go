@@ -10,20 +10,37 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// DescribeVolumeStatus handles the DescribeVolumeStatus API call
-func DescribeVolumeStatus(input *ec2.DescribeVolumeStatusInput, natsConn *nats.Conn) (ec2.DescribeVolumeStatusOutput, error) {
+// ValidateDescribeVolumeStatusInput validates the input parameters
+func ValidateDescribeVolumeStatusInput(input *ec2.DescribeVolumeStatusInput) error {
+	if input == nil {
+		return nil
+	}
+
 	// Validate VolumeId format if provided
 	for _, volumeId := range input.VolumeIds {
 		if volumeId != nil && !strings.HasPrefix(*volumeId, "vol-") {
-			return ec2.DescribeVolumeStatusOutput{}, errors.New(awserrors.ErrorInvalidVolumeIDMalformed)
+			return errors.New(awserrors.ErrorInvalidVolumeIDMalformed)
 		}
+	}
+
+	return nil
+}
+
+// DescribeVolumeStatus handles the DescribeVolumeStatus API call
+func DescribeVolumeStatus(input *ec2.DescribeVolumeStatusInput, natsConn *nats.Conn) (ec2.DescribeVolumeStatusOutput, error) {
+	var output ec2.DescribeVolumeStatusOutput
+
+	err := ValidateDescribeVolumeStatusInput(input)
+	if err != nil {
+		return output, err
 	}
 
 	volumeService := handlers_ec2_volume.NewNATSVolumeService(natsConn)
 	result, err := volumeService.DescribeVolumeStatus(input)
 	if err != nil {
-		return ec2.DescribeVolumeStatusOutput{}, err
+		return output, err
 	}
 
-	return *result, nil
+	output = *result
+	return output, nil
 }
