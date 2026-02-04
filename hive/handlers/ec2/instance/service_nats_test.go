@@ -178,46 +178,6 @@ func TestNATSInstanceService_RunInstances_DaemonError(t *testing.T) {
 	assert.Equal(t, "InvalidInstanceType", err.Error(), "Error should be the AWS error code")
 }
 
-// TestNATSInstanceService_RunInstances_Timeout tests timeout handling
-/*
-func TestNATSInstanceService_RunInstances_Timeout(t *testing.T) {
-	if os.Getenv("LOG_IGNORE") != "" {
-		t.Setenv("LOG_IGNORE", "1")
-	}
-
-	ns, natsURL := startTestNATSServer(t)
-	defer ns.Shutdown()
-
-	nc, err := nats.Connect(natsURL)
-	require.NoError(t, err)
-	defer nc.Close()
-
-	// Create mock daemon that never responds (simulates timeout)
-	_, err = nc.QueueSubscribe("ec2.RunInstances", "hive-workers", func(msg *nats.Msg) {
-		// Don't respond - simulate timeout
-		time.Sleep(35 * time.Second)
-	})
-	require.NoError(t, err)
-
-	service := NewNATSInstanceService(nc)
-	input := createValidRunInstancesInput()
-
-	// Call RunInstances
-	start := time.Now()
-	reservation, err := service.RunInstances(input)
-	duration := time.Since(start)
-
-	// Verify timeout behavior
-	require.Error(t, err, "Should timeout after 30 seconds")
-	assert.Nil(t, reservation, "Reservation should be nil on timeout")
-	assert.Contains(t, err.Error(), "NATS request failed", "Error should indicate NATS failure")
-
-	// Verify timeout happened around 30 seconds (with some tolerance)
-	assert.GreaterOrEqual(t, duration.Seconds(), 29.0, "Should wait at least 29 seconds")
-	assert.LessOrEqual(t, duration.Seconds(), 32.0, "Should timeout within 32 seconds")
-}
-*/
-
 // TestNATSInstanceService_RunInstances_NoSubscriber tests behavior when no daemon is subscribed
 func TestNATSInstanceService_RunInstances_NoSubscriber(t *testing.T) {
 	if os.Getenv("LOG_IGNORE") != "" {

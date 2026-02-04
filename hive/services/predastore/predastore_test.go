@@ -110,42 +110,6 @@ func TestServiceMethods(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestServiceShutdown tests that Shutdown calls Stop. Can't test, given it will exit the process and tests will fail.
-/*
-func TestServiceShutdown(t *testing.T) {
-	cfg := &Config{
-		ConfigPath: "/tmp/test-config.toml",
-		Port:       8443,
-	}
-
-	svc, err := New(cfg)
-	assert.NoError(t, err)
-
-	// Shutdown should call Stop internally
-	// Since we can't actually start the service, we just verify it doesn't panic
-	err = svc.Shutdown()
-	// Will error because no PID file exists, which is expected
-	assert.Error(t, err)
-}
-
-// TestServiceStop tests the Stop method
-
-func TestServiceStop(t *testing.T) {
-	cfg := &Config{
-		ConfigPath: "/tmp/test-config.toml",
-		Port:       8443,
-	}
-
-	svc, err := New(cfg)
-	assert.NoError(t, err)
-
-	// Stop should try to read PID file and stop the process
-	err = svc.Stop()
-	// Will error because no PID file exists, which is expected in tests
-	assert.Error(t, err)
-}
-*/
-
 // TestServiceNameConstant tests the serviceName constant
 func TestServiceNameConstant(t *testing.T) {
 	assert.Equal(t, "predastore", serviceName)

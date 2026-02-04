@@ -110,23 +110,6 @@ var AvailableImages = map[string]Images{
 		Starred:      true,
 	},
 
-	/*
-		"local-debian-12-arm64": {
-			Name:         "local-debian-12-arm64",
-			Description:  "Debian 12 (Bookworm) arm64 cloud image (generic cloud)",
-			Distro:       "debian",
-			Version:      "12",
-			Arch:         "arm64",
-			Platform:     "Linux/UNIX",
-			CreatedAt:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
-			URL:          "http://192.168.64.1:8000/debian-12-generic-amd64.tar.xz",
-			Checksum:     "http://192.168.64.1:8000/SHA512SUMS",
-			ChecksumType: "sha512",
-			BootMode:     "uefi",
-			Starred:      true,
-		},
-	*/
-
 	// Ubuntu
 	"ubuntu-24.04-x86_64": {
 		//Ubuntu 24.04 LTS (Noble Numbat)
