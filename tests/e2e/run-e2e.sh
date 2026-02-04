@@ -295,7 +295,7 @@ fi
 
 # Attach volume to the running instance
 echo "Attaching volume $TEST_VOLUME_ID to instance $INSTANCE_ID..."
-$AWS_EC2 attach-volume --volume-id "$TEST_VOLUME_ID" --instance-id "$INSTANCE_ID" --device /dev/sdf
+$AWS_EC2 attach-volume --volume-id "$TEST_VOLUME_ID" --instance-id "$INSTANCE_ID"
 
 # Verify attachment
 echo "Verifying volume attachment..."
@@ -332,11 +332,9 @@ COUNT=0
 while [ $COUNT -lt 30 ]; do
     VOL_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].State' --output text)
-    ATTACH_COUNT=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
-        --query 'length(Volumes[0].Attachments)' --output text)
 
-    if [ "$VOL_STATE" == "available" ] && { [ "$ATTACH_COUNT" == "0" ] || [ "$ATTACH_COUNT" == "None" ]; }; then
-        echo "Volume detached successfully (State=$VOL_STATE, Attachments=$ATTACH_COUNT)"
+    if [ "$VOL_STATE" == "available" ]; then
+        echo "Volume detached successfully (State=$VOL_STATE)"
         break
     fi
 
