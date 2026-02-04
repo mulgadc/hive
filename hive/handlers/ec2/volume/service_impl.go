@@ -276,23 +276,17 @@ func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatus
 	}, nil
 }
 
-// getVolumeStatusByID builds a VolumeStatusItem from a volume's config
+// getVolumeStatusByID builds a VolumeStatusItem by reusing getVolumeByID
+// to validate the volume exists, then returning static health status.
 func (s *VolumeServiceImpl) getVolumeStatusByID(volumeID string) (*ec2.VolumeStatusItem, error) {
-	cfg, err := s.GetVolumeConfig(volumeID)
+	vol, err := s.getVolumeByID(volumeID)
 	if err != nil {
 		return nil, err
 	}
 
-	volMeta := cfg.VolumeMetadata
-
-	if volMeta.VolumeID == "" {
-		slog.Debug("Volume ID is empty in config", "key", volumeID+"/config.json")
-		return nil, errors.New("volume ID is empty")
-	}
-
 	return &ec2.VolumeStatusItem{
-		VolumeId:         aws.String(volMeta.VolumeID),
-		AvailabilityZone: aws.String(volMeta.AvailabilityZone),
+		VolumeId:         vol.VolumeId,
+		AvailabilityZone: vol.AvailabilityZone,
 		VolumeStatus: &ec2.VolumeStatusInfo{
 			Status: aws.String("ok"),
 			Details: []*ec2.VolumeStatusDetails{
