@@ -7,110 +7,11 @@ import (
 	"log/slog"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/handlers/ec2/image"
+	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
-/*
-Sample JSON:
-
-    "RegisterImage":{
-      "name":"RegisterImage",
-      "http":{
-        "method":"POST",
-        "requestUri":"/"
-      },
-      "input":{"shape":"RegisterImageRequest"},
-      "output":{"shape":"RegisterImageResult"}
-    },
-
-    "RegisterImageRequest":{
-      "type":"structure",
-      "required":["Name"],
-      "members":{
-        "ImageLocation":{"shape":"String"},
-        "Architecture":{
-          "shape":"ArchitectureValues",
-          "locationName":"architecture"
-        },
-        "BlockDeviceMappings":{
-          "shape":"BlockDeviceMappingRequestList",
-          "locationName":"BlockDeviceMapping"
-        },
-        "Description":{
-          "shape":"String",
-          "locationName":"description"
-        },
-        "DryRun":{
-          "shape":"Boolean",
-          "locationName":"dryRun"
-        },
-        "EnaSupport":{
-          "shape":"Boolean",
-          "locationName":"enaSupport"
-        },
-        "KernelId":{
-          "shape":"KernelId",
-          "locationName":"kernelId"
-        },
-        "Name":{
-          "shape":"String",
-          "locationName":"name"
-        },
-        "BillingProducts":{
-          "shape":"BillingProductList",
-          "locationName":"BillingProduct"
-        },
-        "RamdiskId":{
-          "shape":"RamdiskId",
-          "locationName":"ramdiskId"
-        },
-        "RootDeviceName":{
-          "shape":"String",
-          "locationName":"rootDeviceName"
-        },
-        "SriovNetSupport":{
-          "shape":"String",
-          "locationName":"sriovNetSupport"
-        },
-        "VirtualizationType":{
-          "shape":"String",
-          "locationName":"virtualizationType"
-        },
-        "BootMode":{
-          "shape":"BootModeValues",
-          "locationName":"bootMode"
-        },
-        "TpmSupport":{
-          "shape":"TpmSupportValues"
-        },
-        "UefiData":{"shape":"StringType"},
-        "ImdsSupport":{
-          "shape":"ImdsSupportValues"
-        },
-        "TagSpecifications":{
-          "shape":"TagSpecificationList",
-          "locationName":"TagSpecification"
-        }
-      }
-    },
-
-    "RegisterImageResult":{
-      "type":"structure",
-      "members":{
-        "ImageId":{
-          "shape":"ImageId",
-          "locationName":"imageId"
-        }
-      }
-    }
-*/
-
 func ValidateRegisterImageInput(input *ec2.RegisterImageInput) (err error) {
-
-	// Check required args from JSON above
-	// required:["Name"]
-
 	if input == nil {
 		return errors.New("MissingParameter")
 	}

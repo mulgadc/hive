@@ -8,66 +8,11 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/handlers/ec2/image"
+	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
-/*
-Sample JSON:
-
-    "ModifyImageAttribute":{
-      "name":"ModifyImageAttribute",
-      "http":{
-        "method":"POST",
-        "requestUri":"/"
-      },
-      "input":{"shape":"ModifyImageAttributeRequest"}
-    },
-
-    "ModifyImageAttributeRequest":{
-      "type":"structure",
-      "required":["ImageId"],
-      "members":{
-        "Attribute":{"shape":"String"},
-        "Description":{"shape":"AttributeValue"},
-        "ImageId":{"shape":"ImageId"},
-        "LaunchPermission":{"shape":"LaunchPermissionModifications"},
-        "OperationType":{"shape":"OperationType"},
-        "ProductCodes":{
-          "shape":"ProductCodeStringList",
-          "locationName":"ProductCode"
-        },
-        "UserGroups":{
-          "shape":"UserGroupStringList",
-          "locationName":"UserGroup"
-        },
-        "UserIds":{
-          "shape":"UserIdStringList",
-          "locationName":"UserId"
-        },
-        "Value":{"shape":"String"},
-        "DryRun":{
-          "shape":"Boolean",
-          "locationName":"dryRun"
-        },
-        "OrganizationArns":{
-          "shape":"OrganizationArnStringList",
-          "locationName":"OrganizationArn"
-        },
-        "OrganizationalUnitArns":{
-          "shape":"OrganizationalUnitArnStringList",
-          "locationName":"OrganizationalUnitArn"
-        },
-        "ImdsSupport":{"shape":"AttributeValue"}
-      }
-    }
-*/
-
 func ValidateModifyImageAttributeInput(input *ec2.ModifyImageAttributeInput) (err error) {
-
-	// Check required args from JSON above
-	// required:["ImageId"]
-
 	if input == nil {
 		return errors.New("MissingParameter")
 	}

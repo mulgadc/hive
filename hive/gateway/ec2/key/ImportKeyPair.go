@@ -8,54 +8,7 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-/*
-Sample JSON:
-
-    "ImportKeyPair":{
-      "name":"ImportKeyPair",
-      "http":{
-        "method":"POST",
-        "requestUri":"/"
-      },
-      "input":{"shape":"ImportKeyPairRequest"},
-      "output":{"shape":"ImportKeyPairResult"}
-    },
-
-    "ImportKeyPairRequest":{
-      "type":"structure",
-      "required":[
-        "KeyName",
-        "PublicKeyMaterial"
-      ],
-      "members":{
-        "DryRun":{
-          "shape":"Boolean",
-          "locationName":"dryRun"
-        },
-        "KeyName":{
-          "shape":"String",
-          "locationName":"keyName"
-        },
-        "PublicKeyMaterial":{
-          "shape":"Blob",
-          "locationName":"publicKeyMaterial"
-        },
-        "TagSpecifications":{
-          "shape":"TagSpecificationList",
-          "locationName":"TagSpecification"
-        }
-      }
-    }
-*/
-
 func ValidateImportKeyPairInput(input *ec2.ImportKeyPairInput) (err error) {
-
-	// Check required args from JSON above
-	// required:[
-	//   "KeyName",
-	//   "PublicKeyMaterial"
-	// ]
-
 	if input == nil {
 		return errors.New("MissingParameter")
 	}

@@ -5,55 +5,11 @@ import (
 	"log/slog"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/handlers/ec2/key"
+	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
 	"github.com/nats-io/nats.go"
 )
 
-/*
-Sample JSON:
-
-    "DeleteKeyPair":{
-      "name":"DeleteKeyPair",
-      "http":{
-        "method":"POST",
-        "requestUri":"/"
-      },
-      "input":{"shape":"DeleteKeyPairRequest"},
-      "output":{"shape":"DeleteKeyPairResult"}
-    },
-
-    "DeleteKeyPairRequest":{
-      "type":"structure",
-      "members":{
-        "KeyName":{"shape":"KeyPairName"},
-        "KeyPairId":{"shape":"KeyPairId"},
-        "DryRun":{
-          "shape":"Boolean",
-          "locationName":"dryRun"
-        }
-      }
-    },
-
-    "DeleteKeyPairResult":{
-      "type":"structure",
-      "members":{
-        "Return":{
-          "shape":"Boolean",
-          "locationName":"return"
-        },
-        "KeyPairId":{
-          "shape":"String",
-          "locationName":"keyPairId"
-        }
-      }
-    }
-*/
-
 func ValidateDeleteKeyPairInput(input *ec2.DeleteKeyPairInput) (err error) {
-
-	// Check required args from JSON above
-	// Note: Either KeyName or KeyPairId must be provided
-
 	if input == nil {
 		return errors.New("MissingParameter")
 	}

@@ -8,80 +8,11 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/handlers/ec2/image"
+	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
-/*
-Sample JSON:
-
-    "CreateImage":{
-      "name":"CreateImage",
-      "http":{
-        "method":"POST",
-        "requestUri":"/"
-      },
-      "input":{"shape":"CreateImageRequest"},
-      "output":{"shape":"CreateImageResult"}
-    },
-
-    "CreateImageRequest":{
-      "type":"structure",
-      "required":[
-        "InstanceId",
-        "Name"
-      ],
-      "members":{
-        "BlockDeviceMappings":{
-          "shape":"BlockDeviceMappingRequestList",
-          "locationName":"blockDeviceMapping"
-        },
-        "Description":{
-          "shape":"String",
-          "locationName":"description"
-        },
-        "DryRun":{
-          "shape":"Boolean",
-          "locationName":"dryRun"
-        },
-        "InstanceId":{
-          "shape":"InstanceId",
-          "locationName":"instanceId"
-        },
-        "Name":{
-          "shape":"String",
-          "locationName":"name"
-        },
-        "NoReboot":{
-          "shape":"Boolean",
-          "locationName":"noReboot"
-        },
-        "TagSpecifications":{
-          "shape":"TagSpecificationList",
-          "locationName":"TagSpecification"
-        }
-      }
-    },
-
-    "CreateImageResult":{
-      "type":"structure",
-      "members":{
-        "ImageId":{
-          "shape":"ImageId",
-          "locationName":"imageId"
-        }
-      }
-    }
-*/
-
 func ValidateCreateImageInput(input *ec2.CreateImageInput) (err error) {
-
-	// Check required args from JSON above
-	// required:[
-	//   "InstanceId",
-	//   "Name"
-	// ]
-
 	if input == nil {
 		return errors.New("MissingParameter")
 	}

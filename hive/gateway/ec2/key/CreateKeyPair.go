@@ -5,47 +5,11 @@ import (
 	"log/slog"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/handlers/ec2/key"
+	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
 	"github.com/nats-io/nats.go"
 )
 
-/*
-Sample JSON:
-
-    "CreateKeyPair":{
-      "name":"CreateKeyPair",
-      "http":{
-        "method":"POST",
-        "requestUri":"/"
-      },
-      "input":{"shape":"CreateKeyPairRequest"},
-      "output":{"shape":"KeyPair"}
-    },
-
-    "CreateKeyPairRequest":{
-      "type":"structure",
-      "required":["KeyName"],
-      "members":{
-        "KeyName":{"shape":"String"},
-        "DryRun":{
-          "shape":"Boolean",
-          "locationName":"dryRun"
-        },
-        "KeyType":{"shape":"KeyType"},
-        "TagSpecifications":{
-          "shape":"TagSpecificationList",
-          "locationName":"TagSpecification"
-        },
-        "KeyFormat":{"shape":"KeyFormat"}
-      }
-    }
-*/
-
 func ValidateCreateKeyPairInput(input *ec2.CreateKeyPairInput) (err error) {
-
-	// Check required args from JSON above
-	// required:["KeyName"]
-
 	if input == nil {
 		return errors.New("MissingParameter")
 	}

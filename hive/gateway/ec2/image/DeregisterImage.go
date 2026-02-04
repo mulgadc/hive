@@ -8,40 +8,11 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/handlers/ec2/image"
+	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
-/*
-Sample JSON:
-
-    "DeregisterImage":{
-      "name":"DeregisterImage",
-      "http":{
-        "method":"POST",
-        "requestUri":"/"
-      },
-      "input":{"shape":"DeregisterImageRequest"}
-    },
-
-    "DeregisterImageRequest":{
-      "type":"structure",
-      "required":["ImageId"],
-      "members":{
-        "ImageId":{"shape":"ImageId"},
-        "DryRun":{
-          "shape":"Boolean",
-          "locationName":"dryRun"
-        }
-      }
-    }
-*/
-
 func ValidateDeregisterImageInput(input *ec2.DeregisterImageInput) (err error) {
-
-	// Check required args from JSON above
-	// required:["ImageId"]
-
 	if input == nil {
 		return errors.New("MissingParameter")
 	}

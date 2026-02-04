@@ -8,77 +8,11 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/handlers/ec2/image"
+	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
-/*
-Sample JSON:
-
-    "CopyImage":{
-      "name":"CopyImage",
-      "http":{
-        "method":"POST",
-        "requestUri":"/"
-      },
-      "input":{"shape":"CopyImageRequest"},
-      "output":{"shape":"CopyImageResult"}
-    },
-
-    "CopyImageRequest":{
-      "type":"structure",
-      "required":[
-        "Name",
-        "SourceImageId",
-        "SourceRegion"
-      ],
-      "members":{
-        "ClientToken":{"shape":"String"},
-        "Description":{"shape":"String"},
-        "Encrypted":{
-          "shape":"Boolean",
-          "locationName":"encrypted"
-        },
-        "KmsKeyId":{
-          "shape":"KmsKeyId",
-          "locationName":"kmsKeyId"
-        },
-        "Name":{"shape":"String"},
-        "SourceImageId":{"shape":"String"},
-        "SourceRegion":{"shape":"String"},
-        "DestinationOutpostArn":{"shape":"String"},
-        "DryRun":{
-          "shape":"Boolean",
-          "locationName":"dryRun"
-        },
-        "CopyImageTags":{"shape":"Boolean"},
-        "TagSpecifications":{
-          "shape":"TagSpecificationList",
-          "locationName":"TagSpecification"
-        }
-      }
-    },
-
-    "CopyImageResult":{
-      "type":"structure",
-      "members":{
-        "ImageId":{
-          "shape":"ImageId",
-          "locationName":"imageId"
-        }
-      }
-    }
-*/
-
 func ValidateCopyImageInput(input *ec2.CopyImageInput) (err error) {
-
-	// Check required args from JSON above
-	// required:[
-	//   "Name",
-	//   "SourceImageId",
-	//   "SourceRegion"
-	// ]
-
 	if input == nil {
 		return errors.New("MissingParameter")
 	}

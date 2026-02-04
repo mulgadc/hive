@@ -8,80 +8,11 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/handlers/ec2/image"
+	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
-/*
-Sample JSON:
-
-    "DescribeImageAttribute":{
-      "name":"DescribeImageAttribute",
-      "http":{
-        "method":"POST",
-        "requestUri":"/"
-      },
-      "input":{"shape":"DescribeImageAttributeRequest"},
-      "output":{"shape":"ImageAttribute"}
-    },
-
-    "DescribeImageAttributeRequest":{
-      "type":"structure",
-      "required":[
-        "Attribute",
-        "ImageId"
-      ],
-      "members":{
-        "Attribute":{"shape":"ImageAttributeName"},
-        "ImageId":{"shape":"ImageId"},
-        "DryRun":{
-          "shape":"Boolean",
-          "locationName":"dryRun"
-        }
-      }
-    },
-
-    "ImageAttribute":{
-      "type":"structure",
-      "members":{
-        "BlockDeviceMappings":{
-          "shape":"BlockDeviceMappingList",
-          "locationName":"blockDeviceMapping"
-        },
-        "ImageId":{
-          "shape":"ImageId",
-          "locationName":"imageId"
-        },
-        "LaunchPermissions":{
-          "shape":"LaunchPermissionList",
-          "locationName":"launchPermission"
-        },
-        "ProductCodes":{
-          "shape":"ProductCodeList",
-          "locationName":"productCodes"
-        },
-        "Description":{"shape":"AttributeValue"},
-        "KernelId":{"shape":"AttributeValue"},
-        "RamdiskId":{"shape":"AttributeValue"},
-        "SriovNetSupport":{"shape":"AttributeValue"},
-        "BootMode":{"shape":"AttributeValue"},
-        "TpmSupport":{"shape":"AttributeValue"},
-        "UefiData":{"shape":"AttributeValue"},
-        "LastLaunchedTime":{"shape":"AttributeValue"},
-        "ImdsSupport":{"shape":"AttributeValue"},
-        "DeregistrationProtection":{"shape":"AttributeValue"}
-      }
-    }
-*/
-
 func ValidateDescribeImageAttributeInput(input *ec2.DescribeImageAttributeInput) (err error) {
-
-	// Check required args from JSON above
-	// required:[
-	//   "Attribute",
-	//   "ImageId"
-	// ]
-
 	if input == nil {
 		return errors.New("MissingParameter")
 	}

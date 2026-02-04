@@ -8,47 +8,11 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/handlers/ec2/image"
+	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
-/*
-Sample JSON:
-
-    "ResetImageAttribute":{
-      "name":"ResetImageAttribute",
-      "http":{
-        "method":"POST",
-        "requestUri":"/"
-      },
-      "input":{"shape":"ResetImageAttributeRequest"}
-    },
-
-    "ResetImageAttributeRequest":{
-      "type":"structure",
-      "required":[
-        "Attribute",
-        "ImageId"
-      ],
-      "members":{
-        "Attribute":{"shape":"ResetImageAttributeName"},
-        "ImageId":{"shape":"ImageId"},
-        "DryRun":{
-          "shape":"Boolean",
-          "locationName":"dryRun"
-        }
-      }
-    }
-*/
-
 func ValidateResetImageAttributeInput(input *ec2.ResetImageAttributeInput) (err error) {
-
-	// Check required args from JSON above
-	// required:[
-	//   "Attribute",
-	//   "ImageId"
-	// ]
-
 	if input == nil {
 		return errors.New("MissingParameter")
 	}

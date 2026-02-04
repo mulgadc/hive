@@ -33,6 +33,7 @@
 - fix describe instances
 - [DONE] change all log into slog
 - `nbd` does not support resizing disks live. Requires instance to be stopped, boot/root volume, or attached volume will need to be resized, and instance started again. Limitation for Hive v1 using NBD, aiming to resolve with `vhost-user-blk` to create a `virtio-blk` device for extended functionality and performance.
+- Migrate to net/http + chi from fiber
 
 ### Issues to investigate
 
