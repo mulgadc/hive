@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/hive/hive/awserrors"
@@ -276,9 +275,6 @@ func (s *KeyServiceImpl) getKeyNameFromKeyPairId(keyPairID string) (string, erro
 	})
 	if err != nil {
 		if objectstore.IsNoSuchKeyError(err) {
-			return "", errors.New(awserrors.ErrorInvalidKeyPairNotFound)
-		}
-		if aerr, ok := err.(awserr.Error); ok && (aerr.Code() == s3.ErrCodeNoSuchKey || aerr.Code() == "NotFound") {
 			return "", errors.New(awserrors.ErrorInvalidKeyPairNotFound)
 		}
 		slog.Error("Failed to get key pair metadata", "keyPairId", keyPairID, "err", err)

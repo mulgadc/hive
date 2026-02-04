@@ -10,9 +10,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
@@ -93,7 +95,15 @@ func NewS3ObjectStore(client *s3.S3) *S3ObjectStore {
 }
 
 func (s *S3ObjectStore) GetObject(input *s3.GetObjectInput) (*s3.GetObjectOutput, error) {
-	return s.client.GetObject(input)
+	out, err := s.client.GetObject(input)
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok &&
+			(aerr.Code() == s3.ErrCodeNoSuchKey || aerr.Code() == "NotFound") {
+			return nil, &NoSuchKeyError{Key: aws.StringValue(input.Key)}
+		}
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *S3ObjectStore) PutObject(input *s3.PutObjectInput) (*s3.PutObjectOutput, error) {
@@ -187,7 +197,7 @@ func (m *MemoryObjectStore) ListObjects(input *s3.ListObjectsInput) (*s3.ListObj
 
 	for key, data := range m.objects {
 		// Check if key belongs to this bucket
-		if !hasPrefix(key, bucket+"/") {
+		if !strings.HasPrefix(key, bucket+"/") {
 			continue
 		}
 
@@ -195,7 +205,7 @@ func (m *MemoryObjectStore) ListObjects(input *s3.ListObjectsInput) (*s3.ListObj
 		objectKey := key[len(bucket)+1:]
 
 		// Check prefix filter
-		if prefix != "" && !hasPrefix(objectKey, prefix) {
+		if prefix != "" && !strings.HasPrefix(objectKey, prefix) {
 			continue
 		}
 
@@ -203,7 +213,7 @@ func (m *MemoryObjectStore) ListObjects(input *s3.ListObjectsInput) (*s3.ListObj
 		if delimiter != "" {
 			// Find the position after the prefix where delimiter appears
 			afterPrefix := objectKey[len(prefix):]
-			if idx := indexOf(afterPrefix, delimiter); idx >= 0 {
+			if idx := strings.Index(afterPrefix, delimiter); idx >= 0 {
 				// This object is in a "subdirectory", add to common prefixes
 				commonPrefix := objectKey[:len(prefix)+idx+len(delimiter)]
 				prefixes[commonPrefix] = true
@@ -230,21 +240,6 @@ func (m *MemoryObjectStore) ListObjects(input *s3.ListObjectsInput) (*s3.ListObj
 		CommonPrefixes: commonPrefixes,
 		Name:           input.Bucket,
 	}, nil
-}
-
-// hasPrefix checks if a string has the given prefix
-func hasPrefix(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
-}
-
-// indexOf finds the index of a substring, returning -1 if not found
-func indexOf(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
 }
 
 // Clear removes all objects from the memory store (useful for test cleanup)

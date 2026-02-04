@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/hive/hive/awserrors"
@@ -97,8 +96,6 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput) (*ec2.
 		})
 		if err != nil {
 			if objectstore.IsNoSuchKeyError(err) {
-				slog.Debug("Config file not found", "key", configKey)
-			} else if aerr, ok := err.(awserr.Error); ok && (aerr.Code() == s3.ErrCodeNoSuchKey || aerr.Code() == "NotFound") {
 				slog.Debug("Config file not found", "key", configKey)
 			} else {
 				slog.Debug("Failed to get config file", "key", configKey, "err", err)

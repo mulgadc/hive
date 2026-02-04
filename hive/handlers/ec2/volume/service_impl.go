@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/hive/hive/awserrors"
@@ -456,9 +455,6 @@ func (s *VolumeServiceImpl) GetVolumeConfig(volumeID string) (*viperblock.Volume
 		if objectstore.IsNoSuchKeyError(err) {
 			return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
 		}
-		if aerr, ok := err.(awserr.Error); ok && (aerr.Code() == s3.ErrCodeNoSuchKey || aerr.Code() == "NotFound") {
-			return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
-		}
 		return nil, fmt.Errorf("failed to get config: %w", err)
 	}
 	defer getResult.Body.Close()
@@ -509,10 +505,6 @@ func (s *VolumeServiceImpl) mergeVolumeConfig(configKey string, cfg *viperblock.
 	})
 	if err != nil {
 		if objectstore.IsNoSuchKeyError(err) {
-			// No existing config.json -- write wrapper for new volume
-			return json.Marshal(volumeConfigWrapper{VolumeConfig: *cfg})
-		}
-		if aerr, ok := err.(awserr.Error); ok && (aerr.Code() == s3.ErrCodeNoSuchKey || aerr.Code() == "NotFound") {
 			// No existing config.json -- write wrapper for new volume
 			return json.Marshal(volumeConfigWrapper{VolumeConfig: *cfg})
 		}
