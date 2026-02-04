@@ -8,4 +8,5 @@ type VolumeService interface {
 	DescribeVolumes(input *ec2.DescribeVolumesInput) (*ec2.DescribeVolumesOutput, error)
 	ModifyVolume(input *ec2.ModifyVolumeInput) (*ec2.ModifyVolumeOutput, error)
 	DeleteVolume(input *ec2.DeleteVolumeInput) (*ec2.DeleteVolumeOutput, error)
+	DescribeVolumeStatus(input *ec2.DescribeVolumeStatusInput) (*ec2.DescribeVolumeStatusOutput, error)
 }

@@ -34,40 +34,6 @@
 - [DONE] change all log into slog
 - `nbd` does not support resizing disks live. Requires instance to be stopped, boot/root volume, or attached volume will need to be resized, and instance started again. Limitation for Hive v1 using NBD, aiming to resolve with `vhost-user-blk` to create a `virtio-blk` device for extended functionality and performance.
 
-### EC2 describe-volume-status
-
-Required to track progress of new volumes created, deleted, detached or running.
-
-```sh
-aws ec2 describe-volume-status --volume-ids vol-1234567890abcdef0
-```
-
-```json
-{
-  "VolumeStatuses": [
-    {
-      "VolumeStatus": {
-        "Status": "ok",
-        "Details": [
-          {
-            "Status": "passed",
-            "Name": "io-enabled"
-          },
-          {
-            "Status": "not-applicable",
-            "Name": "io-performance"
-          }
-        ]
-      },
-      "AvailabilityZone": "us-east-1a",
-      "VolumeId": "vol-1234567890abcdef0",
-      "Actions": [],
-      "Events": []
-    }
-  ]
-}
-```
-
 ### Issues to investigate
 
 - When the host disk volume is full and a new instance is launched, disk corruption will occur within the instance since the host volume is out of space. Consider a pre-flight check, check available storage on the S3 server, local viperblock for WAL cache availability and provide improved guard rails to prevent a new instance running, if available disk space is nearing to be exceeded.
@@ -142,7 +108,7 @@ Instance `dmesg`:
 | `delete-volume` | `--volume-id` | `--dry-run` | Volume must exist and be detached (state=available) | Gateway validates vol- prefix → NATS `ec2.DeleteVolume` → daemon confirms state=available and no AttachedInstance → NATS `ebs.delete` to viperblockd (stops nbdkit/WAL) → deletes S3 objects under vol-id/, vol-id-efi/, vol-id-cloudinit/ → returns success | 1. Delete detached volume<br>2. Delete attached volume (error: VolumeInUse)<br>3. Delete non-existent volume (error: InvalidVolume.NotFound)<br>4. Verify volume gone from describe-volumes<br>5. Malformed volume ID (error: InvalidVolumeID.Malformed)<br>6. Double delete (idempotent NotFound) | **DONE** |
 | `attach-volume` | `--volume-id`, `--instance-id`, `--device` (optional, auto-assigns `/dev/sd[f-p]`) | `--dry-run` | Volume must exist (available), instance must exist (running) | Gateway sends to `ec2.cmd.{instanceId}` → daemon validates volume (Predastore) → `ebs.mount` via NATS (viperblock starts NBD server) → QMP `blockdev-add` (nbd-{volId}) → QMP `device_add` (virtio-blk-pci, vdisk-{volId}) → three-phase rollback on failure → update EBSRequests + BlockDeviceMappings → persist to JetStream + Predastore → respond with VolumeAttachment | 1. Attach volume to running instance<br>2. Auto-assign device name<br>3. Attach already-attached volume (VolumeInUse)<br>4. Attach to non-existent instance (InvalidInstanceID.NotFound)<br>5. Attach to stopped instance (IncorrectInstanceState)<br>6. Volume not found (InvalidVolume.NotFound)<br>7. All device slots full (AttachmentLimitExceeded)<br>8. Volume persists across stop/start | **DONE** |
 | `detach-volume` | `--volume-id`, `--instance-id` (optional, resolved via DescribeVolumes), `--device` (optional cross-check), `--force` | `--dry-run` | Volume must be attached, instance must be running | Gateway resolves InstanceId if omitted (via DescribeVolumes) → sends to `ec2.cmd.{instanceId}` → daemon validates (running, attached, not boot/EFI/CloudInit, device match) → three-phase hot-unplug: QMP `device_del` (force continues on failure) → QMP `blockdev-del` (abort if fails, preserves state to prevent double-attach) → `ebs.unmount` via NATS (best-effort) → remove from EBSRequests + BlockDeviceMappings → update volume metadata to available → persist state → respond with VolumeAttachment (state=detaching) | 1. Detach with explicit InstanceId<br>2. Detach without InstanceId (gateway resolution)<br>3. Detach with correct --device cross-check<br>4. Missing VolumeId (InvalidParameterValue)<br>5. Volume not attached (IncorrectState)<br>6. Nonexistent volume (InvalidVolume.NotFound)<br>7. Nonexistent instance (InvalidInstanceID.NotFound)<br>8. Instance not running (IncorrectInstanceState)<br>9. Device mismatch (InvalidParameterValue)<br>10. Boot volume protection (OperationNotPermitted)<br>11. Force flag (continues past device_del failure)<br>12. Volume reusability (re-attach after detach) | **DONE** |
-| `describe-volume-status` | — | `--volume-ids`, `--filters`, `--max-results` | None | Query viperblock for volume health status → return io-enabled status, availability zone, events | 1. Check healthy volume status<br>2. Check volume during modification<br>3. Filter by volume ID | **NOT STARTED** |
+| `describe-volume-status` | `--volume-ids` | `--filters`, `--max-results`, `--next-token`, `--dry-run` | None | Gateway validates vol- prefix → NATS `ec2.DescribeVolumeStatus` → daemon fetches VolumeConfig from Predastore S3 (parallel for specific IDs, sequential list-all for no IDs) → builds VolumeStatusItem per volume (status=ok, io-enabled=passed, io-performance=not-applicable) → returns InvalidVolume.NotFound for missing explicit IDs → skips internal sub-volumes (-efi, -cloudinit) | 1. List all volume statuses<br>2. Filter by specific volume IDs (fast path)<br>3. Non-existent volume ID returns InvalidVolume.NotFound<br>4. Invalid volume ID format (InvalidVolume.Malformed)<br>5. Internal sub-volumes excluded from listing<br>6. Nil/empty input defaults to all volumes | **DONE** |
 | `describe-volumes-modifications` | — | `--volume-ids`, `--filters`, `--max-results` | None | Query pending/completed volume modifications → return modification state, progress, original/target size | 1. Check in-progress modification<br>2. Check completed modification<br>3. No modifications returns empty | **NOT STARTED** |
 
 ### EC2 - Snapshot Management

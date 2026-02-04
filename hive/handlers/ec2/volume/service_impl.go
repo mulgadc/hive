@@ -204,38 +204,12 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput) (*e
 	}
 
 	// Slow path: list all volumes (no filter provided)
-	result, err := s.s3Client.ListObjects(&s3.ListObjectsInput{
-		Bucket:    aws.String(s.config.Predastore.Bucket),
-		Delimiter: aws.String("/"),
-	})
-
+	volumeIDs, err := s.listAllVolumeIDs()
 	if err != nil {
-		slog.Error("Failed to list S3 objects", "err", err)
-		return nil, errors.New(awserrors.ErrorServerInternal)
+		return nil, err
 	}
 
-	// Iterate over CommonPrefixes to find vol-* directories
-	for _, prefix := range result.CommonPrefixes {
-		if prefix.Prefix == nil {
-			continue
-		}
-
-		prefixStr := *prefix.Prefix
-		slog.Debug("Processing S3 prefix", "prefix", prefixStr)
-
-		// Only check prefixes that match pattern: vol-<id>/
-		if !strings.HasPrefix(prefixStr, "vol-") {
-			continue
-		}
-
-		// Extract volume ID from prefix (remove trailing slash)
-		volumeID := strings.TrimSuffix(prefixStr, "/")
-
-		// Skip internal sub-volumes (EFI and cloud-init partitions)
-		if strings.HasSuffix(volumeID, "-efi") || strings.HasSuffix(volumeID, "-cloudinit") {
-			continue
-		}
-
+	for _, volumeID := range volumeIDs {
 		vol, err := s.getVolumeByID(volumeID)
 		if err != nil {
 			slog.Error("Failed to get volume", "volumeId", volumeID, "err", err)
@@ -250,6 +224,122 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput) (*e
 	return &ec2.DescribeVolumesOutput{
 		Volumes: volumes,
 	}, nil
+}
+
+// DescribeVolumeStatus returns the status of one or more EBS volumes
+func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatusInput) (*ec2.DescribeVolumeStatusOutput, error) {
+	if input == nil {
+		input = &ec2.DescribeVolumeStatusInput{}
+	}
+
+	slog.Info("DescribeVolumeStatus", "volumeIds", input.VolumeIds)
+
+	var statusItems []*ec2.VolumeStatusItem
+
+	// Fast path: if specific volume IDs are requested, fetch them directly
+	if len(input.VolumeIds) > 0 {
+		for _, vid := range input.VolumeIds {
+			if vid == nil {
+				continue
+			}
+			item, err := s.getVolumeStatusByID(*vid)
+			if err != nil {
+				slog.Error("DescribeVolumeStatus volume not found", "volumeId", *vid, "err", err)
+				return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
+			}
+			statusItems = append(statusItems, item)
+		}
+		slog.Info("DescribeVolumeStatus completed", "count", len(statusItems))
+		return &ec2.DescribeVolumeStatusOutput{VolumeStatuses: statusItems}, nil
+	}
+
+	// Slow path: list all volumes (no filter provided)
+	volumeIDs, err := s.listAllVolumeIDs()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, volumeID := range volumeIDs {
+		item, err := s.getVolumeStatusByID(volumeID)
+		if err != nil {
+			slog.Error("Failed to get volume status", "volumeId", volumeID, "err", err)
+			continue
+		}
+
+		statusItems = append(statusItems, item)
+	}
+
+	slog.Info("DescribeVolumeStatus completed", "count", len(statusItems))
+
+	return &ec2.DescribeVolumeStatusOutput{
+		VolumeStatuses: statusItems,
+	}, nil
+}
+
+// getVolumeStatusByID builds a VolumeStatusItem by reusing getVolumeByID
+// to validate the volume exists, then returning static health status.
+func (s *VolumeServiceImpl) getVolumeStatusByID(volumeID string) (*ec2.VolumeStatusItem, error) {
+	vol, err := s.getVolumeByID(volumeID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ec2.VolumeStatusItem{
+		VolumeId:         vol.VolumeId,
+		AvailabilityZone: vol.AvailabilityZone,
+		VolumeStatus: &ec2.VolumeStatusInfo{
+			Status: aws.String("ok"),
+			Details: []*ec2.VolumeStatusDetails{
+				{
+					Name:   aws.String("io-enabled"),
+					Status: aws.String("passed"),
+				},
+				{
+					Name:   aws.String("io-performance"),
+					Status: aws.String("not-applicable"),
+				},
+			},
+		},
+		Actions: []*ec2.VolumeStatusAction{},
+		Events:  []*ec2.VolumeStatusEvent{},
+	}, nil
+}
+
+// listAllVolumeIDs lists all volume IDs from S3 by scanning bucket prefixes.
+// It filters for vol-* prefixes and skips internal sub-volumes (EFI and cloud-init).
+func (s *VolumeServiceImpl) listAllVolumeIDs() ([]string, error) {
+	result, err := s.s3Client.ListObjects(&s3.ListObjectsInput{
+		Bucket:    aws.String(s.config.Predastore.Bucket),
+		Delimiter: aws.String("/"),
+	})
+	if err != nil {
+		slog.Error("Failed to list S3 objects", "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	var volumeIDs []string
+	for _, prefix := range result.CommonPrefixes {
+		if prefix.Prefix == nil {
+			continue
+		}
+
+		prefixStr := *prefix.Prefix
+
+		if !strings.HasPrefix(prefixStr, "vol-") {
+			continue
+		}
+
+		volumeID := strings.TrimSuffix(prefixStr, "/")
+
+		// Skip internal sub-volumes (EFI and cloud-init partitions)
+		if strings.HasSuffix(volumeID, "-efi") || strings.HasSuffix(volumeID, "-cloudinit") {
+			continue
+		}
+
+		volumeIDs = append(volumeIDs, volumeID)
+	}
+
+	return volumeIDs, nil
 }
 
 // fetchVolumesByIDs fetches multiple volumes in parallel by their IDs

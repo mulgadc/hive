@@ -1080,6 +1080,40 @@ func (d *Daemon) handleEC2DescribeVolumes(msg *nats.Msg) {
 	slog.Info("handleEC2DescribeVolumes completed", "count", len(output.Volumes))
 }
 
+// handleEC2DescribeVolumeStatus processes incoming EC2 DescribeVolumeStatus requests
+func (d *Daemon) handleEC2DescribeVolumeStatus(msg *nats.Msg) {
+	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
+
+	describeVolumeStatusInput := &ec2.DescribeVolumeStatusInput{}
+	errResp := utils.UnmarshalJsonPayload(describeVolumeStatusInput, msg.Data)
+	if errResp != nil {
+		msg.Respond(errResp)
+		slog.Error("Request does not match DescribeVolumeStatusInput")
+		return
+	}
+
+	slog.Info("Processing DescribeVolumeStatus request")
+
+	output, err := d.volumeService.DescribeVolumeStatus(describeVolumeStatusInput)
+	if err != nil {
+		slog.Error("handleEC2DescribeVolumeStatus service.DescribeVolumeStatus failed", "err", err)
+		errResp = utils.GenerateErrorPayload(err.Error())
+		msg.Respond(errResp)
+		return
+	}
+
+	jsonResponse, err := json.Marshal(output)
+	if err != nil {
+		slog.Error("handleEC2DescribeVolumeStatus failed to marshal output", "err", err)
+		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+		msg.Respond(errResp)
+		return
+	}
+	msg.Respond(jsonResponse)
+
+	slog.Info("handleEC2DescribeVolumeStatus completed", "count", len(output.VolumeStatuses))
+}
+
 // handleEC2ModifyVolume processes incoming EC2 ModifyVolume requests
 func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 	slog.Debug("Received message", "subject", msg.Subject)
