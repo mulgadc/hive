@@ -450,6 +450,63 @@ func TestMarshalToXML(t *testing.T) {
 	}
 }
 
+func TestGenerateIAMXMLPayload(t *testing.T) {
+	type User struct {
+		UserName string `locationName:"UserName" type:"string"`
+		UserId   string `locationName:"UserId" type:"string"`
+	}
+
+	tests := []struct {
+		name     string
+		action   string
+		payload  any
+		validate func(t *testing.T, result any)
+	}{
+		{
+			name:   "CreateUser wrapping",
+			action: "CreateUser",
+			payload: User{
+				UserName: "testuser",
+				UserId:   "AIDA12345",
+			},
+			validate: func(t *testing.T, result any) {
+				xmlBytes, err := MarshalToXML(result)
+				assert.NoError(t, err)
+				xmlStr := string(xmlBytes)
+				assert.Contains(t, xmlStr, "CreateUserResponse")
+				assert.Contains(t, xmlStr, "CreateUserResult")
+				assert.Contains(t, xmlStr, "testuser")
+				assert.Contains(t, xmlStr, "AIDA12345")
+			},
+		},
+		{
+			name:   "ListUsers wrapping",
+			action: "ListUsers",
+			payload: User{
+				UserName: "admin",
+				UserId:   "AIDA99999",
+			},
+			validate: func(t *testing.T, result any) {
+				xmlBytes, err := MarshalToXML(result)
+				assert.NoError(t, err)
+				xmlStr := string(xmlBytes)
+				assert.Contains(t, xmlStr, "ListUsersResponse")
+				assert.Contains(t, xmlStr, "ListUsersResult")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := GenerateIAMXMLPayload(tt.action, tt.payload)
+			assert.NotNil(t, result)
+			if tt.validate != nil {
+				tt.validate(t, result)
+			}
+		})
+	}
+}
+
 func TestKillProcess(t *testing.T) {
 	// Create a test process
 	cmd := exec.Command("sleep", "60")

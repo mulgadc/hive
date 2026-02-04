@@ -483,6 +483,36 @@ func GenerateXMLPayload(locationName string, payload any) any {
 	return v.Interface()
 }
 
+// GenerateIAMXMLPayload wraps IAM output with proper *Result element structure.
+// IAM responses have format: <ActionResponse><ActionResult>content</ActionResult><ResponseMetadata>...</ResponseMetadata></ActionResponse>
+func GenerateIAMXMLPayload(action string, payload any) any {
+	// First wrap with ActionResult (e.g., CreateUserResult)
+	resultName := action + "Result"
+	resultWrapper := reflect.StructOf([]reflect.StructField{
+		{
+			Name: "Result",
+			Type: reflect.TypeOf(payload),
+			Tag:  reflect.StructTag(`locationName:"` + resultName + `"`),
+		},
+	})
+	resultV := reflect.New(resultWrapper).Elem()
+	resultV.Field(0).Set(reflect.ValueOf(payload))
+
+	// Then wrap with ActionResponse (e.g., CreateUserResponse)
+	responseName := action + "Response"
+	responseWrapper := reflect.StructOf([]reflect.StructField{
+		{
+			Name: "Response",
+			Type: resultWrapper,
+			Tag:  reflect.StructTag(`locationName:"` + responseName + `"`),
+		},
+	})
+	responseV := reflect.New(responseWrapper).Elem()
+	responseV.Field(0).Set(resultV)
+
+	return responseV.Interface()
+}
+
 // Generate JSON Error Payload
 func GenerateErrorPayload(code string) (jsonResponse []byte) {
 
