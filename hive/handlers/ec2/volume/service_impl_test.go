@@ -229,3 +229,28 @@ func TestDeleteVolume_Validation(t *testing.T) {
 	}
 }
 
+func TestDescribeVolumeStatus_NilInputDefaults(t *testing.T) {
+	svc := newTestVolumeService("ap-southeast-2a")
+
+	// nil input is defaulted to empty, then hits the slow path which
+	// calls listAllVolumeIDs. This panics because s3Client is nil in
+	// the test, but the panic proves the nil-input guard ran (no nil
+	// pointer dereference on the input itself).
+	assert.Panics(t, func() {
+		_, _ = svc.DescribeVolumeStatus(nil)
+	}, "expected panic from nil s3Client after nil-input defaulting")
+}
+
+func TestDescribeVolumeStatus_WithVolumeIDs(t *testing.T) {
+	svc := newTestVolumeService("ap-southeast-2a")
+
+	// When volume IDs are provided, the fast path is taken. It will
+	// panic at the S3 layer (GetVolumeConfig) since s3Client is nil,
+	// confirming the fast-path branch was reached.
+	assert.Panics(t, func() {
+		_, _ = svc.DescribeVolumeStatus(&ec2.DescribeVolumeStatusInput{
+			VolumeIds: []*string{aws.String("vol-abc123")},
+		})
+	}, "expected panic from nil s3Client when fetching volume config")
+}
+

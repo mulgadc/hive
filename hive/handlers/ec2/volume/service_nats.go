@@ -99,6 +99,32 @@ func (s *NATSVolumeService) ModifyVolume(input *ec2.ModifyVolumeInput) (*ec2.Mod
 	return &output, nil
 }
 
+// DescribeVolumeStatus sends a DescribeVolumeStatus request via NATS and waits for response
+func (s *NATSVolumeService) DescribeVolumeStatus(input *ec2.DescribeVolumeStatusInput) (*ec2.DescribeVolumeStatusOutput, error) {
+	jsonData, err := json.Marshal(input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal input: %w", err)
+	}
+
+	msg, err := s.natsConn.Request("ec2.DescribeVolumeStatus", jsonData, 30*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("NATS request failed: %w", err)
+	}
+
+	responseError, err := utils.ValidateErrorPayload(msg.Data)
+	if err != nil {
+		return nil, errors.New(*responseError.Code)
+	}
+
+	var output ec2.DescribeVolumeStatusOutput
+	err = json.Unmarshal(msg.Data, &output)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return &output, nil
+}
+
 // DeleteVolume sends a DeleteVolume request via NATS and waits for response
 func (s *NATSVolumeService) DeleteVolume(input *ec2.DeleteVolumeInput) (*ec2.DeleteVolumeOutput, error) {
 	jsonData, err := json.Marshal(input)

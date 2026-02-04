@@ -414,6 +414,28 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 			return errors.New("failed to marshal response to XML")
 		}
 
+	case "DescribeVolumeStatus":
+		var input = &ec2.DescribeVolumeStatusInput{}
+		err = awsec2query.QueryParamsToStruct(queryArgs, input)
+
+		if err != nil {
+			return err
+		}
+
+		output, err := gateway_ec2_volume.DescribeVolumeStatus(input, gw.NATSConn)
+
+		if err != nil {
+			return err
+		}
+
+		// Convert to XML
+		payload := utils.GenerateXMLPayload("DescribeVolumeStatusResponse", output)
+		xmlOutput, err = utils.MarshalToXML(payload)
+
+		if err != nil {
+			return errors.New("failed to marshal response to XML")
+		}
+
 	case "DetachVolume":
 		var input = &ec2.DetachVolumeInput{}
 		err = awsec2query.QueryParamsToStruct(queryArgs, input)
