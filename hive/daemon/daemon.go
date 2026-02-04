@@ -432,6 +432,7 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.DescribeVolumes", d.handleEC2DescribeVolumes, "hive-workers"},
 		{"ec2.ModifyVolume", d.handleEC2ModifyVolume, "hive-workers"},
 		{"ec2.DeleteVolume", d.handleEC2DeleteVolume, "hive-workers"},
+		{"ec2.DescribeVolumeStatus", d.handleEC2DescribeVolumeStatus, "hive-workers"},
 		{"ec2.DescribeInstances", d.handleEC2DescribeInstances, ""},
 		{"ec2.DescribeInstanceTypes", d.handleEC2DescribeInstanceTypes, ""},
 		{"ec2.startinstances", d.handleEC2StartInstances, "hive-workers"},

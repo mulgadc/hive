@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/awserrors"
 	handlers_ec2_volume "github.com/mulgadc/hive/hive/handlers/ec2/volume"
 	"github.com/nats-io/nats.go"
 )
@@ -19,7 +20,7 @@ func ValidateDescribeVolumeStatusInput(input *ec2.DescribeVolumeStatusInput) err
 	if input.VolumeIds != nil {
 		for _, volumeId := range input.VolumeIds {
 			if volumeId != nil && !strings.HasPrefix(*volumeId, "vol-") {
-				return errors.New("InvalidVolume.Malformed")
+				return errors.New(awserrors.ErrorInvalidVolumeIDMalformed)
 			}
 		}
 	}
