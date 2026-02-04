@@ -3,75 +3,67 @@ package handlers_ec2_volume
 import (
 	"bytes"
 	"crypto/rand"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"math/big"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/handlers/ec2/objectstore"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
 	s3backend "github.com/mulgadc/viperblock/viperblock/backends/s3"
 	"github.com/nats-io/nats.go"
-	"golang.org/x/net/http2"
 )
 
 const defaultGP3IOPS = 3000
 
 // VolumeServiceImpl handles EBS volume operations with S3 storage
 type VolumeServiceImpl struct {
-	config   *config.Config
-	s3Client *s3.S3
-	natsConn *nats.Conn
+	config     *config.Config
+	store      objectstore.ObjectStore
+	bucketName string
+	natsConn   *nats.Conn
 }
 
 // NewVolumeServiceImpl creates a new daemon-side volume service
 func NewVolumeServiceImpl(cfg *config.Config, natsConn *nats.Conn) *VolumeServiceImpl {
-	// Create HTTP client with TLS verification disabled and HTTP/2 support
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-			NextProtos:         []string{"h2", "http/1.1"},
-		},
-		ForceAttemptHTTP2: true,
-	}
-
-	// CRITICAL: Configure HTTP/2 support with custom TLS config
-	if err := http2.ConfigureTransport(tr); err != nil {
-		slog.Warn("Failed to configure HTTP/2", "error", err)
-	}
-
-	httpClient := &http.Client{Transport: tr}
-
-	// Create AWS SDK S3 client configured for Predastore endpoint
-	sess := session.Must(session.NewSession(&aws.Config{
-		Endpoint:         aws.String(cfg.Predastore.Host),
-		Region:           aws.String(cfg.Predastore.Region),
-		Credentials:      credentials.NewStaticCredentials(cfg.Predastore.AccessKey, cfg.Predastore.SecretKey, ""),
-		S3ForcePathStyle: aws.Bool(true),
-		HTTPClient:       httpClient,
-	}))
-
-	s3Client := s3.New(sess)
+	store := objectstore.NewS3ObjectStoreFromConfig(
+		cfg.Predastore.Host,
+		cfg.Predastore.Region,
+		cfg.Predastore.AccessKey,
+		cfg.Predastore.SecretKey,
+	)
 
 	return &VolumeServiceImpl{
-		config:   cfg,
-		s3Client: s3Client,
-		natsConn: natsConn,
+		config:     cfg,
+		store:      store,
+		bucketName: cfg.Predastore.Bucket,
+		natsConn:   natsConn,
+	}
+}
+
+// NewVolumeServiceImplWithStore creates a volume service with a custom ObjectStore (for testing)
+func NewVolumeServiceImplWithStore(cfg *config.Config, store objectstore.ObjectStore, natsConn *nats.Conn) *VolumeServiceImpl {
+	bucketName := ""
+	if cfg != nil {
+		bucketName = cfg.Predastore.Bucket
+	}
+	return &VolumeServiceImpl{
+		config:     cfg,
+		store:      store,
+		bucketName: bucketName,
+		natsConn:   natsConn,
 	}
 }
 
@@ -109,7 +101,7 @@ func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Vol
 	}
 
 	now := time.Now()
-	volumeID := viperblock.GenerateVolumeID("vol", fmt.Sprintf("%d-create", randomNumber), s.config.Predastore.Bucket, now.Unix())
+	volumeID := viperblock.GenerateVolumeID("vol", fmt.Sprintf("%d-create", randomNumber), s.bucketName, now.Unix())
 
 	iops := defaultGP3IOPS
 
@@ -137,7 +129,7 @@ func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Vol
 	cfg := s3backend.S3Config{
 		VolumeName: volumeID,
 		VolumeSize: volumeSizeBytes,
-		Bucket:     s.config.Predastore.Bucket,
+		Bucket:     s.bucketName,
 		Region:     s.config.Predastore.Region,
 		AccessKey:  s.config.Predastore.AccessKey,
 		SecretKey:  s.config.Predastore.SecretKey,
@@ -308,8 +300,8 @@ func (s *VolumeServiceImpl) getVolumeStatusByID(volumeID string) (*ec2.VolumeSta
 // listAllVolumeIDs lists all volume IDs from S3 by scanning bucket prefixes.
 // It filters for vol-* prefixes and skips internal sub-volumes (EFI and cloud-init).
 func (s *VolumeServiceImpl) listAllVolumeIDs() ([]string, error) {
-	result, err := s.s3Client.ListObjects(&s3.ListObjectsInput{
-		Bucket:    aws.String(s.config.Predastore.Bucket),
+	result, err := s.store.ListObjects(&s3.ListObjectsInput{
+		Bucket:    aws.String(s.bucketName),
 		Delimiter: aws.String("/"),
 	})
 	if err != nil {
@@ -456,11 +448,14 @@ type volumeConfigWrapper struct {
 func (s *VolumeServiceImpl) GetVolumeConfig(volumeID string) (*viperblock.VolumeConfig, error) {
 	configKey := volumeID + "/config.json"
 
-	getResult, err := s.s3Client.GetObject(&s3.GetObjectInput{
-		Bucket: aws.String(s.config.Predastore.Bucket),
+	getResult, err := s.store.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(configKey),
 	})
 	if err != nil {
+		if objectstore.IsNoSuchKeyError(err) {
+			return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
+		}
 		if aerr, ok := err.(awserr.Error); ok && (aerr.Code() == s3.ErrCodeNoSuchKey || aerr.Code() == "NotFound") {
 			return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
 		}
@@ -492,8 +487,8 @@ func (s *VolumeServiceImpl) putVolumeConfig(volumeID string, cfg *viperblock.Vol
 		return err
 	}
 
-	_, err = s.s3Client.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String(s.config.Predastore.Bucket),
+	_, err = s.store.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(configKey),
 		Body:   bytes.NewReader(data),
 	})
@@ -508,11 +503,15 @@ func (s *VolumeServiceImpl) putVolumeConfig(volumeID string, cfg *viperblock.Vol
 // VolumeConfig into it, preserving full VBState when present. If no existing
 // VBState is found, it returns a plain volumeConfigWrapper.
 func (s *VolumeServiceImpl) mergeVolumeConfig(configKey string, cfg *viperblock.VolumeConfig) ([]byte, error) {
-	getResult, err := s.s3Client.GetObject(&s3.GetObjectInput{
-		Bucket: aws.String(s.config.Predastore.Bucket),
+	getResult, err := s.store.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(configKey),
 	})
 	if err != nil {
+		if objectstore.IsNoSuchKeyError(err) {
+			// No existing config.json -- write wrapper for new volume
+			return json.Marshal(volumeConfigWrapper{VolumeConfig: *cfg})
+		}
 		if aerr, ok := err.(awserr.Error); ok && (aerr.Code() == s3.ErrCodeNoSuchKey || aerr.Code() == "NotFound") {
 			// No existing config.json -- write wrapper for new volume
 			return json.Marshal(volumeConfigWrapper{VolumeConfig: *cfg})
@@ -717,14 +716,14 @@ func (s *VolumeServiceImpl) DeleteVolume(input *ec2.DeleteVolumeInput) (*ec2.Del
 
 // deleteS3Prefix deletes all S3 objects under the given prefix
 func (s *VolumeServiceImpl) deleteS3Prefix(prefix string) error {
-	bucket := s.config.Predastore.Bucket
+	bucket := s.bucketName
 
-	var continuationToken *string
+	var marker *string
 	for {
-		listOutput, err := s.s3Client.ListObjectsV2(&s3.ListObjectsV2Input{
-			Bucket:            aws.String(bucket),
-			Prefix:            aws.String(prefix),
-			ContinuationToken: continuationToken,
+		listOutput, err := s.store.ListObjects(&s3.ListObjectsInput{
+			Bucket: aws.String(bucket),
+			Prefix: aws.String(prefix),
+			Marker: marker,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to list objects with prefix %s: %w", prefix, err)
@@ -735,7 +734,7 @@ func (s *VolumeServiceImpl) deleteS3Prefix(prefix string) error {
 		}
 
 		for _, obj := range listOutput.Contents {
-			_, err := s.s3Client.DeleteObject(&s3.DeleteObjectInput{
+			_, err := s.store.DeleteObject(&s3.DeleteObjectInput{
 				Bucket: aws.String(bucket),
 				Key:    obj.Key,
 			})
@@ -747,7 +746,9 @@ func (s *VolumeServiceImpl) deleteS3Prefix(prefix string) error {
 		if !aws.BoolValue(listOutput.IsTruncated) {
 			break
 		}
-		continuationToken = listOutput.NextContinuationToken
+		// Use the last key as the marker for the next page
+		lastKey := listOutput.Contents[len(listOutput.Contents)-1].Key
+		marker = lastKey
 	}
 
 	return nil

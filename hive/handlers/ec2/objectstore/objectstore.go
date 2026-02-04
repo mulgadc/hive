@@ -5,12 +5,18 @@ package objectstore
 
 import (
 	"bytes"
+	"crypto/tls"
 	"errors"
 	"io"
+	"log/slog"
+	"net/http"
 	"sync"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"golang.org/x/net/http2"
 )
 
 // NoSuchKeyError represents a missing object error, compatible with AWS S3 errors
@@ -46,6 +52,34 @@ type ObjectStore interface {
 
 	// ListObjects lists objects in a bucket
 	ListObjects(input *s3.ListObjectsInput) (*s3.ListObjectsOutput, error)
+}
+
+// NewS3ObjectStoreFromConfig creates an S3ObjectStore from Predastore connection parameters,
+// eliminating the duplicated TLS+HTTP/2+session boilerplate in each service.
+func NewS3ObjectStoreFromConfig(host, region, accessKey, secretKey string) *S3ObjectStore {
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true, // Skip TLS verification for self-signed certs
+			NextProtos:         []string{"h2", "http/1.1"},
+		},
+		ForceAttemptHTTP2: true,
+	}
+
+	if err := http2.ConfigureTransport(tr); err != nil {
+		slog.Warn("Failed to configure HTTP/2", "error", err)
+	}
+
+	httpClient := &http.Client{Transport: tr}
+
+	sess := session.Must(session.NewSession(&aws.Config{
+		Endpoint:         aws.String(host),
+		Region:           aws.String(region),
+		Credentials:      credentials.NewStaticCredentials(accessKey, secretKey, ""),
+		S3ForcePathStyle: aws.Bool(true),
+		HTTPClient:       httpClient,
+	}))
+
+	return NewS3ObjectStore(s3.New(sess))
 }
 
 // S3ObjectStore wraps the AWS S3 client to implement ObjectStore

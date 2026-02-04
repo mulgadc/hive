@@ -7,26 +7,24 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/handlers/ec2/objectstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func newTestVolumeService(az string) *VolumeServiceImpl {
-	return &VolumeServiceImpl{
-		config: &config.Config{
-			AZ: az,
-			Predastore: config.PredastoreConfig{
-				Bucket:    "test-bucket",
-				Region:    "ap-southeast-2",
-				Host:      "localhost:9000",
-				AccessKey: "testkey",
-				SecretKey: "testsecret",
-			},
-			WalDir: "/tmp/test-wal",
+	cfg := &config.Config{
+		AZ: az,
+		Predastore: config.PredastoreConfig{
+			Bucket:    "test-bucket",
+			Region:    "ap-southeast-2",
+			Host:      "localhost:9000",
+			AccessKey: "testkey",
+			SecretKey: "testsecret",
 		},
-		// s3Client is nil - tests that hit S3/viperblock will fail,
-		// which is expected for unit-level validation tests.
+		WalDir: "/tmp/test-wal",
 	}
+	return NewVolumeServiceImplWithStore(cfg, objectstore.NewMemoryObjectStore(), nil)
 }
 
 func TestCreateVolume_Validation(t *testing.T) {
@@ -233,24 +231,23 @@ func TestDescribeVolumeStatus_NilInputDefaults(t *testing.T) {
 	svc := newTestVolumeService("ap-southeast-2a")
 
 	// nil input is defaulted to empty, then hits the slow path which
-	// calls listAllVolumeIDs. This panics because s3Client is nil in
-	// the test, but the panic proves the nil-input guard ran (no nil
-	// pointer dereference on the input itself).
-	assert.Panics(t, func() {
-		_, _ = svc.DescribeVolumeStatus(nil)
-	}, "expected panic from nil s3Client after nil-input defaulting")
+	// calls listAllVolumeIDs. With an empty MemoryObjectStore, no
+	// volumes are found and an empty result is returned.
+	output, err := svc.DescribeVolumeStatus(nil)
+	require.NoError(t, err)
+	assert.Empty(t, output.VolumeStatuses)
 }
 
 func TestDescribeVolumeStatus_WithVolumeIDs(t *testing.T) {
 	svc := newTestVolumeService("ap-southeast-2a")
 
-	// When volume IDs are provided, the fast path is taken. It will
-	// panic at the S3 layer (GetVolumeConfig) since s3Client is nil,
-	// confirming the fast-path branch was reached.
-	assert.Panics(t, func() {
-		_, _ = svc.DescribeVolumeStatus(&ec2.DescribeVolumeStatusInput{
-			VolumeIds: []*string{aws.String("vol-abc123")},
-		})
-	}, "expected panic from nil s3Client when fetching volume config")
+	// When volume IDs are provided, the fast path is taken. With an
+	// empty MemoryObjectStore, the volume config is not found and an
+	// InvalidVolume.NotFound error is returned.
+	_, err := svc.DescribeVolumeStatus(&ec2.DescribeVolumeStatusInput{
+		VolumeIds: []*string{aws.String("vol-abc123")},
+	})
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidVolumeNotFound, err.Error())
 }
 
