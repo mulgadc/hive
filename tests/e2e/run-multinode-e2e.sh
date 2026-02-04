@@ -300,7 +300,7 @@ fi
 
 # Attach volume to the first running instance
 echo "  Attaching volume $TEST_VOLUME_ID to instance ${INSTANCE_IDS[0]}..."
-$AWS_EC2 attach-volume --volume-id "$TEST_VOLUME_ID" --instance-id "${INSTANCE_IDS[0]}"
+$AWS_EC2 attach-volume --volume-id "$TEST_VOLUME_ID" --instance-id "${INSTANCE_IDS[0]}" --device /dev/sdf
 
 # Verify attachment
 echo "  Verifying volume attachment..."
