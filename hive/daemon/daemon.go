@@ -314,6 +314,22 @@ func NewResourceManager() *ResourceManager {
 	}
 }
 
+// instanceTypeVCPUs returns the default vCPU count for an instance type, or 0 if unavailable.
+func instanceTypeVCPUs(it *ec2.InstanceTypeInfo) int64 {
+	if it.VCpuInfo != nil && it.VCpuInfo.DefaultVCpus != nil {
+		return *it.VCpuInfo.DefaultVCpus
+	}
+	return 0
+}
+
+// instanceTypeMemoryMiB returns the memory in MiB for an instance type, or 0 if unavailable.
+func instanceTypeMemoryMiB(it *ec2.InstanceTypeInfo) int64 {
+	if it.MemoryInfo != nil && it.MemoryInfo.SizeInMiB != nil {
+		return *it.MemoryInfo.SizeInMiB
+	}
+	return 0
+}
+
 // GetInstanceTypeInfos returns all instance types as ec2.InstanceTypeInfo for AWS API compatibility
 func (rm *ResourceManager) GetInstanceTypeInfos() []*ec2.InstanceTypeInfo {
 	rm.mu.RLock()
@@ -336,14 +352,8 @@ func (rm *ResourceManager) GetAvailableInstanceTypeInfos(showCapacity bool) []*e
 	var infos []*ec2.InstanceTypeInfo
 
 	for _, it := range rm.instanceTypes {
-		vCPUs := int64(0)
-		if it.VCpuInfo != nil && it.VCpuInfo.DefaultVCpus != nil {
-			vCPUs = *it.VCpuInfo.DefaultVCpus
-		}
-		memoryGB := float64(0)
-		if it.MemoryInfo != nil && it.MemoryInfo.SizeInMiB != nil {
-			memoryGB = float64(*it.MemoryInfo.SizeInMiB) / 1024.0
-		}
+		vCPUs := instanceTypeVCPUs(it)
+		memoryGB := float64(instanceTypeMemoryMiB(it)) / 1024.0
 
 		if vCPUs == 0 || memoryGB == 0 {
 			continue
@@ -1279,14 +1289,8 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		return fmt.Errorf("instance type %s not found", instance.InstanceType)
 	}
 
-	vCPUs := int(0)
-	if instanceType.VCpuInfo != nil && instanceType.VCpuInfo.DefaultVCpus != nil {
-		vCPUs = int(*instanceType.VCpuInfo.DefaultVCpus)
-	}
-	memoryMiB := int64(0)
-	if instanceType.MemoryInfo != nil && instanceType.MemoryInfo.SizeInMiB != nil {
-		memoryMiB = *instanceType.MemoryInfo.SizeInMiB
-	}
+	vCPUs := int(instanceTypeVCPUs(instanceType))
+	memoryMiB := instanceTypeMemoryMiB(instanceType)
 	architecture := "x86_64"
 	if instanceType.ProcessorInfo != nil && len(instanceType.ProcessorInfo.SupportedArchitectures) > 0 && instanceType.ProcessorInfo.SupportedArchitectures[0] != nil {
 		architecture = *instanceType.ProcessorInfo.SupportedArchitectures[0]
@@ -1678,14 +1682,8 @@ func (rm *ResourceManager) canAllocate(instanceType *ec2.InstanceTypeInfo, count
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
-	vCPUs := int64(0)
-	if instanceType.VCpuInfo != nil && instanceType.VCpuInfo.DefaultVCpus != nil {
-		vCPUs = *instanceType.VCpuInfo.DefaultVCpus
-	}
-	memoryGB := float64(0)
-	if instanceType.MemoryInfo != nil && instanceType.MemoryInfo.SizeInMiB != nil {
-		memoryGB = float64(*instanceType.MemoryInfo.SizeInMiB) / 1024.0
-	}
+	vCPUs := instanceTypeVCPUs(instanceType)
+	memoryGB := float64(instanceTypeMemoryMiB(instanceType)) / 1024.0
 
 	availableVCPU := rm.availableVCPU - rm.allocatedVCPU
 	availableMem := rm.availableMem - rm.allocatedMem
@@ -1734,14 +1732,8 @@ func (rm *ResourceManager) allocate(instanceType *ec2.InstanceTypeInfo) error {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	vCPUs := int64(0)
-	if instanceType.VCpuInfo != nil && instanceType.VCpuInfo.DefaultVCpus != nil {
-		vCPUs = *instanceType.VCpuInfo.DefaultVCpus
-	}
-	memoryGB := float64(0)
-	if instanceType.MemoryInfo != nil && instanceType.MemoryInfo.SizeInMiB != nil {
-		memoryGB = float64(*instanceType.MemoryInfo.SizeInMiB) / 1024.0
-	}
+	vCPUs := instanceTypeVCPUs(instanceType)
+	memoryGB := float64(instanceTypeMemoryMiB(instanceType)) / 1024.0
 
 	rm.allocatedVCPU += int(vCPUs)
 	rm.allocatedMem += memoryGB
@@ -1753,14 +1745,8 @@ func (rm *ResourceManager) deallocate(instanceType *ec2.InstanceTypeInfo) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 
-	vCPUs := int64(0)
-	if instanceType.VCpuInfo != nil && instanceType.VCpuInfo.DefaultVCpus != nil {
-		vCPUs = *instanceType.VCpuInfo.DefaultVCpus
-	}
-	memoryGB := float64(0)
-	if instanceType.MemoryInfo != nil && instanceType.MemoryInfo.SizeInMiB != nil {
-		memoryGB = float64(*instanceType.MemoryInfo.SizeInMiB) / 1024.0
-	}
+	vCPUs := instanceTypeVCPUs(instanceType)
+	memoryGB := float64(instanceTypeMemoryMiB(instanceType)) / 1024.0
 
 	rm.allocatedVCPU -= int(vCPUs)
 	rm.allocatedMem -= memoryGB
