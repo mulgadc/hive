@@ -75,9 +75,9 @@ install-system:
 		iproute2 netcat-openbsd openssh-client wget git unzip sudo xz-utils file
 
 install-go:
-	@echo "\n....Installing Go 1.25.6 for $(ARCH) ($(GO_ARCH))...."
+	@echo "\n....Installing Go 1.25.7 for $(ARCH) ($(GO_ARCH))...."
 	@if [ ! -d "/usr/local/go" ]; then \
-		curl -L https://go.dev/dl/go1.25.6.linux-$(GO_ARCH).tar.gz | tar -C /usr/local -xz; \
+		curl -L https://go.dev/dl/go1.25.7.linux-$(GO_ARCH).tar.gz | tar -C /usr/local -xz; \
 	else \
 		echo "Go already installed in /usr/local/go"; \
 	fi

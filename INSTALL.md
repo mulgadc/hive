@@ -45,7 +45,7 @@ sudo add-apt-repository universe
 sudo apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu-kvm libvirt-daemon-system libvirt-clients libvirt-dev make gcc unzip xz-utils file
 ```
 
-Ensure the Go toolkit is installed for version 1.25.6 or higher. Recommended to install the latest directly from [https://go.dev/dl/](https://go.dev/dl/).
+Ensure the Go toolkit is installed for version 1.25.7 or higher. Recommended to install the latest directly from [https://go.dev/dl/](https://go.dev/dl/).
 
 Confirm Go is correctly installed, and set in your $PATH.
 
