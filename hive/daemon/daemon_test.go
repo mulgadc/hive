@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/config"
 	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
+	"github.com/mulgadc/hive/hive/objectstore"
 	handlers_ec2_volume "github.com/mulgadc/hive/hive/handlers/ec2/volume"
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/vm"
@@ -101,7 +102,7 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 	daemon.natsConn = nc
 
 	// Initialize services (needed for handler tests)
-	daemon.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(cfg, daemon.resourceMgr.instanceTypes, nc, &daemon.Instances)
+	daemon.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(cfg, daemon.resourceMgr.instanceTypes, nc, &daemon.Instances, objectstore.NewMemoryObjectStore())
 	daemon.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(cfg, nc)
 
 	t.Cleanup(func() {

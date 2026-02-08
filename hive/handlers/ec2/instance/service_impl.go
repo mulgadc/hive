@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/big"
 	"os"
@@ -12,11 +13,13 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	awss3 "github.com/aws/aws-sdk-go/service/s3"
 	"github.com/kdomanski/iso9660"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
-	"github.com/mulgadc/hive/hive/s3client"
+	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/mulgadc/viperblock/types"
@@ -90,15 +93,17 @@ type InstanceServiceImpl struct {
 	instanceTypes map[string]*ec2.InstanceTypeInfo
 	natsConn      *nats.Conn
 	instances     *vm.Instances
+	objectStore   objectstore.ObjectStore
 }
 
 // NewInstanceServiceImpl creates a new instance service implementation for daemon use
-func NewInstanceServiceImpl(cfg *config.Config, instanceTypes map[string]*ec2.InstanceTypeInfo, nc *nats.Conn, instances *vm.Instances) *InstanceServiceImpl {
+func NewInstanceServiceImpl(cfg *config.Config, instanceTypes map[string]*ec2.InstanceTypeInfo, nc *nats.Conn, instances *vm.Instances, store objectstore.ObjectStore) *InstanceServiceImpl {
 	return &InstanceServiceImpl{
 		config:        cfg,
 		instanceTypes: instanceTypes,
 		natsConn:      nc,
 		instances:     instances,
+		objectStore:   store,
 	}
 }
 
@@ -611,29 +616,25 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 	hostname := generateHostname(instanceId)
 
 	// Retrieve SSH pubkey from S3
-	s3c := s3client.New(s3client.S3Config{
-		AccessKey: s.config.AccessKey,
-		SecretKey: s.config.SecretKey,
-		Host:      s.config.Predastore.Host,
-		Bucket:    s.config.Predastore.Bucket,
-		Region:    s.config.Predastore.Region,
-	})
-
-	err = s3c.Init()
-	if err != nil {
-		slog.Error("failed to initialize S3 client", "err", err)
-		return errors.New(awserrors.ErrorServerInternal)
-	}
-
 	keyName := ""
 	if input.KeyName != nil {
 		keyName = *input.KeyName
 	}
 
 	// TODO: Mock for account ID, replace with real account ID retrieval
-	sshKey, err := s3c.Read(fmt.Sprintf("/keys/123456789/%s", keyName))
+	keyPath := fmt.Sprintf("/keys/123456789/%s", keyName)
+	result, err := s.objectStore.GetObject(&awss3.GetObjectInput{
+		Bucket: aws.String(s.config.Predastore.Bucket),
+		Key:    aws.String(keyPath),
+	})
 	if err != nil {
 		slog.Error("failed to read SSH key", "err", err)
+		return errors.New(awserrors.ErrorServerInternal)
+	}
+
+	sshKey, err := io.ReadAll(result.Body)
+	if err != nil {
+		slog.Error("failed to read SSH key body", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 
