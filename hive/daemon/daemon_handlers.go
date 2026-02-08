@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
@@ -17,6 +16,27 @@ import (
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/nats-io/nats.go"
 )
+
+// handleNATSRequest is a generic helper for the common unmarshal → service → marshal → respond pattern.
+// used for basic requests that don't modify any daemon state, just return the result
+func handleNATSRequest[I any, O any](msg *nats.Msg, serviceFn func(*I) (*O, error)) {
+	input := new(I)
+	if errResp := utils.UnmarshalJsonPayload(input, msg.Data); errResp != nil {
+		msg.Respond(errResp)
+		return
+	}
+	output, err := serviceFn(input)
+	if err != nil {
+		msg.Respond(utils.GenerateErrorPayload(err.Error()))
+		return
+	}
+	jsonResponse, err := json.Marshal(output)
+	if err != nil {
+		msg.Respond(utils.GenerateErrorPayload(awserrors.ErrorServerInternal))
+		return
+	}
+	msg.Respond(jsonResponse)
+}
 
 func (d *Daemon) handleEC2StartInstances(msg *nats.Msg) {
 
@@ -791,327 +811,36 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	slog.Info("handleEC2RunInstances completed", "requested", launchCount, "created", len(instances), "launched", successCount)
 }
 
-// handleEC2CreateKeyPair processes incoming EC2 CreateKeyPair requests
 func (d *Daemon) handleEC2CreateKeyPair(msg *nats.Msg) {
-	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
-
-	// Initialize createKeyPairInput before unmarshaling into it
-	createKeyPairInput := &ec2.CreateKeyPairInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(createKeyPairInput, msg.Data)
-
-	if errResp != nil {
-		msg.Respond(errResp)
-		slog.Error("Request does not match CreateKeyPairInput")
-		return
-	}
-
-	slog.Info("Processing CreateKeyPair request", "keyName", *createKeyPairInput.KeyName)
-
-	// Delegate to key service for business logic (key generation, S3 storage)
-	output, err := d.keyService.CreateKeyPair(createKeyPairInput)
-
-	if err != nil {
-		slog.Error("handleEC2CreateKeyPair service.CreateKeyPair failed", "err", err)
-		errResp = utils.GenerateErrorPayload(err.Error())
-		msg.Respond(errResp)
-		return
-	}
-
-	// Respond to NATS with CreateKeyPairOutput
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2CreateKeyPair failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		return
-	}
-	msg.Respond(jsonResponse)
-
-	slog.Info("handleEC2CreateKeyPair completed", "keyName", *output.KeyName, "fingerprint", *output.KeyFingerprint)
+	handleNATSRequest(msg, d.keyService.CreateKeyPair)
 }
 
-// handleEC2DeleteKeyPair processes incoming EC2 DeleteKeyPair requests
 func (d *Daemon) handleEC2DeleteKeyPair(msg *nats.Msg) {
-	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
-
-	// Initialize deleteKeyPairInput before unmarshaling into it
-	deleteKeyPairInput := &ec2.DeleteKeyPairInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(deleteKeyPairInput, msg.Data)
-
-	if errResp != nil {
-		msg.Respond(errResp)
-		slog.Error("Request does not match DeleteKeyPairInput")
-		return
-	}
-
-	// Log which identifier was provided
-	if deleteKeyPairInput.KeyPairId != nil {
-		slog.Info("Processing DeleteKeyPair request", "keyPairId", *deleteKeyPairInput.KeyPairId)
-	} else if deleteKeyPairInput.KeyName != nil {
-		slog.Info("Processing DeleteKeyPair request", "keyName", *deleteKeyPairInput.KeyName)
-	}
-
-	// Delegate to key service for business logic (S3 deletion)
-	output, err := d.keyService.DeleteKeyPair(deleteKeyPairInput)
-
-	if err != nil {
-		slog.Error("handleEC2DeleteKeyPair service.DeleteKeyPair failed", "err", err)
-		errResp = utils.GenerateErrorPayload(err.Error())
-		msg.Respond(errResp)
-		return
-	}
-
-	// Respond to NATS with DeleteKeyPairOutput
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2DeleteKeyPair failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		return
-	}
-	msg.Respond(jsonResponse)
-
-	slog.Info("handleEC2DeleteKeyPair completed")
+	handleNATSRequest(msg, d.keyService.DeleteKeyPair)
 }
 
-// handleEC2DescribeKeyPairs processes incoming EC2 DescribeKeyPairs requests
 func (d *Daemon) handleEC2DescribeKeyPairs(msg *nats.Msg) {
-	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
-
-	// Initialize describeKeyPairsInput before unmarshaling into it
-	describeKeyPairsInput := &ec2.DescribeKeyPairsInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(describeKeyPairsInput, msg.Data)
-
-	if errResp != nil {
-		msg.Respond(errResp)
-		slog.Error("Request does not match DescribeKeyPairsInput")
-		return
-	}
-
-	slog.Info("Processing DescribeKeyPairs request")
-
-	// Delegate to key service for business logic (S3 listing)
-	output, err := d.keyService.DescribeKeyPairs(describeKeyPairsInput)
-
-	if err != nil {
-		slog.Error("handleEC2DescribeKeyPairs service.DescribeKeyPairs failed", "err", err)
-		errResp = utils.GenerateErrorPayload(err.Error())
-		msg.Respond(errResp)
-		return
-	}
-
-	// Respond to NATS with DescribeKeyPairsOutput
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2DescribeKeyPairs failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		return
-	}
-	msg.Respond(jsonResponse)
-
-	slog.Info("handleEC2DescribeKeyPairs completed", "count", len(output.KeyPairs))
+	handleNATSRequest(msg, d.keyService.DescribeKeyPairs)
 }
 
-// handleEC2ImportKeyPair processes incoming EC2 ImportKeyPair requests
 func (d *Daemon) handleEC2ImportKeyPair(msg *nats.Msg) {
-	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
-
-	// Initialize importKeyPairInput before unmarshaling into it
-	importKeyPairInput := &ec2.ImportKeyPairInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(importKeyPairInput, msg.Data)
-
-	if errResp != nil {
-		msg.Respond(errResp)
-		slog.Error("Request does not match ImportKeyPairInput")
-		return
-	}
-
-	// Log which key is being imported (avoid logging the actual key material)
-	if importKeyPairInput.KeyName != nil {
-		slog.Info("Processing ImportKeyPair request", "keyName", *importKeyPairInput.KeyName)
-	}
-
-	// Delegate to key service for business logic (key parsing, S3 storage)
-	output, err := d.keyService.ImportKeyPair(importKeyPairInput)
-
-	if err != nil {
-		slog.Error("handleEC2ImportKeyPair service.ImportKeyPair failed", "err", err)
-		errResp = utils.GenerateErrorPayload(err.Error())
-		msg.Respond(errResp)
-		return
-	}
-
-	// Respond to NATS with ImportKeyPairOutput
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2ImportKeyPair failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		return
-	}
-	msg.Respond(jsonResponse)
-
-	slog.Info("handleEC2ImportKeyPair completed", "keyName", *output.KeyName, "fingerprint", *output.KeyFingerprint)
+	handleNATSRequest(msg, d.keyService.ImportKeyPair)
 }
 
-// handleEC2DescribeImages processes incoming EC2 DescribeImages requests
 func (d *Daemon) handleEC2DescribeImages(msg *nats.Msg) {
-	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
-
-	// Initialize describeImagesInput before unmarshaling into it
-	describeImagesInput := &ec2.DescribeImagesInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(describeImagesInput, msg.Data)
-
-	if errResp != nil {
-		msg.Respond(errResp)
-		slog.Error("Request does not match DescribeImagesInput")
-		return
-	}
-
-	slog.Info("Processing DescribeImages request")
-
-	// Delegate to image service for business logic (S3 listing)
-	output, err := d.imageService.DescribeImages(describeImagesInput)
-
-	if err != nil {
-		slog.Error("handleEC2DescribeImages service.DescribeImages failed", "err", err)
-		errResp = utils.GenerateErrorPayload(err.Error())
-		msg.Respond(errResp)
-		return
-	}
-
-	// Respond to NATS with DescribeImagesOutput
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2DescribeImages failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		return
-	}
-	msg.Respond(jsonResponse)
-
-	slog.Info("handleEC2DescribeImages completed", "count", len(output.Images))
+	handleNATSRequest(msg, d.imageService.DescribeImages)
 }
 
-// handleEC2CreateVolume processes incoming EC2 CreateVolume requests
 func (d *Daemon) handleEC2CreateVolume(msg *nats.Msg) {
-	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
-
-	createVolumeInput := &ec2.CreateVolumeInput{}
-	errResp := utils.UnmarshalJsonPayload(createVolumeInput, msg.Data)
-	if errResp != nil {
-		msg.Respond(errResp)
-		slog.Error("Request does not match CreateVolumeInput")
-		return
-	}
-
-	slog.Info("Processing CreateVolume request", "size", aws.Int64Value(createVolumeInput.Size), "az", aws.StringValue(createVolumeInput.AvailabilityZone))
-
-	output, err := d.volumeService.CreateVolume(createVolumeInput)
-
-	if err != nil {
-		slog.Error("handleEC2CreateVolume service.CreateVolume failed", "err", err)
-		errResp = utils.GenerateErrorPayload(err.Error())
-		msg.Respond(errResp)
-		return
-	}
-
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2CreateVolume failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		return
-	}
-	msg.Respond(jsonResponse)
-
-	slog.Info("handleEC2CreateVolume completed", "volumeId", aws.StringValue(output.VolumeId))
+	handleNATSRequest(msg, d.volumeService.CreateVolume)
 }
 
-// handleEC2DescribeVolumes processes incoming EC2 DescribeVolumes requests
 func (d *Daemon) handleEC2DescribeVolumes(msg *nats.Msg) {
-	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
-
-	// Initialize describeVolumesInput before unmarshaling into it
-	describeVolumesInput := &ec2.DescribeVolumesInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(describeVolumesInput, msg.Data)
-
-	if errResp != nil {
-		msg.Respond(errResp)
-		slog.Error("Request does not match DescribeVolumesInput")
-		return
-	}
-
-	slog.Info("Processing DescribeVolumes request")
-
-	// Delegate to volume service for business logic (S3 listing)
-	output, err := d.volumeService.DescribeVolumes(describeVolumesInput)
-
-	if err != nil {
-		slog.Error("handleEC2DescribeVolumes service.DescribeVolumes failed", "err", err)
-		errResp = utils.GenerateErrorPayload(err.Error())
-		msg.Respond(errResp)
-		return
-	}
-
-	// Respond to NATS with DescribeVolumesOutput
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2DescribeVolumes failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		return
-	}
-	msg.Respond(jsonResponse)
-
-	slog.Info("handleEC2DescribeVolumes completed", "count", len(output.Volumes))
+	handleNATSRequest(msg, d.volumeService.DescribeVolumes)
 }
 
-// handleEC2DescribeVolumeStatus processes incoming EC2 DescribeVolumeStatus requests
 func (d *Daemon) handleEC2DescribeVolumeStatus(msg *nats.Msg) {
-	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
-
-	describeVolumeStatusInput := &ec2.DescribeVolumeStatusInput{}
-	errResp := utils.UnmarshalJsonPayload(describeVolumeStatusInput, msg.Data)
-	if errResp != nil {
-		msg.Respond(errResp)
-		slog.Error("Request does not match DescribeVolumeStatusInput")
-		return
-	}
-
-	slog.Info("Processing DescribeVolumeStatus request")
-
-	output, err := d.volumeService.DescribeVolumeStatus(describeVolumeStatusInput)
-	if err != nil {
-		slog.Error("handleEC2DescribeVolumeStatus service.DescribeVolumeStatus failed", "err", err)
-		errResp = utils.GenerateErrorPayload(err.Error())
-		msg.Respond(errResp)
-		return
-	}
-
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2DescribeVolumeStatus failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		return
-	}
-	msg.Respond(jsonResponse)
-
-	slog.Info("handleEC2DescribeVolumeStatus completed", "count", len(output.VolumeStatuses))
+	handleNATSRequest(msg, d.volumeService.DescribeVolumeStatus)
 }
 
 // handleEC2ModifyVolume processes incoming EC2 ModifyVolume requests
@@ -1167,39 +896,8 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 	slog.Info("handleEC2ModifyVolume completed", "volumeId", modifyVolumeInput.VolumeId)
 }
 
-// handleEC2DeleteVolume processes incoming EC2 DeleteVolume requests
 func (d *Daemon) handleEC2DeleteVolume(msg *nats.Msg) {
-	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
-
-	deleteVolumeInput := &ec2.DeleteVolumeInput{}
-	errResp := utils.UnmarshalJsonPayload(deleteVolumeInput, msg.Data)
-	if errResp != nil {
-		msg.Respond(errResp)
-		slog.Error("Request does not match DeleteVolumeInput")
-		return
-	}
-
-	slog.Info("Processing DeleteVolume request", "volumeId", aws.StringValue(deleteVolumeInput.VolumeId))
-
-	output, err := d.volumeService.DeleteVolume(deleteVolumeInput)
-
-	if err != nil {
-		slog.Error("handleEC2DeleteVolume service.DeleteVolume failed", "err", err)
-		errResp = utils.GenerateErrorPayload(err.Error())
-		msg.Respond(errResp)
-		return
-	}
-
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2DeleteVolume failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
-		return
-	}
-	msg.Respond(jsonResponse)
-
-	slog.Info("handleEC2DeleteVolume completed", "volumeId", aws.StringValue(deleteVolumeInput.VolumeId))
+	handleNATSRequest(msg, d.volumeService.DeleteVolume)
 }
 
 // handleEC2DescribeInstanceTypes processes incoming EC2 DescribeInstanceTypes requests
