@@ -16,503 +16,174 @@ import (
 	"github.com/mulgadc/hive/hive/utils"
 )
 
-func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
+// EC2Handler processes parsed query args and returns XML response bytes.
+type EC2Handler func(q map[string]string, gw *GatewayConfig) ([]byte, error)
 
+// ec2Response parses query args into the input struct, calls the handler,
+// and marshals the result to an XML response.
+func ec2Response(action string, q map[string]string, input any, call func() (any, error)) ([]byte, error) {
+	if err := awsec2query.QueryParamsToStruct(q, input); err != nil {
+		return nil, err
+	}
+	output, err := call()
+	if err != nil {
+		return nil, err
+	}
+	payload := utils.GenerateXMLPayload(action+"Response", output)
+	xmlOutput, err := utils.MarshalToXML(payload)
+	if err != nil {
+		return nil, errors.New("failed to marshal response to XML")
+	}
+	return xmlOutput, nil
+}
+
+var ec2Actions = map[string]EC2Handler{
+	"DescribeInstances": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.DescribeInstancesInput{}
+		return ec2Response("DescribeInstances", q, input, func() (any, error) {
+			return gateway_ec2_instance.DescribeInstances(input, gw.NATSConn, gw.DiscoverActiveNodes())
+		})
+	},
+	"RunInstances": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.RunInstancesInput{}
+		return ec2Response("RunInstances", q, input, func() (any, error) {
+			return gateway_ec2_instance.RunInstances(input, gw.NATSConn)
+		})
+	},
+	"StartInstances": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.StartInstancesInput{}
+		return ec2Response("StartInstances", q, input, func() (any, error) {
+			return gateway_ec2_instance.StartInstances(input, gw.NATSConn)
+		})
+	},
+	"StopInstances": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.StopInstancesInput{}
+		return ec2Response("StopInstances", q, input, func() (any, error) {
+			return gateway_ec2_instance.StopInstances(input, gw.NATSConn)
+		})
+	},
+	"TerminateInstances": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.TerminateInstancesInput{}
+		return ec2Response("TerminateInstances", q, input, func() (any, error) {
+			return gateway_ec2_instance.TerminateInstances(input, gw.NATSConn)
+		})
+	},
+	"DescribeInstanceTypes": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.DescribeInstanceTypesInput{}
+		return ec2Response("DescribeInstanceTypes", q, input, func() (any, error) {
+			return gateway_ec2_instance.DescribeInstanceTypes(input, gw.NATSConn, gw.ExpectedNodes)
+		})
+	},
+	"CreateKeyPair": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.CreateKeyPairInput{}
+		return ec2Response("CreateKeyPair", q, input, func() (any, error) {
+			return gateway_ec2_key.CreateKeyPair(input, gw.NATSConn)
+		})
+	},
+	"DeleteKeyPair": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.DeleteKeyPairInput{}
+		return ec2Response("DeleteKeyPair", q, input, func() (any, error) {
+			return gateway_ec2_key.DeleteKeyPair(input, gw.NATSConn)
+		})
+	},
+	"DescribeKeyPairs": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.DescribeKeyPairsInput{}
+		return ec2Response("DescribeKeyPairs", q, input, func() (any, error) {
+			return gateway_ec2_key.DescribeKeyPairs(input, gw.NATSConn)
+		})
+	},
+	"ImportKeyPair": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		// Bug in parser, end of Base64 is URL encoded
+		if strings.HasSuffix(q["PublicKeyMaterial"], "%3D%3D") {
+			q["PublicKeyMaterial"] = strings.Replace(q["PublicKeyMaterial"], "%3D%3D", "==", 1)
+		}
+		input := &ec2.ImportKeyPairInput{}
+		return ec2Response("ImportKeyPair", q, input, func() (any, error) {
+			return gateway_ec2_key.ImportKeyPair(input, gw.NATSConn)
+		})
+	},
+	"DescribeImages": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.DescribeImagesInput{}
+		return ec2Response("DescribeImages", q, input, func() (any, error) {
+			return gateway_ec2_image.DescribeImages(input, gw.NATSConn)
+		})
+	},
+	"DescribeRegions": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.DescribeRegionsInput{}
+		return ec2Response("DescribeRegions", q, input, func() (any, error) {
+			return gateway_ec2_zone.DescribeRegions(input, gw.Region)
+		})
+	},
+	"DescribeAvailabilityZones": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.DescribeAvailabilityZonesInput{}
+		return ec2Response("DescribeAvailabilityZones", q, input, func() (any, error) {
+			return gateway_ec2_zone.DescribeAvailabilityZones(input, gw.Region, gw.AZ)
+		})
+	},
+	"DescribeVolumes": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.DescribeVolumesInput{}
+		return ec2Response("DescribeVolumes", q, input, func() (any, error) {
+			return gateway_ec2_volume.DescribeVolumes(input, gw.NATSConn)
+		})
+	},
+	"ModifyVolume": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.ModifyVolumeInput{}
+		return ec2Response("ModifyVolume", q, input, func() (any, error) {
+			return gateway_ec2_volume.ModifyVolume(input, gw.NATSConn)
+		})
+	},
+	"CreateVolume": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.CreateVolumeInput{}
+		return ec2Response("CreateVolume", q, input, func() (any, error) {
+			return gateway_ec2_volume.CreateVolume(input, gw.NATSConn)
+		})
+	},
+	"DeleteVolume": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.DeleteVolumeInput{}
+		return ec2Response("DeleteVolume", q, input, func() (any, error) {
+			return gateway_ec2_volume.DeleteVolume(input, gw.NATSConn)
+		})
+	},
+	"AttachVolume": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.AttachVolumeInput{}
+		return ec2Response("AttachVolume", q, input, func() (any, error) {
+			return gateway_ec2_volume.AttachVolume(input, gw.NATSConn)
+		})
+	},
+	"DescribeVolumeStatus": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.DescribeVolumeStatusInput{}
+		return ec2Response("DescribeVolumeStatus", q, input, func() (any, error) {
+			return gateway_ec2_volume.DescribeVolumeStatus(input, gw.NATSConn)
+		})
+	},
+	"DetachVolume": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.DetachVolumeInput{}
+		return ec2Response("DetachVolume", q, input, func() (any, error) {
+			return gateway_ec2_volume.DetachVolume(input, gw.NATSConn)
+		})
+	},
+	"DescribeAccountAttributes": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := &ec2.DescribeAccountAttributesInput{}
+		return ec2Response("DescribeAccountAttributes", q, input, func() (any, error) {
+			return gateway_ec2_account.DescribeAccountAttributes(input)
+		})
+	},
+}
+
+func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 	queryArgs := ParseAWSQueryArgs(string(ctx.Body()))
 
-	var xmlOutput []byte
-	var err error
-
-	// Run the action
-	// TODO: Generate for each action, unit test each, and invalid action
-	switch queryArgs["Action"] {
-
-	case "DescribeInstances":
-		var input = &ec2.DescribeInstancesInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		// Dynamically discover active nodes instead of using static config value
-		activeNodes := gw.DiscoverActiveNodes()
-		output, err := gateway_ec2_instance.DescribeInstances(input, gw.NATSConn, activeNodes)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("DescribeInstancesResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-	case "RunInstances":
-
-		var input = &ec2.RunInstancesInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_instance.RunInstances(input, gw.NATSConn)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("RunInstancesResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	case "StartInstances":
-
-		var input = &ec2.StartInstancesInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_instance.StartInstances(input, gw.NATSConn)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("StartInstancesResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	case "StopInstances":
-
-		var input = &ec2.StopInstancesInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_instance.StopInstances(input, gw.NATSConn)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("StopInstancesResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	case "TerminateInstances":
-
-		var input = &ec2.TerminateInstancesInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_instance.TerminateInstances(input, gw.NATSConn)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("TerminateInstancesResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	case "DescribeInstanceTypes":
-		var input = &ec2.DescribeInstanceTypesInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_instance.DescribeInstanceTypes(input, gw.NATSConn, gw.ExpectedNodes)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("DescribeInstanceTypesResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	case "CreateKeyPair":
-
-		var input = &ec2.CreateKeyPairInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_key.CreateKeyPair(input, gw.NATSConn)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("CreateKeyPairResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	case "DeleteKeyPair":
-
-		var input = &ec2.DeleteKeyPairInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_key.DeleteKeyPair(input, gw.NATSConn)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("DeleteKeyPairResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	case "DescribeKeyPairs":
-
-		var input = &ec2.DescribeKeyPairsInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_key.DescribeKeyPairs(input, gw.NATSConn)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("DescribeKeyPairsResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	case "ImportKeyPair":
-
-		var input = &ec2.ImportKeyPairInput{}
-
-		// Bug in parser, end of Base64 is URL encoded
-		if strings.HasSuffix(queryArgs["PublicKeyMaterial"], "%3D%3D") {
-			queryArgs["PublicKeyMaterial"] = strings.Replace(queryArgs["PublicKeyMaterial"], "%3D%3D", "==", 1)
-		}
-
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_key.ImportKeyPair(input, gw.NATSConn)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("ImportKeyPairResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	case "DescribeImages":
-
-		var input = &ec2.DescribeImagesInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_image.DescribeImages(input, gw.NATSConn)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("DescribeImagesResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-	case "DescribeRegions":
-		var input = &ec2.DescribeRegionsInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_zone.DescribeRegions(input, gw.Region)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("DescribeRegionsResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	case "DescribeAvailabilityZones":
-		var input = &ec2.DescribeAvailabilityZonesInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_zone.DescribeAvailabilityZones(input, gw.Region, gw.AZ)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("DescribeAvailabilityZonesResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	case "DescribeVolumes":
-		var input = &ec2.DescribeVolumesInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_volume.DescribeVolumes(input, gw.NATSConn)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("DescribeVolumesResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	case "ModifyVolume":
-		var input = &ec2.ModifyVolumeInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_volume.ModifyVolume(input, gw.NATSConn)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("ModifyVolumeResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	case "CreateVolume":
-		var input = &ec2.CreateVolumeInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_volume.CreateVolume(input, gw.NATSConn)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("CreateVolumeResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	case "DeleteVolume":
-		var input = &ec2.DeleteVolumeInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_volume.DeleteVolume(input, gw.NATSConn)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("DeleteVolumeResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	case "AttachVolume":
-		var input = &ec2.AttachVolumeInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_volume.AttachVolume(input, gw.NATSConn)
-
-		if err != nil {
-			return err
-		}
-
-		payload := utils.GenerateXMLPayload("AttachVolumeResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	case "DescribeVolumeStatus":
-		var input = &ec2.DescribeVolumeStatusInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_volume.DescribeVolumeStatus(input, gw.NATSConn)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("DescribeVolumeStatusResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	case "DetachVolume":
-		var input = &ec2.DetachVolumeInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_volume.DetachVolume(input, gw.NATSConn)
-
-		if err != nil {
-			return err
-		}
-
-		payload := utils.GenerateXMLPayload("DetachVolumeResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	case "DescribeAccountAttributes":
-		var input = &ec2.DescribeAccountAttributesInput{}
-		err = awsec2query.QueryParamsToStruct(queryArgs, input)
-
-		if err != nil {
-			return err
-		}
-
-		output, err := gateway_ec2_account.DescribeAccountAttributes(input)
-
-		if err != nil {
-			return err
-		}
-
-		// Convert to XML
-		payload := utils.GenerateXMLPayload("DescribeAccountAttributesResponse", output)
-		xmlOutput, err = utils.MarshalToXML(payload)
-
-		if err != nil {
-			return errors.New("failed to marshal response to XML")
-		}
-
-	default:
-		err = errors.New("InvalidAction")
+	action := queryArgs["Action"]
+	handler, ok := ec2Actions[action]
+	if !ok {
+		return errors.New("InvalidAction")
 	}
 
-	// Return an error XML
+	xmlOutput, err := handler(queryArgs, gw)
 	if err != nil {
 		return err
 	}
 
 	ctx.Status(fiber.StatusOK).Type("text/xml").Send(xmlOutput)
-
 	return nil
-
 }
