@@ -134,8 +134,8 @@ Instance `dmesg`:
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
-| `describe-regions` | *(returns configured region from config — all input params ignored)* | `--region-names`, `--filters`, `--all-regions`, `--dry-run` | None | Return configured region from hive init config (e.g. us-east-1) → local-only response, no NATS | 1. List all regions<br>2. Filter by region name<br>3. Verify endpoint URL returned | **DONE** |
-| `describe-availability-zones` | — | `--zone-names`, `--filters`, `--all-availability-zones` | None | Return configured AZ from hive init (e.g. ap-southeast-2a) → single AZ for Hive v1 | 1. List all AZs<br>2. Filter by zone name<br>3. Verify zone state is available | **NOT STARTED** |
+| `describe-regions` | *(returns configured region, endpoint, opt-in status from config — input params ignored)* | `--region-names`, `--filters`, `--all-regions`, `--dry-run` | None | Return configured region from hive init config with Endpoint and OptInStatus → local-only response, no NATS | 1. List all regions<br>2. Filter by region name<br>3. Verify endpoint URL returned<br>4. Verify OptInStatus returned | **DONE** |
+| `describe-availability-zones` | *(returns configured AZ, region, zone ID, state, opt-in status from config — input params ignored)* | `--zone-names`, `--filters`, `--all-availability-zones` | None | Return configured AZ from hive init config with zone ID, state, group name, network border group → local-only response, no NATS | 1. List all AZs<br>2. Filter by zone name<br>3. Verify zone state is available<br>4. Verify region name matches config | **DONE** |
 
 ### EC2 - VPC Networking (Core)
 
