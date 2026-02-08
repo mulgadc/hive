@@ -1,5 +1,9 @@
 # Hive Development Roadmap
 
+## Known Bugs
+
+- **QueryParamsToStruct does not match all AWS query param key formats**: The parser tries the Go field name (e.g. `AttributeNames.1`) and the SDK `locationName` tag (e.g. `attributeName.1`), but the AWS CLI sends PascalCase singular form (e.g. `AttributeName.1`). This causes list filters like `--attribute-names` on `describe-account-attributes` to be silently ignored. Affects any SDK field where the Go name, locationName, and wire format all differ. Fix in `hive/awsec2query/parser.go`.
+
 ## Update Jan 2026
 
 ### Big rocks:
@@ -136,6 +140,12 @@ Instance `dmesg`:
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
 | `describe-regions` | *(returns configured region, endpoint, opt-in status from config — input params ignored)* | `--region-names`, `--filters`, `--all-regions`, `--dry-run` | None | Return configured region from hive init config with Endpoint and OptInStatus → local-only response, no NATS | 1. List all regions<br>2. Filter by region name<br>3. Verify endpoint URL returned<br>4. Verify OptInStatus returned | **DONE** |
 | `describe-availability-zones` | *(returns configured AZ, region, zone ID, state, opt-in status from config — input params ignored)* | `--zone-names`, `--filters`, `--all-availability-zones` | None | Return configured AZ from hive init config with zone ID, state, group name, network border group → local-only response, no NATS | 1. List all AZs<br>2. Filter by zone name<br>3. Verify zone state is available<br>4. Verify region name matches config | **DONE** |
+
+### EC2 - Account Attributes
+
+| Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------------------|---------------|---------------|-------------|------------|--------|
+| `describe-account-attributes` | *(returns all 6 hardcoded attributes — input filter parsed but not applied due to QueryParamsToStruct bug, see Known Bugs)* | `--attribute-names` (filter not working) | None | Gateway parses input → returns static account attributes: supported-platforms=VPC, default-vpc=none, max-instances=100, vpc-max-security-groups-per-interface=5, max-elastic-ips=5, vpc-max-elastic-ips=20 → local-only response, no NATS | 1. List all account attributes<br>2. Filter by attribute name (blocked by parser bug)<br>3. Verify all 6 attributes returned with correct values | **DONE** |
 
 ### EC2 - VPC Networking (Core)
 
