@@ -1,7 +1,6 @@
 package handlers_ec2_image
 
 import (
-	"bytes"
 	"encoding/json"
 	"log/slog"
 
@@ -30,12 +29,8 @@ func (h *ModifyImageAttributeHandler) Topic() string {
 func (h *ModifyImageAttributeHandler) Process(jsonData []byte) []byte {
 	var input ec2.ModifyImageAttributeInput
 
-	decoder := json.NewDecoder(bytes.NewReader(jsonData))
-	decoder.DisallowUnknownFields()
-
-	err := decoder.Decode(&input)
-	if err != nil {
-		return utils.GenerateErrorPayload(awserrors.ErrorValidationError)
+	if errPayload := utils.UnmarshalJsonPayload(&input, jsonData); errPayload != nil {
+		return errPayload
 	}
 
 	// Delegate to the service implementation

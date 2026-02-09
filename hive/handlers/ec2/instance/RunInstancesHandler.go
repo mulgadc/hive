@@ -1,10 +1,8 @@
 package handlers_ec2_instance
 
 import (
-	"bytes"
 	"encoding/json"
 	"log/slog"
-	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/awserrors"
@@ -31,38 +29,8 @@ func (h *RunInstancesHandler) Topic() string {
 func (h *RunInstancesHandler) Process(jsonData []byte) []byte {
 	var input ec2.RunInstancesInput
 
-	decoder := json.NewDecoder(bytes.NewReader(jsonData))
-	decoder.DisallowUnknownFields()
-
-	err := decoder.Decode(&input)
-	if err != nil {
-		return utils.GenerateErrorPayload(awserrors.ErrorValidationError)
-	}
-
-	// Validate required fields
-	if input.MinCount == nil {
-		return utils.GenerateErrorPayload(awserrors.ErrorMissingParameter)
-	}
-	if input.MaxCount == nil {
-		return utils.GenerateErrorPayload(awserrors.ErrorMissingParameter)
-	}
-	if *input.MinCount == 0 {
-		return utils.GenerateErrorPayload(awserrors.ErrorInvalidParameterValue)
-	}
-	if *input.MaxCount == 0 {
-		return utils.GenerateErrorPayload(awserrors.ErrorInvalidParameterValue)
-	}
-	if *input.MinCount > *input.MaxCount {
-		return utils.GenerateErrorPayload(awserrors.ErrorInvalidParameterValue)
-	}
-	if input.ImageId == nil || *input.ImageId == "" {
-		return utils.GenerateErrorPayload(awserrors.ErrorMissingParameter)
-	}
-	if input.InstanceType == nil || *input.InstanceType == "" {
-		return utils.GenerateErrorPayload(awserrors.ErrorMissingParameter)
-	}
-	if !strings.HasPrefix(*input.ImageId, "ami-") {
-		return utils.GenerateErrorPayload(awserrors.ErrorInvalidAMIIDMalformed)
+	if errPayload := utils.UnmarshalJsonPayload(&input, jsonData); errPayload != nil {
+		return errPayload
 	}
 
 	// Call the service to perform the actual operation

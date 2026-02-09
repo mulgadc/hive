@@ -185,15 +185,6 @@ func TestEC2ProcessRunInstances(t *testing.T) {
 			wantErrCode:       "ValidationError",
 		},
 		{
-			name: "MissingRequiredFields",
-			payload: &ec2.RunInstancesInput{
-				ImageId:  aws.String("ami-0abcdef1234567890"),
-				MaxCount: aws.Int64(1),
-			},
-			wantValidationErr: true,
-			wantErrCode:       "MissingParameter",
-		},
-		{
 			name: "UnknownFieldInPayload",
 			rawJSON: []byte(`{
 				"ImageId":"ami-0abcdef1234567890",

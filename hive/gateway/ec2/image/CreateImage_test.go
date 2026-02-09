@@ -86,14 +86,6 @@ func TestEC2ProcessCreateImage(t *testing.T) {
 			wantErrCode:       "ValidationError",
 		},
 		{
-			name: "MissingRequiredFields",
-			payload: &ec2.CreateImageInput{
-				Name: aws.String("test-image"),
-			},
-			wantValidationErr: true,
-			wantErrCode:       "MissingParameter",
-		},
-		{
 			name: "ValidCreateImage",
 			payload: &ec2.CreateImageInput{
 				InstanceId: aws.String("i-0123456789abcdef0"),

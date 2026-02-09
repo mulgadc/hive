@@ -72,14 +72,6 @@ func TestEC2ProcessCreateKeyPair(t *testing.T) {
 			wantErrCode:       "ValidationError",
 		},
 		{
-			name: "MissingRequiredFields",
-			payload: &ec2.CreateKeyPairInput{
-				KeyName: aws.String(""),
-			},
-			wantValidationErr: true,
-			wantErrCode:       "MissingParameter",
-		},
-		{
 			name: "ValidCreateKeyPair",
 			payload: &ec2.CreateKeyPairInput{
 				KeyName: aws.String("test-key"),

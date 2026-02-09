@@ -1,7 +1,6 @@
 package handlers_ec2_key
 
 import (
-	"bytes"
 	"encoding/json"
 	"log/slog"
 
@@ -30,17 +29,8 @@ func (h *CreateKeyPairHandler) Topic() string {
 func (h *CreateKeyPairHandler) Process(jsonData []byte) []byte {
 	var input ec2.CreateKeyPairInput
 
-	decoder := json.NewDecoder(bytes.NewReader(jsonData))
-	decoder.DisallowUnknownFields()
-
-	err := decoder.Decode(&input)
-	if err != nil {
-		return utils.GenerateErrorPayload(awserrors.ErrorValidationError)
-	}
-
-	// Validate required fields
-	if input.KeyName == nil || *input.KeyName == "" {
-		return utils.GenerateErrorPayload(awserrors.ErrorMissingParameter)
+	if errPayload := utils.UnmarshalJsonPayload(&input, jsonData); errPayload != nil {
+		return errPayload
 	}
 
 	// Call the service to perform the actual operation

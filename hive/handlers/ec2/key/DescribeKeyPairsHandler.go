@@ -1,7 +1,6 @@
 package handlers_ec2_key
 
 import (
-	"bytes"
 	"encoding/json"
 	"log/slog"
 
@@ -30,12 +29,8 @@ func (h *DescribeKeyPairsHandler) Topic() string {
 func (h *DescribeKeyPairsHandler) Process(jsonData []byte) []byte {
 	var input ec2.DescribeKeyPairsInput
 
-	decoder := json.NewDecoder(bytes.NewReader(jsonData))
-	decoder.DisallowUnknownFields()
-
-	err := decoder.Decode(&input)
-	if err != nil {
-		return utils.GenerateErrorPayload(awserrors.ErrorValidationError)
+	if errPayload := utils.UnmarshalJsonPayload(&input, jsonData); errPayload != nil {
+		return errPayload
 	}
 
 	// Call the service to perform the actual operation

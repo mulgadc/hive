@@ -1,10 +1,8 @@
 package handlers_ec2_image
 
 import (
-	"bytes"
 	"encoding/json"
 	"log/slog"
-	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/awserrors"
@@ -31,24 +29,8 @@ func (h *CreateImageHandler) Topic() string {
 func (h *CreateImageHandler) Process(jsonData []byte) []byte {
 	var input ec2.CreateImageInput
 
-	decoder := json.NewDecoder(bytes.NewReader(jsonData))
-	decoder.DisallowUnknownFields()
-
-	err := decoder.Decode(&input)
-	if err != nil {
-		return utils.GenerateErrorPayload(awserrors.ErrorValidationError)
-	}
-
-	// Validate required fields
-	if input.InstanceId == nil || *input.InstanceId == "" {
-		return utils.GenerateErrorPayload(awserrors.ErrorMissingParameter)
-	}
-	if input.Name == nil || *input.Name == "" {
-		return utils.GenerateErrorPayload(awserrors.ErrorMissingParameter)
-	}
-	// Validate InstanceId format
-	if !strings.HasPrefix(*input.InstanceId, "i-") {
-		return utils.GenerateErrorPayload(awserrors.ErrorInvalidInstanceID)
+	if errPayload := utils.UnmarshalJsonPayload(&input, jsonData); errPayload != nil {
+		return errPayload
 	}
 
 	// Delegate to the service implementation
