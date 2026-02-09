@@ -16,6 +16,7 @@ import (
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/objectstore"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
 )
 
@@ -179,7 +180,7 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput) (*e
 	snapshotCfg := &SnapshotConfig{
 		SnapshotID:       snapshotID,
 		VolumeID:         volumeID,
-		VolumeSize:       int64(volumeConfig.VolumeMetadata.SizeGiB),
+		VolumeSize:       utils.SafeUint64ToInt64(volumeConfig.VolumeMetadata.SizeGiB),
 		State:            "completed",
 		Progress:         "100%",
 		StartTime:        now,

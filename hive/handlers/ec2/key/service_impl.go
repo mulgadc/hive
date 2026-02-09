@@ -27,6 +27,9 @@ import (
 	"github.com/mulgadc/hive/hive/utils"
 )
 
+// Ensure KeyServiceImpl implements KeyService
+var _ KeyService = (*KeyServiceImpl)(nil)
+
 // KeyServiceImpl handles key pair operations with ssh-keygen and S3 storage
 type KeyServiceImpl struct {
 	config     *config.Config

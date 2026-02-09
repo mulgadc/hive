@@ -27,6 +27,9 @@ import (
 
 const defaultGP3IOPS = 3000
 
+// Ensure VolumeServiceImpl implements VolumeService
+var _ VolumeService = (*VolumeServiceImpl)(nil)
+
 // VolumeServiceImpl handles EBS volume operations with S3 storage
 type VolumeServiceImpl struct {
 	config     *config.Config

@@ -17,6 +17,9 @@ import (
 	"github.com/mulgadc/viperblock/viperblock"
 )
 
+// Ensure ImageServiceImpl implements ImageService
+var _ ImageService = (*ImageServiceImpl)(nil)
+
 // ImageServiceImpl handles AMI image operations with S3 storage
 type ImageServiceImpl struct {
 	config     *config.Config
