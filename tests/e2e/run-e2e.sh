@@ -377,6 +377,103 @@ fi
 
 echo "Volume lifecycle test passed (create -> resize -> attach -> detach -> delete)"
 
+# Phase 6: Tag Management
+echo "Phase 6: Tag Management"
+
+# 6a: Create tags on the instance
+echo "Creating tags on instance $INSTANCE_ID..."
+$AWS_EC2 create-tags --resources "$INSTANCE_ID" --tags Key=Name,Value=e2e-test Key=Environment,Value=testing Key=DeleteMe,Value=please
+
+# 6b: Verify tags with describe-tags (resource-id filter)
+echo "Verifying tags on instance..."
+TAG_COUNT=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" \
+    --query 'length(Tags || `[]`)' --output text)
+if [ "$TAG_COUNT" -ne 3 ]; then
+    echo "Expected 3 tags on instance, got $TAG_COUNT"
+    exit 1
+fi
+echo "Instance has $TAG_COUNT tags"
+
+# 6c: Create tags on the root volume
+echo "Creating tags on volume $VOLUME_ID..."
+$AWS_EC2 create-tags --resources "$VOLUME_ID" --tags Key=Name,Value=e2e-root-vol Key=Environment,Value=testing
+
+# 6d: Filter by key
+echo "Testing key filter..."
+ENV_TAGS=$($AWS_EC2 describe-tags --filters "Name=key,Values=Environment" \
+    --query 'length(Tags || `[]`)' --output text)
+if [ "$ENV_TAGS" -ne 2 ]; then
+    echo "Expected 2 'Environment' tags across resources, got $ENV_TAGS"
+    exit 1
+fi
+echo "Key filter returned $ENV_TAGS tags"
+
+# 6e: Filter by resource-type
+echo "Testing resource-type filter..."
+INSTANCE_TAGS=$($AWS_EC2 describe-tags --filters "Name=resource-type,Values=instance" \
+    --query 'length(Tags || `[]`)' --output text)
+if [ "$INSTANCE_TAGS" -ne 3 ]; then
+    echo "Expected 3 instance tags, got $INSTANCE_TAGS"
+    exit 1
+fi
+echo "Resource-type filter returned $INSTANCE_TAGS instance tags"
+
+# 6f: Overwrite a tag value
+echo "Overwriting Name tag on instance..."
+$AWS_EC2 create-tags --resources "$INSTANCE_ID" --tags Key=Name,Value=e2e-test-updated
+UPDATED_NAME=$($AWS_EC2 describe-tags \
+    --filters "Name=resource-id,Values=$INSTANCE_ID" "Name=key,Values=Name" \
+    --query 'Tags[0].Value' --output text)
+if [ "$UPDATED_NAME" != "e2e-test-updated" ]; then
+    echo "Tag overwrite failed: expected 'e2e-test-updated', got '$UPDATED_NAME'"
+    exit 1
+fi
+echo "Tag overwrite verified"
+
+# 6g: Delete tag by key (unconditional)
+echo "Deleting DeleteMe tag unconditionally..."
+$AWS_EC2 delete-tags --resources "$INSTANCE_ID" --tags Key=DeleteMe
+REMAINING=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" \
+    --query 'length(Tags || `[]`)' --output text)
+if [ "$REMAINING" -ne 2 ]; then
+    echo "Expected 2 tags after unconditional delete, got $REMAINING"
+    exit 1
+fi
+echo "Unconditional delete verified ($REMAINING tags remaining)"
+
+# 6h: Delete tag with wrong value (should NOT delete)
+echo "Attempting delete with wrong value (should be no-op)..."
+$AWS_EC2 delete-tags --resources "$INSTANCE_ID" --tags Key=Environment,Value=production
+ENV_STILL=$($AWS_EC2 describe-tags \
+    --filters "Name=resource-id,Values=$INSTANCE_ID" "Name=key,Values=Environment" \
+    --query 'length(Tags || `[]`)' --output text)
+if [ "$ENV_STILL" -ne 1 ]; then
+    echo "Value-conditional delete incorrectly removed tag"
+    exit 1
+fi
+echo "Value-conditional mismatch preserved tag"
+
+# 6i: Delete tag with correct value
+echo "Deleting Environment tag with correct value..."
+$AWS_EC2 delete-tags --resources "$INSTANCE_ID" --tags Key=Environment,Value=testing
+ENV_GONE=$($AWS_EC2 describe-tags \
+    --filters "Name=resource-id,Values=$INSTANCE_ID" "Name=key,Values=Environment" \
+    --query 'length(Tags || `[]`)' --output text)
+if [ "$ENV_GONE" -ne 0 ]; then
+    echo "Value-conditional delete failed to remove matching tag"
+    exit 1
+fi
+echo "Value-conditional match deleted tag"
+
+# 6j: Verify only Name tag remains on instance
+FINAL_COUNT=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" \
+    --query 'length(Tags || `[]`)' --output text)
+if [ "$FINAL_COUNT" -ne 1 ]; then
+    echo "Expected 1 tag remaining on instance, got $FINAL_COUNT"
+    exit 1
+fi
+echo "Tag management tests passed"
+
 # Stop instance (stop-instances) and verify transition to stopped (describe-instances)
 echo "Stopping instance..."
 $AWS_EC2 stop-instances --instance-ids "$INSTANCE_ID"
