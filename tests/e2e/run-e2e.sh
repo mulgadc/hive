@@ -377,6 +377,175 @@ fi
 
 echo "Volume lifecycle test passed (create -> resize -> attach -> detach -> delete)"
 
+# Phase 5c: Snapshot Lifecycle
+echo "Phase 5c: Snapshot Lifecycle"
+echo "Testing snapshot create -> describe -> copy -> delete..."
+
+# Create a volume to snapshot (snapshots need a source volume)
+echo "Creating source volume for snapshot tests..."
+SNAP_VOL_OUTPUT=$($AWS_EC2 create-volume --size 10 --availability-zone ap-southeast-2a)
+SNAP_VOL_ID=$(echo "$SNAP_VOL_OUTPUT" | jq -r '.VolumeId')
+
+if [ -z "$SNAP_VOL_ID" ] || [ "$SNAP_VOL_ID" == "null" ]; then
+    echo "Failed to create source volume for snapshot tests"
+    exit 1
+fi
+echo "Created source volume: $SNAP_VOL_ID"
+
+# Create a snapshot from the volume
+echo "Creating snapshot from volume $SNAP_VOL_ID..."
+SNAP_OUTPUT=$($AWS_EC2 create-snapshot --volume-id "$SNAP_VOL_ID" --description "e2e-test-snapshot")
+SNAPSHOT_ID=$(echo "$SNAP_OUTPUT" | jq -r '.SnapshotId')
+
+if [ -z "$SNAPSHOT_ID" ] || [ "$SNAPSHOT_ID" == "null" ]; then
+    echo "Failed to create snapshot"
+    echo "Output: $SNAP_OUTPUT"
+    exit 1
+fi
+echo "Created snapshot: $SNAPSHOT_ID"
+
+# Verify snapshot fields from create response
+SNAP_STATE=$(echo "$SNAP_OUTPUT" | jq -r '.State')
+SNAP_VOL_REF=$(echo "$SNAP_OUTPUT" | jq -r '.VolumeId')
+SNAP_SIZE=$(echo "$SNAP_OUTPUT" | jq -r '.VolumeSize')
+SNAP_PROGRESS=$(echo "$SNAP_OUTPUT" | jq -r '.Progress')
+
+if [ "$SNAP_VOL_REF" != "$SNAP_VOL_ID" ]; then
+    echo "Snapshot VolumeId mismatch: expected $SNAP_VOL_ID, got $SNAP_VOL_REF"
+    exit 1
+fi
+if [ "$SNAP_SIZE" -ne 10 ]; then
+    echo "Snapshot VolumeSize mismatch: expected 10, got $SNAP_SIZE"
+    exit 1
+fi
+echo "Snapshot create response verified (State=$SNAP_STATE, VolumeId=$SNAP_VOL_REF, Size=$SNAP_SIZE, Progress=$SNAP_PROGRESS)"
+
+# Poll until snapshot is completed (should be immediate in v1, but poll for forward-compat)
+echo "Waiting for snapshot to complete..."
+COUNT=0
+while [ $COUNT -lt 30 ]; do
+    SNAP_STATE=$($AWS_EC2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
+        --query 'Snapshots[0].State' --output text)
+
+    if [ "$SNAP_STATE" == "completed" ]; then
+        echo "Snapshot completed"
+        break
+    fi
+
+    sleep 2
+    COUNT=$((COUNT + 1))
+done
+
+if [ "$SNAP_STATE" != "completed" ]; then
+    echo "Snapshot failed to reach completed state (State=$SNAP_STATE)"
+    exit 1
+fi
+
+# Describe snapshot by ID and verify fields
+echo "Verifying snapshot via describe-snapshots..."
+DESCRIBE_SNAP=$($AWS_EC2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID")
+DESC_VOL_ID=$(echo "$DESCRIBE_SNAP" | jq -r '.Snapshots[0].VolumeId')
+DESC_SIZE=$(echo "$DESCRIBE_SNAP" | jq -r '.Snapshots[0].VolumeSize')
+DESC_DESC=$(echo "$DESCRIBE_SNAP" | jq -r '.Snapshots[0].Description')
+
+if [ "$DESC_VOL_ID" != "$SNAP_VOL_ID" ]; then
+    echo "Describe snapshot VolumeId mismatch: expected $SNAP_VOL_ID, got $DESC_VOL_ID"
+    exit 1
+fi
+if [ "$DESC_SIZE" -ne 10 ]; then
+    echo "Describe snapshot VolumeSize mismatch: expected 10, got $DESC_SIZE"
+    exit 1
+fi
+if [ "$DESC_DESC" != "e2e-test-snapshot" ]; then
+    echo "Describe snapshot Description mismatch: expected 'e2e-test-snapshot', got '$DESC_DESC'"
+    exit 1
+fi
+echo "Describe snapshot verified (VolumeId=$DESC_VOL_ID, Size=$DESC_SIZE, Description=$DESC_DESC)"
+
+# Copy the snapshot
+echo "Copying snapshot $SNAPSHOT_ID..."
+COPY_OUTPUT=$($AWS_EC2 copy-snapshot --source-snapshot-id "$SNAPSHOT_ID" --source-region ap-southeast-2 --description "e2e-copy")
+COPY_SNAPSHOT_ID=$(echo "$COPY_OUTPUT" | jq -r '.SnapshotId')
+
+if [ -z "$COPY_SNAPSHOT_ID" ] || [ "$COPY_SNAPSHOT_ID" == "null" ]; then
+    echo "Failed to copy snapshot"
+    echo "Output: $COPY_OUTPUT"
+    exit 1
+fi
+echo "Copied snapshot: $COPY_SNAPSHOT_ID"
+
+# Verify the copy is a distinct snapshot
+if [ "$COPY_SNAPSHOT_ID" == "$SNAPSHOT_ID" ]; then
+    echo "Copy snapshot ID should differ from original"
+    exit 1
+fi
+
+# Describe all snapshots — should see both original and copy
+TOTAL_SNAPS=$($AWS_EC2 describe-snapshots \
+    --snapshot-ids "$SNAPSHOT_ID" "$COPY_SNAPSHOT_ID" \
+    --query 'length(Snapshots)' --output text)
+
+if [ "$TOTAL_SNAPS" -ne 2 ]; then
+    echo "Expected 2 snapshots, got $TOTAL_SNAPS"
+    exit 1
+fi
+echo "Both snapshots visible via describe-snapshots"
+
+# Verify copy has correct description
+COPY_DESC=$($AWS_EC2 describe-snapshots --snapshot-ids "$COPY_SNAPSHOT_ID" \
+    --query 'Snapshots[0].Description' --output text)
+if [ "$COPY_DESC" != "e2e-copy" ]; then
+    echo "Copy description mismatch: expected 'e2e-copy', got '$COPY_DESC'"
+    exit 1
+fi
+
+# Delete the original snapshot
+echo "Deleting original snapshot $SNAPSHOT_ID..."
+$AWS_EC2 delete-snapshot --snapshot-id "$SNAPSHOT_ID"
+
+# Verify original is gone, copy remains
+echo "Verifying snapshot deletion..."
+COUNT=0
+while [ $COUNT -lt 30 ]; do
+    set +e
+    SNAP_CHECK=$($AWS_EC2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
+        --query 'Snapshots[0].SnapshotId' --output text 2>&1)
+    SNAP_EXIT=$?
+    set -e
+
+    if [ $SNAP_EXIT -ne 0 ] || [ "$SNAP_CHECK" == "None" ] || [ -z "$SNAP_CHECK" ]; then
+        echo "Original snapshot deleted successfully"
+        break
+    fi
+
+    sleep 2
+    COUNT=$((COUNT + 1))
+done
+
+if [ $COUNT -ge 30 ]; then
+    echo "Snapshot deletion verification timed out"
+    exit 1
+fi
+
+# Verify copy still exists
+COPY_STATE=$($AWS_EC2 describe-snapshots --snapshot-ids "$COPY_SNAPSHOT_ID" \
+    --query 'Snapshots[0].State' --output text)
+if [ "$COPY_STATE" != "completed" ]; then
+    echo "Copy snapshot should still exist (State=$COPY_STATE)"
+    exit 1
+fi
+echo "Copy snapshot still intact after original deletion"
+
+# Delete the copy
+echo "Deleting copy snapshot $COPY_SNAPSHOT_ID..."
+$AWS_EC2 delete-snapshot --snapshot-id "$COPY_SNAPSHOT_ID"
+
+# Clean up the source volume
+echo "Deleting source volume $SNAP_VOL_ID..."
+$AWS_EC2 delete-volume --volume-id "$SNAP_VOL_ID"
+
+echo "Snapshot lifecycle test passed (create -> describe -> copy -> delete)"
+
 # Phase 6: Tag Management
 echo "Phase 6: Tag Management"
 

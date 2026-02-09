@@ -382,6 +382,273 @@ fi
 
 echo "  Volume lifecycle test passed (create -> resize -> attach -> detach -> delete)"
 
+# Test 1c: Snapshot Lifecycle
+echo ""
+echo "Test 1c: Snapshot Lifecycle"
+echo "----------------------------------------"
+echo "Testing snapshot create -> describe -> copy -> delete..."
+
+# Create a volume to snapshot
+echo "  Creating source volume for snapshot tests..."
+SNAP_VOL_OUTPUT=$($AWS_EC2 create-volume --size 10 --availability-zone ap-southeast-2a)
+SNAP_VOL_ID=$(echo "$SNAP_VOL_OUTPUT" | jq -r '.VolumeId')
+
+if [ -z "$SNAP_VOL_ID" ] || [ "$SNAP_VOL_ID" == "null" ]; then
+    echo "  ERROR: Failed to create source volume for snapshot tests"
+    exit 1
+fi
+echo "  Created source volume: $SNAP_VOL_ID"
+
+# Create a snapshot
+echo "  Creating snapshot from volume $SNAP_VOL_ID..."
+SNAP_OUTPUT=$($AWS_EC2 create-snapshot --volume-id "$SNAP_VOL_ID" --description "multinode-e2e-snapshot")
+SNAPSHOT_ID=$(echo "$SNAP_OUTPUT" | jq -r '.SnapshotId')
+
+if [ -z "$SNAPSHOT_ID" ] || [ "$SNAPSHOT_ID" == "null" ]; then
+    echo "  ERROR: Failed to create snapshot"
+    echo "  Output: $SNAP_OUTPUT"
+    exit 1
+fi
+echo "  Created snapshot: $SNAPSHOT_ID"
+
+# Verify create response fields
+SNAP_STATE=$(echo "$SNAP_OUTPUT" | jq -r '.State')
+SNAP_VOL_REF=$(echo "$SNAP_OUTPUT" | jq -r '.VolumeId')
+SNAP_SIZE=$(echo "$SNAP_OUTPUT" | jq -r '.VolumeSize')
+
+if [ "$SNAP_VOL_REF" != "$SNAP_VOL_ID" ]; then
+    echo "  ERROR: Snapshot VolumeId mismatch: expected $SNAP_VOL_ID, got $SNAP_VOL_REF"
+    exit 1
+fi
+if [ "$SNAP_SIZE" -ne 10 ]; then
+    echo "  ERROR: Snapshot VolumeSize mismatch: expected 10, got $SNAP_SIZE"
+    exit 1
+fi
+echo "  Create response verified (State=$SNAP_STATE, VolumeId=$SNAP_VOL_REF, Size=$SNAP_SIZE)"
+
+# Poll until completed
+echo "  Waiting for snapshot to complete..."
+COUNT=0
+while [ $COUNT -lt 30 ]; do
+    SNAP_STATE=$($AWS_EC2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
+        --query 'Snapshots[0].State' --output text)
+
+    if [ "$SNAP_STATE" == "completed" ]; then
+        echo "  Snapshot completed"
+        break
+    fi
+
+    sleep 2
+    COUNT=$((COUNT + 1))
+done
+
+if [ "$SNAP_STATE" != "completed" ]; then
+    echo "  ERROR: Snapshot failed to reach completed state (State=$SNAP_STATE)"
+    exit 1
+fi
+
+# Describe by ID and verify
+echo "  Verifying snapshot via describe-snapshots..."
+DESCRIBE_SNAP=$($AWS_EC2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID")
+DESC_VOL_ID=$(echo "$DESCRIBE_SNAP" | jq -r '.Snapshots[0].VolumeId')
+DESC_SIZE=$(echo "$DESCRIBE_SNAP" | jq -r '.Snapshots[0].VolumeSize')
+DESC_DESC=$(echo "$DESCRIBE_SNAP" | jq -r '.Snapshots[0].Description')
+
+if [ "$DESC_VOL_ID" != "$SNAP_VOL_ID" ]; then
+    echo "  ERROR: Describe VolumeId mismatch: expected $SNAP_VOL_ID, got $DESC_VOL_ID"
+    exit 1
+fi
+if [ "$DESC_SIZE" -ne 10 ]; then
+    echo "  ERROR: Describe VolumeSize mismatch: expected 10, got $DESC_SIZE"
+    exit 1
+fi
+if [ "$DESC_DESC" != "multinode-e2e-snapshot" ]; then
+    echo "  ERROR: Describe Description mismatch: expected 'multinode-e2e-snapshot', got '$DESC_DESC'"
+    exit 1
+fi
+echo "  Describe verified (VolumeId=$DESC_VOL_ID, Size=$DESC_SIZE, Description=$DESC_DESC)"
+
+# Copy the snapshot
+echo "  Copying snapshot $SNAPSHOT_ID..."
+COPY_OUTPUT=$($AWS_EC2 copy-snapshot --source-snapshot-id "$SNAPSHOT_ID" --source-region ap-southeast-2 --description "multinode-e2e-copy")
+COPY_SNAPSHOT_ID=$(echo "$COPY_OUTPUT" | jq -r '.SnapshotId')
+
+if [ -z "$COPY_SNAPSHOT_ID" ] || [ "$COPY_SNAPSHOT_ID" == "null" ]; then
+    echo "  ERROR: Failed to copy snapshot"
+    echo "  Output: $COPY_OUTPUT"
+    exit 1
+fi
+echo "  Copied snapshot: $COPY_SNAPSHOT_ID"
+
+if [ "$COPY_SNAPSHOT_ID" == "$SNAPSHOT_ID" ]; then
+    echo "  ERROR: Copy snapshot ID should differ from original"
+    exit 1
+fi
+
+# Verify both exist
+TOTAL_SNAPS=$($AWS_EC2 describe-snapshots \
+    --snapshot-ids "$SNAPSHOT_ID" "$COPY_SNAPSHOT_ID" \
+    --query 'length(Snapshots)' --output text)
+
+if [ "$TOTAL_SNAPS" -ne 2 ]; then
+    echo "  ERROR: Expected 2 snapshots, got $TOTAL_SNAPS"
+    exit 1
+fi
+echo "  Both snapshots visible via describe-snapshots"
+
+# Verify copy description
+COPY_DESC=$($AWS_EC2 describe-snapshots --snapshot-ids "$COPY_SNAPSHOT_ID" \
+    --query 'Snapshots[0].Description' --output text)
+if [ "$COPY_DESC" != "multinode-e2e-copy" ]; then
+    echo "  ERROR: Copy description mismatch: expected 'multinode-e2e-copy', got '$COPY_DESC'"
+    exit 1
+fi
+
+# Delete original
+echo "  Deleting original snapshot $SNAPSHOT_ID..."
+$AWS_EC2 delete-snapshot --snapshot-id "$SNAPSHOT_ID"
+
+# Verify original gone, copy remains
+echo "  Verifying snapshot deletion..."
+COUNT=0
+while [ $COUNT -lt 30 ]; do
+    set +e
+    SNAP_CHECK=$($AWS_EC2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
+        --query 'Snapshots[0].SnapshotId' --output text 2>&1)
+    SNAP_EXIT=$?
+    set -e
+
+    if [ $SNAP_EXIT -ne 0 ] || [ "$SNAP_CHECK" == "None" ] || [ -z "$SNAP_CHECK" ]; then
+        echo "  Original snapshot deleted successfully"
+        break
+    fi
+
+    sleep 2
+    COUNT=$((COUNT + 1))
+done
+
+if [ $COUNT -ge 30 ]; then
+    echo "  ERROR: Snapshot deletion verification timed out"
+    exit 1
+fi
+
+# Verify copy still exists
+COPY_STATE=$($AWS_EC2 describe-snapshots --snapshot-ids "$COPY_SNAPSHOT_ID" \
+    --query 'Snapshots[0].State' --output text)
+if [ "$COPY_STATE" != "completed" ]; then
+    echo "  ERROR: Copy snapshot should still exist (State=$COPY_STATE)"
+    exit 1
+fi
+echo "  Copy snapshot intact after original deletion"
+
+# Delete copy and source volume
+echo "  Deleting copy snapshot $COPY_SNAPSHOT_ID..."
+$AWS_EC2 delete-snapshot --snapshot-id "$COPY_SNAPSHOT_ID"
+
+echo "  Deleting source volume $SNAP_VOL_ID..."
+$AWS_EC2 delete-volume --volume-id "$SNAP_VOL_ID"
+
+echo "  Snapshot lifecycle test passed (create -> describe -> copy -> delete)"
+
+# Test 1d: Tag Management
+echo ""
+echo "Test 1d: Tag Management"
+echo "----------------------------------------"
+echo "Testing create-tags -> describe-tags -> delete-tags..."
+
+# Use the first instance for tag tests
+TAG_INSTANCE="${INSTANCE_IDS[0]}"
+
+# Create tags on instance
+echo "  Creating tags on instance $TAG_INSTANCE..."
+$AWS_EC2 create-tags --resources "$TAG_INSTANCE" --tags Key=Name,Value=multinode-test Key=Environment,Value=testing Key=DeleteMe,Value=please
+
+# Verify tags with describe-tags (resource-id filter)
+echo "  Verifying tags on instance..."
+TAG_COUNT=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$TAG_INSTANCE" \
+    --query 'length(Tags || `[]`)' --output text)
+if [ "$TAG_COUNT" -ne 3 ]; then
+    echo "  ERROR: Expected 3 tags on instance, got $TAG_COUNT"
+    exit 1
+fi
+echo "  Instance has $TAG_COUNT tags"
+
+# Filter by key
+echo "  Testing key filter..."
+ENV_TAGS=$($AWS_EC2 describe-tags --filters "Name=key,Values=Environment" \
+    --query 'length(Tags || `[]`)' --output text)
+if [ "$ENV_TAGS" -lt 1 ]; then
+    echo "  ERROR: Expected at least 1 'Environment' tag, got $ENV_TAGS"
+    exit 1
+fi
+echo "  Key filter returned $ENV_TAGS tags"
+
+# Filter by resource-type
+echo "  Testing resource-type filter..."
+INSTANCE_TAGS=$($AWS_EC2 describe-tags --filters "Name=resource-type,Values=instance" \
+    --query 'length(Tags || `[]`)' --output text)
+if [ "$INSTANCE_TAGS" -lt 3 ]; then
+    echo "  ERROR: Expected at least 3 instance tags, got $INSTANCE_TAGS"
+    exit 1
+fi
+echo "  Resource-type filter returned $INSTANCE_TAGS instance tags"
+
+# Overwrite a tag value
+echo "  Overwriting Name tag..."
+$AWS_EC2 create-tags --resources "$TAG_INSTANCE" --tags Key=Name,Value=multinode-updated
+UPDATED_NAME=$($AWS_EC2 describe-tags \
+    --filters "Name=resource-id,Values=$TAG_INSTANCE" "Name=key,Values=Name" \
+    --query 'Tags[0].Value' --output text)
+if [ "$UPDATED_NAME" != "multinode-updated" ]; then
+    echo "  ERROR: Tag overwrite failed: expected 'multinode-updated', got '$UPDATED_NAME'"
+    exit 1
+fi
+echo "  Tag overwrite verified"
+
+# Delete tag by key (unconditional)
+echo "  Deleting DeleteMe tag unconditionally..."
+$AWS_EC2 delete-tags --resources "$TAG_INSTANCE" --tags Key=DeleteMe
+REMAINING=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$TAG_INSTANCE" \
+    --query 'length(Tags || `[]`)' --output text)
+if [ "$REMAINING" -ne 2 ]; then
+    echo "  ERROR: Expected 2 tags after unconditional delete, got $REMAINING"
+    exit 1
+fi
+echo "  Unconditional delete verified ($REMAINING tags remaining)"
+
+# Delete tag with wrong value (should NOT delete)
+echo "  Attempting delete with wrong value (should be no-op)..."
+$AWS_EC2 delete-tags --resources "$TAG_INSTANCE" --tags Key=Environment,Value=production
+ENV_STILL=$($AWS_EC2 describe-tags \
+    --filters "Name=resource-id,Values=$TAG_INSTANCE" "Name=key,Values=Environment" \
+    --query 'length(Tags || `[]`)' --output text)
+if [ "$ENV_STILL" -ne 1 ]; then
+    echo "  ERROR: Value-conditional delete incorrectly removed tag"
+    exit 1
+fi
+echo "  Value-conditional mismatch preserved tag"
+
+# Delete tag with correct value
+echo "  Deleting Environment tag with correct value..."
+$AWS_EC2 delete-tags --resources "$TAG_INSTANCE" --tags Key=Environment,Value=testing
+ENV_GONE=$($AWS_EC2 describe-tags \
+    --filters "Name=resource-id,Values=$TAG_INSTANCE" "Name=key,Values=Environment" \
+    --query 'length(Tags || `[]`)' --output text)
+if [ "$ENV_GONE" -ne 0 ]; then
+    echo "  ERROR: Value-conditional delete failed to remove matching tag"
+    exit 1
+fi
+echo "  Value-conditional match deleted tag"
+
+# Verify only Name tag remains
+FINAL_COUNT=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$TAG_INSTANCE" \
+    --query 'length(Tags || `[]`)' --output text)
+if [ "$FINAL_COUNT" -ne 1 ]; then
+    echo "  ERROR: Expected 1 tag remaining, got $FINAL_COUNT"
+    exit 1
+fi
+echo "  Tag management tests passed"
+
 # Test 2: DescribeInstances Aggregation
 echo ""
 echo "Test 2: DescribeInstances Aggregation"
