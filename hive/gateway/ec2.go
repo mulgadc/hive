@@ -113,30 +113,6 @@ var ec2Actions = map[string]EC2Handler{
 	"DescribeAccountAttributes": ec2Handler(func(input *ec2.DescribeAccountAttributesInput, gw *GatewayConfig) (any, error) {
 		return gateway_ec2_account.DescribeAccountAttributes(input)
 	}),
-	"GetInstanceMetadataDefaults": ec2Handler(func(input *ec2.GetInstanceMetadataDefaultsInput, gw *GatewayConfig) (any, error) {
-		return gateway_ec2_account.GetInstanceMetadataDefaults(input, gw.NATSConn)
-	}),
-	"ModifyInstanceMetadataDefaults": ec2Handler(func(input *ec2.ModifyInstanceMetadataDefaultsInput, gw *GatewayConfig) (any, error) {
-		return gateway_ec2_account.ModifyInstanceMetadataDefaults(input, gw.NATSConn)
-	}),
-	"GetSnapshotBlockPublicAccessState": ec2Handler(func(input *ec2.GetSnapshotBlockPublicAccessStateInput, gw *GatewayConfig) (any, error) {
-		return gateway_ec2_account.GetSnapshotBlockPublicAccessState(input, gw.NATSConn)
-	}),
-	"EnableSnapshotBlockPublicAccess": ec2Handler(func(input *ec2.EnableSnapshotBlockPublicAccessInput, gw *GatewayConfig) (any, error) {
-		return gateway_ec2_account.EnableSnapshotBlockPublicAccess(input, gw.NATSConn)
-	}),
-	"DisableSnapshotBlockPublicAccess": ec2Handler(func(input *ec2.DisableSnapshotBlockPublicAccessInput, gw *GatewayConfig) (any, error) {
-		return gateway_ec2_account.DisableSnapshotBlockPublicAccess(input, gw.NATSConn)
-	}),
-	"GetImageBlockPublicAccessState": ec2Handler(func(input *ec2.GetImageBlockPublicAccessStateInput, gw *GatewayConfig) (any, error) {
-		return gateway_ec2_account.GetImageBlockPublicAccessState(input, gw.NATSConn)
-	}),
-	"EnableImageBlockPublicAccess": ec2Handler(func(input *ec2.EnableImageBlockPublicAccessInput, gw *GatewayConfig) (any, error) {
-		return gateway_ec2_account.EnableImageBlockPublicAccess(input, gw.NATSConn)
-	}),
-	"DisableImageBlockPublicAccess": ec2Handler(func(input *ec2.DisableImageBlockPublicAccessInput, gw *GatewayConfig) (any, error) {
-		return gateway_ec2_account.DisableImageBlockPublicAccess(input, gw.NATSConn)
-	}),
 	"EnableEbsEncryptionByDefault": ec2Handler(func(input *ec2.EnableEbsEncryptionByDefaultInput, gw *GatewayConfig) (any, error) {
 		return gateway_ec2_account.EnableEbsEncryptionByDefault(input, gw.NATSConn)
 	}),

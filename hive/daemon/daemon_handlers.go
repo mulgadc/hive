@@ -1131,34 +1131,3 @@ func (d *Daemon) handleEC2DisableSerialConsoleAccess(msg *nats.Msg) {
 	handleNATSRequest(msg, d.accountService.DisableSerialConsoleAccess)
 }
 
-func (d *Daemon) handleEC2GetInstanceMetadataDefaults(msg *nats.Msg) {
-	handleNATSRequest(msg, d.accountService.GetInstanceMetadataDefaults)
-}
-
-func (d *Daemon) handleEC2ModifyInstanceMetadataDefaults(msg *nats.Msg) {
-	handleNATSRequest(msg, d.accountService.ModifyInstanceMetadataDefaults)
-}
-
-func (d *Daemon) handleEC2GetSnapshotBlockPublicAccessState(msg *nats.Msg) {
-	handleNATSRequest(msg, d.accountService.GetSnapshotBlockPublicAccessState)
-}
-
-func (d *Daemon) handleEC2EnableSnapshotBlockPublicAccess(msg *nats.Msg) {
-	handleNATSRequest(msg, d.accountService.EnableSnapshotBlockPublicAccess)
-}
-
-func (d *Daemon) handleEC2DisableSnapshotBlockPublicAccess(msg *nats.Msg) {
-	handleNATSRequest(msg, d.accountService.DisableSnapshotBlockPublicAccess)
-}
-
-func (d *Daemon) handleEC2GetImageBlockPublicAccessState(msg *nats.Msg) {
-	handleNATSRequest(msg, d.accountService.GetImageBlockPublicAccessState)
-}
-
-func (d *Daemon) handleEC2EnableImageBlockPublicAccess(msg *nats.Msg) {
-	handleNATSRequest(msg, d.accountService.EnableImageBlockPublicAccess)
-}
-
-func (d *Daemon) handleEC2DisableImageBlockPublicAccess(msg *nats.Msg) {
-	handleNATSRequest(msg, d.accountService.DisableImageBlockPublicAccess)
-}

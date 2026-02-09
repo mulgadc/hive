@@ -151,20 +151,20 @@ Instance `dmesg`:
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
-| `get-instance-metadata-defaults` | *(full)* | `--dry-run` | None | Gateway validates input → NATS `ec2.GetInstanceMetadataDefaults` → daemon returns platform defaults: HttpTokens=optional, HttpPutResponseHopLimit=1, HttpEndpoint=enabled, InstanceMetadataTags=disabled | 1. Returns valid IMDS defaults<br>2. Verify HttpTokens, HopLimit, Endpoint, MetadataTags fields | **DONE** |
-| `modify-instance-metadata-defaults` | `--http-tokens`, `--http-put-response-hop-limit`, `--http-endpoint`, `--instance-metadata-tags` | `--dry-run` | None | Gateway validates input → NATS `ec2.ModifyInstanceMetadataDefaults` → daemon accepts settings (enforcement on instance launch) → returns Return=true | 1. Modify HttpTokens to required<br>2. Returns success | **DONE** |
 | `get-ebs-encryption-by-default` | *(full)* | `--dry-run` | None | Gateway validates input → NATS `ec2.GetEbsEncryptionByDefault` → daemon reads from JetStream KV → returns current EBS encryption default (false initially) | 1. Default is false<br>2. Returns true after enable | **DONE** |
 | `enable-ebs-encryption-by-default` | *(full)* | `--dry-run` | None | Gateway validates input → NATS `ec2.EnableEbsEncryptionByDefault` → daemon sets EbsEncryptionByDefault=true in JetStream KV → returns EbsEncryptionByDefault=true | 1. Enable returns true<br>2. Persists across calls | **DONE** |
 | `disable-ebs-encryption-by-default` | *(full)* | `--dry-run` | None | Gateway validates input → NATS `ec2.DisableEbsEncryptionByDefault` → daemon sets EbsEncryptionByDefault=false in JetStream KV → returns EbsEncryptionByDefault=false | 1. Disable returns false<br>2. Persists across calls | **DONE** |
 | `get-serial-console-access-status` | *(full)* | `--dry-run` | None | Gateway validates input → NATS `ec2.GetSerialConsoleAccessStatus` → daemon reads from JetStream KV → returns current serial console access status (false initially) | 1. Default is false<br>2. Returns true after enable | **DONE** |
 | `enable-serial-console-access` | *(full)* | `--dry-run` | None | Gateway validates input → NATS `ec2.EnableSerialConsoleAccess` → daemon sets SerialConsoleAccess=true in JetStream KV → returns SerialConsoleAccessEnabled=true | 1. Enable returns true<br>2. Persists across calls | **DONE** |
 | `disable-serial-console-access` | *(full)* | `--dry-run` | None | Gateway validates input → NATS `ec2.DisableSerialConsoleAccess` → daemon sets SerialConsoleAccess=false in JetStream KV → returns SerialConsoleAccessEnabled=false | 1. Disable returns false<br>2. Persists across calls | **DONE** |
-| `get-snapshot-block-public-access-state` | *(full)* | `--dry-run` | None | Gateway validates input → NATS `ec2.GetSnapshotBlockPublicAccessState` → daemon returns hardcoded state=block-all-sharing (Hive default) | 1. Returns block-all-sharing | **DONE** |
-| `enable-snapshot-block-public-access` | `--state` (required) | `--dry-run` | None | Gateway validates input + State field → NATS `ec2.EnableSnapshotBlockPublicAccess` → daemon returns provided state | 1. Enable with block-all-sharing<br>2. Missing State returns error | **DONE** |
-| `disable-snapshot-block-public-access` | *(full)* | `--dry-run` | None | Gateway validates input → NATS `ec2.DisableSnapshotBlockPublicAccess` → daemon returns state=unblocked | 1. Returns unblocked | **DONE** |
-| `get-image-block-public-access-state` | *(full)* | `--dry-run` | None | Gateway validates input → NATS `ec2.GetImageBlockPublicAccessState` → daemon returns hardcoded ImageBlockPublicAccessState=block-new-sharing (Hive default) | 1. Returns block-new-sharing | **DONE** |
-| `enable-image-block-public-access` | `--image-block-public-access-state` (required) | `--dry-run` | None | Gateway validates input + ImageBlockPublicAccessState field → NATS `ec2.EnableImageBlockPublicAccess` → daemon returns provided state | 1. Enable with block-new-sharing<br>2. Missing state returns error | **DONE** |
-| `disable-image-block-public-access` | *(full)* | `--dry-run` | None | Gateway validates input → NATS `ec2.DisableImageBlockPublicAccess` → daemon returns ImageBlockPublicAccessState=unblocked | 1. Returns unblocked | **DONE** |
+| `get-instance-metadata-defaults` | — | all | None | Not implemented. Requires persisted IMDS settings with JetStream KV and enforcement during instance launch. | — | **NOT IMPLEMENTED** |
+| `modify-instance-metadata-defaults` | — | all | None | Not implemented. Requires persisted IMDS settings with JetStream KV and enforcement during instance launch. | — | **NOT IMPLEMENTED** |
+| `get-snapshot-block-public-access-state` | — | all | None | Not implemented. Requires snapshot feature to be implemented first. | — | **NOT IMPLEMENTED** |
+| `enable-snapshot-block-public-access` | — | all | None | Not implemented. Requires snapshot feature to be implemented first. | — | **NOT IMPLEMENTED** |
+| `disable-snapshot-block-public-access` | — | all | None | Not implemented. Requires snapshot feature to be implemented first. | — | **NOT IMPLEMENTED** |
+| `get-image-block-public-access-state` | — | all | None | Not implemented. Requires AMI sharing/public access feature to be implemented first. | — | **NOT IMPLEMENTED** |
+| `enable-image-block-public-access` | — | all | None | Not implemented. Requires AMI sharing/public access feature to be implemented first. | — | **NOT IMPLEMENTED** |
+| `disable-image-block-public-access` | — | all | None | Not implemented. Requires AMI sharing/public access feature to be implemented first. | — | **NOT IMPLEMENTED** |
 
 ### EC2 - VPC Networking (Core)
 

@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -101,73 +100,3 @@ func TestSerialConsole_EnableDisable(t *testing.T) {
 	assert.False(t, *getOut.SerialConsoleAccessEnabled)
 }
 
-// IMDS tests
-
-func TestGetInstanceMetadataDefaults(t *testing.T) {
-	svc := setupTestAccountService(t)
-	out, err := svc.GetInstanceMetadataDefaults(&ec2.GetInstanceMetadataDefaultsInput{})
-	require.NoError(t, err)
-	require.NotNil(t, out.AccountLevel)
-	assert.Equal(t, "optional", *out.AccountLevel.HttpTokens)
-	assert.Equal(t, int64(1), *out.AccountLevel.HttpPutResponseHopLimit)
-	assert.Equal(t, "enabled", *out.AccountLevel.HttpEndpoint)
-}
-
-func TestModifyInstanceMetadataDefaults(t *testing.T) {
-	svc := setupTestAccountService(t)
-	out, err := svc.ModifyInstanceMetadataDefaults(&ec2.ModifyInstanceMetadataDefaultsInput{
-		HttpTokens: aws.String("required"),
-	})
-	require.NoError(t, err)
-	assert.True(t, *out.Return)
-}
-
-// Snapshot Block Public Access tests
-
-func TestGetSnapshotBlockPublicAccessState(t *testing.T) {
-	svc := setupTestAccountService(t)
-	out, err := svc.GetSnapshotBlockPublicAccessState(&ec2.GetSnapshotBlockPublicAccessStateInput{})
-	require.NoError(t, err)
-	assert.Equal(t, "block-all-sharing", *out.State)
-}
-
-func TestEnableSnapshotBlockPublicAccess(t *testing.T) {
-	svc := setupTestAccountService(t)
-	out, err := svc.EnableSnapshotBlockPublicAccess(&ec2.EnableSnapshotBlockPublicAccessInput{
-		State: aws.String("block-all-sharing"),
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "block-all-sharing", *out.State)
-}
-
-func TestDisableSnapshotBlockPublicAccess(t *testing.T) {
-	svc := setupTestAccountService(t)
-	out, err := svc.DisableSnapshotBlockPublicAccess(&ec2.DisableSnapshotBlockPublicAccessInput{})
-	require.NoError(t, err)
-	assert.Equal(t, "unblocked", *out.State)
-}
-
-// Image Block Public Access tests
-
-func TestGetImageBlockPublicAccessState(t *testing.T) {
-	svc := setupTestAccountService(t)
-	out, err := svc.GetImageBlockPublicAccessState(&ec2.GetImageBlockPublicAccessStateInput{})
-	require.NoError(t, err)
-	assert.Equal(t, "block-new-sharing", *out.ImageBlockPublicAccessState)
-}
-
-func TestEnableImageBlockPublicAccess(t *testing.T) {
-	svc := setupTestAccountService(t)
-	out, err := svc.EnableImageBlockPublicAccess(&ec2.EnableImageBlockPublicAccessInput{
-		ImageBlockPublicAccessState: aws.String("block-new-sharing"),
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "block-new-sharing", *out.ImageBlockPublicAccessState)
-}
-
-func TestDisableImageBlockPublicAccess(t *testing.T) {
-	svc := setupTestAccountService(t)
-	out, err := svc.DisableImageBlockPublicAccess(&ec2.DisableImageBlockPublicAccessInput{})
-	require.NoError(t, err)
-	assert.Equal(t, "unblocked", *out.ImageBlockPublicAccessState)
-}
