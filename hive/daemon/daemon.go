@@ -26,6 +26,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
+	handlers_ec2_account "github.com/mulgadc/hive/hive/handlers/ec2/account"
 	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
 	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
@@ -78,6 +79,7 @@ type Daemon struct {
 	keyService      *handlers_ec2_key.KeyServiceImpl
 	imageService    *handlers_ec2_image.ImageServiceImpl
 	volumeService   *handlers_ec2_volume.VolumeServiceImpl
+	accountService  *handlers_ec2_account.AccountSettingsServiceImpl
 	ctx             context.Context
 	cancel          context.CancelFunc
 	shutdownWg      sync.WaitGroup
@@ -447,6 +449,20 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.DescribeInstances", d.handleEC2DescribeInstances, ""},
 		{"ec2.DescribeInstanceTypes", d.handleEC2DescribeInstanceTypes, ""},
 		{"ec2.startinstances", d.handleEC2StartInstances, "hive-workers"},
+		{"ec2.EnableEbsEncryptionByDefault", d.handleEC2EnableEbsEncryptionByDefault, "hive-workers"},
+		{"ec2.DisableEbsEncryptionByDefault", d.handleEC2DisableEbsEncryptionByDefault, "hive-workers"},
+		{"ec2.GetEbsEncryptionByDefault", d.handleEC2GetEbsEncryptionByDefault, "hive-workers"},
+		{"ec2.GetSerialConsoleAccessStatus", d.handleEC2GetSerialConsoleAccessStatus, "hive-workers"},
+		{"ec2.EnableSerialConsoleAccess", d.handleEC2EnableSerialConsoleAccess, "hive-workers"},
+		{"ec2.DisableSerialConsoleAccess", d.handleEC2DisableSerialConsoleAccess, "hive-workers"},
+		{"ec2.GetInstanceMetadataDefaults", d.handleEC2GetInstanceMetadataDefaults, "hive-workers"},
+		{"ec2.ModifyInstanceMetadataDefaults", d.handleEC2ModifyInstanceMetadataDefaults, "hive-workers"},
+		{"ec2.GetSnapshotBlockPublicAccessState", d.handleEC2GetSnapshotBlockPublicAccessState, "hive-workers"},
+		{"ec2.EnableSnapshotBlockPublicAccess", d.handleEC2EnableSnapshotBlockPublicAccess, "hive-workers"},
+		{"ec2.DisableSnapshotBlockPublicAccess", d.handleEC2DisableSnapshotBlockPublicAccess, "hive-workers"},
+		{"ec2.GetImageBlockPublicAccessState", d.handleEC2GetImageBlockPublicAccessState, "hive-workers"},
+		{"ec2.EnableImageBlockPublicAccess", d.handleEC2EnableImageBlockPublicAccess, "hive-workers"},
+		{"ec2.DisableImageBlockPublicAccess", d.handleEC2DisableImageBlockPublicAccess, "hive-workers"},
 		{fmt.Sprintf("hive.admin.%s.health", d.node), d.handleHealthCheck, ""},
 		{"hive.nodes.discover", d.handleNodeDiscover, ""},
 	}
@@ -490,6 +506,13 @@ func (d *Daemon) Start() error {
 	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
 	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config)
 	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config, d.natsConn)
+
+	accountSvc, err := handlers_ec2_account.NewAccountSettingsServiceImplWithNATS(d.config, d.natsConn)
+	if err != nil {
+		slog.Warn("Failed to create account settings service with NATS, using in-memory fallback", "error", err)
+		accountSvc = handlers_ec2_account.NewAccountSettingsServiceImpl(d.config)
+	}
+	d.accountService = accountSvc
 
 	d.restoreInstances()
 

@@ -1104,3 +1104,61 @@ func (d *Daemon) handleNodeDiscover(msg *nats.Msg) {
 	msg.Respond(jsonResponse)
 	slog.Debug("Node discovery responded", "node", d.node)
 }
+
+// Account settings handlers
+
+func (d *Daemon) handleEC2EnableEbsEncryptionByDefault(msg *nats.Msg) {
+	handleNATSRequest(msg, d.accountService.EnableEbsEncryptionByDefault)
+}
+
+func (d *Daemon) handleEC2DisableEbsEncryptionByDefault(msg *nats.Msg) {
+	handleNATSRequest(msg, d.accountService.DisableEbsEncryptionByDefault)
+}
+
+func (d *Daemon) handleEC2GetEbsEncryptionByDefault(msg *nats.Msg) {
+	handleNATSRequest(msg, d.accountService.GetEbsEncryptionByDefault)
+}
+
+func (d *Daemon) handleEC2GetSerialConsoleAccessStatus(msg *nats.Msg) {
+	handleNATSRequest(msg, d.accountService.GetSerialConsoleAccessStatus)
+}
+
+func (d *Daemon) handleEC2EnableSerialConsoleAccess(msg *nats.Msg) {
+	handleNATSRequest(msg, d.accountService.EnableSerialConsoleAccess)
+}
+
+func (d *Daemon) handleEC2DisableSerialConsoleAccess(msg *nats.Msg) {
+	handleNATSRequest(msg, d.accountService.DisableSerialConsoleAccess)
+}
+
+func (d *Daemon) handleEC2GetInstanceMetadataDefaults(msg *nats.Msg) {
+	handleNATSRequest(msg, d.accountService.GetInstanceMetadataDefaults)
+}
+
+func (d *Daemon) handleEC2ModifyInstanceMetadataDefaults(msg *nats.Msg) {
+	handleNATSRequest(msg, d.accountService.ModifyInstanceMetadataDefaults)
+}
+
+func (d *Daemon) handleEC2GetSnapshotBlockPublicAccessState(msg *nats.Msg) {
+	handleNATSRequest(msg, d.accountService.GetSnapshotBlockPublicAccessState)
+}
+
+func (d *Daemon) handleEC2EnableSnapshotBlockPublicAccess(msg *nats.Msg) {
+	handleNATSRequest(msg, d.accountService.EnableSnapshotBlockPublicAccess)
+}
+
+func (d *Daemon) handleEC2DisableSnapshotBlockPublicAccess(msg *nats.Msg) {
+	handleNATSRequest(msg, d.accountService.DisableSnapshotBlockPublicAccess)
+}
+
+func (d *Daemon) handleEC2GetImageBlockPublicAccessState(msg *nats.Msg) {
+	handleNATSRequest(msg, d.accountService.GetImageBlockPublicAccessState)
+}
+
+func (d *Daemon) handleEC2EnableImageBlockPublicAccess(msg *nats.Msg) {
+	handleNATSRequest(msg, d.accountService.EnableImageBlockPublicAccess)
+}
+
+func (d *Daemon) handleEC2DisableImageBlockPublicAccess(msg *nats.Msg) {
+	handleNATSRequest(msg, d.accountService.DisableImageBlockPublicAccess)
+}
