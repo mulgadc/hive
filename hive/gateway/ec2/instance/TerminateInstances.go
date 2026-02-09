@@ -55,45 +55,13 @@ func TerminateInstances(input *ec2.TerminateInstancesInput, natsConn *nats.Conn)
 		msg, err := natsConn.Request(subject, jsonData, 5*time.Second)
 		if err != nil {
 			slog.Error("TerminateInstances: Failed to send command", "instance_id", instanceID, "err", err)
-			// Add failed state change
-			stateChange := &ec2.InstanceStateChange{
-				InstanceId: &instanceID,
-				CurrentState: &ec2.InstanceState{
-					Code: new(int64),
-					Name: new(string),
-				},
-				PreviousState: &ec2.InstanceState{
-					Code: new(int64),
-					Name: new(string),
-				},
-			}
-			*stateChange.CurrentState.Code = 16 // running
-			*stateChange.CurrentState.Name = "running"
-			*stateChange.PreviousState.Code = 16
-			*stateChange.PreviousState.Name = "running"
-			stateChanges = append(stateChanges, stateChange)
+			stateChanges = append(stateChanges, newStateChange(instanceID, 16, "running", 16, "running"))
 			continue
 		}
 
 		slog.Info("TerminateInstances: Command sent successfully", "instance_id", instanceID, "response", string(msg.Data))
 
-		// Build state change response (running -> shutting-down)
-		stateChange := &ec2.InstanceStateChange{
-			InstanceId: &instanceID,
-			CurrentState: &ec2.InstanceState{
-				Code: new(int64),
-				Name: new(string),
-			},
-			PreviousState: &ec2.InstanceState{
-				Code: new(int64),
-				Name: new(string),
-			},
-		}
-		*stateChange.CurrentState.Code = 32 // shutting-down
-		*stateChange.CurrentState.Name = "shutting-down"
-		*stateChange.PreviousState.Code = 16 // running
-		*stateChange.PreviousState.Name = "running"
-		stateChanges = append(stateChanges, stateChange)
+		stateChanges = append(stateChanges, newStateChange(instanceID, 32, "shutting-down", 16, "running"))
 	}
 
 	output := &ec2.TerminateInstancesOutput{

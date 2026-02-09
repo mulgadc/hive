@@ -57,45 +57,13 @@ func StartInstances(input *ec2.StartInstancesInput, natsConn *nats.Conn) (*ec2.S
 		msg, err := natsConn.Request(subject, jsonData, 30*time.Second)
 		if err != nil {
 			slog.Error("StartInstances: Failed to send command", "instance_id", instanceID, "err", err)
-			// Add failed state change
-			stateChange := &ec2.InstanceStateChange{
-				InstanceId: &instanceID,
-				CurrentState: &ec2.InstanceState{
-					Code: new(int64),
-					Name: new(string),
-				},
-				PreviousState: &ec2.InstanceState{
-					Code: new(int64),
-					Name: new(string),
-				},
-			}
-			*stateChange.CurrentState.Code = 80 // stopped
-			*stateChange.CurrentState.Name = "stopped"
-			*stateChange.PreviousState.Code = 80
-			*stateChange.PreviousState.Name = "stopped"
-			stateChanges = append(stateChanges, stateChange)
+			stateChanges = append(stateChanges, newStateChange(instanceID, 80, "stopped", 80, "stopped"))
 			continue
 		}
 
 		slog.Info("StartInstances: Command sent successfully", "instance_id", instanceID, "response", string(msg.Data))
 
-		// Build state change response (stopped -> pending)
-		stateChange := &ec2.InstanceStateChange{
-			InstanceId: &instanceID,
-			CurrentState: &ec2.InstanceState{
-				Code: new(int64),
-				Name: new(string),
-			},
-			PreviousState: &ec2.InstanceState{
-				Code: new(int64),
-				Name: new(string),
-			},
-		}
-		*stateChange.CurrentState.Code = 0 // pending
-		*stateChange.CurrentState.Name = "pending"
-		*stateChange.PreviousState.Code = 80 // stopped
-		*stateChange.PreviousState.Name = "stopped"
-		stateChanges = append(stateChanges, stateChange)
+		stateChanges = append(stateChanges, newStateChange(instanceID, 0, "pending", 80, "stopped"))
 	}
 
 	output := &ec2.StartInstancesOutput{
