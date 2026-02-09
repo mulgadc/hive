@@ -42,7 +42,7 @@ type Service struct {
 }
 
 // New creates a new predastore service
-func New(config interface{}) (svc *Service, err error) {
+func New(config any) (svc *Service, err error) {
 	svc = &Service{
 		Config: config.(*Config),
 	}

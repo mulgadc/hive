@@ -188,7 +188,7 @@ func TestMemoryObjectStore_Clear(t *testing.T) {
 	store := NewMemoryObjectStore()
 
 	// Add some objects
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		_, _ = store.PutObject(&s3.PutObjectInput{
 			Bucket: aws.String("bucket"),
 			Key:    aws.String("key-" + string(rune('0'+i))),
@@ -284,7 +284,7 @@ func TestMemoryObjectStore_ConcurrentAccess(t *testing.T) {
 
 	// Concurrent writes
 	wg.Add(numGoroutines)
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		go func(idx int) {
 			defer wg.Done()
 			_, _ = store.PutObject(&s3.PutObjectInput{
@@ -298,7 +298,7 @@ func TestMemoryObjectStore_ConcurrentAccess(t *testing.T) {
 
 	// Concurrent reads
 	wg.Add(numGoroutines)
-	for i := 0; i < numGoroutines; i++ {
+	for range numGoroutines {
 		go func() {
 			defer wg.Done()
 			_, _ = store.ListObjects(&s3.ListObjectsInput{

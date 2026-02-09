@@ -1452,7 +1452,7 @@ func TestRunInstances_CountValidation(t *testing.T) {
 		require.NoError(t, err)
 
 		// Should return validation error
-		var errResp map[string]interface{}
+		var errResp map[string]any
 		err = json.Unmarshal(resp.Data, &errResp)
 		require.NoError(t, err)
 		assert.Contains(t, errResp, "Code", "Should return error response")
@@ -1471,7 +1471,7 @@ func TestRunInstances_CountValidation(t *testing.T) {
 		resp, err := daemon.natsConn.Request("ec2.RunInstances", inputJSON, 5*time.Second)
 		require.NoError(t, err)
 
-		var errResp map[string]interface{}
+		var errResp map[string]any
 		err = json.Unmarshal(resp.Data, &errResp)
 		require.NoError(t, err)
 		assert.Contains(t, errResp, "Code")
@@ -1489,7 +1489,7 @@ func TestRunInstances_CountValidation(t *testing.T) {
 		resp, err := daemon.natsConn.Request("ec2.RunInstances", inputJSON, 5*time.Second)
 		require.NoError(t, err)
 
-		var errResp map[string]interface{}
+		var errResp map[string]any
 		err = json.Unmarshal(resp.Data, &errResp)
 		require.NoError(t, err)
 		assert.Contains(t, errResp, "Code")
@@ -1508,7 +1508,7 @@ func TestRunInstances_CountValidation(t *testing.T) {
 		resp, err := daemon.natsConn.Request("ec2.RunInstances", inputJSON, 5*time.Second)
 		require.NoError(t, err)
 
-		var errResp map[string]interface{}
+		var errResp map[string]any
 		err = json.Unmarshal(resp.Data, &errResp)
 		require.NoError(t, err)
 		assert.Equal(t, "InsufficientInstanceCapacity", errResp["Code"])
@@ -1535,7 +1535,7 @@ func TestResourceManager_ConcurrentAccess(t *testing.T) {
 
 	// Goroutine 1: Allocate and deallocate
 	go func() {
-		for i := 0; i < iterations; i++ {
+		for range iterations {
 			if rm.canAllocate(microType, 1) >= 1 {
 				rm.allocate(microType)
 				rm.deallocate(microType)
@@ -1546,7 +1546,7 @@ func TestResourceManager_ConcurrentAccess(t *testing.T) {
 
 	// Goroutine 2: Check capacity
 	go func() {
-		for i := 0; i < iterations; i++ {
+		for range iterations {
 			_ = rm.canAllocate(microType, 10)
 		}
 		done <- true
@@ -1554,7 +1554,7 @@ func TestResourceManager_ConcurrentAccess(t *testing.T) {
 
 	// Goroutine 3: Allocate and deallocate
 	go func() {
-		for i := 0; i < iterations; i++ {
+		for range iterations {
 			if rm.canAllocate(microType, 1) >= 1 {
 				rm.allocate(microType)
 				rm.deallocate(microType)

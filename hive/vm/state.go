@@ -1,5 +1,7 @@
 package vm
 
+import "slices"
+
 // InstanceState represents a typed VM lifecycle state.
 type InstanceState string
 
@@ -52,10 +54,5 @@ func IsValidTransition(current, target InstanceState) bool {
 	if !ok {
 		return false
 	}
-	for _, s := range allowed {
-		if s == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowed, target)
 }
