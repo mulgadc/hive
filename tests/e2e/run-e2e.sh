@@ -387,7 +387,7 @@ $AWS_EC2 create-tags --resources "$INSTANCE_ID" --tags Key=Name,Value=e2e-test K
 # 6b: Verify tags with describe-tags (resource-id filter)
 echo "Verifying tags on instance..."
 TAG_COUNT=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" \
-    --query 'Tags | length(@)' --output text)
+    --query 'length(Tags || `[]`)' --output text)
 if [ "$TAG_COUNT" -ne 3 ]; then
     echo "Expected 3 tags on instance, got $TAG_COUNT"
     exit 1
@@ -401,7 +401,7 @@ $AWS_EC2 create-tags --resources "$VOLUME_ID" --tags Key=Name,Value=e2e-root-vol
 # 6d: Filter by key
 echo "Testing key filter..."
 ENV_TAGS=$($AWS_EC2 describe-tags --filters "Name=key,Values=Environment" \
-    --query 'Tags | length(@)' --output text)
+    --query 'length(Tags || `[]`)' --output text)
 if [ "$ENV_TAGS" -ne 2 ]; then
     echo "Expected 2 'Environment' tags across resources, got $ENV_TAGS"
     exit 1
@@ -411,7 +411,7 @@ echo "Key filter returned $ENV_TAGS tags"
 # 6e: Filter by resource-type
 echo "Testing resource-type filter..."
 INSTANCE_TAGS=$($AWS_EC2 describe-tags --filters "Name=resource-type,Values=instance" \
-    --query 'Tags | length(@)' --output text)
+    --query 'length(Tags || `[]`)' --output text)
 if [ "$INSTANCE_TAGS" -ne 3 ]; then
     echo "Expected 3 instance tags, got $INSTANCE_TAGS"
     exit 1
@@ -434,7 +434,7 @@ echo "Tag overwrite verified"
 echo "Deleting DeleteMe tag unconditionally..."
 $AWS_EC2 delete-tags --resources "$INSTANCE_ID" --tags Key=DeleteMe
 REMAINING=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" \
-    --query 'Tags | length(@)' --output text)
+    --query 'length(Tags || `[]`)' --output text)
 if [ "$REMAINING" -ne 2 ]; then
     echo "Expected 2 tags after unconditional delete, got $REMAINING"
     exit 1
@@ -446,7 +446,7 @@ echo "Attempting delete with wrong value (should be no-op)..."
 $AWS_EC2 delete-tags --resources "$INSTANCE_ID" --tags Key=Environment,Value=production
 ENV_STILL=$($AWS_EC2 describe-tags \
     --filters "Name=resource-id,Values=$INSTANCE_ID" "Name=key,Values=Environment" \
-    --query 'Tags | length(@)' --output text)
+    --query 'length(Tags || `[]`)' --output text)
 if [ "$ENV_STILL" -ne 1 ]; then
     echo "Value-conditional delete incorrectly removed tag"
     exit 1
@@ -458,7 +458,7 @@ echo "Deleting Environment tag with correct value..."
 $AWS_EC2 delete-tags --resources "$INSTANCE_ID" --tags Key=Environment,Value=testing
 ENV_GONE=$($AWS_EC2 describe-tags \
     --filters "Name=resource-id,Values=$INSTANCE_ID" "Name=key,Values=Environment" \
-    --query 'Tags | length(@)' --output text)
+    --query 'length(Tags || `[]`)' --output text)
 if [ "$ENV_GONE" -ne 0 ]; then
     echo "Value-conditional delete failed to remove matching tag"
     exit 1
@@ -467,7 +467,7 @@ echo "Value-conditional match deleted tag"
 
 # 6j: Verify only Name tag remains on instance
 FINAL_COUNT=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" \
-    --query 'Tags | length(@)' --output text)
+    --query 'length(Tags || `[]`)' --output text)
 if [ "$FINAL_COUNT" -ne 1 ]; then
     echo "Expected 1 tag remaining on instance, got $FINAL_COUNT"
     exit 1
