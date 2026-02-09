@@ -1,9 +1,6 @@
 package handlers_ec2_volume
 
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -21,132 +18,22 @@ func NewNATSVolumeService(conn *nats.Conn) VolumeService {
 	return &NATSVolumeService{natsConn: conn}
 }
 
-// CreateVolume sends a CreateVolume request via NATS and waits for response
 func (s *NATSVolumeService) CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Volume, error) {
-	jsonData, err := json.Marshal(input)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal input: %w", err)
-	}
-
-	msg, err := s.natsConn.Request("ec2.CreateVolume", jsonData, 30*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("NATS request failed: %w", err)
-	}
-
-	responseError, err := utils.ValidateErrorPayload(msg.Data)
-	if err != nil {
-		return nil, errors.New(*responseError.Code)
-	}
-
-	var output ec2.Volume
-	err = json.Unmarshal(msg.Data, &output)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return &output, nil
+	return utils.NATSRequest[ec2.Volume](s.natsConn, "ec2.CreateVolume", input, 30*time.Second)
 }
 
-// DescribeVolumes sends a DescribeVolumes request via NATS and waits for response
 func (s *NATSVolumeService) DescribeVolumes(input *ec2.DescribeVolumesInput) (*ec2.DescribeVolumesOutput, error) {
-	jsonData, err := json.Marshal(input)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal input: %w", err)
-	}
-
-	msg, err := s.natsConn.Request("ec2.DescribeVolumes", jsonData, 30*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("NATS request failed: %w", err)
-	}
-
-	responseError, err := utils.ValidateErrorPayload(msg.Data)
-	if err != nil {
-		return nil, errors.New(*responseError.Code)
-	}
-
-	var output ec2.DescribeVolumesOutput
-	err = json.Unmarshal(msg.Data, &output)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return &output, nil
+	return utils.NATSRequest[ec2.DescribeVolumesOutput](s.natsConn, "ec2.DescribeVolumes", input, 30*time.Second)
 }
 
-// ModifyVolume sends a ModifyVolume request via NATS and waits for response
 func (s *NATSVolumeService) ModifyVolume(input *ec2.ModifyVolumeInput) (*ec2.ModifyVolumeOutput, error) {
-	jsonData, err := json.Marshal(input)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal input: %w", err)
-	}
-
-	msg, err := s.natsConn.Request("ec2.ModifyVolume", jsonData, 30*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("NATS request failed: %w", err)
-	}
-
-	responseError, err := utils.ValidateErrorPayload(msg.Data)
-	if err != nil {
-		return nil, errors.New(*responseError.Code)
-	}
-
-	var output ec2.ModifyVolumeOutput
-	err = json.Unmarshal(msg.Data, &output)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return &output, nil
+	return utils.NATSRequest[ec2.ModifyVolumeOutput](s.natsConn, "ec2.ModifyVolume", input, 30*time.Second)
 }
 
-// DescribeVolumeStatus sends a DescribeVolumeStatus request via NATS and waits for response
 func (s *NATSVolumeService) DescribeVolumeStatus(input *ec2.DescribeVolumeStatusInput) (*ec2.DescribeVolumeStatusOutput, error) {
-	jsonData, err := json.Marshal(input)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal input: %w", err)
-	}
-
-	msg, err := s.natsConn.Request("ec2.DescribeVolumeStatus", jsonData, 30*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("NATS request failed: %w", err)
-	}
-
-	responseError, err := utils.ValidateErrorPayload(msg.Data)
-	if err != nil {
-		return nil, errors.New(*responseError.Code)
-	}
-
-	var output ec2.DescribeVolumeStatusOutput
-	err = json.Unmarshal(msg.Data, &output)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return &output, nil
+	return utils.NATSRequest[ec2.DescribeVolumeStatusOutput](s.natsConn, "ec2.DescribeVolumeStatus", input, 30*time.Second)
 }
 
-// DeleteVolume sends a DeleteVolume request via NATS and waits for response
 func (s *NATSVolumeService) DeleteVolume(input *ec2.DeleteVolumeInput) (*ec2.DeleteVolumeOutput, error) {
-	jsonData, err := json.Marshal(input)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal input: %w", err)
-	}
-
-	msg, err := s.natsConn.Request("ec2.DeleteVolume", jsonData, 30*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("NATS request failed: %w", err)
-	}
-
-	responseError, err := utils.ValidateErrorPayload(msg.Data)
-	if err != nil {
-		return nil, errors.New(*responseError.Code)
-	}
-
-	var output ec2.DeleteVolumeOutput
-	err = json.Unmarshal(msg.Data, &output)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return &output, nil
+	return utils.NATSRequest[ec2.DeleteVolumeOutput](s.natsConn, "ec2.DeleteVolume", input, 30*time.Second)
 }

@@ -1,10 +1,6 @@
 package handlers_ec2_instance
 
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -22,37 +18,6 @@ func NewNATSInstanceService(conn *nats.Conn) InstanceService {
 	return &NATSInstanceService{natsConn: conn}
 }
 
-// RunInstances sends a RunInstances request to the daemon via NATS
 func (s *NATSInstanceService) RunInstances(input *ec2.RunInstancesInput) (*ec2.Reservation, error) {
-	// Marshal input to JSON
-	jsonData, err := json.Marshal(input)
-	if err != nil {
-		slog.Error("NATSInstanceService: Failed to marshal RunInstancesInput", "err", err)
-		return nil, fmt.Errorf("failed to marshal input: %w", err)
-	}
-
-	// Send request to daemon via NATS with 5 minute timeout
-	msg, err := s.natsConn.Request("ec2.RunInstances", jsonData, 5*time.Minute)
-	if err != nil {
-		slog.Error("NATSInstanceService: Failed to send NATS request", "err", err)
-		return nil, fmt.Errorf("NATS request failed: %w", err)
-	}
-
-	// Check if the response is an error
-	responseError, err := utils.ValidateErrorPayload(msg.Data)
-	if err != nil {
-		// Response is an error payload - return just the error code for gateway lookup
-		slog.Error("NATSInstanceService: Received error response from daemon", "code", responseError.Code)
-		return nil, errors.New(*responseError.Code)
-	}
-
-	// Unmarshal successful response
-	var reservation ec2.Reservation
-	err = json.Unmarshal(msg.Data, &reservation)
-	if err != nil {
-		slog.Error("NATSInstanceService: Failed to unmarshal reservation", "err", err)
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return &reservation, nil
+	return utils.NATSRequest[ec2.Reservation](s.natsConn, "ec2.RunInstances", input, 5*time.Minute)
 }

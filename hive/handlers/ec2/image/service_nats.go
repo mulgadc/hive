@@ -1,7 +1,6 @@
 package handlers_ec2_image
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -20,37 +19,11 @@ func NewNATSImageService(conn *nats.Conn) ImageService {
 	return &NATSImageService{natsConn: conn}
 }
 
-// DescribeImages sends a request via NATS and waits for response
 func (s *NATSImageService) DescribeImages(input *ec2.DescribeImagesInput) (*ec2.DescribeImagesOutput, error) {
-	// Marshal input to JSON
-	jsonData, err := json.Marshal(input)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal input: %w", err)
-	}
-
-	// Send NATS request with 30 second timeout
-	msg, err := s.natsConn.Request("ec2.DescribeImages", jsonData, 30*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("NATS request failed: %w", err)
-	}
-
-	// Validate error response
-	responseError, err := utils.ValidateErrorPayload(msg.Data)
-	if err != nil {
-		return nil, fmt.Errorf("daemon returned error: %s", *responseError.Code)
-	}
-
-	// Unmarshal successful response
-	var output ec2.DescribeImagesOutput
-	err = json.Unmarshal(msg.Data, &output)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return &output, nil
+	return utils.NATSRequest[ec2.DescribeImagesOutput](s.natsConn, "ec2.DescribeImages", input, 30*time.Second)
 }
 
-// Stub implementations for other ImageService methods
+// Stub implementations for unimplemented ImageService methods
 func (s *NATSImageService) CreateImage(input *ec2.CreateImageInput) (*ec2.CreateImageOutput, error) {
 	return nil, fmt.Errorf("CreateImage not yet implemented")
 }
