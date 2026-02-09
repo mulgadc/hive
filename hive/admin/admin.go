@@ -627,4 +627,3 @@ func ParsePredastoreNodeIDFromConfig(tomlContent string, ip string) int {
 	}
 	return FindNodeIDByIP(cfg.DB, ip)
 }
-

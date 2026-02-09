@@ -8,8 +8,8 @@ import (
 )
 
 type NBDKitConfig struct {
-	Port       int    `json:"port"`        // TCP port (when using TCP transport)
-	Socket     string `json:"socket"`      // Unix socket path (when using socket transport)
+	Port       int    `json:"port"`   // TCP port (when using TCP transport)
+	Socket     string `json:"socket"` // Unix socket path (when using socket transport)
 	PidFile    string `json:"pid_file"`
 	PluginPath string `json:"plugin_path"`
 	Verbose    bool   `json:"verbose"`

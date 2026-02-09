@@ -250,4 +250,3 @@ func TestDescribeVolumeStatus_WithVolumeIDs(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidVolumeNotFound, err.Error())
 }
-

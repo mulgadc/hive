@@ -32,8 +32,8 @@ import (
 	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
 	handlers_ec2_snapshot "github.com/mulgadc/hive/hive/handlers/ec2/snapshot"
 	handlers_ec2_tags "github.com/mulgadc/hive/hive/handlers/ec2/tags"
-	"github.com/mulgadc/hive/hive/objectstore"
 	handlers_ec2_volume "github.com/mulgadc/hive/hive/handlers/ec2/volume"
+	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/hive/hive/vm"
@@ -883,7 +883,6 @@ func (d *Daemon) WriteState() error {
 	return nil
 }
 
-
 // LoadState loads the instance state from JetStream KV store (required)
 func (d *Daemon) LoadState() error {
 	if d.jsManager == nil {
@@ -900,7 +899,6 @@ func (d *Daemon) LoadState() error {
 	d.Instances.VMS = instances.VMS
 	return nil
 }
-
 
 func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId string) (*qmp.QMPResponse, error) {
 
@@ -971,8 +969,6 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 		}
 	}
 }
-
-
 
 func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) error {
 
@@ -1782,4 +1778,3 @@ func (rm *ResourceManager) deallocate(instanceType *ec2.InstanceTypeInfo) {
 	rm.allocatedVCPU -= int(vCPUs)
 	rm.allocatedMem -= memoryGB
 }
-

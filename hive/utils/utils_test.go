@@ -316,13 +316,13 @@ func TestValidateErrorPayload(t *testing.T) {
 
 func TestParseNBDURI(t *testing.T) {
 	tests := []struct {
-		name           string
-		uri            string
-		wantType       string
-		wantPath       string
-		wantHost       string
-		wantPort       int
-		wantErr        bool
+		name     string
+		uri      string
+		wantType string
+		wantPath string
+		wantHost string
+		wantPort int
+		wantErr  bool
 	}{
 		{
 			name:     "Unix socket",

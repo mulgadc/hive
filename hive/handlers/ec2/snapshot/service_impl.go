@@ -360,4 +360,3 @@ func (s *SnapshotServiceImpl) CopySnapshot(input *ec2.CopySnapshotInput) (*ec2.C
 		SnapshotId: aws.String(newSnapshotID),
 	}, nil
 }
-
