@@ -4,10 +4,8 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/awserrors"
-	handlers_ec2_snapshot "github.com/mulgadc/hive/hive/handlers/ec2/snapshot"
 	"github.com/nats-io/nats.go"
 )
 
@@ -32,7 +30,9 @@ func ValidateCreateSnapshotsInput(input *ec2.CreateSnapshotsInput) error {
 	return nil
 }
 
-// CreateSnapshots handles the EC2 CreateSnapshots API call (batch snapshot creation)
+// CreateSnapshots handles the EC2 CreateSnapshots API call (batch snapshot creation).
+// Stub: requires instance-volume attachment tracking to discover which volumes to snapshot.
+// Currently returns an empty snapshot list after validation.
 func CreateSnapshots(input *ec2.CreateSnapshotsInput, natsConn *nats.Conn) (ec2.CreateSnapshotsOutput, error) {
 	var output ec2.CreateSnapshotsOutput
 
@@ -40,38 +40,6 @@ func CreateSnapshots(input *ec2.CreateSnapshotsInput, natsConn *nats.Conn) (ec2.
 		return output, err
 	}
 
-	svc := handlers_ec2_snapshot.NewNATSSnapshotService(natsConn)
-
-	// For multi-volume snapshot, we create snapshots for volumes attached to the instance.
-	// Current stub: attempt a single snapshot creation and return as batch result.
-	var snapshots []*ec2.SnapshotInfo
-
-	createSnapshotInput := &ec2.CreateSnapshotInput{
-		Description: input.Description,
-	}
-
-	result, err := svc.CreateSnapshot(createSnapshotInput)
-	if err != nil {
-		// If we can't create a snapshot, return empty result
-		output.Snapshots = snapshots
-		return output, nil
-	}
-
-	snapshotInfo := &ec2.SnapshotInfo{
-		SnapshotId:  result.SnapshotId,
-		VolumeId:    result.VolumeId,
-		VolumeSize:  result.VolumeSize,
-		StartTime:   result.StartTime,
-		State:       result.State,
-		Progress:    result.Progress,
-		Encrypted:   result.Encrypted,
-		Description: result.Description,
-		OwnerId:     aws.String("000000000000"),
-		Tags:        []*ec2.Tag{},
-	}
-
-	snapshots = append(snapshots, snapshotInfo)
-	output.Snapshots = snapshots
-
+	// TODO: look up volumes attached to the instance and create snapshots for each
 	return output, nil
 }

@@ -16,9 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Ensure interface compliance
-var _ SnapshotService = (*SnapshotServiceImpl)(nil)
-
 // setupTestSnapshotService creates a snapshot service with in-memory storage for testing
 func setupTestSnapshotService(t *testing.T) (*SnapshotServiceImpl, *objectstore.MemoryObjectStore) {
 	store := objectstore.NewMemoryObjectStore()
@@ -321,22 +318,3 @@ func TestCopySnapshot_PreservesTags(t *testing.T) {
 	assert.Equal(t, "test", *result.Snapshots[0].Tags[0].Value)
 }
 
-// TestIsValidSnapshotID tests the snapshot ID validation helper
-func TestIsValidSnapshotID(t *testing.T) {
-	tests := []struct {
-		id    string
-		valid bool
-	}{
-		{"snap-abc123", true},
-		{"snap-1", true},
-		{"snap-", false},
-		{"vol-abc123", false},
-		{"", false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.id, func(t *testing.T) {
-			assert.Equal(t, tc.valid, isValidSnapshotID(tc.id))
-		})
-	}
-}

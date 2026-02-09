@@ -1,6 +1,7 @@
 package handlers_ec2_snapshot
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -80,7 +81,7 @@ func (s *SnapshotServiceImpl) getSnapshotConfig(snapshotID string) (*SnapshotCon
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		if objectstore.IsNoSuchKeyError(err) || strings.Contains(err.Error(), "NoSuchKey") || strings.Contains(err.Error(), "404") {
+		if objectstore.IsNoSuchKeyError(err) {
 			return nil, errors.New(awserrors.ErrorInvalidSnapshotNotFound)
 		}
 		return nil, err
@@ -107,11 +108,39 @@ func (s *SnapshotServiceImpl) putSnapshotConfig(snapshotID string, cfg *Snapshot
 	_, err = s.store.PutObject(&s3.PutObjectInput{
 		Bucket:      aws.String(s.config.Predastore.Bucket),
 		Key:         aws.String(key),
-		Body:        strings.NewReader(string(data)),
+		Body:        bytes.NewReader(data),
 		ContentType: aws.String("application/json"),
 	})
 
 	return err
+}
+
+// snapshotConfigToEC2 converts a SnapshotConfig to an EC2 Snapshot response object
+func snapshotConfigToEC2(cfg *SnapshotConfig) *ec2.Snapshot {
+	snapshot := &ec2.Snapshot{
+		SnapshotId:  aws.String(cfg.SnapshotID),
+		VolumeId:    aws.String(cfg.VolumeID),
+		VolumeSize:  aws.Int64(cfg.VolumeSize),
+		State:       aws.String(cfg.State),
+		Progress:    aws.String(cfg.Progress),
+		StartTime:   aws.Time(cfg.StartTime),
+		Description: aws.String(cfg.Description),
+		Encrypted:   aws.Bool(cfg.Encrypted),
+		OwnerId:     aws.String(cfg.OwnerID),
+	}
+
+	if len(cfg.Tags) > 0 {
+		tags := make([]*ec2.Tag, 0, len(cfg.Tags))
+		for key, value := range cfg.Tags {
+			tags = append(tags, &ec2.Tag{
+				Key:   aws.String(key),
+				Value: aws.String(value),
+			})
+		}
+		snapshot.Tags = tags
+	}
+
+	return snapshot
 }
 
 // CreateSnapshot creates a new snapshot from a volume
@@ -124,10 +153,8 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput) (*e
 
 	slog.Info("CreateSnapshot request", "volumeId", volumeID)
 
-	// Generate snapshot ID
 	snapshotID := viperblock.GenerateVolumeID("snap", fmt.Sprintf("snap-%d", time.Now().UnixNano()), s.config.Predastore.Bucket, time.Now().Unix())
 
-	// Get volume config to get size and availability zone
 	volumeConfigKey := fmt.Sprintf("%s/config.json", volumeID)
 	volumeResult, err := s.store.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(s.config.Predastore.Bucket),
@@ -147,13 +174,14 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput) (*e
 
 	now := time.Now()
 
-	// Create snapshot config
+	// Mark as completed immediately -- Hive v1 stores snapshot metadata
+	// pointing to the source volume rather than copying actual block data.
 	snapshotCfg := &SnapshotConfig{
 		SnapshotID:       snapshotID,
 		VolumeID:         volumeID,
 		VolumeSize:       int64(volumeConfig.VolumeMetadata.SizeGiB),
-		State:            "pending",
-		Progress:         "0%",
+		State:            "completed",
+		Progress:         "100%",
 		StartTime:        now,
 		Encrypted:        volumeConfig.VolumeMetadata.IsEncrypted,
 		OwnerID:          s.config.Predastore.AccessKey,
@@ -165,63 +193,24 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput) (*e
 		snapshotCfg.Description = *input.Description
 	}
 
-	// Copy tags if provided
-	if input.TagSpecifications != nil {
-		for _, tagSpec := range input.TagSpecifications {
-			if tagSpec.ResourceType != nil && *tagSpec.ResourceType == "snapshot" {
-				for _, tag := range tagSpec.Tags {
-					if tag.Key != nil && tag.Value != nil {
-						snapshotCfg.Tags[*tag.Key] = *tag.Value
-					}
+	for _, tagSpec := range input.TagSpecifications {
+		if tagSpec.ResourceType != nil && *tagSpec.ResourceType == "snapshot" {
+			for _, tag := range tagSpec.Tags {
+				if tag.Key != nil && tag.Value != nil {
+					snapshotCfg.Tags[*tag.Key] = *tag.Value
 				}
 			}
 		}
 	}
 
-	// Store snapshot config
 	if err := s.putSnapshotConfig(snapshotID, snapshotCfg); err != nil {
 		slog.Error("CreateSnapshot failed to write config", "snapshotId", snapshotID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	// For Hive v1, we mark snapshots as completed immediately since actual data
-	// copying would require additional infrastructure. The snapshot metadata
-	// points to the volume for restore operations.
-	snapshotCfg.State = "completed"
-	snapshotCfg.Progress = "100%"
-	if err := s.putSnapshotConfig(snapshotID, snapshotCfg); err != nil {
-		slog.Error("CreateSnapshot failed to update state", "snapshotId", snapshotID, "err", err)
-		// Don't fail - snapshot exists even if state update failed
-	}
-
-	// Build response
-	snapshot := &ec2.Snapshot{
-		SnapshotId:  aws.String(snapshotID),
-		VolumeId:    aws.String(volumeID),
-		VolumeSize:  aws.Int64(snapshotCfg.VolumeSize),
-		State:       aws.String(snapshotCfg.State),
-		Progress:    aws.String(snapshotCfg.Progress),
-		StartTime:   aws.Time(now),
-		Description: aws.String(snapshotCfg.Description),
-		Encrypted:   aws.Bool(snapshotCfg.Encrypted),
-		OwnerId:     aws.String(snapshotCfg.OwnerID),
-	}
-
-	// Add tags to response
-	if len(snapshotCfg.Tags) > 0 {
-		tags := make([]*ec2.Tag, 0, len(snapshotCfg.Tags))
-		for key, value := range snapshotCfg.Tags {
-			tags = append(tags, &ec2.Tag{
-				Key:   aws.String(key),
-				Value: aws.String(value),
-			})
-		}
-		snapshot.Tags = tags
-	}
-
 	slog.Info("CreateSnapshot completed", "snapshotId", snapshotID, "volumeId", volumeID)
 
-	return snapshot, nil
+	return snapshotConfigToEC2(snapshotCfg), nil
 }
 
 // DescribeSnapshots lists snapshots matching the specified criteria
@@ -231,19 +220,13 @@ func (s *SnapshotServiceImpl) DescribeSnapshots(input *ec2.DescribeSnapshotsInpu
 
 	slog.Info("DescribeSnapshots request", "snapshotIds", input.SnapshotIds)
 
-	var snapshots []*ec2.Snapshot
-
-	// Build filter for specific snapshot IDs if provided
 	snapshotIDFilter := make(map[string]bool)
-	if input.SnapshotIds != nil && len(input.SnapshotIds) > 0 {
-		for _, id := range input.SnapshotIds {
-			if id != nil {
-				snapshotIDFilter[*id] = true
-			}
+	for _, id := range input.SnapshotIds {
+		if id != nil {
+			snapshotIDFilter[*id] = true
 		}
 	}
 
-	// List all snapshot directories from S3
 	listResult, err := s.store.ListObjects(&s3.ListObjectsInput{
 		Bucket:    aws.String(s.config.Predastore.Bucket),
 		Prefix:    aws.String("snap-"),
@@ -254,7 +237,7 @@ func (s *SnapshotServiceImpl) DescribeSnapshots(input *ec2.DescribeSnapshotsInpu
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	// Process each snapshot directory
+	var snapshots []*ec2.Snapshot
 	for _, prefix := range listResult.CommonPrefixes {
 		if prefix.Prefix == nil {
 			continue
@@ -262,43 +245,17 @@ func (s *SnapshotServiceImpl) DescribeSnapshots(input *ec2.DescribeSnapshotsInpu
 
 		snapshotID := strings.TrimSuffix(*prefix.Prefix, "/")
 
-		// Filter by snapshot ID if specified
 		if len(snapshotIDFilter) > 0 && !snapshotIDFilter[snapshotID] {
 			continue
 		}
 
-		// Get snapshot config
 		cfg, err := s.getSnapshotConfig(snapshotID)
 		if err != nil {
 			slog.Warn("DescribeSnapshots failed to get config", "snapshotId", snapshotID, "err", err)
 			continue
 		}
 
-		snapshot := &ec2.Snapshot{
-			SnapshotId:  aws.String(cfg.SnapshotID),
-			VolumeId:    aws.String(cfg.VolumeID),
-			VolumeSize:  aws.Int64(cfg.VolumeSize),
-			State:       aws.String(cfg.State),
-			Progress:    aws.String(cfg.Progress),
-			StartTime:   aws.Time(cfg.StartTime),
-			Description: aws.String(cfg.Description),
-			Encrypted:   aws.Bool(cfg.Encrypted),
-			OwnerId:     aws.String(cfg.OwnerID),
-		}
-
-		// Add tags
-		if len(cfg.Tags) > 0 {
-			tags := make([]*ec2.Tag, 0, len(cfg.Tags))
-			for key, value := range cfg.Tags {
-				tags = append(tags, &ec2.Tag{
-					Key:   aws.String(key),
-					Value: aws.String(value),
-				})
-			}
-			snapshot.Tags = tags
-		}
-
-		snapshots = append(snapshots, snapshot)
+		snapshots = append(snapshots, snapshotConfigToEC2(cfg))
 	}
 
 	slog.Info("DescribeSnapshots completed", "count", len(snapshots))
@@ -318,14 +275,12 @@ func (s *SnapshotServiceImpl) DeleteSnapshot(input *ec2.DeleteSnapshotInput) (*e
 
 	slog.Info("DeleteSnapshot request", "snapshotId", snapshotID)
 
-	// Verify snapshot exists
 	_, err := s.getSnapshotConfig(snapshotID)
 	if err != nil {
 		slog.Error("DeleteSnapshot snapshot not found", "snapshotId", snapshotID, "err", err)
 		return nil, err
 	}
 
-	// Delete all objects under snapshotID/ prefix
 	listResult, err := s.store.ListObjects(&s3.ListObjectsInput{
 		Bucket: aws.String(s.config.Predastore.Bucket),
 		Prefix: aws.String(snapshotID + "/"),
@@ -363,17 +318,14 @@ func (s *SnapshotServiceImpl) CopySnapshot(input *ec2.CopySnapshotInput) (*ec2.C
 
 	slog.Info("CopySnapshot request", "sourceSnapshotId", sourceSnapshotID)
 
-	// Get source snapshot config
 	sourceCfg, err := s.getSnapshotConfig(sourceSnapshotID)
 	if err != nil {
 		slog.Error("CopySnapshot source snapshot not found", "snapshotId", sourceSnapshotID, "err", err)
 		return nil, err
 	}
 
-	// Generate new snapshot ID
 	newSnapshotID := viperblock.GenerateVolumeID("snap", fmt.Sprintf("snap-%d", time.Now().UnixNano()), s.config.Predastore.Bucket, time.Now().Unix())
 
-	// Create new snapshot config as copy
 	newCfg := &SnapshotConfig{
 		SnapshotID:       newSnapshotID,
 		VolumeID:         sourceCfg.VolumeID,
@@ -392,12 +344,10 @@ func (s *SnapshotServiceImpl) CopySnapshot(input *ec2.CopySnapshotInput) (*ec2.C
 		newCfg.Description = *input.Description
 	}
 
-	// Copy tags
 	for k, v := range sourceCfg.Tags {
 		newCfg.Tags[k] = v
 	}
 
-	// Store new snapshot config
 	if err := s.putSnapshotConfig(newSnapshotID, newCfg); err != nil {
 		slog.Error("CopySnapshot failed to write config", "snapshotId", newSnapshotID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
@@ -410,7 +360,3 @@ func (s *SnapshotServiceImpl) CopySnapshot(input *ec2.CopySnapshotInput) (*ec2.C
 	}, nil
 }
 
-// isValidSnapshotID checks if snapshot ID format is valid
-func isValidSnapshotID(id string) bool {
-	return strings.HasPrefix(id, "snap-") && len(id) > 5
-}
