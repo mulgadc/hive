@@ -30,6 +30,7 @@ import (
 	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
 	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
+	handlers_ec2_snapshot "github.com/mulgadc/hive/hive/handlers/ec2/snapshot"
 	handlers_ec2_tags "github.com/mulgadc/hive/hive/handlers/ec2/tags"
 	"github.com/mulgadc/hive/hive/objectstore"
 	handlers_ec2_volume "github.com/mulgadc/hive/hive/handlers/ec2/volume"
@@ -80,7 +81,11 @@ type Daemon struct {
 	keyService      *handlers_ec2_key.KeyServiceImpl
 	imageService    *handlers_ec2_image.ImageServiceImpl
 	volumeService   *handlers_ec2_volume.VolumeServiceImpl
+<<<<<<< HEAD
 	accountService  *handlers_ec2_account.AccountSettingsServiceImpl
+=======
+	snapshotService *handlers_ec2_snapshot.SnapshotServiceImpl
+>>>>>>> 513fd07 (feat: snapshots (#30))
 	tagsService     *handlers_ec2_tags.TagsServiceImpl
 	ctx             context.Context
 	cancel          context.CancelFunc
@@ -448,6 +453,10 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.ModifyVolume", d.handleEC2ModifyVolume, "hive-workers"},
 		{"ec2.DeleteVolume", d.handleEC2DeleteVolume, "hive-workers"},
 		{"ec2.DescribeVolumeStatus", d.handleEC2DescribeVolumeStatus, "hive-workers"},
+		{"ec2.CreateSnapshot", d.handleEC2CreateSnapshot, "hive-workers"},
+		{"ec2.DescribeSnapshots", d.handleEC2DescribeSnapshots, "hive-workers"},
+		{"ec2.DeleteSnapshot", d.handleEC2DeleteSnapshot, "hive-workers"},
+		{"ec2.CopySnapshot", d.handleEC2CopySnapshot, "hive-workers"},
 		{"ec2.CreateTags", d.handleEC2CreateTags, "hive-workers"},
 		{"ec2.DeleteTags", d.handleEC2DeleteTags, "hive-workers"},
 		{"ec2.DescribeTags", d.handleEC2DescribeTags, "hive-workers"},
@@ -503,6 +512,7 @@ func (d *Daemon) Start() error {
 	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
 	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config)
 	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config, d.natsConn)
+	d.snapshotService = handlers_ec2_snapshot.NewSnapshotServiceImpl(d.config)
 	d.tagsService = handlers_ec2_tags.NewTagsServiceImpl(d.config)
 
 	accountSvc, err := handlers_ec2_account.NewAccountSettingsServiceImplWithNATS(d.config, d.natsConn)
