@@ -164,7 +164,7 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 		}
 		if bdm.Ebs != nil {
 			if bdm.Ebs.VolumeSize != nil {
-				size = int(*bdm.Ebs.VolumeSize)
+				size = int(*bdm.Ebs.VolumeSize) * 1024 * 1024 * 1024 // AWS API sends GiB, convert to bytes
 			}
 			if bdm.Ebs.VolumeType != nil {
 				volumeType = *bdm.Ebs.VolumeType

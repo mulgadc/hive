@@ -31,15 +31,18 @@ func setupTestSnapshotService(t *testing.T) (*SnapshotServiceImpl, *objectstore.
 }
 
 // createTestVolume creates a test volume in the mock store
+// The real S3 stores VBState (which wraps VolumeConfig), so we match that format.
 func createTestVolume(t *testing.T, store *objectstore.MemoryObjectStore, volumeID string, sizeGiB int) {
-	volumeConfig := viperblock.VolumeConfig{
-		VolumeMetadata: viperblock.VolumeMetadata{
-			SizeGiB:          uint64(sizeGiB),
-			IsEncrypted:      false,
-			AvailabilityZone: "us-east-1a",
+	volumeState := viperblock.VBState{
+		VolumeConfig: viperblock.VolumeConfig{
+			VolumeMetadata: viperblock.VolumeMetadata{
+				SizeGiB:          uint64(sizeGiB),
+				IsEncrypted:      false,
+				AvailabilityZone: "us-east-1a",
+			},
 		},
 	}
-	data, err := json.Marshal(volumeConfig)
+	data, err := json.Marshal(volumeState)
 	require.NoError(t, err)
 
 	_, err = store.PutObject(&s3.PutObjectInput{
@@ -95,6 +98,35 @@ func TestCreateSnapshot_MissingVolumeId(t *testing.T) {
 	_, err := svc.CreateSnapshot(&ec2.CreateSnapshotInput{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), awserrors.ErrorInvalidParameterValue)
+}
+
+// TestCreateSnapshot_VolumeZeroSize tests that creating a snapshot from a volume with zero SizeGiB fails
+func TestCreateSnapshot_VolumeZeroSize(t *testing.T) {
+	svc, store := setupTestSnapshotService(t)
+
+	// Store a volume config with SizeGiB == 0
+	volumeState := viperblock.VBState{
+		VolumeConfig: viperblock.VolumeConfig{
+			VolumeMetadata: viperblock.VolumeMetadata{
+				SizeGiB: 0,
+			},
+		},
+	}
+	data, err := json.Marshal(volumeState)
+	require.NoError(t, err)
+
+	_, err = store.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String("test-bucket"),
+		Key:    aws.String("vol-zerosize/config.json"),
+		Body:   strings.NewReader(string(data)),
+	})
+	require.NoError(t, err)
+
+	_, err = svc.CreateSnapshot(&ec2.CreateSnapshotInput{
+		VolumeId: aws.String("vol-zerosize"),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorServerInternal)
 }
 
 // TestCreateSnapshot_VolumeNotFound tests creating a snapshot from non-existent volume
