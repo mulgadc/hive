@@ -1,9 +1,9 @@
 package handlers_ec2_tags
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -24,14 +24,6 @@ type TagsServiceImpl struct {
 	config *config.Config
 	store  objectstore.ObjectStore
 	mutex  sync.RWMutex
-}
-
-// TagRecord represents a stored tag
-type TagRecord struct {
-	ResourceID   string `json:"resource_id"`
-	ResourceType string `json:"resource_type"`
-	Key          string `json:"key"`
-	Value        string `json:"value"`
 }
 
 // NewTagsServiceImpl creates a new tags service implementation
@@ -91,7 +83,16 @@ func getResourceType(resourceID string) string {
 
 // getTagsKey returns the S3 key for storing tags for a resource
 func getTagsKey(resourceID string) string {
-	return fmt.Sprintf("tags/%s.json", resourceID)
+	return "tags/" + resourceID + ".json"
+}
+
+// collectFilterValues adds non-nil string pointer values to the target map
+func collectFilterValues(values []*string, target map[string]bool) {
+	for _, v := range values {
+		if v != nil {
+			target[*v] = true
+		}
+	}
 }
 
 // getResourceTags retrieves tags for a specific resource from S3
@@ -103,8 +104,7 @@ func (s *TagsServiceImpl) getResourceTags(resourceID string) (map[string]string,
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		// If not found, return empty map
-		if objectstore.IsNoSuchKeyError(err) || strings.Contains(err.Error(), "NoSuchKey") || strings.Contains(err.Error(), "404") {
+		if objectstore.IsNoSuchKeyError(err) {
 			return make(map[string]string), nil
 		}
 		return nil, err
@@ -131,7 +131,7 @@ func (s *TagsServiceImpl) putResourceTags(resourceID string, tags map[string]str
 	_, err = s.store.PutObject(&s3.PutObjectInput{
 		Bucket:      aws.String(s.config.Predastore.Bucket),
 		Key:         aws.String(key),
-		Body:        strings.NewReader(string(data)),
+		Body:        bytes.NewReader(data),
 		ContentType: aws.String("application/json"),
 	})
 
@@ -213,36 +213,22 @@ func (s *TagsServiceImpl) DescribeTags(input *ec2.DescribeTagsInput) (*ec2.Descr
 	keyFilter := make(map[string]bool)
 	valueFilter := make(map[string]bool)
 
-	if input != nil && input.Filters != nil {
+	if input != nil {
 		for _, filter := range input.Filters {
 			if filter.Name == nil {
 				continue
 			}
 			switch *filter.Name {
 			case "resource-id":
-				for _, v := range filter.Values {
-					if v != nil {
-						resourceIDFilter[*v] = true
-					}
-				}
+				collectFilterValues(filter.Values, resourceIDFilter)
 			case "resource-type":
-				for _, v := range filter.Values {
-					if v != nil {
-						resourceTypeFilter[*v] = true
-					}
-				}
+				collectFilterValues(filter.Values, resourceTypeFilter)
 			case "key":
-				for _, v := range filter.Values {
-					if v != nil {
-						keyFilter[*v] = true
-					}
-				}
+				collectFilterValues(filter.Values, keyFilter)
 			case "value":
-				for _, v := range filter.Values {
-					if v != nil {
-						valueFilter[*v] = true
-					}
-				}
+				collectFilterValues(filter.Values, valueFilter)
+			default:
+				return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 			}
 		}
 	}
@@ -333,10 +319,20 @@ func (s *TagsServiceImpl) DeleteTags(input *ec2.DeleteTagsInput) (*ec2.DeleteTag
 			// Delete all tags if no specific tags provided
 			existingTags = make(map[string]string)
 		} else {
-			// Delete specified tags
+			// Delete specified tags — per AWS API, when Value is specified
+			// the tag is only deleted if the stored value matches
 			for _, tag := range input.Tags {
-				if tag.Key != nil {
+				if tag.Key == nil {
+					continue
+				}
+				if tag.Value == nil {
+					// No value specified: delete unconditionally
 					delete(existingTags, *tag.Key)
+				} else {
+					// Value specified: only delete if current value matches
+					if current, exists := existingTags[*tag.Key]; exists && current == *tag.Value {
+						delete(existingTags, *tag.Key)
+					}
 				}
 			}
 		}

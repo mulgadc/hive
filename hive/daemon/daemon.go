@@ -29,6 +29,7 @@ import (
 	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
 	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
+	handlers_ec2_tags "github.com/mulgadc/hive/hive/handlers/ec2/tags"
 	"github.com/mulgadc/hive/hive/objectstore"
 	handlers_ec2_volume "github.com/mulgadc/hive/hive/handlers/ec2/volume"
 	"github.com/mulgadc/hive/hive/qmp"
@@ -78,6 +79,7 @@ type Daemon struct {
 	keyService      *handlers_ec2_key.KeyServiceImpl
 	imageService    *handlers_ec2_image.ImageServiceImpl
 	volumeService   *handlers_ec2_volume.VolumeServiceImpl
+	tagsService     *handlers_ec2_tags.TagsServiceImpl
 	ctx             context.Context
 	cancel          context.CancelFunc
 	shutdownWg      sync.WaitGroup
@@ -444,6 +446,9 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.ModifyVolume", d.handleEC2ModifyVolume, "hive-workers"},
 		{"ec2.DeleteVolume", d.handleEC2DeleteVolume, "hive-workers"},
 		{"ec2.DescribeVolumeStatus", d.handleEC2DescribeVolumeStatus, "hive-workers"},
+		{"ec2.CreateTags", d.handleEC2CreateTags, "hive-workers"},
+		{"ec2.DeleteTags", d.handleEC2DeleteTags, "hive-workers"},
+		{"ec2.DescribeTags", d.handleEC2DescribeTags, "hive-workers"},
 		{"ec2.DescribeInstances", d.handleEC2DescribeInstances, ""},
 		{"ec2.DescribeInstanceTypes", d.handleEC2DescribeInstanceTypes, ""},
 		{"ec2.startinstances", d.handleEC2StartInstances, "hive-workers"},
@@ -490,6 +495,7 @@ func (d *Daemon) Start() error {
 	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
 	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config)
 	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config, d.natsConn)
+	d.tagsService = handlers_ec2_tags.NewTagsServiceImpl(d.config)
 
 	d.restoreInstances()
 

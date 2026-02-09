@@ -13,9 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Ensure interface compliance
-var _ TagsService = (*TagsServiceImpl)(nil)
-
 // setupTestTagsService creates a tags service with in-memory storage for testing
 func setupTestTagsService(t *testing.T) (*TagsServiceImpl, *objectstore.MemoryObjectStore) {
 	store := objectstore.NewMemoryObjectStore()
@@ -282,6 +279,19 @@ func TestDescribeTags_Empty(t *testing.T) {
 	assert.Empty(t, result.Tags)
 }
 
+// TestDescribeTags_InvalidFilterName tests that unrecognized filter names return an error
+func TestDescribeTags_InvalidFilterName(t *testing.T) {
+	svc, _ := setupTestTagsService(t)
+
+	_, err := svc.DescribeTags(&ec2.DescribeTagsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("resouce-id"), Values: []*string{aws.String("i-test1")}},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorInvalidParameterValue)
+}
+
 // TestDeleteTags tests deleting specific tags
 func TestDeleteTags(t *testing.T) {
 	svc, _ := setupTestTagsService(t)
@@ -344,6 +354,58 @@ func TestDeleteTags_AllTags(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Empty(t, result.Tags)
+}
+
+// TestDeleteTags_ValueConditional tests that DeleteTags only deletes when value matches
+func TestDeleteTags_ValueConditional(t *testing.T) {
+	svc, _ := setupTestTagsService(t)
+
+	// Create tags
+	_, err := svc.CreateTags(&ec2.CreateTagsInput{
+		Resources: []*string{aws.String("i-test123")},
+		Tags: []*ec2.Tag{
+			{Key: aws.String("Environment"), Value: aws.String("production")},
+			{Key: aws.String("Team"), Value: aws.String("backend")},
+		},
+	})
+	require.NoError(t, err)
+
+	// Try to delete Environment=staging (wrong value) — should NOT delete
+	_, err = svc.DeleteTags(&ec2.DeleteTagsInput{
+		Resources: []*string{aws.String("i-test123")},
+		Tags: []*ec2.Tag{
+			{Key: aws.String("Environment"), Value: aws.String("staging")},
+		},
+	})
+	require.NoError(t, err)
+
+	// Verify both tags still exist
+	result, err := svc.DescribeTags(&ec2.DescribeTagsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("resource-id"), Values: []*string{aws.String("i-test123")}},
+		},
+	})
+	require.NoError(t, err)
+	assert.Len(t, result.Tags, 2)
+
+	// Delete Environment=production (correct value) — should delete
+	_, err = svc.DeleteTags(&ec2.DeleteTagsInput{
+		Resources: []*string{aws.String("i-test123")},
+		Tags: []*ec2.Tag{
+			{Key: aws.String("Environment"), Value: aws.String("production")},
+		},
+	})
+	require.NoError(t, err)
+
+	// Verify only Team remains
+	result, err = svc.DescribeTags(&ec2.DescribeTagsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("resource-id"), Values: []*string{aws.String("i-test123")}},
+		},
+	})
+	require.NoError(t, err)
+	assert.Len(t, result.Tags, 1)
+	assert.Equal(t, "Team", *result.Tags[0].Key)
 }
 
 // TestDeleteTags_MissingResources tests deleting tags without resources
