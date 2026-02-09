@@ -1,9 +1,5 @@
 # Hive Development Roadmap
 
-## Known Bugs
-
-- **QueryParamsToStruct does not match all AWS query param key formats**: The parser tries the Go field name (e.g. `AttributeNames.1`) and the SDK `locationName` tag (e.g. `attributeName.1`), but the AWS CLI sends PascalCase singular form (e.g. `AttributeName.1`). This causes list filters like `--attribute-names` on `describe-account-attributes` to be silently ignored. Affects any SDK field where the Go name, locationName, and wire format all differ. Fix in `hive/awsec2query/parser.go`.
-
 ## Update Jan 2026
 
 ### Big rocks:
@@ -145,7 +141,7 @@ Instance `dmesg`:
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
-| `describe-account-attributes` | *(returns all 6 hardcoded attributes — input filter parsed but not applied due to QueryParamsToStruct bug, see Known Bugs)* | `--attribute-names` (filter not working) | None | Gateway parses input → returns static account attributes: supported-platforms=VPC, default-vpc=none, max-instances=100, vpc-max-security-groups-per-interface=5, max-elastic-ips=5, vpc-max-elastic-ips=20 → local-only response, no NATS | 1. List all account attributes<br>2. Filter by attribute name (blocked by parser bug)<br>3. Verify all 6 attributes returned with correct values | **DONE** |
+| `describe-account-attributes` | `--attribute-names` | `--dry-run` | None | Gateway parses input → returns static account attributes: supported-platforms=VPC, default-vpc=none, max-instances=100, vpc-max-security-groups-per-interface=5, max-elastic-ips=5, vpc-max-elastic-ips=20 → local-only response, no NATS | 1. List all account attributes<br>2. Filter by attribute name<br>3. Verify all 6 attributes returned with correct values | **DONE** |
 
 ### EC2 - VPC Networking (Core)
 
