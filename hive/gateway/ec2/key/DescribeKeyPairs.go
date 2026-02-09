@@ -6,21 +6,9 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// ValidateDescribeKeyPairsInput validates the DescribeKeyPairs request
-func ValidateDescribeKeyPairsInput(input *ec2.DescribeKeyPairsInput) error {
-	// DescribeKeyPairs has no required parameters
-	// All fields are optional filters
-	return nil
-}
-
 // DescribeKeyPairs lists key pairs via NATS
 func DescribeKeyPairs(input *ec2.DescribeKeyPairsInput, natsConn *nats.Conn) (output ec2.DescribeKeyPairsOutput, err error) {
-	// Validate input
-	err = ValidateDescribeKeyPairsInput(input)
-
-	if err != nil {
-		return output, err
-	}
+	// all input fields are optional filters
 
 	// Create NATS key service and call DescribeKeyPairs
 	keyService := handlers_ec2_key.NewNATSKeyService(natsConn)

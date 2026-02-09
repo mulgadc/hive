@@ -62,10 +62,17 @@ func setStructFields(v reflect.Value, params map[string]string, prefix string) e
 		// Check for locationName tag (AWS SDK uses this for query parameter names)
 		locationName := fieldType.Tag.Get("locationName")
 
-		// Try both the field name and locationName (if different)
+		// Try the field name, locationName, and title-cased locationName.
+		// AWS query params use title case (e.g. "ResourceId") but some SDK
+		// structs use camelCase locationName (e.g. "resourceId" in DeleteTagsInput
+		// vs "ResourceId" in CreateTagsInput).
 		queryKeys := []string{prefix + fieldName}
 		if locationName != "" && locationName != fieldName {
 			queryKeys = append(queryKeys, prefix+locationName)
+			titled := strings.ToUpper(locationName[:1]) + locationName[1:]
+			if titled != fieldName && titled != locationName {
+				queryKeys = append(queryKeys, prefix+titled)
+			}
 		}
 
 		// Check if this is a simple field (string, int, bool, etc.)

@@ -900,6 +900,18 @@ func (d *Daemon) handleEC2DeleteVolume(msg *nats.Msg) {
 	handleNATSRequest(msg, d.volumeService.DeleteVolume)
 }
 
+func (d *Daemon) handleEC2CreateTags(msg *nats.Msg) {
+	handleNATSRequest(msg, d.tagsService.CreateTags)
+}
+
+func (d *Daemon) handleEC2DeleteTags(msg *nats.Msg) {
+	handleNATSRequest(msg, d.tagsService.DeleteTags)
+}
+
+func (d *Daemon) handleEC2DescribeTags(msg *nats.Msg) {
+	handleNATSRequest(msg, d.tagsService.DescribeTags)
+}
+
 // handleEC2DescribeInstanceTypes processes incoming EC2 DescribeInstanceTypes requests
 // This handler responds with instance types that can currently be provisioned on this node
 // based on available resources (CPU and memory not already allocated to running instances)

@@ -1,9 +1,5 @@
 # Hive Development Roadmap
 
-## Known Bugs
-
-- **QueryParamsToStruct does not match all AWS query param key formats**: The parser tries the Go field name (e.g. `AttributeNames.1`) and the SDK `locationName` tag (e.g. `attributeName.1`), but the AWS CLI sends PascalCase singular form (e.g. `AttributeName.1`). This causes list filters like `--attribute-names` on `describe-account-attributes` to be silently ignored. Affects any SDK field where the Go name, locationName, and wire format all differ. Fix in `hive/awsec2query/parser.go`.
-
 ## Update Jan 2026
 
 ### Big rocks:
@@ -130,9 +126,9 @@ Instance `dmesg`:
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
-| `create-tags` | — | `--resources`, `--tags` (Key=,Value=) | Resources must exist | Store tags in NATS KV or Predastore keyed by resource ID → return success | 1. Tag an instance<br>2. Tag a volume<br>3. Tag non-existent resource (error)<br>4. Overwrite existing tag | **NOT STARTED** |
-| `delete-tags` | — | `--resources`, `--tags` | Resources must exist | Remove specified tags from resource metadata → return success | 1. Delete existing tag<br>2. Delete non-existent tag (idempotent) | **NOT STARTED** |
-| `describe-tags` | — | `--filters`, `--max-results` | None | Query tag store with filters → return tag list with resource type and ID | 1. List all tags<br>2. Filter by resource type<br>3. Filter by key/value | **NOT STARTED** |
+| `create-tags` | `--resources`, `--tags` (Key=,Value=) | `--dry-run` | None | Gateway validates input (resources non-empty, tags non-empty, keys non-empty) → NATS `ec2.CreateTags` → daemon merges tags into per-resource JSON in Predastore S3 (`tags/{resourceId}.json`) → return success | 1. Tag an instance<br>2. Tag multiple resources at once<br>3. Overwrite existing tag value<br>4. Empty resources list (error: MissingParameter)<br>5. Empty tags list (error: MissingParameter)<br>6. Empty tag key (error: InvalidParameterValue) | **DONE** |
+| `delete-tags` | `--resources`, `--tags` | `--dry-run` | None | Gateway validates input (resources non-empty) → NATS `ec2.DeleteTags` → daemon removes specified tag keys from resource JSON, or all tags if no keys specified → return success | 1. Delete specific tag by key<br>2. Delete all tags (no tags specified)<br>3. Empty resources list (error: MissingParameter) | **DONE** |
+| `describe-tags` | `--filters` (resource-id, resource-type, key, value) | `--max-results`, `--next-token`, `--dry-run` | None | NATS `ec2.DescribeTags` → daemon lists all `tags/*.json` from Predastore S3 → applies filters (resource-id, resource-type, key, value) → returns tag list with resource type auto-detected from ID prefix | 1. List all tags<br>2. Filter by resource-id<br>3. Filter by resource-type (instance, volume, image, snapshot, vpc, subnet, security-group, route-table, internet-gateway)<br>4. Filter by key<br>5. Filter by value<br>6. Empty result when no tags exist | **DONE** |
 
 ### EC2 - Regions & Availability Zones
 
@@ -145,7 +141,7 @@ Instance `dmesg`:
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
-| `describe-account-attributes` | *(returns all 6 hardcoded attributes — input filter parsed but not applied due to QueryParamsToStruct bug, see Known Bugs)* | `--attribute-names` (filter not working) | None | Gateway parses input → returns static account attributes: supported-platforms=VPC, default-vpc=none, max-instances=100, vpc-max-security-groups-per-interface=5, max-elastic-ips=5, vpc-max-elastic-ips=20 → local-only response, no NATS | 1. List all account attributes<br>2. Filter by attribute name (blocked by parser bug)<br>3. Verify all 6 attributes returned with correct values | **DONE** |
+| `describe-account-attributes` | `--attribute-names` | `--dry-run` | None | Gateway parses input → returns static account attributes: supported-platforms=VPC, default-vpc=none, max-instances=100, vpc-max-security-groups-per-interface=5, max-elastic-ips=5, vpc-max-elastic-ips=20 → local-only response, no NATS | 1. List all account attributes<br>2. Filter by attribute name<br>3. Verify all 6 attributes returned with correct values | **DONE** |
 
 ### EC2 - Account Settings
 

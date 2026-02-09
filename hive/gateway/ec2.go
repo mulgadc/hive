@@ -13,6 +13,7 @@ import (
 	gateway_ec2_image "github.com/mulgadc/hive/hive/gateway/ec2/image"
 	gateway_ec2_instance "github.com/mulgadc/hive/hive/gateway/ec2/instance"
 	gateway_ec2_key "github.com/mulgadc/hive/hive/gateway/ec2/key"
+	gateway_ec2_tags "github.com/mulgadc/hive/hive/gateway/ec2/tags"
 	gateway_ec2_volume "github.com/mulgadc/hive/hive/gateway/ec2/volume"
 	gateway_ec2_zone "github.com/mulgadc/hive/hive/gateway/ec2/zone"
 	"github.com/mulgadc/hive/hive/utils"
@@ -130,6 +131,15 @@ var ec2Actions = map[string]EC2Handler{
 	}),
 	"DisableSerialConsoleAccess": ec2Handler(func(input *ec2.DisableSerialConsoleAccessInput, gw *GatewayConfig) (any, error) {
 		return gateway_ec2_account.DisableSerialConsoleAccess(input, gw.NATSConn)
+	}),
+	"CreateTags": ec2Handler(func(input *ec2.CreateTagsInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_tags.CreateTags(input, gw.NATSConn)
+	}),
+	"DeleteTags": ec2Handler(func(input *ec2.DeleteTagsInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_tags.DeleteTags(input, gw.NATSConn)
+	}),
+	"DescribeTags": ec2Handler(func(input *ec2.DescribeTagsInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_tags.DescribeTags(input, gw.NATSConn)
 	}),
 }
 
