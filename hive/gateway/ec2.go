@@ -1,3 +1,5 @@
+// Package gateway provides the AWS Gateway for the Hive platform.
+// It handles the incoming requests from the AWS SDK and delegates to the appropriate gateway functions (which calls the NATS handlers).
 package gateway
 
 import (
@@ -17,157 +19,100 @@ import (
 )
 
 // EC2Handler processes parsed query args and returns XML response bytes.
-type EC2Handler func(q map[string]string, gw *GatewayConfig) ([]byte, error)
+// The action parameter is the EC2 API action name, passed from the map key.
+type EC2Handler func(action string, q map[string]string, gw *GatewayConfig) ([]byte, error)
 
-// ec2Response parses query args into the input struct, calls the handler,
-// and marshals the result to an XML response.
-func ec2Response(action string, q map[string]string, input any, call func() (any, error)) ([]byte, error) {
-	if err := awsec2query.QueryParamsToStruct(q, input); err != nil {
-		return nil, err
+// ec2Handler creates a type-safe EC2Handler that allocates the typed input struct,
+// parses query params into it, calls the handler, and marshals the output to XML.
+func ec2Handler[In any](handler func(*In, *GatewayConfig) (any, error)) EC2Handler {
+	return func(action string, q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		input := new(In)
+		if err := awsec2query.QueryParamsToStruct(q, input); err != nil {
+			return nil, err
+		}
+		output, err := handler(input, gw)
+		if err != nil {
+			return nil, err
+		}
+		payload := utils.GenerateXMLPayload(action+"Response", output)
+		xmlOutput, err := utils.MarshalToXML(payload)
+		if err != nil {
+			return nil, errors.New("failed to marshal response to XML")
+		}
+		return xmlOutput, nil
 	}
-	output, err := call()
-	if err != nil {
-		return nil, err
-	}
-	payload := utils.GenerateXMLPayload(action+"Response", output)
-	xmlOutput, err := utils.MarshalToXML(payload)
-	if err != nil {
-		return nil, errors.New("failed to marshal response to XML")
-	}
-	return xmlOutput, nil
 }
 
 var ec2Actions = map[string]EC2Handler{
-	"DescribeInstances": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.DescribeInstancesInput{}
-		return ec2Response("DescribeInstances", q, input, func() (any, error) {
-			return gateway_ec2_instance.DescribeInstances(input, gw.NATSConn, gw.DiscoverActiveNodes())
-		})
-	},
-	"RunInstances": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.RunInstancesInput{}
-		return ec2Response("RunInstances", q, input, func() (any, error) {
-			return gateway_ec2_instance.RunInstances(input, gw.NATSConn)
-		})
-	},
-	"StartInstances": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.StartInstancesInput{}
-		return ec2Response("StartInstances", q, input, func() (any, error) {
-			return gateway_ec2_instance.StartInstances(input, gw.NATSConn)
-		})
-	},
-	"StopInstances": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.StopInstancesInput{}
-		return ec2Response("StopInstances", q, input, func() (any, error) {
-			return gateway_ec2_instance.StopInstances(input, gw.NATSConn)
-		})
-	},
-	"TerminateInstances": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.TerminateInstancesInput{}
-		return ec2Response("TerminateInstances", q, input, func() (any, error) {
-			return gateway_ec2_instance.TerminateInstances(input, gw.NATSConn)
-		})
-	},
-	"DescribeInstanceTypes": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.DescribeInstanceTypesInput{}
-		return ec2Response("DescribeInstanceTypes", q, input, func() (any, error) {
-			return gateway_ec2_instance.DescribeInstanceTypes(input, gw.NATSConn, gw.ExpectedNodes)
-		})
-	},
-	"CreateKeyPair": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.CreateKeyPairInput{}
-		return ec2Response("CreateKeyPair", q, input, func() (any, error) {
-			return gateway_ec2_key.CreateKeyPair(input, gw.NATSConn)
-		})
-	},
-	"DeleteKeyPair": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.DeleteKeyPairInput{}
-		return ec2Response("DeleteKeyPair", q, input, func() (any, error) {
-			return gateway_ec2_key.DeleteKeyPair(input, gw.NATSConn)
-		})
-	},
-	"DescribeKeyPairs": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.DescribeKeyPairsInput{}
-		return ec2Response("DescribeKeyPairs", q, input, func() (any, error) {
-			return gateway_ec2_key.DescribeKeyPairs(input, gw.NATSConn)
-		})
-	},
-	"ImportKeyPair": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		// Bug in parser, end of Base64 is URL encoded
+	"DescribeInstances": ec2Handler(func(input *ec2.DescribeInstancesInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_instance.DescribeInstances(input, gw.NATSConn, gw.DiscoverActiveNodes())
+	}),
+	"RunInstances": ec2Handler(func(input *ec2.RunInstancesInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_instance.RunInstances(input, gw.NATSConn)
+	}),
+	"StartInstances": ec2Handler(func(input *ec2.StartInstancesInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_instance.StartInstances(input, gw.NATSConn)
+	}),
+	"StopInstances": ec2Handler(func(input *ec2.StopInstancesInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_instance.StopInstances(input, gw.NATSConn)
+	}),
+	"TerminateInstances": ec2Handler(func(input *ec2.TerminateInstancesInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_instance.TerminateInstances(input, gw.NATSConn)
+	}),
+	"DescribeInstanceTypes": ec2Handler(func(input *ec2.DescribeInstanceTypesInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_instance.DescribeInstanceTypes(input, gw.NATSConn, gw.ExpectedNodes)
+	}),
+	"CreateKeyPair": ec2Handler(func(input *ec2.CreateKeyPairInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_key.CreateKeyPair(input, gw.NATSConn)
+	}),
+	"DeleteKeyPair": ec2Handler(func(input *ec2.DeleteKeyPairInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_key.DeleteKeyPair(input, gw.NATSConn)
+	}),
+	"DescribeKeyPairs": ec2Handler(func(input *ec2.DescribeKeyPairsInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_key.DescribeKeyPairs(input, gw.NATSConn)
+	}),
+	"ImportKeyPair": func(action string, q map[string]string, gw *GatewayConfig) ([]byte, error) {
+		// Workaround: parser leaves Base64 padding URL-encoded
 		if strings.HasSuffix(q["PublicKeyMaterial"], "%3D%3D") {
 			q["PublicKeyMaterial"] = strings.Replace(q["PublicKeyMaterial"], "%3D%3D", "==", 1)
 		}
-		input := &ec2.ImportKeyPairInput{}
-		return ec2Response("ImportKeyPair", q, input, func() (any, error) {
+		return ec2Handler(func(input *ec2.ImportKeyPairInput, gw *GatewayConfig) (any, error) {
 			return gateway_ec2_key.ImportKeyPair(input, gw.NATSConn)
-		})
+		})(action, q, gw)
 	},
-	"DescribeImages": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.DescribeImagesInput{}
-		return ec2Response("DescribeImages", q, input, func() (any, error) {
-			return gateway_ec2_image.DescribeImages(input, gw.NATSConn)
-		})
-	},
-	"DescribeRegions": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.DescribeRegionsInput{}
-		return ec2Response("DescribeRegions", q, input, func() (any, error) {
-			return gateway_ec2_zone.DescribeRegions(input, gw.Region)
-		})
-	},
-	"DescribeAvailabilityZones": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.DescribeAvailabilityZonesInput{}
-		return ec2Response("DescribeAvailabilityZones", q, input, func() (any, error) {
-			return gateway_ec2_zone.DescribeAvailabilityZones(input, gw.Region, gw.AZ)
-		})
-	},
-	"DescribeVolumes": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.DescribeVolumesInput{}
-		return ec2Response("DescribeVolumes", q, input, func() (any, error) {
-			return gateway_ec2_volume.DescribeVolumes(input, gw.NATSConn)
-		})
-	},
-	"ModifyVolume": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.ModifyVolumeInput{}
-		return ec2Response("ModifyVolume", q, input, func() (any, error) {
-			return gateway_ec2_volume.ModifyVolume(input, gw.NATSConn)
-		})
-	},
-	"CreateVolume": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.CreateVolumeInput{}
-		return ec2Response("CreateVolume", q, input, func() (any, error) {
-			return gateway_ec2_volume.CreateVolume(input, gw.NATSConn)
-		})
-	},
-	"DeleteVolume": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.DeleteVolumeInput{}
-		return ec2Response("DeleteVolume", q, input, func() (any, error) {
-			return gateway_ec2_volume.DeleteVolume(input, gw.NATSConn)
-		})
-	},
-	"AttachVolume": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.AttachVolumeInput{}
-		return ec2Response("AttachVolume", q, input, func() (any, error) {
-			return gateway_ec2_volume.AttachVolume(input, gw.NATSConn)
-		})
-	},
-	"DescribeVolumeStatus": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.DescribeVolumeStatusInput{}
-		return ec2Response("DescribeVolumeStatus", q, input, func() (any, error) {
-			return gateway_ec2_volume.DescribeVolumeStatus(input, gw.NATSConn)
-		})
-	},
-	"DetachVolume": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.DetachVolumeInput{}
-		return ec2Response("DetachVolume", q, input, func() (any, error) {
-			return gateway_ec2_volume.DetachVolume(input, gw.NATSConn)
-		})
-	},
-	"DescribeAccountAttributes": func(q map[string]string, gw *GatewayConfig) ([]byte, error) {
-		input := &ec2.DescribeAccountAttributesInput{}
-		return ec2Response("DescribeAccountAttributes", q, input, func() (any, error) {
-			return gateway_ec2_account.DescribeAccountAttributes(input)
-		})
-	},
+	"DescribeImages": ec2Handler(func(input *ec2.DescribeImagesInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_image.DescribeImages(input, gw.NATSConn)
+	}),
+	"DescribeRegions": ec2Handler(func(input *ec2.DescribeRegionsInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_zone.DescribeRegions(input, gw.Region)
+	}),
+	"DescribeAvailabilityZones": ec2Handler(func(input *ec2.DescribeAvailabilityZonesInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_zone.DescribeAvailabilityZones(input, gw.Region, gw.AZ)
+	}),
+	"DescribeVolumes": ec2Handler(func(input *ec2.DescribeVolumesInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_volume.DescribeVolumes(input, gw.NATSConn)
+	}),
+	"ModifyVolume": ec2Handler(func(input *ec2.ModifyVolumeInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_volume.ModifyVolume(input, gw.NATSConn)
+	}),
+	"CreateVolume": ec2Handler(func(input *ec2.CreateVolumeInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_volume.CreateVolume(input, gw.NATSConn)
+	}),
+	"DeleteVolume": ec2Handler(func(input *ec2.DeleteVolumeInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_volume.DeleteVolume(input, gw.NATSConn)
+	}),
+	"AttachVolume": ec2Handler(func(input *ec2.AttachVolumeInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_volume.AttachVolume(input, gw.NATSConn)
+	}),
+	"DescribeVolumeStatus": ec2Handler(func(input *ec2.DescribeVolumeStatusInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_volume.DescribeVolumeStatus(input, gw.NATSConn)
+	}),
+	"DetachVolume": ec2Handler(func(input *ec2.DetachVolumeInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_volume.DetachVolume(input, gw.NATSConn)
+	}),
+	"DescribeAccountAttributes": ec2Handler(func(input *ec2.DescribeAccountAttributesInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_account.DescribeAccountAttributes(input)
+	}),
 }
 
 func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
@@ -179,7 +124,7 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 		return errors.New("InvalidAction")
 	}
 
-	xmlOutput, err := handler(queryArgs, gw)
+	xmlOutput, err := handler(action, queryArgs, gw)
 	if err != nil {
 		return err
 	}
