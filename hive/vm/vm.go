@@ -32,13 +32,13 @@ qemu-system-x86_64 \
 */
 
 type VM struct {
-	ID           string `json:"id"`
-	PID          int    `json:"pid"`
-	PTS          int    `json:"pts"`
-	Running      bool   `json:"running"`
+	ID           string        `json:"id"`
+	PID          int           `json:"pid"`
+	PTS          int           `json:"pts"`
+	Running      bool          `json:"running"`
 	Status       InstanceState `json:"status"`
-	InstanceType string `json:"instance_type"`
-	Config       Config `json:"config"`
+	InstanceType string        `json:"instance_type"`
+	Config       Config        `json:"config"`
 
 	EBSRequests config.EBSRequests `json:"ebs_requests"`
 

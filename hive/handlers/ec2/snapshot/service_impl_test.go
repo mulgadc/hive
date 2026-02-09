@@ -317,4 +317,3 @@ func TestCopySnapshot_PreservesTags(t *testing.T) {
 	assert.Equal(t, "Environment", *result.Snapshots[0].Tags[0].Key)
 	assert.Equal(t, "test", *result.Snapshots[0].Tags[0].Value)
 }
-

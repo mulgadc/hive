@@ -51,4 +51,3 @@ func TestValidateCreateKeyPairInput(t *testing.T) {
 		})
 	}
 }
-

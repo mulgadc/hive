@@ -127,9 +127,9 @@ type EBSSyncRequest struct {
 }
 
 type EBSSyncResponse struct {
-	Volume  string
-	Synced  bool
-	Error   string
+	Volume string
+	Synced bool
+	Error  string
 }
 
 type EBSDeleteRequest struct {
