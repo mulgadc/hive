@@ -167,9 +167,15 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput) (*e
 	}
 	defer volumeResult.Body.Close()
 
-	var volumeConfig viperblock.VolumeConfig
-	if err := json.NewDecoder(volumeResult.Body).Decode(&volumeConfig); err != nil {
+	var volumeState viperblock.VBState
+	if err := json.NewDecoder(volumeResult.Body).Decode(&volumeState); err != nil {
 		slog.Error("CreateSnapshot failed to decode volume config", "volumeId", volumeID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+	volumeConfig := volumeState.VolumeConfig
+
+	if volumeConfig.VolumeMetadata.SizeGiB == 0 {
+		slog.Error("CreateSnapshot: source volume has zero size in config", "volumeId", volumeID)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
