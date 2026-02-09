@@ -383,6 +383,11 @@ func (s *VolumeServiceImpl) getVolumeByID(volumeID string) (*ec2.Volume, error) 
 		return nil, errors.New("volume ID is empty")
 	}
 
+	if volMeta.SizeGiB == 0 {
+		slog.Error("Volume has zero size in config", "volumeId", volumeID)
+		return nil, fmt.Errorf("volume %s has zero size in config", volumeID)
+	}
+
 	state := volMeta.State
 	if state == "" {
 		state = "available"
