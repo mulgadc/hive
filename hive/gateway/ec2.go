@@ -127,9 +127,6 @@ var ec2Actions = map[string]EC2Handler{
 	"CreateSnapshot": ec2Handler(func(input *ec2.CreateSnapshotInput, gw *GatewayConfig) (any, error) {
 		return gateway_ec2_snapshot.CreateSnapshot(input, gw.NATSConn)
 	}),
-	"CreateSnapshots": ec2Handler(func(input *ec2.CreateSnapshotsInput, gw *GatewayConfig) (any, error) {
-		return gateway_ec2_snapshot.CreateSnapshots(input, gw.NATSConn)
-	}),
 	"DeleteSnapshot": ec2Handler(func(input *ec2.DeleteSnapshotInput, gw *GatewayConfig) (any, error) {
 		return gateway_ec2_snapshot.DeleteSnapshot(input, gw.NATSConn)
 	}),
