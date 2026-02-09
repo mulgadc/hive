@@ -98,15 +98,16 @@ start_service_foreground() {
 # Function to check if service is responsive
 check_service() {
     local name="$1"
-    local port="$2"
+    local host="$2"
+    local port="$3"
     local max_attempts=10
     local attempt=1
 
-    echo "🔍 Checking $name connectivity on port $port..."
+    echo "🔍 Checking $name connectivity on $host:$port..."
 
     while [ $attempt -le $max_attempts ]; do
-        if nc -z localhost "$port" 2>/dev/null; then
-            echo "   ✅ $name is responding on port $port"
+        if nc -z "$host" "$port" 2>/dev/null; then
+            echo "   ✅ $name is responding on $host:$port"
             return 0
         fi
         echo "   ⏳ Attempt $attempt/$max_attempts - waiting for $name..."
@@ -114,7 +115,7 @@ check_service() {
         ((attempt++))
     done
 
-    echo "   ⚠️  $name may not be responding on port $port (continuing anyway)"
+    echo "   ⚠️  $name may not be responding on $host:$port (continuing anyway)"
 
 }
 
@@ -174,8 +175,18 @@ export HIVE_PREDASTORE_TLS_CERT=$CONFIG_DIR/server.pem
 export HIVE_PREDASTORE_TLS_KEY=$CONFIG_DIR/server.key
 # Very chatty logs, only for debugging
 #export HIVE_PREDASTORE_DEBUG=true
-export HIVE_PREDASTORE_HOST=0.0.0.0
-export HIVE_PREDASTORE_PORT=8443
+
+# Auto-detect Predastore host:port from hive.toml [nodes.<name>.predastore] section
+PREDASTORE_BIND="0.0.0.0:8443"
+if [ -f "$CONFIG_DIR/hive.toml" ]; then
+    DETECTED_PREDASTORE_HOST=$(awk -F'"' '/\[nodes\..*\.predastore\]/{found=1} found && /^host/{print $2; exit}' "$CONFIG_DIR/hive.toml")
+    if [ -n "$DETECTED_PREDASTORE_HOST" ]; then
+        PREDASTORE_BIND="$DETECTED_PREDASTORE_HOST"
+        echo "   Auto-detected Predastore bind=$PREDASTORE_BIND from hive.toml"
+    fi
+fi
+export HIVE_PREDASTORE_HOST="${PREDASTORE_BIND%%:*}"
+export HIVE_PREDASTORE_PORT="${PREDASTORE_BIND##*:}"
 
 # Default, distributed backend. For testing, all nodes running locally.
 # Specify NODE_ID to run a specific node (e.g multi-server)
@@ -198,7 +209,7 @@ export HIVE_PREDASTORE_NODE_ID="${HIVE_PREDASTORE_NODE_ID:-}"
 PREDASTORE_CMD="./bin/hive service predastore start"
 
 start_service "predastore" "$PREDASTORE_CMD"
-check_service "Predastore" "8443"
+check_service "Predastore" "$HIVE_PREDASTORE_HOST" "$HIVE_PREDASTORE_PORT"
 
 #else
 #    echo ""
