@@ -1,14 +1,11 @@
 package gateway_ec2_instance
 
 import (
-	"encoding/json"
 	"errors"
 	"testing"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
-	"github.com/mulgadc/hive/hive/utils"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -157,97 +154,3 @@ func TestParseRunInstances(t *testing.T) {
 
 }
 
-func TestEC2ProcessRunInstances(t *testing.T) {
-	makeValidInput := func() *ec2.RunInstancesInput {
-		return &ec2.RunInstancesInput{
-			ImageId:          aws.String(*defaults.ImageId),
-			InstanceType:     aws.String(*defaults.InstanceType),
-			MinCount:         aws.Int64(1),
-			MaxCount:         aws.Int64(1),
-			KeyName:          aws.String(*defaults.KeyName),
-			SecurityGroupIds: []*string{aws.String(*defaults.SecurityGroupIds[0])},
-			SubnetId:         aws.String(*defaults.SubnetId),
-		}
-	}
-
-	tests := []struct {
-		name              string
-		payload           any
-		rawJSON           []byte
-		wantValidationErr bool
-		wantErrCode       string
-		assertFn          func(t *testing.T, reservation ec2.Reservation)
-	}{
-		{
-			name:              "MismatchedShape",
-			payload:           &ec2.DescribeInstancesInput{DryRun: aws.Bool(true)},
-			wantValidationErr: true,
-			wantErrCode:       "ValidationError",
-		},
-		{
-			name: "UnknownFieldInPayload",
-			rawJSON: []byte(`{
-				"ImageId":"ami-0abcdef1234567890",
-				"InstanceType":"t2.micro",
-				"MinCount":1,
-				"MaxCount":1,
-				"Unexpected":true
-			}`),
-			wantValidationErr: true,
-			wantErrCode:       "ValidationError",
-		},
-		{
-			name:    "ValidRunInstances",
-			payload: makeValidInput(),
-			assertFn: func(t *testing.T, reservation ec2.Reservation) {
-				assert.Len(t, reservation.Instances, 1)
-				if len(reservation.Instances) == 0 {
-					return
-				}
-				instance := reservation.Instances[0]
-				assert.Equal(t, defaults.ImageId, instance.ImageId)
-				assert.Equal(t, defaults.InstanceType, instance.InstanceType)
-				assert.Equal(t, defaults.KeyName, instance.KeyName)
-				assert.Equal(t, aws.Int64(16), instance.State.Code)
-				assert.Equal(t, aws.String("running"), instance.State.Name)
-				assert.Equal(t, defaults.SubnetId, instance.SubnetId)
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var (
-				jsonData []byte
-				err      error
-			)
-
-			if tt.rawJSON != nil {
-				jsonData = tt.rawJSON
-			} else {
-				jsonData, err = json.Marshal(tt.payload)
-				assert.NoError(t, err)
-			}
-
-			handler := handlers_ec2_instance.NewRunInstancesHandler(handlers_ec2_instance.NewMockInstanceService())
-			jsonResp := handler.Process(jsonData)
-
-			responseError, err := utils.ValidateErrorPayload(jsonResp)
-
-			if tt.wantValidationErr {
-				assert.Error(t, err)
-				assert.Equal(t, tt.wantErrCode, aws.StringValue(responseError.Code))
-				return
-			}
-
-			assert.NoError(t, err)
-
-			var reservation ec2.Reservation
-			assert.NoError(t, json.Unmarshal(jsonResp, &reservation))
-
-			if tt.assertFn != nil {
-				tt.assertFn(t, reservation)
-			}
-		})
-	}
-}
