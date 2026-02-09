@@ -13,6 +13,7 @@ import (
 	gateway_ec2_image "github.com/mulgadc/hive/hive/gateway/ec2/image"
 	gateway_ec2_instance "github.com/mulgadc/hive/hive/gateway/ec2/instance"
 	gateway_ec2_key "github.com/mulgadc/hive/hive/gateway/ec2/key"
+	gateway_ec2_snapshot "github.com/mulgadc/hive/hive/gateway/ec2/snapshot"
 	gateway_ec2_tags "github.com/mulgadc/hive/hive/gateway/ec2/tags"
 	gateway_ec2_volume "github.com/mulgadc/hive/hive/gateway/ec2/volume"
 	gateway_ec2_zone "github.com/mulgadc/hive/hive/gateway/ec2/zone"
@@ -122,6 +123,18 @@ var ec2Actions = map[string]EC2Handler{
 	}),
 	"DescribeTags": ec2Handler(func(input *ec2.DescribeTagsInput, gw *GatewayConfig) (any, error) {
 		return gateway_ec2_tags.DescribeTags(input, gw.NATSConn)
+	}),
+	"CreateSnapshot": ec2Handler(func(input *ec2.CreateSnapshotInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_snapshot.CreateSnapshot(input, gw.NATSConn)
+	}),
+	"DeleteSnapshot": ec2Handler(func(input *ec2.DeleteSnapshotInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_snapshot.DeleteSnapshot(input, gw.NATSConn)
+	}),
+	"DescribeSnapshots": ec2Handler(func(input *ec2.DescribeSnapshotsInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_snapshot.DescribeSnapshots(input, gw.NATSConn)
+	}),
+	"CopySnapshot": ec2Handler(func(input *ec2.CopySnapshotInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_snapshot.CopySnapshot(input, gw.NATSConn)
 	}),
 }
 
