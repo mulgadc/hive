@@ -125,4 +125,3 @@ func TestValidateDescribeEgressOnlyInternetGatewaysInput(t *testing.T) {
 		})
 	}
 }
-
