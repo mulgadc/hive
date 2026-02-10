@@ -270,16 +270,16 @@ func FormatNBDTCPURI(host string, port int) string {
 //   - "nbd:unix:/path/to/socket.sock" → serverType="unix", path="/path/to/socket.sock"
 //   - "nbd://host:port"               → serverType="inet", host="host", port=<port>
 func ParseNBDURI(nbdURI string) (serverType, path, host string, port int, err error) {
-	if strings.HasPrefix(nbdURI, "nbd:unix:") {
-		path = strings.TrimPrefix(nbdURI, "nbd:unix:")
+	if after, ok := strings.CutPrefix(nbdURI, "nbd:unix:"); ok {
+		path = after
 		if path == "" {
 			return "", "", "", 0, fmt.Errorf("empty socket path in NBD URI: %s", nbdURI)
 		}
 		return "unix", path, "", 0, nil
 	}
 
-	if strings.HasPrefix(nbdURI, "nbd://") {
-		hostPort := strings.TrimPrefix(nbdURI, "nbd://")
+	if after, ok := strings.CutPrefix(nbdURI, "nbd://"); ok {
+		hostPort := after
 		colonIdx := strings.LastIndex(hostPort, ":")
 		if colonIdx < 0 {
 			return "", "", "", 0, fmt.Errorf("missing port in NBD TCP URI: %s", nbdURI)

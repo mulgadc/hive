@@ -354,16 +354,14 @@ func TestConfigConcurrentRead(t *testing.T) {
 
 	// Spawn multiple goroutines to read volumes concurrently
 	for range iterations {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			cfg.mu.Lock()
 			_ = len(cfg.MountedVolumes)
 			if len(cfg.MountedVolumes) > 0 {
 				_ = cfg.MountedVolumes[0].Name
 			}
 			cfg.mu.Unlock()
-		}()
+		})
 	}
 
 	wg.Wait()
