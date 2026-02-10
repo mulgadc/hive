@@ -107,7 +107,9 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput) (*ec2.
 		}
 
 		body, err := io.ReadAll(getResult.Body)
-		getResult.Body.Close()
+		if err := getResult.Body.Close(); err != nil {
+			slog.Debug("Failed to close config body", "key", configKey, "err", err)
+		}
 		if err != nil {
 			slog.Debug("Failed to read config body", "key", configKey, "err", err)
 			continue

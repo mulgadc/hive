@@ -28,7 +28,9 @@ func (svc *Service) SetConfigPath(path string) {
 }
 
 func (svc *Service) Start() (int, error) {
-	utils.WritePidFile(serviceName, os.Getpid())
+	if err := utils.WritePidFile(serviceName, os.Getpid()); err != nil {
+		slog.Error("Failed to write pid file", "err", err)
+	}
 	err := launchService(svc.Config, svc.ConfigPath)
 	if err != nil {
 		return 0, err

@@ -170,7 +170,7 @@ func NewQMPClient(path string) (*QMPClient, error) {
 	// wait for greeting
 	var greeting QMPGreeting
 	if err := client.Decoder.Decode(&greeting); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, err
 	}
 

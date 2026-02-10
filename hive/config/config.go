@@ -162,7 +162,9 @@ func (ec2StartInstanceResponse EC2StartInstancesResponse) Respond(msg *nats.Msg)
 		return
 	}
 
-	msg.Respond(response)
+	if err := msg.Respond(response); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
 
 }
 

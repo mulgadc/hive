@@ -68,7 +68,9 @@ func New(config any) (svc *Service, err error) {
 
 func (svc *Service) Start() (int, error) {
 
-	utils.WritePidFile(serviceName, os.Getpid())
+	if err := utils.WritePidFile(serviceName, os.Getpid()); err != nil {
+		slog.Error("Failed to write pid file", "err", err)
+	}
 	err := launchService(svc.Config)
 
 	if err != nil {
@@ -110,7 +112,7 @@ func launchService(cfg *Config) (err error) {
 	// Subscribe to the viperblock.mount subject
 	slog.Info("Connected. Waiting for EBS events")
 
-	nc.QueueSubscribe("ebs.delete", "hive-workers", func(msg *nats.Msg) {
+	if _, err := nc.QueueSubscribe("ebs.delete", "hive-workers", func(msg *nats.Msg) {
 		slog.Info("Received ebs.delete message", "data", string(msg.Data))
 
 		var ebsRequest config.EBSDeleteRequest
@@ -118,7 +120,9 @@ func launchService(cfg *Config) (err error) {
 		if err != nil {
 			slog.Error("Failed to unmarshal ebs.delete message", "err", err)
 			errResp, _ := json.Marshal(config.EBSDeleteResponse{Error: fmt.Sprintf("bad request: %v", err)})
-			msg.Respond(errResp)
+			if err := msg.Respond(errResp); err != nil {
+				slog.Error("Failed to respond to ebs.delete request", "err", err)
+			}
 			return
 		}
 
@@ -143,7 +147,9 @@ func launchService(cfg *Config) (err error) {
 			if matched.VB != nil {
 				matched.VB.StopWALSyncer()
 			}
-			utils.KillProcess(matched.PID)
+			if err := utils.KillProcess(matched.PID); err != nil {
+				slog.Error("Failed to kill nbdkit process", "pid", matched.PID, "err", err)
+			}
 
 			// Remove the socket file if using socket transport
 			if matched.Socket != "" {
@@ -162,14 +168,20 @@ func launchService(cfg *Config) (err error) {
 		respData, err := json.Marshal(response)
 		if err != nil {
 			slog.Error("Failed to marshal ebs.delete response", "err", err)
-			msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
+			if err := msg.Respond([]byte(`{"Error":"internal marshal failure"}`)); err != nil {
+				slog.Error("Failed to respond to ebs.delete request", "err", err)
+			}
 			return
 		}
 
-		msg.Respond(respData)
-	})
+		if err := msg.Respond(respData); err != nil {
+			slog.Error("Failed to respond to ebs.delete request", "err", err)
+		}
+	}); err != nil {
+		slog.Error("Failed to subscribe to ebs.delete", "err", err)
+	}
 
-	nc.QueueSubscribe("ebs.unmount", "hive-workers", func(msg *nats.Msg) {
+	if _, err := nc.QueueSubscribe("ebs.unmount", "hive-workers", func(msg *nats.Msg) {
 		slog.Info("Received message", "data", string(msg.Data))
 
 		// Parse the message
@@ -209,7 +221,9 @@ func launchService(cfg *Config) (err error) {
 				matched.VB.StopWALSyncer()
 			}
 
-			utils.KillProcess(matched.PID)
+			if err := utils.KillProcess(matched.PID); err != nil {
+				slog.Error("Failed to kill nbdkit process", "pid", matched.PID, "err", err)
+			}
 
 			// Remove the socket file if using socket transport
 			if matched.Socket != "" {
@@ -234,18 +248,26 @@ func launchService(cfg *Config) (err error) {
 			return
 		}
 
-		msg.Respond(response)
-		nc.Publish("ebs.unmount.response", response)
-	})
+		if err := msg.Respond(response); err != nil {
+			slog.Error("Failed to respond to ebs.unmount request", "err", err)
+		}
+		if err := nc.Publish("ebs.unmount.response", response); err != nil {
+			slog.Error("Failed to publish ebs.unmount.response", "err", err)
+		}
+	}); err != nil {
+		slog.Error("Failed to subscribe to ebs.unmount", "err", err)
+	}
 
-	nc.QueueSubscribe("ebs.sync", "hive-workers", func(msg *nats.Msg) {
+	if _, err := nc.QueueSubscribe("ebs.sync", "hive-workers", func(msg *nats.Msg) {
 		slog.Info("Received ebs.sync message", "data", string(msg.Data))
 
 		var syncRequest config.EBSSyncRequest
 		if err := json.Unmarshal(msg.Data, &syncRequest); err != nil {
 			slog.Error("Failed to unmarshal ebs.sync message", "err", err)
 			errResp, _ := json.Marshal(config.EBSSyncResponse{Error: fmt.Sprintf("bad request: %v", err)})
-			msg.Respond(errResp)
+			if err := msg.Respond(errResp); err != nil {
+				slog.Error("Failed to respond to ebs.sync request", "err", err)
+			}
 			return
 		}
 
@@ -277,14 +299,20 @@ func launchService(cfg *Config) (err error) {
 		response, err := json.Marshal(syncResponse)
 		if err != nil {
 			slog.Error("Failed to marshal ebs.sync response", "err", err)
-			msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
+			if err := msg.Respond([]byte(`{"Error":"internal marshal failure"}`)); err != nil {
+				slog.Error("Failed to respond to ebs.sync request", "err", err)
+			}
 			return
 		}
 
-		msg.Respond(response)
-	})
+		if err := msg.Respond(response); err != nil {
+			slog.Error("Failed to respond to ebs.sync request", "err", err)
+		}
+	}); err != nil {
+		slog.Error("Failed to subscribe to ebs.sync", "err", err)
+	}
 
-	nc.QueueSubscribe("ebs.mount", "hive-workers", func(msg *nats.Msg) {
+	if _, err := nc.QueueSubscribe("ebs.mount", "hive-workers", func(msg *nats.Msg) {
 		slog.Info("Received message:", "data", string(msg.Data))
 
 		// Parse the message
@@ -332,11 +360,15 @@ func launchService(cfg *Config) (err error) {
 		var nbdCacheSize int
 		if strings.HasSuffix(ebsRequest.Name, "-cloudinit") || strings.HasSuffix(ebsRequest.Name, "-efi") {
 			slog.Info("Disabling cache for auxiliary volume", "volume", ebsRequest.Name)
-			vb.SetCacheSize(0, 0)
+			if err := vb.SetCacheSize(0, 0); err != nil {
+				slog.Error("Failed to set cache size", "err", err)
+			}
 			nbdCacheSize = 0
 		} else {
 			slog.Info("Enabling 64MB cache for main volume", "volume", ebsRequest.Name, "blocks", defaultCache)
-			vb.SetCacheSize(defaultCache, 0)
+			if err := vb.SetCacheSize(defaultCache, 0); err != nil {
+				slog.Error("Failed to set cache size", "err", err)
+			}
 			nbdCacheSize = defaultCache
 		}
 
@@ -344,8 +376,12 @@ func launchService(cfg *Config) (err error) {
 			ebsResponse.Error = fmt.Sprintf("Failed to connect to Viperblock store: %v", err)
 			// Marshal and send error response immediately
 			response, _ := json.Marshal(ebsResponse)
-			msg.Respond(response)
-			nc.Publish("ebs.mount.response", response)
+			if err := msg.Respond(response); err != nil {
+				slog.Error("Failed to respond to ebs.mount request", "err", err)
+			}
+			if err := nc.Publish("ebs.mount.response", response); err != nil {
+				slog.Error("Failed to publish ebs.mount.response", "err", err)
+			}
 			return
 		}
 
@@ -360,8 +396,12 @@ func launchService(cfg *Config) (err error) {
 			ebsResponse.Error = err.Error()
 			// Marshal and send error response immediately
 			response, _ := json.Marshal(ebsResponse)
-			msg.Respond(response)
-			nc.Publish("ebs.mount.response", response)
+			if err := msg.Respond(response); err != nil {
+				slog.Error("Failed to respond to ebs.mount request", "err", err)
+			}
+			if err := nc.Publish("ebs.mount.response", response); err != nil {
+				slog.Error("Failed to publish ebs.mount.response", "err", err)
+			}
 			return
 		}
 
@@ -373,8 +413,12 @@ func launchService(cfg *Config) (err error) {
 			ebsResponse.Error = err.Error()
 			// Marshal and send error response immediately
 			response, _ := json.Marshal(ebsResponse)
-			msg.Respond(response)
-			nc.Publish("ebs.mount.response", response)
+			if err := msg.Respond(response); err != nil {
+				slog.Error("Failed to respond to ebs.mount request", "err", err)
+			}
+			if err := nc.Publish("ebs.mount.response", response); err != nil {
+				slog.Error("Failed to publish ebs.mount.response", "err", err)
+			}
 			return
 		}
 
@@ -393,8 +437,12 @@ func launchService(cfg *Config) (err error) {
 			if err != nil {
 				ebsResponse.Error = err.Error()
 				response, _ := json.Marshal(ebsResponse)
-				msg.Respond(response)
-				nc.Publish("ebs.mount.response", response)
+				if err := msg.Respond(response); err != nil {
+					slog.Error("Failed to respond to ebs.mount request", "err", err)
+				}
+				if err := nc.Publish("ebs.mount.response", response); err != nil {
+					slog.Error("Failed to publish ebs.mount.response", "err", err)
+				}
 				return
 			}
 
@@ -414,8 +462,12 @@ func launchService(cfg *Config) (err error) {
 			if err != nil {
 				ebsResponse.Error = err.Error()
 				response, _ := json.Marshal(ebsResponse)
-				msg.Respond(response)
-				nc.Publish("ebs.mount.response", response)
+				if err := msg.Respond(response); err != nil {
+					slog.Error("Failed to respond to ebs.mount request", "err", err)
+				}
+				if err := nc.Publish("ebs.mount.response", response); err != nil {
+					slog.Error("Failed to publish ebs.mount.response", "err", err)
+				}
 				return
 			}
 
@@ -491,8 +543,12 @@ func launchService(cfg *Config) (err error) {
 			ebsResponse.Error = "Failed to start nbdkit"
 			// Marshal and send error response immediately
 			response, _ := json.Marshal(ebsResponse)
-			msg.Respond(response)
-			nc.Publish("ebs.mount.response", response)
+			if err := msg.Respond(response); err != nil {
+				slog.Error("Failed to respond to ebs.mount request", "err", err)
+			}
+			if err := nc.Publish("ebs.mount.response", response); err != nil {
+				slog.Error("Failed to publish ebs.mount.response", "err", err)
+			}
 			return
 		}
 
@@ -505,8 +561,12 @@ func launchService(cfg *Config) (err error) {
 			if exitErr != 0 {
 				ebsResponse.Error = fmt.Sprintf("nbdkit failed: %v", exitErr)
 				response, _ := json.Marshal(ebsResponse)
-				msg.Respond(response)
-				nc.Publish("ebs.mount.response", response)
+				if err := msg.Respond(response); err != nil {
+					slog.Error("Failed to respond to ebs.mount request", "err", err)
+				}
+				if err := nc.Publish("ebs.mount.response", response); err != nil {
+					slog.Error("Failed to publish ebs.mount.response", "err", err)
+				}
 				return
 			}
 		default:
@@ -535,12 +595,20 @@ func launchService(cfg *Config) (err error) {
 			return
 		}
 
-		msg.Respond(response)
+		if err := msg.Respond(response); err != nil {
+			slog.Error("Failed to respond to ebs.mount request", "err", err)
+			return
+		}
 
-		nc.Publish("ebs.mount.response", response)
+		if err := nc.Publish("ebs.mount.response", response); err != nil {
+			slog.Error("Failed to publish ebs.mount.response", "err", err)
+			return
+		}
 
 		slog.Debug("Sent ebs.mount response", "response", string(response))
-	})
+	}); err != nil {
+		slog.Error("Failed to subscribe to ebs.mount", "err", err)
+	}
 
 	// Create a channel to receive shutdown signals
 	sigChan := make(chan os.Signal, 1)
@@ -565,7 +633,9 @@ func launchService(cfg *Config) (err error) {
 			volume.VB.StopWALSyncer()
 		}
 		slog.Info("Killing nbdkit process", "pid", volume.PID)
-		utils.KillProcess(volume.PID)
+		if err := utils.KillProcess(volume.PID); err != nil {
+			slog.Error("Failed to kill nbdkit process", "pid", volume.PID, "err", err)
+		}
 	}
 
 	return nil

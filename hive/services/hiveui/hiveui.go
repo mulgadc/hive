@@ -74,7 +74,9 @@ func New(config any) (*Service, error) {
 
 // Start starts the hive-ui service
 func (svc *Service) Start() (int, error) {
-	utils.WritePidFile(serviceName, os.Getpid())
+	if err := utils.WritePidFile(serviceName, os.Getpid()); err != nil {
+		slog.Error("Failed to write pid file", "err", err)
+	}
 
 	err := svc.launchService()
 	if err != nil {
@@ -198,7 +200,9 @@ func (svc *Service) launchService() error {
 		slog.Info("Received shutdown signal, gracefully shutting down...")
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		server.Shutdown(ctx)
+		if err := server.Shutdown(ctx); err != nil {
+			slog.Error("Failed to shutdown server gracefully", "err", err)
+		}
 	}()
 
 	slog.Info("Starting hive-ui service with HTTPS", "addr", addr)

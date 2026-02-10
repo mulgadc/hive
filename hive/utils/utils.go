@@ -889,7 +889,7 @@ func DownloadFileWithProgress(url string, name string, filename string, timeout 
 		}))
 
 		_, err = io.Copy(f, reader)
-		bar.Stop()
+		_, _ = bar.Stop()
 		if err != nil {
 			return fmt.Errorf("copy error: %v", err)
 		}
@@ -903,15 +903,13 @@ func DownloadFileWithProgress(url string, name string, filename string, timeout 
 		spin, _ := pterm.DefaultSpinner.
 			WithText("Downloading (size unknown)...").
 			Start()
-		defer spin.Stop()
-
 		var written int64
 		reader := io.TeeReader(resp.Body, progressWriter(func(n int) {
 			written += int64(n)
 			spin.UpdateText(fmt.Sprintf("Downloading %s (%s) ...", name, humanBytes(SafeInt64ToUint64(written))))
 		}))
 		_, err = io.Copy(f, reader)
-		spin.Stop()
+		_ = spin.Stop()
 
 		if err != nil {
 			return fmt.Errorf("copy error: %v", err)
