@@ -203,7 +203,11 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput) (*e
 		}
 
 		var snapResp config.EBSSnapshotResponse
-		if json.Unmarshal(msg.Data, &snapResp) == nil && snapResp.Error != "" {
+		if err := json.Unmarshal(msg.Data, &snapResp); err != nil {
+			slog.Error("CreateSnapshot: failed to unmarshal ebs.snapshot response", "volumeId", volumeID, "snapshotId", snapshotID, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
+		if !snapResp.Success || snapResp.Error != "" {
 			slog.Error("CreateSnapshot: viperblock snapshot failed", "volumeId", volumeID, "snapshotId", snapshotID, "err", snapResp.Error)
 			return nil, errors.New(awserrors.ErrorServerInternal)
 		}

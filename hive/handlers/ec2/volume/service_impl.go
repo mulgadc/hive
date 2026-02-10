@@ -112,6 +112,10 @@ func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Vol
 		if *input.Size < 1 || *input.Size > 16384 {
 			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 		}
+		if snapshotSizeGiB > 0 && *input.Size < snapshotSizeGiB {
+			slog.Error("CreateVolume: requested size smaller than snapshot", "size", *input.Size, "snapshotSize", snapshotSizeGiB)
+			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+		}
 		size = *input.Size
 	} else if snapshotSizeGiB > 0 {
 		size = snapshotSizeGiB
@@ -868,33 +872,53 @@ func (s *VolumeServiceImpl) checkVolumeHasNoSnapshots(volumeID string) error {
 
 		snapshotID := strings.TrimSuffix(*prefix.Prefix, "/")
 
-		// Try metadata.json first (hive format), then config.json (viperblock format)
-		for _, filename := range []string{"metadata.json", "config.json"} {
-			key := snapshotID + "/" + filename
+		if err := s.snapshotReferencesVolume(snapshotID, volumeID); err != nil {
+			return err
+		}
+	}
 
-			getResult, err := s.store.GetObject(&s3.GetObjectInput{
-				Bucket: aws.String(s.bucketName),
-				Key:    aws.String(key),
-			})
-			if err != nil {
-				continue
-			}
+	return nil
+}
 
-			body, err := io.ReadAll(getResult.Body)
-			getResult.Body.Close()
-			if err != nil {
-				continue
-			}
+// snapshotReferencesVolume checks if a snapshot references the given volume.
+// Returns an error if the snapshot references the volume or if a non-recoverable
+// S3/IO error occurs. Returns nil if the snapshot does not reference the volume.
+func (s *VolumeServiceImpl) snapshotReferencesVolume(snapshotID, volumeID string) error {
+	// Try metadata.json first (hive format), then config.json (viperblock format)
+	for _, filename := range []string{"metadata.json", "config.json"} {
+		key := snapshotID + "/" + filename
 
-			var ref snapshotVolumeRef
-			if json.Unmarshal(body, &ref) != nil {
-				continue
+		getResult, err := s.store.GetObject(&s3.GetObjectInput{
+			Bucket: aws.String(s.bucketName),
+			Key:    aws.String(key),
+		})
+		if err != nil {
+			if objectstore.IsNoSuchKeyError(err) {
+				continue // Expected: this format file doesn't exist for this snapshot
 			}
+			slog.Error("checkVolumeHasNoSnapshots: failed to read snapshot metadata",
+				"volumeId", volumeID, "snapshotId", snapshotID, "key", key, "err", err)
+			return errors.New(awserrors.ErrorServerInternal)
+		}
 
-			if ref.referencesVolume(volumeID) {
-				slog.Error("DeleteVolume blocked: volume has snapshots", "volumeId", volumeID, "snapshotId", snapshotID)
-				return fmt.Errorf("%s: volume %s has existing snapshot %s. Delete snapshots first", awserrors.ErrorVolumeInUse, volumeID, snapshotID)
-			}
+		body, err := io.ReadAll(getResult.Body)
+		getResult.Body.Close()
+		if err != nil {
+			slog.Error("checkVolumeHasNoSnapshots: failed to read snapshot body",
+				"volumeId", volumeID, "snapshotId", snapshotID, "key", key, "err", err)
+			return errors.New(awserrors.ErrorServerInternal)
+		}
+
+		var ref snapshotVolumeRef
+		if err := json.Unmarshal(body, &ref); err != nil {
+			slog.Warn("checkVolumeHasNoSnapshots: failed to parse snapshot metadata, skipping file",
+				"volumeId", volumeID, "snapshotId", snapshotID, "key", key, "err", err)
+			continue // JSON parse errors for individual files are not fatal -- try next file
+		}
+
+		if ref.referencesVolume(volumeID) {
+			slog.Error("DeleteVolume blocked: volume has snapshots", "volumeId", volumeID, "snapshotId", snapshotID)
+			return fmt.Errorf("%s: volume %s has existing snapshot %s. Delete snapshots first", awserrors.ErrorVolumeInUse, volumeID, snapshotID)
 		}
 	}
 
