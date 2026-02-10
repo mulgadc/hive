@@ -322,6 +322,10 @@ func TestParseAWSQueryArgs_URLDecoding(t *testing.T) {
 		{"encoded plus as space", "Name=my+volume", "Name", "my volume"},
 		{"no encoding needed", "VolumeId=vol-abc123", "VolumeId", "vol-abc123"},
 		{"multiple params", "VolumeId=vol-abc&Device=%2Fdev%2Fsdg", "Device", "/dev/sdg"},
+		{"encoded key dot", "Tag%2EKey=Name", "Tag.Key", "Name"},
+		{"encoded key and value", "Filter%2E1%2EName=instance-id&Filter%2E1%2EValue=i-abc", "Filter.1.Name", "instance-id"},
+		{"key-only encoded", "Tag%2EKey=", "Tag.Key", ""},
+		{"key without value", "Tag%2EKey", "Tag.Key", ""},
 	}
 
 	for _, tc := range testCases {

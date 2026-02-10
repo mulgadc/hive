@@ -205,19 +205,19 @@ func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {
 }
 
 // Parse AWS query arguments (used by some services like EC2/S3)
+// Properly URL-decodes both keys and values
 func ParseAWSQueryArgs(query string) map[string]string {
 	params := make(map[string]string)
 	pairs := strings.SplitSeq(query, "&")
 	for pair := range pairs {
 		kv := strings.SplitN(pair, "=", 2)
 		if len(kv) == 2 {
-			val, err := url.QueryUnescape(kv[1])
-			if err != nil {
-				val = kv[1]
-			}
-			params[kv[0]] = val
+			key, _ := url.QueryUnescape(kv[0])
+			value, _ := url.QueryUnescape(kv[1])
+			params[key] = value
 		} else if len(kv) == 1 {
-			params[kv[0]] = ""
+			key, _ := url.QueryUnescape(kv[0])
+			params[key] = ""
 		}
 	}
 	return params
