@@ -24,12 +24,12 @@ import (
 var serviceName = "viperblock"
 
 type MountedVolume struct {
-	Name   string
-	Port   int    // TCP port (when using TCP transport)
-	Socket string // Unix socket path (when using socket transport)
+	Name        string
+	Port        int    // TCP port (when using TCP transport)
+	Socket      string // Unix socket path (when using socket transport)
 	NBDURI      string // Full NBD URI (nbd:unix:/path.sock or nbd://host:port)
 	PID         int
-	VB          *viperblock.VB    // Reference to viperblock instance for state sync/flush
+	VB          *viperblock.VB     // Reference to viperblock instance for state sync/flush
 	SnapshotSub *nats.Subscription // Per-volume snapshot subscription (ebs.snapshot.{volumeID})
 }
 
