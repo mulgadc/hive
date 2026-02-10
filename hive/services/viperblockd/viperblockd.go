@@ -312,6 +312,59 @@ func launchService(cfg *Config) (err error) {
 		slog.Error("Failed to subscribe to ebs.sync", "err", err)
 	}
 
+	if _, err := nc.QueueSubscribe("ebs.snapshot", "hive-workers", func(msg *nats.Msg) {
+		slog.Info("Received ebs.snapshot message", "data", string(msg.Data))
+
+		var snapRequest config.EBSSnapshotRequest
+		if err := json.Unmarshal(msg.Data, &snapRequest); err != nil {
+			slog.Error("Failed to unmarshal ebs.snapshot message", "err", err)
+			errResp, _ := json.Marshal(config.EBSSnapshotResponse{Error: fmt.Sprintf("bad request: %v", err)})
+			if err := msg.Respond(errResp); err != nil {
+				slog.Error("Failed to respond to ebs.snapshot request", "err", err)
+			}
+			return
+		}
+
+		snapResponse := config.EBSSnapshotResponse{SnapshotID: snapRequest.SnapshotID}
+
+		// Find the mounted volume's VB instance
+		cfg.mu.Lock()
+		var foundVB *viperblock.VB
+		for _, volume := range cfg.MountedVolumes {
+			if volume.Name == snapRequest.Volume && volume.VB != nil {
+				foundVB = volume.VB
+				break
+			}
+		}
+		cfg.mu.Unlock()
+
+		if foundVB == nil {
+			snapResponse.Error = fmt.Sprintf("volume %s not mounted or has no VB instance", snapRequest.Volume)
+			slog.Error("ebs.snapshot: volume not found", "volume", snapRequest.Volume)
+		} else if _, err := foundVB.CreateSnapshot(snapRequest.SnapshotID); err != nil {
+			snapResponse.Error = fmt.Sprintf("snapshot failed: %v", err)
+			slog.Error("ebs.snapshot: CreateSnapshot failed", "volume", snapRequest.Volume, "snapshotId", snapRequest.SnapshotID, "err", err)
+		} else {
+			snapResponse.Success = true
+			slog.Info("ebs.snapshot: snapshot created", "volume", snapRequest.Volume, "snapshotId", snapRequest.SnapshotID)
+		}
+
+		response, err := json.Marshal(snapResponse)
+		if err != nil {
+			slog.Error("Failed to marshal ebs.snapshot response", "err", err)
+			if err := msg.Respond([]byte(`{"Error":"internal marshal failure"}`)); err != nil {
+				slog.Error("Failed to respond to ebs.snapshot request", "err", err)
+			}
+			return
+		}
+
+		if err := msg.Respond(response); err != nil {
+			slog.Error("Failed to respond to ebs.snapshot request", "err", err)
+		}
+	}); err != nil {
+		slog.Error("Failed to subscribe to ebs.snapshot", "err", err)
+	}
+
 	if _, err := nc.QueueSubscribe("ebs.mount", "hive-workers", func(msg *nats.Msg) {
 		slog.Info("Received message:", "data", string(msg.Data))
 
