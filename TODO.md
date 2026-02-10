@@ -39,6 +39,7 @@
 - make gateway validation methods be private, only used for tests
 - use more secure crypto, can we stop using sha1 or is required for aws?
 - centralise random gen ids, all scattered
+- make runinstances nats naming be consistent with others - ec2.RunInstances
 
 ### Issues to investigate
 
