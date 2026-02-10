@@ -972,6 +972,18 @@ func (d *Daemon) handleEC2DescribeTags(msg *nats.Msg) {
 	handleNATSRequest(msg, d.tagsService.DescribeTags)
 }
 
+func (d *Daemon) handleEC2CreateEgressOnlyInternetGateway(msg *nats.Msg) {
+	handleNATSRequest(msg, d.eigwService.CreateEgressOnlyInternetGateway)
+}
+
+func (d *Daemon) handleEC2DeleteEgressOnlyInternetGateway(msg *nats.Msg) {
+	handleNATSRequest(msg, d.eigwService.DeleteEgressOnlyInternetGateway)
+}
+
+func (d *Daemon) handleEC2DescribeEgressOnlyInternetGateways(msg *nats.Msg) {
+	handleNATSRequest(msg, d.eigwService.DescribeEgressOnlyInternetGateways)
+}
+
 // handleEC2DescribeInstanceTypes processes incoming EC2 DescribeInstanceTypes requests
 // This handler responds with instance types that can currently be provisioned on this node
 // based on available resources (CPU and memory not already allocated to running instances)

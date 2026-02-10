@@ -26,6 +26,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
+	handlers_ec2_eigw "github.com/mulgadc/hive/hive/handlers/ec2/eigw"
 	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
 	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
@@ -82,6 +83,7 @@ type Daemon struct {
 	volumeService   *handlers_ec2_volume.VolumeServiceImpl
 	snapshotService *handlers_ec2_snapshot.SnapshotServiceImpl
 	tagsService     *handlers_ec2_tags.TagsServiceImpl
+	eigwService     *handlers_ec2_eigw.EgressOnlyIGWServiceImpl
 	ctx             context.Context
 	cancel          context.CancelFunc
 	shutdownWg      sync.WaitGroup
@@ -452,6 +454,9 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.CreateTags", d.handleEC2CreateTags, "hive-workers"},
 		{"ec2.DeleteTags", d.handleEC2DeleteTags, "hive-workers"},
 		{"ec2.DescribeTags", d.handleEC2DescribeTags, "hive-workers"},
+		{"ec2.CreateEgressOnlyInternetGateway", d.handleEC2CreateEgressOnlyInternetGateway, "hive-workers"},
+		{"ec2.DeleteEgressOnlyInternetGateway", d.handleEC2DeleteEgressOnlyInternetGateway, "hive-workers"},
+		{"ec2.DescribeEgressOnlyInternetGateways", d.handleEC2DescribeEgressOnlyInternetGateways, "hive-workers"},
 		{"ec2.DescribeInstances", d.handleEC2DescribeInstances, ""},
 		{"ec2.DescribeInstanceTypes", d.handleEC2DescribeInstanceTypes, ""},
 		{"ec2.startinstances", d.handleEC2StartInstances, "hive-workers"},
@@ -500,6 +505,13 @@ func (d *Daemon) Start() error {
 	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config, d.natsConn)
 	d.snapshotService = handlers_ec2_snapshot.NewSnapshotServiceImpl(d.config, d.natsConn)
 	d.tagsService = handlers_ec2_tags.NewTagsServiceImpl(d.config)
+
+	if eigwSvc, err := handlers_ec2_eigw.NewEgressOnlyIGWServiceImplWithNATS(d.config, d.natsConn); err != nil {
+		slog.Warn("Failed to initialize EIGW service, falling back to in-memory", "error", err)
+		d.eigwService = handlers_ec2_eigw.NewEgressOnlyIGWServiceImpl(d.config)
+	} else {
+		d.eigwService = eigwSvc
+	}
 
 	d.restoreInstances()
 
