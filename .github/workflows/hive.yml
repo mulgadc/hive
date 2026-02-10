@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  hive_build_and_test:
+  build_and_test:
     name: Hive Build and Test
     runs-on: ubuntu-24.04
 
@@ -26,6 +26,27 @@ jobs:
 
       - name: Run Tests
         run: LOG_IGNORE=1 go test -v -timeout 120s ./...
+
+  lint_and_security:
+    name: Hive Lint and Security
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          cache-dependency-path: "go.sum"
+          go-version-file: "go.mod"
+
+      - name: Check gofmt
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "Go files are not formatted. Run 'gofmt -w .' to fix them."
+            exit 1
+          fi
 
       - name: Go Vet
         run: go vet ./...
