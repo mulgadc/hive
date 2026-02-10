@@ -16,105 +16,83 @@ The Hive platform consists of these independent repositories:
 - **hive/** (this repo) - VM orchestration service and platform coordinator
 
 Each component can be used independently or as part of the integrated Hive stack. See component-specific `CLAUDE.md` files for detailed development guidance:
-- `../viperblock/CLAUDE.md` - Viperblock development guide
-- `../predastore/CLAUDE.md` - Predastore development guide
+- `../viperblock/CLAUDE.md`
+- `../predastore/CLAUDE.md`
+
+## Commands
+
+### Go (backend)
+
+```bash
+make build          # Build hive binary to ./bin/hive
+make test           # Run all tests (sets LOG_IGNORE=1)
+make bench          # Run benchmarks
+make format         # Run gofmt
+make security       # Run go vet, govulncheck, gosec, staticcheck
+make clean          # Remove build artifacts
+```
+
+### Frontend (hive-ui)
+
+```bash
+make build-ui                                    # Production build
+cd hive/services/hiveui/frontend && pnpm dev     # Dev server on port 3000
+cd hive/services/hiveui/frontend && pnpm fix     # Biome lint/format fix
+cd hive/services/hiveui/frontend && pnpm build   # Build + typecheck
+```
+
+Frontend stack: React 19, TanStack Router/Query, Tailwind CSS v4, Biome (lint/format), Vite, pnpm. See `.claude/rules/frontend-standards.md` for coding standards.
+
+### Dev Environment
+
+```bash
+scripts/dev-setup.sh    # One-time setup: creates directories, generates config/certs
+scripts/start-dev.sh    # Start all services (NATS → Predastore → Viperblock → NBDkit → Gateway → Daemon → UI)
+scripts/stop-dev.sh     # Stop all services
+```
+
+Data directory: `~/hive/` (logs in `~/hive/logs/`, config in `~/hive/config/`)
 
 ## Project Standards
 
-- Use log/slog instead of log. Use appropriate log level, eg `slog.Info`
+- Use `log/slog` instead of `log`. Use appropriate log level, eg `slog.Debug`
 - All new features must have comprehensive unit tests
+- For returning AWS errors, use `awserrors` package instead of manually typed strings
 
 **Testing Policy:**
 - **All unit tests MUST pass** before committing changes
 - **No exceptions** - failing tests block commits
 - Tests must complete without errors or panics
-- Use `make test` command to run all tests
-- use `make security` command to run all security tests
-- If tests fail, fix issues before proceeding
 
-## Architecture Notes
+## Architecture
 
-Read `DESIGN.md` to understand the full architecture
+Read `DESIGN.md` to understand the full architecture.
 
-### Message-Driven Microservices Architecture
-
-Hive uses a **scalable message-driven architecture** that separates API handling from request processing:
+### Message-Driven Architecture
 
 ```
-AWS SDK (custom endpoint) → Hive API Gateway → NATS Topics → Specialized Daemons
-                                    ↑                              ↓
-                         AWS-compatible response ←  NATS Topics  ←  Processing Results
+AWS SDK (custom endpoint) → AWS Gateway (port 9999) → NATS → Specialized Daemons → Response
 ```
 
-#### Core Components:
+- **AWS Gateway** (`hive/services/awsgw/`): TLS endpoint, SigV4 auth, routes to service handlers via NATS
+- **Daemons** (`hive/daemon/`): Subscribe to NATS topics, process requests, manage QEMU/KVM VMs
+- **NATS Topics**: `ec2.*`, `ebs.*`, `s3.*`, `vpc.*` — queue groups (`hive-workers`) for load balancing, no queue group for fan-out (e.g., DescribeInstances)
+- **Storage**: Viperblock for EBS volumes (`ebs.mount` topic), Predastore for S3/AMI/key storage
 
-1. **Hive API Gateway Service** - TLS endpoint that handles AWS SDK requests
-2. **Specialized Daemon Services** - Horizontally scalable workers for each AWS service type
-3. **NATS Message Broker** - Topic-based routing with queue groups for load balancing
+### Go Workspace
 
-#### Current Implementation (daemon.go):
+Uses `go.work` with local module replacements — all repos must be cloned to the same parent directory:
+```
+mulga/
+├── hive/         # This repo
+├── predastore/   # S3-compatible storage
+└── viperblock/   # Block storage
+```
 
-- **Gateway Logic**: `StartAWSGateway()` handles AWS API calls on port 9999
-- **NATS Integration**: Uses request-response pattern: `d.natsConn.Request("ec2.runinstances", data, 30s)`
-- **Queue Groups**: Load balancing via `"hive-workers"` queue group
-- **Service Coordination**: All inter-service communication via NATS topics
+Build flag: `GOEXPERIMENT=greenteagc` is used for the GC experiment.
 
-### Inter-component Dependencies
-
-- **Service Startup Order**: NATS → Predastore → Viperblock → NBDkit → Gateway → Daemons
-- **Message Flow**: Gateway translates AWS calls to NATS messages, daemons process and respond
-- **Scaling**: Multiple daemon instances can subscribe to same topics for horizontal scaling
-- All Go projects use local module replacements for development
-
-### Storage Backend Integration
-
-- **Viperblock Integration**: EBS volumes mounted via NATS messaging (`ebs.mount` topic)
-- **Predastore Integration**: S3 operations proxied through dedicated S3 daemons
-- **NBDkit Integration**: Block device access for VM storage
-- **Volume Lifecycle**: Coordinated through NATS between EC2 and EBS daemons
-
-### Key Design Patterns
-
-- **Message-Driven**: All service communication via NATS topics
-- **Queue Groups**: Load balancing and fault tolerance via NATS queue groups
-- **Request-Response**: 30-second timeout pattern for AWS API compatibility
-- **Service Specialization**: Dedicated daemon types for each AWS service
-- **Horizontal Scaling**: Multiple daemon instances handle same topic types
-
-### NATS Topic Structure
-
-- **EC2 Daemons**: Listen on `ec2.*` topics, manage QEMU/KVM instances
-- **EBS Daemons**: Listen on `ebs.*` topics, coordinate with Viperblock
-- **S3 Daemons**: Listen on `s3.*` topics, proxy to Predastore
-- **VPC Daemons**: Listen on `vpc.*` topics, manage networking
+### Testing with AWS CLI
 
 ```bash
-# Health and Discovery:
-health.ec2.daemon.{id}       # Daemon health heartbeats
-discovery.services           # Service registration
+AWS_PROFILE=hive aws ec2 describe-instances
 ```
-
-### Development Workflow
-
-#### Development Process
-
-1. **Cross-repo Setup**: Clone all repositories to same parent directory
-2. **Service Dependencies**: Start services in order: NATS → Predastore → Viperblock → NBDkit → Gateway → Daemons
-3. **Build Order**: Build components: predastore → viperblock → hive
-4. **Testing**: Use `make test` in each component to verify changes
-5. **Message-Driven Development**: Test NATS message flows between gateway and daemons
-6. **Scaling**: Test with multiple daemon instances subscribing to same topics
-
-#### Development Tools
-
-- **Log Monitoring**: Centralized logs in `~/hive/logs/` directory
-- **AWS CLI Testing**: Test endpoints with `aws --endpoint-url https://localhost:9999`
-
-### Development Roadmap
-
-For major feature development and architectural changes, refer to `HIVE_DEVELOPMENT_PLAN.md` which contains:
-- Comprehensive roadmap for transforming Hive from proof-of-concept to beta release
-- Detailed implementation phases with specific tasks and file structures
-- AWS API compatibility implementation guidelines
-- Development environment automation plans
-- Testing and validation frameworks
