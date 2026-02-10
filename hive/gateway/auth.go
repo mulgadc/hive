@@ -47,8 +47,8 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() fiber.Handler {
 
 		// Parse Credential
 		var accessKey, date, region, service string
-		if strings.HasPrefix(parts[0], "Credential=") {
-			credParts := strings.Split(strings.TrimPrefix(parts[0], "Credential="), "/")
+		if after, ok := strings.CutPrefix(parts[0], "Credential="); ok {
+			credParts := strings.Split(after, "/")
 			if len(credParts) != 5 || credParts[4] != "aws4_request" {
 				return gw.writeSigV4Error(c, awserrors.ErrorIncompleteSignature)
 			}
@@ -62,16 +62,16 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() fiber.Handler {
 
 		// Parse SignedHeaders
 		var signedHeaders string
-		if strings.HasPrefix(parts[1], "SignedHeaders=") {
-			signedHeaders = strings.TrimPrefix(parts[1], "SignedHeaders=")
+		if after, ok := strings.CutPrefix(parts[1], "SignedHeaders="); ok {
+			signedHeaders = after
 		} else {
 			return gw.writeSigV4Error(c, awserrors.ErrorIncompleteSignature)
 		}
 
 		// Parse Signature
 		var providedSignature string
-		if strings.HasPrefix(parts[2], "Signature=") {
-			providedSignature = strings.TrimPrefix(parts[2], "Signature=")
+		if after, ok := strings.CutPrefix(parts[2], "Signature="); ok {
+			providedSignature = after
 		} else {
 			return gw.writeSigV4Error(c, awserrors.ErrorIncompleteSignature)
 		}
@@ -198,8 +198,8 @@ func buildCanonicalQueryString(queryString string) string {
 
 	// Parse query parameters
 	params := make(map[string][]string)
-	pairs := strings.Split(queryString, "&")
-	for _, pair := range pairs {
+	pairs := strings.SplitSeq(queryString, "&")
+	for pair := range pairs {
 		if pair == "" {
 			continue
 		}

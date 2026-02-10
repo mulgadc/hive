@@ -975,10 +975,7 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 	// Run asynchronously within a worker group
 	for _, instance := range instances {
 
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 
 			// Send shutdown command - if it fails, VM may already be dead, continue with cleanup
 			_, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "system_powerdown"}, instance.ID)
@@ -1078,7 +1075,7 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				slog.Info("Deallocating resources for stopped instance", "instanceId", instance.ID, "type", instance.InstanceType)
 				d.resourceMgr.deallocate(instanceType)
 			}
-		}()
+		})
 	}
 
 	// Wait for all shutdowns to finish
@@ -1099,9 +1096,7 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 }
 
 func (d *Daemon) setupShutdown() {
-	d.shutdownWg.Add(1)
-	go func() {
-		defer d.shutdownWg.Done()
+	d.shutdownWg.Go(func() {
 
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
@@ -1145,7 +1140,7 @@ func (d *Daemon) setupShutdown() {
 		// Wait for any ongoing operations to complete
 		// TODO: Implement cleanup of running instances
 		slog.Info("Shutdown complete")
-	}()
+	})
 }
 
 func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
