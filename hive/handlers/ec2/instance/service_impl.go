@@ -377,14 +377,20 @@ func (s *InstanceServiceImpl) cloneAMIToVolume(input *ec2.RunInstancesInput, siz
 				continue
 			}
 
-			destVb.WriteAt(block*uint64(destVb.BlockSize), data[i*int(destVb.BlockSize):(i+1)*int(destVb.BlockSize)])
+			if err := destVb.WriteAt(block*uint64(destVb.BlockSize), data[i*int(destVb.BlockSize):(i+1)*int(destVb.BlockSize)]); err != nil {
+				slog.Error("Failed to write block", "block", block, "err", err)
+			}
 			block++
 
 			// Flush every 4MB
 			if block%uint64(destVb.BlockSize) == 0 {
 				// slog.Debug("Flush", "block", block)
-				destVb.Flush()
-				destVb.WriteWALToChunk(true)
+				if err := destVb.Flush(); err != nil {
+					slog.Error("Failed to flush", "err", err)
+				}
+				if err := destVb.WriteWALToChunk(true); err != nil {
+					slog.Error("Failed to write WAL to chunk", "err", err)
+				}
 			}
 		}
 	}
@@ -451,8 +457,12 @@ func (s *InstanceServiceImpl) prepareEFIVolume(imageId string, volumeConfig vipe
 		}
 
 		// Write an empty block to the EFI volume
-		efiVb.WriteAt(0, make([]byte, efiVb.BlockSize))
-		efiVb.Flush()
+		if err := efiVb.WriteAt(0, make([]byte, efiVb.BlockSize)); err != nil {
+			slog.Error("Failed to write empty EFI block", "err", err)
+		}
+		if err := efiVb.Flush(); err != nil {
+			slog.Error("Failed to flush EFI volume", "err", err)
+		}
 	}
 
 	slog.Info("Closing EFI")
@@ -677,8 +687,12 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 	}
 
 	// Flush
-	cloudInitVb.Flush()
-	cloudInitVb.WriteWALToChunk(true)
+	if err := cloudInitVb.Flush(); err != nil {
+		slog.Error("Failed to flush cloud-init volume", "err", err)
+	}
+	if err := cloudInitVb.WriteWALToChunk(true); err != nil {
+		slog.Error("Failed to write WAL to chunk", "err", err)
+	}
 
 	// Remove the temp ISO file
 	err = os.Remove(tempFile.Name())

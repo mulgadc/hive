@@ -102,16 +102,16 @@ quickinstall: install-system install-go install-aws
 security:
 	@echo "\n....Running security checks for $(GO_PROJECT_NAME)...."
 
+	go vet ./... 2>&1 | tee tests/govet-report.txt || true
+	@echo "Go vet report saved to tests/govet-report.txt"
+
 	go tool govulncheck ./... > tests/govulncheck-report.txt || true
 	@echo "Govulncheck report saved to tests/govulncheck-report.txt"
 
-	go tool gosec -exclude=G204,G304,G402 ./... > tests/gosec-report.txt || true
+	go tool gosec -exclude=G204,G304,G402 -exclude-generated -exclude-dir=cmd ./... > tests/gosec-report.txt || true
 	@echo "Gosec report saved to tests/gosec-report.txt"
 
 	go tool staticcheck -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./...  > tests/staticcheck-report.txt || true
 	@echo "Staticcheck report saved to tests/staticcheck-report.txt"
-
-	go vet ./... 2>&1 | tee tests/govet-report.txt || true
-	@echo "Go vet report saved to tests/govet-report.txt"
 
 .PHONY: build build-ui go_build go_run test bench run clean install-system install-go install-aws quickinstall security

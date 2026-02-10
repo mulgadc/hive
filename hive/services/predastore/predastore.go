@@ -51,7 +51,9 @@ func New(config any) (svc *Service, err error) {
 
 // Start starts the predastore service
 func (svc *Service) Start() (int, error) {
-	utils.WritePidFile(serviceName, os.Getpid())
+	if err := utils.WritePidFile(serviceName, os.Getpid()); err != nil {
+		slog.Error("Failed to write pid file", "err", err)
+	}
 
 	server, err := s3.NewServer(
 		s3.WithConfigPath(svc.Config.ConfigPath),

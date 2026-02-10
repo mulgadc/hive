@@ -22,20 +22,28 @@ import (
 func handleNATSRequest[I any, O any](msg *nats.Msg, serviceFn func(*I) (*O, error)) {
 	input := new(I)
 	if errResp := utils.UnmarshalJsonPayload(input, msg.Data); errResp != nil {
-		msg.Respond(errResp)
+		if err := msg.Respond(errResp); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		return
 	}
 	output, err := serviceFn(input)
 	if err != nil {
-		msg.Respond(utils.GenerateErrorPayload(err.Error()))
+		if err := msg.Respond(utils.GenerateErrorPayload(err.Error())); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		return
 	}
 	jsonResponse, err := json.Marshal(output)
 	if err != nil {
-		msg.Respond(utils.GenerateErrorPayload(awserrors.ErrorServerInternal))
+		if err := msg.Respond(utils.GenerateErrorPayload(awserrors.ErrorServerInternal)); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		return
 	}
-	msg.Respond(jsonResponse)
+	if err := msg.Respond(jsonResponse); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
 }
 
 func (d *Daemon) handleEC2StartInstances(msg *nats.Msg) {
@@ -105,7 +113,9 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 
 	// Helper to ensure we always respond to NATS
 	respondWithError := func(errCode string) {
-		msg.Respond(utils.GenerateErrorPayload(errCode))
+		if err := msg.Respond(utils.GenerateErrorPayload(errCode)); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 	}
 
 	if err := json.Unmarshal(msg.Data, &command); err != nil {
@@ -521,7 +531,9 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 
 		slog.Info("Instance started", "instanceId", instance.ID)
 
-		msg.Respond(fmt.Appendf(nil, `{"status":"running","instanceId":"%s"}`, instance.ID))
+		if err := msg.Respond(fmt.Appendf(nil, `{"status":"running","instanceId":"%s"}`, instance.ID)); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		return
 	}
 
@@ -548,7 +560,9 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 
 		// Respond immediately - operation will complete in background
 		// stopInstance() handles the QMP shutdown command, so we don't send it here
-		msg.Respond([]byte(`{}`))
+		if err := msg.Respond([]byte(`{}`)); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 
 		// Run cleanup in goroutine to not block NATS
 		go func(inst *vm.VM, attrs qmp.Attributes) {
@@ -588,13 +602,17 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 	target, ok := qmp.CommandResponseTypes[command.QMPCommand.Execute]
 	if !ok {
 		slog.Warn("Unhandled QMP command", "cmd", command.QMPCommand.Execute)
-		msg.Respond(resp.Return)
+		if err := msg.Respond(resp.Return); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		return
 	}
 
 	if err := json.Unmarshal(resp.Return, target); err != nil {
 		slog.Error("Failed to unmarshal QMP response", "cmd", command.QMPCommand.Execute, "err", err)
-		msg.Respond(resp.Return)
+		if err := msg.Respond(resp.Return); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		return
 	}
 
@@ -607,7 +625,9 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 		slog.Error("Failed to write state to disk", "err", err)
 	}
 
-	msg.Respond(resp.Return)
+	if err := msg.Respond(resp.Return); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
 }
 
 // handleEC2RunInstances processes incoming EC2 RunInstances requests
@@ -622,7 +642,9 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	errResp = utils.UnmarshalJsonPayload(runInstancesInput, msg.Data)
 
 	if errResp != nil {
-		msg.Respond(errResp)
+		if err := msg.Respond(errResp); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		slog.Error("Request does not match RunInstancesInput")
 		return
 	}
@@ -633,7 +655,9 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	if err != nil {
 		slog.Error("handleEC2RunInstances validation failed", "err", awserrors.ErrorValidationError)
 		errResp = utils.GenerateErrorPayload(awserrors.ErrorValidationError)
-		msg.Respond(errResp)
+		if err := msg.Respond(errResp); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		return
 
 	}
@@ -645,7 +669,9 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	if !exists {
 		slog.Error("handleEC2RunInstances instance lookup", "err", awserrors.ErrorInvalidInstanceType, "InstanceType", *runInstancesInput.InstanceType)
 		errResp = utils.GenerateErrorPayload(awserrors.ErrorInvalidInstanceType)
-		msg.Respond(errResp)
+		if err := msg.Respond(errResp); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		return
 	}
 
@@ -660,7 +686,9 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		// Cannot satisfy MinCount requirement - fail entirely
 		slog.Error("handleEC2RunInstances insufficient capacity", "requested", minCount, "available", allocatableCount, "InstanceType", *runInstancesInput.InstanceType)
 		errResp = utils.GenerateErrorPayload(awserrors.ErrorInsufficientInstanceCapacity)
-		msg.Respond(errResp)
+		if err := msg.Respond(errResp); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		return
 	}
 
@@ -688,7 +716,9 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		}
 		slog.Error("handleEC2RunInstances insufficient capacity after allocation", "allocated", allocatedCount, "minCount", minCount)
 		errResp = utils.GenerateErrorPayload(awserrors.ErrorInsufficientInstanceCapacity)
-		msg.Respond(errResp)
+		if err := msg.Respond(errResp); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		return
 	}
 
@@ -727,7 +757,9 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		}
 		slog.Error("handleEC2RunInstances failed to create minimum instances", "created", len(instances), "minCount", minCount)
 		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
+		if err := msg.Respond(errResp); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		return
 	}
 
@@ -747,14 +779,18 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	if err != nil {
 		slog.Error("handleEC2RunInstances failed to marshal reservation", "err", err)
 		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
+		if err := msg.Respond(errResp); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		// Deallocate all resources
 		for range instances {
 			d.resourceMgr.deallocate(instanceType)
 		}
 		return
 	}
-	msg.Respond(jsonResponse)
+	if err := msg.Respond(jsonResponse); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
 
 	// Add all instances to state immediately so DescribeInstances can find them
 	// while volumes are being prepared and VMs are launching
@@ -854,7 +890,9 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 	errResp = utils.UnmarshalJsonPayload(modifyVolumeInput, msg.Data)
 
 	if errResp != nil {
-		msg.Respond(errResp)
+		if err := msg.Respond(errResp); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		slog.Error("Request does not match ModifyVolumeInput")
 		return
 	}
@@ -866,7 +904,9 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 	if err != nil {
 		slog.Error("handleEC2ModifyVolume service.ModifyVolume failed", "err", err)
 		errResp = utils.GenerateErrorPayload(err.Error())
-		msg.Respond(errResp)
+		if err := msg.Respond(errResp); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		return
 	}
 
@@ -874,10 +914,14 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 	if err != nil {
 		slog.Error("handleEC2ModifyVolume failed to marshal output", "err", err)
 		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
+		if err := msg.Respond(errResp); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		return
 	}
-	msg.Respond(jsonResponse)
+	if err := msg.Respond(jsonResponse); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
 
 	// Notify viperblockd to reload state after volume modification (e.g. resize)
 	if modifyVolumeInput.VolumeId != nil {
@@ -940,7 +984,9 @@ func (d *Daemon) handleEC2DescribeInstanceTypes(msg *nats.Msg) {
 
 	errResp = utils.UnmarshalJsonPayload(describeInput, msg.Data)
 	if errResp != nil {
-		msg.Respond(errResp)
+		if err := msg.Respond(errResp); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		slog.Error("Request does not match DescribeInstanceTypesInput")
 		return
 	}
@@ -973,10 +1019,14 @@ func (d *Daemon) handleEC2DescribeInstanceTypes(msg *nats.Msg) {
 	if err != nil {
 		slog.Error("handleEC2DescribeInstanceTypes failed to marshal output", "err", err)
 		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
+		if err := msg.Respond(errResp); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		return
 	}
-	msg.Respond(jsonResponse)
+	if err := msg.Respond(jsonResponse); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
 
 	slog.Info("handleEC2DescribeInstanceTypes completed", "count", len(filteredTypes))
 }
@@ -993,7 +1043,9 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 	errResp = utils.UnmarshalJsonPayload(describeInstancesInput, msg.Data)
 
 	if errResp != nil {
-		msg.Respond(errResp)
+		if err := msg.Respond(errResp); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		slog.Error("Request does not match DescribeInstancesInput")
 		return
 	}
@@ -1077,10 +1129,14 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 	if err != nil {
 		slog.Error("handleEC2DescribeInstances failed to marshal output", "err", err)
 		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		msg.Respond(errResp)
+		if err := msg.Respond(errResp); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
 		return
 	}
-	msg.Respond(jsonResponse)
+	if err := msg.Respond(jsonResponse); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
 
 	slog.Info("handleEC2DescribeInstances completed", "count", len(reservations))
 }
@@ -1107,7 +1163,9 @@ func (d *Daemon) handleHealthCheck(msg *nats.Msg) {
 		return
 	}
 
-	msg.Respond(jsonResponse)
+	if err := msg.Respond(jsonResponse); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
 	slog.Debug("Health check responded", "node", d.node, "epoch", d.clusterConfig.Epoch)
 }
 
@@ -1129,7 +1187,9 @@ func (d *Daemon) handleNodeDiscover(msg *nats.Msg) {
 		return
 	}
 
-	msg.Respond(jsonResponse)
+	if err := msg.Respond(jsonResponse); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
 	slog.Debug("Node discovery responded", "node", d.node)
 }
 

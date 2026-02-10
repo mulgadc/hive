@@ -170,6 +170,5 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 		return err
 	}
 
-	ctx.Status(fiber.StatusOK).Type("text/xml").Send(xmlOutput)
-	return nil
+	return ctx.Status(fiber.StatusOK).Type("text/xml").Send(xmlOutput)
 }

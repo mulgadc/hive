@@ -995,7 +995,9 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 					slog.Debug("No PID file found (VM likely already stopped)", "id", instance.ID)
 				} else {
 					slog.Info("Force killing process", "pid", pid, "id", instance.ID)
-					utils.KillProcess(pid)
+					if err := utils.KillProcess(pid); err != nil {
+						slog.Error("Failed to kill process", "pid", pid, "id", instance.ID, "err", err)
+					}
 				}
 			}
 
@@ -1086,7 +1088,9 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 	if deleteVolume {
 		for _, instance := range instances {
 			slog.Info("Unsubscribing from NATS subject", "instance", instance.ID)
-			d.natsSubscriptions[fmt.Sprintf("ec2.cmd.%s", instance.ID)].Unsubscribe()
+			if err := d.natsSubscriptions[fmt.Sprintf("ec2.cmd.%s", instance.ID)].Unsubscribe(); err != nil {
+				slog.Error("Failed to unsubscribe from NATS subject", "instance", instance.ID, "err", err)
+			}
 			// TODO: Remove redundant subscription if not used
 			//d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)].Unsubscribe()
 		}
@@ -1108,7 +1112,9 @@ func (d *Daemon) setupShutdown() {
 		d.cancel()
 
 		// Pass instances to terminate
-		d.stopInstance(d.Instances.VMS, false)
+		if err := d.stopInstance(d.Instances.VMS, false); err != nil {
+			slog.Error("Failed to stop instances during shutdown", "err", err)
+		}
 
 		// Final cleanup
 		for _, sub := range d.natsSubscriptions {
@@ -1171,7 +1177,9 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 
 				// Close the QMP client connection if it exists
 				if instance.QMPClient != nil && instance.QMPClient.Conn != nil {
-					instance.QMPClient.Conn.Close()
+					if err := instance.QMPClient.Conn.Close(); err != nil {
+						slog.Error("Failed to close QMP connection", "instance", instance.ID, "err", err)
+					}
 				}
 				return
 			}
@@ -1658,7 +1666,9 @@ func (d *Daemon) respondWithVolumeAttachment(msg *nats.Msg, respondWithError fun
 		return
 	}
 
-	msg.Respond(jsonResp)
+	if err := msg.Respond(jsonResp); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
 }
 
 // nextAvailableDevice finds the next available /dev/sd[f-p] device name for an instance.

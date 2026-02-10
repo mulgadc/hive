@@ -184,10 +184,12 @@ func (s *KeyServiceImpl) CreateKeyPair(input *ec2.CreateKeyPairInput) (*ec2.Crea
 	if err != nil {
 		slog.Error("Failed to store key pair metadata", "err", err, "keyPairId", keyPairID)
 		// Try to cleanup the public key we just uploaded
-		s.store.DeleteObject(&s3.DeleteObjectInput{
+		if _, err := s.store.DeleteObject(&s3.DeleteObjectInput{
 			Bucket: aws.String(s.bucketName),
 			Key:    aws.String(keyPath),
-		})
+		}); err != nil {
+			slog.Error("Failed to cleanup public key", "err", err, "key", keyPath)
+		}
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -343,7 +345,9 @@ func (s *KeyServiceImpl) findKeyPairIdFromKeyName(keyName string) (string, error
 		}
 
 		body, err := io.ReadAll(getResult.Body)
-		getResult.Body.Close()
+		if err := getResult.Body.Close(); err != nil {
+			slog.Debug("Failed to close metadata body", "key", *obj.Key, "err", err)
+		}
 		if err != nil {
 			slog.Debug("Failed to read metadata body", "key", *obj.Key, "err", err)
 			continue
@@ -486,7 +490,9 @@ func (s *KeyServiceImpl) DescribeKeyPairs(input *ec2.DescribeKeyPairsInput) (*ec
 		}
 
 		body, err := io.ReadAll(getResult.Body)
-		getResult.Body.Close()
+		if err := getResult.Body.Close(); err != nil {
+			slog.Debug("Failed to close metadata body", "key", *obj.Key, "err", err)
+		}
 		if err != nil {
 			slog.Debug("Failed to read metadata body", "key", *obj.Key, "err", err)
 			continue
@@ -658,10 +664,12 @@ func (s *KeyServiceImpl) ImportKeyPair(input *ec2.ImportKeyPairInput) (*ec2.Impo
 	if err != nil {
 		slog.Error("Failed to store key pair metadata", "err", err, "keyPairId", keyPairID)
 		// Try to cleanup the public key we just uploaded
-		s.store.DeleteObject(&s3.DeleteObjectInput{
+		if _, err := s.store.DeleteObject(&s3.DeleteObjectInput{
 			Bucket: aws.String(s.bucketName),
 			Key:    aws.String(keyPath),
-		})
+		}); err != nil {
+			slog.Error("Failed to cleanup public key", "err", err, "key", keyPath)
+		}
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
