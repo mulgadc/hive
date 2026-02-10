@@ -388,16 +388,13 @@ echo "Test 1c: Snapshot Lifecycle"
 echo "----------------------------------------"
 echo "Testing snapshot create -> describe -> copy -> delete..."
 
-# Create a volume to snapshot
-echo "  Creating source volume for snapshot tests..."
-SNAP_VOL_OUTPUT=$($AWS_EC2 create-volume --size 10 --availability-zone ap-southeast-2a)
-SNAP_VOL_ID=$(echo "$SNAP_VOL_OUTPUT" | jq -r '.VolumeId')
-
-if [ -z "$SNAP_VOL_ID" ] || [ "$SNAP_VOL_ID" == "null" ]; then
-    echo "  ERROR: Failed to create source volume for snapshot tests"
-    exit 1
-fi
-echo "  Created source volume: $SNAP_VOL_ID"
+# Use the root volume of the first instance — it's already attached and mounted
+# in viperblockd, which is required for create-snapshot.
+SNAP_VOL_ID=$($AWS_EC2 describe-instances --instance-ids "${INSTANCE_IDS[0]}" \
+    --query 'Reservations[0].Instances[0].BlockDeviceMappings[0].Ebs.VolumeId' --output text)
+echo "  Using root volume $SNAP_VOL_ID (attached to ${INSTANCE_IDS[0]})"
+SNAP_VOL_SIZE=$($AWS_EC2 describe-volumes --volume-ids "$SNAP_VOL_ID" \
+    --query 'Volumes[0].Size' --output text)
 
 # Create a snapshot
 echo "  Creating snapshot from volume $SNAP_VOL_ID..."
@@ -420,8 +417,8 @@ if [ "$SNAP_VOL_REF" != "$SNAP_VOL_ID" ]; then
     echo "  ERROR: Snapshot VolumeId mismatch: expected $SNAP_VOL_ID, got $SNAP_VOL_REF"
     exit 1
 fi
-if [ "$SNAP_SIZE" -ne 10 ]; then
-    echo "  ERROR: Snapshot VolumeSize mismatch: expected 10, got $SNAP_SIZE"
+if [ "$SNAP_SIZE" -ne "$SNAP_VOL_SIZE" ]; then
+    echo "  ERROR: Snapshot VolumeSize mismatch: expected $SNAP_VOL_SIZE, got $SNAP_SIZE"
     exit 1
 fi
 echo "  Create response verified (State=$SNAP_STATE, VolumeId=$SNAP_VOL_REF, Size=$SNAP_SIZE)"
@@ -458,8 +455,8 @@ if [ "$DESC_VOL_ID" != "$SNAP_VOL_ID" ]; then
     echo "  ERROR: Describe VolumeId mismatch: expected $SNAP_VOL_ID, got $DESC_VOL_ID"
     exit 1
 fi
-if [ "$DESC_SIZE" -ne 10 ]; then
-    echo "  ERROR: Describe VolumeSize mismatch: expected 10, got $DESC_SIZE"
+if [ "$DESC_SIZE" -ne "$SNAP_VOL_SIZE" ]; then
+    echo "  ERROR: Describe VolumeSize mismatch: expected $SNAP_VOL_SIZE, got $DESC_SIZE"
     exit 1
 fi
 if [ "$DESC_DESC" != "multinode-e2e-snapshot" ]; then
@@ -541,47 +538,51 @@ if [ "$COPY_STATE" != "completed" ]; then
 fi
 echo "  Copy snapshot intact after original deletion"
 
-# Delete copy and source volume
+# Delete copy
 echo "  Deleting copy snapshot $COPY_SNAPSHOT_ID..."
 $AWS_EC2 delete-snapshot --snapshot-id "$COPY_SNAPSHOT_ID"
 
-echo "  Deleting source volume $SNAP_VOL_ID..."
-$AWS_EC2 delete-volume --volume-id "$SNAP_VOL_ID"
-
 echo "  Snapshot lifecycle test passed (create -> describe -> copy -> delete)"
 
-# Test 1c-ii: Snapshot-Backed Instance Launch
+# Test 1c-ii: Verify Snapshot-Backed Instance Launch
 echo ""
-echo "Test 1c-ii: Snapshot-Backed Instance Launch"
+echo "Test 1c-ii: Verify Snapshot-Backed Instance Launch"
 echo "----------------------------------------"
-echo "Verifying that AMI import created a snapshot for zero-copy cloning..."
+echo "All run-instances calls go through cloneAMIToVolume() -> OpenFromSnapshot(),"
+echo "so the Test 1 instances are already snapshot-backed. Verify their volume configs."
 
-# Verify the imported AMI has a SnapshotID in its metadata
-AMI_SNAP=$($AWS_EC2 describe-images --image-ids "$AMI_ID" \
-    --query 'Images[0].BlockDeviceMappings[0].Ebs.SnapshotId' --output text 2>/dev/null || echo "")
-echo "  AMI snapshot reference: $AMI_SNAP"
+AWS_S3="aws --endpoint-url https://${NODE1_IP}:${PREDASTORE_PORT} s3"
 
-# Verify all launched instances are still running (snapshot-backed launches)
-echo "  Verifying all instances are still running..."
-for instance_id in "${INSTANCE_IDS[@]}"; do
-    INST_STATE=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
-        --query 'Reservations[0].Instances[0].State.Name' --output text)
-    if [ "$INST_STATE" != "running" ]; then
-        echo "  ERROR: Instance $instance_id is not running (State=$INST_STATE)"
-        exit 1
-    fi
-    echo "  Instance $instance_id confirmed running"
-done
-
-# Verify root volumes exist
-ROOT_VOLS=$($AWS_EC2 describe-volumes --query 'Volumes[*].VolumeId' --output text)
-if [ -z "$ROOT_VOLS" ] || [ "$ROOT_VOLS" == "None" ]; then
-    echo "  ERROR: Failed to find volumes for snapshot-backed instances"
+# Verify the AMI snapshot exists in Predastore
+echo "  Checking AMI snapshot in Predastore..."
+SNAP_PREFIX="snap-$AMI_ID"
+SNAP_FILES=$($AWS_S3 ls "s3://predastore/$SNAP_PREFIX/" 2>&1 || echo "")
+if echo "$SNAP_FILES" | grep -q "config.json"; then
+    echo "  AMI snapshot config found at $SNAP_PREFIX/"
+else
+    echo "  ERROR: AMI snapshot config not found at $SNAP_PREFIX/"
     exit 1
 fi
-echo "  Root volumes exist: $ROOT_VOLS"
 
-echo "  Snapshot-backed instance launch test passed"
+# Verify the first instance's root volume has SnapshotID and SourceVolumeName
+SNAP_ROOT_VOL=$($AWS_EC2 describe-instances --instance-ids "${INSTANCE_IDS[0]}" \
+    --query 'Reservations[0].Instances[0].BlockDeviceMappings[0].Ebs.VolumeId' --output text)
+echo "  Verifying root volume $SNAP_ROOT_VOL is snapshot-backed via Predastore config..."
+VOL_CONFIG=$($AWS_S3 cp "s3://predastore/$SNAP_ROOT_VOL/config.json" - 2>/dev/null || echo "{}")
+VOL_SNAPSHOT_ID=$(echo "$VOL_CONFIG" | jq -r '.SnapshotID // empty')
+VOL_SOURCE_NAME=$(echo "$VOL_CONFIG" | jq -r '.SourceVolumeName // empty')
+
+if [ -z "$VOL_SNAPSHOT_ID" ]; then
+    echo "  ERROR: Volume config missing SnapshotID — launch was NOT snapshot-backed"
+    exit 1
+fi
+if [ -z "$VOL_SOURCE_NAME" ]; then
+    echo "  ERROR: Volume config missing SourceVolumeName — launch was NOT snapshot-backed"
+    exit 1
+fi
+echo "  Volume is snapshot-backed (SnapshotID=$VOL_SNAPSHOT_ID, SourceVolumeName=$VOL_SOURCE_NAME)"
+
+echo "  Snapshot-backed instance launch verified"
 
 # Test 1d: Tag Management
 echo ""

@@ -902,7 +902,10 @@ func (s *VolumeServiceImpl) snapshotReferencesVolume(snapshotID, volumeID string
 		}
 
 		body, err := io.ReadAll(getResult.Body)
-		getResult.Body.Close()
+		if closeErr := getResult.Body.Close(); closeErr != nil {
+			slog.Error("checkVolumeHasNoSnapshots: failed to close response body",
+				"volumeId", volumeID, "snapshotId", snapshotID, "key", key, "err", closeErr)
+		}
 		if err != nil {
 			slog.Error("checkVolumeHasNoSnapshots: failed to read snapshot body",
 				"volumeId", volumeID, "snapshotId", snapshotID, "key", key, "err", err)
