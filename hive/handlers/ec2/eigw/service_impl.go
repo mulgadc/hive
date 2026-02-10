@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats.go"
 )
 
@@ -66,7 +67,7 @@ func NewEgressOnlyIGWServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn
 func getOrCreateKVBucket(js nats.JetStreamContext, bucketName string, history int) (nats.KeyValue, error) {
 	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{
 		Bucket:  bucketName,
-		History: uint8(history),
+		History: utils.SafeIntToUint8(history),
 	})
 	if err != nil {
 		kv, err = js.KeyValue(bucketName)

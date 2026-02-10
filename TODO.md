@@ -40,6 +40,7 @@
 - use more secure crypto, can we stop using sha1 or is required for aws?
 - centralise random gen ids, all scattered
 - make runinstances nats naming be consistent with others - ec2.RunInstances
+- split up utils.go, eg conversions can have their own file
 
 ### Issues to investigate
 
