@@ -36,6 +36,9 @@
 - Migrate to net/http + chi from fiber
 - remove insecure skip verify
 - migrate to list objects v2
+- make gateway validation methods be private, only used for tests
+- use more secure crypto, can we stop using sha1 or is required for aws?
+- centralise random gen ids, all scattered
 
 ### Issues to investigate
 

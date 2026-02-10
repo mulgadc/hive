@@ -1,14 +1,17 @@
 package handlers_ec2_eigw
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/nats-io/nats.go"
 )
@@ -16,10 +19,7 @@ import (
 // Ensure EgressOnlyIGWServiceImpl implements EgressOnlyIGWService
 var _ EgressOnlyIGWService = (*EgressOnlyIGWServiceImpl)(nil)
 
-const (
-	KVBucketEgressOnlyIGW = "hive-eigw"
-	HiveAccountID         = "000000000000"
-)
+const KVBucketEgressOnlyIGW = "hive-eigw"
 
 // EgressOnlyIGWRecord represents a stored Egress-only Internet Gateway
 type EgressOnlyIGWRecord struct {
@@ -33,7 +33,6 @@ type EgressOnlyIGWRecord struct {
 // EgressOnlyIGWServiceImpl implements Egress-only Internet Gateway operations with NATS JetStream persistence
 type EgressOnlyIGWServiceImpl struct {
 	config *config.Config
-	js     nats.JetStreamContext
 	eigwKV nats.KeyValue
 }
 
@@ -53,15 +52,13 @@ func NewEgressOnlyIGWServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn
 
 	eigwKV, err := getOrCreateKVBucket(js, KVBucketEgressOnlyIGW, 10)
 	if err != nil {
-		slog.Warn("Failed to create Egress-only IGW KV bucket", "error", err)
-		return NewEgressOnlyIGWServiceImpl(cfg), nil
+		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketEgressOnlyIGW, err)
 	}
 
 	slog.Info("Egress-only IGW service initialized with JetStream KV", "bucket", KVBucketEgressOnlyIGW)
 
 	return &EgressOnlyIGWServiceImpl{
 		config: cfg,
-		js:     js,
 		eigwKV: eigwKV,
 	}, nil
 }
@@ -82,13 +79,17 @@ func getOrCreateKVBucket(js nats.JetStreamContext, bucketName string, history in
 
 // generateEgressOnlyIGWID generates a unique Egress-only Internet Gateway ID
 func generateEgressOnlyIGWID() string {
-	return fmt.Sprintf("eigw-%08x%08x", rand.Uint32(), rand.Uint32())
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return "eigw-" + hex.EncodeToString(b)
 }
 
 // CreateEgressOnlyInternetGateway creates a new Egress-only Internet Gateway
 func (s *EgressOnlyIGWServiceImpl) CreateEgressOnlyInternetGateway(input *ec2.CreateEgressOnlyInternetGatewayInput) (*ec2.CreateEgressOnlyInternetGatewayOutput, error) {
 	if input.VpcId == nil || *input.VpcId == "" {
-		return nil, fmt.Errorf("InvalidParameterValue: VpcId is required")
+		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
 
 	eigwID := generateEgressOnlyIGWID()
@@ -101,29 +102,22 @@ func (s *EgressOnlyIGWServiceImpl) CreateEgressOnlyInternetGateway(input *ec2.Cr
 		CreatedAt:                   time.Now(),
 	}
 
-	// Process tags
-	if input.TagSpecifications != nil {
-		for _, tagSpec := range input.TagSpecifications {
-			if tagSpec.ResourceType != nil && *tagSpec.ResourceType == "egress-only-internet-gateway" {
-				for _, tag := range tagSpec.Tags {
-					if tag.Key != nil && tag.Value != nil {
-						record.Tags[*tag.Key] = *tag.Value
-					}
+	for _, tagSpec := range input.TagSpecifications {
+		if tagSpec.ResourceType != nil && *tagSpec.ResourceType == "egress-only-internet-gateway" {
+			for _, tag := range tagSpec.Tags {
+				if tag.Key != nil && tag.Value != nil {
+					record.Tags[*tag.Key] = *tag.Value
 				}
 			}
 		}
 	}
 
-	// Store in KV
-	if s.eigwKV != nil {
-		data, err := json.Marshal(record)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal Egress-only IGW record: %w", err)
-		}
-		if _, err := s.eigwKV.Put(eigwID, data); err != nil {
-			slog.Error("Failed to store Egress-only IGW record", "error", err)
-			return nil, fmt.Errorf("ServerInternal: failed to store Egress-only IGW")
-		}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal Egress-only IGW record: %w", err)
+	}
+	if _, err := s.eigwKV.Put(eigwID, data); err != nil {
+		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
 	slog.Info("CreateEgressOnlyInternetGateway completed", "egressOnlyInternetGatewayId", eigwID, "vpcId", record.VpcId)
@@ -136,22 +130,17 @@ func (s *EgressOnlyIGWServiceImpl) CreateEgressOnlyInternetGateway(input *ec2.Cr
 // DeleteEgressOnlyInternetGateway deletes an Egress-only Internet Gateway
 func (s *EgressOnlyIGWServiceImpl) DeleteEgressOnlyInternetGateway(input *ec2.DeleteEgressOnlyInternetGatewayInput) (*ec2.DeleteEgressOnlyInternetGatewayOutput, error) {
 	if input.EgressOnlyInternetGatewayId == nil || *input.EgressOnlyInternetGatewayId == "" {
-		return nil, fmt.Errorf("InvalidParameterValue: EgressOnlyInternetGatewayId is required")
+		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
 
 	eigwID := *input.EgressOnlyInternetGatewayId
 
-	// Check if exists
-	if s.eigwKV != nil {
-		_, err := s.eigwKV.Get(eigwID)
-		if err != nil {
-			return nil, fmt.Errorf("InvalidEgressOnlyInternetGatewayId.NotFound: %s", eigwID)
-		}
+	if _, err := s.eigwKV.Get(eigwID); err != nil {
+		return nil, errors.New(awserrors.ErrorInvalidEgressOnlyInternetGatewayIdNotFound)
+	}
 
-		// Delete from KV
-		if err := s.eigwKV.Delete(eigwID); err != nil {
-			slog.Error("Failed to delete Egress-only IGW record", "error", err)
-		}
+	if err := s.eigwKV.Delete(eigwID); err != nil {
+		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
 	slog.Info("DeleteEgressOnlyInternetGateway completed", "egressOnlyInternetGatewayId", eigwID)
@@ -165,40 +154,36 @@ func (s *EgressOnlyIGWServiceImpl) DeleteEgressOnlyInternetGateway(input *ec2.De
 func (s *EgressOnlyIGWServiceImpl) DescribeEgressOnlyInternetGateways(input *ec2.DescribeEgressOnlyInternetGatewaysInput) (*ec2.DescribeEgressOnlyInternetGatewaysOutput, error) {
 	var egressOnlyIGWs []*ec2.EgressOnlyInternetGateway
 
-	// Build filter sets
 	eigwIDs := make(map[string]bool)
-	if input.EgressOnlyInternetGatewayIds != nil {
-		for _, id := range input.EgressOnlyInternetGatewayIds {
-			if id != nil {
-				eigwIDs[*id] = true
-			}
+	for _, id := range input.EgressOnlyInternetGatewayIds {
+		if id != nil {
+			eigwIDs[*id] = true
 		}
 	}
 
-	if s.eigwKV != nil {
-		keys, err := s.eigwKV.Keys()
-		if err != nil {
-			slog.Warn("Failed to list Egress-only IGW keys", "error", err)
-		} else {
-			for _, key := range keys {
-				// Apply ID filter
-				if len(eigwIDs) > 0 && !eigwIDs[key] {
-					continue
-				}
+	keys, err := s.eigwKV.Keys()
+	if err != nil && !errors.Is(err, nats.ErrNoKeysFound) {
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
 
-				entry, err := s.eigwKV.Get(key)
-				if err != nil {
-					continue
-				}
-
-				var record EgressOnlyIGWRecord
-				if err := json.Unmarshal(entry.Value(), &record); err != nil {
-					continue
-				}
-
-				egressOnlyIGWs = append(egressOnlyIGWs, s.recordToEC2(&record))
-			}
+	for _, key := range keys {
+		if len(eigwIDs) > 0 && !eigwIDs[key] {
+			continue
 		}
+
+		entry, err := s.eigwKV.Get(key)
+		if err != nil {
+			slog.Warn("Failed to get Egress-only IGW record", "key", key, "error", err)
+			continue
+		}
+
+		var record EgressOnlyIGWRecord
+		if err := json.Unmarshal(entry.Value(), &record); err != nil {
+			slog.Warn("Failed to unmarshal Egress-only IGW record", "key", key, "error", err)
+			continue
+		}
+
+		egressOnlyIGWs = append(egressOnlyIGWs, s.recordToEC2(&record))
 	}
 
 	slog.Info("DescribeEgressOnlyInternetGateways completed", "count", len(egressOnlyIGWs))
@@ -207,8 +192,6 @@ func (s *EgressOnlyIGWServiceImpl) DescribeEgressOnlyInternetGateways(input *ec2
 		EgressOnlyInternetGateways: egressOnlyIGWs,
 	}, nil
 }
-
-// Helper methods
 
 func (s *EgressOnlyIGWServiceImpl) recordToEC2(record *EgressOnlyIGWRecord) *ec2.EgressOnlyInternetGateway {
 	eigw := &ec2.EgressOnlyInternetGateway{
@@ -221,11 +204,12 @@ func (s *EgressOnlyIGWServiceImpl) recordToEC2(record *EgressOnlyIGWRecord) *ec2
 		},
 	}
 
-	// Add tags
 	if len(record.Tags) > 0 {
+		tags := make([]*ec2.Tag, 0, len(record.Tags))
 		for k, v := range record.Tags {
-			eigw.Tags = append(eigw.Tags, &ec2.Tag{Key: aws.String(k), Value: aws.String(v)})
+			tags = append(tags, &ec2.Tag{Key: aws.String(k), Value: aws.String(v)})
 		}
+		eigw.Tags = tags
 	}
 
 	return eigw

@@ -12,8 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var _ EgressOnlyIGWService = (*EgressOnlyIGWServiceImpl)(nil)
-
 func setupTestEIGWService(t *testing.T) *EgressOnlyIGWServiceImpl {
 	t.Helper()
 	opts := &server.Options{
@@ -64,7 +62,59 @@ func TestCreateEgressOnlyInternetGateway(t *testing.T) {
 func TestCreateEgressOnlyInternetGateway_MissingVpcId(t *testing.T) {
 	svc := setupTestEIGWService(t)
 	_, err := svc.CreateEgressOnlyInternetGateway(&ec2.CreateEgressOnlyInternetGatewayInput{})
-	assert.Error(t, err)
+	assert.ErrorContains(t, err, "MissingParameter")
+}
+
+func TestCreateEgressOnlyInternetGateway_EmptyVpcId(t *testing.T) {
+	svc := setupTestEIGWService(t)
+	_, err := svc.CreateEgressOnlyInternetGateway(&ec2.CreateEgressOnlyInternetGatewayInput{
+		VpcId: aws.String(""),
+	})
+	assert.ErrorContains(t, err, "MissingParameter")
+}
+
+func TestCreateEgressOnlyInternetGateway_WithTags(t *testing.T) {
+	svc := setupTestEIGWService(t)
+	out, err := svc.CreateEgressOnlyInternetGateway(&ec2.CreateEgressOnlyInternetGatewayInput{
+		VpcId: aws.String("vpc-tagged"),
+		TagSpecifications: []*ec2.TagSpecification{
+			{
+				ResourceType: aws.String("egress-only-internet-gateway"),
+				Tags: []*ec2.Tag{
+					{Key: aws.String("Name"), Value: aws.String("my-eigw")},
+					{Key: aws.String("Env"), Value: aws.String("test")},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out.EgressOnlyInternetGateway)
+	assert.Len(t, out.EgressOnlyInternetGateway.Tags, 2)
+
+	// Verify tags persist through describe
+	desc, err := svc.DescribeEgressOnlyInternetGateways(&ec2.DescribeEgressOnlyInternetGatewaysInput{
+		EgressOnlyInternetGatewayIds: []*string{out.EgressOnlyInternetGateway.EgressOnlyInternetGatewayId},
+	})
+	require.NoError(t, err)
+	require.Len(t, desc.EgressOnlyInternetGateways, 1)
+	assert.Len(t, desc.EgressOnlyInternetGateways[0].Tags, 2)
+}
+
+func TestCreateEgressOnlyInternetGateway_TagsWrongResourceType(t *testing.T) {
+	svc := setupTestEIGWService(t)
+	out, err := svc.CreateEgressOnlyInternetGateway(&ec2.CreateEgressOnlyInternetGatewayInput{
+		VpcId: aws.String("vpc-tagged2"),
+		TagSpecifications: []*ec2.TagSpecification{
+			{
+				ResourceType: aws.String("instance"),
+				Tags: []*ec2.Tag{
+					{Key: aws.String("Name"), Value: aws.String("wrong-type")},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, out.EgressOnlyInternetGateway.Tags)
 }
 
 func TestDeleteEgressOnlyInternetGateway(t *testing.T) {
@@ -89,13 +139,21 @@ func TestDeleteEgressOnlyInternetGateway_NotFound(t *testing.T) {
 	_, err := svc.DeleteEgressOnlyInternetGateway(&ec2.DeleteEgressOnlyInternetGatewayInput{
 		EgressOnlyInternetGatewayId: aws.String("eigw-nonexistent"),
 	})
-	assert.Error(t, err)
+	assert.ErrorContains(t, err, "InvalidEgressOnlyInternetGatewayId.NotFound")
 }
 
 func TestDeleteEgressOnlyInternetGateway_MissingID(t *testing.T) {
 	svc := setupTestEIGWService(t)
 	_, err := svc.DeleteEgressOnlyInternetGateway(&ec2.DeleteEgressOnlyInternetGatewayInput{})
-	assert.Error(t, err)
+	assert.ErrorContains(t, err, "MissingParameter")
+}
+
+func TestDeleteEgressOnlyInternetGateway_EmptyID(t *testing.T) {
+	svc := setupTestEIGWService(t)
+	_, err := svc.DeleteEgressOnlyInternetGateway(&ec2.DeleteEgressOnlyInternetGatewayInput{
+		EgressOnlyInternetGatewayId: aws.String(""),
+	})
+	assert.ErrorContains(t, err, "MissingParameter")
 }
 
 func TestDescribeEgressOnlyInternetGateways_All(t *testing.T) {
@@ -105,7 +163,7 @@ func TestDescribeEgressOnlyInternetGateways_All(t *testing.T) {
 
 	desc, err := svc.DescribeEgressOnlyInternetGateways(&ec2.DescribeEgressOnlyInternetGatewaysInput{})
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(desc.EgressOnlyInternetGateways), 2)
+	assert.Len(t, desc.EgressOnlyInternetGateways, 2)
 }
 
 func TestDescribeEgressOnlyInternetGateways_ByID(t *testing.T) {
