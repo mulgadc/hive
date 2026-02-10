@@ -26,6 +26,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
+	handlers_ec2_account "github.com/mulgadc/hive/hive/handlers/ec2/account"
 	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
 	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
@@ -80,6 +81,7 @@ type Daemon struct {
 	keyService      *handlers_ec2_key.KeyServiceImpl
 	imageService    *handlers_ec2_image.ImageServiceImpl
 	volumeService   *handlers_ec2_volume.VolumeServiceImpl
+	accountService  *handlers_ec2_account.AccountSettingsServiceImpl
 	snapshotService *handlers_ec2_snapshot.SnapshotServiceImpl
 	tagsService     *handlers_ec2_tags.TagsServiceImpl
 	ctx             context.Context
@@ -455,6 +457,12 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.DescribeInstances", d.handleEC2DescribeInstances, ""},
 		{"ec2.DescribeInstanceTypes", d.handleEC2DescribeInstanceTypes, ""},
 		{"ec2.startinstances", d.handleEC2StartInstances, "hive-workers"},
+		{"ec2.EnableEbsEncryptionByDefault", d.handleEC2EnableEbsEncryptionByDefault, "hive-workers"},
+		{"ec2.DisableEbsEncryptionByDefault", d.handleEC2DisableEbsEncryptionByDefault, "hive-workers"},
+		{"ec2.GetEbsEncryptionByDefault", d.handleEC2GetEbsEncryptionByDefault, "hive-workers"},
+		{"ec2.GetSerialConsoleAccessStatus", d.handleEC2GetSerialConsoleAccessStatus, "hive-workers"},
+		{"ec2.EnableSerialConsoleAccess", d.handleEC2EnableSerialConsoleAccess, "hive-workers"},
+		{"ec2.DisableSerialConsoleAccess", d.handleEC2DisableSerialConsoleAccess, "hive-workers"},
 		{fmt.Sprintf("hive.admin.%s.health", d.node), d.handleHealthCheck, ""},
 		{"hive.nodes.discover", d.handleNodeDiscover, ""},
 	}
@@ -500,6 +508,13 @@ func (d *Daemon) Start() error {
 	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config, d.natsConn)
 	d.snapshotService = handlers_ec2_snapshot.NewSnapshotServiceImpl(d.config, d.natsConn)
 	d.tagsService = handlers_ec2_tags.NewTagsServiceImpl(d.config)
+
+	accountSvc, err := handlers_ec2_account.NewAccountSettingsServiceImplWithNATS(d.config, d.natsConn)
+	if err != nil {
+		slog.Warn("Failed to create account settings service with NATS, using in-memory fallback", "error", err)
+		accountSvc = handlers_ec2_account.NewAccountSettingsServiceImpl(d.config)
+	}
+	d.accountService = accountSvc
 
 	d.restoreInstances()
 
