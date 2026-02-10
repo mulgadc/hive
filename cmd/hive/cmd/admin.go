@@ -377,7 +377,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 
 	manifestFilename := fmt.Sprintf("%s/%s.json", imagePath, manifest.AMIMetadata.Name)
 	// Write to file
-	err = os.WriteFile(manifestFilename, jsonData, 0644)
+	err = os.WriteFile(manifestFilename, jsonData, 0600)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not write manifest: %v\n", err)
 		os.Exit(1)
@@ -850,7 +850,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		caCertPath := filepath.Join(configDir, "ca.pem")
 		caKeyPath := filepath.Join(configDir, "ca.key")
 
-		if err := os.WriteFile(caCertPath, []byte(joinResp.CACert), 0644); err != nil {
+		if err := os.WriteFile(caCertPath, []byte(joinResp.CACert), 0600); err != nil {
 			fmt.Fprintf(os.Stderr, "Error writing CA cert: %v\n", err)
 			os.Exit(1)
 		}
