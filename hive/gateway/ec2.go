@@ -117,6 +117,24 @@ var ec2Actions = map[string]EC2Handler{
 	"DescribeAccountAttributes": ec2Handler(func(input *ec2.DescribeAccountAttributesInput, gw *GatewayConfig) (any, error) {
 		return gateway_ec2_account.DescribeAccountAttributes(input)
 	}),
+	"EnableEbsEncryptionByDefault": ec2Handler(func(input *ec2.EnableEbsEncryptionByDefaultInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_account.EnableEbsEncryptionByDefault(input, gw.NATSConn)
+	}),
+	"DisableEbsEncryptionByDefault": ec2Handler(func(input *ec2.DisableEbsEncryptionByDefaultInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_account.DisableEbsEncryptionByDefault(input, gw.NATSConn)
+	}),
+	"GetEbsEncryptionByDefault": ec2Handler(func(input *ec2.GetEbsEncryptionByDefaultInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_account.GetEbsEncryptionByDefault(input, gw.NATSConn)
+	}),
+	"GetSerialConsoleAccessStatus": ec2Handler(func(input *ec2.GetSerialConsoleAccessStatusInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_account.GetSerialConsoleAccessStatus(input, gw.NATSConn)
+	}),
+	"EnableSerialConsoleAccess": ec2Handler(func(input *ec2.EnableSerialConsoleAccessInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_account.EnableSerialConsoleAccess(input, gw.NATSConn)
+	}),
+	"DisableSerialConsoleAccess": ec2Handler(func(input *ec2.DisableSerialConsoleAccessInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_account.DisableSerialConsoleAccess(input, gw.NATSConn)
+	}),
 	"CreateTags": ec2Handler(func(input *ec2.CreateTagsInput, gw *GatewayConfig) (any, error) {
 		return gateway_ec2_tags.CreateTags(input, gw.NATSConn)
 	}),
