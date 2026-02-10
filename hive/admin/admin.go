@@ -172,7 +172,7 @@ func CreateServiceDirectories(hiveRoot string) {
 
 		// Check if directory exists
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			if err := os.MkdirAll(dir, 0755); err != nil {
+			if err := os.MkdirAll(dir, 0750); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: Could not create %s: %v\n", dir, err)
 			}
 		}

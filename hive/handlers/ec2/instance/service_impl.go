@@ -639,7 +639,7 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 
 	slog.Info("Created temp ISO file", "file", tempFile.Name())
 
-	outputFile, err := os.OpenFile(tempFile.Name(), os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0644)
+	outputFile, err := os.OpenFile(tempFile.Name(), os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0600)
 	if err != nil {
 		slog.Error("failed to create file", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
