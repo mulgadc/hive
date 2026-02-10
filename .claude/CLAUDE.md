@@ -28,8 +28,9 @@ Each component can be used independently or as part of the integrated Hive stack
 - **All unit tests MUST pass** before committing changes
 - **No exceptions** - failing tests block commits
 - Tests must complete without errors or panics
-- Use `make test` command to run the full test suite
-- If tests fail, fix issues before proceeding with git operations
+- Use `make test` command to run all tests
+- use `make security` command to run all security tests
+- If tests fail, fix issues before proceeding
 
 ## Architecture Notes
 
