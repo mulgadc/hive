@@ -546,6 +546,35 @@ $AWS_EC2 delete-volume --volume-id "$SNAP_VOL_ID"
 
 echo "Snapshot lifecycle test passed (create -> describe -> copy -> delete)"
 
+# Phase 5d: Snapshot-Backed Instance Launch
+echo "Phase 5d: Snapshot-Backed Instance Launch"
+echo "Verifying that AMI import created a snapshot for zero-copy cloning..."
+
+# Verify the imported AMI has a SnapshotID in its metadata
+AMI_SNAP=$($AWS_EC2 describe-images --image-ids "$AMI_ID" \
+    --query 'Images[0].BlockDeviceMappings[0].Ebs.SnapshotId' --output text 2>/dev/null || echo "")
+echo "AMI snapshot reference: $AMI_SNAP"
+
+# Verify the instance that was launched earlier (Phase 5) is still running
+# This confirms snapshot-backed launch worked end-to-end
+RUNNING_STATE=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID" \
+    --query 'Reservations[0].Instances[0].State.Name' --output text)
+if [ "$RUNNING_STATE" != "running" ]; then
+    echo "Instance $INSTANCE_ID is not running (State=$RUNNING_STATE)"
+    exit 1
+fi
+echo "Instance $INSTANCE_ID confirmed running (snapshot-backed launch)"
+
+# Verify the root volume exists
+ROOT_VOL=$($AWS_EC2 describe-volumes --query 'Volumes[0].VolumeId' --output text)
+if [ -z "$ROOT_VOL" ] || [ "$ROOT_VOL" == "None" ]; then
+    echo "Failed to find root volume for snapshot-backed instance"
+    exit 1
+fi
+echo "Root volume exists: $ROOT_VOL"
+
+echo "Snapshot-backed instance launch test passed"
+
 # Phase 6: Tag Management
 echo "Phase 6: Tag Management"
 

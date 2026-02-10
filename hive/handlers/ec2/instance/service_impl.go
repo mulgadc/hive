@@ -305,99 +305,54 @@ func (s *InstanceServiceImpl) prepareRootVolume(input *ec2.RunInstancesInput, im
 	return nil
 }
 
-// cloneAMIToVolume clones an AMI to a new volume
+// cloneAMIToVolume creates a new volume from an AMI using snapshot-based
+// zero-copy cloning. The destination volume points at the AMI's frozen block
+// map and reads on-demand from the AMI's chunks (copy-on-write).
 func (s *InstanceServiceImpl) cloneAMIToVolume(input *ec2.RunInstancesInput, size int, volumeConfig viperblock.VolumeConfig, destVb *viperblock.VB) error {
-	// Open WALs for destination volume
-	err := destVb.OpenWAL(&destVb.WAL, fmt.Sprintf("%s/%s", destVb.WAL.BaseDir, types.GetFilePath(types.FileTypeWALChunk, destVb.WAL.WallNum.Load(), destVb.GetVolume())))
-	if err != nil {
-		slog.Error("Failed to load WAL", "err", err)
-		return errors.New(awserrors.ErrorServerInternal)
-	}
-
-	err = destVb.OpenWAL(&destVb.BlockToObjectWAL, fmt.Sprintf("%s/%s", destVb.WAL.BaseDir, types.GetFilePath(types.FileTypeWALBlock, destVb.BlockToObjectWAL.WallNum.Load(), destVb.GetVolume())))
-	if err != nil {
-		slog.Error("Failed to load block WAL", "err", err)
-		return errors.New(awserrors.ErrorServerInternal)
-	}
-
-	// Setup source AMI Viperblock
+	// Load AMI state to get the snapshot ID
 	amiVb, err := s.newViperblock(*input.ImageId, size, volumeConfig)
 	if err != nil {
 		slog.Error("Failed to connect to Viperblock store for AMI", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 
-	// Initialize AMI backend
-	slog.Debug("Initializing AMI Viperblock store backend")
 	err = amiVb.Backend.Init()
 	if err != nil {
 		slog.Error("Could not connect to AMI Viperblock store", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 
-	slog.Debug("Loading state for AMI Viperblock store")
-	err = amiVb.LoadState()
+	amiState, err := amiVb.LoadStateRequest("")
 	if err != nil {
-		slog.Error("Could not load state for AMI Viperblock store", "err", err)
+		slog.Error("Could not load state for AMI", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 
-	err = amiVb.LoadBlockState()
-	if err != nil {
-		slog.Error("Failed to load block state", "err", err)
+	snapshotID := amiState.VolumeConfig.AMIMetadata.SnapshotID
+	if snapshotID == "" {
+		slog.Error("AMI has no snapshot ID, cannot perform zero-copy clone", "imageId", *input.ImageId)
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 
-	slog.Debug("Starting to clone AMI to new volume")
+	slog.Info("Cloning AMI via snapshot", "imageId", *input.ImageId, "snapshotID", snapshotID)
 
-	// Clone blocks from AMI to new volume
-	var block uint64 = 0
-	nullBlock := make([]byte, destVb.BlockSize)
-
-	for {
-		if block*uint64(destVb.BlockSize) >= amiVb.VolumeSize {
-			slog.Debug("Reached end of AMI")
-			break
-		}
-
-		// Read 1MB
-		data, err := amiVb.ReadAt(block*uint64(destVb.BlockSize), uint64(destVb.BlockSize)*1024)
-		if err != nil && err != viperblock.ErrZeroBlock {
-			slog.Error("Failed to read block from AMI source", "err", err)
-			return errors.New(awserrors.ErrorServerInternal)
-		}
-
-		numBlocks := len(data) / int(destVb.BlockSize)
-
-		// Write individual blocks to the new volume
-		for i := range numBlocks {
-			// Check if the input is a Zero block
-			if bytes.Equal(data[i*int(destVb.BlockSize):(i+1)*int(destVb.BlockSize)], nullBlock) {
-				block++
-				continue
-			}
-
-			if err := destVb.WriteAt(block*uint64(destVb.BlockSize), data[i*int(destVb.BlockSize):(i+1)*int(destVb.BlockSize)]); err != nil {
-				slog.Error("Failed to write block", "block", block, "err", err)
-			}
-			block++
-
-			// Flush every 4MB
-			if block%uint64(destVb.BlockSize) == 0 {
-				// slog.Debug("Flush", "block", block)
-				if err := destVb.Flush(); err != nil {
-					slog.Error("Failed to flush", "err", err)
-				}
-				if err := destVb.WriteWALToChunk(true); err != nil {
-					slog.Error("Failed to write WAL to chunk", "err", err)
-				}
-			}
-		}
+	// Set up destination volume from the snapshot (zero-copy)
+	err = destVb.OpenFromSnapshot(snapshotID)
+	if err != nil {
+		slog.Error("Failed to open from snapshot", "snapshotID", snapshotID, "err", err)
+		return errors.New(awserrors.ErrorServerInternal)
 	}
 
-	err = destVb.Close()
+	// Persist the snapshot relationship to the backend
+	err = destVb.SaveState()
 	if err != nil {
-		slog.Error("Failed to close Viperblock store", "err", err)
+		slog.Error("Failed to save state", "err", err)
+		return errors.New(awserrors.ErrorServerInternal)
+	}
+
+	err = destVb.SaveBlockState()
+	if err != nil {
+		slog.Error("Failed to save block state", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 

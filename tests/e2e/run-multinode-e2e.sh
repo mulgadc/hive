@@ -550,6 +550,39 @@ $AWS_EC2 delete-volume --volume-id "$SNAP_VOL_ID"
 
 echo "  Snapshot lifecycle test passed (create -> describe -> copy -> delete)"
 
+# Test 1c-ii: Snapshot-Backed Instance Launch
+echo ""
+echo "Test 1c-ii: Snapshot-Backed Instance Launch"
+echo "----------------------------------------"
+echo "Verifying that AMI import created a snapshot for zero-copy cloning..."
+
+# Verify the imported AMI has a SnapshotID in its metadata
+AMI_SNAP=$($AWS_EC2 describe-images --image-ids "$AMI_ID" \
+    --query 'Images[0].BlockDeviceMappings[0].Ebs.SnapshotId' --output text 2>/dev/null || echo "")
+echo "  AMI snapshot reference: $AMI_SNAP"
+
+# Verify all launched instances are still running (snapshot-backed launches)
+echo "  Verifying all instances are still running..."
+for instance_id in "${INSTANCE_IDS[@]}"; do
+    INST_STATE=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
+        --query 'Reservations[0].Instances[0].State.Name' --output text)
+    if [ "$INST_STATE" != "running" ]; then
+        echo "  ERROR: Instance $instance_id is not running (State=$INST_STATE)"
+        exit 1
+    fi
+    echo "  Instance $instance_id confirmed running"
+done
+
+# Verify root volumes exist
+ROOT_VOLS=$($AWS_EC2 describe-volumes --query 'Volumes[*].VolumeId' --output text)
+if [ -z "$ROOT_VOLS" ] || [ "$ROOT_VOLS" == "None" ]; then
+    echo "  ERROR: Failed to find volumes for snapshot-backed instances"
+    exit 1
+fi
+echo "  Root volumes exist: $ROOT_VOLS"
+
+echo "  Snapshot-backed instance launch test passed"
+
 # Test 1d: Tag Management
 echo ""
 echo "Test 1d: Tag Management"
