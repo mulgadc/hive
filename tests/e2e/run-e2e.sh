@@ -381,20 +381,16 @@ echo "Volume lifecycle test passed (create -> resize -> attach -> detach -> dele
 echo "Phase 5c: Snapshot Lifecycle"
 echo "Testing snapshot create -> describe -> copy -> delete..."
 
-# Create a volume to snapshot (snapshots need a source volume)
-echo "Creating source volume for snapshot tests..."
-SNAP_VOL_OUTPUT=$($AWS_EC2 create-volume --size 10 --availability-zone ap-southeast-2a)
-SNAP_VOL_ID=$(echo "$SNAP_VOL_OUTPUT" | jq -r '.VolumeId')
+# Use the root volume from Phase 5 — it's already attached and mounted in
+# viperblockd, which is required for create-snapshot (the ebs.snapshot handler
+# needs a live VB instance to flush).
+echo "Using root volume $VOLUME_ID (already attached to $INSTANCE_ID)"
+ROOT_VOL_SIZE=$($AWS_EC2 describe-volumes --volume-ids "$VOLUME_ID" \
+    --query 'Volumes[0].Size' --output text)
 
-if [ -z "$SNAP_VOL_ID" ] || [ "$SNAP_VOL_ID" == "null" ]; then
-    echo "Failed to create source volume for snapshot tests"
-    exit 1
-fi
-echo "Created source volume: $SNAP_VOL_ID"
-
-# Create a snapshot from the volume
-echo "Creating snapshot from volume $SNAP_VOL_ID..."
-SNAP_OUTPUT=$($AWS_EC2 create-snapshot --volume-id "$SNAP_VOL_ID" --description "e2e-test-snapshot")
+# Create a snapshot from the attached root volume
+echo "Creating snapshot from volume $VOLUME_ID..."
+SNAP_OUTPUT=$($AWS_EC2 create-snapshot --volume-id "$VOLUME_ID" --description "e2e-test-snapshot")
 SNAPSHOT_ID=$(echo "$SNAP_OUTPUT" | jq -r '.SnapshotId')
 
 if [ -z "$SNAPSHOT_ID" ] || [ "$SNAPSHOT_ID" == "null" ]; then
@@ -410,12 +406,12 @@ SNAP_VOL_REF=$(echo "$SNAP_OUTPUT" | jq -r '.VolumeId')
 SNAP_SIZE=$(echo "$SNAP_OUTPUT" | jq -r '.VolumeSize')
 SNAP_PROGRESS=$(echo "$SNAP_OUTPUT" | jq -r '.Progress')
 
-if [ "$SNAP_VOL_REF" != "$SNAP_VOL_ID" ]; then
-    echo "Snapshot VolumeId mismatch: expected $SNAP_VOL_ID, got $SNAP_VOL_REF"
+if [ "$SNAP_VOL_REF" != "$VOLUME_ID" ]; then
+    echo "Snapshot VolumeId mismatch: expected $VOLUME_ID, got $SNAP_VOL_REF"
     exit 1
 fi
-if [ "$SNAP_SIZE" -ne 10 ]; then
-    echo "Snapshot VolumeSize mismatch: expected 10, got $SNAP_SIZE"
+if [ "$SNAP_SIZE" -ne "$ROOT_VOL_SIZE" ]; then
+    echo "Snapshot VolumeSize mismatch: expected $ROOT_VOL_SIZE, got $SNAP_SIZE"
     exit 1
 fi
 echo "Snapshot create response verified (State=$SNAP_STATE, VolumeId=$SNAP_VOL_REF, Size=$SNAP_SIZE, Progress=$SNAP_PROGRESS)"
@@ -448,12 +444,12 @@ DESC_VOL_ID=$(echo "$DESCRIBE_SNAP" | jq -r '.Snapshots[0].VolumeId')
 DESC_SIZE=$(echo "$DESCRIBE_SNAP" | jq -r '.Snapshots[0].VolumeSize')
 DESC_DESC=$(echo "$DESCRIBE_SNAP" | jq -r '.Snapshots[0].Description')
 
-if [ "$DESC_VOL_ID" != "$SNAP_VOL_ID" ]; then
-    echo "Describe snapshot VolumeId mismatch: expected $SNAP_VOL_ID, got $DESC_VOL_ID"
+if [ "$DESC_VOL_ID" != "$VOLUME_ID" ]; then
+    echo "Describe snapshot VolumeId mismatch: expected $VOLUME_ID, got $DESC_VOL_ID"
     exit 1
 fi
-if [ "$DESC_SIZE" -ne 10 ]; then
-    echo "Describe snapshot VolumeSize mismatch: expected 10, got $DESC_SIZE"
+if [ "$DESC_SIZE" -ne "$ROOT_VOL_SIZE" ]; then
+    echo "Describe snapshot VolumeSize mismatch: expected $ROOT_VOL_SIZE, got $DESC_SIZE"
     exit 1
 fi
 if [ "$DESC_DESC" != "e2e-test-snapshot" ]; then
@@ -540,11 +536,43 @@ echo "Copy snapshot still intact after original deletion"
 echo "Deleting copy snapshot $COPY_SNAPSHOT_ID..."
 $AWS_EC2 delete-snapshot --snapshot-id "$COPY_SNAPSHOT_ID"
 
-# Clean up the source volume
-echo "Deleting source volume $SNAP_VOL_ID..."
-$AWS_EC2 delete-volume --volume-id "$SNAP_VOL_ID"
-
 echo "Snapshot lifecycle test passed (create -> describe -> copy -> delete)"
+
+# Phase 5d: Verify Snapshot-Backed Instance Launch
+echo "Phase 5d: Verify Snapshot-Backed Instance Launch"
+echo "All run-instances calls go through cloneAMIToVolume() -> OpenFromSnapshot(),"
+echo "so the Phase 5 instance is already snapshot-backed. Verify its volume config."
+
+AWS_S3="aws --endpoint-url https://localhost:8443 s3"
+
+# Verify the AMI snapshot exists in Predastore
+echo "Checking AMI snapshot in Predastore..."
+SNAP_PREFIX="snap-$AMI_ID"
+SNAP_FILES=$($AWS_S3 ls "s3://predastore/$SNAP_PREFIX/" 2>&1 || echo "")
+if echo "$SNAP_FILES" | grep -q "config.json"; then
+    echo "AMI snapshot config found at $SNAP_PREFIX/"
+else
+    echo "AMI snapshot config not found at $SNAP_PREFIX/"
+    exit 1
+fi
+
+# Verify the Phase 5 instance's root volume has SnapshotID and SourceVolumeName
+echo "Verifying root volume $VOLUME_ID is snapshot-backed via Predastore config..."
+VOL_CONFIG=$($AWS_S3 cp "s3://predastore/$VOLUME_ID/config.json" - 2>/dev/null || echo "{}")
+VOL_SNAPSHOT_ID=$(echo "$VOL_CONFIG" | jq -r '.SnapshotID // empty')
+VOL_SOURCE_NAME=$(echo "$VOL_CONFIG" | jq -r '.SourceVolumeName // empty')
+
+if [ -z "$VOL_SNAPSHOT_ID" ]; then
+    echo "Volume config missing SnapshotID — launch was NOT snapshot-backed"
+    exit 1
+fi
+if [ -z "$VOL_SOURCE_NAME" ]; then
+    echo "Volume config missing SourceVolumeName — launch was NOT snapshot-backed"
+    exit 1
+fi
+echo "Volume is snapshot-backed (SnapshotID=$VOL_SNAPSHOT_ID, SourceVolumeName=$VOL_SOURCE_NAME)"
+
+echo "Snapshot-backed instance launch verified"
 
 # Phase 6: Tag Management
 echo "Phase 6: Tag Management"

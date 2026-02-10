@@ -26,7 +26,7 @@ func setupTestSnapshotService(t *testing.T) (*SnapshotServiceImpl, *objectstore.
 		},
 	}
 
-	svc := NewSnapshotServiceImplWithStore(cfg, store)
+	svc := NewSnapshotServiceImplWithStore(cfg, store, nil)
 	return svc, store
 }
 

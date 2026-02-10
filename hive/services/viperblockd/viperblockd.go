@@ -24,12 +24,13 @@ import (
 var serviceName = "viperblock"
 
 type MountedVolume struct {
-	Name   string
-	Port   int    // TCP port (when using TCP transport)
-	Socket string // Unix socket path (when using socket transport)
-	NBDURI string // Full NBD URI (nbd:unix:/path.sock or nbd://host:port)
-	PID    int
-	VB     *viperblock.VB // Reference to viperblock instance for state sync/flush
+	Name        string
+	Port        int    // TCP port (when using TCP transport)
+	Socket      string // Unix socket path (when using socket transport)
+	NBDURI      string // Full NBD URI (nbd:unix:/path.sock or nbd://host:port)
+	PID         int
+	VB          *viperblock.VB     // Reference to viperblock instance for state sync/flush
+	SnapshotSub *nats.Subscription // Per-volume snapshot subscription (ebs.snapshot.{volumeID})
 }
 
 type Config struct {
@@ -64,6 +65,46 @@ func New(config any) (svc *Service, err error) {
 	}
 
 	return svc, nil
+}
+
+// makeSnapshotHandler returns a NATS handler for volume-specific snapshot requests (ebs.snapshot.{volumeID}).
+func makeSnapshotHandler(vb *viperblock.VB, volumeName string) nats.MsgHandler {
+	return func(msg *nats.Msg) {
+		var snapRequest config.EBSSnapshotRequest
+		if err := json.Unmarshal(msg.Data, &snapRequest); err != nil {
+			slog.Error("Failed to unmarshal ebs.snapshot message", "volume", volumeName, "err", err)
+			errResp, _ := json.Marshal(config.EBSSnapshotResponse{Error: fmt.Sprintf("bad request: %v", err)})
+			if err := msg.Respond(errResp); err != nil {
+				slog.Error("Failed to respond to ebs.snapshot request", "err", err)
+			}
+			return
+		}
+
+		slog.Info("ebs.snapshot: processing snapshot request", "volume", volumeName, "snapshotId", snapRequest.SnapshotID)
+
+		snapResponse := config.EBSSnapshotResponse{SnapshotID: snapRequest.SnapshotID}
+
+		if _, err := vb.CreateSnapshot(snapRequest.SnapshotID); err != nil {
+			snapResponse.Error = fmt.Sprintf("snapshot failed: %v", err)
+			slog.Error("ebs.snapshot: CreateSnapshot failed", "volume", volumeName, "snapshotId", snapRequest.SnapshotID, "err", err)
+		} else {
+			snapResponse.Success = true
+			slog.Info("ebs.snapshot: snapshot created", "volume", volumeName, "snapshotId", snapRequest.SnapshotID)
+		}
+
+		response, err := json.Marshal(snapResponse)
+		if err != nil {
+			slog.Error("Failed to marshal ebs.snapshot response", "err", err)
+			if err := msg.Respond([]byte(`{"Error":"internal marshal failure"}`)); err != nil {
+				slog.Error("Failed to respond to ebs.snapshot request", "err", err)
+			}
+			return
+		}
+
+		if err := msg.Respond(response); err != nil {
+			slog.Error("Failed to respond to ebs.snapshot request", "err", err)
+		}
+	}
 }
 
 func (svc *Service) Start() (int, error) {
@@ -143,6 +184,12 @@ func launchService(cfg *Config) (err error) {
 		cfg.mu.Unlock()
 
 		if matchIdx >= 0 {
+			// Unsubscribe from volume-specific snapshot topic
+			if matched.SnapshotSub != nil {
+				if err := matched.SnapshotSub.Unsubscribe(); err != nil {
+					slog.Error("Failed to unsubscribe snapshot topic", "volume", ebsRequest.Volume, "err", err)
+				}
+			}
 			// Stop WAL syncer and kill nbdkit process
 			if matched.VB != nil {
 				matched.VB.StopWALSyncer()
@@ -213,6 +260,13 @@ func launchService(cfg *Config) (err error) {
 			ebsResponse = config.EBSUnMountResponse{
 				Volume:  matched.Name,
 				Mounted: false,
+			}
+
+			// Unsubscribe from volume-specific snapshot topic
+			if matched.SnapshotSub != nil {
+				if err := matched.SnapshotSub.Unsubscribe(); err != nil {
+					slog.Error("Failed to unsubscribe snapshot topic", "volume", ebsRequest.Name, "err", err)
+				}
 			}
 
 			// Clean up the VB instance's background goroutine.
@@ -311,6 +365,10 @@ func launchService(cfg *Config) (err error) {
 	}); err != nil {
 		slog.Error("Failed to subscribe to ebs.sync", "err", err)
 	}
+
+	// Note: ebs.snapshot is handled per-volume via ebs.snapshot.{volumeID} topics,
+	// subscribed at mount time and unsubscribed at unmount time. This ensures
+	// snapshot requests are routed to the node that owns the volume.
 
 	if _, err := nc.QueueSubscribe("ebs.mount", "hive-workers", func(msg *nats.Msg) {
 		slog.Info("Received message:", "data", string(msg.Data))
@@ -577,14 +635,21 @@ func launchService(cfg *Config) (err error) {
 		ebsResponse.Mounted = true
 		ebsResponse.URI = nbdURI
 
+		// Subscribe to volume-specific snapshot topic so requests route to this node
+		snapSub, err := nc.Subscribe(fmt.Sprintf("ebs.snapshot.%s", ebsRequest.Name), makeSnapshotHandler(vb, ebsRequest.Name))
+		if err != nil {
+			slog.Error("Failed to subscribe to volume snapshot topic", "volume", ebsRequest.Name, "err", err)
+		}
+
 		cfg.mu.Lock()
 		cfg.MountedVolumes = append(cfg.MountedVolumes, MountedVolume{
-			Name:   ebsRequest.Name,
-			Port:   nbdPort,
-			Socket: nbdSocket,
-			NBDURI: nbdURI,
-			PID:    pid,
-			VB:     vb,
+			Name:        ebsRequest.Name,
+			Port:        nbdPort,
+			Socket:      nbdSocket,
+			NBDURI:      nbdURI,
+			PID:         pid,
+			VB:          vb,
+			SnapshotSub: snapSub,
 		})
 		cfg.mu.Unlock()
 

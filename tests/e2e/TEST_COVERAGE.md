@@ -38,13 +38,20 @@
 - `delete-volume` (verify gone)
 
 ### Phase 5c: Snapshot Lifecycle
-- `create-snapshot` (from volume, with description)
+- Uses root volume already attached to running instance (snapshots require a mounted VB instance)
+- `create-snapshot` (from attached root volume, with description)
 - Verify create response fields (VolumeId, VolumeSize, State, Progress)
 - `describe-snapshots` (by ID, verify VolumeId/Size/Description)
 - `copy-snapshot` (with new description, verify distinct ID)
 - `describe-snapshots` (verify both original + copy visible)
 - `delete-snapshot` (original, verify gone while copy survives)
 - `delete-snapshot` (copy, cleanup)
+
+### Phase 5d: Verify Snapshot-Backed Instance Launch
+- All `run-instances` calls use the snapshot path (`cloneAMIToVolume` -> `OpenFromSnapshot`), so the Phase 5 instance is already snapshot-backed
+- Verify AMI snapshot exists in Predastore (`snap-{amiId}/config.json`)
+- Read Phase 5 root volume's `config.json` from Predastore
+- Verify `SnapshotID` and `SourceVolumeName` are set (proves zero-copy clone)
 
 ### Phase 6: Tag Management
 - `create-tags` (3 tags on instance)
@@ -106,13 +113,20 @@
 - `delete-volume`
 
 #### Test 1c: Snapshot Lifecycle
-- `create-snapshot` (from volume, with description)
+- Uses root volume of first instance (snapshots require a mounted VB instance)
+- `create-snapshot` (from attached root volume, with description)
 - Verify create response fields (VolumeId, VolumeSize, State)
 - `describe-snapshots` (by ID, verify fields)
 - `copy-snapshot` (with new description)
 - `describe-snapshots` (verify both exist)
 - `delete-snapshot` (original, verify copy survives)
 - `delete-snapshot` (copy, cleanup)
+
+#### Test 1c-ii: Verify Snapshot-Backed Instance Launch
+- All `run-instances` calls use the snapshot path (`cloneAMIToVolume` -> `OpenFromSnapshot`), so the Test 1 instances are already snapshot-backed
+- Verify AMI snapshot exists in Predastore (`snap-{amiId}/config.json`)
+- Read first instance's root volume `config.json` from Predastore
+- Verify `SnapshotID` and `SourceVolumeName` are set (proves zero-copy clone)
 
 #### Test 1d: Tag Management
 - `create-tags` (3 tags on instance)

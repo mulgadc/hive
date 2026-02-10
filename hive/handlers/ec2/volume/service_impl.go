@@ -75,12 +75,6 @@ func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Vol
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
-	// Validate size (1-16384 GiB)
-	if input.Size == nil || *input.Size < 1 || *input.Size > 16384 {
-		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-	size := *input.Size
-
 	// Validate volume type: only gp3 supported (or empty defaults to gp3)
 	if input.VolumeType != nil && *input.VolumeType != "" && *input.VolumeType != "gp3" {
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
@@ -95,6 +89,40 @@ func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Vol
 		return nil, errors.New(awserrors.ErrorInvalidAvailabilityZone)
 	}
 
+	// If creating from snapshot, read snapshot metadata to get defaults
+	var snapshotID string
+	var sourceVolumeName string
+	var snapshotSizeGiB int64
+
+	if input.SnapshotId != nil && *input.SnapshotId != "" {
+		snapshotID = *input.SnapshotId
+		snapMeta, err := s.getSnapshotMetadata(snapshotID)
+		if err != nil {
+			slog.Error("CreateVolume: snapshot not found", "snapshotId", snapshotID, "err", err)
+			return nil, errors.New(awserrors.ErrorInvalidSnapshotNotFound)
+		}
+		sourceVolumeName = snapMeta.VolumeID
+		snapshotSizeGiB = snapMeta.VolumeSize
+	}
+
+	// Validate size (1-16384 GiB). When creating from snapshot, size can be
+	// omitted (defaults to snapshot size) or must be >= snapshot size.
+	var size int64
+	if input.Size != nil {
+		if *input.Size < 1 || *input.Size > 16384 {
+			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+		}
+		if snapshotSizeGiB > 0 && *input.Size < snapshotSizeGiB {
+			slog.Error("CreateVolume: requested size smaller than snapshot", "size", *input.Size, "snapshotSize", snapshotSizeGiB)
+			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+		}
+		size = *input.Size
+	} else if snapshotSizeGiB > 0 {
+		size = snapshotSizeGiB
+	} else {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
 	// Generate volume ID
 	randomNumber, err := rand.Int(rand.Reader, big.NewInt(100_000_000))
 	if err != nil {
@@ -107,7 +135,8 @@ func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Vol
 
 	iops := defaultGP3IOPS
 
-	slog.Info("CreateVolume", "volumeId", volumeID, "size", size, "type", volumeType, "az", *input.AvailabilityZone)
+	slog.Info("CreateVolume", "volumeId", volumeID, "size", size, "type", volumeType,
+		"az", *input.AvailabilityZone, "snapshotId", snapshotID)
 
 	// Volume size in bytes for viperblock
 	sizeGiB := utils.SafeInt64ToUint64(size)
@@ -124,6 +153,7 @@ func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Vol
 			VolumeType:       volumeType,
 			IOPS:             iops,
 			IsEncrypted:      false,
+			SnapshotID:       snapshotID,
 		},
 	}
 
@@ -144,6 +174,13 @@ func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Vol
 		BaseDir:      s.config.WalDir,
 		Cache:        viperblock.Cache{Config: viperblock.CacheConfig{Size: 0}},
 		VolumeConfig: volumeConfig,
+	}
+
+	// If created from a snapshot, set the snapshot fields so viperblock's
+	// LoadState will call OpenFromSnapshot to load the base block map.
+	if snapshotID != "" {
+		vbconfig.SnapshotID = snapshotID
+		vbconfig.SourceVolumeName = sourceVolumeName
 	}
 
 	vb, err := viperblock.New(&vbconfig, "s3", cfg)
@@ -168,7 +205,7 @@ func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Vol
 
 	slog.Info("CreateVolume completed", "volumeId", volumeID, "size", size, "type", volumeType)
 
-	return &ec2.Volume{
+	vol := &ec2.Volume{
 		VolumeId:         aws.String(volumeID),
 		Size:             aws.Int64(size),
 		VolumeType:       aws.String(volumeType),
@@ -177,7 +214,13 @@ func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Vol
 		CreateTime:       aws.Time(now),
 		Iops:             aws.Int64(int64(iops)),
 		Encrypted:        aws.Bool(false),
-	}, nil
+	}
+
+	if snapshotID != "" {
+		vol.SnapshotId = aws.String(snapshotID)
+	}
+
+	return vol, nil
 }
 
 // DescribeVolumes lists EBS volumes by reading config.json files from S3
@@ -671,6 +714,13 @@ func (s *VolumeServiceImpl) DeleteVolume(input *ec2.DeleteVolumeInput) (*ec2.Del
 		return nil, errors.New(awserrors.ErrorVolumeInUse)
 	}
 
+	// Check if any snapshots reference this volume. Snapshot-backed clones
+	// read chunk files from the source volume's S3 prefix via ReadFrom().
+	// Deleting the source volume would silently break all clones.
+	if err := s.checkVolumeHasNoSnapshots(volumeID); err != nil {
+		return nil, err
+	}
+
 	// Notify viperblockd to stop nbdkit/WAL syncer (best-effort)
 	if s.natsConn != nil {
 		deleteReq := config.EBSDeleteRequest{Volume: volumeID}
@@ -749,6 +799,130 @@ func (s *VolumeServiceImpl) deleteS3Prefix(prefix string) error {
 		// Use the last key as the marker for the next page
 		lastKey := listOutput.Contents[len(listOutput.Contents)-1].Key
 		marker = lastKey
+	}
+
+	return nil
+}
+
+// snapshotMetadata holds the subset of snapshot metadata needed by CreateVolume.
+// Matches the JSON written by the snapshot service's SnapshotConfig.
+type snapshotMetadata struct {
+	VolumeID   string `json:"volume_id"`
+	VolumeSize int64  `json:"volume_size"`
+}
+
+// getSnapshotMetadata reads snapshot metadata.json from S3 for CreateVolume.
+func (s *VolumeServiceImpl) getSnapshotMetadata(snapshotID string) (*snapshotMetadata, error) {
+	key := snapshotID + "/metadata.json"
+
+	getResult, err := s.store.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		if objectstore.IsNoSuchKeyError(err) {
+			return nil, errors.New(awserrors.ErrorInvalidSnapshotNotFound)
+		}
+		return nil, fmt.Errorf("failed to get snapshot metadata: %w", err)
+	}
+	defer getResult.Body.Close()
+
+	body, err := io.ReadAll(getResult.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read snapshot metadata: %w", err)
+	}
+
+	var meta snapshotMetadata
+	if err := json.Unmarshal(body, &meta); err != nil {
+		return nil, fmt.Errorf("failed to decode snapshot metadata: %w", err)
+	}
+
+	return &meta, nil
+}
+
+// snapshotVolumeRef reads VolumeID from hive metadata.json (volume_id)
+// or viperblock config.json (SourceVolumeName).
+type snapshotVolumeRef struct {
+	VolumeID         string `json:"volume_id"`
+	SourceVolumeName string `json:"SourceVolumeName"`
+}
+
+func (r snapshotVolumeRef) referencesVolume(volumeID string) bool {
+	return r.VolumeID == volumeID || r.SourceVolumeName == volumeID
+}
+
+// checkVolumeHasNoSnapshots scans all snap-* prefixes in S3 and returns an
+// error if any snapshot references the given volume. Checks both hive's
+// metadata.json and viperblock's config.json to handle either format.
+func (s *VolumeServiceImpl) checkVolumeHasNoSnapshots(volumeID string) error {
+	listResult, err := s.store.ListObjects(&s3.ListObjectsInput{
+		Bucket:    aws.String(s.bucketName),
+		Prefix:    aws.String("snap-"),
+		Delimiter: aws.String("/"),
+	})
+	if err != nil {
+		slog.Error("checkVolumeHasNoSnapshots: failed to list snapshots", "volumeId", volumeID, "err", err)
+		return errors.New(awserrors.ErrorServerInternal)
+	}
+
+	for _, prefix := range listResult.CommonPrefixes {
+		if prefix.Prefix == nil {
+			continue
+		}
+
+		snapshotID := strings.TrimSuffix(*prefix.Prefix, "/")
+
+		if err := s.snapshotReferencesVolume(snapshotID, volumeID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// snapshotReferencesVolume checks if a snapshot references the given volume.
+// Returns an error if the snapshot references the volume or if a non-recoverable
+// S3/IO error occurs. Returns nil if the snapshot does not reference the volume.
+func (s *VolumeServiceImpl) snapshotReferencesVolume(snapshotID, volumeID string) error {
+	// Try metadata.json first (hive format), then config.json (viperblock format)
+	for _, filename := range []string{"metadata.json", "config.json"} {
+		key := snapshotID + "/" + filename
+
+		getResult, err := s.store.GetObject(&s3.GetObjectInput{
+			Bucket: aws.String(s.bucketName),
+			Key:    aws.String(key),
+		})
+		if err != nil {
+			if objectstore.IsNoSuchKeyError(err) {
+				continue // Expected: this format file doesn't exist for this snapshot
+			}
+			slog.Error("checkVolumeHasNoSnapshots: failed to read snapshot metadata",
+				"volumeId", volumeID, "snapshotId", snapshotID, "key", key, "err", err)
+			return errors.New(awserrors.ErrorServerInternal)
+		}
+
+		body, err := io.ReadAll(getResult.Body)
+		if closeErr := getResult.Body.Close(); closeErr != nil {
+			slog.Error("checkVolumeHasNoSnapshots: failed to close response body",
+				"volumeId", volumeID, "snapshotId", snapshotID, "key", key, "err", closeErr)
+		}
+		if err != nil {
+			slog.Error("checkVolumeHasNoSnapshots: failed to read snapshot body",
+				"volumeId", volumeID, "snapshotId", snapshotID, "key", key, "err", err)
+			return errors.New(awserrors.ErrorServerInternal)
+		}
+
+		var ref snapshotVolumeRef
+		if err := json.Unmarshal(body, &ref); err != nil {
+			slog.Warn("checkVolumeHasNoSnapshots: failed to parse snapshot metadata, skipping file",
+				"volumeId", volumeID, "snapshotId", snapshotID, "key", key, "err", err)
+			continue // JSON parse errors for individual files are not fatal -- try next file
+		}
+
+		if ref.referencesVolume(volumeID) {
+			slog.Error("DeleteVolume blocked: volume has snapshots", "volumeId", volumeID, "snapshotId", snapshotID)
+			return fmt.Errorf("%s: volume %s has existing snapshot %s. Delete snapshots first", awserrors.ErrorVolumeInUse, volumeID, snapshotID)
+		}
 	}
 
 	return nil

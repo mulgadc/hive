@@ -18,6 +18,7 @@ import (
 	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
+	"github.com/nats-io/nats.go"
 )
 
 // Ensure SnapshotServiceImpl implements SnapshotService
@@ -25,9 +26,10 @@ var _ SnapshotService = (*SnapshotServiceImpl)(nil)
 
 // SnapshotServiceImpl implements SnapshotService with S3-backed storage
 type SnapshotServiceImpl struct {
-	config *config.Config
-	store  objectstore.ObjectStore
-	mutex  sync.RWMutex
+	config   *config.Config
+	store    objectstore.ObjectStore
+	natsConn *nats.Conn
+	mutex    sync.RWMutex
 }
 
 // SnapshotConfig represents snapshot metadata stored in S3
@@ -46,7 +48,7 @@ type SnapshotConfig struct {
 }
 
 // NewSnapshotServiceImpl creates a new snapshot service implementation
-func NewSnapshotServiceImpl(cfg *config.Config) *SnapshotServiceImpl {
+func NewSnapshotServiceImpl(cfg *config.Config, natsConn *nats.Conn) *SnapshotServiceImpl {
 	store := objectstore.NewS3ObjectStoreFromConfig(
 		cfg.Predastore.Host,
 		cfg.Predastore.Region,
@@ -55,22 +57,26 @@ func NewSnapshotServiceImpl(cfg *config.Config) *SnapshotServiceImpl {
 	)
 
 	return &SnapshotServiceImpl{
-		config: cfg,
-		store:  store,
+		config:   cfg,
+		store:    store,
+		natsConn: natsConn,
 	}
 }
 
 // NewSnapshotServiceImplWithStore creates a snapshot service with a custom ObjectStore (for testing)
-func NewSnapshotServiceImplWithStore(cfg *config.Config, store objectstore.ObjectStore) *SnapshotServiceImpl {
+func NewSnapshotServiceImplWithStore(cfg *config.Config, store objectstore.ObjectStore, natsConn *nats.Conn) *SnapshotServiceImpl {
 	return &SnapshotServiceImpl{
-		config: cfg,
-		store:  store,
+		config:   cfg,
+		store:    store,
+		natsConn: natsConn,
 	}
 }
 
-// getSnapshotKey returns the S3 key for storing snapshot config
+// getSnapshotKey returns the S3 key for storing snapshot metadata.
+// Uses metadata.json to avoid conflicting with viperblock's config.json
+// which stores the SnapshotState (block map references, source volume, etc).
 func getSnapshotKey(snapshotID string) string {
-	return fmt.Sprintf("%s/config.json", snapshotID)
+	return fmt.Sprintf("%s/metadata.json", snapshotID)
 }
 
 // getSnapshotConfig retrieves snapshot config from S3
@@ -179,10 +185,40 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput) (*e
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
+	// Trigger viperblock to flush data and create a frozen block map checkpoint.
+	// This sends a NATS message to the EBS daemon that owns the volume, which
+	// calls vb.CreateSnapshot() on the live viperblock instance.
+	if s.natsConn != nil {
+		snapReq := config.EBSSnapshotRequest{Volume: volumeID, SnapshotID: snapshotID}
+		snapData, err := json.Marshal(snapReq)
+		if err != nil {
+			slog.Error("CreateSnapshot: failed to marshal ebs.snapshot request", "volumeId", volumeID, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
+
+		msg, err := s.natsConn.Request(fmt.Sprintf("ebs.snapshot.%s", volumeID), snapData, 30*time.Second)
+		if err != nil {
+			slog.Error("CreateSnapshot: ebs.snapshot NATS request failed", "volumeId", volumeID, "snapshotId", snapshotID, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
+
+		var snapResp config.EBSSnapshotResponse
+		if err := json.Unmarshal(msg.Data, &snapResp); err != nil {
+			slog.Error("CreateSnapshot: failed to unmarshal ebs.snapshot response", "volumeId", volumeID, "snapshotId", snapshotID, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
+		if !snapResp.Success || snapResp.Error != "" {
+			slog.Error("CreateSnapshot: viperblock snapshot failed", "volumeId", volumeID, "snapshotId", snapshotID, "err", snapResp.Error)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
+
+		slog.Info("CreateSnapshot: viperblock snapshot created", "volumeId", volumeID, "snapshotId", snapshotID)
+	} else {
+		slog.Warn("CreateSnapshot: natsConn is nil, skipping viperblock snapshot (metadata-only)", "volumeId", volumeID)
+	}
+
 	now := time.Now()
 
-	// Mark as completed immediately -- Hive v1 stores snapshot metadata
-	// pointing to the source volume rather than copying actual block data.
 	snapshotCfg := &SnapshotConfig{
 		SnapshotID:       snapshotID,
 		VolumeID:         volumeID,
