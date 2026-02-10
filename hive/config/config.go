@@ -142,6 +142,17 @@ type EBSDeleteResponse struct {
 	Error   string
 }
 
+type EBSSnapshotRequest struct {
+	Volume     string
+	SnapshotID string
+}
+
+type EBSSnapshotResponse struct {
+	SnapshotID string
+	Success    bool
+	Error      string
+}
+
 // EC2, TODO: Move to vm.go or more applicable place
 type EC2StartInstancesRequest struct {
 	InstanceID string

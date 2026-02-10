@@ -509,7 +509,7 @@ func (d *Daemon) Start() error {
 	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
 	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config)
 	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config, d.natsConn)
-	d.snapshotService = handlers_ec2_snapshot.NewSnapshotServiceImpl(d.config)
+	d.snapshotService = handlers_ec2_snapshot.NewSnapshotServiceImpl(d.config, d.natsConn)
 	d.tagsService = handlers_ec2_tags.NewTagsServiceImpl(d.config)
 
 	accountSvc, err := handlers_ec2_account.NewAccountSettingsServiceImplWithNATS(d.config, d.natsConn)
