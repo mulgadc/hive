@@ -99,6 +99,9 @@ quickinstall: install-system install-go install-aws
 	@echo "   Please ensure /usr/local/go/bin is in your PATH."
 	@echo "   Installed: Go ($(GO_ARCH)), AWS CLI ($(AWS_ARCH)), QEMU ($(QEMU_PACKAGES))"
 
+format:
+	gofmt -w .
+
 security:
 	@echo "\n....Running security checks for $(GO_PROJECT_NAME)...."
 
