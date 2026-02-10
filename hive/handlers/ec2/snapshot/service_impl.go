@@ -196,7 +196,7 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput) (*e
 			return nil, errors.New(awserrors.ErrorServerInternal)
 		}
 
-		msg, err := s.natsConn.Request("ebs.snapshot", snapData, 30*time.Second)
+		msg, err := s.natsConn.Request(fmt.Sprintf("ebs.snapshot.%s", volumeID), snapData, 30*time.Second)
 		if err != nil {
 			slog.Error("CreateSnapshot: ebs.snapshot NATS request failed", "volumeId", volumeID, "snapshotId", snapshotID, "err", err)
 			return nil, errors.New(awserrors.ErrorServerInternal)
