@@ -81,11 +81,8 @@ type Daemon struct {
 	keyService      *handlers_ec2_key.KeyServiceImpl
 	imageService    *handlers_ec2_image.ImageServiceImpl
 	volumeService   *handlers_ec2_volume.VolumeServiceImpl
-<<<<<<< HEAD
 	accountService  *handlers_ec2_account.AccountSettingsServiceImpl
-=======
 	snapshotService *handlers_ec2_snapshot.SnapshotServiceImpl
->>>>>>> 513fd07 (feat: snapshots (#30))
 	tagsService     *handlers_ec2_tags.TagsServiceImpl
 	ctx             context.Context
 	cancel          context.CancelFunc
