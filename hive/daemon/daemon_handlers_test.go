@@ -323,9 +323,8 @@ func TestHandleEC2Events_StopInstance(t *testing.T) {
 		QMPClient:    &qmp.QMPClient{},
 	}
 
-	sub, err := daemon.natsConn.QueueSubscribe(
+	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
-		"hive-events",
 		daemon.handleEC2Events,
 	)
 	require.NoError(t, err)
@@ -369,9 +368,8 @@ func TestHandleEC2Events_TerminateInstance(t *testing.T) {
 		QMPClient:    &qmp.QMPClient{},
 	}
 
-	sub, err := daemon.natsConn.QueueSubscribe(
+	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
-		"hive-events",
 		daemon.handleEC2Events,
 	)
 	require.NoError(t, err)
@@ -404,7 +402,7 @@ func TestHandleEC2Events_InstanceNotFound(t *testing.T) {
 
 	daemon := createTestDaemon(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.cmd.i-nonexistent", "hive-events", daemon.handleEC2Events)
+	sub, err := daemon.natsConn.Subscribe("ec2.cmd.i-nonexistent", daemon.handleEC2Events)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -428,7 +426,7 @@ func TestHandleEC2Events_MalformedJSON(t *testing.T) {
 
 	daemon := createTestDaemon(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.cmd.test", "hive-events", daemon.handleEC2Events)
+	sub, err := daemon.natsConn.Subscribe("ec2.cmd.test", daemon.handleEC2Events)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 

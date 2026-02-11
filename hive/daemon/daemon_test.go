@@ -1938,9 +1938,8 @@ func TestHandleEC2Events_AttachVolume(t *testing.T) {
 	daemon.Instances.VMS[instanceID] = instance
 
 	// Subscribe the handler to the instance's per-instance topic
-	sub, err := daemon.natsConn.QueueSubscribe(
+	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
-		"hive-events",
 		daemon.handleEC2Events,
 	)
 	require.NoError(t, err)
@@ -2084,9 +2083,8 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 	daemon.Instances.VMS[instanceID] = instance
 
 	// Subscribe the handler to the instance's per-instance topic
-	sub, err := daemon.natsConn.QueueSubscribe(
+	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
-		"hive-events",
 		daemon.handleEC2Events,
 	)
 	require.NoError(t, err)
@@ -2445,9 +2443,8 @@ func TestDetachVolume_SuccessPath(t *testing.T) {
 	require.NoError(t, err)
 	defer ebsSub.Unsubscribe()
 
-	sub, err := daemon.natsConn.QueueSubscribe(
+	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
-		"hive-events",
 		daemon.handleEC2Events,
 	)
 	require.NoError(t, err)
@@ -2584,9 +2581,8 @@ func TestDetachVolume_ForceFlag(t *testing.T) {
 	require.NoError(t, err)
 	defer ebsSub.Unsubscribe()
 
-	sub, err := daemon.natsConn.QueueSubscribe(
+	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
-		"hive-events",
 		daemon.handleEC2Events,
 	)
 	require.NoError(t, err)
@@ -2689,9 +2685,8 @@ func TestDetachVolume_BlockdevDelFailure(t *testing.T) {
 	}
 	daemon.Instances.VMS[instanceID] = instance
 
-	sub, err := daemon.natsConn.QueueSubscribe(
+	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
-		"hive-events",
 		daemon.handleEC2Events,
 	)
 	require.NoError(t, err)
@@ -2789,9 +2784,8 @@ func TestDetachVolume_SuccessWithDeviceMatch(t *testing.T) {
 	require.NoError(t, err)
 	defer ebsSub.Unsubscribe()
 
-	sub, err := daemon.natsConn.QueueSubscribe(
+	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
-		"hive-events",
 		daemon.handleEC2Events,
 	)
 	require.NoError(t, err)
@@ -2866,9 +2860,8 @@ func TestAttachVolume_ReplacesStaleEBSRequest(t *testing.T) {
 	require.NoError(t, err)
 	defer ebsSub.Unsubscribe()
 
-	sub, err := daemon.natsConn.QueueSubscribe(
+	sub, err := daemon.natsConn.Subscribe(
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
-		"hive-events",
 		daemon.handleEC2Events,
 	)
 	require.NoError(t, err)

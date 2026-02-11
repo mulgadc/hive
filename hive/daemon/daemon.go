@@ -624,7 +624,7 @@ func (d *Daemon) restoreInstances() {
 		if instance.Attributes.StopInstance || instance.Status == vm.StateStopped {
 			slog.Info("Instance is stopped, subscribing to NATS for start commands", "instance", instance.ID)
 			d.mu.Lock()
-			sub, err := d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), "hive-events", d.handleEC2Events)
+			sub, err := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
 			if err != nil {
 				d.mu.Unlock()
 				slog.Error("Failed to subscribe stopped instance to NATS", "instance", instance.ID, "err", err)
@@ -704,7 +704,7 @@ func (d *Daemon) reconnectInstance(instance *vm.VM) error {
 	}
 
 	d.mu.Lock()
-	sub, err := d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), "hive-events", d.handleEC2Events)
+	sub, err := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
 	if err != nil {
 		d.mu.Unlock()
 		// Clean up the QMP connection we just opened
@@ -1340,7 +1340,7 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	d.natsSubscriptions[instance.ID], err = d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), "hive-events", d.handleEC2Events)
+	d.natsSubscriptions[instance.ID], err = d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
 
 	if err != nil {
 		slog.Error("failed to subscribe to NATS", "err", err)
