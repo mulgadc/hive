@@ -106,12 +106,8 @@ func (d *Daemon) handleEC2StartInstances(msg *nats.Msg) {
 
 // handleEC2Events processes incoming EC2 instance events (start, stop, terminate, attach-volume)
 func (d *Daemon) handleEC2Events(msg *nats.Msg) {
-
 	var command qmp.Command
-	var resp *qmp.QMPResponse
-	var err error
 
-	// Helper to ensure we always respond to NATS
 	respondWithError := func(errCode string) {
 		if err := msg.Respond(utils.GenerateErrorPayload(errCode)); err != nil {
 			slog.Error("Failed to respond to NATS request", "err", err)
@@ -136,460 +132,469 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 		return
 	}
 
-	// AttachVolume performs a three-phase hot-plug:
-	//   Phase 1: ebs.mount via NATS   (rolls back with ebs.unmount)
-	//   Phase 2: QMP blockdev-add     (rolls back Phase 1)
-	//   Phase 3: QMP device_add       (rolls back Phase 2 + Phase 1)
-	if command.Attributes.AttachVolume {
-		slog.Info("Attaching volume to instance", "instanceId", command.ID)
+	switch {
+	case command.Attributes.AttachVolume:
+		d.handleAttachVolume(msg, command, instance, respondWithError)
+	case command.Attributes.DetachVolume:
+		d.handleDetachVolume(msg, command, instance, respondWithError)
+	case command.Attributes.StartInstance:
+		d.handleStartInstance(msg, command, instance, respondWithError)
+	case command.Attributes.StopInstance, command.Attributes.TerminateInstance:
+		d.handleStopOrTerminateInstance(msg, command, instance, respondWithError)
+	default:
+		d.handleQMPCommand(msg, command, instance, respondWithError)
+	}
+}
 
-		// Validate AttachVolumeData
-		if command.AttachVolumeData == nil || command.AttachVolumeData.VolumeID == "" {
-			slog.Error("AttachVolume: missing attach volume data")
-			respondWithError(awserrors.ErrorInvalidParameterValue)
-			return
-		}
+// handleAttachVolume performs a three-phase hot-plug:
+//
+//	Phase 1: ebs.mount via NATS   (rolls back with ebs.unmount)
+//	Phase 2: QMP blockdev-add     (rolls back Phase 1)
+//	Phase 3: QMP device_add       (rolls back Phase 2 + Phase 1)
+func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance *vm.VM, respondWithError func(string)) {
+	slog.Info("Attaching volume to instance", "instanceId", command.ID)
 
-		volumeID := command.AttachVolumeData.VolumeID
-		device := command.AttachVolumeData.Device
-
-		// Validate instance is running
-		d.Instances.Mu.Lock()
-		status := instance.Status
-		d.Instances.Mu.Unlock()
-
-		if status != vm.StateRunning {
-			slog.Error("AttachVolume: instance not running", "instanceId", command.ID, "status", status)
-			respondWithError(awserrors.ErrorIncorrectInstanceState)
-			return
-		}
-
-		// Validate volume exists and is available
-		volCfg, err := d.volumeService.GetVolumeConfig(volumeID)
-		if err != nil {
-			slog.Error("AttachVolume: failed to get volume config", "volumeId", volumeID, "err", err)
-			respondWithError(awserrors.ErrorInvalidVolumeNotFound)
-			return
-		}
-
-		if volCfg.VolumeMetadata.State != "available" {
-			slog.Error("AttachVolume: volume not available", "volumeId", volumeID, "state", volCfg.VolumeMetadata.State)
-			respondWithError(awserrors.ErrorVolumeInUse)
-			return
-		}
-
-		// Determine device name
-		if device == "" {
-			d.Instances.Mu.Lock()
-			device = nextAvailableDevice(instance)
-			d.Instances.Mu.Unlock()
-			if device == "" {
-				slog.Error("AttachVolume: no available device names")
-				respondWithError(awserrors.ErrorAttachmentLimitExceeded)
-				return
-			}
-		}
-
-		// Create EBS mount request
-		ebsRequest := config.EBSRequest{
-			Name:       volumeID,
-			DeviceName: device,
-		}
-
-		ebsMountData, err := json.Marshal(ebsRequest)
-		if err != nil {
-			slog.Error("AttachVolume: failed to marshal ebs.mount request", "err", err)
-			respondWithError(awserrors.ErrorServerInternal)
-			return
-		}
-
-		mountReply, err := d.natsConn.Request("ebs.mount", ebsMountData, 30*time.Second)
-		if err != nil {
-			slog.Error("AttachVolume: ebs.mount failed", "volumeId", volumeID, "err", err)
-			respondWithError(awserrors.ErrorServerInternal)
-			return
-		}
-
-		var mountResp config.EBSMountResponse
-		if err := json.Unmarshal(mountReply.Data, &mountResp); err != nil {
-			slog.Error("AttachVolume: failed to unmarshal mount response", "err", err)
-			respondWithError(awserrors.ErrorServerInternal)
-			return
-		}
-
-		if mountResp.Error != "" {
-			slog.Error("AttachVolume: mount returned error", "volumeId", volumeID, "err", mountResp.Error)
-			respondWithError(awserrors.ErrorServerInternal)
-			return
-		}
-
-		nbdURI := mountResp.URI
-		if nbdURI == "" {
-			slog.Error("AttachVolume: mount response has empty URI", "volumeId", volumeID)
-			d.rollbackEBSMount(ebsRequest)
-			respondWithError(awserrors.ErrorServerInternal)
-			return
-		}
-		ebsRequest.NBDURI = nbdURI
-
-		// Parse NBDURI for QMP blockdev-add
-		serverType, socketPath, nbdHost, nbdPort, err := utils.ParseNBDURI(nbdURI)
-		if err != nil {
-			slog.Error("AttachVolume: failed to parse NBDURI", "uri", nbdURI, "err", err)
-			// Rollback: unmount
-			d.rollbackEBSMount(ebsRequest)
-			respondWithError(awserrors.ErrorServerInternal)
-			return
-		}
-
-		// Build QMP server argument
-		var serverArg map[string]any
-		if serverType == "unix" {
-			serverArg = map[string]any{"type": "unix", "path": socketPath}
-		} else {
-			serverArg = map[string]any{"type": "inet", "host": nbdHost, "port": fmt.Sprintf("%d", nbdPort)}
-		}
-
-		nodeName := fmt.Sprintf("nbd-%s", volumeID)
-		deviceID := fmt.Sprintf("vdisk-%s", volumeID)
-
-		// QMP blockdev-add
-		blockdevCmd := qmp.QMPCommand{
-			Execute: "blockdev-add",
-			Arguments: map[string]any{
-				"node-name": nodeName,
-				"driver":    "nbd",
-				"server":    serverArg,
-				"export":    "",
-				"read-only": false,
-			},
-		}
-
-		_, err = d.SendQMPCommand(instance.QMPClient, blockdevCmd, instance.ID)
-		if err != nil {
-			slog.Error("AttachVolume: QMP blockdev-add failed", "volumeId", volumeID, "err", err)
-			d.rollbackEBSMount(ebsRequest)
-			respondWithError(awserrors.ErrorServerInternal)
-			return
-		}
-
-		// Determine which hotplug root port to use based on device letter.
-		// /dev/sdf -> hotplug1, /dev/sdg -> hotplug2, etc.
-		hotplugBus := ""
-		if len(device) > 0 {
-			letter := device[len(device)-1]
-			if letter >= 'f' && letter <= 'p' {
-				hotplugBus = fmt.Sprintf("hotplug%d", letter-'f'+1)
-			}
-		}
-
-		// QMP device_add
-		deviceAddArgs := map[string]any{
-			"driver": "virtio-blk-pci",
-			"id":     deviceID,
-			"drive":  nodeName,
-		}
-		if hotplugBus != "" {
-			deviceAddArgs["bus"] = hotplugBus
-		}
-		deviceAddCmd := qmp.QMPCommand{
-			Execute:   "device_add",
-			Arguments: deviceAddArgs,
-		}
-
-		_, err = d.SendQMPCommand(instance.QMPClient, deviceAddCmd, instance.ID)
-		if err != nil {
-			slog.Error("AttachVolume: QMP device_add failed, rolling back blockdev", "volumeId", volumeID, "err", err)
-			// Rollback: blockdev-del then unmount
-			if _, delErr := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{
-				Execute:   "blockdev-del",
-				Arguments: map[string]any{"node-name": nodeName},
-			}, instance.ID); delErr != nil {
-				slog.Error("AttachVolume: rollback blockdev-del failed, skipping EBS unmount", "volumeId", volumeID, "err", delErr)
-			} else {
-				d.rollbackEBSMount(ebsRequest)
-			}
-			respondWithError(awserrors.ErrorServerInternal)
-			return
-		}
-
-		// Update instance state: replace existing entry for this volume (handles
-		// stop/start cycles that keep stale entries) or append a new one.
-		instance.EBSRequests.Mu.Lock()
-		replaced := false
-		for i, req := range instance.EBSRequests.Requests {
-			if req.Name == volumeID {
-				instance.EBSRequests.Requests[i] = ebsRequest
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
-			instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, ebsRequest)
-		}
-		instance.EBSRequests.Mu.Unlock()
-
-		// Update BlockDeviceMappings on the ec2.Instance
-		d.Instances.Mu.Lock()
-		if instance.Instance != nil {
-			now := time.Now()
-			mapping := &ec2.InstanceBlockDeviceMapping{}
-			mapping.SetDeviceName(device)
-			mapping.Ebs = &ec2.EbsInstanceBlockDevice{}
-			mapping.Ebs.SetVolumeId(volumeID)
-			mapping.Ebs.SetAttachTime(now)
-			mapping.Ebs.SetDeleteOnTermination(false)
-			mapping.Ebs.SetStatus("attached")
-			instance.Instance.BlockDeviceMappings = append(instance.Instance.BlockDeviceMappings, mapping)
-		}
-		d.Instances.Mu.Unlock()
-
-		// Update volume metadata in S3
-		if err := d.volumeService.UpdateVolumeState(volumeID, "in-use", command.ID, device); err != nil {
-			slog.Error("AttachVolume: failed to update volume metadata", "volumeId", volumeID, "err", err)
-		}
-
-		// Persist state
-		if err := d.WriteState(); err != nil {
-			slog.Error("AttachVolume: failed to write state", "err", err)
-		}
-
-		d.respondWithVolumeAttachment(msg, respondWithError, volumeID, command.ID, device, "attached")
-		slog.Info("Volume attached successfully", "volumeId", volumeID, "instanceId", command.ID, "device", device)
+	// Validate AttachVolumeData
+	if command.AttachVolumeData == nil || command.AttachVolumeData.VolumeID == "" {
+		slog.Error("AttachVolume: missing attach volume data")
+		respondWithError(awserrors.ErrorInvalidParameterValue)
 		return
 	}
 
-	// DetachVolume performs a three-phase hot-unplug (reverse of attach):
-	//   Phase 1: QMP device_del    (remove guest device)
-	//   Phase 2: QMP blockdev-del  (remove block node)
-	//   Phase 3: ebs.unmount NATS  (stop NBD server)
-	if command.Attributes.DetachVolume {
-		slog.Info("Detaching volume from instance", "instanceId", command.ID)
+	volumeID := command.AttachVolumeData.VolumeID
+	device := command.AttachVolumeData.Device
 
-		// Validate DetachVolumeData
-		if command.DetachVolumeData == nil || command.DetachVolumeData.VolumeID == "" {
-			slog.Error("DetachVolume: missing detach volume data")
-			respondWithError(awserrors.ErrorInvalidParameterValue)
-			return
-		}
+	// Validate instance is running
+	d.Instances.Mu.Lock()
+	status := instance.Status
+	d.Instances.Mu.Unlock()
 
-		volumeID := command.DetachVolumeData.VolumeID
-		device := command.DetachVolumeData.Device
-		force := command.DetachVolumeData.Force
+	if status != vm.StateRunning {
+		slog.Error("AttachVolume: instance not running", "instanceId", command.ID, "status", status)
+		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		return
+	}
 
-		// Validate instance is running
+	// Validate volume exists and is available
+	volCfg, err := d.volumeService.GetVolumeConfig(volumeID)
+	if err != nil {
+		slog.Error("AttachVolume: failed to get volume config", "volumeId", volumeID, "err", err)
+		respondWithError(awserrors.ErrorInvalidVolumeNotFound)
+		return
+	}
+
+	if volCfg.VolumeMetadata.State != "available" {
+		slog.Error("AttachVolume: volume not available", "volumeId", volumeID, "state", volCfg.VolumeMetadata.State)
+		respondWithError(awserrors.ErrorVolumeInUse)
+		return
+	}
+
+	// Determine device name
+	if device == "" {
 		d.Instances.Mu.Lock()
-		status := instance.Status
+		device = nextAvailableDevice(instance)
 		d.Instances.Mu.Unlock()
-
-		if status != vm.StateRunning {
-			slog.Error("DetachVolume: instance not running", "instanceId", command.ID, "status", status)
-			respondWithError(awserrors.ErrorIncorrectInstanceState)
+		if device == "" {
+			slog.Error("AttachVolume: no available device names")
+			respondWithError(awserrors.ErrorAttachmentLimitExceeded)
 			return
 		}
+	}
 
-		// Find the volume in EBSRequests
-		instance.EBSRequests.Mu.Lock()
-		var ebsReq config.EBSRequest
-		found := false
-		for _, req := range instance.EBSRequests.Requests {
-			if req.Name == volumeID {
-				ebsReq = req
-				found = true
-				break
-			}
+	// Create EBS mount request
+	ebsRequest := config.EBSRequest{
+		Name:       volumeID,
+		DeviceName: device,
+	}
+
+	ebsMountData, err := json.Marshal(ebsRequest)
+	if err != nil {
+		slog.Error("AttachVolume: failed to marshal ebs.mount request", "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	mountReply, err := d.natsConn.Request("ebs.mount", ebsMountData, 30*time.Second)
+	if err != nil {
+		slog.Error("AttachVolume: ebs.mount failed", "volumeId", volumeID, "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	var mountResp config.EBSMountResponse
+	if err := json.Unmarshal(mountReply.Data, &mountResp); err != nil {
+		slog.Error("AttachVolume: failed to unmarshal mount response", "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	if mountResp.Error != "" {
+		slog.Error("AttachVolume: mount returned error", "volumeId", volumeID, "err", mountResp.Error)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	nbdURI := mountResp.URI
+	if nbdURI == "" {
+		slog.Error("AttachVolume: mount response has empty URI", "volumeId", volumeID)
+		d.rollbackEBSMount(ebsRequest)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+	ebsRequest.NBDURI = nbdURI
+
+	// Parse NBDURI for QMP blockdev-add
+	serverType, socketPath, nbdHost, nbdPort, err := utils.ParseNBDURI(nbdURI)
+	if err != nil {
+		slog.Error("AttachVolume: failed to parse NBDURI", "uri", nbdURI, "err", err)
+		// Rollback: unmount
+		d.rollbackEBSMount(ebsRequest)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	// Build QMP server argument
+	var serverArg map[string]any
+	if serverType == "unix" {
+		serverArg = map[string]any{"type": "unix", "path": socketPath}
+	} else {
+		serverArg = map[string]any{"type": "inet", "host": nbdHost, "port": fmt.Sprintf("%d", nbdPort)}
+	}
+
+	nodeName := fmt.Sprintf("nbd-%s", volumeID)
+	deviceID := fmt.Sprintf("vdisk-%s", volumeID)
+
+	// QMP blockdev-add
+	blockdevCmd := qmp.QMPCommand{
+		Execute: "blockdev-add",
+		Arguments: map[string]any{
+			"node-name": nodeName,
+			"driver":    "nbd",
+			"server":    serverArg,
+			"export":    "",
+			"read-only": false,
+		},
+	}
+
+	_, err = d.SendQMPCommand(instance.QMPClient, blockdevCmd, instance.ID)
+	if err != nil {
+		slog.Error("AttachVolume: QMP blockdev-add failed", "volumeId", volumeID, "err", err)
+		d.rollbackEBSMount(ebsRequest)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	// Determine which hotplug root port to use based on device letter.
+	// /dev/sdf -> hotplug1, /dev/sdg -> hotplug2, etc.
+	hotplugBus := ""
+	if len(device) > 0 {
+		letter := device[len(device)-1]
+		if letter >= 'f' && letter <= 'p' {
+			hotplugBus = fmt.Sprintf("hotplug%d", letter-'f'+1)
 		}
-		instance.EBSRequests.Mu.Unlock()
+	}
 
-		if !found {
-			slog.Error("DetachVolume: volume not attached to instance", "volumeId", volumeID, "instanceId", command.ID)
-			respondWithError(awserrors.ErrorIncorrectState)
-			return
-		}
+	// QMP device_add
+	deviceAddArgs := map[string]any{
+		"driver": "virtio-blk-pci",
+		"id":     deviceID,
+		"drive":  nodeName,
+	}
+	if hotplugBus != "" {
+		deviceAddArgs["bus"] = hotplugBus
+	}
+	deviceAddCmd := qmp.QMPCommand{
+		Execute:   "device_add",
+		Arguments: deviceAddArgs,
+	}
 
-		// Reject detaching boot/EFI/CloudInit volumes
-		if ebsReq.Boot || ebsReq.EFI || ebsReq.CloudInit {
-			slog.Error("DetachVolume: cannot detach boot/EFI/CloudInit volume", "volumeId", volumeID)
-			respondWithError(awserrors.ErrorOperationNotPermitted)
-			return
-		}
-
-		// Optional device cross-check
-		if device != "" && ebsReq.DeviceName != "" && device != ebsReq.DeviceName {
-			slog.Error("DetachVolume: device mismatch", "requested", device, "actual", ebsReq.DeviceName)
-			respondWithError(awserrors.ErrorInvalidParameterValue)
-			return
-		}
-
-		deviceID := fmt.Sprintf("vdisk-%s", volumeID)
-		nodeName := fmt.Sprintf("nbd-%s", volumeID)
-
-		// Phase 1: QMP device_del (remove guest device)
-		_, err = d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{
-			Execute:   "device_del",
-			Arguments: map[string]any{"id": deviceID},
-		}, instance.ID)
-		if err != nil {
-			if !force {
-				slog.Error("DetachVolume: QMP device_del failed", "volumeId", volumeID, "err", err)
-				respondWithError(awserrors.ErrorServerInternal)
-				return
-			}
-			slog.Warn("DetachVolume: QMP device_del failed (force=true, continuing)", "volumeId", volumeID, "err", err)
-		}
-
-		// Brief pause for guest to acknowledge PCI removal
-		time.Sleep(1 * time.Second)
-
-		// Phase 2: QMP blockdev-del (remove block node)
-		_, blockdevErr := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{
+	_, err = d.SendQMPCommand(instance.QMPClient, deviceAddCmd, instance.ID)
+	if err != nil {
+		slog.Error("AttachVolume: QMP device_add failed, rolling back blockdev", "volumeId", volumeID, "err", err)
+		// Rollback: blockdev-del then unmount
+		if _, delErr := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{
 			Execute:   "blockdev-del",
 			Arguments: map[string]any{"node-name": nodeName},
-		}, instance.ID)
-		if blockdevErr != nil {
-			// Block node still referenced by QEMU; do not clean up state or unmount —
-			// tearing down the NBD server would crash the VM, and removing metadata
-			// would allow the volume to be double-attached.
-			slog.Error("DetachVolume: QMP blockdev-del failed, leaving volume state intact", "volumeId", volumeID, "err", blockdevErr)
-			respondWithError(awserrors.ErrorServerInternal)
-			return
+		}, instance.ID); delErr != nil {
+			slog.Error("AttachVolume: rollback blockdev-del failed, skipping EBS unmount", "volumeId", volumeID, "err", delErr)
+		} else {
+			d.rollbackEBSMount(ebsRequest)
 		}
-
-		// Phase 3: ebs.unmount via NATS (best-effort)
-		d.rollbackEBSMount(ebsReq)
-
-		// State cleanup: remove volume from EBSRequests (search by name to avoid stale index)
-		instance.EBSRequests.Mu.Lock()
-		for i, req := range instance.EBSRequests.Requests {
-			if req.Name == volumeID {
-				instance.EBSRequests.Requests = append(instance.EBSRequests.Requests[:i], instance.EBSRequests.Requests[i+1:]...)
-				break
-			}
-		}
-		instance.EBSRequests.Mu.Unlock()
-
-		// Remove from BlockDeviceMappings
-		d.Instances.Mu.Lock()
-		if instance.Instance != nil {
-			filtered := make([]*ec2.InstanceBlockDeviceMapping, 0, len(instance.Instance.BlockDeviceMappings))
-			for _, bdm := range instance.Instance.BlockDeviceMappings {
-				if bdm.Ebs != nil && bdm.Ebs.VolumeId != nil && *bdm.Ebs.VolumeId == volumeID {
-					continue
-				}
-				filtered = append(filtered, bdm)
-			}
-			instance.Instance.BlockDeviceMappings = filtered
-		}
-		d.Instances.Mu.Unlock()
-
-		// Update volume metadata to "available"
-		if err := d.volumeService.UpdateVolumeState(volumeID, "available", "", ""); err != nil {
-			slog.Error("DetachVolume: failed to update volume metadata", "volumeId", volumeID, "err", err)
-		}
-
-		// Persist state
-		if err := d.WriteState(); err != nil {
-			slog.Error("DetachVolume: failed to write state", "err", err)
-		}
-
-		d.respondWithVolumeAttachment(msg, respondWithError, volumeID, command.ID, ebsReq.DeviceName, "detaching")
-		slog.Info("Volume detached successfully", "volumeId", volumeID, "instanceId", command.ID)
+		respondWithError(awserrors.ErrorServerInternal)
 		return
 	}
 
-	// Start an instance
-	if command.Attributes.StartInstance {
-		slog.Info("Starting instance", "id", command.ID)
+	// Update instance state: replace existing entry for this volume (handles
+	// stop/start cycles that keep stale entries) or append a new one.
+	instance.EBSRequests.Mu.Lock()
+	replaced := false
+	for i, req := range instance.EBSRequests.Requests {
+		if req.Name == volumeID {
+			instance.EBSRequests.Requests[i] = ebsRequest
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, ebsRequest)
+	}
+	instance.EBSRequests.Mu.Unlock()
 
-		// Allocate resources
-		instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
+	// Update BlockDeviceMappings on the ec2.Instance
+	d.Instances.Mu.Lock()
+	if instance.Instance != nil {
+		now := time.Now()
+		mapping := &ec2.InstanceBlockDeviceMapping{}
+		mapping.SetDeviceName(device)
+		mapping.Ebs = &ec2.EbsInstanceBlockDevice{}
+		mapping.Ebs.SetVolumeId(volumeID)
+		mapping.Ebs.SetAttachTime(now)
+		mapping.Ebs.SetDeleteOnTermination(false)
+		mapping.Ebs.SetStatus("attached")
+		instance.Instance.BlockDeviceMappings = append(instance.Instance.BlockDeviceMappings, mapping)
+	}
+	d.Instances.Mu.Unlock()
+
+	// Update volume metadata in S3
+	if err := d.volumeService.UpdateVolumeState(volumeID, "in-use", command.ID, device); err != nil {
+		slog.Error("AttachVolume: failed to update volume metadata", "volumeId", volumeID, "err", err)
+	}
+
+	// Persist state
+	if err := d.WriteState(); err != nil {
+		slog.Error("AttachVolume: failed to write state", "err", err)
+	}
+
+	d.respondWithVolumeAttachment(msg, respondWithError, volumeID, command.ID, device, "attached")
+	slog.Info("Volume attached successfully", "volumeId", volumeID, "instanceId", command.ID, "device", device)
+}
+
+// handleDetachVolume performs a three-phase hot-unplug (reverse of attach):
+//
+//	Phase 1: QMP device_del    (remove guest device)
+//	Phase 2: QMP blockdev-del  (remove block node)
+//	Phase 3: ebs.unmount NATS  (stop NBD server)
+func (d *Daemon) handleDetachVolume(msg *nats.Msg, command qmp.Command, instance *vm.VM, respondWithError func(string)) {
+	slog.Info("Detaching volume from instance", "instanceId", command.ID)
+
+	// Validate DetachVolumeData
+	if command.DetachVolumeData == nil || command.DetachVolumeData.VolumeID == "" {
+		slog.Error("DetachVolume: missing detach volume data")
+		respondWithError(awserrors.ErrorInvalidParameterValue)
+		return
+	}
+
+	volumeID := command.DetachVolumeData.VolumeID
+	device := command.DetachVolumeData.Device
+	force := command.DetachVolumeData.Force
+
+	// Validate instance is running
+	d.Instances.Mu.Lock()
+	status := instance.Status
+	d.Instances.Mu.Unlock()
+
+	if status != vm.StateRunning {
+		slog.Error("DetachVolume: instance not running", "instanceId", command.ID, "status", status)
+		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		return
+	}
+
+	// Find the volume in EBSRequests
+	instance.EBSRequests.Mu.Lock()
+	var ebsReq config.EBSRequest
+	found := false
+	for _, req := range instance.EBSRequests.Requests {
+		if req.Name == volumeID {
+			ebsReq = req
+			found = true
+			break
+		}
+	}
+	instance.EBSRequests.Mu.Unlock()
+
+	if !found {
+		slog.Error("DetachVolume: volume not attached to instance", "volumeId", volumeID, "instanceId", command.ID)
+		respondWithError(awserrors.ErrorIncorrectState)
+		return
+	}
+
+	// Reject detaching boot/EFI/CloudInit volumes
+	if ebsReq.Boot || ebsReq.EFI || ebsReq.CloudInit {
+		slog.Error("DetachVolume: cannot detach boot/EFI/CloudInit volume", "volumeId", volumeID)
+		respondWithError(awserrors.ErrorOperationNotPermitted)
+		return
+	}
+
+	// Optional device cross-check
+	if device != "" && ebsReq.DeviceName != "" && device != ebsReq.DeviceName {
+		slog.Error("DetachVolume: device mismatch", "requested", device, "actual", ebsReq.DeviceName)
+		respondWithError(awserrors.ErrorInvalidParameterValue)
+		return
+	}
+
+	deviceID := fmt.Sprintf("vdisk-%s", volumeID)
+	nodeName := fmt.Sprintf("nbd-%s", volumeID)
+
+	// Phase 1: QMP device_del (remove guest device)
+	_, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{
+		Execute:   "device_del",
+		Arguments: map[string]any{"id": deviceID},
+	}, instance.ID)
+	if err != nil {
+		if !force {
+			slog.Error("DetachVolume: QMP device_del failed", "volumeId", volumeID, "err", err)
+			respondWithError(awserrors.ErrorServerInternal)
+			return
+		}
+		slog.Warn("DetachVolume: QMP device_del failed (force=true, continuing)", "volumeId", volumeID, "err", err)
+	}
+
+	// Brief pause for guest to acknowledge PCI removal
+	time.Sleep(1 * time.Second)
+
+	// Phase 2: QMP blockdev-del (remove block node)
+	_, blockdevErr := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{
+		Execute:   "blockdev-del",
+		Arguments: map[string]any{"node-name": nodeName},
+	}, instance.ID)
+	if blockdevErr != nil {
+		// Block node still referenced by QEMU; do not clean up state or unmount —
+		// tearing down the NBD server would crash the VM, and removing metadata
+		// would allow the volume to be double-attached.
+		slog.Error("DetachVolume: QMP blockdev-del failed, leaving volume state intact", "volumeId", volumeID, "err", blockdevErr)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	// Phase 3: ebs.unmount via NATS (best-effort)
+	d.rollbackEBSMount(ebsReq)
+
+	// State cleanup: remove volume from EBSRequests (search by name to avoid stale index)
+	instance.EBSRequests.Mu.Lock()
+	for i, req := range instance.EBSRequests.Requests {
+		if req.Name == volumeID {
+			instance.EBSRequests.Requests = append(instance.EBSRequests.Requests[:i], instance.EBSRequests.Requests[i+1:]...)
+			break
+		}
+	}
+	instance.EBSRequests.Mu.Unlock()
+
+	// Remove from BlockDeviceMappings
+	d.Instances.Mu.Lock()
+	if instance.Instance != nil {
+		filtered := make([]*ec2.InstanceBlockDeviceMapping, 0, len(instance.Instance.BlockDeviceMappings))
+		for _, bdm := range instance.Instance.BlockDeviceMappings {
+			if bdm.Ebs != nil && bdm.Ebs.VolumeId != nil && *bdm.Ebs.VolumeId == volumeID {
+				continue
+			}
+			filtered = append(filtered, bdm)
+		}
+		instance.Instance.BlockDeviceMappings = filtered
+	}
+	d.Instances.Mu.Unlock()
+
+	// Update volume metadata to "available"
+	if err := d.volumeService.UpdateVolumeState(volumeID, "available", "", ""); err != nil {
+		slog.Error("DetachVolume: failed to update volume metadata", "volumeId", volumeID, "err", err)
+	}
+
+	// Persist state
+	if err := d.WriteState(); err != nil {
+		slog.Error("DetachVolume: failed to write state", "err", err)
+	}
+
+	d.respondWithVolumeAttachment(msg, respondWithError, volumeID, command.ID, ebsReq.DeviceName, "detaching")
+	slog.Info("Volume detached successfully", "volumeId", volumeID, "instanceId", command.ID)
+}
+
+func (d *Daemon) handleStartInstance(msg *nats.Msg, command qmp.Command, instance *vm.VM, respondWithError func(string)) {
+	slog.Info("Starting instance", "id", command.ID)
+
+	// Allocate resources
+	instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
+	if ok {
+		if err := d.resourceMgr.allocate(instanceType); err != nil {
+			slog.Error("Failed to allocate resources for start command", "id", command.ID, "err", err)
+			respondWithError(awserrors.ErrorInsufficientInstanceCapacity)
+			return
+		}
+	}
+
+	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
+	err := d.LaunchInstance(instance)
+
+	if err != nil {
+		slog.Error("handleEC2RunInstances LaunchInstance failed", "err", err)
+		// Free the resource on failure
 		if ok {
-			if err := d.resourceMgr.allocate(instanceType); err != nil {
-				slog.Error("Failed to allocate resources for start command", "id", command.ID, "err", err)
-				respondWithError(awserrors.ErrorInsufficientInstanceCapacity)
-				return
-			}
+			d.resourceMgr.deallocate(instanceType)
 		}
-
-		// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
-		err := d.LaunchInstance(instance)
-
-		if err != nil {
-			slog.Error("handleEC2RunInstances LaunchInstance failed", "err", err)
-			// Free the resource on failure
-			if ok {
-				d.resourceMgr.deallocate(instanceType)
-			}
-			respondWithError(awserrors.ErrorServerInternal)
-			return
-		}
-
-		// Update instance attributes (LaunchInstance already transitions to StateRunning)
-		d.Instances.Mu.Lock()
-		instance.Attributes = command.Attributes
-		d.Instances.Mu.Unlock()
-
-		slog.Info("Instance started", "instanceId", instance.ID)
-
-		if err := msg.Respond(fmt.Appendf(nil, `{"status":"running","instanceId":"%s"}`, instance.ID)); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
+		respondWithError(awserrors.ErrorServerInternal)
 		return
 	}
 
-	// Stop or terminate an instance
-	if command.Attributes.StopInstance || command.Attributes.TerminateInstance {
-		isTerminate := command.Attributes.TerminateInstance
-		action := "Stopping"
-		initialState := vm.StateStopping
-		finalState := vm.StateStopped
-		if isTerminate {
-			action = "Terminating"
-			initialState = vm.StateShuttingDown
-			finalState = vm.StateTerminated
-		}
+	// Update instance attributes (LaunchInstance already transitions to StateRunning)
+	d.Instances.Mu.Lock()
+	instance.Attributes = command.Attributes
+	d.Instances.Mu.Unlock()
 
-		slog.Info(action+" instance", "id", command.ID)
+	slog.Info("Instance started", "instanceId", instance.ID)
 
-		// Transition to the initial transitional state
-		if err := d.TransitionState(instance, initialState); err != nil {
-			slog.Error("Failed to transition to "+string(initialState), "instanceId", instance.ID, "err", err)
-			respondWithError(awserrors.ErrorServerInternal)
-			return
-		}
+	if err := msg.Respond(fmt.Appendf(nil, `{"status":"running","instanceId":"%s"}`, instance.ID)); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
+}
 
-		// Respond immediately - operation will complete in background
-		// stopInstance() handles the QMP shutdown command, so we don't send it here
-		if err := msg.Respond([]byte(`{}`)); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
+func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command qmp.Command, instance *vm.VM, respondWithError func(string)) {
+	isTerminate := command.Attributes.TerminateInstance
+	action := "Stopping"
+	initialState := vm.StateStopping
+	finalState := vm.StateStopped
+	if isTerminate {
+		action = "Terminating"
+		initialState = vm.StateShuttingDown
+		finalState = vm.StateTerminated
+	}
 
-		// Run cleanup in goroutine to not block NATS
-		go func(inst *vm.VM, attrs qmp.Attributes) {
-			stopErr := d.stopInstance(map[string]*vm.VM{inst.ID: inst}, isTerminate)
+	slog.Info(action+" instance", "id", command.ID)
 
-			if stopErr != nil {
-				slog.Error("Failed to "+strings.ToLower(action)+" instance", "err", stopErr, "id", inst.ID)
-				if err := d.TransitionState(inst, vm.StateError); err != nil {
-					slog.Error("Failed to transition to error state", "instanceId", inst.ID, "err", err)
-				}
-			} else {
-				d.Instances.Mu.Lock()
-				inst.Attributes = attrs
-				d.Instances.Mu.Unlock()
-
-				if err := d.TransitionState(inst, finalState); err != nil {
-					slog.Error("Failed to transition to final state", "instanceId", inst.ID, "err", err)
-				}
-				slog.Info("Instance "+string(finalState), "id", inst.ID)
-			}
-		}(instance, command.Attributes)
-
+	// Transition to the initial transitional state
+	if err := d.TransitionState(instance, initialState); err != nil {
+		slog.Error("Failed to transition to "+string(initialState), "instanceId", instance.ID, "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
 		return
 	}
 
-	// Regular QMP command - must succeed
-	resp, err = d.SendQMPCommand(instance.QMPClient, command.QMPCommand, instance.ID)
+	// Respond immediately - operation will complete in background
+	// stopInstance() handles the QMP shutdown command, so we don't send it here
+	if err := msg.Respond([]byte(`{}`)); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
+
+	// Run cleanup in goroutine to not block NATS
+	go func(inst *vm.VM, attrs qmp.Attributes) {
+		stopErr := d.stopInstance(map[string]*vm.VM{inst.ID: inst}, isTerminate)
+
+		if stopErr != nil {
+			slog.Error("Failed to "+strings.ToLower(action)+" instance", "err", stopErr, "id", inst.ID)
+			if err := d.TransitionState(inst, vm.StateError); err != nil {
+				slog.Error("Failed to transition to error state", "instanceId", inst.ID, "err", err)
+			}
+		} else {
+			d.Instances.Mu.Lock()
+			inst.Attributes = attrs
+			d.Instances.Mu.Unlock()
+
+			if err := d.TransitionState(inst, finalState); err != nil {
+				slog.Error("Failed to transition to final state", "instanceId", inst.ID, "err", err)
+			}
+			slog.Info("Instance "+string(finalState), "id", inst.ID)
+		}
+	}(instance, command.Attributes)
+}
+
+func (d *Daemon) handleQMPCommand(msg *nats.Msg, command qmp.Command, instance *vm.VM, respondWithError func(string)) {
+	resp, err := d.SendQMPCommand(instance.QMPClient, command.QMPCommand, instance.ID)
 	if err != nil {
 		slog.Error("Failed to send QMP command", "err", err)
 		respondWithError(awserrors.ErrorServerInternal)
