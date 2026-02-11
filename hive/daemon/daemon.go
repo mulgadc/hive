@@ -448,7 +448,7 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.DescribeKeyPairs", d.handleEC2DescribeKeyPairs, "hive-workers"},
 		{"ec2.ImportKeyPair", d.handleEC2ImportKeyPair, "hive-workers"},
 		{"ec2.DescribeImages", d.handleEC2DescribeImages, "hive-workers"},
-		{"ec2.CreateImage", d.handleEC2CreateImage, "hive-workers"},
+		{"ec2.CreateImage", d.handleEC2CreateImage, ""},
 		{"ec2.CreateVolume", d.handleEC2CreateVolume, "hive-workers"},
 		{"ec2.DescribeVolumes", d.handleEC2DescribeVolumes, "hive-workers"},
 		{"ec2.ModifyVolume", d.handleEC2ModifyVolume, "hive-workers"},
@@ -634,11 +634,78 @@ func (d *Daemon) restoreInstances() {
 			}
 		}
 
+		// Check if QEMU process is still alive from before the restart
+		if d.isInstanceProcessRunning(instance) {
+			slog.Info("Instance QEMU process still alive, reconnecting", "instance", instance.ID)
+			if err := d.reconnectInstance(instance); err != nil {
+				slog.Error("Failed to reconnect to running instance", "instanceId", instance.ID, "err", err)
+			}
+			continue
+		}
+
+		// QEMU is not running - handle transitional states from interrupted operations
+		switch instance.Status {
+		case vm.StateStopping:
+			instance.Status = vm.StateStopped
+			slog.Info("Instance was stopping, QEMU exited, marking stopped", "instance", instance.ID)
+			d.WriteState()
+			continue
+		case vm.StateShuttingDown:
+			instance.Status = vm.StateTerminated
+			slog.Info("Instance was shutting-down, QEMU exited, marking terminated", "instance", instance.ID)
+			d.WriteState()
+			continue
+		case vm.StateRunning:
+			// Was running but QEMU died - reset to pending so LaunchInstance can transition to running
+			instance.Status = vm.StatePending
+			slog.Info("Instance was running but QEMU exited, relaunching", "instance", instance.ID)
+		}
+
 		slog.Info("Launching instance", "instance", instance.ID)
 		if err := d.LaunchInstance(instance); err != nil {
 			slog.Error("Failed to launch instance", "instanceId", instance.ID, "err", err)
 		}
 	}
+}
+
+// isInstanceProcessRunning checks if the QEMU process for an instance is still alive.
+func (d *Daemon) isInstanceProcessRunning(instance *vm.VM) bool {
+	pid, err := utils.ReadPidFile(instance.ID)
+	if err != nil || pid <= 0 {
+		return false
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return process.Signal(syscall.Signal(0)) == nil
+}
+
+// reconnectInstance re-establishes QMP and NATS connections to a running QEMU instance
+// after a daemon restart. This bypasses the state machine since recovery is not a
+// normal state transition.
+func (d *Daemon) reconnectInstance(instance *vm.VM) error {
+	if err := d.CreateQMPClient(instance); err != nil {
+		return fmt.Errorf("failed to reconnect QMP: %w", err)
+	}
+
+	d.mu.Lock()
+	sub, err := d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), "hive-events", d.handleEC2Events)
+	if err != nil {
+		d.mu.Unlock()
+		return fmt.Errorf("failed to subscribe to NATS: %w", err)
+	}
+	d.natsSubscriptions[instance.ID] = sub
+	d.mu.Unlock()
+
+	instance.Status = vm.StateRunning
+
+	if err := d.WriteState(); err != nil {
+		slog.Error("Failed to persist reconnected instance state", "instanceId", instance.ID, "err", err)
+	}
+
+	slog.Info("Successfully reconnected to running instance", "instance", instance.ID)
+	return nil
 }
 
 // awaitShutdown blocks until the daemon's shutdown wait group completes.

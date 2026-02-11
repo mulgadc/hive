@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
+	handlers_ec2_snapshot "github.com/mulgadc/hive/hive/handlers/ec2/snapshot"
 	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
@@ -272,16 +273,19 @@ func (s *ImageServiceImpl) CreateImageFromInstance(params CreateImageParams) (*e
 	volumeSizeGiB := volumeConfig.VolumeMetadata.SizeGiB
 
 	// Step 3: Read source AMI config for architecture, platform, etc.
-	sourceAMI := viperblock.AMIMetadata{
-		Architecture:    "x86_64",
-		PlatformDetails: "Linux/UNIX",
-		Virtualization:  "hvm",
-	}
+	var sourceAMI viperblock.AMIMetadata
 	if params.SourceImageID != "" {
-		if srcCfg, err := s.getAMIConfig(params.SourceImageID); err == nil {
-			sourceAMI = srcCfg
-		} else {
-			slog.Warn("CreateImageFromInstance: could not read source AMI, using defaults", "sourceImageId", params.SourceImageID, "err", err)
+		srcCfg, err := s.getAMIConfig(params.SourceImageID)
+		if err != nil {
+			slog.Error("CreateImageFromInstance: failed to read source AMI config", "sourceImageId", params.SourceImageID, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
+		sourceAMI = srcCfg
+	} else {
+		sourceAMI = viperblock.AMIMetadata{
+			Architecture:    "x86_64",
+			PlatformDetails: "Linux/UNIX",
+			Virtualization:  "hvm",
 		}
 	}
 
@@ -292,14 +296,8 @@ func (s *ImageServiceImpl) CreateImageFromInstance(params CreateImageParams) (*e
 	}
 
 	// Step 5: Build and store AMI config
-	name := ""
-	if input.Name != nil {
-		name = *input.Name
-	}
-	description := ""
-	if input.Description != nil {
-		description = *input.Description
-	}
+	name := aws.StringValue(input.Name)
+	description := aws.StringValue(input.Description)
 
 	amiConfig := viperblock.VBState{
 		VolumeConfig: viperblock.VolumeConfig{
@@ -353,6 +351,7 @@ func (s *ImageServiceImpl) snapshotRunningVolume(volumeID, snapshotID string) er
 	snapReq := config.EBSSnapshotRequest{Volume: volumeID, SnapshotID: snapshotID}
 	snapData, err := json.Marshal(snapReq)
 	if err != nil {
+		slog.Error("snapshotRunningVolume: failed to marshal snapshot request", "volumeId", volumeID, "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -387,8 +386,8 @@ func (s *ImageServiceImpl) snapshotStoppedVolume(volumeID, snapshotID string) er
 		VolumeSize: 0, // will be loaded from state
 		Bucket:     s.config.Predastore.Bucket,
 		Region:     s.config.Predastore.Region,
-		AccessKey:  s.config.AccessKey,
-		SecretKey:  s.config.SecretKey,
+		AccessKey:  s.config.Predastore.AccessKey,
+		SecretKey:  s.config.Predastore.SecretKey,
 		Host:       s.config.Predastore.Host,
 	}
 
@@ -416,12 +415,14 @@ func (s *ImageServiceImpl) snapshotStoppedVolume(volumeID, snapshotID string) er
 
 	if _, err := vb.CreateSnapshot(snapshotID); err != nil {
 		slog.Error("snapshotStoppedVolume: CreateSnapshot failed", "volumeId", volumeID, "snapshotId", snapshotID, "err", err)
-		_ = vb.RemoveLocalFiles()
+		if cleanupErr := vb.RemoveLocalFiles(); cleanupErr != nil {
+			slog.Error("snapshotStoppedVolume: failed to remove local files after snapshot failure", "volumeId", volumeID, "err", cleanupErr)
+		}
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 
 	if err := vb.RemoveLocalFiles(); err != nil {
-		slog.Warn("snapshotStoppedVolume: failed to remove local files", "volumeId", volumeID, "err", err)
+		slog.Error("snapshotStoppedVolume: failed to remove local files", "volumeId", volumeID, "err", err)
 	}
 
 	slog.Info("snapshotStoppedVolume: snapshot created", "volumeId", volumeID, "snapshotId", snapshotID)
@@ -466,19 +467,9 @@ func (s *ImageServiceImpl) getAMIConfig(imageID string) (viperblock.AMIMetadata,
 	return vbState.VolumeConfig.AMIMetadata, nil
 }
 
-// putSnapshotMetadata stores snapshot metadata in S3 (same format as snapshot service)
+// putSnapshotMetadata stores snapshot metadata in S3 using the canonical SnapshotConfig type
 func (s *ImageServiceImpl) putSnapshotMetadata(snapshotID, volumeID string, volumeSizeGiB uint64) error {
-	type snapshotConfig struct {
-		SnapshotID string    `json:"snapshot_id"`
-		VolumeID   string    `json:"volume_id"`
-		VolumeSize int64     `json:"volume_size"`
-		State      string    `json:"state"`
-		Progress   string    `json:"progress"`
-		StartTime  time.Time `json:"start_time"`
-		OwnerID    string    `json:"owner_id"`
-	}
-
-	cfg := snapshotConfig{
+	cfg := handlers_ec2_snapshot.SnapshotConfig{
 		SnapshotID: snapshotID,
 		VolumeID:   volumeID,
 		VolumeSize: utils.SafeUint64ToInt64(volumeSizeGiB),

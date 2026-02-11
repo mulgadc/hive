@@ -1,7 +1,7 @@
 package handlers_ec2_image
 
 import (
-	"fmt"
+	"errors"
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -28,25 +28,25 @@ func (s *NATSImageService) CreateImage(input *ec2.CreateImageInput) (*ec2.Create
 }
 
 func (s *NATSImageService) CopyImage(input *ec2.CopyImageInput) (*ec2.CopyImageOutput, error) {
-	return nil, fmt.Errorf("CopyImage not yet implemented")
+	return nil, errors.New("CopyImage not yet implemented")
 }
 
 func (s *NATSImageService) DescribeImageAttribute(input *ec2.DescribeImageAttributeInput) (*ec2.DescribeImageAttributeOutput, error) {
-	return nil, fmt.Errorf("DescribeImageAttribute not yet implemented")
+	return nil, errors.New("DescribeImageAttribute not yet implemented")
 }
 
 func (s *NATSImageService) RegisterImage(input *ec2.RegisterImageInput) (*ec2.RegisterImageOutput, error) {
-	return nil, fmt.Errorf("RegisterImage not yet implemented")
+	return nil, errors.New("RegisterImage not yet implemented")
 }
 
 func (s *NATSImageService) DeregisterImage(input *ec2.DeregisterImageInput) (*ec2.DeregisterImageOutput, error) {
-	return nil, fmt.Errorf("DeregisterImage not yet implemented")
+	return nil, errors.New("DeregisterImage not yet implemented")
 }
 
 func (s *NATSImageService) ModifyImageAttribute(input *ec2.ModifyImageAttributeInput) (*ec2.ModifyImageAttributeOutput, error) {
-	return nil, fmt.Errorf("ModifyImageAttribute not yet implemented")
+	return nil, errors.New("ModifyImageAttribute not yet implemented")
 }
 
 func (s *NATSImageService) ResetImageAttribute(input *ec2.ResetImageAttributeInput) (*ec2.ResetImageAttributeOutput, error) {
-	return nil, fmt.Errorf("ResetImageAttribute not yet implemented")
+	return nil, errors.New("ResetImageAttribute not yet implemented")
 }

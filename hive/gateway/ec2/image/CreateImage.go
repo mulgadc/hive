@@ -44,6 +44,9 @@ func CreateImage(input *ec2.CreateImageInput, natsConn *nats.Conn) (ec2.CreateIm
 	if err != nil {
 		return output, err
 	}
+	if result == nil {
+		return output, errors.New(awserrors.ErrorServerInternal)
+	}
 
 	return *result, nil
 }
