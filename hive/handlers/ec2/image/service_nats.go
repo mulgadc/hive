@@ -23,9 +23,8 @@ func (s *NATSImageService) DescribeImages(input *ec2.DescribeImagesInput) (*ec2.
 	return utils.NATSRequest[ec2.DescribeImagesOutput](s.natsConn, "ec2.DescribeImages", input, 30*time.Second)
 }
 
-// Stub implementations for unimplemented ImageService methods
 func (s *NATSImageService) CreateImage(input *ec2.CreateImageInput) (*ec2.CreateImageOutput, error) {
-	return nil, fmt.Errorf("CreateImage not yet implemented")
+	return utils.NATSRequest[ec2.CreateImageOutput](s.natsConn, "ec2.CreateImage", input, 120*time.Second)
 }
 
 func (s *NATSImageService) CopyImage(input *ec2.CopyImageInput) (*ec2.CopyImageOutput, error) {

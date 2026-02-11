@@ -448,6 +448,7 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.DescribeKeyPairs", d.handleEC2DescribeKeyPairs, "hive-workers"},
 		{"ec2.ImportKeyPair", d.handleEC2ImportKeyPair, "hive-workers"},
 		{"ec2.DescribeImages", d.handleEC2DescribeImages, "hive-workers"},
+		{"ec2.CreateImage", d.handleEC2CreateImage, "hive-workers"},
 		{"ec2.CreateVolume", d.handleEC2CreateVolume, "hive-workers"},
 		{"ec2.DescribeVolumes", d.handleEC2DescribeVolumes, "hive-workers"},
 		{"ec2.ModifyVolume", d.handleEC2ModifyVolume, "hive-workers"},
@@ -512,7 +513,7 @@ func (d *Daemon) Start() error {
 	store := objectstore.NewS3ObjectStoreFromConfig(d.config.Predastore.Host, d.config.Predastore.Region, d.config.AccessKey, d.config.SecretKey)
 	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances, store)
 	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
-	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config)
+	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config, d.natsConn)
 	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config, d.natsConn)
 	d.snapshotService = handlers_ec2_snapshot.NewSnapshotServiceImpl(d.config, d.natsConn)
 	d.tagsService = handlers_ec2_tags.NewTagsServiceImpl(d.config)

@@ -11,6 +11,7 @@ import (
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	gateway_ec2_instance "github.com/mulgadc/hive/hive/gateway/ec2/instance"
+	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/hive/hive/vm"
@@ -812,6 +813,105 @@ func (d *Daemon) handleEC2ImportKeyPair(msg *nats.Msg) {
 
 func (d *Daemon) handleEC2DescribeImages(msg *nats.Msg) {
 	handleNATSRequest(msg, d.imageService.DescribeImages)
+}
+
+// handleEC2CreateImage is a stateful handler that extracts instance context
+// (root volume ID, source AMI, running state) before delegating to the image service.
+func (d *Daemon) handleEC2CreateImage(msg *nats.Msg) {
+	slog.Debug("Received message", "subject", msg.Subject)
+
+	respondWithError := func(errCode string) {
+		if err := msg.Respond(utils.GenerateErrorPayload(errCode)); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
+	}
+
+	input := &ec2.CreateImageInput{}
+	if errResp := utils.UnmarshalJsonPayload(input, msg.Data); errResp != nil {
+		if err := msg.Respond(errResp); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
+		return
+	}
+
+	if input.InstanceId == nil || *input.InstanceId == "" {
+		respondWithError(awserrors.ErrorMissingParameter)
+		return
+	}
+
+	instanceID := *input.InstanceId
+
+	// Find instance and extract context
+	d.Instances.Mu.Lock()
+	instance, ok := d.Instances.VMS[instanceID]
+	d.Instances.Mu.Unlock()
+
+	if !ok {
+		slog.Error("CreateImage: instance not found", "instanceId", instanceID)
+		respondWithError(awserrors.ErrorInvalidInstanceIDNotFound)
+		return
+	}
+
+	// Validate instance is in running or stopped state
+	d.Instances.Mu.Lock()
+	status := instance.Status
+	d.Instances.Mu.Unlock()
+
+	if status != vm.StateRunning && status != vm.StateStopped {
+		slog.Error("CreateImage: instance not in valid state", "instanceId", instanceID, "status", status)
+		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		return
+	}
+
+	// Find root volume ID from BlockDeviceMappings
+	var rootVolumeID string
+	d.Instances.Mu.Lock()
+	if instance.Instance != nil {
+		for _, bdm := range instance.Instance.BlockDeviceMappings {
+			if bdm.Ebs != nil && bdm.Ebs.VolumeId != nil {
+				rootVolumeID = *bdm.Ebs.VolumeId
+				break
+			}
+		}
+	}
+	sourceImageID := ""
+	if instance.Instance != nil && instance.Instance.ImageId != nil {
+		sourceImageID = *instance.Instance.ImageId
+	}
+	d.Instances.Mu.Unlock()
+
+	if rootVolumeID == "" {
+		slog.Error("CreateImage: no root volume found", "instanceId", instanceID)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	params := handlers_ec2_image.CreateImageParams{
+		Input:         input,
+		RootVolumeID:  rootVolumeID,
+		SourceImageID: sourceImageID,
+		IsRunning:     status == vm.StateRunning,
+	}
+
+	output, err := d.imageService.CreateImageFromInstance(params)
+	if err != nil {
+		slog.Error("CreateImage: service failed", "instanceId", instanceID, "err", err)
+		respondWithError(err.Error())
+		return
+	}
+
+	jsonResponse, err := json.Marshal(output)
+	if err != nil {
+		slog.Error("CreateImage: failed to marshal response", "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	if err := msg.Respond(jsonResponse); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
+
+	slog.Info("CreateImage completed", "instanceId", instanceID, "imageId", output.ImageId)
 }
 
 func (d *Daemon) handleEC2CreateVolume(msg *nats.Msg) {
