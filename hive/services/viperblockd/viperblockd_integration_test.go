@@ -84,6 +84,7 @@ func createMockVolumeState(t *testing.T, baseDir, volumeName string) {
 
 // TestIntegration_ServiceStartWithEmbeddedNATS tests service startup with embedded NATS
 func TestIntegration_ServiceStartWithEmbeddedNATS(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -117,6 +118,7 @@ func TestIntegration_ServiceStartWithEmbeddedNATS(t *testing.T) {
 
 // TestIntegration_EBSMountRequest tests EBS mount request handling
 func TestIntegration_EBSMountRequest(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -179,6 +181,7 @@ func TestIntegration_EBSMountRequest(t *testing.T) {
 
 // TestIntegration_EBSUnmountRequest tests EBS unmount request handling
 func TestIntegration_EBSUnmountRequest(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -248,6 +251,7 @@ func TestIntegration_EBSUnmountRequest(t *testing.T) {
 
 // TestIntegration_EBSUnmountNonExistentVolume tests unmounting a volume that doesn't exist
 func TestIntegration_EBSUnmountNonExistentVolume(t *testing.T) {
+	t.Parallel()
 
 	// Skip
 	if testing.Short() {
@@ -300,6 +304,7 @@ func TestIntegration_EBSUnmountNonExistentVolume(t *testing.T) {
 
 // TestIntegration_ConcurrentMountRequests tests multiple concurrent mount requests
 func TestIntegration_ConcurrentMountRequests(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -366,6 +371,7 @@ func TestIntegration_ConcurrentMountRequests(t *testing.T) {
 
 // TestIntegration_MessageSubscriptions tests that all expected subscriptions are active
 func TestIntegration_MessageSubscriptions(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
@@ -419,6 +425,7 @@ func TestIntegration_MessageSubscriptions(t *testing.T) {
 
 // TestIntegration_ServiceGracefulShutdown tests graceful shutdown behavior
 func TestIntegration_ServiceGracefulShutdown(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}

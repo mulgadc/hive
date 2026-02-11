@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	handlers_ec2_volume "github.com/mulgadc/hive/hive/handlers/ec2/volume"
 	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/hive/hive/qmp"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -2995,4 +2997,340 @@ func TestAttachVolume_ReplacesStaleEBSRequest(t *testing.T) {
 	}
 	instance.EBSRequests.Mu.Unlock()
 	assert.Equal(t, 1, count, "Should have exactly one EBSRequest for the volume, not a duplicate")
+}
+
+// --- computeConfigHash ---
+
+func TestComputeConfigHash_Deterministic(t *testing.T) {
+	d := &Daemon{clusterConfig: &config.ClusterConfig{
+		Epoch:   1,
+		Version: "1.0",
+		Nodes: map[string]config.Config{
+			"n1": {Region: "us-east-1"},
+		},
+	}}
+
+	h1, err := d.computeConfigHash()
+	require.NoError(t, err)
+	h2, err := d.computeConfigHash()
+	require.NoError(t, err)
+	assert.Equal(t, h1, h2)
+	assert.Len(t, h1, 64) // SHA256 hex
+}
+
+func TestComputeConfigHash_ChangesOnMutation(t *testing.T) {
+	d := &Daemon{clusterConfig: &config.ClusterConfig{
+		Epoch:   1,
+		Version: "1.0",
+		Nodes: map[string]config.Config{
+			"n1": {Region: "us-east-1"},
+		},
+	}}
+
+	h1, _ := d.computeConfigHash()
+
+	d.clusterConfig.Epoch = 2
+	h2, _ := d.computeConfigHash()
+	assert.NotEqual(t, h1, h2)
+
+	d.clusterConfig.Epoch = 1
+	d.clusterConfig.Nodes["n2"] = config.Config{Region: "eu-west-1"}
+	h3, _ := d.computeConfigHash()
+	assert.NotEqual(t, h1, h3)
+}
+
+func TestComputeConfigHash_ExcludesNodeField(t *testing.T) {
+	d := &Daemon{clusterConfig: &config.ClusterConfig{
+		Epoch:   1,
+		Version: "1.0",
+		Node:    "node-a",
+		Nodes: map[string]config.Config{
+			"n1": {Region: "us-east-1"},
+		},
+	}}
+
+	h1, _ := d.computeConfigHash()
+	d.clusterConfig.Node = "node-b"
+	h2, _ := d.computeConfigHash()
+	assert.Equal(t, h1, h2, "changing top-level Node should not affect config hash")
+}
+
+// --- saveClusterConfig ---
+
+func TestSaveClusterConfig_WritesToDisk(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hive.toml")
+
+	d := &Daemon{
+		configPath: path,
+		clusterConfig: &config.ClusterConfig{
+			Epoch:   5,
+			Version: "2.0",
+			Node:    "test-node",
+			Nodes: map[string]config.Config{
+				"test-node": {Region: "us-west-2"},
+			},
+		},
+	}
+
+	err := d.saveClusterConfig()
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	var loaded config.ClusterConfig
+	require.NoError(t, toml.Unmarshal(data, &loaded))
+	assert.Equal(t, uint64(5), loaded.Epoch)
+	assert.Equal(t, "2.0", loaded.Version)
+	assert.Equal(t, "us-west-2", loaded.Nodes["test-node"].Region)
+
+	// Verify permissions
+	info, _ := os.Stat(path)
+	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+}
+
+func TestSaveClusterConfig_ErrorOnEmptyPath(t *testing.T) {
+	d := &Daemon{
+		configPath:    "",
+		clusterConfig: &config.ClusterConfig{},
+	}
+	err := d.saveClusterConfig()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "config path not set")
+}
+
+func TestSaveClusterConfig_ErrorOnInvalidPath(t *testing.T) {
+	d := &Daemon{
+		configPath:    "/nonexistent/dir/hive.toml",
+		clusterConfig: &config.ClusterConfig{},
+	}
+	err := d.saveClusterConfig()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to write config")
+}
+
+// --- generateInstanceTypes ---
+
+func TestGenerateInstanceTypes_DualFamily(t *testing.T) {
+	types := generateInstanceTypes("m7i", "x86_64")
+	assert.Len(t, types, 14) // 7 m7i + 7 t3
+
+	m7iCount, t3Count := 0, 0
+	for name := range types {
+		if strings.HasPrefix(name, "m7i.") {
+			m7iCount++
+		}
+		if strings.HasPrefix(name, "t3.") {
+			t3Count++
+		}
+	}
+	assert.Equal(t, 7, m7iCount)
+	assert.Equal(t, 7, t3Count)
+}
+
+func TestGenerateInstanceTypes_SingleFamily(t *testing.T) {
+	// When family matches burstable, should not duplicate
+	types := generateInstanceTypes("t3", "x86_64")
+	assert.Len(t, types, 7)
+	for name := range types {
+		assert.True(t, strings.HasPrefix(name, "t3."))
+	}
+}
+
+func TestGenerateInstanceTypes_ARM64(t *testing.T) {
+	types := generateInstanceTypes("m8g", "arm64")
+	// m8g is not t4g, so we should get both families
+	assert.Len(t, types, 14)
+
+	t4gCount := 0
+	for name := range types {
+		if strings.HasPrefix(name, "t4g.") {
+			t4gCount++
+		}
+	}
+	assert.Equal(t, 7, t4gCount)
+}
+
+func TestGenerateInstanceTypes_ARM64_SingleFamily(t *testing.T) {
+	types := generateInstanceTypes("t4g", "arm64")
+	assert.Len(t, types, 7)
+	for name := range types {
+		assert.True(t, strings.HasPrefix(name, "t4g."))
+	}
+}
+
+func TestGenerateInstanceTypes_VerifySizes(t *testing.T) {
+	types := generateInstanceTypes("t3", "x86_64")
+
+	expected := map[string]struct {
+		vcpus int64
+		memMB int64
+	}{
+		"t3.nano":    {2, 512},
+		"t3.micro":   {2, 1024},
+		"t3.small":   {2, 2048},
+		"t3.medium":  {2, 4096},
+		"t3.large":   {2, 8192},
+		"t3.xlarge":  {4, 16384},
+		"t3.2xlarge": {8, 32768},
+	}
+
+	for name, exp := range expected {
+		it, ok := types[name]
+		require.True(t, ok, "missing instance type %s", name)
+		assert.Equal(t, exp.vcpus, *it.VCpuInfo.DefaultVCpus, "%s vCPUs", name)
+		assert.Equal(t, exp.memMB, *it.MemoryInfo.SizeInMiB, "%s memory", name)
+	}
+}
+
+// --- getInstanceFamilyFromCPU ---
+
+func TestGetInstanceFamilyFromCPU_ExactMappings(t *testing.T) {
+	assert.Equal(t, "m8a", getInstanceFamilyFromCPU("AMD EPYC 7551"))
+	assert.Equal(t, "m7i", getInstanceFamilyFromCPU("Intel Xeon E5-2686"))
+	assert.Equal(t, "m8g", getInstanceFamilyFromCPU("Apple M1"))
+	assert.Equal(t, "m8g", getInstanceFamilyFromCPU("AWS Graviton2"))
+	assert.Equal(t, "m8g", getInstanceFamilyFromCPU("ARM Cortex-A72"))
+}
+
+func TestGetInstanceFamilyFromCPU_CaseInsensitive(t *testing.T) {
+	assert.Equal(t, "m8a", getInstanceFamilyFromCPU("amd epyc 9654"))
+}
+
+func TestGetInstanceFamilyFromCPU_DefaultFallback(t *testing.T) {
+	family := getInstanceFamilyFromCPU("Unknown CPU Model XYZ")
+	if runtime.GOARCH == "arm64" {
+		assert.Equal(t, "t4g", family)
+	} else {
+		assert.Equal(t, "t3", family)
+	}
+}
+
+// --- instanceTypeVCPUs / instanceTypeMemoryMiB nil safety ---
+
+func TestInstanceTypeVCPUs_NilSafety(t *testing.T) {
+	// Nil VCpuInfo
+	assert.Equal(t, int64(0), instanceTypeVCPUs(&ec2.InstanceTypeInfo{}))
+
+	// Non-nil VCpuInfo but nil DefaultVCpus
+	assert.Equal(t, int64(0), instanceTypeVCPUs(&ec2.InstanceTypeInfo{
+		VCpuInfo: &ec2.VCpuInfo{},
+	}))
+
+	// Valid
+	assert.Equal(t, int64(4), instanceTypeVCPUs(&ec2.InstanceTypeInfo{
+		VCpuInfo: &ec2.VCpuInfo{DefaultVCpus: aws.Int64(4)},
+	}))
+}
+
+func TestInstanceTypeMemoryMiB_NilSafety(t *testing.T) {
+	// Nil MemoryInfo
+	assert.Equal(t, int64(0), instanceTypeMemoryMiB(&ec2.InstanceTypeInfo{}))
+
+	// Non-nil MemoryInfo but nil SizeInMiB
+	assert.Equal(t, int64(0), instanceTypeMemoryMiB(&ec2.InstanceTypeInfo{
+		MemoryInfo: &ec2.MemoryInfo{},
+	}))
+
+	// Valid
+	assert.Equal(t, int64(8192), instanceTypeMemoryMiB(&ec2.InstanceTypeInfo{
+		MemoryInfo: &ec2.MemoryInfo{SizeInMiB: aws.Int64(8192)},
+	}))
+}
+
+// --- Daemon.WriteState / Daemon.LoadState nil jsManager ---
+
+func TestDaemon_WriteState_NilJSManager(t *testing.T) {
+	d := &Daemon{jsManager: nil}
+	err := d.WriteState()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "JetStream manager not initialized")
+}
+
+func TestDaemon_LoadState_NilJSManager(t *testing.T) {
+	d := &Daemon{jsManager: nil}
+	err := d.LoadState()
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "JetStream manager not initialized")
+}
+
+// --- GetAvailableInstanceTypeInfos edge cases ---
+
+func TestGetAvailableInstanceTypeInfos_Overcommitted(t *testing.T) {
+	rm := &ResourceManager{
+		availableVCPU: 4,
+		availableMem:  8.0,
+		allocatedVCPU: 8, // Over-committed
+		allocatedMem:  16.0,
+		instanceTypes: map[string]*ec2.InstanceTypeInfo{
+			"t3.micro": {
+				InstanceType: aws.String("t3.micro"),
+				VCpuInfo:     &ec2.VCpuInfo{DefaultVCpus: aws.Int64(2)},
+				MemoryInfo:   &ec2.MemoryInfo{SizeInMiB: aws.Int64(1024)},
+			},
+		},
+	}
+
+	infos := rm.GetAvailableInstanceTypeInfos(true)
+	assert.Empty(t, infos, "overcommitted resources should return 0 available slots")
+
+	infos = rm.GetAvailableInstanceTypeInfos(false)
+	assert.Empty(t, infos)
+}
+
+func TestGetAvailableInstanceTypeInfos_ShowCapacity(t *testing.T) {
+	rm := &ResourceManager{
+		availableVCPU: 8,
+		availableMem:  16.0,
+		allocatedVCPU: 0,
+		allocatedMem:  0,
+		instanceTypes: map[string]*ec2.InstanceTypeInfo{
+			"t3.micro": {
+				InstanceType: aws.String("t3.micro"),
+				VCpuInfo:     &ec2.VCpuInfo{DefaultVCpus: aws.Int64(2)},
+				MemoryInfo:   &ec2.MemoryInfo{SizeInMiB: aws.Int64(1024)},
+			},
+		},
+	}
+
+	// With showCapacity=true, should return multiple entries
+	infos := rm.GetAvailableInstanceTypeInfos(true)
+	assert.Greater(t, len(infos), 1)
+
+	// With showCapacity=false, should return exactly 1
+	infos = rm.GetAvailableInstanceTypeInfos(false)
+	assert.Len(t, infos, 1)
+}
+
+// --- NewDaemon ---
+
+func TestNewDaemon_WalDirDefaultsToBaseDir(t *testing.T) {
+	cfg := &config.ClusterConfig{
+		Node: "n1",
+		Nodes: map[string]config.Config{
+			"n1": {
+				BaseDir: "/data/hive",
+				WalDir:  "", // Empty - should default to BaseDir
+			},
+		},
+	}
+
+	d := NewDaemon(cfg)
+	assert.Equal(t, "/data/hive", d.config.WalDir)
+}
+
+func TestNewDaemon_WalDirPreservedIfSet(t *testing.T) {
+	cfg := &config.ClusterConfig{
+		Node: "n1",
+		Nodes: map[string]config.Config{
+			"n1": {
+				BaseDir: "/data/hive",
+				WalDir:  "/fast-ssd/wal",
+			},
+		},
+	}
+
+	d := NewDaemon(cfg)
+	assert.Equal(t, "/fast-ssd/wal", d.config.WalDir)
 }
