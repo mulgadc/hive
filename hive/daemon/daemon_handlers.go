@@ -11,6 +11,7 @@ import (
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	gateway_ec2_instance "github.com/mulgadc/hive/hive/gateway/ec2/instance"
+	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/hive/hive/vm"
@@ -452,6 +453,17 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command qmp.Command, instance
 func (d *Daemon) handleStartInstance(msg *nats.Msg, command qmp.Command, instance *vm.VM, respondWithError func(string)) {
 	slog.Info("Starting instance", "id", command.ID)
 
+	// Validate instance is in stopped state
+	d.Instances.Mu.Lock()
+	status := instance.Status
+	d.Instances.Mu.Unlock()
+
+	if status != vm.StateStopped {
+		slog.Error("StartInstance: instance not in stopped state", "instanceId", command.ID, "status", status)
+		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		return
+	}
+
 	// Allocate resources
 	instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
 	if ok {
@@ -812,6 +824,99 @@ func (d *Daemon) handleEC2ImportKeyPair(msg *nats.Msg) {
 
 func (d *Daemon) handleEC2DescribeImages(msg *nats.Msg) {
 	handleNATSRequest(msg, d.imageService.DescribeImages)
+}
+
+// handleEC2CreateImage is a stateful handler that extracts instance context
+// (root volume ID, source AMI, running state) before delegating to the image service.
+func (d *Daemon) handleEC2CreateImage(msg *nats.Msg) {
+	slog.Debug("Received message", "subject", msg.Subject)
+
+	respondWithError := func(errCode string) {
+		if err := msg.Respond(utils.GenerateErrorPayload(errCode)); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
+	}
+
+	input := &ec2.CreateImageInput{}
+	if errResp := utils.UnmarshalJsonPayload(input, msg.Data); errResp != nil {
+		if err := msg.Respond(errResp); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
+		return
+	}
+
+	if input.InstanceId == nil || *input.InstanceId == "" {
+		respondWithError(awserrors.ErrorMissingParameter)
+		return
+	}
+
+	instanceID := *input.InstanceId
+
+	// Extract all instance context in a single critical section
+	d.Instances.Mu.Lock()
+	instance, ok := d.Instances.VMS[instanceID]
+	var status vm.InstanceState
+	var rootVolumeID, sourceImageID string
+	if ok {
+		status = instance.Status
+		if instance.Instance != nil {
+			for _, bdm := range instance.Instance.BlockDeviceMappings {
+				if bdm.Ebs != nil && bdm.Ebs.VolumeId != nil {
+					rootVolumeID = *bdm.Ebs.VolumeId
+					break
+				}
+			}
+			if instance.Instance.ImageId != nil {
+				sourceImageID = *instance.Instance.ImageId
+			}
+		}
+	}
+	d.Instances.Mu.Unlock()
+
+	if !ok {
+		slog.Error("CreateImage: instance not found", "instanceId", instanceID)
+		respondWithError(awserrors.ErrorInvalidInstanceIDNotFound)
+		return
+	}
+
+	if status != vm.StateRunning && status != vm.StateStopped {
+		slog.Error("CreateImage: instance not in valid state", "instanceId", instanceID, "status", status)
+		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		return
+	}
+
+	if rootVolumeID == "" {
+		slog.Error("CreateImage: no root volume found", "instanceId", instanceID)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	params := handlers_ec2_image.CreateImageParams{
+		Input:         input,
+		RootVolumeID:  rootVolumeID,
+		SourceImageID: sourceImageID,
+		IsRunning:     status == vm.StateRunning,
+	}
+
+	output, err := d.imageService.CreateImageFromInstance(params)
+	if err != nil {
+		slog.Error("CreateImage: service failed", "instanceId", instanceID, "err", err)
+		respondWithError(err.Error())
+		return
+	}
+
+	jsonResponse, err := json.Marshal(output)
+	if err != nil {
+		slog.Error("CreateImage: failed to marshal response", "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	if err := msg.Respond(jsonResponse); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
+
+	slog.Info("CreateImage completed", "instanceId", instanceID, "imageId", *output.ImageId)
 }
 
 func (d *Daemon) handleEC2CreateVolume(msg *nats.Msg) {

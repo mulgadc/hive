@@ -65,6 +65,27 @@ stop_service "hive-ui" "$PID_DIR"
 # Stop Hive daemon/gateway (it will terminate running instances, unmount nbd devices)
 stop_service "hive" "$PID_DIR"
 
+# Wait for all QEMU instances to exit before stopping infrastructure services.
+# The daemon sends system_powerdown to VMs during shutdown, but may be killed
+# before VMs fully exit. We must wait here so viperblock/predastore aren't
+# pulled out from under running VMs.
+if pgrep -x qemu-system-x86_64 > /dev/null 2>&1; then
+    echo "⏳ Waiting for QEMU instances to exit..."
+    timeout=120
+    elapsed=0
+    while pgrep -x qemu-system-x86_64 > /dev/null 2>&1; do
+        if [ $elapsed -ge $timeout ]; then
+            echo "⚠️  Timeout waiting for QEMU processes, force killing..."
+            pkill -9 -x qemu-system-x86_64 2>/dev/null || true
+            sleep 1
+            break
+        fi
+        sleep 1
+        ((elapsed++))
+    done
+    echo "✅ All QEMU instances exited"
+fi
+
 # Stop AWSGW
 stop_service "awsgw" "$PID_DIR"
 

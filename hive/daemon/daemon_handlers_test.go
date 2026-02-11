@@ -642,6 +642,148 @@ func TestHandleEC2DisableSerialConsoleAccess(t *testing.T) {
 	assert.False(t, *output.SerialConsoleAccessEnabled)
 }
 
+// --- handleEC2CreateImage tests ---
+
+func TestHandleEC2CreateImage_InstanceNotFound(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon := createFullTestDaemon(t, natsURL)
+
+	sub, err := daemon.natsConn.Subscribe("ec2.CreateImage", daemon.handleEC2CreateImage)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.CreateImageInput{
+		InstanceId: aws.String("i-nonexistent"),
+		Name:       aws.String("my-image"),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.CreateImage", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+}
+
+func TestHandleEC2CreateImage_MissingInstanceId(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon := createFullTestDaemon(t, natsURL)
+
+	sub, err := daemon.natsConn.Subscribe("ec2.CreateImage", daemon.handleEC2CreateImage)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.CreateImageInput{
+		Name: aws.String("my-image"),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.CreateImage", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+}
+
+func TestHandleEC2CreateImage_InvalidState(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon := createFullTestDaemon(t, natsURL)
+
+	// Add an instance in "pending" state (not running or stopped)
+	daemon.Instances.Mu.Lock()
+	daemon.Instances.VMS["i-pending123"] = &vm.VM{
+		ID:     "i-pending123",
+		Status: vm.StatePending,
+		Instance: &ec2.Instance{
+			InstanceId: aws.String("i-pending123"),
+			ImageId:    aws.String("ami-source"),
+			BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{
+				{
+					DeviceName: aws.String("/dev/sda1"),
+					Ebs:        &ec2.EbsInstanceBlockDevice{VolumeId: aws.String("vol-root123")},
+				},
+			},
+		},
+	}
+	daemon.Instances.Mu.Unlock()
+
+	sub, err := daemon.natsConn.Subscribe("ec2.CreateImage", daemon.handleEC2CreateImage)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.CreateImageInput{
+		InstanceId: aws.String("i-pending123"),
+		Name:       aws.String("my-image"),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.CreateImage", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+}
+
+func TestHandleEC2CreateImage_NoRootVolume(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon := createFullTestDaemon(t, natsURL)
+
+	// Add instance with no block device mappings
+	daemon.Instances.Mu.Lock()
+	daemon.Instances.VMS["i-novol123"] = &vm.VM{
+		ID:     "i-novol123",
+		Status: vm.StateRunning,
+		Instance: &ec2.Instance{
+			InstanceId:          aws.String("i-novol123"),
+			ImageId:             aws.String("ami-source"),
+			BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{},
+		},
+	}
+	daemon.Instances.Mu.Unlock()
+
+	sub, err := daemon.natsConn.Subscribe("ec2.CreateImage", daemon.handleEC2CreateImage)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.CreateImageInput{
+		InstanceId: aws.String("i-novol123"),
+		Name:       aws.String("my-image"),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.CreateImage", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+}
+
+func TestHandleEC2CreateImage_MalformedJSON(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon := createFullTestDaemon(t, natsURL)
+
+	sub, err := daemon.natsConn.Subscribe("ec2.CreateImage", daemon.handleEC2CreateImage)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reply, err := daemon.natsConn.Request("ec2.CreateImage", []byte(`{bad json}`), 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+}
+
 // --- SetConfigPath test ---
 
 func TestSetConfigPath(t *testing.T) {
