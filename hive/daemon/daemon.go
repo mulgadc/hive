@@ -700,7 +700,7 @@ func (d *Daemon) reconnectInstance(instance *vm.VM) error {
 		d.mu.Unlock()
 		// Clean up the QMP connection we just opened
 		if instance.QMPClient != nil && instance.QMPClient.Conn != nil {
-			instance.QMPClient.Conn.Close()
+			_ = instance.QMPClient.Conn.Close()
 			instance.QMPClient = nil
 		}
 		return fmt.Errorf("failed to subscribe to NATS: %w", err)
