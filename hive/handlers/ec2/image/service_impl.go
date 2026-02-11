@@ -381,9 +381,17 @@ func (s *ImageServiceImpl) snapshotStoppedVolume(volumeID, snapshotID string) er
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 
+	// Read volume config to get the size (required by viperblock.New)
+	volConfig, err := s.getVolumeConfig(volumeID)
+	if err != nil {
+		slog.Error("snapshotStoppedVolume: failed to read volume config", "volumeId", volumeID, "err", err)
+		return errors.New(awserrors.ErrorServerInternal)
+	}
+	volumeSize := volConfig.VolumeMetadata.SizeGiB * 1024 * 1024 * 1024
+
 	cfg := vbs3.S3Config{
 		VolumeName: volumeID,
-		VolumeSize: 0, // will be loaded from state
+		VolumeSize: volumeSize,
 		Bucket:     s.config.Predastore.Bucket,
 		Region:     s.config.Predastore.Region,
 		AccessKey:  s.config.Predastore.AccessKey,
@@ -393,6 +401,7 @@ func (s *ImageServiceImpl) snapshotStoppedVolume(volumeID, snapshotID string) er
 
 	vbconfig := viperblock.VB{
 		VolumeName: volumeID,
+		VolumeSize: volumeSize,
 		BaseDir:    s.config.WalDir,
 		Cache:      viperblock.Cache{Config: viperblock.CacheConfig{Size: 0}},
 	}
