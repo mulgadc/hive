@@ -78,6 +78,9 @@ func getResourceType(resourceID string) string {
 	if strings.HasPrefix(resourceID, "igw-") {
 		return "internet-gateway"
 	}
+	if strings.HasPrefix(resourceID, "eigw-") {
+		return "egress-only-internet-gateway"
+	}
 	return "unknown"
 }
 

@@ -436,6 +436,7 @@ func TestGetResourceType(t *testing.T) {
 		{"sg-abc123", "security-group"},
 		{"rtb-abc123", "route-table"},
 		{"igw-abc123", "internet-gateway"},
+		{"eigw-abc123", "egress-only-internet-gateway"},
 		{"unknown-abc123", "unknown"},
 	}
 

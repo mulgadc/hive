@@ -47,6 +47,17 @@ func SafeInt64ToUint64(v int64) uint64 {
 	return uint64(v)
 }
 
+// SafeIntToUint8 converts int to uint8, clamping to [0, 255]
+func SafeIntToUint8(v int) uint8 {
+	if v < 0 {
+		return 0
+	}
+	if v > math.MaxUint8 {
+		return math.MaxUint8
+	}
+	return uint8(v)
+}
+
 // SafeIntToUint64 converts int to uint64, returning 0 if negative
 func SafeIntToUint64(v int) uint64 {
 	if v < 0 {

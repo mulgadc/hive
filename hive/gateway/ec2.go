@@ -9,7 +9,9 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/gofiber/fiber/v2"
 	"github.com/mulgadc/hive/hive/awsec2query"
+	"github.com/mulgadc/hive/hive/awserrors"
 	gateway_ec2_account "github.com/mulgadc/hive/hive/gateway/ec2/account"
+	gateway_ec2_eigw "github.com/mulgadc/hive/hive/gateway/ec2/eigw"
 	gateway_ec2_image "github.com/mulgadc/hive/hive/gateway/ec2/image"
 	gateway_ec2_instance "github.com/mulgadc/hive/hive/gateway/ec2/instance"
 	gateway_ec2_key "github.com/mulgadc/hive/hive/gateway/ec2/key"
@@ -154,6 +156,22 @@ var ec2Actions = map[string]EC2Handler{
 	"CopySnapshot": ec2Handler(func(input *ec2.CopySnapshotInput, gw *GatewayConfig) (any, error) {
 		return gateway_ec2_snapshot.CopySnapshot(input, gw.NATSConn)
 	}),
+	"CreateEgressOnlyInternetGateway": ec2Handler(func(input *ec2.CreateEgressOnlyInternetGatewayInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_eigw.CreateEgressOnlyInternetGateway(input, gw.NATSConn)
+	}),
+	"DeleteEgressOnlyInternetGateway": ec2Handler(func(input *ec2.DeleteEgressOnlyInternetGatewayInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_eigw.DeleteEgressOnlyInternetGateway(input, gw.NATSConn)
+	}),
+	"DescribeEgressOnlyInternetGateways": ec2Handler(func(input *ec2.DescribeEgressOnlyInternetGatewaysInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_eigw.DescribeEgressOnlyInternetGateways(input, gw.NATSConn)
+	}),
+}
+
+// ec2LocalActions are actions that don't require a NATS connection.
+var ec2LocalActions = map[string]bool{
+	"DescribeRegions":           true,
+	"DescribeAvailabilityZones": true,
+	"DescribeAccountAttributes": true,
 }
 
 func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
@@ -163,6 +181,10 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 	handler, ok := ec2Actions[action]
 	if !ok {
 		return errors.New("InvalidAction")
+	}
+
+	if gw.NATSConn == nil && !ec2LocalActions[action] {
+		return errors.New(awserrors.ErrorServerInternal)
 	}
 
 	xmlOutput, err := handler(action, queryArgs, gw)
