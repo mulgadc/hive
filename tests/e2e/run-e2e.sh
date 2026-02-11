@@ -870,10 +870,10 @@ echo "RunInstances count>1 test passed"
 # Phase 8: Negative / Error Path Tests
 echo "Phase 8: Negative / Error Path Tests"
 
-# 8a: RunInstances with invalid AMI ID
-echo "8a: RunInstances with invalid AMI ID..."
-expect_error "InvalidAMIID.NotFound" $AWS_EC2 run-instances \
-    --image-id ami-nonexistent --instance-type "$INSTANCE_TYPE" --key-name test-key-1
+# 8a: RunInstances with malformed AMI ID (missing ami- prefix)
+echo "8a: RunInstances with malformed AMI ID..."
+expect_error "InvalidAMIID.Malformed" $AWS_EC2 run-instances \
+    --image-id notanami --instance-type "$INSTANCE_TYPE" --key-name test-key-1
 
 # 8b: RunInstances with invalid instance type
 echo "8b: RunInstances with invalid instance type..."

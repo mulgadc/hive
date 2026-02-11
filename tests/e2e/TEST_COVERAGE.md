@@ -100,7 +100,7 @@
 - `terminate-instances` (both, poll -> terminated)
 
 ### Phase 8: Negative / Error Path Tests
-- `run-instances` with invalid AMI ID (expect `InvalidAMIID.NotFound`)
+- `run-instances` with malformed AMI ID (expect `InvalidAMIID.Malformed`)
 - `run-instances` with invalid instance type (expect `InvalidInstanceType`)
 - `attach-volume` on in-use volume (expect `VolumeInUse`)
 - `detach-volume` on boot volume (expect `OperationNotPermitted`)
