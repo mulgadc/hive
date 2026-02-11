@@ -253,15 +253,13 @@ func (s *ImageServiceImpl) CreateImageFromInstance(params CreateImageParams) (*e
 		"rootVolumeId", params.RootVolumeID, "amiId", amiID, "snapshotId", snapshotID,
 		"isRunning", params.IsRunning)
 
-	// Step 1: Snapshot the root volume
+	// Step 1: Snapshot root volume (live via NATS or offline from S3)
+	snapshotFn := s.snapshotStoppedVolume
 	if params.IsRunning {
-		if err := s.snapshotRunningVolume(params.RootVolumeID, snapshotID); err != nil {
-			return nil, err
-		}
-	} else {
-		if err := s.snapshotStoppedVolume(params.RootVolumeID, snapshotID); err != nil {
-			return nil, err
-		}
+		snapshotFn = s.snapshotRunningVolume
+	}
+	if err := snapshotFn(params.RootVolumeID, snapshotID); err != nil {
+		return nil, err
 	}
 
 	// Step 2: Read source volume config for size
@@ -273,7 +271,11 @@ func (s *ImageServiceImpl) CreateImageFromInstance(params CreateImageParams) (*e
 	volumeSizeGiB := volumeConfig.VolumeMetadata.SizeGiB
 
 	// Step 3: Read source AMI config for architecture, platform, etc.
-	var sourceAMI viperblock.AMIMetadata
+	sourceAMI := viperblock.AMIMetadata{
+		Architecture:    "x86_64",
+		PlatformDetails: "Linux/UNIX",
+		Virtualization:  "hvm",
+	}
 	if params.SourceImageID != "" {
 		srcCfg, err := s.getAMIConfig(params.SourceImageID)
 		if err != nil {
@@ -281,12 +283,6 @@ func (s *ImageServiceImpl) CreateImageFromInstance(params CreateImageParams) (*e
 			return nil, errors.New(awserrors.ErrorServerInternal)
 		}
 		sourceAMI = srcCfg
-	} else {
-		sourceAMI = viperblock.AMIMetadata{
-			Architecture:    "x86_64",
-			PlatformDetails: "Linux/UNIX",
-			Virtualization:  "hvm",
-		}
 	}
 
 	// Step 4: Store snapshot metadata
@@ -422,16 +418,16 @@ func (s *ImageServiceImpl) snapshotStoppedVolume(volumeID, snapshotID string) er
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 
+	// Clean up local WAL files regardless of snapshot success or failure
+	defer func() {
+		if err := vb.RemoveLocalFiles(); err != nil {
+			slog.Error("snapshotStoppedVolume: failed to remove local files", "volumeId", volumeID, "err", err)
+		}
+	}()
+
 	if _, err := vb.CreateSnapshot(snapshotID); err != nil {
 		slog.Error("snapshotStoppedVolume: CreateSnapshot failed", "volumeId", volumeID, "snapshotId", snapshotID, "err", err)
-		if cleanupErr := vb.RemoveLocalFiles(); cleanupErr != nil {
-			slog.Error("snapshotStoppedVolume: failed to remove local files after snapshot failure", "volumeId", volumeID, "err", cleanupErr)
-		}
 		return errors.New(awserrors.ErrorServerInternal)
-	}
-
-	if err := vb.RemoveLocalFiles(); err != nil {
-		slog.Error("snapshotStoppedVolume: failed to remove local files", "volumeId", volumeID, "err", err)
 	}
 
 	slog.Info("snapshotStoppedVolume: snapshot created", "volumeId", volumeID, "snapshotId", snapshotID)

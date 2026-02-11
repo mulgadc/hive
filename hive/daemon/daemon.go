@@ -643,20 +643,21 @@ func (d *Daemon) restoreInstances() {
 			continue
 		}
 
-		// QEMU is not running - handle transitional states from interrupted operations
+		// QEMU is not running -- resolve transitional states from interrupted operations
 		switch instance.Status {
-		case vm.StateStopping:
-			instance.Status = vm.StateStopped
-			slog.Info("Instance was stopping, QEMU exited, marking stopped", "instance", instance.ID)
-			if err := d.WriteState(); err != nil {
-				slog.Error("Failed to write state", "instance", instance.ID, "error", err)
+		case vm.StateStopping, vm.StateShuttingDown:
+			prevStatus := instance.Status
+			if instance.Status == vm.StateStopping {
+				instance.Status = vm.StateStopped
+			} else {
+				instance.Status = vm.StateTerminated
 			}
-			continue
-		case vm.StateShuttingDown:
-			instance.Status = vm.StateTerminated
-			slog.Info("Instance was shutting-down, QEMU exited, marking terminated", "instance", instance.ID)
+			slog.Info("QEMU exited during transition, finalizing state",
+				"instance", instance.ID, "from", prevStatus, "to", instance.Status)
 			if err := d.WriteState(); err != nil {
-				slog.Error("Failed to write state", "instance", instance.ID, "error", err)
+				slog.Error("Failed to persist state, will retry on next restart",
+					"instance", instance.ID, "error", err)
+				instance.Status = prevStatus // revert so next restart retries
 			}
 			continue
 		case vm.StateRunning:
@@ -697,6 +698,11 @@ func (d *Daemon) reconnectInstance(instance *vm.VM) error {
 	sub, err := d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), "hive-events", d.handleEC2Events)
 	if err != nil {
 		d.mu.Unlock()
+		// Clean up the QMP connection we just opened
+		if instance.QMPClient != nil && instance.QMPClient.Conn != nil {
+			instance.QMPClient.Conn.Close()
+			instance.QMPClient = nil
+		}
 		return fmt.Errorf("failed to subscribe to NATS: %w", err)
 	}
 	d.natsSubscriptions[instance.ID] = sub
@@ -705,7 +711,7 @@ func (d *Daemon) reconnectInstance(instance *vm.VM) error {
 	instance.Status = vm.StateRunning
 
 	if err := d.WriteState(); err != nil {
-		slog.Error("Failed to persist reconnected instance state", "instanceId", instance.ID, "err", err)
+		return fmt.Errorf("failed to persist reconnected instance state: %w", err)
 	}
 
 	slog.Info("Successfully reconnected to running instance", "instance", instance.ID)

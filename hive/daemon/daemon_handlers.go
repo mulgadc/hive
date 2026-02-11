@@ -874,13 +874,13 @@ func (d *Daemon) handleEC2CreateImage(msg *nats.Msg) {
 	d.Instances.Mu.Unlock()
 
 	if !ok {
-		slog.Error("CreateImage: instance not found", "instanceId", instanceID)
+		slog.Warn("CreateImage: instance not found", "instanceId", instanceID)
 		respondWithError(awserrors.ErrorInvalidInstanceIDNotFound)
 		return
 	}
 
 	if status != vm.StateRunning && status != vm.StateStopped {
-		slog.Error("CreateImage: instance not in valid state", "instanceId", instanceID, "status", status)
+		slog.Warn("CreateImage: instance not in valid state", "instanceId", instanceID, "status", status)
 		respondWithError(awserrors.ErrorIncorrectInstanceState)
 		return
 	}
