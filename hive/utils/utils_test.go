@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGenerateResourceID(t *testing.T) {
@@ -697,4 +698,131 @@ func TestExtractDiskImageFromFile(t *testing.T) {
 	//err = os.RemoveAll(tmpDir)
 	//assert.NoError(t, err, "Could not remove temp dir")
 
+}
+
+func TestIsSocketURI(t *testing.T) {
+	tests := []struct {
+		name string
+		uri  string
+		want bool
+	}{
+		{"Socket suffix", "/run/nbd-vol.sock", true},
+		{"Unix prefix", "unix:/run/nbd-vol", true},
+		{"Both", "unix:/run/nbd-vol.sock", true},
+		{"TCP URI", "nbd://127.0.0.1:9000", false},
+		{"Empty", "", false},
+		{"Random path", "/tmp/somefile.txt", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsSocketURI(tt.uri))
+		})
+	}
+}
+
+func TestFormatNBDSocketURI(t *testing.T) {
+	assert.Equal(t, "nbd:unix:/run/nbd-vol.sock", FormatNBDSocketURI("/run/nbd-vol.sock"))
+	assert.Equal(t, "nbd:unix:/tmp/test.sock", FormatNBDSocketURI("/tmp/test.sock"))
+}
+
+func TestFormatNBDTCPURI(t *testing.T) {
+	assert.Equal(t, "nbd://127.0.0.1:9000", FormatNBDTCPURI("127.0.0.1", 9000))
+	assert.Equal(t, "nbd://storage.local:34305", FormatNBDTCPURI("storage.local", 34305))
+}
+
+func TestGenerateUniqueSocketFile(t *testing.T) {
+	path1, err := GenerateUniqueSocketFile("vol-123")
+	require.NoError(t, err)
+	assert.Contains(t, path1, "nbd-vol-123-")
+	assert.True(t, strings.HasSuffix(path1, ".sock"))
+
+	// Two calls should produce different paths (different timestamps)
+	time.Sleep(time.Nanosecond)
+	path2, err := GenerateUniqueSocketFile("vol-123")
+	require.NoError(t, err)
+	assert.NotEqual(t, path1, path2)
+
+	// Empty volume name
+	_, err = GenerateUniqueSocketFile("")
+	assert.Error(t, err)
+}
+
+func TestGenerateXMLPayload(t *testing.T) {
+	type Inner struct {
+		Name string `locationName:"Name" type:"string"`
+	}
+
+	result := GenerateXMLPayload("DescribeInstancesResponse", Inner{Name: "test"})
+	assert.NotNil(t, result)
+
+	xmlBytes, err := MarshalToXML(result)
+	require.NoError(t, err)
+	xmlStr := string(xmlBytes)
+	assert.Contains(t, xmlStr, "DescribeInstancesResponse")
+	assert.Contains(t, xmlStr, "test")
+}
+
+func TestHumanBytes(t *testing.T) {
+	tests := []struct {
+		name string
+		b    uint64
+		want string
+	}{
+		{"Zero", 0, "0 B"},
+		{"Bytes", 512, "512 B"},
+		{"KiB", 1024, "1.0 KiB"},
+		{"KiB fractional", 1536, "1.5 KiB"},
+		{"MiB", 1048576, "1.0 MiB"},
+		{"GiB", 1073741824, "1.0 GiB"},
+		{"Large GiB", 5368709120, "5.0 GiB"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, humanBytes(tt.b))
+		})
+	}
+}
+
+func TestDirExists(t *testing.T) {
+	// Existing directory
+	assert.True(t, dirExists(os.TempDir()))
+
+	// Non-existent path
+	assert.False(t, dirExists("/nonexistent/path/should/not/exist"))
+
+	// File (not a directory)
+	tmpFile, err := os.CreateTemp("", "direxists-test-*")
+	require.NoError(t, err)
+	defer os.Remove(tmpFile.Name())
+	tmpFile.Close()
+	assert.False(t, dirExists(tmpFile.Name()))
+}
+
+func TestProgressWriter(t *testing.T) {
+	var total int
+	pw := progressWriter(func(n int) {
+		total += n
+	})
+
+	n, err := pw.Write([]byte("hello"))
+	assert.NoError(t, err)
+	assert.Equal(t, 5, n)
+	assert.Equal(t, 5, total)
+
+	n, err = pw.Write([]byte("world!"))
+	assert.NoError(t, err)
+	assert.Equal(t, 6, n)
+	assert.Equal(t, 11, total)
+}
+
+func TestGeneratePidFile_EmptyName(t *testing.T) {
+	_, err := GeneratePidFile("")
+	assert.Error(t, err)
+}
+
+func TestGenerateSocketFile_EmptyName(t *testing.T) {
+	_, err := GenerateSocketFile("")
+	assert.Error(t, err)
 }
