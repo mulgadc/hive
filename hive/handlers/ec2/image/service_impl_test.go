@@ -259,4 +259,3 @@ func TestDescribeImages_FilterByOwnerSelf(t *testing.T) {
 	assert.Len(t, result.Images, 1)
 	assert.Equal(t, amiID, *result.Images[0].ImageId)
 }
-
