@@ -6,6 +6,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -18,21 +19,21 @@ func TestValidateImportKeyPairInput(t *testing.T) {
 		{
 			name:  "NilInput",
 			input: nil,
-			want:  errors.New("MissingParameter"),
+			want:  errors.New(awserrors.ErrorMissingParameter),
 		},
 		{
 			name: "MissingKeyName",
 			input: &ec2.ImportKeyPairInput{
 				PublicKeyMaterial: []byte("ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQ..."),
 			},
-			want: errors.New("MissingParameter"),
+			want: errors.New(awserrors.ErrorMissingParameter),
 		},
 		{
 			name: "MissingPublicKeyMaterial",
 			input: &ec2.ImportKeyPairInput{
 				KeyName: aws.String("test-key"),
 			},
-			want: errors.New("MissingParameter"),
+			want: errors.New(awserrors.ErrorMissingParameter),
 		},
 		{
 			name: "EmptyPublicKeyMaterial",
@@ -40,7 +41,7 @@ func TestValidateImportKeyPairInput(t *testing.T) {
 				KeyName:           aws.String("test-key"),
 				PublicKeyMaterial: []byte{},
 			},
-			want: errors.New("MissingParameter"),
+			want: errors.New(awserrors.ErrorMissingParameter),
 		},
 		{
 			name: "ValidInput",

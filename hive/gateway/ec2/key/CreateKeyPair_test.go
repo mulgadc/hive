@@ -6,6 +6,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/awserrors"
 )
 
 func TestValidateCreateKeyPairInput(t *testing.T) {
@@ -17,14 +18,14 @@ func TestValidateCreateKeyPairInput(t *testing.T) {
 		{
 			name:  "NilInput",
 			input: nil,
-			want:  errors.New("MissingParameter"),
+			want:  errors.New(awserrors.ErrorMissingParameter),
 		},
 		{
 			name: "MissingKeyName",
 			input: &ec2.CreateKeyPairInput{
 				KeyName: aws.String(""),
 			},
-			want: errors.New("MissingParameter"),
+			want: errors.New(awserrors.ErrorMissingParameter),
 		},
 		{
 			name: "ValidInput",

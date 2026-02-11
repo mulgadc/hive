@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/awserrors"
 	handlers_ec2_volume "github.com/mulgadc/hive/hive/handlers/ec2/volume"
 	"github.com/nats-io/nats.go"
 )
@@ -12,15 +13,15 @@ import (
 // ValidateModifyVolumeInput validates the input parameters
 func ValidateModifyVolumeInput(input *ec2.ModifyVolumeInput) error {
 	if input == nil {
-		return errors.New("InvalidParameterValue")
+		return errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
 	if input.VolumeId == nil || !strings.HasPrefix(*input.VolumeId, "vol-") {
-		return errors.New("InvalidVolumeID.Malformed")
+		return errors.New(awserrors.ErrorInvalidVolumeIDMalformed)
 	}
 
 	if input.Size != nil && *input.Size <= 0 {
-		return errors.New("InvalidParameterValue")
+		return errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
 	return nil

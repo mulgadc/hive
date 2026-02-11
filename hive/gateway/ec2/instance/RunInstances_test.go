@@ -6,6 +6,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -41,7 +42,7 @@ func TestParseRunInstances(t *testing.T) {
 				SecurityGroupIds: defaults.SecurityGroupIds,
 				SubnetId:         defaults.SubnetId,
 			},
-			want: errors.New("InvalidParameterValue"),
+			want: errors.New(awserrors.ErrorInvalidParameterValue),
 		},
 
 		{
@@ -55,7 +56,7 @@ func TestParseRunInstances(t *testing.T) {
 				SecurityGroupIds: defaults.SecurityGroupIds,
 				SubnetId:         defaults.SubnetId,
 			},
-			want: errors.New("InvalidParameterValue"),
+			want: errors.New(awserrors.ErrorInvalidParameterValue),
 		},
 
 		{
@@ -69,7 +70,7 @@ func TestParseRunInstances(t *testing.T) {
 				SecurityGroupIds: defaults.SecurityGroupIds,
 				SubnetId:         defaults.SubnetId,
 			},
-			want: errors.New("InvalidParameterValue"),
+			want: errors.New(awserrors.ErrorInvalidParameterValue),
 		},
 
 		{
@@ -83,7 +84,7 @@ func TestParseRunInstances(t *testing.T) {
 				SecurityGroupIds: defaults.SecurityGroupIds,
 				SubnetId:         defaults.SubnetId,
 			},
-			want: errors.New("MissingParameter"),
+			want: errors.New(awserrors.ErrorMissingParameter),
 		},
 
 		{
@@ -97,7 +98,7 @@ func TestParseRunInstances(t *testing.T) {
 				SecurityGroupIds: defaults.SecurityGroupIds,
 				SubnetId:         defaults.SubnetId,
 			},
-			want: errors.New("MissingParameter"),
+			want: errors.New(awserrors.ErrorMissingParameter),
 		},
 
 		{
@@ -111,7 +112,7 @@ func TestParseRunInstances(t *testing.T) {
 				SecurityGroupIds: defaults.SecurityGroupIds,
 				SubnetId:         defaults.SubnetId,
 			},
-			want: errors.New("InvalidAMIID.Malformed"),
+			want: errors.New(awserrors.ErrorInvalidAMIIDMalformed),
 		},
 
 		// Successful test

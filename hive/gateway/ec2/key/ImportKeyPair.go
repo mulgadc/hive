@@ -4,21 +4,22 @@ import (
 	"errors"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/awserrors"
 	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
 	"github.com/nats-io/nats.go"
 )
 
 func ValidateImportKeyPairInput(input *ec2.ImportKeyPairInput) (err error) {
 	if input == nil {
-		return errors.New("MissingParameter")
+		return errors.New(awserrors.ErrorMissingParameter)
 	}
 
 	if input.KeyName == nil || *input.KeyName == "" {
-		return errors.New("MissingParameter")
+		return errors.New(awserrors.ErrorMissingParameter)
 	}
 
 	if len(input.PublicKeyMaterial) == 0 {
-		return errors.New("MissingParameter")
+		return errors.New(awserrors.ErrorMissingParameter)
 	}
 
 	return

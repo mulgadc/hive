@@ -143,7 +143,7 @@ func (gw *GatewayConfig) Request(ctx *fiber.Ctx) error {
 	case "iam":
 		err = gw.IAM_Request(ctx)
 	default:
-		err = errors.New("UnsupportedOperation")
+		err = errors.New(awserrors.ErrorUnsupportedOperation)
 	}
 
 	if err != nil {
@@ -164,7 +164,7 @@ func (gw *GatewayConfig) GetService(ctx *fiber.Ctx) (string, error) {
 	}
 	if !supportedServices[svc] {
 		slog.Debug("Unsupported service", "service", svc)
-		return "", errors.New("UnsupportedOperation")
+		return "", errors.New(awserrors.ErrorUnsupportedOperation)
 	}
 	return svc, nil
 }
@@ -186,7 +186,7 @@ func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {
 	// Check if the error lookup exists
 	if _, exists := awserrors.ErrorLookup[err.Error()]; !exists {
 		slog.Warn("Unknown error code", "error", err.Error())
-		err = errors.New("InternalError")
+		err = errors.New(awserrors.ErrorInternalError)
 	}
 
 	errorMsg = awserrors.ErrorLookup[err.Error()]
@@ -254,7 +254,7 @@ func ParseArgsToStruct(input *any, args map[string]string) (err error) {
 	err = awsec2query.QueryParamsToStruct(args, input)
 
 	if err != nil {
-		return errors.New("InvalidParameter")
+		return errors.New(awserrors.ErrorInvalidParameter)
 	}
 
 	return nil

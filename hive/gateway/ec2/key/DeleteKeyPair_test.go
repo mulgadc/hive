@@ -6,6 +6,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/awserrors"
 )
 
 func TestValidateDeleteKeyPairInput(t *testing.T) {
@@ -17,7 +18,7 @@ func TestValidateDeleteKeyPairInput(t *testing.T) {
 		{
 			name:  "NilInput",
 			input: nil,
-			want:  errors.New("MissingParameter"),
+			want:  errors.New(awserrors.ErrorMissingParameter),
 		},
 		{
 			name: "MissingBothKeyNameAndKeyPairId",
@@ -25,7 +26,7 @@ func TestValidateDeleteKeyPairInput(t *testing.T) {
 				KeyName:   aws.String(""),
 				KeyPairId: aws.String(""),
 			},
-			want: errors.New("MissingParameter"),
+			want: errors.New(awserrors.ErrorMissingParameter),
 		},
 		{
 			name: "ValidInputWithKeyName",

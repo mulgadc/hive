@@ -5,17 +5,18 @@ import (
 	"log/slog"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/awserrors"
 	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
 	"github.com/nats-io/nats.go"
 )
 
 func ValidateCreateKeyPairInput(input *ec2.CreateKeyPairInput) (err error) {
 	if input == nil {
-		return errors.New("MissingParameter")
+		return errors.New(awserrors.ErrorMissingParameter)
 	}
 
 	if input.KeyName == nil || *input.KeyName == "" {
-		return errors.New("MissingParameter")
+		return errors.New(awserrors.ErrorMissingParameter)
 	}
 
 	return

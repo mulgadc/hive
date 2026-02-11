@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/awserrors"
 	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	"github.com/nats-io/nats.go"
 )
@@ -18,7 +19,7 @@ func ValidateDescribeImagesInput(input *ec2.DescribeImagesInput) (err error) {
 	if input.ImageIds != nil {
 		for _, imageId := range input.ImageIds {
 			if imageId != nil && !strings.HasPrefix(*imageId, "ami-") {
-				return errors.New("InvalidAMIID.Malformed")
+				return errors.New(awserrors.ErrorInvalidAMIIDMalformed)
 			}
 		}
 	}

@@ -5,18 +5,19 @@ import (
 	"log/slog"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/awserrors"
 	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
 	"github.com/nats-io/nats.go"
 )
 
 func ValidateDeleteKeyPairInput(input *ec2.DeleteKeyPairInput) (err error) {
 	if input == nil {
-		return errors.New("MissingParameter")
+		return errors.New(awserrors.ErrorMissingParameter)
 	}
 
 	// At least one of KeyName or KeyPairId must be provided
 	if (input.KeyName == nil || *input.KeyName == "") && (input.KeyPairId == nil || *input.KeyPairId == "") {
-		return errors.New("MissingParameter")
+		return errors.New(awserrors.ErrorMissingParameter)
 	}
 
 	return

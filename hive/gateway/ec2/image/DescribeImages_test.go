@@ -6,6 +6,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -30,7 +31,7 @@ func TestValidateDescribeImagesInput(t *testing.T) {
 			input: &ec2.DescribeImagesInput{
 				ImageIds: []*string{aws.String("invalid-id")},
 			},
-			want: errors.New("InvalidAMIID.Malformed"),
+			want: errors.New(awserrors.ErrorInvalidAMIIDMalformed),
 		},
 		{
 			name: "ValidInput",

@@ -180,7 +180,7 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 	action := queryArgs["Action"]
 	handler, ok := ec2Actions[action]
 	if !ok {
-		return errors.New("InvalidAction")
+		return errors.New(awserrors.ErrorInvalidAction)
 	}
 
 	if gw.NATSConn == nil && !ec2LocalActions[action] {

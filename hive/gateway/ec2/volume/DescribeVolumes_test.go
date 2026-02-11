@@ -49,7 +49,7 @@ func TestValidateDescribeVolumesInput(t *testing.T) {
 				VolumeIds: []*string{aws.String("invalid-id")},
 			},
 			wantErr: true,
-			errMsg:  "InvalidVolume.Malformed",
+			errMsg:  "InvalidVolumeID.Malformed",
 		},
 		{
 			name: "InvalidVolumeId_WrongPrefix",
@@ -57,7 +57,7 @@ func TestValidateDescribeVolumesInput(t *testing.T) {
 				VolumeIds: []*string{aws.String("ami-0123456789abcdef0")},
 			},
 			wantErr: true,
-			errMsg:  "InvalidVolume.Malformed",
+			errMsg:  "InvalidVolumeID.Malformed",
 		},
 		{
 			name: "InvalidVolumeId_EmptyString",
@@ -65,7 +65,7 @@ func TestValidateDescribeVolumesInput(t *testing.T) {
 				VolumeIds: []*string{aws.String("")},
 			},
 			wantErr: true,
-			errMsg:  "InvalidVolume.Malformed",
+			errMsg:  "InvalidVolumeID.Malformed",
 		},
 		{
 			name: "MixedValidAndInvalid",
@@ -76,7 +76,7 @@ func TestValidateDescribeVolumesInput(t *testing.T) {
 				},
 			},
 			wantErr: true,
-			errMsg:  "InvalidVolume.Malformed",
+			errMsg:  "InvalidVolumeID.Malformed",
 		},
 		{
 			name: "NilVolumeIdInList",

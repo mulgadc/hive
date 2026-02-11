@@ -101,7 +101,7 @@ func (s *KeyServiceImpl) CreateKeyPair(input *ec2.CreateKeyPairInput) (*ec2.Crea
 		case "ed25519":
 			keyType = "ed25519"
 		default:
-			return nil, errors.New("InvalidParameterValue")
+			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 		}
 	}
 
