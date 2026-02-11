@@ -5,12 +5,10 @@ import (
 	"log/slog"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/gateway"
 	"github.com/mulgadc/hive/hive/utils"
-	"github.com/nats-io/nats.go"
 )
 
 var serviceName = "awsgw"
@@ -60,26 +58,12 @@ func launchService(config *config.ClusterConfig) (err error) {
 	nodeConfig := config.Nodes[config.Node]
 
 	// Connect to NATS for service communication
-	opts := []nats.Option{
-		nats.Token(nodeConfig.NATS.ACL.Token),
-		nats.ReconnectWait(time.Second),
-		nats.MaxReconnects(-1), // Infinite reconnects
-		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
-			slog.Warn("NATS disconnected", "err", err)
-		}),
-		nats.ReconnectHandler(func(nc *nats.Conn) {
-			slog.Info("NATS reconnected", "url", nc.ConnectedUrl())
-		}),
-	}
-
-	natsConn, err := nats.Connect(nodeConfig.NATS.Host, opts...)
+	natsConn, err := utils.ConnectNATS(nodeConfig.NATS.Host, nodeConfig.NATS.ACL.Token)
 	if err != nil {
 		slog.Error("Failed to connect to NATS", "err", err)
 		return err
 	}
 	defer natsConn.Close()
-
-	slog.Info("Connected to NATS server", "host", nodeConfig.NATS.Host)
 
 	// Append Base dir if config has no leading path
 	if nodeConfig.BaseDir != "" && !strings.HasPrefix(nodeConfig.AWSGW.Config, "/") {

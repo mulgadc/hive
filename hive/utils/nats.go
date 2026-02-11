@@ -4,10 +4,38 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/nats-io/nats.go"
 )
+
+// ConnectNATS establishes a connection to a NATS server with standard reconnect
+// handling and logging. If token is non-empty, token authentication is used.
+func ConnectNATS(host, token string) (*nats.Conn, error) {
+	opts := []nats.Option{
+		nats.ReconnectWait(time.Second),
+		nats.MaxReconnects(-1),
+		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
+			slog.Warn("NATS disconnected", "err", err)
+		}),
+		nats.ReconnectHandler(func(nc *nats.Conn) {
+			slog.Info("NATS reconnected", "url", nc.ConnectedUrl())
+		}),
+	}
+
+	if token != "" {
+		opts = append(opts, nats.Token(token))
+	}
+
+	nc, err := nats.Connect(host, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("NATS connect failed: %w", err)
+	}
+
+	slog.Info("Connected to NATS server", "host", host)
+	return nc, nil
+}
 
 // NATSRequest performs a NATS request-response with JSON marshaling.
 // It marshals the input, sends to the given subject, validates the response

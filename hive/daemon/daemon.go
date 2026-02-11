@@ -541,25 +541,11 @@ func (d *Daemon) Start() error {
 
 // connectNATS establishes a connection to the NATS server with reconnect handling.
 func (d *Daemon) connectNATS() error {
-	opts := []nats.Option{
-		nats.Token(d.config.NATS.ACL.Token),
-		nats.ReconnectWait(time.Second),
-		nats.MaxReconnects(-1), // Infinite reconnects
-		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
-			slog.Warn("NATS disconnected", "err", err)
-		}),
-		nats.ReconnectHandler(func(nc *nats.Conn) {
-			slog.Info("NATS reconnected", "url", nc.ConnectedUrl())
-		}),
-	}
-
-	var err error
-	d.natsConn, err = nats.Connect(d.config.NATS.Host, opts...)
+	nc, err := utils.ConnectNATS(d.config.NATS.Host, d.config.NATS.ACL.Token)
 	if err != nil {
 		return err
 	}
-
-	slog.Info("Connected to NATS server", "host", d.config.NATS.Host)
+	d.natsConn = nc
 	return nil
 }
 

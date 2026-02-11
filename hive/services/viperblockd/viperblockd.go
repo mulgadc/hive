@@ -38,6 +38,7 @@ type Config struct {
 	PluginPath     string
 	Debug          bool
 	NatsHost       string
+	NatsToken      string
 	MountedVolumes []MountedVolume
 	S3Host         string
 	Bucket         string
@@ -143,15 +144,13 @@ func (svc *Service) Reload() (err error) {
 func launchService(cfg *Config) (err error) {
 
 	// Connect to NATS
-	nc, err := nats.Connect(cfg.NatsHost)
-
+	nc, err := utils.ConnectNATS(cfg.NatsHost, cfg.NatsToken)
 	if err != nil {
-		slog.Error("Failed to connect to NATS:", "err", err)
+		slog.Error("Failed to connect to NATS", "err", err)
 		return err
 	}
 
-	// Subscribe to the viperblock.mount subject
-	slog.Info("Connected. Waiting for EBS events")
+	slog.Info("Waiting for EBS events")
 
 	if _, err := nc.QueueSubscribe("ebs.delete", "hive-workers", func(msg *nats.Msg) {
 		slog.Info("Received ebs.delete message", "data", string(msg.Data))
