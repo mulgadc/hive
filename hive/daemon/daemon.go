@@ -1003,38 +1003,10 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 		}
 
 		if _, ok := msg["event"]; ok {
-			slog.Info("QMP event", "event", msg["event"])
-
-			// Look up the instance to handle state transitions
-			d.Instances.Mu.Lock()
-			instance, found := d.Instances.VMS[instanceId]
-			d.Instances.Mu.Unlock()
-			if !found {
-				slog.Info("QMP event - instance not found", "id", instanceId)
-				continue
-			}
-
-			// Handle QMP events with state machine transitions.
-			// TransitionState validates the current state atomically under lock,
-			// so no pre-check is needed here.
-			// RESET indicates a reboot but the VM remains running — no state change.
-			switch msg["event"] {
-			case "STOP":
-				if err := d.TransitionState(instance, vm.StateStopped); err != nil {
-					slog.Error("QMP STOP event: transition failed", "instanceId", instanceId, "err", err)
-				}
-			case "RESUME":
-				if err := d.TransitionState(instance, vm.StateRunning); err != nil {
-					slog.Error("QMP RESUME event: transition failed", "instanceId", instanceId, "err", err)
-				}
-			case "POWERDOWN":
-				if err := d.TransitionState(instance, vm.StateStopping); err != nil {
-					slog.Error("QMP POWERDOWN event: transition failed", "instanceId", instanceId, "err", err)
-				}
-			case "RESET":
-				slog.Info("QMP RESET event", "instanceId", instanceId)
-			}
-
+			// QMP events are informational only — state transitions are driven
+			// by the command handlers that initiate the action, avoiding races
+			// between event-driven and command-driven transitions.
+			slog.Info("QMP event", "event", msg["event"], "instanceId", instanceId)
 			continue
 		}
 		if errObj, ok := msg["error"].(map[string]any); ok {
@@ -1339,6 +1311,11 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	// Step 8: Subscribe to start/stop/shutdown events
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	// Unsubscribe any existing subscription (e.g. from restoreInstances for stopped instances)
+	if existing, ok := d.natsSubscriptions[instance.ID]; ok {
+		_ = existing.Unsubscribe()
+	}
 
 	d.natsSubscriptions[instance.ID], err = d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
 
