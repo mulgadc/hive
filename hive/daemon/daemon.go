@@ -104,6 +104,9 @@ type Daemon struct {
 	// JetStream manager for KV state storage (nil if JetStream disabled)
 	jsManager *JetStreamManager
 
+	// Delay after QMP device_del before blockdev-del (default 1s, 0 in tests)
+	detachDelay time.Duration
+
 	mu sync.Mutex
 }
 
@@ -425,6 +428,7 @@ func NewDaemon(cfg *config.ClusterConfig) *Daemon {
 		Instances:         vm.Instances{VMS: make(map[string]*vm.VM)},
 		natsSubscriptions: make(map[string]*nats.Subscription),
 		startTime:         time.Now(),
+		detachDelay:       1 * time.Second,
 	}
 }
 

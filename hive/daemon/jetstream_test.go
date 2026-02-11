@@ -1,58 +1,17 @@
 package daemon
 
 import (
-	"os"
 	"testing"
-	"time"
 
 	"github.com/mulgadc/hive/hive/vm"
-	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// startTestNATSServerWithJetStream starts an embedded NATS server with JetStream enabled for testing
-func startTestNATSServerWithJetStream(t *testing.T) (*server.Server, string) {
-	// Create a temporary directory for JetStream storage
-	tmpDir, err := os.MkdirTemp("", "nats-js-test-*")
-	require.NoError(t, err, "Failed to create temp directory for JetStream")
-
-	t.Cleanup(func() {
-		os.RemoveAll(tmpDir)
-	})
-
-	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1, // Let NATS auto-allocate an available port
-		JetStream: true,
-		StoreDir:  tmpDir,
-		NoLog:     true,
-		NoSigs:    true,
-	}
-
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err, "Failed to create NATS server with JetStream")
-
-	// Start server in a goroutine
-	go ns.Start()
-
-	// Wait for server to be ready
-	if !ns.ReadyForConnections(5 * time.Second) {
-		t.Fatal("NATS server with JetStream failed to start")
-	}
-
-	// Get the actual URL that was assigned
-	url := ns.ClientURL()
-	t.Logf("Test NATS server with JetStream started at: %s", url)
-
-	return ns, url
-}
-
 // TestJetStreamManager_WriteAndLoadState tests round-trip write and load of instance state
 func TestJetStreamManager_WriteAndLoadState(t *testing.T) {
-	ns, natsURL := startTestNATSServerWithJetStream(t)
-	defer ns.Shutdown()
+	natsURL := sharedJSNATSURL
 
 	// Connect to NATS
 	nc, err := nats.Connect(natsURL)
@@ -105,8 +64,7 @@ func TestJetStreamManager_WriteAndLoadState(t *testing.T) {
 
 // TestJetStreamManager_LoadState_KeyNotFound tests that LoadState returns empty state when key doesn't exist
 func TestJetStreamManager_LoadState_KeyNotFound(t *testing.T) {
-	ns, natsURL := startTestNATSServerWithJetStream(t)
-	defer ns.Shutdown()
+	natsURL := sharedJSNATSURL
 
 	nc, err := nats.Connect(natsURL)
 	require.NoError(t, err)
@@ -127,8 +85,7 @@ func TestJetStreamManager_LoadState_KeyNotFound(t *testing.T) {
 
 // TestJetStreamManager_BucketCreation tests that InitKVBucket creates the bucket when it doesn't exist
 func TestJetStreamManager_BucketCreation(t *testing.T) {
-	ns, natsURL := startTestNATSServerWithJetStream(t)
-	defer ns.Shutdown()
+	natsURL := sharedJSNATSURL
 
 	nc, err := nats.Connect(natsURL)
 	require.NoError(t, err)
@@ -147,8 +104,7 @@ func TestJetStreamManager_BucketCreation(t *testing.T) {
 
 // TestJetStreamManager_BucketReconnection tests that InitKVBucket connects to existing bucket
 func TestJetStreamManager_BucketReconnection(t *testing.T) {
-	ns, natsURL := startTestNATSServerWithJetStream(t)
-	defer ns.Shutdown()
+	natsURL := sharedJSNATSURL
 
 	// First connection - create the bucket
 	nc1, err := nats.Connect(natsURL)
@@ -195,8 +151,7 @@ func TestJetStreamManager_BucketReconnection(t *testing.T) {
 
 // TestJetStreamManager_DeleteState tests deleting state from the KV store
 func TestJetStreamManager_DeleteState(t *testing.T) {
-	ns, natsURL := startTestNATSServerWithJetStream(t)
-	defer ns.Shutdown()
+	natsURL := sharedJSNATSURL
 
 	nc, err := nats.Connect(natsURL)
 	require.NoError(t, err)
@@ -238,8 +193,7 @@ func TestJetStreamManager_DeleteState(t *testing.T) {
 
 // TestJetStreamManager_DeleteState_NonExistent tests deleting state that doesn't exist
 func TestJetStreamManager_DeleteState_NonExistent(t *testing.T) {
-	ns, natsURL := startTestNATSServerWithJetStream(t)
-	defer ns.Shutdown()
+	natsURL := sharedJSNATSURL
 
 	nc, err := nats.Connect(natsURL)
 	require.NoError(t, err)
@@ -258,8 +212,7 @@ func TestJetStreamManager_DeleteState_NonExistent(t *testing.T) {
 
 // TestJetStreamManager_WriteState_UpdateExisting tests that writing state updates existing entry
 func TestJetStreamManager_WriteState_UpdateExisting(t *testing.T) {
-	ns, natsURL := startTestNATSServerWithJetStream(t)
-	defer ns.Shutdown()
+	natsURL := sharedJSNATSURL
 
 	nc, err := nats.Connect(natsURL)
 	require.NoError(t, err)
@@ -311,8 +264,7 @@ func TestJetStreamManager_WriteState_UpdateExisting(t *testing.T) {
 
 // TestJetStreamManager_MultipleNodes tests storing state for multiple nodes
 func TestJetStreamManager_MultipleNodes(t *testing.T) {
-	ns, natsURL := startTestNATSServerWithJetStream(t)
-	defer ns.Shutdown()
+	natsURL := sharedJSNATSURL
 
 	nc, err := nats.Connect(natsURL)
 	require.NoError(t, err)
@@ -363,8 +315,7 @@ func TestJetStreamManager_MultipleNodes(t *testing.T) {
 
 // TestJetStreamManager_KVNotInitialized tests error handling when KV is not initialized
 func TestJetStreamManager_KVNotInitialized(t *testing.T) {
-	ns, natsURL := startTestNATSServerWithJetStream(t)
-	defer ns.Shutdown()
+	natsURL := sharedJSNATSURL
 
 	nc, err := nats.Connect(natsURL)
 	require.NoError(t, err)
@@ -387,8 +338,7 @@ func TestJetStreamManager_KVNotInitialized(t *testing.T) {
 
 // TestJetStreamManager_UpdateReplicas tests updating replica count for the KV bucket
 func TestJetStreamManager_UpdateReplicas(t *testing.T) {
-	ns, natsURL := startTestNATSServerWithJetStream(t)
-	defer ns.Shutdown()
+	natsURL := sharedJSNATSURL
 
 	nc, err := nats.Connect(natsURL)
 	require.NoError(t, err)

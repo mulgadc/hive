@@ -20,41 +20,11 @@ import (
 	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/vm"
-	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// startTestNATSServer starts an embedded NATS server for testing
-// Using port -1 allows NATS to automatically allocate an available port
-func startTestNATSServer(t *testing.T) (*server.Server, string) {
-	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1, // Let NATS auto-allocate an available port
-		JetStream: false,
-		NoLog:     true,
-		NoSigs:    true,
-	}
-
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err, "Failed to create NATS server")
-
-	// Start server in a goroutine
-	go ns.Start()
-
-	// Wait for server to be ready
-	if !ns.ReadyForConnections(5 * time.Second) {
-		t.Fatal("NATS server failed to start")
-	}
-
-	// Get the actual URL that was assigned
-	url := ns.ClientURL()
-	t.Logf("Test NATS server started at: %s", url)
-
-	return ns, url
-}
 
 // createTestDaemon creates a test daemon instance with minimal configuration
 func createTestDaemon(t *testing.T, natsURL string) *Daemon {
@@ -102,6 +72,7 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 	require.NoError(t, err, "Failed to connect to NATS")
 
 	daemon.natsConn = nc
+	daemon.detachDelay = 0 // Skip sleep in tests
 
 	// Initialize services (needed for handler tests)
 	daemon.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(cfg, daemon.resourceMgr.instanceTypes, nc, &daemon.Instances, objectstore.NewMemoryObjectStore())
@@ -236,8 +207,7 @@ func TestHandleEC2RunInstances_MessageParsing(t *testing.T) {
 			}
 
 			// Start test NATS server
-			ns, natsURL := startTestNATSServer(t)
-			defer ns.Shutdown()
+			natsURL := sharedNATSURL
 
 			// Create test daemon
 			daemon := createTestDaemon(t, natsURL)
@@ -318,8 +288,7 @@ func TestHandleEC2RunInstances_ResourceManagement(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ns, natsURL := startTestNATSServer(t)
-			defer ns.Shutdown()
+			natsURL := sharedNATSURL
 
 			daemon := createTestDaemon(t, natsURL)
 
@@ -609,8 +578,7 @@ func TestGetAvailableInstanceTypeInfos_ResourceFiltering(t *testing.T) {
 
 // TestHandleEC2DescribeInstanceTypes tests the DescribeInstanceTypes handler
 func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
-	ns, natsURL := startTestNATSServer(t)
-	defer ns.Shutdown()
+	natsURL := sharedNATSURL
 
 	daemon := createTestDaemon(t, natsURL)
 
@@ -916,27 +884,7 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 
 // TestDaemon_BootAllocation verifies that resources are correctly reconstructed on startup
 func TestDaemon_BootAllocation(t *testing.T) {
-	// Start NATS server with JetStream
-	jsTmpDir, err := os.MkdirTemp("", "nats-js-boot-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(jsTmpDir)
-
-	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		JetStream: true,
-		StoreDir:  jsTmpDir,
-		NoLog:     true,
-		NoSigs:    true,
-	}
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err)
-	go ns.Start()
-	if !ns.ReadyForConnections(5 * time.Second) {
-		t.Fatal("NATS server with JetStream failed to start")
-	}
-	defer ns.Shutdown()
-	natsURL := ns.ClientURL()
+	natsURL := sharedJSNATSURL
 
 	// Create daemon temp directory
 	tmpDir, err := os.MkdirTemp("", "hive-daemon-boot-test-*")
@@ -1193,8 +1141,7 @@ func TestCanAllocate_CountEdgeCases(t *testing.T) {
 
 // TestDescribeInstances_ReservationGrouping tests that instances are grouped by reservation ID
 func TestDescribeInstances_ReservationGrouping(t *testing.T) {
-	ns, natsURL := startTestNATSServer(t)
-	defer ns.Shutdown()
+	natsURL := sharedNATSURL
 
 	daemon := createTestDaemon(t, natsURL)
 
@@ -1382,8 +1329,7 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 
 // TestRunInstances_CountValidation tests MinCount/MaxCount validation scenarios
 func TestRunInstances_CountValidation(t *testing.T) {
-	ns, natsURL := startTestNATSServer(t)
-	defer ns.Shutdown()
+	natsURL := sharedNATSURL
 
 	daemon := createTestDaemon(t, natsURL)
 
@@ -1621,8 +1567,7 @@ func TestGenerateVolumes_DeleteOnTermination_FromBlockDeviceMapping(t *testing.T
 // correctly handles DeleteOnTermination for each volume type.
 // Uses embedded NATS with mock subscribers to verify NATS messages.
 func TestStopInstance_DeleteOnTermination_VolumeDeletion(t *testing.T) {
-	ns, natsURL := startTestNATSServer(t)
-	defer ns.Shutdown()
+	natsURL := sharedNATSURL
 
 	daemon := createTestDaemon(t, natsURL)
 
@@ -1720,8 +1665,7 @@ func TestStopInstance_DeleteOnTermination_VolumeDeletion(t *testing.T) {
 // TestStopInstance_DeleteOnTermination_False_SkipsVolumeDeletion verifies that
 // volumes with DeleteOnTermination=false are NOT deleted during termination.
 func TestStopInstance_DeleteOnTermination_False_SkipsVolumeDeletion(t *testing.T) {
-	ns, natsURL := startTestNATSServer(t)
-	defer ns.Shutdown()
+	natsURL := sharedNATSURL
 
 	daemon := createTestDaemon(t, natsURL)
 
@@ -1819,8 +1763,7 @@ func TestStopInstance_DeleteOnTermination_False_SkipsVolumeDeletion(t *testing.T
 // TestStopInstance_NoDelete_OnStop verifies that volumes are NOT deleted during
 // a regular stop (non-termination), regardless of DeleteOnTermination flag.
 func TestStopInstance_NoDelete_OnStop(t *testing.T) {
-	ns, natsURL := startTestNATSServer(t)
-	defer ns.Shutdown()
+	natsURL := sharedNATSURL
 
 	daemon := createTestDaemon(t, natsURL)
 
@@ -1976,8 +1919,7 @@ func TestNextAvailableDevice(t *testing.T) {
 
 // TestHandleEC2Events_AttachVolume tests the attach-volume handler in handleEC2Events
 func TestHandleEC2Events_AttachVolume(t *testing.T) {
-	ns, natsURL := startTestNATSServer(t)
-	defer ns.Shutdown()
+	natsURL := sharedNATSURL
 
 	daemon := createTestDaemon(t, natsURL)
 
@@ -2106,8 +2048,7 @@ func TestEBSRequest_JSON_Serialization(t *testing.T) {
 
 // TestHandleEC2Events_DetachVolume tests the detach-volume handler in handleEC2Events
 func TestHandleEC2Events_DetachVolume(t *testing.T) {
-	ns, natsURL := startTestNATSServer(t)
-	defer ns.Shutdown()
+	natsURL := sharedNATSURL
 
 	daemon := createTestDaemon(t, natsURL)
 
@@ -2433,8 +2374,7 @@ func newMockQMPClient(t *testing.T, responseFunc func(cmd qmp.QMPCommand) map[st
 // TestDetachVolume_SuccessPath tests the full happy-path detach including QMP commands
 // and state cleanup using a mock QMP server.
 func TestDetachVolume_SuccessPath(t *testing.T) {
-	ns, natsURL := startTestNATSServer(t)
-	defer ns.Shutdown()
+	natsURL := sharedNATSURL
 
 	daemon := createTestDaemon(t, natsURL)
 
@@ -2575,8 +2515,7 @@ func TestDetachVolume_SuccessPath(t *testing.T) {
 
 // TestDetachVolume_ForceFlag tests that force=true continues past device_del failure
 func TestDetachVolume_ForceFlag(t *testing.T) {
-	ns, natsURL := startTestNATSServer(t)
-	defer ns.Shutdown()
+	natsURL := sharedNATSURL
 
 	daemon := createTestDaemon(t, natsURL)
 
@@ -2692,8 +2631,7 @@ func TestDetachVolume_ForceFlag(t *testing.T) {
 // TestDetachVolume_BlockdevDelFailure tests that when blockdev-del fails,
 // state is left intact to prevent double-attach and VM crashes.
 func TestDetachVolume_BlockdevDelFailure(t *testing.T) {
-	ns, natsURL := startTestNATSServer(t)
-	defer ns.Shutdown()
+	natsURL := sharedNATSURL
 
 	daemon := createTestDaemon(t, natsURL)
 
@@ -2805,8 +2743,7 @@ func TestDetachVolume_BlockdevDelFailure(t *testing.T) {
 
 // TestDetachVolume_SuccessWithDeviceMatch tests detach with correct --device cross-check
 func TestDetachVolume_SuccessWithDeviceMatch(t *testing.T) {
-	ns, natsURL := startTestNATSServer(t)
-	defer ns.Shutdown()
+	natsURL := sharedNATSURL
 
 	daemon := createTestDaemon(t, natsURL)
 
@@ -2890,8 +2827,7 @@ func TestDetachVolume_SuccessWithDeviceMatch(t *testing.T) {
 // that already has a stale EBSRequest entry (e.g. from a stop/start cycle)
 // replaces it rather than creating a duplicate.
 func TestAttachVolume_ReplacesStaleEBSRequest(t *testing.T) {
-	ns, natsURL := startTestNATSServer(t)
-	defer ns.Shutdown()
+	natsURL := sharedNATSURL
 
 	daemon := createTestDaemon(t, natsURL)
 
@@ -3333,4 +3269,156 @@ func TestNewDaemon_WalDirPreservedIfSet(t *testing.T) {
 
 	d := NewDaemon(cfg)
 	assert.Equal(t, "/fast-ssd/wal", d.config.WalDir)
+}
+
+// TestMarkInstanceFailed verifies that markInstanceFailed sets the StateReason and
+// transitions the instance to StateShuttingDown.
+func TestMarkInstanceFailed(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon := createTestDaemon(t, natsURL)
+
+	instanceID := "i-test-mark-failed"
+	ec2Instance := &ec2.Instance{}
+	ec2Instance.SetInstanceId(instanceID)
+
+	instance := &vm.VM{
+		ID:           instanceID,
+		InstanceType: getTestInstanceType(),
+		Status:       vm.StatePending,
+		Instance:     ec2Instance,
+		QMPClient:    &qmp.QMPClient{},
+	}
+	daemon.Instances.VMS[instanceID] = instance
+
+	daemon.markInstanceFailed(instance, "volume_preparation_failed")
+
+	daemon.Instances.Mu.Lock()
+	defer daemon.Instances.Mu.Unlock()
+
+	// Verify state transitioned to shutting-down
+	assert.Equal(t, vm.StateShuttingDown, instance.Status)
+
+	// Verify StateReason was set
+	require.NotNil(t, instance.Instance.StateReason)
+	assert.Equal(t, "Server.InternalError", *instance.Instance.StateReason.Code)
+	assert.Equal(t, "volume_preparation_failed", *instance.Instance.StateReason.Message)
+}
+
+// TestMarkInstanceFailed_NilInstance verifies that markInstanceFailed handles
+// a VM with no ec2.Instance (Instance == nil) gracefully.
+func TestMarkInstanceFailed_NilInstance(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon := createTestDaemon(t, natsURL)
+
+	instanceID := "i-test-mark-failed-nil"
+	instance := &vm.VM{
+		ID:           instanceID,
+		InstanceType: getTestInstanceType(),
+		Status:       vm.StatePending,
+		Instance:     nil, // no ec2.Instance
+		QMPClient:    &qmp.QMPClient{},
+	}
+	daemon.Instances.VMS[instanceID] = instance
+
+	// Should not panic
+	daemon.markInstanceFailed(instance, "test_failure")
+
+	daemon.Instances.Mu.Lock()
+	defer daemon.Instances.Mu.Unlock()
+	assert.Equal(t, vm.StateShuttingDown, instance.Status)
+}
+
+// TestRollbackEBSMount_Success verifies that rollbackEBSMount sends an ebs.unmount
+// request and handles a successful unmount response.
+func TestRollbackEBSMount_Success(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon := createTestDaemon(t, natsURL)
+
+	unmountCalled := make(chan string, 1)
+
+	// Mock ebs.unmount subscriber that returns success
+	sub, err := daemon.natsConn.Subscribe("ebs.unmount", func(msg *nats.Msg) {
+		var req config.EBSRequest
+		json.Unmarshal(msg.Data, &req)
+		unmountCalled <- req.Name
+		resp := config.EBSUnMountResponse{Volume: req.Name, Mounted: false}
+		data, _ := json.Marshal(resp)
+		msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	ebsReq := config.EBSRequest{
+		Name:       "vol-rollback-test",
+		DeviceName: "/dev/sdf",
+	}
+
+	daemon.rollbackEBSMount(ebsReq)
+
+	select {
+	case volName := <-unmountCalled:
+		assert.Equal(t, "vol-rollback-test", volName)
+	case <-time.After(2 * time.Second):
+		t.Fatal("ebs.unmount was not called")
+	}
+}
+
+// TestRollbackEBSMount_UnmountError verifies that rollbackEBSMount handles
+// an error response from ebs.unmount gracefully (no panic, just logs).
+func TestRollbackEBSMount_UnmountError(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon := createTestDaemon(t, natsURL)
+
+	// Mock ebs.unmount subscriber that returns an error
+	sub, err := daemon.natsConn.Subscribe("ebs.unmount", func(msg *nats.Msg) {
+		resp := config.EBSUnMountResponse{Error: "unmount failed: device busy"}
+		data, _ := json.Marshal(resp)
+		msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	ebsReq := config.EBSRequest{Name: "vol-rollback-err"}
+
+	// Should not panic — errors are logged but not propagated
+	daemon.rollbackEBSMount(ebsReq)
+}
+
+// TestRollbackEBSMount_StillMounted verifies that rollbackEBSMount handles
+// the case where the unmount response says the volume is still mounted.
+func TestRollbackEBSMount_StillMounted(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon := createTestDaemon(t, natsURL)
+
+	sub, err := daemon.natsConn.Subscribe("ebs.unmount", func(msg *nats.Msg) {
+		resp := config.EBSUnMountResponse{Mounted: true} // still mounted
+		data, _ := json.Marshal(resp)
+		msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	ebsReq := config.EBSRequest{Name: "vol-still-mounted"}
+
+	// Should not panic
+	daemon.rollbackEBSMount(ebsReq)
+}
+
+// TestRollbackEBSMount_NATSTimeout verifies that rollbackEBSMount handles
+// NATS request timeout gracefully (no subscriber on ebs.unmount).
+func TestRollbackEBSMount_NATSTimeout(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon := createTestDaemon(t, natsURL)
+
+	// No ebs.unmount subscriber — will timeout
+	ebsReq := config.EBSRequest{Name: "vol-timeout"}
+
+	// Should not panic, just log the timeout
+	daemon.rollbackEBSMount(ebsReq)
 }

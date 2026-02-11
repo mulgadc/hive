@@ -392,7 +392,7 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command qmp.Command, instance
 	}
 
 	// Brief pause for guest to acknowledge PCI removal
-	time.Sleep(1 * time.Second)
+	time.Sleep(d.detachDelay)
 
 	// Phase 2: QMP blockdev-del (remove block node)
 	_, blockdevErr := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{
