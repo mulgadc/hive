@@ -651,6 +651,16 @@ if [ "$CUSTOM_IMAGE_NAME" != "e2e-custom-ami" ]; then
 fi
 echo "Custom AMI verified (Name=$CUSTOM_IMAGE_NAME, State=$CUSTOM_IMAGE_STATE)"
 
+# Extract the backing snapshot ID from the custom AMI config in Predastore
+# (needed later to clean up before termination, so DeleteOnTermination can work)
+CUSTOM_AMI_CONFIG=$($AWS_S3 cp "s3://predastore/$CUSTOM_AMI_ID/config.json" - 2>/dev/null || echo "{}")
+CUSTOM_AMI_SNAP_ID=$(echo "$CUSTOM_AMI_CONFIG" | jq -r '.VolumeConfig.AMIMetadata.SnapshotID // empty')
+if [ -n "$CUSTOM_AMI_SNAP_ID" ]; then
+    echo "Custom AMI backing snapshot: $CUSTOM_AMI_SNAP_ID"
+else
+    echo "WARNING: Could not extract backing snapshot ID from custom AMI config"
+fi
+
 echo "CreateImage lifecycle test passed"
 
 # Phase 6: Tag Management
@@ -916,6 +926,14 @@ echo "Phase 9: Terminate and Verify Cleanup"
 # Save root volume ID before termination for cleanup verification
 ROOT_VOLUME_ID="$VOLUME_ID"
 echo "Root volume to verify cleanup: $ROOT_VOLUME_ID"
+
+# Clean up the CreateImage backing snapshot so DeleteOnTermination can delete the root volume.
+# checkVolumeHasNoSnapshots() correctly blocks volume deletion when snapshots reference it.
+if [ -n "$CUSTOM_AMI_SNAP_ID" ]; then
+    echo "Deleting CreateImage backing snapshot $CUSTOM_AMI_SNAP_ID before termination..."
+    $AWS_EC2 delete-snapshot --snapshot-id "$CUSTOM_AMI_SNAP_ID"
+    echo "CreateImage snapshot deleted"
+fi
 
 # Terminate instance (terminate-instances) and verify termination (describe-instances)
 echo "Terminating instance..."

@@ -69,6 +69,7 @@
 - `create-image` (from running instance, with name and description)
 - Verify returned ImageId is non-empty
 - `describe-images` (verify custom AMI name and state)
+- Extract backing snapshot ID from Predastore config (for cleanup before termination)
 
 ### Phase 6: Tag Management
 - `create-tags` (3 tags on instance)
@@ -108,6 +109,7 @@
 - Unsupported Action via raw HTTP (expect `InvalidAction` or error response)
 
 ### Phase 9: Terminate and Verify Cleanup
+- `delete-snapshot` (CreateImage backing snapshot, so DeleteOnTermination is not blocked)
 - `terminate-instances` (poll -> terminated)
 
 ### Phase 9a: Volume Cleanup Verification
