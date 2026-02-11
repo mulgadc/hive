@@ -1,38 +1,47 @@
 package gateway_ec2_key
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/awserrors"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestValidateCreateKeyPairInput(t *testing.T) {
 	tests := []struct {
-		name  string
-		input *ec2.CreateKeyPairInput
-		want  error
+		name    string
+		input   *ec2.CreateKeyPairInput
+		wantErr bool
+		errMsg  string
 	}{
 		{
-			name:  "NilInput",
-			input: nil,
-			want:  errors.New(awserrors.ErrorMissingParameter),
+			name:    "NilInput",
+			input:   nil,
+			wantErr: true,
+			errMsg:  awserrors.ErrorMissingParameter,
 		},
 		{
 			name: "MissingKeyName",
 			input: &ec2.CreateKeyPairInput{
 				KeyName: aws.String(""),
 			},
-			want: errors.New(awserrors.ErrorMissingParameter),
+			wantErr: true,
+			errMsg:  awserrors.ErrorMissingParameter,
+		},
+		{
+			name:    "NilKeyName",
+			input:   &ec2.CreateKeyPairInput{},
+			wantErr: true,
+			errMsg:  awserrors.ErrorMissingParameter,
 		},
 		{
 			name: "ValidInput",
 			input: &ec2.CreateKeyPairInput{
 				KeyName: aws.String("test-key"),
 			},
-			want: nil,
+			wantErr: false,
 		},
 		{
 			name: "ValidInputWithKeyType",
@@ -40,15 +49,20 @@ func TestValidateCreateKeyPairInput(t *testing.T) {
 				KeyName: aws.String("test-key"),
 				KeyType: aws.String("rsa"),
 			},
-			want: nil,
+			wantErr: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Skip this test as CreateKeyPair now requires NATS connection
-			// This is covered by integration tests
-			t.Skip("Skipping - CreateKeyPair now requires NATS connection. See TestEC2ProcessCreateKeyPair for handler tests.")
+			err := ValidateCreateKeyPairInput(tt.input)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				assert.Equal(t, tt.errMsg, err.Error())
+			} else {
+				assert.NoError(t, err)
+			}
 		})
 	}
 }
