@@ -19,10 +19,10 @@ import (
 	handlers_ec2_volume "github.com/mulgadc/hive/hive/handlers/ec2/volume"
 	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/hive/hive/qmp"
-	"github.com/pelletier/go-toml/v2"
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
