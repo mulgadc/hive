@@ -621,8 +621,17 @@ func (d *Daemon) restoreInstances() {
 			continue
 		}
 
-		if instance.Attributes.StopInstance {
-			slog.Info("Instance flagged as user initiated stop, skipping", "instance", instance.ID)
+		if instance.Attributes.StopInstance || instance.Status == vm.StateStopped {
+			slog.Info("Instance is stopped, subscribing to NATS for start commands", "instance", instance.ID)
+			d.mu.Lock()
+			sub, err := d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), "hive-events", d.handleEC2Events)
+			if err != nil {
+				d.mu.Unlock()
+				slog.Error("Failed to subscribe stopped instance to NATS", "instance", instance.ID, "err", err)
+				continue
+			}
+			d.natsSubscriptions[instance.ID] = sub
+			d.mu.Unlock()
 			continue
 		}
 
@@ -1162,12 +1171,15 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 	// For stop operations, keep the subscription so we can receive start commands
 	if deleteVolume {
 		for _, instance := range instances {
-			slog.Info("Unsubscribing from NATS subject", "instance", instance.ID)
-			if err := d.natsSubscriptions[fmt.Sprintf("ec2.cmd.%s", instance.ID)].Unsubscribe(); err != nil {
-				slog.Error("Failed to unsubscribe from NATS subject", "instance", instance.ID, "err", err)
+			d.mu.Lock()
+			if sub, ok := d.natsSubscriptions[instance.ID]; ok {
+				slog.Info("Unsubscribing from NATS subject", "instance", instance.ID)
+				if err := sub.Unsubscribe(); err != nil {
+					slog.Error("Failed to unsubscribe from NATS subject", "instance", instance.ID, "err", err)
+				}
+				delete(d.natsSubscriptions, instance.ID)
 			}
-			// TODO: Remove redundant subscription if not used
-			//d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)].Unsubscribe()
+			d.mu.Unlock()
 		}
 	}
 	return nil
