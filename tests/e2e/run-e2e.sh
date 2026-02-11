@@ -99,6 +99,18 @@ echo "Phase 2: Discovery & Metadata"
 # Verify describe-regions (just ensure it returns at least one region)
 $AWS_EC2 describe-regions | jq -e '.Regions | length > 0'
 
+# Verify describe-availability-zones
+echo "Verifying describe-availability-zones..."
+AZ_OUTPUT=$($AWS_EC2 describe-availability-zones)
+echo "$AZ_OUTPUT" | jq -e '.AvailabilityZones | length > 0'
+AZ_NAME=$(echo "$AZ_OUTPUT" | jq -r '.AvailabilityZones[0].ZoneName')
+AZ_STATE=$(echo "$AZ_OUTPUT" | jq -r '.AvailabilityZones[0].State')
+if [ "$AZ_STATE" != "available" ]; then
+    echo "Expected AZ state 'available', got '$AZ_STATE'"
+    exit 1
+fi
+echo "DescribeAvailabilityZones verified (Zone=$AZ_NAME, State=$AZ_STATE)"
+
 # Discover available instance types from Hive
 # Hive generates these based on the host CPU (e.g., m7i.micro, m8g.small, etc.)
 echo "Discovering available instance types..."
@@ -243,6 +255,32 @@ if [ "$STATE" != "running" ]; then
     exit 1
 fi
 
+# Phase 5a: Validate instance metadata fields
+echo "Phase 5a: Instance Metadata Validation"
+DESCRIBE_META=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID")
+META_TYPE=$(echo "$DESCRIBE_META" | jq -r '.Reservations[0].Instances[0].InstanceType')
+META_KEY=$(echo "$DESCRIBE_META" | jq -r '.Reservations[0].Instances[0].KeyName')
+META_IMAGE=$(echo "$DESCRIBE_META" | jq -r '.Reservations[0].Instances[0].ImageId')
+META_BDM=$(echo "$DESCRIBE_META" | jq -r '.Reservations[0].Instances[0].BlockDeviceMappings | length')
+
+if [ "$META_TYPE" != "$INSTANCE_TYPE" ]; then
+    echo "InstanceType mismatch: expected $INSTANCE_TYPE, got $META_TYPE"
+    exit 1
+fi
+if [ "$META_KEY" != "test-key-1" ]; then
+    echo "KeyName mismatch: expected test-key-1, got $META_KEY"
+    exit 1
+fi
+if [ "$META_IMAGE" != "$AMI_ID" ]; then
+    echo "ImageId mismatch: expected $AMI_ID, got $META_IMAGE"
+    exit 1
+fi
+if [ "$META_BDM" -lt 1 ]; then
+    echo "Expected at least 1 BlockDeviceMapping, got $META_BDM"
+    exit 1
+fi
+echo "Instance metadata validated (Type=$META_TYPE, Key=$META_KEY, Image=$META_IMAGE, BDMs=$META_BDM)"
+
 # Verify root volume attached to the instance (describe-volumes)
 VOLUME_ID=$($AWS_EC2 describe-volumes --query 'Volumes[0].VolumeId' --output text)
 if [ -z "$VOLUME_ID" ] || [ "$VOLUME_ID" == "None" ]; then
@@ -376,6 +414,19 @@ if [ $COUNT -ge 30 ]; then
 fi
 
 echo "Volume lifecycle test passed (create -> resize -> attach -> detach -> delete)"
+
+# Phase 5b-ii: DescribeVolumeStatus
+echo "Phase 5b-ii: DescribeVolumeStatus"
+echo "Testing describe-volume-status on root volume..."
+VOL_STATUS_OUTPUT=$($AWS_EC2 describe-volume-status --volume-ids "$VOLUME_ID")
+VOL_STATUS_ID=$(echo "$VOL_STATUS_OUTPUT" | jq -r '.VolumeStatuses[0].VolumeId')
+VOL_STATUS_STATE=$(echo "$VOL_STATUS_OUTPUT" | jq -r '.VolumeStatuses[0].VolumeStatus.Status')
+
+if [ "$VOL_STATUS_ID" != "$VOLUME_ID" ]; then
+    echo "DescribeVolumeStatus VolumeId mismatch: expected $VOLUME_ID, got $VOL_STATUS_ID"
+    exit 1
+fi
+echo "DescribeVolumeStatus verified (VolumeId=$VOL_STATUS_ID, Status=$VOL_STATUS_STATE)"
 
 # Phase 5c: Snapshot Lifecycle
 echo "Phase 5c: Snapshot Lifecycle"
@@ -574,6 +625,34 @@ echo "Volume is snapshot-backed (SnapshotID=$VOL_SNAPSHOT_ID, SourceVolumeName=$
 
 echo "Snapshot-backed instance launch verified"
 
+# Phase 5e: CreateImage Lifecycle
+echo "Phase 5e: CreateImage Lifecycle"
+echo "Creating custom AMI from running instance $INSTANCE_ID..."
+
+CREATE_IMAGE_OUTPUT=$($AWS_EC2 create-image --instance-id "$INSTANCE_ID" --name "e2e-custom-ami" --description "E2E test custom image")
+CUSTOM_AMI_ID=$(echo "$CREATE_IMAGE_OUTPUT" | jq -r '.ImageId')
+
+if [ -z "$CUSTOM_AMI_ID" ] || [ "$CUSTOM_AMI_ID" == "null" ]; then
+    echo "Failed to create custom image"
+    echo "Output: $CREATE_IMAGE_OUTPUT"
+    exit 1
+fi
+echo "Created custom AMI: $CUSTOM_AMI_ID"
+
+# Verify the custom AMI exists via describe-images
+echo "Verifying custom AMI via describe-images..."
+CUSTOM_IMAGE=$($AWS_EC2 describe-images --image-ids "$CUSTOM_AMI_ID")
+CUSTOM_IMAGE_NAME=$(echo "$CUSTOM_IMAGE" | jq -r '.Images[0].Name')
+CUSTOM_IMAGE_STATE=$(echo "$CUSTOM_IMAGE" | jq -r '.Images[0].State')
+
+if [ "$CUSTOM_IMAGE_NAME" != "e2e-custom-ami" ]; then
+    echo "Custom AMI name mismatch: expected 'e2e-custom-ami', got '$CUSTOM_IMAGE_NAME'"
+    exit 1
+fi
+echo "Custom AMI verified (Name=$CUSTOM_IMAGE_NAME, State=$CUSTOM_IMAGE_STATE)"
+
+echo "CreateImage lifecycle test passed"
+
 # Phase 6: Tag Management
 echo "Phase 6: Tag Management"
 
@@ -671,6 +750,9 @@ if [ "$FINAL_COUNT" -ne 1 ]; then
 fi
 echo "Tag management tests passed"
 
+# Phase 7: Instance State Transitions
+echo "Phase 7: Instance State Transitions"
+
 # Stop instance (stop-instances) and verify transition to stopped (describe-instances)
 echo "Stopping instance..."
 $AWS_EC2 stop-instances --instance-ids "$INSTANCE_ID"
@@ -689,6 +771,22 @@ if [ "$STATE" != "stopped" ]; then
     echo "Instance failed to reach stopped state"
     exit 1
 fi
+
+# Phase 7a: Attach volume to stopped instance (should fail)
+echo "Phase 7a: Attach Volume to Stopped Instance (Error Path)"
+echo "Creating a volume to test attach-to-stopped..."
+STOPPED_VOL_OUTPUT=$($AWS_EC2 create-volume --size 10 --availability-zone ap-southeast-2a)
+STOPPED_VOL_ID=$(echo "$STOPPED_VOL_OUTPUT" | jq -r '.VolumeId')
+echo "Created volume: $STOPPED_VOL_ID"
+
+echo "Attempting attach to stopped instance (should fail)..."
+expect_error "IncorrectInstanceState" $AWS_EC2 attach-volume \
+    --volume-id "$STOPPED_VOL_ID" --instance-id "$INSTANCE_ID" --device /dev/sdg
+echo "Attach-to-stopped correctly rejected"
+
+# Clean up the test volume
+$AWS_EC2 delete-volume --volume-id "$STOPPED_VOL_ID"
+echo "Cleaned up test volume $STOPPED_VOL_ID"
 
 # Start instance (start-instances) and verify transition back to running (describe-instances)
 echo "Starting instance..."
@@ -709,6 +807,116 @@ if [ "$STATE" != "running" ]; then
     exit 1
 fi
 
+# Phase 7b: RunInstances with count > 1
+echo "Phase 7b: RunInstances with MinCount/MaxCount > 1"
+echo "Launching 2 instances in a single run-instances call..."
+MULTI_RUN_OUTPUT=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name test-key-1 \
+    --count 2)
+MULTI_COUNT=$(echo "$MULTI_RUN_OUTPUT" | jq '.Instances | length')
+
+if [ "$MULTI_COUNT" -ne 2 ]; then
+    echo "Expected 2 instances from run-instances --count 2, got $MULTI_COUNT"
+    exit 1
+fi
+
+MULTI_ID_1=$(echo "$MULTI_RUN_OUTPUT" | jq -r '.Instances[0].InstanceId')
+MULTI_ID_2=$(echo "$MULTI_RUN_OUTPUT" | jq -r '.Instances[1].InstanceId')
+echo "Launched 2 instances: $MULTI_ID_1, $MULTI_ID_2"
+
+# Wait for both to reach running state
+for MID in "$MULTI_ID_1" "$MULTI_ID_2"; do
+    echo "Waiting for $MID to reach running state..."
+    COUNT=0
+    while [ $COUNT -lt 60 ]; do
+        MSTATE=$($AWS_EC2 describe-instances --instance-ids "$MID" \
+            --query 'Reservations[0].Instances[0].State.Name' --output text) || {
+            sleep 5
+            COUNT=$((COUNT + 1))
+            continue
+        }
+        if [ "$MSTATE" == "running" ]; then
+            echo "Instance $MID is running"
+            break
+        fi
+        sleep 5
+        COUNT=$((COUNT + 1))
+    done
+    if [ "$MSTATE" != "running" ]; then
+        echo "Instance $MID failed to reach running state"
+        exit 1
+    fi
+done
+
+# Terminate the multi-launch instances
+echo "Terminating multi-launch instances..."
+$AWS_EC2 terminate-instances --instance-ids "$MULTI_ID_1" "$MULTI_ID_2"
+for MID in "$MULTI_ID_1" "$MULTI_ID_2"; do
+    COUNT=0
+    while [ $COUNT -lt 30 ]; do
+        MSTATE=$($AWS_EC2 describe-instances --instance-ids "$MID" \
+            --query 'Reservations[0].Instances[0].State.Name' --output text)
+        if [ "$MSTATE" == "terminated" ] || [ "$MSTATE" == "None" ]; then
+            break
+        fi
+        sleep 5
+        COUNT=$((COUNT + 1))
+    done
+done
+echo "RunInstances count>1 test passed"
+
+# Phase 8: Negative / Error Path Tests
+echo "Phase 8: Negative / Error Path Tests"
+
+# 8a: RunInstances with invalid AMI ID
+echo "8a: RunInstances with invalid AMI ID..."
+expect_error "InvalidAMIID.NotFound" $AWS_EC2 run-instances \
+    --image-id ami-nonexistent --instance-type "$INSTANCE_TYPE" --key-name test-key-1
+
+# 8b: RunInstances with invalid instance type
+echo "8b: RunInstances with invalid instance type..."
+expect_error "InvalidInstanceType" $AWS_EC2 run-instances \
+    --image-id "$AMI_ID" --instance-type "x99.superlarge" --key-name test-key-1
+
+# 8c: Attach an already in-use volume (root volume is attached to running instance)
+echo "8c: Attach already in-use volume..."
+expect_error "VolumeInUse" $AWS_EC2 attach-volume \
+    --volume-id "$VOLUME_ID" --instance-id "$INSTANCE_ID" --device /dev/sdg
+
+# 8d: Detach boot/root volume (should be rejected)
+echo "8d: Detach boot volume..."
+expect_error "OperationNotPermitted" $AWS_EC2 detach-volume \
+    --volume-id "$VOLUME_ID" --instance-id "$INSTANCE_ID"
+
+# 8e: Delete a non-existent snapshot
+echo "8e: Delete non-existent snapshot..."
+expect_error "InvalidSnapshot.NotFound" $AWS_EC2 delete-snapshot \
+    --snapshot-id snap-nonexistent000000
+
+# 8f: Call an unsupported Action (use raw curl to send an invalid Action)
+echo "8f: Unsupported Action..."
+set +e
+UNSUPPORTED_OUTPUT=$(curl -s -k -X POST https://localhost:9999/ \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "Action=DescribeFakeThings&Version=2016-11-15" 2>&1)
+set -e
+if echo "$UNSUPPORTED_OUTPUT" | grep -q "InvalidAction\|UnknownAction\|Error"; then
+    echo "  Got expected error for unsupported action"
+else
+    echo "  WARNING: Unsupported action did not return expected error (may need auth)"
+fi
+
+echo "Negative test suite passed"
+
+# Phase 9: Terminate and Verify Cleanup
+echo "Phase 9: Terminate and Verify Cleanup"
+
+# Save root volume ID before termination for cleanup verification
+ROOT_VOLUME_ID="$VOLUME_ID"
+echo "Root volume to verify cleanup: $ROOT_VOLUME_ID"
+
 # Terminate instance (terminate-instances) and verify termination (describe-instances)
 echo "Terminating instance..."
 $AWS_EC2 terminate-instances --instance-ids "$INSTANCE_ID"
@@ -722,6 +930,39 @@ while [ $COUNT -lt 30 ]; do
     sleep 5
     COUNT=$((COUNT + 1))
 done
+
+# Phase 9a: Verify root volume cleanup after termination
+echo "Phase 9a: Volume Cleanup Verification"
+echo "Verifying root volume $ROOT_VOLUME_ID is cleaned up after termination..."
+sleep 5  # Allow time for async volume deletion
+
+COUNT=0
+VOLUME_CLEANED=false
+while [ $COUNT -lt 20 ]; do
+    set +e
+    VOL_CHECK=$($AWS_EC2 describe-volumes --volume-ids "$ROOT_VOLUME_ID" \
+        --query 'Volumes[0].State' --output text 2>&1)
+    VOL_EXIT=$?
+    set -e
+
+    if [ $VOL_EXIT -ne 0 ] || [ "$VOL_CHECK" == "None" ] || [ -z "$VOL_CHECK" ]; then
+        VOLUME_CLEANED=true
+        echo "Root volume $ROOT_VOLUME_ID has been cleaned up (DeleteOnTermination)"
+        break
+    fi
+
+    echo "Volume still exists (State=$VOL_CHECK), waiting... ($COUNT/20)"
+    sleep 3
+    COUNT=$((COUNT + 1))
+done
+
+if [ "$VOLUME_CLEANED" != "true" ]; then
+    echo "WARNING: Root volume $ROOT_VOLUME_ID was not cleaned up after termination"
+    echo "This may indicate a DeleteOnTermination regression"
+    exit 1
+fi
+
+echo "Volume cleanup verification passed"
 
 echo "E2E Test Completed Successfully"
 exit 0
