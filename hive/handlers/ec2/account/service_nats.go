@@ -41,4 +41,3 @@ func (s *NATSAccountSettingsService) EnableSerialConsoleAccess(input *ec2.Enable
 func (s *NATSAccountSettingsService) DisableSerialConsoleAccess(input *ec2.DisableSerialConsoleAccessInput) (*ec2.DisableSerialConsoleAccessOutput, error) {
 	return utils.NATSRequest[ec2.DisableSerialConsoleAccessOutput](s.natsConn, "ec2.DisableSerialConsoleAccess", input, 30*time.Second)
 }
-

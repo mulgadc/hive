@@ -1230,4 +1230,3 @@ func (d *Daemon) handleEC2EnableSerialConsoleAccess(msg *nats.Msg) {
 func (d *Daemon) handleEC2DisableSerialConsoleAccess(msg *nats.Msg) {
 	handleNATSRequest(msg, d.accountService.DisableSerialConsoleAccess)
 }
-

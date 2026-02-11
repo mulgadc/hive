@@ -223,4 +223,3 @@ func (s *AccountSettingsServiceImpl) DisableSerialConsoleAccess(input *ec2.Disab
 		SerialConsoleAccessEnabled: aws.Bool(false),
 	}, nil
 }
-
