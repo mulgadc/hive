@@ -2,9 +2,16 @@ name: UI Build and Test
 
 on:
   push:
-    branches: [main, ui]
-    paths: [hive/services/hiveui/frontend/**, .github/workflows/ui.yml]
+    branches:
+      - main
+      - ui
+    paths:
+      - hive/services/hiveui/frontend/**
+      - .github/workflows/ui.yml
   pull_request:
+    paths:
+      - hive/services/hiveui/frontend/**
+      - .github/workflows/ui.yml
   workflow_dispatch:
 
 jobs:

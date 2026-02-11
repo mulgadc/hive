@@ -2,8 +2,22 @@ name: Hive Build and Test
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - test
+    paths:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - Makefile
+      - .github/workflows/hive.yml
   pull_request:
+    paths:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - Makefile
+      - .github/workflows/hive.yml
   workflow_dispatch:
 
 jobs:

@@ -2,7 +2,17 @@ name: Hive E2E Test
 
 on:
   push:
-    branches: [main, e2e]
+    branches:
+      - main
+      - e2e
+    paths:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - Makefile
+      - tests/e2e/**
+      - scripts/**
+      - .github/workflows/e2e.yml
   workflow_dispatch:
 
 jobs:
