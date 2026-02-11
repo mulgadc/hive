@@ -453,6 +453,17 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command qmp.Command, instance
 func (d *Daemon) handleStartInstance(msg *nats.Msg, command qmp.Command, instance *vm.VM, respondWithError func(string)) {
 	slog.Info("Starting instance", "id", command.ID)
 
+	// Validate instance is in stopped state
+	d.Instances.Mu.Lock()
+	status := instance.Status
+	d.Instances.Mu.Unlock()
+
+	if status != vm.StateStopped {
+		slog.Error("StartInstance: instance not in stopped state", "instanceId", command.ID, "status", status)
+		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		return
+	}
+
 	// Allocate resources
 	instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
 	if ok {
