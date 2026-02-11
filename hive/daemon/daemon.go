@@ -648,12 +648,16 @@ func (d *Daemon) restoreInstances() {
 		case vm.StateStopping:
 			instance.Status = vm.StateStopped
 			slog.Info("Instance was stopping, QEMU exited, marking stopped", "instance", instance.ID)
-			d.WriteState()
+			if err := d.WriteState(); err != nil {
+				slog.Error("Failed to write state", "instance", instance.ID, "error", err)
+			}
 			continue
 		case vm.StateShuttingDown:
 			instance.Status = vm.StateTerminated
 			slog.Info("Instance was shutting-down, QEMU exited, marking terminated", "instance", instance.ID)
-			d.WriteState()
+			if err := d.WriteState(); err != nil {
+				slog.Error("Failed to write state", "instance", instance.ID, "error", err)
+			}
 			continue
 		case vm.StateRunning:
 			// Was running but QEMU died - reset to pending so LaunchInstance can transition to running
