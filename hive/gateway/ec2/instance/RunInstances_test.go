@@ -115,6 +115,68 @@ func TestParseRunInstances(t *testing.T) {
 			want: errors.New(awserrors.ErrorInvalidAMIIDMalformed),
 		},
 
+		{
+			name:  "NilInput",
+			input: nil,
+			want:  errors.New(awserrors.ErrorMissingParameter),
+		},
+
+		{
+			name: "NilMinCount",
+			input: &ec2.RunInstancesInput{
+				ImageId:          defaults.ImageId,
+				InstanceType:     defaults.InstanceType,
+				MinCount:         nil,
+				MaxCount:         aws.Int64(1),
+				KeyName:          defaults.KeyName,
+				SecurityGroupIds: defaults.SecurityGroupIds,
+				SubnetId:         defaults.SubnetId,
+			},
+			want: errors.New(awserrors.ErrorMissingParameter),
+		},
+
+		{
+			name: "MinCountGreaterThanMaxCount",
+			input: &ec2.RunInstancesInput{
+				ImageId:          defaults.ImageId,
+				InstanceType:     defaults.InstanceType,
+				MinCount:         aws.Int64(5),
+				MaxCount:         aws.Int64(2),
+				KeyName:          defaults.KeyName,
+				SecurityGroupIds: defaults.SecurityGroupIds,
+				SubnetId:         defaults.SubnetId,
+			},
+			want: errors.New(awserrors.ErrorInvalidParameterValue),
+		},
+
+		{
+			name: "NilImageId",
+			input: &ec2.RunInstancesInput{
+				ImageId:          nil,
+				InstanceType:     defaults.InstanceType,
+				MinCount:         aws.Int64(1),
+				MaxCount:         aws.Int64(1),
+				KeyName:          defaults.KeyName,
+				SecurityGroupIds: defaults.SecurityGroupIds,
+				SubnetId:         defaults.SubnetId,
+			},
+			want: errors.New(awserrors.ErrorMissingParameter),
+		},
+
+		{
+			name: "NilInstanceType",
+			input: &ec2.RunInstancesInput{
+				ImageId:          defaults.ImageId,
+				InstanceType:     nil,
+				MinCount:         aws.Int64(1),
+				MaxCount:         aws.Int64(1),
+				KeyName:          defaults.KeyName,
+				SecurityGroupIds: defaults.SecurityGroupIds,
+				SubnetId:         defaults.SubnetId,
+			},
+			want: errors.New(awserrors.ErrorMissingParameter),
+		},
+
 		// Successful test
 		{
 			name: "ValidTest",
