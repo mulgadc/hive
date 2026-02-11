@@ -46,64 +46,6 @@ func handleNATSRequest[I any, O any](msg *nats.Msg, serviceFn func(*I) (*O, erro
 	}
 }
 
-func (d *Daemon) handleEC2StartInstances(msg *nats.Msg) {
-
-	var ec2StartInstance config.EC2StartInstancesRequest
-
-	if err := json.Unmarshal(msg.Data, &ec2StartInstance); err != nil {
-		slog.Error("Error unmarshaling EC2 describe request", "err", err)
-		return
-	}
-
-	slog.Info("EC2 Start Instance Request", "instanceId", ec2StartInstance.InstanceID)
-
-	var ec2StartInstanceResponse config.EC2StartInstancesResponse
-
-	// Check if the instance is running on this node
-	d.Instances.Mu.Lock()
-	instance, ok := d.Instances.VMS[ec2StartInstance.InstanceID]
-	d.Instances.Mu.Unlock()
-
-	if !ok {
-		slog.Error("EC2 Start Request - Instance not found", "instanceId", ec2StartInstanceResponse.InstanceID)
-		ec2StartInstanceResponse.InstanceID = ec2StartInstance.InstanceID
-		ec2StartInstanceResponse.Error = awserrors.ErrorInvalidInstanceIDNotFound
-		ec2StartInstanceResponse.Respond(msg)
-		return
-	}
-
-	// Check if we have enough resources and allocate them
-	instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
-	if ok {
-		if err := d.resourceMgr.allocate(instanceType); err != nil {
-			slog.Error("EC2 Start Request - Insufficient capacity", "instanceId", instance.ID, "err", err)
-			ec2StartInstanceResponse.InstanceID = ec2StartInstance.InstanceID
-			ec2StartInstanceResponse.Error = awserrors.ErrorInsufficientInstanceCapacity
-			ec2StartInstanceResponse.Respond(msg)
-			return
-		}
-	}
-
-	// Launch the instance (acquires d.Instances.Mu internally via TransitionState)
-	err := d.LaunchInstance(instance)
-
-	if err != nil {
-		// Deallocate on failure
-		if ok {
-			d.resourceMgr.deallocate(instanceType)
-		}
-		ec2StartInstanceResponse.Error = err.Error()
-	} else {
-		ec2StartInstanceResponse.InstanceID = instance.ID
-		d.Instances.Mu.Lock()
-		ec2StartInstanceResponse.Status = string(instance.Status)
-		d.Instances.Mu.Unlock()
-	}
-
-	ec2StartInstanceResponse.Respond(msg)
-
-}
-
 // handleEC2Events processes incoming EC2 instance events (start, stop, terminate, attach-volume)
 func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 	var command qmp.Command

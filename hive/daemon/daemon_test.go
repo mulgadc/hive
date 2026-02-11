@@ -1011,55 +1011,6 @@ func TestDaemon_BootAllocation(t *testing.T) {
 	assert.Equal(t, expectedMem, daemon.resourceMgr.allocatedMem)
 }
 
-// TestHandleEC2StartInstances_Allocation verifies that starting a stopped instance allocates resources
-func TestHandleEC2StartInstances_Allocation(t *testing.T) {
-	// Skip if SKIP_INTEGRATION is set
-	if os.Getenv("SKIP_INTEGRATION") != "" {
-		t.Skip("Skipping as it requires NATS and complex setup")
-	}
-
-	ns, natsURL := startTestNATSServer(t)
-	defer ns.Shutdown()
-
-	daemon := createTestDaemon(t, natsURL)
-
-	// Create a stopped instance in memory
-	instanceId := "i-test-start"
-	instanceType := getTestInstanceType()
-	daemon.Instances.VMS[instanceId] = &vm.VM{
-		ID:           instanceId,
-		InstanceType: instanceType,
-		Status:       vm.StateStopped,
-	}
-
-	// Subscribe to ec2.startinstances
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.startinstances", "hive-workers", daemon.handleEC2StartInstances)
-	require.NoError(t, err)
-	defer sub.Unsubscribe()
-
-	// Send start request
-	req := config.EC2StartInstancesRequest{
-		InstanceID: instanceId,
-	}
-	msgData, _ := json.Marshal(req)
-
-	// Mock LaunchInstance behavior to avoid QEMU/NBD errors
-	// We can't easily mock LaunchInstance because it's a method on Daemon.
-	// But we can check if allocation happened BEFORE it hit the error in LaunchInstance.
-
-	// We expect this to return an error from LaunchInstance (since no QEMU/NBD)
-	// but allocation should have happened first.
-	_, _ = daemon.natsConn.Request("ec2.startinstances", msgData, 15*time.Second)
-
-	// Verify allocation happened
-	_ = daemon.resourceMgr.instanceTypes[instanceType]
-
-	// If LaunchInstance failed (which it will in this test), the current implementation
-	// DEALLOCATES in the error block of handleEC2StartInstances.
-	// So we should check if it was deallocated back to 0.
-	assert.Equal(t, 0, daemon.resourceMgr.allocatedVCPU, "Resources should be deallocated after failed launch")
-}
-
 // TestStopInstance_Deallocation verifies that stopping an instance deallocates resources
 func TestStopInstance_Deallocation(t *testing.T) {
 	clusterCfg := &config.ClusterConfig{

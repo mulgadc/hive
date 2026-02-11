@@ -36,11 +36,8 @@
 - Migrate to net/http + chi from fiber
 - remove insecure skip verify - need to add predastore multi node ips to certs
 - migrate to list objects v2
-- make gateway validation methods be private, only used for tests
-- use more secure crypto, can we stop using sha1 or is required for aws?
-- centralise random gen ids, all scattered
-- make runinstances nats naming be consistent with others - ec2.RunInstances
 - split up utils.go
+- make sure nats is running before we start daemon? eigw and account service will fallback to memory versions but that breaks all functionality
 
 ### Issues to investigate
 

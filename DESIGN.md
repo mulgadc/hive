@@ -30,9 +30,7 @@ Hive is an AWS-compatible infrastructure platform for bare-metal, edge, and on-p
 │   Topics:                              Queue Groups:                        │
 │   • ec2.RunInstances                   • hive-workers (load balanced)       │
 │   • ec2.DescribeInstances              • No queue (fan-out to all nodes)    │
-│   • ec2.StartInstances                                                      │
-│   • ec2.StopInstances                                                       │
-│   • ec2.TerminateInstances                                                  │
+│   • ec2.cmd.{instanceID}              (per-instance start/stop/terminate)   │
 │   • ebs.mount / ebs.unmount                                                 │
 └─────────────────────────────────────────────────────────────────────────────┘
                                       │
@@ -229,9 +227,7 @@ type ResourceManager struct {
 |-------|-------------|---------|
 | `ec2.RunInstances` | `hive-workers` | Launch new instances |
 | `ec2.DescribeInstances` | None (fan-out) | Query all nodes for instances |
-| `ec2.StartInstances` | `hive-workers` | Start stopped instances |
-| `ec2.StopInstances` | `hive-workers` | Stop running instances |
-| `ec2.TerminateInstances` | `hive-workers` | Terminate instances |
+| `ec2.cmd.{instanceID}` | `hive-events` | Per-instance commands (start/stop/terminate, attach/detach volume) |
 | `ec2.CreateKeyPair` | `hive-workers` | Generate SSH keypair |
 | `ec2.DescribeKeyPairs` | `hive-workers` | List SSH keypairs |
 | `ec2.DescribeImages` | `hive-workers` | List AMIs |
