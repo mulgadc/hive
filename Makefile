@@ -43,7 +43,7 @@ build-ui:
 # GO commands
 go_build:
 	@echo "\n....Building $(GO_PROJECT_NAME)"
-	GOEXPERIMENT=greenteagc go build $(GO_BUILD_MOD) -ldflags "-s -w" -o ./bin/$(GO_PROJECT_NAME) cmd/hive/main.go
+	go build $(GO_BUILD_MOD) -ldflags "-s -w" -o ./bin/$(GO_PROJECT_NAME) cmd/hive/main.go
 
 go_run:
 	@echo "\n....Running $(GO_PROJECT_NAME)...."
@@ -75,9 +75,9 @@ install-system:
 		iproute2 netcat-openbsd openssh-client wget git unzip sudo xz-utils file
 
 install-go:
-	@echo "\n....Installing Go 1.25.7 for $(ARCH) ($(GO_ARCH))...."
+	@echo "\n....Installing Go 1.26.0 for $(ARCH) ($(GO_ARCH))...."
 	@if [ ! -d "/usr/local/go" ]; then \
-		curl -L https://go.dev/dl/go1.25.7.linux-$(GO_ARCH).tar.gz | tar -C /usr/local -xz; \
+		curl -L https://go.dev/dl/go1.26.0.linux-$(GO_ARCH).tar.gz | tar -C /usr/local -xz; \
 	else \
 		echo "Go already installed in /usr/local/go"; \
 	fi

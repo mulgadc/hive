@@ -1,6 +1,6 @@
 module github.com/mulgadc/hive
 
-go 1.25.7
+go 1.26.0
 
 require (
 	github.com/NYTimes/gziphandler v1.1.1

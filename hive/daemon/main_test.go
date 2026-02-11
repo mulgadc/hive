@@ -11,10 +11,10 @@ import (
 
 // Shared NATS servers for all daemon tests — started once in TestMain.
 var (
-	sharedNATSServer   *server.Server
-	sharedNATSURL      string
-	sharedJSServer     *server.Server
-	sharedJSNATSURL    string
+	sharedNATSServer *server.Server
+	sharedNATSURL    string
+	sharedJSServer   *server.Server
+	sharedJSNATSURL  string
 )
 
 func TestMain(m *testing.M) {

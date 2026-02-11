@@ -89,8 +89,6 @@ mulga/
 └── viperblock/   # Block storage
 ```
 
-Build flag: `GOEXPERIMENT=greenteagc` is used for the GC experiment.
-
 ### Testing with AWS CLI
 
 ```bash
