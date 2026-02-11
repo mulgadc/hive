@@ -2,13 +2,11 @@ package handlers_ec2_volume
 
 import (
 	"bytes"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"math/big"
 	"strings"
 	"sync"
 	"time"
@@ -123,15 +121,8 @@ func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Vol
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
-	// Generate volume ID
-	randomNumber, err := rand.Int(rand.Reader, big.NewInt(100_000_000))
-	if err != nil {
-		slog.Error("CreateVolume failed to generate random number", "err", err)
-		return nil, errors.New(awserrors.ErrorServerInternal)
-	}
-
 	now := time.Now()
-	volumeID := viperblock.GenerateVolumeID("vol", fmt.Sprintf("%d-create", randomNumber), s.bucketName, now.Unix())
+	volumeID := utils.GenerateResourceID("vol")
 
 	iops := defaultGP3IOPS
 

@@ -2,12 +2,10 @@ package handlers_ec2_instance
 
 import (
 	"bytes"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"math/big"
 	"os"
 	"strings"
 	"text/template"
@@ -116,7 +114,7 @@ func (s *InstanceServiceImpl) RunInstance(input *ec2.RunInstancesInput) (*vm.VM,
 		return nil, nil, errors.New(awserrors.ErrorInvalidInstanceType)
 	}
 
-	instanceId := vm.GenerateEC2InstanceID()
+	instanceId := utils.GenerateResourceID("i")
 
 	// Create new instance structure
 	instance := &vm.VM{
@@ -180,11 +178,7 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 
 	// Determine image ID and snapshot ID
 	if strings.HasPrefix(*input.ImageId, "ami-") {
-		randomNumber, err := rand.Int(rand.Reader, big.NewInt(100_000_000))
-		if err != nil {
-			return nil, err
-		}
-		imageId = viperblock.GenerateVolumeID("vol", fmt.Sprintf("%d-%s", randomNumber, *input.ImageId), "predastore", time.Now().Unix())
+		imageId = utils.GenerateResourceID("vol")
 		snapshotId = *input.ImageId
 	} else {
 		imageId = *input.ImageId

@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -73,13 +72,5 @@ func TestExecute(t *testing.T) {
 
 	assert.Contains(t, cmd.Path, "qemu-system-aarch64")
 	assert.Equal(t, expectedArgs, cmd.Args[1:])
-
-}
-
-func TestGenerateEC2InstanceID(t *testing.T) {
-	id := GenerateEC2InstanceID()
-
-	assert.Len(t, id, 19)
-	assert.True(t, strings.HasPrefix(id, "i-"))
 
 }

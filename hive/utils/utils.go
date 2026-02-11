@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -34,6 +36,16 @@ import (
 	"github.com/pterm/pterm"
 	"golang.org/x/net/http2"
 )
+
+// GenerateResourceID generates a unique resource ID with the given prefix.
+// Format: {prefix}-{17 hex chars} using crypto/rand.
+func GenerateResourceID(prefix string) string {
+	b := make([]byte, 9)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return prefix + "-" + hex.EncodeToString(b)[:17]
+}
 
 // Helper functions for OS images
 

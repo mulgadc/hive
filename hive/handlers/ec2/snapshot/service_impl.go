@@ -160,7 +160,7 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput) (*e
 
 	slog.Info("CreateSnapshot request", "volumeId", volumeID)
 
-	snapshotID := viperblock.GenerateVolumeID("snap", fmt.Sprintf("snap-%d", time.Now().UnixNano()), s.config.Predastore.Bucket, time.Now().Unix())
+	snapshotID := utils.GenerateResourceID("snap")
 
 	volumeConfigKey := fmt.Sprintf("%s/config.json", volumeID)
 	volumeResult, err := s.store.GetObject(&s3.GetObjectInput{
@@ -367,7 +367,7 @@ func (s *SnapshotServiceImpl) CopySnapshot(input *ec2.CopySnapshotInput) (*ec2.C
 		return nil, err
 	}
 
-	newSnapshotID := viperblock.GenerateVolumeID("snap", fmt.Sprintf("snap-%d", time.Now().UnixNano()), s.config.Predastore.Bucket, time.Now().Unix())
+	newSnapshotID := utils.GenerateResourceID("snap")
 
 	newCfg := &SnapshotConfig{
 		SnapshotID:       newSnapshotID,

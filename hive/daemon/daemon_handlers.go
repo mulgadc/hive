@@ -770,7 +770,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 
 	// Build reservation with all instances
 	reservation := ec2.Reservation{}
-	reservation.SetReservationId(vm.GenerateEC2ReservationID())
+	reservation.SetReservationId(utils.GenerateResourceID("r"))
 	reservation.SetOwnerId("123456789012") // TODO: Use actual owner ID from config
 	reservation.Instances = allEC2Instances
 

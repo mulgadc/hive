@@ -1,8 +1,6 @@
 package handlers_ec2_eigw
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,22 +76,13 @@ func getOrCreateKVBucket(js nats.JetStreamContext, bucketName string, history in
 	return kv, nil
 }
 
-// generateEgressOnlyIGWID generates a unique Egress-only Internet Gateway ID
-func generateEgressOnlyIGWID() string {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		panic("crypto/rand failed: " + err.Error())
-	}
-	return "eigw-" + hex.EncodeToString(b)
-}
-
 // CreateEgressOnlyInternetGateway creates a new Egress-only Internet Gateway
 func (s *EgressOnlyIGWServiceImpl) CreateEgressOnlyInternetGateway(input *ec2.CreateEgressOnlyInternetGatewayInput) (*ec2.CreateEgressOnlyInternetGatewayOutput, error) {
 	if input.VpcId == nil || *input.VpcId == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
 
-	eigwID := generateEgressOnlyIGWID()
+	eigwID := utils.GenerateResourceID("eigw")
 
 	record := EgressOnlyIGWRecord{
 		EgressOnlyInternetGatewayId: eigwID,

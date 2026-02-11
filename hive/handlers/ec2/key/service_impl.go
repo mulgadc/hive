@@ -2,8 +2,7 @@ package handlers_ec2_key
 
 import (
 	"bytes"
-	"crypto/md5"  //#nosec G501 - need md5 for AWS compatibility
-	"crypto/sha1" //#nosec G505 - need sha256 for AWS compatibility
+	"crypto/md5" //#nosec G501 - need md5 for AWS compatibility
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -16,7 +15,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -167,7 +165,7 @@ func (s *KeyServiceImpl) CreateKeyPair(input *ec2.CreateKeyPairInput) (*ec2.Crea
 	}
 
 	// Build response (similar to AWS EC2)
-	keyPairID := fmt.Sprintf("key-%s", generateKeyPairID())
+	keyPairID := utils.GenerateResourceID("key")
 	output := &ec2.CreateKeyPairOutput{
 		KeyFingerprint: aws.String(fingerprint),
 		KeyMaterial:    aws.String(string(privateKeyData)),
@@ -236,13 +234,6 @@ func formatFingerprint(hash []byte, algorithm string) string {
 		// SHA256 format: SHA256:base64encodedstring
 		return fmt.Sprintf("SHA256:%s", base64.RawStdEncoding.EncodeToString(hash))
 	}
-}
-
-// generateKeyPairID generates a unique key pair ID (similar to AWS key-xxxxx format)
-func generateKeyPairID() string {
-	hash := sha1.New() //#nosec G401 - need sha1 for AWS compatibility
-	hash.Write(fmt.Appendf(nil, "%d", time.Now().UnixNano()))
-	return fmt.Sprintf("%x", hash.Sum(nil))[:16]
 }
 
 // storeKeyPairMetadata stores key pair metadata (without private key) to S3 for keyPairId lookups
@@ -643,7 +634,7 @@ func (s *KeyServiceImpl) ImportKeyPair(input *ec2.ImportKeyPairInput) (*ec2.Impo
 	}
 
 	// Generate key pair ID
-	keyPairID := fmt.Sprintf("key-%s", generateKeyPairID())
+	keyPairID := utils.GenerateResourceID("key")
 
 	// Build response output
 	output := &ec2.ImportKeyPairOutput{

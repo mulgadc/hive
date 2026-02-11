@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,22 +13,6 @@ import (
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/qmp"
 )
-
-/*
-qemu-system-x86_64 \
-   -enable-kvm \
-   -nographic \
-   -M ubuntu \
-   -cpu host \
-   -smp 4 \
-   -m 3000 \
-   -drive file=/usr/share/ovmf/OVMF.fd,if=pflash,format=raw \
-   -drive file=nbd://127.0.0.1:34305/default,format=raw,if=virtio \
-   -drive file=nbd://127.0.0.1:39449/default,format=raw,if=none,media=disk,id=debian \
-   -device virtio-blk-pci,drive=debian,bootindex=1 \
-   -netdev user,id=net0,hostfwd=tcp::2222-:22 \
-   -device virtio-rng-pci
-*/
 
 type VM struct {
 	ID           string        `json:"id"`
@@ -207,13 +190,14 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 
 	var qemuArchitecture string
 
-	if cfg.Architecture == "arm64" {
+	switch cfg.Architecture {
+	case "arm64":
 		qemuArchitecture = "qemu-system-aarch64"
 
-	} else if cfg.Architecture == "x86_64" {
+	case "x86_64":
 		qemuArchitecture = "qemu-system-x86_64"
 
-	} else {
+	default:
 		return nil, fmt.Errorf("architecture missing")
 	}
 
@@ -245,32 +229,4 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 	//cmd.Stderr = os.Stderr
 
 	return cmd, nil
-}
-
-func GenerateEC2InstanceID() string {
-	const idLength = 17
-	const hexChars = "0123456789abcdef"
-
-	bytes := make([]byte, idLength)
-	_, err := rand.Read(bytes)
-	if err != nil {
-		panic("failed to generate random bytes: " + err.Error())
-	}
-
-	// Map each byte to a hex digit (0-15)
-	for i := range bytes {
-		bytes[i] = hexChars[bytes[i]&0x0F]
-	}
-
-	return "i-" + string(bytes)
-}
-
-func GenerateEC2ReservationID() string {
-
-	id := GenerateEC2InstanceID()
-
-	id = strings.Replace(id, "i-", "r-", 1)
-
-	return id
-
 }

@@ -344,7 +344,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	// Calculate the size
 
 	manifest.AMIMetadata.Name = fmt.Sprintf("ami-%s-%s-%s", image.Distro, image.Version, image.Arch)
-	volumeId := viperblock.GenerateVolumeID("ami", manifest.AMIMetadata.Name, "", time.Now().Unix()) // TODO: Replace with bucket
+	volumeId := utils.GenerateResourceID("ami")
 	manifest.AMIMetadata.ImageID = volumeId
 
 	manifest.AMIMetadata.Description = fmt.Sprintf("%s cloud image prepared for Hive", manifest.AMIMetadata.Name)
