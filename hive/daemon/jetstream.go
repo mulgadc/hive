@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/nats-io/nats.go"
@@ -12,8 +13,10 @@ import (
 const (
 	// InstanceStateBucket is the name of the KV bucket for storing instance state
 	InstanceStateBucket = "hive-instance-state"
-	// InstanceStatePrefix is the key prefix for instance state entries
+	// InstanceStatePrefix is the key prefix for per-node instance state entries
 	InstanceStatePrefix = "node."
+	// StoppedInstancePrefix is the key prefix for stopped instances in shared KV
+	StoppedInstancePrefix = "instance."
 )
 
 // JetStreamManager manages JetStream KV store operations for instance state
@@ -178,4 +181,106 @@ func (m *JetStreamManager) UpdateReplicas(newReplicas int) error {
 	m.replicas = newReplicas
 	slog.Info("Updated JetStream KV bucket replicas", "bucket", InstanceStateBucket, "oldReplicas", currentReplicas, "newReplicas", newReplicas)
 	return nil
+}
+
+// WriteStoppedInstance writes a stopped instance to the shared KV store.
+func (m *JetStreamManager) WriteStoppedInstance(instanceID string, instance *vm.VM) error {
+	if m.kv == nil {
+		return errors.New("KV bucket not initialized")
+	}
+
+	jsonData, err := json.Marshal(instance)
+	if err != nil {
+		return err
+	}
+
+	key := StoppedInstancePrefix + instanceID
+	_, err = m.kv.Put(key, jsonData)
+	if err != nil {
+		return err
+	}
+
+	slog.Debug("Wrote stopped instance to JetStream KV", "key", key, "instanceId", instanceID)
+	return nil
+}
+
+// LoadStoppedInstance loads a stopped instance from the shared KV store.
+// Returns nil, nil if the key does not exist.
+func (m *JetStreamManager) LoadStoppedInstance(instanceID string) (*vm.VM, error) {
+	if m.kv == nil {
+		return nil, errors.New("KV bucket not initialized")
+	}
+
+	key := StoppedInstancePrefix + instanceID
+	entry, err := m.kv.Get(key)
+	if err != nil {
+		if errors.Is(err, nats.ErrKeyNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var instance vm.VM
+	if err := json.Unmarshal(entry.Value(), &instance); err != nil {
+		return nil, err
+	}
+
+	return &instance, nil
+}
+
+// DeleteStoppedInstance removes a stopped instance from the shared KV store.
+// It is idempotent — deleting a non-existent key is not an error.
+func (m *JetStreamManager) DeleteStoppedInstance(instanceID string) error {
+	if m.kv == nil {
+		return errors.New("KV bucket not initialized")
+	}
+
+	key := StoppedInstancePrefix + instanceID
+	err := m.kv.Delete(key)
+	if err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
+		return err
+	}
+
+	slog.Debug("Deleted stopped instance from JetStream KV", "key", key)
+	return nil
+}
+
+// ListStoppedInstances returns all stopped instances from the shared KV store.
+func (m *JetStreamManager) ListStoppedInstances() ([]*vm.VM, error) {
+	if m.kv == nil {
+		return nil, errors.New("KV bucket not initialized")
+	}
+
+	keys, err := m.kv.Keys()
+	if err != nil {
+		if errors.Is(err, nats.ErrNoKeysFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var instances []*vm.VM
+	for _, key := range keys {
+		if !strings.HasPrefix(key, StoppedInstancePrefix) {
+			continue
+		}
+
+		entry, err := m.kv.Get(key)
+		if err != nil {
+			if errors.Is(err, nats.ErrKeyNotFound) {
+				continue
+			}
+			return nil, err
+		}
+
+		var instance vm.VM
+		if err := json.Unmarshal(entry.Value(), &instance); err != nil {
+			slog.Error("Failed to unmarshal stopped instance", "key", key, "err", err)
+			continue
+		}
+
+		instances = append(instances, &instance)
+	}
+
+	return instances, nil
 }

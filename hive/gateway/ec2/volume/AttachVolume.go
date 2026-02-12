@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/qmp"
@@ -69,6 +70,10 @@ func AttachVolume(input *ec2.AttachVolumeInput, natsConn *nats.Conn) (ec2.Volume
 	if err != nil {
 		slog.Error("AttachVolume: NATS request failed", "instanceId", instanceID, "volumeId", volumeID, "err", err)
 		if errors.Is(err, nats.ErrNoResponders) {
+			// Check shared KV for stopped instances before returning NotFound
+			if isStoppedInstance(instanceID, natsConn) {
+				return output, errors.New(awserrors.ErrorIncorrectInstanceState)
+			}
 			return output, errors.New(awserrors.ErrorInvalidInstanceIDNotFound)
 		}
 		return output, errors.New(awserrors.ErrorServerInternal)
@@ -86,4 +91,37 @@ func AttachVolume(input *ec2.AttachVolumeInput, natsConn *nats.Conn) (ec2.Volume
 
 	slog.Info("AttachVolume completed", "instanceId", instanceID, "volumeId", volumeID)
 	return output, nil
+}
+
+// isStoppedInstance checks the shared KV (via ec2.DescribeStoppedInstances) to
+// determine whether instanceID exists as a stopped instance.
+func isStoppedInstance(instanceID string, natsConn *nats.Conn) bool {
+	input := &ec2.DescribeInstancesInput{
+		InstanceIds: []*string{aws.String(instanceID)},
+	}
+	reqData, err := json.Marshal(input)
+	if err != nil {
+		return false
+	}
+
+	msg, err := natsConn.Request("ec2.DescribeStoppedInstances", reqData, 3*time.Second)
+	if err != nil {
+		return false
+	}
+
+	if _, err := utils.ValidateErrorPayload(msg.Data); err != nil {
+		return false
+	}
+
+	var output ec2.DescribeInstancesOutput
+	if err := json.Unmarshal(msg.Data, &output); err != nil {
+		return false
+	}
+
+	for _, res := range output.Reservations {
+		if len(res.Instances) > 0 {
+			return true
+		}
+	}
+	return false
 }

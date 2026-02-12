@@ -378,3 +378,196 @@ func TestJetStreamManager_UpdateReplicas_NoInit(t *testing.T) {
 	err := jsm.UpdateReplicas(3)
 	assert.Error(t, err, "UpdateReplicas should error when JetStream not initialized")
 }
+
+// --- Stopped instance KV tests ---
+
+// TestJetStreamManager_WriteAndLoadStoppedInstance tests round-trip write and load of a stopped instance
+func TestJetStreamManager_WriteAndLoadStoppedInstance(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	err = jsm.InitKVBucket()
+	require.NoError(t, err)
+
+	testVM := &vm.VM{
+		ID:           "i-stopped-001",
+		Status:       vm.StateStopped,
+		InstanceType: "t3.micro",
+		LastNode:     "node-1",
+	}
+
+	// Write stopped instance
+	err = jsm.WriteStoppedInstance(testVM.ID, testVM)
+	require.NoError(t, err)
+
+	// Load stopped instance
+	loaded, err := jsm.LoadStoppedInstance(testVM.ID)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, testVM.ID, loaded.ID)
+	assert.Equal(t, vm.StateStopped, loaded.Status)
+	assert.Equal(t, "t3.micro", loaded.InstanceType)
+	assert.Equal(t, "node-1", loaded.LastNode)
+
+	// Cleanup
+	_ = jsm.DeleteStoppedInstance(testVM.ID)
+}
+
+// TestJetStreamManager_LoadStoppedInstance_NotFound tests that LoadStoppedInstance returns nil for missing key
+func TestJetStreamManager_LoadStoppedInstance_NotFound(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	err = jsm.InitKVBucket()
+	require.NoError(t, err)
+
+	loaded, err := jsm.LoadStoppedInstance("i-nonexistent")
+	require.NoError(t, err)
+	assert.Nil(t, loaded)
+}
+
+// TestJetStreamManager_DeleteStoppedInstance tests deleting a stopped instance (including non-existent)
+func TestJetStreamManager_DeleteStoppedInstance(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	err = jsm.InitKVBucket()
+	require.NoError(t, err)
+
+	testVM := &vm.VM{
+		ID:     "i-stopped-del",
+		Status: vm.StateStopped,
+	}
+
+	// Write then delete
+	err = jsm.WriteStoppedInstance(testVM.ID, testVM)
+	require.NoError(t, err)
+
+	err = jsm.DeleteStoppedInstance(testVM.ID)
+	require.NoError(t, err)
+
+	// Verify it's gone
+	loaded, err := jsm.LoadStoppedInstance(testVM.ID)
+	require.NoError(t, err)
+	assert.Nil(t, loaded)
+
+	// Delete non-existent should not error
+	err = jsm.DeleteStoppedInstance("i-does-not-exist")
+	require.NoError(t, err)
+}
+
+// TestJetStreamManager_ListStoppedInstances tests listing multiple stopped instances
+func TestJetStreamManager_ListStoppedInstances(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	err = jsm.InitKVBucket()
+	require.NoError(t, err)
+
+	// Write multiple stopped instances
+	vms := []*vm.VM{
+		{ID: "i-list-001", Status: vm.StateStopped, InstanceType: "t3.micro"},
+		{ID: "i-list-002", Status: vm.StateStopped, InstanceType: "t3.small"},
+		{ID: "i-list-003", Status: vm.StateStopped, InstanceType: "t3.medium"},
+	}
+
+	for _, v := range vms {
+		err = jsm.WriteStoppedInstance(v.ID, v)
+		require.NoError(t, err)
+	}
+
+	// List stopped instances
+	instances, err := jsm.ListStoppedInstances()
+	require.NoError(t, err)
+
+	// Should contain at least the 3 we wrote (may also contain instances from other tests)
+	instanceIDs := make(map[string]bool)
+	for _, inst := range instances {
+		instanceIDs[inst.ID] = true
+	}
+	assert.True(t, instanceIDs["i-list-001"])
+	assert.True(t, instanceIDs["i-list-002"])
+	assert.True(t, instanceIDs["i-list-003"])
+
+	// Cleanup
+	for _, v := range vms {
+		_ = jsm.DeleteStoppedInstance(v.ID)
+	}
+}
+
+// TestJetStreamManager_StoppedInstances_NoInterference tests that stopped instances don't interfere with per-node state
+func TestJetStreamManager_StoppedInstances_NoInterference(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	err = jsm.InitKVBucket()
+	require.NoError(t, err)
+
+	// Write per-node state
+	nodeInstances := &vm.Instances{
+		VMS: map[string]*vm.VM{
+			"i-running-001": {ID: "i-running-001", Status: vm.StateRunning},
+		},
+	}
+	err = jsm.WriteState("interference-test-node", nodeInstances)
+	require.NoError(t, err)
+
+	// Write stopped instance
+	stoppedVM := &vm.VM{ID: "i-stopped-interf", Status: vm.StateStopped}
+	err = jsm.WriteStoppedInstance(stoppedVM.ID, stoppedVM)
+	require.NoError(t, err)
+
+	// Verify per-node state is unaffected
+	loaded, err := jsm.LoadState("interference-test-node")
+	require.NoError(t, err)
+	assert.Len(t, loaded.VMS, 1)
+	assert.NotNil(t, loaded.VMS["i-running-001"])
+
+	// Verify stopped instance loads independently
+	loadedStopped, err := jsm.LoadStoppedInstance(stoppedVM.ID)
+	require.NoError(t, err)
+	require.NotNil(t, loadedStopped)
+	assert.Equal(t, "i-stopped-interf", loadedStopped.ID)
+
+	// Cleanup
+	_ = jsm.DeleteStoppedInstance(stoppedVM.ID)
+	_ = jsm.DeleteState("interference-test-node")
+}
+
+// TestJetStreamManager_StoppedInstance_KVNotInitialized tests error handling when KV is not initialized
+func TestJetStreamManager_StoppedInstance_KVNotInitialized(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	// Don't call InitKVBucket
+
+	err = jsm.WriteStoppedInstance("i-test", &vm.VM{})
+	assert.Error(t, err)
+
+	_, err = jsm.LoadStoppedInstance("i-test")
+	assert.Error(t, err)
+
+	err = jsm.DeleteStoppedInstance("i-test")
+	assert.Error(t, err)
+
+	_, err = jsm.ListStoppedInstances()
+	assert.Error(t, err)
+}

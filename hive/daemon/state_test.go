@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"sync"
@@ -589,7 +588,8 @@ func TestTransitionState_MultipleInstancesIndependent(t *testing.T) {
 // exercises the recovery state resolution logic.
 
 // TestRestoreInstances_StoppingFinalizedToStopped verifies that an instance
-// stuck in StateStopping when the daemon died gets finalized to StateStopped.
+// stuck in StateStopping when the daemon died gets finalized to StateStopped
+// and migrated to shared KV.
 func TestRestoreInstances_StoppingFinalizedToStopped(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
@@ -606,9 +606,14 @@ func TestRestoreInstances_StoppingFinalizedToStopped(t *testing.T) {
 	// restoreInstances loads from JetStream and resolves transitional states.
 	daemon.restoreInstances()
 
-	instance, ok := daemon.Instances.VMS["i-restore-stop"]
-	require.True(t, ok, "instance should be loaded from state")
-	assert.Equal(t, vm.StateStopped, instance.Status,
+	// Stopped instances are migrated to shared KV and removed from local map
+	_, ok := daemon.Instances.VMS["i-restore-stop"]
+	assert.False(t, ok, "stopping→stopped instance should be migrated to shared KV, not in local map")
+
+	stoppedInst, err := daemon.jsManager.LoadStoppedInstance("i-restore-stop")
+	require.NoError(t, err)
+	require.NotNil(t, stoppedInst, "stopping→stopped instance should exist in shared KV")
+	assert.Equal(t, vm.StateStopped, stoppedInst.Status,
 		"stopping instance should be finalized to stopped on recovery")
 }
 
@@ -652,9 +657,9 @@ func TestRestoreInstances_TerminatedSkipped(t *testing.T) {
 		"terminated instance should remain terminated")
 }
 
-// TestRestoreInstances_UserStoppedSkipped verifies that instances flagged as
-// user-stopped are not relaunched.
-func TestRestoreInstances_UserStoppedSkipped(t *testing.T) {
+// TestRestoreInstances_UserStoppedMigratedToSharedKV verifies that instances
+// flagged as user-stopped are migrated to shared KV and not relaunched.
+func TestRestoreInstances_UserStoppedMigratedToSharedKV(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
 	daemon.Instances.VMS["i-restore-userstop"] = &vm.VM{
@@ -669,10 +674,15 @@ func TestRestoreInstances_UserStoppedSkipped(t *testing.T) {
 	daemon.Instances.VMS = make(map[string]*vm.VM)
 	daemon.restoreInstances()
 
-	instance, ok := daemon.Instances.VMS["i-restore-userstop"]
-	require.True(t, ok, "user-stopped instance should still be loaded")
-	assert.Equal(t, vm.StateStopped, instance.Status,
-		"user-stopped instance should remain stopped")
+	// Stopped instances should be migrated to shared KV
+	_, ok := daemon.Instances.VMS["i-restore-userstop"]
+	assert.False(t, ok, "user-stopped instance should be migrated to shared KV, not in local map")
+
+	stoppedInst, err := daemon.jsManager.LoadStoppedInstance("i-restore-userstop")
+	require.NoError(t, err)
+	require.NotNil(t, stoppedInst, "user-stopped instance should exist in shared KV")
+	assert.Equal(t, vm.StateStopped, stoppedInst.Status,
+		"user-stopped instance should remain stopped in shared KV")
 }
 
 // TestRestoreInstances_RunningResetToPending verifies that a running instance
@@ -701,6 +711,7 @@ func TestRestoreInstances_RunningResetToPending(t *testing.T) {
 
 // TestRestoreInstances_MixedStates verifies recovery with multiple instances
 // in different states, ensuring each is handled correctly and independently.
+// Stopped instances (including stopping→stopped transitions) are migrated to shared KV.
 func TestRestoreInstances_MixedStates(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
@@ -722,14 +733,25 @@ func TestRestoreInstances_MixedStates(t *testing.T) {
 	daemon.Instances.VMS = make(map[string]*vm.VM)
 	daemon.restoreInstances()
 
-	assert.Equal(t, vm.StateStopped, daemon.Instances.VMS["i-mix-stopping"].Status,
-		"stopping should finalize to stopped")
+	// Stopped instances are migrated to shared KV and removed from local map
+	assert.Nil(t, daemon.Instances.VMS["i-mix-stopping"],
+		"stopping→stopped should be migrated to shared KV")
+	stoppedFromStopping, err := daemon.jsManager.LoadStoppedInstance("i-mix-stopping")
+	require.NoError(t, err)
+	require.NotNil(t, stoppedFromStopping, "stopping→stopped should exist in shared KV")
+	assert.Equal(t, vm.StateStopped, stoppedFromStopping.Status)
+
 	assert.Equal(t, vm.StateTerminated, daemon.Instances.VMS["i-mix-shutting"].Status,
 		"shutting-down should finalize to terminated")
 	assert.Equal(t, vm.StateTerminated, daemon.Instances.VMS["i-mix-terminated"].Status,
 		"terminated should remain terminated")
-	assert.Equal(t, vm.StateStopped, daemon.Instances.VMS["i-mix-stopped"].Status,
-		"user-stopped should remain stopped")
+
+	assert.Nil(t, daemon.Instances.VMS["i-mix-stopped"],
+		"user-stopped should be migrated to shared KV")
+	stoppedFromUser, err := daemon.jsManager.LoadStoppedInstance("i-mix-stopped")
+	require.NoError(t, err)
+	require.NotNil(t, stoppedFromUser, "user-stopped should exist in shared KV")
+	assert.Equal(t, vm.StateStopped, stoppedFromUser.Status)
 }
 
 // TestRestoreInstances_StatePersistsAfterRecovery verifies that the finalized
@@ -750,15 +772,27 @@ func TestRestoreInstances_StatePersistsAfterRecovery(t *testing.T) {
 	daemon.Instances.VMS = make(map[string]*vm.VM)
 	daemon.restoreInstances()
 
-	assert.Equal(t, vm.StateStopped, daemon.Instances.VMS["i-persist-stop"].Status)
+	// stopping→stopped migrates to shared KV
+	assert.Nil(t, daemon.Instances.VMS["i-persist-stop"],
+		"stopping→stopped should be migrated to shared KV")
+	stoppedInst, err := daemon.jsManager.LoadStoppedInstance("i-persist-stop")
+	require.NoError(t, err)
+	require.NotNil(t, stoppedInst)
+	assert.Equal(t, vm.StateStopped, stoppedInst.Status)
+
 	assert.Equal(t, vm.StateTerminated, daemon.Instances.VMS["i-persist-shut"].Status)
 
-	// Second restart: load again, verify states are already finalized.
+	// Second restart: stopped instance is in shared KV (not per-node state),
+	// so local map won't have it. Terminated instance persists in per-node state.
 	daemon.Instances.VMS = make(map[string]*vm.VM)
 	daemon.restoreInstances()
 
-	assert.Equal(t, vm.StateStopped, daemon.Instances.VMS["i-persist-stop"].Status,
-		"stopped state should persist through second restart")
+	// Stopped instance should still be in shared KV
+	stoppedInst2, err := daemon.jsManager.LoadStoppedInstance("i-persist-stop")
+	require.NoError(t, err)
+	require.NotNil(t, stoppedInst2, "stopped instance should persist in shared KV through second restart")
+	assert.Equal(t, vm.StateStopped, stoppedInst2.Status)
+
 	assert.Equal(t, vm.StateTerminated, daemon.Instances.VMS["i-persist-shut"].Status,
 		"terminated state should persist through second restart")
 }
@@ -792,10 +826,10 @@ func TestStatePersistence_RoundTrip(t *testing.T) {
 	assert.Equal(t, original.Attributes.StopInstance, loaded.Attributes.StopInstance)
 }
 
-// TestRestoreInstances_StoppedInstanceCanReceiveStartCommand verifies that after
-// a daemon restart, a stopped instance has an active ec2.cmd.<id> subscription
-// so the gateway's StartInstances can reach it (no "no responders" error).
-func TestRestoreInstances_StoppedInstanceCanReceiveStartCommand(t *testing.T) {
+// TestRestoreInstances_StoppedInstanceMigratedToSharedKV verifies that after
+// a daemon restart, a stopped instance is migrated to shared KV and can be
+// retrieved by the ec2.start handler.
+func TestRestoreInstances_StoppedInstanceMigratedToSharedKV(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
 	instanceID := "i-restore-start"
@@ -811,31 +845,15 @@ func TestRestoreInstances_StoppedInstanceCanReceiveStartCommand(t *testing.T) {
 	daemon.Instances.VMS = make(map[string]*vm.VM)
 	daemon.restoreInstances()
 
-	// Instance should still be stopped.
-	instance, ok := daemon.Instances.VMS[instanceID]
-	require.True(t, ok, "stopped instance should be loaded after restore")
-	assert.Equal(t, vm.StateStopped, instance.Status)
+	// Instance should not be in local map (migrated to shared KV).
+	_, ok := daemon.Instances.VMS[instanceID]
+	assert.False(t, ok, "stopped instance should be migrated to shared KV, not in local map")
 
-	// Send a start command to the per-instance topic (ec2.cmd.<id>).
-	// restoreInstances should have created this subscription for stopped instances.
-	command := qmp.Command{
-		ID: instanceID,
-		QMPCommand: qmp.QMPCommand{
-			Execute:   "cont",
-			Arguments: map[string]any{},
-		},
-		Attributes: qmp.Attributes{
-			StartInstance: true,
-		},
-	}
-	cmdData, err := json.Marshal(command)
+	// Instance should be in shared KV
+	stoppedInst, err := daemon.jsManager.LoadStoppedInstance(instanceID)
 	require.NoError(t, err)
-
-	// The request should get a response (subscription exists), not "no responders".
-	// LaunchInstance will fail in tests (no QEMU), so we expect an error response,
-	// but the key assertion is that the subscription is active.
-	subject := fmt.Sprintf("ec2.cmd.%s", instanceID)
-	reply, err := daemon.natsConn.Request(subject, cmdData, 5*time.Second)
-	require.NoError(t, err, "ec2.cmd.%s should have a subscriber after restoreInstances", instanceID)
-	require.NotNil(t, reply)
+	require.NotNil(t, stoppedInst, "stopped instance should exist in shared KV")
+	assert.Equal(t, vm.StateStopped, stoppedInst.Status)
+	assert.Equal(t, "node-1", stoppedInst.LastNode,
+		"stopped instance should record last node")
 }

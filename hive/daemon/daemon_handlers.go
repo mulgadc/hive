@@ -539,12 +539,54 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command qmp.Comman
 		} else {
 			d.Instances.Mu.Lock()
 			inst.Attributes = attrs
+			inst.LastNode = d.node
 			d.Instances.Mu.Unlock()
 
 			if err := d.TransitionState(inst, finalState); err != nil {
 				slog.Error("Failed to transition to final state", "instanceId", inst.ID, "err", err)
 			}
 			slog.Info("Instance "+string(finalState), "id", inst.ID)
+
+			// For stop (not terminate): release ownership to shared KV so any
+			// daemon can pick up the next StartInstance request.
+			if !isTerminate && d.jsManager != nil {
+
+				// Write to shared KV first — if daemon crashes after this but
+				// before local cleanup, restoreInstances handles the overlap.
+				if err := d.jsManager.WriteStoppedInstance(inst.ID, inst); err != nil {
+					slog.Error("Failed to write stopped instance to shared KV, keeping local ownership",
+						"instanceId", inst.ID, "err", err)
+				} else {
+					// Unsubscribe from per-instance NATS topic
+					d.mu.Lock()
+					if sub, ok := d.natsSubscriptions[inst.ID]; ok {
+						if err := sub.Unsubscribe(); err != nil {
+							slog.Error("Failed to unsubscribe stopped instance", "instanceId", inst.ID, "err", err)
+						}
+						delete(d.natsSubscriptions, inst.ID)
+					}
+					d.mu.Unlock()
+
+					// Remove from local instance map
+					d.Instances.Mu.Lock()
+					delete(d.Instances.VMS, inst.ID)
+					d.Instances.Mu.Unlock()
+
+					// Persist local state without the stopped instance
+					if err := d.WriteState(); err != nil {
+						slog.Error("Failed to persist state after releasing stopped instance, re-adding to local map for consistency",
+							"instanceId", inst.ID, "err", err)
+						// Re-add to local map so in-memory state matches on-disk state.
+						// On next restart, restoreInstances will retry the migration.
+						d.Instances.Mu.Lock()
+						d.Instances.VMS[inst.ID] = inst
+						d.Instances.Mu.Unlock()
+					} else {
+						slog.Info("Released stopped instance ownership to shared KV",
+							"instanceId", inst.ID, "lastNode", d.node)
+					}
+				}
+			}
 		}
 	}(instance, command.Attributes)
 }
@@ -1283,4 +1325,316 @@ func (d *Daemon) handleEC2EnableSerialConsoleAccess(msg *nats.Msg) {
 
 func (d *Daemon) handleEC2DisableSerialConsoleAccess(msg *nats.Msg) {
 	handleNATSRequest(msg, d.accountService.DisableSerialConsoleAccess)
+}
+
+// startStoppedInstanceRequest is the payload for ec2.start topic
+type startStoppedInstanceRequest struct {
+	InstanceID string `json:"instance_id"`
+}
+
+// handleEC2StartStoppedInstance picks up a stopped instance from shared KV,
+// re-launches it on this daemon node, and removes it from shared KV.
+func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
+	respondWithError := func(errCode string) {
+		if err := msg.Respond(utils.GenerateErrorPayload(errCode)); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
+	}
+
+	var req startStoppedInstanceRequest
+	if err := json.Unmarshal(msg.Data, &req); err != nil {
+		slog.Error("handleEC2StartStoppedInstance: failed to unmarshal request", "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	if req.InstanceID == "" {
+		slog.Error("handleEC2StartStoppedInstance: missing instance_id")
+		respondWithError(awserrors.ErrorMissingParameter)
+		return
+	}
+
+	if d.jsManager == nil {
+		slog.Error("handleEC2StartStoppedInstance: JetStream not available")
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	// Load instance from shared KV
+	instance, err := d.jsManager.LoadStoppedInstance(req.InstanceID)
+	if err != nil {
+		slog.Error("handleEC2StartStoppedInstance: failed to load stopped instance", "instanceId", req.InstanceID, "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+	if instance == nil {
+		slog.Warn("handleEC2StartStoppedInstance: instance not found in shared KV", "instanceId", req.InstanceID)
+		respondWithError(awserrors.ErrorInvalidInstanceIDNotFound)
+		return
+	}
+
+	if instance.Status != vm.StateStopped {
+		slog.Error("handleEC2StartStoppedInstance: instance not in stopped state", "instanceId", req.InstanceID, "status", instance.Status)
+		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		return
+	}
+
+	// Reset node-local fields that are stale after cross-node migration
+	instance.ResetNodeLocalState()
+
+	// Allocate resources
+	instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
+	if !ok {
+		slog.Error("handleEC2StartStoppedInstance: unknown instance type", "instanceId", req.InstanceID, "instanceType", instance.InstanceType)
+		respondWithError(awserrors.ErrorInvalidInstanceType)
+		return
+	}
+	if err := d.resourceMgr.allocate(instanceType); err != nil {
+		slog.Error("handleEC2StartStoppedInstance: failed to allocate resources", "instanceId", req.InstanceID, "err", err)
+		respondWithError(awserrors.ErrorInsufficientInstanceCapacity)
+		return
+	}
+
+	// Add instance to local map and clear stop attribute before launch
+	d.Instances.Mu.Lock()
+	d.Instances.VMS[instance.ID] = instance
+	instance.Attributes = qmp.Attributes{StartInstance: true}
+	d.Instances.Mu.Unlock()
+
+	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
+	err = d.LaunchInstance(instance)
+	if err != nil {
+		slog.Error("handleEC2StartStoppedInstance: LaunchInstance failed", "instanceId", req.InstanceID, "err", err)
+		// Rollback: deallocate resources and remove from local map
+		if ok {
+			d.resourceMgr.deallocate(instanceType)
+		}
+		d.Instances.Mu.Lock()
+		delete(d.Instances.VMS, instance.ID)
+		d.Instances.Mu.Unlock()
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	// Remove from shared KV now that it's running locally.
+	// Retry once on failure — a stale KV entry risks duplicate starts.
+	if err := d.jsManager.DeleteStoppedInstance(req.InstanceID); err != nil {
+		slog.Warn("handleEC2StartStoppedInstance: first KV delete failed, retrying",
+			"instanceId", req.InstanceID, "err", err)
+		if retryErr := d.jsManager.DeleteStoppedInstance(req.InstanceID); retryErr != nil {
+			slog.Error("handleEC2StartStoppedInstance: KV delete failed after retry, instance is running locally but stale entry remains in shared KV",
+				"instanceId", req.InstanceID, "err", retryErr)
+		}
+	}
+
+	slog.Info("Started stopped instance from shared KV", "instanceId", instance.ID, "node", d.node)
+
+	if err := msg.Respond(fmt.Appendf(nil, `{"status":"running","instanceId":"%s"}`, instance.ID)); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
+}
+
+// terminateStoppedInstanceRequest is the payload for ec2.terminate topic
+type terminateStoppedInstanceRequest struct {
+	InstanceID string `json:"instance_id"`
+}
+
+// handleEC2TerminateStoppedInstance picks up a stopped instance from shared KV,
+// deletes its volumes, and removes it from shared KV.
+func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
+	respondWithError := func(errCode string) {
+		if err := msg.Respond(utils.GenerateErrorPayload(errCode)); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
+	}
+
+	var req terminateStoppedInstanceRequest
+	if err := json.Unmarshal(msg.Data, &req); err != nil {
+		slog.Error("handleEC2TerminateStoppedInstance: failed to unmarshal request", "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	if req.InstanceID == "" {
+		slog.Error("handleEC2TerminateStoppedInstance: missing instance_id")
+		respondWithError(awserrors.ErrorMissingParameter)
+		return
+	}
+
+	if d.jsManager == nil {
+		slog.Error("handleEC2TerminateStoppedInstance: JetStream not available")
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	// Load instance from shared KV
+	instance, err := d.jsManager.LoadStoppedInstance(req.InstanceID)
+	if err != nil {
+		slog.Error("handleEC2TerminateStoppedInstance: failed to load stopped instance", "instanceId", req.InstanceID, "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+	if instance == nil {
+		slog.Warn("handleEC2TerminateStoppedInstance: instance not found in shared KV", "instanceId", req.InstanceID)
+		respondWithError(awserrors.ErrorInvalidInstanceIDNotFound)
+		return
+	}
+
+	if instance.Status != vm.StateStopped {
+		slog.Error("handleEC2TerminateStoppedInstance: instance not in stopped state", "instanceId", req.InstanceID, "status", instance.Status)
+		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		return
+	}
+
+	// Delete volumes — no QEMU shutdown or unmount needed (already done during stop)
+	instance.EBSRequests.Mu.Lock()
+	for _, ebsRequest := range instance.EBSRequests.Requests {
+		// Internal volumes (EFI, cloud-init) are always cleaned up via ebs.delete
+		if ebsRequest.EFI || ebsRequest.CloudInit {
+			ebsDeleteData, err := json.Marshal(config.EBSDeleteRequest{Volume: ebsRequest.Name})
+			if err != nil {
+				slog.Error("handleEC2TerminateStoppedInstance: failed to marshal ebs.delete request", "name", ebsRequest.Name, "err", err)
+				continue
+			}
+			deleteMsg, err := d.natsConn.Request("ebs.delete", ebsDeleteData, 30*time.Second)
+			if err != nil {
+				slog.Warn("handleEC2TerminateStoppedInstance: ebs.delete failed for internal volume", "name", ebsRequest.Name, "err", err)
+			} else {
+				slog.Info("handleEC2TerminateStoppedInstance: ebs.delete sent for internal volume", "name", ebsRequest.Name, "data", string(deleteMsg.Data))
+			}
+			continue
+		}
+
+		// User-visible volumes: respect DeleteOnTermination flag
+		if !ebsRequest.DeleteOnTermination {
+			slog.Info("handleEC2TerminateStoppedInstance: volume has DeleteOnTermination=false, skipping", "name", ebsRequest.Name)
+			continue
+		}
+
+		slog.Info("handleEC2TerminateStoppedInstance: deleting volume with DeleteOnTermination=true", "name", ebsRequest.Name)
+		_, err := d.volumeService.DeleteVolume(&ec2.DeleteVolumeInput{
+			VolumeId: &ebsRequest.Name,
+		})
+		if err != nil {
+			slog.Error("handleEC2TerminateStoppedInstance: failed to delete volume", "name", ebsRequest.Name, "err", err)
+		}
+	}
+	instance.EBSRequests.Mu.Unlock()
+
+	// Remove from shared KV
+	if err := d.jsManager.DeleteStoppedInstance(req.InstanceID); err != nil {
+		slog.Error("handleEC2TerminateStoppedInstance: failed to delete from shared KV", "instanceId", req.InstanceID, "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	slog.Info("Terminated stopped instance from shared KV", "instanceId", req.InstanceID)
+
+	if err := msg.Respond(fmt.Appendf(nil, `{"status":"terminated","instanceId":"%s"}`, req.InstanceID)); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
+}
+
+// handleEC2DescribeStoppedInstances returns stopped instances from shared KV.
+func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
+	respondWithError := func(errCode string) {
+		if err := msg.Respond(utils.GenerateErrorPayload(errCode)); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
+	}
+
+	if d.jsManager == nil {
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	// Parse optional filters from the request
+	describeInput := &ec2.DescribeInstancesInput{}
+	if len(msg.Data) > 0 {
+		if errResp := utils.UnmarshalJsonPayload(describeInput, msg.Data); errResp != nil {
+			if err := msg.Respond(errResp); err != nil {
+				slog.Error("Failed to respond to NATS request", "err", err)
+			}
+			return
+		}
+	}
+
+	// Build instance ID filter
+	instanceIDFilter := make(map[string]bool)
+	if len(describeInput.InstanceIds) > 0 {
+		for _, id := range describeInput.InstanceIds {
+			if id != nil {
+				instanceIDFilter[*id] = true
+			}
+		}
+	}
+
+	instances, err := d.jsManager.ListStoppedInstances()
+	if err != nil {
+		slog.Error("handleEC2DescribeStoppedInstances: failed to list stopped instances", "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	// Group instances by reservation ID
+	reservationMap := make(map[string]*ec2.Reservation)
+
+	for _, instance := range instances {
+		// Apply instance ID filter
+		if len(instanceIDFilter) > 0 && !instanceIDFilter[instance.ID] {
+			continue
+		}
+
+		if instance.Reservation != nil && instance.Instance != nil {
+			resID := ""
+			if instance.Reservation.ReservationId != nil {
+				resID = *instance.Reservation.ReservationId
+			}
+
+			if _, exists := reservationMap[resID]; !exists {
+				reservation := &ec2.Reservation{}
+				reservation.SetReservationId(resID)
+				if instance.Reservation.OwnerId != nil {
+					reservation.SetOwnerId(*instance.Reservation.OwnerId)
+				}
+				reservation.Instances = []*ec2.Instance{}
+				reservationMap[resID] = reservation
+			}
+
+			// Update the instance state
+			instanceCopy := *instance.Instance
+			instanceCopy.State = &ec2.InstanceState{}
+			if info, ok := vm.EC2StateCodes[instance.Status]; ok {
+				instanceCopy.State.SetCode(info.Code)
+				instanceCopy.State.SetName(info.Name)
+			} else {
+				instanceCopy.State.SetCode(80)
+				instanceCopy.State.SetName("stopped")
+			}
+
+			reservationMap[resID].Instances = append(reservationMap[resID].Instances, &instanceCopy)
+		}
+	}
+
+	reservations := make([]*ec2.Reservation, 0, len(reservationMap))
+	for _, reservation := range reservationMap {
+		reservations = append(reservations, reservation)
+	}
+
+	output := &ec2.DescribeInstancesOutput{
+		Reservations: reservations,
+	}
+
+	jsonResponse, err := json.Marshal(output)
+	if err != nil {
+		slog.Error("handleEC2DescribeStoppedInstances: failed to marshal output", "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	if err := msg.Respond(jsonResponse); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
+
+	slog.Info("handleEC2DescribeStoppedInstances completed", "count", len(reservations))
 }

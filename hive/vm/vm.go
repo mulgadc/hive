@@ -38,11 +38,27 @@ type VM struct {
 	// Instance contains the current instance state and metadata
 	Instance *ec2.Instance `json:"instance,omitempty"`
 
+	// LastNode records which daemon node last ran this instance.
+	// Set when ownership is released on stop for shared KV storage.
+	LastNode string `json:"last_node,omitempty"`
+
 	// User data for cloud-init (decoded from base64)
 	UserData string `json:"user_data,omitempty"`
 
 	// Metadata server address (e.g., "127.0.0.1:12345") for EC2 metadata service
 	MetadataServerAddress string `json:"metadata_server_address,omitempty"`
+}
+
+// ResetNodeLocalState zeroes out fields that are specific to the daemon node
+// that last ran this instance. Must be called after deserializing a VM from
+// shared KV before launching it on a new node.
+func (v *VM) ResetNodeLocalState() {
+	v.PID = 0
+	v.PTS = 0
+	v.Running = false
+	v.MetadataServerAddress = ""
+	v.QMPClient = &qmp.QMPClient{}
+	v.EBSRequests.Mu = sync.Mutex{}
 }
 
 type Instances struct {
