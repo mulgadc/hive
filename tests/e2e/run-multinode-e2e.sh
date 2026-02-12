@@ -208,6 +208,45 @@ echo "  AMI ID: $AMI_ID"
 $AWS_EC2 describe-images --image-ids "$AMI_ID" | jq -e ".Images[0] | select(.ImageId==\"$AMI_ID\")" > /dev/null
 echo "  AMI verified"
 
+# Phase 4b: Multi-Node Key Pair Operations
+echo ""
+echo "Phase 4b: Multi-Node Key Pair Operations"
+echo "========================================"
+echo "Testing key pair CRUD across the cluster..."
+
+# Import a key pair (goes to a random node via queue group)
+echo "  Generating local RSA key for import..."
+ssh-keygen -t rsa -b 2048 -f multinode-test-key-2-local -N ""
+$AWS_EC2 import-key-pair --key-name multinode-test-key-2 --public-key-material "fileb://multinode-test-key-2-local.pub"
+echo "  Imported key: multinode-test-key-2"
+
+# Describe key pairs — verify both keys are visible
+echo "  Verifying both keys via describe-key-pairs..."
+KEY_LIST=$($AWS_EC2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text)
+echo "  Keys found: $KEY_LIST"
+echo "$KEY_LIST" | grep -q "multinode-test-key" || {
+    echo "  ERROR: multinode-test-key not found in describe-key-pairs"
+    exit 1
+}
+echo "$KEY_LIST" | grep -q "multinode-test-key-2" || {
+    echo "  ERROR: multinode-test-key-2 not found in describe-key-pairs"
+    exit 1
+}
+echo "  Both keys visible"
+
+# Delete the imported key
+echo "  Deleting multinode-test-key-2..."
+$AWS_EC2 delete-key-pair --key-name multinode-test-key-2
+
+# Verify deletion
+REMAINING_KEYS=$($AWS_EC2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text)
+if echo "$REMAINING_KEYS" | grep -q "multinode-test-key-2"; then
+    echo "  ERROR: multinode-test-key-2 was not deleted"
+    exit 1
+fi
+echo "  Key deletion verified"
+echo "  Multi-node key pair operations passed"
+
 # Phase 5: Multi-Node Instance Tests
 echo ""
 echo "Phase 5: Multi-Node Instance Tests"
@@ -681,7 +720,50 @@ if [ "$FINAL_COUNT" -ne 1 ]; then
     echo "  ERROR: Expected 1 tag remaining, got $FINAL_COUNT"
     exit 1
 fi
-echo "  Tag management tests passed"
+echo "  Instance tag tests passed"
+
+# Test 1d-ii: Tags on Volumes (multi-node)
+echo ""
+echo "Test 1d-ii: Tags on Volumes (Multi-Node)"
+echo "----------------------------------------"
+
+# Get the root volume of the first instance
+TAG_VOL_ID=$($AWS_EC2 describe-instances --instance-ids "${INSTANCE_IDS[0]}" \
+    --query 'Reservations[0].Instances[0].BlockDeviceMappings[0].Ebs.VolumeId' --output text)
+echo "  Tagging volume $TAG_VOL_ID..."
+
+# Create tags on volume
+$AWS_EC2 create-tags --resources "$TAG_VOL_ID" --tags Key=Name,Value=multinode-root-vol Key=Environment,Value=testing
+
+# Verify tags on volume
+VOL_TAG_COUNT=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$TAG_VOL_ID" \
+    --query 'length(Tags || `[]`)' --output text)
+if [ "$VOL_TAG_COUNT" -ne 2 ]; then
+    echo "  ERROR: Expected 2 tags on volume, got $VOL_TAG_COUNT"
+    exit 1
+fi
+echo "  Volume has $VOL_TAG_COUNT tags"
+
+# Filter by resource-type=volume
+VOL_TYPE_TAGS=$($AWS_EC2 describe-tags --filters "Name=resource-type,Values=volume" \
+    --query 'length(Tags || `[]`)' --output text)
+if [ "$VOL_TYPE_TAGS" -lt 2 ]; then
+    echo "  ERROR: Expected at least 2 volume tags, got $VOL_TYPE_TAGS"
+    exit 1
+fi
+echo "  Volume resource-type filter returned $VOL_TYPE_TAGS tags"
+
+# Delete tags from volume
+$AWS_EC2 delete-tags --resources "$TAG_VOL_ID" --tags Key=Name Key=Environment
+VOL_TAG_AFTER=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$TAG_VOL_ID" \
+    --query 'length(Tags || `[]`)' --output text)
+if [ "$VOL_TAG_AFTER" -ne 0 ]; then
+    echo "  ERROR: Expected 0 tags after delete, got $VOL_TAG_AFTER"
+    exit 1
+fi
+echo "  Volume tag cleanup verified"
+
+echo "  Tag management tests passed (instances + volumes)"
 
 # Test 2: DescribeInstances Aggregation
 echo ""

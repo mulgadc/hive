@@ -408,6 +408,35 @@ verify_ssh_unreachable() {
     fi
 }
 
+# Expect an AWS CLI command to fail with a specific error code
+# Usage: expect_error "ErrorCode" aws ec2 some-command --args...
+# Returns: 0 if the command fails with the expected error, 1 otherwise
+expect_error() {
+    local expected_error="$1"
+    shift
+
+    set +e
+    local output
+    output=$("$@" 2>&1)
+    local exit_code=$?
+    set -e
+
+    if [ $exit_code -eq 0 ]; then
+        echo "  FAIL: Expected error '$expected_error' but command succeeded"
+        echo "  Output: $output"
+        return 1
+    fi
+
+    if echo "$output" | grep -q "$expected_error"; then
+        echo "  Got expected error: $expected_error"
+        return 0
+    else
+        echo "  FAIL: Expected error '$expected_error' but got different error"
+        echo "  Output: $output"
+        return 1
+    fi
+}
+
 # Dump logs from all nodes (for debugging failures)
 dump_all_node_logs() {
     echo ""
