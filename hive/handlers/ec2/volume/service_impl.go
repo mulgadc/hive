@@ -865,7 +865,7 @@ func (s *VolumeServiceImpl) checkVolumeHasNoSnapshots(volumeID string) error {
 	}
 	if has {
 		slog.Error("DeleteVolume blocked: volume has snapshots (KV)", "volumeId", volumeID)
-		return fmt.Errorf("%s: volume %s has existing snapshots. Delete snapshots first", awserrors.ErrorVolumeInUse, volumeID)
+		return errors.New(awserrors.ErrorVolumeInUse)
 	}
 	return nil
 }
@@ -956,7 +956,7 @@ func (s *VolumeServiceImpl) snapshotReferencesVolume(snapshotID, volumeID string
 
 		if ref.referencesVolume(volumeID) {
 			slog.Error("DeleteVolume blocked: volume has snapshots", "volumeId", volumeID, "snapshotId", snapshotID)
-			return fmt.Errorf("%s: volume %s has existing snapshot %s. Delete snapshots first", awserrors.ErrorVolumeInUse, volumeID, snapshotID)
+			return errors.New(awserrors.ErrorVolumeInUse)
 		}
 	}
 

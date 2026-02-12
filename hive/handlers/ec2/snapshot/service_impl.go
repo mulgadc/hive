@@ -248,22 +248,25 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput) (*e
 		}
 
 		msg, err := s.natsConn.Request(fmt.Sprintf("ebs.snapshot.%s", volumeID), snapData, 30*time.Second)
-		if err != nil {
+		if errors.Is(err, nats.ErrNoResponders) {
+			// Volume is not mounted — data is already persisted to S3, proceed with metadata-only snapshot.
+			slog.Info("CreateSnapshot: volume not mounted, creating metadata-only snapshot", "volumeId", volumeID, "snapshotId", snapshotID)
+		} else if err != nil {
 			slog.Error("CreateSnapshot: ebs.snapshot NATS request failed", "volumeId", volumeID, "snapshotId", snapshotID, "err", err)
 			return nil, errors.New(awserrors.ErrorServerInternal)
-		}
+		} else {
+			var snapResp config.EBSSnapshotResponse
+			if err := json.Unmarshal(msg.Data, &snapResp); err != nil {
+				slog.Error("CreateSnapshot: failed to unmarshal ebs.snapshot response", "volumeId", volumeID, "snapshotId", snapshotID, "err", err)
+				return nil, errors.New(awserrors.ErrorServerInternal)
+			}
+			if !snapResp.Success || snapResp.Error != "" {
+				slog.Error("CreateSnapshot: viperblock snapshot failed", "volumeId", volumeID, "snapshotId", snapshotID, "err", snapResp.Error)
+				return nil, errors.New(awserrors.ErrorServerInternal)
+			}
 
-		var snapResp config.EBSSnapshotResponse
-		if err := json.Unmarshal(msg.Data, &snapResp); err != nil {
-			slog.Error("CreateSnapshot: failed to unmarshal ebs.snapshot response", "volumeId", volumeID, "snapshotId", snapshotID, "err", err)
-			return nil, errors.New(awserrors.ErrorServerInternal)
+			slog.Info("CreateSnapshot: viperblock snapshot created", "volumeId", volumeID, "snapshotId", snapshotID)
 		}
-		if !snapResp.Success || snapResp.Error != "" {
-			slog.Error("CreateSnapshot: viperblock snapshot failed", "volumeId", volumeID, "snapshotId", snapshotID, "err", snapResp.Error)
-			return nil, errors.New(awserrors.ErrorServerInternal)
-		}
-
-		slog.Info("CreateSnapshot: viperblock snapshot created", "volumeId", volumeID, "snapshotId", snapshotID)
 	} else {
 		slog.Warn("CreateSnapshot: natsConn is nil, skipping viperblock snapshot (metadata-only)", "volumeId", volumeID)
 	}
