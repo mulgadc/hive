@@ -274,97 +274,6 @@ func newTestVolumeServiceWithStore(az string, store *objectstore.MemoryObjectSto
 	return NewVolumeServiceImplWithStore(cfg, store, nil)
 }
 
-func TestDeleteVolume_BlockedBySnapshot(t *testing.T) {
-	store := objectstore.NewMemoryObjectStore()
-	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
-
-	volumeID := "vol-test123"
-
-	// Create volume config in store
-	volumeState := viperblock.VBState{
-		VolumeConfig: viperblock.VolumeConfig{
-			VolumeMetadata: viperblock.VolumeMetadata{
-				VolumeID: volumeID,
-				SizeGiB:  10,
-				State:    "available",
-			},
-		},
-	}
-	data, err := json.Marshal(volumeState)
-	require.NoError(t, err)
-
-	_, err = store.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String("test-bucket"),
-		Key:    aws.String(volumeID + "/config.json"),
-		Body:   strings.NewReader(string(data)),
-	})
-	require.NoError(t, err)
-
-	// Create a snapshot referencing this volume
-	snapCfg := snapshotVolumeRef{VolumeID: volumeID}
-	snapData, err := json.Marshal(snapCfg)
-	require.NoError(t, err)
-
-	_, err = store.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String("test-bucket"),
-		Key:    aws.String("snap-abc123/config.json"),
-		Body:   strings.NewReader(string(snapData)),
-	})
-	require.NoError(t, err)
-
-	// DeleteVolume should be blocked
-	_, err = svc.DeleteVolume(&ec2.DeleteVolumeInput{
-		VolumeId: aws.String(volumeID),
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), awserrors.ErrorVolumeInUse)
-}
-
-func TestDeleteVolume_AllowedWithoutSnapshots(t *testing.T) {
-	store := objectstore.NewMemoryObjectStore()
-	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
-
-	volumeID := "vol-test456"
-
-	// Create volume config in store
-	volumeState := viperblock.VBState{
-		VolumeConfig: viperblock.VolumeConfig{
-			VolumeMetadata: viperblock.VolumeMetadata{
-				VolumeID: volumeID,
-				SizeGiB:  10,
-				State:    "available",
-			},
-		},
-	}
-	data, err := json.Marshal(volumeState)
-	require.NoError(t, err)
-
-	_, err = store.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String("test-bucket"),
-		Key:    aws.String(volumeID + "/config.json"),
-		Body:   strings.NewReader(string(data)),
-	})
-	require.NoError(t, err)
-
-	// Create a snapshot referencing a DIFFERENT volume
-	snapCfg := snapshotVolumeRef{VolumeID: "vol-other"}
-	snapData, err := json.Marshal(snapCfg)
-	require.NoError(t, err)
-
-	_, err = store.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String("test-bucket"),
-		Key:    aws.String("snap-xyz789/config.json"),
-		Body:   strings.NewReader(string(snapData)),
-	})
-	require.NoError(t, err)
-
-	// DeleteVolume should succeed (no snapshots reference this volume)
-	_, err = svc.DeleteVolume(&ec2.DeleteVolumeInput{
-		VolumeId: aws.String(volumeID),
-	})
-	require.NoError(t, err)
-}
-
 func TestCreateVolume_FromSnapshot_PassesValidation(t *testing.T) {
 	store := objectstore.NewMemoryObjectStore()
 	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
@@ -504,98 +413,6 @@ func TestCreateVolume_FromSnapshot_SizeEqualToSnapshot(t *testing.T) {
 	}
 }
 
-func TestDeleteVolume_BlockedBySourceVolumeName(t *testing.T) {
-	store := objectstore.NewMemoryObjectStore()
-	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
-
-	volumeID := "vol-srcname"
-
-	// Create volume config
-	volumeState := viperblock.VBState{
-		VolumeConfig: viperblock.VolumeConfig{
-			VolumeMetadata: viperblock.VolumeMetadata{
-				VolumeID: volumeID,
-				SizeGiB:  10,
-				State:    "available",
-			},
-		},
-	}
-	data, err := json.Marshal(volumeState)
-	require.NoError(t, err)
-
-	_, err = store.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String("test-bucket"),
-		Key:    aws.String(volumeID + "/config.json"),
-		Body:   strings.NewReader(string(data)),
-	})
-	require.NoError(t, err)
-
-	// Snapshot references volume via SourceVolumeName (viperblock config.json format)
-	snapCfg := snapshotVolumeRef{SourceVolumeName: volumeID}
-	snapData, err := json.Marshal(snapCfg)
-	require.NoError(t, err)
-
-	_, err = store.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String("test-bucket"),
-		Key:    aws.String("snap-vb001/config.json"),
-		Body:   strings.NewReader(string(snapData)),
-	})
-	require.NoError(t, err)
-
-	// DeleteVolume should be blocked via SourceVolumeName match
-	_, err = svc.DeleteVolume(&ec2.DeleteVolumeInput{
-		VolumeId: aws.String(volumeID),
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), awserrors.ErrorVolumeInUse)
-}
-
-func TestDeleteVolume_BlockedByMetadataJson(t *testing.T) {
-	store := objectstore.NewMemoryObjectStore()
-	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
-
-	volumeID := "vol-metablock"
-
-	// Create volume config
-	volumeState := viperblock.VBState{
-		VolumeConfig: viperblock.VolumeConfig{
-			VolumeMetadata: viperblock.VolumeMetadata{
-				VolumeID: volumeID,
-				SizeGiB:  10,
-				State:    "available",
-			},
-		},
-	}
-	data, err := json.Marshal(volumeState)
-	require.NoError(t, err)
-
-	_, err = store.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String("test-bucket"),
-		Key:    aws.String(volumeID + "/config.json"),
-		Body:   strings.NewReader(string(data)),
-	})
-	require.NoError(t, err)
-
-	// Snapshot references volume via metadata.json (hive format, volume_id field)
-	snapCfg := snapshotVolumeRef{VolumeID: volumeID}
-	snapData, err := json.Marshal(snapCfg)
-	require.NoError(t, err)
-
-	_, err = store.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String("test-bucket"),
-		Key:    aws.String("snap-meta001/metadata.json"),
-		Body:   strings.NewReader(string(snapData)),
-	})
-	require.NoError(t, err)
-
-	// DeleteVolume should be blocked via metadata.json match
-	_, err = svc.DeleteVolume(&ec2.DeleteVolumeInput{
-		VolumeId: aws.String(volumeID),
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), awserrors.ErrorVolumeInUse)
-}
-
 func TestCreateVolume_FromSnapshot_CorruptMetadata(t *testing.T) {
 	store := objectstore.NewMemoryObjectStore()
 	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
@@ -615,48 +432,6 @@ func TestCreateVolume_FromSnapshot_CorruptMetadata(t *testing.T) {
 		SnapshotId:       aws.String(snapshotID),
 	})
 	require.Error(t, err)
-}
-
-func TestDeleteVolume_CorruptSnapshotMetadata_SkipsFile(t *testing.T) {
-	store := objectstore.NewMemoryObjectStore()
-	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
-
-	volumeID := "vol-corruptsnap"
-
-	// Create volume config
-	volumeState := viperblock.VBState{
-		VolumeConfig: viperblock.VolumeConfig{
-			VolumeMetadata: viperblock.VolumeMetadata{
-				VolumeID: volumeID,
-				SizeGiB:  10,
-				State:    "available",
-			},
-		},
-	}
-	data, err := json.Marshal(volumeState)
-	require.NoError(t, err)
-
-	_, err = store.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String("test-bucket"),
-		Key:    aws.String(volumeID + "/config.json"),
-		Body:   strings.NewReader(string(data)),
-	})
-	require.NoError(t, err)
-
-	// Put corrupt metadata.json (invalid JSON) -- should be skipped
-	_, err = store.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String("test-bucket"),
-		Key:    aws.String("snap-corrupt/metadata.json"),
-		Body:   strings.NewReader("not json{{{"),
-	})
-	require.NoError(t, err)
-
-	// No valid config.json either, so no snapshot blocks this volume.
-	// DeleteVolume should succeed since corrupt metadata is skipped.
-	_, err = svc.DeleteVolume(&ec2.DeleteVolumeInput{
-		VolumeId: aws.String(volumeID),
-	})
-	require.NoError(t, err)
 }
 
 // setupTestVolumeKV creates a NATS JetStream test server and returns a KV bucket.
@@ -751,30 +526,18 @@ func TestDeleteVolume_AllowedByKV(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestDeleteVolume_FallbackToS3WhenKVNil(t *testing.T) {
+func TestDeleteVolume_ErrorWhenKVNil(t *testing.T) {
 	store := objectstore.NewMemoryObjectStore()
 	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
 	// snapshotKV is nil by default
 
-	volumeID := "vol-s3fallback"
+	volumeID := "vol-nokvtest"
 	createVolumeInStore(t, store, volumeID)
 
-	// Put a snapshot referencing this volume in S3 (old path)
-	snapCfg := snapshotVolumeRef{VolumeID: volumeID}
-	snapData, err := json.Marshal(snapCfg)
-	require.NoError(t, err)
-
-	_, err = store.PutObject(&s3.PutObjectInput{
-		Bucket: aws.String("test-bucket"),
-		Key:    aws.String("snap-fallback/metadata.json"),
-		Body:   strings.NewReader(string(snapData)),
-	})
-	require.NoError(t, err)
-
-	// Should still be blocked via S3 fallback
-	_, err = svc.DeleteVolume(&ec2.DeleteVolumeInput{
+	// Should fail because snapshotKV is nil
+	_, err := svc.DeleteVolume(&ec2.DeleteVolumeInput{
 		VolumeId: aws.String(volumeID),
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), awserrors.ErrorVolumeInUse)
+	assert.Contains(t, err.Error(), awserrors.ErrorServerInternal)
 }

@@ -713,9 +713,9 @@ func (s *VolumeServiceImpl) DeleteVolume(input *ec2.DeleteVolumeInput) (*ec2.Del
 		return nil, errors.New(awserrors.ErrorVolumeInUse)
 	}
 
-	// Check if any snapshots reference this volume. Snapshot-backed clones
-	// read chunk files from the source volume's S3 prefix via ReadFrom().
-	// Deleting the source volume would silently break all clones.
+	// Check if any snapshots reference this volume via JetStream KV.
+	// Snapshot-backed clones read chunk files from the source volume's
+	// S3 prefix via ReadFrom(). Deleting the source would break all clones.
 	if err := s.checkVolumeHasNoSnapshots(volumeID); err != nil {
 		return nil, err
 	}
@@ -839,32 +839,21 @@ func (s *VolumeServiceImpl) getSnapshotMetadata(snapshotID string) (*snapshotMet
 	return &meta, nil
 }
 
-// snapshotVolumeRef reads VolumeID from hive metadata.json (volume_id)
-// or viperblock config.json (SourceVolumeName).
-type snapshotVolumeRef struct {
-	VolumeID         string `json:"volume_id"`
-	SourceVolumeName string `json:"SourceVolumeName"`
-}
-
-func (r snapshotVolumeRef) referencesVolume(volumeID string) bool {
-	return r.VolumeID == volumeID || r.SourceVolumeName == volumeID
-}
-
-// checkVolumeHasNoSnapshots checks if a volume has dependent snapshots.
-// Uses the JetStream KV index for O(1) lookup when available, falling back
-// to the S3 scan when KV is nil or the lookup fails.
+// checkVolumeHasNoSnapshots checks if a volume has dependent snapshots
+// using the JetStream KV index.
 func (s *VolumeServiceImpl) checkVolumeHasNoSnapshots(volumeID string) error {
 	if s.snapshotKV == nil {
-		return s.checkVolumeHasNoSnapshotsS3(volumeID)
+		slog.Error("checkVolumeHasNoSnapshots: snapshotKV is nil", "volumeId", volumeID)
+		return errors.New(awserrors.ErrorServerInternal)
 	}
 
 	has, err := s.volumeHasSnapshotsKV(volumeID)
 	if err != nil {
-		slog.Warn("checkVolumeHasNoSnapshots: KV lookup failed, falling back to S3 scan", "volumeId", volumeID, "err", err)
-		return s.checkVolumeHasNoSnapshotsS3(volumeID)
+		slog.Error("checkVolumeHasNoSnapshots: KV lookup failed", "volumeId", volumeID, "err", err)
+		return errors.New(awserrors.ErrorServerInternal)
 	}
 	if has {
-		slog.Error("DeleteVolume blocked: volume has snapshots (KV)", "volumeId", volumeID)
+		slog.Error("DeleteVolume blocked: volume has snapshots", "volumeId", volumeID)
 		return errors.New(awserrors.ErrorVolumeInUse)
 	}
 	return nil
@@ -886,79 +875,4 @@ func (s *VolumeServiceImpl) volumeHasSnapshotsKV(volumeID string) (bool, error) 
 	}
 
 	return len(snapshots) > 0, nil
-}
-
-// checkVolumeHasNoSnapshotsS3 is the original S3-scanning fallback.
-func (s *VolumeServiceImpl) checkVolumeHasNoSnapshotsS3(volumeID string) error {
-	listResult, err := s.store.ListObjects(&s3.ListObjectsInput{
-		Bucket:    aws.String(s.bucketName),
-		Prefix:    aws.String("snap-"),
-		Delimiter: aws.String("/"),
-	})
-	if err != nil {
-		slog.Error("checkVolumeHasNoSnapshots: failed to list snapshots", "volumeId", volumeID, "err", err)
-		return errors.New(awserrors.ErrorServerInternal)
-	}
-
-	for _, prefix := range listResult.CommonPrefixes {
-		if prefix.Prefix == nil {
-			continue
-		}
-
-		snapshotID := strings.TrimSuffix(*prefix.Prefix, "/")
-
-		if err := s.snapshotReferencesVolume(snapshotID, volumeID); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// snapshotReferencesVolume checks if a snapshot references the given volume.
-// Returns an error if the snapshot references the volume or if a non-recoverable
-// S3/IO error occurs. Returns nil if the snapshot does not reference the volume.
-func (s *VolumeServiceImpl) snapshotReferencesVolume(snapshotID, volumeID string) error {
-	// Try metadata.json first (hive format), then config.json (viperblock format)
-	for _, filename := range []string{"metadata.json", "config.json"} {
-		key := snapshotID + "/" + filename
-
-		getResult, err := s.store.GetObject(&s3.GetObjectInput{
-			Bucket: aws.String(s.bucketName),
-			Key:    aws.String(key),
-		})
-		if err != nil {
-			if objectstore.IsNoSuchKeyError(err) {
-				continue // Expected: this format file doesn't exist for this snapshot
-			}
-			slog.Error("checkVolumeHasNoSnapshots: failed to read snapshot metadata",
-				"volumeId", volumeID, "snapshotId", snapshotID, "key", key, "err", err)
-			return errors.New(awserrors.ErrorServerInternal)
-		}
-
-		body, err := io.ReadAll(getResult.Body)
-		if closeErr := getResult.Body.Close(); closeErr != nil {
-			slog.Error("checkVolumeHasNoSnapshots: failed to close response body",
-				"volumeId", volumeID, "snapshotId", snapshotID, "key", key, "err", closeErr)
-		}
-		if err != nil {
-			slog.Error("checkVolumeHasNoSnapshots: failed to read snapshot body",
-				"volumeId", volumeID, "snapshotId", snapshotID, "key", key, "err", err)
-			return errors.New(awserrors.ErrorServerInternal)
-		}
-
-		var ref snapshotVolumeRef
-		if err := json.Unmarshal(body, &ref); err != nil {
-			slog.Warn("checkVolumeHasNoSnapshots: failed to parse snapshot metadata, skipping file",
-				"volumeId", volumeID, "snapshotId", snapshotID, "key", key, "err", err)
-			continue // JSON parse errors for individual files are not fatal -- try next file
-		}
-
-		if ref.referencesVolume(volumeID) {
-			slog.Error("DeleteVolume blocked: volume has snapshots", "volumeId", volumeID, "snapshotId", snapshotID)
-			return errors.New(awserrors.ErrorVolumeInUse)
-		}
-	}
-
-	return nil
 }
