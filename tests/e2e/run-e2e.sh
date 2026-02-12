@@ -303,8 +303,10 @@ test_ssh_connectivity "$SSH_HOST" "$SSH_PORT" "test-key-1.pem"
 # Check root volume size via lsblk
 echo "Verifying root volume size from inside the VM..."
 ROOT_VOL_SIZE_API=$($AWS_EC2 describe-volumes --query 'Volumes[0].Size' --output text)
-# Use plain lsblk output (no --json) for maximum compatibility across guest images
-# -b=bytes, -d=disk-only (no partitions), -n=no-header, -o SIZE=only the size column
+# Find the disk backing the root filesystem (avoids picking up floppy/cdrom devices)
+# 1. findmnt gets the source device for / (e.g. /dev/vda1)
+# 2. lsblk PKNAME resolves to parent disk name (e.g. vda)
+# 3. lsblk -b -d gets that disk's byte size
 ROOT_DISK_BYTES=$(ssh -o StrictHostKeyChecking=no \
     -o UserKnownHostsFile=/dev/null \
     -o LogLevel=ERROR \
@@ -312,13 +314,13 @@ ROOT_DISK_BYTES=$(ssh -o StrictHostKeyChecking=no \
     -o BatchMode=yes \
     -p "$SSH_PORT" \
     -i "test-key-1.pem" \
-    ec2-user@"$SSH_HOST" 'lsblk -b -d -n -o SIZE | head -1' | tr -d '[:space:]')
+    ec2-user@"$SSH_HOST" 'SRC=$(findmnt -n -o SOURCE /); PKN=$(lsblk -n -o PKNAME "$SRC" 2>/dev/null | head -1); DEV=${PKN:-$(basename "$SRC")}; lsblk -b -d -n -o SIZE "/dev/$DEV"' | tr -d '[:space:]')
 if [ -z "$ROOT_DISK_BYTES" ] || [ "$ROOT_DISK_BYTES" = "0" ]; then
     echo "Failed to get root disk size from VM (got: '$ROOT_DISK_BYTES')"
     echo "lsblk debug output:"
     ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
         -o ConnectTimeout=5 -o BatchMode=yes -p "$SSH_PORT" -i "test-key-1.pem" \
-        ec2-user@"$SSH_HOST" 'lsblk -b -d; echo "---"; cat /proc/partitions' || true
+        ec2-user@"$SSH_HOST" 'lsblk -b -d; echo "---"; findmnt -n -o SOURCE /; cat /proc/partitions' || true
     exit 1
 fi
 ROOT_DISK_GIB=$((ROOT_DISK_BYTES / 1073741824))
