@@ -621,8 +621,17 @@ func (d *Daemon) restoreInstances() {
 			continue
 		}
 
-		if instance.Attributes.StopInstance {
-			slog.Info("Instance flagged as user initiated stop, skipping", "instance", instance.ID)
+		if instance.Attributes.StopInstance || instance.Status == vm.StateStopped {
+			slog.Info("Instance is stopped, subscribing to NATS for start commands", "instance", instance.ID)
+			d.mu.Lock()
+			sub, err := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
+			if err != nil {
+				d.mu.Unlock()
+				slog.Error("Failed to subscribe stopped instance to NATS", "instance", instance.ID, "err", err)
+				continue
+			}
+			d.natsSubscriptions[instance.ID] = sub
+			d.mu.Unlock()
 			continue
 		}
 
@@ -695,12 +704,12 @@ func (d *Daemon) reconnectInstance(instance *vm.VM) error {
 	}
 
 	d.mu.Lock()
-	sub, err := d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), "hive-events", d.handleEC2Events)
+	sub, err := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
 	if err != nil {
 		d.mu.Unlock()
 		// Clean up the QMP connection we just opened
 		if instance.QMPClient != nil && instance.QMPClient.Conn != nil {
-			instance.QMPClient.Conn.Close()
+			_ = instance.QMPClient.Conn.Close()
 			instance.QMPClient = nil
 		}
 		return fmt.Errorf("failed to subscribe to NATS: %w", err)
@@ -994,38 +1003,10 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 		}
 
 		if _, ok := msg["event"]; ok {
-			slog.Info("QMP event", "event", msg["event"])
-
-			// Look up the instance to handle state transitions
-			d.Instances.Mu.Lock()
-			instance, found := d.Instances.VMS[instanceId]
-			d.Instances.Mu.Unlock()
-			if !found {
-				slog.Info("QMP event - instance not found", "id", instanceId)
-				continue
-			}
-
-			// Handle QMP events with state machine transitions.
-			// TransitionState validates the current state atomically under lock,
-			// so no pre-check is needed here.
-			// RESET indicates a reboot but the VM remains running — no state change.
-			switch msg["event"] {
-			case "STOP":
-				if err := d.TransitionState(instance, vm.StateStopped); err != nil {
-					slog.Error("QMP STOP event: transition failed", "instanceId", instanceId, "err", err)
-				}
-			case "RESUME":
-				if err := d.TransitionState(instance, vm.StateRunning); err != nil {
-					slog.Error("QMP RESUME event: transition failed", "instanceId", instanceId, "err", err)
-				}
-			case "POWERDOWN":
-				if err := d.TransitionState(instance, vm.StateStopping); err != nil {
-					slog.Error("QMP POWERDOWN event: transition failed", "instanceId", instanceId, "err", err)
-				}
-			case "RESET":
-				slog.Info("QMP RESET event", "instanceId", instanceId)
-			}
-
+			// QMP events are informational only — state transitions are driven
+			// by the command handlers that initiate the action, avoiding races
+			// between event-driven and command-driven transitions.
+			slog.Info("QMP event", "event", msg["event"], "instanceId", instanceId)
 			continue
 		}
 		if errObj, ok := msg["error"].(map[string]any); ok {
@@ -1162,12 +1143,15 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 	// For stop operations, keep the subscription so we can receive start commands
 	if deleteVolume {
 		for _, instance := range instances {
-			slog.Info("Unsubscribing from NATS subject", "instance", instance.ID)
-			if err := d.natsSubscriptions[fmt.Sprintf("ec2.cmd.%s", instance.ID)].Unsubscribe(); err != nil {
-				slog.Error("Failed to unsubscribe from NATS subject", "instance", instance.ID, "err", err)
+			d.mu.Lock()
+			if sub, ok := d.natsSubscriptions[instance.ID]; ok {
+				slog.Info("Unsubscribing from NATS subject", "instance", instance.ID)
+				if err := sub.Unsubscribe(); err != nil {
+					slog.Error("Failed to unsubscribe from NATS subject", "instance", instance.ID, "err", err)
+				}
+				delete(d.natsSubscriptions, instance.ID)
 			}
-			// TODO: Remove redundant subscription if not used
-			//d.natsSubscriptions[fmt.Sprintf("ec2.describe.%s", instance.ID)].Unsubscribe()
+			d.mu.Unlock()
 		}
 	}
 	return nil
@@ -1328,7 +1312,12 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	d.natsSubscriptions[instance.ID], err = d.natsConn.QueueSubscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), "hive-events", d.handleEC2Events)
+	// Unsubscribe any existing subscription (e.g. from restoreInstances for stopped instances)
+	if existing, ok := d.natsSubscriptions[instance.ID]; ok {
+		_ = existing.Unsubscribe()
+	}
+
+	d.natsSubscriptions[instance.ID], err = d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
 
 	if err != nil {
 		slog.Error("failed to subscribe to NATS", "err", err)

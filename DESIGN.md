@@ -227,7 +227,7 @@ type ResourceManager struct {
 |-------|-------------|---------|
 | `ec2.RunInstances` | `hive-workers` | Launch new instances |
 | `ec2.DescribeInstances` | None (fan-out) | Query all nodes for instances |
-| `ec2.cmd.{instanceID}` | `hive-events` | Per-instance commands (start/stop/terminate, attach/detach volume) |
+| `ec2.cmd.{instanceID}` | None (owner only) | Per-instance commands (start/stop/terminate, attach/detach volume) |
 | `ec2.CreateKeyPair` | `hive-workers` | Generate SSH keypair |
 | `ec2.DescribeKeyPairs` | `hive-workers` | List SSH keypairs |
 | `ec2.DescribeImages` | `hive-workers` | List AMIs |

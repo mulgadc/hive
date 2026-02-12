@@ -11,6 +11,7 @@
 
 ### Phase 2: Discovery & Metadata
 - `describe-regions`
+- `describe-availability-zones` (verify zone name and state)
 - `describe-instance-types` (discover available types)
 - Select nano instance type and detect architecture
 
@@ -27,6 +28,14 @@
 ### Phase 5: Instance Lifecycle
 - `run-instances` (launch VM with key pair)
 - `describe-instances` (poll pending -> running)
+
+### Phase 5a: Instance Metadata Validation
+- `describe-instances` — verify InstanceType matches requested type
+- Verify KeyName matches requested key
+- Verify ImageId matches requested AMI
+- Verify at least 1 BlockDeviceMapping present
+
+### Phase 5 (cont): Root Volume
 - `describe-volumes` (verify root volume attached)
 
 ### Phase 5b: Volume Lifecycle
@@ -36,6 +45,9 @@
 - `describe-volumes` (verify in-use + attached state)
 - `detach-volume` (verify available state)
 - `delete-volume` (verify gone)
+
+### Phase 5b-ii: DescribeVolumeStatus
+- `describe-volume-status` (on root volume, verify VolumeId in response)
 
 ### Phase 5c: Snapshot Lifecycle
 - Uses root volume already attached to running instance (snapshots require a mounted VB instance)
@@ -53,6 +65,12 @@
 - Read Phase 5 root volume's `config.json` from Predastore
 - Verify `SnapshotID` and `SourceVolumeName` are set (proves zero-copy clone)
 
+### Phase 5e: CreateImage Lifecycle
+- `create-image` (from running instance, with name and description)
+- Verify returned ImageId is non-empty
+- `describe-images` (verify custom AMI name and state)
+- Extract backing snapshot ID from Predastore config (for cleanup before termination)
+
 ### Phase 6: Tag Management
 - `create-tags` (3 tags on instance)
 - `describe-tags` (filter by resource-id)
@@ -67,8 +85,36 @@
 
 ### Phase 7: Instance State Transitions
 - `stop-instances` (poll -> stopped)
+
+### Phase 7a: Attach Volume to Stopped Instance (Error Path)
+- `create-volume` (for attach test)
+- `attach-volume` to stopped instance (expect `IncorrectInstanceState` error)
+- `delete-volume` (cleanup)
+
+### Phase 7 (cont): Start and Restart
 - `start-instances` (poll -> running)
+
+### Phase 7b: RunInstances with count > 1
+- `run-instances --count 2` (launch 2 instances in a single call)
+- Verify 2 instances returned in response
+- Poll both to running state
+- `terminate-instances` (both, poll -> terminated)
+
+### Phase 8: Negative / Error Path Tests
+- `run-instances` with malformed AMI ID (expect `InvalidAMIID.Malformed`)
+- `run-instances` with invalid instance type (expect `InvalidInstanceType`)
+- `attach-volume` on in-use volume (expect `VolumeInUse`)
+- `detach-volume` on boot volume (expect `OperationNotPermitted`)
+- `delete-snapshot` on non-existent snapshot (expect `InvalidSnapshot.NotFound`)
+- Unsupported Action via raw HTTP (expect `InvalidAction` or error response)
+
+### Phase 9: Terminate and Verify Cleanup
+- `delete-snapshot` (CreateImage backing snapshot, so DeleteOnTermination is not blocked)
 - `terminate-instances` (poll -> terminated)
+
+### Phase 9a: Volume Cleanup Verification
+- `describe-volumes` on root volume after termination
+- Verify root volume is deleted (DeleteOnTermination)
 
 ---
 
@@ -97,6 +143,11 @@
 - `create-key-pair`
 - `hive admin images import` (with node1 config paths)
 - `describe-images` (verify AMI)
+
+### Phase 4b: Multi-Node Key Pair Operations
+- `import-key-pair` (multinode-test-key-2, from local RSA key)
+- `describe-key-pairs` (verify both keys visible across cluster)
+- `delete-key-pair` (multinode-test-key-2, verify deletion)
 
 ### Phase 5: Multi-Node Instance Tests
 
@@ -128,7 +179,7 @@
 - Read first instance's root volume `config.json` from Predastore
 - Verify `SnapshotID` and `SourceVolumeName` are set (proves zero-copy clone)
 
-#### Test 1d: Tag Management
+#### Test 1d: Tag Management (Instances)
 - `create-tags` (3 tags on instance)
 - `describe-tags` (filter by resource-id)
 - `describe-tags` (filter by key)
@@ -138,6 +189,12 @@
 - `delete-tags` (wrong value — no-op)
 - `delete-tags` (correct value)
 - Verify final tag count
+
+#### Test 1d-ii: Tag Management (Volumes)
+- `create-tags` (2 tags on root volume)
+- `describe-tags` (filter by resource-id, verify count)
+- `describe-tags` (filter by resource-type=volume)
+- `delete-tags` (both tags, verify cleanup)
 
 #### Test 2: DescribeInstances Aggregation
 - `describe-instances` (fan-out across all nodes, verify count)
