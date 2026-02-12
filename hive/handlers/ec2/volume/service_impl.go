@@ -854,19 +854,20 @@ func (r snapshotVolumeRef) referencesVolume(volumeID string) bool {
 // Uses the JetStream KV index for O(1) lookup when available, falling back
 // to the S3 scan when KV is nil or the lookup fails.
 func (s *VolumeServiceImpl) checkVolumeHasNoSnapshots(volumeID string) error {
-	if s.snapshotKV != nil {
-		has, err := s.volumeHasSnapshotsKV(volumeID)
-		if err != nil {
-			slog.Warn("checkVolumeHasNoSnapshots: KV lookup failed, falling back to S3 scan", "volumeId", volumeID, "err", err)
-		} else if has {
-			slog.Error("DeleteVolume blocked: volume has snapshots (KV)", "volumeId", volumeID)
-			return fmt.Errorf("%s: volume %s has existing snapshots. Delete snapshots first", awserrors.ErrorVolumeInUse, volumeID)
-		} else {
-			return nil
-		}
+	if s.snapshotKV == nil {
+		return s.checkVolumeHasNoSnapshotsS3(volumeID)
 	}
 
-	return s.checkVolumeHasNoSnapshotsS3(volumeID)
+	has, err := s.volumeHasSnapshotsKV(volumeID)
+	if err != nil {
+		slog.Warn("checkVolumeHasNoSnapshots: KV lookup failed, falling back to S3 scan", "volumeId", volumeID, "err", err)
+		return s.checkVolumeHasNoSnapshotsS3(volumeID)
+	}
+	if has {
+		slog.Error("DeleteVolume blocked: volume has snapshots (KV)", "volumeId", volumeID)
+		return fmt.Errorf("%s: volume %s has existing snapshots. Delete snapshots first", awserrors.ErrorVolumeInUse, volumeID)
+	}
+	return nil
 }
 
 // volumeHasSnapshotsKV checks the JetStream KV index for snapshot references.

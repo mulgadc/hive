@@ -386,7 +386,7 @@ func setupTestNATSKV(t *testing.T) nats.KeyValue {
 
 func TestAddSnapshotRef(t *testing.T) {
 	kv := setupTestNATSKV(t)
-	svc := &SnapshotServiceImpl{snapshotKV: kv}
+	svc := &SnapshotServiceImpl{snapKV: kv}
 
 	require.NoError(t, svc.addSnapshotRef("vol-1", "snap-a"))
 	require.NoError(t, svc.addSnapshotRef("vol-1", "snap-b"))
@@ -400,7 +400,7 @@ func TestAddSnapshotRef(t *testing.T) {
 
 func TestRemoveSnapshotRef(t *testing.T) {
 	kv := setupTestNATSKV(t)
-	svc := &SnapshotServiceImpl{snapshotKV: kv}
+	svc := &SnapshotServiceImpl{snapKV: kv}
 
 	require.NoError(t, svc.addSnapshotRef("vol-1", "snap-a"))
 	require.NoError(t, svc.addSnapshotRef("vol-1", "snap-b"))
@@ -423,7 +423,7 @@ func TestRemoveSnapshotRef(t *testing.T) {
 
 func TestRemoveSnapshotRef_NonExistentKey(t *testing.T) {
 	kv := setupTestNATSKV(t)
-	svc := &SnapshotServiceImpl{snapshotKV: kv}
+	svc := &SnapshotServiceImpl{snapKV: kv}
 
 	// Should not error on non-existent key
 	require.NoError(t, svc.removeSnapshotRef("vol-nonexistent", "snap-x"))
@@ -431,33 +431,33 @@ func TestRemoveSnapshotRef_NonExistentKey(t *testing.T) {
 
 func TestVolumeHasSnapshots(t *testing.T) {
 	kv := setupTestNATSKV(t)
-	svc := &SnapshotServiceImpl{snapshotKV: kv}
+	svc := &SnapshotServiceImpl{snapKV: kv}
 
 	// No entry → false
-	has, err := svc.VolumeHasSnapshots("vol-1")
+	has, err := svc.volumeHasSnapshots("vol-1")
 	require.NoError(t, err)
 	assert.False(t, has)
 
 	// Add one → true
 	require.NoError(t, svc.addSnapshotRef("vol-1", "snap-a"))
-	has, err = svc.VolumeHasSnapshots("vol-1")
+	has, err = svc.volumeHasSnapshots("vol-1")
 	require.NoError(t, err)
 	assert.True(t, has)
 
 	// Remove it → false
 	require.NoError(t, svc.removeSnapshotRef("vol-1", "snap-a"))
-	has, err = svc.VolumeHasSnapshots("vol-1")
+	has, err = svc.volumeHasSnapshots("vol-1")
 	require.NoError(t, err)
 	assert.False(t, has)
 }
 
 func TestKVNilFallback(t *testing.T) {
-	svc := &SnapshotServiceImpl{snapshotKV: nil}
+	svc := &SnapshotServiceImpl{snapKV: nil}
 
 	// All methods should be no-ops when KV is nil
 	require.NoError(t, svc.addSnapshotRef("vol-1", "snap-a"))
 	require.NoError(t, svc.removeSnapshotRef("vol-1", "snap-a"))
-	has, err := svc.VolumeHasSnapshots("vol-1")
+	has, err := svc.volumeHasSnapshots("vol-1")
 	require.NoError(t, err)
 	assert.False(t, has)
 }
@@ -471,8 +471,7 @@ func TestCreateSnapshot_WritesKVEntry(t *testing.T) {
 			AccessKey: "test-owner-123",
 		},
 	}
-	svc := NewSnapshotServiceImplWithStore(cfg, store, nil)
-	svc.SetSnapshotKV(kv)
+	svc := NewSnapshotServiceImplWithStore(cfg, store, nil, kv)
 
 	volumeID := "vol-kvtest"
 	createTestVolume(t, store, volumeID, 10)
@@ -483,7 +482,7 @@ func TestCreateSnapshot_WritesKVEntry(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify KV entry exists
-	has, err := svc.VolumeHasSnapshots(volumeID)
+	has, err := svc.volumeHasSnapshots(volumeID)
 	require.NoError(t, err)
 	assert.True(t, has)
 
@@ -504,8 +503,7 @@ func TestDeleteSnapshot_RemovesKVEntry(t *testing.T) {
 			AccessKey: "test-owner-123",
 		},
 	}
-	svc := NewSnapshotServiceImplWithStore(cfg, store, nil)
-	svc.SetSnapshotKV(kv)
+	svc := NewSnapshotServiceImplWithStore(cfg, store, nil, kv)
 
 	volumeID := "vol-kvdelete"
 	createTestVolume(t, store, volumeID, 10)
@@ -522,7 +520,7 @@ func TestDeleteSnapshot_RemovesKVEntry(t *testing.T) {
 	require.NoError(t, err)
 
 	// KV should now be empty for this volume
-	has, err := svc.VolumeHasSnapshots(volumeID)
+	has, err := svc.volumeHasSnapshots(volumeID)
 	require.NoError(t, err)
 	assert.False(t, has)
 }
@@ -536,8 +534,7 @@ func TestCopySnapshot_AddsKVEntry(t *testing.T) {
 			AccessKey: "test-owner-123",
 		},
 	}
-	svc := NewSnapshotServiceImplWithStore(cfg, store, nil)
-	svc.SetSnapshotKV(kv)
+	svc := NewSnapshotServiceImplWithStore(cfg, store, nil, kv)
 
 	volumeID := "vol-kvcopy"
 	createTestVolume(t, store, volumeID, 10)
