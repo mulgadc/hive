@@ -621,7 +621,7 @@ func (d *Daemon) restoreInstances() {
 			continue
 		}
 
-		if instance.Attributes.StopInstance || instance.Status == vm.StateStopped {
+		if instance.Status == vm.StateStopped {
 			slog.Info("Instance is stopped, subscribing to NATS for start commands", "instance", instance.ID)
 			d.mu.Lock()
 			sub, err := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)

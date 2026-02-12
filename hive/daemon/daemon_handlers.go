@@ -474,6 +474,13 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command qmp.Command, instanc
 		}
 	}
 
+	// Clear stop attribute before launch so WriteState inside LaunchInstance
+	// persists the correct attributes. Without this, a daemon restart after
+	// a stop→start cycle would see StopInstance=true and skip reconnecting QEMU.
+	d.Instances.Mu.Lock()
+	instance.Attributes = command.Attributes
+	d.Instances.Mu.Unlock()
+
 	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
 	err := d.LaunchInstance(instance)
 
@@ -486,11 +493,6 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command qmp.Command, instanc
 		respondWithError(awserrors.ErrorServerInternal)
 		return
 	}
-
-	// Update instance attributes (LaunchInstance already transitions to StateRunning)
-	d.Instances.Mu.Lock()
-	instance.Attributes = command.Attributes
-	d.Instances.Mu.Unlock()
 
 	slog.Info("Instance started", "instanceId", instance.ID)
 
