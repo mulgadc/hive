@@ -38,6 +38,10 @@ type VM struct {
 	// Instance contains the current instance state and metadata
 	Instance *ec2.Instance `json:"instance,omitempty"`
 
+	// LastNode records which daemon node last ran this instance.
+	// Set when ownership is released on stop for shared KV storage.
+	LastNode string `json:"last_node,omitempty"`
+
 	// User data for cloud-init (decoded from base64)
 	UserData string `json:"user_data,omitempty"`
 

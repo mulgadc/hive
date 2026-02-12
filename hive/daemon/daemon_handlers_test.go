@@ -795,3 +795,190 @@ func TestSetConfigPath(t *testing.T) {
 	daemon.SetConfigPath("/etc/hive/config.toml")
 	assert.Equal(t, "/etc/hive/config.toml", daemon.configPath)
 }
+
+// --- handleEC2StartStoppedInstance tests ---
+
+func TestHandleEC2StartStoppedInstance_MissingInstance(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.start", "hive-workers", daemon.handleEC2StartStoppedInstance)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	// Request to start a non-existent instance
+	reqData, _ := json.Marshal(map[string]string{"instance_id": "i-nonexistent"})
+	reply, err := daemon.natsConn.Request("ec2.start", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+}
+
+func TestHandleEC2StartStoppedInstance_MissingInstanceID(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.start", "hive-workers", daemon.handleEC2StartStoppedInstance)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	// Request with empty instance_id
+	reqData, _ := json.Marshal(map[string]string{"instance_id": ""})
+	reply, err := daemon.natsConn.Request("ec2.start", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+}
+
+func TestHandleEC2StartStoppedInstance_NotStoppedState(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	// Write an instance in running state to shared KV
+	runningVM := &vm.VM{
+		ID:           "i-running-shared",
+		Status:       vm.StateRunning,
+		InstanceType: getTestInstanceType(),
+	}
+	err := daemon.jsManager.WriteStoppedInstance(runningVM.ID, runningVM)
+	require.NoError(t, err)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.start", "hive-workers", daemon.handleEC2StartStoppedInstance)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reqData, _ := json.Marshal(map[string]string{"instance_id": "i-running-shared"})
+	reply, err := daemon.natsConn.Request("ec2.start", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+
+	// Cleanup
+	_ = daemon.jsManager.DeleteStoppedInstance(runningVM.ID)
+}
+
+// --- handleEC2DescribeStoppedInstances tests ---
+
+func TestHandleEC2DescribeStoppedInstances_ReturnsStoppedInstances(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	// Write stopped instances to shared KV with full reservation/instance metadata
+	stoppedVM := &vm.VM{
+		ID:           "i-describe-stopped-001",
+		Status:       vm.StateStopped,
+		InstanceType: getTestInstanceType(),
+		LastNode:     "node-1",
+		Reservation: &ec2.Reservation{
+			ReservationId: aws.String("r-test-001"),
+			OwnerId:       aws.String("123456789012"),
+		},
+		Instance: &ec2.Instance{
+			InstanceId:   aws.String("i-describe-stopped-001"),
+			InstanceType: aws.String(getTestInstanceType()),
+		},
+	}
+	err := daemon.jsManager.WriteStoppedInstance(stoppedVM.ID, stoppedVM)
+	require.NoError(t, err)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeStoppedInstances", "hive-workers", daemon.handleEC2DescribeStoppedInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.DescribeInstancesInput{}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.DescribeStoppedInstances", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.DescribeInstancesOutput
+	err = json.Unmarshal(reply.Data, &output)
+	require.NoError(t, err)
+
+	// Find our stopped instance in the output
+	found := false
+	for _, res := range output.Reservations {
+		for _, inst := range res.Instances {
+			if inst.InstanceId != nil && *inst.InstanceId == "i-describe-stopped-001" {
+				found = true
+				assert.Equal(t, "stopped", *inst.State.Name)
+				assert.Equal(t, int64(80), *inst.State.Code)
+			}
+		}
+	}
+	assert.True(t, found, "Should find stopped instance in DescribeStoppedInstances output")
+
+	// Cleanup
+	_ = daemon.jsManager.DeleteStoppedInstance(stoppedVM.ID)
+}
+
+func TestHandleEC2DescribeStoppedInstances_WithFilter(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	// Write two stopped instances
+	for _, id := range []string{"i-filter-001", "i-filter-002"} {
+		v := &vm.VM{
+			ID:       id,
+			Status:   vm.StateStopped,
+			LastNode: "node-1",
+			Reservation: &ec2.Reservation{
+				ReservationId: aws.String("r-filter"),
+				OwnerId:       aws.String("123456789012"),
+			},
+			Instance: &ec2.Instance{
+				InstanceId: aws.String(id),
+			},
+		}
+		err := daemon.jsManager.WriteStoppedInstance(id, v)
+		require.NoError(t, err)
+	}
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeStoppedInstances", "hive-workers", daemon.handleEC2DescribeStoppedInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	// Filter for only one instance
+	input := &ec2.DescribeInstancesInput{
+		InstanceIds: []*string{aws.String("i-filter-001")},
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.DescribeStoppedInstances", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.DescribeInstancesOutput
+	err = json.Unmarshal(reply.Data, &output)
+	require.NoError(t, err)
+
+	// Count matching instances
+	var matchCount int
+	for _, res := range output.Reservations {
+		for _, inst := range res.Instances {
+			if inst.InstanceId != nil && *inst.InstanceId == "i-filter-001" {
+				matchCount++
+			}
+			// Should NOT contain i-filter-002
+			if inst.InstanceId != nil && *inst.InstanceId == "i-filter-002" {
+				t.Error("Should not contain i-filter-002 when filtering for i-filter-001")
+			}
+		}
+	}
+	assert.Equal(t, 1, matchCount, "Should find exactly one filtered instance")
+
+	// Cleanup
+	_ = daemon.jsManager.DeleteStoppedInstance("i-filter-001")
+	_ = daemon.jsManager.DeleteStoppedInstance("i-filter-002")
+}

@@ -464,6 +464,8 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.CreateEgressOnlyInternetGateway", d.handleEC2CreateEgressOnlyInternetGateway, "hive-workers"},
 		{"ec2.DeleteEgressOnlyInternetGateway", d.handleEC2DeleteEgressOnlyInternetGateway, "hive-workers"},
 		{"ec2.DescribeEgressOnlyInternetGateways", d.handleEC2DescribeEgressOnlyInternetGateways, "hive-workers"},
+		{"ec2.start", d.handleEC2StartStoppedInstance, "hive-workers"},
+		{"ec2.DescribeStoppedInstances", d.handleEC2DescribeStoppedInstances, "hive-workers"},
 		{"ec2.DescribeInstances", d.handleEC2DescribeInstances, ""},
 		{"ec2.DescribeInstanceTypes", d.handleEC2DescribeInstanceTypes, ""},
 		{"ec2.EnableEbsEncryptionByDefault", d.handleEC2EnableEbsEncryptionByDefault, "hive-workers"},
@@ -622,16 +624,17 @@ func (d *Daemon) restoreInstances() {
 		}
 
 		if instance.Status == vm.StateStopped {
-			slog.Info("Instance is stopped, subscribing to NATS for start commands", "instance", instance.ID)
-			d.mu.Lock()
-			sub, err := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
-			if err != nil {
-				d.mu.Unlock()
-				slog.Error("Failed to subscribe stopped instance to NATS", "instance", instance.ID, "err", err)
-				continue
+			// Migrate stopped instances to shared KV so any daemon can start them
+			if d.jsManager != nil {
+				instance.LastNode = d.node
+				if err := d.jsManager.WriteStoppedInstance(instance.ID, instance); err != nil {
+					slog.Error("Failed to migrate stopped instance to shared KV, skipping",
+						"instance", instance.ID, "err", err)
+				} else {
+					delete(d.Instances.VMS, instance.ID)
+					slog.Info("Migrated stopped instance to shared KV", "instance", instance.ID)
+				}
 			}
-			d.natsSubscriptions[instance.ID] = sub
-			d.mu.Unlock()
 			continue
 		}
 
@@ -663,6 +666,20 @@ func (d *Daemon) restoreInstances() {
 			}
 			slog.Info("QEMU exited during transition, finalizing state",
 				"instance", instance.ID, "from", prevStatus, "to", instance.Status)
+
+			// Migrate stopped instances to shared KV
+			if instance.Status == vm.StateStopped && d.jsManager != nil {
+				instance.LastNode = d.node
+				if err := d.jsManager.WriteStoppedInstance(instance.ID, instance); err != nil {
+					slog.Error("Failed to migrate resolved-stopped instance to shared KV",
+						"instance", instance.ID, "err", err)
+				} else {
+					delete(d.Instances.VMS, instance.ID)
+					slog.Info("Migrated resolved-stopped instance to shared KV", "instance", instance.ID)
+					continue
+				}
+			}
+
 			if err := d.WriteState(); err != nil {
 				slog.Error("Failed to persist state, will retry on next restart",
 					"instance", instance.ID, "error", err)
@@ -679,6 +696,11 @@ func (d *Daemon) restoreInstances() {
 		if err := d.LaunchInstance(instance); err != nil {
 			slog.Error("Failed to launch instance", "instanceId", instance.ID, "err", err)
 		}
+	}
+
+	// Persist state after any migrations/removals during restore
+	if err := d.WriteState(); err != nil {
+		slog.Error("Failed to persist state after restore", "error", err)
 	}
 }
 

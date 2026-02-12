@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -545,6 +546,43 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command qmp.Comman
 				slog.Error("Failed to transition to final state", "instanceId", inst.ID, "err", err)
 			}
 			slog.Info("Instance "+string(finalState), "id", inst.ID)
+
+			// For stop (not terminate): release ownership to shared KV so any
+			// daemon can pick up the next StartInstance request.
+			if !isTerminate && d.jsManager != nil {
+				inst.LastNode = d.node
+
+				// Write to shared KV first — if daemon crashes after this but
+				// before local cleanup, restoreInstances handles the overlap.
+				if err := d.jsManager.WriteStoppedInstance(inst.ID, inst); err != nil {
+					slog.Error("Failed to write stopped instance to shared KV, keeping local ownership",
+						"instanceId", inst.ID, "err", err)
+				} else {
+					// Unsubscribe from per-instance NATS topic
+					d.mu.Lock()
+					if sub, ok := d.natsSubscriptions[inst.ID]; ok {
+						if err := sub.Unsubscribe(); err != nil {
+							slog.Error("Failed to unsubscribe stopped instance", "instanceId", inst.ID, "err", err)
+						}
+						delete(d.natsSubscriptions, inst.ID)
+					}
+					d.mu.Unlock()
+
+					// Remove from local instance map
+					d.Instances.Mu.Lock()
+					delete(d.Instances.VMS, inst.ID)
+					d.Instances.Mu.Unlock()
+
+					// Persist local state without the stopped instance
+					if err := d.WriteState(); err != nil {
+						slog.Error("Failed to persist state after releasing stopped instance",
+							"instanceId", inst.ID, "err", err)
+					}
+
+					slog.Info("Released stopped instance ownership to shared KV",
+						"instanceId", inst.ID, "lastNode", d.node)
+				}
+			}
 		}
 	}(instance, command.Attributes)
 }
@@ -1283,4 +1321,212 @@ func (d *Daemon) handleEC2EnableSerialConsoleAccess(msg *nats.Msg) {
 
 func (d *Daemon) handleEC2DisableSerialConsoleAccess(msg *nats.Msg) {
 	handleNATSRequest(msg, d.accountService.DisableSerialConsoleAccess)
+}
+
+// startStoppedInstanceRequest is the payload for ec2.start topic
+type startStoppedInstanceRequest struct {
+	InstanceID string `json:"instance_id"`
+}
+
+// handleEC2StartStoppedInstance picks up a stopped instance from shared KV,
+// re-launches it on this daemon node, and removes it from shared KV.
+func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
+	respondWithError := func(errCode string) {
+		if err := msg.Respond(utils.GenerateErrorPayload(errCode)); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
+	}
+
+	var req startStoppedInstanceRequest
+	if err := json.Unmarshal(msg.Data, &req); err != nil {
+		slog.Error("handleEC2StartStoppedInstance: failed to unmarshal request", "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	if req.InstanceID == "" {
+		slog.Error("handleEC2StartStoppedInstance: missing instance_id")
+		respondWithError(awserrors.ErrorMissingParameter)
+		return
+	}
+
+	if d.jsManager == nil {
+		slog.Error("handleEC2StartStoppedInstance: JetStream not available")
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	// Load instance from shared KV
+	instance, err := d.jsManager.LoadStoppedInstance(req.InstanceID)
+	if err != nil {
+		slog.Error("handleEC2StartStoppedInstance: failed to load stopped instance", "instanceId", req.InstanceID, "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+	if instance == nil {
+		slog.Warn("handleEC2StartStoppedInstance: instance not found in shared KV", "instanceId", req.InstanceID)
+		respondWithError(awserrors.ErrorInvalidInstanceIDNotFound)
+		return
+	}
+
+	if instance.Status != vm.StateStopped {
+		slog.Error("handleEC2StartStoppedInstance: instance not in stopped state", "instanceId", req.InstanceID, "status", instance.Status)
+		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		return
+	}
+
+	// Re-initialize non-serialized fields
+	instance.QMPClient = &qmp.QMPClient{}
+	instance.EBSRequests.Mu = sync.Mutex{}
+
+	// Allocate resources
+	instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
+	if ok {
+		if err := d.resourceMgr.allocate(instanceType); err != nil {
+			slog.Error("handleEC2StartStoppedInstance: failed to allocate resources", "instanceId", req.InstanceID, "err", err)
+			respondWithError(awserrors.ErrorInsufficientInstanceCapacity)
+			return
+		}
+	}
+
+	// Add instance to local map
+	d.Instances.Mu.Lock()
+	d.Instances.VMS[instance.ID] = instance
+	d.Instances.Mu.Unlock()
+
+	// Clear stop attribute before launch
+	d.Instances.Mu.Lock()
+	instance.Attributes = qmp.Attributes{StartInstance: true}
+	d.Instances.Mu.Unlock()
+
+	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)
+	err = d.LaunchInstance(instance)
+	if err != nil {
+		slog.Error("handleEC2StartStoppedInstance: LaunchInstance failed", "instanceId", req.InstanceID, "err", err)
+		// Rollback: deallocate resources and remove from local map
+		if ok {
+			d.resourceMgr.deallocate(instanceType)
+		}
+		d.Instances.Mu.Lock()
+		delete(d.Instances.VMS, instance.ID)
+		d.Instances.Mu.Unlock()
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	// Remove from shared KV now that it's running locally
+	if err := d.jsManager.DeleteStoppedInstance(req.InstanceID); err != nil {
+		slog.Error("handleEC2StartStoppedInstance: failed to delete from shared KV (instance is running)",
+			"instanceId", req.InstanceID, "err", err)
+	}
+
+	slog.Info("Started stopped instance from shared KV", "instanceId", instance.ID, "node", d.node)
+
+	if err := msg.Respond(fmt.Appendf(nil, `{"status":"running","instanceId":"%s"}`, instance.ID)); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
+}
+
+// handleEC2DescribeStoppedInstances returns stopped instances from shared KV.
+func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
+	respondWithError := func(errCode string) {
+		if err := msg.Respond(utils.GenerateErrorPayload(errCode)); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
+	}
+
+	if d.jsManager == nil {
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	// Parse optional filters from the request
+	describeInput := &ec2.DescribeInstancesInput{}
+	if len(msg.Data) > 0 {
+		if errResp := utils.UnmarshalJsonPayload(describeInput, msg.Data); errResp != nil {
+			if err := msg.Respond(errResp); err != nil {
+				slog.Error("Failed to respond to NATS request", "err", err)
+			}
+			return
+		}
+	}
+
+	// Build instance ID filter
+	instanceIDFilter := make(map[string]bool)
+	if len(describeInput.InstanceIds) > 0 {
+		for _, id := range describeInput.InstanceIds {
+			if id != nil {
+				instanceIDFilter[*id] = true
+			}
+		}
+	}
+
+	instances, err := d.jsManager.ListStoppedInstances()
+	if err != nil {
+		slog.Error("handleEC2DescribeStoppedInstances: failed to list stopped instances", "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	// Group instances by reservation ID
+	reservationMap := make(map[string]*ec2.Reservation)
+
+	for _, instance := range instances {
+		// Apply instance ID filter
+		if len(instanceIDFilter) > 0 && !instanceIDFilter[instance.ID] {
+			continue
+		}
+
+		if instance.Reservation != nil && instance.Instance != nil {
+			resID := ""
+			if instance.Reservation.ReservationId != nil {
+				resID = *instance.Reservation.ReservationId
+			}
+
+			if _, exists := reservationMap[resID]; !exists {
+				reservation := &ec2.Reservation{}
+				reservation.SetReservationId(resID)
+				if instance.Reservation.OwnerId != nil {
+					reservation.SetOwnerId(*instance.Reservation.OwnerId)
+				}
+				reservation.Instances = []*ec2.Instance{}
+				reservationMap[resID] = reservation
+			}
+
+			// Update the instance state
+			instanceCopy := *instance.Instance
+			instanceCopy.State = &ec2.InstanceState{}
+			if info, ok := vm.EC2StateCodes[instance.Status]; ok {
+				instanceCopy.State.SetCode(info.Code)
+				instanceCopy.State.SetName(info.Name)
+			} else {
+				instanceCopy.State.SetCode(80)
+				instanceCopy.State.SetName("stopped")
+			}
+
+			reservationMap[resID].Instances = append(reservationMap[resID].Instances, &instanceCopy)
+		}
+	}
+
+	reservations := make([]*ec2.Reservation, 0, len(reservationMap))
+	for _, reservation := range reservationMap {
+		reservations = append(reservations, reservation)
+	}
+
+	output := &ec2.DescribeInstancesOutput{
+		Reservations: reservations,
+	}
+
+	jsonResponse, err := json.Marshal(output)
+	if err != nil {
+		slog.Error("handleEC2DescribeStoppedInstances: failed to marshal output", "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	if err := msg.Respond(jsonResponse); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
+
+	slog.Info("handleEC2DescribeStoppedInstances completed", "count", len(reservations))
 }
