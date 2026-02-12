@@ -40,6 +40,7 @@
 - make sure nats is running before we start daemon? eigw and account service will fallback to memory versions but that breaks all functionality
 - the BlockDeviceMappings > DeviceName (/dev/xvda) is not the true volume, i think it's /dev/vda on mine. I think qmp has a query device stats which will provide block devices so we can match these up. not a blocker, but needs to be fixed eventually
 - aws ec2 modify-instance-attribute
+- move configs into jetstream
 
 ### Issues to investigate
 
