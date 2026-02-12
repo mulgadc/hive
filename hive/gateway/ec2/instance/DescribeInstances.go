@@ -102,22 +102,11 @@ func DescribeInstances(input *ec2.DescribeInstancesInput, natsConn *nats.Conn, e
 	}
 
 	// Query stopped instances from shared KV (via queue group — only one daemon handles it)
-	stoppedMsg, err := natsConn.Request("ec2.DescribeStoppedInstances", jsonData, 3*time.Second)
+	stoppedReservations, err := describeStoppedInstances(natsConn, jsonData)
 	if err != nil {
-		slog.Warn("DescribeInstances: Failed to query stopped instances (may not be available)", "err", err)
+		slog.Warn("DescribeInstances: Failed to query stopped instances", "err", err)
 	} else {
-		responseError, parseErr := utils.ValidateErrorPayload(stoppedMsg.Data)
-		if parseErr != nil {
-			slog.Warn("DescribeInstances: Stopped instances query returned error", "code", responseError.Code)
-		} else {
-			var stoppedOutput ec2.DescribeInstancesOutput
-			if err := json.Unmarshal(stoppedMsg.Data, &stoppedOutput); err != nil {
-				slog.Error("DescribeInstances: Failed to unmarshal stopped instances response", "err", err)
-			} else if stoppedOutput.Reservations != nil {
-				allReservations = append(allReservations, stoppedOutput.Reservations...)
-				slog.Info("DescribeInstances: Collected stopped instance reservations", "count", len(stoppedOutput.Reservations))
-			}
-		}
+		allReservations = append(allReservations, stoppedReservations...)
 	}
 
 	// Build final aggregated response
@@ -127,4 +116,28 @@ func DescribeInstances(input *ec2.DescribeInstancesInput, natsConn *nats.Conn, e
 
 	slog.Info("DescribeInstances: Aggregated response", "total_reservations", len(allReservations))
 	return output, nil
+}
+
+// describeStoppedInstances queries a single daemon (via queue group) for stopped
+// instances stored in the shared KV. Returns nil on transport or parse errors.
+func describeStoppedInstances(natsConn *nats.Conn, jsonData []byte) ([]*ec2.Reservation, error) {
+	msg, err := natsConn.Request("ec2.DescribeStoppedInstances", jsonData, 3*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("NATS request failed: %w", err)
+	}
+
+	responseError, parseErr := utils.ValidateErrorPayload(msg.Data)
+	if parseErr != nil {
+		return nil, fmt.Errorf("daemon returned error: %v", responseError.Code)
+	}
+
+	var output ec2.DescribeInstancesOutput
+	if err := json.Unmarshal(msg.Data, &output); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	if len(output.Reservations) > 0 {
+		slog.Info("DescribeInstances: Collected stopped instance reservations", "count", len(output.Reservations))
+	}
+	return output.Reservations, nil
 }

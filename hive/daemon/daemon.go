@@ -598,6 +598,23 @@ func (d *Daemon) initJetStream() error {
 	return nil
 }
 
+// migrateStoppedToSharedKV writes a stopped instance to shared KV and removes
+// it from the local instance map. Returns true if migration succeeded.
+func (d *Daemon) migrateStoppedToSharedKV(instance *vm.VM) bool {
+	if d.jsManager == nil {
+		return false
+	}
+	instance.LastNode = d.node
+	if err := d.jsManager.WriteStoppedInstance(instance.ID, instance); err != nil {
+		slog.Error("Failed to migrate stopped instance to shared KV",
+			"instance", instance.ID, "err", err)
+		return false
+	}
+	delete(d.Instances.VMS, instance.ID)
+	slog.Info("Migrated stopped instance to shared KV", "instance", instance.ID)
+	return true
+}
+
 // restoreInstances loads persisted VM state and re-launches instances that are
 // neither terminated nor flagged as user-stopped.
 func (d *Daemon) restoreInstances() {
@@ -624,15 +641,17 @@ func (d *Daemon) restoreInstances() {
 		}
 
 		if instance.Status == vm.StateStopped {
-			// Migrate stopped instances to shared KV so any daemon can start them
-			if d.jsManager != nil {
-				instance.LastNode = d.node
-				if err := d.jsManager.WriteStoppedInstance(instance.ID, instance); err != nil {
-					slog.Error("Failed to migrate stopped instance to shared KV, skipping",
-						"instance", instance.ID, "err", err)
+			if !d.migrateStoppedToSharedKV(instance) {
+				// Migration failed — instance is stranded in local state.
+				// Subscribe to ec2.cmd so it can still receive start commands
+				// via the old per-instance path until next restart retries migration.
+				slog.Warn("Stopped instance stranded in local state, subscribing to ec2.cmd as fallback",
+					"instance", instance.ID)
+				sub, subErr := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
+				if subErr != nil {
+					slog.Error("Failed to subscribe stranded instance", "instance", instance.ID, "err", subErr)
 				} else {
-					delete(d.Instances.VMS, instance.ID)
-					slog.Info("Migrated stopped instance to shared KV", "instance", instance.ID)
+					d.natsSubscriptions[instance.ID] = sub
 				}
 			}
 			continue
@@ -667,16 +686,18 @@ func (d *Daemon) restoreInstances() {
 			slog.Info("QEMU exited during transition, finalizing state",
 				"instance", instance.ID, "from", prevStatus, "to", instance.Status)
 
-			// Migrate stopped instances to shared KV
-			if instance.Status == vm.StateStopped && d.jsManager != nil {
-				instance.LastNode = d.node
-				if err := d.jsManager.WriteStoppedInstance(instance.ID, instance); err != nil {
-					slog.Error("Failed to migrate resolved-stopped instance to shared KV",
-						"instance", instance.ID, "err", err)
-				} else {
-					delete(d.Instances.VMS, instance.ID)
-					slog.Info("Migrated resolved-stopped instance to shared KV", "instance", instance.ID)
+			if instance.Status == vm.StateStopped {
+				if d.migrateStoppedToSharedKV(instance) {
 					continue
+				}
+				// Migration failed — subscribe as fallback (same as above)
+				slog.Warn("Stopped instance stranded in local state after transition, subscribing to ec2.cmd as fallback",
+					"instance", instance.ID)
+				sub, subErr := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
+				if subErr != nil {
+					slog.Error("Failed to subscribe stranded instance", "instance", instance.ID, "err", subErr)
+				} else {
+					d.natsSubscriptions[instance.ID] = sub
 				}
 			}
 

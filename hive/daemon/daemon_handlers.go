@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -540,6 +539,7 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command qmp.Comman
 		} else {
 			d.Instances.Mu.Lock()
 			inst.Attributes = attrs
+			inst.LastNode = d.node
 			d.Instances.Mu.Unlock()
 
 			if err := d.TransitionState(inst, finalState); err != nil {
@@ -550,7 +550,6 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command qmp.Comman
 			// For stop (not terminate): release ownership to shared KV so any
 			// daemon can pick up the next StartInstance request.
 			if !isTerminate && d.jsManager != nil {
-				inst.LastNode = d.node
 
 				// Write to shared KV first — if daemon crashes after this but
 				// before local cleanup, restoreInstances handles the overlap.
@@ -575,12 +574,17 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command qmp.Comman
 
 					// Persist local state without the stopped instance
 					if err := d.WriteState(); err != nil {
-						slog.Error("Failed to persist state after releasing stopped instance",
+						slog.Error("Failed to persist state after releasing stopped instance, re-adding to local map for consistency",
 							"instanceId", inst.ID, "err", err)
+						// Re-add to local map so in-memory state matches on-disk state.
+						// On next restart, restoreInstances will retry the migration.
+						d.Instances.Mu.Lock()
+						d.Instances.VMS[inst.ID] = inst
+						d.Instances.Mu.Unlock()
+					} else {
+						slog.Info("Released stopped instance ownership to shared KV",
+							"instanceId", inst.ID, "lastNode", d.node)
 					}
-
-					slog.Info("Released stopped instance ownership to shared KV",
-						"instanceId", inst.ID, "lastNode", d.node)
 				}
 			}
 		}
@@ -1375,27 +1379,25 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 		return
 	}
 
-	// Re-initialize non-serialized fields
-	instance.QMPClient = &qmp.QMPClient{}
-	instance.EBSRequests.Mu = sync.Mutex{}
+	// Reset node-local fields that are stale after cross-node migration
+	instance.ResetNodeLocalState()
 
 	// Allocate resources
 	instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
-	if ok {
-		if err := d.resourceMgr.allocate(instanceType); err != nil {
-			slog.Error("handleEC2StartStoppedInstance: failed to allocate resources", "instanceId", req.InstanceID, "err", err)
-			respondWithError(awserrors.ErrorInsufficientInstanceCapacity)
-			return
-		}
+	if !ok {
+		slog.Error("handleEC2StartStoppedInstance: unknown instance type", "instanceId", req.InstanceID, "instanceType", instance.InstanceType)
+		respondWithError(awserrors.ErrorInvalidInstanceType)
+		return
+	}
+	if err := d.resourceMgr.allocate(instanceType); err != nil {
+		slog.Error("handleEC2StartStoppedInstance: failed to allocate resources", "instanceId", req.InstanceID, "err", err)
+		respondWithError(awserrors.ErrorInsufficientInstanceCapacity)
+		return
 	}
 
-	// Add instance to local map
+	// Add instance to local map and clear stop attribute before launch
 	d.Instances.Mu.Lock()
 	d.Instances.VMS[instance.ID] = instance
-	d.Instances.Mu.Unlock()
-
-	// Clear stop attribute before launch
-	d.Instances.Mu.Lock()
 	instance.Attributes = qmp.Attributes{StartInstance: true}
 	d.Instances.Mu.Unlock()
 
@@ -1404,9 +1406,7 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 	if err != nil {
 		slog.Error("handleEC2StartStoppedInstance: LaunchInstance failed", "instanceId", req.InstanceID, "err", err)
 		// Rollback: deallocate resources and remove from local map
-		if ok {
-			d.resourceMgr.deallocate(instanceType)
-		}
+		d.resourceMgr.deallocate(instanceType)
 		d.Instances.Mu.Lock()
 		delete(d.Instances.VMS, instance.ID)
 		d.Instances.Mu.Unlock()
@@ -1414,10 +1414,15 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 		return
 	}
 
-	// Remove from shared KV now that it's running locally
+	// Remove from shared KV now that it's running locally.
+	// Retry once on failure — a stale KV entry risks duplicate starts.
 	if err := d.jsManager.DeleteStoppedInstance(req.InstanceID); err != nil {
-		slog.Error("handleEC2StartStoppedInstance: failed to delete from shared KV (instance is running)",
+		slog.Warn("handleEC2StartStoppedInstance: first KV delete failed, retrying",
 			"instanceId", req.InstanceID, "err", err)
+		if retryErr := d.jsManager.DeleteStoppedInstance(req.InstanceID); retryErr != nil {
+			slog.Error("handleEC2StartStoppedInstance: KV delete failed after retry, instance is running locally but stale entry remains in shared KV",
+				"instanceId", req.InstanceID, "err", retryErr)
+		}
 	}
 
 	slog.Info("Started stopped instance from shared KV", "instanceId", instance.ID, "node", d.node)

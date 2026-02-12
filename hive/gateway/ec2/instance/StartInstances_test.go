@@ -162,8 +162,8 @@ func TestStartInstances_MixedSuccessAndFailure(t *testing.T) {
 	assert.Equal(t, goodID, *output.StartingInstances[0].InstanceId)
 	assert.Equal(t, "pending", *output.StartingInstances[0].CurrentState.Name)
 
-	// Second instance also got a response (even though it's an error from the daemon),
-	// StartInstances treats any NATS reply as success from a transport perspective
+	// Second instance: daemon returned an error, state remains stopped
 	assert.Equal(t, badID, *output.StartingInstances[1].InstanceId)
-	assert.Equal(t, "pending", *output.StartingInstances[1].CurrentState.Name)
+	assert.Equal(t, int64(80), *output.StartingInstances[1].CurrentState.Code)
+	assert.Equal(t, "stopped", *output.StartingInstances[1].CurrentState.Name)
 }

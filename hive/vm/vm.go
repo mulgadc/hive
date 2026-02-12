@@ -49,6 +49,18 @@ type VM struct {
 	MetadataServerAddress string `json:"metadata_server_address,omitempty"`
 }
 
+// ResetNodeLocalState zeroes out fields that are specific to the daemon node
+// that last ran this instance. Must be called after deserializing a VM from
+// shared KV before launching it on a new node.
+func (v *VM) ResetNodeLocalState() {
+	v.PID = 0
+	v.PTS = 0
+	v.Running = false
+	v.MetadataServerAddress = ""
+	v.QMPClient = &qmp.QMPClient{}
+	v.EBSRequests.Mu = sync.Mutex{}
+}
+
 type Instances struct {
 	VMS map[string]*VM `json:"vms"`
 	Mu  sync.Mutex     `json:"-"`

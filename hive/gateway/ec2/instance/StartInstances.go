@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats.go"
 )
 
@@ -44,6 +45,13 @@ func StartInstances(input *ec2.StartInstancesInput, natsConn *nats.Conn) (*ec2.S
 		msg, err := natsConn.Request("ec2.start", jsonData, 30*time.Second)
 		if err != nil {
 			slog.Error("StartInstances: Failed to send start request", "instance_id", instanceID, "err", err)
+			stateChanges = append(stateChanges, newStateChange(instanceID, 80, "stopped", 80, "stopped"))
+			continue
+		}
+
+		// Check if the daemon returned an error response
+		if responseError, parseErr := utils.ValidateErrorPayload(msg.Data); parseErr != nil {
+			slog.Error("StartInstances: Daemon returned error", "instance_id", instanceID, "code", responseError.Code)
 			stateChanges = append(stateChanges, newStateChange(instanceID, 80, "stopped", 80, "stopped"))
 			continue
 		}

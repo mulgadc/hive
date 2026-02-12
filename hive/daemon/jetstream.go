@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/nats-io/nats.go"
@@ -260,7 +261,7 @@ func (m *JetStreamManager) ListStoppedInstances() ([]*vm.VM, error) {
 
 	var instances []*vm.VM
 	for _, key := range keys {
-		if len(key) <= len(StoppedInstancePrefix) || key[:len(StoppedInstancePrefix)] != StoppedInstancePrefix {
+		if !strings.HasPrefix(key, StoppedInstancePrefix) {
 			continue
 		}
 
