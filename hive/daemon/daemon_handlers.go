@@ -1406,7 +1406,9 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 	if err != nil {
 		slog.Error("handleEC2StartStoppedInstance: LaunchInstance failed", "instanceId", req.InstanceID, "err", err)
 		// Rollback: deallocate resources and remove from local map
-		d.resourceMgr.deallocate(instanceType)
+		if ok {
+			d.resourceMgr.deallocate(instanceType)
+		}
 		d.Instances.Mu.Lock()
 		delete(d.Instances.VMS, instance.ID)
 		d.Instances.Mu.Unlock()

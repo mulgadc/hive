@@ -641,19 +641,7 @@ func (d *Daemon) restoreInstances() {
 		}
 
 		if instance.Status == vm.StateStopped {
-			if !d.migrateStoppedToSharedKV(instance) {
-				// Migration failed — instance is stranded in local state.
-				// Subscribe to ec2.cmd so it can still receive start commands
-				// via the old per-instance path until next restart retries migration.
-				slog.Warn("Stopped instance stranded in local state, subscribing to ec2.cmd as fallback",
-					"instance", instance.ID)
-				sub, subErr := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
-				if subErr != nil {
-					slog.Error("Failed to subscribe stranded instance", "instance", instance.ID, "err", subErr)
-				} else {
-					d.natsSubscriptions[instance.ID] = sub
-				}
-			}
+			d.migrateStoppedToSharedKV(instance)
 			continue
 		}
 
@@ -686,19 +674,8 @@ func (d *Daemon) restoreInstances() {
 			slog.Info("QEMU exited during transition, finalizing state",
 				"instance", instance.ID, "from", prevStatus, "to", instance.Status)
 
-			if instance.Status == vm.StateStopped {
-				if d.migrateStoppedToSharedKV(instance) {
-					continue
-				}
-				// Migration failed — subscribe as fallback (same as above)
-				slog.Warn("Stopped instance stranded in local state after transition, subscribing to ec2.cmd as fallback",
-					"instance", instance.ID)
-				sub, subErr := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
-				if subErr != nil {
-					slog.Error("Failed to subscribe stranded instance", "instance", instance.ID, "err", subErr)
-				} else {
-					d.natsSubscriptions[instance.ID] = sub
-				}
+			if instance.Status == vm.StateStopped && d.migrateStoppedToSharedKV(instance) {
+				continue
 			}
 
 			if err := d.WriteState(); err != nil {
