@@ -50,22 +50,6 @@ type SnapshotConfig struct {
 	Tags             map[string]string `json:"tags"`
 }
 
-// NewSnapshotServiceImpl creates a new snapshot service implementation
-func NewSnapshotServiceImpl(cfg *config.Config, natsConn *nats.Conn) *SnapshotServiceImpl {
-	store := objectstore.NewS3ObjectStoreFromConfig(
-		cfg.Predastore.Host,
-		cfg.Predastore.Region,
-		cfg.Predastore.AccessKey,
-		cfg.Predastore.SecretKey,
-	)
-
-	return &SnapshotServiceImpl{
-		config:   cfg,
-		store:    store,
-		natsConn: natsConn,
-	}
-}
-
 // NewSnapshotServiceImplWithNATS creates a snapshot service with JetStream KV for volume-snapshot tracking
 func NewSnapshotServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*SnapshotServiceImpl, nats.KeyValue, error) {
 	store := objectstore.NewS3ObjectStoreFromConfig(
