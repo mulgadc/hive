@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -12,6 +13,8 @@ import (
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/viperblock/viperblock"
+	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -657,4 +660,124 @@ func TestDeleteVolume_CorruptSnapshotMetadata_SkipsFile(t *testing.T) {
 		VolumeId: aws.String(volumeID),
 	})
 	require.NoError(t, err)
+}
+
+// setupTestVolumeKV creates a NATS JetStream test server and returns a KV bucket.
+func setupTestVolumeKV(t *testing.T) nats.KeyValue {
+	t.Helper()
+	opts := &server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		JetStream: true,
+		StoreDir:  t.TempDir(),
+		NoLog:     true,
+		NoSigs:    true,
+	}
+	ns, err := server.NewServer(opts)
+	require.NoError(t, err)
+	go ns.Start()
+	require.True(t, ns.ReadyForConnections(5*time.Second))
+	t.Cleanup(func() { ns.Shutdown() })
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(func() { nc.Close() })
+
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+
+	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{
+		Bucket: "hive-volume-snapshots",
+	})
+	require.NoError(t, err)
+	return kv
+}
+
+func createVolumeInStore(t *testing.T, store *objectstore.MemoryObjectStore, volumeID string) {
+	t.Helper()
+	volumeState := viperblock.VBState{
+		VolumeConfig: viperblock.VolumeConfig{
+			VolumeMetadata: viperblock.VolumeMetadata{
+				VolumeID: volumeID,
+				SizeGiB:  10,
+				State:    "available",
+			},
+		},
+	}
+	data, err := json.Marshal(volumeState)
+	require.NoError(t, err)
+
+	_, err = store.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String("test-bucket"),
+		Key:    aws.String(volumeID + "/config.json"),
+		Body:   strings.NewReader(string(data)),
+	})
+	require.NoError(t, err)
+}
+
+func TestDeleteVolume_BlockedByKV(t *testing.T) {
+	kv := setupTestVolumeKV(t)
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+	svc.snapshotKV = kv
+
+	volumeID := "vol-kvblocked"
+	createVolumeInStore(t, store, volumeID)
+
+	// Put a snapshot ref in KV
+	data, err := json.Marshal([]string{"snap-001"})
+	require.NoError(t, err)
+	_, err = kv.Put(volumeID, data)
+	require.NoError(t, err)
+
+	// DeleteVolume should be blocked
+	_, err = svc.DeleteVolume(&ec2.DeleteVolumeInput{
+		VolumeId: aws.String(volumeID),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorVolumeInUse)
+}
+
+func TestDeleteVolume_AllowedByKV(t *testing.T) {
+	kv := setupTestVolumeKV(t)
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+	svc.snapshotKV = kv
+
+	volumeID := "vol-kvallowed"
+	createVolumeInStore(t, store, volumeID)
+
+	// No KV entry → delete allowed
+	_, err := svc.DeleteVolume(&ec2.DeleteVolumeInput{
+		VolumeId: aws.String(volumeID),
+	})
+	require.NoError(t, err)
+}
+
+func TestDeleteVolume_FallbackToS3WhenKVNil(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+	// snapshotKV is nil by default
+
+	volumeID := "vol-s3fallback"
+	createVolumeInStore(t, store, volumeID)
+
+	// Put a snapshot referencing this volume in S3 (old path)
+	snapCfg := snapshotVolumeRef{VolumeID: volumeID}
+	snapData, err := json.Marshal(snapCfg)
+	require.NoError(t, err)
+
+	_, err = store.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String("test-bucket"),
+		Key:    aws.String("snap-fallback/metadata.json"),
+		Body:   strings.NewReader(string(snapData)),
+	})
+	require.NoError(t, err)
+
+	// Should still be blocked via S3 fallback
+	_, err = svc.DeleteVolume(&ec2.DeleteVolumeInput{
+		VolumeId: aws.String(volumeID),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorVolumeInUse)
 }

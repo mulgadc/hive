@@ -1,145 +1,133 @@
-# Plan: Implement CreateImage API
+# Plan: JetStream KV for Volume→Snapshot Dependency Tracking
 
 ## Context
 
-Users need the ability to create a new AMI from a running (or stopped) instance so they can launch new instances from snapshots of existing ones. This is the standard AWS `CreateImage` flow: snapshot the instance's root volume, then register a new AMI pointing at that snapshot. All the building blocks exist (CreateSnapshot, AMIMetadata, OpenFromSnapshot, cloneAMIToVolume) — they just need to be wired together.
+Currently, `DeleteVolume` checks for snapshot dependencies by scanning **all** `snap-*` prefixes in S3 and reading each snapshot's metadata to see if it references the volume (`checkVolumeHasNoSnapshots` in `service_impl.go:848`). This is O(n) in total snapshots and makes multiple S3 round-trips per delete.
 
-## Flow
+We'll replace this with a JetStream KV index keyed by volume ID, giving O(1) lookups on the delete path. The KV is written **before** the snapshot is persisted to S3, so the failure mode is safe: a phantom KV entry blocks deletion of a volume that could technically be deleted, rather than allowing deletion of a volume with live dependents.
 
-```
-AWS CLI: create-image --instance-id i-xxx --name "my-image"
-  → Gateway (ec2.go)
-    → NATS "ec2.CreateImage"
-      → Daemon handler
-        → Finds instance → gets root volume ID
-        → Calls snapshotService.CreateSnapshot(volumeID)
-        → Creates new AMI viperblock config with AMIMetadata.SnapshotID
-        → Stores as ami-xxx/config.json in S3
-        → Returns ami-xxx
-```
+## Design
+
+**Bucket:** `hive-volume-snapshots` (new KV bucket, follows existing naming: `hive-ec2-account-settings`, `hive-eigw`)
+
+**Key:** volume ID (e.g., `vol-abc123`)
+**Value:** JSON array of snapshot IDs (e.g., `["snap-001","snap-002"]`)
+
+**Write ordering (safe direction):**
+1. CreateSnapshot: add snapshot ID to KV **before** writing snapshot to S3
+2. DeleteSnapshot: remove snapshot ID from KV **after** deleting snapshot from S3
+3. CopySnapshot: add new snapshot ID to KV **before** writing snapshot config to S3
+
+**Read path:** `DeleteVolume` does a single `kv.Get(volumeID)` — if key exists and array is non-empty, return `VolumeInUse`.
 
 ## Changes
 
-### 1. Gateway: Add CreateImage action entry
-**File**: `hive/gateway/ec2.go`
-- Add `"CreateImage"` to the `ec2Actions` map, following the DescribeImages pattern
+### 1. Add KV field to SnapshotServiceImpl
 
-### 2. Gateway: CreateImage handler
-**File**: `hive/gateway/ec2/image/CreateImage.go` (new)
-- `ValidateCreateImageInput()` — validate InstanceId is present and starts with `i-`
-- `CreateImage()` — create NATSImageService, call `svc.CreateImage(input)`
-- Follow exact pattern of `gateway/ec2/snapshot/CreateSnapshot.go`
+**File:** `hive/handlers/ec2/snapshot/service_impl.go`
 
-### 3. NATS service: Wire CreateImage to NATS
-**File**: `hive/handlers/ec2/image/service_nats.go`
-- Replace the `CreateImage` stub with a real NATS request to `"ec2.CreateImage"` topic
-- Use `utils.NATSRequest[ec2.CreateImageOutput]` with 120s timeout (snapshot can be slow)
+- Add `snapshotKV nats.KeyValue` field to `SnapshotServiceImpl` struct
+- Add `const KVBucketVolumeSnapshots = "hive-volume-snapshots"`
+- Add new constructor `NewSnapshotServiceImplWithNATS(cfg, natsConn)` that initializes the KV bucket using the existing `getOrCreateKVBucket` pattern (from `hive/handlers/ec2/account/service_impl.go:63`)
+- Reuse `getOrCreateKVBucket` — move it to a shared location or duplicate it (it's 8 lines). Since `account` and `eigw` both have their own copies already, duplicate into this package too for consistency.
 
-### 4. Daemon: Add NATS subscription and handler
-**File**: `hive/daemon/daemon.go`
-- Add `{"ec2.CreateImage", d.handleEC2CreateImage, "hive-workers"}` to subscriptions
-- Update `NewImageServiceImpl(d.config)` → `NewImageServiceImpl(d.config, d.natsConn)` (~line 515)
+### 2. Add KV helper methods to SnapshotServiceImpl
 
-**File**: `hive/daemon/daemon_handlers.go`
-- Add `handleEC2CreateImage` — this is a **stateful handler** (NOT handleNATSRequest) because it needs instance state to find the root volume
-- Steps:
-  1. Unmarshal `ec2.CreateImageInput`
-  2. Lock `d.Instances.Mu`, find instance in `d.Instances.VMS[*input.InstanceId]`, unlock
-  3. Validate instance exists and is in running or stopped state
-  4. Find root volume ID from `instance.Instance.BlockDeviceMappings` (first entry with `Ebs.VolumeId`)
-  5. Get instance status (running vs stopped) — pass to service so it knows which snapshot path to use
-  6. Get source AMI ID from `instance.Instance.ImageId` (for architecture, platform, etc.)
-  7. Call `d.imageService.CreateImageFromInstance(params)` passing the extracted data
-  8. Respond with JSON
+**File:** `hive/handlers/ec2/snapshot/service_impl.go`
 
-### 5. Image service: Update interface and add CreateImageParams
-**File**: `hive/handlers/ec2/image/service.go`
-- Keep `CreateImage(input *ec2.CreateImageInput)` signature unchanged on the interface (gateway NATS side doesn't use extra params)
+Three helpers:
 
-**File**: `hive/handlers/ec2/image/service_impl.go`
-- Add a `CreateImageParams` struct for the daemon-side call:
-  ```go
-  type CreateImageParams struct {
-      Input         *ec2.CreateImageInput
-      RootVolumeID  string
-      SourceImageID string
-      IsRunning     bool // true = use ebs.snapshot NATS, false = snapshot from S3 state
-  }
-  ```
-- The daemon handler calls `d.imageService.CreateImageFromInstance(params)` directly (not through the generic interface)
+```go
+// addSnapshotRef adds snapshotID to the volume's snapshot list in KV.
+func (s *SnapshotServiceImpl) addSnapshotRef(volumeID, snapshotID string) error
 
-### 6. Image service: Implement CreateImageFromInstance
-**File**: `hive/handlers/ec2/image/service_impl.go`
+// removeSnapshotRef removes snapshotID from the volume's snapshot list in KV.
+// Deletes the key if the list becomes empty.
+func (s *SnapshotServiceImpl) removeSnapshotRef(volumeID, snapshotID string) error
 
-Add `natsConn *nats.Conn` to `ImageServiceImpl` (for running-instance NATS snapshot calls and offline viperblock instantiation for stopped instances). Update constructor.
+// VolumeHasSnapshots returns true if the volume has any snapshots in KV.
+func (s *SnapshotServiceImpl) VolumeHasSnapshots(volumeID string) (bool, error)
+```
 
-Implement `CreateImageFromInstance(params CreateImageParams)`:
-1. Generate AMI ID: `utils.GenerateResourceID("ami")`
-2. Generate snapshot ID: `utils.GenerateResourceID("snap")`
-3. **Snapshot the root volume** — two paths:
-   - **Running instance**: NATS `ebs.snapshot.{volumeID}` — reuse the exact pattern from `snapshot/service_impl.go:191-218`:
-     - Marshal `config.EBSSnapshotRequest{Volume: rootVolumeID, SnapshotID: snapshotID}`
-     - Send NATS request to `ebs.snapshot.{rootVolumeID}` with 30s timeout
-     - Validate response
-   - **Stopped instance**: Volume is not mounted in viperblockd. Data is fully persisted in S3. Create snapshot offline:
-     - Instantiate viperblock via `newViperblock(rootVolumeID, ...)` (reuse pattern from `instance/service_impl.go:238-258`)
-     - `backend.Init()` + `LoadStateRequest("")` to load config + block map from S3
-     - Call `vb.CreateSnapshot(snapshotID)` directly — the flush/WAL steps are no-ops on a freshly loaded instance, it just serializes the block map into the snapshot checkpoint
-     - `vb.RemoveLocalFiles()` to clean up temp files
-4. **Store snapshot metadata** in `{snapshotID}/metadata.json` — same pattern as `snapshot/service_impl.go:220-252`
-5. **Read source AMI config** from S3 `{sourceImageID}/config.json` to get architecture, platform, etc.
-6. **Read root volume config** from S3 `{rootVolumeID}/config.json` to get volume size
-7. **Build AMI VolumeConfig** with populated `AMIMetadata`:
-   - `ImageID`: new ami-xxx
-   - `Name`: from input
-   - `Description`: from input
-   - `SnapshotID`: the snap-xxx just created
-   - `Architecture`, `PlatformDetails`, `Virtualization`, etc.: from source AMI (or defaults)
-   - `VolumeSizeGiB`: from root volume config
-   - `CreationDate`: now
-   - `RootDeviceType`: "ebs"
-   - `ImageOwnerAlias`: "self"
-8. **Store AMI config** to S3 as `{amiID}/config.json` — create a `VBState` with the VolumeConfig. This is what `DescribeImages` reads.
-9. Return `&ec2.CreateImageOutput{ImageId: &amiID}`
+- `addSnapshotRef`: Get current value (or empty array if `ErrKeyNotFound`), append snapshot ID, Put back
+- `removeSnapshotRef`: Get current value, filter out snapshot ID, Put back (or Delete key if empty)
+- `VolumeHasSnapshots`: Get key, unmarshal, return `len > 0`. Return `false, nil` on `ErrKeyNotFound`.
 
-### 7. Tests
-- Add unit test for `CreateImage` in `hive/handlers/ec2/image/` with mock object store
-- Add gateway validation test in `hive/gateway/ec2/image/`
+All methods are no-ops (log warning, return nil/false) if `snapshotKV` is nil, to support the fallback case where JetStream isn't available.
 
-## Key Files
+### 3. Hook into CreateSnapshot
+
+**File:** `hive/handlers/ec2/snapshot/service_impl.go` — `CreateSnapshot()` (line ~153)
+
+After the viperblock NATS snapshot succeeds but **before** `putSnapshotConfig` (the S3 write), call `addSnapshotRef(volumeID, snapshotID)`. If the KV write fails, fail the entire CreateSnapshot and return an error — this prevents creating a snapshot that isn't tracked.
+
+### 4. Hook into DeleteSnapshot
+
+**File:** `hive/handlers/ec2/snapshot/service_impl.go` — `DeleteSnapshot()` (line ~311)
+
+Read the snapshot config first (already done at line 321) to get `volumeID`. **After** all S3 objects are deleted successfully, call `removeSnapshotRef(cfg.VolumeID, snapshotID)`. If KV removal fails, log a warning but don't fail the delete — the safe direction is a phantom entry.
+
+### 5. Hook into CopySnapshot
+
+**File:** `hive/handlers/ec2/snapshot/service_impl.go` — `CopySnapshot()` (line ~355)
+
+CopySnapshot creates a new snapshot referencing the same source volume. **Before** `putSnapshotConfig`, call `addSnapshotRef(sourceCfg.VolumeID, newSnapshotID)`. Fail if KV write fails (same reasoning as CreateSnapshot).
+
+### 6. Replace checkVolumeHasNoSnapshots in VolumeServiceImpl
+
+**File:** `hive/handlers/ec2/volume/service_impl.go`
+
+The volume service doesn't currently have access to the snapshot KV. Rather than giving it a direct KV handle (crossing service boundaries), use a NATS request to a new topic.
+
+Add a new NATS topic `ec2.VolumeHasSnapshots` handled by the daemon. The handler calls `snapshotService.VolumeHasSnapshots(volumeID)` and returns a simple bool response.
+
+**In `DeleteVolume` (line ~711):** Replace the `checkVolumeHasNoSnapshots` S3 scan with a NATS request to `ec2.VolumeHasSnapshots`. Keep the old `checkVolumeHasNoSnapshots` method as a **fallback** if the NATS request fails (e.g., no responders), so the system degrades gracefully.
+
+### 7. Wire up in daemon
+
+**File:** `hive/daemon/daemon.go` (line ~521)
+
+Change `NewSnapshotServiceImpl` → `NewSnapshotServiceImplWithNATS` (with fallback like eigw/account patterns).
+
+**File:** `hive/daemon/daemon.go` — subscriptions
+
+Add `ec2.VolumeHasSnapshots` subscription with queue group `hive-workers`.
+
+**File:** `hive/daemon/daemon_handlers.go`
+
+Add `handleEC2VolumeHasSnapshots` handler:
+- Unmarshal volume ID from request
+- Call `d.snapshotService.VolumeHasSnapshots(volumeID)`
+- Respond with result
+
+### 8. Tests
+
+**File:** `hive/handlers/ec2/snapshot/service_impl_test.go`
+
+- Test `addSnapshotRef` / `removeSnapshotRef` / `VolumeHasSnapshots` with a real JetStream test server
+- Test CreateSnapshot writes KV entry
+- Test DeleteSnapshot removes KV entry
+- Test CopySnapshot adds KV entry for same volume
+- Test KV nil fallback (no-op behavior)
+
+**File:** `hive/handlers/ec2/volume/service_impl_test.go`
+
+- Test that DeleteVolume is blocked when VolumeHasSnapshots returns true via NATS
+- Test fallback to S3 scan when NATS is unavailable
+
+## Files Modified
 
 | File | Change |
 |------|--------|
-| `hive/gateway/ec2.go` | Add CreateImage action |
-| `hive/gateway/ec2/image/CreateImage.go` | New gateway handler |
-| `hive/handlers/ec2/image/service.go` | Update interface |
-| `hive/handlers/ec2/image/service_nats.go` | Wire NATS request |
-| `hive/handlers/ec2/image/service_impl.go` | Core implementation |
-| `hive/daemon/daemon.go` | Add subscription, update constructor |
-| `hive/daemon/daemon_handlers.go` | Add stateful handler |
-
-## Existing Code to Reuse
-
-- `snapshot/service_impl.go:191-218` — EBS snapshot NATS pattern (`ebs.snapshot.{volumeID}`)
-- `snapshot/service_impl.go:107-123` — `putSnapshotConfig` S3 storage pattern
-- `image/service_impl.go:96-126` — Reading viperblock VBState from S3 (`config.json`)
-- `instance/service_impl.go:238-258` — `newViperblock()` for offline viperblock instantiation
-- `utils.GenerateResourceID()` — ID generation
-- `utils.NATSRequest[T]()` — Generic NATS request helper
-- `viperblock.VBState`, `viperblock.VolumeConfig`, `viperblock.AMIMetadata` — Existing types
+| `hive/handlers/ec2/snapshot/service_impl.go` | KV field, constructor, helpers, hook into Create/Delete/Copy |
+| `hive/handlers/ec2/volume/service_impl.go` | Replace S3 scan with NATS call + fallback |
+| `hive/daemon/daemon.go` | Wire `NewSnapshotServiceImplWithNATS`, add subscription |
+| `hive/daemon/daemon_handlers.go` | Add `handleEC2VolumeHasSnapshots` handler |
+| `hive/handlers/ec2/snapshot/service_impl_test.go` | KV helper tests |
+| `hive/handlers/ec2/volume/service_impl_test.go` | Updated DeleteVolume tests |
 
 ## Verification
 
-1. `make build` — confirm compilation
-2. `make test` — all existing tests pass
-3. Manual test:
-   ```bash
-   # Launch instance from existing AMI
-   aws ec2 run-instances --image-id ami-xxx --instance-type t2.micro --key-name mykey
-   # Create image from running instance
-   aws ec2 create-image --instance-id i-xxx --name "test-snapshot-image"
-   # Verify it appears
-   aws ec2 describe-images --owners self
-   # Launch new instance from the snapshot-based AMI
-   aws ec2 run-instances --image-id ami-yyy --instance-type t2.micro --key-name mykey
-   ```
+1. `make test` — all existing + new tests pass
+2. `make build` — compiles cleanly
+3. Manual e2e: create volume → create snapshot → attempt delete volume (should fail) → delete snapshot → delete volume (should succeed)

@@ -24,12 +24,15 @@ import (
 // Ensure SnapshotServiceImpl implements SnapshotService
 var _ SnapshotService = (*SnapshotServiceImpl)(nil)
 
+const KVBucketVolumeSnapshots = "hive-volume-snapshots"
+
 // SnapshotServiceImpl implements SnapshotService with S3-backed storage
 type SnapshotServiceImpl struct {
-	config   *config.Config
-	store    objectstore.ObjectStore
-	natsConn *nats.Conn
-	mutex    sync.RWMutex
+	config     *config.Config
+	store      objectstore.ObjectStore
+	natsConn   *nats.Conn
+	snapshotKV nats.KeyValue
+	mutex      sync.RWMutex
 }
 
 // SnapshotConfig represents snapshot metadata stored in S3
@@ -63,6 +66,35 @@ func NewSnapshotServiceImpl(cfg *config.Config, natsConn *nats.Conn) *SnapshotSe
 	}
 }
 
+// NewSnapshotServiceImplWithNATS creates a snapshot service with JetStream KV for volume-snapshot tracking
+func NewSnapshotServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*SnapshotServiceImpl, nats.KeyValue, error) {
+	store := objectstore.NewS3ObjectStoreFromConfig(
+		cfg.Predastore.Host,
+		cfg.Predastore.Region,
+		cfg.Predastore.AccessKey,
+		cfg.Predastore.SecretKey,
+	)
+
+	js, err := natsConn.JetStream()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get JetStream context: %w", err)
+	}
+
+	kv, err := getOrCreateKVBucket(js, KVBucketVolumeSnapshots, 10)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketVolumeSnapshots, err)
+	}
+
+	slog.Info("Snapshot service initialized with JetStream KV", "bucket", KVBucketVolumeSnapshots)
+
+	return &SnapshotServiceImpl{
+		config:     cfg,
+		store:      store,
+		natsConn:   natsConn,
+		snapshotKV: kv,
+	}, kv, nil
+}
+
 // NewSnapshotServiceImplWithStore creates a snapshot service with a custom ObjectStore (for testing)
 func NewSnapshotServiceImplWithStore(cfg *config.Config, store objectstore.ObjectStore, natsConn *nats.Conn) *SnapshotServiceImpl {
 	return &SnapshotServiceImpl{
@@ -70,6 +102,20 @@ func NewSnapshotServiceImplWithStore(cfg *config.Config, store objectstore.Objec
 		store:    store,
 		natsConn: natsConn,
 	}
+}
+
+func getOrCreateKVBucket(js nats.JetStreamContext, bucketName string, history int) (nats.KeyValue, error) {
+	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{
+		Bucket:  bucketName,
+		History: utils.SafeIntToUint8(history),
+	})
+	if err != nil {
+		kv, err = js.KeyValue(bucketName)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return kv, nil
 }
 
 // getSnapshotKey returns the S3 key for storing snapshot metadata.
@@ -246,6 +292,13 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput) (*e
 		}
 	}
 
+	// Track the volume→snapshot dependency in KV before persisting to S3.
+	// This ensures we never have an untracked snapshot in S3.
+	if err := s.addSnapshotRef(volumeID, snapshotID); err != nil {
+		slog.Error("CreateSnapshot failed to add snapshot ref to KV", "snapshotId", snapshotID, "volumeId", volumeID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
 	if err := s.putSnapshotConfig(snapshotID, snapshotCfg); err != nil {
 		slog.Error("CreateSnapshot failed to write config", "snapshotId", snapshotID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
@@ -318,7 +371,7 @@ func (s *SnapshotServiceImpl) DeleteSnapshot(input *ec2.DeleteSnapshotInput) (*e
 
 	slog.Info("DeleteSnapshot request", "snapshotId", snapshotID)
 
-	_, err := s.getSnapshotConfig(snapshotID)
+	cfg, err := s.getSnapshotConfig(snapshotID)
 	if err != nil {
 		slog.Error("DeleteSnapshot snapshot not found", "snapshotId", snapshotID, "err", err)
 		return nil, err
@@ -344,6 +397,12 @@ func (s *SnapshotServiceImpl) DeleteSnapshot(input *ec2.DeleteSnapshotInput) (*e
 		if err != nil {
 			slog.Warn("DeleteSnapshot failed to delete object", "key", *obj.Key, "err", err)
 		}
+	}
+
+	// Remove from KV after S3 cleanup. Failure is logged but not fatal —
+	// a phantom entry safely blocks volume deletion rather than allowing it.
+	if err := s.removeSnapshotRef(cfg.VolumeID, snapshotID); err != nil {
+		slog.Warn("DeleteSnapshot failed to remove snapshot ref from KV", "snapshotId", snapshotID, "volumeId", cfg.VolumeID, "err", err)
 	}
 
 	slog.Info("DeleteSnapshot completed", "snapshotId", snapshotID)
@@ -391,6 +450,12 @@ func (s *SnapshotServiceImpl) CopySnapshot(input *ec2.CopySnapshotInput) (*ec2.C
 		newCfg.Tags[k] = v
 	}
 
+	// Track the volume→snapshot dependency in KV before persisting to S3.
+	if err := s.addSnapshotRef(sourceCfg.VolumeID, newSnapshotID); err != nil {
+		slog.Error("CopySnapshot failed to add snapshot ref to KV", "snapshotId", newSnapshotID, "volumeId", sourceCfg.VolumeID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
 	if err := s.putSnapshotConfig(newSnapshotID, newCfg); err != nil {
 		slog.Error("CopySnapshot failed to write config", "snapshotId", newSnapshotID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
@@ -401,4 +466,116 @@ func (s *SnapshotServiceImpl) CopySnapshot(input *ec2.CopySnapshotInput) (*ec2.C
 	return &ec2.CopySnapshotOutput{
 		SnapshotId: aws.String(newSnapshotID),
 	}, nil
+}
+
+// addSnapshotRef adds snapshotID to the volume's snapshot list in KV.
+func (s *SnapshotServiceImpl) addSnapshotRef(volumeID, snapshotID string) error {
+	if s.snapshotKV == nil {
+		slog.Warn("addSnapshotRef: snapshotKV is nil, skipping", "volumeId", volumeID, "snapshotId", snapshotID)
+		return nil
+	}
+
+	entry, err := s.snapshotKV.Get(volumeID)
+	var snapshots []string
+	if err != nil {
+		if !errors.Is(err, nats.ErrKeyNotFound) {
+			return fmt.Errorf("addSnapshotRef: failed to get KV key %s: %w", volumeID, err)
+		}
+	} else {
+		if err := json.Unmarshal(entry.Value(), &snapshots); err != nil {
+			return fmt.Errorf("addSnapshotRef: failed to unmarshal KV value for %s: %w", volumeID, err)
+		}
+	}
+
+	snapshots = append(snapshots, snapshotID)
+
+	data, err := json.Marshal(snapshots)
+	if err != nil {
+		return fmt.Errorf("addSnapshotRef: failed to marshal snapshot list: %w", err)
+	}
+
+	if _, err := s.snapshotKV.Put(volumeID, data); err != nil {
+		return fmt.Errorf("addSnapshotRef: failed to put KV key %s: %w", volumeID, err)
+	}
+
+	slog.Info("addSnapshotRef: added snapshot ref", "volumeId", volumeID, "snapshotId", snapshotID)
+	return nil
+}
+
+// removeSnapshotRef removes snapshotID from the volume's snapshot list in KV.
+// Deletes the key if the list becomes empty.
+func (s *SnapshotServiceImpl) removeSnapshotRef(volumeID, snapshotID string) error {
+	if s.snapshotKV == nil {
+		slog.Warn("removeSnapshotRef: snapshotKV is nil, skipping", "volumeId", volumeID, "snapshotId", snapshotID)
+		return nil
+	}
+
+	entry, err := s.snapshotKV.Get(volumeID)
+	if err != nil {
+		if errors.Is(err, nats.ErrKeyNotFound) {
+			return nil
+		}
+		return fmt.Errorf("removeSnapshotRef: failed to get KV key %s: %w", volumeID, err)
+	}
+
+	var snapshots []string
+	if err := json.Unmarshal(entry.Value(), &snapshots); err != nil {
+		return fmt.Errorf("removeSnapshotRef: failed to unmarshal KV value for %s: %w", volumeID, err)
+	}
+
+	filtered := snapshots[:0]
+	for _, s := range snapshots {
+		if s != snapshotID {
+			filtered = append(filtered, s)
+		}
+	}
+
+	if len(filtered) == 0 {
+		if err := s.snapshotKV.Delete(volumeID); err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
+			return fmt.Errorf("removeSnapshotRef: failed to delete KV key %s: %w", volumeID, err)
+		}
+	} else {
+		data, err := json.Marshal(filtered)
+		if err != nil {
+			return fmt.Errorf("removeSnapshotRef: failed to marshal snapshot list: %w", err)
+		}
+		if _, err := s.snapshotKV.Put(volumeID, data); err != nil {
+			return fmt.Errorf("removeSnapshotRef: failed to put KV key %s: %w", volumeID, err)
+		}
+	}
+
+	slog.Info("removeSnapshotRef: removed snapshot ref", "volumeId", volumeID, "snapshotId", snapshotID)
+	return nil
+}
+
+// VolumeHasSnapshots returns true if the volume has any snapshots in KV.
+func (s *SnapshotServiceImpl) VolumeHasSnapshots(volumeID string) (bool, error) {
+	if s.snapshotKV == nil {
+		return false, nil
+	}
+
+	entry, err := s.snapshotKV.Get(volumeID)
+	if err != nil {
+		if errors.Is(err, nats.ErrKeyNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("VolumeHasSnapshots: failed to get KV key %s: %w", volumeID, err)
+	}
+
+	var snapshots []string
+	if err := json.Unmarshal(entry.Value(), &snapshots); err != nil {
+		return false, fmt.Errorf("VolumeHasSnapshots: failed to unmarshal KV value for %s: %w", volumeID, err)
+	}
+
+	return len(snapshots) > 0, nil
+}
+
+// GetSnapshotKV returns the snapshot KV handle for sharing with other services.
+func (s *SnapshotServiceImpl) GetSnapshotKV() nats.KeyValue {
+	return s.snapshotKV
+}
+
+// SetSnapshotKV sets the snapshot KV handle (for testing).
+func (s *SnapshotServiceImpl) SetSnapshotKV(kv nats.KeyValue) {
+	s.snapshotKV = kv
 }

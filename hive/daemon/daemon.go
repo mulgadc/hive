@@ -517,8 +517,15 @@ func (d *Daemon) Start() error {
 	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances, store)
 	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
 	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config, d.natsConn)
-	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config, d.natsConn)
-	d.snapshotService = handlers_ec2_snapshot.NewSnapshotServiceImpl(d.config, d.natsConn)
+	var snapshotKV nats.KeyValue
+	if snapSvc, kv, err := handlers_ec2_snapshot.NewSnapshotServiceImplWithNATS(d.config, d.natsConn); err != nil {
+		slog.Warn("Failed to initialize snapshot service with NATS KV, falling back", "error", err)
+		d.snapshotService = handlers_ec2_snapshot.NewSnapshotServiceImpl(d.config, d.natsConn)
+	} else {
+		d.snapshotService = snapSvc
+		snapshotKV = kv
+	}
+	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config, d.natsConn, snapshotKV)
 	d.tagsService = handlers_ec2_tags.NewTagsServiceImpl(d.config)
 
 	if eigwSvc, err := handlers_ec2_eigw.NewEgressOnlyIGWServiceImplWithNATS(d.config, d.natsConn); err != nil {

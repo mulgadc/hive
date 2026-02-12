@@ -34,10 +34,13 @@ type VolumeServiceImpl struct {
 	store      objectstore.ObjectStore
 	bucketName string
 	natsConn   *nats.Conn
+	snapshotKV nats.KeyValue
 }
 
-// NewVolumeServiceImpl creates a new daemon-side volume service
-func NewVolumeServiceImpl(cfg *config.Config, natsConn *nats.Conn) *VolumeServiceImpl {
+// NewVolumeServiceImpl creates a new daemon-side volume service.
+// snapshotKV is optional — when non-nil, DeleteVolume uses O(1) KV lookup
+// instead of scanning all snapshots in S3.
+func NewVolumeServiceImpl(cfg *config.Config, natsConn *nats.Conn, snapshotKV nats.KeyValue) *VolumeServiceImpl {
 	store := objectstore.NewS3ObjectStoreFromConfig(
 		cfg.Predastore.Host,
 		cfg.Predastore.Region,
@@ -50,21 +53,26 @@ func NewVolumeServiceImpl(cfg *config.Config, natsConn *nats.Conn) *VolumeServic
 		store:      store,
 		bucketName: cfg.Predastore.Bucket,
 		natsConn:   natsConn,
+		snapshotKV: snapshotKV,
 	}
 }
 
 // NewVolumeServiceImplWithStore creates a volume service with a custom ObjectStore (for testing)
-func NewVolumeServiceImplWithStore(cfg *config.Config, store objectstore.ObjectStore, natsConn *nats.Conn) *VolumeServiceImpl {
+func NewVolumeServiceImplWithStore(cfg *config.Config, store objectstore.ObjectStore, natsConn *nats.Conn, snapshotKV ...nats.KeyValue) *VolumeServiceImpl {
 	bucketName := ""
 	if cfg != nil {
 		bucketName = cfg.Predastore.Bucket
 	}
-	return &VolumeServiceImpl{
+	svc := &VolumeServiceImpl{
 		config:     cfg,
 		store:      store,
 		bucketName: bucketName,
 		natsConn:   natsConn,
 	}
+	if len(snapshotKV) > 0 {
+		svc.snapshotKV = snapshotKV[0]
+	}
+	return svc
 }
 
 // CreateVolume creates a new EBS volume via viperblock and persists its config to S3
@@ -842,10 +850,45 @@ func (r snapshotVolumeRef) referencesVolume(volumeID string) bool {
 	return r.VolumeID == volumeID || r.SourceVolumeName == volumeID
 }
 
-// checkVolumeHasNoSnapshots scans all snap-* prefixes in S3 and returns an
-// error if any snapshot references the given volume. Checks both hive's
-// metadata.json and viperblock's config.json to handle either format.
+// checkVolumeHasNoSnapshots checks if a volume has dependent snapshots.
+// Uses the JetStream KV index for O(1) lookup when available, falling back
+// to the S3 scan when KV is nil or the lookup fails.
 func (s *VolumeServiceImpl) checkVolumeHasNoSnapshots(volumeID string) error {
+	if s.snapshotKV != nil {
+		has, err := s.volumeHasSnapshotsKV(volumeID)
+		if err != nil {
+			slog.Warn("checkVolumeHasNoSnapshots: KV lookup failed, falling back to S3 scan", "volumeId", volumeID, "err", err)
+		} else if has {
+			slog.Error("DeleteVolume blocked: volume has snapshots (KV)", "volumeId", volumeID)
+			return fmt.Errorf("%s: volume %s has existing snapshots. Delete snapshots first", awserrors.ErrorVolumeInUse, volumeID)
+		} else {
+			return nil
+		}
+	}
+
+	return s.checkVolumeHasNoSnapshotsS3(volumeID)
+}
+
+// volumeHasSnapshotsKV checks the JetStream KV index for snapshot references.
+func (s *VolumeServiceImpl) volumeHasSnapshotsKV(volumeID string) (bool, error) {
+	entry, err := s.snapshotKV.Get(volumeID)
+	if err != nil {
+		if errors.Is(err, nats.ErrKeyNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	var snapshots []string
+	if err := json.Unmarshal(entry.Value(), &snapshots); err != nil {
+		return false, err
+	}
+
+	return len(snapshots) > 0, nil
+}
+
+// checkVolumeHasNoSnapshotsS3 is the original S3-scanning fallback.
+func (s *VolumeServiceImpl) checkVolumeHasNoSnapshotsS3(volumeID string) error {
 	listResult, err := s.store.ListObjects(&s3.ListObjectsInput{
 		Bucket:    aws.String(s.bucketName),
 		Prefix:    aws.String("snap-"),
