@@ -333,15 +333,24 @@ for idx in "${!INSTANCE_IDS[@]}"; do
         --query 'Reservations[0].Instances[0].BlockDeviceMappings[0].Ebs.VolumeId' --output text)
     ROOT_VOL_SIZE_API=$($AWS_EC2 describe-volumes --volume-ids "$ROOT_VOL_ID_SSH" \
         --query 'Volumes[0].Size' --output text)
-    LSBLK_OUTPUT=$(ssh -o StrictHostKeyChecking=no \
+    # Use plain lsblk output (no --json) for maximum compatibility across guest images
+    # -b=bytes, -d=disk-only (no partitions), -n=no-header, -o SIZE=only the size column
+    ROOT_DISK_BYTES=$(ssh -o StrictHostKeyChecking=no \
         -o UserKnownHostsFile=/dev/null \
+        -o LogLevel=ERROR \
         -o ConnectTimeout=5 \
         -o BatchMode=yes \
         -p "$SSH_PORT" \
         -i "multinode-test-key.pem" \
-        ec2-user@"$SSH_HOST" 'lsblk --bytes --output NAME,SIZE --json' 2>/dev/null)
-    # Get the size of the root disk (first blockdevice) in bytes, convert to GiB
-    ROOT_DISK_BYTES=$(echo "$LSBLK_OUTPUT" | jq -r '.blockdevices[0].size' | tr -d '"')
+        ec2-user@"$SSH_HOST" 'lsblk -b -d -n -o SIZE | head -1' | tr -d '[:space:]')
+    if [ -z "$ROOT_DISK_BYTES" ] || [ "$ROOT_DISK_BYTES" = "0" ]; then
+        echo "  ERROR: Failed to get root disk size from VM (got: '$ROOT_DISK_BYTES')"
+        echo "  lsblk debug output:"
+        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+            -o ConnectTimeout=5 -o BatchMode=yes -p "$SSH_PORT" -i "multinode-test-key.pem" \
+            ec2-user@"$SSH_HOST" 'lsblk -b -d; echo "---"; cat /proc/partitions' || true
+        exit 1
+    fi
     ROOT_DISK_GIB=$((ROOT_DISK_BYTES / 1073741824))
     echo "  Root disk size from VM: ${ROOT_DISK_GIB}GiB (API reports: ${ROOT_VOL_SIZE_API}GiB)"
     if [ "$ROOT_DISK_GIB" -ne "$ROOT_VOL_SIZE_API" ]; then
