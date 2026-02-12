@@ -982,3 +982,117 @@ func TestHandleEC2DescribeStoppedInstances_WithFilter(t *testing.T) {
 	_ = daemon.jsManager.DeleteStoppedInstance("i-filter-001")
 	_ = daemon.jsManager.DeleteStoppedInstance("i-filter-002")
 }
+
+// --- handleEC2TerminateStoppedInstance tests ---
+
+func TestHandleEC2TerminateStoppedInstance_MissingInstanceID(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.terminate", "hive-workers", daemon.handleEC2TerminateStoppedInstance)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reqData, _ := json.Marshal(map[string]string{"instance_id": ""})
+	reply, err := daemon.natsConn.Request("ec2.terminate", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+}
+
+func TestHandleEC2TerminateStoppedInstance_MissingInstance(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.terminate", "hive-workers", daemon.handleEC2TerminateStoppedInstance)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reqData, _ := json.Marshal(map[string]string{"instance_id": "i-nonexistent"})
+	reply, err := daemon.natsConn.Request("ec2.terminate", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+}
+
+func TestHandleEC2TerminateStoppedInstance_NotStoppedState(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	// Write an instance in running state to shared KV
+	runningVM := &vm.VM{
+		ID:           "i-term-running",
+		Status:       vm.StateRunning,
+		InstanceType: getTestInstanceType(),
+	}
+	err := daemon.jsManager.WriteStoppedInstance(runningVM.ID, runningVM)
+	require.NoError(t, err)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.terminate", "hive-workers", daemon.handleEC2TerminateStoppedInstance)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reqData, _ := json.Marshal(map[string]string{"instance_id": "i-term-running"})
+	reply, err := daemon.natsConn.Request("ec2.terminate", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+
+	// Cleanup
+	_ = daemon.jsManager.DeleteStoppedInstance(runningVM.ID)
+}
+
+func TestHandleEC2TerminateStoppedInstance_Success(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	// Write a stopped instance to shared KV
+	stoppedVM := &vm.VM{
+		ID:           "i-term-stopped-001",
+		Status:       vm.StateStopped,
+		InstanceType: getTestInstanceType(),
+		LastNode:     "node-1",
+		Reservation: &ec2.Reservation{
+			ReservationId: aws.String("r-term-001"),
+			OwnerId:       aws.String("123456789012"),
+		},
+		Instance: &ec2.Instance{
+			InstanceId:   aws.String("i-term-stopped-001"),
+			InstanceType: aws.String(getTestInstanceType()),
+		},
+	}
+	err := daemon.jsManager.WriteStoppedInstance(stoppedVM.ID, stoppedVM)
+	require.NoError(t, err)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.terminate", "hive-workers", daemon.handleEC2TerminateStoppedInstance)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reqData, _ := json.Marshal(map[string]string{"instance_id": "i-term-stopped-001"})
+	reply, err := daemon.natsConn.Request("ec2.terminate", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var resp map[string]string
+	err = json.Unmarshal(reply.Data, &resp)
+	require.NoError(t, err)
+	assert.Equal(t, "terminated", resp["status"])
+	assert.Equal(t, "i-term-stopped-001", resp["instanceId"])
+
+	// Verify instance was removed from shared KV
+	loaded, err := daemon.jsManager.LoadStoppedInstance("i-term-stopped-001")
+	require.NoError(t, err)
+	assert.Nil(t, loaded, "Instance should be removed from shared KV after termination")
+}

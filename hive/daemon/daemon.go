@@ -465,6 +465,7 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.DeleteEgressOnlyInternetGateway", d.handleEC2DeleteEgressOnlyInternetGateway, "hive-workers"},
 		{"ec2.DescribeEgressOnlyInternetGateways", d.handleEC2DescribeEgressOnlyInternetGateways, "hive-workers"},
 		{"ec2.start", d.handleEC2StartStoppedInstance, "hive-workers"},
+		{"ec2.terminate", d.handleEC2TerminateStoppedInstance, "hive-workers"},
 		{"ec2.DescribeStoppedInstances", d.handleEC2DescribeStoppedInstances, "hive-workers"},
 		{"ec2.DescribeInstances", d.handleEC2DescribeInstances, ""},
 		{"ec2.DescribeInstanceTypes", d.handleEC2DescribeInstanceTypes, ""},

@@ -2,14 +2,21 @@ package gateway_ec2_instance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/qmp"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats.go"
 )
+
+// terminateStoppedInstanceRequest is the payload sent to the ec2.terminate topic
+type terminateStoppedInstanceRequest struct {
+	InstanceID string `json:"instance_id"`
+}
 
 // TerminateInstances sends terminate commands to specified instances via NATS
 // Uses system_powerdown with stop_instance attribute to prevent restart
@@ -54,6 +61,21 @@ func TerminateInstances(input *ec2.TerminateInstancesInput, natsConn *nats.Conn)
 		subject := fmt.Sprintf("ec2.cmd.%s", instanceID)
 		msg, err := natsConn.Request(subject, jsonData, 5*time.Second)
 		if err != nil {
+			// If no daemon owns this instance, try the ec2.terminate topic for stopped instances
+			if errors.Is(err, nats.ErrNoResponders) {
+				slog.Info("TerminateInstances: No responder on per-instance topic, trying ec2.terminate", "instance_id", instanceID)
+
+				terminateReq, _ := json.Marshal(terminateStoppedInstanceRequest{InstanceID: instanceID})
+				terminateMsg, terminateErr := natsConn.Request("ec2.terminate", terminateReq, 30*time.Second)
+				if terminateErr == nil {
+					if _, parseErr := utils.ValidateErrorPayload(terminateMsg.Data); parseErr == nil {
+						slog.Info("TerminateInstances: Stopped instance terminated via ec2.terminate", "instance_id", instanceID)
+						stateChanges = append(stateChanges, newStateChange(instanceID, 32, "shutting-down", 80, "stopped"))
+						continue
+					}
+				}
+			}
+
 			slog.Error("TerminateInstances: Failed to send command", "instance_id", instanceID, "err", err)
 			stateChanges = append(stateChanges, newStateChange(instanceID, 16, "running", 16, "running"))
 			continue

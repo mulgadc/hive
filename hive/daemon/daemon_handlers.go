@@ -1434,6 +1434,107 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 	}
 }
 
+// terminateStoppedInstanceRequest is the payload for ec2.terminate topic
+type terminateStoppedInstanceRequest struct {
+	InstanceID string `json:"instance_id"`
+}
+
+// handleEC2TerminateStoppedInstance picks up a stopped instance from shared KV,
+// deletes its volumes, and removes it from shared KV.
+func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
+	respondWithError := func(errCode string) {
+		if err := msg.Respond(utils.GenerateErrorPayload(errCode)); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
+	}
+
+	var req terminateStoppedInstanceRequest
+	if err := json.Unmarshal(msg.Data, &req); err != nil {
+		slog.Error("handleEC2TerminateStoppedInstance: failed to unmarshal request", "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	if req.InstanceID == "" {
+		slog.Error("handleEC2TerminateStoppedInstance: missing instance_id")
+		respondWithError(awserrors.ErrorMissingParameter)
+		return
+	}
+
+	if d.jsManager == nil {
+		slog.Error("handleEC2TerminateStoppedInstance: JetStream not available")
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	// Load instance from shared KV
+	instance, err := d.jsManager.LoadStoppedInstance(req.InstanceID)
+	if err != nil {
+		slog.Error("handleEC2TerminateStoppedInstance: failed to load stopped instance", "instanceId", req.InstanceID, "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+	if instance == nil {
+		slog.Warn("handleEC2TerminateStoppedInstance: instance not found in shared KV", "instanceId", req.InstanceID)
+		respondWithError(awserrors.ErrorInvalidInstanceIDNotFound)
+		return
+	}
+
+	if instance.Status != vm.StateStopped {
+		slog.Error("handleEC2TerminateStoppedInstance: instance not in stopped state", "instanceId", req.InstanceID, "status", instance.Status)
+		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		return
+	}
+
+	// Delete volumes — no QEMU shutdown or unmount needed (already done during stop)
+	instance.EBSRequests.Mu.Lock()
+	for _, ebsRequest := range instance.EBSRequests.Requests {
+		// Internal volumes (EFI, cloud-init) are always cleaned up via ebs.delete
+		if ebsRequest.EFI || ebsRequest.CloudInit {
+			ebsDeleteData, err := json.Marshal(config.EBSDeleteRequest{Volume: ebsRequest.Name})
+			if err != nil {
+				slog.Error("handleEC2TerminateStoppedInstance: failed to marshal ebs.delete request", "name", ebsRequest.Name, "err", err)
+				continue
+			}
+			deleteMsg, err := d.natsConn.Request("ebs.delete", ebsDeleteData, 30*time.Second)
+			if err != nil {
+				slog.Warn("handleEC2TerminateStoppedInstance: ebs.delete failed for internal volume", "name", ebsRequest.Name, "err", err)
+			} else {
+				slog.Info("handleEC2TerminateStoppedInstance: ebs.delete sent for internal volume", "name", ebsRequest.Name, "data", string(deleteMsg.Data))
+			}
+			continue
+		}
+
+		// User-visible volumes: respect DeleteOnTermination flag
+		if !ebsRequest.DeleteOnTermination {
+			slog.Info("handleEC2TerminateStoppedInstance: volume has DeleteOnTermination=false, skipping", "name", ebsRequest.Name)
+			continue
+		}
+
+		slog.Info("handleEC2TerminateStoppedInstance: deleting volume with DeleteOnTermination=true", "name", ebsRequest.Name)
+		_, err := d.volumeService.DeleteVolume(&ec2.DeleteVolumeInput{
+			VolumeId: &ebsRequest.Name,
+		})
+		if err != nil {
+			slog.Error("handleEC2TerminateStoppedInstance: failed to delete volume", "name", ebsRequest.Name, "err", err)
+		}
+	}
+	instance.EBSRequests.Mu.Unlock()
+
+	// Remove from shared KV
+	if err := d.jsManager.DeleteStoppedInstance(req.InstanceID); err != nil {
+		slog.Error("handleEC2TerminateStoppedInstance: failed to delete from shared KV", "instanceId", req.InstanceID, "err", err)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
+
+	slog.Info("Terminated stopped instance from shared KV", "instanceId", req.InstanceID)
+
+	if err := msg.Respond(fmt.Appendf(nil, `{"status":"terminated","instanceId":"%s"}`, req.InstanceID)); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
+}
+
 // handleEC2DescribeStoppedInstances returns stopped instances from shared KV.
 func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
 	respondWithError := func(errCode string) {
