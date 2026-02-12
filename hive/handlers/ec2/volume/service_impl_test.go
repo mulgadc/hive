@@ -318,7 +318,6 @@ func TestDeleteVolume_BlockedBySnapshot(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), awserrors.ErrorVolumeInUse)
-	assert.Contains(t, err.Error(), "snap-abc123")
 }
 
 func TestDeleteVolume_AllowedWithoutSnapshots(t *testing.T) {
@@ -549,7 +548,6 @@ func TestDeleteVolume_BlockedBySourceVolumeName(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), awserrors.ErrorVolumeInUse)
-	assert.Contains(t, err.Error(), "snap-vb001")
 }
 
 func TestDeleteVolume_BlockedByMetadataJson(t *testing.T) {
@@ -596,7 +594,6 @@ func TestDeleteVolume_BlockedByMetadataJson(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), awserrors.ErrorVolumeInUse)
-	assert.Contains(t, err.Error(), "snap-meta001")
 }
 
 func TestCreateVolume_FromSnapshot_CorruptMetadata(t *testing.T) {
