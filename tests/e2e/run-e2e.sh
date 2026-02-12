@@ -281,6 +281,63 @@ if [ "$META_BDM" -lt 1 ]; then
 fi
 echo "Instance metadata validated (Type=$META_TYPE, Key=$META_KEY, Image=$META_IMAGE, BDMs=$META_BDM)"
 
+# Phase 5a-ii: SSH Connectivity & Volume Verification
+echo "Phase 5a-ii: SSH Connectivity & Volume Verification"
+
+# Get SSH connection details from QEMU process
+echo "Getting SSH port for instance $INSTANCE_ID..."
+SSH_PORT=$(get_ssh_port "$INSTANCE_ID")
+if [ -z "$SSH_PORT" ]; then
+    echo "Failed to get SSH port for instance $INSTANCE_ID"
+    exit 1
+fi
+SSH_HOST=$(get_ssh_host "$INSTANCE_ID")
+echo "SSH endpoint: $SSH_HOST:$SSH_PORT"
+
+# Wait for SSH to become ready (VM boot + cloud-init)
+wait_for_ssh "$SSH_HOST" "$SSH_PORT" "test-key-1.pem"
+
+# Test basic SSH connectivity
+test_ssh_connectivity "$SSH_HOST" "$SSH_PORT" "test-key-1.pem"
+
+# Check root volume size via lsblk
+echo "Verifying root volume size from inside the VM..."
+ROOT_VOL_SIZE_API=$($AWS_EC2 describe-volumes --query 'Volumes[0].Size' --output text)
+LSBLK_OUTPUT=$(ssh -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    -o ConnectTimeout=5 \
+    -o BatchMode=yes \
+    -p "$SSH_PORT" \
+    -i "test-key-1.pem" \
+    ec2-user@"$SSH_HOST" 'lsblk --bytes --output NAME,SIZE --json' 2>/dev/null)
+# Get the size of the root disk (first blockdevice) in bytes, convert to GiB
+ROOT_DISK_BYTES=$(echo "$LSBLK_OUTPUT" | jq -r '.blockdevices[0].size' | tr -d '"')
+ROOT_DISK_GIB=$((ROOT_DISK_BYTES / 1073741824))
+echo "Root disk size from VM: ${ROOT_DISK_GIB}GiB (API reports: ${ROOT_VOL_SIZE_API}GiB)"
+if [ "$ROOT_DISK_GIB" -ne "$ROOT_VOL_SIZE_API" ]; then
+    echo "Root volume size mismatch: VM reports ${ROOT_DISK_GIB}GiB, API reports ${ROOT_VOL_SIZE_API}GiB"
+    exit 1
+fi
+echo "Root volume size verified"
+
+# Verify hostname contains instance ID
+echo "Verifying hostname inside the VM..."
+VM_HOSTNAME=$(ssh -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    -o ConnectTimeout=5 \
+    -o BatchMode=yes \
+    -p "$SSH_PORT" \
+    -i "test-key-1.pem" \
+    ec2-user@"$SSH_HOST" 'hostname' 2>/dev/null)
+echo "VM hostname: $VM_HOSTNAME"
+if echo "$VM_HOSTNAME" | grep -q "$INSTANCE_ID"; then
+    echo "Hostname contains instance ID"
+else
+    echo "WARNING: Hostname '$VM_HOSTNAME' does not contain instance ID '$INSTANCE_ID' (non-fatal)"
+fi
+
+echo "SSH connectivity and volume verification passed"
+
 # Verify root volume attached to the instance (describe-volumes)
 VOLUME_ID=$($AWS_EC2 describe-volumes --query 'Volumes[0].VolumeId' --output text)
 if [ -z "$VOLUME_ID" ] || [ "$VOLUME_ID" == "None" ]; then
@@ -949,8 +1006,13 @@ while [ $COUNT -lt 30 ]; do
     COUNT=$((COUNT + 1))
 done
 
-# Phase 9a: Verify root volume cleanup after termination
-echo "Phase 9a: Volume Cleanup Verification"
+# Phase 9a: Verify SSH unreachable after termination
+echo "Phase 9a: SSH Unreachable Verification"
+verify_ssh_unreachable "$SSH_HOST" "$SSH_PORT" "test-key-1.pem"
+echo "SSH unreachable verification passed"
+
+# Phase 9b: Verify root volume cleanup after termination
+echo "Phase 9b: Volume Cleanup Verification"
 echo "Verifying root volume $ROOT_VOLUME_ID is cleaned up after termination..."
 sleep 5  # Allow time for async volume deletion
 

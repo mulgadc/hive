@@ -293,6 +293,83 @@ done
 echo ""
 check_instance_distribution
 
+# Test 1a-ii: SSH Connectivity & Volume Verification
+echo ""
+echo "Test 1a-ii: SSH Connectivity & Volume Verification"
+echo "----------------------------------------"
+echo "Testing SSH into all 3 instances..."
+
+# Arrays to store SSH details for post-termination verification
+SSH_PORTS=()
+SSH_HOSTS=()
+
+for idx in "${!INSTANCE_IDS[@]}"; do
+    instance_id="${INSTANCE_IDS[$idx]}"
+    echo ""
+    echo "  Instance $((idx + 1)): $instance_id"
+
+    # Get SSH connection details from QEMU process
+    echo "  Getting SSH port..."
+    SSH_PORT=$(get_ssh_port "$instance_id")
+    if [ -z "$SSH_PORT" ]; then
+        echo "  ERROR: Failed to get SSH port for instance $instance_id"
+        exit 1
+    fi
+    SSH_HOST=$(get_ssh_host "$instance_id")
+    echo "  SSH endpoint: $SSH_HOST:$SSH_PORT"
+
+    SSH_PORTS+=("$SSH_PORT")
+    SSH_HOSTS+=("$SSH_HOST")
+
+    # Wait for SSH to become ready (VM boot + cloud-init)
+    wait_for_ssh "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem"
+
+    # Test basic SSH connectivity
+    test_ssh_connectivity "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem"
+
+    # Check root volume size via lsblk
+    echo "  Verifying root volume size from inside the VM..."
+    ROOT_VOL_ID_SSH=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
+        --query 'Reservations[0].Instances[0].BlockDeviceMappings[0].Ebs.VolumeId' --output text)
+    ROOT_VOL_SIZE_API=$($AWS_EC2 describe-volumes --volume-ids "$ROOT_VOL_ID_SSH" \
+        --query 'Volumes[0].Size' --output text)
+    LSBLK_OUTPUT=$(ssh -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o ConnectTimeout=5 \
+        -o BatchMode=yes \
+        -p "$SSH_PORT" \
+        -i "multinode-test-key.pem" \
+        ec2-user@"$SSH_HOST" 'lsblk --bytes --output NAME,SIZE --json' 2>/dev/null)
+    # Get the size of the root disk (first blockdevice) in bytes, convert to GiB
+    ROOT_DISK_BYTES=$(echo "$LSBLK_OUTPUT" | jq -r '.blockdevices[0].size' | tr -d '"')
+    ROOT_DISK_GIB=$((ROOT_DISK_BYTES / 1073741824))
+    echo "  Root disk size from VM: ${ROOT_DISK_GIB}GiB (API reports: ${ROOT_VOL_SIZE_API}GiB)"
+    if [ "$ROOT_DISK_GIB" -ne "$ROOT_VOL_SIZE_API" ]; then
+        echo "  ERROR: Root volume size mismatch: VM reports ${ROOT_DISK_GIB}GiB, API reports ${ROOT_VOL_SIZE_API}GiB"
+        exit 1
+    fi
+    echo "  Root volume size verified"
+
+    # Verify hostname contains instance ID
+    echo "  Verifying hostname inside the VM..."
+    VM_HOSTNAME=$(ssh -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o ConnectTimeout=5 \
+        -o BatchMode=yes \
+        -p "$SSH_PORT" \
+        -i "multinode-test-key.pem" \
+        ec2-user@"$SSH_HOST" 'hostname' 2>/dev/null)
+    echo "  VM hostname: $VM_HOSTNAME"
+    if echo "$VM_HOSTNAME" | grep -q "$instance_id"; then
+        echo "  Hostname contains instance ID"
+    else
+        echo "  WARNING: Hostname '$VM_HOSTNAME' does not contain instance ID '$instance_id' (non-fatal)"
+    fi
+done
+
+echo ""
+echo "  SSH connectivity and volume verification passed for all instances"
+
 # Test 1b: Volume Lifecycle (Attach/Detach)
 echo ""
 echo "Test 1b: Volume Lifecycle (Attach/Detach)"
@@ -843,6 +920,15 @@ if [ $TERMINATION_FAILED -ne 0 ]; then
     dump_all_node_logs
     exit 1
 fi
+
+# Verify SSH unreachable after termination
+echo ""
+echo "  Verifying SSH unreachable after termination..."
+for idx in "${!INSTANCE_IDS[@]}"; do
+    instance_id="${INSTANCE_IDS[$idx]}"
+    verify_ssh_unreachable "${SSH_HOSTS[$idx]}" "${SSH_PORTS[$idx]}" "multinode-test-key.pem"
+done
+echo "  SSH unreachable verification passed"
 
 echo ""
 echo "========================================"
