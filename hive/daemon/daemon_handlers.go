@@ -1666,4 +1666,3 @@ func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
 
 	slog.Info("handleEC2DescribeStoppedInstances completed", "count", len(reservations))
 }
-

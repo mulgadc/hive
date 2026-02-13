@@ -24,11 +24,14 @@ Each component can be used independently or as part of the integrated Hive stack
 ### Go (backend)
 
 ```bash
+make preflight            # Run ALL CI checks locally (format + vet + security + tests)
 make build                # Build hive binary to ./bin/hive
-make test                 # Run all tests (sets LOG_IGNORE=1)
+make test                 # Run all unit tests (sets LOG_IGNORE=1)
+make check-format         # Check gofmt (fails on diff, same as CI)
+make format               # Fix gofmt in place
+make vet                  # Run go vet (fails on issues)
+make security             # Run go vet + govulncheck, gosec, staticcheck (fails on issues)
 make bench                # Run benchmarks
-make format               # Run gofmt
-make security             # Run go vet, govulncheck, gosec, staticcheck
 make clean                # Remove build artifacts
 make test-docker          # Run single + multi-node E2E in Docker (requires /dev/kvm)
 make test-docker-single   # Single-node E2E only

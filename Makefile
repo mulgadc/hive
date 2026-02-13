@@ -49,6 +49,12 @@ go_run:
 	@echo "\n....Running $(GO_PROJECT_NAME)...."
 	$(GOPATH)/bin/$(GO_PROJECT_NAME)
 
+# Preflight — runs the same checks as GitHub Actions (format + lint + security + tests).
+# Use this before committing to catch CI failures locally.
+preflight: check-format vet security-check test
+	@echo "\n✅ Preflight passed — safe to commit."
+
+# Run unit tests
 test:
 	@echo "\n....Running tests for $(GO_PROJECT_NAME)...."
 	LOG_IGNORE=1 go test -v -timeout 120s ./...
@@ -99,23 +105,41 @@ quickinstall: install-system install-go install-aws
 	@echo "   Please ensure /usr/local/go/bin is in your PATH."
 	@echo "   Installed: Go ($(GO_ARCH)), AWS CLI ($(AWS_ARCH)), QEMU ($(QEMU_PACKAGES))"
 
+# Format all Go files in place
 format:
 	gofmt -w .
 
-security:
+# Check that all Go files are formatted (CI-compatible, fails on diff)
+check-format:
+	@echo "Checking gofmt..."
+	@UNFORMATTED=$$(gofmt -l .); \
+	if [ -n "$$UNFORMATTED" ]; then \
+		echo "Files not formatted:"; \
+		echo "$$UNFORMATTED"; \
+		echo "Run 'make format' to fix."; \
+		exit 1; \
+	fi
+	@echo "  gofmt ok"
+
+# Go vet (fails on issues, matches CI)
+vet:
+	@echo "Running go vet..."
+	go vet ./...
+	@echo "  go vet ok"
+
+# Security checks — each tool fails the build on findings (matches CI).
+# Reports are also saved to tests/ for review.
+security-check:
 	@echo "\n....Running security checks for $(GO_PROJECT_NAME)...."
+	go tool govulncheck ./... 2>&1 | tee tests/govulncheck-report.txt
+	@echo "  govulncheck ok"
+	go tool gosec -exclude=G204,G304,G402 -exclude-generated -exclude-dir=cmd ./... 2>&1 | tee tests/gosec-report.txt
+	@echo "  gosec ok"
+	go tool staticcheck -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./... 2>&1 | tee tests/staticcheck-report.txt
+	@echo "  staticcheck ok"
 
-	go vet ./... 2>&1 | tee tests/govet-report.txt || true
-	@echo "Go vet report saved to tests/govet-report.txt"
-
-	go tool govulncheck ./... > tests/govulncheck-report.txt || true
-	@echo "Govulncheck report saved to tests/govulncheck-report.txt"
-
-	go tool gosec -exclude=G204,G304,G402 -exclude-generated -exclude-dir=cmd ./... > tests/gosec-report.txt || true
-	@echo "Gosec report saved to tests/gosec-report.txt"
-
-	go tool staticcheck -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./...  > tests/staticcheck-report.txt || true
-	@echo "Staticcheck report saved to tests/staticcheck-report.txt"
+# Legacy alias — now runs the strict checks (same as security-check)
+security: vet security-check
 
 # Docker E2E tests (mirrors GitHub Actions e2e.yml)
 # Usage: make test-docker              # both suites
@@ -149,4 +173,7 @@ test-docker: test-docker-build
 	@echo "\n....Running Multi-Node E2E Tests...."
 	docker run --privileged --rm -v /dev/kvm:/dev/kvm --cap-add=NET_ADMIN $(E2E_IMAGE) ./tests/e2e/run-multinode-e2e.sh
 
-.PHONY: build build-ui go_build go_run test bench run clean install-system install-go install-aws quickinstall security test-docker-build test-docker-single test-docker-multi test-docker
+.PHONY: build build-ui go_build go_run preflight test bench run clean \
+	install-system install-go install-aws quickinstall \
+	format check-format vet security security-check \
+	test-docker-build test-docker-single test-docker-multi test-docker
