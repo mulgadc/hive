@@ -61,7 +61,10 @@ type EBS struct {
 	VolumeType               string
 }
 
-// ResourceManager handles the allocation and tracking of system resources
+// ResourceManager handles the allocation and tracking of system resources.
+// It dynamically manages per-instance-type NATS subscriptions: when capacity
+// is available for a type, the node subscribes to ec2.RunInstances.{type};
+// when full, it unsubscribes so NATS routes requests to other nodes.
 type ResourceManager struct {
 	mu            sync.RWMutex
 	availableVCPU int
@@ -69,6 +72,12 @@ type ResourceManager struct {
 	allocatedVCPU int
 	allocatedMem  float64
 	instanceTypes map[string]*ec2.InstanceTypeInfo
+
+	// Dynamic instance-type subscription management
+	subsMu       sync.Mutex
+	natsConn     *nats.Conn
+	instanceSubs map[string]*nats.Subscription
+	handler      nats.MsgHandler
 }
 
 // Daemon represents the main daemon service
@@ -442,7 +451,8 @@ type natsSub struct {
 // subscribeAll registers all NATS subscriptions using a table-driven approach.
 func (d *Daemon) subscribeAll() error {
 	subs := []natsSub{
-		{"ec2.RunInstances", d.handleEC2RunInstances, "hive-workers"},
+		// ec2.RunInstances is handled by dynamic per-instance-type subscriptions
+		// managed by ResourceManager.initSubscriptions()
 		{"ec2.CreateKeyPair", d.handleEC2CreateKeyPair, "hive-workers"},
 		{"ec2.DeleteKeyPair", d.handleEC2DeleteKeyPair, "hive-workers"},
 		{"ec2.DescribeKeyPairs", d.handleEC2DescribeKeyPairs, "hive-workers"},
@@ -539,6 +549,11 @@ func (d *Daemon) Start() error {
 	if err := d.subscribeAll(); err != nil {
 		return fmt.Errorf("failed to subscribe to NATS topics: %w", err)
 	}
+
+	// Initialize dynamic per-instance-type subscriptions for capacity-aware routing.
+	// Each instance type gets its own NATS topic (ec2.RunInstances.{type}) so requests
+	// are only routed to nodes with available capacity.
+	d.resourceMgr.initSubscriptions(d.natsConn, d.handleEC2RunInstances)
 
 	d.setupShutdown()
 	d.awaitShutdown()
@@ -1451,9 +1466,14 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 			drive.If = "none"
 			drive.Media = "disk"
 			drive.ID = "os"
+			drive.Cache = "none"
+
+			iothreadID := "ioth-os"
+			instance.Config.IOThreads = append(instance.Config.IOThreads, vm.IOThread{ID: iothreadID})
 
 			instance.Config.Devices = append(instance.Config.Devices, vm.Device{
-				Value: fmt.Sprintf("virtio-blk-pci,drive=%s,bootindex=1", drive.ID),
+				Value: fmt.Sprintf("virtio-blk-pci,drive=%s,iothread=%s,num-queues=%d,bootindex=1",
+					drive.ID, iothreadID, instance.Config.CPUCount),
 			})
 		}
 
@@ -1836,9 +1856,8 @@ func (rm *ResourceManager) canAllocate(instanceType *ec2.InstanceTypeInfo, count
 	return allocatableCount
 }
 
-// allocate reserves resources for an instance
+// allocate reserves resources for an instance and updates NATS subscriptions
 func (rm *ResourceManager) allocate(instanceType *ec2.InstanceTypeInfo) error {
-
 	if rm.canAllocate(instanceType, 1) < 1 {
 		instanceTypeName := ""
 		if instanceType.InstanceType != nil {
@@ -1848,24 +1867,68 @@ func (rm *ResourceManager) allocate(instanceType *ec2.InstanceTypeInfo) error {
 	}
 
 	rm.mu.Lock()
-	defer rm.mu.Unlock()
-
 	vCPUs := instanceTypeVCPUs(instanceType)
 	memoryGB := float64(instanceTypeMemoryMiB(instanceType)) / 1024.0
-
 	rm.allocatedVCPU += int(vCPUs)
 	rm.allocatedMem += memoryGB
+	rm.mu.Unlock()
+
+	rm.updateInstanceSubscriptions()
 	return nil
 }
 
-// deallocate releases resources for an instance
+// deallocate releases resources for an instance and updates NATS subscriptions
 func (rm *ResourceManager) deallocate(instanceType *ec2.InstanceTypeInfo) {
 	rm.mu.Lock()
-	defer rm.mu.Unlock()
-
 	vCPUs := instanceTypeVCPUs(instanceType)
 	memoryGB := float64(instanceTypeMemoryMiB(instanceType)) / 1024.0
-
 	rm.allocatedVCPU -= int(vCPUs)
 	rm.allocatedMem -= memoryGB
+	rm.mu.Unlock()
+
+	rm.updateInstanceSubscriptions()
+}
+
+// initSubscriptions sets up dynamic per-instance-type NATS subscriptions.
+// Called once during daemon startup after NATS is connected.
+func (rm *ResourceManager) initSubscriptions(nc *nats.Conn, handler nats.MsgHandler) {
+	rm.natsConn = nc
+	rm.handler = handler
+	rm.instanceSubs = make(map[string]*nats.Subscription)
+	rm.updateInstanceSubscriptions()
+}
+
+// updateInstanceSubscriptions recalculates which instance types can fit on this
+// node and subscribes/unsubscribes from the corresponding NATS topics. Each type
+// gets its own topic (ec2.RunInstances.{type}) with the hive-workers queue group,
+// so NATS only routes requests to nodes that can actually serve them.
+func (rm *ResourceManager) updateInstanceSubscriptions() {
+	if rm.natsConn == nil {
+		return
+	}
+
+	rm.subsMu.Lock()
+	defer rm.subsMu.Unlock()
+
+	for typeName, typeInfo := range rm.instanceTypes {
+		topic := fmt.Sprintf("ec2.RunInstances.%s", typeName)
+		canFit := rm.canAllocate(typeInfo, 1) >= 1
+
+		_, subscribed := rm.instanceSubs[topic]
+		if canFit && !subscribed {
+			sub, err := rm.natsConn.QueueSubscribe(topic, "hive-workers", rm.handler)
+			if err != nil {
+				slog.Error("Failed to subscribe to instance type topic", "topic", topic, "err", err)
+				continue
+			}
+			rm.instanceSubs[topic] = sub
+			slog.Debug("Subscribed to instance type", "topic", topic)
+		} else if !canFit && subscribed {
+			if err := rm.instanceSubs[topic].Unsubscribe(); err != nil {
+				slog.Error("Failed to unsubscribe from instance type topic", "topic", topic, "err", err)
+			}
+			delete(rm.instanceSubs, topic)
+			slog.Info("Unsubscribed from instance type (capacity full)", "topic", topic)
+		}
+	}
 }

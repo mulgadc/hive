@@ -117,4 +117,36 @@ security:
 	go tool staticcheck -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./...  > tests/staticcheck-report.txt || true
 	@echo "Staticcheck report saved to tests/staticcheck-report.txt"
 
-.PHONY: build build-ui go_build go_run test bench run clean install-system install-go install-aws quickinstall security
+# Docker E2E tests (mirrors GitHub Actions e2e.yml)
+# Usage: make test-docker              # both suites
+#        make test-docker-single       # single-node only
+#        make test-docker-multi        # multi-node only
+PARENT_DIR := $(shell cd .. && pwd)
+E2E_IMAGE := hive-e2e:latest
+
+test-docker-build:
+	@echo "\n....Building E2E Docker image...."
+	@for dep in viperblock predastore; do \
+		if [ ! -d "$(PARENT_DIR)/$$dep" ]; then \
+			echo "Missing sibling repo $$dep — running clone-deps.sh"; \
+			./scripts/clone-deps.sh; \
+			break; \
+		fi; \
+	done
+	docker build -t $(E2E_IMAGE) -f tests/e2e/Dockerfile.e2e $(PARENT_DIR)
+
+test-docker-single: test-docker-build
+	@echo "\n....Running Single-Node E2E Tests...."
+	docker run --privileged --rm -v /dev/kvm:/dev/kvm $(E2E_IMAGE)
+
+test-docker-multi: test-docker-build
+	@echo "\n....Running Multi-Node E2E Tests...."
+	docker run --privileged --rm -v /dev/kvm:/dev/kvm --cap-add=NET_ADMIN $(E2E_IMAGE) ./tests/e2e/run-multinode-e2e.sh
+
+test-docker: test-docker-build
+	@echo "\n....Running Single-Node E2E Tests...."
+	docker run --privileged --rm -v /dev/kvm:/dev/kvm $(E2E_IMAGE)
+	@echo "\n....Running Multi-Node E2E Tests...."
+	docker run --privileged --rm -v /dev/kvm:/dev/kvm --cap-add=NET_ADMIN $(E2E_IMAGE) ./tests/e2e/run-multinode-e2e.sh
+
+.PHONY: build build-ui go_build go_run test bench run clean install-system install-go install-aws quickinstall security test-docker-build test-docker-single test-docker-multi test-docker

@@ -91,6 +91,9 @@ if [ $COUNT -eq $MAX_RETRIES ]; then
     exit 1
 fi
 
+# Wait for daemon NATS subscriptions to be active
+wait_for_daemon_ready "https://localhost:9999"
+
 # Define common AWS CLI args
 AWS_EC2="aws --endpoint-url https://localhost:9999 ec2"
 

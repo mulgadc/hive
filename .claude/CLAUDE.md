@@ -24,12 +24,15 @@ Each component can be used independently or as part of the integrated Hive stack
 ### Go (backend)
 
 ```bash
-make build          # Build hive binary to ./bin/hive
-make test           # Run all tests (sets LOG_IGNORE=1)
-make bench          # Run benchmarks
-make format         # Run gofmt
-make security       # Run go vet, govulncheck, gosec, staticcheck
-make clean          # Remove build artifacts
+make build                # Build hive binary to ./bin/hive
+make test                 # Run all tests (sets LOG_IGNORE=1)
+make bench                # Run benchmarks
+make format               # Run gofmt
+make security             # Run go vet, govulncheck, gosec, staticcheck
+make clean                # Remove build artifacts
+make test-docker          # Run single + multi-node E2E in Docker (requires /dev/kvm)
+make test-docker-single   # Single-node E2E only
+make test-docker-multi    # Multi-node E2E only
 ```
 
 ### Frontend (hive-ui)
@@ -52,6 +55,80 @@ scripts/stop-dev.sh     # Stop all services
 ```
 
 Data directory: `~/hive/` (logs in `~/hive/logs/`, config in `~/hive/config/`)
+
+## Development Process
+
+All non-trivial work (features, bug fixes, improvements) follows a plan-first, document-as-you-go process. Plans are committed to git so they are visible to the whole team, reviewable in PRs, and serve as permanent documentation.
+
+### When to write a plan
+
+- **Required**: New features, multi-file changes, architectural changes, performance work, non-obvious bug fixes
+- **Not required**: Typo fixes, single-line bug fixes, config tweaks, small refactors contained to one function
+
+### Plan location
+
+Plans live in `docs/development/` under the appropriate category:
+
+```
+docs/development/
+├── bugs/              # Bug fixes
+├── feature/           # New features
+└── improvements/      # Performance, refactoring, tech debt
+```
+
+File naming: lowercase kebab-case describing the work, e.g. `nbd-performance.md`, `attach-volume.md`, `instance-state.md`.
+
+### Plan lifecycle
+
+#### 1. Planning phase
+
+When entering plan mode for non-trivial work, **create the plan document first** and write it to the appropriate `docs/development/{category}/` path. The plan must include:
+
+- **Summary** — What and why, in 1-3 sentences
+- **Context / Problem Statement** — Current behavior, what's wrong or missing
+- **Proposed Changes** — What will change, which files, key design decisions
+- **Files to Modify** — List of files with brief description of changes
+- **Testing** — How the changes will be verified
+
+The plan document is committed to git before implementation begins. This makes the plan reviewable and visible to the team.
+
+#### 2. Implementation phase
+
+During implementation, **update the plan document as you go**:
+
+- Mark completed steps (use `[x]` checkboxes or note "Done" inline)
+- Record findings, corrections, or deviations from the original plan
+- Add code references (file paths, line numbers, struct/function names) for what was actually implemented
+- Note any follow-up work discovered during implementation
+
+#### 3. Completion
+
+When development is complete, update the document to serve as **permanent reference documentation**:
+
+- Add a status line near the top: `**Status: Complete**` (or `**Status: In Progress**`, `**Status: Planned**`)
+- Replace future-tense plan language with past-tense description of what was done
+- Add a **"Files Modified"** summary table
+- Add a **"Future Work"** section if there are known follow-ups
+- Keep the original context (benchmarks, research, root cause analysis) — this is valuable reference material
+- The document should read as a complete technical reference, not just a plan
+
+#### Example status markers
+
+```markdown
+**Status: Planned** — Awaiting review/approval before implementation
+**Status: In Progress** — Implementation underway
+**Status: Complete** — All changes implemented and tests passing
+```
+
+### Git history as context
+
+When starting work on a feature or investigating an issue, review the last 10-20 git commits (`git log --oneline -20`) to understand the current development context. Recent commits contain valuable context about in-progress features, architectural decisions, and related changes.
+
+### Existing examples
+
+- `docs/development/improvements/nbd-performance.md` — Complete improvement with benchmarks, root cause analysis, implementation details, and future work
+- `docs/development/feature/attach-volume.md` — Complete feature with request flow, files changed, and design decisions
+- `docs/development/bugs/instance-state.md` — Bug fix with problem statement, proposed architecture, and state transitions
 
 ## Project Standards
 

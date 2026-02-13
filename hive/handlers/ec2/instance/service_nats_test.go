@@ -97,8 +97,9 @@ func TestNATSInstanceService_RunInstances_Success(t *testing.T) {
 	defer nc.Close()
 
 	// Create mock daemon subscriber that responds with valid reservation
+	// Subscribe to the per-instance-type topic (t3.micro from createValidRunInstancesInput)
 	mockReservation := createValidReservation()
-	_, err = nc.QueueSubscribe("ec2.RunInstances", "hive-workers", func(msg *nats.Msg) {
+	_, err = nc.QueueSubscribe("ec2.RunInstances.t3.micro", "hive-workers", func(msg *nats.Msg) {
 		// Validate that request is properly formatted
 		var input ec2.RunInstancesInput
 		err := json.Unmarshal(msg.Data, &input)
@@ -153,7 +154,8 @@ func TestNATSInstanceService_RunInstances_DaemonError(t *testing.T) {
 	defer nc.Close()
 
 	// Create mock daemon that responds with error
-	_, err = nc.QueueSubscribe("ec2.RunInstances", "hive-workers", func(msg *nats.Msg) {
+	// Subscribe to the per-instance-type topic for the requested type
+	_, err = nc.QueueSubscribe("ec2.RunInstances.invalid.type", "hive-workers", func(msg *nats.Msg) {
 		// Send back error response
 		errorResponse := utils.GenerateErrorPayload("InvalidInstanceType")
 		msg.Respond(errorResponse)
@@ -202,11 +204,10 @@ func TestNATSInstanceService_RunInstances_NoSubscriber(t *testing.T) {
 	duration := time.Since(start)
 
 	// Verify error behavior
-	// When no subscribers are available, NATS fails immediately with "no responders available"
-	// This is better than waiting 30 seconds for timeout
+	// When no subscribers are available, NATS returns ErrNoResponders immediately
 	require.Error(t, err, "Should fail when no subscriber")
 	assert.Nil(t, reservation, "Reservation should be nil")
-	assert.Contains(t, err.Error(), "NATS request failed", "Error should indicate NATS failure")
+	assert.ErrorIs(t, err, nats.ErrNoResponders, "Error should be ErrNoResponders")
 
 	// Should fail quickly (within 1 second), not wait for 30 second timeout
 	assert.Less(t, duration.Seconds(), 1.0, "Should fail immediately when no responders")
@@ -226,7 +227,7 @@ func TestNATSInstanceService_RunInstances_InvalidResponse(t *testing.T) {
 	defer nc.Close()
 
 	// Create mock daemon that responds with invalid JSON
-	_, err = nc.QueueSubscribe("ec2.RunInstances", "hive-workers", func(msg *nats.Msg) {
+	_, err = nc.QueueSubscribe("ec2.RunInstances.t3.micro", "hive-workers", func(msg *nats.Msg) {
 		// Send back malformed JSON
 		msg.Respond([]byte(`{"invalid": json response`))
 	})
@@ -259,17 +260,11 @@ func TestNATSInstanceService_RunInstances_MarshalError(t *testing.T) {
 
 	service := NewNATSInstanceService(nc)
 
-	// Create input with unmarshalable fields (channels can't be marshaled to JSON)
-	// Note: ec2.RunInstancesInput doesn't have channel fields, so this test
-	// documents the error path even though it's hard to trigger with real AWS SDK types
-
-	// For now, we'll test with nil input which should cause validation issues downstream
+	// Nil input should be rejected before hitting NATS
 	reservation, err := service.RunInstances(nil)
-
-	// The service should handle nil gracefully
-	// Either by marshaling error or daemon validation error
 	require.Error(t, err, "Should handle nil input")
 	assert.Nil(t, reservation)
+	assert.Contains(t, err.Error(), "instance type is required")
 }
 
 // TestNATSInstanceService_RunInstances_MultipleInstances tests launching multiple instances
@@ -286,7 +281,7 @@ func TestNATSInstanceService_RunInstances_MultipleInstances(t *testing.T) {
 	defer nc.Close()
 
 	// Create mock daemon that returns multiple instances
-	_, err = nc.QueueSubscribe("ec2.RunInstances", "hive-workers", func(msg *nats.Msg) {
+	_, err = nc.QueueSubscribe("ec2.RunInstances.t3.micro", "hive-workers", func(msg *nats.Msg) {
 		var input ec2.RunInstancesInput
 		json.Unmarshal(msg.Data, &input)
 
@@ -348,7 +343,7 @@ func TestNATSInstanceService_RunInstances_QueueGroup(t *testing.T) {
 	worker1Count := 0
 	worker2Count := 0
 
-	_, err = nc.QueueSubscribe("ec2.RunInstances", "hive-workers", func(msg *nats.Msg) {
+	_, err = nc.QueueSubscribe("ec2.RunInstances.t3.micro", "hive-workers", func(msg *nats.Msg) {
 		worker1Count++
 		reservation := createValidReservation()
 		responseData, _ := json.Marshal(reservation)
@@ -356,7 +351,7 @@ func TestNATSInstanceService_RunInstances_QueueGroup(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = nc.QueueSubscribe("ec2.RunInstances", "hive-workers", func(msg *nats.Msg) {
+	_, err = nc.QueueSubscribe("ec2.RunInstances.t3.micro", "hive-workers", func(msg *nats.Msg) {
 		worker2Count++
 		reservation := createValidReservation()
 		responseData, _ := json.Marshal(reservation)

@@ -80,6 +80,11 @@ type Drive struct {
 	If     string `json:"if"`
 	Media  string `json:"media"`
 	ID     string `json:"id"`
+	Cache  string `json:"cache,omitempty"`
+}
+
+type IOThread struct {
+	ID string `json:"id"`
 }
 
 type Config struct {
@@ -95,7 +100,8 @@ type Config struct {
 	CPUCount    int    `json:"cpu_count"`
 	Memory      int    `json:"memory"`
 
-	Drives []Drive `json:"drives"`
+	Drives    []Drive    `json:"drives"`
+	IOThreads []IOThread `json:"io_threads,omitempty"`
 
 	Devices []Device `json:"devices"`
 	NetDevs []NetDev `json:"net_devs"`
@@ -162,6 +168,10 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 		return nil, fmt.Errorf("memory is required")
 	}
 
+	for _, iot := range cfg.IOThreads {
+		args = append(args, "-object", fmt.Sprintf("iothread,id=%s", iot.ID))
+	}
+
 	if len(cfg.Drives) == 0 {
 		return nil, fmt.Errorf("at least one drive is required")
 	}
@@ -190,6 +200,10 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 
 		if drive.ID != "" {
 			opts = append(opts, fmt.Sprintf("id=%s", drive.ID))
+		}
+
+		if drive.Cache != "" {
+			opts = append(opts, fmt.Sprintf("cache=%s", drive.Cache))
 		}
 
 		args = append(args, "-drive", strings.Join(opts, ","))

@@ -479,7 +479,10 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	bindIP, _ := cmd.Flags().GetString("bind")
 	clusterBind, _ := cmd.Flags().GetString("cluster-bind")
 	clusterRoutesStr, _ := cmd.Flags().GetString("cluster-routes")
-	clusterRoutes := strings.Split(clusterRoutesStr, ",")
+	var clusterRoutes []string
+	if clusterRoutesStr != "" {
+		clusterRoutes = strings.Split(clusterRoutesStr, ",")
+	}
 	predastoreNodesStr, _ := cmd.Flags().GetString("predastore-nodes")
 	formationTimeoutStr, _ := cmd.Flags().GetString("formation-timeout")
 	clusterName, _ := cmd.Flags().GetString("cluster-name")

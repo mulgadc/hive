@@ -48,6 +48,9 @@ func NATSRequest[Out any](conn *nats.Conn, subject string, input any, timeout ti
 
 	msg, err := conn.Request(subject, jsonData, timeout)
 	if err != nil {
+		if errors.Is(err, nats.ErrNoResponders) {
+			return nil, fmt.Errorf("NATS request to %s: %w", subject, nats.ErrNoResponders)
+		}
 		return nil, fmt.Errorf("NATS request failed: %w", err)
 	}
 

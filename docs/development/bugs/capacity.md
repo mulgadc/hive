@@ -1,4 +1,6 @@
-# RunInstances capacity routing does not retry other nodes
+# RunInstances capacity routing via per-instance-type NATS subscriptions
+
+**Status:** Implemented (local tests pass, pending remote verification)
 
 ## Problem
 
@@ -24,10 +26,8 @@ The user must retry manually until NATS happens to pick a node with capacity.
 
 ### Why this happens
 
-The request flow is fire-and-forget from the gateway's perspective:
-
 ```
-AWS SDK → Gateway → NATS "ec2.RunInstances" [queue: hive-workers] → ONE daemon
+AWS SDK → Gateway → NATS "ec2.RunInstances" [queue: hive-workers] → ONE daemon (random)
                                                                         ↓
                                                           canAllocate() fails
                                                                         ↓
@@ -36,142 +36,218 @@ AWS SDK → Gateway → NATS "ec2.RunInstances" [queue: hive-workers] → ONE da
                                                     Gateway returns error to client
 ```
 
-There is no retry, no fallback, and no capacity-aware routing. The gateway (`service_nats.go`) does a single `NATSRequest` and returns whatever the daemon responds with.
+There is no capacity-aware routing. NATS blindly round-robins to any daemon, regardless of whether it can serve the requested instance type.
 
-### Current code path
+## Solution: per-instance-type NATS topics with dynamic subscription
 
-1. **Gateway** `ec2.go:54` → calls `RunInstances(input, gw.NATSConn)`
-2. **Gateway** `RunInstances.go:66` → creates `NATSInstanceService`, calls `service.RunInstances(input)`
-3. **Service** `service_nats.go:22` → `NATSRequest(conn, "ec2.RunInstances", input, 5*time.Minute)` — single NATS request-reply
-4. **NATS** routes to one daemon in queue group `hive-workers`
-5. **Daemon** `daemon_handlers.go:686` → `canAllocate(instanceType, maxCount)` → returns 0
-6. **Daemon** `daemon_handlers.go:691` → responds with `InsufficientInstanceCapacity`
-7. **Gateway** receives error, returns HTTP 503 to client
+Leverage NATS subscription semantics directly: each daemon subscribes to `ec2.RunInstances.{instanceType}` only for types it has capacity to serve. When a node fills up for a given type, it unsubscribes. When capacity is freed, it re-subscribes.
 
-No retry logic exists anywhere in this chain.
+This means NATS itself becomes the capacity-aware router — requests are only delivered to nodes that can serve them. No retry logic, no discovery, no hacks.
 
-## The per-instance-type unsubscribe idea (and why it doesn't work cleanly)
-
-One approach: when a node is full for `t3.medium`, it unsubscribes from `ec2.RunInstances` so NATS won't route requests to it. But capacity is shared across instance types — a node with 2 free vCPUs and 2 GB free RAM can run a `t3.small` (2 vCPU, 2 GB) but not a `t3.medium` (2 vCPU, 4 GB). You can't unsubscribe from "RunInstances" globally without also blocking smaller instance types that would still fit.
-
-Splitting into per-type topics (e.g., `ec2.RunInstances.t3.medium`) would fix this: unsubscribe from `t3.medium` when you can't fit one, while staying subscribed to `t3.small`. But this creates problems:
-
-- With 14 instance types per node, each daemon manages 14 dynamic subscriptions
-- Every `allocate` and `deallocate` must recalculate which types still fit and update subscriptions
-- Race conditions: between the capacity check and NATS delivering the message, another request could consume the resources
-- Gateway must know the instance type before publishing (it does — it's in the parsed request) but the topic routing becomes tightly coupled to the type catalog
-- Adding new instance types requires matching subscription changes in daemon startup
-
-This approach has merit for a future optimization (proactive capacity filtering) but doesn't solve the core problem: what happens when a node receives a request it can't serve?
-
-## Proposed approach: daemon-side NATS retry
-
-Instead of the daemon returning an error when it lacks capacity, have it **re-publish the request** so another node can try. This keeps the logic in the daemon layer (no gateway changes) and uses NATS naturally.
-
-### How it works
-
-1. Daemon receives `RunInstances` via queue group
-2. `canAllocate()` returns 0 — not enough capacity
-3. Instead of responding with error, daemon publishes a **`NAK`** (negative acknowledgment) back through NATS using a retry mechanism
-4. NATS delivers to a different queue group member
-5. If all nodes are full, the last node returns `InsufficientInstanceCapacity`
-
-### Implementation: NATS request-retry pattern
-
-The daemon doesn't respond to the original message. Instead, it re-publishes to the same topic with a retry header. NATS queue group semantics mean a different member will receive it (NATS avoids delivering to the same consumer consecutively when others are available).
+### Fixed NATS topic flow
 
 ```
-Gateway → "ec2.RunInstances" [queue: hive-workers]
-  → Node3 receives (full) → doesn't respond, publishes retry with node3 in "tried" list
-  → Node1 receives (has capacity) → processes request, responds to gateway
+Gateway → "ec2.RunInstances.t3.medium" [queue: hive-workers] → only daemons with capacity
+  → Daemon receives (guaranteed to have capacity) → allocates → launches VM
+  → Daemon recalculates: t3.medium no longer fits → unsubscribes from ec2.RunInstances.t3.medium
+  → Other daemons still subscribed → next request routed to them
+
+All nodes full for t3.medium:
+Gateway → "ec2.RunInstances.t3.medium" → no subscribers → NATS returns ErrNoResponders
+  → Gateway maps ErrNoResponders to InsufficientInstanceCapacity → returns to client
 ```
 
-The retry message includes:
-- Original request payload
-- Reply-to address from the original NATS message (so the response goes back to the gateway)
-- List of nodes that already tried and failed (to detect exhaustion)
+### How dynamic subscription works
 
-When all nodes are in the "tried" list, the last node responds with `InsufficientInstanceCapacity`.
+Each daemon maintains a set of per-instance-type NATS subscriptions. After every resource change (allocate or deallocate), it recalculates which types can fit at least 1 instance:
 
-### Key design details
+```
+Node starts (8 vCPUs, 32 GB free):
+  → subscribes to: ec2.RunInstances.t3.nano, .micro, .small, .medium, .large, .xlarge, .2xlarge
+                    ec2.RunInstances.m8a.nano, .micro, .small, .medium, .large, .xlarge, .2xlarge
 
-**Retry metadata**: Attach a `Hive-Tried-Nodes` header to the NATS message. Each daemon that can't serve the request appends its node name before re-publishing. When `len(triedNodes) >= expectedNodes`, no capacity exists anywhere — return the error.
+After launching t3.2xlarge (8 vCPU, 32 GB → 0 free):
+  → unsubscribes from ALL ec2.RunInstances.* types (nothing fits)
 
-**Reply routing**: The re-published message must carry the original `msg.Reply` inbox address so the eventual response reaches the gateway. Use `natsConn.PublishMsg()` with the original reply subject.
+After terminating t3.2xlarge (resources freed → 8 vCPU, 32 GB free again):
+  → re-subscribes to all 14 instance types
+```
 
-**Timeout safety**: The gateway already sets a 5-minute timeout on the NATS request. If all nodes are slow or the retry loop takes too long, the gateway times out naturally. No additional timeout needed in the daemon.
+### Race condition handling
 
-**No infinite loops**: The tried-nodes list grows monotonically. Once it contains all nodes, the loop terminates. Maximum retries = number of nodes - 1.
+There's a small window between a subscription existing and resources being allocated where two requests for the last available slot could arrive at the same node. This is handled naturally:
 
-### Pseudocode
+1. Request A arrives → daemon allocates → success → recalculates subscriptions
+2. Request B arrives before unsubscribe completes → daemon tries to allocate → `canAllocate()` returns 0
+3. Daemon responds with `InsufficientInstanceCapacity` (same as today)
 
+This is an edge case that only occurs when a node is at exact capacity boundary with concurrent requests. The existing `canAllocate()` check remains as a safety net. This is acceptable — the alternative (distributed locking) adds complexity far exceeding the rare failure.
+
+## Implementation
+
+### Step 1: Gateway publishes to instance-type-specific topic
+
+**File:** `hive/handlers/ec2/instance/service_nats.go`
+
+Change:
 ```go
-func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
-    // ... parse input, validate ...
-
-    allocatableCount := d.resourceMgr.canAllocate(instanceType, maxCount)
-    if allocatableCount < minCount {
-        // Check if we can retry on another node
-        triedNodes := getTriedNodes(msg) // from Hive-Tried-Nodes header
-        triedNodes = append(triedNodes, d.node)
-
-        if len(triedNodes) >= d.expectedNodes {
-            // All nodes tried — no capacity anywhere
-            msg.Respond(InsufficientInstanceCapacity)
-            return
-        }
-
-        // Re-publish for another node to try
-        retryMsg := &nats.Msg{
-            Subject: "ec2.RunInstances",
-            Data:    msg.Data,
-            Reply:   msg.Reply, // preserve original reply-to
-            Header:  nats.Header{},
-        }
-        retryMsg.Header.Set("Hive-Tried-Nodes", strings.Join(triedNodes, ","))
-        d.natsConn.PublishMsg(retryMsg)
-        return
-    }
-
-    // ... proceed with allocation and launch ...
+func (s *NATSInstanceService) RunInstances(input *ec2.RunInstancesInput) (*ec2.Reservation, error) {
+    topic := fmt.Sprintf("ec2.RunInstances.%s", aws.StringValue(input.InstanceType))
+    return utils.NATSRequest[ec2.Reservation](s.natsConn, topic, input, 5*time.Minute)
 }
 ```
 
-### Why this approach
+### Step 2: Gateway maps ErrNoResponders to InsufficientInstanceCapacity
 
-| Consideration | Daemon-side retry | Gateway retry | Per-type topics |
-|---|---|---|---|
-| Gateway changes | None | Significant | Moderate |
-| Daemon changes | Small (retry logic) | None | Large (dynamic subs) |
-| Latency (happy path) | Zero overhead | Zero overhead | Zero overhead |
-| Latency (retry) | ~1ms per hop | ~1ms per retry + gateway logic | N/A (preemptive) |
-| Race conditions | Same as current | Same as current | Subscription timing |
-| Exhaustion detection | Tried-nodes header | Gateway tracks failures | Implicit (no subscribers) |
-| NATS compatibility | Standard pub/sub | Requires node-specific topics | Standard but many topics |
+**File:** `hive/utils/nats.go`
 
-Daemon-side retry is the simplest change: one function in the daemon, no gateway changes, no new NATS topic patterns. It also composes well — if per-type topic filtering is added later as an optimization, the retry logic still works as a safety net.
+Update `NATSRequest` to detect `nats.ErrNoResponders` and return a specific error the gateway can map to `InsufficientInstanceCapacity`:
 
-### Future optimization: proactive capacity filtering
+```go
+msg, err := conn.Request(subject, jsonData, timeout)
+if err != nil {
+    if errors.Is(err, nats.ErrNoResponders) {
+        return nil, fmt.Errorf("no responders for subject %s: %w", subject, nats.ErrNoResponders)
+    }
+    return nil, fmt.Errorf("NATS request failed: %w", err)
+}
+```
 
-Once the retry mechanism works, per-type subscriptions can be layered on top as a performance optimization to reduce unnecessary retries:
+**File:** `hive/gateway/ec2/instance/RunInstances.go`
 
-1. After each `allocate`/`deallocate`, recalculate which instance types can fit
-2. Unsubscribe from types that no longer fit
-3. Re-subscribe when capacity is freed
+Map the no-responders error to the AWS-compatible error:
+```go
+reservationPtr, err := service.RunInstances(input)
+if err != nil {
+    if errors.Is(err, nats.ErrNoResponders) {
+        return reservation, errors.New(awserrors.ErrorInsufficientInstanceCapacity)
+    }
+    return reservation, err
+}
+```
 
-This is purely an optimization — it reduces the number of retry hops but isn't required for correctness. The retry mechanism handles the edge cases that subscription timing can't (e.g., two requests arriving simultaneously when only one fits).
+### Step 3: Add subscription management to ResourceManager
 
-## Files that would need changes
+**File:** `hive/daemon/daemon.go`
+
+Add to `ResourceManager`:
+```go
+type ResourceManager struct {
+    // ... existing fields ...
+    natsConn    *nats.Conn
+    node        string
+    instanceSubs map[string]*nats.Subscription  // topic → subscription
+    handler      nats.MsgHandler                // RunInstances handler
+}
+```
+
+Add methods:
+```go
+// updateInstanceSubscriptions recalculates which instance types can fit
+// and subscribes/unsubscribes accordingly. Called after every allocate/deallocate.
+func (rm *ResourceManager) updateInstanceSubscriptions() {
+    rm.mu.RLock()
+    defer rm.mu.RUnlock()
+
+    for typeName, typeInfo := range rm.instanceTypes {
+        topic := fmt.Sprintf("ec2.RunInstances.%s", typeName)
+        canFit := rm.canAllocateUnlocked(typeInfo, 1) >= 1
+
+        _, subscribed := rm.instanceSubs[topic]
+        if canFit && !subscribed {
+            sub, err := rm.natsConn.QueueSubscribe(topic, "hive-workers", rm.handler)
+            if err != nil {
+                slog.Error("Failed to subscribe to instance type topic", "topic", topic, "err", err)
+                continue
+            }
+            rm.instanceSubs[topic] = sub
+            slog.Info("Subscribed to instance type", "topic", topic)
+        } else if !canFit && subscribed {
+            rm.instanceSubs[topic].Unsubscribe()
+            delete(rm.instanceSubs, topic)
+            slog.Info("Unsubscribed from instance type (capacity full)", "topic", topic)
+        }
+    }
+}
+```
+
+### Step 4: Call updateInstanceSubscriptions after allocate/deallocate
+
+**File:** `hive/daemon/daemon.go`
+
+Update `allocate()` to recalculate subscriptions after reserving resources:
+```go
+func (rm *ResourceManager) allocate(instanceType *ec2.InstanceTypeInfo) error {
+    // ... existing allocation logic ...
+    rm.updateInstanceSubscriptions()
+    return nil
+}
+```
+
+Update `deallocate()` to recalculate subscriptions after freeing resources:
+```go
+func (rm *ResourceManager) deallocate(instanceType *ec2.InstanceTypeInfo) {
+    // ... existing deallocation logic ...
+    rm.updateInstanceSubscriptions()
+}
+```
+
+### Step 5: Remove static ec2.RunInstances subscription from subscribeAll()
+
+**File:** `hive/daemon/daemon.go`
+
+Remove `{"ec2.RunInstances", d.handleEC2RunInstances, "hive-workers"}` from the `subscribeAll()` table. The initial subscriptions are created by `updateInstanceSubscriptions()` called during daemon startup (after `NewResourceManager()` sets up the handler).
+
+### Step 6: Initialize subscription management on daemon start
+
+**File:** `hive/daemon/daemon.go`
+
+After `subscribeAll()` in `Start()`, initialize the instance type subscriptions:
+```go
+d.resourceMgr.handler = d.handleEC2RunInstances
+d.resourceMgr.natsConn = d.natsConn
+d.resourceMgr.node = d.node
+d.resourceMgr.instanceSubs = make(map[string]*nats.Subscription)
+d.resourceMgr.updateInstanceSubscriptions()
+```
+
+### Step 7: Update tests
+
+**File:** `hive/daemon/daemon_test.go`
+
+- Update tests that publish to `ec2.RunInstances` to publish to `ec2.RunInstances.{instanceType}` instead
+- Add test: verify that after filling a node, it unsubscribes from the filled type
+- Add test: verify that after deallocating, it re-subscribes
+- Add test: verify `ErrNoResponders` when no node has capacity
+
+**File:** `hive/handlers/ec2/instance/service_nats_test.go` (if exists)
+
+- Update topic assertions
+
+## Files summary
 
 | File | Change |
-|---|---|
-| `hive/daemon/daemon_handlers.go` | Add retry logic to `handleEC2RunInstances` |
-| `hive/daemon/daemon.go` | Add `expectedNodes` field to Daemon (from config) |
-| `hive/daemon/daemon_test.go` | Test retry behavior: full node forwards, exhaustion returns error |
+|------|--------|
+| `hive/handlers/ec2/instance/service_nats.go` | Publish to `ec2.RunInstances.{instanceType}` |
+| `hive/utils/nats.go` | Preserve `ErrNoResponders` in error chain |
+| `hive/gateway/ec2/instance/RunInstances.go` | Map `ErrNoResponders` → `InsufficientInstanceCapacity` |
+| `hive/daemon/daemon.go` | Add subscription management to ResourceManager, remove static subscription |
+| `hive/daemon/daemon_test.go` | Update topics, add subscribe/unsubscribe tests |
+
+## Existing behavior preserved
+
+- `canAllocate()` still runs as a safety net (handles race conditions)
+- Instance type validation (`instanceType, exists := d.resourceMgr.instanceTypes[...]`) still runs
+- All other NATS subscriptions unchanged
+- DescribeInstanceTypes still uses fan-out (no queue group) — unchanged
 
 ## Verification
 
-1. 3-node cluster, fill one node to capacity
-2. Run 10 `RunInstances` requests — all should succeed (routed to free nodes), none should return `InsufficientInstanceCapacity`
-3. Fill all nodes — request should return `InsufficientInstanceCapacity` (not hang)
-4. Stop an instance, retry — should succeed on the node that freed capacity
+1. `make test` — all tests pass
+2. `make build` — compiles
+3. 3-node cluster test:
+   - Start cluster, all nodes subscribe to all 14 instance types
+   - Fill node1 with t3.2xlarge — node1 unsubscribes from all types
+   - `RunInstances t3.medium` → NATS routes to node2 or node3 (never node1)
+   - Fill all nodes → `RunInstances` returns `InsufficientInstanceCapacity` (NATS ErrNoResponders)
+   - Terminate instance on node1 → node1 re-subscribes → next RunInstances succeeds

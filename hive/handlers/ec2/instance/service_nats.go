@@ -1,8 +1,10 @@
 package handlers_ec2_instance
 
 import (
+	"fmt"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats.go"
@@ -19,5 +21,9 @@ func NewNATSInstanceService(conn *nats.Conn) InstanceService {
 }
 
 func (s *NATSInstanceService) RunInstances(input *ec2.RunInstancesInput) (*ec2.Reservation, error) {
-	return utils.NATSRequest[ec2.Reservation](s.natsConn, "ec2.RunInstances", input, 5*time.Minute)
+	if input == nil || input.InstanceType == nil {
+		return nil, fmt.Errorf("instance type is required")
+	}
+	topic := fmt.Sprintf("ec2.RunInstances.%s", aws.StringValue(input.InstanceType))
+	return utils.NATSRequest[ec2.Reservation](s.natsConn, topic, input, 5*time.Minute)
 }

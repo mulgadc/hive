@@ -206,6 +206,23 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 
 	nodeName := fmt.Sprintf("nbd-%s", volumeID)
 	deviceID := fmt.Sprintf("vdisk-%s", volumeID)
+	iothreadID := fmt.Sprintf("ioth-%s", volumeID)
+
+	// QMP object-add: create iothread for this volume
+	iothreadCmd := qmp.QMPCommand{
+		Execute: "object-add",
+		Arguments: map[string]any{
+			"qom-type": "iothread",
+			"id":       iothreadID,
+		},
+	}
+	_, err = d.SendQMPCommand(instance.QMPClient, iothreadCmd, instance.ID)
+	if err != nil {
+		slog.Error("AttachVolume: QMP object-add iothread failed", "volumeId", volumeID, "err", err)
+		d.rollbackEBSMount(ebsRequest)
+		respondWithError(awserrors.ErrorServerInternal)
+		return
+	}
 
 	// QMP blockdev-add
 	blockdevCmd := qmp.QMPCommand{
@@ -239,9 +256,10 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 
 	// QMP device_add
 	deviceAddArgs := map[string]any{
-		"driver": "virtio-blk-pci",
-		"id":     deviceID,
-		"drive":  nodeName,
+		"driver":   "virtio-blk-pci",
+		"id":       deviceID,
+		"drive":    nodeName,
+		"iothread": iothreadID,
 	}
 	if hotplugBus != "" {
 		deviceAddArgs["bus"] = hotplugBus
@@ -377,6 +395,7 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command qmp.Command, instance
 
 	deviceID := fmt.Sprintf("vdisk-%s", volumeID)
 	nodeName := fmt.Sprintf("nbd-%s", volumeID)
+	iothreadID := fmt.Sprintf("ioth-%s", volumeID)
 
 	// Phase 1: QMP device_del (remove guest device)
 	_, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{
@@ -407,6 +426,15 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command qmp.Command, instance
 		slog.Error("DetachVolume: QMP blockdev-del failed, leaving volume state intact", "volumeId", volumeID, "err", blockdevErr)
 		respondWithError(awserrors.ErrorServerInternal)
 		return
+	}
+
+	// Phase 2b: QMP object-del (remove iothread, best-effort)
+	_, iothreadErr := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{
+		Execute:   "object-del",
+		Arguments: map[string]any{"id": iothreadID},
+	}, instance.ID)
+	if iothreadErr != nil {
+		slog.Warn("DetachVolume: QMP object-del iothread failed (non-fatal)", "volumeId", volumeID, "err", iothreadErr)
 	}
 
 	// Phase 3: ebs.unmount via NATS (best-effort)
@@ -1638,3 +1666,4 @@ func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
 
 	slog.Info("handleEC2DescribeStoppedInstances completed", "count", len(reservations))
 }
+

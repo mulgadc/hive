@@ -22,6 +22,11 @@ cleanup() {
         dump_all_node_logs
     fi
 
+    # Kill any lingering formation background processes
+    [ -n "$LEADER_INIT_PID" ] && kill "$LEADER_INIT_PID" 2>/dev/null || true
+    [ -n "$JOIN2_PID" ] && kill "$JOIN2_PID" 2>/dev/null || true
+    [ -n "$JOIN3_PID" ] && kill "$JOIN3_PID" 2>/dev/null || true
+
     # Stop all node services
     stop_all_nodes || true
 
@@ -31,6 +36,10 @@ cleanup() {
     echo "Cleanup complete"
 }
 trap cleanup EXIT
+
+# PIDs for background formation processes (used in cleanup)
+JOIN2_PID=""
+JOIN3_PID=""
 
 # Use Hive profile for AWS CLI
 export AWS_PROFILE=hive
@@ -80,37 +89,37 @@ echo ""
 echo "Phase 2: Cluster Initialization"
 echo "========================================"
 
-# Initialize leader node (node1)
+# Background init — starts formation server, generates certs first
 echo ""
 init_leader_node
 
-# Trust the Hive CA certificate for AWS CLI SSL verification
+# Trust CA cert (exists before formation completes — cert generation is the first step)
 echo ""
 echo "Adding Hive CA certificate to system trust store..."
 sudo cp ~/node1/config/ca.pem /usr/local/share/ca-certificates/hive-ca.crt
 sudo update-ca-certificates
 
-# Start node1 services first (leader must be running for join)
+# Background BOTH joins — they poll /formation/status until all 3 nodes have joined.
+# Must be concurrent: each join blocks until formation is complete.
 echo ""
-echo "Starting node1 services..."
+echo "Joining follower nodes concurrently..."
+join_follower_node 2 &
+JOIN2_PID=$!
+join_follower_node 3 &
+JOIN3_PID=$!
+
+# Wait for formation to complete (all processes generate their configs)
+echo "Waiting for cluster formation to complete..."
+wait $JOIN2_PID || { echo "ERROR: Node 2 join failed"; exit 1; }
+wait $JOIN3_PID || { echo "ERROR: Node 3 join failed"; exit 1; }
+wait $LEADER_INIT_PID || { echo "ERROR: Leader init failed"; exit 1; }
+echo "Cluster formation complete — all configs generated"
+
+# Now start services (configs exist for all nodes)
+echo ""
+echo "Starting node services..."
 start_node_services 1 "$HOME/node1"
-
-# Wait for node1's NATS and cluster service to be ready
-echo "Waiting for node1 cluster service..."
-sleep 5
-
-# Join follower nodes
-echo ""
-join_follower_node 2
-join_follower_node 3
-
-# Start follower node services
-echo ""
-echo "Starting node2 services..."
 start_node_services 2 "$HOME/node2"
-
-echo ""
-echo "Starting node3 services..."
 start_node_services 3 "$HOME/node3"
 
 # Wait for all services to stabilize
@@ -140,6 +149,9 @@ verify_predastore_cluster 3 || {
 # Wait for gateway on node1 (primary gateway)
 echo ""
 wait_for_gateway "${NODE1_IP}" 30
+
+# Wait for daemon NATS subscriptions to be active
+wait_for_daemon_ready "https://${NODE1_IP}:${AWSGW_PORT}"
 
 # Define AWS CLI args pointing to node1's gateway
 AWS_EC2="aws --endpoint-url https://${NODE1_IP}:${AWSGW_PORT} ec2"

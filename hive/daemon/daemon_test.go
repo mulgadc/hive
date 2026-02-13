@@ -1330,24 +1330,26 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 // TestRunInstances_CountValidation tests MinCount/MaxCount validation scenarios
 func TestRunInstances_CountValidation(t *testing.T) {
 	natsURL := sharedNATSURL
+	instanceType := getTestInstanceType()
+	topic := fmt.Sprintf("ec2.RunInstances.%s", instanceType)
 
 	daemon := createTestDaemon(t, natsURL)
 
-	// Subscribe to handle RunInstances
-	sub, err := daemon.natsConn.Subscribe("ec2.RunInstances", daemon.handleEC2RunInstances)
+	// Subscribe to the per-instance-type topic (matches production routing)
+	sub, err := daemon.natsConn.QueueSubscribe(topic, "hive-workers", daemon.handleEC2RunInstances)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
 	t.Run("MinCount_greater_than_MaxCount", func(t *testing.T) {
 		input := &ec2.RunInstancesInput{
 			ImageId:      aws.String("ami-test"),
-			InstanceType: aws.String(getTestInstanceType()),
+			InstanceType: aws.String(instanceType),
 			MinCount:     aws.Int64(5),
 			MaxCount:     aws.Int64(3), // Invalid: min > max
 		}
 		inputJSON, _ := json.Marshal(input)
 
-		resp, err := daemon.natsConn.Request("ec2.RunInstances", inputJSON, 5*time.Second)
+		resp, err := daemon.natsConn.Request(topic, inputJSON, 5*time.Second)
 		require.NoError(t, err)
 
 		// Should return validation error
@@ -1361,13 +1363,13 @@ func TestRunInstances_CountValidation(t *testing.T) {
 	t.Run("MinCount_zero", func(t *testing.T) {
 		input := &ec2.RunInstancesInput{
 			ImageId:      aws.String("ami-test"),
-			InstanceType: aws.String(getTestInstanceType()),
+			InstanceType: aws.String(instanceType),
 			MinCount:     aws.Int64(0), // Invalid
 			MaxCount:     aws.Int64(1),
 		}
 		inputJSON, _ := json.Marshal(input)
 
-		resp, err := daemon.natsConn.Request("ec2.RunInstances", inputJSON, 5*time.Second)
+		resp, err := daemon.natsConn.Request(topic, inputJSON, 5*time.Second)
 		require.NoError(t, err)
 
 		var errResp map[string]any
@@ -1379,13 +1381,13 @@ func TestRunInstances_CountValidation(t *testing.T) {
 	t.Run("MaxCount_zero", func(t *testing.T) {
 		input := &ec2.RunInstancesInput{
 			ImageId:      aws.String("ami-test"),
-			InstanceType: aws.String(getTestInstanceType()),
+			InstanceType: aws.String(instanceType),
 			MinCount:     aws.Int64(1),
 			MaxCount:     aws.Int64(0), // Invalid
 		}
 		inputJSON, _ := json.Marshal(input)
 
-		resp, err := daemon.natsConn.Request("ec2.RunInstances", inputJSON, 5*time.Second)
+		resp, err := daemon.natsConn.Request(topic, inputJSON, 5*time.Second)
 		require.NoError(t, err)
 
 		var errResp map[string]any
@@ -1398,13 +1400,13 @@ func TestRunInstances_CountValidation(t *testing.T) {
 		// Request more instances than could possibly fit
 		input := &ec2.RunInstancesInput{
 			ImageId:      aws.String("ami-test"),
-			InstanceType: aws.String(getTestInstanceType()),
+			InstanceType: aws.String(instanceType),
 			MinCount:     aws.Int64(10000), // Way more than available
 			MaxCount:     aws.Int64(10000),
 		}
 		inputJSON, _ := json.Marshal(input)
 
-		resp, err := daemon.natsConn.Request("ec2.RunInstances", inputJSON, 5*time.Second)
+		resp, err := daemon.natsConn.Request(topic, inputJSON, 5*time.Second)
 		require.NoError(t, err)
 
 		var errResp map[string]any
@@ -1412,6 +1414,193 @@ func TestRunInstances_CountValidation(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "InsufficientInstanceCapacity", errResp["Code"])
 		t.Logf("Got expected error: %v", errResp["Code"])
+	})
+}
+
+// TestInstanceTypeSubscriptions tests dynamic NATS subscription management
+// based on node capacity.
+func TestInstanceTypeSubscriptions(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	t.Run("InitialSubscriptions", func(t *testing.T) {
+		// A fresh ResourceManager should subscribe to all instance types that fit
+		rm := NewResourceManager()
+		nc, err := nats.Connect(natsURL)
+		require.NoError(t, err)
+		defer nc.Close()
+
+		handler := func(msg *nats.Msg) {}
+		rm.initSubscriptions(nc, handler)
+
+		// Count how many types actually fit on this machine
+		fittableTypes := 0
+		for _, typeInfo := range rm.instanceTypes {
+			if rm.canAllocate(typeInfo, 1) >= 1 {
+				fittableTypes++
+			}
+		}
+
+		assert.Equal(t, fittableTypes, len(rm.instanceSubs),
+			"should subscribe to all instance types that fit")
+		assert.Greater(t, len(rm.instanceSubs), 0,
+			"should subscribe to at least some instance types")
+
+		// Verify topics follow the expected pattern
+		for topic := range rm.instanceSubs {
+			assert.True(t, strings.HasPrefix(topic, "ec2.RunInstances."),
+				"subscription topic should have correct prefix: %s", topic)
+		}
+	})
+
+	t.Run("UnsubscribesWhenFull", func(t *testing.T) {
+		rm := NewResourceManager()
+		nc, err := nats.Connect(natsURL)
+		require.NoError(t, err)
+		defer nc.Close()
+
+		handler := func(msg *nats.Msg) {}
+		rm.initSubscriptions(nc, handler)
+
+		initialCount := len(rm.instanceSubs)
+		require.Greater(t, initialCount, 0)
+
+		// Allocate all resources so nothing fits
+		rm.mu.Lock()
+		rm.allocatedVCPU = rm.availableVCPU
+		rm.allocatedMem = rm.availableMem
+		rm.mu.Unlock()
+
+		rm.updateInstanceSubscriptions()
+
+		assert.Equal(t, 0, len(rm.instanceSubs),
+			"should unsubscribe from all types when node is full")
+	})
+
+	t.Run("ResubscribesWhenFreed", func(t *testing.T) {
+		rm := NewResourceManager()
+		nc, err := nats.Connect(natsURL)
+		require.NoError(t, err)
+		defer nc.Close()
+
+		handler := func(msg *nats.Msg) {}
+		rm.initSubscriptions(nc, handler)
+
+		expectedCount := len(rm.instanceSubs)
+
+		// Fill all resources
+		rm.mu.Lock()
+		rm.allocatedVCPU = rm.availableVCPU
+		rm.allocatedMem = rm.availableMem
+		rm.mu.Unlock()
+		rm.updateInstanceSubscriptions()
+		assert.Equal(t, 0, len(rm.instanceSubs))
+
+		// Free all resources
+		rm.mu.Lock()
+		rm.allocatedVCPU = 0
+		rm.allocatedMem = 0
+		rm.mu.Unlock()
+		rm.updateInstanceSubscriptions()
+
+		assert.Equal(t, expectedCount, len(rm.instanceSubs),
+			"should resubscribe to all types when resources are freed")
+	})
+
+	t.Run("PartialCapacity", func(t *testing.T) {
+		rm := NewResourceManager()
+		nc, err := nats.Connect(natsURL)
+		require.NoError(t, err)
+		defer nc.Close()
+
+		handler := func(msg *nats.Msg) {}
+		rm.initSubscriptions(nc, handler)
+
+		// Leave only 2 vCPUs and 1 GB free — enough for nano/micro but not larger types
+		rm.mu.Lock()
+		rm.allocatedVCPU = rm.availableVCPU - 2
+		rm.allocatedMem = rm.availableMem - 1.0
+		rm.mu.Unlock()
+		rm.updateInstanceSubscriptions()
+
+		// Count subscribed types — should be less than total but more than zero
+		assert.Greater(t, len(rm.instanceSubs), 0,
+			"should still be subscribed to small instance types")
+		assert.Less(t, len(rm.instanceSubs), len(rm.instanceTypes),
+			"should not be subscribed to large instance types")
+
+		// Verify nano (0.5 GB) and micro (1 GB) are subscribed
+		for typeName := range rm.instanceSubs {
+			t.Logf("Still subscribed: %s", typeName)
+		}
+	})
+
+	t.Run("AllocateTriggersSubs", func(t *testing.T) {
+		rm := NewResourceManager()
+		nc, err := nats.Connect(natsURL)
+		require.NoError(t, err)
+		defer nc.Close()
+
+		handler := func(msg *nats.Msg) {}
+		rm.initSubscriptions(nc, handler)
+
+		initialCount := len(rm.instanceSubs)
+		require.Greater(t, initialCount, 0)
+
+		// Find a .micro type that fits (2 vCPU, 1 GB — always fits)
+		var microType *ec2.InstanceTypeInfo
+		for key, it := range rm.instanceTypes {
+			if strings.HasSuffix(key, ".micro") && rm.canAllocate(it, 1) >= 1 {
+				microType = it
+				break
+			}
+		}
+		require.NotNil(t, microType, "should have at least one .micro type that fits")
+
+		// Keep allocating until full
+		allocated := 0
+		for rm.canAllocate(microType, 1) >= 1 {
+			err := rm.allocate(microType)
+			require.NoError(t, err)
+			allocated++
+		}
+		require.Greater(t, allocated, 0)
+
+		// Should have fewer subscriptions now (or zero)
+		assert.Less(t, len(rm.instanceSubs), initialCount,
+			"allocating resources should reduce subscriptions")
+
+		// Deallocate everything — subscriptions should restore
+		for range allocated {
+			rm.deallocate(microType)
+		}
+		assert.Equal(t, initialCount, len(rm.instanceSubs),
+			"deallocating should restore all subscriptions")
+	})
+
+	t.Run("NoRespondersWhenFull", func(t *testing.T) {
+		rm := NewResourceManager()
+		nc, err := nats.Connect(natsURL)
+		require.NoError(t, err)
+		defer nc.Close()
+
+		handler := func(msg *nats.Msg) {}
+		rm.initSubscriptions(nc, handler)
+
+		// Fill the node completely
+		rm.mu.Lock()
+		rm.allocatedVCPU = rm.availableVCPU
+		rm.allocatedMem = rm.availableMem
+		rm.mu.Unlock()
+		rm.updateInstanceSubscriptions()
+		assert.Equal(t, 0, len(rm.instanceSubs))
+
+		// Publishing to an instance type topic should get no responders
+		instanceType := getTestInstanceType()
+		topic := fmt.Sprintf("ec2.RunInstances.%s", instanceType)
+
+		_, err = nc.Request(topic, []byte("{}"), 500*time.Millisecond)
+		assert.ErrorIs(t, err, nats.ErrNoResponders,
+			"request to a type with no subscribed nodes should return ErrNoResponders")
 	})
 }
 
@@ -2477,9 +2666,9 @@ func TestDetachVolume_SuccessPath(t *testing.T) {
 	assert.Equal(t, "detaching", *attachment.State)
 	assert.Equal(t, "/dev/sdf", *attachment.Device)
 
-	// Verify QMP commands issued: device_del then blockdev-del
+	// Verify QMP commands issued: device_del, blockdev-del, then object-del (iothread cleanup)
 	mu.Lock()
-	assert.Equal(t, []string{"device_del", "blockdev-del"}, qmpCommands)
+	assert.Equal(t, []string{"device_del", "blockdev-del", "object-del"}, qmpCommands)
 	mu.Unlock()
 
 	// Verify ebs.unmount was called
@@ -2613,9 +2802,9 @@ func TestDetachVolume_ForceFlag(t *testing.T) {
 	require.NoError(t, err, "force detach should succeed")
 	assert.Equal(t, "detaching", *attachment.State)
 
-	// Both QMP commands should have been issued
+	// All QMP commands should have been issued: device_del (failed), blockdev-del, object-del
 	mu.Lock()
-	assert.Equal(t, []string{"device_del", "blockdev-del"}, qmpCommands)
+	assert.Equal(t, []string{"device_del", "blockdev-del", "object-del"}, qmpCommands)
 	mu.Unlock()
 
 	// Volume should be cleaned up from EBSRequests

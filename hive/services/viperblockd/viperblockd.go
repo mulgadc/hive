@@ -425,8 +425,8 @@ func launchService(cfg *Config) (err error) {
 			Host:       cfg.S3Host,
 		}
 
-		// TODO: Improve based on system availability. Default 64MB cache
-		defaultCache := (64 * 1024 * 1024) / int(viperblock.DefaultBlockSize)
+		// TODO: Improve based on system availability. Default 128MB cache
+		defaultCache := (128 * 1024 * 1024) / int(viperblock.DefaultBlockSize)
 
 		vbconfig := viperblock.VB{
 			VolumeName: ebsRequest.Name,
@@ -443,7 +443,7 @@ func launchService(cfg *Config) (err error) {
 
 		vb, err := viperblock.New(&vbconfig, "s3", s3cfg)
 
-		// Enable 64MB cache for main volumes, disable for cloudinit/efi (small, rarely read)
+		// Enable 128MB cache for main volumes, disable for cloudinit/efi (small, rarely read)
 		// This cacheSize is passed to nbdkit plugin (separate viperblock instance)
 		var nbdCacheSize int
 		if strings.HasSuffix(ebsRequest.Name, "-cloudinit") || strings.HasSuffix(ebsRequest.Name, "-efi") {
@@ -453,7 +453,7 @@ func launchService(cfg *Config) (err error) {
 			}
 			nbdCacheSize = 0
 		} else {
-			slog.Info("Enabling 64MB cache for main volume", "volume", ebsRequest.Name, "blocks", defaultCache)
+			slog.Info("Enabling 128MB cache for main volume", "volume", ebsRequest.Name, "blocks", defaultCache)
 			if err := vb.SetCacheSize(defaultCache, 0); err != nil {
 				slog.Error("Failed to set cache size", "err", err)
 			}

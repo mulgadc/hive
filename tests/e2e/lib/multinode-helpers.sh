@@ -210,6 +210,33 @@ wait_for_gateway() {
     return 1
 }
 
+# Wait for daemon NATS subscriptions to be active.
+# Polls describe-instance-types until it returns a non-empty result.
+# Usage: wait_for_daemon_ready <gateway_endpoint> [max_attempts]
+wait_for_daemon_ready() {
+    local endpoint="$1"
+    local max_attempts="${2:-30}"
+    local attempt=0
+
+    echo "Waiting for daemon readiness (NATS subscriptions)..."
+
+    while [ $attempt -lt $max_attempts ]; do
+        local types
+        types=$(aws --endpoint-url "$endpoint" ec2 describe-instance-types \
+            --query 'InstanceTypes[*].InstanceType' --output text 2>/dev/null || true)
+        if [ -n "$types" ] && [ "$types" != "None" ]; then
+            echo "  Daemon is ready"
+            return 0
+        fi
+        echo "  Waiting... ($((attempt + 1))/$max_attempts)"
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+
+    echo "  ERROR: Daemon not ready after $max_attempts attempts"
+    return 1
+}
+
 # Check instance distribution across nodes
 # Counts QEMU processes per node IP from hostfwd bindings
 check_instance_distribution() {
@@ -220,7 +247,7 @@ check_instance_distribution() {
         local node_ip="${SIMULATED_NETWORK}.$i"
         # Count QEMU processes with hostfwd bound to this node's IP
         local count
-        count=$(ps auxw | grep qemu-system | grep -v grep | grep -c "hostfwd=tcp:${node_ip}:" 2>/dev/null || echo "0")
+        count=$(ps auxw | grep qemu-system | grep -v grep | grep -c "hostfwd=tcp:${node_ip}:" 2>/dev/null) || count=0
         echo "  Node$i ($node_ip): $count instances"
         total=$((total + count))
     done
@@ -468,7 +495,12 @@ dump_all_node_logs() {
     echo "=========================================="
 }
 
+# Global variable for init PID tracking (used by multi-node formation)
+LEADER_INIT_PID=""
+
 # Initialize leader node (node1)
+# In multi-node mode (default --nodes 3), this backgrounds the init process
+# because the formation server blocks waiting for joins.
 # Usage: init_leader_node
 init_leader_node() {
     echo "Initializing leader node (node1)..."
@@ -476,8 +508,7 @@ init_leader_node() {
     # Remove old node directory
     rm -rf "$HOME/node1/"
 
-    # Node1 routes to itself to enable clustering mode (NATS ignores self-routes)
-    # Other nodes will discover each other via gossip when they connect
+    # Start init in background — formation server will wait for joins
     ./bin/hive admin init \
         --node node1 \
         --bind "${NODE1_IP}" \
@@ -488,10 +519,21 @@ init_leader_node() {
         --region ap-southeast-2 \
         --az ap-southeast-2a \
         --hive-dir "$HOME/node1/" \
-        --config-dir "$HOME/node1/config/"
+        --config-dir "$HOME/node1/config/" &
+    LEADER_INIT_PID=$!
 
+    # Wait for formation server to be ready
+    echo "Waiting for formation server..."
+    for i in $(seq 1 60); do
+        if curl -s "http://${NODE1_IP}:${CLUSTER_PORT}/formation/health" > /dev/null 2>&1; then
+            echo "  Formation server is ready (PID: $LEADER_INIT_PID)"
+            return 0
+        fi
+        sleep 1
+    done
 
-    echo "Leader node initialized"
+    echo "  ERROR: Formation server failed to start"
+    return 1
 }
 
 # Join a follower node to the cluster
