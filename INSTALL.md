@@ -45,7 +45,7 @@ sudo add-apt-repository universe
 sudo apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu-kvm libvirt-daemon-system libvirt-clients libvirt-dev make gcc unzip xz-utils file
 ```
 
-Ensure the Go toolkit is installed for version 1.26.0 or higher. Recommended to install the latest directly from [https://go.dev/dl/](https://go.dev/dl/).
+Ensure the Go toolkit is installed for version 1.25.7 or higher. Recommended to install the latest directly from [https://go.dev/dl/](https://go.dev/dl/).
 
 Confirm Go is correctly installed, and set in your $PATH.
 
@@ -262,22 +262,28 @@ aws ec2 describe-instance-types
 {
   "InstanceTypes": [
     {
-      "InstanceType": "m8a.small",
+      "InstanceType": "t3.small",
       "CurrentGeneration": true,
-      "SupportedRootDeviceTypes": ["ebs"],
-      "SupportedVirtualizationTypes": ["hvm"],
+      "SupportedRootDeviceTypes": [
+          "ebs"
+      ],
+      "SupportedVirtualizationTypes": [
+          "hvm"
+      ],
       "Hypervisor": "kvm",
       "ProcessorInfo": {
-        "SupportedArchitectures": ["x86_64"]
+          "SupportedArchitectures": [
+              "x86_64"
+          ]
       },
       "VCpuInfo": {
-        "DefaultVCpus": 2
+          "DefaultVCpus": 2
       },
       "MemoryInfo": {
-        "SizeInMiB": 1024
+          "SizeInMiB": 2048
       },
       "BurstablePerformanceSupported": false
-    }
+  },
   ]
 }
 ```
@@ -285,7 +291,7 @@ aws ec2 describe-instance-types
 Export the instance-type:
 
 ```sh
-export HIVE_INSTANCE="m8a.small"
+export HIVE_INSTANCE="t3.small"
 ```
 
 ### Run Instance

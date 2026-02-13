@@ -1,3 +1,11 @@
+# Terraform/OpenTofu
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!example.tfvars
+
 # Go workspace
 go.work
 go.work.sum
