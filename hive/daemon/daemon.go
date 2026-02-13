@@ -1071,7 +1071,7 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 					continue
 				}
 
-				msg, err := d.natsConn.Request("ebs.unmount", ebsUnMountRequest, 30*time.Second)
+				msg, err := d.natsConn.Request(d.ebsTopic("unmount"), ebsUnMountRequest, 30*time.Second)
 				if err != nil {
 					slog.Error("Failed to unmount volume", "name", ebsRequest.Name, "id", instance.ID, "err", err)
 				} else {
@@ -1629,6 +1629,13 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	return nil
 }
 
+// ebsTopic returns a node-specific EBS NATS topic, e.g. "ebs.node1.mount".
+// This ensures mount/unmount requests are routed to the viperblock instance
+// running on the same node as the daemon (NBD sockets are local).
+func (d *Daemon) ebsTopic(action string) string {
+	return fmt.Sprintf("ebs.%s.%s", d.node, action)
+}
+
 // MountVolumes mounts the volumes for an instance
 func (d *Daemon) MountVolumes(instance *vm.VM) error {
 
@@ -1643,7 +1650,7 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 			return err
 		}
 
-		reply, err := d.natsConn.Request("ebs.mount", ebsMountRequest, 30*time.Second)
+		reply, err := d.natsConn.Request(d.ebsTopic("mount"), ebsMountRequest, 30*time.Second)
 
 		slog.Info("Mounting volume", "Vol", v.Name, "NBDURI", v.NBDURI)
 
@@ -1690,7 +1697,7 @@ func (d *Daemon) rollbackEBSMount(req config.EBSRequest) {
 		slog.Error("rollbackEBSMount: failed to marshal unmount request", "volume", req.Name, "err", err)
 		return
 	}
-	msg, err := d.natsConn.Request("ebs.unmount", data, 10*time.Second)
+	msg, err := d.natsConn.Request(d.ebsTopic("unmount"), data, 10*time.Second)
 	if err != nil {
 		slog.Error("rollbackEBSMount: ebs.unmount NATS request failed", "volume", req.Name, "err", err)
 		return

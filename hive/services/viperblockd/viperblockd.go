@@ -47,6 +47,11 @@ type Config struct {
 	SecretKey      string
 	BaseDir        string
 
+	// NodeName identifies this node in the cluster (e.g. "node1").
+	// Used for node-specific NATS topics: ebs.{NodeName}.mount / ebs.{NodeName}.unmount.
+	// If empty, falls back to generic ebs.mount / ebs.unmount with queue group (single-node compat).
+	NodeName string
+
 	// NBDTransport controls the transport type: "socket" (default) or "tcp"
 	// Socket is faster for local connections, TCP required for remote/DPU scenarios
 	NBDTransport config.NBDTransport
@@ -150,7 +155,11 @@ func launchService(cfg *Config) (err error) {
 		return err
 	}
 
-	slog.Info("Waiting for EBS events")
+	if cfg.NodeName != "" {
+		slog.Info("Waiting for EBS events", "node", cfg.NodeName)
+	} else {
+		slog.Info("Waiting for EBS events (single-node mode)")
+	}
 
 	if _, err := nc.QueueSubscribe("ebs.delete", "hive-workers", func(msg *nats.Msg) {
 		slog.Info("Received ebs.delete message", "data", string(msg.Data))
@@ -227,7 +236,18 @@ func launchService(cfg *Config) (err error) {
 		slog.Error("Failed to subscribe to ebs.delete", "err", err)
 	}
 
-	if _, err := nc.QueueSubscribe("ebs.unmount", "hive-workers", func(msg *nats.Msg) {
+	// Subscribe to node-specific unmount topic if NodeName is set, otherwise fall back to generic queue group
+	unmountTopic := "ebs.unmount"
+	if cfg.NodeName != "" {
+		unmountTopic = fmt.Sprintf("ebs.%s.unmount", cfg.NodeName)
+	}
+	unmountSubscribe := func(topic string, handler nats.MsgHandler) (*nats.Subscription, error) {
+		if cfg.NodeName != "" {
+			return nc.Subscribe(topic, handler)
+		}
+		return nc.QueueSubscribe(topic, "hive-workers", handler)
+	}
+	if _, err := unmountSubscribe(unmountTopic, func(msg *nats.Msg) {
 		slog.Info("Received message", "data", string(msg.Data))
 
 		// Parse the message
@@ -308,7 +328,7 @@ func launchService(cfg *Config) (err error) {
 			slog.Error("Failed to publish ebs.unmount.response", "err", err)
 		}
 	}); err != nil {
-		slog.Error("Failed to subscribe to ebs.unmount", "err", err)
+		slog.Error("Failed to subscribe to unmount topic", "topic", unmountTopic, "err", err)
 	}
 
 	if _, err := nc.QueueSubscribe("ebs.sync", "hive-workers", func(msg *nats.Msg) {
@@ -369,7 +389,18 @@ func launchService(cfg *Config) (err error) {
 	// subscribed at mount time and unsubscribed at unmount time. This ensures
 	// snapshot requests are routed to the node that owns the volume.
 
-	if _, err := nc.QueueSubscribe("ebs.mount", "hive-workers", func(msg *nats.Msg) {
+	// Subscribe to node-specific mount topic if NodeName is set, otherwise fall back to generic queue group
+	mountTopic := "ebs.mount"
+	if cfg.NodeName != "" {
+		mountTopic = fmt.Sprintf("ebs.%s.mount", cfg.NodeName)
+	}
+	mountSubscribe := func(topic string, handler nats.MsgHandler) (*nats.Subscription, error) {
+		if cfg.NodeName != "" {
+			return nc.Subscribe(topic, handler)
+		}
+		return nc.QueueSubscribe(topic, "hive-workers", handler)
+	}
+	if _, err := mountSubscribe(mountTopic, func(msg *nats.Msg) {
 		slog.Info("Received message:", "data", string(msg.Data))
 
 		// Parse the message
@@ -671,7 +702,7 @@ func launchService(cfg *Config) (err error) {
 
 		slog.Debug("Sent ebs.mount response", "response", string(response))
 	}); err != nil {
-		slog.Error("Failed to subscribe to ebs.mount", "err", err)
+		slog.Error("Failed to subscribe to mount topic", "topic", mountTopic, "err", err)
 	}
 
 	// Create a channel to receive shutdown signals

@@ -1577,7 +1577,7 @@ func TestStopInstance_DeleteOnTermination_VolumeDeletion(t *testing.T) {
 	ebsDeletedVolumes := make(map[string]bool)
 
 	// Mock ebs.unmount subscriber
-	unmountSub, err := daemon.natsConn.Subscribe("ebs.unmount", func(msg *nats.Msg) {
+	unmountSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
 		var req config.EBSRequest
 		json.Unmarshal(msg.Data, &req)
 		mu.Lock()
@@ -1674,7 +1674,7 @@ func TestStopInstance_DeleteOnTermination_False_SkipsVolumeDeletion(t *testing.T
 	ebsDeletedVolumes := make(map[string]bool)
 
 	// Mock ebs.unmount subscriber
-	unmountSub, err := daemon.natsConn.Subscribe("ebs.unmount", func(msg *nats.Msg) {
+	unmountSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
 		var req config.EBSRequest
 		json.Unmarshal(msg.Data, &req)
 		mu.Lock()
@@ -1771,7 +1771,7 @@ func TestStopInstance_NoDelete_OnStop(t *testing.T) {
 	ebsDeletedVolumes := make(map[string]bool)
 
 	// Mock ebs.unmount subscriber
-	unmountSub, err := daemon.natsConn.Subscribe("ebs.unmount", func(msg *nats.Msg) {
+	unmountSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
 		resp := config.EBSUnMountResponse{Mounted: false}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
@@ -2432,7 +2432,7 @@ func TestDetachVolume_SuccessPath(t *testing.T) {
 
 	// Subscribe a mock ebs.unmount handler
 	ebsUnmountCalled := make(chan string, 1)
-	ebsSub, err := daemon.natsConn.Subscribe("ebs.unmount", func(msg *nats.Msg) {
+	ebsSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
 		var req config.EBSRequest
 		json.Unmarshal(msg.Data, &req)
 		ebsUnmountCalled <- req.Name
@@ -2573,7 +2573,7 @@ func TestDetachVolume_ForceFlag(t *testing.T) {
 	daemon.Instances.VMS[instanceID] = instance
 
 	// Mock ebs.unmount
-	ebsSub, err := daemon.natsConn.Subscribe("ebs.unmount", func(msg *nats.Msg) {
+	ebsSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
 		resp := config.EBSUnMountResponse{Mounted: false}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
@@ -2776,7 +2776,7 @@ func TestDetachVolume_SuccessWithDeviceMatch(t *testing.T) {
 	}
 	daemon.Instances.VMS[instanceID] = instance
 
-	ebsSub, err := daemon.natsConn.Subscribe("ebs.unmount", func(msg *nats.Msg) {
+	ebsSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
 		resp := config.EBSUnMountResponse{Mounted: false}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
@@ -2852,7 +2852,7 @@ func TestAttachVolume_ReplacesStaleEBSRequest(t *testing.T) {
 	daemon.Instances.VMS[instanceID] = instance
 
 	// Mock ebs.mount to return success with a new NBDURI
-	ebsSub, err := daemon.natsConn.Subscribe("ebs.mount", func(msg *nats.Msg) {
+	ebsSub, err := daemon.natsConn.Subscribe("ebs.node-1.mount", func(msg *nats.Msg) {
 		resp := config.EBSMountResponse{URI: "nbd://new:2222"}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
@@ -3333,7 +3333,7 @@ func TestRollbackEBSMount_Success(t *testing.T) {
 	unmountCalled := make(chan string, 1)
 
 	// Mock ebs.unmount subscriber that returns success
-	sub, err := daemon.natsConn.Subscribe("ebs.unmount", func(msg *nats.Msg) {
+	sub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
 		var req config.EBSRequest
 		json.Unmarshal(msg.Data, &req)
 		unmountCalled <- req.Name
@@ -3367,7 +3367,7 @@ func TestRollbackEBSMount_UnmountError(t *testing.T) {
 	daemon := createTestDaemon(t, natsURL)
 
 	// Mock ebs.unmount subscriber that returns an error
-	sub, err := daemon.natsConn.Subscribe("ebs.unmount", func(msg *nats.Msg) {
+	sub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
 		resp := config.EBSUnMountResponse{Error: "unmount failed: device busy"}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
@@ -3388,7 +3388,7 @@ func TestRollbackEBSMount_StillMounted(t *testing.T) {
 
 	daemon := createTestDaemon(t, natsURL)
 
-	sub, err := daemon.natsConn.Subscribe("ebs.unmount", func(msg *nats.Msg) {
+	sub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
 		resp := config.EBSUnMountResponse{Mounted: true} // still mounted
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)

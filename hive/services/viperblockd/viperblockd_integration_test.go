@@ -56,6 +56,7 @@ func setupTestConfig(t *testing.T, natsURL string) *Config {
 		PluginPath:     filepath.Join(testDir, "plugins"), // Use temp dir to avoid actual nbdkit execution
 		Debug:          true,
 		MountedVolumes: []MountedVolume{},
+		NodeName:       "test-node",
 	}
 
 	return cfg
@@ -160,7 +161,7 @@ func TestIntegration_EBSMountRequest(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Use Request instead of Publish to get direct response
-	msg, err := nc.Request("ebs.mount", requestData, 5*time.Second)
+	msg, err := nc.Request("ebs.test-node.mount", requestData, 5*time.Second)
 
 	// We expect to get a response (even if it contains an error)
 	if err != nil {
@@ -230,7 +231,7 @@ func TestIntegration_EBSUnmountRequest(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Send unmount request
-	msg, err := nc.Request("ebs.unmount", requestData, 3*time.Second)
+	msg, err := nc.Request("ebs.test-node.unmount", requestData, 3*time.Second)
 	assert.NoError(t, err)
 	assert.NotNil(t, msg)
 
@@ -287,7 +288,7 @@ func TestIntegration_EBSUnmountNonExistentVolume(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Send unmount request
-	msg, err := nc.Request("ebs.unmount", requestData, 3*time.Second)
+	msg, err := nc.Request("ebs.test-node.unmount", requestData, 3*time.Second)
 	assert.NoError(t, err)
 	assert.NotNil(t, msg)
 
@@ -347,7 +348,7 @@ func TestIntegration_ConcurrentMountRequests(t *testing.T) {
 		assert.NoError(t, err)
 
 		// Use Request to get synchronous response
-		msg, err := nc.Request("ebs.mount", requestData, 5*time.Second)
+		msg, err := nc.Request("ebs.test-node.mount", requestData, 5*time.Second)
 
 		if err != nil {
 			// Timeout or no response - acceptable for this test
@@ -400,7 +401,7 @@ func TestIntegration_MessageSubscriptions(t *testing.T) {
 
 	// Test unmount (most reliable since it doesn't depend on external services)
 	testMsg := []byte(`{"Name": "test-volume-sub"}`)
-	msg, err := nc.Request("ebs.unmount", testMsg, 3*time.Second)
+	msg, err := nc.Request("ebs.test-node.unmount", testMsg, 3*time.Second)
 
 	// Should get a response
 	assert.NoError(t, err)
@@ -466,7 +467,7 @@ func TestIntegration_ServiceGracefulShutdown(t *testing.T) {
 	request := config.EBSRequest{Name: "test"}
 	requestData, _ := json.Marshal(request)
 
-	_, err = nc.Request("ebs.unmount", requestData, 2*time.Second)
+	_, err = nc.Request("ebs.test-node.unmount", requestData, 2*time.Second)
 	assert.NoError(t, err)
 
 	nc.Close()

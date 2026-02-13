@@ -251,7 +251,7 @@ func TestIntegration_EBSUnmountRemovesSocket(t *testing.T) {
 	defer nc.Close()
 
 	reqData, _ := json.Marshal(config.EBSRequest{Name: "vol-unmount-socket"})
-	msg, err := nc.Request("ebs.unmount", reqData, 3*time.Second)
+	msg, err := nc.Request("ebs.test-node.unmount", reqData, 3*time.Second)
 	require.NoError(t, err)
 
 	var resp config.EBSUnMountResponse

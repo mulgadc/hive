@@ -28,3 +28,8 @@ Thumbs.db
 
 # Test reports
 *-report.txt
+
+# Agent direction (internal use only)
+docs/INTERNAL.md
+docs/PRIVATE.md
+docs/DEVNOTES.md

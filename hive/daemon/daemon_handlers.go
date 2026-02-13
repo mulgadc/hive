@@ -157,7 +157,7 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 		return
 	}
 
-	mountReply, err := d.natsConn.Request("ebs.mount", ebsMountData, 30*time.Second)
+	mountReply, err := d.natsConn.Request(d.ebsTopic("mount"), ebsMountData, 30*time.Second)
 	if err != nil {
 		slog.Error("AttachVolume: ebs.mount failed", "volumeId", volumeID, "err", err)
 		respondWithError(awserrors.ErrorServerInternal)

@@ -1,17 +1,18 @@
+#!/bin/bash
 
-#sudo ip addr del 10.11.12.1/24 dev eth0
-#sudo ip addr del 10.11.12.2/24 dev eth0
-#sudo ip addr del 10.11.12.3/24 dev eth0
+# Stop simulated multi-node cluster.
+# Stops services in reverse order (node3 → node2 → node1).
+# Usage: ./scripts/stop-multi-node.sh
 
-# TODO: Reverse order, predastore running on node1
-# BUG: Need to wait for each QEMU to flush/commit WAL to disk > S3, before shutdown, else corruption may occur
-# BUG: nbdkit: ramdisk.3: debug: sending error reply: Cannot send after transport endpoint shutdown
-# TODO: Fallback, if WAL on local disk not flushed, on boot, viperblock should commit and verify. Requires UT and test-cases
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-./scripts/stop-dev.sh ~/node3/
+echo "Stopping multi-node cluster..."
 
-./scripts/stop-dev.sh ~/node2/
+# Stop in reverse order — node1 last since it hosts the Predastore leader
+"$SCRIPT_DIR/stop-dev.sh" ~/node3/
+"$SCRIPT_DIR/stop-dev.sh" ~/node2/
+"$SCRIPT_DIR/stop-dev.sh" ~/node1/
 
-./scripts/stop-dev.sh ~/node1/
-
-
+echo ""
+echo "Multi-node cluster stopped."
+echo "To remove all data: rm -rf ~/node1/ ~/node2/ ~/node3/"

@@ -9,6 +9,7 @@ The currently supported operating systems that are validated and tested include:
 - Ubuntu 22.04
 - Ubuntu 24.04
 - Ubuntu 25.10
+- Debian 12.13
 
 For the development preview, please use one of the supported versions above.
 
@@ -551,133 +552,330 @@ The Hive Platform also offers a web interface for managing hive services. Simply
 
 **Note:** If you are not viewing the website on the same machine that is running the hive server, you will need to go to [https://localhost:9999](https://localhost:9999) and [https://localhost:8443](https://localhost:8443) and accept the certificates. If you have added the CA to your local machine this is not needed.
 
-# Multi-node Configuration
+# Multi-Node Configuration
 
-To create a simulated multi-node installation on a single server (e.g node1, node2, node3) review the script `./scripts/create-multi-node.sh`.
+Hive is designed for distributed, multi-server deployments. A Hive cluster operates as a fully distributed infrastructure region — similar to an AWS Region — where multiple nodes work together to provide high availability, data durability, and fault tolerance across the platform.
 
-Specifically this will create 3 IPs on a specified ethernet adapter.
+When deploying a multi-node cluster, you define a **region** (e.g., `ap-southeast-2`, `us-east-1`) and **availability zones** to organize your infrastructure. Services are distributed across nodes: NATS provides a clustered message bus for request routing and JetStream replication, Predastore uses Raft consensus with Reed-Solomon erasure coding (RS 2+1) for durable S3-compatible object storage, and the Hive daemon on each node can independently serve AWS API requests. The result is a platform where compute, storage, and API services are replicated — an AMI stored on one node is available from any node, an EC2 instance launched via any gateway is visible cluster-wide, and the loss of a single node does not compromise data or availability.
+
+Cluster formation is automatic. When initializing with `--nodes 3`, the init node starts a formation server and waits for other nodes to join. Once all nodes have registered, each node receives the full cluster topology — credentials, CA certificates, NATS routes, Predastore peer lists — and generates its own configuration files. No manual configuration synchronization is required.
+
+## Simulated Multi-Node (Single Server)
+
+For development and testing, a 3-node cluster can be simulated on a single machine using loopback addresses. Linux handles the full `127.0.0.0/8` range natively, so `127.0.0.1`, `127.0.0.2`, and `127.0.0.3` all work without any network configuration.
+
+Each node uses a separate data directory (`~/node1/`, `~/node2/`, `~/node3/`) to isolate configuration, logs, and state.
+
+### 1. Build
 
 ```bash
-ip addr add 10.11.12.1/24 dev eth0
-ip addr add 10.11.12.2/24 dev eth0
-ip addr add 10.11.12.3/24 dev eth0
+make build
 ```
 
-### Initialize the Leader Node
+### 2. Form the Cluster
 
-Next, `hive` will be installed and initiated in `$HOME/node1` for configuration files.
+The formation process requires running init and join commands concurrently. The init node blocks until all expected nodes have joined.
+
+**Terminal 1 — Initialize the leader node:**
 
 ```bash
 ./bin/hive admin init \
---node node1 \
---bind 10.11.12.1 \
---cluster-bind 10.11.12.1 \
---cluster-routes 10.11.12.1:4248 \
---predastore-nodes 10.11.12.1,10.11.12.2,10.11.12.3 \
---port 4432 \
---hive-dir ~/node1/ \
---config-dir ~/node1/config/ \
---region ap-southeast-2 \
---az ap-southeast-2a \
-
-./scripts/start-dev.sh ~/node1/
+  --node node1 \
+  --nodes 3 \
+  --bind 127.0.0.1 \
+  --cluster-bind 127.0.0.1 \
+  --port 4432 \
+  --hive-dir ~/node1/ \
+  --config-dir ~/node1/config/ \
+  --region ap-southeast-2 \
+  --az ap-southeast-2a
 ```
 
-### Join Follower Nodes
+This starts a formation server on `127.0.0.1:4432` and waits for 2 more nodes to join.
 
-Two other nodes will be created, joining node1 to exchange configuration files and identify as a new node.
+**Terminal 2 — Join node 2 (while init is running):**
 
 ```bash
 ./bin/hive admin join \
---node node2 \
---bind 10.11.12.2 \
---cluster-bind 10.11.12.2 \
---cluster-routes 10.11.12.1:4248 \
---host 10.11.12.1:4432 \
---data-dir ~/node2/ \
---config-dir ~/node2/config/ \
---region ap-southeast-2 \
---az ap-southeast-2a \
-
-./scripts/start-dev.sh ~/node2/
+  --node node2 \
+  --bind 127.0.0.2 \
+  --cluster-bind 127.0.0.2 \
+  --host 127.0.0.1:4432 \
+  --data-dir ~/node2/ \
+  --config-dir ~/node2/config/ \
+  --region ap-southeast-2 \
+  --az ap-southeast-2a
 ```
+
+**Terminal 3 — Join node 3 (while init is running):**
 
 ```bash
 ./bin/hive admin join \
---node node3 \
---bind 10.11.12.3 \
---cluster-bind 10.11.12.3 \
---cluster-routes 10.11.12.1:4248 \
---host 10.11.12.1:4432 \
---data-dir ~/node3/ \
---config-dir ~/node3/config/ \
---region ap-southeast-2 \
---az ap-southeast-2a \
+  --node node3 \
+  --bind 127.0.0.3 \
+  --cluster-bind 127.0.0.3 \
+  --host 127.0.0.1:4432 \
+  --data-dir ~/node3/ \
+  --config-dir ~/node3/config/ \
+  --region ap-southeast-2 \
+  --az ap-southeast-2a
+```
 
-./scripts/start-dev.sh ~/node3/
+All three processes will exit with a cluster summary once formation is complete.
+
+### 3. Start Services
+
+Start services on each node (in separate terminals or background):
+
+```bash
+HIVE_SKIP_BUILD=true UI=false ./scripts/start-dev.sh ~/node1/
+HIVE_SKIP_BUILD=true UI=false ./scripts/start-dev.sh ~/node2/
+HIVE_SKIP_BUILD=true UI=false ./scripts/start-dev.sh ~/node3/
+```
+
+### 4. Verify the Cluster
+
+Check that all daemons are healthy:
+
+```bash
+curl -s http://127.0.0.1:4432/health
+curl -s http://127.0.0.2:4432/health
+curl -s http://127.0.0.3:4432/health
+```
+
+Check NATS cluster routing (from any node):
+
+```bash
+grep -i "route\|cluster" ~/node1/logs/nats.log
+```
+
+Check Predastore Raft consensus:
+
+```bash
+grep -i "leader\|election" ~/node1/logs/predastore.log
+```
+
+### 5. Using the Cluster
+
+When using the AWS CLI, specify the endpoint URL pointing to any node's gateway:
+
+```bash
+AWS_ENDPOINT_URL=https://127.0.0.1:9999 aws ec2 describe-instances
+AWS_ENDPOINT_URL=https://127.0.0.2:9999 aws ec2 describe-instances
+```
+
+Each node has its own logs for debugging:
+
+```bash
+tail -f ~/node1/logs/hive.log
+tail -f ~/node2/logs/hive.log
+tail -f ~/node3/logs/hive.log
+```
+
+### 6. Stop the Cluster
+
+Stop services on each node in reverse order:
+
+```bash
+./scripts/stop-dev.sh ~/node3/
+./scripts/stop-dev.sh ~/node2/
+./scripts/stop-dev.sh ~/node1/
+```
+
+### 7. Clean Up
+
+To fully remove the simulated cluster:
+
+```bash
+rm -rf ~/node1/ ~/node2/ ~/node3/
+```
+
+### Alternative: IP Aliases
+
+For a more production-like simulation using dedicated IP addresses on a network interface:
+
+```bash
+sudo ip addr add 10.11.12.1/24 dev eth0
+sudo ip addr add 10.11.12.2/24 dev eth0
+sudo ip addr add 10.11.12.3/24 dev eth0
+```
+
+Replace `eth0` with your network interface name (e.g., `enp0s3`, `ens33`). Then use these IPs instead of `127.0.0.x` in the formation commands above.
+
+To remove the aliases:
+
+```bash
+sudo ip addr del 10.11.12.1/24 dev eth0
+sudo ip addr del 10.11.12.2/24 dev eth0
+sudo ip addr del 10.11.12.3/24 dev eth0
+```
+
+## Real Multi-Node (Physical Servers)
+
+For production or production-like deployments across multiple physical servers or VMs.
+
+### Prerequisites
+
+On **each server**:
+
+1. Install Hive dependencies (see [Dependencies](#dependencies) above)
+2. Clone the repository and build:
+
+```bash
+mkdir -p ~/Development/mulga/
+cd ~/Development/mulga/
+git clone https://github.com/mulgadc/hive.git
+cd hive
+./scripts/clone-deps.sh
+make build
+```
+
+3. Identify the bind IP for each server (e.g., the primary network interface IP):
+
+```bash
+ip addr show | grep "inet "
+```
+
+### Example: 3-Node Cluster
+
+Assume three servers with these IPs:
+
+| Node | IP Address | Role |
+|------|------------|------|
+| node1 | 192.168.1.10 | Init node |
+| node2 | 192.168.1.11 | Join node |
+| node3 | 192.168.1.12 | Join node |
+
+**Server 1 — Initialize the cluster:**
+
+```bash
+cd ~/Development/mulga/hive
+
+./bin/hive admin init \
+  --node node1 \
+  --nodes 3 \
+  --bind 192.168.1.10 \
+  --cluster-bind 192.168.1.10 \
+  --port 4432 \
+  --hive-dir ~/hive/ \
+  --config-dir ~/hive/config/ \
+  --region us-east-1 \
+  --az us-east-1a
+```
+
+**Server 2 — Join the cluster (while init is running):**
+
+```bash
+cd ~/Development/mulga/hive
+
+./bin/hive admin join \
+  --node node2 \
+  --bind 192.168.1.11 \
+  --cluster-bind 192.168.1.11 \
+  --host 192.168.1.10:4432 \
+  --data-dir ~/hive/ \
+  --config-dir ~/hive/config/ \
+  --region us-east-1 \
+  --az us-east-1a
+```
+
+**Server 3 — Join the cluster (while init is running):**
+
+```bash
+cd ~/Development/mulga/hive
+
+./bin/hive admin join \
+  --node node3 \
+  --bind 192.168.1.12 \
+  --cluster-bind 192.168.1.12 \
+  --host 192.168.1.10:4432 \
+  --data-dir ~/hive/ \
+  --config-dir ~/hive/config/ \
+  --region us-east-1 \
+  --az us-east-1a
+```
+
+All three processes will exit with a cluster summary once formation is complete.
+
+### Service Co-location
+
+Every node that runs EC2 instances (compute) **must** also run the viperblock service. EBS volumes are mounted locally via Unix domain sockets (NBD) — the daemon publishes to a node-specific NATS topic (`ebs.{nodeName}.mount`) which is handled by the viperblock instance on the same server. Nodes without viperblock cannot run EC2 instances.
+
+In the default deployment, every node runs all services (NATS, Predastore, Viperblock, Daemon, Gateway), which satisfies this requirement.
+
+### Start Services on Each Server
+
+After formation completes, start services on **all servers**:
+
+```bash
+./scripts/start-dev.sh
 ```
 
 ### Verify the Cluster
 
-Each node will have its own storage for config, data and state in `~/node[1,2,3]` to simulate a unique node and network.
-
-Once the multi-node cluster is configured, follow the original installation instructions above to:
-
-- Import an SSH key
-- Import an AMI
-- Launch instances
-
-Note - when using the AWS CLI tool you must specify the IP address of a gateway node (10.11.12.1, 10.11.12.2, or 10.11.12.3).
+From any server, check daemon health:
 
 ```bash
-aws --endpoint-url https://10.11.12.3:9999 ec2 describe-instances --instance-ids i-9f5f648adc57ea46d
+curl -s http://192.168.1.10:4432/health
+curl -s http://192.168.1.11:4432/health
+curl -s http://192.168.1.12:4432/health
 ```
 
-```json
-{
-  "Reservations": [
-    {
-      "ReservationId": "r-9d26866c3b0d53bf4",
-      "OwnerId": "123456789012",
-      "Instances": [
-        {
-          "InstanceId": "i-9f5f648adc57ea46d",
-          "ImageId": "ami-d0de73dd18fa33ac9",
-          "State": {
-            "Code": 16,
-            "Name": "running"
-          },
-          "KeyName": "hive-key",
-          "InstanceType": "t3.micro",
-          "LaunchTime": "2025-11-21T10:36:42.834000+00:00"
-        }
-      ]
-    }
-  ]
-}
-```
-
-For debugging, reference the node unique configuration files, e.g
+Check NATS cluster mesh:
 
 ```bash
-tail -n 100 ~/node3/logs/hive.log
+grep -i "route\|cluster" ~/hive/logs/nats.log
 ```
+
+Check Predastore Raft:
 
 ```bash
-...
-2025/11/21 22:59:32 Received message on subject: ec2.DescribeInstances
-2025/11/21 22:59:32 Message data: {"DryRun":null,"Filters":null,"InstanceIds":["i-9f5f648adc57ea46d"],"MaxResults":null,"NextToken":null}
-2025/11/21 22:59:32 INFO Processing DescribeInstances request from this node
-2025/11/21 22:59:32 INFO handleEC2DescribeInstances completed count=1
-...
+grep -i "leader\|election" ~/hive/logs/predastore.log
 ```
 
-### Stop multi-node Instance
+### Trust CA Certificate
 
-To stop a simulated multi-node instance:
+The CA certificate is generated by the init node and distributed to all joining nodes during formation. On **each server**, trust the CA:
 
 ```bash
-./scripts/stop-multi-node.sh
+sudo cp ~/hive/config/ca.pem /usr/local/share/ca-certificates/hive-ca.crt
+sudo update-ca-certificates
 ```
 
-Note if multiple EC2 instances are running, it may take a few minutes to gracefully terminate the instance, unmount the attached EBS volume (via NBD) and push the write-ahead-log (WAL) to the S3 server (predastore).
+### Using the Cluster
+
+Connect to any node's AWS Gateway:
+
+```bash
+AWS_ENDPOINT_URL=https://192.168.1.10:9999 AWS_PROFILE=hive aws ec2 describe-instances
+```
+
+### Dual NIC Configuration
+
+If servers have separate management and cluster network interfaces, use `--cluster-bind` to specify the cluster network IP:
+
+```bash
+# Server 1: management=192.168.1.10, cluster=10.0.0.10
+./bin/hive admin init \
+  --node node1 \
+  --nodes 3 \
+  --bind 192.168.1.10 \
+  --cluster-bind 10.0.0.10 \
+  --port 4432 \
+  --hive-dir ~/hive/ \
+  --config-dir ~/hive/config/ \
+  --region us-east-1 \
+  --az us-east-1a
+```
+
+The `--bind` IP is used for the formation server, daemon, and AWS gateway. The `--cluster-bind` IP is used for NATS cluster routing and Predastore Raft consensus. If `--cluster-bind` is not specified, it defaults to the `--bind` IP.
+
+### Shutdown
+
+Stop services on each server:
+
+```bash
+./scripts/stop-dev.sh
+```
+
+Note: if EC2 instances are running, the stop process will gracefully terminate them, unmount attached EBS volumes (via NBD), and flush the write-ahead-log (WAL) to the S3 server (Predastore). This may take a few minutes depending on instance volume sizes.

@@ -38,6 +38,7 @@ type ConfigSettings struct {
 	// Cluster settings
 	ClusterBindIP string
 	ClusterRoutes []string
+	ClusterName   string
 
 	// Predastore multi-node
 	PredastoreNodeID int
@@ -516,8 +517,9 @@ func GenerateSelfSignedCert(certPath, keyPath string) error {
 	return nil
 }
 
-// setupAWSCredentials updates ~/.aws/credentials and ~/.aws/config
-func SetupAWSCredentials(accessKey, secretKey, region, certPath string) error {
+// SetupAWSCredentials updates ~/.aws/credentials and ~/.aws/config.
+// bindIP is the IP the AWS gateway listens on. If empty or "0.0.0.0", defaults to "localhost".
+func SetupAWSCredentials(accessKey, secretKey, region, certPath, bindIP string) error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return err
@@ -559,9 +561,14 @@ func SetupAWSCredentials(accessKey, secretKey, region, certPath string) error {
 		configSection = "profile " + profileName
 	}
 
+	endpointHost := bindIP
+	if endpointHost == "" || endpointHost == "0.0.0.0" {
+		endpointHost = "localhost"
+	}
+
 	if err := UpdateAWSINIFile(configPath, configSection, map[string]string{
 		"region":       region,
-		"endpoint_url": "https://localhost:9999",
+		"endpoint_url": fmt.Sprintf("https://%s:9999", endpointHost),
 		"ca_bundle":    certPath,
 		"output":       "json",
 	}); err != nil {

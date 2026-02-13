@@ -209,7 +209,7 @@ func TestSetupAWSCredentials_CreatesFiles(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 
-	err := SetupAWSCredentials("AKIATEST123", "secret123", "us-east-1", "/path/to/ca.pem")
+	err := SetupAWSCredentials("AKIATEST123", "secret123", "us-east-1", "/path/to/ca.pem", "")
 	require.NoError(t, err)
 
 	credData, _ := os.ReadFile(filepath.Join(dir, ".aws", "credentials"))
@@ -232,13 +232,36 @@ func TestSetupAWSCredentials_PreservesExistingProfiles(t *testing.T) {
 		"aws_access_key_id": "EXISTING_KEY",
 	}))
 
-	err := SetupAWSCredentials("NEWAKEY", "NEWSECRET", "us-west-2", "/ca.pem")
+	err := SetupAWSCredentials("NEWAKEY", "NEWSECRET", "us-west-2", "/ca.pem", "")
 	require.NoError(t, err)
 
 	data, _ := os.ReadFile(filepath.Join(awsDir, "credentials"))
 	content := string(data)
 	assert.Contains(t, content, "EXISTING_KEY")
 	assert.Contains(t, content, "NEWAKEY")
+}
+
+func TestSetupAWSCredentials_UsesBindIP(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	err := SetupAWSCredentials("AKIATEST123", "secret123", "us-east-1", "/ca.pem", "10.11.12.1")
+	require.NoError(t, err)
+
+	configData, _ := os.ReadFile(filepath.Join(dir, ".aws", "config"))
+	assert.Contains(t, string(configData), "https://10.11.12.1:9999")
+	assert.NotContains(t, string(configData), "localhost")
+}
+
+func TestSetupAWSCredentials_FallsBackToLocalhostForWildcard(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	err := SetupAWSCredentials("AKIATEST123", "secret123", "us-east-1", "/ca.pem", "0.0.0.0")
+	require.NoError(t, err)
+
+	configData, _ := os.ReadFile(filepath.Join(dir, ".aws", "config"))
+	assert.Contains(t, string(configData), "https://localhost:9999")
 }
 
 // --- Certificate generation ---

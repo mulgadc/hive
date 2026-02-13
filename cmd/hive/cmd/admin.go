@@ -17,7 +17,7 @@ package cmd
 
 import (
 	"bytes"
-	"crypto/tls"
+	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -33,14 +33,13 @@ import (
 
 	"github.com/mulgadc/hive/hive/admin"
 	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/formation"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/mulgadc/viperblock/viperblock/backends/s3"
 	"github.com/mulgadc/viperblock/viperblock/v_utils"
-	"github.com/pelletier/go-toml/v2"
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
-	"golang.org/x/net/http2"
 )
 
 //go:embed templates/hive.toml
@@ -161,6 +160,8 @@ func init() {
 	adminInitCmd.Flags().String("cluster-bind", "", "IP address to bind NATS cluster services to (e.g., 10.11.12.1 for multi-node)")
 	adminInitCmd.Flags().String("cluster-routes", "", "NATS cluster hosts for routing specify multiple with comma (e.g., 10.11.12.1:4248,10.11.12.2:4248 for multi-node)")
 	adminInitCmd.Flags().String("predastore-nodes", "", "Comma-separated IPs for multi-node Predastore cluster (e.g., 10.11.12.1,10.11.12.2,10.11.12.3). Requires >= 3 nodes.")
+	adminInitCmd.Flags().String("formation-timeout", "10m", "Timeout for cluster formation (e.g., 5m, 30s)")
+	adminInitCmd.Flags().String("cluster-name", "hive", "NATS cluster name")
 
 	// Flags for admin join
 	adminJoinCmd.Flags().String("region", "ap-southeast-2", "Region for this node")
@@ -473,12 +474,15 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	region, _ := cmd.Flags().GetString("region")
 	az, _ := cmd.Flags().GetString("az")
 	node, _ := cmd.Flags().GetString("node")
+	nodes, _ := cmd.Flags().GetInt("nodes")
 	port, _ := cmd.Flags().GetInt("port")
 	bindIP, _ := cmd.Flags().GetString("bind")
 	clusterBind, _ := cmd.Flags().GetString("cluster-bind")
 	clusterRoutesStr, _ := cmd.Flags().GetString("cluster-routes")
 	clusterRoutes := strings.Split(clusterRoutesStr, ",")
 	predastoreNodesStr, _ := cmd.Flags().GetString("predastore-nodes")
+	formationTimeoutStr, _ := cmd.Flags().GetString("formation-timeout")
+	clusterName, _ := cmd.Flags().GetString("cluster-name")
 
 	// Validate IP address format
 	if net.ParseIP(bindIP) == nil {
@@ -490,6 +494,11 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	if port < 1 || port > 65535 {
 		fmt.Fprintf(os.Stderr, "❌ Error: Port must be between 1 and 65535, got: %d\n", port)
 		os.Exit(1)
+	}
+
+	// Default cluster-bind to bind IP if not specified
+	if clusterBind == "" {
+		clusterBind = bindIP
 	}
 
 	fmt.Printf("Initializing Hive with bind IP: %s, port: %d\n", bindIP, port)
@@ -545,8 +554,19 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		// Get home directory for data path
 		homeDir, _ := os.UserHomeDir()
 		hiveRoot = filepath.Join(homeDir, "hive")
-
 	}
+
+	// Determine if this is a multi-node formation
+	isMultiNode := nodes >= 2 && bindIP != "0.0.0.0"
+
+	if isMultiNode {
+		runAdminInitMultiNode(cmd, accessKey, secretKey, accountID, natsToken, clusterName,
+			configDir, hiveRoot, certPath, region, az, node, bindIP, clusterBind,
+			port, nodes, formationTimeoutStr)
+		return
+	}
+
+	// --- Single-node path (existing behavior) ---
 
 	// Create config files from embedded templates
 	fmt.Println("\n📝 Creating configuration files...")
@@ -566,7 +586,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 	portStr := fmt.Sprintf("%d", port)
 
-	// Parse multi-node predastore configuration
+	// Parse multi-node predastore configuration (legacy flag-based approach for single-node)
 	var predastoreNodeID int
 	if predastoreNodesStr != "" {
 		ips := strings.Split(predastoreNodesStr, ",")
@@ -623,6 +643,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		BindIP:        bindIP,
 		ClusterBindIP: clusterBind,
 		ClusterRoutes: clusterRoutes,
+		ClusterName:   clusterName,
 
 		PredastoreNodeID: predastoreNodeID,
 	}
@@ -648,7 +669,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 	// Update ~/.aws/credentials and ~/.aws/config
 	fmt.Println("\n🔧 Configuring AWS credentials...")
-	if err := admin.SetupAWSCredentials(accessKey, secretKey, region, certPath); err != nil {
+	if err := admin.SetupAWSCredentials(accessKey, secretKey, region, certPath, bindIP); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Could not update AWS credentials: %v\n", err)
 	} else {
 		fmt.Println("✅ AWS credentials configured")
@@ -672,6 +693,187 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	fmt.Println()
 }
 
+// runAdminInitMultiNode handles the multi-node formation path for admin init.
+// It starts a formation server, registers this node, waits for all nodes to join,
+// then generates configs with complete cluster topology.
+func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, natsToken, clusterName,
+	configDir, hiveRoot, certPath, region, az, node, bindIP, clusterBind string,
+	port, expectedNodes int, formationTimeoutStr string) {
+
+	formationTimeout, err := time.ParseDuration(formationTimeoutStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error: Invalid --formation-timeout: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Read CA cert/key for distribution to joining nodes
+	caCertData, err := os.ReadFile(filepath.Join(configDir, "ca.pem"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error reading CA cert: %v\n", err)
+		os.Exit(1)
+	}
+	caKeyData, err := os.ReadFile(filepath.Join(configDir, "ca.key"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error reading CA key: %v\n", err)
+		os.Exit(1)
+	}
+
+	creds := &formation.SharedCredentials{
+		AccessKey:   accessKey,
+		SecretKey:   secretKey,
+		AccountID:   accountID,
+		NatsToken:   natsToken,
+		ClusterName: clusterName,
+		Region:      region,
+	}
+
+	fs := formation.NewFormationServer(expectedNodes, creds, string(caCertData), string(caKeyData))
+
+	// Register self (init node) as the first node
+	selfNode := formation.NodeInfo{
+		Name:      node,
+		BindIP:    bindIP,
+		ClusterIP: clusterBind,
+		Region:    region,
+		AZ:        az,
+		Port:      port,
+	}
+	if err := fs.RegisterNode(selfNode); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error registering self: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Start formation server
+	formationAddr := fmt.Sprintf("%s:%d", bindIP, port)
+	if err := fs.Start(formationAddr); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error starting formation server: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("\n📡 Formation server started on %s\n", formationAddr)
+	fmt.Printf("   Waiting for %d more node(s) to join...\n", expectedNodes-1)
+	fmt.Printf("   Other nodes should run: hive admin join --host %s --node <name> --bind <ip>\n\n", formationAddr)
+
+	// Wait for all nodes to register
+	if err := fs.WaitForCompletion(formationTimeout); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
+		fs.Shutdown(context.Background())
+		os.Exit(1)
+	}
+
+	fmt.Printf("✅ All %d nodes joined!\n", expectedNodes)
+
+	// Build cluster topology from formation data
+	allNodes := fs.Nodes()
+	clusterRoutes := formation.BuildClusterRoutes(allNodes)
+	predastoreNodes := formation.BuildPredastoreNodes(allNodes)
+
+	fmt.Println("\n📝 Creating configuration files...")
+
+	// Create subdirectories
+	awsgwDir := filepath.Join(configDir, "awsgw")
+	predastoreDir := filepath.Join(configDir, "predastore")
+	natsDir := filepath.Join(configDir, "nats")
+	hiveDir := filepath.Join(configDir, "hive")
+
+	for _, dir := range []string{awsgwDir, predastoreDir, natsDir, hiveDir} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating directory %s: %v\n", dir, err)
+			os.Exit(1)
+		}
+	}
+
+	portStr := fmt.Sprintf("%d", port)
+
+	// Generate multi-node predastore config
+	var predastoreNodeID int
+	if len(predastoreNodes) >= 3 {
+		predastoreContent, err := admin.GenerateMultiNodePredastoreConfig(predastoreMultiNodeTemplate, predastoreNodes, accessKey, secretKey, region)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error generating multi-node predastore config: %v\n", err)
+			os.Exit(1)
+		}
+
+		predastorePath := filepath.Join(predastoreDir, "predastore.toml")
+		if err := os.WriteFile(predastorePath, []byte(predastoreContent), 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing predastore config: %v\n", err)
+			os.Exit(1)
+		}
+
+		predastoreNodeID = admin.FindNodeIDByIP(predastoreNodes, bindIP)
+		fmt.Printf("✅ Created: multi-node predastore.toml (node ID: %d)\n", predastoreNodeID)
+	}
+
+	hiveTomlPath := filepath.Join(configDir, "hive.toml")
+
+	configSettings := admin.ConfigSettings{
+		AccessKey: accessKey,
+		SecretKey: secretKey,
+		AccountID: accountID,
+		Region:    region,
+		NatsToken: natsToken,
+		DataDir:   hiveRoot,
+
+		Node:          node,
+		Az:            az,
+		Port:          portStr,
+		BindIP:        bindIP,
+		ClusterBindIP: clusterBind,
+		ClusterRoutes: clusterRoutes,
+		ClusterName:   clusterName,
+
+		PredastoreNodeID: predastoreNodeID,
+	}
+
+	// Generate config files
+	configs := []admin.ConfigFile{
+		{Name: "hive.toml", Path: hiveTomlPath, Template: hiveTomlTemplate},
+		{Name: filepath.Join(awsgwDir, "awsgw.toml"), Path: filepath.Join(awsgwDir, "awsgw.toml"), Template: awsgwTomlTemplate},
+		{Name: filepath.Join(natsDir, "nats.conf"), Path: filepath.Join(natsDir, "nats.conf"), Template: natsConfTemplate},
+	}
+	// Skip template-based predastore.toml if multi-node was generated
+	if len(predastoreNodes) < 3 {
+		configs = append(configs, admin.ConfigFile{
+			Name: filepath.Join(predastoreDir, "predastore.toml"), Path: filepath.Join(predastoreDir, "predastore.toml"), Template: predastoreTomlTemplate,
+		})
+	}
+
+	if err := admin.GenerateConfigFiles(configs, configSettings); err != nil {
+		fmt.Fprintf(os.Stderr, "Error generating configuration files: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Update ~/.aws/credentials and ~/.aws/config
+	fmt.Println("\n🔧 Configuring AWS credentials...")
+	if err := admin.SetupAWSCredentials(accessKey, secretKey, region, certPath, bindIP); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Could not update AWS credentials: %v\n", err)
+	} else {
+		fmt.Println("✅ AWS credentials configured")
+	}
+
+	admin.CreateServiceDirectories(hiveRoot)
+
+	// Keep formation server running briefly so joining nodes can fetch complete status
+	fmt.Println("\n⏳ Waiting for joining nodes to fetch cluster data...")
+	time.Sleep(15 * time.Second)
+
+	// Shutdown formation server
+	fs.Shutdown(context.Background())
+
+	// Print cluster summary
+	fmt.Println("\n🎉 Cluster formation complete!")
+	fmt.Printf("   Cluster: %s (%d nodes)\n", clusterName, expectedNodes)
+	fmt.Printf("   Region: %s\n", region)
+	fmt.Println("   Nodes:")
+	for name, n := range allNodes {
+		fmt.Printf("     - %s (%s)\n", name, n.BindIP)
+	}
+	fmt.Println("\n📋 Next steps:")
+	fmt.Println("   1. Start services on ALL nodes:")
+	fmt.Println("      ./scripts/start-dev.sh")
+	fmt.Println()
+}
+
 func runAdminJoin(cmd *cobra.Command, args []string) {
 	node, _ := cmd.Flags().GetString("node")
 	leaderHost, _ := cmd.Flags().GetString("host")
@@ -682,12 +884,6 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	bindIP, _ := cmd.Flags().GetString("bind")
 	configDir, _ := cmd.Flags().GetString("config-dir")
 	clusterBind, _ := cmd.Flags().GetString("cluster-bind")
-	// Receive as string, split later
-	// TODO: Use GetStringArray
-	clusterRoutesStr, _ := cmd.Flags().GetString("cluster-routes")
-
-	// Supply as array to template
-	clusterRoutes := strings.Split(clusterRoutesStr, ",")
 
 	// Validate required parameters
 	if node == "" {
@@ -711,6 +907,11 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Default cluster-bind to bind IP if not specified
+	if clusterBind == "" {
+		clusterBind = bindIP
+	}
+
 	// Set default data directory
 	if dataDir == "" {
 		homeDir, err := os.UserHomeDir()
@@ -721,9 +922,6 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		dataDir = filepath.Join(homeDir, "hive")
 	}
 
-	// Set daemon host for this node
-	daemonHost := fmt.Sprintf("%s:%d", bindIP, port)
-
 	fmt.Println("🚀 Joining Hive cluster...")
 	fmt.Printf("Node: %s\n", node)
 	fmt.Printf("Leader: %s\n", leaderHost)
@@ -732,13 +930,16 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	fmt.Printf("Bind IP: %s\n", bindIP)
 	fmt.Printf("Port: %d\n\n", port)
 
-	// Create join request
-	joinReq := config.NodeJoinRequest{
-		Node:       node,
-		Region:     region,
-		AZ:         az,
-		DataDir:    dataDir,
-		DaemonHost: daemonHost,
+	// POST join request to formation server
+	joinReq := formation.JoinRequest{
+		NodeInfo: formation.NodeInfo{
+			Name:      node,
+			BindIP:    bindIP,
+			ClusterIP: clusterBind,
+			Region:    region,
+			AZ:        az,
+			Port:      port,
+		},
 	}
 
 	reqBody, err := json.Marshal(joinReq)
@@ -747,46 +948,24 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Send join request to leader with HTTP/2 support
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true, // Skip TLS verification for self-signed certs
-			NextProtos:         []string{"h2", "http/1.1"},
-		},
-		ForceAttemptHTTP2: true,
-	}
+	client := &http.Client{Timeout: 30 * time.Second}
 
-	// Configure HTTP/2 support with custom TLS config
-	http2.ConfigureTransport(tr)
-
-	client := &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: tr,
-	}
-
-	joinURL := fmt.Sprintf("http://%s/join", leaderHost)
+	joinURL := fmt.Sprintf("http://%s/formation/join", leaderHost)
 	resp, err := client.Post(joinURL, "application/json", bytes.NewBuffer(reqBody))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Error connecting to leader node: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Make sure the leader node is running and accessible at %s\n", leaderHost)
+		fmt.Fprintf(os.Stderr, "❌ Error connecting to formation server: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Make sure the leader node has run 'hive admin init' and is accessible at %s\n", leaderHost)
 		os.Exit(1)
 	}
-	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error reading response body: %v\n", err)
 		os.Exit(1)
 	}
 
-	if resp.StatusCode != 200 {
-		var errResp config.NodeJoinResponse
-		json.Unmarshal(body, &errResp)
-		fmt.Fprintf(os.Stderr, "❌ Failed to join cluster: %s\n", errResp.Message)
-		os.Exit(1)
-	}
-
-	var joinResp config.NodeJoinResponse
+	var joinResp formation.JoinResponse
 	if err := json.Unmarshal(body, &joinResp); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing join response: %v\n", err)
 		os.Exit(1)
@@ -797,12 +976,49 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Println("✅ Successfully joined cluster!")
-	fmt.Printf("Epoch: %d\n", joinResp.SharedData.Epoch)
-	fmt.Printf("Config hash: %s\n\n", joinResp.ConfigHash)
+	fmt.Printf("✅ Registered with formation server (%d/%d nodes joined)\n", joinResp.Joined, joinResp.Expected)
 
-	// Save cluster config locally
-	// Confirm if default config directory required
+	// Poll status until formation is complete
+	statusURL := fmt.Sprintf("http://%s/formation/status", leaderHost)
+	var statusResp formation.StatusResponse
+
+	for {
+		sResp, err := client.Get(statusURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Error polling formation status: %v\n", err)
+			os.Exit(1)
+		}
+
+		sBody, err := io.ReadAll(sResp.Body)
+		sResp.Body.Close()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Error reading status response: %v\n", err)
+			os.Exit(1)
+		}
+
+		if err := json.Unmarshal(sBody, &statusResp); err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing status response: %v\n", err)
+			os.Exit(1)
+		}
+
+		if statusResp.Complete {
+			break
+		}
+
+		fmt.Printf("   Waiting for cluster formation... (%d/%d nodes joined)\n", statusResp.Joined, statusResp.Expected)
+		time.Sleep(2 * time.Second)
+	}
+
+	fmt.Printf("✅ Cluster formation complete! (%d nodes)\n\n", statusResp.Expected)
+
+	// Extract credentials and CA from formation status
+	creds := statusResp.Credentials
+	if creds == nil {
+		fmt.Fprintf(os.Stderr, "❌ Error: formation server did not return credentials\n")
+		os.Exit(1)
+	}
+
+	// Set up config directory
 	if configDir == "" {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
@@ -812,109 +1028,91 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		configDir = filepath.Join(homeDir, "hive", "config")
 	}
 
-	hiveTomlPath := filepath.Join(configDir, "hive.toml")
-
-	// Create config directory if needed
 	if err := os.MkdirAll(configDir, 0700); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating config directory: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Construct local node config with THIS node's name at top level
-	localConfig := config.ClusterConfig{
-		Epoch:   joinResp.SharedData.Epoch,
-		Node:    node, // THIS node's name, not the leader's
-		Version: joinResp.SharedData.Version,
-		Nodes:   joinResp.SharedData.Nodes,
-	}
+	// Write CA cert and key
+	caCertPath := filepath.Join(configDir, "ca.pem")
+	caKeyPath := filepath.Join(configDir, "ca.key")
 
-	// Marshal config to TOML format
-	configTOML, err := toml.Marshal(&localConfig)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error marshaling config to TOML: %v\n", err)
+	if statusResp.CACert == "" || statusResp.CAKey == "" {
+		fmt.Fprintf(os.Stderr, "❌ Error: formation server did not return CA certificate\n")
 		os.Exit(1)
 	}
 
-	// Write config to file
-	if err := os.WriteFile(hiveTomlPath, configTOML, 0600); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing config file: %v\n", err)
+	if err := os.WriteFile(caCertPath, []byte(statusResp.CACert), 0600); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing CA cert: %v\n", err)
 		os.Exit(1)
 	}
-
-	fmt.Printf("✅ Config saved to: %s\n\n", hiveTomlPath)
-
-	// Handle CA and server certificate generation
-	// If leader provided CA files, use those; otherwise fall back to generating our own
-	if joinResp.CACert != "" && joinResp.CAKey != "" {
-		// Write CA files received from leader
-		caCertPath := filepath.Join(configDir, "ca.pem")
-		caKeyPath := filepath.Join(configDir, "ca.key")
-
-		if err := os.WriteFile(caCertPath, []byte(joinResp.CACert), 0600); err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing CA cert: %v\n", err)
-			os.Exit(1)
-		}
-		if err := os.WriteFile(caKeyPath, []byte(joinResp.CAKey), 0600); err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing CA key: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("✅ CA certificate received from leader: %s\n", caCertPath)
-
-		// Generate server cert signed by CA with this node's bind IP
-		if err := admin.GenerateServerCertOnly(configDir, bindIP); err != nil {
-			fmt.Fprintf(os.Stderr, "Error generating server certificate: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("✅ Server certificate generated with bind IP: %s\n\n", bindIP)
-	} else {
-		// Fallback: generate own CA if leader didn't provide one (backwards compatibility)
-		certPath := admin.GenerateCertificatesIfNeeded(configDir, false, bindIP)
-		fmt.Printf("✅ SSL certificates available at: %s\n\n", certPath)
+	if err := os.WriteFile(caKeyPath, []byte(statusResp.CAKey), 0600); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing CA key: %v\n", err)
+		os.Exit(1)
 	}
+	fmt.Printf("✅ CA certificate received from leader: %s\n", caCertPath)
 
-	// Write individual node config files
-	portStr := fmt.Sprintf("%d", port)
+	// Generate server cert signed by CA with this node's bind IP
+	if err := admin.GenerateServerCertOnly(configDir, bindIP); err != nil {
+		fmt.Fprintf(os.Stderr, "Error generating server certificate: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("✅ Server certificate generated with bind IP: %s\n\n", bindIP)
 
+	// Build cluster topology from formation data
+	clusterRoutes := formation.BuildClusterRoutes(statusResp.Nodes)
+	predastoreNodes := formation.BuildPredastoreNodes(statusResp.Nodes)
+
+	fmt.Println("📝 Creating configuration files...")
+
+	// Create subdirectories
 	awsgwDir := filepath.Join(configDir, "awsgw")
 	predastoreDir := filepath.Join(configDir, "predastore")
 	natsDir := filepath.Join(configDir, "nats")
+	hiveDir := filepath.Join(configDir, "hive")
 
-	for _, dir := range []string{awsgwDir, predastoreDir, natsDir} {
+	for _, dir := range []string{awsgwDir, predastoreDir, natsDir, hiveDir} {
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating directory %s: %v\n", dir, err)
 			os.Exit(1)
 		}
 	}
 
-	// Handle multi-node predastore config from leader
+	portStr := fmt.Sprintf("%d", port)
+
+	// Generate multi-node predastore config
 	var predastoreNodeID int
-	hasLeaderPredastoreConfig := joinResp.PredastoreConfig != ""
+	hasPredastoreConfig := len(predastoreNodes) >= 3
 
-	if hasLeaderPredastoreConfig {
-		// Write the leader's predastore.toml
+	if hasPredastoreConfig {
+		predastoreContent, err := admin.GenerateMultiNodePredastoreConfig(predastoreMultiNodeTemplate, predastoreNodes, creds.AccessKey, creds.SecretKey, creds.Region)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error generating multi-node predastore config: %v\n", err)
+			os.Exit(1)
+		}
+
 		predastorePath := filepath.Join(predastoreDir, "predastore.toml")
-		if err := os.WriteFile(predastorePath, []byte(joinResp.PredastoreConfig), 0600); err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing predastore config from leader: %v\n", err)
+		if err := os.WriteFile(predastorePath, []byte(predastoreContent), 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing predastore config: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("✅ Predastore config received from leader: %s\n", predastorePath)
 
-		predastoreNodeID = admin.ParsePredastoreNodeIDFromConfig(joinResp.PredastoreConfig, bindIP)
-
-		if predastoreNodeID > 0 {
-			fmt.Printf("✅ Detected Predastore node ID: %d (for bind IP %s)\n", predastoreNodeID, bindIP)
-		} else {
-			fmt.Fprintf(os.Stderr, "ERROR: Could not detect Predastore node ID for bind IP %s in leader config\n", bindIP)
-			fmt.Fprintf(os.Stderr, "This node's IP must be listed in the --predastore-nodes used during init\n")
+		predastoreNodeID = admin.FindNodeIDByIP(predastoreNodes, bindIP)
+		if predastoreNodeID == 0 {
+			fmt.Fprintf(os.Stderr, "❌ Error: bind IP %s not found in predastore node list\n", bindIP)
 			os.Exit(1)
 		}
+		fmt.Printf("✅ Created: multi-node predastore.toml (node ID: %d)\n", predastoreNodeID)
 	}
 
+	hiveTomlPath := filepath.Join(configDir, "hive.toml")
+
 	configSettings := admin.ConfigSettings{
-		AccessKey: localConfig.Nodes[node].AccessKey,
-		SecretKey: localConfig.Nodes[node].SecretKey,
-		Region:    region,
-		NatsToken: localConfig.Nodes[node].NATS.ACL.Token,
+		AccessKey: creds.AccessKey,
+		SecretKey: creds.SecretKey,
+		AccountID: creds.AccountID,
+		Region:    creds.Region,
+		NatsToken: creds.NatsToken,
 		DataDir:   dataDir,
 
 		Node:          node,
@@ -923,6 +1121,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		BindIP:        bindIP,
 		ClusterBindIP: clusterBind,
 		ClusterRoutes: clusterRoutes,
+		ClusterName:   creds.ClusterName,
 
 		PredastoreNodeID: predastoreNodeID,
 	}
@@ -933,8 +1132,8 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		{Name: filepath.Join(awsgwDir, "awsgw.toml"), Path: filepath.Join(awsgwDir, "awsgw.toml"), Template: awsgwTomlTemplate},
 		{Name: filepath.Join(natsDir, "nats.conf"), Path: filepath.Join(natsDir, "nats.conf"), Template: natsConfTemplate},
 	}
-	// Skip template-based predastore.toml if received from leader
-	if !hasLeaderPredastoreConfig {
+	// Skip template-based predastore.toml if multi-node was generated
+	if !hasPredastoreConfig {
 		configs = append(configs, admin.ConfigFile{
 			Name: filepath.Join(predastoreDir, "predastore.toml"), Path: filepath.Join(predastoreDir, "predastore.toml"), Template: predastoreTomlTemplate,
 		})
@@ -946,11 +1145,25 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Update ~/.aws/credentials and ~/.aws/config
+	fmt.Println("\n🔧 Configuring AWS credentials...")
+	if err := admin.SetupAWSCredentials(creds.AccessKey, creds.SecretKey, creds.Region, caCertPath, bindIP); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Could not update AWS credentials: %v\n", err)
+	} else {
+		fmt.Println("✅ AWS credentials configured")
+	}
+
 	admin.CreateServiceDirectories(dataDir)
 
-	fmt.Println("🎉 Node successfully joined cluster!")
+	// Print cluster summary
+	fmt.Println("\n🎉 Node successfully joined cluster!")
+	fmt.Printf("   Cluster: %s (%d nodes)\n", creds.ClusterName, len(statusResp.Nodes))
+	fmt.Println("   Nodes:")
+	for name, n := range statusResp.Nodes {
+		fmt.Printf("     - %s (%s)\n", name, n.BindIP)
+	}
 	fmt.Println("\n📋 Next steps:")
-	fmt.Println("   1. Start the hive service:")
-	fmt.Printf("      hive service hive start --config %s\n", hiveTomlPath)
+	fmt.Println("   1. Start services:")
+	fmt.Println("      ./scripts/start-dev.sh")
 	fmt.Println()
 }

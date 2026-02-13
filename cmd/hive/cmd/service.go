@@ -275,6 +275,7 @@ var viperblockStartCmd = &cobra.Command{
 			AccessKey:  nodeConfig.Predastore.AccessKey,
 			SecretKey:  nodeConfig.Predastore.SecretKey,
 			BaseDir:    nodeConfig.Predastore.BaseDir,
+			NodeName:   clusterConfig.Node,
 		})
 
 		if err != nil {
