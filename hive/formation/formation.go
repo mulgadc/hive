@@ -160,8 +160,12 @@ func (fs *FormationServer) Start(bindAddr string) error {
 	mux.HandleFunc("GET /formation/health", fs.handleHealth)
 
 	fs.server = &http.Server{
-		Addr:    bindAddr,
-		Handler: mux,
+		Addr:              bindAddr,
+		Handler:           mux,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 
 	ln, err := net.Listen("tcp", bindAddr)
@@ -243,11 +247,15 @@ func (fs *FormationServer) handleStatus(w http.ResponseWriter, r *http.Request) 
 
 func (fs *FormationServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ok"))
+	if _, err := w.Write([]byte("ok")); err != nil {
+		slog.Error("Failed to write health response", "error", err)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		slog.Error("Failed to encode JSON response", "error", err)
+	}
 }
