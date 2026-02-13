@@ -181,3 +181,76 @@ func TestTerminateInstances_VerifiesQMPAttributes(t *testing.T) {
 	assert.True(t, receivedCmd.Attributes.TerminateInstance, "TerminateInstance should be true")
 	assert.False(t, receivedCmd.Attributes.StartInstance, "StartInstance should be false")
 }
+
+func TestTerminateInstances_StoppedInstanceFallback(t *testing.T) {
+	_, nc := startTestNATSServer(t)
+
+	instanceID := "i-stopped-term"
+
+	// No ec2.cmd.<id> subscriber — simulate stopped instance with no daemon owning it.
+	// Subscribe to ec2.terminate to handle the fallback.
+	nc.QueueSubscribe("ec2.terminate", "hive-workers", func(msg *nats.Msg) {
+		var req terminateStoppedInstanceRequest
+		json.Unmarshal(msg.Data, &req)
+		assert.Equal(t, instanceID, req.InstanceID)
+		msg.Respond([]byte(`{"status":"terminated","instanceId":"` + instanceID + `"}`))
+	})
+
+	input := &ec2.TerminateInstancesInput{
+		InstanceIds: []*string{aws.String(instanceID)},
+	}
+
+	output, err := TerminateInstances(input, nc)
+
+	require.NoError(t, err)
+	require.Len(t, output.TerminatingInstances, 1)
+
+	sc := output.TerminatingInstances[0]
+	assert.Equal(t, instanceID, *sc.InstanceId)
+	assert.Equal(t, int64(32), *sc.CurrentState.Code)
+	assert.Equal(t, "shutting-down", *sc.CurrentState.Name)
+	assert.Equal(t, int64(80), *sc.PreviousState.Code)
+	assert.Equal(t, "stopped", *sc.PreviousState.Name)
+}
+
+func TestTerminateInstances_MixedRunningAndStopped(t *testing.T) {
+	_, nc := startTestNATSServer(t)
+
+	runningID := "i-running-mix"
+	stoppedID := "i-stopped-mix"
+
+	// Running instance responds on ec2.cmd.<id>
+	nc.Subscribe("ec2.cmd."+runningID, func(msg *nats.Msg) {
+		msg.Respond([]byte(`{"return":{}}`))
+	})
+
+	// Stopped instance: no ec2.cmd subscriber, but ec2.terminate responds
+	nc.QueueSubscribe("ec2.terminate", "hive-workers", func(msg *nats.Msg) {
+		var req terminateStoppedInstanceRequest
+		json.Unmarshal(msg.Data, &req)
+		msg.Respond([]byte(`{"status":"terminated","instanceId":"` + req.InstanceID + `"}`))
+	})
+
+	input := &ec2.TerminateInstancesInput{
+		InstanceIds: []*string{aws.String(runningID), aws.String(stoppedID)},
+	}
+
+	output, err := TerminateInstances(input, nc)
+
+	require.NoError(t, err)
+	require.Len(t, output.TerminatingInstances, 2)
+
+	// Running instance: previous=running, current=shutting-down
+	assert.Equal(t, runningID, *output.TerminatingInstances[0].InstanceId)
+	assert.Equal(t, int64(32), *output.TerminatingInstances[0].CurrentState.Code)
+	assert.Equal(t, "shutting-down", *output.TerminatingInstances[0].CurrentState.Name)
+	assert.Equal(t, int64(16), *output.TerminatingInstances[0].PreviousState.Code)
+	assert.Equal(t, "running", *output.TerminatingInstances[0].PreviousState.Name)
+
+	// Stopped instance: previous=stopped, current=shutting-down
+	assert.Equal(t, stoppedID, *output.TerminatingInstances[1].InstanceId)
+	assert.Equal(t, int64(32), *output.TerminatingInstances[1].CurrentState.Code)
+	assert.Equal(t, "shutting-down", *output.TerminatingInstances[1].CurrentState.Name)
+	assert.Equal(t, int64(80), *output.TerminatingInstances[1].PreviousState.Code)
+	assert.Equal(t, "stopped", *output.TerminatingInstances[1].PreviousState.Name)
+}

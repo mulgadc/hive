@@ -7,11 +7,17 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/qmp"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats.go"
 )
 
-// StartInstances sends start commands to specified instances via NATS
+// startStoppedInstanceRequest is the payload sent to the ec2.start topic
+type startStoppedInstanceRequest struct {
+	InstanceID string `json:"instance_id"`
+}
+
+// StartInstances sends start requests to the ec2.start queue group topic.
+// Any available daemon can pick up the request and launch the stopped instance.
 func StartInstances(input *ec2.StartInstancesInput, natsConn *nats.Conn) (*ec2.StartInstancesOutput, error) {
 	if len(input.InstanceIds) == 0 {
 		return nil, fmt.Errorf("no instance IDs provided")
@@ -21,48 +27,36 @@ func StartInstances(input *ec2.StartInstancesInput, natsConn *nats.Conn) (*ec2.S
 
 	var stateChanges []*ec2.InstanceStateChange
 
-	// Process each instance
 	for _, instanceIDPtr := range input.InstanceIds {
 		if instanceIDPtr == nil {
 			continue
 		}
 		instanceID := *instanceIDPtr
 
-		// Build the QMP command to resume the instance
-		command := qmp.Command{
-			ID: instanceID,
-			QMPCommand: qmp.QMPCommand{
-				Execute:   "cont",
-				Arguments: map[string]any{},
-			},
-			Attributes: qmp.Attributes{
-				StopInstance:      false,
-				TerminateInstance: false,
-				StartInstance:     true,
-			},
-		}
-
-		// Marshal the command
-		jsonData, err := json.Marshal(command)
+		req := startStoppedInstanceRequest{InstanceID: instanceID}
+		jsonData, err := json.Marshal(req)
 		if err != nil {
-			slog.Error("StartInstances: Failed to marshal command", "instance_id", instanceID, "err", err)
+			slog.Error("StartInstances: Failed to marshal request", "instance_id", instanceID, "err", err)
 			continue
 		}
 
-		// Send NATS request to the specific instance topic
-		subject := fmt.Sprintf("ec2.cmd.%s", instanceID)
-		slog.Info("StartInstances: Sending NATS request", "subject", subject, "instance_id", instanceID)
+		slog.Info("StartInstances: Sending NATS request", "subject", "ec2.start", "instance_id", instanceID)
 
-		// TODO: Improve, stop/termination may take significant time
-		msg, err := natsConn.Request(subject, jsonData, 30*time.Second)
+		msg, err := natsConn.Request("ec2.start", jsonData, 30*time.Second)
 		if err != nil {
-			slog.Error("StartInstances: Failed to send command", "instance_id", instanceID, "err", err)
+			slog.Error("StartInstances: Failed to send start request", "instance_id", instanceID, "err", err)
+			stateChanges = append(stateChanges, newStateChange(instanceID, 80, "stopped", 80, "stopped"))
+			continue
+		}
+
+		// Check if the daemon returned an error response
+		if responseError, parseErr := utils.ValidateErrorPayload(msg.Data); parseErr != nil {
+			slog.Error("StartInstances: Daemon returned error", "instance_id", instanceID, "code", responseError.Code)
 			stateChanges = append(stateChanges, newStateChange(instanceID, 80, "stopped", 80, "stopped"))
 			continue
 		}
 
 		slog.Info("StartInstances: Command sent successfully", "instance_id", instanceID, "response", string(msg.Data))
-
 		stateChanges = append(stateChanges, newStateChange(instanceID, 0, "pending", 80, "stopped"))
 	}
 

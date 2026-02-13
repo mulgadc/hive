@@ -101,6 +101,25 @@ func DescribeInstances(input *ec2.DescribeInstancesInput, natsConn *nats.Conn, e
 		}
 	}
 
+	// Query stopped instances from shared KV (via queue group — only one daemon handles it)
+	stoppedMsg, err := natsConn.Request("ec2.DescribeStoppedInstances", jsonData, 3*time.Second)
+	if err != nil {
+		slog.Warn("DescribeInstances: Failed to query stopped instances (may not be available)", "err", err)
+	} else {
+		responseError, parseErr := utils.ValidateErrorPayload(stoppedMsg.Data)
+		if parseErr != nil {
+			slog.Warn("DescribeInstances: Stopped instances query returned error", "code", responseError.Code)
+		} else {
+			var stoppedOutput ec2.DescribeInstancesOutput
+			if err := json.Unmarshal(stoppedMsg.Data, &stoppedOutput); err != nil {
+				slog.Error("DescribeInstances: Failed to unmarshal stopped instances response", "err", err)
+			} else if stoppedOutput.Reservations != nil {
+				allReservations = append(allReservations, stoppedOutput.Reservations...)
+				slog.Info("DescribeInstances: Collected stopped instance reservations", "count", len(stoppedOutput.Reservations))
+			}
+		}
+	}
+
 	// Build final aggregated response
 	output := &ec2.DescribeInstancesOutput{
 		Reservations: allReservations,

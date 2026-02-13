@@ -6,7 +6,6 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,19 +16,15 @@ func TestStartInstances_Success(t *testing.T) {
 
 	instanceID := "i-0123456789abcdef0"
 
-	// Mock subscriber for the instance command topic
-	nc.Subscribe("ec2.cmd."+instanceID, func(msg *nats.Msg) {
-		var cmd qmp.Command
-		err := json.Unmarshal(msg.Data, &cmd)
+	// Mock subscriber for the ec2.start queue group topic
+	nc.QueueSubscribe("ec2.start", "hive-workers", func(msg *nats.Msg) {
+		var req startStoppedInstanceRequest
+		err := json.Unmarshal(msg.Data, &req)
 		require.NoError(t, err)
 
-		assert.Equal(t, instanceID, cmd.ID)
-		assert.Equal(t, "cont", cmd.QMPCommand.Execute)
-		assert.True(t, cmd.Attributes.StartInstance)
-		assert.False(t, cmd.Attributes.StopInstance)
-		assert.False(t, cmd.Attributes.TerminateInstance)
+		assert.Equal(t, instanceID, req.InstanceID)
 
-		msg.Respond([]byte(`{"return":{}}`))
+		msg.Respond([]byte(`{"status":"running","instanceId":"` + instanceID + `"}`))
 	})
 
 	input := &ec2.StartInstancesInput{
@@ -55,12 +50,12 @@ func TestStartInstances_MultipleInstances(t *testing.T) {
 
 	ids := []string{"i-001", "i-002", "i-003"}
 
-	for _, id := range ids {
-		id := id
-		nc.Subscribe("ec2.cmd."+id, func(msg *nats.Msg) {
-			msg.Respond([]byte(`{"return":{}}`))
-		})
-	}
+	// Single subscriber handles all start requests via queue group
+	nc.QueueSubscribe("ec2.start", "hive-workers", func(msg *nats.Msg) {
+		var req startStoppedInstanceRequest
+		json.Unmarshal(msg.Data, &req)
+		msg.Respond([]byte(`{"status":"running","instanceId":"` + req.InstanceID + `"}`))
+	})
 
 	input := &ec2.StartInstancesInput{
 		InstanceIds: []*string{aws.String(ids[0]), aws.String(ids[1]), aws.String(ids[2])},
@@ -94,8 +89,8 @@ func TestStartInstances_NilInstanceIdSkipped(t *testing.T) {
 	_, nc := startTestNATSServer(t)
 
 	instanceID := "i-valid"
-	nc.Subscribe("ec2.cmd."+instanceID, func(msg *nats.Msg) {
-		msg.Respond([]byte(`{"return":{}}`))
+	nc.QueueSubscribe("ec2.start", "hive-workers", func(msg *nats.Msg) {
+		msg.Respond([]byte(`{"status":"running","instanceId":"` + instanceID + `"}`))
 	})
 
 	input := &ec2.StartInstancesInput{
@@ -114,7 +109,7 @@ func TestStartInstances_NilInstanceIdSkipped(t *testing.T) {
 func TestStartInstances_NATSRequestFails(t *testing.T) {
 	_, nc := startTestNATSServer(t)
 
-	// No subscriber for this instance topic, so NATS request will fail
+	// No subscriber for ec2.start, so NATS request will fail
 	instanceID := "i-nosubscriber"
 
 	input := &ec2.StartInstancesInput{
@@ -140,10 +135,18 @@ func TestStartInstances_MixedSuccessAndFailure(t *testing.T) {
 	_, nc := startTestNATSServer(t)
 
 	goodID := "i-good"
-	badID := "i-bad" // no subscriber
+	badID := "i-bad"
 
-	nc.Subscribe("ec2.cmd."+goodID, func(msg *nats.Msg) {
-		msg.Respond([]byte(`{"return":{}}`))
+	// Subscribe to ec2.start but only respond for goodID
+	nc.QueueSubscribe("ec2.start", "hive-workers", func(msg *nats.Msg) {
+		var req startStoppedInstanceRequest
+		json.Unmarshal(msg.Data, &req)
+		if req.InstanceID == goodID {
+			msg.Respond([]byte(`{"status":"running","instanceId":"` + goodID + `"}`))
+		} else {
+			// Simulate error for bad instance
+			msg.Respond([]byte(`{"Code":"InvalidInstanceID.NotFound"}`))
+		}
 	})
 
 	input := &ec2.StartInstancesInput{
@@ -159,7 +162,8 @@ func TestStartInstances_MixedSuccessAndFailure(t *testing.T) {
 	assert.Equal(t, goodID, *output.StartingInstances[0].InstanceId)
 	assert.Equal(t, "pending", *output.StartingInstances[0].CurrentState.Name)
 
-	// Second instance failed: state → stopped (unchanged)
+	// Second instance: daemon returned an error, state remains stopped
 	assert.Equal(t, badID, *output.StartingInstances[1].InstanceId)
+	assert.Equal(t, int64(80), *output.StartingInstances[1].CurrentState.Code)
 	assert.Equal(t, "stopped", *output.StartingInstances[1].CurrentState.Name)
 }
