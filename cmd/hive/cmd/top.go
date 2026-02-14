@@ -71,9 +71,16 @@ func runTopNodes(cmd *cobra.Command, args []string) {
 		respondedNodes[resp.Node] = resp
 	}
 
-	// Node resource table
-	nodeNames := make([]string, 0, len(cfg.Nodes))
+	// Node resource table: union of config-known nodes + NATS responders
+	nodeSet := make(map[string]struct{})
 	for name := range cfg.Nodes {
+		nodeSet[name] = struct{}{}
+	}
+	for name := range respondedNodes {
+		nodeSet[name] = struct{}{}
+	}
+	nodeNames := make([]string, 0, len(nodeSet))
+	for name := range nodeSet {
 		nodeNames = append(nodeNames, name)
 	}
 	sort.Strings(nodeNames)

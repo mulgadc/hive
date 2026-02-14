@@ -5,6 +5,7 @@ node = "{{.Node}}"
 
 [nodes.{{.Node}}]
 node = "{{.Node}}"
+host = "{{.BindIP}}"
 region = "{{.Region}}"
 az = "{{.Az}}"
 {{- if .Services}}
@@ -43,4 +44,15 @@ accesskey = "{{.AccessKey}}"
 secretkey = "{{.SecretKey}}"
 {{- if gt .PredastoreNodeID 0}}
 node_id = {{.PredastoreNodeID}}
+{{- end}}
+{{- range .RemoteNodes}}
+
+[nodes.{{.Name}}]
+node = "{{.Name}}"
+host = "{{.Host}}"
+region = "{{.Region}}"
+az = "{{.AZ}}"
+{{- if .Services}}
+services = [{{range $i, $s := .Services}}{{if $i}}, {{end}}"{{$s}}"{{end}}]
+{{- end}}
 {{- end}}

@@ -62,6 +62,15 @@ Bottom table aggregates free capacity across all Ready nodes.
 
 ## Design
 
+### Config as Source of Truth
+
+During multi-node formation, each node's `hive.toml` includes ALL cluster nodes — the local node with full config (daemon, nats, predastore subsections) and remote nodes with basic info (host, region, AZ, services). This makes config the authoritative list of expected cluster members.
+
+The CLI builds its node list from the union of config nodes + NATS responders:
+- **Config nodes that respond** → shown as `Ready` with live data from NATS
+- **Config nodes that don't respond** → shown as `NotReady` with host/region/AZ from config
+- **NATS responders not in config** → shown as `Ready` (safety net for dynamic additions)
+
 ### NATS Topics
 
 Two fan-out topics (no queue group — all daemons respond):
@@ -95,8 +104,11 @@ New method that returns total/allocated vCPU and memory plus per-instance-type a
 | File | Change |
 |------|--------|
 | `hive/config/config.go` | Added `NodeStatusResponse`, `InstanceTypeCap`, `VMInfo`, `NodeVMsResponse` types |
+| `hive/admin/admin.go` | Added `RemoteNode` type and `RemoteNodes` field to `ConfigSettings` |
 | `hive/daemon/daemon_handlers.go` | Added `daemonIP()`, `handleNodeStatus()`, `handleNodeVMs()` handlers |
 | `hive/daemon/daemon.go` | Added `hive.node.status` and `hive.node.vms` subscriptions in `subscribeAll()`, added `GetResourceStats()` method to `ResourceManager` |
+| `cmd/hive/cmd/admin.go` | Added `buildRemoteNodes()` helper; populate `RemoteNodes` in init and join flows |
+| `cmd/hive/cmd/templates/hive.toml` | Added `host` to local node, template loop for remote nodes |
 | `cmd/hive/cmd/get.go` | **New file** — `get nodes`, `get vms` commands with pterm table output |
 | `cmd/hive/cmd/top.go` | **New file** — `top nodes` command with node resource + instance type capacity tables |
 | `tests/e2e/run-e2e.sh` | Added Phase 1b (get nodes, top nodes, get vms empty) and Phase 5a-pre (get vms with running VM) |

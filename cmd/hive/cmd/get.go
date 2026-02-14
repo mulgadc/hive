@@ -162,14 +162,21 @@ func runGetNodes(cmd *cobra.Command, args []string) {
 		respondedNodes[resp.Node] = resp
 	}
 
-	// Build table: include all known nodes from config, mark non-responders as NotReady
+	// Build table: union of config-known nodes + NATS responders
 	tableData := pterm.TableData{
 		{"NAME", "STATUS", "IP", "REGION", "AZ", "UPTIME", "VMs", "SERVICES"},
 	}
 
-	// Collect and sort node names for stable output
-	nodeNames := make([]string, 0, len(cfg.Nodes))
+	// Collect all node names: config + responded (union)
+	nodeSet := make(map[string]struct{})
 	for name := range cfg.Nodes {
+		nodeSet[name] = struct{}{}
+	}
+	for name := range respondedNodes {
+		nodeSet[name] = struct{}{}
+	}
+	nodeNames := make([]string, 0, len(nodeSet))
+	for name := range nodeSet {
 		nodeNames = append(nodeNames, name)
 	}
 	sort.Strings(nodeNames)

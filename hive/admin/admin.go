@@ -21,6 +21,15 @@ import (
 	"gopkg.in/ini.v1"
 )
 
+// RemoteNode holds basic info about a remote cluster node for config generation.
+type RemoteNode struct {
+	Name     string
+	Host     string
+	Region   string
+	AZ       string
+	Services []string
+}
+
 type ConfigSettings struct {
 	AccessKey string
 	SecretKey string
@@ -45,6 +54,9 @@ type ConfigSettings struct {
 
 	// Node capabilities
 	Services []string
+
+	// Other nodes in the cluster (for config source of truth)
+	RemoteNodes []RemoteNode
 }
 
 // PredastoreNodeConfig describes a single Predastore node for multi-node config generation.

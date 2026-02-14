@@ -831,6 +831,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 		PredastoreNodeID: predastoreNodeID,
 		Services:         services,
+		RemoteNodes:      buildRemoteNodes(allNodes, node),
 	}
 
 	// Generate config files
@@ -1134,6 +1135,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 
 		PredastoreNodeID: predastoreNodeID,
 		Services:         services,
+		RemoteNodes:      buildRemoteNodes(statusResp.Nodes, node),
 	}
 
 	// Generate config files
@@ -1176,4 +1178,27 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	fmt.Println("   1. Start services:")
 	fmt.Println("      ./scripts/start-dev.sh")
 	fmt.Println()
+}
+
+// buildRemoteNodes converts formation NodeInfo into RemoteNode entries,
+// excluding the local node. This puts all cluster members into hive.toml
+// so config is the source of truth for expected cluster membership.
+func buildRemoteNodes(allNodes map[string]formation.NodeInfo, localNode string) []admin.RemoteNode {
+	var remote []admin.RemoteNode
+	for name, n := range allNodes {
+		if name == localNode {
+			continue
+		}
+		remote = append(remote, admin.RemoteNode{
+			Name:     name,
+			Host:     n.BindIP,
+			Region:   n.Region,
+			AZ:       n.AZ,
+			Services: n.Services,
+		})
+	}
+	sort.Slice(remote, func(i, j int) bool {
+		return remote[i].Name < remote[j].Name
+	})
+	return remote
 }

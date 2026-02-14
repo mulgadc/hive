@@ -560,19 +560,32 @@ When deploying a multi-node cluster, you define a **region** (e.g., `ap-southeas
 
 Cluster formation is automatic. When initializing with `--nodes 3`, the init node starts a formation server and waits for other nodes to join. Once all nodes have registered, each node receives the full cluster topology — credentials, CA certificates, NATS routes, Predastore peer lists — and generates its own configuration files. No manual configuration synchronization is required.
 
-## Simulated Multi-Node (Single Server)
+## Choose a Deployment Mode
 
-For development and testing, a 3-node cluster can be simulated on a single machine using loopback addresses. Linux handles the full `127.0.0.0/8` range natively, so `127.0.0.1`, `127.0.0.2`, and `127.0.0.3` all work without any network configuration.
+| | Simulated (Option A) | Real Multi-Server (Option B) |
+|---|---|---|
+| **Servers** | 1 machine, loopback IPs | 3+ physical/virtual servers |
+| **Use case** | Development & testing | Production & staging |
+| **Network** | `127.0.0.1/2/3` (no setup) | Real LAN IPs |
+| **Data dirs** | `~/node1/`, `~/node2/`, `~/node3/` | `~/hive/` on each server |
 
-Each node uses a separate data directory (`~/node1/`, `~/node2/`, `~/node3/`) to isolate configuration, logs, and state.
+Both options use `HIVE_NODE1`, `HIVE_NODE2`, and `HIVE_NODE3` environment variables. Set them in the option you choose, then all subsequent sections (verification, usage, shutdown) reference them.
 
-### 1. Build
+### Option A: Simulated Multi-Node (Single Server)
+
+For development and testing, a 3-node cluster can be simulated on a single machine using loopback addresses. Linux handles the full `127.0.0.0/8` range natively, so `127.0.0.1`, `127.0.0.2`, and `127.0.0.3` all work without any network configuration. Each node uses a separate data directory to isolate configuration, logs, and state.
+
+#### 1. Build and Set Variables
 
 ```bash
 make build
+
+export HIVE_NODE1=127.0.0.1
+export HIVE_NODE2=127.0.0.2
+export HIVE_NODE3=127.0.0.3
 ```
 
-### 2. Form the Cluster
+#### 2. Form the Cluster
 
 The formation process requires running init and join commands concurrently. The init node blocks until all expected nodes have joined.
 
@@ -582,8 +595,8 @@ The formation process requires running init and join commands concurrently. The 
 ./bin/hive admin init \
   --node node1 \
   --nodes 3 \
-  --bind 127.0.0.1 \
-  --cluster-bind 127.0.0.1 \
+  --bind $HIVE_NODE1 \
+  --cluster-bind $HIVE_NODE1 \
   --port 4432 \
   --hive-dir ~/node1/ \
   --config-dir ~/node1/config/ \
@@ -591,16 +604,16 @@ The formation process requires running init and join commands concurrently. The 
   --az ap-southeast-2a
 ```
 
-This starts a formation server on `127.0.0.1:4432` and waits for 2 more nodes to join.
+This starts a formation server on `$HIVE_NODE1:4432` and waits for 2 more nodes to join.
 
 **Terminal 2 — Join node 2 (while init is running):**
 
 ```bash
 ./bin/hive admin join \
   --node node2 \
-  --bind 127.0.0.2 \
-  --cluster-bind 127.0.0.2 \
-  --host 127.0.0.1:4432 \
+  --bind $HIVE_NODE2 \
+  --cluster-bind $HIVE_NODE2 \
+  --host $HIVE_NODE1:4432 \
   --data-dir ~/node2/ \
   --config-dir ~/node2/config/ \
   --region ap-southeast-2 \
@@ -612,9 +625,9 @@ This starts a formation server on `127.0.0.1:4432` and waits for 2 more nodes to
 ```bash
 ./bin/hive admin join \
   --node node3 \
-  --bind 127.0.0.3 \
-  --cluster-bind 127.0.0.3 \
-  --host 127.0.0.1:4432 \
+  --bind $HIVE_NODE3 \
+  --cluster-bind $HIVE_NODE3 \
+  --host $HIVE_NODE1:4432 \
   --data-dir ~/node3/ \
   --config-dir ~/node3/config/ \
   --region ap-southeast-2 \
@@ -623,7 +636,7 @@ This starts a formation server on `127.0.0.1:4432` and waits for 2 more nodes to
 
 All three processes will exit with a cluster summary once formation is complete.
 
-### 3. Start Services
+#### 3. Start Services
 
 Start services on each node (in separate terminals or background):
 
@@ -633,88 +646,11 @@ HIVE_SKIP_BUILD=true UI=false ./scripts/start-dev.sh ~/node2/
 HIVE_SKIP_BUILD=true UI=false ./scripts/start-dev.sh ~/node3/
 ```
 
-### 4. Verify the Cluster
-
-Check that all daemons are healthy:
-
-```bash
-curl -s http://127.0.0.1:4432/health
-curl -s http://127.0.0.2:4432/health
-curl -s http://127.0.0.3:4432/health
-```
-
-Check NATS cluster routing (from any node):
-
-```bash
-grep -i "route\|cluster" ~/node1/logs/nats.log
-```
-
-Check Predastore Raft consensus:
-
-```bash
-grep -i "leader\|election" ~/node1/logs/predastore.log
-```
-
-### 5. Using the Cluster
-
-When using the AWS CLI, specify the endpoint URL pointing to any node's gateway:
-
-```bash
-AWS_ENDPOINT_URL=https://127.0.0.1:9999 aws ec2 describe-instances
-AWS_ENDPOINT_URL=https://127.0.0.2:9999 aws ec2 describe-instances
-```
-
-Each node has its own logs for debugging:
-
-```bash
-tail -f ~/node1/logs/hive.log
-tail -f ~/node2/logs/hive.log
-tail -f ~/node3/logs/hive.log
-```
-
-### 6. Stop the Cluster
-
-Stop services on each node in reverse order:
-
-```bash
-./scripts/stop-dev.sh ~/node3/
-./scripts/stop-dev.sh ~/node2/
-./scripts/stop-dev.sh ~/node1/
-```
-
-### 7. Clean Up
-
-To fully remove the simulated cluster:
-
-```bash
-rm -rf ~/node1/ ~/node2/ ~/node3/
-```
-
-### Alternative: IP Aliases
-
-For a more production-like simulation using dedicated IP addresses on a network interface:
-
-```bash
-sudo ip addr add 10.11.12.1/24 dev eth0
-sudo ip addr add 10.11.12.2/24 dev eth0
-sudo ip addr add 10.11.12.3/24 dev eth0
-```
-
-Replace `eth0` with your network interface name (e.g., `enp0s3`, `ens33`). Then use these IPs instead of `127.0.0.x` in the formation commands above.
-
-To remove the aliases:
-
-```bash
-sudo ip addr del 10.11.12.1/24 dev eth0
-sudo ip addr del 10.11.12.2/24 dev eth0
-sudo ip addr del 10.11.12.3/24 dev eth0
-```
-
-## Real Multi-Node (Physical Servers)
+### Option B: Real Multi-Node (Physical Servers)
 
 For production or production-like deployments across multiple physical servers or VMs.
 
-### Prerequisites
+#### Prerequisites
 
 On **each server**:
 
@@ -730,21 +666,23 @@ cd hive
 make build
 ```
 
-3. Identify the bind IP for each server (e.g., the primary network interface IP):
+3. Identify the bind IP for each server:
 
 ```bash
 ip addr show | grep "inet "
 ```
 
-### Example: 3-Node Cluster
+#### 1. Set Variables
 
-Assume three servers with these IPs:
+Export the IPs for your three servers (replace with your actual IPs):
 
-| Node | IP Address | Role |
-|------|------------|------|
-| node1 | 192.168.1.10 | Init node |
-| node2 | 192.168.1.11 | Join node |
-| node3 | 192.168.1.12 | Join node |
+```bash
+export HIVE_NODE1=192.168.1.10
+export HIVE_NODE2=192.168.1.11
+export HIVE_NODE3=192.168.1.12
+```
+
+#### 2. Form the Cluster
 
 **Server 1 — Initialize the cluster:**
 
@@ -754,8 +692,8 @@ cd ~/Development/mulga/hive
 ./bin/hive admin init \
   --node node1 \
   --nodes 3 \
-  --bind 192.168.1.10 \
-  --cluster-bind 192.168.1.10 \
+  --bind $HIVE_NODE1 \
+  --cluster-bind $HIVE_NODE1 \
   --port 4432 \
   --hive-dir ~/hive/ \
   --config-dir ~/hive/config/ \
@@ -770,9 +708,9 @@ cd ~/Development/mulga/hive
 
 ./bin/hive admin join \
   --node node2 \
-  --bind 192.168.1.11 \
-  --cluster-bind 192.168.1.11 \
-  --host 192.168.1.10:4432 \
+  --bind $HIVE_NODE2 \
+  --cluster-bind $HIVE_NODE2 \
+  --host $HIVE_NODE1:4432 \
   --data-dir ~/hive/ \
   --config-dir ~/hive/config/ \
   --region us-east-1 \
@@ -786,9 +724,9 @@ cd ~/Development/mulga/hive
 
 ./bin/hive admin join \
   --node node3 \
-  --bind 192.168.1.12 \
-  --cluster-bind 192.168.1.12 \
-  --host 192.168.1.10:4432 \
+  --bind $HIVE_NODE3 \
+  --cluster-bind $HIVE_NODE3 \
+  --host $HIVE_NODE1:4432 \
   --data-dir ~/hive/ \
   --config-dir ~/hive/config/ \
   --region us-east-1 \
@@ -797,13 +735,7 @@ cd ~/Development/mulga/hive
 
 All three processes will exit with a cluster summary once formation is complete.
 
-### Service Co-location
-
-Every node that runs EC2 instances (compute) **must** also run the viperblock service. EBS volumes are mounted locally via Unix domain sockets (NBD) — the daemon publishes to a node-specific NATS topic (`ebs.{nodeName}.mount`) which is handled by the viperblock instance on the same server. Nodes without viperblock cannot run EC2 instances.
-
-In the default deployment, every node runs all services (NATS, Predastore, Viperblock, Daemon, Gateway), which satisfies this requirement.
-
-### Start Services on Each Server
+#### 3. Start Services
 
 After formation completes, start services on **all servers**:
 
@@ -811,44 +743,88 @@ After formation completes, start services on **all servers**:
 ./scripts/start-dev.sh
 ```
 
-### Verify the Cluster
+## Verify the Cluster
 
-From any server, check daemon health:
-
-```bash
-curl -s http://192.168.1.10:4432/health
-curl -s http://192.168.1.11:4432/health
-curl -s http://192.168.1.12:4432/health
-```
-
-Check NATS cluster mesh:
+From any node, view cluster status and resource capacity:
 
 ```bash
-grep -i "route\|cluster" ~/hive/logs/nats.log
+./bin/hive get nodes
+# NAME    STATUS    IP              REGION    AZ    UPTIME   VMs   SERVICES
+# node1   Ready     $HIVE_NODE1     ...       ...   2m       0     nats,predastore,viperblock,daemon,...
+# node2   Ready     $HIVE_NODE2     ...       ...   2m       0     nats,predastore,viperblock,daemon
+# node3   Ready     $HIVE_NODE3     ...       ...   2m       0     nats,predastore,viperblock,daemon
+
+./bin/hive top nodes
+# NAME    CPU (used/total)   MEM (used/total)   VMs
+# node1   0/16               0.0Gi/30.6Gi       0
+# node2   0/16               0.0Gi/30.6Gi       0
+# node3   0/16               0.0Gi/30.6Gi       0
 ```
 
-Check Predastore Raft:
+All nodes should show `Ready` status. Use `hive get vms` to see running instances across the cluster.
+
+Check individual daemon health endpoints:
 
 ```bash
-grep -i "leader\|election" ~/hive/logs/predastore.log
+curl -s http://$HIVE_NODE1:4432/health
+curl -s http://$HIVE_NODE2:4432/health
+curl -s http://$HIVE_NODE3:4432/health
 ```
 
-### Trust CA Certificate
+Check NATS cluster routing (from any node):
 
-The CA certificate is generated by the init node and distributed to all joining nodes during formation. On **each server**, trust the CA:
+```bash
+grep -i "route\|cluster" ~/node1/logs/nats.log   # simulated
+grep -i "route\|cluster" ~/hive/logs/nats.log     # real multi-server
+```
+
+Check Predastore Raft consensus:
+
+```bash
+grep -i "leader\|election" ~/node1/logs/predastore.log   # simulated
+grep -i "leader\|election" ~/hive/logs/predastore.log     # real multi-server
+```
+
+## Trust CA Certificate
+
+The CA certificate is generated by the init node and distributed to all joining nodes during formation. On **each node** (or the single machine for simulated mode), trust the CA:
 
 ```bash
 sudo cp ~/hive/config/ca.pem /usr/local/share/ca-certificates/hive-ca.crt
 sudo update-ca-certificates
 ```
 
-### Using the Cluster
+For simulated mode, the config directory is under each node's data directory — copy from any node since the CA is the same:
+
+```bash
+sudo cp ~/node1/config/ca.pem /usr/local/share/ca-certificates/hive-ca.crt
+sudo update-ca-certificates
+```
+
+Set the AWS profile:
+
+```bash
+export AWS_PROFILE=hive
+```
+
+## Using the Cluster
 
 Connect to any node's AWS Gateway:
 
 ```bash
-AWS_ENDPOINT_URL=https://192.168.1.10:9999 AWS_PROFILE=hive aws ec2 describe-instances
+AWS_ENDPOINT_URL=https://$HIVE_NODE1:9999 aws ec2 describe-instances
+AWS_ENDPOINT_URL=https://$HIVE_NODE2:9999 aws ec2 describe-instances
 ```
+
+Check logs on each node for debugging. Log locations depend on your deployment mode — `~/node{1,2,3}/logs/` for simulated, `~/hive/logs/` for real multi-server.
+
+## Advanced Configuration
+
+### Service Co-location
+
+Every node that runs EC2 instances (compute) **must** also run the viperblock service. EBS volumes are mounted locally via Unix domain sockets (NBD) — the daemon publishes to a node-specific NATS topic (`ebs.{nodeName}.mount`) which is handled by the viperblock instance on the same server. Nodes without viperblock cannot run EC2 instances.
+
+In the default deployment, every node runs all services (NATS, Predastore, Viperblock, Daemon, Gateway), which satisfies this requirement.
 
 ### Dual NIC Configuration
 
@@ -870,12 +846,44 @@ If servers have separate management and cluster network interfaces, use `--clust
 
 The `--bind` IP is used for the formation server, daemon, and AWS gateway. The `--cluster-bind` IP is used for NATS cluster routing and Predastore Raft consensus. If `--cluster-bind` is not specified, it defaults to the `--bind` IP.
 
-### Shutdown
+### IP Aliases (Simulated Mode)
 
-Stop services on each server:
+For a more production-like simulation using dedicated IP addresses on a network interface:
 
 ```bash
+sudo ip addr add 10.11.12.1/24 dev eth0
+sudo ip addr add 10.11.12.2/24 dev eth0
+sudo ip addr add 10.11.12.3/24 dev eth0
+```
+
+Replace `eth0` with your network interface name (e.g., `enp0s3`, `ens33`). Then export these as your `HIVE_NODE` variables instead of the loopback addresses.
+
+To remove the aliases:
+
+```bash
+sudo ip addr del 10.11.12.1/24 dev eth0
+sudo ip addr del 10.11.12.2/24 dev eth0
+sudo ip addr del 10.11.12.3/24 dev eth0
+```
+
+## Shutdown
+
+Stop services on each node:
+
+```bash
+# Simulated — stop in reverse order:
+./scripts/stop-dev.sh ~/node3/
+./scripts/stop-dev.sh ~/node2/
+./scripts/stop-dev.sh ~/node1/
+
+# Real multi-server — run on each server:
 ./scripts/stop-dev.sh
 ```
 
-Note: if EC2 instances are running, the stop process will gracefully terminate them, unmount attached EBS volumes (via NBD), and flush the write-ahead-log (WAL) to the S3 server (Predastore). This may take a few minutes depending on instance volume sizes.
+If EC2 instances are running, the stop process will gracefully terminate them, unmount attached EBS volumes (via NBD), and flush the write-ahead-log (WAL) to the S3 server (Predastore). This may take a few minutes depending on instance volume sizes.
+
+To fully remove a simulated cluster's data:
+
+```bash
+rm -rf ~/node1/ ~/node2/ ~/node3/
+```
