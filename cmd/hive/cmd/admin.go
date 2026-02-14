@@ -162,6 +162,7 @@ func init() {
 	adminInitCmd.Flags().String("predastore-nodes", "", "Comma-separated IPs for multi-node Predastore cluster (e.g., 10.11.12.1,10.11.12.2,10.11.12.3). Requires >= 3 nodes.")
 	adminInitCmd.Flags().String("formation-timeout", "10m", "Timeout for cluster formation (e.g., 5m, 30s)")
 	adminInitCmd.Flags().String("cluster-name", "hive", "NATS cluster name")
+	adminInitCmd.Flags().StringSlice("services", nil, "Services this node runs (default: all). Valid: nats,predastore,viperblock,daemon,awsgw,ui")
 
 	// Flags for admin join
 	adminJoinCmd.Flags().String("region", "ap-southeast-2", "Region for this node")
@@ -173,6 +174,7 @@ func init() {
 	adminJoinCmd.Flags().String("bind", "0.0.0.0", "IP address to bind services to (e.g., 10.11.12.2 for multi-node on single host)")
 	adminJoinCmd.Flags().String("cluster-bind", "", "IP address to bind NATS cluster services to (e.g., 10.11.12.1 for multi-node)")
 	adminJoinCmd.Flags().String("cluster-routes", "", "NATS cluster hosts for routing specify multiple with comma (e.g., 10.11.12.1:4248,10.11.12.2:4248 for multi-node)")
+	adminJoinCmd.Flags().StringSlice("services", nil, "Services this node runs (default: all)")
 	adminJoinCmd.MarkFlagRequired("node")
 	adminJoinCmd.MarkFlagRequired("host")
 
@@ -486,6 +488,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	predastoreNodesStr, _ := cmd.Flags().GetString("predastore-nodes")
 	formationTimeoutStr, _ := cmd.Flags().GetString("formation-timeout")
 	clusterName, _ := cmd.Flags().GetString("cluster-name")
+	services, _ := cmd.Flags().GetStringSlice("services")
 
 	// Validate IP address format
 	if net.ParseIP(bindIP) == nil {
@@ -565,7 +568,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	if isMultiNode {
 		runAdminInitMultiNode(cmd, accessKey, secretKey, accountID, natsToken, clusterName,
 			configDir, hiveRoot, certPath, region, az, node, bindIP, clusterBind,
-			port, nodes, formationTimeoutStr)
+			port, nodes, formationTimeoutStr, services)
 		return
 	}
 
@@ -649,6 +652,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		ClusterName:   clusterName,
 
 		PredastoreNodeID: predastoreNodeID,
+		Services:         services,
 	}
 
 	// Generate config files
@@ -701,7 +705,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 // then generates configs with complete cluster topology.
 func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, natsToken, clusterName,
 	configDir, hiveRoot, certPath, region, az, node, bindIP, clusterBind string,
-	port, expectedNodes int, formationTimeoutStr string) {
+	port, expectedNodes int, formationTimeoutStr string, services []string) {
 
 	formationTimeout, err := time.ParseDuration(formationTimeoutStr)
 	if err != nil {
@@ -826,6 +830,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		ClusterName:   clusterName,
 
 		PredastoreNodeID: predastoreNodeID,
+		Services:         services,
 	}
 
 	// Generate config files
@@ -887,6 +892,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	bindIP, _ := cmd.Flags().GetString("bind")
 	configDir, _ := cmd.Flags().GetString("config-dir")
 	clusterBind, _ := cmd.Flags().GetString("cluster-bind")
+	services, _ := cmd.Flags().GetStringSlice("services")
 
 	// Validate required parameters
 	if node == "" {
@@ -1127,6 +1133,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		ClusterName:   creds.ClusterName,
 
 		PredastoreNodeID: predastoreNodeID,
+		Services:         services,
 	}
 
 	// Generate config files

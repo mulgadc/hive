@@ -30,6 +30,26 @@ echo "🚀 Starting Hive development environment..."
 echo "Project root: $PROJECT_ROOT"
 echo "Data directory: $DATA_DIR"
 
+# Parse services from hive.toml — defaults to all if not set
+parse_services() {
+    local config_file="$CONFIG_DIR/hive.toml"
+    if [ -f "$config_file" ]; then
+        local svc_line=$(grep -m1 '^services' "$config_file" | sed 's/.*\[//;s/\].*//;s/"//g;s/,/ /g')
+        if [ -n "$svc_line" ]; then
+            echo "$svc_line"
+            return
+        fi
+    fi
+    echo "nats predastore viperblock daemon awsgw ui"
+}
+
+SERVICES=$(parse_services)
+has_service() {
+    local svc="$1"
+    echo "$SERVICES" | grep -qw "$svc"
+}
+echo "Services: $SERVICES"
+
 # Confirm configuration directory exists
 if [ ! -d "$CONFIG_DIR" ]; then
     echo "⚠️  Configuration directory $CONFIG_DIR does not exist."
@@ -141,176 +161,149 @@ fi
 
 # 1️⃣ Start NATS server
 echo ""
-echo "1️⃣  Starting NATS server..."
+if has_service "nats"; then
+    echo "1️⃣  Starting NATS server..."
 
-if [ -f "$CONFIG_DIR/nats/nats.conf" ]; then
-    export HIVE_CONFIG_PATH=$CONFIG_DIR/nats/nats.conf
-    echo " Using NATS config file: $CONFIG_DIR/nats/nats.conf"
+    if [ -f "$CONFIG_DIR/nats/nats.conf" ]; then
+        export HIVE_CONFIG_PATH=$CONFIG_DIR/nats/nats.conf
+        echo " Using NATS config file: $CONFIG_DIR/nats/nats.conf"
+    else
+        echo " ⚠️ NATS config file not found at $CONFIG_DIR/nats/nats.conf, using defaults"
+        export HIVE_NATS_HOST=0.0.0.0
+        export HIVE_NATS_PORT=4222
+        export HIVE_NATS_DATA_DIR=$DATA_DIR/nats/
+        export HIVE_NATS_JETSTREAM=false
+    fi
+
+    NATS_CMD="./bin/hive service nats start"
+    start_service "nats" "$NATS_CMD"
 else
-    echo " ⚠️ NATS config file not found at $CONFIG_DIR/nats/nats.conf, using defaults"
-    # TODO: Confirm, settings file will overwrite env vars (e.g multi-node config)
-    export HIVE_NATS_HOST=0.0.0.0
-    export HIVE_NATS_PORT=4222
-    export HIVE_NATS_DATA_DIR=$DATA_DIR/nats/
-    export HIVE_NATS_JETSTREAM=false
-    #export HIVE_NATS_DEBUG=true
+    echo "1️⃣  Skipping NATS (not a local service)"
 fi
-
-# Use air for hot reloading (dev!)
-#NATS_CMD="air -c .air-nats.toml"
-NATS_CMD="./bin/hive service nats start"
-
-start_service "nats" "$NATS_CMD"
-
-#start_service "nats" "go run cmd/hive/main.go service nats start"
-#check_service "NATS" "4222"
 
 # 2️⃣ Start Predastore
-echo "2️⃣  Starting Predastore..."
-unset HIVE_CONFIG_PATH
+echo ""
+if has_service "predastore"; then
+    echo "2️⃣  Starting Predastore..."
+    unset HIVE_CONFIG_PATH
 
-export HIVE_PREDASTORE_BASE_PATH=$DATA_DIR/predastore/
-export HIVE_PREDASTORE_CONFIG_PATH=$CONFIG_DIR/predastore/predastore.toml
-export HIVE_PREDASTORE_TLS_CERT=$CONFIG_DIR/server.pem
-export HIVE_PREDASTORE_TLS_KEY=$CONFIG_DIR/server.key
-# Very chatty logs, only for debugging
-#export HIVE_PREDASTORE_DEBUG=true
+    export HIVE_PREDASTORE_BASE_PATH=$DATA_DIR/predastore/
+    export HIVE_PREDASTORE_CONFIG_PATH=$CONFIG_DIR/predastore/predastore.toml
+    export HIVE_PREDASTORE_TLS_CERT=$CONFIG_DIR/server.pem
+    export HIVE_PREDASTORE_TLS_KEY=$CONFIG_DIR/server.key
 
-# Auto-detect Predastore host:port from hive.toml [nodes.<name>.predastore] section
-PREDASTORE_BIND="0.0.0.0:8443"
-if [ -f "$CONFIG_DIR/hive.toml" ]; then
-    DETECTED_PREDASTORE_HOST=$(awk -F'"' '/\[nodes\..*\.predastore\]/{found=1} found && /^host/{print $2; exit}' "$CONFIG_DIR/hive.toml")
-    if [ -n "$DETECTED_PREDASTORE_HOST" ]; then
-        PREDASTORE_BIND="$DETECTED_PREDASTORE_HOST"
-        echo "   Auto-detected Predastore bind=$PREDASTORE_BIND from hive.toml"
-    fi
-fi
-export HIVE_PREDASTORE_HOST="${PREDASTORE_BIND%%:*}"
-export HIVE_PREDASTORE_PORT="${PREDASTORE_BIND##*:}"
-
-# Default, distributed backend. For testing, all nodes running locally.
-# Specify NODE_ID to run a specific node (e.g multi-server)
-export HIVE_PREDASTORE_BACKEND=distributed
-
-# Auto-detect Predastore NODE_ID from hive.toml if not already set
-if [ -z "$HIVE_PREDASTORE_NODE_ID" ]; then
+    # Auto-detect Predastore host:port from hive.toml [nodes.<name>.predastore] section
+    PREDASTORE_BIND="0.0.0.0:8443"
     if [ -f "$CONFIG_DIR/hive.toml" ]; then
-        DETECTED_NODE_ID=$(awk -F'= *' '/node_id/{gsub(/ /,"",$2); print $2; exit}' "$CONFIG_DIR/hive.toml")
-        if [ -n "$DETECTED_NODE_ID" ] && [ "$DETECTED_NODE_ID" != "0" ]; then
-            export HIVE_PREDASTORE_NODE_ID="$DETECTED_NODE_ID"
-            echo "   Auto-detected Predastore NODE_ID=$DETECTED_NODE_ID from hive.toml"
+        DETECTED_PREDASTORE_HOST=$(awk -F'"' '/\[nodes\..*\.predastore\]/{found=1} found && /^host/{print $2; exit}' "$CONFIG_DIR/hive.toml")
+        if [ -n "$DETECTED_PREDASTORE_HOST" ]; then
+            PREDASTORE_BIND="$DETECTED_PREDASTORE_HOST"
+            echo "   Auto-detected Predastore bind=$PREDASTORE_BIND from hive.toml"
         fi
     fi
+    export HIVE_PREDASTORE_HOST="${PREDASTORE_BIND%%:*}"
+    export HIVE_PREDASTORE_PORT="${PREDASTORE_BIND##*:}"
+
+    export HIVE_PREDASTORE_BACKEND=distributed
+
+    # Auto-detect Predastore NODE_ID from hive.toml if not already set
+    if [ -z "$HIVE_PREDASTORE_NODE_ID" ]; then
+        if [ -f "$CONFIG_DIR/hive.toml" ]; then
+            DETECTED_NODE_ID=$(awk -F'= *' '/node_id/{gsub(/ /,"",$2); print $2; exit}' "$CONFIG_DIR/hive.toml")
+            if [ -n "$DETECTED_NODE_ID" ] && [ "$DETECTED_NODE_ID" != "0" ]; then
+                export HIVE_PREDASTORE_NODE_ID="$DETECTED_NODE_ID"
+                echo "   Auto-detected Predastore NODE_ID=$DETECTED_NODE_ID from hive.toml"
+            fi
+        fi
+    fi
+    export HIVE_PREDASTORE_NODE_ID="${HIVE_PREDASTORE_NODE_ID:-}"
+
+    PREDASTORE_CMD="./bin/hive service predastore start"
+    start_service "predastore" "$PREDASTORE_CMD"
+    check_service "Predastore" "$HIVE_PREDASTORE_HOST" "$HIVE_PREDASTORE_PORT"
+else
+    echo "2️⃣  Skipping Predastore (not a local service)"
 fi
-export HIVE_PREDASTORE_NODE_ID="${HIVE_PREDASTORE_NODE_ID:-}"
-
-# Use air for hot reloading (dev!)
-#PREDASTORE_CMD="air -c .air-predastore.toml"
-PREDASTORE_CMD="./bin/hive service predastore start"
-
-start_service "predastore" "$PREDASTORE_CMD"
-check_service "Predastore" "$HIVE_PREDASTORE_HOST" "$HIVE_PREDASTORE_PORT"
-
-#else
-#    echo ""
-#    echo "2️⃣  Skipping Predastore for multi-node setup (TODO)"
-#fi
 
 
 # 3️⃣ Start Viperblock
 echo ""
-echo "3️⃣  Starting Viperblock..."
+if has_service "viperblock"; then
+    echo "3️⃣  Starting Viperblock..."
 
-# Determine base directory for Viperblock data, dev uses /mnt/ramdisk if available
-if [ -d "/mnt/ramdisk" ] && [ -w "/mnt/ramdisk" ]; then
-    VB_BASE_DIR="/mnt/ramdisk/"
+    # Determine base directory for Viperblock data, dev uses /mnt/ramdisk if available
+    if [ -d "/mnt/ramdisk" ] && [ -w "/mnt/ramdisk" ]; then
+        VB_BASE_DIR="/mnt/ramdisk/"
+    else
+        VB_BASE_DIR="$DATA_DIR/viperblock/"
+    fi
+
+    # Check if NBD plugin exists
+    NBD_PLUGIN_PATH="$MULGA_ROOT/viperblock/lib/nbdkit-viperblock-plugin.so"
+
+    if [ ! -f "$NBD_PLUGIN_PATH" ]; then
+        echo "   ⚠️  NBD plugin not found at $NBD_PLUGIN_PATH"
+        echo "   Building Viperblock first..."
+        cd "$MULGA_ROOT/viperblock"
+        make build
+        cd "$PROJECT_ROOT"
+    fi
+
+    export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
+    export HIVE_VIPERBLOCK_PLUGIN_PATH=$NBD_PLUGIN_PATH
+    export HIVE_BASE_DIR=$VB_BASE_DIR
+
+    VIPERBLOCK_CMD="./bin/hive service viperblock start"
+    start_service "viperblock" "$VIPERBLOCK_CMD"
 else
-    VB_BASE_DIR="$DATA_DIR/viperblock/"
+    echo "3️⃣  Skipping Viperblock (not a local service)"
 fi
-
-# Check if NBD plugin exists
-NBD_PLUGIN_PATH="$MULGA_ROOT/viperblock/lib/nbdkit-viperblock-plugin.so"
-
-if [ ! -f "$NBD_PLUGIN_PATH" ]; then
-    echo "   ⚠️  NBD plugin not found at $NBD_PLUGIN_PATH"
-    echo "   Building Viperblock first..."
-    cd "$MULGA_ROOT/viperblock"
-    make build
-    cd "$PROJECT_ROOT"
-fi
-
-export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
-# Use config above for Viperblock settings
-#export HIVE_VIPERBLOCK_S3_HOST=0.0.0.0:8443
-#export HIVE_VIPERBLOCK_S3_BUCKET=predastore
-#export HIVE_VIPERBLOCK_S3_REGION=ap-southeast-2
-#export HIVE_NATS_HOST=0.0.0.0:4222
-export HIVE_VIPERBLOCK_PLUGIN_PATH=$NBD_PLUGIN_PATH
-export HIVE_BASE_DIR=$VB_BASE_DIR
-
-#VIPERBLOCK_CMD="air -c .air-viperblock.toml"
-VIPERBLOCK_CMD="./bin/hive service viperblock start"
-
-#VIPERBLOCK_CMD="go run cmd/hive/main.go service viperblock start \
-#    --nats-host 0.0.0.0:4222 \
-#    --base-dir $VB_BASE_DIR \
-#    --plugin-path $NBD_PLUGIN_PATH"
-
-start_service "viperblock" "$VIPERBLOCK_CMD"
 
 # 4️⃣ Start Hive Gateway/Daemon
 echo ""
-echo "4️⃣. Starting Hive Gateway..."
+if has_service "daemon"; then
+    echo "4️⃣. Starting Hive Gateway..."
 
-# Use the same base directory as Viperblock for consistency
-export HIVE_BASE_DIR="$VB_BASE_DIR"
-export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
-export HIVE_BASE_DIR=$DATA_DIR/hive/
-export HIVE_WAL_DIR=$WAL_DIR
+    export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
+    export HIVE_BASE_DIR=$DATA_DIR/hive/
+    export HIVE_WAL_DIR=$WAL_DIR
 
-#HIVE_CMD="air -c .air-hive.toml"
-#HIVE_CMD="./bin/hive service hive start --config $HIVE_CONFIG_PATH--base-dir $HIVE_BASE_DIR --wal-dir $HIVE_WAL_DIR"
-HIVE_CMD="./bin/hive service hive start"
-
-start_service "hive" "$HIVE_CMD"
+    HIVE_CMD="./bin/hive service hive start"
+    start_service "hive" "$HIVE_CMD"
+else
+    echo "4️⃣. Skipping Hive Gateway (not a local service)"
+fi
 
 
 # 5️⃣ Start AWS Gateway
 echo ""
-echo "5️⃣. Starting AWS Gateway..."
+if has_service "awsgw"; then
+    echo "5️⃣. Starting AWS Gateway..."
 
-# Use the same base directory as Viperblock for consistency
+    unset HIVE_NATS_HOST
+    unset HIVE_PREDASTORE_HOST
+    export HIVE_BASE_DIR=$CONFIG_DIR
+    export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
+    export HIVE_AWSGW_TLS_CERT=$CONFIG_DIR/server.pem
+    export HIVE_AWSGW_TLS_KEY=$CONFIG_DIR/server.key
 
-unset HIVE_NATS_HOST
-unset HIVE_PREDASTORE_HOST
-export HIVE_BASE_DIR=$CONFIG_DIR
-export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
-# Overwritten by config file
-#export HIVE_AWSGW_HOST="0.0.0.0:9999"
-export HIVE_AWSGW_TLS_CERT=$CONFIG_DIR/server.pem
-export HIVE_AWSGW_TLS_KEY=$CONFIG_DIR/server.key
-
-#HIVE_CMD="air -c .air-hive.toml"
-#HIVE_CMD="./bin/hive service hive start --config config/hive.toml --base-dir $HIVE_BASE_DIR --wal-dir $WAL_DIR"
-AWSGW_CMD="./bin/hive service awsgw start"
-
-start_service "awsgw" "$AWSGW_CMD"
-
-# TODO: Need host:ip support, depending on node
-#check_service "awsgw" "9999"
+    AWSGW_CMD="./bin/hive service awsgw start"
+    start_service "awsgw" "$AWSGW_CMD"
+else
+    echo "5️⃣. Skipping AWS Gateway (not a local service)"
+fi
 
 
-# 6️⃣ Start Hive UI (skip with UI=false)
-if [ "${UI}" != "false" ]; then
+# 6️⃣ Start Hive UI (skip with UI=false or if not a local service)
+if [ "${UI}" != "false" ] && has_service "ui"; then
     echo ""
     echo "6️⃣. Starting Hive UI..."
 
     HIVEUI_CMD="./bin/hive service hive-ui start"
-
     start_service "hive-ui" "$HIVEUI_CMD"
 else
     echo ""
-    echo "6️⃣. Skipping Hive UI (UI=false)"
+    echo "6️⃣. Skipping Hive UI"
 fi
 
 

@@ -28,6 +28,30 @@ LOGS_DIR="$PROJECT_ROOT/data/logs"
 
 echo "Stopping Hive development environment..."
 
+# Parse services from hive.toml — defaults to all if not set
+CONFIG_DIR="${CONFIG_DIR:-$DATA_DIR/config}"
+parse_services() {
+    local config_file="$CONFIG_DIR/hive.toml"
+    if [ -f "$config_file" ]; then
+        local svc_line=$(grep -m1 '^services' "$config_file" | sed 's/.*\[//;s/\].*//;s/"//g;s/,/ /g')
+        if [ -n "$svc_line" ]; then
+            echo "$svc_line"
+            return
+        fi
+    fi
+    echo "nats predastore viperblock daemon awsgw ui"
+}
+
+SERVICES=$(parse_services)
+has_service() {
+    local svc="$1"
+    case "$svc" in
+        hive) svc="daemon" ;;
+        hive-ui) svc="ui" ;;
+    esac
+    echo "$SERVICES" | grep -qw "$svc"
+}
+
 # Function to stop service by PID file
 stop_service() {
     local name="$1"
@@ -60,10 +84,10 @@ stop_service() {
 echo "Stopping services..."
 echo ""
 # Stop Hive UI first (last to start)
-stop_service "hive-ui" "$PID_DIR"
+has_service "hive-ui" && stop_service "hive-ui" "$PID_DIR"
 
 # Stop Hive daemon/gateway (it will terminate running instances, unmount nbd devices)
-stop_service "hive" "$PID_DIR"
+has_service "hive" && stop_service "hive" "$PID_DIR"
 
 # Wait for all QEMU instances to exit before stopping infrastructure services.
 # The daemon sends system_powerdown to VMs during shutdown, but may be killed
@@ -87,16 +111,16 @@ if pgrep -x qemu-system-x86_64 > /dev/null 2>&1; then
 fi
 
 # Stop AWSGW
-stop_service "awsgw" "$PID_DIR"
+has_service "awsgw" && stop_service "awsgw" "$PID_DIR"
 
 # Stop Viperblock
-stop_service "viperblock" "$PID_DIR"
+has_service "viperblock" && stop_service "viperblock" "$PID_DIR"
 
 # Stop Predastore
-stop_service "predastore" "$PID_DIR"
+has_service "predastore" && stop_service "predastore" "$PID_DIR"
 
 # Stop NATS
-stop_service "nats" "$PID_DIR"
+has_service "nats" && stop_service "nats" "$PID_DIR"
 
 echo ""
 echo "✅ Hive development environment stopped"

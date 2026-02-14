@@ -21,11 +21,12 @@ type ClusterConfig struct {
 // Config holds all configuration for the application
 type Config struct {
 	// Node config
-	Node    string `mapstructure:"node"`
-	Host    string `mapstructure:"host"` // Unique hostname or IP of this node
-	Region  string `mapstructure:"region"`
-	AZ      string `mapstructure:"az"`
-	DataDir string `mapstructure:"data_dir"`
+	Node     string   `mapstructure:"node"`
+	Host     string   `mapstructure:"host"` // Unique hostname or IP of this node
+	Region   string   `mapstructure:"region"`
+	AZ       string   `mapstructure:"az"`
+	DataDir  string   `mapstructure:"data_dir"`
+	Services []string `mapstructure:"services"` // Which services this node runs locally
 
 	Daemon     DaemonConfig     `mapstructure:"daemon"`
 	NATS       NATSConfig       `mapstructure:"nats"`
@@ -38,6 +39,32 @@ type Config struct {
 	SecretKey string `mapstructure:"secretkey"`
 	BaseDir   string `mapstructure:"base_dir"`
 	WalDir    string `mapstructure:"wal_dir"`
+}
+
+// AllServices is the default service list when Services is empty (backward compat).
+var AllServices = []string{"nats", "predastore", "viperblock", "daemon", "awsgw", "ui"}
+
+// HasService reports whether the node runs the named service.
+// An empty Services list means all services (backward compat).
+func (c Config) HasService(name string) bool {
+	services := c.Services
+	if len(services) == 0 {
+		services = AllServices
+	}
+	for _, s := range services {
+		if s == name {
+			return true
+		}
+	}
+	return false
+}
+
+// GetServices returns the configured service list, defaulting to AllServices.
+func (c Config) GetServices() []string {
+	if len(c.Services) == 0 {
+		return AllServices
+	}
+	return c.Services
 }
 
 type AWSGWConfig struct {
@@ -209,11 +236,13 @@ type NodeJoinResponse struct {
 }
 
 type NodeHealthResponse struct {
-	Node       string `json:"node"`
-	Status     string `json:"status"`
-	ConfigHash string `json:"config_hash"`
-	Epoch      uint64 `json:"epoch"`
-	Uptime     int64  `json:"uptime"`
+	Node          string            `json:"node"`
+	Status        string            `json:"status"`
+	ConfigHash    string            `json:"config_hash"`
+	Epoch         uint64            `json:"epoch"`
+	Uptime        int64             `json:"uptime"`
+	Services      []string          `json:"services"`
+	ServiceHealth map[string]string `json:"service_health,omitempty"`
 }
 
 // LoadConfig loads the configuration from file and environment variables

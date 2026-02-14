@@ -13,12 +13,13 @@ import (
 
 // NodeInfo describes a node participating in cluster formation.
 type NodeInfo struct {
-	Name      string `json:"name"`
-	BindIP    string `json:"bind_ip"`
-	ClusterIP string `json:"cluster_ip"`
-	Region    string `json:"region"`
-	AZ        string `json:"az"`
-	Port      int    `json:"port"`
+	Name      string   `json:"name"`
+	BindIP    string   `json:"bind_ip"`
+	ClusterIP string   `json:"cluster_ip"`
+	Region    string   `json:"region"`
+	AZ        string   `json:"az"`
+	Port      int      `json:"port"`
+	Services  []string `json:"services,omitempty"`
 }
 
 // JoinRequest is the payload POSTed by joining nodes.

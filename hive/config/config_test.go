@@ -219,6 +219,44 @@ expected_nodes = 3
 	assert.Equal(t, 3, n.AWSGW.ExpectedNodes)
 }
 
+// Tests for HasService / GetServices
+
+func TestHasService_ExplicitList(t *testing.T) {
+	c := Config{Services: []string{"nats", "daemon"}}
+
+	assert.True(t, c.HasService("nats"))
+	assert.True(t, c.HasService("daemon"))
+	assert.False(t, c.HasService("predastore"))
+	assert.False(t, c.HasService("viperblock"))
+	assert.False(t, c.HasService("ui"))
+}
+
+func TestHasService_EmptyListBackwardCompat(t *testing.T) {
+	c := Config{} // no Services set
+
+	// Empty list means all services
+	for _, svc := range AllServices {
+		assert.True(t, c.HasService(svc), "expected %s to be available with empty list", svc)
+	}
+}
+
+func TestHasService_UnknownService(t *testing.T) {
+	c := Config{Services: []string{"nats"}}
+	assert.False(t, c.HasService("unknown"))
+}
+
+func TestGetServices_DefaultsToAll(t *testing.T) {
+	c := Config{}
+	services := c.GetServices()
+	assert.Equal(t, AllServices, services)
+}
+
+func TestGetServices_ExplicitList(t *testing.T) {
+	c := Config{Services: []string{"nats", "predastore"}}
+	services := c.GetServices()
+	assert.Equal(t, []string{"nats", "predastore"}, services)
+}
+
 // Tests for type constants
 
 func TestNBDTransportConstants(t *testing.T) {

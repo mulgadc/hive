@@ -139,6 +139,19 @@ When starting work on a feature or investigating an issue, review the last 10-20
 - All new features must have comprehensive unit tests
 - For returning AWS errors, use `awserrors` package instead of manually typed strings
 
+**Preflight Policy:**
+- Run `make preflight` before pushing any major changes — it runs the same checks as GitHub Actions (gofmt, go vet, gosec, staticcheck, govulncheck, and all unit tests)
+- All developers must install the pre-push hook to enforce this automatically:
+
+```bash
+cat > .git/hooks/pre-push << 'EOF'
+#!/bin/sh
+make preflight
+make test
+EOF
+chmod +x .git/hooks/pre-push
+```
+
 **Testing Policy:**
 - **All unit tests MUST pass** before committing changes
 - **No exceptions** - failing tests block commits

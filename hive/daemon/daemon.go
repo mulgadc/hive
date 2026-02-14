@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -522,6 +523,18 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to initialize JetStream: %w", err)
 	}
 
+	// Write service manifest so other nodes know what this node runs
+	if d.jsManager != nil {
+		if err := d.jsManager.WriteServiceManifest(
+			d.node,
+			d.config.GetServices(),
+			d.config.NATS.Host,
+			d.config.Predastore.Host,
+		); err != nil {
+			slog.Warn("Failed to write service manifest", "error", err)
+		}
+	}
+
 	// Create services before loading/launching instances, since LaunchInstance depends on them
 	store := objectstore.NewS3ObjectStoreFromConfig(d.config.Predastore.Host, d.config.Predastore.Region, d.config.AccessKey, d.config.SecretKey)
 	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances, store)
@@ -544,6 +557,7 @@ func (d *Daemon) Start() error {
 	}
 	d.accountService = accountSvc
 
+	d.waitForClusterReady()
 	d.restoreInstances()
 
 	if err := d.subscribeAll(); err != nil {
@@ -585,7 +599,11 @@ func (d *Daemon) initJetStream() error {
 		}
 
 		if err == nil {
-			slog.Info("JetStream KV store initialized successfully", "replicas", 1, "attempts", attempt)
+			err = d.jsManager.InitClusterStateBucket()
+		}
+
+		if err == nil {
+			slog.Info("JetStream KV stores initialized successfully", "replicas", 1, "attempts", attempt)
 			lastErr = nil
 			break
 		}
@@ -614,6 +632,66 @@ func (d *Daemon) initJetStream() error {
 	return nil
 }
 
+// waitForClusterReady waits until dependent infrastructure services are reachable
+// before starting VM recovery. This prevents races where VMs try to mount volumes
+// before viperblock/predastore are ready.
+func (d *Daemon) waitForClusterReady() {
+	slog.Info("Waiting for cluster readiness...")
+	maxWait := 2 * time.Minute
+	start := time.Now()
+	interval := 2 * time.Second
+
+	for time.Since(start) < maxWait {
+		ready := true
+		var reason string
+
+		// Viperblock must be reachable (local or remote)
+		if ready && !d.checkViperblockReady() {
+			ready = false
+			reason = "viperblock not ready"
+		}
+
+		// Predastore must be reachable (local or remote)
+		if ready && !d.checkPredastoreReady() {
+			ready = false
+			reason = "predastore not ready"
+		}
+
+		if ready {
+			slog.Info("Cluster readiness check passed", "elapsed", time.Since(start))
+			return
+		}
+
+		slog.Debug("Cluster not ready, waiting...", "reason", reason, "elapsed", time.Since(start))
+		time.Sleep(interval)
+	}
+
+	slog.Warn("Cluster readiness timeout, proceeding with recovery anyway", "maxWait", maxWait)
+}
+
+// checkViperblockReady checks if viperblock is reachable by verifying
+// the NATS connection is up (viperblock subscribes to ebs topics on NATS).
+func (d *Daemon) checkViperblockReady() bool {
+	if d.natsConn == nil {
+		return false
+	}
+	return d.natsConn.IsConnected()
+}
+
+// checkPredastoreReady checks if predastore is reachable via TCP.
+func (d *Daemon) checkPredastoreReady() bool {
+	host := d.config.Predastore.Host
+	if host == "" {
+		return true // no predastore configured, skip check
+	}
+	conn, err := net.DialTimeout("tcp", host, 3*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
 // migrateStoppedToSharedKV writes a stopped instance to shared KV and removes
 // it from the local instance map. Returns true if migration succeeded.
 func (d *Daemon) migrateStoppedToSharedKV(instance *vm.VM) bool {
@@ -631,9 +709,29 @@ func (d *Daemon) migrateStoppedToSharedKV(instance *vm.VM) bool {
 	return true
 }
 
+// maxConcurrentRecovery limits how many VMs are relaunched in parallel during recovery.
+const maxConcurrentRecovery = 2
+
 // restoreInstances loads persisted VM state and re-launches instances that are
 // neither terminated nor flagged as user-stopped.
 func (d *Daemon) restoreInstances() {
+	// Check for clean shutdown marker
+	cleanShutdown := false
+	if d.jsManager != nil {
+		if marker, err := d.jsManager.ReadShutdownMarker(d.node); err == nil {
+			cleanShutdown = marker
+			if marker {
+				slog.Info("Clean shutdown marker found, trusting KV state")
+				_ = d.jsManager.DeleteShutdownMarker(d.node)
+			}
+		}
+	}
+
+	if !cleanShutdown {
+		slog.Warn("No clean shutdown marker — possible crash recovery, validating QEMU PIDs carefully")
+		time.Sleep(3 * time.Second)
+	}
+
 	err := d.LoadState()
 	if err != nil {
 		slog.Warn("Failed to load state, continuing with empty state", "error", err)
@@ -644,6 +742,9 @@ func (d *Daemon) restoreInstances() {
 
 	// Ensure mutexes and QMP clients are usable after deserialization
 	d.Instances.Mu = sync.Mutex{}
+
+	// Phase 1: Reconnect running QEMU, finalize transitional states, collect VMs to relaunch
+	var toLaunch []*vm.VM
 
 	for i := range d.Instances.VMS {
 		d.Instances.VMS[i].EBSRequests.Mu = sync.Mutex{}
@@ -706,10 +807,28 @@ func (d *Daemon) restoreInstances() {
 			slog.Info("Instance was running but QEMU exited, relaunching", "instance", instance.ID)
 		}
 
-		slog.Info("Launching instance", "instance", instance.ID)
-		if err := d.LaunchInstance(instance); err != nil {
-			slog.Error("Failed to launch instance", "instanceId", instance.ID, "err", err)
+		toLaunch = append(toLaunch, instance)
+	}
+
+	// Phase 2: Relaunch crashed VMs with semaphore-based throttling
+	if len(toLaunch) > 0 {
+		slog.Info("Launching instances (recovery)", "count", len(toLaunch), "maxConcurrent", maxConcurrentRecovery)
+		sem := make(chan struct{}, maxConcurrentRecovery)
+		var wg sync.WaitGroup
+
+		for _, instance := range toLaunch {
+			sem <- struct{}{} // acquire
+			wg.Add(1)
+			go func(inst *vm.VM) {
+				defer wg.Done()
+				defer func() { <-sem }() // release
+				slog.Info("Launching instance (recovery)", "instance", inst.ID)
+				if err := d.LaunchInstance(inst); err != nil {
+					slog.Error("Failed to launch instance", "instanceId", inst.ID, "err", err)
+				}
+			}(instance)
 		}
+		wg.Wait()
 	}
 
 	// Persist state after any migrations/removals during restore
@@ -835,12 +954,27 @@ func (d *Daemon) ClusterManager() error {
 			})
 		}
 
+		serviceHealth := make(map[string]string)
+		for _, svc := range d.config.GetServices() {
+			serviceHealth[svc] = "ok"
+		}
+		// For remote dependencies, check connectivity
+		if !d.config.HasService("nats") {
+			if d.natsConn != nil && d.natsConn.IsConnected() {
+				serviceHealth["nats"] = "remote_ok"
+			} else {
+				serviceHealth["nats"] = "remote_unreachable"
+			}
+		}
+
 		response := config.NodeHealthResponse{
-			Node:       d.node,
-			Status:     "running",
-			ConfigHash: configHash,
-			Epoch:      d.clusterConfig.Epoch,
-			Uptime:     int64(time.Since(d.startTime).Seconds()),
+			Node:          d.node,
+			Status:        "running",
+			ConfigHash:    configHash,
+			Epoch:         d.clusterConfig.Epoch,
+			Uptime:        int64(time.Since(d.startTime).Seconds()),
+			Services:      d.config.GetServices(),
+			ServiceHealth: serviceHealth,
 		}
 
 		return c.JSON(response)
@@ -1219,6 +1353,13 @@ func (d *Daemon) setupShutdown() {
 				slog.Error("Error unsubscribing from NATS", "err", err)
 			}
 
+		}
+
+		// Write shutdown marker to cluster state KV
+		if d.jsManager != nil {
+			if err := d.jsManager.WriteShutdownMarker(d.node); err != nil {
+				slog.Error("Failed to write shutdown marker", "err", err)
+			}
 		}
 
 		// Write state to JetStream before closing NATS connection

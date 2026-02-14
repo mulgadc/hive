@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/nats-io/nats.go"
@@ -13,6 +14,8 @@ import (
 const (
 	// InstanceStateBucket is the name of the KV bucket for storing instance state
 	InstanceStateBucket = "hive-instance-state"
+	// ClusterStateBucket is the name of the KV bucket for cluster state (heartbeats, shutdown markers, service maps)
+	ClusterStateBucket = "hive-cluster-state"
 	// InstanceStatePrefix is the key prefix for per-node instance state entries
 	InstanceStatePrefix = "node."
 	// StoppedInstancePrefix is the key prefix for stopped instances in shared KV
@@ -21,9 +24,10 @@ const (
 
 // JetStreamManager manages JetStream KV store operations for instance state
 type JetStreamManager struct {
-	js       nats.JetStreamContext
-	kv       nats.KeyValue
-	replicas int
+	js        nats.JetStreamContext
+	kv        nats.KeyValue // hive-instance-state
+	clusterKV nats.KeyValue // hive-cluster-state
+	replicas  int
 }
 
 // NewJetStreamManager creates a new JetStreamManager from a NATS connection.
@@ -66,6 +70,89 @@ func (m *JetStreamManager) InitKVBucket() error {
 
 	m.kv = kv
 	return nil
+}
+
+// InitClusterStateBucket initializes the cluster-state KV bucket, creating it if it doesn't exist.
+func (m *JetStreamManager) InitClusterStateBucket() error {
+	kv, err := m.js.KeyValue(ClusterStateBucket)
+	if err != nil {
+		if errors.Is(err, nats.ErrBucketNotFound) {
+			slog.Info("Creating JetStream KV bucket", "bucket", ClusterStateBucket, "replicas", m.replicas)
+			kv, err = m.js.CreateKeyValue(&nats.KeyValueConfig{
+				Bucket:      ClusterStateBucket,
+				Description: "Hive cluster state (heartbeats, shutdown markers, service maps)",
+				History:     1,
+				Replicas:    m.replicas,
+				TTL:         1 * time.Hour,
+			})
+			if err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+	} else {
+		slog.Info("Connected to existing JetStream KV bucket", "bucket", ClusterStateBucket)
+	}
+
+	m.clusterKV = kv
+	return nil
+}
+
+// WriteShutdownMarker writes a shutdown marker for the given node to the cluster-state KV.
+func (m *JetStreamManager) WriteShutdownMarker(nodeID string) error {
+	if m.clusterKV == nil {
+		return errors.New("cluster state KV not initialized")
+	}
+	data, _ := json.Marshal(map[string]any{
+		"node":      nodeID,
+		"timestamp": time.Now().UTC().Format(time.RFC3339),
+	})
+	_, err := m.clusterKV.Put("shutdown."+nodeID, data)
+	return err
+}
+
+// ReadShutdownMarker checks if a clean shutdown marker exists for the given node.
+func (m *JetStreamManager) ReadShutdownMarker(nodeID string) (bool, error) {
+	if m.clusterKV == nil {
+		return false, errors.New("cluster state KV not initialized")
+	}
+	_, err := m.clusterKV.Get("shutdown." + nodeID)
+	if errors.Is(err, nats.ErrKeyNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// DeleteShutdownMarker removes the shutdown marker for the given node.
+func (m *JetStreamManager) DeleteShutdownMarker(nodeID string) error {
+	if m.clusterKV == nil {
+		return errors.New("cluster state KV not initialized")
+	}
+	err := m.clusterKV.Delete("shutdown." + nodeID)
+	if err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
+		return err
+	}
+	return nil
+}
+
+// WriteServiceManifest writes the service manifest for the given node to the cluster-state KV.
+func (m *JetStreamManager) WriteServiceManifest(nodeID string, services []string, natsHost, predastoreHost string) error {
+	if m.clusterKV == nil {
+		return errors.New("cluster state KV not initialized")
+	}
+	data, _ := json.Marshal(map[string]any{
+		"node":            nodeID,
+		"services":        services,
+		"nats_host":       natsHost,
+		"predastore_host": predastoreHost,
+		"timestamp":       time.Now().UTC().Format(time.RFC3339),
+	})
+	_, err := m.clusterKV.Put("node."+nodeID+".services", data)
+	return err
 }
 
 // WriteState writes the instance state to the KV store for the given node.
@@ -180,6 +267,21 @@ func (m *JetStreamManager) UpdateReplicas(newReplicas int) error {
 
 	m.replicas = newReplicas
 	slog.Info("Updated JetStream KV bucket replicas", "bucket", InstanceStateBucket, "oldReplicas", currentReplicas, "newReplicas", newReplicas)
+
+	// Also update the cluster-state bucket if it exists
+	if m.clusterKV != nil {
+		clusterStreamName := "KV_" + ClusterStateBucket
+		clusterInfo, err := m.js.StreamInfo(clusterStreamName)
+		if err == nil && clusterInfo.Config.Replicas < newReplicas {
+			clusterInfo.Config.Replicas = newReplicas
+			if _, err := m.js.UpdateStream(&clusterInfo.Config); err != nil {
+				slog.Warn("Failed to update cluster-state bucket replicas", "error", err)
+			} else {
+				slog.Info("Updated cluster-state bucket replicas", "bucket", ClusterStateBucket, "newReplicas", newReplicas)
+			}
+		}
+	}
+
 	return nil
 }
 

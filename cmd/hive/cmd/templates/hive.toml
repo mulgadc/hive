@@ -7,6 +7,9 @@ node = "{{.Node}}"
 node = "{{.Node}}"
 region = "{{.Region}}"
 az = "{{.Az}}"
+{{- if .Services}}
+services = [{{range $i, $s := .Services}}{{if $i}}, {{end}}"{{$s}}"{{end}}]
+{{- end}}
 
 account_id = "{{.AccountID}}"
 accesskey = "{{.AccessKey}}"

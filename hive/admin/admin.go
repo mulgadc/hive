@@ -42,6 +42,9 @@ type ConfigSettings struct {
 
 	// Predastore multi-node
 	PredastoreNodeID int
+
+	// Node capabilities
+	Services []string
 }
 
 // PredastoreNodeConfig describes a single Predastore node for multi-node config generation.
