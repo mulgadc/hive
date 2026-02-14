@@ -7,10 +7,6 @@ terraform {
   }
 }
 
-locals {
-  nodes = { for idx, node in var.nodes : node.name => merge(node, { index = idx + 1 }) }
-}
-
 # API token is read from PROXMOX_VE_API_TOKEN env var automatically
 provider "proxmox" {
   endpoint = var.proxmox_endpoint
@@ -22,9 +18,9 @@ provider "proxmox" {
     private_key = file(pathexpand(var.ssh_private_key_path))
 
     dynamic "node" {
-      for_each = local.nodes
+      for_each = var.nodes
       content {
-        name    = node.key
+        name    = node.value.name
         address = node.value.address
       }
     }

@@ -1,14 +1,14 @@
-resource "proxmox_virtual_environment_vm" "iac_mulgaos" {
-  for_each = local.nodes
+resource "proxmox_virtual_environment_vm" "hive_node" {
+  count = var.node_count
 
-  name        = "iac-dev-mulgaos-${each.value.index}"
+  name        = "${var.cluster_name}-${count.index + 1}"
   description = "Managed by Terraform"
-  tags        = ["terraform", "mulgaos"]
-  node_name   = each.key
+  tags        = ["terraform", "hive", var.cluster_name]
+  node_name   = var.nodes[count.index % length(var.nodes)].name
 
   initialization {
     datastore_id        = "local"
-    vendor_data_file_id = proxmox_virtual_environment_file.iac_mulgaos_config[each.key].id
+    vendor_data_file_id = proxmox_virtual_environment_file.cloud_config[count.index].id
 
     user_account {
       username = "tf-user"
@@ -31,12 +31,12 @@ resource "proxmox_virtual_environment_vm" "iac_mulgaos" {
   }
 
   cpu {
-    cores = 4
+    cores = var.cpu_cores
     type  = "host"
   }
 
   memory {
-    dedicated = 8192
+    dedicated = var.memory_mb
   }
 
   agent {
@@ -44,28 +44,19 @@ resource "proxmox_virtual_environment_vm" "iac_mulgaos" {
   }
 
   network_device {
-    bridge = each.value.bridge
+    bridge = var.nodes[count.index % length(var.nodes)].bridge
   }
 
   network_device {
-    bridge = each.value.bridge
+    bridge = var.nodes[count.index % length(var.nodes)].bridge
   }
 
   disk {
-    file_id      = "local:iso/debian-12-genericcloud-amd64-20240211-1654.img"
-    datastore_id = each.value.datastore_id
+    file_id      = var.os_image
+    datastore_id = var.nodes[count.index % length(var.nodes)].datastore_id
     interface    = "virtio0"
     iothread     = true
     discard      = "on"
-    size         = 32
-  }
-}
-
-output "iac_mulgaos_ips" {
-  value = {
-    for name, vm in proxmox_virtual_environment_vm.iac_mulgaos : name => {
-      management = vm.ipv4_addresses[1][0]
-      data       = vm.ipv4_addresses[2][0]
-    }
+    size         = var.disk_size_gb
   }
 }

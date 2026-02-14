@@ -1,39 +1,87 @@
 # Proxmox IaC
 
-OpenTofu/Terraform templates for provisioning a 3-node Hive development cluster on Proxmox VE.
+OpenTofu/Terraform templates for provisioning Hive development clusters on Proxmox VE.
 
 ## Prerequisites
 
 - [OpenTofu](https://opentofu.org/) (or Terraform >= 1.6.0)
-- 3 Proxmox VE nodes with:
+- 1 or more Proxmox VE nodes with:
   - A Terraform API token (`Datacenter > Permissions > API Tokens`)
   - SSH access for a `terraform` user on each node
   - Debian 12 cloud image uploaded to `local:iso/` on each node
 - SSH keypair for cloud-init VM access
 - A hardcoded Debian ISO is used, which needs to be pre-installed on each Proxmox host ("debian-12-genericcloud-amd64-20240211-1654.img") https://cdimage.debian.org/images/cloud/bookworm/20240211-1654/debian-12-genericcloud-amd64-20240211-1654.qcow2
 
-## Setup
+## Quick Start (hive-test.sh)
 
-1. Copy the example environment file and fill in your values:
+The `hive-test.sh` wrapper script manages the full lifecycle: provision, configure, test, and destroy.
+
+```sh
+# Source environment
+source scripts/iac/proxmox/.env
+source ~/prox   # Proxmox API token
+
+# Provision a 3-node cluster
+./scripts/iac/hive-test.sh up my-cluster
+
+# Configure: clone repo, build, form cluster, start services
+./scripts/iac/hive-test.sh configure my-cluster
+
+# Run smoke tests
+./scripts/iac/hive-test.sh test my-cluster
+
+# Check cluster health
+./scripts/iac/hive-test.sh status my-cluster
+
+# SSH to a specific node
+./scripts/iac/hive-test.sh ssh my-cluster 2
+
+# Destroy when done
+./scripts/iac/hive-test.sh down my-cluster
+
+# Or run the full lifecycle (up → configure → test → down)
+./scripts/iac/hive-test.sh full my-cluster
+```
+
+### Options
+
+```
+--node-count=N       Number of VMs (default: 3)
+--memory-mb=N        Memory per VM in MB (default: 16384)
+--cpu-cores=N        CPU cores per VM (default: 4)
+--disk-size-gb=N     Disk size per VM in GB (default: 32)
+```
+
+Example with custom sizing:
+
+```sh
+./scripts/iac/hive-test.sh up my-cluster --node-count=5 --memory-mb=8192 --cpu-cores=2
+```
+
+Per-cluster state is stored in `scripts/iac/proxmox/clusters/<name>/terraform.tfstate`, allowing multiple clusters to coexist.
+
+## Manual Setup
+
+### 1. Configure environment
 
 ```sh
 cp .env.example .env
 # Edit .env with your Proxmox endpoint, SSH keys, and node configuration
 ```
 
-2. Set your Proxmox API token separately (do not store in `.env`):
+### 2. Set API token
 
 ```sh
 export PROXMOX_VE_API_TOKEN="terraform@pve!provider=YOUR_TOKEN_SECRET"
 ```
 
-3. Initialize and deploy:
+### 3. Deploy
 
 ```sh
 source .env
 tofu init
-tofu plan
-tofu apply
+tofu plan -var="cluster_name=dev1"
+tofu apply -var="cluster_name=dev1"
 ```
 
 ### Example `.env` file
@@ -58,8 +106,9 @@ export TF_VAR_ssh_private_key_path="~/.ssh/proxmox-tf"
 # Path to SSH public key injected into VMs via cloud-init (the tf-user account)
 export TF_VAR_ssh_public_key_path="~/.ssh/proxmox-tf-cloudinit.pub"
 
-# --- Cluster Nodes (exactly 3 required) ---
+# --- Proxmox Nodes ---
 #
+# Physical Proxmox hosts where VMs are placed (round-robin).
 # Each node object:
 #   name         - Proxmox node name exactly as shown in the Proxmox UI sidebar
 #   address      - SSH-reachable hostname or IP of the Proxmox host
@@ -97,7 +146,7 @@ export TF_VAR_nodes='[
 | `TF_VAR_proxmox_ssh_username` | No | SSH user on Proxmox hosts (default: `terraform`) |
 | `TF_VAR_ssh_private_key_path` | Yes | SSH private key for Proxmox host access |
 | `TF_VAR_ssh_public_key_path` | Yes | SSH public key injected into VMs via cloud-init |
-| `TF_VAR_nodes` | Yes | JSON array of exactly 3 node objects |
+| `TF_VAR_nodes` | Yes | JSON array of Proxmox node objects |
 
 Each node object in `TF_VAR_nodes`:
 
@@ -108,45 +157,22 @@ Each node object in `TF_VAR_nodes`:
 | `bridge` | `vmbr0` | Network bridge for VM interfaces |
 | `datastore_id` | `local-lvm` | Storage pool for VM disks |
 
-## Deploy
+### Cluster variables (passed via `-var` or `TF_VAR_`)
 
-```sh
-source .env
-tofu init
-tofu plan    # validates config - fails if required env vars are missing
-tofu apply
-```
-
-Example output:
-
-```sh
-Plan: 6 to add, 0 to change, 0 to destroy.
-
-Apply complete! Resources: 6 added, 0 changed, 0 destroyed.
-
-Outputs:
-
-iac_mulgaos_ips = {
-  "node1" = {
-    "data" = "10.1.3.169"
-    "management" = "10.1.3.170"
-  }
-  "node2" = {
-    "data" = "10.1.2.21"
-    "management" = "10.1.3.171"
-  }
-  "node3" = {
-    "data" = "10.1.2.22"
-    "management" = "10.1.3.172"
-  }
-}
-```
+| Variable | Default | Description |
+|---|---|---|
+| `cluster_name` | (required) | Cluster name — used in VM names and tags |
+| `node_count` | `3` | Number of VMs to create (1-10) |
+| `cpu_cores` | `4` | CPU cores per VM |
+| `memory_mb` | `16384` | Memory per VM in MB |
+| `disk_size_gb` | `32` | Disk size per VM in GB |
+| `os_image` | `local:iso/debian-12-...` | Proxmox image for boot disk |
 
 ## Destroy
 
 ```sh
 source .env
-tofu destroy
+tofu destroy -var="cluster_name=dev1"
 ```
 
 ## SSH access
@@ -155,87 +181,6 @@ Connect to provisioned VMs using the cloud-init public key:
 
 ```sh
 ssh -i ~/.ssh/your-cloud-init-key tf-user@<VM_IP>
-```
-
-## Multi-node cluster setup
-
-After VMs are provisioned, initialize the Hive cluster manually. Consider moving to Ansible for automation.
-
-Note, modify the NODE IP addresses with the output from the terraform deployment above.
-
-### Node 1 (init)
-
-Management traffic over first network adapter, with Open vSwitch (Geneve) traffic on the 2nd for VPC traffic.
-
-```sh
-cd ~/Development/mulga/hive
-make
-
-export HIVE_REGION="ap-southeast-2"
-export HIVE_AZ="ap-southeast-2a"
-export NODE1_MGMT_IP="10.1.3.170"
-export NODE2_MGMT_IP="10.1.3.171"
-export NODE3_MGMT_IP="10.1.3.172"
-
-./bin/hive admin init \
-  --node node1 \
-  --bind $NODE1_MGMT_IP \
-  --cluster-bind $NODE1_MGMT_IP \
-  --cluster-routes $NODE1_MGMT_IP:4248 \
-  --predastore-nodes $NODE1_MGMT_IP,$NODE2_MGMT_IP,$NODE3_MGMT_IP \
-  --port 4432 \
-  --hive-dir ~/hive/ \
-  --config-dir ~/hive/config/ \
-  --region $HIVE_REGION \
-  --az $HIVE_AZ
-```
-
-### Node 2 (join)
-
-```sh
-cd ~/Development/mulga/hive
-make
-
-export HIVE_REGION="ap-southeast-2"
-export HIVE_AZ="ap-southeast-2"
-export NODE1_MGMT_IP="10.1.3.170"
-export NODE2_MGMT_IP="10.1.3.171"
-export NODE3_MGMT_IP="10.1.3.172"
-
-./bin/hive admin join \
-  --node node2 \
-  --bind $NODE2_MGMT_IP \
-  --cluster-bind $NODE2_MGMT_IP \
-  --cluster-routes $NODE1_MGMT_IP:4248 \
-  --host $NODE1_MGMT_IP:4432 \
-  --data-dir ~/hive/ \
-  --config-dir ~/hive/config/ \
-  --region $HIVE_REGION \
-  --az $HIVE_AZ
-```
-
-### Node 3 (join)
-
-```sh
-cd ~/Development/mulga/hive
-make
-
-export HIVE_REGION="ap-southeast-2"
-export HIVE_AZ="ap-southeast-2"
-export NODE1_MGMT_IP="10.1.3.170"
-export NODE2_MGMT_IP="10.1.3.171"
-export NODE3_MGMT_IP="10.1.3.172"
-
-./bin/hive admin join \
-  --node node3 \
-  --bind $NODE3_MGMT_IP \
-  --cluster-bind $NODE3_MGMT_IP \
-  --cluster-routes $NODE1_MGMT_IP:4248 \
-  --host $NODE1_MGMT_IP:4432 \
-  --data-dir ~/hive/ \
-  --config-dir ~/hive/config/ \
-  --region $HIVE_REGION \
-  --az $HIVE_AZ
 ```
 
 ## Known issues

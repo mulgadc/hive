@@ -5,6 +5,7 @@
 *.tfstate.*
 *.tfvars
 !example.tfvars
+scripts/iac/proxmox/clusters/
 
 # Go workspace
 go.work
