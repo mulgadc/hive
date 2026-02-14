@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -116,6 +117,10 @@ type Daemon struct {
 
 	// Delay after QMP device_del before blockdev-del (default 1s, 0 in tests)
 	detachDelay time.Duration
+
+	// shuttingDown is set to true during coordinated cluster shutdown (GATE phase).
+	// When true, the daemon rejects new work and setupShutdown skips VM stops.
+	shuttingDown atomic.Bool
 
 	mu sync.Mutex
 }
@@ -529,6 +534,12 @@ func (d *Daemon) subscribeAll() error {
 		{"hive.nodes.discover", d.handleNodeDiscover, ""},
 		{"hive.node.status", d.handleNodeStatus, ""},
 		{"hive.node.vms", d.handleNodeVMs, ""},
+		// Coordinated cluster shutdown phases (fan-out, no queue group)
+		{"hive.cluster.shutdown.gate", d.handleShutdownGate, ""},
+		{"hive.cluster.shutdown.drain", d.handleShutdownDrain, ""},
+		{"hive.cluster.shutdown.storage", d.handleShutdownStorage, ""},
+		{"hive.cluster.shutdown.persist", d.handleShutdownPersist, ""},
+		{"hive.cluster.shutdown.infra", d.handleShutdownInfra, ""},
 	}
 
 	for _, s := range subs {
@@ -610,6 +621,7 @@ func (d *Daemon) Start() error {
 	// are only routed to nodes with available capacity.
 	d.resourceMgr.initSubscriptions(d.natsConn, d.handleEC2RunInstances)
 
+	d.startHeartbeat()
 	d.setupShutdown()
 	d.awaitShutdown()
 
@@ -1378,12 +1390,17 @@ func (d *Daemon) setupShutdown() {
 		<-sigChan
 		slog.Info("Received shutdown signal, cleaning up...")
 
-		// Cancel context
+		// Cancel context to stop heartbeat and other goroutines
 		d.cancel()
 
-		// Pass instances to terminate
-		if err := d.stopInstance(d.Instances.VMS, false); err != nil {
-			slog.Error("Failed to stop instances during shutdown", "err", err)
+		// If coordinated shutdown already handled VMs (DRAIN phase), skip stopInstance
+		if d.shuttingDown.Load() {
+			slog.Info("Coordinated shutdown in progress, skipping VM stop (already handled by DRAIN phase)")
+		} else {
+			// Pass instances to terminate
+			if err := d.stopInstance(d.Instances.VMS, false); err != nil {
+				slog.Error("Failed to stop instances during shutdown", "err", err)
+			}
 		}
 
 		// Final cleanup
@@ -1420,8 +1437,6 @@ func (d *Daemon) setupShutdown() {
 			}
 		}
 
-		// Wait for any ongoing operations to complete
-		// TODO: Implement cleanup of running instances
 		slog.Info("Shutdown complete")
 	})
 }

@@ -99,6 +99,100 @@ func (m *JetStreamManager) InitClusterStateBucket() error {
 	return nil
 }
 
+// Heartbeat represents a daemon's periodic health status published to cluster KV.
+type Heartbeat struct {
+	Node          string   `json:"node"`
+	Epoch         uint64   `json:"epoch"`
+	Timestamp     string   `json:"timestamp"`
+	Services      []string `json:"services"`
+	VMCount       int      `json:"vm_count"`
+	AllocatedVCPU int      `json:"allocated_vcpu"`
+	AvailableVCPU int      `json:"available_vcpu"`
+	AllocatedMem  float64  `json:"allocated_mem_gb"`
+	AvailableMem  float64  `json:"available_mem_gb"`
+}
+
+// WriteHeartbeat writes a heartbeat entry for the given node to the cluster-state KV.
+func (m *JetStreamManager) WriteHeartbeat(h *Heartbeat) error {
+	if m.clusterKV == nil {
+		return errors.New("cluster state KV not initialized")
+	}
+	data, err := json.Marshal(h)
+	if err != nil {
+		return err
+	}
+	_, err = m.clusterKV.Put("heartbeat."+h.Node, data)
+	return err
+}
+
+// ReadHeartbeat reads the heartbeat entry for the given node from the cluster-state KV.
+func (m *JetStreamManager) ReadHeartbeat(nodeID string) (*Heartbeat, error) {
+	if m.clusterKV == nil {
+		return nil, errors.New("cluster state KV not initialized")
+	}
+	entry, err := m.clusterKV.Get("heartbeat." + nodeID)
+	if err != nil {
+		return nil, err
+	}
+	var h Heartbeat
+	if err := json.Unmarshal(entry.Value(), &h); err != nil {
+		return nil, err
+	}
+	return &h, nil
+}
+
+// ClusterShutdownState tracks the coordinated cluster shutdown progress in KV.
+type ClusterShutdownState struct {
+	Initiator  string            `json:"initiator"`
+	Phase      string            `json:"phase"`
+	Started    string            `json:"started"`
+	Timeout    string            `json:"timeout"`
+	Force      bool              `json:"force"`
+	NodesTotal int               `json:"nodes_total"`
+	NodesAcked map[string]string `json:"nodes_acked"`
+}
+
+// WriteClusterShutdown writes the cluster shutdown state to KV.
+func (m *JetStreamManager) WriteClusterShutdown(state *ClusterShutdownState) error {
+	if m.clusterKV == nil {
+		return errors.New("cluster state KV not initialized")
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	_, err = m.clusterKV.Put("cluster.shutdown", data)
+	return err
+}
+
+// ReadClusterShutdown reads the cluster shutdown state from KV.
+func (m *JetStreamManager) ReadClusterShutdown() (*ClusterShutdownState, error) {
+	if m.clusterKV == nil {
+		return nil, errors.New("cluster state KV not initialized")
+	}
+	entry, err := m.clusterKV.Get("cluster.shutdown")
+	if err != nil {
+		return nil, err
+	}
+	var state ClusterShutdownState
+	if err := json.Unmarshal(entry.Value(), &state); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+// DeleteClusterShutdown removes the cluster shutdown state from KV.
+func (m *JetStreamManager) DeleteClusterShutdown() error {
+	if m.clusterKV == nil {
+		return errors.New("cluster state KV not initialized")
+	}
+	err := m.clusterKV.Delete("cluster.shutdown")
+	if err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
+		return err
+	}
+	return nil
+}
+
 // WriteShutdownMarker writes a shutdown marker for the given node to the cluster-state KV.
 func (m *JetStreamManager) WriteShutdownMarker(nodeID string) error {
 	if m.clusterKV == nil {

@@ -75,6 +75,21 @@ var adminCmd = &cobra.Command{
 	Long:  `Administrative commands for initializing and managing the Hive platform.`,
 }
 
+var clusterCmd = &cobra.Command{
+	Use:   "cluster",
+	Short: "Cluster-wide operations",
+	Long:  `Cluster-wide administrative operations such as coordinated shutdown.`,
+}
+
+var clusterShutdownCmd = &cobra.Command{
+	Use:   "shutdown",
+	Short: "Gracefully shut down the entire cluster",
+	Long: `Perform a coordinated, phased shutdown of the entire cluster.
+Phases execute in order: GATE (stop API/UI) → DRAIN (stop VMs) → STORAGE (stop viperblock) → PERSIST (stop predastore) → INFRA (stop NATS/daemon).
+Each phase waits for all nodes to ACK before proceeding to the next.`,
+	Run: runClusterShutdown,
+}
+
 var adminInitCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize Hive platform configuration",
@@ -136,6 +151,12 @@ func init() {
 	rootCmd.AddCommand(adminCmd)
 	adminCmd.AddCommand(adminInitCmd)
 	adminCmd.AddCommand(adminJoinCmd)
+
+	adminCmd.AddCommand(clusterCmd)
+	clusterCmd.AddCommand(clusterShutdownCmd)
+	clusterShutdownCmd.Flags().Bool("force", false, "Force shutdown even if nodes don't respond")
+	clusterShutdownCmd.Flags().Duration("timeout", 120*time.Second, "Maximum time to wait per phase")
+	clusterShutdownCmd.Flags().Bool("dry-run", false, "Print phase plan without executing")
 
 	adminCmd.AddCommand(imagesCmd)
 	imagesCmd.AddCommand(imagesImportCmd)

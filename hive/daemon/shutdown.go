@@ -1,0 +1,276 @@
+package daemon
+
+import (
+	"encoding/json"
+	"log/slog"
+	"os"
+	"os/exec"
+	"time"
+
+	"github.com/mulgadc/hive/hive/utils"
+	"github.com/nats-io/nats.go"
+)
+
+// ShutdownRequest is sent by the coordinator to each daemon per phase.
+type ShutdownRequest struct {
+	Phase   string `json:"phase"`
+	Force   bool   `json:"force"`
+	Timeout int    `json:"timeout_seconds"`
+}
+
+// ShutdownACK is the response from a daemon after completing a shutdown phase.
+type ShutdownACK struct {
+	Node    string   `json:"node"`
+	Phase   string   `json:"phase"`
+	Stopped []string `json:"stopped,omitempty"`
+	Error   string   `json:"error,omitempty"`
+}
+
+// ShutdownProgress is published by daemons during the DRAIN phase to report VM shutdown progress.
+type ShutdownProgress struct {
+	Node      string `json:"node"`
+	Phase     string `json:"phase"`
+	Total     int    `json:"total"`
+	Remaining int    `json:"remaining"`
+}
+
+// handleShutdownGate stops the API gateway and UI, then sets shuttingDown flag
+// so the daemon rejects new work. Phase: GATE.
+func (d *Daemon) handleShutdownGate(msg *nats.Msg) {
+	var req ShutdownRequest
+	if err := json.Unmarshal(msg.Data, &req); err != nil {
+		slog.Error("handleShutdownGate: failed to unmarshal request", "error", err)
+		return
+	}
+
+	slog.Info("Shutdown GATE phase starting", "node", d.node, "force", req.Force)
+
+	var stopped []string
+
+	// Stop AWSGW
+	if d.config.HasService("awsgw") {
+		if err := utils.StopProcess("awsgw"); err != nil {
+			slog.Warn("Failed to stop awsgw", "error", err)
+		} else {
+			stopped = append(stopped, "awsgw")
+		}
+	}
+
+	// Stop UI
+	if d.config.HasService("ui") {
+		if err := utils.StopProcess("hive-ui"); err != nil {
+			slog.Warn("Failed to stop hive-ui", "error", err)
+		} else {
+			stopped = append(stopped, "hive-ui")
+		}
+	}
+
+	// Set shuttingDown flag so daemon rejects new work
+	d.shuttingDown.Store(true)
+
+	ack := ShutdownACK{
+		Node:    d.node,
+		Phase:   "gate",
+		Stopped: stopped,
+	}
+	d.respondShutdownACK(msg, ack)
+	slog.Info("Shutdown GATE phase complete", "node", d.node, "stopped", stopped)
+}
+
+// handleShutdownDrain gracefully stops all running VMs, writes shutdown marker
+// and persists state. Phase: DRAIN.
+func (d *Daemon) handleShutdownDrain(msg *nats.Msg) {
+	var req ShutdownRequest
+	if err := json.Unmarshal(msg.Data, &req); err != nil {
+		slog.Error("handleShutdownDrain: failed to unmarshal request", "error", err)
+		return
+	}
+
+	slog.Info("Shutdown DRAIN phase starting", "node", d.node)
+
+	// Count total VMs
+	d.Instances.Mu.Lock()
+	total := len(d.Instances.VMS)
+	d.Instances.Mu.Unlock()
+
+	// Publish initial progress
+	d.publishShutdownProgress("drain", total, total)
+
+	// Stop all instances (graceful shutdown, no volume deletion)
+	if total > 0 {
+		d.Instances.Mu.Lock()
+		vms := d.Instances.VMS
+		d.Instances.Mu.Unlock()
+
+		if err := d.stopInstance(vms, false); err != nil {
+			slog.Error("Failed to stop instances during DRAIN", "error", err)
+			ack := ShutdownACK{
+				Node:  d.node,
+				Phase: "drain",
+				Error: err.Error(),
+			}
+			d.respondShutdownACK(msg, ack)
+			return
+		}
+	}
+
+	// Publish final progress
+	d.publishShutdownProgress("drain", total, 0)
+
+	// Write shutdown marker and persist state
+	if d.jsManager != nil {
+		if err := d.jsManager.WriteShutdownMarker(d.node); err != nil {
+			slog.Error("Failed to write shutdown marker during DRAIN", "error", err)
+		}
+	}
+	if err := d.WriteState(); err != nil {
+		slog.Error("Failed to write state during DRAIN", "error", err)
+	}
+
+	ack := ShutdownACK{
+		Node:  d.node,
+		Phase: "drain",
+	}
+	d.respondShutdownACK(msg, ack)
+	slog.Info("Shutdown DRAIN phase complete", "node", d.node, "vms_stopped", total)
+}
+
+// handleShutdownStorage stops viperblock and cleans up orphan nbdkit processes. Phase: STORAGE.
+func (d *Daemon) handleShutdownStorage(msg *nats.Msg) {
+	var req ShutdownRequest
+	if err := json.Unmarshal(msg.Data, &req); err != nil {
+		slog.Error("handleShutdownStorage: failed to unmarshal request", "error", err)
+		return
+	}
+
+	slog.Info("Shutdown STORAGE phase starting", "node", d.node)
+
+	var stopped []string
+
+	if d.config.HasService("viperblock") {
+		if err := utils.StopProcess("viperblock"); err != nil {
+			slog.Warn("Failed to stop viperblock", "error", err)
+		} else {
+			stopped = append(stopped, "viperblock")
+		}
+	}
+
+	// Best-effort cleanup of orphaned nbdkit processes
+	if err := exec.Command("pkill", "-f", "nbdkit").Run(); err != nil {
+		slog.Debug("pkill nbdkit (best-effort)", "result", err)
+	}
+
+	ack := ShutdownACK{
+		Node:    d.node,
+		Phase:   "storage",
+		Stopped: stopped,
+	}
+	d.respondShutdownACK(msg, ack)
+	slog.Info("Shutdown STORAGE phase complete", "node", d.node, "stopped", stopped)
+}
+
+// handleShutdownPersist stops predastore. Phase: PERSIST.
+func (d *Daemon) handleShutdownPersist(msg *nats.Msg) {
+	var req ShutdownRequest
+	if err := json.Unmarshal(msg.Data, &req); err != nil {
+		slog.Error("handleShutdownPersist: failed to unmarshal request", "error", err)
+		return
+	}
+
+	slog.Info("Shutdown PERSIST phase starting", "node", d.node)
+
+	var stopped []string
+
+	if d.config.HasService("predastore") {
+		if err := utils.StopProcess("predastore"); err != nil {
+			slog.Warn("Failed to stop predastore", "error", err)
+		} else {
+			stopped = append(stopped, "predastore")
+		}
+	}
+
+	ack := ShutdownACK{
+		Node:    d.node,
+		Phase:   "persist",
+		Stopped: stopped,
+	}
+	d.respondShutdownACK(msg, ack)
+	slog.Info("Shutdown PERSIST phase complete", "node", d.node, "stopped", stopped)
+}
+
+// handleShutdownInfra stops NATS and exits the daemon. Phase: INFRA.
+// No ACK is sent because NATS is going down — this is fire-and-forget from the coordinator.
+func (d *Daemon) handleShutdownInfra(msg *nats.Msg) {
+	var req ShutdownRequest
+	if err := json.Unmarshal(msg.Data, &req); err != nil {
+		slog.Error("handleShutdownInfra: failed to unmarshal request", "error", err)
+		return
+	}
+
+	slog.Info("Shutdown INFRA phase starting", "node", d.node)
+
+	// Cancel context to stop heartbeat and other goroutines
+	d.cancel()
+
+	// Unsubscribe from all NATS topics
+	for topic, sub := range d.natsSubscriptions {
+		slog.Debug("Unsubscribing from NATS", "topic", topic)
+		if err := sub.Unsubscribe(); err != nil {
+			slog.Warn("Failed to unsubscribe", "topic", topic, "error", err)
+		}
+	}
+
+	// Shutdown cluster manager
+	if d.clusterApp != nil {
+		if err := d.clusterApp.Shutdown(); err != nil {
+			slog.Warn("Failed to shutdown cluster manager", "error", err)
+		}
+	}
+
+	// Close NATS connection
+	d.natsConn.Close()
+
+	// Stop NATS server if this node runs it
+	if d.config.HasService("nats") {
+		if err := utils.StopProcess("nats"); err != nil {
+			slog.Warn("Failed to stop nats", "error", err)
+		} else {
+			slog.Info("NATS server stopped", "node", d.node)
+		}
+	}
+
+	slog.Info("Shutdown INFRA phase complete, exiting", "node", d.node)
+
+	// Give a moment for log flush
+	time.Sleep(500 * time.Millisecond)
+	os.Exit(0)
+}
+
+// respondShutdownACK marshals and sends a ShutdownACK response.
+func (d *Daemon) respondShutdownACK(msg *nats.Msg, ack ShutdownACK) {
+	data, err := json.Marshal(ack)
+	if err != nil {
+		slog.Error("Failed to marshal shutdown ACK", "error", err)
+		return
+	}
+	if err := msg.Respond(data); err != nil {
+		slog.Error("Failed to respond with shutdown ACK", "error", err)
+	}
+}
+
+// publishShutdownProgress publishes a progress update during the DRAIN phase.
+func (d *Daemon) publishShutdownProgress(phase string, total, remaining int) {
+	progress := ShutdownProgress{
+		Node:      d.node,
+		Phase:     phase,
+		Total:     total,
+		Remaining: remaining,
+	}
+	data, err := json.Marshal(progress)
+	if err != nil {
+		return
+	}
+	if err := d.natsConn.Publish("hive.cluster.shutdown.progress", data); err != nil {
+		slog.Debug("Failed to publish shutdown progress", "error", err)
+	}
+}

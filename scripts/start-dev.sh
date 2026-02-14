@@ -50,6 +50,17 @@ has_service() {
 }
 echo "Services: $SERVICES"
 
+# Detect multi-node cluster from config
+is_multinode() {
+    local config_file="$CONFIG_DIR/hive.toml"
+    if [ -f "$config_file" ]; then
+        local node_count=$(grep -c '^\[nodes\.' "$config_file")
+        [ "$node_count" -gt 1 ]
+    else
+        return 1
+    fi
+}
+
 # Confirm configuration directory exists
 if [ ! -d "$CONFIG_DIR" ]; then
     echo "⚠️  Configuration directory $CONFIG_DIR does not exist."
@@ -323,6 +334,36 @@ echo "🧪 Test with AWS CLI (once daemon is running):"
 echo "   export AWS_PROFILE=hive"
 echo "   aws ec2 describe-instances"
 echo ""
+
+# For multi-node clusters, check peer daemon health (best-effort)
+if is_multinode; then
+    echo "Checking cluster peer health..."
+    # Extract peer daemon hosts from config (host = "ip:port" under [nodes.X.daemon])
+    peer_hosts=$(awk '
+        /^\[nodes\./ { node=1; daemon=0 }
+        node && /^\[.*\.daemon\]/ { daemon=1 }
+        daemon && /^host/ { gsub(/[" ]/, "", $3); print $3; daemon=0 }
+    ' "$CONFIG_DIR/hive.toml")
+
+    for peer in $peer_hosts; do
+        attempts=0
+        max_attempts=5
+        while [ $attempts -lt $max_attempts ]; do
+            if curl -s --connect-timeout 3 "http://$peer/health" > /dev/null 2>&1; then
+                echo "   $peer: healthy"
+                break
+            fi
+            ((attempts++))
+            if [ $attempts -lt $max_attempts ]; then
+                sleep 2
+            fi
+        done
+        if [ $attempts -ge $max_attempts ]; then
+            echo "   $peer: not responding (may still be starting)"
+        fi
+    done
+    echo ""
+fi
 
 # This will only be reached if air/daemon exits normally
 #echo ""

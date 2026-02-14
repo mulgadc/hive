@@ -52,6 +52,26 @@ has_service() {
     echo "$SERVICES" | grep -qw "$svc"
 }
 
+# Detect multi-node cluster from config
+is_multinode() {
+    local config_file="$CONFIG_DIR/hive.toml"
+    if [ -f "$config_file" ]; then
+        local node_count=$(grep -c '^\[nodes\.' "$config_file")
+        [ "$node_count" -gt 1 ]
+    else
+        return 1
+    fi
+}
+
+# For multi-node clusters, delegate to coordinated shutdown via NATS.
+# Only when called without arguments (default path). When a data-dir is
+# explicitly provided (e.g., E2E per-node cleanup), use per-service stop.
+if is_multinode && [ -z "$HIVE_FORCE_LOCAL_STOP" ] && [ -z "$1" ]; then
+    echo "Multi-node cluster detected. Using coordinated shutdown..."
+    echo "  (Set HIVE_FORCE_LOCAL_STOP=1 to force per-service stop)"
+    exec $PROJECT_ROOT/bin/hive admin cluster shutdown
+fi
+
 # Function to stop service by PID file
 stop_service() {
     local name="$1"
