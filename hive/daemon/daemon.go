@@ -411,6 +411,45 @@ func (rm *ResourceManager) GetAvailableInstanceTypeInfos(showCapacity bool) []*e
 	return infos
 }
 
+// GetResourceStats returns current resource allocation stats for the node status response.
+func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64, allocVCPU int, allocMemGB float64, caps []config.InstanceTypeCap) {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+
+	totalVCPU = rm.availableVCPU
+	totalMemGB = rm.availableMem
+	allocVCPU = rm.allocatedVCPU
+	allocMemGB = rm.allocatedMem
+
+	remainingVCPU := rm.availableVCPU - rm.allocatedVCPU
+	remainingMem := rm.availableMem - rm.allocatedMem
+
+	for _, it := range rm.instanceTypes {
+		vCPUs := instanceTypeVCPUs(it)
+		memGB := float64(instanceTypeMemoryMiB(it)) / 1024.0
+		if vCPUs == 0 || memGB == 0 {
+			continue
+		}
+		countVCPU := remainingVCPU / int(vCPUs)
+		countMem := int(remainingMem / memGB)
+		count := min(countMem, countVCPU)
+		if count < 0 {
+			count = 0
+		}
+		name := ""
+		if it.InstanceType != nil {
+			name = *it.InstanceType
+		}
+		caps = append(caps, config.InstanceTypeCap{
+			Name:      name,
+			VCPU:      int(vCPUs),
+			MemoryGB:  memGB,
+			Available: count,
+		})
+	}
+	return
+}
+
 // SetConfigPath sets the configuration file path for cluster management
 func (d *Daemon) SetConfigPath(path string) {
 	d.configPath = path
@@ -488,6 +527,8 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.DisableSerialConsoleAccess", d.handleEC2DisableSerialConsoleAccess, "hive-workers"},
 		{fmt.Sprintf("hive.admin.%s.health", d.node), d.handleHealthCheck, ""},
 		{"hive.nodes.discover", d.handleNodeDiscover, ""},
+		{"hive.node.status", d.handleNodeStatus, ""},
+		{"hive.node.vms", d.handleNodeVMs, ""},
 	}
 
 	for _, s := range subs {

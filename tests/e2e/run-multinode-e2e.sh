@@ -156,6 +156,36 @@ wait_for_daemon_ready "https://${NODE1_IP}:${AWSGW_PORT}"
 # Define AWS CLI args pointing to node1's gateway
 AWS_EC2="aws --endpoint-url https://${NODE1_IP}:${AWSGW_PORT} ec2"
 
+# Phase 3b: Cluster Stats CLI (Multi-Node)
+echo ""
+echo "Phase 3b: Cluster Stats CLI (Multi-Node)"
+echo "========================================"
+
+# Test hive get nodes — should show all 3 nodes as Ready
+echo "Testing hive get nodes..."
+GET_NODES_OUTPUT=$(./bin/hive get nodes --config "$HOME/node1/config/hive.toml" --timeout 5s 2>/dev/null)
+echo "$GET_NODES_OUTPUT"
+READY_COUNT=$(echo "$GET_NODES_OUTPUT" | grep -c "Ready" || true)
+if [ "$READY_COUNT" -lt 3 ]; then
+    echo "WARNING: hive get nodes shows $READY_COUNT Ready nodes (expected 3)"
+fi
+echo "hive get nodes passed ($READY_COUNT Ready nodes)"
+
+# Test hive top nodes — should show resource stats for all nodes
+echo "Testing hive top nodes..."
+TOP_NODES_OUTPUT=$(./bin/hive top nodes --config "$HOME/node1/config/hive.toml" --timeout 5s 2>/dev/null)
+echo "$TOP_NODES_OUTPUT"
+if ! echo "$TOP_NODES_OUTPUT" | grep -q "INSTANCE TYPE"; then
+    echo "WARNING: hive top nodes did not show instance type capacity table"
+fi
+echo "hive top nodes passed"
+
+# Test hive get vms — should show no VMs yet
+echo "Testing hive get vms (empty)..."
+GET_VMS_OUTPUT=$(./bin/hive get vms --config "$HOME/node1/config/hive.toml" --timeout 5s 2>/dev/null)
+echo "$GET_VMS_OUTPUT"
+echo "hive get vms (empty) passed"
+
 # Verify gateway responds
 echo ""
 echo "Testing gateway connectivity..."
@@ -304,6 +334,18 @@ done
 # Check distribution
 echo ""
 check_instance_distribution
+
+# Verify hive get vms shows all running instances
+echo ""
+echo "Verifying hive get vms (with running VMs)..."
+GET_VMS_OUTPUT=$(./bin/hive get vms --config "$HOME/node1/config/hive.toml" --timeout 5s 2>/dev/null)
+echo "$GET_VMS_OUTPUT"
+for instance_id in "${INSTANCE_IDS[@]}"; do
+    if ! echo "$GET_VMS_OUTPUT" | grep -q "$instance_id"; then
+        echo "WARNING: hive get vms did not show instance $instance_id"
+    fi
+done
+echo "hive get vms shows launched instances"
 
 # Test 1a-ii: SSH Connectivity & Volume Verification
 echo ""

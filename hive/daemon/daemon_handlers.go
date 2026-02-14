@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 	"time"
 
@@ -1665,4 +1666,92 @@ func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
 	}
 
 	slog.Info("handleEC2DescribeStoppedInstances completed", "count", len(reservations))
+}
+
+// daemonIP extracts the IP portion from the daemon host (host:port format).
+func (d *Daemon) daemonIP() string {
+	host := d.config.Daemon.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
+}
+
+// handleNodeStatus responds with this node's status and resource stats.
+// Used by the CLI: hive get nodes, hive top nodes.
+func (d *Daemon) handleNodeStatus(msg *nats.Msg) {
+	totalVCPU, totalMemGB, allocVCPU, allocMemGB, caps := d.resourceMgr.GetResourceStats()
+
+	d.Instances.Mu.Lock()
+	vmCount := 0
+	for _, v := range d.Instances.VMS {
+		if v.Status == vm.StateRunning {
+			vmCount++
+		}
+	}
+	d.Instances.Mu.Unlock()
+
+	resp := config.NodeStatusResponse{
+		Node:          d.node,
+		Status:        "Ready",
+		Host:          d.daemonIP(),
+		Region:        d.config.Region,
+		AZ:            d.config.AZ,
+		Uptime:        int64(time.Since(d.startTime).Seconds()),
+		Services:      d.config.GetServices(),
+		TotalVCPU:     totalVCPU,
+		TotalMemGB:    totalMemGB,
+		AllocVCPU:     allocVCPU,
+		AllocMemGB:    allocMemGB,
+		VMCount:       vmCount,
+		InstanceTypes: caps,
+	}
+
+	data, err := json.Marshal(resp)
+	if err != nil {
+		slog.Error("handleNodeStatus failed to marshal response", "err", err)
+		return
+	}
+	if err := msg.Respond(data); err != nil {
+		slog.Error("Failed to respond to hive.node.status", "err", err)
+	}
+}
+
+// handleNodeVMs responds with the list of VMs running on this node.
+// Used by the CLI: hive get vms.
+func (d *Daemon) handleNodeVMs(msg *nats.Msg) {
+	d.Instances.Mu.Lock()
+	vms := make([]config.VMInfo, 0, len(d.Instances.VMS))
+	for _, v := range d.Instances.VMS {
+		info := config.VMInfo{
+			InstanceID:   v.ID,
+			Status:       string(v.Status),
+			InstanceType: v.InstanceType,
+		}
+		// Get vCPU/memory from the resource manager's instance type info
+		if it, ok := d.resourceMgr.instanceTypes[v.InstanceType]; ok {
+			info.VCPU = int(instanceTypeVCPUs(it))
+			info.MemoryGB = float64(instanceTypeMemoryMiB(it)) / 1024.0
+		}
+		if v.Instance != nil && v.Instance.LaunchTime != nil {
+			info.LaunchTime = v.Instance.LaunchTime.Unix()
+		}
+		vms = append(vms, info)
+	}
+	d.Instances.Mu.Unlock()
+
+	resp := config.NodeVMsResponse{
+		Node: d.node,
+		Host: d.daemonIP(),
+		VMs:  vms,
+	}
+
+	data, err := json.Marshal(resp)
+	if err != nil {
+		slog.Error("handleNodeVMs failed to marshal response", "err", err)
+		return
+	}
+	if err := msg.Respond(data); err != nil {
+		slog.Error("Failed to respond to hive.node.vms", "err", err)
+	}
 }

@@ -225,7 +225,7 @@ Called in `Start()` after `initJetStream()` succeeds. Failure is non-fatal (logg
 
 ### Phase 2: Cross-node coordination
 
-These changes enable daemons to coordinate recovery of failed nodes' VMs.
+These changes enable daemons to coordinate lifecycle events — both failure recovery and graceful cluster-wide shutdown.
 
 #### 2.1 Heartbeat publishing
 
@@ -283,6 +283,242 @@ The recovery leader:
 - `hive/daemon/recovery.go` — new file, recovery coordinator logic
 - `hive/daemon/daemon.go` — integrate recovery coordinator startup
 
+#### 2.4 Coordinated cluster shutdown
+
+##### Problem
+
+The current `stop-dev.sh` operates per-node: each node independently shuts down its own services in reverse startup order. In a multi-node cluster, this creates ordering hazards:
+
+1. **Storage pulled from under running VMs**: If node1 stops Predastore before node2's VMs have finished flushing writes through Viperblock, data can be lost or corrupted.
+2. **Cascade failures during rolling stop**: Stopping NATS on one node can break JetStream quorum before other nodes have persisted their state.
+3. **Manual coordination required**: An operator must SSH into each node and run `stop-dev.sh` in the right order — infrastructure nodes last, compute nodes first. This is error-prone and doesn't scale.
+4. **No cluster-wide drain**: There's no way to stop accepting new API requests across all gateways simultaneously. A request arriving at node2's AWSGW during node1's shutdown could try to launch a VM on a node that's mid-teardown.
+5. **Orphaned nbdkit processes**: If a daemon exits before cleanly unmounting all volumes, nbdkit processes may be left running with no parent to clean them up. The current `stop-dev.sh` handles this via `pgrep`/`pkill` but only for the local node.
+
+##### Design inspiration
+
+The coordinated shutdown draws from several distributed systems patterns:
+
+| Source | Pattern | Application to Hive |
+|--------|---------|---------------------|
+| Ceph | Pre-shutdown flags (`noout`, `norecover`, `nobackfill`) set before maintenance; monitors shut down last | Write cluster shutdown marker before any service stops; NATS shuts down last |
+| Ceph | Ordered daemon shutdown: RGW → MDS → OSD → MON | AWSGW → Daemon/VMs → Viperblock → Predastore → NATS |
+| Kubernetes | Graceful node shutdown (KEP-2000): kubelet uses systemd inhibitor locks, pods sorted by priority class, `terminationGracePeriodSeconds` per pod | Per-VM QMP `system_powerdown` with configurable timeout, force kill after grace period |
+| Kubernetes | Pod termination lifecycle: preStop hook → SIGTERM → grace period → SIGKILL | Phase-based shutdown with ACK between phases; no phase proceeds until prior phase completes |
+| Kubernetes | `kubectl drain` cordons a node (marks unschedulable) before evicting pods | GATE phase stops AWSGW to prevent new work before draining VMs |
+| Rancher/Harvester | Ordered HCI shutdown: cordon node → migrate VMs → drain workloads → power off; fleet-managed lifecycle for multi-cluster | Coordinator-driven phased shutdown across all nodes; progress tracking via NATS |
+| RKE2 | `rke2-killall.sh` handles both graceful and forceful modes with explicit cleanup of iptables, mounts, and network namespaces | `--force` flag for immediate shutdown; explicit nbdkit/QEMU cleanup in DRAIN phase |
+| etcd | Learner removal before shutdown; leader transfer to minimize disruption | Coordinator is last to stop NATS; non-coordinator nodes stop NATS first |
+
+##### Command
+
+```bash
+# Graceful shutdown — waits for VMs to power down cleanly
+./bin/hive admin cluster shutdown
+
+# Force shutdown — SIGKILL VMs immediately, skip grace periods
+./bin/hive admin cluster shutdown --force
+
+# Custom timeout for VM drain phase (default: 120s)
+./bin/hive admin cluster shutdown --timeout 300s
+
+# Dry run — show what would happen without executing
+./bin/hive admin cluster shutdown --dry-run
+```
+
+The command can be run from **any node** in the cluster. The issuing node becomes the shutdown coordinator. If the coordinator crashes mid-shutdown, any surviving node can detect the `cluster.shutdown` KV marker and resume coordination (similar to the recovery leader election pattern from 2.3).
+
+##### Shutdown protocol
+
+The protocol uses five phases, each gated by acknowledgements from all participating nodes. The coordinator drives transitions and aggregates progress. NATS request-reply ensures reliable delivery with timeouts per phase.
+
+```
+Phase 1: GATE ──────► Phase 2: DRAIN ──────► Phase 3: STORAGE ──────► Phase 4: PERSIST ──────► Phase 5: INFRA
+(stop new work)        (stop VMs)             (stop block I/O)         (stop object storage)    (stop NATS)
+```
+
+**Phase 1: GATE** — stop accepting new work
+
+Purpose: Ensure no new API requests enter the system while shutdown proceeds. Analogous to Ceph's `noout`/`norecover` flags and Kubernetes' node cordon.
+
+1. Coordinator writes `cluster.shutdown` marker to `hive-cluster-state` KV:
+   ```
+   Key:   cluster.shutdown
+   Value: {"initiator": "node1", "phase": "gate", "started": "2024-...", "timeout": "120s", "force": false}
+   ```
+2. Coordinator publishes `hive.cluster.shutdown.gate` (NATS request, expecting N replies)
+3. Each node on receiving the gate request:
+   - Stops AWSGW service (no new API requests accepted)
+   - Stops hive-ui service
+   - Sets internal `shuttingDown` flag to reject any in-flight NATS work requests
+   - ACKs to coordinator: `{"node": "node2", "phase": "gate", "stopped": ["awsgw", "ui"]}`
+4. Coordinator waits for all ACKs (timeout: 30s per node)
+5. On timeout: log which nodes didn't respond, proceed anyway (they may be already down)
+
+**Phase 2: DRAIN** — gracefully terminate all VMs
+
+Purpose: Ensure all VMs are cleanly shut down and their volumes unmounted before storage services stop. This is the critical data-safety phase. Mirrors Kubernetes' pod termination lifecycle: preStop → SIGTERM → grace period → SIGKILL.
+
+1. Coordinator publishes `hive.cluster.shutdown.drain`
+2. Each daemon node:
+   - Sends QMP `system_powerdown` to each running QEMU instance (same as `setupShutdown()` today)
+   - Waits for QEMU processes to exit, polling PID files
+   - Reports progress via `hive.cluster.shutdown.progress`:
+     ```json
+     {"node": "node2", "phase": "drain", "total": 4, "remaining": 2, "vms": ["i-abc123", "i-def456"]}
+     ```
+   - After per-VM grace period (default 60s), sends SIGTERM then SIGKILL to stubborn QEMU processes
+   - Unmounts all EBS volumes via `ebs.unmount` NATS requests (viperblock still running)
+   - Cleans up any orphaned nbdkit processes attached to terminated VMs
+   - Writes instance state to JetStream KV (same as `WriteState()` in `setupShutdown()`)
+   - Writes per-node shutdown marker (reuses Phase 1's `WriteShutdownMarker()`)
+   - ACKs when all VMs have exited and volumes are unmounted
+3. Coordinator aggregates progress, prints live status
+4. `--force` mode: skip QMP `system_powerdown`, immediately SIGKILL all QEMU processes
+5. On timeout: coordinator logs remaining VMs, force-kills them, proceeds
+
+**Phase 3: STORAGE** — stop block storage
+
+Purpose: Shut down viperblock and clean up all nbdkit processes. Safe to do now because all VMs are terminated and volumes unmounted.
+
+1. Coordinator publishes `hive.cluster.shutdown.storage`
+2. Each node with viperblock service:
+   - Stops viperblock service
+   - Scans for and kills any orphaned nbdkit processes (`pkill -f nbdkit`)
+   - Verifies no NBD block devices remain active
+   - ACKs when complete
+3. Nodes without viperblock: ACK immediately
+4. Coordinator waits for all ACKs (timeout: 30s)
+
+**Phase 4: PERSIST** — stop object storage
+
+Purpose: Shut down Predastore cleanly. Safe because no viperblock or AWSGW requests remain. Predastore may still have internal replication traffic between nodes — the coordinator ensures all nodes stop together.
+
+1. Coordinator publishes `hive.cluster.shutdown.persist`
+2. Each node with predastore service:
+   - Stops predastore service
+   - ACKs when complete
+3. Coordinator waits for all ACKs (timeout: 30s)
+
+**Phase 5: INFRA** — stop NATS (coordinator last)
+
+Purpose: Shut down the coordination layer itself. This is fire-and-forget because the communication channel is being torn down.
+
+1. Coordinator publishes `hive.cluster.shutdown.infra` to all **non-coordinator** nodes
+2. Non-coordinator nodes: stop local NATS and exit the shutdown handler
+3. Coordinator waits 5s for NATS cluster to stabilize with fewer members
+4. Coordinator stops its own NATS
+5. Coordinator logs "Cluster shutdown complete" and exits
+
+##### Coordinator election and failure handling
+
+The coordinator is simply the node that runs the `hive admin cluster shutdown` command. If the coordinator crashes mid-shutdown:
+
+1. The `cluster.shutdown` KV marker persists (1-hour TTL, long enough for any shutdown)
+2. The marker records the current phase and which nodes have ACKed
+3. Any surviving daemon detects the marker via `kv.Watch("cluster.shutdown")`
+4. After a coordinator timeout (30s without progress updates), a surviving daemon takes over using the same CAS pattern as recovery leader election (2.3)
+5. The new coordinator resumes from the last completed phase
+
+If a node is unreachable during any phase:
+- Coordinator logs a warning and continues after the per-phase timeout
+- Unreachable nodes may have already shut down (e.g., power loss)
+- If they come back later, they'll see the `cluster.shutdown` marker and refuse to start services until the marker is cleared
+
+##### Status reporting
+
+The coordinator prints live progress to stdout:
+
+```
+Cluster shutdown initiated from node1 (3 nodes)
+
+Phase 1/5: GATE — Stopping API gateways and UI...
+  node1: awsgw stopped, ui stopped               [ok]
+  node2: awsgw stopped, ui stopped               [ok]
+  node3: awsgw stopped, ui stopped               [ok]
+
+Phase 2/5: DRAIN — Stopping virtual machines...
+  node1: 4/4 VMs stopped                         [ok]     12.3s
+  node2: 2/2 VMs stopped                         [ok]      8.7s
+  node3: 1/1 VMs stopped                         [ok]      6.1s
+
+Phase 3/5: STORAGE — Stopping block storage...
+  node1: viperblock stopped, 0 nbdkit cleaned    [ok]
+  node2: viperblock stopped, 0 nbdkit cleaned    [ok]
+  node3: viperblock stopped, 0 nbdkit cleaned    [ok]
+
+Phase 4/5: PERSIST — Stopping object storage...
+  node1: predastore stopped                      [ok]
+  node2: predastore stopped                      [ok]
+  node3: predastore stopped                      [ok]
+
+Phase 5/5: INFRA — Stopping NATS...
+  node2: nats stopped
+  node3: nats stopped
+  node1: nats stopped (coordinator, last)
+
+Cluster shutdown complete (47.3s)
+```
+
+##### NATS topics
+
+| Topic | Pattern | Purpose |
+|-------|---------|---------|
+| `hive.cluster.shutdown.gate` | Request-Reply | Phase 1: stop AWSGW + UI, await ACK |
+| `hive.cluster.shutdown.drain` | Request-Reply | Phase 2: stop VMs, await ACK |
+| `hive.cluster.shutdown.progress` | Publish (broadcast) | Progress updates during drain (VM counts) |
+| `hive.cluster.shutdown.storage` | Request-Reply | Phase 3: stop viperblock + nbdkit, await ACK |
+| `hive.cluster.shutdown.persist` | Request-Reply | Phase 4: stop predastore, await ACK |
+| `hive.cluster.shutdown.infra` | Publish (fire-and-forget) | Phase 5: stop NATS on non-coordinator nodes |
+
+##### Cluster shutdown KV state
+
+```
+Bucket:  hive-cluster-state
+Key:     cluster.shutdown
+Value:   {
+    "initiator": "node1",
+    "phase": "drain",
+    "started": "2024-01-15T10:30:00Z",
+    "timeout": "120s",
+    "force": false,
+    "nodes_total": 3,
+    "nodes_acked": {
+        "node1": {"phase": "gate", "at": "..."},
+        "node2": {"phase": "gate", "at": "..."},
+        "node3": {"phase": "gate", "at": "..."}
+    }
+}
+```
+
+##### Integration with existing code
+
+- **Reuses `stopInstance()`**: The daemon's existing `stopInstance()` function handles QMP shutdown, PID polling, volume unmount, and force kill. The DRAIN phase calls this same code path rather than reimplementing it.
+- **Reuses `WriteShutdownMarker()`**: Each node writes its per-node shutdown marker during DRAIN, so on next startup, `restoreInstances()` sees a clean shutdown.
+- **Reuses `./bin/hive service <name> stop`**: For stopping AWSGW, UI, viperblock, predastore, and NATS, the coordinator tells each daemon to invoke the same service stop mechanism used by `stop-dev.sh`.
+- **`setupShutdown()` becomes cluster-aware**: When a daemon receives a cluster shutdown request, it skips independent shutdown and instead participates in the coordinated protocol. If a SIGTERM arrives while a coordinated shutdown is in progress, the daemon ACKs the current phase and exits.
+- **`stop-dev.sh` remains for single-node dev**: The script continues to work for local development. For multi-node clusters, `hive admin cluster shutdown` is the preferred approach.
+
+##### Comparison with per-node `stop-dev.sh`
+
+| Aspect | `stop-dev.sh` (current) | `hive admin cluster shutdown` (proposed) |
+|--------|------------------------|------------------------------------------|
+| Scope | Single node | Entire cluster from any node |
+| Ordering | Per-node reverse order | Cluster-wide phased ordering |
+| VM safety | Daemon exits, then waits for QEMU via `pgrep` | Daemon actively monitors each VM's QMP shutdown |
+| Storage safety | Hopes VMs exited before predastore stop | Guarantees all VMs stopped before storage phases |
+| nbdkit cleanup | `pgrep`/`pkill` after the fact | Explicit unmount + cleanup during DRAIN |
+| Progress | Per-service echo messages | Cluster-wide live progress with VM counts |
+| Failure handling | None — operator must check each node | Automatic coordinator failover, timeout handling |
+| NATS safety | Stops NATS whenever it gets there | NATS is always last, coordinator node last of all |
+
+**Files:**
+- `hive/daemon/daemon.go` — shutdown handler that participates in coordinated protocol, `shuttingDown` flag to reject new work
+- `hive/daemon/shutdown.go` — **new file**, coordinator logic: phase management, ACK aggregation, progress reporting, coordinator failover
+- `hive/daemon/jetstream.go` — `WriteClusterShutdown()` / `ReadClusterShutdown()` / `DeleteClusterShutdown()` / `WatchClusterShutdown()`
+- `cmd/hive/cmd/admin.go` — new `cluster shutdown` subcommand with `--force`, `--timeout`, `--dry-run` flags
+- `hive/daemon/daemon_handlers.go` — NATS handlers for `hive.cluster.shutdown.*` topics
+
 ### Phase 3: Operational tooling
 
 #### 3.1 Maintenance mode flag
@@ -297,6 +533,7 @@ When maintenance mode is set for a node:
 - Peer daemons skip the 5-minute failure detection grace period for that node (they know it's planned)
 - The node itself skips VM recovery on restart if the maintenance flag is still set (operator controls when VMs come back)
 - Analogous to Ceph's `noout` flag
+- Works with coordinated shutdown: the coordinator sets maintenance mode on all nodes before Phase 1, clears it after Phase 5
 
 **Files:**
 - `hive/daemon/jetstream.go` — new `SetMaintenanceMode()` / `ClearMaintenanceMode()` / `IsMaintenanceMode()`
@@ -352,12 +589,14 @@ This reads from the `hive-cluster-state` KV bucket (heartbeats + service manifes
 
 ## Files to Modify (Phase 2 + 3)
 
-| File | Changes |
-|------|---------|
-| `hive/daemon/jetstream.go` | Heartbeat, recovery lease, maintenance mode |
-| `hive/daemon/recovery.go` | **New file** — recovery coordinator: leader election, capability-aware VM assignment, peer monitoring |
-| `hive/daemon/daemon.go` | Heartbeat/recovery integration |
-| `cmd/hive/cmd/admin.go` | `maintenance` and `status` subcommands |
+| File | Changes | Phase |
+|------|---------|-------|
+| `hive/daemon/jetstream.go` | Heartbeat, recovery lease, cluster shutdown KV, maintenance mode | 2.1–2.4, 3.1 |
+| `hive/daemon/recovery.go` | **New file** — recovery coordinator: leader election, capability-aware VM assignment, peer monitoring | 2.3 |
+| `hive/daemon/shutdown.go` | **New file** — coordinated shutdown coordinator: phase management, ACK aggregation, progress reporting, failover | 2.4 |
+| `hive/daemon/daemon.go` | Heartbeat/recovery integration, cluster shutdown handler, `shuttingDown` flag | 2.1–2.4 |
+| `hive/daemon/daemon_handlers.go` | NATS handlers for `hive.cluster.shutdown.*` topics | 2.4 |
+| `cmd/hive/cmd/admin.go` | `cluster shutdown`, `maintenance`, `status` subcommands | 2.4, 3.1, 3.3 |
 
 ## Implementation Order
 
@@ -376,15 +615,16 @@ Phase 0 is the prerequisite — all subsequent phases depend on nodes knowing th
 8. [x] Clean shutdown marker
 9. [x] Service manifest on startup
 
-**Phase 2** — cross-node failure recovery — **Planned**:
+**Phase 2** — cross-node coordination — **Planned**:
 10. Heartbeat publishing (with capabilities)
 11. Peer failure detection
 12. Leader-elected recovery coordinator (capability-aware placement)
+13. Coordinated cluster shutdown (`hive admin cluster shutdown`)
 
 **Phase 3** — operational tooling — **Planned**:
-13. Maintenance mode flag
-14. Recovery status endpoints
-15. Admin cluster status command
+14. Maintenance mode flag
+15. Recovery status endpoints
+16. Admin cluster status command
 
 ## Testing
 
@@ -409,22 +649,33 @@ Phase 0 is the prerequisite — all subsequent phases depend on nodes knowing th
 #### Unit tests
 - Recovery coordinator: test leader election, capability-filtered VM assignment, epoch-based fencing
 - Heartbeat: test staleness detection thresholds
+- Coordinated shutdown: test phase transitions, ACK aggregation, timeout handling, coordinator failover
+- Shutdown protocol: test `cluster.shutdown` KV marker lifecycle (write, read, resume, clear)
 
 #### Integration tests (multi-node Docker)
 - Start 3-node cluster, launch 4 VMs, stop all, restart — verify all 4 VMs recover exactly once
 - Start 3+1 cluster (3 full + 1 compute-only), verify compute-only connects to remote NATS/Predastore
 - Kill one node (SIGKILL), verify surviving nodes recover its VMs after grace period
 - Rolling restart: stop/start nodes one at a time, verify zero duplicate launches
+- Coordinated shutdown: launch VMs across 3 nodes, run `hive admin cluster shutdown` from node2, verify phase ordering (AWSGW stops before VMs, VMs stop before viperblock, viperblock before predastore, NATS last)
+- Coordinated shutdown with `--force`: verify VMs are killed immediately, no grace period
+- Shutdown coordinator failure: start cluster shutdown from node1, kill node1 mid-drain, verify another node resumes coordination
+- Post-shutdown restart: after coordinated shutdown, restart all nodes, verify clean shutdown markers present and VMs restore correctly
+- No orphaned processes: after coordinated shutdown, verify zero remaining QEMU/nbdkit processes on all nodes
 
 #### Manual verification
 - Deploy to 3-node test cluster (10.1.3.170-172), run stop/start cycle, check logs for race conditions
 - Add a 4th compute-only node, verify it joins and accepts workloads
+- Run `hive admin cluster shutdown` from each of the 3 nodes in turn, verify it works from any node
+- Run `hive admin cluster shutdown --dry-run` and verify output matches expected phase plan
 
 ## Future Work
 
+- **Coordinated cluster startup** (`hive admin cluster start`): Complement to `cluster shutdown`. Coordinator starts services across all nodes in dependency order (NATS → Predastore → Viperblock → Daemon → AWSGW → UI), with health checks between phases. Would replace per-node `start-dev.sh` for multi-node clusters.
 - **Persistent VM pinning**: Optional affinity rules to prefer restarting VMs on their original node
-- **Live migration**: Move running VMs between nodes without stopping them (requires QEMU live migration support)
+- **Live migration**: Move running VMs between nodes without stopping them (requires QEMU live migration support). Would enable `cluster shutdown` to migrate VMs to surviving nodes instead of stopping them.
 - **Automatic scaling**: Detect sustained capacity pressure and suggest adding nodes
-- **Recovery metrics**: Prometheus-compatible metrics for recovery duration, failures, leader elections
+- **Recovery metrics**: Prometheus-compatible metrics for recovery duration, failures, leader elections, shutdown phase timings
 - **Dynamic service reconfiguration**: Add/remove services from a running node without full restart
 - **Storage-only node health**: Extend recovery to detect failed storage nodes and reroute Viperblock/Predastore traffic
+- **Rolling cluster upgrade**: Coordinated restart that drains nodes one at a time, upgrades binaries, and restarts — maintaining cluster availability throughout

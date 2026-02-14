@@ -97,6 +97,39 @@ wait_for_daemon_ready "https://localhost:9999"
 # Define common AWS CLI args
 AWS_EC2="aws --endpoint-url https://localhost:9999 ec2"
 
+# Phase 1b: Cluster Stats CLI
+echo "Phase 1b: Cluster Stats CLI"
+
+# Test hive get nodes — should show node1 as Ready
+echo "Testing hive get nodes..."
+GET_NODES_OUTPUT=$(./bin/hive get nodes --config ~/hive/config/hive.toml --timeout 5s 2>/dev/null)
+echo "$GET_NODES_OUTPUT"
+if ! echo "$GET_NODES_OUTPUT" | grep -q "Ready"; then
+    echo "hive get nodes did not show any Ready nodes"
+    exit 1
+fi
+echo "hive get nodes passed"
+
+# Test hive top nodes — should show CPU/MEM stats
+echo "Testing hive top nodes..."
+TOP_NODES_OUTPUT=$(./bin/hive top nodes --config ~/hive/config/hive.toml --timeout 5s 2>/dev/null)
+echo "$TOP_NODES_OUTPUT"
+if ! echo "$TOP_NODES_OUTPUT" | grep -q "0/"; then
+    echo "hive top nodes did not show resource stats"
+    exit 1
+fi
+echo "hive top nodes passed"
+
+# Test hive get vms — should show no VMs yet
+echo "Testing hive get vms (empty)..."
+GET_VMS_OUTPUT=$(./bin/hive get vms --config ~/hive/config/hive.toml --timeout 5s 2>/dev/null)
+echo "$GET_VMS_OUTPUT"
+if ! echo "$GET_VMS_OUTPUT" | grep -q "No VMs found"; then
+    echo "hive get vms should show 'No VMs found' before any launches"
+    exit 1
+fi
+echo "hive get vms (empty) passed"
+
 # Phase 2: Discovery & Metadata
 echo "Phase 2: Discovery & Metadata"
 # Verify describe-regions (just ensure it returns at least one region)
@@ -257,6 +290,16 @@ if [ "$STATE" != "running" ]; then
     echo "Instance failed to reach running state"
     exit 1
 fi
+
+# Phase 5a-pre: Verify hive get vms shows running instance
+echo "Phase 5a-pre: Cluster Stats CLI (with running VM)"
+GET_VMS_OUTPUT=$(./bin/hive get vms --config ~/hive/config/hive.toml --timeout 5s 2>/dev/null)
+echo "$GET_VMS_OUTPUT"
+if ! echo "$GET_VMS_OUTPUT" | grep -q "$INSTANCE_ID"; then
+    echo "hive get vms did not show running instance $INSTANCE_ID"
+    exit 1
+fi
+echo "hive get vms shows running instance"
 
 # Phase 5a: Validate instance metadata fields
 echo "Phase 5a: Instance Metadata Validation"
