@@ -1,4 +1,5 @@
 GO_PROJECT_NAME := hive
+SHELL := /bin/bash
 
 # Detect architecture for cross-platform support
 ARCH := $(shell uname -m)
@@ -37,30 +38,30 @@ build:
 
 # Build hive-ui frontend (requires pnpm)
 build-ui:
-	@echo "\n....Building hive-ui frontend...."
+	@echo -e "\n....Building hive-ui frontend...."
 	cd hive/services/hiveui/frontend && pnpm build
 
 # GO commands
 go_build:
-	@echo "\n....Building $(GO_PROJECT_NAME)"
+	@echo -e "\n....Building $(GO_PROJECT_NAME)"
 	go build $(GO_BUILD_MOD) -ldflags "-s -w" -o ./bin/$(GO_PROJECT_NAME) cmd/hive/main.go
 
 go_run:
-	@echo "\n....Running $(GO_PROJECT_NAME)...."
+	@echo -e "\n....Running $(GO_PROJECT_NAME)...."
 	$(GOPATH)/bin/$(GO_PROJECT_NAME)
 
 # Preflight — runs the same checks as GitHub Actions (format + lint + security + tests).
 # Use this before committing to catch CI failures locally.
 preflight: check-format vet security-check test
-	@echo "\n✅ Preflight passed — safe to commit."
+	@echo -e "\n ✅ Preflight passed — safe to commit."
 
 # Run unit tests
 test:
-	@echo "\n....Running tests for $(GO_PROJECT_NAME)...."
+	@echo -e "\n....Running tests for $(GO_PROJECT_NAME)...."
 	LOG_IGNORE=1 go test -v -timeout 120s ./...
 
 bench:
-	@echo "\n....Running benchmarks for $(GO_PROJECT_NAME)...."
+	@echo -e "\n....Running benchmarks for $(GO_PROJECT_NAME)...."
 	$(MAKE) easyjson
 	LOG_IGNORE=1 go test -benchmem -run=. -bench=. ./...
 
@@ -73,7 +74,7 @@ clean:
 	rm -rf hive/services/hiveui/frontend/dist
 
 install-system:
-	@echo "\n....Installing system dependencies for $(ARCH)...."
+	@echo -e "\n....Installing system dependencies for $(ARCH)...."
 	@echo "QEMU packages: $(QEMU_PACKAGES)"
 	apt-get update && sudo apt-get install -y \
 		nbdkit nbdkit-plugin-dev pkg-config $(QEMU_PACKAGES) qemu-utils qemu-kvm \
@@ -81,7 +82,7 @@ install-system:
 		iproute2 netcat-openbsd openssh-client wget git unzip sudo xz-utils file
 
 install-go:
-	@echo "\n....Installing Go 1.26.0 for $(ARCH) ($(GO_ARCH))...."
+	@echo -e "\n....Installing Go 1.26.0 for $(ARCH) ($(GO_ARCH))...."
 	@if [ ! -d "/usr/local/go" ]; then \
 		curl -L https://go.dev/dl/go1.26.0.linux-$(GO_ARCH).tar.gz | tar -C /usr/local -xz; \
 	else \
@@ -90,7 +91,7 @@ install-go:
 	@echo "Go version: $$(go version)"
 
 install-aws:
-	@echo "\n....Installing AWS CLI v2 for $(ARCH) ($(AWS_ARCH))...."
+	@echo -e "\n....Installing AWS CLI v2 for $(ARCH) ($(AWS_ARCH))...."
 	@if ! command -v aws >/dev/null 2>&1; then \
 		curl "https://awscli.amazonaws.com/awscli-exe-linux-$(AWS_ARCH).zip" -o "awscliv2.zip"; \
 		unzip -o awscliv2.zip; \
@@ -101,7 +102,7 @@ install-aws:
 	fi
 
 quickinstall: install-system install-go install-aws
-	@echo "\n✅ Quickinstall complete for $(ARCH)."
+	@echo -e "\n✅ Quickinstall complete for $(ARCH)."
 	@echo "   Please ensure /usr/local/go/bin is in your PATH."
 	@echo "   Installed: Go ($(GO_ARCH)), AWS CLI ($(AWS_ARCH)), QEMU ($(QEMU_PACKAGES))"
 
@@ -130,12 +131,12 @@ vet:
 # Security checks — each tool fails the build on findings (matches CI).
 # Reports are also saved to tests/ for review.
 security-check:
-	@echo "\n....Running security checks for $(GO_PROJECT_NAME)...."
-	go tool govulncheck ./... 2>&1 | tee tests/govulncheck-report.txt
+	@echo -e "\n....Running security checks for $(GO_PROJECT_NAME)...."
+	set -o pipefail && go tool govulncheck ./... 2>&1 | tee tests/govulncheck-report.txt
 	@echo "  govulncheck ok"
-	go tool gosec -exclude=G204,G304,G402 -exclude-generated -exclude-dir=cmd ./... 2>&1 | tee tests/gosec-report.txt
+	set -o pipefail && go tool gosec -exclude=G204,G304,G402 -exclude-generated -exclude-dir=cmd ./... 2>&1 | tee tests/gosec-report.txt
 	@echo "  gosec ok"
-	go tool staticcheck -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./... 2>&1 | tee tests/staticcheck-report.txt
+	set -o pipefail && go tool staticcheck -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./... 2>&1 | tee tests/staticcheck-report.txt
 	@echo "  staticcheck ok"
 
 # Legacy alias — now runs the strict checks (same as security-check)
@@ -149,7 +150,7 @@ PARENT_DIR := $(shell cd .. && pwd)
 E2E_IMAGE := hive-e2e:latest
 
 test-docker-build:
-	@echo "\n....Building E2E Docker image...."
+	@echo -e "\n....Building E2E Docker image...."
 	@for dep in viperblock predastore; do \
 		if [ ! -d "$(PARENT_DIR)/$$dep" ]; then \
 			echo "Missing sibling repo $$dep — running clone-deps.sh"; \
@@ -160,17 +161,17 @@ test-docker-build:
 	docker build -t $(E2E_IMAGE) -f tests/e2e/Dockerfile.e2e $(PARENT_DIR)
 
 test-docker-single: test-docker-build
-	@echo "\n....Running Single-Node E2E Tests...."
+	@echo -e "\n....Running Single-Node E2E Tests...."
 	docker run --privileged --rm -v /dev/kvm:/dev/kvm $(E2E_IMAGE)
 
 test-docker-multi: test-docker-build
-	@echo "\n....Running Multi-Node E2E Tests...."
+	@echo -e "\n....Running Multi-Node E2E Tests...."
 	docker run --privileged --rm -v /dev/kvm:/dev/kvm --cap-add=NET_ADMIN $(E2E_IMAGE) ./tests/e2e/run-multinode-e2e.sh
 
 test-docker: test-docker-build
-	@echo "\n....Running Single-Node E2E Tests...."
+	@echo -e "\n....Running Single-Node E2E Tests...."
 	docker run --privileged --rm -v /dev/kvm:/dev/kvm $(E2E_IMAGE)
-	@echo "\n....Running Multi-Node E2E Tests...."
+	@echo -e "\n....Running Multi-Node E2E Tests...."
 	docker run --privileged --rm -v /dev/kvm:/dev/kvm --cap-add=NET_ADMIN $(E2E_IMAGE) ./tests/e2e/run-multinode-e2e.sh
 
 .PHONY: build build-ui go_build go_run preflight test bench run clean \

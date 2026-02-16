@@ -30,7 +30,7 @@ make test                 # Run all unit tests (sets LOG_IGNORE=1)
 make check-format         # Check gofmt (fails on diff, same as CI)
 make format               # Fix gofmt in place
 make vet                  # Run go vet (fails on issues)
-make security             # Run go vet + govulncheck, gosec, staticcheck (fails on issues)
+make security-check       # Run govulncheck, gosec, staticcheck (fails on issues)
 make bench                # Run benchmarks
 make clean                # Remove build artifacts
 make test-docker          # Run single + multi-node E2E in Docker (requires /dev/kvm)
