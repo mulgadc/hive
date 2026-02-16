@@ -59,80 +59,6 @@ scripts/stop-dev.sh     # Stop all services
 
 Data directory: `~/hive/` (logs in `~/hive/logs/`, config in `~/hive/config/`)
 
-## Development Process
-
-All non-trivial work (features, bug fixes, improvements) follows a plan-first, document-as-you-go process. Plans are committed to git so they are visible to the whole team, reviewable in PRs, and serve as permanent documentation.
-
-### When to write a plan
-
-- **Required**: New features, multi-file changes, architectural changes, performance work, non-obvious bug fixes
-- **Not required**: Typo fixes, single-line bug fixes, config tweaks, small refactors contained to one function
-
-### Plan location
-
-Plans live in `docs/development/` under the appropriate category:
-
-```
-docs/development/
-├── bugs/              # Bug fixes
-├── feature/           # New features
-└── improvements/      # Performance, refactoring, tech debt
-```
-
-File naming: lowercase kebab-case describing the work, e.g. `nbd-performance.md`, `attach-volume.md`, `instance-state.md`.
-
-### Plan lifecycle
-
-#### 1. Planning phase
-
-When entering plan mode for non-trivial work, **create the plan document first** and write it to the appropriate `docs/development/{category}/` path. The plan must include:
-
-- **Summary** — What and why, in 1-3 sentences
-- **Context / Problem Statement** — Current behavior, what's wrong or missing
-- **Proposed Changes** — What will change, which files, key design decisions
-- **Files to Modify** — List of files with brief description of changes
-- **Testing** — How the changes will be verified
-
-The plan document is committed to git before implementation begins. This makes the plan reviewable and visible to the team.
-
-#### 2. Implementation phase
-
-During implementation, **update the plan document as you go**:
-
-- Mark completed steps (use `[x]` checkboxes or note "Done" inline)
-- Record findings, corrections, or deviations from the original plan
-- Add code references (file paths, line numbers, struct/function names) for what was actually implemented
-- Note any follow-up work discovered during implementation
-
-#### 3. Completion
-
-When development is complete, update the document to serve as **permanent reference documentation**:
-
-- Add a status line near the top: `**Status: Complete**` (or `**Status: In Progress**`, `**Status: Planned**`)
-- Replace future-tense plan language with past-tense description of what was done
-- Add a **"Files Modified"** summary table
-- Add a **"Future Work"** section if there are known follow-ups
-- Keep the original context (benchmarks, research, root cause analysis) — this is valuable reference material
-- The document should read as a complete technical reference, not just a plan
-
-#### Example status markers
-
-```markdown
-**Status: Planned** — Awaiting review/approval before implementation
-**Status: In Progress** — Implementation underway
-**Status: Complete** — All changes implemented and tests passing
-```
-
-### Git history as context
-
-When starting work on a feature or investigating an issue, review the last 10-20 git commits (`git log --oneline -20`) to understand the current development context. Recent commits contain valuable context about in-progress features, architectural decisions, and related changes.
-
-### Existing examples
-
-- `docs/development/improvements/nbd-performance.md` — Complete improvement with benchmarks, root cause analysis, implementation details, and future work
-- `docs/development/feature/attach-volume.md` — Complete feature with request flow, files changed, and design decisions
-- `docs/development/bugs/instance-state.md` — Bug fix with problem statement, proposed architecture, and state transitions
-
 ## Project Standards
 
 - Use `log/slog` instead of `log`. Use appropriate log level, eg `slog.Debug`
@@ -140,6 +66,7 @@ When starting work on a feature or investigating an issue, review the last 10-20
 - For returning AWS errors, use `awserrors` package instead of manually typed strings
 
 **Preflight Policy:**
+- **Claude MUST run `make preflight` and `make test` after any Go code changes** — these catch security issues (gosec), lint errors, and test failures before they reach CI. Do not skip this step.
 - Run `make preflight` before pushing any major changes — it runs the same checks as GitHub Actions (gofmt, go vet, gosec, staticcheck, govulncheck, and all unit tests)
 - All developers must install the pre-push hook to enforce this automatically:
 
@@ -188,29 +115,6 @@ mulga/
 AWS_PROFILE=hive aws ec2 describe-instances
 ```
 
-### Remote Test Cluster
+### IaC / Test Cluster
 
-A multi-node Proxmox test cluster is available for validating changes on real hardware. Node IPs, SSH credentials, and connection details are in `docs/DEVNOTES.md` (gitignored, private to the repo).
-
-**Lifecycle scripts** (`scripts/iac/`):
-
-```bash
-# Source environment first
-source scripts/iac/proxmox/.env && source ~/prox
-
-# Provision, configure, test, destroy
-./scripts/iac/hive-test.sh up <cluster-name>          # Create VMs
-./scripts/iac/hive-test.sh configure <cluster-name>   # Clone, build, form cluster, start services
-./scripts/iac/hive-test.sh test <cluster-name>         # Smoke tests (describe-regions, instances, etc.)
-./scripts/iac/hive-test.sh status <cluster-name>       # Health check all nodes
-./scripts/iac/hive-test.sh ssh <cluster-name> <N>      # SSH to node N
-./scripts/iac/hive-test.sh down <cluster-name>         # Destroy VMs
-```
-
-**Deploying local changes to a running cluster:**
-
-1. Read `docs/DEVNOTES.md` for the current cluster node IPs and SSH key path
-2. SSH key: `~/.ssh/us-west-1-tf-cloudinit`, user: `tf-user`
-3. Use `git diff` patches or `scp` to push changes, then rebuild on each node
-4. Daemon health endpoint is HTTP (not HTTPS): `curl -s http://<ip>:4432/health`
-5. Always `export PATH=/usr/local/go/bin:$PATH` on remote nodes before builds
+Infrastructure-as-code scripts for provisioning multi-node test clusters are in `scripts/iac/`. See `scripts/iac/proxmox/` for Proxmox-based provisioning with OpenTofu.
