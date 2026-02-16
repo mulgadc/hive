@@ -76,7 +76,7 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 
 	// Initialize services (needed for handler tests)
 	daemon.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(cfg, daemon.resourceMgr.instanceTypes, nc, &daemon.Instances, objectstore.NewMemoryObjectStore())
-	daemon.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(cfg, nc)
+	daemon.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(cfg, nc, nil)
 
 	t.Cleanup(func() {
 		if daemon.natsConn != nil {
