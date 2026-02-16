@@ -177,7 +177,7 @@ func SetOOMScore(pid int, score int) error {
 		return fmt.Errorf("OOM score adjustment is only supported on Linux")
 	}
 	path := fmt.Sprintf("/proc/%d/oom_score_adj", pid)
-	return os.WriteFile(path, []byte(strconv.Itoa(score)), 0644)
+	return os.WriteFile(path, []byte(strconv.Itoa(score)), 0600)
 }
 
 func ReadPidFile(name string) (int, error) {

@@ -114,7 +114,7 @@ func (d *Daemon) handleInstanceCrash(instance *vm.VM, waitErr error) {
 
 	// Clean up stale QMP socket so QEMU can rebind on restart
 	if instance.Config.QMPSocket != "" {
-		os.Remove(instance.Config.QMPSocket)
+		_ = os.Remove(instance.Config.QMPSocket)
 	}
 
 	// Unmount EBS volumes (same pattern as stopInstance)
