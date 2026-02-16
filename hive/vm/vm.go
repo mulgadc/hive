@@ -8,11 +8,21 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/qmp"
 )
+
+// InstanceHealthState tracks crash detection and auto-restart metadata for a VM.
+type InstanceHealthState struct {
+	CrashCount      int       `json:"crash_count"`
+	LastCrashTime   time.Time `json:"last_crash_time,omitempty"`
+	LastCrashReason string    `json:"last_crash_reason,omitempty"`
+	RestartCount    int       `json:"restart_count"`
+	FirstCrashTime  time.Time `json:"first_crash_time,omitempty"`
+}
 
 type VM struct {
 	ID           string        `json:"id"`
@@ -47,6 +57,9 @@ type VM struct {
 
 	// Metadata server address (e.g., "127.0.0.1:12345") for EC2 metadata service
 	MetadataServerAddress string `json:"metadata_server_address,omitempty"`
+
+	// Health tracks crash detection and auto-restart state
+	Health InstanceHealthState `json:"health"`
 }
 
 // ResetNodeLocalState zeroes out fields that are specific to the daemon node

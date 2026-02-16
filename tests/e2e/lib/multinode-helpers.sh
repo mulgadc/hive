@@ -495,6 +495,68 @@ dump_all_node_logs() {
     echo "=========================================="
 }
 
+# Get the QEMU process PID for an instance
+# Usage: get_qemu_pid <instance_id>
+# Returns: the PID, or empty string if not found
+get_qemu_pid() {
+    local instance_id="$1"
+
+    local pid
+    pid=$(ps auxw | grep "$instance_id" | grep qemu-system | grep -v grep | awk '{print $2}' | head -1)
+
+    if [ -n "$pid" ]; then
+        echo "$pid"
+        return 0
+    fi
+
+    return 1
+}
+
+# Wait for an instance to recover from a crash (error → running)
+# Usage: wait_for_instance_recovery <instance_id> [max_attempts]
+# Expects state transition: error → pending → running
+wait_for_instance_recovery() {
+    local instance_id="$1"
+    local max_attempts="${2:-60}"
+    local attempt=0
+    local saw_error=false
+
+    echo "  Waiting for instance $instance_id to recover..."
+
+    while [ $attempt -lt $max_attempts ]; do
+        local state
+        state=$(aws --endpoint-url https://${NODE1_IP}:${AWSGW_PORT} ec2 describe-instances \
+            --instance-ids "$instance_id" \
+            --query 'Reservations[0].Instances[0].State.Name' \
+            --output text 2>/dev/null) || {
+            sleep 2
+            attempt=$((attempt + 1))
+            continue
+        }
+
+        if [ "$state" == "error" ] || [ "$state" == "pending" ]; then
+            saw_error=true
+            echo "  State: $state (attempt $((attempt + 1))/$max_attempts)"
+        fi
+
+        if [ "$state" == "running" ] && [ "$saw_error" = true ]; then
+            echo "  Instance recovered to running state"
+            return 0
+        fi
+
+        if [ "$state" == "running" ] && [ "$saw_error" = false ]; then
+            # Still in original running state, crash not detected yet
+            :
+        fi
+
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+
+    echo "  ERROR: Instance did not recover within $max_attempts attempts"
+    return 1
+}
+
 # Global variable for init PID tracking (used by multi-node formation)
 LEADER_INIT_PID=""
 

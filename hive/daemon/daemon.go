@@ -609,6 +609,11 @@ func (d *Daemon) Start() error {
 	}
 	d.accountService = accountSvc
 
+	// Protect daemon from OOM killer (prefer killing QEMU VMs instead)
+	if err := utils.SetOOMScore(os.Getpid(), -500); err != nil {
+		slog.Warn("Failed to set daemon OOM score", "err", err)
+	}
+
 	d.waitForClusterReady()
 	d.restoreInstances()
 
@@ -1732,6 +1737,7 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	processChan := make(chan int, 1)
 	exitChan := make(chan int, 1)
 	ptsChan := make(chan int, 1)
+	startupConfirmed := make(chan bool, 1)
 
 	go func() {
 		cmd, err := instance.Config.Execute()
@@ -1765,6 +1771,11 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		}
 
 		slog.Info("VM started successfully", "pid", cmd.Process.Pid)
+
+		// Set OOM score for QEMU process (prefer killing VMs over system services)
+		if err := utils.SetOOMScore(cmd.Process.Pid, 500); err != nil {
+			slog.Warn("Failed to set QEMU OOM score", "pid", cmd.Process.Pid, "err", err)
+		}
 
 		// TODO: Consider workaround using QMP
 		//  (QEMU) query-chardev
@@ -1813,15 +1824,27 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 
 		processChan <- cmd.Process.Pid
 
-		// Read the pts from launch
-		err = cmd.Wait()
+		// Block until QEMU exits
+		waitErr := cmd.Wait()
 
-		if err != nil {
-			slog.Error("Failed to wait for VM:", "err", err)
-			exitChan <- 1
-			return
+		if waitErr != nil {
+			slog.Error("VM process exited", "instance", instance.ID, "err", waitErr)
 		}
 
+		// Signal startup check (non-blocking)
+		select {
+		case exitChan <- 1:
+		default:
+		}
+
+		// Wait for startup phase to complete before deciding on crash handling
+		confirmed := <-startupConfirmed
+		if !confirmed {
+			return // Startup failed, LaunchInstance handles the error
+		}
+
+		// Runtime crash — handle it
+		d.handleInstanceCrash(instance, waitErr)
 	}()
 
 	// Wait for startup result
@@ -1843,16 +1866,17 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		//return fmt.Errorf("failed to get pts")
 	}
 
-	// Check if nbdkit exited immediately with an error
+	// Check if QEMU exited immediately with an error
 	select {
 	case exitErr := <-exitChan:
+		startupConfirmed <- false // tell goroutine not to handle crash
 		if exitErr != 0 {
 			errorMsg := fmt.Errorf("failed: %v", exitErr)
 			slog.Error("Failed to launch qemu", "err", errorMsg)
 			return errorMsg
 		}
 	default:
-		// nbdkit is still running after 1 second, which means it started successfully
+		startupConfirmed <- true // goroutine will handle future crashes
 		slog.Info("QEMU started successfully and is running", "pts", pts)
 	}
 

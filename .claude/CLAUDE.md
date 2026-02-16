@@ -187,3 +187,30 @@ mulga/
 ```bash
 AWS_PROFILE=hive aws ec2 describe-instances
 ```
+
+### Remote Test Cluster
+
+A multi-node Proxmox test cluster is available for validating changes on real hardware. Node IPs, SSH credentials, and connection details are in `docs/DEVNOTES.md` (gitignored, private to the repo).
+
+**Lifecycle scripts** (`scripts/iac/`):
+
+```bash
+# Source environment first
+source scripts/iac/proxmox/.env && source ~/prox
+
+# Provision, configure, test, destroy
+./scripts/iac/hive-test.sh up <cluster-name>          # Create VMs
+./scripts/iac/hive-test.sh configure <cluster-name>   # Clone, build, form cluster, start services
+./scripts/iac/hive-test.sh test <cluster-name>         # Smoke tests (describe-regions, instances, etc.)
+./scripts/iac/hive-test.sh status <cluster-name>       # Health check all nodes
+./scripts/iac/hive-test.sh ssh <cluster-name> <N>      # SSH to node N
+./scripts/iac/hive-test.sh down <cluster-name>         # Destroy VMs
+```
+
+**Deploying local changes to a running cluster:**
+
+1. Read `docs/DEVNOTES.md` for the current cluster node IPs and SSH key path
+2. SSH key: `~/.ssh/us-west-1-tf-cloudinit`, user: `tf-user`
+3. Use `git diff` patches or `scp` to push changes, then rebuild on each node
+4. Daemon health endpoint is HTTP (not HTTPS): `curl -s http://<ip>:4432/health`
+5. Always `export PATH=/usr/local/go/bin:$PATH` on remote nodes before builds

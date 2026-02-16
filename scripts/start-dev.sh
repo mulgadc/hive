@@ -126,6 +126,22 @@ start_service_foreground() {
     $command
 }
 
+# Function to set OOM score for a service (Linux only)
+# Protects infrastructure services from OOM killer (-500 = less likely to be killed)
+set_oom_score() {
+    local name="$1"
+    local score="$2"
+    local pid_file="$LOGS_DIR/${name}.pid"
+    if [ -f "$pid_file" ]; then
+        local pid=$(cat "$pid_file")
+        if [ -d "/proc/$pid" ]; then
+            echo "$score" > "/proc/$pid/oom_score_adj" 2>/dev/null && \
+                echo "  OOM score for $name (PID $pid): $score" || \
+                echo "  Warning: Could not set OOM score for $name"
+        fi
+    fi
+}
+
 # Function to check if service is responsive
 check_service() {
     local name="$1"
@@ -188,6 +204,7 @@ if has_service "nats"; then
 
     NATS_CMD="./bin/hive service nats start"
     start_service "nats" "$NATS_CMD"
+    set_oom_score "nats" "-500"
 else
     echo "1️⃣  Skipping NATS (not a local service)"
 fi
@@ -231,6 +248,7 @@ if has_service "predastore"; then
 
     PREDASTORE_CMD="./bin/hive service predastore start"
     start_service "predastore" "$PREDASTORE_CMD"
+    set_oom_score "predastore" "-500"
     check_service "Predastore" "$HIVE_PREDASTORE_HOST" "$HIVE_PREDASTORE_PORT"
 else
     echo "2️⃣  Skipping Predastore (not a local service)"
@@ -266,6 +284,7 @@ if has_service "viperblock"; then
 
     VIPERBLOCK_CMD="./bin/hive service viperblock start"
     start_service "viperblock" "$VIPERBLOCK_CMD"
+    set_oom_score "viperblock" "-500"
 else
     echo "3️⃣  Skipping Viperblock (not a local service)"
 fi
@@ -281,6 +300,7 @@ if has_service "daemon"; then
 
     HIVE_CMD="./bin/hive service hive start"
     start_service "hive" "$HIVE_CMD"
+    set_oom_score "hive" "-500"
 else
     echo "4️⃣. Skipping Hive Gateway (not a local service)"
 fi
@@ -300,6 +320,7 @@ if has_service "awsgw"; then
 
     AWSGW_CMD="./bin/hive service awsgw start"
     start_service "awsgw" "$AWSGW_CMD"
+    set_oom_score "awsgw" "-500"
 else
     echo "5️⃣. Skipping AWS Gateway (not a local service)"
 fi
@@ -312,6 +333,7 @@ if [ "${UI}" != "false" ] && has_service "ui"; then
 
     HIVEUI_CMD="./bin/hive service hive-ui start"
     start_service "hive-ui" "$HIVEUI_CMD"
+    set_oom_score "hive-ui" "-500"
 else
     echo ""
     echo "6️⃣. Skipping Hive UI"
