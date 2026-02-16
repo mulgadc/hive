@@ -3256,6 +3256,28 @@ func TestGenerateInstanceTypes_SingleFamily(t *testing.T) {
 	}
 }
 
+func TestGenerateInstanceTypes_AMDBurstable(t *testing.T) {
+	types := generateInstanceTypes("m8a", "x86_64")
+	assert.Len(t, types, 14) // 7 m8a + 7 t3a
+
+	m8aCount, t3aCount := 0, 0
+	for name := range types {
+		if strings.HasPrefix(name, "m8a.") {
+			m8aCount++
+		}
+		if strings.HasPrefix(name, "t3a.") {
+			t3aCount++
+		}
+	}
+	assert.Equal(t, 7, m8aCount)
+	assert.Equal(t, 7, t3aCount)
+
+	// Verify t3 (Intel burstable) is NOT present
+	for name := range types {
+		assert.False(t, strings.HasPrefix(name, "t3."), "AMD should get t3a, not t3: %s", name)
+	}
+}
+
 func TestGenerateInstanceTypes_ARM64(t *testing.T) {
 	types := generateInstanceTypes("m8g", "arm64")
 	// m8g is not t4g, so we should get both families

@@ -246,10 +246,12 @@ func generateInstanceTypes(family, arch string) map[string]*ec2.InstanceTypeInfo
 		{"2xlarge", 8, 32.0},
 	}
 
-	// Determine the burstable family based on architecture
+	// Determine the burstable family based on architecture and CPU vendor
 	burstableFamily := "t3"
 	if arch == "arm64" {
 		burstableFamily = "t4g"
+	} else if strings.HasSuffix(family, "a") {
+		burstableFamily = "t3a"
 	}
 
 	// Build list of families to generate: CPU-specific + burstable (if different)
@@ -328,6 +330,8 @@ func NewResourceManager() *ResourceManager {
 	burstableFamily := "t3"
 	if runtime.GOARCH == "arm64" {
 		burstableFamily = "t4g"
+	} else if strings.HasSuffix(instanceFamily, "a") {
+		burstableFamily = "t3a"
 	}
 	slog.Info("System resources detected",
 		"vCPUs", numCPU, "memGB", totalMemGB, "cpu", cpuModel,
@@ -745,7 +749,7 @@ func (d *Daemon) checkPredastoreReady() bool {
 	if err != nil {
 		return false
 	}
-	conn.Close()
+	_ = conn.Close()
 	return true
 }
 
