@@ -263,3 +263,73 @@ func TestNBDTransportConstants(t *testing.T) {
 	assert.Equal(t, NBDTransport("socket"), NBDTransportSocket)
 	assert.Equal(t, NBDTransport("tcp"), NBDTransportTCP)
 }
+
+// Tests for ViperblockConfig
+
+func TestLoadConfig_ViperblockShardWAL_Explicit(t *testing.T) {
+	resetViper(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hive.toml")
+
+	toml := `
+node = "n1"
+
+[nodes.n1]
+region = "us-east-1"
+
+[nodes.n1.viperblock]
+shardwal = false
+`
+	require.NoError(t, os.WriteFile(path, []byte(toml), 0600))
+
+	cfg, err := LoadConfig(path)
+	require.NoError(t, err)
+
+	n := cfg.Nodes["n1"]
+	require.NotNil(t, n.Viperblock.ShardWAL, "ShardWAL should be set when explicitly configured")
+	assert.False(t, *n.Viperblock.ShardWAL)
+}
+
+func TestLoadConfig_ViperblockShardWAL_DefaultNil(t *testing.T) {
+	resetViper(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hive.toml")
+
+	toml := `
+node = "n1"
+
+[nodes.n1]
+region = "us-east-1"
+`
+	require.NoError(t, os.WriteFile(path, []byte(toml), 0600))
+
+	cfg, err := LoadConfig(path)
+	require.NoError(t, err)
+
+	n := cfg.Nodes["n1"]
+	assert.Nil(t, n.Viperblock.ShardWAL, "ShardWAL should be nil when not configured (defaults to true in service)")
+}
+
+func TestLoadConfig_ViperblockShardWAL_True(t *testing.T) {
+	resetViper(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hive.toml")
+
+	toml := `
+node = "n1"
+
+[nodes.n1]
+region = "us-east-1"
+
+[nodes.n1.viperblock]
+shardwal = true
+`
+	require.NoError(t, os.WriteFile(path, []byte(toml), 0600))
+
+	cfg, err := LoadConfig(path)
+	require.NoError(t, err)
+
+	n := cfg.Nodes["n1"]
+	require.NotNil(t, n.Viperblock.ShardWAL)
+	assert.True(t, *n.Viperblock.ShardWAL)
+}

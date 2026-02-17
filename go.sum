@@ -276,6 +276,8 @@ github.com/mulgadc/predastore v1.0.0 h1:IZ5V/EL+k+zz0zGoTYp+1BgODb43JxHsb/kvORuy
 github.com/mulgadc/predastore v1.0.0/go.mod h1:x46A1z091hlZkMt3kkcuLSy2PAzSgROr6ft04qcYOU4=
 github.com/mulgadc/viperblock v1.0.10 h1:nQJGD44cQ6gW2oWt7IZGjovLNdhLpxjX+WO1EDT+lgY=
 github.com/mulgadc/viperblock v1.0.10/go.mod h1:1ZKEGGbjmiMi3rfmQ5jMZJB3gIws0pMnAreDbjoCodE=
+github.com/mulgadc/viperblock v1.0.11 h1:819xzoQ1DNbu/fz3flUSyu+A60WkfrfoYGPUo796ELU=
+github.com/mulgadc/viperblock v1.0.11/go.mod h1:dV1eRKaIjH8YfuCk2Bd4hxKd3Rx5mWfO6gelJ9SbbeY=
 github.com/mwitkow/go-conntrack v0.0.0-20161129095857-cc309e4a2223/go.mod h1:qRWi+5nqEBWmkhHvq77mSJWrCKwh8bxhgT7d/eI7P4U=
 github.com/mwitkow/go-conntrack v0.0.0-20190716064945-2f068394615f/go.mod h1:qRWi+5nqEBWmkhHvq77mSJWrCKwh8bxhgT7d/eI7P4U=
 github.com/nats-io/jwt/v2 v2.7.4 h1:jXFuDDxs/GQjGDZGhNgH4tXzSUK6WQi2rsj4xmsNOtI=

@@ -23,7 +23,8 @@ type NBDKitConfig struct {
 	BaseDir    string `json:"base_dir"`
 	Host       string `json:"host"`
 	CacheSize  int    `json:"cache_size"`
-	UseTCP     bool   `json:"use_tcp"` // If true, use TCP transport; otherwise use Unix socket
+	ShardWAL   bool   `json:"shardwal"` // Enable sharded WAL (default true)
+	UseTCP     bool   `json:"use_tcp"`  // If true, use TCP transport; otherwise use Unix socket
 }
 
 func (cfg *NBDKitConfig) Execute() (*exec.Cmd, error) {
@@ -68,6 +69,7 @@ func (cfg *NBDKitConfig) Execute() (*exec.Cmd, error) {
 		fmt.Sprintf("base_dir=%s", cfg.BaseDir),
 		fmt.Sprintf("host=%s", cfg.Host),
 		fmt.Sprintf("cache_size=%d", cfg.CacheSize),
+		fmt.Sprintf("shardwal=%t", cfg.ShardWAL),
 	}
 
 	args = append(args, pluginArgs...)

@@ -31,6 +31,7 @@ type Config struct {
 	Daemon     DaemonConfig     `mapstructure:"daemon"`
 	NATS       NATSConfig       `mapstructure:"nats"`
 	Predastore PredastoreConfig `mapstructure:"predastore"`
+	Viperblock ViperblockConfig `mapstructure:"viperblock"`
 	AWSGW      AWSGWConfig      `mapstructure:"awsgw"`
 
 	// Authentication
@@ -75,6 +76,10 @@ type AWSGWConfig struct {
 
 	Debug         bool `mapstructure:"debug"`
 	ExpectedNodes int  `mapstructure:"expected_nodes"` // TODO: Replace with root cluster config
+}
+
+type ViperblockConfig struct {
+	ShardWAL *bool `mapstructure:"shardwal"` // Enable sharded WAL (default true when nil)
 }
 
 type PredastoreConfig struct {
