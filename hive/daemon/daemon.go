@@ -126,10 +126,11 @@ type Daemon struct {
 	mu sync.Mutex
 }
 
-// getSystemMemoryGB returns the total system memory in GB.
-func getSystemMemoryGB() (float64, error) {
+// getSystemMemory returns the total system memory in GB
+func getSystemMemory() (float64, error) {
 	switch runtime.GOOS {
 	case "darwin":
+		// macOS: use sysctl
 		cmd := exec.Command("sysctl", "-n", "hw.memsize")
 		output, err := cmd.Output()
 		if err != nil {
@@ -142,32 +143,26 @@ func getSystemMemoryGB() (float64, error) {
 		return float64(memBytes) / (1024 * 1024 * 1024), nil
 
 	case "linux":
-		f, err := os.Open("/proc/meminfo")
+		// Linux: read from /proc/meminfo
+		cmd := exec.Command("grep", "MemTotal", "/proc/meminfo")
+		output, err := cmd.Output()
 		if err != nil {
-			return 0, fmt.Errorf("failed to open /proc/meminfo: %w", err)
+			return 0, fmt.Errorf("failed to read /proc/meminfo: %w", err)
 		}
-		defer f.Close()
 
-		scanner := bufio.NewScanner(f)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if !strings.HasPrefix(line, "MemTotal:") {
-				continue
-			}
-			fields := strings.Fields(line)
-			if len(fields) < 2 {
-				return 0, fmt.Errorf("unexpected MemTotal format: %s", line)
-			}
-			memKB, err := strconv.ParseInt(fields[1], 10, 64)
-			if err != nil {
-				return 0, fmt.Errorf("failed to parse MemTotal value: %w", err)
-			}
-			return float64(memKB) / (1024 * 1024), nil
+		// Parse the output (format: "MemTotal:       16384 kB")
+		fields := strings.Fields(string(output))
+		if len(fields) < 3 {
+			return 0, fmt.Errorf("unexpected /proc/meminfo format")
 		}
-		if err := scanner.Err(); err != nil {
-			return 0, fmt.Errorf("error reading /proc/meminfo: %w", err)
+
+		memKB, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("failed to parse memory size from /proc/meminfo: %w", err)
 		}
-		return 0, fmt.Errorf("MemTotal not found in /proc/meminfo")
+
+		// Convert KB to GB
+		return float64(memKB) / (1024 * 1024), nil
 
 	default:
 		return 0, fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
@@ -180,7 +175,7 @@ func NewResourceManager() *ResourceManager {
 	numCPU := runtime.NumCPU()
 
 	// Get system memory (in GB)
-	totalMemGB, err := getSystemMemoryGB()
+	totalMemGB, err := getSystemMemory()
 	if err != nil {
 		slog.Warn("Failed to get system memory, using default of 8GB", "err", err)
 		totalMemGB = 8.0 // Default to 8GB if we can't get the actual memory

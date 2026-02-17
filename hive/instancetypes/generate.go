@@ -58,11 +58,11 @@ func DetectAndGenerate(cpu CPUInfo, arch string) map[string]*ec2.InstanceTypeInf
 	if len(types) == 0 {
 		slog.Error("No instance types generated, daemon will be unable to run VMs",
 			"generation", gen.name, "arch", arch)
+	} else {
+		slog.Info("CPU generation detected",
+			"generation", gen.name, "families", gen.families,
+			"instanceTypes", len(types), "os", runtime.GOOS)
 	}
-
-	slog.Info("CPU generation detected",
-		"generation", gen.name, "families", gen.families,
-		"instanceTypes", len(types), "os", runtime.GOOS)
 
 	return types
 }
