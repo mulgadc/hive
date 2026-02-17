@@ -1142,6 +1142,34 @@ fi
 
 echo "  Crash recovery tests passed"
 
+# Cleanup: Terminate all test instances (before shutdown test so they don't respawn on restart)
+echo ""
+echo "Cleanup: Deleting test resources"
+echo "----------------------------------------"
+
+# Terminate all instances
+for instance_id in "${INSTANCE_IDS[@]}"; do
+    echo "  Terminating $instance_id..."
+    $AWS_EC2 terminate-instances --instance-ids "$instance_id" > /dev/null 2>&1 || echo "  (instance may already be terminated)"
+done
+
+# Wait for termination
+echo "  Waiting for termination..."
+TERMINATION_FAILED=0
+for instance_id in "${INSTANCE_IDS[@]}"; do
+    if ! wait_for_instance_state "$instance_id" "terminated" 30; then
+        echo "  WARNING: Failed to confirm termination of $instance_id"
+        TERMINATION_FAILED=1
+    fi
+done
+
+if [ $TERMINATION_FAILED -ne 0 ]; then
+    echo ""
+    echo "ERROR: Some instances failed to terminate properly"
+    dump_all_node_logs
+    exit 1
+fi
+
 # Phase 6: Cluster Shutdown + Restart
 echo ""
 echo "Phase 6: Cluster Shutdown + Restart"
@@ -1225,23 +1253,6 @@ else
 fi
 
 echo "  Cluster shutdown + restart test passed"
-
-# Cleanup: Terminate all test instances
-echo ""
-echo "Cleanup: Deleting test resources"
-echo "----------------------------------------"
-
-# Terminate all instances (some may already be gone from cluster shutdown)
-for instance_id in "${INSTANCE_IDS[@]}"; do
-    echo "  Terminating $instance_id..."
-    $AWS_EC2 terminate-instances --instance-ids "$instance_id" > /dev/null 2>&1 || echo "  (instance may already be terminated)"
-done
-
-# Wait for termination
-echo "  Waiting for termination..."
-for instance_id in "${INSTANCE_IDS[@]}"; do
-    wait_for_instance_state "$instance_id" "terminated" 30 || echo "  WARNING: Could not confirm termination of $instance_id"
-done
 
 echo ""
 echo "========================================"
