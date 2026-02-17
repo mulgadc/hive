@@ -79,7 +79,7 @@ type AWSGWConfig struct {
 }
 
 type ViperblockConfig struct {
-	ShardWAL *bool `mapstructure:"shardwal"` // Enable sharded WAL (default true when nil)
+	ShardWAL *bool `mapstructure:"shardwal"` // Enable sharded WAL (default false when nil)
 }
 
 type PredastoreConfig struct {

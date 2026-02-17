@@ -266,8 +266,8 @@ var viperblockStartCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Resolve sharded WAL setting: default true unless explicitly set to false
-		shardWAL := true
+		// Resolve sharded WAL setting: default false unless explicitly set to true
+		shardWAL := false
 		if nodeConfig.Viperblock.ShardWAL != nil {
 			shardWAL = *nodeConfig.Viperblock.ShardWAL
 		}

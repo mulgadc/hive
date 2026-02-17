@@ -307,7 +307,7 @@ region = "us-east-1"
 	require.NoError(t, err)
 
 	n := cfg.Nodes["n1"]
-	assert.Nil(t, n.Viperblock.ShardWAL, "ShardWAL should be nil when not configured (defaults to true in service)")
+	assert.Nil(t, n.Viperblock.ShardWAL, "ShardWAL should be nil when not configured (defaults to false in service)")
 }
 
 func TestLoadConfig_ViperblockShardWAL_True(t *testing.T) {

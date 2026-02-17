@@ -56,7 +56,7 @@ type Config struct {
 	// Socket is faster for local connections, TCP required for remote/DPU scenarios
 	NBDTransport config.NBDTransport
 
-	// ShardWAL enables sharded WAL for mounted volumes (default true)
+	// ShardWAL enables sharded WAL for mounted volumes (default false)
 	ShardWAL bool
 
 	mu sync.Mutex
