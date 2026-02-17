@@ -56,7 +56,8 @@ has_service() {
 is_multinode() {
     local config_file="$CONFIG_DIR/hive.toml"
     if [ -f "$config_file" ]; then
-        local node_count=$(grep -c '^\[nodes\.' "$config_file")
+        # Count only top-level node sections [nodes.X], not subsections [nodes.X.Y]
+        local node_count=$(grep -cE '^\[nodes\.[^.]+\]' "$config_file")
         [ "$node_count" -gt 1 ]
     else
         return 1
