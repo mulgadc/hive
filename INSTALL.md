@@ -674,7 +674,7 @@ ip addr show | grep "inet "
 
 #### 1. Set Variables
 
-Export the IPs for your three servers (replace with your actual IPs):
+Export the IPs for your three servers (replace with your actual IPs) on each server:
 
 ```bash
 export HIVE_NODE1=192.168.1.10
@@ -868,16 +868,54 @@ sudo ip addr del 10.11.12.3/24 dev eth0
 
 ## Shutdown
 
-Stop services on each node:
+When running in the multi-server cluster mode a graceful shutdown is required to synchronize and coordinate nodes.
 
+On any node, issue the following command to shutdown nodes cluster wide:
+
+```sh
+./bin/hive admin cluster shutdown
+```
+
+Example output:
 ```bash
-# Simulated — stop in reverse order:
-./scripts/stop-dev.sh ~/node3/
-./scripts/stop-dev.sh ~/node2/
-./scripts/stop-dev.sh ~/node1/
+Starting coordinated cluster shutdown (3 nodes)
+Phases: gate -> drain -> storage -> persist -> infra
+Timeout per phase: 2m0s
 
-# Real multi-server — run on each server:
-./scripts/stop-dev.sh
+[GATE] Sending to 3 node(s)...
+  [GATE] node1: stopped awsgw, hive-ui
+  [GATE] node3: stopped awsgw, hive-ui
+  [GATE] node2: stopped awsgw, hive-ui
+[GATE] Complete (3/3 nodes, 2.005s)
+
+[DRAIN] Sending to 3 node(s)...
+  [DRAIN] node1: 0/0 VMs remaining
+  [DRAIN] node1: 0/0 VMs remaining
+  [DRAIN] node2: 0/0 VMs remaining
+  [DRAIN] node2: 0/0 VMs remaining
+  [DRAIN] node3: 0/0 VMs remaining
+  [DRAIN] node3: 0/0 VMs remaining
+  [DRAIN] node1: OK
+  [DRAIN] node3: OK
+  [DRAIN] node2: OK
+[DRAIN] Complete (3/3 nodes, 5ms)
+
+[STORAGE] Sending to 3 node(s)...
+  [STORAGE] node1: stopped viperblock
+  [STORAGE] node3: stopped viperblock
+  [STORAGE] node2: stopped viperblock
+[STORAGE] Complete (3/3 nodes, 1.09s)
+
+[PERSIST] Sending to 3 node(s)...
+  [PERSIST] node1: stopped predastore
+  [PERSIST] node3: stopped predastore
+  [PERSIST] node2: stopped predastore
+[PERSIST] Complete (3/3 nodes, 1.003s)
+
+[INFRA] Sending final shutdown to all nodes...
+[INFRA] Complete
+Cluster shutdown complete (6.104s)
+
 ```
 
 If EC2 instances are running, the stop process will gracefully terminate them, unmount attached EBS volumes (via NBD), and flush the write-ahead-log (WAL) to the S3 server (Predastore). This may take a few minutes depending on instance volume sizes.

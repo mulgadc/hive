@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -824,5 +825,42 @@ func TestGeneratePidFile_EmptyName(t *testing.T) {
 
 func TestGenerateSocketFile_EmptyName(t *testing.T) {
 	_, err := GenerateSocketFile("")
+	assert.Error(t, err)
+}
+
+func TestSetOOMScore(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("OOM score adjustment only supported on Linux")
+	}
+
+	// Read current value so we can set something higher (unprivileged processes
+	// can only increase their OOM score, not decrease it)
+	pid := os.Getpid()
+	current, err := os.ReadFile(fmt.Sprintf("/proc/%d/oom_score_adj", pid))
+	if err != nil {
+		t.Skipf("Cannot read OOM score: %v", err)
+	}
+
+	// Set a positive score (always allowed for unprivileged processes)
+	err = SetOOMScore(pid, 100)
+	if err != nil {
+		t.Skipf("Insufficient permissions to set OOM score: %v", err)
+	}
+
+	// Read back and verify
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/oom_score_adj", pid))
+	assert.NoError(t, err)
+	assert.Equal(t, "100", strings.TrimSpace(string(data)))
+
+	// Best-effort restore (may fail without privileges if original was lower)
+	_ = os.WriteFile(fmt.Sprintf("/proc/%d/oom_score_adj", pid), current, 0644)
+}
+
+func TestSetOOMScore_InvalidPID(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("OOM score adjustment only supported on Linux")
+	}
+
+	err := SetOOMScore(999999999, 100)
 	assert.Error(t, err)
 }

@@ -51,12 +51,24 @@ resource "proxmox_virtual_environment_vm" "hive_node" {
     bridge = var.nodes[count.index % length(var.nodes)].bridge
   }
 
-  disk {
-    file_id      = var.os_image
-    datastore_id = var.nodes[count.index % length(var.nodes)].datastore_id
-    interface    = "virtio0"
-    iothread     = true
-    discard      = "on"
-    size         = var.disk_size_gb
+  # Clone from template if the target node has template_vmid set, otherwise boot from cloud image.
+  dynamic "clone" {
+    for_each = var.nodes[count.index % length(var.nodes)].template_vmid != null ? [1] : []
+    content {
+      vm_id = var.nodes[count.index % length(var.nodes)].template_vmid
+      full  = true
+    }
+  }
+
+  dynamic "disk" {
+    for_each = var.nodes[count.index % length(var.nodes)].template_vmid == null ? [1] : []
+    content {
+      file_id      = var.os_image
+      datastore_id = var.nodes[count.index % length(var.nodes)].datastore_id
+      interface    = "virtio0"
+      iothread     = true
+      discard      = "on"
+      size         = var.disk_size_gb
+    }
   }
 }

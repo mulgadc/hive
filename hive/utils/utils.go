@@ -169,6 +169,17 @@ var AvailableImages = map[string]Images{
 
 }
 
+// SetOOMScore sets the OOM score adjustment for a process.
+// Score range: -1000 (never kill) to 1000 (always kill first).
+// Linux-only; returns an error on non-Linux systems.
+func SetOOMScore(pid int, score int) error {
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("OOM score adjustment is only supported on Linux")
+	}
+	path := fmt.Sprintf("/proc/%d/oom_score_adj", pid)
+	return os.WriteFile(path, []byte(strconv.Itoa(score)), 0600)
+}
+
 func ReadPidFile(name string) (int, error) {
 
 	pidPath := pidPath()
