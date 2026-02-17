@@ -14,7 +14,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -789,7 +788,6 @@ func (d *Daemon) reconnectInstance(instance *vm.VM) error {
 	sub, err := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
 	if err != nil {
 		d.mu.Unlock()
-		// Clean up the QMP connection we just opened
 		if instance.QMPClient != nil && instance.QMPClient.Conn != nil {
 			_ = instance.QMPClient.Conn.Close()
 			instance.QMPClient = nil
@@ -797,6 +795,13 @@ func (d *Daemon) reconnectInstance(instance *vm.VM) error {
 		return fmt.Errorf("failed to subscribe to NATS: %w", err)
 	}
 	d.natsSubscriptions[instance.ID] = sub
+
+	consoleSub, err := d.natsConn.Subscribe(fmt.Sprintf("ec2.%s.GetConsoleOutput", instance.ID), d.handleEC2GetConsoleOutput)
+	if err != nil {
+		d.mu.Unlock()
+		return fmt.Errorf("failed to subscribe to console output NATS: %w", err)
+	}
+	d.natsSubscriptions[instance.ID+".console"] = consoleSub
 	d.mu.Unlock()
 
 	instance.Status = vm.StateRunning
@@ -1248,6 +1253,13 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				}
 				delete(d.natsSubscriptions, instance.ID)
 			}
+			consoleSubKey := instance.ID + ".console"
+			if sub, ok := d.natsSubscriptions[consoleSubKey]; ok {
+				if err := sub.Unsubscribe(); err != nil {
+					slog.Error("Failed to unsubscribe from console NATS subject", "instance", instance.ID, "err", err)
+				}
+				delete(d.natsSubscriptions, consoleSubKey)
+			}
 			d.mu.Unlock()
 		}
 	}
@@ -1419,15 +1431,24 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// Unsubscribe any existing subscription (e.g. from restoreInstances for stopped instances)
+	// Unsubscribe any existing subscriptions (e.g. from restoreInstances for stopped instances)
 	if existing, ok := d.natsSubscriptions[instance.ID]; ok {
+		_ = existing.Unsubscribe()
+	}
+	consoleSubKey := instance.ID + ".console"
+	if existing, ok := d.natsSubscriptions[consoleSubKey]; ok {
 		_ = existing.Unsubscribe()
 	}
 
 	d.natsSubscriptions[instance.ID], err = d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
-
 	if err != nil {
 		slog.Error("failed to subscribe to NATS", "err", err)
+		return err
+	}
+
+	d.natsSubscriptions[consoleSubKey], err = d.natsConn.Subscribe(fmt.Sprintf("ec2.%s.GetConsoleOutput", instance.ID), d.handleEC2GetConsoleOutput)
+	if err != nil {
+		slog.Error("failed to subscribe to console output NATS topic", "err", err)
 		return err
 	}
 
@@ -1494,17 +1515,23 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		architecture = *instanceType.ProcessorInfo.SupportedArchitectures[0]
 	}
 
+	// Console log + serial socket paths (serial output capture + admin access via socat)
+	runtimeDir := utils.RuntimeDir()
+	consoleLogPath := filepath.Join(runtimeDir, fmt.Sprintf("console-%s.log", instance.ID))
+	serialSocket := filepath.Join(runtimeDir, fmt.Sprintf("serial-%s.sock", instance.ID))
+
 	instance.Config = vm.Config{
-		Name:         instance.ID,
-		PIDFile:      pidFile,
-		EnableKVM:    true, // If available, if kvm fails, will use cpu max
-		NoGraphic:    true,
-		MachineType:  "q35",
-		Serial:       "pty",
-		CPUType:      "host", // If available, if kvm fails, will use cpu max
-		Memory:       int(memoryMiB),
-		CPUCount:     vCPUs,
-		Architecture: architecture,
+		Name:           instance.ID,
+		PIDFile:        pidFile,
+		EnableKVM:      true, // If available, if kvm fails, will use cpu max
+		NoGraphic:      true,
+		MachineType:    "q35",
+		ConsoleLogPath: consoleLogPath,
+		SerialSocket:   serialSocket,
+		CPUType:        "host", // If available, if kvm fails, will use cpu max
+		Memory:         int(memoryMiB),
+		CPUCount:       vCPUs,
+		Architecture:   architecture,
 	}
 
 	// Add PCIe root ports for volume hotplug (Q35 requires explicit root ports).
@@ -1604,7 +1631,6 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	// Create a unique error channel for this specific mount request
 	processChan := make(chan int, 1)
 	exitChan := make(chan int, 1)
-	ptsChan := make(chan int, 1)
 	startupConfirmed := make(chan bool, 1)
 
 	go func() {
@@ -1645,37 +1671,11 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 			slog.Warn("Failed to set QEMU OOM score", "pid", cmd.Process.Pid, "err", err)
 		}
 
-		// TODO: Consider workaround using QMP
-		//  (QEMU) query-chardev
-		// {"return": [{"frontend-open": true, "filename": "vc", "label": "parallel0"}, {"frontend-open": true, "filename": "unix:/run/user/1000/qmp-i-150340b52b20c0b43.sock,server=on", "label": "compat_monitor0"}, {"frontend-open": true, "filename": "pty:/dev/pts/9", "label": "serial0"}]}
-
+		// Log QEMU stdout (serial output is captured via chardev logfile, not stdout)
 		go func() {
-			// TODO: Add a timeout to the scanner
 			scanner := bufio.NewScanner(VMstdout)
-
-			slog.Info("QEMU stdout reader started")
-
-			re := regexp.MustCompile(`/dev/pts/(\d+)`)
-
 			for scanner.Scan() {
-				line := scanner.Text()
-				slog.Info("[qemu]", "line", line)
-
-				matches := re.FindStringSubmatch(line)
-				if len(matches) == 2 {
-					ptsInt, err := strconv.Atoi(matches[1])
-					slog.Info("Extracted pts from QEMU output", "pts", ptsInt)
-
-					if err != nil {
-						slog.Error("Failed to convert pts to int:", "err", err)
-						ptsChan <- -1
-						return
-					}
-
-					ptsChan <- ptsInt // just the pts number, e.g., "9"
-					return
-				}
-
+				slog.Info("[qemu]", "line", scanner.Text())
 			}
 		}()
 
@@ -1729,15 +1729,6 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	// Wait for 1 second to confirm nbdkit is running
 	time.Sleep(1 * time.Second)
 
-	// Fetch the pts
-	pts := <-ptsChan
-
-	if pts < 0 {
-		// pts == -1 indicates failure to extract pts from QEMU output
-		slog.Error("Failed to get pts from QEMU output", "pts", pts)
-		//return fmt.Errorf("failed to get pts")
-	}
-
 	// Check if QEMU exited immediately with an error
 	select {
 	case exitErr := <-exitChan:
@@ -1749,7 +1740,9 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		}
 	default:
 		startupConfirmed <- true // goroutine will handle future crashes
-		slog.Info("QEMU started successfully and is running", "pts", pts)
+		slog.Info("QEMU started successfully and is running",
+			"console_log", instance.Config.ConsoleLogPath,
+			"serial_socket", instance.Config.SerialSocket)
 	}
 
 	// Confirm the instance has booted

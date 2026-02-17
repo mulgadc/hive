@@ -27,7 +27,6 @@ type InstanceHealthState struct {
 type VM struct {
 	ID           string        `json:"id"`
 	PID          int           `json:"pid"`
-	PTS          int           `json:"pts"`
 	Running      bool          `json:"running"`
 	Status       InstanceState `json:"status"`
 	InstanceType string        `json:"instance_type"`
@@ -67,7 +66,6 @@ type VM struct {
 // shared KV before launching it on a new node.
 func (v *VM) ResetNodeLocalState() {
 	v.PID = 0
-	v.PTS = 0
 	v.Running = false
 	v.MetadataServerAddress = ""
 	v.QMPClient = &qmp.QMPClient{}
@@ -101,16 +99,17 @@ type IOThread struct {
 }
 
 type Config struct {
-	Name        string `json:"name"`
-	PIDFile     string `json:"pid_file"`
-	QMPSocket   string `json:"qmp_socket"`
-	EnableKVM   bool   `json:"enable_kvm"`
-	NoGraphic   bool   `json:"no_graphic"`
-	MachineType string `json:"machine_type"`
-	Serial      string `json:"serial"`
-	CPUType     string `json:"cpu_type"`
-	CPUCount    int    `json:"cpu_count"`
-	Memory      int    `json:"memory"`
+	Name           string `json:"name"`
+	PIDFile        string `json:"pid_file"`
+	QMPSocket      string `json:"qmp_socket"`
+	EnableKVM      bool   `json:"enable_kvm"`
+	NoGraphic      bool   `json:"no_graphic"`
+	MachineType    string `json:"machine_type"`
+	ConsoleLogPath string `json:"console_log_path,omitempty"`
+	SerialSocket   string `json:"serial_socket,omitempty"`
+	CPUType        string `json:"cpu_type"`
+	CPUCount       int    `json:"cpu_count"`
+	Memory         int    `json:"memory"`
 
 	Drives    []Drive    `json:"drives"`
 	IOThreads []IOThread `json:"io_threads,omitempty"`
@@ -160,8 +159,10 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 		args = append(args, "-display", "none")
 	}
 
-	if cfg.Serial != "" {
-		args = append(args, "-serial", cfg.Serial)
+	if cfg.SerialSocket != "" && cfg.ConsoleLogPath != "" {
+		chardevOpts := fmt.Sprintf("socket,id=console0,path=%s,server=on,wait=off,logfile=%s",
+			cfg.SerialSocket, cfg.ConsoleLogPath)
+		args = append(args, "-chardev", chardevOpts, "-serial", "chardev:console0")
 	}
 
 	if cfg.CPUCount > 0 {

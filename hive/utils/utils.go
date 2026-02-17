@@ -330,6 +330,11 @@ func RemovePidFile(serviceName string) error {
 	return nil
 }
 
+// RuntimeDir returns the runtime directory used for PID files, sockets, and logs.
+func RuntimeDir() string {
+	return pidPath()
+}
+
 func pidPath() string {
 	var pidPath string
 
