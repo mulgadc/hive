@@ -36,6 +36,9 @@ token = "{{.NatsToken}}"
 
 [nodes.{{.Node}}.nats.sub]
 
+[nodes.{{.Node}}.viperblock]
+shardwal = true
+
 [nodes.{{.Node}}.predastore]
 host = "{{.BindIP}}:8443"
 region = "{{.Region}}"

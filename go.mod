@@ -10,7 +10,7 @@ require (
 	github.com/kdomanski/iso9660 v0.4.0
 	github.com/klauspost/cpuid/v2 v2.3.0
 	github.com/mulgadc/predastore v1.0.0
-	github.com/mulgadc/viperblock v1.0.10
+	github.com/mulgadc/viperblock v1.0.11
 	github.com/nats-io/nats-server/v2 v2.11.6
 	github.com/nats-io/nats.go v1.43.0
 	github.com/pelletier/go-toml/v2 v2.2.4

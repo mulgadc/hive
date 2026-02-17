@@ -56,6 +56,9 @@ type Config struct {
 	// Socket is faster for local connections, TCP required for remote/DPU scenarios
 	NBDTransport config.NBDTransport
 
+	// ShardWAL enables sharded WAL for mounted volumes (default true)
+	ShardWAL bool
+
 	mu sync.Mutex
 }
 
@@ -154,6 +157,8 @@ func launchService(cfg *Config) (err error) {
 		slog.Error("Failed to connect to NATS", "err", err)
 		return err
 	}
+
+	slog.Info("Viperblock config", "shardwal", cfg.ShardWAL)
 
 	if cfg.NodeName != "" {
 		slog.Info("Waiting for EBS events", "node", cfg.NodeName)
@@ -586,6 +591,7 @@ func launchService(cfg *Config) (err error) {
 			AccessKey:  cfg.AccessKey,
 			SecretKey:  cfg.SecretKey,
 			CacheSize:  nbdCacheSize,
+			ShardWAL:   cfg.ShardWAL,
 		}
 
 		// Create a unique error channel for this specific mount request

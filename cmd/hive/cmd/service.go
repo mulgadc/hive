@@ -266,6 +266,12 @@ var viperblockStartCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
+		// Resolve sharded WAL setting: default true unless explicitly set to false
+		shardWAL := true
+		if nodeConfig.Viperblock.ShardWAL != nil {
+			shardWAL = *nodeConfig.Viperblock.ShardWAL
+		}
+
 		service, err := service.New("viperblock", &viperblockd.Config{
 			NatsHost:   nodeConfig.NATS.Host,
 			PluginPath: pluginPath,
@@ -276,6 +282,7 @@ var viperblockStartCmd = &cobra.Command{
 			SecretKey:  nodeConfig.Predastore.SecretKey,
 			BaseDir:    nodeConfig.Predastore.BaseDir,
 			NodeName:   clusterConfig.Node,
+			ShardWAL:   shardWAL,
 		})
 
 		if err != nil {
