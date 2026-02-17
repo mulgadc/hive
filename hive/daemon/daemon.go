@@ -160,7 +160,6 @@ var (
 	genUnknown      = cpuGeneration{"Unknown", []string{"t3"}}
 )
 
-
 // detectCPUGeneration detects the CPU microarchitecture generation using CPUID.
 func detectCPUGeneration() cpuGeneration {
 	switch cpuid.CPU.VendorID {
