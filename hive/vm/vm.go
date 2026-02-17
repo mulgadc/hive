@@ -102,7 +102,6 @@ type IOThread struct {
 
 type Config struct {
 	Name        string `json:"name"`
-	Daemonize   bool   `json:"daemonize"`
 	PIDFile     string `json:"pid_file"`
 	QMPSocket   string `json:"qmp_socket"`
 	EnableKVM   bool   `json:"enable_kvm"`
@@ -127,10 +126,6 @@ type Config struct {
 func (cfg *Config) Execute() (*exec.Cmd, error) {
 
 	args := []string{}
-
-	if cfg.Daemonize {
-		args = append(args, "-daemonize")
-	}
 
 	if cfg.PIDFile != "" {
 		args = append(args, "-pidfile", cfg.PIDFile)
