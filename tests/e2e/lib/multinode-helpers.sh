@@ -557,6 +557,40 @@ wait_for_instance_recovery() {
     return 1
 }
 
+# Verify all services are down on all nodes
+# Returns 0 if everything is down, 1 if something is still running
+verify_all_services_down() {
+    local all_down=true
+
+    for i in 1 2 3; do
+        local node_ip="${SIMULATED_NETWORK}.$i"
+
+        # Check gateway
+        if curl -k -s --connect-timeout 2 "https://${node_ip}:${AWSGW_PORT}" > /dev/null 2>&1; then
+            echo "  Node$i: gateway still responding"
+            all_down=false
+        fi
+
+        # Check NATS
+        if curl -s --connect-timeout 2 "http://${node_ip}:${NATS_MONITOR_PORT}" > /dev/null 2>&1; then
+            echo "  Node$i: NATS still responding"
+            all_down=false
+        fi
+    done
+
+    # Check for any remaining QEMU processes
+    if pgrep -x qemu-system-x86_64 > /dev/null 2>&1; then
+        echo "  QEMU processes still running"
+        all_down=false
+    fi
+
+    if [ "$all_down" = true ]; then
+        echo "  All services confirmed down"
+        return 0
+    fi
+    return 1
+}
+
 # Global variable for init PID tracking (used by multi-node formation)
 LEADER_INIT_PID=""
 
