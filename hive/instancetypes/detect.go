@@ -39,7 +39,7 @@ func detectCPUGeneration(cpu CPUInfo, arch string) cpuGeneration {
 		slog.Warn("CPUID vendor not recognized, falling back to brand string detection",
 			"vendorID", cpu.VendorID(), "brand", cpu.BrandName())
 	}
-	return detectGenerationFromBrand(cpu, cpu.BrandName(), arch)
+	return detectGenerationFromBrand(cpu, arch)
 }
 
 // detectIntelGeneration maps Intel CPUID Family 6 model numbers to generations.
@@ -116,17 +116,18 @@ func detectARMGeneration(cpu CPUInfo) cpuGeneration {
 		return genARMNeoverseV1
 	}
 
-	// Default ARM to Neoverse N1 (most common)
-	slog.Warn("Could not identify ARM generation, defaulting to Neoverse N1", "brand", cpu.BrandName())
-	return genARMNeoverseN1
+	// Unknown ARM — expose only burstable t4g (same as unknown Intel/AMD behavior)
+	slog.Warn("Could not identify ARM generation, exposing t4g only", "brand", cpu.BrandName())
+	return genUnknownARM
 }
 
 // detectGenerationFromBrand is a fallback for VMs/hypervisors where CPUID may be virtualized.
-func detectGenerationFromBrand(cpu CPUInfo, brand, arch string) cpuGeneration {
+func detectGenerationFromBrand(cpu CPUInfo, arch string) cpuGeneration {
 	if arch == "arm64" {
 		return detectARMGeneration(cpu)
 	}
 
+	brand := cpu.BrandName()
 	brandLower := strings.ToLower(brand)
 
 	// Intel patterns

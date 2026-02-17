@@ -97,11 +97,10 @@ func TestDetectGenerationFromBrand(t *testing.T) {
 		{"Completely unknown", "Some Random CPU", "x86_64", genUnknown},
 	}
 
-	// Use a nil-feature mock since brand fallback on x86_64 doesn't check features
-	mock := &mockCPU{}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gen := detectGenerationFromBrand(mock, tt.brand, tt.arch)
+			mock := &mockCPU{brandName: tt.brand}
+			gen := detectGenerationFromBrand(mock, tt.arch)
 			assert.Equal(t, tt.expected.name, gen.name)
 			assert.Equal(t, tt.expected.families, gen.families)
 		})
@@ -163,6 +162,16 @@ func TestDetectCPUGeneration_ARMViaInterface(t *testing.T) {
 	gen := detectCPUGeneration(cpu, "arm64")
 	assert.Equal(t, genARMNeoverseV1.name, gen.name)
 	assert.Equal(t, genARMNeoverseV1.families, gen.families)
+}
+
+func TestDetectCPUGeneration_ARMUnknown(t *testing.T) {
+	cpu := &mockCPU{
+		vendorID:  0, // unknown vendor
+		brandName: "Some Unknown ARM Processor",
+	}
+	gen := detectCPUGeneration(cpu, "arm64")
+	assert.Equal(t, genUnknownARM.name, gen.name)
+	assert.Equal(t, genUnknownARM.families, gen.families)
 }
 
 func TestDetectCPUGeneration_FallbackToBrand(t *testing.T) {

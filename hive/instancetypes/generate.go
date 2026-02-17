@@ -10,10 +10,10 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 )
 
-// GenerateForGeneration creates the instance type map for the given CPU generation.
+// generateForGeneration creates the instance type map for the given CPU generation.
 // It generates all instance families matching the generation's family list across
 // burstable, general purpose, compute optimized, and memory optimized categories.
-func GenerateForGeneration(gen cpuGeneration, arch string) map[string]*ec2.InstanceTypeInfo {
+func generateForGeneration(gen cpuGeneration, arch string) map[string]*ec2.InstanceTypeInfo {
 	// Build a set of allowed families for fast lookup
 	allowed := make(map[string]bool, len(gen.families))
 	for _, f := range gen.families {
@@ -53,7 +53,7 @@ func GenerateForGeneration(gen cpuGeneration, arch string) map[string]*ec2.Insta
 // DetectAndGenerate detects the host CPU generation and generates matching instance types.
 func DetectAndGenerate(cpu CPUInfo, arch string) map[string]*ec2.InstanceTypeInfo {
 	gen := detectCPUGeneration(cpu, arch)
-	types := GenerateForGeneration(gen, arch)
+	types := generateForGeneration(gen, arch)
 
 	if len(types) == 0 {
 		slog.Error("No instance types generated, daemon will be unable to run VMs",

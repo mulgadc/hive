@@ -29,7 +29,7 @@ func countFamily(types map[string]*ec2.InstanceTypeInfo, prefix string) int {
 }
 
 func TestGenerateInstanceTypes_IntelIceLake(t *testing.T) {
-	types := GenerateForGeneration(genIntelIceLake, "x86_64")
+	types := generateForGeneration(genIntelIceLake, "x86_64")
 	// t3(7) + c6i(8) + m6i(8) + r6i(8) = 31
 	assert.Len(t, types, 31)
 
@@ -46,7 +46,7 @@ func TestGenerateInstanceTypes_IntelIceLake(t *testing.T) {
 }
 
 func TestGenerateInstanceTypes_IntelBroadwell(t *testing.T) {
-	types := GenerateForGeneration(genIntelBroadwell, "x86_64")
+	types := generateForGeneration(genIntelBroadwell, "x86_64")
 	// t2(7) + c4(6) + m4(6) + r4(6) = 25
 	assert.Len(t, types, 25)
 
@@ -56,7 +56,7 @@ func TestGenerateInstanceTypes_IntelBroadwell(t *testing.T) {
 }
 
 func TestGenerateInstanceTypes_IntelSkylake(t *testing.T) {
-	types := GenerateForGeneration(genIntelSkylake, "x86_64")
+	types := generateForGeneration(genIntelSkylake, "x86_64")
 	// t3(7) + c5(8) + m5(8) + r5(8) = 31
 	assert.Len(t, types, 31)
 
@@ -66,7 +66,7 @@ func TestGenerateInstanceTypes_IntelSkylake(t *testing.T) {
 }
 
 func TestGenerateInstanceTypes_IntelSapphireRapids(t *testing.T) {
-	types := GenerateForGeneration(genIntelSapphireRapids, "x86_64")
+	types := generateForGeneration(genIntelSapphireRapids, "x86_64")
 	// t3(7) + c7i(8) + m7i(8) + r7i(8) = 31
 	assert.Len(t, types, 31)
 
@@ -76,7 +76,7 @@ func TestGenerateInstanceTypes_IntelSapphireRapids(t *testing.T) {
 }
 
 func TestGenerateInstanceTypes_IntelGraniteRapids(t *testing.T) {
-	types := GenerateForGeneration(genIntelGraniteRapids, "x86_64")
+	types := generateForGeneration(genIntelGraniteRapids, "x86_64")
 	// t3(7) + c8i(8) + m8i(8) + r8i(8) = 31
 	assert.Len(t, types, 31)
 
@@ -86,7 +86,7 @@ func TestGenerateInstanceTypes_IntelGraniteRapids(t *testing.T) {
 }
 
 func TestGenerateInstanceTypes_AMDZen(t *testing.T) {
-	types := GenerateForGeneration(genAMDZen, "x86_64")
+	types := generateForGeneration(genAMDZen, "x86_64")
 	// t3a(7) + c5a(8) + m5a(8) + r5a(8) = 31
 	assert.Len(t, types, 31)
 
@@ -96,7 +96,7 @@ func TestGenerateInstanceTypes_AMDZen(t *testing.T) {
 }
 
 func TestGenerateInstanceTypes_AMDZen4(t *testing.T) {
-	types := GenerateForGeneration(genAMDZen4, "x86_64")
+	types := generateForGeneration(genAMDZen4, "x86_64")
 	// t3a(7) + c7a(8) + m7a(8) + r7a(8) = 31
 	assert.Len(t, types, 31)
 
@@ -112,7 +112,7 @@ func TestGenerateInstanceTypes_AMDZen4(t *testing.T) {
 }
 
 func TestGenerateInstanceTypes_ARMN1(t *testing.T) {
-	types := GenerateForGeneration(genARMNeoverseN1, "arm64")
+	types := generateForGeneration(genARMNeoverseN1, "arm64")
 	// t4g(7) + c6g(6) + m6g(6) + r6g(6) = 25
 	assert.Len(t, types, 25)
 
@@ -128,7 +128,7 @@ func TestGenerateInstanceTypes_ARMN1(t *testing.T) {
 }
 
 func TestGenerateInstanceTypes_ARMV2(t *testing.T) {
-	types := GenerateForGeneration(genARMNeoverseV2, "arm64")
+	types := generateForGeneration(genARMNeoverseV2, "arm64")
 	// t4g(7) + c8g(6) + m8g(6) + r8g(6) = 25
 	assert.Len(t, types, 25)
 
@@ -138,26 +138,26 @@ func TestGenerateInstanceTypes_ARMV2(t *testing.T) {
 }
 
 func TestGenerateInstanceTypes_UnknownFallback(t *testing.T) {
-	types := GenerateForGeneration(genUnknownIntel, "x86_64")
+	types := generateForGeneration(genUnknownIntel, "x86_64")
 	// Unknown Intel: t3 only = 7 types
 	assert.Len(t, types, 7)
 	assert.True(t, hasFamily(types, "t3."), "unknown Intel should have t3")
 
-	types = GenerateForGeneration(genUnknownAMD, "x86_64")
+	types = generateForGeneration(genUnknownAMD, "x86_64")
 	assert.Len(t, types, 7)
 	assert.True(t, hasFamily(types, "t3a."), "unknown AMD should have t3a")
 
-	types = GenerateForGeneration(genUnknownARM, "arm64")
+	types = generateForGeneration(genUnknownARM, "arm64")
 	assert.Len(t, types, 7)
 	assert.True(t, hasFamily(types, "t4g."), "unknown ARM should have t4g")
 
-	types = GenerateForGeneration(genUnknown, "x86_64")
+	types = generateForGeneration(genUnknown, "x86_64")
 	assert.Len(t, types, 7)
 	assert.True(t, hasFamily(types, "t3."), "completely unknown should have t3")
 }
 
 func TestGenerateInstanceTypes_VerifyBurstableSizes(t *testing.T) {
-	types := GenerateForGeneration(genIntelSkylake, "x86_64")
+	types := generateForGeneration(genIntelSkylake, "x86_64")
 
 	expected := map[string]struct {
 		vcpus int64
@@ -182,7 +182,7 @@ func TestGenerateInstanceTypes_VerifyBurstableSizes(t *testing.T) {
 
 func TestGenerateInstanceTypes_ComputeRatio(t *testing.T) {
 	// Skylake for c5
-	skylakeTypes := GenerateForGeneration(genIntelSkylake, "x86_64")
+	skylakeTypes := generateForGeneration(genIntelSkylake, "x86_64")
 	expectedSkylake := map[string]struct {
 		vcpus int64
 		memMB int64
@@ -200,7 +200,7 @@ func TestGenerateInstanceTypes_ComputeRatio(t *testing.T) {
 	}
 
 	// Sapphire Rapids for c7i
-	sapphireTypes := GenerateForGeneration(genIntelSapphireRapids, "x86_64")
+	sapphireTypes := generateForGeneration(genIntelSapphireRapids, "x86_64")
 	it, ok := sapphireTypes["c7i.4xlarge"]
 	require.True(t, ok, "missing instance type c7i.4xlarge")
 	assert.Equal(t, int64(16), *it.VCpuInfo.DefaultVCpus, "c7i.4xlarge vCPUs")
@@ -209,7 +209,7 @@ func TestGenerateInstanceTypes_ComputeRatio(t *testing.T) {
 
 func TestGenerateInstanceTypes_MemoryRatio(t *testing.T) {
 	// Skylake for r5
-	skylakeTypes := GenerateForGeneration(genIntelSkylake, "x86_64")
+	skylakeTypes := generateForGeneration(genIntelSkylake, "x86_64")
 	expectedSkylake := map[string]struct {
 		vcpus int64
 		memMB int64
@@ -227,7 +227,7 @@ func TestGenerateInstanceTypes_MemoryRatio(t *testing.T) {
 	}
 
 	// Sapphire Rapids for r7i
-	sapphireTypes := GenerateForGeneration(genIntelSapphireRapids, "x86_64")
+	sapphireTypes := generateForGeneration(genIntelSapphireRapids, "x86_64")
 	it, ok := sapphireTypes["r7i.4xlarge"]
 	require.True(t, ok, "missing instance type r7i.4xlarge")
 	assert.Equal(t, int64(16), *it.VCpuInfo.DefaultVCpus, "r7i.4xlarge vCPUs")
@@ -235,7 +235,7 @@ func TestGenerateInstanceTypes_MemoryRatio(t *testing.T) {
 }
 
 func TestGenerateInstanceTypes_NoSmallSizesForNonBurstable(t *testing.T) {
-	types := GenerateForGeneration(genIntelSkylake, "x86_64")
+	types := generateForGeneration(genIntelSkylake, "x86_64")
 
 	// Non-burstable families should not have nano/micro/small/medium sizes
 	for name := range types {
@@ -251,17 +251,17 @@ func TestGenerateInstanceTypes_NoSmallSizesForNonBurstable(t *testing.T) {
 
 func TestGenerateInstanceTypes_OlderFamiliesHaveSmallerSizeRange(t *testing.T) {
 	// Broadwell has m4 = 6 sizes
-	broadwellTypes := GenerateForGeneration(genIntelBroadwell, "x86_64")
+	broadwellTypes := generateForGeneration(genIntelBroadwell, "x86_64")
 	assert.Equal(t, 6, countFamily(broadwellTypes, "m4."), "m4 should have 6 sizes (large → 16xlarge)")
 
 	// Skylake has m5 = 8 sizes
-	skylakeTypes := GenerateForGeneration(genIntelSkylake, "x86_64")
+	skylakeTypes := generateForGeneration(genIntelSkylake, "x86_64")
 	assert.Equal(t, 8, countFamily(skylakeTypes, "m5."), "m5 should have 8 sizes (large → 24xlarge)")
 }
 
 func TestGenerateInstanceTypes_BurstableFlag(t *testing.T) {
 	// Test Broadwell (has prev-gen families)
-	broadwellTypes := GenerateForGeneration(genIntelBroadwell, "x86_64")
+	broadwellTypes := generateForGeneration(genIntelBroadwell, "x86_64")
 	prevGen := map[string]bool{"t2": true, "m4": true, "c4": true, "r4": true}
 
 	for name, info := range broadwellTypes {
@@ -274,7 +274,7 @@ func TestGenerateInstanceTypes_BurstableFlag(t *testing.T) {
 	}
 
 	// Test current-gen (Sapphire Rapids) — all families should be currentGen=true
-	sapphireTypes := GenerateForGeneration(genIntelSapphireRapids, "x86_64")
+	sapphireTypes := generateForGeneration(genIntelSapphireRapids, "x86_64")
 	for name, info := range sapphireTypes {
 		isBurstable := strings.HasPrefix(name, "t")
 		assert.Equal(t, isBurstable, *info.BurstablePerformanceSupported,
