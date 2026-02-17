@@ -95,6 +95,8 @@ func TestDetectGenerationFromBrand(t *testing.T) {
 		{"AMD Genoa brand", "AMD EPYC 9004 Series", "x86_64", genAMDZen4},
 		{"Generic AMD EPYC", "AMD EPYC 7551", "x86_64", genAMDZen},
 		{"Completely unknown", "Some Random CPU", "x86_64", genUnknown},
+		// ARM delegation path
+		{"ARM via brand fallback", "AWS Graviton4", "arm64", genARMNeoverseV2},
 	}
 
 	for _, tt := range tests {
@@ -182,6 +184,51 @@ func TestDetectCPUGeneration_FallbackToBrand(t *testing.T) {
 	gen := detectCPUGeneration(cpu, "x86_64")
 	assert.Equal(t, genAMDZen4.name, gen.name)
 	assert.Equal(t, genAMDZen4.families, gen.families)
+}
+
+// --- detectARMGeneration coverage for all 5 code paths ---
+
+func TestDetectARMGeneration(t *testing.T) {
+	tests := []struct {
+		name     string
+		brand    string
+		features map[cpuid.FeatureID]bool
+		expected cpuGeneration
+	}{
+		{"Graviton4 brand", "AWS Graviton4", nil, genARMNeoverseV2},
+		{"Neoverse V2 brand", "ARM Neoverse-V2", nil, genARMNeoverseV2},
+		{"Graviton3 brand", "AWS Graviton3", nil, genARMNeoverseV1},
+		{"Neoverse V1 brand", "ARM Neoverse-V1", nil, genARMNeoverseV1},
+		{"Graviton2 brand", "AWS Graviton2", nil, genARMNeoverseN1},
+		{"Neoverse N1 brand", "ARM Neoverse-N1", nil, genARMNeoverseN1},
+		{"SVE only, no brand match", "Generic ARM Processor", map[cpuid.FeatureID]bool{cpuid.SVE: true}, genARMNeoverseV1},
+		{"Unknown ARM, no SVE", "Generic ARM Processor", nil, genUnknownARM},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cpu := &mockCPU{brandName: tt.brand, features: tt.features}
+			gen := detectARMGeneration(cpu)
+			assert.Equal(t, tt.expected.name, gen.name)
+			assert.Equal(t, tt.expected.families, gen.families)
+		})
+	}
+}
+
+// --- DetectAndGenerate (public API) ---
+
+func TestDetectAndGenerate_Intel(t *testing.T) {
+	cpu := &mockCPU{vendorID: cpuid.Intel, family: 6, model: 143}
+	types := DetectAndGenerate(cpu, "x86_64")
+	assert.NotEmpty(t, types)
+	assert.True(t, hasFamily(types, "c7i."), "Sapphire Rapids should include c7i")
+}
+
+func TestDetectAndGenerate_NormalizesAmd64(t *testing.T) {
+	cpu := &mockCPU{vendorID: cpuid.Intel, family: 6, model: 106}
+	types := DetectAndGenerate(cpu, "amd64")
+	assert.NotEmpty(t, types)
+	assert.True(t, hasFamily(types, "c6i."), "amd64 should normalize to x86_64 and produce Ice Lake types")
 }
 
 func hostArch() string {

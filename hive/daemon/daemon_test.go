@@ -470,7 +470,6 @@ func TestGetInstanceTypeInfos(t *testing.T) {
 	}
 }
 
-// TestCPUDetection tests that detectCPUGeneration returns a valid generation on the current host
 // TestGetAvailableInstanceTypeInfos_ResourceFiltering tests that instance types are filtered by available resources
 func TestGetAvailableInstanceTypeInfos_ResourceFiltering(t *testing.T) {
 	rm := NewResourceManager()

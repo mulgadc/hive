@@ -52,6 +52,11 @@ func generateForGeneration(gen cpuGeneration, arch string) map[string]*ec2.Insta
 
 // DetectAndGenerate detects the host CPU generation and generates matching instance types.
 func DetectAndGenerate(cpu CPUInfo, arch string) map[string]*ec2.InstanceTypeInfo {
+	// Normalize Go's "amd64" to the Linux/AWS convention "x86_64".
+	if arch == "amd64" {
+		arch = "x86_64"
+	}
+
 	gen := detectCPUGeneration(cpu, arch)
 	types := generateForGeneration(gen, arch)
 

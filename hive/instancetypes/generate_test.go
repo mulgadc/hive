@@ -111,6 +111,36 @@ func TestGenerateInstanceTypes_AMDZen4(t *testing.T) {
 	}
 }
 
+func TestGenerateInstanceTypes_AMDZen3(t *testing.T) {
+	types := generateForGeneration(genAMDZen3, "x86_64")
+	// t3a(7) + c6a(8) + m6a(8) + r6a(8) = 31
+	assert.Len(t, types, 31)
+
+	for _, prefix := range []string{"t3a.", "c6a.", "m6a.", "r6a."} {
+		assert.True(t, hasFamily(types, prefix), "expected Zen 3 types to include %s family", prefix)
+	}
+}
+
+func TestGenerateInstanceTypes_AMDZen5(t *testing.T) {
+	types := generateForGeneration(genAMDZen5, "x86_64")
+	// t3a(7) + c8a(8) + m8a(8) + r8a(8) = 31
+	assert.Len(t, types, 31)
+
+	for _, prefix := range []string{"t3a.", "c8a.", "m8a.", "r8a."} {
+		assert.True(t, hasFamily(types, prefix), "expected Zen 5 types to include %s family", prefix)
+	}
+}
+
+func TestGenerateInstanceTypes_ARMV1(t *testing.T) {
+	types := generateForGeneration(genARMNeoverseV1, "arm64")
+	// t4g(7) + c7g(6) + m7g(6) + r7g(6) = 25
+	assert.Len(t, types, 25)
+
+	for _, prefix := range []string{"t4g.", "c7g.", "m7g.", "r7g."} {
+		assert.True(t, hasFamily(types, prefix), "expected V1 types to include %s family", prefix)
+	}
+}
+
 func TestGenerateInstanceTypes_ARMN1(t *testing.T) {
 	types := generateForGeneration(genARMNeoverseN1, "arm64")
 	// t4g(7) + c6g(6) + m6g(6) + r6g(6) = 25
