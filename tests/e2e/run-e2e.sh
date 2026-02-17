@@ -35,6 +35,7 @@ cleanup() {
         fi
     fi
     ./scripts/stop-dev.sh
+    exit $EXIT_CODE
 }
 trap cleanup EXIT
 
