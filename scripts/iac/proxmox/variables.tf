@@ -36,12 +36,13 @@ variable "ssh_public_key_path" {
 
 variable "nodes" {
   type = list(object({
-    name         = string
-    address      = string
-    bridge       = string
-    datastore_id = string
+    name          = string
+    address       = string
+    bridge        = string
+    datastore_id  = string
+    template_vmid = optional(number)
   }))
-  description = "Proxmox hosts for VM placement (VMs are distributed round-robin)"
+  description = "Proxmox hosts for VM placement (VMs are distributed round-robin). Set template_vmid to clone from a pre-built template instead of booting from os_image."
 
   validation {
     condition     = length(var.nodes) > 0
@@ -100,6 +101,6 @@ variable "disk_size_gb" {
 
 variable "os_image" {
   type        = string
-  description = "Proxmox image file ID for VM boot disk"
+  description = "Proxmox image file ID for VM boot disk (used when node has no template_vmid)"
   default     = "local:iso/debian-12-genericcloud-amd64-20240211-1654.img"
 }
