@@ -331,19 +331,19 @@ func RemovePidFile(serviceName string) error {
 }
 
 func pidPath() string {
-	var pidPath string
-
-	// CHeck if a directory exists
-
-	if os.Getenv("XDG_RUNTIME_DIR") != "" {
-		pidPath = os.Getenv("XDG_RUNTIME_DIR")
-	} else if dirExists(fmt.Sprintf("%s/%s", os.Getenv("HOME"), "hive")) {
-		pidPath = filepath.Join(os.Getenv("HOME"), "hive")
-	} else {
-		pidPath = os.TempDir()
+	// HIVE_PID_DIR is set per-node in multi-node deployments so each node
+	// gets its own PID directory (avoids PID file collisions on a single host).
+	if dir := os.Getenv("HIVE_PID_DIR"); dir != "" {
+		return dir
 	}
 
-	return pidPath
+	if os.Getenv("XDG_RUNTIME_DIR") != "" {
+		return os.Getenv("XDG_RUNTIME_DIR")
+	}
+	if dirExists(fmt.Sprintf("%s/%s", os.Getenv("HOME"), "hive")) {
+		return filepath.Join(os.Getenv("HOME"), "hive")
+	}
+	return os.TempDir()
 }
 
 func StopProcess(serviceName string) error {
