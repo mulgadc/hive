@@ -177,8 +177,9 @@ func detectCPUGeneration() cpuGeneration {
 		if runtime.GOARCH == "arm64" {
 			return detectARMGeneration()
 		}
+		slog.Warn("CPUID vendor not recognized, falling back to brand string detection",
+			"vendorID", cpuid.CPU.VendorID, "brand", cpuid.CPU.BrandName)
 	}
-	// Fallback: try brand string detection (useful in VMs where CPUID may be virtualized)
 	return detectGenerationFromBrand(cpuid.CPU.BrandName, runtime.GOARCH)
 }
 
@@ -219,11 +220,14 @@ func detectAMDGeneration(family, model int) cpuGeneration {
 	switch family {
 	case 23: // Zen, Zen+, Zen 2 (Naples, Rome, Matisse, etc.)
 		return genAMDZen
-	case 25: // Zen 3 or Zen 4
-		if model < 0x10 || (model >= 0x20 && model < 0x60) {
-			return genAMDZen3 // Milan, Vermeer, Rembrandt, etc.
+	case 25: // Zen 3 and Zen 4 share family 25; model ranges distinguish them
+		// Zen 3 models: 0x00-0x0F (Milan/Vermeer), 0x20-0x5F (Rembrandt/Barcelo)
+		// Zen 4 models: 0x10-0x1F (Genoa), 0x60+ (Raphael/Phoenix)
+		isZen3 := model < 0x10 || (model >= 0x20 && model < 0x60)
+		if isZen3 {
+			return genAMDZen3
 		}
-		return genAMDZen4 // Genoa, Raphael, Phoenix, etc.
+		return genAMDZen4
 	case 26: // Zen 5 (Turin, Granite Ridge)
 		return genAMDZen5
 	}
@@ -247,8 +251,9 @@ func detectARMGeneration() cpuGeneration {
 		return genARMNeoverseN1
 	}
 
-	// Use feature flags as heuristic: SVE support indicates Neoverse V1+
+	// SVE indicates Neoverse V1+ but cannot distinguish V1 from V2
 	if cpuid.CPU.Has(cpuid.SVE) {
+		slog.Warn("ARM generation detected via SVE heuristic, defaulting to Neoverse V1", "brand", cpuid.CPU.BrandName)
 		return genARMNeoverseV1
 	}
 
@@ -288,7 +293,7 @@ func detectGenerationFromBrand(brand, arch string) cpuGeneration {
 	// AMD patterns
 	if strings.Contains(brandLower, "epyc") || strings.Contains(brandLower, "amd") || strings.Contains(brandLower, "ryzen") {
 		switch {
-		case strings.Contains(brandLower, "turin") || strings.Contains(brandLower, "9x"):
+		case strings.Contains(brandLower, "turin"):
 			return genAMDZen5
 		case strings.Contains(brandLower, "genoa") || strings.Contains(brandLower, "9004") || strings.Contains(brandLower, "raphael"):
 			return genAMDZen4
@@ -354,30 +359,8 @@ type instanceSize struct {
 	memoryGB float64
 }
 
-type cpuVendor int
-
-const (
-	vendorIntel cpuVendor = iota
-	vendorAMD
-	vendorARM
-)
-
-func (v cpuVendor) String() string {
-	switch v {
-	case vendorIntel:
-		return "Intel"
-	case vendorAMD:
-		return "AMD"
-	case vendorARM:
-		return "ARM"
-	default:
-		return "Unknown"
-	}
-}
-
 type instanceFamilyDef struct {
 	name       string
-	vendor     cpuVendor
 	sizes      []instanceSize
 	currentGen bool
 }
@@ -457,52 +440,52 @@ var memorySizesSmall = slices.Clone(memorySizes[:6])
 //   - Legacy (pre-gen4): a1, c1, c3, cc1, cc2, cg1, cr1, hi1, hs1, m1, m2, m3, r3, t1
 var instanceFamilyDefs = []instanceFamilyDef{
 	// Burstable
-	{name: "t2", vendor: vendorIntel, sizes: burstableSizes, currentGen: false},
-	{name: "t3", vendor: vendorIntel, sizes: burstableSizes, currentGen: true},
-	{name: "t3a", vendor: vendorAMD, sizes: burstableSizes, currentGen: true},
-	{name: "t4g", vendor: vendorARM, sizes: burstableSizes, currentGen: true},
+	{name: "t2", sizes: burstableSizes, currentGen: false},
+	{name: "t3", sizes: burstableSizes, currentGen: true},
+	{name: "t3a", sizes: burstableSizes, currentGen: true},
+	{name: "t4g", sizes: burstableSizes, currentGen: true},
 
 	// General Purpose (1:4 vCPU:memory)
-	{name: "m4", vendor: vendorIntel, sizes: gpSizesSmall, currentGen: false},
-	{name: "m5", vendor: vendorIntel, sizes: gpSizes, currentGen: true},
-	{name: "m5a", vendor: vendorAMD, sizes: gpSizes, currentGen: true},
-	{name: "m6i", vendor: vendorIntel, sizes: gpSizes, currentGen: true},
-	{name: "m6a", vendor: vendorAMD, sizes: gpSizes, currentGen: true},
-	{name: "m6g", vendor: vendorARM, sizes: gpSizesSmall, currentGen: true},
-	{name: "m7i", vendor: vendorIntel, sizes: gpSizes, currentGen: true},
-	{name: "m7a", vendor: vendorAMD, sizes: gpSizes, currentGen: true},
-	{name: "m7g", vendor: vendorARM, sizes: gpSizesSmall, currentGen: true},
-	{name: "m8i", vendor: vendorIntel, sizes: gpSizes, currentGen: true},
-	{name: "m8a", vendor: vendorAMD, sizes: gpSizes, currentGen: true},
-	{name: "m8g", vendor: vendorARM, sizes: gpSizesSmall, currentGen: true},
+	{name: "m4", sizes: gpSizesSmall, currentGen: false},
+	{name: "m5", sizes: gpSizes, currentGen: true},
+	{name: "m5a", sizes: gpSizes, currentGen: true},
+	{name: "m6i", sizes: gpSizes, currentGen: true},
+	{name: "m6a", sizes: gpSizes, currentGen: true},
+	{name: "m6g", sizes: gpSizesSmall, currentGen: true},
+	{name: "m7i", sizes: gpSizes, currentGen: true},
+	{name: "m7a", sizes: gpSizes, currentGen: true},
+	{name: "m7g", sizes: gpSizesSmall, currentGen: true},
+	{name: "m8i", sizes: gpSizes, currentGen: true},
+	{name: "m8a", sizes: gpSizes, currentGen: true},
+	{name: "m8g", sizes: gpSizesSmall, currentGen: true},
 
 	// Compute Optimized (1:2 vCPU:memory)
-	{name: "c4", vendor: vendorIntel, sizes: computeSizesSmall, currentGen: false},
-	{name: "c5", vendor: vendorIntel, sizes: computeSizes, currentGen: true},
-	{name: "c5a", vendor: vendorAMD, sizes: computeSizes, currentGen: true},
-	{name: "c6i", vendor: vendorIntel, sizes: computeSizes, currentGen: true},
-	{name: "c6a", vendor: vendorAMD, sizes: computeSizes, currentGen: true},
-	{name: "c6g", vendor: vendorARM, sizes: computeSizesSmall, currentGen: true},
-	{name: "c7i", vendor: vendorIntel, sizes: computeSizes, currentGen: true},
-	{name: "c7a", vendor: vendorAMD, sizes: computeSizes, currentGen: true},
-	{name: "c7g", vendor: vendorARM, sizes: computeSizesSmall, currentGen: true},
-	{name: "c8i", vendor: vendorIntel, sizes: computeSizes, currentGen: true},
-	{name: "c8a", vendor: vendorAMD, sizes: computeSizes, currentGen: true},
-	{name: "c8g", vendor: vendorARM, sizes: computeSizesSmall, currentGen: true},
+	{name: "c4", sizes: computeSizesSmall, currentGen: false},
+	{name: "c5", sizes: computeSizes, currentGen: true},
+	{name: "c5a", sizes: computeSizes, currentGen: true},
+	{name: "c6i", sizes: computeSizes, currentGen: true},
+	{name: "c6a", sizes: computeSizes, currentGen: true},
+	{name: "c6g", sizes: computeSizesSmall, currentGen: true},
+	{name: "c7i", sizes: computeSizes, currentGen: true},
+	{name: "c7a", sizes: computeSizes, currentGen: true},
+	{name: "c7g", sizes: computeSizesSmall, currentGen: true},
+	{name: "c8i", sizes: computeSizes, currentGen: true},
+	{name: "c8a", sizes: computeSizes, currentGen: true},
+	{name: "c8g", sizes: computeSizesSmall, currentGen: true},
 
 	// Memory Optimized (1:8 vCPU:memory)
-	{name: "r4", vendor: vendorIntel, sizes: memorySizesSmall, currentGen: false},
-	{name: "r5", vendor: vendorIntel, sizes: memorySizes, currentGen: true},
-	{name: "r5a", vendor: vendorAMD, sizes: memorySizes, currentGen: true},
-	{name: "r6i", vendor: vendorIntel, sizes: memorySizes, currentGen: true},
-	{name: "r6a", vendor: vendorAMD, sizes: memorySizes, currentGen: true},
-	{name: "r6g", vendor: vendorARM, sizes: memorySizesSmall, currentGen: true},
-	{name: "r7i", vendor: vendorIntel, sizes: memorySizes, currentGen: true},
-	{name: "r7a", vendor: vendorAMD, sizes: memorySizes, currentGen: true},
-	{name: "r7g", vendor: vendorARM, sizes: memorySizesSmall, currentGen: true},
-	{name: "r8i", vendor: vendorIntel, sizes: memorySizes, currentGen: true},
-	{name: "r8a", vendor: vendorAMD, sizes: memorySizes, currentGen: true},
-	{name: "r8g", vendor: vendorARM, sizes: memorySizesSmall, currentGen: true},
+	{name: "r4", sizes: memorySizesSmall, currentGen: false},
+	{name: "r5", sizes: memorySizes, currentGen: true},
+	{name: "r5a", sizes: memorySizes, currentGen: true},
+	{name: "r6i", sizes: memorySizes, currentGen: true},
+	{name: "r6a", sizes: memorySizes, currentGen: true},
+	{name: "r6g", sizes: memorySizesSmall, currentGen: true},
+	{name: "r7i", sizes: memorySizes, currentGen: true},
+	{name: "r7a", sizes: memorySizes, currentGen: true},
+	{name: "r7g", sizes: memorySizesSmall, currentGen: true},
+	{name: "r8i", sizes: memorySizes, currentGen: true},
+	{name: "r8a", sizes: memorySizes, currentGen: true},
+	{name: "r8g", sizes: memorySizesSmall, currentGen: true},
 }
 
 // generateInstanceTypes creates the instance type map for the given CPU generation.
@@ -2094,9 +2077,11 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 			return // Startup failed, LaunchInstance handles the error
 		}
 
-		// Runtime crash — handle it (clean exits are expected from QMP shutdown)
+		// Handle exit: crash vs clean shutdown
 		if waitErr != nil {
 			d.handleInstanceCrash(instance, waitErr)
+		} else {
+			slog.Info("VM process exited cleanly", "instance", instance.ID)
 		}
 	}()
 

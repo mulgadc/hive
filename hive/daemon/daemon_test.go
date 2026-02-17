@@ -3518,6 +3518,14 @@ func TestDetectAMDGeneration(t *testing.T) {
 		{"Zen3 Vermeer model 0x21", 25, 0x21, genAMDZen3},
 		{"Zen4 Genoa model 0x11", 25, 0x11, genAMDZen4},
 		{"Zen4 Raphael model 0x61", 25, 0x61, genAMDZen4},
+		// Boundary tests for family 25 Zen3/Zen4 split
+		{"Zen3 boundary 0x0F", 25, 0x0F, genAMDZen3},
+		{"Zen4 boundary 0x10", 25, 0x10, genAMDZen4},
+		{"Zen4 boundary 0x1F", 25, 0x1F, genAMDZen4},
+		{"Zen3 boundary 0x20", 25, 0x20, genAMDZen3},
+		{"Zen3 boundary 0x5F", 25, 0x5F, genAMDZen3},
+		{"Zen4 boundary 0x60", 25, 0x60, genAMDZen4},
+		{"Zen4 max model", 25, 0xFF, genAMDZen4},
 		{"Zen5 Turin family 26", 26, 0, genAMDZen5},
 		{"Unknown AMD family", 20, 0, genUnknownAMD},
 	}
