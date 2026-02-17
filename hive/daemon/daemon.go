@@ -333,11 +333,14 @@ var memorySizesSmall = slices.Clone(memorySizes[:6])
 //     r5n, r5dn, r5b, c6gd, c6gn, c6id, c6in, m6gd, m6id, m6idn, m6in, r6gd, r6id, r6idn, r6in,
 //     c7gd, c7gn, c7i-flex, m7gd, m7i-flex, r7gd, r7iz, c8gd, c8gn, c8i-flex, m8gd, m8i-flex,
 //     r8gd, r8gn, r8gb, r8i-flex — require NVMe instance storage or enhanced networking
-//   - GPU/accelerator: g2-g6, g6e, g6f, gr6, gr6f, p2-p6, dl1, dl2q
+//   - GPU/accelerator: g2-g6, g6e, g6f, gr6, gr6f, p2-p6, inf1-inf2, trn1-trn2, dl1, dl2q — require
+//     GPU, Inferentia, Trainium, or other accelerator hardware. note inf1 and trn1 are not supported since its aws only hardware.
 //   - Storage optimized: d2, d3, d3en, h1, i2-i8g, i7ie, i8ge, im4gn, is4gen — require dense HDD/NVMe
 //   - FPGA: f1, f2 — require FPGA hardware
 //   - High memory: u-*, u7i-*, x1, x1e, x2gd, x2idn, x2iedn, x2iezn, x8g — require TB-scale memory
 //   - High frequency: z1d — specialized high clock-speed instances
+//   - (unsupported) Dedicated host: mac*, hpc* — require macOS/Apple hardware or HPC interconnects
+//   - (unsupported) Video: vt1 — requires video transcoding hardware
 //   - Legacy (pre-gen4): a1, c1, c3, cc1, cc2, cg1, cr1, hi1, hs1, m1, m2, m3, r3, t1
 var instanceFamilyDefs = []instanceFamilyDef{
 	// Burstable
@@ -1967,20 +1970,23 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 			slog.Error("VM process exited", "instance", instance.ID, "err", waitErr)
 		}
 
-		// Signal startup check (non-blocking)
-		select {
-		case exitChan <- 1:
-		default:
-		}
+		// Signal startup check (non-blocking) — only on error
+		if waitErr != nil {
+			select {
+			case exitChan <- 1:
+			default:
+			}
 
-		// Wait for startup phase to complete before deciding on crash handling
-		confirmed := <-startupConfirmed
-		if !confirmed {
-			return // Startup failed, LaunchInstance handles the error
-		}
+			// Wait for startup phase to complete before deciding on crash handling
+			confirmed := <-startupConfirmed
+			if !confirmed {
+				return // Startup failed, LaunchInstance handles the error
+			}
 
-		// Runtime crash — handle it
-		d.handleInstanceCrash(instance, waitErr)
+			// Runtime crash — handle it
+			d.handleInstanceCrash(instance, waitErr)
+		}
+		// If waitErr is nil, QEMU daemonized successfully — nothing to do
 	}()
 
 	// Wait for startup result
