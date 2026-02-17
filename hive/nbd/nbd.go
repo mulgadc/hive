@@ -23,7 +23,7 @@ type NBDKitConfig struct {
 	BaseDir    string `json:"base_dir"`
 	Host       string `json:"host"`
 	CacheSize  int    `json:"cache_size"`
-	ShardWAL   bool   `json:"shardwal"` // Enable sharded WAL (default true)
+	ShardWAL   bool   `json:"shardwal"` // Enable sharded WAL (default false)
 	UseTCP     bool   `json:"use_tcp"`  // If true, use TCP transport; otherwise use Unix socket
 }
 
