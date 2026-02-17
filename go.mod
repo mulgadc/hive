@@ -8,6 +8,7 @@ require (
 	github.com/gofiber/fiber/v2 v2.52.9
 	github.com/google/uuid v1.6.0
 	github.com/kdomanski/iso9660 v0.4.0
+	github.com/klauspost/cpuid/v2 v2.3.0
 	github.com/mulgadc/predastore v1.0.0
 	github.com/mulgadc/viperblock v1.0.10
 	github.com/nats-io/nats-server/v2 v2.11.6
@@ -69,7 +70,6 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
-	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/klauspost/reedsolomon v1.12.6 // indirect
 	github.com/lithammer/fuzzysearch v1.1.8 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect

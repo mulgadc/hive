@@ -27,6 +27,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/gofiber/fiber/v2"
+	cpuid "github.com/klauspost/cpuid/v2"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	handlers_ec2_account "github.com/mulgadc/hive/hive/handlers/ec2/account"
@@ -126,33 +127,181 @@ type Daemon struct {
 	mu sync.Mutex
 }
 
-// cpuToVendor maps CPU model patterns to CPU vendors.
-// Patterns are checked in order; more specific patterns should come first.
-var cpuToVendor = []struct {
-	pattern string
-	vendor  cpuVendor
-}{
-	{"EPYC", vendorAMD},
-	{"Xeon", vendorIntel},
-	{"Graviton", vendorARM},
-	{"Apple", vendorARM},
-	{"ARM", vendorARM},
-	{"AMD", vendorAMD}, // catches Ryzen, Threadripper, etc.
+// cpuGeneration represents a specific CPU microarchitecture generation
+// and the AWS instance families it maps to.
+type cpuGeneration struct {
+	name     string   // e.g. "Intel Ice Lake", "AMD Genoa"
+	families []string // e.g. ["t3", "c6i", "m6i", "r6i"]
 }
 
-// vendorFromCPU returns the CPU vendor based on the CPU model string and architecture.
-func vendorFromCPU(cpuModel, arch string) cpuVendor {
-	if arch == "arm64" {
-		return vendorARM
+var (
+	// Intel generations
+	genIntelBroadwell      = cpuGeneration{"Intel Broadwell", []string{"t2", "c4", "m4", "r4"}}
+	genIntelSkylake        = cpuGeneration{"Intel Skylake/Cascade Lake", []string{"t3", "c5", "m5", "r5"}}
+	genIntelIceLake        = cpuGeneration{"Intel Ice Lake", []string{"t3", "c6i", "m6i", "r6i"}}
+	genIntelSapphireRapids = cpuGeneration{"Intel Sapphire Rapids", []string{"t3", "c7i", "m7i", "r7i"}}
+	genIntelGraniteRapids  = cpuGeneration{"Intel Granite Rapids", []string{"t3", "c8i", "m8i", "r8i"}}
+
+	// AMD generations
+	genAMDZen  = cpuGeneration{"AMD Zen/Zen2 (Naples/Rome)", []string{"t3a", "c5a", "m5a", "r5a"}}
+	genAMDZen3 = cpuGeneration{"AMD Zen 3 (Milan)", []string{"t3a", "c6a", "m6a", "r6a"}}
+	genAMDZen4 = cpuGeneration{"AMD Zen 4 (Genoa)", []string{"t3a", "c7a", "m7a", "r7a"}}
+	genAMDZen5 = cpuGeneration{"AMD Zen 5 (Turin)", []string{"t3a", "c8a", "m8a", "r8a"}}
+
+	// ARM generations
+	genARMNeoverseN1 = cpuGeneration{"ARM Neoverse N1 (Graviton2)", []string{"t4g", "c6g", "m6g", "r6g"}}
+	genARMNeoverseV1 = cpuGeneration{"ARM Neoverse V1 (Graviton3)", []string{"t4g", "c7g", "m7g", "r7g"}}
+	genARMNeoverseV2 = cpuGeneration{"ARM Neoverse V2 (Graviton4)", []string{"t4g", "c8g", "m8g", "r8g"}}
+
+	// Unknown/fallback — expose only burstable family
+	genUnknownIntel = cpuGeneration{"Unknown Intel", []string{"t3"}}
+	genUnknownAMD   = cpuGeneration{"Unknown AMD", []string{"t3a"}}
+	genUnknownARM   = cpuGeneration{"Unknown ARM", []string{"t4g"}}
+	genUnknown      = cpuGeneration{"Unknown", []string{"t3"}}
+)
+
+// detectCPUGeneration detects the CPU microarchitecture generation using CPUID.
+func detectCPUGeneration() cpuGeneration {
+	switch cpuid.CPU.VendorID {
+	case cpuid.Intel:
+		return detectIntelGeneration(cpuid.CPU.Family, cpuid.CPU.Model)
+	case cpuid.AMD:
+		return detectAMDGeneration(cpuid.CPU.Family, cpuid.CPU.Model)
+	default:
+		if runtime.GOARCH == "arm64" {
+			return detectARMGeneration()
+		}
+		slog.Warn("CPUID vendor not recognized, falling back to brand string detection",
+			"vendorID", cpuid.CPU.VendorID, "brand", cpuid.CPU.BrandName)
 	}
-	cpuUpper := strings.ToUpper(cpuModel)
-	for _, entry := range cpuToVendor {
-		if strings.Contains(cpuUpper, strings.ToUpper(entry.pattern)) {
-			return entry.vendor
+	return detectGenerationFromBrand(cpuid.CPU.BrandName, runtime.GOARCH)
+}
+
+// detectIntelGeneration maps Intel CPUID Family 6 model numbers to generations.
+func detectIntelGeneration(family, model int) cpuGeneration {
+	if family != 6 {
+		slog.Warn("Unrecognized Intel CPU family, exposing t3 only", "family", family, "model", model)
+		return genUnknownIntel
+	}
+
+	switch model {
+	case 79, 86: // Broadwell server (BDX, BDX-DE)
+		return genIntelBroadwell
+	case 85: // Skylake-SP / Cascade Lake-SP
+		return genIntelSkylake
+	case 106, 108: // Ice Lake server (ICX, ICX-D)
+		return genIntelIceLake
+	case 143, 207: // Sapphire Rapids (SPR, EMR)
+		return genIntelSapphireRapids
+	case 173, 174: // Granite Rapids (GNR, GNR-D)
+		return genIntelGraniteRapids
+
+	// Consumer/desktop mapped to nearest server generation
+	case 151, 154: // Alder Lake
+		return genIntelIceLake
+	case 183, 191: // Raptor Lake
+		return genIntelSapphireRapids
+	case 197, 198: // Arrow Lake
+		return genIntelGraniteRapids
+	}
+
+	slog.Warn("Unrecognized Intel CPU model, exposing t3 only", "family", family, "model", model, "brand", cpuid.CPU.BrandName)
+	return genUnknownIntel
+}
+
+// detectAMDGeneration maps AMD CPUID family/model to generations.
+func detectAMDGeneration(family, model int) cpuGeneration {
+	switch family {
+	case 23: // Zen, Zen+, Zen 2 (Naples, Rome, Matisse, etc.)
+		return genAMDZen
+	case 25: // Zen 3 and Zen 4 share family 25; model ranges distinguish them
+		// Zen 3 models: 0x00-0x0F (Milan/Vermeer), 0x20-0x5F (Rembrandt/Barcelo)
+		// Zen 4 models: 0x10-0x1F (Genoa), 0x60+ (Raphael/Phoenix)
+		isZen3 := model < 0x10 || (model >= 0x20 && model < 0x60)
+		if isZen3 {
+			return genAMDZen3
+		}
+		return genAMDZen4
+	case 26: // Zen 5 (Turin, Granite Ridge)
+		return genAMDZen5
+	}
+
+	slog.Warn("Unrecognized AMD CPU family, exposing t3a only", "family", family, "model", model, "brand", cpuid.CPU.BrandName)
+	return genUnknownAMD
+}
+
+// detectARMGeneration detects ARM CPU generation using brand string and feature flags.
+func detectARMGeneration() cpuGeneration {
+	brand := strings.ToLower(cpuid.CPU.BrandName)
+
+	// Check for specific Graviton versions
+	if strings.Contains(brand, "graviton4") || strings.Contains(brand, "neoverse-v2") {
+		return genARMNeoverseV2
+	}
+	if strings.Contains(brand, "graviton3") || strings.Contains(brand, "neoverse-v1") {
+		return genARMNeoverseV1
+	}
+	if strings.Contains(brand, "graviton2") || strings.Contains(brand, "neoverse-n1") {
+		return genARMNeoverseN1
+	}
+
+	// SVE indicates Neoverse V1+ but cannot distinguish V1 from V2
+	if cpuid.CPU.Has(cpuid.SVE) {
+		slog.Warn("ARM generation detected via SVE heuristic, defaulting to Neoverse V1", "brand", cpuid.CPU.BrandName)
+		return genARMNeoverseV1
+	}
+
+	// Default ARM to Neoverse N1 (most common)
+	slog.Warn("Could not identify ARM generation, defaulting to Neoverse N1", "brand", cpuid.CPU.BrandName)
+	return genARMNeoverseN1
+}
+
+// detectGenerationFromBrand is a fallback for VMs/hypervisors where CPUID may be virtualized.
+func detectGenerationFromBrand(brand, arch string) cpuGeneration {
+	if arch == "arm64" {
+		return detectARMGeneration()
+	}
+
+	brandLower := strings.ToLower(brand)
+
+	// Intel patterns
+	if strings.Contains(brandLower, "xeon") || strings.Contains(brandLower, "intel") {
+		switch {
+		case strings.Contains(brandLower, "granite"):
+			return genIntelGraniteRapids
+		case strings.Contains(brandLower, "sapphire"):
+			return genIntelSapphireRapids
+		case strings.Contains(brandLower, "ice lake") || strings.Contains(brandLower, "icelake"):
+			return genIntelIceLake
+		case strings.Contains(brandLower, "cascade") || strings.Contains(brandLower, "skylake"):
+			return genIntelSkylake
+		case strings.Contains(brandLower, "broadwell"):
+			return genIntelBroadwell
+		default:
+			// Generic Intel — default to Skylake (most common in VMs)
+			slog.Warn("Intel CPU detected via brand string but generation unknown, defaulting to Skylake", "brand", brand)
+			return genIntelSkylake
 		}
 	}
-	slog.Warn("Unrecognized CPU model, defaulting to Intel vendor", "cpuModel", cpuModel)
-	return vendorIntel
+
+	// AMD patterns
+	if strings.Contains(brandLower, "epyc") || strings.Contains(brandLower, "amd") || strings.Contains(brandLower, "ryzen") {
+		switch {
+		case strings.Contains(brandLower, "turin"):
+			return genAMDZen5
+		case strings.Contains(brandLower, "genoa") || strings.Contains(brandLower, "9004") || strings.Contains(brandLower, "raphael"):
+			return genAMDZen4
+		case strings.Contains(brandLower, "milan") || strings.Contains(brandLower, "7003") || strings.Contains(brandLower, "vermeer"):
+			return genAMDZen3
+		default:
+			// Generic AMD — default to Zen/Zen2
+			slog.Warn("AMD CPU detected via brand string but generation unknown, defaulting to Zen/Zen2", "brand", brand)
+			return genAMDZen
+		}
+	}
+
+	slog.Warn("Unrecognized CPU, exposing t3 only", "brand", brand, "arch", arch)
+	return genUnknown
 }
 
 // getSystemMemory returns the total system memory in GB
@@ -198,73 +347,14 @@ func getSystemMemory() (float64, error) {
 	}
 }
 
-// getCPUModel returns the CPU model name for the host system
-func getCPUModel() (string, error) {
-	switch runtime.GOOS {
-	case "darwin":
-		// macOS: use sysctl
-		cmd := exec.Command("sysctl", "-n", "machdep.cpu.brand_string")
-		output, err := cmd.Output()
-		if err != nil {
-			return "", fmt.Errorf("failed to get CPU model on macOS: %w", err)
-		}
-		return strings.TrimSpace(string(output)), nil
-
-	case "linux":
-		// Linux: read from /proc/cpuinfo
-		file, err := os.Open("/proc/cpuinfo")
-		if err != nil {
-			return "", fmt.Errorf("failed to open /proc/cpuinfo: %w", err)
-		}
-		defer file.Close()
-
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.HasPrefix(line, "model name") {
-				parts := strings.SplitN(line, ":", 2)
-				if len(parts) == 2 {
-					return strings.TrimSpace(parts[1]), nil
-				}
-			}
-		}
-		return "", fmt.Errorf("model name not found in /proc/cpuinfo")
-
-	default:
-		return "", fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
-	}
-}
-
 type instanceSize struct {
 	suffix   string
 	vcpus    int
 	memoryGB float64
 }
 
-type cpuVendor int
-
-const (
-	vendorIntel cpuVendor = iota
-	vendorAMD
-	vendorARM
-)
-
-func (v cpuVendor) String() string {
-	switch v {
-	case vendorIntel:
-		return "Intel"
-	case vendorAMD:
-		return "AMD"
-	case vendorARM:
-		return "ARM"
-	default:
-		return "Unknown"
-	}
-}
-
 type instanceFamilyDef struct {
 	name       string
-	vendor     cpuVendor
 	sizes      []instanceSize
 	currentGen bool
 }
@@ -344,61 +434,67 @@ var memorySizesSmall = slices.Clone(memorySizes[:6])
 //   - Legacy (pre-gen4): a1, c1, c3, cc1, cc2, cg1, cr1, hi1, hs1, m1, m2, m3, r3, t1
 var instanceFamilyDefs = []instanceFamilyDef{
 	// Burstable
-	{name: "t2", vendor: vendorIntel, sizes: burstableSizes, currentGen: false},
-	{name: "t3", vendor: vendorIntel, sizes: burstableSizes, currentGen: true},
-	{name: "t3a", vendor: vendorAMD, sizes: burstableSizes, currentGen: true},
-	{name: "t4g", vendor: vendorARM, sizes: burstableSizes, currentGen: true},
+	{name: "t2", sizes: burstableSizes, currentGen: false},
+	{name: "t3", sizes: burstableSizes, currentGen: true},
+	{name: "t3a", sizes: burstableSizes, currentGen: true},
+	{name: "t4g", sizes: burstableSizes, currentGen: true},
 
 	// General Purpose (1:4 vCPU:memory)
-	{name: "m4", vendor: vendorIntel, sizes: gpSizesSmall, currentGen: false},
-	{name: "m5", vendor: vendorIntel, sizes: gpSizes, currentGen: true},
-	{name: "m5a", vendor: vendorAMD, sizes: gpSizes, currentGen: true},
-	{name: "m6i", vendor: vendorIntel, sizes: gpSizes, currentGen: true},
-	{name: "m6a", vendor: vendorAMD, sizes: gpSizes, currentGen: true},
-	{name: "m6g", vendor: vendorARM, sizes: gpSizesSmall, currentGen: true},
-	{name: "m7i", vendor: vendorIntel, sizes: gpSizes, currentGen: true},
-	{name: "m7a", vendor: vendorAMD, sizes: gpSizes, currentGen: true},
-	{name: "m7g", vendor: vendorARM, sizes: gpSizesSmall, currentGen: true},
-	{name: "m8i", vendor: vendorIntel, sizes: gpSizes, currentGen: true},
-	{name: "m8a", vendor: vendorAMD, sizes: gpSizes, currentGen: true},
-	{name: "m8g", vendor: vendorARM, sizes: gpSizesSmall, currentGen: true},
+	{name: "m4", sizes: gpSizesSmall, currentGen: false},
+	{name: "m5", sizes: gpSizes, currentGen: true},
+	{name: "m5a", sizes: gpSizes, currentGen: true},
+	{name: "m6i", sizes: gpSizes, currentGen: true},
+	{name: "m6a", sizes: gpSizes, currentGen: true},
+	{name: "m6g", sizes: gpSizesSmall, currentGen: true},
+	{name: "m7i", sizes: gpSizes, currentGen: true},
+	{name: "m7a", sizes: gpSizes, currentGen: true},
+	{name: "m7g", sizes: gpSizesSmall, currentGen: true},
+	{name: "m8i", sizes: gpSizes, currentGen: true},
+	{name: "m8a", sizes: gpSizes, currentGen: true},
+	{name: "m8g", sizes: gpSizesSmall, currentGen: true},
 
 	// Compute Optimized (1:2 vCPU:memory)
-	{name: "c4", vendor: vendorIntel, sizes: computeSizesSmall, currentGen: false},
-	{name: "c5", vendor: vendorIntel, sizes: computeSizes, currentGen: true},
-	{name: "c5a", vendor: vendorAMD, sizes: computeSizes, currentGen: true},
-	{name: "c6i", vendor: vendorIntel, sizes: computeSizes, currentGen: true},
-	{name: "c6a", vendor: vendorAMD, sizes: computeSizes, currentGen: true},
-	{name: "c6g", vendor: vendorARM, sizes: computeSizesSmall, currentGen: true},
-	{name: "c7i", vendor: vendorIntel, sizes: computeSizes, currentGen: true},
-	{name: "c7a", vendor: vendorAMD, sizes: computeSizes, currentGen: true},
-	{name: "c7g", vendor: vendorARM, sizes: computeSizesSmall, currentGen: true},
-	{name: "c8i", vendor: vendorIntel, sizes: computeSizes, currentGen: true},
-	{name: "c8a", vendor: vendorAMD, sizes: computeSizes, currentGen: true},
-	{name: "c8g", vendor: vendorARM, sizes: computeSizesSmall, currentGen: true},
+	{name: "c4", sizes: computeSizesSmall, currentGen: false},
+	{name: "c5", sizes: computeSizes, currentGen: true},
+	{name: "c5a", sizes: computeSizes, currentGen: true},
+	{name: "c6i", sizes: computeSizes, currentGen: true},
+	{name: "c6a", sizes: computeSizes, currentGen: true},
+	{name: "c6g", sizes: computeSizesSmall, currentGen: true},
+	{name: "c7i", sizes: computeSizes, currentGen: true},
+	{name: "c7a", sizes: computeSizes, currentGen: true},
+	{name: "c7g", sizes: computeSizesSmall, currentGen: true},
+	{name: "c8i", sizes: computeSizes, currentGen: true},
+	{name: "c8a", sizes: computeSizes, currentGen: true},
+	{name: "c8g", sizes: computeSizesSmall, currentGen: true},
 
 	// Memory Optimized (1:8 vCPU:memory)
-	{name: "r4", vendor: vendorIntel, sizes: memorySizesSmall, currentGen: false},
-	{name: "r5", vendor: vendorIntel, sizes: memorySizes, currentGen: true},
-	{name: "r5a", vendor: vendorAMD, sizes: memorySizes, currentGen: true},
-	{name: "r6i", vendor: vendorIntel, sizes: memorySizes, currentGen: true},
-	{name: "r6a", vendor: vendorAMD, sizes: memorySizes, currentGen: true},
-	{name: "r6g", vendor: vendorARM, sizes: memorySizesSmall, currentGen: true},
-	{name: "r7i", vendor: vendorIntel, sizes: memorySizes, currentGen: true},
-	{name: "r7a", vendor: vendorAMD, sizes: memorySizes, currentGen: true},
-	{name: "r7g", vendor: vendorARM, sizes: memorySizesSmall, currentGen: true},
-	{name: "r8i", vendor: vendorIntel, sizes: memorySizes, currentGen: true},
-	{name: "r8a", vendor: vendorAMD, sizes: memorySizes, currentGen: true},
-	{name: "r8g", vendor: vendorARM, sizes: memorySizesSmall, currentGen: true},
+	{name: "r4", sizes: memorySizesSmall, currentGen: false},
+	{name: "r5", sizes: memorySizes, currentGen: true},
+	{name: "r5a", sizes: memorySizes, currentGen: true},
+	{name: "r6i", sizes: memorySizes, currentGen: true},
+	{name: "r6a", sizes: memorySizes, currentGen: true},
+	{name: "r6g", sizes: memorySizesSmall, currentGen: true},
+	{name: "r7i", sizes: memorySizes, currentGen: true},
+	{name: "r7a", sizes: memorySizes, currentGen: true},
+	{name: "r7g", sizes: memorySizesSmall, currentGen: true},
+	{name: "r8i", sizes: memorySizes, currentGen: true},
+	{name: "r8a", sizes: memorySizes, currentGen: true},
+	{name: "r8g", sizes: memorySizesSmall, currentGen: true},
 }
 
-// generateInstanceTypes creates the instance type map for the given CPU vendor.
-// It generates all instance families matching the vendor across burstable,
-// general purpose, compute optimized, and memory optimized categories.
-func generateInstanceTypes(v cpuVendor, arch string) map[string]*ec2.InstanceTypeInfo {
+// generateInstanceTypes creates the instance type map for the given CPU generation.
+// It generates all instance families matching the generation's family list across
+// burstable, general purpose, compute optimized, and memory optimized categories.
+func generateInstanceTypes(gen cpuGeneration, arch string) map[string]*ec2.InstanceTypeInfo {
+	// Build a set of allowed families for fast lookup
+	allowed := make(map[string]bool, len(gen.families))
+	for _, f := range gen.families {
+		allowed[f] = true
+	}
+
 	instanceTypes := make(map[string]*ec2.InstanceTypeInfo)
 	for _, def := range instanceFamilyDefs {
-		if def.vendor != v {
+		if !allowed[def.name] {
 			continue
 		}
 		burstable := strings.HasPrefix(def.name, "t")
@@ -438,31 +534,25 @@ func NewResourceManager() *ResourceManager {
 		totalMemGB = 8.0 // Default to 8GB if we can't get the actual memory
 	}
 
-	// Get CPU model for instance family detection
-	cpuModel, err := getCPUModel()
-	if err != nil {
-		slog.Warn("Failed to get CPU model, using default", "err", err)
-		cpuModel = "Unknown"
-	}
-
 	// Determine architecture
 	arch := "x86_64"
 	if runtime.GOARCH == "arm64" {
 		arch = "arm64"
 	}
 
-	// Detect CPU vendor and generate instance types
-	vendor := vendorFromCPU(cpuModel, arch)
-	instanceTypes := generateInstanceTypes(vendor, arch)
+	// Detect CPU generation and generate matching instance types
+	gen := detectCPUGeneration()
+	instanceTypes := generateInstanceTypes(gen, arch)
 
 	if len(instanceTypes) == 0 {
 		slog.Error("No instance types generated, daemon will be unable to run VMs",
-			"vendor", vendor, "arch", arch, "cpuModel", cpuModel)
+			"generation", gen.name, "arch", arch)
 	}
 
 	slog.Info("System resources detected",
-		"vCPUs", numCPU, "memGB", totalMemGB, "cpu", cpuModel,
-		"vendor", vendor, "instanceTypes", len(instanceTypes), "os", runtime.GOOS)
+		"vCPUs", numCPU, "memGB", totalMemGB,
+		"generation", gen.name, "families", gen.families,
+		"instanceTypes", len(instanceTypes), "os", runtime.GOOS)
 
 	return &ResourceManager{
 		availableVCPU: numCPU,
@@ -1981,9 +2071,11 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 			return // Startup failed, LaunchInstance handles the error
 		}
 
-		// Runtime crash — handle it (clean exits are expected from QMP shutdown)
+		// Handle exit: crash vs clean shutdown
 		if waitErr != nil {
 			d.handleInstanceCrash(instance, waitErr)
+		} else {
+			slog.Info("VM process exited cleanly", "instance", instance.ID)
 		}
 	}()
 
