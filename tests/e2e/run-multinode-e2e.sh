@@ -1142,34 +1142,6 @@ fi
 
 echo "  Crash recovery tests passed"
 
-# Cleanup: Terminate all test instances (before shutdown test so they don't respawn on restart)
-echo ""
-echo "Cleanup: Deleting test resources"
-echo "----------------------------------------"
-
-# Terminate all instances
-for instance_id in "${INSTANCE_IDS[@]}"; do
-    echo "  Terminating $instance_id..."
-    $AWS_EC2 terminate-instances --instance-ids "$instance_id" > /dev/null 2>&1 || echo "  (instance may already be terminated)"
-done
-
-# Wait for termination
-echo "  Waiting for termination..."
-TERMINATION_FAILED=0
-for instance_id in "${INSTANCE_IDS[@]}"; do
-    if ! wait_for_instance_state "$instance_id" "terminated" 30; then
-        echo "  WARNING: Failed to confirm termination of $instance_id"
-        TERMINATION_FAILED=1
-    fi
-done
-
-if [ $TERMINATION_FAILED -ne 0 ]; then
-    echo ""
-    echo "ERROR: Some instances failed to terminate properly"
-    dump_all_node_logs
-    exit 1
-fi
-
 # Phase 6: Cluster Shutdown + Restart
 echo ""
 echo "Phase 6: Cluster Shutdown + Restart"
@@ -1253,6 +1225,61 @@ else
 fi
 
 echo "  Cluster shutdown + restart test passed"
+
+# Test 6d: Instance relaunch and terminate after restart
+echo ""
+echo "Test 6d: Instance Relaunch + Terminate"
+echo "----------------------------------------"
+echo "Waiting for instances to relaunch after cluster restart..."
+
+# Instances were running before shutdown — the daemon will relaunch them.
+# Must wait for them to finish launching (pending → running) before terminate
+# will work, because the NATS per-instance subscription is only created after
+# QEMU starts.
+for instance_id in "${INSTANCE_IDS[@]}"; do
+    echo "  Waiting for $instance_id to finish relaunching..."
+    COUNT=0
+    while [ $COUNT -lt 90 ]; do
+        STATE=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
+            --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "unknown")
+        if [ "$STATE" = "running" ] || [ "$STATE" = "error" ]; then
+            echo "  $instance_id reached state: $STATE"
+            break
+        fi
+        sleep 2
+        COUNT=$((COUNT + 1))
+    done
+    if [ $COUNT -ge 90 ]; then
+        echo "  WARNING: $instance_id still in $STATE after 180s"
+    fi
+done
+
+# Now terminate all instances
+echo ""
+echo "Terminating all instances..."
+for instance_id in "${INSTANCE_IDS[@]}"; do
+    echo "  Terminating $instance_id..."
+    $AWS_EC2 terminate-instances --instance-ids "$instance_id" > /dev/null 2>&1 || echo "  (instance may already be terminated)"
+done
+
+# Wait for termination
+echo "  Waiting for termination..."
+TERMINATION_FAILED=0
+for instance_id in "${INSTANCE_IDS[@]}"; do
+    if ! wait_for_instance_state "$instance_id" "terminated" 30; then
+        echo "  WARNING: Failed to confirm termination of $instance_id"
+        TERMINATION_FAILED=1
+    fi
+done
+
+if [ $TERMINATION_FAILED -ne 0 ]; then
+    echo ""
+    echo "ERROR: Some instances failed to terminate properly after restart"
+    dump_all_node_logs
+    exit 1
+fi
+
+echo "  Instance relaunch + terminate after restart passed"
 
 echo ""
 echo "========================================"
