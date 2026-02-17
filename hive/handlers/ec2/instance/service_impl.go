@@ -391,8 +391,12 @@ func (s *InstanceServiceImpl) prepareEFIVolume(imageId string, volumeConfig vipe
 	if err != nil {
 		slog.Info("Volume does not yet exist, creating EFI disk ...")
 
-		// Open the chunk WAL
-		err = efiVb.OpenWAL(&efiVb.WAL, fmt.Sprintf("%s/%s", efiVb.WAL.BaseDir, types.GetFilePath(types.FileTypeWALChunk, efiVb.WAL.WallNum.Load(), efiVb.GetVolume())))
+		// Open the chunk WAL (sharded or legacy)
+		if efiVb.UseShardedWAL {
+			err = efiVb.OpenShardedWAL()
+		} else {
+			err = efiVb.OpenWAL(&efiVb.WAL, fmt.Sprintf("%s/%s", efiVb.WAL.BaseDir, types.GetFilePath(types.FileTypeWALChunk, efiVb.WAL.WallNum.Load(), efiVb.GetVolume())))
+		}
 		if err != nil {
 			slog.Error("Failed to load WAL", "err", err)
 			return errors.New(awserrors.ErrorServerInternal)
@@ -471,8 +475,12 @@ func (s *InstanceServiceImpl) prepareCloudInitVolume(input *ec2.RunInstancesInpu
 	if err != nil {
 		slog.Info("Volume does not yet exist, creating cloud-init disk ...")
 
-		// Open WALs
-		err = cloudInitVb.OpenWAL(&cloudInitVb.WAL, fmt.Sprintf("%s/%s", cloudInitVb.WAL.BaseDir, types.GetFilePath(types.FileTypeWALChunk, cloudInitVb.WAL.WallNum.Load(), cloudInitVb.GetVolume())))
+		// Open the chunk WAL (sharded or legacy)
+		if cloudInitVb.UseShardedWAL {
+			err = cloudInitVb.OpenShardedWAL()
+		} else {
+			err = cloudInitVb.OpenWAL(&cloudInitVb.WAL, fmt.Sprintf("%s/%s", cloudInitVb.WAL.BaseDir, types.GetFilePath(types.FileTypeWALChunk, cloudInitVb.WAL.WallNum.Load(), cloudInitVb.GetVolume())))
+		}
 		if err != nil {
 			slog.Error("Failed to load WAL", "err", err)
 			return errors.New(awserrors.ErrorServerInternal)
