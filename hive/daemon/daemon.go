@@ -1766,7 +1766,6 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 
 	instance.Config = vm.Config{
 		Name:         instance.ID,
-		Daemonize:    true,
 		PIDFile:      pidFile,
 		EnableKVM:    true, // If available, if kvm fails, will use cpu max
 		NoGraphic:    true,
@@ -1970,23 +1969,22 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 			slog.Error("VM process exited", "instance", instance.ID, "err", waitErr)
 		}
 
-		// Signal startup check (non-blocking) — only on error
+		// Signal startup check (non-blocking)
+		select {
+		case exitChan <- 1:
+		default:
+		}
+
+		// Wait for startup phase to complete before deciding on crash handling
+		confirmed := <-startupConfirmed
+		if !confirmed {
+			return // Startup failed, LaunchInstance handles the error
+		}
+
+		// Runtime crash — handle it (clean exits are expected from QMP shutdown)
 		if waitErr != nil {
-			select {
-			case exitChan <- 1:
-			default:
-			}
-
-			// Wait for startup phase to complete before deciding on crash handling
-			confirmed := <-startupConfirmed
-			if !confirmed {
-				return // Startup failed, LaunchInstance handles the error
-			}
-
-			// Runtime crash — handle it
 			d.handleInstanceCrash(instance, waitErr)
 		}
-		// If waitErr is nil, QEMU daemonized successfully — nothing to do
 	}()
 
 	// Wait for startup result
