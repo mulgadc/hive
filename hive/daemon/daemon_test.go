@@ -660,10 +660,11 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 		initialCount := len(initialOutput.InstanceTypes)
 		t.Logf("Initial available instance types: %d", initialCount)
 
-		// Find an instance type that uses 2 vCPUs
+		// Find an instance type that uses 2 vCPUs from the available types
+		// (not the raw map, which may contain types that exceed host memory)
 		var instanceType2CPU *ec2.InstanceTypeInfo
 		var instanceTypeName string
-		for _, it := range daemon.resourceMgr.instanceTypes {
+		for _, it := range initialOutput.InstanceTypes {
 			if it.VCpuInfo != nil && it.VCpuInfo.DefaultVCpus != nil && *it.VCpuInfo.DefaultVCpus == 2 {
 				instanceType2CPU = it
 				if it.InstanceType != nil {
