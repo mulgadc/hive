@@ -591,6 +591,96 @@ verify_all_services_down() {
     return 1
 }
 
+# Force-kill all service processes and clean up stale resources on all nodes.
+# Used between shutdown and restart to ensure a clean slate.
+# This kills processes by PID file, then by name, removes badger LOCK files,
+# and waits for ports to be free.
+force_cleanup_all_nodes() {
+    echo "Force-cleaning all nodes..."
+
+    # Step 1: Kill all service processes via PID files
+    for i in 1 2 3; do
+        local data_dir="$HOME/node$i"
+        local logs_dir="$data_dir/logs"
+
+        if [ -d "$logs_dir" ]; then
+            for svc in hive-ui hive awsgw viperblock predastore nats; do
+                local pidfile="$logs_dir/$svc.pid"
+                if [ -f "$pidfile" ]; then
+                    local pid
+                    pid=$(cat "$pidfile" 2>/dev/null || true)
+                    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                        echo "  Node$i: killing $svc (PID $pid)..."
+                        kill -TERM "$pid" 2>/dev/null || true
+                    fi
+                fi
+            done
+        fi
+    done
+
+    # Brief wait for graceful shutdown
+    sleep 3
+
+    # Step 2: SIGKILL anything still alive
+    for i in 1 2 3; do
+        local data_dir="$HOME/node$i"
+        local logs_dir="$data_dir/logs"
+
+        if [ -d "$logs_dir" ]; then
+            for svc in hive-ui hive awsgw viperblock predastore nats; do
+                local pidfile="$logs_dir/$svc.pid"
+                if [ -f "$pidfile" ]; then
+                    local pid
+                    pid=$(cat "$pidfile" 2>/dev/null || true)
+                    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                        echo "  Node$i: force-killing $svc (PID $pid)..."
+                        kill -9 "$pid" 2>/dev/null || true
+                    fi
+                fi
+            done
+        fi
+    done
+
+    # Kill any remaining QEMU processes
+    pkill -9 -x qemu-system-x86_64 2>/dev/null || true
+
+    sleep 2
+
+    # Step 3: Remove stale badger LOCK files from predastore directories
+    for i in 1 2 3; do
+        local data_dir="$HOME/node$i"
+        local predastore_dir="$data_dir/predastore"
+
+        if [ -d "$predastore_dir" ]; then
+            local lock_files
+            lock_files=$(find "$predastore_dir" -name "LOCK" -type f 2>/dev/null || true)
+            if [ -n "$lock_files" ]; then
+                echo "  Node$i: removing stale badger LOCK files..."
+                echo "$lock_files" | while read -r f; do
+                    rm -f "$f"
+                    echo "    removed $f"
+                done
+            fi
+        fi
+    done
+
+    # Step 4: Wait for key ports to be free
+    for i in 1 2 3; do
+        local node_ip="${SIMULATED_NETWORK}.$i"
+        local attempt=0
+        while [ $attempt -lt 10 ]; do
+            if ! ss -tlnp 2>/dev/null | grep -q "${node_ip}:${AWSGW_PORT}"; then
+                break
+            fi
+            echo "  Node$i: waiting for port ${AWSGW_PORT} to be free..."
+            sleep 1
+            attempt=$((attempt + 1))
+        done
+    done
+
+    echo "  Force cleanup complete"
+}
+
 # Global variable for init PID tracking (used by multi-node formation)
 LEADER_INIT_PID=""
 

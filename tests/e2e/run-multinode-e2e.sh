@@ -40,6 +40,9 @@ cleanup() {
         stop_all_nodes || true
     fi
 
+    # Force-kill anything that survived and clean up stale locks
+    force_cleanup_all_nodes || true
+
     # Remove simulated IPs
     remove_simulated_ips || true
 
@@ -1184,6 +1187,11 @@ sleep 5
 verify_all_services_down || {
     echo "  WARNING: Some services still running after shutdown"
 }
+
+# Force cleanup: kill lingering processes and remove stale locks
+# The coordinated shutdown may not fully kill all processes (e.g. predastore
+# holding badger locks, awsgw still bound to ports). This ensures a clean slate.
+force_cleanup_all_nodes
 
 # Test 6c: Restart and recovery
 echo ""
