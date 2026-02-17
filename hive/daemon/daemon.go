@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +36,7 @@ import (
 	handlers_ec2_snapshot "github.com/mulgadc/hive/hive/handlers/ec2/snapshot"
 	handlers_ec2_tags "github.com/mulgadc/hive/hive/handlers/ec2/tags"
 	handlers_ec2_volume "github.com/mulgadc/hive/hive/handlers/ec2/volume"
+	"github.com/mulgadc/hive/hive/instancetypes"
 	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/utils"
@@ -126,35 +126,6 @@ type Daemon struct {
 	mu sync.Mutex
 }
 
-// cpuToVendor maps CPU model patterns to CPU vendors.
-// Patterns are checked in order; more specific patterns should come first.
-var cpuToVendor = []struct {
-	pattern string
-	vendor  cpuVendor
-}{
-	{"EPYC", vendorAMD},
-	{"Xeon", vendorIntel},
-	{"Graviton", vendorARM},
-	{"Apple", vendorARM},
-	{"ARM", vendorARM},
-	{"AMD", vendorAMD}, // catches Ryzen, Threadripper, etc.
-}
-
-// vendorFromCPU returns the CPU vendor based on the CPU model string and architecture.
-func vendorFromCPU(cpuModel, arch string) cpuVendor {
-	if arch == "arm64" {
-		return vendorARM
-	}
-	cpuUpper := strings.ToUpper(cpuModel)
-	for _, entry := range cpuToVendor {
-		if strings.Contains(cpuUpper, strings.ToUpper(entry.pattern)) {
-			return entry.vendor
-		}
-	}
-	slog.Warn("Unrecognized CPU model, defaulting to Intel vendor", "cpuModel", cpuModel)
-	return vendorIntel
-}
-
 // getSystemMemory returns the total system memory in GB
 func getSystemMemory() (float64, error) {
 	switch runtime.GOOS {
@@ -198,234 +169,6 @@ func getSystemMemory() (float64, error) {
 	}
 }
 
-// getCPUModel returns the CPU model name for the host system
-func getCPUModel() (string, error) {
-	switch runtime.GOOS {
-	case "darwin":
-		// macOS: use sysctl
-		cmd := exec.Command("sysctl", "-n", "machdep.cpu.brand_string")
-		output, err := cmd.Output()
-		if err != nil {
-			return "", fmt.Errorf("failed to get CPU model on macOS: %w", err)
-		}
-		return strings.TrimSpace(string(output)), nil
-
-	case "linux":
-		// Linux: read from /proc/cpuinfo
-		file, err := os.Open("/proc/cpuinfo")
-		if err != nil {
-			return "", fmt.Errorf("failed to open /proc/cpuinfo: %w", err)
-		}
-		defer file.Close()
-
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.HasPrefix(line, "model name") {
-				parts := strings.SplitN(line, ":", 2)
-				if len(parts) == 2 {
-					return strings.TrimSpace(parts[1]), nil
-				}
-			}
-		}
-		return "", fmt.Errorf("model name not found in /proc/cpuinfo")
-
-	default:
-		return "", fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
-	}
-}
-
-type instanceSize struct {
-	suffix   string
-	vcpus    int
-	memoryGB float64
-}
-
-type cpuVendor int
-
-const (
-	vendorIntel cpuVendor = iota
-	vendorAMD
-	vendorARM
-)
-
-func (v cpuVendor) String() string {
-	switch v {
-	case vendorIntel:
-		return "Intel"
-	case vendorAMD:
-		return "AMD"
-	case vendorARM:
-		return "ARM"
-	default:
-		return "Unknown"
-	}
-}
-
-type instanceFamilyDef struct {
-	name       string
-	vendor     cpuVendor
-	sizes      []instanceSize
-	currentGen bool
-}
-
-// Size tables for each instance category
-
-var burstableSizes = []instanceSize{
-	{"nano", 2, 0.5},
-	{"micro", 2, 1},
-	{"small", 2, 2},
-	{"medium", 2, 4},
-	{"large", 2, 8},
-	{"xlarge", 4, 16},
-	{"2xlarge", 8, 32},
-}
-
-var gpSizes = []instanceSize{
-	{"large", 2, 8},
-	{"xlarge", 4, 16},
-	{"2xlarge", 8, 32},
-	{"4xlarge", 16, 64},
-	{"8xlarge", 32, 128},
-	{"12xlarge", 48, 192},
-	{"16xlarge", 64, 256},
-	{"24xlarge", 96, 384},
-}
-
-// gpSizesSmall is gpSizes without 12xlarge and 24xlarge (older/ARM families).
-var gpSizesSmall = slices.Clone(gpSizes[:6])
-
-var computeSizes = []instanceSize{
-	{"large", 2, 4},
-	{"xlarge", 4, 8},
-	{"2xlarge", 8, 16},
-	{"4xlarge", 16, 32},
-	{"8xlarge", 32, 64},
-	{"12xlarge", 48, 96},
-	{"16xlarge", 64, 128},
-	{"24xlarge", 96, 192},
-}
-
-// computeSizesSmall is computeSizes without 12xlarge and 24xlarge (older/ARM families).
-var computeSizesSmall = slices.Clone(computeSizes[:6])
-
-var memorySizes = []instanceSize{
-	{"large", 2, 16},
-	{"xlarge", 4, 32},
-	{"2xlarge", 8, 64},
-	{"4xlarge", 16, 128},
-	{"8xlarge", 32, 256},
-	{"12xlarge", 48, 384},
-	{"16xlarge", 64, 512},
-	{"24xlarge", 96, 768},
-}
-
-// memorySizesSmall is memorySizes without 12xlarge and 24xlarge (older/ARM families).
-var memorySizesSmall = slices.Clone(memorySizes[:6])
-
-// instanceFamilyDefs defines all supported instance families with their vendor and sizes.
-//
-// We support the core families across burstable, general purpose, compute optimized,
-// and memory optimized categories. The following AWS family categories are intentionally
-// excluded because they require specialized hardware not available on standard bare-metal hosts:
-//
-//   - Local disk variants (d/n suffixes): c5d, c5ad, c5n, m5d, m5ad, m5n, m5dn, m5zn, r5d, r5ad,
-//     r5n, r5dn, r5b, c6gd, c6gn, c6id, c6in, m6gd, m6id, m6idn, m6in, r6gd, r6id, r6idn, r6in,
-//     c7gd, c7gn, c7i-flex, m7gd, m7i-flex, r7gd, r7iz, c8gd, c8gn, c8i-flex, m8gd, m8i-flex,
-//     r8gd, r8gn, r8gb, r8i-flex — require NVMe instance storage or enhanced networking
-//   - GPU/accelerator: g2-g6, g6e, g6f, gr6, gr6f, p2-p6, inf1-inf2, trn1-trn2, dl1, dl2q — require
-//     GPU, Inferentia, Trainium, or other accelerator hardware
-//   - Storage optimized: d2, d3, d3en, h1, i2-i8g, i7ie, i8ge, im4gn, is4gen — require dense HDD/NVMe
-//   - FPGA: f1, f2 — require FPGA hardware
-//   - High memory: u-*, u7i-*, x1, x1e, x2gd, x2idn, x2iedn, x2iezn, x8g — require TB-scale memory
-//   - High frequency: z1d — specialized high clock-speed instances
-//   - Dedicated host: mac*, hpc* — require macOS/Apple hardware or HPC interconnects
-//   - Video: vt1 — requires video transcoding hardware
-//   - Legacy (pre-gen4): a1, c1, c3, cc1, cc2, cg1, cr1, hi1, hs1, m1, m2, m3, r3, t1
-var instanceFamilyDefs = []instanceFamilyDef{
-	// Burstable
-	{name: "t2", vendor: vendorIntel, sizes: burstableSizes, currentGen: false},
-	{name: "t3", vendor: vendorIntel, sizes: burstableSizes, currentGen: true},
-	{name: "t3a", vendor: vendorAMD, sizes: burstableSizes, currentGen: true},
-	{name: "t4g", vendor: vendorARM, sizes: burstableSizes, currentGen: true},
-
-	// General Purpose (1:4 vCPU:memory)
-	{name: "m4", vendor: vendorIntel, sizes: gpSizesSmall, currentGen: false},
-	{name: "m5", vendor: vendorIntel, sizes: gpSizes, currentGen: true},
-	{name: "m5a", vendor: vendorAMD, sizes: gpSizes, currentGen: true},
-	{name: "m6i", vendor: vendorIntel, sizes: gpSizes, currentGen: true},
-	{name: "m6a", vendor: vendorAMD, sizes: gpSizes, currentGen: true},
-	{name: "m6g", vendor: vendorARM, sizes: gpSizesSmall, currentGen: true},
-	{name: "m7i", vendor: vendorIntel, sizes: gpSizes, currentGen: true},
-	{name: "m7a", vendor: vendorAMD, sizes: gpSizes, currentGen: true},
-	{name: "m7g", vendor: vendorARM, sizes: gpSizesSmall, currentGen: true},
-	{name: "m8i", vendor: vendorIntel, sizes: gpSizes, currentGen: true},
-	{name: "m8a", vendor: vendorAMD, sizes: gpSizes, currentGen: true},
-	{name: "m8g", vendor: vendorARM, sizes: gpSizesSmall, currentGen: true},
-
-	// Compute Optimized (1:2 vCPU:memory)
-	{name: "c4", vendor: vendorIntel, sizes: computeSizesSmall, currentGen: false},
-	{name: "c5", vendor: vendorIntel, sizes: computeSizes, currentGen: true},
-	{name: "c5a", vendor: vendorAMD, sizes: computeSizes, currentGen: true},
-	{name: "c6i", vendor: vendorIntel, sizes: computeSizes, currentGen: true},
-	{name: "c6a", vendor: vendorAMD, sizes: computeSizes, currentGen: true},
-	{name: "c6g", vendor: vendorARM, sizes: computeSizesSmall, currentGen: true},
-	{name: "c7i", vendor: vendorIntel, sizes: computeSizes, currentGen: true},
-	{name: "c7a", vendor: vendorAMD, sizes: computeSizes, currentGen: true},
-	{name: "c7g", vendor: vendorARM, sizes: computeSizesSmall, currentGen: true},
-	{name: "c8i", vendor: vendorIntel, sizes: computeSizes, currentGen: true},
-	{name: "c8a", vendor: vendorAMD, sizes: computeSizes, currentGen: true},
-	{name: "c8g", vendor: vendorARM, sizes: computeSizesSmall, currentGen: true},
-
-	// Memory Optimized (1:8 vCPU:memory)
-	{name: "r4", vendor: vendorIntel, sizes: memorySizesSmall, currentGen: false},
-	{name: "r5", vendor: vendorIntel, sizes: memorySizes, currentGen: true},
-	{name: "r5a", vendor: vendorAMD, sizes: memorySizes, currentGen: true},
-	{name: "r6i", vendor: vendorIntel, sizes: memorySizes, currentGen: true},
-	{name: "r6a", vendor: vendorAMD, sizes: memorySizes, currentGen: true},
-	{name: "r6g", vendor: vendorARM, sizes: memorySizesSmall, currentGen: true},
-	{name: "r7i", vendor: vendorIntel, sizes: memorySizes, currentGen: true},
-	{name: "r7a", vendor: vendorAMD, sizes: memorySizes, currentGen: true},
-	{name: "r7g", vendor: vendorARM, sizes: memorySizesSmall, currentGen: true},
-	{name: "r8i", vendor: vendorIntel, sizes: memorySizes, currentGen: true},
-	{name: "r8a", vendor: vendorAMD, sizes: memorySizes, currentGen: true},
-	{name: "r8g", vendor: vendorARM, sizes: memorySizesSmall, currentGen: true},
-}
-
-// generateInstanceTypes creates the instance type map for the given CPU vendor.
-// It generates all instance families matching the vendor across burstable,
-// general purpose, compute optimized, and memory optimized categories.
-func generateInstanceTypes(v cpuVendor, arch string) map[string]*ec2.InstanceTypeInfo {
-	instanceTypes := make(map[string]*ec2.InstanceTypeInfo)
-	for _, def := range instanceFamilyDefs {
-		if def.vendor != v {
-			continue
-		}
-		burstable := strings.HasPrefix(def.name, "t")
-		for _, size := range def.sizes {
-			name := fmt.Sprintf("%s.%s", def.name, size.suffix)
-			instanceTypes[name] = &ec2.InstanceTypeInfo{
-				InstanceType: aws.String(name),
-				VCpuInfo: &ec2.VCpuInfo{
-					DefaultVCpus: aws.Int64(int64(size.vcpus)),
-				},
-				MemoryInfo: &ec2.MemoryInfo{
-					SizeInMiB: aws.Int64(int64(size.memoryGB * 1024)),
-				},
-				ProcessorInfo: &ec2.ProcessorInfo{
-					SupportedArchitectures: []*string{aws.String(arch)},
-				},
-				CurrentGeneration:             aws.Bool(def.currentGen),
-				BurstablePerformanceSupported: aws.Bool(burstable),
-				Hypervisor:                    aws.String("kvm"),
-				SupportedVirtualizationTypes:  []*string{aws.String("hvm")},
-				SupportedRootDeviceTypes:      []*string{aws.String("ebs")},
-			}
-		}
-	}
-	return instanceTypes
-}
-
 // NewResourceManager creates a new resource manager with system capabilities
 func NewResourceManager() *ResourceManager {
 	// Get system CPU cores
@@ -438,31 +181,18 @@ func NewResourceManager() *ResourceManager {
 		totalMemGB = 8.0 // Default to 8GB if we can't get the actual memory
 	}
 
-	// Get CPU model for instance family detection
-	cpuModel, err := getCPUModel()
-	if err != nil {
-		slog.Warn("Failed to get CPU model, using default", "err", err)
-		cpuModel = "Unknown"
-	}
-
 	// Determine architecture
 	arch := "x86_64"
 	if runtime.GOARCH == "arm64" {
 		arch = "arm64"
 	}
 
-	// Detect CPU vendor and generate instance types
-	vendor := vendorFromCPU(cpuModel, arch)
-	instanceTypes := generateInstanceTypes(vendor, arch)
-
-	if len(instanceTypes) == 0 {
-		slog.Error("No instance types generated, daemon will be unable to run VMs",
-			"vendor", vendor, "arch", arch, "cpuModel", cpuModel)
-	}
+	// Detect CPU generation and generate matching instance types
+	instanceTypes := instancetypes.DetectAndGenerate(instancetypes.HostCPU{}, arch)
 
 	slog.Info("System resources detected",
-		"vCPUs", numCPU, "memGB", totalMemGB, "cpu", cpuModel,
-		"vendor", vendor, "instanceTypes", len(instanceTypes), "os", runtime.GOOS)
+		"vCPUs", numCPU, "memGB", totalMemGB,
+		"instanceTypes", len(instanceTypes))
 
 	return &ResourceManager{
 		availableVCPU: numCPU,
@@ -1766,7 +1496,6 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 
 	instance.Config = vm.Config{
 		Name:         instance.ID,
-		Daemonize:    true,
 		PIDFile:      pidFile,
 		EnableKVM:    true, // If available, if kvm fails, will use cpu max
 		NoGraphic:    true,
@@ -1982,8 +1711,12 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 			return // Startup failed, LaunchInstance handles the error
 		}
 
-		// Runtime crash — handle it
-		d.handleInstanceCrash(instance, waitErr)
+		// Handle exit: crash vs clean shutdown
+		if waitErr != nil {
+			d.handleInstanceCrash(instance, waitErr)
+		} else {
+			slog.Info("VM process exited cleanly", "instance", instance.ID)
+		}
 	}()
 
 	// Wait for startup result

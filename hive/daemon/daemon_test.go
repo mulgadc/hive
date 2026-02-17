@@ -450,9 +450,9 @@ func TestGetInstanceTypeInfos(t *testing.T) {
 	infos := rm.GetInstanceTypeInfos()
 
 	require.NotEmpty(t, infos, "Should return at least one instance type")
-	// With comprehensive families, expect 49+ types (ARM) up to 128 (Intel)
-	assert.True(t, len(infos) >= 49,
-		"Should have at least 49 instance types, got %d", len(infos))
+	// With generation-specific families, minimum is 7 (unknown/burstable-only) up to 31 (current-gen)
+	assert.True(t, len(infos) >= 7,
+		"Should have at least 7 instance types, got %d", len(infos))
 
 	// Verify structure of returned instance type info
 	for _, info := range infos {
@@ -467,37 +467,6 @@ func TestGetInstanceTypeInfos(t *testing.T) {
 
 		t.Logf("Instance type: %s, vCPUs: %d, Memory: %d MiB",
 			*info.InstanceType, *info.VCpuInfo.DefaultVCpus, *info.MemoryInfo.SizeInMiB)
-	}
-}
-
-// TestCPUDetection tests CPU model detection
-func TestCPUDetection(t *testing.T) {
-	cpuModel, err := getCPUModel()
-	require.NoError(t, err, "Should be able to detect CPU model")
-	assert.NotEmpty(t, cpuModel, "CPU model should not be empty")
-
-	t.Logf("Detected CPU model: %s", cpuModel)
-
-	// Test vendor mapping with correct architectures
-	testCases := []struct {
-		cpuModel string
-		arch     string
-		expected cpuVendor
-	}{
-		{"AMD EPYC 7551", "x86_64", vendorAMD},
-		{"AMD Ryzen 9 7950X", "x86_64", vendorAMD},
-		{"Intel Xeon E5-2686", "x86_64", vendorIntel},
-		{"Apple M1", "arm64", vendorARM},
-		{"AWS Graviton2", "arm64", vendorARM},
-		{"Unknown CPU", "x86_64", vendorIntel},
-	}
-
-	for _, tt := range testCases {
-		t.Run(tt.cpuModel, func(t *testing.T) {
-			v := vendorFromCPU(tt.cpuModel, tt.arch)
-			assert.Equal(t, tt.expected, v, "Wrong vendor for %s on %s", tt.cpuModel, tt.arch)
-			t.Logf("CPU: %s (%s) -> Vendor: %s", tt.cpuModel, tt.arch, v)
-		})
 	}
 }
 
@@ -683,10 +652,11 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 		initialCount := len(initialOutput.InstanceTypes)
 		t.Logf("Initial available instance types: %d", initialCount)
 
-		// Find an instance type that uses 2 vCPUs
+		// Find an instance type that uses 2 vCPUs from the available types
+		// (not the raw map, which may contain types that exceed host memory)
 		var instanceType2CPU *ec2.InstanceTypeInfo
 		var instanceTypeName string
-		for _, it := range daemon.resourceMgr.instanceTypes {
+		for _, it := range initialOutput.InstanceTypes {
 			if it.VCpuInfo != nil && it.VCpuInfo.DefaultVCpus != nil && *it.VCpuInfo.DefaultVCpus == 2 {
 				instanceType2CPU = it
 				if it.InstanceType != nil {
@@ -3208,211 +3178,6 @@ func TestSaveClusterConfig_ErrorOnInvalidPath(t *testing.T) {
 	err := d.saveClusterConfig()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to write config")
-}
-
-// --- generateInstanceTypes ---
-
-func hasFamily(types map[string]*ec2.InstanceTypeInfo, prefix string) bool {
-	for name := range types {
-		if strings.HasPrefix(name, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func countFamily(types map[string]*ec2.InstanceTypeInfo, prefix string) int {
-	count := 0
-	for name := range types {
-		if strings.HasPrefix(name, prefix) {
-			count++
-		}
-	}
-	return count
-}
-
-func TestGenerateInstanceTypes_Intel(t *testing.T) {
-	types := generateInstanceTypes(vendorIntel, "x86_64")
-	// Intel: t2(7)+t3(7) + m4(6)+m5(8)+m6i(8)+m7i(8)+m8i(8) + c4(6)+c5(8)+c6i(8)+c7i(8)+c8i(8) + r4(6)+r5(8)+r6i(8)+r7i(8)+r8i(8) = 128
-	assert.Len(t, types, 128)
-
-	for _, prefix := range []string{"t2.", "t3.", "m7i.", "m8i.", "c5.", "c7i.", "r5.", "r7i."} {
-		assert.True(t, hasFamily(types, prefix), "expected Intel types to include %s family", prefix)
-	}
-
-	// Verify AMD/ARM families are NOT present
-	for name := range types {
-		assert.False(t, strings.HasPrefix(name, "t3a."), "Intel should not have t3a: %s", name)
-		assert.False(t, strings.HasPrefix(name, "t4g."), "Intel should not have t4g: %s", name)
-		assert.False(t, strings.HasPrefix(name, "m7a."), "Intel should not have m7a: %s", name)
-		assert.False(t, strings.HasPrefix(name, "m7g."), "Intel should not have m7g: %s", name)
-	}
-}
-
-func TestGenerateInstanceTypes_AMD(t *testing.T) {
-	types := generateInstanceTypes(vendorAMD, "x86_64")
-	// AMD: t3a(7) + m5a(8)+m6a(8)+m7a(8)+m8a(8) + c5a(8)+c6a(8)+c7a(8)+c8a(8) + r5a(8)+r6a(8)+r7a(8)+r8a(8) = 103
-	assert.Len(t, types, 103)
-
-	for _, prefix := range []string{"t3a.", "m5a.", "m8a.", "c5a.", "c8a.", "r5a.", "r8a."} {
-		assert.True(t, hasFamily(types, prefix), "expected AMD types to include %s family", prefix)
-	}
-
-	// Verify Intel/ARM families are NOT present
-	for name := range types {
-		assert.False(t, strings.HasPrefix(name, "t3."), "AMD should not have t3: %s", name)
-		assert.False(t, strings.HasPrefix(name, "t4g."), "AMD should not have t4g: %s", name)
-		assert.False(t, strings.HasPrefix(name, "m7i."), "AMD should not have m7i: %s", name)
-	}
-}
-
-func TestGenerateInstanceTypes_ARM(t *testing.T) {
-	types := generateInstanceTypes(vendorARM, "arm64")
-	// ARM: t4g(7) + m6g(6)+m7g(6)+m8g(6) + c6g(6)+c7g(6)+c8g(6) + r6g(6)+r7g(6)+r8g(6) = 61
-	assert.Len(t, types, 61)
-
-	for _, prefix := range []string{"t4g.", "m7g.", "m8g.", "c7g.", "c8g.", "r7g.", "r8g."} {
-		assert.True(t, hasFamily(types, prefix), "expected ARM types to include %s family", prefix)
-	}
-
-	// Verify Intel/AMD families are NOT present
-	for name := range types {
-		assert.False(t, strings.HasPrefix(name, "t3."), "ARM should not have t3: %s", name)
-		assert.False(t, strings.HasPrefix(name, "t3a."), "ARM should not have t3a: %s", name)
-		assert.False(t, strings.HasPrefix(name, "m7i."), "ARM should not have m7i: %s", name)
-	}
-}
-
-func TestGenerateInstanceTypes_VerifyBurstableSizes(t *testing.T) {
-	types := generateInstanceTypes(vendorIntel, "x86_64")
-
-	expected := map[string]struct {
-		vcpus int64
-		memMB int64
-	}{
-		"t3.nano":    {2, 512},
-		"t3.micro":   {2, 1024},
-		"t3.small":   {2, 2048},
-		"t3.medium":  {2, 4096},
-		"t3.large":   {2, 8192},
-		"t3.xlarge":  {4, 16384},
-		"t3.2xlarge": {8, 32768},
-	}
-
-	for name, exp := range expected {
-		it, ok := types[name]
-		require.True(t, ok, "missing instance type %s", name)
-		assert.Equal(t, exp.vcpus, *it.VCpuInfo.DefaultVCpus, "%s vCPUs", name)
-		assert.Equal(t, exp.memMB, *it.MemoryInfo.SizeInMiB, "%s memory", name)
-	}
-}
-
-func TestGenerateInstanceTypes_ComputeRatio(t *testing.T) {
-	types := generateInstanceTypes(vendorIntel, "x86_64")
-
-	// Compute optimized: 1:2 vCPU:memory ratio
-	expected := map[string]struct {
-		vcpus int64
-		memMB int64
-	}{
-		"c5.large":    {2, 4096},
-		"c5.xlarge":   {4, 8192},
-		"c5.2xlarge":  {8, 16384},
-		"c7i.4xlarge": {16, 32768},
-	}
-
-	for name, exp := range expected {
-		it, ok := types[name]
-		require.True(t, ok, "missing instance type %s", name)
-		assert.Equal(t, exp.vcpus, *it.VCpuInfo.DefaultVCpus, "%s vCPUs", name)
-		assert.Equal(t, exp.memMB, *it.MemoryInfo.SizeInMiB, "%s memory", name)
-	}
-}
-
-func TestGenerateInstanceTypes_MemoryRatio(t *testing.T) {
-	types := generateInstanceTypes(vendorIntel, "x86_64")
-
-	// Memory optimized: 1:8 vCPU:memory ratio
-	expected := map[string]struct {
-		vcpus int64
-		memMB int64
-	}{
-		"r5.large":    {2, 16384},
-		"r5.xlarge":   {4, 32768},
-		"r5.2xlarge":  {8, 65536},
-		"r7i.4xlarge": {16, 131072},
-	}
-
-	for name, exp := range expected {
-		it, ok := types[name]
-		require.True(t, ok, "missing instance type %s", name)
-		assert.Equal(t, exp.vcpus, *it.VCpuInfo.DefaultVCpus, "%s vCPUs", name)
-		assert.Equal(t, exp.memMB, *it.MemoryInfo.SizeInMiB, "%s memory", name)
-	}
-}
-
-func TestGenerateInstanceTypes_NoSmallSizesForNonBurstable(t *testing.T) {
-	types := generateInstanceTypes(vendorIntel, "x86_64")
-
-	// Non-burstable families should not have nano/micro/small/medium sizes
-	for name := range types {
-		if strings.HasPrefix(name, "t") {
-			continue // skip all burstable families
-		}
-		for _, small := range []string{".nano", ".micro", ".small", ".medium"} {
-			assert.False(t, strings.HasSuffix(name, small),
-				"non-burstable type %s should not have %s size", name, small)
-		}
-	}
-}
-
-func TestGenerateInstanceTypes_OlderFamiliesHaveSmallerSizeRange(t *testing.T) {
-	types := generateInstanceTypes(vendorIntel, "x86_64")
-
-	// m4 (older Intel GP) should have 6 sizes (large → 16xlarge, no 24xlarge)
-	assert.Equal(t, 6, countFamily(types, "m4."), "m4 should have 6 sizes (large → 16xlarge)")
-	// m5 (newer Intel GP) should have 8 sizes (large → 24xlarge)
-	assert.Equal(t, 8, countFamily(types, "m5."), "m5 should have 8 sizes (large → 24xlarge)")
-}
-
-func TestGenerateInstanceTypes_BurstableFlag(t *testing.T) {
-	types := generateInstanceTypes(vendorIntel, "x86_64")
-
-	// Previous-gen families: t2, m4, c4, r4
-	prevGen := map[string]bool{"t2": true, "m4": true, "c4": true, "r4": true}
-
-	for name, info := range types {
-		isBurstable := strings.HasPrefix(name, "t")
-		family := strings.SplitN(name, ".", 2)[0]
-		assert.Equal(t, isBurstable, *info.BurstablePerformanceSupported,
-			"%s burstable flag mismatch", name)
-		assert.Equal(t, !prevGen[family], *info.CurrentGeneration,
-			"%s current generation flag mismatch", name)
-	}
-}
-
-// --- vendorFromCPU ---
-
-func TestVendorFromCPU_ExactMappings(t *testing.T) {
-	assert.Equal(t, vendorAMD, vendorFromCPU("AMD EPYC 7551", "x86_64"))
-	assert.Equal(t, vendorAMD, vendorFromCPU("AMD Ryzen 9 7950X", "x86_64"))
-	assert.Equal(t, vendorAMD, vendorFromCPU("AMD Ryzen Threadripper PRO 5995WX", "x86_64"))
-	assert.Equal(t, vendorIntel, vendorFromCPU("Intel Xeon E5-2686", "x86_64"))
-	assert.Equal(t, vendorARM, vendorFromCPU("Apple M1", "arm64"))
-	assert.Equal(t, vendorARM, vendorFromCPU("AWS Graviton2", "arm64"))
-	assert.Equal(t, vendorARM, vendorFromCPU("ARM Cortex-A72", "arm64"))
-}
-
-func TestVendorFromCPU_CaseInsensitive(t *testing.T) {
-	assert.Equal(t, vendorAMD, vendorFromCPU("amd epyc 9654", "x86_64"))
-}
-
-func TestVendorFromCPU_DefaultFallback(t *testing.T) {
-	// Unknown CPU on x86_64 defaults to Intel
-	assert.Equal(t, vendorIntel, vendorFromCPU("Unknown CPU Model XYZ", "x86_64"))
-	// Any CPU on arm64 always returns ARM
-	assert.Equal(t, vendorARM, vendorFromCPU("Unknown CPU Model XYZ", "arm64"))
-	assert.Equal(t, vendorARM, vendorFromCPU("Intel Xeon E5-2686", "arm64"))
 }
 
 // --- instanceTypeVCPUs / instanceTypeMemoryMiB nil safety ---
