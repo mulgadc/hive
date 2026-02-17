@@ -101,8 +101,8 @@ type IOThread struct {
 }
 
 type Config struct {
-	Name    string `json:"name"`
-	PIDFile string `json:"pid_file"`
+	Name        string `json:"name"`
+	PIDFile     string `json:"pid_file"`
 	QMPSocket   string `json:"qmp_socket"`
 	EnableKVM   bool   `json:"enable_kvm"`
 	NoGraphic   bool   `json:"no_graphic"`

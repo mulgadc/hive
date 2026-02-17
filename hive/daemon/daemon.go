@@ -134,37 +134,32 @@ type cpuGeneration struct {
 	families []string // e.g. ["t3", "c6i", "m6i", "r6i"]
 }
 
-// Intel generations
 var (
+	// Intel generations
 	genIntelBroadwell      = cpuGeneration{"Intel Broadwell", []string{"t2", "c4", "m4", "r4"}}
 	genIntelSkylake        = cpuGeneration{"Intel Skylake/Cascade Lake", []string{"t3", "c5", "m5", "r5"}}
 	genIntelIceLake        = cpuGeneration{"Intel Ice Lake", []string{"t3", "c6i", "m6i", "r6i"}}
 	genIntelSapphireRapids = cpuGeneration{"Intel Sapphire Rapids", []string{"t3", "c7i", "m7i", "r7i"}}
 	genIntelGraniteRapids  = cpuGeneration{"Intel Granite Rapids", []string{"t3", "c8i", "m8i", "r8i"}}
-)
 
-// AMD generations
-var (
+	// AMD generations
 	genAMDZen  = cpuGeneration{"AMD Zen/Zen2 (Naples/Rome)", []string{"t3a", "c5a", "m5a", "r5a"}}
 	genAMDZen3 = cpuGeneration{"AMD Zen 3 (Milan)", []string{"t3a", "c6a", "m6a", "r6a"}}
 	genAMDZen4 = cpuGeneration{"AMD Zen 4 (Genoa)", []string{"t3a", "c7a", "m7a", "r7a"}}
 	genAMDZen5 = cpuGeneration{"AMD Zen 5 (Turin)", []string{"t3a", "c8a", "m8a", "r8a"}}
-)
 
-// ARM generations
-var (
+	// ARM generations
 	genARMNeoverseN1 = cpuGeneration{"ARM Neoverse N1 (Graviton2)", []string{"t4g", "c6g", "m6g", "r6g"}}
 	genARMNeoverseV1 = cpuGeneration{"ARM Neoverse V1 (Graviton3)", []string{"t4g", "c7g", "m7g", "r7g"}}
 	genARMNeoverseV2 = cpuGeneration{"ARM Neoverse V2 (Graviton4)", []string{"t4g", "c8g", "m8g", "r8g"}}
-)
 
-// Unknown/fallback generations — expose only burstable family
-var (
+	// Unknown/fallback — expose only burstable family
 	genUnknownIntel = cpuGeneration{"Unknown Intel", []string{"t3"}}
 	genUnknownAMD   = cpuGeneration{"Unknown AMD", []string{"t3a"}}
 	genUnknownARM   = cpuGeneration{"Unknown ARM", []string{"t4g"}}
 	genUnknown      = cpuGeneration{"Unknown", []string{"t3"}}
 )
+
 
 // detectCPUGeneration detects the CPU microarchitecture generation using CPUID.
 func detectCPUGeneration() cpuGeneration {
