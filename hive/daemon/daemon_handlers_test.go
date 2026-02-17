@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -1095,4 +1097,110 @@ func TestHandleEC2TerminateStoppedInstance_Success(t *testing.T) {
 	loaded, err := daemon.jsManager.LoadStoppedInstance("i-term-stopped-001")
 	require.NoError(t, err)
 	assert.Nil(t, loaded, "Instance should be removed from shared KV after termination")
+}
+
+func TestHandleEC2GetConsoleOutput(t *testing.T) {
+	natsURL := sharedNATSURL
+	daemon := createFullTestDaemon(t, natsURL)
+
+	instanceID := "i-console-test-001"
+
+	// Create a temp console log file
+	tmpDir := t.TempDir()
+	logPath := tmpDir + "/console-" + instanceID + ".log"
+	require.NoError(t, os.WriteFile(logPath, []byte("Hello from serial console\nBoot complete."), 0644))
+
+	// Add an instance with console log path
+	daemon.Instances.Mu.Lock()
+	daemon.Instances.VMS[instanceID] = &vm.VM{
+		ID:     instanceID,
+		Status: vm.StateRunning,
+		Config: vm.Config{
+			ConsoleLogPath: logPath,
+		},
+	}
+	daemon.Instances.Mu.Unlock()
+
+	topic := fmt.Sprintf("ec2.%s.GetConsoleOutput", instanceID)
+	sub, err := daemon.natsConn.Subscribe(topic, daemon.handleEC2GetConsoleOutput)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.GetConsoleOutputInput{
+		InstanceId: aws.String(instanceID),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request(topic, reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.GetConsoleOutputOutput
+	err = json.Unmarshal(reply.Data, &output)
+	require.NoError(t, err)
+	assert.Equal(t, instanceID, *output.InstanceId)
+	assert.NotNil(t, output.Output)
+	assert.NotEmpty(t, *output.Output)
+	assert.NotNil(t, output.Timestamp)
+
+	// Decode base64 output and verify content
+	decoded, err := base64.StdEncoding.DecodeString(*output.Output)
+	require.NoError(t, err)
+	assert.Contains(t, string(decoded), "Boot complete.")
+}
+
+func TestHandleEC2GetConsoleOutput_EmptyLog(t *testing.T) {
+	natsURL := sharedNATSURL
+	daemon := createFullTestDaemon(t, natsURL)
+
+	instanceID := "i-console-empty-001"
+
+	// Instance exists but no log file yet
+	daemon.Instances.Mu.Lock()
+	daemon.Instances.VMS[instanceID] = &vm.VM{
+		ID:     instanceID,
+		Status: vm.StateRunning,
+		Config: vm.Config{
+			ConsoleLogPath: "/nonexistent/console.log",
+		},
+	}
+	daemon.Instances.Mu.Unlock()
+
+	topic := fmt.Sprintf("ec2.%s.GetConsoleOutput", instanceID)
+	sub, err := daemon.natsConn.Subscribe(topic, daemon.handleEC2GetConsoleOutput)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.GetConsoleOutputInput{
+		InstanceId: aws.String(instanceID),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request(topic, reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.GetConsoleOutputOutput
+	err = json.Unmarshal(reply.Data, &output)
+	require.NoError(t, err)
+	assert.Equal(t, instanceID, *output.InstanceId)
+	assert.NotNil(t, output.Output)
+	assert.Empty(t, *output.Output)
+}
+
+func TestHandleEC2GetConsoleOutput_NotFound(t *testing.T) {
+	natsURL := sharedNATSURL
+	daemon := createFullTestDaemon(t, natsURL)
+
+	instanceID := "i-nonexistent-console"
+	topic := fmt.Sprintf("ec2.%s.GetConsoleOutput", instanceID)
+	sub, err := daemon.natsConn.Subscribe(topic, daemon.handleEC2GetConsoleOutput)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.GetConsoleOutputInput{
+		InstanceId: aws.String(instanceID),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request(topic, reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	// Should get an error response (instance not found)
+	assert.Contains(t, string(reply.Data), "InvalidInstanceID.NotFound")
 }
