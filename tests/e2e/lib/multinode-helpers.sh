@@ -190,7 +190,7 @@ wait_for_instance_state() {
 # Usage: wait_for_gateway [host] [max_attempts]
 wait_for_gateway() {
     local host="${1:-localhost}"
-    local max_attempts="${2:-30}"
+    local max_attempts="${2:-15}"
     local attempt=0
 
     echo "Waiting for AWS Gateway at $host:${AWSGW_PORT}..."
@@ -215,7 +215,7 @@ wait_for_gateway() {
 # Usage: wait_for_daemon_ready <gateway_endpoint> [max_attempts]
 wait_for_daemon_ready() {
     local endpoint="$1"
-    local max_attempts="${2:-30}"
+    local max_attempts="${2:-15}"
     local attempt=0
 
     echo "Waiting for daemon readiness (NATS subscriptions)..."
@@ -260,7 +260,7 @@ check_instance_distribution() {
 # Returns: the SSH port number, or empty string if not found
 get_ssh_port() {
     local instance_id="$1"
-    local max_attempts="${2:-60}"
+    local max_attempts="${2:-30}"
     local attempt=0
 
     while [ $attempt -lt $max_attempts ]; do
@@ -341,7 +341,7 @@ wait_for_ssh() {
     local host="$1"
     local port="$2"
     local key_file="$3"
-    local max_attempts="${4:-120}"
+    local max_attempts="${4:-60}"
     local attempt=0
 
     echo "  Waiting for SSH to be ready on $host:$port..."
@@ -517,7 +517,7 @@ get_qemu_pid() {
 # Expects state transition: error → pending → running
 wait_for_instance_recovery() {
     local instance_id="$1"
-    local max_attempts="${2:-60}"
+    local max_attempts="${2:-30}"
     local attempt=0
     local saw_error=false
 

@@ -139,7 +139,7 @@ CLUSTER_SERVICES_STARTED="true"
 # Wait for all services to stabilize
 echo ""
 echo "Waiting for cluster to stabilize..."
-sleep 10
+sleep 5
 
 # Phase 3: Cluster Health Verification
 echo ""
@@ -162,7 +162,7 @@ verify_predastore_cluster 3 || {
 
 # Wait for gateway on node1 (primary gateway)
 echo ""
-wait_for_gateway "${NODE1_IP}" 30
+wait_for_gateway "${NODE1_IP}" 15
 
 # Wait for daemon NATS subscriptions to be active
 wait_for_daemon_ready "https://${NODE1_IP}:${AWSGW_PORT}"
@@ -339,7 +339,7 @@ done
 echo ""
 echo "Waiting for instances to reach running state..."
 for instance_id in "${INSTANCE_IDS[@]}"; do
-    wait_for_instance_state "$instance_id" "running" 60 || {
+    wait_for_instance_state "$instance_id" "running" 30 || {
         echo "ERROR: Instance $instance_id failed to start"
         exit 1
     }
@@ -475,7 +475,7 @@ $AWS_EC2 modify-volume --volume-id "$TEST_VOLUME_ID" --size "$NEW_SIZE"
 # Verify resize
 echo "  Verifying resize..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 15 ]; do
     VOLUME_SIZE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].Size' --output text)
 
@@ -500,7 +500,7 @@ $AWS_EC2 attach-volume --volume-id "$TEST_VOLUME_ID" --instance-id "${INSTANCE_I
 # Verify attachment
 echo "  Verifying volume attachment..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 15 ]; do
     ATTACH_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].Attachments[0].State' --output text)
     ATTACH_INSTANCE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
@@ -529,7 +529,7 @@ $AWS_EC2 detach-volume --volume-id "$TEST_VOLUME_ID"
 # Verify detachment
 echo "  Verifying volume detachment..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 15 ]; do
     VOL_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].State' --output text)
 
@@ -554,7 +554,7 @@ $AWS_EC2 delete-volume --volume-id "$TEST_VOLUME_ID"
 # Verify deletion
 echo "  Verifying volume deletion..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 15 ]; do
     set +e
     VOLUME_CHECK=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].VolumeId' --output text 2>&1)
@@ -570,7 +570,7 @@ while [ $COUNT -lt 30 ]; do
     COUNT=$((COUNT + 1))
 done
 
-if [ $COUNT -ge 30 ]; then
+if [ $COUNT -ge 15 ]; then
     echo "  ERROR: Volume deletion verification timed out"
     exit 1
 fi
@@ -621,7 +621,7 @@ echo "  Create response verified (State=$SNAP_STATE, VolumeId=$SNAP_VOL_REF, Siz
 # Poll until completed
 echo "  Waiting for snapshot to complete..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 15 ]; do
     SNAP_STATE=$($AWS_EC2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
         --query 'Snapshots[0].State' --output text)
 
@@ -703,7 +703,7 @@ $AWS_EC2 delete-snapshot --snapshot-id "$SNAPSHOT_ID"
 # Verify original gone, copy remains
 echo "  Verifying snapshot deletion..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 15 ]; do
     set +e
     SNAP_CHECK=$($AWS_EC2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
         --query 'Snapshots[0].SnapshotId' --output text 2>&1)
@@ -719,7 +719,7 @@ while [ $COUNT -lt 30 ]; do
     COUNT=$((COUNT + 1))
 done
 
-if [ $COUNT -ge 30 ]; then
+if [ $COUNT -ge 15 ]; then
     echo "  ERROR: Snapshot deletion verification timed out"
     exit 1
 fi
@@ -953,12 +953,12 @@ echo "  Test instance: $TEST_INSTANCE"
 # Stop instance
 echo "  Stopping instance..."
 $AWS_EC2 stop-instances --instance-ids "$TEST_INSTANCE" > /dev/null
-wait_for_instance_state "$TEST_INSTANCE" "stopped" 30
+wait_for_instance_state "$TEST_INSTANCE" "stopped" 15
 
 # Start instance
 echo "  Starting instance..."
 $AWS_EC2 start-instances --instance-ids "$TEST_INSTANCE" > /dev/null
-wait_for_instance_state "$TEST_INSTANCE" "running" 30
+wait_for_instance_state "$TEST_INSTANCE" "running" 15
 
 echo "  Cross-node operations test passed"
 
@@ -1023,7 +1023,7 @@ if [ "$POST_CRASH_STATE" == "running" ]; then
 else
     # Wait for auto-restart (backoff starts at 5s)
     echo "  Instance in $POST_CRASH_STATE state, waiting for auto-restart..."
-    wait_for_instance_recovery "$CRASH_INSTANCE" 60 || {
+    wait_for_instance_recovery "$CRASH_INSTANCE" 30 || {
         echo "  ERROR: Instance failed to recover from crash"
         # Dump daemon logs for debugging
         for i in 1 2 3; do
@@ -1173,7 +1173,7 @@ echo "Test 6b: Coordinated Cluster Shutdown"
 echo "----------------------------------------"
 echo "Running cluster shutdown..."
 
-./bin/hive admin cluster shutdown --force --timeout 60s --config "$HOME/node1/config/hive.toml" 2>&1 || {
+./bin/hive admin cluster shutdown --force --timeout 30s --config "$HOME/node1/config/hive.toml" 2>&1 || {
     echo "  WARNING: Cluster shutdown command returned non-zero exit code"
 }
 CLUSTER_SERVICES_STARTED="false"
@@ -1198,7 +1198,7 @@ CLUSTER_SERVICES_STARTED="true"
 
 echo ""
 echo "Waiting for cluster to stabilize..."
-sleep 10
+sleep 5
 
 # Verify NATS cluster reformed
 echo ""
@@ -1208,7 +1208,7 @@ verify_nats_cluster 3 || {
 
 # Wait for gateway
 echo ""
-wait_for_gateway "${NODE1_IP}" 30
+wait_for_gateway "${NODE1_IP}" 15
 
 # Wait for daemon readiness
 wait_for_daemon_ready "https://${NODE1_IP}:${AWSGW_PORT}"
@@ -1239,7 +1239,7 @@ echo "Waiting for instances to relaunch after cluster restart..."
 for instance_id in "${INSTANCE_IDS[@]}"; do
     echo "  Waiting for $instance_id to finish relaunching..."
     COUNT=0
-    while [ $COUNT -lt 90 ]; do
+    while [ $COUNT -lt 30 ]; do
         STATE=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
             --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "unknown")
         if [ "$STATE" = "running" ] || [ "$STATE" = "error" ]; then
@@ -1249,8 +1249,8 @@ for instance_id in "${INSTANCE_IDS[@]}"; do
         sleep 2
         COUNT=$((COUNT + 1))
     done
-    if [ $COUNT -ge 90 ]; then
-        echo "  WARNING: $instance_id still in $STATE after 180s"
+    if [ $COUNT -ge 30 ]; then
+        echo "  WARNING: $instance_id still in $STATE after 60s"
     fi
 done
 
@@ -1266,7 +1266,7 @@ done
 echo "  Waiting for termination..."
 TERMINATION_FAILED=0
 for instance_id in "${INSTANCE_IDS[@]}"; do
-    if ! wait_for_instance_state "$instance_id" "terminated" 30; then
+    if ! wait_for_instance_state "$instance_id" "terminated" 15; then
         echo "  WARNING: Failed to confirm termination of $instance_id"
         TERMINATION_FAILED=1
     fi
