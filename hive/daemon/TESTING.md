@@ -418,3 +418,20 @@ When adding new tests:
    - Add comments explaining Linux-only requirements
    - Use build tags where appropriate
    - Provide alternative test paths for macOS
+
+## Local Docker E2E Tests
+
+For more advanced testing (e.g., if GitHub Actions is failing), run the Docker E2E tests locally before committing. These mirror the CI pipeline exactly.
+
+```bash
+make test-docker-single       # Single-node E2E only
+make test-docker-multi        # Multi-node E2E only
+make test-docker              # Both suites
+```
+
+Requirements:
+- Docker with `--privileged` support
+- `/dev/kvm` available (KVM-capable host)
+- Sibling repos (`viperblock/`, `predastore/`) cloned alongside `hive/`
+
+The Docker build copies local source (including `go.work` if present), so uncommitted changes in sibling repos are picked up automatically.
