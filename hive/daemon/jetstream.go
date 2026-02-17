@@ -51,7 +51,7 @@ func (m *JetStreamManager) InitKVBucket() error {
 	if err != nil {
 		if errors.Is(err, nats.ErrBucketNotFound) {
 			// Bucket doesn't exist, create it
-			slog.Info("Creating JetStream KV bucket", "bucket", InstanceStateBucket, "replicas", m.replicas)
+			slog.Debug("Creating JetStream KV bucket", "bucket", InstanceStateBucket, "replicas", m.replicas)
 			kv, err = m.js.CreateKeyValue(&nats.KeyValueConfig{
 				Bucket:      InstanceStateBucket,
 				Description: "Hive instance state storage",
@@ -65,7 +65,7 @@ func (m *JetStreamManager) InitKVBucket() error {
 			return err
 		}
 	} else {
-		slog.Info("Connected to existing JetStream KV bucket", "bucket", InstanceStateBucket)
+		slog.Debug("Connected to existing JetStream KV bucket", "bucket", InstanceStateBucket)
 	}
 
 	m.kv = kv
@@ -77,7 +77,7 @@ func (m *JetStreamManager) InitClusterStateBucket() error {
 	kv, err := m.js.KeyValue(ClusterStateBucket)
 	if err != nil {
 		if errors.Is(err, nats.ErrBucketNotFound) {
-			slog.Info("Creating JetStream KV bucket", "bucket", ClusterStateBucket, "replicas", m.replicas)
+			slog.Debug("Creating JetStream KV bucket", "bucket", ClusterStateBucket, "replicas", m.replicas)
 			kv, err = m.js.CreateKeyValue(&nats.KeyValueConfig{
 				Bucket:      ClusterStateBucket,
 				Description: "Hive cluster state (heartbeats, shutdown markers, service maps)",
@@ -92,7 +92,7 @@ func (m *JetStreamManager) InitClusterStateBucket() error {
 			return err
 		}
 	} else {
-		slog.Info("Connected to existing JetStream KV bucket", "bucket", ClusterStateBucket)
+		slog.Debug("Connected to existing JetStream KV bucket", "bucket", ClusterStateBucket)
 	}
 
 	m.clusterKV = kv

@@ -45,7 +45,7 @@ var ValidTransitions = map[InstanceState][]InstanceState{
 	StateStopping:     {StateStopped, StateShuttingDown, StateError},
 	StateStopped:      {StateRunning, StateShuttingDown, StateError},
 	StateShuttingDown: {StateTerminated, StateError},
-	StateError:        {StateRunning, StateShuttingDown},
+	StateError:        {StatePending, StateRunning, StateShuttingDown},
 }
 
 // IsValidTransition checks whether moving from current to target is allowed.
