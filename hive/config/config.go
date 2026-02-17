@@ -303,7 +303,8 @@ func LoadConfig(configPath string) (*ClusterConfig, error) {
 			if err := viper.ReadInConfig(); err != nil {
 				return nil, fmt.Errorf("error reading config file: %w", err)
 			}
-			fmt.Fprintf(os.Stderr, "Using config file: %s\n", viper.ConfigFileUsed())
+			//fmt.Fprintf(os.Stderr, "Using config file: %s\n", viper.ConfigFileUsed())
+
 		} else {
 			fmt.Fprintf(os.Stderr, "Config file not found: %s, using environment variables and defaults\n", configPath)
 		}

@@ -246,10 +246,12 @@ func generateInstanceTypes(family, arch string) map[string]*ec2.InstanceTypeInfo
 		{"2xlarge", 8, 32.0},
 	}
 
-	// Determine the burstable family based on architecture
+	// Determine the burstable family based on architecture and CPU vendor
 	burstableFamily := "t3"
 	if arch == "arm64" {
 		burstableFamily = "t4g"
+	} else if strings.HasSuffix(family, "a") {
+		burstableFamily = "t3a"
 	}
 
 	// Build list of families to generate: CPU-specific + burstable (if different)
@@ -328,6 +330,8 @@ func NewResourceManager() *ResourceManager {
 	burstableFamily := "t3"
 	if runtime.GOARCH == "arm64" {
 		burstableFamily = "t4g"
+	} else if strings.HasSuffix(instanceFamily, "a") {
+		burstableFamily = "t3a"
 	}
 	slog.Info("System resources detected",
 		"vCPUs", numCPU, "memGB", totalMemGB, "cpu", cpuModel,
@@ -592,8 +596,12 @@ func (d *Daemon) Start() error {
 	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances, store)
 	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
 	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config, d.natsConn)
-	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config, d.natsConn)
-	d.snapshotService = handlers_ec2_snapshot.NewSnapshotServiceImpl(d.config, d.natsConn)
+	snapSvc, snapshotKV, err := handlers_ec2_snapshot.NewSnapshotServiceImplWithNATS(d.config, d.natsConn)
+	if err != nil {
+		return fmt.Errorf("failed to initialize snapshot service with NATS KV: %w", err)
+	}
+	d.snapshotService = snapSvc
+	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config, d.natsConn, snapshotKV)
 	d.tagsService = handlers_ec2_tags.NewTagsServiceImpl(d.config)
 
 	if eigwSvc, err := handlers_ec2_eigw.NewEgressOnlyIGWServiceImplWithNATS(d.config, d.natsConn); err != nil {
@@ -608,6 +616,11 @@ func (d *Daemon) Start() error {
 		accountSvc = handlers_ec2_account.NewAccountSettingsServiceImpl(d.config)
 	}
 	d.accountService = accountSvc
+
+	// Protect daemon from OOM killer (prefer killing QEMU VMs instead)
+	if err := utils.SetOOMScore(os.Getpid(), -500); err != nil {
+		slog.Warn("Failed to set daemon OOM score", "err", err)
+	}
 
 	d.waitForClusterReady()
 	d.restoreInstances()
@@ -741,7 +754,7 @@ func (d *Daemon) checkPredastoreReady() bool {
 	if err != nil {
 		return false
 	}
-	conn.Close()
+	_ = conn.Close()
 	return true
 }
 
@@ -1732,6 +1745,7 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	processChan := make(chan int, 1)
 	exitChan := make(chan int, 1)
 	ptsChan := make(chan int, 1)
+	startupConfirmed := make(chan bool, 1)
 
 	go func() {
 		cmd, err := instance.Config.Execute()
@@ -1765,6 +1779,11 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		}
 
 		slog.Info("VM started successfully", "pid", cmd.Process.Pid)
+
+		// Set OOM score for QEMU process (prefer killing VMs over system services)
+		if err := utils.SetOOMScore(cmd.Process.Pid, 500); err != nil {
+			slog.Warn("Failed to set QEMU OOM score", "pid", cmd.Process.Pid, "err", err)
+		}
 
 		// TODO: Consider workaround using QMP
 		//  (QEMU) query-chardev
@@ -1813,15 +1832,27 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 
 		processChan <- cmd.Process.Pid
 
-		// Read the pts from launch
-		err = cmd.Wait()
+		// Block until QEMU exits
+		waitErr := cmd.Wait()
 
-		if err != nil {
-			slog.Error("Failed to wait for VM:", "err", err)
-			exitChan <- 1
-			return
+		if waitErr != nil {
+			slog.Error("VM process exited", "instance", instance.ID, "err", waitErr)
 		}
 
+		// Signal startup check (non-blocking)
+		select {
+		case exitChan <- 1:
+		default:
+		}
+
+		// Wait for startup phase to complete before deciding on crash handling
+		confirmed := <-startupConfirmed
+		if !confirmed {
+			return // Startup failed, LaunchInstance handles the error
+		}
+
+		// Runtime crash — handle it
+		d.handleInstanceCrash(instance, waitErr)
 	}()
 
 	// Wait for startup result
@@ -1843,16 +1874,17 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		//return fmt.Errorf("failed to get pts")
 	}
 
-	// Check if nbdkit exited immediately with an error
+	// Check if QEMU exited immediately with an error
 	select {
 	case exitErr := <-exitChan:
+		startupConfirmed <- false // tell goroutine not to handle crash
 		if exitErr != 0 {
 			errorMsg := fmt.Errorf("failed: %v", exitErr)
 			slog.Error("Failed to launch qemu", "err", errorMsg)
 			return errorMsg
 		}
 	default:
-		// nbdkit is still running after 1 second, which means it started successfully
+		startupConfirmed <- true // goroutine will handle future crashes
 		slog.Info("QEMU started successfully and is running", "pts", pts)
 	}
 

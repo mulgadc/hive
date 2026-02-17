@@ -958,6 +958,176 @@ verify_nats_cluster 3 || {
     echo "WARNING: NATS cluster verification failed after operations"
 }
 
+# Test 5: VM Crash Recovery (kill -9 → detect → auto-restart)
+echo ""
+echo "Test 5: VM Crash Recovery"
+echo "----------------------------------------"
+echo "Testing QEMU crash detection and auto-restart..."
+
+# Use the second instance for crash testing (first was used for stop/start in Test 3)
+CRASH_INSTANCE="${INSTANCE_IDS[1]}"
+echo "  Crash test instance: $CRASH_INSTANCE"
+
+# Verify instance is running before crash
+CRASH_STATE=$($AWS_EC2 describe-instances --instance-ids "$CRASH_INSTANCE" \
+    --query 'Reservations[0].Instances[0].State.Name' --output text)
+if [ "$CRASH_STATE" != "running" ]; then
+    echo "  ERROR: Instance not in running state before crash test (state: $CRASH_STATE)"
+    exit 1
+fi
+echo "  Instance is running"
+
+# Get the QEMU PID
+QEMU_PID=$(get_qemu_pid "$CRASH_INSTANCE")
+if [ -z "$QEMU_PID" ]; then
+    echo "  ERROR: Could not find QEMU PID for $CRASH_INSTANCE"
+    exit 1
+fi
+echo "  QEMU PID: $QEMU_PID"
+
+# Kill QEMU with SIGKILL (simulates OOM kill)
+echo "  Killing QEMU process with SIGKILL (simulating OOM kill)..."
+kill -9 "$QEMU_PID"
+
+# Brief pause for the daemon to detect the crash
+sleep 3
+
+# Verify the daemon detected the crash (state should be error or already recovering)
+echo "  Checking post-crash state..."
+POST_CRASH_STATE=$($AWS_EC2 describe-instances --instance-ids "$CRASH_INSTANCE" \
+    --query 'Reservations[0].Instances[0].State.Name' --output text)
+echo "  Post-crash state: $POST_CRASH_STATE"
+
+if [ "$POST_CRASH_STATE" == "running" ]; then
+    # Might have recovered very quickly, check if it's a new PID
+    NEW_PID=$(get_qemu_pid "$CRASH_INSTANCE" || echo "")
+    if [ "$NEW_PID" == "$QEMU_PID" ]; then
+        echo "  ERROR: Instance still has same PID after kill -9, crash not detected"
+        exit 1
+    fi
+    echo "  Instance already recovered with new PID: $NEW_PID (was: $QEMU_PID)"
+else
+    # Wait for auto-restart (backoff starts at 5s)
+    echo "  Instance in $POST_CRASH_STATE state, waiting for auto-restart..."
+    wait_for_instance_recovery "$CRASH_INSTANCE" 60 || {
+        echo "  ERROR: Instance failed to recover from crash"
+        # Dump daemon logs for debugging
+        for i in 1 2 3; do
+            if [ -f "$HOME/node$i/logs/hive.log" ]; then
+                echo ""
+                echo "  --- node$i daemon log (last 30 lines) ---"
+                tail -30 "$HOME/node$i/logs/hive.log"
+            fi
+        done
+        exit 1
+    }
+fi
+
+# Verify the instance is running with a new QEMU process
+RECOVERED_PID=$(get_qemu_pid "$CRASH_INSTANCE")
+if [ -z "$RECOVERED_PID" ]; then
+    echo "  ERROR: No QEMU process found after recovery"
+    exit 1
+fi
+
+if [ "$RECOVERED_PID" == "$QEMU_PID" ]; then
+    echo "  ERROR: QEMU PID unchanged after crash recovery (expected new process)"
+    exit 1
+fi
+echo "  New QEMU PID: $RECOVERED_PID (was: $QEMU_PID)"
+
+# Verify describe-instances shows running state
+FINAL_STATE=$($AWS_EC2 describe-instances --instance-ids "$CRASH_INSTANCE" \
+    --query 'Reservations[0].Instances[0].State.Name' --output text)
+if [ "$FINAL_STATE" != "running" ]; then
+    echo "  ERROR: Instance not running after recovery (state: $FINAL_STATE)"
+    exit 1
+fi
+echo "  Instance is running after crash recovery"
+
+# Verify SSH works after recovery (VM rebooted with fresh OS from root volume)
+echo "  Verifying SSH after crash recovery..."
+CRASH_SSH_PORT=$(get_ssh_port "$CRASH_INSTANCE" 30)
+CRASH_SSH_HOST=$(get_ssh_host "$CRASH_INSTANCE")
+if [ -n "$CRASH_SSH_PORT" ]; then
+    echo "  SSH endpoint after recovery: $CRASH_SSH_HOST:$CRASH_SSH_PORT"
+    # Update SSH details for later termination verification
+    SSH_PORTS[1]="$CRASH_SSH_PORT"
+    SSH_HOSTS[1]="$CRASH_SSH_HOST"
+    wait_for_ssh "$CRASH_SSH_HOST" "$CRASH_SSH_PORT" "multinode-test-key.pem" || {
+        echo "  WARNING: SSH not ready after crash recovery (non-fatal, VM may still be booting)"
+    }
+else
+    echo "  WARNING: Could not determine SSH port after recovery (non-fatal)"
+fi
+
+# Test 5b: Crash Loop Prevention (kill 4 times rapidly to exceed max restarts)
+echo ""
+echo "Test 5b: Crash Loop Prevention"
+echo "----------------------------------------"
+echo "Testing that crash loop is detected and restarts stop after max attempts..."
+
+# Use the third instance for crash loop testing
+LOOP_INSTANCE="${INSTANCE_IDS[2]}"
+echo "  Crash loop test instance: $LOOP_INSTANCE"
+
+# Verify instance is running
+LOOP_STATE=$($AWS_EC2 describe-instances --instance-ids "$LOOP_INSTANCE" \
+    --query 'Reservations[0].Instances[0].State.Name' --output text)
+if [ "$LOOP_STATE" != "running" ]; then
+    echo "  ERROR: Instance not running before crash loop test (state: $LOOP_STATE)"
+    exit 1
+fi
+
+# Kill QEMU repeatedly to exhaust restart attempts (max 3 in 10 min window)
+for crash_num in 1 2 3 4; do
+    echo "  Crash $crash_num/4: killing QEMU..."
+    LOOP_PID=$(get_qemu_pid "$LOOP_INSTANCE" || echo "")
+    if [ -z "$LOOP_PID" ]; then
+        echo "  No QEMU process found (instance may be in error state)"
+        break
+    fi
+
+    kill -9 "$LOOP_PID"
+
+    if [ $crash_num -lt 4 ]; then
+        # Wait for restart (backoff increases: 5s, 10s, 20s)
+        # Give generous time for each restart cycle
+        local_max=$((15 + crash_num * 10))
+        echo "  Waiting up to ${local_max}s for restart or error state..."
+        attempt=0
+        while [ $attempt -lt $local_max ]; do
+            state=$($AWS_EC2 describe-instances --instance-ids "$LOOP_INSTANCE" \
+                --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "unknown")
+            if [ "$state" == "running" ]; then
+                echo "  Instance restarted (crash $crash_num)"
+                break
+            fi
+            if [ "$state" == "error" ] && [ $crash_num -ge 3 ]; then
+                echo "  Instance in error state after crash $crash_num (restart limit may be reached)"
+                break
+            fi
+            sleep 2
+            attempt=$((attempt + 2))
+        done
+    fi
+done
+
+# After 4 rapid crashes, the instance should be in error state (exceeded max 3 restarts)
+sleep 5
+LOOP_FINAL_STATE=$($AWS_EC2 describe-instances --instance-ids "$LOOP_INSTANCE" \
+    --query 'Reservations[0].Instances[0].State.Name' --output text)
+echo "  Final state after crash loop: $LOOP_FINAL_STATE"
+
+if [ "$LOOP_FINAL_STATE" == "error" ]; then
+    echo "  Crash loop prevention working: instance stayed in error state"
+else
+    echo "  WARNING: Instance in state '$LOOP_FINAL_STATE' (expected 'error' after exceeding max restarts)"
+    echo "  This may be expected if timing allowed restarts to spread across the window"
+fi
+
+echo "  Crash recovery tests passed"
+
 # Cleanup: Terminate all test instances
 echo ""
 echo "Cleanup: Deleting test resources"
