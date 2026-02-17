@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - test
+      - dev
     paths:
       - "**/*.go"
       - go.mod
@@ -26,40 +26,78 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout Code
+      - name: Checkout Hive
         uses: actions/checkout@v6
+        with:
+          path: hive
+
+      - name: Checkout Viperblock
+        uses: actions/checkout@v6
+        with:
+          repository: mulgadc/viperblock
+          ref: dev
+          path: viperblock
+
+      - name: Checkout Predastore
+        uses: actions/checkout@v6
+        with:
+          repository: mulgadc/predastore
+          ref: dev
+          path: predastore
+
+      - name: Setup Go Workspace
+        run: go work init ./hive ./viperblock ./predastore
 
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          cache-dependency-path: "go.sum"
-          go-version-file: "go.mod"
+          cache-dependency-path: "hive/go.sum"
+          go-version-file: "hive/go.mod"
 
       - name: Build Hive
-        run: make build
+        run: make -C hive build
 
       - name: Run Tests
-        run: make test
+        run: make -C hive test
 
   lint_and_security:
     name: Hive Lint and Security
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout Code
+      - name: Checkout Hive
         uses: actions/checkout@v6
+        with:
+          path: hive
+
+      - name: Checkout Viperblock
+        uses: actions/checkout@v6
+        with:
+          repository: mulgadc/viperblock
+          ref: dev
+          path: viperblock
+
+      - name: Checkout Predastore
+        uses: actions/checkout@v6
+        with:
+          repository: mulgadc/predastore
+          ref: dev
+          path: predastore
+
+      - name: Setup Go Workspace
+        run: go work init ./hive ./viperblock ./predastore
 
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          cache-dependency-path: "go.sum"
-          go-version-file: "go.mod"
+          cache-dependency-path: "hive/go.sum"
+          go-version-file: "hive/go.mod"
 
       - name: Check Format
-        run: make check-format
+        run: make -C hive check-format
 
       - name: Go Vet
-        run: make vet
+        run: make -C hive vet
 
       - name: Security Checks
-        run: make security-check
+        run: make -C hive security-check
