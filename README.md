@@ -116,12 +116,6 @@ While Hive is architected and implemented by experienced engineers, we leverage 
 - **Performance Optimization**: Real-world performance tuning and benchmarking
 - **Production Operations**: Deployment strategies and operational procedures
 
-**Development Artifacts:**
-
-- `.claude/CLAUDE.md` - Instructions for Claude Code when working on this codebase
-- `HIVE_DEVELOPMENT_PLAN.md` - Comprehensive roadmap and implementation strategy
-- Component-specific guidance in `viperblock/CLAUDE.md` and `predastore/CLAUDE.md`
-
 This hybrid approach ensures Hive benefits from both proven engineering expertise and modern development acceleration, while maintaining the quality and reliability standards required for production infrastructure.
 
 ## License
