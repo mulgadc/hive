@@ -393,7 +393,7 @@ for idx in "${!INSTANCE_IDS[@]}"; do
     SSH_HOSTS+=("$SSH_HOST")
 
     # Wait for SSH to become ready (VM boot + cloud-init)
-    wait_for_ssh "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem"
+    wait_for_ssh "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem" 30
 
     # Test basic SSH connectivity
     test_ssh_connectivity "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem"
@@ -956,12 +956,12 @@ echo "  Test instance: $TEST_INSTANCE"
 # Stop instance
 echo "  Stopping instance..."
 $AWS_EC2 stop-instances --instance-ids "$TEST_INSTANCE" > /dev/null
-wait_for_instance_state "$TEST_INSTANCE" "stopped" 15
+wait_for_instance_state "$TEST_INSTANCE" "stopped" 30
 
 # Start instance
 echo "  Starting instance..."
 $AWS_EC2 start-instances --instance-ids "$TEST_INSTANCE" > /dev/null
-wait_for_instance_state "$TEST_INSTANCE" "running" 15
+wait_for_instance_state "$TEST_INSTANCE" "running" 30
 
 echo "  Cross-node operations test passed"
 
@@ -1071,7 +1071,7 @@ if [ -n "$CRASH_SSH_PORT" ]; then
     # Update SSH details for later termination verification
     SSH_PORTS[1]="$CRASH_SSH_PORT"
     SSH_HOSTS[1]="$CRASH_SSH_HOST"
-    wait_for_ssh "$CRASH_SSH_HOST" "$CRASH_SSH_PORT" "multinode-test-key.pem" || {
+    wait_for_ssh "$CRASH_SSH_HOST" "$CRASH_SSH_PORT" "multinode-test-key.pem" 30 || {
         echo "  WARNING: SSH not ready after crash recovery (non-fatal, VM may still be booting)"
     }
 else
@@ -1278,7 +1278,7 @@ done
 echo "  Waiting for termination..."
 TERMINATION_FAILED=0
 for instance_id in "${INSTANCE_IDS[@]}"; do
-    if ! wait_for_instance_state "$instance_id" "terminated" 20; then
+    if ! wait_for_instance_state "$instance_id" "terminated" 30; then
         echo "  WARNING: Failed to confirm termination of $instance_id"
         TERMINATION_FAILED=1
     fi
