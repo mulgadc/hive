@@ -1623,8 +1623,8 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		return err
 	}
 
-	// Just the ipv4 port required
-	sshDebugPort = strings.Replace(sshDebugPort, "[::]:", "", 1)
+	// Extract just the port number
+	_, sshDebugPort, _ = net.SplitHostPort(sshDebugPort)
 
 	// TODO: Make configurable
 	instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
