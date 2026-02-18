@@ -8,10 +8,6 @@ on:
     paths:
       - hive/services/hiveui/frontend/**
       - .github/workflows/ui.yml
-  pull_request:
-    paths:
-      - hive/services/hiveui/frontend/**
-      - .github/workflows/ui.yml
   workflow_dispatch:
 
 jobs:
