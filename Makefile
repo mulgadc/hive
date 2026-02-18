@@ -139,9 +139,6 @@ security-check:
 	set -o pipefail && go tool staticcheck -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./... 2>&1 | tee tests/staticcheck-report.txt
 	@echo "  staticcheck ok"
 
-# Legacy alias — now runs the strict checks (same as security-check)
-security: vet security-check
-
 # Docker E2E tests (mirrors GitHub Actions e2e.yml)
 # Usage: make test-docker              # both suites
 #        make test-docker-single       # single-node only
@@ -176,5 +173,5 @@ test-docker: test-docker-build
 
 .PHONY: build build-ui go_build go_run preflight test bench run clean \
 	install-system install-go install-aws quickinstall \
-	format check-format vet security security-check \
+	format check-format vet security-check \
 	test-docker-build test-docker-single test-docker-multi test-docker
