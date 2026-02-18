@@ -162,7 +162,7 @@ func TestGetAMIConfig(t *testing.T) {
 
 	createTestAMIConfig(t, store, "ami-abc123")
 
-	meta, err := svc.getAMIConfig("ami-abc123")
+	meta, err := svc.GetAMIConfig("ami-abc123")
 	require.NoError(t, err)
 	assert.Equal(t, "ami-abc123", meta.ImageID)
 	assert.Equal(t, "test-ami", meta.Name)
@@ -174,7 +174,7 @@ func TestGetAMIConfig(t *testing.T) {
 func TestGetAMIConfig_NotFound(t *testing.T) {
 	svc, _ := setupTestImageService(t)
 
-	_, err := svc.getAMIConfig("ami-nonexistent")
+	_, err := svc.GetAMIConfig("ami-nonexistent")
 	require.Error(t, err)
 }
 

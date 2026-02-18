@@ -709,6 +709,19 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		return
 	}
 
+	// Validate AMI exists before allocating resources
+	if runInstancesInput.ImageId != nil {
+		_, err := d.imageService.GetAMIConfig(*runInstancesInput.ImageId)
+		if err != nil {
+			slog.Error("handleEC2RunInstances AMI not found", "imageId", *runInstancesInput.ImageId, "err", err)
+			errResp = utils.GenerateErrorPayload(awserrors.ErrorInvalidAMIIDNotFound)
+			if err := msg.Respond(errResp); err != nil {
+				slog.Error("Failed to respond to NATS request", "err", err)
+			}
+			return
+		}
+	}
+
 	// Determine how many instances to launch based on MinCount/MaxCount
 	minCount := int(*runInstancesInput.MinCount)
 	maxCount := int(*runInstancesInput.MaxCount)

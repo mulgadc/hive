@@ -26,9 +26,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// createFullTestDaemon creates a test daemon with ALL services initialized (including
-// key, image, snapshot, tags, eigw, account) using in-memory object stores.
-func createFullTestDaemon(t *testing.T, natsURL string) *Daemon {
+// createFullTestDaemonWithStore creates a test daemon with ALL services initialized
+// and returns the shared memory store for seeding test data.
+func createFullTestDaemonWithStore(t *testing.T, natsURL string) (*Daemon, *objectstore.MemoryObjectStore) {
 	daemon := createTestDaemon(t, natsURL)
 
 	memStore := objectstore.NewMemoryObjectStore()
@@ -42,6 +42,13 @@ func createFullTestDaemon(t *testing.T, natsURL string) *Daemon {
 	daemon.eigwService = handlers_ec2_eigw.NewEgressOnlyIGWServiceImpl(cfg)
 	daemon.accountService = handlers_ec2_account.NewAccountSettingsServiceImpl(cfg)
 
+	return daemon, memStore
+}
+
+// createFullTestDaemon creates a test daemon with ALL services initialized (including
+// key, image, snapshot, tags, eigw, account) using in-memory object stores.
+func createFullTestDaemon(t *testing.T, natsURL string) *Daemon {
+	daemon, _ := createFullTestDaemonWithStore(t, natsURL)
 	return daemon
 }
 
@@ -307,6 +314,31 @@ func TestHandleNodeDiscover(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, daemon.node, resp.Node)
+}
+
+// --- handleEC2RunInstances AMI validation tests ---
+
+func TestHandleEC2RunInstances_InvalidAMI(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon := createFullTestDaemon(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", daemon.handleEC2RunInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-nonexistent"),
+		InstanceType: aws.String(getTestInstanceType()),
+		MinCount:     aws.Int64(1),
+		MaxCount:     aws.Int64(1),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	// Should return InvalidAMIID.NotFound, not ServerInternal
+	assert.Contains(t, string(reply.Data), "InvalidAMIID.NotFound")
 }
 
 // --- handleStopOrTerminateInstance tests (JetStream required for TransitionState) ---

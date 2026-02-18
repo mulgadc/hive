@@ -277,7 +277,7 @@ func (s *ImageServiceImpl) CreateImageFromInstance(params CreateImageParams) (*e
 		Virtualization:  "hvm",
 	}
 	if params.SourceImageID != "" {
-		srcCfg, err := s.getAMIConfig(params.SourceImageID)
+		srcCfg, err := s.GetAMIConfig(params.SourceImageID)
 		if err != nil {
 			slog.Error("CreateImageFromInstance: failed to read source AMI config", "sourceImageId", params.SourceImageID, "err", err)
 			return nil, errors.New(awserrors.ErrorServerInternal)
@@ -453,8 +453,9 @@ func (s *ImageServiceImpl) getVolumeConfig(volumeID string) (*viperblock.VolumeC
 	return &vbState.VolumeConfig, nil
 }
 
-// getAMIConfig reads an AMI's metadata from S3
-func (s *ImageServiceImpl) getAMIConfig(imageID string) (viperblock.AMIMetadata, error) {
+// GetAMIConfig retrieves the AMI metadata for a given image ID from S3.
+// Returns NoSuchKeyError if the AMI does not exist.
+func (s *ImageServiceImpl) GetAMIConfig(imageID string) (viperblock.AMIMetadata, error) {
 	configKey := fmt.Sprintf("%s/config.json", imageID)
 	result, err := s.store.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(s.bucketName),

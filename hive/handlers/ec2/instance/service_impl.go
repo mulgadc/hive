@@ -318,8 +318,8 @@ func (s *InstanceServiceImpl) cloneAMIToVolume(input *ec2.RunInstancesInput, siz
 
 	amiState, err := amiVb.LoadStateRequest("")
 	if err != nil {
-		slog.Error("Could not load state for AMI", "err", err)
-		return errors.New(awserrors.ErrorServerInternal)
+		slog.Error("Could not load state for AMI", "imageId", *input.ImageId, "err", err)
+		return errors.New(awserrors.ErrorInvalidAMIIDNotFound)
 	}
 
 	snapshotID := amiState.VolumeConfig.AMIMetadata.SnapshotID
