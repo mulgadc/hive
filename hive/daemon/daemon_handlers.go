@@ -722,6 +722,18 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		}
 	}
 
+	// Validate key pair exists (if specified)
+	if runInstancesInput.KeyName != nil && *runInstancesInput.KeyName != "" {
+		if err := d.keyService.ValidateKeyPairExists(*runInstancesInput.KeyName); err != nil {
+			slog.Error("handleEC2RunInstances key pair not found", "keyName", *runInstancesInput.KeyName, "err", err)
+			errResp = utils.GenerateErrorPayload(awserrors.ErrorInvalidKeyPairNotFound)
+			if err := msg.Respond(errResp); err != nil {
+				slog.Error("Failed to respond to NATS request", "err", err)
+			}
+			return
+		}
+	}
+
 	// Determine how many instances to launch based on MinCount/MaxCount
 	minCount := int(*runInstancesInput.MinCount)
 	maxCount := int(*runInstancesInput.MaxCount)

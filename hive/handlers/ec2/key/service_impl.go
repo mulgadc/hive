@@ -362,6 +362,13 @@ func (s *KeyServiceImpl) findKeyPairIdFromKeyName(keyName string) (string, error
 	return "", errors.New(awserrors.ErrorInvalidKeyPairNotFound)
 }
 
+// ValidateKeyPairExists checks if a key pair with the given name exists.
+// Returns nil if the key pair exists, or an error with ErrorInvalidKeyPairNotFound if not.
+func (s *KeyServiceImpl) ValidateKeyPairExists(keyName string) error {
+	_, err := s.findKeyPairIdFromKeyName(keyName)
+	return err
+}
+
 // DeleteKeyPair removes a key pair (both public key and metadata from S3)
 func (s *KeyServiceImpl) DeleteKeyPair(input *ec2.DeleteKeyPairInput) (*ec2.DeleteKeyPairOutput, error) {
 	if input == nil {

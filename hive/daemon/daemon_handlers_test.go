@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	awss3 "github.com/aws/aws-sdk-go/service/s3"
+
 	"github.com/mulgadc/hive/hive/config"
 	handlers_ec2_account "github.com/mulgadc/hive/hive/handlers/ec2/account"
 	handlers_ec2_eigw "github.com/mulgadc/hive/hive/handlers/ec2/eigw"
@@ -339,6 +342,102 @@ func TestHandleEC2RunInstances_InvalidAMI(t *testing.T) {
 
 	// Should return InvalidAMIID.NotFound, not ServerInternal
 	assert.Contains(t, string(reply.Data), "InvalidAMIID.NotFound")
+}
+
+func TestHandleEC2RunInstances_InvalidKeyPair(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon, memStore := createFullTestDaemonWithStore(t, natsURL)
+
+	// Seed a valid AMI so AMI validation passes
+	seedTestAMI(t, memStore, daemon.config.Predastore.Bucket, "ami-test123")
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", daemon.handleEC2RunInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-test123"),
+		InstanceType: aws.String(getTestInstanceType()),
+		KeyName:      aws.String("nonexistent-keypair"),
+		MinCount:     aws.Int64(1),
+		MaxCount:     aws.Int64(1),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	// Should return InvalidKeyPair.NotFound, not proceed to launch
+	assert.Contains(t, string(reply.Data), "InvalidKeyPair.NotFound")
+}
+
+func TestHandleEC2RunInstances_ValidKeyPairPassesValidation(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon, memStore := createFullTestDaemonWithStore(t, natsURL)
+
+	// Seed a valid AMI
+	seedTestAMI(t, memStore, daemon.config.Predastore.Bucket, "ami-test456")
+
+	// Seed a valid key pair (public key + metadata)
+	bucket := daemon.config.Predastore.Bucket
+	_, err := memStore.PutObject(&awss3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String("keys/123456789/my-key"),
+		Body:   strings.NewReader("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest"),
+	})
+	require.NoError(t, err)
+
+	metadataJSON := `{"KeyPairId":"key-abc123","KeyName":"my-key","KeyFingerprint":"SHA256:test"}`
+	_, err = memStore.PutObject(&awss3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String("keys/123456789/key-abc123.json"),
+		Body:   strings.NewReader(metadataJSON),
+	})
+	require.NoError(t, err)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", daemon.handleEC2RunInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-test456"),
+		InstanceType: aws.String(getTestInstanceType()),
+		KeyName:      aws.String("my-key"),
+		MinCount:     aws.Int64(1),
+		MaxCount:     aws.Int64(1),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	// Should NOT contain InvalidKeyPair.NotFound — key pair validation should pass
+	assert.NotContains(t, string(reply.Data), "InvalidKeyPair.NotFound")
+}
+
+func TestHandleEC2RunInstances_EmptyKeyNameSkipsValidation(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon, memStore := createFullTestDaemonWithStore(t, natsURL)
+	seedTestAMI(t, memStore, daemon.config.Predastore.Bucket, "ami-test789")
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", daemon.handleEC2RunInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	// No KeyName at all — should skip validation
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-test789"),
+		InstanceType: aws.String(getTestInstanceType()),
+		MinCount:     aws.Int64(1),
+		MaxCount:     aws.Int64(1),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	// Should NOT contain InvalidKeyPair.NotFound
+	assert.NotContains(t, string(reply.Data), "InvalidKeyPair.NotFound")
 }
 
 // --- handleStopOrTerminateInstance tests (JetStream required for TransitionState) ---
