@@ -2,6 +2,7 @@ package gateway_ec2_instance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -51,9 +52,8 @@ func StartInstances(input *ec2.StartInstancesInput, natsConn *nats.Conn) (*ec2.S
 
 		// Check if the daemon returned an error response
 		if responseError, parseErr := utils.ValidateErrorPayload(msg.Data); parseErr != nil {
-			slog.Error("StartInstances: Daemon returned error", "instance_id", instanceID, "code", responseError.Code)
-			stateChanges = append(stateChanges, newStateChange(instanceID, 80, "stopped", 80, "stopped"))
-			continue
+			slog.Error("StartInstances: Daemon returned error", "instance_id", instanceID, "code", *responseError.Code)
+			return nil, errors.New(*responseError.Code)
 		}
 
 		slog.Info("StartInstances: Command sent successfully", "instance_id", instanceID, "response", string(msg.Data))

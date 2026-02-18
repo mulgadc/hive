@@ -492,6 +492,7 @@ func (d *Daemon) Start() error {
 	d.resourceMgr.initSubscriptions(d.natsConn, d.handleEC2RunInstances)
 
 	d.startHeartbeat()
+	d.startPendingWatchdog()
 	d.setupShutdown()
 	d.awaitShutdown()
 
@@ -712,10 +713,21 @@ func (d *Daemon) restoreInstances() {
 		}
 
 		instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
-		if !ok {
-			slog.Error("Instance type not found in current type map, cannot re-allocate resources",
+		if !ok && instance.InstanceType != "" {
+			slog.Warn("Instance type not available on this node, moving to stopped",
 				"instanceId", instance.ID, "instanceType", instance.InstanceType)
-		} else {
+			instance.Status = vm.StateStopped
+			if instance.Instance != nil {
+				instance.Instance.StateReason = &ec2.StateReason{}
+				instance.Instance.StateReason.SetCode("Server.InsufficientInstanceCapacity")
+				instance.Instance.StateReason.SetMessage(
+					fmt.Sprintf("instance type %s is not available on this node", instance.InstanceType))
+			}
+			d.migrateStoppedToSharedKV(instance)
+			continue
+		}
+
+		if ok {
 			slog.Info("Re-allocating resources for instance", "instanceId", instance.ID, "type", instance.InstanceType)
 			if err := d.resourceMgr.allocate(instanceType); err != nil {
 				slog.Error("Failed to re-allocate resources for instance on startup", "instanceId", instance.ID, "err", err)
@@ -1518,6 +1530,42 @@ func (d *Daemon) markInstanceFailed(instance *vm.VM, reason string) {
 	}
 
 	slog.Info("Instance marked as failed", "instanceId", instance.ID, "reason", reason)
+}
+
+const pendingWatchdogInterval = 60 * time.Second
+const pendingWatchdogTimeout = 5 * time.Minute
+
+// startPendingWatchdog runs a background goroutine that periodically checks for
+// instances stuck in pending/provisioning beyond a timeout and marks them failed.
+func (d *Daemon) startPendingWatchdog() {
+	ticker := time.NewTicker(pendingWatchdogInterval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-d.ctx.Done():
+				return
+			case <-ticker.C:
+				d.Instances.Mu.Lock()
+				var stuck []*vm.VM
+				for _, instance := range d.Instances.VMS {
+					if (instance.Status == vm.StatePending || instance.Status == vm.StateProvisioning) &&
+						instance.Instance != nil && instance.Instance.LaunchTime != nil &&
+						time.Since(*instance.Instance.LaunchTime) > pendingWatchdogTimeout {
+						stuck = append(stuck, instance)
+					}
+				}
+				d.Instances.Mu.Unlock()
+
+				for _, instance := range stuck {
+					slog.Warn("Instance stuck in pending, marking failed",
+						"instanceId", instance.ID, "status", instance.Status,
+						"elapsed", time.Since(*instance.Instance.LaunchTime))
+					d.markInstanceFailed(instance, "launch_timeout")
+				}
+			}
+		}
+	}()
 }
 
 func (d *Daemon) StartInstance(instance *vm.VM) error {

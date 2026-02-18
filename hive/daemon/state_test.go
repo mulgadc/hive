@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/vm"
@@ -856,4 +857,88 @@ func TestRestoreInstances_StoppedInstanceMigratedToSharedKV(t *testing.T) {
 	assert.Equal(t, vm.StateStopped, stoppedInst.Status)
 	assert.Equal(t, "node-1", stoppedInst.LastNode,
 		"stopped instance should record last node")
+}
+
+// TestRestoreInstances_UnknownTypeMigratedToStoppedWithReason verifies that an
+// instance whose type is not in the local type map gets moved to stopped with
+// an InsufficientInstanceCapacity state reason and migrated to shared KV.
+func TestRestoreInstances_UnknownTypeMigratedToStoppedWithReason(t *testing.T) {
+	daemon := createDaemonWithJetStream(t)
+
+	instanceID := "i-restore-notype"
+	daemon.Instances.VMS[instanceID] = &vm.VM{
+		ID:           instanceID,
+		InstanceType: "m7i.small", // type that won't exist on this host
+		Status:       vm.StateRunning,
+		Instance:     &ec2.Instance{},
+	}
+	require.NoError(t, daemon.WriteState())
+
+	// Simulate daemon restart
+	daemon.Instances.VMS = make(map[string]*vm.VM)
+	daemon.restoreInstances()
+
+	// Instance should not be in local map (migrated to shared KV)
+	_, ok := daemon.Instances.VMS[instanceID]
+	assert.False(t, ok, "instance with unknown type should be migrated to shared KV")
+
+	// Instance should be stopped in shared KV with capacity reason
+	stoppedInst, err := daemon.jsManager.LoadStoppedInstance(instanceID)
+	require.NoError(t, err)
+	require.NotNil(t, stoppedInst, "instance should exist in shared KV")
+	assert.Equal(t, vm.StateStopped, stoppedInst.Status)
+	require.NotNil(t, stoppedInst.Instance.StateReason)
+	assert.Equal(t, "Server.InsufficientInstanceCapacity", *stoppedInst.Instance.StateReason.Code)
+	assert.Contains(t, *stoppedInst.Instance.StateReason.Message, "m7i.small")
+}
+
+// TestPendingWatchdog_MarksStuckInstanceFailed verifies that the pending watchdog
+// detects instances stuck in pending beyond the timeout and marks them failed.
+func TestPendingWatchdog_MarksStuckInstanceFailed(t *testing.T) {
+	daemon := createDaemonWithJetStream(t)
+
+	staleTime := time.Now().Add(-6 * time.Minute)
+	recentTime := time.Now()
+
+	daemon.Instances.VMS["i-stuck"] = &vm.VM{
+		ID:     "i-stuck",
+		Status: vm.StatePending,
+		Instance: &ec2.Instance{
+			LaunchTime: &staleTime,
+		},
+	}
+	daemon.Instances.VMS["i-fresh"] = &vm.VM{
+		ID:     "i-fresh",
+		Status: vm.StatePending,
+		Instance: &ec2.Instance{
+			LaunchTime: &recentTime,
+		},
+	}
+
+	// Run one watchdog tick manually instead of waiting for the ticker
+	daemon.Instances.Mu.Lock()
+	var stuck []*vm.VM
+	for _, instance := range daemon.Instances.VMS {
+		if (instance.Status == vm.StatePending || instance.Status == vm.StateProvisioning) &&
+			instance.Instance != nil && instance.Instance.LaunchTime != nil &&
+			time.Since(*instance.Instance.LaunchTime) > 5*time.Minute {
+			stuck = append(stuck, instance)
+		}
+	}
+	daemon.Instances.Mu.Unlock()
+
+	for _, instance := range stuck {
+		daemon.markInstanceFailed(instance, "launch_timeout")
+	}
+
+	// Stuck instance should have transitioned to shutting-down
+	stuckInst := daemon.Instances.VMS["i-stuck"]
+	assert.Equal(t, vm.StateShuttingDown, stuckInst.Status)
+	require.NotNil(t, stuckInst.Instance.StateReason)
+	assert.Equal(t, "Server.InternalError", *stuckInst.Instance.StateReason.Code)
+	assert.Equal(t, "launch_timeout", *stuckInst.Instance.StateReason.Message)
+
+	// Fresh instance should still be pending
+	freshInst := daemon.Instances.VMS["i-fresh"]
+	assert.Equal(t, vm.StatePending, freshInst.Status)
 }

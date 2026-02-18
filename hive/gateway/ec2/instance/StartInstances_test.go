@@ -153,17 +153,9 @@ func TestStartInstances_MixedSuccessAndFailure(t *testing.T) {
 		InstanceIds: []*string{aws.String(goodID), aws.String(badID)},
 	}
 
-	output, err := StartInstances(input, nc)
+	_, err := StartInstances(input, nc)
 
-	require.NoError(t, err)
-	require.Len(t, output.StartingInstances, 2)
-
-	// First instance succeeded: state → pending
-	assert.Equal(t, goodID, *output.StartingInstances[0].InstanceId)
-	assert.Equal(t, "pending", *output.StartingInstances[0].CurrentState.Name)
-
-	// Second instance: daemon returned an error, state remains stopped
-	assert.Equal(t, badID, *output.StartingInstances[1].InstanceId)
-	assert.Equal(t, int64(80), *output.StartingInstances[1].CurrentState.Code)
-	assert.Equal(t, "stopped", *output.StartingInstances[1].CurrentState.Name)
+	// Daemon error for any instance should fail the whole call
+	require.Error(t, err)
+	assert.Equal(t, "InvalidInstanceID.NotFound", err.Error())
 }
