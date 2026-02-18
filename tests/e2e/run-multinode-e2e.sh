@@ -1197,16 +1197,20 @@ force_cleanup_all_nodes
 echo ""
 echo "Test 6c: Cluster Restart + Recovery"
 echo "----------------------------------------"
-echo "Restarting all node services..."
+echo "Restarting all node services concurrently..."
 
-start_node_services 1 "$HOME/node1"
-start_node_services 2 "$HOME/node2"
-start_node_services 3 "$HOME/node3"
+# Cluster restart requires concurrent startup: NATS needs route peers to form,
+# Predastore needs Raft quorum (2/3), and the daemon needs JetStream.
+# Sequential start would leave node1 waiting for quorum that never arrives.
+start_node_services 1 "$HOME/node1" &
+start_node_services 2 "$HOME/node2" &
+start_node_services 3 "$HOME/node3" &
+wait
 CLUSTER_SERVICES_STARTED="true"
 
 echo ""
 echo "Waiting for cluster to stabilize..."
-sleep 5
+sleep 10
 
 # Verify NATS cluster reformed
 echo ""
