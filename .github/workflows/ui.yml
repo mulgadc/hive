@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - ui
+      - dev
     paths:
       - hive/services/hiveui/frontend/**
       - .github/workflows/ui.yml
