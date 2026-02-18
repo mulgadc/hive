@@ -257,6 +257,53 @@ func TestGetServices_ExplicitList(t *testing.T) {
 	assert.Equal(t, []string{"nats", "predastore"}, services)
 }
 
+// Tests for NodeBaseDir
+
+func TestNodeBaseDir_HappyPath(t *testing.T) {
+	cc := &ClusterConfig{
+		Node: "node1",
+		Nodes: map[string]Config{
+			"node1": {BaseDir: "/data/node1"},
+		},
+	}
+	assert.Equal(t, "/data/node1", cc.NodeBaseDir())
+}
+
+func TestNodeBaseDir_NilConfig(t *testing.T) {
+	var cc *ClusterConfig
+	assert.Equal(t, "", cc.NodeBaseDir())
+}
+
+func TestNodeBaseDir_EmptyNode(t *testing.T) {
+	cc := &ClusterConfig{
+		Node: "",
+		Nodes: map[string]Config{
+			"node1": {BaseDir: "/data/node1"},
+		},
+	}
+	assert.Equal(t, "", cc.NodeBaseDir())
+}
+
+func TestNodeBaseDir_NodeNotInMap(t *testing.T) {
+	cc := &ClusterConfig{
+		Node: "missing",
+		Nodes: map[string]Config{
+			"node1": {BaseDir: "/data/node1"},
+		},
+	}
+	assert.Equal(t, "", cc.NodeBaseDir())
+}
+
+func TestNodeBaseDir_EmptyBaseDir(t *testing.T) {
+	cc := &ClusterConfig{
+		Node: "node1",
+		Nodes: map[string]Config{
+			"node1": {BaseDir: ""},
+		},
+	}
+	assert.Equal(t, "", cc.NodeBaseDir())
+}
+
 // Tests for type constants
 
 func TestNBDTransportConstants(t *testing.T) {

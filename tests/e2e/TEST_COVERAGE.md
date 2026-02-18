@@ -136,7 +136,13 @@
 - Verify NATS cluster (3 nodes)
 - Verify Predastore cluster (3 nodes)
 - Wait for gateway on node1
+- Wait for daemon NATS readiness
 - `describe-regions` (gateway connectivity check)
+
+### Phase 3b: Cluster Stats CLI
+- `hive get nodes` — verify all 3 nodes show Ready
+- `hive top nodes` — verify instance type capacity table
+- `hive get vms` — verify empty (no instances yet)
 
 ### Phase 4: Image and Key Setup
 - `describe-instance-types` (discover + select nano)
@@ -155,6 +161,13 @@
 - `run-instances` x3 (distribute across nodes)
 - Poll all instances to running state
 - Check instance distribution across nodes
+- `hive get vms` — verify all instances visible
+
+#### Test 1a-ii: SSH Connectivity & Volume Verification
+- SSH into all 3 instances via QEMU hostfwd port
+- Verify SSH connectivity (`id` command returns ec2-user)
+- Verify root volume size from inside VM matches API-reported size (`lsblk` vs `describe-volumes`)
+- Verify VM hostname
 
 #### Test 1b: Volume Lifecycle
 - `create-volume` (10GB)
@@ -206,8 +219,40 @@
 #### Test 4: NATS Cluster Health (Post-Operations)
 - Verify NATS cluster still healthy after all operations
 
-### Cleanup
+#### Test 5: VM Crash Recovery
+- Kill QEMU process with SIGKILL (simulate OOM kill)
+- Verify daemon detects crash (instance transitions to error/pending)
+- Wait for auto-restart (backoff starts at 5s)
+- Verify new QEMU PID differs from original
+- Verify instance reaches running state
+- Verify SSH connectivity after recovery
+
+#### Test 5b: Crash Loop Prevention
+- Kill QEMU 4 times rapidly on a third instance
+- Verify crash loop is detected and restarts stop after max attempts (3 in 10-min window)
+- Verify instance reaches error state (won't restart further)
+
+### Phase 6: Cluster Shutdown + Restart
+
+#### Test 6a: Dry-Run Shutdown
+- `hive admin cluster shutdown --dry-run`
+- Validate output contains all 5 phases (GATE, DRAIN, STORAGE, PERSIST, INFRA)
+
+#### Test 6b: Coordinated Cluster Shutdown
+- `hive admin cluster shutdown --force --timeout 60s`
+- Verify all services down on all nodes (gateway, NATS, QEMU)
+
+#### Test 6c: Cluster Restart + Recovery
+- Restart all 3 node services
+- Verify NATS cluster reforms (3 members)
+- Wait for gateway and daemon readiness
+- Smoke test: `describe-instance-types` returns valid results
+
+#### Test 6d: Instance Relaunch + Terminate
+- Wait for instances to finish relaunching after restart (pending → running/error)
 - `terminate-instances` (all 3 instances)
 - Poll all to terminated state
-- Stop all node services
+
+### Cleanup
+- Coordinated cluster shutdown (with fallback to per-node PID stops)
 - Remove simulated IPs

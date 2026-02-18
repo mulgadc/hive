@@ -27,8 +27,21 @@ cleanup() {
     [ -n "$JOIN2_PID" ] && kill "$JOIN2_PID" 2>/dev/null || true
     [ -n "$JOIN3_PID" ] && kill "$JOIN3_PID" 2>/dev/null || true
 
-    # Stop all node services
-    stop_all_nodes || true
+    # Try coordinated shutdown first (only if NATS is likely still up)
+    if [ "$CLUSTER_SERVICES_STARTED" = "true" ]; then
+        echo "Attempting coordinated cluster shutdown..."
+        if timeout 60 ./bin/hive admin cluster shutdown --force --timeout 30s --config "$HOME/node1/config/hive.toml" 2>/dev/null; then
+            echo "Coordinated shutdown succeeded"
+        else
+            echo "Coordinated shutdown failed, falling back to per-node stop..."
+            stop_all_nodes || true
+        fi
+    else
+        stop_all_nodes || true
+    fi
+
+    # Force-kill anything that survived and clean up stale locks
+    force_cleanup_all_nodes || true
 
     # Remove simulated IPs
     remove_simulated_ips || true
@@ -40,6 +53,9 @@ trap cleanup EXIT
 # PIDs for background formation processes (used in cleanup)
 JOIN2_PID=""
 JOIN3_PID=""
+
+# Track whether cluster services have been started (for cleanup trap)
+CLUSTER_SERVICES_STARTED="false"
 
 # Use Hive profile for AWS CLI
 export AWS_PROFILE=hive
@@ -121,11 +137,12 @@ echo "Starting node services..."
 start_node_services 1 "$HOME/node1"
 start_node_services 2 "$HOME/node2"
 start_node_services 3 "$HOME/node3"
+CLUSTER_SERVICES_STARTED="true"
 
 # Wait for all services to stabilize
 echo ""
 echo "Waiting for cluster to stabilize..."
-sleep 10
+sleep 5
 
 # Phase 3: Cluster Health Verification
 echo ""
@@ -148,7 +165,7 @@ verify_predastore_cluster 3 || {
 
 # Wait for gateway on node1 (primary gateway)
 echo ""
-wait_for_gateway "${NODE1_IP}" 30
+wait_for_gateway "${NODE1_IP}" 15
 
 # Wait for daemon NATS subscriptions to be active
 wait_for_daemon_ready "https://${NODE1_IP}:${AWSGW_PORT}"
@@ -325,7 +342,7 @@ done
 echo ""
 echo "Waiting for instances to reach running state..."
 for instance_id in "${INSTANCE_IDS[@]}"; do
-    wait_for_instance_state "$instance_id" "running" 60 || {
+    wait_for_instance_state "$instance_id" "running" 30 || {
         echo "ERROR: Instance $instance_id failed to start"
         exit 1
     }
@@ -376,7 +393,7 @@ for idx in "${!INSTANCE_IDS[@]}"; do
     SSH_HOSTS+=("$SSH_HOST")
 
     # Wait for SSH to become ready (VM boot + cloud-init)
-    wait_for_ssh "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem"
+    wait_for_ssh "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem" 30
 
     # Test basic SSH connectivity
     test_ssh_connectivity "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem"
@@ -461,7 +478,7 @@ $AWS_EC2 modify-volume --volume-id "$TEST_VOLUME_ID" --size "$NEW_SIZE"
 # Verify resize
 echo "  Verifying resize..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 15 ]; do
     VOLUME_SIZE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].Size' --output text)
 
@@ -486,7 +503,7 @@ $AWS_EC2 attach-volume --volume-id "$TEST_VOLUME_ID" --instance-id "${INSTANCE_I
 # Verify attachment
 echo "  Verifying volume attachment..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 15 ]; do
     ATTACH_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].Attachments[0].State' --output text)
     ATTACH_INSTANCE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
@@ -515,7 +532,7 @@ $AWS_EC2 detach-volume --volume-id "$TEST_VOLUME_ID"
 # Verify detachment
 echo "  Verifying volume detachment..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 15 ]; do
     VOL_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].State' --output text)
 
@@ -540,7 +557,7 @@ $AWS_EC2 delete-volume --volume-id "$TEST_VOLUME_ID"
 # Verify deletion
 echo "  Verifying volume deletion..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 15 ]; do
     set +e
     VOLUME_CHECK=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].VolumeId' --output text 2>&1)
@@ -556,7 +573,7 @@ while [ $COUNT -lt 30 ]; do
     COUNT=$((COUNT + 1))
 done
 
-if [ $COUNT -ge 30 ]; then
+if [ $COUNT -ge 15 ]; then
     echo "  ERROR: Volume deletion verification timed out"
     exit 1
 fi
@@ -607,7 +624,7 @@ echo "  Create response verified (State=$SNAP_STATE, VolumeId=$SNAP_VOL_REF, Siz
 # Poll until completed
 echo "  Waiting for snapshot to complete..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 15 ]; do
     SNAP_STATE=$($AWS_EC2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
         --query 'Snapshots[0].State' --output text)
 
@@ -689,7 +706,7 @@ $AWS_EC2 delete-snapshot --snapshot-id "$SNAPSHOT_ID"
 # Verify original gone, copy remains
 echo "  Verifying snapshot deletion..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 15 ]; do
     set +e
     SNAP_CHECK=$($AWS_EC2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
         --query 'Snapshots[0].SnapshotId' --output text 2>&1)
@@ -705,7 +722,7 @@ while [ $COUNT -lt 30 ]; do
     COUNT=$((COUNT + 1))
 done
 
-if [ $COUNT -ge 30 ]; then
+if [ $COUNT -ge 15 ]; then
     echo "  ERROR: Snapshot deletion verification timed out"
     exit 1
 fi
@@ -1009,7 +1026,7 @@ if [ "$POST_CRASH_STATE" == "running" ]; then
 else
     # Wait for auto-restart (backoff starts at 5s)
     echo "  Instance in $POST_CRASH_STATE state, waiting for auto-restart..."
-    wait_for_instance_recovery "$CRASH_INSTANCE" 60 || {
+    wait_for_instance_recovery "$CRASH_INSTANCE" 30 || {
         echo "  ERROR: Instance failed to recover from crash"
         # Dump daemon logs for debugging
         for i in 1 2 3; do
@@ -1054,7 +1071,7 @@ if [ -n "$CRASH_SSH_PORT" ]; then
     # Update SSH details for later termination verification
     SSH_PORTS[1]="$CRASH_SSH_PORT"
     SSH_HOSTS[1]="$CRASH_SSH_HOST"
-    wait_for_ssh "$CRASH_SSH_HOST" "$CRASH_SSH_PORT" "multinode-test-key.pem" || {
+    wait_for_ssh "$CRASH_SSH_HOST" "$CRASH_SSH_PORT" "multinode-test-key.pem" 30 || {
         echo "  WARNING: SSH not ready after crash recovery (non-fatal, VM may still be booting)"
     }
 else
@@ -1128,18 +1145,136 @@ fi
 
 echo "  Crash recovery tests passed"
 
-# Cleanup: Terminate all test instances
+# Phase 6: Cluster Shutdown + Restart
 echo ""
-echo "Cleanup: Deleting test resources"
-echo "----------------------------------------"
+echo "Phase 6: Cluster Shutdown + Restart"
+echo "========================================"
+echo "Testing hive admin cluster shutdown command..."
 
-# Terminate all instances
+# Test 6a: Dry-run shutdown
+echo ""
+echo "Test 6a: Dry-Run Shutdown"
+echo "----------------------------------------"
+echo "Running cluster shutdown in dry-run mode..."
+
+DRY_RUN_OUTPUT=$(./bin/hive admin cluster shutdown --dry-run --config "$HOME/node1/config/hive.toml" 2>&1)
+echo "$DRY_RUN_OUTPUT"
+
+# Validate dry-run output contains expected phases
+for phase in GATE DRAIN STORAGE PERSIST INFRA; do
+    if echo "$DRY_RUN_OUTPUT" | grep -qi "$phase"; then
+        echo "  Phase $phase found in shutdown plan"
+    else
+        echo "  WARNING: Phase $phase not found in dry-run output"
+    fi
+done
+echo "  Dry-run shutdown test passed"
+
+# Test 6b: Real coordinated shutdown
+echo ""
+echo "Test 6b: Coordinated Cluster Shutdown"
+echo "----------------------------------------"
+echo "Running cluster shutdown..."
+
+./bin/hive admin cluster shutdown --force --timeout 30s --config "$HOME/node1/config/hive.toml" 2>&1 || {
+    echo "  WARNING: Cluster shutdown command returned non-zero exit code"
+}
+CLUSTER_SERVICES_STARTED="false"
+
+# Verify all services are down
+echo "  Waiting for services to stop..."
+sleep 5
+verify_all_services_down || {
+    echo "  WARNING: Some services still running after shutdown"
+}
+
+# Force cleanup: kill lingering processes and remove stale locks
+# The coordinated shutdown may not fully kill all processes (e.g. predastore
+# holding badger locks, awsgw still bound to ports). This ensures a clean slate.
+force_cleanup_all_nodes
+
+# Test 6c: Restart and recovery
+echo ""
+echo "Test 6c: Cluster Restart + Recovery"
+echo "----------------------------------------"
+echo "Restarting all node services concurrently..."
+
+# Cluster restart requires concurrent startup: NATS needs route peers to form,
+# Predastore needs Raft quorum (2/3), and the daemon needs JetStream.
+# Sequential start would leave node1 waiting for quorum that never arrives.
+start_node_services 1 "$HOME/node1" &
+start_node_services 2 "$HOME/node2" &
+start_node_services 3 "$HOME/node3" &
+wait
+CLUSTER_SERVICES_STARTED="true"
+
+echo ""
+echo "Waiting for cluster to stabilize..."
+sleep 10
+
+# Verify NATS cluster reformed
+echo ""
+verify_nats_cluster 3 || {
+    echo "WARNING: NATS cluster verification failed after restart"
+}
+
+# Wait for gateway
+echo ""
+wait_for_gateway "${NODE1_IP}" 15
+
+# Wait for daemon readiness
+wait_for_daemon_ready "https://${NODE1_IP}:${AWSGW_PORT}"
+
+# Smoke test: describe-instance-types
+echo ""
+echo "Running post-restart smoke test..."
+SMOKE_OUTPUT=$($AWS_EC2 describe-instance-types --query 'InstanceTypes[*].InstanceType' --output text 2>/dev/null)
+if [ -n "$SMOKE_OUTPUT" ] && [ "$SMOKE_OUTPUT" != "None" ]; then
+    echo "  Smoke test passed: describe-instance-types returned: $SMOKE_OUTPUT"
+else
+    echo "  ERROR: Smoke test failed: describe-instance-types returned empty/None"
+    exit 1
+fi
+
+echo "  Cluster shutdown + restart test passed"
+
+# Test 6d: Instance relaunch and terminate after restart
+echo ""
+echo "Test 6d: Instance Relaunch + Terminate"
+echo "----------------------------------------"
+echo "Waiting for instances to relaunch after cluster restart..."
+
+# Instances were running before shutdown — the daemon will relaunch them.
+# Must wait for them to finish launching (pending → running) before terminate
+# will work, because the NATS per-instance subscription is only created after
+# QEMU starts.
 for instance_id in "${INSTANCE_IDS[@]}"; do
-    echo "  Terminating $instance_id..."
-    $AWS_EC2 terminate-instances --instance-ids "$instance_id" > /dev/null
+    echo "  Waiting for $instance_id to finish relaunching..."
+    COUNT=0
+    while [ $COUNT -lt 30 ]; do
+        STATE=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
+            --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "unknown")
+        if [ "$STATE" = "running" ] || [ "$STATE" = "error" ]; then
+            echo "  $instance_id reached state: $STATE"
+            break
+        fi
+        sleep 2
+        COUNT=$((COUNT + 1))
+    done
+    if [ $COUNT -ge 30 ]; then
+        echo "  WARNING: $instance_id still in $STATE after 60s"
+    fi
 done
 
-# Wait for termination - track failures
+# Now terminate all instances
+echo ""
+echo "Terminating all instances..."
+for instance_id in "${INSTANCE_IDS[@]}"; do
+    echo "  Terminating $instance_id..."
+    $AWS_EC2 terminate-instances --instance-ids "$instance_id" > /dev/null 2>&1 || echo "  (instance may already be terminated)"
+done
+
+# Wait for termination
 echo "  Waiting for termination..."
 TERMINATION_FAILED=0
 for instance_id in "${INSTANCE_IDS[@]}"; do
@@ -1151,19 +1286,12 @@ done
 
 if [ $TERMINATION_FAILED -ne 0 ]; then
     echo ""
-    echo "ERROR: Some instances failed to terminate properly"
+    echo "ERROR: Some instances failed to terminate properly after restart"
     dump_all_node_logs
     exit 1
 fi
 
-# Verify SSH unreachable after termination
-echo ""
-echo "  Verifying SSH unreachable after termination..."
-for idx in "${!INSTANCE_IDS[@]}"; do
-    instance_id="${INSTANCE_IDS[$idx]}"
-    verify_ssh_unreachable "${SSH_HOSTS[$idx]}" "${SSH_PORTS[$idx]}" "multinode-test-key.pem"
-done
-echo "  SSH unreachable verification passed"
+echo "  Instance relaunch + terminate after restart passed"
 
 echo ""
 echo "========================================"

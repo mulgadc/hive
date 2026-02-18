@@ -318,6 +318,73 @@ func WritePidFile(name string, pid int) error {
 	return nil
 }
 
+// WritePidFileTo writes a PID file to a specific directory. If dir is empty,
+// falls back to the default pidPath(). Used by services that know their own
+// data directory (e.g. predastore's BasePath) to avoid PID file collisions
+// when multiple nodes run on the same host.
+func WritePidFileTo(dir string, name string, pid int) error {
+	if dir == "" {
+		return WritePidFile(name, pid)
+	}
+
+	pidFilename := filepath.Join(dir, fmt.Sprintf("%s.pid", name))
+
+	pidFile, err := os.Create(pidFilename)
+	if err != nil {
+		return err
+	}
+
+	defer pidFile.Close()
+	_, err = pidFile.WriteString(fmt.Sprintf("%d", pid))
+	return err
+}
+
+// ReadPidFileFrom reads a PID from a file in a specific directory. If dir is
+// empty, falls back to the default pidPath().
+func ReadPidFileFrom(dir string, name string) (int, error) {
+	if dir == "" {
+		return ReadPidFile(name)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("%s.pid", name)))
+	if err != nil {
+		return 0, err
+	}
+
+	data = bytes.TrimSpace(data)
+	return strconv.Atoi(string(data))
+}
+
+// RemovePidFileAt removes a PID file from a specific directory. If dir is
+// empty, falls back to the default pidPath().
+func RemovePidFileAt(dir string, name string) error {
+	if dir == "" {
+		return RemovePidFile(name)
+	}
+	return os.Remove(filepath.Join(dir, fmt.Sprintf("%s.pid", name)))
+}
+
+// StopProcessAt stops a process using a PID file in a specific directory.
+// If dir is empty, falls back to the default pidPath(). The PID file is
+// always removed, even if the process is already dead, to prevent stale
+// PID files from accumulating across restarts.
+func StopProcessAt(dir string, name string) error {
+	pid, err := ReadPidFileFrom(dir, name)
+	if err != nil {
+		return err
+	}
+
+	killErr := KillProcess(pid)
+
+	// Always remove the PID file to avoid stale entries. If the process is
+	// already dead, the PID file is stale and must be cleaned up.
+	if removeErr := RemovePidFileAt(dir, name); removeErr != nil && killErr == nil {
+		return removeErr
+	}
+
+	return killErr
+}
+
 func RemovePidFile(serviceName string) error {
 
 	pidPath := pidPath()
@@ -336,19 +403,13 @@ func RuntimeDir() string {
 }
 
 func pidPath() string {
-	var pidPath string
-
-	// CHeck if a directory exists
-
 	if os.Getenv("XDG_RUNTIME_DIR") != "" {
-		pidPath = os.Getenv("XDG_RUNTIME_DIR")
-	} else if dirExists(fmt.Sprintf("%s/%s", os.Getenv("HOME"), "hive")) {
-		pidPath = filepath.Join(os.Getenv("HOME"), "hive")
-	} else {
-		pidPath = os.TempDir()
+		return os.Getenv("XDG_RUNTIME_DIR")
 	}
-
-	return pidPath
+	if dirExists(fmt.Sprintf("%s/%s", os.Getenv("HOME"), "hive")) {
+		return filepath.Join(os.Getenv("HOME"), "hive")
+	}
+	return os.TempDir()
 }
 
 func StopProcess(serviceName string) error {
