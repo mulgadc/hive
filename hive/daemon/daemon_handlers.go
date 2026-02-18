@@ -1509,8 +1509,9 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 	// Allocate resources
 	instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
 	if !ok {
-		slog.Error("handleEC2StartStoppedInstance: unknown instance type", "instanceId", req.InstanceID, "instanceType", instance.InstanceType)
-		respondWithError(awserrors.ErrorInvalidInstanceType)
+		slog.Error("handleEC2StartStoppedInstance: instance type not available on this node",
+			"instanceId", req.InstanceID, "instanceType", instance.InstanceType)
+		respondWithError(awserrors.ErrorInsufficientInstanceCapacity)
 		return
 	}
 	if err := d.resourceMgr.allocate(instanceType); err != nil {
