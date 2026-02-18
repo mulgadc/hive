@@ -8,12 +8,10 @@
 # Accept optional data directory argument
 DATA_DIR="${1:-$HOME/hive}"
 
-# If path is provided, use for pid location, else the default for Hive
-if [ -n "$1" ]; then
-    PID_DIR="$DATA_DIR/logs"
-else
-    PID_DIR=""
-fi
+# Always use the logs directory for PID files — start-dev.sh writes shell PIDs
+# there, and Go services write PIDs to their own data dirs. This ensures
+# consistent stop behavior for both single-node and multi-node setups.
+PID_DIR="$DATA_DIR/logs"
 
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

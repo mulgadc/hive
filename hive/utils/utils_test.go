@@ -823,6 +823,49 @@ func TestGeneratePidFile_EmptyName(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestWritePidFileTo(t *testing.T) {
+	dir := t.TempDir()
+
+	cmd := exec.Command("cat")
+	require.NoError(t, cmd.Start())
+	defer cmd.Process.Kill()
+
+	// Write PID to custom directory
+	err := WritePidFileTo(dir, "testservice", cmd.Process.Pid)
+	require.NoError(t, err)
+
+	// Read it back from the same directory
+	pid, err := ReadPidFileFrom(dir, "testservice")
+	require.NoError(t, err)
+	assert.Equal(t, cmd.Process.Pid, pid)
+
+	// Clean up
+	err = RemovePidFileAt(dir, "testservice")
+	assert.NoError(t, err)
+
+	// Verify it's gone
+	_, err = ReadPidFileFrom(dir, "testservice")
+	assert.Error(t, err)
+}
+
+func TestWritePidFileTo_EmptyDir(t *testing.T) {
+	// With empty dir, should fall back to default pidPath()
+	cmd := exec.Command("cat")
+	require.NoError(t, cmd.Start())
+	defer cmd.Process.Kill()
+
+	err := WritePidFileTo("", "pidto-fallback", cmd.Process.Pid)
+	require.NoError(t, err)
+
+	// Should be readable via the default ReadPidFile
+	pid, err := ReadPidFile("pidto-fallback")
+	require.NoError(t, err)
+	assert.Equal(t, cmd.Process.Pid, pid)
+
+	// Clean up
+	RemovePidFile("pidto-fallback")
+}
+
 func TestGenerateSocketFile_EmptyName(t *testing.T) {
 	_, err := GenerateSocketFile("")
 	assert.Error(t, err)

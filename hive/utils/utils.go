@@ -318,6 +318,67 @@ func WritePidFile(name string, pid int) error {
 	return nil
 }
 
+// WritePidFileTo writes a PID file to a specific directory. If dir is empty,
+// falls back to the default pidPath(). Used by services that know their own
+// data directory (e.g. predastore's BasePath) to avoid PID file collisions
+// when multiple nodes run on the same host.
+func WritePidFileTo(dir string, name string, pid int) error {
+	if dir == "" {
+		return WritePidFile(name, pid)
+	}
+
+	pidFilename := filepath.Join(dir, fmt.Sprintf("%s.pid", name))
+
+	pidFile, err := os.Create(pidFilename)
+	if err != nil {
+		return err
+	}
+
+	defer pidFile.Close()
+	_, err = pidFile.WriteString(fmt.Sprintf("%d", pid))
+	return err
+}
+
+// ReadPidFileFrom reads a PID from a file in a specific directory. If dir is
+// empty, falls back to the default pidPath().
+func ReadPidFileFrom(dir string, name string) (int, error) {
+	if dir == "" {
+		return ReadPidFile(name)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("%s.pid", name)))
+	if err != nil {
+		return 0, err
+	}
+
+	data = bytes.TrimSpace(data)
+	return strconv.Atoi(string(data))
+}
+
+// RemovePidFileAt removes a PID file from a specific directory. If dir is
+// empty, falls back to the default pidPath().
+func RemovePidFileAt(dir string, name string) error {
+	if dir == "" {
+		return RemovePidFile(name)
+	}
+	return os.Remove(filepath.Join(dir, fmt.Sprintf("%s.pid", name)))
+}
+
+// StopProcessAt stops a process using a PID file in a specific directory.
+// If dir is empty, falls back to the default pidPath().
+func StopProcessAt(dir string, name string) error {
+	pid, err := ReadPidFileFrom(dir, name)
+	if err != nil {
+		return err
+	}
+
+	if err := KillProcess(pid); err != nil {
+		return err
+	}
+
+	return RemovePidFileAt(dir, name)
+}
+
 func RemovePidFile(serviceName string) error {
 
 	pidPath := pidPath()
@@ -331,12 +392,6 @@ func RemovePidFile(serviceName string) error {
 }
 
 func pidPath() string {
-	// HIVE_PID_DIR is set per-node in multi-node deployments so each node
-	// gets its own PID directory (avoids PID file collisions on a single host).
-	if dir := os.Getenv("HIVE_PID_DIR"); dir != "" {
-		return dir
-	}
-
 	if os.Getenv("XDG_RUNTIME_DIR") != "" {
 		return os.Getenv("XDG_RUNTIME_DIR")
 	}

@@ -26,11 +26,6 @@ echo "Using configuration directory: $CONFIG_DIR"
 LOGS_DIR="$DATA_DIR/logs"
 WAL_DIR="$DATA_DIR/hive"
 
-# Tell Go services to write PID files into the per-node logs directory.
-# Critical for multi-node setups on a single host — without this, all nodes
-# clobber the same PID file in $HOME/hive/ and StopProcess kills the wrong process.
-export HIVE_PID_DIR="$LOGS_DIR"
-
 echo "🚀 Starting Hive development environment..."
 echo "Project root: $PROJECT_ROOT"
 echo "Data directory: $DATA_DIR"

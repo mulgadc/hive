@@ -34,7 +34,7 @@ func New(config any) (svc *Service, err error) {
 }
 
 func (svc *Service) Start() (int, error) {
-	if err := utils.WritePidFile(serviceName, os.Getpid()); err != nil {
+	if err := utils.WritePidFileTo(svc.Config.DataDir, serviceName, os.Getpid()); err != nil {
 		slog.Error("Failed to write pid file", "err", err)
 	}
 	err := launchService(svc.Config)
@@ -45,8 +45,7 @@ func (svc *Service) Start() (int, error) {
 }
 
 func (svc *Service) Stop() (err error) {
-	err = utils.StopProcess(serviceName)
-	return err
+	return utils.StopProcessAt(svc.Config.DataDir, serviceName)
 }
 
 func (svc *Service) Status() (string, error) {

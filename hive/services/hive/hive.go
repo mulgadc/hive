@@ -27,8 +27,18 @@ func (svc *Service) SetConfigPath(path string) {
 	svc.ConfigPath = path
 }
 
+func (svc *Service) nodeBaseDir() string {
+	if svc.Config == nil || svc.Config.Node == "" {
+		return ""
+	}
+	if node, ok := svc.Config.Nodes[svc.Config.Node]; ok {
+		return node.BaseDir
+	}
+	return ""
+}
+
 func (svc *Service) Start() (int, error) {
-	if err := utils.WritePidFile(serviceName, os.Getpid()); err != nil {
+	if err := utils.WritePidFileTo(svc.nodeBaseDir(), serviceName, os.Getpid()); err != nil {
 		slog.Error("Failed to write pid file", "err", err)
 	}
 	err := launchService(svc.Config, svc.ConfigPath)
@@ -40,8 +50,7 @@ func (svc *Service) Start() (int, error) {
 }
 
 func (svc *Service) Stop() (err error) {
-	err = utils.StopProcess(serviceName)
-	return err
+	return utils.StopProcessAt(svc.nodeBaseDir(), serviceName)
 }
 
 func (svc *Service) Status() (string, error) {
