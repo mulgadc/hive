@@ -365,18 +365,24 @@ func RemovePidFileAt(dir string, name string) error {
 }
 
 // StopProcessAt stops a process using a PID file in a specific directory.
-// If dir is empty, falls back to the default pidPath().
+// If dir is empty, falls back to the default pidPath(). The PID file is
+// always removed, even if the process is already dead, to prevent stale
+// PID files from accumulating across restarts.
 func StopProcessAt(dir string, name string) error {
 	pid, err := ReadPidFileFrom(dir, name)
 	if err != nil {
 		return err
 	}
 
-	if err := KillProcess(pid); err != nil {
-		return err
+	killErr := KillProcess(pid)
+
+	// Always remove the PID file to avoid stale entries. If the process is
+	// already dead, the PID file is stale and must be cleaned up.
+	if removeErr := RemovePidFileAt(dir, name); removeErr != nil && killErr == nil {
+		return removeErr
 	}
 
-	return RemovePidFileAt(dir, name)
+	return killErr
 }
 
 func RemovePidFile(serviceName string) error {

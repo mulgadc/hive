@@ -24,18 +24,8 @@ func New(cfg any) (svc *Service, err error) {
 	return svc, nil
 }
 
-func (svc *Service) nodeBaseDir() string {
-	if svc.Config == nil || svc.Config.Node == "" {
-		return ""
-	}
-	if node, ok := svc.Config.Nodes[svc.Config.Node]; ok {
-		return node.BaseDir
-	}
-	return ""
-}
-
 func (svc *Service) Start() (int, error) {
-	if err := utils.WritePidFileTo(svc.nodeBaseDir(), serviceName, os.Getpid()); err != nil {
+	if err := utils.WritePidFileTo(svc.Config.NodeBaseDir(), serviceName, os.Getpid()); err != nil {
 		slog.Error("Failed to write pid file", "err", err)
 	}
 	err := launchService(svc.Config)
@@ -47,7 +37,7 @@ func (svc *Service) Start() (int, error) {
 }
 
 func (svc *Service) Stop() (err error) {
-	return utils.StopProcessAt(svc.nodeBaseDir(), serviceName)
+	return utils.StopProcessAt(svc.Config.NodeBaseDir(), serviceName)
 }
 
 func (svc *Service) Status() (string, error) {

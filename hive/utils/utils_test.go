@@ -866,6 +866,62 @@ func TestWritePidFileTo_EmptyDir(t *testing.T) {
 	RemovePidFile("pidto-fallback")
 }
 
+func TestStopProcessAt(t *testing.T) {
+	dir := t.TempDir()
+
+	// Start a process we can kill
+	cmd := exec.Command("sleep", "60")
+	require.NoError(t, cmd.Start())
+
+	// Write PID file
+	err := WritePidFileTo(dir, "stopat-test", cmd.Process.Pid)
+	require.NoError(t, err)
+
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		err := StopProcessAt(dir, "stopat-test")
+		assert.NoError(t, err)
+
+		// Verify PID file was removed
+		_, err = ReadPidFileFrom(dir, "stopat-test")
+		assert.Error(t, err, "PID file should be removed")
+	}()
+
+	// Reap the process
+	if err := cmd.Wait(); err != nil {
+		t.Logf("process exited after SIGTERM: %v", err)
+	}
+}
+
+func TestStopProcessAt_StaleProcess(t *testing.T) {
+	dir := t.TempDir()
+
+	// Start a process and let it exit, leaving a stale PID file
+	cmd := exec.Command("true")
+	require.NoError(t, cmd.Start())
+	stalePid := cmd.Process.Pid
+	require.NoError(t, cmd.Wait())
+
+	// Write stale PID file
+	err := WritePidFileTo(dir, "stale-test", stalePid)
+	require.NoError(t, err)
+
+	// StopProcessAt should return an error (process is dead) but still
+	// clean up the PID file
+	err = StopProcessAt(dir, "stale-test")
+	assert.Error(t, err, "should error because process is already dead")
+
+	// PID file must be removed despite the kill error
+	_, err = ReadPidFileFrom(dir, "stale-test")
+	assert.Error(t, err, "PID file should be removed even when process is already dead")
+}
+
+func TestStopProcessAt_NoPidFile(t *testing.T) {
+	dir := t.TempDir()
+	err := StopProcessAt(dir, "nonexistent")
+	assert.Error(t, err, "should error when PID file does not exist")
+}
+
 func TestGenerateSocketFile_EmptyName(t *testing.T) {
 	_, err := GenerateSocketFile("")
 	assert.Error(t, err)

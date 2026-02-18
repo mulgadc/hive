@@ -97,5 +97,5 @@ done
 
 echo ""
 echo "Multi-node cluster is running!"
-echo "  Stop with: ./scripts/stop-multi-node.sh"
+echo "  Stop with: ./scripts/stop-dev.sh"
 echo "  Logs: ~/node{1,2,3}/logs/"

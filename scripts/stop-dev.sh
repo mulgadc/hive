@@ -77,19 +77,18 @@ stop_service() {
 
     echo "🛑 Stopping $name $pidpath..."
 
+    local rc=0
     # Workaround for local development for multi-node config on single instance
     if [ -n "$pidpath" ]; then
-        kill -SIGTERM `cat $pidpath/$name.pid`
+        kill -SIGTERM $(cat "$pidpath/$name.pid" 2>/dev/null) 2>/dev/null || rc=$?
         sleep 1
     else
     # Correct graceful shutdown via hive binary, waits for clean exit
-        $PROJECT_ROOT/bin/hive service $name stop
+        $PROJECT_ROOT/bin/hive service $name stop || rc=$?
     fi
 
-    echo "Status: $?"
-
-    if [[ $? -ne 0 ]]; then
-        echo "⚠️  Failed to stop $name"
+    if [[ $rc -ne 0 ]]; then
+        echo "⚠️  Failed to stop $name (exit code $rc)"
         return 1
     else
         echo "✅ $name stopped"
