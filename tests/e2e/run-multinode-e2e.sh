@@ -1278,7 +1278,7 @@ done
 echo "  Waiting for termination..."
 TERMINATION_FAILED=0
 for instance_id in "${INSTANCE_IDS[@]}"; do
-    if ! wait_for_instance_state "$instance_id" "terminated" 15; then
+    if ! wait_for_instance_state "$instance_id" "terminated" 20; then
         echo "  WARNING: Failed to confirm termination of $instance_id"
         TERMINATION_FAILED=1
     fi
