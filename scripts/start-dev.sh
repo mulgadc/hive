@@ -375,7 +375,7 @@ if is_multinode; then
                 echo "   $peer: healthy"
                 break
             fi
-            ((attempts++))
+            attempts=$((attempts + 1))
             if [ $attempts -lt $max_attempts ]; then
                 sleep 2
             fi

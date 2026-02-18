@@ -51,7 +51,7 @@ func New(config any) (svc *Service, err error) {
 
 // Start starts the predastore service
 func (svc *Service) Start() (int, error) {
-	if err := utils.WritePidFile(serviceName, os.Getpid()); err != nil {
+	if err := utils.WritePidFileTo(svc.Config.BasePath, serviceName, os.Getpid()); err != nil {
 		slog.Error("Failed to write pid file", "err", err)
 	}
 
@@ -96,7 +96,7 @@ func (svc *Service) Start() (int, error) {
 
 // Stop stops the predastore service
 func (svc *Service) Stop() error {
-	return utils.StopProcess(serviceName)
+	return utils.StopProcessAt(svc.Config.BasePath, serviceName)
 }
 
 // Status returns the status of the predastore service

@@ -78,7 +78,7 @@ HIVE_SKIP_BUILD=true ./scripts/start-dev.sh
 
 # Wait for health checks on https://localhost:9999 (AWS Gateway)
 echo "Waiting for AWS Gateway..."
-MAX_RETRIES=30
+MAX_RETRIES=15
 COUNT=0
 
 until curl -s https://localhost:9999 > /dev/null || [ $COUNT -eq $MAX_RETRIES ]; do
@@ -254,18 +254,18 @@ echo "Launched Instance ID: $INSTANCE_ID"
 echo "Polling for instance running state..."
 COUNT=0
 STATE="unknown"
-while [ $COUNT -lt 60 ]; do
+while [ $COUNT -lt 30 ]; do
     # Capture full output to check if instance even exists in the response
     DESCRIBE_OUTPUT=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID") || {
-        echo "⚠️  Gateway request failed, retrying... ($COUNT/60)"
-        sleep 5
+        echo "⚠️  Gateway request failed, retrying... ($COUNT/30)"
+        sleep 2
         COUNT=$((COUNT + 1))
         continue
     }
 
     if [ -z "$DESCRIBE_OUTPUT" ]; then
         echo "⚠️  Gateway returned empty response, retrying..."
-        sleep 5
+        sleep 2
         COUNT=$((COUNT + 1))
         continue
     fi
@@ -283,7 +283,7 @@ while [ $COUNT -lt 60 ]; do
         exit 1
     fi
 
-    sleep 5
+    sleep 2
     COUNT=$((COUNT + 1))
 done
 
@@ -342,7 +342,7 @@ SSH_HOST=$(get_ssh_host "$INSTANCE_ID")
 echo "SSH endpoint: $SSH_HOST:$SSH_PORT"
 
 # Wait for SSH to become ready (VM boot + cloud-init)
-wait_for_ssh "$SSH_HOST" "$SSH_PORT" "test-key-1.pem"
+wait_for_ssh "$SSH_HOST" "$SSH_PORT" "test-key-1.pem" 30
 
 # Test basic SSH connectivity
 test_ssh_connectivity "$SSH_HOST" "$SSH_PORT" "test-key-1.pem"
@@ -888,7 +888,7 @@ while [ $COUNT -lt 30 ]; do
     if [ "$STATE" == "stopped" ]; then
         break
     fi
-    sleep 5
+    sleep 2
     COUNT=$((COUNT + 1))
 done
 
@@ -923,7 +923,7 @@ while [ $COUNT -lt 30 ]; do
     if [ "$STATE" == "running" ]; then
         break
     fi
-    sleep 5
+    sleep 2
     COUNT=$((COUNT + 1))
 done
 
@@ -955,10 +955,10 @@ echo "Launched 2 instances: $MULTI_ID_1, $MULTI_ID_2"
 for MID in "$MULTI_ID_1" "$MULTI_ID_2"; do
     echo "Waiting for $MID to reach running state..."
     COUNT=0
-    while [ $COUNT -lt 60 ]; do
+    while [ $COUNT -lt 30 ]; do
         MSTATE=$($AWS_EC2 describe-instances --instance-ids "$MID" \
             --query 'Reservations[0].Instances[0].State.Name' --output text) || {
-            sleep 5
+            sleep 2
             COUNT=$((COUNT + 1))
             continue
         }
@@ -966,7 +966,7 @@ for MID in "$MULTI_ID_1" "$MULTI_ID_2"; do
             echo "Instance $MID is running"
             break
         fi
-        sleep 5
+        sleep 2
         COUNT=$((COUNT + 1))
     done
     if [ "$MSTATE" != "running" ]; then
@@ -986,7 +986,7 @@ for MID in "$MULTI_ID_1" "$MULTI_ID_2"; do
         if [ "$MSTATE" == "terminated" ] || [ "$MSTATE" == "None" ]; then
             break
         fi
-        sleep 5
+        sleep 2
         COUNT=$((COUNT + 1))
     done
 done
@@ -1060,7 +1060,7 @@ while [ $COUNT -lt 30 ]; do
     if [ "$STATE" == "terminated" ] || [ "$STATE" == "None" ]; then
         break
     fi
-    sleep 5
+    sleep 2
     COUNT=$((COUNT + 1))
 done
 

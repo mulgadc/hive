@@ -190,7 +190,7 @@ wait_for_instance_state() {
 # Usage: wait_for_gateway [host] [max_attempts]
 wait_for_gateway() {
     local host="${1:-localhost}"
-    local max_attempts="${2:-30}"
+    local max_attempts="${2:-15}"
     local attempt=0
 
     echo "Waiting for AWS Gateway at $host:${AWSGW_PORT}..."
@@ -215,7 +215,7 @@ wait_for_gateway() {
 # Usage: wait_for_daemon_ready <gateway_endpoint> [max_attempts]
 wait_for_daemon_ready() {
     local endpoint="$1"
-    local max_attempts="${2:-30}"
+    local max_attempts="${2:-15}"
     local attempt=0
 
     echo "Waiting for daemon readiness (NATS subscriptions)..."
@@ -260,7 +260,7 @@ check_instance_distribution() {
 # Returns: the SSH port number, or empty string if not found
 get_ssh_port() {
     local instance_id="$1"
-    local max_attempts="${2:-60}"
+    local max_attempts="${2:-30}"
     local attempt=0
 
     while [ $attempt -lt $max_attempts ]; do
@@ -341,7 +341,7 @@ wait_for_ssh() {
     local host="$1"
     local port="$2"
     local key_file="$3"
-    local max_attempts="${4:-120}"
+    local max_attempts="${4:-60}"
     local attempt=0
 
     echo "  Waiting for SSH to be ready on $host:$port..."
@@ -517,7 +517,7 @@ get_qemu_pid() {
 # Expects state transition: error → pending → running
 wait_for_instance_recovery() {
     local instance_id="$1"
-    local max_attempts="${2:-60}"
+    local max_attempts="${2:-30}"
     local attempt=0
     local saw_error=false
 
@@ -555,6 +555,130 @@ wait_for_instance_recovery() {
 
     echo "  ERROR: Instance did not recover within $max_attempts attempts"
     return 1
+}
+
+# Verify all services are down on all nodes
+# Returns 0 if everything is down, 1 if something is still running
+verify_all_services_down() {
+    local all_down=true
+
+    for i in 1 2 3; do
+        local node_ip="${SIMULATED_NETWORK}.$i"
+
+        # Check gateway
+        if curl -k -s --connect-timeout 2 "https://${node_ip}:${AWSGW_PORT}" > /dev/null 2>&1; then
+            echo "  Node$i: gateway still responding"
+            all_down=false
+        fi
+
+        # Check NATS
+        if curl -s --connect-timeout 2 "http://${node_ip}:${NATS_MONITOR_PORT}" > /dev/null 2>&1; then
+            echo "  Node$i: NATS still responding"
+            all_down=false
+        fi
+    done
+
+    # Check for any remaining QEMU processes
+    if pgrep -x qemu-system-x86_64 > /dev/null 2>&1; then
+        echo "  QEMU processes still running"
+        all_down=false
+    fi
+
+    if [ "$all_down" = true ]; then
+        echo "  All services confirmed down"
+        return 0
+    fi
+    return 1
+}
+
+# Force-kill all service processes and clean up stale resources on all nodes.
+# Used between shutdown and restart to ensure a clean slate.
+# This kills processes by PID file, then by name, removes badger LOCK files,
+# and waits for ports to be free.
+force_cleanup_all_nodes() {
+    echo "Force-cleaning all nodes..."
+
+    # Step 1: Kill all service processes via PID files
+    for i in 1 2 3; do
+        local data_dir="$HOME/node$i"
+        local logs_dir="$data_dir/logs"
+
+        if [ -d "$logs_dir" ]; then
+            for svc in hive-ui hive awsgw viperblock predastore nats; do
+                local pidfile="$logs_dir/$svc.pid"
+                if [ -f "$pidfile" ]; then
+                    local pid
+                    pid=$(cat "$pidfile" 2>/dev/null || true)
+                    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                        echo "  Node$i: killing $svc (PID $pid)..."
+                        kill -TERM "$pid" 2>/dev/null || true
+                    fi
+                fi
+            done
+        fi
+    done
+
+    # Brief wait for graceful shutdown
+    sleep 3
+
+    # Step 2: SIGKILL anything still alive
+    for i in 1 2 3; do
+        local data_dir="$HOME/node$i"
+        local logs_dir="$data_dir/logs"
+
+        if [ -d "$logs_dir" ]; then
+            for svc in hive-ui hive awsgw viperblock predastore nats; do
+                local pidfile="$logs_dir/$svc.pid"
+                if [ -f "$pidfile" ]; then
+                    local pid
+                    pid=$(cat "$pidfile" 2>/dev/null || true)
+                    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                        echo "  Node$i: force-killing $svc (PID $pid)..."
+                        kill -9 "$pid" 2>/dev/null || true
+                    fi
+                fi
+            done
+        fi
+    done
+
+    # Kill any remaining QEMU processes
+    pkill -9 -x qemu-system-x86_64 2>/dev/null || true
+
+    sleep 2
+
+    # Step 3: Remove stale badger LOCK files from predastore directories
+    for i in 1 2 3; do
+        local data_dir="$HOME/node$i"
+        local predastore_dir="$data_dir/predastore"
+
+        if [ -d "$predastore_dir" ]; then
+            local lock_files
+            lock_files=$(find "$predastore_dir" -name "LOCK" -type f 2>/dev/null || true)
+            if [ -n "$lock_files" ]; then
+                echo "  Node$i: removing stale badger LOCK files..."
+                echo "$lock_files" | while read -r f; do
+                    rm -f "$f"
+                    echo "    removed $f"
+                done
+            fi
+        fi
+    done
+
+    # Step 4: Wait for key ports to be free
+    for i in 1 2 3; do
+        local node_ip="${SIMULATED_NETWORK}.$i"
+        local attempt=0
+        while [ $attempt -lt 10 ]; do
+            if ! ss -tlnp 2>/dev/null | grep -q "${node_ip}:${AWSGW_PORT}"; then
+                break
+            fi
+            echo "  Node$i: waiting for port ${AWSGW_PORT} to be free..."
+            sleep 1
+            attempt=$((attempt + 1))
+        done
+    done
+
+    echo "  Force cleanup complete"
 }
 
 # Global variable for init PID tracking (used by multi-node formation)

@@ -453,7 +453,7 @@ func (d *Daemon) Start() error {
 	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances, store)
 	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
 	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config, d.natsConn)
-	snapSvc, snapshotKV, err := handlers_ec2_snapshot.NewSnapshotServiceImplWithNATS(d.config, d.natsConn)
+	snapSvc, snapshotKV, err := d.initSnapshotService()
 	if err != nil {
 		return fmt.Errorf("failed to initialize snapshot service with NATS KV: %w", err)
 	}
@@ -553,6 +553,32 @@ func (d *Daemon) initJetStream() error {
 	}
 
 	return nil
+}
+
+// initSnapshotService initializes the snapshot service with retry/backoff.
+// During cluster restarts, JetStream KV may be temporarily unavailable while
+// NATS routes re-establish and the cluster forms quorum.
+func (d *Daemon) initSnapshotService() (*handlers_ec2_snapshot.SnapshotServiceImpl, nats.KeyValue, error) {
+	const maxRetries = 10
+	retryDelay := 500 * time.Millisecond
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		snapSvc, snapshotKV, err := handlers_ec2_snapshot.NewSnapshotServiceImplWithNATS(d.config, d.natsConn)
+		if err == nil {
+			if attempt > 1 {
+				slog.Info("Snapshot service initialized successfully", "attempts", attempt)
+			}
+			return snapSvc, snapshotKV, nil
+		}
+
+		slog.Warn("Failed to init snapshot service", "error", err, "attempt", attempt, "maxRetries", maxRetries)
+		if attempt < maxRetries {
+			time.Sleep(retryDelay)
+			retryDelay = min(retryDelay*2, 5*time.Second)
+		}
+	}
+
+	return nil, nil, fmt.Errorf("snapshot service unavailable after %d attempts", maxRetries)
 }
 
 // waitForClusterReady waits until dependent infrastructure services are reachable

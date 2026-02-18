@@ -42,6 +42,24 @@ type Config struct {
 	WalDir    string `mapstructure:"wal_dir"`
 }
 
+// NodeBaseDir returns the BaseDir for the current node, or "" if the config
+// is nil, the node name is unset, or the node is not found in the Nodes map.
+func (cc *ClusterConfig) NodeBaseDir() string {
+	if cc == nil || cc.Node == "" {
+		slog.Warn("NodeBaseDir: no config or node name set, using global PID path")
+		return ""
+	}
+	node, ok := cc.Nodes[cc.Node]
+	if !ok {
+		slog.Error("NodeBaseDir: node not found in config", "node", cc.Node)
+		return ""
+	}
+	if node.BaseDir == "" {
+		slog.Warn("NodeBaseDir: BaseDir is empty for node, using global PID path", "node", cc.Node)
+	}
+	return node.BaseDir
+}
+
 // AllServices is the default service list when Services is empty (backward compat).
 var AllServices = []string{"nats", "predastore", "viperblock", "daemon", "awsgw", "ui"}
 
