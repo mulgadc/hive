@@ -27,20 +27,16 @@ func ValidateRunInstancesInput(input *ec2.RunInstancesInput) (err error) {
 	}
 
 	if *input.MinCount == 0 {
-		return awserrors.NewErrorf(awserrors.ErrorInvalidParameterValue,
-			"Value (%d) for parameter minCount is invalid. Expected a positive integer.", *input.MinCount)
+		return errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
 	if *input.MaxCount == 0 {
-		return awserrors.NewErrorf(awserrors.ErrorInvalidParameterValue,
-			"Value (%d) for parameter maxCount is invalid. Expected a positive integer.", *input.MaxCount)
+		return errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
 	// Additional validation from EC2 spec
 	if *input.MinCount > *input.MaxCount {
-		return awserrors.NewErrorf(awserrors.ErrorInvalidParameterValue,
-			"Value (%d) for parameter minCount is invalid. minCount may not exceed maxCount (%d).",
-			*input.MinCount, *input.MaxCount)
+		return errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
 	if input.ImageId == nil || *input.ImageId == "" {
@@ -52,8 +48,7 @@ func ValidateRunInstancesInput(input *ec2.RunInstancesInput) (err error) {
 	}
 
 	if !strings.HasPrefix(*input.ImageId, "ami-") {
-		return awserrors.NewErrorf(awserrors.ErrorInvalidAMIIDMalformed,
-			"Invalid id: %q (expecting \"ami-...\")", *input.ImageId)
+		return errors.New(awserrors.ErrorInvalidAMIIDMalformed)
 	}
 
 	return
