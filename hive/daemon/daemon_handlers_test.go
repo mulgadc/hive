@@ -1492,8 +1492,6 @@ func TestHandleEC2GetConsoleOutput_EnableThenDisable(t *testing.T) {
 	assert.Contains(t, string(reply.Data), "SerialConsoleSessionUnavailable")
 }
 
-
-
 // TestAttachVolume_ZoneMismatch verifies that attaching a volume in a different AZ
 // returns InvalidVolume.ZoneMismatch instead of proceeding.
 func TestAttachVolume_ZoneMismatch(t *testing.T) {
