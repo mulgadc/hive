@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"sync"
 
 	"github.com/nats-io/nats.go"
@@ -70,12 +71,7 @@ func (c Config) HasService(name string) bool {
 	if len(services) == 0 {
 		services = AllServices
 	}
-	for _, s := range services {
-		if s == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(services, name)
 }
 
 // GetServices returns the configured service list, defaulting to AllServices.

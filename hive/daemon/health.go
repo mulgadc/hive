@@ -212,7 +212,7 @@ func (d *Daemon) maybeRestartInstance(instance *vm.VM) {
 
 	// Calculate exponential backoff
 	delay := restartBackoffBase
-	for i := 0; i < restartCount; i++ {
+	for range restartCount {
 		delay *= 2
 		if delay > restartBackoffMax {
 			delay = restartBackoffMax

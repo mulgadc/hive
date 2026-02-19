@@ -33,7 +33,7 @@ func QueryParamsToStruct(params map[string]string, out any) error {
 	v := reflect.ValueOf(out)
 
 	// Must be a pointer to a struct
-	if v.Kind() != reflect.Ptr {
+	if v.Kind() != reflect.Pointer {
 		return fmt.Errorf("out must be a pointer to a struct")
 	}
 
@@ -86,7 +86,7 @@ func setStructFields(v reflect.Value, params map[string]string, prefix string) e
 		}
 
 		// Handle pointer to struct (nested structs)
-		if field.Kind() == reflect.Ptr && field.Type().Elem().Kind() == reflect.Struct {
+		if field.Kind() == reflect.Pointer && field.Type().Elem().Kind() == reflect.Struct {
 			for _, queryKey := range queryKeys {
 				// Check if there are any params with this prefix
 				hasParams := false
@@ -122,7 +122,7 @@ func setStructFields(v reflect.Value, params map[string]string, prefix string) e
 		}
 
 		// Handle pointer to slice
-		if field.Kind() == reflect.Ptr && field.Type().Elem().Kind() == reflect.Slice {
+		if field.Kind() == reflect.Pointer && field.Type().Elem().Kind() == reflect.Slice {
 			for _, queryKey := range queryKeys {
 				sliceField := reflect.New(field.Type().Elem()).Elem()
 				if err := setSliceField(sliceField, params, queryKey); err != nil {
@@ -161,7 +161,7 @@ func setFieldValue(field reflect.Value, value string) error {
 
 	case reflect.String:
 		field.SetString(value)
-	case reflect.Ptr:
+	case reflect.Pointer:
 		// Handle pointer types
 		if field.IsNil() {
 			field.Set(reflect.New(field.Type().Elem()))
@@ -229,7 +229,7 @@ func setSliceField(field reflect.Value, params map[string]string, prefix string)
 			if val, ok := params[indexPrefix]; ok {
 				elem.SetString(val)
 			}
-		case reflect.Ptr:
+		case reflect.Pointer:
 			// Handle pointer to string
 			if elemType.Elem().Kind() == reflect.String {
 				if val, ok := params[indexPrefix]; ok {

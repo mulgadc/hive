@@ -1,6 +1,7 @@
 package formation
 
 import (
+	"slices"
 	"sort"
 
 	"github.com/mulgadc/hive/hive/admin"
@@ -12,12 +13,7 @@ func hasService(services []string, name string) bool {
 	if len(services) == 0 {
 		return true // backward compat: empty = all services
 	}
-	for _, s := range services {
-		if s == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(services, name)
 }
 
 // BuildClusterRoutes returns a sorted list of "IP:4248" NATS cluster routes

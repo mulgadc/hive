@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -491,9 +492,7 @@ func (s *SnapshotServiceImpl) CopySnapshot(input *ec2.CopySnapshotInput) (*ec2.C
 		newCfg.Description = *input.Description
 	}
 
-	for k, v := range sourceCfg.Tags {
-		newCfg.Tags[k] = v
-	}
+	maps.Copy(newCfg.Tags, sourceCfg.Tags)
 
 	// Track the volume→snapshot dependency in KV before persisting to S3.
 	if err := s.addSnapshotRef(sourceCfg.VolumeID, newSnapshotID); err != nil {

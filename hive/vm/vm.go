@@ -18,10 +18,10 @@ import (
 // InstanceHealthState tracks crash detection and auto-restart metadata for a VM.
 type InstanceHealthState struct {
 	CrashCount      int       `json:"crash_count"`
-	LastCrashTime   time.Time `json:"last_crash_time,omitempty"`
+	LastCrashTime   time.Time `json:"last_crash_time"`
 	LastCrashReason string    `json:"last_crash_reason,omitempty"`
 	RestartCount    int       `json:"restart_count"`
-	FirstCrashTime  time.Time `json:"first_crash_time,omitempty"`
+	FirstCrashTime  time.Time `json:"first_crash_time"`
 }
 
 type VM struct {

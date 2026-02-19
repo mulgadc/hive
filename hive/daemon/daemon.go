@@ -255,9 +255,8 @@ func (rm *ResourceManager) GetAvailableInstanceTypeInfos(showCapacity bool) []*e
 		// Use the minimum of CPU slots and Memory slots
 		count := min(countMem, countVCPU)
 
-		if count < 0 {
-			count = 0
-		}
+		// ensure non negative
+		count = max(count, 0)
 
 		if showCapacity {
 			// Add to the list as many times as it can fit
@@ -298,9 +297,9 @@ func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64
 		countVCPU := remainingVCPU / int(vCPUs)
 		countMem := int(remainingMem / memGB)
 		count := min(countMem, countVCPU)
-		if count < 0 {
-			count = 0
-		}
+
+		// ensure non negative
+		count = max(count, 0)
 		name := ""
 		if it.InstanceType != nil {
 			name = *it.InstanceType
@@ -2024,16 +2023,11 @@ func (rm *ResourceManager) canAllocate(instanceType *ec2.InstanceTypeInfo, count
 
 	// Take the minimum of CPU-limited and memory-limited counts
 	allocatableCount := min(countByMem, countByCPU)
-
 	// Cap at requested count
-	if allocatableCount > count {
-		allocatableCount = count
-	}
+	allocatableCount = min(allocatableCount, count)
 
-	// Ensure non-negative
-	if allocatableCount < 0 {
-		allocatableCount = 0
-	}
+	// ensure non negative
+	allocatableCount = max(allocatableCount, 0)
 
 	return allocatableCount
 }

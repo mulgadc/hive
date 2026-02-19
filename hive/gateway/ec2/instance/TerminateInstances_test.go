@@ -54,7 +54,6 @@ func TestTerminateInstances_MultipleInstances(t *testing.T) {
 	ids := []string{"i-001", "i-002", "i-003"}
 
 	for _, id := range ids {
-		id := id
 		nc.Subscribe("ec2.cmd."+id, func(msg *nats.Msg) {
 			msg.Respond([]byte(`{"return":{}}`))
 		})

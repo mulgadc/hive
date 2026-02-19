@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"sync"
@@ -147,9 +148,7 @@ func (fs *FormationServer) Nodes() map[string]NodeInfo {
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 	out := make(map[string]NodeInfo, len(fs.nodes))
-	for k, v := range fs.nodes {
-		out[k] = v
-	}
+	maps.Copy(out, fs.nodes)
 	return out
 }
 
@@ -235,9 +234,7 @@ func (fs *FormationServer) handleStatus(w http.ResponseWriter, r *http.Request) 
 	// Only expose full data when formation is complete
 	if fs.isComplete() {
 		resp.Nodes = make(map[string]NodeInfo, len(fs.nodes))
-		for k, v := range fs.nodes {
-			resp.Nodes[k] = v
-		}
+		maps.Copy(resp.Nodes, fs.nodes)
 		resp.Credentials = fs.credentials
 		resp.CACert = fs.caCert
 		resp.CAKey = fs.caKey

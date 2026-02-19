@@ -190,7 +190,7 @@ func TestRestartBackoff_Exponential(t *testing.T) {
 
 	for i, want := range expected {
 		delay := restartBackoffBase
-		for j := 0; j < i; j++ {
+		for range i {
 			delay *= 2
 			if delay > restartBackoffMax {
 				delay = restartBackoffMax
