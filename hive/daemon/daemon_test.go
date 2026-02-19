@@ -3479,6 +3479,40 @@ func TestRollbackEBSMount_NATSTimeout(t *testing.T) {
 	daemon.rollbackEBSMount(ebsReq)
 }
 
+// TestDescribeInstances_InvalidInstanceIDMalformed verifies that DescribeInstances
+// returns InvalidInstanceID.Malformed when given instance IDs without the i- prefix.
+func TestDescribeInstances_InvalidInstanceIDMalformed(t *testing.T) {
+	natsURL := sharedNATSURL
+	daemon := createTestDaemon(t, natsURL)
+
+	sub, err := daemon.natsConn.Subscribe("ec2.DescribeInstances", daemon.handleEC2DescribeInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	t.Run("MalformedInstanceID", func(t *testing.T) {
+		input := &ec2.DescribeInstancesInput{
+			InstanceIds: []*string{aws.String("bad-instance-id")},
+		}
+		inputJSON, _ := json.Marshal(input)
+
+		resp, err := daemon.natsConn.Request("ec2.DescribeInstances", inputJSON, 5*time.Second)
+		require.NoError(t, err)
+		assert.Contains(t, string(resp.Data), "InvalidInstanceID.Malformed")
+	})
+
+	t.Run("ValidInstanceIDPassesValidation", func(t *testing.T) {
+		input := &ec2.DescribeInstancesInput{
+			InstanceIds: []*string{aws.String("i-nonexistent")},
+		}
+		inputJSON, _ := json.Marshal(input)
+
+		resp, err := daemon.natsConn.Request("ec2.DescribeInstances", inputJSON, 5*time.Second)
+		require.NoError(t, err)
+		// Should not contain a malformed error — returns empty results instead
+		assert.NotContains(t, string(resp.Data), "InvalidInstanceID.Malformed")
+	})
+}
+
 // TestStopTerminate_IncorrectInstanceState verifies that stopping an already-stopped
 // instance or terminating an already-terminated instance returns IncorrectInstanceState
 // instead of ServerInternal.

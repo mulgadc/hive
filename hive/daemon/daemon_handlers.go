@@ -1240,11 +1240,17 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 	d.Instances.Mu.Lock()
 	defer d.Instances.Mu.Unlock()
 
-	// Filter instances if specific instance IDs were requested
+	// Validate and filter instances if specific instance IDs were requested
 	instanceIDFilter := make(map[string]bool)
 	if len(describeInstancesInput.InstanceIds) > 0 {
 		for _, id := range describeInstancesInput.InstanceIds {
-			if id != nil {
+			if id != nil && *id != "" {
+				if !strings.HasPrefix(*id, "i-") {
+					if err := msg.Respond(utils.GenerateErrorPayload(awserrors.ErrorInvalidInstanceIDMalformed)); err != nil {
+						slog.Error("Failed to respond to NATS request", "err", err)
+					}
+					return
+				}
 				instanceIDFilter[*id] = true
 			}
 		}
