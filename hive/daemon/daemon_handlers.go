@@ -1363,6 +1363,22 @@ func (d *Daemon) handleEC2GetConsoleOutput(msg *nats.Msg) {
 		return
 	}
 
+	// Check account-level serial console access
+	status, err := d.accountService.GetSerialConsoleAccessStatus(&ec2.GetSerialConsoleAccessStatusInput{})
+	if err != nil {
+		slog.Error("Failed to check serial console access status", "err", err)
+		if err := msg.Respond(utils.GenerateErrorPayload(awserrors.ErrorServerInternal)); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
+		return
+	}
+	if status.SerialConsoleAccessEnabled == nil || !*status.SerialConsoleAccessEnabled {
+		if err := msg.Respond(utils.GenerateErrorPayload(awserrors.ErrorSerialConsoleSessionUnavailable)); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
+		return
+	}
+
 	instanceID := *input.InstanceId
 
 	// Find the instance on this node

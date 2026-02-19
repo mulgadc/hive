@@ -467,12 +467,9 @@ func (d *Daemon) Start() error {
 	} else {
 		d.eigwService = eigwSvc
 	}
-	accountSvc, err := handlers_ec2_account.NewAccountSettingsServiceImplWithNATS(d.config, d.natsConn)
-	if err != nil {
-		slog.Warn("Failed to create account settings service with NATS, using in-memory fallback", "error", err)
-		accountSvc = handlers_ec2_account.NewAccountSettingsServiceImpl(d.config)
+	if err := d.initAccountService(); err != nil {
+		return fmt.Errorf("failed to initialize account settings service: %w", err)
 	}
-	d.accountService = accountSvc
 
 	// Protect daemon from OOM killer (prefer killing QEMU VMs instead)
 	if err := utils.SetOOMScore(os.Getpid(), -500); err != nil {
@@ -580,6 +577,31 @@ func (d *Daemon) initSnapshotService() (*handlers_ec2_snapshot.SnapshotServiceIm
 	}
 
 	return nil, nil, fmt.Errorf("snapshot service unavailable after %d attempts", maxRetries)
+}
+
+// initAccountService initializes the account settings service with retry/backoff.
+func (d *Daemon) initAccountService() error {
+	const maxRetries = 10
+	retryDelay := 500 * time.Millisecond
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		svc, err := handlers_ec2_account.NewAccountSettingsServiceImplWithNATS(d.config, d.natsConn)
+		if err == nil {
+			if attempt > 1 {
+				slog.Info("Account settings service initialized successfully", "attempts", attempt)
+			}
+			d.accountService = svc
+			return nil
+		}
+
+		slog.Warn("Failed to init account settings service", "error", err, "attempt", attempt, "maxRetries", maxRetries)
+		if attempt < maxRetries {
+			time.Sleep(retryDelay)
+			retryDelay = min(retryDelay*2, 5*time.Second)
+		}
+	}
+
+	return fmt.Errorf("account settings service unavailable after %d attempts", maxRetries)
 }
 
 // waitForClusterReady waits until dependent infrastructure services are reachable

@@ -367,6 +367,7 @@ var (
 	ErrorSecurityGroupLimitExceeded                            = "SecurityGroupLimitExceeded"
 	ErrorSecurityGroupsPerInstanceLimitExceeded                = "SecurityGroupsPerInstanceLimitExceeded"
 	ErrorSecurityGroupsPerInterfaceLimitExceeded               = "SecurityGroupsPerInterfaceLimitExceeded"
+	ErrorSerialConsoleSessionUnavailable                       = "SerialConsoleSessionUnavailable"
 	ErrorServerInternal                                        = "ServerInternal"
 	ErrorServiceUnavailable                                    = "ServiceUnavailable"
 	ErrorSignatureDoesNotMatch                                 = "SignatureDoesNotMatch"
@@ -786,6 +787,7 @@ var ErrorLookup = map[string]ErrorMessage{
 	ErrorSecurityGroupLimitExceeded:                            {HTTPCode: 400, Message: "You've reached the limit on the number of security groups that you can create, or that you can assign to an instance."},
 	ErrorSecurityGroupsPerInstanceLimitExceeded:                {HTTPCode: 400, Message: "You've reached the limit on the number of security groups that you can assign to an instance. For more information, see Amazon EC2 security groups."},
 	ErrorSecurityGroupsPerInterfaceLimitExceeded:               {HTTPCode: 400, Message: "You've reached the limit on the number of security groups you can associate with the specified network interface. For more information, see Amazon VPC quotas."},
+	ErrorSerialConsoleSessionUnavailable:                       {HTTPCode: 403, Message: "The serial console access is not enabled for this account. Use EnableSerialConsoleAccess to enable access."},
 	ErrorServerInternal:                                        {HTTPCode: 500, Message: "An internal error has occurred. Retry your request, but if the problem persists, contact us with details by posting a message on AWS re:Post."},
 	ErrorServiceUnavailable:                                    {HTTPCode: 503, Message: "The request has failed due to a temporary failure of the server."},
 	ErrorSignatureDoesNotMatch:                                 {HTTPCode: 403, Message: "The request signature that Amazon has does not match the signature that you provided. Check your AWS credentials and signing method."},
