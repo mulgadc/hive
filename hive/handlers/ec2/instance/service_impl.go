@@ -318,8 +318,8 @@ func (s *InstanceServiceImpl) cloneAMIToVolume(input *ec2.RunInstancesInput, siz
 
 	amiState, err := amiVb.LoadStateRequest("")
 	if err != nil {
-		slog.Error("Could not load state for AMI", "err", err)
-		return errors.New(awserrors.ErrorServerInternal)
+		slog.Error("Could not load state for AMI", "imageId", *input.ImageId, "err", err)
+		return errors.New(awserrors.ErrorInvalidAMIIDNotFound)
 	}
 
 	snapshotID := amiState.VolumeConfig.AMIMetadata.SnapshotID
@@ -546,6 +546,10 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 		Key:    aws.String(keyPath),
 	})
 	if err != nil {
+		if objectstore.IsNoSuchKeyError(err) {
+			slog.Error("key pair not found", "keyName", keyName, "err", err)
+			return errors.New(awserrors.ErrorInvalidKeyPairNotFound)
+		}
 		slog.Error("failed to read SSH key", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
 	}

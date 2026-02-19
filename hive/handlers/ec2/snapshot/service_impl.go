@@ -354,6 +354,47 @@ func (s *SnapshotServiceImpl) DescribeSnapshots(input *ec2.DescribeSnapshotsInpu
 	}, nil
 }
 
+// snapshotInUseByVolumes checks if any volume was created from the given snapshot.
+func (s *SnapshotServiceImpl) snapshotInUseByVolumes(snapshotID string) (bool, error) {
+	listResult, err := s.store.ListObjects(&s3.ListObjectsInput{
+		Bucket:    aws.String(s.config.Predastore.Bucket),
+		Prefix:    aws.String("vol-"),
+		Delimiter: aws.String("/"),
+	})
+	if err != nil {
+		return false, fmt.Errorf("snapshotInUseByVolumes: failed to list volumes: %w", err)
+	}
+
+	for _, prefix := range listResult.CommonPrefixes {
+		if prefix.Prefix == nil {
+			continue
+		}
+		volumeID := strings.TrimSuffix(*prefix.Prefix, "/")
+		configKey := fmt.Sprintf("%s/config.json", volumeID)
+
+		result, err := s.store.GetObject(&s3.GetObjectInput{
+			Bucket: aws.String(s.config.Predastore.Bucket),
+			Key:    aws.String(configKey),
+		})
+		if err != nil {
+			continue // volume may not have a config yet
+		}
+
+		var state viperblock.VBState
+		decodeErr := json.NewDecoder(result.Body).Decode(&state)
+		_ = result.Body.Close()
+		if decodeErr != nil {
+			continue
+		}
+
+		if state.VolumeConfig.VolumeMetadata.SnapshotID == snapshotID {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 // DeleteSnapshot deletes a snapshot
 func (s *SnapshotServiceImpl) DeleteSnapshot(input *ec2.DeleteSnapshotInput) (*ec2.DeleteSnapshotOutput, error) {
 	if input == nil || input.SnapshotId == nil {
@@ -368,6 +409,17 @@ func (s *SnapshotServiceImpl) DeleteSnapshot(input *ec2.DeleteSnapshotInput) (*e
 	if err != nil {
 		slog.Error("DeleteSnapshot snapshot not found", "snapshotId", snapshotID, "err", err)
 		return nil, err
+	}
+
+	// Check if any volumes were created from this snapshot
+	inUse, err := s.snapshotInUseByVolumes(snapshotID)
+	if err != nil {
+		slog.Error("DeleteSnapshot failed to check snapshot usage", "snapshotId", snapshotID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+	if inUse {
+		slog.Info("DeleteSnapshot blocked: snapshot in use by volume", "snapshotId", snapshotID)
+		return nil, errors.New(awserrors.ErrorInvalidSnapshotInUse)
 	}
 
 	listResult, err := s.store.ListObjects(&s3.ListObjectsInput{

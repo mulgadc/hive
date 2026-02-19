@@ -784,12 +784,12 @@ func TestDescribeVolumes_FastPath_MixedExistingAndMissing(t *testing.T) {
 		VolumeID: "vol-exists", SizeGiB: 10, State: "available",
 	})
 
-	output, err := svc.DescribeVolumes(&ec2.DescribeVolumesInput{
+	// AWS returns InvalidVolume.NotFound when any requested ID is missing
+	_, err := svc.DescribeVolumes(&ec2.DescribeVolumesInput{
 		VolumeIds: []*string{aws.String("vol-exists"), aws.String("vol-ghost")},
 	})
-	require.NoError(t, err)
-	assert.Len(t, output.Volumes, 1)
-	assert.Equal(t, "vol-exists", *output.Volumes[0].VolumeId)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidVolumeNotFound, err.Error())
 }
 
 func TestDescribeVolumes_FastPath_NilVolumeID(t *testing.T) {

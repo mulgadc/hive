@@ -225,6 +225,21 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput) (*ec2.
 		images = append(images, image)
 	}
 
+	// If specific ImageIds were requested, verify all were found
+	if len(input.ImageIds) > 0 {
+		foundIDs := make(map[string]bool, len(images))
+		for _, img := range images {
+			if img.ImageId != nil {
+				foundIDs[*img.ImageId] = true
+			}
+		}
+		for _, reqID := range input.ImageIds {
+			if reqID != nil && !foundIDs[*reqID] {
+				return nil, errors.New(awserrors.ErrorInvalidAMIIDNotFound)
+			}
+		}
+	}
+
 	slog.Info("DescribeImages completed", "count", len(images))
 
 	return &ec2.DescribeImagesOutput{
@@ -244,6 +259,17 @@ func (s *ImageServiceImpl) CreateImageFromInstance(params CreateImageParams) (*e
 	input := params.Input
 	if input == nil || input.InstanceId == nil {
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
+	// Check for duplicate AMI name before doing any expensive work
+	name := aws.StringValue(input.Name)
+	if name != "" {
+		if exists, err := s.amiNameExists(name); err != nil {
+			slog.Error("CreateImageFromInstance: failed to check AMI name uniqueness", "name", name, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		} else if exists {
+			return nil, errors.New(awserrors.ErrorInvalidAMINameDuplicate)
+		}
 	}
 
 	amiID := utils.GenerateResourceID("ami")
@@ -277,7 +303,7 @@ func (s *ImageServiceImpl) CreateImageFromInstance(params CreateImageParams) (*e
 		Virtualization:  "hvm",
 	}
 	if params.SourceImageID != "" {
-		srcCfg, err := s.getAMIConfig(params.SourceImageID)
+		srcCfg, err := s.GetAMIConfig(params.SourceImageID)
 		if err != nil {
 			slog.Error("CreateImageFromInstance: failed to read source AMI config", "sourceImageId", params.SourceImageID, "err", err)
 			return nil, errors.New(awserrors.ErrorServerInternal)
@@ -292,7 +318,6 @@ func (s *ImageServiceImpl) CreateImageFromInstance(params CreateImageParams) (*e
 	}
 
 	// Step 5: Build and store AMI config
-	name := aws.StringValue(input.Name)
 	description := aws.StringValue(input.Description)
 
 	amiConfig := viperblock.VBState{
@@ -453,8 +478,48 @@ func (s *ImageServiceImpl) getVolumeConfig(volumeID string) (*viperblock.VolumeC
 	return &vbState.VolumeConfig, nil
 }
 
-// getAMIConfig reads an AMI's metadata from S3
-func (s *ImageServiceImpl) getAMIConfig(imageID string) (viperblock.AMIMetadata, error) {
+// amiNameExists checks if any existing AMI already uses the given name.
+func (s *ImageServiceImpl) amiNameExists(name string) (bool, error) {
+	listResult, err := s.store.ListObjects(&s3.ListObjectsInput{
+		Bucket:    aws.String(s.bucketName),
+		Prefix:    aws.String("ami-"),
+		Delimiter: aws.String("/"),
+	})
+	if err != nil {
+		return false, fmt.Errorf("amiNameExists: failed to list AMIs: %w", err)
+	}
+
+	for _, prefix := range listResult.CommonPrefixes {
+		if prefix.Prefix == nil {
+			continue
+		}
+		configKey := *prefix.Prefix + "config.json"
+		result, err := s.store.GetObject(&s3.GetObjectInput{
+			Bucket: aws.String(s.bucketName),
+			Key:    aws.String(configKey),
+		})
+		if err != nil {
+			continue
+		}
+
+		var vbState viperblock.VBState
+		decodeErr := json.NewDecoder(result.Body).Decode(&vbState)
+		_ = result.Body.Close()
+		if decodeErr != nil {
+			continue
+		}
+
+		if vbState.VolumeConfig.AMIMetadata.Name == name {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// GetAMIConfig retrieves the AMI metadata for a given image ID from S3.
+// Returns NoSuchKeyError if the AMI does not exist.
+func (s *ImageServiceImpl) GetAMIConfig(imageID string) (viperblock.AMIMetadata, error) {
 	configKey := fmt.Sprintf("%s/config.json", imageID)
 	result, err := s.store.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(s.bucketName),

@@ -14,6 +14,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	awss3 "github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/hive/hive/config"
 	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
 	handlers_ec2_volume "github.com/mulgadc/hive/hive/handlers/ec2/volume"
@@ -101,6 +102,20 @@ func getTestInstanceType() string {
 		return key
 	}
 	return "t3.micro" // Default fallback
+}
+
+// seedTestAMI creates a minimal AMI config in the memory store so that
+// handleEC2RunInstances AMI validation passes.
+func seedTestAMI(t *testing.T, store *objectstore.MemoryObjectStore, bucket, imageID string) {
+	t.Helper()
+	amiConfig := `{"VolumeConfig":{"AMIMetadata":{"ImageID":"` + imageID + `","Name":"test"}}}`
+	_, err := store.PutObject(&awss3.PutObjectInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(imageID + "/config.json"),
+		Body:        strings.NewReader(amiConfig),
+		ContentType: aws.String("application/json"),
+	})
+	require.NoError(t, err)
 }
 
 // TestHandleEC2RunInstances_MessageParsing tests that the handler correctly parses NATS messages
@@ -1285,7 +1300,11 @@ func TestRunInstances_CountValidation(t *testing.T) {
 	instanceType := getTestInstanceType()
 	topic := fmt.Sprintf("ec2.RunInstances.%s", instanceType)
 
-	daemon := createTestDaemon(t, natsURL)
+	daemon, memStore := createFullTestDaemonWithStore(t, natsURL)
+
+	// Seed a valid AMI in the store so tests that pass input validation
+	// don't fail at the AMI existence check
+	seedTestAMI(t, memStore, daemon.config.Predastore.Bucket, "ami-test")
 
 	// Subscribe to the per-instance-type topic (matches production routing)
 	sub, err := daemon.natsConn.QueueSubscribe(topic, "hive-workers", daemon.handleEC2RunInstances)
@@ -3458,4 +3477,108 @@ func TestRollbackEBSMount_NATSTimeout(t *testing.T) {
 
 	// Should not panic, just log the timeout
 	daemon.rollbackEBSMount(ebsReq)
+}
+
+// TestDescribeInstances_InvalidInstanceIDMalformed verifies that DescribeInstances
+// returns InvalidInstanceID.Malformed when given instance IDs without the i- prefix.
+func TestDescribeInstances_InvalidInstanceIDMalformed(t *testing.T) {
+	natsURL := sharedNATSURL
+	daemon := createTestDaemon(t, natsURL)
+
+	sub, err := daemon.natsConn.Subscribe("ec2.DescribeInstances", daemon.handleEC2DescribeInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	t.Run("MalformedInstanceID", func(t *testing.T) {
+		input := &ec2.DescribeInstancesInput{
+			InstanceIds: []*string{aws.String("bad-instance-id")},
+		}
+		inputJSON, _ := json.Marshal(input)
+
+		resp, err := daemon.natsConn.Request("ec2.DescribeInstances", inputJSON, 5*time.Second)
+		require.NoError(t, err)
+		assert.Contains(t, string(resp.Data), "InvalidInstanceID.Malformed")
+	})
+
+	t.Run("ValidInstanceIDPassesValidation", func(t *testing.T) {
+		input := &ec2.DescribeInstancesInput{
+			InstanceIds: []*string{aws.String("i-nonexistent")},
+		}
+		inputJSON, _ := json.Marshal(input)
+
+		resp, err := daemon.natsConn.Request("ec2.DescribeInstances", inputJSON, 5*time.Second)
+		require.NoError(t, err)
+		// Should not contain a malformed error — returns empty results instead
+		assert.NotContains(t, string(resp.Data), "InvalidInstanceID.Malformed")
+	})
+}
+
+// TestStopTerminate_IncorrectInstanceState verifies that stopping an already-stopped
+// instance or terminating an already-terminated instance returns IncorrectInstanceState
+// instead of ServerInternal.
+func TestStopTerminate_IncorrectInstanceState(t *testing.T) {
+	natsURL := sharedNATSURL
+	daemon := createTestDaemon(t, natsURL)
+
+	instanceID := "i-test-state-check"
+	instance := &vm.VM{
+		ID:           instanceID,
+		InstanceType: getTestInstanceType(),
+		Status:       vm.StateStopped,
+		Instance:     &ec2.Instance{},
+	}
+	daemon.Instances.VMS[instanceID] = instance
+
+	sub, err := daemon.natsConn.Subscribe(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		daemon.handleEC2Events,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	t.Run("StopAlreadyStoppedInstance", func(t *testing.T) {
+		daemon.Instances.Mu.Lock()
+		instance.Status = vm.StateStopped
+		daemon.Instances.Mu.Unlock()
+
+		command := qmp.Command{
+			ID: instanceID,
+			Attributes: qmp.Attributes{
+				StopInstance: true,
+			},
+		}
+		data, _ := json.Marshal(command)
+
+		resp, err := daemon.natsConn.Request(
+			fmt.Sprintf("ec2.cmd.%s", instanceID),
+			data,
+			5*time.Second,
+		)
+		require.NoError(t, err)
+		assert.Contains(t, string(resp.Data), "IncorrectInstanceState")
+		assert.NotContains(t, string(resp.Data), "ServerInternal")
+	})
+
+	t.Run("TerminateAlreadyTerminatedInstance", func(t *testing.T) {
+		daemon.Instances.Mu.Lock()
+		instance.Status = vm.StateTerminated
+		daemon.Instances.Mu.Unlock()
+
+		command := qmp.Command{
+			ID: instanceID,
+			Attributes: qmp.Attributes{
+				TerminateInstance: true,
+			},
+		}
+		data, _ := json.Marshal(command)
+
+		resp, err := daemon.natsConn.Request(
+			fmt.Sprintf("ec2.cmd.%s", instanceID),
+			data,
+			5*time.Second,
+		)
+		require.NoError(t, err)
+		assert.Contains(t, string(resp.Data), "IncorrectInstanceState")
+		assert.NotContains(t, string(resp.Data), "ServerInternal")
+	})
 }

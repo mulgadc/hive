@@ -7,6 +7,9 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/objectstore"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestKeyPairMetadataMarshaling tests that CreateKeyPairOutput (used as metadata) can be marshaled/unmarshaled correctly
@@ -385,6 +388,74 @@ func TestImportKeyPairKeyTypeDetection(t *testing.T) {
 			if keyType != tt.expectedType {
 				t.Errorf("Expected key type %s, got %s", tt.expectedType, keyType)
 			}
+		})
+	}
+}
+
+// TestDeleteKeyPairIdempotent verifies AWS-compatible idempotent behavior:
+// deleting a non-existent key pair returns success instead of NotFound.
+func TestDeleteKeyPairIdempotent(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := NewKeyServiceImplWithStore(store, "test-bucket", "123456789")
+
+	t.Run("NonExistentKeyName", func(t *testing.T) {
+		result, err := svc.DeleteKeyPair(&ec2.DeleteKeyPairInput{
+			KeyName: aws.String("no-such-key"),
+		})
+		require.NoError(t, err)
+		assert.NotNil(t, result)
+	})
+
+	t.Run("NonExistentKeyPairId", func(t *testing.T) {
+		result, err := svc.DeleteKeyPair(&ec2.DeleteKeyPairInput{
+			KeyPairId: aws.String("key-0123456789abcdef0"),
+		})
+		require.NoError(t, err)
+		assert.NotNil(t, result)
+	})
+}
+
+// TestImportKeyPairInvalidKeyFormat verifies that ImportKeyPair returns
+// InvalidKey.Format for malformed public key material (not InvalidKeyPair.Format).
+func TestImportKeyPairInvalidKeyFormat(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := NewKeyServiceImplWithStore(store, "test-bucket", "123456789")
+
+	tests := []struct {
+		name           string
+		publicKey      string
+		expectedErrMsg string
+	}{
+		{
+			name:           "SingleFieldNoKeyData",
+			publicKey:      "ssh-rsa",
+			expectedErrMsg: "InvalidKey.Format",
+		},
+		{
+			name:           "UnsupportedAlgorithm",
+			publicKey:      "ssh-dss AAAAB3NzaC1kc3MAAACB",
+			expectedErrMsg: "InvalidKey.Format",
+		},
+		{
+			name:           "InvalidBase64",
+			publicKey:      "ssh-rsa not-valid-base64!!!",
+			expectedErrMsg: "InvalidKey.Format",
+		},
+		{
+			name:           "EmptyKeyData",
+			publicKey:      "ssh-ed25519 ",
+			expectedErrMsg: "InvalidKey.Format",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := svc.ImportKeyPair(&ec2.ImportKeyPairInput{
+				KeyName:           aws.String("test-key"),
+				PublicKeyMaterial: []byte(tt.publicKey),
+			})
+			require.Error(t, err)
+			assert.Equal(t, tt.expectedErrMsg, err.Error())
 		})
 	}
 }

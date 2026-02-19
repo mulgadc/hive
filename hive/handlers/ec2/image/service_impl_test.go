@@ -74,6 +74,33 @@ func createTestAMIConfig(t *testing.T, store *objectstore.MemoryObjectStore, ima
 	require.NoError(t, err)
 }
 
+// createTestAMIConfigWithName creates a test AMI config with a specified name
+func createTestAMIConfigWithName(t *testing.T, store *objectstore.MemoryObjectStore, imageID, name string) {
+	amiState := viperblock.VBState{
+		VolumeConfig: viperblock.VolumeConfig{
+			AMIMetadata: viperblock.AMIMetadata{
+				ImageID:         imageID,
+				Name:            name,
+				Architecture:    "x86_64",
+				PlatformDetails: "Linux/UNIX",
+				Virtualization:  "hvm",
+				RootDeviceType:  "ebs",
+				VolumeSizeGiB:   8,
+			},
+		},
+	}
+	data, err := json.Marshal(amiState)
+	require.NoError(t, err)
+
+	_, err = store.PutObject(&awss3.PutObjectInput{
+		Bucket:      aws.String(testBucket),
+		Key:         aws.String(imageID + "/config.json"),
+		Body:        strings.NewReader(string(data)),
+		ContentType: aws.String("application/json"),
+	})
+	require.NoError(t, err)
+}
+
 func TestCreateImageFromInstance_NilInput(t *testing.T) {
 	svc, _ := setupTestImageService(t)
 
@@ -162,7 +189,7 @@ func TestGetAMIConfig(t *testing.T) {
 
 	createTestAMIConfig(t, store, "ami-abc123")
 
-	meta, err := svc.getAMIConfig("ami-abc123")
+	meta, err := svc.GetAMIConfig("ami-abc123")
 	require.NoError(t, err)
 	assert.Equal(t, "ami-abc123", meta.ImageID)
 	assert.Equal(t, "test-ami", meta.Name)
@@ -174,7 +201,7 @@ func TestGetAMIConfig(t *testing.T) {
 func TestGetAMIConfig_NotFound(t *testing.T) {
 	svc, _ := setupTestImageService(t)
 
-	_, err := svc.getAMIConfig("ami-nonexistent")
+	_, err := svc.GetAMIConfig("ami-nonexistent")
 	require.Error(t, err)
 }
 
@@ -223,6 +250,37 @@ func TestCreateImageFromInstance_SourceAMIReadFailure(t *testing.T) {
 	assert.Equal(t, awserrors.ErrorServerInternal, err.Error())
 }
 
+func TestDescribeImages_NotFound(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// Create one AMI
+	createTestAMIConfig(t, store, "ami-exists123")
+
+	// Request a non-existent AMI ID — should return InvalidAMIID.NotFound
+	_, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		ImageIds: []*string{aws.String("ami-nonexistent")},
+	})
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
+}
+
+func TestDescribeImages_MixedExistingAndMissing(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// Create one AMI
+	createTestAMIConfig(t, store, "ami-exists123")
+
+	// Request one existing + one non-existent — should return NotFound
+	_, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		ImageIds: []*string{
+			aws.String("ami-exists123"),
+			aws.String("ami-missing456"),
+		},
+	})
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
+}
+
 func TestDescribeImages_FilterByOwnerSelf(t *testing.T) {
 	svc, store := setupTestImageService(t)
 
@@ -258,4 +316,50 @@ func TestDescribeImages_FilterByOwnerSelf(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Len(t, result.Images, 1)
 	assert.Equal(t, amiID, *result.Images[0].ImageId)
+}
+
+func TestCreateImageFromInstance_DuplicateName(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// Create an existing AMI with name "my-image"
+	createTestAMIConfigWithName(t, store, "ami-existing123", "my-image")
+
+	// Create volume config for the snapshot step
+	createTestVolumeConfig(t, store, "vol-root123", 10)
+
+	// Attempt to create another image with the same name — should fail with duplicate error
+	_, err := svc.CreateImageFromInstance(CreateImageParams{
+		Input: &ec2.CreateImageInput{
+			InstanceId: aws.String("i-test123"),
+			Name:       aws.String("my-image"),
+		},
+		RootVolumeID: "vol-root123",
+		IsRunning:    true,
+	})
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMINameDuplicate, err.Error())
+}
+
+func TestCreateImageFromInstance_UniqueNameAllowed(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// Create an existing AMI with a different name
+	createTestAMIConfigWithName(t, store, "ami-existing123", "other-image")
+
+	// Create volume config
+	createTestVolumeConfig(t, store, "vol-root123", 10)
+
+	// Creating with a unique name should NOT fail at the name check stage
+	// (it will fail later at the snapshot step since natsConn is nil, but that's expected)
+	_, err := svc.CreateImageFromInstance(CreateImageParams{
+		Input: &ec2.CreateImageInput{
+			InstanceId: aws.String("i-test123"),
+			Name:       aws.String("unique-image"),
+		},
+		RootVolumeID: "vol-root123",
+		IsRunning:    true,
+	})
+	require.Error(t, err)
+	// Should fail at snapshot, NOT at duplicate name check
+	assert.Equal(t, awserrors.ErrorServerInternal, err.Error())
 }

@@ -362,6 +362,13 @@ func (s *KeyServiceImpl) findKeyPairIdFromKeyName(keyName string) (string, error
 	return "", errors.New(awserrors.ErrorInvalidKeyPairNotFound)
 }
 
+// ValidateKeyPairExists checks if a key pair with the given name exists.
+// Returns nil if the key pair exists, or an error with ErrorInvalidKeyPairNotFound if not.
+func (s *KeyServiceImpl) ValidateKeyPairExists(keyName string) error {
+	_, err := s.findKeyPairIdFromKeyName(keyName)
+	return err
+}
+
 // DeleteKeyPair removes a key pair (both public key and metadata from S3)
 func (s *KeyServiceImpl) DeleteKeyPair(input *ec2.DeleteKeyPairInput) (*ec2.DeleteKeyPairOutput, error) {
 	if input == nil {
@@ -386,6 +393,11 @@ func (s *KeyServiceImpl) DeleteKeyPair(input *ec2.DeleteKeyPairInput) (*ec2.Dele
 
 		keyName, err = s.getKeyNameFromKeyPairId(keyPairID)
 		if err != nil {
+			// AWS DeleteKeyPair is idempotent — return success for non-existent keys
+			if err.Error() == awserrors.ErrorInvalidKeyPairNotFound {
+				slog.Debug("DeleteKeyPair: key pair not found, returning success (idempotent)", "keyPairId", keyPairID)
+				return &ec2.DeleteKeyPairOutput{}, nil
+			}
 			slog.Error("Failed to get keyName from keyPairId", "keyPairId", keyPairID, "err", err)
 			return nil, err
 		}
@@ -401,6 +413,11 @@ func (s *KeyServiceImpl) DeleteKeyPair(input *ec2.DeleteKeyPairInput) (*ec2.Dele
 
 		keyPairID, err = s.findKeyPairIdFromKeyName(keyName)
 		if err != nil {
+			// AWS DeleteKeyPair is idempotent — return success for non-existent keys
+			if err.Error() == awserrors.ErrorInvalidKeyPairNotFound {
+				slog.Debug("DeleteKeyPair: key pair not found, returning success (idempotent)", "keyName", keyName)
+				return &ec2.DeleteKeyPairOutput{}, nil
+			}
 			slog.Error("Failed to find keyPairId from keyName", "keyName", keyName, "err", err)
 			return nil, err
 		}
@@ -596,7 +613,7 @@ func (s *KeyServiceImpl) ImportKeyPair(input *ec2.ImportKeyPairInput) (*ec2.Impo
 	parts := strings.Fields(publicKeyString)
 	if len(parts) < 2 {
 		slog.Error("Invalid public key format", "keyName", keyName)
-		return nil, errors.New(awserrors.ErrorInvalidKeyPairFormat)
+		return nil, errors.New(awserrors.ErrorInvalidKeyFormat)
 	}
 
 	// Determine key type from algorithm prefix
@@ -612,7 +629,13 @@ func (s *KeyServiceImpl) ImportKeyPair(input *ec2.ImportKeyPairInput) (*ec2.Impo
 		keyType = "ecdsa"
 	default:
 		slog.Error("Unsupported key type", "algorithm", algorithmPrefix, "keyName", keyName)
-		return nil, errors.New(awserrors.ErrorInvalidKeyPairFormat)
+		return nil, errors.New(awserrors.ErrorInvalidKeyFormat)
+	}
+
+	// Validate that the key data is valid base64
+	if _, err := base64.StdEncoding.DecodeString(parts[1]); err != nil {
+		slog.Error("Invalid base64 in public key material", "keyName", keyName, "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidKeyFormat)
 	}
 
 	// Calculate fingerprint from the imported public key

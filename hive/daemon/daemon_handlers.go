@@ -135,6 +135,16 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 		return
 	}
 
+	// Check AZ compatibility — volume and instance must be in the same AZ
+	if volCfg.VolumeMetadata.AvailabilityZone != "" && d.config.AZ != "" &&
+		volCfg.VolumeMetadata.AvailabilityZone != d.config.AZ {
+		slog.Error("AttachVolume: volume and instance are in different AZs",
+			"volumeId", volumeID, "volumeAZ", volCfg.VolumeMetadata.AvailabilityZone,
+			"instanceAZ", d.config.AZ)
+		respondWithError(awserrors.ErrorInvalidVolumeZoneMismatch)
+		return
+	}
+
 	// Determine device name
 	if device == "" {
 		d.Instances.Mu.Lock()
@@ -545,6 +555,18 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command qmp.Comman
 
 	slog.Info(action+" instance", "id", command.ID)
 
+	// Check state validity before attempting transition — return the correct
+	// AWS error code when the instance is already stopped/terminated/etc.
+	d.Instances.Mu.Lock()
+	currentState := instance.Status
+	d.Instances.Mu.Unlock()
+	if !vm.IsValidTransition(currentState, initialState) {
+		slog.Warn("Instance in incorrect state for "+strings.ToLower(action),
+			"instanceId", instance.ID, "currentState", string(currentState))
+		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		return
+	}
+
 	// Transition to the initial transitional state
 	if err := d.TransitionState(instance, initialState); err != nil {
 		slog.Error("Failed to transition to "+string(initialState), "instanceId", instance.ID, "err", err)
@@ -709,6 +731,31 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		return
 	}
 
+	// Validate AMI exists before allocating resources
+	if runInstancesInput.ImageId != nil {
+		_, err := d.imageService.GetAMIConfig(*runInstancesInput.ImageId)
+		if err != nil {
+			slog.Error("handleEC2RunInstances AMI not found", "imageId", *runInstancesInput.ImageId, "err", err)
+			errResp = utils.GenerateErrorPayload(awserrors.ErrorInvalidAMIIDNotFound)
+			if err := msg.Respond(errResp); err != nil {
+				slog.Error("Failed to respond to NATS request", "err", err)
+			}
+			return
+		}
+	}
+
+	// Validate key pair exists (if specified)
+	if runInstancesInput.KeyName != nil && *runInstancesInput.KeyName != "" {
+		if err := d.keyService.ValidateKeyPairExists(*runInstancesInput.KeyName); err != nil {
+			slog.Error("handleEC2RunInstances key pair not found", "keyName", *runInstancesInput.KeyName, "err", err)
+			errResp = utils.GenerateErrorPayload(awserrors.ErrorInvalidKeyPairNotFound)
+			if err := msg.Respond(errResp); err != nil {
+				slog.Error("Failed to respond to NATS request", "err", err)
+			}
+			return
+		}
+	}
+
 	// Determine how many instances to launch based on MinCount/MaxCount
 	minCount := int(*runInstancesInput.MinCount)
 	maxCount := int(*runInstancesInput.MaxCount)
@@ -769,11 +816,13 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	// Create all instances
 	var instances []*vm.VM
 	var allEC2Instances []*ec2.Instance
+	var lastRunErr error
 
 	for i := 0; i < launchCount; i++ {
 		instance, ec2Instance, err := d.instanceService.RunInstance(runInstancesInput)
 		if err != nil {
 			slog.Error("handleEC2RunInstances service.RunInstance failed", "index", i, "err", err)
+			lastRunErr = err
 			// Deallocate this instance's resources
 			d.resourceMgr.deallocate(instanceType)
 			continue
@@ -789,8 +838,15 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		for range instances {
 			d.resourceMgr.deallocate(instanceType)
 		}
-		slog.Error("handleEC2RunInstances failed to create minimum instances", "created", len(instances), "minCount", minCount)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+		// Propagate the service-layer error if it's a known AWS error code
+		errCode := awserrors.ErrorServerInternal
+		if lastRunErr != nil {
+			if _, ok := awserrors.ErrorLookup[lastRunErr.Error()]; ok {
+				errCode = lastRunErr.Error()
+			}
+		}
+		slog.Error("handleEC2RunInstances failed to create minimum instances", "created", len(instances), "minCount", minCount, "err", errCode)
+		errResp = utils.GenerateErrorPayload(errCode)
 		if err := msg.Respond(errResp); err != nil {
 			slog.Error("Failed to respond to NATS request", "err", err)
 		}
@@ -1194,11 +1250,17 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 	d.Instances.Mu.Lock()
 	defer d.Instances.Mu.Unlock()
 
-	// Filter instances if specific instance IDs were requested
+	// Validate and filter instances if specific instance IDs were requested
 	instanceIDFilter := make(map[string]bool)
 	if len(describeInstancesInput.InstanceIds) > 0 {
 		for _, id := range describeInstancesInput.InstanceIds {
-			if id != nil {
+			if id != nil && *id != "" {
+				if !strings.HasPrefix(*id, "i-") {
+					if err := msg.Respond(utils.GenerateErrorPayload(awserrors.ErrorInvalidInstanceIDMalformed)); err != nil {
+						slog.Error("Failed to respond to NATS request", "err", err)
+					}
+					return
+				}
 				instanceIDFilter[*id] = true
 			}
 		}

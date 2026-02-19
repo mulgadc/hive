@@ -249,6 +249,50 @@ func TestDeleteSnapshot(t *testing.T) {
 	assert.Empty(t, result.Snapshots)
 }
 
+// TestDeleteSnapshot_InUseByVolume tests that deleting a snapshot fails when a volume was created from it
+func TestDeleteSnapshot_InUseByVolume(t *testing.T) {
+	svc, store := setupTestSnapshotService(t)
+
+	// Create a test volume and snapshot
+	createTestVolume(t, store, "vol-source", 50)
+	snap, err := svc.CreateSnapshot(&ec2.CreateSnapshotInput{
+		VolumeId: aws.String("vol-source"),
+	})
+	require.NoError(t, err)
+
+	// Create a volume that references this snapshot (simulates CreateVolume from snapshot)
+	volumeState := viperblock.VBState{
+		VolumeConfig: viperblock.VolumeConfig{
+			VolumeMetadata: viperblock.VolumeMetadata{
+				SizeGiB:    50,
+				SnapshotID: *snap.SnapshotId,
+			},
+		},
+	}
+	data, err := json.Marshal(volumeState)
+	require.NoError(t, err)
+	_, err = store.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String("test-bucket"),
+		Key:    aws.String("vol-cloned/config.json"),
+		Body:   strings.NewReader(string(data)),
+	})
+	require.NoError(t, err)
+
+	// Attempt to delete the snapshot — should fail
+	_, err = svc.DeleteSnapshot(&ec2.DeleteSnapshotInput{
+		SnapshotId: snap.SnapshotId,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorInvalidSnapshotInUse)
+
+	// Verify snapshot still exists
+	result, err := svc.DescribeSnapshots(&ec2.DescribeSnapshotsInput{
+		SnapshotIds: []*string{snap.SnapshotId},
+	})
+	require.NoError(t, err)
+	assert.Len(t, result.Snapshots, 1)
+}
+
 // TestDeleteSnapshot_NotFound tests deleting a non-existent snapshot
 func TestDeleteSnapshot_NotFound(t *testing.T) {
 	svc, _ := setupTestSnapshotService(t)

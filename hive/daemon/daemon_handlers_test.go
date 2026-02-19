@@ -5,15 +5,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	awss3 "github.com/aws/aws-sdk-go/service/s3"
+
 	"github.com/mulgadc/hive/hive/config"
 	handlers_ec2_account "github.com/mulgadc/hive/hive/handlers/ec2/account"
 	handlers_ec2_eigw "github.com/mulgadc/hive/hive/handlers/ec2/eigw"
 	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
+	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
 	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
 	handlers_ec2_snapshot "github.com/mulgadc/hive/hive/handlers/ec2/snapshot"
 	handlers_ec2_tags "github.com/mulgadc/hive/hive/handlers/ec2/tags"
@@ -21,14 +25,15 @@ import (
 	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/vm"
+	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// createFullTestDaemon creates a test daemon with ALL services initialized (including
-// key, image, snapshot, tags, eigw, account) using in-memory object stores.
-func createFullTestDaemon(t *testing.T, natsURL string) *Daemon {
+// createFullTestDaemonWithStore creates a test daemon with ALL services initialized
+// and returns the shared memory store for seeding test data.
+func createFullTestDaemonWithStore(t *testing.T, natsURL string) (*Daemon, *objectstore.MemoryObjectStore) {
 	daemon := createTestDaemon(t, natsURL)
 
 	memStore := objectstore.NewMemoryObjectStore()
@@ -42,6 +47,13 @@ func createFullTestDaemon(t *testing.T, natsURL string) *Daemon {
 	daemon.eigwService = handlers_ec2_eigw.NewEgressOnlyIGWServiceImpl(cfg)
 	daemon.accountService = handlers_ec2_account.NewAccountSettingsServiceImpl(cfg)
 
+	return daemon, memStore
+}
+
+// createFullTestDaemon creates a test daemon with ALL services initialized (including
+// key, image, snapshot, tags, eigw, account) using in-memory object stores.
+func createFullTestDaemon(t *testing.T, natsURL string) *Daemon {
+	daemon, _ := createFullTestDaemonWithStore(t, natsURL)
 	return daemon
 }
 
@@ -307,6 +319,164 @@ func TestHandleNodeDiscover(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, daemon.node, resp.Node)
+}
+
+// --- handleEC2RunInstances AMI validation tests ---
+
+func TestHandleEC2RunInstances_InvalidAMI(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon := createFullTestDaemon(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", daemon.handleEC2RunInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-nonexistent"),
+		InstanceType: aws.String(getTestInstanceType()),
+		MinCount:     aws.Int64(1),
+		MaxCount:     aws.Int64(1),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	// Should return InvalidAMIID.NotFound, not ServerInternal
+	assert.Contains(t, string(reply.Data), "InvalidAMIID.NotFound")
+}
+
+func TestHandleEC2RunInstances_InvalidKeyPair(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon, memStore := createFullTestDaemonWithStore(t, natsURL)
+
+	// Seed a valid AMI so AMI validation passes
+	seedTestAMI(t, memStore, daemon.config.Predastore.Bucket, "ami-test123")
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", daemon.handleEC2RunInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-test123"),
+		InstanceType: aws.String(getTestInstanceType()),
+		KeyName:      aws.String("nonexistent-keypair"),
+		MinCount:     aws.Int64(1),
+		MaxCount:     aws.Int64(1),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	// Should return InvalidKeyPair.NotFound, not proceed to launch
+	assert.Contains(t, string(reply.Data), "InvalidKeyPair.NotFound")
+}
+
+func TestHandleEC2RunInstances_ValidKeyPairPassesValidation(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon, memStore := createFullTestDaemonWithStore(t, natsURL)
+
+	// Seed a valid AMI
+	seedTestAMI(t, memStore, daemon.config.Predastore.Bucket, "ami-test456")
+
+	// Seed a valid key pair (public key + metadata)
+	bucket := daemon.config.Predastore.Bucket
+	_, err := memStore.PutObject(&awss3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String("keys/123456789/my-key"),
+		Body:   strings.NewReader("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest"),
+	})
+	require.NoError(t, err)
+
+	metadataJSON := `{"KeyPairId":"key-abc123","KeyName":"my-key","KeyFingerprint":"SHA256:test"}`
+	_, err = memStore.PutObject(&awss3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String("keys/123456789/key-abc123.json"),
+		Body:   strings.NewReader(metadataJSON),
+	})
+	require.NoError(t, err)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", daemon.handleEC2RunInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-test456"),
+		InstanceType: aws.String(getTestInstanceType()),
+		KeyName:      aws.String("my-key"),
+		MinCount:     aws.Int64(1),
+		MaxCount:     aws.Int64(1),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	// Should NOT contain InvalidKeyPair.NotFound — key pair validation should pass
+	assert.NotContains(t, string(reply.Data), "InvalidKeyPair.NotFound")
+}
+
+func TestHandleEC2RunInstances_EmptyKeyNameSkipsValidation(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon, memStore := createFullTestDaemonWithStore(t, natsURL)
+	seedTestAMI(t, memStore, daemon.config.Predastore.Bucket, "ami-test789")
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", daemon.handleEC2RunInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	// No KeyName at all — should skip validation
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-test789"),
+		InstanceType: aws.String(getTestInstanceType()),
+		MinCount:     aws.Int64(1),
+		MaxCount:     aws.Int64(1),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	// Should NOT contain InvalidKeyPair.NotFound
+	assert.NotContains(t, string(reply.Data), "InvalidKeyPair.NotFound")
+}
+
+// --- handleEC2RunInstances service-layer error propagation ---
+
+func TestHandleEC2RunInstances_ServiceErrorPropagated(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon, memStore := createFullTestDaemonWithStore(t, natsURL)
+	seedTestAMI(t, memStore, daemon.config.Predastore.Bucket, "ami-propatest")
+
+	// Override instanceService with one that has an empty instance types map.
+	// The resourceMgr still has instance types, so the daemon-level check passes,
+	// but RunInstance() will fail with ErrorInvalidInstanceType.
+	emptyTypes := map[string]*ec2.InstanceTypeInfo{}
+	daemon.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(
+		daemon.config, emptyTypes, daemon.natsConn, &daemon.Instances,
+		objectstore.NewMemoryObjectStore(),
+	)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", daemon.handleEC2RunInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-propatest"),
+		InstanceType: aws.String(getTestInstanceType()),
+		MinCount:     aws.Int64(1),
+		MaxCount:     aws.Int64(1),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	// Should propagate the specific AWS error from the service layer,
+	// not swallow it into ServerInternal
+	assert.Contains(t, string(reply.Data), "InvalidInstanceType")
+	assert.NotContains(t, string(reply.Data), "ServerInternal")
 }
 
 // --- handleStopOrTerminateInstance tests (JetStream required for TransitionState) ---
@@ -1203,4 +1373,74 @@ func TestHandleEC2GetConsoleOutput_NotFound(t *testing.T) {
 
 	// Should get an error response (instance not found)
 	assert.Contains(t, string(reply.Data), "InvalidInstanceID.NotFound")
+}
+
+// TestAttachVolume_ZoneMismatch verifies that attaching a volume in a different AZ
+// returns InvalidVolume.ZoneMismatch instead of proceeding.
+func TestAttachVolume_ZoneMismatch(t *testing.T) {
+	natsURL := sharedNATSURL
+	daemon, store := createFullTestDaemonWithStore(t, natsURL)
+
+	// Set the daemon's AZ
+	daemon.config.AZ = "us-east-1a"
+
+	instanceID := "i-test-az-mismatch"
+	volumeID := "vol-az-mismatch"
+
+	// Create a running instance
+	instance := &vm.VM{
+		ID:           instanceID,
+		InstanceType: getTestInstanceType(),
+		Status:       vm.StateRunning,
+		Instance:     &ec2.Instance{},
+		QMPClient:    &qmp.QMPClient{},
+	}
+	daemon.Instances.VMS[instanceID] = instance
+
+	// Create a volume in a different AZ
+	wrapper := struct {
+		VolumeConfig viperblock.VolumeConfig `json:"VolumeConfig"`
+	}{
+		VolumeConfig: viperblock.VolumeConfig{
+			VolumeMetadata: viperblock.VolumeMetadata{
+				VolumeID:         volumeID,
+				SizeGiB:          10,
+				State:            "available",
+				AvailabilityZone: "us-west-2a",
+			},
+		},
+	}
+	data, _ := json.Marshal(wrapper)
+	store.PutObject(&awss3.PutObjectInput{
+		Bucket: aws.String("test-bucket"),
+		Key:    aws.String(volumeID + "/config.json"),
+		Body:   strings.NewReader(string(data)),
+	})
+
+	// Subscribe handler
+	sub, err := daemon.natsConn.Subscribe(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		daemon.handleEC2Events,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	command := qmp.Command{
+		ID: instanceID,
+		Attributes: qmp.Attributes{
+			AttachVolume: true,
+		},
+		AttachVolumeData: &qmp.AttachVolumeData{
+			VolumeID: volumeID,
+		},
+	}
+	cmdData, _ := json.Marshal(command)
+
+	resp, err := daemon.natsConn.Request(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		cmdData,
+		5*time.Second,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, string(resp.Data), "InvalidVolume.ZoneMismatch")
 }
