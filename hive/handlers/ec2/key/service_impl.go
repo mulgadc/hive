@@ -393,6 +393,11 @@ func (s *KeyServiceImpl) DeleteKeyPair(input *ec2.DeleteKeyPairInput) (*ec2.Dele
 
 		keyName, err = s.getKeyNameFromKeyPairId(keyPairID)
 		if err != nil {
+			// AWS DeleteKeyPair is idempotent — return success for non-existent keys
+			if err.Error() == awserrors.ErrorInvalidKeyPairNotFound {
+				slog.Debug("DeleteKeyPair: key pair not found, returning success (idempotent)", "keyPairId", keyPairID)
+				return &ec2.DeleteKeyPairOutput{}, nil
+			}
 			slog.Error("Failed to get keyName from keyPairId", "keyPairId", keyPairID, "err", err)
 			return nil, err
 		}
@@ -408,6 +413,11 @@ func (s *KeyServiceImpl) DeleteKeyPair(input *ec2.DeleteKeyPairInput) (*ec2.Dele
 
 		keyPairID, err = s.findKeyPairIdFromKeyName(keyName)
 		if err != nil {
+			// AWS DeleteKeyPair is idempotent — return success for non-existent keys
+			if err.Error() == awserrors.ErrorInvalidKeyPairNotFound {
+				slog.Debug("DeleteKeyPair: key pair not found, returning success (idempotent)", "keyName", keyName)
+				return &ec2.DeleteKeyPairOutput{}, nil
+			}
 			slog.Error("Failed to find keyPairId from keyName", "keyName", keyName, "err", err)
 			return nil, err
 		}

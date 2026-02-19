@@ -7,6 +7,9 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/objectstore"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestKeyPairMetadataMarshaling tests that CreateKeyPairOutput (used as metadata) can be marshaled/unmarshaled correctly
@@ -387,6 +390,29 @@ func TestImportKeyPairKeyTypeDetection(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDeleteKeyPairIdempotent verifies AWS-compatible idempotent behavior:
+// deleting a non-existent key pair returns success instead of NotFound.
+func TestDeleteKeyPairIdempotent(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := NewKeyServiceImplWithStore(store, "test-bucket", "123456789")
+
+	t.Run("NonExistentKeyName", func(t *testing.T) {
+		result, err := svc.DeleteKeyPair(&ec2.DeleteKeyPairInput{
+			KeyName: aws.String("no-such-key"),
+		})
+		require.NoError(t, err)
+		assert.NotNil(t, result)
+	})
+
+	t.Run("NonExistentKeyPairId", func(t *testing.T) {
+		result, err := svc.DeleteKeyPair(&ec2.DeleteKeyPairInput{
+			KeyPairId: aws.String("key-0123456789abcdef0"),
+		})
+		require.NoError(t, err)
+		assert.NotNil(t, result)
+	})
 }
 
 // TestImportKeyPairInputValidation tests input validation for ImportKeyPair
