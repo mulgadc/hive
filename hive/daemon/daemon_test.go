@@ -3478,3 +3478,73 @@ func TestRollbackEBSMount_NATSTimeout(t *testing.T) {
 	// Should not panic, just log the timeout
 	daemon.rollbackEBSMount(ebsReq)
 }
+
+// TestStopTerminate_IncorrectInstanceState verifies that stopping an already-stopped
+// instance or terminating an already-terminated instance returns IncorrectInstanceState
+// instead of ServerInternal.
+func TestStopTerminate_IncorrectInstanceState(t *testing.T) {
+	natsURL := sharedNATSURL
+	daemon := createTestDaemon(t, natsURL)
+
+	instanceID := "i-test-state-check"
+	instance := &vm.VM{
+		ID:           instanceID,
+		InstanceType: getTestInstanceType(),
+		Status:       vm.StateStopped,
+		Instance:     &ec2.Instance{},
+	}
+	daemon.Instances.VMS[instanceID] = instance
+
+	sub, err := daemon.natsConn.Subscribe(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		daemon.handleEC2Events,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	t.Run("StopAlreadyStoppedInstance", func(t *testing.T) {
+		daemon.Instances.Mu.Lock()
+		instance.Status = vm.StateStopped
+		daemon.Instances.Mu.Unlock()
+
+		command := qmp.Command{
+			ID: instanceID,
+			Attributes: qmp.Attributes{
+				StopInstance: true,
+			},
+		}
+		data, _ := json.Marshal(command)
+
+		resp, err := daemon.natsConn.Request(
+			fmt.Sprintf("ec2.cmd.%s", instanceID),
+			data,
+			5*time.Second,
+		)
+		require.NoError(t, err)
+		assert.Contains(t, string(resp.Data), "IncorrectInstanceState")
+		assert.NotContains(t, string(resp.Data), "ServerInternal")
+	})
+
+	t.Run("TerminateAlreadyTerminatedInstance", func(t *testing.T) {
+		daemon.Instances.Mu.Lock()
+		instance.Status = vm.StateTerminated
+		daemon.Instances.Mu.Unlock()
+
+		command := qmp.Command{
+			ID: instanceID,
+			Attributes: qmp.Attributes{
+				TerminateInstance: true,
+			},
+		}
+		data, _ := json.Marshal(command)
+
+		resp, err := daemon.natsConn.Request(
+			fmt.Sprintf("ec2.cmd.%s", instanceID),
+			data,
+			5*time.Second,
+		)
+		require.NoError(t, err)
+		assert.Contains(t, string(resp.Data), "IncorrectInstanceState")
+		assert.NotContains(t, string(resp.Data), "ServerInternal")
+	})
+}

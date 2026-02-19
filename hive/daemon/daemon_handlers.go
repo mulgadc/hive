@@ -545,6 +545,18 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command qmp.Comman
 
 	slog.Info(action+" instance", "id", command.ID)
 
+	// Check state validity before attempting transition — return the correct
+	// AWS error code when the instance is already stopped/terminated/etc.
+	d.Instances.Mu.Lock()
+	currentState := instance.Status
+	d.Instances.Mu.Unlock()
+	if !vm.IsValidTransition(currentState, initialState) {
+		slog.Warn("Instance in incorrect state for "+strings.ToLower(action),
+			"instanceId", instance.ID, "currentState", string(currentState))
+		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		return
+	}
+
 	// Transition to the initial transitional state
 	if err := d.TransitionState(instance, initialState); err != nil {
 		slog.Error("Failed to transition to "+string(initialState), "instanceId", instance.ID, "err", err)
