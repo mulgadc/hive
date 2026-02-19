@@ -60,6 +60,20 @@ func TestParseRunInstances(t *testing.T) {
 		},
 
 		{
+			name: "InvalidMinCount",
+			input: &ec2.RunInstancesInput{
+				ImageId:          defaults.ImageId,
+				InstanceType:     defaults.InstanceType,
+				MinCount:         aws.Int64(0),
+				MaxCount:         aws.Int64(1),
+				KeyName:          defaults.KeyName,
+				SecurityGroupIds: defaults.SecurityGroupIds,
+				SubnetId:         defaults.SubnetId,
+			},
+			want: errors.New(awserrors.ErrorInvalidParameterValue),
+		},
+
+		{
 			name: "InvalidNoImageId",
 			input: &ec2.RunInstancesInput{
 				ImageId:          aws.String(""),
@@ -88,7 +102,7 @@ func TestParseRunInstances(t *testing.T) {
 		},
 
 		{
-			name: "InvalidAMIIDMalformed",
+			name: "InvalidNoInstanceType",
 			input: &ec2.RunInstancesInput{
 				ImageId:          aws.String("invalid-name-here"),
 				InstanceType:     defaults.InstanceType,
@@ -198,4 +212,7 @@ func TestParseRunInstances(t *testing.T) {
 			}
 		})
 	}
+
+	// Additional test
+
 }
