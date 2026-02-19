@@ -169,6 +169,44 @@ echo "Detected architecture for $INSTANCE_TYPE: $ARCH"
 # Verify describe-instance-types (ensure the chosen type is available)
 $AWS_EC2 describe-instance-types | jq -e ".InstanceTypes[] | select(.InstanceType==\"$INSTANCE_TYPE\")"
 
+# Phase 2b: Serial Console Access Settings
+echo "Phase 2b: Serial Console Access Settings"
+
+# Default should be disabled
+SERIAL_DEFAULT=$($AWS_EC2 get-serial-console-access-status --query 'SerialConsoleAccessEnabled' --output text)
+if [ "$SERIAL_DEFAULT" != "False" ]; then
+    echo "Expected serial console access default to be False, got $SERIAL_DEFAULT"
+    exit 1
+fi
+echo "  Default state: disabled"
+
+# Enable
+ENABLE_RESULT=$($AWS_EC2 enable-serial-console-access --query 'SerialConsoleAccessEnabled' --output text)
+if [ "$ENABLE_RESULT" != "True" ]; then
+    echo "Expected enable to return True, got $ENABLE_RESULT"
+    exit 1
+fi
+SERIAL_ENABLED=$($AWS_EC2 get-serial-console-access-status --query 'SerialConsoleAccessEnabled' --output text)
+if [ "$SERIAL_ENABLED" != "True" ]; then
+    echo "Expected serial console access to be True after enable, got $SERIAL_ENABLED"
+    exit 1
+fi
+echo "  Enabled: $SERIAL_ENABLED"
+
+# Disable
+DISABLE_RESULT=$($AWS_EC2 disable-serial-console-access --query 'SerialConsoleAccessEnabled' --output text)
+if [ "$DISABLE_RESULT" != "False" ]; then
+    echo "Expected disable to return False, got $DISABLE_RESULT"
+    exit 1
+fi
+SERIAL_DISABLED=$($AWS_EC2 get-serial-console-access-status --query 'SerialConsoleAccessEnabled' --output text)
+if [ "$SERIAL_DISABLED" != "False" ]; then
+    echo "Expected serial console access to be False after disable, got $SERIAL_DISABLED"
+    exit 1
+fi
+echo "  Disabled: $SERIAL_DISABLED"
+echo "Serial console access settings tests passed"
+
 # Phase 3: SSH Key Management
 echo "Phase 3: SSH Key Management"
 # Create test-key-1 (create-key-pair) and verify private key material is returned
@@ -395,6 +433,45 @@ else
 fi
 
 echo "SSH connectivity and volume verification passed"
+
+# Phase 5a-iii: Console Output & Serial Console Enforcement
+echo "Phase 5a-iii: Console Output & Serial Console Enforcement"
+
+# Serial console access is disabled from Phase 2b — GetConsoleOutput should be blocked
+echo "Testing GetConsoleOutput blocked when serial console access disabled..."
+expect_error "SerialConsoleSessionUnavailable" $AWS_EC2 get-console-output \
+    --instance-id "$INSTANCE_ID"
+echo "  GetConsoleOutput correctly blocked"
+
+# Enable serial console access
+echo "Enabling serial console access..."
+$AWS_EC2 enable-serial-console-access > /dev/null
+
+# GetConsoleOutput should now succeed
+echo "Testing GetConsoleOutput succeeds when serial console access enabled..."
+CONSOLE_OUTPUT=$($AWS_EC2 get-console-output --instance-id "$INSTANCE_ID")
+CONSOLE_INSTANCE=$(echo "$CONSOLE_OUTPUT" | jq -r '.InstanceId')
+CONSOLE_DATA=$(echo "$CONSOLE_OUTPUT" | jq -r '.Output // empty')
+
+if [ "$CONSOLE_INSTANCE" != "$INSTANCE_ID" ]; then
+    echo "GetConsoleOutput InstanceId mismatch: expected $INSTANCE_ID, got $CONSOLE_INSTANCE"
+    exit 1
+fi
+echo "  GetConsoleOutput succeeded (InstanceId=$CONSOLE_INSTANCE, has output=$([ -n "$CONSOLE_DATA" ] && echo yes || echo no))"
+
+# Disable serial console access — GetConsoleOutput should be blocked again
+echo "Disabling serial console access..."
+$AWS_EC2 disable-serial-console-access > /dev/null
+
+echo "Testing GetConsoleOutput blocked again after disable..."
+expect_error "SerialConsoleSessionUnavailable" $AWS_EC2 get-console-output \
+    --instance-id "$INSTANCE_ID"
+echo "  GetConsoleOutput correctly blocked after disable"
+
+# Re-enable for the rest of the test suite (in case future tests need it)
+$AWS_EC2 enable-serial-console-access > /dev/null
+
+echo "Console output enforcement tests passed"
 
 # Verify root volume attached to the instance (describe-volumes)
 VOLUME_ID=$($AWS_EC2 describe-volumes --query 'Volumes[0].VolumeId' --output text)
@@ -1032,6 +1109,57 @@ if echo "$UNSUPPORTED_OUTPUT" | grep -q "InvalidAction\|UnknownAction\|Error"; t
 else
     echo "  WARNING: Unsupported action did not return expected error (may need auth)"
 fi
+
+# 8g: RunInstances with non-existent AMI (valid format but doesn't exist)
+echo "8g: RunInstances with non-existent AMI..."
+expect_error "InvalidAMIID.NotFound" $AWS_EC2 run-instances \
+    --image-id ami-0000000000000dead --instance-type "$INSTANCE_TYPE" --key-name test-key-1
+
+# 8h: RunInstances with non-existent key pair
+echo "8h: RunInstances with non-existent key pair..."
+expect_error "InvalidKeyPair.NotFound" $AWS_EC2 run-instances \
+    --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" --key-name nonexistent-key-xyz
+
+# 8i: DeleteVolume on non-existent volume
+echo "8i: DeleteVolume non-existent volume..."
+expect_error "InvalidVolume.NotFound" $AWS_EC2 delete-volume \
+    --volume-id vol-0000000000000dead
+
+# 8j: CreateKeyPair with duplicate name (test-key-1 exists from Phase 3)
+echo "8j: CreateKeyPair duplicate name..."
+expect_error "InvalidKeyPair.Duplicate" $AWS_EC2 create-key-pair \
+    --key-name test-key-1
+
+# 8k: ImportKeyPair with duplicate name (test-key-1 exists from Phase 3)
+echo "8k: ImportKeyPair duplicate name..."
+expect_error "InvalidKeyPair.Duplicate" $AWS_EC2 import-key-pair \
+    --key-name test-key-1 --public-key-material "fileb://test-key-2-local.pub"
+
+# 8l: ImportKeyPair with invalid key format
+echo "8l: ImportKeyPair invalid key format..."
+echo "not-a-valid-public-key" > /tmp/bad-key.pub
+expect_error "InvalidKey.Format" $AWS_EC2 import-key-pair \
+    --key-name bad-format-key --public-key-material "fileb:///tmp/bad-key.pub"
+
+# 8m: DescribeVolumes with non-existent volume ID
+echo "8m: DescribeVolumes non-existent volume..."
+expect_error "InvalidVolume.NotFound" $AWS_EC2 describe-volumes \
+    --volume-ids vol-0000000000000dead
+
+# 8n: DescribeImages with non-existent AMI ID
+echo "8n: DescribeImages non-existent AMI..."
+expect_error "InvalidAMIID.NotFound" $AWS_EC2 describe-images \
+    --image-ids ami-0000000000000dead
+
+# 8o: CreateImage with duplicate name (e2e-custom-ami exists from Phase 5e)
+echo "8o: CreateImage duplicate name..."
+expect_error "InvalidAMIName.Duplicate" $AWS_EC2 create-image \
+    --instance-id "$INSTANCE_ID" --name "e2e-custom-ami"
+
+# 8p: DeleteKeyPair for non-existent key — should succeed (idempotent, matches AWS)
+echo "8p: DeleteKeyPair non-existent key (idempotent)..."
+$AWS_EC2 delete-key-pair --key-name nonexistent-key-99999
+echo "  DeleteKeyPair for non-existent key succeeded (idempotent)"
 
 echo "Negative test suite passed"
 

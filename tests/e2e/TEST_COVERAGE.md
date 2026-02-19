@@ -15,6 +15,11 @@
 - `describe-instance-types` (discover available types)
 - Select nano instance type and detect architecture
 
+### Phase 2b: Serial Console Access Settings
+- `get-serial-console-access-status` (verify default disabled)
+- `enable-serial-console-access` (verify returns true, get confirms true)
+- `disable-serial-console-access` (verify returns false, get confirms false)
+
 ### Phase 3: SSH Key Management
 - `create-key-pair` (test-key-1, verify private key material)
 - `import-key-pair` (test-key-2, from local RSA key)
@@ -34,6 +39,14 @@
 - Verify KeyName matches requested key
 - Verify ImageId matches requested AMI
 - Verify at least 1 BlockDeviceMapping present
+
+### Phase 5a-iii: Console Output & Serial Console Enforcement
+- `get-console-output` when serial console disabled (expect `SerialConsoleSessionUnavailable`)
+- `enable-serial-console-access`
+- `get-console-output` succeeds (verify InstanceId in response)
+- `disable-serial-console-access`
+- `get-console-output` blocked again (expect `SerialConsoleSessionUnavailable`)
+- Re-enable serial console access for remaining tests
 
 ### Phase 5 (cont): Root Volume
 - `describe-volumes` (verify root volume attached)
@@ -107,6 +120,16 @@
 - `detach-volume` on boot volume (expect `OperationNotPermitted`)
 - `delete-snapshot` on non-existent snapshot (expect `InvalidSnapshot.NotFound`)
 - Unsupported Action via raw HTTP (expect `InvalidAction` or error response)
+- `run-instances` with non-existent AMI ID (expect `InvalidAMIID.NotFound`)
+- `run-instances` with non-existent key pair (expect `InvalidKeyPair.NotFound`)
+- `delete-volume` on non-existent volume (expect `InvalidVolume.NotFound`)
+- `create-key-pair` with duplicate name (expect `InvalidKeyPair.Duplicate`)
+- `import-key-pair` with duplicate name (expect `InvalidKeyPair.Duplicate`)
+- `import-key-pair` with invalid key format (expect `InvalidKey.Format`)
+- `describe-volumes` with non-existent volume ID (expect `InvalidVolume.NotFound`)
+- `describe-images` with non-existent AMI ID (expect `InvalidAMIID.NotFound`)
+- `create-image` with duplicate name (expect `InvalidAMIName.Duplicate`)
+- `delete-key-pair` on non-existent key (expect success — idempotent, matches AWS)
 
 ### Phase 9: Terminate and Verify Cleanup
 - `delete-snapshot` (CreateImage backing snapshot, so DeleteOnTermination is not blocked)
