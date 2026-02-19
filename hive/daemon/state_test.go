@@ -61,6 +61,7 @@ func createDaemonWithJetStream(t *testing.T) *Daemon {
 	daemon.jsManager, err = NewJetStreamManager(nc, 1)
 	require.NoError(t, err)
 	require.NoError(t, daemon.jsManager.InitKVBucket())
+	require.NoError(t, daemon.jsManager.InitClusterStateBucket())
 
 	return daemon
 }
@@ -588,6 +589,15 @@ func TestTransitionState_MultipleInstancesIndependent(t *testing.T) {
 // running, isInstanceProcessRunning returns false for all instances, which
 // exercises the recovery state resolution logic.
 
+// simulateCleanRestore writes a clean shutdown marker then calls restoreInstances.
+// Without the marker, restoreInstances sleeps 3s waiting for stale QEMU PIDs —
+// unnecessary in tests since no QEMU process ever runs.
+func simulateCleanRestore(t *testing.T, daemon *Daemon) {
+	t.Helper()
+	require.NoError(t, daemon.jsManager.WriteShutdownMarker(daemon.node))
+	daemon.restoreInstances()
+}
+
 // TestRestoreInstances_StoppingFinalizedToStopped verifies that an instance
 // stuck in StateStopping when the daemon died gets finalized to StateStopped
 // and migrated to shared KV.
@@ -605,7 +615,7 @@ func TestRestoreInstances_StoppingFinalizedToStopped(t *testing.T) {
 	daemon.Instances.VMS = make(map[string]*vm.VM)
 
 	// restoreInstances loads from JetStream and resolves transitional states.
-	daemon.restoreInstances()
+	simulateCleanRestore(t, daemon)
 
 	// Stopped instances are migrated to shared KV and removed from local map
 	_, ok := daemon.Instances.VMS["i-restore-stop"]
@@ -630,7 +640,7 @@ func TestRestoreInstances_ShuttingDownFinalizedToTerminated(t *testing.T) {
 	require.NoError(t, daemon.WriteState())
 
 	daemon.Instances.VMS = make(map[string]*vm.VM)
-	daemon.restoreInstances()
+	simulateCleanRestore(t, daemon)
 
 	instance, ok := daemon.Instances.VMS["i-restore-shut"]
 	require.True(t, ok, "instance should be loaded from state")
@@ -650,7 +660,7 @@ func TestRestoreInstances_TerminatedSkipped(t *testing.T) {
 	require.NoError(t, daemon.WriteState())
 
 	daemon.Instances.VMS = make(map[string]*vm.VM)
-	daemon.restoreInstances()
+	simulateCleanRestore(t, daemon)
 
 	instance, ok := daemon.Instances.VMS["i-restore-term"]
 	require.True(t, ok, "terminated instance should still be loaded")
@@ -673,7 +683,7 @@ func TestRestoreInstances_UserStoppedMigratedToSharedKV(t *testing.T) {
 	require.NoError(t, daemon.WriteState())
 
 	daemon.Instances.VMS = make(map[string]*vm.VM)
-	daemon.restoreInstances()
+	simulateCleanRestore(t, daemon)
 
 	// Stopped instances should be migrated to shared KV
 	_, ok := daemon.Instances.VMS["i-restore-userstop"]
@@ -700,7 +710,7 @@ func TestRestoreInstances_RunningResetToPending(t *testing.T) {
 	require.NoError(t, daemon.WriteState())
 
 	daemon.Instances.VMS = make(map[string]*vm.VM)
-	daemon.restoreInstances()
+	simulateCleanRestore(t, daemon)
 
 	instance, ok := daemon.Instances.VMS["i-restore-run"]
 	require.True(t, ok, "running instance should still be loaded")
@@ -732,7 +742,7 @@ func TestRestoreInstances_MixedStates(t *testing.T) {
 	require.NoError(t, daemon.WriteState())
 
 	daemon.Instances.VMS = make(map[string]*vm.VM)
-	daemon.restoreInstances()
+	simulateCleanRestore(t, daemon)
 
 	// Stopped instances are migrated to shared KV and removed from local map
 	assert.Nil(t, daemon.Instances.VMS["i-mix-stopping"],
@@ -771,7 +781,7 @@ func TestRestoreInstances_StatePersistsAfterRecovery(t *testing.T) {
 
 	// First restart: finalize transitional states.
 	daemon.Instances.VMS = make(map[string]*vm.VM)
-	daemon.restoreInstances()
+	simulateCleanRestore(t, daemon)
 
 	// stopping→stopped migrates to shared KV
 	assert.Nil(t, daemon.Instances.VMS["i-persist-stop"],
@@ -786,7 +796,7 @@ func TestRestoreInstances_StatePersistsAfterRecovery(t *testing.T) {
 	// Second restart: stopped instance is in shared KV (not per-node state),
 	// so local map won't have it. Terminated instance persists in per-node state.
 	daemon.Instances.VMS = make(map[string]*vm.VM)
-	daemon.restoreInstances()
+	simulateCleanRestore(t, daemon)
 
 	// Stopped instance should still be in shared KV
 	stoppedInst2, err := daemon.jsManager.LoadStoppedInstance("i-persist-stop")
@@ -844,7 +854,7 @@ func TestRestoreInstances_StoppedInstanceMigratedToSharedKV(t *testing.T) {
 
 	// Simulate daemon restart: clear in-memory state and restore from JetStream.
 	daemon.Instances.VMS = make(map[string]*vm.VM)
-	daemon.restoreInstances()
+	simulateCleanRestore(t, daemon)
 
 	// Instance should not be in local map (migrated to shared KV).
 	_, ok := daemon.Instances.VMS[instanceID]
@@ -876,7 +886,7 @@ func TestRestoreInstances_UnknownTypeMigratedToStoppedWithReason(t *testing.T) {
 
 	// Simulate daemon restart
 	daemon.Instances.VMS = make(map[string]*vm.VM)
-	daemon.restoreInstances()
+	simulateCleanRestore(t, daemon)
 
 	// Instance should not be in local map (migrated to shared KV)
 	_, ok := daemon.Instances.VMS[instanceID]

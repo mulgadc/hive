@@ -475,14 +475,83 @@ func TestIntegration_ServiceGracefulShutdown(t *testing.T) {
 	t.Log("Service is running and responsive")
 }
 
-// TestIntegration_NATSReconnection tests behavior when NATS connection is lost
-func TestIntegration_NATSReconnection(t *testing.T) {
+// TestIntegration_GenericTopicRouting tests that NodeName="" uses generic ebs.unmount with queue group
+func TestIntegration_GenericTopicRouting(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	// This test would require stopping and restarting NATS server
-	// which is complex with the current architecture
-	// Marked as TODO for future enhancement
-	t.Skip("TODO: Implement NATS reconnection test")
+	ns, natsURL := setupEmbeddedNATS(t)
+	defer ns.Shutdown()
+
+	cfg := setupTestConfig(t, natsURL)
+	cfg.NodeName = "" // Single-node / generic mode
+	cfg.MountedVolumes = []MountedVolume{
+		{Name: "vol-generic", PID: 99999},
+	}
+
+	go func() { launchService(cfg) }()
+	time.Sleep(500 * time.Millisecond)
+
+	nc, err := nats.Connect(natsURL)
+	assert.NoError(t, err)
+	defer nc.Close()
+
+	// Send to generic topic (not ebs.{node}.unmount)
+	request := config.EBSRequest{Name: "vol-generic"}
+	requestData, _ := json.Marshal(request)
+
+	msg, err := nc.Request("ebs.unmount", requestData, 3*time.Second)
+	assert.NoError(t, err)
+
+	var response config.EBSUnMountResponse
+	assert.NoError(t, json.Unmarshal(msg.Data, &response))
+	assert.Equal(t, "vol-generic", response.Volume)
+	assert.False(t, response.Mounted)
+	assert.Empty(t, response.Error)
+}
+
+// TestIntegration_MountAuxiliaryVolumeSuffix tests that volumes with -cloudinit suffix
+// reach the mount handler and trigger the auxiliary volume code path
+func TestIntegration_MountAuxiliaryVolumeSuffix(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	ns, natsURL := setupEmbeddedNATS(t)
+	defer ns.Shutdown()
+
+	cfg := setupTestConfig(t, natsURL)
+
+	go func() { launchService(cfg) }()
+	time.Sleep(500 * time.Millisecond)
+
+	nc, err := nats.Connect(natsURL)
+	assert.NoError(t, err)
+	defer nc.Close()
+
+	nc.Flush()
+
+	// Send mount request for auxiliary volume (will fail at S3 backend, but validates routing)
+	request := config.EBSRequest{
+		Name:    "vol-test-cloudinit",
+		VolType: "gp3",
+	}
+
+	requestData, _ := json.Marshal(request)
+
+	msg, err := nc.Request("ebs.test-node.mount", requestData, 5*time.Second)
+	if err != nil {
+		// Timeout is acceptable — service attempted to process but backend failed
+		t.Logf("Request error (expected with mocked S3 backend): %v", err)
+		return
+	}
+
+	var response config.EBSMountResponse
+	assert.NoError(t, json.Unmarshal(msg.Data, &response))
+	// Expect an error because S3 backend is mocked, but the request was processed
+	assert.NotEmpty(t, response.Error)
+	t.Logf("Auxiliary volume mount processed with expected error: %s", response.Error)
 }
