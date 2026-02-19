@@ -234,7 +234,18 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput) (*e
 
 	// Fast path: if specific volume IDs are requested, fetch them directly
 	if len(input.VolumeIds) > 0 {
+		// Count non-nil requested IDs
+		requested := 0
+		for _, id := range input.VolumeIds {
+			if id != nil {
+				requested++
+			}
+		}
 		volumes = s.fetchVolumesByIDs(input.VolumeIds)
+		// AWS returns InvalidVolume.NotFound if any requested ID is missing
+		if len(volumes) != requested {
+			return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
+		}
 		slog.Info("DescribeVolumes completed", "count", len(volumes))
 		return &ec2.DescribeVolumesOutput{Volumes: volumes}, nil
 	}
