@@ -261,6 +261,17 @@ func (s *ImageServiceImpl) CreateImageFromInstance(params CreateImageParams) (*e
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
+	// Check for duplicate AMI name before doing any expensive work
+	name := aws.StringValue(input.Name)
+	if name != "" {
+		if exists, err := s.amiNameExists(name); err != nil {
+			slog.Error("CreateImageFromInstance: failed to check AMI name uniqueness", "name", name, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		} else if exists {
+			return nil, errors.New(awserrors.ErrorInvalidAMINameDuplicate)
+		}
+	}
+
 	amiID := utils.GenerateResourceID("ami")
 	snapshotID := utils.GenerateResourceID("snap")
 
@@ -307,7 +318,6 @@ func (s *ImageServiceImpl) CreateImageFromInstance(params CreateImageParams) (*e
 	}
 
 	// Step 5: Build and store AMI config
-	name := aws.StringValue(input.Name)
 	description := aws.StringValue(input.Description)
 
 	amiConfig := viperblock.VBState{
@@ -466,6 +476,45 @@ func (s *ImageServiceImpl) getVolumeConfig(volumeID string) (*viperblock.VolumeC
 		return nil, err
 	}
 	return &vbState.VolumeConfig, nil
+}
+
+// amiNameExists checks if any existing AMI already uses the given name.
+func (s *ImageServiceImpl) amiNameExists(name string) (bool, error) {
+	listResult, err := s.store.ListObjects(&s3.ListObjectsInput{
+		Bucket:    aws.String(s.bucketName),
+		Prefix:    aws.String("ami-"),
+		Delimiter: aws.String("/"),
+	})
+	if err != nil {
+		return false, fmt.Errorf("amiNameExists: failed to list AMIs: %w", err)
+	}
+
+	for _, prefix := range listResult.CommonPrefixes {
+		if prefix.Prefix == nil {
+			continue
+		}
+		configKey := *prefix.Prefix + "config.json"
+		result, err := s.store.GetObject(&s3.GetObjectInput{
+			Bucket: aws.String(s.bucketName),
+			Key:    aws.String(configKey),
+		})
+		if err != nil {
+			continue
+		}
+
+		var vbState viperblock.VBState
+		decodeErr := json.NewDecoder(result.Body).Decode(&vbState)
+		_ = result.Body.Close()
+		if decodeErr != nil {
+			continue
+		}
+
+		if vbState.VolumeConfig.AMIMetadata.Name == name {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // GetAMIConfig retrieves the AMI metadata for a given image ID from S3.
