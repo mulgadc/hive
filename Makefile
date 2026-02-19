@@ -60,6 +60,19 @@ test:
 	@echo -e "\n....Running tests for $(GO_PROJECT_NAME)...."
 	LOG_IGNORE=1 go test -v -timeout 120s ./...
 
+# Run unit tests with coverage profile
+COVERPROFILE ?= coverage.out
+test-cover:
+	@echo -e "\n....Running tests with coverage for $(GO_PROJECT_NAME)...."
+	LOG_IGNORE=1 go test -v -timeout 120s -coverprofile=$(COVERPROFILE) -covermode=atomic ./hive/...
+	@echo ""
+	@echo "=== Total Coverage ==="
+	@go tool cover -func=$(COVERPROFILE) | tail -1
+
+# Check that new/changed code meets coverage threshold (runs tests first)
+diff-coverage: test-cover
+	@scripts/diff-coverage.sh $(COVERPROFILE)
+
 bench:
 	@echo -e "\n....Running benchmarks for $(GO_PROJECT_NAME)...."
 	$(MAKE) easyjson
@@ -192,7 +205,7 @@ test-docker: test-docker-build
 	@echo -e "\n....Running Multi-Node E2E Tests...."
 	docker run --privileged --rm -v /dev/kvm:/dev/kvm --cap-add=NET_ADMIN $(E2E_IMAGE) ./tests/e2e/run-multinode-e2e.sh
 
-.PHONY: build build-ui go_build go_run preflight test bench run clean \
+.PHONY: build build-ui go_build go_run preflight test test-cover diff-coverage bench run clean \
 	install-system install-go install-aws quickinstall \
 	format check-format modernize check-modernize vet security-check \
 	test-docker-build test-docker-single test-docker-multi test-docker

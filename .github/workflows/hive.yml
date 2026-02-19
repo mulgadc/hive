@@ -23,19 +23,20 @@ jobs:
         uses: actions/checkout@v6
         with:
           path: hive
+          fetch-depth: 2
 
       - name: Checkout Viperblock
         uses: actions/checkout@v6
         with:
           repository: mulgadc/viperblock
-          ref: dev
+          ref: ${{ github.ref_name }}
           path: viperblock
 
       - name: Checkout Predastore
         uses: actions/checkout@v6
         with:
           repository: mulgadc/predastore
-          ref: dev
+          ref: ${{ github.ref_name }}
           path: predastore
 
       - name: Setup Go Workspace
@@ -50,8 +51,11 @@ jobs:
       - name: Build Hive
         run: make -C hive build
 
-      - name: Run Tests
-        run: make -C hive test
+      - name: Run Tests with Coverage
+        run: make -C hive test-cover
+
+      - name: Check Diff Coverage
+        run: cd hive && scripts/diff-coverage.sh coverage.out --base HEAD~1
 
   lint_and_security:
     name: Hive Lint and Security
@@ -67,14 +71,14 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: mulgadc/viperblock
-          ref: dev
+          ref: ${{ github.ref_name }}
           path: viperblock
 
       - name: Checkout Predastore
         uses: actions/checkout@v6
         with:
           repository: mulgadc/predastore
-          ref: dev
+          ref: ${{ github.ref_name }}
           path: predastore
 
       - name: Setup Go Workspace
