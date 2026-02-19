@@ -613,7 +613,7 @@ func (s *KeyServiceImpl) ImportKeyPair(input *ec2.ImportKeyPairInput) (*ec2.Impo
 	parts := strings.Fields(publicKeyString)
 	if len(parts) < 2 {
 		slog.Error("Invalid public key format", "keyName", keyName)
-		return nil, errors.New(awserrors.ErrorInvalidKeyPairFormat)
+		return nil, errors.New(awserrors.ErrorInvalidKeyFormat)
 	}
 
 	// Determine key type from algorithm prefix
@@ -629,7 +629,13 @@ func (s *KeyServiceImpl) ImportKeyPair(input *ec2.ImportKeyPairInput) (*ec2.Impo
 		keyType = "ecdsa"
 	default:
 		slog.Error("Unsupported key type", "algorithm", algorithmPrefix, "keyName", keyName)
-		return nil, errors.New(awserrors.ErrorInvalidKeyPairFormat)
+		return nil, errors.New(awserrors.ErrorInvalidKeyFormat)
+	}
+
+	// Validate that the key data is valid base64
+	if _, err := base64.StdEncoding.DecodeString(parts[1]); err != nil {
+		slog.Error("Invalid base64 in public key material", "keyName", keyName, "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidKeyFormat)
 	}
 
 	// Calculate fingerprint from the imported public key

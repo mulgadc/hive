@@ -415,6 +415,51 @@ func TestDeleteKeyPairIdempotent(t *testing.T) {
 	})
 }
 
+// TestImportKeyPairInvalidKeyFormat verifies that ImportKeyPair returns
+// InvalidKey.Format for malformed public key material (not InvalidKeyPair.Format).
+func TestImportKeyPairInvalidKeyFormat(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := NewKeyServiceImplWithStore(store, "test-bucket", "123456789")
+
+	tests := []struct {
+		name           string
+		publicKey      string
+		expectedErrMsg string
+	}{
+		{
+			name:           "SingleFieldNoKeyData",
+			publicKey:      "ssh-rsa",
+			expectedErrMsg: "InvalidKey.Format",
+		},
+		{
+			name:           "UnsupportedAlgorithm",
+			publicKey:      "ssh-dss AAAAB3NzaC1kc3MAAACB",
+			expectedErrMsg: "InvalidKey.Format",
+		},
+		{
+			name:           "InvalidBase64",
+			publicKey:      "ssh-rsa not-valid-base64!!!",
+			expectedErrMsg: "InvalidKey.Format",
+		},
+		{
+			name:           "EmptyKeyData",
+			publicKey:      "ssh-ed25519 ",
+			expectedErrMsg: "InvalidKey.Format",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := svc.ImportKeyPair(&ec2.ImportKeyPairInput{
+				KeyName:           aws.String("test-key"),
+				PublicKeyMaterial: []byte(tt.publicKey),
+			})
+			require.Error(t, err)
+			assert.Equal(t, tt.expectedErrMsg, err.Error())
+		})
+	}
+}
+
 // TestImportKeyPairInputValidation tests input validation for ImportKeyPair
 func TestImportKeyPairInputValidation(t *testing.T) {
 	tests := []struct {
