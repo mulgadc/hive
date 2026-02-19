@@ -128,8 +128,9 @@ vet:
 	go vet ./...
 	@echo "  go vet ok"
 
-#   newexpr — replaces aws.String() with new(), not idiomatic for AWS SDK code
-GOFIX_EXCLUDE := -newexpr=false
+# Excluded: newexpr (replaces aws.String with new, not idiomatic for AWS SDK)
+# Excluded: stringsbuilder (replaces string += in loops with strings.Builder, not worth the complexity for small loops)
+GOFIX_EXCLUDE := -newexpr=false -stringsbuilder=false
 
 # Apply go fix modernizations
 modernize:
