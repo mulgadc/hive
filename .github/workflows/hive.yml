@@ -57,6 +57,42 @@ jobs:
       - name: Check Diff Coverage
         run: cd hive && scripts/diff-coverage.sh coverage.out --base HEAD~1
 
+  race_detection:
+    name: Hive Race Detection
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout Hive
+        uses: actions/checkout@v6
+        with:
+          path: hive
+
+      - name: Checkout Viperblock
+        uses: actions/checkout@v6
+        with:
+          repository: mulgadc/viperblock
+          ref: ${{ github.ref_name }}
+          path: viperblock
+
+      - name: Checkout Predastore
+        uses: actions/checkout@v6
+        with:
+          repository: mulgadc/predastore
+          ref: ${{ github.ref_name }}
+          path: predastore
+
+      - name: Setup Go Workspace
+        run: go work init ./hive ./viperblock ./predastore
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          cache-dependency-path: "hive/go.sum"
+          go-version-file: "hive/go.mod"
+
+      - name: Run Tests with Race Detector
+        run: make -C hive test-race
+
   lint_and_security:
     name: Hive Lint and Security
     runs-on: ubuntu-24.04

@@ -52,13 +52,13 @@ go_run:
 
 # Preflight — runs the same checks as GitHub Actions (format + lint + security + tests).
 # Use this before committing to catch CI failures locally.
-preflight: check-format check-modernize vet security-check test
+preflight: check-format check-modernize vet security-check test-cover diff-coverage test-race
 	@echo -e "\n ✅ Preflight passed — safe to commit."
 
 # Run unit tests
 test:
 	@echo -e "\n....Running tests for $(GO_PROJECT_NAME)...."
-	LOG_IGNORE=1 go test -v -timeout 120s ./...
+	LOG_IGNORE=1 go test -v -timeout 120s ./hive/...
 
 # Run unit tests with coverage profile
 COVERPROFILE ?= coverage.out
@@ -68,6 +68,11 @@ test-cover:
 	@echo ""
 	@echo "=== Total Coverage ==="
 	@go tool cover -func=$(COVERPROFILE) | tail -1
+
+# Run unit tests with race detector
+test-race:
+	@echo -e "\n....Running tests with race detector for $(GO_PROJECT_NAME)...."
+	LOG_IGNORE=1 go test -race -timeout 300s ./hive/...
 
 # Check that new/changed code meets coverage threshold (runs tests first)
 diff-coverage: test-cover
@@ -205,7 +210,7 @@ test-docker: test-docker-build
 	@echo -e "\n....Running Multi-Node E2E Tests...."
 	docker run --privileged --rm -v /dev/kvm:/dev/kvm --cap-add=NET_ADMIN $(E2E_IMAGE) ./tests/e2e/run-multinode-e2e.sh
 
-.PHONY: build build-ui go_build go_run preflight test test-cover diff-coverage bench run clean \
+.PHONY: build build-ui go_build go_run preflight test test-cover test-race diff-coverage bench run clean \
 	install-system install-go install-aws quickinstall \
 	format check-format modernize check-modernize vet security-check \
 	test-docker-build test-docker-single test-docker-multi test-docker
