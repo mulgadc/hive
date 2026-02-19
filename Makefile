@@ -52,7 +52,7 @@ go_run:
 
 # Preflight — runs the same checks as GitHub Actions (format + lint + security + tests).
 # Use this before committing to catch CI failures locally.
-preflight: check-format vet security-check test
+preflight: check-format check-modernize vet security-check test
 	@echo -e "\n ✅ Preflight passed — safe to commit."
 
 # Run unit tests
@@ -128,6 +128,26 @@ vet:
 	go vet ./...
 	@echo "  go vet ok"
 
+#   newexpr — replaces aws.String() with new(), not idiomatic for AWS SDK code
+GOFIX_EXCLUDE := -newexpr=false
+
+# Apply go fix modernizations
+modernize:
+	@echo "Applying go fix modernizations..."
+	go fix $(GOFIX_EXCLUDE) ./...
+	@echo "  go fix applied"
+
+# Check that code is modernized (CI-compatible, fails on diff)
+check-modernize:
+	@echo "Checking go fix modernizations..."
+	@DIFF=$$(go fix $(GOFIX_EXCLUDE) -diff ./... 2>&1); \
+	if [ -n "$$DIFF" ]; then \
+		echo "$$DIFF"; \
+		echo "Run 'make modernize' to fix."; \
+		exit 1; \
+	fi
+	@echo "  go fix ok"
+
 # Security checks — each tool fails the build on findings (matches CI).
 # Reports are also saved to tests/ for review.
 security-check:
@@ -173,5 +193,5 @@ test-docker: test-docker-build
 
 .PHONY: build build-ui go_build go_run preflight test bench run clean \
 	install-system install-go install-aws quickinstall \
-	format check-format vet security-check \
+	format check-format modernize check-modernize vet security-check \
 	test-docker-build test-docker-single test-docker-multi test-docker

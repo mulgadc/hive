@@ -89,6 +89,9 @@ jobs:
       - name: Check Format
         run: make -C hive check-format
 
+      - name: Check Modernize
+        run: make -C hive check-modernize
+
       - name: Go Vet
         run: make -C hive vet
 
