@@ -225,6 +225,21 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput) (*ec2.
 		images = append(images, image)
 	}
 
+	// If specific ImageIds were requested, verify all were found
+	if len(input.ImageIds) > 0 {
+		foundIDs := make(map[string]bool, len(images))
+		for _, img := range images {
+			if img.ImageId != nil {
+				foundIDs[*img.ImageId] = true
+			}
+		}
+		for _, reqID := range input.ImageIds {
+			if reqID != nil && !foundIDs[*reqID] {
+				return nil, errors.New(awserrors.ErrorInvalidAMIIDNotFound)
+			}
+		}
+	}
+
 	slog.Info("DescribeImages completed", "count", len(images))
 
 	return &ec2.DescribeImagesOutput{

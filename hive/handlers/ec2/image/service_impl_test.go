@@ -223,6 +223,37 @@ func TestCreateImageFromInstance_SourceAMIReadFailure(t *testing.T) {
 	assert.Equal(t, awserrors.ErrorServerInternal, err.Error())
 }
 
+func TestDescribeImages_NotFound(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// Create one AMI
+	createTestAMIConfig(t, store, "ami-exists123")
+
+	// Request a non-existent AMI ID — should return InvalidAMIID.NotFound
+	_, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		ImageIds: []*string{aws.String("ami-nonexistent")},
+	})
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
+}
+
+func TestDescribeImages_MixedExistingAndMissing(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// Create one AMI
+	createTestAMIConfig(t, store, "ami-exists123")
+
+	// Request one existing + one non-existent — should return NotFound
+	_, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		ImageIds: []*string{
+			aws.String("ami-exists123"),
+			aws.String("ami-missing456"),
+		},
+	})
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
+}
+
 func TestDescribeImages_FilterByOwnerSelf(t *testing.T) {
 	svc, store := setupTestImageService(t)
 
