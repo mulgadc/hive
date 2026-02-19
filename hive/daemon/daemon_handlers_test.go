@@ -17,6 +17,7 @@ import (
 	handlers_ec2_account "github.com/mulgadc/hive/hive/handlers/ec2/account"
 	handlers_ec2_eigw "github.com/mulgadc/hive/hive/handlers/ec2/eigw"
 	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
+	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
 	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
 	handlers_ec2_snapshot "github.com/mulgadc/hive/hive/handlers/ec2/snapshot"
 	handlers_ec2_tags "github.com/mulgadc/hive/hive/handlers/ec2/tags"
@@ -438,6 +439,43 @@ func TestHandleEC2RunInstances_EmptyKeyNameSkipsValidation(t *testing.T) {
 
 	// Should NOT contain InvalidKeyPair.NotFound
 	assert.NotContains(t, string(reply.Data), "InvalidKeyPair.NotFound")
+}
+
+// --- handleEC2RunInstances service-layer error propagation ---
+
+func TestHandleEC2RunInstances_ServiceErrorPropagated(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon, memStore := createFullTestDaemonWithStore(t, natsURL)
+	seedTestAMI(t, memStore, daemon.config.Predastore.Bucket, "ami-propatest")
+
+	// Override instanceService with one that has an empty instance types map.
+	// The resourceMgr still has instance types, so the daemon-level check passes,
+	// but RunInstance() will fail with ErrorInvalidInstanceType.
+	emptyTypes := map[string]*ec2.InstanceTypeInfo{}
+	daemon.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(
+		daemon.config, emptyTypes, daemon.natsConn, &daemon.Instances,
+		objectstore.NewMemoryObjectStore(),
+	)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", daemon.handleEC2RunInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-propatest"),
+		InstanceType: aws.String(getTestInstanceType()),
+		MinCount:     aws.Int64(1),
+		MaxCount:     aws.Int64(1),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	// Should propagate the specific AWS error from the service layer,
+	// not swallow it into ServerInternal
+	assert.Contains(t, string(reply.Data), "InvalidInstanceType")
+	assert.NotContains(t, string(reply.Data), "ServerInternal")
 }
 
 // --- handleStopOrTerminateInstance tests (JetStream required for TransitionState) ---

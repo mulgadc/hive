@@ -794,11 +794,13 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	// Create all instances
 	var instances []*vm.VM
 	var allEC2Instances []*ec2.Instance
+	var lastRunErr error
 
 	for i := 0; i < launchCount; i++ {
 		instance, ec2Instance, err := d.instanceService.RunInstance(runInstancesInput)
 		if err != nil {
 			slog.Error("handleEC2RunInstances service.RunInstance failed", "index", i, "err", err)
+			lastRunErr = err
 			// Deallocate this instance's resources
 			d.resourceMgr.deallocate(instanceType)
 			continue
@@ -814,8 +816,15 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		for range instances {
 			d.resourceMgr.deallocate(instanceType)
 		}
-		slog.Error("handleEC2RunInstances failed to create minimum instances", "created", len(instances), "minCount", minCount)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
+		// Propagate the service-layer error if it's a known AWS error code
+		errCode := awserrors.ErrorServerInternal
+		if lastRunErr != nil {
+			if _, ok := awserrors.ErrorLookup[lastRunErr.Error()]; ok {
+				errCode = lastRunErr.Error()
+			}
+		}
+		slog.Error("handleEC2RunInstances failed to create minimum instances", "created", len(instances), "minCount", minCount, "err", errCode)
+		errResp = utils.GenerateErrorPayload(errCode)
 		if err := msg.Respond(errResp); err != nil {
 			slog.Error("Failed to respond to NATS request", "err", err)
 		}
