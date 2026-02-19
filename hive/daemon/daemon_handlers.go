@@ -135,6 +135,16 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 		return
 	}
 
+	// Check AZ compatibility — volume and instance must be in the same AZ
+	if volCfg.VolumeMetadata.AvailabilityZone != "" && d.config.AZ != "" &&
+		volCfg.VolumeMetadata.AvailabilityZone != d.config.AZ {
+		slog.Error("AttachVolume: volume and instance are in different AZs",
+			"volumeId", volumeID, "volumeAZ", volCfg.VolumeMetadata.AvailabilityZone,
+			"instanceAZ", d.config.AZ)
+		respondWithError(awserrors.ErrorInvalidVolumeZoneMismatch)
+		return
+	}
+
 	// Determine device name
 	if device == "" {
 		d.Instances.Mu.Lock()

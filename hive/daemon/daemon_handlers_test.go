@@ -25,6 +25,7 @@ import (
 	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/vm"
+	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1372,4 +1373,74 @@ func TestHandleEC2GetConsoleOutput_NotFound(t *testing.T) {
 
 	// Should get an error response (instance not found)
 	assert.Contains(t, string(reply.Data), "InvalidInstanceID.NotFound")
+}
+
+// TestAttachVolume_ZoneMismatch verifies that attaching a volume in a different AZ
+// returns InvalidVolume.ZoneMismatch instead of proceeding.
+func TestAttachVolume_ZoneMismatch(t *testing.T) {
+	natsURL := sharedNATSURL
+	daemon, store := createFullTestDaemonWithStore(t, natsURL)
+
+	// Set the daemon's AZ
+	daemon.config.AZ = "us-east-1a"
+
+	instanceID := "i-test-az-mismatch"
+	volumeID := "vol-az-mismatch"
+
+	// Create a running instance
+	instance := &vm.VM{
+		ID:           instanceID,
+		InstanceType: getTestInstanceType(),
+		Status:       vm.StateRunning,
+		Instance:     &ec2.Instance{},
+		QMPClient:    &qmp.QMPClient{},
+	}
+	daemon.Instances.VMS[instanceID] = instance
+
+	// Create a volume in a different AZ
+	wrapper := struct {
+		VolumeConfig viperblock.VolumeConfig `json:"VolumeConfig"`
+	}{
+		VolumeConfig: viperblock.VolumeConfig{
+			VolumeMetadata: viperblock.VolumeMetadata{
+				VolumeID:         volumeID,
+				SizeGiB:          10,
+				State:            "available",
+				AvailabilityZone: "us-west-2a",
+			},
+		},
+	}
+	data, _ := json.Marshal(wrapper)
+	store.PutObject(&awss3.PutObjectInput{
+		Bucket: aws.String("test-bucket"),
+		Key:    aws.String(volumeID + "/config.json"),
+		Body:   strings.NewReader(string(data)),
+	})
+
+	// Subscribe handler
+	sub, err := daemon.natsConn.Subscribe(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		daemon.handleEC2Events,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	command := qmp.Command{
+		ID: instanceID,
+		Attributes: qmp.Attributes{
+			AttachVolume: true,
+		},
+		AttachVolumeData: &qmp.AttachVolumeData{
+			VolumeID: volumeID,
+		},
+	}
+	cmdData, _ := json.Marshal(command)
+
+	resp, err := daemon.natsConn.Request(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		cmdData,
+		5*time.Second,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, string(resp.Data), "InvalidVolume.ZoneMismatch")
 }
