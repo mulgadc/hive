@@ -92,9 +92,9 @@ Persistence layer works (NATS JetStream KV), but stored values are not yet enfor
 | `enable-ebs-encryption-by-default` | — | `--dry-run` | None | Store encryption default flag in JetStream KV → return `EbsEncryptionByDefault=true` | 1. Enable encryption<br>2. Verify via get | **NOT STARTED** (enforcement pending) |
 | `disable-ebs-encryption-by-default` | — | `--dry-run` | None | Clear encryption default flag in JetStream KV → return `EbsEncryptionByDefault=false` | 1. Disable encryption<br>2. Verify via get | **NOT STARTED** (enforcement pending) |
 | `get-ebs-encryption-by-default` | — | `--dry-run` | None | Read encryption default flag from JetStream KV → return current state | 1. Get default state<br>2. Verify matches last enable/disable | **NOT STARTED** (enforcement pending) |
-| `enable-serial-console-access` | — | `--dry-run` | None | Store serial console access flag in JetStream KV → return enabled=true | 1. Enable access<br>2. Verify via get | **NOT STARTED** (enforcement pending) |
-| `disable-serial-console-access` | — | `--dry-run` | None | Clear serial console access flag in JetStream KV → return enabled=false | 1. Disable access | **NOT STARTED** (enforcement pending) |
-| `get-serial-console-access-status` | — | `--dry-run` | None | Read serial console access flag from JetStream KV | 1. Get current status | **NOT STARTED** (enforcement pending) |
+| `enable-serial-console-access` | — | `--dry-run` | None | Store serial console access flag in JetStream KV → return enabled=true | 1. Enable access<br>2. Verify via get | **DONE** |
+| `disable-serial-console-access` | — | `--dry-run` | None | Clear serial console access flag in JetStream KV → return enabled=false | 1. Disable access | **DONE** |
+| `get-serial-console-access-status` | — | `--dry-run` | None | Read serial console access flag from JetStream KV | 1. Get current status | **DONE** |
 | `enable-snapshot-block-public-access` | — | `--state` | None | Store snapshot block public access state in JetStream KV | 1. Enable with block-all-sharing<br>2. Enable with block-new-sharing | **NOT STARTED** (enforcement pending) |
 | `disable-snapshot-block-public-access` | — | `--dry-run` | None | Clear snapshot block public access state in JetStream KV | 1. Disable access | **NOT STARTED** (enforcement pending) |
 | `get-snapshot-block-public-access-state` | — | `--dry-run` | None | Read snapshot block public access state from JetStream KV | 1. Get current state | **NOT STARTED** (enforcement pending) |

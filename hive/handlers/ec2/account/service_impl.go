@@ -2,6 +2,7 @@ package handlers_ec2_account
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -31,13 +32,6 @@ type AccountSettingsServiceImpl struct {
 	settingsKV nats.KeyValue
 }
 
-// NewAccountSettingsServiceImpl creates a new account settings service implementation
-func NewAccountSettingsServiceImpl(cfg *config.Config) *AccountSettingsServiceImpl {
-	return &AccountSettingsServiceImpl{
-		config: cfg,
-	}
-}
-
 // NewAccountSettingsServiceImplWithNATS creates an account settings service with NATS JetStream for persistence
 func NewAccountSettingsServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*AccountSettingsServiceImpl, error) {
 	js, err := natsConn.JetStream()
@@ -47,8 +41,7 @@ func NewAccountSettingsServiceImplWithNATS(cfg *config.Config, natsConn *nats.Co
 
 	settingsKV, err := getOrCreateKVBucket(js, KVBucketAccountSettings, 10)
 	if err != nil {
-		slog.Warn("Failed to create account settings KV bucket", "error", err)
-		return NewAccountSettingsServiceImpl(cfg), nil
+		return nil, fmt.Errorf("failed to create account settings KV bucket: %w", err)
 	}
 
 	slog.Info("Account settings service initialized with JetStream KV", "bucket", KVBucketAccountSettings)
@@ -76,21 +69,15 @@ func getOrCreateKVBucket(js nats.JetStreamContext, bucketName string, history in
 
 // getSettings retrieves current account settings
 func (s *AccountSettingsServiceImpl) getSettings() (*AccountSettingsRecord, error) {
-	if s.settingsKV == nil {
-		// Return defaults if KV not available
-		return &AccountSettingsRecord{
-			EbsEncryptionByDefault: false,
-			SerialConsoleAccess:    false,
-		}, nil
-	}
-
 	entry, err := s.settingsKV.Get("default")
 	if err != nil {
-		// Return defaults if not found
-		return &AccountSettingsRecord{
-			EbsEncryptionByDefault: false,
-			SerialConsoleAccess:    false,
-		}, nil
+		if errors.Is(err, nats.ErrKeyNotFound) {
+			return &AccountSettingsRecord{
+				EbsEncryptionByDefault: false,
+				SerialConsoleAccess:    false,
+			}, nil
+		}
+		return nil, fmt.Errorf("failed to get account settings: %w", err)
 	}
 
 	var settings AccountSettingsRecord
@@ -103,11 +90,6 @@ func (s *AccountSettingsServiceImpl) getSettings() (*AccountSettingsRecord, erro
 
 // saveSettings saves current account settings
 func (s *AccountSettingsServiceImpl) saveSettings(settings *AccountSettingsRecord) error {
-	if s.settingsKV == nil {
-		slog.Warn("Cannot save settings - KV not initialized")
-		return nil // Return success anyway for in-memory fallback
-	}
-
 	data, err := json.Marshal(settings)
 	if err != nil {
 		return err

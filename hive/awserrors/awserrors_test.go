@@ -369,6 +369,7 @@ func TestErrorLookup(t *testing.T) {
 		{code: "SecurityGroupLimitExceeded", http: 400, message: "You've reached the limit on the number of security groups that you can create, or that you can assign to an instance."},
 		{code: "SecurityGroupsPerInstanceLimitExceeded", http: 400, message: "You've reached the limit on the number of security groups that you can assign to an instance. For more information, see Amazon EC2 security groups."},
 		{code: "SecurityGroupsPerInterfaceLimitExceeded", http: 400, message: "You've reached the limit on the number of security groups you can associate with the specified network interface. For more information, see Amazon VPC quotas."},
+		{code: "SerialConsoleSessionUnavailable", http: 403, message: "The serial console access is not enabled for this account. Use EnableSerialConsoleAccess to enable access."},
 		{code: "ServerInternal", http: 500, message: "An internal error has occurred. Retry your request, but if the problem persists, contact us with details by posting a message on AWS re:Post."},
 		{code: "ServiceUnavailable", http: 503, message: "The request has failed due to a temporary failure of the server."},
 		{code: "SignatureDoesNotMatch", http: 403, message: "The request signature that Amazon has does not match the signature that you provided. Check your AWS credentials and signing method."},

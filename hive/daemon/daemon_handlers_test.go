@@ -26,6 +26,7 @@ import (
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/mulgadc/viperblock/viperblock"
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,7 +46,7 @@ func createFullTestDaemonWithStore(t *testing.T, natsURL string) (*Daemon, *obje
 	daemon.snapshotService = handlers_ec2_snapshot.NewSnapshotServiceImplWithStore(cfg, memStore, daemon.natsConn)
 	daemon.tagsService = handlers_ec2_tags.NewTagsServiceImplWithStore(cfg, memStore)
 	daemon.eigwService = handlers_ec2_eigw.NewEgressOnlyIGWServiceImpl(cfg)
-	daemon.accountService = handlers_ec2_account.NewAccountSettingsServiceImpl(cfg)
+	initAccountServiceForTest(t, daemon)
 
 	return daemon, memStore
 }
@@ -69,6 +70,32 @@ func createFullTestDaemonWithJetStream(t *testing.T, natsURL string) *Daemon {
 	require.NoError(t, err)
 
 	return daemon
+}
+
+// initAccountServiceForTest initializes a JetStream-backed account service on the daemon
+// using an isolated embedded NATS JetStream server per test to avoid shared KV state.
+func initAccountServiceForTest(t *testing.T, daemon *Daemon) {
+	t.Helper()
+	ns, err := server.NewServer(&server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		JetStream: true,
+		StoreDir:  t.TempDir(),
+		NoLog:     true,
+		NoSigs:    true,
+	})
+	require.NoError(t, err)
+	go ns.Start()
+	require.True(t, ns.ReadyForConnections(5*time.Second))
+	t.Cleanup(func() { ns.Shutdown() })
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(func() { nc.Close() })
+
+	svc, err := handlers_ec2_account.NewAccountSettingsServiceImplWithNATS(nil, nc)
+	require.NoError(t, err)
+	daemon.accountService = svc
 }
 
 // --- handleNATSRequest generic tests ---
@@ -1273,6 +1300,10 @@ func TestHandleEC2GetConsoleOutput(t *testing.T) {
 	natsURL := sharedNATSURL
 	daemon := createFullTestDaemon(t, natsURL)
 
+	// Enable serial console access
+	_, err := daemon.accountService.EnableSerialConsoleAccess(&ec2.EnableSerialConsoleAccessInput{})
+	require.NoError(t, err)
+
 	instanceID := "i-console-test-001"
 
 	// Create a temp console log file
@@ -1321,6 +1352,10 @@ func TestHandleEC2GetConsoleOutput_EmptyLog(t *testing.T) {
 	natsURL := sharedNATSURL
 	daemon := createFullTestDaemon(t, natsURL)
 
+	// Enable serial console access
+	_, err := daemon.accountService.EnableSerialConsoleAccess(&ec2.EnableSerialConsoleAccessInput{})
+	require.NoError(t, err)
+
 	instanceID := "i-console-empty-001"
 
 	// Instance exists but no log file yet
@@ -1358,6 +1393,10 @@ func TestHandleEC2GetConsoleOutput_NotFound(t *testing.T) {
 	natsURL := sharedNATSURL
 	daemon := createFullTestDaemon(t, natsURL)
 
+	// Enable serial console access
+	_, err := daemon.accountService.EnableSerialConsoleAccess(&ec2.EnableSerialConsoleAccessInput{})
+	require.NoError(t, err)
+
 	instanceID := "i-nonexistent-console"
 	topic := fmt.Sprintf("ec2.%s.GetConsoleOutput", instanceID)
 	sub, err := daemon.natsConn.Subscribe(topic, daemon.handleEC2GetConsoleOutput)
@@ -1373,6 +1412,84 @@ func TestHandleEC2GetConsoleOutput_NotFound(t *testing.T) {
 
 	// Should get an error response (instance not found)
 	assert.Contains(t, string(reply.Data), "InvalidInstanceID.NotFound")
+}
+
+func TestHandleEC2GetConsoleOutput_SerialConsoleDisabled(t *testing.T) {
+	natsURL := sharedNATSURL
+	daemon := createFullTestDaemon(t, natsURL)
+
+	// Serial console access defaults to disabled — do NOT enable it
+
+	instanceID := "i-console-disabled-001"
+	daemon.Instances.Mu.Lock()
+	daemon.Instances.VMS[instanceID] = &vm.VM{
+		ID:     instanceID,
+		Status: vm.StateRunning,
+		Config: vm.Config{
+			ConsoleLogPath: "/tmp/some-log.log",
+		},
+	}
+	daemon.Instances.Mu.Unlock()
+
+	topic := fmt.Sprintf("ec2.%s.GetConsoleOutput", instanceID)
+	sub, err := daemon.natsConn.Subscribe(topic, daemon.handleEC2GetConsoleOutput)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.GetConsoleOutputInput{
+		InstanceId: aws.String(instanceID),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request(topic, reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	assert.Contains(t, string(reply.Data), "SerialConsoleSessionUnavailable")
+}
+
+func TestHandleEC2GetConsoleOutput_EnableThenDisable(t *testing.T) {
+	natsURL := sharedNATSURL
+	daemon := createFullTestDaemon(t, natsURL)
+
+	instanceID := "i-console-toggle-001"
+	tmpDir := t.TempDir()
+	logPath := tmpDir + "/console.log"
+	require.NoError(t, os.WriteFile(logPath, []byte("console output"), 0644))
+
+	daemon.Instances.Mu.Lock()
+	daemon.Instances.VMS[instanceID] = &vm.VM{
+		ID:     instanceID,
+		Status: vm.StateRunning,
+		Config: vm.Config{
+			ConsoleLogPath: logPath,
+		},
+	}
+	daemon.Instances.Mu.Unlock()
+
+	topic := fmt.Sprintf("ec2.%s.GetConsoleOutput", instanceID)
+	sub, err := daemon.natsConn.Subscribe(topic, daemon.handleEC2GetConsoleOutput)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	// Enable serial console access — GetConsoleOutput should succeed
+	_, err = daemon.accountService.EnableSerialConsoleAccess(&ec2.EnableSerialConsoleAccessInput{})
+	require.NoError(t, err)
+
+	input := &ec2.GetConsoleOutputInput{InstanceId: aws.String(instanceID)}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request(topic, reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.GetConsoleOutputOutput
+	require.NoError(t, json.Unmarshal(reply.Data, &output))
+	assert.NotEmpty(t, *output.Output)
+
+	// Disable serial console access — GetConsoleOutput should fail
+	_, err = daemon.accountService.DisableSerialConsoleAccess(&ec2.DisableSerialConsoleAccessInput{})
+	require.NoError(t, err)
+
+	reply, err = daemon.natsConn.Request(topic, reqData, 5*time.Second)
+	require.NoError(t, err)
+	assert.Contains(t, string(reply.Data), "SerialConsoleSessionUnavailable")
 }
 
 // TestAttachVolume_ZoneMismatch verifies that attaching a volume in a different AZ
