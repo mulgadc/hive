@@ -2,12 +2,15 @@ package gateway_ec2_instance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/nats-io/nats.go"
+
+	"github.com/mulgadc/hive/hive/utils"
 )
 
 // GetConsoleOutput retrieves console output for a specific instance via NATS.
@@ -29,6 +32,12 @@ func GetConsoleOutput(input *ec2.GetConsoleOutputInput, natsConn *nats.Conn) (*e
 			return nil, fmt.Errorf("instance %s not found or not running", *input.InstanceId)
 		}
 		return nil, fmt.Errorf("failed to get console output: %w", err)
+	}
+
+	responseError, parseErr := utils.ValidateErrorPayload(msg.Data)
+	if parseErr != nil {
+		slog.Error("GetConsoleOutput: Daemon returned error", "instance_id", *input.InstanceId, "code", *responseError.Code)
+		return nil, errors.New(*responseError.Code)
 	}
 
 	var output ec2.GetConsoleOutputOutput
