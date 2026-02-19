@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var defaults = ec2.RunInstancesInput{
@@ -26,9 +27,9 @@ func TestParseRunInstances(t *testing.T) {
 
 	// Group multiple tests
 	tests := []struct {
-		name  string
-		input *ec2.RunInstancesInput
-		want  error
+		name     string
+		input    *ec2.RunInstancesInput
+		wantCode string
 	}{
 
 		{
@@ -42,7 +43,7 @@ func TestParseRunInstances(t *testing.T) {
 				SecurityGroupIds: defaults.SecurityGroupIds,
 				SubnetId:         defaults.SubnetId,
 			},
-			want: errors.New(awserrors.ErrorInvalidParameterValue),
+			wantCode: awserrors.ErrorInvalidParameterValue,
 		},
 
 		{
@@ -56,21 +57,7 @@ func TestParseRunInstances(t *testing.T) {
 				SecurityGroupIds: defaults.SecurityGroupIds,
 				SubnetId:         defaults.SubnetId,
 			},
-			want: errors.New(awserrors.ErrorInvalidParameterValue),
-		},
-
-		{
-			name: "InvalidMinCount",
-			input: &ec2.RunInstancesInput{
-				ImageId:          defaults.ImageId,
-				InstanceType:     defaults.InstanceType,
-				MinCount:         aws.Int64(0),
-				MaxCount:         aws.Int64(1),
-				KeyName:          defaults.KeyName,
-				SecurityGroupIds: defaults.SecurityGroupIds,
-				SubnetId:         defaults.SubnetId,
-			},
-			want: errors.New(awserrors.ErrorInvalidParameterValue),
+			wantCode: awserrors.ErrorInvalidParameterValue,
 		},
 
 		{
@@ -84,7 +71,7 @@ func TestParseRunInstances(t *testing.T) {
 				SecurityGroupIds: defaults.SecurityGroupIds,
 				SubnetId:         defaults.SubnetId,
 			},
-			want: errors.New(awserrors.ErrorMissingParameter),
+			wantCode: awserrors.ErrorMissingParameter,
 		},
 
 		{
@@ -98,11 +85,11 @@ func TestParseRunInstances(t *testing.T) {
 				SecurityGroupIds: defaults.SecurityGroupIds,
 				SubnetId:         defaults.SubnetId,
 			},
-			want: errors.New(awserrors.ErrorMissingParameter),
+			wantCode: awserrors.ErrorMissingParameter,
 		},
 
 		{
-			name: "InvalidNoInstanceType",
+			name: "InvalidAMIIDMalformed",
 			input: &ec2.RunInstancesInput{
 				ImageId:          aws.String("invalid-name-here"),
 				InstanceType:     defaults.InstanceType,
@@ -112,13 +99,13 @@ func TestParseRunInstances(t *testing.T) {
 				SecurityGroupIds: defaults.SecurityGroupIds,
 				SubnetId:         defaults.SubnetId,
 			},
-			want: errors.New(awserrors.ErrorInvalidAMIIDMalformed),
+			wantCode: awserrors.ErrorInvalidAMIIDMalformed,
 		},
 
 		{
-			name:  "NilInput",
-			input: nil,
-			want:  errors.New(awserrors.ErrorMissingParameter),
+			name:     "NilInput",
+			input:    nil,
+			wantCode: awserrors.ErrorMissingParameter,
 		},
 
 		{
@@ -132,7 +119,7 @@ func TestParseRunInstances(t *testing.T) {
 				SecurityGroupIds: defaults.SecurityGroupIds,
 				SubnetId:         defaults.SubnetId,
 			},
-			want: errors.New(awserrors.ErrorMissingParameter),
+			wantCode: awserrors.ErrorMissingParameter,
 		},
 
 		{
@@ -146,7 +133,7 @@ func TestParseRunInstances(t *testing.T) {
 				SecurityGroupIds: defaults.SecurityGroupIds,
 				SubnetId:         defaults.SubnetId,
 			},
-			want: errors.New(awserrors.ErrorInvalidParameterValue),
+			wantCode: awserrors.ErrorInvalidParameterValue,
 		},
 
 		{
@@ -160,7 +147,7 @@ func TestParseRunInstances(t *testing.T) {
 				SecurityGroupIds: defaults.SecurityGroupIds,
 				SubnetId:         defaults.SubnetId,
 			},
-			want: errors.New(awserrors.ErrorMissingParameter),
+			wantCode: awserrors.ErrorMissingParameter,
 		},
 
 		{
@@ -174,7 +161,7 @@ func TestParseRunInstances(t *testing.T) {
 				SecurityGroupIds: defaults.SecurityGroupIds,
 				SubnetId:         defaults.SubnetId,
 			},
-			want: errors.New(awserrors.ErrorMissingParameter),
+			wantCode: awserrors.ErrorMissingParameter,
 		},
 
 		// Successful test
@@ -189,30 +176,90 @@ func TestParseRunInstances(t *testing.T) {
 				SecurityGroupIds: defaults.SecurityGroupIds,
 				SubnetId:         defaults.SubnetId,
 			},
-			want: nil,
+			wantCode: "",
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			// Skip the valid test as it requires full daemon infrastructure
-			// These tests are covered by the integration tests in service_nats_test.go
-			if test.want == nil {
+			if test.wantCode == "" {
 				t.Skip("Skipping valid test - requires full daemon infrastructure")
 			}
 
 			// For validation tests, we can pass nil conn since validation happens before NATS call
 			response, err := RunInstances(test.input, nil)
 
-			// Use assert to check if the error is as expected
-			assert.Equal(t, test.want, err)
-
-			if err != nil {
-				assert.Len(t, response.Instances, 0)
-			}
+			require.Error(t, err)
+			assert.Equal(t, test.wantCode, err.Error())
+			assert.Len(t, response.Instances, 0)
 		})
 	}
+}
 
-	// Additional test
+func TestRunInstances_FieldSpecificMessages(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       *ec2.RunInstancesInput
+		wantCode    string
+		wantContain string
+	}{
+		{
+			name: "MinCountZero_SpecificMessage",
+			input: &ec2.RunInstancesInput{
+				ImageId:      defaults.ImageId,
+				InstanceType: defaults.InstanceType,
+				MinCount:     aws.Int64(0),
+				MaxCount:     aws.Int64(1),
+			},
+			wantCode:    awserrors.ErrorInvalidParameterValue,
+			wantContain: "minCount",
+		},
+		{
+			name: "MaxCountZero_SpecificMessage",
+			input: &ec2.RunInstancesInput{
+				ImageId:      defaults.ImageId,
+				InstanceType: defaults.InstanceType,
+				MinCount:     aws.Int64(1),
+				MaxCount:     aws.Int64(0),
+			},
+			wantCode:    awserrors.ErrorInvalidParameterValue,
+			wantContain: "maxCount",
+		},
+		{
+			name: "MinExceedsMax_SpecificMessage",
+			input: &ec2.RunInstancesInput{
+				ImageId:      defaults.ImageId,
+				InstanceType: defaults.InstanceType,
+				MinCount:     aws.Int64(5),
+				MaxCount:     aws.Int64(2),
+			},
+			wantCode:    awserrors.ErrorInvalidParameterValue,
+			wantContain: "minCount may not exceed maxCount",
+		},
+		{
+			name: "InvalidAMIID_SpecificMessage",
+			input: &ec2.RunInstancesInput{
+				ImageId:      aws.String("bad-id"),
+				InstanceType: defaults.InstanceType,
+				MinCount:     aws.Int64(1),
+				MaxCount:     aws.Int64(1),
+			},
+			wantCode:    awserrors.ErrorInvalidAMIIDMalformed,
+			wantContain: "bad-id",
+		},
+	}
 
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := RunInstances(test.input, nil)
+
+			require.Error(t, err)
+			assert.Equal(t, test.wantCode, err.Error())
+
+			var awsErr *awserrors.AWSError
+			require.True(t, errors.As(err, &awsErr), "expected AWSError type")
+			assert.Contains(t, awsErr.Detail, test.wantContain)
+		})
+	}
 }

@@ -1,8 +1,31 @@
 package awserrors
 
+import "fmt"
+
 type ErrorMessage struct {
 	HTTPCode int
 	Message  string
+}
+
+// AWSError carries an error code and a field-specific message.
+// ErrorHandler extracts Code for the lookup and uses Detail as the response message.
+type AWSError struct {
+	Code   string
+	Detail string
+}
+
+func (e *AWSError) Error() string {
+	return e.Code
+}
+
+// NewError creates an AWSError with a field-specific detail message.
+func NewError(code, detail string) *AWSError {
+	return &AWSError{Code: code, Detail: detail}
+}
+
+// NewErrorf creates an AWSError with a formatted detail message.
+func NewErrorf(code, format string, args ...any) *AWSError {
+	return &AWSError{Code: code, Detail: fmt.Sprintf(format, args...)}
 }
 
 var (

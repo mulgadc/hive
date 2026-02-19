@@ -181,19 +181,34 @@ func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {
 	var requestId = uuid.NewString()
 	requestId = ctx.Get("x-amz-request-id", requestId)
 
+	// Extract error code and optional custom message from AWSError
+	errorCode := err.Error()
+	customMessage := ""
+	var awsErr *awserrors.AWSError
+	if errors.As(err, &awsErr) {
+		errorCode = awsErr.Code
+		customMessage = awsErr.Detail
+	}
+
 	var errorMsg = awserrors.ErrorMessage{}
 
 	// Check if the error lookup exists
-	if _, exists := awserrors.ErrorLookup[err.Error()]; !exists {
-		slog.Warn("Unknown error code", "error", err.Error())
-		err = errors.New(awserrors.ErrorInternalError)
+	if _, exists := awserrors.ErrorLookup[errorCode]; !exists {
+		slog.Warn("Unknown error code", "error", errorCode)
+		errorCode = awserrors.ErrorInternalError
 	}
 
-	errorMsg = awserrors.ErrorLookup[err.Error()]
+	errorMsg = awserrors.ErrorLookup[errorCode]
 
-	xmlError := GenerateEC2ErrorResponse(err.Error(), errorMsg.Message, requestId)
+	// Use custom message if provided, otherwise fall back to the generic lookup message
+	message := errorMsg.Message
+	if customMessage != "" {
+		message = customMessage
+	}
 
-	slog.Debug("Generated error response", "error", err.Error(), "xml", string(xmlError), "requestId", requestId)
+	xmlError := GenerateEC2ErrorResponse(errorCode, message, requestId)
+
+	slog.Debug("Generated error response", "error", errorCode, "xml", string(xmlError), "requestId", requestId)
 
 	if errorMsg.HTTPCode == 0 {
 		errorMsg.HTTPCode = 500
