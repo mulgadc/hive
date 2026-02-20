@@ -147,7 +147,7 @@ func (s *InstanceServiceImpl) RunInstance(input *ec2.RunInstancesInput) (*vm.VM,
 func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, instance *vm.VM) ([]VolumeInfo, error) {
 
 	var size int = 4 * 1024 * 1024 * 1024 // 4GB default size
-	var deviceName = "/dev/xvda"          // Default device name
+	var deviceName = "/dev/vda"           // Default device name (virtio-blk-pci)
 	var volumeType string
 	var iops int
 	var imageId string

@@ -1690,7 +1690,7 @@ func TestGenerateVolumes_DeleteOnTermination_FromBlockDeviceMapping(t *testing.T
 			if tt.deleteOnTerminationFlag != nil {
 				input.BlockDeviceMappings = []*ec2.BlockDeviceMapping{
 					{
-						DeviceName: aws.String("/dev/xvda"),
+						DeviceName: aws.String("/dev/vda"),
 						Ebs: &ec2.EbsBlockDevice{
 							VolumeSize:          aws.Int64(8),
 							DeleteOnTermination: tt.deleteOnTerminationFlag,
