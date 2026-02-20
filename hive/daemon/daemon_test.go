@@ -1993,90 +1993,6 @@ func TestStopInstance_NoDelete_OnStop(t *testing.T) {
 	assert.Empty(t, ebsDeletedVolumes, "No volumes should be deleted during stop (not terminate)")
 }
 
-// TestNextAvailableDevice tests the device name auto-assignment logic
-func TestNextAvailableDevice(t *testing.T) {
-	t.Run("EmptyInstance_ReturnsFirstDevice", func(t *testing.T) {
-		instance := &vm.VM{
-			ID:       "i-test",
-			Instance: &ec2.Instance{},
-		}
-		dev := nextAvailableDevice(instance)
-		assert.Equal(t, "/dev/sdf", dev)
-	})
-
-	t.Run("WithExistingBlockDeviceMappings", func(t *testing.T) {
-		instance := &vm.VM{
-			ID: "i-test",
-			Instance: &ec2.Instance{
-				BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{
-					{DeviceName: aws.String("/dev/sdf")},
-					{DeviceName: aws.String("/dev/sdg")},
-				},
-			},
-		}
-		dev := nextAvailableDevice(instance)
-		assert.Equal(t, "/dev/sdh", dev)
-	})
-
-	t.Run("WithExistingEBSRequests", func(t *testing.T) {
-		instance := &vm.VM{
-			ID:       "i-test",
-			Instance: &ec2.Instance{},
-			EBSRequests: config.EBSRequests{
-				Requests: []config.EBSRequest{
-					{Name: "vol-1", DeviceName: "/dev/sdf"},
-				},
-			},
-		}
-		dev := nextAvailableDevice(instance)
-		assert.Equal(t, "/dev/sdg", dev)
-	})
-
-	t.Run("AllDevicesUsed_ReturnsEmpty", func(t *testing.T) {
-		bdms := make([]*ec2.InstanceBlockDeviceMapping, 0)
-		for c := 'f'; c <= 'p'; c++ {
-			dev := fmt.Sprintf("/dev/sd%c", c)
-			bdms = append(bdms, &ec2.InstanceBlockDeviceMapping{
-				DeviceName: aws.String(dev),
-			})
-		}
-		instance := &vm.VM{
-			ID: "i-test",
-			Instance: &ec2.Instance{
-				BlockDeviceMappings: bdms,
-			},
-		}
-		dev := nextAvailableDevice(instance)
-		assert.Equal(t, "", dev)
-	})
-
-	t.Run("NilInstance_ReturnsFirstDevice", func(t *testing.T) {
-		instance := &vm.VM{
-			ID: "i-test",
-		}
-		dev := nextAvailableDevice(instance)
-		assert.Equal(t, "/dev/sdf", dev)
-	})
-
-	t.Run("MixedSources_SkipsAll", func(t *testing.T) {
-		instance := &vm.VM{
-			ID: "i-test",
-			Instance: &ec2.Instance{
-				BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{
-					{DeviceName: aws.String("/dev/sdf")},
-				},
-			},
-			EBSRequests: config.EBSRequests{
-				Requests: []config.EBSRequest{
-					{Name: "vol-1", DeviceName: "/dev/sdg"},
-				},
-			},
-		}
-		dev := nextAvailableDevice(instance)
-		assert.Equal(t, "/dev/sdh", dev)
-	})
-}
-
 // TestHandleEC2Events_AttachVolume tests the attach-volume handler in handleEC2Events
 func TestHandleEC2Events_AttachVolume(t *testing.T) {
 	natsURL := sharedNATSURL
@@ -3581,4 +3497,258 @@ func TestStopTerminate_IncorrectInstanceState(t *testing.T) {
 		assert.Contains(t, string(resp.Data), "IncorrectInstanceState")
 		assert.NotContains(t, string(resp.Data), "ServerInternal")
 	})
+}
+
+// TestNextAvailableDevice tests the device name auto-assignment logic
+func TestNextAvailableDevice(t *testing.T) {
+	tests := []struct {
+		name       string
+		instance   *vm.VM
+		wantDevice string
+	}{
+		{
+			name: "empty instance returns first device",
+			instance: &vm.VM{
+				Instance: &ec2.Instance{},
+			},
+			wantDevice: "/dev/sdf",
+		},
+		{
+			name:       "nil Instance returns first device",
+			instance:   &vm.VM{},
+			wantDevice: "/dev/sdf",
+		},
+		{
+			name: "existing BlockDeviceMappings skipped",
+			instance: &vm.VM{
+				Instance: &ec2.Instance{
+					BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{
+						{DeviceName: aws.String("/dev/sdf")},
+						{DeviceName: aws.String("/dev/sdg")},
+					},
+				},
+			},
+			wantDevice: "/dev/sdh",
+		},
+		{
+			name: "existing EBSRequests skipped",
+			instance: &vm.VM{
+				Instance: &ec2.Instance{},
+				EBSRequests: config.EBSRequests{
+					Requests: []config.EBSRequest{
+						{Name: "vol-1", DeviceName: "/dev/sdf"},
+					},
+				},
+			},
+			wantDevice: "/dev/sdg",
+		},
+		{
+			name: "mixed sources all skipped",
+			instance: &vm.VM{
+				Instance: &ec2.Instance{
+					BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{
+						{DeviceName: aws.String("/dev/sdf")},
+					},
+				},
+				EBSRequests: config.EBSRequests{
+					Requests: []config.EBSRequest{
+						{Name: "vol-1", DeviceName: "/dev/sdg"},
+					},
+				},
+			},
+			wantDevice: "/dev/sdh",
+		},
+		{
+			name: "all devices f-p used returns empty",
+			instance: func() *vm.VM {
+				var bdms []*ec2.InstanceBlockDeviceMapping
+				for c := 'f'; c <= 'p'; c++ {
+					dev := fmt.Sprintf("/dev/sd%c", c)
+					bdms = append(bdms, &ec2.InstanceBlockDeviceMapping{
+						DeviceName: aws.String(dev),
+					})
+				}
+				return &vm.VM{
+					Instance: &ec2.Instance{BlockDeviceMappings: bdms},
+				}
+			}(),
+			wantDevice: "",
+		},
+		{
+			name: "nil DeviceName in BlockDeviceMappings ignored",
+			instance: &vm.VM{
+				Instance: &ec2.Instance{
+					BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{
+						{DeviceName: nil},
+						{DeviceName: aws.String("/dev/sdf")},
+					},
+				},
+			},
+			wantDevice: "/dev/sdg",
+		},
+		{
+			name: "empty DeviceName in EBSRequests ignored",
+			instance: &vm.VM{
+				EBSRequests: config.EBSRequests{
+					Requests: []config.EBSRequest{
+						{DeviceName: ""},
+						{DeviceName: "/dev/sdf"},
+					},
+				},
+			},
+			wantDevice: "/dev/sdg",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := nextAvailableDevice(tt.instance)
+			assert.Equal(t, tt.wantDevice, got)
+		})
+	}
+}
+
+func TestCanAllocate(t *testing.T) {
+	makeInstanceType := func(vCPUs int64, memoryMiB int64) *ec2.InstanceTypeInfo {
+		return &ec2.InstanceTypeInfo{
+			VCpuInfo:   &ec2.VCpuInfo{DefaultVCpus: aws.Int64(vCPUs)},
+			MemoryInfo: &ec2.MemoryInfo{SizeInMiB: aws.Int64(memoryMiB)},
+		}
+	}
+
+	tests := []struct {
+		name          string
+		availableVCPU int
+		availableMem  float64
+		allocatedVCPU int
+		allocatedMem  float64
+		instanceType  *ec2.InstanceTypeInfo
+		count         int
+		want          int
+	}{
+		{
+			name:          "plenty of resources",
+			availableVCPU: 16,
+			availableMem:  32.0,
+			allocatedVCPU: 0,
+			allocatedMem:  0,
+			instanceType:  makeInstanceType(2, 2048), // 2 vCPU, 2 GiB
+			count:         3,
+			want:          3,
+		},
+		{
+			name:          "CPU limited",
+			availableVCPU: 4,
+			availableMem:  32.0,
+			allocatedVCPU: 0,
+			allocatedMem:  0,
+			instanceType:  makeInstanceType(2, 2048),
+			count:         5,
+			want:          2,
+		},
+		{
+			name:          "memory limited",
+			availableVCPU: 16,
+			availableMem:  4.0,
+			allocatedVCPU: 0,
+			allocatedMem:  0,
+			instanceType:  makeInstanceType(1, 2048), // 1 vCPU, 2 GiB
+			count:         5,
+			want:          2,
+		},
+		{
+			name:          "no resources returns 0",
+			availableVCPU: 4,
+			availableMem:  4.0,
+			allocatedVCPU: 4,
+			allocatedMem:  4.0,
+			instanceType:  makeInstanceType(2, 2048),
+			count:         3,
+			want:          0,
+		},
+		{
+			name:          "zero vCPU instance type returns requested count",
+			availableVCPU: 8,
+			availableMem:  16.0,
+			allocatedVCPU: 0,
+			allocatedMem:  0,
+			instanceType:  makeInstanceType(0, 2048),
+			count:         4,
+			want:          4,
+		},
+		{
+			name:          "zero memory instance type returns requested count",
+			availableVCPU: 8,
+			availableMem:  16.0,
+			allocatedVCPU: 0,
+			allocatedMem:  0,
+			instanceType:  makeInstanceType(2, 0),
+			count:         4,
+			want:          4,
+		},
+		{
+			name:          "nil VCpuInfo and MemoryInfo returns requested count",
+			availableVCPU: 8,
+			availableMem:  16.0,
+			allocatedVCPU: 0,
+			allocatedMem:  0,
+			instanceType:  &ec2.InstanceTypeInfo{},
+			count:         3,
+			want:          3,
+		},
+		{
+			name:          "partial allocation reduces available",
+			availableVCPU: 8,
+			availableMem:  8.0,
+			allocatedVCPU: 4,
+			allocatedMem:  4.0,
+			instanceType:  makeInstanceType(2, 2048),
+			count:         5,
+			want:          2,
+		},
+		{
+			name:          "exact fit",
+			availableVCPU: 4,
+			availableMem:  4.0,
+			allocatedVCPU: 0,
+			allocatedMem:  0,
+			instanceType:  makeInstanceType(2, 2048),
+			count:         2,
+			want:          2,
+		},
+		{
+			name:          "count zero returns 0",
+			availableVCPU: 8,
+			availableMem:  16.0,
+			allocatedVCPU: 0,
+			allocatedMem:  0,
+			instanceType:  makeInstanceType(2, 2048),
+			count:         0,
+			want:          0,
+		},
+		{
+			name:          "negative available returns 0",
+			availableVCPU: 2,
+			availableMem:  2.0,
+			allocatedVCPU: 4,
+			allocatedMem:  4.0,
+			instanceType:  makeInstanceType(2, 2048),
+			count:         1,
+			want:          0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rm := &ResourceManager{
+				availableVCPU: tt.availableVCPU,
+				availableMem:  tt.availableMem,
+				allocatedVCPU: tt.allocatedVCPU,
+				allocatedMem:  tt.allocatedMem,
+				instanceTypes: map[string]*ec2.InstanceTypeInfo{},
+			}
+			got := rm.canAllocate(tt.instanceType, tt.count)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

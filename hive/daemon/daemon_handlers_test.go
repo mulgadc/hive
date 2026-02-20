@@ -1831,3 +1831,378 @@ func TestHandleEC2ModifyInstanceAttribute_InvalidJSON(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ServerInternal", errResp["Code"])
 }
+
+// --- Delegate handler round-trip tests (table-driven) ---
+// Each of these handlers is a single line delegating to handleNATSRequest.
+// This test verifies the wiring is correct by sending a NATS request and
+// checking for a valid JSON response.
+
+func TestDelegateHandlers_RoundTrip(t *testing.T) {
+	daemon := createFullTestDaemon(t, sharedNATSURL)
+
+	tests := []struct {
+		name    string
+		topic   string
+		handler func(*nats.Msg)
+		input   any
+	}{
+		{
+			"DeleteKeyPair",
+			"ec2.test.DeleteKeyPair",
+			daemon.handleEC2DeleteKeyPair,
+			&ec2.DeleteKeyPairInput{KeyName: aws.String("nonexistent-key")},
+		},
+		{
+			"ImportKeyPair",
+			"ec2.test.ImportKeyPair",
+			daemon.handleEC2ImportKeyPair,
+			&ec2.ImportKeyPairInput{
+				KeyName:           aws.String("imported-key"),
+				PublicKeyMaterial: []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest test@test"),
+			},
+		},
+		{
+			"CreateVolume",
+			"ec2.test.CreateVolume",
+			daemon.handleEC2CreateVolume,
+			&ec2.CreateVolumeInput{
+				AvailabilityZone: aws.String("us-east-1a"),
+				Size:             aws.Int64(10),
+			},
+		},
+		{
+			"DescribeVolumeStatus",
+			"ec2.test.DescribeVolumeStatus",
+			daemon.handleEC2DescribeVolumeStatus,
+			&ec2.DescribeVolumeStatusInput{},
+		},
+		{
+			"DeleteVolume",
+			"ec2.test.DeleteVolume",
+			daemon.handleEC2DeleteVolume,
+			&ec2.DeleteVolumeInput{VolumeId: aws.String("vol-nonexistent")},
+		},
+		{
+			"CreateSnapshot",
+			"ec2.test.CreateSnapshot",
+			daemon.handleEC2CreateSnapshot,
+			&ec2.CreateSnapshotInput{VolumeId: aws.String("vol-nonexistent")},
+		},
+		{
+			"DescribeSnapshots",
+			"ec2.test.DescribeSnapshots",
+			daemon.handleEC2DescribeSnapshots,
+			&ec2.DescribeSnapshotsInput{},
+		},
+		{
+			"DeleteSnapshot",
+			"ec2.test.DeleteSnapshot",
+			daemon.handleEC2DeleteSnapshot,
+			&ec2.DeleteSnapshotInput{SnapshotId: aws.String("snap-nonexistent")},
+		},
+		{
+			"CopySnapshot",
+			"ec2.test.CopySnapshot",
+			daemon.handleEC2CopySnapshot,
+			&ec2.CopySnapshotInput{
+				SourceRegion:     aws.String("us-east-1"),
+				SourceSnapshotId: aws.String("snap-nonexistent"),
+			},
+		},
+		{
+			"DeleteTags",
+			"ec2.test.DeleteTags",
+			daemon.handleEC2DeleteTags,
+			&ec2.DeleteTagsInput{
+				Resources: []*string{aws.String("i-12345678")},
+			},
+		},
+		{
+			"DescribeTags",
+			"ec2.test.DescribeTags",
+			daemon.handleEC2DescribeTags,
+			&ec2.DescribeTagsInput{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "hive-workers", tt.handler)
+			require.NoError(t, err)
+			defer sub.Unsubscribe()
+
+			reqData, err := json.Marshal(tt.input)
+			require.NoError(t, err)
+
+			reply, err := daemon.natsConn.Request(tt.topic, reqData, 5*time.Second)
+			require.NoError(t, err)
+			require.NotNil(t, reply)
+
+			// Verify response is valid JSON (either success output or error response)
+			var resp json.RawMessage
+			err = json.Unmarshal(reply.Data, &resp)
+			require.NoError(t, err, "response should be valid JSON: %s", string(reply.Data))
+		})
+	}
+}
+
+// --- daemonIP tests ---
+
+func TestDaemonIP(t *testing.T) {
+	tests := []struct {
+		name     string
+		host     string
+		expected string
+	}{
+		{"HostPort", "10.0.0.1:4432", "10.0.0.1"},
+		{"HostOnly", "myhost", "myhost"},
+		{"IPv6", "[::1]:4432", "::1"},
+		{"EmptyString", "", ""},
+		{"HostPortZero", "0.0.0.0:0", "0.0.0.0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			daemon := createTestDaemon(t, sharedNATSURL)
+			daemon.config.Daemon.Host = tt.host
+			assert.Equal(t, tt.expected, daemon.daemonIP())
+		})
+	}
+}
+
+// --- handleNodeStatus tests ---
+
+func TestHandleNodeStatus(t *testing.T) {
+	daemon := createTestDaemon(t, sharedNATSURL)
+
+	// Set identifiable config values
+	daemon.config.Region = "us-west-2"
+	daemon.config.AZ = "us-west-2a"
+	daemon.config.Daemon.Host = "10.0.0.5:4432"
+
+	// Add some VMs (2 running, 1 stopped — only running counted)
+	daemon.Instances.Mu.Lock()
+	daemon.Instances.VMS["i-run-1"] = &vm.VM{ID: "i-run-1", Status: vm.StateRunning}
+	daemon.Instances.VMS["i-run-2"] = &vm.VM{ID: "i-run-2", Status: vm.StateRunning}
+	daemon.Instances.VMS["i-stop-1"] = &vm.VM{ID: "i-stop-1", Status: vm.StateStopped}
+	daemon.Instances.Mu.Unlock()
+
+	sub, err := daemon.natsConn.Subscribe("hive.node.status.test", daemon.handleNodeStatus)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reply, err := daemon.natsConn.Request("hive.node.status.test", nil, 5*time.Second)
+	require.NoError(t, err)
+
+	var resp config.NodeStatusResponse
+	err = json.Unmarshal(reply.Data, &resp)
+	require.NoError(t, err)
+
+	assert.Equal(t, "node-1", resp.Node)
+	assert.Equal(t, "Ready", resp.Status)
+	assert.Equal(t, "10.0.0.5", resp.Host)
+	assert.Equal(t, "us-west-2", resp.Region)
+	assert.Equal(t, "us-west-2a", resp.AZ)
+	assert.GreaterOrEqual(t, resp.Uptime, int64(0))
+	assert.Equal(t, 2, resp.VMCount)
+	assert.Greater(t, resp.TotalVCPU, 0)
+	assert.Greater(t, resp.TotalMemGB, 0.0)
+}
+
+func TestHandleNodeStatus_NoVMs(t *testing.T) {
+	daemon := createTestDaemon(t, sharedNATSURL)
+	daemon.config.Daemon.Host = "192.168.1.1:4432"
+
+	sub, err := daemon.natsConn.Subscribe("hive.node.status.empty", daemon.handleNodeStatus)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reply, err := daemon.natsConn.Request("hive.node.status.empty", nil, 5*time.Second)
+	require.NoError(t, err)
+
+	var resp config.NodeStatusResponse
+	err = json.Unmarshal(reply.Data, &resp)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, resp.VMCount)
+	assert.Equal(t, "Ready", resp.Status)
+}
+
+// --- handleNodeVMs tests ---
+
+func TestHandleNodeVMs(t *testing.T) {
+	daemon := createTestDaemon(t, sharedNATSURL)
+	daemon.config.Daemon.Host = "10.0.0.5:4432"
+
+	instanceType := getTestInstanceType()
+	launchTime := time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)
+
+	daemon.Instances.Mu.Lock()
+	daemon.Instances.VMS["i-vm-1"] = &vm.VM{
+		ID:           "i-vm-1",
+		Status:       vm.StateRunning,
+		InstanceType: instanceType,
+		Instance: &ec2.Instance{
+			LaunchTime: &launchTime,
+		},
+	}
+	daemon.Instances.VMS["i-vm-2"] = &vm.VM{
+		ID:           "i-vm-2",
+		Status:       vm.StateStopped,
+		InstanceType: instanceType,
+		Instance:     nil, // no launch time
+	}
+	daemon.Instances.Mu.Unlock()
+
+	sub, err := daemon.natsConn.Subscribe("hive.node.vms.test", daemon.handleNodeVMs)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reply, err := daemon.natsConn.Request("hive.node.vms.test", nil, 5*time.Second)
+	require.NoError(t, err)
+
+	var resp config.NodeVMsResponse
+	err = json.Unmarshal(reply.Data, &resp)
+	require.NoError(t, err)
+
+	assert.Equal(t, "node-1", resp.Node)
+	assert.Equal(t, "10.0.0.5", resp.Host)
+	assert.Len(t, resp.VMs, 2)
+
+	// Build a lookup by instance ID
+	vmsByID := make(map[string]config.VMInfo)
+	for _, v := range resp.VMs {
+		vmsByID[v.InstanceID] = v
+	}
+
+	vm1 := vmsByID["i-vm-1"]
+	assert.Equal(t, "running", vm1.Status)
+	assert.Equal(t, instanceType, vm1.InstanceType)
+	assert.Greater(t, vm1.VCPU, 0)
+	assert.Greater(t, vm1.MemoryGB, 0.0)
+	assert.Equal(t, launchTime.Unix(), vm1.LaunchTime)
+
+	vm2 := vmsByID["i-vm-2"]
+	assert.Equal(t, "stopped", vm2.Status)
+	assert.Equal(t, int64(0), vm2.LaunchTime)
+}
+
+func TestHandleNodeVMs_Empty(t *testing.T) {
+	daemon := createTestDaemon(t, sharedNATSURL)
+	daemon.config.Daemon.Host = "10.0.0.5:4432"
+
+	sub, err := daemon.natsConn.Subscribe("hive.node.vms.empty", daemon.handleNodeVMs)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reply, err := daemon.natsConn.Request("hive.node.vms.empty", nil, 5*time.Second)
+	require.NoError(t, err)
+
+	var resp config.NodeVMsResponse
+	err = json.Unmarshal(reply.Data, &resp)
+	require.NoError(t, err)
+
+	assert.Equal(t, "node-1", resp.Node)
+	assert.Empty(t, resp.VMs)
+}
+
+func TestHandleNodeVMs_UnknownInstanceType(t *testing.T) {
+	daemon := createTestDaemon(t, sharedNATSURL)
+	daemon.config.Daemon.Host = "10.0.0.5:4432"
+
+	daemon.Instances.Mu.Lock()
+	daemon.Instances.VMS["i-vm-unknown"] = &vm.VM{
+		ID:           "i-vm-unknown",
+		Status:       vm.StateRunning,
+		InstanceType: "z99.mega", // not in instanceTypes map
+	}
+	daemon.Instances.Mu.Unlock()
+
+	sub, err := daemon.natsConn.Subscribe("hive.node.vms.unknown", daemon.handleNodeVMs)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reply, err := daemon.natsConn.Request("hive.node.vms.unknown", nil, 5*time.Second)
+	require.NoError(t, err)
+
+	var resp config.NodeVMsResponse
+	err = json.Unmarshal(reply.Data, &resp)
+	require.NoError(t, err)
+
+	assert.Len(t, resp.VMs, 1)
+	assert.Equal(t, 0, resp.VMs[0].VCPU)
+	assert.Equal(t, 0.0, resp.VMs[0].MemoryGB)
+}
+
+// TestDelegateHandlers_EIGW tests Egress-Only Internet Gateway delegate handlers.
+// These need a JetStream-backed EIGW service since the service uses KV storage.
+func TestDelegateHandlers_EIGW(t *testing.T) {
+	daemon := createTestDaemon(t, sharedNATSURL)
+
+	// Create an isolated JetStream NATS server for the EIGW service
+	ns, err := server.NewServer(&server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		JetStream: true,
+		StoreDir:  t.TempDir(),
+		NoLog:     true,
+		NoSigs:    true,
+	})
+	require.NoError(t, err)
+	go ns.Start()
+	require.True(t, ns.ReadyForConnections(5*time.Second))
+	t.Cleanup(func() { ns.Shutdown() })
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(func() { nc.Close() })
+
+	eigwSvc, err := handlers_ec2_eigw.NewEgressOnlyIGWServiceImplWithNATS(daemon.config, nc)
+	require.NoError(t, err)
+	daemon.eigwService = eigwSvc
+
+	tests := []struct {
+		name    string
+		topic   string
+		handler func(*nats.Msg)
+		input   any
+	}{
+		{
+			"CreateEgressOnlyInternetGateway",
+			"ec2.test.CreateEgressOnlyIGW",
+			daemon.handleEC2CreateEgressOnlyInternetGateway,
+			&ec2.CreateEgressOnlyInternetGatewayInput{VpcId: aws.String("vpc-123")},
+		},
+		{
+			"DeleteEgressOnlyInternetGateway",
+			"ec2.test.DeleteEgressOnlyIGW",
+			daemon.handleEC2DeleteEgressOnlyInternetGateway,
+			&ec2.DeleteEgressOnlyInternetGatewayInput{EgressOnlyInternetGatewayId: aws.String("eigw-nonexistent")},
+		},
+		{
+			"DescribeEgressOnlyInternetGateways",
+			"ec2.test.DescribeEgressOnlyIGWs",
+			daemon.handleEC2DescribeEgressOnlyInternetGateways,
+			&ec2.DescribeEgressOnlyInternetGatewaysInput{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "hive-workers", tt.handler)
+			require.NoError(t, err)
+			defer sub.Unsubscribe()
+
+			reqData, err := json.Marshal(tt.input)
+			require.NoError(t, err)
+
+			reply, err := daemon.natsConn.Request(tt.topic, reqData, 5*time.Second)
+			require.NoError(t, err)
+			require.NotNil(t, reply)
+
+			var resp json.RawMessage
+			err = json.Unmarshal(reply.Data, &resp)
+			require.NoError(t, err, "response should be valid JSON: %s", string(reply.Data))
+		})
+	}
+}

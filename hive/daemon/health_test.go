@@ -222,16 +222,20 @@ func newTestDaemon(t *testing.T) (*Daemon, func()) {
 	return d, func() { nc.Close() }
 }
 
-// smallestAllocType returns the name of the smallest (fewest vCPUs) instance type
-// in the resource manager. This ensures tests work on CI runners with limited resources.
+// smallestAllocType returns the name of the smallest allocatable instance type
+// in the resource manager, considering both vCPU and memory to ensure it fits
+// on the current host (important for CI runners with limited resources).
 func smallestAllocType(t *testing.T, rm *ResourceManager) string {
 	t.Helper()
 	var smallest string
-	var smallestVCPU int64 = 1<<63 - 1
+	var smallestScore int64 = 1<<63 - 1
 	for name, it := range rm.instanceTypes {
 		vcpu := instanceTypeVCPUs(it)
-		if vcpu < smallestVCPU {
-			smallestVCPU = vcpu
+		memMiB := instanceTypeMemoryMiB(it)
+		// Score by total resource footprint so we pick the type smallest in both dimensions
+		score := vcpu*1024 + memMiB
+		if score < smallestScore {
+			smallestScore = score
 			smallest = name
 		}
 	}

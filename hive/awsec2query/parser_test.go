@@ -379,6 +379,106 @@ func TestQueryParamsToStruct_CompleteRunInstancesExample(t *testing.T) {
 	assert.Equal(t, "Production", aws.StringValue(tagSpec.Tags[1].Value))
 }
 
+// --- Gap-filling tests for setFieldValue and setStructFields uncovered branches ---
+
+func TestQueryParamsToStruct_ByteSliceBase64(t *testing.T) {
+	// ImportKeyPairInput.PublicKeyMaterial is []byte — tests base64 decoding path
+	args := map[string]string{
+		"KeyName":           "my-imported-key",
+		"PublicKeyMaterial": "c3NoLXJzYSB0ZXN0LWtleS1kYXRh", // base64 of "ssh-rsa test-key-data"
+	}
+
+	input := &ec2.ImportKeyPairInput{}
+	err := QueryParamsToStruct(args, input)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "my-imported-key", aws.StringValue(input.KeyName))
+	assert.Equal(t, "ssh-rsa test-key-data", string(input.PublicKeyMaterial))
+}
+
+func TestQueryParamsToStruct_ByteSliceRawText(t *testing.T) {
+	// Non-base64 text falls back to raw bytes
+	args := map[string]string{
+		"KeyName":           "raw-key",
+		"PublicKeyMaterial": "not-valid-base64!!!",
+	}
+
+	input := &ec2.ImportKeyPairInput{}
+	err := QueryParamsToStruct(args, input)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("not-valid-base64!!!"), input.PublicKeyMaterial)
+}
+
+func TestQueryParamsToStruct_InvalidIntValue(t *testing.T) {
+	args := map[string]string{
+		"MinCount": "not-a-number",
+	}
+
+	input := &ec2.RunInstancesInput{}
+	err := QueryParamsToStruct(args, input)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "error setting field MinCount")
+}
+
+func TestQueryParamsToStruct_InvalidBoolValue(t *testing.T) {
+	args := map[string]string{
+		"InstanceId.1": "i-1234567890abcdef0",
+		"Force":        "not-a-bool",
+	}
+
+	input := &ec2.StopInstancesInput{}
+	err := QueryParamsToStruct(args, input)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "error setting field Force")
+}
+
+func TestQueryParamsToStruct_LocationNameCamelCaseFallback(t *testing.T) {
+	// DeleteTagsInput.Resources has locationName:"resourceId"
+	// AWS query params use "ResourceId" (titled), testing the camelCase → titleCase fallback
+	args := map[string]string{
+		"ResourceId.1": "i-1234567890abcdef0",
+		"ResourceId.2": "i-0987654321fedcba0",
+		"Tag.1.Key":    "Environment",
+		"Tag.1.Value":  "Production",
+	}
+
+	input := &ec2.DeleteTagsInput{}
+	err := QueryParamsToStruct(args, input)
+
+	assert.NoError(t, err)
+	assert.Len(t, input.Resources, 2)
+	assert.Equal(t, "i-1234567890abcdef0", aws.StringValue(input.Resources[0]))
+	assert.Equal(t, "i-0987654321fedcba0", aws.StringValue(input.Resources[1]))
+	assert.Len(t, input.Tags, 1)
+	assert.Equal(t, "Environment", aws.StringValue(input.Tags[0].Key))
+	assert.Equal(t, "Production", aws.StringValue(input.Tags[0].Value))
+}
+
+func TestQueryParamsToStruct_LocationNameDryRun(t *testing.T) {
+	// DryRun has locationName:"dryRun" — tests that titled locationName matches "DryRun" query param
+	args := map[string]string{
+		"InstanceId.1": "i-1234567890abcdef0",
+		"DryRun":       "true",
+	}
+
+	input := &ec2.TerminateInstancesInput{}
+	err := QueryParamsToStruct(args, input)
+
+	assert.NoError(t, err)
+	assert.Equal(t, true, aws.BoolValue(input.DryRun))
+}
+
+func TestQueryParamsToStruct_NonStructPointer(t *testing.T) {
+	args := map[string]string{"Key": "value"}
+	str := "hello"
+	err := QueryParamsToStruct(args, &str)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "must be a pointer to a struct")
+}
+
 func TestQueryParamsToStruct_BlockDeviceMappingsWithIOPS(t *testing.T) {
 	args := map[string]string{
 		"Action":                              "RunInstances",

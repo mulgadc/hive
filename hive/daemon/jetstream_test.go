@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/mulgadc/hive/hive/vm"
@@ -570,4 +571,85 @@ func TestJetStreamManager_StoppedInstance_KVNotInitialized(t *testing.T) {
 
 	_, err = jsm.ListStoppedInstances()
 	assert.Error(t, err)
+}
+
+// --- WriteServiceManifest KV tests ---
+
+// TestJetStreamManager_WriteServiceManifest tests writing a service manifest to the cluster-state KV.
+func TestJetStreamManager_WriteServiceManifest(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	err = jsm.InitClusterStateBucket()
+	require.NoError(t, err)
+
+	services := []string{"daemon", "nats", "predastore"}
+	err = jsm.WriteServiceManifest("test-node-svc", services, "10.0.0.1:4222", "10.0.0.1:8443")
+	require.NoError(t, err)
+
+	// Read the KV entry directly and verify JSON contents
+	entry, err := jsm.clusterKV.Get("node.test-node-svc.services")
+	require.NoError(t, err)
+
+	var manifest map[string]any
+	err = json.Unmarshal(entry.Value(), &manifest)
+	require.NoError(t, err)
+
+	assert.Equal(t, "test-node-svc", manifest["node"])
+	assert.Equal(t, "10.0.0.1:4222", manifest["nats_host"])
+	assert.Equal(t, "10.0.0.1:8443", manifest["predastore_host"])
+	assert.NotEmpty(t, manifest["timestamp"])
+
+	// Verify services list
+	svcList, ok := manifest["services"].([]any)
+	require.True(t, ok, "services should be a JSON array")
+	assert.Len(t, svcList, 3)
+	assert.Equal(t, "daemon", svcList[0])
+	assert.Equal(t, "nats", svcList[1])
+	assert.Equal(t, "predastore", svcList[2])
+}
+
+// TestJetStreamManager_WriteServiceManifest_EmptyServices tests writing a manifest with no services.
+func TestJetStreamManager_WriteServiceManifest_EmptyServices(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	err = jsm.InitClusterStateBucket()
+	require.NoError(t, err)
+
+	err = jsm.WriteServiceManifest("empty-svc-node", []string{}, "10.0.0.2:4222", "10.0.0.2:8443")
+	require.NoError(t, err)
+
+	entry, err := jsm.clusterKV.Get("node.empty-svc-node.services")
+	require.NoError(t, err)
+
+	var manifest map[string]any
+	err = json.Unmarshal(entry.Value(), &manifest)
+	require.NoError(t, err)
+
+	assert.Equal(t, "empty-svc-node", manifest["node"])
+	svcList, ok := manifest["services"].([]any)
+	require.True(t, ok, "services should be a JSON array")
+	assert.Empty(t, svcList)
+}
+
+// TestJetStreamManager_WriteServiceManifest_ClusterKVNotInitialized tests error when clusterKV is nil.
+func TestJetStreamManager_WriteServiceManifest_ClusterKVNotInitialized(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	// Don't call InitClusterStateBucket
+
+	err = jsm.WriteServiceManifest("test-node", []string{"daemon"}, "10.0.0.1:4222", "10.0.0.1:8443")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cluster state KV not initialized")
 }
