@@ -942,3 +942,68 @@ func TestSetOOMScore_InvalidPID(t *testing.T) {
 	err := SetOOMScore(999999999, 100)
 	assert.Error(t, err)
 }
+
+func TestRuntimeDir(t *testing.T) {
+	dir := RuntimeDir()
+	assert.NotEmpty(t, dir)
+}
+
+func TestPidPath_XDG(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "/tmp/test-xdg-runtime")
+	assert.Equal(t, "/tmp/test-xdg-runtime", pidPath())
+}
+
+func TestPidPath_HomeHiveFallback(t *testing.T) {
+	tmpHome := t.TempDir()
+	hiveDir := fmt.Sprintf("%s/hive", tmpHome)
+	require.NoError(t, os.Mkdir(hiveDir, 0755))
+
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("HOME", tmpHome)
+
+	assert.Equal(t, hiveDir, pidPath())
+}
+
+func TestPidPath_TempDirFallback(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("HOME", "/nonexistent-home-dir-utils-test")
+
+	assert.Equal(t, os.TempDir(), pidPath())
+}
+
+func TestExtractDiskImagePath_NoMatch(t *testing.T) {
+	output := []byte("somefile.txt\nanotherfile.conf\n")
+	diskimage, err := extractDiskImagePath(t.TempDir(), output)
+	assert.Empty(t, diskimage)
+	assert.NoError(t, err)
+}
+
+func TestExtractDiskImagePath_EmptyOutput(t *testing.T) {
+	diskimage, err := extractDiskImagePath(t.TempDir(), []byte{})
+	assert.Empty(t, diskimage)
+	assert.NoError(t, err)
+}
+
+func TestWritePidFile_CreateError(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "/nonexistent-dir-utils-test")
+	err := WritePidFile("testservice", 12345)
+	assert.Error(t, err)
+}
+
+func TestRemovePidFileAt_EmptyDir(t *testing.T) {
+	err := RemovePidFileAt("", fmt.Sprintf("nonexistent-service-%d", time.Now().UnixNano()))
+	assert.Error(t, err)
+}
+
+func TestGeneratePidFile_InvalidPath(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "/nonexistent-dir-utils-test")
+	path, err := GeneratePidFile("test")
+	// GeneratePidFile doesn't check if path exists, just builds it
+	assert.NoError(t, err)
+	assert.Contains(t, path, "test.pid")
+}
+
+func TestReadPidFileFrom_EmptyDir(t *testing.T) {
+	_, err := ReadPidFileFrom("", fmt.Sprintf("nonexistent-service-%d", time.Now().UnixNano()))
+	assert.Error(t, err)
+}
