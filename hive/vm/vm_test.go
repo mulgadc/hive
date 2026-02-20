@@ -2,6 +2,7 @@ package vm
 
 import (
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -228,12 +229,7 @@ func argValue(args []string, flag string) string {
 }
 
 func argExists(args []string, flag string) bool {
-	for _, a := range args {
-		if a == flag {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(args, flag)
 }
 
 func TestResetNodeLocalState(t *testing.T) {
