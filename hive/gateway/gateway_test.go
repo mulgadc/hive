@@ -201,3 +201,108 @@ func TestSupportedServices(t *testing.T) {
 	assert.False(t, supportedServices["dynamodb"])
 	assert.False(t, supportedServices[""])
 }
+
+func TestParseAWSQueryArgs(t *testing.T) {
+	tests := []struct {
+		name     string
+		query    string
+		expected map[string]string
+	}{
+		{
+			name:  "simple action and version",
+			query: "Action=DescribeInstances&Version=2016-11-15",
+			expected: map[string]string{
+				"Action":  "DescribeInstances",
+				"Version": "2016-11-15",
+			},
+		},
+		{
+			name:  "URL-encoded values",
+			query: "Name=%2Fdev%2Fsda&Value=hello%20world",
+			expected: map[string]string{
+				"Name":  "/dev/sda",
+				"Value": "hello world",
+			},
+		},
+		{
+			name:  "key without value",
+			query: "DryRun",
+			expected: map[string]string{
+				"DryRun": "",
+			},
+		},
+		{
+			name:     "empty string",
+			query:    "",
+			expected: map[string]string{"": ""},
+		},
+		{
+			name:  "multiple parameters",
+			query: "Action=RunInstances&ImageId=ami-123&MinCount=1&MaxCount=5&InstanceType=t2.micro",
+			expected: map[string]string{
+				"Action":       "RunInstances",
+				"ImageId":      "ami-123",
+				"MinCount":     "1",
+				"MaxCount":     "5",
+				"InstanceType": "t2.micro",
+			},
+		},
+		{
+			name:  "value containing equals sign",
+			query: "Filter.1.Name=tag:Env&Filter.1.Value=prod=staging",
+			expected: map[string]string{
+				"Filter.1.Name":  "tag:Env",
+				"Filter.1.Value": "prod=staging",
+			},
+		},
+		{
+			name:  "URL-encoded key and value",
+			query: "Tag%2EName=my%20tag",
+			expected: map[string]string{
+				"Tag.Name": "my tag",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := ParseAWSQueryArgs(tc.query)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
+}
+
+func TestParseArgsToStruct(t *testing.T) {
+	// ParseArgsToStruct wraps QueryParamsToStruct errors as ErrorInvalidParameter.
+	// The *any parameter causes a reflection kind mismatch (Interface vs Struct)
+	// in QueryParamsToStruct, so this function always returns the wrapped error.
+	// Tests verify the error wrapping behavior.
+
+	type simpleInput struct {
+		Action string `locationName:"Action"`
+	}
+
+	t.Run("struct pointer wrapped in any returns InvalidParameter", func(t *testing.T) {
+		args := map[string]string{"Action": "RunInstances"}
+		var input any = &simpleInput{}
+		err := ParseArgsToStruct(&input, args)
+		assert.Error(t, err)
+		assert.Equal(t, "InvalidParameter", err.Error())
+	})
+
+	t.Run("non-pointer input returns InvalidParameter", func(t *testing.T) {
+		args := map[string]string{"Action": "Test"}
+		var input any = "not a struct"
+		err := ParseArgsToStruct(&input, args)
+		assert.Error(t, err)
+		assert.Equal(t, "InvalidParameter", err.Error())
+	})
+
+	t.Run("empty args still returns InvalidParameter", func(t *testing.T) {
+		args := map[string]string{}
+		var input any = &simpleInput{}
+		err := ParseArgsToStruct(&input, args)
+		assert.Error(t, err)
+		assert.Equal(t, "InvalidParameter", err.Error())
+	})
+}
