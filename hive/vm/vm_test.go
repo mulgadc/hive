@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -214,4 +215,239 @@ func TestExecute_MultipleIOThreads(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 2, iothreadCount)
+}
+
+// argValue returns the value following flag in args, or "" if not found.
+func argValue(args []string, flag string) string {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+func argExists(args []string, flag string) bool {
+	for _, a := range args {
+		if a == flag {
+			return true
+		}
+	}
+	return false
+}
+
+func TestResetNodeLocalState(t *testing.T) {
+	v := &VM{
+		ID:                    "i-abc123",
+		PID:                   12345,
+		Running:               true,
+		MetadataServerAddress: "127.0.0.1:9999",
+		Status:                StateRunning,
+	}
+
+	v.ResetNodeLocalState()
+
+	assert.Equal(t, 0, v.PID)
+	assert.False(t, v.Running)
+	assert.Empty(t, v.MetadataServerAddress)
+	assert.NotNil(t, v.QMPClient)
+	// ID and Status should be unchanged
+	assert.Equal(t, "i-abc123", v.ID)
+	assert.Equal(t, StateRunning, v.Status)
+}
+
+func TestExecute_PIDFileAndQMPSocket(t *testing.T) {
+	cfg := Config{
+		CPUCount:     1,
+		Memory:       512,
+		Architecture: "x86_64",
+		PIDFile:      "/run/test.pid",
+		QMPSocket:    "/run/test.sock",
+		Drives:       []Drive{{File: "disk.img", Format: "raw"}},
+	}
+
+	cmd, err := cfg.Execute()
+	assert.NoError(t, err)
+
+	args := cmd.Args[1:]
+	assert.Equal(t, "/run/test.pid", argValue(args, "-pidfile"))
+	assert.Equal(t, "unix:/run/test.sock,server,nowait", argValue(args, "-qmp"))
+}
+
+func TestExecute_NoGraphic(t *testing.T) {
+	cfg := Config{
+		CPUCount:     1,
+		Memory:       512,
+		Architecture: "x86_64",
+		NoGraphic:    true,
+		Drives:       []Drive{{File: "disk.img", Format: "raw"}},
+	}
+
+	cmd, err := cfg.Execute()
+	assert.NoError(t, err)
+
+	args := cmd.Args[1:]
+	assert.Equal(t, "none", argValue(args, "-display"))
+}
+
+func TestExecute_SerialSocketAndConsoleLog(t *testing.T) {
+	cfg := Config{
+		CPUCount:       1,
+		Memory:         512,
+		Architecture:   "x86_64",
+		SerialSocket:   "/run/serial.sock",
+		ConsoleLogPath: "/var/log/console.log",
+		Drives:         []Drive{{File: "disk.img", Format: "raw"}},
+	}
+
+	cmd, err := cfg.Execute()
+	assert.NoError(t, err)
+
+	args := cmd.Args[1:]
+	chardev := argValue(args, "-chardev")
+	assert.Contains(t, chardev, "socket,id=console0")
+	assert.Contains(t, chardev, "path=/run/serial.sock")
+	assert.Contains(t, chardev, "logfile=/var/log/console.log")
+	assert.Equal(t, "chardev:console0", argValue(args, "-serial"))
+}
+
+func TestExecute_NetDevs(t *testing.T) {
+	cfg := Config{
+		CPUCount:     1,
+		Memory:       512,
+		Architecture: "x86_64",
+		Drives:       []Drive{{File: "disk.img", Format: "raw"}},
+		NetDevs: []NetDev{
+			{Value: "tap,id=net0,ifname=tap0,script=no"},
+		},
+	}
+
+	cmd, err := cfg.Execute()
+	assert.NoError(t, err)
+
+	args := cmd.Args[1:]
+	assert.Equal(t, "tap,id=net0,ifname=tap0,script=no", argValue(args, "-netdev"))
+}
+
+func TestExecute_MachineType_x86(t *testing.T) {
+	cfg := Config{
+		CPUCount:     1,
+		Memory:       512,
+		Architecture: "x86_64",
+		MachineType:  "q35",
+		Drives:       []Drive{{File: "disk.img", Format: "raw"}},
+	}
+
+	cmd, err := cfg.Execute()
+	assert.NoError(t, err)
+
+	args := cmd.Args[1:]
+	assert.Equal(t, "q35", argValue(args, "-M"))
+}
+
+func TestExecute_ARM64_Q35(t *testing.T) {
+	cfg := Config{
+		CPUCount:     1,
+		Memory:       512,
+		Architecture: "arm64",
+		MachineType:  "q35",
+		Drives:       []Drive{{File: "disk.img", Format: "raw"}},
+	}
+
+	uefiPath := "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
+	_, uefiErr := os.Stat(uefiPath)
+	hasUEFI := uefiErr == nil
+
+	cmd, err := cfg.Execute()
+
+	if hasUEFI {
+		// UEFI firmware exists — should succeed with -M virt and -bios
+		assert.NoError(t, err)
+		assert.NotNil(t, cmd)
+		args := cmd.Args[1:]
+		assert.Contains(t, cmd.Path, "qemu-system-aarch64")
+		assert.Equal(t, "virt", argValue(args, "-M"))
+		assert.Equal(t, uefiPath, argValue(args, "-bios"))
+	} else {
+		// No firmware — error
+		assert.Error(t, err)
+		assert.Nil(t, cmd)
+		assert.Contains(t, err.Error(), "UEFI firmware file not found")
+	}
+}
+
+func TestExecute_MissingArchitecture(t *testing.T) {
+	cfg := Config{
+		CPUCount: 1,
+		Memory:   512,
+		Drives:   []Drive{{File: "disk.img", Format: "raw"}},
+	}
+
+	cmd, err := cfg.Execute()
+	assert.Error(t, err)
+	assert.Nil(t, cmd)
+	assert.Contains(t, err.Error(), "architecture missing")
+}
+
+func TestExecute_KVMAndCPUType(t *testing.T) {
+	cfg := Config{
+		CPUCount:     2,
+		Memory:       1024,
+		Architecture: "x86_64",
+		EnableKVM:    true,
+		CPUType:      "host",
+		Drives:       []Drive{{File: "disk.img", Format: "raw"}},
+	}
+
+	cmd, err := cfg.Execute()
+	assert.NoError(t, err)
+
+	args := cmd.Args[1:]
+
+	// KVM/CPU flags depend on whether /dev/kvm exists on host
+	if _, err := os.Stat("/dev/kvm"); err == nil {
+		assert.True(t, argExists(args, "-enable-kvm"))
+		assert.Equal(t, "host", argValue(args, "-cpu"))
+	} else {
+		assert.False(t, argExists(args, "-enable-kvm"))
+		assert.Empty(t, argValue(args, "-cpu"))
+	}
+}
+
+func TestExecute_FullConfig(t *testing.T) {
+	cfg := Config{
+		Name:           "full-vm",
+		PIDFile:        "/run/vm.pid",
+		QMPSocket:      "/run/vm.sock",
+		NoGraphic:      true,
+		MachineType:    "q35",
+		ConsoleLogPath: "/var/log/vm.log",
+		SerialSocket:   "/run/serial.sock",
+		CPUCount:       4,
+		Memory:         8192,
+		Architecture:   "x86_64",
+		IOThreads:      []IOThread{{ID: "io0"}},
+		Drives: []Drive{
+			{File: "nbd:unix:/run/os.sock", Format: "raw", If: "none", ID: "os", Cache: "none"},
+		},
+		Devices: []Device{{Value: "virtio-blk-pci,drive=os"}},
+		NetDevs: []NetDev{{Value: "user,id=net0"}},
+	}
+
+	cmd, err := cfg.Execute()
+	assert.NoError(t, err)
+	assert.NotNil(t, cmd)
+	assert.Contains(t, cmd.Path, "qemu-system-x86_64")
+
+	args := cmd.Args[1:]
+	assert.Equal(t, "/run/vm.pid", argValue(args, "-pidfile"))
+	assert.Equal(t, "unix:/run/vm.sock,server,nowait", argValue(args, "-qmp"))
+	assert.Equal(t, "none", argValue(args, "-display"))
+	assert.Equal(t, "q35", argValue(args, "-M"))
+	assert.Equal(t, "4", argValue(args, "-smp"))
+	assert.Equal(t, "8192", argValue(args, "-m"))
+	assert.Contains(t, argValue(args, "-chardev"), "logfile=/var/log/vm.log")
+	assert.Equal(t, "chardev:console0", argValue(args, "-serial"))
+	assert.Equal(t, "iothread,id=io0", argValue(args, "-object"))
+	assert.Equal(t, "user,id=net0", argValue(args, "-netdev"))
 }
