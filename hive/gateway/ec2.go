@@ -69,6 +69,9 @@ var ec2Actions = map[string]EC2Handler{
 	"GetConsoleOutput": ec2Handler(func(input *ec2.GetConsoleOutputInput, gw *GatewayConfig) (any, error) {
 		return gateway_ec2_instance.GetConsoleOutput(input, gw.NATSConn)
 	}),
+	"ModifyInstanceAttribute": ec2Handler(func(input *ec2.ModifyInstanceAttributeInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_instance.ModifyInstanceAttribute(input, gw.NATSConn)
+	}),
 	"CreateKeyPair": ec2Handler(func(input *ec2.CreateKeyPairInput, gw *GatewayConfig) (any, error) {
 		return gateway_ec2_key.CreateKeyPair(input, gw.NATSConn)
 	}),
