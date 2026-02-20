@@ -307,6 +307,42 @@ func TestExecute_SerialSocketAndConsoleLog(t *testing.T) {
 	assert.Equal(t, "chardev:console0", argValue(args, "-serial"))
 }
 
+func TestExecute_SerialSocketOnly(t *testing.T) {
+	cfg := Config{
+		CPUCount:     1,
+		Memory:       512,
+		Architecture: "x86_64",
+		SerialSocket: "/run/serial.sock",
+		Drives:       []Drive{{File: "disk.img", Format: "raw"}},
+	}
+
+	cmd, err := cfg.Execute()
+	assert.NoError(t, err)
+
+	args := cmd.Args[1:]
+	// When ConsoleLogPath is empty, -chardev and -serial should not appear
+	assert.Empty(t, argValue(args, "-chardev"))
+	assert.Empty(t, argValue(args, "-serial"))
+}
+
+func TestExecute_ConsoleLogPathOnly(t *testing.T) {
+	cfg := Config{
+		CPUCount:       1,
+		Memory:         512,
+		Architecture:   "x86_64",
+		ConsoleLogPath: "/var/log/console.log",
+		Drives:         []Drive{{File: "disk.img", Format: "raw"}},
+	}
+
+	cmd, err := cfg.Execute()
+	assert.NoError(t, err)
+
+	args := cmd.Args[1:]
+	// When SerialSocket is empty, -chardev and -serial should not appear
+	assert.Empty(t, argValue(args, "-chardev"))
+	assert.Empty(t, argValue(args, "-serial"))
+}
+
 func TestExecute_NetDevs(t *testing.T) {
 	cfg := Config{
 		CPUCount:     1,

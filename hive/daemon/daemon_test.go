@@ -3717,6 +3717,16 @@ func TestCanAllocate(t *testing.T) {
 			want:          2,
 		},
 		{
+			name:          "count zero returns 0",
+			availableVCPU: 8,
+			availableMem:  16.0,
+			allocatedVCPU: 0,
+			allocatedMem:  0,
+			instanceType:  makeInstanceType(2, 2048),
+			count:         0,
+			want:          0,
+		},
+		{
 			name:          "negative available returns 0",
 			availableVCPU: 2,
 			availableMem:  2.0,

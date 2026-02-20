@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"encoding/xml"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -78,7 +79,7 @@ func TestGenerateEC2ErrorResponse_ValidXML(t *testing.T) {
 		_, err := decoder.Token()
 		if err != nil {
 			// io.EOF means we parsed the entire document successfully
-			assert.ErrorIs(t, err, err) // just ensure we got here
+			assert.ErrorIs(t, err, io.EOF)
 			break
 		}
 	}
