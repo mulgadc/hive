@@ -35,9 +35,6 @@ func ValidateModifyInstanceAttributeInput(input *ec2.ModifyInstanceAttributeInpu
 	if input.UserData != nil {
 		count++
 	}
-	if input.EbsOptimized != nil {
-		count++
-	}
 	if count != 1 {
 		return errors.New(awserrors.ErrorInvalidParameterValue)
 	}

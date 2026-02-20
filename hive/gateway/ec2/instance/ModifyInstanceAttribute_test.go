@@ -55,7 +55,7 @@ func TestValidateModifyInstanceAttributeInput_MultipleAttributes(t *testing.T) {
 	err := ValidateModifyInstanceAttributeInput(&ec2.ModifyInstanceAttributeInput{
 		InstanceId:   aws.String("i-abc123"),
 		InstanceType: &ec2.AttributeValue{Value: aws.String("t3.micro")},
-		EbsOptimized: &ec2.AttributeBooleanValue{Value: aws.Bool(true)},
+		UserData:     &ec2.BlobAttributeValue{Value: []byte("data")},
 	})
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidParameterValue, err.Error())
@@ -91,14 +91,6 @@ func TestValidateModifyInstanceAttributeInput_ValidUserData(t *testing.T) {
 	err := ValidateModifyInstanceAttributeInput(&ec2.ModifyInstanceAttributeInput{
 		InstanceId: aws.String("i-abc123"),
 		UserData:   &ec2.BlobAttributeValue{Value: []byte("IyEvYmluL2Jhc2g=")},
-	})
-	assert.NoError(t, err)
-}
-
-func TestValidateModifyInstanceAttributeInput_ValidEbsOptimized(t *testing.T) {
-	err := ValidateModifyInstanceAttributeInput(&ec2.ModifyInstanceAttributeInput{
-		InstanceId:   aws.String("i-abc123"),
-		EbsOptimized: &ec2.AttributeBooleanValue{Value: aws.Bool(true)},
 	})
 	assert.NoError(t, err)
 }

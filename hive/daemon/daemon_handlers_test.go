@@ -1631,11 +1631,12 @@ func TestHandleEC2ModifyInstanceAttribute_ChangeUserData(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = daemon.jsManager.DeleteStoppedInstance(instanceID) })
 
-	// IyEvYmluL2Jhc2g= decodes to "#!/bin/bash"
-	newB64 := "IyEvYmluL2Jhc2g="
+	// Value holds decoded bytes (the gateway query parser decodes base64 from the CLI,
+	// then json.Marshal/Unmarshal round-trips []byte through base64 transparently)
+	newContent := "#!/bin/bash"
 	input := &ec2.ModifyInstanceAttributeInput{
 		InstanceId: aws.String(instanceID),
-		UserData:   &ec2.BlobAttributeValue{Value: []byte(newB64)},
+		UserData:   &ec2.BlobAttributeValue{Value: []byte(newContent)},
 	}
 	reqData, _ := json.Marshal(input)
 	reply, err := daemon.natsConn.Request("ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
@@ -1645,46 +1646,8 @@ func TestHandleEC2ModifyInstanceAttribute_ChangeUserData(t *testing.T) {
 	updated, err := daemon.jsManager.LoadStoppedInstance(instanceID)
 	require.NoError(t, err)
 	require.NotNil(t, updated)
-	assert.Equal(t, "#!/bin/bash", updated.UserData)
-	assert.Equal(t, newB64, *updated.RunInstancesInput.UserData)
-}
-
-func TestHandleEC2ModifyInstanceAttribute_ChangeEbsOptimized(t *testing.T) {
-	natsURL := sharedJSNATSURL
-
-	daemon := createFullTestDaemonWithJetStream(t, natsURL)
-
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", daemon.handleEC2ModifyInstanceAttribute)
-	require.NoError(t, err)
-	defer sub.Unsubscribe()
-
-	instanceID := "i-modify-ebs-001"
-	instance := &vm.VM{
-		ID:           instanceID,
-		Status:       vm.StateStopped,
-		InstanceType: "t3.micro",
-		Instance: &ec2.Instance{
-			InstanceId:   aws.String(instanceID),
-			EbsOptimized: aws.Bool(false),
-		},
-	}
-	err = daemon.jsManager.WriteStoppedInstance(instanceID, instance)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = daemon.jsManager.DeleteStoppedInstance(instanceID) })
-
-	input := &ec2.ModifyInstanceAttributeInput{
-		InstanceId:   aws.String(instanceID),
-		EbsOptimized: &ec2.AttributeBooleanValue{Value: aws.Bool(true)},
-	}
-	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
-	require.NoError(t, err)
-	assert.Equal(t, `{}`, string(reply.Data))
-
-	updated, err := daemon.jsManager.LoadStoppedInstance(instanceID)
-	require.NoError(t, err)
-	require.NotNil(t, updated)
-	assert.True(t, *updated.Instance.EbsOptimized)
+	assert.Equal(t, newContent, updated.UserData)
+	assert.Equal(t, "IyEvYmluL2Jhc2g=", *updated.RunInstancesInput.UserData)
 }
 
 func TestHandleEC2ModifyInstanceAttribute_InstanceNotFound(t *testing.T) {

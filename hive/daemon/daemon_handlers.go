@@ -1932,7 +1932,7 @@ func (d *Daemon) handleNodeVMs(msg *nats.Msg) {
 }
 
 // handleEC2ModifyInstanceAttribute modifies attributes of a stopped instance in shared KV.
-// All supported attributes (InstanceType, UserData, EbsOptimized) require the instance to be stopped.
+// All supported attributes (InstanceType, UserData) require the instance to be stopped.
 func (d *Daemon) handleEC2ModifyInstanceAttribute(msg *nats.Msg) {
 	respondWithError := func(errCode string) {
 		if err := msg.Respond(utils.GenerateErrorPayload(errCode)); err != nil {
@@ -2003,32 +2003,13 @@ func (d *Daemon) handleEC2ModifyInstanceAttribute(msg *nats.Msg) {
 	}
 
 	if input.UserData != nil && input.UserData.Value != nil {
-		newUserDataB64 := string(input.UserData.Value)
 		slog.Info("handleEC2ModifyInstanceAttribute: changing user data", "instanceId", instanceID)
 
-		decoded, err := base64.StdEncoding.DecodeString(newUserDataB64)
-		if err != nil {
-			slog.Error("handleEC2ModifyInstanceAttribute: invalid base64 in UserData", "instanceId", instanceID, "err", err)
-			respondWithError(awserrors.ErrorInvalidParameterValue)
-			return
-		}
-		instance.UserData = string(decoded)
+		// Value arrives as decoded bytes (JSON unmarshal handles base64 → []byte automatically)
+		instance.UserData = string(input.UserData.Value)
 		if instance.RunInstancesInput != nil {
-			instance.RunInstancesInput.UserData = aws.String(newUserDataB64)
+			instance.RunInstancesInput.UserData = aws.String(base64.StdEncoding.EncodeToString(input.UserData.Value))
 		}
-	}
-
-	if input.EbsOptimized != nil && input.EbsOptimized.Value != nil {
-		newValue := *input.EbsOptimized.Value
-		if instance.Instance == nil {
-			slog.Error("handleEC2ModifyInstanceAttribute: instance.Instance is nil, data integrity issue", "instanceId", instanceID)
-			respondWithError(awserrors.ErrorServerInternal)
-			return
-		}
-		slog.Info("handleEC2ModifyInstanceAttribute: changing EBS optimization",
-			"instanceId", instanceID, "value", newValue)
-
-		instance.Instance.EbsOptimized = aws.Bool(newValue)
 	}
 
 	if err := d.jsManager.WriteStoppedInstance(instanceID, instance); err != nil {
