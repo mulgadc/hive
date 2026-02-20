@@ -1831,3 +1831,190 @@ func TestHandleEC2ModifyInstanceAttribute_InvalidJSON(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "ServerInternal", errResp["Code"])
 }
+
+// --- Delegate handler round-trip tests (table-driven) ---
+// Each of these handlers is a single line delegating to handleNATSRequest.
+// This test verifies the wiring is correct by sending a NATS request and
+// checking for a valid JSON response.
+
+func TestDelegateHandlers_RoundTrip(t *testing.T) {
+	daemon := createFullTestDaemon(t, sharedNATSURL)
+
+	tests := []struct {
+		name    string
+		topic   string
+		handler func(*nats.Msg)
+		input   any
+	}{
+		{
+			"DeleteKeyPair",
+			"ec2.test.DeleteKeyPair",
+			daemon.handleEC2DeleteKeyPair,
+			&ec2.DeleteKeyPairInput{KeyName: aws.String("nonexistent-key")},
+		},
+		{
+			"ImportKeyPair",
+			"ec2.test.ImportKeyPair",
+			daemon.handleEC2ImportKeyPair,
+			&ec2.ImportKeyPairInput{
+				KeyName:           aws.String("imported-key"),
+				PublicKeyMaterial: []byte("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest test@test"),
+			},
+		},
+		{
+			"CreateVolume",
+			"ec2.test.CreateVolume",
+			daemon.handleEC2CreateVolume,
+			&ec2.CreateVolumeInput{
+				AvailabilityZone: aws.String("us-east-1a"),
+				Size:             aws.Int64(10),
+			},
+		},
+		{
+			"DescribeVolumeStatus",
+			"ec2.test.DescribeVolumeStatus",
+			daemon.handleEC2DescribeVolumeStatus,
+			&ec2.DescribeVolumeStatusInput{},
+		},
+		{
+			"DeleteVolume",
+			"ec2.test.DeleteVolume",
+			daemon.handleEC2DeleteVolume,
+			&ec2.DeleteVolumeInput{VolumeId: aws.String("vol-nonexistent")},
+		},
+		{
+			"CreateSnapshot",
+			"ec2.test.CreateSnapshot",
+			daemon.handleEC2CreateSnapshot,
+			&ec2.CreateSnapshotInput{VolumeId: aws.String("vol-nonexistent")},
+		},
+		{
+			"DescribeSnapshots",
+			"ec2.test.DescribeSnapshots",
+			daemon.handleEC2DescribeSnapshots,
+			&ec2.DescribeSnapshotsInput{},
+		},
+		{
+			"DeleteSnapshot",
+			"ec2.test.DeleteSnapshot",
+			daemon.handleEC2DeleteSnapshot,
+			&ec2.DeleteSnapshotInput{SnapshotId: aws.String("snap-nonexistent")},
+		},
+		{
+			"CopySnapshot",
+			"ec2.test.CopySnapshot",
+			daemon.handleEC2CopySnapshot,
+			&ec2.CopySnapshotInput{
+				SourceRegion:     aws.String("us-east-1"),
+				SourceSnapshotId: aws.String("snap-nonexistent"),
+			},
+		},
+		{
+			"DeleteTags",
+			"ec2.test.DeleteTags",
+			daemon.handleEC2DeleteTags,
+			&ec2.DeleteTagsInput{
+				Resources: []*string{aws.String("i-12345678")},
+			},
+		},
+		{
+			"DescribeTags",
+			"ec2.test.DescribeTags",
+			daemon.handleEC2DescribeTags,
+			&ec2.DescribeTagsInput{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "hive-workers", tt.handler)
+			require.NoError(t, err)
+			defer sub.Unsubscribe()
+
+			reqData, err := json.Marshal(tt.input)
+			require.NoError(t, err)
+
+			reply, err := daemon.natsConn.Request(tt.topic, reqData, 5*time.Second)
+			require.NoError(t, err)
+			require.NotNil(t, reply)
+
+			// Verify response is valid JSON (either success output or error response)
+			var resp json.RawMessage
+			err = json.Unmarshal(reply.Data, &resp)
+			require.NoError(t, err, "response should be valid JSON: %s", string(reply.Data))
+		})
+	}
+}
+
+// TestDelegateHandlers_EIGW tests Egress-Only Internet Gateway delegate handlers.
+// These need a JetStream-backed EIGW service since the service uses KV storage.
+func TestDelegateHandlers_EIGW(t *testing.T) {
+	daemon := createTestDaemon(t, sharedNATSURL)
+
+	// Create an isolated JetStream NATS server for the EIGW service
+	ns, err := server.NewServer(&server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		JetStream: true,
+		StoreDir:  t.TempDir(),
+		NoLog:     true,
+		NoSigs:    true,
+	})
+	require.NoError(t, err)
+	go ns.Start()
+	require.True(t, ns.ReadyForConnections(5*time.Second))
+	t.Cleanup(func() { ns.Shutdown() })
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(func() { nc.Close() })
+
+	eigwSvc, err := handlers_ec2_eigw.NewEgressOnlyIGWServiceImplWithNATS(daemon.config, nc)
+	require.NoError(t, err)
+	daemon.eigwService = eigwSvc
+
+	tests := []struct {
+		name    string
+		topic   string
+		handler func(*nats.Msg)
+		input   any
+	}{
+		{
+			"CreateEgressOnlyInternetGateway",
+			"ec2.test.CreateEgressOnlyIGW",
+			daemon.handleEC2CreateEgressOnlyInternetGateway,
+			&ec2.CreateEgressOnlyInternetGatewayInput{VpcId: aws.String("vpc-123")},
+		},
+		{
+			"DeleteEgressOnlyInternetGateway",
+			"ec2.test.DeleteEgressOnlyIGW",
+			daemon.handleEC2DeleteEgressOnlyInternetGateway,
+			&ec2.DeleteEgressOnlyInternetGatewayInput{EgressOnlyInternetGatewayId: aws.String("eigw-nonexistent")},
+		},
+		{
+			"DescribeEgressOnlyInternetGateways",
+			"ec2.test.DescribeEgressOnlyIGWs",
+			daemon.handleEC2DescribeEgressOnlyInternetGateways,
+			&ec2.DescribeEgressOnlyInternetGatewaysInput{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "hive-workers", tt.handler)
+			require.NoError(t, err)
+			defer sub.Unsubscribe()
+
+			reqData, err := json.Marshal(tt.input)
+			require.NoError(t, err)
+
+			reply, err := daemon.natsConn.Request(tt.topic, reqData, 5*time.Second)
+			require.NoError(t, err)
+			require.NotNil(t, reply)
+
+			var resp json.RawMessage
+			err = json.Unmarshal(reply.Data, &resp)
+			require.NoError(t, err, "response should be valid JSON: %s", string(reply.Data))
+		})
+	}
+}
