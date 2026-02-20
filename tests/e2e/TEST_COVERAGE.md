@@ -104,10 +104,15 @@
 - `attach-volume` to stopped instance (expect `IncorrectInstanceState` error)
 - `delete-volume` (cleanup)
 
-### Phase 7 (cont): Start and Restart
-- `start-instances` (poll -> running)
+### Phase 7b: ModifyInstanceAttribute
+- `modify-instance-attribute` (change instance type from nano → xlarge while stopped)
+- `describe-instances` (verify type updated in KV)
+- `describe-instance-types` (get expected vCPU count and memory for new type)
+- `start-instances` (poll -> running with new type)
+- SSH: `nproc` — verify vCPU count matches xlarge (4 vCPUs)
+- SSH: `/proc/meminfo` MemTotal — verify memory matches xlarge (within 85% of expected)
 
-### Phase 7b: RunInstances with count > 1
+### Phase 7c: RunInstances with count > 1
 - `run-instances --count 2` (launch 2 instances in a single call)
 - Verify 2 instances returned in response
 - Poll both to running state
@@ -130,6 +135,7 @@
 - `describe-images` with non-existent AMI ID (expect `InvalidAMIID.NotFound`)
 - `create-image` with duplicate name (expect `InvalidAMIName.Duplicate`)
 - `delete-key-pair` on non-existent key (expect success — idempotent, matches AWS)
+- `modify-instance-attribute` on running instance (expect `InvalidInstanceID.NotFound` — running instances not in stopped KV)
 
 ### Phase 9: Terminate and Verify Cleanup
 - `delete-snapshot` (CreateImage backing snapshot, so DeleteOnTermination is not blocked)

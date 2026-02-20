@@ -990,12 +990,41 @@ echo "Attach-to-stopped correctly rejected"
 $AWS_EC2 delete-volume --volume-id "$STOPPED_VOL_ID"
 echo "Cleaned up test volume $STOPPED_VOL_ID"
 
-# Start instance (start-instances) and verify transition back to running (describe-instances)
-echo "Starting instance..."
+# Phase 7b: ModifyInstanceAttribute (change instance type while stopped, verify via SSH)
+echo "Phase 7b: ModifyInstanceAttribute"
+echo "Instance is stopped — modifying instance type to verify changes take effect on restart"
+
+# Derive an upsized type in the same family: nano → xlarge (4 vCPUs instead of 2)
+MODIFY_TYPE="${INSTANCE_TYPE%.nano}.xlarge"
+echo "Changing instance type from $INSTANCE_TYPE to $MODIFY_TYPE..."
+
+# Get expected vCPU and memory for the new type
+# Note: --instance-types filter may not be supported; use jq to select the correct type
+TYPES_JSON=$($AWS_EC2 describe-instance-types)
+EXPECTED_VCPUS=$(echo "$TYPES_JSON" | jq -r ".InstanceTypes[] | select(.InstanceType==\"$MODIFY_TYPE\") | .VCpuInfo.DefaultVCpus")
+EXPECTED_MEM_MIB=$(echo "$TYPES_JSON" | jq -r ".InstanceTypes[] | select(.InstanceType==\"$MODIFY_TYPE\") | .MemoryInfo.SizeInMiB")
+echo "Expected resources after modify: ${EXPECTED_VCPUS} vCPUs, ${EXPECTED_MEM_MIB} MiB RAM"
+
+# Modify the instance type
+$AWS_EC2 modify-instance-attribute --instance-id "$INSTANCE_ID" \
+    --instance-type "{\"Value\": \"$MODIFY_TYPE\"}"
+
+# Verify describe-instances reflects the new type
+MODIFIED_TYPE=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID" \
+    --query 'Reservations[0].Instances[0].InstanceType' --output text)
+if [ "$MODIFIED_TYPE" != "$MODIFY_TYPE" ]; then
+    echo "ModifyInstanceAttribute failed: expected type $MODIFY_TYPE, got $MODIFIED_TYPE"
+    exit 1
+fi
+echo "Instance type updated to $MODIFIED_TYPE"
+
+# Start instance with the new type
+echo "Starting instance with modified type..."
 $AWS_EC2 start-instances --instance-ids "$INSTANCE_ID"
 COUNT=0
 while [ $COUNT -lt 30 ]; do
-    STATE=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)
+    STATE=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID" \
+        --query 'Reservations[0].Instances[0].State.Name' --output text)
     echo "Instance state: $STATE"
     if [ "$STATE" == "running" ]; then
         break
@@ -1005,12 +1034,60 @@ while [ $COUNT -lt 30 ]; do
 done
 
 if [ "$STATE" != "running" ]; then
-    echo "Instance failed to reach running state after restart"
+    echo "Instance failed to reach running state after type change"
     exit 1
 fi
 
-# Phase 7b: RunInstances with count > 1
-echo "Phase 7b: RunInstances with MinCount/MaxCount > 1"
+# Get SSH port (may have changed after restart with new QEMU config)
+echo "Getting SSH port for restarted instance..."
+SSH_PORT=$(get_ssh_port "$INSTANCE_ID")
+SSH_HOST=$(get_ssh_host "$INSTANCE_ID")
+echo "SSH endpoint: $SSH_HOST:$SSH_PORT"
+
+# Wait for SSH to become ready
+wait_for_ssh "$SSH_HOST" "$SSH_PORT" "test-key-1.pem" 30
+
+# Verify vCPU count matches the new instance type (nproc reports online CPUs)
+echo "Verifying vCPU count inside the VM..."
+VM_VCPUS=$(ssh -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    -o LogLevel=ERROR \
+    -o ConnectTimeout=5 \
+    -o BatchMode=yes \
+    -p "$SSH_PORT" \
+    -i "test-key-1.pem" \
+    ec2-user@"$SSH_HOST" 'nproc' | tr -d '[:space:]')
+echo "VM reports $VM_VCPUS vCPUs (expected $EXPECTED_VCPUS)"
+if [ "$VM_VCPUS" != "$EXPECTED_VCPUS" ]; then
+    echo "vCPU count mismatch after ModifyInstanceAttribute: VM reports $VM_VCPUS, expected $EXPECTED_VCPUS"
+    exit 1
+fi
+echo "vCPU count verified"
+
+# Verify memory matches the new instance type (MemTotal from /proc/meminfo)
+echo "Verifying memory inside the VM..."
+VM_MEM_KB=$(ssh -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    -o LogLevel=ERROR \
+    -o ConnectTimeout=5 \
+    -o BatchMode=yes \
+    -p "$SSH_PORT" \
+    -i "test-key-1.pem" \
+    ec2-user@"$SSH_HOST" "awk '/MemTotal/ {print \$2}' /proc/meminfo" | tr -d '[:space:]')
+VM_MEM_MIB=$((VM_MEM_KB / 1024))
+# Allow 15% margin for kernel reserved memory
+EXPECTED_MEM_LOW=$((EXPECTED_MEM_MIB * 85 / 100))
+echo "VM reports ${VM_MEM_MIB} MiB total RAM (expected ~${EXPECTED_MEM_MIB} MiB, threshold ${EXPECTED_MEM_LOW} MiB)"
+if [ "$VM_MEM_MIB" -lt "$EXPECTED_MEM_LOW" ]; then
+    echo "Memory too low after ModifyInstanceAttribute: VM reports ${VM_MEM_MIB} MiB, expected at least ${EXPECTED_MEM_LOW} MiB"
+    exit 1
+fi
+echo "Memory verified"
+
+echo "ModifyInstanceAttribute test passed (type change + vCPU + memory verified via SSH)"
+
+# Phase 7c: RunInstances with count > 1
+echo "Phase 7c: RunInstances with MinCount/MaxCount > 1"
 echo "Launching 2 instances in a single run-instances call..."
 MULTI_RUN_OUTPUT=$($AWS_EC2 run-instances \
     --image-id "$AMI_ID" \
@@ -1160,6 +1237,11 @@ expect_error "InvalidAMIName.Duplicate" $AWS_EC2 create-image \
 echo "8p: DeleteKeyPair non-existent key (idempotent)..."
 $AWS_EC2 delete-key-pair --key-name nonexistent-key-99999
 echo "  DeleteKeyPair for non-existent key succeeded (idempotent)"
+
+# 8q: ModifyInstanceAttribute on running instance (instance not in stopped KV → NotFound)
+echo "8q: ModifyInstanceAttribute on running instance..."
+expect_error "InvalidInstanceID.NotFound" $AWS_EC2 modify-instance-attribute \
+    --instance-id "$INSTANCE_ID" --instance-type "{\"Value\": \"$INSTANCE_TYPE\"}"
 
 echo "Negative test suite passed"
 
