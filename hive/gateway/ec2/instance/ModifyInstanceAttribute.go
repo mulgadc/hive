@@ -52,9 +52,9 @@ func ValidateModifyInstanceAttributeInput(input *ec2.ModifyInstanceAttributeInpu
 
 // ModifyInstanceAttribute sends a modify request to the daemon via NATS.
 // The daemon updates the stopped instance in KV and returns an empty response on success.
-func ModifyInstanceAttribute(input *ec2.ModifyInstanceAttributeInput, natsConn *nats.Conn) (struct{}, error) {
+func ModifyInstanceAttribute(input *ec2.ModifyInstanceAttributeInput, natsConn *nats.Conn) (ec2.ModifyInstanceAttributeOutput, error) {
 	if err := ValidateModifyInstanceAttributeInput(input); err != nil {
-		return struct{}{}, err
+		return ec2.ModifyInstanceAttributeOutput{}, err
 	}
 
 	slog.Info("ModifyInstanceAttribute: Processing request", "instance_id", *input.InstanceId)
@@ -62,20 +62,20 @@ func ModifyInstanceAttribute(input *ec2.ModifyInstanceAttributeInput, natsConn *
 	jsonData, err := json.Marshal(input)
 	if err != nil {
 		slog.Error("ModifyInstanceAttribute: Failed to marshal request", "instance_id", *input.InstanceId, "err", err)
-		return struct{}{}, fmt.Errorf("failed to marshal request: %w", err)
+		return ec2.ModifyInstanceAttributeOutput{}, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	msg, err := natsConn.Request("ec2.ModifyInstanceAttribute", jsonData, 30*time.Second)
 	if err != nil {
 		slog.Error("ModifyInstanceAttribute: Failed to send request", "instance_id", *input.InstanceId, "err", err)
-		return struct{}{}, fmt.Errorf("failed to send modify request: %w", err)
+		return ec2.ModifyInstanceAttributeOutput{}, fmt.Errorf("failed to send modify request: %w", err)
 	}
 
 	if responseError, parseErr := utils.ValidateErrorPayload(msg.Data); parseErr != nil {
 		slog.Error("ModifyInstanceAttribute: Daemon returned error", "instance_id", *input.InstanceId, "code", *responseError.Code)
-		return struct{}{}, errors.New(*responseError.Code)
+		return ec2.ModifyInstanceAttributeOutput{}, errors.New(*responseError.Code)
 	}
 
 	slog.Info("ModifyInstanceAttribute: Completed successfully", "instance_id", *input.InstanceId)
-	return struct{}{}, nil
+	return ec2.ModifyInstanceAttributeOutput{}, nil
 }

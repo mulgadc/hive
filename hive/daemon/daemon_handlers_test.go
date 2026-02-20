@@ -1848,5 +1848,5 @@ func TestHandleEC2ModifyInstanceAttribute_MissingInstanceID(t *testing.T) {
 	var errResp map[string]any
 	err = json.Unmarshal(reply.Data, &errResp)
 	require.NoError(t, err)
-	assert.Contains(t, errResp, "Code")
+	assert.Equal(t, "MissingParameter", errResp["Code"])
 }

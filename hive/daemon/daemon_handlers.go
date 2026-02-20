@@ -1983,7 +1983,13 @@ func (d *Daemon) handleEC2ModifyInstanceAttribute(msg *nats.Msg) {
 	if input.InstanceType != nil && input.InstanceType.Value != nil {
 		newType := *input.InstanceType.Value
 		if newType == "" {
+			slog.Error("handleEC2ModifyInstanceAttribute: empty instance type value", "instanceId", instanceID)
 			respondWithError(awserrors.ErrorInvalidInstanceAttributeValue)
+			return
+		}
+		if instance.Instance == nil {
+			slog.Error("handleEC2ModifyInstanceAttribute: instance.Instance is nil, data integrity issue", "instanceId", instanceID)
+			respondWithError(awserrors.ErrorServerInternal)
 			return
 		}
 		slog.Info("handleEC2ModifyInstanceAttribute: changing instance type",
@@ -1991,34 +1997,38 @@ func (d *Daemon) handleEC2ModifyInstanceAttribute(msg *nats.Msg) {
 
 		instance.InstanceType = newType
 		instance.Config.InstanceType = newType
-		if instance.Instance != nil {
-			instance.Instance.InstanceType = aws.String(newType)
-			// Clear StateReason — resolves capacity-unavailable state from instance-type-missing bug
-			instance.Instance.StateReason = nil
-		}
+		instance.Instance.InstanceType = aws.String(newType)
+		// Clear StateReason — resolves capacity-unavailable state from instance-type-missing bug
+		instance.Instance.StateReason = nil
 	}
 
 	if input.UserData != nil && input.UserData.Value != nil {
 		newUserDataB64 := string(input.UserData.Value)
 		slog.Info("handleEC2ModifyInstanceAttribute: changing user data", "instanceId", instanceID)
 
+		decoded, err := base64.StdEncoding.DecodeString(newUserDataB64)
+		if err != nil {
+			slog.Error("handleEC2ModifyInstanceAttribute: invalid base64 in UserData", "instanceId", instanceID, "err", err)
+			respondWithError(awserrors.ErrorInvalidParameterValue)
+			return
+		}
+		instance.UserData = string(decoded)
 		if instance.RunInstancesInput != nil {
 			instance.RunInstancesInput.UserData = aws.String(newUserDataB64)
-		}
-		decoded, err := base64.StdEncoding.DecodeString(newUserDataB64)
-		if err == nil {
-			instance.UserData = string(decoded)
 		}
 	}
 
 	if input.EbsOptimized != nil && input.EbsOptimized.Value != nil {
 		newValue := *input.EbsOptimized.Value
+		if instance.Instance == nil {
+			slog.Error("handleEC2ModifyInstanceAttribute: instance.Instance is nil, data integrity issue", "instanceId", instanceID)
+			respondWithError(awserrors.ErrorServerInternal)
+			return
+		}
 		slog.Info("handleEC2ModifyInstanceAttribute: changing EBS optimization",
 			"instanceId", instanceID, "value", newValue)
 
-		if instance.Instance != nil {
-			instance.Instance.EbsOptimized = aws.Bool(newValue)
-		}
+		instance.Instance.EbsOptimized = aws.Bool(newValue)
 	}
 
 	if err := d.jsManager.WriteStoppedInstance(instanceID, instance); err != nil {
