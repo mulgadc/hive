@@ -1946,6 +1946,194 @@ func TestDelegateHandlers_RoundTrip(t *testing.T) {
 	}
 }
 
+// --- daemonIP tests ---
+
+func TestDaemonIP(t *testing.T) {
+	tests := []struct {
+		name     string
+		host     string
+		expected string
+	}{
+		{"HostPort", "10.0.0.1:4432", "10.0.0.1"},
+		{"HostOnly", "myhost", "myhost"},
+		{"IPv6", "[::1]:4432", "::1"},
+		{"EmptyString", "", ""},
+		{"HostPortZero", "0.0.0.0:0", "0.0.0.0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			daemon := createTestDaemon(t, sharedNATSURL)
+			daemon.config.Daemon.Host = tt.host
+			assert.Equal(t, tt.expected, daemon.daemonIP())
+		})
+	}
+}
+
+// --- handleNodeStatus tests ---
+
+func TestHandleNodeStatus(t *testing.T) {
+	daemon := createTestDaemon(t, sharedNATSURL)
+
+	// Set identifiable config values
+	daemon.config.Region = "us-west-2"
+	daemon.config.AZ = "us-west-2a"
+	daemon.config.Daemon.Host = "10.0.0.5:4432"
+
+	// Add some VMs (2 running, 1 stopped — only running counted)
+	daemon.Instances.Mu.Lock()
+	daemon.Instances.VMS["i-run-1"] = &vm.VM{ID: "i-run-1", Status: vm.StateRunning}
+	daemon.Instances.VMS["i-run-2"] = &vm.VM{ID: "i-run-2", Status: vm.StateRunning}
+	daemon.Instances.VMS["i-stop-1"] = &vm.VM{ID: "i-stop-1", Status: vm.StateStopped}
+	daemon.Instances.Mu.Unlock()
+
+	sub, err := daemon.natsConn.Subscribe("hive.node.status.test", daemon.handleNodeStatus)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reply, err := daemon.natsConn.Request("hive.node.status.test", nil, 5*time.Second)
+	require.NoError(t, err)
+
+	var resp config.NodeStatusResponse
+	err = json.Unmarshal(reply.Data, &resp)
+	require.NoError(t, err)
+
+	assert.Equal(t, "node-1", resp.Node)
+	assert.Equal(t, "Ready", resp.Status)
+	assert.Equal(t, "10.0.0.5", resp.Host)
+	assert.Equal(t, "us-west-2", resp.Region)
+	assert.Equal(t, "us-west-2a", resp.AZ)
+	assert.GreaterOrEqual(t, resp.Uptime, int64(0))
+	assert.Equal(t, 2, resp.VMCount)
+	assert.Greater(t, resp.TotalVCPU, 0)
+	assert.Greater(t, resp.TotalMemGB, 0.0)
+}
+
+func TestHandleNodeStatus_NoVMs(t *testing.T) {
+	daemon := createTestDaemon(t, sharedNATSURL)
+	daemon.config.Daemon.Host = "192.168.1.1:4432"
+
+	sub, err := daemon.natsConn.Subscribe("hive.node.status.empty", daemon.handleNodeStatus)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reply, err := daemon.natsConn.Request("hive.node.status.empty", nil, 5*time.Second)
+	require.NoError(t, err)
+
+	var resp config.NodeStatusResponse
+	err = json.Unmarshal(reply.Data, &resp)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, resp.VMCount)
+	assert.Equal(t, "Ready", resp.Status)
+}
+
+// --- handleNodeVMs tests ---
+
+func TestHandleNodeVMs(t *testing.T) {
+	daemon := createTestDaemon(t, sharedNATSURL)
+	daemon.config.Daemon.Host = "10.0.0.5:4432"
+
+	instanceType := getTestInstanceType()
+	launchTime := time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)
+
+	daemon.Instances.Mu.Lock()
+	daemon.Instances.VMS["i-vm-1"] = &vm.VM{
+		ID:           "i-vm-1",
+		Status:       vm.StateRunning,
+		InstanceType: instanceType,
+		Instance: &ec2.Instance{
+			LaunchTime: &launchTime,
+		},
+	}
+	daemon.Instances.VMS["i-vm-2"] = &vm.VM{
+		ID:           "i-vm-2",
+		Status:       vm.StateStopped,
+		InstanceType: instanceType,
+		Instance:     nil, // no launch time
+	}
+	daemon.Instances.Mu.Unlock()
+
+	sub, err := daemon.natsConn.Subscribe("hive.node.vms.test", daemon.handleNodeVMs)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reply, err := daemon.natsConn.Request("hive.node.vms.test", nil, 5*time.Second)
+	require.NoError(t, err)
+
+	var resp config.NodeVMsResponse
+	err = json.Unmarshal(reply.Data, &resp)
+	require.NoError(t, err)
+
+	assert.Equal(t, "node-1", resp.Node)
+	assert.Equal(t, "10.0.0.5", resp.Host)
+	assert.Len(t, resp.VMs, 2)
+
+	// Build a lookup by instance ID
+	vmsByID := make(map[string]config.VMInfo)
+	for _, v := range resp.VMs {
+		vmsByID[v.InstanceID] = v
+	}
+
+	vm1 := vmsByID["i-vm-1"]
+	assert.Equal(t, "running", vm1.Status)
+	assert.Equal(t, instanceType, vm1.InstanceType)
+	assert.Greater(t, vm1.VCPU, 0)
+	assert.Greater(t, vm1.MemoryGB, 0.0)
+	assert.Equal(t, launchTime.Unix(), vm1.LaunchTime)
+
+	vm2 := vmsByID["i-vm-2"]
+	assert.Equal(t, "stopped", vm2.Status)
+	assert.Equal(t, int64(0), vm2.LaunchTime)
+}
+
+func TestHandleNodeVMs_Empty(t *testing.T) {
+	daemon := createTestDaemon(t, sharedNATSURL)
+	daemon.config.Daemon.Host = "10.0.0.5:4432"
+
+	sub, err := daemon.natsConn.Subscribe("hive.node.vms.empty", daemon.handleNodeVMs)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reply, err := daemon.natsConn.Request("hive.node.vms.empty", nil, 5*time.Second)
+	require.NoError(t, err)
+
+	var resp config.NodeVMsResponse
+	err = json.Unmarshal(reply.Data, &resp)
+	require.NoError(t, err)
+
+	assert.Equal(t, "node-1", resp.Node)
+	assert.Empty(t, resp.VMs)
+}
+
+func TestHandleNodeVMs_UnknownInstanceType(t *testing.T) {
+	daemon := createTestDaemon(t, sharedNATSURL)
+	daemon.config.Daemon.Host = "10.0.0.5:4432"
+
+	daemon.Instances.Mu.Lock()
+	daemon.Instances.VMS["i-vm-unknown"] = &vm.VM{
+		ID:           "i-vm-unknown",
+		Status:       vm.StateRunning,
+		InstanceType: "z99.mega", // not in instanceTypes map
+	}
+	daemon.Instances.Mu.Unlock()
+
+	sub, err := daemon.natsConn.Subscribe("hive.node.vms.unknown", daemon.handleNodeVMs)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reply, err := daemon.natsConn.Request("hive.node.vms.unknown", nil, 5*time.Second)
+	require.NoError(t, err)
+
+	var resp config.NodeVMsResponse
+	err = json.Unmarshal(reply.Data, &resp)
+	require.NoError(t, err)
+
+	assert.Len(t, resp.VMs, 1)
+	assert.Equal(t, 0, resp.VMs[0].VCPU)
+	assert.Equal(t, 0.0, resp.VMs[0].MemoryGB)
+}
+
 // TestDelegateHandlers_EIGW tests Egress-Only Internet Gateway delegate handlers.
 // These need a JetStream-backed EIGW service since the service uses KV storage.
 func TestDelegateHandlers_EIGW(t *testing.T) {
