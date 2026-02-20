@@ -1813,3 +1813,21 @@ func TestHandleEC2ModifyInstanceAttribute_MissingInstanceID(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "MissingParameter", errResp["Code"])
 }
+
+func TestHandleEC2ModifyInstanceAttribute_InvalidJSON(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", daemon.handleEC2ModifyInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reply, err := daemon.natsConn.Request("ec2.ModifyInstanceAttribute", []byte(`{invalid`), 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Equal(t, "ServerInternal", errResp["Code"])
+}
