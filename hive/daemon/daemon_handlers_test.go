@@ -1561,3 +1561,292 @@ func TestAttachVolume_ZoneMismatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(resp.Data), "InvalidVolume.ZoneMismatch")
 }
+
+// --- handleEC2ModifyInstanceAttribute tests ---
+
+func TestHandleEC2ModifyInstanceAttribute_ChangeInstanceType(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", daemon.handleEC2ModifyInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	instanceID := "i-modify-type-001"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateStopped,
+		InstanceType: "t3.micro",
+		Config:       vm.Config{InstanceType: "t3.micro"},
+		Instance: &ec2.Instance{
+			InstanceId:   aws.String(instanceID),
+			InstanceType: aws.String("t3.micro"),
+		},
+	}
+	err = daemon.jsManager.WriteStoppedInstance(instanceID, instance)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = daemon.jsManager.DeleteStoppedInstance(instanceID) })
+
+	input := &ec2.ModifyInstanceAttributeInput{
+		InstanceId:   aws.String(instanceID),
+		InstanceType: &ec2.AttributeValue{Value: aws.String("t3.medium")},
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, `{}`, string(reply.Data))
+
+	updated, err := daemon.jsManager.LoadStoppedInstance(instanceID)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "t3.medium", updated.InstanceType)
+	assert.Equal(t, "t3.medium", updated.Config.InstanceType)
+	assert.Equal(t, "t3.medium", *updated.Instance.InstanceType)
+}
+
+func TestHandleEC2ModifyInstanceAttribute_ChangeUserData(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", daemon.handleEC2ModifyInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	instanceID := "i-modify-ud-001"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateStopped,
+		InstanceType: "t3.micro",
+		UserData:     "old data",
+		RunInstancesInput: &ec2.RunInstancesInput{
+			UserData: aws.String("b2xkIGRhdGE="),
+		},
+		Instance: &ec2.Instance{
+			InstanceId: aws.String(instanceID),
+		},
+	}
+	err = daemon.jsManager.WriteStoppedInstance(instanceID, instance)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = daemon.jsManager.DeleteStoppedInstance(instanceID) })
+
+	// IyEvYmluL2Jhc2g= decodes to "#!/bin/bash"
+	newB64 := "IyEvYmluL2Jhc2g="
+	input := &ec2.ModifyInstanceAttributeInput{
+		InstanceId: aws.String(instanceID),
+		UserData:   &ec2.BlobAttributeValue{Value: []byte(newB64)},
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, `{}`, string(reply.Data))
+
+	updated, err := daemon.jsManager.LoadStoppedInstance(instanceID)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "#!/bin/bash", updated.UserData)
+	assert.Equal(t, newB64, *updated.RunInstancesInput.UserData)
+}
+
+func TestHandleEC2ModifyInstanceAttribute_ChangeEbsOptimized(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", daemon.handleEC2ModifyInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	instanceID := "i-modify-ebs-001"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateStopped,
+		InstanceType: "t3.micro",
+		Instance: &ec2.Instance{
+			InstanceId:   aws.String(instanceID),
+			EbsOptimized: aws.Bool(false),
+		},
+	}
+	err = daemon.jsManager.WriteStoppedInstance(instanceID, instance)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = daemon.jsManager.DeleteStoppedInstance(instanceID) })
+
+	input := &ec2.ModifyInstanceAttributeInput{
+		InstanceId:   aws.String(instanceID),
+		EbsOptimized: &ec2.AttributeBooleanValue{Value: aws.Bool(true)},
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, `{}`, string(reply.Data))
+
+	updated, err := daemon.jsManager.LoadStoppedInstance(instanceID)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.True(t, *updated.Instance.EbsOptimized)
+}
+
+func TestHandleEC2ModifyInstanceAttribute_InstanceNotFound(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", daemon.handleEC2ModifyInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.ModifyInstanceAttributeInput{
+		InstanceId:   aws.String("i-nonexistent"),
+		InstanceType: &ec2.AttributeValue{Value: aws.String("t3.medium")},
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Equal(t, "InvalidInstanceID.NotFound", errResp["Code"])
+}
+
+func TestHandleEC2ModifyInstanceAttribute_NotStopped(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", daemon.handleEC2ModifyInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	instanceID := "i-modify-running-001"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateRunning,
+		InstanceType: "t3.micro",
+	}
+	err = daemon.jsManager.WriteStoppedInstance(instanceID, instance)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = daemon.jsManager.DeleteStoppedInstance(instanceID) })
+
+	input := &ec2.ModifyInstanceAttributeInput{
+		InstanceId:   aws.String(instanceID),
+		InstanceType: &ec2.AttributeValue{Value: aws.String("t3.medium")},
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Equal(t, "IncorrectInstanceState", errResp["Code"])
+}
+
+func TestHandleEC2ModifyInstanceAttribute_ClearsStateReason(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", daemon.handleEC2ModifyInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	instanceID := "i-modify-recovery-001"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateStopped,
+		InstanceType: "m7i.small",
+		Config:       vm.Config{InstanceType: "m7i.small"},
+		Instance: &ec2.Instance{
+			InstanceId:   aws.String(instanceID),
+			InstanceType: aws.String("m7i.small"),
+			StateReason: &ec2.StateReason{
+				Code:    aws.String("Server.InsufficientInstanceCapacity"),
+				Message: aws.String("Instance type not available on any node"),
+			},
+		},
+	}
+	err = daemon.jsManager.WriteStoppedInstance(instanceID, instance)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = daemon.jsManager.DeleteStoppedInstance(instanceID) })
+
+	input := &ec2.ModifyInstanceAttributeInput{
+		InstanceId:   aws.String(instanceID),
+		InstanceType: &ec2.AttributeValue{Value: aws.String("t3.micro")},
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, `{}`, string(reply.Data))
+
+	updated, err := daemon.jsManager.LoadStoppedInstance(instanceID)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "t3.micro", updated.InstanceType)
+	assert.Equal(t, "t3.micro", updated.Config.InstanceType)
+	assert.Equal(t, "t3.micro", *updated.Instance.InstanceType)
+	assert.Nil(t, updated.Instance.StateReason)
+}
+
+func TestHandleEC2ModifyInstanceAttribute_InvalidTypeAccepted(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", daemon.handleEC2ModifyInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	instanceID := "i-modify-nonsense-001"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateStopped,
+		InstanceType: "t3.micro",
+		Config:       vm.Config{InstanceType: "t3.micro"},
+		Instance: &ec2.Instance{
+			InstanceId:   aws.String(instanceID),
+			InstanceType: aws.String("t3.micro"),
+		},
+	}
+	err = daemon.jsManager.WriteStoppedInstance(instanceID, instance)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = daemon.jsManager.DeleteStoppedInstance(instanceID) })
+
+	// z99.mega is nonsense — modify does not pre-validate, matching AWS behavior
+	input := &ec2.ModifyInstanceAttributeInput{
+		InstanceId:   aws.String(instanceID),
+		InstanceType: &ec2.AttributeValue{Value: aws.String("z99.mega")},
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, `{}`, string(reply.Data))
+
+	updated, err := daemon.jsManager.LoadStoppedInstance(instanceID)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, "z99.mega", updated.InstanceType)
+	assert.Equal(t, "z99.mega", updated.Config.InstanceType)
+	assert.Equal(t, "z99.mega", *updated.Instance.InstanceType)
+}
+
+func TestHandleEC2ModifyInstanceAttribute_MissingInstanceID(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", daemon.handleEC2ModifyInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.ModifyInstanceAttributeInput{}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+}
