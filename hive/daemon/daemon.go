@@ -378,6 +378,7 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.CreateEgressOnlyInternetGateway", d.handleEC2CreateEgressOnlyInternetGateway, "hive-workers"},
 		{"ec2.DeleteEgressOnlyInternetGateway", d.handleEC2DeleteEgressOnlyInternetGateway, "hive-workers"},
 		{"ec2.DescribeEgressOnlyInternetGateways", d.handleEC2DescribeEgressOnlyInternetGateways, "hive-workers"},
+		{"ec2.ModifyInstanceAttribute", d.handleEC2ModifyInstanceAttribute, "hive-workers"},
 		{"ec2.start", d.handleEC2StartStoppedInstance, "hive-workers"},
 		{"ec2.terminate", d.handleEC2TerminateStoppedInstance, "hive-workers"},
 		{"ec2.DescribeStoppedInstances", d.handleEC2DescribeStoppedInstances, "hive-workers"},
