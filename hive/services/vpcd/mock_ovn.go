@@ -14,21 +14,25 @@ type MockOVNClient struct {
 	mu        sync.Mutex
 	connected bool
 
-	switches    map[string]*nbdb.LogicalSwitch
-	ports       map[string]*nbdb.LogicalSwitchPort
-	routers     map[string]*nbdb.LogicalRouter
-	routerPorts map[string]*nbdb.LogicalRouterPort
-	dhcpOpts    map[string]*nbdb.DHCPOptions
+	switches     map[string]*nbdb.LogicalSwitch
+	ports        map[string]*nbdb.LogicalSwitchPort
+	routers      map[string]*nbdb.LogicalRouter
+	routerPorts  map[string]*nbdb.LogicalRouterPort
+	dhcpOpts     map[string]*nbdb.DHCPOptions
+	nats         map[string]*nbdb.NAT                      // keyed by UUID
+	staticRoutes map[string]*nbdb.LogicalRouterStaticRoute // keyed by UUID
 }
 
 // NewMockOVNClient creates a new MockOVNClient for testing.
 func NewMockOVNClient() *MockOVNClient {
 	return &MockOVNClient{
-		switches:    make(map[string]*nbdb.LogicalSwitch),
-		ports:       make(map[string]*nbdb.LogicalSwitchPort),
-		routers:     make(map[string]*nbdb.LogicalRouter),
-		routerPorts: make(map[string]*nbdb.LogicalRouterPort),
-		dhcpOpts:    make(map[string]*nbdb.DHCPOptions),
+		switches:     make(map[string]*nbdb.LogicalSwitch),
+		ports:        make(map[string]*nbdb.LogicalSwitchPort),
+		routers:      make(map[string]*nbdb.LogicalRouter),
+		routerPorts:  make(map[string]*nbdb.LogicalRouterPort),
+		dhcpOpts:     make(map[string]*nbdb.DHCPOptions),
+		nats:         make(map[string]*nbdb.NAT),
+		staticRoutes: make(map[string]*nbdb.LogicalRouterStaticRoute),
 	}
 }
 
@@ -307,4 +311,98 @@ func (m *MockOVNClient) ListDHCPOptions(_ context.Context) ([]nbdb.DHCPOptions, 
 		result = append(result, *opts)
 	}
 	return result, nil
+}
+
+// NAT
+
+func (m *MockOVNClient) AddNAT(_ context.Context, routerName string, nat *nbdb.NAT) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lr, exists := m.routers[routerName]
+	if !exists {
+		return fmt.Errorf("logical router %q not found", routerName)
+	}
+	if nat.UUID == "" {
+		nat.UUID = utils.GenerateResourceID("nat")
+	}
+	stored := *nat
+	m.nats[nat.UUID] = &stored
+	lr.NAT = append(lr.NAT, nat.UUID)
+	return nil
+}
+
+func (m *MockOVNClient) DeleteNAT(_ context.Context, routerName string, natType, logicalIP string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lr, exists := m.routers[routerName]
+	if !exists {
+		return fmt.Errorf("logical router %q not found", routerName)
+	}
+	// Find the NAT entry
+	var foundUUID string
+	for uuid, n := range m.nats {
+		if n.Type == natType && n.LogicalIP == logicalIP {
+			foundUUID = uuid
+			break
+		}
+	}
+	if foundUUID == "" {
+		return fmt.Errorf("NAT %s %s not found", natType, logicalIP)
+	}
+	// Remove from router's NAT list
+	for i, uuid := range lr.NAT {
+		if uuid == foundUUID {
+			lr.NAT = append(lr.NAT[:i], lr.NAT[i+1:]...)
+			break
+		}
+	}
+	delete(m.nats, foundUUID)
+	return nil
+}
+
+// Static Routes
+
+func (m *MockOVNClient) AddStaticRoute(_ context.Context, routerName string, route *nbdb.LogicalRouterStaticRoute) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lr, exists := m.routers[routerName]
+	if !exists {
+		return fmt.Errorf("logical router %q not found", routerName)
+	}
+	if route.UUID == "" {
+		route.UUID = utils.GenerateResourceID("route")
+	}
+	stored := *route
+	m.staticRoutes[route.UUID] = &stored
+	lr.StaticRoutes = append(lr.StaticRoutes, route.UUID)
+	return nil
+}
+
+func (m *MockOVNClient) DeleteStaticRoute(_ context.Context, routerName string, ipPrefix string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lr, exists := m.routers[routerName]
+	if !exists {
+		return fmt.Errorf("logical router %q not found", routerName)
+	}
+	// Find the route
+	var foundUUID string
+	for uuid, r := range m.staticRoutes {
+		if r.IPPrefix == ipPrefix {
+			foundUUID = uuid
+			break
+		}
+	}
+	if foundUUID == "" {
+		return fmt.Errorf("static route %s not found", ipPrefix)
+	}
+	// Remove from router's StaticRoutes list
+	for i, uuid := range lr.StaticRoutes {
+		if uuid == foundUUID {
+			lr.StaticRoutes = append(lr.StaticRoutes[:i], lr.StaticRoutes[i+1:]...)
+			break
+		}
+	}
+	delete(m.staticRoutes, foundUUID)
+	return nil
 }

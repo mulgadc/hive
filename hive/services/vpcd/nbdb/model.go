@@ -69,14 +69,49 @@ type DHCPOptions struct {
 	ExternalIDs map[string]string `ovsdb:"external_ids"`
 }
 
+// NAT represents an OVN NAT rule on a Logical_Router.
+type NAT struct {
+	UUID        string            `ovsdb:"_uuid"`
+	Type        string            `ovsdb:"type"` // "snat", "dnat", "dnat_and_snat"
+	ExternalIP  string            `ovsdb:"external_ip"`
+	LogicalIP   string            `ovsdb:"logical_ip"`
+	LogicalPort *string           `ovsdb:"logical_port"`
+	ExternalMAC *string           `ovsdb:"external_mac"`
+	ExternalIDs map[string]string `ovsdb:"external_ids"`
+	Options     map[string]string `ovsdb:"options"`
+}
+
+// LogicalRouterStaticRoute represents an OVN Logical_Router_Static_Route.
+type LogicalRouterStaticRoute struct {
+	UUID        string            `ovsdb:"_uuid"`
+	IPPrefix    string            `ovsdb:"ip_prefix"`
+	Nexthop     string            `ovsdb:"nexthop"`
+	OutputPort  *string           `ovsdb:"output_port"`
+	Policy      *string           `ovsdb:"policy"`
+	ExternalIDs map[string]string `ovsdb:"external_ids"`
+}
+
+// GatewayChassis represents an OVN Gateway_Chassis for HA scheduling.
+type GatewayChassis struct {
+	UUID        string            `ovsdb:"_uuid"`
+	Name        string            `ovsdb:"name"`
+	ChassisName string            `ovsdb:"chassis_name"`
+	Priority    int               `ovsdb:"priority"`
+	ExternalIDs map[string]string `ovsdb:"external_ids"`
+	Options     map[string]string `ovsdb:"options"`
+}
+
 // FullDatabaseModel returns a ClientDBModel for the OVN Northbound database
 // containing all tables needed for Hive VPC networking.
 func FullDatabaseModel() (model.ClientDBModel, error) {
 	return model.NewClientDBModel("OVN_Northbound", map[string]model.Model{
-		"Logical_Switch":      &LogicalSwitch{},
-		"Logical_Switch_Port": &LogicalSwitchPort{},
-		"Logical_Router":      &LogicalRouter{},
-		"Logical_Router_Port": &LogicalRouterPort{},
-		"DHCP_Options":        &DHCPOptions{},
+		"Logical_Switch":              &LogicalSwitch{},
+		"Logical_Switch_Port":         &LogicalSwitchPort{},
+		"Logical_Router":              &LogicalRouter{},
+		"Logical_Router_Port":         &LogicalRouterPort{},
+		"DHCP_Options":                &DHCPOptions{},
+		"NAT":                         &NAT{},
+		"Logical_Router_Static_Route": &LogicalRouterStaticRoute{},
+		"Gateway_Chassis":             &GatewayChassis{},
 	})
 }

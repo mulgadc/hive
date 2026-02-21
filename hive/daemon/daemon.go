@@ -29,6 +29,7 @@ import (
 	"github.com/mulgadc/hive/hive/config"
 	handlers_ec2_account "github.com/mulgadc/hive/hive/handlers/ec2/account"
 	handlers_ec2_eigw "github.com/mulgadc/hive/hive/handlers/ec2/eigw"
+	handlers_ec2_igw "github.com/mulgadc/hive/hive/handlers/ec2/igw"
 	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
 	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
@@ -98,6 +99,7 @@ type Daemon struct {
 	snapshotService *handlers_ec2_snapshot.SnapshotServiceImpl
 	tagsService     *handlers_ec2_tags.TagsServiceImpl
 	eigwService     *handlers_ec2_eigw.EgressOnlyIGWServiceImpl
+	igwService      *handlers_ec2_igw.IGWServiceImpl
 	vpcService      *handlers_ec2_vpc.VPCServiceImpl
 	ctx             context.Context
 	cancel          context.CancelFunc
@@ -383,6 +385,11 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.CreateEgressOnlyInternetGateway", d.handleEC2CreateEgressOnlyInternetGateway, "hive-workers"},
 		{"ec2.DeleteEgressOnlyInternetGateway", d.handleEC2DeleteEgressOnlyInternetGateway, "hive-workers"},
 		{"ec2.DescribeEgressOnlyInternetGateways", d.handleEC2DescribeEgressOnlyInternetGateways, "hive-workers"},
+		{"ec2.CreateInternetGateway", d.handleEC2CreateInternetGateway, "hive-workers"},
+		{"ec2.DeleteInternetGateway", d.handleEC2DeleteInternetGateway, "hive-workers"},
+		{"ec2.DescribeInternetGateways", d.handleEC2DescribeInternetGateways, "hive-workers"},
+		{"ec2.AttachInternetGateway", d.handleEC2AttachInternetGateway, "hive-workers"},
+		{"ec2.DetachInternetGateway", d.handleEC2DetachInternetGateway, "hive-workers"},
 		{"ec2.CreateVpc", d.handleEC2CreateVpc, "hive-workers"},
 		{"ec2.DeleteVpc", d.handleEC2DeleteVpc, "hive-workers"},
 		{"ec2.DescribeVpcs", d.handleEC2DescribeVpcs, "hive-workers"},
@@ -480,6 +487,12 @@ func (d *Daemon) Start() error {
 		d.eigwService = handlers_ec2_eigw.NewEgressOnlyIGWServiceImpl(d.config)
 	} else {
 		d.eigwService = eigwSvc
+	}
+	if igwSvc, err := handlers_ec2_igw.NewIGWServiceImplWithNATS(d.config, d.natsConn); err != nil {
+		slog.Warn("Failed to initialize IGW service, falling back to in-memory", "error", err)
+		d.igwService = handlers_ec2_igw.NewIGWServiceImpl(d.config)
+	} else {
+		d.igwService = igwSvc
 	}
 	if vpcSvc, err := handlers_ec2_vpc.NewVPCServiceImplWithNATS(d.config, d.natsConn); err != nil {
 		slog.Warn("Failed to initialize VPC service, falling back to in-memory", "error", err)

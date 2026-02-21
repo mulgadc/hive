@@ -20,6 +20,8 @@ const (
 	TopicCreatePort   = "vpc.create-port"
 	TopicDeletePort   = "vpc.delete-port"
 	TopicPortStatus   = "vpc.port-status"
+	TopicIGWAttach    = "vpc.igw-attach"
+	TopicIGWDetach    = "vpc.igw-detach"
 )
 
 // VPCEvent is published on vpc.create after a VPC is persisted.
@@ -43,6 +45,12 @@ type PortEvent struct {
 	VpcId              string `json:"vpc_id"`
 	PrivateIpAddress   string `json:"private_ip_address"`
 	MacAddress         string `json:"mac_address"`
+}
+
+// IGWEvent is published on vpc.igw-attach / vpc.igw-detach.
+type IGWEvent struct {
+	InternetGatewayId string `json:"internet_gateway_id"`
+	VpcId             string `json:"vpc_id"`
 }
 
 // TopologyHandler translates VPC lifecycle NATS events into OVN NB DB operations.
@@ -70,6 +78,8 @@ func (h *TopologyHandler) Subscribe(nc *nats.Conn) ([]*nats.Subscription, error)
 		{TopicSubnetDelete, h.handleSubnetDelete},
 		{TopicCreatePort, h.handleCreatePort},
 		{TopicDeletePort, h.handleDeletePort},
+		{TopicIGWAttach, h.handleIGWAttach},
+		{TopicIGWDetach, h.handleIGWDetach},
 	}
 
 	var result []*nats.Subscription
@@ -428,6 +438,219 @@ func (h *TopologyHandler) handleDeletePort(msg *nats.Msg) {
 		"port", portName,
 		"switch", switchName,
 		"eni_id", evt.NetworkInterfaceId,
+	)
+	respond(msg, nil)
+}
+
+// --- Internet Gateway (external connectivity + NAT) ---
+
+func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
+	if h.ovn == nil {
+		respond(msg, fmt.Errorf("OVN client not connected"))
+		return
+	}
+
+	var evt IGWEvent
+	if err := json.Unmarshal(msg.Data, &evt); err != nil {
+		slog.Error("vpcd: failed to unmarshal vpc.igw-attach event", "err", err)
+		respond(msg, err)
+		return
+	}
+
+	ctx := context.Background()
+	routerName := "vpc-" + evt.VpcId
+	extSwitchName := "ext-" + evt.VpcId
+	extPortName := "ext-port-" + evt.VpcId
+	gwPortName := "gw-" + evt.VpcId
+	switchGWPortName := "gw-port-" + evt.VpcId
+
+	// 1. Create external logical switch (localnet for physical uplink)
+	extSwitch := &nbdb.LogicalSwitch{
+		Name: extSwitchName,
+		ExternalIDs: map[string]string{
+			"hive:vpc_id": evt.VpcId,
+			"hive:igw_id": evt.InternetGatewayId,
+			"hive:role":   "external",
+		},
+	}
+	if err := h.ovn.CreateLogicalSwitch(ctx, extSwitch); err != nil {
+		slog.Error("vpcd: failed to create external switch", "switch", extSwitchName, "err", err)
+		respond(msg, err)
+		return
+	}
+
+	// 2. Create localnet port on external switch (maps to physical network)
+	localnetPort := &nbdb.LogicalSwitchPort{
+		Name:      extPortName,
+		Type:      "localnet",
+		Addresses: []string{"unknown"},
+		Options: map[string]string{
+			"network_name": "external",
+		},
+		ExternalIDs: map[string]string{
+			"hive:vpc_id": evt.VpcId,
+			"hive:igw_id": evt.InternetGatewayId,
+		},
+	}
+	if err := h.ovn.CreateLogicalSwitchPort(ctx, extSwitchName, localnetPort); err != nil {
+		slog.Error("vpcd: failed to create localnet port", "port", extPortName, "err", err)
+		_ = h.ovn.DeleteLogicalSwitch(ctx, extSwitchName)
+		respond(msg, err)
+		return
+	}
+
+	// 3. Create gateway router port on the VPC router connecting to external switch
+	gwMAC := generateMAC("gw-" + evt.VpcId)
+	lrp := &nbdb.LogicalRouterPort{
+		Name:     gwPortName,
+		MAC:      gwMAC,
+		Networks: []string{"169.254.0.1/30"}, // link-local for external transit
+		ExternalIDs: map[string]string{
+			"hive:vpc_id": evt.VpcId,
+			"hive:igw_id": evt.InternetGatewayId,
+			"hive:role":   "gateway",
+		},
+	}
+	if err := h.ovn.CreateLogicalRouterPort(ctx, routerName, lrp); err != nil {
+		slog.Error("vpcd: failed to create gateway router port", "port", gwPortName, "err", err)
+		_ = h.ovn.DeleteLogicalSwitch(ctx, extSwitchName)
+		respond(msg, err)
+		return
+	}
+
+	// 4. Create switch port connecting external switch to router
+	switchGWPort := &nbdb.LogicalSwitchPort{
+		Name:      switchGWPortName,
+		Type:      "router",
+		Addresses: []string{"router"},
+		Options: map[string]string{
+			"router-port": gwPortName,
+		},
+		ExternalIDs: map[string]string{
+			"hive:vpc_id": evt.VpcId,
+			"hive:igw_id": evt.InternetGatewayId,
+		},
+	}
+	if err := h.ovn.CreateLogicalSwitchPort(ctx, extSwitchName, switchGWPort); err != nil {
+		slog.Error("vpcd: failed to create switch gateway port", "port", switchGWPortName, "err", err)
+		_ = h.ovn.DeleteLogicalRouterPort(ctx, routerName, gwPortName)
+		_ = h.ovn.DeleteLogicalSwitch(ctx, extSwitchName)
+		respond(msg, err)
+		return
+	}
+
+	// 5. Add SNAT rule — masquerade all VPC traffic going through the gateway
+	//    Get the VPC CIDR from the router's external_ids
+	router, err := h.ovn.GetLogicalRouter(ctx, routerName)
+	if err != nil {
+		slog.Warn("vpcd: failed to get router for SNAT, skipping NAT setup", "router", routerName, "err", err)
+	} else {
+		vpcCIDR := router.ExternalIDs["hive:cidr"]
+		if vpcCIDR == "" {
+			// Fall back to a reasonable default — list subnets for this VPC
+			vpcCIDR = "10.0.0.0/8"
+		}
+		snatRule := &nbdb.NAT{
+			Type:       "snat",
+			ExternalIP: "169.254.0.1",
+			LogicalIP:  vpcCIDR,
+			ExternalIDs: map[string]string{
+				"hive:vpc_id": evt.VpcId,
+				"hive:igw_id": evt.InternetGatewayId,
+			},
+		}
+		if err := h.ovn.AddNAT(ctx, routerName, snatRule); err != nil {
+			slog.Warn("vpcd: failed to add SNAT rule", "router", routerName, "err", err)
+		}
+	}
+
+	// 6. Add default route pointing to the external gateway
+	defaultRoute := &nbdb.LogicalRouterStaticRoute{
+		IPPrefix: "0.0.0.0/0",
+		Nexthop:  "169.254.0.2",
+		ExternalIDs: map[string]string{
+			"hive:vpc_id": evt.VpcId,
+			"hive:igw_id": evt.InternetGatewayId,
+		},
+	}
+	if err := h.ovn.AddStaticRoute(ctx, routerName, defaultRoute); err != nil {
+		slog.Warn("vpcd: failed to add default route", "router", routerName, "err", err)
+	}
+
+	slog.Info("vpcd: attached internet gateway to VPC",
+		"igw_id", evt.InternetGatewayId,
+		"vpc_id", evt.VpcId,
+		"ext_switch", extSwitchName,
+		"gw_port", gwPortName,
+	)
+	respond(msg, nil)
+}
+
+func (h *TopologyHandler) handleIGWDetach(msg *nats.Msg) {
+	if h.ovn == nil {
+		respond(msg, fmt.Errorf("OVN client not connected"))
+		return
+	}
+
+	var evt IGWEvent
+	if err := json.Unmarshal(msg.Data, &evt); err != nil {
+		slog.Error("vpcd: failed to unmarshal vpc.igw-detach event", "err", err)
+		respond(msg, err)
+		return
+	}
+
+	ctx := context.Background()
+	routerName := "vpc-" + evt.VpcId
+	extSwitchName := "ext-" + evt.VpcId
+	extPortName := "ext-port-" + evt.VpcId
+	gwPortName := "gw-" + evt.VpcId
+	switchGWPortName := "gw-port-" + evt.VpcId
+
+	// 1. Delete default route
+	if err := h.ovn.DeleteStaticRoute(ctx, routerName, "0.0.0.0/0"); err != nil {
+		slog.Warn("vpcd: failed to delete default route", "router", routerName, "err", err)
+	}
+
+	// 2. Delete SNAT rule(s) for this IGW
+	// Find VPC CIDR for the SNAT rule
+	router, err := h.ovn.GetLogicalRouter(ctx, routerName)
+	if err != nil {
+		slog.Warn("vpcd: failed to get router for NAT cleanup", "router", routerName, "err", err)
+	} else {
+		vpcCIDR := router.ExternalIDs["hive:cidr"]
+		if vpcCIDR == "" {
+			vpcCIDR = "10.0.0.0/8"
+		}
+		if err := h.ovn.DeleteNAT(ctx, routerName, "snat", vpcCIDR); err != nil {
+			slog.Warn("vpcd: failed to delete SNAT rule", "router", routerName, "err", err)
+		}
+	}
+
+	// 3. Delete switch gateway port
+	if err := h.ovn.DeleteLogicalSwitchPort(ctx, extSwitchName, switchGWPortName); err != nil {
+		slog.Warn("vpcd: failed to delete switch gateway port", "port", switchGWPortName, "err", err)
+	}
+
+	// 4. Delete gateway router port
+	if err := h.ovn.DeleteLogicalRouterPort(ctx, routerName, gwPortName); err != nil {
+		slog.Warn("vpcd: failed to delete gateway router port", "port", gwPortName, "err", err)
+	}
+
+	// 5. Delete localnet port
+	if err := h.ovn.DeleteLogicalSwitchPort(ctx, extSwitchName, extPortName); err != nil {
+		slog.Warn("vpcd: failed to delete localnet port", "port", extPortName, "err", err)
+	}
+
+	// 6. Delete external switch
+	if err := h.ovn.DeleteLogicalSwitch(ctx, extSwitchName); err != nil {
+		slog.Error("vpcd: failed to delete external switch", "switch", extSwitchName, "err", err)
+		respond(msg, err)
+		return
+	}
+
+	slog.Info("vpcd: detached internet gateway from VPC",
+		"igw_id", evt.InternetGatewayId,
+		"vpc_id", evt.VpcId,
 	)
 	respond(msg, nil)
 }

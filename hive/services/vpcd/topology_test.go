@@ -789,6 +789,282 @@ func TestTopologyHandler_NilOVN(t *testing.T) {
 	}
 }
 
+func TestTopologyHandler_IGWAttach(t *testing.T) {
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock)
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	// Pre-create VPC router
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name: "vpc-vpc-igw1",
+		ExternalIDs: map[string]string{
+			"hive:vpc_id": "vpc-igw1",
+			"hive:cidr":   "10.0.0.0/16",
+		},
+	})
+
+	// Attach IGW
+	evt := IGWEvent{InternetGatewayId: "igw-test1", VpcId: "vpc-igw1"}
+	data, _ := json.Marshal(evt)
+	resp, err := nc.Request(TopicIGWAttach, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request vpc.igw-attach: %v", err)
+	}
+	assertSuccess(t, resp, "attach IGW")
+
+	// Verify external switch created
+	extSwitch, err := mock.GetLogicalSwitch(ctx, "ext-vpc-igw1")
+	if err != nil {
+		t.Fatalf("expected external switch: %v", err)
+	}
+	if extSwitch.ExternalIDs["hive:role"] != "external" {
+		t.Errorf("expected role=external, got %s", extSwitch.ExternalIDs["hive:role"])
+	}
+	if extSwitch.ExternalIDs["hive:igw_id"] != "igw-test1" {
+		t.Errorf("expected igw_id=igw-test1, got %s", extSwitch.ExternalIDs["hive:igw_id"])
+	}
+
+	// Verify localnet port created on external switch
+	_, err = mock.GetLogicalSwitchPort(ctx, "ext-port-vpc-igw1")
+	if err != nil {
+		t.Fatalf("expected localnet port: %v", err)
+	}
+
+	// Verify gateway router port created
+	router, err := mock.GetLogicalRouter(ctx, "vpc-vpc-igw1")
+	if err != nil {
+		t.Fatalf("expected router: %v", err)
+	}
+	if len(router.Ports) < 1 {
+		t.Error("expected at least 1 router port (gateway)")
+	}
+
+	// Verify switch gateway port created
+	_, err = mock.GetLogicalSwitchPort(ctx, "gw-port-vpc-igw1")
+	if err != nil {
+		t.Fatalf("expected switch gateway port: %v", err)
+	}
+
+	// Verify SNAT rule added
+	if len(router.NAT) != 1 {
+		t.Errorf("expected 1 NAT rule, got %d", len(router.NAT))
+	}
+
+	// Verify default route added
+	if len(router.StaticRoutes) != 1 {
+		t.Errorf("expected 1 static route, got %d", len(router.StaticRoutes))
+	}
+}
+
+func TestTopologyHandler_IGWDetach(t *testing.T) {
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock)
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	// Pre-create VPC router
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name: "vpc-vpc-igw2",
+		ExternalIDs: map[string]string{
+			"hive:vpc_id": "vpc-igw2",
+			"hive:cidr":   "10.0.0.0/16",
+		},
+	})
+
+	// Attach IGW first
+	attachEvt := IGWEvent{InternetGatewayId: "igw-test2", VpcId: "vpc-igw2"}
+	data, _ := json.Marshal(attachEvt)
+	resp, err := nc.Request(TopicIGWAttach, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request vpc.igw-attach: %v", err)
+	}
+	assertSuccess(t, resp, "attach IGW")
+
+	// Verify resources exist before detach
+	_, err = mock.GetLogicalSwitch(ctx, "ext-vpc-igw2")
+	if err != nil {
+		t.Fatal("expected external switch before detach")
+	}
+
+	// Detach IGW
+	detachEvt := IGWEvent{InternetGatewayId: "igw-test2", VpcId: "vpc-igw2"}
+	data, _ = json.Marshal(detachEvt)
+	resp, err = nc.Request(TopicIGWDetach, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request vpc.igw-detach: %v", err)
+	}
+	assertSuccess(t, resp, "detach IGW")
+
+	// Verify external switch deleted
+	_, err = mock.GetLogicalSwitch(ctx, "ext-vpc-igw2")
+	if err == nil {
+		t.Error("expected external switch to be deleted")
+	}
+
+	// Verify router still exists but NAT and routes are cleaned up
+	router, err := mock.GetLogicalRouter(ctx, "vpc-vpc-igw2")
+	if err != nil {
+		t.Fatal("expected VPC router to still exist")
+	}
+	if len(router.NAT) != 0 {
+		t.Errorf("expected 0 NAT rules after detach, got %d", len(router.NAT))
+	}
+	if len(router.StaticRoutes) != 0 {
+		t.Errorf("expected 0 static routes after detach, got %d", len(router.StaticRoutes))
+	}
+	if len(router.Ports) != 0 {
+		t.Errorf("expected 0 router ports after detach, got %d", len(router.Ports))
+	}
+}
+
+func TestTopologyHandler_IGWAttachDetachLifecycle(t *testing.T) {
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock)
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	// 1. Create VPC
+	vpcEvt := VPCEvent{VpcId: "vpc-igwlc", CidrBlock: "10.0.0.0/16", VNI: 400}
+	data, _ := json.Marshal(vpcEvt)
+	resp, _ := nc.Request(TopicVPCCreate, data, 5_000_000_000)
+	assertSuccess(t, resp, "create VPC")
+
+	// 2. Create subnet
+	subEvt := SubnetEvent{SubnetId: "subnet-igwlc", VpcId: "vpc-igwlc", CidrBlock: "10.0.1.0/24"}
+	data, _ = json.Marshal(subEvt)
+	resp, _ = nc.Request(TopicSubnetCreate, data, 5_000_000_000)
+	assertSuccess(t, resp, "create subnet")
+
+	// 3. Attach IGW
+	igwEvt := IGWEvent{InternetGatewayId: "igw-lc1", VpcId: "vpc-igwlc"}
+	data, _ = json.Marshal(igwEvt)
+	resp, _ = nc.Request(TopicIGWAttach, data, 5_000_000_000)
+	assertSuccess(t, resp, "attach IGW")
+
+	// Verify full topology: 2 switches (subnet + external), 1 router with ports+NAT+routes
+	switches, _ := mock.ListLogicalSwitches(ctx)
+	if len(switches) != 2 {
+		t.Errorf("expected 2 switches (subnet + external), got %d", len(switches))
+	}
+
+	router, _ := mock.GetLogicalRouter(ctx, "vpc-vpc-igwlc")
+	if len(router.Ports) != 2 {
+		t.Errorf("expected 2 router ports (subnet + gateway), got %d", len(router.Ports))
+	}
+
+	// 4. Detach IGW
+	data, _ = json.Marshal(igwEvt)
+	resp, _ = nc.Request(TopicIGWDetach, data, 5_000_000_000)
+	assertSuccess(t, resp, "detach IGW")
+
+	// Only subnet switch should remain
+	switches, _ = mock.ListLogicalSwitches(ctx)
+	if len(switches) != 1 {
+		t.Errorf("expected 1 switch after IGW detach, got %d", len(switches))
+	}
+
+	// Router should still have subnet port but no gateway port
+	router, _ = mock.GetLogicalRouter(ctx, "vpc-vpc-igwlc")
+	if len(router.Ports) != 1 {
+		t.Errorf("expected 1 router port after IGW detach, got %d", len(router.Ports))
+	}
+
+	// 5. Delete subnet and VPC
+	data, _ = json.Marshal(subEvt)
+	resp, _ = nc.Request(TopicSubnetDelete, data, 5_000_000_000)
+	assertSuccess(t, resp, "delete subnet")
+
+	data, _ = json.Marshal(VPCEvent{VpcId: "vpc-igwlc"})
+	resp, _ = nc.Request(TopicVPCDelete, data, 5_000_000_000)
+	assertSuccess(t, resp, "delete VPC")
+
+	// Everything should be gone
+	routers, _ := mock.ListLogicalRouters(ctx)
+	if len(routers) != 0 {
+		t.Errorf("expected 0 routers, got %d", len(routers))
+	}
+	switches, _ = mock.ListLogicalSwitches(ctx)
+	if len(switches) != 0 {
+		t.Errorf("expected 0 switches, got %d", len(switches))
+	}
+}
+
+func TestTopologyHandler_IGWNilOVN(t *testing.T) {
+	_, nc := startTestNATS(t)
+
+	topo := NewTopologyHandler(nil)
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	// Should fail gracefully when OVN is nil
+	evt := IGWEvent{InternetGatewayId: "igw-nil", VpcId: "vpc-nil"}
+	data, _ := json.Marshal(evt)
+	resp, err := nc.Request(TopicIGWAttach, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+
+	var result struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error,omitempty"`
+	}
+	_ = json.Unmarshal(resp.Data, &result)
+	if result.Success {
+		t.Error("expected failure when OVN is nil")
+	}
+
+	// Detach should also fail gracefully
+	resp, err = nc.Request(TopicIGWDetach, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	_ = json.Unmarshal(resp.Data, &result)
+	if result.Success {
+		t.Error("expected detach failure when OVN is nil")
+	}
+}
+
 // --- Test helpers ---
 
 func assertSuccess(t *testing.T, msg *nats.Msg, label string) {

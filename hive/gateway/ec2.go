@@ -12,6 +12,7 @@ import (
 	"github.com/mulgadc/hive/hive/awserrors"
 	gateway_ec2_account "github.com/mulgadc/hive/hive/gateway/ec2/account"
 	gateway_ec2_eigw "github.com/mulgadc/hive/hive/gateway/ec2/eigw"
+	gateway_ec2_igw "github.com/mulgadc/hive/hive/gateway/ec2/igw"
 	gateway_ec2_image "github.com/mulgadc/hive/hive/gateway/ec2/image"
 	gateway_ec2_instance "github.com/mulgadc/hive/hive/gateway/ec2/instance"
 	gateway_ec2_key "github.com/mulgadc/hive/hive/gateway/ec2/key"
@@ -165,6 +166,21 @@ var ec2Actions = map[string]EC2Handler{
 	}),
 	"CopySnapshot": ec2Handler(func(input *ec2.CopySnapshotInput, gw *GatewayConfig) (any, error) {
 		return gateway_ec2_snapshot.CopySnapshot(input, gw.NATSConn)
+	}),
+	"CreateInternetGateway": ec2Handler(func(input *ec2.CreateInternetGatewayInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_igw.CreateInternetGateway(input, gw.NATSConn)
+	}),
+	"DeleteInternetGateway": ec2Handler(func(input *ec2.DeleteInternetGatewayInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_igw.DeleteInternetGateway(input, gw.NATSConn)
+	}),
+	"DescribeInternetGateways": ec2Handler(func(input *ec2.DescribeInternetGatewaysInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_igw.DescribeInternetGateways(input, gw.NATSConn)
+	}),
+	"AttachInternetGateway": ec2Handler(func(input *ec2.AttachInternetGatewayInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_igw.AttachInternetGateway(input, gw.NATSConn)
+	}),
+	"DetachInternetGateway": ec2Handler(func(input *ec2.DetachInternetGatewayInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_igw.DetachInternetGateway(input, gw.NATSConn)
 	}),
 	"CreateEgressOnlyInternetGateway": ec2Handler(func(input *ec2.CreateEgressOnlyInternetGatewayInput, gw *GatewayConfig) (any, error) {
 		return gateway_ec2_eigw.CreateEgressOnlyInternetGateway(input, gw.NATSConn)

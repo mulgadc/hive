@@ -46,6 +46,14 @@ type OVNClient interface {
 	FindDHCPOptionsByCIDR(ctx context.Context, cidr string) (*nbdb.DHCPOptions, error)
 	FindDHCPOptionsByExternalID(ctx context.Context, key, value string) (*nbdb.DHCPOptions, error)
 	ListDHCPOptions(ctx context.Context) ([]nbdb.DHCPOptions, error)
+
+	// NAT rules
+	AddNAT(ctx context.Context, routerName string, nat *nbdb.NAT) error
+	DeleteNAT(ctx context.Context, routerName string, natType, logicalIP string) error
+
+	// Static routes
+	AddStaticRoute(ctx context.Context, routerName string, route *nbdb.LogicalRouterStaticRoute) error
+	DeleteStaticRoute(ctx context.Context, routerName string, ipPrefix string) error
 }
 
 // LiveOVNClient implements OVNClient using libovsdb against a real OVN NB DB.
@@ -386,4 +394,126 @@ func (c *LiveOVNClient) ListDHCPOptions(ctx context.Context) ([]nbdb.DHCPOptions
 		return nil, fmt.Errorf("list DHCP options: %w", err)
 	}
 	return options, nil
+}
+
+func (c *LiveOVNClient) AddNAT(ctx context.Context, routerName string, nat *nbdb.NAT) error {
+	createOps, err := c.client.Create(nat)
+	if err != nil {
+		return fmt.Errorf("create NAT ops: %w", err)
+	}
+
+	lr := &nbdb.LogicalRouter{Name: routerName}
+	mutateOps, err := c.client.Where(lr).Mutate(lr, model.Mutation{
+		Field:   &lr.NAT,
+		Mutator: "insert",
+		Value:   []string{nat.UUID},
+	})
+	if err != nil {
+		return fmt.Errorf("mutate router NAT ops: %w", err)
+	}
+
+	ops := append(createOps, mutateOps...)
+	_, err = c.client.Transact(ctx, ops...)
+	if err != nil {
+		return fmt.Errorf("add NAT transact: %w", err)
+	}
+	return nil
+}
+
+func (c *LiveOVNClient) DeleteNAT(ctx context.Context, routerName string, natType, logicalIP string) error {
+	// Find the NAT entry by type and logical IP
+	var nats []nbdb.NAT
+	err := c.client.WhereCache(func(n *nbdb.NAT) bool {
+		return n.Type == natType && n.LogicalIP == logicalIP
+	}).List(ctx, &nats)
+	if err != nil {
+		return fmt.Errorf("find NAT: %w", err)
+	}
+	if len(nats) == 0 {
+		return fmt.Errorf("NAT %s %s not found", natType, logicalIP)
+	}
+
+	nat := &nats[0]
+	lr := &nbdb.LogicalRouter{Name: routerName}
+	mutateOps, err := c.client.Where(lr).Mutate(lr, model.Mutation{
+		Field:   &lr.NAT,
+		Mutator: "delete",
+		Value:   []string{nat.UUID},
+	})
+	if err != nil {
+		return fmt.Errorf("mutate router NAT ops: %w", err)
+	}
+
+	deleteOps, err := c.client.Where(nat).Delete()
+	if err != nil {
+		return fmt.Errorf("delete NAT ops: %w", err)
+	}
+
+	ops := append(mutateOps, deleteOps...)
+	_, err = c.client.Transact(ctx, ops...)
+	if err != nil {
+		return fmt.Errorf("delete NAT transact: %w", err)
+	}
+	return nil
+}
+
+func (c *LiveOVNClient) AddStaticRoute(ctx context.Context, routerName string, route *nbdb.LogicalRouterStaticRoute) error {
+	createOps, err := c.client.Create(route)
+	if err != nil {
+		return fmt.Errorf("create static route ops: %w", err)
+	}
+
+	lr := &nbdb.LogicalRouter{Name: routerName}
+	mutateOps, err := c.client.Where(lr).Mutate(lr, model.Mutation{
+		Field:   &lr.StaticRoutes,
+		Mutator: "insert",
+		Value:   []string{route.UUID},
+	})
+	if err != nil {
+		return fmt.Errorf("mutate router static routes ops: %w", err)
+	}
+
+	ops := append(createOps, mutateOps...)
+	_, err = c.client.Transact(ctx, ops...)
+	if err != nil {
+		return fmt.Errorf("add static route transact: %w", err)
+	}
+	return nil
+}
+
+func (c *LiveOVNClient) DeleteStaticRoute(ctx context.Context, routerName string, ipPrefix string) error {
+	// Find the route by IP prefix
+	var routes []nbdb.LogicalRouterStaticRoute
+	err := c.client.WhereCache(func(r *nbdb.LogicalRouterStaticRoute) bool {
+		return r.IPPrefix == ipPrefix
+	}).List(ctx, &routes)
+	if err != nil {
+		return fmt.Errorf("find static route: %w", err)
+	}
+	if len(routes) == 0 {
+		return fmt.Errorf("static route %s not found", ipPrefix)
+	}
+
+	route := &routes[0]
+	lr := &nbdb.LogicalRouter{Name: routerName}
+	mutateOps, err := c.client.Where(lr).Mutate(lr, model.Mutation{
+		Field:   &lr.StaticRoutes,
+		Mutator: "delete",
+		Value:   []string{route.UUID},
+	})
+	if err != nil {
+		return fmt.Errorf("mutate router static routes ops: %w", err)
+	}
+
+	deleteOps, err := c.client.Where(route).Delete()
+	if err != nil {
+		return fmt.Errorf("delete static route ops: %w", err)
+	}
+
+	ops := append(mutateOps, deleteOps...)
+	_, err = c.client.Transact(ctx, ops...)
+	if err != nil {
+		return fmt.Errorf("delete static route transact: %w", err)
+	}
+	return nil
 }
