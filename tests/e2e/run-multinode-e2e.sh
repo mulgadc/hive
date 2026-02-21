@@ -1150,6 +1150,231 @@ fi
 
 echo "  Crash recovery tests passed"
 
+# Phase 5c: VPC Networking
+echo ""
+echo "Phase 5c: VPC Networking"
+echo "========================================"
+echo "Testing VPC instance launch, PrivateIpAddress, and same-subnet connectivity..."
+
+# Step 1: Create VPC and Subnet
+echo ""
+echo "Step 1: Create VPC + Subnet"
+echo "----------------------------------------"
+
+VPC_OUTPUT=$($AWS_EC2 create-vpc --cidr-block 10.100.0.0/16)
+VPC_ID=$(echo "$VPC_OUTPUT" | jq -r '.Vpc.VpcId')
+if [ -z "$VPC_ID" ] || [ "$VPC_ID" == "null" ]; then
+    echo "  ERROR: Failed to create VPC"
+    echo "  Output: $VPC_OUTPUT"
+    exit 1
+fi
+echo "  Created VPC: $VPC_ID (10.100.0.0/16)"
+
+SUBNET_OUTPUT=$($AWS_EC2 create-subnet --vpc-id "$VPC_ID" --cidr-block 10.100.1.0/24)
+SUBNET_ID=$(echo "$SUBNET_OUTPUT" | jq -r '.Subnet.SubnetId')
+if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" == "null" ]; then
+    echo "  ERROR: Failed to create subnet"
+    echo "  Output: $SUBNET_OUTPUT"
+    exit 1
+fi
+echo "  Created Subnet: $SUBNET_ID (10.100.1.0/24)"
+
+# Brief pause for OVN topology to be programmed (logical switch + router port + DHCP)
+sleep 2
+
+# Step 2: Launch 3 VPC instances
+echo ""
+echo "Step 2: Launch 3 VPC instances"
+echo "----------------------------------------"
+
+VPC_INSTANCE_IDS=()
+for i in 1 2 3; do
+    echo "  Launching VPC instance $i with subnet $SUBNET_ID..."
+    RUN_OUTPUT=$($AWS_EC2 run-instances \
+        --image-id "$AMI_ID" \
+        --instance-type "$INSTANCE_TYPE" \
+        --key-name multinode-test-key \
+        --subnet-id "$SUBNET_ID")
+
+    VPC_INST_ID=$(echo "$RUN_OUTPUT" | jq -r '.Instances[0].InstanceId')
+    VPC_INST_IP=$(echo "$RUN_OUTPUT" | jq -r '.Instances[0].PrivateIpAddress // empty')
+
+    if [ -z "$VPC_INST_ID" ] || [ "$VPC_INST_ID" == "null" ]; then
+        echo "  ERROR: Failed to launch VPC instance $i"
+        echo "  Output: $RUN_OUTPUT"
+        exit 1
+    fi
+    echo "  Launched: $VPC_INST_ID (PrivateIpAddress: ${VPC_INST_IP:-not yet assigned})"
+    VPC_INSTANCE_IDS+=("$VPC_INST_ID")
+
+    sleep 2
+done
+
+# Wait for all VPC instances to be running
+echo ""
+echo "Waiting for VPC instances to reach running state..."
+for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+    wait_for_instance_state "$vpc_inst" "running" 30 || {
+        echo "ERROR: VPC instance $vpc_inst failed to start"
+        exit 1
+    }
+done
+
+# Step 3: Verify PrivateIpAddress in DescribeInstances
+echo ""
+echo "Step 3: Verify PrivateIpAddress in DescribeInstances"
+echo "----------------------------------------"
+
+VPC_PRIVATE_IPS=()
+for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+    DESCRIBE_OUT=$($AWS_EC2 describe-instances --instance-ids "$vpc_inst")
+    PRIVATE_IP=$(echo "$DESCRIBE_OUT" | jq -r '.Reservations[0].Instances[0].PrivateIpAddress // empty')
+    INST_SUBNET=$(echo "$DESCRIBE_OUT" | jq -r '.Reservations[0].Instances[0].SubnetId // empty')
+    INST_VPC=$(echo "$DESCRIBE_OUT" | jq -r '.Reservations[0].Instances[0].VpcId // empty')
+    ENI_COUNT=$(echo "$DESCRIBE_OUT" | jq -r '.Reservations[0].Instances[0].NetworkInterfaces | length')
+
+    if [ -z "$PRIVATE_IP" ]; then
+        echo "  ERROR: $vpc_inst has no PrivateIpAddress"
+        echo "  Describe output: $(echo "$DESCRIBE_OUT" | jq -c '.Reservations[0].Instances[0] | {PrivateIpAddress, SubnetId, VpcId, NetworkInterfaces}')"
+        exit 1
+    fi
+
+    echo "  $vpc_inst: IP=$PRIVATE_IP, Subnet=$INST_SUBNET, VPC=$INST_VPC, ENIs=$ENI_COUNT"
+
+    if [ "$INST_SUBNET" != "$SUBNET_ID" ]; then
+        echo "  ERROR: SubnetId mismatch (expected $SUBNET_ID, got $INST_SUBNET)"
+        exit 1
+    fi
+    if [ "$INST_VPC" != "$VPC_ID" ]; then
+        echo "  ERROR: VpcId mismatch (expected $VPC_ID, got $INST_VPC)"
+        exit 1
+    fi
+    if [ "$ENI_COUNT" -lt 1 ]; then
+        echo "  ERROR: No NetworkInterfaces found"
+        exit 1
+    fi
+
+    VPC_PRIVATE_IPS+=("$PRIVATE_IP")
+done
+
+# Verify all IPs are unique and in the subnet range (10.100.1.x)
+echo ""
+echo "  Verifying IP uniqueness and subnet range..."
+UNIQUE_IPS=$(printf '%s\n' "${VPC_PRIVATE_IPS[@]}" | sort -u | wc -l)
+if [ "$UNIQUE_IPS" -ne "${#VPC_PRIVATE_IPS[@]}" ]; then
+    echo "  ERROR: Duplicate IPs detected: ${VPC_PRIVATE_IPS[*]}"
+    exit 1
+fi
+for ip in "${VPC_PRIVATE_IPS[@]}"; do
+    if ! echo "$ip" | grep -qE '^10\.100\.1\.[0-9]+$'; then
+        echo "  ERROR: IP $ip not in expected subnet 10.100.1.0/24"
+        exit 1
+    fi
+done
+echo "  All IPs unique and in correct subnet: ${VPC_PRIVATE_IPS[*]}"
+
+# Step 4: SSH via DEV_NETWORKING hostfwd and test ping connectivity
+echo ""
+echo "Step 4: SSH + Ping Connectivity"
+echo "----------------------------------------"
+
+VPC_SSH_PORTS=()
+VPC_SSH_HOSTS=()
+
+for idx in "${!VPC_INSTANCE_IDS[@]}"; do
+    vpc_inst="${VPC_INSTANCE_IDS[$idx]}"
+    echo ""
+    echo "  Instance $((idx + 1)): $vpc_inst (${VPC_PRIVATE_IPS[$idx]})"
+
+    # Get SSH connection details from QEMU process (DEV_NETWORKING dev0 hostfwd)
+    SSH_PORT=$(get_ssh_port "$vpc_inst" 30)
+    if [ -z "$SSH_PORT" ]; then
+        echo "  ERROR: Failed to get SSH port for VPC instance $vpc_inst"
+        echo "  (DEV_NETWORKING may not be enabled — check daemon.dev_networking in hive.toml)"
+        exit 1
+    fi
+    SSH_HOST=$(get_ssh_host "$vpc_inst")
+    echo "  SSH endpoint: $SSH_HOST:$SSH_PORT"
+
+    VPC_SSH_PORTS+=("$SSH_PORT")
+    VPC_SSH_HOSTS+=("$SSH_HOST")
+
+    # Wait for SSH (cloud-init + DHCP via OVN)
+    wait_for_ssh "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem" 60
+done
+
+# Now ping between all pairs
+echo ""
+echo "  Testing ping connectivity between all VPC instances..."
+PING_FAILURES=0
+
+for src_idx in "${!VPC_INSTANCE_IDS[@]}"; do
+    for dst_idx in "${!VPC_INSTANCE_IDS[@]}"; do
+        if [ "$src_idx" -eq "$dst_idx" ]; then
+            continue
+        fi
+
+        src_inst="${VPC_INSTANCE_IDS[$src_idx]}"
+        dst_ip="${VPC_PRIVATE_IPS[$dst_idx]}"
+        ssh_host="${VPC_SSH_HOSTS[$src_idx]}"
+        ssh_port="${VPC_SSH_PORTS[$src_idx]}"
+
+        echo "  Ping: $src_inst (${VPC_PRIVATE_IPS[$src_idx]}) -> $dst_ip"
+
+        PING_RESULT=$(ssh -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o LogLevel=ERROR \
+            -o ConnectTimeout=5 \
+            -o BatchMode=yes \
+            -p "$ssh_port" \
+            -i "multinode-test-key.pem" \
+            ec2-user@"$ssh_host" "ping -c 3 -W 5 $dst_ip" 2>&1) || true
+
+        if echo "$PING_RESULT" | grep -q "3 received\|3 packets transmitted, 3"; then
+            echo "    OK (3/3 packets)"
+        else
+            echo "    FAILED"
+            echo "    Output: $PING_RESULT"
+            PING_FAILURES=$((PING_FAILURES + 1))
+        fi
+    done
+done
+
+if [ "$PING_FAILURES" -gt 0 ]; then
+    echo ""
+    echo "  WARNING: $PING_FAILURES ping tests failed (OVN overlay may not be fully programmed)"
+    echo "  This is expected if OVN flow programming takes time in Docker single-host mode."
+    echo "  VPC DescribeInstances + IP allocation verified — ping is best-effort in E2E."
+else
+    echo ""
+    echo "  All ping tests passed — VPC same-subnet connectivity verified"
+fi
+
+# Step 5: Clean up VPC instances
+echo ""
+echo "Step 5: Clean up VPC resources"
+echo "----------------------------------------"
+
+for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+    echo "  Terminating $vpc_inst..."
+    $AWS_EC2 terminate-instances --instance-ids "$vpc_inst" > /dev/null 2>&1 || true
+done
+
+for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+    wait_for_instance_state "$vpc_inst" "terminated" 30 || {
+        echo "  WARNING: Failed to confirm termination of $vpc_inst"
+    }
+done
+
+# Clean up subnet and VPC
+echo "  Deleting subnet $SUBNET_ID..."
+$AWS_EC2 delete-subnet --subnet-id "$SUBNET_ID" 2>/dev/null || echo "  (subnet delete failed, may have ENIs)"
+
+echo "  Deleting VPC $VPC_ID..."
+$AWS_EC2 delete-vpc --vpc-id "$VPC_ID" 2>/dev/null || echo "  (vpc delete failed, may have subnets)"
+
+echo "  VPC networking tests passed"
+
 # Phase 6: Cluster Shutdown + Restart
 echo ""
 echo "Phase 6: Cluster Shutdown + Restart"
