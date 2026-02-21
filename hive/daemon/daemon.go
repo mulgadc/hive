@@ -491,6 +491,13 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to initialize account settings service: %w", err)
 	}
 
+	// Ensure default VPC exists (matches AWS: every account has a default VPC)
+	if d.vpcService != nil {
+		if err := d.vpcService.EnsureDefaultVPC(); err != nil {
+			slog.Warn("Failed to ensure default VPC", "error", err)
+		}
+	}
+
 	// Initialize network plumber for VPC tap device management
 	if d.networkPlumber == nil {
 		d.networkPlumber = &OVSNetworkPlumber{}

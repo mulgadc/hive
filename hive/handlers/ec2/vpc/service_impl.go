@@ -612,6 +612,138 @@ func (s *VPCServiceImpl) subnetRecordToEC2(record *SubnetRecord, availableIPs in
 	return subnet
 }
 
+// Default VPC constants matching AWS defaults.
+const (
+	DefaultVPCCidr    = "172.31.0.0/16"
+	DefaultSubnetCidr = "172.31.0.0/20"
+)
+
+// EnsureDefaultVPC creates a default VPC and subnet if none exists.
+// This matches AWS behavior where a default VPC is present on account creation.
+// Safe to call multiple times — no-ops if a default VPC already exists.
+func (s *VPCServiceImpl) EnsureDefaultVPC() error {
+	if s.vpcKV == nil {
+		return nil // No persistence, skip
+	}
+
+	// Check if a default VPC already exists
+	keys, err := s.vpcKV.Keys()
+	if err != nil && !errors.Is(err, nats.ErrNoKeysFound) {
+		return fmt.Errorf("list VPCs: %w", err)
+	}
+
+	for _, key := range keys {
+		entry, err := s.vpcKV.Get(key)
+		if err != nil {
+			continue
+		}
+		var record VPCRecord
+		if err := json.Unmarshal(entry.Value(), &record); err != nil {
+			continue
+		}
+		if record.IsDefault {
+			slog.Debug("Default VPC already exists", "vpcId", record.VpcId)
+			return nil
+		}
+	}
+
+	// Create default VPC
+	vni, err := s.nextVNI()
+	if err != nil {
+		return fmt.Errorf("allocate VNI for default VPC: %w", err)
+	}
+
+	vpcID := utils.GenerateResourceID("vpc")
+	vpcRecord := VPCRecord{
+		VpcId:     vpcID,
+		CidrBlock: DefaultVPCCidr,
+		State:     "available",
+		IsDefault: true,
+		VNI:       vni,
+		Tags:      map[string]string{"Name": "default"},
+		CreatedAt: time.Now(),
+	}
+
+	data, err := json.Marshal(vpcRecord)
+	if err != nil {
+		return fmt.Errorf("marshal default VPC: %w", err)
+	}
+	if _, err := s.vpcKV.Put(vpcID, data); err != nil {
+		return fmt.Errorf("store default VPC: %w", err)
+	}
+
+	s.publishVPCEvent("vpc.create", vpcID, DefaultVPCCidr, vni)
+
+	// Determine AZ
+	az := "us-east-1a"
+	if s.config != nil && s.config.AZ != "" {
+		az = s.config.AZ
+	}
+
+	// Create default subnet
+	subnetID := utils.GenerateResourceID("subnet")
+	subnetRecord := SubnetRecord{
+		SubnetId:         subnetID,
+		VpcId:            vpcID,
+		CidrBlock:        DefaultSubnetCidr,
+		AvailabilityZone: az,
+		State:            "available",
+		IsDefault:        true,
+		Tags:             map[string]string{"Name": "default"},
+		CreatedAt:        time.Now(),
+	}
+
+	data, err = json.Marshal(subnetRecord)
+	if err != nil {
+		return fmt.Errorf("marshal default subnet: %w", err)
+	}
+	if _, err := s.subnetKV.Put(subnetID, data); err != nil {
+		return fmt.Errorf("store default subnet: %w", err)
+	}
+
+	s.publishSubnetEvent("vpc.create-subnet", subnetID, vpcID, DefaultSubnetCidr)
+
+	slog.Info("Created default VPC and subnet",
+		"vpcId", vpcID,
+		"vpcCidr", DefaultVPCCidr,
+		"subnetId", subnetID,
+		"subnetCidr", DefaultSubnetCidr,
+		"az", az,
+	)
+	return nil
+}
+
+// GetDefaultSubnet returns the default subnet for RunInstances when no SubnetId is specified.
+func (s *VPCServiceImpl) GetDefaultSubnet() (*SubnetRecord, error) {
+	if s.subnetKV == nil {
+		return nil, fmt.Errorf("VPC service not initialized")
+	}
+
+	keys, err := s.subnetKV.Keys()
+	if err != nil {
+		if errors.Is(err, nats.ErrNoKeysFound) {
+			return nil, fmt.Errorf("no default subnet found")
+		}
+		return nil, fmt.Errorf("list subnets: %w", err)
+	}
+
+	for _, key := range keys {
+		entry, err := s.subnetKV.Get(key)
+		if err != nil {
+			continue
+		}
+		var record SubnetRecord
+		if err := json.Unmarshal(entry.Value(), &record); err != nil {
+			continue
+		}
+		if record.IsDefault {
+			return &record, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no default subnet found")
+}
+
 // publishVPCEvent publishes a VPC lifecycle event to NATS for vpcd consumption.
 // This is fire-and-forget; errors are logged but do not fail the API response.
 func (s *VPCServiceImpl) publishVPCEvent(topic, vpcId, cidrBlock string, vni int64) {

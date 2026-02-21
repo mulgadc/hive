@@ -511,6 +511,107 @@ func TestCreateSubnet_CidrRanges(t *testing.T) {
 	assert.Equal(t, int64(65531), *out2.Subnet.AvailableIpAddressCount)
 }
 
+// --- Default VPC Tests ---
+
+func TestEnsureDefaultVPC(t *testing.T) {
+	svc := setupTestVPCService(t)
+
+	err := svc.EnsureDefaultVPC()
+	require.NoError(t, err)
+
+	// Verify default VPC was created
+	desc, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{})
+	require.NoError(t, err)
+	require.Len(t, desc.Vpcs, 1)
+	assert.True(t, *desc.Vpcs[0].IsDefault)
+	assert.Equal(t, "172.31.0.0/16", *desc.Vpcs[0].CidrBlock)
+
+	// Verify default subnet was created
+	subDesc, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{})
+	require.NoError(t, err)
+	require.Len(t, subDesc.Subnets, 1)
+	assert.True(t, *subDesc.Subnets[0].DefaultForAz)
+	assert.Equal(t, "172.31.0.0/20", *subDesc.Subnets[0].CidrBlock)
+	assert.Equal(t, *desc.Vpcs[0].VpcId, *subDesc.Subnets[0].VpcId)
+}
+
+func TestEnsureDefaultVPC_Idempotent(t *testing.T) {
+	svc := setupTestVPCService(t)
+
+	// Call twice — should be idempotent
+	require.NoError(t, svc.EnsureDefaultVPC())
+	require.NoError(t, svc.EnsureDefaultVPC())
+
+	// Should still have exactly 1 VPC and 1 subnet
+	desc, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{})
+	require.NoError(t, err)
+	assert.Len(t, desc.Vpcs, 1)
+
+	subDesc, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{})
+	require.NoError(t, err)
+	assert.Len(t, subDesc.Subnets, 1)
+}
+
+func TestEnsureDefaultVPC_SkipsWhenDefaultExists(t *testing.T) {
+	svc := setupTestVPCService(t)
+
+	// Create default VPC first
+	require.NoError(t, svc.EnsureDefaultVPC())
+
+	// Create a second (non-default) VPC
+	createTestVPC(t, svc, "10.0.0.0/16")
+
+	// Calling again should not create another default
+	require.NoError(t, svc.EnsureDefaultVPC())
+
+	desc, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{})
+	require.NoError(t, err)
+	assert.Len(t, desc.Vpcs, 2) // 1 default + 1 manual
+
+	// Only 1 should be default
+	defaultCount := 0
+	for _, vpc := range desc.Vpcs {
+		if *vpc.IsDefault {
+			defaultCount++
+		}
+	}
+	assert.Equal(t, 1, defaultCount)
+}
+
+func TestGetDefaultSubnet(t *testing.T) {
+	svc := setupTestVPCService(t)
+
+	// No default subnet yet
+	_, err := svc.GetDefaultSubnet()
+	assert.Error(t, err)
+
+	// Create default VPC + subnet
+	require.NoError(t, svc.EnsureDefaultVPC())
+
+	subnet, err := svc.GetDefaultSubnet()
+	require.NoError(t, err)
+	assert.Equal(t, "172.31.0.0/20", subnet.CidrBlock)
+	assert.True(t, subnet.IsDefault)
+}
+
+func TestGetDefaultSubnet_NotConfusedByNonDefault(t *testing.T) {
+	svc := setupTestVPCService(t)
+
+	// Create a non-default VPC + subnet
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	createTestSubnet(t, svc, vpcID, "10.0.1.0/24")
+
+	// GetDefaultSubnet should not return the non-default subnet
+	_, err := svc.GetDefaultSubnet()
+	assert.Error(t, err)
+
+	// Now create default
+	require.NoError(t, svc.EnsureDefaultVPC())
+	subnet, err := svc.GetDefaultSubnet()
+	require.NoError(t, err)
+	assert.True(t, subnet.IsDefault)
+}
+
 func TestCreateSubnet_CidrTooSmall(t *testing.T) {
 	svc := setupTestVPCService(t)
 	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
