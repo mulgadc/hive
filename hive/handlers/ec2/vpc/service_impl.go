@@ -50,13 +50,15 @@ type SubnetRecord struct {
 	CreatedAt        time.Time         `json:"created_at"`
 }
 
-// VPCServiceImpl implements VPC and Subnet operations with NATS JetStream persistence
+// VPCServiceImpl implements VPC, Subnet, and ENI operations with NATS JetStream persistence
 type VPCServiceImpl struct {
 	config   *config.Config
 	natsConn *nats.Conn
 	vpcKV    nats.KeyValue
 	subnetKV nats.KeyValue
 	vniKV    nats.KeyValue
+	eniKV    nats.KeyValue
+	ipam     *IPAM
 }
 
 // NewVPCServiceImpl creates a new VPC service implementation (in-memory, no persistence)
@@ -88,10 +90,21 @@ func NewVPCServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*VPCSer
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketVNICounter, err)
 	}
 
+	eniKV, err := getOrCreateKVBucket(js, KVBucketENIs, 10)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketENIs, err)
+	}
+
+	ipam, err := NewIPAM(js)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize IPAM: %w", err)
+	}
+
 	slog.Info("VPC service initialized with JetStream KV",
 		"vpcBucket", KVBucketVPCs,
 		"subnetBucket", KVBucketSubnets,
-		"vniBucket", KVBucketVNICounter)
+		"vniBucket", KVBucketVNICounter,
+		"eniBucket", KVBucketENIs)
 
 	return &VPCServiceImpl{
 		config:   cfg,
@@ -99,6 +112,8 @@ func NewVPCServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*VPCSer
 		vpcKV:    vpcKV,
 		subnetKV: subnetKV,
 		vniKV:    vniKV,
+		eniKV:    eniKV,
+		ipam:     ipam,
 	}, nil
 }
 

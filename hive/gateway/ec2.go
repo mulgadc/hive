@@ -193,6 +193,15 @@ var ec2Actions = map[string]EC2Handler{
 	"DescribeSubnets": ec2Handler(func(input *ec2.DescribeSubnetsInput, gw *GatewayConfig) (any, error) {
 		return gateway_ec2_vpc.DescribeSubnets(input, gw.NATSConn)
 	}),
+	"CreateNetworkInterface": ec2Handler(func(input *ec2.CreateNetworkInterfaceInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_vpc.CreateNetworkInterface(input, gw.NATSConn)
+	}),
+	"DeleteNetworkInterface": ec2Handler(func(input *ec2.DeleteNetworkInterfaceInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_vpc.DeleteNetworkInterface(input, gw.NATSConn)
+	}),
+	"DescribeNetworkInterfaces": ec2Handler(func(input *ec2.DescribeNetworkInterfacesInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_vpc.DescribeNetworkInterfaces(input, gw.NATSConn)
+	}),
 }
 
 // ec2LocalActions are actions that don't require a NATS connection.

@@ -13,13 +13,13 @@ import (
 
 // NATS topics for VPC lifecycle events published by the daemon.
 const (
-	TopicVPCCreate       = "vpc.create"
-	TopicVPCDelete       = "vpc.delete"
-	TopicSubnetCreate    = "vpc.create-subnet"
-	TopicSubnetDelete    = "vpc.delete-subnet"
-	TopicCreatePort      = "vpc.create-port"
-	TopicDeletePort      = "vpc.delete-port"
-	TopicPortStatus      = "vpc.port-status"
+	TopicVPCCreate    = "vpc.create"
+	TopicVPCDelete    = "vpc.delete"
+	TopicSubnetCreate = "vpc.create-subnet"
+	TopicSubnetDelete = "vpc.delete-subnet"
+	TopicCreatePort   = "vpc.create-port"
+	TopicDeletePort   = "vpc.delete-port"
+	TopicPortStatus   = "vpc.port-status"
 )
 
 // VPCEvent is published on vpc.create after a VPC is persisted.

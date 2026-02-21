@@ -1192,6 +1192,18 @@ func (d *Daemon) handleEC2DescribeSubnets(msg *nats.Msg) {
 	handleNATSRequest(msg, d.vpcService.DescribeSubnets)
 }
 
+func (d *Daemon) handleEC2CreateNetworkInterface(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.CreateNetworkInterface)
+}
+
+func (d *Daemon) handleEC2DeleteNetworkInterface(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.DeleteNetworkInterface)
+}
+
+func (d *Daemon) handleEC2DescribeNetworkInterfaces(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.DescribeNetworkInterfaces)
+}
+
 // handleEC2DescribeInstanceTypes processes incoming EC2 DescribeInstanceTypes requests
 // This handler responds with instance types that can currently be provisioned on this node
 // based on available resources (CPU and memory not already allocated to running instances)

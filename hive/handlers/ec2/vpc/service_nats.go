@@ -41,3 +41,15 @@ func (s *NATSVPCService) DeleteSubnet(input *ec2.DeleteSubnetInput) (*ec2.Delete
 func (s *NATSVPCService) DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error) {
 	return utils.NATSRequest[ec2.DescribeSubnetsOutput](s.natsConn, "ec2.DescribeSubnets", input, 30*time.Second)
 }
+
+func (s *NATSVPCService) CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInput) (*ec2.CreateNetworkInterfaceOutput, error) {
+	return utils.NATSRequest[ec2.CreateNetworkInterfaceOutput](s.natsConn, "ec2.CreateNetworkInterface", input, 30*time.Second)
+}
+
+func (s *NATSVPCService) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error) {
+	return utils.NATSRequest[ec2.DeleteNetworkInterfaceOutput](s.natsConn, "ec2.DeleteNetworkInterface", input, 30*time.Second)
+}
+
+func (s *NATSVPCService) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error) {
+	return utils.NATSRequest[ec2.DescribeNetworkInterfacesOutput](s.natsConn, "ec2.DescribeNetworkInterfaces", input, 30*time.Second)
+}
