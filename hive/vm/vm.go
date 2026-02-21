@@ -59,6 +59,10 @@ type VM struct {
 
 	// Health tracks crash detection and auto-restart state
 	Health InstanceHealthState `json:"health"`
+
+	// VPC networking: ENI attached to this instance (set by RunInstances when VPC mode is active)
+	ENIId  string `json:"eni_id,omitempty"`
+	ENIMac string `json:"eni_mac,omitempty"`
 }
 
 // ResetNodeLocalState zeroes out fields that are specific to the daemon node

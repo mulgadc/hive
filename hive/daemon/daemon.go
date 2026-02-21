@@ -120,6 +120,9 @@ type Daemon struct {
 	// Delay after QMP device_del before blockdev-del (default 1s, 0 in tests)
 	detachDelay time.Duration
 
+	// NetworkPlumber handles tap device lifecycle for VPC networking
+	networkPlumber NetworkPlumber
+
 	// shuttingDown is set to true during coordinated cluster shutdown (GATE phase).
 	// When true, the daemon rejects new work and setupShutdown skips VM stops.
 	shuttingDown atomic.Bool
@@ -486,6 +489,11 @@ func (d *Daemon) Start() error {
 	}
 	if err := d.initAccountService(); err != nil {
 		return fmt.Errorf("failed to initialize account settings service: %w", err)
+	}
+
+	// Initialize network plumber for VPC tap device management
+	if d.networkPlumber == nil {
+		d.networkPlumber = &OVSNetworkPlumber{}
 	}
 
 	// Protect daemon from OOM killer (prefer killing QEMU VMs instead)
@@ -1306,6 +1314,13 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				}
 			}
 
+			// Clean up VPC tap device if present
+			if instance.ENIId != "" && d.networkPlumber != nil {
+				if err := d.networkPlumber.CleanupTapDevice(instance.ENIId); err != nil {
+					slog.Warn("Failed to clean up tap device", "eni", instance.ENIId, "err", err)
+				}
+			}
+
 			// Deallocate resources
 			instanceType := d.resourceMgr.instanceTypes[instance.InstanceType]
 			if instanceType != nil {
@@ -1703,28 +1718,42 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	}
 	instance.EBSRequests.Mu.Unlock()
 
-	// TODO: Toggle SSH local port forwarding based on config (debugging use)
-	sshDebugPort, err := viperblock.FindFreePort()
-	if err != nil {
-		slog.Error("Failed to find free port", "err", err)
-		return err
+	// VPC tap networking vs user-mode fallback
+	if instance.ENIId != "" && d.networkPlumber != nil {
+		// VPC mode: create tap device and add to OVS br-int
+		if err := d.networkPlumber.SetupTapDevice(instance.ENIId, instance.ENIMac); err != nil {
+			slog.Error("Failed to set up tap device", "eni", instance.ENIId, "err", err)
+			return fmt.Errorf("setup tap device: %w", err)
+		}
+
+		tapName := TapDeviceName(instance.ENIId)
+		instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
+			Value: fmt.Sprintf("tap,id=net0,ifname=%s,script=no,downscript=no", tapName),
+		})
+		instance.Config.Devices = append(instance.Config.Devices, vm.Device{
+			Value: fmt.Sprintf("virtio-net-pci,netdev=net0,mac=%s", instance.ENIMac),
+		})
+
+		slog.Info("VPC networking configured", "tap", tapName, "eni", instance.ENIId, "mac", instance.ENIMac)
+	} else {
+		// Non-VPC fallback: user-mode networking with SSH port forwarding
+		sshDebugPort, err := viperblock.FindFreePort()
+		if err != nil {
+			slog.Error("Failed to find free port", "err", err)
+			return err
+		}
+		_, sshDebugPort, _ = net.SplitHostPort(sshDebugPort)
+
+		instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
+			Value: fmt.Sprintf("user,id=net0,hostfwd=tcp:127.0.0.1:%s-:22", sshDebugPort),
+		})
+		instance.Config.Devices = append(instance.Config.Devices, vm.Device{
+			Value: "virtio-net-pci,netdev=net0",
+		})
 	}
-
-	// Extract just the port number
-	_, sshDebugPort, _ = net.SplitHostPort(sshDebugPort)
-
-	// TODO: Make configurable
-	instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
-		Value: fmt.Sprintf("user,id=net0,hostfwd=tcp:127.0.0.1:%s-:22", sshDebugPort),
-	})
 
 	instance.Config.Devices = append(instance.Config.Devices, vm.Device{
 		Value: "virtio-rng-pci",
-	})
-
-	// Add NIC
-	instance.Config.Devices = append(instance.Config.Devices, vm.Device{
-		Value: "virtio-net-pci,netdev=net0",
 	})
 
 	// QMP socket
