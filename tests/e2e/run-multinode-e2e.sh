@@ -1350,9 +1350,93 @@ else
     echo "  All ping tests passed — VPC same-subnet connectivity verified"
 fi
 
-# Step 5: Clean up VPC instances
+# Step 5: Stop/Start IP persistence
 echo ""
-echo "Step 5: Clean up VPC resources"
+echo "Step 5: Stop/Start IP Persistence"
+echo "----------------------------------------"
+echo "Verifying private IPs persist through stop/start cycle (AWS behavior)..."
+
+# Record IPs before stop
+echo "  IPs before stop: ${VPC_PRIVATE_IPS[*]}"
+
+# Stop all VPC instances
+echo ""
+echo "  Stopping all VPC instances..."
+for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+    echo "  Stopping $vpc_inst..."
+    $AWS_EC2 stop-instances --instance-ids "$vpc_inst" > /dev/null
+done
+
+for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+    wait_for_instance_state "$vpc_inst" "stopped" 30 || {
+        echo "  ERROR: VPC instance $vpc_inst failed to stop"
+        exit 1
+    }
+done
+echo "  All VPC instances stopped"
+
+# Verify IPs are still present in DescribeInstances while stopped
+echo ""
+echo "  Verifying IPs persist in stopped state..."
+for idx in "${!VPC_INSTANCE_IDS[@]}"; do
+    vpc_inst="${VPC_INSTANCE_IDS[$idx]}"
+    expected_ip="${VPC_PRIVATE_IPS[$idx]}"
+
+    STOPPED_IP=$($AWS_EC2 describe-instances --instance-ids "$vpc_inst" \
+        --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+
+    if [ "$STOPPED_IP" != "$expected_ip" ]; then
+        echo "  ERROR: $vpc_inst IP changed while stopped (expected $expected_ip, got $STOPPED_IP)"
+        exit 1
+    fi
+    echo "  $vpc_inst: IP=$STOPPED_IP (unchanged)"
+done
+
+# Start all VPC instances
+echo ""
+echo "  Starting all VPC instances..."
+for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+    echo "  Starting $vpc_inst..."
+    $AWS_EC2 start-instances --instance-ids "$vpc_inst" > /dev/null
+done
+
+for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+    wait_for_instance_state "$vpc_inst" "running" 30 || {
+        echo "  ERROR: VPC instance $vpc_inst failed to restart"
+        exit 1
+    }
+done
+echo "  All VPC instances restarted"
+
+# Verify IPs are identical after restart
+echo ""
+echo "  Verifying IPs persist after restart..."
+IP_MISMATCHES=0
+for idx in "${!VPC_INSTANCE_IDS[@]}"; do
+    vpc_inst="${VPC_INSTANCE_IDS[$idx]}"
+    expected_ip="${VPC_PRIVATE_IPS[$idx]}"
+
+    RESTARTED_IP=$($AWS_EC2 describe-instances --instance-ids "$vpc_inst" \
+        --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+
+    if [ "$RESTARTED_IP" == "$expected_ip" ]; then
+        echo "  $vpc_inst: IP=$RESTARTED_IP (matches pre-stop)"
+    else
+        echo "  ERROR: $vpc_inst IP changed after restart (expected $expected_ip, got $RESTARTED_IP)"
+        IP_MISMATCHES=$((IP_MISMATCHES + 1))
+    fi
+done
+
+if [ "$IP_MISMATCHES" -gt 0 ]; then
+    echo "  ERROR: $IP_MISMATCHES instances had IP changes — ENI not persisting through stop/start"
+    exit 1
+fi
+
+echo "  Stop/start IP persistence verified — all IPs match"
+
+# Step 6: Clean up VPC instances
+echo ""
+echo "Step 6: Clean up VPC resources"
 echo "----------------------------------------"
 
 for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
