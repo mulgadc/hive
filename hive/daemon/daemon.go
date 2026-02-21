@@ -1781,6 +1781,28 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		})
 
 		slog.Info("VPC networking configured", "tap", tapName, "eni", instance.ENIId, "mac", instance.ENIMac)
+
+		// DEV_NETWORKING: add a second NIC with hostfwd for SSH dev access
+		if d.config.Daemon.DevNetworking {
+			sshDebugPort, err := viperblock.FindFreePort()
+			if err != nil {
+				slog.Warn("DEV_NETWORKING: failed to find free port for dev NIC", "err", err)
+			} else {
+				_, sshDebugPort, _ = net.SplitHostPort(sshDebugPort)
+				bindIP := d.config.Host
+				if bindIP == "" || bindIP == "0.0.0.0" {
+					bindIP = "127.0.0.1"
+				}
+				instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
+					Value: fmt.Sprintf("user,id=dev0,hostfwd=tcp:%s:%s-:22", bindIP, sshDebugPort),
+				})
+				instance.Config.Devices = append(instance.Config.Devices, vm.Device{
+					Value: "virtio-net-pci,netdev=dev0",
+				})
+				slog.Info("DEV_NETWORKING: added dev NIC with SSH hostfwd",
+					"bindIP", bindIP, "port", sshDebugPort, "instanceId", instance.ID)
+			}
+		}
 	} else {
 		// Non-VPC fallback: user-mode networking with SSH port forwarding
 		sshDebugPort, err := viperblock.FindFreePort()
@@ -1790,8 +1812,12 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		}
 		_, sshDebugPort, _ = net.SplitHostPort(sshDebugPort)
 
+		bindIP := d.config.Host
+		if bindIP == "" || bindIP == "0.0.0.0" {
+			bindIP = "127.0.0.1"
+		}
 		instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
-			Value: fmt.Sprintf("user,id=net0,hostfwd=tcp:127.0.0.1:%s-:22", sshDebugPort),
+			Value: fmt.Sprintf("user,id=net0,hostfwd=tcp:%s:%s-:22", bindIP, sshDebugPort),
 		})
 		instance.Config.Devices = append(instance.Config.Devices, vm.Device{
 			Value: "virtio-net-pci,netdev=net0",

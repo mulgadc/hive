@@ -115,9 +115,10 @@ type PredastoreConfig struct {
 
 // DaemonConfig holds the daemon configuration
 type DaemonConfig struct {
-	Host    string `mapstructure:"host"`
-	TLSKey  string `mapstructure:"tlskey"`
-	TLSCert string `mapstructure:"tlscert"`
+	Host          string `mapstructure:"host"`
+	TLSKey        string `mapstructure:"tlskey"`
+	TLSCert       string `mapstructure:"tlscert"`
+	DevNetworking bool   `mapstructure:"dev_networking"` // VPC instances get both TAP + hostfwd for SSH dev access
 }
 
 // NATSConfig holds the NATS configuration

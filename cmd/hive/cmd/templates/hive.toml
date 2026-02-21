@@ -20,6 +20,7 @@ secretkey = "{{.SecretKey}}"
 host = "{{.BindIP}}:{{.Port}}"
 tlskey = "config/server.key"
 tlscert = "config/server.pem"
+dev_networking = true
 
 [nodes.{{.Node}}.awsgw]
 host = "{{.BindIP}}:9999"
