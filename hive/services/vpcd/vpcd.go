@@ -2,8 +2,10 @@ package vpcd
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 
@@ -75,11 +77,48 @@ func (svc *Service) Reload() error {
 	return nil
 }
 
+// checkBrInt verifies the OVS integration bridge (br-int) exists.
+// This is the bridge that all VM TAP devices connect to.
+var checkBrInt = func() error {
+	cmd := exec.Command("ovs-vsctl", "br-exists", "br-int")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("br-int does not exist: run ./scripts/setup-ovn.sh --management")
+	}
+	return nil
+}
+
+// checkOVNController verifies that ovn-controller is running on this host.
+var checkOVNController = func() error {
+	cmd := exec.Command("ovs-appctl", "-t", "ovn-controller", "version")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("ovn-controller is not running: run ./scripts/setup-ovn.sh --management")
+	}
+	return nil
+}
+
+// preflightOVN runs all OVN preflight checks and returns the first failure.
+func preflightOVN() error {
+	if err := checkBrInt(); err != nil {
+		return fmt.Errorf("OVN preflight failed: %w", err)
+	}
+	if err := checkOVNController(); err != nil {
+		return fmt.Errorf("OVN preflight failed: %w", err)
+	}
+	return nil
+}
+
 func launchService(cfg *Config) error {
 	slog.Info("Starting vpcd service",
 		"ovn_nb_addr", cfg.OVNNBAddr,
 		"nats_host", cfg.NatsHost,
 	)
+
+	// OVN preflight: verify br-int and ovn-controller before proceeding
+	if err := preflightOVN(); err != nil {
+		slog.Error("OVN preflight check failed — vpcd cannot start without OVN", "err", err)
+		return err
+	}
+	slog.Info("OVN preflight passed (br-int exists, ovn-controller running)")
 
 	// Connect to NATS
 	nc, err := utils.ConnectNATS(cfg.NatsHost, cfg.NatsToken)
@@ -89,28 +128,22 @@ func launchService(cfg *Config) error {
 	}
 	defer nc.Close()
 
-	// Connect to OVN NB DB
-	var ovn OVNClient
-	if cfg.OVNNBAddr != "" {
-		liveClient := NewLiveOVNClient(cfg.OVNNBAddr)
-		ctx := context.Background()
-		if err := liveClient.Connect(ctx); err != nil {
-			slog.Warn("Failed to connect to OVN NB DB, operating without OVN",
-				"endpoint", cfg.OVNNBAddr, "err", err)
-		} else {
-			ovn = liveClient
-			defer liveClient.Close()
-		}
-	} else {
-		slog.Warn("No OVN NB DB address configured, vpcd will not manage OVN resources")
+	// Connect to OVN NB DB (required — vpcd is useless without it)
+	if cfg.OVNNBAddr == "" {
+		return fmt.Errorf("OVN NB DB address not configured (ovn_nb_addr is empty)")
 	}
 
-	if ovn != nil {
-		slog.Info("Connected to OVN NB DB, ready for VPC lifecycle events")
+	liveClient := NewLiveOVNClient(cfg.OVNNBAddr)
+	ctx := context.Background()
+	if err := liveClient.Connect(ctx); err != nil {
+		slog.Error("Failed to connect to OVN NB DB", "endpoint", cfg.OVNNBAddr, "err", err)
+		return fmt.Errorf("connect OVN NB DB: %w", err)
 	}
+	defer liveClient.Close()
+	slog.Info("Connected to OVN NB DB", "endpoint", cfg.OVNNBAddr)
 
 	// Subscribe to VPC lifecycle topics for OVN topology translation
-	topo := NewTopologyHandler(ovn)
+	topo := NewTopologyHandler(liveClient)
 	subs, err := topo.Subscribe(nc)
 	if err != nil {
 		slog.Error("Failed to subscribe to VPC topics", "err", err)

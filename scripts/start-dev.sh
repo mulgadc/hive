@@ -186,25 +186,38 @@ else
     echo "✈️  Skipping build (HIVE_SKIP_BUILD=true)"
 fi
 
-# 0️⃣ Verify OVN networking readiness (non-blocking)
+# 0️⃣ Verify OVN networking readiness (required — blocks service startup)
 echo ""
 echo "0️⃣  Checking OVN networking..."
-if command -v ovs-vsctl >/dev/null 2>&1; then
+OVN_OK=true
+
+if ! command -v ovs-vsctl >/dev/null 2>&1; then
+    echo "   ❌ OVS not installed"
+    echo "   Run: make quickinstall && ./scripts/setup-ovn.sh --management"
+    OVN_OK=false
+else
     if ovs-vsctl br-exists br-int 2>/dev/null; then
         echo "   ✅ br-int exists"
     else
-        echo "   ⚠️  br-int not found — VPC networking will not work"
+        echo "   ❌ br-int not found"
         echo "   Run: ./scripts/setup-ovn.sh --management"
+        OVN_OK=false
     fi
     if ovs-appctl -t ovn-controller version >/dev/null 2>&1; then
         echo "   ✅ ovn-controller running"
     else
-        echo "   ⚠️  ovn-controller not running — VPC networking will not work"
+        echo "   ❌ ovn-controller not running"
         echo "   Run: ./scripts/setup-ovn.sh --management"
+        OVN_OK=false
     fi
-else
-    echo "   ⚠️  OVS not installed — VPC networking unavailable"
-    echo "   Run: make quickinstall && ./scripts/setup-ovn.sh --management"
+fi
+
+if [ "$OVN_OK" != "true" ]; then
+    echo ""
+    echo "   ❌ OVN preflight failed — cannot start services without OVN."
+    echo "   OVN is required for VPC networking. Set up OVN first:"
+    echo "     ./scripts/setup-ovn.sh --management"
+    exit 1
 fi
 
 # 1️⃣ Start NATS server
