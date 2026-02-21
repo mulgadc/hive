@@ -63,6 +63,10 @@ else
     exit 1
 fi
 
+# Bootstrap OVN/OVS (required — start-dev.sh will block without it)
+echo "Bootstrapping OVN/OVS networking..."
+bootstrap_ovn_docker
+
 ./bin/hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
 
 # Trust the Hive CA certificate for AWS CLI SSL verification

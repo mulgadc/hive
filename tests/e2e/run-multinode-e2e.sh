@@ -91,6 +91,11 @@ if ! command -v ip &> /dev/null; then
     exit 1
 fi
 
+# Bootstrap OVN/OVS (required — start-dev.sh will block without it)
+echo ""
+echo "Bootstrapping OVN/OVS networking..."
+bootstrap_ovn_docker
+
 # Setup simulated network
 echo ""
 echo "Setting up simulated network..."
