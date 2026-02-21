@@ -46,13 +46,25 @@ sudo add-apt-repository universe
 sudo apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu-kvm libvirt-daemon-system libvirt-clients libvirt-dev make gcc unzip xz-utils file
 ```
 
-#### OVN (Optional — VPC Networking)
+#### OVN (Required — VPC Networking)
 
-For VPC networking support (virtual switches, routers, DHCP), install OVN and Open vSwitch:
+OVN and Open vSwitch are required for VPC networking (virtual switches, routers, DHCP, Geneve overlay). Hive will not start without OVN configured.
 
 ```bash
 sudo apt install ovn-central ovn-host openvswitch-switch
 ```
+
+After installing, run the setup script on each node:
+
+```bash
+# Single-node or management node (runs OVN central + compute):
+./scripts/setup-ovn.sh --management
+
+# Compute-only node (connects to management node's OVN DBs):
+./scripts/setup-ovn.sh --ovn-remote=tcp://<management-ip>:6642 --encap-ip=<this-node-ip>
+```
+
+This creates `br-int`, starts `ovn-controller`, configures Geneve tunnel endpoints, and enables IP forwarding. See `./scripts/setup-ovn.sh --help` for all options.
 
 Ensure the Go toolkit is installed for version 1.25.7 or higher. Recommended to install the latest directly from [https://go.dev/dl/](https://go.dev/dl/).
 
@@ -834,25 +846,39 @@ Every node that runs EC2 instances (compute) **must** also run the viperblock se
 
 In the default deployment, every node runs all services (NATS, Predastore, Viperblock, Daemon, Gateway), which satisfies this requirement.
 
+### Network Configuration
+
+Minimum **1 NIC** required. **2 NICs recommended** for production:
+
+| NIC | Purpose | Traffic |
+|-----|---------|---------|
+| **NIC 1 — Management** | Cluster coordination, admin access | NATS cluster routes, Predastore Raft, daemon health, SSH, AWS Gateway |
+| **NIC 2 — Overlay** | VPC networking between hosts | Geneve tunnels (UDP 6081), OVN datapath, inter-host VM traffic |
+
+With a single NIC, all traffic shares one interface. This works but is not recommended for production — Geneve tunnel traffic competes with cluster coordination traffic.
+
 ### Dual NIC Configuration
 
-If servers have separate management and cluster network interfaces, use `--cluster-bind` to specify the cluster network IP:
+Use `--cluster-bind` for NIC 1 (management/cluster) and `--encap-ip` in `setup-ovn.sh` for NIC 2 (overlay):
 
 ```bash
-# Server 1: management=192.168.1.10, cluster=10.0.0.10
+# Server 1: management=192.168.1.10, overlay=10.0.0.10
 ./bin/hive admin init \
   --node node1 \
   --nodes 3 \
   --bind 192.168.1.10 \
-  --cluster-bind 10.0.0.10 \
+  --cluster-bind 192.168.1.10 \
   --port 4432 \
   --hive-dir ~/hive/ \
   --config-dir ~/hive/config/ \
   --region us-east-1 \
   --az us-east-1a
+
+# OVN overlay on the second NIC:
+./scripts/setup-ovn.sh --management --encap-ip=10.0.0.10
 ```
 
-The `--bind` IP is used for the formation server, daemon, and AWS gateway. The `--cluster-bind` IP is used for NATS cluster routing and Predastore Raft consensus. If `--cluster-bind` is not specified, it defaults to the `--bind` IP.
+The `--bind` IP is used for the formation server, daemon, and AWS gateway. The `--cluster-bind` IP is used for NATS cluster routing and Predastore Raft consensus. If `--cluster-bind` is not specified, it defaults to the `--bind` IP. The `--encap-ip` sets the Geneve tunnel endpoint for OVN overlay traffic — this should be on the overlay NIC for production deployments.
 
 ### IP Aliases (Simulated Mode)
 
