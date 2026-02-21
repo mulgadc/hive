@@ -828,6 +828,49 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 			d.resourceMgr.deallocate(instanceType)
 			continue
 		}
+
+		// Auto-create ENI when SubnetId is provided (matches AWS behavior)
+		if runInstancesInput.SubnetId != nil && *runInstancesInput.SubnetId != "" && d.vpcService != nil {
+			eniOut, eniErr := d.vpcService.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
+				SubnetId:    runInstancesInput.SubnetId,
+				Description: aws.String("Primary network interface for " + instance.ID),
+			})
+			if eniErr != nil {
+				slog.Error("handleEC2RunInstances auto-create ENI failed", "instanceId", instance.ID, "subnetId", *runInstancesInput.SubnetId, "err", eniErr)
+				lastRunErr = eniErr
+				d.resourceMgr.deallocate(instanceType)
+				continue
+			}
+
+			eni := eniOut.NetworkInterface
+			instance.ENIId = *eni.NetworkInterfaceId
+			instance.ENIMac = *eni.MacAddress
+			ec2Instance.SetPrivateIpAddress(*eni.PrivateIpAddress)
+			ec2Instance.SetSubnetId(*runInstancesInput.SubnetId)
+			ec2Instance.SetVpcId(*eni.VpcId)
+			ec2Instance.NetworkInterfaces = []*ec2.InstanceNetworkInterface{
+				{
+					NetworkInterfaceId: eni.NetworkInterfaceId,
+					PrivateIpAddress:   eni.PrivateIpAddress,
+					MacAddress:         eni.MacAddress,
+					SubnetId:           runInstancesInput.SubnetId,
+					VpcId:              eni.VpcId,
+					Status:             aws.String("in-use"),
+					Attachment: &ec2.InstanceNetworkInterfaceAttachment{
+						DeviceIndex: aws.Int64(0),
+						Status:      aws.String("attached"),
+					},
+				},
+			}
+
+			slog.Info("Auto-created ENI for VPC instance",
+				"instanceId", instance.ID,
+				"eniId", instance.ENIId,
+				"privateIp", *eni.PrivateIpAddress,
+				"mac", instance.ENIMac,
+			)
+		}
+
 		instances = append(instances, instance)
 		allEC2Instances = append(allEC2Instances, ec2Instance)
 	}
