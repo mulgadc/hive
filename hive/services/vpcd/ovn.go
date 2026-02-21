@@ -44,6 +44,7 @@ type OVNClient interface {
 	CreateDHCPOptions(ctx context.Context, opts *nbdb.DHCPOptions) (string, error)
 	DeleteDHCPOptions(ctx context.Context, uuid string) error
 	FindDHCPOptionsByCIDR(ctx context.Context, cidr string) (*nbdb.DHCPOptions, error)
+	FindDHCPOptionsByExternalID(ctx context.Context, key, value string) (*nbdb.DHCPOptions, error)
 	ListDHCPOptions(ctx context.Context) ([]nbdb.DHCPOptions, error)
 }
 
@@ -360,6 +361,20 @@ func (c *LiveOVNClient) FindDHCPOptionsByCIDR(ctx context.Context, cidr string) 
 	}
 	if len(options) == 0 {
 		return nil, fmt.Errorf("DHCP options for CIDR %q not found", cidr)
+	}
+	return &options[0], nil
+}
+
+func (c *LiveOVNClient) FindDHCPOptionsByExternalID(ctx context.Context, key, value string) (*nbdb.DHCPOptions, error) {
+	var options []nbdb.DHCPOptions
+	err := c.client.WhereCache(func(o *nbdb.DHCPOptions) bool {
+		return o.ExternalIDs[key] == value
+	}).List(ctx, &options)
+	if err != nil {
+		return nil, fmt.Errorf("find DHCP options by external_id %s=%s: %w", key, value, err)
+	}
+	if len(options) == 0 {
+		return nil, fmt.Errorf("DHCP options with external_id %s=%s not found", key, value)
 	}
 	return &options[0], nil
 }

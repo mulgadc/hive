@@ -287,6 +287,18 @@ func (m *MockOVNClient) FindDHCPOptionsByCIDR(_ context.Context, cidr string) (*
 	return nil, fmt.Errorf("DHCP options for CIDR %q not found", cidr)
 }
 
+func (m *MockOVNClient) FindDHCPOptionsByExternalID(_ context.Context, key, value string) (*nbdb.DHCPOptions, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, opts := range m.dhcpOpts {
+		if opts.ExternalIDs[key] == value {
+			result := *opts
+			return &result, nil
+		}
+	}
+	return nil, fmt.Errorf("DHCP options with external_id %s=%s not found", key, value)
+}
+
 func (m *MockOVNClient) ListDHCPOptions(_ context.Context) ([]nbdb.DHCPOptions, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

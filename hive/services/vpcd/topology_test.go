@@ -445,6 +445,289 @@ func TestGenerateMAC(t *testing.T) {
 	}
 }
 
+func TestTopologyHandler_CreatePort(t *testing.T) {
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock)
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	// Setup: create VPC router, subnet switch, and DHCP options
+	_ = mock.CreateLogicalRouter(ctx, nbdbLogicalRouter("vpc-vpc-port1", "vpc-port1"))
+	_ = mock.CreateLogicalSwitch(ctx, nbdbLogicalSwitch("subnet-subnet-port1", "subnet-port1", "vpc-port1"))
+	dhcpUUID, _ := mock.CreateDHCPOptions(ctx, nbdbDHCPOptions("10.0.1.0/24", "subnet-port1", "vpc-port1"))
+
+	// Create port via NATS
+	evt := PortEvent{
+		NetworkInterfaceId: "eni-aaa111",
+		SubnetId:           "subnet-port1",
+		VpcId:              "vpc-port1",
+		PrivateIpAddress:   "10.0.1.4",
+		MacAddress:         "02:00:00:11:22:33",
+	}
+	data, _ := json.Marshal(evt)
+	resp, err := nc.Request(TopicCreatePort, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request vpc.create-port: %v", err)
+	}
+	assertSuccess(t, resp, "create port")
+
+	// Verify logical switch port created
+	lsp, err := mock.GetLogicalSwitchPort(ctx, "port-eni-aaa111")
+	if err != nil {
+		t.Fatalf("expected logical switch port: %v", err)
+	}
+
+	// Verify addresses
+	expectedAddr := "02:00:00:11:22:33 10.0.1.4"
+	if len(lsp.Addresses) != 1 || lsp.Addresses[0] != expectedAddr {
+		t.Errorf("expected addresses [%s], got %v", expectedAddr, lsp.Addresses)
+	}
+
+	// Verify port security
+	if len(lsp.PortSecurity) != 1 || lsp.PortSecurity[0] != expectedAddr {
+		t.Errorf("expected port_security [%s], got %v", expectedAddr, lsp.PortSecurity)
+	}
+
+	// Verify DHCPv4 options
+	if lsp.DHCPv4Options == nil {
+		t.Fatal("expected DHCPv4Options to be set")
+	}
+	if *lsp.DHCPv4Options != dhcpUUID {
+		t.Errorf("expected DHCPv4Options UUID %s, got %s", dhcpUUID, *lsp.DHCPv4Options)
+	}
+
+	// Verify external IDs
+	if lsp.ExternalIDs["hive:eni_id"] != "eni-aaa111" {
+		t.Errorf("expected eni_id=eni-aaa111, got %s", lsp.ExternalIDs["hive:eni_id"])
+	}
+	if lsp.ExternalIDs["hive:subnet_id"] != "subnet-port1" {
+		t.Errorf("expected subnet_id=subnet-port1, got %s", lsp.ExternalIDs["hive:subnet_id"])
+	}
+	if lsp.ExternalIDs["hive:vpc_id"] != "vpc-port1" {
+		t.Errorf("expected vpc_id=vpc-port1, got %s", lsp.ExternalIDs["hive:vpc_id"])
+	}
+
+	// Verify port was added to the switch
+	ls, err := mock.GetLogicalSwitch(ctx, "subnet-subnet-port1")
+	if err != nil {
+		t.Fatalf("get switch: %v", err)
+	}
+	if len(ls.Ports) != 1 {
+		t.Errorf("expected 1 port on switch, got %d", len(ls.Ports))
+	}
+}
+
+func TestTopologyHandler_DeletePort(t *testing.T) {
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock)
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	// Setup: create switch and port
+	_ = mock.CreateLogicalSwitch(ctx, nbdbLogicalSwitch("subnet-subnet-del2", "subnet-del2", "vpc-del2"))
+	_ = mock.CreateLogicalSwitchPort(ctx, "subnet-subnet-del2", &nbdb.LogicalSwitchPort{
+		Name:         "port-eni-bbb222",
+		Addresses:    []string{"02:00:00:44:55:66 10.0.2.4"},
+		PortSecurity: []string{"02:00:00:44:55:66 10.0.2.4"},
+		ExternalIDs: map[string]string{
+			"hive:eni_id":    "eni-bbb222",
+			"hive:subnet_id": "subnet-del2",
+			"hive:vpc_id":    "vpc-del2",
+		},
+	})
+
+	// Verify port exists before delete
+	_, err = mock.GetLogicalSwitchPort(ctx, "port-eni-bbb222")
+	if err != nil {
+		t.Fatalf("expected port to exist before delete: %v", err)
+	}
+
+	// Delete port via NATS
+	evt := PortEvent{
+		NetworkInterfaceId: "eni-bbb222",
+		SubnetId:           "subnet-del2",
+		VpcId:              "vpc-del2",
+		PrivateIpAddress:   "10.0.2.4",
+		MacAddress:         "02:00:00:44:55:66",
+	}
+	data, _ := json.Marshal(evt)
+	resp, err := nc.Request(TopicDeletePort, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request vpc.delete-port: %v", err)
+	}
+	assertSuccess(t, resp, "delete port")
+
+	// Verify port is gone
+	_, err = mock.GetLogicalSwitchPort(ctx, "port-eni-bbb222")
+	if err == nil {
+		t.Error("expected port to be deleted")
+	}
+
+	// Verify switch still exists but has no ports
+	ls, err := mock.GetLogicalSwitch(ctx, "subnet-subnet-del2")
+	if err != nil {
+		t.Fatalf("expected switch to still exist: %v", err)
+	}
+	if len(ls.Ports) != 0 {
+		t.Errorf("expected 0 ports on switch after delete, got %d", len(ls.Ports))
+	}
+}
+
+func TestTopologyHandler_CreatePortNoDHCP(t *testing.T) {
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock)
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	// Setup: create switch but NO DHCP options
+	_ = mock.CreateLogicalSwitch(ctx, nbdbLogicalSwitch("subnet-subnet-nodhcp", "subnet-nodhcp", "vpc-nodhcp"))
+
+	// Create port — should succeed but without DHCPv4Options
+	evt := PortEvent{
+		NetworkInterfaceId: "eni-nodhcp",
+		SubnetId:           "subnet-nodhcp",
+		VpcId:              "vpc-nodhcp",
+		PrivateIpAddress:   "10.0.3.4",
+		MacAddress:         "02:00:00:77:88:99",
+	}
+	data, _ := json.Marshal(evt)
+	resp, err := nc.Request(TopicCreatePort, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request vpc.create-port: %v", err)
+	}
+	assertSuccess(t, resp, "create port without DHCP")
+
+	// Port should exist but without DHCPv4Options
+	lsp, err := mock.GetLogicalSwitchPort(ctx, "port-eni-nodhcp")
+	if err != nil {
+		t.Fatalf("expected port: %v", err)
+	}
+	if lsp.DHCPv4Options != nil {
+		t.Errorf("expected nil DHCPv4Options when no DHCP configured, got %s", *lsp.DHCPv4Options)
+	}
+}
+
+func TestTopologyHandler_PortLifecycle(t *testing.T) {
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock)
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	// 1. Create VPC
+	vpcEvt := VPCEvent{VpcId: "vpc-plc", CidrBlock: "10.0.0.0/16", VNI: 300}
+	data, _ := json.Marshal(vpcEvt)
+	resp, _ := nc.Request(TopicVPCCreate, data, 5_000_000_000)
+	assertSuccess(t, resp, "create VPC")
+
+	// 2. Create Subnet
+	subEvt := SubnetEvent{SubnetId: "subnet-plc", VpcId: "vpc-plc", CidrBlock: "10.0.1.0/24"}
+	data, _ = json.Marshal(subEvt)
+	resp, _ = nc.Request(TopicSubnetCreate, data, 5_000_000_000)
+	assertSuccess(t, resp, "create subnet")
+
+	// 3. Create two ports
+	portEvt1 := PortEvent{
+		NetworkInterfaceId: "eni-plc-1",
+		SubnetId:           "subnet-plc",
+		VpcId:              "vpc-plc",
+		PrivateIpAddress:   "10.0.1.4",
+		MacAddress:         "02:00:00:aa:bb:01",
+	}
+	data, _ = json.Marshal(portEvt1)
+	resp, _ = nc.Request(TopicCreatePort, data, 5_000_000_000)
+	assertSuccess(t, resp, "create port 1")
+
+	portEvt2 := PortEvent{
+		NetworkInterfaceId: "eni-plc-2",
+		SubnetId:           "subnet-plc",
+		VpcId:              "vpc-plc",
+		PrivateIpAddress:   "10.0.1.5",
+		MacAddress:         "02:00:00:aa:bb:02",
+	}
+	data, _ = json.Marshal(portEvt2)
+	resp, _ = nc.Request(TopicCreatePort, data, 5_000_000_000)
+	assertSuccess(t, resp, "create port 2")
+
+	// Verify switch has 3 ports (router port + 2 ENI ports)
+	ls, err := mock.GetLogicalSwitch(ctx, "subnet-subnet-plc")
+	if err != nil {
+		t.Fatalf("get switch: %v", err)
+	}
+	if len(ls.Ports) != 3 {
+		t.Errorf("expected 3 ports (1 router + 2 ENI), got %d", len(ls.Ports))
+	}
+
+	// 4. Delete port 1
+	data, _ = json.Marshal(portEvt1)
+	resp, _ = nc.Request(TopicDeletePort, data, 5_000_000_000)
+	assertSuccess(t, resp, "delete port 1")
+
+	// Verify switch has 2 ports now
+	ls, err = mock.GetLogicalSwitch(ctx, "subnet-subnet-plc")
+	if err != nil {
+		t.Fatalf("get switch after port delete: %v", err)
+	}
+	if len(ls.Ports) != 2 {
+		t.Errorf("expected 2 ports after delete, got %d", len(ls.Ports))
+	}
+
+	// Port 2 should still exist
+	_, err = mock.GetLogicalSwitchPort(ctx, "port-eni-plc-2")
+	if err != nil {
+		t.Error("expected port 2 to still exist")
+	}
+
+	// Port 1 should be gone
+	_, err = mock.GetLogicalSwitchPort(ctx, "port-eni-plc-1")
+	if err == nil {
+		t.Error("expected port 1 to be deleted")
+	}
+}
+
 func TestTopologyHandler_NilOVN(t *testing.T) {
 	_, nc := startTestNATS(t)
 
@@ -475,6 +758,34 @@ func TestTopologyHandler_NilOVN(t *testing.T) {
 	_ = json.Unmarshal(resp.Data, &result)
 	if result.Success {
 		t.Error("expected failure when OVN is nil")
+	}
+
+	// Port create should also fail gracefully
+	portEvt := PortEvent{
+		NetworkInterfaceId: "eni-nil",
+		SubnetId:           "subnet-nil",
+		VpcId:              "vpc-nil",
+		PrivateIpAddress:   "10.0.1.4",
+		MacAddress:         "02:00:00:00:00:01",
+	}
+	data, _ = json.Marshal(portEvt)
+	resp, err = nc.Request(TopicCreatePort, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request create port: %v", err)
+	}
+	_ = json.Unmarshal(resp.Data, &result)
+	if result.Success {
+		t.Error("expected create-port failure when OVN is nil")
+	}
+
+	// Port delete should also fail gracefully
+	resp, err = nc.Request(TopicDeletePort, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request delete port: %v", err)
+	}
+	_ = json.Unmarshal(resp.Data, &result)
+	if result.Success {
+		t.Error("expected delete-port failure when OVN is nil")
 	}
 }
 

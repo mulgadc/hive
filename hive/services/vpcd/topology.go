@@ -36,6 +36,15 @@ type SubnetEvent struct {
 	CidrBlock string `json:"cidr_block"`
 }
 
+// PortEvent is published on vpc.create-port / vpc.delete-port.
+type PortEvent struct {
+	NetworkInterfaceId string `json:"network_interface_id"`
+	SubnetId           string `json:"subnet_id"`
+	VpcId              string `json:"vpc_id"`
+	PrivateIpAddress   string `json:"private_ip_address"`
+	MacAddress         string `json:"mac_address"`
+}
+
 // TopologyHandler translates VPC lifecycle NATS events into OVN NB DB operations.
 type TopologyHandler struct {
 	ovn OVNClient
@@ -59,6 +68,8 @@ func (h *TopologyHandler) Subscribe(nc *nats.Conn) ([]*nats.Subscription, error)
 		{TopicVPCDelete, h.handleVPCDelete},
 		{TopicSubnetCreate, h.handleSubnetCreate},
 		{TopicSubnetDelete, h.handleSubnetDelete},
+		{TopicCreatePort, h.handleCreatePort},
+		{TopicDeletePort, h.handleDeletePort},
 	}
 
 	var result []*nats.Subscription
@@ -333,6 +344,91 @@ func (h *TopologyHandler) handleSubnetDelete(msg *nats.Msg) {
 	}
 
 	slog.Info("vpcd: deleted subnet topology", "switch", switchName, "subnet_id", evt.SubnetId)
+	respond(msg, nil)
+}
+
+// --- Port (LogicalSwitchPort for VM/ENI) ---
+
+func (h *TopologyHandler) handleCreatePort(msg *nats.Msg) {
+	if h.ovn == nil {
+		respond(msg, fmt.Errorf("OVN client not connected"))
+		return
+	}
+
+	var evt PortEvent
+	if err := json.Unmarshal(msg.Data, &evt); err != nil {
+		slog.Error("vpcd: failed to unmarshal vpc.create-port event", "err", err)
+		respond(msg, err)
+		return
+	}
+
+	ctx := context.Background()
+	portName := "port-" + evt.NetworkInterfaceId
+	switchName := "subnet-" + evt.SubnetId
+	addrStr := fmt.Sprintf("%s %s", evt.MacAddress, evt.PrivateIpAddress)
+
+	lsp := &nbdb.LogicalSwitchPort{
+		Name:         portName,
+		Addresses:    []string{addrStr},
+		PortSecurity: []string{addrStr},
+		ExternalIDs: map[string]string{
+			"hive:eni_id":    evt.NetworkInterfaceId,
+			"hive:subnet_id": evt.SubnetId,
+			"hive:vpc_id":    evt.VpcId,
+		},
+	}
+
+	// Look up DHCP options for the subnet and attach to the port
+	dhcpOpts, err := h.ovn.FindDHCPOptionsByExternalID(ctx, "hive:subnet_id", evt.SubnetId)
+	if err != nil {
+		slog.Warn("vpcd: DHCP options not found for subnet, port will not have DHCP", "subnet", evt.SubnetId, "err", err)
+	} else {
+		lsp.DHCPv4Options = &dhcpOpts.UUID
+	}
+
+	if err := h.ovn.CreateLogicalSwitchPort(ctx, switchName, lsp); err != nil {
+		slog.Error("vpcd: failed to create logical switch port", "port", portName, "switch", switchName, "err", err)
+		respond(msg, err)
+		return
+	}
+
+	slog.Info("vpcd: created logical switch port for ENI",
+		"port", portName,
+		"switch", switchName,
+		"eni_id", evt.NetworkInterfaceId,
+		"ip", evt.PrivateIpAddress,
+	)
+	respond(msg, nil)
+}
+
+func (h *TopologyHandler) handleDeletePort(msg *nats.Msg) {
+	if h.ovn == nil {
+		respond(msg, fmt.Errorf("OVN client not connected"))
+		return
+	}
+
+	var evt PortEvent
+	if err := json.Unmarshal(msg.Data, &evt); err != nil {
+		slog.Error("vpcd: failed to unmarshal vpc.delete-port event", "err", err)
+		respond(msg, err)
+		return
+	}
+
+	ctx := context.Background()
+	portName := "port-" + evt.NetworkInterfaceId
+	switchName := "subnet-" + evt.SubnetId
+
+	if err := h.ovn.DeleteLogicalSwitchPort(ctx, switchName, portName); err != nil {
+		slog.Error("vpcd: failed to delete logical switch port", "port", portName, "switch", switchName, "err", err)
+		respond(msg, err)
+		return
+	}
+
+	slog.Info("vpcd: deleted logical switch port for ENI",
+		"port", portName,
+		"switch", switchName,
+		"eni_id", evt.NetworkInterfaceId,
+	)
 	respond(msg, nil)
 }
 
