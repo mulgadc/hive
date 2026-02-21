@@ -1168,6 +1168,30 @@ func (d *Daemon) handleEC2DescribeEgressOnlyInternetGateways(msg *nats.Msg) {
 	handleNATSRequest(msg, d.eigwService.DescribeEgressOnlyInternetGateways)
 }
 
+func (d *Daemon) handleEC2CreateVpc(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.CreateVpc)
+}
+
+func (d *Daemon) handleEC2DeleteVpc(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.DeleteVpc)
+}
+
+func (d *Daemon) handleEC2DescribeVpcs(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.DescribeVpcs)
+}
+
+func (d *Daemon) handleEC2CreateSubnet(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.CreateSubnet)
+}
+
+func (d *Daemon) handleEC2DeleteSubnet(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.DeleteSubnet)
+}
+
+func (d *Daemon) handleEC2DescribeSubnets(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.DescribeSubnets)
+}
+
 // handleEC2DescribeInstanceTypes processes incoming EC2 DescribeInstanceTypes requests
 // This handler responds with instance types that can currently be provisioned on this node
 // based on available resources (CPU and memory not already allocated to running instances)

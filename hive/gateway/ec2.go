@@ -18,6 +18,7 @@ import (
 	gateway_ec2_snapshot "github.com/mulgadc/hive/hive/gateway/ec2/snapshot"
 	gateway_ec2_tags "github.com/mulgadc/hive/hive/gateway/ec2/tags"
 	gateway_ec2_volume "github.com/mulgadc/hive/hive/gateway/ec2/volume"
+	gateway_ec2_vpc "github.com/mulgadc/hive/hive/gateway/ec2/vpc"
 	gateway_ec2_zone "github.com/mulgadc/hive/hive/gateway/ec2/zone"
 	"github.com/mulgadc/hive/hive/utils"
 )
@@ -173,6 +174,24 @@ var ec2Actions = map[string]EC2Handler{
 	}),
 	"DescribeEgressOnlyInternetGateways": ec2Handler(func(input *ec2.DescribeEgressOnlyInternetGatewaysInput, gw *GatewayConfig) (any, error) {
 		return gateway_ec2_eigw.DescribeEgressOnlyInternetGateways(input, gw.NATSConn)
+	}),
+	"CreateVpc": ec2Handler(func(input *ec2.CreateVpcInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_vpc.CreateVpc(input, gw.NATSConn)
+	}),
+	"DeleteVpc": ec2Handler(func(input *ec2.DeleteVpcInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_vpc.DeleteVpc(input, gw.NATSConn)
+	}),
+	"DescribeVpcs": ec2Handler(func(input *ec2.DescribeVpcsInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_vpc.DescribeVpcs(input, gw.NATSConn)
+	}),
+	"CreateSubnet": ec2Handler(func(input *ec2.CreateSubnetInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_vpc.CreateSubnet(input, gw.NATSConn)
+	}),
+	"DeleteSubnet": ec2Handler(func(input *ec2.DeleteSubnetInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_vpc.DeleteSubnet(input, gw.NATSConn)
+	}),
+	"DescribeSubnets": ec2Handler(func(input *ec2.DescribeSubnetsInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_vpc.DescribeSubnets(input, gw.NATSConn)
 	}),
 }
 

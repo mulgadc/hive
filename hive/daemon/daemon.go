@@ -35,6 +35,7 @@ import (
 	handlers_ec2_snapshot "github.com/mulgadc/hive/hive/handlers/ec2/snapshot"
 	handlers_ec2_tags "github.com/mulgadc/hive/hive/handlers/ec2/tags"
 	handlers_ec2_volume "github.com/mulgadc/hive/hive/handlers/ec2/volume"
+	handlers_ec2_vpc "github.com/mulgadc/hive/hive/handlers/ec2/vpc"
 	"github.com/mulgadc/hive/hive/instancetypes"
 	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/hive/hive/qmp"
@@ -97,6 +98,7 @@ type Daemon struct {
 	snapshotService *handlers_ec2_snapshot.SnapshotServiceImpl
 	tagsService     *handlers_ec2_tags.TagsServiceImpl
 	eigwService     *handlers_ec2_eigw.EgressOnlyIGWServiceImpl
+	vpcService      *handlers_ec2_vpc.VPCServiceImpl
 	ctx             context.Context
 	cancel          context.CancelFunc
 	shutdownWg      sync.WaitGroup
@@ -378,6 +380,12 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.CreateEgressOnlyInternetGateway", d.handleEC2CreateEgressOnlyInternetGateway, "hive-workers"},
 		{"ec2.DeleteEgressOnlyInternetGateway", d.handleEC2DeleteEgressOnlyInternetGateway, "hive-workers"},
 		{"ec2.DescribeEgressOnlyInternetGateways", d.handleEC2DescribeEgressOnlyInternetGateways, "hive-workers"},
+		{"ec2.CreateVpc", d.handleEC2CreateVpc, "hive-workers"},
+		{"ec2.DeleteVpc", d.handleEC2DeleteVpc, "hive-workers"},
+		{"ec2.DescribeVpcs", d.handleEC2DescribeVpcs, "hive-workers"},
+		{"ec2.CreateSubnet", d.handleEC2CreateSubnet, "hive-workers"},
+		{"ec2.DeleteSubnet", d.handleEC2DeleteSubnet, "hive-workers"},
+		{"ec2.DescribeSubnets", d.handleEC2DescribeSubnets, "hive-workers"},
 		{"ec2.ModifyInstanceAttribute", d.handleEC2ModifyInstanceAttribute, "hive-workers"},
 		{"ec2.start", d.handleEC2StartStoppedInstance, "hive-workers"},
 		{"ec2.terminate", d.handleEC2TerminateStoppedInstance, "hive-workers"},
@@ -466,6 +474,12 @@ func (d *Daemon) Start() error {
 		d.eigwService = handlers_ec2_eigw.NewEgressOnlyIGWServiceImpl(d.config)
 	} else {
 		d.eigwService = eigwSvc
+	}
+	if vpcSvc, err := handlers_ec2_vpc.NewVPCServiceImplWithNATS(d.config, d.natsConn); err != nil {
+		slog.Warn("Failed to initialize VPC service, falling back to in-memory", "error", err)
+		d.vpcService = handlers_ec2_vpc.NewVPCServiceImpl(d.config)
+	} else {
+		d.vpcService = vpcSvc
 	}
 	if err := d.initAccountService(); err != nil {
 		return fmt.Errorf("failed to initialize account settings service: %w", err)
