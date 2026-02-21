@@ -34,6 +34,7 @@ type Config struct {
 	Predastore PredastoreConfig `mapstructure:"predastore"`
 	Viperblock ViperblockConfig `mapstructure:"viperblock"`
 	AWSGW      AWSGWConfig      `mapstructure:"awsgw"`
+	VPCD       VPCDConfig       `mapstructure:"vpcd"`
 
 	// Authentication
 	// TODO: Move to more appropriate setting above
@@ -62,7 +63,7 @@ func (cc *ClusterConfig) NodeBaseDir() string {
 }
 
 // AllServices is the default service list when Services is empty (backward compat).
-var AllServices = []string{"nats", "predastore", "viperblock", "daemon", "awsgw", "ui"}
+var AllServices = []string{"nats", "predastore", "viperblock", "daemon", "awsgw", "vpcd", "ui"}
 
 // HasService reports whether the node runs the named service.
 // An empty Services list means all services (backward compat).
@@ -94,6 +95,12 @@ type AWSGWConfig struct {
 
 type ViperblockConfig struct {
 	ShardWAL *bool `mapstructure:"shardwal"` // Enable sharded WAL (default false when nil)
+}
+
+// VPCDConfig holds the VPC daemon (vpcd) configuration.
+type VPCDConfig struct {
+	OVNNBAddr string `mapstructure:"ovn_nb_addr"` // OVN Northbound DB address (e.g., "tcp:127.0.0.1:6641")
+	OVNSBAddr string `mapstructure:"ovn_sb_addr"` // OVN Southbound DB address (e.g., "tcp:127.0.0.1:6642")
 }
 
 type PredastoreConfig struct {

@@ -39,6 +39,10 @@ token = "{{.NatsToken}}"
 [nodes.{{.Node}}.viperblock]
 shardwal = false
 
+[nodes.{{.Node}}.vpcd]
+ovn_nb_addr = "tcp:127.0.0.1:6641"
+ovn_sb_addr = "tcp:127.0.0.1:6642"
+
 [nodes.{{.Node}}.predastore]
 host = "{{.BindIP}}:8443"
 region = "{{.Region}}"
