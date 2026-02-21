@@ -109,14 +109,20 @@ func launchService(cfg *Config) error {
 		slog.Info("Connected to OVN NB DB, ready for VPC lifecycle events")
 	}
 
-	// NATS subscriptions for VPC lifecycle events will be added
-	// by mulga-04m (topology translation bead).
-	// Topics: vpc.create, vpc.delete, vpc.create-subnet, vpc.delete-subnet,
-	//         vpc.create-port, vpc.delete-port, vpc.update-sg, vpc.port-status
-	_ = nc
-	_ = ovn
+	// Subscribe to VPC lifecycle topics for OVN topology translation
+	topo := NewTopologyHandler(ovn)
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		slog.Error("Failed to subscribe to VPC topics", "err", err)
+		return err
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
 
-	slog.Info("vpcd service started, waiting for VPC lifecycle events")
+	slog.Info("vpcd service started, waiting for VPC lifecycle events", "subscriptions", len(subs))
 
 	// Wait for shutdown signal
 	sigChan := make(chan os.Signal, 1)

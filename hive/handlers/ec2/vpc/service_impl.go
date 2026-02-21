@@ -53,6 +53,7 @@ type SubnetRecord struct {
 // VPCServiceImpl implements VPC and Subnet operations with NATS JetStream persistence
 type VPCServiceImpl struct {
 	config   *config.Config
+	natsConn *nats.Conn
 	vpcKV    nats.KeyValue
 	subnetKV nats.KeyValue
 	vniKV    nats.KeyValue
@@ -94,6 +95,7 @@ func NewVPCServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*VPCSer
 
 	return &VPCServiceImpl{
 		config:   cfg,
+		natsConn: natsConn,
 		vpcKV:    vpcKV,
 		subnetKV: subnetKV,
 		vniKV:    vniKV,
@@ -200,6 +202,9 @@ func (s *VPCServiceImpl) CreateVpc(input *ec2.CreateVpcInput) (*ec2.CreateVpcOut
 
 	slog.Info("CreateVpc completed", "vpcId", vpcID, "cidrBlock", record.CidrBlock, "vni", vni)
 
+	// Publish vpc.create event for vpcd topology translation
+	s.publishVPCEvent("vpc.create", record.VpcId, record.CidrBlock, record.VNI)
+
 	return &ec2.CreateVpcOutput{
 		Vpc: s.vpcRecordToEC2(&record),
 	}, nil
@@ -241,6 +246,9 @@ func (s *VPCServiceImpl) DeleteVpc(input *ec2.DeleteVpcInput) (*ec2.DeleteVpcOut
 	}
 
 	slog.Info("DeleteVpc completed", "vpcId", vpcID)
+
+	// Publish vpc.delete event for vpcd topology cleanup
+	s.publishVPCEvent("vpc.delete", vpcID, "", 0)
 
 	return &ec2.DeleteVpcOutput{}, nil
 }
@@ -419,6 +427,9 @@ func (s *VPCServiceImpl) CreateSubnet(input *ec2.CreateSubnetInput) (*ec2.Create
 
 	slog.Info("CreateSubnet completed", "subnetId", subnetID, "vpcId", vpcID, "cidrBlock", record.CidrBlock)
 
+	// Publish vpc.create-subnet event for vpcd topology translation
+	s.publishSubnetEvent("vpc.create-subnet", record.SubnetId, record.VpcId, record.CidrBlock)
+
 	return &ec2.CreateSubnetOutput{
 		Subnet: s.subnetRecordToEC2(&record, totalHosts),
 	}, nil
@@ -432,15 +443,22 @@ func (s *VPCServiceImpl) DeleteSubnet(input *ec2.DeleteSubnetInput) (*ec2.Delete
 
 	subnetID := *input.SubnetId
 
-	if _, err := s.subnetKV.Get(subnetID); err != nil {
+	// Read subnet record before deletion (needed for vpcd event)
+	subnetEntry, err := s.subnetKV.Get(subnetID)
+	if err != nil {
 		return nil, errors.New(awserrors.ErrorInvalidSubnetIDNotFound)
 	}
+	var subnetRecord SubnetRecord
+	_ = json.Unmarshal(subnetEntry.Value(), &subnetRecord)
 
 	if err := s.subnetKV.Delete(subnetID); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
 	slog.Info("DeleteSubnet completed", "subnetId", subnetID)
+
+	// Publish vpc.delete-subnet event for vpcd topology cleanup
+	s.publishSubnetEvent("vpc.delete-subnet", subnetID, subnetRecord.VpcId, subnetRecord.CidrBlock)
 
 	return &ec2.DeleteSubnetOutput{}, nil
 }
@@ -577,4 +595,47 @@ func (s *VPCServiceImpl) subnetRecordToEC2(record *SubnetRecord, availableIPs in
 	}
 
 	return subnet
+}
+
+// publishVPCEvent publishes a VPC lifecycle event to NATS for vpcd consumption.
+// This is fire-and-forget; errors are logged but do not fail the API response.
+func (s *VPCServiceImpl) publishVPCEvent(topic, vpcId, cidrBlock string, vni int64) {
+	if s.natsConn == nil {
+		return
+	}
+	evt := struct {
+		VpcId     string `json:"vpc_id"`
+		CidrBlock string `json:"cidr_block"`
+		VNI       int64  `json:"vni"`
+	}{VpcId: vpcId, CidrBlock: cidrBlock, VNI: vni}
+
+	data, err := json.Marshal(evt)
+	if err != nil {
+		slog.Error("Failed to marshal VPC event", "topic", topic, "err", err)
+		return
+	}
+	if err := s.natsConn.Publish(topic, data); err != nil {
+		slog.Error("Failed to publish VPC event", "topic", topic, "err", err)
+	}
+}
+
+// publishSubnetEvent publishes a subnet lifecycle event to NATS for vpcd consumption.
+func (s *VPCServiceImpl) publishSubnetEvent(topic, subnetId, vpcId, cidrBlock string) {
+	if s.natsConn == nil {
+		return
+	}
+	evt := struct {
+		SubnetId  string `json:"subnet_id"`
+		VpcId     string `json:"vpc_id"`
+		CidrBlock string `json:"cidr_block"`
+	}{SubnetId: subnetId, VpcId: vpcId, CidrBlock: cidrBlock}
+
+	data, err := json.Marshal(evt)
+	if err != nil {
+		slog.Error("Failed to marshal subnet event", "topic", topic, "err", err)
+		return
+	}
+	if err := s.natsConn.Publish(topic, data); err != nil {
+		slog.Error("Failed to publish subnet event", "topic", topic, "err", err)
+	}
 }
