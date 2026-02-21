@@ -991,6 +991,19 @@ func (d *Daemon) ClusterManager() error {
 			}
 		}
 
+		// Check OVN networking readiness
+		ovnHealth := CheckOVNHealth()
+		if ovnHealth.BrIntExists {
+			serviceHealth["br-int"] = "ok"
+		} else {
+			serviceHealth["br-int"] = "missing"
+		}
+		if ovnHealth.OVNControllerUp {
+			serviceHealth["ovn-controller"] = "ok"
+		} else {
+			serviceHealth["ovn-controller"] = "not_running"
+		}
+
 		response := config.NodeHealthResponse{
 			Node:          d.node,
 			Status:        "running",

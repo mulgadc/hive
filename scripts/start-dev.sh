@@ -186,6 +186,27 @@ else
     echo "✈️  Skipping build (HIVE_SKIP_BUILD=true)"
 fi
 
+# 0️⃣ Verify OVN networking readiness (non-blocking)
+echo ""
+echo "0️⃣  Checking OVN networking..."
+if command -v ovs-vsctl >/dev/null 2>&1; then
+    if ovs-vsctl br-exists br-int 2>/dev/null; then
+        echo "   ✅ br-int exists"
+    else
+        echo "   ⚠️  br-int not found — VPC networking will not work"
+        echo "   Run: ./scripts/setup-ovn.sh --management"
+    fi
+    if ovs-appctl -t ovn-controller version >/dev/null 2>&1; then
+        echo "   ✅ ovn-controller running"
+    else
+        echo "   ⚠️  ovn-controller not running — VPC networking will not work"
+        echo "   Run: ./scripts/setup-ovn.sh --management"
+    fi
+else
+    echo "   ⚠️  OVS not installed — VPC networking unavailable"
+    echo "   Run: make quickinstall && ./scripts/setup-ovn.sh --management"
+fi
+
 # 1️⃣ Start NATS server
 echo ""
 if has_service "nats"; then

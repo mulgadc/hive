@@ -85,3 +85,81 @@ func TapDeviceName(eniId string) string {
 func OVSIfaceID(eniId string) string {
 	return "port-" + eniId
 }
+
+// OVNHealthStatus reports the readiness of OVN networking on this compute node.
+type OVNHealthStatus struct {
+	BrIntExists     bool   `json:"br_int_exists"`
+	OVNControllerUp bool   `json:"ovn_controller_up"`
+	ChassisID       string `json:"chassis_id,omitempty"`
+	EncapIP         string `json:"encap_ip,omitempty"`
+	OVNRemote       string `json:"ovn_remote,omitempty"`
+}
+
+// CheckOVNHealth probes local OVS/OVN state to determine network readiness.
+func CheckOVNHealth() OVNHealthStatus {
+	status := OVNHealthStatus{}
+
+	// Check br-int exists
+	if err := exec.Command("ovs-vsctl", "br-exists", "br-int").Run(); err == nil {
+		status.BrIntExists = true
+	}
+
+	// Check ovn-controller is running via ovs-appctl (more reliable than pgrep)
+	if out, err := exec.Command("ovs-appctl", "-t", "ovn-controller", "version").CombinedOutput(); err == nil && len(out) > 0 {
+		status.OVNControllerUp = true
+	}
+
+	// Read chassis identity from OVS external_ids
+	if out, err := exec.Command("ovs-vsctl", "get", "Open_vSwitch", ".", "external_ids:system-id").CombinedOutput(); err == nil {
+		status.ChassisID = strings.Trim(strings.TrimSpace(string(out)), "\"")
+	}
+	if out, err := exec.Command("ovs-vsctl", "get", "Open_vSwitch", ".", "external_ids:ovn-encap-ip").CombinedOutput(); err == nil {
+		status.EncapIP = strings.Trim(strings.TrimSpace(string(out)), "\"")
+	}
+	if out, err := exec.Command("ovs-vsctl", "get", "Open_vSwitch", ".", "external_ids:ovn-remote").CombinedOutput(); err == nil {
+		status.OVNRemote = strings.Trim(strings.TrimSpace(string(out)), "\"")
+	}
+
+	return status
+}
+
+// SetupComputeNode configures OVS for OVN on this compute node.
+// It creates br-int with secure fail-mode and sets the OVN external_ids.
+func SetupComputeNode(chassisID, ovnRemote, encapIP string) error {
+	// Create br-int if it doesn't exist
+	if out, err := exec.Command("ovs-vsctl", "--may-exist", "add-br", "br-int").CombinedOutput(); err != nil {
+		return fmt.Errorf("create br-int: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+
+	// Set fail-mode=secure (preserves flows during ovn-controller restart)
+	if out, err := exec.Command("ovs-vsctl", "set", "Bridge", "br-int", "fail-mode=secure").CombinedOutput(); err != nil {
+		return fmt.Errorf("set br-int fail-mode: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+
+	// Disable in-band management (prevents OVS from adding its own flows)
+	if out, err := exec.Command("ovs-vsctl", "set", "Bridge", "br-int", "other-config:disable-in-band=true").CombinedOutput(); err != nil {
+		return fmt.Errorf("set br-int disable-in-band: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+
+	// Bring br-int up
+	if out, err := exec.Command("ip", "link", "set", "br-int", "up").CombinedOutput(); err != nil {
+		return fmt.Errorf("bring up br-int: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+
+	// Set OVN external_ids on the Open_vSwitch table
+	if out, err := exec.Command("ovs-vsctl", "set", "Open_vSwitch", ".",
+		fmt.Sprintf("external_ids:system-id=%s", chassisID),
+		fmt.Sprintf("external_ids:ovn-remote=%s", ovnRemote),
+		fmt.Sprintf("external_ids:ovn-encap-ip=%s", encapIP),
+		"external_ids:ovn-encap-type=geneve",
+	).CombinedOutput(); err != nil {
+		return fmt.Errorf("set OVN external_ids: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+
+	slog.Info("OVN compute node configured",
+		"chassis_id", chassisID,
+		"ovn_remote", ovnRemote,
+		"encap_ip", encapIP,
+	)
+	return nil
+}
