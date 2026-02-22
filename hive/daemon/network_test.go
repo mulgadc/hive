@@ -214,8 +214,8 @@ func TestGenerateDevMAC(t *testing.T) {
 	seen := make(map[string]bool)
 	for _, tt := range tests {
 		mac := generateDevMAC(tt.instanceId)
-		if !strings.HasPrefix(mac, "02:de:v0:") {
-			t.Errorf("generateDevMAC(%q) = %q, want prefix '02:de:v0:'", tt.instanceId, mac)
+		if !strings.HasPrefix(mac, "02:de:00:") {
+			t.Errorf("generateDevMAC(%q) = %q, want prefix '02:de:00:'", tt.instanceId, mac)
 		}
 		if seen[mac] {
 			t.Errorf("generateDevMAC(%q) = %q, duplicate MAC", tt.instanceId, mac)

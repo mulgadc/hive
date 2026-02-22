@@ -131,6 +131,21 @@ func getOrCreateKVBucket(js nats.JetStreamContext, bucketName string, history in
 	return kv, nil
 }
 
+// errKVNotReady is returned when the VPC service was initialized without NATS KV
+// (in-memory fallback mode). Callers receive an internal server error.
+var errKVNotReady = errors.New("VPC KV stores not initialized (in-memory fallback mode)")
+
+// ensureKVReady returns an error if any required KV store is nil.
+// This guards against nil pointer dereferences when the daemon fell back to
+// NewVPCServiceImpl (no NATS) but still receives VPC requests via queue group.
+func (s *VPCServiceImpl) ensureKVReady() error {
+	if s.vpcKV == nil || s.subnetKV == nil || s.vniKV == nil || s.eniKV == nil {
+		slog.Error("VPC service called without KV stores initialized")
+		return errKVNotReady
+	}
+	return nil
+}
+
 // nextVNI allocates the next VNI using atomic increment on the NATS KV counter
 func (s *VPCServiceImpl) nextVNI() (int64, error) {
 	entry, err := s.vniKV.Get(vniCounterKey)
@@ -163,6 +178,9 @@ func (s *VPCServiceImpl) nextVNI() (int64, error) {
 
 // CreateVpc creates a new VPC
 func (s *VPCServiceImpl) CreateVpc(input *ec2.CreateVpcInput) (*ec2.CreateVpcOutput, error) {
+	if err := s.ensureKVReady(); err != nil {
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
 	if input.CidrBlock == nil || *input.CidrBlock == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
@@ -227,6 +245,9 @@ func (s *VPCServiceImpl) CreateVpc(input *ec2.CreateVpcInput) (*ec2.CreateVpcOut
 
 // DeleteVpc deletes a VPC
 func (s *VPCServiceImpl) DeleteVpc(input *ec2.DeleteVpcInput) (*ec2.DeleteVpcOutput, error) {
+	if err := s.ensureKVReady(); err != nil {
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
 	if input.VpcId == nil || *input.VpcId == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
@@ -270,6 +291,9 @@ func (s *VPCServiceImpl) DeleteVpc(input *ec2.DeleteVpcInput) (*ec2.DeleteVpcOut
 
 // DescribeVpcs describes VPCs
 func (s *VPCServiceImpl) DescribeVpcs(input *ec2.DescribeVpcsInput) (*ec2.DescribeVpcsOutput, error) {
+	if err := s.ensureKVReady(); err != nil {
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
 	var vpcs []*ec2.Vpc
 
 	vpcIDs := make(map[string]bool)
@@ -328,6 +352,9 @@ func (s *VPCServiceImpl) DescribeVpcs(input *ec2.DescribeVpcsInput) (*ec2.Descri
 
 // CreateSubnet creates a new subnet within a VPC
 func (s *VPCServiceImpl) CreateSubnet(input *ec2.CreateSubnetInput) (*ec2.CreateSubnetOutput, error) {
+	if err := s.ensureKVReady(); err != nil {
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
 	if input.VpcId == nil || *input.VpcId == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
@@ -452,6 +479,9 @@ func (s *VPCServiceImpl) CreateSubnet(input *ec2.CreateSubnetInput) (*ec2.Create
 
 // DeleteSubnet deletes a subnet
 func (s *VPCServiceImpl) DeleteSubnet(input *ec2.DeleteSubnetInput) (*ec2.DeleteSubnetOutput, error) {
+	if err := s.ensureKVReady(); err != nil {
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
 	if input.SubnetId == nil || *input.SubnetId == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
@@ -480,6 +510,9 @@ func (s *VPCServiceImpl) DeleteSubnet(input *ec2.DeleteSubnetInput) (*ec2.Delete
 
 // DescribeSubnets describes subnets
 func (s *VPCServiceImpl) DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error) {
+	if err := s.ensureKVReady(); err != nil {
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
 	var subnets []*ec2.Subnet
 
 	subnetIDs := make(map[string]bool)

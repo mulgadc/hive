@@ -104,7 +104,7 @@ OVN provides the virtual networking layer for VPC instances. This step configure
 ./scripts/setup-ovn.sh --management
 ```
 
-This creates the `br-int` integration bridge, starts `ovn-controller`, starts the OVN central databases (NB DB + SB DB), configures Geneve tunnel endpoints, and enables IP forwarding. Hive will not start without this step.
+This creates the `br-int` integration bridge, starts `ovn-controller`, starts the OVN central databases (NB DB + SB DB), configures Geneve tunnel endpoints, enables IP forwarding, and creates a sudoers rule so the Hive daemon can manage tap devices and OVS ports without running as root. Hive will not start without this step.
 
 ## Init
 

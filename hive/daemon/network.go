@@ -106,13 +106,14 @@ func OVSIfaceID(eniId string) string {
 }
 
 // generateDevMAC creates a locally-administered unicast MAC for the dev/hostfwd NIC.
-// Uses prefix 02:de:v0 to distinguish from ENI MACs (02:00:00).
+// Uses prefix 02:de:00 to distinguish from ENI MACs (02:00:00).
+// All octets must be valid hex for QEMU's virtio-net-pci mac property.
 func generateDevMAC(instanceId string) string {
 	h := uint32(0)
 	for _, c := range instanceId {
 		h = h*31 + uint32(c)
 	}
-	return fmt.Sprintf("02:de:v0:%02x:%02x:%02x", (h>>16)&0xff, (h>>8)&0xff, h&0xff)
+	return fmt.Sprintf("02:de:00:%02x:%02x:%02x", (h>>16)&0xff, (h>>8)&0xff, h&0xff)
 }
 
 // OVNHealthStatus reports the readiness of OVN networking on this compute node.

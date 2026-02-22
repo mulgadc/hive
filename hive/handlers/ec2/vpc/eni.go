@@ -37,6 +37,9 @@ type ENIRecord struct {
 
 // CreateNetworkInterface creates a new ENI in the specified subnet
 func (s *VPCServiceImpl) CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInput) (*ec2.CreateNetworkInterfaceOutput, error) {
+	if err := s.ensureKVReady(); err != nil {
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
 	if input.SubnetId == nil || *input.SubnetId == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
@@ -120,6 +123,9 @@ func (s *VPCServiceImpl) CreateNetworkInterface(input *ec2.CreateNetworkInterfac
 
 // DeleteNetworkInterface deletes an ENI
 func (s *VPCServiceImpl) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error) {
+	if err := s.ensureKVReady(); err != nil {
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
 	if input.NetworkInterfaceId == nil || *input.NetworkInterfaceId == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
@@ -161,6 +167,9 @@ func (s *VPCServiceImpl) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfac
 
 // DescribeNetworkInterfaces lists ENIs with optional filters
 func (s *VPCServiceImpl) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error) {
+	if err := s.ensureKVReady(); err != nil {
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
 	var enis []*ec2.NetworkInterface
 
 	eniIDs := make(map[string]bool)
@@ -247,6 +256,9 @@ func (s *VPCServiceImpl) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInt
 
 // AttachENI marks an ENI as attached to an instance (internal use by RunInstances)
 func (s *VPCServiceImpl) AttachENI(eniId, instanceId string, deviceIndex int64) (string, error) {
+	if err := s.ensureKVReady(); err != nil {
+		return "", errors.New(awserrors.ErrorServerInternal)
+	}
 	entry, err := s.eniKV.Get(eniId)
 	if err != nil {
 		return "", errors.New(awserrors.ErrorInvalidNetworkInterfaceIDNotFound)
@@ -281,6 +293,9 @@ func (s *VPCServiceImpl) AttachENI(eniId, instanceId string, deviceIndex int64) 
 
 // DetachENI marks an ENI as detached from an instance (internal use by TerminateInstances)
 func (s *VPCServiceImpl) DetachENI(eniId string) error {
+	if err := s.ensureKVReady(); err != nil {
+		return errors.New(awserrors.ErrorServerInternal)
+	}
 	entry, err := s.eniKV.Get(eniId)
 	if err != nil {
 		return errors.New(awserrors.ErrorInvalidNetworkInterfaceIDNotFound)

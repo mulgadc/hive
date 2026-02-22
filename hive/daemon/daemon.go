@@ -1796,11 +1796,12 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 				instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
 					Value: fmt.Sprintf("user,id=dev0,hostfwd=tcp:%s:%s-:22", bindIP, sshDebugPort),
 				})
+				devMac := generateDevMAC(instance.ID)
 				instance.Config.Devices = append(instance.Config.Devices, vm.Device{
-					Value: "virtio-net-pci,netdev=dev0",
+					Value: fmt.Sprintf("virtio-net-pci,netdev=dev0,mac=%s", devMac),
 				})
 				slog.Info("DEV_NETWORKING: added dev NIC with SSH hostfwd",
-					"bindIP", bindIP, "port", sshDebugPort, "instanceId", instance.ID)
+					"bindIP", bindIP, "port", sshDebugPort, "mac", devMac, "instanceId", instance.ID)
 			}
 		}
 	} else {
