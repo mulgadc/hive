@@ -19,6 +19,18 @@ func (c *LiveOVNClient) transactOps(ctx context.Context, ops []ovsdb.Operation) 
 		return err
 	}
 	_, err = ovsdb.CheckOperationResults(results, ops)
+	if err != nil {
+		// Log detailed per-operation errors for debugging
+		for i, r := range results {
+			if r.Error != "" {
+				opTable := ""
+				if i < len(ops) {
+					opTable = fmt.Sprintf("%s on %s", ops[i].Op, ops[i].Table)
+				}
+				slog.Error("OVSDB operation failed", "index", i, "op", opTable, "error", r.Error, "details", r.Details)
+			}
+		}
+	}
 	return err
 }
 
