@@ -64,31 +64,38 @@ func NewTopologyHandler(ovn OVNClient) *TopologyHandler {
 }
 
 // Subscribe registers NATS subscriptions for VPC lifecycle topics.
-// All vpcd instances receive every event (no queue group) because OVN topology
-// operations are centralized on the NB DB. Handlers are idempotent — duplicate
-// creates on multiple nodes produce harmless "already exists" warnings.
+// Global topology events (VPC/subnet/IGW) use a queue group so exactly one vpcd
+// instance handles each event — all instances connect to the same OVN NB DB, so
+// any one can process these. Per-node port events use regular subscriptions so
+// all instances see them (future: route to the specific node).
 func (h *TopologyHandler) Subscribe(nc *nats.Conn) ([]*nats.Subscription, error) {
 	type sub struct {
 		topic   string
 		handler nats.MsgHandler
+		queue   bool // true = use queue group (one handler), false = fan-out (all handlers)
 	}
 
 	subs := []sub{
-		{TopicVPCCreate, h.handleVPCCreate},
-		{TopicVPCDelete, h.handleVPCDelete},
-		{TopicSubnetCreate, h.handleSubnetCreate},
-		{TopicSubnetDelete, h.handleSubnetDelete},
-		{TopicCreatePort, h.handleCreatePort},
-		{TopicDeletePort, h.handleDeletePort},
-		{TopicIGWAttach, h.handleIGWAttach},
-		{TopicIGWDetach, h.handleIGWDetach},
+		{TopicVPCCreate, h.handleVPCCreate, true},
+		{TopicVPCDelete, h.handleVPCDelete, true},
+		{TopicSubnetCreate, h.handleSubnetCreate, true},
+		{TopicSubnetDelete, h.handleSubnetDelete, true},
+		{TopicCreatePort, h.handleCreatePort, true},
+		{TopicDeletePort, h.handleDeletePort, true},
+		{TopicIGWAttach, h.handleIGWAttach, true},
+		{TopicIGWDetach, h.handleIGWDetach, true},
 	}
 
 	var result []*nats.Subscription
 	for _, s := range subs {
-		natsSub, err := nc.Subscribe(s.topic, s.handler)
+		var natsSub *nats.Subscription
+		var err error
+		if s.queue {
+			natsSub, err = nc.QueueSubscribe(s.topic, "vpcd-workers", s.handler)
+		} else {
+			natsSub, err = nc.Subscribe(s.topic, s.handler)
+		}
 		if err != nil {
-			// Unsubscribe any already-registered subs
 			for _, r := range result {
 				_ = r.Unsubscribe()
 			}
