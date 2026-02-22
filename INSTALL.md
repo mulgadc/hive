@@ -25,7 +25,7 @@ git clone https://github.com/mulgadc/hive.git
 
 ### Quick Install
 
-To bootstrap the dependencies of Hive in one simple step (QEMU, Go, AWS CLI):
+To bootstrap all dependencies of Hive in one step (QEMU, Go, AWS CLI, OVN/OVS):
 
 ```bash
 sudo make -C hive quickinstall
@@ -48,23 +48,13 @@ sudo apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu
 
 #### OVN (Required — VPC Networking)
 
-OVN and Open vSwitch are required for VPC networking (virtual switches, routers, DHCP, Geneve overlay). Hive will not start without OVN configured.
+OVN and Open vSwitch are required for VPC networking (virtual switches, routers, DHCP, Geneve overlay).
 
 ```bash
 sudo apt install ovn-central ovn-host openvswitch-switch
 ```
 
-After installing, run the setup script on each node:
-
-```bash
-# Single-node or management node (runs OVN central + compute):
-./scripts/setup-ovn.sh --management
-
-# Compute-only node (connects to management node's OVN DBs):
-./scripts/setup-ovn.sh --ovn-remote=tcp://<management-ip>:6642 --encap-ip=<this-node-ip>
-```
-
-This creates `br-int`, starts `ovn-controller`, configures Geneve tunnel endpoints, and enables IP forwarding. See `./scripts/setup-ovn.sh --help` for all options.
+**Note:** The OVN packages must be installed before proceeding, but the setup and configuration step (`setup-ovn.sh`) is covered later — see the [Setup OVN](#setup-ovn) section below.
 
 Ensure the Go toolkit is installed for version 1.25.7 or higher. Recommended to install the latest directly from [https://go.dev/dl/](https://go.dev/dl/).
 
@@ -105,6 +95,16 @@ Once complete, confirm `./bin/hive` exists and is executable.
 # Single Node Installation
 
 For rapid development and testing, `hive` can be installed locally as a single node instance. Follow the instructions below for a complete working environment.
+
+## Setup OVN
+
+OVN provides the virtual networking layer for VPC instances. This step configures OVS bridges, starts the OVN controller, and enables Geneve tunnel support. For a single-node install, run the setup script with `--management` to start all OVN services locally:
+
+```bash
+./scripts/setup-ovn.sh --management
+```
+
+This creates the `br-int` integration bridge, starts `ovn-controller`, starts the OVN central databases (NB DB + SB DB), configures Geneve tunnel endpoints, and enables IP forwarding. Hive will not start without this step.
 
 ## Init
 
@@ -688,7 +688,17 @@ export HIVE_NODE2=127.0.0.2
 export HIVE_NODE3=127.0.0.3
 ```
 
-#### 2. Form the Cluster
+#### 2. Setup OVN
+
+For simulated mode on a single machine, run the setup script once with `--management`:
+
+```bash
+./scripts/setup-ovn.sh --management
+```
+
+This starts OVN central services and configures the local compute node. All three simulated nodes share the same OVS/OVN instance on the host.
+
+#### 3. Form the Cluster
 
 The formation process requires running init and join commands concurrently. The init node blocks until all expected nodes have joined.
 
@@ -739,7 +749,7 @@ This starts a formation server on `$HIVE_NODE1:4432` and waits for 2 more nodes 
 
 All three processes will exit with a cluster summary once formation is complete.
 
-#### 3. Start Services
+#### 4. Start Services
 
 Start services on each node (in separate terminals or background):
 
@@ -785,7 +795,48 @@ export HIVE_NODE2=192.168.1.11
 export HIVE_NODE3=192.168.1.12
 ```
 
-#### 2. Form the Cluster
+#### 2. Setup OVN
+
+OVN must be configured on every server before forming the cluster. Server 1 runs OVN central (the NB and SB databases), so it must be set up first. Servers 2 and 3 connect to server 1's OVN databases as compute nodes.
+
+**Server 1 — OVN central + compute (run first):**
+
+```bash
+cd ~/Development/mulga/hive
+./scripts/setup-ovn.sh --management --encap-ip=$HIVE_NODE1
+```
+
+**Server 2 — Compute node (after server 1 is ready):**
+
+```bash
+cd ~/Development/mulga/hive
+./scripts/setup-ovn.sh --ovn-remote=tcp:$HIVE_NODE1:6642 --encap-ip=$HIVE_NODE2
+```
+
+**Server 3 — Compute node (after server 1 is ready):**
+
+```bash
+cd ~/Development/mulga/hive
+./scripts/setup-ovn.sh --ovn-remote=tcp:$HIVE_NODE1:6642 --encap-ip=$HIVE_NODE3
+```
+
+Verify OVN is running on all servers:
+
+```bash
+sudo ovs-appctl -t ovn-controller version
+```
+
+On server 1, confirm all chassis have registered:
+
+```bash
+sudo ovn-sbctl show
+```
+
+You should see 3 chassis entries, one per server, each with a Geneve encap IP.
+
+If your servers have a dedicated data/overlay NIC separate from the management NIC, use the data NIC's IP for `--encap-ip` instead — see [Dual NIC Configuration](#dual-nic-configuration) below.
+
+#### 3. Form the Cluster
 
 **Server 1 — Initialize the cluster:**
 
@@ -838,7 +889,7 @@ cd ~/Development/mulga/hive
 
 All three processes will exit with a cluster summary once formation is complete.
 
-#### 3. Start Services
+#### 4. Start Services
 
 After formation completes, start services on **all servers**:
 
