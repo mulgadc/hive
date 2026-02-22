@@ -63,6 +63,20 @@ instance-id: {{.InstanceID}}
 local-hostname: {{.Hostname}}
 `
 
+// cloudInitNetworkConfig enables DHCP on all NICs. Without this, Ubuntu cloud
+// images only configure the first NIC and the guest may have no IPv4 connectivity.
+// This is essential for DEV_NETWORKING dual-NIC setups (TAP + hostfwd) and
+// also ensures OVN DHCP works reliably on the TAP interface.
+const cloudInitNetworkConfig = `network:
+  version: 2
+  ethernets:
+    allnics:
+      match:
+        name: "en*"
+      dhcp4: true
+      dhcp-identifier: mac
+`
+
 type CloudInitData struct {
 	Username            string
 	SSHKey              string
@@ -598,6 +612,13 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 	err = writer.AddFile(&buf, "meta-data")
 	if err != nil {
 		slog.Error("failed to add file", "err", err)
+		return errors.New(awserrors.ErrorServerInternal)
+	}
+
+	// Add network-config (enables DHCP on all NICs)
+	err = writer.AddFile(strings.NewReader(cloudInitNetworkConfig), "network-config")
+	if err != nil {
+		slog.Error("failed to add network-config file", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 

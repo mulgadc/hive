@@ -69,8 +69,8 @@ bootstrap_ovn_docker() {
         external_ids:ovn-encap-ip="127.0.0.1" \
         external_ids:ovn-encap-type="geneve"
 
-    # Start ovn-controller
-    ovn-controller --pidfile=/var/run/ovn/ovn-controller.pid \
+    # Start ovn-controller with pidfile in OVS rundir
+    ovn-controller --pidfile=/var/run/openvswitch/ovn-controller.pid \
         --detach --log-file=/var/log/ovn/ovn-controller.log
 
     # Apply sysctl for overlay networking
@@ -81,6 +81,28 @@ bootstrap_ovn_docker() {
     # Load geneve kernel module
     modprobe geneve 2>/dev/null || true
 
+    # Wait for ovn-controller to become responsive.
+    # ovn-controller creates its ctl socket at /var/run/ovn/ovn-controller.PID.ctl
+    # but ovs-appctl -t ovn-controller looks in /var/run/openvswitch/, so we
+    # symlink it once the socket appears.
+    echo "  Waiting for ovn-controller to start..."
+    local ovn_pid
+    ovn_pid=$(cat /var/run/openvswitch/ovn-controller.pid 2>/dev/null || true)
+    local attempt=0
+    while [ $attempt -lt 15 ]; do
+        # Create symlink once the ctl socket appears
+        if [ -n "$ovn_pid" ] && [ -S "/var/run/ovn/ovn-controller.${ovn_pid}.ctl" ] \
+            && [ ! -e "/var/run/openvswitch/ovn-controller.${ovn_pid}.ctl" ]; then
+            ln -sf "/var/run/ovn/ovn-controller.${ovn_pid}.ctl" \
+                "/var/run/openvswitch/ovn-controller.${ovn_pid}.ctl"
+        fi
+        if ovs-appctl -t ovn-controller version >/dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+
     # Verify
     if ovs-vsctl br-exists br-int && ovs-appctl -t ovn-controller version >/dev/null 2>&1; then
         echo "  OVN/OVS bootstrap complete (br-int up, ovn-controller running)"
@@ -88,6 +110,9 @@ bootstrap_ovn_docker() {
         echo "  ERROR: OVN bootstrap failed"
         ovs-vsctl br-exists br-int && echo "  br-int: OK" || echo "  br-int: MISSING"
         ovs-appctl -t ovn-controller version >/dev/null 2>&1 && echo "  ovn-controller: OK" || echo "  ovn-controller: NOT RUNNING"
+        # Dump ovn-controller log for debugging
+        echo "  --- ovn-controller.log ---"
+        cat /var/log/ovn/ovn-controller.log 2>/dev/null | tail -20 || true
         return 1
     fi
 }

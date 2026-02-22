@@ -1150,6 +1150,22 @@ fi
 
 echo "  Crash recovery tests passed"
 
+# Terminate Phase 5 instances before VPC tests to free memory
+echo ""
+echo "Cleaning up Phase 5 instances before VPC tests..."
+for instance_id in "${INSTANCE_IDS[@]}"; do
+    state=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
+        --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "unknown")
+    if [ "$state" != "terminated" ] && [ "$state" != "unknown" ]; then
+        $AWS_EC2 terminate-instances --instance-ids "$instance_id" > /dev/null 2>&1 || true
+    fi
+done
+# Wait for all to terminate
+for instance_id in "${INSTANCE_IDS[@]}"; do
+    wait_for_instance_state "$instance_id" "terminated" 30 || true
+done
+echo "  Phase 5 instances terminated"
+
 # Phase 5c: VPC Networking
 echo ""
 echo "Phase 5c: VPC Networking"
