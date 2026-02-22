@@ -256,6 +256,17 @@ func (m *MockOVNClient) DeleteLogicalRouterPort(_ context.Context, routerName st
 	return nil
 }
 
+func (m *MockOVNClient) GetLogicalRouterPort(_ context.Context, name string) (*nbdb.LogicalRouterPort, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lrp, exists := m.routerPorts[name]
+	if !exists {
+		return nil, fmt.Errorf("logical router port %q not found", name)
+	}
+	result := *lrp
+	return &result, nil
+}
+
 // DHCP Options
 
 func (m *MockOVNClient) CreateDHCPOptions(_ context.Context, opts *nbdb.DHCPOptions) (string, error) {

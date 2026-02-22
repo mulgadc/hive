@@ -39,6 +39,7 @@ type OVNClient interface {
 	// Logical Router Port
 	CreateLogicalRouterPort(ctx context.Context, routerName string, lrp *nbdb.LogicalRouterPort) error
 	DeleteLogicalRouterPort(ctx context.Context, routerName string, portName string) error
+	GetLogicalRouterPort(ctx context.Context, name string) (*nbdb.LogicalRouterPort, error)
 
 	// DHCP Options
 	CreateDHCPOptions(ctx context.Context, opts *nbdb.DHCPOptions) (string, error)
@@ -118,7 +119,10 @@ func (c *LiveOVNClient) CreateLogicalSwitch(ctx context.Context, ls *nbdb.Logica
 }
 
 func (c *LiveOVNClient) DeleteLogicalSwitch(ctx context.Context, name string) error {
-	ls := &nbdb.LogicalSwitch{Name: name}
+	ls, err := c.GetLogicalSwitch(ctx, name)
+	if err != nil {
+		return fmt.Errorf("delete logical switch lookup: %w", err)
+	}
 	ops, err := c.client.Where(ls).Delete()
 	if err != nil {
 		return fmt.Errorf("delete logical switch ops: %w", err)
@@ -160,8 +164,13 @@ func (c *LiveOVNClient) CreateLogicalSwitchPort(ctx context.Context, switchName 
 		return fmt.Errorf("create logical switch port ops: %w", err)
 	}
 
+	// Look up the switch to get its UUID for the Where clause
+	ls, err := c.GetLogicalSwitch(ctx, switchName)
+	if err != nil {
+		return fmt.Errorf("get logical switch for port add: %w", err)
+	}
+
 	// Add the port to the switch's ports set
-	ls := &nbdb.LogicalSwitch{Name: switchName}
 	mutateOps, err := c.client.Where(ls).Mutate(ls, model.Mutation{
 		Field:   &ls.Ports,
 		Mutator: "insert",
@@ -180,10 +189,19 @@ func (c *LiveOVNClient) CreateLogicalSwitchPort(ctx context.Context, switchName 
 }
 
 func (c *LiveOVNClient) DeleteLogicalSwitchPort(ctx context.Context, switchName string, portName string) error {
-	lsp := &nbdb.LogicalSwitchPort{Name: portName}
+	// Look up the port to get its UUID
+	lsp, err := c.GetLogicalSwitchPort(ctx, portName)
+	if err != nil {
+		return fmt.Errorf("get logical switch port for delete: %w", err)
+	}
+
+	// Look up the switch to get its UUID
+	ls, err := c.GetLogicalSwitch(ctx, switchName)
+	if err != nil {
+		return fmt.Errorf("get logical switch for port delete: %w", err)
+	}
 
 	// Remove the port from the switch's ports set
-	ls := &nbdb.LogicalSwitch{Name: switchName}
 	mutateOps, err := c.client.Where(ls).Mutate(ls, model.Mutation{
 		Field:   &ls.Ports,
 		Mutator: "delete",
@@ -222,6 +240,14 @@ func (c *LiveOVNClient) GetLogicalSwitchPort(ctx context.Context, name string) (
 }
 
 func (c *LiveOVNClient) UpdateLogicalSwitchPort(ctx context.Context, lsp *nbdb.LogicalSwitchPort) error {
+	// Ensure we have the UUID for the Where clause
+	if lsp.UUID == "" {
+		existing, err := c.GetLogicalSwitchPort(ctx, lsp.Name)
+		if err != nil {
+			return fmt.Errorf("get logical switch port for update: %w", err)
+		}
+		lsp.UUID = existing.UUID
+	}
 	ops, err := c.client.Where(lsp).Update(lsp)
 	if err != nil {
 		return fmt.Errorf("update logical switch port ops: %w", err)
@@ -246,7 +272,10 @@ func (c *LiveOVNClient) CreateLogicalRouter(ctx context.Context, lr *nbdb.Logica
 }
 
 func (c *LiveOVNClient) DeleteLogicalRouter(ctx context.Context, name string) error {
-	lr := &nbdb.LogicalRouter{Name: name}
+	lr, err := c.GetLogicalRouter(ctx, name)
+	if err != nil {
+		return fmt.Errorf("delete logical router lookup: %w", err)
+	}
 	ops, err := c.client.Where(lr).Delete()
 	if err != nil {
 		return fmt.Errorf("delete logical router ops: %w", err)
@@ -287,7 +316,12 @@ func (c *LiveOVNClient) CreateLogicalRouterPort(ctx context.Context, routerName 
 		return fmt.Errorf("create logical router port ops: %w", err)
 	}
 
-	lr := &nbdb.LogicalRouter{Name: routerName}
+	// Look up the router to get its UUID for the Where clause
+	lr, err := c.GetLogicalRouter(ctx, routerName)
+	if err != nil {
+		return fmt.Errorf("get logical router for port add: %w", err)
+	}
+
 	mutateOps, err := c.client.Where(lr).Mutate(lr, model.Mutation{
 		Field:   &lr.Ports,
 		Mutator: "insert",
@@ -306,9 +340,18 @@ func (c *LiveOVNClient) CreateLogicalRouterPort(ctx context.Context, routerName 
 }
 
 func (c *LiveOVNClient) DeleteLogicalRouterPort(ctx context.Context, routerName string, portName string) error {
-	lrp := &nbdb.LogicalRouterPort{Name: portName}
+	// Look up the port to get its UUID
+	lrp, err := c.GetLogicalRouterPort(ctx, portName)
+	if err != nil {
+		return fmt.Errorf("get logical router port for delete: %w", err)
+	}
 
-	lr := &nbdb.LogicalRouter{Name: routerName}
+	// Look up the router to get its UUID
+	lr, err := c.GetLogicalRouter(ctx, routerName)
+	if err != nil {
+		return fmt.Errorf("get logical router for port delete: %w", err)
+	}
+
 	mutateOps, err := c.client.Where(lr).Mutate(lr, model.Mutation{
 		Field:   &lr.Ports,
 		Mutator: "delete",
@@ -329,6 +372,20 @@ func (c *LiveOVNClient) DeleteLogicalRouterPort(ctx context.Context, routerName 
 		return fmt.Errorf("delete logical router port transact: %w", err)
 	}
 	return nil
+}
+
+func (c *LiveOVNClient) GetLogicalRouterPort(ctx context.Context, name string) (*nbdb.LogicalRouterPort, error) {
+	var ports []nbdb.LogicalRouterPort
+	err := c.client.WhereCache(func(lrp *nbdb.LogicalRouterPort) bool {
+		return lrp.Name == name
+	}).List(ctx, &ports)
+	if err != nil {
+		return nil, fmt.Errorf("get logical router port: %w", err)
+	}
+	if len(ports) == 0 {
+		return nil, fmt.Errorf("logical router port %q not found", name)
+	}
+	return &ports[0], nil
 }
 
 func (c *LiveOVNClient) CreateDHCPOptions(ctx context.Context, opts *nbdb.DHCPOptions) (string, error) {
@@ -402,7 +459,11 @@ func (c *LiveOVNClient) AddNAT(ctx context.Context, routerName string, nat *nbdb
 		return fmt.Errorf("create NAT ops: %w", err)
 	}
 
-	lr := &nbdb.LogicalRouter{Name: routerName}
+	lr, err := c.GetLogicalRouter(ctx, routerName)
+	if err != nil {
+		return fmt.Errorf("get logical router for NAT add: %w", err)
+	}
+
 	mutateOps, err := c.client.Where(lr).Mutate(lr, model.Mutation{
 		Field:   &lr.NAT,
 		Mutator: "insert",
@@ -434,7 +495,11 @@ func (c *LiveOVNClient) DeleteNAT(ctx context.Context, routerName string, natTyp
 	}
 
 	nat := &nats[0]
-	lr := &nbdb.LogicalRouter{Name: routerName}
+	lr, err := c.GetLogicalRouter(ctx, routerName)
+	if err != nil {
+		return fmt.Errorf("get logical router for NAT delete: %w", err)
+	}
+
 	mutateOps, err := c.client.Where(lr).Mutate(lr, model.Mutation{
 		Field:   &lr.NAT,
 		Mutator: "delete",
@@ -463,7 +528,11 @@ func (c *LiveOVNClient) AddStaticRoute(ctx context.Context, routerName string, r
 		return fmt.Errorf("create static route ops: %w", err)
 	}
 
-	lr := &nbdb.LogicalRouter{Name: routerName}
+	lr, err := c.GetLogicalRouter(ctx, routerName)
+	if err != nil {
+		return fmt.Errorf("get logical router for route add: %w", err)
+	}
+
 	mutateOps, err := c.client.Where(lr).Mutate(lr, model.Mutation{
 		Field:   &lr.StaticRoutes,
 		Mutator: "insert",
@@ -495,7 +564,11 @@ func (c *LiveOVNClient) DeleteStaticRoute(ctx context.Context, routerName string
 	}
 
 	route := &routes[0]
-	lr := &nbdb.LogicalRouter{Name: routerName}
+	lr, err := c.GetLogicalRouter(ctx, routerName)
+	if err != nil {
+		return fmt.Errorf("get logical router for route delete: %w", err)
+	}
+
 	mutateOps, err := c.client.Where(lr).Mutate(lr, model.Mutation{
 		Field:   &lr.StaticRoutes,
 		Mutator: "delete",
