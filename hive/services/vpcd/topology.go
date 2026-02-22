@@ -64,7 +64,9 @@ func NewTopologyHandler(ovn OVNClient) *TopologyHandler {
 }
 
 // Subscribe registers NATS subscriptions for VPC lifecycle topics.
-// Uses queue group "vpcd-workers" for load balancing across vpcd instances.
+// All vpcd instances receive every event (no queue group) because OVN topology
+// operations are centralized on the NB DB. Handlers are idempotent — duplicate
+// creates on multiple nodes produce harmless "already exists" warnings.
 func (h *TopologyHandler) Subscribe(nc *nats.Conn) ([]*nats.Subscription, error) {
 	type sub struct {
 		topic   string
@@ -84,7 +86,7 @@ func (h *TopologyHandler) Subscribe(nc *nats.Conn) ([]*nats.Subscription, error)
 
 	var result []*nats.Subscription
 	for _, s := range subs {
-		natsSub, err := nc.QueueSubscribe(s.topic, "vpcd-workers", s.handler)
+		natsSub, err := nc.Subscribe(s.topic, s.handler)
 		if err != nil {
 			// Unsubscribe any already-registered subs
 			for _, r := range result {

@@ -65,6 +65,15 @@ func (d *Daemon) handleShutdownGate(msg *nats.Msg) {
 		}
 	}
 
+	// Stop vpcd (VPC daemon)
+	if d.config.HasService("vpcd") {
+		if err := utils.StopProcess("vpcd"); err != nil {
+			slog.Warn("Failed to stop vpcd", "error", err)
+		} else {
+			stopped = append(stopped, "vpcd")
+		}
+	}
+
 	// Set shuttingDown flag so daemon rejects new work
 	d.shuttingDown.Store(true)
 
