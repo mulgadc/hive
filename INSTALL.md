@@ -265,9 +265,73 @@ Next, verify available disk images to confirm the import was successful.
 aws ec2 describe-images --image-ids $HIVE_AMI
 ```
 
+## Create VPC and Subnet
+
+Every EC2 instance runs inside a VPC (Virtual Private Cloud) with an isolated virtual network. Hive creates a default VPC automatically during initialization, but you can also create your own.
+
+### Create a VPC
+
+```bash
+aws ec2 create-vpc --cidr-block 10.200.0.0/16
+```
+
+```json
+{
+  "Vpc": {
+    "VpcId": "vpc-1035bd70d9bc10b06",
+    "CidrBlock": "10.200.0.0/16",
+    "State": "available",
+    "IsDefault": false
+  }
+}
+```
+
+Export the VPC ID:
+
+```bash
+export HIVE_VPC="vpc-XXX"
+```
+
+### Create a Subnet
+
+Create a subnet within the VPC. All instances launched into this subnet will receive a private IP address from its CIDR range via DHCP.
+
+```bash
+aws ec2 create-subnet --vpc-id $HIVE_VPC --cidr-block 10.200.1.0/24
+```
+
+```json
+{
+  "Subnet": {
+    "SubnetId": "subnet-6e7f829e3a4b1c5d0",
+    "VpcId": "vpc-1035bd70d9bc10b06",
+    "CidrBlock": "10.200.1.0/24",
+    "AvailableIpAddressCount": 249,
+    "State": "available"
+  }
+}
+```
+
+Export the Subnet ID — this is required when launching instances:
+
+```bash
+export HIVE_SUBNET="subnet-XXX"
+```
+
+### Verify VPC Networking
+
+Confirm the VPC and subnet were created:
+
+```bash
+aws ec2 describe-vpcs
+aws ec2 describe-subnets
+```
+
+Behind the scenes, Hive's `vpcd` service translates these into OVN topology: the VPC becomes a logical router, the subnet becomes a logical switch with DHCP options, and each instance launched into the subnet gets an OVN port with automatic IP assignment.
+
 ## Run Instance
 
-Once Hive is successfully installed and bootstrapped with a system AMI and SSH keys, proceed to run an instance.
+Once Hive is successfully installed and bootstrapped with a system AMI, SSH keys, and a VPC subnet, proceed to run an instance.
 
 ### Query Instance Types
 
@@ -317,19 +381,18 @@ export HIVE_INSTANCE="t3.small"
 
 ### Run Instance
 
-Next, launch a new instance, note `hive-key` is the SSH key specified in the previous stage.
+Next, launch a new instance. The `--subnet-id` places the instance into your VPC subnet, where it will receive a private IP address via DHCP. The `hive-key` is the SSH key specified in the previous stage.
 
 ```bash
 aws ec2 run-instances \
   --image-id $HIVE_AMI \
   --instance-type $HIVE_INSTANCE \
   --key-name hive-key \
-  --security-group-ids sg-0123456789abcdef0 \
-  --subnet-id subnet-6e7f829e \
+  --subnet-id $HIVE_SUBNET \
   --count 1
 ```
 
-A sample response is below from the `RunInstance` request, note the `InstanceId` attribute:
+A sample response is below from the `RunInstance` request. Note the `InstanceId` and `PrivateIpAddress` — the instance has been assigned an IP from the subnet's CIDR range:
 
 ```json
 {
@@ -343,9 +406,26 @@ A sample response is below from the `RunInstance` request, note the `InstanceId`
         "Code": 0,
         "Name": "pending"
       },
+      "PrivateIpAddress": "10.200.1.5",
+      "SubnetId": "subnet-6e7f829e3a4b1c5d0",
+      "VpcId": "vpc-1035bd70d9bc10b06",
       "KeyName": "hive-key",
       "InstanceType": "t3.micro",
-      "LaunchTime": "2025-11-12T13:07:47.548000+00:00"
+      "LaunchTime": "2025-11-12T13:07:47.548000+00:00",
+      "NetworkInterfaces": [
+        {
+          "NetworkInterfaceId": "eni-a1b2c3d4e5f6g7h8i",
+          "PrivateIpAddress": "10.200.1.5",
+          "MacAddress": "02:00:00:1a:2b:3c",
+          "SubnetId": "subnet-6e7f829e3a4b1c5d0",
+          "VpcId": "vpc-1035bd70d9bc10b06",
+          "Status": "in-use",
+          "Attachment": {
+            "DeviceIndex": 0,
+            "Status": "attached"
+          }
+        }
+      ]
     }
   ]
 }
@@ -365,7 +445,7 @@ Next, validate the running instance is ready.
 aws ec2 describe-instances --instance-ids $INSTANCE_ID
 ```
 
-Confirm the `State.Name` attribute is set as `running`.
+Confirm the `State.Name` attribute is set as `running` and the instance has a `PrivateIpAddress` assigned from the subnet.
 
 ```json
 {
@@ -381,6 +461,9 @@ Confirm the `State.Name` attribute is set as `running`.
             "Code": 16,
             "Name": "running"
           },
+          "PrivateIpAddress": "10.200.1.5",
+          "SubnetId": "subnet-6e7f829e3a4b1c5d0",
+          "VpcId": "vpc-1035bd70d9bc10b06",
           "KeyName": "hive-key",
           "InstanceType": "t3.micro",
           "LaunchTime": "2025-11-12T13:07:47.548000+00:00"
@@ -829,12 +912,62 @@ export AWS_PROFILE=hive
 
 ## Using the Cluster
 
-Connect to any node's AWS Gateway:
+Connect to any node's AWS Gateway — all nodes serve the same cluster state:
 
 ```bash
 AWS_ENDPOINT_URL=https://$HIVE_NODE1:9999 aws ec2 describe-instances
 AWS_ENDPOINT_URL=https://$HIVE_NODE2:9999 aws ec2 describe-instances
 ```
+
+### VPC Networking
+
+Create a VPC and subnet for your cluster. This only needs to be done once — the VPC is shared across all nodes.
+
+```bash
+aws ec2 create-vpc --cidr-block 10.200.0.0/16
+export HIVE_VPC="vpc-XXX"
+
+aws ec2 create-subnet --vpc-id $HIVE_VPC --cidr-block 10.200.1.0/24
+export HIVE_SUBNET="subnet-XXX"
+```
+
+### Launching Instances Across Nodes
+
+Use `--count` to launch multiple instances in a single request. Hive distributes them across nodes in the cluster based on available capacity — instances land on different physical hosts but share the same VPC subnet, and can route traffic to each other over OVN's Geneve overlay:
+
+```bash
+aws ec2 run-instances \
+  --image-id $HIVE_AMI \
+  --instance-type $HIVE_INSTANCE \
+  --key-name hive-key \
+  --subnet-id $HIVE_SUBNET \
+  --count 3
+```
+
+This launches 3 instances distributed across the cluster. Each receives a unique private IP from the subnet (e.g. `10.200.1.5`, `10.200.1.6`, `10.200.1.7`). Instances on different physical hosts communicate transparently through Geneve tunnels — no additional configuration required.
+
+Verify all instances are running and have received their private IPs:
+
+```bash
+aws ec2 describe-instances
+```
+
+Check which node each instance landed on:
+
+```bash
+./bin/hive get vms
+```
+
+### Verifying Cross-Host Connectivity
+
+SSH into any instance and verify connectivity to instances on other nodes:
+
+```bash
+# From inside a VM, ping another instance's private IP
+ping 10.200.1.6
+```
+
+All instances within the same VPC subnet can communicate regardless of which physical host they run on. The OVN overlay network handles cross-host routing automatically via Geneve encapsulation.
 
 Check logs on each node for debugging. Log locations depend on your deployment mode — `~/node{1,2,3}/logs/` for simulated, `~/hive/logs/` for real multi-server.
 
