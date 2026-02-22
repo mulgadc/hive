@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/mulgadc/hive/hive/vm"
@@ -200,6 +201,36 @@ func TestSudoCommand_NonRoot(t *testing.T) {
 	}
 }
 
+func TestGenerateDevMAC(t *testing.T) {
+	tests := []struct {
+		instanceId string
+	}{
+		{"i-abc123"},
+		{"i-def456"},
+		{"i-ghi789"},
+	}
+
+	// All MACs should be unique and have the 02:de:v0 prefix
+	seen := make(map[string]bool)
+	for _, tt := range tests {
+		mac := generateDevMAC(tt.instanceId)
+		if !strings.HasPrefix(mac, "02:de:v0:") {
+			t.Errorf("generateDevMAC(%q) = %q, want prefix '02:de:v0:'", tt.instanceId, mac)
+		}
+		if seen[mac] {
+			t.Errorf("generateDevMAC(%q) = %q, duplicate MAC", tt.instanceId, mac)
+		}
+		seen[mac] = true
+	}
+
+	// Same input should produce same output (deterministic)
+	mac1 := generateDevMAC("i-test123")
+	mac2 := generateDevMAC("i-test123")
+	if mac1 != mac2 {
+		t.Errorf("generateDevMAC not deterministic: %q != %q", mac1, mac2)
+	}
+}
+
 func TestNetworkPlumber_InterfaceCompliance(t *testing.T) {
 	// Verify both types satisfy the interface
 	var _ NetworkPlumber = &OVSNetworkPlumber{}
@@ -260,6 +291,45 @@ func TestCheckOVNHealth_ReturnsStatus(t *testing.T) {
 	_ = status.ChassisID
 	_ = status.EncapIP
 	_ = status.OVNRemote
+}
+
+func TestFindInterfaceByIP_InvalidIP(t *testing.T) {
+	_, err := findInterfaceByIP("not-an-ip")
+	if err == nil {
+		t.Fatal("expected error for invalid IP")
+	}
+	if !strings.Contains(err.Error(), "invalid IP address") {
+		t.Errorf("expected 'invalid IP address' error, got: %v", err)
+	}
+}
+
+func TestFindInterfaceByIP_Loopback(t *testing.T) {
+	// 127.0.0.1 should always be on the loopback interface
+	iface, err := findInterfaceByIP("127.0.0.1")
+	if err != nil {
+		t.Fatalf("findInterfaceByIP(127.0.0.1): %v", err)
+	}
+	if iface != "lo" {
+		t.Errorf("findInterfaceByIP(127.0.0.1) = %q, want 'lo'", iface)
+	}
+}
+
+func TestFindInterfaceByIP_NotFound(t *testing.T) {
+	_, err := findInterfaceByIP("192.0.2.1")
+	if err == nil {
+		t.Fatal("expected error for non-existent IP")
+	}
+	if !strings.Contains(err.Error(), "no interface found") {
+		t.Errorf("expected 'no interface found' error, got: %v", err)
+	}
+}
+
+func TestEnsureDataRoute_NoOVS(t *testing.T) {
+	// EnsureDataRoute requires ip commands which may not work in CI.
+	// On loopback, there's no kernel subnet route, so it should return an error.
+	err := EnsureDataRoute("127.0.0.1")
+	// We expect an error (no kernel route for lo), but no panic.
+	_ = err
 }
 
 func TestSetupComputeNode_ValidatesArgs(t *testing.T) {

@@ -3,6 +3,7 @@ package daemon
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -35,6 +36,13 @@ type OVSNetworkPlumber struct{}
 func (p *OVSNetworkPlumber) SetupTapDevice(eniId, mac string) error {
 	tapName := TapDeviceName(eniId)
 	ifaceID := OVSIfaceID(eniId)
+
+	// 0. If tap already exists (e.g. unclean shutdown), clean it up first
+	if _, err := os.Stat("/sys/class/net/" + tapName); err == nil {
+		slog.Warn("Stale tap device found, cleaning up before recreate", "tap", tapName)
+		_ = sudoCommand("ovs-vsctl", "--if-exists", "del-port", "br-int", tapName).Run()
+		_ = sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run()
+	}
 
 	// 1. Create tap device
 	if out, err := sudoCommand("ip", "tuntap", "add", "dev", tapName, "mode", "tap").CombinedOutput(); err != nil {
@@ -95,6 +103,16 @@ func TapDeviceName(eniId string) string {
 // This must match the OVN LogicalSwitchPort name for ovn-controller binding.
 func OVSIfaceID(eniId string) string {
 	return "port-" + eniId
+}
+
+// generateDevMAC creates a locally-administered unicast MAC for the dev/hostfwd NIC.
+// Uses prefix 02:de:v0 to distinguish from ENI MACs (02:00:00).
+func generateDevMAC(instanceId string) string {
+	h := uint32(0)
+	for _, c := range instanceId {
+		h = h*31 + uint32(c)
+	}
+	return fmt.Sprintf("02:de:v0:%02x:%02x:%02x", (h>>16)&0xff, (h>>8)&0xff, h&0xff)
 }
 
 // OVNHealthStatus reports the readiness of OVN networking on this compute node.
@@ -172,5 +190,85 @@ func SetupComputeNode(chassisID, ovnRemote, encapIP string) error {
 		"ovn_remote", ovnRemote,
 		"encap_ip", encapIP,
 	)
+
+	// Ensure the data NIC is preferred for Geneve tunnel routing.
+	if err := EnsureDataRoute(encapIP); err != nil {
+		slog.Warn("Failed to configure data NIC routing (Geneve tunnels may use wrong source IP)", "err", err)
+	}
+
 	return nil
+}
+
+// EnsureDataRoute ensures the kernel routes Geneve tunnel traffic through the
+// data NIC (the interface holding the encap IP). When management and data NICs
+// share the same subnet with equal route metrics, the kernel may pick the
+// management NIC, causing Geneve packets to have the wrong source IP. Remote
+// OVS nodes then drop these packets because the source doesn't match the
+// expected tunnel remote_ip.
+//
+// Fix: find the data NIC's subnet route and replace it with a lower metric (50)
+// so it's preferred over the management NIC's route (typically metric 100+).
+func EnsureDataRoute(encapIP string) error {
+	dataIface, err := findInterfaceByIP(encapIP)
+	if err != nil {
+		return fmt.Errorf("find data interface for %s: %w", encapIP, err)
+	}
+
+	// Read the existing subnet route for the data interface
+	out, err := sudoCommand("ip", "-o", "-4", "route", "show", "dev", dataIface, "proto", "kernel", "scope", "link").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("read routes for %s: %s: %w", dataIface, strings.TrimSpace(string(out)), err)
+	}
+
+	// Parse the subnet CIDR from the route output (e.g. "10.1.0.0/16 dev eth1 ...")
+	fields := strings.Fields(strings.TrimSpace(string(out)))
+	if len(fields) == 0 {
+		return fmt.Errorf("no kernel route found for %s", dataIface)
+	}
+	subnet := fields[0]
+
+	// Replace the route with a lower metric so the data NIC is preferred
+	if out, err := sudoCommand("ip", "route", "replace", subnet,
+		"dev", dataIface, "src", encapIP, "metric", "50",
+	).CombinedOutput(); err != nil {
+		return fmt.Errorf("replace route for %s: %s: %w", subnet, strings.TrimSpace(string(out)), err)
+	}
+
+	slog.Info("Data NIC route configured for Geneve tunnels",
+		"interface", dataIface,
+		"subnet", subnet,
+		"encap_ip", encapIP,
+		"metric", 50,
+	)
+	return nil
+}
+
+// findInterfaceByIP returns the network interface name that holds the given IP address.
+func findInterfaceByIP(ipAddr string) (string, error) {
+	targetIP := net.ParseIP(ipAddr)
+	if targetIP == nil {
+		return "", fmt.Errorf("invalid IP address: %s", ipAddr)
+	}
+
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "", fmt.Errorf("list interfaces: %w", err)
+	}
+
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			if ipNet.IP.Equal(targetIP) {
+				return iface.Name, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no interface found with IP %s", ipAddr)
 }

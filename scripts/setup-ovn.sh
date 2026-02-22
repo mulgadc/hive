@@ -169,6 +169,28 @@ SYSCTL
 sudo sysctl --system -q
 echo "  ip_forward=1, rp_filter=0"
 
+# --- Step 6b: Ensure data NIC routing for Geneve tunnels ---
+echo ""
+echo "Step 6b: Configuring data NIC routing for Geneve tunnels..."
+
+# When management and data NICs share the same subnet (e.g. both on 10.1.0.0/16),
+# the kernel may route Geneve tunnel traffic through the management NIC with the
+# wrong source IP. This causes remote OVS nodes to drop incoming tunnel packets
+# because the source IP doesn't match the configured tunnel remote_ip.
+# Fix: lower the route metric on the data NIC so it's preferred.
+DATA_IFACE=$(ip -o -4 addr show | awk -v ip="$ENCAP_IP" '$0 ~ ip"/" {print $2}')
+if [ -n "$DATA_IFACE" ]; then
+    SUBNET=$(ip -o -4 route show dev "$DATA_IFACE" proto kernel scope link | awk '{print $1}' | head -1)
+    if [ -n "$SUBNET" ]; then
+        sudo ip route replace "$SUBNET" dev "$DATA_IFACE" src "$ENCAP_IP" metric 50
+        echo "  data route: $SUBNET via $DATA_IFACE src $ENCAP_IP (metric 50)"
+    else
+        echo "  skipped: no kernel route found for $DATA_IFACE"
+    fi
+else
+    echo "  skipped: could not find interface for $ENCAP_IP"
+fi
+
 # --- Step 7: Verify Geneve kernel support ---
 echo ""
 echo "Step 7: Verifying Geneve kernel module..."
