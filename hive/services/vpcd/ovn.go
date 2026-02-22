@@ -81,6 +81,22 @@ type OVNClient interface {
 	DeleteStaticRoute(ctx context.Context, routerName string, ipPrefix string) error
 }
 
+// namedUUID generates a valid OVSDB named-uuid from a prefix and name.
+// OVSDB named-uuids must match [_a-zA-Z][_a-zA-Z0-9]* — hyphens and dots
+// are replaced with underscores.
+func namedUUID(prefix, name string) string {
+	s := prefix + name
+	result := make([]byte, len(s))
+	for i := range s {
+		if s[i] == '-' || s[i] == '.' || s[i] == '/' {
+			result[i] = '_'
+		} else {
+			result[i] = s[i]
+		}
+	}
+	return string(result)
+}
+
 // LiveOVNClient implements OVNClient using libovsdb against a real OVN NB DB.
 type LiveOVNClient struct {
 	endpoint string
@@ -184,7 +200,7 @@ func (c *LiveOVNClient) ListLogicalSwitches(ctx context.Context) ([]nbdb.Logical
 func (c *LiveOVNClient) CreateLogicalSwitchPort(ctx context.Context, switchName string, lsp *nbdb.LogicalSwitchPort) error {
 	// Set a named UUID so the port can be referenced in the same transaction
 	if lsp.UUID == "" {
-		lsp.UUID = "lsp-" + lsp.Name
+		lsp.UUID = namedUUID("lsp_", lsp.Name)
 	}
 
 	// Create the port
@@ -342,7 +358,7 @@ func (c *LiveOVNClient) ListLogicalRouters(ctx context.Context) ([]nbdb.LogicalR
 func (c *LiveOVNClient) CreateLogicalRouterPort(ctx context.Context, routerName string, lrp *nbdb.LogicalRouterPort) error {
 	// Set a named UUID so the port can be referenced in the same transaction
 	if lrp.UUID == "" {
-		lrp.UUID = "lrp-" + lrp.Name
+		lrp.UUID = namedUUID("lrp_", lrp.Name)
 	}
 
 	createOps, err := c.client.Create(lrp)
@@ -493,7 +509,7 @@ func (c *LiveOVNClient) ListDHCPOptions(ctx context.Context) ([]nbdb.DHCPOptions
 func (c *LiveOVNClient) AddNAT(ctx context.Context, routerName string, nat *nbdb.NAT) error {
 	// Set a named UUID so the NAT can be referenced in the same transaction
 	if nat.UUID == "" {
-		nat.UUID = "nat-" + nat.Type + "-" + nat.LogicalIP
+		nat.UUID = namedUUID("nat_", nat.Type+"_"+nat.LogicalIP)
 	}
 
 	createOps, err := c.client.Create(nat)
@@ -567,7 +583,7 @@ func (c *LiveOVNClient) DeleteNAT(ctx context.Context, routerName string, natTyp
 func (c *LiveOVNClient) AddStaticRoute(ctx context.Context, routerName string, route *nbdb.LogicalRouterStaticRoute) error {
 	// Set a named UUID so the route can be referenced in the same transaction
 	if route.UUID == "" {
-		route.UUID = "route-" + route.IPPrefix
+		route.UUID = namedUUID("route_", route.IPPrefix)
 	}
 
 	createOps, err := c.client.Create(route)
