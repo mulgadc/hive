@@ -119,6 +119,13 @@ func (h *TopologyHandler) handleVPCCreate(msg *nats.Msg) {
 	routerName := "vpc-" + evt.VpcId
 	ctx := context.Background()
 
+	// Idempotent: skip if router already exists (another vpcd instance may have created it)
+	if _, err := h.ovn.GetLogicalRouter(ctx, routerName); err == nil {
+		slog.Debug("vpcd: logical router already exists, skipping", "router", routerName)
+		respond(msg, nil)
+		return
+	}
+
 	lr := &nbdb.LogicalRouter{
 		Name: routerName,
 		ExternalIDs: map[string]string{
@@ -227,6 +234,13 @@ func (h *TopologyHandler) handleSubnetCreate(msg *nats.Msg) {
 
 	// Generate a deterministic MAC for the router port
 	routerMAC := generateMAC(evt.SubnetId)
+
+	// Idempotent: skip if switch already exists (another vpcd instance may have created it)
+	if _, err := h.ovn.GetLogicalSwitch(ctx, switchName); err == nil {
+		slog.Debug("vpcd: subnet topology already exists, skipping", "switch", switchName)
+		respond(msg, nil)
+		return
+	}
 
 	// 1. Create LogicalSwitch
 	ls := &nbdb.LogicalSwitch{
@@ -377,6 +391,14 @@ func (h *TopologyHandler) handleCreatePort(msg *nats.Msg) {
 	ctx := context.Background()
 	portName := "port-" + evt.NetworkInterfaceId
 	switchName := "subnet-" + evt.SubnetId
+
+	// Idempotent: skip if port already exists
+	if _, err := h.ovn.GetLogicalSwitchPort(ctx, portName); err == nil {
+		slog.Debug("vpcd: logical switch port already exists, skipping", "port", portName)
+		respond(msg, nil)
+		return
+	}
+
 	addrStr := fmt.Sprintf("%s %s", evt.MacAddress, evt.PrivateIpAddress)
 
 	lsp := &nbdb.LogicalSwitchPort{
@@ -465,6 +487,13 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 	extPortName := "ext-port-" + evt.VpcId
 	gwPortName := "gw-" + evt.VpcId
 	switchGWPortName := "gw-port-" + evt.VpcId
+
+	// Idempotent: skip if external switch already exists
+	if _, err := h.ovn.GetLogicalSwitch(ctx, extSwitchName); err == nil {
+		slog.Debug("vpcd: IGW topology already exists, skipping", "switch", extSwitchName)
+		respond(msg, nil)
+		return
+	}
 
 	// 1. Create external logical switch (localnet for physical uplink)
 	extSwitch := &nbdb.LogicalSwitch{
