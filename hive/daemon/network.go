@@ -3,9 +3,20 @@ package daemon
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 )
+
+// sudoCommand wraps exec.Command with sudo when running as non-root.
+// OVS/OVN and ip commands require elevated privileges; in Docker and
+// production the daemon runs as root, but in dev environments it may not.
+func sudoCommand(name string, args ...string) *exec.Cmd {
+	if os.Getuid() == 0 {
+		return exec.Command(name, args...)
+	}
+	return exec.Command("sudo", append([]string{name}, args...)...)
+}
 
 // NetworkPlumber handles tap device and OVS bridge operations for VM networking.
 // The live implementation runs system commands (ip, ovs-vsctl); tests use a mock.
@@ -26,24 +37,24 @@ func (p *OVSNetworkPlumber) SetupTapDevice(eniId, mac string) error {
 	ifaceID := OVSIfaceID(eniId)
 
 	// 1. Create tap device
-	if out, err := exec.Command("ip", "tuntap", "add", "dev", tapName, "mode", "tap").CombinedOutput(); err != nil {
+	if out, err := sudoCommand("ip", "tuntap", "add", "dev", tapName, "mode", "tap").CombinedOutput(); err != nil {
 		return fmt.Errorf("create tap %s: %s: %w", tapName, strings.TrimSpace(string(out)), err)
 	}
 
 	// 2. Bring tap up
-	if out, err := exec.Command("ip", "link", "set", tapName, "up").CombinedOutput(); err != nil {
-		_ = exec.Command("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run()
+	if out, err := sudoCommand("ip", "link", "set", tapName, "up").CombinedOutput(); err != nil {
+		_ = sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run()
 		return fmt.Errorf("bring up tap %s: %s: %w", tapName, strings.TrimSpace(string(out)), err)
 	}
 
 	// 3. Add to br-int with iface-id for OVN port binding
-	if out, err := exec.Command("ovs-vsctl",
+	if out, err := sudoCommand("ovs-vsctl",
 		"add-port", "br-int", tapName,
 		"--", "set", "Interface", tapName,
 		fmt.Sprintf("external_ids:iface-id=%s", ifaceID),
 		fmt.Sprintf("external_ids:attached-mac=%s", mac),
 	).CombinedOutput(); err != nil {
-		_ = exec.Command("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run()
+		_ = sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run()
 		return fmt.Errorf("add tap to br-int: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 
@@ -55,12 +66,12 @@ func (p *OVSNetworkPlumber) CleanupTapDevice(eniId string) error {
 	tapName := TapDeviceName(eniId)
 
 	// 1. Remove from br-int (--if-exists avoids error if already gone)
-	if out, err := exec.Command("ovs-vsctl", "--if-exists", "del-port", "br-int", tapName).CombinedOutput(); err != nil {
+	if out, err := sudoCommand("ovs-vsctl", "--if-exists", "del-port", "br-int", tapName).CombinedOutput(); err != nil {
 		slog.Warn("Failed to remove tap from br-int", "tap", tapName, "err", err, "out", strings.TrimSpace(string(out)))
 	}
 
 	// 2. Delete tap device
-	if out, err := exec.Command("ip", "tuntap", "del", "dev", tapName, "mode", "tap").CombinedOutput(); err != nil {
+	if out, err := sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").CombinedOutput(); err != nil {
 		return fmt.Errorf("delete tap %s: %s: %w", tapName, strings.TrimSpace(string(out)), err)
 	}
 
@@ -100,23 +111,23 @@ func CheckOVNHealth() OVNHealthStatus {
 	status := OVNHealthStatus{}
 
 	// Check br-int exists
-	if err := exec.Command("ovs-vsctl", "br-exists", "br-int").Run(); err == nil {
+	if err := sudoCommand("ovs-vsctl", "br-exists", "br-int").Run(); err == nil {
 		status.BrIntExists = true
 	}
 
 	// Check ovn-controller is running via ovs-appctl (more reliable than pgrep)
-	if out, err := exec.Command("ovs-appctl", "-t", "ovn-controller", "version").CombinedOutput(); err == nil && len(out) > 0 {
+	if out, err := sudoCommand("ovs-appctl", "-t", "ovn-controller", "version").CombinedOutput(); err == nil && len(out) > 0 {
 		status.OVNControllerUp = true
 	}
 
 	// Read chassis identity from OVS external_ids
-	if out, err := exec.Command("ovs-vsctl", "get", "Open_vSwitch", ".", "external_ids:system-id").CombinedOutput(); err == nil {
+	if out, err := sudoCommand("ovs-vsctl", "get", "Open_vSwitch", ".", "external_ids:system-id").CombinedOutput(); err == nil {
 		status.ChassisID = strings.Trim(strings.TrimSpace(string(out)), "\"")
 	}
-	if out, err := exec.Command("ovs-vsctl", "get", "Open_vSwitch", ".", "external_ids:ovn-encap-ip").CombinedOutput(); err == nil {
+	if out, err := sudoCommand("ovs-vsctl", "get", "Open_vSwitch", ".", "external_ids:ovn-encap-ip").CombinedOutput(); err == nil {
 		status.EncapIP = strings.Trim(strings.TrimSpace(string(out)), "\"")
 	}
-	if out, err := exec.Command("ovs-vsctl", "get", "Open_vSwitch", ".", "external_ids:ovn-remote").CombinedOutput(); err == nil {
+	if out, err := sudoCommand("ovs-vsctl", "get", "Open_vSwitch", ".", "external_ids:ovn-remote").CombinedOutput(); err == nil {
 		status.OVNRemote = strings.Trim(strings.TrimSpace(string(out)), "\"")
 	}
 
@@ -127,27 +138,27 @@ func CheckOVNHealth() OVNHealthStatus {
 // It creates br-int with secure fail-mode and sets the OVN external_ids.
 func SetupComputeNode(chassisID, ovnRemote, encapIP string) error {
 	// Create br-int if it doesn't exist
-	if out, err := exec.Command("ovs-vsctl", "--may-exist", "add-br", "br-int").CombinedOutput(); err != nil {
+	if out, err := sudoCommand("ovs-vsctl", "--may-exist", "add-br", "br-int").CombinedOutput(); err != nil {
 		return fmt.Errorf("create br-int: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 
 	// Set fail-mode=secure (preserves flows during ovn-controller restart)
-	if out, err := exec.Command("ovs-vsctl", "set", "Bridge", "br-int", "fail-mode=secure").CombinedOutput(); err != nil {
+	if out, err := sudoCommand("ovs-vsctl", "set", "Bridge", "br-int", "fail-mode=secure").CombinedOutput(); err != nil {
 		return fmt.Errorf("set br-int fail-mode: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 
 	// Disable in-band management (prevents OVS from adding its own flows)
-	if out, err := exec.Command("ovs-vsctl", "set", "Bridge", "br-int", "other-config:disable-in-band=true").CombinedOutput(); err != nil {
+	if out, err := sudoCommand("ovs-vsctl", "set", "Bridge", "br-int", "other-config:disable-in-band=true").CombinedOutput(); err != nil {
 		return fmt.Errorf("set br-int disable-in-band: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 
 	// Bring br-int up
-	if out, err := exec.Command("ip", "link", "set", "br-int", "up").CombinedOutput(); err != nil {
+	if out, err := sudoCommand("ip", "link", "set", "br-int", "up").CombinedOutput(); err != nil {
 		return fmt.Errorf("bring up br-int: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 
 	// Set OVN external_ids on the Open_vSwitch table
-	if out, err := exec.Command("ovs-vsctl", "set", "Open_vSwitch", ".",
+	if out, err := sudoCommand("ovs-vsctl", "set", "Open_vSwitch", ".",
 		fmt.Sprintf("external_ids:system-id=%s", chassisID),
 		fmt.Sprintf("external_ids:ovn-remote=%s", ovnRemote),
 		fmt.Sprintf("external_ids:ovn-encap-ip=%s", encapIP),

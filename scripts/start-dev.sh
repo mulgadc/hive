@@ -196,14 +196,14 @@ if ! command -v ovs-vsctl >/dev/null 2>&1; then
     echo "   Run: make quickinstall && ./scripts/setup-ovn.sh --management"
     OVN_OK=false
 else
-    if ovs-vsctl br-exists br-int 2>/dev/null; then
+    if sudo ovs-vsctl br-exists br-int 2>/dev/null; then
         echo "   ✅ br-int exists"
     else
         echo "   ❌ br-int not found"
         echo "   Run: ./scripts/setup-ovn.sh --management"
         OVN_OK=false
     fi
-    if ovs-appctl -t ovn-controller version >/dev/null 2>&1; then
+    if sudo ovs-appctl -t ovn-controller version >/dev/null 2>&1; then
         echo "   ✅ ovn-controller running"
     else
         echo "   ❌ ovn-controller not running"

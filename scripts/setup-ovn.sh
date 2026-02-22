@@ -179,14 +179,66 @@ else
     echo "  WARNING: geneve module not available (tunnels may not work)"
 fi
 
-# --- Step 8: Health check ---
+# --- Step 8: Grant non-root access to OVS/OVN ---
 echo ""
-echo "Step 8: Verifying setup..."
+echo "Step 8: Configuring non-root access..."
+
+# Open OVS DB socket so non-root processes can use ovs-vsctl
+OVS_SOCK="/var/run/openvswitch/db.sock"
+if [ -S "$OVS_SOCK" ]; then
+    sudo chmod 0666 "$OVS_SOCK"
+    echo "  OVS DB socket: opened ($OVS_SOCK)"
+fi
+
+# Open OVN runtime directory and ctl sockets for ovs-appctl access
+if [ -d "/var/run/ovn" ]; then
+    sudo chmod 0755 /var/run/ovn
+    sudo chmod 0666 /var/run/ovn/*.ctl 2>/dev/null || true
+    echo "  OVN ctl sockets: opened (/var/run/ovn/)"
+fi
+if [ -d "/var/run/openvswitch" ]; then
+    sudo chmod 0666 /var/run/openvswitch/*.ctl 2>/dev/null || true
+fi
+
+# Create persistent systemd override so permissions survive OVS restarts
+OVERRIDE_DIR="/etc/systemd/system/openvswitch-switch.service.d"
+if [ ! -f "$OVERRIDE_DIR/hive-perms.conf" ]; then
+    sudo mkdir -p "$OVERRIDE_DIR"
+    sudo tee "$OVERRIDE_DIR/hive-perms.conf" >/dev/null <<'OVERRIDE'
+[Service]
+ExecStartPost=/bin/chmod 0666 /var/run/openvswitch/db.sock
+OVERRIDE
+    sudo systemctl daemon-reload
+    echo "  systemd override: created (db.sock permissions persist across restarts)"
+else
+    echo "  systemd override: already exists"
+fi
+
+# Create sudoers rule for network commands that always need root
+# (ip tuntap, ip link set — NET_ADMIN operations)
+SUDOERS_FILE="/etc/sudoers.d/hive-network"
+if [ ! -f "$SUDOERS_FILE" ]; then
+    CURRENT_USER=$(whoami)
+    sudo tee "$SUDOERS_FILE" >/dev/null <<EOF
+# Hive VPC networking: allow non-root daemon to manage tap devices and OVS
+$CURRENT_USER ALL=(root) NOPASSWD: /sbin/ip, /usr/sbin/ip
+$CURRENT_USER ALL=(root) NOPASSWD: /usr/bin/ovs-vsctl, /usr/bin/ovs-appctl
+$CURRENT_USER ALL=(root) NOPASSWD: /usr/bin/ovn-nbctl, /usr/bin/ovn-sbctl
+EOF
+    sudo chmod 0440 "$SUDOERS_FILE"
+    echo "  sudoers rule: created ($SUDOERS_FILE)"
+else
+    echo "  sudoers rule: already exists"
+fi
+
+# --- Step 9: Health check ---
+echo ""
+echo "Step 9: Verifying setup..."
 
 OK=true
 
 # Check br-int
-if ovs-vsctl br-exists br-int; then
+if sudo ovs-vsctl br-exists br-int; then
     echo "  br-int:          OK"
 else
     echo "  br-int:          FAILED"
@@ -194,7 +246,7 @@ else
 fi
 
 # Check ovn-controller
-if ovs-appctl -t ovn-controller version >/dev/null 2>&1; then
+if sudo ovs-appctl -t ovn-controller version >/dev/null 2>&1; then
     echo "  ovn-controller:  OK"
 else
     echo "  ovn-controller:  FAILED (may still be starting)"

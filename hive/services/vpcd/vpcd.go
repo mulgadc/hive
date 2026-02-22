@@ -12,6 +12,16 @@ import (
 	"github.com/mulgadc/hive/hive/utils"
 )
 
+// sudoCommand wraps exec.Command with sudo when running as non-root.
+// OVS/OVN commands require elevated privileges; when running as root
+// (Docker, production) no wrapper is needed.
+func sudoCommand(name string, args ...string) *exec.Cmd {
+	if os.Getuid() == 0 {
+		return exec.Command(name, args...)
+	}
+	return exec.Command("sudo", append([]string{name}, args...)...)
+}
+
 var serviceName = "vpcd"
 
 // Config holds the vpcd service configuration.
@@ -80,7 +90,7 @@ func (svc *Service) Reload() error {
 // checkBrInt verifies the OVS integration bridge (br-int) exists.
 // This is the bridge that all VM TAP devices connect to.
 var checkBrInt = func() error {
-	cmd := exec.Command("ovs-vsctl", "br-exists", "br-int")
+	cmd := sudoCommand("ovs-vsctl", "br-exists", "br-int")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("br-int does not exist: run ./scripts/setup-ovn.sh --management")
 	}
@@ -89,7 +99,7 @@ var checkBrInt = func() error {
 
 // checkOVNController verifies that ovn-controller is running on this host.
 var checkOVNController = func() error {
-	cmd := exec.Command("ovs-appctl", "-t", "ovn-controller", "version")
+	cmd := sudoCommand("ovs-appctl", "-t", "ovn-controller", "version")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("ovn-controller is not running: run ./scripts/setup-ovn.sh --management")
 	}
