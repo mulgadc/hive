@@ -8,7 +8,19 @@ import (
 	"github.com/mulgadc/hive/hive/services/vpcd/nbdb"
 	"github.com/ovn-kubernetes/libovsdb/client"
 	"github.com/ovn-kubernetes/libovsdb/model"
+	"github.com/ovn-kubernetes/libovsdb/ovsdb"
 )
+
+// transactOps executes a set of OVSDB operations as a single transaction,
+// checking both the RPC error and individual operation results.
+func (c *LiveOVNClient) transactOps(ctx context.Context, ops []ovsdb.Operation) error {
+	results, err := c.client.Transact(ctx, ops...)
+	if err != nil {
+		return err
+	}
+	_, err = ovsdb.CheckOperationResults(results, ops)
+	return err
+}
 
 // OVNClient defines the interface for interacting with the OVN Northbound Database.
 // This abstraction allows for mock implementations in tests.
@@ -111,7 +123,7 @@ func (c *LiveOVNClient) CreateLogicalSwitch(ctx context.Context, ls *nbdb.Logica
 	if err != nil {
 		return fmt.Errorf("create logical switch ops: %w", err)
 	}
-	_, err = c.client.Transact(ctx, ops...)
+	err = c.transactOps(ctx, ops)
 	if err != nil {
 		return fmt.Errorf("create logical switch transact: %w", err)
 	}
@@ -127,7 +139,7 @@ func (c *LiveOVNClient) DeleteLogicalSwitch(ctx context.Context, name string) er
 	if err != nil {
 		return fmt.Errorf("delete logical switch ops: %w", err)
 	}
-	_, err = c.client.Transact(ctx, ops...)
+	err = c.transactOps(ctx, ops)
 	if err != nil {
 		return fmt.Errorf("delete logical switch transact: %w", err)
 	}
@@ -158,6 +170,11 @@ func (c *LiveOVNClient) ListLogicalSwitches(ctx context.Context) ([]nbdb.Logical
 }
 
 func (c *LiveOVNClient) CreateLogicalSwitchPort(ctx context.Context, switchName string, lsp *nbdb.LogicalSwitchPort) error {
+	// Set a named UUID so the port can be referenced in the same transaction
+	if lsp.UUID == "" {
+		lsp.UUID = "lsp-" + lsp.Name
+	}
+
 	// Create the port
 	createOps, err := c.client.Create(lsp)
 	if err != nil {
@@ -170,7 +187,7 @@ func (c *LiveOVNClient) CreateLogicalSwitchPort(ctx context.Context, switchName 
 		return fmt.Errorf("get logical switch for port add: %w", err)
 	}
 
-	// Add the port to the switch's ports set
+	// Add the port to the switch's ports set (uses named UUID from Create)
 	mutateOps, err := c.client.Where(ls).Mutate(ls, model.Mutation{
 		Field:   &ls.Ports,
 		Mutator: "insert",
@@ -181,7 +198,7 @@ func (c *LiveOVNClient) CreateLogicalSwitchPort(ctx context.Context, switchName 
 	}
 
 	ops := append(createOps, mutateOps...)
-	_, err = c.client.Transact(ctx, ops...)
+	err = c.transactOps(ctx, ops)
 	if err != nil {
 		return fmt.Errorf("create logical switch port transact: %w", err)
 	}
@@ -218,7 +235,7 @@ func (c *LiveOVNClient) DeleteLogicalSwitchPort(ctx context.Context, switchName 
 	}
 
 	ops := append(mutateOps, deleteOps...)
-	_, err = c.client.Transact(ctx, ops...)
+	err = c.transactOps(ctx, ops)
 	if err != nil {
 		return fmt.Errorf("delete logical switch port transact: %w", err)
 	}
@@ -252,7 +269,7 @@ func (c *LiveOVNClient) UpdateLogicalSwitchPort(ctx context.Context, lsp *nbdb.L
 	if err != nil {
 		return fmt.Errorf("update logical switch port ops: %w", err)
 	}
-	_, err = c.client.Transact(ctx, ops...)
+	err = c.transactOps(ctx, ops)
 	if err != nil {
 		return fmt.Errorf("update logical switch port transact: %w", err)
 	}
@@ -264,7 +281,7 @@ func (c *LiveOVNClient) CreateLogicalRouter(ctx context.Context, lr *nbdb.Logica
 	if err != nil {
 		return fmt.Errorf("create logical router ops: %w", err)
 	}
-	_, err = c.client.Transact(ctx, ops...)
+	err = c.transactOps(ctx, ops)
 	if err != nil {
 		return fmt.Errorf("create logical router transact: %w", err)
 	}
@@ -280,7 +297,7 @@ func (c *LiveOVNClient) DeleteLogicalRouter(ctx context.Context, name string) er
 	if err != nil {
 		return fmt.Errorf("delete logical router ops: %w", err)
 	}
-	_, err = c.client.Transact(ctx, ops...)
+	err = c.transactOps(ctx, ops)
 	if err != nil {
 		return fmt.Errorf("delete logical router transact: %w", err)
 	}
@@ -311,6 +328,11 @@ func (c *LiveOVNClient) ListLogicalRouters(ctx context.Context) ([]nbdb.LogicalR
 }
 
 func (c *LiveOVNClient) CreateLogicalRouterPort(ctx context.Context, routerName string, lrp *nbdb.LogicalRouterPort) error {
+	// Set a named UUID so the port can be referenced in the same transaction
+	if lrp.UUID == "" {
+		lrp.UUID = "lrp-" + lrp.Name
+	}
+
 	createOps, err := c.client.Create(lrp)
 	if err != nil {
 		return fmt.Errorf("create logical router port ops: %w", err)
@@ -332,7 +354,7 @@ func (c *LiveOVNClient) CreateLogicalRouterPort(ctx context.Context, routerName 
 	}
 
 	ops := append(createOps, mutateOps...)
-	_, err = c.client.Transact(ctx, ops...)
+	err = c.transactOps(ctx, ops)
 	if err != nil {
 		return fmt.Errorf("create logical router port transact: %w", err)
 	}
@@ -367,7 +389,7 @@ func (c *LiveOVNClient) DeleteLogicalRouterPort(ctx context.Context, routerName 
 	}
 
 	ops := append(mutateOps, deleteOps...)
-	_, err = c.client.Transact(ctx, ops...)
+	err = c.transactOps(ctx, ops)
 	if err != nil {
 		return fmt.Errorf("delete logical router port transact: %w", err)
 	}
@@ -397,6 +419,9 @@ func (c *LiveOVNClient) CreateDHCPOptions(ctx context.Context, opts *nbdb.DHCPOp
 	if err != nil {
 		return "", fmt.Errorf("create DHCP options transact: %w", err)
 	}
+	if _, err := ovsdb.CheckOperationResults(results, ops); err != nil {
+		return "", fmt.Errorf("create DHCP options check: %w", err)
+	}
 	if len(results) > 0 {
 		return results[0].UUID.GoUUID, nil
 	}
@@ -409,7 +434,7 @@ func (c *LiveOVNClient) DeleteDHCPOptions(ctx context.Context, uuid string) erro
 	if err != nil {
 		return fmt.Errorf("delete DHCP options ops: %w", err)
 	}
-	_, err = c.client.Transact(ctx, ops...)
+	err = c.transactOps(ctx, ops)
 	if err != nil {
 		return fmt.Errorf("delete DHCP options transact: %w", err)
 	}
@@ -454,6 +479,11 @@ func (c *LiveOVNClient) ListDHCPOptions(ctx context.Context) ([]nbdb.DHCPOptions
 }
 
 func (c *LiveOVNClient) AddNAT(ctx context.Context, routerName string, nat *nbdb.NAT) error {
+	// Set a named UUID so the NAT can be referenced in the same transaction
+	if nat.UUID == "" {
+		nat.UUID = "nat-" + nat.Type + "-" + nat.LogicalIP
+	}
+
 	createOps, err := c.client.Create(nat)
 	if err != nil {
 		return fmt.Errorf("create NAT ops: %w", err)
@@ -474,7 +504,7 @@ func (c *LiveOVNClient) AddNAT(ctx context.Context, routerName string, nat *nbdb
 	}
 
 	ops := append(createOps, mutateOps...)
-	_, err = c.client.Transact(ctx, ops...)
+	err = c.transactOps(ctx, ops)
 	if err != nil {
 		return fmt.Errorf("add NAT transact: %w", err)
 	}
@@ -515,7 +545,7 @@ func (c *LiveOVNClient) DeleteNAT(ctx context.Context, routerName string, natTyp
 	}
 
 	ops := append(mutateOps, deleteOps...)
-	_, err = c.client.Transact(ctx, ops...)
+	err = c.transactOps(ctx, ops)
 	if err != nil {
 		return fmt.Errorf("delete NAT transact: %w", err)
 	}
@@ -523,6 +553,11 @@ func (c *LiveOVNClient) DeleteNAT(ctx context.Context, routerName string, natTyp
 }
 
 func (c *LiveOVNClient) AddStaticRoute(ctx context.Context, routerName string, route *nbdb.LogicalRouterStaticRoute) error {
+	// Set a named UUID so the route can be referenced in the same transaction
+	if route.UUID == "" {
+		route.UUID = "route-" + route.IPPrefix
+	}
+
 	createOps, err := c.client.Create(route)
 	if err != nil {
 		return fmt.Errorf("create static route ops: %w", err)
@@ -543,7 +578,7 @@ func (c *LiveOVNClient) AddStaticRoute(ctx context.Context, routerName string, r
 	}
 
 	ops := append(createOps, mutateOps...)
-	_, err = c.client.Transact(ctx, ops...)
+	err = c.transactOps(ctx, ops)
 	if err != nil {
 		return fmt.Errorf("add static route transact: %w", err)
 	}
@@ -584,7 +619,7 @@ func (c *LiveOVNClient) DeleteStaticRoute(ctx context.Context, routerName string
 	}
 
 	ops := append(mutateOps, deleteOps...)
-	_, err = c.client.Transact(ctx, ops...)
+	err = c.transactOps(ctx, ops)
 	if err != nil {
 		return fmt.Errorf("delete static route transact: %w", err)
 	}
