@@ -129,6 +129,10 @@ type Daemon struct {
 	// When true, the daemon rejects new work and setupShutdown skips VM stops.
 	shuttingDown atomic.Bool
 
+	// ready is set to true once NATS connection, JetStream, and all services
+	// are fully initialized. The health endpoint reports "starting" until ready.
+	ready atomic.Bool
+
 	mu sync.Mutex
 }
 
@@ -511,29 +515,58 @@ func (d *Daemon) Start() error {
 
 	d.startHeartbeat()
 	d.startPendingWatchdog()
+
+	d.ready.Store(true)
+	slog.Info("Daemon fully initialized", "node", d.node, "startupTime", time.Since(d.startTime).Round(time.Second))
+
 	d.setupShutdown()
 	d.awaitShutdown()
 
 	return nil
 }
 
-// connectNATS establishes a connection to the NATS server with reconnect handling.
+// connectNATS establishes a connection to the NATS server with retry and
+// exponential backoff. On multi-node clusters, the local NATS server may not
+// be ready immediately after daemon start (e.g. if start-dev.sh is still
+// launching services). This retries for up to 5 minutes before giving up.
 func (d *Daemon) connectNATS() error {
-	nc, err := utils.ConnectNATS(d.config.NATS.Host, d.config.NATS.ACL.Token)
-	if err != nil {
-		return err
+	const maxWait = 5 * time.Minute
+	retryDelay := 500 * time.Millisecond
+	start := time.Now()
+
+	for {
+		nc, err := utils.ConnectNATS(d.config.NATS.Host, d.config.NATS.ACL.Token)
+		if err == nil {
+			d.natsConn = nc
+			if time.Since(start) > time.Second {
+				slog.Info("NATS connection established", "elapsed", time.Since(start))
+			}
+			return nil
+		}
+
+		elapsed := time.Since(start)
+		if elapsed >= maxWait {
+			return fmt.Errorf("NATS connect failed after %s: %w", elapsed.Round(time.Second), err)
+		}
+
+		slog.Warn("NATS not ready, retrying...", "error", err, "elapsed", elapsed.Round(time.Second), "retryIn", retryDelay)
+		time.Sleep(retryDelay)
+		retryDelay = min(retryDelay*2, 10*time.Second)
 	}
-	d.natsConn = nc
-	return nil
 }
 
-// initJetStream initializes JetStream with retry/backoff and upgrades replicas for multi-node clusters.
+// initJetStream initializes JetStream with retry/backoff and upgrades replicas
+// for multi-node clusters. On multi-node clusters, JetStream requires NATS
+// cluster quorum which may take several minutes if nodes start at different
+// times. This retries for up to 5 minutes to allow late-joining nodes.
 func (d *Daemon) initJetStream() error {
-	const maxRetries = 10
+	const maxWait = 5 * time.Minute
 	retryDelay := 500 * time.Millisecond
+	start := time.Now()
+	attempt := 0
 
-	var lastErr error
-	for attempt := 1; attempt <= maxRetries; attempt++ {
+	for {
+		attempt++
 		var err error
 		d.jsManager, err = NewJetStreamManager(d.natsConn, 1)
 		if err == nil {
@@ -545,22 +578,18 @@ func (d *Daemon) initJetStream() error {
 		}
 
 		if err == nil {
-			slog.Info("JetStream KV stores initialized successfully", "replicas", 1, "attempts", attempt)
-			lastErr = nil
+			slog.Info("JetStream KV stores initialized successfully", "replicas", 1, "attempts", attempt, "elapsed", time.Since(start).Round(time.Second))
 			break
 		}
 
-		lastErr = err
-		slog.Warn("Failed to init JetStream", "error", err, "attempt", attempt, "maxRetries", maxRetries)
-
-		if attempt < maxRetries {
-			time.Sleep(retryDelay)
-			retryDelay = min(retryDelay*2, 5*time.Second)
+		elapsed := time.Since(start)
+		if elapsed >= maxWait {
+			return fmt.Errorf("failed to initialize JetStream after %s (%d attempts): %w", elapsed.Round(time.Second), attempt, err)
 		}
-	}
 
-	if lastErr != nil {
-		return fmt.Errorf("failed to initialize JetStream after %d attempts: %w", maxRetries, lastErr)
+		slog.Warn("JetStream not ready (waiting for cluster quorum)", "error", err, "attempt", attempt, "elapsed", elapsed.Round(time.Second), "retryIn", retryDelay)
+		time.Sleep(retryDelay)
+		retryDelay = min(retryDelay*2, 10*time.Second)
 	}
 
 	// Upgrade replicas if cluster has more than one node
@@ -578,51 +607,59 @@ func (d *Daemon) initJetStream() error {
 // During cluster restarts, JetStream KV may be temporarily unavailable while
 // NATS routes re-establish and the cluster forms quorum.
 func (d *Daemon) initSnapshotService() (*handlers_ec2_snapshot.SnapshotServiceImpl, nats.KeyValue, error) {
-	const maxRetries = 10
+	const maxWait = 5 * time.Minute
 	retryDelay := 500 * time.Millisecond
+	start := time.Now()
+	attempt := 0
 
-	for attempt := 1; attempt <= maxRetries; attempt++ {
+	for {
+		attempt++
 		snapSvc, snapshotKV, err := handlers_ec2_snapshot.NewSnapshotServiceImplWithNATS(d.config, d.natsConn)
 		if err == nil {
 			if attempt > 1 {
-				slog.Info("Snapshot service initialized successfully", "attempts", attempt)
+				slog.Info("Snapshot service initialized successfully", "attempts", attempt, "elapsed", time.Since(start).Round(time.Second))
 			}
 			return snapSvc, snapshotKV, nil
 		}
 
-		slog.Warn("Failed to init snapshot service", "error", err, "attempt", attempt, "maxRetries", maxRetries)
-		if attempt < maxRetries {
-			time.Sleep(retryDelay)
-			retryDelay = min(retryDelay*2, 5*time.Second)
+		elapsed := time.Since(start)
+		if elapsed >= maxWait {
+			return nil, nil, fmt.Errorf("snapshot service unavailable after %s (%d attempts): %w", elapsed.Round(time.Second), attempt, err)
 		}
-	}
 
-	return nil, nil, fmt.Errorf("snapshot service unavailable after %d attempts", maxRetries)
+		slog.Warn("Failed to init snapshot service", "error", err, "attempt", attempt, "elapsed", elapsed.Round(time.Second))
+		time.Sleep(retryDelay)
+		retryDelay = min(retryDelay*2, 10*time.Second)
+	}
 }
 
 // initAccountService initializes the account settings service with retry/backoff.
 func (d *Daemon) initAccountService() error {
-	const maxRetries = 10
+	const maxWait = 5 * time.Minute
 	retryDelay := 500 * time.Millisecond
+	start := time.Now()
+	attempt := 0
 
-	for attempt := 1; attempt <= maxRetries; attempt++ {
+	for {
+		attempt++
 		svc, err := handlers_ec2_account.NewAccountSettingsServiceImplWithNATS(d.config, d.natsConn)
 		if err == nil {
 			if attempt > 1 {
-				slog.Info("Account settings service initialized successfully", "attempts", attempt)
+				slog.Info("Account settings service initialized successfully", "attempts", attempt, "elapsed", time.Since(start).Round(time.Second))
 			}
 			d.accountService = svc
 			return nil
 		}
 
-		slog.Warn("Failed to init account settings service", "error", err, "attempt", attempt, "maxRetries", maxRetries)
-		if attempt < maxRetries {
-			time.Sleep(retryDelay)
-			retryDelay = min(retryDelay*2, 5*time.Second)
+		elapsed := time.Since(start)
+		if elapsed >= maxWait {
+			return fmt.Errorf("account settings service unavailable after %s (%d attempts): %w", elapsed.Round(time.Second), attempt, err)
 		}
-	}
 
-	return fmt.Errorf("account settings service unavailable after %d attempts", maxRetries)
+		slog.Warn("Failed to init account settings service", "error", err, "attempt", attempt, "elapsed", elapsed.Round(time.Second))
+		time.Sleep(retryDelay)
+		retryDelay = min(retryDelay*2, 10*time.Second)
+	}
 }
 
 // waitForClusterReady waits until dependent infrastructure services are reachable
@@ -993,9 +1030,14 @@ func (d *Daemon) ClusterManager() error {
 			serviceHealth["ovn-controller"] = "not_running"
 		}
 
+		status := "running"
+		if !d.ready.Load() {
+			status = "starting"
+		}
+
 		response := config.NodeHealthResponse{
 			Node:          d.node,
-			Status:        "running",
+			Status:        status,
 			ConfigHash:    configHash,
 			Epoch:         d.clusterConfig.Epoch,
 			Uptime:        int64(time.Since(d.startTime).Seconds()),

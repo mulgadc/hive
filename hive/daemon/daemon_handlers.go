@@ -138,9 +138,14 @@ func (d *Daemon) handleHealthCheck(msg *nats.Msg) {
 		configHash = "error"
 	}
 
+	status := "running"
+	if !d.ready.Load() {
+		status = "starting"
+	}
+
 	response := config.NodeHealthResponse{
 		Node:       d.node,
-		Status:     "running",
+		Status:     status,
 		ConfigHash: configHash,
 		Epoch:      d.clusterConfig.Epoch,
 		Uptime:     int64(time.Since(d.startTime).Seconds()),

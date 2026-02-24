@@ -314,6 +314,7 @@ func TestHandleHealthCheck(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
+	// Before ready is set, status should be "starting"
 	reply, err := daemon.natsConn.Request(topic, nil, 5*time.Second)
 	require.NoError(t, err)
 	require.NotNil(t, reply)
@@ -323,9 +324,18 @@ func TestHandleHealthCheck(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, daemon.node, resp.Node)
-	assert.Equal(t, "running", resp.Status)
+	assert.Equal(t, "starting", resp.Status)
 	assert.NotEmpty(t, resp.ConfigHash)
 	assert.GreaterOrEqual(t, resp.Uptime, int64(0))
+
+	// After marking ready, status should be "running"
+	daemon.ready.Store(true)
+	reply, err = daemon.natsConn.Request(topic, nil, 5*time.Second)
+	require.NoError(t, err)
+
+	err = json.Unmarshal(reply.Data, &resp)
+	require.NoError(t, err)
+	assert.Equal(t, "running", resp.Status)
 }
 
 // --- handleNodeDiscover tests ---
