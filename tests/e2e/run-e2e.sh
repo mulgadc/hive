@@ -78,7 +78,7 @@ sudo update-ca-certificates
 # Ensure logs directory exists for start-dev.sh
 mkdir -p ~/hive/logs
 mkdir -p /mnt/ramdisk
-HIVE_SKIP_BUILD=true ./scripts/start-dev.sh
+./scripts/start-dev.sh
 
 # Wait for health checks on https://localhost:9999 (AWS Gateway)
 echo "Waiting for AWS Gateway..."

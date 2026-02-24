@@ -158,7 +158,7 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     ip="${MGMT_IPS[$i]}"
     (
         echo "    node$((i + 1)) ($ip): starting services..."
-        remote "$ip" "export PATH=\$PATH:/usr/local/go/bin && cd ~/Development/mulga/hive && HIVE_SKIP_BUILD=true ./scripts/start-dev.sh"
+        remote "$ip" "export PATH=\$PATH:/usr/local/go/bin && cd ~/Development/mulga/hive && ./scripts/start-dev.sh"
         echo "    node$((i + 1)) ($ip): services started"
     ) &
     PIDS+=($!)

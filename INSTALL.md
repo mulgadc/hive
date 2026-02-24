@@ -745,9 +745,9 @@ All three processes will exit with a cluster summary once formation is complete.
 Start services on each node (in separate terminals or background):
 
 ```bash
-HIVE_SKIP_BUILD=true UI=false ./scripts/start-dev.sh ~/node1/
-HIVE_SKIP_BUILD=true UI=false ./scripts/start-dev.sh ~/node2/
-HIVE_SKIP_BUILD=true UI=false ./scripts/start-dev.sh ~/node3/
+./scripts/start-dev.sh ~/node1/
+./scripts/start-dev.sh ~/node2/
+./scripts/start-dev.sh ~/node3/
 ```
 
 ### Option B: Real Multi-Node (Physical Servers)

@@ -187,7 +187,7 @@ start_node_services() {
     echo "Starting services for node$node_num at $node_ip..."
 
     # Start all services - each node's config binds to its specific IP
-    HIVE_SKIP_BUILD=true ./scripts/start-dev.sh "$data_dir"
+    ./scripts/start-dev.sh "$data_dir"
 
     echo "Node$node_num services started"
 }
