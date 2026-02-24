@@ -246,32 +246,24 @@ func (rm *ResourceManager) GetAvailableInstanceTypeInfos(showCapacity bool) []*e
 
 	for _, it := range rm.instanceTypes {
 		vCPUs := instanceTypeVCPUs(it)
-		memoryGB := float64(instanceTypeMemoryMiB(it)) / 1024.0
+		memMiB := instanceTypeMemoryMiB(it)
 
-		if vCPUs == 0 || memoryGB == 0 {
+		if vCPUs == 0 || memMiB == 0 {
 			continue
 		}
 
-		remainingVCPU := rm.availableVCPU - rm.allocatedVCPU
-		remainingMem := rm.availableMem - rm.allocatedMem
-
-		// Calculate how many instances of this type can fit based on REMAINING host capacity
-		countVCPU := remainingVCPU / int(vCPUs)
-		countMem := int(remainingMem / memoryGB)
-
-		// Use the minimum of CPU slots and Memory slots
-		count := min(countMem, countVCPU)
-
-		// ensure non negative
-		count = max(count, 0)
+		count := canAllocateCount(
+			rm.availableVCPU, rm.allocatedVCPU,
+			rm.availableMem, rm.allocatedMem,
+			vCPUs, memMiB,
+			1<<30, // effectively unlimited — let resources be the constraint
+		)
 
 		if showCapacity {
-			// Add to the list as many times as it can fit
-			for i := 0; i < count; i++ {
+			for range count {
 				infos = append(infos, it)
 			}
 		} else if count > 0 {
-			// Just add it once if it fits at least once
 			infos = append(infos, it)
 		}
 	}
@@ -296,27 +288,11 @@ func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64
 	remainingMem := rm.availableMem - rm.allocatedMem
 
 	for _, it := range rm.instanceTypes {
-		vCPUs := instanceTypeVCPUs(it)
-		memGB := float64(instanceTypeMemoryMiB(it)) / 1024.0
-		if vCPUs == 0 || memGB == 0 {
+		cap := resourceStatsForType(remainingVCPU, remainingMem, it)
+		if cap.VCPU == 0 || cap.MemoryGB == 0 {
 			continue
 		}
-		countVCPU := remainingVCPU / int(vCPUs)
-		countMem := int(remainingMem / memGB)
-		count := min(countMem, countVCPU)
-
-		// ensure non negative
-		count = max(count, 0)
-		name := ""
-		if it.InstanceType != nil {
-			name = *it.InstanceType
-		}
-		caps = append(caps, config.InstanceTypeCap{
-			Name:      name,
-			VCPU:      int(vCPUs),
-			MemoryGB:  memGB,
-			Available: count,
-		})
+		caps = append(caps, cap)
 	}
 	return
 }
@@ -2118,38 +2094,19 @@ func nextAvailableDevice(instance *vm.VM) string {
 	return ""
 }
 
-// canAllocate checks how many instances of the given type can be allocated
-// Returns the count that can actually be allocated (0 to count)
+// canAllocate checks how many instances of the given type can be allocated.
+// Returns the count that can actually be allocated (0 to count).
 func (rm *ResourceManager) canAllocate(instanceType *ec2.InstanceTypeInfo, count int) int {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
-	vCPUs := instanceTypeVCPUs(instanceType)
-	memoryGB := float64(instanceTypeMemoryMiB(instanceType)) / 1024.0
-
-	availableVCPU := rm.availableVCPU - rm.allocatedVCPU
-	availableMem := rm.availableMem - rm.allocatedMem
-
-	// Calculate how many instances we can fit based on CPU and memory
-	countByCPU := count
-	if vCPUs > 0 {
-		countByCPU = availableVCPU / int(vCPUs)
-	}
-
-	countByMem := count
-	if memoryGB > 0 {
-		countByMem = int(availableMem / memoryGB)
-	}
-
-	// Take the minimum of CPU-limited and memory-limited counts
-	allocatableCount := min(countByMem, countByCPU)
-	// Cap at requested count
-	allocatableCount = min(allocatableCount, count)
-
-	// ensure non negative
-	allocatableCount = max(allocatableCount, 0)
-
-	return allocatableCount
+	return canAllocateCount(
+		rm.availableVCPU, rm.allocatedVCPU,
+		rm.availableMem, rm.allocatedMem,
+		instanceTypeVCPUs(instanceType),
+		instanceTypeMemoryMiB(instanceType),
+		count,
+	)
 }
 
 // allocate reserves resources for an instance and updates NATS subscriptions

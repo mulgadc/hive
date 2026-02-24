@@ -20,6 +20,19 @@ const (
 	restartBackoffMax   = 2 * time.Minute
 )
 
+// restartBackoff computes the exponential backoff delay for the given
+// restart count. Pure function — no side effects.
+func restartBackoff(restartCount int) time.Duration {
+	delay := restartBackoffBase
+	for range restartCount {
+		delay *= 2
+		if delay > restartBackoffMax {
+			return restartBackoffMax
+		}
+	}
+	return delay
+}
+
 // classifyCrashReason extracts a human-readable crash reason from the error
 // returned by cmd.Wait(). Uses exec.ExitError + syscall.WaitStatus to
 // distinguish OOM kills (SIGKILL), segfaults (SIGSEGV), etc.
@@ -210,15 +223,7 @@ func (d *Daemon) maybeRestartInstance(instance *vm.VM) {
 		return
 	}
 
-	// Calculate exponential backoff
-	delay := restartBackoffBase
-	for range restartCount {
-		delay *= 2
-		if delay > restartBackoffMax {
-			delay = restartBackoffMax
-			break
-		}
-	}
+	delay := restartBackoff(restartCount)
 
 	slog.Info("Scheduling instance restart",
 		"instance", instance.ID,

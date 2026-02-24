@@ -43,7 +43,7 @@ fi
 if [[ -z "$BASE_REF" ]]; then
     BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}"
     case "$BRANCH" in
-        main) BASE_REF="origin/main" ;;
+        main) BASE_REF="HEAD~1" ;;
         dev)  BASE_REF="origin/main" ;;
         *)    BASE_REF="origin/dev" ;;
     esac

@@ -58,7 +58,7 @@ preflight: check-format check-modernize vet security-check test-cover diff-cover
 # Run unit tests
 test:
 	@echo -e "\n....Running tests for $(GO_PROJECT_NAME)...."
-	LOG_IGNORE=1 go test -v -timeout 120s ./hive/...
+	LOG_IGNORE=1 go test -timeout 120s ./hive/...
 
 # Run unit tests with coverage profile
 # Note: go test may exit non-zero due to Go version mismatch in coverage instrumentation
@@ -67,7 +67,7 @@ COVERPROFILE ?= coverage.out
 MIN_COVERAGE ?= 50.0
 test-cover:
 	@echo -e "\n....Running tests with coverage for $(GO_PROJECT_NAME)...."
-	LOG_IGNORE=1 go test -v -timeout 120s -coverprofile=$(COVERPROFILE) -covermode=atomic ./hive/... || true
+	LOG_IGNORE=1 go test -timeout 120s -coverprofile=$(COVERPROFILE) -covermode=atomic ./hive/... || true
 	@echo ""
 	@echo "=== Total Coverage ==="
 	@go tool cover -func=$(COVERPROFILE) | tail -1
@@ -188,7 +188,7 @@ security-check:
 	@echo -e "\n....Running security checks for $(GO_PROJECT_NAME)...."
 	set -o pipefail && go tool govulncheck ./... 2>&1 | tee tests/govulncheck-report.txt
 	@echo "  govulncheck ok"
-	set -o pipefail && go tool gosec -exclude=G204,G304,G402 -exclude-generated -exclude-dir=cmd ./... 2>&1 | tee tests/gosec-report.txt
+	set -o pipefail && go tool gosec -quiet -exclude=G204,G304,G402 -exclude-generated -exclude-dir=cmd ./... 2>&1 | tee tests/gosec-report.txt
 	@echo "  gosec ok"
 	set -o pipefail && go tool staticcheck -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./... 2>&1 | tee tests/staticcheck-report.txt
 	@echo "  staticcheck ok"

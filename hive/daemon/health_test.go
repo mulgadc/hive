@@ -179,27 +179,23 @@ func TestMaybeRestart_ResetsAfterWindow(t *testing.T) {
 }
 
 func TestRestartBackoff_Exponential(t *testing.T) {
-	// Verify the backoff calculation logic
-	expected := []time.Duration{
-		5 * time.Second,   // restart 0
-		10 * time.Second,  // restart 1
-		20 * time.Second,  // restart 2
-		40 * time.Second,  // restart 3
-		80 * time.Second,  // restart 4
-		120 * time.Second, // restart 5 (capped at 2min)
-		120 * time.Second, // restart 6 (capped at 2min)
+	tests := []struct {
+		restartCount int
+		want         time.Duration
+	}{
+		{0, 5 * time.Second},
+		{1, 10 * time.Second},
+		{2, 20 * time.Second},
+		{3, 40 * time.Second},
+		{4, 80 * time.Second},
+		{5, 120 * time.Second},   // capped at 2min
+		{6, 120 * time.Second},   // stays capped
+		{100, 120 * time.Second}, // large count stays capped
 	}
 
-	for i, want := range expected {
-		delay := restartBackoffBase
-		for range i {
-			delay *= 2
-			if delay > restartBackoffMax {
-				delay = restartBackoffMax
-				break
-			}
-		}
-		assert.Equal(t, want, delay, "Backoff mismatch at restart count %d", i)
+	for _, tc := range tests {
+		got := restartBackoff(tc.restartCount)
+		assert.Equal(t, tc.want, got, "Backoff mismatch at restart count %d", tc.restartCount)
 	}
 }
 
