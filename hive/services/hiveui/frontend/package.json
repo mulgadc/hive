@@ -10,9 +10,9 @@
     "fix": "biome check --fix"
   },
   "dependencies": {
-    "@aws-sdk/client-ec2": "^3.975.0",
-    "@aws-sdk/client-s3": "^3.975.0",
-    "@aws-sdk/lib-storage": "^3.975.0",
+    "@aws-sdk/client-ec2": "^3.995.0",
+    "@aws-sdk/client-s3": "^3.995.0",
+    "@aws-sdk/lib-storage": "^3.995.0",
     "@base-ui/react": "^1.1.0",
     "@fontsource-variable/geist": "^5.2.8",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
@@ -40,7 +40,7 @@
     "@vitejs/plugin-react": "^5.1.2",
     "babel-plugin-react-compiler": "^1.0.0",
     "typescript": "^5.9.3",
-    "ultracite": "^7.0.12",
+    "ultracite": "^7.2.3",
     "vite": "^7.3.1"
   },
   "packageManager": "pnpm@10.28.0+sha512.05df71d1421f21399e053fde567cea34d446fa02c76571441bfc1c7956e98e363088982d940465fd34480d4d90a0668bc12362f8aa88000a64e83d0b0e47be48"

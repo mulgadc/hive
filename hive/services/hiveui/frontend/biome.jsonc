@@ -4,6 +4,8 @@
   "assist": {
     "actions": {
       "source": {
+        "useSortedProperties": "off",
+        "useSortedInterfaceMembers": "off",
         "organizeImports": {
           "level": "on",
           "options": {
