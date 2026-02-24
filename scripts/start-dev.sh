@@ -2,12 +2,12 @@
 
 # Start Hive development environment
 # This script starts all required services in the correct order using Hive service commands
-# Usage: ./scripts/start-dev.sh [data-dir]
+# Usage: ./scripts/start-dev.sh [--build] [data-dir]
+#   --build:  Rebuild all binaries before starting (default: skip build)
 #   data-dir: Optional data directory path (default: ~/hive)
 #
 # Environment variables:
 #   UI=false              Skip starting Hive UI (e.g., UI=false ./scripts/start-dev.sh)
-#   HIVE_SKIP_BUILD=true  Skip building binaries before starting
 
 set -e
 
@@ -15,8 +15,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MULGA_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"
 
-# Accept optional data directory argument
-DATA_DIR="${1:-$HOME/hive}"
+# Parse arguments
+BUILD=false
+DATA_DIR="$HOME/hive"
+for arg in "$@"; do
+    case "$arg" in
+        --build) BUILD=true ;;
+        *) DATA_DIR="$arg" ;;
+    esac
+done
 
 # Configuration paths
 # Use CONFIG_DIR environment variable if set, otherwise derive from DATA_DIR
@@ -166,8 +173,8 @@ check_service() {
 
 }
 
-# Pre-flight, compile latest
-if [ "$HIVE_SKIP_BUILD" != "true" ]; then
+# Pre-flight, compile latest (only with --build flag)
+if [ "$BUILD" = "true" ]; then
     echo "✈️  Pre-flight, compiling latest..."
 
     echo "   Building hive..."
@@ -183,7 +190,7 @@ if [ "$HIVE_SKIP_BUILD" != "true" ]; then
 
     echo "   ✅ Build complete"
 else
-    echo "✈️  Skipping build (HIVE_SKIP_BUILD=true)"
+    echo "✈️  Skipping build (pass --build to rebuild)"
 fi
 
 # 0️⃣ Verify OVN networking readiness (required — blocks service startup)
@@ -306,9 +313,8 @@ if has_service "viperblock"; then
 
     if [ ! -f "$NBD_PLUGIN_PATH" ]; then
         echo "   ⚠️  NBD plugin not found at $NBD_PLUGIN_PATH"
-        echo "   Building Viperblock first..."
-        cd "$MULGA_ROOT/viperblock"
-        make build
+        echo "   Building Viperblock NBD plugin..."
+        cd "$MULGA_ROOT/viperblock" && make build
         cd "$PROJECT_ROOT"
     fi
 

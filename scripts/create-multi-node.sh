@@ -74,13 +74,13 @@ echo "Step 2: Starting Services"
 echo "========================="
 
 # Start node 1 first (Predastore needs quorum)
-HIVE_SKIP_BUILD=true UI=false ./scripts/start-dev.sh ~/node1/ &
+UI=false ./scripts/start-dev.sh ~/node1/ &
 sleep 5
 
 # Start nodes 2 and 3
-HIVE_SKIP_BUILD=true UI=false ./scripts/start-dev.sh ~/node2/ &
+UI=false ./scripts/start-dev.sh ~/node2/ &
 sleep 2
-HIVE_SKIP_BUILD=true UI=false ./scripts/start-dev.sh ~/node3/ &
+UI=false ./scripts/start-dev.sh ~/node3/ &
 
 # Wait for all start scripts to finish
 wait
