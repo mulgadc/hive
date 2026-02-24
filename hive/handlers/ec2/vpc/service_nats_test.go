@@ -22,14 +22,14 @@ func setupNATSVPCServiceTest(t *testing.T) (VPCService, *VPCServiceImpl, *nats.C
 
 	// Subscribe the backend handlers on NATS topics
 	topics := map[string]func(*nats.Msg){
-		"ec2.CreateVpc":                func(msg *nats.Msg) { handleNATSMsg(msg, backend.CreateVpc) },
-		"ec2.DeleteVpc":                func(msg *nats.Msg) { handleNATSMsg(msg, backend.DeleteVpc) },
-		"ec2.DescribeVpcs":             func(msg *nats.Msg) { handleNATSMsg(msg, backend.DescribeVpcs) },
-		"ec2.CreateSubnet":             func(msg *nats.Msg) { handleNATSMsg(msg, backend.CreateSubnet) },
-		"ec2.DeleteSubnet":             func(msg *nats.Msg) { handleNATSMsg(msg, backend.DeleteSubnet) },
-		"ec2.DescribeSubnets":          func(msg *nats.Msg) { handleNATSMsg(msg, backend.DescribeSubnets) },
-		"ec2.CreateNetworkInterface":   func(msg *nats.Msg) { handleNATSMsg(msg, backend.CreateNetworkInterface) },
-		"ec2.DeleteNetworkInterface":   func(msg *nats.Msg) { handleNATSMsg(msg, backend.DeleteNetworkInterface) },
+		"ec2.CreateVpc":                 func(msg *nats.Msg) { handleNATSMsg(msg, backend.CreateVpc) },
+		"ec2.DeleteVpc":                 func(msg *nats.Msg) { handleNATSMsg(msg, backend.DeleteVpc) },
+		"ec2.DescribeVpcs":              func(msg *nats.Msg) { handleNATSMsg(msg, backend.DescribeVpcs) },
+		"ec2.CreateSubnet":              func(msg *nats.Msg) { handleNATSMsg(msg, backend.CreateSubnet) },
+		"ec2.DeleteSubnet":              func(msg *nats.Msg) { handleNATSMsg(msg, backend.DeleteSubnet) },
+		"ec2.DescribeSubnets":           func(msg *nats.Msg) { handleNATSMsg(msg, backend.DescribeSubnets) },
+		"ec2.CreateNetworkInterface":    func(msg *nats.Msg) { handleNATSMsg(msg, backend.CreateNetworkInterface) },
+		"ec2.DeleteNetworkInterface":    func(msg *nats.Msg) { handleNATSMsg(msg, backend.DeleteNetworkInterface) },
 		"ec2.DescribeNetworkInterfaces": func(msg *nats.Msg) { handleNATSMsg(msg, backend.DescribeNetworkInterfaces) },
 	}
 

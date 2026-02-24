@@ -2519,3 +2519,739 @@ func TestDelegateHandlers_EIGW(t *testing.T) {
 		})
 	}
 }
+
+// --- handleEC2ModifyVolume success path ---
+
+func TestHandleEC2ModifyVolume_Success(t *testing.T) {
+	daemon, store := createFullTestDaemonWithStore(t, sharedNATSURL)
+
+	// Seed a volume in the store
+	volumeID := "vol-modify-success"
+	wrapper := struct {
+		VolumeConfig viperblock.VolumeConfig `json:"VolumeConfig"`
+	}{
+		VolumeConfig: viperblock.VolumeConfig{
+			VolumeMetadata: viperblock.VolumeMetadata{
+				VolumeID:   volumeID,
+				SizeGiB:    10,
+				State:      "available",
+				VolumeType: "gp3",
+			},
+		},
+	}
+	data, _ := json.Marshal(wrapper)
+	store.PutObject(&awss3.PutObjectInput{
+		Bucket: aws.String("test-bucket"),
+		Key:    aws.String(volumeID + "/config.json"),
+		Body:   strings.NewReader(string(data)),
+	})
+
+	// Subscribe a dummy ebs.sync handler so the NATS Request doesn't time out
+	syncSub, err := daemon.natsConn.Subscribe("ebs.sync", func(msg *nats.Msg) {
+		_ = msg.Respond([]byte(`{}`))
+	})
+	require.NoError(t, err)
+	defer syncSub.Unsubscribe()
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyVolume", "hive-workers", daemon.handleEC2ModifyVolume)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.ModifyVolumeInput{
+		VolumeId: aws.String(volumeID),
+		Size:     aws.Int64(20),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.ModifyVolume", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.ModifyVolumeOutput
+	err = json.Unmarshal(reply.Data, &output)
+	require.NoError(t, err)
+	require.NotNil(t, output.VolumeModification)
+	assert.Equal(t, volumeID, *output.VolumeModification.VolumeId)
+	assert.Equal(t, int64(10), *output.VolumeModification.OriginalSize)
+	assert.Equal(t, int64(20), *output.VolumeModification.TargetSize)
+	assert.Equal(t, "completed", *output.VolumeModification.ModificationState)
+}
+
+// --- handleEC2TerminateStoppedInstance with volumes ---
+
+func TestHandleEC2TerminateStoppedInstance_WithVolumes(t *testing.T) {
+	daemon := createFullTestDaemonWithJetStream(t, sharedJSNATSURL)
+
+	// Subscribe a dummy ebs.delete handler
+	ebsDeleteSub, err := daemon.natsConn.Subscribe("ebs.delete", func(msg *nats.Msg) {
+		_ = msg.Respond([]byte(`{"status":"deleted"}`))
+	})
+	require.NoError(t, err)
+	defer ebsDeleteSub.Unsubscribe()
+
+	stoppedVM := &vm.VM{
+		ID:           "i-term-vol-001",
+		Status:       vm.StateStopped,
+		InstanceType: getTestInstanceType(),
+		LastNode:     "node-1",
+		Reservation: &ec2.Reservation{
+			ReservationId: aws.String("r-term-vol-001"),
+			OwnerId:       aws.String("123456789012"),
+		},
+		Instance: &ec2.Instance{
+			InstanceId:   aws.String("i-term-vol-001"),
+			InstanceType: aws.String(getTestInstanceType()),
+		},
+	}
+	// Add EFI, CloudInit, and a user volume with DeleteOnTermination
+	stoppedVM.EBSRequests.Requests = []config.EBSRequest{
+		{Name: "vol-efi-001", EFI: true},
+		{Name: "vol-ci-001", CloudInit: true},
+		{Name: "vol-user-001", DeleteOnTermination: true},
+		{Name: "vol-keep-001", DeleteOnTermination: false},
+	}
+
+	err = daemon.jsManager.WriteStoppedInstance(stoppedVM.ID, stoppedVM)
+	require.NoError(t, err)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.terminate", "hive-workers", daemon.handleEC2TerminateStoppedInstance)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reqData, _ := json.Marshal(map[string]string{"instance_id": "i-term-vol-001"})
+	reply, err := daemon.natsConn.Request("ec2.terminate", reqData, 10*time.Second)
+	require.NoError(t, err)
+
+	var resp map[string]string
+	err = json.Unmarshal(reply.Data, &resp)
+	require.NoError(t, err)
+	assert.Equal(t, "terminated", resp["status"])
+	assert.Equal(t, "i-term-vol-001", resp["instanceId"])
+
+	loaded, err := daemon.jsManager.LoadStoppedInstance("i-term-vol-001")
+	require.NoError(t, err)
+	assert.Nil(t, loaded)
+}
+
+// --- handleEC2DescribeInstanceTypes with capacity filter ---
+
+func TestHandleEC2DescribeInstanceTypes_CapacityFilter(t *testing.T) {
+	daemon := createFullTestDaemon(t, sharedNATSURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeInstanceTypes", "hive-workers", daemon.handleEC2DescribeInstanceTypes)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	// Request with capacity=true filter
+	input := &ec2.DescribeInstanceTypesInput{
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("capacity"),
+				Values: []*string{aws.String("true")},
+			},
+		},
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.DescribeInstanceTypes", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.DescribeInstanceTypesOutput
+	err = json.Unmarshal(reply.Data, &output)
+	require.NoError(t, err)
+	// Should return instance types that fit the node's available capacity
+	assert.NotNil(t, output.InstanceTypes)
+}
+
+func TestHandleEC2DescribeInstanceTypes_NoFilter(t *testing.T) {
+	daemon := createFullTestDaemon(t, sharedNATSURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeInstanceTypes.nofilter", "hive-workers", daemon.handleEC2DescribeInstanceTypes)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.DescribeInstanceTypesInput{}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.DescribeInstanceTypes.nofilter", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.DescribeInstanceTypesOutput
+	err = json.Unmarshal(reply.Data, &output)
+	require.NoError(t, err)
+	assert.NotNil(t, output.InstanceTypes)
+	assert.Greater(t, len(output.InstanceTypes), 0)
+}
+
+// --- handleEC2StartStoppedInstance: instance type not available ---
+
+func TestHandleEC2StartStoppedInstance_InstanceTypeNotAvailable(t *testing.T) {
+	daemon := createFullTestDaemonWithJetStream(t, sharedJSNATSURL)
+
+	stoppedVM := &vm.VM{
+		ID:           "i-start-badtype-001",
+		Status:       vm.StateStopped,
+		InstanceType: "z99.nonexistent",
+		Instance: &ec2.Instance{
+			InstanceId:   aws.String("i-start-badtype-001"),
+			InstanceType: aws.String("z99.nonexistent"),
+		},
+	}
+	err := daemon.jsManager.WriteStoppedInstance(stoppedVM.ID, stoppedVM)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = daemon.jsManager.DeleteStoppedInstance(stoppedVM.ID) })
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.start", "hive-workers", daemon.handleEC2StartStoppedInstance)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reqData, _ := json.Marshal(map[string]string{"instance_id": "i-start-badtype-001"})
+	reply, err := daemon.natsConn.Request("ec2.start", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+}
+
+// --- handleEC2CreateImage: running instance with valid root volume ---
+
+func TestHandleEC2CreateImage_RunningInstanceReachesService(t *testing.T) {
+	daemon, store := createFullTestDaemonWithStore(t, sharedNATSURL)
+
+	instanceID := "i-create-image-running"
+	rootVolumeID := "vol-root-img-001"
+	sourceImageID := "ami-source-001"
+
+	// Seed a root volume config
+	wrapper := struct {
+		VolumeConfig viperblock.VolumeConfig `json:"VolumeConfig"`
+	}{
+		VolumeConfig: viperblock.VolumeConfig{
+			VolumeMetadata: viperblock.VolumeMetadata{
+				VolumeID: rootVolumeID,
+				SizeGiB:  8,
+				State:    "in-use",
+			},
+		},
+	}
+	volData, _ := json.Marshal(wrapper)
+	store.PutObject(&awss3.PutObjectInput{
+		Bucket: aws.String("test-bucket"),
+		Key:    aws.String(rootVolumeID + "/config.json"),
+		Body:   strings.NewReader(string(volData)),
+	})
+
+	daemon.Instances.Mu.Lock()
+	daemon.Instances.VMS[instanceID] = &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateRunning,
+		InstanceType: getTestInstanceType(),
+		Instance: &ec2.Instance{
+			InstanceId: aws.String(instanceID),
+			ImageId:    aws.String(sourceImageID),
+			BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{
+				{
+					DeviceName: aws.String("/dev/sda1"),
+					Ebs: &ec2.EbsInstanceBlockDevice{
+						VolumeId: aws.String(rootVolumeID),
+					},
+				},
+			},
+		},
+	}
+	daemon.Instances.Mu.Unlock()
+
+	sub, err := daemon.natsConn.Subscribe(
+		fmt.Sprintf("ec2.%s.CreateImage", instanceID),
+		daemon.handleEC2CreateImage,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.CreateImageInput{
+		InstanceId: aws.String(instanceID),
+		Name:       aws.String("test-image-snapshot"),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request(
+		fmt.Sprintf("ec2.%s.CreateImage", instanceID),
+		reqData,
+		5*time.Second,
+	)
+	require.NoError(t, err)
+	// The service call may fail (no real S3 backend), but we've exercised
+	// the handler path up through service invocation: instance lookup,
+	// state validation, root volume extraction, params construction.
+	assert.NotEmpty(t, reply.Data)
+}
+
+// --- handleAttachVolume: missing volume data ---
+
+func TestAttachVolume_MissingVolumeData(t *testing.T) {
+	daemon := createFullTestDaemon(t, sharedNATSURL)
+
+	instanceID := "i-attach-missing-vol"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateRunning,
+		InstanceType: getTestInstanceType(),
+		Instance:     &ec2.Instance{},
+		QMPClient:    &qmp.QMPClient{},
+	}
+	daemon.Instances.VMS[instanceID] = instance
+
+	sub, err := daemon.natsConn.Subscribe(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		daemon.handleEC2Events,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	// AttachVolume with nil AttachVolumeData
+	command := qmp.Command{
+		ID: instanceID,
+		Attributes: qmp.Attributes{
+			AttachVolume: true,
+		},
+		AttachVolumeData: nil,
+	}
+	cmdData, _ := json.Marshal(command)
+
+	resp, err := daemon.natsConn.Request(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		cmdData,
+		5*time.Second,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, string(resp.Data), "InvalidParameterValue")
+}
+
+func TestAttachVolume_InstanceNotRunning(t *testing.T) {
+	daemon := createFullTestDaemon(t, sharedNATSURL)
+
+	instanceID := "i-attach-stopped"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateStopped,
+		InstanceType: getTestInstanceType(),
+		Instance:     &ec2.Instance{},
+		QMPClient:    &qmp.QMPClient{},
+	}
+	daemon.Instances.VMS[instanceID] = instance
+
+	sub, err := daemon.natsConn.Subscribe(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		daemon.handleEC2Events,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	command := qmp.Command{
+		ID: instanceID,
+		Attributes: qmp.Attributes{
+			AttachVolume: true,
+		},
+		AttachVolumeData: &qmp.AttachVolumeData{
+			VolumeID: "vol-test-123",
+		},
+	}
+	cmdData, _ := json.Marshal(command)
+
+	resp, err := daemon.natsConn.Request(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		cmdData,
+		5*time.Second,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, string(resp.Data), "IncorrectInstanceState")
+}
+
+func TestAttachVolume_VolumeNotFound(t *testing.T) {
+	daemon, _ := createFullTestDaemonWithStore(t, sharedNATSURL)
+
+	instanceID := "i-attach-vol-notfound"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateRunning,
+		InstanceType: getTestInstanceType(),
+		Instance:     &ec2.Instance{},
+		QMPClient:    &qmp.QMPClient{},
+	}
+	daemon.Instances.VMS[instanceID] = instance
+
+	sub, err := daemon.natsConn.Subscribe(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		daemon.handleEC2Events,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	command := qmp.Command{
+		ID: instanceID,
+		Attributes: qmp.Attributes{
+			AttachVolume: true,
+		},
+		AttachVolumeData: &qmp.AttachVolumeData{
+			VolumeID: "vol-nonexistent-999",
+		},
+	}
+	cmdData, _ := json.Marshal(command)
+
+	resp, err := daemon.natsConn.Request(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		cmdData,
+		5*time.Second,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, string(resp.Data), "InvalidVolume.NotFound")
+}
+
+func TestAttachVolume_VolumeInUse(t *testing.T) {
+	daemon, store := createFullTestDaemonWithStore(t, sharedNATSURL)
+
+	instanceID := "i-attach-vol-inuse"
+	volumeID := "vol-in-use-001"
+
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateRunning,
+		InstanceType: getTestInstanceType(),
+		Instance:     &ec2.Instance{},
+		QMPClient:    &qmp.QMPClient{},
+	}
+	daemon.Instances.VMS[instanceID] = instance
+
+	// Seed a volume that is already in-use
+	wrapper := struct {
+		VolumeConfig viperblock.VolumeConfig `json:"VolumeConfig"`
+	}{
+		VolumeConfig: viperblock.VolumeConfig{
+			VolumeMetadata: viperblock.VolumeMetadata{
+				VolumeID: volumeID,
+				SizeGiB:  10,
+				State:    "in-use",
+			},
+		},
+	}
+	data, _ := json.Marshal(wrapper)
+	store.PutObject(&awss3.PutObjectInput{
+		Bucket: aws.String("test-bucket"),
+		Key:    aws.String(volumeID + "/config.json"),
+		Body:   strings.NewReader(string(data)),
+	})
+
+	sub, err := daemon.natsConn.Subscribe(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		daemon.handleEC2Events,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	command := qmp.Command{
+		ID: instanceID,
+		Attributes: qmp.Attributes{
+			AttachVolume: true,
+		},
+		AttachVolumeData: &qmp.AttachVolumeData{
+			VolumeID: volumeID,
+		},
+	}
+	cmdData, _ := json.Marshal(command)
+
+	resp, err := daemon.natsConn.Request(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		cmdData,
+		5*time.Second,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, string(resp.Data), "VolumeInUse")
+}
+
+// --- handleEC2Events: detach volume validation ---
+
+func TestDetachVolume_MissingVolumeData(t *testing.T) {
+	daemon := createFullTestDaemon(t, sharedNATSURL)
+
+	instanceID := "i-detach-missing"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateRunning,
+		InstanceType: getTestInstanceType(),
+		Instance:     &ec2.Instance{},
+		QMPClient:    &qmp.QMPClient{},
+	}
+	daemon.Instances.VMS[instanceID] = instance
+
+	sub, err := daemon.natsConn.Subscribe(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		daemon.handleEC2Events,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	command := qmp.Command{
+		ID: instanceID,
+		Attributes: qmp.Attributes{
+			DetachVolume: true,
+		},
+		DetachVolumeData: nil,
+	}
+	cmdData, _ := json.Marshal(command)
+
+	resp, err := daemon.natsConn.Request(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		cmdData,
+		5*time.Second,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, string(resp.Data), "InvalidParameterValue")
+}
+
+func TestDetachVolume_InstanceNotRunning(t *testing.T) {
+	daemon := createFullTestDaemon(t, sharedNATSURL)
+
+	instanceID := "i-detach-stopped"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateStopped,
+		InstanceType: getTestInstanceType(),
+		Instance:     &ec2.Instance{},
+		QMPClient:    &qmp.QMPClient{},
+	}
+	daemon.Instances.VMS[instanceID] = instance
+
+	sub, err := daemon.natsConn.Subscribe(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		daemon.handleEC2Events,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	command := qmp.Command{
+		ID: instanceID,
+		Attributes: qmp.Attributes{
+			DetachVolume: true,
+		},
+		DetachVolumeData: &qmp.DetachVolumeData{
+			VolumeID: "vol-test-123",
+		},
+	}
+	cmdData, _ := json.Marshal(command)
+
+	resp, err := daemon.natsConn.Request(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		cmdData,
+		5*time.Second,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, string(resp.Data), "IncorrectInstanceState")
+}
+
+func TestDetachVolume_VolumeNotAttached(t *testing.T) {
+	daemon := createFullTestDaemon(t, sharedNATSURL)
+
+	instanceID := "i-detach-notattached"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateRunning,
+		InstanceType: getTestInstanceType(),
+		Instance:     &ec2.Instance{},
+		QMPClient:    &qmp.QMPClient{},
+	}
+	daemon.Instances.VMS[instanceID] = instance
+
+	sub, err := daemon.natsConn.Subscribe(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		daemon.handleEC2Events,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	command := qmp.Command{
+		ID: instanceID,
+		Attributes: qmp.Attributes{
+			DetachVolume: true,
+		},
+		DetachVolumeData: &qmp.DetachVolumeData{
+			VolumeID: "vol-not-attached-999",
+		},
+	}
+	cmdData, _ := json.Marshal(command)
+
+	resp, err := daemon.natsConn.Request(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		cmdData,
+		5*time.Second,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, string(resp.Data), "IncorrectState")
+}
+
+func TestDetachVolume_BootVolumeRejected(t *testing.T) {
+	daemon := createFullTestDaemon(t, sharedNATSURL)
+
+	instanceID := "i-detach-boot"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateRunning,
+		InstanceType: getTestInstanceType(),
+		Instance:     &ec2.Instance{},
+		QMPClient:    &qmp.QMPClient{},
+	}
+	instance.EBSRequests.Requests = []config.EBSRequest{
+		{Name: "vol-boot-001", Boot: true, DeviceName: "/dev/sda1"},
+	}
+	daemon.Instances.VMS[instanceID] = instance
+
+	sub, err := daemon.natsConn.Subscribe(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		daemon.handleEC2Events,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	command := qmp.Command{
+		ID: instanceID,
+		Attributes: qmp.Attributes{
+			DetachVolume: true,
+		},
+		DetachVolumeData: &qmp.DetachVolumeData{
+			VolumeID: "vol-boot-001",
+		},
+	}
+	cmdData, _ := json.Marshal(command)
+
+	resp, err := daemon.natsConn.Request(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		cmdData,
+		5*time.Second,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, string(resp.Data), "OperationNotPermitted")
+}
+
+func TestDetachVolume_DeviceMismatch(t *testing.T) {
+	daemon := createFullTestDaemon(t, sharedNATSURL)
+
+	instanceID := "i-detach-devmismatch"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateRunning,
+		InstanceType: getTestInstanceType(),
+		Instance:     &ec2.Instance{},
+		QMPClient:    &qmp.QMPClient{},
+	}
+	instance.EBSRequests.Requests = []config.EBSRequest{
+		{Name: "vol-mismatch-001", DeviceName: "/dev/sdf"},
+	}
+	daemon.Instances.VMS[instanceID] = instance
+
+	sub, err := daemon.natsConn.Subscribe(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		daemon.handleEC2Events,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	command := qmp.Command{
+		ID: instanceID,
+		Attributes: qmp.Attributes{
+			DetachVolume: true,
+		},
+		DetachVolumeData: &qmp.DetachVolumeData{
+			VolumeID: "vol-mismatch-001",
+			Device:   "/dev/sdg",
+		},
+	}
+	cmdData, _ := json.Marshal(command)
+
+	resp, err := daemon.natsConn.Request(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		cmdData,
+		5*time.Second,
+	)
+	require.NoError(t, err)
+	assert.Contains(t, string(resp.Data), "InvalidParameterValue")
+}
+
+// --- handleEC2RunInstances: insufficient capacity ---
+
+func TestHandleEC2RunInstances_InsufficientCapacity(t *testing.T) {
+	daemon := createFullTestDaemon(t, sharedNATSURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", daemon.handleEC2RunInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	// Request a very large instance count that can't be satisfied
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-test"),
+		InstanceType: aws.String(getTestInstanceType()),
+		MinCount:     aws.Int64(9999),
+		MaxCount:     aws.Int64(9999),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+}
+
+func TestHandleEC2RunInstances_UnsupportedInstanceType(t *testing.T) {
+	daemon := createFullTestDaemon(t, sharedNATSURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances.badtype", "hive-workers", daemon.handleEC2RunInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-test"),
+		InstanceType: aws.String("z99.nonexistent"),
+		MinCount:     aws.Int64(1),
+		MaxCount:     aws.Int64(1),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.RunInstances.badtype", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+}
+
+func TestHandleEC2RunInstances_MalformedInput(t *testing.T) {
+	daemon := createFullTestDaemon(t, sharedNATSURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances.bad", "hive-workers", daemon.handleEC2RunInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reply, err := daemon.natsConn.Request("ec2.RunInstances.bad", []byte(`{not valid}`), 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+}
+
+// --- handleEC2DescribeInstances: malformed instance ID ---
+
+func TestHandleEC2DescribeInstances_MalformedInstanceID(t *testing.T) {
+	daemon := createFullTestDaemon(t, sharedNATSURL)
+
+	sub, err := daemon.natsConn.Subscribe("ec2.DescribeInstances.malformed", daemon.handleEC2DescribeInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.DescribeInstancesInput{
+		InstanceIds: []*string{aws.String("not-an-instance-id")},
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.DescribeInstances.malformed", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	assert.Contains(t, string(reply.Data), "InvalidInstanceID.Malformed")
+}

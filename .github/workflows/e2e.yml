@@ -7,7 +7,6 @@ on:
       - dev
     paths:
       - "**/*.go"
-      - "!**/*_test.go"
       - go.mod
       - go.sum
       - Makefile

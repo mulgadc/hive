@@ -64,8 +64,10 @@ TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
 # --- Step 1: Extract added line numbers from diff ---
-# Only non-test .go files that were added or modified
-git diff "${BASE_REF}" HEAD --unified=0 --diff-filter=AM -- '*.go' ':!*_test.go' | awk '
+# Only non-test .go files that were added or modified.
+# -M enables rename detection so file splits/moves only count truly changed lines.
+# -C enables copy detection for the same reason (file split = partial copy).
+git diff "${BASE_REF}" HEAD --unified=0 -M -C --diff-filter=AM -- '*.go' ':!*_test.go' | awk '
     /^\+\+\+ / {
         file = substr($2, 3)
         next

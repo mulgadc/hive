@@ -19,11 +19,11 @@ func setupNATSIGWServiceTest(t *testing.T) (IGWService, *IGWServiceImpl) {
 	backend, nc := setupTestIGWService(t)
 
 	topics := map[string]func(*nats.Msg){
-		"ec2.CreateInternetGateway":   func(msg *nats.Msg) { handleNATSMsg(msg, backend.CreateInternetGateway) },
-		"ec2.DeleteInternetGateway":   func(msg *nats.Msg) { handleNATSMsg(msg, backend.DeleteInternetGateway) },
+		"ec2.CreateInternetGateway":    func(msg *nats.Msg) { handleNATSMsg(msg, backend.CreateInternetGateway) },
+		"ec2.DeleteInternetGateway":    func(msg *nats.Msg) { handleNATSMsg(msg, backend.DeleteInternetGateway) },
 		"ec2.DescribeInternetGateways": func(msg *nats.Msg) { handleNATSMsg(msg, backend.DescribeInternetGateways) },
-		"ec2.AttachInternetGateway":   func(msg *nats.Msg) { handleNATSMsg(msg, backend.AttachInternetGateway) },
-		"ec2.DetachInternetGateway":   func(msg *nats.Msg) { handleNATSMsg(msg, backend.DetachInternetGateway) },
+		"ec2.AttachInternetGateway":    func(msg *nats.Msg) { handleNATSMsg(msg, backend.AttachInternetGateway) },
+		"ec2.DetachInternetGateway":    func(msg *nats.Msg) { handleNATSMsg(msg, backend.DetachInternetGateway) },
 	}
 
 	for topic, handler := range topics {

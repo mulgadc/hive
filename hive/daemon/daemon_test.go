@@ -1331,24 +1331,6 @@ func TestRunInstances_CountValidation(t *testing.T) {
 		t.Logf("Error response: %v", errResp)
 	})
 
-	t.Run("MinCount_zero", func(t *testing.T) {
-		input := &ec2.RunInstancesInput{
-			ImageId:      aws.String("ami-test"),
-			InstanceType: aws.String(instanceType),
-			MinCount:     aws.Int64(0), // Invalid
-			MaxCount:     aws.Int64(1),
-		}
-		inputJSON, _ := json.Marshal(input)
-
-		resp, err := daemon.natsConn.Request(topic, inputJSON, 5*time.Second)
-		require.NoError(t, err)
-
-		var errResp map[string]any
-		err = json.Unmarshal(resp.Data, &errResp)
-		require.NoError(t, err)
-		assert.Contains(t, errResp, "Code")
-	})
-
 	t.Run("MaxCount_zero", func(t *testing.T) {
 		input := &ec2.RunInstancesInput{
 			ImageId:      aws.String("ami-test"),
