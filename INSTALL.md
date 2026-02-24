@@ -25,7 +25,7 @@ git clone https://github.com/mulgadc/hive.git
 
 ### Quick Install
 
-To bootstrap the dependencies of Hive in one simple step (QEMU, Go, AWS CLI):
+To bootstrap all dependencies of Hive in one step (QEMU, Go, AWS CLI, OVN/OVS):
 
 ```bash
 sudo make -C hive quickinstall
@@ -43,10 +43,12 @@ Alternatively, run the following steps to manually set up the required dependenc
 
 ```bash
 sudo add-apt-repository universe
-sudo apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu-kvm libvirt-daemon-system libvirt-clients libvirt-dev make gcc unzip xz-utils file
+sudo apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu-kvm libvirt-daemon-system libvirt-clients libvirt-dev make gcc unzip xz-utils file ovn-central ovn-host openvswitch-switch
 ```
 
-Ensure the Go toolkit is installed for version 1.25.7 or higher. Recommended to install the latest directly from [https://go.dev/dl/](https://go.dev/dl/).
+**Note:** OVN and Open vSwitch are required for VPC networking (virtual switches, routers, DHCP, Geneve overlay). The packages are installed above, but the setup and configuration step (`setup-ovn.sh`) is covered later — see the [Setup OVN](#setup-ovn) section below.
+
+Ensure the Go toolkit is installed for version 1.26.0 or higher. Recommended to install the latest directly from [https://go.dev/dl/](https://go.dev/dl/).
 
 Confirm Go is correctly installed, and set in your $PATH.
 
@@ -84,7 +86,17 @@ Once complete, confirm `./bin/hive` exists and is executable.
 
 # Single Node Installation
 
-For rapid development and testing, `hive` can be installed locally as a single node instance. Follow the instructions below for a complete working environment.
+For rapid development and testing, `hive` can be installed locally as a single node instance. Follow the instructions below for a complete working environment. For multi node installation, skip to [Multi-Node Installation](#multi-node-installation)
+
+## Setup OVN
+
+OVN provides the virtual networking layer for VPC instances. This step configures OVS bridges, starts the OVN controller, and enables Geneve tunnel support. For a single-node install, run the setup script with `--management` to start all OVN services locally:
+
+```bash
+./scripts/setup-ovn.sh --management
+```
+
+This creates the `br-int` integration bridge, starts `ovn-controller`, starts the OVN central databases (NB DB + SB DB), configures Geneve tunnel endpoints, enables IP forwarding, and creates a sudoers rule so the Hive daemon can manage tap devices and OVS ports without running as root. Hive will not start without this step.
 
 ## Init
 
@@ -202,7 +214,6 @@ Discover available images to automatically download and install. This will pull 
 
 ```bash
 NAME                 | DISTRO | VERSION | ARCH   | BOOT
-alpine-3.22.2-x86_64 | alpine | 3.22.2  | x86_64 | bios
 debian-12-arm64      | debian | 12      | arm64  | bios
 debian-12-x86_64     | debian | 12      | x86_64 | bios
 ubuntu-24.04-arm64   | ubuntu | 24.04   | arm64  | bios
@@ -245,9 +256,73 @@ Next, verify available disk images to confirm the import was successful.
 aws ec2 describe-images --image-ids $HIVE_AMI
 ```
 
+## Create VPC and Subnet
+
+Every EC2 instance runs inside a VPC (Virtual Private Cloud) with an isolated virtual network. Hive creates a default VPC automatically during initialization, but you can also create your own.
+
+### Create a VPC
+
+```bash
+aws ec2 create-vpc --cidr-block 10.200.0.0/16
+```
+
+```json
+{
+  "Vpc": {
+    "VpcId": "vpc-1035bd70d9bc10b06",
+    "CidrBlock": "10.200.0.0/16",
+    "State": "available",
+    "IsDefault": false
+  }
+}
+```
+
+Export the VPC ID:
+
+```bash
+export HIVE_VPC="vpc-XXX"
+```
+
+### Create a Subnet
+
+Create a subnet within the VPC. All instances launched into this subnet will receive a private IP address from its CIDR range via DHCP.
+
+```bash
+aws ec2 create-subnet --vpc-id $HIVE_VPC --cidr-block 10.200.1.0/24
+```
+
+```json
+{
+  "Subnet": {
+    "SubnetId": "subnet-6e7f829e3a4b1c5d0",
+    "VpcId": "vpc-1035bd70d9bc10b06",
+    "CidrBlock": "10.200.1.0/24",
+    "AvailableIpAddressCount": 249,
+    "State": "available"
+  }
+}
+```
+
+Export the Subnet ID — this is required when launching instances:
+
+```bash
+export HIVE_SUBNET="subnet-XXX"
+```
+
+### Verify VPC Networking
+
+Confirm the VPC and subnet were created:
+
+```bash
+aws ec2 describe-vpcs
+aws ec2 describe-subnets
+```
+
+Behind the scenes, Hive's `vpcd` service translates these into OVN topology: the VPC becomes a logical router, the subnet becomes a logical switch with DHCP options, and each instance launched into the subnet gets an OVN port with automatic IP assignment.
+
 ## Run Instance
 
-Once Hive is successfully installed and bootstrapped with a system AMI and SSH keys, proceed to run an instance.
+Once Hive is successfully installed and bootstrapped with a system AMI, SSH keys, and a VPC subnet, proceed to run an instance.
 
 ### Query Instance Types
 
@@ -297,19 +372,18 @@ export HIVE_INSTANCE="t3.small"
 
 ### Run Instance
 
-Next, launch a new instance, note `hive-key` is the SSH key specified in the previous stage.
+Next, launch a new instance. The `--subnet-id` places the instance into your VPC subnet, where it will receive a private IP address via DHCP. The `hive-key` is the SSH key specified in the previous stage.
 
 ```bash
 aws ec2 run-instances \
   --image-id $HIVE_AMI \
   --instance-type $HIVE_INSTANCE \
   --key-name hive-key \
-  --security-group-ids sg-0123456789abcdef0 \
-  --subnet-id subnet-6e7f829e \
+  --subnet-id $HIVE_SUBNET \
   --count 1
 ```
 
-A sample response is below from the `RunInstance` request, note the `InstanceId` attribute:
+A sample response is below from the `RunInstance` request. Note the `InstanceId` and `PrivateIpAddress` — the instance has been assigned an IP from the subnet's CIDR range:
 
 ```json
 {
@@ -323,9 +397,26 @@ A sample response is below from the `RunInstance` request, note the `InstanceId`
         "Code": 0,
         "Name": "pending"
       },
+      "PrivateIpAddress": "10.200.1.5",
+      "SubnetId": "subnet-6e7f829e3a4b1c5d0",
+      "VpcId": "vpc-1035bd70d9bc10b06",
       "KeyName": "hive-key",
       "InstanceType": "t3.micro",
-      "LaunchTime": "2025-11-12T13:07:47.548000+00:00"
+      "LaunchTime": "2025-11-12T13:07:47.548000+00:00",
+      "NetworkInterfaces": [
+        {
+          "NetworkInterfaceId": "eni-a1b2c3d4e5f6g7h8i",
+          "PrivateIpAddress": "10.200.1.5",
+          "MacAddress": "02:00:00:1a:2b:3c",
+          "SubnetId": "subnet-6e7f829e3a4b1c5d0",
+          "VpcId": "vpc-1035bd70d9bc10b06",
+          "Status": "in-use",
+          "Attachment": {
+            "DeviceIndex": 0,
+            "Status": "attached"
+          }
+        }
+      ]
     }
   ]
 }
@@ -345,7 +436,7 @@ Next, validate the running instance is ready.
 aws ec2 describe-instances --instance-ids $INSTANCE_ID
 ```
 
-Confirm the `State.Name` attribute is set as `running`.
+Confirm the `State.Name` attribute is set as `running` and the instance has a `PrivateIpAddress` assigned from the subnet.
 
 ```json
 {
@@ -361,6 +452,9 @@ Confirm the `State.Name` attribute is set as `running`.
             "Code": 16,
             "Name": "running"
           },
+          "PrivateIpAddress": "10.200.1.5",
+          "SubnetId": "subnet-6e7f829e3a4b1c5d0",
+          "VpcId": "vpc-1035bd70d9bc10b06",
           "KeyName": "hive-key",
           "InstanceType": "t3.micro",
           "LaunchTime": "2025-11-12T13:07:47.548000+00:00"
@@ -552,7 +646,7 @@ The Hive Platform also offers a web interface for managing hive services. Simply
 
 **Note:** If you are not viewing the website on the same machine that is running the hive server, you will need to go to [https://localhost:9999](https://localhost:9999) and [https://localhost:8443](https://localhost:8443) and accept the certificates. If you have added the CA to your local machine this is not needed.
 
-# Multi-Node Configuration
+# Multi-Node Installation
 
 Hive is designed for distributed, multi-server deployments. A Hive cluster operates as a fully distributed infrastructure region — similar to an AWS Region — where multiple nodes work together to provide high availability, data durability, and fault tolerance across the platform.
 
@@ -585,7 +679,17 @@ export HIVE_NODE2=127.0.0.2
 export HIVE_NODE3=127.0.0.3
 ```
 
-#### 2. Form the Cluster
+#### 2. Setup OVN
+
+For simulated mode on a single machine, run the setup script once with `--management`:
+
+```bash
+./scripts/setup-ovn.sh --management
+```
+
+This starts OVN central services and configures the local compute node. All three simulated nodes share the same OVS/OVN instance on the host.
+
+#### 3. Form the Cluster
 
 The formation process requires running init and join commands concurrently. The init node blocks until all expected nodes have joined.
 
@@ -636,7 +740,7 @@ This starts a formation server on `$HIVE_NODE1:4432` and waits for 2 more nodes 
 
 All three processes will exit with a cluster summary once formation is complete.
 
-#### 3. Start Services
+#### 4. Start Services
 
 Start services on each node (in separate terminals or background):
 
@@ -670,7 +774,12 @@ make build
 
 ```bash
 ip addr show | grep "inet "
+    inet 127.0.0.1/8 scope host lo
+    inet 192.168.1.10/24 brd 192.168.1.255 scope global eth0
+    inet 10.0.0.10/24 brd 10.0.0.255 scope global eth1
 ```
+
+With a **single NIC**, use the one real IP (e.g. `192.168.1.10`) for everything. With **two NICs**, the primary interface (e.g. `eth0`) is your management IP for `--bind` and `--cluster-bind`, and the secondary (e.g. `eth1`) is for `--encap-ip` (Geneve overlay) — see [Dual NIC Configuration](#dual-nic-configuration).
 
 #### 1. Set Variables
 
@@ -682,7 +791,56 @@ export HIVE_NODE2=192.168.1.11
 export HIVE_NODE3=192.168.1.12
 ```
 
-#### 2. Form the Cluster
+#### 2. Setup OVN
+
+OVN must be configured on every server before forming the cluster. Server 1 runs OVN central (the NB and SB databases), so it must be set up first. Servers 2 and 3 connect to server 1's OVN databases as compute nodes.
+
+**Note:** The examples below use a single NIC where `--encap-ip` is the same as the node's bind IP. If your servers have a dedicated overlay NIC, see [Dual NIC Configuration](#dual-nic-configuration) for how to separate management and Geneve tunnel traffic.
+
+**Server 1 — OVN central + compute (run first):**
+
+```bash
+cd ~/Development/mulga/hive
+./scripts/setup-ovn.sh --management --encap-ip=$HIVE_NODE1
+```
+
+Verify OVN central is ready before proceeding to other servers:
+
+```bash
+sudo ovn-sbctl show
+```
+
+**Server 2 — Compute node (after server 1 is ready):**
+
+```bash
+cd ~/Development/mulga/hive
+./scripts/setup-ovn.sh --ovn-remote=tcp:$HIVE_NODE1:6642 --encap-ip=$HIVE_NODE2
+```
+
+**Server 3 — Compute node (after server 1 is ready):**
+
+```bash
+cd ~/Development/mulga/hive
+./scripts/setup-ovn.sh --ovn-remote=tcp:$HIVE_NODE1:6642 --encap-ip=$HIVE_NODE3
+```
+
+Verify OVN is running on all servers:
+
+```bash
+sudo systemctl is-active ovn-controller
+```
+
+On server 1, confirm all chassis have registered:
+
+```bash
+sudo ovn-sbctl show
+```
+
+You should see 3 chassis entries, one per server, each with a Geneve encap IP.
+
+If your servers have a dedicated data/overlay NIC separate from the management NIC, use the data NIC's IP for `--encap-ip` instead — see [Dual NIC Configuration](#dual-nic-configuration) below.
+
+#### 3. Form the Cluster
 
 **Server 1 — Initialize the cluster:**
 
@@ -735,7 +893,7 @@ cd ~/Development/mulga/hive
 
 All three processes will exit with a cluster summary once formation is complete.
 
-#### 3. Start Services
+#### 4. Start Services
 
 After formation completes, start services on **all servers**:
 
@@ -761,7 +919,7 @@ From any node, view cluster status and resource capacity:
 # node3   0/16               0.0Gi/30.6Gi       0
 ```
 
-All nodes should show `Ready` status. Use `hive get vms` to see running instances across the cluster.
+All nodes should show `Ready` status. Use `./bin/hive get vms` to see running instances across the cluster.
 
 Check individual daemon health endpoints:
 
@@ -809,12 +967,123 @@ export AWS_PROFILE=hive
 
 ## Using the Cluster
 
-Connect to any node's AWS Gateway:
+Connect to any node's AWS Gateway — all nodes serve the same cluster state:
 
 ```bash
 AWS_ENDPOINT_URL=https://$HIVE_NODE1:9999 aws ec2 describe-instances
 AWS_ENDPOINT_URL=https://$HIVE_NODE2:9999 aws ec2 describe-instances
 ```
+
+### Create SSH Key
+
+Create or import an SSH key pair from **any node** — the key is stored in Predastore and available cluster-wide:
+
+```bash
+aws ec2 import-key-pair --key-name "hive-key" --public-key-material fileb://~/.ssh/id_rsa.pub
+```
+
+Or generate a new key pair:
+
+```bash
+aws ec2 create-key-pair \
+  --key-name hive-key \
+| jq -r '.KeyMaterial | rtrimstr("\n")' > ~/.ssh/hive-key
+chmod 600 ~/.ssh/hive-key
+```
+
+**Important:** If you want to ssh into instances, you will need to copy the private key to every node in the cluster. Instance SSH port forwarding is only accessible from the node running the VM, so you need the key available on all nodes:
+
+```bash
+# From the node where the key was created, copy to other nodes:
+scp ~/.ssh/hive-key tf-user@$HIVE_NODE2:~/.ssh/hive-key
+scp ~/.ssh/hive-key tf-user@$HIVE_NODE3:~/.ssh/hive-key
+```
+
+### Create AMI Template
+
+Import an OS image from **any node**. The AMI is stored in Predastore and available cluster-wide:
+
+```bash
+./bin/hive admin images list
+./bin/hive admin images import --name debian-12-x86_64
+```
+
+Verify and export the AMI ID:
+
+```bash
+aws ec2 describe-images
+export HIVE_AMI="ami-XXX"
+```
+
+See the [single-node AMI section](#create-ami-template) for more options (manual import, custom images).
+
+### VPC Networking
+
+Create a VPC and subnet for your cluster. This only needs to be done once — the VPC is shared across all nodes.
+
+```bash
+aws ec2 create-vpc --cidr-block 10.200.0.0/16
+export HIVE_VPC="vpc-XXX"
+
+aws ec2 create-subnet --vpc-id $HIVE_VPC --cidr-block 10.200.1.0/24
+export HIVE_SUBNET="subnet-XXX"
+```
+
+Verify the OVN topology was created (from server 1):
+
+```bash
+sudo ovn-nbctl lr-list    # One logical router per VPC
+sudo ovn-nbctl ls-list    # One logical switch per subnet
+```
+
+### Launching Instances Across Nodes
+
+Use `--count` to launch multiple instances in a single request. Hive distributes them across nodes in the cluster based on available capacity — instances land on different physical hosts but share the same VPC subnet, and can route traffic to each other over OVN's Geneve overlay:
+
+```bash
+aws ec2 run-instances \
+  --image-id $HIVE_AMI \
+  --instance-type $HIVE_INSTANCE \
+  --key-name hive-key \
+  --subnet-id $HIVE_SUBNET \
+  --count 3
+```
+
+This launches 3 instances distributed across the cluster. Each receives a unique private IP from the subnet (e.g. `10.200.1.5`, `10.200.1.6`, `10.200.1.7`). Instances on different physical hosts communicate transparently through Geneve tunnels — no additional configuration required.
+
+Verify all instances are running and have received their private IPs:
+
+```bash
+aws ec2 describe-instances
+```
+
+Check which node each instance landed on:
+
+```bash
+./bin/hive get vms
+```
+
+### Verifying Cross-Host Connectivity
+
+SSH into an instance. The dev SSH port forwarding binds to the node running the VM, so you must SSH from that node (or use its IP). Find the forwarded port:
+
+```bash
+# On the node running the instance:
+ps auxw | grep hostfwd
+# Look for: hostfwd=tcp:<node-ip>:<port>-:22
+```
+
+```bash
+ssh -i ~/.ssh/hive-key ec2-user@<node-ip> -p <port>
+```
+
+From inside the VM, ping an instance running on a **different physical node**:
+
+```bash
+ping 10.200.1.6
+```
+
+If the ping succeeds across hosts, the OVN Geneve overlay is working correctly — traffic is being encapsulated and routed between physical servers transparently.
 
 Check logs on each node for debugging. Log locations depend on your deployment mode — `~/node{1,2,3}/logs/` for simulated, `~/hive/logs/` for real multi-server.
 
@@ -826,17 +1095,54 @@ Every node that runs EC2 instances (compute) **must** also run the viperblock se
 
 In the default deployment, every node runs all services (NATS, Predastore, Viperblock, Daemon, Gateway), which satisfies this requirement.
 
+### Network Configuration
+
+Minimum **1 NIC** required. **2 NICs recommended** for production:
+
+| NIC | Purpose | Traffic |
+|-----|---------|---------|
+| **NIC 1 — Management** | Cluster coordination, admin access | NATS cluster routes, Predastore Raft, daemon health, SSH, AWS Gateway |
+| **NIC 2 — Overlay** | VPC networking between hosts | Geneve tunnels (UDP 6081), OVN datapath, inter-host VM traffic |
+
+With a single NIC, all traffic shares one interface. This works but is not recommended for production — Geneve tunnel traffic competes with cluster coordination traffic.
+
 ### Dual NIC Configuration
 
-If servers have separate management and cluster network interfaces, use `--cluster-bind` to specify the cluster network IP:
+When using two NICs, each flag controls which NIC carries which traffic:
+
+| Flag | NIC | Used by | Example |
+|------|-----|---------|---------|
+| `--bind` | Management | Formation server, daemon health, AWS gateway | `192.168.1.10` |
+| `--cluster-bind` | Management | NATS cluster routes, Predastore Raft consensus | `192.168.1.10` |
+| `--encap-ip` | Overlay | Geneve tunnels (VM-to-VM traffic across hosts) | `10.0.0.10` |
+
+If `--cluster-bind` is not specified, it defaults to `--bind`. For single NIC deployments, all three use the same IP.
+
+Example with management NIC `192.168.1.0/24` and overlay NIC `10.0.0.0/24`. The order is the same as the single NIC flow — setup OVN on all servers first, then form the cluster.
+
+**Step 1 — Setup OVN on all servers:**
 
 ```bash
-# Server 1: management=192.168.1.10, cluster=10.0.0.10
+# Server 1 (OVN central + compute):
+./scripts/setup-ovn.sh --management --encap-ip=10.0.0.10
+
+# Server 2 (compute, after server 1 is ready):
+./scripts/setup-ovn.sh --ovn-remote=tcp:192.168.1.10:6642 --encap-ip=10.0.0.11
+
+# Server 3 (compute, after server 1 is ready):
+./scripts/setup-ovn.sh --ovn-remote=tcp:192.168.1.10:6642 --encap-ip=10.0.0.12
+```
+
+**Step 2 — Form the cluster (same as single NIC, but with `--cluster-bind`):**
+
+Server 1:
+
+```bash
 ./bin/hive admin init \
   --node node1 \
   --nodes 3 \
   --bind 192.168.1.10 \
-  --cluster-bind 10.0.0.10 \
+  --cluster-bind 192.168.1.10 \
   --port 4432 \
   --hive-dir ~/hive/ \
   --config-dir ~/hive/config/ \
@@ -844,7 +1150,33 @@ If servers have separate management and cluster network interfaces, use `--clust
   --az us-east-1a
 ```
 
-The `--bind` IP is used for the formation server, daemon, and AWS gateway. The `--cluster-bind` IP is used for NATS cluster routing and Predastore Raft consensus. If `--cluster-bind` is not specified, it defaults to the `--bind` IP.
+Server 2 (while init is running):
+
+```bash
+./bin/hive admin join \
+  --node node2 \
+  --bind 192.168.1.11 \
+  --cluster-bind 192.168.1.11 \
+  --host 192.168.1.10:4432 \
+  --data-dir ~/hive/ \
+  --config-dir ~/hive/config/ \
+  --region us-east-1 \
+  --az us-east-1a
+```
+
+Server 3 (while init is running):
+
+```bash
+./bin/hive admin join \
+  --node node3 \
+  --bind 192.168.1.12 \
+  --cluster-bind 192.168.1.12 \
+  --host 192.168.1.10:4432 \
+  --data-dir ~/hive/ \
+  --config-dir ~/hive/config/ \
+  --region us-east-1 \
+  --az us-east-1a
+```
 
 ### IP Aliases (Simulated Mode)
 

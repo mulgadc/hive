@@ -71,6 +71,35 @@ for cmd in "${optional_commands[@]}"; do
     fi
 done
 
+# Check OVN/OVS commands (required for VPC networking)
+echo ""
+echo "🔍 Checking OVN/OVS dependencies..."
+ovn_commands=("ovs-vsctl" "ovn-controller" "ovn-nbctl")
+ovn_ready=true
+for cmd in "${ovn_commands[@]}"; do
+    if command_exists "$cmd"; then
+        echo "✅ $cmd found"
+    else
+        echo "⚠️  $cmd not found (required for VPC networking)"
+        ovn_ready=false
+    fi
+done
+if [ "$ovn_ready" = false ]; then
+    echo "   Install OVN: sudo apt-get install ovn-central ovn-host openvswitch-switch"
+    echo "   Or run: make quickinstall"
+fi
+
+# Initialize br-int if OVS is available
+if command_exists "ovs-vsctl"; then
+    echo ""
+    echo "🌐 Checking OVS br-int bridge..."
+    if ovs-vsctl br-exists br-int 2>/dev/null; then
+        echo "✅ br-int already exists"
+    else
+        echo "⚠️  br-int not found. Run ./scripts/setup-ovn.sh to initialize OVN networking"
+    fi
+fi
+
 # Check component repositories
 echo ""
 echo "📦 Checking component repositories..."

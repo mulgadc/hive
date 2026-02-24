@@ -29,12 +29,14 @@ import (
 	"github.com/mulgadc/hive/hive/config"
 	handlers_ec2_account "github.com/mulgadc/hive/hive/handlers/ec2/account"
 	handlers_ec2_eigw "github.com/mulgadc/hive/hive/handlers/ec2/eigw"
+	handlers_ec2_igw "github.com/mulgadc/hive/hive/handlers/ec2/igw"
 	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
 	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
 	handlers_ec2_snapshot "github.com/mulgadc/hive/hive/handlers/ec2/snapshot"
 	handlers_ec2_tags "github.com/mulgadc/hive/hive/handlers/ec2/tags"
 	handlers_ec2_volume "github.com/mulgadc/hive/hive/handlers/ec2/volume"
+	handlers_ec2_vpc "github.com/mulgadc/hive/hive/handlers/ec2/vpc"
 	"github.com/mulgadc/hive/hive/instancetypes"
 	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/hive/hive/qmp"
@@ -97,6 +99,8 @@ type Daemon struct {
 	snapshotService *handlers_ec2_snapshot.SnapshotServiceImpl
 	tagsService     *handlers_ec2_tags.TagsServiceImpl
 	eigwService     *handlers_ec2_eigw.EgressOnlyIGWServiceImpl
+	igwService      *handlers_ec2_igw.IGWServiceImpl
+	vpcService      *handlers_ec2_vpc.VPCServiceImpl
 	ctx             context.Context
 	cancel          context.CancelFunc
 	shutdownWg      sync.WaitGroup
@@ -117,6 +121,9 @@ type Daemon struct {
 
 	// Delay after QMP device_del before blockdev-del (default 1s, 0 in tests)
 	detachDelay time.Duration
+
+	// NetworkPlumber handles tap device lifecycle for VPC networking
+	networkPlumber NetworkPlumber
 
 	// shuttingDown is set to true during coordinated cluster shutdown (GATE phase).
 	// When true, the daemon rejects new work and setupShutdown skips VM stops.
@@ -378,6 +385,20 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.CreateEgressOnlyInternetGateway", d.handleEC2CreateEgressOnlyInternetGateway, "hive-workers"},
 		{"ec2.DeleteEgressOnlyInternetGateway", d.handleEC2DeleteEgressOnlyInternetGateway, "hive-workers"},
 		{"ec2.DescribeEgressOnlyInternetGateways", d.handleEC2DescribeEgressOnlyInternetGateways, "hive-workers"},
+		{"ec2.CreateInternetGateway", d.handleEC2CreateInternetGateway, "hive-workers"},
+		{"ec2.DeleteInternetGateway", d.handleEC2DeleteInternetGateway, "hive-workers"},
+		{"ec2.DescribeInternetGateways", d.handleEC2DescribeInternetGateways, "hive-workers"},
+		{"ec2.AttachInternetGateway", d.handleEC2AttachInternetGateway, "hive-workers"},
+		{"ec2.DetachInternetGateway", d.handleEC2DetachInternetGateway, "hive-workers"},
+		{"ec2.CreateVpc", d.handleEC2CreateVpc, "hive-workers"},
+		{"ec2.DeleteVpc", d.handleEC2DeleteVpc, "hive-workers"},
+		{"ec2.DescribeVpcs", d.handleEC2DescribeVpcs, "hive-workers"},
+		{"ec2.CreateSubnet", d.handleEC2CreateSubnet, "hive-workers"},
+		{"ec2.DeleteSubnet", d.handleEC2DeleteSubnet, "hive-workers"},
+		{"ec2.DescribeSubnets", d.handleEC2DescribeSubnets, "hive-workers"},
+		{"ec2.CreateNetworkInterface", d.handleEC2CreateNetworkInterface, "hive-workers"},
+		{"ec2.DeleteNetworkInterface", d.handleEC2DeleteNetworkInterface, "hive-workers"},
+		{"ec2.DescribeNetworkInterfaces", d.handleEC2DescribeNetworkInterfaces, "hive-workers"},
 		{"ec2.ModifyInstanceAttribute", d.handleEC2ModifyInstanceAttribute, "hive-workers"},
 		{"ec2.start", d.handleEC2StartStoppedInstance, "hive-workers"},
 		{"ec2.terminate", d.handleEC2TerminateStoppedInstance, "hive-workers"},
@@ -467,8 +488,32 @@ func (d *Daemon) Start() error {
 	} else {
 		d.eigwService = eigwSvc
 	}
+	if igwSvc, err := handlers_ec2_igw.NewIGWServiceImplWithNATS(d.config, d.natsConn); err != nil {
+		slog.Warn("Failed to initialize IGW service, falling back to in-memory", "error", err)
+		d.igwService = handlers_ec2_igw.NewIGWServiceImpl(d.config)
+	} else {
+		d.igwService = igwSvc
+	}
+	if vpcSvc, err := handlers_ec2_vpc.NewVPCServiceImplWithNATS(d.config, d.natsConn); err != nil {
+		slog.Warn("Failed to initialize VPC service, falling back to in-memory", "error", err)
+		d.vpcService = handlers_ec2_vpc.NewVPCServiceImpl(d.config)
+	} else {
+		d.vpcService = vpcSvc
+	}
 	if err := d.initAccountService(); err != nil {
 		return fmt.Errorf("failed to initialize account settings service: %w", err)
+	}
+
+	// Ensure default VPC exists (matches AWS: every account has a default VPC)
+	if d.vpcService != nil {
+		if err := d.vpcService.EnsureDefaultVPC(); err != nil {
+			slog.Warn("Failed to ensure default VPC", "error", err)
+		}
+	}
+
+	// Initialize network plumber for VPC tap device management
+	if d.networkPlumber == nil {
+		d.networkPlumber = &OVSNetworkPlumber{}
 	}
 
 	// Protect daemon from OOM killer (prefer killing QEMU VMs instead)
@@ -959,6 +1004,19 @@ func (d *Daemon) ClusterManager() error {
 			}
 		}
 
+		// Check OVN networking readiness
+		ovnHealth := CheckOVNHealth()
+		if ovnHealth.BrIntExists {
+			serviceHealth["br-int"] = "ok"
+		} else {
+			serviceHealth["br-int"] = "missing"
+		}
+		if ovnHealth.OVNControllerUp {
+			serviceHealth["ovn-controller"] = "ok"
+		} else {
+			serviceHealth["ovn-controller"] = "not_running"
+		}
+
 		response := config.NodeHealthResponse{
 			Node:          d.node,
 			Status:        "running",
@@ -1286,6 +1344,26 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 					} else {
 						slog.Info("Deleted volume on termination", "name", ebsRequest.Name, "id", instance.ID)
 					}
+				}
+			}
+
+			// Clean up VPC tap device if present
+			if instance.ENIId != "" && d.networkPlumber != nil {
+				if err := d.networkPlumber.CleanupTapDevice(instance.ENIId); err != nil {
+					slog.Warn("Failed to clean up tap device", "eni", instance.ENIId, "err", err)
+				}
+			}
+
+			// On termination, delete the auto-created ENI (releases IP back to IPAM,
+			// publishes vpc.delete-port for vpcd). On stop, ENI persists (AWS behavior).
+			if deleteVolume && instance.ENIId != "" && d.vpcService != nil {
+				_, eniErr := d.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+					NetworkInterfaceId: &instance.ENIId,
+				})
+				if eniErr != nil {
+					slog.Warn("Failed to delete ENI on termination", "eni", instance.ENIId, "err", eniErr)
+				} else {
+					slog.Info("Deleted ENI on termination", "eni", instance.ENIId, "instanceId", instance.ID)
 				}
 			}
 
@@ -1686,28 +1764,69 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	}
 	instance.EBSRequests.Mu.Unlock()
 
-	// TODO: Toggle SSH local port forwarding based on config (debugging use)
-	sshDebugPort, err := viperblock.FindFreePort()
-	if err != nil {
-		slog.Error("Failed to find free port", "err", err)
-		return err
+	// VPC tap networking vs user-mode fallback
+	if instance.ENIId != "" && d.networkPlumber != nil {
+		// VPC mode: create tap device and add to OVS br-int
+		if err := d.networkPlumber.SetupTapDevice(instance.ENIId, instance.ENIMac); err != nil {
+			slog.Error("Failed to set up tap device", "eni", instance.ENIId, "err", err)
+			return fmt.Errorf("setup tap device: %w", err)
+		}
+
+		tapName := TapDeviceName(instance.ENIId)
+		instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
+			Value: fmt.Sprintf("tap,id=net0,ifname=%s,script=no,downscript=no", tapName),
+		})
+		instance.Config.Devices = append(instance.Config.Devices, vm.Device{
+			Value: fmt.Sprintf("virtio-net-pci,netdev=net0,mac=%s", instance.ENIMac),
+		})
+
+		slog.Info("VPC networking configured", "tap", tapName, "eni", instance.ENIId, "mac", instance.ENIMac)
+
+		// DEV_NETWORKING: add a second NIC with hostfwd for SSH dev access
+		if d.config.Daemon.DevNetworking {
+			sshDebugPort, err := viperblock.FindFreePort()
+			if err != nil {
+				slog.Warn("DEV_NETWORKING: failed to find free port for dev NIC", "err", err)
+			} else {
+				_, sshDebugPort, _ = net.SplitHostPort(sshDebugPort)
+				bindIP := d.config.Host
+				if bindIP == "" || bindIP == "0.0.0.0" {
+					bindIP = "127.0.0.1"
+				}
+				instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
+					Value: fmt.Sprintf("user,id=dev0,hostfwd=tcp:%s:%s-:22", bindIP, sshDebugPort),
+				})
+				devMac := generateDevMAC(instance.ID)
+				instance.Config.Devices = append(instance.Config.Devices, vm.Device{
+					Value: fmt.Sprintf("virtio-net-pci,netdev=dev0,mac=%s", devMac),
+				})
+				slog.Info("DEV_NETWORKING: added dev NIC with SSH hostfwd",
+					"bindIP", bindIP, "port", sshDebugPort, "mac", devMac, "instanceId", instance.ID)
+			}
+		}
+	} else {
+		// Non-VPC fallback: user-mode networking with SSH port forwarding
+		sshDebugPort, err := viperblock.FindFreePort()
+		if err != nil {
+			slog.Error("Failed to find free port", "err", err)
+			return err
+		}
+		_, sshDebugPort, _ = net.SplitHostPort(sshDebugPort)
+
+		bindIP := d.config.Host
+		if bindIP == "" || bindIP == "0.0.0.0" {
+			bindIP = "127.0.0.1"
+		}
+		instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
+			Value: fmt.Sprintf("user,id=net0,hostfwd=tcp:%s:%s-:22", bindIP, sshDebugPort),
+		})
+		instance.Config.Devices = append(instance.Config.Devices, vm.Device{
+			Value: "virtio-net-pci,netdev=net0",
+		})
 	}
-
-	// Extract just the port number
-	_, sshDebugPort, _ = net.SplitHostPort(sshDebugPort)
-
-	// TODO: Make configurable
-	instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
-		Value: fmt.Sprintf("user,id=net0,hostfwd=tcp:127.0.0.1:%s-:22", sshDebugPort),
-	})
 
 	instance.Config.Devices = append(instance.Config.Devices, vm.Device{
 		Value: "virtio-rng-pci",
-	})
-
-	// Add NIC
-	instance.Config.Devices = append(instance.Config.Devices, vm.Device{
-		Value: "virtio-net-pci,netdev=net0",
 	})
 
 	// QMP socket

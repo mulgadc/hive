@@ -828,6 +828,49 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 			d.resourceMgr.deallocate(instanceType)
 			continue
 		}
+
+		// Auto-create ENI when SubnetId is provided (matches AWS behavior)
+		if runInstancesInput.SubnetId != nil && *runInstancesInput.SubnetId != "" && d.vpcService != nil {
+			eniOut, eniErr := d.vpcService.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
+				SubnetId:    runInstancesInput.SubnetId,
+				Description: aws.String("Primary network interface for " + instance.ID),
+			})
+			if eniErr != nil {
+				slog.Error("handleEC2RunInstances auto-create ENI failed", "instanceId", instance.ID, "subnetId", *runInstancesInput.SubnetId, "err", eniErr)
+				lastRunErr = eniErr
+				d.resourceMgr.deallocate(instanceType)
+				continue
+			}
+
+			eni := eniOut.NetworkInterface
+			instance.ENIId = *eni.NetworkInterfaceId
+			instance.ENIMac = *eni.MacAddress
+			ec2Instance.SetPrivateIpAddress(*eni.PrivateIpAddress)
+			ec2Instance.SetSubnetId(*runInstancesInput.SubnetId)
+			ec2Instance.SetVpcId(*eni.VpcId)
+			ec2Instance.NetworkInterfaces = []*ec2.InstanceNetworkInterface{
+				{
+					NetworkInterfaceId: eni.NetworkInterfaceId,
+					PrivateIpAddress:   eni.PrivateIpAddress,
+					MacAddress:         eni.MacAddress,
+					SubnetId:           runInstancesInput.SubnetId,
+					VpcId:              eni.VpcId,
+					Status:             aws.String("in-use"),
+					Attachment: &ec2.InstanceNetworkInterfaceAttachment{
+						DeviceIndex: aws.Int64(0),
+						Status:      aws.String("attached"),
+					},
+				},
+			}
+
+			slog.Info("Auto-created ENI for VPC instance",
+				"instanceId", instance.ID,
+				"eniId", instance.ENIId,
+				"privateIp", *eni.PrivateIpAddress,
+				"mac", instance.ENIMac,
+			)
+		}
+
 		instances = append(instances, instance)
 		allEC2Instances = append(allEC2Instances, ec2Instance)
 	}
@@ -1166,6 +1209,62 @@ func (d *Daemon) handleEC2DeleteEgressOnlyInternetGateway(msg *nats.Msg) {
 
 func (d *Daemon) handleEC2DescribeEgressOnlyInternetGateways(msg *nats.Msg) {
 	handleNATSRequest(msg, d.eigwService.DescribeEgressOnlyInternetGateways)
+}
+
+func (d *Daemon) handleEC2CreateInternetGateway(msg *nats.Msg) {
+	handleNATSRequest(msg, d.igwService.CreateInternetGateway)
+}
+
+func (d *Daemon) handleEC2DeleteInternetGateway(msg *nats.Msg) {
+	handleNATSRequest(msg, d.igwService.DeleteInternetGateway)
+}
+
+func (d *Daemon) handleEC2DescribeInternetGateways(msg *nats.Msg) {
+	handleNATSRequest(msg, d.igwService.DescribeInternetGateways)
+}
+
+func (d *Daemon) handleEC2AttachInternetGateway(msg *nats.Msg) {
+	handleNATSRequest(msg, d.igwService.AttachInternetGateway)
+}
+
+func (d *Daemon) handleEC2DetachInternetGateway(msg *nats.Msg) {
+	handleNATSRequest(msg, d.igwService.DetachInternetGateway)
+}
+
+func (d *Daemon) handleEC2CreateVpc(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.CreateVpc)
+}
+
+func (d *Daemon) handleEC2DeleteVpc(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.DeleteVpc)
+}
+
+func (d *Daemon) handleEC2DescribeVpcs(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.DescribeVpcs)
+}
+
+func (d *Daemon) handleEC2CreateSubnet(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.CreateSubnet)
+}
+
+func (d *Daemon) handleEC2DeleteSubnet(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.DeleteSubnet)
+}
+
+func (d *Daemon) handleEC2DescribeSubnets(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.DescribeSubnets)
+}
+
+func (d *Daemon) handleEC2CreateNetworkInterface(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.CreateNetworkInterface)
+}
+
+func (d *Daemon) handleEC2DeleteNetworkInterface(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.DeleteNetworkInterface)
+}
+
+func (d *Daemon) handleEC2DescribeNetworkInterfaces(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.DescribeNetworkInterfaces)
 }
 
 // handleEC2DescribeInstanceTypes processes incoming EC2 DescribeInstanceTypes requests

@@ -2,6 +2,8 @@ package handlers_ec2_instance
 
 import (
 	"bytes"
+	"fmt"
+	"strings"
 	"testing"
 	"text/template"
 
@@ -10,6 +12,7 @@ import (
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/objectstore"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -249,4 +252,32 @@ func TestCloudInitMetaTemplateRendering(t *testing.T) {
 	assert.Contains(t, rendered, "hive-vm-01234567")
 	assert.Contains(t, rendered, "instance-id:")
 	assert.Contains(t, rendered, "local-hostname:")
+}
+
+// TestCloudInitVolumeNamePerInstance verifies that AMI-based launches produce
+// unique root volume IDs, which in turn produce unique cloud-init volume names.
+// This prevents the bug where a cached cloud-init ISO (keyed by AMI) would
+// serve stale SSH keys or hostnames to subsequent instances.
+func TestCloudInitVolumeNamePerInstance(t *testing.T) {
+	amiID := "ami-0abcdef1234567890"
+
+	seen := make(map[string]bool)
+	for range 100 {
+		// Simulate GenerateVolumes logic for AMI-based launches (line 194-195)
+		var rootVolumeId string
+		if strings.HasPrefix(amiID, "ami-") {
+			rootVolumeId = utils.GenerateResourceID("vol")
+		}
+
+		cloudInitName := fmt.Sprintf("%s-cloudinit", rootVolumeId)
+
+		assert.True(t, strings.HasPrefix(cloudInitName, "vol-"),
+			"cloud-init volume should be keyed by root volume ID, not AMI ID")
+		assert.True(t, strings.HasSuffix(cloudInitName, "-cloudinit"))
+		assert.False(t, strings.Contains(cloudInitName, "ami-"),
+			"cloud-init volume name must not contain the AMI ID")
+		assert.False(t, seen[cloudInitName],
+			"each instance must get a unique cloud-init volume name")
+		seen[cloudInitName] = true
+	}
 }

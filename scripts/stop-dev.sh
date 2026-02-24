@@ -37,7 +37,7 @@ parse_services() {
             return
         fi
     fi
-    echo "nats predastore viperblock daemon awsgw ui"
+    echo "nats predastore viperblock daemon awsgw vpcd ui"
 }
 
 SERVICES=$(parse_services)
@@ -128,6 +128,9 @@ if pgrep -x qemu-system-x86_64 > /dev/null 2>&1; then
     echo "✅ All QEMU instances exited"
 fi
 
+# Stop vpcd (VPC daemon)
+has_service "vpcd" && stop_service "vpcd" "$PID_DIR"
+
 # Stop AWSGW
 has_service "awsgw" && stop_service "awsgw" "$PID_DIR"
 
@@ -144,7 +147,7 @@ echo ""
 echo "✅ Hive development environment stopped"
 
 # Show any remaining related processes
-remaining=$(ps aux | grep -E "(hive|hive-ui|nats|predastore|viperblock)" | grep -v grep | grep -v "stop-dev.sh" || true)
+remaining=$(ps aux | grep -E "(hive|hive-ui|nats|predastore|viperblock|vpcd)" | grep -v grep | grep -v "stop-dev.sh" || true)
 if [[ -n "$remaining" ]]; then
     echo ""
     echo "⚠️  Some related processes may still be running:"

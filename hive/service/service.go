@@ -9,6 +9,7 @@ import (
 	"github.com/mulgadc/hive/hive/services/nats"
 	"github.com/mulgadc/hive/hive/services/predastore"
 	"github.com/mulgadc/hive/hive/services/viperblockd"
+	"github.com/mulgadc/hive/hive/services/vpcd"
 )
 
 type Service interface {
@@ -39,6 +40,9 @@ func New(btype string, config any) (Service, error) {
 
 	case "hive-ui":
 		return hiveui.New(config)
+
+	case "vpcd":
+		return vpcd.New(config)
 
 	}
 

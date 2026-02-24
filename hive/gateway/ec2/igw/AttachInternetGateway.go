@@ -1,0 +1,33 @@
+package gateway_ec2_igw
+
+import (
+	"errors"
+
+	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/awserrors"
+	handlers_ec2_igw "github.com/mulgadc/hive/hive/handlers/ec2/igw"
+	"github.com/nats-io/nats.go"
+)
+
+// AttachInternetGateway handles the EC2 AttachInternetGateway API call
+func AttachInternetGateway(input *ec2.AttachInternetGatewayInput, natsConn *nats.Conn) (ec2.AttachInternetGatewayOutput, error) {
+	var output ec2.AttachInternetGatewayOutput
+
+	if input == nil {
+		return output, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	if input.InternetGatewayId == nil || *input.InternetGatewayId == "" {
+		return output, errors.New(awserrors.ErrorMissingParameter)
+	}
+	if input.VpcId == nil || *input.VpcId == "" {
+		return output, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	svc := handlers_ec2_igw.NewNATSIGWService(natsConn)
+	result, err := svc.AttachInternetGateway(input)
+	if err != nil {
+		return output, err
+	}
+
+	return *result, nil
+}

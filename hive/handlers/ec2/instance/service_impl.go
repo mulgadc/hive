@@ -63,6 +63,20 @@ instance-id: {{.InstanceID}}
 local-hostname: {{.Hostname}}
 `
 
+// cloudInitNetworkConfig enables DHCP on all NICs. Without this, Ubuntu cloud
+// images only configure the first NIC and the guest may have no IPv4 connectivity.
+// This is essential for DEV_NETWORKING dual-NIC setups (TAP + hostfwd) and
+// also ensures OVN DHCP works reliably on the TAP interface.
+const cloudInitNetworkConfig = `network:
+  version: 2
+  ethernets:
+    allnics:
+      match:
+        name: "en*"
+      dhcp4: true
+      dhcp-identifier: mac
+`
+
 type CloudInitData struct {
 	Username            string
 	SSHKey              string
@@ -441,11 +455,13 @@ func (s *InstanceServiceImpl) prepareEFIVolume(imageId string, volumeConfig vipe
 	return nil
 }
 
-// prepareCloudInitVolume creates cloud-init ISO with SSH keys and user data
-func (s *InstanceServiceImpl) prepareCloudInitVolume(input *ec2.RunInstancesInput, imageId string, volumeConfig viperblock.VolumeConfig, instance *vm.VM) error {
+// prepareCloudInitVolume creates cloud-init ISO with SSH keys and user data.
+// rootVolumeId is the per-instance root volume ID (not the AMI ID), ensuring
+// each instance gets its own cloud-init volume with fresh SSH keys and metadata.
+func (s *InstanceServiceImpl) prepareCloudInitVolume(input *ec2.RunInstancesInput, rootVolumeId string, volumeConfig viperblock.VolumeConfig, instance *vm.VM) error {
 	slog.Info("Creating cloud-init volume")
 
-	cloudInitVolumeName := fmt.Sprintf("%s-cloudinit", imageId)
+	cloudInitVolumeName := fmt.Sprintf("%s-cloudinit", rootVolumeId)
 	cloudInitSize := 1 * 1024 * 1024 // 1MB
 
 	// Update VolumeID to match the cloud-init volume name
@@ -468,35 +484,30 @@ func (s *InstanceServiceImpl) prepareCloudInitVolume(input *ec2.RunInstancesInpu
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 
-	// Load the state from the remote backend
-	_, err = cloudInitVb.LoadStateRequest("")
+	// Always create a fresh cloud-init ISO — never reuse a cached volume.
+	// Each instance needs its own SSH key, hostname, and user data.
 
-	// Create cloud-init volume if it doesn't exist
+	// Open the chunk WAL (sharded or legacy)
+	if cloudInitVb.UseShardedWAL {
+		err = cloudInitVb.OpenShardedWAL()
+	} else {
+		err = cloudInitVb.OpenWAL(&cloudInitVb.WAL, fmt.Sprintf("%s/%s", cloudInitVb.WAL.BaseDir, types.GetFilePath(types.FileTypeWALChunk, cloudInitVb.WAL.WallNum.Load(), cloudInitVb.GetVolume())))
+	}
 	if err != nil {
-		slog.Info("Volume does not yet exist, creating cloud-init disk ...")
+		slog.Error("Failed to load WAL", "err", err)
+		return errors.New(awserrors.ErrorServerInternal)
+	}
 
-		// Open the chunk WAL (sharded or legacy)
-		if cloudInitVb.UseShardedWAL {
-			err = cloudInitVb.OpenShardedWAL()
-		} else {
-			err = cloudInitVb.OpenWAL(&cloudInitVb.WAL, fmt.Sprintf("%s/%s", cloudInitVb.WAL.BaseDir, types.GetFilePath(types.FileTypeWALChunk, cloudInitVb.WAL.WallNum.Load(), cloudInitVb.GetVolume())))
-		}
-		if err != nil {
-			slog.Error("Failed to load WAL", "err", err)
-			return errors.New(awserrors.ErrorServerInternal)
-		}
+	err = cloudInitVb.OpenWAL(&cloudInitVb.BlockToObjectWAL, fmt.Sprintf("%s/%s", cloudInitVb.WAL.BaseDir, types.GetFilePath(types.FileTypeWALBlock, cloudInitVb.BlockToObjectWAL.WallNum.Load(), cloudInitVb.GetVolume())))
+	if err != nil {
+		slog.Error("Failed to load block WAL", "err", err)
+		return errors.New(awserrors.ErrorServerInternal)
+	}
 
-		err = cloudInitVb.OpenWAL(&cloudInitVb.BlockToObjectWAL, fmt.Sprintf("%s/%s", cloudInitVb.WAL.BaseDir, types.GetFilePath(types.FileTypeWALBlock, cloudInitVb.BlockToObjectWAL.WallNum.Load(), cloudInitVb.GetVolume())))
-		if err != nil {
-			slog.Error("Failed to load block WAL", "err", err)
-			return errors.New(awserrors.ErrorServerInternal)
-		}
-
-		// Create the cloud-init ISO
-		err = s.createCloudInitISO(input, instance.ID, cloudInitVb)
-		if err != nil {
-			return err
-		}
+	// Create the cloud-init ISO
+	err = s.createCloudInitISO(input, instance.ID, cloudInitVb)
+	if err != nil {
+		return err
 	}
 
 	err = cloudInitVb.Close()
@@ -598,6 +609,13 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 	err = writer.AddFile(&buf, "meta-data")
 	if err != nil {
 		slog.Error("failed to add file", "err", err)
+		return errors.New(awserrors.ErrorServerInternal)
+	}
+
+	// Add network-config (enables DHCP on all NICs)
+	err = writer.AddFile(strings.NewReader(cloudInitNetworkConfig), "network-config")
+	if err != nil {
+		slog.Error("failed to add network-config file", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 

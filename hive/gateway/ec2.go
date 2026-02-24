@@ -12,12 +12,14 @@ import (
 	"github.com/mulgadc/hive/hive/awserrors"
 	gateway_ec2_account "github.com/mulgadc/hive/hive/gateway/ec2/account"
 	gateway_ec2_eigw "github.com/mulgadc/hive/hive/gateway/ec2/eigw"
+	gateway_ec2_igw "github.com/mulgadc/hive/hive/gateway/ec2/igw"
 	gateway_ec2_image "github.com/mulgadc/hive/hive/gateway/ec2/image"
 	gateway_ec2_instance "github.com/mulgadc/hive/hive/gateway/ec2/instance"
 	gateway_ec2_key "github.com/mulgadc/hive/hive/gateway/ec2/key"
 	gateway_ec2_snapshot "github.com/mulgadc/hive/hive/gateway/ec2/snapshot"
 	gateway_ec2_tags "github.com/mulgadc/hive/hive/gateway/ec2/tags"
 	gateway_ec2_volume "github.com/mulgadc/hive/hive/gateway/ec2/volume"
+	gateway_ec2_vpc "github.com/mulgadc/hive/hive/gateway/ec2/vpc"
 	gateway_ec2_zone "github.com/mulgadc/hive/hive/gateway/ec2/zone"
 	"github.com/mulgadc/hive/hive/utils"
 )
@@ -165,6 +167,21 @@ var ec2Actions = map[string]EC2Handler{
 	"CopySnapshot": ec2Handler(func(input *ec2.CopySnapshotInput, gw *GatewayConfig) (any, error) {
 		return gateway_ec2_snapshot.CopySnapshot(input, gw.NATSConn)
 	}),
+	"CreateInternetGateway": ec2Handler(func(input *ec2.CreateInternetGatewayInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_igw.CreateInternetGateway(input, gw.NATSConn)
+	}),
+	"DeleteInternetGateway": ec2Handler(func(input *ec2.DeleteInternetGatewayInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_igw.DeleteInternetGateway(input, gw.NATSConn)
+	}),
+	"DescribeInternetGateways": ec2Handler(func(input *ec2.DescribeInternetGatewaysInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_igw.DescribeInternetGateways(input, gw.NATSConn)
+	}),
+	"AttachInternetGateway": ec2Handler(func(input *ec2.AttachInternetGatewayInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_igw.AttachInternetGateway(input, gw.NATSConn)
+	}),
+	"DetachInternetGateway": ec2Handler(func(input *ec2.DetachInternetGatewayInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_igw.DetachInternetGateway(input, gw.NATSConn)
+	}),
 	"CreateEgressOnlyInternetGateway": ec2Handler(func(input *ec2.CreateEgressOnlyInternetGatewayInput, gw *GatewayConfig) (any, error) {
 		return gateway_ec2_eigw.CreateEgressOnlyInternetGateway(input, gw.NATSConn)
 	}),
@@ -173,6 +190,33 @@ var ec2Actions = map[string]EC2Handler{
 	}),
 	"DescribeEgressOnlyInternetGateways": ec2Handler(func(input *ec2.DescribeEgressOnlyInternetGatewaysInput, gw *GatewayConfig) (any, error) {
 		return gateway_ec2_eigw.DescribeEgressOnlyInternetGateways(input, gw.NATSConn)
+	}),
+	"CreateVpc": ec2Handler(func(input *ec2.CreateVpcInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_vpc.CreateVpc(input, gw.NATSConn)
+	}),
+	"DeleteVpc": ec2Handler(func(input *ec2.DeleteVpcInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_vpc.DeleteVpc(input, gw.NATSConn)
+	}),
+	"DescribeVpcs": ec2Handler(func(input *ec2.DescribeVpcsInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_vpc.DescribeVpcs(input, gw.NATSConn)
+	}),
+	"CreateSubnet": ec2Handler(func(input *ec2.CreateSubnetInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_vpc.CreateSubnet(input, gw.NATSConn)
+	}),
+	"DeleteSubnet": ec2Handler(func(input *ec2.DeleteSubnetInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_vpc.DeleteSubnet(input, gw.NATSConn)
+	}),
+	"DescribeSubnets": ec2Handler(func(input *ec2.DescribeSubnetsInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_vpc.DescribeSubnets(input, gw.NATSConn)
+	}),
+	"CreateNetworkInterface": ec2Handler(func(input *ec2.CreateNetworkInterfaceInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_vpc.CreateNetworkInterface(input, gw.NATSConn)
+	}),
+	"DeleteNetworkInterface": ec2Handler(func(input *ec2.DeleteNetworkInterfaceInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_vpc.DeleteNetworkInterface(input, gw.NATSConn)
+	}),
+	"DescribeNetworkInterfaces": ec2Handler(func(input *ec2.DescribeNetworkInterfacesInput, gw *GatewayConfig) (any, error) {
+		return gateway_ec2_vpc.DescribeNetworkInterfaces(input, gw.NATSConn)
 	}),
 }
 

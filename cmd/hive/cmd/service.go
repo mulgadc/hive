@@ -27,6 +27,7 @@ import (
 	"github.com/mulgadc/hive/hive/services/nats"
 	"github.com/mulgadc/hive/hive/services/predastore"
 	"github.com/mulgadc/hive/hive/services/viperblockd"
+	"github.com/mulgadc/hive/hive/services/vpcd"
 	"github.com/mulgadc/predastore/s3"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -60,6 +61,11 @@ var hiveCmd = &cobra.Command{
 var awsgwCmd = &cobra.Command{
 	Use:   "awsgw",
 	Short: "Manage the awsgw (AWS gateway) service",
+}
+
+var vpcdCmd = &cobra.Command{
+	Use:   "vpcd",
+	Short: "Manage the vpcd (VPC daemon) service",
 }
 
 var hiveUICmd = &cobra.Command{
@@ -638,6 +644,69 @@ var hiveUIStatusCmd = &cobra.Command{
 	},
 }
 
+var vpcdStartCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Start the vpcd service",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println("Starting vpcd service...")
+
+		cfgFile := viper.GetString("config")
+		if cfgFile == "" {
+			fmt.Println("Config file is not set")
+			return
+		}
+
+		clusterConfig, err := config.LoadConfig(cfgFile)
+		if err != nil {
+			fmt.Println("Error loading config file:", err)
+			return
+		}
+
+		nodeConfig := clusterConfig.Nodes[clusterConfig.Node]
+
+		svc, err := service.New("vpcd", &vpcd.Config{
+			NatsHost:  nodeConfig.NATS.Host,
+			NatsToken: nodeConfig.NATS.ACL.Token,
+			OVNNBAddr: nodeConfig.VPCD.OVNNBAddr,
+			OVNSBAddr: nodeConfig.VPCD.OVNSBAddr,
+			BaseDir:   nodeConfig.BaseDir,
+			Debug:     false,
+		})
+		if err != nil {
+			fmt.Println("Error starting vpcd service:", err)
+			return
+		}
+
+		svc.Start()
+		fmt.Println("vpcd service started")
+	},
+}
+
+var vpcdStopCmd = &cobra.Command{
+	Use:   "stop",
+	Short: "Stop the vpcd service",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println("Stopping vpcd service...")
+
+		svc, err := service.New("vpcd", &vpcd.Config{})
+		if err != nil {
+			fmt.Println("Error stopping vpcd service:", err)
+			return
+		}
+
+		svc.Stop()
+		fmt.Println("vpcd service stopped")
+	},
+}
+
+var vpcdStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Get status of the vpcd service",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println("vpcd service status: ...")
+	},
+}
+
 func init() {
 
 	viper.SetEnvPrefix("HIVE") // Prefix for environment variables
@@ -816,5 +885,12 @@ func init() {
 	hiveUICmd.AddCommand(hiveUIStartCmd)
 	hiveUICmd.AddCommand(hiveUIStopCmd)
 	hiveUICmd.AddCommand(hiveUIStatusCmd)
+
+	// vpcd
+	serviceCmd.AddCommand(vpcdCmd)
+
+	vpcdCmd.AddCommand(vpcdStartCmd)
+	vpcdCmd.AddCommand(vpcdStopCmd)
+	vpcdCmd.AddCommand(vpcdStatusCmd)
 
 }

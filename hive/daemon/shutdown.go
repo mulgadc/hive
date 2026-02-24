@@ -5,11 +5,23 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats.go"
 )
+
+// pidDir returns the directory containing shell-level PID files for this node.
+// start-dev.sh writes PID files to $DATA_DIR/logs/ and the daemon's BaseDir is
+// always $DATA_DIR/hive/, so we derive the logs directory from that. Each node
+// has its own DATA_DIR, so this is safe for simulated multi-node on a single host.
+func (d *Daemon) pidDir() string {
+	if d.config.BaseDir != "" {
+		return filepath.Join(filepath.Dir(filepath.Clean(d.config.BaseDir)), "logs")
+	}
+	return ""
+}
 
 // ShutdownRequest is sent by the coordinator to each daemon per phase.
 type ShutdownRequest struct {
@@ -49,7 +61,7 @@ func (d *Daemon) handleShutdownGate(msg *nats.Msg) {
 
 	// Stop AWSGW
 	if d.config.HasService("awsgw") {
-		if err := utils.StopProcess("awsgw"); err != nil {
+		if err := utils.StopProcessAt(d.pidDir(), "awsgw"); err != nil {
 			slog.Warn("Failed to stop awsgw", "error", err)
 		} else {
 			stopped = append(stopped, "awsgw")
@@ -58,10 +70,19 @@ func (d *Daemon) handleShutdownGate(msg *nats.Msg) {
 
 	// Stop UI
 	if d.config.HasService("ui") {
-		if err := utils.StopProcess("hive-ui"); err != nil {
+		if err := utils.StopProcessAt(d.pidDir(), "hive-ui"); err != nil {
 			slog.Warn("Failed to stop hive-ui", "error", err)
 		} else {
 			stopped = append(stopped, "hive-ui")
+		}
+	}
+
+	// Stop vpcd (VPC daemon)
+	if d.config.HasService("vpcd") {
+		if err := utils.StopProcessAt(d.pidDir(), "vpcd"); err != nil {
+			slog.Warn("Failed to stop vpcd", "error", err)
+		} else {
+			stopped = append(stopped, "vpcd")
 		}
 	}
 
@@ -148,7 +169,7 @@ func (d *Daemon) handleShutdownStorage(msg *nats.Msg) {
 	var stopped []string
 
 	if d.config.HasService("viperblock") {
-		if err := utils.StopProcess("viperblock"); err != nil {
+		if err := utils.StopProcessAt(d.pidDir(), "viperblock"); err != nil {
 			slog.Warn("Failed to stop viperblock", "error", err)
 		} else {
 			stopped = append(stopped, "viperblock")
@@ -182,7 +203,7 @@ func (d *Daemon) handleShutdownPersist(msg *nats.Msg) {
 	var stopped []string
 
 	if d.config.HasService("predastore") {
-		if err := utils.StopProcess("predastore"); err != nil {
+		if err := utils.StopProcessAt(d.pidDir(), "predastore"); err != nil {
 			slog.Warn("Failed to stop predastore", "error", err)
 		} else {
 			stopped = append(stopped, "predastore")
@@ -232,7 +253,7 @@ func (d *Daemon) handleShutdownInfra(msg *nats.Msg) {
 
 	// Stop NATS server if this node runs it
 	if d.config.HasService("nats") {
-		if err := utils.StopProcess("nats"); err != nil {
+		if err := utils.StopProcessAt(d.pidDir(), "nats"); err != nil {
 			slog.Warn("Failed to stop nats", "error", err)
 		} else {
 			slog.Info("NATS server stopped", "node", d.node)

@@ -5,6 +5,118 @@
 # and verifying NATS cluster health.
 
 
+# Bootstrap OVN/OVS services inside a Docker container (no systemd).
+# Starts ovsdb-server, ovs-vswitchd, OVN central (NB/SB DBs + northd),
+# creates br-int, and starts ovn-controller.
+# All 3 simulated nodes share one br-int and one ovn-controller.
+bootstrap_ovn_docker() {
+    echo "Bootstrapping OVN/OVS for Docker (no systemd)..."
+
+    # Start ovsdb-server
+    mkdir -p /var/run/openvswitch
+    if [ ! -f /etc/openvswitch/conf.db ]; then
+        ovsdb-tool create /etc/openvswitch/conf.db /usr/share/openvswitch/vswitch.ovsschema
+    fi
+    ovsdb-server --remote=punix:/var/run/openvswitch/db.sock \
+        --remote=db:Open_vSwitch,Open_vSwitch,manager_options \
+        --pidfile --detach --log-file=/var/log/openvswitch/ovsdb-server.log \
+        /etc/openvswitch/conf.db
+    ovs-vsctl --no-wait init
+
+    # Start ovs-vswitchd
+    ovs-vswitchd --pidfile --detach --log-file=/var/log/openvswitch/ovs-vswitchd.log
+
+    # Create br-int with secure fail-mode
+    ovs-vsctl --may-exist add-br br-int
+    ovs-vsctl set Bridge br-int fail-mode=secure
+    ovs-vsctl set Bridge br-int other-config:disable-in-band=true
+    ip link set br-int up
+
+    # Start OVN central (NB + SB DBs + northd)
+    mkdir -p /var/run/ovn /var/lib/ovn /var/log/ovn
+
+    # NB database
+    if [ ! -f /var/lib/ovn/ovnnb_db.db ]; then
+        ovsdb-tool create /var/lib/ovn/ovnnb_db.db /usr/share/ovn/ovn-nb.ovsschema
+    fi
+    ovsdb-server --remote=punix:/var/run/ovn/ovnnb_db.sock \
+        --remote=ptcp:6641 \
+        --pidfile=/var/run/ovn/ovnnb_db.pid \
+        --detach --log-file=/var/log/ovn/ovnnb_db.log \
+        /var/lib/ovn/ovnnb_db.db
+
+    # SB database
+    if [ ! -f /var/lib/ovn/ovnsb_db.db ]; then
+        ovsdb-tool create /var/lib/ovn/ovnsb_db.db /usr/share/ovn/ovn-sb.ovsschema
+    fi
+    ovsdb-server --remote=punix:/var/run/ovn/ovnsb_db.sock \
+        --remote=ptcp:6642 \
+        --pidfile=/var/run/ovn/ovnsb_db.pid \
+        --detach --log-file=/var/log/ovn/ovnsb_db.log \
+        /var/lib/ovn/ovnsb_db.db
+
+    # Start ovn-northd
+    ovn-northd --pidfile=/var/run/ovn/ovn-northd.pid \
+        --detach --log-file=/var/log/ovn/ovn-northd.log \
+        --ovnnb-db=unix:/var/run/ovn/ovnnb_db.sock \
+        --ovnsb-db=unix:/var/run/ovn/ovnsb_db.sock
+
+    # Configure OVS external_ids for OVN
+    local chassis_id="chassis-docker"
+    ovs-vsctl set Open_vSwitch . \
+        external_ids:system-id="$chassis_id" \
+        external_ids:ovn-remote="tcp:127.0.0.1:6642" \
+        external_ids:ovn-encap-ip="127.0.0.1" \
+        external_ids:ovn-encap-type="geneve"
+
+    # Start ovn-controller with pidfile in OVS rundir
+    ovn-controller --pidfile=/var/run/openvswitch/ovn-controller.pid \
+        --detach --log-file=/var/log/ovn/ovn-controller.log
+
+    # Apply sysctl for overlay networking
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+    sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
+    sysctl -w net.ipv4.conf.default.rp_filter=0 >/dev/null 2>&1 || true
+
+    # Load geneve kernel module
+    modprobe geneve 2>/dev/null || true
+
+    # Wait for ovn-controller to become responsive.
+    # ovn-controller creates its ctl socket at /var/run/ovn/ovn-controller.PID.ctl
+    # but ovs-appctl -t ovn-controller looks in /var/run/openvswitch/, so we
+    # symlink it once the socket appears.
+    echo "  Waiting for ovn-controller to start..."
+    local ovn_pid
+    ovn_pid=$(cat /var/run/openvswitch/ovn-controller.pid 2>/dev/null || true)
+    local attempt=0
+    while [ $attempt -lt 15 ]; do
+        # Create symlink once the ctl socket appears
+        if [ -n "$ovn_pid" ] && [ -S "/var/run/ovn/ovn-controller.${ovn_pid}.ctl" ] \
+            && [ ! -e "/var/run/openvswitch/ovn-controller.${ovn_pid}.ctl" ]; then
+            ln -sf "/var/run/ovn/ovn-controller.${ovn_pid}.ctl" \
+                "/var/run/openvswitch/ovn-controller.${ovn_pid}.ctl"
+        fi
+        if ovs-appctl -t ovn-controller version >/dev/null 2>&1; then
+            break
+        fi
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+
+    # Verify
+    if ovs-vsctl br-exists br-int && ovs-appctl -t ovn-controller version >/dev/null 2>&1; then
+        echo "  OVN/OVS bootstrap complete (br-int up, ovn-controller running)"
+    else
+        echo "  ERROR: OVN bootstrap failed"
+        ovs-vsctl br-exists br-int && echo "  br-int: OK" || echo "  br-int: MISSING"
+        ovs-appctl -t ovn-controller version >/dev/null 2>&1 && echo "  ovn-controller: OK" || echo "  ovn-controller: NOT RUNNING"
+        # Dump ovn-controller log for debugging
+        echo "  --- ovn-controller.log ---"
+        cat /var/log/ovn/ovn-controller.log 2>/dev/null | tail -20 || true
+        return 1
+    fi
+}
+
 # Network configuration
 SIMULATED_NETWORK="10.11.12"
 NODE1_IP="${SIMULATED_NETWORK}.1"

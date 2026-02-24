@@ -16,12 +16,14 @@ import (
 	"github.com/mulgadc/hive/hive/config"
 	handlers_ec2_account "github.com/mulgadc/hive/hive/handlers/ec2/account"
 	handlers_ec2_eigw "github.com/mulgadc/hive/hive/handlers/ec2/eigw"
+	handlers_ec2_igw "github.com/mulgadc/hive/hive/handlers/ec2/igw"
 	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
 	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
 	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
 	handlers_ec2_snapshot "github.com/mulgadc/hive/hive/handlers/ec2/snapshot"
 	handlers_ec2_tags "github.com/mulgadc/hive/hive/handlers/ec2/tags"
 	handlers_ec2_volume "github.com/mulgadc/hive/hive/handlers/ec2/volume"
+	handlers_ec2_vpc "github.com/mulgadc/hive/hive/handlers/ec2/vpc"
 	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/vm"
@@ -2132,6 +2134,317 @@ func TestHandleNodeVMs_UnknownInstanceType(t *testing.T) {
 	assert.Len(t, resp.VMs, 1)
 	assert.Equal(t, 0, resp.VMs[0].VCPU)
 	assert.Equal(t, 0.0, resp.VMs[0].MemoryGB)
+}
+
+// --- VPC/IGW daemon handler round-trip tests ---
+
+// createVPCTestDaemon creates a test daemon with VPC and IGW services initialized
+// using an isolated JetStream server for KV storage.
+func createVPCTestDaemon(t *testing.T) *Daemon {
+	t.Helper()
+
+	daemon := createTestDaemon(t, sharedNATSURL)
+
+	ns, err := server.NewServer(&server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		JetStream: true,
+		StoreDir:  t.TempDir(),
+		NoLog:     true,
+		NoSigs:    true,
+	})
+	require.NoError(t, err)
+	go ns.Start()
+	require.True(t, ns.ReadyForConnections(5*time.Second))
+	t.Cleanup(func() { ns.Shutdown() })
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(func() { nc.Close() })
+
+	vpcSvc, err := handlers_ec2_vpc.NewVPCServiceImplWithNATS(daemon.config, nc)
+	require.NoError(t, err)
+	daemon.vpcService = vpcSvc
+
+	igwSvc, err := handlers_ec2_igw.NewIGWServiceImplWithNATS(daemon.config, nc)
+	require.NoError(t, err)
+	daemon.igwService = igwSvc
+
+	return daemon
+}
+
+func TestDelegateHandlers_VPC(t *testing.T) {
+	daemon := createVPCTestDaemon(t)
+
+	tests := []struct {
+		name    string
+		topic   string
+		handler func(*nats.Msg)
+		input   any
+	}{
+		{
+			"CreateVpc",
+			"ec2.test.CreateVpc",
+			daemon.handleEC2CreateVpc,
+			&ec2.CreateVpcInput{CidrBlock: aws.String("10.0.0.0/16")},
+		},
+		{
+			"DeleteVpc",
+			"ec2.test.DeleteVpc",
+			daemon.handleEC2DeleteVpc,
+			&ec2.DeleteVpcInput{VpcId: aws.String("vpc-nonexistent")},
+		},
+		{
+			"DescribeVpcs",
+			"ec2.test.DescribeVpcs",
+			daemon.handleEC2DescribeVpcs,
+			&ec2.DescribeVpcsInput{},
+		},
+		{
+			"CreateSubnet",
+			"ec2.test.CreateSubnet",
+			daemon.handleEC2CreateSubnet,
+			&ec2.CreateSubnetInput{
+				VpcId:     aws.String("vpc-nonexistent"),
+				CidrBlock: aws.String("10.0.1.0/24"),
+			},
+		},
+		{
+			"DeleteSubnet",
+			"ec2.test.DeleteSubnet",
+			daemon.handleEC2DeleteSubnet,
+			&ec2.DeleteSubnetInput{SubnetId: aws.String("subnet-nonexistent")},
+		},
+		{
+			"DescribeSubnets",
+			"ec2.test.DescribeSubnets",
+			daemon.handleEC2DescribeSubnets,
+			&ec2.DescribeSubnetsInput{},
+		},
+		{
+			"CreateNetworkInterface",
+			"ec2.test.CreateNetworkInterface",
+			daemon.handleEC2CreateNetworkInterface,
+			&ec2.CreateNetworkInterfaceInput{SubnetId: aws.String("subnet-nonexistent")},
+		},
+		{
+			"DeleteNetworkInterface",
+			"ec2.test.DeleteNetworkInterface",
+			daemon.handleEC2DeleteNetworkInterface,
+			&ec2.DeleteNetworkInterfaceInput{NetworkInterfaceId: aws.String("eni-nonexistent")},
+		},
+		{
+			"DescribeNetworkInterfaces",
+			"ec2.test.DescribeNetworkInterfaces",
+			daemon.handleEC2DescribeNetworkInterfaces,
+			&ec2.DescribeNetworkInterfacesInput{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "hive-workers", tt.handler)
+			require.NoError(t, err)
+			defer sub.Unsubscribe()
+
+			reqData, err := json.Marshal(tt.input)
+			require.NoError(t, err)
+
+			reply, err := daemon.natsConn.Request(tt.topic, reqData, 5*time.Second)
+			require.NoError(t, err)
+			require.NotNil(t, reply)
+
+			var resp json.RawMessage
+			err = json.Unmarshal(reply.Data, &resp)
+			require.NoError(t, err, "VPC response should be valid JSON: %s", string(reply.Data))
+		})
+	}
+}
+
+func TestDelegateHandlers_IGW(t *testing.T) {
+	daemon := createVPCTestDaemon(t)
+
+	tests := []struct {
+		name    string
+		topic   string
+		handler func(*nats.Msg)
+		input   any
+	}{
+		{
+			"CreateInternetGateway",
+			"ec2.test.CreateInternetGateway",
+			daemon.handleEC2CreateInternetGateway,
+			&ec2.CreateInternetGatewayInput{},
+		},
+		{
+			"DeleteInternetGateway",
+			"ec2.test.DeleteInternetGateway",
+			daemon.handleEC2DeleteInternetGateway,
+			&ec2.DeleteInternetGatewayInput{InternetGatewayId: aws.String("igw-nonexistent")},
+		},
+		{
+			"DescribeInternetGateways",
+			"ec2.test.DescribeInternetGateways",
+			daemon.handleEC2DescribeInternetGateways,
+			&ec2.DescribeInternetGatewaysInput{},
+		},
+		{
+			"AttachInternetGateway",
+			"ec2.test.AttachInternetGateway",
+			daemon.handleEC2AttachInternetGateway,
+			&ec2.AttachInternetGatewayInput{
+				InternetGatewayId: aws.String("igw-nonexistent"),
+				VpcId:             aws.String("vpc-nonexistent"),
+			},
+		},
+		{
+			"DetachInternetGateway",
+			"ec2.test.DetachInternetGateway",
+			daemon.handleEC2DetachInternetGateway,
+			&ec2.DetachInternetGatewayInput{
+				InternetGatewayId: aws.String("igw-nonexistent"),
+				VpcId:             aws.String("vpc-nonexistent"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "hive-workers", tt.handler)
+			require.NoError(t, err)
+			defer sub.Unsubscribe()
+
+			reqData, err := json.Marshal(tt.input)
+			require.NoError(t, err)
+
+			reply, err := daemon.natsConn.Request(tt.topic, reqData, 5*time.Second)
+			require.NoError(t, err)
+			require.NotNil(t, reply)
+
+			var resp json.RawMessage
+			err = json.Unmarshal(reply.Data, &resp)
+			require.NoError(t, err, "IGW response should be valid JSON: %s", string(reply.Data))
+		})
+	}
+}
+
+func TestHandleEC2CreateVpc_SuccessPath(t *testing.T) {
+	daemon := createVPCTestDaemon(t)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.CreateVpc", "hive-workers", daemon.handleEC2CreateVpc)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.CreateVpcInput{CidrBlock: aws.String("10.100.0.0/16")}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.CreateVpc", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.CreateVpcOutput
+	err = json.Unmarshal(reply.Data, &output)
+	require.NoError(t, err)
+	require.NotNil(t, output.Vpc)
+	assert.NotEmpty(t, *output.Vpc.VpcId)
+	assert.Equal(t, "10.100.0.0/16", *output.Vpc.CidrBlock)
+	assert.Equal(t, "available", *output.Vpc.State)
+}
+
+func TestHandleEC2CreateAndDescribeVpc_RoundTrip(t *testing.T) {
+	daemon := createVPCTestDaemon(t)
+
+	createSub, err := daemon.natsConn.QueueSubscribe("ec2.CreateVpc", "hive-workers", daemon.handleEC2CreateVpc)
+	require.NoError(t, err)
+	defer createSub.Unsubscribe()
+
+	describeSub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeVpcs", "hive-workers", daemon.handleEC2DescribeVpcs)
+	require.NoError(t, err)
+	defer describeSub.Unsubscribe()
+
+	// Create a VPC
+	createInput := &ec2.CreateVpcInput{CidrBlock: aws.String("10.200.0.0/16")}
+	reqData, _ := json.Marshal(createInput)
+	reply, err := daemon.natsConn.Request("ec2.CreateVpc", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var createOutput ec2.CreateVpcOutput
+	require.NoError(t, json.Unmarshal(reply.Data, &createOutput))
+	vpcID := *createOutput.Vpc.VpcId
+
+	// Describe VPCs and verify the created VPC appears
+	describeInput := &ec2.DescribeVpcsInput{}
+	reqData, _ = json.Marshal(describeInput)
+	reply, err = daemon.natsConn.Request("ec2.DescribeVpcs", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var describeOutput ec2.DescribeVpcsOutput
+	require.NoError(t, json.Unmarshal(reply.Data, &describeOutput))
+
+	found := false
+	for _, vpc := range describeOutput.Vpcs {
+		if *vpc.VpcId == vpcID {
+			found = true
+			assert.Equal(t, "10.200.0.0/16", *vpc.CidrBlock)
+		}
+	}
+	assert.True(t, found, "created VPC should appear in DescribeVpcs")
+}
+
+func TestHandleEC2CreateInternetGateway_SuccessPath(t *testing.T) {
+	daemon := createVPCTestDaemon(t)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.CreateInternetGateway", "hive-workers", daemon.handleEC2CreateInternetGateway)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.CreateInternetGatewayInput{}
+	reqData, _ := json.Marshal(input)
+	reply, err := daemon.natsConn.Request("ec2.CreateInternetGateway", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.CreateInternetGatewayOutput
+	err = json.Unmarshal(reply.Data, &output)
+	require.NoError(t, err)
+	require.NotNil(t, output.InternetGateway)
+	assert.NotEmpty(t, *output.InternetGateway.InternetGatewayId)
+	assert.True(t, len(*output.InternetGateway.InternetGatewayId) > 4)
+}
+
+func TestHandleEC2CreateSubnet_SuccessPath(t *testing.T) {
+	daemon := createVPCTestDaemon(t)
+
+	createVpcSub, err := daemon.natsConn.QueueSubscribe("ec2.CreateVpc", "hive-workers", daemon.handleEC2CreateVpc)
+	require.NoError(t, err)
+	defer createVpcSub.Unsubscribe()
+
+	createSubnetSub, err := daemon.natsConn.QueueSubscribe("ec2.CreateSubnet", "hive-workers", daemon.handleEC2CreateSubnet)
+	require.NoError(t, err)
+	defer createSubnetSub.Unsubscribe()
+
+	// Create a VPC first
+	vpcInput := &ec2.CreateVpcInput{CidrBlock: aws.String("10.50.0.0/16")}
+	reqData, _ := json.Marshal(vpcInput)
+	reply, err := daemon.natsConn.Request("ec2.CreateVpc", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var vpcOutput ec2.CreateVpcOutput
+	require.NoError(t, json.Unmarshal(reply.Data, &vpcOutput))
+	vpcID := *vpcOutput.Vpc.VpcId
+
+	// Create a subnet in the VPC
+	subnetInput := &ec2.CreateSubnetInput{
+		VpcId:     aws.String(vpcID),
+		CidrBlock: aws.String("10.50.1.0/24"),
+	}
+	reqData, _ = json.Marshal(subnetInput)
+	reply, err = daemon.natsConn.Request("ec2.CreateSubnet", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var subnetOutput ec2.CreateSubnetOutput
+	require.NoError(t, json.Unmarshal(reply.Data, &subnetOutput))
+	require.NotNil(t, subnetOutput.Subnet)
+	assert.NotEmpty(t, *subnetOutput.Subnet.SubnetId)
+	assert.Equal(t, vpcID, *subnetOutput.Subnet.VpcId)
+	assert.Equal(t, "10.50.1.0/24", *subnetOutput.Subnet.CidrBlock)
 }
 
 // TestDelegateHandlers_EIGW tests Egress-Only Internet Gateway delegate handlers.

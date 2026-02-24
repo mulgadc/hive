@@ -91,6 +91,11 @@ if ! command -v ip &> /dev/null; then
     exit 1
 fi
 
+# Bootstrap OVN/OVS (required — start-dev.sh will block without it)
+echo ""
+echo "Bootstrapping OVN/OVS networking..."
+bootstrap_ovn_docker
+
 # Setup simulated network
 echo ""
 echo "Setting up simulated network..."
@@ -1144,6 +1149,263 @@ else
 fi
 
 echo "  Crash recovery tests passed"
+
+# Terminate Phase 5 instances before VPC tests to free memory
+echo ""
+echo "Cleaning up Phase 5 instances before VPC tests..."
+for instance_id in "${INSTANCE_IDS[@]}"; do
+    state=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
+        --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "unknown")
+    if [ "$state" != "terminated" ] && [ "$state" != "unknown" ]; then
+        $AWS_EC2 terminate-instances --instance-ids "$instance_id" > /dev/null 2>&1 || true
+    fi
+done
+# Wait for all to terminate
+for instance_id in "${INSTANCE_IDS[@]}"; do
+    wait_for_instance_state "$instance_id" "terminated" 30 || true
+done
+echo "  Phase 5 instances terminated"
+
+# Phase 5c: VPC Networking
+echo ""
+echo "Phase 5c: VPC Networking"
+echo "========================================"
+echo "Testing VPC instance launch, PrivateIpAddress, and same-subnet connectivity..."
+
+# Step 1: Create VPC and Subnet
+echo ""
+echo "Step 1: Create VPC + Subnet"
+echo "----------------------------------------"
+
+VPC_OUTPUT=$($AWS_EC2 create-vpc --cidr-block 10.100.0.0/16)
+VPC_ID=$(echo "$VPC_OUTPUT" | jq -r '.Vpc.VpcId')
+if [ -z "$VPC_ID" ] || [ "$VPC_ID" == "null" ]; then
+    echo "  ERROR: Failed to create VPC"
+    echo "  Output: $VPC_OUTPUT"
+    exit 1
+fi
+echo "  Created VPC: $VPC_ID (10.100.0.0/16)"
+
+SUBNET_OUTPUT=$($AWS_EC2 create-subnet --vpc-id "$VPC_ID" --cidr-block 10.100.1.0/24)
+SUBNET_ID=$(echo "$SUBNET_OUTPUT" | jq -r '.Subnet.SubnetId')
+if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" == "null" ]; then
+    echo "  ERROR: Failed to create subnet"
+    echo "  Output: $SUBNET_OUTPUT"
+    exit 1
+fi
+echo "  Created Subnet: $SUBNET_ID (10.100.1.0/24)"
+
+# Brief pause for OVN topology to be programmed (logical switch + router port + DHCP)
+sleep 2
+
+# Step 2: Launch 3 VPC instances
+echo ""
+echo "Step 2: Launch 3 VPC instances"
+echo "----------------------------------------"
+
+VPC_INSTANCE_IDS=()
+for i in 1 2 3; do
+    echo "  Launching VPC instance $i with subnet $SUBNET_ID..."
+    RUN_OUTPUT=$($AWS_EC2 run-instances \
+        --image-id "$AMI_ID" \
+        --instance-type "$INSTANCE_TYPE" \
+        --key-name multinode-test-key \
+        --subnet-id "$SUBNET_ID")
+
+    VPC_INST_ID=$(echo "$RUN_OUTPUT" | jq -r '.Instances[0].InstanceId')
+    VPC_INST_IP=$(echo "$RUN_OUTPUT" | jq -r '.Instances[0].PrivateIpAddress // empty')
+
+    if [ -z "$VPC_INST_ID" ] || [ "$VPC_INST_ID" == "null" ]; then
+        echo "  ERROR: Failed to launch VPC instance $i"
+        echo "  Output: $RUN_OUTPUT"
+        exit 1
+    fi
+    echo "  Launched: $VPC_INST_ID (PrivateIpAddress: ${VPC_INST_IP:-not yet assigned})"
+    VPC_INSTANCE_IDS+=("$VPC_INST_ID")
+
+    sleep 2
+done
+
+# Wait for all VPC instances to be running
+echo ""
+echo "Waiting for VPC instances to reach running state..."
+for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+    wait_for_instance_state "$vpc_inst" "running" 30 || {
+        echo "ERROR: VPC instance $vpc_inst failed to start"
+        exit 1
+    }
+done
+
+# Step 3: Verify PrivateIpAddress in DescribeInstances
+echo ""
+echo "Step 3: Verify PrivateIpAddress in DescribeInstances"
+echo "----------------------------------------"
+
+VPC_PRIVATE_IPS=()
+for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+    DESCRIBE_OUT=$($AWS_EC2 describe-instances --instance-ids "$vpc_inst")
+    PRIVATE_IP=$(echo "$DESCRIBE_OUT" | jq -r '.Reservations[0].Instances[0].PrivateIpAddress // empty')
+    INST_SUBNET=$(echo "$DESCRIBE_OUT" | jq -r '.Reservations[0].Instances[0].SubnetId // empty')
+    INST_VPC=$(echo "$DESCRIBE_OUT" | jq -r '.Reservations[0].Instances[0].VpcId // empty')
+    ENI_COUNT=$(echo "$DESCRIBE_OUT" | jq -r '.Reservations[0].Instances[0].NetworkInterfaces | length')
+
+    if [ -z "$PRIVATE_IP" ]; then
+        echo "  ERROR: $vpc_inst has no PrivateIpAddress"
+        echo "  Describe output: $(echo "$DESCRIBE_OUT" | jq -c '.Reservations[0].Instances[0] | {PrivateIpAddress, SubnetId, VpcId, NetworkInterfaces}')"
+        exit 1
+    fi
+
+    echo "  $vpc_inst: IP=$PRIVATE_IP, Subnet=$INST_SUBNET, VPC=$INST_VPC, ENIs=$ENI_COUNT"
+
+    if [ "$INST_SUBNET" != "$SUBNET_ID" ]; then
+        echo "  ERROR: SubnetId mismatch (expected $SUBNET_ID, got $INST_SUBNET)"
+        exit 1
+    fi
+    if [ "$INST_VPC" != "$VPC_ID" ]; then
+        echo "  ERROR: VpcId mismatch (expected $VPC_ID, got $INST_VPC)"
+        exit 1
+    fi
+    if [ "$ENI_COUNT" -lt 1 ]; then
+        echo "  ERROR: No NetworkInterfaces found"
+        exit 1
+    fi
+
+    VPC_PRIVATE_IPS+=("$PRIVATE_IP")
+done
+
+# Verify all IPs are unique and in the subnet range (10.100.1.x)
+echo ""
+echo "  Verifying IP uniqueness and subnet range..."
+UNIQUE_IPS=$(printf '%s\n' "${VPC_PRIVATE_IPS[@]}" | sort -u | wc -l)
+if [ "$UNIQUE_IPS" -ne "${#VPC_PRIVATE_IPS[@]}" ]; then
+    echo "  ERROR: Duplicate IPs detected: ${VPC_PRIVATE_IPS[*]}"
+    exit 1
+fi
+for ip in "${VPC_PRIVATE_IPS[@]}"; do
+    if ! echo "$ip" | grep -qE '^10\.100\.1\.[0-9]+$'; then
+        echo "  ERROR: IP $ip not in expected subnet 10.100.1.0/24"
+        exit 1
+    fi
+done
+echo "  All IPs unique and in correct subnet: ${VPC_PRIVATE_IPS[*]}"
+
+# Step 4: SSH via DEV_NETWORKING hostfwd and test ping connectivity
+# DISABLED: VPC instances use OVN DHCP which takes ~6 min per instance to get SSH ready.
+# With 3 instances this adds ~18 min to the E2E run. The SSH+ping test is best-effort
+# anyway (OVN overlay not fully programmed in Docker single-host mode). IP allocation
+# and subnet correctness are already verified in Step 3.
+echo ""
+echo "Step 4: SSH + Ping Connectivity (SKIPPED — OVN DHCP wait too slow in CI)"
+echo "----------------------------------------"
+
+# Step 5: Stop/Start IP persistence
+echo ""
+echo "Step 5: Stop/Start IP Persistence"
+echo "----------------------------------------"
+echo "Verifying private IPs persist through stop/start cycle (AWS behavior)..."
+
+# Record IPs before stop
+echo "  IPs before stop: ${VPC_PRIVATE_IPS[*]}"
+
+# Stop all VPC instances
+echo ""
+echo "  Stopping all VPC instances..."
+for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+    echo "  Stopping $vpc_inst..."
+    $AWS_EC2 stop-instances --instance-ids "$vpc_inst" > /dev/null
+done
+
+for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+    wait_for_instance_state "$vpc_inst" "stopped" 30 || {
+        echo "  ERROR: VPC instance $vpc_inst failed to stop"
+        exit 1
+    }
+done
+echo "  All VPC instances stopped"
+
+# Verify IPs are still present in DescribeInstances while stopped
+echo ""
+echo "  Verifying IPs persist in stopped state..."
+for idx in "${!VPC_INSTANCE_IDS[@]}"; do
+    vpc_inst="${VPC_INSTANCE_IDS[$idx]}"
+    expected_ip="${VPC_PRIVATE_IPS[$idx]}"
+
+    STOPPED_IP=$($AWS_EC2 describe-instances --instance-ids "$vpc_inst" \
+        --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+
+    if [ "$STOPPED_IP" != "$expected_ip" ]; then
+        echo "  ERROR: $vpc_inst IP changed while stopped (expected $expected_ip, got $STOPPED_IP)"
+        exit 1
+    fi
+    echo "  $vpc_inst: IP=$STOPPED_IP (unchanged)"
+done
+
+# Start all VPC instances
+echo ""
+echo "  Starting all VPC instances..."
+for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+    echo "  Starting $vpc_inst..."
+    $AWS_EC2 start-instances --instance-ids "$vpc_inst" > /dev/null
+done
+
+for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+    wait_for_instance_state "$vpc_inst" "running" 30 || {
+        echo "  ERROR: VPC instance $vpc_inst failed to restart"
+        exit 1
+    }
+done
+echo "  All VPC instances restarted"
+
+# Verify IPs are identical after restart
+echo ""
+echo "  Verifying IPs persist after restart..."
+IP_MISMATCHES=0
+for idx in "${!VPC_INSTANCE_IDS[@]}"; do
+    vpc_inst="${VPC_INSTANCE_IDS[$idx]}"
+    expected_ip="${VPC_PRIVATE_IPS[$idx]}"
+
+    RESTARTED_IP=$($AWS_EC2 describe-instances --instance-ids "$vpc_inst" \
+        --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+
+    if [ "$RESTARTED_IP" == "$expected_ip" ]; then
+        echo "  $vpc_inst: IP=$RESTARTED_IP (matches pre-stop)"
+    else
+        echo "  ERROR: $vpc_inst IP changed after restart (expected $expected_ip, got $RESTARTED_IP)"
+        IP_MISMATCHES=$((IP_MISMATCHES + 1))
+    fi
+done
+
+if [ "$IP_MISMATCHES" -gt 0 ]; then
+    echo "  ERROR: $IP_MISMATCHES instances had IP changes — ENI not persisting through stop/start"
+    exit 1
+fi
+
+echo "  Stop/start IP persistence verified — all IPs match"
+
+# Step 6: Clean up VPC instances
+echo ""
+echo "Step 6: Clean up VPC resources"
+echo "----------------------------------------"
+
+for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+    echo "  Terminating $vpc_inst..."
+    $AWS_EC2 terminate-instances --instance-ids "$vpc_inst" > /dev/null 2>&1 || true
+done
+
+for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+    wait_for_instance_state "$vpc_inst" "terminated" 30 || {
+        echo "  WARNING: Failed to confirm termination of $vpc_inst"
+    }
+done
+
+# Clean up subnet and VPC
+echo "  Deleting subnet $SUBNET_ID..."
+$AWS_EC2 delete-subnet --subnet-id "$SUBNET_ID" 2>/dev/null || echo "  (subnet delete failed, may have ENIs)"
+
+echo "  Deleting VPC $VPC_ID..."
+$AWS_EC2 delete-vpc --vpc-id "$VPC_ID" 2>/dev/null || echo "  (vpc delete failed, may have subnets)"
+
+echo "  VPC networking tests passed"
 
 # Phase 6: Cluster Shutdown + Restart
 echo ""

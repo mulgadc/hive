@@ -40,7 +40,7 @@ parse_services() {
             return
         fi
     fi
-    echo "nats predastore viperblock daemon awsgw ui"
+    echo "nats predastore viperblock daemon awsgw vpcd ui"
 }
 
 SERVICES=$(parse_services)
@@ -186,6 +186,40 @@ else
     echo "✈️  Skipping build (HIVE_SKIP_BUILD=true)"
 fi
 
+# 0️⃣ Verify OVN networking readiness (required — blocks service startup)
+echo ""
+echo "0️⃣  Checking OVN networking..."
+OVN_OK=true
+
+if ! command -v ovs-vsctl >/dev/null 2>&1; then
+    echo "   ❌ OVS not installed"
+    echo "   Run: make quickinstall && ./scripts/setup-ovn.sh --management"
+    OVN_OK=false
+else
+    if sudo ovs-vsctl br-exists br-int 2>/dev/null; then
+        echo "   ✅ br-int exists"
+    else
+        echo "   ❌ br-int not found"
+        echo "   Run: ./scripts/setup-ovn.sh --management"
+        OVN_OK=false
+    fi
+    if sudo ovs-appctl -t ovn-controller version >/dev/null 2>&1 || systemctl is-active --quiet ovn-controller 2>/dev/null; then
+        echo "   ✅ ovn-controller running"
+    else
+        echo "   ❌ ovn-controller not running"
+        echo "   Run: ./scripts/setup-ovn.sh --management"
+        OVN_OK=false
+    fi
+fi
+
+if [ "$OVN_OK" != "true" ]; then
+    echo ""
+    echo "   ❌ OVN preflight failed — cannot start services without OVN."
+    echo "   OVN is required for VPC networking. Set up OVN first:"
+    echo "     ./scripts/setup-ovn.sh --management"
+    exit 1
+fi
+
 # 1️⃣ Start NATS server
 echo ""
 if has_service "nats"; then
@@ -326,17 +360,31 @@ else
 fi
 
 
-# 6️⃣ Start Hive UI (skip with UI=false or if not a local service)
+# 6️⃣ Start vpcd (VPC daemon)
+echo ""
+if has_service "vpcd"; then
+    echo "6️⃣. Starting vpcd (VPC daemon)..."
+
+    export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
+
+    VPCD_CMD="./bin/hive service vpcd start"
+    start_service "vpcd" "$VPCD_CMD"
+    set_oom_score "vpcd" "-500"
+else
+    echo "6️⃣. Skipping vpcd (not a local service)"
+fi
+
+# 7️⃣ Start Hive UI (skip with UI=false or if not a local service)
 if [ "${UI}" != "false" ] && has_service "ui"; then
     echo ""
-    echo "6️⃣. Starting Hive UI..."
+    echo "7️⃣. Starting Hive UI..."
 
     HIVEUI_CMD="./bin/hive service hive-ui start"
     start_service "hive-ui" "$HIVEUI_CMD"
     set_oom_score "hive-ui" "-500"
 else
     echo ""
-    echo "6️⃣. Skipping Hive UI"
+    echo "7️⃣. Skipping Hive UI"
 fi
 
 

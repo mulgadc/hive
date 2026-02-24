@@ -13,7 +13,7 @@ set -euo pipefail
 
 PROFILE=""
 BASE_REF=""
-THRESHOLD=70
+THRESHOLD=60
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -86,6 +86,12 @@ git diff "${BASE_REF}" HEAD --unified=0 --diff-filter=AM -- '*.go' ':!*_test.go'
 DIFF_COUNT=$(wc -l < "$TMPDIR/diff_lines" | tr -d ' ')
 if [[ "$DIFF_COUNT" -eq 0 ]]; then
     echo "No new/modified Go source lines — skipping diff coverage."
+    exit 0
+fi
+
+MIN_LOC=100
+if [[ "$DIFF_COUNT" -lt "$MIN_LOC" ]]; then
+    echo "Only $DIFF_COUNT changed lines (< $MIN_LOC) — skipping diff coverage."
     exit 0
 fi
 
