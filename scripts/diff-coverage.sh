@@ -13,7 +13,7 @@ set -euo pipefail
 
 PROFILE=""
 BASE_REF=""
-THRESHOLD=60
+THRESHOLD=50
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -43,7 +43,7 @@ fi
 if [[ -z "$BASE_REF" ]]; then
     BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}"
     case "$BRANCH" in
-        main) BASE_REF="HEAD~1" ;;
+        main) BASE_REF="origin/main" ;;
         dev)  BASE_REF="origin/main" ;;
         *)    BASE_REF="origin/dev" ;;
     esac

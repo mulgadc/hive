@@ -2062,7 +2062,7 @@ func (d *Daemon) rollbackEBSMount(req config.EBSRequest) {
 
 // respondWithVolumeAttachment builds an ec2.VolumeAttachment, marshals it to JSON, and
 // responds on the NATS message. Used by both AttachVolume and DetachVolume handlers.
-func (d *Daemon) respondWithVolumeAttachment(msg *nats.Msg, respondWithError func(string), volumeID, instanceID, device, state string) {
+func (d *Daemon) respondWithVolumeAttachment(msg *nats.Msg, volumeID, instanceID, device, state string) {
 	attachment := ec2.VolumeAttachment{
 		VolumeId:            aws.String(volumeID),
 		InstanceId:          aws.String(instanceID),
@@ -2075,7 +2075,7 @@ func (d *Daemon) respondWithVolumeAttachment(msg *nats.Msg, respondWithError fun
 	jsonResp, err := json.Marshal(attachment)
 	if err != nil {
 		slog.Error("Failed to marshal VolumeAttachment response", "err", err)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 

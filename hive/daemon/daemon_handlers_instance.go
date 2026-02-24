@@ -25,9 +25,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 
 	// Initialize runInstancesInput before unmarshaling into it
 	runInstancesInput := &ec2.RunInstancesInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(runInstancesInput, msg.Data)
+	errResp := utils.UnmarshalJsonPayload(runInstancesInput, msg.Data)
 
 	if errResp != nil {
 		if err := msg.Respond(errResp); err != nil {
@@ -43,34 +41,27 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	instanceType, exists := d.resourceMgr.instanceTypes[*runInstancesInput.InstanceType]
 	if !exists {
 		slog.Error("handleEC2RunInstances instance lookup", "err", awserrors.ErrorInvalidInstanceType, "InstanceType", *runInstancesInput.InstanceType)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorInvalidInstanceType)
-		if err := msg.Respond(errResp); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
+		respondWithError(msg, awserrors.ErrorInvalidInstanceType)
 		return
 	}
 
 	// Validate AMI exists before allocating resources
-	if runInstancesInput.ImageId != nil {
-		_, err := d.imageService.GetAMIConfig(*runInstancesInput.ImageId)
-		if err != nil {
-			slog.Error("handleEC2RunInstances AMI not found", "imageId", *runInstancesInput.ImageId, "err", err)
-			errResp = utils.GenerateErrorPayload(awserrors.ErrorInvalidAMIIDNotFound)
-			if err := msg.Respond(errResp); err != nil {
-				slog.Error("Failed to respond to NATS request", "err", err)
-			}
-			return
-		}
+	if runInstancesInput.ImageId == nil || *runInstancesInput.ImageId == "" {
+		slog.Error("handleEC2RunInstances missing ImageId")
+		respondWithError(msg, awserrors.ErrorMissingParameter)
+		return
+	}
+	if _, err := d.imageService.GetAMIConfig(*runInstancesInput.ImageId); err != nil {
+		slog.Error("handleEC2RunInstances AMI not found", "imageId", *runInstancesInput.ImageId, "err", err)
+		respondWithError(msg, awserrors.ErrorInvalidAMIIDNotFound)
+		return
 	}
 
 	// Validate key pair exists (if specified)
 	if runInstancesInput.KeyName != nil && *runInstancesInput.KeyName != "" {
 		if err := d.keyService.ValidateKeyPairExists(*runInstancesInput.KeyName); err != nil {
 			slog.Error("handleEC2RunInstances key pair not found", "keyName", *runInstancesInput.KeyName, "err", err)
-			errResp = utils.GenerateErrorPayload(awserrors.ErrorInvalidKeyPairNotFound)
-			if err := msg.Respond(errResp); err != nil {
-				slog.Error("Failed to respond to NATS request", "err", err)
-			}
+			respondWithError(msg, awserrors.ErrorInvalidKeyPairNotFound)
 			return
 		}
 	}
@@ -85,10 +76,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	if allocatableCount < minCount {
 		// Cannot satisfy MinCount requirement - fail entirely
 		slog.Error("handleEC2RunInstances insufficient capacity", "requested", minCount, "available", allocatableCount, "InstanceType", *runInstancesInput.InstanceType)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorInsufficientInstanceCapacity)
-		if err := msg.Respond(errResp); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
+		respondWithError(msg, awserrors.ErrorInsufficientInstanceCapacity)
 		return
 	}
 
@@ -115,10 +103,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 			d.resourceMgr.deallocate(instanceType)
 		}
 		slog.Error("handleEC2RunInstances insufficient capacity after allocation", "allocated", allocatedCount, "minCount", minCount)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorInsufficientInstanceCapacity)
-		if err := msg.Respond(errResp); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
+		respondWithError(msg, awserrors.ErrorInsufficientInstanceCapacity)
 		return
 	}
 
@@ -208,10 +193,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 			}
 		}
 		slog.Error("handleEC2RunInstances failed to create minimum instances", "created", len(instances), "minCount", minCount, "err", errCode)
-		errResp = utils.GenerateErrorPayload(errCode)
-		if err := msg.Respond(errResp); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
+		respondWithError(msg, errCode)
 		return
 	}
 
@@ -230,10 +212,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	jsonResponse, err := json.Marshal(reservation)
 	if err != nil {
 		slog.Error("handleEC2RunInstances failed to marshal reservation", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		if err := msg.Respond(errResp); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		// Deallocate all resources
 		for range instances {
 			d.resourceMgr.deallocate(instanceType)
@@ -299,7 +278,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	slog.Info("handleEC2RunInstances completed", "requested", launchCount, "created", len(instances), "launched", successCount)
 }
 
-func (d *Daemon) handleStartInstance(msg *nats.Msg, command qmp.Command, instance *vm.VM, respondWithError func(string)) {
+func (d *Daemon) handleStartInstance(msg *nats.Msg, command qmp.Command, instance *vm.VM) {
 	slog.Info("Starting instance", "id", command.ID)
 
 	// Validate instance is in stopped state
@@ -309,7 +288,7 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command qmp.Command, instanc
 
 	if status != vm.StateStopped {
 		slog.Error("StartInstance: instance not in stopped state", "instanceId", command.ID, "status", status)
-		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		respondWithError(msg, awserrors.ErrorIncorrectInstanceState)
 		return
 	}
 
@@ -318,7 +297,7 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command qmp.Command, instanc
 	if ok {
 		if err := d.resourceMgr.allocate(instanceType); err != nil {
 			slog.Error("Failed to allocate resources for start command", "id", command.ID, "err", err)
-			respondWithError(awserrors.ErrorInsufficientInstanceCapacity)
+			respondWithError(msg, awserrors.ErrorInsufficientInstanceCapacity)
 			return
 		}
 	}
@@ -339,7 +318,7 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command qmp.Command, instanc
 		if ok {
 			d.resourceMgr.deallocate(instanceType)
 		}
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
@@ -350,7 +329,7 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command qmp.Command, instanc
 	}
 }
 
-func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command qmp.Command, instance *vm.VM, respondWithError func(string)) {
+func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command qmp.Command, instance *vm.VM) {
 	isTerminate := command.Attributes.TerminateInstance
 	action := "Stopping"
 	initialState := vm.StateStopping
@@ -371,14 +350,14 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command qmp.Comman
 	if !vm.IsValidTransition(currentState, initialState) {
 		slog.Warn("Instance in incorrect state for "+strings.ToLower(action),
 			"instanceId", instance.ID, "currentState", string(currentState))
-		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		respondWithError(msg, awserrors.ErrorIncorrectInstanceState)
 		return
 	}
 
 	// Transition to the initial transitional state
 	if err := d.TransitionState(instance, initialState); err != nil {
 		slog.Error("Failed to transition to "+string(initialState), "instanceId", instance.ID, "err", err)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
@@ -459,9 +438,7 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 
 	// Initialize describeInstancesInput before unmarshaling into it
 	describeInstancesInput := &ec2.DescribeInstancesInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(describeInstancesInput, msg.Data)
+	errResp := utils.UnmarshalJsonPayload(describeInstancesInput, msg.Data)
 
 	if errResp != nil {
 		if err := msg.Respond(errResp); err != nil {
@@ -482,9 +459,7 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 		for _, id := range describeInstancesInput.InstanceIds {
 			if id != nil && *id != "" {
 				if !strings.HasPrefix(*id, "i-") {
-					if err := msg.Respond(utils.GenerateErrorPayload(awserrors.ErrorInvalidInstanceIDMalformed)); err != nil {
-						slog.Error("Failed to respond to NATS request", "err", err)
-					}
+					respondWithError(msg, awserrors.ErrorInvalidInstanceIDMalformed)
 					return
 				}
 				instanceIDFilter[*id] = true
@@ -555,10 +530,7 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 	jsonResponse, err := json.Marshal(output)
 	if err != nil {
 		slog.Error("handleEC2DescribeInstances failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		if err := msg.Respond(errResp); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 	if err := msg.Respond(jsonResponse); err != nil {
@@ -576,9 +548,7 @@ func (d *Daemon) handleEC2DescribeInstanceTypes(msg *nats.Msg) {
 
 	// Initialize input
 	describeInput := &ec2.DescribeInstanceTypesInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(describeInput, msg.Data)
+	errResp := utils.UnmarshalJsonPayload(describeInput, msg.Data)
 	if errResp != nil {
 		if err := msg.Respond(errResp); err != nil {
 			slog.Error("Failed to respond to NATS request", "err", err)
@@ -614,10 +584,7 @@ func (d *Daemon) handleEC2DescribeInstanceTypes(msg *nats.Msg) {
 	jsonResponse, err := json.Marshal(output)
 	if err != nil {
 		slog.Error("handleEC2DescribeInstanceTypes failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		if err := msg.Respond(errResp); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 	if err := msg.Respond(jsonResponse); err != nil {
@@ -635,28 +602,23 @@ type startStoppedInstanceRequest struct {
 // handleEC2StartStoppedInstance picks up a stopped instance from shared KV,
 // re-launches it on this daemon node, and removes it from shared KV.
 func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
-	respondWithError := func(errCode string) {
-		if err := msg.Respond(utils.GenerateErrorPayload(errCode)); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
-	}
 
 	var req startStoppedInstanceRequest
 	if err := json.Unmarshal(msg.Data, &req); err != nil {
 		slog.Error("handleEC2StartStoppedInstance: failed to unmarshal request", "err", err)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
 	if req.InstanceID == "" {
 		slog.Error("handleEC2StartStoppedInstance: missing instance_id")
-		respondWithError(awserrors.ErrorMissingParameter)
+		respondWithError(msg, awserrors.ErrorMissingParameter)
 		return
 	}
 
 	if d.jsManager == nil {
 		slog.Error("handleEC2StartStoppedInstance: JetStream not available")
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
@@ -664,18 +626,18 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 	instance, err := d.jsManager.LoadStoppedInstance(req.InstanceID)
 	if err != nil {
 		slog.Error("handleEC2StartStoppedInstance: failed to load stopped instance", "instanceId", req.InstanceID, "err", err)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 	if instance == nil {
 		slog.Warn("handleEC2StartStoppedInstance: instance not found in shared KV", "instanceId", req.InstanceID)
-		respondWithError(awserrors.ErrorInvalidInstanceIDNotFound)
+		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
 		return
 	}
 
 	if instance.Status != vm.StateStopped {
 		slog.Error("handleEC2StartStoppedInstance: instance not in stopped state", "instanceId", req.InstanceID, "status", instance.Status)
-		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		respondWithError(msg, awserrors.ErrorIncorrectInstanceState)
 		return
 	}
 
@@ -687,12 +649,12 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 	if !ok {
 		slog.Error("handleEC2StartStoppedInstance: instance type not available on this node",
 			"instanceId", req.InstanceID, "instanceType", instance.InstanceType)
-		respondWithError(awserrors.ErrorInsufficientInstanceCapacity)
+		respondWithError(msg, awserrors.ErrorInsufficientInstanceCapacity)
 		return
 	}
 	if err := d.resourceMgr.allocate(instanceType); err != nil {
 		slog.Error("handleEC2StartStoppedInstance: failed to allocate resources", "instanceId", req.InstanceID, "err", err)
-		respondWithError(awserrors.ErrorInsufficientInstanceCapacity)
+		respondWithError(msg, awserrors.ErrorInsufficientInstanceCapacity)
 		return
 	}
 
@@ -713,7 +675,7 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 		d.Instances.Mu.Lock()
 		delete(d.Instances.VMS, instance.ID)
 		d.Instances.Mu.Unlock()
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
@@ -743,28 +705,23 @@ type terminateStoppedInstanceRequest struct {
 // handleEC2TerminateStoppedInstance picks up a stopped instance from shared KV,
 // deletes its volumes, and removes it from shared KV.
 func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
-	respondWithError := func(errCode string) {
-		if err := msg.Respond(utils.GenerateErrorPayload(errCode)); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
-	}
 
 	var req terminateStoppedInstanceRequest
 	if err := json.Unmarshal(msg.Data, &req); err != nil {
 		slog.Error("handleEC2TerminateStoppedInstance: failed to unmarshal request", "err", err)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
 	if req.InstanceID == "" {
 		slog.Error("handleEC2TerminateStoppedInstance: missing instance_id")
-		respondWithError(awserrors.ErrorMissingParameter)
+		respondWithError(msg, awserrors.ErrorMissingParameter)
 		return
 	}
 
 	if d.jsManager == nil {
 		slog.Error("handleEC2TerminateStoppedInstance: JetStream not available")
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
@@ -772,18 +729,18 @@ func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
 	instance, err := d.jsManager.LoadStoppedInstance(req.InstanceID)
 	if err != nil {
 		slog.Error("handleEC2TerminateStoppedInstance: failed to load stopped instance", "instanceId", req.InstanceID, "err", err)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 	if instance == nil {
 		slog.Warn("handleEC2TerminateStoppedInstance: instance not found in shared KV", "instanceId", req.InstanceID)
-		respondWithError(awserrors.ErrorInvalidInstanceIDNotFound)
+		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
 		return
 	}
 
 	if instance.Status != vm.StateStopped {
 		slog.Error("handleEC2TerminateStoppedInstance: instance not in stopped state", "instanceId", req.InstanceID, "status", instance.Status)
-		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		respondWithError(msg, awserrors.ErrorIncorrectInstanceState)
 		return
 	}
 
@@ -825,7 +782,7 @@ func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
 	// Remove from shared KV
 	if err := d.jsManager.DeleteStoppedInstance(req.InstanceID); err != nil {
 		slog.Error("handleEC2TerminateStoppedInstance: failed to delete from shared KV", "instanceId", req.InstanceID, "err", err)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
@@ -838,14 +795,9 @@ func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
 
 // handleEC2DescribeStoppedInstances returns stopped instances from shared KV.
 func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
-	respondWithError := func(errCode string) {
-		if err := msg.Respond(utils.GenerateErrorPayload(errCode)); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
-	}
 
 	if d.jsManager == nil {
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
@@ -873,7 +825,7 @@ func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
 	instances, err := d.jsManager.ListStoppedInstances()
 	if err != nil {
 		slog.Error("handleEC2DescribeStoppedInstances: failed to list stopped instances", "err", err)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
@@ -929,7 +881,7 @@ func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
 	jsonResponse, err := json.Marshal(output)
 	if err != nil {
 		slog.Error("handleEC2DescribeStoppedInstances: failed to marshal output", "err", err)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
@@ -943,22 +895,17 @@ func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
 // handleEC2ModifyInstanceAttribute modifies attributes of a stopped instance in shared KV.
 // All supported attributes (InstanceType, UserData) require the instance to be stopped.
 func (d *Daemon) handleEC2ModifyInstanceAttribute(msg *nats.Msg) {
-	respondWithError := func(errCode string) {
-		if err := msg.Respond(utils.GenerateErrorPayload(errCode)); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
-	}
 
 	var input ec2.ModifyInstanceAttributeInput
 	if err := json.Unmarshal(msg.Data, &input); err != nil {
 		slog.Error("handleEC2ModifyInstanceAttribute: failed to unmarshal request", "err", err)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
 	if input.InstanceId == nil || *input.InstanceId == "" {
 		slog.Error("handleEC2ModifyInstanceAttribute: missing instance_id")
-		respondWithError(awserrors.ErrorMissingParameter)
+		respondWithError(msg, awserrors.ErrorMissingParameter)
 		return
 	}
 
@@ -966,25 +913,25 @@ func (d *Daemon) handleEC2ModifyInstanceAttribute(msg *nats.Msg) {
 
 	if d.jsManager == nil {
 		slog.Error("handleEC2ModifyInstanceAttribute: JetStream not available")
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
 	instance, err := d.jsManager.LoadStoppedInstance(instanceID)
 	if err != nil {
 		slog.Error("handleEC2ModifyInstanceAttribute: failed to load stopped instance", "instanceId", instanceID, "err", err)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 	if instance == nil {
 		slog.Warn("handleEC2ModifyInstanceAttribute: instance not found in shared KV", "instanceId", instanceID)
-		respondWithError(awserrors.ErrorInvalidInstanceIDNotFound)
+		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
 		return
 	}
 
 	if instance.Status != vm.StateStopped {
 		slog.Error("handleEC2ModifyInstanceAttribute: instance not in stopped state", "instanceId", instanceID, "status", instance.Status)
-		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		respondWithError(msg, awserrors.ErrorIncorrectInstanceState)
 		return
 	}
 
@@ -993,12 +940,12 @@ func (d *Daemon) handleEC2ModifyInstanceAttribute(msg *nats.Msg) {
 		newType := *input.InstanceType.Value
 		if newType == "" {
 			slog.Error("handleEC2ModifyInstanceAttribute: empty instance type value", "instanceId", instanceID)
-			respondWithError(awserrors.ErrorInvalidInstanceAttributeValue)
+			respondWithError(msg, awserrors.ErrorInvalidInstanceAttributeValue)
 			return
 		}
 		if instance.Instance == nil {
 			slog.Error("handleEC2ModifyInstanceAttribute: instance.Instance is nil, data integrity issue", "instanceId", instanceID)
-			respondWithError(awserrors.ErrorServerInternal)
+			respondWithError(msg, awserrors.ErrorServerInternal)
 			return
 		}
 		slog.Info("handleEC2ModifyInstanceAttribute: changing instance type",
@@ -1024,7 +971,7 @@ func (d *Daemon) handleEC2ModifyInstanceAttribute(msg *nats.Msg) {
 	if err := d.jsManager.WriteStoppedInstance(instanceID, instance); err != nil {
 		slog.Error("handleEC2ModifyInstanceAttribute: failed to write modified instance to KV",
 			"instanceId", instanceID, "err", err)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 

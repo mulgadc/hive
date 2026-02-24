@@ -20,13 +20,13 @@ import (
 //	Phase 1: ebs.mount via NATS   (rolls back with ebs.unmount)
 //	Phase 2: QMP blockdev-add     (rolls back Phase 1)
 //	Phase 3: QMP device_add       (rolls back Phase 2 + Phase 1)
-func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance *vm.VM, respondWithError func(string)) {
+func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance *vm.VM) {
 	slog.Info("Attaching volume to instance", "instanceId", command.ID)
 
 	// Validate AttachVolumeData
 	if command.AttachVolumeData == nil || command.AttachVolumeData.VolumeID == "" {
 		slog.Error("AttachVolume: missing attach volume data")
-		respondWithError(awserrors.ErrorInvalidParameterValue)
+		respondWithError(msg, awserrors.ErrorInvalidParameterValue)
 		return
 	}
 
@@ -40,7 +40,7 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 
 	if status != vm.StateRunning {
 		slog.Error("AttachVolume: instance not running", "instanceId", command.ID, "status", status)
-		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		respondWithError(msg, awserrors.ErrorIncorrectInstanceState)
 		return
 	}
 
@@ -48,13 +48,13 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 	volCfg, err := d.volumeService.GetVolumeConfig(volumeID)
 	if err != nil {
 		slog.Error("AttachVolume: failed to get volume config", "volumeId", volumeID, "err", err)
-		respondWithError(awserrors.ErrorInvalidVolumeNotFound)
+		respondWithError(msg, awserrors.ErrorInvalidVolumeNotFound)
 		return
 	}
 
 	if volCfg.VolumeMetadata.State != "available" {
 		slog.Error("AttachVolume: volume not available", "volumeId", volumeID, "state", volCfg.VolumeMetadata.State)
-		respondWithError(awserrors.ErrorVolumeInUse)
+		respondWithError(msg, awserrors.ErrorVolumeInUse)
 		return
 	}
 
@@ -64,7 +64,7 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 		slog.Error("AttachVolume: volume and instance are in different AZs",
 			"volumeId", volumeID, "volumeAZ", volCfg.VolumeMetadata.AvailabilityZone,
 			"instanceAZ", d.config.AZ)
-		respondWithError(awserrors.ErrorInvalidVolumeZoneMismatch)
+		respondWithError(msg, awserrors.ErrorInvalidVolumeZoneMismatch)
 		return
 	}
 
@@ -75,7 +75,7 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 		d.Instances.Mu.Unlock()
 		if device == "" {
 			slog.Error("AttachVolume: no available device names")
-			respondWithError(awserrors.ErrorAttachmentLimitExceeded)
+			respondWithError(msg, awserrors.ErrorAttachmentLimitExceeded)
 			return
 		}
 	}
@@ -89,27 +89,27 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 	ebsMountData, err := json.Marshal(ebsRequest)
 	if err != nil {
 		slog.Error("AttachVolume: failed to marshal ebs.mount request", "err", err)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
 	mountReply, err := d.natsConn.Request(d.ebsTopic("mount"), ebsMountData, 30*time.Second)
 	if err != nil {
 		slog.Error("AttachVolume: ebs.mount failed", "volumeId", volumeID, "err", err)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
 	var mountResp config.EBSMountResponse
 	if err := json.Unmarshal(mountReply.Data, &mountResp); err != nil {
 		slog.Error("AttachVolume: failed to unmarshal mount response", "err", err)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
 	if mountResp.Error != "" {
 		slog.Error("AttachVolume: mount returned error", "volumeId", volumeID, "err", mountResp.Error)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
@@ -117,7 +117,7 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 	if nbdURI == "" {
 		slog.Error("AttachVolume: mount response has empty URI", "volumeId", volumeID)
 		d.rollbackEBSMount(ebsRequest)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 	ebsRequest.NBDURI = nbdURI
@@ -128,7 +128,7 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 		slog.Error("AttachVolume: failed to parse NBDURI", "uri", nbdURI, "err", err)
 		// Rollback: unmount
 		d.rollbackEBSMount(ebsRequest)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
@@ -156,7 +156,7 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 	if err != nil {
 		slog.Error("AttachVolume: QMP object-add iothread failed", "volumeId", volumeID, "err", err)
 		d.rollbackEBSMount(ebsRequest)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
@@ -176,7 +176,7 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 	if err != nil {
 		slog.Error("AttachVolume: QMP blockdev-add failed", "volumeId", volumeID, "err", err)
 		d.rollbackEBSMount(ebsRequest)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
@@ -217,7 +217,7 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 		} else {
 			d.rollbackEBSMount(ebsRequest)
 		}
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
@@ -262,7 +262,7 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 		slog.Error("AttachVolume: failed to write state", "err", err)
 	}
 
-	d.respondWithVolumeAttachment(msg, respondWithError, volumeID, command.ID, device, "attached")
+	d.respondWithVolumeAttachment(msg, volumeID, command.ID, device, "attached")
 	slog.Info("Volume attached successfully", "volumeId", volumeID, "instanceId", command.ID, "device", device)
 }
 
@@ -271,13 +271,13 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 //	Phase 1: QMP device_del    (remove guest device)
 //	Phase 2: QMP blockdev-del  (remove block node)
 //	Phase 3: ebs.unmount NATS  (stop NBD server)
-func (d *Daemon) handleDetachVolume(msg *nats.Msg, command qmp.Command, instance *vm.VM, respondWithError func(string)) {
+func (d *Daemon) handleDetachVolume(msg *nats.Msg, command qmp.Command, instance *vm.VM) {
 	slog.Info("Detaching volume from instance", "instanceId", command.ID)
 
 	// Validate DetachVolumeData
 	if command.DetachVolumeData == nil || command.DetachVolumeData.VolumeID == "" {
 		slog.Error("DetachVolume: missing detach volume data")
-		respondWithError(awserrors.ErrorInvalidParameterValue)
+		respondWithError(msg, awserrors.ErrorInvalidParameterValue)
 		return
 	}
 
@@ -292,7 +292,7 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command qmp.Command, instance
 
 	if status != vm.StateRunning {
 		slog.Error("DetachVolume: instance not running", "instanceId", command.ID, "status", status)
-		respondWithError(awserrors.ErrorIncorrectInstanceState)
+		respondWithError(msg, awserrors.ErrorIncorrectInstanceState)
 		return
 	}
 
@@ -311,21 +311,21 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command qmp.Command, instance
 
 	if !found {
 		slog.Error("DetachVolume: volume not attached to instance", "volumeId", volumeID, "instanceId", command.ID)
-		respondWithError(awserrors.ErrorIncorrectState)
+		respondWithError(msg, awserrors.ErrorIncorrectState)
 		return
 	}
 
 	// Reject detaching boot/EFI/CloudInit volumes
 	if ebsReq.Boot || ebsReq.EFI || ebsReq.CloudInit {
 		slog.Error("DetachVolume: cannot detach boot/EFI/CloudInit volume", "volumeId", volumeID)
-		respondWithError(awserrors.ErrorOperationNotPermitted)
+		respondWithError(msg, awserrors.ErrorOperationNotPermitted)
 		return
 	}
 
 	// Optional device cross-check
 	if device != "" && ebsReq.DeviceName != "" && device != ebsReq.DeviceName {
 		slog.Error("DetachVolume: device mismatch", "requested", device, "actual", ebsReq.DeviceName)
-		respondWithError(awserrors.ErrorInvalidParameterValue)
+		respondWithError(msg, awserrors.ErrorInvalidParameterValue)
 		return
 	}
 
@@ -341,7 +341,7 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command qmp.Command, instance
 	if err != nil {
 		if !force {
 			slog.Error("DetachVolume: QMP device_del failed", "volumeId", volumeID, "err", err)
-			respondWithError(awserrors.ErrorServerInternal)
+			respondWithError(msg, awserrors.ErrorServerInternal)
 			return
 		}
 		slog.Warn("DetachVolume: QMP device_del failed (force=true, continuing)", "volumeId", volumeID, "err", err)
@@ -360,7 +360,7 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command qmp.Command, instance
 		// tearing down the NBD server would crash the VM, and removing metadata
 		// would allow the volume to be double-attached.
 		slog.Error("DetachVolume: QMP blockdev-del failed, leaving volume state intact", "volumeId", volumeID, "err", blockdevErr)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
@@ -410,7 +410,7 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command qmp.Command, instance
 		slog.Error("DetachVolume: failed to write state", "err", err)
 	}
 
-	d.respondWithVolumeAttachment(msg, respondWithError, volumeID, command.ID, ebsReq.DeviceName, "detaching")
+	d.respondWithVolumeAttachment(msg, volumeID, command.ID, ebsReq.DeviceName, "detaching")
 	slog.Info("Volume detached successfully", "volumeId", volumeID, "instanceId", command.ID)
 }
 
@@ -432,9 +432,7 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 	slog.Debug("Message data", "data", string(msg.Data))
 
 	modifyVolumeInput := &ec2.ModifyVolumeInput{}
-	var errResp []byte
-
-	errResp = utils.UnmarshalJsonPayload(modifyVolumeInput, msg.Data)
+	errResp := utils.UnmarshalJsonPayload(modifyVolumeInput, msg.Data)
 
 	if errResp != nil {
 		if err := msg.Respond(errResp); err != nil {
@@ -450,20 +448,14 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 
 	if err != nil {
 		slog.Error("handleEC2ModifyVolume service.ModifyVolume failed", "err", err)
-		errResp = utils.GenerateErrorPayload(err.Error())
-		if err := msg.Respond(errResp); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
+		respondWithError(msg, err.Error())
 		return
 	}
 
 	jsonResponse, err := json.Marshal(output)
 	if err != nil {
 		slog.Error("handleEC2ModifyVolume failed to marshal output", "err", err)
-		errResp = utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		if err := msg.Respond(errResp); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 	if err := msg.Respond(jsonResponse); err != nil {

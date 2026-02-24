@@ -648,10 +648,7 @@ func TestRespondWithVolumeAttachment(t *testing.T) {
 	daemon := createTestDaemon(t, natsURL)
 
 	sub, err := daemon.natsConn.Subscribe("test.volume.attach", func(msg *nats.Msg) {
-		respondWithError := func(errCode string) {
-			msg.Respond(fmt.Appendf(nil, `{"Code":"%s"}`, errCode))
-		}
-		daemon.respondWithVolumeAttachment(msg, respondWithError, "vol-123", "i-456", "/dev/sdf", "attached")
+		daemon.respondWithVolumeAttachment(msg, "vol-123", "i-456", "/dev/sdf", "attached")
 	})
 	require.NoError(t, err)
 	defer sub.Unsubscribe()

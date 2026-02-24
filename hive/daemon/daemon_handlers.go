@@ -14,6 +14,13 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// respondWithError sends an error payload for the given error code on the NATS message.
+func respondWithError(msg *nats.Msg, errCode string) {
+	if err := msg.Respond(utils.GenerateErrorPayload(errCode)); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
+}
+
 // handleNATSRequest is a generic helper for the common unmarshal → service → marshal → respond pattern.
 // used for basic requests that don't modify any daemon state, just return the result
 func handleNATSRequest[I any, O any](msg *nats.Msg, serviceFn func(*I) (*O, error)) {
@@ -47,15 +54,9 @@ func handleNATSRequest[I any, O any](msg *nats.Msg, serviceFn func(*I) (*O, erro
 func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 	var command qmp.Command
 
-	respondWithError := func(errCode string) {
-		if err := msg.Respond(utils.GenerateErrorPayload(errCode)); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
-	}
-
 	if err := json.Unmarshal(msg.Data, &command); err != nil {
 		slog.Error("Error unmarshaling QMP command", "err", err)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
@@ -67,29 +68,29 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 
 	if !ok {
 		slog.Warn("Instance is not running on this node", "id", command.ID)
-		respondWithError(awserrors.ErrorInvalidInstanceIDNotFound)
+		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
 		return
 	}
 
 	switch {
 	case command.Attributes.AttachVolume:
-		d.handleAttachVolume(msg, command, instance, respondWithError)
+		d.handleAttachVolume(msg, command, instance)
 	case command.Attributes.DetachVolume:
-		d.handleDetachVolume(msg, command, instance, respondWithError)
+		d.handleDetachVolume(msg, command, instance)
 	case command.Attributes.StartInstance:
-		d.handleStartInstance(msg, command, instance, respondWithError)
+		d.handleStartInstance(msg, command, instance)
 	case command.Attributes.StopInstance, command.Attributes.TerminateInstance:
-		d.handleStopOrTerminateInstance(msg, command, instance, respondWithError)
+		d.handleStopOrTerminateInstance(msg, command, instance)
 	default:
-		d.handleQMPCommand(msg, command, instance, respondWithError)
+		d.handleQMPCommand(msg, command, instance)
 	}
 }
 
-func (d *Daemon) handleQMPCommand(msg *nats.Msg, command qmp.Command, instance *vm.VM, respondWithError func(string)) {
+func (d *Daemon) handleQMPCommand(msg *nats.Msg, command qmp.Command, instance *vm.VM) {
 	resp, err := d.SendQMPCommand(instance.QMPClient, command.QMPCommand, instance.ID)
 	if err != nil {
 		slog.Error("Failed to send QMP command", "err", err)
-		respondWithError(awserrors.ErrorServerInternal)
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 

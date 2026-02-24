@@ -143,7 +143,9 @@ func (s *InstanceServiceImpl) RunInstance(input *ec2.RunInstancesInput) (*vm.VM,
 	}
 	ec2Instance.SetInstanceId(instance.ID)
 	ec2Instance.SetInstanceType(*input.InstanceType)
-	ec2Instance.SetImageId(*input.ImageId)
+	if input.ImageId != nil {
+		ec2Instance.SetImageId(*input.ImageId)
+	}
 	if input.KeyName != nil {
 		ec2Instance.SetKeyName(*input.KeyName)
 	}

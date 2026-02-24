@@ -27,10 +27,7 @@ func (d *Daemon) handleEC2GetConsoleOutput(msg *nats.Msg) {
 	}
 
 	if input.InstanceId == nil {
-		errResp := utils.GenerateErrorPayload(awserrors.ErrorMissingParameter)
-		if err := msg.Respond(errResp); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
+		respondWithError(msg, awserrors.ErrorMissingParameter)
 		return
 	}
 
@@ -38,15 +35,11 @@ func (d *Daemon) handleEC2GetConsoleOutput(msg *nats.Msg) {
 	status, err := d.accountService.GetSerialConsoleAccessStatus(&ec2.GetSerialConsoleAccessStatusInput{})
 	if err != nil {
 		slog.Error("Failed to check serial console access status", "err", err)
-		if err := msg.Respond(utils.GenerateErrorPayload(awserrors.ErrorServerInternal)); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 	if status.SerialConsoleAccessEnabled == nil || !*status.SerialConsoleAccessEnabled {
-		if err := msg.Respond(utils.GenerateErrorPayload(awserrors.ErrorSerialConsoleSessionUnavailable)); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
+		respondWithError(msg, awserrors.ErrorSerialConsoleSessionUnavailable)
 		return
 	}
 
@@ -58,10 +51,7 @@ func (d *Daemon) handleEC2GetConsoleOutput(msg *nats.Msg) {
 	d.Instances.Mu.Unlock()
 
 	if !exists {
-		errResp := utils.GenerateErrorPayload(awserrors.ErrorInvalidInstanceIDNotFound)
-		if err := msg.Respond(errResp); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
+		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
 		return
 	}
 
@@ -108,10 +98,7 @@ func (d *Daemon) handleEC2GetConsoleOutput(msg *nats.Msg) {
 	jsonResponse, err := json.Marshal(output)
 	if err != nil {
 		slog.Error("Failed to marshal GetConsoleOutput response", "err", err)
-		errResp := utils.GenerateErrorPayload(awserrors.ErrorServerInternal)
-		if err := msg.Respond(errResp); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
+		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
