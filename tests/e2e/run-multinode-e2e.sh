@@ -1150,22 +1150,6 @@ fi
 
 echo "  Crash recovery tests passed"
 
-# Terminate Phase 5 instances before VPC tests to free memory
-echo ""
-echo "Cleaning up Phase 5 instances before VPC tests..."
-for instance_id in "${INSTANCE_IDS[@]}"; do
-    state=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
-        --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "unknown")
-    if [ "$state" != "terminated" ] && [ "$state" != "unknown" ]; then
-        $AWS_EC2 terminate-instances --instance-ids "$instance_id" > /dev/null 2>&1 || true
-    fi
-done
-# Wait for all to terminate
-for instance_id in "${INSTANCE_IDS[@]}"; do
-    wait_for_instance_state "$instance_id" "terminated" 30 || true
-done
-echo "  Phase 5 instances terminated"
-
 # Phase 5c: VPC Networking
 echo ""
 echo "Phase 5c: VPC Networking"
@@ -1387,16 +1371,7 @@ echo ""
 echo "Step 6: Clean up VPC resources"
 echo "----------------------------------------"
 
-for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
-    echo "  Terminating $vpc_inst..."
-    $AWS_EC2 terminate-instances --instance-ids "$vpc_inst" > /dev/null 2>&1 || true
-done
-
-for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
-    wait_for_instance_state "$vpc_inst" "terminated" 30 || {
-        echo "  WARNING: Failed to confirm termination of $vpc_inst"
-    }
-done
+terminate_and_wait "${VPC_INSTANCE_IDS[@]}" || true
 
 # Clean up subnet and VPC
 echo "  Deleting subnet $SUBNET_ID..."
@@ -1445,15 +1420,11 @@ CLUSTER_SERVICES_STARTED="false"
 
 # Verify all services are down
 echo "  Waiting for services to stop..."
-sleep 5
-verify_all_services_down || {
-    echo "  WARNING: Some services still running after shutdown"
-}
-
-# Force cleanup: kill lingering processes and remove stale locks
-# The coordinated shutdown may not fully kill all processes (e.g. predastore
-# holding badger locks, awsgw still bound to ports). This ensures a clean slate.
-force_cleanup_all_nodes
+sleep 2
+if ! verify_all_services_down; then
+    echo "  Some services still running, force-cleaning..."
+    force_cleanup_all_nodes
+fi
 
 # Test 6c: Restart and recovery
 echo ""
@@ -1472,7 +1443,7 @@ CLUSTER_SERVICES_STARTED="true"
 
 echo ""
 echo "Waiting for cluster to stabilize..."
-sleep 10
+sleep 5
 
 # Verify NATS cluster reformed
 echo ""
@@ -1510,7 +1481,9 @@ echo "Waiting for instances to relaunch after cluster restart..."
 # Must wait for them to finish launching (pending → running) before terminate
 # will work, because the NATS per-instance subscription is only created after
 # QEMU starts.
-for instance_id in "${INSTANCE_IDS[@]}"; do
+# Note: INSTANCE_IDS[2] was the crash-loop test instance — it will be in error
+# state and won't relaunch, so we only wait for the first two.
+for instance_id in "${INSTANCE_IDS[0]}" "${INSTANCE_IDS[1]}"; do
     echo "  Waiting for $instance_id to finish relaunching..."
     COUNT=0
     while [ $COUNT -lt 30 ]; do
@@ -1528,25 +1501,10 @@ for instance_id in "${INSTANCE_IDS[@]}"; do
     fi
 done
 
-# Now terminate all instances
+# Terminate all instances (including the crash-loop one in error state)
 echo ""
 echo "Terminating all instances..."
-for instance_id in "${INSTANCE_IDS[@]}"; do
-    echo "  Terminating $instance_id..."
-    $AWS_EC2 terminate-instances --instance-ids "$instance_id" > /dev/null 2>&1 || echo "  (instance may already be terminated)"
-done
-
-# Wait for termination
-echo "  Waiting for termination..."
-TERMINATION_FAILED=0
-for instance_id in "${INSTANCE_IDS[@]}"; do
-    if ! wait_for_instance_state "$instance_id" "terminated" 30; then
-        echo "  WARNING: Failed to confirm termination of $instance_id"
-        TERMINATION_FAILED=1
-    fi
-done
-
-if [ $TERMINATION_FAILED -ne 0 ]; then
+if ! terminate_and_wait "${INSTANCE_IDS[@]}"; then
     echo ""
     echo "ERROR: Some instances failed to terminate properly after restart"
     dump_all_node_logs

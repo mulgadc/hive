@@ -298,6 +298,32 @@ wait_for_instance_state() {
     return 1
 }
 
+# Terminate instances and wait for them to reach terminated state
+# Usage: terminate_and_wait <instance_id> [instance_id...]
+terminate_and_wait() {
+    local ids=("$@")
+
+    for instance_id in "${ids[@]}"; do
+        local state
+        state=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
+            --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "unknown")
+        if [ "$state" != "terminated" ] && [ "$state" != "unknown" ]; then
+            echo "  Terminating $instance_id (state: $state)..."
+            $AWS_EC2 terminate-instances --instance-ids "$instance_id" > /dev/null 2>&1 || true
+        fi
+    done
+
+    local failed=0
+    for instance_id in "${ids[@]}"; do
+        if ! wait_for_instance_state "$instance_id" "terminated" 30; then
+            echo "  WARNING: Failed to confirm termination of $instance_id"
+            failed=1
+        fi
+    done
+
+    return $failed
+}
+
 # Wait for gateway to be ready
 # Usage: wait_for_gateway [host] [max_attempts]
 wait_for_gateway() {
