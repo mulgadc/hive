@@ -720,6 +720,39 @@ func TestRestoreInstances_RunningResetToPending(t *testing.T) {
 		"instance should not remain running when QEMU process is dead")
 }
 
+// TestRestoreInstances_RunningResetsLaunchTime verifies that when a running
+// instance is reset to pending for relaunch, its LaunchTime is updated to now.
+// Without this, the pending watchdog sees the stale LaunchTime and immediately
+// marks the instance as failed.
+func TestRestoreInstances_RunningResetsLaunchTime(t *testing.T) {
+	daemon := createDaemonWithJetStream(t)
+
+	staleTime := time.Now().Add(-30 * time.Minute)
+	daemon.Instances.VMS["i-stale-launch"] = &vm.VM{
+		ID:     "i-stale-launch",
+		Status: vm.StateRunning,
+		Instance: &ec2.Instance{
+			LaunchTime: &staleTime,
+		},
+	}
+	require.NoError(t, daemon.WriteState())
+
+	daemon.Instances.VMS = make(map[string]*vm.VM)
+	before := time.Now()
+	simulateCleanRestore(t, daemon)
+
+	instance, ok := daemon.Instances.VMS["i-stale-launch"]
+	require.True(t, ok, "instance should be loaded from state")
+	require.NotNil(t, instance.Instance)
+	require.NotNil(t, instance.Instance.LaunchTime)
+
+	// LaunchTime should be reset to approximately now, not the stale 30min-ago time
+	assert.True(t, instance.Instance.LaunchTime.After(before) || instance.Instance.LaunchTime.Equal(before),
+		"LaunchTime should be reset to now, got %v (stale was %v)", *instance.Instance.LaunchTime, staleTime)
+	assert.True(t, time.Since(*instance.Instance.LaunchTime) < pendingWatchdogTimeout,
+		"LaunchTime should be within watchdog timeout window")
+}
+
 // TestRestoreInstances_MixedStates verifies recovery with multiple instances
 // in different states, ensuring each is handled correctly and independently.
 // Stopped instances (including stopping→stopped transitions) are migrated to shared KV.

@@ -848,6 +848,13 @@ func (d *Daemon) restoreInstances() {
 		case vm.StateRunning:
 			// Was running but QEMU died - reset to pending so LaunchInstance can transition to running
 			instance.Status = vm.StatePending
+			// Reset LaunchTime so the pending watchdog gives a fresh timeout window.
+			// Without this, the stale LaunchTime from the original launch causes the
+			// watchdog to immediately mark the instance as failed.
+			now := time.Now()
+			if instance.Instance != nil {
+				instance.Instance.LaunchTime = &now
+			}
 			slog.Info("Instance was running but QEMU exited, relaunching", "instance", instance.ID)
 		}
 
