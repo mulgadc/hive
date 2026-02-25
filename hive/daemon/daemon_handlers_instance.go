@@ -271,6 +271,9 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 			continue
 		}
 
+		// Discover actual guest device names via QMP query-block
+		d.updateGuestDeviceNames(instance)
+
 		successCount++
 		slog.Info("handleEC2RunInstances launched instance", "instanceId", instance.ID)
 	}
