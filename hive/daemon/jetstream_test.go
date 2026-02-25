@@ -811,6 +811,148 @@ func TestJetStreamManager_ListStoppedInstances_RecoverAfterStreamLost(t *testing
 	assert.Empty(t, instances)
 }
 
+// --- KV bucket recovery failure tests ---
+// These tests verify that when recovery itself fails (e.g., NATS is unreachable),
+// errors are properly propagated rather than silently returning empty state.
+
+// swapToNonJSContext replaces the JetStreamManager's JS context with one from the
+// non-JetStream NATS server. The original kv handle still targets the JS server
+// (where the stream was deleted), so operations fail with stream-unavailable errors.
+// Recovery then also fails because the non-JS server has no JetStream support.
+func swapToNonJSContext(t *testing.T, jsm *JetStreamManager) {
+	t.Helper()
+	nc, err := nats.Connect(sharedNATSURL)
+	require.NoError(t, err)
+	t.Cleanup(func() { nc.Close() })
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	jsm.js = js
+}
+
+func TestJetStreamManager_WriteState_RecoveryFailure(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	err = jsm.InitKVBucket()
+	require.NoError(t, err)
+
+	deleteInstanceStateBucket(t, nc)
+	swapToNonJSContext(t, jsm)
+
+	testInstances := &vm.Instances{VMS: map[string]*vm.VM{"i-fail": {ID: "i-fail"}}}
+	err = jsm.WriteState("fail-node", testInstances)
+	assert.Error(t, err, "WriteState should return error when recovery fails")
+}
+
+func TestJetStreamManager_LoadState_RecoveryFailure(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	err = jsm.InitKVBucket()
+	require.NoError(t, err)
+
+	deleteInstanceStateBucket(t, nc)
+	swapToNonJSContext(t, jsm)
+
+	loaded, err := jsm.LoadState("fail-node")
+	assert.Error(t, err, "LoadState should return error when recovery fails")
+	assert.Nil(t, loaded)
+}
+
+func TestJetStreamManager_DeleteState_RecoveryFailure(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	err = jsm.InitKVBucket()
+	require.NoError(t, err)
+
+	deleteInstanceStateBucket(t, nc)
+	swapToNonJSContext(t, jsm)
+
+	err = jsm.DeleteState("fail-node")
+	assert.Error(t, err, "DeleteState should return error when recovery fails")
+}
+
+func TestJetStreamManager_WriteStoppedInstance_RecoveryFailure(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	err = jsm.InitKVBucket()
+	require.NoError(t, err)
+
+	deleteInstanceStateBucket(t, nc)
+	swapToNonJSContext(t, jsm)
+
+	testVM := &vm.VM{ID: "i-fail", Status: vm.StateStopped}
+	err = jsm.WriteStoppedInstance(testVM.ID, testVM)
+	assert.Error(t, err, "WriteStoppedInstance should return error when recovery fails")
+}
+
+func TestJetStreamManager_LoadStoppedInstance_RecoveryFailure(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	err = jsm.InitKVBucket()
+	require.NoError(t, err)
+
+	deleteInstanceStateBucket(t, nc)
+	swapToNonJSContext(t, jsm)
+
+	loaded, err := jsm.LoadStoppedInstance("i-fail")
+	assert.Error(t, err, "LoadStoppedInstance should return error when recovery fails")
+	assert.Nil(t, loaded)
+}
+
+func TestJetStreamManager_DeleteStoppedInstance_RecoveryFailure(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	err = jsm.InitKVBucket()
+	require.NoError(t, err)
+
+	deleteInstanceStateBucket(t, nc)
+	swapToNonJSContext(t, jsm)
+
+	err = jsm.DeleteStoppedInstance("i-fail")
+	assert.Error(t, err, "DeleteStoppedInstance should return error when recovery fails")
+}
+
+func TestJetStreamManager_ListStoppedInstances_RecoveryFailure(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	err = jsm.InitKVBucket()
+	require.NoError(t, err)
+
+	deleteInstanceStateBucket(t, nc)
+	swapToNonJSContext(t, jsm)
+
+	instances, err := jsm.ListStoppedInstances()
+	assert.Error(t, err, "ListStoppedInstances should return error when recovery fails")
+	assert.Nil(t, instances)
+}
+
 func TestIsStreamUnavailable(t *testing.T) {
 	assert.False(t, isStreamUnavailable(nil))
 	assert.True(t, isStreamUnavailable(nats.ErrStreamNotFound))
