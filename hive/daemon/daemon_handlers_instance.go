@@ -325,6 +325,9 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command qmp.Command, instanc
 		return
 	}
 
+	// Discover actual guest device names via QMP query-block
+	d.updateGuestDeviceNames(instance)
+
 	slog.Info("Instance started", "instanceId", instance.ID)
 
 	if err := msg.Respond(fmt.Appendf(nil, `{"status":"running","instanceId":"%s"}`, instance.ID)); err != nil {
@@ -681,6 +684,9 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
+
+	// Discover actual guest device names via QMP query-block
+	d.updateGuestDeviceNames(instance)
 
 	// Remove from shared KV now that it's running locally.
 	// Retry once on failure — a stale KV entry risks duplicate starts.

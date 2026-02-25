@@ -229,8 +229,10 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 	} else if gd, ok := deviceMap[deviceID]; ok {
 		guestDevice = gd
 		slog.Info("AttachVolume: discovered guest device", "volumeId", volumeID, "qemuDevice", deviceID, "guestDevice", guestDevice)
+	} else {
+		slog.Error("AttachVolume: device not found in QMP device map after successful query, using API device name",
+			"volumeId", volumeID, "qemuDevice", deviceID, "deviceMap", deviceMap)
 	}
-	ebsRequest.GuestDevice = guestDevice
 
 	// Update instance state: replace existing entry for this volume (handles
 	// stop/start cycles that keep stale entries) or append a new one.
@@ -274,7 +276,7 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 	}
 
 	d.respondWithVolumeAttachment(msg, volumeID, command.ID, guestDevice, "attached")
-	slog.Info("Volume attached successfully", "volumeId", volumeID, "instanceId", command.ID, "device", device)
+	slog.Info("Volume attached successfully", "volumeId", volumeID, "instanceId", command.ID, "apiDevice", device, "guestDevice", guestDevice)
 }
 
 // handleDetachVolume performs a three-phase hot-unplug (reverse of attach):

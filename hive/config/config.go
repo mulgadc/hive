@@ -152,7 +152,6 @@ type EBSRequest struct {
 	DeleteOnTermination bool
 	NBDURI              string // NBD URI - socket path (nbd:unix:/path.sock) or TCP (nbd://host:port)
 	DeviceName          string // AWS API device name (e.g. /dev/sdf) for hot-plugged volumes
-	GuestDevice         string // Actual guest device path (e.g. /dev/vdc) discovered via QMP
 }
 
 // NBDTransport defines the transport type for NBD connections

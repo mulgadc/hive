@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/mulgadc/hive/hive/qmp"
@@ -31,7 +32,7 @@ func queryGuestDeviceMap(d *Daemon, qmpClient *qmp.QMPClient, instanceID string)
 	}
 
 	var devices []qmp.BlockDevice
-	if err := parseQueryBlockResponse(resp.Return, &devices); err != nil {
+	if err := json.Unmarshal(resp.Return, &devices); err != nil {
 		return nil, fmt.Errorf("failed to parse query-block response: %w", err)
 	}
 
@@ -49,21 +50,7 @@ func buildDeviceMap(devices []qmp.BlockDevice) map[string]string {
 	var virtioDevices []deviceEntry
 
 	for _, dev := range devices {
-		// Skip non-virtio devices (floppy, ide, sd)
-		if dev.Inserted == nil && dev.QDev == "" {
-			continue
-		}
-		// Filter out legacy devices by name
-		switch dev.Device {
-		case "floppy0", "sd0", "ide1-cd0":
-			continue
-		}
-		// Must have a QDev path to determine PCI order
-		if dev.QDev == "" {
-			continue
-		}
-		// Skip non-virtio devices (those without virtio-backend in QDev)
-		if !strings.Contains(dev.QDev, "virtio-backend") {
+		if dev.QDev == "" || !strings.Contains(dev.QDev, "virtio-backend") {
 			continue
 		}
 
@@ -87,7 +74,9 @@ func buildDeviceMap(devices []qmp.BlockDevice) map[string]string {
 	result := make(map[string]string, len(virtioDevices))
 	for i, entry := range virtioDevices {
 		if i >= 26 {
-			break // /dev/vda through /dev/vdz only
+			slog.Warn("buildDeviceMap: more than 26 virtio devices, cannot map remaining",
+				"totalDevices", len(virtioDevices))
+			break
 		}
 		guestDev := fmt.Sprintf("/dev/vd%c", 'a'+i)
 		result[entry.name] = guestDev
@@ -96,15 +85,12 @@ func buildDeviceMap(devices []qmp.BlockDevice) map[string]string {
 	return result
 }
 
-// parseQueryBlockResponse unmarshals the raw QMP return value into a slice of BlockDevices.
-func parseQueryBlockResponse(raw json.RawMessage, out *[]qmp.BlockDevice) error {
-	return json.Unmarshal(raw, out)
-}
-
 // updateGuestDeviceNames queries the running VM's QMP to discover actual guest device
-// paths and updates the instance's BlockDeviceMappings and EBSRequests accordingly.
+// paths and updates the instance's BlockDeviceMappings accordingly.
 func (d *Daemon) updateGuestDeviceNames(instance *vm.VM) {
 	if instance.QMPClient == nil {
+		slog.Warn("updateGuestDeviceNames: QMPClient is nil, cannot discover guest device names",
+			"instanceId", instance.ID)
 		return
 	}
 
@@ -115,43 +101,35 @@ func (d *Daemon) updateGuestDeviceNames(instance *vm.VM) {
 		return
 	}
 
-	// Update EBSRequests with guest device names
+	// Build volume ID → guest device path mapping from EBSRequests.
+	// Collect under EBSRequests lock, then release before acquiring Instances lock
+	// to maintain consistent lock ordering.
 	instance.EBSRequests.Mu.Lock()
-	for i, req := range instance.EBSRequests.Requests {
-		var qemuDeviceID string
+	volToGuest := make(map[string]string, len(instance.EBSRequests.Requests))
+	for _, req := range instance.EBSRequests.Requests {
+		var qemuID string
 		if req.Boot {
-			qemuDeviceID = "os"
+			qemuID = "os"
 		} else if req.CloudInit {
-			qemuDeviceID = "cloudinit"
+			qemuID = "cloudinit"
 		} else {
-			// Hot-plugged volumes use "vdisk-{volumeID}" as the QEMU device ID
-			qemuDeviceID = fmt.Sprintf("vdisk-%s", req.Name)
+			qemuID = fmt.Sprintf("vdisk-%s", req.Name)
 		}
-
-		if guestDev, ok := deviceMap[qemuDeviceID]; ok {
-			instance.EBSRequests.Requests[i].GuestDevice = guestDev
+		if gd, ok := deviceMap[qemuID]; ok {
+			volToGuest[req.Name] = gd
 		}
 	}
 	instance.EBSRequests.Mu.Unlock()
 
-	// Update BlockDeviceMappings DeviceName to use actual guest paths
+	// Update BlockDeviceMappings using the mapping
 	d.Instances.Mu.Lock()
 	if instance.Instance != nil {
 		for _, bdm := range instance.Instance.BlockDeviceMappings {
-			if bdm.Ebs == nil || bdm.Ebs.VolumeId == nil {
+			if bdm.Ebs == nil || bdm.Ebs.VolumeId == nil || bdm.DeviceName == nil {
 				continue
 			}
-			// The root volume QEMU device ID is "os"
-			if guestDev, ok := deviceMap["os"]; ok && bdm.DeviceName != nil {
-				// Match root volume: it's the first BDM entry (or has the root volume ID)
-				instance.EBSRequests.Mu.Lock()
-				for _, req := range instance.EBSRequests.Requests {
-					if req.Boot && req.Name == *bdm.Ebs.VolumeId {
-						bdm.DeviceName = &guestDev
-						break
-					}
-				}
-				instance.EBSRequests.Mu.Unlock()
+			if gd, ok := volToGuest[*bdm.Ebs.VolumeId]; ok {
+				bdm.DeviceName = &gd
 			}
 		}
 	}
@@ -171,8 +149,8 @@ func extractPCIIndex(qdev string) int {
 	if len(matches) < 2 {
 		return -1
 	}
-	var idx int
-	if _, err := fmt.Sscanf(matches[1], "%d", &idx); err != nil {
+	idx, err := strconv.Atoi(matches[1])
+	if err != nil {
 		return -1
 	}
 	return idx

@@ -29,7 +29,7 @@ func TestExtractPCIIndex(t *testing.T) {
 			want: 12,
 		},
 		{
-			name: "unattached device without brackets",
+			name: "unattached device path",
 			qdev: "/machine/unattached/device[24]",
 			want: 24,
 		},
