@@ -121,6 +121,8 @@ func TestBuildDeviceMap(t *testing.T) {
 }
 
 func TestBuildDeviceMapWithHotplug(t *testing.T) {
+	// Hot-plugged devices have empty Device field and use
+	// /machine/peripheral/<id>/virtio-backend QDev path format
 	devices := []qmp.BlockDevice{
 		{
 			Device:   "os",
@@ -133,14 +135,14 @@ func TestBuildDeviceMapWithHotplug(t *testing.T) {
 			QDev:     "/machine/peripheral-anon/device[3]/virtio-backend",
 		},
 		{
-			Device:   "vdisk-vol-abc123",
+			Device:   "",
 			Inserted: &qmp.BlockInserted{},
-			QDev:     "/machine/peripheral/hotplug1/device[10]/virtio-backend",
+			QDev:     "/machine/peripheral/vdisk-vol-abc123/virtio-backend",
 		},
 		{
-			Device:   "vdisk-vol-def456",
+			Device:   "",
 			Inserted: &qmp.BlockInserted{},
-			QDev:     "/machine/peripheral/hotplug2/device[11]/virtio-backend",
+			QDev:     "/machine/peripheral/vdisk-vol-def456/virtio-backend",
 		},
 		// Legacy devices to filter out
 		{Device: "floppy0", QDev: "/machine/unattached/device[18]"},
@@ -163,7 +165,7 @@ func TestBuildDeviceMapEmpty(t *testing.T) {
 }
 
 func TestBuildDeviceMapPCIOrdering(t *testing.T) {
-	// Test that PCI ordering is correct when devices are returned out of order
+	// Boot devices returned out of order + hot-plugged device
 	devices := []qmp.BlockDevice{
 		{
 			Device:   "cloudinit",
@@ -176,15 +178,80 @@ func TestBuildDeviceMapPCIOrdering(t *testing.T) {
 			QDev:     "/machine/peripheral-anon/device[1]/virtio-backend",
 		},
 		{
-			Device:   "vdisk-vol-123",
+			Device:   "",
 			Inserted: &qmp.BlockInserted{},
-			QDev:     "/machine/peripheral/hotplug1/device[3]/virtio-backend",
+			QDev:     "/machine/peripheral/vdisk-vol-123/virtio-backend",
 		},
 	}
 
 	result := buildDeviceMap(devices)
 
 	assert.Equal(t, "/dev/vda", result["os"], "lowest PCI index gets /dev/vda")
-	assert.Equal(t, "/dev/vdb", result["vdisk-vol-123"], "middle PCI index gets /dev/vdb")
-	assert.Equal(t, "/dev/vdc", result["cloudinit"], "highest PCI index gets /dev/vdc")
+	assert.Equal(t, "/dev/vdb", result["cloudinit"], "second boot device")
+	assert.Equal(t, "/dev/vdc", result["vdisk-vol-123"], "hot-plugged device sorts after boot devices")
+}
+
+func TestExtractPeripheralName(t *testing.T) {
+	tests := []struct {
+		name string
+		qdev string
+		want string
+	}{
+		{
+			name: "hot-plugged volume",
+			qdev: "/machine/peripheral/vdisk-vol-abc123/virtio-backend",
+			want: "vdisk-vol-abc123",
+		},
+		{
+			name: "boot device path",
+			qdev: "/machine/peripheral-anon/device[0]/virtio-backend",
+			want: "",
+		},
+		{
+			name: "empty",
+			qdev: "",
+			want: "",
+		},
+		{
+			name: "no trailing slash",
+			qdev: "/machine/peripheral/",
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, extractPeripheralName(tt.qdev))
+		})
+	}
+}
+
+func TestExtractHotplugPort(t *testing.T) {
+	tests := []struct {
+		name string
+		qdev string
+		want int
+	}{
+		{
+			name: "hotplug port 3",
+			qdev: "/machine/peripheral/vdisk-vol-xxx/hotplug3/virtio-backend",
+			want: 3,
+		},
+		{
+			name: "no hotplug in path",
+			qdev: "/machine/peripheral/vdisk-vol-xxx/virtio-backend",
+			want: -1,
+		},
+		{
+			name: "boot device",
+			qdev: "/machine/peripheral-anon/device[0]/virtio-backend",
+			want: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, extractHotplugPort(tt.qdev))
+		})
+	}
 }

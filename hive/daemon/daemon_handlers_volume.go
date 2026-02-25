@@ -221,16 +221,18 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 		return
 	}
 
-	// Discover actual guest device name via QMP query-block
+	// Discover actual guest device name via QMP query-block.
+	// Use the retry variant because query-block may not include the device
+	// immediately after device_add.
 	guestDevice := device // fallback to AWS API name
-	deviceMap, qmpErr := queryGuestDeviceMap(d, instance.QMPClient, instance.ID)
+	deviceMap, qmpErr := queryGuestDeviceMapWait(d, instance.QMPClient, instance.ID, deviceID)
 	if qmpErr != nil {
 		slog.Warn("AttachVolume: failed to query guest device map, using API device name", "volumeId", volumeID, "err", qmpErr)
 	} else if gd, ok := deviceMap[deviceID]; ok {
 		guestDevice = gd
 		slog.Info("AttachVolume: discovered guest device", "volumeId", volumeID, "qemuDevice", deviceID, "guestDevice", guestDevice)
 	} else {
-		slog.Error("AttachVolume: device not found in QMP device map after successful query, using API device name",
+		slog.Error("AttachVolume: device not found in QMP device map after retries, using API device name",
 			"volumeId", volumeID, "qemuDevice", deviceID, "deviceMap", deviceMap)
 	}
 

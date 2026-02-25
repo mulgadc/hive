@@ -8,15 +8,23 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/vm"
 )
 
-// pciAddrRegexp extracts the PCI address component from a QDev path.
-// Example QDev: "/machine/peripheral-anon/device[0]/virtio-backend"
-// The device[N] index determines PCI enumeration order.
+// pciAddrRegexp extracts the device index from a boot-time QDev path.
+// Example: "/machine/peripheral-anon/device[0]/virtio-backend" → 0
 var pciAddrRegexp = regexp.MustCompile(`device\[(\d+)\]`)
+
+// hotplugPortRegexp extracts the hotplug port number from a hot-plugged QDev path.
+// Example: "/machine/peripheral/vdisk-vol-xxx/hotplug3/virtio-backend" or
+//
+//	"/machine/peripheral/vdisk-vol-xxx/virtio-backend" (bus assigned by QEMU)
+//
+// The chassis number from the QEMU command line determines PCI slot order.
+var hotplugPortRegexp = regexp.MustCompile(`hotplug(\d+)`)
 
 // queryGuestDeviceMap uses QMP query-block to build a map from QEMU device ID
 // (e.g. "os", "cloudinit", "vdisk-vol-xxx") to the guest device path
@@ -39,8 +47,40 @@ func queryGuestDeviceMap(d *Daemon, qmpClient *qmp.QMPClient, instanceID string)
 	return buildDeviceMap(devices), nil
 }
 
+// queryGuestDeviceMapWait retries queryGuestDeviceMap until expectedDevice
+// appears in the result. This handles the race where query-block is called
+// immediately after device_add, before QEMU has registered the new device.
+func queryGuestDeviceMapWait(d *Daemon, qmpClient *qmp.QMPClient, instanceID, expectedDevice string) (map[string]string, error) {
+	const maxAttempts = 5
+	const retryDelay = 200 * time.Millisecond
+
+	for attempt := range maxAttempts {
+		deviceMap, err := queryGuestDeviceMap(d, qmpClient, instanceID)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := deviceMap[expectedDevice]; ok {
+			return deviceMap, nil
+		}
+		if attempt < maxAttempts-1 {
+			slog.Debug("queryGuestDeviceMapWait: device not yet visible, retrying",
+				"expectedDevice", expectedDevice, "attempt", attempt+1, "maxAttempts", maxAttempts)
+			time.Sleep(retryDelay)
+		}
+	}
+
+	// Return the last result even though the device wasn't found — caller decides fallback.
+	return queryGuestDeviceMap(d, qmpClient, instanceID)
+}
+
 // buildDeviceMap takes a list of BlockDevices from QMP and returns a map
 // from QEMU device ID to guest /dev/vdX path, sorted by PCI address.
+//
+// Two QDev path formats exist:
+//   - Boot-time:  /machine/peripheral-anon/device[N]/virtio-backend
+//     device field contains the ID (e.g. "os", "cloudinit")
+//   - Hot-plugged: /machine/peripheral/<device-id>/virtio-backend
+//     device field is empty; ID is extracted from the QDev path
 func buildDeviceMap(devices []qmp.BlockDevice) map[string]string {
 	type deviceEntry struct {
 		name     string
@@ -54,14 +94,29 @@ func buildDeviceMap(devices []qmp.BlockDevice) map[string]string {
 			continue
 		}
 
+		name := dev.Device
 		pciIndex := extractPCIIndex(dev.QDev)
+
 		if pciIndex < 0 {
-			slog.Warn("Could not extract PCI index from QDev path", "device", dev.Device, "qdev", dev.QDev)
-			continue
+			// Hot-plugged device: extract name and port from QDev path.
+			// QDev looks like "/machine/peripheral/<name>/virtio-backend"
+			if name == "" {
+				name = extractPeripheralName(dev.QDev)
+			}
+			if name == "" {
+				slog.Warn("Could not extract device name from QDev path", "qdev", dev.QDev)
+				continue
+			}
+			// Use hotplug port number for ordering; fall back to a high
+			// index so hot-plugged devices sort after boot devices.
+			pciIndex = extractHotplugPort(dev.QDev)
+			if pciIndex < 0 {
+				pciIndex = 1000 // arbitrary high value
+			}
 		}
 
 		virtioDevices = append(virtioDevices, deviceEntry{
-			name:     dev.Device,
+			name:     name,
 			pciIndex: pciIndex,
 		})
 	}
@@ -146,6 +201,36 @@ func (d *Daemon) updateGuestDeviceNames(instance *vm.VM) {
 // For example: "/machine/peripheral-anon/device[3]/virtio-backend" → 3
 func extractPCIIndex(qdev string) int {
 	matches := pciAddrRegexp.FindStringSubmatch(qdev)
+	if len(matches) < 2 {
+		return -1
+	}
+	idx, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return -1
+	}
+	return idx
+}
+
+// extractPeripheralName extracts the device ID from a hot-plugged QDev path.
+// For example: "/machine/peripheral/vdisk-vol-abc123/virtio-backend" → "vdisk-vol-abc123"
+func extractPeripheralName(qdev string) string {
+	// Path format: /machine/peripheral/<name>/virtio-backend
+	const prefix = "/machine/peripheral/"
+	if !strings.HasPrefix(qdev, prefix) {
+		return ""
+	}
+	rest := qdev[len(prefix):]
+	if idx := strings.Index(rest, "/"); idx > 0 {
+		return rest[:idx]
+	}
+	return ""
+}
+
+// extractHotplugPort extracts the hotplug port number from a QDev path.
+// For example: "/machine/peripheral/vdisk-vol-xxx/hotplug3/virtio-backend" → 3
+// Returns -1 if no hotplug port is found.
+func extractHotplugPort(qdev string) int {
+	matches := hotplugPortRegexp.FindStringSubmatch(qdev)
 	if len(matches) < 2 {
 		return -1
 	}
