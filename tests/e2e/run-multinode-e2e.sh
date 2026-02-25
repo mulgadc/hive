@@ -1477,20 +1477,18 @@ echo "Test 6d: Instance Relaunch + Terminate"
 echo "----------------------------------------"
 echo "Waiting for instances to relaunch after cluster restart..."
 
-# Instances were running before shutdown — the daemon will relaunch them.
+# Two instances were running before shutdown — the daemon will relaunch them.
 # Must wait for them to finish launching (pending → running) before terminate
 # will work, because the NATS per-instance subscription is only created after
 # QEMU starts.
-# Note: INSTANCE_IDS[2] was the crash-loop test instance — it will be in error
-# state and won't relaunch, so we only wait for the first two.
 for instance_id in "${INSTANCE_IDS[0]}" "${INSTANCE_IDS[1]}"; do
     echo "  Waiting for $instance_id to finish relaunching..."
     COUNT=0
     while [ $COUNT -lt 30 ]; do
         STATE=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
             --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "unknown")
-        if [ "$STATE" = "running" ] || [ "$STATE" = "error" ]; then
-            echo "  $instance_id reached state: $STATE"
+        if [ "$STATE" = "running" ]; then
+            echo "  $instance_id relaunched successfully: $STATE"
             break
         fi
         sleep 2
@@ -1500,6 +1498,15 @@ for instance_id in "${INSTANCE_IDS[0]}" "${INSTANCE_IDS[1]}"; do
         echo "  WARNING: $instance_id still in $STATE after 60s"
     fi
 done
+
+# Verify crash-loop instance (INSTANCE_IDS[2]) stayed in error — daemon should
+# not relaunch an instance that exceeded its crash restart limit.
+CRASH_LOOP_STATE=$($AWS_EC2 describe-instances --instance-ids "${INSTANCE_IDS[2]}" \
+    --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "unknown")
+echo "  Crash-loop instance ${INSTANCE_IDS[2]} state: $CRASH_LOOP_STATE"
+if [ "$CRASH_LOOP_STATE" != "error" ]; then
+    echo "  WARNING: Expected crash-loop instance to remain in error state (got: $CRASH_LOOP_STATE)"
+fi
 
 # Terminate all instances (including the crash-loop one in error state)
 echo ""
