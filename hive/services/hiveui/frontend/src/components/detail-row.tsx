@@ -1,4 +1,12 @@
-export function DetailRow({ label, value }: { label: string; value?: string }) {
+import type { ReactNode } from "react"
+
+export function DetailRow({
+  label,
+  value,
+}: {
+  label: string
+  value?: ReactNode
+}) {
   return (
     <div>
       <dt className="text-muted-foreground text-sm">{label}</dt>

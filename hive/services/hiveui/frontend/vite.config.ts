@@ -9,6 +9,7 @@ import { defineConfig } from "vite"
 export default defineConfig({
   envDir: "../",
   build: {
+    target: "es2023",
     chunkSizeWarningLimit: 1500,
     rollupOptions: {
       output: {

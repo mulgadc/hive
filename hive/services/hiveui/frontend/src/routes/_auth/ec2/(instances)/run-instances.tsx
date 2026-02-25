@@ -21,12 +21,9 @@ import {
   ec2ImagesQueryOptions,
   ec2InstanceTypesQueryOptions,
   ec2KeyPairsQueryOptions,
+  ec2SubnetsQueryOptions,
 } from "@/queries/ec2"
 import { type CreateInstanceFormData, createInstanceSchema } from "@/types/ec2"
-
-// Hardcoded values - will be replaced when IAM is implemented
-const SECURITY_GROUP_IDS = ["sg-placeholder"]
-const SUBNET_ID = "subnet-placeholder"
 
 export const Route = createFileRoute("/_auth/ec2/(instances)/run-instances")({
   loader: async ({ context }) => {
@@ -34,6 +31,7 @@ export const Route = createFileRoute("/_auth/ec2/(instances)/run-instances")({
       context.queryClient.ensureQueryData(ec2ImagesQueryOptions),
       context.queryClient.ensureQueryData(ec2KeyPairsQueryOptions),
       context.queryClient.ensureQueryData(ec2InstanceTypesQueryOptions),
+      context.queryClient.ensureQueryData(ec2SubnetsQueryOptions),
     ])
   },
   head: () => ({
@@ -53,14 +51,11 @@ function CreateInstance() {
   const { data: instanceTypesData } = useSuspenseQuery(
     ec2InstanceTypesQueryOptions,
   )
+  const { data: subnetsData } = useSuspenseQuery(ec2SubnetsQueryOptions)
   const createMutation = useCreateInstance()
   const images = imagesData.Images ?? []
   const keyPairs = keyPairsData.KeyPairs ?? []
-  const instanceTypes =
-    instanceTypesData.InstanceTypes?.flatMap((type) =>
-      type.InstanceType ? [type.InstanceType] : [],
-    ) ?? []
-
+  const subnets = subnetsData.Subnets ?? []
   const instanceTypeCounts =
     instanceTypesData.InstanceTypes?.reduce(
       (acc, type) => {
@@ -112,11 +107,7 @@ function CreateInstance() {
     : 1
 
   const onSubmit = async (data: CreateInstanceFormData) => {
-    await createMutation.mutateAsync({
-      ...data,
-      securityGroupIds: SECURITY_GROUP_IDS,
-      subnetId: SUBNET_ID,
-    })
+    await createMutation.mutateAsync(data)
 
     navigate({ to: "/ec2/describe-instances" })
   }
@@ -127,7 +118,7 @@ function CreateInstance() {
       <PageHeading title="Run EC2 Instances" />
 
       {/* Handle error when no instance types available */}
-      {instanceTypes.length === 0 && (
+      {uniqueInstanceTypes.length === 0 && (
         <ErrorBanner msg="No compute available. No new instances can be created until compute is available." />
       )}
 
@@ -254,6 +245,40 @@ function CreateInstance() {
           <FieldError errors={[errors.keyName]} />
         </Field>
 
+        {/* Subnet */}
+        <Field>
+          <FieldTitle>
+            <label htmlFor="subnetId">Subnet</label>
+          </FieldTitle>
+          <Controller
+            control={control}
+            name="subnetId"
+            render={({ field }) => (
+              <Select
+                onValueChange={(value) =>
+                  field.onChange(value === "none" ? undefined : value)
+                }
+                value={field.value ?? "none"}
+              >
+                <SelectTrigger className="w-full" id="subnetId">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">none</SelectItem>
+                  {subnets.map((subnet) => (
+                    <SelectItem
+                      key={subnet.SubnetId}
+                      value={subnet.SubnetId ?? ""}
+                    >
+                      {subnet.SubnetId}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          />
+        </Field>
+
         {/* Instance Count */}
         <Field>
           <FieldTitle>
@@ -287,7 +312,7 @@ function CreateInstance() {
             disabled={
               isSubmitting ||
               createMutation.isPending ||
-              instanceTypes.length === 0
+              uniqueInstanceTypes.length === 0
             }
             type="submit"
           >

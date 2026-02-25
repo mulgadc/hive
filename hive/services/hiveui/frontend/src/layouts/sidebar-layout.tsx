@@ -1,6 +1,16 @@
 import { useQueryClient } from "@tanstack/react-query"
 import { Link, useLocation, useNavigate } from "@tanstack/react-router"
-import { HardDrive, Home, Image, Key, LogOut, Server } from "lucide-react"
+import {
+  Camera,
+  HardDrive,
+  Home,
+  Image,
+  Key,
+  LayoutGrid,
+  LogOut,
+  Network,
+  Server,
+} from "lucide-react"
 
 // import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 // import {
@@ -106,11 +116,65 @@ export function SidebarLayout() {
             <SidebarMenuItem>
               <Link to="/ec2/describe-volumes">
                 <SidebarMenuButton
-                  isActive={pathname.startsWith("/ec2/describe-volumes")}
+                  isActive={
+                    pathname.startsWith("/ec2/describe-volumes") ||
+                    pathname.startsWith("/ec2/create-volume") ||
+                    pathname.startsWith("/ec2/modify-volume")
+                  }
                   tooltip="Volumes"
                 >
                   <HardDrive className="size-4" />
                   <span>Volumes</span>
+                </SidebarMenuButton>
+              </Link>
+            </SidebarMenuItem>
+
+            <SidebarMenuItem>
+              <Link to="/ec2/describe-snapshots">
+                <SidebarMenuButton
+                  isActive={
+                    pathname.startsWith("/ec2/describe-snapshots") ||
+                    pathname.startsWith("/ec2/create-snapshot")
+                  }
+                  tooltip="Snapshots"
+                >
+                  <Camera className="size-4" />
+                  <span>Snapshots</span>
+                </SidebarMenuButton>
+              </Link>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel>Networking</SidebarGroupLabel>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <Link to="/ec2/describe-vpcs">
+                <SidebarMenuButton
+                  isActive={
+                    pathname.startsWith("/ec2/describe-vpcs") ||
+                    pathname.startsWith("/ec2/create-vpc")
+                  }
+                  tooltip="VPCs"
+                >
+                  <Network className="size-4" />
+                  <span>VPCs</span>
+                </SidebarMenuButton>
+              </Link>
+            </SidebarMenuItem>
+
+            <SidebarMenuItem>
+              <Link to="/ec2/describe-subnets">
+                <SidebarMenuButton
+                  isActive={
+                    pathname.startsWith("/ec2/describe-subnets") ||
+                    pathname.startsWith("/ec2/create-subnet")
+                  }
+                  tooltip="Subnets"
+                >
+                  <LayoutGrid className="size-4" />
+                  <span>Subnets</span>
                 </SidebarMenuButton>
               </Link>
             </SidebarMenuItem>

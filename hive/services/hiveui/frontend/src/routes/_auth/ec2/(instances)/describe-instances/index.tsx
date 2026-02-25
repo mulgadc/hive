@@ -28,10 +28,27 @@ function Ec2() {
   // useInitialSidebar(false)
   const { data } = useSuspenseQuery(ec2InstancesQueryOptions)
 
-  const instances =
+  const statePriority: Record<string, number> = {
+    running: 0,
+    pending: 1,
+    stopping: 2,
+    "shutting-down": 3,
+    stopped: 4,
+    terminated: 5,
+  }
+
+  const instances = (
     data.Reservations?.flatMap(
       (reservation: Reservation) => reservation.Instances || [],
     ) || []
+  ).toSorted((a, b) => {
+    const pa = statePriority[a.State?.Name ?? ""] ?? 6
+    const pb = statePriority[b.State?.Name ?? ""] ?? 6
+    if (pa !== pb) {
+      return pa - pb
+    }
+    return (a.InstanceId ?? "").localeCompare(b.InstanceId ?? "")
+  })
 
   return (
     <>

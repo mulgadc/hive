@@ -14,19 +14,28 @@ import { Route as AuthRouteRouteImport } from './routes/_auth/route'
 import { Route as AuthIndexRouteImport } from './routes/_auth/index'
 import { Route as AuthS3LsIndexRouteImport } from './routes/_auth/s3/ls/index'
 import { Route as AuthS3bucketsCreateBucketRouteImport } from './routes/_auth/s3/(buckets)/create-bucket'
+import { Route as AuthEc2vpcCreateVpcRouteImport } from './routes/_auth/ec2/(vpc)/create-vpc'
 import { Route as AuthEc2volumesCreateVolumeRouteImport } from './routes/_auth/ec2/(volumes)/create-volume'
+import { Route as AuthEc2subnetCreateSubnetRouteImport } from './routes/_auth/ec2/(subnet)/create-subnet'
+import { Route as AuthEc2snapshotsCreateSnapshotRouteImport } from './routes/_auth/ec2/(snapshots)/create-snapshot'
 import { Route as AuthEc2keyImportKeyPairRouteImport } from './routes/_auth/ec2/(key)/import-key-pair'
 import { Route as AuthEc2keyCreateKeyPairRouteImport } from './routes/_auth/ec2/(key)/create-key-pair'
 import { Route as AuthEc2instancesRunInstancesRouteImport } from './routes/_auth/ec2/(instances)/run-instances'
 import { Route as AuthS3LsBucketRouteRouteImport } from './routes/_auth/s3/ls/$bucket/route'
 import { Route as AuthS3LsBucketIndexRouteImport } from './routes/_auth/s3/ls/$bucket/index'
+import { Route as AuthEc2vpcDescribeVpcsIndexRouteImport } from './routes/_auth/ec2/(vpc)/describe-vpcs/index'
 import { Route as AuthEc2volumesDescribeVolumesIndexRouteImport } from './routes/_auth/ec2/(volumes)/describe-volumes/index'
+import { Route as AuthEc2subnetDescribeSubnetsIndexRouteImport } from './routes/_auth/ec2/(subnet)/describe-subnets/index'
+import { Route as AuthEc2snapshotsDescribeSnapshotsIndexRouteImport } from './routes/_auth/ec2/(snapshots)/describe-snapshots/index'
 import { Route as AuthEc2keyDescribeKeyPairsIndexRouteImport } from './routes/_auth/ec2/(key)/describe-key-pairs/index'
 import { Route as AuthEc2instancesDescribeInstancesIndexRouteImport } from './routes/_auth/ec2/(instances)/describe-instances/index'
 import { Route as AuthEc2imagesDescribeImagesIndexRouteImport } from './routes/_auth/ec2/(images)/describe-images/index'
 import { Route as AuthS3LsBucketSplatRouteImport } from './routes/_auth/s3/ls/$bucket/$'
+import { Route as AuthEc2vpcDescribeVpcsIdRouteImport } from './routes/_auth/ec2/(vpc)/describe-vpcs/$id'
 import { Route as AuthEc2volumesModifyVolumeIdRouteImport } from './routes/_auth/ec2/(volumes)/modify-volume/$id'
 import { Route as AuthEc2volumesDescribeVolumesIdRouteImport } from './routes/_auth/ec2/(volumes)/describe-volumes/$id'
+import { Route as AuthEc2subnetDescribeSubnetsIdRouteImport } from './routes/_auth/ec2/(subnet)/describe-subnets/$id'
+import { Route as AuthEc2snapshotsDescribeSnapshotsIdRouteImport } from './routes/_auth/ec2/(snapshots)/describe-snapshots/$id'
 import { Route as AuthEc2keyDescribeKeyPairsIdRouteImport } from './routes/_auth/ec2/(key)/describe-key-pairs/$id'
 import { Route as AuthEc2instancesDescribeInstancesIdRouteImport } from './routes/_auth/ec2/(instances)/describe-instances/$id'
 import { Route as AuthEc2imagesDescribeImagesIdRouteImport } from './routes/_auth/ec2/(images)/describe-images/$id'
@@ -56,10 +65,27 @@ const AuthS3bucketsCreateBucketRoute =
     path: '/s3/create-bucket',
     getParentRoute: () => AuthRouteRoute,
   } as any)
+const AuthEc2vpcCreateVpcRoute = AuthEc2vpcCreateVpcRouteImport.update({
+  id: '/ec2/(vpc)/create-vpc',
+  path: '/ec2/create-vpc',
+  getParentRoute: () => AuthRouteRoute,
+} as any)
 const AuthEc2volumesCreateVolumeRoute =
   AuthEc2volumesCreateVolumeRouteImport.update({
     id: '/ec2/(volumes)/create-volume',
     path: '/ec2/create-volume',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
+const AuthEc2subnetCreateSubnetRoute =
+  AuthEc2subnetCreateSubnetRouteImport.update({
+    id: '/ec2/(subnet)/create-subnet',
+    path: '/ec2/create-subnet',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
+const AuthEc2snapshotsCreateSnapshotRoute =
+  AuthEc2snapshotsCreateSnapshotRouteImport.update({
+    id: '/ec2/(snapshots)/create-snapshot',
+    path: '/ec2/create-snapshot',
     getParentRoute: () => AuthRouteRoute,
   } as any)
 const AuthEc2keyImportKeyPairRoute = AuthEc2keyImportKeyPairRouteImport.update({
@@ -88,10 +114,28 @@ const AuthS3LsBucketIndexRoute = AuthS3LsBucketIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AuthS3LsBucketRouteRoute,
 } as any)
+const AuthEc2vpcDescribeVpcsIndexRoute =
+  AuthEc2vpcDescribeVpcsIndexRouteImport.update({
+    id: '/ec2/(vpc)/describe-vpcs/',
+    path: '/ec2/describe-vpcs/',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
 const AuthEc2volumesDescribeVolumesIndexRoute =
   AuthEc2volumesDescribeVolumesIndexRouteImport.update({
     id: '/ec2/(volumes)/describe-volumes/',
     path: '/ec2/describe-volumes/',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
+const AuthEc2subnetDescribeSubnetsIndexRoute =
+  AuthEc2subnetDescribeSubnetsIndexRouteImport.update({
+    id: '/ec2/(subnet)/describe-subnets/',
+    path: '/ec2/describe-subnets/',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
+const AuthEc2snapshotsDescribeSnapshotsIndexRoute =
+  AuthEc2snapshotsDescribeSnapshotsIndexRouteImport.update({
+    id: '/ec2/(snapshots)/describe-snapshots/',
+    path: '/ec2/describe-snapshots/',
     getParentRoute: () => AuthRouteRoute,
   } as any)
 const AuthEc2keyDescribeKeyPairsIndexRoute =
@@ -117,6 +161,12 @@ const AuthS3LsBucketSplatRoute = AuthS3LsBucketSplatRouteImport.update({
   path: '/$',
   getParentRoute: () => AuthS3LsBucketRouteRoute,
 } as any)
+const AuthEc2vpcDescribeVpcsIdRoute =
+  AuthEc2vpcDescribeVpcsIdRouteImport.update({
+    id: '/ec2/(vpc)/describe-vpcs/$id',
+    path: '/ec2/describe-vpcs/$id',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
 const AuthEc2volumesModifyVolumeIdRoute =
   AuthEc2volumesModifyVolumeIdRouteImport.update({
     id: '/ec2/(volumes)/modify-volume/$id',
@@ -127,6 +177,18 @@ const AuthEc2volumesDescribeVolumesIdRoute =
   AuthEc2volumesDescribeVolumesIdRouteImport.update({
     id: '/ec2/(volumes)/describe-volumes/$id',
     path: '/ec2/describe-volumes/$id',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
+const AuthEc2subnetDescribeSubnetsIdRoute =
+  AuthEc2subnetDescribeSubnetsIdRouteImport.update({
+    id: '/ec2/(subnet)/describe-subnets/$id',
+    path: '/ec2/describe-subnets/$id',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
+const AuthEc2snapshotsDescribeSnapshotsIdRoute =
+  AuthEc2snapshotsDescribeSnapshotsIdRouteImport.update({
+    id: '/ec2/(snapshots)/describe-snapshots/$id',
+    path: '/ec2/describe-snapshots/$id',
     getParentRoute: () => AuthRouteRoute,
   } as any)
 const AuthEc2keyDescribeKeyPairsIdRoute =
@@ -155,19 +217,28 @@ export interface FileRoutesByFullPath {
   '/ec2/run-instances': typeof AuthEc2instancesRunInstancesRoute
   '/ec2/create-key-pair': typeof AuthEc2keyCreateKeyPairRoute
   '/ec2/import-key-pair': typeof AuthEc2keyImportKeyPairRoute
+  '/ec2/create-snapshot': typeof AuthEc2snapshotsCreateSnapshotRoute
+  '/ec2/create-subnet': typeof AuthEc2subnetCreateSubnetRoute
   '/ec2/create-volume': typeof AuthEc2volumesCreateVolumeRoute
+  '/ec2/create-vpc': typeof AuthEc2vpcCreateVpcRoute
   '/s3/create-bucket': typeof AuthS3bucketsCreateBucketRoute
   '/s3/ls/': typeof AuthS3LsIndexRoute
   '/ec2/describe-images/$id': typeof AuthEc2imagesDescribeImagesIdRoute
   '/ec2/describe-instances/$id': typeof AuthEc2instancesDescribeInstancesIdRoute
   '/ec2/describe-key-pairs/$id': typeof AuthEc2keyDescribeKeyPairsIdRoute
+  '/ec2/describe-snapshots/$id': typeof AuthEc2snapshotsDescribeSnapshotsIdRoute
+  '/ec2/describe-subnets/$id': typeof AuthEc2subnetDescribeSubnetsIdRoute
   '/ec2/describe-volumes/$id': typeof AuthEc2volumesDescribeVolumesIdRoute
   '/ec2/modify-volume/$id': typeof AuthEc2volumesModifyVolumeIdRoute
+  '/ec2/describe-vpcs/$id': typeof AuthEc2vpcDescribeVpcsIdRoute
   '/s3/ls/$bucket/$': typeof AuthS3LsBucketSplatRoute
   '/ec2/describe-images/': typeof AuthEc2imagesDescribeImagesIndexRoute
   '/ec2/describe-instances/': typeof AuthEc2instancesDescribeInstancesIndexRoute
   '/ec2/describe-key-pairs/': typeof AuthEc2keyDescribeKeyPairsIndexRoute
+  '/ec2/describe-snapshots/': typeof AuthEc2snapshotsDescribeSnapshotsIndexRoute
+  '/ec2/describe-subnets/': typeof AuthEc2subnetDescribeSubnetsIndexRoute
   '/ec2/describe-volumes/': typeof AuthEc2volumesDescribeVolumesIndexRoute
+  '/ec2/describe-vpcs/': typeof AuthEc2vpcDescribeVpcsIndexRoute
   '/s3/ls/$bucket/': typeof AuthS3LsBucketIndexRoute
 }
 export interface FileRoutesByTo {
@@ -176,19 +247,28 @@ export interface FileRoutesByTo {
   '/ec2/run-instances': typeof AuthEc2instancesRunInstancesRoute
   '/ec2/create-key-pair': typeof AuthEc2keyCreateKeyPairRoute
   '/ec2/import-key-pair': typeof AuthEc2keyImportKeyPairRoute
+  '/ec2/create-snapshot': typeof AuthEc2snapshotsCreateSnapshotRoute
+  '/ec2/create-subnet': typeof AuthEc2subnetCreateSubnetRoute
   '/ec2/create-volume': typeof AuthEc2volumesCreateVolumeRoute
+  '/ec2/create-vpc': typeof AuthEc2vpcCreateVpcRoute
   '/s3/create-bucket': typeof AuthS3bucketsCreateBucketRoute
   '/s3/ls': typeof AuthS3LsIndexRoute
   '/ec2/describe-images/$id': typeof AuthEc2imagesDescribeImagesIdRoute
   '/ec2/describe-instances/$id': typeof AuthEc2instancesDescribeInstancesIdRoute
   '/ec2/describe-key-pairs/$id': typeof AuthEc2keyDescribeKeyPairsIdRoute
+  '/ec2/describe-snapshots/$id': typeof AuthEc2snapshotsDescribeSnapshotsIdRoute
+  '/ec2/describe-subnets/$id': typeof AuthEc2subnetDescribeSubnetsIdRoute
   '/ec2/describe-volumes/$id': typeof AuthEc2volumesDescribeVolumesIdRoute
   '/ec2/modify-volume/$id': typeof AuthEc2volumesModifyVolumeIdRoute
+  '/ec2/describe-vpcs/$id': typeof AuthEc2vpcDescribeVpcsIdRoute
   '/s3/ls/$bucket/$': typeof AuthS3LsBucketSplatRoute
   '/ec2/describe-images': typeof AuthEc2imagesDescribeImagesIndexRoute
   '/ec2/describe-instances': typeof AuthEc2instancesDescribeInstancesIndexRoute
   '/ec2/describe-key-pairs': typeof AuthEc2keyDescribeKeyPairsIndexRoute
+  '/ec2/describe-snapshots': typeof AuthEc2snapshotsDescribeSnapshotsIndexRoute
+  '/ec2/describe-subnets': typeof AuthEc2subnetDescribeSubnetsIndexRoute
   '/ec2/describe-volumes': typeof AuthEc2volumesDescribeVolumesIndexRoute
+  '/ec2/describe-vpcs': typeof AuthEc2vpcDescribeVpcsIndexRoute
   '/s3/ls/$bucket': typeof AuthS3LsBucketIndexRoute
 }
 export interface FileRoutesById {
@@ -200,19 +280,28 @@ export interface FileRoutesById {
   '/_auth/ec2/(instances)/run-instances': typeof AuthEc2instancesRunInstancesRoute
   '/_auth/ec2/(key)/create-key-pair': typeof AuthEc2keyCreateKeyPairRoute
   '/_auth/ec2/(key)/import-key-pair': typeof AuthEc2keyImportKeyPairRoute
+  '/_auth/ec2/(snapshots)/create-snapshot': typeof AuthEc2snapshotsCreateSnapshotRoute
+  '/_auth/ec2/(subnet)/create-subnet': typeof AuthEc2subnetCreateSubnetRoute
   '/_auth/ec2/(volumes)/create-volume': typeof AuthEc2volumesCreateVolumeRoute
+  '/_auth/ec2/(vpc)/create-vpc': typeof AuthEc2vpcCreateVpcRoute
   '/_auth/s3/(buckets)/create-bucket': typeof AuthS3bucketsCreateBucketRoute
   '/_auth/s3/ls/': typeof AuthS3LsIndexRoute
   '/_auth/ec2/(images)/describe-images/$id': typeof AuthEc2imagesDescribeImagesIdRoute
   '/_auth/ec2/(instances)/describe-instances/$id': typeof AuthEc2instancesDescribeInstancesIdRoute
   '/_auth/ec2/(key)/describe-key-pairs/$id': typeof AuthEc2keyDescribeKeyPairsIdRoute
+  '/_auth/ec2/(snapshots)/describe-snapshots/$id': typeof AuthEc2snapshotsDescribeSnapshotsIdRoute
+  '/_auth/ec2/(subnet)/describe-subnets/$id': typeof AuthEc2subnetDescribeSubnetsIdRoute
   '/_auth/ec2/(volumes)/describe-volumes/$id': typeof AuthEc2volumesDescribeVolumesIdRoute
   '/_auth/ec2/(volumes)/modify-volume/$id': typeof AuthEc2volumesModifyVolumeIdRoute
+  '/_auth/ec2/(vpc)/describe-vpcs/$id': typeof AuthEc2vpcDescribeVpcsIdRoute
   '/_auth/s3/ls/$bucket/$': typeof AuthS3LsBucketSplatRoute
   '/_auth/ec2/(images)/describe-images/': typeof AuthEc2imagesDescribeImagesIndexRoute
   '/_auth/ec2/(instances)/describe-instances/': typeof AuthEc2instancesDescribeInstancesIndexRoute
   '/_auth/ec2/(key)/describe-key-pairs/': typeof AuthEc2keyDescribeKeyPairsIndexRoute
+  '/_auth/ec2/(snapshots)/describe-snapshots/': typeof AuthEc2snapshotsDescribeSnapshotsIndexRoute
+  '/_auth/ec2/(subnet)/describe-subnets/': typeof AuthEc2subnetDescribeSubnetsIndexRoute
   '/_auth/ec2/(volumes)/describe-volumes/': typeof AuthEc2volumesDescribeVolumesIndexRoute
+  '/_auth/ec2/(vpc)/describe-vpcs/': typeof AuthEc2vpcDescribeVpcsIndexRoute
   '/_auth/s3/ls/$bucket/': typeof AuthS3LsBucketIndexRoute
 }
 export interface FileRouteTypes {
@@ -224,19 +313,28 @@ export interface FileRouteTypes {
     | '/ec2/run-instances'
     | '/ec2/create-key-pair'
     | '/ec2/import-key-pair'
+    | '/ec2/create-snapshot'
+    | '/ec2/create-subnet'
     | '/ec2/create-volume'
+    | '/ec2/create-vpc'
     | '/s3/create-bucket'
     | '/s3/ls/'
     | '/ec2/describe-images/$id'
     | '/ec2/describe-instances/$id'
     | '/ec2/describe-key-pairs/$id'
+    | '/ec2/describe-snapshots/$id'
+    | '/ec2/describe-subnets/$id'
     | '/ec2/describe-volumes/$id'
     | '/ec2/modify-volume/$id'
+    | '/ec2/describe-vpcs/$id'
     | '/s3/ls/$bucket/$'
     | '/ec2/describe-images/'
     | '/ec2/describe-instances/'
     | '/ec2/describe-key-pairs/'
+    | '/ec2/describe-snapshots/'
+    | '/ec2/describe-subnets/'
     | '/ec2/describe-volumes/'
+    | '/ec2/describe-vpcs/'
     | '/s3/ls/$bucket/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -245,19 +343,28 @@ export interface FileRouteTypes {
     | '/ec2/run-instances'
     | '/ec2/create-key-pair'
     | '/ec2/import-key-pair'
+    | '/ec2/create-snapshot'
+    | '/ec2/create-subnet'
     | '/ec2/create-volume'
+    | '/ec2/create-vpc'
     | '/s3/create-bucket'
     | '/s3/ls'
     | '/ec2/describe-images/$id'
     | '/ec2/describe-instances/$id'
     | '/ec2/describe-key-pairs/$id'
+    | '/ec2/describe-snapshots/$id'
+    | '/ec2/describe-subnets/$id'
     | '/ec2/describe-volumes/$id'
     | '/ec2/modify-volume/$id'
+    | '/ec2/describe-vpcs/$id'
     | '/s3/ls/$bucket/$'
     | '/ec2/describe-images'
     | '/ec2/describe-instances'
     | '/ec2/describe-key-pairs'
+    | '/ec2/describe-snapshots'
+    | '/ec2/describe-subnets'
     | '/ec2/describe-volumes'
+    | '/ec2/describe-vpcs'
     | '/s3/ls/$bucket'
   id:
     | '__root__'
@@ -268,19 +375,28 @@ export interface FileRouteTypes {
     | '/_auth/ec2/(instances)/run-instances'
     | '/_auth/ec2/(key)/create-key-pair'
     | '/_auth/ec2/(key)/import-key-pair'
+    | '/_auth/ec2/(snapshots)/create-snapshot'
+    | '/_auth/ec2/(subnet)/create-subnet'
     | '/_auth/ec2/(volumes)/create-volume'
+    | '/_auth/ec2/(vpc)/create-vpc'
     | '/_auth/s3/(buckets)/create-bucket'
     | '/_auth/s3/ls/'
     | '/_auth/ec2/(images)/describe-images/$id'
     | '/_auth/ec2/(instances)/describe-instances/$id'
     | '/_auth/ec2/(key)/describe-key-pairs/$id'
+    | '/_auth/ec2/(snapshots)/describe-snapshots/$id'
+    | '/_auth/ec2/(subnet)/describe-subnets/$id'
     | '/_auth/ec2/(volumes)/describe-volumes/$id'
     | '/_auth/ec2/(volumes)/modify-volume/$id'
+    | '/_auth/ec2/(vpc)/describe-vpcs/$id'
     | '/_auth/s3/ls/$bucket/$'
     | '/_auth/ec2/(images)/describe-images/'
     | '/_auth/ec2/(instances)/describe-instances/'
     | '/_auth/ec2/(key)/describe-key-pairs/'
+    | '/_auth/ec2/(snapshots)/describe-snapshots/'
+    | '/_auth/ec2/(subnet)/describe-subnets/'
     | '/_auth/ec2/(volumes)/describe-volumes/'
+    | '/_auth/ec2/(vpc)/describe-vpcs/'
     | '/_auth/s3/ls/$bucket/'
   fileRoutesById: FileRoutesById
 }
@@ -326,11 +442,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthS3bucketsCreateBucketRouteImport
       parentRoute: typeof AuthRouteRoute
     }
+    '/_auth/ec2/(vpc)/create-vpc': {
+      id: '/_auth/ec2/(vpc)/create-vpc'
+      path: '/ec2/create-vpc'
+      fullPath: '/ec2/create-vpc'
+      preLoaderRoute: typeof AuthEc2vpcCreateVpcRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
     '/_auth/ec2/(volumes)/create-volume': {
       id: '/_auth/ec2/(volumes)/create-volume'
       path: '/ec2/create-volume'
       fullPath: '/ec2/create-volume'
       preLoaderRoute: typeof AuthEc2volumesCreateVolumeRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/_auth/ec2/(subnet)/create-subnet': {
+      id: '/_auth/ec2/(subnet)/create-subnet'
+      path: '/ec2/create-subnet'
+      fullPath: '/ec2/create-subnet'
+      preLoaderRoute: typeof AuthEc2subnetCreateSubnetRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/_auth/ec2/(snapshots)/create-snapshot': {
+      id: '/_auth/ec2/(snapshots)/create-snapshot'
+      path: '/ec2/create-snapshot'
+      fullPath: '/ec2/create-snapshot'
+      preLoaderRoute: typeof AuthEc2snapshotsCreateSnapshotRouteImport
       parentRoute: typeof AuthRouteRoute
     }
     '/_auth/ec2/(key)/import-key-pair': {
@@ -368,11 +505,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthS3LsBucketIndexRouteImport
       parentRoute: typeof AuthS3LsBucketRouteRoute
     }
+    '/_auth/ec2/(vpc)/describe-vpcs/': {
+      id: '/_auth/ec2/(vpc)/describe-vpcs/'
+      path: '/ec2/describe-vpcs'
+      fullPath: '/ec2/describe-vpcs/'
+      preLoaderRoute: typeof AuthEc2vpcDescribeVpcsIndexRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
     '/_auth/ec2/(volumes)/describe-volumes/': {
       id: '/_auth/ec2/(volumes)/describe-volumes/'
       path: '/ec2/describe-volumes'
       fullPath: '/ec2/describe-volumes/'
       preLoaderRoute: typeof AuthEc2volumesDescribeVolumesIndexRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/_auth/ec2/(subnet)/describe-subnets/': {
+      id: '/_auth/ec2/(subnet)/describe-subnets/'
+      path: '/ec2/describe-subnets'
+      fullPath: '/ec2/describe-subnets/'
+      preLoaderRoute: typeof AuthEc2subnetDescribeSubnetsIndexRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/_auth/ec2/(snapshots)/describe-snapshots/': {
+      id: '/_auth/ec2/(snapshots)/describe-snapshots/'
+      path: '/ec2/describe-snapshots'
+      fullPath: '/ec2/describe-snapshots/'
+      preLoaderRoute: typeof AuthEc2snapshotsDescribeSnapshotsIndexRouteImport
       parentRoute: typeof AuthRouteRoute
     }
     '/_auth/ec2/(key)/describe-key-pairs/': {
@@ -403,6 +561,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthS3LsBucketSplatRouteImport
       parentRoute: typeof AuthS3LsBucketRouteRoute
     }
+    '/_auth/ec2/(vpc)/describe-vpcs/$id': {
+      id: '/_auth/ec2/(vpc)/describe-vpcs/$id'
+      path: '/ec2/describe-vpcs/$id'
+      fullPath: '/ec2/describe-vpcs/$id'
+      preLoaderRoute: typeof AuthEc2vpcDescribeVpcsIdRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
     '/_auth/ec2/(volumes)/modify-volume/$id': {
       id: '/_auth/ec2/(volumes)/modify-volume/$id'
       path: '/ec2/modify-volume/$id'
@@ -415,6 +580,20 @@ declare module '@tanstack/react-router' {
       path: '/ec2/describe-volumes/$id'
       fullPath: '/ec2/describe-volumes/$id'
       preLoaderRoute: typeof AuthEc2volumesDescribeVolumesIdRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/_auth/ec2/(subnet)/describe-subnets/$id': {
+      id: '/_auth/ec2/(subnet)/describe-subnets/$id'
+      path: '/ec2/describe-subnets/$id'
+      fullPath: '/ec2/describe-subnets/$id'
+      preLoaderRoute: typeof AuthEc2subnetDescribeSubnetsIdRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/_auth/ec2/(snapshots)/describe-snapshots/$id': {
+      id: '/_auth/ec2/(snapshots)/describe-snapshots/$id'
+      path: '/ec2/describe-snapshots/$id'
+      fullPath: '/ec2/describe-snapshots/$id'
+      preLoaderRoute: typeof AuthEc2snapshotsDescribeSnapshotsIdRouteImport
       parentRoute: typeof AuthRouteRoute
     }
     '/_auth/ec2/(key)/describe-key-pairs/$id': {
@@ -460,18 +639,27 @@ interface AuthRouteRouteChildren {
   AuthEc2instancesRunInstancesRoute: typeof AuthEc2instancesRunInstancesRoute
   AuthEc2keyCreateKeyPairRoute: typeof AuthEc2keyCreateKeyPairRoute
   AuthEc2keyImportKeyPairRoute: typeof AuthEc2keyImportKeyPairRoute
+  AuthEc2snapshotsCreateSnapshotRoute: typeof AuthEc2snapshotsCreateSnapshotRoute
+  AuthEc2subnetCreateSubnetRoute: typeof AuthEc2subnetCreateSubnetRoute
   AuthEc2volumesCreateVolumeRoute: typeof AuthEc2volumesCreateVolumeRoute
+  AuthEc2vpcCreateVpcRoute: typeof AuthEc2vpcCreateVpcRoute
   AuthS3bucketsCreateBucketRoute: typeof AuthS3bucketsCreateBucketRoute
   AuthS3LsIndexRoute: typeof AuthS3LsIndexRoute
   AuthEc2imagesDescribeImagesIdRoute: typeof AuthEc2imagesDescribeImagesIdRoute
   AuthEc2instancesDescribeInstancesIdRoute: typeof AuthEc2instancesDescribeInstancesIdRoute
   AuthEc2keyDescribeKeyPairsIdRoute: typeof AuthEc2keyDescribeKeyPairsIdRoute
+  AuthEc2snapshotsDescribeSnapshotsIdRoute: typeof AuthEc2snapshotsDescribeSnapshotsIdRoute
+  AuthEc2subnetDescribeSubnetsIdRoute: typeof AuthEc2subnetDescribeSubnetsIdRoute
   AuthEc2volumesDescribeVolumesIdRoute: typeof AuthEc2volumesDescribeVolumesIdRoute
   AuthEc2volumesModifyVolumeIdRoute: typeof AuthEc2volumesModifyVolumeIdRoute
+  AuthEc2vpcDescribeVpcsIdRoute: typeof AuthEc2vpcDescribeVpcsIdRoute
   AuthEc2imagesDescribeImagesIndexRoute: typeof AuthEc2imagesDescribeImagesIndexRoute
   AuthEc2instancesDescribeInstancesIndexRoute: typeof AuthEc2instancesDescribeInstancesIndexRoute
   AuthEc2keyDescribeKeyPairsIndexRoute: typeof AuthEc2keyDescribeKeyPairsIndexRoute
+  AuthEc2snapshotsDescribeSnapshotsIndexRoute: typeof AuthEc2snapshotsDescribeSnapshotsIndexRoute
+  AuthEc2subnetDescribeSubnetsIndexRoute: typeof AuthEc2subnetDescribeSubnetsIndexRoute
   AuthEc2volumesDescribeVolumesIndexRoute: typeof AuthEc2volumesDescribeVolumesIndexRoute
+  AuthEc2vpcDescribeVpcsIndexRoute: typeof AuthEc2vpcDescribeVpcsIndexRoute
 }
 
 const AuthRouteRouteChildren: AuthRouteRouteChildren = {
@@ -480,21 +668,33 @@ const AuthRouteRouteChildren: AuthRouteRouteChildren = {
   AuthEc2instancesRunInstancesRoute: AuthEc2instancesRunInstancesRoute,
   AuthEc2keyCreateKeyPairRoute: AuthEc2keyCreateKeyPairRoute,
   AuthEc2keyImportKeyPairRoute: AuthEc2keyImportKeyPairRoute,
+  AuthEc2snapshotsCreateSnapshotRoute: AuthEc2snapshotsCreateSnapshotRoute,
+  AuthEc2subnetCreateSubnetRoute: AuthEc2subnetCreateSubnetRoute,
   AuthEc2volumesCreateVolumeRoute: AuthEc2volumesCreateVolumeRoute,
+  AuthEc2vpcCreateVpcRoute: AuthEc2vpcCreateVpcRoute,
   AuthS3bucketsCreateBucketRoute: AuthS3bucketsCreateBucketRoute,
   AuthS3LsIndexRoute: AuthS3LsIndexRoute,
   AuthEc2imagesDescribeImagesIdRoute: AuthEc2imagesDescribeImagesIdRoute,
   AuthEc2instancesDescribeInstancesIdRoute:
     AuthEc2instancesDescribeInstancesIdRoute,
   AuthEc2keyDescribeKeyPairsIdRoute: AuthEc2keyDescribeKeyPairsIdRoute,
+  AuthEc2snapshotsDescribeSnapshotsIdRoute:
+    AuthEc2snapshotsDescribeSnapshotsIdRoute,
+  AuthEc2subnetDescribeSubnetsIdRoute: AuthEc2subnetDescribeSubnetsIdRoute,
   AuthEc2volumesDescribeVolumesIdRoute: AuthEc2volumesDescribeVolumesIdRoute,
   AuthEc2volumesModifyVolumeIdRoute: AuthEc2volumesModifyVolumeIdRoute,
+  AuthEc2vpcDescribeVpcsIdRoute: AuthEc2vpcDescribeVpcsIdRoute,
   AuthEc2imagesDescribeImagesIndexRoute: AuthEc2imagesDescribeImagesIndexRoute,
   AuthEc2instancesDescribeInstancesIndexRoute:
     AuthEc2instancesDescribeInstancesIndexRoute,
   AuthEc2keyDescribeKeyPairsIndexRoute: AuthEc2keyDescribeKeyPairsIndexRoute,
+  AuthEc2snapshotsDescribeSnapshotsIndexRoute:
+    AuthEc2snapshotsDescribeSnapshotsIndexRoute,
+  AuthEc2subnetDescribeSubnetsIndexRoute:
+    AuthEc2subnetDescribeSubnetsIndexRoute,
   AuthEc2volumesDescribeVolumesIndexRoute:
     AuthEc2volumesDescribeVolumesIndexRoute,
+  AuthEc2vpcDescribeVpcsIndexRoute: AuthEc2vpcDescribeVpcsIndexRoute,
 }
 
 const AuthRouteRouteWithChildren = AuthRouteRoute._addFileChildren(

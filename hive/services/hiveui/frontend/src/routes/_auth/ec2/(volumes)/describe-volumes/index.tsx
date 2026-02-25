@@ -4,7 +4,7 @@ import { createFileRoute, Link } from "@tanstack/react-router"
 
 import { ListCard } from "@/components/list-card"
 import { PageHeading } from "@/components/page-heading"
-import { Badge } from "@/components/ui/badge"
+import { StateBadge } from "@/components/state-badge"
 import { Button } from "@/components/ui/button"
 import { ec2VolumesQueryOptions } from "@/queries/ec2"
 
@@ -46,17 +46,7 @@ function Volumes() {
             }
             return (
               <ListCard
-                badge={
-                  volume.State ? (
-                    <Badge
-                      variant={
-                        volume.State === "available" ? "default" : "outline"
-                      }
-                    >
-                      {volume.State}
-                    </Badge>
-                  ) : undefined
-                }
+                badge={<StateBadge state={volume.State} />}
                 key={volume.VolumeId}
                 params={{ id: volume.VolumeId }}
                 subtitle={`${volume.Size} GiB • ${volume.VolumeType}`}

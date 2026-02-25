@@ -31,18 +31,6 @@ func (d *Daemon) handleEC2GetConsoleOutput(msg *nats.Msg) {
 		return
 	}
 
-	// Check account-level serial console access
-	status, err := d.accountService.GetSerialConsoleAccessStatus(&ec2.GetSerialConsoleAccessStatusInput{})
-	if err != nil {
-		slog.Error("Failed to check serial console access status", "err", err)
-		respondWithError(msg, awserrors.ErrorServerInternal)
-		return
-	}
-	if status.SerialConsoleAccessEnabled == nil || !*status.SerialConsoleAccessEnabled {
-		respondWithError(msg, awserrors.ErrorSerialConsoleSessionUnavailable)
-		return
-	}
-
 	instanceID := *input.InstanceId
 
 	// Find the instance on this node

@@ -24,7 +24,7 @@ export const Route = createFileRoute("/_auth/ec2/(key)/describe-key-pairs/")({
 function KeyPairs() {
   const { data } = useSuspenseQuery(ec2KeyPairsQueryOptions)
 
-  const keyPairs = [...(data.KeyPairs || [])].sort((a, b) => {
+  const keyPairs = (data.KeyPairs || []).toSorted((a, b) => {
     const nameA = a.KeyName?.toLowerCase() ?? ""
     const nameB = b.KeyName?.toLowerCase() ?? ""
     return nameA.localeCompare(nameB)

@@ -4,7 +4,7 @@ import { createFileRoute } from "@tanstack/react-router"
 
 import { ListCard } from "@/components/list-card"
 import { PageHeading } from "@/components/page-heading"
-import { Badge } from "@/components/ui/badge"
+import { StateBadge } from "@/components/state-badge"
 import { ec2ImagesQueryOptions } from "@/queries/ec2"
 
 export const Route = createFileRoute("/_auth/ec2/(images)/describe-images/")({
@@ -38,17 +38,7 @@ function Images() {
             }
             return (
               <ListCard
-                badge={
-                  image.State ? (
-                    <Badge
-                      variant={
-                        image.State === "available" ? "default" : "outline"
-                      }
-                    >
-                      {image.State}
-                    </Badge>
-                  ) : undefined
-                }
+                badge={<StateBadge state={image.State} />}
                 key={image.ImageId}
                 params={{ id: image.ImageId }}
                 subtitle={image.Name}

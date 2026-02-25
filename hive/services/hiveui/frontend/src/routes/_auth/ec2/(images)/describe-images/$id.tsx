@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router"
 
 import { BackLink } from "@/components/back-link"
 import { PageHeading } from "@/components/page-heading"
-import { Badge } from "@/components/ui/badge"
+import { StateBadge } from "@/components/state-badge"
 import { ec2ImageQueryOptions } from "@/queries/ec2"
 import { AmiDetails } from "../../-components/ami-details"
 
@@ -45,15 +45,7 @@ function ImageDetail() {
 
       <div className="space-y-6">
         <PageHeading
-          actions={
-            image.State ? (
-              <Badge
-                variant={image.State === "available" ? "default" : "outline"}
-              >
-                {image.State}
-              </Badge>
-            ) : undefined
-          }
+          actions={<StateBadge state={image.State} />}
           subtitle="EC2 Image Details"
           title={image.ImageId}
         />

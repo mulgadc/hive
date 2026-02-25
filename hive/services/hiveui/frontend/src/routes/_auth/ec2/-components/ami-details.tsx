@@ -1,4 +1,5 @@
 import type { Image } from "@aws-sdk/client-ec2"
+import { Link } from "@tanstack/react-router"
 
 import { DetailCard } from "@/components/detail-card"
 import { DetailRow } from "@/components/detail-row"
@@ -23,7 +24,22 @@ export function AmiDetails({
           {showExtendedDetails ? "AMI Information" : "AMI Details"}
         </DetailCard.Header>
         <DetailCard.Content>
-          <DetailRow label="AMI ID" value={image.ImageId} />
+          <DetailRow
+            label="AMI ID"
+            value={
+              image.ImageId && !showExtendedDetails ? (
+                <Link
+                  className="text-primary hover:underline"
+                  params={{ id: image.ImageId }}
+                  to="/ec2/describe-images/$id"
+                >
+                  {image.ImageId}
+                </Link>
+              ) : (
+                image.ImageId
+              )
+            }
+          />
           <DetailRow label="AMI Name" value={image.Name} />
           <DetailRow label="Description" value={image.Description} />
           <DetailRow label="Architecture" value={image.Architecture} />
@@ -83,7 +99,15 @@ export function AmiDetails({
                   {mapping.Ebs.SnapshotId && (
                     <DetailRow
                       label="Snapshot ID"
-                      value={mapping.Ebs.SnapshotId}
+                      value={
+                        <Link
+                          className="text-primary hover:underline"
+                          params={{ id: mapping.Ebs.SnapshotId }}
+                          to="/ec2/describe-snapshots/$id"
+                        >
+                          {mapping.Ebs.SnapshotId}
+                        </Link>
+                      }
                     />
                   )}
                 </>

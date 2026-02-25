@@ -1,6 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod"
+import { useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { useForm } from "react-hook-form"
+import { Controller, useForm } from "react-hook-form"
 
 import { BackLink } from "@/components/back-link"
 import { ErrorBanner } from "@/components/error-banner"
@@ -8,10 +9,21 @@ import { PageHeading } from "@/components/page-heading"
 import { Button } from "@/components/ui/button"
 import { Field, FieldError, FieldTitle } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { useCreateVolume } from "@/mutations/ec2"
+import { ec2AvailabilityZonesQueryOptions } from "@/queries/ec2"
 import { type CreateVolumeFormData, createVolumeSchema } from "@/types/ec2"
 
 export const Route = createFileRoute("/_auth/ec2/(volumes)/create-volume")({
+  loader: async ({ context }) => {
+    await context.queryClient.ensureQueryData(ec2AvailabilityZonesQueryOptions)
+  },
   head: () => ({
     meta: [
       {
@@ -24,9 +36,14 @@ export const Route = createFileRoute("/_auth/ec2/(volumes)/create-volume")({
 
 function CreateVolume() {
   const navigate = useNavigate()
+  const { data: azData } = useSuspenseQuery(ec2AvailabilityZonesQueryOptions)
   const createMutation = useCreateVolume()
+  const availabilityZones = azData.AvailabilityZones ?? []
+
+  const defaultAz = availabilityZones[0]?.ZoneName ?? ""
 
   const {
+    control,
     handleSubmit,
     register,
     formState: { errors, isSubmitting },
@@ -34,7 +51,7 @@ function CreateVolume() {
     resolver: zodResolver(createVolumeSchema),
     defaultValues: {
       size: 1,
-      availabilityZone: "",
+      availabilityZone: defaultAz,
     },
   })
 
@@ -76,12 +93,30 @@ function CreateVolume() {
           <FieldTitle>
             <label htmlFor="availabilityZone">Availability Zone</label>
           </FieldTitle>
-          <Input
-            aria-invalid={!!errors.availabilityZone}
-            id="availabilityZone"
-            placeholder="ap-southeast-2a"
-            type="text"
-            {...register("availabilityZone")}
+          <Controller
+            control={control}
+            name="availabilityZone"
+            render={({ field }) => (
+              <Select
+                onValueChange={(value) => field.onChange(value)}
+                value={field.value ?? ""}
+              >
+                <SelectTrigger
+                  aria-invalid={!!errors.availabilityZone}
+                  className="w-full"
+                  id="availabilityZone"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {availabilityZones.map((az) => (
+                    <SelectItem key={az.ZoneName} value={az.ZoneName ?? ""}>
+                      {az.ZoneName}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
           />
           <FieldError errors={[errors.availabilityZone]} />
         </Field>
