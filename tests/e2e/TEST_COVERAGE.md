@@ -9,6 +9,11 @@
 - Start all services (`start-dev.sh`)
 - Wait for AWS gateway on `localhost:9999`
 
+### Phase 1b: Cluster Stats CLI
+- `hive get nodes` — verify node shows Ready
+- `hive top nodes` — verify CPU/MEM resource stats
+- `hive get vms` — verify "No VMs found" before any launches
+
 ### Phase 2: Discovery & Metadata
 - `describe-regions`
 - `describe-availability-zones` (verify zone name and state)
@@ -34,11 +39,20 @@
 - `run-instances` (launch VM with key pair)
 - `describe-instances` (poll pending -> running)
 
+### Phase 5a-pre: Cluster Stats CLI (with running VM)
+- `hive get vms` — verify running instance appears in output
+
 ### Phase 5a: Instance Metadata Validation
 - `describe-instances` — verify InstanceType matches requested type
 - Verify KeyName matches requested key
 - Verify ImageId matches requested AMI
 - Verify at least 1 BlockDeviceMapping present
+
+### Phase 5a-ii: SSH Connectivity & Volume Verification
+- SSH into instance via QEMU hostfwd port
+- Verify SSH connectivity (`id` command returns ec2-user)
+- Verify root volume size from inside VM matches API-reported size (`lsblk` vs `describe-volumes`)
+- Verify VM hostname
 
 ### Phase 5a-iii: Console Output & Serial Console Enforcement
 - `get-console-output` when serial console disabled (expect `SerialConsoleSessionUnavailable`)
@@ -141,7 +155,10 @@
 - `delete-snapshot` (CreateImage backing snapshot, so DeleteOnTermination is not blocked)
 - `terminate-instances` (poll -> terminated)
 
-### Phase 9a: Volume Cleanup Verification
+### Phase 9a: SSH Unreachable Verification
+- Verify SSH connection is refused/unreachable after termination
+
+### Phase 9b: Volume Cleanup Verification
 - `describe-volumes` on root volume after termination
 - Verify root volume is deleted (DeleteOnTermination)
 
@@ -261,6 +278,22 @@
 - Verify crash loop is detected and restarts stop after max attempts (3 in 10-min window)
 - Verify instance reaches error state (won't restart further)
 
+### Phase 5c: VPC Networking
+- Step 1: `create-vpc` (10.100.0.0/16) + `create-subnet` (10.100.1.0/24)
+- Step 2: `run-instances` x3 with `--subnet-id` (launch into VPC subnet)
+- Poll all VPC instances to running state
+- Step 3: Verify `PrivateIpAddress` in `describe-instances` for each instance
+- Verify `SubnetId` and `VpcId` match requested values
+- Verify at least 1 `NetworkInterface` per instance
+- Verify all IPs are unique and in subnet range (10.100.1.x)
+- Step 4: SSH + ping connectivity (skipped in CI — OVN DHCP wait too slow)
+- Step 5: Stop/start IP persistence
+  - `stop-instances` (all VPC instances, poll -> stopped)
+  - Verify `PrivateIpAddress` persists in stopped state
+  - `start-instances` (all VPC instances, poll -> running)
+  - Verify `PrivateIpAddress` identical after restart
+- Step 6: Cleanup — terminate VPC instances, delete subnet, delete VPC
+
 ### Phase 6: Cluster Shutdown + Restart
 
 #### Test 6a: Dry-Run Shutdown
@@ -285,3 +318,45 @@
 ### Cleanup
 - Coordinated cluster shutdown (with fallback to per-node PID stops)
 - Remove simulated IPs
+
+---
+
+## VPC (`run-vpc-e2e.sh`)
+
+Standalone VPC networking test suite. Runs against a running Hive endpoint (configurable via `ENDPOINT` env var). OVN topology tests are skipped when OVN is unavailable.
+
+### Phase 1: VPC CRUD
+- `create-vpc` (10.99.0.0/16, verify VpcId)
+- `describe-vpcs` (by ID, verify exactly 1 returned)
+
+### Phase 2: Subnet CRUD
+- `create-subnet` (10.99.1.0/24 in VPC, verify SubnetId)
+- `describe-subnets` (by ID, verify exactly 1 returned)
+
+### Phase 3: Internet Gateway CRUD
+- `create-internet-gateway` (verify InternetGatewayId)
+- `describe-internet-gateways` (by ID, verify exactly 1 returned)
+
+### Phase 4: Internet Gateway Attach / Detach
+- `attach-internet-gateway` (IGW to VPC)
+- `describe-internet-gateways` (verify attachment VpcId)
+- `delete-internet-gateway` on attached IGW (expect `DependencyViolation` or rejection)
+- `detach-internet-gateway` (IGW from VPC)
+- `describe-internet-gateways` (verify no attachments)
+
+### Phase 5: OVN Topology Verification (requires OVN)
+- Re-attach IGW for topology inspection
+- Verify OVN logical switch exists for subnet
+- Verify OVN logical router exists for VPC
+- Verify OVN external switch exists (IGW attached)
+- Verify SNAT rule on VPC router
+- Verify default route (0.0.0.0/0) on VPC router
+- Dump full OVN NB DB topology for debugging
+- Detach IGW
+- Skipped when `ovn-nbctl` is not available
+
+### Phase 6: Cleanup
+- `delete-internet-gateway`
+- `delete-subnet`
+- `delete-vpc`
+- Verify OVN cleanup (no VPC routers remaining, when OVN available)
