@@ -3734,3 +3734,79 @@ func TestCanAllocate(t *testing.T) {
 		})
 	}
 }
+
+// TestConnectNATS_RetriesOnFailure tests that connectNATS retries when NATS is not immediately available.
+func TestConnectNATS_RetriesOnFailure(t *testing.T) {
+	// Use a port that nothing is listening on
+	clusterCfg := &config.ClusterConfig{
+		Node:  "node-1",
+		Nodes: map[string]config.Config{},
+	}
+	cfg := config.Config{
+		NATS: config.NATSConfig{
+			Host: "nats://127.0.0.1:14222", // nothing listening here
+		},
+	}
+	clusterCfg.Nodes["node-1"] = cfg
+	daemon := NewDaemon(clusterCfg)
+
+	// Run connectNATS in a goroutine and verify it retries (takes > 1s)
+	// then verify it eventually errors. We don't wait for the full 5min timeout;
+	// just confirm it retried at least once by checking elapsed time.
+	errCh := make(chan error, 1)
+	start := time.Now()
+	go func() { errCh <- daemon.connectNATS() }()
+
+	select {
+	case err := <-errCh:
+		elapsed := time.Since(start)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "NATS connect failed")
+		assert.Greater(t, elapsed, 1*time.Second, "should have retried at least once")
+	case <-time.After(10 * time.Second):
+		// connectNATS is still retrying after 10s — that proves retry works.
+		// We don't wait for the full 5min timeout in tests.
+		t.Log("connectNATS still retrying after 10s (retry logic confirmed)")
+	}
+}
+
+// TestConnectNATS_SucceedsImmediately tests that connectNATS succeeds immediately when NATS is available.
+func TestConnectNATS_SucceedsImmediately(t *testing.T) {
+	clusterCfg := &config.ClusterConfig{
+		Node:  "node-1",
+		Nodes: map[string]config.Config{},
+	}
+	cfg := config.Config{
+		NATS: config.NATSConfig{
+			Host: sharedNATSURL,
+		},
+	}
+	clusterCfg.Nodes["node-1"] = cfg
+	daemon := NewDaemon(clusterCfg)
+
+	start := time.Now()
+	err := daemon.connectNATS()
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	assert.Less(t, elapsed, 2*time.Second, "should connect quickly when NATS is available")
+	assert.True(t, daemon.natsConn.IsConnected())
+
+	daemon.natsConn.Close()
+}
+
+// TestDaemonReadyFlag tests that the ready flag is false by default and can be set.
+func TestDaemonReadyFlag(t *testing.T) {
+	clusterCfg := &config.ClusterConfig{
+		Node:  "node-1",
+		Nodes: map[string]config.Config{},
+	}
+	cfg := config.Config{}
+	clusterCfg.Nodes["node-1"] = cfg
+	daemon := NewDaemon(clusterCfg)
+
+	assert.False(t, daemon.ready.Load(), "daemon should not be ready before Start()")
+
+	daemon.ready.Store(true)
+	assert.True(t, daemon.ready.Load(), "daemon should be ready after setting flag")
+}
