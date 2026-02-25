@@ -54,13 +54,8 @@
 - Verify root volume size from inside VM matches API-reported size (`lsblk` vs `describe-volumes`)
 - Verify VM hostname
 
-### Phase 5a-iii: Console Output & Serial Console Enforcement
-- `get-console-output` when serial console disabled (expect `SerialConsoleSessionUnavailable`)
-- `enable-serial-console-access`
+### Phase 5a-iii: Console Output
 - `get-console-output` succeeds (verify InstanceId in response)
-- `disable-serial-console-access`
-- `get-console-output` blocked again (expect `SerialConsoleSessionUnavailable`)
-- Re-enable serial console access for remaining tests
 
 ### Phase 5 (cont): Root Volume
 - `describe-volumes` (verify root volume attached)

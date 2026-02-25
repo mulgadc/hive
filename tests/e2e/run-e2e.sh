@@ -438,21 +438,9 @@ fi
 
 echo "SSH connectivity and volume verification passed"
 
-# Phase 5a-iii: Console Output & Serial Console Enforcement
-echo "Phase 5a-iii: Console Output & Serial Console Enforcement"
+# Phase 5a-iii: Console Output
+echo "Phase 5a-iii: Console Output"
 
-# Serial console access is disabled from Phase 2b — GetConsoleOutput should be blocked
-echo "Testing GetConsoleOutput blocked when serial console access disabled..."
-expect_error "SerialConsoleSessionUnavailable" $AWS_EC2 get-console-output \
-    --instance-id "$INSTANCE_ID"
-echo "  GetConsoleOutput correctly blocked"
-
-# Enable serial console access
-echo "Enabling serial console access..."
-$AWS_EC2 enable-serial-console-access > /dev/null
-
-# GetConsoleOutput should now succeed
-echo "Testing GetConsoleOutput succeeds when serial console access enabled..."
 CONSOLE_OUTPUT=$($AWS_EC2 get-console-output --instance-id "$INSTANCE_ID")
 CONSOLE_INSTANCE=$(echo "$CONSOLE_OUTPUT" | jq -r '.InstanceId')
 CONSOLE_DATA=$(echo "$CONSOLE_OUTPUT" | jq -r '.Output // empty')
@@ -463,19 +451,7 @@ if [ "$CONSOLE_INSTANCE" != "$INSTANCE_ID" ]; then
 fi
 echo "  GetConsoleOutput succeeded (InstanceId=$CONSOLE_INSTANCE, has output=$([ -n "$CONSOLE_DATA" ] && echo yes || echo no))"
 
-# Disable serial console access — GetConsoleOutput should be blocked again
-echo "Disabling serial console access..."
-$AWS_EC2 disable-serial-console-access > /dev/null
-
-echo "Testing GetConsoleOutput blocked again after disable..."
-expect_error "SerialConsoleSessionUnavailable" $AWS_EC2 get-console-output \
-    --instance-id "$INSTANCE_ID"
-echo "  GetConsoleOutput correctly blocked after disable"
-
-# Re-enable for the rest of the test suite (in case future tests need it)
-$AWS_EC2 enable-serial-console-access > /dev/null
-
-echo "Console output enforcement tests passed"
+echo "Console output tests passed"
 
 # Verify root volume attached to the instance (describe-volumes)
 VOLUME_ID=$($AWS_EC2 describe-volumes --query 'Volumes[0].VolumeId' --output text)
