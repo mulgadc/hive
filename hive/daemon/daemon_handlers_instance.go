@@ -51,6 +51,11 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		respondWithError(msg, awserrors.ErrorMissingParameter)
 		return
 	}
+	if d.imageService == nil {
+		slog.Error("handleEC2RunInstances image service not initialized")
+		respondWithError(msg, awserrors.ErrorServerInternal)
+		return
+	}
 	if _, err := d.imageService.GetAMIConfig(*runInstancesInput.ImageId); err != nil {
 		slog.Error("handleEC2RunInstances AMI not found", "imageId", *runInstancesInput.ImageId, "err", err)
 		respondWithError(msg, awserrors.ErrorInvalidAMIIDNotFound)

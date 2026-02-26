@@ -224,8 +224,8 @@ func TestHandleEC2RunInstances_MessageParsing(t *testing.T) {
 			// Start test NATS server
 			natsURL := sharedNATSURL
 
-			// Create test daemon
-			daemon := createTestDaemon(t, natsURL)
+			// Create test daemon with all services initialized (image, key, etc.)
+			daemon := createFullTestDaemon(t, natsURL)
 
 			// Subscribe to the ec2.launch topic with the handler
 			sub, err := daemon.natsConn.QueueSubscribe("ec2.launch", "hive-workers", daemon.handleEC2RunInstances)

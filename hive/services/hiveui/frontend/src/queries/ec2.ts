@@ -29,6 +29,7 @@ export const ec2InstancesQueryOptions = queryOptions({
     const command = new DescribeInstancesCommand({})
     return getEc2Client().send(command)
   },
+  refetchInterval: 5000,
 })
 
 export const ec2InstanceQueryOptions = (instanceId: string) =>
@@ -40,6 +41,7 @@ export const ec2InstanceQueryOptions = (instanceId: string) =>
       })
       return getEc2Client().send(command)
     },
+    refetchInterval: 5000,
   })
 
 export const ec2InstanceTypesQueryOptions = queryOptions({
@@ -55,6 +57,7 @@ export const ec2InstanceTypesQueryOptions = queryOptions({
     })
     return getEc2Client().send(command)
   },
+  refetchInterval: 5000,
 })
 
 export const ec2ImagesQueryOptions = queryOptions({
@@ -132,6 +135,7 @@ export const ec2SnapshotsQueryOptions = queryOptions({
     const command = new DescribeSnapshotsCommand({})
     return getEc2Client().send(command)
   },
+  refetchInterval: 5000,
 })
 
 export const ec2SnapshotQueryOptions = (snapshotId: string) =>
@@ -143,6 +147,7 @@ export const ec2SnapshotQueryOptions = (snapshotId: string) =>
       })
       return getEc2Client().send(command)
     },
+    refetchInterval: 5000,
   })
 
 export const ec2VpcsQueryOptions = queryOptions({
@@ -170,6 +175,7 @@ export const ec2VolumesQueryOptions = queryOptions({
     const command = new DescribeVolumesCommand({})
     return getEc2Client().send(command)
   },
+  refetchInterval: 5000,
 })
 
 export const ec2VolumeQueryOptions = (volumeId: string) =>
@@ -181,4 +187,5 @@ export const ec2VolumeQueryOptions = (volumeId: string) =>
       })
       return getEc2Client().send(command)
     },
+    refetchInterval: 5000,
   })
