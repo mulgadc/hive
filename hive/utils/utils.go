@@ -624,8 +624,7 @@ func UnmarshalJsonPayload(input any, jsonData []byte) []byte {
 	// input is already a pointer, don't take address again
 	err := decoder.Decode(input)
 	if err != nil {
-		// TODO: Move error codes with vars to errors.go
-		return GenerateErrorPayload("ValidationError")
+		return GenerateErrorPayload(awserrors.ErrorValidationError)
 	}
 
 	return nil
@@ -640,8 +639,7 @@ func MarshalJsonPayload(input any, jsonData []byte) []byte {
 	// input is already a pointer, don't take address again
 	err := decoder.Decode(input)
 	if err != nil {
-		// TODO: Move error codes with vars to errors.go
-		return GenerateErrorPayload("ValidationError")
+		return GenerateErrorPayload(awserrors.ErrorValidationError)
 	}
 
 	return nil

@@ -425,6 +425,16 @@ var (
 	ErrorZonesMismatched                                       = "ZonesMismatched"
 )
 
+// ValidErrorCode returns the error code if it exists in ErrorLookup,
+// otherwise returns ErrorServerInternal. Use this to sanitize error strings
+// before sending them to clients.
+func ValidErrorCode(code string) string {
+	if _, ok := ErrorLookup[code]; ok {
+		return code
+	}
+	return ErrorServerInternal
+}
+
 var ErrorLookup = map[string]ErrorMessage{
 	ErrorAccountDisabled: {HTTPCode: 400, Message: "The functionality you have requested has been administratively disabled for this account."},
 	ErrorActiveVpcPeeringConnectionPerVpcLimitExceeded:         {HTTPCode: 400, Message: "You've reached the limit on the number of active VPC peering connections you can have for the specified VPC."},

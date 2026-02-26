@@ -33,7 +33,7 @@ func handleNATSRequest[I any, O any](msg *nats.Msg, serviceFn func(*I) (*O, erro
 	}
 	output, err := serviceFn(input)
 	if err != nil {
-		if err := msg.Respond(utils.GenerateErrorPayload(err.Error())); err != nil {
+		if err := msg.Respond(utils.GenerateErrorPayload(awserrors.ValidErrorCode(err.Error()))); err != nil {
 			slog.Error("Failed to respond to NATS request", "err", err)
 		}
 		return

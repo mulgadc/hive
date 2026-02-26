@@ -85,7 +85,7 @@ func (d *Daemon) handleEC2CreateImage(msg *nats.Msg) {
 	output, err := d.imageService.CreateImageFromInstance(params)
 	if err != nil {
 		slog.Error("CreateImage: service failed", "instanceId", instanceID, "err", err)
-		respondWithError(msg, err.Error())
+		respondWithError(msg, awserrors.ValidErrorCode(err.Error()))
 		return
 	}
 
