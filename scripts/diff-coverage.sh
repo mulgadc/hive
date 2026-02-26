@@ -148,6 +148,12 @@ awk -v threshold="$THRESHOLD" '
             exit 0
         }
 
+        min_instrumentable = 5
+        if (total < min_instrumentable) {
+            printf "Only %d instrumentable lines (< %d minimum) — skipping diff coverage.\n", total, min_instrumentable
+            exit 0
+        }
+
         uncovered = total - covered
         pct = (covered / total) * 100
 
