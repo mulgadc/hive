@@ -271,6 +271,9 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 			continue
 		}
 
+		// Discover actual guest device names via QMP query-block
+		d.updateGuestDeviceNames(instance)
+
 		successCount++
 		slog.Info("handleEC2RunInstances launched instance", "instanceId", instance.ID)
 	}
@@ -321,6 +324,9 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command qmp.Command, instanc
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
+
+	// Discover actual guest device names via QMP query-block
+	d.updateGuestDeviceNames(instance)
 
 	slog.Info("Instance started", "instanceId", instance.ID)
 
@@ -678,6 +684,9 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
+
+	// Discover actual guest device names via QMP query-block
+	d.updateGuestDeviceNames(instance)
 
 	// Remove from shared KV now that it's running locally.
 	// Retry once on failure — a stale KV entry risks duplicate starts.

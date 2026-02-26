@@ -221,6 +221,21 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 		return
 	}
 
+	// Discover actual guest device name via QMP query-block.
+	// Use the retry variant because query-block may not include the device
+	// immediately after device_add.
+	guestDevice := device // fallback to AWS API name
+	deviceMap, qmpErr := queryGuestDeviceMapWait(d, instance.QMPClient, instance.ID, deviceID)
+	if qmpErr != nil {
+		slog.Warn("AttachVolume: failed to query guest device map, using API device name", "volumeId", volumeID, "err", qmpErr)
+	} else if gd, ok := deviceMap[deviceID]; ok {
+		guestDevice = gd
+		slog.Info("AttachVolume: discovered guest device", "volumeId", volumeID, "qemuDevice", deviceID, "guestDevice", guestDevice)
+	} else {
+		slog.Error("AttachVolume: device not found in QMP device map after retries, using API device name",
+			"volumeId", volumeID, "qemuDevice", deviceID, "deviceMap", deviceMap)
+	}
+
 	// Update instance state: replace existing entry for this volume (handles
 	// stop/start cycles that keep stale entries) or append a new one.
 	instance.EBSRequests.Mu.Lock()
@@ -237,12 +252,12 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 	}
 	instance.EBSRequests.Mu.Unlock()
 
-	// Update BlockDeviceMappings on the ec2.Instance
+	// Update BlockDeviceMappings on the ec2.Instance using actual guest device name
 	d.Instances.Mu.Lock()
 	if instance.Instance != nil {
 		now := time.Now()
 		mapping := &ec2.InstanceBlockDeviceMapping{}
-		mapping.SetDeviceName(device)
+		mapping.SetDeviceName(guestDevice)
 		mapping.Ebs = &ec2.EbsInstanceBlockDevice{}
 		mapping.Ebs.SetVolumeId(volumeID)
 		mapping.Ebs.SetAttachTime(now)
@@ -253,7 +268,7 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 	d.Instances.Mu.Unlock()
 
 	// Update volume metadata in S3
-	if err := d.volumeService.UpdateVolumeState(volumeID, "in-use", command.ID, device); err != nil {
+	if err := d.volumeService.UpdateVolumeState(volumeID, "in-use", command.ID, guestDevice); err != nil {
 		slog.Error("AttachVolume: failed to update volume metadata", "volumeId", volumeID, "err", err)
 	}
 
@@ -262,8 +277,8 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 		slog.Error("AttachVolume: failed to write state", "err", err)
 	}
 
-	d.respondWithVolumeAttachment(msg, volumeID, command.ID, device, "attached")
-	slog.Info("Volume attached successfully", "volumeId", volumeID, "instanceId", command.ID, "device", device)
+	d.respondWithVolumeAttachment(msg, volumeID, command.ID, guestDevice, "attached")
+	slog.Info("Volume attached successfully", "volumeId", volumeID, "instanceId", command.ID, "apiDevice", device, "guestDevice", guestDevice)
 }
 
 // handleDetachVolume performs a three-phase hot-unplug (reverse of attach):
