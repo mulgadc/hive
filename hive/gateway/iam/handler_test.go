@@ -10,34 +10,36 @@ import (
 	"testing"
 )
 
+const testAccountID = "000000000000"
+
 // stubIAMService returns empty non-nil outputs for all methods.
 type stubIAMService struct{}
 
-func (s *stubIAMService) CreateUser(_ *iam.CreateUserInput) (*iam.CreateUserOutput, error) {
+func (s *stubIAMService) CreateUser(_ string, _ *iam.CreateUserInput) (*iam.CreateUserOutput, error) {
 	return &iam.CreateUserOutput{}, nil
 }
 
-func (s *stubIAMService) GetUser(_ *iam.GetUserInput) (*iam.GetUserOutput, error) {
+func (s *stubIAMService) GetUser(_ string, _ *iam.GetUserInput) (*iam.GetUserOutput, error) {
 	return &iam.GetUserOutput{}, nil
 }
 
-func (s *stubIAMService) ListUsers(_ *iam.ListUsersInput) (*iam.ListUsersOutput, error) {
+func (s *stubIAMService) ListUsers(_ string, _ *iam.ListUsersInput) (*iam.ListUsersOutput, error) {
 	return &iam.ListUsersOutput{}, nil
 }
 
-func (s *stubIAMService) DeleteUser(_ *iam.DeleteUserInput) (*iam.DeleteUserOutput, error) {
+func (s *stubIAMService) DeleteUser(_ string, _ *iam.DeleteUserInput) (*iam.DeleteUserOutput, error) {
 	return &iam.DeleteUserOutput{}, nil
 }
 
-func (s *stubIAMService) CreateAccessKey(_ *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error) {
+func (s *stubIAMService) CreateAccessKey(_ string, _ *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error) {
 	return &iam.CreateAccessKeyOutput{}, nil
 }
 
-func (s *stubIAMService) ListAccessKeys(_ *iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error) {
+func (s *stubIAMService) ListAccessKeys(_ string, _ *iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error) {
 	return &iam.ListAccessKeysOutput{}, nil
 }
 
-func (s *stubIAMService) DeleteAccessKey(_ *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error) {
+func (s *stubIAMService) DeleteAccessKey(_ string, _ *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error) {
 	return &iam.DeleteAccessKeyOutput{}, nil
 }
 
@@ -45,39 +47,39 @@ func (s *stubIAMService) UpdateAccessKey(_ *iam.UpdateAccessKeyInput) (*iam.Upda
 	return &iam.UpdateAccessKeyOutput{}, nil
 }
 
-func (s *stubIAMService) CreatePolicy(_ *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error) {
+func (s *stubIAMService) CreatePolicy(_ string, _ *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error) {
 	return &iam.CreatePolicyOutput{}, nil
 }
 
-func (s *stubIAMService) GetPolicy(_ *iam.GetPolicyInput) (*iam.GetPolicyOutput, error) {
+func (s *stubIAMService) GetPolicy(_ string, _ *iam.GetPolicyInput) (*iam.GetPolicyOutput, error) {
 	return &iam.GetPolicyOutput{}, nil
 }
 
-func (s *stubIAMService) GetPolicyVersion(_ *iam.GetPolicyVersionInput) (*iam.GetPolicyVersionOutput, error) {
+func (s *stubIAMService) GetPolicyVersion(_ string, _ *iam.GetPolicyVersionInput) (*iam.GetPolicyVersionOutput, error) {
 	return &iam.GetPolicyVersionOutput{}, nil
 }
 
-func (s *stubIAMService) ListPolicies(_ *iam.ListPoliciesInput) (*iam.ListPoliciesOutput, error) {
+func (s *stubIAMService) ListPolicies(_ string, _ *iam.ListPoliciesInput) (*iam.ListPoliciesOutput, error) {
 	return &iam.ListPoliciesOutput{}, nil
 }
 
-func (s *stubIAMService) DeletePolicy(_ *iam.DeletePolicyInput) (*iam.DeletePolicyOutput, error) {
+func (s *stubIAMService) DeletePolicy(_ string, _ *iam.DeletePolicyInput) (*iam.DeletePolicyOutput, error) {
 	return &iam.DeletePolicyOutput{}, nil
 }
 
-func (s *stubIAMService) AttachUserPolicy(_ *iam.AttachUserPolicyInput) (*iam.AttachUserPolicyOutput, error) {
+func (s *stubIAMService) AttachUserPolicy(_ string, _ *iam.AttachUserPolicyInput) (*iam.AttachUserPolicyOutput, error) {
 	return &iam.AttachUserPolicyOutput{}, nil
 }
 
-func (s *stubIAMService) DetachUserPolicy(_ *iam.DetachUserPolicyInput) (*iam.DetachUserPolicyOutput, error) {
+func (s *stubIAMService) DetachUserPolicy(_ string, _ *iam.DetachUserPolicyInput) (*iam.DetachUserPolicyOutput, error) {
 	return &iam.DetachUserPolicyOutput{}, nil
 }
 
-func (s *stubIAMService) ListAttachedUserPolicies(_ *iam.ListAttachedUserPoliciesInput) (*iam.ListAttachedUserPoliciesOutput, error) {
+func (s *stubIAMService) ListAttachedUserPolicies(_ string, _ *iam.ListAttachedUserPoliciesInput) (*iam.ListAttachedUserPoliciesOutput, error) {
 	return &iam.ListAttachedUserPoliciesOutput{}, nil
 }
 
-func (s *stubIAMService) GetUserPolicies(_ string) ([]handlers_iam.PolicyDocument, error) {
+func (s *stubIAMService) GetUserPolicies(_, _ string) ([]handlers_iam.PolicyDocument, error) {
 	return nil, nil
 }
 
@@ -87,6 +89,12 @@ func (s *stubIAMService) LookupAccessKey(_ string) (*handlers_iam.AccessKey, err
 
 func (s *stubIAMService) SeedRootUser(_ *handlers_iam.BootstrapData) error { return nil }
 func (s *stubIAMService) IsEmpty() (bool, error)                           { return true, nil }
+
+func (s *stubIAMService) CreateAccount(_ string) (*handlers_iam.Account, error) {
+	return nil, nil
+}
+func (s *stubIAMService) GetAccount(_ string) (*handlers_iam.Account, error) { return nil, nil }
+func (s *stubIAMService) ListAccounts() ([]*handlers_iam.Account, error)     { return nil, nil }
 
 func TestCreateUser(t *testing.T) {
 	svc := &stubIAMService{}
@@ -101,7 +109,7 @@ func TestCreateUser(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := CreateUser(tc.input, svc)
+			_, err := CreateUser(testAccountID, tc.input, svc)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Equal(t, tc.wantErr, err.Error())
@@ -125,7 +133,7 @@ func TestGetUser(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := GetUser(tc.input, svc)
+			_, err := GetUser(testAccountID, tc.input, svc)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Equal(t, tc.wantErr, err.Error())
@@ -138,7 +146,7 @@ func TestGetUser(t *testing.T) {
 
 func TestListUsers(t *testing.T) {
 	svc := &stubIAMService{}
-	_, err := ListUsers(&iam.ListUsersInput{}, svc)
+	_, err := ListUsers(testAccountID, &iam.ListUsersInput{}, svc)
 	require.NoError(t, err)
 }
 
@@ -155,7 +163,7 @@ func TestDeleteUser(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := DeleteUser(tc.input, svc)
+			_, err := DeleteUser(testAccountID, tc.input, svc)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Equal(t, tc.wantErr, err.Error())
@@ -179,7 +187,7 @@ func TestCreateAccessKey(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := CreateAccessKey(tc.input, svc)
+			_, err := CreateAccessKey(testAccountID, tc.input, svc)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Equal(t, tc.wantErr, err.Error())
@@ -203,7 +211,7 @@ func TestListAccessKeys(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ListAccessKeys(tc.input, svc)
+			_, err := ListAccessKeys(testAccountID, tc.input, svc)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Equal(t, tc.wantErr, err.Error())
@@ -229,7 +237,7 @@ func TestDeleteAccessKey(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := DeleteAccessKey(tc.input, svc)
+			_, err := DeleteAccessKey(testAccountID, tc.input, svc)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Equal(t, tc.wantErr, err.Error())
@@ -284,7 +292,7 @@ func TestCreatePolicy(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := CreatePolicy(tc.input, svc)
+			_, err := CreatePolicy(testAccountID, tc.input, svc)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Equal(t, tc.wantErr, err.Error())
@@ -308,7 +316,7 @@ func TestGetPolicy(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := GetPolicy(tc.input, svc)
+			_, err := GetPolicy(testAccountID, tc.input, svc)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Equal(t, tc.wantErr, err.Error())
@@ -335,7 +343,7 @@ func TestGetPolicyVersion(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := GetPolicyVersion(tc.input, svc)
+			_, err := GetPolicyVersion(testAccountID, tc.input, svc)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Equal(t, tc.wantErr, err.Error())
@@ -348,7 +356,7 @@ func TestGetPolicyVersion(t *testing.T) {
 
 func TestListPolicies(t *testing.T) {
 	svc := &stubIAMService{}
-	_, err := ListPolicies(&iam.ListPoliciesInput{}, svc)
+	_, err := ListPolicies(testAccountID, &iam.ListPoliciesInput{}, svc)
 	require.NoError(t, err)
 }
 
@@ -365,7 +373,7 @@ func TestDeletePolicy(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := DeletePolicy(tc.input, svc)
+			_, err := DeletePolicy(testAccountID, tc.input, svc)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Equal(t, tc.wantErr, err.Error())
@@ -394,7 +402,7 @@ func TestAttachUserPolicy(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := AttachUserPolicy(tc.input, svc)
+			_, err := AttachUserPolicy(testAccountID, tc.input, svc)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Equal(t, tc.wantErr, err.Error())
@@ -421,7 +429,7 @@ func TestDetachUserPolicy(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := DetachUserPolicy(tc.input, svc)
+			_, err := DetachUserPolicy(testAccountID, tc.input, svc)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Equal(t, tc.wantErr, err.Error())
@@ -445,7 +453,7 @@ func TestListAttachedUserPolicies(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ListAttachedUserPolicies(tc.input, svc)
+			_, err := ListAttachedUserPolicies(testAccountID, tc.input, svc)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Equal(t, tc.wantErr, err.Error())

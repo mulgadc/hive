@@ -8,28 +8,28 @@ import (
 	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
 )
 
-func CreateAccessKey(input *iam.CreateAccessKeyInput, svc handlers_iam.IAMService) (*iam.CreateAccessKeyOutput, error) {
+func CreateAccessKey(accountID string, input *iam.CreateAccessKeyInput, svc handlers_iam.IAMService) (*iam.CreateAccessKeyOutput, error) {
 	if input.UserName == nil || *input.UserName == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
-	return svc.CreateAccessKey(input)
+	return svc.CreateAccessKey(accountID, input)
 }
 
-func ListAccessKeys(input *iam.ListAccessKeysInput, svc handlers_iam.IAMService) (*iam.ListAccessKeysOutput, error) {
+func ListAccessKeys(accountID string, input *iam.ListAccessKeysInput, svc handlers_iam.IAMService) (*iam.ListAccessKeysOutput, error) {
 	if input.UserName == nil || *input.UserName == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
-	return svc.ListAccessKeys(input)
+	return svc.ListAccessKeys(accountID, input)
 }
 
-func DeleteAccessKey(input *iam.DeleteAccessKeyInput, svc handlers_iam.IAMService) (*iam.DeleteAccessKeyOutput, error) {
+func DeleteAccessKey(accountID string, input *iam.DeleteAccessKeyInput, svc handlers_iam.IAMService) (*iam.DeleteAccessKeyOutput, error) {
 	if input.UserName == nil || *input.UserName == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
 	if input.AccessKeyId == nil || *input.AccessKeyId == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
-	return svc.DeleteAccessKey(input)
+	return svc.DeleteAccessKey(accountID, input)
 }
 
 func UpdateAccessKey(input *iam.UpdateAccessKeyInput, svc handlers_iam.IAMService) (*iam.UpdateAccessKeyOutput, error) {

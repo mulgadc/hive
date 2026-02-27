@@ -16,6 +16,8 @@ import (
 // Interface compliance check
 var _ IAMService = (*IAMServiceImpl)(nil)
 
+const testAccountID = GlobalAccountID
+
 func setupTestIAMService(t *testing.T) *IAMServiceImpl {
 	t.Helper()
 	opts := &server.Options{
@@ -46,7 +48,7 @@ func setupTestIAMService(t *testing.T) *IAMServiceImpl {
 
 func createTestUser(t *testing.T, svc *IAMServiceImpl, userName string) *iam.User {
 	t.Helper()
-	out, err := svc.CreateUser(&iam.CreateUserInput{
+	out, err := svc.CreateUser(testAccountID, &iam.CreateUserInput{
 		UserName: aws.String(userName),
 	})
 	require.NoError(t, err)
@@ -60,7 +62,7 @@ func createTestUser(t *testing.T, svc *IAMServiceImpl, userName string) *iam.Use
 func TestCreateUser(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	out, err := svc.CreateUser(&iam.CreateUserInput{
+	out, err := svc.CreateUser(testAccountID, &iam.CreateUserInput{
 		UserName: aws.String("testuser"),
 		Path:     aws.String("/developers/"),
 		Tags: []*iam.Tag{
@@ -79,7 +81,7 @@ func TestCreateUser(t *testing.T) {
 func TestCreateUser_DefaultPath(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	out, err := svc.CreateUser(&iam.CreateUserInput{
+	out, err := svc.CreateUser(testAccountID, &iam.CreateUserInput{
 		UserName: aws.String("defaultpath"),
 	})
 	require.NoError(t, err)
@@ -89,7 +91,7 @@ func TestCreateUser_DefaultPath(t *testing.T) {
 func TestCreateUser_MissingUserName(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.CreateUser(&iam.CreateUserInput{})
+	_, err := svc.CreateUser(testAccountID, &iam.CreateUserInput{})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), awserrors.ErrorIAMInvalidInput)
 }
@@ -97,12 +99,12 @@ func TestCreateUser_MissingUserName(t *testing.T) {
 func TestCreateUser_Duplicate(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.CreateUser(&iam.CreateUserInput{
+	_, err := svc.CreateUser(testAccountID, &iam.CreateUserInput{
 		UserName: aws.String("duplicateuser"),
 	})
 	require.NoError(t, err)
 
-	_, err = svc.CreateUser(&iam.CreateUserInput{
+	_, err = svc.CreateUser(testAccountID, &iam.CreateUserInput{
 		UserName: aws.String("duplicateuser"),
 	})
 	assert.Error(t, err)
@@ -113,7 +115,7 @@ func TestGetUser(t *testing.T) {
 	svc := setupTestIAMService(t)
 	createTestUser(t, svc, "getuser")
 
-	out, err := svc.GetUser(&iam.GetUserInput{
+	out, err := svc.GetUser(testAccountID, &iam.GetUserInput{
 		UserName: aws.String("getuser"),
 	})
 	require.NoError(t, err)
@@ -123,7 +125,7 @@ func TestGetUser(t *testing.T) {
 func TestGetUser_NotFound(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.GetUser(&iam.GetUserInput{
+	_, err := svc.GetUser(testAccountID, &iam.GetUserInput{
 		UserName: aws.String("nonexistent"),
 	})
 	assert.Error(t, err)
@@ -137,7 +139,7 @@ func TestListUsers(t *testing.T) {
 	createTestUser(t, svc, "user2")
 	createTestUser(t, svc, "user3")
 
-	out, err := svc.ListUsers(&iam.ListUsersInput{})
+	out, err := svc.ListUsers(testAccountID, &iam.ListUsersInput{})
 	require.NoError(t, err)
 	assert.Len(t, out.Users, 3)
 
@@ -153,7 +155,7 @@ func TestListUsers(t *testing.T) {
 func TestListUsers_Empty(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	out, err := svc.ListUsers(&iam.ListUsersInput{})
+	out, err := svc.ListUsers(testAccountID, &iam.ListUsersInput{})
 	require.NoError(t, err)
 	assert.Len(t, out.Users, 0)
 }
@@ -161,16 +163,16 @@ func TestListUsers_Empty(t *testing.T) {
 func TestListUsers_PathFilter(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	svc.CreateUser(&iam.CreateUserInput{
+	svc.CreateUser(testAccountID, &iam.CreateUserInput{
 		UserName: aws.String("dev1"),
 		Path:     aws.String("/developers/"),
 	})
-	svc.CreateUser(&iam.CreateUserInput{
+	svc.CreateUser(testAccountID, &iam.CreateUserInput{
 		UserName: aws.String("admin1"),
 		Path:     aws.String("/admins/"),
 	})
 
-	out, err := svc.ListUsers(&iam.ListUsersInput{
+	out, err := svc.ListUsers(testAccountID, &iam.ListUsersInput{
 		PathPrefix: aws.String("/developers/"),
 	})
 	require.NoError(t, err)
@@ -182,12 +184,12 @@ func TestDeleteUser(t *testing.T) {
 	svc := setupTestIAMService(t)
 	createTestUser(t, svc, "deleteuser")
 
-	_, err := svc.DeleteUser(&iam.DeleteUserInput{
+	_, err := svc.DeleteUser(testAccountID, &iam.DeleteUserInput{
 		UserName: aws.String("deleteuser"),
 	})
 	require.NoError(t, err)
 
-	_, err = svc.GetUser(&iam.GetUserInput{
+	_, err = svc.GetUser(testAccountID, &iam.GetUserInput{
 		UserName: aws.String("deleteuser"),
 	})
 	assert.Error(t, err)
@@ -197,7 +199,7 @@ func TestDeleteUser(t *testing.T) {
 func TestDeleteUser_NotFound(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.DeleteUser(&iam.DeleteUserInput{
+	_, err := svc.DeleteUser(testAccountID, &iam.DeleteUserInput{
 		UserName: aws.String("nonexistent"),
 	})
 	assert.Error(t, err)
@@ -208,12 +210,12 @@ func TestDeleteUser_WithAccessKeys(t *testing.T) {
 	svc := setupTestIAMService(t)
 	createTestUser(t, svc, "userWithKeys")
 
-	_, err := svc.CreateAccessKey(&iam.CreateAccessKeyInput{
+	_, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("userWithKeys"),
 	})
 	require.NoError(t, err)
 
-	_, err = svc.DeleteUser(&iam.DeleteUserInput{
+	_, err = svc.DeleteUser(testAccountID, &iam.DeleteUserInput{
 		UserName: aws.String("userWithKeys"),
 	})
 	assert.Error(t, err)
@@ -228,7 +230,7 @@ func TestCreateAccessKey(t *testing.T) {
 	svc := setupTestIAMService(t)
 	createTestUser(t, svc, "keyuser")
 
-	out, err := svc.CreateAccessKey(&iam.CreateAccessKeyInput{
+	out, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("keyuser"),
 	})
 	require.NoError(t, err)
@@ -245,7 +247,7 @@ func TestCreateAccessKey_SecretIsDecryptable(t *testing.T) {
 	svc := setupTestIAMService(t)
 	createTestUser(t, svc, "decryptuser")
 
-	out, err := svc.CreateAccessKey(&iam.CreateAccessKeyInput{
+	out, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("decryptuser"),
 	})
 	require.NoError(t, err)
@@ -265,7 +267,7 @@ func TestCreateAccessKey_SecretIsDecryptable(t *testing.T) {
 func TestCreateAccessKey_UserNotFound(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.CreateAccessKey(&iam.CreateAccessKeyInput{
+	_, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("nonexistent"),
 	})
 	assert.Error(t, err)
@@ -276,18 +278,18 @@ func TestCreateAccessKey_MaxLimit(t *testing.T) {
 	svc := setupTestIAMService(t)
 	createTestUser(t, svc, "limituser")
 
-	_, err := svc.CreateAccessKey(&iam.CreateAccessKeyInput{
+	_, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("limituser"),
 	})
 	require.NoError(t, err)
 
-	_, err = svc.CreateAccessKey(&iam.CreateAccessKeyInput{
+	_, err = svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("limituser"),
 	})
 	require.NoError(t, err)
 
 	// Third key should fail (AWS limit is 2)
-	_, err = svc.CreateAccessKey(&iam.CreateAccessKeyInput{
+	_, err = svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("limituser"),
 	})
 	assert.Error(t, err)
@@ -298,14 +300,14 @@ func TestListAccessKeys(t *testing.T) {
 	svc := setupTestIAMService(t)
 	createTestUser(t, svc, "listkeysuser")
 
-	key1, _ := svc.CreateAccessKey(&iam.CreateAccessKeyInput{
+	key1, _ := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("listkeysuser"),
 	})
-	key2, _ := svc.CreateAccessKey(&iam.CreateAccessKeyInput{
+	key2, _ := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("listkeysuser"),
 	})
 
-	out, err := svc.ListAccessKeys(&iam.ListAccessKeysInput{
+	out, err := svc.ListAccessKeys(testAccountID, &iam.ListAccessKeysInput{
 		UserName: aws.String("listkeysuser"),
 	})
 	require.NoError(t, err)
@@ -323,26 +325,26 @@ func TestDeleteAccessKey(t *testing.T) {
 	svc := setupTestIAMService(t)
 	createTestUser(t, svc, "delkeyuser")
 
-	keyOut, err := svc.CreateAccessKey(&iam.CreateAccessKeyInput{
+	keyOut, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("delkeyuser"),
 	})
 	require.NoError(t, err)
 	keyID := *keyOut.AccessKey.AccessKeyId
 
-	_, err = svc.DeleteAccessKey(&iam.DeleteAccessKeyInput{
+	_, err = svc.DeleteAccessKey(testAccountID, &iam.DeleteAccessKeyInput{
 		UserName:    aws.String("delkeyuser"),
 		AccessKeyId: aws.String(keyID),
 	})
 	require.NoError(t, err)
 
-	listOut, err := svc.ListAccessKeys(&iam.ListAccessKeysInput{
+	listOut, err := svc.ListAccessKeys(testAccountID, &iam.ListAccessKeysInput{
 		UserName: aws.String("delkeyuser"),
 	})
 	require.NoError(t, err)
 	assert.Len(t, listOut.AccessKeyMetadata, 0)
 
 	// User should now be deletable (no access keys)
-	_, err = svc.DeleteUser(&iam.DeleteUserInput{
+	_, err = svc.DeleteUser(testAccountID, &iam.DeleteUserInput{
 		UserName: aws.String("delkeyuser"),
 	})
 	require.NoError(t, err)
@@ -352,7 +354,7 @@ func TestDeleteAccessKey_NotFound(t *testing.T) {
 	svc := setupTestIAMService(t)
 	createTestUser(t, svc, "delnotfounduser")
 
-	_, err := svc.DeleteAccessKey(&iam.DeleteAccessKeyInput{
+	_, err := svc.DeleteAccessKey(testAccountID, &iam.DeleteAccessKeyInput{
 		UserName:    aws.String("delnotfounduser"),
 		AccessKeyId: aws.String("AKIANONEXISTENT12345"),
 	})
@@ -364,7 +366,7 @@ func TestUpdateAccessKey(t *testing.T) {
 	svc := setupTestIAMService(t)
 	createTestUser(t, svc, "updatekeyuser")
 
-	keyOut, _ := svc.CreateAccessKey(&iam.CreateAccessKeyInput{
+	keyOut, _ := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("updatekeyuser"),
 	})
 	keyID := *keyOut.AccessKey.AccessKeyId
@@ -377,7 +379,7 @@ func TestUpdateAccessKey(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify status changed
-	listOut, _ := svc.ListAccessKeys(&iam.ListAccessKeysInput{
+	listOut, _ := svc.ListAccessKeys(testAccountID, &iam.ListAccessKeysInput{
 		UserName: aws.String("updatekeyuser"),
 	})
 	assert.Equal(t, "Inactive", *listOut.AccessKeyMetadata[0].Status)
@@ -389,7 +391,7 @@ func TestUpdateAccessKey(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	listOut, _ = svc.ListAccessKeys(&iam.ListAccessKeysInput{
+	listOut, _ = svc.ListAccessKeys(testAccountID, &iam.ListAccessKeysInput{
 		UserName: aws.String("updatekeyuser"),
 	})
 	assert.Equal(t, "Active", *listOut.AccessKeyMetadata[0].Status)
@@ -399,7 +401,7 @@ func TestUpdateAccessKey_InvalidStatus(t *testing.T) {
 	svc := setupTestIAMService(t)
 	createTestUser(t, svc, "invalidstatususer")
 
-	keyOut, _ := svc.CreateAccessKey(&iam.CreateAccessKeyInput{
+	keyOut, _ := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("invalidstatususer"),
 	})
 
@@ -430,7 +432,7 @@ func TestLookupAccessKey(t *testing.T) {
 	svc := setupTestIAMService(t)
 	createTestUser(t, svc, "lookupuser")
 
-	keyOut, err := svc.CreateAccessKey(&iam.CreateAccessKeyInput{
+	keyOut, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("lookupuser"),
 	})
 	require.NoError(t, err)
@@ -454,7 +456,7 @@ func TestLookupAccessKey_InactiveKey(t *testing.T) {
 	svc := setupTestIAMService(t)
 	createTestUser(t, svc, "inactiveuser")
 
-	keyOut, _ := svc.CreateAccessKey(&iam.CreateAccessKeyInput{
+	keyOut, _ := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("inactiveuser"),
 	})
 	keyID := *keyOut.AccessKey.AccessKeyId
@@ -483,28 +485,37 @@ func TestSeedRootUser(t *testing.T) {
 	err = svc.SeedRootUser(&BootstrapData{
 		AccessKeyID:     "AKIAEXAMPLE123456789",
 		EncryptedSecret: encryptedSecret,
-		AccountID:       "000000000000",
+		AccountID:       GlobalAccountID,
 	})
 	require.NoError(t, err)
 
-	// Verify root user exists
-	out, err := svc.GetUser(&iam.GetUserInput{
+	// Verify root user exists at account-scoped key
+	out, err := svc.GetUser(GlobalAccountID, &iam.GetUserInput{
 		UserName: aws.String("root"),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "root", *out.User.UserName)
+	assert.Contains(t, *out.User.Arn, GlobalAccountID)
 	assert.Contains(t, *out.User.Arn, "root")
 
-	// Verify access key exists
+	// Verify access key exists with AccountID
 	ak, err := svc.LookupAccessKey("AKIAEXAMPLE123456789")
 	require.NoError(t, err)
 	assert.Equal(t, "root", ak.UserName)
+	assert.Equal(t, GlobalAccountID, ak.AccountID)
 	assert.Equal(t, "Active", ak.Status)
 
 	// Verify secret is decryptable
 	decrypted, err := DecryptSecret(ak.SecretAccessKey, svc.masterKey)
 	require.NoError(t, err)
 	assert.Equal(t, "test-secret-key", decrypted)
+
+	// Verify global account record was created
+	account, err := svc.GetAccount(GlobalAccountID)
+	require.NoError(t, err)
+	assert.Equal(t, GlobalAccountID, account.AccountID)
+	assert.Equal(t, "Global", account.AccountName)
+	assert.Equal(t, "ACTIVE", account.Status)
 }
 
 func TestSeedRootUser_Idempotent(t *testing.T) {
@@ -514,7 +525,7 @@ func TestSeedRootUser_Idempotent(t *testing.T) {
 	data := &BootstrapData{
 		AccessKeyID:     "AKIAEXAMPLE123456789",
 		EncryptedSecret: encryptedSecret,
-		AccountID:       "000000000000",
+		AccountID:       GlobalAccountID,
 	}
 
 	// First call seeds
@@ -526,7 +537,7 @@ func TestSeedRootUser_Idempotent(t *testing.T) {
 	require.NoError(t, err)
 
 	// Root user should still exist with original data
-	out, err := svc.GetUser(&iam.GetUserInput{
+	out, err := svc.GetUser(GlobalAccountID, &iam.GetUserInput{
 		UserName: aws.String("root"),
 	})
 	require.NoError(t, err)
@@ -596,7 +607,7 @@ func validPolicyDocument() string {
 
 func createTestPolicy(t *testing.T, svc *IAMServiceImpl, name string) *iam.Policy {
 	t.Helper()
-	out, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+	out, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
 		PolicyName:     aws.String(name),
 		PolicyDocument: aws.String(validPolicyDocument()),
 	})
@@ -607,7 +618,7 @@ func createTestPolicy(t *testing.T, svc *IAMServiceImpl, name string) *iam.Polic
 func TestCreatePolicy(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	out, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+	out, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
 		PolicyName:     aws.String("AllowEC2"),
 		PolicyDocument: aws.String(validPolicyDocument()),
 		Path:           aws.String("/devteam/"),
@@ -629,7 +640,7 @@ func TestCreatePolicy(t *testing.T) {
 func TestCreatePolicy_DefaultPath(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	out, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+	out, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
 		PolicyName:     aws.String("DefaultPath"),
 		PolicyDocument: aws.String(validPolicyDocument()),
 	})
@@ -641,7 +652,7 @@ func TestCreatePolicy_DefaultPath(t *testing.T) {
 func TestCreatePolicy_MissingName(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+	_, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
 		PolicyDocument: aws.String(validPolicyDocument()),
 	})
 	assert.Error(t, err)
@@ -651,7 +662,7 @@ func TestCreatePolicy_MissingName(t *testing.T) {
 func TestCreatePolicy_MissingDocument(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+	_, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
 		PolicyName: aws.String("NoDoc"),
 	})
 	assert.Error(t, err)
@@ -661,7 +672,7 @@ func TestCreatePolicy_MissingDocument(t *testing.T) {
 func TestCreatePolicy_InvalidJSON(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+	_, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
 		PolicyName:     aws.String("BadJSON"),
 		PolicyDocument: aws.String(`{not valid json`),
 	})
@@ -672,7 +683,7 @@ func TestCreatePolicy_InvalidJSON(t *testing.T) {
 func TestCreatePolicy_InvalidVersion(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+	_, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
 		PolicyName:     aws.String("BadVersion"),
 		PolicyDocument: aws.String(`{"Version":"2008-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`),
 	})
@@ -683,7 +694,7 @@ func TestCreatePolicy_InvalidVersion(t *testing.T) {
 func TestCreatePolicy_NoStatements(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+	_, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
 		PolicyName:     aws.String("NoStmts"),
 		PolicyDocument: aws.String(`{"Version":"2012-10-17","Statement":[]}`),
 	})
@@ -694,7 +705,7 @@ func TestCreatePolicy_NoStatements(t *testing.T) {
 func TestCreatePolicy_InvalidEffect(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+	_, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
 		PolicyName:     aws.String("BadEffect"),
 		PolicyDocument: aws.String(`{"Version":"2012-10-17","Statement":[{"Effect":"Maybe","Action":"*","Resource":"*"}]}`),
 	})
@@ -705,7 +716,7 @@ func TestCreatePolicy_InvalidEffect(t *testing.T) {
 func TestCreatePolicy_MissingAction(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+	_, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
 		PolicyName:     aws.String("NoAction"),
 		PolicyDocument: aws.String(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Resource":"*"}]}`),
 	})
@@ -716,7 +727,7 @@ func TestCreatePolicy_MissingAction(t *testing.T) {
 func TestCreatePolicy_MissingResource(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+	_, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
 		PolicyName:     aws.String("NoResource"),
 		PolicyDocument: aws.String(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*"}]}`),
 	})
@@ -729,7 +740,7 @@ func TestCreatePolicy_Duplicate(t *testing.T) {
 
 	createTestPolicy(t, svc, "DupPolicy")
 
-	_, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+	_, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
 		PolicyName:     aws.String("DupPolicy"),
 		PolicyDocument: aws.String(validPolicyDocument()),
 	})
@@ -741,7 +752,7 @@ func TestCreatePolicy_ArrayActions(t *testing.T) {
 	svc := setupTestIAMService(t)
 
 	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["ec2:DescribeInstances","ec2:RunInstances"],"Resource":"*"}]}`
-	out, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+	out, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
 		PolicyName:     aws.String("ArrayActions"),
 		PolicyDocument: aws.String(doc),
 	})
@@ -753,7 +764,7 @@ func TestGetPolicy(t *testing.T) {
 	svc := setupTestIAMService(t)
 	created := createTestPolicy(t, svc, "GetMe")
 
-	out, err := svc.GetPolicy(&iam.GetPolicyInput{
+	out, err := svc.GetPolicy(testAccountID, &iam.GetPolicyInput{
 		PolicyArn: created.Arn,
 	})
 	require.NoError(t, err)
@@ -767,7 +778,7 @@ func TestGetPolicy(t *testing.T) {
 func TestGetPolicy_NotFound(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.GetPolicy(&iam.GetPolicyInput{
+	_, err := svc.GetPolicy(testAccountID, &iam.GetPolicyInput{
 		PolicyArn: aws.String("arn:aws:iam::000000000000:policy/Nonexistent"),
 	})
 	assert.Error(t, err)
@@ -777,7 +788,7 @@ func TestGetPolicy_NotFound(t *testing.T) {
 func TestGetPolicy_MalformedARN(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.GetPolicy(&iam.GetPolicyInput{
+	_, err := svc.GetPolicy(testAccountID, &iam.GetPolicyInput{
 		PolicyArn: aws.String("not-an-arn"),
 	})
 	assert.Error(t, err)
@@ -790,16 +801,16 @@ func TestGetPolicy_WithAttachments(t *testing.T) {
 	createTestUser(t, svc, "attachuser1")
 	createTestUser(t, svc, "attachuser2")
 
-	svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+	svc.AttachUserPolicy(testAccountID, &iam.AttachUserPolicyInput{
 		UserName:  aws.String("attachuser1"),
 		PolicyArn: created.Arn,
 	})
-	svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+	svc.AttachUserPolicy(testAccountID, &iam.AttachUserPolicyInput{
 		UserName:  aws.String("attachuser2"),
 		PolicyArn: created.Arn,
 	})
 
-	out, err := svc.GetPolicy(&iam.GetPolicyInput{
+	out, err := svc.GetPolicy(testAccountID, &iam.GetPolicyInput{
 		PolicyArn: created.Arn,
 	})
 	require.NoError(t, err)
@@ -810,7 +821,7 @@ func TestGetPolicyVersion(t *testing.T) {
 	svc := setupTestIAMService(t)
 	created := createTestPolicy(t, svc, "VersionPolicy")
 
-	out, err := svc.GetPolicyVersion(&iam.GetPolicyVersionInput{
+	out, err := svc.GetPolicyVersion(testAccountID, &iam.GetPolicyVersionInput{
 		PolicyArn: created.Arn,
 		VersionId: aws.String("v1"),
 	})
@@ -830,7 +841,7 @@ func TestGetPolicyVersion_InvalidVersion(t *testing.T) {
 	svc := setupTestIAMService(t)
 	created := createTestPolicy(t, svc, "VersionPolicy2")
 
-	_, err := svc.GetPolicyVersion(&iam.GetPolicyVersionInput{
+	_, err := svc.GetPolicyVersion(testAccountID, &iam.GetPolicyVersionInput{
 		PolicyArn: created.Arn,
 		VersionId: aws.String("v2"),
 	})
@@ -841,7 +852,7 @@ func TestGetPolicyVersion_InvalidVersion(t *testing.T) {
 func TestGetPolicyVersion_PolicyNotFound(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.GetPolicyVersion(&iam.GetPolicyVersionInput{
+	_, err := svc.GetPolicyVersion(testAccountID, &iam.GetPolicyVersionInput{
 		PolicyArn: aws.String("arn:aws:iam::000000000000:policy/Ghost"),
 		VersionId: aws.String("v1"),
 	})
@@ -856,7 +867,7 @@ func TestListPolicies(t *testing.T) {
 	createTestPolicy(t, svc, "Policy2")
 	createTestPolicy(t, svc, "Policy3")
 
-	out, err := svc.ListPolicies(&iam.ListPoliciesInput{})
+	out, err := svc.ListPolicies(testAccountID, &iam.ListPoliciesInput{})
 	require.NoError(t, err)
 	assert.Len(t, out.Policies, 3)
 
@@ -872,7 +883,7 @@ func TestListPolicies(t *testing.T) {
 func TestListPolicies_Empty(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	out, err := svc.ListPolicies(&iam.ListPoliciesInput{})
+	out, err := svc.ListPolicies(testAccountID, &iam.ListPoliciesInput{})
 	require.NoError(t, err)
 	assert.Len(t, out.Policies, 0)
 }
@@ -881,13 +892,13 @@ func TestDeletePolicy(t *testing.T) {
 	svc := setupTestIAMService(t)
 	created := createTestPolicy(t, svc, "DeleteMe")
 
-	_, err := svc.DeletePolicy(&iam.DeletePolicyInput{
+	_, err := svc.DeletePolicy(testAccountID, &iam.DeletePolicyInput{
 		PolicyArn: created.Arn,
 	})
 	require.NoError(t, err)
 
 	// Confirm it's gone
-	_, err = svc.GetPolicy(&iam.GetPolicyInput{
+	_, err = svc.GetPolicy(testAccountID, &iam.GetPolicyInput{
 		PolicyArn: created.Arn,
 	})
 	assert.Error(t, err)
@@ -897,7 +908,7 @@ func TestDeletePolicy(t *testing.T) {
 func TestDeletePolicy_NotFound(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.DeletePolicy(&iam.DeletePolicyInput{
+	_, err := svc.DeletePolicy(testAccountID, &iam.DeletePolicyInput{
 		PolicyArn: aws.String("arn:aws:iam::000000000000:policy/Ghost"),
 	})
 	assert.Error(t, err)
@@ -909,26 +920,26 @@ func TestDeletePolicy_AttachedConflict(t *testing.T) {
 	created := createTestPolicy(t, svc, "Attached")
 	createTestUser(t, svc, "conflictuser")
 
-	_, err := svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+	_, err := svc.AttachUserPolicy(testAccountID, &iam.AttachUserPolicyInput{
 		UserName:  aws.String("conflictuser"),
 		PolicyArn: created.Arn,
 	})
 	require.NoError(t, err)
 
-	_, err = svc.DeletePolicy(&iam.DeletePolicyInput{
+	_, err = svc.DeletePolicy(testAccountID, &iam.DeletePolicyInput{
 		PolicyArn: created.Arn,
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), awserrors.ErrorIAMDeleteConflict)
 
 	// Detach, then delete should succeed
-	_, err = svc.DetachUserPolicy(&iam.DetachUserPolicyInput{
+	_, err = svc.DetachUserPolicy(testAccountID, &iam.DetachUserPolicyInput{
 		UserName:  aws.String("conflictuser"),
 		PolicyArn: created.Arn,
 	})
 	require.NoError(t, err)
 
-	_, err = svc.DeletePolicy(&iam.DeletePolicyInput{
+	_, err = svc.DeletePolicy(testAccountID, &iam.DeletePolicyInput{
 		PolicyArn: created.Arn,
 	})
 	require.NoError(t, err)
@@ -943,14 +954,14 @@ func TestAttachUserPolicy(t *testing.T) {
 	created := createTestPolicy(t, svc, "AttachPolicy")
 	createTestUser(t, svc, "attachme")
 
-	_, err := svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+	_, err := svc.AttachUserPolicy(testAccountID, &iam.AttachUserPolicyInput{
 		UserName:  aws.String("attachme"),
 		PolicyArn: created.Arn,
 	})
 	require.NoError(t, err)
 
 	// Verify via list
-	out, err := svc.ListAttachedUserPolicies(&iam.ListAttachedUserPoliciesInput{
+	out, err := svc.ListAttachedUserPolicies(testAccountID, &iam.ListAttachedUserPoliciesInput{
 		UserName: aws.String("attachme"),
 	})
 	require.NoError(t, err)
@@ -969,15 +980,15 @@ func TestAttachUserPolicy_Idempotent(t *testing.T) {
 		PolicyArn: created.Arn,
 	}
 
-	_, err := svc.AttachUserPolicy(input)
+	_, err := svc.AttachUserPolicy(testAccountID, input)
 	require.NoError(t, err)
 
 	// Attach same policy again — should succeed silently
-	_, err = svc.AttachUserPolicy(input)
+	_, err = svc.AttachUserPolicy(testAccountID, input)
 	require.NoError(t, err)
 
 	// Should still have exactly 1 attachment
-	out, err := svc.ListAttachedUserPolicies(&iam.ListAttachedUserPoliciesInput{
+	out, err := svc.ListAttachedUserPolicies(testAccountID, &iam.ListAttachedUserPoliciesInput{
 		UserName: aws.String("idempotentuser"),
 	})
 	require.NoError(t, err)
@@ -988,7 +999,7 @@ func TestAttachUserPolicy_NonexistentPolicy(t *testing.T) {
 	svc := setupTestIAMService(t)
 	createTestUser(t, svc, "orphanuser")
 
-	_, err := svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+	_, err := svc.AttachUserPolicy(testAccountID, &iam.AttachUserPolicyInput{
 		UserName:  aws.String("orphanuser"),
 		PolicyArn: aws.String("arn:aws:iam::000000000000:policy/Ghost"),
 	})
@@ -1000,7 +1011,7 @@ func TestAttachUserPolicy_NonexistentUser(t *testing.T) {
 	svc := setupTestIAMService(t)
 	created := createTestPolicy(t, svc, "OrphanPolicy")
 
-	_, err := svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+	_, err := svc.AttachUserPolicy(testAccountID, &iam.AttachUserPolicyInput{
 		UserName:  aws.String("ghostuser"),
 		PolicyArn: created.Arn,
 	})
@@ -1013,20 +1024,20 @@ func TestDetachUserPolicy(t *testing.T) {
 	created := createTestPolicy(t, svc, "DetachPolicy")
 	createTestUser(t, svc, "detachme")
 
-	_, err := svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+	_, err := svc.AttachUserPolicy(testAccountID, &iam.AttachUserPolicyInput{
 		UserName:  aws.String("detachme"),
 		PolicyArn: created.Arn,
 	})
 	require.NoError(t, err)
 
-	_, err = svc.DetachUserPolicy(&iam.DetachUserPolicyInput{
+	_, err = svc.DetachUserPolicy(testAccountID, &iam.DetachUserPolicyInput{
 		UserName:  aws.String("detachme"),
 		PolicyArn: created.Arn,
 	})
 	require.NoError(t, err)
 
 	// Verify detached
-	out, err := svc.ListAttachedUserPolicies(&iam.ListAttachedUserPoliciesInput{
+	out, err := svc.ListAttachedUserPolicies(testAccountID, &iam.ListAttachedUserPoliciesInput{
 		UserName: aws.String("detachme"),
 	})
 	require.NoError(t, err)
@@ -1038,7 +1049,7 @@ func TestDetachUserPolicy_NotAttached(t *testing.T) {
 	created := createTestPolicy(t, svc, "NeverAttached")
 	createTestUser(t, svc, "cleanuser")
 
-	_, err := svc.DetachUserPolicy(&iam.DetachUserPolicyInput{
+	_, err := svc.DetachUserPolicy(testAccountID, &iam.DetachUserPolicyInput{
 		UserName:  aws.String("cleanuser"),
 		PolicyArn: created.Arn,
 	})
@@ -1049,7 +1060,7 @@ func TestDetachUserPolicy_NotAttached(t *testing.T) {
 func TestDetachUserPolicy_NonexistentUser(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.DetachUserPolicy(&iam.DetachUserPolicyInput{
+	_, err := svc.DetachUserPolicy(testAccountID, &iam.DetachUserPolicyInput{
 		UserName:  aws.String("ghostuser"),
 		PolicyArn: aws.String("arn:aws:iam::000000000000:policy/Whatever"),
 	})
@@ -1064,16 +1075,16 @@ func TestListAttachedUserPolicies(t *testing.T) {
 	p2 := createTestPolicy(t, svc, "ListPolicy2")
 	createTestUser(t, svc, "listpuser")
 
-	svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+	svc.AttachUserPolicy(testAccountID, &iam.AttachUserPolicyInput{
 		UserName:  aws.String("listpuser"),
 		PolicyArn: p1.Arn,
 	})
-	svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+	svc.AttachUserPolicy(testAccountID, &iam.AttachUserPolicyInput{
 		UserName:  aws.String("listpuser"),
 		PolicyArn: p2.Arn,
 	})
 
-	out, err := svc.ListAttachedUserPolicies(&iam.ListAttachedUserPoliciesInput{
+	out, err := svc.ListAttachedUserPolicies(testAccountID, &iam.ListAttachedUserPoliciesInput{
 		UserName: aws.String("listpuser"),
 	})
 	require.NoError(t, err)
@@ -1091,7 +1102,7 @@ func TestListAttachedUserPolicies_Empty(t *testing.T) {
 	svc := setupTestIAMService(t)
 	createTestUser(t, svc, "nopolicies")
 
-	out, err := svc.ListAttachedUserPolicies(&iam.ListAttachedUserPoliciesInput{
+	out, err := svc.ListAttachedUserPolicies(testAccountID, &iam.ListAttachedUserPoliciesInput{
 		UserName: aws.String("nopolicies"),
 	})
 	require.NoError(t, err)
@@ -1101,7 +1112,7 @@ func TestListAttachedUserPolicies_Empty(t *testing.T) {
 func TestListAttachedUserPolicies_NonexistentUser(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.ListAttachedUserPolicies(&iam.ListAttachedUserPoliciesInput{
+	_, err := svc.ListAttachedUserPolicies(testAccountID, &iam.ListAttachedUserPoliciesInput{
 		UserName: aws.String("ghostuser"),
 	})
 	assert.Error(t, err)
@@ -1116,14 +1127,14 @@ func TestGetUserPolicies(t *testing.T) {
 	svc := setupTestIAMService(t)
 
 	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ec2:DescribeInstances","Resource":"*"}]}`
-	p1, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+	p1, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
 		PolicyName:     aws.String("InternalPolicy1"),
 		PolicyDocument: aws.String(doc),
 	})
 	require.NoError(t, err)
 
 	doc2 := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"ec2:TerminateInstances","Resource":"*"}]}`
-	p2, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+	p2, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
 		PolicyName:     aws.String("InternalPolicy2"),
 		PolicyDocument: aws.String(doc2),
 	})
@@ -1131,16 +1142,16 @@ func TestGetUserPolicies(t *testing.T) {
 
 	createTestUser(t, svc, "evaluser")
 
-	svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+	svc.AttachUserPolicy(testAccountID, &iam.AttachUserPolicyInput{
 		UserName:  aws.String("evaluser"),
 		PolicyArn: p1.Policy.Arn,
 	})
-	svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+	svc.AttachUserPolicy(testAccountID, &iam.AttachUserPolicyInput{
 		UserName:  aws.String("evaluser"),
 		PolicyArn: p2.Policy.Arn,
 	})
 
-	docs, err := svc.GetUserPolicies("evaluser")
+	docs, err := svc.GetUserPolicies(testAccountID, "evaluser")
 	require.NoError(t, err)
 	assert.Len(t, docs, 2)
 	assert.Equal(t, "2012-10-17", docs[0].Version)
@@ -1151,7 +1162,7 @@ func TestGetUserPolicies_NoPolicies(t *testing.T) {
 	svc := setupTestIAMService(t)
 	createTestUser(t, svc, "emptyuser")
 
-	docs, err := svc.GetUserPolicies("emptyuser")
+	docs, err := svc.GetUserPolicies(testAccountID, "emptyuser")
 	require.NoError(t, err)
 	assert.Len(t, docs, 0)
 }
@@ -1159,7 +1170,7 @@ func TestGetUserPolicies_NoPolicies(t *testing.T) {
 func TestGetUserPolicies_NonexistentUser(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.GetUserPolicies("ghostuser")
+	_, err := svc.GetUserPolicies(testAccountID, "ghostuser")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), awserrors.ErrorIAMNoSuchEntity)
 }

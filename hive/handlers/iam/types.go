@@ -6,6 +6,7 @@ import "encoding/json"
 type User struct {
 	UserName         string   `json:"user_name"`
 	UserID           string   `json:"user_id"`
+	AccountID        string   `json:"account_id"`
 	ARN              string   `json:"arn"`
 	Path             string   `json:"path"`
 	CreatedAt        string   `json:"created_at"`
@@ -21,6 +22,7 @@ type AccessKey struct {
 	AccessKeyID     string `json:"access_key_id"`
 	SecretAccessKey string `json:"secret_access_key"` // AES-256-GCM encrypted, base64-encoded
 	UserName        string `json:"user_name"`
+	AccountID       string `json:"account_id"`
 	Status          string `json:"status"` // Active or Inactive
 	CreatedAt       string `json:"created_at"`
 }
@@ -93,4 +95,13 @@ type BootstrapData struct {
 	AccessKeyID     string `json:"access_key_id"`
 	EncryptedSecret string `json:"encrypted_secret"`
 	AccountID       string `json:"account_id"`
+}
+
+// Account represents a Hive account. Accounts namespace IAM users,
+// policies, and resources. Created via CLI only in v1.
+type Account struct {
+	AccountID   string `json:"account_id"`   // 12-digit zero-padded, sequential
+	AccountName string `json:"account_name"` // Friendly name
+	Status      string `json:"status"`       // "ACTIVE" or "SUSPENDED"
+	CreatedAt   string `json:"created_at"`   // RFC3339
 }
