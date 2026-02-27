@@ -14,17 +14,17 @@ import (
 )
 
 // IAMHandler processes parsed query args and returns XML response bytes.
-type IAMHandler func(action string, q map[string]string, gw *GatewayConfig) ([]byte, error)
+type IAMHandler func(action string, q map[string]string, gw *GatewayConfig, accountID string) ([]byte, error)
 
 // iamHandler creates a type-safe IAMHandler that allocates the typed input struct,
 // parses query params into it, calls the handler, and marshals the output to XML.
-func iamHandler[In any](handler func(*In, handlers_iam.IAMService) (any, error)) IAMHandler {
-	return func(action string, q map[string]string, gw *GatewayConfig) ([]byte, error) {
+func iamHandler[In any](handler func(string, *In, handlers_iam.IAMService) (any, error)) IAMHandler {
+	return func(action string, q map[string]string, gw *GatewayConfig, accountID string) ([]byte, error) {
 		input := new(In)
 		if err := awsec2query.QueryParamsToStruct(q, input); err != nil {
 			return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 		}
-		output, err := handler(input, gw.IAMService)
+		output, err := handler(accountID, input, gw.IAMService)
 		if err != nil {
 			return nil, err
 		}
@@ -38,57 +38,57 @@ func iamHandler[In any](handler func(*In, handlers_iam.IAMService) (any, error))
 }
 
 var iamActions = map[string]IAMHandler{
-	"CreateUser": iamHandler(func(input *iam.CreateUserInput, svc handlers_iam.IAMService) (any, error) {
-		return gateway_iam.CreateUser(input, svc)
+	"CreateUser": iamHandler(func(accountID string, input *iam.CreateUserInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.CreateUser(accountID, input, svc)
 	}),
-	"GetUser": iamHandler(func(input *iam.GetUserInput, svc handlers_iam.IAMService) (any, error) {
-		return gateway_iam.GetUser(input, svc)
+	"GetUser": iamHandler(func(accountID string, input *iam.GetUserInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.GetUser(accountID, input, svc)
 	}),
-	"ListUsers": iamHandler(func(input *iam.ListUsersInput, svc handlers_iam.IAMService) (any, error) {
-		return gateway_iam.ListUsers(input, svc)
+	"ListUsers": iamHandler(func(accountID string, input *iam.ListUsersInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.ListUsers(accountID, input, svc)
 	}),
-	"DeleteUser": iamHandler(func(input *iam.DeleteUserInput, svc handlers_iam.IAMService) (any, error) {
-		return gateway_iam.DeleteUser(input, svc)
+	"DeleteUser": iamHandler(func(accountID string, input *iam.DeleteUserInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.DeleteUser(accountID, input, svc)
 	}),
-	"CreateAccessKey": iamHandler(func(input *iam.CreateAccessKeyInput, svc handlers_iam.IAMService) (any, error) {
-		return gateway_iam.CreateAccessKey(input, svc)
+	"CreateAccessKey": iamHandler(func(accountID string, input *iam.CreateAccessKeyInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.CreateAccessKey(accountID, input, svc)
 	}),
-	"ListAccessKeys": iamHandler(func(input *iam.ListAccessKeysInput, svc handlers_iam.IAMService) (any, error) {
-		return gateway_iam.ListAccessKeys(input, svc)
+	"ListAccessKeys": iamHandler(func(accountID string, input *iam.ListAccessKeysInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.ListAccessKeys(accountID, input, svc)
 	}),
-	"DeleteAccessKey": iamHandler(func(input *iam.DeleteAccessKeyInput, svc handlers_iam.IAMService) (any, error) {
-		return gateway_iam.DeleteAccessKey(input, svc)
+	"DeleteAccessKey": iamHandler(func(accountID string, input *iam.DeleteAccessKeyInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.DeleteAccessKey(accountID, input, svc)
 	}),
-	"UpdateAccessKey": iamHandler(func(input *iam.UpdateAccessKeyInput, svc handlers_iam.IAMService) (any, error) {
+	"UpdateAccessKey": iamHandler(func(_ string, input *iam.UpdateAccessKeyInput, svc handlers_iam.IAMService) (any, error) {
 		return gateway_iam.UpdateAccessKey(input, svc)
 	}),
 
 	// Policy CRUD
-	"CreatePolicy": iamHandler(func(input *iam.CreatePolicyInput, svc handlers_iam.IAMService) (any, error) {
-		return gateway_iam.CreatePolicy(input, svc)
+	"CreatePolicy": iamHandler(func(accountID string, input *iam.CreatePolicyInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.CreatePolicy(accountID, input, svc)
 	}),
-	"GetPolicy": iamHandler(func(input *iam.GetPolicyInput, svc handlers_iam.IAMService) (any, error) {
-		return gateway_iam.GetPolicy(input, svc)
+	"GetPolicy": iamHandler(func(accountID string, input *iam.GetPolicyInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.GetPolicy(accountID, input, svc)
 	}),
-	"GetPolicyVersion": iamHandler(func(input *iam.GetPolicyVersionInput, svc handlers_iam.IAMService) (any, error) {
-		return gateway_iam.GetPolicyVersion(input, svc)
+	"GetPolicyVersion": iamHandler(func(accountID string, input *iam.GetPolicyVersionInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.GetPolicyVersion(accountID, input, svc)
 	}),
-	"ListPolicies": iamHandler(func(input *iam.ListPoliciesInput, svc handlers_iam.IAMService) (any, error) {
-		return gateway_iam.ListPolicies(input, svc)
+	"ListPolicies": iamHandler(func(accountID string, input *iam.ListPoliciesInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.ListPolicies(accountID, input, svc)
 	}),
-	"DeletePolicy": iamHandler(func(input *iam.DeletePolicyInput, svc handlers_iam.IAMService) (any, error) {
-		return gateway_iam.DeletePolicy(input, svc)
+	"DeletePolicy": iamHandler(func(accountID string, input *iam.DeletePolicyInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.DeletePolicy(accountID, input, svc)
 	}),
 
 	// Policy attachment
-	"AttachUserPolicy": iamHandler(func(input *iam.AttachUserPolicyInput, svc handlers_iam.IAMService) (any, error) {
-		return gateway_iam.AttachUserPolicy(input, svc)
+	"AttachUserPolicy": iamHandler(func(accountID string, input *iam.AttachUserPolicyInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.AttachUserPolicy(accountID, input, svc)
 	}),
-	"DetachUserPolicy": iamHandler(func(input *iam.DetachUserPolicyInput, svc handlers_iam.IAMService) (any, error) {
-		return gateway_iam.DetachUserPolicy(input, svc)
+	"DetachUserPolicy": iamHandler(func(accountID string, input *iam.DetachUserPolicyInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.DetachUserPolicy(accountID, input, svc)
 	}),
-	"ListAttachedUserPolicies": iamHandler(func(input *iam.ListAttachedUserPoliciesInput, svc handlers_iam.IAMService) (any, error) {
-		return gateway_iam.ListAttachedUserPolicies(input, svc)
+	"ListAttachedUserPolicies": iamHandler(func(accountID string, input *iam.ListAttachedUserPoliciesInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.ListAttachedUserPolicies(accountID, input, svc)
 	}),
 }
 
@@ -111,7 +111,10 @@ func (gw *GatewayConfig) IAM_Request(ctx *fiber.Ctx) error {
 		return err
 	}
 
-	xmlOutput, err := handler(action, queryArgs, gw)
+	// Extract account ID from auth context
+	accountID, _ := ctx.Locals("sigv4.accountId").(string)
+
+	xmlOutput, err := handler(action, queryArgs, gw, accountID)
 	if err != nil {
 		return err
 	}

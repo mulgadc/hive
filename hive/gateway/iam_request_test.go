@@ -18,61 +18,61 @@ import (
 
 // flexMockIAMService is a configurable mock with per-method overrides.
 type flexMockIAMService struct {
-	createUserFn      func(*iam.CreateUserInput) (*iam.CreateUserOutput, error)
-	getUserFn         func(*iam.GetUserInput) (*iam.GetUserOutput, error)
-	listUsersFn       func(*iam.ListUsersInput) (*iam.ListUsersOutput, error)
-	deleteUserFn      func(*iam.DeleteUserInput) (*iam.DeleteUserOutput, error)
-	createAccessKeyFn func(*iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error)
-	listAccessKeysFn  func(*iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error)
-	deleteAccessKeyFn func(*iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error)
+	createUserFn      func(string, *iam.CreateUserInput) (*iam.CreateUserOutput, error)
+	getUserFn         func(string, *iam.GetUserInput) (*iam.GetUserOutput, error)
+	listUsersFn       func(string, *iam.ListUsersInput) (*iam.ListUsersOutput, error)
+	deleteUserFn      func(string, *iam.DeleteUserInput) (*iam.DeleteUserOutput, error)
+	createAccessKeyFn func(string, *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error)
+	listAccessKeysFn  func(string, *iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error)
+	deleteAccessKeyFn func(string, *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error)
 	updateAccessKeyFn func(*iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error)
 }
 
-func (m *flexMockIAMService) CreateUser(input *iam.CreateUserInput) (*iam.CreateUserOutput, error) {
+func (m *flexMockIAMService) CreateUser(accountID string, input *iam.CreateUserInput) (*iam.CreateUserOutput, error) {
 	if m.createUserFn != nil {
-		return m.createUserFn(input)
+		return m.createUserFn(accountID, input)
 	}
 	return &iam.CreateUserOutput{}, nil
 }
 
-func (m *flexMockIAMService) GetUser(input *iam.GetUserInput) (*iam.GetUserOutput, error) {
+func (m *flexMockIAMService) GetUser(accountID string, input *iam.GetUserInput) (*iam.GetUserOutput, error) {
 	if m.getUserFn != nil {
-		return m.getUserFn(input)
+		return m.getUserFn(accountID, input)
 	}
 	return &iam.GetUserOutput{}, nil
 }
 
-func (m *flexMockIAMService) ListUsers(input *iam.ListUsersInput) (*iam.ListUsersOutput, error) {
+func (m *flexMockIAMService) ListUsers(accountID string, input *iam.ListUsersInput) (*iam.ListUsersOutput, error) {
 	if m.listUsersFn != nil {
-		return m.listUsersFn(input)
+		return m.listUsersFn(accountID, input)
 	}
 	return &iam.ListUsersOutput{}, nil
 }
 
-func (m *flexMockIAMService) DeleteUser(input *iam.DeleteUserInput) (*iam.DeleteUserOutput, error) {
+func (m *flexMockIAMService) DeleteUser(accountID string, input *iam.DeleteUserInput) (*iam.DeleteUserOutput, error) {
 	if m.deleteUserFn != nil {
-		return m.deleteUserFn(input)
+		return m.deleteUserFn(accountID, input)
 	}
 	return &iam.DeleteUserOutput{}, nil
 }
 
-func (m *flexMockIAMService) CreateAccessKey(input *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error) {
+func (m *flexMockIAMService) CreateAccessKey(accountID string, input *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error) {
 	if m.createAccessKeyFn != nil {
-		return m.createAccessKeyFn(input)
+		return m.createAccessKeyFn(accountID, input)
 	}
 	return &iam.CreateAccessKeyOutput{}, nil
 }
 
-func (m *flexMockIAMService) ListAccessKeys(input *iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error) {
+func (m *flexMockIAMService) ListAccessKeys(accountID string, input *iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error) {
 	if m.listAccessKeysFn != nil {
-		return m.listAccessKeysFn(input)
+		return m.listAccessKeysFn(accountID, input)
 	}
 	return &iam.ListAccessKeysOutput{}, nil
 }
 
-func (m *flexMockIAMService) DeleteAccessKey(input *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error) {
+func (m *flexMockIAMService) DeleteAccessKey(accountID string, input *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error) {
 	if m.deleteAccessKeyFn != nil {
-		return m.deleteAccessKeyFn(input)
+		return m.deleteAccessKeyFn(accountID, input)
 	}
 	return &iam.DeleteAccessKeyOutput{}, nil
 }
@@ -84,39 +84,39 @@ func (m *flexMockIAMService) UpdateAccessKey(input *iam.UpdateAccessKeyInput) (*
 	return &iam.UpdateAccessKeyOutput{}, nil
 }
 
-func (m *flexMockIAMService) CreatePolicy(_ *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error) {
+func (m *flexMockIAMService) CreatePolicy(_ string, _ *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error) {
 	return &iam.CreatePolicyOutput{}, nil
 }
 
-func (m *flexMockIAMService) GetPolicy(_ *iam.GetPolicyInput) (*iam.GetPolicyOutput, error) {
+func (m *flexMockIAMService) GetPolicy(_ string, _ *iam.GetPolicyInput) (*iam.GetPolicyOutput, error) {
 	return &iam.GetPolicyOutput{}, nil
 }
 
-func (m *flexMockIAMService) GetPolicyVersion(_ *iam.GetPolicyVersionInput) (*iam.GetPolicyVersionOutput, error) {
+func (m *flexMockIAMService) GetPolicyVersion(_ string, _ *iam.GetPolicyVersionInput) (*iam.GetPolicyVersionOutput, error) {
 	return &iam.GetPolicyVersionOutput{}, nil
 }
 
-func (m *flexMockIAMService) ListPolicies(_ *iam.ListPoliciesInput) (*iam.ListPoliciesOutput, error) {
+func (m *flexMockIAMService) ListPolicies(_ string, _ *iam.ListPoliciesInput) (*iam.ListPoliciesOutput, error) {
 	return &iam.ListPoliciesOutput{}, nil
 }
 
-func (m *flexMockIAMService) DeletePolicy(_ *iam.DeletePolicyInput) (*iam.DeletePolicyOutput, error) {
+func (m *flexMockIAMService) DeletePolicy(_ string, _ *iam.DeletePolicyInput) (*iam.DeletePolicyOutput, error) {
 	return &iam.DeletePolicyOutput{}, nil
 }
 
-func (m *flexMockIAMService) AttachUserPolicy(_ *iam.AttachUserPolicyInput) (*iam.AttachUserPolicyOutput, error) {
+func (m *flexMockIAMService) AttachUserPolicy(_ string, _ *iam.AttachUserPolicyInput) (*iam.AttachUserPolicyOutput, error) {
 	return &iam.AttachUserPolicyOutput{}, nil
 }
 
-func (m *flexMockIAMService) DetachUserPolicy(_ *iam.DetachUserPolicyInput) (*iam.DetachUserPolicyOutput, error) {
+func (m *flexMockIAMService) DetachUserPolicy(_ string, _ *iam.DetachUserPolicyInput) (*iam.DetachUserPolicyOutput, error) {
 	return &iam.DetachUserPolicyOutput{}, nil
 }
 
-func (m *flexMockIAMService) ListAttachedUserPolicies(_ *iam.ListAttachedUserPoliciesInput) (*iam.ListAttachedUserPoliciesOutput, error) {
+func (m *flexMockIAMService) ListAttachedUserPolicies(_ string, _ *iam.ListAttachedUserPoliciesInput) (*iam.ListAttachedUserPoliciesOutput, error) {
 	return &iam.ListAttachedUserPoliciesOutput{}, nil
 }
 
-func (m *flexMockIAMService) GetUserPolicies(_ string) ([]handlers_iam.PolicyDocument, error) {
+func (m *flexMockIAMService) GetUserPolicies(_, _ string) ([]handlers_iam.PolicyDocument, error) {
 	return nil, nil
 }
 
@@ -126,6 +126,12 @@ func (m *flexMockIAMService) LookupAccessKey(_ string) (*handlers_iam.AccessKey,
 
 func (m *flexMockIAMService) SeedRootUser(_ *handlers_iam.BootstrapData) error { return nil }
 func (m *flexMockIAMService) IsEmpty() (bool, error)                           { return true, nil }
+
+func (m *flexMockIAMService) CreateAccount(_ string) (*handlers_iam.Account, error) {
+	return nil, nil
+}
+func (m *flexMockIAMService) GetAccount(_ string) (*handlers_iam.Account, error) { return nil, nil }
+func (m *flexMockIAMService) ListAccounts() ([]*handlers_iam.Account, error)     { return nil, nil }
 
 // setupIAMRequestApp creates a Fiber app wired for IAM_Request testing.
 func setupIAMRequestApp(svc handlers_iam.IAMService) *fiber.App {
@@ -140,6 +146,7 @@ func setupIAMRequestApp(svc handlers_iam.IAMService) *fiber.App {
 	})
 	app.Post("/", func(c *fiber.Ctx) error {
 		c.Locals("sigv4.service", "iam")
+		c.Locals("sigv4.accountId", "000000000000")
 		return gw.IAM_Request(c)
 	})
 	return app
@@ -147,7 +154,7 @@ func setupIAMRequestApp(svc handlers_iam.IAMService) *fiber.App {
 
 func TestIAMRequest_CreateUser_Success(t *testing.T) {
 	svc := &flexMockIAMService{
-		createUserFn: func(input *iam.CreateUserInput) (*iam.CreateUserOutput, error) {
+		createUserFn: func(_ string, input *iam.CreateUserInput) (*iam.CreateUserOutput, error) {
 			return &iam.CreateUserOutput{
 				User: &iam.User{
 					UserName: input.UserName,
@@ -175,7 +182,7 @@ func TestIAMRequest_CreateUser_Success(t *testing.T) {
 
 func TestIAMRequest_ListUsers_Success(t *testing.T) {
 	svc := &flexMockIAMService{
-		listUsersFn: func(_ *iam.ListUsersInput) (*iam.ListUsersOutput, error) {
+		listUsersFn: func(_ string, _ *iam.ListUsersInput) (*iam.ListUsersOutput, error) {
 			return &iam.ListUsersOutput{
 				Users: []*iam.User{
 					{UserName: aws.String("alice"), UserId: aws.String("AID1")},
@@ -241,6 +248,7 @@ func TestIAMRequest_NilService(t *testing.T) {
 	})
 	app.Post("/", func(c *fiber.Ctx) error {
 		c.Locals("sigv4.service", "iam")
+		c.Locals("sigv4.accountId", "000000000000")
 		return gw.IAM_Request(c)
 	})
 
@@ -257,7 +265,7 @@ func TestIAMRequest_NilService(t *testing.T) {
 
 func TestIAMRequest_ServiceError(t *testing.T) {
 	svc := &flexMockIAMService{
-		createUserFn: func(_ *iam.CreateUserInput) (*iam.CreateUserOutput, error) {
+		createUserFn: func(_ string, _ *iam.CreateUserInput) (*iam.CreateUserOutput, error) {
 			return nil, errors.New(awserrors.ErrorIAMEntityAlreadyExists)
 		},
 	}

@@ -36,59 +36,64 @@ func (m *mockIAMService) LookupAccessKey(accessKeyID string) (*handlers_iam.Acce
 	return ak, nil
 }
 
-func (m *mockIAMService) CreateUser(_ *iam.CreateUserInput) (*iam.CreateUserOutput, error) {
+func (m *mockIAMService) CreateUser(_ string, _ *iam.CreateUserInput) (*iam.CreateUserOutput, error) {
 	return nil, nil
 }
-func (m *mockIAMService) GetUser(_ *iam.GetUserInput) (*iam.GetUserOutput, error) {
+func (m *mockIAMService) GetUser(_ string, _ *iam.GetUserInput) (*iam.GetUserOutput, error) {
 	return nil, nil
 }
-func (m *mockIAMService) ListUsers(_ *iam.ListUsersInput) (*iam.ListUsersOutput, error) {
+func (m *mockIAMService) ListUsers(_ string, _ *iam.ListUsersInput) (*iam.ListUsersOutput, error) {
 	return nil, nil
 }
-func (m *mockIAMService) DeleteUser(_ *iam.DeleteUserInput) (*iam.DeleteUserOutput, error) {
+func (m *mockIAMService) DeleteUser(_ string, _ *iam.DeleteUserInput) (*iam.DeleteUserOutput, error) {
 	return nil, nil
 }
-func (m *mockIAMService) CreateAccessKey(_ *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error) {
+func (m *mockIAMService) CreateAccessKey(_ string, _ *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error) {
 	return nil, nil
 }
-func (m *mockIAMService) ListAccessKeys(_ *iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error) {
+func (m *mockIAMService) ListAccessKeys(_ string, _ *iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error) {
 	return nil, nil
 }
-func (m *mockIAMService) DeleteAccessKey(_ *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error) {
+func (m *mockIAMService) DeleteAccessKey(_ string, _ *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error) {
 	return nil, nil
 }
 func (m *mockIAMService) UpdateAccessKey(_ *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error) {
 	return nil, nil
 }
-func (m *mockIAMService) CreatePolicy(_ *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error) {
+func (m *mockIAMService) CreatePolicy(_ string, _ *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error) {
 	return nil, nil
 }
-func (m *mockIAMService) GetPolicy(_ *iam.GetPolicyInput) (*iam.GetPolicyOutput, error) {
+func (m *mockIAMService) GetPolicy(_ string, _ *iam.GetPolicyInput) (*iam.GetPolicyOutput, error) {
 	return nil, nil
 }
-func (m *mockIAMService) GetPolicyVersion(_ *iam.GetPolicyVersionInput) (*iam.GetPolicyVersionOutput, error) {
+func (m *mockIAMService) GetPolicyVersion(_ string, _ *iam.GetPolicyVersionInput) (*iam.GetPolicyVersionOutput, error) {
 	return nil, nil
 }
-func (m *mockIAMService) ListPolicies(_ *iam.ListPoliciesInput) (*iam.ListPoliciesOutput, error) {
+func (m *mockIAMService) ListPolicies(_ string, _ *iam.ListPoliciesInput) (*iam.ListPoliciesOutput, error) {
 	return nil, nil
 }
-func (m *mockIAMService) DeletePolicy(_ *iam.DeletePolicyInput) (*iam.DeletePolicyOutput, error) {
+func (m *mockIAMService) DeletePolicy(_ string, _ *iam.DeletePolicyInput) (*iam.DeletePolicyOutput, error) {
 	return nil, nil
 }
-func (m *mockIAMService) AttachUserPolicy(_ *iam.AttachUserPolicyInput) (*iam.AttachUserPolicyOutput, error) {
+func (m *mockIAMService) AttachUserPolicy(_ string, _ *iam.AttachUserPolicyInput) (*iam.AttachUserPolicyOutput, error) {
 	return nil, nil
 }
-func (m *mockIAMService) DetachUserPolicy(_ *iam.DetachUserPolicyInput) (*iam.DetachUserPolicyOutput, error) {
+func (m *mockIAMService) DetachUserPolicy(_ string, _ *iam.DetachUserPolicyInput) (*iam.DetachUserPolicyOutput, error) {
 	return nil, nil
 }
-func (m *mockIAMService) ListAttachedUserPolicies(_ *iam.ListAttachedUserPoliciesInput) (*iam.ListAttachedUserPoliciesOutput, error) {
+func (m *mockIAMService) ListAttachedUserPolicies(_ string, _ *iam.ListAttachedUserPoliciesInput) (*iam.ListAttachedUserPoliciesOutput, error) {
 	return nil, nil
 }
-func (m *mockIAMService) GetUserPolicies(_ string) ([]handlers_iam.PolicyDocument, error) {
+func (m *mockIAMService) GetUserPolicies(_, _ string) ([]handlers_iam.PolicyDocument, error) {
 	return nil, nil
 }
 func (m *mockIAMService) SeedRootUser(_ *handlers_iam.BootstrapData) error { return nil }
 func (m *mockIAMService) IsEmpty() (bool, error)                           { return true, nil }
+func (m *mockIAMService) CreateAccount(_ string) (*handlers_iam.Account, error) {
+	return nil, nil
+}
+func (m *mockIAMService) GetAccount(_ string) (*handlers_iam.Account, error) { return nil, nil }
+func (m *mockIAMService) ListAccounts() ([]*handlers_iam.Account, error)     { return nil, nil }
 
 // testMasterKey is a fixed 32-byte key for deterministic tests.
 var testMasterKey []byte
