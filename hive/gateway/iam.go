@@ -107,6 +107,10 @@ func (gw *GatewayConfig) IAM_Request(ctx *fiber.Ctx) error {
 		return errors.New(awserrors.ErrorInternalError)
 	}
 
+	if err := gw.checkPolicy(ctx, "iam", action); err != nil {
+		return err
+	}
+
 	xmlOutput, err := handler(action, queryArgs, gw)
 	if err != nil {
 		return err

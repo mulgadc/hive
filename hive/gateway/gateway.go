@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mulgadc/hive/hive/awsec2query"
 	"github.com/mulgadc/hive/hive/awserrors"
+	"github.com/mulgadc/hive/hive/gateway/policy"
 	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
 	"github.com/nats-io/nats.go"
 )
@@ -168,6 +169,42 @@ func (gw *GatewayConfig) GetService(ctx *fiber.Ctx) (string, error) {
 		return "", errors.New(awserrors.ErrorUnsupportedOperation)
 	}
 	return svc, nil
+}
+
+// checkPolicy evaluates IAM policies for the current request. Returns nil
+// if access is allowed, or an ErrorAccessDenied error if denied.
+// Root users bypass evaluation entirely. If the IAM service is unavailable,
+// access is allowed (pre-IAM compatibility).
+func (gw *GatewayConfig) checkPolicy(ctx *fiber.Ctx, service, action string) error {
+	if gw.IAMService == nil {
+		return nil
+	}
+
+	identity, _ := ctx.Locals("sigv4.identity").(string)
+	if identity == "" || identity == "root" {
+		return nil
+	}
+
+	// Resolve the IAM action string (e.g. "ec2:RunInstances")
+	iamAction, ok := policy.LookupAction(service, action)
+	if !ok {
+		// Action not in mapping table — construct it directly so wildcard
+		// policies (e.g. "ec2:*") still match.
+		iamAction = policy.IAMAction(service, action)
+	}
+
+	policies, err := gw.IAMService.GetUserPolicies(identity)
+	if err != nil {
+		slog.Error("checkPolicy: failed to get user policies", "user", identity, "err", err)
+		return errors.New(awserrors.ErrorInternalError)
+	}
+
+	if policy.EvaluateAccess(identity, iamAction, "*", policies) == policy.Deny {
+		slog.Info("checkPolicy: access denied", "user", identity, "action", iamAction)
+		return errors.New(awserrors.ErrorAccessDenied)
+	}
+
+	return nil
 }
 
 func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {
