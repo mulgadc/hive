@@ -1,137 +1,137 @@
 package policy
 
-import "fmt"
-
 // IAMAction converts a gateway service name and action name into the
 // IAM policy action format "service:ActionName".
-// For example: ("ec2", "RunInstances") → "ec2:RunInstances"
+// For example: ("ec2", "RunInstances") -> "ec2:RunInstances"
 func IAMAction(service, action string) string {
-	return fmt.Sprintf("%s:%s", service, action)
+	return service + ":" + action
 }
 
-// EC2Actions maps EC2 gateway action names to their IAM action strings.
-var EC2Actions = map[string]string{
+// ec2Actions is the set of known EC2 gateway action names.
+var ec2Actions = map[string]bool{
 	// Instances
-	"DescribeInstances":       "ec2:DescribeInstances",
-	"RunInstances":            "ec2:RunInstances",
-	"StartInstances":          "ec2:StartInstances",
-	"StopInstances":           "ec2:StopInstances",
-	"TerminateInstances":      "ec2:TerminateInstances",
-	"DescribeInstanceTypes":   "ec2:DescribeInstanceTypes",
-	"GetConsoleOutput":        "ec2:GetConsoleOutput",
-	"ModifyInstanceAttribute": "ec2:ModifyInstanceAttribute",
+	"DescribeInstances":       true,
+	"RunInstances":            true,
+	"StartInstances":          true,
+	"StopInstances":           true,
+	"TerminateInstances":      true,
+	"DescribeInstanceTypes":   true,
+	"GetConsoleOutput":        true,
+	"ModifyInstanceAttribute": true,
 
 	// Key pairs
-	"CreateKeyPair":    "ec2:CreateKeyPair",
-	"DeleteKeyPair":    "ec2:DeleteKeyPair",
-	"DescribeKeyPairs": "ec2:DescribeKeyPairs",
-	"ImportKeyPair":    "ec2:ImportKeyPair",
+	"CreateKeyPair":    true,
+	"DeleteKeyPair":    true,
+	"DescribeKeyPairs": true,
+	"ImportKeyPair":    true,
 
 	// Images
-	"DescribeImages": "ec2:DescribeImages",
-	"CreateImage":    "ec2:CreateImage",
+	"DescribeImages": true,
+	"CreateImage":    true,
 
 	// Regions / AZs
-	"DescribeRegions":           "ec2:DescribeRegions",
-	"DescribeAvailabilityZones": "ec2:DescribeAvailabilityZones",
+	"DescribeRegions":           true,
+	"DescribeAvailabilityZones": true,
 
 	// Volumes
-	"DescribeVolumes":      "ec2:DescribeVolumes",
-	"ModifyVolume":         "ec2:ModifyVolume",
-	"CreateVolume":         "ec2:CreateVolume",
-	"DeleteVolume":         "ec2:DeleteVolume",
-	"AttachVolume":         "ec2:AttachVolume",
-	"DetachVolume":         "ec2:DetachVolume",
-	"DescribeVolumeStatus": "ec2:DescribeVolumeStatus",
+	"DescribeVolumes":      true,
+	"ModifyVolume":         true,
+	"CreateVolume":         true,
+	"DeleteVolume":         true,
+	"AttachVolume":         true,
+	"DetachVolume":         true,
+	"DescribeVolumeStatus": true,
 
 	// Account
-	"DescribeAccountAttributes":     "ec2:DescribeAccountAttributes",
-	"EnableEbsEncryptionByDefault":  "ec2:EnableEbsEncryptionByDefault",
-	"DisableEbsEncryptionByDefault": "ec2:DisableEbsEncryptionByDefault",
-	"GetEbsEncryptionByDefault":     "ec2:GetEbsEncryptionByDefault",
-	"GetSerialConsoleAccessStatus":  "ec2:GetSerialConsoleAccessStatus",
-	"EnableSerialConsoleAccess":     "ec2:EnableSerialConsoleAccess",
-	"DisableSerialConsoleAccess":    "ec2:DisableSerialConsoleAccess",
+	"DescribeAccountAttributes":     true,
+	"EnableEbsEncryptionByDefault":  true,
+	"DisableEbsEncryptionByDefault": true,
+	"GetEbsEncryptionByDefault":     true,
+	"GetSerialConsoleAccessStatus":  true,
+	"EnableSerialConsoleAccess":     true,
+	"DisableSerialConsoleAccess":    true,
 
 	// Tags
-	"CreateTags":   "ec2:CreateTags",
-	"DeleteTags":   "ec2:DeleteTags",
-	"DescribeTags": "ec2:DescribeTags",
+	"CreateTags":   true,
+	"DeleteTags":   true,
+	"DescribeTags": true,
 
 	// Snapshots
-	"CreateSnapshot":    "ec2:CreateSnapshot",
-	"DeleteSnapshot":    "ec2:DeleteSnapshot",
-	"DescribeSnapshots": "ec2:DescribeSnapshots",
-	"CopySnapshot":      "ec2:CopySnapshot",
+	"CreateSnapshot":    true,
+	"DeleteSnapshot":    true,
+	"DescribeSnapshots": true,
+	"CopySnapshot":      true,
 
 	// Internet gateways
-	"CreateInternetGateway":    "ec2:CreateInternetGateway",
-	"DeleteInternetGateway":    "ec2:DeleteInternetGateway",
-	"DescribeInternetGateways": "ec2:DescribeInternetGateways",
-	"AttachInternetGateway":    "ec2:AttachInternetGateway",
-	"DetachInternetGateway":    "ec2:DetachInternetGateway",
+	"CreateInternetGateway":    true,
+	"DeleteInternetGateway":    true,
+	"DescribeInternetGateways": true,
+	"AttachInternetGateway":    true,
+	"DetachInternetGateway":    true,
 
 	// Egress-only internet gateways
-	"CreateEgressOnlyInternetGateway":    "ec2:CreateEgressOnlyInternetGateway",
-	"DeleteEgressOnlyInternetGateway":    "ec2:DeleteEgressOnlyInternetGateway",
-	"DescribeEgressOnlyInternetGateways": "ec2:DescribeEgressOnlyInternetGateways",
+	"CreateEgressOnlyInternetGateway":    true,
+	"DeleteEgressOnlyInternetGateway":    true,
+	"DescribeEgressOnlyInternetGateways": true,
 
 	// VPC
-	"CreateVpc":    "ec2:CreateVpc",
-	"DeleteVpc":    "ec2:DeleteVpc",
-	"DescribeVpcs": "ec2:DescribeVpcs",
+	"CreateVpc":    true,
+	"DeleteVpc":    true,
+	"DescribeVpcs": true,
 
 	// Subnets
-	"CreateSubnet":    "ec2:CreateSubnet",
-	"DeleteSubnet":    "ec2:DeleteSubnet",
-	"DescribeSubnets": "ec2:DescribeSubnets",
+	"CreateSubnet":    true,
+	"DeleteSubnet":    true,
+	"DescribeSubnets": true,
 
 	// Network interfaces
-	"CreateNetworkInterface":    "ec2:CreateNetworkInterface",
-	"DeleteNetworkInterface":    "ec2:DeleteNetworkInterface",
-	"DescribeNetworkInterfaces": "ec2:DescribeNetworkInterfaces",
+	"CreateNetworkInterface":    true,
+	"DeleteNetworkInterface":    true,
+	"DescribeNetworkInterfaces": true,
 }
 
-// IAMActions maps IAM gateway action names to their IAM action strings.
-var IAMActions = map[string]string{
+// iamActions is the set of known IAM gateway action names.
+var iamActions = map[string]bool{
 	// Users
-	"CreateUser": "iam:CreateUser",
-	"GetUser":    "iam:GetUser",
-	"ListUsers":  "iam:ListUsers",
-	"DeleteUser": "iam:DeleteUser",
+	"CreateUser": true,
+	"GetUser":    true,
+	"ListUsers":  true,
+	"DeleteUser": true,
 
 	// Access keys
-	"CreateAccessKey": "iam:CreateAccessKey",
-	"ListAccessKeys":  "iam:ListAccessKeys",
-	"DeleteAccessKey": "iam:DeleteAccessKey",
-	"UpdateAccessKey": "iam:UpdateAccessKey",
+	"CreateAccessKey": true,
+	"ListAccessKeys":  true,
+	"DeleteAccessKey": true,
+	"UpdateAccessKey": true,
 
 	// Policies
-	"CreatePolicy":     "iam:CreatePolicy",
-	"GetPolicy":        "iam:GetPolicy",
-	"GetPolicyVersion": "iam:GetPolicyVersion",
-	"ListPolicies":     "iam:ListPolicies",
-	"DeletePolicy":     "iam:DeletePolicy",
+	"CreatePolicy":     true,
+	"GetPolicy":        true,
+	"GetPolicyVersion": true,
+	"ListPolicies":     true,
+	"DeletePolicy":     true,
 
 	// Policy attachment
-	"AttachUserPolicy":         "iam:AttachUserPolicy",
-	"DetachUserPolicy":         "iam:DetachUserPolicy",
-	"ListAttachedUserPolicies": "iam:ListAttachedUserPolicies",
+	"AttachUserPolicy":         true,
+	"DetachUserPolicy":         true,
+	"ListAttachedUserPolicies": true,
 }
 
 // LookupAction resolves a gateway (service, action) pair to the IAM action
 // string used in policy documents. Returns the IAM action string and true
 // if found, or ("", false) if the action is unknown.
 func LookupAction(service, action string) (string, bool) {
-	var m map[string]string
+	var known map[string]bool
 	switch service {
 	case "ec2":
-		m = EC2Actions
+		known = ec2Actions
 	case "iam":
-		m = IAMActions
+		known = iamActions
 	default:
 		return "", false
 	}
-	iamAction, ok := m[action]
-	return iamAction, ok
+	if !known[action] {
+		return "", false
+	}
+	return IAMAction(service, action), true
 }

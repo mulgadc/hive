@@ -2,6 +2,7 @@
 package policy
 
 import (
+	"log/slog"
 	"strings"
 
 	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
@@ -35,17 +36,21 @@ func EvaluateAccess(identity, action, resource string, policies []handlers_iam.P
 		for j := range policies[i].Statement {
 			stmt := &policies[i].Statement[j]
 
-			if !matchesAction(stmt.Action, action) {
+			if !matchesAny(stmt.Action, action) {
 				continue
 			}
-			if !matchesResource(stmt.Resource, resource) {
+			if !matchesAny(stmt.Resource, resource) {
 				continue
 			}
-			if stmt.Effect == "Deny" {
+			switch stmt.Effect {
+			case "Deny":
 				return Deny
-			}
-			if stmt.Effect == "Allow" {
+			case "Allow":
 				hasAllow = true
+			default:
+				slog.Warn("EvaluateAccess: unrecognized Effect, treating as Deny",
+					"effect", stmt.Effect, "action", action, "identity", identity)
+				return Deny
 			}
 		}
 	}
@@ -56,27 +61,15 @@ func EvaluateAccess(identity, action, resource string, policies []handlers_iam.P
 	return Deny
 }
 
-// matchesAction returns true if any pattern in patterns matches the given action.
-// Supported patterns:
-//   - "*"           — matches everything
-//   - "ec2:*"       — matches all actions in the ec2 service
-//   - "s3:Get*"     — matches s3:GetObject, s3:GetBucketPolicy, etc.
+// matchesAny returns true if any pattern in patterns matches the given value.
+// Supports the same wildcard matching for both actions and resources:
+//   - "*"                — matches everything
+//   - "ec2:*"            — matches all actions in the ec2 service
+//   - "s3:Get*"          — matches s3:GetObject, s3:GetBucketPolicy, etc.
 //   - "ec2:RunInstances" — exact match
-func matchesAction(patterns []string, action string) bool {
+func matchesAny(patterns []string, value string) bool {
 	for _, p := range patterns {
-		if matchWildcard(p, action) {
-			return true
-		}
-	}
-	return false
-}
-
-// matchesResource returns true if any pattern in patterns matches the given resource.
-// For Phase 2, resources are typically "*". Supports the same wildcard matching
-// as actions for forward compatibility.
-func matchesResource(patterns []string, resource string) bool {
-	for _, p := range patterns {
-		if matchWildcard(p, resource) {
+		if matchWildcard(p, value) {
 			return true
 		}
 	}

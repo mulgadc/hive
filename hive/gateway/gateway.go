@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/url"
 	"os"
@@ -177,10 +178,21 @@ func (gw *GatewayConfig) GetService(ctx *fiber.Ctx) (string, error) {
 // access is allowed (pre-IAM compatibility).
 func (gw *GatewayConfig) checkPolicy(ctx *fiber.Ctx, service, action string) error {
 	if gw.IAMService == nil {
+		slog.Warn("checkPolicy: IAM service not available, skipping policy check",
+			"service", service, "action", action)
 		return nil
 	}
 
-	identity, _ := ctx.Locals("sigv4.identity").(string)
+	identityVal := ctx.Locals("sigv4.identity")
+	if identityVal == nil {
+		// No auth context — pre-IAM compatibility
+		return nil
+	}
+	identity, ok := identityVal.(string)
+	if !ok {
+		slog.Error("checkPolicy: identity has unexpected type", "type", fmt.Sprintf("%T", identityVal))
+		return errors.New(awserrors.ErrorInternalError)
+	}
 	if identity == "" || identity == "root" {
 		return nil
 	}

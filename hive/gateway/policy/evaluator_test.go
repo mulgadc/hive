@@ -374,22 +374,32 @@ func TestEvaluateAccess_AdminWithDenyTerminate(t *testing.T) {
 	}
 }
 
-// TestEC2ActionsComplete verifies every EC2 action in the map has the correct format.
+// TestEC2ActionsComplete verifies every EC2 action in the set resolves via LookupAction.
 func TestEC2ActionsComplete(t *testing.T) {
-	for action, iamAction := range EC2Actions {
+	for action := range ec2Actions {
+		got, ok := LookupAction("ec2", action)
+		if !ok {
+			t.Errorf("LookupAction(%q, %q) returned not-found", "ec2", action)
+			continue
+		}
 		expected := "ec2:" + action
-		if iamAction != expected {
-			t.Errorf("EC2Actions[%q] = %q, want %q", action, iamAction, expected)
+		if got != expected {
+			t.Errorf("LookupAction(%q, %q) = %q, want %q", "ec2", action, got, expected)
 		}
 	}
 }
 
-// TestIAMActionsComplete verifies every IAM action in the map has the correct format.
+// TestIAMActionsComplete verifies every IAM action in the set resolves via LookupAction.
 func TestIAMActionsComplete(t *testing.T) {
-	for action, iamAction := range IAMActions {
+	for action := range iamActions {
+		got, ok := LookupAction("iam", action)
+		if !ok {
+			t.Errorf("LookupAction(%q, %q) returned not-found", "iam", action)
+			continue
+		}
 		expected := "iam:" + action
-		if iamAction != expected {
-			t.Errorf("IAMActions[%q] = %q, want %q", action, iamAction, expected)
+		if got != expected {
+			t.Errorf("LookupAction(%q, %q) = %q, want %q", "iam", action, got, expected)
 		}
 	}
 }
