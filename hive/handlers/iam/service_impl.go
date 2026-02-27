@@ -124,7 +124,7 @@ func (s *IAMServiceImpl) CreateUser(accountID string, input *iam.CreateUserInput
 		path = *input.Path
 	}
 
-	kvKey := accountID + ":" + userName
+	kvKey := accountID + "." + userName
 	user := User{
 		UserName:         userName,
 		UserID:           generateUserID(),
@@ -215,7 +215,7 @@ func (s *IAMServiceImpl) ListUsers(accountID string, input *iam.ListUsersInput) 
 		pathPrefix = *input.PathPrefix
 	}
 
-	keyPrefix := accountID + ":"
+	keyPrefix := accountID + "."
 	var users []*iam.User
 	for _, key := range keys {
 		if !strings.HasPrefix(key, keyPrefix) {
@@ -267,7 +267,7 @@ func (s *IAMServiceImpl) DeleteUser(accountID string, input *iam.DeleteUserInput
 	}
 
 	userName := *input.UserName
-	kvKey := accountID + ":" + userName
+	kvKey := accountID + "." + userName
 
 	user, err := s.getUser(accountID, userName)
 	if err != nil {
@@ -296,7 +296,7 @@ func (s *IAMServiceImpl) CreateAccessKey(accountID string, input *iam.CreateAcce
 	}
 
 	userName := *input.UserName
-	userKVKey := accountID + ":" + userName
+	userKVKey := accountID + "." + userName
 
 	user, err := s.getUser(accountID, userName)
 	if err != nil {
@@ -423,7 +423,7 @@ func (s *IAMServiceImpl) DeleteAccessKey(accountID string, input *iam.DeleteAcce
 
 	userName := *input.UserName
 	accessKeyID := *input.AccessKeyId
-	userKVKey := accountID + ":" + userName
+	userKVKey := accountID + "." + userName
 
 	user, err := s.getUser(accountID, userName)
 	if err != nil {
@@ -547,7 +547,7 @@ func (s *IAMServiceImpl) SeedRootUser(data *BootstrapData) error {
 		return fmt.Errorf("seed global account: %w", err)
 	}
 
-	kvKey := GlobalAccountID + ":root"
+	kvKey := GlobalAccountID + ".root"
 	rootUser := User{
 		UserName:         "root",
 		UserID:           "AIDAAAAAAAAAAAAAAAAA",
@@ -742,7 +742,7 @@ func (s *IAMServiceImpl) CreatePolicy(accountID string, input *iam.CreatePolicyI
 	}
 
 	policyName := *input.PolicyName
-	kvKey := accountID + ":" + policyName
+	kvKey := accountID + "." + policyName
 
 	if _, err := ValidatePolicyDocument(*input.PolicyDocument); err != nil {
 		slog.Debug("CreatePolicy: invalid policy document", "policyName", policyName, "err", err)
@@ -877,7 +877,7 @@ func (s *IAMServiceImpl) ListPolicies(accountID string, input *iam.ListPoliciesI
 		return nil, fmt.Errorf("list policy keys: %w", err)
 	}
 
-	keyPrefix := accountID + ":"
+	keyPrefix := accountID + "."
 	var policies []*iam.Policy
 	for _, key := range keys {
 		if !strings.HasPrefix(key, keyPrefix) {
@@ -944,7 +944,7 @@ func (s *IAMServiceImpl) DeletePolicy(accountID string, input *iam.DeletePolicyI
 		return nil, errors.New(awserrors.ErrorIAMDeleteConflict)
 	}
 
-	kvKey := accountID + ":" + policy.PolicyName
+	kvKey := accountID + "." + policy.PolicyName
 	if err := s.policiesBucket.Delete(kvKey); err != nil {
 		return nil, fmt.Errorf("delete policy: %w", err)
 	}
@@ -967,7 +967,7 @@ func (s *IAMServiceImpl) AttachUserPolicy(accountID string, input *iam.AttachUse
 
 	userName := *input.UserName
 	policyARN := *input.PolicyArn
-	userKVKey := accountID + ":" + userName
+	userKVKey := accountID + "." + userName
 
 	// Verify policy exists
 	if _, err := s.getPolicyByARN(accountID, policyARN); err != nil {
@@ -1008,7 +1008,7 @@ func (s *IAMServiceImpl) DetachUserPolicy(accountID string, input *iam.DetachUse
 
 	userName := *input.UserName
 	policyARN := *input.PolicyArn
-	userKVKey := accountID + ":" + userName
+	userKVKey := accountID + "." + userName
 
 	user, err := s.getUser(accountID, userName)
 	if err != nil {
@@ -1116,7 +1116,7 @@ func (s *IAMServiceImpl) getPolicyByARN(accountID, policyARN string) (*Policy, e
 		return nil, errors.New(awserrors.ErrorIAMNoSuchEntity)
 	}
 
-	kvKey := accountID + ":" + policyName
+	kvKey := accountID + "." + policyName
 	entry, err := s.policiesBucket.Get(kvKey)
 	if err != nil {
 		if errors.Is(err, nats.ErrKeyNotFound) {
@@ -1148,7 +1148,7 @@ func (s *IAMServiceImpl) countPolicyAttachments(accountID, policyARN string) (in
 		return 0, fmt.Errorf("count policy attachments: %w", err)
 	}
 
-	keyPrefix := accountID + ":"
+	keyPrefix := accountID + "."
 	var count int64
 	for _, key := range keys {
 		if !strings.HasPrefix(key, keyPrefix) {
@@ -1177,7 +1177,7 @@ func (s *IAMServiceImpl) countPolicyAttachments(accountID, policyARN string) (in
 }
 
 func (s *IAMServiceImpl) getUser(accountID, userName string) (*User, error) {
-	kvKey := accountID + ":" + userName
+	kvKey := accountID + "." + userName
 	entry, err := s.usersBucket.Get(kvKey)
 	if err != nil {
 		if errors.Is(err, nats.ErrKeyNotFound) {
