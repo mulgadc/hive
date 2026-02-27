@@ -98,6 +98,18 @@ func DecryptSecret(ciphertext string, key []byte) (string, error) {
 	return string(plaintext), nil
 }
 
+// SaveBootstrapData writes bootstrap data as JSON to disk with 0600 permissions.
+func SaveBootstrapData(path string, data *BootstrapData) error {
+	b, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("marshal bootstrap data: %w", err)
+	}
+	if err := os.WriteFile(path, b, 0600); err != nil {
+		return fmt.Errorf("write bootstrap data: %w", err)
+	}
+	return nil
+}
+
 // LoadBootstrapData reads and parses a bootstrap JSON file from disk.
 func LoadBootstrapData(path string) (*BootstrapData, error) {
 	data, err := os.ReadFile(path)
