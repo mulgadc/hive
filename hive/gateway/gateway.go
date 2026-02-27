@@ -197,6 +197,13 @@ func (gw *GatewayConfig) checkPolicy(ctx *fiber.Ctx, service, action string) err
 		return nil
 	}
 
+	// Extract account ID from auth context
+	accountID, _ := ctx.Locals("sigv4.accountId").(string)
+	if accountID == "" {
+		slog.Error("checkPolicy: no account ID in auth context", "user", identity)
+		return errors.New(awserrors.ErrorInternalError)
+	}
+
 	// Resolve the IAM action string (e.g. "ec2:RunInstances")
 	iamAction, ok := policy.LookupAction(service, action)
 	if !ok {
@@ -205,7 +212,7 @@ func (gw *GatewayConfig) checkPolicy(ctx *fiber.Ctx, service, action string) err
 		iamAction = policy.IAMAction(service, action)
 	}
 
-	policies, err := gw.IAMService.GetUserPolicies(identity)
+	policies, err := gw.IAMService.GetUserPolicies(accountID, identity)
 	if err != nil {
 		slog.Error("checkPolicy: failed to get user policies", "user", identity, "err", err)
 		return errors.New(awserrors.ErrorInternalError)
