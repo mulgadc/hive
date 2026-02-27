@@ -431,6 +431,8 @@ func TestErrorLookup(t *testing.T) {
 		{code: "EntityAlreadyExists", http: 409, message: "The request was rejected because it attempted to create a resource that already exists."},
 		{code: "DeleteConflict", http: 409, message: "The request was rejected because it attempted to delete a resource that has attached subordinate entities."},
 		{code: "LimitExceeded", http: 409, message: "The request was rejected because it attempted to create resources beyond the current AWS account limits."},
+		{code: "MalformedPolicyDocument", http: 400, message: "The policy document is malformed."},
+		{code: "AccessDenied", http: 403, message: "User is not authorized to perform this action."},
 	}
 
 	if len(ErrorLookup) != len(expected) {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -789,10 +790,8 @@ func (s *IAMServiceImpl) AttachUserPolicy(input *iam.AttachUserPolicyInput) (*ia
 	}
 
 	// Idempotent — if already attached, succeed silently
-	for _, arn := range user.AttachedPolicies {
-		if arn == policyARN {
-			return &iam.AttachUserPolicyOutput{}, nil
-		}
+	if slices.Contains(user.AttachedPolicies, policyARN) {
+		return &iam.AttachUserPolicyOutput{}, nil
 	}
 
 	user.AttachedPolicies = append(user.AttachedPolicies, policyARN)
@@ -964,11 +963,8 @@ func (s *IAMServiceImpl) countPolicyAttachments(policyARN string) int64 {
 		if err := json.Unmarshal(entry.Value(), &user); err != nil {
 			continue
 		}
-		for _, arn := range user.AttachedPolicies {
-			if arn == policyARN {
-				count++
-				break
-			}
+		if slices.Contains(user.AttachedPolicies, policyARN) {
+			count++
 		}
 	}
 	return count

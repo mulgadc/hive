@@ -425,13 +425,13 @@ var (
 	ErrorZonesMismatched                                       = "ZonesMismatched"
 
 	// IAM-specific error codes
-	ErrorIAMNoSuchEntity              = "NoSuchEntity"
-	ErrorIAMEntityAlreadyExists       = "EntityAlreadyExists"
-	ErrorIAMDeleteConflict            = "DeleteConflict"
-	ErrorIAMLimitExceeded             = "LimitExceeded"
-	ErrorIAMInvalidInput              = ErrorInvalidInput // alias for IAM usage
-	ErrorIAMMalformedPolicyDocument   = "MalformedPolicyDocument"
-	ErrorAccessDenied                 = "AccessDenied"
+	ErrorIAMNoSuchEntity            = "NoSuchEntity"
+	ErrorIAMEntityAlreadyExists     = "EntityAlreadyExists"
+	ErrorIAMDeleteConflict          = "DeleteConflict"
+	ErrorIAMLimitExceeded           = "LimitExceeded"
+	ErrorIAMInvalidInput            = ErrorInvalidInput // alias for IAM usage
+	ErrorIAMMalformedPolicyDocument = "MalformedPolicyDocument"
+	ErrorAccessDenied               = "AccessDenied"
 )
 
 // ValidErrorCode returns the error code if it exists in ErrorLookup,
