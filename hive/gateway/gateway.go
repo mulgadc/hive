@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mulgadc/hive/hive/awsec2query"
 	"github.com/mulgadc/hive/hive/awserrors"
+	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
 	"github.com/nats-io/nats.go"
 )
 
@@ -29,6 +30,8 @@ type GatewayConfig struct {
 	AZ             string     // Availability zone this gateway is running in
 	AccessKey      string     // AWS Access Key ID for authentication
 	SecretKey      string     // AWS Secret Access Key for authentication
+	IAMService     handlers_iam.IAMService
+	IAMMasterKey   []byte // loaded from master.key file at startup
 }
 
 var supportedServices = map[string]bool{
@@ -170,12 +173,8 @@ func (gw *GatewayConfig) GetService(ctx *fiber.Ctx) (string, error) {
 }
 
 func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {
-	// TODO: Support service type specific errors (e.g EC2, S3, IAM, differ)
-
 	svc, _ := gw.GetService(ctx)
 	slog.Debug("ErrorHandler", "service", svc, "error", err.Error())
-
-	// Status code defaults to 500
 
 	// Get the request ID
 	var requestId = uuid.NewString()
@@ -191,7 +190,13 @@ func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {
 
 	errorMsg = awserrors.ErrorLookup[err.Error()]
 
-	xmlError := GenerateEC2ErrorResponse(err.Error(), errorMsg.Message, requestId)
+	// IAM uses a different error XML format than EC2
+	var xmlError []byte
+	if svc == "iam" {
+		xmlError = GenerateIAMErrorResponse(err.Error(), errorMsg.Message, requestId)
+	} else {
+		xmlError = GenerateEC2ErrorResponse(err.Error(), errorMsg.Message, requestId)
+	}
 
 	slog.Debug("Generated error response", "error", err.Error(), "xml", string(xmlError), "requestId", requestId)
 
@@ -199,7 +204,6 @@ func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {
 		errorMsg.HTTPCode = 500
 	}
 
-	// Set standard S3 error response headers
 	ctx.Set("Content-Type", "application/xml")
 	return ctx.Status(errorMsg.HTTPCode).Send(xmlError)
 }
@@ -245,6 +249,40 @@ func GenerateEC2ErrorResponse(code, message, requestID string) (output []byte) {
 	// Add XML header
 	output = append([]byte(xml.Header), output...)
 
+	return output
+}
+
+// IAMErrorResponse represents the IAM-style error XML format:
+// <ErrorResponse><Error><Type>Sender</Type><Code>...</Code><Message>...</Message></Error><RequestId>...</RequestId></ErrorResponse>
+type IAMErrorResponse struct {
+	XMLName   xml.Name       `xml:"ErrorResponse"`
+	Error     IAMErrorDetail `xml:"Error"`
+	RequestID string         `xml:"RequestId"`
+}
+
+type IAMErrorDetail struct {
+	Type    string `xml:"Type"`
+	Code    string `xml:"Code"`
+	Message string `xml:"Message"`
+}
+
+func GenerateIAMErrorResponse(code, message, requestID string) (output []byte) {
+	errorXml := IAMErrorResponse{
+		Error: IAMErrorDetail{
+			Type:    "Sender",
+			Code:    code,
+			Message: message,
+		},
+		RequestID: requestID,
+	}
+
+	output, err := xml.MarshalIndent(errorXml, "", "  ")
+	if err != nil {
+		slog.Error("Failed to build IAM error XML", "error", err)
+		return nil
+	}
+
+	output = append([]byte(xml.Header), output...)
 	return output
 }
 

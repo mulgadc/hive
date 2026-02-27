@@ -63,10 +63,10 @@ func NewIAMServiceImpl(natsConn *nats.Conn, masterKey []byte) (*IAMServiceImpl, 
 	}, nil
 }
 
-func getOrCreateBucket(js nats.JetStreamContext, name string, history int) (nats.KeyValue, error) {
+func getOrCreateBucket(js nats.JetStreamContext, name string, history uint8) (nats.KeyValue, error) {
 	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{
 		Bucket:  name,
-		History: uint8(history),
+		History: history,
 	})
 	if err != nil {
 		kv, err = js.KeyValue(name)
