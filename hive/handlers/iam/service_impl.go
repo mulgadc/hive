@@ -20,6 +20,7 @@ import (
 const (
 	KVBucketUsers      = "hive-iam-users"
 	KVBucketAccessKeys = "hive-iam-access-keys"
+	KVBucketPolicies   = "hive-iam-policies"
 
 	HiveAccountID = "000000000000"
 
@@ -31,6 +32,7 @@ type IAMServiceImpl struct {
 	js               nats.JetStreamContext
 	usersBucket      nats.KeyValue
 	accessKeysBucket nats.KeyValue
+	policiesBucket   nats.KeyValue
 	masterKey        []byte
 }
 
@@ -55,14 +57,21 @@ func NewIAMServiceImpl(natsConn *nats.Conn, masterKey []byte) (*IAMServiceImpl, 
 		return nil, fmt.Errorf("init access keys bucket: %w", err)
 	}
 
+	policiesBucket, err := getOrCreateBucket(js, KVBucketPolicies, 10)
+	if err != nil {
+		return nil, fmt.Errorf("init policies bucket: %w", err)
+	}
+
 	slog.Info("IAM service initialized",
 		"users_bucket", KVBucketUsers,
-		"access_keys_bucket", KVBucketAccessKeys)
+		"access_keys_bucket", KVBucketAccessKeys,
+		"policies_bucket", KVBucketPolicies)
 
 	return &IAMServiceImpl{
 		js:               js,
 		usersBucket:      usersBucket,
 		accessKeysBucket: accessKeysBucket,
+		policiesBucket:   policiesBucket,
 		masterKey:        masterKey,
 	}, nil
 }
@@ -97,13 +106,14 @@ func (s *IAMServiceImpl) CreateUser(input *iam.CreateUserInput) (*iam.CreateUser
 	}
 
 	user := User{
-		UserName:   userName,
-		UserID:     generateUserID(),
-		ARN:        fmt.Sprintf("arn:aws:iam::%s:user%s%s", HiveAccountID, path, userName),
-		Path:       path,
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-		AccessKeys: []string{},
-		Tags:       []Tag{},
+		UserName:         userName,
+		UserID:           generateUserID(),
+		ARN:              fmt.Sprintf("arn:aws:iam::%s:user%s%s", HiveAccountID, path, userName),
+		Path:             path,
+		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
+		AccessKeys:       []string{},
+		Tags:             []Tag{},
+		AttachedPolicies: []string{},
 	}
 
 	for _, tag := range input.Tags {
@@ -490,13 +500,14 @@ func (s *IAMServiceImpl) LookupAccessKey(accessKeyID string) (*AccessKey, error)
 // race safety — the first node to call this wins; others skip silently.
 func (s *IAMServiceImpl) SeedRootUser(data *BootstrapData) error {
 	rootUser := User{
-		UserName:   "root",
-		UserID:     "AIDAAAAAAAAAAAAAAAAA",
-		ARN:        fmt.Sprintf("arn:aws:iam::%s:root", data.AccountID),
-		Path:       "/",
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-		AccessKeys: []string{data.AccessKeyID},
-		Tags:       []Tag{},
+		UserName:         "root",
+		UserID:           "AIDAAAAAAAAAAAAAAAAA",
+		ARN:              fmt.Sprintf("arn:aws:iam::%s:root", data.AccountID),
+		Path:             "/",
+		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
+		AccessKeys:       []string{data.AccessKeyID},
+		Tags:             []Tag{},
+		AttachedPolicies: []string{},
 	}
 
 	userData, err := json.Marshal(rootUser)
@@ -595,4 +606,42 @@ func generateSecretAccessKey() string {
 		panic("crypto/rand failed: " + err.Error())
 	}
 	return base64.StdEncoding.EncodeToString(b)[:40]
+}
+
+func generatePolicyID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return "ANPA" + strings.ToUpper(hex.EncodeToString(b))[:17]
+}
+
+// ValidatePolicyDocument parses and validates an IAM policy document JSON string.
+func ValidatePolicyDocument(docJSON string) (*PolicyDocument, error) {
+	var doc PolicyDocument
+	if err := json.Unmarshal([]byte(docJSON), &doc); err != nil {
+		return nil, fmt.Errorf("invalid JSON: %w", err)
+	}
+
+	if doc.Version != "2012-10-17" {
+		return nil, fmt.Errorf("unsupported policy version: %q", doc.Version)
+	}
+
+	if len(doc.Statement) == 0 {
+		return nil, fmt.Errorf("policy must contain at least one statement")
+	}
+
+	for i, stmt := range doc.Statement {
+		if stmt.Effect != "Allow" && stmt.Effect != "Deny" {
+			return nil, fmt.Errorf("statement %d: Effect must be Allow or Deny, got %q", i, stmt.Effect)
+		}
+		if len(stmt.Action) == 0 {
+			return nil, fmt.Errorf("statement %d: Action is required", i)
+		}
+		if len(stmt.Resource) == 0 {
+			return nil, fmt.Errorf("statement %d: Resource is required", i)
+		}
+	}
+
+	return &doc, nil
 }
