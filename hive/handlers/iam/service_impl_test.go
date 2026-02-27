@@ -584,3 +584,656 @@ func TestGenerateSecretAccessKey(t *testing.T) {
 	secret2 := generateSecretAccessKey()
 	assert.NotEqual(t, secret, secret2)
 }
+
+// ============================================================================
+// Policy CRUD Tests
+// ============================================================================
+
+// validPolicyDocument returns a valid IAM policy document JSON string.
+func validPolicyDocument() string {
+	return `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ec2:DescribeInstances","Resource":"*"}]}`
+}
+
+func createTestPolicy(t *testing.T, svc *IAMServiceImpl, name string) *iam.Policy {
+	t.Helper()
+	out, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+		PolicyName:     aws.String(name),
+		PolicyDocument: aws.String(validPolicyDocument()),
+	})
+	require.NoError(t, err)
+	return out.Policy
+}
+
+func TestCreatePolicy(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	out, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+		PolicyName:     aws.String("AllowEC2"),
+		PolicyDocument: aws.String(validPolicyDocument()),
+		Path:           aws.String("/devteam/"),
+		Description:    aws.String("Allow EC2 describe"),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out.Policy)
+	assert.Equal(t, "AllowEC2", *out.Policy.PolicyName)
+	assert.Equal(t, "/devteam/", *out.Policy.Path)
+	assert.Equal(t, "Allow EC2 describe", *out.Policy.Description)
+	assert.Equal(t, "v1", *out.Policy.DefaultVersionId)
+	assert.Contains(t, *out.Policy.Arn, "policy/devteam/AllowEC2")
+	assert.True(t, len(*out.Policy.PolicyId) > 4)
+	assert.Equal(t, "ANPA", (*out.Policy.PolicyId)[:4])
+	assert.Equal(t, int64(0), *out.Policy.AttachmentCount)
+	assert.True(t, *out.Policy.IsAttachable)
+}
+
+func TestCreatePolicy_DefaultPath(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	out, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+		PolicyName:     aws.String("DefaultPath"),
+		PolicyDocument: aws.String(validPolicyDocument()),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "/", *out.Policy.Path)
+	assert.Contains(t, *out.Policy.Arn, "policy/DefaultPath")
+}
+
+func TestCreatePolicy_MissingName(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	_, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+		PolicyDocument: aws.String(validPolicyDocument()),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMInvalidInput)
+}
+
+func TestCreatePolicy_MissingDocument(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	_, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+		PolicyName: aws.String("NoDoc"),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMInvalidInput)
+}
+
+func TestCreatePolicy_InvalidJSON(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	_, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+		PolicyName:     aws.String("BadJSON"),
+		PolicyDocument: aws.String(`{not valid json`),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMMalformedPolicyDocument)
+}
+
+func TestCreatePolicy_InvalidVersion(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	_, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+		PolicyName:     aws.String("BadVersion"),
+		PolicyDocument: aws.String(`{"Version":"2008-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMMalformedPolicyDocument)
+}
+
+func TestCreatePolicy_NoStatements(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	_, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+		PolicyName:     aws.String("NoStmts"),
+		PolicyDocument: aws.String(`{"Version":"2012-10-17","Statement":[]}`),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMMalformedPolicyDocument)
+}
+
+func TestCreatePolicy_InvalidEffect(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	_, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+		PolicyName:     aws.String("BadEffect"),
+		PolicyDocument: aws.String(`{"Version":"2012-10-17","Statement":[{"Effect":"Maybe","Action":"*","Resource":"*"}]}`),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMMalformedPolicyDocument)
+}
+
+func TestCreatePolicy_MissingAction(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	_, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+		PolicyName:     aws.String("NoAction"),
+		PolicyDocument: aws.String(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Resource":"*"}]}`),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMMalformedPolicyDocument)
+}
+
+func TestCreatePolicy_MissingResource(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	_, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+		PolicyName:     aws.String("NoResource"),
+		PolicyDocument: aws.String(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*"}]}`),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMMalformedPolicyDocument)
+}
+
+func TestCreatePolicy_Duplicate(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	createTestPolicy(t, svc, "DupPolicy")
+
+	_, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+		PolicyName:     aws.String("DupPolicy"),
+		PolicyDocument: aws.String(validPolicyDocument()),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMEntityAlreadyExists)
+}
+
+func TestCreatePolicy_ArrayActions(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["ec2:DescribeInstances","ec2:RunInstances"],"Resource":"*"}]}`
+	out, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+		PolicyName:     aws.String("ArrayActions"),
+		PolicyDocument: aws.String(doc),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "ArrayActions", *out.Policy.PolicyName)
+}
+
+func TestGetPolicy(t *testing.T) {
+	svc := setupTestIAMService(t)
+	created := createTestPolicy(t, svc, "GetMe")
+
+	out, err := svc.GetPolicy(&iam.GetPolicyInput{
+		PolicyArn: created.Arn,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "GetMe", *out.Policy.PolicyName)
+	assert.Equal(t, *created.PolicyId, *out.Policy.PolicyId)
+	assert.Equal(t, *created.Arn, *out.Policy.Arn)
+	assert.Equal(t, "v1", *out.Policy.DefaultVersionId)
+	assert.Equal(t, int64(0), *out.Policy.AttachmentCount)
+}
+
+func TestGetPolicy_NotFound(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	_, err := svc.GetPolicy(&iam.GetPolicyInput{
+		PolicyArn: aws.String("arn:aws:iam::000000000000:policy/Nonexistent"),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMNoSuchEntity)
+}
+
+func TestGetPolicy_MalformedARN(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	_, err := svc.GetPolicy(&iam.GetPolicyInput{
+		PolicyArn: aws.String("not-an-arn"),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMNoSuchEntity)
+}
+
+func TestGetPolicy_WithAttachments(t *testing.T) {
+	svc := setupTestIAMService(t)
+	created := createTestPolicy(t, svc, "AttachedPolicy")
+	createTestUser(t, svc, "attachuser1")
+	createTestUser(t, svc, "attachuser2")
+
+	svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+		UserName:  aws.String("attachuser1"),
+		PolicyArn: created.Arn,
+	})
+	svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+		UserName:  aws.String("attachuser2"),
+		PolicyArn: created.Arn,
+	})
+
+	out, err := svc.GetPolicy(&iam.GetPolicyInput{
+		PolicyArn: created.Arn,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), *out.Policy.AttachmentCount)
+}
+
+func TestGetPolicyVersion(t *testing.T) {
+	svc := setupTestIAMService(t)
+	created := createTestPolicy(t, svc, "VersionPolicy")
+
+	out, err := svc.GetPolicyVersion(&iam.GetPolicyVersionInput{
+		PolicyArn: created.Arn,
+		VersionId: aws.String("v1"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "v1", *out.PolicyVersion.VersionId)
+	assert.True(t, *out.PolicyVersion.IsDefaultVersion)
+	assert.NotEmpty(t, *out.PolicyVersion.Document)
+
+	// Verify the returned document is valid JSON
+	doc, err := ValidatePolicyDocument(*out.PolicyVersion.Document)
+	require.NoError(t, err)
+	assert.Equal(t, "2012-10-17", doc.Version)
+	assert.Len(t, doc.Statement, 1)
+}
+
+func TestGetPolicyVersion_InvalidVersion(t *testing.T) {
+	svc := setupTestIAMService(t)
+	created := createTestPolicy(t, svc, "VersionPolicy2")
+
+	_, err := svc.GetPolicyVersion(&iam.GetPolicyVersionInput{
+		PolicyArn: created.Arn,
+		VersionId: aws.String("v2"),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMNoSuchEntity)
+}
+
+func TestGetPolicyVersion_PolicyNotFound(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	_, err := svc.GetPolicyVersion(&iam.GetPolicyVersionInput{
+		PolicyArn: aws.String("arn:aws:iam::000000000000:policy/Ghost"),
+		VersionId: aws.String("v1"),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMNoSuchEntity)
+}
+
+func TestListPolicies(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	createTestPolicy(t, svc, "Policy1")
+	createTestPolicy(t, svc, "Policy2")
+	createTestPolicy(t, svc, "Policy3")
+
+	out, err := svc.ListPolicies(&iam.ListPoliciesInput{})
+	require.NoError(t, err)
+	assert.Len(t, out.Policies, 3)
+
+	names := make(map[string]bool)
+	for _, p := range out.Policies {
+		names[*p.PolicyName] = true
+	}
+	assert.True(t, names["Policy1"])
+	assert.True(t, names["Policy2"])
+	assert.True(t, names["Policy3"])
+}
+
+func TestListPolicies_Empty(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	out, err := svc.ListPolicies(&iam.ListPoliciesInput{})
+	require.NoError(t, err)
+	assert.Len(t, out.Policies, 0)
+}
+
+func TestDeletePolicy(t *testing.T) {
+	svc := setupTestIAMService(t)
+	created := createTestPolicy(t, svc, "DeleteMe")
+
+	_, err := svc.DeletePolicy(&iam.DeletePolicyInput{
+		PolicyArn: created.Arn,
+	})
+	require.NoError(t, err)
+
+	// Confirm it's gone
+	_, err = svc.GetPolicy(&iam.GetPolicyInput{
+		PolicyArn: created.Arn,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMNoSuchEntity)
+}
+
+func TestDeletePolicy_NotFound(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	_, err := svc.DeletePolicy(&iam.DeletePolicyInput{
+		PolicyArn: aws.String("arn:aws:iam::000000000000:policy/Ghost"),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMNoSuchEntity)
+}
+
+func TestDeletePolicy_AttachedConflict(t *testing.T) {
+	svc := setupTestIAMService(t)
+	created := createTestPolicy(t, svc, "Attached")
+	createTestUser(t, svc, "conflictuser")
+
+	_, err := svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+		UserName:  aws.String("conflictuser"),
+		PolicyArn: created.Arn,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.DeletePolicy(&iam.DeletePolicyInput{
+		PolicyArn: created.Arn,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMDeleteConflict)
+
+	// Detach, then delete should succeed
+	_, err = svc.DetachUserPolicy(&iam.DetachUserPolicyInput{
+		UserName:  aws.String("conflictuser"),
+		PolicyArn: created.Arn,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.DeletePolicy(&iam.DeletePolicyInput{
+		PolicyArn: created.Arn,
+	})
+	require.NoError(t, err)
+}
+
+// ============================================================================
+// Policy Attachment Tests
+// ============================================================================
+
+func TestAttachUserPolicy(t *testing.T) {
+	svc := setupTestIAMService(t)
+	created := createTestPolicy(t, svc, "AttachPolicy")
+	createTestUser(t, svc, "attachme")
+
+	_, err := svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+		UserName:  aws.String("attachme"),
+		PolicyArn: created.Arn,
+	})
+	require.NoError(t, err)
+
+	// Verify via list
+	out, err := svc.ListAttachedUserPolicies(&iam.ListAttachedUserPoliciesInput{
+		UserName: aws.String("attachme"),
+	})
+	require.NoError(t, err)
+	require.Len(t, out.AttachedPolicies, 1)
+	assert.Equal(t, "AttachPolicy", *out.AttachedPolicies[0].PolicyName)
+	assert.Equal(t, *created.Arn, *out.AttachedPolicies[0].PolicyArn)
+}
+
+func TestAttachUserPolicy_Idempotent(t *testing.T) {
+	svc := setupTestIAMService(t)
+	created := createTestPolicy(t, svc, "IdempotentPolicy")
+	createTestUser(t, svc, "idempotentuser")
+
+	input := &iam.AttachUserPolicyInput{
+		UserName:  aws.String("idempotentuser"),
+		PolicyArn: created.Arn,
+	}
+
+	_, err := svc.AttachUserPolicy(input)
+	require.NoError(t, err)
+
+	// Attach same policy again — should succeed silently
+	_, err = svc.AttachUserPolicy(input)
+	require.NoError(t, err)
+
+	// Should still have exactly 1 attachment
+	out, err := svc.ListAttachedUserPolicies(&iam.ListAttachedUserPoliciesInput{
+		UserName: aws.String("idempotentuser"),
+	})
+	require.NoError(t, err)
+	assert.Len(t, out.AttachedPolicies, 1)
+}
+
+func TestAttachUserPolicy_NonexistentPolicy(t *testing.T) {
+	svc := setupTestIAMService(t)
+	createTestUser(t, svc, "orphanuser")
+
+	_, err := svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+		UserName:  aws.String("orphanuser"),
+		PolicyArn: aws.String("arn:aws:iam::000000000000:policy/Ghost"),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMNoSuchEntity)
+}
+
+func TestAttachUserPolicy_NonexistentUser(t *testing.T) {
+	svc := setupTestIAMService(t)
+	created := createTestPolicy(t, svc, "OrphanPolicy")
+
+	_, err := svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+		UserName:  aws.String("ghostuser"),
+		PolicyArn: created.Arn,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMNoSuchEntity)
+}
+
+func TestDetachUserPolicy(t *testing.T) {
+	svc := setupTestIAMService(t)
+	created := createTestPolicy(t, svc, "DetachPolicy")
+	createTestUser(t, svc, "detachme")
+
+	_, err := svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+		UserName:  aws.String("detachme"),
+		PolicyArn: created.Arn,
+	})
+	require.NoError(t, err)
+
+	_, err = svc.DetachUserPolicy(&iam.DetachUserPolicyInput{
+		UserName:  aws.String("detachme"),
+		PolicyArn: created.Arn,
+	})
+	require.NoError(t, err)
+
+	// Verify detached
+	out, err := svc.ListAttachedUserPolicies(&iam.ListAttachedUserPoliciesInput{
+		UserName: aws.String("detachme"),
+	})
+	require.NoError(t, err)
+	assert.Len(t, out.AttachedPolicies, 0)
+}
+
+func TestDetachUserPolicy_NotAttached(t *testing.T) {
+	svc := setupTestIAMService(t)
+	created := createTestPolicy(t, svc, "NeverAttached")
+	createTestUser(t, svc, "cleanuser")
+
+	_, err := svc.DetachUserPolicy(&iam.DetachUserPolicyInput{
+		UserName:  aws.String("cleanuser"),
+		PolicyArn: created.Arn,
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMNoSuchEntity)
+}
+
+func TestDetachUserPolicy_NonexistentUser(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	_, err := svc.DetachUserPolicy(&iam.DetachUserPolicyInput{
+		UserName:  aws.String("ghostuser"),
+		PolicyArn: aws.String("arn:aws:iam::000000000000:policy/Whatever"),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMNoSuchEntity)
+}
+
+func TestListAttachedUserPolicies(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	p1 := createTestPolicy(t, svc, "ListPolicy1")
+	p2 := createTestPolicy(t, svc, "ListPolicy2")
+	createTestUser(t, svc, "listpuser")
+
+	svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+		UserName:  aws.String("listpuser"),
+		PolicyArn: p1.Arn,
+	})
+	svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+		UserName:  aws.String("listpuser"),
+		PolicyArn: p2.Arn,
+	})
+
+	out, err := svc.ListAttachedUserPolicies(&iam.ListAttachedUserPoliciesInput{
+		UserName: aws.String("listpuser"),
+	})
+	require.NoError(t, err)
+	assert.Len(t, out.AttachedPolicies, 2)
+
+	names := make(map[string]bool)
+	for _, p := range out.AttachedPolicies {
+		names[*p.PolicyName] = true
+	}
+	assert.True(t, names["ListPolicy1"])
+	assert.True(t, names["ListPolicy2"])
+}
+
+func TestListAttachedUserPolicies_Empty(t *testing.T) {
+	svc := setupTestIAMService(t)
+	createTestUser(t, svc, "nopolicies")
+
+	out, err := svc.ListAttachedUserPolicies(&iam.ListAttachedUserPoliciesInput{
+		UserName: aws.String("nopolicies"),
+	})
+	require.NoError(t, err)
+	assert.Len(t, out.AttachedPolicies, 0)
+}
+
+func TestListAttachedUserPolicies_NonexistentUser(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	_, err := svc.ListAttachedUserPolicies(&iam.ListAttachedUserPoliciesInput{
+		UserName: aws.String("ghostuser"),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMNoSuchEntity)
+}
+
+// ============================================================================
+// GetUserPolicies (internal) Tests
+// ============================================================================
+
+func TestGetUserPolicies(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ec2:DescribeInstances","Resource":"*"}]}`
+	p1, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+		PolicyName:     aws.String("InternalPolicy1"),
+		PolicyDocument: aws.String(doc),
+	})
+	require.NoError(t, err)
+
+	doc2 := `{"Version":"2012-10-17","Statement":[{"Effect":"Deny","Action":"ec2:TerminateInstances","Resource":"*"}]}`
+	p2, err := svc.CreatePolicy(&iam.CreatePolicyInput{
+		PolicyName:     aws.String("InternalPolicy2"),
+		PolicyDocument: aws.String(doc2),
+	})
+	require.NoError(t, err)
+
+	createTestUser(t, svc, "evaluser")
+
+	svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+		UserName:  aws.String("evaluser"),
+		PolicyArn: p1.Policy.Arn,
+	})
+	svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
+		UserName:  aws.String("evaluser"),
+		PolicyArn: p2.Policy.Arn,
+	})
+
+	docs, err := svc.GetUserPolicies("evaluser")
+	require.NoError(t, err)
+	assert.Len(t, docs, 2)
+	assert.Equal(t, "2012-10-17", docs[0].Version)
+	assert.Equal(t, "2012-10-17", docs[1].Version)
+}
+
+func TestGetUserPolicies_NoPolicies(t *testing.T) {
+	svc := setupTestIAMService(t)
+	createTestUser(t, svc, "emptyuser")
+
+	docs, err := svc.GetUserPolicies("emptyuser")
+	require.NoError(t, err)
+	assert.Len(t, docs, 0)
+}
+
+func TestGetUserPolicies_NonexistentUser(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	_, err := svc.GetUserPolicies("ghostuser")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMNoSuchEntity)
+}
+
+// ============================================================================
+// ValidatePolicyDocument Tests
+// ============================================================================
+
+func TestValidatePolicyDocument_Valid(t *testing.T) {
+	doc, err := ValidatePolicyDocument(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`)
+	require.NoError(t, err)
+	assert.Equal(t, "2012-10-17", doc.Version)
+	assert.Len(t, doc.Statement, 1)
+	assert.Equal(t, "Allow", doc.Statement[0].Effect)
+}
+
+func TestValidatePolicyDocument_MultipleStatements(t *testing.T) {
+	doc, err := ValidatePolicyDocument(`{
+		"Version":"2012-10-17",
+		"Statement":[
+			{"Sid":"AllowEC2","Effect":"Allow","Action":["ec2:DescribeInstances","ec2:RunInstances"],"Resource":"*"},
+			{"Effect":"Deny","Action":"ec2:TerminateInstances","Resource":"*"}
+		]
+	}`)
+	require.NoError(t, err)
+	assert.Len(t, doc.Statement, 2)
+	assert.Equal(t, "AllowEC2", doc.Statement[0].Sid)
+	assert.Len(t, doc.Statement[0].Action, 2)
+}
+
+func TestValidatePolicyDocument_BadJSON(t *testing.T) {
+	_, err := ValidatePolicyDocument(`{broken`)
+	assert.Error(t, err)
+}
+
+func TestValidatePolicyDocument_WrongVersion(t *testing.T) {
+	_, err := ValidatePolicyDocument(`{"Version":"2008-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported policy version")
+}
+
+func TestValidatePolicyDocument_EmptyStatements(t *testing.T) {
+	_, err := ValidatePolicyDocument(`{"Version":"2012-10-17","Statement":[]}`)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "at least one statement")
+}
+
+func TestValidatePolicyDocument_BadEffect(t *testing.T) {
+	_, err := ValidatePolicyDocument(`{"Version":"2012-10-17","Statement":[{"Effect":"Maybe","Action":"*","Resource":"*"}]}`)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Effect must be Allow or Deny")
+}
+
+func TestValidatePolicyDocument_MissingAction(t *testing.T) {
+	_, err := ValidatePolicyDocument(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Resource":"*"}]}`)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Action is required")
+}
+
+func TestValidatePolicyDocument_MissingResource(t *testing.T) {
+	_, err := ValidatePolicyDocument(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*"}]}`)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Resource is required")
+}
+
+// ============================================================================
+// Helper Function Tests (Policy)
+// ============================================================================
+
+func TestGeneratePolicyID(t *testing.T) {
+	id := generatePolicyID()
+	assert.Equal(t, "ANPA", id[:4])
+	assert.Len(t, id, 21) // ANPA + 17 hex chars
+
+	id2 := generatePolicyID()
+	assert.NotEqual(t, id, id2)
+}
