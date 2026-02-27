@@ -353,7 +353,7 @@ if has_service "awsgw"; then
 
     unset HIVE_NATS_HOST
     unset HIVE_PREDASTORE_HOST
-    export HIVE_BASE_DIR=$CONFIG_DIR
+    export HIVE_BASE_DIR=$DATA_DIR
     export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
     export HIVE_AWSGW_TLS_CERT=$CONFIG_DIR/server.pem
     export HIVE_AWSGW_TLS_KEY=$CONFIG_DIR/server.key

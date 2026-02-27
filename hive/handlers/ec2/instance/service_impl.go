@@ -257,8 +257,8 @@ func (s *InstanceServiceImpl) newViperblock(volumeName string, size int, volumeC
 		VolumeSize: utils.SafeIntToUint64(size),
 		Bucket:     s.config.Predastore.Bucket,
 		Region:     s.config.Predastore.Region,
-		AccessKey:  s.config.AccessKey,
-		SecretKey:  s.config.SecretKey,
+		AccessKey:  s.config.Predastore.AccessKey,
+		SecretKey:  s.config.Predastore.SecretKey,
 		Host:       s.config.Predastore.Host,
 	}
 

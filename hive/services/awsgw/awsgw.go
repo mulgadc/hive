@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/gateway"
+	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
@@ -52,7 +54,7 @@ func (svc *Service) Reload() (err error) {
 	return nil
 }
 
-func launchService(config *config.ClusterConfig) (err error) {
+func launchService(config *config.ClusterConfig) error {
 
 	nodeConfig := config.Nodes[config.Node]
 
@@ -69,6 +71,32 @@ func launchService(config *config.ClusterConfig) (err error) {
 		nodeConfig.AWSGW.Config = fmt.Sprintf("%s/%s", nodeConfig.BaseDir, nodeConfig.AWSGW.Config)
 	}
 
+	// Load IAM master key from disk (required for all authenticated requests)
+	masterKeyPath := filepath.Join(nodeConfig.BaseDir, "config", "master.key")
+	masterKey, err := handlers_iam.LoadMasterKey(masterKeyPath)
+	if err != nil {
+		return fmt.Errorf("load IAM master key from %s: %w", masterKeyPath, err)
+	}
+
+	// Initialize IAM service with NATS KV backend (required for auth)
+	iamService, err := handlers_iam.NewIAMServiceImpl(natsConn, masterKey)
+	if err != nil {
+		return fmt.Errorf("initialize IAM service: %w", err)
+	}
+
+	// First boot: consume bootstrap.json → seed root user into NATS KV → delete file
+	bootstrapPath := filepath.Join(nodeConfig.BaseDir, "config", "bootstrap.json")
+	if data, err := handlers_iam.LoadBootstrapData(bootstrapPath); err == nil {
+		slog.Info("Bootstrap file found, seeding root IAM user")
+		if err := iamService.SeedRootUser(data); err != nil {
+			return fmt.Errorf("seed root user from bootstrap.json: %w", err)
+		}
+		if err := os.Remove(bootstrapPath); err != nil {
+			slog.Warn("Failed to delete bootstrap file", "path", bootstrapPath, "err", err)
+		}
+		slog.Info("Bootstrap complete, bootstrap.json deleted")
+	}
+
 	// Create gateway with NATS connection
 	gw := gateway.GatewayConfig{
 		Debug:          nodeConfig.AWSGW.Debug,
@@ -78,16 +106,11 @@ func launchService(config *config.ClusterConfig) (err error) {
 		ExpectedNodes:  len(config.Nodes),
 		Region:         nodeConfig.Region,
 		AZ:             nodeConfig.AZ,
-		AccessKey:      nodeConfig.AccessKey,
-		SecretKey:      nodeConfig.SecretKey,
+		IAMService:     iamService,
+		IAMMasterKey:   masterKey,
 	}
 
 	app := gw.SetupRoutes()
-
-	if err != nil {
-		slog.Warn("Failed to setup gateway routes", "err", err)
-		return err
-	}
 
 	if err := app.ListenTLS(nodeConfig.AWSGW.Host, nodeConfig.AWSGW.TLSCert, nodeConfig.AWSGW.TLSKey); err != nil {
 		slog.Error("Failed to start TLS listener", "err", err)

@@ -887,7 +887,7 @@ func CreateS3Client(cfg *config.Config) *s3.S3 {
 	sess := session.Must(session.NewSession(&aws.Config{
 		Region:           aws.String(cfg.Predastore.Region),
 		Endpoint:         aws.String(fmt.Sprintf("https://%s", cfg.Predastore.Host)),
-		Credentials:      credentials.NewStaticCredentials(cfg.AccessKey, cfg.SecretKey, ""),
+		Credentials:      credentials.NewStaticCredentials(cfg.Predastore.AccessKey, cfg.Predastore.SecretKey, ""),
 		S3ForcePathStyle: aws.Bool(true),
 		DisableSSL:       aws.Bool(false),
 		HTTPClient:       httpClient,

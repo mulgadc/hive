@@ -11,6 +11,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/mulgadc/hive/hive/awserrors"
+	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
 	"github.com/mulgadc/predastore/auth"
 )
 
@@ -76,11 +77,30 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() fiber.Handler {
 			return gw.writeSigV4Error(c, awserrors.ErrorIncompleteSignature)
 		}
 
-		// Verify access key matches configured credentials
-		fmt.Println("accessKey", accessKey, "gw.AccessKey", gw.AccessKey)
-		if accessKey != gw.AccessKey {
-			slog.Debug("Invalid access key", "provided", accessKey, "expected", gw.AccessKey)
+		// Lookup access key in IAM KV store
+		if gw.IAMService == nil {
+			slog.Error("SigV4 auth: IAM service not initialized")
+			return gw.writeSigV4Error(c, awserrors.ErrorInternalError)
+		}
+
+		ak, err := gw.IAMService.LookupAccessKey(accessKey)
+		if err != nil {
+			if strings.Contains(err.Error(), awserrors.ErrorIAMNoSuchEntity) {
+				slog.Debug("Access key not found", "accessKeyID", accessKey)
+				return gw.writeSigV4Error(c, awserrors.ErrorInvalidClientTokenId)
+			}
+			slog.Error("IAM lookup failed", "accessKeyID", accessKey, "err", err)
+			return gw.writeSigV4Error(c, awserrors.ErrorInternalError)
+		}
+		if ak.Status != "Active" {
+			slog.Debug("Access key inactive", "accessKeyID", accessKey)
 			return gw.writeSigV4Error(c, awserrors.ErrorInvalidClientTokenId)
+		}
+
+		secret, err := handlers_iam.DecryptSecret(ak.SecretAccessKey, gw.IAMMasterKey)
+		if err != nil {
+			slog.Error("Failed to decrypt IAM secret", "accessKeyID", accessKey, "err", err)
+			return gw.writeSigV4Error(c, awserrors.ErrorInternalError)
 		}
 
 		// Get timestamp from X-Amz-Date header
@@ -100,8 +120,8 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() fiber.Handler {
 			return gw.writeSigV4Error(c, awserrors.ErrorSignatureDoesNotMatch)
 		}
 
-		// Compute expected signature
-		expectedSignature := gw.computeSignature(c, date, timestamp, region, service, signedHeaders)
+		// Compute expected signature using decrypted secret
+		expectedSignature := computeSignatureWithSecret(c, secret, date, timestamp, region, service, signedHeaders)
 
 		// Compare signatures using constant-time comparison to prevent timing attacks
 		if subtle.ConstantTimeCompare([]byte(expectedSignature), []byte(providedSignature)) != 1 {
@@ -113,17 +133,19 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() fiber.Handler {
 		}
 
 		// Store parsed auth data in context for downstream handlers
+		c.Locals("sigv4.identity", ak.UserName)
 		c.Locals("sigv4.service", service)
 		c.Locals("sigv4.region", region)
 		c.Locals("sigv4.accessKey", accessKey)
 
-		slog.Debug("SigV4 authentication successful", "accessKey", accessKey)
+		slog.Debug("SigV4 authentication successful", "accessKey", accessKey, "identity", ak.UserName)
 		return c.Next()
 	}
 }
 
-// computeSignature builds the canonical request and computes the AWS Signature V4 signature.
-func (gw *GatewayConfig) computeSignature(c *fiber.Ctx, date, timestamp, region, service, signedHeaders string) string {
+// computeSignatureWithSecret builds the canonical request and computes the AWS Signature V4 signature
+// using the provided secret key.
+func computeSignatureWithSecret(c *fiber.Ctx, secretKey, date, timestamp, region, service, signedHeaders string) string {
 	// Build canonical URI (URI-encoded path)
 	path := c.Path()
 	if path == "" {
@@ -184,7 +206,7 @@ func (gw *GatewayConfig) computeSignature(c *fiber.Ctx, date, timestamp, region,
 	)
 
 	// Derive signing key and compute signature
-	signingKey := auth.GetSigningKey(gw.SecretKey, date, region, service)
+	signingKey := auth.GetSigningKey(secretKey, date, region, service)
 	signature := auth.HmacSHA256Hex(signingKey, stringToSign)
 
 	return signature

@@ -425,6 +425,12 @@ func TestErrorLookup(t *testing.T) {
 		{code: "VpnGatewayAttachmentLimitExceeded", http: 400, message: "You've reached the limit on the number of VPCs that can be attached to the specified virtual private gateway."},
 		{code: "VpnGatewayLimitExceeded", http: 400, message: "You've reached the limit on the number of virtual private gateways that you can create. For more information about limits, see Amazon VPC quotas."},
 		{code: "ZonesMismatched", http: 400, message: "The Availability Zone for the instance does not match that of the Dedicated Host"},
+
+		// IAM error codes
+		{code: "NoSuchEntity", http: 404, message: "The request was rejected because it referenced a resource entity that does not exist."},
+		{code: "EntityAlreadyExists", http: 409, message: "The request was rejected because it attempted to create a resource that already exists."},
+		{code: "DeleteConflict", http: 409, message: "The request was rejected because it attempted to delete a resource that has attached subordinate entities."},
+		{code: "LimitExceeded", http: 409, message: "The request was rejected because it attempted to create resources beyond the current AWS account limits."},
 	}
 
 	if len(ErrorLookup) != len(expected) {

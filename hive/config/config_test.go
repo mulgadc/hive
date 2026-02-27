@@ -32,9 +32,6 @@ node = "node1"
 node = "node1"
 region = "us-east-1"
 az = "us-east-1a"
-accesskey = "AKIATEST"
-secretkey = "SECRET"
-
 [nodes.node1.daemon]
 host = "127.0.0.1:8080"
 
@@ -63,7 +60,6 @@ region = "us-east-1"
 	require.True(t, ok, "node1 should exist in Nodes map")
 	assert.Equal(t, "us-east-1", node.Region)
 	assert.Equal(t, "us-east-1a", node.AZ)
-	assert.Equal(t, "AKIATEST", node.AccessKey)
 	assert.Equal(t, "127.0.0.1:8080", node.Daemon.Host)
 	assert.Equal(t, "127.0.0.1:4222", node.NATS.Host)
 	assert.Equal(t, "nats_testtoken", node.NATS.ACL.Token)

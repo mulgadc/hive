@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http/httptest"
@@ -8,7 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/gofiber/fiber/v2"
+	"github.com/mulgadc/hive/hive/awserrors"
+	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
 	"github.com/mulgadc/predastore/auth"
 )
 
@@ -18,6 +22,57 @@ const (
 	testRegion    = "us-east-1"
 	testService   = "ec2"
 )
+
+// mockIAMService implements handlers_iam.IAMService for auth tests.
+type mockIAMService struct {
+	accessKeys map[string]*handlers_iam.AccessKey
+}
+
+func (m *mockIAMService) LookupAccessKey(accessKeyID string) (*handlers_iam.AccessKey, error) {
+	ak, ok := m.accessKeys[accessKeyID]
+	if !ok {
+		return nil, errors.New(awserrors.ErrorIAMNoSuchEntity)
+	}
+	return ak, nil
+}
+
+func (m *mockIAMService) CreateUser(_ *iam.CreateUserInput) (*iam.CreateUserOutput, error) {
+	return nil, nil
+}
+func (m *mockIAMService) GetUser(_ *iam.GetUserInput) (*iam.GetUserOutput, error) {
+	return nil, nil
+}
+func (m *mockIAMService) ListUsers(_ *iam.ListUsersInput) (*iam.ListUsersOutput, error) {
+	return nil, nil
+}
+func (m *mockIAMService) DeleteUser(_ *iam.DeleteUserInput) (*iam.DeleteUserOutput, error) {
+	return nil, nil
+}
+func (m *mockIAMService) CreateAccessKey(_ *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error) {
+	return nil, nil
+}
+func (m *mockIAMService) ListAccessKeys(_ *iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error) {
+	return nil, nil
+}
+func (m *mockIAMService) DeleteAccessKey(_ *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error) {
+	return nil, nil
+}
+func (m *mockIAMService) UpdateAccessKey(_ *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error) {
+	return nil, nil
+}
+func (m *mockIAMService) SeedRootUser(_ *handlers_iam.BootstrapData) error { return nil }
+func (m *mockIAMService) IsEmpty() (bool, error)                           { return true, nil }
+
+// testMasterKey is a fixed 32-byte key for deterministic tests.
+var testMasterKey []byte
+
+func init() {
+	var err error
+	testMasterKey, err = handlers_iam.GenerateMasterKey()
+	if err != nil {
+		panic("failed to generate test master key: " + err.Error())
+	}
+}
 
 // generateTestAuthHeader creates a valid AWS SigV4 Authorization header for testing.
 func generateTestAuthHeader(method, path, queryString, body, accessKey, secretKey, region, service string) (authHeader, timestamp string) {
@@ -83,11 +138,27 @@ func generateTestAuthHeader(method, path, queryString, body, accessKey, secretKe
 }
 
 func setupTestApp(accessKey, secretKey string) *fiber.App {
+	encryptedSecret, err := handlers_iam.EncryptSecret(secretKey, testMasterKey)
+	if err != nil {
+		panic("failed to encrypt test secret: " + err.Error())
+	}
+
+	mockSvc := &mockIAMService{
+		accessKeys: map[string]*handlers_iam.AccessKey{
+			accessKey: {
+				AccessKeyID:     accessKey,
+				SecretAccessKey: encryptedSecret,
+				UserName:        "root",
+				Status:          "Active",
+			},
+		},
+	}
+
 	gw := &GatewayConfig{
 		DisableLogging: true,
-		AccessKey:      accessKey,
-		SecretKey:      secretKey,
 		Region:         testRegion,
+		IAMService:     mockSvc,
+		IAMMasterKey:   testMasterKey,
 	}
 
 	app := fiber.New()
@@ -309,6 +380,157 @@ func TestSigV4Auth_ValidSignatureWithQueryString(t *testing.T) {
 	}
 }
 
+func TestSigV4Auth_InactiveAccessKey(t *testing.T) {
+	encryptedSecret, err := handlers_iam.EncryptSecret(testSecretKey, testMasterKey)
+	if err != nil {
+		t.Fatalf("Failed to encrypt secret: %v", err)
+	}
+
+	mockSvc := &mockIAMService{
+		accessKeys: map[string]*handlers_iam.AccessKey{
+			testAccessKey: {
+				AccessKeyID:     testAccessKey,
+				SecretAccessKey: encryptedSecret,
+				UserName:        "root",
+				Status:          "Inactive",
+			},
+		},
+	}
+
+	gw := &GatewayConfig{
+		DisableLogging: true,
+		Region:         testRegion,
+		IAMService:     mockSvc,
+		IAMMasterKey:   testMasterKey,
+	}
+
+	app := fiber.New()
+	app.Use(gw.SigV4AuthMiddleware())
+	app.All("/*", func(c *fiber.Ctx) error {
+		return c.SendString("OK")
+	})
+
+	authHeader, timestamp := generateTestAuthHeader(
+		"GET", "/", "", "",
+		testAccessKey, testSecretKey, testRegion, testService,
+	)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "localhost:9999"
+	req.Header.Set("Authorization", authHeader)
+	req.Header.Set("X-Amz-Date", timestamp)
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("Failed to test request: %v", err)
+	}
+
+	if resp.StatusCode != 403 {
+		t.Errorf("Expected status 403 for inactive key, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "InvalidClientTokenId") {
+		t.Errorf("Expected InvalidClientTokenId error, got: %s", string(body))
+	}
+}
+
+func TestSigV4Auth_NilIAMService(t *testing.T) {
+	gw := &GatewayConfig{
+		DisableLogging: true,
+		Region:         testRegion,
+		IAMService:     nil,
+		IAMMasterKey:   testMasterKey,
+	}
+
+	app := fiber.New()
+	app.Use(gw.SigV4AuthMiddleware())
+	app.All("/*", func(c *fiber.Ctx) error {
+		return c.SendString("OK")
+	})
+
+	authHeader, timestamp := generateTestAuthHeader(
+		"GET", "/", "", "",
+		testAccessKey, testSecretKey, testRegion, testService,
+	)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "localhost:9999"
+	req.Header.Set("Authorization", authHeader)
+	req.Header.Set("X-Amz-Date", timestamp)
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("Failed to test request: %v", err)
+	}
+
+	if resp.StatusCode != 500 {
+		t.Errorf("Expected status 500 for nil IAM service, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "InternalError") {
+		t.Errorf("Expected InternalError, got: %s", string(body))
+	}
+}
+
+func TestSigV4Auth_CallerIdentity(t *testing.T) {
+	encryptedSecret, err := handlers_iam.EncryptSecret(testSecretKey, testMasterKey)
+	if err != nil {
+		t.Fatalf("Failed to encrypt secret: %v", err)
+	}
+
+	mockSvc := &mockIAMService{
+		accessKeys: map[string]*handlers_iam.AccessKey{
+			testAccessKey: {
+				AccessKeyID:     testAccessKey,
+				SecretAccessKey: encryptedSecret,
+				UserName:        "alice",
+				Status:          "Active",
+			},
+		},
+	}
+
+	gw := &GatewayConfig{
+		DisableLogging: true,
+		Region:         testRegion,
+		IAMService:     mockSvc,
+		IAMMasterKey:   testMasterKey,
+	}
+
+	app := fiber.New()
+	app.Use(gw.SigV4AuthMiddleware())
+	app.All("/*", func(c *fiber.Ctx) error {
+		identity := c.Locals("sigv4.identity")
+		return c.SendString(fmt.Sprintf("identity=%v", identity))
+	})
+
+	authHeader, timestamp := generateTestAuthHeader(
+		"GET", "/", "", "",
+		testAccessKey, testSecretKey, testRegion, testService,
+	)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "localhost:9999"
+	req.Header.Set("Authorization", authHeader)
+	req.Header.Set("X-Amz-Date", timestamp)
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("Failed to test request: %v", err)
+	}
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("Expected status 200, got %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "identity=alice" {
+		t.Errorf("Expected identity=alice, got: %s", string(body))
+	}
+}
+
 func TestParseAWSQueryArgs_URLDecoding(t *testing.T) {
 	testCases := []struct {
 		name     string
@@ -357,6 +579,66 @@ func TestBuildCanonicalQueryString(t *testing.T) {
 				t.Errorf("Expected %q, got %q", tc.expected, result)
 			}
 		})
+	}
+}
+
+func TestSigV4Auth_DecryptFailure(t *testing.T) {
+	// Encrypt secret with a DIFFERENT master key so decryption fails
+	otherKey, err := handlers_iam.GenerateMasterKey()
+	if err != nil {
+		t.Fatalf("GenerateMasterKey() error: %v", err)
+	}
+	encryptedWithOther, err := handlers_iam.EncryptSecret(testSecretKey, otherKey)
+	if err != nil {
+		t.Fatalf("EncryptSecret() error: %v", err)
+	}
+
+	mockSvc := &mockIAMService{
+		accessKeys: map[string]*handlers_iam.AccessKey{
+			testAccessKey: {
+				AccessKeyID:     testAccessKey,
+				SecretAccessKey: encryptedWithOther, // encrypted with wrong key
+				UserName:        "root",
+				Status:          "Active",
+			},
+		},
+	}
+
+	gw := &GatewayConfig{
+		DisableLogging: true,
+		Region:         testRegion,
+		IAMService:     mockSvc,
+		IAMMasterKey:   testMasterKey, // different from otherKey
+	}
+
+	app := fiber.New()
+	app.Use(gw.SigV4AuthMiddleware())
+	app.All("/*", func(c *fiber.Ctx) error {
+		return c.SendString("OK")
+	})
+
+	authHeader, timestamp := generateTestAuthHeader(
+		"GET", "/", "", "",
+		testAccessKey, testSecretKey, testRegion, testService,
+	)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "localhost:9999"
+	req.Header.Set("Authorization", authHeader)
+	req.Header.Set("X-Amz-Date", timestamp)
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("Failed to test request: %v", err)
+	}
+
+	if resp.StatusCode != 500 {
+		t.Errorf("Expected status 500 for decrypt failure, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "InternalError") {
+		t.Errorf("Expected InternalError, got: %s", string(body))
 	}
 }
 

@@ -13,8 +13,6 @@ services = [{{range $i, $s := .Services}}{{if $i}}, {{end}}"{{$s}}"{{end}}]
 {{- end}}
 
 account_id = "{{.AccountID}}"
-accesskey = "{{.AccessKey}}"
-secretkey = "{{.SecretKey}}"
 
 [nodes.{{.Node}}.daemon]
 host = "{{.BindIP}}:{{.Port}}"

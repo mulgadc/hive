@@ -45,6 +45,7 @@ type StatusResponse struct {
 	Credentials *SharedCredentials  `json:"credentials,omitempty"`
 	CACert      string              `json:"ca_cert,omitempty"`
 	CAKey       string              `json:"ca_key,omitempty"`
+	MasterKey   string              `json:"master_key,omitempty"`
 }
 
 // SharedCredentials contains the cluster-wide credentials distributed during formation.
@@ -68,6 +69,7 @@ type FormationServer struct {
 	credentials *SharedCredentials
 	caCert      string
 	caKey       string
+	masterKey   string
 	done        chan struct{}
 	server      *http.Server
 }
@@ -150,6 +152,13 @@ func (fs *FormationServer) Nodes() map[string]NodeInfo {
 	out := make(map[string]NodeInfo, len(fs.nodes))
 	maps.Copy(out, fs.nodes)
 	return out
+}
+
+// SetMasterKey sets the base64-encoded IAM master key for distribution to joining nodes.
+func (fs *FormationServer) SetMasterKey(key string) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	fs.masterKey = key
 }
 
 // Start launches the HTTP server on the given address (e.g. "10.0.0.1:4432").
@@ -238,6 +247,7 @@ func (fs *FormationServer) handleStatus(w http.ResponseWriter, r *http.Request) 
 		resp.Credentials = fs.credentials
 		resp.CACert = fs.caCert
 		resp.CAKey = fs.caKey
+		resp.MasterKey = fs.masterKey
 	}
 
 	writeJSON(w, http.StatusOK, resp)
