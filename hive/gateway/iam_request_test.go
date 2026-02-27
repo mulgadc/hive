@@ -84,6 +84,42 @@ func (m *flexMockIAMService) UpdateAccessKey(input *iam.UpdateAccessKeyInput) (*
 	return &iam.UpdateAccessKeyOutput{}, nil
 }
 
+func (m *flexMockIAMService) CreatePolicy(_ *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error) {
+	return &iam.CreatePolicyOutput{}, nil
+}
+
+func (m *flexMockIAMService) GetPolicy(_ *iam.GetPolicyInput) (*iam.GetPolicyOutput, error) {
+	return &iam.GetPolicyOutput{}, nil
+}
+
+func (m *flexMockIAMService) GetPolicyVersion(_ *iam.GetPolicyVersionInput) (*iam.GetPolicyVersionOutput, error) {
+	return &iam.GetPolicyVersionOutput{}, nil
+}
+
+func (m *flexMockIAMService) ListPolicies(_ *iam.ListPoliciesInput) (*iam.ListPoliciesOutput, error) {
+	return &iam.ListPoliciesOutput{}, nil
+}
+
+func (m *flexMockIAMService) DeletePolicy(_ *iam.DeletePolicyInput) (*iam.DeletePolicyOutput, error) {
+	return &iam.DeletePolicyOutput{}, nil
+}
+
+func (m *flexMockIAMService) AttachUserPolicy(_ *iam.AttachUserPolicyInput) (*iam.AttachUserPolicyOutput, error) {
+	return &iam.AttachUserPolicyOutput{}, nil
+}
+
+func (m *flexMockIAMService) DetachUserPolicy(_ *iam.DetachUserPolicyInput) (*iam.DetachUserPolicyOutput, error) {
+	return &iam.DetachUserPolicyOutput{}, nil
+}
+
+func (m *flexMockIAMService) ListAttachedUserPolicies(_ *iam.ListAttachedUserPoliciesInput) (*iam.ListAttachedUserPoliciesOutput, error) {
+	return &iam.ListAttachedUserPoliciesOutput{}, nil
+}
+
+func (m *flexMockIAMService) GetUserPolicies(_ string) ([]handlers_iam.PolicyDocument, error) {
+	return nil, nil
+}
+
 func (m *flexMockIAMService) LookupAccessKey(_ string) (*handlers_iam.AccessKey, error) {
 	return nil, errors.New("not implemented")
 }

@@ -45,6 +45,42 @@ func (s *stubIAMService) UpdateAccessKey(_ *iam.UpdateAccessKeyInput) (*iam.Upda
 	return &iam.UpdateAccessKeyOutput{}, nil
 }
 
+func (s *stubIAMService) CreatePolicy(_ *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error) {
+	return &iam.CreatePolicyOutput{}, nil
+}
+
+func (s *stubIAMService) GetPolicy(_ *iam.GetPolicyInput) (*iam.GetPolicyOutput, error) {
+	return &iam.GetPolicyOutput{}, nil
+}
+
+func (s *stubIAMService) GetPolicyVersion(_ *iam.GetPolicyVersionInput) (*iam.GetPolicyVersionOutput, error) {
+	return &iam.GetPolicyVersionOutput{}, nil
+}
+
+func (s *stubIAMService) ListPolicies(_ *iam.ListPoliciesInput) (*iam.ListPoliciesOutput, error) {
+	return &iam.ListPoliciesOutput{}, nil
+}
+
+func (s *stubIAMService) DeletePolicy(_ *iam.DeletePolicyInput) (*iam.DeletePolicyOutput, error) {
+	return &iam.DeletePolicyOutput{}, nil
+}
+
+func (s *stubIAMService) AttachUserPolicy(_ *iam.AttachUserPolicyInput) (*iam.AttachUserPolicyOutput, error) {
+	return &iam.AttachUserPolicyOutput{}, nil
+}
+
+func (s *stubIAMService) DetachUserPolicy(_ *iam.DetachUserPolicyInput) (*iam.DetachUserPolicyOutput, error) {
+	return &iam.DetachUserPolicyOutput{}, nil
+}
+
+func (s *stubIAMService) ListAttachedUserPolicies(_ *iam.ListAttachedUserPoliciesInput) (*iam.ListAttachedUserPoliciesOutput, error) {
+	return &iam.ListAttachedUserPoliciesOutput{}, nil
+}
+
+func (s *stubIAMService) GetUserPolicies(_ string) ([]handlers_iam.PolicyDocument, error) {
+	return nil, nil
+}
+
 func (s *stubIAMService) LookupAccessKey(_ string) (*handlers_iam.AccessKey, error) {
 	return nil, nil
 }
