@@ -582,6 +582,66 @@ func TestBuildCanonicalQueryString(t *testing.T) {
 	}
 }
 
+func TestSigV4Auth_DecryptFailure(t *testing.T) {
+	// Encrypt secret with a DIFFERENT master key so decryption fails
+	otherKey, err := handlers_iam.GenerateMasterKey()
+	if err != nil {
+		t.Fatalf("GenerateMasterKey() error: %v", err)
+	}
+	encryptedWithOther, err := handlers_iam.EncryptSecret(testSecretKey, otherKey)
+	if err != nil {
+		t.Fatalf("EncryptSecret() error: %v", err)
+	}
+
+	mockSvc := &mockIAMService{
+		accessKeys: map[string]*handlers_iam.AccessKey{
+			testAccessKey: {
+				AccessKeyID:     testAccessKey,
+				SecretAccessKey: encryptedWithOther, // encrypted with wrong key
+				UserName:        "root",
+				Status:          "Active",
+			},
+		},
+	}
+
+	gw := &GatewayConfig{
+		DisableLogging: true,
+		Region:         testRegion,
+		IAMService:     mockSvc,
+		IAMMasterKey:   testMasterKey, // different from otherKey
+	}
+
+	app := fiber.New()
+	app.Use(gw.SigV4AuthMiddleware())
+	app.All("/*", func(c *fiber.Ctx) error {
+		return c.SendString("OK")
+	})
+
+	authHeader, timestamp := generateTestAuthHeader(
+		"GET", "/", "", "",
+		testAccessKey, testSecretKey, testRegion, testService,
+	)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "localhost:9999"
+	req.Header.Set("Authorization", authHeader)
+	req.Header.Set("X-Amz-Date", timestamp)
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("Failed to test request: %v", err)
+	}
+
+	if resp.StatusCode != 500 {
+		t.Errorf("Expected status 500 for decrypt failure, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "InternalError") {
+		t.Errorf("Expected InternalError, got: %s", string(body))
+	}
+}
+
 func TestCanonicalHeaderName(t *testing.T) {
 	testCases := []struct {
 		input    string

@@ -230,3 +230,54 @@ func TestLoadBootstrapDataInvalidJSON(t *testing.T) {
 		t.Fatal("LoadBootstrapData() should fail for invalid JSON")
 	}
 }
+
+func TestSaveBootstrapData_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bootstrap.json")
+
+	data := &BootstrapData{
+		AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+		EncryptedSecret: "dGVzdC1lbmNyeXB0ZWQ=",
+		AccountID:       "000000000000",
+	}
+
+	if err := SaveBootstrapData(path, data); err != nil {
+		t.Fatalf("SaveBootstrapData() error: %v", err)
+	}
+
+	// Verify file permissions
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat bootstrap.json: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Fatalf("expected permissions 0600, got %04o", perm)
+	}
+
+	// Verify round-trip
+	loaded, err := LoadBootstrapData(path)
+	if err != nil {
+		t.Fatalf("LoadBootstrapData() error: %v", err)
+	}
+	if loaded.AccessKeyID != data.AccessKeyID {
+		t.Fatalf("AccessKeyID: expected %q, got %q", data.AccessKeyID, loaded.AccessKeyID)
+	}
+	if loaded.EncryptedSecret != data.EncryptedSecret {
+		t.Fatalf("EncryptedSecret: expected %q, got %q", data.EncryptedSecret, loaded.EncryptedSecret)
+	}
+	if loaded.AccountID != data.AccountID {
+		t.Fatalf("AccountID: expected %q, got %q", data.AccountID, loaded.AccountID)
+	}
+}
+
+func TestSaveBootstrapData_InvalidPath(t *testing.T) {
+	data := &BootstrapData{
+		AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
+		EncryptedSecret: "dGVzdA==",
+		AccountID:       "000000000000",
+	}
+	err := SaveBootstrapData("/nonexistent/dir/bootstrap.json", data)
+	if err == nil {
+		t.Fatal("SaveBootstrapData() should fail for invalid path")
+	}
+}
