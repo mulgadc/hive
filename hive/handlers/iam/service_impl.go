@@ -36,6 +36,10 @@ type IAMServiceImpl struct {
 
 // NewIAMServiceImpl creates a new IAM service backed by NATS JetStream KV.
 func NewIAMServiceImpl(natsConn *nats.Conn, masterKey []byte) (*IAMServiceImpl, error) {
+	if len(masterKey) != 32 {
+		return nil, fmt.Errorf("master key must be 32 bytes, got %d", len(masterKey))
+	}
+
 	js, err := natsConn.JetStream()
 	if err != nil {
 		return nil, fmt.Errorf("get JetStream context: %w", err)
@@ -92,15 +96,6 @@ func (s *IAMServiceImpl) CreateUser(input *iam.CreateUserInput) (*iam.CreateUser
 		path = *input.Path
 	}
 
-	// Check if user already exists
-	_, err := s.usersBucket.Get(userName)
-	if err == nil {
-		return nil, errors.New(awserrors.ErrorIAMEntityAlreadyExists)
-	}
-	if !errors.Is(err, nats.ErrKeyNotFound) {
-		return nil, fmt.Errorf("check user existence: %w", err)
-	}
-
 	user := User{
 		UserName:   userName,
 		UserID:     generateUserID(),
@@ -122,13 +117,20 @@ func (s *IAMServiceImpl) CreateUser(input *iam.CreateUserInput) (*iam.CreateUser
 		return nil, fmt.Errorf("marshal user: %w", err)
 	}
 
-	if _, err := s.usersBucket.Put(userName, data); err != nil {
+	// Atomic create — fails if key already exists (race-safe)
+	if _, err := s.usersBucket.Create(userName, data); err != nil {
+		if errors.Is(err, nats.ErrKeyExists) {
+			return nil, errors.New(awserrors.ErrorIAMEntityAlreadyExists)
+		}
 		return nil, fmt.Errorf("store user: %w", err)
 	}
 
 	slog.Info("IAM user created", "userName", userName, "userID", user.UserID)
 
-	createdAt, _ := time.Parse(time.RFC3339, user.CreatedAt)
+	createdAt, err := time.Parse(time.RFC3339, user.CreatedAt)
+	if err != nil {
+		slog.Warn("Failed to parse user CreatedAt", "userName", userName, "createdAt", user.CreatedAt, "err", err)
+	}
 	return &iam.CreateUserOutput{
 		User: &iam.User{
 			UserName:   aws.String(user.UserName),
@@ -150,7 +152,10 @@ func (s *IAMServiceImpl) GetUser(input *iam.GetUserInput) (*iam.GetUserOutput, e
 		return nil, err
 	}
 
-	createdAt, _ := time.Parse(time.RFC3339, user.CreatedAt)
+	createdAt, err := time.Parse(time.RFC3339, user.CreatedAt)
+	if err != nil {
+		slog.Warn("Failed to parse user CreatedAt", "userName", user.UserName, "createdAt", user.CreatedAt, "err", err)
+	}
 	return &iam.GetUserOutput{
 		User: &iam.User{
 			UserName:   aws.String(user.UserName),
@@ -183,11 +188,17 @@ func (s *IAMServiceImpl) ListUsers(input *iam.ListUsersInput) (*iam.ListUsersOut
 	for _, key := range keys {
 		entry, err := s.usersBucket.Get(key)
 		if err != nil {
+			if errors.Is(err, nats.ErrKeyNotFound) {
+				slog.Debug("ListUsers: user key disappeared (concurrent delete)", "key", key)
+			} else {
+				slog.Warn("ListUsers: failed to get user", "key", key, "err", err)
+			}
 			continue
 		}
 
 		var user User
 		if err := json.Unmarshal(entry.Value(), &user); err != nil {
+			slog.Warn("ListUsers: failed to unmarshal user", "key", key, "err", err)
 			continue
 		}
 
@@ -195,7 +206,10 @@ func (s *IAMServiceImpl) ListUsers(input *iam.ListUsersInput) (*iam.ListUsersOut
 			continue
 		}
 
-		createdAt, _ := time.Parse(time.RFC3339, user.CreatedAt)
+		createdAt, err := time.Parse(time.RFC3339, user.CreatedAt)
+		if err != nil {
+			slog.Warn("Failed to parse user CreatedAt", "userName", user.UserName, "createdAt", user.CreatedAt, "err", err)
+		}
 		users = append(users, &iam.User{
 			UserName:   aws.String(user.UserName),
 			UserId:     aws.String(user.UserID),
@@ -282,18 +296,25 @@ func (s *IAMServiceImpl) CreateAccessKey(input *iam.CreateAccessKeyInput) (*iam.
 	user.AccessKeys = append(user.AccessKeys, accessKeyID)
 	userData, err := json.Marshal(user)
 	if err != nil {
-		_ = s.accessKeysBucket.Delete(accessKeyID) // rollback
+		if rbErr := s.accessKeysBucket.Delete(accessKeyID); rbErr != nil {
+			slog.Error("Rollback failed: orphaned access key", "accessKeyID", accessKeyID, "err", rbErr)
+		}
 		return nil, fmt.Errorf("marshal user: %w", err)
 	}
 
 	if _, err := s.usersBucket.Put(userName, userData); err != nil {
-		_ = s.accessKeysBucket.Delete(accessKeyID) // rollback
+		if rbErr := s.accessKeysBucket.Delete(accessKeyID); rbErr != nil {
+			slog.Error("Rollback failed: orphaned access key", "accessKeyID", accessKeyID, "err", rbErr)
+		}
 		return nil, fmt.Errorf("update user: %w", err)
 	}
 
 	slog.Info("IAM access key created", "userName", userName, "accessKeyID", accessKeyID)
 
-	createdAt, _ := time.Parse(time.RFC3339, ak.CreatedAt)
+	createdAt, err := time.Parse(time.RFC3339, ak.CreatedAt)
+	if err != nil {
+		slog.Warn("Failed to parse access key CreatedAt", "accessKeyID", accessKeyID, "createdAt", ak.CreatedAt, "err", err)
+	}
 	return &iam.CreateAccessKeyOutput{
 		AccessKey: &iam.AccessKey{
 			AccessKeyId:     aws.String(accessKeyID),
@@ -319,15 +340,24 @@ func (s *IAMServiceImpl) ListAccessKeys(input *iam.ListAccessKeysInput) (*iam.Li
 	for _, keyID := range user.AccessKeys {
 		entry, err := s.accessKeysBucket.Get(keyID)
 		if err != nil {
+			if errors.Is(err, nats.ErrKeyNotFound) {
+				slog.Debug("ListAccessKeys: access key disappeared (concurrent delete)", "keyID", keyID)
+			} else {
+				slog.Warn("ListAccessKeys: failed to get access key", "keyID", keyID, "err", err)
+			}
 			continue
 		}
 
 		var ak AccessKey
 		if err := json.Unmarshal(entry.Value(), &ak); err != nil {
+			slog.Warn("ListAccessKeys: failed to unmarshal access key", "keyID", keyID, "err", err)
 			continue
 		}
 
-		createdAt, _ := time.Parse(time.RFC3339, ak.CreatedAt)
+		createdAt, err := time.Parse(time.RFC3339, ak.CreatedAt)
+		if err != nil {
+			slog.Warn("Failed to parse access key CreatedAt", "keyID", keyID, "createdAt", ak.CreatedAt, "err", err)
+		}
 		metadata = append(metadata, &iam.AccessKeyMetadata{
 			AccessKeyId: aws.String(ak.AccessKeyID),
 			UserName:    aws.String(ak.UserName),
@@ -545,18 +575,24 @@ func (s *IAMServiceImpl) getUser(userName string) (*User, error) {
 
 func generateUserID() string {
 	b := make([]byte, 16)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
 	return "AIDA" + strings.ToUpper(hex.EncodeToString(b))[:17]
 }
 
 func generateAccessKeyID() string {
 	b := make([]byte, 10)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
 	return "AKIA" + strings.ToUpper(hex.EncodeToString(b))
 }
 
 func generateSecretAccessKey() string {
 	b := make([]byte, 30)
-	_, _ = rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
 	return base64.StdEncoding.EncodeToString(b)[:40]
 }

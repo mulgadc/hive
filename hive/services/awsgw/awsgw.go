@@ -54,7 +54,7 @@ func (svc *Service) Reload() (err error) {
 	return nil
 }
 
-func launchService(config *config.ClusterConfig) (err error) {
+func launchService(config *config.ClusterConfig) error {
 
 	nodeConfig := config.Nodes[config.Node]
 
@@ -71,35 +71,30 @@ func launchService(config *config.ClusterConfig) (err error) {
 		nodeConfig.AWSGW.Config = fmt.Sprintf("%s/%s", nodeConfig.BaseDir, nodeConfig.AWSGW.Config)
 	}
 
-	// Load IAM master key from disk
-	var masterKey []byte
-	var iamService *handlers_iam.IAMServiceImpl
+	// Load IAM master key from disk (required for all authenticated requests)
 	masterKeyPath := filepath.Join(nodeConfig.BaseDir, "config", "master.key")
-	masterKey, err = handlers_iam.LoadMasterKey(masterKeyPath)
+	masterKey, err := handlers_iam.LoadMasterKey(masterKeyPath)
 	if err != nil {
-		slog.Error("Failed to load IAM master key", "path", masterKeyPath, "err", err)
-	} else {
-		// Initialize IAM service with NATS KV backend
-		iamService, err = handlers_iam.NewIAMServiceImpl(natsConn, masterKey)
-		if err != nil {
-			slog.Warn("Failed to initialize IAM service", "err", err)
-		}
+		return fmt.Errorf("load IAM master key from %s: %w", masterKeyPath, err)
+	}
+
+	// Initialize IAM service with NATS KV backend (required for auth)
+	iamService, err := handlers_iam.NewIAMServiceImpl(natsConn, masterKey)
+	if err != nil {
+		return fmt.Errorf("initialize IAM service: %w", err)
 	}
 
 	// First boot: consume bootstrap.json → seed root user into NATS KV → delete file
-	if iamService != nil {
-		bootstrapPath := filepath.Join(nodeConfig.BaseDir, "config", "bootstrap.json")
-		if data, err := handlers_iam.LoadBootstrapData(bootstrapPath); err == nil {
-			slog.Info("Bootstrap file found, seeding root IAM user")
-			if err := iamService.SeedRootUser(data); err != nil {
-				slog.Error("Failed to seed root user", "err", err)
-			} else {
-				if err := os.Remove(bootstrapPath); err != nil {
-					slog.Warn("Failed to delete bootstrap file", "path", bootstrapPath, "err", err)
-				}
-				slog.Info("Bootstrap complete, bootstrap.json deleted")
-			}
+	bootstrapPath := filepath.Join(nodeConfig.BaseDir, "config", "bootstrap.json")
+	if data, err := handlers_iam.LoadBootstrapData(bootstrapPath); err == nil {
+		slog.Info("Bootstrap file found, seeding root IAM user")
+		if err := iamService.SeedRootUser(data); err != nil {
+			return fmt.Errorf("seed root user from bootstrap.json: %w", err)
 		}
+		if err := os.Remove(bootstrapPath); err != nil {
+			slog.Warn("Failed to delete bootstrap file", "path", bootstrapPath, "err", err)
+		}
+		slog.Info("Bootstrap complete, bootstrap.json deleted")
 	}
 
 	// Create gateway with NATS connection
@@ -116,11 +111,6 @@ func launchService(config *config.ClusterConfig) (err error) {
 	}
 
 	app := gw.SetupRoutes()
-
-	if err != nil {
-		slog.Warn("Failed to setup gateway routes", "err", err)
-		return err
-	}
 
 	if err := app.ListenTLS(nodeConfig.AWSGW.Host, nodeConfig.AWSGW.TLSCert, nodeConfig.AWSGW.TLSKey); err != nil {
 		slog.Error("Failed to start TLS listener", "err", err)

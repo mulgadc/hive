@@ -79,13 +79,18 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() fiber.Handler {
 
 		// Lookup access key in IAM KV store
 		if gw.IAMService == nil {
+			slog.Error("SigV4 auth: IAM service not initialized")
 			return gw.writeSigV4Error(c, awserrors.ErrorInternalError)
 		}
 
 		ak, err := gw.IAMService.LookupAccessKey(accessKey)
 		if err != nil {
-			slog.Debug("Access key not found", "accessKeyID", accessKey)
-			return gw.writeSigV4Error(c, awserrors.ErrorInvalidClientTokenId)
+			if strings.Contains(err.Error(), awserrors.ErrorIAMNoSuchEntity) {
+				slog.Debug("Access key not found", "accessKeyID", accessKey)
+				return gw.writeSigV4Error(c, awserrors.ErrorInvalidClientTokenId)
+			}
+			slog.Error("IAM lookup failed", "accessKeyID", accessKey, "err", err)
+			return gw.writeSigV4Error(c, awserrors.ErrorInternalError)
 		}
 		if ak.Status != "Active" {
 			slog.Debug("Access key inactive", "accessKeyID", accessKey)

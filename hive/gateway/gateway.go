@@ -241,7 +241,7 @@ func GenerateEC2ErrorResponse(code, message, requestID string) (output []byte) {
 
 	if err != nil {
 		slog.Error("Failed to build XML", "error", err)
-		return nil
+		return []byte(xml.Header + "<Response><Errors><Error><Code>InternalError</Code><Message>Internal error</Message></Error></Errors><RequestID>" + requestID + "</RequestID></Response>")
 	}
 
 	// Add XML header
@@ -277,7 +277,7 @@ func GenerateIAMErrorResponse(code, message, requestID string) (output []byte) {
 	output, err := xml.MarshalIndent(errorXml, "", "  ")
 	if err != nil {
 		slog.Error("Failed to build IAM error XML", "error", err)
-		return nil
+		return []byte(xml.Header + "<ErrorResponse><Error><Type>Sender</Type><Code>InternalError</Code><Message>Internal error</Message></Error><RequestId>" + requestID + "</RequestId></ErrorResponse>")
 	}
 
 	output = append([]byte(xml.Header), output...)
