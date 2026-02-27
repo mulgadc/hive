@@ -425,11 +425,13 @@ var (
 	ErrorZonesMismatched                                       = "ZonesMismatched"
 
 	// IAM-specific error codes
-	ErrorIAMNoSuchEntity        = "NoSuchEntity"
-	ErrorIAMEntityAlreadyExists = "EntityAlreadyExists"
-	ErrorIAMDeleteConflict      = "DeleteConflict"
-	ErrorIAMLimitExceeded       = "LimitExceeded"
-	ErrorIAMInvalidInput        = ErrorInvalidInput // alias for IAM usage
+	ErrorIAMNoSuchEntity            = "NoSuchEntity"
+	ErrorIAMEntityAlreadyExists     = "EntityAlreadyExists"
+	ErrorIAMDeleteConflict          = "DeleteConflict"
+	ErrorIAMLimitExceeded           = "LimitExceeded"
+	ErrorIAMInvalidInput            = ErrorInvalidInput // alias for IAM usage
+	ErrorIAMMalformedPolicyDocument = "MalformedPolicyDocument"
+	ErrorAccessDenied               = "AccessDenied"
 )
 
 // ValidErrorCode returns the error code if it exists in ErrorLookup,
@@ -862,8 +864,10 @@ var ErrorLookup = map[string]ErrorMessage{
 	ErrorZonesMismatched:                                       {HTTPCode: 400, Message: "The Availability Zone for the instance does not match that of the Dedicated Host"},
 
 	// IAM error codes
-	ErrorIAMNoSuchEntity:        {HTTPCode: 404, Message: "The request was rejected because it referenced a resource entity that does not exist."},
-	ErrorIAMEntityAlreadyExists: {HTTPCode: 409, Message: "The request was rejected because it attempted to create a resource that already exists."},
-	ErrorIAMDeleteConflict:      {HTTPCode: 409, Message: "The request was rejected because it attempted to delete a resource that has attached subordinate entities."},
-	ErrorIAMLimitExceeded:       {HTTPCode: 409, Message: "The request was rejected because it attempted to create resources beyond the current AWS account limits."},
+	ErrorIAMNoSuchEntity:            {HTTPCode: 404, Message: "The request was rejected because it referenced a resource entity that does not exist."},
+	ErrorIAMEntityAlreadyExists:     {HTTPCode: 409, Message: "The request was rejected because it attempted to create a resource that already exists."},
+	ErrorIAMDeleteConflict:          {HTTPCode: 409, Message: "The request was rejected because it attempted to delete a resource that has attached subordinate entities."},
+	ErrorIAMLimitExceeded:           {HTTPCode: 409, Message: "The request was rejected because it attempted to create resources beyond the current AWS account limits."},
+	ErrorIAMMalformedPolicyDocument: {HTTPCode: 400, Message: "The policy document is malformed."},
+	ErrorAccessDenied:               {HTTPCode: 403, Message: "User is not authorized to perform this action."},
 }

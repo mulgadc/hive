@@ -45,6 +45,42 @@ func (s *stubIAMService) UpdateAccessKey(_ *iam.UpdateAccessKeyInput) (*iam.Upda
 	return &iam.UpdateAccessKeyOutput{}, nil
 }
 
+func (s *stubIAMService) CreatePolicy(_ *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error) {
+	return &iam.CreatePolicyOutput{}, nil
+}
+
+func (s *stubIAMService) GetPolicy(_ *iam.GetPolicyInput) (*iam.GetPolicyOutput, error) {
+	return &iam.GetPolicyOutput{}, nil
+}
+
+func (s *stubIAMService) GetPolicyVersion(_ *iam.GetPolicyVersionInput) (*iam.GetPolicyVersionOutput, error) {
+	return &iam.GetPolicyVersionOutput{}, nil
+}
+
+func (s *stubIAMService) ListPolicies(_ *iam.ListPoliciesInput) (*iam.ListPoliciesOutput, error) {
+	return &iam.ListPoliciesOutput{}, nil
+}
+
+func (s *stubIAMService) DeletePolicy(_ *iam.DeletePolicyInput) (*iam.DeletePolicyOutput, error) {
+	return &iam.DeletePolicyOutput{}, nil
+}
+
+func (s *stubIAMService) AttachUserPolicy(_ *iam.AttachUserPolicyInput) (*iam.AttachUserPolicyOutput, error) {
+	return &iam.AttachUserPolicyOutput{}, nil
+}
+
+func (s *stubIAMService) DetachUserPolicy(_ *iam.DetachUserPolicyInput) (*iam.DetachUserPolicyOutput, error) {
+	return &iam.DetachUserPolicyOutput{}, nil
+}
+
+func (s *stubIAMService) ListAttachedUserPolicies(_ *iam.ListAttachedUserPoliciesInput) (*iam.ListAttachedUserPoliciesOutput, error) {
+	return &iam.ListAttachedUserPoliciesOutput{}, nil
+}
+
+func (s *stubIAMService) GetUserPolicies(_ string) ([]handlers_iam.PolicyDocument, error) {
+	return nil, nil
+}
+
 func (s *stubIAMService) LookupAccessKey(_ string) (*handlers_iam.AccessKey, error) {
 	return nil, nil
 }
@@ -220,6 +256,196 @@ func TestUpdateAccessKey(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := UpdateAccessKey(tc.input, svc)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Equal(t, tc.wantErr, err.Error())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// --- Policy CRUD ---
+
+func TestCreatePolicy(t *testing.T) {
+	svc := &stubIAMService{}
+	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`
+	tests := []struct {
+		name    string
+		input   *iam.CreatePolicyInput
+		wantErr string
+	}{
+		{"nil PolicyName", &iam.CreatePolicyInput{PolicyDocument: aws.String(doc)}, awserrors.ErrorMissingParameter},
+		{"empty PolicyName", &iam.CreatePolicyInput{PolicyName: aws.String(""), PolicyDocument: aws.String(doc)}, awserrors.ErrorMissingParameter},
+		{"nil PolicyDocument", &iam.CreatePolicyInput{PolicyName: aws.String("mypolicy")}, awserrors.ErrorMissingParameter},
+		{"empty PolicyDocument", &iam.CreatePolicyInput{PolicyName: aws.String("mypolicy"), PolicyDocument: aws.String("")}, awserrors.ErrorMissingParameter},
+		{"valid", &iam.CreatePolicyInput{PolicyName: aws.String("mypolicy"), PolicyDocument: aws.String(doc)}, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := CreatePolicy(tc.input, svc)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Equal(t, tc.wantErr, err.Error())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestGetPolicy(t *testing.T) {
+	svc := &stubIAMService{}
+	tests := []struct {
+		name    string
+		input   *iam.GetPolicyInput
+		wantErr string
+	}{
+		{"nil PolicyArn", &iam.GetPolicyInput{}, awserrors.ErrorMissingParameter},
+		{"empty PolicyArn", &iam.GetPolicyInput{PolicyArn: aws.String("")}, awserrors.ErrorMissingParameter},
+		{"valid", &iam.GetPolicyInput{PolicyArn: aws.String("arn:aws:iam::000000000000:policy/mypolicy")}, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := GetPolicy(tc.input, svc)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Equal(t, tc.wantErr, err.Error())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestGetPolicyVersion(t *testing.T) {
+	svc := &stubIAMService{}
+	arn := "arn:aws:iam::000000000000:policy/mypolicy"
+	tests := []struct {
+		name    string
+		input   *iam.GetPolicyVersionInput
+		wantErr string
+	}{
+		{"nil PolicyArn", &iam.GetPolicyVersionInput{VersionId: aws.String("v1")}, awserrors.ErrorMissingParameter},
+		{"empty PolicyArn", &iam.GetPolicyVersionInput{PolicyArn: aws.String(""), VersionId: aws.String("v1")}, awserrors.ErrorMissingParameter},
+		{"nil VersionId", &iam.GetPolicyVersionInput{PolicyArn: aws.String(arn)}, awserrors.ErrorMissingParameter},
+		{"empty VersionId", &iam.GetPolicyVersionInput{PolicyArn: aws.String(arn), VersionId: aws.String("")}, awserrors.ErrorMissingParameter},
+		{"valid", &iam.GetPolicyVersionInput{PolicyArn: aws.String(arn), VersionId: aws.String("v1")}, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := GetPolicyVersion(tc.input, svc)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Equal(t, tc.wantErr, err.Error())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestListPolicies(t *testing.T) {
+	svc := &stubIAMService{}
+	_, err := ListPolicies(&iam.ListPoliciesInput{}, svc)
+	require.NoError(t, err)
+}
+
+func TestDeletePolicy(t *testing.T) {
+	svc := &stubIAMService{}
+	tests := []struct {
+		name    string
+		input   *iam.DeletePolicyInput
+		wantErr string
+	}{
+		{"nil PolicyArn", &iam.DeletePolicyInput{}, awserrors.ErrorMissingParameter},
+		{"empty PolicyArn", &iam.DeletePolicyInput{PolicyArn: aws.String("")}, awserrors.ErrorMissingParameter},
+		{"valid", &iam.DeletePolicyInput{PolicyArn: aws.String("arn:aws:iam::000000000000:policy/mypolicy")}, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := DeletePolicy(tc.input, svc)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Equal(t, tc.wantErr, err.Error())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// --- Policy Attachment ---
+
+func TestAttachUserPolicy(t *testing.T) {
+	svc := &stubIAMService{}
+	arn := "arn:aws:iam::000000000000:policy/mypolicy"
+	tests := []struct {
+		name    string
+		input   *iam.AttachUserPolicyInput
+		wantErr string
+	}{
+		{"nil UserName", &iam.AttachUserPolicyInput{PolicyArn: aws.String(arn)}, awserrors.ErrorMissingParameter},
+		{"empty UserName", &iam.AttachUserPolicyInput{UserName: aws.String(""), PolicyArn: aws.String(arn)}, awserrors.ErrorMissingParameter},
+		{"nil PolicyArn", &iam.AttachUserPolicyInput{UserName: aws.String("alice")}, awserrors.ErrorMissingParameter},
+		{"empty PolicyArn", &iam.AttachUserPolicyInput{UserName: aws.String("alice"), PolicyArn: aws.String("")}, awserrors.ErrorMissingParameter},
+		{"valid", &iam.AttachUserPolicyInput{UserName: aws.String("alice"), PolicyArn: aws.String(arn)}, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := AttachUserPolicy(tc.input, svc)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Equal(t, tc.wantErr, err.Error())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestDetachUserPolicy(t *testing.T) {
+	svc := &stubIAMService{}
+	arn := "arn:aws:iam::000000000000:policy/mypolicy"
+	tests := []struct {
+		name    string
+		input   *iam.DetachUserPolicyInput
+		wantErr string
+	}{
+		{"nil UserName", &iam.DetachUserPolicyInput{PolicyArn: aws.String(arn)}, awserrors.ErrorMissingParameter},
+		{"empty UserName", &iam.DetachUserPolicyInput{UserName: aws.String(""), PolicyArn: aws.String(arn)}, awserrors.ErrorMissingParameter},
+		{"nil PolicyArn", &iam.DetachUserPolicyInput{UserName: aws.String("alice")}, awserrors.ErrorMissingParameter},
+		{"empty PolicyArn", &iam.DetachUserPolicyInput{UserName: aws.String("alice"), PolicyArn: aws.String("")}, awserrors.ErrorMissingParameter},
+		{"valid", &iam.DetachUserPolicyInput{UserName: aws.String("alice"), PolicyArn: aws.String(arn)}, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := DetachUserPolicy(tc.input, svc)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Equal(t, tc.wantErr, err.Error())
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestListAttachedUserPolicies(t *testing.T) {
+	svc := &stubIAMService{}
+	tests := []struct {
+		name    string
+		input   *iam.ListAttachedUserPoliciesInput
+		wantErr string
+	}{
+		{"nil UserName", &iam.ListAttachedUserPoliciesInput{}, awserrors.ErrorMissingParameter},
+		{"empty UserName", &iam.ListAttachedUserPoliciesInput{UserName: aws.String("")}, awserrors.ErrorMissingParameter},
+		{"valid", &iam.ListAttachedUserPoliciesInput{UserName: aws.String("alice")}, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ListAttachedUserPolicies(tc.input, svc)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Equal(t, tc.wantErr, err.Error())

@@ -236,6 +236,10 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 		return errors.New(awserrors.ErrorInvalidAction)
 	}
 
+	if err := gw.checkPolicy(ctx, "ec2", action); err != nil {
+		return err
+	}
+
 	if gw.NATSConn == nil && !ec2LocalActions[action] {
 		return errors.New(awserrors.ErrorServerInternal)
 	}

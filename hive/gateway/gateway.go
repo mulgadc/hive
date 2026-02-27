@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/url"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mulgadc/hive/hive/awsec2query"
 	"github.com/mulgadc/hive/hive/awserrors"
+	"github.com/mulgadc/hive/hive/gateway/policy"
 	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
 	"github.com/nats-io/nats.go"
 )
@@ -168,6 +170,53 @@ func (gw *GatewayConfig) GetService(ctx *fiber.Ctx) (string, error) {
 		return "", errors.New(awserrors.ErrorUnsupportedOperation)
 	}
 	return svc, nil
+}
+
+// checkPolicy evaluates IAM policies for the current request. Returns nil
+// if access is allowed, or an ErrorAccessDenied error if denied.
+// Root users bypass evaluation entirely. If the IAM service is unavailable,
+// access is allowed (pre-IAM compatibility).
+func (gw *GatewayConfig) checkPolicy(ctx *fiber.Ctx, service, action string) error {
+	if gw.IAMService == nil {
+		slog.Warn("checkPolicy: IAM service not available, skipping policy check",
+			"service", service, "action", action)
+		return nil
+	}
+
+	identityVal := ctx.Locals("sigv4.identity")
+	if identityVal == nil {
+		// No auth context — pre-IAM compatibility
+		return nil
+	}
+	identity, ok := identityVal.(string)
+	if !ok {
+		slog.Error("checkPolicy: identity has unexpected type", "type", fmt.Sprintf("%T", identityVal))
+		return errors.New(awserrors.ErrorInternalError)
+	}
+	if identity == "" || identity == "root" {
+		return nil
+	}
+
+	// Resolve the IAM action string (e.g. "ec2:RunInstances")
+	iamAction, ok := policy.LookupAction(service, action)
+	if !ok {
+		// Action not in mapping table — construct it directly so wildcard
+		// policies (e.g. "ec2:*") still match.
+		iamAction = policy.IAMAction(service, action)
+	}
+
+	policies, err := gw.IAMService.GetUserPolicies(identity)
+	if err != nil {
+		slog.Error("checkPolicy: failed to get user policies", "user", identity, "err", err)
+		return errors.New(awserrors.ErrorInternalError)
+	}
+
+	if policy.EvaluateAccess(identity, iamAction, "*", policies) == policy.Deny {
+		slog.Info("checkPolicy: access denied", "user", identity, "action", iamAction)
+		return errors.New(awserrors.ErrorAccessDenied)
+	}
+
+	return nil
 }
 
 func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {

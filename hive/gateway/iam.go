@@ -62,6 +62,34 @@ var iamActions = map[string]IAMHandler{
 	"UpdateAccessKey": iamHandler(func(input *iam.UpdateAccessKeyInput, svc handlers_iam.IAMService) (any, error) {
 		return gateway_iam.UpdateAccessKey(input, svc)
 	}),
+
+	// Policy CRUD
+	"CreatePolicy": iamHandler(func(input *iam.CreatePolicyInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.CreatePolicy(input, svc)
+	}),
+	"GetPolicy": iamHandler(func(input *iam.GetPolicyInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.GetPolicy(input, svc)
+	}),
+	"GetPolicyVersion": iamHandler(func(input *iam.GetPolicyVersionInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.GetPolicyVersion(input, svc)
+	}),
+	"ListPolicies": iamHandler(func(input *iam.ListPoliciesInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.ListPolicies(input, svc)
+	}),
+	"DeletePolicy": iamHandler(func(input *iam.DeletePolicyInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.DeletePolicy(input, svc)
+	}),
+
+	// Policy attachment
+	"AttachUserPolicy": iamHandler(func(input *iam.AttachUserPolicyInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.AttachUserPolicy(input, svc)
+	}),
+	"DetachUserPolicy": iamHandler(func(input *iam.DetachUserPolicyInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.DetachUserPolicy(input, svc)
+	}),
+	"ListAttachedUserPolicies": iamHandler(func(input *iam.ListAttachedUserPoliciesInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.ListAttachedUserPolicies(input, svc)
+	}),
 }
 
 func (gw *GatewayConfig) IAM_Request(ctx *fiber.Ctx) error {
@@ -77,6 +105,10 @@ func (gw *GatewayConfig) IAM_Request(ctx *fiber.Ctx) error {
 	if gw.IAMService == nil {
 		slog.Error("IAM: service not initialized")
 		return errors.New(awserrors.ErrorInternalError)
+	}
+
+	if err := gw.checkPolicy(ctx, "iam", action); err != nil {
+		return err
 	}
 
 	xmlOutput, err := handler(action, queryArgs, gw)

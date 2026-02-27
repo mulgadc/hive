@@ -60,6 +60,33 @@ func (m *mockIAMService) DeleteAccessKey(_ *iam.DeleteAccessKeyInput) (*iam.Dele
 func (m *mockIAMService) UpdateAccessKey(_ *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error) {
 	return nil, nil
 }
+func (m *mockIAMService) CreatePolicy(_ *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error) {
+	return nil, nil
+}
+func (m *mockIAMService) GetPolicy(_ *iam.GetPolicyInput) (*iam.GetPolicyOutput, error) {
+	return nil, nil
+}
+func (m *mockIAMService) GetPolicyVersion(_ *iam.GetPolicyVersionInput) (*iam.GetPolicyVersionOutput, error) {
+	return nil, nil
+}
+func (m *mockIAMService) ListPolicies(_ *iam.ListPoliciesInput) (*iam.ListPoliciesOutput, error) {
+	return nil, nil
+}
+func (m *mockIAMService) DeletePolicy(_ *iam.DeletePolicyInput) (*iam.DeletePolicyOutput, error) {
+	return nil, nil
+}
+func (m *mockIAMService) AttachUserPolicy(_ *iam.AttachUserPolicyInput) (*iam.AttachUserPolicyOutput, error) {
+	return nil, nil
+}
+func (m *mockIAMService) DetachUserPolicy(_ *iam.DetachUserPolicyInput) (*iam.DetachUserPolicyOutput, error) {
+	return nil, nil
+}
+func (m *mockIAMService) ListAttachedUserPolicies(_ *iam.ListAttachedUserPoliciesInput) (*iam.ListAttachedUserPoliciesOutput, error) {
+	return nil, nil
+}
+func (m *mockIAMService) GetUserPolicies(_ string) ([]handlers_iam.PolicyDocument, error) {
+	return nil, nil
+}
 func (m *mockIAMService) SeedRootUser(_ *handlers_iam.BootstrapData) error { return nil }
 func (m *mockIAMService) IsEmpty() (bool, error)                           { return true, nil }
 

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 const (
 	KVBucketUsers      = "hive-iam-users"
 	KVBucketAccessKeys = "hive-iam-access-keys"
+	KVBucketPolicies   = "hive-iam-policies"
 
 	HiveAccountID = "000000000000"
 
@@ -31,6 +33,7 @@ type IAMServiceImpl struct {
 	js               nats.JetStreamContext
 	usersBucket      nats.KeyValue
 	accessKeysBucket nats.KeyValue
+	policiesBucket   nats.KeyValue
 	masterKey        []byte
 }
 
@@ -55,14 +58,21 @@ func NewIAMServiceImpl(natsConn *nats.Conn, masterKey []byte) (*IAMServiceImpl, 
 		return nil, fmt.Errorf("init access keys bucket: %w", err)
 	}
 
+	policiesBucket, err := getOrCreateBucket(js, KVBucketPolicies, 10)
+	if err != nil {
+		return nil, fmt.Errorf("init policies bucket: %w", err)
+	}
+
 	slog.Info("IAM service initialized",
 		"users_bucket", KVBucketUsers,
-		"access_keys_bucket", KVBucketAccessKeys)
+		"access_keys_bucket", KVBucketAccessKeys,
+		"policies_bucket", KVBucketPolicies)
 
 	return &IAMServiceImpl{
 		js:               js,
 		usersBucket:      usersBucket,
 		accessKeysBucket: accessKeysBucket,
+		policiesBucket:   policiesBucket,
 		masterKey:        masterKey,
 	}, nil
 }
@@ -97,13 +107,14 @@ func (s *IAMServiceImpl) CreateUser(input *iam.CreateUserInput) (*iam.CreateUser
 	}
 
 	user := User{
-		UserName:   userName,
-		UserID:     generateUserID(),
-		ARN:        fmt.Sprintf("arn:aws:iam::%s:user%s%s", HiveAccountID, path, userName),
-		Path:       path,
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-		AccessKeys: []string{},
-		Tags:       []Tag{},
+		UserName:         userName,
+		UserID:           generateUserID(),
+		ARN:              fmt.Sprintf("arn:aws:iam::%s:user%s%s", HiveAccountID, path, userName),
+		Path:             path,
+		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
+		AccessKeys:       []string{},
+		Tags:             []Tag{},
+		AttachedPolicies: []string{},
 	}
 
 	for _, tag := range input.Tags {
@@ -490,13 +501,14 @@ func (s *IAMServiceImpl) LookupAccessKey(accessKeyID string) (*AccessKey, error)
 // race safety — the first node to call this wins; others skip silently.
 func (s *IAMServiceImpl) SeedRootUser(data *BootstrapData) error {
 	rootUser := User{
-		UserName:   "root",
-		UserID:     "AIDAAAAAAAAAAAAAAAAA",
-		ARN:        fmt.Sprintf("arn:aws:iam::%s:root", data.AccountID),
-		Path:       "/",
-		CreatedAt:  time.Now().UTC().Format(time.RFC3339),
-		AccessKeys: []string{data.AccessKeyID},
-		Tags:       []Tag{},
+		UserName:         "root",
+		UserID:           "AIDAAAAAAAAAAAAAAAAA",
+		ARN:              fmt.Sprintf("arn:aws:iam::%s:root", data.AccountID),
+		Path:             "/",
+		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
+		AccessKeys:       []string{data.AccessKeyID},
+		Tags:             []Tag{},
+		AttachedPolicies: []string{},
 	}
 
 	userData, err := json.Marshal(rootUser)
@@ -554,8 +566,436 @@ func (s *IAMServiceImpl) IsEmpty() (bool, error) {
 }
 
 // ---------------------------------------------------------------------------
+// Policy CRUD
+// ---------------------------------------------------------------------------
+
+func (s *IAMServiceImpl) CreatePolicy(input *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error) {
+	if input.PolicyName == nil || *input.PolicyName == "" {
+		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
+	}
+	if input.PolicyDocument == nil || *input.PolicyDocument == "" {
+		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
+	}
+
+	policyName := *input.PolicyName
+
+	if _, err := ValidatePolicyDocument(*input.PolicyDocument); err != nil {
+		slog.Debug("CreatePolicy: invalid policy document", "policyName", policyName, "err", err)
+		return nil, errors.New(awserrors.ErrorIAMMalformedPolicyDocument)
+	}
+
+	path := aws.StringValue(input.Path)
+	if path == "" {
+		path = "/"
+	}
+
+	policy := Policy{
+		PolicyName:     policyName,
+		PolicyID:       generatePolicyID(),
+		ARN:            fmt.Sprintf("arn:aws:iam::%s:policy%s%s", HiveAccountID, path, policyName),
+		Path:           path,
+		Description:    aws.StringValue(input.Description),
+		PolicyDocument: *input.PolicyDocument,
+		CreatedAt:      time.Now().UTC().Format(time.RFC3339),
+		DefaultVersion: "v1",
+		Tags:           []Tag{},
+	}
+
+	data, err := json.Marshal(policy)
+	if err != nil {
+		return nil, fmt.Errorf("marshal policy: %w", err)
+	}
+
+	if _, err := s.policiesBucket.Create(policyName, data); err != nil {
+		if errors.Is(err, nats.ErrKeyExists) {
+			return nil, errors.New(awserrors.ErrorIAMEntityAlreadyExists)
+		}
+		return nil, fmt.Errorf("store policy: %w", err)
+	}
+
+	slog.Info("IAM policy created", "policyName", policyName, "policyID", policy.PolicyID)
+
+	createdAt, err := time.Parse(time.RFC3339, policy.CreatedAt)
+	if err != nil {
+		slog.Warn("Failed to parse policy CreatedAt", "policyName", policy.PolicyName, "createdAt", policy.CreatedAt, "err", err)
+	}
+	return &iam.CreatePolicyOutput{
+		Policy: &iam.Policy{
+			PolicyName:       aws.String(policy.PolicyName),
+			PolicyId:         aws.String(policy.PolicyID),
+			Arn:              aws.String(policy.ARN),
+			Path:             aws.String(policy.Path),
+			Description:      aws.String(policy.Description),
+			DefaultVersionId: aws.String(policy.DefaultVersion),
+			CreateDate:       aws.Time(createdAt),
+			AttachmentCount:  aws.Int64(0),
+			IsAttachable:     aws.Bool(true),
+		},
+	}, nil
+}
+
+func (s *IAMServiceImpl) GetPolicy(input *iam.GetPolicyInput) (*iam.GetPolicyOutput, error) {
+	if input.PolicyArn == nil || *input.PolicyArn == "" {
+		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
+	}
+
+	policy, err := s.getPolicyByARN(*input.PolicyArn)
+	if err != nil {
+		return nil, err
+	}
+
+	attachmentCount, err := s.countPolicyAttachments(policy.ARN)
+	if err != nil {
+		return nil, fmt.Errorf("check policy attachments: %w", err)
+	}
+
+	createdAt, err := time.Parse(time.RFC3339, policy.CreatedAt)
+	if err != nil {
+		slog.Warn("Failed to parse policy CreatedAt", "policyName", policy.PolicyName, "createdAt", policy.CreatedAt, "err", err)
+	}
+	return &iam.GetPolicyOutput{
+		Policy: &iam.Policy{
+			PolicyName:       aws.String(policy.PolicyName),
+			PolicyId:         aws.String(policy.PolicyID),
+			Arn:              aws.String(policy.ARN),
+			Path:             aws.String(policy.Path),
+			Description:      aws.String(policy.Description),
+			DefaultVersionId: aws.String(policy.DefaultVersion),
+			CreateDate:       aws.Time(createdAt),
+			AttachmentCount:  aws.Int64(attachmentCount),
+			IsAttachable:     aws.Bool(true),
+		},
+	}, nil
+}
+
+func (s *IAMServiceImpl) GetPolicyVersion(input *iam.GetPolicyVersionInput) (*iam.GetPolicyVersionOutput, error) {
+	if input.PolicyArn == nil || *input.PolicyArn == "" {
+		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
+	}
+	if input.VersionId == nil || *input.VersionId == "" {
+		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
+	}
+
+	policy, err := s.getPolicyByARN(*input.PolicyArn)
+	if err != nil {
+		return nil, err
+	}
+
+	// We only support v1 — reject other version IDs
+	if *input.VersionId != "v1" {
+		return nil, errors.New(awserrors.ErrorIAMNoSuchEntity)
+	}
+
+	createdAt, err := time.Parse(time.RFC3339, policy.CreatedAt)
+	if err != nil {
+		slog.Warn("Failed to parse policy CreatedAt", "policyName", policy.PolicyName, "createdAt", policy.CreatedAt, "err", err)
+	}
+	return &iam.GetPolicyVersionOutput{
+		PolicyVersion: &iam.PolicyVersion{
+			Document:         aws.String(policy.PolicyDocument),
+			VersionId:        aws.String("v1"),
+			IsDefaultVersion: aws.Bool(true),
+			CreateDate:       aws.Time(createdAt),
+		},
+	}, nil
+}
+
+func (s *IAMServiceImpl) ListPolicies(input *iam.ListPoliciesInput) (*iam.ListPoliciesOutput, error) {
+	keys, err := s.policiesBucket.Keys()
+	if err != nil {
+		if errors.Is(err, nats.ErrNoKeysFound) {
+			return &iam.ListPoliciesOutput{
+				Policies:    []*iam.Policy{},
+				IsTruncated: aws.Bool(false),
+			}, nil
+		}
+		return nil, fmt.Errorf("list policy keys: %w", err)
+	}
+
+	var policies []*iam.Policy
+	for _, key := range keys {
+		entry, err := s.policiesBucket.Get(key)
+		if err != nil {
+			if errors.Is(err, nats.ErrKeyNotFound) {
+				slog.Debug("ListPolicies: policy key disappeared (concurrent delete)", "key", key)
+			} else {
+				slog.Warn("ListPolicies: failed to get policy", "key", key, "err", err)
+			}
+			continue
+		}
+
+		var policy Policy
+		if err := json.Unmarshal(entry.Value(), &policy); err != nil {
+			slog.Warn("ListPolicies: failed to unmarshal policy", "key", key, "err", err)
+			continue
+		}
+
+		createdAt, err := time.Parse(time.RFC3339, policy.CreatedAt)
+		if err != nil {
+			slog.Warn("Failed to parse policy CreatedAt", "policyName", policy.PolicyName, "createdAt", policy.CreatedAt, "err", err)
+		}
+		attachCount, err := s.countPolicyAttachments(policy.ARN)
+		if err != nil {
+			return nil, fmt.Errorf("count policy attachments: %w", err)
+		}
+		policies = append(policies, &iam.Policy{
+			PolicyName:       aws.String(policy.PolicyName),
+			PolicyId:         aws.String(policy.PolicyID),
+			Arn:              aws.String(policy.ARN),
+			Path:             aws.String(policy.Path),
+			DefaultVersionId: aws.String(policy.DefaultVersion),
+			CreateDate:       aws.Time(createdAt),
+			AttachmentCount:  aws.Int64(attachCount),
+			IsAttachable:     aws.Bool(true),
+		})
+	}
+
+	return &iam.ListPoliciesOutput{
+		Policies:    policies,
+		IsTruncated: aws.Bool(false),
+	}, nil
+}
+
+func (s *IAMServiceImpl) DeletePolicy(input *iam.DeletePolicyInput) (*iam.DeletePolicyOutput, error) {
+	if input.PolicyArn == nil || *input.PolicyArn == "" {
+		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
+	}
+
+	policy, err := s.getPolicyByARN(*input.PolicyArn)
+	if err != nil {
+		return nil, err
+	}
+
+	attachCount, err := s.countPolicyAttachments(policy.ARN)
+	if err != nil {
+		return nil, fmt.Errorf("check policy attachments: %w", err)
+	}
+	if attachCount > 0 {
+		return nil, errors.New(awserrors.ErrorIAMDeleteConflict)
+	}
+
+	if err := s.policiesBucket.Delete(policy.PolicyName); err != nil {
+		return nil, fmt.Errorf("delete policy: %w", err)
+	}
+
+	slog.Info("IAM policy deleted", "policyName", policy.PolicyName)
+	return &iam.DeletePolicyOutput{}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Policy Attachment
+// ---------------------------------------------------------------------------
+
+func (s *IAMServiceImpl) AttachUserPolicy(input *iam.AttachUserPolicyInput) (*iam.AttachUserPolicyOutput, error) {
+	if input.UserName == nil || *input.UserName == "" {
+		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
+	}
+	if input.PolicyArn == nil || *input.PolicyArn == "" {
+		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
+	}
+
+	userName := *input.UserName
+	policyARN := *input.PolicyArn
+
+	// Verify policy exists
+	if _, err := s.getPolicyByARN(policyARN); err != nil {
+		return nil, err
+	}
+
+	user, err := s.getUser(userName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Idempotent — if already attached, succeed silently
+	if slices.Contains(user.AttachedPolicies, policyARN) {
+		return &iam.AttachUserPolicyOutput{}, nil
+	}
+
+	user.AttachedPolicies = append(user.AttachedPolicies, policyARN)
+	userData, err := json.Marshal(user)
+	if err != nil {
+		return nil, fmt.Errorf("marshal user: %w", err)
+	}
+
+	if _, err := s.usersBucket.Put(userName, userData); err != nil {
+		return nil, fmt.Errorf("update user: %w", err)
+	}
+
+	slog.Info("IAM policy attached to user", "userName", userName, "policyArn", policyARN)
+	return &iam.AttachUserPolicyOutput{}, nil
+}
+
+func (s *IAMServiceImpl) DetachUserPolicy(input *iam.DetachUserPolicyInput) (*iam.DetachUserPolicyOutput, error) {
+	if input.UserName == nil || *input.UserName == "" {
+		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
+	}
+	if input.PolicyArn == nil || *input.PolicyArn == "" {
+		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
+	}
+
+	userName := *input.UserName
+	policyARN := *input.PolicyArn
+
+	user, err := s.getUser(userName)
+	if err != nil {
+		return nil, err
+	}
+
+	found := false
+	remaining := make([]string, 0, len(user.AttachedPolicies))
+	for _, arn := range user.AttachedPolicies {
+		if arn == policyARN {
+			found = true
+		} else {
+			remaining = append(remaining, arn)
+		}
+	}
+
+	if !found {
+		return nil, errors.New(awserrors.ErrorIAMNoSuchEntity)
+	}
+
+	user.AttachedPolicies = remaining
+	userData, err := json.Marshal(user)
+	if err != nil {
+		return nil, fmt.Errorf("marshal user: %w", err)
+	}
+
+	if _, err := s.usersBucket.Put(userName, userData); err != nil {
+		return nil, fmt.Errorf("update user: %w", err)
+	}
+
+	slog.Info("IAM policy detached from user", "userName", userName, "policyArn", policyARN)
+	return &iam.DetachUserPolicyOutput{}, nil
+}
+
+func (s *IAMServiceImpl) ListAttachedUserPolicies(input *iam.ListAttachedUserPoliciesInput) (*iam.ListAttachedUserPoliciesOutput, error) {
+	if input.UserName == nil || *input.UserName == "" {
+		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
+	}
+
+	user, err := s.getUser(*input.UserName)
+	if err != nil {
+		return nil, err
+	}
+
+	var attached []*iam.AttachedPolicy
+	for _, arn := range user.AttachedPolicies {
+		policy, err := s.getPolicyByARN(arn)
+		if err != nil {
+			slog.Warn("ListAttachedUserPolicies: policy not found for ARN", "arn", arn, "err", err)
+			continue
+		}
+		attached = append(attached, &iam.AttachedPolicy{
+			PolicyArn:  aws.String(policy.ARN),
+			PolicyName: aws.String(policy.PolicyName),
+		})
+	}
+
+	return &iam.ListAttachedUserPoliciesOutput{
+		AttachedPolicies: attached,
+		IsTruncated:      aws.Bool(false),
+	}, nil
+}
+
+// GetUserPolicies resolves all policy documents attached to a user.
+// Used internally by the gateway for policy evaluation.
+func (s *IAMServiceImpl) GetUserPolicies(userName string) ([]PolicyDocument, error) {
+	user, err := s.getUser(userName)
+	if err != nil {
+		return nil, err
+	}
+
+	var docs []PolicyDocument
+	for _, arn := range user.AttachedPolicies {
+		policy, err := s.getPolicyByARN(arn)
+		if err != nil {
+			// Fail closed: if we can't resolve a policy, we can't make a safe
+			// access decision. Return an error so the caller denies access.
+			return nil, fmt.Errorf("resolve policy %s: %w", arn, err)
+		}
+
+		doc, err := ValidatePolicyDocument(policy.PolicyDocument)
+		if err != nil {
+			return nil, fmt.Errorf("parse policy %s: %w", policy.PolicyName, err)
+		}
+		docs = append(docs, *doc)
+	}
+
+	return docs, nil
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+func (s *IAMServiceImpl) getPolicyByARN(policyARN string) (*Policy, error) {
+	// Extract policy name from ARN: arn:aws:iam::000000000000:policy/path/PolicyName
+	parts := strings.SplitN(policyARN, ":policy", 2)
+	if len(parts) != 2 || parts[1] == "" {
+		return nil, errors.New(awserrors.ErrorIAMNoSuchEntity)
+	}
+	// The name is the last segment after the final /
+	segments := strings.Split(parts[1], "/")
+	policyName := segments[len(segments)-1]
+	if policyName == "" {
+		return nil, errors.New(awserrors.ErrorIAMNoSuchEntity)
+	}
+
+	entry, err := s.policiesBucket.Get(policyName)
+	if err != nil {
+		if errors.Is(err, nats.ErrKeyNotFound) {
+			return nil, errors.New(awserrors.ErrorIAMNoSuchEntity)
+		}
+		return nil, fmt.Errorf("get policy: %w", err)
+	}
+
+	var policy Policy
+	if err := json.Unmarshal(entry.Value(), &policy); err != nil {
+		return nil, fmt.Errorf("unmarshal policy: %w", err)
+	}
+
+	// Verify the full ARN matches (path may differ)
+	if policy.ARN != policyARN {
+		return nil, errors.New(awserrors.ErrorIAMNoSuchEntity)
+	}
+
+	return &policy, nil
+}
+
+// countPolicyAttachments counts how many users have this policy attached.
+func (s *IAMServiceImpl) countPolicyAttachments(policyARN string) (int64, error) {
+	keys, err := s.usersBucket.Keys()
+	if err != nil {
+		if errors.Is(err, nats.ErrNoKeysFound) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("count policy attachments: %w", err)
+	}
+
+	var count int64
+	for _, key := range keys {
+		entry, err := s.usersBucket.Get(key)
+		if err != nil {
+			if errors.Is(err, nats.ErrKeyNotFound) {
+				slog.Debug("countPolicyAttachments: user key disappeared", "key", key)
+				continue
+			}
+			slog.Warn("countPolicyAttachments: failed to get user", "key", key, "err", err)
+			continue
+		}
+		var user User
+		if err := json.Unmarshal(entry.Value(), &user); err != nil {
+			slog.Warn("countPolicyAttachments: failed to unmarshal user", "key", key, "err", err)
+			continue
+		}
+		if slices.Contains(user.AttachedPolicies, policyARN) {
+			count++
+		}
+	}
+	return count, nil
+}
 
 func (s *IAMServiceImpl) getUser(userName string) (*User, error) {
 	entry, err := s.usersBucket.Get(userName)
@@ -595,4 +1035,42 @@ func generateSecretAccessKey() string {
 		panic("crypto/rand failed: " + err.Error())
 	}
 	return base64.StdEncoding.EncodeToString(b)[:40]
+}
+
+func generatePolicyID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return "ANPA" + strings.ToUpper(hex.EncodeToString(b))[:17]
+}
+
+// ValidatePolicyDocument parses and validates an IAM policy document JSON string.
+func ValidatePolicyDocument(docJSON string) (*PolicyDocument, error) {
+	var doc PolicyDocument
+	if err := json.Unmarshal([]byte(docJSON), &doc); err != nil {
+		return nil, fmt.Errorf("invalid JSON: %w", err)
+	}
+
+	if doc.Version != "2012-10-17" {
+		return nil, fmt.Errorf("unsupported policy version: %q", doc.Version)
+	}
+
+	if len(doc.Statement) == 0 {
+		return nil, fmt.Errorf("policy must contain at least one statement")
+	}
+
+	for i, stmt := range doc.Statement {
+		if stmt.Effect != "Allow" && stmt.Effect != "Deny" {
+			return nil, fmt.Errorf("statement %d: Effect must be Allow or Deny, got %q", i, stmt.Effect)
+		}
+		if len(stmt.Action) == 0 {
+			return nil, fmt.Errorf("statement %d: Action is required", i)
+		}
+		if len(stmt.Resource) == 0 {
+			return nil, fmt.Errorf("statement %d: Resource is required", i)
+		}
+	}
+
+	return &doc, nil
 }
