@@ -101,6 +101,11 @@ func launchService(config *config.ClusterConfig) error {
 		slog.Info("Bootstrap complete, bootstrap.json deleted")
 	}
 
+	// Migrate legacy IAM data to account-scoped keys (idempotent, runs every startup)
+	if err := iamService.MigrateToAccountScoped(); err != nil {
+		return fmt.Errorf("IAM account migration: %w", err)
+	}
+
 	// Create gateway with NATS connection
 	gw := gateway.GatewayConfig{
 		Debug:          nodeConfig.AWSGW.Debug,
