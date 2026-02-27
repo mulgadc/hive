@@ -6,11 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/gateway"
 	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
 	"github.com/mulgadc/hive/hive/utils"
+	"github.com/nats-io/nats.go"
 )
 
 var serviceName = "awsgw"
@@ -58,10 +60,10 @@ func launchService(config *config.ClusterConfig) error {
 
 	nodeConfig := config.Nodes[config.Node]
 
-	// Connect to NATS for service communication
-	natsConn, err := utils.ConnectNATS(nodeConfig.NATS.Host, nodeConfig.NATS.ACL.Token)
+	// Connect to NATS for service communication. On concurrent startup the
+	// local NATS server may not be listening yet, so retry with backoff.
+	natsConn, err := connectNATS(nodeConfig.NATS.Host, nodeConfig.NATS.ACL.Token)
 	if err != nil {
-		slog.Error("Failed to connect to NATS", "err", err)
 		return err
 	}
 	defer natsConn.Close()
@@ -78,8 +80,10 @@ func launchService(config *config.ClusterConfig) error {
 		return fmt.Errorf("load IAM master key from %s: %w", masterKeyPath, err)
 	}
 
-	// Initialize IAM service with NATS KV backend (required for auth)
-	iamService, err := handlers_iam.NewIAMServiceImpl(natsConn, masterKey)
+	// Initialize IAM service with NATS KV backend (required for auth).
+	// On multi-node clusters, JetStream KV requires cluster quorum which may
+	// not be available yet if nodes start concurrently. Retry with backoff.
+	iamService, err := initIAMService(natsConn, masterKey)
 	if err != nil {
 		return fmt.Errorf("initialize IAM service: %w", err)
 	}
@@ -119,4 +123,61 @@ func launchService(config *config.ClusterConfig) error {
 
 	return nil
 
+}
+
+// connectNATS establishes a connection to NATS with retry/backoff. On concurrent
+// startup the local NATS server may not be listening yet.
+func connectNATS(host, token string) (*nats.Conn, error) {
+	const maxWait = 5 * time.Minute
+	retryDelay := 500 * time.Millisecond
+	start := time.Now()
+
+	for {
+		nc, err := utils.ConnectNATS(host, token)
+		if err == nil {
+			if time.Since(start) > time.Second {
+				slog.Info("NATS connection established", "elapsed", time.Since(start).Round(time.Second))
+			}
+			return nc, nil
+		}
+
+		elapsed := time.Since(start)
+		if elapsed >= maxWait {
+			return nil, fmt.Errorf("NATS connect failed after %s: %w", elapsed.Round(time.Second), err)
+		}
+
+		slog.Warn("NATS not ready, retrying...", "error", err, "elapsed", elapsed.Round(time.Second), "retryIn", retryDelay)
+		time.Sleep(retryDelay)
+		retryDelay = min(retryDelay*2, 10*time.Second)
+	}
+}
+
+// initIAMService initializes the IAM service with retry/backoff. On multi-node
+// clusters, JetStream requires NATS cluster quorum before KV buckets can be
+// created. This retries for up to 5 minutes to allow late-joining nodes.
+func initIAMService(natsConn *nats.Conn, masterKey []byte) (*handlers_iam.IAMServiceImpl, error) {
+	const maxWait = 5 * time.Minute
+	retryDelay := 500 * time.Millisecond
+	start := time.Now()
+	attempt := 0
+
+	for {
+		attempt++
+		svc, err := handlers_iam.NewIAMServiceImpl(natsConn, masterKey)
+		if err == nil {
+			if attempt > 1 {
+				slog.Info("IAM service initialized after retry", "attempts", attempt, "elapsed", time.Since(start).Round(time.Second))
+			}
+			return svc, nil
+		}
+
+		elapsed := time.Since(start)
+		if elapsed >= maxWait {
+			return nil, fmt.Errorf("IAM service unavailable after %s (%d attempts): %w", elapsed.Round(time.Second), attempt, err)
+		}
+
+		slog.Warn("IAM service not ready (waiting for JetStream cluster quorum)", "error", err, "attempt", attempt, "elapsed", elapsed.Round(time.Second), "retryIn", retryDelay)
+		time.Sleep(retryDelay)
+		retryDelay = min(retryDelay*2, 10*time.Second)
+	}
 }
