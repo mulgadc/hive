@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,22 +20,26 @@ import (
 )
 
 const (
-	KVBucketUsers      = "hive-iam-users"
-	KVBucketAccessKeys = "hive-iam-access-keys"
-	KVBucketPolicies   = "hive-iam-policies"
+	KVBucketUsers          = "hive-iam-users"
+	KVBucketAccessKeys     = "hive-iam-access-keys"
+	KVBucketPolicies       = "hive-iam-policies"
+	KVBucketAccounts       = "hive-accounts"
+	KVBucketAccountCounter = "hive-account-counter"
 
-	HiveAccountID = "000000000000"
+	GlobalAccountID = "000000000000"
 
 	maxAccessKeysPerUser = 2
 )
 
 // IAMServiceImpl implements IAM operations using NATS JetStream KV.
 type IAMServiceImpl struct {
-	js               nats.JetStreamContext
-	usersBucket      nats.KeyValue
-	accessKeysBucket nats.KeyValue
-	policiesBucket   nats.KeyValue
-	masterKey        []byte
+	js                   nats.JetStreamContext
+	usersBucket          nats.KeyValue
+	accessKeysBucket     nats.KeyValue
+	policiesBucket       nats.KeyValue
+	accountsBucket       nats.KeyValue
+	accountCounterBucket nats.KeyValue
+	masterKey            []byte
 }
 
 // NewIAMServiceImpl creates a new IAM service backed by NATS JetStream KV.
@@ -63,17 +68,30 @@ func NewIAMServiceImpl(natsConn *nats.Conn, masterKey []byte) (*IAMServiceImpl, 
 		return nil, fmt.Errorf("init policies bucket: %w", err)
 	}
 
+	accountsBucket, err := getOrCreateBucket(js, KVBucketAccounts, 5)
+	if err != nil {
+		return nil, fmt.Errorf("init accounts bucket: %w", err)
+	}
+
+	accountCounterBucket, err := getOrCreateBucket(js, KVBucketAccountCounter, 5)
+	if err != nil {
+		return nil, fmt.Errorf("init account counter bucket: %w", err)
+	}
+
 	slog.Info("IAM service initialized",
 		"users_bucket", KVBucketUsers,
 		"access_keys_bucket", KVBucketAccessKeys,
-		"policies_bucket", KVBucketPolicies)
+		"policies_bucket", KVBucketPolicies,
+		"accounts_bucket", KVBucketAccounts)
 
 	return &IAMServiceImpl{
-		js:               js,
-		usersBucket:      usersBucket,
-		accessKeysBucket: accessKeysBucket,
-		policiesBucket:   policiesBucket,
-		masterKey:        masterKey,
+		js:                   js,
+		usersBucket:          usersBucket,
+		accessKeysBucket:     accessKeysBucket,
+		policiesBucket:       policiesBucket,
+		accountsBucket:       accountsBucket,
+		accountCounterBucket: accountCounterBucket,
+		masterKey:            masterKey,
 	}, nil
 }
 
@@ -109,7 +127,7 @@ func (s *IAMServiceImpl) CreateUser(input *iam.CreateUserInput) (*iam.CreateUser
 	user := User{
 		UserName:         userName,
 		UserID:           generateUserID(),
-		ARN:              fmt.Sprintf("arn:aws:iam::%s:user%s%s", HiveAccountID, path, userName),
+		ARN:              fmt.Sprintf("arn:aws:iam::%s:user%s%s", GlobalAccountID, path, userName),
 		Path:             path,
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		AccessKeys:       []string{},
@@ -566,6 +584,120 @@ func (s *IAMServiceImpl) IsEmpty() (bool, error) {
 }
 
 // ---------------------------------------------------------------------------
+// Account Operations
+// ---------------------------------------------------------------------------
+
+// CreateAccount creates a new account with a sequentially assigned 12-digit ID.
+// Uses a CAS loop on the counter bucket for safe concurrent ID assignment.
+func (s *IAMServiceImpl) CreateAccount(name string) (*Account, error) {
+	if name == "" {
+		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
+	}
+
+	var accountID string
+	for {
+		// Read current counter value
+		entry, err := s.accountCounterBucket.Get("next_id")
+		if errors.Is(err, nats.ErrKeyNotFound) {
+			// First account ever — start at 1 (000000000000 is the global account)
+			accountID = fmt.Sprintf("%012d", 1)
+			if _, err := s.accountCounterBucket.Create("next_id", []byte("2")); err != nil {
+				if errors.Is(err, nats.ErrKeyExists) {
+					continue // Another node raced us, retry
+				}
+				return nil, fmt.Errorf("init account counter: %w", err)
+			}
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read account counter: %w", err)
+		}
+
+		nextID, err := strconv.ParseInt(string(entry.Value()), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse account counter: %w", err)
+		}
+		accountID = fmt.Sprintf("%012d", nextID)
+
+		// CAS update: increment counter, fail if revision changed
+		newVal := []byte(strconv.FormatInt(nextID+1, 10))
+		if _, err := s.accountCounterBucket.Update("next_id", newVal, entry.Revision()); err != nil {
+			if errors.Is(err, nats.ErrKeyExists) {
+				continue // CAS conflict, retry
+			}
+			return nil, fmt.Errorf("update account counter: %w", err)
+		}
+		break
+	}
+
+	account := Account{
+		AccountID:   accountID,
+		AccountName: name,
+		Status:      "ACTIVE",
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+	}
+
+	data, err := json.Marshal(account)
+	if err != nil {
+		return nil, fmt.Errorf("marshal account: %w", err)
+	}
+
+	if _, err := s.accountsBucket.Create(accountID, data); err != nil {
+		return nil, fmt.Errorf("store account: %w", err)
+	}
+
+	slog.Info("Account created", "accountID", accountID, "name", name)
+	return &account, nil
+}
+
+// GetAccount retrieves an account by its 12-digit ID.
+func (s *IAMServiceImpl) GetAccount(accountID string) (*Account, error) {
+	entry, err := s.accountsBucket.Get(accountID)
+	if err != nil {
+		if errors.Is(err, nats.ErrKeyNotFound) {
+			return nil, errors.New(awserrors.ErrorIAMNoSuchEntity)
+		}
+		return nil, fmt.Errorf("get account: %w", err)
+	}
+
+	var account Account
+	if err := json.Unmarshal(entry.Value(), &account); err != nil {
+		return nil, fmt.Errorf("unmarshal account: %w", err)
+	}
+	return &account, nil
+}
+
+// ListAccounts returns all accounts.
+func (s *IAMServiceImpl) ListAccounts() ([]*Account, error) {
+	keys, err := s.accountsBucket.Keys()
+	if err != nil {
+		if errors.Is(err, nats.ErrNoKeysFound) {
+			return []*Account{}, nil
+		}
+		return nil, fmt.Errorf("list account keys: %w", err)
+	}
+
+	accounts := make([]*Account, 0, len(keys))
+	for _, key := range keys {
+		entry, err := s.accountsBucket.Get(key)
+		if err != nil {
+			if errors.Is(err, nats.ErrKeyNotFound) {
+				continue
+			}
+			return nil, fmt.Errorf("get account %s: %w", key, err)
+		}
+
+		var account Account
+		if err := json.Unmarshal(entry.Value(), &account); err != nil {
+			slog.Warn("ListAccounts: failed to unmarshal account", "key", key, "err", err)
+			continue
+		}
+		accounts = append(accounts, &account)
+	}
+	return accounts, nil
+}
+
+// ---------------------------------------------------------------------------
 // Policy CRUD
 // ---------------------------------------------------------------------------
 
@@ -592,7 +724,7 @@ func (s *IAMServiceImpl) CreatePolicy(input *iam.CreatePolicyInput) (*iam.Create
 	policy := Policy{
 		PolicyName:     policyName,
 		PolicyID:       generatePolicyID(),
-		ARN:            fmt.Sprintf("arn:aws:iam::%s:policy%s%s", HiveAccountID, path, policyName),
+		ARN:            fmt.Sprintf("arn:aws:iam::%s:policy%s%s", GlobalAccountID, path, policyName),
 		Path:           path,
 		Description:    aws.StringValue(input.Description),
 		PolicyDocument: *input.PolicyDocument,
