@@ -113,7 +113,7 @@ func getOrCreateBucket(js nats.JetStreamContext, name string, history uint8) (na
 // User CRUD
 // ---------------------------------------------------------------------------
 
-func (s *IAMServiceImpl) CreateUser(input *iam.CreateUserInput) (*iam.CreateUserOutput, error) {
+func (s *IAMServiceImpl) CreateUser(accountID string, input *iam.CreateUserInput) (*iam.CreateUserOutput, error) {
 	if input.UserName == nil || *input.UserName == "" {
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
@@ -124,10 +124,12 @@ func (s *IAMServiceImpl) CreateUser(input *iam.CreateUserInput) (*iam.CreateUser
 		path = *input.Path
 	}
 
+	kvKey := accountID + ":" + userName
 	user := User{
 		UserName:         userName,
 		UserID:           generateUserID(),
-		ARN:              fmt.Sprintf("arn:aws:iam::%s:user%s%s", GlobalAccountID, path, userName),
+		AccountID:        accountID,
+		ARN:              fmt.Sprintf("arn:aws:iam::%s:user%s%s", accountID, path, userName),
 		Path:             path,
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		AccessKeys:       []string{},
@@ -147,14 +149,14 @@ func (s *IAMServiceImpl) CreateUser(input *iam.CreateUserInput) (*iam.CreateUser
 	}
 
 	// Atomic create — fails if key already exists (race-safe)
-	if _, err := s.usersBucket.Create(userName, data); err != nil {
+	if _, err := s.usersBucket.Create(kvKey, data); err != nil {
 		if errors.Is(err, nats.ErrKeyExists) {
 			return nil, errors.New(awserrors.ErrorIAMEntityAlreadyExists)
 		}
 		return nil, fmt.Errorf("store user: %w", err)
 	}
 
-	slog.Info("IAM user created", "userName", userName, "userID", user.UserID)
+	slog.Info("IAM user created", "accountID", accountID, "userName", userName, "userID", user.UserID)
 
 	createdAt, err := time.Parse(time.RFC3339, user.CreatedAt)
 	if err != nil {
@@ -171,12 +173,12 @@ func (s *IAMServiceImpl) CreateUser(input *iam.CreateUserInput) (*iam.CreateUser
 	}, nil
 }
 
-func (s *IAMServiceImpl) GetUser(input *iam.GetUserInput) (*iam.GetUserOutput, error) {
+func (s *IAMServiceImpl) GetUser(accountID string, input *iam.GetUserInput) (*iam.GetUserOutput, error) {
 	if input.UserName == nil || *input.UserName == "" {
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
 
-	user, err := s.getUser(*input.UserName)
+	user, err := s.getUser(accountID, *input.UserName)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +198,7 @@ func (s *IAMServiceImpl) GetUser(input *iam.GetUserInput) (*iam.GetUserOutput, e
 	}, nil
 }
 
-func (s *IAMServiceImpl) ListUsers(input *iam.ListUsersInput) (*iam.ListUsersOutput, error) {
+func (s *IAMServiceImpl) ListUsers(accountID string, input *iam.ListUsersInput) (*iam.ListUsersOutput, error) {
 	keys, err := s.usersBucket.Keys()
 	if err != nil {
 		if errors.Is(err, nats.ErrNoKeysFound) {
@@ -213,8 +215,13 @@ func (s *IAMServiceImpl) ListUsers(input *iam.ListUsersInput) (*iam.ListUsersOut
 		pathPrefix = *input.PathPrefix
 	}
 
+	keyPrefix := accountID + ":"
 	var users []*iam.User
 	for _, key := range keys {
+		if !strings.HasPrefix(key, keyPrefix) {
+			continue
+		}
+
 		entry, err := s.usersBucket.Get(key)
 		if err != nil {
 			if errors.Is(err, nats.ErrKeyNotFound) {
@@ -254,12 +261,15 @@ func (s *IAMServiceImpl) ListUsers(input *iam.ListUsersInput) (*iam.ListUsersOut
 	}, nil
 }
 
-func (s *IAMServiceImpl) DeleteUser(input *iam.DeleteUserInput) (*iam.DeleteUserOutput, error) {
+func (s *IAMServiceImpl) DeleteUser(accountID string, input *iam.DeleteUserInput) (*iam.DeleteUserOutput, error) {
 	if input.UserName == nil || *input.UserName == "" {
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
 
-	user, err := s.getUser(*input.UserName)
+	userName := *input.UserName
+	kvKey := accountID + ":" + userName
+
+	user, err := s.getUser(accountID, userName)
 	if err != nil {
 		return nil, err
 	}
@@ -268,11 +278,11 @@ func (s *IAMServiceImpl) DeleteUser(input *iam.DeleteUserInput) (*iam.DeleteUser
 		return nil, errors.New(awserrors.ErrorIAMDeleteConflict)
 	}
 
-	if err := s.usersBucket.Delete(*input.UserName); err != nil {
+	if err := s.usersBucket.Delete(kvKey); err != nil {
 		return nil, fmt.Errorf("delete user: %w", err)
 	}
 
-	slog.Info("IAM user deleted", "userName", *input.UserName)
+	slog.Info("IAM user deleted", "accountID", accountID, "userName", userName)
 	return &iam.DeleteUserOutput{}, nil
 }
 
@@ -280,14 +290,15 @@ func (s *IAMServiceImpl) DeleteUser(input *iam.DeleteUserInput) (*iam.DeleteUser
 // Access Key Lifecycle
 // ---------------------------------------------------------------------------
 
-func (s *IAMServiceImpl) CreateAccessKey(input *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error) {
+func (s *IAMServiceImpl) CreateAccessKey(accountID string, input *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error) {
 	if input.UserName == nil || *input.UserName == "" {
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
 
 	userName := *input.UserName
+	userKVKey := accountID + ":" + userName
 
-	user, err := s.getUser(userName)
+	user, err := s.getUser(accountID, userName)
 	if err != nil {
 		return nil, err
 	}
@@ -308,6 +319,7 @@ func (s *IAMServiceImpl) CreateAccessKey(input *iam.CreateAccessKeyInput) (*iam.
 		AccessKeyID:     accessKeyID,
 		SecretAccessKey: encryptedSecret,
 		UserName:        userName,
+		AccountID:       accountID,
 		Status:          "Active",
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
@@ -331,14 +343,14 @@ func (s *IAMServiceImpl) CreateAccessKey(input *iam.CreateAccessKeyInput) (*iam.
 		return nil, fmt.Errorf("marshal user: %w", err)
 	}
 
-	if _, err := s.usersBucket.Put(userName, userData); err != nil {
+	if _, err := s.usersBucket.Put(userKVKey, userData); err != nil {
 		if rbErr := s.accessKeysBucket.Delete(accessKeyID); rbErr != nil {
 			slog.Error("Rollback failed: orphaned access key", "accessKeyID", accessKeyID, "err", rbErr)
 		}
 		return nil, fmt.Errorf("update user: %w", err)
 	}
 
-	slog.Info("IAM access key created", "userName", userName, "accessKeyID", accessKeyID)
+	slog.Info("IAM access key created", "accountID", accountID, "userName", userName, "accessKeyID", accessKeyID)
 
 	createdAt, err := time.Parse(time.RFC3339, ak.CreatedAt)
 	if err != nil {
@@ -355,12 +367,12 @@ func (s *IAMServiceImpl) CreateAccessKey(input *iam.CreateAccessKeyInput) (*iam.
 	}, nil
 }
 
-func (s *IAMServiceImpl) ListAccessKeys(input *iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error) {
+func (s *IAMServiceImpl) ListAccessKeys(accountID string, input *iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error) {
 	if input.UserName == nil || *input.UserName == "" {
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
 
-	user, err := s.getUser(*input.UserName)
+	user, err := s.getUser(accountID, *input.UserName)
 	if err != nil {
 		return nil, err
 	}
@@ -401,7 +413,7 @@ func (s *IAMServiceImpl) ListAccessKeys(input *iam.ListAccessKeysInput) (*iam.Li
 	}, nil
 }
 
-func (s *IAMServiceImpl) DeleteAccessKey(input *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error) {
+func (s *IAMServiceImpl) DeleteAccessKey(accountID string, input *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error) {
 	if input.UserName == nil || *input.UserName == "" {
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
@@ -411,8 +423,9 @@ func (s *IAMServiceImpl) DeleteAccessKey(input *iam.DeleteAccessKeyInput) (*iam.
 
 	userName := *input.UserName
 	accessKeyID := *input.AccessKeyId
+	userKVKey := accountID + ":" + userName
 
-	user, err := s.getUser(userName)
+	user, err := s.getUser(accountID, userName)
 	if err != nil {
 		return nil, err
 	}
@@ -442,11 +455,11 @@ func (s *IAMServiceImpl) DeleteAccessKey(input *iam.DeleteAccessKeyInput) (*iam.
 		return nil, fmt.Errorf("marshal user: %w", err)
 	}
 
-	if _, err := s.usersBucket.Put(userName, userData); err != nil {
+	if _, err := s.usersBucket.Put(userKVKey, userData); err != nil {
 		return nil, fmt.Errorf("update user: %w", err)
 	}
 
-	slog.Info("IAM access key deleted", "userName", userName, "accessKeyID", accessKeyID)
+	slog.Info("IAM access key deleted", "accountID", accountID, "userName", userName, "accessKeyID", accessKeyID)
 	return &iam.DeleteAccessKeyOutput{}, nil
 }
 
@@ -701,7 +714,7 @@ func (s *IAMServiceImpl) ListAccounts() ([]*Account, error) {
 // Policy CRUD
 // ---------------------------------------------------------------------------
 
-func (s *IAMServiceImpl) CreatePolicy(input *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error) {
+func (s *IAMServiceImpl) CreatePolicy(accountID string, input *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error) {
 	if input.PolicyName == nil || *input.PolicyName == "" {
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
@@ -710,6 +723,7 @@ func (s *IAMServiceImpl) CreatePolicy(input *iam.CreatePolicyInput) (*iam.Create
 	}
 
 	policyName := *input.PolicyName
+	kvKey := accountID + ":" + policyName
 
 	if _, err := ValidatePolicyDocument(*input.PolicyDocument); err != nil {
 		slog.Debug("CreatePolicy: invalid policy document", "policyName", policyName, "err", err)
@@ -724,7 +738,7 @@ func (s *IAMServiceImpl) CreatePolicy(input *iam.CreatePolicyInput) (*iam.Create
 	policy := Policy{
 		PolicyName:     policyName,
 		PolicyID:       generatePolicyID(),
-		ARN:            fmt.Sprintf("arn:aws:iam::%s:policy%s%s", GlobalAccountID, path, policyName),
+		ARN:            fmt.Sprintf("arn:aws:iam::%s:policy%s%s", accountID, path, policyName),
 		Path:           path,
 		Description:    aws.StringValue(input.Description),
 		PolicyDocument: *input.PolicyDocument,
@@ -738,14 +752,14 @@ func (s *IAMServiceImpl) CreatePolicy(input *iam.CreatePolicyInput) (*iam.Create
 		return nil, fmt.Errorf("marshal policy: %w", err)
 	}
 
-	if _, err := s.policiesBucket.Create(policyName, data); err != nil {
+	if _, err := s.policiesBucket.Create(kvKey, data); err != nil {
 		if errors.Is(err, nats.ErrKeyExists) {
 			return nil, errors.New(awserrors.ErrorIAMEntityAlreadyExists)
 		}
 		return nil, fmt.Errorf("store policy: %w", err)
 	}
 
-	slog.Info("IAM policy created", "policyName", policyName, "policyID", policy.PolicyID)
+	slog.Info("IAM policy created", "accountID", accountID, "policyName", policyName, "policyID", policy.PolicyID)
 
 	createdAt, err := time.Parse(time.RFC3339, policy.CreatedAt)
 	if err != nil {
@@ -766,17 +780,17 @@ func (s *IAMServiceImpl) CreatePolicy(input *iam.CreatePolicyInput) (*iam.Create
 	}, nil
 }
 
-func (s *IAMServiceImpl) GetPolicy(input *iam.GetPolicyInput) (*iam.GetPolicyOutput, error) {
+func (s *IAMServiceImpl) GetPolicy(accountID string, input *iam.GetPolicyInput) (*iam.GetPolicyOutput, error) {
 	if input.PolicyArn == nil || *input.PolicyArn == "" {
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
 
-	policy, err := s.getPolicyByARN(*input.PolicyArn)
+	policy, err := s.getPolicyByARN(accountID, *input.PolicyArn)
 	if err != nil {
 		return nil, err
 	}
 
-	attachmentCount, err := s.countPolicyAttachments(policy.ARN)
+	attachmentCount, err := s.countPolicyAttachments(accountID, policy.ARN)
 	if err != nil {
 		return nil, fmt.Errorf("check policy attachments: %w", err)
 	}
@@ -800,7 +814,7 @@ func (s *IAMServiceImpl) GetPolicy(input *iam.GetPolicyInput) (*iam.GetPolicyOut
 	}, nil
 }
 
-func (s *IAMServiceImpl) GetPolicyVersion(input *iam.GetPolicyVersionInput) (*iam.GetPolicyVersionOutput, error) {
+func (s *IAMServiceImpl) GetPolicyVersion(accountID string, input *iam.GetPolicyVersionInput) (*iam.GetPolicyVersionOutput, error) {
 	if input.PolicyArn == nil || *input.PolicyArn == "" {
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
@@ -808,7 +822,7 @@ func (s *IAMServiceImpl) GetPolicyVersion(input *iam.GetPolicyVersionInput) (*ia
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
 
-	policy, err := s.getPolicyByARN(*input.PolicyArn)
+	policy, err := s.getPolicyByARN(accountID, *input.PolicyArn)
 	if err != nil {
 		return nil, err
 	}
@@ -832,7 +846,7 @@ func (s *IAMServiceImpl) GetPolicyVersion(input *iam.GetPolicyVersionInput) (*ia
 	}, nil
 }
 
-func (s *IAMServiceImpl) ListPolicies(input *iam.ListPoliciesInput) (*iam.ListPoliciesOutput, error) {
+func (s *IAMServiceImpl) ListPolicies(accountID string, input *iam.ListPoliciesInput) (*iam.ListPoliciesOutput, error) {
 	keys, err := s.policiesBucket.Keys()
 	if err != nil {
 		if errors.Is(err, nats.ErrNoKeysFound) {
@@ -844,8 +858,13 @@ func (s *IAMServiceImpl) ListPolicies(input *iam.ListPoliciesInput) (*iam.ListPo
 		return nil, fmt.Errorf("list policy keys: %w", err)
 	}
 
+	keyPrefix := accountID + ":"
 	var policies []*iam.Policy
 	for _, key := range keys {
+		if !strings.HasPrefix(key, keyPrefix) {
+			continue
+		}
+
 		entry, err := s.policiesBucket.Get(key)
 		if err != nil {
 			if errors.Is(err, nats.ErrKeyNotFound) {
@@ -866,7 +885,7 @@ func (s *IAMServiceImpl) ListPolicies(input *iam.ListPoliciesInput) (*iam.ListPo
 		if err != nil {
 			slog.Warn("Failed to parse policy CreatedAt", "policyName", policy.PolicyName, "createdAt", policy.CreatedAt, "err", err)
 		}
-		attachCount, err := s.countPolicyAttachments(policy.ARN)
+		attachCount, err := s.countPolicyAttachments(accountID, policy.ARN)
 		if err != nil {
 			return nil, fmt.Errorf("count policy attachments: %w", err)
 		}
@@ -888,17 +907,17 @@ func (s *IAMServiceImpl) ListPolicies(input *iam.ListPoliciesInput) (*iam.ListPo
 	}, nil
 }
 
-func (s *IAMServiceImpl) DeletePolicy(input *iam.DeletePolicyInput) (*iam.DeletePolicyOutput, error) {
+func (s *IAMServiceImpl) DeletePolicy(accountID string, input *iam.DeletePolicyInput) (*iam.DeletePolicyOutput, error) {
 	if input.PolicyArn == nil || *input.PolicyArn == "" {
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
 
-	policy, err := s.getPolicyByARN(*input.PolicyArn)
+	policy, err := s.getPolicyByARN(accountID, *input.PolicyArn)
 	if err != nil {
 		return nil, err
 	}
 
-	attachCount, err := s.countPolicyAttachments(policy.ARN)
+	attachCount, err := s.countPolicyAttachments(accountID, policy.ARN)
 	if err != nil {
 		return nil, fmt.Errorf("check policy attachments: %w", err)
 	}
@@ -906,11 +925,12 @@ func (s *IAMServiceImpl) DeletePolicy(input *iam.DeletePolicyInput) (*iam.Delete
 		return nil, errors.New(awserrors.ErrorIAMDeleteConflict)
 	}
 
-	if err := s.policiesBucket.Delete(policy.PolicyName); err != nil {
+	kvKey := accountID + ":" + policy.PolicyName
+	if err := s.policiesBucket.Delete(kvKey); err != nil {
 		return nil, fmt.Errorf("delete policy: %w", err)
 	}
 
-	slog.Info("IAM policy deleted", "policyName", policy.PolicyName)
+	slog.Info("IAM policy deleted", "accountID", accountID, "policyName", policy.PolicyName)
 	return &iam.DeletePolicyOutput{}, nil
 }
 
@@ -918,7 +938,7 @@ func (s *IAMServiceImpl) DeletePolicy(input *iam.DeletePolicyInput) (*iam.Delete
 // Policy Attachment
 // ---------------------------------------------------------------------------
 
-func (s *IAMServiceImpl) AttachUserPolicy(input *iam.AttachUserPolicyInput) (*iam.AttachUserPolicyOutput, error) {
+func (s *IAMServiceImpl) AttachUserPolicy(accountID string, input *iam.AttachUserPolicyInput) (*iam.AttachUserPolicyOutput, error) {
 	if input.UserName == nil || *input.UserName == "" {
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
@@ -928,13 +948,14 @@ func (s *IAMServiceImpl) AttachUserPolicy(input *iam.AttachUserPolicyInput) (*ia
 
 	userName := *input.UserName
 	policyARN := *input.PolicyArn
+	userKVKey := accountID + ":" + userName
 
 	// Verify policy exists
-	if _, err := s.getPolicyByARN(policyARN); err != nil {
+	if _, err := s.getPolicyByARN(accountID, policyARN); err != nil {
 		return nil, err
 	}
 
-	user, err := s.getUser(userName)
+	user, err := s.getUser(accountID, userName)
 	if err != nil {
 		return nil, err
 	}
@@ -950,15 +971,15 @@ func (s *IAMServiceImpl) AttachUserPolicy(input *iam.AttachUserPolicyInput) (*ia
 		return nil, fmt.Errorf("marshal user: %w", err)
 	}
 
-	if _, err := s.usersBucket.Put(userName, userData); err != nil {
+	if _, err := s.usersBucket.Put(userKVKey, userData); err != nil {
 		return nil, fmt.Errorf("update user: %w", err)
 	}
 
-	slog.Info("IAM policy attached to user", "userName", userName, "policyArn", policyARN)
+	slog.Info("IAM policy attached to user", "accountID", accountID, "userName", userName, "policyArn", policyARN)
 	return &iam.AttachUserPolicyOutput{}, nil
 }
 
-func (s *IAMServiceImpl) DetachUserPolicy(input *iam.DetachUserPolicyInput) (*iam.DetachUserPolicyOutput, error) {
+func (s *IAMServiceImpl) DetachUserPolicy(accountID string, input *iam.DetachUserPolicyInput) (*iam.DetachUserPolicyOutput, error) {
 	if input.UserName == nil || *input.UserName == "" {
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
@@ -968,8 +989,9 @@ func (s *IAMServiceImpl) DetachUserPolicy(input *iam.DetachUserPolicyInput) (*ia
 
 	userName := *input.UserName
 	policyARN := *input.PolicyArn
+	userKVKey := accountID + ":" + userName
 
-	user, err := s.getUser(userName)
+	user, err := s.getUser(accountID, userName)
 	if err != nil {
 		return nil, err
 	}
@@ -994,27 +1016,27 @@ func (s *IAMServiceImpl) DetachUserPolicy(input *iam.DetachUserPolicyInput) (*ia
 		return nil, fmt.Errorf("marshal user: %w", err)
 	}
 
-	if _, err := s.usersBucket.Put(userName, userData); err != nil {
+	if _, err := s.usersBucket.Put(userKVKey, userData); err != nil {
 		return nil, fmt.Errorf("update user: %w", err)
 	}
 
-	slog.Info("IAM policy detached from user", "userName", userName, "policyArn", policyARN)
+	slog.Info("IAM policy detached from user", "accountID", accountID, "userName", userName, "policyArn", policyARN)
 	return &iam.DetachUserPolicyOutput{}, nil
 }
 
-func (s *IAMServiceImpl) ListAttachedUserPolicies(input *iam.ListAttachedUserPoliciesInput) (*iam.ListAttachedUserPoliciesOutput, error) {
+func (s *IAMServiceImpl) ListAttachedUserPolicies(accountID string, input *iam.ListAttachedUserPoliciesInput) (*iam.ListAttachedUserPoliciesOutput, error) {
 	if input.UserName == nil || *input.UserName == "" {
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
 
-	user, err := s.getUser(*input.UserName)
+	user, err := s.getUser(accountID, *input.UserName)
 	if err != nil {
 		return nil, err
 	}
 
 	var attached []*iam.AttachedPolicy
 	for _, arn := range user.AttachedPolicies {
-		policy, err := s.getPolicyByARN(arn)
+		policy, err := s.getPolicyByARN(accountID, arn)
 		if err != nil {
 			slog.Warn("ListAttachedUserPolicies: policy not found for ARN", "arn", arn, "err", err)
 			continue
@@ -1033,15 +1055,15 @@ func (s *IAMServiceImpl) ListAttachedUserPolicies(input *iam.ListAttachedUserPol
 
 // GetUserPolicies resolves all policy documents attached to a user.
 // Used internally by the gateway for policy evaluation.
-func (s *IAMServiceImpl) GetUserPolicies(userName string) ([]PolicyDocument, error) {
-	user, err := s.getUser(userName)
+func (s *IAMServiceImpl) GetUserPolicies(accountID, userName string) ([]PolicyDocument, error) {
+	user, err := s.getUser(accountID, userName)
 	if err != nil {
 		return nil, err
 	}
 
 	var docs []PolicyDocument
 	for _, arn := range user.AttachedPolicies {
-		policy, err := s.getPolicyByARN(arn)
+		policy, err := s.getPolicyByARN(accountID, arn)
 		if err != nil {
 			// Fail closed: if we can't resolve a policy, we can't make a safe
 			// access decision. Return an error so the caller denies access.
@@ -1062,7 +1084,7 @@ func (s *IAMServiceImpl) GetUserPolicies(userName string) ([]PolicyDocument, err
 // Helpers
 // ---------------------------------------------------------------------------
 
-func (s *IAMServiceImpl) getPolicyByARN(policyARN string) (*Policy, error) {
+func (s *IAMServiceImpl) getPolicyByARN(accountID, policyARN string) (*Policy, error) {
 	// Extract policy name from ARN: arn:aws:iam::000000000000:policy/path/PolicyName
 	parts := strings.SplitN(policyARN, ":policy", 2)
 	if len(parts) != 2 || parts[1] == "" {
@@ -1075,7 +1097,8 @@ func (s *IAMServiceImpl) getPolicyByARN(policyARN string) (*Policy, error) {
 		return nil, errors.New(awserrors.ErrorIAMNoSuchEntity)
 	}
 
-	entry, err := s.policiesBucket.Get(policyName)
+	kvKey := accountID + ":" + policyName
+	entry, err := s.policiesBucket.Get(kvKey)
 	if err != nil {
 		if errors.Is(err, nats.ErrKeyNotFound) {
 			return nil, errors.New(awserrors.ErrorIAMNoSuchEntity)
@@ -1096,8 +1119,8 @@ func (s *IAMServiceImpl) getPolicyByARN(policyARN string) (*Policy, error) {
 	return &policy, nil
 }
 
-// countPolicyAttachments counts how many users have this policy attached.
-func (s *IAMServiceImpl) countPolicyAttachments(policyARN string) (int64, error) {
+// countPolicyAttachments counts how many users in this account have this policy attached.
+func (s *IAMServiceImpl) countPolicyAttachments(accountID, policyARN string) (int64, error) {
 	keys, err := s.usersBucket.Keys()
 	if err != nil {
 		if errors.Is(err, nats.ErrNoKeysFound) {
@@ -1106,8 +1129,13 @@ func (s *IAMServiceImpl) countPolicyAttachments(policyARN string) (int64, error)
 		return 0, fmt.Errorf("count policy attachments: %w", err)
 	}
 
+	keyPrefix := accountID + ":"
 	var count int64
 	for _, key := range keys {
+		if !strings.HasPrefix(key, keyPrefix) {
+			continue
+		}
+
 		entry, err := s.usersBucket.Get(key)
 		if err != nil {
 			if errors.Is(err, nats.ErrKeyNotFound) {
@@ -1129,8 +1157,9 @@ func (s *IAMServiceImpl) countPolicyAttachments(policyARN string) (int64, error)
 	return count, nil
 }
 
-func (s *IAMServiceImpl) getUser(userName string) (*User, error) {
-	entry, err := s.usersBucket.Get(userName)
+func (s *IAMServiceImpl) getUser(accountID, userName string) (*User, error) {
+	kvKey := accountID + ":" + userName
+	entry, err := s.usersBucket.Get(kvKey)
 	if err != nil {
 		if errors.Is(err, nats.ErrKeyNotFound) {
 			return nil, errors.New(awserrors.ErrorIAMNoSuchEntity)
