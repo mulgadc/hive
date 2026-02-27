@@ -530,11 +530,29 @@ func (s *IAMServiceImpl) LookupAccessKey(accessKeyID string) (*AccessKey, error)
 // SeedRootUser consumes bootstrap data to create the root IAM user and access
 // key in NATS KV. Uses conditional create (put-if-not-exists) for multi-node
 // race safety — the first node to call this wins; others skip silently.
+// Also creates the global account record (000000000000) if it doesn't exist.
 func (s *IAMServiceImpl) SeedRootUser(data *BootstrapData) error {
+	// Ensure the global account record exists
+	globalAccount := Account{
+		AccountID:   GlobalAccountID,
+		AccountName: "Global",
+		Status:      "ACTIVE",
+		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
+	}
+	accountData, err := json.Marshal(globalAccount)
+	if err != nil {
+		return fmt.Errorf("marshal global account: %w", err)
+	}
+	if _, err := s.accountsBucket.Create(GlobalAccountID, accountData); err != nil && !errors.Is(err, nats.ErrKeyExists) {
+		return fmt.Errorf("seed global account: %w", err)
+	}
+
+	kvKey := GlobalAccountID + ":root"
 	rootUser := User{
 		UserName:         "root",
 		UserID:           "AIDAAAAAAAAAAAAAAAAA",
-		ARN:              fmt.Sprintf("arn:aws:iam::%s:root", data.AccountID),
+		AccountID:        GlobalAccountID,
+		ARN:              fmt.Sprintf("arn:aws:iam::%s:root", GlobalAccountID),
 		Path:             "/",
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		AccessKeys:       []string{data.AccessKeyID},
@@ -548,7 +566,7 @@ func (s *IAMServiceImpl) SeedRootUser(data *BootstrapData) error {
 	}
 
 	// Conditional create — fails if key already exists (another node seeded first)
-	_, err = s.usersBucket.Create("root", userData)
+	_, err = s.usersBucket.Create(kvKey, userData)
 	if errors.Is(err, nats.ErrKeyExists) {
 		slog.Info("Root user already seeded by another node, skipping")
 		return nil
@@ -562,6 +580,7 @@ func (s *IAMServiceImpl) SeedRootUser(data *BootstrapData) error {
 		AccessKeyID:     data.AccessKeyID,
 		SecretAccessKey: data.EncryptedSecret,
 		UserName:        "root",
+		AccountID:       GlobalAccountID,
 		Status:          "Active",
 		CreatedAt:       rootUser.CreatedAt,
 	}
@@ -580,7 +599,7 @@ func (s *IAMServiceImpl) SeedRootUser(data *BootstrapData) error {
 		return fmt.Errorf("seed root access key: %w", err)
 	}
 
-	slog.Info("Root IAM user seeded", "accessKeyID", data.AccessKeyID)
+	slog.Info("Root IAM user seeded", "accountID", GlobalAccountID, "accessKeyID", data.AccessKeyID)
 	return nil
 }
 
