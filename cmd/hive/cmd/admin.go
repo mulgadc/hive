@@ -423,8 +423,8 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		VolumeSize: utils.SafeInt64ToUint64(imageStat.Size()),
 		Bucket:     appConfig.Nodes[appConfig.Node].Predastore.Bucket,
 		Region:     appConfig.Nodes[appConfig.Node].Predastore.Region,
-		AccessKey:  appConfig.Nodes[appConfig.Node].AccessKey,
-		SecretKey:  appConfig.Nodes[appConfig.Node].SecretKey,
+		AccessKey:  appConfig.Nodes[appConfig.Node].Predastore.AccessKey,
+		SecretKey:  appConfig.Nodes[appConfig.Node].Predastore.SecretKey,
 		Host:       appConfig.Nodes[appConfig.Node].Predastore.Host,
 	}
 

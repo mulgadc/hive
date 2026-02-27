@@ -28,8 +28,6 @@ type GatewayConfig struct {
 	ExpectedNodes  int        // Number of expected hive nodes for multi-node operations
 	Region         string     // Region this gateway is running in
 	AZ             string     // Availability zone this gateway is running in
-	AccessKey      string     // AWS Access Key ID for authentication
-	SecretKey      string     // AWS Secret Access Key for authentication
 	IAMService     handlers_iam.IAMService
 	IAMMasterKey   []byte // loaded from master.key file at startup
 }
