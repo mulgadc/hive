@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/gateway"
+	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
@@ -69,6 +71,37 @@ func launchService(config *config.ClusterConfig) (err error) {
 		nodeConfig.AWSGW.Config = fmt.Sprintf("%s/%s", nodeConfig.BaseDir, nodeConfig.AWSGW.Config)
 	}
 
+	// Load IAM master key from disk
+	var masterKey []byte
+	var iamService *handlers_iam.IAMServiceImpl
+	masterKeyPath := filepath.Join(nodeConfig.BaseDir, "config", "master.key")
+	masterKey, err = handlers_iam.LoadMasterKey(masterKeyPath)
+	if err != nil {
+		slog.Error("Failed to load IAM master key", "path", masterKeyPath, "err", err)
+	} else {
+		// Initialize IAM service with NATS KV backend
+		iamService, err = handlers_iam.NewIAMServiceImpl(natsConn, masterKey)
+		if err != nil {
+			slog.Warn("Failed to initialize IAM service", "err", err)
+		}
+	}
+
+	// First boot: consume bootstrap.json → seed root user into NATS KV → delete file
+	if iamService != nil {
+		bootstrapPath := filepath.Join(nodeConfig.BaseDir, "config", "bootstrap.json")
+		if data, err := handlers_iam.LoadBootstrapData(bootstrapPath); err == nil {
+			slog.Info("Bootstrap file found, seeding root IAM user")
+			if err := iamService.SeedRootUser(data); err != nil {
+				slog.Error("Failed to seed root user", "err", err)
+			} else {
+				if err := os.Remove(bootstrapPath); err != nil {
+					slog.Warn("Failed to delete bootstrap file", "path", bootstrapPath, "err", err)
+				}
+				slog.Info("Bootstrap complete, bootstrap.json deleted")
+			}
+		}
+	}
+
 	// Create gateway with NATS connection
 	gw := gateway.GatewayConfig{
 		Debug:          nodeConfig.AWSGW.Debug,
@@ -80,6 +113,8 @@ func launchService(config *config.ClusterConfig) (err error) {
 		AZ:             nodeConfig.AZ,
 		AccessKey:      nodeConfig.AccessKey,
 		SecretKey:      nodeConfig.SecretKey,
+		IAMService:     iamService,
+		IAMMasterKey:   masterKey,
 	}
 
 	app := gw.SetupRoutes()
