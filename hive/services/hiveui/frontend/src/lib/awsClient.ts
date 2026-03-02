@@ -3,6 +3,9 @@ import { S3Client } from "@aws-sdk/client-s3"
 
 import { getCredentials } from "./auth"
 
+const awsEndpoint = `${window.location.protocol}//${window.location.hostname}:9999`
+const s3Endpoint = `${window.location.protocol}//${window.location.hostname}:8443`
+
 // Cached singleton clients
 let ec2Client: EC2Client | null = null
 let s3Client: S3Client | null = null
@@ -14,7 +17,7 @@ export function getEc2Client(): EC2Client {
       throw new Error("AWS credentials not configured")
     }
     ec2Client = new EC2Client({
-      endpoint: "https://localhost:9999",
+      endpoint: awsEndpoint,
       region: "ap-southeast-2",
       credentials: {
         accessKeyId: credentials.accessKeyId,
@@ -32,7 +35,7 @@ export function getS3Client(): S3Client {
       throw new Error("AWS credentials not configured")
     }
     s3Client = new S3Client({
-      endpoint: "https://localhost:8443",
+      endpoint: s3Endpoint,
       region: "ap-southeast-2",
       credentials: {
         accessKeyId: credentials.accessKeyId,
