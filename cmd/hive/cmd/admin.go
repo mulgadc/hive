@@ -1442,6 +1442,45 @@ func runAccountCreate(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Configure AWS CLI profile automatically
+	profileName := "hive-" + strings.ToLower(strings.ReplaceAll(name, " ", "-"))
+	homeDir, _ := os.UserHomeDir()
+	certPath := filepath.Join(homeDir, "hive", "config", "ca.pem")
+
+	cfg, nc2, cfgErr := loadConfigAndConnect()
+	if nc2 != nil {
+		nc2.Close()
+	}
+	endpointHost := "localhost"
+	if cfgErr == nil {
+		nodeConfig := cfg.Nodes[cfg.Node]
+		host := nodeConfig.AWSGW.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			if h != "" && h != "0.0.0.0" {
+				endpointHost = h
+			}
+		}
+	}
+	endpointURL := fmt.Sprintf("https://%s:9999", endpointHost)
+
+	credPath := filepath.Join(homeDir, ".aws", "credentials")
+	configPath := filepath.Join(homeDir, ".aws", "config")
+
+	if err := admin.UpdateAWSINIFile(credPath, profileName, map[string]string{
+		"aws_access_key_id":     *akOut.AccessKey.AccessKeyId,
+		"aws_secret_access_key": *akOut.AccessKey.SecretAccessKey,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not update AWS credentials: %v\n", err)
+	}
+	if err := admin.UpdateAWSINIFile(configPath, "profile "+profileName, map[string]string{
+		"region":       "us-east-1",
+		"endpoint_url": endpointURL,
+		"ca_bundle":    certPath,
+		"output":       "json",
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not update AWS config: %v\n", err)
+	}
+
 	// Print credentials
 	fmt.Println("\nAccount created successfully!")
 	fmt.Printf("  Account ID:        %s\n", accountID)
@@ -1449,8 +1488,9 @@ func runAccountCreate(cmd *cobra.Command, args []string) {
 	fmt.Printf("  Admin User:        admin\n")
 	fmt.Printf("  Access Key ID:     %s\n", *akOut.AccessKey.AccessKeyId)
 	fmt.Printf("  Secret Access Key: %s\n", *akOut.AccessKey.SecretAccessKey)
-	fmt.Println("\nConfigure the AWS CLI with:")
-	fmt.Printf("  aws configure --profile %s\n", name)
+	fmt.Printf("  AWS Profile:       %s\n", profileName)
+	fmt.Println("\nUse with:")
+	fmt.Printf("  AWS_PROFILE=%s aws ec2 describe-instances\n", profileName)
 }
 
 func runAccountList(cmd *cobra.Command, args []string) {
