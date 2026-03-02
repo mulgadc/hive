@@ -463,7 +463,7 @@ func (s *IAMServiceImpl) DeleteAccessKey(accountID string, input *iam.DeleteAcce
 	return &iam.DeleteAccessKeyOutput{}, nil
 }
 
-func (s *IAMServiceImpl) UpdateAccessKey(input *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error) {
+func (s *IAMServiceImpl) UpdateAccessKey(accountID string, input *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error) {
 	if input.AccessKeyId == nil || *input.AccessKeyId == "" {
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
@@ -491,6 +491,10 @@ func (s *IAMServiceImpl) UpdateAccessKey(input *iam.UpdateAccessKeyInput) (*iam.
 		return nil, fmt.Errorf("unmarshal access key: %w", err)
 	}
 
+	if ak.AccountID != accountID {
+		return nil, errors.New(awserrors.ErrorIAMNoSuchEntity)
+	}
+
 	ak.Status = status
 	data, err := json.Marshal(ak)
 	if err != nil {
@@ -501,7 +505,7 @@ func (s *IAMServiceImpl) UpdateAccessKey(input *iam.UpdateAccessKeyInput) (*iam.
 		return nil, fmt.Errorf("update access key: %w", err)
 	}
 
-	slog.Info("IAM access key updated", "accessKeyID", accessKeyID, "status", status)
+	slog.Info("IAM access key updated", "accountID", accountID, "accessKeyID", accessKeyID, "status", status)
 	return &iam.UpdateAccessKeyOutput{}, nil
 }
 

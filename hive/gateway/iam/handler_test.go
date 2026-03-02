@@ -43,7 +43,7 @@ func (s *stubIAMService) DeleteAccessKey(_ string, _ *iam.DeleteAccessKeyInput) 
 	return &iam.DeleteAccessKeyOutput{}, nil
 }
 
-func (s *stubIAMService) UpdateAccessKey(_ *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error) {
+func (s *stubIAMService) UpdateAccessKey(_ string, _ *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error) {
 	return &iam.UpdateAccessKeyOutput{}, nil
 }
 
@@ -263,7 +263,7 @@ func TestUpdateAccessKey(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := UpdateAccessKey(tc.input, svc)
+			_, err := UpdateAccessKey(testAccountID, tc.input, svc)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Equal(t, tc.wantErr, err.Error())

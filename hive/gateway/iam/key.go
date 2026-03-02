@@ -32,12 +32,12 @@ func DeleteAccessKey(accountID string, input *iam.DeleteAccessKeyInput, svc hand
 	return svc.DeleteAccessKey(accountID, input)
 }
 
-func UpdateAccessKey(input *iam.UpdateAccessKeyInput, svc handlers_iam.IAMService) (*iam.UpdateAccessKeyOutput, error) {
+func UpdateAccessKey(accountID string, input *iam.UpdateAccessKeyInput, svc handlers_iam.IAMService) (*iam.UpdateAccessKeyOutput, error) {
 	if input.AccessKeyId == nil || *input.AccessKeyId == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
 	if input.Status == nil || *input.Status == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
-	return svc.UpdateAccessKey(input)
+	return svc.UpdateAccessKey(accountID, input)
 }

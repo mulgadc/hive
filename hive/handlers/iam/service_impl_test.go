@@ -372,7 +372,7 @@ func TestUpdateAccessKey(t *testing.T) {
 	keyID := *keyOut.AccessKey.AccessKeyId
 
 	// Deactivate
-	_, err := svc.UpdateAccessKey(&iam.UpdateAccessKeyInput{
+	_, err := svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
 		AccessKeyId: aws.String(keyID),
 		Status:      aws.String("Inactive"),
 	})
@@ -385,7 +385,7 @@ func TestUpdateAccessKey(t *testing.T) {
 	assert.Equal(t, "Inactive", *listOut.AccessKeyMetadata[0].Status)
 
 	// Reactivate
-	_, err = svc.UpdateAccessKey(&iam.UpdateAccessKeyInput{
+	_, err = svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
 		AccessKeyId: aws.String(keyID),
 		Status:      aws.String("Active"),
 	})
@@ -405,7 +405,7 @@ func TestUpdateAccessKey_InvalidStatus(t *testing.T) {
 		UserName: aws.String("invalidstatususer"),
 	})
 
-	_, err := svc.UpdateAccessKey(&iam.UpdateAccessKeyInput{
+	_, err := svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
 		AccessKeyId: keyOut.AccessKey.AccessKeyId,
 		Status:      aws.String("Invalid"),
 	})
@@ -416,7 +416,7 @@ func TestUpdateAccessKey_InvalidStatus(t *testing.T) {
 func TestUpdateAccessKey_NotFound(t *testing.T) {
 	svc := setupTestIAMService(t)
 
-	_, err := svc.UpdateAccessKey(&iam.UpdateAccessKeyInput{
+	_, err := svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
 		AccessKeyId: aws.String("AKIANONEXISTENT12345"),
 		Status:      aws.String("Inactive"),
 	})
@@ -461,7 +461,7 @@ func TestLookupAccessKey_InactiveKey(t *testing.T) {
 	})
 	keyID := *keyOut.AccessKey.AccessKeyId
 
-	svc.UpdateAccessKey(&iam.UpdateAccessKeyInput{
+	svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
 		AccessKeyId: aws.String(keyID),
 		Status:      aws.String("Inactive"),
 	})

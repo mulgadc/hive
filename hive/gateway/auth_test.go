@@ -57,7 +57,7 @@ func (m *mockIAMService) ListAccessKeys(_ string, _ *iam.ListAccessKeysInput) (*
 func (m *mockIAMService) DeleteAccessKey(_ string, _ *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error) {
 	return nil, nil
 }
-func (m *mockIAMService) UpdateAccessKey(_ *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error) {
+func (m *mockIAMService) UpdateAccessKey(_ string, _ *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error) {
 	return nil, nil
 }
 func (m *mockIAMService) CreatePolicy(_ string, _ *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error) {

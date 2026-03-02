@@ -193,15 +193,15 @@ func (gw *GatewayConfig) checkPolicy(ctx *fiber.Ctx, service, action string) err
 		slog.Error("checkPolicy: identity has unexpected type", "type", fmt.Sprintf("%T", identityVal))
 		return errors.New(awserrors.ErrorInternalError)
 	}
-	if identity == "" || identity == "root" {
-		return nil
-	}
-
 	// Extract account ID from auth context
 	accountID, _ := ctx.Locals("sigv4.accountId").(string)
 	if accountID == "" {
 		slog.Error("checkPolicy: no account ID in auth context", "user", identity)
 		return errors.New(awserrors.ErrorInternalError)
+	}
+
+	if identity == "" || (identity == "root" && accountID == handlers_iam.GlobalAccountID) {
+		return nil
 	}
 
 	// Resolve the IAM action string (e.g. "ec2:RunInstances")

@@ -59,8 +59,8 @@ var iamActions = map[string]IAMHandler{
 	"DeleteAccessKey": iamHandler(func(accountID string, input *iam.DeleteAccessKeyInput, svc handlers_iam.IAMService) (any, error) {
 		return gateway_iam.DeleteAccessKey(accountID, input, svc)
 	}),
-	"UpdateAccessKey": iamHandler(func(_ string, input *iam.UpdateAccessKeyInput, svc handlers_iam.IAMService) (any, error) {
-		return gateway_iam.UpdateAccessKey(input, svc)
+	"UpdateAccessKey": iamHandler(func(accountID string, input *iam.UpdateAccessKeyInput, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.UpdateAccessKey(accountID, input, svc)
 	}),
 
 	// Policy CRUD
@@ -113,6 +113,10 @@ func (gw *GatewayConfig) IAM_Request(ctx *fiber.Ctx) error {
 
 	// Extract account ID from auth context
 	accountID, _ := ctx.Locals("sigv4.accountId").(string)
+	if accountID == "" {
+		slog.Error("IAM_Request: no account ID in auth context")
+		return errors.New(awserrors.ErrorInternalError)
+	}
 
 	xmlOutput, err := handler(action, queryArgs, gw, accountID)
 	if err != nil {

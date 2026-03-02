@@ -34,7 +34,7 @@ func TestCreateAccount_SequentialIDs(t *testing.T) {
 	svc := setupTestIAMService(t)
 
 	var prevID string
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		acc, err := svc.CreateAccount("account")
 		require.NoError(t, err)
 		assert.Len(t, acc.AccountID, 12)

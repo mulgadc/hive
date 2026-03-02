@@ -25,7 +25,7 @@ type flexMockIAMService struct {
 	createAccessKeyFn func(string, *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error)
 	listAccessKeysFn  func(string, *iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error)
 	deleteAccessKeyFn func(string, *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error)
-	updateAccessKeyFn func(*iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error)
+	updateAccessKeyFn func(string, *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error)
 }
 
 func (m *flexMockIAMService) CreateUser(accountID string, input *iam.CreateUserInput) (*iam.CreateUserOutput, error) {
@@ -77,9 +77,9 @@ func (m *flexMockIAMService) DeleteAccessKey(accountID string, input *iam.Delete
 	return &iam.DeleteAccessKeyOutput{}, nil
 }
 
-func (m *flexMockIAMService) UpdateAccessKey(input *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error) {
+func (m *flexMockIAMService) UpdateAccessKey(accountID string, input *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error) {
 	if m.updateAccessKeyFn != nil {
-		return m.updateAccessKeyFn(input)
+		return m.updateAccessKeyFn(accountID, input)
 	}
 	return &iam.UpdateAccessKeyOutput{}, nil
 }
