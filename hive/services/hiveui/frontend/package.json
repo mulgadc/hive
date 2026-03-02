@@ -10,7 +10,7 @@
     "fix": "biome check --fix"
   },
   "dependencies": {
-    "@aws-sdk/client-ec2": "^3.995.0",
+    "@aws-sdk/client-ec2": "^3.1000.0",
     "@aws-sdk/client-s3": "^3.995.0",
     "@aws-sdk/lib-storage": "^3.995.0",
     "@base-ui/react": "^1.2.0",
@@ -40,8 +40,13 @@
     "@vitejs/plugin-react": "^5.1.4",
     "babel-plugin-react-compiler": "^1.0.0",
     "typescript": "^5.9.3",
-    "ultracite": "^7.2.3",
+    "ultracite": "^7.2.4",
     "vite": "^7.3.1"
+  },
+  "pnpm": {
+    "overrides": {
+      "fast-xml-parser": ">=5.3.8"
+    }
   },
   "packageManager": "pnpm@10.30.0+sha512.2b5753de015d480eeb88f5b5b61e0051f05b4301808a82ec8b840c9d2adf7748eb352c83f5c1593ca703ff1017295bc3fdd3119abb9686efc96b9fcb18200937"
 }
