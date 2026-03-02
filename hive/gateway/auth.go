@@ -134,6 +134,7 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() fiber.Handler {
 
 		// Store parsed auth data in context for downstream handlers
 		c.Locals("sigv4.identity", ak.UserName)
+		c.Locals("sigv4.accountId", ak.AccountID)
 		c.Locals("sigv4.service", service)
 		c.Locals("sigv4.region", region)
 		c.Locals("sigv4.accessKey", accessKey)

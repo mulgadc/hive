@@ -32,6 +32,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/mulgadc/hive/hive/admin"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/formation"
@@ -130,6 +132,28 @@ var imagesListCmd = &cobra.Command{
 	Run:   runimagesListCmd,
 }
 
+var accountCmd = &cobra.Command{
+	Use:   "account",
+	Short: "Manage Hive accounts",
+	Long:  `Create and manage Hive accounts. Each account namespaces IAM users, policies, and resources.`,
+}
+
+var accountCreateCmd = &cobra.Command{
+	Use:   "create",
+	Short: "Create a new account with an admin user",
+	Long: `Create a new Hive account. This creates an account with a sequential 12-digit ID,
+an admin user, and an AdministratorAccess policy attached to the admin user.
+Requires the cluster to be running (connects to NATS).`,
+	Run: runAccountCreate,
+}
+
+var accountListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all accounts",
+	Long:  `List all Hive accounts with their ID, name, status, and creation time.`,
+	Run:   runAccountList,
+}
+
 /*
 CLI ideas
 
@@ -163,6 +187,12 @@ func init() {
 	adminCmd.AddCommand(imagesCmd)
 	imagesCmd.AddCommand(imagesImportCmd)
 	imagesCmd.AddCommand(imagesListCmd)
+
+	adminCmd.AddCommand(accountCmd)
+	accountCmd.AddCommand(accountCreateCmd)
+	accountCmd.AddCommand(accountListCmd)
+	accountCreateCmd.Flags().String("name", "", "Account name (required)")
+	accountCreateCmd.MarkFlagRequired("name")
 
 	homeDir, _ := os.UserHomeDir()
 	configDir := fmt.Sprintf("%s/hive/config", homeDir)
@@ -1324,4 +1354,171 @@ func buildRemoteNodes(allNodes map[string]formation.NodeInfo, localNode string) 
 		return remote[i].Name < remote[j].Name
 	})
 	return remote
+}
+
+// initIAMServiceFromConfig loads config, connects to NATS, loads the master
+// key, and returns an initialised IAMServiceImpl. Callers must defer nc.Close().
+func initIAMServiceFromConfig() (*handlers_iam.IAMServiceImpl, func(), error) {
+	_, nc, err := loadConfigAndConnect()
+	if err != nil {
+		return nil, nil, fmt.Errorf("connect to cluster: %w", err)
+	}
+
+	homeDir, _ := os.UserHomeDir()
+	masterKeyPath := filepath.Join(homeDir, "hive", "config", "master.key")
+	masterKey, err := handlers_iam.LoadMasterKey(masterKeyPath)
+	if err != nil {
+		nc.Close()
+		return nil, nil, fmt.Errorf("load master key: %w", err)
+	}
+
+	svc, err := handlers_iam.NewIAMServiceImpl(nc, masterKey)
+	if err != nil {
+		nc.Close()
+		return nil, nil, fmt.Errorf("init IAM service: %w", err)
+	}
+
+	return svc, func() { nc.Close() }, nil
+}
+
+// adminAccessPolicyDocument is the AdministratorAccess policy document that
+// grants full access to all actions and resources.
+const adminAccessPolicyDocument = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`
+
+func runAccountCreate(cmd *cobra.Command, args []string) {
+	name, _ := cmd.Flags().GetString("name")
+
+	svc, cleanup, err := initIAMServiceFromConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer cleanup()
+
+	// 1. Create the account
+	account, err := svc.CreateAccount(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating account: %v\n", err)
+		os.Exit(1)
+	}
+	accountID := account.AccountID
+
+	// 2. Create admin user
+	_, err = svc.CreateUser(accountID, &iam.CreateUserInput{
+		UserName: aws.String("admin"),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating admin user: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 3. Create access key for admin user
+	akOut, err := svc.CreateAccessKey(accountID, &iam.CreateAccessKeyInput{
+		UserName: aws.String("admin"),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating access key: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 4. Create AdministratorAccess policy scoped to this account
+	policyARN := fmt.Sprintf("arn:aws:iam::%s:policy/AdministratorAccess", accountID)
+	_, err = svc.CreatePolicy(accountID, &iam.CreatePolicyInput{
+		PolicyName:     aws.String("AdministratorAccess"),
+		PolicyDocument: aws.String(adminAccessPolicyDocument),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating admin policy: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 5. Attach policy to admin user
+	_, err = svc.AttachUserPolicy(accountID, &iam.AttachUserPolicyInput{
+		UserName:  aws.String("admin"),
+		PolicyArn: aws.String(policyARN),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error attaching policy: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Configure AWS CLI profile automatically
+	profileName := "hive-" + strings.ToLower(strings.ReplaceAll(name, " ", "-"))
+	homeDir, _ := os.UserHomeDir()
+	certPath := filepath.Join(homeDir, "hive", "config", "ca.pem")
+
+	cfg, nc2, cfgErr := loadConfigAndConnect()
+	if nc2 != nil {
+		nc2.Close()
+	}
+	endpointHost := "localhost"
+	if cfgErr == nil {
+		nodeConfig := cfg.Nodes[cfg.Node]
+		host := nodeConfig.AWSGW.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			if h != "" && h != "0.0.0.0" {
+				endpointHost = h
+			}
+		}
+	}
+	endpointURL := fmt.Sprintf("https://%s:9999", endpointHost)
+
+	credPath := filepath.Join(homeDir, ".aws", "credentials")
+	configPath := filepath.Join(homeDir, ".aws", "config")
+
+	if err := admin.UpdateAWSINIFile(credPath, profileName, map[string]string{
+		"aws_access_key_id":     *akOut.AccessKey.AccessKeyId,
+		"aws_secret_access_key": *akOut.AccessKey.SecretAccessKey,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not update AWS credentials: %v\n", err)
+	}
+	if err := admin.UpdateAWSINIFile(configPath, "profile "+profileName, map[string]string{
+		"region":       "us-east-1",
+		"endpoint_url": endpointURL,
+		"ca_bundle":    certPath,
+		"output":       "json",
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not update AWS config: %v\n", err)
+	}
+
+	// Print credentials
+	fmt.Println("\nAccount created successfully!")
+	fmt.Printf("  Account ID:        %s\n", accountID)
+	fmt.Printf("  Account Name:      %s\n", name)
+	fmt.Printf("  Admin User:        admin\n")
+	fmt.Printf("  Access Key ID:     %s\n", *akOut.AccessKey.AccessKeyId)
+	fmt.Printf("  Secret Access Key: %s\n", *akOut.AccessKey.SecretAccessKey)
+	fmt.Printf("  AWS Profile:       %s\n", profileName)
+	fmt.Println("\nUse with:")
+	fmt.Printf("  AWS_PROFILE=%s aws ec2 describe-instances\n", profileName)
+}
+
+func runAccountList(cmd *cobra.Command, args []string) {
+	svc, cleanup, err := initIAMServiceFromConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer cleanup()
+
+	accounts, err := svc.ListAccounts()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error listing accounts: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(accounts) == 0 {
+		fmt.Println("No accounts found.")
+		return
+	}
+
+	fmt.Printf("%-14s %-20s %-10s %s\n", "ACCOUNT ID", "NAME", "STATUS", "CREATED")
+	fmt.Printf("%-14s %-20s %-10s %s\n", "----------", "----", "------", "-------")
+	for _, a := range accounts {
+		created := a.CreatedAt
+		if t, err := time.Parse(time.RFC3339, a.CreatedAt); err == nil {
+			created = t.Format("2006-01-02 15:04")
+		}
+		fmt.Printf("%-14s %-20s %-10s %s\n", a.AccountID, a.AccountName, a.Status, created)
+	}
 }

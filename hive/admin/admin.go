@@ -264,12 +264,11 @@ func GenerateAWSSecretKey() string {
 	return base64.StdEncoding.EncodeToString(bytes)
 }
 
-// generateAccountID generates a 12-digit AWS account ID
+// GenerateAccountID returns the global platform account ID (000000000000).
+// This is used during bootstrap (hive admin init) for the root/platform account.
+// Customer accounts are created via IAMService.CreateAccount() with sequential IDs.
 func GenerateAccountID() string {
-	// Generate random 12-digit number
-	num, _ := rand.Int(rand.Reader, big.NewInt(900000000000))
-	accountID := num.Int64() + 100000000000 // Ensure it's 12 digits
-	return fmt.Sprintf("%012d", accountID)
+	return "000000000000"
 }
 
 // generateNATSToken generates a secure random token for NATS
