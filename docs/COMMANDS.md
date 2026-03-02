@@ -1,6 +1,39 @@
-# AWS Command Implementation Matrix
+# Command Implementation Matrix
 
-## EC2 - Instance Management
+## Hive Admin CLI
+
+Platform management commands not exposed via the AWS gateway API. These are CLI-only commands.
+
+### Cluster Initialization
+
+| Command | Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------|---------------|-------------|------------|--------|
+| `hive admin init` | `--nodes`, `--node`, `--bind`, `--port`, `--region`, `--az`, `--cluster-name`, `--cluster-bind`, `--cluster-routes`, `--predastore-nodes`, `--services`, `--formation-timeout`, `--force` | None (first-time setup) | Generates root IAM credentials (AKIA-prefixed access key + secret) → creates master.key (AES-256, 32 bytes, 0600) → writes bootstrap.json (consumed on first start) → generates CA + server TLS certificates → creates NATS config with auth token → writes hive.toml, awsgw.toml, predastore.toml → configures AWS CLI `hive` profile → creates directory structure under `~/hive/` | 1. Init creates all config files<br>2. Root credentials printed once<br>3. master.key is 32 bytes, mode 0600<br>4. bootstrap.json consumed on first start<br>5. `--force` re-initializes existing config<br>6. AWS CLI profile `hive` auto-configured | **DONE** |
+| `hive admin join` | `--host` (required), `--node` (required), `--bind`, `--port`, `--region`, `--az`, `--cluster-bind`, `--cluster-routes`, `--data-dir`, `--services` | Leader node must be running | Connects to leader node → retrieves cluster configuration → configures local node to join cluster and participate in distributed operations | 1. Join existing cluster<br>2. Missing host (error)<br>3. Missing node name (error) | **DONE** |
+
+### Cluster Operations
+
+| Command | Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------|---------------|-------------|------------|--------|
+| `hive admin cluster shutdown` | — | Cluster must be running | Gracefully shuts down the entire cluster | 1. Shutdown running cluster<br>2. All nodes stop cleanly | **DONE** |
+
+### Account Management
+
+| Command | Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------|---------------|-------------|------------|--------|
+| `hive admin account create` | `--name` | Cluster must be running (NATS), master key must exist | Connects to NATS → CAS loop on `hive-account-counter:next_id` for sequential 12-digit ID → creates Account record in `hive-accounts` KV → creates `admin` user in new account → creates access key for admin → creates AdministratorAccess policy (Action:*, Resource:*) → attaches policy → prints credentials | 1. Create first account (ID 000000000001)<br>2. Sequential IDs (000000000002, etc.)<br>3. Admin user has full access<br>4. Credentials printed once | **DONE** |
+| `hive admin account list` | — | Cluster must be running (NATS), master key must exist | Connects to NATS → IAMService.ListAccounts() → prints table with Account ID, Name, Status, Created | 1. List all accounts<br>2. Empty list (only global account) | **DONE** |
+
+### Image Management
+
+| Command | Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------|---------------|-------------|------------|--------|
+| `hive admin images import` | `--name` | Cluster must be running, image file must exist locally | Imports a local disk image (QCOW2) as an AMI → uploads to Predastore S3 → registers as available AMI | 1. Import valid QCOW2 image<br>2. Image appears in `describe-images` | **DONE** |
+| `hive admin images list` | — | None | Lists available OS images that can be imported or downloaded | 1. List available images | **DONE** |
+
+## AWS Commands
+
+### EC2 - Instance Management
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -16,7 +49,7 @@
 | `monitor-instances` | — | `--instance-ids` | Instance must exist | Enable basic monitoring (CPU, disk, network) → store metrics in NATS KV → return monitoring state | 1. Enable monitoring<br>2. Verify monitoring state in describe-instances | **NOT STARTED** |
 | `unmonitor-instances` | — | `--instance-ids` | Instance must exist | Disable detailed monitoring → revert to basic monitoring → return monitoring state | 1. Disable monitoring<br>2. Verify monitoring state reverts in describe-instances | **NOT STARTED** |
 
-## EC2 - Key Pair Management
+### EC2 - Key Pair Management
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -25,7 +58,7 @@
 | `delete-key-pair` | `--key-name`, `--key-pair-id` | `--dry-run` | Key must exist | NATS `ec2.DeleteKeyPair` → daemon deletes public key from Predastore S3 → returns success | 1. Delete existing key pair<br>2. Delete non-existent key (idempotent, no error)<br>3. Verify key no longer in describe-key-pairs | **DONE** |
 | `import-key-pair` | `--key-name`, `--public-key-material` | `--tag-specifications`, `--dry-run` | None | NATS `ec2.ImportKeyPair` → daemon stores provided public key in Predastore S3 → returns key name and fingerprint | 1. Import valid SSH public key<br>2. Import invalid key material (error)<br>3. Import duplicate name (error)<br>4. Verify imported key usable with run-instances | **DONE** |
 
-## EC2 - AMI Image Management
+### EC2 - AMI Image Management
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -39,7 +72,7 @@
 | `modify-image-attribute` | — | `--image-id`, `--launch-permission`, `--description`, `--operation-type`, `--user-ids`, `--user-groups`, `--organization-arns`, `--dry-run` | AMI must exist | Update specific attribute in AMI metadata → persist to S3 | 1. Add launch permission<br>2. Modify description<br>3. Invalid AMI (error) | **NOT STARTED** |
 | `reset-image-attribute` | — | `--image-id`, `--attribute`, `--dry-run` | AMI must exist | Reset attribute to default value in AMI metadata | 1. Reset launch permission to owner-only<br>2. Invalid AMI (error) | **NOT STARTED** |
 
-## EC2 - Volume (EBS) Management
+### EC2 - Volume (EBS) Management
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -52,7 +85,7 @@
 | `describe-volume-status` | `--volume-ids` | `--filters`, `--max-results`, `--next-token`, `--dry-run` | None | Gateway validates vol- prefix → NATS `ec2.DescribeVolumeStatus` → daemon fetches VolumeConfig from Predastore S3 (parallel for specific IDs, sequential list-all for no IDs) → builds VolumeStatusItem per volume (status=ok, io-enabled=passed, io-performance=not-applicable) → returns InvalidVolume.NotFound for missing explicit IDs → skips internal sub-volumes (-efi, -cloudinit) | 1. List all volume statuses<br>2. Filter by specific volume IDs (fast path)<br>3. Non-existent volume ID returns InvalidVolume.NotFound<br>4. Invalid volume ID format (InvalidVolume.Malformed)<br>5. Internal sub-volumes excluded from listing<br>6. Nil/empty input defaults to all volumes | **DONE** |
 | `describe-volumes-modifications` | — | `--volume-ids`, `--filters`, `--max-results` | None | Query pending/completed volume modifications → return modification state, progress, original/target size | 1. Check in-progress modification<br>2. Check completed modification<br>3. No modifications returns empty | **NOT STARTED** |
 
-## EC2 - Snapshot Management
+### EC2 - Snapshot Management
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -62,7 +95,7 @@
 | `describe-snapshots` | `--snapshot-ids` | `--owner-ids`, `--filters`, `--max-results`, `--dry-run` | None | Gateway validates snap- prefix on IDs → NATS `ec2.DescribeSnapshots` → daemon lists snap- prefixed objects in Predastore → reads SnapshotConfig for each → filters by snapshot ID if specified → returns snapshot list | 1. List all snapshots<br>2. Filter by snapshot ID<br>3. Empty snapshot list<br>4. Invalid snapshot ID format (InvalidSnapshot.Malformed) | **DONE** |
 | `copy-snapshot` | `--source-snapshot-id`, `--source-region`, `--description` | `--encrypted`, `--dry-run` | Source snapshot must exist | Gateway validates snap- prefix + source region → NATS `ec2.CopySnapshot` → daemon reads source SnapshotConfig → generates new snap-ID → copies metadata (preserves tags, description override) → stores as completed → returns new snapshot ID | 1. Copy within same region<br>2. Copy non-existent snapshot (InvalidSnapshot.NotFound)<br>3. Missing source ID (InvalidParameterValue)<br>4. Missing source region (MissingParameter)<br>5. Copy preserves tags<br>6. Copy with description override | **DONE** |
 
-## EC2 - Tags
+### EC2 - Tags
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -70,20 +103,20 @@
 | `delete-tags` | `--resources`, `--tags` | `--dry-run` | None | Gateway validates input (resources non-empty) → NATS `ec2.DeleteTags` → daemon removes specified tag keys from resource JSON, or all tags if no keys specified → return success | 1. Delete specific tag by key<br>2. Delete all tags (no tags specified)<br>3. Empty resources list (error: MissingParameter) | **DONE** |
 | `describe-tags` | `--filters` (resource-id, resource-type, key, value) | `--max-results`, `--next-token`, `--dry-run` | None | NATS `ec2.DescribeTags` → daemon lists all `tags/*.json` from Predastore S3 → applies filters (resource-id, resource-type, key, value) → returns tag list with resource type auto-detected from ID prefix | 1. List all tags<br>2. Filter by resource-id<br>3. Filter by resource-type (instance, volume, image, snapshot, vpc, subnet, security-group, route-table, internet-gateway, egress-only-internet-gateway)<br>4. Filter by key<br>5. Filter by value<br>6. Empty result when no tags exist | **DONE** |
 
-## EC2 - Regions & Availability Zones
+### EC2 - Regions & Availability Zones
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
 | `describe-regions` | *(returns configured region, endpoint, opt-in status from config — input params ignored)* | `--region-names`, `--filters`, `--all-regions`, `--dry-run` | None | Return configured region from hive init config with Endpoint and OptInStatus → local-only response, no NATS | 1. List all regions<br>2. Filter by region name<br>3. Verify endpoint URL returned<br>4. Verify OptInStatus returned | **DONE** |
 | `describe-availability-zones` | *(returns configured AZ, region, zone ID, state, opt-in status from config — input params ignored)* | `--zone-names`, `--filters`, `--all-availability-zones` | None | Return configured AZ from hive init config with zone ID, state, group name, network border group → local-only response, no NATS | 1. List all AZs<br>2. Filter by zone name<br>3. Verify zone state is available<br>4. Verify region name matches config | **DONE** |
 
-## EC2 - Account Attributes
+### EC2 - Account Attributes
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
 | `describe-account-attributes` | `--attribute-names` | `--dry-run` | None | Gateway parses input → returns static account attributes: supported-platforms=VPC, default-vpc=none, max-instances=100, vpc-max-security-groups-per-interface=5, max-elastic-ips=5, vpc-max-elastic-ips=20 → local-only response, no NATS | 1. List all account attributes<br>2. Filter by attribute name<br>3. Verify all 6 attributes returned with correct values | **DONE** |
 
-## EC2 - Account Settings (Deferred)
+### EC2 - Account Settings (Deferred)
 
 Persistence layer works (NATS JetStream KV), but stored values are not yet enforced by downstream services. Will be completed post-merge.
 
@@ -104,7 +137,7 @@ Persistence layer works (NATS JetStream KV), but stored values are not yet enfor
 | `modify-instance-metadata-defaults` | — | `--http-tokens`, `--http-put-response-hop-limit`, `--http-endpoint`, `--instance-metadata-tags` | None | Store instance metadata defaults in JetStream KV | 1. Set httpTokens=required<br>2. Set hop limit | **NOT STARTED** (enforcement pending) |
 | `get-instance-metadata-defaults` | — | `--dry-run` | None | Read instance metadata defaults from JetStream KV | 1. Get current defaults | **NOT STARTED** (enforcement pending) |
 
-## EC2 - Egress-Only Internet Gateway
+### EC2 - Egress-Only Internet Gateway
 
 Gateway routing and KV CRUD are wired up but no OVN/OVS integration exists. EIGWs are stored in `hive-eigw` KV bucket but have no effect on network topology (no vpcd events published, unlike IGW which publishes `vpc.igw-attach`/`vpc.igw-detach`).
 
@@ -114,7 +147,7 @@ Gateway routing and KV CRUD are wired up but no OVN/OVS integration exists. EIGW
 | `delete-egress-only-internet-gateway` | `--egress-only-internet-gateway-id` | `--dry-run` | EIGW must exist | NATS `ec2.DeleteEgressOnlyInternetGateway` → daemon verifies EIGW exists in KV → deletes from `hive-eigw` KV → returns ReturnCode=true. No detach required (unlike IGW). | 1. Delete existing EIGW<br>2. Delete non-existent EIGW (error)<br>3. Missing ID (error: MissingParameter) | **STARTED** (KV only, no OVN) |
 | `describe-egress-only-internet-gateways` | `--egress-only-internet-gateway-ids` | `--filters`, `--max-results`, `--next-token`, `--dry-run` | None | NATS `ec2.DescribeEgressOnlyInternetGateways` → daemon lists all keys from `hive-eigw` KV bucket → filters by ID if specified → always includes Attachments array → returns list | 1. Describe all EIGWs<br>2. Filter by specific ID<br>3. Non-existent ID returns empty list | **STARTED** (KV only, no OVN) |
 
-## EC2 - Placement Groups
+### EC2 - Placement Groups
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -122,7 +155,7 @@ Gateway routing and KV CRUD are wired up but no OVN/OVS integration exists. EIGW
 | `delete-placement-group` | — | `--group-name`, `--dry-run` | Group must exist, no instances in group | NATS `ec2.DeletePlacementGroup` → daemon verifies group exists and is empty → delete from KV → return success | 1. Delete empty group<br>2. Delete group with instances (error)<br>3. Delete non-existent group (error) | **NOT STARTED** |
 | `describe-placement-groups` | — | `--group-names`, `--group-ids`, `--filters` | None | NATS `ec2.DescribePlacementGroups` → daemon lists groups from KV → return list with strategy and state | 1. List all groups<br>2. Filter by name<br>3. Filter by strategy | **NOT STARTED** |
 
-## EC2 - Dedicated Hosts
+### EC2 - Dedicated Hosts
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -138,7 +171,7 @@ Gateway routing and KV CRUD are wired up but no OVN/OVS integration exists. EIGW
 | `delete-public-ipv4-pool` | — | `--pool-id`, `--dry-run` | Pool must exist and be empty | NATS `ec2.DeletePublicIpv4Pool` → daemon verifies pool empty → delete from KV → return success | 1. Delete empty pool<br>2. Delete pool with addresses (error) | **NOT STARTED** |
 | `describe-public-ipv4-pools` | — | `--pool-ids`, `--filters`, `--max-results` | None | NATS `ec2.DescribePublicIpv4Pools` → daemon lists pools from KV → return pool list with address counts | 1. List all pools<br>2. Filter by pool ID | **NOT STARTED** |
 
-## EC2 - DHCP Options
+### EC2 - DHCP Options
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -147,7 +180,7 @@ Gateway routing and KV CRUD are wired up but no OVN/OVS integration exists. EIGW
 | `describe-dhcp-options` | — | `--dhcp-options-ids`, `--filters`, `--max-results` | None | NATS `ec2.DescribeDhcpOptions` → daemon lists DHCP options from KV → return list with configurations | 1. List all DHCP options<br>2. Filter by ID | **NOT STARTED** |
 | `associate-dhcp-options` | — | `--dhcp-options-id`, `--vpc-id`, `--dry-run` | DHCP options and VPC must exist | NATS `ec2.AssociateDhcpOptions` → daemon links DHCP options to VPC → update VPC metadata → return success | 1. Associate with VPC<br>2. Missing DHCP options ID (error)<br>3. Missing VPC ID (error) | **NOT STARTED** |
 
-## EC2 - Capacity Reservations
+### EC2 - Capacity Reservations
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -156,7 +189,7 @@ Gateway routing and KV CRUD are wired up but no OVN/OVS integration exists. EIGW
 | `describe-capacity-reservations` | — | `--capacity-reservation-ids`, `--filters`, `--max-results` | None | NATS `ec2.DescribeCapacityReservations` → daemon lists reservations from KV → return list with state and counts | 1. List all reservations<br>2. Filter by ID<br>3. Filter by instance type | **NOT STARTED** |
 | `modify-capacity-reservation` | — | `--capacity-reservation-id`, `--instance-count`, `--end-date`, `--end-date-type` | Reservation must exist | NATS `ec2.ModifyCapacityReservation` → daemon updates reservation in KV → return success | 1. Modify instance count<br>2. Modify end date<br>3. Missing reservation ID (error) | **NOT STARTED** |
 
-## EC2 - Elastic IP
+### EC2 - Elastic IP
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -166,7 +199,7 @@ Gateway routing and KV CRUD are wired up but no OVN/OVS integration exists. EIGW
 | `disassociate-address` | — | `--association-id`, `--dry-run` | Association must exist | NATS `ec2.DisassociateAddress` → daemon unlinks EIP from instance/ENI → remove OVS DNAT/SNAT rules → return success | 1. Disassociate existing<br>2. Disassociate non-existent (error) | **NOT STARTED** |
 | `describe-addresses` | — | `--allocation-ids`, `--filters`, `--public-ips` | None | NATS `ec2.DescribeAddresses` → daemon lists EIPs from KV → return list with association info | 1. List all EIPs<br>2. Filter by allocation ID<br>3. Filter by public IP | **NOT STARTED** |
 
-## EC2 - NAT Gateway
+### EC2 - NAT Gateway
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -176,7 +209,7 @@ Gateway routing and KV CRUD are wired up but no OVN/OVS integration exists. EIGW
 | `assign-private-nat-gateway-address` | — | `--nat-gateway-id`, `--private-ip-addresses` | NAT gateway must exist (private type) | NATS `ec2.AssignPrivateNatGatewayAddress` → daemon assigns private IPs to NAT gateway → return assigned addresses | 1. Assign address<br>2. Missing NAT gateway ID (error) | **NOT STARTED** |
 | `associate-nat-gateway-address` | — | `--nat-gateway-id`, `--allocation-ids` | NAT gateway and EIPs must exist | NATS `ec2.AssociateNatGatewayAddress` → daemon associates EIPs with NAT gateway → return association info | 1. Associate EIP<br>2. Missing NAT gateway ID (error) | **NOT STARTED** |
 
-## EC2 - VPC Networking (Core)
+### EC2 - VPC Networking (Core)
 
 Requires OVN/OVS (`apt install openvswitch-switch ovn-host`). VPC/Subnet/ENI CRUD stores metadata in NATS KV and publishes events to vpcd (the network topology daemon) which translates to OVN logical switches, ports, and routers. Single AZ for Hive v1. IPAM uses CAS-based allocation from NATS KV (`hive-vpc-ipam` bucket).
 
@@ -207,7 +240,7 @@ Requires OVN/OVS (`apt install openvswitch-switch ovn-host`). VPC/Subnet/ENI CRU
 | `delete-internet-gateway` | `--internet-gateway-id` | `--dry-run` | IGW must be detached | NATS `ec2.DeleteInternetGateway` → daemon validates IGW exists and VpcId is empty (DependencyViolation if attached) → deletes from `hive-igw` KV | 1. Delete detached IGW<br>2. Delete attached IGW (DependencyViolation)<br>3. Delete non-existent (error) | **DONE** |
 | `describe-internet-gateways` | `--internet-gateway-ids` | `--filters`, `--max-results`, `--dry-run` | None | NATS `ec2.DescribeInternetGateways` → daemon lists all keys from `hive-igw` KV → filters by IGW IDs if specified → returns list with Attachments array (if attached) | 1. List all IGWs<br>2. Filter by IGW ID<br>3. Verify attachment info | **DONE** |
 
-## EC2 - Route Tables
+### EC2 - Route Tables
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -220,7 +253,7 @@ Requires OVN/OVS (`apt install openvswitch-switch ovn-host`). VPC/Subnet/ENI CRU
 | `associate-route-table` | — | `--route-table-id`, `--subnet-id` or `--gateway-id` | Route table and target must exist | NATS `ec2.AssociateRouteTable` → daemon links route table to subnet/gateway → return rtbassoc-ID | 1. Associate with subnet<br>2. Missing route table ID (error) | **NOT STARTED** |
 | `disassociate-route-table` | — | `--association-id` | Association must exist, not main table association | NATS `ec2.DisassociateRouteTable` → daemon unlinks route table → return success | 1. Disassociate existing<br>2. Disassociate main table (error) | **NOT STARTED** |
 
-## EC2 - VPC Peering
+### EC2 - VPC Peering
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -231,7 +264,7 @@ Requires OVN/OVS (`apt install openvswitch-switch ovn-host`). VPC/Subnet/ENI CRU
 | `describe-vpc-peering-connections` | — | `--vpc-peering-connection-ids`, `--filters`, `--max-results` | None | NATS `ec2.DescribeVpcPeeringConnections` → daemon lists peerings from KV → return list with state | 1. List all peerings<br>2. Filter by ID<br>3. Filter by VPC | **NOT STARTED** |
 | `modify-vpc-peering-connection-options` | — | `--vpc-peering-connection-id`, `--requester-peering-connection-options`, `--accepter-peering-connection-options` | Peering must be active | NATS `ec2.ModifyVpcPeeringConnectionOptions` → daemon updates peering options in KV → return modified options | 1. Enable DNS resolution<br>2. Missing peering ID (error) | **NOT STARTED** |
 
-## EC2 - VPC Endpoints
+### EC2 - VPC Endpoints
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -241,7 +274,7 @@ Requires OVN/OVS (`apt install openvswitch-switch ovn-host`). VPC/Subnet/ENI CRU
 | `describe-vpc-endpoint-services` | — | `--service-names`, `--filters`, `--max-results` | None | NATS `ec2.DescribeVpcEndpointServices` → daemon returns available services (S3, DynamoDB equivalents) → return service list | 1. List available services<br>2. Filter by service name | **NOT STARTED** |
 | `modify-vpc-endpoint` | — | `--vpc-endpoint-id`, `--add-route-table-ids`, `--remove-route-table-ids`, `--add-subnet-ids`, `--remove-subnet-ids` | Endpoint must exist | NATS `ec2.ModifyVpcEndpoint` → daemon updates endpoint route tables/subnets in KV → return success | 1. Add route table<br>2. Remove subnet<br>3. Missing endpoint ID (error) | **NOT STARTED** |
 
-## EC2 - VPN Gateway & Customer Gateway
+### EC2 - VPN Gateway & Customer Gateway
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -254,7 +287,7 @@ Requires OVN/OVS (`apt install openvswitch-switch ovn-host`). VPC/Subnet/ENI CRU
 | `detach-vpn-gateway` | — | `--vpn-gateway-id`, `--vpc-id` | Must be attached | NATS `ec2.DetachVpnGateway` → daemon unlinks VPN gateway from VPC → return success | 1. Detach from VPC<br>2. Not attached (error) | **NOT STARTED** |
 | `describe-vpn-gateways` | — | `--vpn-gateway-ids`, `--filters` | None | NATS `ec2.DescribeVpnGateways` → daemon lists from KV → return list with attachment info | 1. List all<br>2. Filter by VPC attachment | **NOT STARTED** |
 
-## EC2 - VPN Connections
+### EC2 - VPN Connections
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -264,7 +297,7 @@ Requires OVN/OVS (`apt install openvswitch-switch ovn-host`). VPC/Subnet/ENI CRU
 | `modify-vpn-connection` | — | `--vpn-connection-id`, `--vpn-gateway-id`, `--customer-gateway-id` | Connection must exist | NATS `ec2.ModifyVpnConnection` → daemon updates connection target in KV → return modified connection | 1. Change VPN gateway<br>2. Missing connection ID (error) | **NOT STARTED** |
 | `modify-vpn-connection-options` | — | `--vpn-connection-id`, `--local-ipv4-network-cidr`, `--remote-ipv4-network-cidr` | Connection must exist | NATS `ec2.ModifyVpnConnectionOptions` → daemon updates tunnel options in KV → return modified connection | 1. Modify CIDR ranges<br>2. Missing connection ID (error) | **NOT STARTED** |
 
-## EC2 - Network ACLs
+### EC2 - Network ACLs
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -276,7 +309,7 @@ Requires OVN/OVS (`apt install openvswitch-switch ovn-host`). VPC/Subnet/ENI CRU
 | `replace-network-acl-association` | — | `--association-id`, `--network-acl-id` | Both must exist | NATS `ec2.ReplaceNetworkAclAssociation` → daemon swaps NACL for subnet → return new association ID | 1. Replace association<br>2. Missing association ID (error) | **NOT STARTED** |
 | `replace-network-acl-entry` | — | `--network-acl-id`, `--rule-number`, `--protocol`, `--rule-action`, `--cidr-block`, `--ingress`/`--egress`, `--port-range` | Entry must exist | NATS `ec2.ReplaceNetworkAclEntry` → daemon replaces rule in KV → update OVS flow → return success | 1. Replace existing entry<br>2. Replace non-existent entry (error) | **NOT STARTED** |
 
-## EC2 - Prefix Lists
+### EC2 - Prefix Lists
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -287,7 +320,7 @@ Requires OVN/OVS (`apt install openvswitch-switch ovn-host`). VPC/Subnet/ENI CRU
 | `get-managed-prefix-list-entries` | — | `--prefix-list-id`, `--target-version`, `--max-results` | Prefix list must exist | NATS `ec2.GetManagedPrefixListEntries` → daemon reads entries from KV → return entry list | 1. List entries<br>2. List entries at specific version | **NOT STARTED** |
 | `get-managed-prefix-list-associations` | — | `--prefix-list-id`, `--max-results` | Prefix list must exist | NATS `ec2.GetManagedPrefixListAssociations` → daemon finds references in SGs/route tables → return association list | 1. List associations<br>2. No associations returns empty | **NOT STARTED** |
 
-## EC2 - Network Interfaces
+### EC2 - Network Interfaces
 
 ENIs are managed via `hive-vpc-enis` KV bucket with CAS-based IPAM allocation from `hive-vpc-ipam`. ENIs are auto-created by `run-instances --subnet-id` and auto-deleted on termination. MAC addresses are deterministically generated from the ENI ID. Attach/detach are internal operations used by instance lifecycle — no standalone attach/detach API yet.
 
@@ -302,7 +335,7 @@ ENIs are managed via `hive-vpc-enis` KV bucket with CAS-based IPAM allocation fr
 | `assign-private-ip-addresses` | — | `--network-interface-id`, `--private-ip-addresses` or `--secondary-private-ip-address-count` | ENI must exist | NATS `ec2.AssignPrivateIpAddresses` → daemon allocates IPs from subnet pool → assign to ENI → return assigned IPs | 1. Assign specific IPs<br>2. Assign by count<br>3. Cannot specify both (error) | **NOT STARTED** |
 | `unassign-private-ip-addresses` | — | `--network-interface-id`, `--private-ip-addresses` | IPs must be assigned to ENI | NATS `ec2.UnassignPrivateIpAddresses` → daemon releases IPs → return success | 1. Unassign secondary IP<br>2. Unassign primary IP (error) | **NOT STARTED** |
 
-## EC2 - Launch Templates
+### EC2 - Launch Templates
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -312,7 +345,7 @@ ENIs are managed via `hive-vpc-enis` KV bucket with CAS-based IPAM allocation fr
 | `describe-launch-templates` | — | `--launch-template-ids`, `--launch-template-names`, `--filters` | None | NATS `ec2.DescribeLaunchTemplates` → daemon lists templates from KV → return list | 1. List all templates<br>2. Filter by name<br>3. Filter by ID | **NOT STARTED** |
 | `describe-launch-template-versions` | — | `--launch-template-id` or `--launch-template-name`, `--versions`, `--min-version`, `--max-version` | Template must exist | NATS `ec2.DescribeLaunchTemplateVersions` → daemon lists versions from KV → return version list with data | 1. List all versions<br>2. List specific version<br>3. Template not found (error) | **NOT STARTED** |
 
-## EC2 - Misc Operations
+### EC2 - Misc Operations
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -320,7 +353,7 @@ ENIs are managed via `hive-vpc-enis` KV bucket with CAS-based IPAM allocation fr
 | `enable-address-transfer` | — | `--allocation-id`, `--transfer-account-id` | EIP must exist | NATS `ec2.EnableAddressTransfer` → daemon stores transfer in JetStream KV with 7-day expiration → return AllocationId and TransferAccountId | 1. Enable transfer<br>2. Verify transfer stored with expiration | **NOT STARTED** |
 | `disable-address-transfer` | — | `--allocation-id` | Transfer must exist | NATS `ec2.DisableAddressTransfer` → daemon updates transfer status to disabled in KV → return status | 1. Disable active transfer<br>2. Disable non-existent transfer (error) | **NOT STARTED** |
 
-## EBS Direct API
+### EBS Direct API
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -331,7 +364,7 @@ ENIs are managed via `hive-vpc-enis` KV bucket with CAS-based IPAM allocation fr
 | `list-snapshot-blocks` | — | `--snapshot-id`, `--max-results`, `--next-token` | Snapshot must exist | List all non-empty blocks in snapshot with tokens and sizes | 1. List blocks of populated snapshot<br>2. List blocks of empty snapshot | **NOT STARTED** |
 | `list-changed-blocks` | — | `--second-snapshot-id`, `--first-snapshot-id`, `--max-results` | Snapshots must exist | Compare two snapshots → return list of differing block indexes | 1. Compare parent and child snapshots<br>2. Compare unrelated snapshots | **NOT STARTED** |
 
-## S3 (via Predastore)
+### S3 (via Predastore)
 
 Currently S3 operations are handled directly by Predastore. Consider moving control/data plane to Hive format for AWS gateway integration.
 
@@ -344,7 +377,7 @@ Currently S3 operations are handled directly by Predastore. Consider moving cont
 | `s3 rm` (DeleteObject) | — | `s3://bucket/key`, `--recursive` | Object must exist | NATS `s3.deleteobject` → Predastore deletes object shards | 1. Delete single object<br>2. Recursive delete<br>3. Delete non-existent (idempotent) | **NOT STARTED** |
 | `s3 sync` | — | `source dest`, `--delete`, `--exclude`, `--include` | Bucket must exist | Compare source and dest → upload changed/new files → optionally delete removed files | 1. Sync local dir to S3<br>2. Sync with --delete<br>3. Sync with exclude filter | **NOT STARTED** |
 
-## IAM - User Management
+### IAM - User Management
 
 All IAM operations are account-scoped. Users, policies, and access keys are namespaced per account. The gateway extracts the account ID from the authenticated access key via `c.Locals("sigv4.accountId")` and passes it to all IAM service methods. Root user (account `000000000000`) bypasses policy evaluation entirely.
 
@@ -355,7 +388,7 @@ All IAM operations are account-scoped. Users, policies, and access keys are name
 | `list-users` | `--path-prefix` | `--max-items`, `--marker` | None | IAMService.ListUsers(accountID, input) → prefix-scans KV for `{accountID}.*` → filters by path prefix if specified → returns user list scoped to caller's account | 1. List all users in account<br>2. List with path prefix filter<br>3. Empty list<br>4. Does not show other accounts' users | **DONE** |
 | `delete-user` | `--user-name` | — | User must exist, no access keys attached | Gateway validates UserName → IAMService.DeleteUser(accountID, input) → checks user has no access keys → deletes from KV | 1. Delete user with no keys<br>2. Delete user with keys attached (DeleteConflict)<br>3. Delete non-existent user (NoSuchEntity) | **DONE** |
 
-## IAM - Access Key Management
+### IAM - Access Key Management
 
 Access keys are globally unique (keyed by AccessKeyID) but associated with an account. Max 2 keys per user. Secrets encrypted with AES-256-GCM using master key.
 
@@ -366,7 +399,7 @@ Access keys are globally unique (keyed by AccessKeyID) but associated with an ac
 | `delete-access-key` | `--access-key-id`, `--user-name` | — | Key must exist | IAMService.DeleteAccessKey(accountID, input) → removes key from global KV → removes key ID from user's AccessKeys list | 1. Delete existing key<br>2. Delete non-existent key (NoSuchEntity) | **DONE** |
 | `update-access-key` | `--access-key-id`, `--user-name`, `--status` (Active/Inactive) | — | Key must exist | IAMService.UpdateAccessKey(input) → reads key from global KV (key ID is globally unique, no accountID needed) → updates Status field → inactive keys rejected at SigV4 auth | 1. Deactivate key (Inactive)<br>2. Reactivate key (Active)<br>3. Non-existent key (NoSuchEntity)<br>4. Inactive key → auth returns InvalidClientTokenId | **DONE** |
 
-## IAM - Policy Management
+### IAM - Policy Management
 
 Policies are account-scoped. KV key is `{accountID}.{policyName}`. Policy documents require `Version: "2012-10-17"` and valid Statement array. Supports wildcard action matching (`ec2:*`, `ec2:Describe*`, `*`). Evaluation order: explicit Deny > explicit Allow > implicit Deny.
 
@@ -386,16 +419,8 @@ Policies are account-scoped. KV key is `{accountID}.{policyName}`. Policy docume
 | `detach-user-policy` | `--user-name`, `--policy-arn` | — | Policy must be attached to user | Gateway validates both params → IAMService.DetachUserPolicy(accountID, input) → removes policy ARN from user's AttachedPolicies list | 1. Detach attached policy<br>2. Policy not attached (NoSuchEntity)<br>3. Non-existent user (NoSuchEntity) | **DONE** |
 | `list-attached-user-policies` | `--user-name` | `--path-prefix`, `--max-items`, `--marker` | User must exist | IAMService.ListAttachedUserPolicies(accountID, input) → reads user's AttachedPolicies list → returns policy ARNs and names | 1. List attached policies<br>2. No policies returns empty list | **DONE** |
 
-## IAM - Account Management (CLI Only)
 
-Account operations are not exposed via the AWS gateway API. They are CLI-only commands that connect directly to NATS.
-
-| Command | Flags | Prerequisites | Basic Logic | Test Cases | Status |
-|---------|-------|---------------|-------------|------------|--------|
-| `hive admin account create` | `--name` | Cluster must be running (NATS), master key must exist | Connects to NATS → CAS loop on `hive-account-counter:next_id` for sequential 12-digit ID → creates Account record in `hive-accounts` KV → creates `admin` user in new account → creates access key for admin → creates AdministratorAccess policy (Action:*, Resource:*) → attaches policy → prints credentials | 1. Create first account (ID 000000000001)<br>2. Sequential IDs (000000000002, etc.)<br>3. Admin user has full access<br>4. Credentials printed once | **DONE** |
-| `hive admin account list` | — | Cluster must be running (NATS), master key must exist | Connects to NATS → IAMService.ListAccounts() → prints table with Account ID, Name, Status, Created | 1. List all accounts<br>2. Empty list (only global account) | **DONE** |
-
-## IAM - Policy Evaluation
+### IAM - Policy Evaluation
 
 The gateway evaluates IAM policies on every request (except root user bypass). Policy evaluation is internal — not an AWS API.
 
@@ -407,5 +432,5 @@ The gateway evaluates IAM policies on every request (except root user bypass). P
 | Explicit deny | Deny statements override Allow (deny wins) | **DONE** |
 | Wildcard matching | `*` matches all, `ec2:*` matches all EC2, `ec2:Describe*` matches prefix | **DONE** |
 | Account-scoped evaluation | Policies resolved from caller's account context | **DONE** |
-| EC2 action mapping | ~50 EC2 actions mapped to IAM policy strings | **DONE** |
+| EC2 action mapping | 54 EC2 actions mapped to IAM policy strings | **DONE** |
 | IAM action mapping | 16 IAM actions mapped to IAM policy strings | **DONE** |
