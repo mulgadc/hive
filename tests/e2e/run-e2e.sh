@@ -439,10 +439,12 @@ VM_HOSTNAME=$(ssh -o StrictHostKeyChecking=no \
     -i "test-key-1.pem" \
     ec2-user@"$SSH_HOST" 'hostname' 2>/dev/null)
 echo "VM hostname: $VM_HOSTNAME"
-if echo "$VM_HOSTNAME" | grep -q "$INSTANCE_ID"; then
-    echo "Hostname contains instance ID"
+# Hostname uses truncated ID: hive-vm-<first 8 hex chars of instance ID>
+SHORT_ID=$(echo "$INSTANCE_ID" | sed 's/^i-//' | cut -c1-8)
+if echo "$VM_HOSTNAME" | grep -q "$SHORT_ID"; then
+    echo "Hostname contains instance ID prefix ($SHORT_ID)"
 else
-    echo "WARNING: Hostname '$VM_HOSTNAME' does not contain instance ID '$INSTANCE_ID' (non-fatal)"
+    echo "WARNING: Hostname '$VM_HOSTNAME' does not contain instance ID prefix '$SHORT_ID' (non-fatal)"
 fi
 
 echo "SSH connectivity and volume verification passed"

@@ -1359,13 +1359,12 @@ func buildRemoteNodes(allNodes map[string]formation.NodeInfo, localNode string) 
 // initIAMServiceFromConfig loads config, connects to NATS, loads the master
 // key, and returns an initialised IAMServiceImpl. Callers must defer nc.Close().
 func initIAMServiceFromConfig() (*handlers_iam.IAMServiceImpl, func(), error) {
-	_, nc, err := loadConfigAndConnect()
+	cfg, nc, err := loadConfigAndConnect()
 	if err != nil {
 		return nil, nil, fmt.Errorf("connect to cluster: %w", err)
 	}
 
-	homeDir, _ := os.UserHomeDir()
-	masterKeyPath := filepath.Join(homeDir, "hive", "config", "master.key")
+	masterKeyPath := filepath.Join(cfg.NodeBaseDir(), "config", "master.key")
 	masterKey, err := handlers_iam.LoadMasterKey(masterKeyPath)
 	if err != nil {
 		nc.Close()
@@ -1445,14 +1444,15 @@ func runAccountCreate(cmd *cobra.Command, args []string) {
 	// Configure AWS CLI profile automatically
 	profileName := "hive-" + strings.ToLower(strings.ReplaceAll(name, " ", "-"))
 	homeDir, _ := os.UserHomeDir()
-	certPath := filepath.Join(homeDir, "hive", "config", "ca.pem")
 
 	cfg, nc2, cfgErr := loadConfigAndConnect()
 	if nc2 != nil {
 		nc2.Close()
 	}
 	endpointHost := "localhost"
+	certPath := filepath.Join(homeDir, "hive", "config", "ca.pem")
 	if cfgErr == nil {
+		certPath = filepath.Join(cfg.NodeBaseDir(), "config", "ca.pem")
 		nodeConfig := cfg.Nodes[cfg.Node]
 		host := nodeConfig.AWSGW.Host
 		if h, _, err := net.SplitHostPort(host); err == nil {

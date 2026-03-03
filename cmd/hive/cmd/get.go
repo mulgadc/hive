@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -71,6 +72,13 @@ func loadConfigAndConnect() (*config.ClusterConfig, *nats.Conn, error) {
 	cfg, err := config.LoadConfig(cfgPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Backfill BaseDir from config file path when not set in the config.
+	// Config lives at <baseDir>/config/hive.toml, so baseDir is two levels up.
+	if nodeConfig, ok := cfg.Nodes[cfg.Node]; ok && nodeConfig.BaseDir == "" {
+		nodeConfig.BaseDir = filepath.Dir(filepath.Dir(cfgPath))
+		cfg.Nodes[cfg.Node] = nodeConfig
 	}
 
 	nodeConfig := cfg.Nodes[cfg.Node]
