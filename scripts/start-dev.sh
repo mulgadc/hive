@@ -193,38 +193,36 @@ else
     echo "✈️  Skipping build (pass --build to rebuild)"
 fi
 
-# 0️⃣ Verify OVN networking readiness (required — blocks service startup)
+# 0️⃣ Start OVN networking (required for VPC)
 echo ""
-echo "0️⃣  Checking OVN networking..."
-OVN_OK=true
+echo "0️⃣  Starting OVN networking..."
 
-if ! command -v ovs-vsctl >/dev/null 2>&1; then
+if ! pidof systemd >/dev/null 2>&1; then
+    echo "   ⚠️  No systemd (container?) — skipping OVN lifecycle management"
+elif ! command -v ovs-vsctl >/dev/null 2>&1; then
     echo "   ❌ OVS not installed"
     echo "   Run: make quickinstall && ./scripts/setup-ovn.sh --management"
-    OVN_OK=false
-else
-    if sudo ovs-vsctl br-exists br-int 2>/dev/null; then
-        echo "   ✅ br-int exists"
-    else
-        echo "   ❌ br-int not found"
-        echo "   Run: ./scripts/setup-ovn.sh --management"
-        OVN_OK=false
-    fi
-    if sudo ovs-appctl -t ovn-controller version >/dev/null 2>&1 || systemctl is-active --quiet ovn-controller 2>/dev/null; then
-        echo "   ✅ ovn-controller running"
-    else
-        echo "   ❌ ovn-controller not running"
-        echo "   Run: ./scripts/setup-ovn.sh --management"
-        OVN_OK=false
-    fi
-fi
-
-if [ "$OVN_OK" != "true" ]; then
-    echo ""
-    echo "   ❌ OVN preflight failed — cannot start services without OVN."
-    echo "   OVN is required for VPC networking. Set up OVN first:"
-    echo "     ./scripts/setup-ovn.sh --management"
     exit 1
+else
+    # Start OVS + OVN services (may already be running)
+    sudo systemctl start openvswitch-switch
+    echo "   ✅ openvswitch-switch started"
+
+    # Start ovn-central if this node has it installed and enabled
+    if systemctl list-unit-files ovn-central.service >/dev/null 2>&1 && systemctl is-enabled ovn-central >/dev/null 2>&1; then
+        sudo systemctl start ovn-central
+        echo "   ✅ ovn-central started"
+    fi
+
+    sudo systemctl start ovn-controller
+    echo "   ✅ ovn-controller started"
+
+    # Verify br-int exists (created by setup-ovn.sh)
+    if ! sudo ovs-vsctl br-exists br-int 2>/dev/null; then
+        echo "   ❌ br-int not found — run ./scripts/setup-ovn.sh --management first"
+        exit 1
+    fi
+    echo "   ✅ br-int exists"
 fi
 
 # 1️⃣ Start NATS server

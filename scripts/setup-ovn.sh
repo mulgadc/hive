@@ -109,12 +109,14 @@ install_packages
 echo ""
 echo "Step 2: Enabling services..."
 
-sudo systemctl enable --now openvswitch-switch
-echo "  openvswitch-switch: enabled"
+sudo systemctl enable openvswitch-switch
+sudo systemctl start openvswitch-switch
+echo "  openvswitch-switch: started"
 
 if [ "$MANAGEMENT" = true ]; then
-    sudo systemctl enable --now ovn-central
-    echo "  ovn-central: enabled (NB DB + SB DB + ovn-northd)"
+    sudo systemctl enable ovn-central
+    sudo systemctl start ovn-central
+    echo "  ovn-central: started (NB DB + SB DB + ovn-northd)"
 
     # Allow remote connections to NB and SB databases
     sudo ovn-nbctl set-connection ptcp:6641
@@ -152,8 +154,8 @@ echo "  ovn-encap-type: geneve"
 echo ""
 echo "Step 5: Starting ovn-controller..."
 
-sudo systemctl enable --now ovn-controller
-echo "  ovn-controller: enabled and started"
+sudo systemctl start ovn-controller
+echo "  ovn-controller: started"
 
 # --- Step 6: Sysctl tuning ---
 echo ""
@@ -253,9 +255,19 @@ else
     echo "  sudoers rule: already exists"
 fi
 
-# --- Step 9: Health check ---
+# --- Step 9: Disable auto-start on boot ---
+# start-dev.sh / stop-dev.sh manage the OVN lifecycle. Without hive services
+# running, ovn-controller spins in a tight reconnect loop burning CPU.
 echo ""
-echo "Step 9: Verifying setup..."
+echo "Step 9: Disabling OVN auto-start on boot (start-dev.sh will manage lifecycle)..."
+sudo systemctl disable openvswitch-switch 2>/dev/null || true
+sudo systemctl disable ovn-controller 2>/dev/null || true
+echo "  openvswitch-switch: disabled on boot"
+echo "  ovn-controller: disabled on boot"
+
+# --- Step 10: Health check ---
+echo ""
+echo "Step 10: Verifying setup..."
 
 OK=true
 
