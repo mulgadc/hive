@@ -92,7 +92,7 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() fiber.Handler {
 			slog.Error("IAM lookup failed", "accessKeyID", accessKey, "err", err)
 			return gw.writeSigV4Error(c, awserrors.ErrorInternalError)
 		}
-		if ak.Status != "Active" {
+		if ak.Status != handlers_iam.AccessKeyStatusActive {
 			slog.Debug("Access key inactive", "accessKeyID", accessKey)
 			return gw.writeSigV4Error(c, awserrors.ErrorInvalidClientTokenId)
 		}

@@ -608,31 +608,13 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "Error generating IAM master key: %v\n", err)
 		os.Exit(1)
 	}
-	masterKeyPath := filepath.Join(configDir, "master.key")
-	if err := handlers_iam.SaveMasterKey(masterKeyPath, masterKey); err != nil {
-		fmt.Fprintf(os.Stderr, "Error saving IAM master key: %v\n", err)
+	if err := writeBootstrapFiles(configDir, masterKey, accessKey, secretKey, accountID); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing bootstrap files: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println("\n🔐 Generated IAM master key")
-	fmt.Printf("   Master key: %s\n", masterKeyPath)
-
-	// Encrypt root secret and write bootstrap file
-	encryptedSecret, err := handlers_iam.EncryptSecret(secretKey, masterKey)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error encrypting root secret: %v\n", err)
-		os.Exit(1)
-	}
-	bootstrapPath := filepath.Join(configDir, "bootstrap.json")
-	bootstrapData := &handlers_iam.BootstrapData{
-		AccessKeyID:     accessKey,
-		EncryptedSecret: encryptedSecret,
-		AccountID:       accountID,
-	}
-	if err := handlers_iam.SaveBootstrapData(bootstrapPath, bootstrapData); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing bootstrap file: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("   Bootstrap: %s\n", bootstrapPath)
+	fmt.Printf("   Master key: %s\n", filepath.Join(configDir, "master.key"))
+	fmt.Printf("   Bootstrap: %s\n", filepath.Join(configDir, "bootstrap.json"))
 
 	// Generate SSL certificates (with bind IP in SANs for multi-node support)
 	certPath := admin.GenerateCertificatesIfNeeded(configDir, force, bindIP)
@@ -803,30 +785,12 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		fmt.Fprintf(os.Stderr, "❌ Error generating IAM master key: %v\n", err)
 		os.Exit(1)
 	}
-	masterKeyPath := filepath.Join(configDir, "master.key")
-	if err := handlers_iam.SaveMasterKey(masterKeyPath, masterKey); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Error saving IAM master key: %v\n", err)
+	if err := writeBootstrapFiles(configDir, masterKey, accessKey, secretKey, accountID); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error writing bootstrap files: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println("\n🔐 Generated IAM master key")
-
-	// Encrypt root secret and write bootstrap file
-	encryptedSecret, err := handlers_iam.EncryptSecret(secretKey, masterKey)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Error encrypting root secret: %v\n", err)
-		os.Exit(1)
-	}
-	bootstrapPath := filepath.Join(configDir, "bootstrap.json")
-	bootstrapData := &handlers_iam.BootstrapData{
-		AccessKeyID:     accessKey,
-		EncryptedSecret: encryptedSecret,
-		AccountID:       accountID,
-	}
-	if err := handlers_iam.SaveBootstrapData(bootstrapPath, bootstrapData); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Error writing bootstrap file: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("   Bootstrap: %s\n", bootstrapPath)
+	fmt.Printf("   Bootstrap: %s\n", filepath.Join(configDir, "bootstrap.json"))
 
 	// Read CA cert/key for distribution to joining nodes
 	caCertData, err := os.ReadFile(filepath.Join(configDir, "ca.pem"))
@@ -1190,30 +1154,12 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "❌ Error decoding master key: %v\n", err)
 		os.Exit(1)
 	}
-	masterKeyPath := filepath.Join(configDir, "master.key")
-	if err := handlers_iam.SaveMasterKey(masterKeyPath, masterKeyBytes); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Error saving master key: %v\n", err)
+	if err := writeBootstrapFiles(configDir, masterKeyBytes, creds.AccessKey, creds.SecretKey, creds.AccountID); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error writing bootstrap files: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println("✅ IAM master key received from leader")
-
-	// Encrypt root secret and write bootstrap file
-	encryptedSecret, err := handlers_iam.EncryptSecret(creds.SecretKey, masterKeyBytes)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Error encrypting root secret: %v\n", err)
-		os.Exit(1)
-	}
-	bootstrapPath := filepath.Join(configDir, "bootstrap.json")
-	bootstrapData := &handlers_iam.BootstrapData{
-		AccessKeyID:     creds.AccessKey,
-		EncryptedSecret: encryptedSecret,
-		AccountID:       creds.AccountID,
-	}
-	if err := handlers_iam.SaveBootstrapData(bootstrapPath, bootstrapData); err != nil {
-		fmt.Fprintf(os.Stderr, "❌ Error writing bootstrap file: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("✅ Bootstrap file written: %s\n", bootstrapPath)
+	fmt.Printf("✅ Bootstrap file written: %s\n", filepath.Join(configDir, "bootstrap.json"))
 
 	// Generate server cert signed by CA with this node's bind IP
 	if err := admin.GenerateServerCertOnly(configDir, bindIP); err != nil {
@@ -1521,4 +1467,20 @@ func runAccountList(cmd *cobra.Command, args []string) {
 		}
 		fmt.Printf("%-14s %-20s %-10s %s\n", a.AccountID, a.AccountName, a.Status, created)
 	}
+}
+
+func writeBootstrapFiles(configDir string, masterKey []byte, accessKey, secretKey, accountID string) error {
+	if err := handlers_iam.SaveMasterKey(filepath.Join(configDir, "master.key"), masterKey); err != nil {
+		return fmt.Errorf("saving master key: %w", err)
+	}
+	encryptedSecret, err := handlers_iam.EncryptSecret(secretKey, masterKey)
+	if err != nil {
+		return fmt.Errorf("encrypting root secret: %w", err)
+	}
+	return handlers_iam.SaveBootstrapData(
+		filepath.Join(configDir, "bootstrap.json"),
+		&handlers_iam.BootstrapData{
+			AccessKeyID: accessKey, EncryptedSecret: encryptedSecret, AccountID: accountID,
+		},
+	)
 }

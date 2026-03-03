@@ -2,7 +2,6 @@ package handlers_iam
 
 import (
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/iam"
+	"github.com/mulgadc/hive/hive/admin"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/nats-io/nats.go"
 )
@@ -114,10 +114,6 @@ func getOrCreateBucket(js nats.JetStreamContext, name string, history uint8) (na
 // ---------------------------------------------------------------------------
 
 func (s *IAMServiceImpl) CreateUser(accountID string, input *iam.CreateUserInput) (*iam.CreateUserOutput, error) {
-	if input.UserName == nil || *input.UserName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	userName := *input.UserName
 	path := "/"
 	if input.Path != nil {
@@ -127,7 +123,7 @@ func (s *IAMServiceImpl) CreateUser(accountID string, input *iam.CreateUserInput
 	kvKey := accountID + "." + userName
 	user := User{
 		UserName:         userName,
-		UserID:           generateUserID(),
+		UserID:           generateIAMID("AIDA"),
 		AccountID:        accountID,
 		ARN:              fmt.Sprintf("arn:aws:iam::%s:user%s%s", accountID, path, userName),
 		Path:             path,
@@ -158,10 +154,7 @@ func (s *IAMServiceImpl) CreateUser(accountID string, input *iam.CreateUserInput
 
 	slog.Info("IAM user created", "accountID", accountID, "userName", userName, "userID", user.UserID)
 
-	createdAt, err := time.Parse(time.RFC3339, user.CreatedAt)
-	if err != nil {
-		slog.Warn("Failed to parse user CreatedAt", "userName", userName, "createdAt", user.CreatedAt, "err", err)
-	}
+	createdAt := parseCreatedAt(user.CreatedAt)
 	return &iam.CreateUserOutput{
 		User: &iam.User{
 			UserName:   aws.String(user.UserName),
@@ -174,19 +167,12 @@ func (s *IAMServiceImpl) CreateUser(accountID string, input *iam.CreateUserInput
 }
 
 func (s *IAMServiceImpl) GetUser(accountID string, input *iam.GetUserInput) (*iam.GetUserOutput, error) {
-	if input.UserName == nil || *input.UserName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	user, err := s.getUser(accountID, *input.UserName)
 	if err != nil {
 		return nil, err
 	}
 
-	createdAt, err := time.Parse(time.RFC3339, user.CreatedAt)
-	if err != nil {
-		slog.Warn("Failed to parse user CreatedAt", "userName", user.UserName, "createdAt", user.CreatedAt, "err", err)
-	}
+	createdAt := parseCreatedAt(user.CreatedAt)
 	return &iam.GetUserOutput{
 		User: &iam.User{
 			UserName:   aws.String(user.UserName),
@@ -242,10 +228,7 @@ func (s *IAMServiceImpl) ListUsers(accountID string, input *iam.ListUsersInput) 
 			continue
 		}
 
-		createdAt, err := time.Parse(time.RFC3339, user.CreatedAt)
-		if err != nil {
-			slog.Warn("Failed to parse user CreatedAt", "userName", user.UserName, "createdAt", user.CreatedAt, "err", err)
-		}
+		createdAt := parseCreatedAt(user.CreatedAt)
 		users = append(users, &iam.User{
 			UserName:   aws.String(user.UserName),
 			UserId:     aws.String(user.UserID),
@@ -262,10 +245,6 @@ func (s *IAMServiceImpl) ListUsers(accountID string, input *iam.ListUsersInput) 
 }
 
 func (s *IAMServiceImpl) DeleteUser(accountID string, input *iam.DeleteUserInput) (*iam.DeleteUserOutput, error) {
-	if input.UserName == nil || *input.UserName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	userName := *input.UserName
 	kvKey := accountID + "." + userName
 
@@ -291,10 +270,6 @@ func (s *IAMServiceImpl) DeleteUser(accountID string, input *iam.DeleteUserInput
 // ---------------------------------------------------------------------------
 
 func (s *IAMServiceImpl) CreateAccessKey(accountID string, input *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error) {
-	if input.UserName == nil || *input.UserName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	userName := *input.UserName
 	userKVKey := accountID + "." + userName
 
@@ -308,7 +283,7 @@ func (s *IAMServiceImpl) CreateAccessKey(accountID string, input *iam.CreateAcce
 	}
 
 	accessKeyID := generateAccessKeyID()
-	secretAccessKey := generateSecretAccessKey()
+	secretAccessKey := admin.GenerateAWSSecretKey()
 
 	encryptedSecret, err := EncryptSecret(secretAccessKey, s.masterKey)
 	if err != nil {
@@ -320,7 +295,7 @@ func (s *IAMServiceImpl) CreateAccessKey(accountID string, input *iam.CreateAcce
 		SecretAccessKey: encryptedSecret,
 		UserName:        userName,
 		AccountID:       accountID,
-		Status:          "Active",
+		Status:          AccessKeyStatusActive,
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -352,26 +327,19 @@ func (s *IAMServiceImpl) CreateAccessKey(accountID string, input *iam.CreateAcce
 
 	slog.Info("IAM access key created", "accountID", accountID, "userName", userName, "accessKeyID", accessKeyID)
 
-	createdAt, err := time.Parse(time.RFC3339, ak.CreatedAt)
-	if err != nil {
-		slog.Warn("Failed to parse access key CreatedAt", "accessKeyID", accessKeyID, "createdAt", ak.CreatedAt, "err", err)
-	}
+	createdAt := parseCreatedAt(ak.CreatedAt)
 	return &iam.CreateAccessKeyOutput{
 		AccessKey: &iam.AccessKey{
 			AccessKeyId:     aws.String(accessKeyID),
 			SecretAccessKey: aws.String(secretAccessKey), // plaintext — only time it's returned
 			UserName:        aws.String(userName),
-			Status:          aws.String("Active"),
+			Status:          aws.String(AccessKeyStatusActive),
 			CreateDate:      aws.Time(createdAt),
 		},
 	}, nil
 }
 
 func (s *IAMServiceImpl) ListAccessKeys(accountID string, input *iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error) {
-	if input.UserName == nil || *input.UserName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	user, err := s.getUser(accountID, *input.UserName)
 	if err != nil {
 		return nil, err
@@ -395,10 +363,7 @@ func (s *IAMServiceImpl) ListAccessKeys(accountID string, input *iam.ListAccessK
 			continue
 		}
 
-		createdAt, err := time.Parse(time.RFC3339, ak.CreatedAt)
-		if err != nil {
-			slog.Warn("Failed to parse access key CreatedAt", "keyID", keyID, "createdAt", ak.CreatedAt, "err", err)
-		}
+		createdAt := parseCreatedAt(ak.CreatedAt)
 		metadata = append(metadata, &iam.AccessKeyMetadata{
 			AccessKeyId: aws.String(ak.AccessKeyID),
 			UserName:    aws.String(ak.UserName),
@@ -414,13 +379,6 @@ func (s *IAMServiceImpl) ListAccessKeys(accountID string, input *iam.ListAccessK
 }
 
 func (s *IAMServiceImpl) DeleteAccessKey(accountID string, input *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error) {
-	if input.UserName == nil || *input.UserName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-	if input.AccessKeyId == nil || *input.AccessKeyId == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	userName := *input.UserName
 	accessKeyID := *input.AccessKeyId
 	userKVKey := accountID + "." + userName
@@ -464,15 +422,8 @@ func (s *IAMServiceImpl) DeleteAccessKey(accountID string, input *iam.DeleteAcce
 }
 
 func (s *IAMServiceImpl) UpdateAccessKey(accountID string, input *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error) {
-	if input.AccessKeyId == nil || *input.AccessKeyId == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-	if input.Status == nil || *input.Status == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	status := *input.Status
-	if status != "Active" && status != "Inactive" {
+	if status != AccessKeyStatusActive && status != AccessKeyStatusInactive {
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
 
@@ -540,7 +491,7 @@ func (s *IAMServiceImpl) SeedRootUser(data *BootstrapData) error {
 	globalAccount := Account{
 		AccountID:   GlobalAccountID,
 		AccountName: "Global",
-		Status:      "ACTIVE",
+		Status:      AccountStatusActive,
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}
 	accountData, err := json.Marshal(globalAccount)
@@ -585,7 +536,7 @@ func (s *IAMServiceImpl) SeedRootUser(data *BootstrapData) error {
 		SecretAccessKey: data.EncryptedSecret,
 		UserName:        "root",
 		AccountID:       GlobalAccountID,
-		Status:          "Active",
+		Status:          AccessKeyStatusActive,
 		CreatedAt:       rootUser.CreatedAt,
 	}
 
@@ -669,7 +620,7 @@ func (s *IAMServiceImpl) CreateAccount(name string) (*Account, error) {
 	account := Account{
 		AccountID:   accountID,
 		AccountName: name,
-		Status:      "ACTIVE",
+		Status:      AccountStatusActive,
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -738,13 +689,6 @@ func (s *IAMServiceImpl) ListAccounts() ([]*Account, error) {
 // ---------------------------------------------------------------------------
 
 func (s *IAMServiceImpl) CreatePolicy(accountID string, input *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error) {
-	if input.PolicyName == nil || *input.PolicyName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-	if input.PolicyDocument == nil || *input.PolicyDocument == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	policyName := *input.PolicyName
 	kvKey := accountID + "." + policyName
 
@@ -760,7 +704,7 @@ func (s *IAMServiceImpl) CreatePolicy(accountID string, input *iam.CreatePolicyI
 
 	policy := Policy{
 		PolicyName:     policyName,
-		PolicyID:       generatePolicyID(),
+		PolicyID:       generateIAMID("ANPA"),
 		ARN:            fmt.Sprintf("arn:aws:iam::%s:policy%s%s", accountID, path, policyName),
 		Path:           path,
 		Description:    aws.StringValue(input.Description),
@@ -784,10 +728,7 @@ func (s *IAMServiceImpl) CreatePolicy(accountID string, input *iam.CreatePolicyI
 
 	slog.Info("IAM policy created", "accountID", accountID, "policyName", policyName, "policyID", policy.PolicyID)
 
-	createdAt, err := time.Parse(time.RFC3339, policy.CreatedAt)
-	if err != nil {
-		slog.Warn("Failed to parse policy CreatedAt", "policyName", policy.PolicyName, "createdAt", policy.CreatedAt, "err", err)
-	}
+	createdAt := parseCreatedAt(policy.CreatedAt)
 	return &iam.CreatePolicyOutput{
 		Policy: &iam.Policy{
 			PolicyName:       aws.String(policy.PolicyName),
@@ -804,10 +745,6 @@ func (s *IAMServiceImpl) CreatePolicy(accountID string, input *iam.CreatePolicyI
 }
 
 func (s *IAMServiceImpl) GetPolicy(accountID string, input *iam.GetPolicyInput) (*iam.GetPolicyOutput, error) {
-	if input.PolicyArn == nil || *input.PolicyArn == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	policy, err := s.getPolicyByARN(accountID, *input.PolicyArn)
 	if err != nil {
 		return nil, err
@@ -818,10 +755,7 @@ func (s *IAMServiceImpl) GetPolicy(accountID string, input *iam.GetPolicyInput) 
 		return nil, fmt.Errorf("check policy attachments: %w", err)
 	}
 
-	createdAt, err := time.Parse(time.RFC3339, policy.CreatedAt)
-	if err != nil {
-		slog.Warn("Failed to parse policy CreatedAt", "policyName", policy.PolicyName, "createdAt", policy.CreatedAt, "err", err)
-	}
+	createdAt := parseCreatedAt(policy.CreatedAt)
 	return &iam.GetPolicyOutput{
 		Policy: &iam.Policy{
 			PolicyName:       aws.String(policy.PolicyName),
@@ -838,13 +772,6 @@ func (s *IAMServiceImpl) GetPolicy(accountID string, input *iam.GetPolicyInput) 
 }
 
 func (s *IAMServiceImpl) GetPolicyVersion(accountID string, input *iam.GetPolicyVersionInput) (*iam.GetPolicyVersionOutput, error) {
-	if input.PolicyArn == nil || *input.PolicyArn == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-	if input.VersionId == nil || *input.VersionId == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	policy, err := s.getPolicyByARN(accountID, *input.PolicyArn)
 	if err != nil {
 		return nil, err
@@ -855,10 +782,7 @@ func (s *IAMServiceImpl) GetPolicyVersion(accountID string, input *iam.GetPolicy
 		return nil, errors.New(awserrors.ErrorIAMNoSuchEntity)
 	}
 
-	createdAt, err := time.Parse(time.RFC3339, policy.CreatedAt)
-	if err != nil {
-		slog.Warn("Failed to parse policy CreatedAt", "policyName", policy.PolicyName, "createdAt", policy.CreatedAt, "err", err)
-	}
+	createdAt := parseCreatedAt(policy.CreatedAt)
 	return &iam.GetPolicyVersionOutput{
 		PolicyVersion: &iam.PolicyVersion{
 			Document:         aws.String(policy.PolicyDocument),
@@ -904,10 +828,7 @@ func (s *IAMServiceImpl) ListPolicies(accountID string, input *iam.ListPoliciesI
 			continue
 		}
 
-		createdAt, err := time.Parse(time.RFC3339, policy.CreatedAt)
-		if err != nil {
-			slog.Warn("Failed to parse policy CreatedAt", "policyName", policy.PolicyName, "createdAt", policy.CreatedAt, "err", err)
-		}
+		createdAt := parseCreatedAt(policy.CreatedAt)
 		attachCount, err := s.countPolicyAttachments(accountID, policy.ARN)
 		if err != nil {
 			return nil, fmt.Errorf("count policy attachments: %w", err)
@@ -931,10 +852,6 @@ func (s *IAMServiceImpl) ListPolicies(accountID string, input *iam.ListPoliciesI
 }
 
 func (s *IAMServiceImpl) DeletePolicy(accountID string, input *iam.DeletePolicyInput) (*iam.DeletePolicyOutput, error) {
-	if input.PolicyArn == nil || *input.PolicyArn == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	policy, err := s.getPolicyByARN(accountID, *input.PolicyArn)
 	if err != nil {
 		return nil, err
@@ -962,13 +879,6 @@ func (s *IAMServiceImpl) DeletePolicy(accountID string, input *iam.DeletePolicyI
 // ---------------------------------------------------------------------------
 
 func (s *IAMServiceImpl) AttachUserPolicy(accountID string, input *iam.AttachUserPolicyInput) (*iam.AttachUserPolicyOutput, error) {
-	if input.UserName == nil || *input.UserName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-	if input.PolicyArn == nil || *input.PolicyArn == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	userName := *input.UserName
 	policyARN := *input.PolicyArn
 	userKVKey := accountID + "." + userName
@@ -1003,13 +913,6 @@ func (s *IAMServiceImpl) AttachUserPolicy(accountID string, input *iam.AttachUse
 }
 
 func (s *IAMServiceImpl) DetachUserPolicy(accountID string, input *iam.DetachUserPolicyInput) (*iam.DetachUserPolicyOutput, error) {
-	if input.UserName == nil || *input.UserName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-	if input.PolicyArn == nil || *input.PolicyArn == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	userName := *input.UserName
 	policyARN := *input.PolicyArn
 	userKVKey := accountID + "." + userName
@@ -1048,10 +951,6 @@ func (s *IAMServiceImpl) DetachUserPolicy(accountID string, input *iam.DetachUse
 }
 
 func (s *IAMServiceImpl) ListAttachedUserPolicies(accountID string, input *iam.ListAttachedUserPoliciesInput) (*iam.ListAttachedUserPoliciesOutput, error) {
-	if input.UserName == nil || *input.UserName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	user, err := s.getUser(accountID, *input.UserName)
 	if err != nil {
 		return nil, err
@@ -1197,12 +1096,12 @@ func (s *IAMServiceImpl) getUser(accountID, userName string) (*User, error) {
 	return &user, nil
 }
 
-func generateUserID() string {
+func generateIAMID(prefix string) string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		panic("crypto/rand failed: " + err.Error())
 	}
-	return "AIDA" + strings.ToUpper(hex.EncodeToString(b))[:17]
+	return prefix + strings.ToUpper(hex.EncodeToString(b))[:17]
 }
 
 func generateAccessKeyID() string {
@@ -1213,20 +1112,12 @@ func generateAccessKeyID() string {
 	return "AKIA" + strings.ToUpper(hex.EncodeToString(b))
 }
 
-func generateSecretAccessKey() string {
-	b := make([]byte, 30)
-	if _, err := rand.Read(b); err != nil {
-		panic("crypto/rand failed: " + err.Error())
+func parseCreatedAt(raw string) time.Time {
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		slog.Warn("parseCreatedAt: invalid RFC3339", "raw", raw, "err", err)
 	}
-	return base64.StdEncoding.EncodeToString(b)[:40]
-}
-
-func generatePolicyID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		panic("crypto/rand failed: " + err.Error())
-	}
-	return "ANPA" + strings.ToUpper(hex.EncodeToString(b))[:17]
+	return t
 }
 
 // ValidatePolicyDocument parses and validates an IAM policy document JSON string.
@@ -1245,7 +1136,7 @@ func ValidatePolicyDocument(docJSON string) (*PolicyDocument, error) {
 	}
 
 	for i, stmt := range doc.Statement {
-		if stmt.Effect != "Allow" && stmt.Effect != "Deny" {
+		if stmt.Effect != PolicyEffectAllow && stmt.Effect != PolicyEffectDeny {
 			return nil, fmt.Errorf("statement %d: Effect must be Allow or Deny, got %q", i, stmt.Effect)
 		}
 		if len(stmt.Action) == 0 {

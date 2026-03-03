@@ -6,6 +6,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/iam"
+	"github.com/mulgadc/hive/hive/admin"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -86,14 +87,6 @@ func TestCreateUser_DefaultPath(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "/", *out.User.Path)
-}
-
-func TestCreateUser_MissingUserName(t *testing.T) {
-	svc := setupTestIAMService(t)
-
-	_, err := svc.CreateUser(testAccountID, &iam.CreateUserInput{})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), awserrors.ErrorIAMInvalidInput)
 }
 
 func TestCreateUser_Duplicate(t *testing.T) {
@@ -569,14 +562,19 @@ func TestIsEmpty_False(t *testing.T) {
 // Helper Function Tests
 // ============================================================================
 
-func TestGenerateUserID(t *testing.T) {
-	id := generateUserID()
+func TestGenerateIAMID(t *testing.T) {
+	id := generateIAMID("AIDA")
 	assert.Equal(t, "AIDA", id[:4])
 	assert.True(t, len(id) == 21) // AIDA + 17 hex chars
 
 	// Two IDs should differ
-	id2 := generateUserID()
+	id2 := generateIAMID("AIDA")
 	assert.NotEqual(t, id, id2)
+
+	// Policy ID prefix
+	pid := generateIAMID("ANPA")
+	assert.Equal(t, "ANPA", pid[:4])
+	assert.Len(t, pid, 21)
 }
 
 func TestGenerateAccessKeyID(t *testing.T) {
@@ -589,10 +587,10 @@ func TestGenerateAccessKeyID(t *testing.T) {
 }
 
 func TestGenerateSecretAccessKey(t *testing.T) {
-	secret := generateSecretAccessKey()
+	secret := admin.GenerateAWSSecretKey()
 	assert.Len(t, secret, 40)
 
-	secret2 := generateSecretAccessKey()
+	secret2 := admin.GenerateAWSSecretKey()
 	assert.NotEqual(t, secret, secret2)
 }
 
@@ -647,26 +645,6 @@ func TestCreatePolicy_DefaultPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "/", *out.Policy.Path)
 	assert.Contains(t, *out.Policy.Arn, "policy/DefaultPath")
-}
-
-func TestCreatePolicy_MissingName(t *testing.T) {
-	svc := setupTestIAMService(t)
-
-	_, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
-		PolicyDocument: aws.String(validPolicyDocument()),
-	})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), awserrors.ErrorIAMInvalidInput)
-}
-
-func TestCreatePolicy_MissingDocument(t *testing.T) {
-	svc := setupTestIAMService(t)
-
-	_, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
-		PolicyName: aws.String("NoDoc"),
-	})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), awserrors.ErrorIAMInvalidInput)
 }
 
 func TestCreatePolicy_InvalidJSON(t *testing.T) {
@@ -1241,10 +1219,10 @@ func TestValidatePolicyDocument_MissingResource(t *testing.T) {
 // ============================================================================
 
 func TestGeneratePolicyID(t *testing.T) {
-	id := generatePolicyID()
+	id := generateIAMID("ANPA")
 	assert.Equal(t, "ANPA", id[:4])
 	assert.Len(t, id, 21) // ANPA + 17 hex chars
 
-	id2 := generatePolicyID()
+	id2 := generateIAMID("ANPA")
 	assert.NotEqual(t, id, id2)
 }

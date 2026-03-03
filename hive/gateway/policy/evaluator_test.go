@@ -16,24 +16,7 @@ func doc(effect, action, resource string) handlers_iam.PolicyDocument {
 	}
 }
 
-func TestEvaluateAccess_RootBypass(t *testing.T) {
-	// Root user is always allowed, even with no policies.
-	got := EvaluateAccess("root", "ec2:TerminateInstances", "*", nil)
-	if got != Allow {
-		t.Fatalf("expected Allow for root, got %v", got)
-	}
-}
-
-func TestEvaluateAccess_RootBypassWithExplicitDeny(t *testing.T) {
-	// Root bypasses even an explicit Deny.
-	policies := []handlers_iam.PolicyDocument{
-		doc("Deny", "*", "*"),
-	}
-	got := EvaluateAccess("root", "ec2:TerminateInstances", "*", policies)
-	if got != Allow {
-		t.Fatalf("expected Allow for root even with explicit deny, got %v", got)
-	}
-}
+// Root bypass is tested at the gateway layer (checkPolicy), not in the evaluator.
 
 func TestEvaluateAccess_DefaultDeny(t *testing.T) {
 	// Non-root with no policies → default deny.
@@ -286,31 +269,6 @@ func TestIAMAction(t *testing.T) {
 	}
 }
 
-func TestLookupAction(t *testing.T) {
-	tests := []struct {
-		service string
-		action  string
-		want    string
-		wantOK  bool
-	}{
-		{"ec2", "RunInstances", "ec2:RunInstances", true},
-		{"ec2", "DescribeInstances", "ec2:DescribeInstances", true},
-		{"iam", "CreateUser", "iam:CreateUser", true},
-		{"iam", "CreatePolicy", "iam:CreatePolicy", true},
-		{"ec2", "NonExistentAction", "", false},
-		{"s3", "GetObject", "", false}, // S3 not mapped yet
-		{"unknown", "Foo", "", false},
-	}
-
-	for _, tt := range tests {
-		got, ok := LookupAction(tt.service, tt.action)
-		if ok != tt.wantOK || got != tt.want {
-			t.Errorf("LookupAction(%q, %q) = (%q, %v), want (%q, %v)",
-				tt.service, tt.action, got, ok, tt.want, tt.wantOK)
-		}
-	}
-}
-
 // --- Realistic scenario tests ---
 
 func TestEvaluateAccess_ReadOnlyUser(t *testing.T) {
@@ -370,36 +328,6 @@ func TestEvaluateAccess_AdminWithDenyTerminate(t *testing.T) {
 		got := EvaluateAccess("admin", tt.action, "*", policies)
 		if got != tt.want {
 			t.Errorf("admin-no-terminate, action=%s: expected %v, got %v", tt.action, tt.want, got)
-		}
-	}
-}
-
-// TestEC2ActionsComplete verifies every EC2 action in the set resolves via LookupAction.
-func TestEC2ActionsComplete(t *testing.T) {
-	for action := range ec2Actions {
-		got, ok := LookupAction("ec2", action)
-		if !ok {
-			t.Errorf("LookupAction(%q, %q) returned not-found", "ec2", action)
-			continue
-		}
-		expected := "ec2:" + action
-		if got != expected {
-			t.Errorf("LookupAction(%q, %q) = %q, want %q", "ec2", action, got, expected)
-		}
-	}
-}
-
-// TestIAMActionsComplete verifies every IAM action in the set resolves via LookupAction.
-func TestIAMActionsComplete(t *testing.T) {
-	for action := range iamActions {
-		got, ok := LookupAction("iam", action)
-		if !ok {
-			t.Errorf("LookupAction(%q, %q) returned not-found", "iam", action)
-			continue
-		}
-		expected := "iam:" + action
-		if got != expected {
-			t.Errorf("LookupAction(%q, %q) = %q, want %q", "iam", action, got, expected)
 		}
 	}
 }

@@ -1663,15 +1663,10 @@ func TestCheckPolicy_RootNonGlobalAccount_StillEvaluated(t *testing.T) {
 		t.Fatalf("Failed to test request: %v", err)
 	}
 
-	// root on non-global account evaluates policies.
-	// EvaluateAccess sees identity="root" which is the bypass in policy/evaluator.go,
-	// so this actually passes through the evaluator's root check.
-	// The gateway checkPolicy only bypasses when identity="root" AND accountID=GlobalAccountID.
-	// But the evaluator also has a root bypass. Let's verify the gateway-level behavior.
-	// Since checkPolicy returns nil for root+GlobalAccountID only, and the evaluator
-	// also bypasses root, the request will actually be allowed by the evaluator.
-	if resp.StatusCode != 200 {
+	// root on non-global account is evaluated by the policy engine like any
+	// other user. With no policies attached, the default deny applies.
+	if resp.StatusCode != 403 {
 		body, _ := io.ReadAll(resp.Body)
-		t.Errorf("Expected status 200, got %d, body: %s", resp.StatusCode, string(body))
+		t.Errorf("Expected status 403, got %d, body: %s", resp.StatusCode, string(body))
 	}
 }
