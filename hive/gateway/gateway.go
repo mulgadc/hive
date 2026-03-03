@@ -205,12 +205,7 @@ func (gw *GatewayConfig) checkPolicy(ctx *fiber.Ctx, service, action string) err
 	}
 
 	// Resolve the IAM action string (e.g. "ec2:RunInstances")
-	iamAction, ok := policy.LookupAction(service, action)
-	if !ok {
-		// Action not in mapping table — construct it directly so wildcard
-		// policies (e.g. "ec2:*") still match.
-		iamAction = policy.IAMAction(service, action)
-	}
+	iamAction := policy.IAMAction(service, action)
 
 	policies, err := gw.IAMService.GetUserPolicies(accountID, identity)
 	if err != nil {
