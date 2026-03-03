@@ -32,7 +32,7 @@ func ValidateCopySnapshotInput(input *ec2.CopySnapshotInput) error {
 }
 
 // CopySnapshot handles the EC2 CopySnapshot API call
-func CopySnapshot(input *ec2.CopySnapshotInput, natsConn *nats.Conn) (ec2.CopySnapshotOutput, error) {
+func CopySnapshot(input *ec2.CopySnapshotInput, natsConn *nats.Conn, accountID string) (ec2.CopySnapshotOutput, error) {
 	var output ec2.CopySnapshotOutput
 
 	if err := ValidateCopySnapshotInput(input); err != nil {
@@ -40,7 +40,7 @@ func CopySnapshot(input *ec2.CopySnapshotInput, natsConn *nats.Conn) (ec2.CopySn
 	}
 
 	svc := handlers_ec2_snapshot.NewNATSSnapshotService(natsConn)
-	result, err := svc.CopySnapshot(input)
+	result, err := svc.CopySnapshot(input, accountID)
 	if err != nil {
 		return output, err
 	}

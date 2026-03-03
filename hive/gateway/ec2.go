@@ -158,16 +158,16 @@ var ec2Actions = map[string]EC2Handler{
 		return gateway_ec2_tags.DescribeTags(input, gw.NATSConn)
 	}),
 	"CreateSnapshot": ec2Handler(func(input *ec2.CreateSnapshotInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_snapshot.CreateSnapshot(input, gw.NATSConn)
+		return gateway_ec2_snapshot.CreateSnapshot(input, gw.NATSConn, accountID)
 	}),
 	"DeleteSnapshot": ec2Handler(func(input *ec2.DeleteSnapshotInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_snapshot.DeleteSnapshot(input, gw.NATSConn)
+		return gateway_ec2_snapshot.DeleteSnapshot(input, gw.NATSConn, accountID)
 	}),
 	"DescribeSnapshots": ec2Handler(func(input *ec2.DescribeSnapshotsInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_snapshot.DescribeSnapshots(input, gw.NATSConn)
+		return gateway_ec2_snapshot.DescribeSnapshots(input, gw.NATSConn, accountID)
 	}),
 	"CopySnapshot": ec2Handler(func(input *ec2.CopySnapshotInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_snapshot.CopySnapshot(input, gw.NATSConn)
+		return gateway_ec2_snapshot.CopySnapshot(input, gw.NATSConn, accountID)
 	}),
 	"CreateInternetGateway": ec2Handler(func(input *ec2.CreateInternetGatewayInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_igw.CreateInternetGateway(input, gw.NATSConn)
