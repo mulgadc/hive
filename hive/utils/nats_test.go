@@ -188,3 +188,90 @@ func TestNATSRequest_InvalidUnmarshal(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unmarshal")
 }
+
+// --- NATSRequestWithAccount tests ---
+
+func TestNATSRequestWithAccount_Success(t *testing.T) {
+	ns := startTestNATSServer(t)
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	defer nc.Close()
+
+	type Req struct {
+		Name string `json:"name"`
+	}
+	type Resp struct {
+		Greeting  string `json:"greeting"`
+		AccountID string `json:"account_id"`
+	}
+
+	// Responder echoes back the account ID from the header
+	_, err = nc.Subscribe("test.account", func(msg *nats.Msg) {
+		var req Req
+		json.Unmarshal(msg.Data, &req)
+		acct := AccountIDFromMsg(msg)
+		resp := Resp{Greeting: "hello " + req.Name, AccountID: acct}
+		data, _ := json.Marshal(resp)
+		msg.Respond(data)
+	})
+	require.NoError(t, err)
+
+	result, err := NATSRequestWithAccount[Resp](nc, "test.account", Req{Name: "world"}, 2*time.Second, "111122223333")
+	require.NoError(t, err)
+	assert.Equal(t, "hello world", result.Greeting)
+	assert.Equal(t, "111122223333", result.AccountID)
+}
+
+func TestNATSRequestWithAccount_ErrorResponse(t *testing.T) {
+	ns := startTestNATSServer(t)
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	defer nc.Close()
+
+	_, err = nc.Subscribe("test.account.fail", func(msg *nats.Msg) {
+		msg.Respond(GenerateErrorPayload("InvalidParameterValue"))
+	})
+	require.NoError(t, err)
+
+	type Resp struct{}
+	_, err = NATSRequestWithAccount[Resp](nc, "test.account.fail", struct{}{}, 2*time.Second, "111122223333")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidParameterValue")
+}
+
+func TestNATSRequestWithAccount_NoResponders(t *testing.T) {
+	ns := startTestNATSServer(t)
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	defer nc.Close()
+
+	type Resp struct{}
+	_, err = NATSRequestWithAccount[Resp](nc, "test.account.nobody", struct{}{}, 500*time.Millisecond, "111122223333")
+	assert.Error(t, err)
+}
+
+// --- AccountIDFromMsg tests ---
+
+func TestAccountIDFromMsg(t *testing.T) {
+	msg := nats.NewMsg("test")
+	msg.Header.Set(AccountIDHeader, "444455556666")
+
+	assert.Equal(t, "444455556666", AccountIDFromMsg(msg))
+}
+
+func TestAccountIDFromMsg_Missing(t *testing.T) {
+	msg := nats.NewMsg("test")
+	assert.Equal(t, "", AccountIDFromMsg(msg))
+}
+
+func TestAccountIDFromMsg_NilMsg(t *testing.T) {
+	assert.Equal(t, "", AccountIDFromMsg(nil))
+}
+
+func TestAccountIDFromMsg_NilHeader(t *testing.T) {
+	msg := &nats.Msg{Subject: "test"}
+	assert.Equal(t, "", AccountIDFromMsg(msg))
+}
