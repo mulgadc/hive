@@ -37,7 +37,7 @@ func ModifyVolume(input *ec2.ModifyVolumeInput, natsConn *nats.Conn, accountID s
 	}
 
 	volumeService := handlers_ec2_volume.NewNATSVolumeService(natsConn)
-	result, err := volumeService.ModifyVolume(accountID, input)
+	result, err := volumeService.ModifyVolume(input, accountID)
 
 	if err != nil {
 		return output, err

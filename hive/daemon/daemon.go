@@ -1359,9 +1359,9 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 					// DeleteVolume handles: NATS ebs.delete notification + S3 cleanup
 					// (including -efi/ and -cloudinit/ sub-prefixes)
 					slog.Info("Deleting volume with DeleteOnTermination=true", "name", ebsRequest.Name, "id", instance.ID)
-					_, err := d.volumeService.DeleteVolume(instance.AccountID, &ec2.DeleteVolumeInput{
+					_, err := d.volumeService.DeleteVolume(&ec2.DeleteVolumeInput{
 						VolumeId: &ebsRequest.Name,
-					})
+					}, instance.AccountID)
 					if err != nil {
 						slog.Error("Failed to delete volume on termination", "name", ebsRequest.Name, "id", instance.ID, "err", err)
 					} else {

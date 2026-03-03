@@ -33,7 +33,7 @@ func DeleteVolume(input *ec2.DeleteVolumeInput, natsConn *nats.Conn, accountID s
 	}
 
 	volumeService := handlers_ec2_volume.NewNATSVolumeService(natsConn)
-	result, err := volumeService.DeleteVolume(accountID, input)
+	result, err := volumeService.DeleteVolume(input, accountID)
 
 	if err != nil {
 		return output, err

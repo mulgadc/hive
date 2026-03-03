@@ -69,7 +69,7 @@ func RunInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn, accountID s
 	service := handlers_ec2_instance.NewNATSInstanceService(natsConn)
 
 	// Call the service directly (no need for JSON marshaling/unmarshaling in same process)
-	reservationPtr, err := service.RunInstances(accountID, input)
+	reservationPtr, err := service.RunInstances(input, accountID)
 	if err != nil {
 		if errors.Is(err, nats.ErrNoResponders) {
 			// ErrNoResponders means no daemon subscribes to ec2.RunInstances.{type}.

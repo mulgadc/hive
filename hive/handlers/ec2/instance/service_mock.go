@@ -13,7 +13,7 @@ func NewMockInstanceService() InstanceService {
 	return &MockInstanceService{}
 }
 
-func (s *MockInstanceService) RunInstances(accountID string, input *ec2.RunInstancesInput) (*ec2.Reservation, error) {
+func (s *MockInstanceService) RunInstances(input *ec2.RunInstancesInput, accountID string) (*ec2.Reservation, error) {
 	instance := &ec2.Instance{
 		InstanceId: aws.String("i-0123456789abcdef0"),
 		State: &ec2.InstanceState{
@@ -28,7 +28,7 @@ func (s *MockInstanceService) RunInstances(accountID string, input *ec2.RunInsta
 
 	reservation := &ec2.Reservation{
 		Instances: []*ec2.Instance{instance},
-		OwnerId:   aws.String("123456789012"),
+		OwnerId:   aws.String(accountID),
 	}
 
 	return reservation, nil

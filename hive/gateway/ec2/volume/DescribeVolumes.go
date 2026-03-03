@@ -40,7 +40,7 @@ func DescribeVolumes(input *ec2.DescribeVolumesInput, natsConn *nats.Conn, accou
 
 	// Create NATS service and call handler
 	volumeService := handlers_ec2_volume.NewNATSVolumeService(natsConn)
-	result, err := volumeService.DescribeVolumes(accountID, input)
+	result, err := volumeService.DescribeVolumes(input, accountID)
 
 	if err != nil {
 		return output, err

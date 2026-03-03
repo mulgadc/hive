@@ -20,7 +20,7 @@ func NewNATSInstanceService(conn *nats.Conn) InstanceService {
 	return &NATSInstanceService{natsConn: conn}
 }
 
-func (s *NATSInstanceService) RunInstances(accountID string, input *ec2.RunInstancesInput) (*ec2.Reservation, error) {
+func (s *NATSInstanceService) RunInstances(input *ec2.RunInstancesInput, accountID string) (*ec2.Reservation, error) {
 	if input == nil || input.InstanceType == nil {
 		return nil, fmt.Errorf("instance type is required")
 	}

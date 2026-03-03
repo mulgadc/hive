@@ -76,7 +76,7 @@ func NewVolumeServiceImplWithStore(cfg *config.Config, store objectstore.ObjectS
 }
 
 // CreateVolume creates a new EBS volume via viperblock and persists its config to S3
-func (s *VolumeServiceImpl) CreateVolume(accountID string, input *ec2.CreateVolumeInput) (*ec2.Volume, error) {
+func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput, accountID string) (*ec2.Volume, error) {
 	if input == nil {
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
@@ -224,7 +224,7 @@ func (s *VolumeServiceImpl) CreateVolume(accountID string, input *ec2.CreateVolu
 }
 
 // DescribeVolumes lists EBS volumes by reading config.json files from S3
-func (s *VolumeServiceImpl) DescribeVolumes(accountID string, input *ec2.DescribeVolumesInput) (*ec2.DescribeVolumesOutput, error) {
+func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput, accountID string) (*ec2.DescribeVolumesOutput, error) {
 	if input == nil {
 		input = &ec2.DescribeVolumesInput{}
 	}
@@ -281,7 +281,7 @@ func (s *VolumeServiceImpl) DescribeVolumes(accountID string, input *ec2.Describ
 }
 
 // DescribeVolumeStatus returns the status of one or more EBS volumes
-func (s *VolumeServiceImpl) DescribeVolumeStatus(accountID string, input *ec2.DescribeVolumeStatusInput) (*ec2.DescribeVolumeStatusOutput, error) {
+func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatusInput, accountID string) (*ec2.DescribeVolumeStatusOutput, error) {
 	if input == nil {
 		input = &ec2.DescribeVolumeStatusInput{}
 	}
@@ -653,7 +653,7 @@ func (s *VolumeServiceImpl) UpdateVolumeState(volumeID, state, attachedInstance,
 }
 
 // ModifyVolume modifies an EBS volume (grow-only, requires stopped instance)
-func (s *VolumeServiceImpl) ModifyVolume(accountID string, input *ec2.ModifyVolumeInput) (*ec2.ModifyVolumeOutput, error) {
+func (s *VolumeServiceImpl) ModifyVolume(input *ec2.ModifyVolumeInput, accountID string) (*ec2.ModifyVolumeOutput, error) {
 	if input.VolumeId == nil || *input.VolumeId == "" {
 		return nil, errors.New(awserrors.ErrorInvalidVolumeIDMalformed)
 	}
@@ -741,7 +741,7 @@ func (s *VolumeServiceImpl) ModifyVolume(accountID string, input *ec2.ModifyVolu
 }
 
 // DeleteVolume deletes an EBS volume: validates state, notifies viperblockd, and removes S3 data
-func (s *VolumeServiceImpl) DeleteVolume(accountID string, input *ec2.DeleteVolumeInput) (*ec2.DeleteVolumeOutput, error) {
+func (s *VolumeServiceImpl) DeleteVolume(input *ec2.DeleteVolumeInput, accountID string) (*ec2.DeleteVolumeOutput, error) {
 	if input == nil || input.VolumeId == nil || *input.VolumeId == "" {
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}

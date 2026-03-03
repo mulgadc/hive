@@ -44,9 +44,9 @@ func DetachVolume(input *ec2.DetachVolumeInput, natsConn *nats.Conn, accountID s
 		instanceID = *input.InstanceId
 	} else {
 		volSvc := handlers_ec2_volume.NewNATSVolumeService(natsConn)
-		descOutput, err := volSvc.DescribeVolumes(accountID, &ec2.DescribeVolumesInput{
+		descOutput, err := volSvc.DescribeVolumes(&ec2.DescribeVolumesInput{
 			VolumeIds: []*string{&volumeID},
-		})
+		}, accountID)
 		if err != nil {
 			slog.Error("DetachVolume: failed to describe volume", "volumeId", volumeID, "err", err)
 			return output, errors.New(awserrors.ErrorInvalidVolumeNotFound)

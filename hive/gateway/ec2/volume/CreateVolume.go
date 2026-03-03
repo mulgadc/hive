@@ -41,7 +41,7 @@ func CreateVolume(input *ec2.CreateVolumeInput, natsConn *nats.Conn, accountID s
 	}
 
 	volumeService := handlers_ec2_volume.NewNATSVolumeService(natsConn)
-	result, err := volumeService.CreateVolume(accountID, input)
+	result, err := volumeService.CreateVolume(input, accountID)
 
 	if err != nil {
 		return output, err

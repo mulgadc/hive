@@ -36,7 +36,7 @@ func DescribeVolumeStatus(input *ec2.DescribeVolumeStatusInput, natsConn *nats.C
 	}
 
 	volumeService := handlers_ec2_volume.NewNATSVolumeService(natsConn)
-	result, err := volumeService.DescribeVolumeStatus(accountID, input)
+	result, err := volumeService.DescribeVolumeStatus(input, accountID)
 	if err != nil {
 		return output, err
 	}
