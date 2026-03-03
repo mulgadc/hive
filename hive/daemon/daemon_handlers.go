@@ -50,6 +50,15 @@ func handleNATSRequest[I any, O any](msg *nats.Msg, serviceFn func(*I) (*O, erro
 	}
 }
 
+// handleNATSRequestWithAccount is like handleNATSRequest but extracts the account ID
+// from the NATS message header and passes it to the service function.
+func handleNATSRequestWithAccount[I any, O any](msg *nats.Msg, serviceFn func(*I, string) (*O, error)) {
+	accountID := utils.AccountIDFromMsg(msg)
+	handleNATSRequest(msg, func(input *I) (*O, error) {
+		return serviceFn(input, accountID)
+	})
+}
+
 // handleEC2Events processes incoming EC2 instance events (start, stop, terminate, attach-volume)
 func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 	var command qmp.Command

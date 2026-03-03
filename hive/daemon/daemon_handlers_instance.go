@@ -72,7 +72,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 
 	// Validate key pair exists (if specified)
 	if runInstancesInput.KeyName != nil && *runInstancesInput.KeyName != "" {
-		if err := d.keyService.ValidateKeyPairExists(*runInstancesInput.KeyName); err != nil {
+		if err := d.keyService.ValidateKeyPairExists(accountID, *runInstancesInput.KeyName); err != nil {
 			slog.Error("handleEC2RunInstances key pair not found", "keyName", *runInstancesInput.KeyName, "err", err)
 			respondWithError(msg, awserrors.ErrorInvalidKeyPairNotFound)
 			return

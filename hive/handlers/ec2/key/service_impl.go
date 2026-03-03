@@ -33,7 +33,6 @@ type KeyServiceImpl struct {
 	config     *config.Config
 	store      objectstore.ObjectStore
 	bucketName string
-	accountID  string // AWS account ID for S3 key storage path
 }
 
 // NewKeyServiceImpl creates a new daemon-side key service
@@ -49,21 +48,19 @@ func NewKeyServiceImpl(cfg *config.Config) *KeyServiceImpl {
 		config:     cfg,
 		store:      store,
 		bucketName: cfg.Predastore.Bucket,
-		accountID:  "123456789", // TODO: Implement proper account ID management
 	}
 }
 
 // NewKeyServiceImplWithStore creates a key service with a custom object store (for testing)
-func NewKeyServiceImplWithStore(store objectstore.ObjectStore, bucketName, accountID string) *KeyServiceImpl {
+func NewKeyServiceImplWithStore(store objectstore.ObjectStore, bucketName string) *KeyServiceImpl {
 	return &KeyServiceImpl{
 		store:      store,
 		bucketName: bucketName,
-		accountID:  accountID,
 	}
 }
 
 // CreateKeyPair generates a new SSH key pair using ssh-keygen
-func (s *KeyServiceImpl) CreateKeyPair(input *ec2.CreateKeyPairInput) (*ec2.CreateKeyPairOutput, error) {
+func (s *KeyServiceImpl) CreateKeyPair(input *ec2.CreateKeyPairInput, accountID string) (*ec2.CreateKeyPairOutput, error) {
 	if input == nil || input.KeyName == nil {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
@@ -78,7 +75,7 @@ func (s *KeyServiceImpl) CreateKeyPair(input *ec2.CreateKeyPairInput) (*ec2.Crea
 	}
 
 	// Check if key already exists in S3
-	keyPath := fmt.Sprintf("keys/%s/%s", s.accountID, keyName)
+	keyPath := fmt.Sprintf("keys/%s/%s", accountID, keyName)
 	_, err := s.store.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(keyPath),
@@ -174,7 +171,7 @@ func (s *KeyServiceImpl) CreateKeyPair(input *ec2.CreateKeyPairInput) (*ec2.Crea
 	}
 
 	// Store metadata file (CreateKeyPairOutput without KeyMaterial) for keyPairId lookups
-	err = s.storeKeyPairMetadata(keyPairID, &ec2.CreateKeyPairOutput{
+	err = s.storeKeyPairMetadata(accountID, keyPairID, &ec2.CreateKeyPairOutput{
 		KeyFingerprint: aws.String(fingerprint),
 		KeyName:        aws.String(keyName),
 		KeyPairId:      aws.String(keyPairID),
@@ -237,9 +234,9 @@ func formatFingerprint(hash []byte, algorithm string) string {
 }
 
 // storeKeyPairMetadata stores key pair metadata (without private key) to S3 for keyPairId lookups
-func (s *KeyServiceImpl) storeKeyPairMetadata(keyPairID string, metadata *ec2.CreateKeyPairOutput) error {
+func (s *KeyServiceImpl) storeKeyPairMetadata(accountID, keyPairID string, metadata *ec2.CreateKeyPairOutput) error {
 	// Store metadata with keyPairId as filename for efficient lookup when keyPairId is provided
-	metadataPath := fmt.Sprintf("keys/%s/%s.json", s.accountID, keyPairID)
+	metadataPath := fmt.Sprintf("keys/%s/%s.json", accountID, keyPairID)
 
 	// Marshal metadata to JSON
 	jsonData, err := json.Marshal(metadata)
@@ -261,8 +258,8 @@ func (s *KeyServiceImpl) storeKeyPairMetadata(keyPairID string, metadata *ec2.Cr
 }
 
 // getKeyNameFromKeyPairId retrieves the key name by directly reading the metadata file for a given keyPairId
-func (s *KeyServiceImpl) getKeyNameFromKeyPairId(keyPairID string) (string, error) {
-	metadataPath := fmt.Sprintf("keys/%s/%s.json", s.accountID, keyPairID)
+func (s *KeyServiceImpl) getKeyNameFromKeyPairId(accountID, keyPairID string) (string, error) {
+	metadataPath := fmt.Sprintf("keys/%s/%s.json", accountID, keyPairID)
 
 	// Get metadata from S3
 	result, err := s.store.GetObject(&s3.GetObjectInput{
@@ -300,8 +297,8 @@ func (s *KeyServiceImpl) getKeyNameFromKeyPairId(keyPairID string) (string, erro
 }
 
 // findKeyPairIdFromKeyName finds the keyPairId by searching metadata files for a given keyName
-func (s *KeyServiceImpl) findKeyPairIdFromKeyName(keyName string) (string, error) {
-	prefix := fmt.Sprintf("keys/%s/", s.accountID)
+func (s *KeyServiceImpl) findKeyPairIdFromKeyName(accountID, keyName string) (string, error) {
+	prefix := fmt.Sprintf("keys/%s/", accountID)
 
 	// List all objects with the keys prefix
 	result, err := s.store.ListObjects(&s3.ListObjectsInput{
@@ -364,13 +361,13 @@ func (s *KeyServiceImpl) findKeyPairIdFromKeyName(keyName string) (string, error
 
 // ValidateKeyPairExists checks if a key pair with the given name exists.
 // Returns nil if the key pair exists, or an error with ErrorInvalidKeyPairNotFound if not.
-func (s *KeyServiceImpl) ValidateKeyPairExists(keyName string) error {
-	_, err := s.findKeyPairIdFromKeyName(keyName)
+func (s *KeyServiceImpl) ValidateKeyPairExists(accountID, keyName string) error {
+	_, err := s.findKeyPairIdFromKeyName(accountID, keyName)
 	return err
 }
 
 // DeleteKeyPair removes a key pair (both public key and metadata from S3)
-func (s *KeyServiceImpl) DeleteKeyPair(input *ec2.DeleteKeyPairInput) (*ec2.DeleteKeyPairOutput, error) {
+func (s *KeyServiceImpl) DeleteKeyPair(input *ec2.DeleteKeyPairInput, accountID string) (*ec2.DeleteKeyPairOutput, error) {
 	if input == nil {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
@@ -391,7 +388,7 @@ func (s *KeyServiceImpl) DeleteKeyPair(input *ec2.DeleteKeyPairInput) (*ec2.Dele
 			return nil, errors.New(awserrors.ErrorInvalidKeyPairFormat)
 		}
 
-		keyName, err = s.getKeyNameFromKeyPairId(keyPairID)
+		keyName, err = s.getKeyNameFromKeyPairId(accountID, keyPairID)
 		if err != nil {
 			// AWS DeleteKeyPair is idempotent — return success for non-existent keys
 			if err.Error() == awserrors.ErrorInvalidKeyPairNotFound {
@@ -411,7 +408,7 @@ func (s *KeyServiceImpl) DeleteKeyPair(input *ec2.DeleteKeyPairInput) (*ec2.Dele
 			return nil, errors.New(awserrors.ErrorInvalidKeyPairFormat)
 		}
 
-		keyPairID, err = s.findKeyPairIdFromKeyName(keyName)
+		keyPairID, err = s.findKeyPairIdFromKeyName(accountID, keyName)
 		if err != nil {
 			// AWS DeleteKeyPair is idempotent — return success for non-existent keys
 			if err.Error() == awserrors.ErrorInvalidKeyPairNotFound {
@@ -428,7 +425,7 @@ func (s *KeyServiceImpl) DeleteKeyPair(input *ec2.DeleteKeyPairInput) (*ec2.Dele
 	slog.Info("Deleting key pair", "keyName", keyName, "keyPairId", keyPairID)
 
 	// Delete public key
-	publicKeyPath := fmt.Sprintf("keys/%s/%s", s.accountID, keyName)
+	publicKeyPath := fmt.Sprintf("keys/%s/%s", accountID, keyName)
 	_, err = s.store.DeleteObject(&s3.DeleteObjectInput{
 		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(publicKeyPath),
@@ -439,7 +436,7 @@ func (s *KeyServiceImpl) DeleteKeyPair(input *ec2.DeleteKeyPairInput) (*ec2.Dele
 	}
 
 	// Delete metadata file (stored with keyPairID)
-	metadataPath := fmt.Sprintf("keys/%s/%s.json", s.accountID, keyPairID)
+	metadataPath := fmt.Sprintf("keys/%s/%s.json", accountID, keyPairID)
 	_, err = s.store.DeleteObject(&s3.DeleteObjectInput{
 		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(metadataPath),
@@ -455,14 +452,14 @@ func (s *KeyServiceImpl) DeleteKeyPair(input *ec2.DeleteKeyPairInput) (*ec2.Dele
 }
 
 // DescribeKeyPairs lists available key pairs by reading metadata files from S3
-func (s *KeyServiceImpl) DescribeKeyPairs(input *ec2.DescribeKeyPairsInput) (*ec2.DescribeKeyPairsOutput, error) {
+func (s *KeyServiceImpl) DescribeKeyPairs(input *ec2.DescribeKeyPairsInput, accountID string) (*ec2.DescribeKeyPairsOutput, error) {
 	if input == nil {
 		input = &ec2.DescribeKeyPairsInput{}
 	}
 
 	slog.Info("Describing key pairs", "filters", input.Filters)
 
-	prefix := fmt.Sprintf("keys/%s/", s.accountID)
+	prefix := fmt.Sprintf("keys/%s/", accountID)
 
 	// List all objects with the keys prefix
 	result, err := s.store.ListObjects(&s3.ListObjectsInput{
@@ -574,7 +571,7 @@ func (s *KeyServiceImpl) DescribeKeyPairs(input *ec2.DescribeKeyPairsInput) (*ec
 }
 
 // ImportKeyPair imports an existing public key
-func (s *KeyServiceImpl) ImportKeyPair(input *ec2.ImportKeyPairInput) (*ec2.ImportKeyPairOutput, error) {
+func (s *KeyServiceImpl) ImportKeyPair(input *ec2.ImportKeyPairInput, accountID string) (*ec2.ImportKeyPairOutput, error) {
 	if input == nil || input.KeyName == nil {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
@@ -593,7 +590,7 @@ func (s *KeyServiceImpl) ImportKeyPair(input *ec2.ImportKeyPairInput) (*ec2.Impo
 	}
 
 	// Check if key already exists in S3
-	keyPath := fmt.Sprintf("keys/%s/%s", s.accountID, keyName)
+	keyPath := fmt.Sprintf("keys/%s/%s", accountID, keyName)
 	_, err := s.store.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(s.bucketName),
 		Key:    aws.String(keyPath),
@@ -674,7 +671,7 @@ func (s *KeyServiceImpl) ImportKeyPair(input *ec2.ImportKeyPairInput) (*ec2.Impo
 		KeyPairId:      aws.String(keyPairID),
 	}
 
-	err = s.storeKeyPairMetadata(keyPairID, metadataOutput)
+	err = s.storeKeyPairMetadata(accountID, keyPairID, metadataOutput)
 	if err != nil {
 		slog.Error("Failed to store key pair metadata", "err", err, "keyPairId", keyPairID)
 		// Try to cleanup the public key we just uploaded

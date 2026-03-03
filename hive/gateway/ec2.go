@@ -77,13 +77,13 @@ var ec2Actions = map[string]EC2Handler{
 		return gateway_ec2_instance.ModifyInstanceAttribute(input, gw.NATSConn, accountID)
 	}),
 	"CreateKeyPair": ec2Handler(func(input *ec2.CreateKeyPairInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_key.CreateKeyPair(input, gw.NATSConn)
+		return gateway_ec2_key.CreateKeyPair(input, gw.NATSConn, accountID)
 	}),
 	"DeleteKeyPair": ec2Handler(func(input *ec2.DeleteKeyPairInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_key.DeleteKeyPair(input, gw.NATSConn)
+		return gateway_ec2_key.DeleteKeyPair(input, gw.NATSConn, accountID)
 	}),
 	"DescribeKeyPairs": ec2Handler(func(input *ec2.DescribeKeyPairsInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_key.DescribeKeyPairs(input, gw.NATSConn)
+		return gateway_ec2_key.DescribeKeyPairs(input, gw.NATSConn, accountID)
 	}),
 	"ImportKeyPair": func(action string, q map[string]string, gw *GatewayConfig, accountID string) ([]byte, error) {
 		// Workaround: parser leaves Base64 padding URL-encoded
@@ -91,7 +91,7 @@ var ec2Actions = map[string]EC2Handler{
 			q["PublicKeyMaterial"] = strings.Replace(q["PublicKeyMaterial"], "%3D%3D", "==", 1)
 		}
 		return ec2Handler(func(input *ec2.ImportKeyPairInput, gw *GatewayConfig, accountID string) (any, error) {
-			return gateway_ec2_key.ImportKeyPair(input, gw.NATSConn)
+			return gateway_ec2_key.ImportKeyPair(input, gw.NATSConn, accountID)
 		})(action, q, gw, accountID)
 	},
 	"DescribeImages": ec2Handler(func(input *ec2.DescribeImagesInput, gw *GatewayConfig, accountID string) (any, error) {

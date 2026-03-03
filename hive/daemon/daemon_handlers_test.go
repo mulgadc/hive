@@ -53,7 +53,7 @@ func createFullTestDaemonWithStore(t *testing.T, natsURL string) (*Daemon, *obje
 	memStore := objectstore.NewMemoryObjectStore()
 	cfg := daemon.config
 
-	daemon.keyService = handlers_ec2_key.NewKeyServiceImplWithStore(memStore, cfg.Predastore.Bucket, "123456789")
+	daemon.keyService = handlers_ec2_key.NewKeyServiceImplWithStore(memStore, cfg.Predastore.Bucket)
 	daemon.imageService = handlers_ec2_image.NewImageServiceImplWithStore(memStore, cfg.Predastore.Bucket, "123456789")
 	daemon.volumeService = handlers_ec2_volume.NewVolumeServiceImplWithStore(cfg, memStore, daemon.natsConn)
 	daemon.snapshotService = handlers_ec2_snapshot.NewSnapshotServiceImplWithStore(cfg, memStore, daemon.natsConn)
@@ -216,7 +216,7 @@ func TestHandleEC2CreateKeyPair_RoundTrip(t *testing.T) {
 		KeyName: aws.String("test-key-001"),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.CreateKeyPair", reqData, 5*time.Second)
+	reply, err := natsRequestWithAccount(daemon.natsConn, "ec2.CreateKeyPair", reqData, 5*time.Second)
 	require.NoError(t, err)
 	require.NotNil(t, reply)
 
@@ -304,7 +304,7 @@ func TestHandleEC2DescribeKeyPairs_RoundTrip(t *testing.T) {
 
 	input := &ec2.DescribeKeyPairsInput{}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.DescribeKeyPairs", reqData, 5*time.Second)
+	reply, err := natsRequestWithAccount(daemon.natsConn, "ec2.DescribeKeyPairs", reqData, 5*time.Second)
 	require.NoError(t, err)
 	require.NotNil(t, reply)
 
@@ -435,7 +435,7 @@ func TestHandleEC2RunInstances_ValidKeyPairPassesValidation(t *testing.T) {
 	bucket := daemon.config.Predastore.Bucket
 	_, err := memStore.PutObject(&awss3.PutObjectInput{
 		Bucket: aws.String(bucket),
-		Key:    aws.String("keys/123456789/my-key"),
+		Key:    aws.String("keys/" + testAccountID + "/my-key"),
 		Body:   strings.NewReader("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest"),
 	})
 	require.NoError(t, err)
@@ -443,7 +443,7 @@ func TestHandleEC2RunInstances_ValidKeyPairPassesValidation(t *testing.T) {
 	metadataJSON := `{"KeyPairId":"key-abc123","KeyName":"my-key","KeyFingerprint":"SHA256:test"}`
 	_, err = memStore.PutObject(&awss3.PutObjectInput{
 		Bucket: aws.String(bucket),
-		Key:    aws.String("keys/123456789/key-abc123.json"),
+		Key:    aws.String("keys/" + testAccountID + "/key-abc123.json"),
 		Body:   strings.NewReader(metadataJSON),
 	})
 	require.NoError(t, err)
@@ -1864,7 +1864,7 @@ func TestDelegateHandlers_RoundTrip(t *testing.T) {
 			reqData, err := json.Marshal(tt.input)
 			require.NoError(t, err)
 
-			reply, err := daemon.natsConn.Request(tt.topic, reqData, 5*time.Second)
+			reply, err := natsRequestWithAccount(daemon.natsConn, tt.topic, reqData, 5*time.Second)
 			require.NoError(t, err)
 			require.NotNil(t, reply)
 

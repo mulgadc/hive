@@ -25,7 +25,7 @@ func ValidateImportKeyPairInput(input *ec2.ImportKeyPairInput) (err error) {
 	return
 }
 
-func ImportKeyPair(input *ec2.ImportKeyPairInput, natsConn *nats.Conn) (output ec2.ImportKeyPairOutput, err error) {
+func ImportKeyPair(input *ec2.ImportKeyPairInput, natsConn *nats.Conn, accountID string) (output ec2.ImportKeyPairOutput, err error) {
 	// Validate input
 	err = ValidateImportKeyPairInput(input)
 
@@ -35,7 +35,7 @@ func ImportKeyPair(input *ec2.ImportKeyPairInput, natsConn *nats.Conn) (output e
 
 	// Create NATS key service and call ImportKeyPair
 	keyService := handlers_ec2_key.NewNATSKeyService(natsConn)
-	result, err := keyService.ImportKeyPair(input)
+	result, err := keyService.ImportKeyPair(input, accountID)
 
 	if err != nil {
 		return output, err
