@@ -19,7 +19,7 @@ type startStoppedInstanceRequest struct {
 
 // StartInstances sends start requests to the ec2.start queue group topic.
 // Any available daemon can pick up the request and launch the stopped instance.
-func StartInstances(input *ec2.StartInstancesInput, natsConn *nats.Conn) (*ec2.StartInstancesOutput, error) {
+func StartInstances(input *ec2.StartInstancesInput, natsConn *nats.Conn, accountID string) (*ec2.StartInstancesOutput, error) {
 	if len(input.InstanceIds) == 0 {
 		return nil, fmt.Errorf("no instance IDs provided")
 	}
@@ -43,7 +43,10 @@ func StartInstances(input *ec2.StartInstancesInput, natsConn *nats.Conn) (*ec2.S
 
 		slog.Info("StartInstances: Sending NATS request", "subject", "ec2.start", "instance_id", instanceID)
 
-		msg, err := natsConn.Request("ec2.start", jsonData, 30*time.Second)
+		reqMsg := nats.NewMsg("ec2.start")
+		reqMsg.Data = jsonData
+		reqMsg.Header.Set(utils.AccountIDHeader, accountID)
+		msg, err := natsConn.RequestMsg(reqMsg, 30*time.Second)
 		if err != nil {
 			slog.Error("StartInstances: Failed to send start request", "instance_id", instanceID, "err", err)
 			stateChanges = append(stateChanges, newStateChange(instanceID, 80, "stopped", 80, "stopped"))

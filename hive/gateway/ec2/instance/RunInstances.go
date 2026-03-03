@@ -56,7 +56,7 @@ func ValidateRunInstancesInput(input *ec2.RunInstancesInput) (err error) {
 
 }
 
-func RunInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn) (reservation ec2.Reservation, err error) {
+func RunInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn, accountID string) (reservation ec2.Reservation, err error) {
 
 	// Validate input
 	err = ValidateRunInstancesInput(input)
@@ -69,7 +69,7 @@ func RunInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn) (reservatio
 	service := handlers_ec2_instance.NewNATSInstanceService(natsConn)
 
 	// Call the service directly (no need for JSON marshaling/unmarshaling in same process)
-	reservationPtr, err := service.RunInstances(input)
+	reservationPtr, err := service.RunInstances(accountID, input)
 	if err != nil {
 		if errors.Is(err, nats.ErrNoResponders) {
 			// ErrNoResponders means no daemon subscribes to ec2.RunInstances.{type}.

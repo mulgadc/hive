@@ -34,6 +34,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testAccountID is the default account ID used in daemon tests.
+const testAccountID = "123456789012"
+
+// natsRequestWithAccount sends a NATS request with the X-Account-ID header set.
+func natsRequestWithAccount(nc *nats.Conn, subject string, data []byte, timeout time.Duration) (*nats.Msg, error) {
+	msg := nats.NewMsg(subject)
+	msg.Data = data
+	msg.Header.Set("X-Account-ID", testAccountID)
+	return nc.RequestMsg(msg, timeout)
+}
+
 // createFullTestDaemonWithStore creates a test daemon with ALL services initialized
 // and returns the shared memory store for seeding test data.
 func createFullTestDaemonWithStore(t *testing.T, natsURL string) (*Daemon, *objectstore.MemoryObjectStore) {
@@ -378,7 +389,7 @@ func TestHandleEC2RunInstances_InvalidAMI(t *testing.T) {
 		MaxCount:     aws.Int64(1),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	reply, err := natsRequestWithAccount(daemon.natsConn, "ec2.RunInstances", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	// Should return InvalidAMIID.NotFound, not ServerInternal
@@ -405,7 +416,7 @@ func TestHandleEC2RunInstances_InvalidKeyPair(t *testing.T) {
 		MaxCount:     aws.Int64(1),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	reply, err := natsRequestWithAccount(daemon.natsConn, "ec2.RunInstances", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	// Should return InvalidKeyPair.NotFound, not proceed to launch
@@ -449,7 +460,7 @@ func TestHandleEC2RunInstances_ValidKeyPairPassesValidation(t *testing.T) {
 		MaxCount:     aws.Int64(1),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	reply, err := natsRequestWithAccount(daemon.natsConn, "ec2.RunInstances", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	// Should NOT contain InvalidKeyPair.NotFound — key pair validation should pass
@@ -474,7 +485,7 @@ func TestHandleEC2RunInstances_EmptyKeyNameSkipsValidation(t *testing.T) {
 		MaxCount:     aws.Int64(1),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	reply, err := natsRequestWithAccount(daemon.natsConn, "ec2.RunInstances", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	// Should NOT contain InvalidKeyPair.NotFound
@@ -509,7 +520,7 @@ func TestHandleEC2RunInstances_ServiceErrorPropagated(t *testing.T) {
 		MaxCount:     aws.Int64(1),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	reply, err := natsRequestWithAccount(daemon.natsConn, "ec2.RunInstances", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	// Should propagate the specific AWS error from the service layer,
@@ -3106,7 +3117,7 @@ func TestHandleEC2RunInstances_InsufficientCapacity(t *testing.T) {
 		MaxCount:     aws.Int64(9999),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	reply, err := natsRequestWithAccount(daemon.natsConn, "ec2.RunInstances", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var errResp map[string]any

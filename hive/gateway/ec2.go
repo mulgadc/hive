@@ -53,28 +53,28 @@ func ec2Handler[In any](handler func(*In, *GatewayConfig, string) (any, error)) 
 
 var ec2Actions = map[string]EC2Handler{
 	"DescribeInstances": ec2Handler(func(input *ec2.DescribeInstancesInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_instance.DescribeInstances(input, gw.NATSConn, gw.DiscoverActiveNodes())
+		return gateway_ec2_instance.DescribeInstances(input, gw.NATSConn, gw.DiscoverActiveNodes(), accountID)
 	}),
 	"RunInstances": ec2Handler(func(input *ec2.RunInstancesInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_instance.RunInstances(input, gw.NATSConn)
+		return gateway_ec2_instance.RunInstances(input, gw.NATSConn, accountID)
 	}),
 	"StartInstances": ec2Handler(func(input *ec2.StartInstancesInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_instance.StartInstances(input, gw.NATSConn)
+		return gateway_ec2_instance.StartInstances(input, gw.NATSConn, accountID)
 	}),
 	"StopInstances": ec2Handler(func(input *ec2.StopInstancesInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_instance.StopInstances(input, gw.NATSConn)
+		return gateway_ec2_instance.StopInstances(input, gw.NATSConn, accountID)
 	}),
 	"TerminateInstances": ec2Handler(func(input *ec2.TerminateInstancesInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_instance.TerminateInstances(input, gw.NATSConn)
+		return gateway_ec2_instance.TerminateInstances(input, gw.NATSConn, accountID)
 	}),
 	"DescribeInstanceTypes": ec2Handler(func(input *ec2.DescribeInstanceTypesInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_instance.DescribeInstanceTypes(input, gw.NATSConn, gw.ExpectedNodes)
 	}),
 	"GetConsoleOutput": ec2Handler(func(input *ec2.GetConsoleOutputInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_instance.GetConsoleOutput(input, gw.NATSConn)
+		return gateway_ec2_instance.GetConsoleOutput(input, gw.NATSConn, accountID)
 	}),
 	"ModifyInstanceAttribute": ec2Handler(func(input *ec2.ModifyInstanceAttributeInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_instance.ModifyInstanceAttribute(input, gw.NATSConn)
+		return gateway_ec2_instance.ModifyInstanceAttribute(input, gw.NATSConn, accountID)
 	}),
 	"CreateKeyPair": ec2Handler(func(input *ec2.CreateKeyPairInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_key.CreateKeyPair(input, gw.NATSConn)

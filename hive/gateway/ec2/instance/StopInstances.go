@@ -8,12 +8,13 @@ import (
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/qmp"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats.go"
 )
 
 // StopInstances sends stop commands to specified instances via NATS
 // Uses system_powerdown with stop_instance attribute to prevent auto-restart on daemon boot
-func StopInstances(input *ec2.StopInstancesInput, natsConn *nats.Conn) (*ec2.StopInstancesOutput, error) {
+func StopInstances(input *ec2.StopInstancesInput, natsConn *nats.Conn, accountID string) (*ec2.StopInstancesOutput, error) {
 	if len(input.InstanceIds) == 0 {
 		return nil, fmt.Errorf("no instance IDs provided")
 	}
@@ -50,9 +51,12 @@ func StopInstances(input *ec2.StopInstancesInput, natsConn *nats.Conn) (*ec2.Sto
 			continue
 		}
 
-		// Send NATS request to the specific instance topic
+		// Send NATS request to the specific instance topic with account ID header
 		subject := fmt.Sprintf("ec2.cmd.%s", instanceID)
-		msg, err := natsConn.Request(subject, jsonData, 5*time.Second)
+		reqMsg := nats.NewMsg(subject)
+		reqMsg.Data = jsonData
+		reqMsg.Header.Set(utils.AccountIDHeader, accountID)
+		msg, err := natsConn.RequestMsg(reqMsg, 5*time.Second)
 		if err != nil {
 			slog.Error("StopInstances: Failed to send command", "instance_id", instanceID, "err", err)
 			stateChanges = append(stateChanges, newStateChange(instanceID, 16, "running", 16, "running"))

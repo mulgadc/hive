@@ -72,6 +72,14 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 		return
 	}
 
+	// Verify the caller owns this instance (skip for pre-Phase4 instances with no AccountID)
+	callerAccountID := utils.AccountIDFromMsg(msg)
+	if callerAccountID != "" && instance.AccountID != "" && instance.AccountID != callerAccountID {
+		slog.Warn("Account does not own this instance", "instanceId", command.ID, "callerAccount", callerAccountID, "ownerAccount", instance.AccountID)
+		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
+		return
+	}
+
 	switch {
 	case command.Attributes.AttachVolume:
 		d.handleAttachVolume(msg, command, instance)

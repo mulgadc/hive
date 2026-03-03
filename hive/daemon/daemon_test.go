@@ -1316,7 +1316,7 @@ func TestRunInstances_CountValidation(t *testing.T) {
 		}
 		inputJSON, _ := json.Marshal(input)
 
-		resp, err := daemon.natsConn.Request(topic, inputJSON, 5*time.Second)
+		resp, err := natsRequestWithAccount(daemon.natsConn, topic, inputJSON, 5*time.Second)
 		require.NoError(t, err)
 
 		// Should return validation error
@@ -1336,7 +1336,7 @@ func TestRunInstances_CountValidation(t *testing.T) {
 		}
 		inputJSON, _ := json.Marshal(input)
 
-		resp, err := daemon.natsConn.Request(topic, inputJSON, 5*time.Second)
+		resp, err := natsRequestWithAccount(daemon.natsConn, topic, inputJSON, 5*time.Second)
 		require.NoError(t, err)
 
 		var errResp map[string]any
@@ -1355,7 +1355,7 @@ func TestRunInstances_CountValidation(t *testing.T) {
 		}
 		inputJSON, _ := json.Marshal(input)
 
-		resp, err := daemon.natsConn.Request(topic, inputJSON, 5*time.Second)
+		resp, err := natsRequestWithAccount(daemon.natsConn, topic, inputJSON, 5*time.Second)
 		require.NoError(t, err)
 
 		var errResp map[string]any

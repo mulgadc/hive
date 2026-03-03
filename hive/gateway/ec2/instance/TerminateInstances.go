@@ -20,7 +20,7 @@ type terminateStoppedInstanceRequest struct {
 
 // TerminateInstances sends terminate commands to specified instances via NATS
 // Uses system_powerdown with stop_instance attribute to prevent restart
-func TerminateInstances(input *ec2.TerminateInstancesInput, natsConn *nats.Conn) (*ec2.TerminateInstancesOutput, error) {
+func TerminateInstances(input *ec2.TerminateInstancesInput, natsConn *nats.Conn, accountID string) (*ec2.TerminateInstancesOutput, error) {
 	if len(input.InstanceIds) == 0 {
 		return nil, fmt.Errorf("no instance IDs provided")
 	}
@@ -57,16 +57,22 @@ func TerminateInstances(input *ec2.TerminateInstancesInput, natsConn *nats.Conn)
 			continue
 		}
 
-		// Send NATS request to the specific instance topic
+		// Send NATS request to the specific instance topic with account ID header
 		subject := fmt.Sprintf("ec2.cmd.%s", instanceID)
-		msg, err := natsConn.Request(subject, jsonData, 5*time.Second)
+		reqMsg := nats.NewMsg(subject)
+		reqMsg.Data = jsonData
+		reqMsg.Header.Set(utils.AccountIDHeader, accountID)
+		msg, err := natsConn.RequestMsg(reqMsg, 5*time.Second)
 		if err != nil {
 			// If no daemon owns this instance, try the ec2.terminate topic for stopped instances
 			if errors.Is(err, nats.ErrNoResponders) {
 				slog.Info("TerminateInstances: No responder on per-instance topic, trying ec2.terminate", "instance_id", instanceID)
 
 				terminateReq, _ := json.Marshal(terminateStoppedInstanceRequest{InstanceID: instanceID})
-				terminateMsg, terminateErr := natsConn.Request("ec2.terminate", terminateReq, 30*time.Second)
+				terminateReqMsg := nats.NewMsg("ec2.terminate")
+				terminateReqMsg.Data = terminateReq
+				terminateReqMsg.Header.Set(utils.AccountIDHeader, accountID)
+				terminateMsg, terminateErr := natsConn.RequestMsg(terminateReqMsg, 30*time.Second)
 				if terminateErr == nil {
 					if _, parseErr := utils.ValidateErrorPayload(terminateMsg.Data); parseErr == nil {
 						slog.Info("TerminateInstances: Stopped instance terminated via ec2.terminate", "instance_id", instanceID)
