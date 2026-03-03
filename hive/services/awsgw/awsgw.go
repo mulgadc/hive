@@ -111,7 +111,6 @@ func launchService(config *config.ClusterConfig) error {
 		Region:         nodeConfig.Region,
 		AZ:             nodeConfig.AZ,
 		IAMService:     iamService,
-		IAMMasterKey:   masterKey,
 	}
 
 	app := gw.SetupRoutes()

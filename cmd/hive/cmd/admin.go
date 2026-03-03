@@ -1304,26 +1304,26 @@ func buildRemoteNodes(allNodes map[string]formation.NodeInfo, localNode string) 
 
 // initIAMServiceFromConfig loads config, connects to NATS, loads the master
 // key, and returns an initialised IAMServiceImpl. Callers must defer nc.Close().
-func initIAMServiceFromConfig() (*handlers_iam.IAMServiceImpl, func(), error) {
+func initIAMServiceFromConfig() (*handlers_iam.IAMServiceImpl, *config.ClusterConfig, func(), error) {
 	cfg, nc, err := loadConfigAndConnect()
 	if err != nil {
-		return nil, nil, fmt.Errorf("connect to cluster: %w", err)
+		return nil, nil, nil, fmt.Errorf("connect to cluster: %w", err)
 	}
 
 	masterKeyPath := filepath.Join(cfg.NodeBaseDir(), "config", "master.key")
 	masterKey, err := handlers_iam.LoadMasterKey(masterKeyPath)
 	if err != nil {
 		nc.Close()
-		return nil, nil, fmt.Errorf("load master key: %w", err)
+		return nil, nil, nil, fmt.Errorf("load master key: %w", err)
 	}
 
 	svc, err := handlers_iam.NewIAMServiceImpl(nc, masterKey)
 	if err != nil {
 		nc.Close()
-		return nil, nil, fmt.Errorf("init IAM service: %w", err)
+		return nil, nil, nil, fmt.Errorf("init IAM service: %w", err)
 	}
 
-	return svc, func() { nc.Close() }, nil
+	return svc, cfg, func() { nc.Close() }, nil
 }
 
 // adminAccessPolicyDocument is the AdministratorAccess policy document that
@@ -1333,7 +1333,7 @@ const adminAccessPolicyDocument = `{"Version":"2012-10-17","Statement":[{"Effect
 func runAccountCreate(cmd *cobra.Command, args []string) {
 	name, _ := cmd.Flags().GetString("name")
 
-	svc, cleanup, err := initIAMServiceFromConfig()
+	svc, cfg, cleanup, err := initIAMServiceFromConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -1391,20 +1391,12 @@ func runAccountCreate(cmd *cobra.Command, args []string) {
 	profileName := "hive-" + strings.ToLower(strings.ReplaceAll(name, " ", "-"))
 	homeDir, _ := os.UserHomeDir()
 
-	cfg, nc2, cfgErr := loadConfigAndConnect()
-	if nc2 != nil {
-		nc2.Close()
-	}
 	endpointHost := "localhost"
-	certPath := filepath.Join(homeDir, "hive", "config", "ca.pem")
-	if cfgErr == nil {
-		certPath = filepath.Join(cfg.NodeBaseDir(), "config", "ca.pem")
-		nodeConfig := cfg.Nodes[cfg.Node]
-		host := nodeConfig.AWSGW.Host
-		if h, _, err := net.SplitHostPort(host); err == nil {
-			if h != "" && h != "0.0.0.0" {
-				endpointHost = h
-			}
+	certPath := filepath.Join(cfg.NodeBaseDir(), "config", "ca.pem")
+	nodeConfig := cfg.Nodes[cfg.Node]
+	if h, _, err := net.SplitHostPort(nodeConfig.AWSGW.Host); err == nil {
+		if h != "" && h != "0.0.0.0" {
+			endpointHost = h
 		}
 	}
 	endpointURL := fmt.Sprintf("https://%s:9999", endpointHost)
@@ -1440,7 +1432,7 @@ func runAccountCreate(cmd *cobra.Command, args []string) {
 }
 
 func runAccountList(cmd *cobra.Command, args []string) {
-	svc, cleanup, err := initIAMServiceFromConfig()
+	svc, _, cleanup, err := initIAMServiceFromConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

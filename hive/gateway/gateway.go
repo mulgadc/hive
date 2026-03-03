@@ -31,7 +31,6 @@ type GatewayConfig struct {
 	Region         string     // Region this gateway is running in
 	AZ             string     // Availability zone this gateway is running in
 	IAMService     handlers_iam.IAMService
-	IAMMasterKey   []byte // loaded from master.key file at startup
 }
 
 var supportedServices = map[string]bool{

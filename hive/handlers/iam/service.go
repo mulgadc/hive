@@ -35,6 +35,7 @@ type IAMService interface {
 
 	// Auth (internal — used by SigV4 middleware and bootstrap, not exposed via gateway)
 	LookupAccessKey(accessKeyID string) (*AccessKey, error)
+	DecryptSecret(ciphertext string) (string, error)
 	SeedRootUser(data *BootstrapData) error
 	IsEmpty() (bool, error)
 

@@ -97,7 +97,7 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() fiber.Handler {
 			return gw.writeSigV4Error(c, awserrors.ErrorInvalidClientTokenId)
 		}
 
-		secret, err := handlers_iam.DecryptSecret(ak.SecretAccessKey, gw.IAMMasterKey)
+		secret, err := gw.IAMService.DecryptSecret(ak.SecretAccessKey)
 		if err != nil {
 			slog.Error("Failed to decrypt IAM secret", "accessKeyID", accessKey, "err", err)
 			return gw.writeSigV4Error(c, awserrors.ErrorInternalError)

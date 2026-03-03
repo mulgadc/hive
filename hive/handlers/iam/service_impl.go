@@ -40,6 +40,7 @@ type IAMServiceImpl struct {
 	accountsBucket       nats.KeyValue
 	accountCounterBucket nats.KeyValue
 	masterKey            []byte
+	decrypter            *Decrypter
 }
 
 // NewIAMServiceImpl creates a new IAM service backed by NATS JetStream KV.
@@ -78,6 +79,11 @@ func NewIAMServiceImpl(natsConn *nats.Conn, masterKey []byte) (*IAMServiceImpl, 
 		return nil, fmt.Errorf("init account counter bucket: %w", err)
 	}
 
+	decrypter, err := NewDecrypter(masterKey)
+	if err != nil {
+		return nil, fmt.Errorf("init decrypter: %w", err)
+	}
+
 	slog.Info("IAM service initialized",
 		"users_bucket", KVBucketUsers,
 		"access_keys_bucket", KVBucketAccessKeys,
@@ -92,6 +98,7 @@ func NewIAMServiceImpl(natsConn *nats.Conn, masterKey []byte) (*IAMServiceImpl, 
 		accountsBucket:       accountsBucket,
 		accountCounterBucket: accountCounterBucket,
 		masterKey:            masterKey,
+		decrypter:            decrypter,
 	}, nil
 }
 
@@ -482,6 +489,12 @@ func (s *IAMServiceImpl) LookupAccessKey(accessKeyID string) (*AccessKey, error)
 	return &ak, nil
 }
 
+// DecryptSecret decrypts a base64-encoded AES-256-GCM ciphertext using the
+// pre-computed cipher initialized at startup.
+func (s *IAMServiceImpl) DecryptSecret(ciphertext string) (string, error) {
+	return s.decrypter.Decrypt(ciphertext)
+}
+
 // SeedRootUser consumes bootstrap data to create the root IAM user and access
 // key in NATS KV. Uses conditional create (put-if-not-exists) for multi-node
 // race safety — the first node to call this wins; others skip silently.
@@ -805,6 +818,12 @@ func (s *IAMServiceImpl) ListPolicies(accountID string, input *iam.ListPoliciesI
 		return nil, fmt.Errorf("list policy keys: %w", err)
 	}
 
+	// Build attachment counts once for the whole account instead of per-policy.
+	attachCounts, err := s.buildAttachmentCounts(accountID)
+	if err != nil {
+		return nil, fmt.Errorf("build attachment counts: %w", err)
+	}
+
 	keyPrefix := accountID + "."
 	var policies []*iam.Policy
 	for _, key := range keys {
@@ -829,10 +848,6 @@ func (s *IAMServiceImpl) ListPolicies(accountID string, input *iam.ListPoliciesI
 		}
 
 		createdAt := parseCreatedAt(policy.CreatedAt)
-		attachCount, err := s.countPolicyAttachments(accountID, policy.ARN)
-		if err != nil {
-			return nil, fmt.Errorf("count policy attachments: %w", err)
-		}
 		policies = append(policies, &iam.Policy{
 			PolicyName:       aws.String(policy.PolicyName),
 			PolicyId:         aws.String(policy.PolicyID),
@@ -840,7 +855,7 @@ func (s *IAMServiceImpl) ListPolicies(accountID string, input *iam.ListPoliciesI
 			Path:             aws.String(policy.Path),
 			DefaultVersionId: aws.String(policy.DefaultVersion),
 			CreateDate:       aws.Time(createdAt),
-			AttachmentCount:  aws.Int64(attachCount),
+			AttachmentCount:  aws.Int64(attachCounts[policy.ARN]),
 			IsAttachable:     aws.Bool(true),
 		})
 	}
@@ -992,11 +1007,12 @@ func (s *IAMServiceImpl) GetUserPolicies(accountID, userName string) ([]PolicyDo
 			return nil, fmt.Errorf("resolve policy %s: %w", arn, err)
 		}
 
-		doc, err := ValidatePolicyDocument(policy.PolicyDocument)
-		if err != nil {
+		// policy already validated at creation, so we skip validating again
+		var doc PolicyDocument
+		if err := json.Unmarshal([]byte(policy.PolicyDocument), &doc); err != nil {
 			return nil, fmt.Errorf("parse policy %s: %w", policy.PolicyName, err)
 		}
-		docs = append(docs, *doc)
+		docs = append(docs, doc)
 	}
 
 	return docs, nil
@@ -1039,6 +1055,46 @@ func (s *IAMServiceImpl) getPolicyByARN(accountID, policyARN string) (*Policy, e
 	}
 
 	return &policy, nil
+}
+
+// buildAttachmentCounts fetches all users for the account once and returns a
+// map of policyARN -> number of users that have it attached. This avoids the
+// N+1 pattern of calling countPolicyAttachments per policy in ListPolicies.
+func (s *IAMServiceImpl) buildAttachmentCounts(accountID string) (map[string]int64, error) {
+	keys, err := s.usersBucket.Keys()
+	if err != nil {
+		if errors.Is(err, nats.ErrNoKeysFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("build attachment counts: %w", err)
+	}
+
+	counts := make(map[string]int64)
+	keyPrefix := accountID + "."
+	for _, key := range keys {
+		if !strings.HasPrefix(key, keyPrefix) {
+			continue
+		}
+
+		entry, err := s.usersBucket.Get(key)
+		if err != nil {
+			if errors.Is(err, nats.ErrKeyNotFound) {
+				slog.Debug("buildAttachmentCounts: user key disappeared", "key", key)
+				continue
+			}
+			slog.Warn("buildAttachmentCounts: failed to get user", "key", key, "err", err)
+			continue
+		}
+		var user User
+		if err := json.Unmarshal(entry.Value(), &user); err != nil {
+			slog.Warn("buildAttachmentCounts: failed to unmarshal user", "key", key, "err", err)
+			continue
+		}
+		for _, arn := range user.AttachedPolicies {
+			counts[arn]++
+		}
+	}
+	return counts, nil
 }
 
 // countPolicyAttachments counts how many users in this account have this policy attached.

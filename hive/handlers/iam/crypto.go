@@ -68,34 +68,52 @@ func EncryptSecret(plaintext string, key []byte) (string, error) {
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
-// DecryptSecret decrypts a base64-encoded AES-256-GCM ciphertext.
-func DecryptSecret(ciphertext string, key []byte) (string, error) {
+// Decrypter holds a pre-computed AES-256-GCM cipher for repeated decryption.
+// Create once at startup with NewDecrypter and reuse across requests.
+type Decrypter struct {
+	gcm cipher.AEAD
+}
+
+// NewDecrypter creates a Decrypter with a pre-computed AES-GCM cipher from the given key.
+func NewDecrypter(key []byte) (*Decrypter, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, fmt.Errorf("create cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("create GCM: %w", err)
+	}
+	return &Decrypter{gcm: gcm}, nil
+}
+
+// Decrypt decrypts a base64-encoded AES-256-GCM ciphertext using the pre-computed cipher.
+func (d *Decrypter) Decrypt(ciphertext string) (string, error) {
 	data, err := base64.StdEncoding.DecodeString(ciphertext)
 	if err != nil {
 		return "", fmt.Errorf("base64 decode: %w", err)
 	}
 
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", fmt.Errorf("create cipher: %w", err)
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", fmt.Errorf("create GCM: %w", err)
-	}
-
-	nonceSize := gcm.NonceSize()
+	nonceSize := d.gcm.NonceSize()
 	if len(data) < nonceSize {
 		return "", fmt.Errorf("ciphertext too short")
 	}
 
 	nonce, sealed := data[:nonceSize], data[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, sealed, nil)
+	plaintext, err := d.gcm.Open(nil, nonce, sealed, nil)
 	if err != nil {
 		return "", fmt.Errorf("decrypt: %w", err)
 	}
 	return string(plaintext), nil
+}
+
+// DecryptSecret decrypts a base64-encoded AES-256-GCM ciphertext.
+func DecryptSecret(ciphertext string, key []byte) (string, error) {
+	d, err := NewDecrypter(key)
+	if err != nil {
+		return "", err
+	}
+	return d.Decrypt(ciphertext)
 }
 
 // SaveBootstrapData writes bootstrap data as JSON to disk with 0600 permissions.

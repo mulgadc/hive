@@ -26,6 +26,7 @@ const (
 // mockIAMService implements handlers_iam.IAMService for auth tests.
 type mockIAMService struct {
 	accessKeys map[string]*handlers_iam.AccessKey
+	masterKey  []byte
 }
 
 func (m *mockIAMService) LookupAccessKey(accessKeyID string) (*handlers_iam.AccessKey, error) {
@@ -86,6 +87,9 @@ func (m *mockIAMService) ListAttachedUserPolicies(_ string, _ *iam.ListAttachedU
 }
 func (m *mockIAMService) GetUserPolicies(_, _ string) ([]handlers_iam.PolicyDocument, error) {
 	return nil, nil
+}
+func (m *mockIAMService) DecryptSecret(ciphertext string) (string, error) {
+	return handlers_iam.DecryptSecret(ciphertext, m.masterKey)
 }
 func (m *mockIAMService) SeedRootUser(_ *handlers_iam.BootstrapData) error { return nil }
 func (m *mockIAMService) IsEmpty() (bool, error)                           { return true, nil }
@@ -176,6 +180,7 @@ func setupTestApp(accessKey, secretKey string) *fiber.App {
 	}
 
 	mockSvc := &mockIAMService{
+		masterKey: testMasterKey,
 		accessKeys: map[string]*handlers_iam.AccessKey{
 			accessKey: {
 				AccessKeyID:     accessKey,
@@ -190,7 +195,6 @@ func setupTestApp(accessKey, secretKey string) *fiber.App {
 		DisableLogging: true,
 		Region:         testRegion,
 		IAMService:     mockSvc,
-		IAMMasterKey:   testMasterKey,
 	}
 
 	app := fiber.New()
@@ -419,6 +423,7 @@ func TestSigV4Auth_InactiveAccessKey(t *testing.T) {
 	}
 
 	mockSvc := &mockIAMService{
+		masterKey: testMasterKey,
 		accessKeys: map[string]*handlers_iam.AccessKey{
 			testAccessKey: {
 				AccessKeyID:     testAccessKey,
@@ -433,7 +438,6 @@ func TestSigV4Auth_InactiveAccessKey(t *testing.T) {
 		DisableLogging: true,
 		Region:         testRegion,
 		IAMService:     mockSvc,
-		IAMMasterKey:   testMasterKey,
 	}
 
 	app := fiber.New()
@@ -472,7 +476,6 @@ func TestSigV4Auth_NilIAMService(t *testing.T) {
 		DisableLogging: true,
 		Region:         testRegion,
 		IAMService:     nil,
-		IAMMasterKey:   testMasterKey,
 	}
 
 	app := fiber.New()
@@ -513,6 +516,7 @@ func TestSigV4Auth_CallerIdentity(t *testing.T) {
 	}
 
 	mockSvc := &mockIAMService{
+		masterKey: testMasterKey,
 		accessKeys: map[string]*handlers_iam.AccessKey{
 			testAccessKey: {
 				AccessKeyID:     testAccessKey,
@@ -527,7 +531,6 @@ func TestSigV4Auth_CallerIdentity(t *testing.T) {
 		DisableLogging: true,
 		Region:         testRegion,
 		IAMService:     mockSvc,
-		IAMMasterKey:   testMasterKey,
 	}
 
 	app := fiber.New()
@@ -626,6 +629,7 @@ func TestSigV4Auth_DecryptFailure(t *testing.T) {
 	}
 
 	mockSvc := &mockIAMService{
+		masterKey: testMasterKey,
 		accessKeys: map[string]*handlers_iam.AccessKey{
 			testAccessKey: {
 				AccessKeyID:     testAccessKey,
@@ -640,7 +644,6 @@ func TestSigV4Auth_DecryptFailure(t *testing.T) {
 		DisableLogging: true,
 		Region:         testRegion,
 		IAMService:     mockSvc,
-		IAMMasterKey:   testMasterKey, // different from otherKey
 	}
 
 	app := fiber.New()
@@ -929,6 +932,7 @@ func TestSigV4Auth_ContextPropagation(t *testing.T) {
 	}
 
 	mockSvc := &mockIAMService{
+		masterKey: testMasterKey,
 		accessKeys: map[string]*handlers_iam.AccessKey{
 			testAccessKey: {
 				AccessKeyID:     testAccessKey,
@@ -944,7 +948,6 @@ func TestSigV4Auth_ContextPropagation(t *testing.T) {
 		DisableLogging: true,
 		Region:         testRegion,
 		IAMService:     mockSvc,
-		IAMMasterKey:   testMasterKey,
 	}
 
 	app := fiber.New()
@@ -1009,7 +1012,6 @@ func TestSigV4Auth_LookupAccessKeyUnexpectedError(t *testing.T) {
 		DisableLogging: true,
 		Region:         testRegion,
 		IAMService:     &errorLookupMockIAMService{err: errors.New("nats: connection closed")},
-		IAMMasterKey:   testMasterKey,
 	}
 
 	app := fiber.New()
@@ -1090,6 +1092,7 @@ func TestSigV4Auth_SignedContentType(t *testing.T) {
 	}
 
 	mockSvc := &mockIAMService{
+		masterKey: testMasterKey,
 		accessKeys: map[string]*handlers_iam.AccessKey{
 			testAccessKey: {
 				AccessKeyID:     testAccessKey,
@@ -1104,7 +1107,6 @@ func TestSigV4Auth_SignedContentType(t *testing.T) {
 		DisableLogging: true,
 		Region:         testRegion,
 		IAMService:     mockSvc,
-		IAMMasterKey:   testMasterKey,
 	}
 
 	app := fiber.New()
@@ -1257,6 +1259,7 @@ func TestCheckPolicy_NonRootNoPolicies_Denied(t *testing.T) {
 
 	mockSvc := &policyMockIAMService{
 		mockIAMService: mockIAMService{
+			masterKey: testMasterKey,
 			accessKeys: map[string]*handlers_iam.AccessKey{
 				testAccessKey: {
 					AccessKeyID:     testAccessKey,
@@ -1276,7 +1279,6 @@ func TestCheckPolicy_NonRootNoPolicies_Denied(t *testing.T) {
 		DisableLogging: true,
 		Region:         testRegion,
 		IAMService:     mockSvc,
-		IAMMasterKey:   testMasterKey,
 	}
 
 	app := setupPolicyTestApp(gw)
@@ -1315,6 +1317,7 @@ func TestCheckPolicy_NonRootWithAllow_Passes(t *testing.T) {
 
 	mockSvc := &policyMockIAMService{
 		mockIAMService: mockIAMService{
+			masterKey: testMasterKey,
 			accessKeys: map[string]*handlers_iam.AccessKey{
 				testAccessKey: {
 					AccessKeyID:     testAccessKey,
@@ -1345,7 +1348,6 @@ func TestCheckPolicy_NonRootWithAllow_Passes(t *testing.T) {
 		DisableLogging: true,
 		Region:         testRegion,
 		IAMService:     mockSvc,
-		IAMMasterKey:   testMasterKey,
 	}
 
 	app := setupPolicyTestApp(gw)
@@ -1379,6 +1381,7 @@ func TestCheckPolicy_NonRootWithExplicitDeny_Denied(t *testing.T) {
 
 	mockSvc := &policyMockIAMService{
 		mockIAMService: mockIAMService{
+			masterKey: testMasterKey,
 			accessKeys: map[string]*handlers_iam.AccessKey{
 				testAccessKey: {
 					AccessKeyID:     testAccessKey,
@@ -1414,7 +1417,6 @@ func TestCheckPolicy_NonRootWithExplicitDeny_Denied(t *testing.T) {
 		DisableLogging: true,
 		Region:         testRegion,
 		IAMService:     mockSvc,
-		IAMMasterKey:   testMasterKey,
 	}
 
 	app := setupPolicyTestApp(gw)
@@ -1453,6 +1455,7 @@ func TestCheckPolicy_RootGlobalAccount_Bypasses(t *testing.T) {
 
 	mockSvc := &policyMockIAMService{
 		mockIAMService: mockIAMService{
+			masterKey: testMasterKey,
 			accessKeys: map[string]*handlers_iam.AccessKey{
 				testAccessKey: {
 					AccessKeyID:     testAccessKey,
@@ -1484,7 +1487,6 @@ func TestCheckPolicy_RootGlobalAccount_Bypasses(t *testing.T) {
 		DisableLogging: true,
 		Region:         testRegion,
 		IAMService:     mockSvc,
-		IAMMasterKey:   testMasterKey,
 	}
 
 	app := setupPolicyTestApp(gw)
@@ -1519,6 +1521,7 @@ func TestCheckPolicy_MissingAccountID_InternalError(t *testing.T) {
 	// AccessKey with empty AccountID — checkPolicy should return InternalError
 	mockSvc := &policyMockIAMService{
 		mockIAMService: mockIAMService{
+			masterKey: testMasterKey,
 			accessKeys: map[string]*handlers_iam.AccessKey{
 				testAccessKey: {
 					AccessKeyID:     testAccessKey,
@@ -1535,7 +1538,6 @@ func TestCheckPolicy_MissingAccountID_InternalError(t *testing.T) {
 		DisableLogging: true,
 		Region:         testRegion,
 		IAMService:     mockSvc,
-		IAMMasterKey:   testMasterKey,
 	}
 
 	app := setupPolicyTestApp(gw)
@@ -1569,6 +1571,7 @@ func TestCheckPolicy_GetUserPoliciesError_InternalError(t *testing.T) {
 
 	mockSvc := &policyMockIAMService{
 		mockIAMService: mockIAMService{
+			masterKey: testMasterKey,
 			accessKeys: map[string]*handlers_iam.AccessKey{
 				testAccessKey: {
 					AccessKeyID:     testAccessKey,
@@ -1588,7 +1591,6 @@ func TestCheckPolicy_GetUserPoliciesError_InternalError(t *testing.T) {
 		DisableLogging: true,
 		Region:         testRegion,
 		IAMService:     mockSvc,
-		IAMMasterKey:   testMasterKey,
 	}
 
 	app := setupPolicyTestApp(gw)
@@ -1624,6 +1626,7 @@ func TestCheckPolicy_RootNonGlobalAccount_StillEvaluated(t *testing.T) {
 
 	mockSvc := &policyMockIAMService{
 		mockIAMService: mockIAMService{
+			masterKey: testMasterKey,
 			accessKeys: map[string]*handlers_iam.AccessKey{
 				testAccessKey: {
 					AccessKeyID:     testAccessKey,
@@ -1643,7 +1646,6 @@ func TestCheckPolicy_RootNonGlobalAccount_StillEvaluated(t *testing.T) {
 		DisableLogging: true,
 		Region:         testRegion,
 		IAMService:     mockSvc,
-		IAMMasterKey:   testMasterKey,
 	}
 
 	app := setupPolicyTestApp(gw)
