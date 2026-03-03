@@ -13,7 +13,7 @@ import (
 )
 
 func (d *Daemon) handleEC2DescribeImages(msg *nats.Msg) {
-	handleNATSRequest(msg, d.imageService.DescribeImages)
+	handleNATSRequestWithAccount(msg, d.imageService.DescribeImages)
 }
 
 // handleEC2CreateImage is a stateful handler that extracts instance context
@@ -28,6 +28,8 @@ func (d *Daemon) handleEC2CreateImage(msg *nats.Msg) {
 		}
 		return
 	}
+
+	accountID := utils.AccountIDFromMsg(msg)
 
 	if input.InstanceId == nil || *input.InstanceId == "" {
 		respondWithError(msg, awserrors.ErrorMissingParameter)
@@ -82,7 +84,7 @@ func (d *Daemon) handleEC2CreateImage(msg *nats.Msg) {
 		IsRunning:     status == vm.StateRunning,
 	}
 
-	output, err := d.imageService.CreateImageFromInstance(params)
+	output, err := d.imageService.CreateImageFromInstance(params, accountID)
 	if err != nil {
 		slog.Error("CreateImage: service failed", "instanceId", instanceID, "err", err)
 		respondWithError(msg, awserrors.ValidErrorCode(err.Error()))

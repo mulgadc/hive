@@ -22,7 +22,7 @@ const testAccountID = "123456789"
 // setupTestImageService creates an image service with in-memory storage for testing
 func setupTestImageService(t *testing.T) (*ImageServiceImpl, *objectstore.MemoryObjectStore) {
 	store := objectstore.NewMemoryObjectStore()
-	svc := NewImageServiceImplWithStore(store, testBucket, testAccountID)
+	svc := NewImageServiceImplWithStore(store, testBucket)
 	return svc, store
 }
 
@@ -104,7 +104,7 @@ func createTestAMIConfigWithName(t *testing.T, store *objectstore.MemoryObjectSt
 func TestCreateImageFromInstance_NilInput(t *testing.T) {
 	svc, _ := setupTestImageService(t)
 
-	_, err := svc.CreateImageFromInstance(CreateImageParams{})
+	_, err := svc.CreateImageFromInstance(CreateImageParams{}, testAccountID)
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidParameterValue, err.Error())
 }
@@ -125,7 +125,7 @@ func TestCreateImageFromInstance_RunningInstance_NoNATS(t *testing.T) {
 		RootVolumeID:  "vol-root123",
 		SourceImageID: "ami-source123",
 		IsRunning:     true,
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorServerInternal, err.Error())
 }
@@ -142,7 +142,7 @@ func TestCreateImageFromInstance_StoppedInstance_NoConfig(t *testing.T) {
 		RootVolumeID:  "vol-nonexistent",
 		SourceImageID: "ami-source123",
 		IsRunning:     false,
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorServerInternal, err.Error())
 }
@@ -157,13 +157,14 @@ func TestDescribeImages_AfterCreate(t *testing.T) {
 	// Describe images should find it
 	result, err := svc.DescribeImages(&ec2.DescribeImagesInput{
 		ImageIds: []*string{aws.String(amiID)},
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, result.Images, 1)
 	assert.Equal(t, amiID, *result.Images[0].ImageId)
 	assert.Equal(t, "test-ami", *result.Images[0].Name)
 	assert.Equal(t, "x86_64", *result.Images[0].Architecture)
+	assert.Equal(t, testAccountID, *result.Images[0].OwnerId)
 }
 
 func TestGetVolumeConfig(t *testing.T) {
@@ -208,7 +209,7 @@ func TestGetAMIConfig_NotFound(t *testing.T) {
 func TestPutSnapshotMetadata(t *testing.T) {
 	svc, store := setupTestImageService(t)
 
-	err := svc.putSnapshotMetadata("snap-abc123", "vol-xyz789", 10)
+	err := svc.putSnapshotMetadata("snap-abc123", "vol-xyz789", 10, testAccountID)
 	require.NoError(t, err)
 
 	// Verify the metadata was written correctly
@@ -245,7 +246,7 @@ func TestCreateImageFromInstance_SourceAMIReadFailure(t *testing.T) {
 		RootVolumeID:  "vol-root123",
 		SourceImageID: "ami-nonexistent",
 		IsRunning:     true, // will fail at snapshot step first (no NATS)
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorServerInternal, err.Error())
 }
@@ -259,7 +260,7 @@ func TestDescribeImages_NotFound(t *testing.T) {
 	// Request a non-existent AMI ID — should return InvalidAMIID.NotFound
 	_, err := svc.DescribeImages(&ec2.DescribeImagesInput{
 		ImageIds: []*string{aws.String("ami-nonexistent")},
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
 }
@@ -276,7 +277,7 @@ func TestDescribeImages_MixedExistingAndMissing(t *testing.T) {
 			aws.String("ami-exists123"),
 			aws.String("ami-missing456"),
 		},
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
 }
@@ -311,7 +312,7 @@ func TestDescribeImages_FilterByOwnerSelf(t *testing.T) {
 	// Filter by "self"
 	result, err := svc.DescribeImages(&ec2.DescribeImagesInput{
 		Owners: []*string{aws.String("self")},
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Len(t, result.Images, 1)
@@ -335,7 +336,7 @@ func TestCreateImageFromInstance_DuplicateName(t *testing.T) {
 		},
 		RootVolumeID: "vol-root123",
 		IsRunning:    true,
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidAMINameDuplicate, err.Error())
 }
@@ -358,8 +359,24 @@ func TestCreateImageFromInstance_UniqueNameAllowed(t *testing.T) {
 		},
 		RootVolumeID: "vol-root123",
 		IsRunning:    true,
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	// Should fail at snapshot, NOT at duplicate name check
 	assert.Equal(t, awserrors.ErrorServerInternal, err.Error())
+}
+
+func TestDescribeImages_AccountScoping(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// Create an AMI
+	createTestAMIConfig(t, store, "ami-scoped123")
+
+	// DescribeImages with any accountID should return the image (AMIs are globally stored)
+	// but OwnerId should reflect the caller's accountID
+	result, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		ImageIds: []*string{aws.String("ami-scoped123")},
+	}, "999888777")
+	require.NoError(t, err)
+	require.Len(t, result.Images, 1)
+	assert.Equal(t, "999888777", *result.Images[0].OwnerId)
 }

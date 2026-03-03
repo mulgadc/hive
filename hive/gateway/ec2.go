@@ -95,10 +95,10 @@ var ec2Actions = map[string]EC2Handler{
 		})(action, q, gw, accountID)
 	},
 	"DescribeImages": ec2Handler(func(input *ec2.DescribeImagesInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_image.DescribeImages(input, gw.NATSConn)
+		return gateway_ec2_image.DescribeImages(input, gw.NATSConn, accountID)
 	}),
 	"CreateImage": ec2Handler(func(input *ec2.CreateImageInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_image.CreateImage(input, gw.NATSConn)
+		return gateway_ec2_image.CreateImage(input, gw.NATSConn, accountID)
 	}),
 	"DescribeRegions": ec2Handler(func(input *ec2.DescribeRegionsInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_zone.DescribeRegions(input, gw.Region)
