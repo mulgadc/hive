@@ -260,7 +260,7 @@ func getLocalIPs() []string {
 // each local IP with the AWS Gateway (:9999) and daemon (:8443) ports to connect-src.
 func buildCSP() string {
 	var b strings.Builder
-	b.WriteString("'self'")
+	b.WriteString("'self' https://localhost:9999 https://localhost:8443")
 	for _, ip := range getLocalIPs() {
 		fmt.Fprintf(&b, " https://%s:9999 https://%s:8443", ip, ip)
 	}

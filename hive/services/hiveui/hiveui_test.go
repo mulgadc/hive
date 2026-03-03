@@ -266,9 +266,10 @@ func TestBuildCSP_ContainsLocalIPs(t *testing.T) {
 	}
 }
 
-func TestBuildCSP_NoLocalhostHardcoded(t *testing.T) {
+func TestBuildCSP_ContainsLocalhost(t *testing.T) {
 	csp := buildCSP()
-	assert.NotContains(t, csp, "localhost", "CSP should use actual IPs, not localhost")
+	assert.Contains(t, csp, "https://localhost:9999")
+	assert.Contains(t, csp, "https://localhost:8443")
 }
 
 func TestShutdown_WithServer(t *testing.T) {

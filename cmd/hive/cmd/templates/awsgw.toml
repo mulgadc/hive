@@ -4,10 +4,3 @@ region = "{{.Region}}"
 
 # Enable verbose debugging
 debug = false
-
-[[auth]]
-access_key_id = "{{.AccessKey}}"
-secret_access_key = "{{.SecretKey}}"
-policy = [
-  { bucket = "predastore", actions = ["s3:ListBucket",  "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListAllMyBuckets"] },
-]
