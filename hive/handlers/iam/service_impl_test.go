@@ -88,14 +88,6 @@ func TestCreateUser_DefaultPath(t *testing.T) {
 	assert.Equal(t, "/", *out.User.Path)
 }
 
-func TestCreateUser_MissingUserName(t *testing.T) {
-	svc := setupTestIAMService(t)
-
-	_, err := svc.CreateUser(testAccountID, &iam.CreateUserInput{})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), awserrors.ErrorIAMInvalidInput)
-}
-
 func TestCreateUser_Duplicate(t *testing.T) {
 	svc := setupTestIAMService(t)
 
@@ -647,26 +639,6 @@ func TestCreatePolicy_DefaultPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "/", *out.Policy.Path)
 	assert.Contains(t, *out.Policy.Arn, "policy/DefaultPath")
-}
-
-func TestCreatePolicy_MissingName(t *testing.T) {
-	svc := setupTestIAMService(t)
-
-	_, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
-		PolicyDocument: aws.String(validPolicyDocument()),
-	})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), awserrors.ErrorIAMInvalidInput)
-}
-
-func TestCreatePolicy_MissingDocument(t *testing.T) {
-	svc := setupTestIAMService(t)
-
-	_, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
-		PolicyName: aws.String("NoDoc"),
-	})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), awserrors.ErrorIAMInvalidInput)
 }
 
 func TestCreatePolicy_InvalidJSON(t *testing.T) {

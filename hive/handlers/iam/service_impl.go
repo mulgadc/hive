@@ -114,10 +114,6 @@ func getOrCreateBucket(js nats.JetStreamContext, name string, history uint8) (na
 // ---------------------------------------------------------------------------
 
 func (s *IAMServiceImpl) CreateUser(accountID string, input *iam.CreateUserInput) (*iam.CreateUserOutput, error) {
-	if input.UserName == nil || *input.UserName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	userName := *input.UserName
 	path := "/"
 	if input.Path != nil {
@@ -174,10 +170,6 @@ func (s *IAMServiceImpl) CreateUser(accountID string, input *iam.CreateUserInput
 }
 
 func (s *IAMServiceImpl) GetUser(accountID string, input *iam.GetUserInput) (*iam.GetUserOutput, error) {
-	if input.UserName == nil || *input.UserName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	user, err := s.getUser(accountID, *input.UserName)
 	if err != nil {
 		return nil, err
@@ -262,10 +254,6 @@ func (s *IAMServiceImpl) ListUsers(accountID string, input *iam.ListUsersInput) 
 }
 
 func (s *IAMServiceImpl) DeleteUser(accountID string, input *iam.DeleteUserInput) (*iam.DeleteUserOutput, error) {
-	if input.UserName == nil || *input.UserName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	userName := *input.UserName
 	kvKey := accountID + "." + userName
 
@@ -291,10 +279,6 @@ func (s *IAMServiceImpl) DeleteUser(accountID string, input *iam.DeleteUserInput
 // ---------------------------------------------------------------------------
 
 func (s *IAMServiceImpl) CreateAccessKey(accountID string, input *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error) {
-	if input.UserName == nil || *input.UserName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	userName := *input.UserName
 	userKVKey := accountID + "." + userName
 
@@ -368,10 +352,6 @@ func (s *IAMServiceImpl) CreateAccessKey(accountID string, input *iam.CreateAcce
 }
 
 func (s *IAMServiceImpl) ListAccessKeys(accountID string, input *iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error) {
-	if input.UserName == nil || *input.UserName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	user, err := s.getUser(accountID, *input.UserName)
 	if err != nil {
 		return nil, err
@@ -414,13 +394,6 @@ func (s *IAMServiceImpl) ListAccessKeys(accountID string, input *iam.ListAccessK
 }
 
 func (s *IAMServiceImpl) DeleteAccessKey(accountID string, input *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error) {
-	if input.UserName == nil || *input.UserName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-	if input.AccessKeyId == nil || *input.AccessKeyId == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	userName := *input.UserName
 	accessKeyID := *input.AccessKeyId
 	userKVKey := accountID + "." + userName
@@ -464,13 +437,6 @@ func (s *IAMServiceImpl) DeleteAccessKey(accountID string, input *iam.DeleteAcce
 }
 
 func (s *IAMServiceImpl) UpdateAccessKey(accountID string, input *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error) {
-	if input.AccessKeyId == nil || *input.AccessKeyId == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-	if input.Status == nil || *input.Status == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	status := *input.Status
 	if status != "Active" && status != "Inactive" {
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
@@ -738,13 +704,6 @@ func (s *IAMServiceImpl) ListAccounts() ([]*Account, error) {
 // ---------------------------------------------------------------------------
 
 func (s *IAMServiceImpl) CreatePolicy(accountID string, input *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error) {
-	if input.PolicyName == nil || *input.PolicyName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-	if input.PolicyDocument == nil || *input.PolicyDocument == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	policyName := *input.PolicyName
 	kvKey := accountID + "." + policyName
 
@@ -804,10 +763,6 @@ func (s *IAMServiceImpl) CreatePolicy(accountID string, input *iam.CreatePolicyI
 }
 
 func (s *IAMServiceImpl) GetPolicy(accountID string, input *iam.GetPolicyInput) (*iam.GetPolicyOutput, error) {
-	if input.PolicyArn == nil || *input.PolicyArn == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	policy, err := s.getPolicyByARN(accountID, *input.PolicyArn)
 	if err != nil {
 		return nil, err
@@ -838,13 +793,6 @@ func (s *IAMServiceImpl) GetPolicy(accountID string, input *iam.GetPolicyInput) 
 }
 
 func (s *IAMServiceImpl) GetPolicyVersion(accountID string, input *iam.GetPolicyVersionInput) (*iam.GetPolicyVersionOutput, error) {
-	if input.PolicyArn == nil || *input.PolicyArn == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-	if input.VersionId == nil || *input.VersionId == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	policy, err := s.getPolicyByARN(accountID, *input.PolicyArn)
 	if err != nil {
 		return nil, err
@@ -931,10 +879,6 @@ func (s *IAMServiceImpl) ListPolicies(accountID string, input *iam.ListPoliciesI
 }
 
 func (s *IAMServiceImpl) DeletePolicy(accountID string, input *iam.DeletePolicyInput) (*iam.DeletePolicyOutput, error) {
-	if input.PolicyArn == nil || *input.PolicyArn == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	policy, err := s.getPolicyByARN(accountID, *input.PolicyArn)
 	if err != nil {
 		return nil, err
@@ -962,13 +906,6 @@ func (s *IAMServiceImpl) DeletePolicy(accountID string, input *iam.DeletePolicyI
 // ---------------------------------------------------------------------------
 
 func (s *IAMServiceImpl) AttachUserPolicy(accountID string, input *iam.AttachUserPolicyInput) (*iam.AttachUserPolicyOutput, error) {
-	if input.UserName == nil || *input.UserName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-	if input.PolicyArn == nil || *input.PolicyArn == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	userName := *input.UserName
 	policyARN := *input.PolicyArn
 	userKVKey := accountID + "." + userName
@@ -1003,13 +940,6 @@ func (s *IAMServiceImpl) AttachUserPolicy(accountID string, input *iam.AttachUse
 }
 
 func (s *IAMServiceImpl) DetachUserPolicy(accountID string, input *iam.DetachUserPolicyInput) (*iam.DetachUserPolicyOutput, error) {
-	if input.UserName == nil || *input.UserName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-	if input.PolicyArn == nil || *input.PolicyArn == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	userName := *input.UserName
 	policyARN := *input.PolicyArn
 	userKVKey := accountID + "." + userName
@@ -1048,10 +978,6 @@ func (s *IAMServiceImpl) DetachUserPolicy(accountID string, input *iam.DetachUse
 }
 
 func (s *IAMServiceImpl) ListAttachedUserPolicies(accountID string, input *iam.ListAttachedUserPoliciesInput) (*iam.ListAttachedUserPoliciesOutput, error) {
-	if input.UserName == nil || *input.UserName == "" {
-		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
-	}
-
 	user, err := s.getUser(accountID, *input.UserName)
 	if err != nil {
 		return nil, err
