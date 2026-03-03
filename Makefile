@@ -33,6 +33,19 @@ else
   GO_BUILD_MOD :=
 endif
 
+# Quiet-mode filters (active when QUIET=1, set by preflight via recursive make)
+ifdef QUIET
+  _Q     = @
+  _COVQ  = 2>&1 | grep -Ev '^\s*(ok|PASS|\?|=== RUN|--- PASS:)\s' | grep -v 'coverage: 0\.0%' || true
+  _RACEQ = 2>&1 | { grep -Ev '^\s*(ok|PASS|\?|=== RUN|--- PASS:)\s' || true; }; exit $${PIPESTATUS[0]}
+  _SECQ  = >
+else
+  _Q     =
+  _COVQ  = || true
+  _RACEQ =
+  _SECQ  = 2>&1 | tee
+endif
+
 build:
 	$(MAKE) go_build
 
@@ -52,7 +65,8 @@ go_run:
 
 # Preflight — runs the same checks as GitHub Actions (format + lint + security + tests).
 # Use this before committing to catch CI failures locally.
-preflight: check-format check-modernize vet security-check test-cover diff-coverage test-race
+preflight:
+	@$(MAKE) --no-print-directory QUIET=1 check-format check-modernize vet security-check test-cover diff-coverage test-race
 	@echo -e "\n ✅ Preflight passed — safe to commit."
 
 # Run unit tests
@@ -64,33 +78,20 @@ test:
 # Note: go test may exit non-zero due to Go version mismatch in coverage instrumentation
 # for packages without test files. We check actual test results + coverage threshold instead.
 COVERPROFILE ?= coverage.out
-MIN_COVERAGE ?= 50.0
+MIN_COVERAGE ?= 60.0
 test-cover:
 	@echo -e "\n....Running tests with coverage for $(GO_PROJECT_NAME)...."
-	LOG_IGNORE=1 go test -timeout 120s -coverprofile=$(COVERPROFILE) -covermode=atomic ./hive/... || true
-	@echo ""
-	@echo "=== Total Coverage ==="
-	@go tool cover -func=$(COVERPROFILE) | tail -1
-	@TOTAL=$$(go tool cover -func=$(COVERPROFILE) | tail -1 | awk '{print $$NF}' | tr -d '%'); \
-	if [ -z "$$TOTAL" ] || [ ! -s $(COVERPROFILE) ]; then \
-		echo "ERROR: No coverage data generated — tests may have failed to compile"; \
-		exit 1; \
-	fi; \
-	PASS=$$(echo "$$TOTAL >= $(MIN_COVERAGE)" | bc -l); \
-	if [ "$$PASS" != "1" ]; then \
-		echo "ERROR: Total coverage $${TOTAL}% is below minimum $(MIN_COVERAGE)%"; \
-		exit 1; \
-	fi; \
-	echo "Coverage $${TOTAL}% meets minimum $(MIN_COVERAGE)% threshold"
+	$(_Q)LOG_IGNORE=1 go test -timeout 120s -coverprofile=$(COVERPROFILE) -covermode=atomic ./hive/... $(_COVQ)
+	@scripts/check-coverage.sh $(COVERPROFILE) $(MIN_COVERAGE) $(QUIET)
 
 # Run unit tests with race detector
 test-race:
 	@echo -e "\n....Running tests with race detector for $(GO_PROJECT_NAME)...."
-	LOG_IGNORE=1 go test -race -timeout 300s ./hive/...
+	$(_Q)LOG_IGNORE=1 go test -race -timeout 300s ./hive/... $(_RACEQ)
 
 # Check that new/changed code meets coverage threshold (runs tests first)
 diff-coverage: test-cover
-	@scripts/diff-coverage.sh $(COVERPROFILE)
+	@QUIET=$(QUIET) scripts/diff-coverage.sh $(COVERPROFILE)
 
 bench:
 	@echo -e "\n....Running benchmarks for $(GO_PROJECT_NAME)...."
@@ -158,7 +159,7 @@ check-format:
 # Go vet (fails on issues, matches CI)
 vet:
 	@echo "Running go vet..."
-	go vet ./...
+	$(_Q)go vet ./...
 	@echo "  go vet ok"
 
 # Excluded: newexpr (replaces aws.String with new, not idiomatic for AWS SDK)
@@ -186,11 +187,11 @@ check-modernize:
 # Reports are also saved to tests/ for review.
 security-check:
 	@echo -e "\n....Running security checks for $(GO_PROJECT_NAME)...."
-	set -o pipefail && go tool govulncheck ./... 2>&1 | tee tests/govulncheck-report.txt
+	$(_Q)set -o pipefail && go tool govulncheck ./... $(_SECQ) tests/govulncheck-report.txt $(if $(QUIET),|| { cat tests/govulncheck-report.txt; exit 1; })
 	@echo "  govulncheck ok"
-	set -o pipefail && go tool gosec -quiet -exclude=G204,G304,G402 -exclude-generated -exclude-dir=cmd ./... 2>&1 | tee tests/gosec-report.txt
+	$(_Q)set -o pipefail && go tool gosec -quiet -exclude=G204,G304,G402 -exclude-generated -exclude-dir=cmd ./... $(_SECQ) tests/gosec-report.txt $(if $(QUIET),|| { cat tests/gosec-report.txt; exit 1; })
 	@echo "  gosec ok"
-	set -o pipefail && go tool staticcheck -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./... 2>&1 | tee tests/staticcheck-report.txt
+	$(_Q)set -o pipefail && go tool staticcheck -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./... $(_SECQ) tests/staticcheck-report.txt $(if $(QUIET),|| { cat tests/staticcheck-report.txt; exit 1; })
 	@echo "  staticcheck ok"
 
 # Docker E2E tests (mirrors GitHub Actions e2e.yml)
