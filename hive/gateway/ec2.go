@@ -107,25 +107,25 @@ var ec2Actions = map[string]EC2Handler{
 		return gateway_ec2_zone.DescribeAvailabilityZones(input, gw.Region, gw.AZ)
 	}),
 	"DescribeVolumes": ec2Handler(func(input *ec2.DescribeVolumesInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_volume.DescribeVolumes(input, gw.NATSConn)
+		return gateway_ec2_volume.DescribeVolumes(input, gw.NATSConn, accountID)
 	}),
 	"ModifyVolume": ec2Handler(func(input *ec2.ModifyVolumeInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_volume.ModifyVolume(input, gw.NATSConn)
+		return gateway_ec2_volume.ModifyVolume(input, gw.NATSConn, accountID)
 	}),
 	"CreateVolume": ec2Handler(func(input *ec2.CreateVolumeInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_volume.CreateVolume(input, gw.NATSConn)
+		return gateway_ec2_volume.CreateVolume(input, gw.NATSConn, accountID)
 	}),
 	"DeleteVolume": ec2Handler(func(input *ec2.DeleteVolumeInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_volume.DeleteVolume(input, gw.NATSConn)
+		return gateway_ec2_volume.DeleteVolume(input, gw.NATSConn, accountID)
 	}),
 	"AttachVolume": ec2Handler(func(input *ec2.AttachVolumeInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_volume.AttachVolume(input, gw.NATSConn)
+		return gateway_ec2_volume.AttachVolume(input, gw.NATSConn, accountID)
 	}),
 	"DescribeVolumeStatus": ec2Handler(func(input *ec2.DescribeVolumeStatusInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_volume.DescribeVolumeStatus(input, gw.NATSConn)
+		return gateway_ec2_volume.DescribeVolumeStatus(input, gw.NATSConn, accountID)
 	}),
 	"DetachVolume": ec2Handler(func(input *ec2.DetachVolumeInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_volume.DetachVolume(input, gw.NATSConn)
+		return gateway_ec2_volume.DetachVolume(input, gw.NATSConn, accountID)
 	}),
 	"DescribeAccountAttributes": ec2Handler(func(input *ec2.DescribeAccountAttributesInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_account.DescribeAccountAttributes(input)

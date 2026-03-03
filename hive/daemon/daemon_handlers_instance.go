@@ -820,7 +820,7 @@ func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
 		}
 
 		slog.Info("handleEC2TerminateStoppedInstance: deleting volume with DeleteOnTermination=true", "name", ebsRequest.Name)
-		_, err := d.volumeService.DeleteVolume(&ec2.DeleteVolumeInput{
+		_, err := d.volumeService.DeleteVolume(instance.AccountID, &ec2.DeleteVolumeInput{
 			VolumeId: &ebsRequest.Name,
 		})
 		if err != nil {

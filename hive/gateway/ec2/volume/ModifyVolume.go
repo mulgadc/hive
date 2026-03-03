@@ -28,7 +28,7 @@ func ValidateModifyVolumeInput(input *ec2.ModifyVolumeInput) error {
 }
 
 // ModifyVolume handles the ModifyVolume API call
-func ModifyVolume(input *ec2.ModifyVolumeInput, natsConn *nats.Conn) (ec2.ModifyVolumeOutput, error) {
+func ModifyVolume(input *ec2.ModifyVolumeInput, natsConn *nats.Conn, accountID string) (ec2.ModifyVolumeOutput, error) {
 	var output ec2.ModifyVolumeOutput
 
 	err := ValidateModifyVolumeInput(input)
@@ -37,7 +37,7 @@ func ModifyVolume(input *ec2.ModifyVolumeInput, natsConn *nats.Conn) (ec2.Modify
 	}
 
 	volumeService := handlers_ec2_volume.NewNATSVolumeService(natsConn)
-	result, err := volumeService.ModifyVolume(input)
+	result, err := volumeService.ModifyVolume(accountID, input)
 
 	if err != nil {
 		return output, err

@@ -24,7 +24,7 @@ func ValidateDeleteVolumeInput(input *ec2.DeleteVolumeInput) error {
 }
 
 // DeleteVolume handles the DeleteVolume API call
-func DeleteVolume(input *ec2.DeleteVolumeInput, natsConn *nats.Conn) (ec2.DeleteVolumeOutput, error) {
+func DeleteVolume(input *ec2.DeleteVolumeInput, natsConn *nats.Conn, accountID string) (ec2.DeleteVolumeOutput, error) {
 	var output ec2.DeleteVolumeOutput
 
 	err := ValidateDeleteVolumeInput(input)
@@ -33,7 +33,7 @@ func DeleteVolume(input *ec2.DeleteVolumeInput, natsConn *nats.Conn) (ec2.Delete
 	}
 
 	volumeService := handlers_ec2_volume.NewNATSVolumeService(natsConn)
-	result, err := volumeService.DeleteVolume(input)
+	result, err := volumeService.DeleteVolume(accountID, input)
 
 	if err != nil {
 		return output, err

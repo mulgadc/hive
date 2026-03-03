@@ -430,21 +430,32 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command qmp.Command, instance
 }
 
 func (d *Daemon) handleEC2CreateVolume(msg *nats.Msg) {
-	handleNATSRequest(msg, d.volumeService.CreateVolume)
+	accountID := utils.AccountIDFromMsg(msg)
+	handleNATSRequest(msg, func(input *ec2.CreateVolumeInput) (*ec2.Volume, error) {
+		return d.volumeService.CreateVolume(accountID, input)
+	})
 }
 
 func (d *Daemon) handleEC2DescribeVolumes(msg *nats.Msg) {
-	handleNATSRequest(msg, d.volumeService.DescribeVolumes)
+	accountID := utils.AccountIDFromMsg(msg)
+	handleNATSRequest(msg, func(input *ec2.DescribeVolumesInput) (*ec2.DescribeVolumesOutput, error) {
+		return d.volumeService.DescribeVolumes(accountID, input)
+	})
 }
 
 func (d *Daemon) handleEC2DescribeVolumeStatus(msg *nats.Msg) {
-	handleNATSRequest(msg, d.volumeService.DescribeVolumeStatus)
+	accountID := utils.AccountIDFromMsg(msg)
+	handleNATSRequest(msg, func(input *ec2.DescribeVolumeStatusInput) (*ec2.DescribeVolumeStatusOutput, error) {
+		return d.volumeService.DescribeVolumeStatus(accountID, input)
+	})
 }
 
 // handleEC2ModifyVolume processes incoming EC2 ModifyVolume requests
 func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 	slog.Debug("Received message", "subject", msg.Subject)
 	slog.Debug("Message data", "data", string(msg.Data))
+
+	accountID := utils.AccountIDFromMsg(msg)
 
 	modifyVolumeInput := &ec2.ModifyVolumeInput{}
 	errResp := utils.UnmarshalJsonPayload(modifyVolumeInput, msg.Data)
@@ -457,9 +468,9 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 		return
 	}
 
-	slog.Info("Processing ModifyVolume request", "volumeId", modifyVolumeInput.VolumeId)
+	slog.Info("Processing ModifyVolume request", "volumeId", modifyVolumeInput.VolumeId, "accountID", accountID)
 
-	output, err := d.volumeService.ModifyVolume(modifyVolumeInput)
+	output, err := d.volumeService.ModifyVolume(accountID, modifyVolumeInput)
 
 	if err != nil {
 		slog.Error("handleEC2ModifyVolume service.ModifyVolume failed", "err", err)
@@ -495,5 +506,8 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 }
 
 func (d *Daemon) handleEC2DeleteVolume(msg *nats.Msg) {
-	handleNATSRequest(msg, d.volumeService.DeleteVolume)
+	accountID := utils.AccountIDFromMsg(msg)
+	handleNATSRequest(msg, func(input *ec2.DeleteVolumeInput) (*ec2.DeleteVolumeOutput, error) {
+		return d.volumeService.DeleteVolume(accountID, input)
+	})
 }

@@ -253,6 +253,60 @@ func TestNATSRequestWithAccount_NoResponders(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestNATSRequestWithAccount_Timeout(t *testing.T) {
+	ns := startTestNATSServer(t)
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	defer nc.Close()
+
+	// Responder that never responds — triggers non-NoResponders NATS error
+	_, err = nc.QueueSubscribe("test.account.slow", "q", func(msg *nats.Msg) {
+		time.Sleep(5 * time.Second)
+	})
+	require.NoError(t, err)
+
+	type Resp struct{}
+	_, err = NATSRequestWithAccount[Resp](nc, "test.account.slow", struct{}{}, 100*time.Millisecond, "111122223333")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "NATS request failed")
+}
+
+func TestNATSRequestWithAccount_MarshalError(t *testing.T) {
+	ns := startTestNATSServer(t)
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	defer nc.Close()
+
+	type Resp struct{}
+	// Channels cannot be marshaled to JSON
+	_, err = NATSRequestWithAccount[Resp](nc, "test.account.marshalfail", make(chan int), 2*time.Second, "111122223333")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to marshal input")
+}
+
+func TestNATSRequestWithAccount_InvalidUnmarshal(t *testing.T) {
+	ns := startTestNATSServer(t)
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	defer nc.Close()
+
+	// Responder returns invalid JSON for the expected type
+	_, err = nc.Subscribe("test.account.badjson", func(msg *nats.Msg) {
+		msg.Respond([]byte(`not-json`))
+	})
+	require.NoError(t, err)
+
+	type Resp struct {
+		Value int `json:"value"`
+	}
+	_, err = NATSRequestWithAccount[Resp](nc, "test.account.badjson", struct{}{}, 2*time.Second, "111122223333")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unmarshal")
+}
+
 // --- AccountIDFromMsg tests ---
 
 func TestAccountIDFromMsg(t *testing.T) {
