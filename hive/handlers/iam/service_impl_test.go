@@ -1,6 +1,7 @@
 package handlers_iam
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -213,6 +214,97 @@ func TestDeleteUser_WithAccessKeys(t *testing.T) {
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), awserrors.ErrorIAMDeleteConflict)
+}
+
+func TestDeleteUser_WithAttachedPolicies(t *testing.T) {
+	svc := setupTestIAMService(t)
+	createTestUser(t, svc, "policyuser")
+
+	_, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
+		PolicyName:     aws.String("TestPolicy"),
+		PolicyDocument: aws.String(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`),
+	})
+	require.NoError(t, err)
+
+	policyARN := "arn:aws:iam::" + testAccountID + ":policy/TestPolicy"
+	_, err = svc.AttachUserPolicy(testAccountID, &iam.AttachUserPolicyInput{
+		UserName:  aws.String("policyuser"),
+		PolicyArn: aws.String(policyARN),
+	})
+	require.NoError(t, err)
+
+	_, err = svc.DeleteUser(testAccountID, &iam.DeleteUserInput{
+		UserName: aws.String("policyuser"),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMDeleteConflict)
+}
+
+// ============================================================================
+// Input Validation Tests
+// ============================================================================
+
+func TestCreateUser_InvalidName_TooLong(t *testing.T) {
+	svc := setupTestIAMService(t)
+	longName := strings.Repeat("a", 65)
+
+	_, err := svc.CreateUser(testAccountID, &iam.CreateUserInput{
+		UserName: aws.String(longName),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMInvalidInput)
+}
+
+func TestCreateUser_InvalidName_BadChars(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	_, err := svc.CreateUser(testAccountID, &iam.CreateUserInput{
+		UserName: aws.String("user name!"),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMInvalidInput)
+}
+
+func TestCreateUser_InvalidPath(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	_, err := svc.CreateUser(testAccountID, &iam.CreateUserInput{
+		UserName: aws.String("validuser"),
+		Path:     aws.String("no-leading-slash/"),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMInvalidInput)
+}
+
+func TestCreatePolicy_InvalidName(t *testing.T) {
+	svc := setupTestIAMService(t)
+	longName := strings.Repeat("a", 129)
+
+	_, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
+		PolicyName:     aws.String(longName),
+		PolicyDocument: aws.String(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMInvalidInput)
+}
+
+func TestCreatePolicy_InvalidPath(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	_, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
+		PolicyName:     aws.String("ValidPolicy"),
+		PolicyDocument: aws.String(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`),
+		Path:           aws.String("bad-path"),
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMInvalidInput)
+}
+
+func TestValidatePolicyDocument_TooLarge(t *testing.T) {
+	largeDoc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"` + strings.Repeat("a", maxPolicyDocumentSize) + `"}]}`
+	_, err := ValidatePolicyDocument(largeDoc)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds maximum size")
 }
 
 // ============================================================================

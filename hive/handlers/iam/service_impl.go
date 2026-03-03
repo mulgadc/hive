@@ -122,9 +122,16 @@ func getOrCreateBucket(js nats.JetStreamContext, name string, history uint8) (na
 
 func (s *IAMServiceImpl) CreateUser(accountID string, input *iam.CreateUserInput) (*iam.CreateUserOutput, error) {
 	userName := *input.UserName
+	if err := validateUserName(userName); err != nil {
+		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
+	}
+
 	path := "/"
 	if input.Path != nil {
 		path = *input.Path
+		if err := validatePath(path); err != nil {
+			return nil, errors.New(awserrors.ErrorIAMInvalidInput)
+		}
 	}
 
 	kvKey := accountID + "." + userName
@@ -261,6 +268,9 @@ func (s *IAMServiceImpl) DeleteUser(accountID string, input *iam.DeleteUserInput
 	}
 
 	if len(user.AccessKeys) > 0 {
+		return nil, errors.New(awserrors.ErrorIAMDeleteConflict)
+	}
+	if len(user.AttachedPolicies) > 0 {
 		return nil, errors.New(awserrors.ErrorIAMDeleteConflict)
 	}
 
@@ -703,6 +713,10 @@ func (s *IAMServiceImpl) ListAccounts() ([]*Account, error) {
 
 func (s *IAMServiceImpl) CreatePolicy(accountID string, input *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error) {
 	policyName := *input.PolicyName
+	if err := validatePolicyName(policyName); err != nil {
+		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
+	}
+
 	kvKey := accountID + "." + policyName
 
 	if _, err := ValidatePolicyDocument(*input.PolicyDocument); err != nil {
@@ -713,6 +727,8 @@ func (s *IAMServiceImpl) CreatePolicy(accountID string, input *iam.CreatePolicyI
 	path := aws.StringValue(input.Path)
 	if path == "" {
 		path = "/"
+	} else if err := validatePath(path); err != nil {
+		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
 
 	policy := Policy{
@@ -1176,8 +1192,54 @@ func parseCreatedAt(raw string) time.Time {
 	return t
 }
 
+const maxPolicyDocumentSize = 6144
+
+// isIAMNameChar returns true if c is allowed in IAM user/policy names.
+func isIAMNameChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+		c == '+' || c == '=' || c == ',' || c == '.' || c == '@' || c == '-' || c == '_'
+}
+
+func validateUserName(name string) error {
+	if len(name) == 0 || len(name) > 64 {
+		return fmt.Errorf("user name must be between 1 and 64 characters")
+	}
+	for i := range len(name) {
+		if !isIAMNameChar(name[i]) {
+			return fmt.Errorf("user name contains invalid character: %q", name[i])
+		}
+	}
+	return nil
+}
+
+func validatePolicyName(name string) error {
+	if len(name) == 0 || len(name) > 128 {
+		return fmt.Errorf("policy name must be between 1 and 128 characters")
+	}
+	for i := range len(name) {
+		if !isIAMNameChar(name[i]) {
+			return fmt.Errorf("policy name contains invalid character: %q", name[i])
+		}
+	}
+	return nil
+}
+
+func validatePath(path string) error {
+	if !strings.HasPrefix(path, "/") || !strings.HasSuffix(path, "/") {
+		return fmt.Errorf("path must begin and end with /")
+	}
+	if len(path) > 512 {
+		return fmt.Errorf("path exceeds maximum length of 512")
+	}
+	return nil
+}
+
 // ValidatePolicyDocument parses and validates an IAM policy document JSON string.
 func ValidatePolicyDocument(docJSON string) (*PolicyDocument, error) {
+	if len(docJSON) > maxPolicyDocumentSize {
+		return nil, fmt.Errorf("policy document exceeds maximum size of %d bytes", maxPolicyDocumentSize)
+	}
+
 	var doc PolicyDocument
 	if err := json.Unmarshal([]byte(docJSON), &doc); err != nil {
 		return nil, fmt.Errorf("invalid JSON: %w", err)
