@@ -2,7 +2,6 @@ package handlers_iam
 
 import (
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/iam"
+	"github.com/mulgadc/hive/hive/admin"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/nats-io/nats.go"
 )
@@ -123,7 +123,7 @@ func (s *IAMServiceImpl) CreateUser(accountID string, input *iam.CreateUserInput
 	kvKey := accountID + "." + userName
 	user := User{
 		UserName:         userName,
-		UserID:           generateUserID(),
+		UserID:           generateIAMID("AIDA"),
 		AccountID:        accountID,
 		ARN:              fmt.Sprintf("arn:aws:iam::%s:user%s%s", accountID, path, userName),
 		Path:             path,
@@ -283,7 +283,7 @@ func (s *IAMServiceImpl) CreateAccessKey(accountID string, input *iam.CreateAcce
 	}
 
 	accessKeyID := generateAccessKeyID()
-	secretAccessKey := generateSecretAccessKey()
+	secretAccessKey := admin.GenerateAWSSecretKey()
 
 	encryptedSecret, err := EncryptSecret(secretAccessKey, s.masterKey)
 	if err != nil {
@@ -704,7 +704,7 @@ func (s *IAMServiceImpl) CreatePolicy(accountID string, input *iam.CreatePolicyI
 
 	policy := Policy{
 		PolicyName:     policyName,
-		PolicyID:       generatePolicyID(),
+		PolicyID:       generateIAMID("ANPA"),
 		ARN:            fmt.Sprintf("arn:aws:iam::%s:policy%s%s", accountID, path, policyName),
 		Path:           path,
 		Description:    aws.StringValue(input.Description),
@@ -1096,12 +1096,12 @@ func (s *IAMServiceImpl) getUser(accountID, userName string) (*User, error) {
 	return &user, nil
 }
 
-func generateUserID() string {
+func generateIAMID(prefix string) string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		panic("crypto/rand failed: " + err.Error())
 	}
-	return "AIDA" + strings.ToUpper(hex.EncodeToString(b))[:17]
+	return prefix + strings.ToUpper(hex.EncodeToString(b))[:17]
 }
 
 func generateAccessKeyID() string {
@@ -1110,22 +1110,6 @@ func generateAccessKeyID() string {
 		panic("crypto/rand failed: " + err.Error())
 	}
 	return "AKIA" + strings.ToUpper(hex.EncodeToString(b))
-}
-
-func generateSecretAccessKey() string {
-	b := make([]byte, 30)
-	if _, err := rand.Read(b); err != nil {
-		panic("crypto/rand failed: " + err.Error())
-	}
-	return base64.StdEncoding.EncodeToString(b)[:40]
-}
-
-func generatePolicyID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		panic("crypto/rand failed: " + err.Error())
-	}
-	return "ANPA" + strings.ToUpper(hex.EncodeToString(b))[:17]
 }
 
 func parseCreatedAt(raw string) time.Time {
