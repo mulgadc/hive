@@ -304,7 +304,7 @@ func (s *IAMServiceImpl) CreateAccessKey(accountID string, input *iam.CreateAcce
 		SecretAccessKey: encryptedSecret,
 		UserName:        userName,
 		AccountID:       accountID,
-		Status:          "Active",
+		Status:          AccessKeyStatusActive,
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -345,7 +345,7 @@ func (s *IAMServiceImpl) CreateAccessKey(accountID string, input *iam.CreateAcce
 			AccessKeyId:     aws.String(accessKeyID),
 			SecretAccessKey: aws.String(secretAccessKey), // plaintext — only time it's returned
 			UserName:        aws.String(userName),
-			Status:          aws.String("Active"),
+			Status:          aws.String(AccessKeyStatusActive),
 			CreateDate:      aws.Time(createdAt),
 		},
 	}, nil
@@ -438,7 +438,7 @@ func (s *IAMServiceImpl) DeleteAccessKey(accountID string, input *iam.DeleteAcce
 
 func (s *IAMServiceImpl) UpdateAccessKey(accountID string, input *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error) {
 	status := *input.Status
-	if status != "Active" && status != "Inactive" {
+	if status != AccessKeyStatusActive && status != AccessKeyStatusInactive {
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
 
@@ -506,7 +506,7 @@ func (s *IAMServiceImpl) SeedRootUser(data *BootstrapData) error {
 	globalAccount := Account{
 		AccountID:   GlobalAccountID,
 		AccountName: "Global",
-		Status:      "ACTIVE",
+		Status:      AccountStatusActive,
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}
 	accountData, err := json.Marshal(globalAccount)
@@ -551,7 +551,7 @@ func (s *IAMServiceImpl) SeedRootUser(data *BootstrapData) error {
 		SecretAccessKey: data.EncryptedSecret,
 		UserName:        "root",
 		AccountID:       GlobalAccountID,
-		Status:          "Active",
+		Status:          AccessKeyStatusActive,
 		CreatedAt:       rootUser.CreatedAt,
 	}
 
@@ -635,7 +635,7 @@ func (s *IAMServiceImpl) CreateAccount(name string) (*Account, error) {
 	account := Account{
 		AccountID:   accountID,
 		AccountName: name,
-		Status:      "ACTIVE",
+		Status:      AccountStatusActive,
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}
 
@@ -1171,7 +1171,7 @@ func ValidatePolicyDocument(docJSON string) (*PolicyDocument, error) {
 	}
 
 	for i, stmt := range doc.Statement {
-		if stmt.Effect != "Allow" && stmt.Effect != "Deny" {
+		if stmt.Effect != PolicyEffectAllow && stmt.Effect != PolicyEffectDeny {
 			return nil, fmt.Errorf("statement %d: Effect must be Allow or Deny, got %q", i, stmt.Effect)
 		}
 		if len(stmt.Action) == 0 {

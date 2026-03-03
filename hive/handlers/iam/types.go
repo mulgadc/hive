@@ -2,6 +2,17 @@ package handlers_iam
 
 import "encoding/json"
 
+const (
+	AccessKeyStatusActive   = "Active"
+	AccessKeyStatusInactive = "Inactive"
+
+	AccountStatusActive    = "ACTIVE"
+	AccountStatusSuspended = "SUSPENDED"
+
+	PolicyEffectAllow = "Allow"
+	PolicyEffectDeny  = "Deny"
+)
+
 // User represents an IAM user stored in JetStream KV.
 type User struct {
 	UserName         string   `json:"user_name"`

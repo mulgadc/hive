@@ -43,9 +43,9 @@ func EvaluateAccess(identity, action, resource string, policies []handlers_iam.P
 				continue
 			}
 			switch stmt.Effect {
-			case "Deny":
+			case handlers_iam.PolicyEffectDeny:
 				return Deny
-			case "Allow":
+			case handlers_iam.PolicyEffectAllow:
 				hasAllow = true
 			default:
 				slog.Warn("EvaluateAccess: unrecognized Effect, treating as Deny",
