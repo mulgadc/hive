@@ -154,10 +154,7 @@ func (s *IAMServiceImpl) CreateUser(accountID string, input *iam.CreateUserInput
 
 	slog.Info("IAM user created", "accountID", accountID, "userName", userName, "userID", user.UserID)
 
-	createdAt, err := time.Parse(time.RFC3339, user.CreatedAt)
-	if err != nil {
-		slog.Warn("Failed to parse user CreatedAt", "userName", userName, "createdAt", user.CreatedAt, "err", err)
-	}
+	createdAt := parseCreatedAt(user.CreatedAt)
 	return &iam.CreateUserOutput{
 		User: &iam.User{
 			UserName:   aws.String(user.UserName),
@@ -175,10 +172,7 @@ func (s *IAMServiceImpl) GetUser(accountID string, input *iam.GetUserInput) (*ia
 		return nil, err
 	}
 
-	createdAt, err := time.Parse(time.RFC3339, user.CreatedAt)
-	if err != nil {
-		slog.Warn("Failed to parse user CreatedAt", "userName", user.UserName, "createdAt", user.CreatedAt, "err", err)
-	}
+	createdAt := parseCreatedAt(user.CreatedAt)
 	return &iam.GetUserOutput{
 		User: &iam.User{
 			UserName:   aws.String(user.UserName),
@@ -234,10 +228,7 @@ func (s *IAMServiceImpl) ListUsers(accountID string, input *iam.ListUsersInput) 
 			continue
 		}
 
-		createdAt, err := time.Parse(time.RFC3339, user.CreatedAt)
-		if err != nil {
-			slog.Warn("Failed to parse user CreatedAt", "userName", user.UserName, "createdAt", user.CreatedAt, "err", err)
-		}
+		createdAt := parseCreatedAt(user.CreatedAt)
 		users = append(users, &iam.User{
 			UserName:   aws.String(user.UserName),
 			UserId:     aws.String(user.UserID),
@@ -336,10 +327,7 @@ func (s *IAMServiceImpl) CreateAccessKey(accountID string, input *iam.CreateAcce
 
 	slog.Info("IAM access key created", "accountID", accountID, "userName", userName, "accessKeyID", accessKeyID)
 
-	createdAt, err := time.Parse(time.RFC3339, ak.CreatedAt)
-	if err != nil {
-		slog.Warn("Failed to parse access key CreatedAt", "accessKeyID", accessKeyID, "createdAt", ak.CreatedAt, "err", err)
-	}
+	createdAt := parseCreatedAt(ak.CreatedAt)
 	return &iam.CreateAccessKeyOutput{
 		AccessKey: &iam.AccessKey{
 			AccessKeyId:     aws.String(accessKeyID),
@@ -375,10 +363,7 @@ func (s *IAMServiceImpl) ListAccessKeys(accountID string, input *iam.ListAccessK
 			continue
 		}
 
-		createdAt, err := time.Parse(time.RFC3339, ak.CreatedAt)
-		if err != nil {
-			slog.Warn("Failed to parse access key CreatedAt", "keyID", keyID, "createdAt", ak.CreatedAt, "err", err)
-		}
+		createdAt := parseCreatedAt(ak.CreatedAt)
 		metadata = append(metadata, &iam.AccessKeyMetadata{
 			AccessKeyId: aws.String(ak.AccessKeyID),
 			UserName:    aws.String(ak.UserName),
@@ -743,10 +728,7 @@ func (s *IAMServiceImpl) CreatePolicy(accountID string, input *iam.CreatePolicyI
 
 	slog.Info("IAM policy created", "accountID", accountID, "policyName", policyName, "policyID", policy.PolicyID)
 
-	createdAt, err := time.Parse(time.RFC3339, policy.CreatedAt)
-	if err != nil {
-		slog.Warn("Failed to parse policy CreatedAt", "policyName", policy.PolicyName, "createdAt", policy.CreatedAt, "err", err)
-	}
+	createdAt := parseCreatedAt(policy.CreatedAt)
 	return &iam.CreatePolicyOutput{
 		Policy: &iam.Policy{
 			PolicyName:       aws.String(policy.PolicyName),
@@ -773,10 +755,7 @@ func (s *IAMServiceImpl) GetPolicy(accountID string, input *iam.GetPolicyInput) 
 		return nil, fmt.Errorf("check policy attachments: %w", err)
 	}
 
-	createdAt, err := time.Parse(time.RFC3339, policy.CreatedAt)
-	if err != nil {
-		slog.Warn("Failed to parse policy CreatedAt", "policyName", policy.PolicyName, "createdAt", policy.CreatedAt, "err", err)
-	}
+	createdAt := parseCreatedAt(policy.CreatedAt)
 	return &iam.GetPolicyOutput{
 		Policy: &iam.Policy{
 			PolicyName:       aws.String(policy.PolicyName),
@@ -803,10 +782,7 @@ func (s *IAMServiceImpl) GetPolicyVersion(accountID string, input *iam.GetPolicy
 		return nil, errors.New(awserrors.ErrorIAMNoSuchEntity)
 	}
 
-	createdAt, err := time.Parse(time.RFC3339, policy.CreatedAt)
-	if err != nil {
-		slog.Warn("Failed to parse policy CreatedAt", "policyName", policy.PolicyName, "createdAt", policy.CreatedAt, "err", err)
-	}
+	createdAt := parseCreatedAt(policy.CreatedAt)
 	return &iam.GetPolicyVersionOutput{
 		PolicyVersion: &iam.PolicyVersion{
 			Document:         aws.String(policy.PolicyDocument),
@@ -852,10 +828,7 @@ func (s *IAMServiceImpl) ListPolicies(accountID string, input *iam.ListPoliciesI
 			continue
 		}
 
-		createdAt, err := time.Parse(time.RFC3339, policy.CreatedAt)
-		if err != nil {
-			slog.Warn("Failed to parse policy CreatedAt", "policyName", policy.PolicyName, "createdAt", policy.CreatedAt, "err", err)
-		}
+		createdAt := parseCreatedAt(policy.CreatedAt)
 		attachCount, err := s.countPolicyAttachments(accountID, policy.ARN)
 		if err != nil {
 			return nil, fmt.Errorf("count policy attachments: %w", err)
@@ -1153,6 +1126,14 @@ func generatePolicyID() string {
 		panic("crypto/rand failed: " + err.Error())
 	}
 	return "ANPA" + strings.ToUpper(hex.EncodeToString(b))[:17]
+}
+
+func parseCreatedAt(raw string) time.Time {
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		slog.Warn("parseCreatedAt: invalid RFC3339", "raw", raw, "err", err)
+	}
+	return t
 }
 
 // ValidatePolicyDocument parses and validates an IAM policy document JSON string.
