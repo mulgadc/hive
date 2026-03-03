@@ -143,6 +143,16 @@ has_service "predastore" && stop_service "predastore" "$PID_DIR"
 # Stop NATS
 has_service "nats" && stop_service "nats" "$PID_DIR"
 
+# Stop OVN networking (prevents idle CPU burn when hive isn't running)
+if pidof systemd >/dev/null 2>&1; then
+    echo "🛑 Stopping OVN networking..."
+    sudo systemctl stop ovn-controller 2>/dev/null && echo "✅ ovn-controller stopped" || true
+    if systemctl is-active --quiet ovn-central 2>/dev/null; then
+        sudo systemctl stop ovn-central 2>/dev/null && echo "✅ ovn-central stopped" || true
+    fi
+    sudo systemctl stop openvswitch-switch 2>/dev/null && echo "✅ openvswitch-switch stopped" || true
+fi
+
 echo ""
 echo "✅ Hive development environment stopped"
 
