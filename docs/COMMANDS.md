@@ -4,6 +4,49 @@
 
 Platform management commands not exposed via the AWS gateway API. These are CLI-only commands.
 
+### Service Management
+
+Service lifecycle commands for starting, stopping, and checking status of all Hive cluster services. Each service subcommand supports `start`, `stop`, and `status` operations.
+
+| Command | Flags | Prerequisites | Basic Logic | Status |
+|---------|-------|---------------|-------------|--------|
+| `hive service predastore start` | `--port` (default: 8443), `--host` (default: 0.0.0.0), `--base-path`, `--config-path`, `--debug`, `--tls-cert`, `--tls-key`, `--backend` (distributed/filesystem, default: distributed), `--node-id` (default: 0), `--pprof`, `--pprof-output` | TLS cert/key, base-path, config-path required | Creates predastore service instance with S3-compatible storage backend → starts service | **DONE** |
+| `hive service predastore stop` | — | Predastore must be running | Stops the predastore service | **DONE** |
+| `hive service predastore status` | — | None | Reports predastore service status | **DONE** |
+| `hive service viperblock start` | `--s3-host` (default: 0.0.0.0:8443), `--s3-bucket` (default: predastore), `--s3-region` (default: ap-southeast-2), `--plugin-path` (default: /opt/hive/lib/nbdkit-viperblock-plugin.so) | `--config` required, plugin-path must exist on disk | Loads cluster config → connects to NATS and Predastore → starts viperblock block storage service with NBD plugin | **DONE** |
+| `hive service viperblock stop` | — | Viperblock must be running | Stops the viperblock service | **DONE** |
+| `hive service viperblock status` | — | None | Reports viperblock service status | **DONE** |
+| `hive service nats start` | `--port` (default: 4222), `--host` (default: 0.0.0.0), `--debug`, `--data-dir`, `--jetstream` | None | Starts embedded NATS server with optional JetStream | **DONE** |
+| `hive service nats stop` | — | NATS must be running | Stops the NATS service | **DONE** |
+| `hive service nats status` | — | None | Reports NATS service status | **DONE** |
+| `hive service hive start` | `--wal-dir` | `--config` required | Loads cluster config → starts hive daemon (VM orchestration, NATS subscriptions, health endpoint) | **DONE** |
+| `hive service hive stop` | — | Hive daemon must be running | Stops the hive daemon service | **DONE** |
+| `hive service hive status` | — | None | Reports hive daemon service status | **DONE** |
+| `hive service awsgw start` | `--host` (default: 0.0.0.0:9999), `--tls-cert`, `--tls-key`, `--debug` | `--config` required | Loads cluster config → starts AWS-compatible gateway with SigV4 auth, IAM policy enforcement, TLS | **DONE** |
+| `hive service awsgw stop` | — | AWS gateway must be running | Stops the AWS gateway service | **DONE** |
+| `hive service awsgw status` | — | None | Reports AWS gateway service status | **DONE** |
+| `hive service hive-ui start` | `--port` (default: 3000), `--host` (default: 0.0.0.0), `--tls-cert`, `--tls-key` | None | Starts embedded web UI server serving the React frontend. Aliases: `ui`, `hiveui` | **DONE** |
+| `hive service hive-ui stop` | — | hive-ui must be running | Stops the hive-ui service | **DONE** |
+| `hive service hive-ui status` | — | None | Reports hive-ui service status | **DONE** |
+| `hive service vpcd start` | — | `--config` required, OVN/OVS installed | Loads cluster config → starts VPC daemon (subscribes to `vpc.*` NATS events, translates to OVN logical switches/ports/routers) | **DONE** |
+| `hive service vpcd stop` | — | vpcd must be running | Stops the vpcd service | **DONE** |
+| `hive service vpcd status` | — | None | Reports vpcd service status | **DONE** |
+
+### Cluster Inspection
+
+Operational commands for inspecting cluster state. These fan out NATS requests to all nodes and aggregate responses.
+
+| Command | Flags | Prerequisites | Basic Logic | Output Columns | Status |
+|---------|-------|---------------|-------------|----------------|--------|
+| `hive get nodes` | `--timeout` (default: 3s) | Cluster must be running (NATS) | Loads config → publishes to `hive.node.status` fan-out topic → collects responses within timeout → merges config-known nodes with NATS responders → nodes that don't respond shown as `NotReady` | NAME, STATUS, IP, REGION, AZ, UPTIME, VMs, SERVICES | **DONE** |
+| `hive get vms` | `--timeout` (default: 3s) | Cluster must be running (NATS) | Publishes to `hive.node.vms` fan-out topic → collects VM info from all nodes → sorts by node then instance ID → prints table. Alias: `hive get instances` | INSTANCE, STATUS, TYPE, VCPU, MEM, NODE, IP, AGE | **DONE** |
+
+### Resource Monitoring
+
+| Command | Flags | Prerequisites | Basic Logic | Output | Status |
+|---------|-------|---------------|-------------|--------|--------|
+| `hive top nodes` | `--timeout` (default: 3s) | Cluster must be running (NATS) | Publishes to `hive.node.status` fan-out topic → collects CPU/memory usage per node → aggregates instance type capacity across all nodes → prints two tables: per-node resource usage and cluster-wide instance type availability | Table 1: NAME, CPU (used/total), MEM (used/total), VMs. Table 2: INSTANCE TYPE, AVAILABLE, VCPU, MEMORY | **DONE** |
+
 ### Cluster Initialization
 
 | Command | Flags | Prerequisites | Basic Logic | Test Cases | Status |
@@ -163,7 +206,7 @@ Gateway routing and KV CRUD are wired up but no OVN/OVS integration exists. EIGW
 | `describe-hosts` | — | `--host-ids`, `--filters`, `--max-results` | None | NATS `ec2.DescribeHosts` → daemon lists hosts from KV → return host list with capacity and instance info | 1. List all hosts<br>2. Filter by host ID<br>3. Filter by instance type | **NOT STARTED** |
 | `release-hosts` | — | `--host-ids` | Host must exist, no running instances | NATS `ec2.ReleaseHosts` → daemon verifies no instances on host → delete from KV → return success/failure per host | 1. Release empty host<br>2. Release host with instances (error)<br>3. Release non-existent host (error) | **NOT STARTED** |
 
-## EC2 - IPv4 Pools
+### EC2 - IPv4 Pools
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
@@ -411,7 +454,7 @@ Policies are account-scoped. KV key is `{accountID}.{policyName}`. Policy docume
 | `list-policies` | — | `--scope`, `--only-attached`, `--path-prefix`, `--max-items`, `--marker` | None | IAMService.ListPolicies(accountID, input) → prefix-scans KV for `{accountID}.*` → returns all policies in caller's account | 1. List all policies in account<br>2. Empty list<br>3. Does not show other accounts' policies | **DONE** |
 | `delete-policy` | `--policy-arn` | — | Policy must exist, not attached to any user | Gateway validates PolicyArn → IAMService.DeletePolicy(accountID, input) → checks no users have this policy attached (scans account's users) → deletes from KV | 1. Delete unattached policy<br>2. Delete attached policy (DeleteConflict)<br>3. Delete non-existent (NoSuchEntity) | **DONE** |
 
-## IAM - Policy Attachment
+### IAM - Policy Attachment
 
 | Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------------------|---------------|---------------|-------------|------------|--------|
