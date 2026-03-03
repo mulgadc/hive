@@ -22,15 +22,12 @@ const (
 // the specified action on the specified resource, based on the supplied
 // policy documents. It follows AWS's evaluation order:
 //
-//  1. Root user → always Allow (bypass evaluation entirely).
-//  2. Explicit Deny in any statement → Deny (wins immediately).
-//  3. Explicit Allow in any statement → Allow.
-//  4. No matching statement → Deny (implicit default).
+//  1. Explicit Deny in any statement → Deny (wins immediately).
+//  2. Explicit Allow in any statement → Allow.
+//  3. No matching statement → Deny (implicit default).
+//
+// Root bypass is handled by the gateway before this function is called.
 func EvaluateAccess(identity, action, resource string, policies []handlers_iam.PolicyDocument) Decision {
-	if identity == "root" {
-		return Allow
-	}
-
 	hasAllow := false
 	for i := range policies {
 		for j := range policies[i].Statement {

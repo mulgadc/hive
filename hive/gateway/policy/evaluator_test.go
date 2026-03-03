@@ -16,24 +16,7 @@ func doc(effect, action, resource string) handlers_iam.PolicyDocument {
 	}
 }
 
-func TestEvaluateAccess_RootBypass(t *testing.T) {
-	// Root user is always allowed, even with no policies.
-	got := EvaluateAccess("root", "ec2:TerminateInstances", "*", nil)
-	if got != Allow {
-		t.Fatalf("expected Allow for root, got %v", got)
-	}
-}
-
-func TestEvaluateAccess_RootBypassWithExplicitDeny(t *testing.T) {
-	// Root bypasses even an explicit Deny.
-	policies := []handlers_iam.PolicyDocument{
-		doc("Deny", "*", "*"),
-	}
-	got := EvaluateAccess("root", "ec2:TerminateInstances", "*", policies)
-	if got != Allow {
-		t.Fatalf("expected Allow for root even with explicit deny, got %v", got)
-	}
-}
+// Root bypass is tested at the gateway layer (checkPolicy), not in the evaluator.
 
 func TestEvaluateAccess_DefaultDeny(t *testing.T) {
 	// Non-root with no policies → default deny.
