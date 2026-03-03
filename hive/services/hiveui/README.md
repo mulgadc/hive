@@ -41,12 +41,6 @@ Note: This is not needed for actually building hive-ui and running it. We commit
 
 5. **Launch Server**
 
-   For production, build the static assets and launch the `go` webservice for serving traffic:
-
-   ```sh
-   make run
-   ```
-
    For development use:
 
    ```sh

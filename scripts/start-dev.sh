@@ -154,7 +154,7 @@ check_service() {
     local name="$1"
     local host="$2"
     local port="$3"
-    local max_attempts=10
+    local max_attempts="${4:-30}"
     local attempt=1
 
     echo "🔍 Checking $name connectivity on $host:$port..."
@@ -169,8 +169,8 @@ check_service() {
         ((attempt++))
     done
 
-    echo "   ⚠️  $name may not be responding on $host:$port (continuing anyway)"
-
+    echo "   ❌ $name failed to start on $host:$port after $max_attempts attempts"
+    exit 1
 }
 
 # Pre-flight, compile latest (only with --build flag)
@@ -353,7 +353,7 @@ if has_service "awsgw"; then
 
     unset HIVE_NATS_HOST
     unset HIVE_PREDASTORE_HOST
-    export HIVE_BASE_DIR=$CONFIG_DIR
+    export HIVE_BASE_DIR=$DATA_DIR
     export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
     export HIVE_AWSGW_TLS_CERT=$CONFIG_DIR/server.pem
     export HIVE_AWSGW_TLS_KEY=$CONFIG_DIR/server.key

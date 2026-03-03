@@ -39,8 +39,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Use Hive profile
+# Use Hive profile (hive admin init sets endpoint_url, ca_bundle, region in ~/.aws/config)
 export AWS_PROFILE=hive
+
+# Helper: set up an AWS CLI profile with credentials + endpoint/CA config from the hive profile
+setup_test_profile() {
+    local profile="$1" key_id="$2" secret="$3"
+    aws configure set aws_access_key_id "$key_id" --profile "$profile"
+    aws configure set aws_secret_access_key "$secret" --profile "$profile"
+    aws configure set region "$(aws configure get region)" --profile "$profile"
+    aws configure set endpoint_url "$(aws configure get endpoint_url)" --profile "$profile"
+    aws configure set ca_bundle "$(aws configure get ca_bundle)" --profile "$profile"
+}
 
 # Ensure we are in the project root
 cd "$(dirname "$0")/../.."
@@ -99,8 +109,7 @@ fi
 # Wait for daemon NATS subscriptions to be active
 wait_for_daemon_ready "https://localhost:9999"
 
-# Define common AWS CLI args
-AWS_EC2="aws --endpoint-url https://localhost:9999 ec2"
+# No need for AWS_EC2/AWS_IAM vars — endpoint_url and ca_bundle are in the profile config
 
 # Phase 1b: Cluster Stats CLI
 echo "Phase 1b: Cluster Stats CLI"
@@ -138,11 +147,11 @@ echo "hive get vms (empty) passed"
 # Phase 2: Discovery & Metadata
 echo "Phase 2: Discovery & Metadata"
 # Verify describe-regions (just ensure it returns at least one region)
-$AWS_EC2 describe-regions | jq -e '.Regions | length > 0'
+aws ec2 describe-regions | jq -e '.Regions | length > 0'
 
 # Verify describe-availability-zones
 echo "Verifying describe-availability-zones..."
-AZ_OUTPUT=$($AWS_EC2 describe-availability-zones)
+AZ_OUTPUT=$(aws ec2 describe-availability-zones)
 echo "$AZ_OUTPUT" | jq -e '.AvailabilityZones | length > 0'
 AZ_NAME=$(echo "$AZ_OUTPUT" | jq -r '.AvailabilityZones[0].ZoneName')
 AZ_STATE=$(echo "$AZ_OUTPUT" | jq -r '.AvailabilityZones[0].State')
@@ -155,7 +164,7 @@ echo "DescribeAvailabilityZones verified (Zone=$AZ_NAME, State=$AZ_STATE)"
 # Discover available instance types from Hive
 # Hive generates these based on the host CPU (e.g., m7i.micro, m8g.small, etc.)
 echo "Discovering available instance types..."
-AVAILABLE_TYPES=$($AWS_EC2 describe-instance-types --query 'InstanceTypes[*].InstanceType' --output text)
+AVAILABLE_TYPES=$(aws ec2 describe-instance-types --query 'InstanceTypes[*].InstanceType' --output text)
 echo "Available instance types: $AVAILABLE_TYPES"
 
 # Pick the nano instance type for minimal resource usage in tests
@@ -167,17 +176,17 @@ fi
 echo "Selected instance type for test: $INSTANCE_TYPE"
 
 # Get architecture for the selected instance type
-ARCH=$($AWS_EC2 describe-instance-types --instance-types "$INSTANCE_TYPE" --query 'InstanceTypes[0].ProcessorInfo.SupportedArchitectures[0]' --output text)
+ARCH=$(aws ec2 describe-instance-types --instance-types "$INSTANCE_TYPE" --query 'InstanceTypes[0].ProcessorInfo.SupportedArchitectures[0]' --output text)
 echo "Detected architecture for $INSTANCE_TYPE: $ARCH"
 
 # Verify describe-instance-types (ensure the chosen type is available)
-$AWS_EC2 describe-instance-types | jq -e ".InstanceTypes[] | select(.InstanceType==\"$INSTANCE_TYPE\")"
+aws ec2 describe-instance-types | jq -e ".InstanceTypes[] | select(.InstanceType==\"$INSTANCE_TYPE\")"
 
 # Phase 2b: Serial Console Access Settings
 echo "Phase 2b: Serial Console Access Settings"
 
 # Default should be disabled
-SERIAL_DEFAULT=$($AWS_EC2 get-serial-console-access-status --query 'SerialConsoleAccessEnabled' --output text)
+SERIAL_DEFAULT=$(aws ec2 get-serial-console-access-status --query 'SerialConsoleAccessEnabled' --output text)
 if [ "$SERIAL_DEFAULT" != "False" ]; then
     echo "Expected serial console access default to be False, got $SERIAL_DEFAULT"
     exit 1
@@ -185,12 +194,12 @@ fi
 echo "  Default state: disabled"
 
 # Enable
-ENABLE_RESULT=$($AWS_EC2 enable-serial-console-access --query 'SerialConsoleAccessEnabled' --output text)
+ENABLE_RESULT=$(aws ec2 enable-serial-console-access --query 'SerialConsoleAccessEnabled' --output text)
 if [ "$ENABLE_RESULT" != "True" ]; then
     echo "Expected enable to return True, got $ENABLE_RESULT"
     exit 1
 fi
-SERIAL_ENABLED=$($AWS_EC2 get-serial-console-access-status --query 'SerialConsoleAccessEnabled' --output text)
+SERIAL_ENABLED=$(aws ec2 get-serial-console-access-status --query 'SerialConsoleAccessEnabled' --output text)
 if [ "$SERIAL_ENABLED" != "True" ]; then
     echo "Expected serial console access to be True after enable, got $SERIAL_ENABLED"
     exit 1
@@ -198,12 +207,12 @@ fi
 echo "  Enabled: $SERIAL_ENABLED"
 
 # Disable
-DISABLE_RESULT=$($AWS_EC2 disable-serial-console-access --query 'SerialConsoleAccessEnabled' --output text)
+DISABLE_RESULT=$(aws ec2 disable-serial-console-access --query 'SerialConsoleAccessEnabled' --output text)
 if [ "$DISABLE_RESULT" != "False" ]; then
     echo "Expected disable to return False, got $DISABLE_RESULT"
     exit 1
 fi
-SERIAL_DISABLED=$($AWS_EC2 get-serial-console-access-status --query 'SerialConsoleAccessEnabled' --output text)
+SERIAL_DISABLED=$(aws ec2 get-serial-console-access-status --query 'SerialConsoleAccessEnabled' --output text)
 if [ "$SERIAL_DISABLED" != "False" ]; then
     echo "Expected serial console access to be False after disable, got $SERIAL_DISABLED"
     exit 1
@@ -214,7 +223,7 @@ echo "Serial console access settings tests passed"
 # Phase 3: SSH Key Management
 echo "Phase 3: SSH Key Management"
 # Create test-key-1 (create-key-pair) and verify private key material is returned
-KEY_MATERIAL=$($AWS_EC2 create-key-pair --key-name test-key-1 --query 'KeyMaterial' --output text)
+KEY_MATERIAL=$(aws ec2 create-key-pair --key-name test-key-1 --query 'KeyMaterial' --output text)
 if [ -z "$KEY_MATERIAL" ] || [ "$KEY_MATERIAL" == "None" ]; then
     echo "Failed to create key pair test-key-1"
     exit 1
@@ -224,15 +233,15 @@ chmod 600 test-key-1.pem
 
 # Generate a local RSA key and import it as test-key-2 (import-key-pair)
 ssh-keygen -t rsa -b 2048 -f test-key-2-local -N ""
-$AWS_EC2 import-key-pair --key-name test-key-2 --public-key-material "fileb://test-key-2-local.pub"
+aws ec2 import-key-pair --key-name test-key-2 --public-key-material "fileb://test-key-2-local.pub"
 
 # Verify both keys are present (describe-key-pairs)
-$AWS_EC2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text | grep test-key-1
-$AWS_EC2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text | grep test-key-2
+aws ec2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text | grep test-key-1
+aws ec2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text | grep test-key-2
 
 # Delete test-key-2 (delete-key-pair) and verify only one remains
-$AWS_EC2 delete-key-pair --key-name test-key-2
-REMAINING_KEYS=$($AWS_EC2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text)
+aws ec2 delete-key-pair --key-name test-key-2
+REMAINING_KEYS=$(aws ec2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text)
 echo "Remaining keys: $REMAINING_KEYS"
 echo "$REMAINING_KEYS" | grep test-key-1
 if echo "$REMAINING_KEYS" | grep -q test-key-2; then
@@ -268,7 +277,7 @@ echo "Captured AMI ID: $AMI_ID"
 
 # Verify the AMI exists using its ID (describe-images)
 echo "Verifying AMI availability..."
-$AWS_EC2 describe-images --image-ids "$AMI_ID" | jq -e ".Images[0] | select(.ImageId==\"$AMI_ID\")"
+aws ec2 describe-images --image-ids "$AMI_ID" | jq -e ".Images[0] | select(.ImageId==\"$AMI_ID\")"
 
 # Phase 5: Instance Lifecycle
 echo "Phase 5: Instance Lifecycle"
@@ -276,7 +285,7 @@ echo "Phase 5: Instance Lifecycle"
 echo "Running: aws ec2 run-instances --image-id $AMI_ID --instance-type $INSTANCE_TYPE --key-name test-key-1"
 # Capture full output for debugging
 set +e  # Temporarily disable exit on error to capture output
-RUN_OUTPUT=$($AWS_EC2 run-instances --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" --key-name test-key-1 2>&1)
+RUN_OUTPUT=$(aws ec2 run-instances --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" --key-name test-key-1 2>&1)
 RUN_EXIT_CODE=$?
 set -e  # Re-enable exit on error
 echo "Run instances exit code: $RUN_EXIT_CODE"
@@ -298,7 +307,7 @@ COUNT=0
 STATE="unknown"
 while [ $COUNT -lt 30 ]; do
     # Capture full output to check if instance even exists in the response
-    DESCRIBE_OUTPUT=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID") || {
+    DESCRIBE_OUTPUT=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID") || {
         echo "⚠️  Gateway request failed, retrying... ($COUNT/30)"
         sleep 2
         COUNT=$((COUNT + 1))
@@ -346,7 +355,7 @@ echo "hive get vms shows running instance"
 
 # Phase 5a: Validate instance metadata fields
 echo "Phase 5a: Instance Metadata Validation"
-DESCRIBE_META=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID")
+DESCRIBE_META=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID")
 META_TYPE=$(echo "$DESCRIBE_META" | jq -r '.Reservations[0].Instances[0].InstanceType')
 META_KEY=$(echo "$DESCRIBE_META" | jq -r '.Reservations[0].Instances[0].KeyName')
 META_IMAGE=$(echo "$DESCRIBE_META" | jq -r '.Reservations[0].Instances[0].ImageId')
@@ -391,7 +400,7 @@ test_ssh_connectivity "$SSH_HOST" "$SSH_PORT" "test-key-1.pem"
 
 # Check root volume size via lsblk
 echo "Verifying root volume size from inside the VM..."
-ROOT_VOL_SIZE_API=$($AWS_EC2 describe-volumes --query 'Volumes[0].Size' --output text)
+ROOT_VOL_SIZE_API=$(aws ec2 describe-volumes --query 'Volumes[0].Size' --output text)
 # Find the disk backing the root filesystem (avoids picking up floppy/cdrom devices)
 # 1. findmnt gets the source device for / (e.g. /dev/vda1)
 # 2. lsblk PKNAME resolves to parent disk name (e.g. vda)
@@ -430,10 +439,12 @@ VM_HOSTNAME=$(ssh -o StrictHostKeyChecking=no \
     -i "test-key-1.pem" \
     ec2-user@"$SSH_HOST" 'hostname' 2>/dev/null)
 echo "VM hostname: $VM_HOSTNAME"
-if echo "$VM_HOSTNAME" | grep -q "$INSTANCE_ID"; then
-    echo "Hostname contains instance ID"
+# Hostname uses truncated ID: hive-vm-<first 8 hex chars of instance ID>
+SHORT_ID=$(echo "$INSTANCE_ID" | sed 's/^i-//' | cut -c1-8)
+if echo "$VM_HOSTNAME" | grep -q "$SHORT_ID"; then
+    echo "Hostname contains instance ID prefix ($SHORT_ID)"
 else
-    echo "WARNING: Hostname '$VM_HOSTNAME' does not contain instance ID '$INSTANCE_ID' (non-fatal)"
+    echo "WARNING: Hostname '$VM_HOSTNAME' does not contain instance ID prefix '$SHORT_ID' (non-fatal)"
 fi
 
 echo "SSH connectivity and volume verification passed"
@@ -441,7 +452,7 @@ echo "SSH connectivity and volume verification passed"
 # Phase 5a-iii: Console Output
 echo "Phase 5a-iii: Console Output"
 
-CONSOLE_OUTPUT=$($AWS_EC2 get-console-output --instance-id "$INSTANCE_ID")
+CONSOLE_OUTPUT=$(aws ec2 get-console-output --instance-id "$INSTANCE_ID")
 CONSOLE_INSTANCE=$(echo "$CONSOLE_OUTPUT" | jq -r '.InstanceId')
 CONSOLE_DATA=$(echo "$CONSOLE_OUTPUT" | jq -r '.Output // empty')
 
@@ -454,7 +465,7 @@ echo "  GetConsoleOutput succeeded (InstanceId=$CONSOLE_INSTANCE, has output=$([
 echo "Console output tests passed"
 
 # Verify root volume attached to the instance (describe-volumes)
-VOLUME_ID=$($AWS_EC2 describe-volumes --query 'Volumes[0].VolumeId' --output text)
+VOLUME_ID=$(aws ec2 describe-volumes --query 'Volumes[0].VolumeId' --output text)
 if [ -z "$VOLUME_ID" ] || [ "$VOLUME_ID" == "None" ]; then
     echo "Failed to find volume for instance $INSTANCE_ID"
     exit 1
@@ -467,7 +478,7 @@ echo "Testing volume create -> resize -> attach -> detach -> delete..."
 
 # Create a test volume
 echo "Creating 10GB volume in ap-southeast-2a..."
-CREATE_OUTPUT=$($AWS_EC2 create-volume --size 10 --availability-zone ap-southeast-2a)
+CREATE_OUTPUT=$(aws ec2 create-volume --size 10 --availability-zone ap-southeast-2a)
 TEST_VOLUME_ID=$(echo "$CREATE_OUTPUT" | jq -r '.VolumeId')
 
 if [ -z "$TEST_VOLUME_ID" ] || [ "$TEST_VOLUME_ID" == "null" ]; then
@@ -480,13 +491,13 @@ echo "Created volume: $TEST_VOLUME_ID"
 # Resize to 20GB
 NEW_SIZE=20
 echo "Modifying volume to ${NEW_SIZE}GB..."
-$AWS_EC2 modify-volume --volume-id "$TEST_VOLUME_ID" --size "$NEW_SIZE"
+aws ec2 modify-volume --volume-id "$TEST_VOLUME_ID" --size "$NEW_SIZE"
 
 # Verify resize
 echo "Verifying resize..."
 COUNT=0
 while [ $COUNT -lt 30 ]; do
-    VOLUME_SIZE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
+    VOLUME_SIZE=$(aws ec2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].Size' --output text)
 
     if [ "$VOLUME_SIZE" -eq "$NEW_SIZE" ]; then
@@ -505,17 +516,17 @@ fi
 
 # Attach volume to the running instance
 echo "Attaching volume $TEST_VOLUME_ID to instance $INSTANCE_ID..."
-$AWS_EC2 attach-volume --volume-id "$TEST_VOLUME_ID" --instance-id "$INSTANCE_ID" --device /dev/sdf
+aws ec2 attach-volume --volume-id "$TEST_VOLUME_ID" --instance-id "$INSTANCE_ID" --device /dev/sdf
 
 # Verify attachment
 echo "Verifying volume attachment..."
 COUNT=0
 while [ $COUNT -lt 30 ]; do
-    ATTACH_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
+    ATTACH_STATE=$(aws ec2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].Attachments[0].State' --output text)
-    ATTACH_INSTANCE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
+    ATTACH_INSTANCE=$(aws ec2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].Attachments[0].InstanceId' --output text)
-    VOL_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
+    VOL_STATE=$(aws ec2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].State' --output text)
 
     if [ "$VOL_STATE" == "in-use" ] && [ "$ATTACH_STATE" == "attached" ] && [ "$ATTACH_INSTANCE" == "$INSTANCE_ID" ]; then
@@ -534,13 +545,13 @@ fi
 
 # Detach volume (without --instance-id to test gateway resolution path)
 echo "Detaching volume $TEST_VOLUME_ID..."
-$AWS_EC2 detach-volume --volume-id "$TEST_VOLUME_ID"
+aws ec2 detach-volume --volume-id "$TEST_VOLUME_ID"
 
 # Verify detachment
 echo "Verifying volume detachment..."
 COUNT=0
 while [ $COUNT -lt 30 ]; do
-    VOL_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
+    VOL_STATE=$(aws ec2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].State' --output text)
 
     if [ "$VOL_STATE" == "available" ]; then
@@ -559,14 +570,14 @@ fi
 
 # Delete the test volume
 echo "Deleting test volume $TEST_VOLUME_ID..."
-$AWS_EC2 delete-volume --volume-id "$TEST_VOLUME_ID"
+aws ec2 delete-volume --volume-id "$TEST_VOLUME_ID"
 
 # Verify deletion
 echo "Verifying volume deletion..."
 COUNT=0
 while [ $COUNT -lt 30 ]; do
     set +e
-    VOLUME_CHECK=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
+    VOLUME_CHECK=$(aws ec2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].VolumeId' --output text 2>&1)
     DESCRIBE_EXIT=$?
     set -e
@@ -590,7 +601,7 @@ echo "Volume lifecycle test passed (create -> resize -> attach -> detach -> dele
 # Phase 5b-ii: DescribeVolumeStatus
 echo "Phase 5b-ii: DescribeVolumeStatus"
 echo "Testing describe-volume-status on root volume..."
-VOL_STATUS_OUTPUT=$($AWS_EC2 describe-volume-status --volume-ids "$VOLUME_ID")
+VOL_STATUS_OUTPUT=$(aws ec2 describe-volume-status --volume-ids "$VOLUME_ID")
 VOL_STATUS_ID=$(echo "$VOL_STATUS_OUTPUT" | jq -r '.VolumeStatuses[0].VolumeId')
 VOL_STATUS_STATE=$(echo "$VOL_STATUS_OUTPUT" | jq -r '.VolumeStatuses[0].VolumeStatus.Status')
 
@@ -608,12 +619,12 @@ echo "Testing snapshot create -> describe -> copy -> delete..."
 # viperblockd, which is required for create-snapshot (the ebs.snapshot handler
 # needs a live VB instance to flush).
 echo "Using root volume $VOLUME_ID (already attached to $INSTANCE_ID)"
-ROOT_VOL_SIZE=$($AWS_EC2 describe-volumes --volume-ids "$VOLUME_ID" \
+ROOT_VOL_SIZE=$(aws ec2 describe-volumes --volume-ids "$VOLUME_ID" \
     --query 'Volumes[0].Size' --output text)
 
 # Create a snapshot from the attached root volume
 echo "Creating snapshot from volume $VOLUME_ID..."
-SNAP_OUTPUT=$($AWS_EC2 create-snapshot --volume-id "$VOLUME_ID" --description "e2e-test-snapshot")
+SNAP_OUTPUT=$(aws ec2 create-snapshot --volume-id "$VOLUME_ID" --description "e2e-test-snapshot")
 SNAPSHOT_ID=$(echo "$SNAP_OUTPUT" | jq -r '.SnapshotId')
 
 if [ -z "$SNAPSHOT_ID" ] || [ "$SNAPSHOT_ID" == "null" ]; then
@@ -643,7 +654,7 @@ echo "Snapshot create response verified (State=$SNAP_STATE, VolumeId=$SNAP_VOL_R
 echo "Waiting for snapshot to complete..."
 COUNT=0
 while [ $COUNT -lt 30 ]; do
-    SNAP_STATE=$($AWS_EC2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
+    SNAP_STATE=$(aws ec2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
         --query 'Snapshots[0].State' --output text)
 
     if [ "$SNAP_STATE" == "completed" ]; then
@@ -662,7 +673,7 @@ fi
 
 # Describe snapshot by ID and verify fields
 echo "Verifying snapshot via describe-snapshots..."
-DESCRIBE_SNAP=$($AWS_EC2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID")
+DESCRIBE_SNAP=$(aws ec2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID")
 DESC_VOL_ID=$(echo "$DESCRIBE_SNAP" | jq -r '.Snapshots[0].VolumeId')
 DESC_SIZE=$(echo "$DESCRIBE_SNAP" | jq -r '.Snapshots[0].VolumeSize')
 DESC_DESC=$(echo "$DESCRIBE_SNAP" | jq -r '.Snapshots[0].Description')
@@ -683,7 +694,7 @@ echo "Describe snapshot verified (VolumeId=$DESC_VOL_ID, Size=$DESC_SIZE, Descri
 
 # Copy the snapshot
 echo "Copying snapshot $SNAPSHOT_ID..."
-COPY_OUTPUT=$($AWS_EC2 copy-snapshot --source-snapshot-id "$SNAPSHOT_ID" --source-region ap-southeast-2 --description "e2e-copy")
+COPY_OUTPUT=$(aws ec2 copy-snapshot --source-snapshot-id "$SNAPSHOT_ID" --source-region ap-southeast-2 --description "e2e-copy")
 COPY_SNAPSHOT_ID=$(echo "$COPY_OUTPUT" | jq -r '.SnapshotId')
 
 if [ -z "$COPY_SNAPSHOT_ID" ] || [ "$COPY_SNAPSHOT_ID" == "null" ]; then
@@ -700,7 +711,7 @@ if [ "$COPY_SNAPSHOT_ID" == "$SNAPSHOT_ID" ]; then
 fi
 
 # Describe all snapshots — should see both original and copy
-TOTAL_SNAPS=$($AWS_EC2 describe-snapshots \
+TOTAL_SNAPS=$(aws ec2 describe-snapshots \
     --snapshot-ids "$SNAPSHOT_ID" "$COPY_SNAPSHOT_ID" \
     --query 'length(Snapshots)' --output text)
 
@@ -711,7 +722,7 @@ fi
 echo "Both snapshots visible via describe-snapshots"
 
 # Verify copy has correct description
-COPY_DESC=$($AWS_EC2 describe-snapshots --snapshot-ids "$COPY_SNAPSHOT_ID" \
+COPY_DESC=$(aws ec2 describe-snapshots --snapshot-ids "$COPY_SNAPSHOT_ID" \
     --query 'Snapshots[0].Description' --output text)
 if [ "$COPY_DESC" != "e2e-copy" ]; then
     echo "Copy description mismatch: expected 'e2e-copy', got '$COPY_DESC'"
@@ -720,14 +731,14 @@ fi
 
 # Delete the original snapshot
 echo "Deleting original snapshot $SNAPSHOT_ID..."
-$AWS_EC2 delete-snapshot --snapshot-id "$SNAPSHOT_ID"
+aws ec2 delete-snapshot --snapshot-id "$SNAPSHOT_ID"
 
 # Verify original is gone, copy remains
 echo "Verifying snapshot deletion..."
 COUNT=0
 while [ $COUNT -lt 30 ]; do
     set +e
-    SNAP_CHECK=$($AWS_EC2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
+    SNAP_CHECK=$(aws ec2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
         --query 'Snapshots[0].SnapshotId' --output text 2>&1)
     SNAP_EXIT=$?
     set -e
@@ -747,7 +758,7 @@ if [ $COUNT -ge 30 ]; then
 fi
 
 # Verify copy still exists
-COPY_STATE=$($AWS_EC2 describe-snapshots --snapshot-ids "$COPY_SNAPSHOT_ID" \
+COPY_STATE=$(aws ec2 describe-snapshots --snapshot-ids "$COPY_SNAPSHOT_ID" \
     --query 'Snapshots[0].State' --output text)
 if [ "$COPY_STATE" != "completed" ]; then
     echo "Copy snapshot should still exist (State=$COPY_STATE)"
@@ -757,7 +768,7 @@ echo "Copy snapshot still intact after original deletion"
 
 # Delete the copy
 echo "Deleting copy snapshot $COPY_SNAPSHOT_ID..."
-$AWS_EC2 delete-snapshot --snapshot-id "$COPY_SNAPSHOT_ID"
+aws ec2 delete-snapshot --snapshot-id "$COPY_SNAPSHOT_ID"
 
 echo "Snapshot lifecycle test passed (create -> describe -> copy -> delete)"
 
@@ -801,7 +812,7 @@ echo "Snapshot-backed instance launch verified"
 echo "Phase 5e: CreateImage Lifecycle"
 echo "Creating custom AMI from running instance $INSTANCE_ID..."
 
-CREATE_IMAGE_OUTPUT=$($AWS_EC2 create-image --instance-id "$INSTANCE_ID" --name "e2e-custom-ami" --description "E2E test custom image")
+CREATE_IMAGE_OUTPUT=$(aws ec2 create-image --instance-id "$INSTANCE_ID" --name "e2e-custom-ami" --description "E2E test custom image")
 CUSTOM_AMI_ID=$(echo "$CREATE_IMAGE_OUTPUT" | jq -r '.ImageId')
 
 if [ -z "$CUSTOM_AMI_ID" ] || [ "$CUSTOM_AMI_ID" == "null" ]; then
@@ -813,7 +824,7 @@ echo "Created custom AMI: $CUSTOM_AMI_ID"
 
 # Verify the custom AMI exists via describe-images
 echo "Verifying custom AMI via describe-images..."
-CUSTOM_IMAGE=$($AWS_EC2 describe-images --image-ids "$CUSTOM_AMI_ID")
+CUSTOM_IMAGE=$(aws ec2 describe-images --image-ids "$CUSTOM_AMI_ID")
 CUSTOM_IMAGE_NAME=$(echo "$CUSTOM_IMAGE" | jq -r '.Images[0].Name')
 CUSTOM_IMAGE_STATE=$(echo "$CUSTOM_IMAGE" | jq -r '.Images[0].State')
 
@@ -840,11 +851,11 @@ echo "Phase 6: Tag Management"
 
 # 6a: Create tags on the instance
 echo "Creating tags on instance $INSTANCE_ID..."
-$AWS_EC2 create-tags --resources "$INSTANCE_ID" --tags Key=Name,Value=e2e-test Key=Environment,Value=testing Key=DeleteMe,Value=please
+aws ec2 create-tags --resources "$INSTANCE_ID" --tags Key=Name,Value=e2e-test Key=Environment,Value=testing Key=DeleteMe,Value=please
 
 # 6b: Verify tags with describe-tags (resource-id filter)
 echo "Verifying tags on instance..."
-TAG_COUNT=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" \
+TAG_COUNT=$(aws ec2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" \
     --query 'length(Tags || `[]`)' --output text)
 if [ "$TAG_COUNT" -ne 3 ]; then
     echo "Expected 3 tags on instance, got $TAG_COUNT"
@@ -854,11 +865,11 @@ echo "Instance has $TAG_COUNT tags"
 
 # 6c: Create tags on the root volume
 echo "Creating tags on volume $VOLUME_ID..."
-$AWS_EC2 create-tags --resources "$VOLUME_ID" --tags Key=Name,Value=e2e-root-vol Key=Environment,Value=testing
+aws ec2 create-tags --resources "$VOLUME_ID" --tags Key=Name,Value=e2e-root-vol Key=Environment,Value=testing
 
 # 6d: Filter by key
 echo "Testing key filter..."
-ENV_TAGS=$($AWS_EC2 describe-tags --filters "Name=key,Values=Environment" \
+ENV_TAGS=$(aws ec2 describe-tags --filters "Name=key,Values=Environment" \
     --query 'length(Tags || `[]`)' --output text)
 if [ "$ENV_TAGS" -ne 2 ]; then
     echo "Expected 2 'Environment' tags across resources, got $ENV_TAGS"
@@ -868,7 +879,7 @@ echo "Key filter returned $ENV_TAGS tags"
 
 # 6e: Filter by resource-type
 echo "Testing resource-type filter..."
-INSTANCE_TAGS=$($AWS_EC2 describe-tags --filters "Name=resource-type,Values=instance" \
+INSTANCE_TAGS=$(aws ec2 describe-tags --filters "Name=resource-type,Values=instance" \
     --query 'length(Tags || `[]`)' --output text)
 if [ "$INSTANCE_TAGS" -ne 3 ]; then
     echo "Expected 3 instance tags, got $INSTANCE_TAGS"
@@ -878,8 +889,8 @@ echo "Resource-type filter returned $INSTANCE_TAGS instance tags"
 
 # 6f: Overwrite a tag value
 echo "Overwriting Name tag on instance..."
-$AWS_EC2 create-tags --resources "$INSTANCE_ID" --tags Key=Name,Value=e2e-test-updated
-UPDATED_NAME=$($AWS_EC2 describe-tags \
+aws ec2 create-tags --resources "$INSTANCE_ID" --tags Key=Name,Value=e2e-test-updated
+UPDATED_NAME=$(aws ec2 describe-tags \
     --filters "Name=resource-id,Values=$INSTANCE_ID" "Name=key,Values=Name" \
     --query 'Tags[0].Value' --output text)
 if [ "$UPDATED_NAME" != "e2e-test-updated" ]; then
@@ -890,8 +901,8 @@ echo "Tag overwrite verified"
 
 # 6g: Delete tag by key (unconditional)
 echo "Deleting DeleteMe tag unconditionally..."
-$AWS_EC2 delete-tags --resources "$INSTANCE_ID" --tags Key=DeleteMe
-REMAINING=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" \
+aws ec2 delete-tags --resources "$INSTANCE_ID" --tags Key=DeleteMe
+REMAINING=$(aws ec2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" \
     --query 'length(Tags || `[]`)' --output text)
 if [ "$REMAINING" -ne 2 ]; then
     echo "Expected 2 tags after unconditional delete, got $REMAINING"
@@ -901,8 +912,8 @@ echo "Unconditional delete verified ($REMAINING tags remaining)"
 
 # 6h: Delete tag with wrong value (should NOT delete)
 echo "Attempting delete with wrong value (should be no-op)..."
-$AWS_EC2 delete-tags --resources "$INSTANCE_ID" --tags Key=Environment,Value=production
-ENV_STILL=$($AWS_EC2 describe-tags \
+aws ec2 delete-tags --resources "$INSTANCE_ID" --tags Key=Environment,Value=production
+ENV_STILL=$(aws ec2 describe-tags \
     --filters "Name=resource-id,Values=$INSTANCE_ID" "Name=key,Values=Environment" \
     --query 'length(Tags || `[]`)' --output text)
 if [ "$ENV_STILL" -ne 1 ]; then
@@ -913,8 +924,8 @@ echo "Value-conditional mismatch preserved tag"
 
 # 6i: Delete tag with correct value
 echo "Deleting Environment tag with correct value..."
-$AWS_EC2 delete-tags --resources "$INSTANCE_ID" --tags Key=Environment,Value=testing
-ENV_GONE=$($AWS_EC2 describe-tags \
+aws ec2 delete-tags --resources "$INSTANCE_ID" --tags Key=Environment,Value=testing
+ENV_GONE=$(aws ec2 describe-tags \
     --filters "Name=resource-id,Values=$INSTANCE_ID" "Name=key,Values=Environment" \
     --query 'length(Tags || `[]`)' --output text)
 if [ "$ENV_GONE" -ne 0 ]; then
@@ -924,7 +935,7 @@ fi
 echo "Value-conditional match deleted tag"
 
 # 6j: Verify only Name tag remains on instance
-FINAL_COUNT=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" \
+FINAL_COUNT=$(aws ec2 describe-tags --filters "Name=resource-id,Values=$INSTANCE_ID" \
     --query 'length(Tags || `[]`)' --output text)
 if [ "$FINAL_COUNT" -ne 1 ]; then
     echo "Expected 1 tag remaining on instance, got $FINAL_COUNT"
@@ -937,10 +948,10 @@ echo "Phase 7: Instance State Transitions"
 
 # Stop instance (stop-instances) and verify transition to stopped (describe-instances)
 echo "Stopping instance..."
-$AWS_EC2 stop-instances --instance-ids "$INSTANCE_ID"
+aws ec2 stop-instances --instance-ids "$INSTANCE_ID"
 COUNT=0
 while [ $COUNT -lt 30 ]; do
-    STATE=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)
+    STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)
     echo "Instance state: $STATE"
     if [ "$STATE" == "stopped" ]; then
         break
@@ -957,17 +968,17 @@ fi
 # Phase 7a: Attach volume to stopped instance (should fail)
 echo "Phase 7a: Attach Volume to Stopped Instance (Error Path)"
 echo "Creating a volume to test attach-to-stopped..."
-STOPPED_VOL_OUTPUT=$($AWS_EC2 create-volume --size 10 --availability-zone ap-southeast-2a)
+STOPPED_VOL_OUTPUT=$(aws ec2 create-volume --size 10 --availability-zone ap-southeast-2a)
 STOPPED_VOL_ID=$(echo "$STOPPED_VOL_OUTPUT" | jq -r '.VolumeId')
 echo "Created volume: $STOPPED_VOL_ID"
 
 echo "Attempting attach to stopped instance (should fail)..."
-expect_error "IncorrectInstanceState" $AWS_EC2 attach-volume \
+expect_error "IncorrectInstanceState" aws ec2 attach-volume \
     --volume-id "$STOPPED_VOL_ID" --instance-id "$INSTANCE_ID" --device /dev/sdg
 echo "Attach-to-stopped correctly rejected"
 
 # Clean up the test volume
-$AWS_EC2 delete-volume --volume-id "$STOPPED_VOL_ID"
+aws ec2 delete-volume --volume-id "$STOPPED_VOL_ID"
 echo "Cleaned up test volume $STOPPED_VOL_ID"
 
 # Phase 7b: ModifyInstanceAttribute (change instance type while stopped, verify via SSH)
@@ -980,17 +991,17 @@ echo "Changing instance type from $INSTANCE_TYPE to $MODIFY_TYPE..."
 
 # Get expected vCPU and memory for the new type
 # Note: --instance-types filter may not be supported; use jq to select the correct type
-TYPES_JSON=$($AWS_EC2 describe-instance-types)
+TYPES_JSON=$(aws ec2 describe-instance-types)
 EXPECTED_VCPUS=$(echo "$TYPES_JSON" | jq -r ".InstanceTypes[] | select(.InstanceType==\"$MODIFY_TYPE\") | .VCpuInfo.DefaultVCpus")
 EXPECTED_MEM_MIB=$(echo "$TYPES_JSON" | jq -r ".InstanceTypes[] | select(.InstanceType==\"$MODIFY_TYPE\") | .MemoryInfo.SizeInMiB")
 echo "Expected resources after modify: ${EXPECTED_VCPUS} vCPUs, ${EXPECTED_MEM_MIB} MiB RAM"
 
 # Modify the instance type
-$AWS_EC2 modify-instance-attribute --instance-id "$INSTANCE_ID" \
+aws ec2 modify-instance-attribute --instance-id "$INSTANCE_ID" \
     --instance-type "{\"Value\": \"$MODIFY_TYPE\"}"
 
 # Verify describe-instances reflects the new type
-MODIFIED_TYPE=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID" \
+MODIFIED_TYPE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
     --query 'Reservations[0].Instances[0].InstanceType' --output text)
 if [ "$MODIFIED_TYPE" != "$MODIFY_TYPE" ]; then
     echo "ModifyInstanceAttribute failed: expected type $MODIFY_TYPE, got $MODIFIED_TYPE"
@@ -1000,10 +1011,10 @@ echo "Instance type updated to $MODIFIED_TYPE"
 
 # Start instance with the new type
 echo "Starting instance with modified type..."
-$AWS_EC2 start-instances --instance-ids "$INSTANCE_ID"
+aws ec2 start-instances --instance-ids "$INSTANCE_ID"
 COUNT=0
 while [ $COUNT -lt 30 ]; do
-    STATE=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID" \
+    STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
         --query 'Reservations[0].Instances[0].State.Name' --output text)
     echo "Instance state: $STATE"
     if [ "$STATE" == "running" ]; then
@@ -1069,7 +1080,7 @@ echo "ModifyInstanceAttribute test passed (type change + vCPU + memory verified 
 # Phase 7c: RunInstances with count > 1
 echo "Phase 7c: RunInstances with MinCount/MaxCount > 1"
 echo "Launching 2 instances in a single run-instances call..."
-MULTI_RUN_OUTPUT=$($AWS_EC2 run-instances \
+MULTI_RUN_OUTPUT=$(aws ec2 run-instances \
     --image-id "$AMI_ID" \
     --instance-type "$INSTANCE_TYPE" \
     --key-name test-key-1 \
@@ -1090,7 +1101,7 @@ for MID in "$MULTI_ID_1" "$MULTI_ID_2"; do
     echo "Waiting for $MID to reach running state..."
     COUNT=0
     while [ $COUNT -lt 30 ]; do
-        MSTATE=$($AWS_EC2 describe-instances --instance-ids "$MID" \
+        MSTATE=$(aws ec2 describe-instances --instance-ids "$MID" \
             --query 'Reservations[0].Instances[0].State.Name' --output text) || {
             sleep 2
             COUNT=$((COUNT + 1))
@@ -1111,11 +1122,11 @@ done
 
 # Terminate the multi-launch instances
 echo "Terminating multi-launch instances..."
-$AWS_EC2 terminate-instances --instance-ids "$MULTI_ID_1" "$MULTI_ID_2"
+aws ec2 terminate-instances --instance-ids "$MULTI_ID_1" "$MULTI_ID_2"
 for MID in "$MULTI_ID_1" "$MULTI_ID_2"; do
     COUNT=0
     while [ $COUNT -lt 30 ]; do
-        MSTATE=$($AWS_EC2 describe-instances --instance-ids "$MID" \
+        MSTATE=$(aws ec2 describe-instances --instance-ids "$MID" \
             --query 'Reservations[0].Instances[0].State.Name' --output text)
         if [ "$MSTATE" == "terminated" ] || [ "$MSTATE" == "None" ]; then
             break
@@ -1131,27 +1142,27 @@ echo "Phase 8: Negative / Error Path Tests"
 
 # 8a: RunInstances with malformed AMI ID (missing ami- prefix)
 echo "8a: RunInstances with malformed AMI ID..."
-expect_error "InvalidAMIID.Malformed" $AWS_EC2 run-instances \
+expect_error "InvalidAMIID.Malformed" aws ec2 run-instances \
     --image-id notanami --instance-type "$INSTANCE_TYPE" --key-name test-key-1
 
 # 8b: RunInstances with invalid instance type
 echo "8b: RunInstances with invalid instance type..."
-expect_error "InvalidInstanceType" $AWS_EC2 run-instances \
+expect_error "InvalidInstanceType" aws ec2 run-instances \
     --image-id "$AMI_ID" --instance-type "x99.superlarge" --key-name test-key-1
 
 # 8c: Attach an already in-use volume (root volume is attached to running instance)
 echo "8c: Attach already in-use volume..."
-expect_error "VolumeInUse" $AWS_EC2 attach-volume \
+expect_error "VolumeInUse" aws ec2 attach-volume \
     --volume-id "$VOLUME_ID" --instance-id "$INSTANCE_ID" --device /dev/sdg
 
 # 8d: Detach boot/root volume (should be rejected)
 echo "8d: Detach boot volume..."
-expect_error "OperationNotPermitted" $AWS_EC2 detach-volume \
+expect_error "OperationNotPermitted" aws ec2 detach-volume \
     --volume-id "$VOLUME_ID" --instance-id "$INSTANCE_ID"
 
 # 8e: Delete a non-existent snapshot
 echo "8e: Delete non-existent snapshot..."
-expect_error "InvalidSnapshot.NotFound" $AWS_EC2 delete-snapshot \
+expect_error "InvalidSnapshot.NotFound" aws ec2 delete-snapshot \
     --snapshot-id snap-nonexistent000000
 
 # 8f: Call an unsupported Action (use raw curl to send an invalid Action)
@@ -1169,61 +1180,571 @@ fi
 
 # 8g: RunInstances with non-existent AMI (valid format but doesn't exist)
 echo "8g: RunInstances with non-existent AMI..."
-expect_error "InvalidAMIID.NotFound" $AWS_EC2 run-instances \
+expect_error "InvalidAMIID.NotFound" aws ec2 run-instances \
     --image-id ami-0000000000000dead --instance-type "$INSTANCE_TYPE" --key-name test-key-1
 
 # 8h: RunInstances with non-existent key pair
 echo "8h: RunInstances with non-existent key pair..."
-expect_error "InvalidKeyPair.NotFound" $AWS_EC2 run-instances \
+expect_error "InvalidKeyPair.NotFound" aws ec2 run-instances \
     --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" --key-name nonexistent-key-xyz
 
 # 8i: DeleteVolume on non-existent volume
 echo "8i: DeleteVolume non-existent volume..."
-expect_error "InvalidVolume.NotFound" $AWS_EC2 delete-volume \
+expect_error "InvalidVolume.NotFound" aws ec2 delete-volume \
     --volume-id vol-0000000000000dead
 
 # 8j: CreateKeyPair with duplicate name (test-key-1 exists from Phase 3)
 echo "8j: CreateKeyPair duplicate name..."
-expect_error "InvalidKeyPair.Duplicate" $AWS_EC2 create-key-pair \
+expect_error "InvalidKeyPair.Duplicate" aws ec2 create-key-pair \
     --key-name test-key-1
 
 # 8k: ImportKeyPair with duplicate name (test-key-1 exists from Phase 3)
 echo "8k: ImportKeyPair duplicate name..."
-expect_error "InvalidKeyPair.Duplicate" $AWS_EC2 import-key-pair \
+expect_error "InvalidKeyPair.Duplicate" aws ec2 import-key-pair \
     --key-name test-key-1 --public-key-material "fileb://test-key-2-local.pub"
 
 # 8l: ImportKeyPair with invalid key format
 echo "8l: ImportKeyPair invalid key format..."
 echo "not-a-valid-public-key" > /tmp/bad-key.pub
-expect_error "InvalidKey.Format" $AWS_EC2 import-key-pair \
+expect_error "InvalidKey.Format" aws ec2 import-key-pair \
     --key-name bad-format-key --public-key-material "fileb:///tmp/bad-key.pub"
 
 # 8m: DescribeVolumes with non-existent volume ID
 echo "8m: DescribeVolumes non-existent volume..."
-expect_error "InvalidVolume.NotFound" $AWS_EC2 describe-volumes \
+expect_error "InvalidVolume.NotFound" aws ec2 describe-volumes \
     --volume-ids vol-0000000000000dead
 
 # 8n: DescribeImages with non-existent AMI ID
 echo "8n: DescribeImages non-existent AMI..."
-expect_error "InvalidAMIID.NotFound" $AWS_EC2 describe-images \
+expect_error "InvalidAMIID.NotFound" aws ec2 describe-images \
     --image-ids ami-0000000000000dead
 
 # 8o: CreateImage with duplicate name (e2e-custom-ami exists from Phase 5e)
 echo "8o: CreateImage duplicate name..."
-expect_error "InvalidAMIName.Duplicate" $AWS_EC2 create-image \
+expect_error "InvalidAMIName.Duplicate" aws ec2 create-image \
     --instance-id "$INSTANCE_ID" --name "e2e-custom-ami"
 
 # 8p: DeleteKeyPair for non-existent key — should succeed (idempotent, matches AWS)
 echo "8p: DeleteKeyPair non-existent key (idempotent)..."
-$AWS_EC2 delete-key-pair --key-name nonexistent-key-99999
+aws ec2 delete-key-pair --key-name nonexistent-key-99999
 echo "  DeleteKeyPair for non-existent key succeeded (idempotent)"
 
 # 8q: ModifyInstanceAttribute on running instance (instance not in stopped KV → NotFound)
 echo "8q: ModifyInstanceAttribute on running instance..."
-expect_error "InvalidInstanceID.NotFound" $AWS_EC2 modify-instance-attribute \
+expect_error "InvalidInstanceID.NotFound" aws ec2 modify-instance-attribute \
     --instance-id "$INSTANCE_ID" --instance-type "{\"Value\": \"$INSTANCE_TYPE\"}"
 
 echo "Negative test suite passed"
+
+# =============================================================================
+# IAM E2E Tests
+# =============================================================================
+
+# IAM Phase 1: User CRUD
+echo ""
+echo "IAM Phase 1: User CRUD"
+
+# Root auth — verify list-users works (root user exists)
+echo "  Verifying root auth via iam list-users..."
+ROOT_USERS=$(aws iam list-users)
+echo "$ROOT_USERS" | jq -e '.Users | length > 0' > /dev/null
+echo "  Root auth verified"
+
+# CreateUser — alice
+echo "  Creating user alice..."
+ALICE_OUTPUT=$(aws iam create-user --user-name alice)
+echo "$ALICE_OUTPUT" | jq -e '.User.UserName == "alice"' > /dev/null
+ALICE_ARN=$(echo "$ALICE_OUTPUT" | jq -r '.User.Arn')
+echo "  Created alice: $ALICE_ARN"
+
+# CreateUser — bob with path
+echo "  Creating user bob with path /engineering/..."
+BOB_OUTPUT=$(aws iam create-user --user-name bob --path /engineering/)
+echo "$BOB_OUTPUT" | jq -e '.User.Path == "/engineering/"' > /dev/null
+echo "  Created bob"
+
+# CreateUser — duplicate (expect EntityAlreadyExists)
+echo "  Creating duplicate user alice (expect error)..."
+expect_error "EntityAlreadyExists" aws iam create-user --user-name alice
+
+# GetUser
+echo "  Getting user alice..."
+aws iam get-user --user-name alice | jq -e '.User.UserName == "alice"' > /dev/null
+echo "  GetUser alice passed"
+
+# GetUser — not found
+echo "  Getting nonexistent user (expect error)..."
+expect_error "NoSuchEntity" aws iam get-user --user-name nonexistent
+
+# ListUsers — should have root, alice, bob
+echo "  Listing users..."
+USER_COUNT=$(aws iam list-users | jq '.Users | length')
+if [ "$USER_COUNT" -lt 3 ]; then
+    echo "  ERROR: Expected at least 3 users (root, alice, bob), got $USER_COUNT"
+    exit 1
+fi
+echo "  ListUsers: $USER_COUNT users"
+
+# ListUsers with path-prefix
+echo "  Listing users with path-prefix /engineering/..."
+ENG_USERS=$(aws iam list-users --path-prefix /engineering/ | jq '.Users | length')
+if [ "$ENG_USERS" -ne 1 ]; then
+    echo "  ERROR: Expected 1 user with path /engineering/, got $ENG_USERS"
+    exit 1
+fi
+echo "  Path-prefix filter passed"
+
+echo "IAM Phase 1 passed"
+
+# IAM Phase 2: Access Key Lifecycle
+echo ""
+echo "IAM Phase 2: Access Key Lifecycle"
+
+# CreateAccessKey — alice key 1
+echo "  Creating access key 1 for alice..."
+KEY1=$(aws iam create-access-key --user-name alice)
+ALICE_KEY_ID=$(echo "$KEY1" | jq -r '.AccessKey.AccessKeyId')
+ALICE_SECRET=$(echo "$KEY1" | jq -r '.AccessKey.SecretAccessKey')
+echo "  Key 1: $ALICE_KEY_ID"
+
+if [ -z "$ALICE_KEY_ID" ] || [ "$ALICE_KEY_ID" == "null" ]; then
+    echo "  ERROR: Failed to create access key for alice"
+    exit 1
+fi
+
+# CreateAccessKey — alice key 2
+echo "  Creating access key 2 for alice..."
+KEY2=$(aws iam create-access-key --user-name alice)
+ALICE_KEY2_ID=$(echo "$KEY2" | jq -r '.AccessKey.AccessKeyId')
+echo "  Key 2: $ALICE_KEY2_ID"
+
+# CreateAccessKey — alice key 3 (exceed limit)
+echo "  Creating access key 3 for alice (expect LimitExceeded)..."
+expect_error "LimitExceeded" aws iam create-access-key --user-name alice
+
+# CreateAccessKey — non-existent user
+echo "  Creating access key for ghost (expect error)..."
+expect_error "NoSuchEntity" aws iam create-access-key --user-name ghost
+
+# ListAccessKeys
+echo "  Listing access keys for alice..."
+ALICE_KEY_COUNT=$(aws iam list-access-keys --user-name alice | jq '.AccessKeyMetadata | length')
+if [ "$ALICE_KEY_COUNT" -ne 2 ]; then
+    echo "  ERROR: Expected 2 keys for alice, got $ALICE_KEY_COUNT"
+    exit 1
+fi
+echo "  Alice has $ALICE_KEY_COUNT keys"
+
+echo "  Listing access keys for bob (expect 0)..."
+BOB_KEY_COUNT=$(aws iam list-access-keys --user-name bob | jq '.AccessKeyMetadata // [] | length')
+if [ "${BOB_KEY_COUNT:-0}" -ne 0 ]; then
+    echo "  ERROR: Expected 0 keys for bob, got $BOB_KEY_COUNT"
+    exit 1
+fi
+echo "  Bob has 0 keys"
+
+# UpdateAccessKey — deactivate
+echo "  Deactivating alice key 1..."
+aws iam update-access-key --user-name alice --access-key-id "$ALICE_KEY_ID" --status Inactive
+STATUS=$(aws iam list-access-keys --user-name alice | \
+    jq -r ".AccessKeyMetadata[] | select(.AccessKeyId == \"$ALICE_KEY_ID\") | .Status")
+if [ "$STATUS" != "Inactive" ]; then
+    echo "  ERROR: Expected Inactive, got $STATUS"
+    exit 1
+fi
+echo "  Key deactivated"
+
+# UpdateAccessKey — reactivate
+echo "  Reactivating alice key 1..."
+aws iam update-access-key --user-name alice --access-key-id "$ALICE_KEY_ID" --status Active
+echo "  Key reactivated"
+
+# DeleteAccessKey — key 2
+echo "  Deleting alice key 2..."
+aws iam delete-access-key --user-name alice --access-key-id "$ALICE_KEY2_ID"
+ALICE_KEY_COUNT=$(aws iam list-access-keys --user-name alice | jq '.AccessKeyMetadata | length')
+if [ "$ALICE_KEY_COUNT" -ne 1 ]; then
+    echo "  ERROR: Expected 1 key after delete, got $ALICE_KEY_COUNT"
+    exit 1
+fi
+echo "  Key 2 deleted, alice has $ALICE_KEY_COUNT key"
+
+echo "IAM Phase 2 passed"
+
+# IAM Phase 3: User Authentication
+echo ""
+echo "IAM Phase 3: User Authentication"
+
+# Configure alice profile
+echo "  Configuring hive-alice profile..."
+setup_test_profile hive-alice "$ALICE_KEY_ID" "$ALICE_SECRET"
+
+# Deactivate key → auth should fail
+echo "  Deactivating alice key, verifying auth rejection..."
+aws iam update-access-key --user-name alice --access-key-id "$ALICE_KEY_ID" --status Inactive
+expect_error "InvalidClientTokenId" \
+    aws ec2 describe-instances --profile hive-alice
+echo "  Inactive key correctly rejected"
+
+# Reactivate key
+echo "  Reactivating alice key..."
+aws iam update-access-key --user-name alice --access-key-id "$ALICE_KEY_ID" --status Active
+
+# Bad secret → SignatureDoesNotMatch
+echo "  Testing bad secret (expect SignatureDoesNotMatch)..."
+setup_test_profile hive-bad "$ALICE_KEY_ID" "WRONG_SECRET_KEY_HERE_12345678901"
+expect_error "SignatureDoesNotMatch" \
+    aws ec2 describe-instances --profile hive-bad
+
+# Non-existent key ID → InvalidClientTokenId
+echo "  Testing fake key ID (expect InvalidClientTokenId)..."
+setup_test_profile hive-fake "AKIAXXXXXXXXXXXXXXXX" "doesntmatter"
+expect_error "InvalidClientTokenId" \
+    aws ec2 describe-instances --profile hive-fake
+
+# Multi-user auth — create bob key and verify both auth
+echo "  Creating access key for bob..."
+BOB_KEY=$(aws iam create-access-key --user-name bob)
+BOB_KEY_ID=$(echo "$BOB_KEY" | jq -r '.AccessKey.AccessKeyId')
+BOB_SECRET=$(echo "$BOB_KEY" | jq -r '.AccessKey.SecretAccessKey')
+setup_test_profile hive-bob "$BOB_KEY_ID" "$BOB_SECRET"
+
+# Root still works
+echo "  Verifying root auth..."
+aws ec2 describe-instances > /dev/null
+echo "  Root auth OK"
+
+echo "IAM Phase 3 passed"
+
+# IAM Phase 4: Policy CRUD
+echo ""
+echo "IAM Phase 4: Policy CRUD"
+
+GLOBAL_ACCOUNT="000000000000"
+
+# CreatePolicy — EC2ReadOnly
+echo "  Creating EC2ReadOnly policy..."
+aws iam create-policy \
+    --policy-name EC2ReadOnly \
+    --policy-document '{
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Allow",
+            "Action": ["ec2:DescribeInstances", "ec2:DescribeVolumes", "ec2:DescribeVpcs"],
+            "Resource": "*"
+        }]
+    }' > /dev/null
+echo "  Created EC2ReadOnly"
+
+# CreatePolicy — FullAdmin
+echo "  Creating FullAdmin policy..."
+aws iam create-policy \
+    --policy-name FullAdmin \
+    --path /admin/ \
+    --description "Full access to all services" \
+    --policy-document '{
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Allow",
+            "Action": "*",
+            "Resource": "*"
+        }]
+    }' > /dev/null
+echo "  Created FullAdmin"
+
+# CreatePolicy — DenyTerminate (mixed Allow + Deny)
+echo "  Creating DenyTerminate policy..."
+aws iam create-policy \
+    --policy-name DenyTerminate \
+    --policy-document '{
+        "Version": "2012-10-17",
+        "Statement": [
+            {"Effect": "Allow", "Action": "ec2:*", "Resource": "*"},
+            {"Effect": "Deny", "Action": "ec2:TerminateInstances", "Resource": "*"}
+        ]
+    }' > /dev/null
+echo "  Created DenyTerminate"
+
+# CreatePolicy — IAMReadOnly
+echo "  Creating IAMReadOnly policy..."
+aws iam create-policy \
+    --policy-name IAMReadOnly \
+    --policy-document '{
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Allow",
+            "Action": ["iam:GetUser", "iam:ListUsers", "iam:ListPolicies", "iam:GetPolicy"],
+            "Resource": "*"
+        }]
+    }' > /dev/null
+echo "  Created IAMReadOnly"
+
+# CreatePolicy — EC2DescribeAll (wildcard)
+echo "  Creating EC2DescribeAll policy..."
+aws iam create-policy \
+    --policy-name EC2DescribeAll \
+    --policy-document '{
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Allow",
+            "Action": "ec2:Describe*",
+            "Resource": "*"
+        }]
+    }' > /dev/null
+echo "  Created EC2DescribeAll"
+
+# CreatePolicy — duplicate (expect EntityAlreadyExists)
+echo "  Creating duplicate EC2ReadOnly (expect error)..."
+expect_error "EntityAlreadyExists" aws iam create-policy --policy-name EC2ReadOnly \
+    --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}'
+
+# CreatePolicy — malformed JSON
+echo "  Creating policy with malformed JSON (expect error)..."
+expect_error "MalformedPolicyDocument" aws iam create-policy --policy-name BadPolicy \
+    --policy-document '{"not valid"}'
+
+# GetPolicy
+echo "  Getting EC2ReadOnly policy..."
+aws iam get-policy \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2ReadOnly" | \
+    jq -e '.Policy.PolicyName == "EC2ReadOnly"' > /dev/null
+echo "  GetPolicy passed"
+
+# GetPolicy — not found
+echo "  Getting non-existent policy (expect error)..."
+expect_error "NoSuchEntity" aws iam get-policy \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/Ghost"
+
+# GetPolicyVersion
+echo "  Getting EC2ReadOnly policy version v1..."
+aws iam get-policy-version \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2ReadOnly" \
+    --version-id v1 | jq -e '.PolicyVersion.VersionId == "v1"' > /dev/null
+echo "  GetPolicyVersion passed"
+
+# ListPolicies
+echo "  Listing policies..."
+POLICY_COUNT=$(aws iam list-policies | jq '.Policies | length')
+if [ "$POLICY_COUNT" -lt 5 ]; then
+    echo "  ERROR: Expected at least 5 policies, got $POLICY_COUNT"
+    exit 1
+fi
+echo "  ListPolicies: $POLICY_COUNT policies"
+
+echo "IAM Phase 4 passed"
+
+# IAM Phase 5: Policy Attachment & Enforcement
+echo ""
+echo "IAM Phase 5: Policy Attachment & Enforcement"
+
+# Create charlie with key
+echo "  Creating user charlie with access key..."
+aws iam create-user --user-name charlie > /dev/null
+CHARLIE_KEY=$(aws iam create-access-key --user-name charlie)
+CHARLIE_KEY_ID=$(echo "$CHARLIE_KEY" | jq -r '.AccessKey.AccessKeyId')
+CHARLIE_SECRET=$(echo "$CHARLIE_KEY" | jq -r '.AccessKey.SecretAccessKey')
+setup_test_profile hive-charlie "$CHARLIE_KEY_ID" "$CHARLIE_SECRET"
+
+# Attach policies
+echo "  Attaching EC2ReadOnly + IAMReadOnly to alice..."
+aws iam attach-user-policy --user-name alice \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2ReadOnly"
+aws iam attach-user-policy --user-name alice \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/IAMReadOnly"
+
+echo "  Attaching DenyTerminate to bob..."
+aws iam attach-user-policy --user-name bob \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/DenyTerminate"
+
+# ListAttachedUserPolicies
+echo "  Verifying alice's attached policies..."
+ALICE_POLICIES=$(aws iam list-attached-user-policies --user-name alice | jq '.AttachedPolicies | length')
+if [ "$ALICE_POLICIES" -ne 2 ]; then
+    echo "  ERROR: Expected 2 policies for alice, got $ALICE_POLICIES"
+    exit 1
+fi
+echo "  Alice has $ALICE_POLICIES policies"
+
+# Idempotent attach
+echo "  Testing idempotent attach..."
+aws iam attach-user-policy --user-name alice \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2ReadOnly"
+ALICE_POLICIES=$(aws iam list-attached-user-policies --user-name alice | jq '.AttachedPolicies | length')
+if [ "$ALICE_POLICIES" -ne 2 ]; then
+    echo "  ERROR: Expected 2 policies after idempotent attach, got $ALICE_POLICIES"
+    exit 1
+fi
+echo "  Idempotent attach passed"
+
+# Attach edge cases
+echo "  Attaching non-existent policy (expect error)..."
+expect_error "NoSuchEntity" aws iam attach-user-policy --user-name alice \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/Ghost"
+
+echo "  Attaching to non-existent user (expect error)..."
+expect_error "NoSuchEntity" aws iam attach-user-policy --user-name ghost \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2ReadOnly"
+
+# --- Enforcement Tests ---
+
+# Default Deny — charlie has no policies
+echo "  Testing default deny (charlie, no policies)..."
+expect_error "AccessDenied" \
+    aws ec2 describe-instances --profile hive-charlie
+expect_error "AccessDenied" \
+    aws iam list-users --profile hive-charlie
+echo "  Default deny passed"
+
+# Explicit Allow — alice has EC2ReadOnly + IAMReadOnly
+echo "  Testing explicit allow (alice, EC2ReadOnly + IAMReadOnly)..."
+aws ec2 describe-instances --profile hive-alice > /dev/null
+echo "    ec2:DescribeInstances — allowed"
+aws ec2 describe-vpcs --profile hive-alice > /dev/null
+echo "    ec2:DescribeVpcs — allowed"
+aws iam list-users --profile hive-alice > /dev/null
+echo "    iam:ListUsers — allowed"
+
+# Actions NOT in alice's policies → denied
+expect_error "AccessDenied" \
+    aws ec2 describe-key-pairs --profile hive-alice
+echo "    ec2:DescribeKeyPairs — denied (not in policy)"
+expect_error "AccessDenied" \
+    aws iam create-user --user-name hack --profile hive-alice
+echo "    iam:CreateUser — denied (not in policy)"
+echo "  Explicit allow passed"
+
+# Wildcard Allow with Explicit Deny — bob has DenyTerminate (ec2:* Allow + ec2:TerminateInstances Deny)
+echo "  Testing deny override (bob, DenyTerminate)..."
+aws ec2 describe-instances --profile hive-bob > /dev/null
+echo "    ec2:DescribeInstances — allowed (ec2:* wildcard)"
+aws ec2 describe-key-pairs --profile hive-bob > /dev/null
+echo "    ec2:DescribeKeyPairs — allowed (ec2:* wildcard)"
+expect_error "AccessDenied" \
+    aws ec2 terminate-instances --instance-ids i-fake --profile hive-bob
+echo "    ec2:TerminateInstances — denied (explicit Deny overrides Allow)"
+expect_error "AccessDenied" \
+    aws iam list-users --profile hive-bob
+echo "    iam:ListUsers — denied (IAM not covered by ec2:*)"
+echo "  Deny override passed"
+
+# Root user bypass
+echo "  Testing root user bypass..."
+aws ec2 describe-instances > /dev/null
+aws iam list-users > /dev/null
+aws iam create-user --user-name temp > /dev/null
+aws iam delete-user --user-name temp > /dev/null
+echo "  Root bypass passed"
+
+# Prefix wildcard — swap alice to EC2DescribeAll
+echo "  Testing prefix wildcard (swap alice to EC2DescribeAll)..."
+aws iam detach-user-policy --user-name alice \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2ReadOnly"
+aws iam detach-user-policy --user-name alice \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/IAMReadOnly"
+aws iam attach-user-policy --user-name alice \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2DescribeAll"
+
+aws ec2 describe-instances --profile hive-alice > /dev/null
+echo "    ec2:DescribeInstances — allowed (Describe*)"
+aws ec2 describe-key-pairs --profile hive-alice > /dev/null
+echo "    ec2:DescribeKeyPairs — allowed (Describe*)"
+expect_error "AccessDenied" \
+    aws ec2 create-key-pair --key-name x --profile hive-alice
+echo "    ec2:CreateKeyPair — denied (not Describe*)"
+expect_error "AccessDenied" \
+    aws iam list-users --profile hive-alice
+echo "    iam:ListUsers — denied (not ec2:Describe*)"
+echo "  Prefix wildcard passed"
+
+# FullAdmin — give charlie full access
+echo "  Testing FullAdmin (charlie)..."
+aws iam attach-user-policy --user-name charlie \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/admin/FullAdmin"
+aws ec2 describe-instances --profile hive-charlie > /dev/null
+echo "    ec2:DescribeInstances — allowed (was denied)"
+aws iam list-users --profile hive-charlie > /dev/null
+echo "    iam:ListUsers — allowed (was denied)"
+echo "  FullAdmin passed"
+
+echo "IAM Phase 5 passed"
+
+# IAM Phase 6: Policy Lifecycle — Detach & Delete
+echo ""
+echo "IAM Phase 6: Policy Lifecycle — Detach & Delete"
+
+# Detach alice's policy → she loses access
+echo "  Detaching EC2DescribeAll from alice..."
+aws iam detach-user-policy --user-name alice \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2DescribeAll"
+expect_error "AccessDenied" \
+    aws ec2 describe-instances --profile hive-alice
+echo "  Alice lost access after detach"
+
+# DeletePolicy — conflict (DenyTerminate still attached to bob)
+echo "  Deleting DenyTerminate while attached (expect DeleteConflict)..."
+expect_error "DeleteConflict" aws iam delete-policy \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/DenyTerminate"
+
+# Detach first, then delete
+echo "  Detaching DenyTerminate from bob, then deleting..."
+aws iam detach-user-policy --user-name bob \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/DenyTerminate"
+aws iam delete-policy \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/DenyTerminate"
+
+# Verify it's gone
+expect_error "NoSuchEntity" aws iam get-policy \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/DenyTerminate"
+echo "  DenyTerminate deleted"
+
+echo "IAM Phase 6 passed"
+
+# IAM Phase 7: Cleanup
+echo ""
+echo "IAM Phase 7: IAM Cleanup"
+
+# Delete alice (detach remaining, delete key, delete user)
+echo "  Cleaning up alice..."
+aws iam delete-access-key --user-name alice --access-key-id "$ALICE_KEY_ID"
+aws iam delete-user --user-name alice
+
+# Delete bob
+echo "  Cleaning up bob..."
+aws iam delete-access-key --user-name bob --access-key-id "$BOB_KEY_ID"
+aws iam delete-user --user-name bob
+
+# Delete charlie (detach FullAdmin first)
+echo "  Cleaning up charlie..."
+aws iam detach-user-policy --user-name charlie \
+    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/admin/FullAdmin"
+aws iam delete-access-key --user-name charlie --access-key-id "$CHARLIE_KEY_ID"
+aws iam delete-user --user-name charlie
+
+# Verify only root remains
+FINAL_USER_COUNT=$(aws iam list-users | jq '.Users | length')
+if [ "$FINAL_USER_COUNT" -ne 1 ]; then
+    echo "  ERROR: Expected 1 user (root) after cleanup, got $FINAL_USER_COUNT"
+    exit 1
+fi
+echo "  Users cleaned up (root only)"
+
+# Delete remaining policies
+echo "  Cleaning up policies..."
+aws iam delete-policy --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2ReadOnly"
+aws iam delete-policy --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/admin/FullAdmin"
+aws iam delete-policy --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/IAMReadOnly"
+aws iam delete-policy --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2DescribeAll"
+
+FINAL_POLICY_COUNT=$(aws iam list-policies | jq '.Policies | length')
+if [ "$FINAL_POLICY_COUNT" -ne 0 ]; then
+    echo "  ERROR: Expected 0 policies after cleanup, got $FINAL_POLICY_COUNT"
+    exit 1
+fi
+echo "  Policies cleaned up"
+
+echo "IAM Phase 7 passed"
+echo ""
+echo "IAM E2E Tests Completed Successfully"
 
 # Phase 9: Terminate and Verify Cleanup
 echo "Phase 9: Terminate and Verify Cleanup"
@@ -1236,16 +1757,16 @@ echo "Root volume to verify cleanup: $ROOT_VOLUME_ID"
 # checkVolumeHasNoSnapshots() correctly blocks volume deletion when snapshots reference it.
 if [ -n "$CUSTOM_AMI_SNAP_ID" ]; then
     echo "Deleting CreateImage backing snapshot $CUSTOM_AMI_SNAP_ID before termination..."
-    $AWS_EC2 delete-snapshot --snapshot-id "$CUSTOM_AMI_SNAP_ID"
+    aws ec2 delete-snapshot --snapshot-id "$CUSTOM_AMI_SNAP_ID"
     echo "CreateImage snapshot deleted"
 fi
 
 # Terminate instance (terminate-instances) and verify termination (describe-instances)
 echo "Terminating instance..."
-$AWS_EC2 terminate-instances --instance-ids "$INSTANCE_ID"
+aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
 COUNT=0
 while [ $COUNT -lt 30 ]; do
-    STATE=$($AWS_EC2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)
+    STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)
     echo "Instance state: $STATE"
     if [ "$STATE" == "terminated" ] || [ "$STATE" == "None" ]; then
         break
@@ -1268,7 +1789,7 @@ COUNT=0
 VOLUME_CLEANED=false
 while [ $COUNT -lt 20 ]; do
     set +e
-    VOL_CHECK=$($AWS_EC2 describe-volumes --volume-ids "$ROOT_VOLUME_ID" \
+    VOL_CHECK=$(aws ec2 describe-volumes --volume-ids "$ROOT_VOLUME_ID" \
         --query 'Volumes[0].State' --output text 2>&1)
     VOL_EXIT=$?
     set -e

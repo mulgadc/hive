@@ -3,13 +3,7 @@ import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router"
 import { useForm } from "react-hook-form"
 
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Field,
   FieldError,
@@ -53,9 +47,6 @@ function LoginPage() {
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle>AWS Credentials</CardTitle>
-          <CardDescription>
-            Run <code>cat ~/hive/config/hive.toml</code> to get your credentials
-          </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit(onSubmit)}>

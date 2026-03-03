@@ -36,12 +36,8 @@ type Config struct {
 	AWSGW      AWSGWConfig      `mapstructure:"awsgw"`
 	VPCD       VPCDConfig       `mapstructure:"vpcd"`
 
-	// Authentication
-	// TODO: Move to more appropriate setting above
-	AccessKey string `mapstructure:"accesskey"`
-	SecretKey string `mapstructure:"secretkey"`
-	BaseDir   string `mapstructure:"base_dir"`
-	WalDir    string `mapstructure:"wal_dir"`
+	BaseDir string `mapstructure:"base_dir"`
+	WalDir  string `mapstructure:"wal_dir"`
 }
 
 // NodeBaseDir returns the BaseDir for the current node, or "" if the config

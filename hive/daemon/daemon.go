@@ -450,7 +450,7 @@ func (d *Daemon) Start() error {
 	}
 
 	// Create services before loading/launching instances, since LaunchInstance depends on them
-	store := objectstore.NewS3ObjectStoreFromConfig(d.config.Predastore.Host, d.config.Predastore.Region, d.config.AccessKey, d.config.SecretKey)
+	store := objectstore.NewS3ObjectStoreFromConfig(d.config.Predastore.Host, d.config.Predastore.Region, d.config.Predastore.AccessKey, d.config.Predastore.SecretKey)
 	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances, store)
 	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
 	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config, d.natsConn)
@@ -1097,8 +1097,6 @@ func (d *Daemon) ClusterManager() error {
 			NATS:       d.config.NATS,
 			Predastore: d.config.Predastore,
 			AWSGW:      d.config.AWSGW,
-			AccessKey:  d.config.AccessKey,
-			SecretKey:  d.config.SecretKey,
 			BaseDir:    req.DataDir,
 		}
 

@@ -146,6 +146,65 @@
 - `delete-key-pair` on non-existent key (expect success — idempotent, matches AWS)
 - `modify-instance-attribute` on running instance (expect `InvalidInstanceID.NotFound` — running instances not in stopped KV)
 
+### IAM Phase 1: User CRUD
+- Root auth via `iam list-users` (root user exists)
+- `create-user` (alice, bob with path)
+- Duplicate user (expect `EntityAlreadyExists`)
+- `get-user` (alice)
+- `get-user` non-existent (expect `NoSuchEntity`)
+- `list-users` (verify count)
+- `list-users` with `--path-prefix` filter
+
+### IAM Phase 2: Access Key Lifecycle
+- `create-access-key` (alice key 1, key 2)
+- Third key exceeds limit (expect `LimitExceeded`)
+- `create-access-key` for non-existent user (expect `NoSuchEntity`)
+- `list-access-keys` (alice: 2 keys, bob: 0 keys)
+- `update-access-key` (Inactive, verify status, reactivate)
+- `delete-access-key` (verify count decremented)
+
+### IAM Phase 3: User Authentication
+- Configure IAM user profile with access key
+- Deactivate key → auth rejected (`InvalidClientTokenId`)
+- Reactivate key
+- Wrong secret → `SignatureDoesNotMatch`
+- Non-existent key ID → `InvalidClientTokenId`
+- Multi-user simultaneous auth (root + bob)
+
+### IAM Phase 4: Policy CRUD
+- `create-policy` (EC2ReadOnly, FullAdmin, DenyTerminate, IAMReadOnly, EC2DescribeAll)
+- Duplicate policy (expect `EntityAlreadyExists`)
+- Malformed JSON (expect `MalformedPolicyDocument`)
+- `get-policy` (by ARN)
+- `get-policy` non-existent (expect `NoSuchEntity`)
+- `get-policy-version` (v1)
+- `list-policies` (verify count)
+
+### IAM Phase 5: Policy Attachment & Enforcement
+- Create charlie with access key
+- `attach-user-policy` (alice: EC2ReadOnly + IAMReadOnly, bob: DenyTerminate)
+- `list-attached-user-policies` (verify count)
+- Idempotent attach (no duplicate)
+- Attach non-existent policy (expect `NoSuchEntity`)
+- Attach to non-existent user (expect `NoSuchEntity`)
+- **Default Deny**: charlie (no policies) → `AccessDenied` on ec2 + iam
+- **Explicit Allow**: alice → ec2:Describe{Instances,Vpcs} allowed, ec2:DescribeKeyPairs denied, iam:ListUsers allowed, iam:CreateUser denied
+- **Deny Override**: bob → ec2:Describe allowed, ec2:TerminateInstances denied (explicit Deny), iam denied
+- **Root Bypass**: root user → all actions succeed
+- **Prefix Wildcard**: swap alice to EC2DescribeAll (ec2:Describe*) → Describe* allowed, non-Describe denied
+- **FullAdmin**: charlie with FullAdmin → all actions allowed
+
+### IAM Phase 6: Policy Lifecycle — Detach & Delete
+- `detach-user-policy` → user loses access
+- `delete-policy` while attached (expect `DeleteConflict`)
+- Detach then delete → `get-policy` returns `NoSuchEntity`
+
+### IAM Phase 7: IAM Cleanup
+- Delete all test users (remove keys + policies first)
+- Verify root-only remains (`list-users` count = 1)
+- Delete all test policies (`list-policies` count = 0)
+- Clean up AWS CLI profiles
+
 ### Phase 9: Terminate and Verify Cleanup
 - `delete-snapshot` (CreateImage backing snapshot, so DeleteOnTermination is not blocked)
 - `terminate-instances` (poll -> terminated)
@@ -273,7 +332,45 @@
 - Verify crash loop is detected and restarts stop after max attempts (3 in 10-min window)
 - Verify instance reaches error state (won't restart further)
 
-### Phase 5c: VPC Networking
+### Phase 5c: IAM Accounts & Cross-Account Isolation
+
+#### Step 1: Create Accounts
+- `hive admin account create` (Team Alpha, Team Beta)
+- Verify sequential 12-digit account IDs
+- `hive admin account list` (verify both accounts)
+
+#### Step 2: Account Admin Auth
+- Alpha admin authenticates via ec2 + iam
+- Beta admin authenticates via ec2 + iam
+
+#### Step 3: Account-Scoped Users
+- `create-user` alice in Alpha + Beta (same name, different accounts)
+- `create-user` team-member (Alpha), dev-user (Beta)
+- `list-users` scoped per account (verify different user lists)
+- Cross-account isolation: Alpha cannot see Beta's users and vice versa (`NoSuchEntity`)
+
+#### Step 4: Account-Scoped Access Keys
+- `create-access-key` for alice in Alpha + Beta
+- Configure separate AWS CLI profiles per account user
+
+#### Step 5: Account-Scoped Policies & Enforcement
+- `create-policy` EC2ReadOnly in Alpha (narrow: DescribeInstances + DescribeVpcs)
+- `create-policy` EC2ReadOnly in Beta (broad: ec2:Describe*)
+- `attach-user-policy` to alice in both accounts
+- Alpha alice: DescribeInstances allowed, DescribeKeyPairs denied (narrow)
+- Beta alice: DescribeInstances allowed, DescribeKeyPairs allowed (broad Describe*)
+- Both denied: CreateKeyPair
+
+#### Step 6: Cross-Account Delete Isolation
+- Delete Alpha's alice (detach policy, delete key, delete user)
+- Verify Alpha alice gone (`NoSuchEntity`)
+- Verify Beta alice unaffected (still exists, auth still works)
+
+#### Step 7: IAM Account Cleanup
+- Delete all account users, policies, access keys
+- Clean up AWS CLI profiles
+
+### Phase 5d: VPC Networking
 - Step 1: `create-vpc` (10.100.0.0/16) + `create-subnet` (10.100.1.0/24)
 - Step 2: `run-instances` x3 with `--subnet-id` (launch into VPC subnet)
 - Poll all VPC instances to running state

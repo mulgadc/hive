@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/url"
 	"os"
@@ -16,6 +17,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/mulgadc/hive/hive/awsec2query"
 	"github.com/mulgadc/hive/hive/awserrors"
+	"github.com/mulgadc/hive/hive/gateway/policy"
+	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
 	"github.com/nats-io/nats.go"
 )
 
@@ -27,8 +30,7 @@ type GatewayConfig struct {
 	ExpectedNodes  int        // Number of expected hive nodes for multi-node operations
 	Region         string     // Region this gateway is running in
 	AZ             string     // Availability zone this gateway is running in
-	AccessKey      string     // AWS Access Key ID for authentication
-	SecretKey      string     // AWS Secret Access Key for authentication
+	IAMService     handlers_iam.IAMService
 }
 
 var supportedServices = map[string]bool{
@@ -169,13 +171,58 @@ func (gw *GatewayConfig) GetService(ctx *fiber.Ctx) (string, error) {
 	return svc, nil
 }
 
-func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {
-	// TODO: Support service type specific errors (e.g EC2, S3, IAM, differ)
+// checkPolicy evaluates IAM policies for the current request. Returns nil
+// if access is allowed, or an ErrorAccessDenied error if denied.
+// Root users bypass evaluation entirely. If the IAM service is unavailable,
+// access is allowed (pre-IAM compatibility).
+func (gw *GatewayConfig) checkPolicy(ctx *fiber.Ctx, service, action string) error {
+	if gw.IAMService == nil {
+		slog.Warn("checkPolicy: IAM service not available, skipping policy check",
+			"service", service, "action", action)
+		return nil
+	}
 
+	identityVal := ctx.Locals("sigv4.identity")
+	if identityVal == nil {
+		// No auth context — pre-IAM compatibility
+		return nil
+	}
+	identity, ok := identityVal.(string)
+	if !ok {
+		slog.Error("checkPolicy: identity has unexpected type", "type", fmt.Sprintf("%T", identityVal))
+		return errors.New(awserrors.ErrorInternalError)
+	}
+	// Extract account ID from auth context
+	accountID, _ := ctx.Locals("sigv4.accountId").(string)
+	if accountID == "" {
+		slog.Error("checkPolicy: no account ID in auth context", "user", identity)
+		return errors.New(awserrors.ErrorInternalError)
+	}
+
+	if identity == "" || (identity == "root" && accountID == handlers_iam.GlobalAccountID) {
+		return nil
+	}
+
+	// Resolve the IAM action string (e.g. "ec2:RunInstances")
+	iamAction := policy.IAMAction(service, action)
+
+	policies, err := gw.IAMService.GetUserPolicies(accountID, identity)
+	if err != nil {
+		slog.Error("checkPolicy: failed to get user policies", "user", identity, "err", err)
+		return errors.New(awserrors.ErrorInternalError)
+	}
+
+	if policy.EvaluateAccess(identity, iamAction, "*", policies) == policy.Deny {
+		slog.Info("checkPolicy: access denied", "user", identity, "action", iamAction)
+		return errors.New(awserrors.ErrorAccessDenied)
+	}
+
+	return nil
+}
+
+func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {
 	svc, _ := gw.GetService(ctx)
 	slog.Debug("ErrorHandler", "service", svc, "error", err.Error())
-
-	// Status code defaults to 500
 
 	// Get the request ID
 	var requestId = uuid.NewString()
@@ -191,7 +238,13 @@ func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {
 
 	errorMsg = awserrors.ErrorLookup[err.Error()]
 
-	xmlError := GenerateEC2ErrorResponse(err.Error(), errorMsg.Message, requestId)
+	// IAM uses a different error XML format than EC2
+	var xmlError []byte
+	if svc == "iam" {
+		xmlError = GenerateIAMErrorResponse(err.Error(), errorMsg.Message, requestId)
+	} else {
+		xmlError = GenerateEC2ErrorResponse(err.Error(), errorMsg.Message, requestId)
+	}
 
 	slog.Debug("Generated error response", "error", err.Error(), "xml", string(xmlError), "requestId", requestId)
 
@@ -199,7 +252,6 @@ func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {
 		errorMsg.HTTPCode = 500
 	}
 
-	// Set standard S3 error response headers
 	ctx.Set("Content-Type", "application/xml")
 	return ctx.Status(errorMsg.HTTPCode).Send(xmlError)
 }
@@ -239,12 +291,46 @@ func GenerateEC2ErrorResponse(code, message, requestID string) (output []byte) {
 
 	if err != nil {
 		slog.Error("Failed to build XML", "error", err)
-		return nil
+		return []byte(xml.Header + "<Response><Errors><Error><Code>InternalError</Code><Message>Internal error</Message></Error></Errors><RequestID>" + requestID + "</RequestID></Response>")
 	}
 
 	// Add XML header
 	output = append([]byte(xml.Header), output...)
 
+	return output
+}
+
+// IAMErrorResponse represents the IAM-style error XML format:
+// <ErrorResponse><Error><Type>Sender</Type><Code>...</Code><Message>...</Message></Error><RequestId>...</RequestId></ErrorResponse>
+type IAMErrorResponse struct {
+	XMLName   xml.Name       `xml:"ErrorResponse"`
+	Error     IAMErrorDetail `xml:"Error"`
+	RequestID string         `xml:"RequestId"`
+}
+
+type IAMErrorDetail struct {
+	Type    string `xml:"Type"`
+	Code    string `xml:"Code"`
+	Message string `xml:"Message"`
+}
+
+func GenerateIAMErrorResponse(code, message, requestID string) (output []byte) {
+	errorXml := IAMErrorResponse{
+		Error: IAMErrorDetail{
+			Type:    "Sender",
+			Code:    code,
+			Message: message,
+		},
+		RequestID: requestID,
+	}
+
+	output, err := xml.MarshalIndent(errorXml, "", "  ")
+	if err != nil {
+		slog.Error("Failed to build IAM error XML", "error", err)
+		return []byte(xml.Header + "<ErrorResponse><Error><Type>Sender</Type><Code>InternalError</Code><Message>Internal error</Message></Error><RequestId>" + requestID + "</RequestId></ErrorResponse>")
+	}
+
+	output = append([]byte(xml.Header), output...)
 	return output
 }
 

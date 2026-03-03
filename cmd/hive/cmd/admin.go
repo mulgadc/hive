@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,9 +32,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/mulgadc/hive/hive/admin"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/formation"
+	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/mulgadc/viperblock/viperblock/backends/s3"
@@ -128,6 +132,28 @@ var imagesListCmd = &cobra.Command{
 	Run:   runimagesListCmd,
 }
 
+var accountCmd = &cobra.Command{
+	Use:   "account",
+	Short: "Manage Hive accounts",
+	Long:  `Create and manage Hive accounts. Each account namespaces IAM users, policies, and resources.`,
+}
+
+var accountCreateCmd = &cobra.Command{
+	Use:   "create",
+	Short: "Create a new account with an admin user",
+	Long: `Create a new Hive account. This creates an account with a sequential 12-digit ID,
+an admin user, and an AdministratorAccess policy attached to the admin user.
+Requires the cluster to be running (connects to NATS).`,
+	Run: runAccountCreate,
+}
+
+var accountListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all accounts",
+	Long:  `List all Hive accounts with their ID, name, status, and creation time.`,
+	Run:   runAccountList,
+}
+
 /*
 CLI ideas
 
@@ -161,6 +187,12 @@ func init() {
 	adminCmd.AddCommand(imagesCmd)
 	imagesCmd.AddCommand(imagesImportCmd)
 	imagesCmd.AddCommand(imagesListCmd)
+
+	adminCmd.AddCommand(accountCmd)
+	accountCmd.AddCommand(accountCreateCmd)
+	accountCmd.AddCommand(accountListCmd)
+	accountCreateCmd.Flags().String("name", "", "Account name (required)")
+	accountCreateCmd.MarkFlagRequired("name")
 
 	homeDir, _ := os.UserHomeDir()
 	configDir := fmt.Sprintf("%s/hive/config", homeDir)
@@ -421,8 +453,8 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		VolumeSize: utils.SafeInt64ToUint64(imageStat.Size()),
 		Bucket:     appConfig.Nodes[appConfig.Node].Predastore.Bucket,
 		Region:     appConfig.Nodes[appConfig.Node].Predastore.Region,
-		AccessKey:  appConfig.Nodes[appConfig.Node].AccessKey,
-		SecretKey:  appConfig.Nodes[appConfig.Node].SecretKey,
+		AccessKey:  appConfig.Nodes[appConfig.Node].Predastore.AccessKey,
+		SecretKey:  appConfig.Nodes[appConfig.Node].Predastore.SecretKey,
 		Host:       appConfig.Nodes[appConfig.Node].Predastore.Host,
 	}
 
@@ -565,10 +597,24 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	secretKey := admin.GenerateAWSSecretKey()
 	accountID := admin.GenerateAccountID()
 
-	fmt.Println("\n🔑 Generated AWS credentials:")
+	fmt.Println("\n🔑 Generated root credentials (save these — they won't be shown again):")
 	fmt.Printf("   Access Key: %s\n", accessKey)
 	fmt.Printf("   Secret Key: %s\n", secretKey)
 	fmt.Printf("   Account ID: %s\n", accountID)
+
+	// Generate IAM master key (AES-256, used to encrypt secrets in NATS KV)
+	masterKey, err := handlers_iam.GenerateMasterKey()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error generating IAM master key: %v\n", err)
+		os.Exit(1)
+	}
+	if err := writeBootstrapFiles(configDir, masterKey, accessKey, secretKey, accountID); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing bootstrap files: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("\n🔐 Generated IAM master key")
+	fmt.Printf("   Master key: %s\n", filepath.Join(configDir, "master.key"))
+	fmt.Printf("   Bootstrap: %s\n", filepath.Join(configDir, "bootstrap.json"))
 
 	// Generate SSL certificates (with bind IP in SANs for multi-node support)
 	certPath := admin.GenerateCertificatesIfNeeded(configDir, force, bindIP)
@@ -689,8 +735,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		})
 	}
 
-	err := admin.GenerateConfigFiles(configs, configSettings)
-	if err != nil {
+	if err := admin.GenerateConfigFiles(configs, configSettings); err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating configuration files: %v\n", err)
 		os.Exit(1)
 	}
@@ -734,6 +779,19 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		os.Exit(1)
 	}
 
+	// Generate IAM master key for the cluster
+	masterKey, err := handlers_iam.GenerateMasterKey()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error generating IAM master key: %v\n", err)
+		os.Exit(1)
+	}
+	if err := writeBootstrapFiles(configDir, masterKey, accessKey, secretKey, accountID); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error writing bootstrap files: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("\n🔐 Generated IAM master key")
+	fmt.Printf("   Bootstrap: %s\n", filepath.Join(configDir, "bootstrap.json"))
+
 	// Read CA cert/key for distribution to joining nodes
 	caCertData, err := os.ReadFile(filepath.Join(configDir, "ca.pem"))
 	if err != nil {
@@ -756,6 +814,9 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 	}
 
 	fs := formation.NewFormationServer(expectedNodes, creds, string(caCertData), string(caKeyData))
+
+	// Include master key in formation server for distribution to joining nodes
+	fs.SetMasterKey(base64.StdEncoding.EncodeToString(masterKey))
 
 	// Register self (init node) as the first node
 	selfNode := formation.NodeInfo{
@@ -1083,6 +1144,23 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	}
 	fmt.Printf("✅ CA certificate received from leader: %s\n", caCertPath)
 
+	// Extract and write master key from formation server
+	if statusResp.MasterKey == "" {
+		fmt.Fprintf(os.Stderr, "❌ Error: formation server did not return master key\n")
+		os.Exit(1)
+	}
+	masterKeyBytes, err := base64.StdEncoding.DecodeString(statusResp.MasterKey)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error decoding master key: %v\n", err)
+		os.Exit(1)
+	}
+	if err := writeBootstrapFiles(configDir, masterKeyBytes, creds.AccessKey, creds.SecretKey, creds.AccountID); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error writing bootstrap files: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("✅ IAM master key received from leader")
+	fmt.Printf("✅ Bootstrap file written: %s\n", filepath.Join(configDir, "bootstrap.json"))
+
 	// Generate server cert signed by CA with this node's bind IP
 	if err := admin.GenerateServerCertOnly(configDir, bindIP); err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating server certificate: %v\n", err)
@@ -1222,4 +1300,179 @@ func buildRemoteNodes(allNodes map[string]formation.NodeInfo, localNode string) 
 		return remote[i].Name < remote[j].Name
 	})
 	return remote
+}
+
+// initIAMServiceFromConfig loads config, connects to NATS, loads the master
+// key, and returns an initialised IAMServiceImpl. Callers must defer nc.Close().
+func initIAMServiceFromConfig() (*handlers_iam.IAMServiceImpl, *config.ClusterConfig, func(), error) {
+	cfg, nc, err := loadConfigAndConnect()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("connect to cluster: %w", err)
+	}
+
+	masterKeyPath := filepath.Join(cfg.NodeBaseDir(), "config", "master.key")
+	masterKey, err := handlers_iam.LoadMasterKey(masterKeyPath)
+	if err != nil {
+		nc.Close()
+		return nil, nil, nil, fmt.Errorf("load master key: %w", err)
+	}
+
+	svc, err := handlers_iam.NewIAMServiceImpl(nc, masterKey)
+	if err != nil {
+		nc.Close()
+		return nil, nil, nil, fmt.Errorf("init IAM service: %w", err)
+	}
+
+	return svc, cfg, func() { nc.Close() }, nil
+}
+
+// adminAccessPolicyDocument is the AdministratorAccess policy document that
+// grants full access to all actions and resources.
+const adminAccessPolicyDocument = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`
+
+func runAccountCreate(cmd *cobra.Command, args []string) {
+	name, _ := cmd.Flags().GetString("name")
+
+	svc, cfg, cleanup, err := initIAMServiceFromConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer cleanup()
+
+	// 1. Create the account
+	account, err := svc.CreateAccount(name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating account: %v\n", err)
+		os.Exit(1)
+	}
+	accountID := account.AccountID
+
+	// 2. Create admin user
+	_, err = svc.CreateUser(accountID, &iam.CreateUserInput{
+		UserName: aws.String("admin"),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating admin user: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 3. Create access key for admin user
+	akOut, err := svc.CreateAccessKey(accountID, &iam.CreateAccessKeyInput{
+		UserName: aws.String("admin"),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating access key: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 4. Create AdministratorAccess policy scoped to this account
+	policyARN := fmt.Sprintf("arn:aws:iam::%s:policy/AdministratorAccess", accountID)
+	_, err = svc.CreatePolicy(accountID, &iam.CreatePolicyInput{
+		PolicyName:     aws.String("AdministratorAccess"),
+		PolicyDocument: aws.String(adminAccessPolicyDocument),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating admin policy: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 5. Attach policy to admin user
+	_, err = svc.AttachUserPolicy(accountID, &iam.AttachUserPolicyInput{
+		UserName:  aws.String("admin"),
+		PolicyArn: aws.String(policyARN),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error attaching policy: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Configure AWS CLI profile automatically
+	profileName := "hive-" + strings.ToLower(strings.ReplaceAll(name, " ", "-"))
+	homeDir, _ := os.UserHomeDir()
+
+	endpointHost := "localhost"
+	certPath := filepath.Join(cfg.NodeBaseDir(), "config", "ca.pem")
+	nodeConfig := cfg.Nodes[cfg.Node]
+	if h, _, err := net.SplitHostPort(nodeConfig.AWSGW.Host); err == nil {
+		if h != "" && h != "0.0.0.0" {
+			endpointHost = h
+		}
+	}
+	endpointURL := fmt.Sprintf("https://%s:9999", endpointHost)
+
+	credPath := filepath.Join(homeDir, ".aws", "credentials")
+	configPath := filepath.Join(homeDir, ".aws", "config")
+
+	if err := admin.UpdateAWSINIFile(credPath, profileName, map[string]string{
+		"aws_access_key_id":     *akOut.AccessKey.AccessKeyId,
+		"aws_secret_access_key": *akOut.AccessKey.SecretAccessKey,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not update AWS credentials: %v\n", err)
+	}
+	if err := admin.UpdateAWSINIFile(configPath, "profile "+profileName, map[string]string{
+		"region":       "us-east-1",
+		"endpoint_url": endpointURL,
+		"ca_bundle":    certPath,
+		"output":       "json",
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not update AWS config: %v\n", err)
+	}
+
+	// Print credentials
+	fmt.Println("\nAccount created successfully!")
+	fmt.Printf("  Account ID:        %s\n", accountID)
+	fmt.Printf("  Account Name:      %s\n", name)
+	fmt.Printf("  Admin User:        admin\n")
+	fmt.Printf("  Access Key ID:     %s\n", *akOut.AccessKey.AccessKeyId)
+	fmt.Printf("  Secret Access Key: %s\n", *akOut.AccessKey.SecretAccessKey)
+	fmt.Printf("  AWS Profile:       %s\n", profileName)
+	fmt.Println("\nUse with:")
+	fmt.Printf("  AWS_PROFILE=%s aws ec2 describe-instances\n", profileName)
+}
+
+func runAccountList(cmd *cobra.Command, args []string) {
+	svc, _, cleanup, err := initIAMServiceFromConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer cleanup()
+
+	accounts, err := svc.ListAccounts()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error listing accounts: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(accounts) == 0 {
+		fmt.Println("No accounts found.")
+		return
+	}
+
+	fmt.Printf("%-14s %-20s %-10s %s\n", "ACCOUNT ID", "NAME", "STATUS", "CREATED")
+	fmt.Printf("%-14s %-20s %-10s %s\n", "----------", "----", "------", "-------")
+	for _, a := range accounts {
+		created := a.CreatedAt
+		if t, err := time.Parse(time.RFC3339, a.CreatedAt); err == nil {
+			created = t.Format("2006-01-02 15:04")
+		}
+		fmt.Printf("%-14s %-20s %-10s %s\n", a.AccountID, a.AccountName, a.Status, created)
+	}
+}
+
+func writeBootstrapFiles(configDir string, masterKey []byte, accessKey, secretKey, accountID string) error {
+	if err := handlers_iam.SaveMasterKey(filepath.Join(configDir, "master.key"), masterKey); err != nil {
+		return fmt.Errorf("saving master key: %w", err)
+	}
+	encryptedSecret, err := handlers_iam.EncryptSecret(secretKey, masterKey)
+	if err != nil {
+		return fmt.Errorf("encrypting root secret: %w", err)
+	}
+	return handlers_iam.SaveBootstrapData(
+		filepath.Join(configDir, "bootstrap.json"),
+		&handlers_iam.BootstrapData{
+			AccessKeyID: accessKey, EncryptedSecret: encryptedSecret, AccountID: accountID,
+		},
+	)
 }

@@ -59,6 +59,8 @@ CLUSTER_SERVICES_STARTED="false"
 
 # Use Hive profile for AWS CLI
 export AWS_PROFILE=hive
+# Trust Hive CA for all profiles (AWS CLI v2 bundles its own Python/certifi, ignores system CA store)
+export AWS_CA_BUNDLE="$HOME/node1/config/ca.pem"
 
 
 echo "========================================"
@@ -177,6 +179,7 @@ wait_for_daemon_ready "https://${NODE1_IP}:${AWSGW_PORT}"
 
 # Define AWS CLI args pointing to node1's gateway
 AWS_EC2="aws --endpoint-url https://${NODE1_IP}:${AWSGW_PORT} ec2"
+AWS_IAM="aws --endpoint-url https://${NODE1_IP}:${AWSGW_PORT} iam"
 
 # Phase 3b: Cluster Stats CLI (Multi-Node)
 echo ""
@@ -447,10 +450,12 @@ for idx in "${!INSTANCE_IDS[@]}"; do
         -i "multinode-test-key.pem" \
         ec2-user@"$SSH_HOST" 'hostname' 2>/dev/null)
     echo "  VM hostname: $VM_HOSTNAME"
-    if echo "$VM_HOSTNAME" | grep -q "$instance_id"; then
-        echo "  Hostname contains instance ID"
+    # Hostname uses truncated ID: hive-vm-<first 8 hex chars of instance ID>
+    SHORT_ID=$(echo "$instance_id" | sed 's/^i-//' | cut -c1-8)
+    if echo "$VM_HOSTNAME" | grep -q "$SHORT_ID"; then
+        echo "  Hostname contains instance ID prefix ($SHORT_ID)"
     else
-        echo "  WARNING: Hostname '$VM_HOSTNAME' does not contain instance ID '$instance_id' (non-fatal)"
+        echo "  WARNING: Hostname '$VM_HOSTNAME' does not contain instance ID prefix '$SHORT_ID' (non-fatal)"
     fi
 done
 
@@ -1150,9 +1155,289 @@ fi
 
 echo "  Crash recovery tests passed"
 
-# Phase 5c: VPC Networking
+# Phase 5c: IAM Accounts & Cross-Account Isolation
 echo ""
-echo "Phase 5c: VPC Networking"
+echo "Phase 5c: IAM Accounts & Cross-Account Isolation"
+echo "========================================"
+
+AWS_EP="--endpoint-url https://${NODE1_IP}:${AWSGW_PORT}"
+
+# Step 1: Create accounts
+echo ""
+echo "Step 1: Create Accounts"
+echo "----------------------------------------"
+
+echo "  Creating Team Alpha account..."
+ALPHA_OUTPUT=$(./bin/hive admin account create --name "Team Alpha" --config "$HOME/node1/config/hive.toml" 2>&1)
+echo "$ALPHA_OUTPUT"
+ALPHA_ACCOUNT=$(echo "$ALPHA_OUTPUT" | grep "Account ID:" | awk '{print $NF}')
+ALPHA_KEY_ID=$(echo "$ALPHA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
+ALPHA_SECRET=$(echo "$ALPHA_OUTPUT" | grep "Secret Access Key:" | awk '{print $NF}')
+
+if [ -z "$ALPHA_ACCOUNT" ] || [ -z "$ALPHA_KEY_ID" ]; then
+    echo "  ERROR: Failed to parse Team Alpha account output"
+    exit 1
+fi
+echo "  Team Alpha: account=$ALPHA_ACCOUNT key=$ALPHA_KEY_ID"
+
+# Configure alpha profile (in case auto-config used a different endpoint)
+aws configure set aws_access_key_id "$ALPHA_KEY_ID" --profile hive-team-alpha
+aws configure set aws_secret_access_key "$ALPHA_SECRET" --profile hive-team-alpha
+aws configure set region us-east-1 --profile hive-team-alpha
+
+echo "  Creating Team Beta account..."
+BETA_OUTPUT=$(./bin/hive admin account create --name "Team Beta" --config "$HOME/node1/config/hive.toml" 2>&1)
+echo "$BETA_OUTPUT"
+BETA_ACCOUNT=$(echo "$BETA_OUTPUT" | grep "Account ID:" | awk '{print $NF}')
+BETA_KEY_ID=$(echo "$BETA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
+BETA_SECRET=$(echo "$BETA_OUTPUT" | grep "Secret Access Key:" | awk '{print $NF}')
+
+if [ -z "$BETA_ACCOUNT" ] || [ -z "$BETA_KEY_ID" ]; then
+    echo "  ERROR: Failed to parse Team Beta account output"
+    exit 1
+fi
+echo "  Team Beta: account=$BETA_ACCOUNT key=$BETA_KEY_ID"
+
+aws configure set aws_access_key_id "$BETA_KEY_ID" --profile hive-team-beta
+aws configure set aws_secret_access_key "$BETA_SECRET" --profile hive-team-beta
+aws configure set region us-east-1 --profile hive-team-beta
+
+# Verify sequential IDs
+echo "  Verifying sequential account IDs..."
+if [ "$ALPHA_ACCOUNT" == "000000000001" ] && [ "$BETA_ACCOUNT" == "000000000002" ]; then
+    echo "  Sequential IDs correct: $ALPHA_ACCOUNT, $BETA_ACCOUNT"
+else
+    echo "  WARNING: Account IDs may not be sequential: $ALPHA_ACCOUNT, $BETA_ACCOUNT"
+fi
+
+# List accounts
+echo "  Listing accounts..."
+ACCOUNT_LIST=$(./bin/hive admin account list --config "$HOME/node1/config/hive.toml" 2>&1)
+echo "$ACCOUNT_LIST"
+if echo "$ACCOUNT_LIST" | grep -q "Team Alpha" && echo "$ACCOUNT_LIST" | grep -q "Team Beta"; then
+    echo "  Account list verified"
+else
+    echo "  ERROR: Account list missing expected accounts"
+    exit 1
+fi
+
+# Step 2: Account admin auth
+echo ""
+echo "Step 2: Account Admin Auth"
+echo "----------------------------------------"
+
+echo "  Testing alpha admin auth..."
+aws $AWS_EP ec2 describe-instances --profile hive-team-alpha > /dev/null
+echo "    Alpha admin: ec2 OK"
+aws $AWS_EP iam list-users --profile hive-team-alpha > /dev/null
+echo "    Alpha admin: iam OK"
+
+echo "  Testing beta admin auth..."
+aws $AWS_EP ec2 describe-instances --profile hive-team-beta > /dev/null
+echo "    Beta admin: ec2 OK"
+aws $AWS_EP iam list-users --profile hive-team-beta > /dev/null
+echo "    Beta admin: iam OK"
+
+# Step 3: Account-scoped users
+echo ""
+echo "Step 3: Account-Scoped Users"
+echo "----------------------------------------"
+
+# Same username in different accounts
+echo "  Creating alice in both accounts..."
+aws $AWS_EP iam create-user --user-name alice --profile hive-team-alpha > /dev/null
+ALPHA_ALICE_ARN=$(aws $AWS_EP iam get-user --user-name alice --profile hive-team-alpha | jq -r '.User.Arn')
+echo "    Alpha alice: $ALPHA_ALICE_ARN"
+
+aws $AWS_EP iam create-user --user-name alice --profile hive-team-beta > /dev/null
+BETA_ALICE_ARN=$(aws $AWS_EP iam get-user --user-name alice --profile hive-team-beta | jq -r '.User.Arn')
+echo "    Beta alice: $BETA_ALICE_ARN"
+
+# Additional users
+aws $AWS_EP iam create-user --user-name team-member --profile hive-team-alpha > /dev/null
+aws $AWS_EP iam create-user --user-name dev-user --profile hive-team-beta > /dev/null
+
+# List users — scoped
+echo "  Verifying scoped user lists..."
+ALPHA_USERS=$(aws $AWS_EP iam list-users --profile hive-team-alpha | jq -r '.Users[].UserName' | sort | tr '\n' ',')
+echo "    Alpha users: $ALPHA_USERS"
+BETA_USERS=$(aws $AWS_EP iam list-users --profile hive-team-beta | jq -r '.Users[].UserName' | sort | tr '\n' ',')
+echo "    Beta users: $BETA_USERS"
+
+# Cross-account isolation
+echo "  Verifying cross-account isolation..."
+set +e
+CROSS_CHECK=$(aws $AWS_EP iam get-user --user-name dev-user --profile hive-team-alpha 2>&1)
+set -e
+if echo "$CROSS_CHECK" | grep -q "NoSuchEntity"; then
+    echo "    Alpha cannot see Beta's dev-user — isolation OK"
+else
+    echo "    ERROR: Alpha can see Beta's user (cross-account leak)"
+    exit 1
+fi
+
+set +e
+CROSS_CHECK2=$(aws $AWS_EP iam get-user --user-name team-member --profile hive-team-beta 2>&1)
+set -e
+if echo "$CROSS_CHECK2" | grep -q "NoSuchEntity"; then
+    echo "    Beta cannot see Alpha's team-member — isolation OK"
+else
+    echo "    ERROR: Beta can see Alpha's user (cross-account leak)"
+    exit 1
+fi
+
+# Step 4: Account-scoped access keys
+echo ""
+echo "Step 4: Account-Scoped Access Keys"
+echo "----------------------------------------"
+
+ALPHA_ALICE_KEY=$(aws $AWS_EP iam create-access-key --user-name alice --profile hive-team-alpha)
+ALPHA_ALICE_KEY_ID=$(echo "$ALPHA_ALICE_KEY" | jq -r '.AccessKey.AccessKeyId')
+ALPHA_ALICE_SECRET=$(echo "$ALPHA_ALICE_KEY" | jq -r '.AccessKey.SecretAccessKey')
+echo "  Alpha alice key: $ALPHA_ALICE_KEY_ID"
+
+aws configure set aws_access_key_id "$ALPHA_ALICE_KEY_ID" --profile hive-alpha-alice
+aws configure set aws_secret_access_key "$ALPHA_ALICE_SECRET" --profile hive-alpha-alice
+aws configure set region us-east-1 --profile hive-alpha-alice
+
+BETA_ALICE_KEY=$(aws $AWS_EP iam create-access-key --user-name alice --profile hive-team-beta)
+BETA_ALICE_KEY_ID=$(echo "$BETA_ALICE_KEY" | jq -r '.AccessKey.AccessKeyId')
+BETA_ALICE_SECRET=$(echo "$BETA_ALICE_KEY" | jq -r '.AccessKey.SecretAccessKey')
+echo "  Beta alice key: $BETA_ALICE_KEY_ID"
+
+aws configure set aws_access_key_id "$BETA_ALICE_KEY_ID" --profile hive-beta-alice
+aws configure set aws_secret_access_key "$BETA_ALICE_SECRET" --profile hive-beta-alice
+aws configure set region us-east-1 --profile hive-beta-alice
+
+# Step 5: Account-scoped policies & enforcement
+echo ""
+echo "Step 5: Account-Scoped Policies & Enforcement"
+echo "----------------------------------------"
+
+# Alpha: narrow EC2 read-only
+echo "  Creating EC2ReadOnly in Alpha (narrow)..."
+aws $AWS_EP iam create-policy \
+    --policy-name EC2ReadOnly \
+    --policy-document '{
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Allow",
+            "Action": ["ec2:DescribeInstances", "ec2:DescribeVpcs"],
+            "Resource": "*"
+        }]
+    }' --profile hive-team-alpha > /dev/null
+
+# Beta: broad EC2 Describe* wildcard
+echo "  Creating EC2ReadOnly in Beta (broad Describe*)..."
+aws $AWS_EP iam create-policy \
+    --policy-name EC2ReadOnly \
+    --policy-document '{
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Allow",
+            "Action": "ec2:Describe*",
+            "Resource": "*"
+        }]
+    }' --profile hive-team-beta > /dev/null
+
+# Attach policies
+echo "  Attaching policies..."
+aws $AWS_EP iam attach-user-policy --user-name alice \
+    --policy-arn "arn:aws:iam::${ALPHA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-alpha
+aws $AWS_EP iam attach-user-policy --user-name alice \
+    --policy-arn "arn:aws:iam::${BETA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-beta
+
+# Verify scoped enforcement
+echo "  Verifying scoped enforcement..."
+
+# Alpha alice: narrow policy
+aws $AWS_EP ec2 describe-instances --profile hive-alpha-alice > /dev/null
+echo "    Alpha alice: describe-instances — allowed"
+aws $AWS_EP ec2 describe-vpcs --profile hive-alpha-alice > /dev/null
+echo "    Alpha alice: describe-vpcs — allowed"
+expect_error "AccessDenied" aws $AWS_EP ec2 describe-key-pairs --profile hive-alpha-alice
+echo "    Alpha alice: describe-key-pairs — denied (narrow policy)"
+
+# Beta alice: broad policy
+aws $AWS_EP ec2 describe-instances --profile hive-beta-alice > /dev/null
+echo "    Beta alice: describe-instances — allowed"
+aws $AWS_EP ec2 describe-key-pairs --profile hive-beta-alice > /dev/null
+echo "    Beta alice: describe-key-pairs — allowed (Describe* wildcard)"
+
+# Both denied non-Describe
+expect_error "AccessDenied" aws $AWS_EP ec2 create-key-pair --key-name x --profile hive-alpha-alice
+echo "    Alpha alice: create-key-pair — denied"
+expect_error "AccessDenied" aws $AWS_EP ec2 create-key-pair --key-name x --profile hive-beta-alice
+echo "    Beta alice: create-key-pair — denied"
+
+echo "  Scoped enforcement verified"
+
+# Step 6: Cross-account delete isolation
+echo ""
+echo "Step 6: Cross-Account Delete Isolation"
+echo "----------------------------------------"
+
+# Delete Alpha's alice
+echo "  Deleting Alpha's alice..."
+aws $AWS_EP iam detach-user-policy --user-name alice \
+    --policy-arn "arn:aws:iam::${ALPHA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-alpha
+aws $AWS_EP iam delete-access-key --user-name alice \
+    --access-key-id "$ALPHA_ALICE_KEY_ID" --profile hive-team-alpha
+aws $AWS_EP iam delete-user --user-name alice --profile hive-team-alpha
+
+# Verify Alpha alice gone
+set +e
+ALPHA_CHECK=$(aws $AWS_EP iam get-user --user-name alice --profile hive-team-alpha 2>&1)
+set -e
+if echo "$ALPHA_CHECK" | grep -q "NoSuchEntity"; then
+    echo "  Alpha alice deleted"
+else
+    echo "  ERROR: Alpha alice still exists after delete"
+    exit 1
+fi
+
+# Verify Beta alice unaffected
+aws $AWS_EP iam get-user --user-name alice --profile hive-team-beta > /dev/null
+echo "  Beta alice still exists (isolation OK)"
+
+aws $AWS_EP ec2 describe-instances --profile hive-beta-alice > /dev/null
+echo "  Beta alice auth still works (isolation OK)"
+
+# Step 7: IAM Account Cleanup
+echo ""
+echo "Step 7: IAM Account Cleanup"
+echo "----------------------------------------"
+
+# Beta cleanup
+echo "  Cleaning up Beta account resources..."
+aws $AWS_EP iam detach-user-policy --user-name alice \
+    --policy-arn "arn:aws:iam::${BETA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-beta
+aws $AWS_EP iam delete-access-key --user-name alice \
+    --access-key-id "$BETA_ALICE_KEY_ID" --profile hive-team-beta
+aws $AWS_EP iam delete-user --user-name alice --profile hive-team-beta
+aws $AWS_EP iam delete-user --user-name dev-user --profile hive-team-beta
+aws $AWS_EP iam delete-policy \
+    --policy-arn "arn:aws:iam::${BETA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-beta
+
+# Alpha cleanup (alice already deleted)
+echo "  Cleaning up Alpha account resources..."
+aws $AWS_EP iam delete-user --user-name team-member --profile hive-team-alpha
+aws $AWS_EP iam delete-policy \
+    --policy-arn "arn:aws:iam::${ALPHA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-alpha
+
+# Clean up AWS CLI profiles
+for p in hive-team-alpha hive-team-beta hive-alpha-alice hive-beta-alice; do
+    aws configure set aws_access_key_id "" --profile $p 2>/dev/null || true
+    aws configure set aws_secret_access_key "" --profile $p 2>/dev/null || true
+done
+
+echo "  IAM account cleanup complete"
+echo ""
+echo "  IAM Accounts & Cross-Account Isolation tests passed"
+
+# Phase 5d: VPC Networking
+echo ""
+echo "Phase 5d: VPC Networking"
 echo "========================================"
 echo "Testing VPC instance launch, PrivateIpAddress, and same-subnet connectivity..."
 

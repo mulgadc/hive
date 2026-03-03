@@ -207,6 +207,34 @@ func TestStatusEndpointComplete(t *testing.T) {
 	assert.Equal(t, "ca-key-data", sr.CAKey)
 }
 
+func TestStatusEndpointMasterKey(t *testing.T) {
+	t.Parallel()
+	fs := NewFormationServer(2, testCreds(), "ca-cert", "ca-key")
+	fs.SetMasterKey("dGVzdC1tYXN0ZXIta2V5LWJhc2U2NC1lbmNvZGVk")
+	ts := testServer(t, fs)
+	defer ts.Close()
+
+	// Before completion: master key should not be exposed
+	resp, err := http.Get(ts.URL + "/formation/status")
+	require.NoError(t, err)
+	var sr StatusResponse
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&sr))
+	resp.Body.Close()
+	assert.Empty(t, sr.MasterKey)
+
+	// Complete formation
+	require.NoError(t, fs.RegisterNode(testNode("node1", "10.0.0.1")))
+	require.NoError(t, fs.RegisterNode(testNode("node2", "10.0.0.2")))
+
+	// After completion: master key should be present
+	resp, err = http.Get(ts.URL + "/formation/status")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&sr))
+	assert.True(t, sr.Complete)
+	assert.Equal(t, "dGVzdC1tYXN0ZXIta2V5LWJhc2U2NC1lbmNvZGVk", sr.MasterKey)
+}
+
 func TestHealthEndpoint(t *testing.T) {
 	t.Parallel()
 	fs := NewFormationServer(1, testCreds(), "", "")

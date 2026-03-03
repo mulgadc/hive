@@ -3,11 +3,15 @@ package gateway
 import (
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"io"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gofiber/fiber/v2"
+	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -83,6 +87,97 @@ func TestGenerateEC2ErrorResponse_ValidXML(t *testing.T) {
 			break
 		}
 	}
+}
+
+func TestGenerateIAMErrorResponse_Structure(t *testing.T) {
+	tests := []struct {
+		name      string
+		code      string
+		message   string
+		requestID string
+	}{
+		{
+			name:      "entity not found",
+			code:      "NoSuchEntity",
+			message:   "The request was rejected because it referenced a resource entity that does not exist.",
+			requestID: "req-iam-001",
+		},
+		{
+			name:      "entity already exists",
+			code:      "EntityAlreadyExists",
+			message:   "The request was rejected because it attempted to create a resource that already exists.",
+			requestID: "req-iam-002",
+		},
+		{
+			name:      "empty fields",
+			code:      "",
+			message:   "",
+			requestID: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			output := GenerateIAMErrorResponse(tc.code, tc.message, tc.requestID)
+			require.NotNil(t, output)
+
+			xmlStr := string(output)
+
+			// Verify XML header
+			assert.True(t, strings.HasPrefix(xmlStr, xml.Header))
+
+			// IAM uses <ErrorResponse> root, not <Response>
+			assert.Contains(t, xmlStr, "<ErrorResponse>")
+			assert.Contains(t, xmlStr, "</ErrorResponse>")
+			assert.NotContains(t, xmlStr, "<Response>")
+
+			// Verify IAM-specific structure
+			assert.Contains(t, xmlStr, "<Type>Sender</Type>")
+			assert.Contains(t, xmlStr, "<Code>"+tc.code+"</Code>")
+			assert.Contains(t, xmlStr, "<RequestId>"+tc.requestID+"</RequestId>")
+		})
+	}
+}
+
+func TestGenerateIAMErrorResponse_ValidXML(t *testing.T) {
+	output := GenerateIAMErrorResponse("NoSuchEntity", "Entity not found", "req-iam-999")
+	require.NotNil(t, output)
+
+	xmlBody := strings.TrimPrefix(string(output), xml.Header)
+	decoder := xml.NewDecoder(strings.NewReader(xmlBody))
+	for {
+		_, err := decoder.Token()
+		if err != nil {
+			assert.ErrorIs(t, err, io.EOF)
+			break
+		}
+	}
+}
+
+func TestErrorHandler_IAMService(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true}
+	app := fiber.New(fiber.Config{
+		ErrorHandler: func(ctx *fiber.Ctx, err error) error {
+			return gw.ErrorHandler(ctx, err)
+		},
+	})
+	app.Get("/", func(c *fiber.Ctx) error {
+		c.Locals("sigv4.service", "iam")
+		return errors.New(awserrors.ErrorIAMNoSuchEntity)
+	})
+
+	req := httptest.NewRequest("GET", "/", nil)
+	resp, err := app.Test(req)
+	require.NoError(t, err)
+	assert.Equal(t, 404, resp.StatusCode)
+
+	body, _ := io.ReadAll(resp.Body)
+	xmlStr := string(body)
+	// IAM format uses <ErrorResponse> not <Response>
+	assert.Contains(t, xmlStr, "<ErrorResponse>")
+	assert.Contains(t, xmlStr, "<Type>Sender</Type>")
+	assert.Contains(t, xmlStr, "<Code>NoSuchEntity</Code>")
+	assert.NotContains(t, xmlStr, "<Errors>")
 }
 
 func startTestNATS(t *testing.T) *nats.Conn {

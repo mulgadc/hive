@@ -530,7 +530,7 @@ var awsgwStartCmd = &cobra.Command{
 
 		baseDir := viper.GetString("base-dir")
 
-		if awsgwTlsKey != "" {
+		if baseDir != "" {
 			fmt.Println("Overwriting awsgw base-dir to:", baseDir)
 			nodeConfig.BaseDir = baseDir
 		}

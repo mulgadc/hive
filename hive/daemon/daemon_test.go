@@ -60,8 +60,6 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 			SecretKey: "test-secret-key",
 			BaseDir:   tmpDir,
 		},
-		AccessKey: "test-access-key",
-		SecretKey: "test-secret-key",
 	}
 
 	clusterCfg.Nodes["node-1"] = *cfg
@@ -359,8 +357,6 @@ func TestDaemon_Initialization(t *testing.T) {
 		NATS: config.NATSConfig{
 			Host: "nats://localhost:4222",
 		},
-		AccessKey: "test-key",
-		SecretKey: "test-secret",
 	}
 
 	clusterCfg.Nodes["node-1"] = *cfg

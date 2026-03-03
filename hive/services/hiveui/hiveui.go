@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -210,14 +211,63 @@ func (svc *Service) launchService() error {
 }
 
 func securityHeadersMiddleware(next http.Handler) http.Handler {
+	csp := buildCSP()
+	slog.Info("Content-Security-Policy configured", "csp", csp)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self' data:; connect-src 'self' https://localhost:9999 https://localhost:8443; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests;")
+		w.Header().Set("Content-Security-Policy", csp)
 		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), browsing-topics=()")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// getLocalIPs returns all non-loopback IPv4 addresses on the machine.
+func getLocalIPs() []string {
+	var ips []string
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		slog.Warn("Failed to get network interfaces for CSP", "error", err)
+		return ips
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || ip.IsLoopback() || ip.To4() == nil {
+				continue
+			}
+			ips = append(ips, ip.String())
+		}
+	}
+	return ips
+}
+
+// buildCSP constructs the Content-Security-Policy header, dynamically adding
+// each local IP with the AWS Gateway (:9999) and daemon (:8443) ports to connect-src.
+func buildCSP() string {
+	var b strings.Builder
+	b.WriteString("'self' https://localhost:9999 https://localhost:8443")
+	for _, ip := range getLocalIPs() {
+		fmt.Fprintf(&b, " https://%s:9999 https://%s:8443", ip, ip)
+	}
+	return fmt.Sprintf(
+		"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self' data:; connect-src %s; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests;",
+		b.String(),
+	)
 }
 
 func gzipMiddleware(next http.Handler) http.Handler {

@@ -423,6 +423,15 @@ var (
 	ErrorVpnGatewayAttachmentLimitExceeded                     = "VpnGatewayAttachmentLimitExceeded"
 	ErrorVpnGatewayLimitExceeded                               = "VpnGatewayLimitExceeded"
 	ErrorZonesMismatched                                       = "ZonesMismatched"
+
+	// IAM-specific error codes
+	ErrorIAMNoSuchEntity            = "NoSuchEntity"
+	ErrorIAMEntityAlreadyExists     = "EntityAlreadyExists"
+	ErrorIAMDeleteConflict          = "DeleteConflict"
+	ErrorIAMLimitExceeded           = "LimitExceeded"
+	ErrorIAMInvalidInput            = ErrorInvalidInput // alias for IAM usage
+	ErrorIAMMalformedPolicyDocument = "MalformedPolicyDocument"
+	ErrorAccessDenied               = "AccessDenied"
 )
 
 // ValidErrorCode returns the error code if it exists in ErrorLookup,
@@ -853,4 +862,12 @@ var ErrorLookup = map[string]ErrorMessage{
 	ErrorVpnGatewayAttachmentLimitExceeded:                     {HTTPCode: 400, Message: "You've reached the limit on the number of VPCs that can be attached to the specified virtual private gateway."},
 	ErrorVpnGatewayLimitExceeded:                               {HTTPCode: 400, Message: "You've reached the limit on the number of virtual private gateways that you can create. For more information about limits, see Amazon VPC quotas."},
 	ErrorZonesMismatched:                                       {HTTPCode: 400, Message: "The Availability Zone for the instance does not match that of the Dedicated Host"},
+
+	// IAM error codes
+	ErrorIAMNoSuchEntity:            {HTTPCode: 404, Message: "The request was rejected because it referenced a resource entity that does not exist."},
+	ErrorIAMEntityAlreadyExists:     {HTTPCode: 409, Message: "The request was rejected because it attempted to create a resource that already exists."},
+	ErrorIAMDeleteConflict:          {HTTPCode: 409, Message: "The request was rejected because it attempted to delete a resource that has attached subordinate entities."},
+	ErrorIAMLimitExceeded:           {HTTPCode: 409, Message: "The request was rejected because it attempted to create resources beyond the current AWS account limits."},
+	ErrorIAMMalformedPolicyDocument: {HTTPCode: 400, Message: "The policy document is malformed."},
+	ErrorAccessDenied:               {HTTPCode: 403, Message: "User is not authorized to perform this action."},
 }

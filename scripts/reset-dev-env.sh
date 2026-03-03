@@ -19,7 +19,7 @@ rm -rf ~/hive/nats/*
 rm -rf ~/hive/images/*
 
 # Enable pprof for development
-PPROF_ENABLED=1 PPROF_OUTPUT=/tmp/hive-vm.prof ./scripts/start-dev.sh
+PPROF_ENABLED=1 PPROF_OUTPUT=/tmp/hive-vm.prof ./scripts/start-dev.sh --build
 
 # Follow INSTALL.md steps
 echo "Importing AMI"
