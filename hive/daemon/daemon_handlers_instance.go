@@ -64,10 +64,33 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
-	if _, err := d.imageService.GetAMIConfig(*runInstancesInput.ImageId); err != nil {
+	amiMeta, err := d.imageService.GetAMIConfig(*runInstancesInput.ImageId)
+	if err != nil {
 		slog.Error("handleEC2RunInstances AMI not found", "imageId", *runInstancesInput.ImageId, "err", err)
 		respondWithError(msg, awserrors.ErrorInvalidAMIIDNotFound)
 		return
+	}
+	// Verify the caller can use this AMI: must own it or it must be a system/pre-phase4 AMI.
+	// System AMIs have non-account-ID owner aliases (e.g. "self", "hive", empty).
+	amiOwner := amiMeta.ImageOwnerAlias
+	if amiOwner != "" && amiOwner != accountID {
+		// Check if this is a system/pre-phase4 AMI (non-account-ID owner)
+		isSystem := len(amiOwner) != 12
+		if !isSystem {
+			allDigits := true
+			for _, c := range amiOwner {
+				if c < '0' || c > '9' {
+					allDigits = false
+					break
+				}
+			}
+			isSystem = !allDigits
+		}
+		if !isSystem {
+			slog.Warn("handleEC2RunInstances AMI not owned by caller", "imageId", *runInstancesInput.ImageId, "amiOwner", amiOwner, "accountID", accountID)
+			respondWithError(msg, awserrors.ErrorInvalidAMIIDNotFound)
+			return
+		}
 	}
 
 	// Validate key pair exists (if specified)

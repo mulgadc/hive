@@ -159,18 +159,50 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accoun
 			}
 		}
 
-		// Filter by Owner if specified (only support "self" and account IDs for now)
+		// Determine AMI ownership. Phase4+ AMIs store the creator's account ID
+		// in ImageOwnerAlias. Pre-phase4 AMIs have non-account values like "self"
+		// or "hive" and are treated as system/public images visible to all.
+		amiOwner := amiMeta.ImageOwnerAlias
+		isSystemAMI := !isAccountID(amiOwner)
+
+		// Visibility check: callers can only see their own AMIs and system AMIs.
+		// This runs regardless of whether an owner filter is specified.
+		if !isSystemAMI && amiOwner != accountID {
+			continue
+		}
+
+		// Filter by Owner if specified
 		if len(input.Owners) > 0 {
 			found := false
 			for _, owner := range input.Owners {
-				if owner != nil && (*owner == "self" || *owner == accountID || *owner == amiMeta.ImageOwnerAlias) {
-					found = true
+				if owner == nil {
+					continue
+				}
+				switch *owner {
+				case "self":
+					// "self" matches only AMIs owned by the caller
+					if amiOwner == accountID {
+						found = true
+					}
+				default:
+					// Match by explicit account ID
+					if amiOwner == *owner {
+						found = true
+					}
+				}
+				if found {
 					break
 				}
 			}
 			if !found {
 				continue
 			}
+		}
+
+		// Resolve the OwnerId for the response. System AMIs use global account.
+		ownerID := amiOwner
+		if isSystemAMI {
+			ownerID = "000000000000"
 		}
 
 		// Build EC2 Image from AMIMetadata
@@ -184,7 +216,7 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accoun
 			RootDeviceType:     aws.String(amiMeta.RootDeviceType),
 			VirtualizationType: aws.String(amiMeta.Virtualization),
 			ImageOwnerAlias:    aws.String(amiMeta.ImageOwnerAlias),
-			OwnerId:            aws.String(accountID),
+			OwnerId:            aws.String(ownerID),
 			Public:             aws.Bool(false),
 			State:              aws.String("available"),
 			ImageType:          aws.String("machine"),
@@ -330,7 +362,7 @@ func (s *ImageServiceImpl) CreateImageFromInstance(params CreateImageParams, acc
 				VolumeSizeGiB:   volumeSizeGiB,
 				CreationDate:    time.Now(),
 				RootDeviceType:  "ebs",
-				ImageOwnerAlias: "self",
+				ImageOwnerAlias: accountID,
 			},
 		},
 	}
@@ -559,6 +591,20 @@ func (s *ImageServiceImpl) putSnapshotMetadata(snapshotID, volumeID string, volu
 		ContentType: aws.String("application/json"),
 	})
 	return err
+}
+
+// isAccountID returns true if the string looks like a valid Hive account ID
+// (12-digit zero-padded number). Pre-phase4 values like "self" or "hive" return false.
+func isAccountID(s string) bool {
+	if len(s) != 12 {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *ImageServiceImpl) CopyImage(input *ec2.CopyImageInput, accountID string) (*ec2.CopyImageOutput, error) {
