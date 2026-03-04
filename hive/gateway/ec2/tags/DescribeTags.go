@@ -7,12 +7,12 @@ import (
 )
 
 // DescribeTags handles the EC2 DescribeTags API call
-func DescribeTags(input *ec2.DescribeTagsInput, natsConn *nats.Conn) (ec2.DescribeTagsOutput, error) {
+func DescribeTags(input *ec2.DescribeTagsInput, natsConn *nats.Conn, accountID string) (ec2.DescribeTagsOutput, error) {
 	// all input fields are optional filters
 	var output ec2.DescribeTagsOutput
 
 	svc := handlers_ec2_tags.NewNATSTagsService(natsConn)
-	result, err := svc.DescribeTags(input)
+	result, err := svc.DescribeTags(input, accountID)
 	if err != nil {
 		return output, err
 	}

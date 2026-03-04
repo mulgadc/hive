@@ -149,13 +149,13 @@ var ec2Actions = map[string]EC2Handler{
 		return gateway_ec2_account.DisableSerialConsoleAccess(input, gw.NATSConn)
 	}),
 	"CreateTags": ec2Handler(func(input *ec2.CreateTagsInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_tags.CreateTags(input, gw.NATSConn)
+		return gateway_ec2_tags.CreateTags(input, gw.NATSConn, accountID)
 	}),
 	"DeleteTags": ec2Handler(func(input *ec2.DeleteTagsInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_tags.DeleteTags(input, gw.NATSConn)
+		return gateway_ec2_tags.DeleteTags(input, gw.NATSConn, accountID)
 	}),
 	"DescribeTags": ec2Handler(func(input *ec2.DescribeTagsInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_tags.DescribeTags(input, gw.NATSConn)
+		return gateway_ec2_tags.DescribeTags(input, gw.NATSConn, accountID)
 	}),
 	"CreateSnapshot": ec2Handler(func(input *ec2.CreateSnapshotInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_snapshot.CreateSnapshot(input, gw.NATSConn, accountID)

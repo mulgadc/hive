@@ -34,7 +34,7 @@ func ValidateCreateTagsInput(input *ec2.CreateTagsInput) error {
 }
 
 // CreateTags handles the EC2 CreateTags API call
-func CreateTags(input *ec2.CreateTagsInput, natsConn *nats.Conn) (ec2.CreateTagsOutput, error) {
+func CreateTags(input *ec2.CreateTagsInput, natsConn *nats.Conn, accountID string) (ec2.CreateTagsOutput, error) {
 	var output ec2.CreateTagsOutput
 
 	if err := ValidateCreateTagsInput(input); err != nil {
@@ -42,7 +42,7 @@ func CreateTags(input *ec2.CreateTagsInput, natsConn *nats.Conn) (ec2.CreateTags
 	}
 
 	svc := handlers_ec2_tags.NewNATSTagsService(natsConn)
-	result, err := svc.CreateTags(input)
+	result, err := svc.CreateTags(input, accountID)
 	if err != nil {
 		return output, err
 	}
