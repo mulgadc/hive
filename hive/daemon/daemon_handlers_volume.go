@@ -52,6 +52,14 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 		return
 	}
 
+	// Account scoping: verify the caller owns this volume
+	callerAccountID := utils.AccountIDFromMsg(msg)
+	if callerAccountID != "" && volCfg.VolumeMetadata.TenantID != "" && volCfg.VolumeMetadata.TenantID != callerAccountID {
+		slog.Warn("AttachVolume: account does not own volume", "volumeId", volumeID, "callerAccount", callerAccountID, "ownerAccount", volCfg.VolumeMetadata.TenantID)
+		respondWithError(msg, awserrors.ErrorInvalidVolumeNotFound)
+		return
+	}
+
 	if volCfg.VolumeMetadata.State != "available" {
 		slog.Error("AttachVolume: volume not available", "volumeId", volumeID, "state", volCfg.VolumeMetadata.State)
 		respondWithError(msg, awserrors.ErrorVolumeInUse)
