@@ -1803,11 +1803,16 @@ echo ""
 echo "Phase 8 Step 2: Instance Scoping"
 echo "----------------------------------------"
 
+# Create per-account key pairs (key pairs are account-scoped, root's test-key-1 is invisible)
+aws ec2 create-key-pair --key-name alpha-instance-key --profile hive-team-alpha > /dev/null
+aws ec2 create-key-pair --key-name beta-instance-key --profile hive-team-beta > /dev/null
+echo "  Created per-account key pairs for instance launches"
+
 echo "  Alpha launching instance..."
 ALPHA_RUN=$(aws ec2 run-instances \
     --image-id "$AMI_ID" \
     --instance-type "$INSTANCE_TYPE" \
-    --key-name test-key-1 \
+    --key-name alpha-instance-key \
     --profile hive-team-alpha)
 ALPHA_INST=$(echo "$ALPHA_RUN" | jq -r '.Instances[0].InstanceId')
 echo "  Alpha instance: $ALPHA_INST"
@@ -1816,7 +1821,7 @@ echo "  Beta launching instance..."
 BETA_RUN=$(aws ec2 run-instances \
     --image-id "$AMI_ID" \
     --instance-type "$INSTANCE_TYPE" \
-    --key-name test-key-1 \
+    --key-name beta-instance-key \
     --profile hive-team-beta)
 BETA_INST=$(echo "$BETA_RUN" | jq -r '.Instances[0].InstanceId')
 echo "  Beta instance: $BETA_INST"
@@ -2410,10 +2415,10 @@ aws ec2 delete-volume --volume-id "$BETA_VOL" --profile hive-team-beta 2>/dev/nu
 
 # Delete key pairs
 echo "  Deleting key pairs..."
-for key in alpha-key shared-name imported-key; do
+for key in alpha-key alpha-instance-key shared-name imported-key; do
     aws ec2 delete-key-pair --key-name "$key" --profile hive-team-alpha 2>/dev/null || true
 done
-for key in beta-key shared-name; do
+for key in beta-key beta-instance-key shared-name; do
     aws ec2 delete-key-pair --key-name "$key" --profile hive-team-beta 2>/dev/null || true
 done
 
