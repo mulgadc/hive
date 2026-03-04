@@ -1926,13 +1926,13 @@ done
 wait
 
 ALPHA_RACE_COUNT=$($AWS_EC2 describe-key-pairs --profile hive-team-alpha \
-    --query 'KeyPairs[].KeyName' --output text | grep -c "race-alpha" || true)
+    --query 'KeyPairs[].KeyName' --output text | tr '\t' '\n' | grep -c "race-alpha" || true)
 if [ "$ALPHA_RACE_COUNT" -ne 5 ]; then
     echo "  ERROR: Expected 5 race-alpha keys, got $ALPHA_RACE_COUNT"
     exit 1
 fi
 ALPHA_RACE_LEAK=$($AWS_EC2 describe-key-pairs --profile hive-team-alpha \
-    --query 'KeyPairs[].KeyName' --output text | grep -c "race-beta" || true)
+    --query 'KeyPairs[].KeyName' --output text | tr '\t' '\n' | grep -c "race-beta" || true)
 if [ "$ALPHA_RACE_LEAK" -ne 0 ]; then
     echo "  ERROR: Alpha sees Beta's race keys (cross-contamination)"
     exit 1
