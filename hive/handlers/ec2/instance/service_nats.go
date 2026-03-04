@@ -25,5 +25,5 @@ func (s *NATSInstanceService) RunInstances(input *ec2.RunInstancesInput, account
 		return nil, fmt.Errorf("instance type is required")
 	}
 	topic := fmt.Sprintf("ec2.RunInstances.%s", aws.StringValue(input.InstanceType))
-	return utils.NATSRequestWithAccount[ec2.Reservation](s.natsConn, topic, input, 5*time.Minute, accountID)
+	return utils.NATSRequest[ec2.Reservation](s.natsConn, topic, input, 5*time.Minute, accountID)
 }

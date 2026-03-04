@@ -19,21 +19,21 @@ func NewNATSVolumeService(conn *nats.Conn) VolumeService {
 }
 
 func (s *NATSVolumeService) CreateVolume(input *ec2.CreateVolumeInput, accountID string) (*ec2.Volume, error) {
-	return utils.NATSRequestWithAccount[ec2.Volume](s.natsConn, "ec2.CreateVolume", input, 30*time.Second, accountID)
+	return utils.NATSRequest[ec2.Volume](s.natsConn, "ec2.CreateVolume", input, 30*time.Second, accountID)
 }
 
 func (s *NATSVolumeService) DescribeVolumes(input *ec2.DescribeVolumesInput, accountID string) (*ec2.DescribeVolumesOutput, error) {
-	return utils.NATSRequestWithAccount[ec2.DescribeVolumesOutput](s.natsConn, "ec2.DescribeVolumes", input, 30*time.Second, accountID)
+	return utils.NATSRequest[ec2.DescribeVolumesOutput](s.natsConn, "ec2.DescribeVolumes", input, 30*time.Second, accountID)
 }
 
 func (s *NATSVolumeService) ModifyVolume(input *ec2.ModifyVolumeInput, accountID string) (*ec2.ModifyVolumeOutput, error) {
-	return utils.NATSRequestWithAccount[ec2.ModifyVolumeOutput](s.natsConn, "ec2.ModifyVolume", input, 30*time.Second, accountID)
+	return utils.NATSRequest[ec2.ModifyVolumeOutput](s.natsConn, "ec2.ModifyVolume", input, 30*time.Second, accountID)
 }
 
 func (s *NATSVolumeService) DescribeVolumeStatus(input *ec2.DescribeVolumeStatusInput, accountID string) (*ec2.DescribeVolumeStatusOutput, error) {
-	return utils.NATSRequestWithAccount[ec2.DescribeVolumeStatusOutput](s.natsConn, "ec2.DescribeVolumeStatus", input, 30*time.Second, accountID)
+	return utils.NATSRequest[ec2.DescribeVolumeStatusOutput](s.natsConn, "ec2.DescribeVolumeStatus", input, 30*time.Second, accountID)
 }
 
 func (s *NATSVolumeService) DeleteVolume(input *ec2.DeleteVolumeInput, accountID string) (*ec2.DeleteVolumeOutput, error) {
-	return utils.NATSRequestWithAccount[ec2.DeleteVolumeOutput](s.natsConn, "ec2.DeleteVolume", input, 30*time.Second, accountID)
+	return utils.NATSRequest[ec2.DeleteVolumeOutput](s.natsConn, "ec2.DeleteVolume", input, 30*time.Second, accountID)
 }

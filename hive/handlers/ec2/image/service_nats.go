@@ -20,11 +20,11 @@ func NewNATSImageService(conn *nats.Conn) ImageService {
 }
 
 func (s *NATSImageService) DescribeImages(input *ec2.DescribeImagesInput, accountID string) (*ec2.DescribeImagesOutput, error) {
-	return utils.NATSRequestWithAccount[ec2.DescribeImagesOutput](s.natsConn, "ec2.DescribeImages", input, 30*time.Second, accountID)
+	return utils.NATSRequest[ec2.DescribeImagesOutput](s.natsConn, "ec2.DescribeImages", input, 30*time.Second, accountID)
 }
 
 func (s *NATSImageService) CreateImage(input *ec2.CreateImageInput, accountID string) (*ec2.CreateImageOutput, error) {
-	return utils.NATSRequestWithAccount[ec2.CreateImageOutput](s.natsConn, "ec2.CreateImage", input, 120*time.Second, accountID)
+	return utils.NATSRequest[ec2.CreateImageOutput](s.natsConn, "ec2.CreateImage", input, 120*time.Second, accountID)
 }
 
 func (s *NATSImageService) CopyImage(input *ec2.CopyImageInput, accountID string) (*ec2.CopyImageOutput, error) {

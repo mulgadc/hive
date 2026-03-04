@@ -90,7 +90,7 @@ func RunInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn, accountID s
 // isKnownInstanceType checks whether any daemon recognizes the given instance type.
 func isKnownInstanceType(natsConn *nats.Conn, instanceType string) bool {
 	result, err := utils.NATSRequest[ec2.DescribeInstanceTypesOutput](
-		natsConn, "ec2.DescribeInstanceTypes", &ec2.DescribeInstanceTypesInput{}, 3*time.Second)
+		natsConn, "ec2.DescribeInstanceTypes", &ec2.DescribeInstanceTypesInput{}, 3*time.Second, "")
 	if err != nil || result == nil {
 		return false
 	}
