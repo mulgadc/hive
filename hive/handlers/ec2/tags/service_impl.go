@@ -19,16 +19,13 @@ import (
 // Ensure TagsServiceImpl implements TagsService
 var _ TagsService = (*TagsServiceImpl)(nil)
 
-// ResourceOwnerChecker validates whether a resource belongs to the given account.
-// Returns true if the resource is confirmed to belong to the account, false otherwise.
-type ResourceOwnerChecker func(accountID, resourceID string) bool
-
-// TagsServiceImpl implements TagsService with S3-backed storage
+// TagsServiceImpl implements TagsService with S3-backed storage.
+// Tags are stored per-account in S3 (tags/{accountID}/{resourceID}.json),
+// so account scoping is enforced at the storage layer.
 type TagsServiceImpl struct {
-	config         *config.Config
-	store          objectstore.ObjectStore
-	mutex          sync.RWMutex
-	ownershipCheck ResourceOwnerChecker
+	config *config.Config
+	store  objectstore.ObjectStore
+	mutex  sync.RWMutex
 }
 
 // NewTagsServiceImpl creates a new tags service implementation
@@ -52,11 +49,6 @@ func NewTagsServiceImplWithStore(cfg *config.Config, store objectstore.ObjectSto
 		config: cfg,
 		store:  store,
 	}
-}
-
-// SetOwnershipChecker sets the function used to validate resource ownership before applying tags.
-func (s *TagsServiceImpl) SetOwnershipChecker(checker ResourceOwnerChecker) {
-	s.ownershipCheck = checker
 }
 
 // getResourceType extracts resource type from resource ID prefix
@@ -174,19 +166,6 @@ func (s *TagsServiceImpl) CreateTags(input *ec2.CreateTagsInput, accountID strin
 	defer s.mutex.Unlock()
 
 	slog.Info("CreateTags request", "resources", len(input.Resources), "tags", len(input.Tags))
-
-	// Validate resource ownership before applying any tags
-	if s.ownershipCheck != nil && accountID != "" {
-		for _, resourceID := range input.Resources {
-			if resourceID == nil {
-				continue
-			}
-			if !s.ownershipCheck(accountID, *resourceID) {
-				slog.Warn("CreateTags: account does not own resource", "resourceId", *resourceID, "accountID", accountID)
-				return nil, errors.New(awserrors.ErrorInvalidID)
-			}
-		}
-	}
 
 	for _, resourceID := range input.Resources {
 		if resourceID == nil {
@@ -333,19 +312,6 @@ func (s *TagsServiceImpl) DeleteTags(input *ec2.DeleteTagsInput, accountID strin
 	defer s.mutex.Unlock()
 
 	slog.Info("DeleteTags request", "resources", len(input.Resources), "tags", len(input.Tags))
-
-	// Validate resource ownership before deleting any tags
-	if s.ownershipCheck != nil && accountID != "" {
-		for _, resourceID := range input.Resources {
-			if resourceID == nil {
-				continue
-			}
-			if !s.ownershipCheck(accountID, *resourceID) {
-				slog.Warn("DeleteTags: account does not own resource", "resourceId", *resourceID, "accountID", accountID)
-				return nil, errors.New(awserrors.ErrorInvalidID)
-			}
-		}
-	}
 
 	for _, resourceID := range input.Resources {
 		if resourceID == nil {

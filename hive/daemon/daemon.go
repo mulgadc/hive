@@ -484,9 +484,6 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to initialize account settings service: %w", err)
 	}
 
-	// Set up resource ownership checker for tags service (validates caller owns the tagged resource)
-	d.tagsService.SetOwnershipChecker(d.ownsResource)
-
 	// Ensure default VPC exists (matches AWS: every account has a default VPC)
 	if d.vpcService != nil {
 		if err := d.vpcService.EnsureDefaultVPC(handlers_ec2_vpc.GlobalAccountID); err != nil {

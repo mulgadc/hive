@@ -536,63 +536,6 @@ func TestAccountIsolation_SameResourceID(t *testing.T) {
 	assert.Equal(t, "from-account-b", *resultB.Tags[0].Value)
 }
 
-// TestCreateTags_OwnershipCheckRejectsUnownedResource tests that CreateTags rejects resources not owned by the caller.
-func TestCreateTags_OwnershipCheckRejectsUnownedResource(t *testing.T) {
-	svc, _ := setupTestTagsService(t)
-
-	// Set up ownership checker: only allows resources starting with "i-owned"
-	svc.SetOwnershipChecker(func(accountID, resourceID string) bool {
-		return resourceID == "i-owned"
-	})
-
-	// Owned resource — should succeed
-	_, err := svc.CreateTags(&ec2.CreateTagsInput{
-		Resources: []*string{aws.String("i-owned")},
-		Tags:      []*ec2.Tag{{Key: aws.String("Name"), Value: aws.String("mine")}},
-	}, testAccountID)
-	require.NoError(t, err)
-
-	// Unowned resource — should fail
-	_, err = svc.CreateTags(&ec2.CreateTagsInput{
-		Resources: []*string{aws.String("i-notmine")},
-		Tags:      []*ec2.Tag{{Key: aws.String("Name"), Value: aws.String("stolen")}},
-	}, testAccountID)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), awserrors.ErrorInvalidID)
-}
-
-// TestDeleteTags_OwnershipCheckRejectsUnownedResource tests that DeleteTags rejects resources not owned by the caller.
-func TestDeleteTags_OwnershipCheckRejectsUnownedResource(t *testing.T) {
-	svc, _ := setupTestTagsService(t)
-
-	// Create a tag first (no ownership check yet)
-	_, err := svc.CreateTags(&ec2.CreateTagsInput{
-		Resources: []*string{aws.String("i-owned")},
-		Tags:      []*ec2.Tag{{Key: aws.String("Name"), Value: aws.String("mine")}},
-	}, testAccountID)
-	require.NoError(t, err)
-
-	// Now set ownership checker
-	svc.SetOwnershipChecker(func(accountID, resourceID string) bool {
-		return resourceID == "i-owned"
-	})
-
-	// Owned resource — should succeed
-	_, err = svc.DeleteTags(&ec2.DeleteTagsInput{
-		Resources: []*string{aws.String("i-owned")},
-		Tags:      []*ec2.Tag{{Key: aws.String("Name")}},
-	}, testAccountID)
-	require.NoError(t, err)
-
-	// Unowned resource — should fail
-	_, err = svc.DeleteTags(&ec2.DeleteTagsInput{
-		Resources: []*string{aws.String("i-notmine")},
-		Tags:      []*ec2.Tag{{Key: aws.String("Name")}},
-	}, testAccountID)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), awserrors.ErrorInvalidID)
-}
-
 // TestAccountIsolation_DeleteDoesNotAffectOtherAccount tests that deleting tags in one account doesn't affect another
 func TestAccountIsolation_DeleteDoesNotAffectOtherAccount(t *testing.T) {
 	svc, _ := setupTestTagsService(t)
