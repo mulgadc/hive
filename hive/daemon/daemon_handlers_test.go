@@ -746,7 +746,7 @@ func TestHandleEC2GetEbsEncryptionByDefault(t *testing.T) {
 
 	input := &ec2.GetEbsEncryptionByDefaultInput{}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.GetEbsEncryptionByDefault", reqData, 5*time.Second)
+	reply, err := natsRequestWithAccount(daemon.natsConn, "ec2.GetEbsEncryptionByDefault", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.GetEbsEncryptionByDefaultOutput
@@ -766,7 +766,7 @@ func TestHandleEC2GetSerialConsoleAccessStatus(t *testing.T) {
 
 	input := &ec2.GetSerialConsoleAccessStatusInput{}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.GetSerialConsoleAccessStatus", reqData, 5*time.Second)
+	reply, err := natsRequestWithAccount(daemon.natsConn, "ec2.GetSerialConsoleAccessStatus", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.GetSerialConsoleAccessStatusOutput
@@ -786,7 +786,7 @@ func TestHandleEC2EnableEbsEncryptionByDefault(t *testing.T) {
 
 	input := &ec2.EnableEbsEncryptionByDefaultInput{}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.EnableEbsEncryptionByDefault", reqData, 5*time.Second)
+	reply, err := natsRequestWithAccount(daemon.natsConn, "ec2.EnableEbsEncryptionByDefault", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.EnableEbsEncryptionByDefaultOutput
@@ -807,7 +807,7 @@ func TestHandleEC2DisableEbsEncryptionByDefault(t *testing.T) {
 
 	input := &ec2.DisableEbsEncryptionByDefaultInput{}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.DisableEbsEncryptionByDefault", reqData, 5*time.Second)
+	reply, err := natsRequestWithAccount(daemon.natsConn, "ec2.DisableEbsEncryptionByDefault", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.DisableEbsEncryptionByDefaultOutput
@@ -828,7 +828,7 @@ func TestHandleEC2EnableSerialConsoleAccess(t *testing.T) {
 
 	input := &ec2.EnableSerialConsoleAccessInput{}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.EnableSerialConsoleAccess", reqData, 5*time.Second)
+	reply, err := natsRequestWithAccount(daemon.natsConn, "ec2.EnableSerialConsoleAccess", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.EnableSerialConsoleAccessOutput
@@ -849,7 +849,7 @@ func TestHandleEC2DisableSerialConsoleAccess(t *testing.T) {
 
 	input := &ec2.DisableSerialConsoleAccessInput{}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.DisableSerialConsoleAccess", reqData, 5*time.Second)
+	reply, err := natsRequestWithAccount(daemon.natsConn, "ec2.DisableSerialConsoleAccess", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.DisableSerialConsoleAccessOutput

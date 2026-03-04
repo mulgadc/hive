@@ -67,9 +67,18 @@ func getOrCreateKVBucket(js nats.JetStreamContext, bucketName string, history in
 	return kv, nil
 }
 
+// settingsKey returns the per-account KV key for storing settings.
+// Falls back to "default" for pre-Phase-4 resources with no accountID.
+func settingsKey(accountID string) string {
+	if accountID == "" {
+		return "default"
+	}
+	return accountID
+}
+
 // getSettings retrieves current account settings
-func (s *AccountSettingsServiceImpl) getSettings() (*AccountSettingsRecord, error) {
-	entry, err := s.settingsKV.Get("default")
+func (s *AccountSettingsServiceImpl) getSettings(accountID string) (*AccountSettingsRecord, error) {
+	entry, err := s.settingsKV.Get(settingsKey(accountID))
 	if err != nil {
 		if errors.Is(err, nats.ErrKeyNotFound) {
 			return &AccountSettingsRecord{
@@ -89,28 +98,28 @@ func (s *AccountSettingsServiceImpl) getSettings() (*AccountSettingsRecord, erro
 }
 
 // saveSettings saves current account settings
-func (s *AccountSettingsServiceImpl) saveSettings(settings *AccountSettingsRecord) error {
+func (s *AccountSettingsServiceImpl) saveSettings(settings *AccountSettingsRecord, accountID string) error {
 	data, err := json.Marshal(settings)
 	if err != nil {
 		return err
 	}
 
-	_, err = s.settingsKV.Put("default", data)
+	_, err = s.settingsKV.Put(settingsKey(accountID), data)
 	return err
 }
 
 // EnableEbsEncryptionByDefault enables EBS encryption by default for the account
-func (s *AccountSettingsServiceImpl) EnableEbsEncryptionByDefault(input *ec2.EnableEbsEncryptionByDefaultInput) (*ec2.EnableEbsEncryptionByDefaultOutput, error) {
-	slog.Info("EnableEbsEncryptionByDefault called")
+func (s *AccountSettingsServiceImpl) EnableEbsEncryptionByDefault(input *ec2.EnableEbsEncryptionByDefaultInput, accountID string) (*ec2.EnableEbsEncryptionByDefaultOutput, error) {
+	slog.Info("EnableEbsEncryptionByDefault called", "accountID", accountID)
 
-	settings, err := s.getSettings()
+	settings, err := s.getSettings(accountID)
 	if err != nil {
 		return nil, err
 	}
 
 	settings.EbsEncryptionByDefault = true
 
-	if err := s.saveSettings(settings); err != nil {
+	if err := s.saveSettings(settings, accountID); err != nil {
 		return nil, err
 	}
 
@@ -120,17 +129,17 @@ func (s *AccountSettingsServiceImpl) EnableEbsEncryptionByDefault(input *ec2.Ena
 }
 
 // DisableEbsEncryptionByDefault disables EBS encryption by default for the account
-func (s *AccountSettingsServiceImpl) DisableEbsEncryptionByDefault(input *ec2.DisableEbsEncryptionByDefaultInput) (*ec2.DisableEbsEncryptionByDefaultOutput, error) {
-	slog.Info("DisableEbsEncryptionByDefault called")
+func (s *AccountSettingsServiceImpl) DisableEbsEncryptionByDefault(input *ec2.DisableEbsEncryptionByDefaultInput, accountID string) (*ec2.DisableEbsEncryptionByDefaultOutput, error) {
+	slog.Info("DisableEbsEncryptionByDefault called", "accountID", accountID)
 
-	settings, err := s.getSettings()
+	settings, err := s.getSettings(accountID)
 	if err != nil {
 		return nil, err
 	}
 
 	settings.EbsEncryptionByDefault = false
 
-	if err := s.saveSettings(settings); err != nil {
+	if err := s.saveSettings(settings, accountID); err != nil {
 		return nil, err
 	}
 
@@ -140,10 +149,10 @@ func (s *AccountSettingsServiceImpl) DisableEbsEncryptionByDefault(input *ec2.Di
 }
 
 // GetEbsEncryptionByDefault gets the current EBS encryption by default setting
-func (s *AccountSettingsServiceImpl) GetEbsEncryptionByDefault(input *ec2.GetEbsEncryptionByDefaultInput) (*ec2.GetEbsEncryptionByDefaultOutput, error) {
-	slog.Info("GetEbsEncryptionByDefault called")
+func (s *AccountSettingsServiceImpl) GetEbsEncryptionByDefault(input *ec2.GetEbsEncryptionByDefaultInput, accountID string) (*ec2.GetEbsEncryptionByDefaultOutput, error) {
+	slog.Info("GetEbsEncryptionByDefault called", "accountID", accountID)
 
-	settings, err := s.getSettings()
+	settings, err := s.getSettings(accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -154,10 +163,10 @@ func (s *AccountSettingsServiceImpl) GetEbsEncryptionByDefault(input *ec2.GetEbs
 }
 
 // GetSerialConsoleAccessStatus gets the current serial console access status
-func (s *AccountSettingsServiceImpl) GetSerialConsoleAccessStatus(input *ec2.GetSerialConsoleAccessStatusInput) (*ec2.GetSerialConsoleAccessStatusOutput, error) {
-	slog.Info("GetSerialConsoleAccessStatus called")
+func (s *AccountSettingsServiceImpl) GetSerialConsoleAccessStatus(input *ec2.GetSerialConsoleAccessStatusInput, accountID string) (*ec2.GetSerialConsoleAccessStatusOutput, error) {
+	slog.Info("GetSerialConsoleAccessStatus called", "accountID", accountID)
 
-	settings, err := s.getSettings()
+	settings, err := s.getSettings(accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -168,17 +177,17 @@ func (s *AccountSettingsServiceImpl) GetSerialConsoleAccessStatus(input *ec2.Get
 }
 
 // EnableSerialConsoleAccess enables serial console access for the account
-func (s *AccountSettingsServiceImpl) EnableSerialConsoleAccess(input *ec2.EnableSerialConsoleAccessInput) (*ec2.EnableSerialConsoleAccessOutput, error) {
-	slog.Info("EnableSerialConsoleAccess called")
+func (s *AccountSettingsServiceImpl) EnableSerialConsoleAccess(input *ec2.EnableSerialConsoleAccessInput, accountID string) (*ec2.EnableSerialConsoleAccessOutput, error) {
+	slog.Info("EnableSerialConsoleAccess called", "accountID", accountID)
 
-	settings, err := s.getSettings()
+	settings, err := s.getSettings(accountID)
 	if err != nil {
 		return nil, err
 	}
 
 	settings.SerialConsoleAccess = true
 
-	if err := s.saveSettings(settings); err != nil {
+	if err := s.saveSettings(settings, accountID); err != nil {
 		return nil, err
 	}
 
@@ -188,17 +197,17 @@ func (s *AccountSettingsServiceImpl) EnableSerialConsoleAccess(input *ec2.Enable
 }
 
 // DisableSerialConsoleAccess disables serial console access for the account
-func (s *AccountSettingsServiceImpl) DisableSerialConsoleAccess(input *ec2.DisableSerialConsoleAccessInput) (*ec2.DisableSerialConsoleAccessOutput, error) {
-	slog.Info("DisableSerialConsoleAccess called")
+func (s *AccountSettingsServiceImpl) DisableSerialConsoleAccess(input *ec2.DisableSerialConsoleAccessInput, accountID string) (*ec2.DisableSerialConsoleAccessOutput, error) {
+	slog.Info("DisableSerialConsoleAccess called", "accountID", accountID)
 
-	settings, err := s.getSettings()
+	settings, err := s.getSettings(accountID)
 	if err != nil {
 		return nil, err
 	}
 
 	settings.SerialConsoleAccess = false
 
-	if err := s.saveSettings(settings); err != nil {
+	if err := s.saveSettings(settings, accountID); err != nil {
 		return nil, err
 	}
 

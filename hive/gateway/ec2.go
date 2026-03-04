@@ -131,22 +131,22 @@ var ec2Actions = map[string]EC2Handler{
 		return gateway_ec2_account.DescribeAccountAttributes(input)
 	}),
 	"EnableEbsEncryptionByDefault": ec2Handler(func(input *ec2.EnableEbsEncryptionByDefaultInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_account.EnableEbsEncryptionByDefault(input, gw.NATSConn)
+		return gateway_ec2_account.EnableEbsEncryptionByDefault(input, gw.NATSConn, accountID)
 	}),
 	"DisableEbsEncryptionByDefault": ec2Handler(func(input *ec2.DisableEbsEncryptionByDefaultInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_account.DisableEbsEncryptionByDefault(input, gw.NATSConn)
+		return gateway_ec2_account.DisableEbsEncryptionByDefault(input, gw.NATSConn, accountID)
 	}),
 	"GetEbsEncryptionByDefault": ec2Handler(func(input *ec2.GetEbsEncryptionByDefaultInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_account.GetEbsEncryptionByDefault(input, gw.NATSConn)
+		return gateway_ec2_account.GetEbsEncryptionByDefault(input, gw.NATSConn, accountID)
 	}),
 	"GetSerialConsoleAccessStatus": ec2Handler(func(input *ec2.GetSerialConsoleAccessStatusInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_account.GetSerialConsoleAccessStatus(input, gw.NATSConn)
+		return gateway_ec2_account.GetSerialConsoleAccessStatus(input, gw.NATSConn, accountID)
 	}),
 	"EnableSerialConsoleAccess": ec2Handler(func(input *ec2.EnableSerialConsoleAccessInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_account.EnableSerialConsoleAccess(input, gw.NATSConn)
+		return gateway_ec2_account.EnableSerialConsoleAccess(input, gw.NATSConn, accountID)
 	}),
 	"DisableSerialConsoleAccess": ec2Handler(func(input *ec2.DisableSerialConsoleAccessInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_account.DisableSerialConsoleAccess(input, gw.NATSConn)
+		return gateway_ec2_account.DisableSerialConsoleAccess(input, gw.NATSConn, accountID)
 	}),
 	"CreateTags": ec2Handler(func(input *ec2.CreateTagsInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_tags.CreateTags(input, gw.NATSConn, accountID)
