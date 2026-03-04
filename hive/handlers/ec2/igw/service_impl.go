@@ -20,6 +20,7 @@ import (
 var _ IGWService = (*IGWServiceImpl)(nil)
 
 const KVBucketIGW = "hive-igw"
+const kvBucketVPCs = "hive-vpc-vpcs"
 
 // IGWRecord represents a stored Internet Gateway
 type IGWRecord struct {
@@ -34,6 +35,7 @@ type IGWRecord struct {
 type IGWServiceImpl struct {
 	config   *config.Config
 	igwKV    nats.KeyValue
+	vpcKV    nats.KeyValue
 	natsConn *nats.Conn
 }
 
@@ -56,11 +58,18 @@ func NewIGWServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*IGWSer
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketIGW, err)
 	}
 
+	// Get VPC KV bucket for cross-resource ownership validation
+	vpcKV, err := js.KeyValue(kvBucketVPCs)
+	if err != nil {
+		slog.Warn("IGW service: VPC KV bucket not available, VPC ownership checks disabled", "error", err)
+	}
+
 	slog.Info("IGW service initialized with JetStream KV", "bucket", KVBucketIGW)
 
 	return &IGWServiceImpl{
 		config:   cfg,
 		igwKV:    igwKV,
+		vpcKV:    vpcKV,
 		natsConn: natsConn,
 	}, nil
 }
@@ -226,6 +235,14 @@ func (s *IGWServiceImpl) AttachInternetGateway(input *ec2.AttachInternetGatewayI
 
 	if record.VpcId != "" {
 		return nil, errors.New(awserrors.ErrorResourceAlreadyAssociated)
+	}
+
+	// Verify the caller owns the target VPC
+	if s.vpcKV != nil {
+		if _, err := s.vpcKV.Get(accountKey(accountID, vpcID)); err != nil {
+			slog.Warn("AttachInternetGateway: VPC not found for account", "vpcId", vpcID, "accountID", accountID)
+			return nil, errors.New(awserrors.ErrorInvalidVpcIDNotFound)
+		}
 	}
 
 	record.VpcId = vpcID

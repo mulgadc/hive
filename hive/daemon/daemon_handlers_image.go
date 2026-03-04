@@ -65,6 +65,13 @@ func (d *Daemon) handleEC2CreateImage(msg *nats.Msg) {
 		return
 	}
 
+	// Verify the caller owns this instance
+	if accountID != "" && instance.AccountID != "" && instance.AccountID != accountID {
+		slog.Warn("CreateImage: account does not own instance", "instanceId", instanceID, "accountID", accountID, "ownerAccountID", instance.AccountID)
+		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
+		return
+	}
+
 	if status != vm.StateRunning && status != vm.StateStopped {
 		slog.Warn("CreateImage: instance not in valid state", "instanceId", instanceID, "status", status)
 		respondWithError(msg, awserrors.ErrorIncorrectInstanceState)

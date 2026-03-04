@@ -186,3 +186,54 @@ func TestDescribeEgressOnlyInternetGateways_Empty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, desc.EgressOnlyInternetGateways)
 }
+
+// TestCreateEgressOnlyInternetGateway_CrossAccountVPCRejected tests that creating an EIGW in another account's VPC is rejected.
+func TestCreateEgressOnlyInternetGateway_CrossAccountVPCRejected(t *testing.T) {
+	// Set up with manual NATS to get VPC KV access
+	opts := &server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		JetStream: true,
+		StoreDir:  t.TempDir(),
+		NoLog:     true,
+		NoSigs:    true,
+	}
+	ns, err := server.NewServer(opts)
+	require.NoError(t, err)
+	go ns.Start()
+	require.True(t, ns.ReadyForConnections(5*time.Second))
+	t.Cleanup(func() { ns.Shutdown() })
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(func() { nc.Close() })
+
+	// Create VPC KV bucket with a VPC owned by testAccountID
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	vpcKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: kvBucketVPCs, History: 1})
+	require.NoError(t, err)
+
+	vpcID := "vpc-alpha456"
+	_, err = vpcKV.Put(accountKey(testAccountID, vpcID), []byte(`{"vpc_id":"vpc-alpha456","state":"available"}`))
+	require.NoError(t, err)
+
+	// Create EIGW service (VPC KV will be populated since we created it before EIGW init)
+	svc, err := NewEgressOnlyIGWServiceImplWithNATS(nil, nc)
+	require.NoError(t, err)
+
+	// Other account tries to create EIGW in testAccountID's VPC — should fail
+	otherAccount := "999999999999"
+	_, err = svc.CreateEgressOnlyInternetGateway(&ec2.CreateEgressOnlyInternetGatewayInput{
+		VpcId: aws.String(vpcID),
+	}, otherAccount)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidVpcID.NotFound")
+
+	// Owner creates EIGW in their own VPC — should succeed
+	out, err := svc.CreateEgressOnlyInternetGateway(&ec2.CreateEgressOnlyInternetGatewayInput{
+		VpcId: aws.String(vpcID),
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.NotNil(t, out.EgressOnlyInternetGateway)
+}

@@ -216,6 +216,12 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput, acc
 	}
 	volumeConfig := volumeState.VolumeConfig
 
+	// Verify the caller owns the source volume
+	if accountID != "" && volumeConfig.VolumeMetadata.TenantID != "" && volumeConfig.VolumeMetadata.TenantID != accountID {
+		slog.Warn("CreateSnapshot: account does not own volume", "volumeId", volumeID, "accountID", accountID, "tenantID", volumeConfig.VolumeMetadata.TenantID)
+		return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
+	}
+
 	if volumeConfig.VolumeMetadata.SizeGiB == 0 {
 		slog.Error("CreateSnapshot: source volume has zero size in config", "volumeId", volumeID)
 		return nil, errors.New(awserrors.ErrorServerInternal)

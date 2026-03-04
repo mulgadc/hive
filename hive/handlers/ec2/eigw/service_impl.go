@@ -20,6 +20,7 @@ import (
 var _ EgressOnlyIGWService = (*EgressOnlyIGWServiceImpl)(nil)
 
 const KVBucketEgressOnlyIGW = "hive-eigw"
+const kvBucketVPCs = "hive-vpc-vpcs"
 
 // EgressOnlyIGWRecord represents a stored Egress-only Internet Gateway
 type EgressOnlyIGWRecord struct {
@@ -34,6 +35,7 @@ type EgressOnlyIGWRecord struct {
 type EgressOnlyIGWServiceImpl struct {
 	config *config.Config
 	eigwKV nats.KeyValue
+	vpcKV  nats.KeyValue
 }
 
 // NewEgressOnlyIGWServiceImpl creates a new Egress-only Internet Gateway service implementation
@@ -55,11 +57,18 @@ func NewEgressOnlyIGWServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketEgressOnlyIGW, err)
 	}
 
+	// Get VPC KV bucket for cross-resource ownership validation
+	vpcKV, err := js.KeyValue(kvBucketVPCs)
+	if err != nil {
+		slog.Warn("EIGW service: VPC KV bucket not available, VPC ownership checks disabled", "error", err)
+	}
+
 	slog.Info("Egress-only IGW service initialized with JetStream KV", "bucket", KVBucketEgressOnlyIGW)
 
 	return &EgressOnlyIGWServiceImpl{
 		config: cfg,
 		eigwKV: eigwKV,
+		vpcKV:  vpcKV,
 	}, nil
 }
 
@@ -85,6 +94,14 @@ func accountKey(accountID, resourceID string) string {
 func (s *EgressOnlyIGWServiceImpl) CreateEgressOnlyInternetGateway(input *ec2.CreateEgressOnlyInternetGatewayInput, accountID string) (*ec2.CreateEgressOnlyInternetGatewayOutput, error) {
 	if input.VpcId == nil || *input.VpcId == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	// Verify the caller owns the target VPC
+	if s.vpcKV != nil {
+		if _, err := s.vpcKV.Get(accountKey(accountID, *input.VpcId)); err != nil {
+			slog.Warn("CreateEgressOnlyInternetGateway: VPC not found for account", "vpcId", *input.VpcId, "accountID", accountID)
+			return nil, errors.New(awserrors.ErrorInvalidVpcIDNotFound)
+		}
 	}
 
 	eigwID := utils.GenerateResourceID("eigw")

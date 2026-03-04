@@ -452,6 +452,46 @@ func TestNewIGWServiceImpl(t *testing.T) {
 	assert.Nil(t, svc.natsConn)
 }
 
+// TestAttachInternetGateway_CrossAccountVPCRejected tests that attaching an IGW to another account's VPC is rejected.
+func TestAttachInternetGateway_CrossAccountVPCRejected(t *testing.T) {
+	svc, nc := setupTestIGWService(t)
+
+	// Create VPC KV bucket and add a VPC owned by testAccountID
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	vpcKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: kvBucketVPCs, History: 1})
+	require.NoError(t, err)
+
+	vpcID := "vpc-alpha123"
+	_, err = vpcKV.Put(accountKey(testAccountID, vpcID), []byte(`{"vpc_id":"vpc-alpha123","state":"available"}`))
+	require.NoError(t, err)
+
+	// Refresh service to pick up the VPC KV bucket
+	svc.vpcKV = vpcKV
+
+	// Create IGW owned by otherAccountID
+	otherAccount := "999999999999"
+	out, err := svc.CreateInternetGateway(&ec2.CreateInternetGatewayInput{}, otherAccount)
+	require.NoError(t, err)
+	igwID := *out.InternetGateway.InternetGatewayId
+
+	// Other account tries to attach their IGW to testAccountID's VPC — should fail
+	_, err = svc.AttachInternetGateway(&ec2.AttachInternetGatewayInput{
+		InternetGatewayId: aws.String(igwID),
+		VpcId:             aws.String(vpcID),
+	}, otherAccount)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidVpcID.NotFound")
+
+	// Owner attaches their own IGW to their own VPC — should succeed
+	ownIGW := createTestIGW(t, svc)
+	_, err = svc.AttachInternetGateway(&ec2.AttachInternetGatewayInput{
+		InternetGatewayId: aws.String(ownIGW),
+		VpcId:             aws.String(vpcID),
+	}, testAccountID)
+	require.NoError(t, err)
+}
+
 func TestDeleteInternetGateway_PublishesNoEvent(t *testing.T) {
 	svc, nc := setupTestIGWService(t)
 	igwID := createTestIGW(t, svc)

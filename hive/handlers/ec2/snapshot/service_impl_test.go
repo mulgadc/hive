@@ -710,3 +710,58 @@ func TestCopySnapshot_AddsKVEntry(t *testing.T) {
 	assert.Contains(t, snapshots, *copyResult.SnapshotId)
 	assert.Len(t, snapshots, 2)
 }
+
+// TestCreateSnapshot_CrossAccountVolumeRejected tests that snapshotting another account's volume is rejected.
+func TestCreateSnapshot_CrossAccountVolumeRejected(t *testing.T) {
+	svc, store := setupTestSnapshotService(t)
+
+	// Create a volume owned by testAccountID (via TenantID)
+	volumeID := "vol-owned-by-alpha"
+	volumeState := viperblock.VBState{
+		VolumeConfig: viperblock.VolumeConfig{
+			VolumeMetadata: viperblock.VolumeMetadata{
+				SizeGiB:          100,
+				TenantID:         testAccountID,
+				AvailabilityZone: "us-east-1a",
+			},
+		},
+	}
+	data, err := json.Marshal(volumeState)
+	require.NoError(t, err)
+	_, err = store.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String("test-bucket"),
+		Key:    aws.String(volumeID + "/config.json"),
+		Body:   strings.NewReader(string(data)),
+	})
+	require.NoError(t, err)
+
+	// Another account tries to snapshot the volume — should fail
+	_, err = svc.CreateSnapshot(&ec2.CreateSnapshotInput{
+		VolumeId: aws.String(volumeID),
+	}, otherAccountID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorInvalidVolumeNotFound)
+
+	// Same account can snapshot — should succeed
+	result, err := svc.CreateSnapshot(&ec2.CreateSnapshotInput{
+		VolumeId: aws.String(volumeID),
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Equal(t, testAccountID, *result.OwnerId)
+}
+
+// TestCreateSnapshot_PrePhase4VolumeAllowed tests that volumes without TenantID (pre-phase4) are allowed.
+func TestCreateSnapshot_PrePhase4VolumeAllowed(t *testing.T) {
+	svc, store := setupTestSnapshotService(t)
+
+	// Create a volume with no TenantID (pre-phase4)
+	volumeID := "vol-legacy"
+	createTestVolume(t, store, volumeID, 50)
+
+	// Any account can snapshot — backward compatibility
+	result, err := svc.CreateSnapshot(&ec2.CreateSnapshotInput{
+		VolumeId: aws.String(volumeID),
+	}, otherAccountID)
+	require.NoError(t, err)
+	assert.Equal(t, otherAccountID, *result.OwnerId)
+}
