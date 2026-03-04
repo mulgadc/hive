@@ -10,7 +10,7 @@ import (
 )
 
 // DescribeInternetGateways handles the EC2 DescribeInternetGateways API call
-func DescribeInternetGateways(input *ec2.DescribeInternetGatewaysInput, natsConn *nats.Conn) (ec2.DescribeInternetGatewaysOutput, error) {
+func DescribeInternetGateways(input *ec2.DescribeInternetGatewaysInput, natsConn *nats.Conn, accountID string) (ec2.DescribeInternetGatewaysOutput, error) {
 	var output ec2.DescribeInternetGatewaysOutput
 
 	if input == nil {
@@ -18,7 +18,7 @@ func DescribeInternetGateways(input *ec2.DescribeInternetGatewaysInput, natsConn
 	}
 
 	svc := handlers_ec2_igw.NewNATSIGWService(natsConn)
-	result, err := svc.DescribeInternetGateways(input)
+	result, err := svc.DescribeInternetGateways(input, accountID)
 	if err != nil {
 		return output, err
 	}

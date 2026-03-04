@@ -18,14 +18,14 @@ func NewNATSEgressOnlyIGWService(conn *nats.Conn) EgressOnlyIGWService {
 	return &NATSEgressOnlyIGWService{natsConn: conn}
 }
 
-func (s *NATSEgressOnlyIGWService) CreateEgressOnlyInternetGateway(input *ec2.CreateEgressOnlyInternetGatewayInput) (*ec2.CreateEgressOnlyInternetGatewayOutput, error) {
-	return utils.NATSRequest[ec2.CreateEgressOnlyInternetGatewayOutput](s.natsConn, "ec2.CreateEgressOnlyInternetGateway", input, 30*time.Second)
+func (s *NATSEgressOnlyIGWService) CreateEgressOnlyInternetGateway(input *ec2.CreateEgressOnlyInternetGatewayInput, accountID string) (*ec2.CreateEgressOnlyInternetGatewayOutput, error) {
+	return utils.NATSRequestWithAccount[ec2.CreateEgressOnlyInternetGatewayOutput](s.natsConn, "ec2.CreateEgressOnlyInternetGateway", input, 30*time.Second, accountID)
 }
 
-func (s *NATSEgressOnlyIGWService) DeleteEgressOnlyInternetGateway(input *ec2.DeleteEgressOnlyInternetGatewayInput) (*ec2.DeleteEgressOnlyInternetGatewayOutput, error) {
-	return utils.NATSRequest[ec2.DeleteEgressOnlyInternetGatewayOutput](s.natsConn, "ec2.DeleteEgressOnlyInternetGateway", input, 30*time.Second)
+func (s *NATSEgressOnlyIGWService) DeleteEgressOnlyInternetGateway(input *ec2.DeleteEgressOnlyInternetGatewayInput, accountID string) (*ec2.DeleteEgressOnlyInternetGatewayOutput, error) {
+	return utils.NATSRequestWithAccount[ec2.DeleteEgressOnlyInternetGatewayOutput](s.natsConn, "ec2.DeleteEgressOnlyInternetGateway", input, 30*time.Second, accountID)
 }
 
-func (s *NATSEgressOnlyIGWService) DescribeEgressOnlyInternetGateways(input *ec2.DescribeEgressOnlyInternetGatewaysInput) (*ec2.DescribeEgressOnlyInternetGatewaysOutput, error) {
-	return utils.NATSRequest[ec2.DescribeEgressOnlyInternetGatewaysOutput](s.natsConn, "ec2.DescribeEgressOnlyInternetGateways", input, 30*time.Second)
+func (s *NATSEgressOnlyIGWService) DescribeEgressOnlyInternetGateways(input *ec2.DescribeEgressOnlyInternetGatewaysInput, accountID string) (*ec2.DescribeEgressOnlyInternetGatewaysOutput, error) {
+	return utils.NATSRequestWithAccount[ec2.DescribeEgressOnlyInternetGatewaysOutput](s.natsConn, "ec2.DescribeEgressOnlyInternetGateways", input, 30*time.Second, accountID)
 }

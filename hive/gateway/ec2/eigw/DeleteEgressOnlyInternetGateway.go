@@ -23,7 +23,7 @@ func ValidateDeleteEgressOnlyInternetGatewayInput(input *ec2.DeleteEgressOnlyInt
 }
 
 // DeleteEgressOnlyInternetGateway handles the EC2 DeleteEgressOnlyInternetGateway API call
-func DeleteEgressOnlyInternetGateway(input *ec2.DeleteEgressOnlyInternetGatewayInput, natsConn *nats.Conn) (ec2.DeleteEgressOnlyInternetGatewayOutput, error) {
+func DeleteEgressOnlyInternetGateway(input *ec2.DeleteEgressOnlyInternetGatewayInput, natsConn *nats.Conn, accountID string) (ec2.DeleteEgressOnlyInternetGatewayOutput, error) {
 	var output ec2.DeleteEgressOnlyInternetGatewayOutput
 
 	if err := ValidateDeleteEgressOnlyInternetGatewayInput(input); err != nil {
@@ -31,7 +31,7 @@ func DeleteEgressOnlyInternetGateway(input *ec2.DeleteEgressOnlyInternetGatewayI
 	}
 
 	svc := handlers_ec2_eigw.NewNATSEgressOnlyIGWService(natsConn)
-	result, err := svc.DeleteEgressOnlyInternetGateway(input)
+	result, err := svc.DeleteEgressOnlyInternetGateway(input, accountID)
 	if err != nil {
 		return output, err
 	}

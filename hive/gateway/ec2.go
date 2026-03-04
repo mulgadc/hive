@@ -170,28 +170,28 @@ var ec2Actions = map[string]EC2Handler{
 		return gateway_ec2_snapshot.CopySnapshot(input, gw.NATSConn, accountID)
 	}),
 	"CreateInternetGateway": ec2Handler(func(input *ec2.CreateInternetGatewayInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_igw.CreateInternetGateway(input, gw.NATSConn)
+		return gateway_ec2_igw.CreateInternetGateway(input, gw.NATSConn, accountID)
 	}),
 	"DeleteInternetGateway": ec2Handler(func(input *ec2.DeleteInternetGatewayInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_igw.DeleteInternetGateway(input, gw.NATSConn)
+		return gateway_ec2_igw.DeleteInternetGateway(input, gw.NATSConn, accountID)
 	}),
 	"DescribeInternetGateways": ec2Handler(func(input *ec2.DescribeInternetGatewaysInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_igw.DescribeInternetGateways(input, gw.NATSConn)
+		return gateway_ec2_igw.DescribeInternetGateways(input, gw.NATSConn, accountID)
 	}),
 	"AttachInternetGateway": ec2Handler(func(input *ec2.AttachInternetGatewayInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_igw.AttachInternetGateway(input, gw.NATSConn)
+		return gateway_ec2_igw.AttachInternetGateway(input, gw.NATSConn, accountID)
 	}),
 	"DetachInternetGateway": ec2Handler(func(input *ec2.DetachInternetGatewayInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_igw.DetachInternetGateway(input, gw.NATSConn)
+		return gateway_ec2_igw.DetachInternetGateway(input, gw.NATSConn, accountID)
 	}),
 	"CreateEgressOnlyInternetGateway": ec2Handler(func(input *ec2.CreateEgressOnlyInternetGatewayInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_eigw.CreateEgressOnlyInternetGateway(input, gw.NATSConn)
+		return gateway_ec2_eigw.CreateEgressOnlyInternetGateway(input, gw.NATSConn, accountID)
 	}),
 	"DeleteEgressOnlyInternetGateway": ec2Handler(func(input *ec2.DeleteEgressOnlyInternetGatewayInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_eigw.DeleteEgressOnlyInternetGateway(input, gw.NATSConn)
+		return gateway_ec2_eigw.DeleteEgressOnlyInternetGateway(input, gw.NATSConn, accountID)
 	}),
 	"DescribeEgressOnlyInternetGateways": ec2Handler(func(input *ec2.DescribeEgressOnlyInternetGatewaysInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_eigw.DescribeEgressOnlyInternetGateways(input, gw.NATSConn)
+		return gateway_ec2_eigw.DescribeEgressOnlyInternetGateways(input, gw.NATSConn, accountID)
 	}),
 	"CreateVpc": ec2Handler(func(input *ec2.CreateVpcInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_vpc.CreateVpc(input, gw.NATSConn, accountID)

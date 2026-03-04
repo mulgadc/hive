@@ -2245,7 +2245,7 @@ func TestDelegateHandlers_IGW(t *testing.T) {
 			reqData, err := json.Marshal(tt.input)
 			require.NoError(t, err)
 
-			reply, err := daemon.natsConn.Request(tt.topic, reqData, 5*time.Second)
+			reply, err := natsRequestWithAccount(daemon.natsConn, tt.topic, reqData, 5*time.Second)
 			require.NoError(t, err)
 			require.NotNil(t, reply)
 
@@ -2326,7 +2326,7 @@ func TestHandleEC2CreateInternetGateway_SuccessPath(t *testing.T) {
 
 	input := &ec2.CreateInternetGatewayInput{}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.CreateInternetGateway", reqData, 5*time.Second)
+	reply, err := natsRequestWithAccount(daemon.natsConn, "ec2.CreateInternetGateway", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.CreateInternetGatewayOutput
@@ -2437,7 +2437,7 @@ func TestDelegateHandlers_EIGW(t *testing.T) {
 			reqData, err := json.Marshal(tt.input)
 			require.NoError(t, err)
 
-			reply, err := daemon.natsConn.Request(tt.topic, reqData, 5*time.Second)
+			reply, err := natsRequestWithAccount(daemon.natsConn, tt.topic, reqData, 5*time.Second)
 			require.NoError(t, err)
 			require.NotNil(t, reply)
 
