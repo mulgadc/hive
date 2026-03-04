@@ -187,7 +187,7 @@ func snapshotConfigToEC2(cfg *SnapshotConfig) *ec2.Snapshot {
 }
 
 // CreateSnapshot creates a new snapshot from a volume
-func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput) (*ec2.Snapshot, error) {
+func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput, accountID string) (*ec2.Snapshot, error) {
 	if input == nil || input.VolumeId == nil {
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
@@ -215,6 +215,12 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput) (*e
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 	volumeConfig := volumeState.VolumeConfig
+
+	// Verify the caller owns the source volume
+	if accountID != "" && volumeConfig.VolumeMetadata.TenantID != "" && volumeConfig.VolumeMetadata.TenantID != accountID {
+		slog.Warn("CreateSnapshot: account does not own volume", "volumeId", volumeID, "accountID", accountID, "tenantID", volumeConfig.VolumeMetadata.TenantID)
+		return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
+	}
 
 	if volumeConfig.VolumeMetadata.SizeGiB == 0 {
 		slog.Error("CreateSnapshot: source volume has zero size in config", "volumeId", volumeID)
@@ -266,7 +272,7 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput) (*e
 		Progress:         "100%",
 		StartTime:        now,
 		Encrypted:        volumeConfig.VolumeMetadata.IsEncrypted,
-		OwnerID:          s.config.Predastore.AccessKey,
+		OwnerID:          accountID,
 		AvailabilityZone: volumeConfig.VolumeMetadata.AvailabilityZone,
 		Tags:             make(map[string]string),
 	}
@@ -303,12 +309,12 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput) (*e
 	return snapshotConfigToEC2(snapshotCfg), nil
 }
 
-// DescribeSnapshots lists snapshots matching the specified criteria
-func (s *SnapshotServiceImpl) DescribeSnapshots(input *ec2.DescribeSnapshotsInput) (*ec2.DescribeSnapshotsOutput, error) {
+// DescribeSnapshots lists snapshots matching the specified criteria, scoped to the caller's account.
+func (s *SnapshotServiceImpl) DescribeSnapshots(input *ec2.DescribeSnapshotsInput, accountID string) (*ec2.DescribeSnapshotsOutput, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
-	slog.Info("DescribeSnapshots request", "snapshotIds", input.SnapshotIds)
+	slog.Info("DescribeSnapshots request", "snapshotIds", input.SnapshotIds, "accountID", accountID)
 
 	snapshotIDFilter := make(map[string]bool)
 	for _, id := range input.SnapshotIds {
@@ -342,6 +348,11 @@ func (s *SnapshotServiceImpl) DescribeSnapshots(input *ec2.DescribeSnapshotsInpu
 		cfg, err := s.getSnapshotConfig(snapshotID)
 		if err != nil {
 			slog.Warn("DescribeSnapshots failed to get config", "snapshotId", snapshotID, "err", err)
+			continue
+		}
+
+		// Filter by account: only return snapshots owned by the caller
+		if accountID != "" && cfg.OwnerID != "" && cfg.OwnerID != accountID {
 			continue
 		}
 
@@ -396,20 +407,26 @@ func (s *SnapshotServiceImpl) snapshotInUseByVolumes(snapshotID string) (bool, e
 	return false, nil
 }
 
-// DeleteSnapshot deletes a snapshot
-func (s *SnapshotServiceImpl) DeleteSnapshot(input *ec2.DeleteSnapshotInput) (*ec2.DeleteSnapshotOutput, error) {
+// DeleteSnapshot deletes a snapshot after verifying the caller owns it.
+func (s *SnapshotServiceImpl) DeleteSnapshot(input *ec2.DeleteSnapshotInput, accountID string) (*ec2.DeleteSnapshotOutput, error) {
 	if input == nil || input.SnapshotId == nil {
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
 	snapshotID := *input.SnapshotId
 
-	slog.Info("DeleteSnapshot request", "snapshotId", snapshotID)
+	slog.Info("DeleteSnapshot request", "snapshotId", snapshotID, "accountID", accountID)
 
 	cfg, err := s.getSnapshotConfig(snapshotID)
 	if err != nil {
 		slog.Error("DeleteSnapshot snapshot not found", "snapshotId", snapshotID, "err", err)
 		return nil, err
+	}
+
+	// Verify ownership: caller must own the snapshot
+	if accountID != "" && cfg.OwnerID != "" && cfg.OwnerID != accountID {
+		slog.Warn("DeleteSnapshot: account does not own snapshot", "snapshotId", snapshotID, "accountID", accountID, "ownerID", cfg.OwnerID)
+		return nil, errors.New(awserrors.ErrorUnauthorizedOperation)
 	}
 
 	// Check if any volumes were created from this snapshot
@@ -456,20 +473,27 @@ func (s *SnapshotServiceImpl) DeleteSnapshot(input *ec2.DeleteSnapshotInput) (*e
 	return &ec2.DeleteSnapshotOutput{}, nil
 }
 
-// CopySnapshot copies a snapshot (within same region for now)
-func (s *SnapshotServiceImpl) CopySnapshot(input *ec2.CopySnapshotInput) (*ec2.CopySnapshotOutput, error) {
+// CopySnapshot copies a snapshot (within same region for now).
+// The copied snapshot is owned by the caller's account.
+func (s *SnapshotServiceImpl) CopySnapshot(input *ec2.CopySnapshotInput, accountID string) (*ec2.CopySnapshotOutput, error) {
 	if input == nil || input.SourceSnapshotId == nil {
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
 	sourceSnapshotID := *input.SourceSnapshotId
 
-	slog.Info("CopySnapshot request", "sourceSnapshotId", sourceSnapshotID)
+	slog.Info("CopySnapshot request", "sourceSnapshotId", sourceSnapshotID, "accountID", accountID)
 
 	sourceCfg, err := s.getSnapshotConfig(sourceSnapshotID)
 	if err != nil {
 		slog.Error("CopySnapshot source snapshot not found", "snapshotId", sourceSnapshotID, "err", err)
 		return nil, err
+	}
+
+	// Verify the caller owns the source snapshot
+	if accountID != "" && sourceCfg.OwnerID != "" && sourceCfg.OwnerID != accountID {
+		slog.Warn("CopySnapshot: account does not own source snapshot", "snapshotId", sourceSnapshotID, "accountID", accountID, "ownerID", sourceCfg.OwnerID)
+		return nil, errors.New(awserrors.ErrorUnauthorizedOperation)
 	}
 
 	newSnapshotID := utils.GenerateResourceID("snap")
@@ -483,7 +507,7 @@ func (s *SnapshotServiceImpl) CopySnapshot(input *ec2.CopySnapshotInput) (*ec2.C
 		StartTime:        time.Now(),
 		Description:      sourceCfg.Description,
 		Encrypted:        sourceCfg.Encrypted,
-		OwnerID:          sourceCfg.OwnerID,
+		OwnerID:          accountID,
 		AvailabilityZone: sourceCfg.AvailabilityZone,
 		Tags:             make(map[string]string),
 	}

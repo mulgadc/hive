@@ -1,8 +1,6 @@
 package daemon
 
-import (
-	"github.com/nats-io/nats.go"
-)
+import "github.com/nats-io/nats.go"
 
 func (d *Daemon) handleEC2CreateTags(msg *nats.Msg) {
 	handleNATSRequest(msg, d.tagsService.CreateTags)

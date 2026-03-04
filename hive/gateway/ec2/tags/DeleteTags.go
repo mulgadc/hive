@@ -23,7 +23,7 @@ func ValidateDeleteTagsInput(input *ec2.DeleteTagsInput) error {
 }
 
 // DeleteTags handles the EC2 DeleteTags API call
-func DeleteTags(input *ec2.DeleteTagsInput, natsConn *nats.Conn) (ec2.DeleteTagsOutput, error) {
+func DeleteTags(input *ec2.DeleteTagsInput, natsConn *nats.Conn, accountID string) (ec2.DeleteTagsOutput, error) {
 	var output ec2.DeleteTagsOutput
 
 	if err := ValidateDeleteTagsInput(input); err != nil {
@@ -31,7 +31,7 @@ func DeleteTags(input *ec2.DeleteTagsInput, natsConn *nats.Conn) (ec2.DeleteTags
 	}
 
 	svc := handlers_ec2_tags.NewNATSTagsService(natsConn)
-	result, err := svc.DeleteTags(input)
+	result, err := svc.DeleteTags(input, accountID)
 	if err != nil {
 		return output, err
 	}

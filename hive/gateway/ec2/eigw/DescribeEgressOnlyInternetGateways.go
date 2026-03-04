@@ -19,7 +19,7 @@ func ValidateDescribeEgressOnlyInternetGatewaysInput(input *ec2.DescribeEgressOn
 }
 
 // DescribeEgressOnlyInternetGateways handles the EC2 DescribeEgressOnlyInternetGateways API call
-func DescribeEgressOnlyInternetGateways(input *ec2.DescribeEgressOnlyInternetGatewaysInput, natsConn *nats.Conn) (ec2.DescribeEgressOnlyInternetGatewaysOutput, error) {
+func DescribeEgressOnlyInternetGateways(input *ec2.DescribeEgressOnlyInternetGatewaysInput, natsConn *nats.Conn, accountID string) (ec2.DescribeEgressOnlyInternetGatewaysOutput, error) {
 	var output ec2.DescribeEgressOnlyInternetGatewaysOutput
 
 	if err := ValidateDescribeEgressOnlyInternetGatewaysInput(input); err != nil {
@@ -27,7 +27,7 @@ func DescribeEgressOnlyInternetGateways(input *ec2.DescribeEgressOnlyInternetGat
 	}
 
 	svc := handlers_ec2_eigw.NewNATSEgressOnlyIGWService(natsConn)
-	result, err := svc.DescribeEgressOnlyInternetGateways(input)
+	result, err := svc.DescribeEgressOnlyInternetGateways(input, accountID)
 	if err != nil {
 		return output, err
 	}

@@ -10,7 +10,7 @@ import (
 )
 
 // CreateVpc handles the EC2 CreateVpc API call
-func CreateVpc(input *ec2.CreateVpcInput, natsConn *nats.Conn) (ec2.CreateVpcOutput, error) {
+func CreateVpc(input *ec2.CreateVpcInput, natsConn *nats.Conn, accountID string) (ec2.CreateVpcOutput, error) {
 	var output ec2.CreateVpcOutput
 
 	if input == nil {
@@ -21,7 +21,7 @@ func CreateVpc(input *ec2.CreateVpcInput, natsConn *nats.Conn) (ec2.CreateVpcOut
 	}
 
 	svc := handlers_ec2_vpc.NewNATSVPCService(natsConn)
-	result, err := svc.CreateVpc(input)
+	result, err := svc.CreateVpc(input, accountID)
 	if err != nil {
 		return output, err
 	}

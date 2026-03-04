@@ -113,7 +113,7 @@ func TestModifyInstanceAttribute_Success(t *testing.T) {
 		InstanceType: &ec2.AttributeValue{Value: aws.String("t3.medium")},
 	}
 
-	_, err := ModifyInstanceAttribute(input, nc)
+	_, err := ModifyInstanceAttribute(input, nc, "123456789012")
 	assert.NoError(t, err)
 }
 
@@ -129,7 +129,7 @@ func TestModifyInstanceAttribute_DaemonError(t *testing.T) {
 		InstanceType: &ec2.AttributeValue{Value: aws.String("t3.medium")},
 	}
 
-	_, err := ModifyInstanceAttribute(input, nc)
+	_, err := ModifyInstanceAttribute(input, nc, "123456789012")
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidInstanceIDNotFound, err.Error())
 }
@@ -137,7 +137,7 @@ func TestModifyInstanceAttribute_DaemonError(t *testing.T) {
 func TestModifyInstanceAttribute_ValidationFailure(t *testing.T) {
 	_, nc := startTestNATSServer(t)
 
-	_, err := ModifyInstanceAttribute(nil, nc)
+	_, err := ModifyInstanceAttribute(nil, nc, "123456789012")
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidParameterValue, err.Error())
 }

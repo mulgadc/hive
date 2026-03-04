@@ -16,7 +16,7 @@ func ValidateDisableEbsEncryptionByDefaultInput(input *ec2.DisableEbsEncryptionB
 	return nil
 }
 
-func DisableEbsEncryptionByDefault(input *ec2.DisableEbsEncryptionByDefaultInput, natsConn *nats.Conn) (ec2.DisableEbsEncryptionByDefaultOutput, error) {
+func DisableEbsEncryptionByDefault(input *ec2.DisableEbsEncryptionByDefaultInput, natsConn *nats.Conn, accountID string) (ec2.DisableEbsEncryptionByDefaultOutput, error) {
 	var output ec2.DisableEbsEncryptionByDefaultOutput
 
 	if err := ValidateDisableEbsEncryptionByDefaultInput(input); err != nil {
@@ -24,7 +24,7 @@ func DisableEbsEncryptionByDefault(input *ec2.DisableEbsEncryptionByDefaultInput
 	}
 
 	svc := handlers_ec2_account.NewNATSAccountSettingsService(natsConn)
-	result, err := svc.DisableEbsEncryptionByDefault(input)
+	result, err := svc.DisableEbsEncryptionByDefault(input, accountID)
 	if err != nil {
 		return output, err
 	}

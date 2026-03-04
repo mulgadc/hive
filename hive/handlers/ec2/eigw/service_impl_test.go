@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testAccountID = "123456789012"
+
 func setupTestEIGWService(t *testing.T) *EgressOnlyIGWServiceImpl {
 	t.Helper()
 	opts := &server.Options{
@@ -41,7 +43,7 @@ func createTestEIGW(t *testing.T, svc *EgressOnlyIGWServiceImpl) string {
 	t.Helper()
 	out, err := svc.CreateEgressOnlyInternetGateway(&ec2.CreateEgressOnlyInternetGatewayInput{
 		VpcId: aws.String("vpc-test123"),
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	return *out.EgressOnlyInternetGateway.EgressOnlyInternetGatewayId
 }
@@ -50,7 +52,7 @@ func TestCreateEgressOnlyInternetGateway(t *testing.T) {
 	svc := setupTestEIGWService(t)
 	out, err := svc.CreateEgressOnlyInternetGateway(&ec2.CreateEgressOnlyInternetGatewayInput{
 		VpcId: aws.String("vpc-test123"),
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, out.EgressOnlyInternetGateway)
 	assert.Equal(t, "eigw-", (*out.EgressOnlyInternetGateway.EgressOnlyInternetGatewayId)[:5])
@@ -61,7 +63,7 @@ func TestCreateEgressOnlyInternetGateway(t *testing.T) {
 
 func TestCreateEgressOnlyInternetGateway_MissingVpcId(t *testing.T) {
 	svc := setupTestEIGWService(t)
-	_, err := svc.CreateEgressOnlyInternetGateway(&ec2.CreateEgressOnlyInternetGatewayInput{})
+	_, err := svc.CreateEgressOnlyInternetGateway(&ec2.CreateEgressOnlyInternetGatewayInput{}, testAccountID)
 	assert.ErrorContains(t, err, "MissingParameter")
 }
 
@@ -69,7 +71,7 @@ func TestCreateEgressOnlyInternetGateway_EmptyVpcId(t *testing.T) {
 	svc := setupTestEIGWService(t)
 	_, err := svc.CreateEgressOnlyInternetGateway(&ec2.CreateEgressOnlyInternetGatewayInput{
 		VpcId: aws.String(""),
-	})
+	}, testAccountID)
 	assert.ErrorContains(t, err, "MissingParameter")
 }
 
@@ -86,7 +88,7 @@ func TestCreateEgressOnlyInternetGateway_WithTags(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, out.EgressOnlyInternetGateway)
 	assert.Len(t, out.EgressOnlyInternetGateway.Tags, 2)
@@ -94,7 +96,7 @@ func TestCreateEgressOnlyInternetGateway_WithTags(t *testing.T) {
 	// Verify tags persist through describe
 	desc, err := svc.DescribeEgressOnlyInternetGateways(&ec2.DescribeEgressOnlyInternetGatewaysInput{
 		EgressOnlyInternetGatewayIds: []*string{out.EgressOnlyInternetGateway.EgressOnlyInternetGatewayId},
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	require.Len(t, desc.EgressOnlyInternetGateways, 1)
 	assert.Len(t, desc.EgressOnlyInternetGateways[0].Tags, 2)
@@ -112,7 +114,7 @@ func TestCreateEgressOnlyInternetGateway_TagsWrongResourceType(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	assert.Empty(t, out.EgressOnlyInternetGateway.Tags)
 }
@@ -123,13 +125,13 @@ func TestDeleteEgressOnlyInternetGateway(t *testing.T) {
 
 	out, err := svc.DeleteEgressOnlyInternetGateway(&ec2.DeleteEgressOnlyInternetGatewayInput{
 		EgressOnlyInternetGatewayId: aws.String(eigwID),
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	assert.True(t, *out.ReturnCode)
 
 	desc, err := svc.DescribeEgressOnlyInternetGateways(&ec2.DescribeEgressOnlyInternetGatewaysInput{
 		EgressOnlyInternetGatewayIds: []*string{aws.String(eigwID)},
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	assert.Empty(t, desc.EgressOnlyInternetGateways)
 }
@@ -138,13 +140,13 @@ func TestDeleteEgressOnlyInternetGateway_NotFound(t *testing.T) {
 	svc := setupTestEIGWService(t)
 	_, err := svc.DeleteEgressOnlyInternetGateway(&ec2.DeleteEgressOnlyInternetGatewayInput{
 		EgressOnlyInternetGatewayId: aws.String("eigw-nonexistent"),
-	})
+	}, testAccountID)
 	assert.ErrorContains(t, err, "InvalidEgressOnlyInternetGatewayId.NotFound")
 }
 
 func TestDeleteEgressOnlyInternetGateway_MissingID(t *testing.T) {
 	svc := setupTestEIGWService(t)
-	_, err := svc.DeleteEgressOnlyInternetGateway(&ec2.DeleteEgressOnlyInternetGatewayInput{})
+	_, err := svc.DeleteEgressOnlyInternetGateway(&ec2.DeleteEgressOnlyInternetGatewayInput{}, testAccountID)
 	assert.ErrorContains(t, err, "MissingParameter")
 }
 
@@ -152,7 +154,7 @@ func TestDeleteEgressOnlyInternetGateway_EmptyID(t *testing.T) {
 	svc := setupTestEIGWService(t)
 	_, err := svc.DeleteEgressOnlyInternetGateway(&ec2.DeleteEgressOnlyInternetGatewayInput{
 		EgressOnlyInternetGatewayId: aws.String(""),
-	})
+	}, testAccountID)
 	assert.ErrorContains(t, err, "MissingParameter")
 }
 
@@ -161,7 +163,7 @@ func TestDescribeEgressOnlyInternetGateways_All(t *testing.T) {
 	createTestEIGW(t, svc)
 	createTestEIGW(t, svc)
 
-	desc, err := svc.DescribeEgressOnlyInternetGateways(&ec2.DescribeEgressOnlyInternetGatewaysInput{})
+	desc, err := svc.DescribeEgressOnlyInternetGateways(&ec2.DescribeEgressOnlyInternetGatewaysInput{}, testAccountID)
 	require.NoError(t, err)
 	assert.Len(t, desc.EgressOnlyInternetGateways, 2)
 }
@@ -172,7 +174,7 @@ func TestDescribeEgressOnlyInternetGateways_ByID(t *testing.T) {
 
 	desc, err := svc.DescribeEgressOnlyInternetGateways(&ec2.DescribeEgressOnlyInternetGatewaysInput{
 		EgressOnlyInternetGatewayIds: []*string{aws.String(eigwID)},
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	require.Len(t, desc.EgressOnlyInternetGateways, 1)
 	assert.Equal(t, eigwID, *desc.EgressOnlyInternetGateways[0].EgressOnlyInternetGatewayId)
@@ -180,7 +182,58 @@ func TestDescribeEgressOnlyInternetGateways_ByID(t *testing.T) {
 
 func TestDescribeEgressOnlyInternetGateways_Empty(t *testing.T) {
 	svc := setupTestEIGWService(t)
-	desc, err := svc.DescribeEgressOnlyInternetGateways(&ec2.DescribeEgressOnlyInternetGatewaysInput{})
+	desc, err := svc.DescribeEgressOnlyInternetGateways(&ec2.DescribeEgressOnlyInternetGatewaysInput{}, testAccountID)
 	require.NoError(t, err)
 	assert.Empty(t, desc.EgressOnlyInternetGateways)
+}
+
+// TestCreateEgressOnlyInternetGateway_CrossAccountVPCRejected tests that creating an EIGW in another account's VPC is rejected.
+func TestCreateEgressOnlyInternetGateway_CrossAccountVPCRejected(t *testing.T) {
+	// Set up with manual NATS to get VPC KV access
+	opts := &server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		JetStream: true,
+		StoreDir:  t.TempDir(),
+		NoLog:     true,
+		NoSigs:    true,
+	}
+	ns, err := server.NewServer(opts)
+	require.NoError(t, err)
+	go ns.Start()
+	require.True(t, ns.ReadyForConnections(5*time.Second))
+	t.Cleanup(func() { ns.Shutdown() })
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(func() { nc.Close() })
+
+	// Create VPC KV bucket with a VPC owned by testAccountID
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	vpcKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: kvBucketVPCs, History: 1})
+	require.NoError(t, err)
+
+	vpcID := "vpc-alpha456"
+	_, err = vpcKV.Put(accountKey(testAccountID, vpcID), []byte(`{"vpc_id":"vpc-alpha456","state":"available"}`))
+	require.NoError(t, err)
+
+	// Create EIGW service (VPC KV will be populated since we created it before EIGW init)
+	svc, err := NewEgressOnlyIGWServiceImplWithNATS(nil, nc)
+	require.NoError(t, err)
+
+	// Other account tries to create EIGW in testAccountID's VPC — should fail
+	otherAccount := "999999999999"
+	_, err = svc.CreateEgressOnlyInternetGateway(&ec2.CreateEgressOnlyInternetGatewayInput{
+		VpcId: aws.String(vpcID),
+	}, otherAccount)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidVpcID.NotFound")
+
+	// Owner creates EIGW in their own VPC — should succeed
+	out, err := svc.CreateEgressOnlyInternetGateway(&ec2.CreateEgressOnlyInternetGatewayInput{
+		VpcId: aws.String(vpcID),
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.NotNil(t, out.EgressOnlyInternetGateway)
 }

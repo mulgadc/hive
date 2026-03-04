@@ -41,7 +41,6 @@ type ImageServiceImpl struct {
 	store      objectstore.ObjectStore
 	natsConn   *nats.Conn
 	bucketName string
-	accountID  string // AWS account ID for S3 key storage path
 }
 
 // NewImageServiceImpl creates a new daemon-side image service
@@ -58,21 +57,19 @@ func NewImageServiceImpl(cfg *config.Config, natsConn *nats.Conn) *ImageServiceI
 		store:      store,
 		natsConn:   natsConn,
 		bucketName: cfg.Predastore.Bucket,
-		accountID:  "123456789", // TODO: Implement proper account ID management
 	}
 }
 
 // NewImageServiceImplWithStore creates an image service with a custom object store (for testing)
-func NewImageServiceImplWithStore(store objectstore.ObjectStore, bucketName, accountID string) *ImageServiceImpl {
+func NewImageServiceImplWithStore(store objectstore.ObjectStore, bucketName string) *ImageServiceImpl {
 	return &ImageServiceImpl{
 		store:      store,
 		bucketName: bucketName,
-		accountID:  accountID,
 	}
 }
 
 // DescribeImages lists available AMI images by reading config.json files from S3
-func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput) (*ec2.DescribeImagesOutput, error) {
+func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accountID string) (*ec2.DescribeImagesOutput, error) {
 	if input == nil {
 		input = &ec2.DescribeImagesInput{}
 	}
@@ -162,18 +159,50 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput) (*ec2.
 			}
 		}
 
-		// Filter by Owner if specified (only support "self" and account IDs for now)
+		// Determine AMI ownership. Phase4+ AMIs store the creator's account ID
+		// in ImageOwnerAlias. Pre-phase4 AMIs have non-account values like "self"
+		// or "hive" and are treated as system/public images visible to all.
+		amiOwner := amiMeta.ImageOwnerAlias
+		isSystemAMI := !isAccountID(amiOwner)
+
+		// Visibility check: callers can only see their own AMIs and system AMIs.
+		// This runs regardless of whether an owner filter is specified.
+		if !isSystemAMI && amiOwner != accountID {
+			continue
+		}
+
+		// Filter by Owner if specified
 		if len(input.Owners) > 0 {
 			found := false
 			for _, owner := range input.Owners {
-				if owner != nil && (*owner == "self" || *owner == s.accountID || *owner == amiMeta.ImageOwnerAlias) {
-					found = true
+				if owner == nil {
+					continue
+				}
+				switch *owner {
+				case "self":
+					// "self" matches only AMIs owned by the caller
+					if amiOwner == accountID {
+						found = true
+					}
+				default:
+					// Match by explicit account ID
+					if amiOwner == *owner {
+						found = true
+					}
+				}
+				if found {
 					break
 				}
 			}
 			if !found {
 				continue
 			}
+		}
+
+		// Resolve the OwnerId for the response. System AMIs use global account.
+		ownerID := amiOwner
+		if isSystemAMI {
+			ownerID = "000000000000"
 		}
 
 		// Build EC2 Image from AMIMetadata
@@ -187,7 +216,7 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput) (*ec2.
 			RootDeviceType:     aws.String(amiMeta.RootDeviceType),
 			VirtualizationType: aws.String(amiMeta.Virtualization),
 			ImageOwnerAlias:    aws.String(amiMeta.ImageOwnerAlias),
-			OwnerId:            aws.String(s.accountID),
+			OwnerId:            aws.String(ownerID),
 			Public:             aws.Bool(false),
 			State:              aws.String("available"),
 			ImageType:          aws.String("machine"),
@@ -249,13 +278,13 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput) (*ec2.
 
 // CreateImage is the generic interface method — on the daemon side, the handler
 // calls CreateImageFromInstance directly with the extra instance context.
-func (s *ImageServiceImpl) CreateImage(input *ec2.CreateImageInput) (*ec2.CreateImageOutput, error) {
+func (s *ImageServiceImpl) CreateImage(input *ec2.CreateImageInput, accountID string) (*ec2.CreateImageOutput, error) {
 	return nil, errors.New("CreateImage requires instance context; use CreateImageFromInstance on daemon side")
 }
 
 // CreateImageFromInstance creates an AMI from an instance by snapshotting the root
 // volume and storing a new AMI config in S3.
-func (s *ImageServiceImpl) CreateImageFromInstance(params CreateImageParams) (*ec2.CreateImageOutput, error) {
+func (s *ImageServiceImpl) CreateImageFromInstance(params CreateImageParams, accountID string) (*ec2.CreateImageOutput, error) {
 	input := params.Input
 	if input == nil || input.InstanceId == nil {
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
@@ -312,7 +341,7 @@ func (s *ImageServiceImpl) CreateImageFromInstance(params CreateImageParams) (*e
 	}
 
 	// Step 4: Store snapshot metadata
-	if err := s.putSnapshotMetadata(snapshotID, params.RootVolumeID, volumeSizeGiB); err != nil {
+	if err := s.putSnapshotMetadata(snapshotID, params.RootVolumeID, volumeSizeGiB, accountID); err != nil {
 		slog.Error("CreateImageFromInstance: failed to write snapshot metadata", "snapshotId", snapshotID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
@@ -333,7 +362,7 @@ func (s *ImageServiceImpl) CreateImageFromInstance(params CreateImageParams) (*e
 				VolumeSizeGiB:   volumeSizeGiB,
 				CreationDate:    time.Now(),
 				RootDeviceType:  "ebs",
-				ImageOwnerAlias: "self",
+				ImageOwnerAlias: accountID,
 			},
 		},
 	}
@@ -538,7 +567,7 @@ func (s *ImageServiceImpl) GetAMIConfig(imageID string) (viperblock.AMIMetadata,
 }
 
 // putSnapshotMetadata stores snapshot metadata in S3 using the canonical SnapshotConfig type
-func (s *ImageServiceImpl) putSnapshotMetadata(snapshotID, volumeID string, volumeSizeGiB uint64) error {
+func (s *ImageServiceImpl) putSnapshotMetadata(snapshotID, volumeID string, volumeSizeGiB uint64, accountID string) error {
 	cfg := handlers_ec2_snapshot.SnapshotConfig{
 		SnapshotID: snapshotID,
 		VolumeID:   volumeID,
@@ -546,7 +575,7 @@ func (s *ImageServiceImpl) putSnapshotMetadata(snapshotID, volumeID string, volu
 		State:      "completed",
 		Progress:   "100%",
 		StartTime:  time.Now(),
-		OwnerID:    s.accountID,
+		OwnerID:    accountID,
 	}
 
 	data, err := json.Marshal(cfg)
@@ -564,26 +593,40 @@ func (s *ImageServiceImpl) putSnapshotMetadata(snapshotID, volumeID string, volu
 	return err
 }
 
-func (s *ImageServiceImpl) CopyImage(input *ec2.CopyImageInput) (*ec2.CopyImageOutput, error) {
+// isAccountID returns true if the string looks like a valid Hive account ID
+// (12-digit zero-padded number). Pre-phase4 values like "self" or "hive" return false.
+func isAccountID(s string) bool {
+	if len(s) != 12 {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *ImageServiceImpl) CopyImage(input *ec2.CopyImageInput, accountID string) (*ec2.CopyImageOutput, error) {
 	return nil, errors.New("CopyImage not yet implemented")
 }
 
-func (s *ImageServiceImpl) DescribeImageAttribute(input *ec2.DescribeImageAttributeInput) (*ec2.DescribeImageAttributeOutput, error) {
+func (s *ImageServiceImpl) DescribeImageAttribute(input *ec2.DescribeImageAttributeInput, accountID string) (*ec2.DescribeImageAttributeOutput, error) {
 	return nil, errors.New("DescribeImageAttribute not yet implemented")
 }
 
-func (s *ImageServiceImpl) RegisterImage(input *ec2.RegisterImageInput) (*ec2.RegisterImageOutput, error) {
+func (s *ImageServiceImpl) RegisterImage(input *ec2.RegisterImageInput, accountID string) (*ec2.RegisterImageOutput, error) {
 	return nil, errors.New("RegisterImage not yet implemented")
 }
 
-func (s *ImageServiceImpl) DeregisterImage(input *ec2.DeregisterImageInput) (*ec2.DeregisterImageOutput, error) {
+func (s *ImageServiceImpl) DeregisterImage(input *ec2.DeregisterImageInput, accountID string) (*ec2.DeregisterImageOutput, error) {
 	return nil, errors.New("DeregisterImage not yet implemented")
 }
 
-func (s *ImageServiceImpl) ModifyImageAttribute(input *ec2.ModifyImageAttributeInput) (*ec2.ModifyImageAttributeOutput, error) {
+func (s *ImageServiceImpl) ModifyImageAttribute(input *ec2.ModifyImageAttributeInput, accountID string) (*ec2.ModifyImageAttributeOutput, error) {
 	return nil, errors.New("ModifyImageAttribute not yet implemented")
 }
 
-func (s *ImageServiceImpl) ResetImageAttribute(input *ec2.ResetImageAttributeInput) (*ec2.ResetImageAttributeOutput, error) {
+func (s *ImageServiceImpl) ResetImageAttribute(input *ec2.ResetImageAttributeInput, accountID string) (*ec2.ResetImageAttributeOutput, error) {
 	return nil, errors.New("ResetImageAttribute not yet implemented")
 }

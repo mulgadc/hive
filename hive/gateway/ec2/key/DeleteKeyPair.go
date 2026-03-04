@@ -23,7 +23,7 @@ func ValidateDeleteKeyPairInput(input *ec2.DeleteKeyPairInput) (err error) {
 	return
 }
 
-func DeleteKeyPair(input *ec2.DeleteKeyPairInput, natsConn *nats.Conn) (output ec2.DeleteKeyPairOutput, err error) {
+func DeleteKeyPair(input *ec2.DeleteKeyPairInput, natsConn *nats.Conn, accountID string) (output ec2.DeleteKeyPairOutput, err error) {
 
 	// Validate input
 	err = ValidateDeleteKeyPairInput(input)
@@ -34,7 +34,7 @@ func DeleteKeyPair(input *ec2.DeleteKeyPairInput, natsConn *nats.Conn) (output e
 
 	// Create NATS key service and call DeleteKeyPair
 	keyService := handlers_ec2_key.NewNATSKeyService(natsConn)
-	result, err := keyService.DeleteKeyPair(input)
+	result, err := keyService.DeleteKeyPair(input, accountID)
 
 	if err != nil {
 		slog.Error("DeleteKeyPair failed", "err", err)

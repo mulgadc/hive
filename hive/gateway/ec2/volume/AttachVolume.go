@@ -33,7 +33,7 @@ func ValidateAttachVolumeInput(input *ec2.AttachVolumeInput) error {
 }
 
 // AttachVolume sends an attach-volume command to the daemon owning the instance
-func AttachVolume(input *ec2.AttachVolumeInput, natsConn *nats.Conn) (ec2.VolumeAttachment, error) {
+func AttachVolume(input *ec2.AttachVolumeInput, natsConn *nats.Conn, accountID string) (ec2.VolumeAttachment, error) {
 	var output ec2.VolumeAttachment
 
 	if err := ValidateAttachVolumeInput(input); err != nil {
@@ -66,7 +66,10 @@ func AttachVolume(input *ec2.AttachVolumeInput, natsConn *nats.Conn) (ec2.Volume
 	}
 
 	subject := fmt.Sprintf("ec2.cmd.%s", instanceID)
-	msg, err := natsConn.Request(subject, jsonData, 30*time.Second)
+	reqMsg := nats.NewMsg(subject)
+	reqMsg.Data = jsonData
+	reqMsg.Header.Set(utils.AccountIDHeader, accountID)
+	msg, err := natsConn.RequestMsg(reqMsg, 30*time.Second)
 	if err != nil {
 		slog.Error("AttachVolume: NATS request failed", "instanceId", instanceID, "volumeId", volumeID, "err", err)
 		if errors.Is(err, nats.ErrNoResponders) {

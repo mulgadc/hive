@@ -23,7 +23,7 @@ func ValidateCreateEgressOnlyInternetGatewayInput(input *ec2.CreateEgressOnlyInt
 }
 
 // CreateEgressOnlyInternetGateway handles the EC2 CreateEgressOnlyInternetGateway API call
-func CreateEgressOnlyInternetGateway(input *ec2.CreateEgressOnlyInternetGatewayInput, natsConn *nats.Conn) (ec2.CreateEgressOnlyInternetGatewayOutput, error) {
+func CreateEgressOnlyInternetGateway(input *ec2.CreateEgressOnlyInternetGatewayInput, natsConn *nats.Conn, accountID string) (ec2.CreateEgressOnlyInternetGatewayOutput, error) {
 	var output ec2.CreateEgressOnlyInternetGatewayOutput
 
 	if err := ValidateCreateEgressOnlyInternetGatewayInput(input); err != nil {
@@ -31,7 +31,7 @@ func CreateEgressOnlyInternetGateway(input *ec2.CreateEgressOnlyInternetGatewayI
 	}
 
 	svc := handlers_ec2_eigw.NewNATSEgressOnlyIGWService(natsConn)
-	result, err := svc.CreateEgressOnlyInternetGateway(input)
+	result, err := svc.CreateEgressOnlyInternetGateway(input, accountID)
 	if err != nil {
 		return output, err
 	}

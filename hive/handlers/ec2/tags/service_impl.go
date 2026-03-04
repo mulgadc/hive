@@ -19,7 +19,9 @@ import (
 // Ensure TagsServiceImpl implements TagsService
 var _ TagsService = (*TagsServiceImpl)(nil)
 
-// TagsServiceImpl implements TagsService with S3-backed storage
+// TagsServiceImpl implements TagsService with S3-backed storage.
+// Tags are stored per-account in S3 (tags/{accountID}/{resourceID}.json),
+// so account scoping is enforced at the storage layer.
 type TagsServiceImpl struct {
 	config *config.Config
 	store  objectstore.ObjectStore
@@ -84,9 +86,14 @@ func getResourceType(resourceID string) string {
 	return "unknown"
 }
 
-// getTagsKey returns the S3 key for storing tags for a resource
-func getTagsKey(resourceID string) string {
-	return "tags/" + resourceID + ".json"
+// getTagsKey returns the S3 key for storing tags for a resource, scoped by account
+func getTagsKey(accountID, resourceID string) string {
+	return "tags/" + accountID + "/" + resourceID + ".json"
+}
+
+// getTagsPrefix returns the S3 prefix for listing all tags for an account
+func getTagsPrefix(accountID string) string {
+	return "tags/" + accountID + "/"
 }
 
 // collectFilterValues adds non-nil string pointer values to the target map
@@ -99,8 +106,8 @@ func collectFilterValues(values []*string, target map[string]bool) {
 }
 
 // getResourceTags retrieves tags for a specific resource from S3
-func (s *TagsServiceImpl) getResourceTags(resourceID string) (map[string]string, error) {
-	key := getTagsKey(resourceID)
+func (s *TagsServiceImpl) getResourceTags(accountID, resourceID string) (map[string]string, error) {
+	key := getTagsKey(accountID, resourceID)
 
 	result, err := s.store.GetObject(&s3.GetObjectInput{
 		Bucket: aws.String(s.config.Predastore.Bucket),
@@ -123,8 +130,8 @@ func (s *TagsServiceImpl) getResourceTags(resourceID string) (map[string]string,
 }
 
 // putResourceTags stores tags for a specific resource in S3
-func (s *TagsServiceImpl) putResourceTags(resourceID string, tags map[string]string) error {
-	key := getTagsKey(resourceID)
+func (s *TagsServiceImpl) putResourceTags(accountID, resourceID string, tags map[string]string) error {
+	key := getTagsKey(accountID, resourceID)
 
 	data, err := json.Marshal(tags)
 	if err != nil {
@@ -142,7 +149,7 @@ func (s *TagsServiceImpl) putResourceTags(resourceID string, tags map[string]str
 }
 
 // CreateTags adds or overwrites tags for the specified resources
-func (s *TagsServiceImpl) CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error) {
+func (s *TagsServiceImpl) CreateTags(input *ec2.CreateTagsInput, accountID string) (*ec2.CreateTagsOutput, error) {
 	if input == nil {
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
@@ -166,7 +173,7 @@ func (s *TagsServiceImpl) CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTag
 		}
 
 		// Get existing tags
-		existingTags, err := s.getResourceTags(*resourceID)
+		existingTags, err := s.getResourceTags(accountID, *resourceID)
 		if err != nil {
 			slog.Error("CreateTags failed to get existing tags", "resourceId", *resourceID, "err", err)
 			return nil, errors.New(awserrors.ErrorServerInternal)
@@ -180,7 +187,7 @@ func (s *TagsServiceImpl) CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTag
 		}
 
 		// Save tags
-		if err := s.putResourceTags(*resourceID, existingTags); err != nil {
+		if err := s.putResourceTags(accountID, *resourceID, existingTags); err != nil {
 			slog.Error("CreateTags failed to save tags", "resourceId", *resourceID, "err", err)
 			return nil, errors.New(awserrors.ErrorServerInternal)
 		}
@@ -192,7 +199,7 @@ func (s *TagsServiceImpl) CreateTags(input *ec2.CreateTagsInput) (*ec2.CreateTag
 }
 
 // DescribeTags returns tags matching the specified filters
-func (s *TagsServiceImpl) DescribeTags(input *ec2.DescribeTagsInput) (*ec2.DescribeTagsOutput, error) {
+func (s *TagsServiceImpl) DescribeTags(input *ec2.DescribeTagsInput, accountID string) (*ec2.DescribeTagsOutput, error) {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -200,10 +207,10 @@ func (s *TagsServiceImpl) DescribeTags(input *ec2.DescribeTagsInput) (*ec2.Descr
 
 	var tags []*ec2.TagDescription
 
-	// List all tag files from S3
+	// List all tag files from S3 scoped to this account
 	listResult, err := s.store.ListObjects(&s3.ListObjectsInput{
 		Bucket: aws.String(s.config.Predastore.Bucket),
-		Prefix: aws.String("tags/"),
+		Prefix: aws.String(getTagsPrefix(accountID)),
 	})
 	if err != nil {
 		slog.Error("DescribeTags failed to list objects", "err", err)
@@ -242,8 +249,8 @@ func (s *TagsServiceImpl) DescribeTags(input *ec2.DescribeTagsInput) (*ec2.Descr
 			continue
 		}
 
-		// Extract resource ID from key (tags/i-xxx.json -> i-xxx)
-		resourceID := strings.TrimPrefix(*obj.Key, "tags/")
+		// Extract resource ID from key (tags/{accountID}/i-xxx.json -> i-xxx)
+		resourceID := strings.TrimPrefix(*obj.Key, getTagsPrefix(accountID))
 		resourceID = strings.TrimSuffix(resourceID, ".json")
 		resourceType := getResourceType(resourceID)
 
@@ -258,7 +265,7 @@ func (s *TagsServiceImpl) DescribeTags(input *ec2.DescribeTagsInput) (*ec2.Descr
 		}
 
 		// Get tags for this resource
-		resourceTags, err := s.getResourceTags(resourceID)
+		resourceTags, err := s.getResourceTags(accountID, resourceID)
 		if err != nil {
 			slog.Warn("DescribeTags failed to get tags", "resourceId", resourceID, "err", err)
 			continue
@@ -292,7 +299,7 @@ func (s *TagsServiceImpl) DescribeTags(input *ec2.DescribeTagsInput) (*ec2.Descr
 }
 
 // DeleteTags removes tags from the specified resources
-func (s *TagsServiceImpl) DeleteTags(input *ec2.DeleteTagsInput) (*ec2.DeleteTagsOutput, error) {
+func (s *TagsServiceImpl) DeleteTags(input *ec2.DeleteTagsInput, accountID string) (*ec2.DeleteTagsOutput, error) {
 	if input == nil {
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
@@ -312,7 +319,7 @@ func (s *TagsServiceImpl) DeleteTags(input *ec2.DeleteTagsInput) (*ec2.DeleteTag
 		}
 
 		// Get existing tags
-		existingTags, err := s.getResourceTags(*resourceID)
+		existingTags, err := s.getResourceTags(accountID, *resourceID)
 		if err != nil {
 			slog.Error("DeleteTags failed to get existing tags", "resourceId", *resourceID, "err", err)
 			return nil, errors.New(awserrors.ErrorServerInternal)
@@ -341,7 +348,7 @@ func (s *TagsServiceImpl) DeleteTags(input *ec2.DeleteTagsInput) (*ec2.DeleteTag
 		}
 
 		// Save updated tags
-		if err := s.putResourceTags(*resourceID, existingTags); err != nil {
+		if err := s.putResourceTags(accountID, *resourceID, existingTags); err != nil {
 			slog.Error("DeleteTags failed to save tags", "resourceId", *resourceID, "err", err)
 			return nil, errors.New(awserrors.ErrorServerInternal)
 		}

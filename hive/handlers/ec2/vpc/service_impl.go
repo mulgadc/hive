@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -176,8 +177,13 @@ func (s *VPCServiceImpl) nextVNI() (int64, error) {
 	return current, nil
 }
 
+// accountKey returns a KV key scoped to the given account: "{accountID}.{resourceID}".
+func accountKey(accountID, resourceID string) string {
+	return accountID + "." + resourceID
+}
+
 // CreateVpc creates a new VPC
-func (s *VPCServiceImpl) CreateVpc(input *ec2.CreateVpcInput) (*ec2.CreateVpcOutput, error) {
+func (s *VPCServiceImpl) CreateVpc(input *ec2.CreateVpcInput, accountID string) (*ec2.CreateVpcOutput, error) {
 	if err := s.ensureKVReady(); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
@@ -229,22 +235,22 @@ func (s *VPCServiceImpl) CreateVpc(input *ec2.CreateVpcInput) (*ec2.CreateVpcOut
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal VPC record: %w", err)
 	}
-	if _, err := s.vpcKV.Put(vpcID, data); err != nil {
+	if _, err := s.vpcKV.Put(accountKey(accountID, vpcID), data); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	slog.Info("CreateVpc completed", "vpcId", vpcID, "cidrBlock", record.CidrBlock, "vni", vni)
+	slog.Info("CreateVpc completed", "vpcId", vpcID, "cidrBlock", record.CidrBlock, "vni", vni, "accountID", accountID)
 
 	// Publish vpc.create event for vpcd topology translation
 	s.publishVPCEvent("vpc.create", record.VpcId, record.CidrBlock, record.VNI)
 
 	return &ec2.CreateVpcOutput{
-		Vpc: s.vpcRecordToEC2(&record),
+		Vpc: s.vpcRecordToEC2(&record, accountID),
 	}, nil
 }
 
 // DeleteVpc deletes a VPC
-func (s *VPCServiceImpl) DeleteVpc(input *ec2.DeleteVpcInput) (*ec2.DeleteVpcOutput, error) {
+func (s *VPCServiceImpl) DeleteVpc(input *ec2.DeleteVpcInput, accountID string) (*ec2.DeleteVpcOutput, error) {
 	if err := s.ensureKVReady(); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
@@ -253,18 +259,23 @@ func (s *VPCServiceImpl) DeleteVpc(input *ec2.DeleteVpcInput) (*ec2.DeleteVpcOut
 	}
 
 	vpcID := *input.VpcId
+	key := accountKey(accountID, vpcID)
 
-	if _, err := s.vpcKV.Get(vpcID); err != nil {
+	if _, err := s.vpcKV.Get(key); err != nil {
 		return nil, errors.New(awserrors.ErrorInvalidVpcIDNotFound)
 	}
 
-	// Check for dependent subnets
+	// Check for dependent subnets owned by this account
+	prefix := accountID + "."
 	subnetKeys, err := s.subnetKV.Keys()
 	if err != nil && !errors.Is(err, nats.ErrNoKeysFound) {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
-	for _, key := range subnetKeys {
-		entry, err := s.subnetKV.Get(key)
+	for _, k := range subnetKeys {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		entry, err := s.subnetKV.Get(k)
 		if err != nil {
 			continue
 		}
@@ -277,11 +288,11 @@ func (s *VPCServiceImpl) DeleteVpc(input *ec2.DeleteVpcInput) (*ec2.DeleteVpcOut
 		}
 	}
 
-	if err := s.vpcKV.Delete(vpcID); err != nil {
+	if err := s.vpcKV.Delete(key); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	slog.Info("DeleteVpc completed", "vpcId", vpcID)
+	slog.Info("DeleteVpc completed", "vpcId", vpcID, "accountID", accountID)
 
 	// Publish vpc.delete event for vpcd topology cleanup
 	s.publishVPCEvent("vpc.delete", vpcID, "", 0)
@@ -290,7 +301,7 @@ func (s *VPCServiceImpl) DeleteVpc(input *ec2.DeleteVpcInput) (*ec2.DeleteVpcOut
 }
 
 // DescribeVpcs describes VPCs
-func (s *VPCServiceImpl) DescribeVpcs(input *ec2.DescribeVpcsInput) (*ec2.DescribeVpcsOutput, error) {
+func (s *VPCServiceImpl) DescribeVpcs(input *ec2.DescribeVpcsInput, accountID string) (*ec2.DescribeVpcsOutput, error) {
 	if err := s.ensureKVReady(); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
@@ -303,13 +314,14 @@ func (s *VPCServiceImpl) DescribeVpcs(input *ec2.DescribeVpcsInput) (*ec2.Descri
 		}
 	}
 
+	prefix := accountID + "."
 	keys, err := s.vpcKV.Keys()
 	if err != nil && !errors.Is(err, nats.ErrNoKeysFound) {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
 	for _, key := range keys {
-		if len(vpcIDs) > 0 && !vpcIDs[key] {
+		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
 
@@ -325,7 +337,11 @@ func (s *VPCServiceImpl) DescribeVpcs(input *ec2.DescribeVpcsInput) (*ec2.Descri
 			continue
 		}
 
-		vpcs = append(vpcs, s.vpcRecordToEC2(&record))
+		if len(vpcIDs) > 0 && !vpcIDs[record.VpcId] {
+			continue
+		}
+
+		vpcs = append(vpcs, s.vpcRecordToEC2(&record, accountID))
 	}
 
 	// If specific VPC IDs were requested but not found, return error
@@ -343,7 +359,7 @@ func (s *VPCServiceImpl) DescribeVpcs(input *ec2.DescribeVpcsInput) (*ec2.Descri
 		}
 	}
 
-	slog.Info("DescribeVpcs completed", "count", len(vpcs))
+	slog.Info("DescribeVpcs completed", "count", len(vpcs), "accountID", accountID)
 
 	return &ec2.DescribeVpcsOutput{
 		Vpcs: vpcs,
@@ -351,7 +367,7 @@ func (s *VPCServiceImpl) DescribeVpcs(input *ec2.DescribeVpcsInput) (*ec2.Descri
 }
 
 // CreateSubnet creates a new subnet within a VPC
-func (s *VPCServiceImpl) CreateSubnet(input *ec2.CreateSubnetInput) (*ec2.CreateSubnetOutput, error) {
+func (s *VPCServiceImpl) CreateSubnet(input *ec2.CreateSubnetInput, accountID string) (*ec2.CreateSubnetOutput, error) {
 	if err := s.ensureKVReady(); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
@@ -364,8 +380,8 @@ func (s *VPCServiceImpl) CreateSubnet(input *ec2.CreateSubnetInput) (*ec2.Create
 
 	vpcID := *input.VpcId
 
-	// Verify VPC exists
-	vpcEntry, err := s.vpcKV.Get(vpcID)
+	// Verify VPC exists and belongs to this account
+	vpcEntry, err := s.vpcKV.Get(accountKey(accountID, vpcID))
 	if err != nil {
 		return nil, errors.New(awserrors.ErrorInvalidVpcIDNotFound)
 	}
@@ -397,14 +413,18 @@ func (s *VPCServiceImpl) CreateSubnet(input *ec2.CreateSubnetInput) (*ec2.Create
 		return nil, errors.New(awserrors.ErrorInvalidSubnetRange)
 	}
 
-	// Check for CIDR conflicts with existing subnets in this VPC
+	// Check for CIDR conflicts with existing subnets in this VPC (same account)
+	prefix := accountID + "."
 	subnetKeys, err := s.subnetKV.Keys()
 	if err != nil && !errors.Is(err, nats.ErrNoKeysFound) {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	for _, key := range subnetKeys {
-		entry, err := s.subnetKV.Get(key)
+	for _, k := range subnetKeys {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		entry, err := s.subnetKV.Get(k)
 		if err != nil {
 			continue
 		}
@@ -463,22 +483,22 @@ func (s *VPCServiceImpl) CreateSubnet(input *ec2.CreateSubnetInput) (*ec2.Create
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal subnet record: %w", err)
 	}
-	if _, err := s.subnetKV.Put(subnetID, data); err != nil {
+	if _, err := s.subnetKV.Put(accountKey(accountID, subnetID), data); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	slog.Info("CreateSubnet completed", "subnetId", subnetID, "vpcId", vpcID, "cidrBlock", record.CidrBlock)
+	slog.Info("CreateSubnet completed", "subnetId", subnetID, "vpcId", vpcID, "cidrBlock", record.CidrBlock, "accountID", accountID)
 
 	// Publish vpc.create-subnet event for vpcd topology translation
 	s.publishSubnetEvent("vpc.create-subnet", record.SubnetId, record.VpcId, record.CidrBlock)
 
 	return &ec2.CreateSubnetOutput{
-		Subnet: s.subnetRecordToEC2(&record, totalHosts),
+		Subnet: s.subnetRecordToEC2(&record, totalHosts, accountID),
 	}, nil
 }
 
 // DeleteSubnet deletes a subnet
-func (s *VPCServiceImpl) DeleteSubnet(input *ec2.DeleteSubnetInput) (*ec2.DeleteSubnetOutput, error) {
+func (s *VPCServiceImpl) DeleteSubnet(input *ec2.DeleteSubnetInput, accountID string) (*ec2.DeleteSubnetOutput, error) {
 	if err := s.ensureKVReady(); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
@@ -487,20 +507,21 @@ func (s *VPCServiceImpl) DeleteSubnet(input *ec2.DeleteSubnetInput) (*ec2.Delete
 	}
 
 	subnetID := *input.SubnetId
+	key := accountKey(accountID, subnetID)
 
 	// Read subnet record before deletion (needed for vpcd event)
-	subnetEntry, err := s.subnetKV.Get(subnetID)
+	subnetEntry, err := s.subnetKV.Get(key)
 	if err != nil {
 		return nil, errors.New(awserrors.ErrorInvalidSubnetIDNotFound)
 	}
 	var subnetRecord SubnetRecord
 	_ = json.Unmarshal(subnetEntry.Value(), &subnetRecord)
 
-	if err := s.subnetKV.Delete(subnetID); err != nil {
+	if err := s.subnetKV.Delete(key); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	slog.Info("DeleteSubnet completed", "subnetId", subnetID)
+	slog.Info("DeleteSubnet completed", "subnetId", subnetID, "accountID", accountID)
 
 	// Publish vpc.delete-subnet event for vpcd topology cleanup
 	s.publishSubnetEvent("vpc.delete-subnet", subnetID, subnetRecord.VpcId, subnetRecord.CidrBlock)
@@ -509,7 +530,7 @@ func (s *VPCServiceImpl) DeleteSubnet(input *ec2.DeleteSubnetInput) (*ec2.Delete
 }
 
 // DescribeSubnets describes subnets
-func (s *VPCServiceImpl) DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.DescribeSubnetsOutput, error) {
+func (s *VPCServiceImpl) DescribeSubnets(input *ec2.DescribeSubnetsInput, accountID string) (*ec2.DescribeSubnetsOutput, error) {
 	if err := s.ensureKVReady(); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
@@ -530,13 +551,14 @@ func (s *VPCServiceImpl) DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.
 		}
 	}
 
+	prefix := accountID + "."
 	keys, err := s.subnetKV.Keys()
 	if err != nil && !errors.Is(err, nats.ErrNoKeysFound) {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
 	for _, key := range keys {
-		if len(subnetIDs) > 0 && !subnetIDs[key] {
+		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
 
@@ -549,6 +571,10 @@ func (s *VPCServiceImpl) DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.
 		var record SubnetRecord
 		if err := json.Unmarshal(entry.Value(), &record); err != nil {
 			slog.Warn("Failed to unmarshal subnet record", "key", key, "error", err)
+			continue
+		}
+
+		if len(subnetIDs) > 0 && !subnetIDs[record.SubnetId] {
 			continue
 		}
 
@@ -565,7 +591,7 @@ func (s *VPCServiceImpl) DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.
 			availableIPs = max((1<<(32-ones))-5, 0) //#nosec G115 - ones from validated CIDR
 		}
 
-		subnets = append(subnets, s.subnetRecordToEC2(&record, availableIPs))
+		subnets = append(subnets, s.subnetRecordToEC2(&record, availableIPs, accountID))
 	}
 
 	// If specific subnet IDs were requested but not found, return error
@@ -583,20 +609,20 @@ func (s *VPCServiceImpl) DescribeSubnets(input *ec2.DescribeSubnetsInput) (*ec2.
 		}
 	}
 
-	slog.Info("DescribeSubnets completed", "count", len(subnets))
+	slog.Info("DescribeSubnets completed", "count", len(subnets), "accountID", accountID)
 
 	return &ec2.DescribeSubnetsOutput{
 		Subnets: subnets,
 	}, nil
 }
 
-func (s *VPCServiceImpl) vpcRecordToEC2(record *VPCRecord) *ec2.Vpc {
+func (s *VPCServiceImpl) vpcRecordToEC2(record *VPCRecord, accountID string) *ec2.Vpc {
 	vpc := &ec2.Vpc{
 		VpcId:     aws.String(record.VpcId),
 		CidrBlock: aws.String(record.CidrBlock),
 		State:     aws.String(record.State),
 		IsDefault: aws.Bool(record.IsDefault),
-		OwnerId:   aws.String("123456789012"),
+		OwnerId:   aws.String(accountID),
 		CidrBlockAssociationSet: []*ec2.VpcCidrBlockAssociation{
 			{
 				CidrBlock: aws.String(record.CidrBlock),
@@ -621,7 +647,7 @@ func (s *VPCServiceImpl) vpcRecordToEC2(record *VPCRecord) *ec2.Vpc {
 	return vpc
 }
 
-func (s *VPCServiceImpl) subnetRecordToEC2(record *SubnetRecord, availableIPs int) *ec2.Subnet {
+func (s *VPCServiceImpl) subnetRecordToEC2(record *SubnetRecord, availableIPs int, accountID string) *ec2.Subnet {
 	subnet := &ec2.Subnet{
 		SubnetId:                aws.String(record.SubnetId),
 		VpcId:                   aws.String(record.VpcId),
@@ -630,7 +656,7 @@ func (s *VPCServiceImpl) subnetRecordToEC2(record *SubnetRecord, availableIPs in
 		State:                   aws.String(record.State),
 		DefaultForAz:            aws.Bool(record.IsDefault),
 		AvailableIpAddressCount: aws.Int64(int64(availableIPs)),
-		OwnerId:                 aws.String("123456789012"),
+		OwnerId:                 aws.String(accountID),
 		MapPublicIpOnLaunch:     aws.Bool(false),
 	}
 
@@ -651,21 +677,30 @@ const (
 	DefaultSubnetCidr = "172.31.0.0/20"
 )
 
-// EnsureDefaultVPC creates a default VPC and subnet if none exists.
+// GlobalAccountID is used for resources created without an explicit account context
+// (e.g., default VPC at daemon startup). Pre-existing resources with no accountID
+// are treated as owned by this account.
+const GlobalAccountID = "000000000000"
+
+// EnsureDefaultVPC creates a default VPC and subnet if none exists for the given account.
 // This matches AWS behavior where a default VPC is present on account creation.
 // Safe to call multiple times — no-ops if a default VPC already exists.
-func (s *VPCServiceImpl) EnsureDefaultVPC() error {
+func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string) error {
 	if s.vpcKV == nil {
 		return nil // No persistence, skip
 	}
 
-	// Check if a default VPC already exists
+	// Check if a default VPC already exists for this account
+	prefix := accountID + "."
 	keys, err := s.vpcKV.Keys()
 	if err != nil && !errors.Is(err, nats.ErrNoKeysFound) {
 		return fmt.Errorf("list VPCs: %w", err)
 	}
 
 	for _, key := range keys {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
 		entry, err := s.vpcKV.Get(key)
 		if err != nil {
 			continue
@@ -675,7 +710,7 @@ func (s *VPCServiceImpl) EnsureDefaultVPC() error {
 			continue
 		}
 		if record.IsDefault {
-			slog.Debug("Default VPC already exists", "vpcId", record.VpcId)
+			slog.Debug("Default VPC already exists", "vpcId", record.VpcId, "accountID", accountID)
 			return nil
 		}
 	}
@@ -701,7 +736,7 @@ func (s *VPCServiceImpl) EnsureDefaultVPC() error {
 	if err != nil {
 		return fmt.Errorf("marshal default VPC: %w", err)
 	}
-	if _, err := s.vpcKV.Put(vpcID, data); err != nil {
+	if _, err := s.vpcKV.Put(accountKey(accountID, vpcID), data); err != nil {
 		return fmt.Errorf("store default VPC: %w", err)
 	}
 
@@ -730,7 +765,7 @@ func (s *VPCServiceImpl) EnsureDefaultVPC() error {
 	if err != nil {
 		return fmt.Errorf("marshal default subnet: %w", err)
 	}
-	if _, err := s.subnetKV.Put(subnetID, data); err != nil {
+	if _, err := s.subnetKV.Put(accountKey(accountID, subnetID), data); err != nil {
 		return fmt.Errorf("store default subnet: %w", err)
 	}
 
@@ -742,16 +777,18 @@ func (s *VPCServiceImpl) EnsureDefaultVPC() error {
 		"subnetId", subnetID,
 		"subnetCidr", DefaultSubnetCidr,
 		"az", az,
+		"accountID", accountID,
 	)
 	return nil
 }
 
 // GetDefaultSubnet returns the default subnet for RunInstances when no SubnetId is specified.
-func (s *VPCServiceImpl) GetDefaultSubnet() (*SubnetRecord, error) {
+func (s *VPCServiceImpl) GetDefaultSubnet(accountID string) (*SubnetRecord, error) {
 	if s.subnetKV == nil {
 		return nil, fmt.Errorf("VPC service not initialized")
 	}
 
+	prefix := accountID + "."
 	keys, err := s.subnetKV.Keys()
 	if err != nil {
 		if errors.Is(err, nats.ErrNoKeysFound) {
@@ -761,6 +798,9 @@ func (s *VPCServiceImpl) GetDefaultSubnet() (*SubnetRecord, error) {
 	}
 
 	for _, key := range keys {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
 		entry, err := s.subnetKV.Get(key)
 		if err != nil {
 			continue

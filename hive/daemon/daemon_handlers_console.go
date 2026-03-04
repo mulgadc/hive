@@ -32,6 +32,7 @@ func (d *Daemon) handleEC2GetConsoleOutput(msg *nats.Msg) {
 	}
 
 	instanceID := *input.InstanceId
+	accountID := utils.AccountIDFromMsg(msg)
 
 	// Find the instance on this node
 	d.Instances.Mu.Lock()
@@ -39,6 +40,12 @@ func (d *Daemon) handleEC2GetConsoleOutput(msg *nats.Msg) {
 	d.Instances.Mu.Unlock()
 
 	if !exists {
+		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
+		return
+	}
+
+	// Verify the caller owns this instance
+	if accountID != "" && instance.AccountID != "" && instance.AccountID != accountID {
 		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
 		return
 	}

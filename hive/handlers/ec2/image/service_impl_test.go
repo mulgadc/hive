@@ -17,12 +17,12 @@ import (
 )
 
 const testBucket = "test-bucket"
-const testAccountID = "123456789"
+const testAccountID = "000000000001"
 
 // setupTestImageService creates an image service with in-memory storage for testing
 func setupTestImageService(t *testing.T) (*ImageServiceImpl, *objectstore.MemoryObjectStore) {
 	store := objectstore.NewMemoryObjectStore()
-	svc := NewImageServiceImplWithStore(store, testBucket, testAccountID)
+	svc := NewImageServiceImplWithStore(store, testBucket)
 	return svc, store
 }
 
@@ -101,10 +101,38 @@ func createTestAMIConfigWithName(t *testing.T, store *objectstore.MemoryObjectSt
 	require.NoError(t, err)
 }
 
+// createTestAMIConfigWithOwner creates a test AMI config with a specified name and owner
+func createTestAMIConfigWithOwner(t *testing.T, store *objectstore.MemoryObjectStore, imageID, name, owner string) {
+	amiState := viperblock.VBState{
+		VolumeConfig: viperblock.VolumeConfig{
+			AMIMetadata: viperblock.AMIMetadata{
+				ImageID:         imageID,
+				Name:            name,
+				Architecture:    "x86_64",
+				PlatformDetails: "Linux/UNIX",
+				Virtualization:  "hvm",
+				RootDeviceType:  "ebs",
+				VolumeSizeGiB:   8,
+				ImageOwnerAlias: owner,
+			},
+		},
+	}
+	data, err := json.Marshal(amiState)
+	require.NoError(t, err)
+
+	_, err = store.PutObject(&awss3.PutObjectInput{
+		Bucket:      aws.String(testBucket),
+		Key:         aws.String(imageID + "/config.json"),
+		Body:        strings.NewReader(string(data)),
+		ContentType: aws.String("application/json"),
+	})
+	require.NoError(t, err)
+}
+
 func TestCreateImageFromInstance_NilInput(t *testing.T) {
 	svc, _ := setupTestImageService(t)
 
-	_, err := svc.CreateImageFromInstance(CreateImageParams{})
+	_, err := svc.CreateImageFromInstance(CreateImageParams{}, testAccountID)
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidParameterValue, err.Error())
 }
@@ -125,7 +153,7 @@ func TestCreateImageFromInstance_RunningInstance_NoNATS(t *testing.T) {
 		RootVolumeID:  "vol-root123",
 		SourceImageID: "ami-source123",
 		IsRunning:     true,
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorServerInternal, err.Error())
 }
@@ -142,7 +170,7 @@ func TestCreateImageFromInstance_StoppedInstance_NoConfig(t *testing.T) {
 		RootVolumeID:  "vol-nonexistent",
 		SourceImageID: "ami-source123",
 		IsRunning:     false,
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorServerInternal, err.Error())
 }
@@ -150,20 +178,21 @@ func TestCreateImageFromInstance_StoppedInstance_NoConfig(t *testing.T) {
 func TestDescribeImages_AfterCreate(t *testing.T) {
 	svc, store := setupTestImageService(t)
 
-	// Manually create an AMI config in the store (simulates what CreateImageFromInstance does)
+	// Manually create an AMI config with the caller as owner
 	amiID := "ami-testimage123"
-	createTestAMIConfig(t, store, amiID)
+	createTestAMIConfigWithOwner(t, store, amiID, "test-ami", testAccountID)
 
 	// Describe images should find it
 	result, err := svc.DescribeImages(&ec2.DescribeImagesInput{
 		ImageIds: []*string{aws.String(amiID)},
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, result.Images, 1)
 	assert.Equal(t, amiID, *result.Images[0].ImageId)
 	assert.Equal(t, "test-ami", *result.Images[0].Name)
 	assert.Equal(t, "x86_64", *result.Images[0].Architecture)
+	assert.Equal(t, testAccountID, *result.Images[0].OwnerId)
 }
 
 func TestGetVolumeConfig(t *testing.T) {
@@ -208,7 +237,7 @@ func TestGetAMIConfig_NotFound(t *testing.T) {
 func TestPutSnapshotMetadata(t *testing.T) {
 	svc, store := setupTestImageService(t)
 
-	err := svc.putSnapshotMetadata("snap-abc123", "vol-xyz789", 10)
+	err := svc.putSnapshotMetadata("snap-abc123", "vol-xyz789", 10, testAccountID)
 	require.NoError(t, err)
 
 	// Verify the metadata was written correctly
@@ -245,7 +274,7 @@ func TestCreateImageFromInstance_SourceAMIReadFailure(t *testing.T) {
 		RootVolumeID:  "vol-root123",
 		SourceImageID: "ami-nonexistent",
 		IsRunning:     true, // will fail at snapshot step first (no NATS)
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorServerInternal, err.Error())
 }
@@ -259,7 +288,7 @@ func TestDescribeImages_NotFound(t *testing.T) {
 	// Request a non-existent AMI ID — should return InvalidAMIID.NotFound
 	_, err := svc.DescribeImages(&ec2.DescribeImagesInput{
 		ImageIds: []*string{aws.String("ami-nonexistent")},
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
 }
@@ -276,7 +305,7 @@ func TestDescribeImages_MixedExistingAndMissing(t *testing.T) {
 			aws.String("ami-exists123"),
 			aws.String("ami-missing456"),
 		},
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
 }
@@ -284,38 +313,20 @@ func TestDescribeImages_MixedExistingAndMissing(t *testing.T) {
 func TestDescribeImages_FilterByOwnerSelf(t *testing.T) {
 	svc, store := setupTestImageService(t)
 
-	// Create AMI with "self" owner alias
-	amiID := "ami-selfowned"
-	amiState := viperblock.VBState{
-		VolumeConfig: viperblock.VolumeConfig{
-			AMIMetadata: viperblock.AMIMetadata{
-				ImageID:         amiID,
-				Name:            "self-owned-ami",
-				ImageOwnerAlias: "self",
-				Architecture:    "x86_64",
-				PlatformDetails: "Linux/UNIX",
-				RootDeviceType:  "ebs",
-				VolumeSizeGiB:   8,
-			},
-		},
-	}
-	data, err := json.Marshal(amiState)
-	require.NoError(t, err)
-	_, err = store.PutObject(&awss3.PutObjectInput{
-		Bucket: aws.String(testBucket),
-		Key:    aws.String(amiID + "/config.json"),
-		Body:   strings.NewReader(string(data)),
-	})
-	require.NoError(t, err)
+	// Create an AMI owned by the caller's account
+	createTestAMIConfigWithOwner(t, store, "ami-selfowned", "self-owned-ami", testAccountID)
 
-	// Filter by "self"
+	// Create a system AMI (should not appear with --owners self)
+	createTestAMIConfigWithOwner(t, store, "ami-system", "system-ami", "hive")
+
+	// Filter by "self" should return only the caller's AMI
 	result, err := svc.DescribeImages(&ec2.DescribeImagesInput{
 		Owners: []*string{aws.String("self")},
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Len(t, result.Images, 1)
-	assert.Equal(t, amiID, *result.Images[0].ImageId)
+	assert.Equal(t, "ami-selfowned", *result.Images[0].ImageId)
 }
 
 func TestCreateImageFromInstance_DuplicateName(t *testing.T) {
@@ -335,7 +346,7 @@ func TestCreateImageFromInstance_DuplicateName(t *testing.T) {
 		},
 		RootVolumeID: "vol-root123",
 		IsRunning:    true,
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidAMINameDuplicate, err.Error())
 }
@@ -358,8 +369,51 @@ func TestCreateImageFromInstance_UniqueNameAllowed(t *testing.T) {
 		},
 		RootVolumeID: "vol-root123",
 		IsRunning:    true,
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	// Should fail at snapshot, NOT at duplicate name check
 	assert.Equal(t, awserrors.ErrorServerInternal, err.Error())
+}
+
+func TestDescribeImages_AccountScoping(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// Create an AMI owned by a specific account
+	createTestAMIConfigWithOwner(t, store, "ami-scoped123", "test-ami", "000000000001")
+
+	// DescribeImages from the owning account should return the image with correct OwnerId
+	result, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		ImageIds: []*string{aws.String("ami-scoped123")},
+	}, "000000000001")
+	require.NoError(t, err)
+	require.Len(t, result.Images, 1)
+	assert.Equal(t, "000000000001", *result.Images[0].OwnerId)
+
+	// DescribeImages from a DIFFERENT account should NOT see the image
+	_, err = svc.DescribeImages(&ec2.DescribeImagesInput{
+		ImageIds: []*string{aws.String("ami-scoped123")},
+	}, "000000000002")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
+}
+
+func TestDescribeImages_SystemAMIVisibleToAll(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// Create a system/pre-phase4 AMI (non-account-ID owner)
+	createTestAMIConfigWithOwner(t, store, "ami-system123", "system-ami", "hive")
+
+	// Any account should be able to see system AMIs
+	result, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		ImageIds: []*string{aws.String("ami-system123")},
+	}, "000000000001")
+	require.NoError(t, err)
+	require.Len(t, result.Images, 1)
+	assert.Equal(t, "000000000000", *result.Images[0].OwnerId) // System AMIs report global account
+
+	result2, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		ImageIds: []*string{aws.String("ami-system123")},
+	}, "000000000002")
+	require.NoError(t, err)
+	require.Len(t, result2.Images, 1)
 }

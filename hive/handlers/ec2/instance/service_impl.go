@@ -507,7 +507,7 @@ func (s *InstanceServiceImpl) prepareCloudInitVolume(input *ec2.RunInstancesInpu
 	}
 
 	// Create the cloud-init ISO
-	err = s.createCloudInitISO(input, instance.ID, cloudInitVb)
+	err = s.createCloudInitISO(input, instance.ID, instance.AccountID, cloudInitVb)
 	if err != nil {
 		return err
 	}
@@ -534,7 +534,7 @@ func (s *InstanceServiceImpl) prepareCloudInitVolume(input *ec2.RunInstancesInpu
 }
 
 // createCloudInitISO generates the cloud-init ISO image
-func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, instanceId string, cloudInitVb *viperblock.VB) error {
+func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, instanceId string, accountID string, cloudInitVb *viperblock.VB) error {
 	// Create ISO writer
 	writer, err := iso9660.NewWriter()
 	if err != nil {
@@ -552,8 +552,7 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 		keyName = *input.KeyName
 	}
 
-	// TODO: Mock for account ID, replace with real account ID retrieval
-	keyPath := fmt.Sprintf("/keys/123456789/%s", keyName)
+	keyPath := fmt.Sprintf("keys/%s/%s", accountID, keyName)
 	result, err := s.objectStore.GetObject(&awss3.GetObjectInput{
 		Bucket: aws.String(s.config.Predastore.Bucket),
 		Key:    aws.String(keyPath),

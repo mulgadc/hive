@@ -22,8 +22,9 @@ func respondWithError(msg *nats.Msg, errCode string) {
 }
 
 // handleNATSRequest is a generic helper for the common unmarshal → service → marshal → respond pattern.
-// used for basic requests that don't modify any daemon state, just return the result
-func handleNATSRequest[I any, O any](msg *nats.Msg, serviceFn func(*I) (*O, error)) {
+// It extracts the account ID from the NATS message header and passes it to the service function.
+func handleNATSRequest[I any, O any](msg *nats.Msg, serviceFn func(*I, string) (*O, error)) {
+	accountID := utils.AccountIDFromMsg(msg)
 	input := new(I)
 	if errResp := utils.UnmarshalJsonPayload(input, msg.Data); errResp != nil {
 		if err := msg.Respond(errResp); err != nil {
@@ -31,7 +32,7 @@ func handleNATSRequest[I any, O any](msg *nats.Msg, serviceFn func(*I) (*O, erro
 		}
 		return
 	}
-	output, err := serviceFn(input)
+	output, err := serviceFn(input, accountID)
 	if err != nil {
 		if err := msg.Respond(utils.GenerateErrorPayload(awserrors.ValidErrorCode(err.Error()))); err != nil {
 			slog.Error("Failed to respond to NATS request", "err", err)
@@ -68,6 +69,14 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 
 	if !ok {
 		slog.Warn("Instance is not running on this node", "id", command.ID)
+		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
+		return
+	}
+
+	// Verify the caller owns this instance (skip for pre-Phase4 instances with no AccountID)
+	callerAccountID := utils.AccountIDFromMsg(msg)
+	if callerAccountID != "" && instance.AccountID != "" && instance.AccountID != callerAccountID {
+		slog.Warn("Account does not own this instance", "instanceId", command.ID, "callerAccount", callerAccountID, "ownerAccount", instance.AccountID)
 		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
 		return
 	}

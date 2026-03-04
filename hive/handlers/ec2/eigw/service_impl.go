@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -19,6 +20,7 @@ import (
 var _ EgressOnlyIGWService = (*EgressOnlyIGWServiceImpl)(nil)
 
 const KVBucketEgressOnlyIGW = "hive-eigw"
+const kvBucketVPCs = "hive-vpc-vpcs"
 
 // EgressOnlyIGWRecord represents a stored Egress-only Internet Gateway
 type EgressOnlyIGWRecord struct {
@@ -33,6 +35,7 @@ type EgressOnlyIGWRecord struct {
 type EgressOnlyIGWServiceImpl struct {
 	config *config.Config
 	eigwKV nats.KeyValue
+	vpcKV  nats.KeyValue
 }
 
 // NewEgressOnlyIGWServiceImpl creates a new Egress-only Internet Gateway service implementation
@@ -54,11 +57,18 @@ func NewEgressOnlyIGWServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketEgressOnlyIGW, err)
 	}
 
+	// Get VPC KV bucket for cross-resource ownership validation
+	vpcKV, err := js.KeyValue(kvBucketVPCs)
+	if err != nil {
+		slog.Warn("EIGW service: VPC KV bucket not available, VPC ownership checks disabled", "error", err)
+	}
+
 	slog.Info("Egress-only IGW service initialized with JetStream KV", "bucket", KVBucketEgressOnlyIGW)
 
 	return &EgressOnlyIGWServiceImpl{
 		config: cfg,
 		eigwKV: eigwKV,
+		vpcKV:  vpcKV,
 	}, nil
 }
 
@@ -76,10 +86,22 @@ func getOrCreateKVBucket(js nats.JetStreamContext, bucketName string, history in
 	return kv, nil
 }
 
+func accountKey(accountID, resourceID string) string {
+	return accountID + "." + resourceID
+}
+
 // CreateEgressOnlyInternetGateway creates a new Egress-only Internet Gateway
-func (s *EgressOnlyIGWServiceImpl) CreateEgressOnlyInternetGateway(input *ec2.CreateEgressOnlyInternetGatewayInput) (*ec2.CreateEgressOnlyInternetGatewayOutput, error) {
+func (s *EgressOnlyIGWServiceImpl) CreateEgressOnlyInternetGateway(input *ec2.CreateEgressOnlyInternetGatewayInput, accountID string) (*ec2.CreateEgressOnlyInternetGatewayOutput, error) {
 	if input.VpcId == nil || *input.VpcId == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	// Verify the caller owns the target VPC
+	if s.vpcKV != nil {
+		if _, err := s.vpcKV.Get(accountKey(accountID, *input.VpcId)); err != nil {
+			slog.Warn("CreateEgressOnlyInternetGateway: VPC not found for account", "vpcId", *input.VpcId, "accountID", accountID)
+			return nil, errors.New(awserrors.ErrorInvalidVpcIDNotFound)
+		}
 	}
 
 	eigwID := utils.GenerateResourceID("eigw")
@@ -106,11 +128,11 @@ func (s *EgressOnlyIGWServiceImpl) CreateEgressOnlyInternetGateway(input *ec2.Cr
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal Egress-only IGW record: %w", err)
 	}
-	if _, err := s.eigwKV.Put(eigwID, data); err != nil {
+	if _, err := s.eigwKV.Put(accountKey(accountID, eigwID), data); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	slog.Info("CreateEgressOnlyInternetGateway completed", "egressOnlyInternetGatewayId", eigwID, "vpcId", record.VpcId)
+	slog.Info("CreateEgressOnlyInternetGateway completed", "egressOnlyInternetGatewayId", eigwID, "vpcId", record.VpcId, "accountID", accountID)
 
 	return &ec2.CreateEgressOnlyInternetGatewayOutput{
 		EgressOnlyInternetGateway: s.recordToEC2(&record),
@@ -118,22 +140,23 @@ func (s *EgressOnlyIGWServiceImpl) CreateEgressOnlyInternetGateway(input *ec2.Cr
 }
 
 // DeleteEgressOnlyInternetGateway deletes an Egress-only Internet Gateway
-func (s *EgressOnlyIGWServiceImpl) DeleteEgressOnlyInternetGateway(input *ec2.DeleteEgressOnlyInternetGatewayInput) (*ec2.DeleteEgressOnlyInternetGatewayOutput, error) {
+func (s *EgressOnlyIGWServiceImpl) DeleteEgressOnlyInternetGateway(input *ec2.DeleteEgressOnlyInternetGatewayInput, accountID string) (*ec2.DeleteEgressOnlyInternetGatewayOutput, error) {
 	if input.EgressOnlyInternetGatewayId == nil || *input.EgressOnlyInternetGatewayId == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
 
 	eigwID := *input.EgressOnlyInternetGatewayId
+	key := accountKey(accountID, eigwID)
 
-	if _, err := s.eigwKV.Get(eigwID); err != nil {
+	if _, err := s.eigwKV.Get(key); err != nil {
 		return nil, errors.New(awserrors.ErrorInvalidEgressOnlyInternetGatewayIdNotFound)
 	}
 
-	if err := s.eigwKV.Delete(eigwID); err != nil {
+	if err := s.eigwKV.Delete(key); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	slog.Info("DeleteEgressOnlyInternetGateway completed", "egressOnlyInternetGatewayId", eigwID)
+	slog.Info("DeleteEgressOnlyInternetGateway completed", "egressOnlyInternetGatewayId", eigwID, "accountID", accountID)
 
 	return &ec2.DeleteEgressOnlyInternetGatewayOutput{
 		ReturnCode: aws.Bool(true),
@@ -141,7 +164,7 @@ func (s *EgressOnlyIGWServiceImpl) DeleteEgressOnlyInternetGateway(input *ec2.De
 }
 
 // DescribeEgressOnlyInternetGateways describes Egress-only Internet Gateways
-func (s *EgressOnlyIGWServiceImpl) DescribeEgressOnlyInternetGateways(input *ec2.DescribeEgressOnlyInternetGatewaysInput) (*ec2.DescribeEgressOnlyInternetGatewaysOutput, error) {
+func (s *EgressOnlyIGWServiceImpl) DescribeEgressOnlyInternetGateways(input *ec2.DescribeEgressOnlyInternetGatewaysInput, accountID string) (*ec2.DescribeEgressOnlyInternetGatewaysOutput, error) {
 	var egressOnlyIGWs []*ec2.EgressOnlyInternetGateway
 
 	eigwIDs := make(map[string]bool)
@@ -151,13 +174,14 @@ func (s *EgressOnlyIGWServiceImpl) DescribeEgressOnlyInternetGateways(input *ec2
 		}
 	}
 
+	prefix := accountID + "."
 	keys, err := s.eigwKV.Keys()
 	if err != nil && !errors.Is(err, nats.ErrNoKeysFound) {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
 	for _, key := range keys {
-		if len(eigwIDs) > 0 && !eigwIDs[key] {
+		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
 
@@ -173,10 +197,14 @@ func (s *EgressOnlyIGWServiceImpl) DescribeEgressOnlyInternetGateways(input *ec2
 			continue
 		}
 
+		if len(eigwIDs) > 0 && !eigwIDs[record.EgressOnlyInternetGatewayId] {
+			continue
+		}
+
 		egressOnlyIGWs = append(egressOnlyIGWs, s.recordToEC2(&record))
 	}
 
-	slog.Info("DescribeEgressOnlyInternetGateways completed", "count", len(egressOnlyIGWs))
+	slog.Info("DescribeEgressOnlyInternetGateways completed", "count", len(egressOnlyIGWs), "accountID", accountID)
 
 	return &ec2.DescribeEgressOnlyInternetGatewaysOutput{
 		EgressOnlyInternetGateways: egressOnlyIGWs,

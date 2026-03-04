@@ -7,12 +7,12 @@ import (
 )
 
 // DescribeKeyPairs lists key pairs via NATS
-func DescribeKeyPairs(input *ec2.DescribeKeyPairsInput, natsConn *nats.Conn) (output ec2.DescribeKeyPairsOutput, err error) {
+func DescribeKeyPairs(input *ec2.DescribeKeyPairsInput, natsConn *nats.Conn, accountID string) (output ec2.DescribeKeyPairsOutput, err error) {
 	// all input fields are optional filters
 
 	// Create NATS key service and call DescribeKeyPairs
 	keyService := handlers_ec2_key.NewNATSKeyService(natsConn)
-	result, err := keyService.DescribeKeyPairs(input)
+	result, err := keyService.DescribeKeyPairs(input, accountID)
 
 	if err != nil {
 		return output, err

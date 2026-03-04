@@ -34,6 +34,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testAccountID is the default account ID used in daemon tests.
+const testAccountID = "123456789012"
+
+// natsRequest sends a NATS request with the X-Account-ID header set.
+func natsRequest(nc *nats.Conn, subject string, data []byte, timeout time.Duration) (*nats.Msg, error) {
+	msg := nats.NewMsg(subject)
+	msg.Data = data
+	msg.Header.Set("X-Account-ID", testAccountID)
+	return nc.RequestMsg(msg, timeout)
+}
+
 // createFullTestDaemonWithStore creates a test daemon with ALL services initialized
 // and returns the shared memory store for seeding test data.
 func createFullTestDaemonWithStore(t *testing.T, natsURL string) (*Daemon, *objectstore.MemoryObjectStore) {
@@ -42,8 +53,8 @@ func createFullTestDaemonWithStore(t *testing.T, natsURL string) (*Daemon, *obje
 	memStore := objectstore.NewMemoryObjectStore()
 	cfg := daemon.config
 
-	daemon.keyService = handlers_ec2_key.NewKeyServiceImplWithStore(memStore, cfg.Predastore.Bucket, "123456789")
-	daemon.imageService = handlers_ec2_image.NewImageServiceImplWithStore(memStore, cfg.Predastore.Bucket, "123456789")
+	daemon.keyService = handlers_ec2_key.NewKeyServiceImplWithStore(memStore, cfg.Predastore.Bucket)
+	daemon.imageService = handlers_ec2_image.NewImageServiceImplWithStore(memStore, cfg.Predastore.Bucket)
 	daemon.volumeService = handlers_ec2_volume.NewVolumeServiceImplWithStore(cfg, memStore, daemon.natsConn)
 	daemon.snapshotService = handlers_ec2_snapshot.NewSnapshotServiceImplWithStore(cfg, memStore, daemon.natsConn)
 	daemon.tagsService = handlers_ec2_tags.NewTagsServiceImplWithStore(cfg, memStore)
@@ -117,7 +128,7 @@ func TestHandleNATSRequest_ValidRequest(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	serviceFn := func(in *testInput) (*testOutput, error) {
+	serviceFn := func(in *testInput, accountID string) (*testOutput, error) {
 		return &testOutput{Greeting: "hello " + in.Name}, nil
 	}
 
@@ -144,7 +155,7 @@ func TestHandleNATSRequest_MalformedJSON(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	serviceFn := func(in *testInput) (*testOutput, error) {
+	serviceFn := func(in *testInput, accountID string) (*testOutput, error) {
 		return &testOutput{Greeting: "hello"}, nil
 	}
 
@@ -170,7 +181,7 @@ func TestHandleNATSRequest_ServiceError(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	serviceFn := func(in *testInput) (*testOutput, error) {
+	serviceFn := func(in *testInput, accountID string) (*testOutput, error) {
 		return nil, fmt.Errorf("something went wrong")
 	}
 
@@ -205,7 +216,7 @@ func TestHandleEC2CreateKeyPair_RoundTrip(t *testing.T) {
 		KeyName: aws.String("test-key-001"),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.CreateKeyPair", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.CreateKeyPair", reqData, 5*time.Second)
 	require.NoError(t, err)
 	require.NotNil(t, reply)
 
@@ -293,7 +304,7 @@ func TestHandleEC2DescribeKeyPairs_RoundTrip(t *testing.T) {
 
 	input := &ec2.DescribeKeyPairsInput{}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.DescribeKeyPairs", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeKeyPairs", reqData, 5*time.Second)
 	require.NoError(t, err)
 	require.NotNil(t, reply)
 
@@ -378,7 +389,7 @@ func TestHandleEC2RunInstances_InvalidAMI(t *testing.T) {
 		MaxCount:     aws.Int64(1),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.RunInstances", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	// Should return InvalidAMIID.NotFound, not ServerInternal
@@ -405,7 +416,7 @@ func TestHandleEC2RunInstances_InvalidKeyPair(t *testing.T) {
 		MaxCount:     aws.Int64(1),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.RunInstances", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	// Should return InvalidKeyPair.NotFound, not proceed to launch
@@ -424,7 +435,7 @@ func TestHandleEC2RunInstances_ValidKeyPairPassesValidation(t *testing.T) {
 	bucket := daemon.config.Predastore.Bucket
 	_, err := memStore.PutObject(&awss3.PutObjectInput{
 		Bucket: aws.String(bucket),
-		Key:    aws.String("keys/123456789/my-key"),
+		Key:    aws.String("keys/" + testAccountID + "/my-key"),
 		Body:   strings.NewReader("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest"),
 	})
 	require.NoError(t, err)
@@ -432,7 +443,7 @@ func TestHandleEC2RunInstances_ValidKeyPairPassesValidation(t *testing.T) {
 	metadataJSON := `{"KeyPairId":"key-abc123","KeyName":"my-key","KeyFingerprint":"SHA256:test"}`
 	_, err = memStore.PutObject(&awss3.PutObjectInput{
 		Bucket: aws.String(bucket),
-		Key:    aws.String("keys/123456789/key-abc123.json"),
+		Key:    aws.String("keys/" + testAccountID + "/key-abc123.json"),
 		Body:   strings.NewReader(metadataJSON),
 	})
 	require.NoError(t, err)
@@ -449,7 +460,7 @@ func TestHandleEC2RunInstances_ValidKeyPairPassesValidation(t *testing.T) {
 		MaxCount:     aws.Int64(1),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.RunInstances", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	// Should NOT contain InvalidKeyPair.NotFound — key pair validation should pass
@@ -474,7 +485,7 @@ func TestHandleEC2RunInstances_EmptyKeyNameSkipsValidation(t *testing.T) {
 		MaxCount:     aws.Int64(1),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.RunInstances", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	// Should NOT contain InvalidKeyPair.NotFound
@@ -509,7 +520,7 @@ func TestHandleEC2RunInstances_ServiceErrorPropagated(t *testing.T) {
 		MaxCount:     aws.Int64(1),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.RunInstances", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	// Should propagate the specific AWS error from the service layer,
@@ -735,7 +746,7 @@ func TestHandleEC2GetEbsEncryptionByDefault(t *testing.T) {
 
 	input := &ec2.GetEbsEncryptionByDefaultInput{}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.GetEbsEncryptionByDefault", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.GetEbsEncryptionByDefault", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.GetEbsEncryptionByDefaultOutput
@@ -755,7 +766,7 @@ func TestHandleEC2GetSerialConsoleAccessStatus(t *testing.T) {
 
 	input := &ec2.GetSerialConsoleAccessStatusInput{}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.GetSerialConsoleAccessStatus", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.GetSerialConsoleAccessStatus", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.GetSerialConsoleAccessStatusOutput
@@ -775,7 +786,7 @@ func TestHandleEC2EnableEbsEncryptionByDefault(t *testing.T) {
 
 	input := &ec2.EnableEbsEncryptionByDefaultInput{}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.EnableEbsEncryptionByDefault", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.EnableEbsEncryptionByDefault", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.EnableEbsEncryptionByDefaultOutput
@@ -796,7 +807,7 @@ func TestHandleEC2DisableEbsEncryptionByDefault(t *testing.T) {
 
 	input := &ec2.DisableEbsEncryptionByDefaultInput{}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.DisableEbsEncryptionByDefault", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.DisableEbsEncryptionByDefault", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.DisableEbsEncryptionByDefaultOutput
@@ -817,7 +828,7 @@ func TestHandleEC2EnableSerialConsoleAccess(t *testing.T) {
 
 	input := &ec2.EnableSerialConsoleAccessInput{}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.EnableSerialConsoleAccess", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.EnableSerialConsoleAccess", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.EnableSerialConsoleAccessOutput
@@ -838,7 +849,7 @@ func TestHandleEC2DisableSerialConsoleAccess(t *testing.T) {
 
 	input := &ec2.DisableSerialConsoleAccessInput{}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.DisableSerialConsoleAccess", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.DisableSerialConsoleAccess", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.DisableSerialConsoleAccessOutput
@@ -1853,7 +1864,7 @@ func TestDelegateHandlers_RoundTrip(t *testing.T) {
 			reqData, err := json.Marshal(tt.input)
 			require.NoError(t, err)
 
-			reply, err := daemon.natsConn.Request(tt.topic, reqData, 5*time.Second)
+			reply, err := natsRequest(daemon.natsConn, tt.topic, reqData, 5*time.Second)
 			require.NoError(t, err)
 			require.NotNil(t, reply)
 
@@ -2167,7 +2178,7 @@ func TestDelegateHandlers_VPC(t *testing.T) {
 			reqData, err := json.Marshal(tt.input)
 			require.NoError(t, err)
 
-			reply, err := daemon.natsConn.Request(tt.topic, reqData, 5*time.Second)
+			reply, err := natsRequest(daemon.natsConn, tt.topic, reqData, 5*time.Second)
 			require.NoError(t, err)
 			require.NotNil(t, reply)
 
@@ -2234,7 +2245,7 @@ func TestDelegateHandlers_IGW(t *testing.T) {
 			reqData, err := json.Marshal(tt.input)
 			require.NoError(t, err)
 
-			reply, err := daemon.natsConn.Request(tt.topic, reqData, 5*time.Second)
+			reply, err := natsRequest(daemon.natsConn, tt.topic, reqData, 5*time.Second)
 			require.NoError(t, err)
 			require.NotNil(t, reply)
 
@@ -2254,7 +2265,7 @@ func TestHandleEC2CreateVpc_SuccessPath(t *testing.T) {
 
 	input := &ec2.CreateVpcInput{CidrBlock: aws.String("10.100.0.0/16")}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.CreateVpc", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.CreateVpc", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.CreateVpcOutput
@@ -2280,7 +2291,7 @@ func TestHandleEC2CreateAndDescribeVpc_RoundTrip(t *testing.T) {
 	// Create a VPC
 	createInput := &ec2.CreateVpcInput{CidrBlock: aws.String("10.200.0.0/16")}
 	reqData, _ := json.Marshal(createInput)
-	reply, err := daemon.natsConn.Request("ec2.CreateVpc", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.CreateVpc", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var createOutput ec2.CreateVpcOutput
@@ -2290,7 +2301,7 @@ func TestHandleEC2CreateAndDescribeVpc_RoundTrip(t *testing.T) {
 	// Describe VPCs and verify the created VPC appears
 	describeInput := &ec2.DescribeVpcsInput{}
 	reqData, _ = json.Marshal(describeInput)
-	reply, err = daemon.natsConn.Request("ec2.DescribeVpcs", reqData, 5*time.Second)
+	reply, err = natsRequest(daemon.natsConn, "ec2.DescribeVpcs", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var describeOutput ec2.DescribeVpcsOutput
@@ -2315,7 +2326,7 @@ func TestHandleEC2CreateInternetGateway_SuccessPath(t *testing.T) {
 
 	input := &ec2.CreateInternetGatewayInput{}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.CreateInternetGateway", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.CreateInternetGateway", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.CreateInternetGatewayOutput
@@ -2340,7 +2351,7 @@ func TestHandleEC2CreateSubnet_SuccessPath(t *testing.T) {
 	// Create a VPC first
 	vpcInput := &ec2.CreateVpcInput{CidrBlock: aws.String("10.50.0.0/16")}
 	reqData, _ := json.Marshal(vpcInput)
-	reply, err := daemon.natsConn.Request("ec2.CreateVpc", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.CreateVpc", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var vpcOutput ec2.CreateVpcOutput
@@ -2353,7 +2364,7 @@ func TestHandleEC2CreateSubnet_SuccessPath(t *testing.T) {
 		CidrBlock: aws.String("10.50.1.0/24"),
 	}
 	reqData, _ = json.Marshal(subnetInput)
-	reply, err = daemon.natsConn.Request("ec2.CreateSubnet", reqData, 5*time.Second)
+	reply, err = natsRequest(daemon.natsConn, "ec2.CreateSubnet", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var subnetOutput ec2.CreateSubnetOutput
@@ -2426,7 +2437,7 @@ func TestDelegateHandlers_EIGW(t *testing.T) {
 			reqData, err := json.Marshal(tt.input)
 			require.NoError(t, err)
 
-			reply, err := daemon.natsConn.Request(tt.topic, reqData, 5*time.Second)
+			reply, err := natsRequest(daemon.natsConn, tt.topic, reqData, 5*time.Second)
 			require.NoError(t, err)
 			require.NotNil(t, reply)
 
@@ -3106,7 +3117,7 @@ func TestHandleEC2RunInstances_InsufficientCapacity(t *testing.T) {
 		MaxCount:     aws.Int64(9999),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.RunInstances", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.RunInstances", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var errResp map[string]any

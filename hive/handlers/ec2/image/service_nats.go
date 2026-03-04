@@ -19,34 +19,34 @@ func NewNATSImageService(conn *nats.Conn) ImageService {
 	return &NATSImageService{natsConn: conn}
 }
 
-func (s *NATSImageService) DescribeImages(input *ec2.DescribeImagesInput) (*ec2.DescribeImagesOutput, error) {
-	return utils.NATSRequest[ec2.DescribeImagesOutput](s.natsConn, "ec2.DescribeImages", input, 30*time.Second)
+func (s *NATSImageService) DescribeImages(input *ec2.DescribeImagesInput, accountID string) (*ec2.DescribeImagesOutput, error) {
+	return utils.NATSRequest[ec2.DescribeImagesOutput](s.natsConn, "ec2.DescribeImages", input, 30*time.Second, accountID)
 }
 
-func (s *NATSImageService) CreateImage(input *ec2.CreateImageInput) (*ec2.CreateImageOutput, error) {
-	return utils.NATSRequest[ec2.CreateImageOutput](s.natsConn, "ec2.CreateImage", input, 120*time.Second)
+func (s *NATSImageService) CreateImage(input *ec2.CreateImageInput, accountID string) (*ec2.CreateImageOutput, error) {
+	return utils.NATSRequest[ec2.CreateImageOutput](s.natsConn, "ec2.CreateImage", input, 120*time.Second, accountID)
 }
 
-func (s *NATSImageService) CopyImage(input *ec2.CopyImageInput) (*ec2.CopyImageOutput, error) {
+func (s *NATSImageService) CopyImage(input *ec2.CopyImageInput, accountID string) (*ec2.CopyImageOutput, error) {
 	return nil, errors.New("CopyImage not yet implemented")
 }
 
-func (s *NATSImageService) DescribeImageAttribute(input *ec2.DescribeImageAttributeInput) (*ec2.DescribeImageAttributeOutput, error) {
+func (s *NATSImageService) DescribeImageAttribute(input *ec2.DescribeImageAttributeInput, accountID string) (*ec2.DescribeImageAttributeOutput, error) {
 	return nil, errors.New("DescribeImageAttribute not yet implemented")
 }
 
-func (s *NATSImageService) RegisterImage(input *ec2.RegisterImageInput) (*ec2.RegisterImageOutput, error) {
+func (s *NATSImageService) RegisterImage(input *ec2.RegisterImageInput, accountID string) (*ec2.RegisterImageOutput, error) {
 	return nil, errors.New("RegisterImage not yet implemented")
 }
 
-func (s *NATSImageService) DeregisterImage(input *ec2.DeregisterImageInput) (*ec2.DeregisterImageOutput, error) {
+func (s *NATSImageService) DeregisterImage(input *ec2.DeregisterImageInput, accountID string) (*ec2.DeregisterImageOutput, error) {
 	return nil, errors.New("DeregisterImage not yet implemented")
 }
 
-func (s *NATSImageService) ModifyImageAttribute(input *ec2.ModifyImageAttributeInput) (*ec2.ModifyImageAttributeOutput, error) {
+func (s *NATSImageService) ModifyImageAttribute(input *ec2.ModifyImageAttributeInput, accountID string) (*ec2.ModifyImageAttributeOutput, error) {
 	return nil, errors.New("ModifyImageAttribute not yet implemented")
 }
 
-func (s *NATSImageService) ResetImageAttribute(input *ec2.ResetImageAttributeInput) (*ec2.ResetImageAttributeOutput, error) {
+func (s *NATSImageService) ResetImageAttribute(input *ec2.ResetImageAttributeInput, accountID string) (*ec2.ResetImageAttributeOutput, error) {
 	return nil, errors.New("ResetImageAttribute not yet implemented")
 }

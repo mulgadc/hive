@@ -10,7 +10,7 @@ import (
 )
 
 // DeleteSubnet handles the EC2 DeleteSubnet API call
-func DeleteSubnet(input *ec2.DeleteSubnetInput, natsConn *nats.Conn) (ec2.DeleteSubnetOutput, error) {
+func DeleteSubnet(input *ec2.DeleteSubnetInput, natsConn *nats.Conn, accountID string) (ec2.DeleteSubnetOutput, error) {
 	var output ec2.DeleteSubnetOutput
 
 	if input == nil {
@@ -21,7 +21,7 @@ func DeleteSubnet(input *ec2.DeleteSubnetInput, natsConn *nats.Conn) (ec2.Delete
 	}
 
 	svc := handlers_ec2_vpc.NewNATSVPCService(natsConn)
-	result, err := svc.DeleteSubnet(input)
+	result, err := svc.DeleteSubnet(input, accountID)
 	if err != nil {
 		return output, err
 	}

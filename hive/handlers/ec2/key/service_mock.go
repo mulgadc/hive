@@ -13,7 +13,7 @@ func NewMockKeyService() KeyService {
 	return &MockKeyService{}
 }
 
-func (s *MockKeyService) CreateKeyPair(input *ec2.CreateKeyPairInput) (*ec2.CreateKeyPairOutput, error) {
+func (s *MockKeyService) CreateKeyPair(input *ec2.CreateKeyPairInput, accountID string) (*ec2.CreateKeyPairOutput, error) {
 	return &ec2.CreateKeyPairOutput{
 		KeyFingerprint: aws.String("1f:51:ae:28:bf:89:e9:d8:1f:25:5d:37:2d:7d:b8:ca:9f:f5:f1:6f"),
 		KeyMaterial:    aws.String("-----BEGIN RSA PRIVATE KEY-----\nMIIEpQIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----"),
@@ -22,14 +22,14 @@ func (s *MockKeyService) CreateKeyPair(input *ec2.CreateKeyPairInput) (*ec2.Crea
 	}, nil
 }
 
-func (s *MockKeyService) DeleteKeyPair(input *ec2.DeleteKeyPairInput) (*ec2.DeleteKeyPairOutput, error) {
+func (s *MockKeyService) DeleteKeyPair(input *ec2.DeleteKeyPairInput, accountID string) (*ec2.DeleteKeyPairOutput, error) {
 	return &ec2.DeleteKeyPairOutput{
 		Return:    aws.Bool(true),
 		KeyPairId: input.KeyPairId,
 	}, nil
 }
 
-func (s *MockKeyService) DescribeKeyPairs(input *ec2.DescribeKeyPairsInput) (*ec2.DescribeKeyPairsOutput, error) {
+func (s *MockKeyService) DescribeKeyPairs(input *ec2.DescribeKeyPairsInput, accountID string) (*ec2.DescribeKeyPairsOutput, error) {
 	return &ec2.DescribeKeyPairsOutput{
 		KeyPairs: []*ec2.KeyPairInfo{
 			{
@@ -42,7 +42,7 @@ func (s *MockKeyService) DescribeKeyPairs(input *ec2.DescribeKeyPairsInput) (*ec
 	}, nil
 }
 
-func (s *MockKeyService) ImportKeyPair(input *ec2.ImportKeyPairInput) (*ec2.ImportKeyPairOutput, error) {
+func (s *MockKeyService) ImportKeyPair(input *ec2.ImportKeyPairInput, accountID string) (*ec2.ImportKeyPairOutput, error) {
 	return &ec2.ImportKeyPairOutput{
 		KeyFingerprint: aws.String("1f:51:ae:28:bf:89:e9:d8:1f:25:5d:37:2d:7d:b8:ca:9f:f5:f1:6f"),
 		KeyName:        input.KeyName,

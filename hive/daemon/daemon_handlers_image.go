@@ -29,6 +29,8 @@ func (d *Daemon) handleEC2CreateImage(msg *nats.Msg) {
 		return
 	}
 
+	accountID := utils.AccountIDFromMsg(msg)
+
 	if input.InstanceId == nil || *input.InstanceId == "" {
 		respondWithError(msg, awserrors.ErrorMissingParameter)
 		return
@@ -63,6 +65,13 @@ func (d *Daemon) handleEC2CreateImage(msg *nats.Msg) {
 		return
 	}
 
+	// Verify the caller owns this instance
+	if accountID != "" && instance.AccountID != "" && instance.AccountID != accountID {
+		slog.Warn("CreateImage: account does not own instance", "instanceId", instanceID, "accountID", accountID, "ownerAccountID", instance.AccountID)
+		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
+		return
+	}
+
 	if status != vm.StateRunning && status != vm.StateStopped {
 		slog.Warn("CreateImage: instance not in valid state", "instanceId", instanceID, "status", status)
 		respondWithError(msg, awserrors.ErrorIncorrectInstanceState)
@@ -82,7 +91,7 @@ func (d *Daemon) handleEC2CreateImage(msg *nats.Msg) {
 		IsRunning:     status == vm.StateRunning,
 	}
 
-	output, err := d.imageService.CreateImageFromInstance(params)
+	output, err := d.imageService.CreateImageFromInstance(params, accountID)
 	if err != nil {
 		slog.Error("CreateImage: service failed", "instanceId", instanceID, "err", err)
 		respondWithError(msg, awserrors.ValidErrorCode(err.Error()))

@@ -54,7 +54,7 @@ func TestDescribeVolumeStatus_InputValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := DescribeVolumeStatus(tt.input, nil)
+			_, err := DescribeVolumeStatus(tt.input, nil, "")
 
 			if tt.wantErr {
 				assert.Error(t, err)

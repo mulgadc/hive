@@ -76,7 +76,7 @@ func NewVolumeServiceImplWithStore(cfg *config.Config, store objectstore.ObjectS
 }
 
 // CreateVolume creates a new EBS volume via viperblock and persists its config to S3
-func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Volume, error) {
+func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput, accountID string) (*ec2.Volume, error) {
 	if input == nil {
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
@@ -145,6 +145,7 @@ func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Vol
 	volumeConfig := viperblock.VolumeConfig{
 		VolumeMetadata: viperblock.VolumeMetadata{
 			VolumeID:         volumeID,
+			TenantID:         accountID,
 			SizeGiB:          sizeGiB,
 			State:            "available",
 			CreatedAt:        now,
@@ -223,7 +224,7 @@ func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput) (*ec2.Vol
 }
 
 // DescribeVolumes lists EBS volumes by reading config.json files from S3
-func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput) (*ec2.DescribeVolumesOutput, error) {
+func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput, accountID string) (*ec2.DescribeVolumesOutput, error) {
 	if input == nil {
 		input = &ec2.DescribeVolumesInput{}
 	}
@@ -241,7 +242,7 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput) (*e
 				requested++
 			}
 		}
-		volumes = s.fetchVolumesByIDs(input.VolumeIds)
+		volumes = s.fetchVolumesByIDs(input.VolumeIds, accountID)
 		// AWS returns InvalidVolume.NotFound if any requested ID is missing
 		if len(volumes) != requested {
 			return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
@@ -257,13 +258,19 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput) (*e
 	}
 
 	for _, volumeID := range volumeIDs {
-		vol, err := s.getVolumeByID(volumeID)
+		result, err := s.getVolumeByID(volumeID)
 		if err != nil {
 			slog.Error("Failed to get volume", "volumeId", volumeID, "err", err)
 			continue
 		}
 
-		volumes = append(volumes, vol)
+		// Skip volumes not owned by the caller's account.
+		// Pre-Phase4 volumes (empty TenantID) are visible to all accounts.
+		if accountID != "" && result.tenantID != "" && result.tenantID != accountID {
+			continue
+		}
+
+		volumes = append(volumes, result.volume)
 	}
 
 	slog.Info("DescribeVolumes completed", "count", len(volumes))
@@ -274,7 +281,7 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput) (*e
 }
 
 // DescribeVolumeStatus returns the status of one or more EBS volumes
-func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatusInput) (*ec2.DescribeVolumeStatusOutput, error) {
+func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatusInput, accountID string) (*ec2.DescribeVolumeStatusOutput, error) {
 	if input == nil {
 		input = &ec2.DescribeVolumeStatusInput{}
 	}
@@ -289,9 +296,13 @@ func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatus
 			if vid == nil {
 				continue
 			}
-			item, err := s.getVolumeStatusByID(*vid)
+			item, tenantID, err := s.getVolumeStatusByID(*vid)
 			if err != nil {
 				slog.Error("DescribeVolumeStatus volume not found", "volumeId", *vid, "err", err)
+				return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
+			}
+			// Skip volumes not owned by the caller's account
+			if accountID != "" && tenantID != "" && tenantID != accountID {
 				return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
 			}
 			statusItems = append(statusItems, item)
@@ -307,9 +318,15 @@ func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatus
 	}
 
 	for _, volumeID := range volumeIDs {
-		item, err := s.getVolumeStatusByID(volumeID)
+		item, tenantID, err := s.getVolumeStatusByID(volumeID)
 		if err != nil {
 			slog.Error("Failed to get volume status", "volumeId", volumeID, "err", err)
+			continue
+		}
+
+		// Skip volumes not owned by the caller's account.
+		// Pre-Phase4 volumes (empty TenantID) are visible to all accounts.
+		if accountID != "" && tenantID != "" && tenantID != accountID {
 			continue
 		}
 
@@ -325,15 +342,16 @@ func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatus
 
 // getVolumeStatusByID builds a VolumeStatusItem by reusing getVolumeByID
 // to validate the volume exists, then returning static health status.
-func (s *VolumeServiceImpl) getVolumeStatusByID(volumeID string) (*ec2.VolumeStatusItem, error) {
-	vol, err := s.getVolumeByID(volumeID)
+// Returns the status item, the tenant ID for account scoping, and any error.
+func (s *VolumeServiceImpl) getVolumeStatusByID(volumeID string) (*ec2.VolumeStatusItem, string, error) {
+	result, err := s.getVolumeByID(volumeID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	return &ec2.VolumeStatusItem{
-		VolumeId:         vol.VolumeId,
-		AvailabilityZone: vol.AvailabilityZone,
+		VolumeId:         result.volume.VolumeId,
+		AvailabilityZone: result.volume.AvailabilityZone,
 		VolumeStatus: &ec2.VolumeStatusInfo{
 			Status: aws.String("ok"),
 			Details: []*ec2.VolumeStatusDetails{
@@ -349,7 +367,7 @@ func (s *VolumeServiceImpl) getVolumeStatusByID(volumeID string) (*ec2.VolumeSta
 		},
 		Actions: []*ec2.VolumeStatusAction{},
 		Events:  []*ec2.VolumeStatusEvent{},
-	}, nil
+	}, result.tenantID, nil
 }
 
 // listAllVolumeIDs lists all volume IDs from S3 by scanning bucket prefixes.
@@ -389,8 +407,9 @@ func (s *VolumeServiceImpl) listAllVolumeIDs() ([]string, error) {
 	return volumeIDs, nil
 }
 
-// fetchVolumesByIDs fetches multiple volumes in parallel by their IDs
-func (s *VolumeServiceImpl) fetchVolumesByIDs(volumeIDs []*string) []*ec2.Volume {
+// fetchVolumesByIDs fetches multiple volumes in parallel by their IDs,
+// filtering by accountID for account scoping.
+func (s *VolumeServiceImpl) fetchVolumesByIDs(volumeIDs []*string, accountID string) []*ec2.Volume {
 	var (
 		volumes []*ec2.Volume
 		mu      sync.Mutex
@@ -406,14 +425,20 @@ func (s *VolumeServiceImpl) fetchVolumesByIDs(volumeIDs []*string) []*ec2.Volume
 		go func(volID string) {
 			defer wg.Done()
 
-			vol, err := s.getVolumeByID(volID)
+			result, err := s.getVolumeByID(volID)
 			if err != nil {
 				slog.Debug("Volume not found", "volumeId", volID, "err", err)
 				return
 			}
 
+			// Skip volumes not owned by the caller's account.
+			// Pre-Phase4 volumes (empty TenantID) are visible to all accounts.
+			if accountID != "" && result.tenantID != "" && result.tenantID != accountID {
+				return
+			}
+
 			mu.Lock()
-			volumes = append(volumes, vol)
+			volumes = append(volumes, result.volume)
 			mu.Unlock()
 		}(*volumeID)
 	}
@@ -422,8 +447,16 @@ func (s *VolumeServiceImpl) fetchVolumesByIDs(volumeIDs []*string) []*ec2.Volume
 	return volumes
 }
 
-// getVolumeByID fetches a single volume's config from S3 and builds an EC2 Volume
-func (s *VolumeServiceImpl) getVolumeByID(volumeID string) (*ec2.Volume, error) {
+// volumeResult bundles an ec2.Volume with the owning account's TenantID
+// so callers can filter by account without a second config read.
+type volumeResult struct {
+	volume   *ec2.Volume
+	tenantID string
+}
+
+// getVolumeByID fetches a single volume's config from S3 and builds an EC2 Volume.
+// Returns the volume and the stored TenantID for account scoping.
+func (s *VolumeServiceImpl) getVolumeByID(volumeID string) (*volumeResult, error) {
 	cfg, err := s.GetVolumeConfig(volumeID)
 	if err != nil {
 		return nil, err
@@ -496,7 +529,7 @@ func (s *VolumeServiceImpl) getVolumeByID(volumeID string) (*ec2.Volume, error) 
 		volume.Tags = tags
 	}
 
-	return volume, nil
+	return &volumeResult{volume: volume, tenantID: volMeta.TenantID}, nil
 }
 
 // volumeConfigWrapper matches the JSON structure stored in S3 config.json files
@@ -620,7 +653,7 @@ func (s *VolumeServiceImpl) UpdateVolumeState(volumeID, state, attachedInstance,
 }
 
 // ModifyVolume modifies an EBS volume (grow-only, requires stopped instance)
-func (s *VolumeServiceImpl) ModifyVolume(input *ec2.ModifyVolumeInput) (*ec2.ModifyVolumeOutput, error) {
+func (s *VolumeServiceImpl) ModifyVolume(input *ec2.ModifyVolumeInput, accountID string) (*ec2.ModifyVolumeOutput, error) {
 	if input.VolumeId == nil || *input.VolumeId == "" {
 		return nil, errors.New(awserrors.ErrorInvalidVolumeIDMalformed)
 	}
@@ -632,6 +665,11 @@ func (s *VolumeServiceImpl) ModifyVolume(input *ec2.ModifyVolumeInput) (*ec2.Mod
 	if err != nil {
 		slog.Error("ModifyVolume failed to get volume config", "volumeId", volumeID, "err", err)
 		return nil, err
+	}
+
+	// Verify caller owns this volume
+	if accountID != "" && cfg.VolumeMetadata.TenantID != "" && cfg.VolumeMetadata.TenantID != accountID {
+		return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
 	}
 
 	volMeta := &cfg.VolumeMetadata
@@ -703,7 +741,7 @@ func (s *VolumeServiceImpl) ModifyVolume(input *ec2.ModifyVolumeInput) (*ec2.Mod
 }
 
 // DeleteVolume deletes an EBS volume: validates state, notifies viperblockd, and removes S3 data
-func (s *VolumeServiceImpl) DeleteVolume(input *ec2.DeleteVolumeInput) (*ec2.DeleteVolumeOutput, error) {
+func (s *VolumeServiceImpl) DeleteVolume(input *ec2.DeleteVolumeInput, accountID string) (*ec2.DeleteVolumeOutput, error) {
 	if input == nil || input.VolumeId == nil || *input.VolumeId == "" {
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
@@ -716,6 +754,11 @@ func (s *VolumeServiceImpl) DeleteVolume(input *ec2.DeleteVolumeInput) (*ec2.Del
 	if err != nil {
 		slog.Error("DeleteVolume failed to get volume config", "volumeId", volumeID, "err", err)
 		return nil, err
+	}
+
+	// Verify caller owns this volume
+	if accountID != "" && cfg.VolumeMetadata.TenantID != "" && cfg.VolumeMetadata.TenantID != accountID {
+		return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
 	}
 
 	// Validate: volume must be available and not attached
