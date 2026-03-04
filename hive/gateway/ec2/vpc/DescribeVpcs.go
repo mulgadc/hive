@@ -7,11 +7,11 @@ import (
 )
 
 // DescribeVpcs handles the EC2 DescribeVpcs API call
-func DescribeVpcs(input *ec2.DescribeVpcsInput, natsConn *nats.Conn) (ec2.DescribeVpcsOutput, error) {
+func DescribeVpcs(input *ec2.DescribeVpcsInput, natsConn *nats.Conn, accountID string) (ec2.DescribeVpcsOutput, error) {
 	var output ec2.DescribeVpcsOutput
 
 	svc := handlers_ec2_vpc.NewNATSVPCService(natsConn)
-	result, err := svc.DescribeVpcs(input)
+	result, err := svc.DescribeVpcs(input, accountID)
 	if err != nil {
 		return output, err
 	}

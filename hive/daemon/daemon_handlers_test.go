@@ -2178,7 +2178,7 @@ func TestDelegateHandlers_VPC(t *testing.T) {
 			reqData, err := json.Marshal(tt.input)
 			require.NoError(t, err)
 
-			reply, err := daemon.natsConn.Request(tt.topic, reqData, 5*time.Second)
+			reply, err := natsRequestWithAccount(daemon.natsConn, tt.topic, reqData, 5*time.Second)
 			require.NoError(t, err)
 			require.NotNil(t, reply)
 
@@ -2265,7 +2265,7 @@ func TestHandleEC2CreateVpc_SuccessPath(t *testing.T) {
 
 	input := &ec2.CreateVpcInput{CidrBlock: aws.String("10.100.0.0/16")}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.CreateVpc", reqData, 5*time.Second)
+	reply, err := natsRequestWithAccount(daemon.natsConn, "ec2.CreateVpc", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.CreateVpcOutput
@@ -2291,7 +2291,7 @@ func TestHandleEC2CreateAndDescribeVpc_RoundTrip(t *testing.T) {
 	// Create a VPC
 	createInput := &ec2.CreateVpcInput{CidrBlock: aws.String("10.200.0.0/16")}
 	reqData, _ := json.Marshal(createInput)
-	reply, err := daemon.natsConn.Request("ec2.CreateVpc", reqData, 5*time.Second)
+	reply, err := natsRequestWithAccount(daemon.natsConn, "ec2.CreateVpc", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var createOutput ec2.CreateVpcOutput
@@ -2301,7 +2301,7 @@ func TestHandleEC2CreateAndDescribeVpc_RoundTrip(t *testing.T) {
 	// Describe VPCs and verify the created VPC appears
 	describeInput := &ec2.DescribeVpcsInput{}
 	reqData, _ = json.Marshal(describeInput)
-	reply, err = daemon.natsConn.Request("ec2.DescribeVpcs", reqData, 5*time.Second)
+	reply, err = natsRequestWithAccount(daemon.natsConn, "ec2.DescribeVpcs", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var describeOutput ec2.DescribeVpcsOutput
@@ -2351,7 +2351,7 @@ func TestHandleEC2CreateSubnet_SuccessPath(t *testing.T) {
 	// Create a VPC first
 	vpcInput := &ec2.CreateVpcInput{CidrBlock: aws.String("10.50.0.0/16")}
 	reqData, _ := json.Marshal(vpcInput)
-	reply, err := daemon.natsConn.Request("ec2.CreateVpc", reqData, 5*time.Second)
+	reply, err := natsRequestWithAccount(daemon.natsConn, "ec2.CreateVpc", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var vpcOutput ec2.CreateVpcOutput
@@ -2364,7 +2364,7 @@ func TestHandleEC2CreateSubnet_SuccessPath(t *testing.T) {
 		CidrBlock: aws.String("10.50.1.0/24"),
 	}
 	reqData, _ = json.Marshal(subnetInput)
-	reply, err = daemon.natsConn.Request("ec2.CreateSubnet", reqData, 5*time.Second)
+	reply, err = natsRequestWithAccount(daemon.natsConn, "ec2.CreateSubnet", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var subnetOutput ec2.CreateSubnetOutput

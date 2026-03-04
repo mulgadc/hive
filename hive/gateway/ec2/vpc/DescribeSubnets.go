@@ -7,11 +7,11 @@ import (
 )
 
 // DescribeSubnets handles the EC2 DescribeSubnets API call
-func DescribeSubnets(input *ec2.DescribeSubnetsInput, natsConn *nats.Conn) (ec2.DescribeSubnetsOutput, error) {
+func DescribeSubnets(input *ec2.DescribeSubnetsInput, natsConn *nats.Conn, accountID string) (ec2.DescribeSubnetsOutput, error) {
 	var output ec2.DescribeSubnetsOutput
 
 	svc := handlers_ec2_vpc.NewNATSVPCService(natsConn)
-	result, err := svc.DescribeSubnets(input)
+	result, err := svc.DescribeSubnets(input, accountID)
 	if err != nil {
 		return output, err
 	}

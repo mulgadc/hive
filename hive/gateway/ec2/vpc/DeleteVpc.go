@@ -10,7 +10,7 @@ import (
 )
 
 // DeleteVpc handles the EC2 DeleteVpc API call
-func DeleteVpc(input *ec2.DeleteVpcInput, natsConn *nats.Conn) (ec2.DeleteVpcOutput, error) {
+func DeleteVpc(input *ec2.DeleteVpcInput, natsConn *nats.Conn, accountID string) (ec2.DeleteVpcOutput, error) {
 	var output ec2.DeleteVpcOutput
 
 	if input == nil {
@@ -21,7 +21,7 @@ func DeleteVpc(input *ec2.DeleteVpcInput, natsConn *nats.Conn) (ec2.DeleteVpcOut
 	}
 
 	svc := handlers_ec2_vpc.NewNATSVPCService(natsConn)
-	result, err := svc.DeleteVpc(input)
+	result, err := svc.DeleteVpc(input, accountID)
 	if err != nil {
 		return output, err
 	}

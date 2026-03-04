@@ -194,31 +194,31 @@ var ec2Actions = map[string]EC2Handler{
 		return gateway_ec2_eigw.DescribeEgressOnlyInternetGateways(input, gw.NATSConn)
 	}),
 	"CreateVpc": ec2Handler(func(input *ec2.CreateVpcInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_vpc.CreateVpc(input, gw.NATSConn)
+		return gateway_ec2_vpc.CreateVpc(input, gw.NATSConn, accountID)
 	}),
 	"DeleteVpc": ec2Handler(func(input *ec2.DeleteVpcInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_vpc.DeleteVpc(input, gw.NATSConn)
+		return gateway_ec2_vpc.DeleteVpc(input, gw.NATSConn, accountID)
 	}),
 	"DescribeVpcs": ec2Handler(func(input *ec2.DescribeVpcsInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_vpc.DescribeVpcs(input, gw.NATSConn)
+		return gateway_ec2_vpc.DescribeVpcs(input, gw.NATSConn, accountID)
 	}),
 	"CreateSubnet": ec2Handler(func(input *ec2.CreateSubnetInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_vpc.CreateSubnet(input, gw.NATSConn)
+		return gateway_ec2_vpc.CreateSubnet(input, gw.NATSConn, accountID)
 	}),
 	"DeleteSubnet": ec2Handler(func(input *ec2.DeleteSubnetInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_vpc.DeleteSubnet(input, gw.NATSConn)
+		return gateway_ec2_vpc.DeleteSubnet(input, gw.NATSConn, accountID)
 	}),
 	"DescribeSubnets": ec2Handler(func(input *ec2.DescribeSubnetsInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_vpc.DescribeSubnets(input, gw.NATSConn)
+		return gateway_ec2_vpc.DescribeSubnets(input, gw.NATSConn, accountID)
 	}),
 	"CreateNetworkInterface": ec2Handler(func(input *ec2.CreateNetworkInterfaceInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_vpc.CreateNetworkInterface(input, gw.NATSConn)
+		return gateway_ec2_vpc.CreateNetworkInterface(input, gw.NATSConn, accountID)
 	}),
 	"DeleteNetworkInterface": ec2Handler(func(input *ec2.DeleteNetworkInterfaceInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_vpc.DeleteNetworkInterface(input, gw.NATSConn)
+		return gateway_ec2_vpc.DeleteNetworkInterface(input, gw.NATSConn, accountID)
 	}),
 	"DescribeNetworkInterfaces": ec2Handler(func(input *ec2.DescribeNetworkInterfacesInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_vpc.DescribeNetworkInterfaces(input, gw.NATSConn)
+		return gateway_ec2_vpc.DescribeNetworkInterfaces(input, gw.NATSConn, accountID)
 	}),
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -36,7 +37,7 @@ type ENIRecord struct {
 }
 
 // CreateNetworkInterface creates a new ENI in the specified subnet
-func (s *VPCServiceImpl) CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInput) (*ec2.CreateNetworkInterfaceOutput, error) {
+func (s *VPCServiceImpl) CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInput, accountID string) (*ec2.CreateNetworkInterfaceOutput, error) {
 	if err := s.ensureKVReady(); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
@@ -46,8 +47,8 @@ func (s *VPCServiceImpl) CreateNetworkInterface(input *ec2.CreateNetworkInterfac
 
 	subnetId := *input.SubnetId
 
-	// Verify subnet exists and get its details
-	subnetEntry, err := s.subnetKV.Get(subnetId)
+	// Verify subnet exists and belongs to this account
+	subnetEntry, err := s.subnetKV.Get(accountKey(accountID, subnetId))
 	if err != nil {
 		return nil, errors.New(awserrors.ErrorInvalidSubnetIDNotFound)
 	}
@@ -107,22 +108,22 @@ func (s *VPCServiceImpl) CreateNetworkInterface(input *ec2.CreateNetworkInterfac
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal ENI record: %w", err)
 	}
-	if _, err := s.eniKV.Put(eniId, data); err != nil {
+	if _, err := s.eniKV.Put(accountKey(accountID, eniId), data); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	slog.Info("CreateNetworkInterface completed", "eniId", eniId, "subnetId", subnetId, "ip", privateIP)
+	slog.Info("CreateNetworkInterface completed", "eniId", eniId, "subnetId", subnetId, "ip", privateIP, "accountID", accountID)
 
 	// Publish vpc.create-port event for vpcd topology translation
 	s.publishENIEvent("vpc.create-port", eniId, subnetId, subnet.VpcId, privateIP, macAddr)
 
 	return &ec2.CreateNetworkInterfaceOutput{
-		NetworkInterface: s.eniRecordToEC2(&record),
+		NetworkInterface: s.eniRecordToEC2(&record, accountID),
 	}, nil
 }
 
 // DeleteNetworkInterface deletes an ENI
-func (s *VPCServiceImpl) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfaceInput) (*ec2.DeleteNetworkInterfaceOutput, error) {
+func (s *VPCServiceImpl) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfaceInput, accountID string) (*ec2.DeleteNetworkInterfaceOutput, error) {
 	if err := s.ensureKVReady(); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
@@ -131,9 +132,10 @@ func (s *VPCServiceImpl) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfac
 	}
 
 	eniId := *input.NetworkInterfaceId
+	key := accountKey(accountID, eniId)
 
 	// Get the ENI record
-	entry, err := s.eniKV.Get(eniId)
+	entry, err := s.eniKV.Get(key)
 	if err != nil {
 		return nil, errors.New(awserrors.ErrorInvalidNetworkInterfaceIDNotFound)
 	}
@@ -153,11 +155,11 @@ func (s *VPCServiceImpl) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfac
 		slog.Warn("Failed to release IP during ENI delete", "eni", eniId, "ip", record.PrivateIpAddress, "err", err)
 	}
 
-	if err := s.eniKV.Delete(eniId); err != nil {
+	if err := s.eniKV.Delete(key); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	slog.Info("DeleteNetworkInterface completed", "eniId", eniId)
+	slog.Info("DeleteNetworkInterface completed", "eniId", eniId, "accountID", accountID)
 
 	// Publish vpc.delete-port event for vpcd topology cleanup
 	s.publishENIEvent("vpc.delete-port", eniId, record.SubnetId, record.VpcId, record.PrivateIpAddress, record.MacAddress)
@@ -166,7 +168,7 @@ func (s *VPCServiceImpl) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfac
 }
 
 // DescribeNetworkInterfaces lists ENIs with optional filters
-func (s *VPCServiceImpl) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput) (*ec2.DescribeNetworkInterfacesOutput, error) {
+func (s *VPCServiceImpl) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput, accountID string) (*ec2.DescribeNetworkInterfacesOutput, error) {
 	if err := s.ensureKVReady(); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
@@ -197,13 +199,14 @@ func (s *VPCServiceImpl) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInt
 		}
 	}
 
+	prefix := accountID + "."
 	keys, err := s.eniKV.Keys()
 	if err != nil && !errors.Is(err, nats.ErrNoKeysFound) {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
 	for _, key := range keys {
-		if len(eniIDs) > 0 && !eniIDs[key] {
+		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
 
@@ -219,6 +222,10 @@ func (s *VPCServiceImpl) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInt
 			continue
 		}
 
+		if len(eniIDs) > 0 && !eniIDs[record.NetworkInterfaceId] {
+			continue
+		}
+
 		if subnetFilter != "" && record.SubnetId != subnetFilter {
 			continue
 		}
@@ -229,7 +236,7 @@ func (s *VPCServiceImpl) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInt
 			continue
 		}
 
-		enis = append(enis, s.eniRecordToEC2(&record))
+		enis = append(enis, s.eniRecordToEC2(&record, accountID))
 	}
 
 	// If specific ENI IDs were requested but not found, return error
@@ -247,19 +254,21 @@ func (s *VPCServiceImpl) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInt
 		}
 	}
 
-	slog.Info("DescribeNetworkInterfaces completed", "count", len(enis))
+	slog.Info("DescribeNetworkInterfaces completed", "count", len(enis), "accountID", accountID)
 
 	return &ec2.DescribeNetworkInterfacesOutput{
 		NetworkInterfaces: enis,
 	}, nil
 }
 
-// AttachENI marks an ENI as attached to an instance (internal use by RunInstances)
-func (s *VPCServiceImpl) AttachENI(eniId, instanceId string, deviceIndex int64) (string, error) {
+// AttachENI marks an ENI as attached to an instance (internal use by RunInstances).
+// accountID scopes the lookup to the correct KV key.
+func (s *VPCServiceImpl) AttachENI(accountID, eniId, instanceId string, deviceIndex int64) (string, error) {
 	if err := s.ensureKVReady(); err != nil {
 		return "", errors.New(awserrors.ErrorServerInternal)
 	}
-	entry, err := s.eniKV.Get(eniId)
+	key := accountKey(accountID, eniId)
+	entry, err := s.eniKV.Get(key)
 	if err != nil {
 		return "", errors.New(awserrors.ErrorInvalidNetworkInterfaceIDNotFound)
 	}
@@ -283,7 +292,7 @@ func (s *VPCServiceImpl) AttachENI(eniId, instanceId string, deviceIndex int64) 
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal ENI record: %w", err)
 	}
-	if _, err := s.eniKV.Update(eniId, data, entry.Revision()); err != nil {
+	if _, err := s.eniKV.Update(key, data, entry.Revision()); err != nil {
 		return "", errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -291,12 +300,14 @@ func (s *VPCServiceImpl) AttachENI(eniId, instanceId string, deviceIndex int64) 
 	return attachmentId, nil
 }
 
-// DetachENI marks an ENI as detached from an instance (internal use by TerminateInstances)
-func (s *VPCServiceImpl) DetachENI(eniId string) error {
+// DetachENI marks an ENI as detached from an instance (internal use by TerminateInstances).
+// accountID scopes the lookup to the correct KV key.
+func (s *VPCServiceImpl) DetachENI(accountID, eniId string) error {
 	if err := s.ensureKVReady(); err != nil {
 		return errors.New(awserrors.ErrorServerInternal)
 	}
-	entry, err := s.eniKV.Get(eniId)
+	key := accountKey(accountID, eniId)
+	entry, err := s.eniKV.Get(key)
 	if err != nil {
 		return errors.New(awserrors.ErrorInvalidNetworkInterfaceIDNotFound)
 	}
@@ -315,7 +326,7 @@ func (s *VPCServiceImpl) DetachENI(eniId string) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal ENI record: %w", err)
 	}
-	if _, err := s.eniKV.Update(eniId, data, entry.Revision()); err != nil {
+	if _, err := s.eniKV.Update(key, data, entry.Revision()); err != nil {
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -324,7 +335,7 @@ func (s *VPCServiceImpl) DetachENI(eniId string) error {
 }
 
 // eniRecordToEC2 converts an ENI record to an EC2 NetworkInterface
-func (s *VPCServiceImpl) eniRecordToEC2(record *ENIRecord) *ec2.NetworkInterface {
+func (s *VPCServiceImpl) eniRecordToEC2(record *ENIRecord, accountID string) *ec2.NetworkInterface {
 	eni := &ec2.NetworkInterface{
 		NetworkInterfaceId: aws.String(record.NetworkInterfaceId),
 		SubnetId:           aws.String(record.SubnetId),
@@ -334,7 +345,7 @@ func (s *VPCServiceImpl) eniRecordToEC2(record *ENIRecord) *ec2.NetworkInterface
 		MacAddress:         aws.String(record.MacAddress),
 		Description:        aws.String(record.Description),
 		Status:             aws.String(record.Status),
-		OwnerId:            aws.String("123456789012"),
+		OwnerId:            aws.String(accountID),
 		InterfaceType:      aws.String("interface"),
 		SourceDestCheck:    aws.Bool(true),
 		PrivateIpAddresses: []*ec2.NetworkInterfacePrivateIpAddress{

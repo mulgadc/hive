@@ -150,7 +150,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 			eniOut, eniErr := d.vpcService.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
 				SubnetId:    runInstancesInput.SubnetId,
 				Description: aws.String("Primary network interface for " + instance.ID),
-			})
+			}, accountID)
 			if eniErr != nil {
 				slog.Error("handleEC2RunInstances auto-create ENI failed", "instanceId", instance.ID, "subnetId", *runInstancesInput.SubnetId, "err", eniErr)
 				lastRunErr = eniErr
