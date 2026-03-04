@@ -178,6 +178,8 @@ func (s *IGWServiceImpl) DescribeInternetGateways(input *ec2.DescribeInternetGat
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
+	foundIDs := make(map[string]bool)
+
 	for _, key := range keys {
 		if !strings.HasPrefix(key, prefix) {
 			continue
@@ -200,6 +202,14 @@ func (s *IGWServiceImpl) DescribeInternetGateways(input *ec2.DescribeInternetGat
 		}
 
 		igws = append(igws, s.recordToEC2(&record))
+		foundIDs[record.InternetGatewayId] = true
+	}
+
+	// Return error if specific IDs were requested but not found
+	for id := range igwIDs {
+		if !foundIDs[id] {
+			return nil, errors.New(awserrors.ErrorInvalidInternetGatewayIDNotFound)
+		}
 	}
 
 	slog.Info("DescribeInternetGateways completed", "count", len(igws), "accountID", accountID)

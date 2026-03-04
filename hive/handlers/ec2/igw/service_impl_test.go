@@ -104,11 +104,10 @@ func TestDeleteInternetGateway(t *testing.T) {
 	}, testAccountID)
 	require.NoError(t, err)
 
-	desc, err := svc.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{
+	_, err = svc.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{
 		InternetGatewayIds: []*string{aws.String(igwID)},
 	}, testAccountID)
-	require.NoError(t, err)
-	assert.Empty(t, desc.InternetGateways)
+	assert.ErrorContains(t, err, "InvalidInternetGatewayID.NotFound")
 }
 
 func TestDeleteInternetGateway_NotFound(t *testing.T) {
