@@ -205,6 +205,86 @@
 - Delete all test policies (`list-policies` count = 0)
 - Clean up AWS CLI profiles
 
+### Phase 8: EC2 Account Scoping
+
+Tests that EC2 resources are properly isolated between tenant accounts (Alpha, Beta). Based on `docs/development/feature/iam-phase4-e2e-test-guide.md`. Skips CreateImage (mulga-612) and instance tags (mulga-613).
+
+#### Step 1: Account Setup
+- `hive admin account create` (Team Alpha, Team Beta)
+- Configure AWS CLI profiles
+- Verify auth for both accounts
+
+#### Step 2: Instance Scoping
+- Alpha + Beta each launch 1 instance
+- `describe-instances` isolation (each sees only own)
+- OwnerId field matches account ID
+- Cross-account `stop-instances` → `InvalidInstanceID.NotFound`
+- Cross-account `terminate-instances` → `InvalidInstanceID.NotFound`
+- Cross-account `start-instances` → `InvalidInstanceID.NotFound`
+- Cross-account `modify-instance-attribute` → `InvalidInstanceID.NotFound`
+- Cross-account `get-console-output` → `InvalidInstanceID.NotFound`
+
+#### Step 3: Volume Scoping
+- Alpha + Beta each create 1 volume
+- `describe-volumes` isolation
+- Cross-account `describe-volumes` by ID → `InvalidVolume.NotFound`
+- Cross-account `delete-volume` → `InvalidVolume.NotFound`
+- Cross-account `attach-volume` → `InvalidVolume.NotFound`
+- Cross-account `detach-volume` → `InvalidVolume.NotFound`
+- Cross-account `modify-volume` → `InvalidVolume.NotFound`
+
+#### Step 4: Key Pair Scoping
+- Alpha + Beta each create key pair
+- `describe-key-pairs` isolation
+- Same key name in both accounts (namespace isolation — different KeyPairIds)
+- Cross-account `delete-key-pair` → no effect on other account's key
+- `import-key-pair` → invisible to other account
+
+#### Step 5: Snapshot Scoping
+- Alpha + Beta each create snapshot from own volume
+- `describe-snapshots` isolation + OwnerId verification
+- Cross-account `delete-snapshot` → `UnauthorizedOperation`
+- Cross-account `create-snapshot` from other's volume → `InvalidVolume.NotFound`
+
+#### Step 6: VPC/Subnet Scoping
+- Alpha + Beta each create VPC (same CIDR — no conflict)
+- `describe-vpcs` isolation
+- Cross-account `describe-vpcs` by ID → `InvalidVpcID.NotFound`
+- Cross-account `delete-vpc` → `InvalidVpcID.NotFound`
+- Alpha + Beta each create subnet
+- `describe-subnets` isolation
+- Cross-account `create-subnet` in other's VPC → `InvalidVpcID.NotFound`
+- Cross-account `delete-subnet` → `InvalidSubnetID.NotFound`
+
+#### Step 7: IGW + EIGW Scoping
+- Alpha + Beta each create IGW
+- `describe-internet-gateways` isolation
+- Cross-account `describe-internet-gateways` by ID → `InvalidInternetGatewayID.NotFound`
+- Cross-account `delete-internet-gateway` → `InvalidInternetGatewayID.NotFound`
+- Cross-account `attach-internet-gateway` → `InvalidInternetGatewayID.NotFound`
+- Cross-account `detach-internet-gateway` → `InvalidInternetGatewayID.NotFound`
+- Alpha + Beta each create EIGW
+- `describe-egress-only-internet-gateways` isolation
+- Cross-account EIGW delete → no effect
+
+#### Step 8: Account Settings
+- Alpha `enable-ebs-encryption-by-default` → Beta unaffected
+- Independent toggle verification
+
+#### Step 9: Global Resources
+- `describe-regions` identical for both accounts
+- `describe-availability-zones` identical
+- `describe-instance-types` identical
+
+#### Step 10: Edge Cases
+- Empty account (Gamma) — no resources visible
+- Root isolation from tenants (root cannot see tenant instances)
+- Non-existent resource IDs → same error as cross-account (no info leakage)
+
+#### Step 11: Cleanup
+- Terminate instances, delete volumes/snapshots/keys/VPCs/IGWs/EIGWs/subnets
+- Clean up AWS CLI profiles
+
 ### Phase 9: Terminate and Verify Cleanup
 - `delete-snapshot` (CreateImage backing snapshot, so DeleteOnTermination is not blocked)
 - `terminate-instances` (poll -> terminated)
@@ -366,8 +446,65 @@
 - Verify Alpha alice gone (`NoSuchEntity`)
 - Verify Beta alice unaffected (still exists, auth still works)
 
-#### Step 7: IAM Account Cleanup
-- Delete all account users, policies, access keys
+#### Step 7: EC2 Resource Scoping
+
+Tests that EC2 resources are properly isolated between the Alpha/Beta accounts. Skips CreateImage (mulga-612) and instance tags (mulga-613).
+
+**7a: Instance Scoping**
+- Alpha + Beta each launch 1 instance
+- `describe-instances` isolation (each sees only own)
+- OwnerId field matches account ID
+- Cross-account `stop-instances` → `InvalidInstanceID.NotFound`
+- Cross-account `terminate-instances` → `InvalidInstanceID.NotFound`
+- Cross-account `get-console-output` → `InvalidInstanceID.NotFound`
+
+**7b: Volume Scoping**
+- Alpha + Beta each create 1 volume
+- `describe-volumes` isolation
+- Cross-account `describe-volumes` by ID → `InvalidVolume.NotFound`
+- Cross-account `delete-volume` → `InvalidVolume.NotFound`
+- Cross-account `attach-volume` → `InvalidVolume.NotFound`
+- Cross-account `detach-volume` → `InvalidVolume.NotFound`
+- Cross-account `modify-volume` → `InvalidVolume.NotFound`
+
+**7c: Key Pair Scoping**
+- Alpha + Beta each create key pair
+- `describe-key-pairs` isolation
+- Same key name in both accounts (namespace isolation — different KeyPairIds)
+- Cross-account `delete-key-pair` → no effect on other account's key
+- `import-key-pair` → invisible to other account
+
+**7d: Snapshot Scoping**
+- Alpha + Beta each create snapshot from own volume
+- `describe-snapshots` isolation + OwnerId verification
+- Cross-account `delete-snapshot` → `UnauthorizedOperation`
+- Cross-account `create-snapshot` from other's volume → `InvalidVolume.NotFound`
+
+**7e: VPC/Subnet Scoping**
+- Alpha + Beta each create VPC (same CIDR — no conflict)
+- `describe-vpcs` / `describe-subnets` isolation
+- Cross-account VPC/subnet operations → `NotFound`
+
+**7f: IGW + EIGW Scoping**
+- Alpha + Beta each create IGW + EIGW
+- Describe isolation for both
+- Cross-account attach/detach/delete → `NotFound`
+
+**7g: Account Settings**
+- `enable-ebs-encryption-by-default` per account — independent toggle
+
+**7h: Global Resources**
+- `describe-regions`, `describe-availability-zones`, `describe-instance-types` identical for both accounts
+
+#### Step 8: Edge Cases
+- Empty account (Gamma) — no resources visible
+- Root isolation from tenants
+- Non-existent resource IDs → same error as cross-account
+- Parallel key creation (race condition) — no cross-contamination
+
+#### Step 9: EC2 + IAM Cleanup
+- Terminate instances, delete volumes/snapshots/keys/VPCs/IGWs/EIGWs/subnets
+- Delete all IAM users, policies, access keys
 - Clean up AWS CLI profiles
 
 ### Phase 5d: VPC Networking

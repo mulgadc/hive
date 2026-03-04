@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testAccountID = "123456789012"
+
 // setupNATSIGWServiceTest creates a NATSIGWService client connected to an
 // IGWServiceImpl backend via NATS.
 func setupNATSIGWServiceTest(t *testing.T) (IGWService, *IGWServiceImpl) {
@@ -36,13 +38,14 @@ func setupNATSIGWServiceTest(t *testing.T) (IGWService, *IGWServiceImpl) {
 	return client, backend
 }
 
-func handleNATSMsg[In any, Out any](msg *nats.Msg, fn func(*In) (*Out, error)) {
+func handleNATSMsg[In any, Out any](msg *nats.Msg, fn func(*In, string) (*Out, error)) {
 	var input In
 	if err := json.Unmarshal(msg.Data, &input); err != nil {
 		_ = msg.Respond([]byte(`{"error":"unmarshal"}`))
 		return
 	}
-	result, err := fn(&input)
+	accountID := msg.Header.Get("X-Account-ID")
+	result, err := fn(&input, accountID)
 	if err != nil {
 		errResp, _ := json.Marshal(map[string]string{"error": err.Error()})
 		_ = msg.Respond(errResp)
@@ -55,7 +58,7 @@ func handleNATSMsg[In any, Out any](msg *nats.Msg, fn func(*In) (*Out, error)) {
 func TestNATSIGWService_CreateInternetGateway(t *testing.T) {
 	client, _ := setupNATSIGWServiceTest(t)
 
-	out, err := client.CreateInternetGateway(&ec2.CreateInternetGatewayInput{})
+	out, err := client.CreateInternetGateway(&ec2.CreateInternetGatewayInput{}, testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, out.InternetGateway)
 	assert.NotEmpty(t, *out.InternetGateway.InternetGatewayId)
@@ -64,10 +67,10 @@ func TestNATSIGWService_CreateInternetGateway(t *testing.T) {
 func TestNATSIGWService_DescribeInternetGateways(t *testing.T) {
 	client, _ := setupNATSIGWServiceTest(t)
 
-	_, err := client.CreateInternetGateway(&ec2.CreateInternetGatewayInput{})
+	_, err := client.CreateInternetGateway(&ec2.CreateInternetGatewayInput{}, testAccountID)
 	require.NoError(t, err)
 
-	out, err := client.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{})
+	out, err := client.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{}, testAccountID)
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, len(out.InternetGateways), 1)
 }
@@ -75,31 +78,31 @@ func TestNATSIGWService_DescribeInternetGateways(t *testing.T) {
 func TestNATSIGWService_DeleteInternetGateway(t *testing.T) {
 	client, _ := setupNATSIGWServiceTest(t)
 
-	createOut, err := client.CreateInternetGateway(&ec2.CreateInternetGatewayInput{})
+	createOut, err := client.CreateInternetGateway(&ec2.CreateInternetGatewayInput{}, testAccountID)
 	require.NoError(t, err)
 
 	_, err = client.DeleteInternetGateway(&ec2.DeleteInternetGatewayInput{
 		InternetGatewayId: createOut.InternetGateway.InternetGatewayId,
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 }
 
 func TestNATSIGWService_AttachAndDetach(t *testing.T) {
 	client, _ := setupNATSIGWServiceTest(t)
 
-	createOut, err := client.CreateInternetGateway(&ec2.CreateInternetGatewayInput{})
+	createOut, err := client.CreateInternetGateway(&ec2.CreateInternetGatewayInput{}, testAccountID)
 	require.NoError(t, err)
 	igwID := createOut.InternetGateway.InternetGatewayId
 
 	_, err = client.AttachInternetGateway(&ec2.AttachInternetGatewayInput{
 		InternetGatewayId: igwID,
 		VpcId:             aws.String("vpc-test123"),
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 
 	_, err = client.DetachInternetGateway(&ec2.DetachInternetGatewayInput{
 		InternetGatewayId: igwID,
 		VpcId:             aws.String("vpc-test123"),
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 }

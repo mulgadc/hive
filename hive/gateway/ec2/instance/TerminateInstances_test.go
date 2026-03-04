@@ -34,7 +34,7 @@ func TestTerminateInstances_Success(t *testing.T) {
 		InstanceIds: []*string{aws.String(instanceID)},
 	}
 
-	output, err := TerminateInstances(input, nc)
+	output, err := TerminateInstances(input, nc, "123456789012")
 
 	require.NoError(t, err)
 	require.NotNil(t, output)
@@ -63,7 +63,7 @@ func TestTerminateInstances_MultipleInstances(t *testing.T) {
 		InstanceIds: []*string{aws.String(ids[0]), aws.String(ids[1]), aws.String(ids[2])},
 	}
 
-	output, err := TerminateInstances(input, nc)
+	output, err := TerminateInstances(input, nc, "123456789012")
 
 	require.NoError(t, err)
 	require.Len(t, output.TerminatingInstances, 3)
@@ -82,7 +82,7 @@ func TestTerminateInstances_EmptyInstanceIds(t *testing.T) {
 		InstanceIds: []*string{},
 	}
 
-	_, err := TerminateInstances(input, nc)
+	_, err := TerminateInstances(input, nc, "123456789012")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no instance IDs provided")
 }
@@ -99,7 +99,7 @@ func TestTerminateInstances_NilInstanceIdSkipped(t *testing.T) {
 		InstanceIds: []*string{nil, aws.String(instanceID), nil},
 	}
 
-	output, err := TerminateInstances(input, nc)
+	output, err := TerminateInstances(input, nc, "123456789012")
 
 	require.NoError(t, err)
 	assert.Len(t, output.TerminatingInstances, 1)
@@ -115,7 +115,7 @@ func TestTerminateInstances_NATSRequestFails(t *testing.T) {
 		InstanceIds: []*string{aws.String(instanceID)},
 	}
 
-	output, err := TerminateInstances(input, nc)
+	output, err := TerminateInstances(input, nc, "123456789012")
 
 	require.NoError(t, err)
 	require.Len(t, output.TerminatingInstances, 1)
@@ -143,7 +143,7 @@ func TestTerminateInstances_MixedSuccessAndFailure(t *testing.T) {
 		InstanceIds: []*string{aws.String(goodID), aws.String(badID)},
 	}
 
-	output, err := TerminateInstances(input, nc)
+	output, err := TerminateInstances(input, nc, "123456789012")
 
 	require.NoError(t, err)
 	require.Len(t, output.TerminatingInstances, 2)
@@ -172,7 +172,7 @@ func TestTerminateInstances_VerifiesQMPAttributes(t *testing.T) {
 		InstanceIds: []*string{aws.String(instanceID)},
 	}
 
-	_, err := TerminateInstances(input, nc)
+	_, err := TerminateInstances(input, nc, "123456789012")
 	require.NoError(t, err)
 
 	// Terminate should set both stop and terminate flags
@@ -199,7 +199,7 @@ func TestTerminateInstances_StoppedInstanceFallback(t *testing.T) {
 		InstanceIds: []*string{aws.String(instanceID)},
 	}
 
-	output, err := TerminateInstances(input, nc)
+	output, err := TerminateInstances(input, nc, "123456789012")
 
 	require.NoError(t, err)
 	require.Len(t, output.TerminatingInstances, 1)
@@ -234,7 +234,7 @@ func TestTerminateInstances_MixedRunningAndStopped(t *testing.T) {
 		InstanceIds: []*string{aws.String(runningID), aws.String(stoppedID)},
 	}
 
-	output, err := TerminateInstances(input, nc)
+	output, err := TerminateInstances(input, nc, "123456789012")
 
 	require.NoError(t, err)
 	require.Len(t, output.TerminatingInstances, 2)

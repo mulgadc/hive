@@ -27,7 +27,7 @@ func ValidateDescribeImagesInput(input *ec2.DescribeImagesInput) (err error) {
 	return
 }
 
-func DescribeImages(input *ec2.DescribeImagesInput, natsConn *nats.Conn) (output ec2.DescribeImagesOutput, err error) {
+func DescribeImages(input *ec2.DescribeImagesInput, natsConn *nats.Conn, accountID string) (output ec2.DescribeImagesOutput, err error) {
 
 	// Validate input
 	err = ValidateDescribeImagesInput(input)
@@ -38,7 +38,7 @@ func DescribeImages(input *ec2.DescribeImagesInput, natsConn *nats.Conn) (output
 
 	// Create NATS service and call handler
 	imageService := handlers_ec2_image.NewNATSImageService(natsConn)
-	result, err := imageService.DescribeImages(input)
+	result, err := imageService.DescribeImages(input, accountID)
 
 	if err != nil {
 		return output, err

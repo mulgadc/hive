@@ -27,7 +27,7 @@ func ValidateDescribeSnapshotsInput(input *ec2.DescribeSnapshotsInput) error {
 }
 
 // DescribeSnapshots handles the EC2 DescribeSnapshots API call
-func DescribeSnapshots(input *ec2.DescribeSnapshotsInput, natsConn *nats.Conn) (ec2.DescribeSnapshotsOutput, error) {
+func DescribeSnapshots(input *ec2.DescribeSnapshotsInput, natsConn *nats.Conn, accountID string) (ec2.DescribeSnapshotsOutput, error) {
 	var output ec2.DescribeSnapshotsOutput
 
 	if err := ValidateDescribeSnapshotsInput(input); err != nil {
@@ -35,7 +35,7 @@ func DescribeSnapshots(input *ec2.DescribeSnapshotsInput, natsConn *nats.Conn) (
 	}
 
 	svc := handlers_ec2_snapshot.NewNATSSnapshotService(natsConn)
-	result, err := svc.DescribeSnapshots(input)
+	result, err := svc.DescribeSnapshots(input, accountID)
 	if err != nil {
 		return output, err
 	}

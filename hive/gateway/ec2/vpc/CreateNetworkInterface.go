@@ -10,7 +10,7 @@ import (
 )
 
 // CreateNetworkInterface handles the EC2 CreateNetworkInterface API call
-func CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInput, natsConn *nats.Conn) (ec2.CreateNetworkInterfaceOutput, error) {
+func CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInput, natsConn *nats.Conn, accountID string) (ec2.CreateNetworkInterfaceOutput, error) {
 	var output ec2.CreateNetworkInterfaceOutput
 
 	if input == nil {
@@ -21,7 +21,7 @@ func CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInput, natsConn *na
 	}
 
 	svc := handlers_ec2_vpc.NewNATSVPCService(natsConn)
-	result, err := svc.CreateNetworkInterface(input)
+	result, err := svc.CreateNetworkInterface(input, accountID)
 	if err != nil {
 		return output, err
 	}

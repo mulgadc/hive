@@ -7,9 +7,9 @@ import (
 )
 
 // DescribeNetworkInterfaces handles the EC2 DescribeNetworkInterfaces API call
-func DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput, natsConn *nats.Conn) (ec2.DescribeNetworkInterfacesOutput, error) {
+func DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput, natsConn *nats.Conn, accountID string) (ec2.DescribeNetworkInterfacesOutput, error) {
 	svc := handlers_ec2_vpc.NewNATSVPCService(natsConn)
-	result, err := svc.DescribeNetworkInterfaces(input)
+	result, err := svc.DescribeNetworkInterfaces(input, accountID)
 	if err != nil {
 		return ec2.DescribeNetworkInterfacesOutput{}, err
 	}

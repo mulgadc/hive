@@ -29,7 +29,7 @@ func ValidateDetachVolumeInput(input *ec2.DetachVolumeInput) error {
 }
 
 // DetachVolume sends a detach-volume command to the daemon owning the instance
-func DetachVolume(input *ec2.DetachVolumeInput, natsConn *nats.Conn) (ec2.VolumeAttachment, error) {
+func DetachVolume(input *ec2.DetachVolumeInput, natsConn *nats.Conn, accountID string) (ec2.VolumeAttachment, error) {
 	var output ec2.VolumeAttachment
 
 	if err := ValidateDetachVolumeInput(input); err != nil {
@@ -46,7 +46,7 @@ func DetachVolume(input *ec2.DetachVolumeInput, natsConn *nats.Conn) (ec2.Volume
 		volSvc := handlers_ec2_volume.NewNATSVolumeService(natsConn)
 		descOutput, err := volSvc.DescribeVolumes(&ec2.DescribeVolumesInput{
 			VolumeIds: []*string{&volumeID},
-		})
+		}, accountID)
 		if err != nil {
 			slog.Error("DetachVolume: failed to describe volume", "volumeId", volumeID, "err", err)
 			return output, errors.New(awserrors.ErrorInvalidVolumeNotFound)
@@ -85,7 +85,10 @@ func DetachVolume(input *ec2.DetachVolumeInput, natsConn *nats.Conn) (ec2.Volume
 	}
 
 	subject := fmt.Sprintf("ec2.cmd.%s", instanceID)
-	msg, err := natsConn.Request(subject, jsonData, 30*time.Second)
+	reqMsg := nats.NewMsg(subject)
+	reqMsg.Data = jsonData
+	reqMsg.Header.Set(utils.AccountIDHeader, accountID)
+	msg, err := natsConn.RequestMsg(reqMsg, 30*time.Second)
 	if err != nil {
 		slog.Error("DetachVolume: NATS request failed", "instanceId", instanceID, "volumeId", volumeID, "err", err)
 		if errors.Is(err, nats.ErrNoResponders) {

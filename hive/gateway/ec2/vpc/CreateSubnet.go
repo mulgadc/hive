@@ -10,7 +10,7 @@ import (
 )
 
 // CreateSubnet handles the EC2 CreateSubnet API call
-func CreateSubnet(input *ec2.CreateSubnetInput, natsConn *nats.Conn) (ec2.CreateSubnetOutput, error) {
+func CreateSubnet(input *ec2.CreateSubnetInput, natsConn *nats.Conn, accountID string) (ec2.CreateSubnetOutput, error) {
 	var output ec2.CreateSubnetOutput
 
 	if input == nil {
@@ -24,7 +24,7 @@ func CreateSubnet(input *ec2.CreateSubnetInput, natsConn *nats.Conn) (ec2.Create
 	}
 
 	svc := handlers_ec2_vpc.NewNATSVPCService(natsConn)
-	result, err := svc.CreateSubnet(input)
+	result, err := svc.CreateSubnet(input, accountID)
 	if err != nil {
 		return output, err
 	}

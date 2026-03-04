@@ -37,16 +37,26 @@ func ConnectNATS(host, token string) (*nats.Conn, error) {
 	return nc, nil
 }
 
+// AccountIDHeader is the NATS message header key used to pass the caller's
+// AWS account ID from the gateway to daemon handlers.
+const AccountIDHeader = "X-Account-ID"
+
 // NATSRequest performs a NATS request-response with JSON marshaling.
-// It marshals the input, sends to the given subject, validates the response
-// for error payloads, and unmarshals the successful response into Out.
-func NATSRequest[Out any](conn *nats.Conn, subject string, input any, timeout time.Duration) (*Out, error) {
+// It marshals the input, sends to the given subject with the X-Account-ID
+// header, validates the response for error payloads, and unmarshals the
+// successful response into Out. Handlers can ignore the account ID if the
+// operation is unscoped (e.g. DescribeInstanceTypes).
+func NATSRequest[Out any](conn *nats.Conn, subject string, input any, timeout time.Duration, accountID string) (*Out, error) {
 	jsonData, err := json.Marshal(input)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal input: %w", err)
 	}
 
-	msg, err := conn.Request(subject, jsonData, timeout)
+	reqMsg := nats.NewMsg(subject)
+	reqMsg.Data = jsonData
+	reqMsg.Header.Set(AccountIDHeader, accountID)
+
+	msg, err := conn.RequestMsg(reqMsg, timeout)
 	if err != nil {
 		if errors.Is(err, nats.ErrNoResponders) {
 			return nil, fmt.Errorf("NATS request to %s: %w", subject, nats.ErrNoResponders)
@@ -65,4 +75,13 @@ func NATSRequest[Out any](conn *nats.Conn, subject string, input any, timeout ti
 	}
 
 	return &output, nil
+}
+
+// AccountIDFromMsg extracts the caller's account ID from a NATS message header.
+// Returns the account ID, or empty string if the header is not set.
+func AccountIDFromMsg(msg *nats.Msg) string {
+	if msg == nil || msg.Header == nil {
+		return ""
+	}
+	return msg.Header.Get(AccountIDHeader)
 }

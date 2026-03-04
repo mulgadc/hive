@@ -49,7 +49,7 @@ func ValidateModifyInstanceAttributeInput(input *ec2.ModifyInstanceAttributeInpu
 
 // ModifyInstanceAttribute sends a modify request to the daemon via NATS.
 // The daemon updates the stopped instance in KV and returns an empty response on success.
-func ModifyInstanceAttribute(input *ec2.ModifyInstanceAttributeInput, natsConn *nats.Conn) (ec2.ModifyInstanceAttributeOutput, error) {
+func ModifyInstanceAttribute(input *ec2.ModifyInstanceAttributeInput, natsConn *nats.Conn, accountID string) (ec2.ModifyInstanceAttributeOutput, error) {
 	if err := ValidateModifyInstanceAttributeInput(input); err != nil {
 		return ec2.ModifyInstanceAttributeOutput{}, err
 	}
@@ -62,7 +62,10 @@ func ModifyInstanceAttribute(input *ec2.ModifyInstanceAttributeInput, natsConn *
 		return ec2.ModifyInstanceAttributeOutput{}, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	msg, err := natsConn.Request("ec2.ModifyInstanceAttribute", jsonData, 30*time.Second)
+	reqMsg := nats.NewMsg("ec2.ModifyInstanceAttribute")
+	reqMsg.Data = jsonData
+	reqMsg.Header.Set(utils.AccountIDHeader, accountID)
+	msg, err := natsConn.RequestMsg(reqMsg, 30*time.Second)
 	if err != nil {
 		slog.Error("ModifyInstanceAttribute: Failed to send request", "instance_id", *input.InstanceId, "err", err)
 		return ec2.ModifyInstanceAttributeOutput{}, fmt.Errorf("failed to send modify request: %w", err)

@@ -13,7 +13,7 @@ import (
 
 // DescribeInstances queries all hive nodes for their instances via NATS
 // and aggregates the results into a single response
-func DescribeInstances(input *ec2.DescribeInstancesInput, natsConn *nats.Conn, expectedNodes int) (*ec2.DescribeInstancesOutput, error) {
+func DescribeInstances(input *ec2.DescribeInstancesInput, natsConn *nats.Conn, expectedNodes int, accountID string) (*ec2.DescribeInstancesOutput, error) {
 	// Marshal input to JSON
 	jsonData, err := json.Marshal(input)
 	if err != nil {
@@ -30,8 +30,12 @@ func DescribeInstances(input *ec2.DescribeInstancesInput, natsConn *nats.Conn, e
 	}
 	defer sub.Unsubscribe()
 
-	// Publish request to all nodes (no queue group, so all daemons receive it)
-	err = natsConn.PublishRequest("ec2.DescribeInstances", inbox, jsonData)
+	// Publish request to all nodes with account ID header
+	pubMsg := nats.NewMsg("ec2.DescribeInstances")
+	pubMsg.Reply = inbox
+	pubMsg.Data = jsonData
+	pubMsg.Header.Set(utils.AccountIDHeader, accountID)
+	err = natsConn.PublishMsg(pubMsg)
 	if err != nil {
 		slog.Error("DescribeInstances: Failed to publish request", "err", err)
 		return nil, fmt.Errorf("failed to publish request: %w", err)
@@ -102,7 +106,10 @@ func DescribeInstances(input *ec2.DescribeInstancesInput, natsConn *nats.Conn, e
 	}
 
 	// Query stopped instances from shared KV (via queue group — only one daemon handles it)
-	stoppedMsg, err := natsConn.Request("ec2.DescribeStoppedInstances", jsonData, 3*time.Second)
+	stoppedReqMsg := nats.NewMsg("ec2.DescribeStoppedInstances")
+	stoppedReqMsg.Data = jsonData
+	stoppedReqMsg.Header.Set(utils.AccountIDHeader, accountID)
+	stoppedMsg, err := natsConn.RequestMsg(stoppedReqMsg, 3*time.Second)
 	if err != nil {
 		slog.Warn("DescribeInstances: Failed to query stopped instances (may not be available)", "err", err)
 	} else {

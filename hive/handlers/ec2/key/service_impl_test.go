@@ -28,7 +28,7 @@ const testRSAPubKey = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDP9LrByKWpgbX+prxBw
 
 func newTestKeyService() (*KeyServiceImpl, *objectstore.MemoryObjectStore) {
 	store := objectstore.NewMemoryObjectStore()
-	svc := NewKeyServiceImplWithStore(store, testBucket, testAccountID)
+	svc := NewKeyServiceImplWithStore(store, testBucket)
 	return svc, store
 }
 
@@ -46,7 +46,7 @@ func importTestKey(t *testing.T, svc *KeyServiceImpl, keyName string) *ec2.Impor
 	out, err := svc.ImportKeyPair(&ec2.ImportKeyPairInput{
 		KeyName:           aws.String(keyName),
 		PublicKeyMaterial: []byte(testED25519PubKey),
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	return out
@@ -83,7 +83,7 @@ func TestCreateKeyPair_ED25519(t *testing.T) {
 
 	out, err := svc.CreateKeyPair(&ec2.CreateKeyPairInput{
 		KeyName: aws.String("my-ed25519-key"),
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, out)
 
@@ -121,7 +121,7 @@ func TestCreateKeyPair_RSA(t *testing.T) {
 	out, err := svc.CreateKeyPair(&ec2.CreateKeyPairInput{
 		KeyName: aws.String("my-rsa-key"),
 		KeyType: aws.String("rsa"),
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, out)
 
@@ -134,7 +134,7 @@ func TestCreateKeyPair_RSA(t *testing.T) {
 func TestCreateKeyPair_NilInput(t *testing.T) {
 	svc, _ := newTestKeyService()
 
-	out, err := svc.CreateKeyPair(nil)
+	out, err := svc.CreateKeyPair(nil, testAccountID)
 	require.Error(t, err)
 	assert.Nil(t, out)
 	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
@@ -143,7 +143,7 @@ func TestCreateKeyPair_NilInput(t *testing.T) {
 func TestCreateKeyPair_MissingKeyName(t *testing.T) {
 	svc, _ := newTestKeyService()
 
-	out, err := svc.CreateKeyPair(&ec2.CreateKeyPairInput{})
+	out, err := svc.CreateKeyPair(&ec2.CreateKeyPairInput{}, testAccountID)
 	require.Error(t, err)
 	assert.Nil(t, out)
 	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
@@ -154,7 +154,7 @@ func TestCreateKeyPair_InvalidKeyName(t *testing.T) {
 
 	out, err := svc.CreateKeyPair(&ec2.CreateKeyPairInput{
 		KeyName: aws.String("invalid key name!@#"),
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	assert.Nil(t, out)
 	assert.Equal(t, awserrors.ErrorInvalidKeyPairFormat, err.Error())
@@ -166,12 +166,12 @@ func TestCreateKeyPair_Duplicate(t *testing.T) {
 
 	_, err := svc.CreateKeyPair(&ec2.CreateKeyPairInput{
 		KeyName: aws.String("dup-key"),
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 
 	out, err := svc.CreateKeyPair(&ec2.CreateKeyPairInput{
 		KeyName: aws.String("dup-key"),
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	assert.Nil(t, out)
 	assert.Equal(t, awserrors.ErrorInvalidKeyPairDuplicate, err.Error())
@@ -183,7 +183,7 @@ func TestCreateKeyPair_InvalidKeyType(t *testing.T) {
 	out, err := svc.CreateKeyPair(&ec2.CreateKeyPairInput{
 		KeyName: aws.String("bad-type-key"),
 		KeyType: aws.String("dsa"),
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	assert.Nil(t, out)
 	assert.Equal(t, awserrors.ErrorInvalidParameterValue, err.Error())
@@ -199,7 +199,7 @@ func TestImportKeyPair_Success_ED25519(t *testing.T) {
 	out, err := svc.ImportKeyPair(&ec2.ImportKeyPairInput{
 		KeyName:           aws.String("imported-ed25519"),
 		PublicKeyMaterial: []byte(testED25519PubKey),
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, out)
 
@@ -234,7 +234,7 @@ func TestImportKeyPair_Success_RSA(t *testing.T) {
 	out, err := svc.ImportKeyPair(&ec2.ImportKeyPairInput{
 		KeyName:           aws.String("imported-rsa"),
 		PublicKeyMaterial: []byte(testRSAPubKey),
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, out)
 
@@ -249,13 +249,13 @@ func TestImportKeyPair_Duplicate(t *testing.T) {
 	_, err := svc.ImportKeyPair(&ec2.ImportKeyPairInput{
 		KeyName:           aws.String("dup-import"),
 		PublicKeyMaterial: []byte(testED25519PubKey),
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 
 	out, err := svc.ImportKeyPair(&ec2.ImportKeyPairInput{
 		KeyName:           aws.String("dup-import"),
 		PublicKeyMaterial: []byte(testED25519PubKey),
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	assert.Nil(t, out)
 	assert.Equal(t, awserrors.ErrorInvalidKeyPairDuplicate, err.Error())
@@ -267,7 +267,7 @@ func TestImportKeyPair_InvalidKeyName(t *testing.T) {
 	out, err := svc.ImportKeyPair(&ec2.ImportKeyPairInput{
 		KeyName:           aws.String("bad name with spaces!"),
 		PublicKeyMaterial: []byte(testED25519PubKey),
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	assert.Nil(t, out)
 	assert.Equal(t, awserrors.ErrorInvalidKeyPairFormat, err.Error())
@@ -308,7 +308,7 @@ func TestImportKeyPairInvalidKeyFormat(t *testing.T) {
 			_, err := svc.ImportKeyPair(&ec2.ImportKeyPairInput{
 				KeyName:           aws.String("test-key"),
 				PublicKeyMaterial: []byte(tt.publicKey),
-			})
+			}, testAccountID)
 			require.Error(t, err)
 			assert.Equal(t, tt.expectedErrMsg, err.Error())
 		})
@@ -326,7 +326,7 @@ func TestDeleteKeyPair_ByKeyName(t *testing.T) {
 
 	result, err := svc.DeleteKeyPair(&ec2.DeleteKeyPairInput{
 		KeyName: aws.String("to-delete-by-name"),
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -354,7 +354,7 @@ func TestDeleteKeyPair_ByKeyPairId(t *testing.T) {
 
 	result, err := svc.DeleteKeyPair(&ec2.DeleteKeyPairInput{
 		KeyPairId: imported.KeyPairId,
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	assert.NotNil(t, result)
 
@@ -381,7 +381,7 @@ func TestDeleteKeyPairIdempotent(t *testing.T) {
 	t.Run("NonExistentKeyName", func(t *testing.T) {
 		result, err := svc.DeleteKeyPair(&ec2.DeleteKeyPairInput{
 			KeyName: aws.String("no-such-key"),
-		})
+		}, testAccountID)
 		require.NoError(t, err)
 		assert.NotNil(t, result)
 	})
@@ -389,7 +389,7 @@ func TestDeleteKeyPairIdempotent(t *testing.T) {
 	t.Run("NonExistentKeyPairId", func(t *testing.T) {
 		result, err := svc.DeleteKeyPair(&ec2.DeleteKeyPairInput{
 			KeyPairId: aws.String("key-0123456789abcdef0"),
-		})
+		}, testAccountID)
 		require.NoError(t, err)
 		assert.NotNil(t, result)
 	})
@@ -398,7 +398,7 @@ func TestDeleteKeyPairIdempotent(t *testing.T) {
 func TestDeleteKeyPair_NilInput(t *testing.T) {
 	svc, _ := newTestKeyService()
 
-	result, err := svc.DeleteKeyPair(nil)
+	result, err := svc.DeleteKeyPair(nil, testAccountID)
 	require.Error(t, err)
 	assert.Nil(t, result)
 	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
@@ -407,7 +407,7 @@ func TestDeleteKeyPair_NilInput(t *testing.T) {
 func TestDeleteKeyPair_EmptyNameAndId(t *testing.T) {
 	svc, _ := newTestKeyService()
 
-	result, err := svc.DeleteKeyPair(&ec2.DeleteKeyPairInput{})
+	result, err := svc.DeleteKeyPair(&ec2.DeleteKeyPairInput{}, testAccountID)
 	require.Error(t, err)
 	assert.Nil(t, result)
 	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
@@ -418,7 +418,7 @@ func TestDeleteKeyPair_InvalidKeyPairIdFormat(t *testing.T) {
 
 	result, err := svc.DeleteKeyPair(&ec2.DeleteKeyPairInput{
 		KeyPairId: aws.String("bad id format!!!"),
-	})
+	}, testAccountID)
 	require.Error(t, err)
 	assert.Nil(t, result)
 	assert.Equal(t, awserrors.ErrorInvalidKeyPairFormat, err.Error())
@@ -431,7 +431,7 @@ func TestDeleteKeyPair_InvalidKeyPairIdFormat(t *testing.T) {
 func TestDescribeKeyPairs_Empty(t *testing.T) {
 	svc, _ := newTestKeyService()
 
-	out, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{})
+	out, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{}, testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	assert.Empty(t, out.KeyPairs)
@@ -443,7 +443,7 @@ func TestDescribeKeyPairs_AllKeys(t *testing.T) {
 	importTestKey(t, svc, "key-alpha")
 	importTestKey(t, svc, "key-beta")
 
-	out, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{})
+	out, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{}, testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	assert.Len(t, out.KeyPairs, 2)
@@ -467,7 +467,7 @@ func TestDescribeKeyPairs_FilterByKeyName(t *testing.T) {
 
 	out, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{
 		KeyNames: []*string{aws.String("find-me")},
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	require.Len(t, out.KeyPairs, 1)
@@ -482,7 +482,7 @@ func TestDescribeKeyPairs_FilterByKeyPairId(t *testing.T) {
 
 	out, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{
 		KeyPairIds: []*string{imported.KeyPairId},
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	require.Len(t, out.KeyPairs, 1)
@@ -496,7 +496,7 @@ func TestDescribeKeyPairs_FilterNoMatch(t *testing.T) {
 
 	out, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{
 		KeyNames: []*string{aws.String("does-not-exist")},
-	})
+	}, testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	assert.Empty(t, out.KeyPairs)
@@ -505,7 +505,7 @@ func TestDescribeKeyPairs_FilterNoMatch(t *testing.T) {
 func TestDescribeKeyPairs_NilInput(t *testing.T) {
 	svc, _ := newTestKeyService()
 
-	out, err := svc.DescribeKeyPairs(nil)
+	out, err := svc.DescribeKeyPairs(nil, testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	assert.Empty(t, out.KeyPairs)
@@ -520,14 +520,14 @@ func TestValidateKeyPairExists_Found(t *testing.T) {
 
 	importTestKey(t, svc, "existing-key")
 
-	err := svc.ValidateKeyPairExists("existing-key")
+	err := svc.ValidateKeyPairExists(testAccountID, "existing-key")
 	assert.NoError(t, err)
 }
 
 func TestValidateKeyPairExists_NotFound(t *testing.T) {
 	svc, _ := newTestKeyService()
 
-	err := svc.ValidateKeyPairExists("ghost-key")
+	err := svc.ValidateKeyPairExists(testAccountID, "ghost-key")
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidKeyPairNotFound, err.Error())
 }

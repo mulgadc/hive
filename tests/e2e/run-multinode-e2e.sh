@@ -1403,13 +1403,624 @@ echo "  Beta alice still exists (isolation OK)"
 aws $AWS_EP ec2 describe-instances --profile hive-beta-alice > /dev/null
 echo "  Beta alice auth still works (isolation OK)"
 
-# Step 7: IAM Account Cleanup
+# ==========================================================================
+# Step 7: EC2 Resource Scoping
+# ==========================================================================
+# Tests that EC2 resources are properly isolated between accounts.
+# Reuses Alpha/Beta accounts created in Step 1.
+# Skips: Section 6 (CreateImage — mulga-612), instance tags (mulga-613)
 echo ""
-echo "Step 7: IAM Account Cleanup"
+echo "Step 7: EC2 Resource Scoping"
+echo "========================================"
+
+# --- 7a: Instance Scoping ---
+echo ""
+echo "Step 7a: Instance Scoping"
 echo "----------------------------------------"
 
+# Create per-account key pairs (key pairs are account-scoped, root's multinode-test-key is invisible)
+$AWS_EC2 create-key-pair --key-name alpha-instance-key --profile hive-team-alpha > /dev/null
+$AWS_EC2 create-key-pair --key-name beta-instance-key --profile hive-team-beta > /dev/null
+echo "  Created per-account key pairs for instance launches"
+
+echo "  Alpha launching instance..."
+ALPHA_INST_RUN=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name alpha-instance-key \
+    --profile hive-team-alpha)
+ALPHA_INST=$(echo "$ALPHA_INST_RUN" | jq -r '.Instances[0].InstanceId')
+echo "  Alpha instance: $ALPHA_INST"
+
+echo "  Beta launching instance..."
+BETA_INST_RUN=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name beta-instance-key \
+    --profile hive-team-beta)
+BETA_INST=$(echo "$BETA_INST_RUN" | jq -r '.Instances[0].InstanceId')
+echo "  Beta instance: $BETA_INST"
+
+# Wait for running (inline — wait_for_instance_state uses root profile, can't see tenant instances)
+echo "  Waiting for instances to reach running state..."
+COUNT=0
+while [ $COUNT -lt 30 ]; do
+    A_STATE=$($AWS_EC2 describe-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha \
+        --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "pending")
+    B_STATE=$($AWS_EC2 describe-instances --instance-ids "$BETA_INST" --profile hive-team-beta \
+        --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "pending")
+    echo "  Alpha=$A_STATE, Beta=$B_STATE"
+    if [ "$A_STATE" == "running" ] && [ "$B_STATE" == "running" ]; then break; fi
+    sleep 2
+    COUNT=$((COUNT + 1))
+done
+if [ "$A_STATE" != "running" ] || [ "$B_STATE" != "running" ]; then
+    echo "  ERROR: Instances failed to reach running state"
+    exit 1
+fi
+echo "  Both instances running"
+
+# Describe isolation
+ALPHA_DESC=$($AWS_EC2 describe-instances --profile hive-team-alpha \
+    --query 'Reservations[].Instances[].InstanceId' --output text)
+if echo "$ALPHA_DESC" | grep -q "$BETA_INST"; then
+    echo "  ERROR: Alpha can see Beta's instance"
+    exit 1
+fi
+echo "  Alpha sees only own instances"
+
+BETA_DESC=$($AWS_EC2 describe-instances --profile hive-team-beta \
+    --query 'Reservations[].Instances[].InstanceId' --output text)
+if echo "$BETA_DESC" | grep -q "$ALPHA_INST"; then
+    echo "  ERROR: Beta can see Alpha's instance"
+    exit 1
+fi
+echo "  Beta sees only own instances"
+
+# OwnerId verification
+ALPHA_OWNER=$($AWS_EC2 describe-instances --profile hive-team-alpha \
+    --query 'Reservations[0].OwnerId' --output text)
+if [ "$ALPHA_OWNER" != "$ALPHA_ACCOUNT" ]; then
+    echo "  ERROR: Alpha OwnerId mismatch: expected $ALPHA_ACCOUNT, got $ALPHA_OWNER"
+    exit 1
+fi
+echo "  Alpha OwnerId correct: $ALPHA_OWNER"
+
+# Cross-account operations
+expect_error "InvalidInstanceID.NotFound" \
+    $AWS_EC2 stop-instances --instance-ids "$BETA_INST" --profile hive-team-alpha
+echo "  Alpha cannot stop Beta's instance"
+
+expect_error "InvalidInstanceID.NotFound" \
+    $AWS_EC2 terminate-instances --instance-ids "$ALPHA_INST" --profile hive-team-beta
+echo "  Beta cannot terminate Alpha's instance"
+
+expect_error "InvalidInstanceID.NotFound" \
+    $AWS_EC2 get-console-output --instance-id "$ALPHA_INST" --profile hive-team-beta
+echo "  Beta cannot get console output of Alpha's instance"
+
+echo "  Instance scoping passed"
+
+# --- 7b: Volume Scoping ---
+echo ""
+echo "Step 7b: Volume Scoping"
+echo "----------------------------------------"
+
+ALPHA_VOL=$($AWS_EC2 create-volume --availability-zone ap-southeast-2a --size 10 \
+    --volume-type gp3 --profile hive-team-alpha | jq -r '.VolumeId')
+echo "  Alpha volume: $ALPHA_VOL"
+
+BETA_VOL=$($AWS_EC2 create-volume --availability-zone ap-southeast-2a --size 10 \
+    --volume-type gp3 --profile hive-team-beta | jq -r '.VolumeId')
+echo "  Beta volume: $BETA_VOL"
+
+# Describe isolation
+ALPHA_VOLS=$($AWS_EC2 describe-volumes --profile hive-team-alpha \
+    --query 'Volumes[].VolumeId' --output text)
+if echo "$ALPHA_VOLS" | grep -q "$BETA_VOL"; then
+    echo "  ERROR: Alpha can see Beta's volume"
+    exit 1
+fi
+echo "  Alpha sees only own volumes"
+
+# Cross-account operations
+expect_error "InvalidVolume.NotFound" \
+    $AWS_EC2 describe-volumes --volume-ids "$BETA_VOL" --profile hive-team-alpha
+echo "  Alpha cannot describe Beta's volume by ID"
+
+expect_error "InvalidVolume.NotFound" \
+    $AWS_EC2 delete-volume --volume-id "$ALPHA_VOL" --profile hive-team-beta
+echo "  Beta cannot delete Alpha's volume"
+
+expect_error "InvalidVolume.NotFound" \
+    $AWS_EC2 attach-volume --volume-id "$ALPHA_VOL" \
+    --instance-id "$BETA_INST" --device /dev/sdf --profile hive-team-beta
+echo "  Beta cannot attach Alpha's volume"
+
+# Attach Alpha's volume, then test cross-account detach
+$AWS_EC2 attach-volume --volume-id "$ALPHA_VOL" \
+    --instance-id "$ALPHA_INST" --device /dev/sdf --profile hive-team-alpha > /dev/null
+sleep 2
+
+expect_error "InvalidVolume.NotFound" \
+    $AWS_EC2 detach-volume --volume-id "$ALPHA_VOL" --profile hive-team-beta
+echo "  Beta cannot detach Alpha's volume"
+
+expect_error "InvalidVolume.NotFound" \
+    $AWS_EC2 modify-volume --volume-id "$ALPHA_VOL" --size 20 --profile hive-team-beta
+echo "  Beta cannot modify Alpha's volume"
+
+# Detach for later cleanup
+$AWS_EC2 detach-volume --volume-id "$ALPHA_VOL" --profile hive-team-alpha > /dev/null
+sleep 2
+
+echo "  Volume scoping passed"
+
+# --- 7c: Key Pair Scoping ---
+echo ""
+echo "Step 7c: Key Pair Scoping"
+echo "----------------------------------------"
+
+$AWS_EC2 create-key-pair --key-name alpha-key --profile hive-team-alpha > /dev/null
+ALPHA_KEYPAIR_ID=$($AWS_EC2 describe-key-pairs --key-names alpha-key \
+    --profile hive-team-alpha --query 'KeyPairs[0].KeyPairId' --output text)
+echo "  Alpha key: alpha-key ($ALPHA_KEYPAIR_ID)"
+
+$AWS_EC2 create-key-pair --key-name beta-key --profile hive-team-beta > /dev/null
+echo "  Beta key: beta-key"
+
+# Describe isolation
+ALPHA_KEYS=$($AWS_EC2 describe-key-pairs --profile hive-team-alpha \
+    --query 'KeyPairs[].KeyName' --output text)
+if echo "$ALPHA_KEYS" | grep -q "beta-key"; then
+    echo "  ERROR: Alpha can see Beta's key"
+    exit 1
+fi
+echo "  Alpha sees only own keys"
+
+# Same name, different accounts
+$AWS_EC2 create-key-pair --key-name shared-name --profile hive-team-alpha > /dev/null
+$AWS_EC2 create-key-pair --key-name shared-name --profile hive-team-beta > /dev/null
+ALPHA_SHARED_ID=$($AWS_EC2 describe-key-pairs --key-names shared-name \
+    --profile hive-team-alpha --query 'KeyPairs[0].KeyPairId' --output text)
+BETA_SHARED_ID=$($AWS_EC2 describe-key-pairs --key-names shared-name \
+    --profile hive-team-beta --query 'KeyPairs[0].KeyPairId' --output text)
+if [ "$ALPHA_SHARED_ID" == "$BETA_SHARED_ID" ]; then
+    echo "  ERROR: Same KeyPairId for shared-name in both accounts"
+    exit 1
+fi
+echo "  Namespace isolation: alpha=$ALPHA_SHARED_ID, beta=$BETA_SHARED_ID"
+
+# Cross-account delete (idempotent, but shouldn't affect other account)
+$AWS_EC2 delete-key-pair --key-name alpha-key --profile hive-team-beta
+ALPHA_KEY_CHECK=$($AWS_EC2 describe-key-pairs --key-names alpha-key \
+    --profile hive-team-alpha --query 'KeyPairs[0].KeyPairId' --output text)
+if [ "$ALPHA_KEY_CHECK" != "$ALPHA_KEYPAIR_ID" ]; then
+    echo "  ERROR: Beta's delete affected Alpha's key"
+    exit 1
+fi
+echo "  Cross-account delete had no effect on Alpha's key"
+
+# Import key pair — account scoped
+ssh-keygen -t ed25519 -f /tmp/test-import-key -N "" -q
+$AWS_EC2 import-key-pair --key-name imported-key \
+    --public-key-material fileb:///tmp/test-import-key.pub --profile hive-team-alpha > /dev/null
+BETA_IMPORT_CHECK=$($AWS_EC2 describe-key-pairs --profile hive-team-beta \
+    --query 'KeyPairs[].KeyName' --output text)
+if echo "$BETA_IMPORT_CHECK" | grep -q "imported-key"; then
+    echo "  ERROR: Beta can see Alpha's imported key"
+    exit 1
+fi
+echo "  Imported key invisible to Beta"
+rm -f /tmp/test-import-key /tmp/test-import-key.pub
+
+echo "  Key pair scoping passed"
+
+# --- 7d: Snapshot Scoping ---
+echo ""
+echo "Step 7d: Snapshot Scoping"
+echo "----------------------------------------"
+
+ALPHA_SNAP=$($AWS_EC2 create-snapshot --volume-id "$ALPHA_VOL" \
+    --description "Alpha snapshot" --profile hive-team-alpha | jq -r '.SnapshotId')
+echo "  Alpha snapshot: $ALPHA_SNAP"
+
+BETA_SNAP=$($AWS_EC2 create-snapshot --volume-id "$BETA_VOL" \
+    --description "Beta snapshot" --profile hive-team-beta | jq -r '.SnapshotId')
+echo "  Beta snapshot: $BETA_SNAP"
+
+# Describe isolation
+ALPHA_SNAPS=$($AWS_EC2 describe-snapshots --owner-ids self --profile hive-team-alpha \
+    --query 'Snapshots[].SnapshotId' --output text)
+if echo "$ALPHA_SNAPS" | grep -q "$BETA_SNAP"; then
+    echo "  ERROR: Alpha can see Beta's snapshot"
+    exit 1
+fi
+echo "  Alpha sees only own snapshots"
+
+# OwnerId verification
+ALPHA_SNAP_OWNER=$($AWS_EC2 describe-snapshots --owner-ids self --profile hive-team-alpha \
+    --query 'Snapshots[0].OwnerId' --output text)
+if [ "$ALPHA_SNAP_OWNER" != "$ALPHA_ACCOUNT" ]; then
+    echo "  ERROR: Snapshot OwnerId mismatch: expected $ALPHA_ACCOUNT, got $ALPHA_SNAP_OWNER"
+    exit 1
+fi
+echo "  Alpha snapshot OwnerId correct"
+
+# Cross-account delete
+expect_error "UnauthorizedOperation" \
+    $AWS_EC2 delete-snapshot --snapshot-id "$ALPHA_SNAP" --profile hive-team-beta
+echo "  Beta cannot delete Alpha's snapshot"
+
+# Cross-account snapshot from other's volume
+expect_error "InvalidVolume.NotFound" \
+    $AWS_EC2 create-snapshot --volume-id "$ALPHA_VOL" \
+    --description "stolen" --profile hive-team-beta
+echo "  Beta cannot snapshot Alpha's volume"
+
+echo "  Snapshot scoping passed"
+
+# --- 7e: VPC/Subnet Scoping ---
+echo ""
+echo "Step 7e: VPC/Subnet Scoping"
+echo "----------------------------------------"
+
+ALPHA_VPC=$($AWS_EC2 create-vpc --cidr-block 10.0.0.0/16 \
+    --profile hive-team-alpha --query 'Vpc.VpcId' --output text)
+echo "  Alpha VPC: $ALPHA_VPC"
+
+BETA_VPC=$($AWS_EC2 create-vpc --cidr-block 10.0.0.0/16 \
+    --profile hive-team-beta --query 'Vpc.VpcId' --output text)
+echo "  Beta VPC: $BETA_VPC (same CIDR — no conflict)"
+
+# Describe isolation
+ALPHA_VPCS=$($AWS_EC2 describe-vpcs --profile hive-team-alpha \
+    --query 'Vpcs[].VpcId' --output text)
+if echo "$ALPHA_VPCS" | grep -q "$BETA_VPC"; then
+    echo "  ERROR: Alpha can see Beta's VPC"
+    exit 1
+fi
+echo "  VPC describe isolation OK"
+
+expect_error "InvalidVpcID.NotFound" \
+    $AWS_EC2 describe-vpcs --vpc-ids "$BETA_VPC" --profile hive-team-alpha
+echo "  Alpha cannot describe Beta's VPC by ID"
+
+expect_error "InvalidVpcID.NotFound" \
+    $AWS_EC2 delete-vpc --vpc-id "$ALPHA_VPC" --profile hive-team-beta
+echo "  Beta cannot delete Alpha's VPC"
+
+# Create subnets
+ALPHA_SUBNET=$($AWS_EC2 create-subnet --vpc-id "$ALPHA_VPC" --cidr-block 10.0.1.0/24 \
+    --profile hive-team-alpha --query 'Subnet.SubnetId' --output text)
+echo "  Alpha subnet: $ALPHA_SUBNET"
+
+BETA_SUBNET=$($AWS_EC2 create-subnet --vpc-id "$BETA_VPC" --cidr-block 10.0.1.0/24 \
+    --profile hive-team-beta --query 'Subnet.SubnetId' --output text)
+echo "  Beta subnet: $BETA_SUBNET"
+
+# Subnet describe isolation
+ALPHA_SUBNETS=$($AWS_EC2 describe-subnets --profile hive-team-alpha \
+    --query 'Subnets[].SubnetId' --output text)
+if echo "$ALPHA_SUBNETS" | grep -q "$BETA_SUBNET"; then
+    echo "  ERROR: Alpha can see Beta's subnet"
+    exit 1
+fi
+echo "  Subnet describe isolation OK"
+
+expect_error "InvalidVpcID.NotFound" \
+    $AWS_EC2 create-subnet --vpc-id "$ALPHA_VPC" --cidr-block 10.0.2.0/24 \
+    --profile hive-team-beta
+echo "  Beta cannot create subnet in Alpha's VPC"
+
+expect_error "InvalidSubnetID.NotFound" \
+    $AWS_EC2 delete-subnet --subnet-id "$ALPHA_SUBNET" --profile hive-team-beta
+echo "  Beta cannot delete Alpha's subnet"
+
+echo "  VPC/Subnet scoping passed"
+
+# --- 7f: IGW + EIGW Scoping ---
+echo ""
+echo "Step 7f: IGW + EIGW Scoping"
+echo "----------------------------------------"
+
+ALPHA_IGW=$($AWS_EC2 create-internet-gateway --profile hive-team-alpha \
+    --query 'InternetGateway.InternetGatewayId' --output text)
+echo "  Alpha IGW: $ALPHA_IGW"
+
+BETA_IGW=$($AWS_EC2 create-internet-gateway --profile hive-team-beta \
+    --query 'InternetGateway.InternetGatewayId' --output text)
+echo "  Beta IGW: $BETA_IGW"
+
+# IGW describe isolation
+ALPHA_IGWS=$($AWS_EC2 describe-internet-gateways --profile hive-team-alpha \
+    --query 'InternetGateways[].InternetGatewayId' --output text)
+if echo "$ALPHA_IGWS" | grep -q "$BETA_IGW"; then
+    echo "  ERROR: Alpha can see Beta's IGW"
+    exit 1
+fi
+echo "  IGW describe isolation OK"
+
+expect_error "InvalidInternetGatewayID.NotFound" \
+    $AWS_EC2 describe-internet-gateways --internet-gateway-ids "$BETA_IGW" \
+    --profile hive-team-alpha
+echo "  Alpha cannot describe Beta's IGW by ID"
+
+expect_error "InvalidInternetGatewayID.NotFound" \
+    $AWS_EC2 delete-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
+    --profile hive-team-beta
+echo "  Beta cannot delete Alpha's IGW"
+
+expect_error "InvalidInternetGatewayID.NotFound" \
+    $AWS_EC2 attach-internet-gateway --internet-gateway-id "$BETA_IGW" \
+    --vpc-id "$ALPHA_VPC" --profile hive-team-alpha
+echo "  Alpha cannot attach Beta's IGW to own VPC"
+
+# Attach Alpha's IGW, test cross-account detach
+$AWS_EC2 attach-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
+    --vpc-id "$ALPHA_VPC" --profile hive-team-alpha > /dev/null
+expect_error "InvalidInternetGatewayID.NotFound" \
+    $AWS_EC2 detach-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
+    --vpc-id "$ALPHA_VPC" --profile hive-team-beta
+echo "  Beta cannot detach Alpha's IGW"
+
+# EIGW
+ALPHA_EIGW=$($AWS_EC2 create-egress-only-internet-gateway --vpc-id "$ALPHA_VPC" \
+    --profile hive-team-alpha \
+    --query 'EgressOnlyInternetGateway.EgressOnlyInternetGatewayId' --output text)
+echo "  Alpha EIGW: $ALPHA_EIGW"
+
+BETA_EIGW=$($AWS_EC2 create-egress-only-internet-gateway --vpc-id "$BETA_VPC" \
+    --profile hive-team-beta \
+    --query 'EgressOnlyInternetGateway.EgressOnlyInternetGatewayId' --output text)
+echo "  Beta EIGW: $BETA_EIGW"
+
+# EIGW describe isolation
+ALPHA_EIGWS=$($AWS_EC2 describe-egress-only-internet-gateways --profile hive-team-alpha \
+    --query 'EgressOnlyInternetGateways[].EgressOnlyInternetGatewayId' --output text)
+if echo "$ALPHA_EIGWS" | grep -q "$BETA_EIGW"; then
+    echo "  ERROR: Alpha can see Beta's EIGW"
+    exit 1
+fi
+echo "  EIGW describe isolation OK"
+
+# Cross-account EIGW delete (verify Alpha's still exists after Beta's attempt)
+set +e
+$AWS_EC2 delete-egress-only-internet-gateway \
+    --egress-only-internet-gateway-id "$ALPHA_EIGW" --profile hive-team-beta 2>/dev/null
+set -e
+ALPHA_EIGW_CHECK=$($AWS_EC2 describe-egress-only-internet-gateways --profile hive-team-alpha \
+    --query 'EgressOnlyInternetGateways[].EgressOnlyInternetGatewayId' --output text)
+if ! echo "$ALPHA_EIGW_CHECK" | grep -q "$ALPHA_EIGW"; then
+    echo "  ERROR: Alpha's EIGW was deleted by Beta"
+    exit 1
+fi
+echo "  Beta cannot delete Alpha's EIGW"
+
+echo "  IGW + EIGW scoping passed"
+
+# --- 7g: Account Settings ---
+echo ""
+echo "Step 7g: Account Settings"
+echo "----------------------------------------"
+
+$AWS_EC2 enable-ebs-encryption-by-default --profile hive-team-alpha > /dev/null
+BETA_ENC=$($AWS_EC2 get-ebs-encryption-by-default --profile hive-team-beta \
+    --query 'EbsEncryptionByDefault' --output text)
+if [ "$BETA_ENC" != "False" ]; then
+    echo "  ERROR: Alpha's encryption setting leaked to Beta (got $BETA_ENC)"
+    exit 1
+fi
+echo "  Alpha enable did not affect Beta"
+
+$AWS_EC2 enable-ebs-encryption-by-default --profile hive-team-beta > /dev/null
+$AWS_EC2 disable-ebs-encryption-by-default --profile hive-team-alpha > /dev/null
+ALPHA_ENC=$($AWS_EC2 get-ebs-encryption-by-default --profile hive-team-alpha \
+    --query 'EbsEncryptionByDefault' --output text)
+BETA_ENC=$($AWS_EC2 get-ebs-encryption-by-default --profile hive-team-beta \
+    --query 'EbsEncryptionByDefault' --output text)
+if [ "$ALPHA_ENC" != "False" ] || [ "$BETA_ENC" != "True" ]; then
+    echo "  ERROR: Independent settings failed: alpha=$ALPHA_ENC beta=$BETA_ENC"
+    exit 1
+fi
+echo "  Independent toggle verified: alpha=$ALPHA_ENC, beta=$BETA_ENC"
+$AWS_EC2 disable-ebs-encryption-by-default --profile hive-team-beta > /dev/null
+
+echo "  Account settings scoping passed"
+
+# --- 7h: Global Resources ---
+echo ""
+echo "Step 7h: Global Resources"
+echo "----------------------------------------"
+
+ALPHA_REGIONS=$($AWS_EC2 describe-regions --profile hive-team-alpha \
+    --query 'Regions[].RegionName' --output text)
+BETA_REGIONS=$($AWS_EC2 describe-regions --profile hive-team-beta \
+    --query 'Regions[].RegionName' --output text)
+if [ "$ALPHA_REGIONS" != "$BETA_REGIONS" ]; then
+    echo "  ERROR: Regions differ between accounts"
+    exit 1
+fi
+echo "  Regions identical"
+
+ALPHA_AZS=$($AWS_EC2 describe-availability-zones --profile hive-team-alpha \
+    --query 'AvailabilityZones[].ZoneName' --output text)
+BETA_AZS=$($AWS_EC2 describe-availability-zones --profile hive-team-beta \
+    --query 'AvailabilityZones[].ZoneName' --output text)
+if [ "$ALPHA_AZS" != "$BETA_AZS" ]; then
+    echo "  ERROR: AZs differ between accounts"
+    exit 1
+fi
+echo "  Availability zones identical"
+
+ALPHA_TYPES=$($AWS_EC2 describe-instance-types --profile hive-team-alpha \
+    --query 'InstanceTypes[].InstanceType' --output text | tr '\t' '\n' | sort)
+BETA_TYPES=$($AWS_EC2 describe-instance-types --profile hive-team-beta \
+    --query 'InstanceTypes[].InstanceType' --output text | tr '\t' '\n' | sort)
+if [ "$ALPHA_TYPES" != "$BETA_TYPES" ]; then
+    echo "  ERROR: Instance types differ between accounts"
+    exit 1
+fi
+echo "  Instance types identical"
+
+echo "  Global resources passed"
+
+# --- Step 8: Edge Cases ---
+echo ""
+echo "Step 8: Edge Cases"
+echo "----------------------------------------"
+
+# Empty account (Gamma)
+echo "  Creating empty Gamma account..."
+GAMMA_OUTPUT=$(./bin/hive admin account create --name "Team Gamma" --config "$HOME/node1/config/hive.toml" 2>&1)
+GAMMA_KEY_ID=$(echo "$GAMMA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
+GAMMA_SECRET=$(echo "$GAMMA_OUTPUT" | grep "Secret Access Key:" | awk '{print $NF}')
+aws configure set aws_access_key_id "$GAMMA_KEY_ID" --profile hive-team-gamma
+aws configure set aws_secret_access_key "$GAMMA_SECRET" --profile hive-team-gamma
+aws configure set region us-east-1 --profile hive-team-gamma
+
+GAMMA_INSTANCES=$($AWS_EC2 describe-instances --profile hive-team-gamma \
+    --query 'Reservations' --output text)
+if [ -n "$GAMMA_INSTANCES" ] && [ "$GAMMA_INSTANCES" != "None" ]; then
+    echo "  ERROR: Gamma has instances"
+    exit 1
+fi
+echo "  Gamma: no instances"
+
+# Skip volume check: root-account volumes (empty TenantID) are visible to all accounts by design
+echo "  Gamma: volumes skipped (root legacy volumes visible to all)"
+
+GAMMA_KEYS=$($AWS_EC2 describe-key-pairs --profile hive-team-gamma \
+    --query 'KeyPairs' --output text)
+if [ -n "$GAMMA_KEYS" ] && [ "$GAMMA_KEYS" != "None" ]; then
+    echo "  ERROR: Gamma has key pairs"
+    exit 1
+fi
+echo "  Gamma: no key pairs"
+
+# Root isolation from tenants
+echo "  Verifying root isolation from tenants..."
+ROOT_INSTANCE_CHECK=$($AWS_EC2 describe-instances \
+    --query 'Reservations[].Instances[].InstanceId' --output text)
+if echo "$ROOT_INSTANCE_CHECK" | grep -q "$ALPHA_INST"; then
+    echo "  ERROR: Root can see Alpha's instance"
+    exit 1
+fi
+echo "  Root cannot see tenant instances"
+
+# Non-existent resource IDs — same error as cross-account
+expect_error "InvalidVolume.NotFound" \
+    $AWS_EC2 delete-volume --volume-id vol-00000000000000000 --profile hive-team-alpha
+echo "  Non-existent volume: same error as cross-account"
+
+expect_error "InvalidSnapshot.NotFound" \
+    $AWS_EC2 delete-snapshot --snapshot-id snap-00000000000000000 --profile hive-team-alpha
+echo "  Non-existent snapshot: same error as cross-account"
+
+# Race condition: parallel key creation from both accounts
+echo "  Testing parallel key creation (race condition)..."
+for i in $(seq 1 5); do
+    $AWS_EC2 create-key-pair --key-name "race-alpha-$i" --profile hive-team-alpha > /dev/null &
+    $AWS_EC2 create-key-pair --key-name "race-beta-$i" --profile hive-team-beta > /dev/null &
+done
+wait
+
+ALPHA_RACE_COUNT=$($AWS_EC2 describe-key-pairs --profile hive-team-alpha \
+    --query 'KeyPairs[].KeyName' --output text | tr '\t' '\n' | grep -c "race-alpha" || true)
+if [ "$ALPHA_RACE_COUNT" -ne 5 ]; then
+    echo "  ERROR: Expected 5 race-alpha keys, got $ALPHA_RACE_COUNT"
+    exit 1
+fi
+ALPHA_RACE_LEAK=$($AWS_EC2 describe-key-pairs --profile hive-team-alpha \
+    --query 'KeyPairs[].KeyName' --output text | tr '\t' '\n' | grep -c "race-beta" || true)
+if [ "$ALPHA_RACE_LEAK" -ne 0 ]; then
+    echo "  ERROR: Alpha sees Beta's race keys (cross-contamination)"
+    exit 1
+fi
+echo "  Parallel key creation: no cross-contamination ($ALPHA_RACE_COUNT alpha keys, 0 beta leaks)"
+
+echo "  Edge cases passed"
+
+# --- Step 9: EC2 + IAM Cleanup ---
+echo ""
+echo "Step 9: EC2 + IAM Cleanup"
+echo "========================================"
+
+# Terminate instances
+echo "  Terminating account-scoped instances..."
+$AWS_EC2 terminate-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha > /dev/null
+$AWS_EC2 terminate-instances --instance-ids "$BETA_INST" --profile hive-team-beta > /dev/null
+
+COUNT=0
+while [ $COUNT -lt 30 ]; do
+    A_STATE=$($AWS_EC2 describe-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha \
+        --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "terminated")
+    B_STATE=$($AWS_EC2 describe-instances --instance-ids "$BETA_INST" --profile hive-team-beta \
+        --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "terminated")
+    if [ "$A_STATE" == "terminated" ] && [ "$B_STATE" == "terminated" ]; then
+        break
+    fi
+    sleep 2
+    COUNT=$((COUNT + 1))
+done
+echo "  Instances terminated"
+
+# Delete snapshots
+echo "  Deleting snapshots..."
+$AWS_EC2 delete-snapshot --snapshot-id "$ALPHA_SNAP" --profile hive-team-alpha 2>/dev/null || true
+$AWS_EC2 delete-snapshot --snapshot-id "$BETA_SNAP" --profile hive-team-beta 2>/dev/null || true
+
+# Delete volumes
+sleep 3
+echo "  Deleting volumes..."
+$AWS_EC2 delete-volume --volume-id "$ALPHA_VOL" --profile hive-team-alpha 2>/dev/null || true
+$AWS_EC2 delete-volume --volume-id "$BETA_VOL" --profile hive-team-beta 2>/dev/null || true
+
+# Delete key pairs
+echo "  Deleting key pairs..."
+for key in alpha-key alpha-instance-key shared-name imported-key; do
+    $AWS_EC2 delete-key-pair --key-name "$key" --profile hive-team-alpha 2>/dev/null || true
+done
+for key in beta-key beta-instance-key shared-name; do
+    $AWS_EC2 delete-key-pair --key-name "$key" --profile hive-team-beta 2>/dev/null || true
+done
+for i in $(seq 1 5); do
+    $AWS_EC2 delete-key-pair --key-name "race-alpha-$i" --profile hive-team-alpha 2>/dev/null || true
+    $AWS_EC2 delete-key-pair --key-name "race-beta-$i" --profile hive-team-beta 2>/dev/null || true
+done
+
+# Delete EIGWs
+echo "  Deleting EIGWs..."
+$AWS_EC2 delete-egress-only-internet-gateway \
+    --egress-only-internet-gateway-id "$ALPHA_EIGW" --profile hive-team-alpha 2>/dev/null || true
+$AWS_EC2 delete-egress-only-internet-gateway \
+    --egress-only-internet-gateway-id "$BETA_EIGW" --profile hive-team-beta 2>/dev/null || true
+
+# Detach + delete IGWs
+echo "  Deleting IGWs..."
+$AWS_EC2 detach-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
+    --vpc-id "$ALPHA_VPC" --profile hive-team-alpha 2>/dev/null || true
+$AWS_EC2 delete-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
+    --profile hive-team-alpha 2>/dev/null || true
+$AWS_EC2 delete-internet-gateway --internet-gateway-id "$BETA_IGW" \
+    --profile hive-team-beta 2>/dev/null || true
+
+# Delete subnets
+echo "  Deleting subnets..."
+$AWS_EC2 delete-subnet --subnet-id "$ALPHA_SUBNET" --profile hive-team-alpha 2>/dev/null || true
+$AWS_EC2 delete-subnet --subnet-id "$BETA_SUBNET" --profile hive-team-beta 2>/dev/null || true
+
+# Delete VPCs
+echo "  Deleting VPCs..."
+$AWS_EC2 delete-vpc --vpc-id "$ALPHA_VPC" --profile hive-team-alpha 2>/dev/null || true
+$AWS_EC2 delete-vpc --vpc-id "$BETA_VPC" --profile hive-team-beta 2>/dev/null || true
+
+echo "  EC2 resources cleaned up"
+
+# IAM cleanup (originally Step 7)
+echo "  Cleaning up IAM resources..."
+
 # Beta cleanup
-echo "  Cleaning up Beta account resources..."
 aws $AWS_EP iam detach-user-policy --user-name alice \
     --policy-arn "arn:aws:iam::${BETA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-beta
 aws $AWS_EP iam delete-access-key --user-name alice \
@@ -1419,19 +2030,18 @@ aws $AWS_EP iam delete-user --user-name dev-user --profile hive-team-beta
 aws $AWS_EP iam delete-policy \
     --policy-arn "arn:aws:iam::${BETA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-beta
 
-# Alpha cleanup (alice already deleted)
-echo "  Cleaning up Alpha account resources..."
+# Alpha cleanup (alice already deleted in Step 6)
 aws $AWS_EP iam delete-user --user-name team-member --profile hive-team-alpha
 aws $AWS_EP iam delete-policy \
     --policy-arn "arn:aws:iam::${ALPHA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-alpha
 
 # Clean up AWS CLI profiles
-for p in hive-team-alpha hive-team-beta hive-alpha-alice hive-beta-alice; do
+for p in hive-team-alpha hive-team-beta hive-alpha-alice hive-beta-alice hive-team-gamma; do
     aws configure set aws_access_key_id "" --profile $p 2>/dev/null || true
     aws configure set aws_secret_access_key "" --profile $p 2>/dev/null || true
 done
 
-echo "  IAM account cleanup complete"
+echo "  IAM + EC2 account cleanup complete"
 echo ""
 echo "  IAM Accounts & Cross-Account Isolation tests passed"
 

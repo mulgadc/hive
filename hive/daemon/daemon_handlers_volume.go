@@ -52,6 +52,14 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 		return
 	}
 
+	// Account scoping: verify the caller owns this volume
+	callerAccountID := utils.AccountIDFromMsg(msg)
+	if callerAccountID != "" && volCfg.VolumeMetadata.TenantID != "" && volCfg.VolumeMetadata.TenantID != callerAccountID {
+		slog.Warn("AttachVolume: account does not own volume", "volumeId", volumeID, "callerAccount", callerAccountID, "ownerAccount", volCfg.VolumeMetadata.TenantID)
+		respondWithError(msg, awserrors.ErrorInvalidVolumeNotFound)
+		return
+	}
+
 	if volCfg.VolumeMetadata.State != "available" {
 		slog.Error("AttachVolume: volume not available", "volumeId", volumeID, "state", volCfg.VolumeMetadata.State)
 		respondWithError(msg, awserrors.ErrorVolumeInUse)
@@ -446,6 +454,8 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 	slog.Debug("Received message", "subject", msg.Subject)
 	slog.Debug("Message data", "data", string(msg.Data))
 
+	accountID := utils.AccountIDFromMsg(msg)
+
 	modifyVolumeInput := &ec2.ModifyVolumeInput{}
 	errResp := utils.UnmarshalJsonPayload(modifyVolumeInput, msg.Data)
 
@@ -457,9 +467,9 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 		return
 	}
 
-	slog.Info("Processing ModifyVolume request", "volumeId", modifyVolumeInput.VolumeId)
+	slog.Info("Processing ModifyVolume request", "volumeId", modifyVolumeInput.VolumeId, "accountID", accountID)
 
-	output, err := d.volumeService.ModifyVolume(modifyVolumeInput)
+	output, err := d.volumeService.ModifyVolume(modifyVolumeInput, accountID)
 
 	if err != nil {
 		slog.Error("handleEC2ModifyVolume service.ModifyVolume failed", "err", err)

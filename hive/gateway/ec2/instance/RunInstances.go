@@ -56,7 +56,7 @@ func ValidateRunInstancesInput(input *ec2.RunInstancesInput) (err error) {
 
 }
 
-func RunInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn) (reservation ec2.Reservation, err error) {
+func RunInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn, accountID string) (reservation ec2.Reservation, err error) {
 
 	// Validate input
 	err = ValidateRunInstancesInput(input)
@@ -69,7 +69,7 @@ func RunInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn) (reservatio
 	service := handlers_ec2_instance.NewNATSInstanceService(natsConn)
 
 	// Call the service directly (no need for JSON marshaling/unmarshaling in same process)
-	reservationPtr, err := service.RunInstances(input)
+	reservationPtr, err := service.RunInstances(input, accountID)
 	if err != nil {
 		if errors.Is(err, nats.ErrNoResponders) {
 			// ErrNoResponders means no daemon subscribes to ec2.RunInstances.{type}.
@@ -90,7 +90,7 @@ func RunInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn) (reservatio
 // isKnownInstanceType checks whether any daemon recognizes the given instance type.
 func isKnownInstanceType(natsConn *nats.Conn, instanceType string) bool {
 	result, err := utils.NATSRequest[ec2.DescribeInstanceTypesOutput](
-		natsConn, "ec2.DescribeInstanceTypes", &ec2.DescribeInstanceTypesInput{}, 3*time.Second)
+		natsConn, "ec2.DescribeInstanceTypes", &ec2.DescribeInstanceTypesInput{}, 3*time.Second, "")
 	if err != nil || result == nil {
 		return false
 	}

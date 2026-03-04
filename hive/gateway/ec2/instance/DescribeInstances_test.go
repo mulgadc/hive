@@ -36,7 +36,7 @@ func TestDescribeInstances_SingleNode(t *testing.T) {
 	require.NoError(t, err)
 
 	input := &ec2.DescribeInstancesInput{}
-	output, err := DescribeInstances(input, nc, 1)
+	output, err := DescribeInstances(input, nc, 1, "123456789012")
 
 	require.NoError(t, err)
 	require.NotNil(t, output)
@@ -87,7 +87,7 @@ func TestDescribeInstances_MultipleNodes(t *testing.T) {
 	nc2.Flush()
 
 	input := &ec2.DescribeInstancesInput{}
-	output, err := DescribeInstances(input, nc, 2)
+	output, err := DescribeInstances(input, nc, 2, "123456789012")
 
 	require.NoError(t, err)
 	require.NotNil(t, output)
@@ -98,7 +98,7 @@ func TestDescribeInstances_NoSubscribers(t *testing.T) {
 	_, nc := startTestNATSServer(t)
 
 	input := &ec2.DescribeInstancesInput{}
-	output, err := DescribeInstances(input, nc, 0)
+	output, err := DescribeInstances(input, nc, 0, "123456789012")
 
 	// No subscribers means timeout — function returns empty reservations, no error
 	require.NoError(t, err)
@@ -115,7 +115,7 @@ func TestDescribeInstances_NodeReturnsError(t *testing.T) {
 	})
 
 	input := &ec2.DescribeInstancesInput{}
-	output, err := DescribeInstances(input, nc, 1)
+	output, err := DescribeInstances(input, nc, 1, "123456789012")
 
 	// Error responses from nodes are logged but don't fail the overall call
 	require.NoError(t, err)
@@ -153,7 +153,7 @@ func TestDescribeInstances_MixedResponses(t *testing.T) {
 	nc2.Flush()
 
 	input := &ec2.DescribeInstancesInput{}
-	output, err := DescribeInstances(input, nc, 2)
+	output, err := DescribeInstances(input, nc, 2, "123456789012")
 
 	require.NoError(t, err)
 	require.NotNil(t, output)
@@ -170,7 +170,7 @@ func TestDescribeInstances_MalformedJSON(t *testing.T) {
 	})
 
 	input := &ec2.DescribeInstancesInput{}
-	output, err := DescribeInstances(input, nc, 1)
+	output, err := DescribeInstances(input, nc, 1, "123456789012")
 
 	// Malformed JSON from a node is skipped, not fatal
 	require.NoError(t, err)
@@ -189,7 +189,7 @@ func TestDescribeInstances_EmptyReservations(t *testing.T) {
 	})
 
 	input := &ec2.DescribeInstancesInput{}
-	output, err := DescribeInstances(input, nc, 1)
+	output, err := DescribeInstances(input, nc, 1, "123456789012")
 
 	require.NoError(t, err)
 	require.NotNil(t, output)
@@ -211,7 +211,7 @@ func TestDescribeInstances_TimeoutCollection(t *testing.T) {
 	})
 
 	input := &ec2.DescribeInstancesInput{}
-	output, err := DescribeInstances(input, nc, 0) // 0 = timeout-based collection
+	output, err := DescribeInstances(input, nc, 0, "123456789012") // 0 = timeout-based collection
 
 	require.NoError(t, err)
 	require.NotNil(t, output)
@@ -232,7 +232,7 @@ func TestDescribeInstances_EarlyExitWithExpectedNodes(t *testing.T) {
 
 	input := &ec2.DescribeInstancesInput{}
 	start := time.Now()
-	output, err := DescribeInstances(input, nc, 1)
+	output, err := DescribeInstances(input, nc, 1, "123456789012")
 	duration := time.Since(start)
 
 	require.NoError(t, err)
@@ -250,7 +250,7 @@ func TestDescribeInstances_ClosedConnection(t *testing.T) {
 	closedNC.Close()
 
 	input := &ec2.DescribeInstancesInput{}
-	_, err = DescribeInstances(input, closedNC, 1)
+	_, err = DescribeInstances(input, closedNC, 1, "123456789012")
 
 	require.Error(t, err)
 }

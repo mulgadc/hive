@@ -10,7 +10,7 @@ import (
 )
 
 // AttachInternetGateway handles the EC2 AttachInternetGateway API call
-func AttachInternetGateway(input *ec2.AttachInternetGatewayInput, natsConn *nats.Conn) (ec2.AttachInternetGatewayOutput, error) {
+func AttachInternetGateway(input *ec2.AttachInternetGatewayInput, natsConn *nats.Conn, accountID string) (ec2.AttachInternetGatewayOutput, error) {
 	var output ec2.AttachInternetGatewayOutput
 
 	if input == nil {
@@ -24,7 +24,7 @@ func AttachInternetGateway(input *ec2.AttachInternetGatewayInput, natsConn *nats
 	}
 
 	svc := handlers_ec2_igw.NewNATSIGWService(natsConn)
-	result, err := svc.AttachInternetGateway(input)
+	result, err := svc.AttachInternetGateway(input, accountID)
 	if err != nil {
 		return output, err
 	}

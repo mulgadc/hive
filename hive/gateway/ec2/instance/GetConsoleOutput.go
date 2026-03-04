@@ -8,14 +8,13 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/nats-io/nats.go"
-
 	"github.com/mulgadc/hive/hive/utils"
+	"github.com/nats-io/nats.go"
 )
 
 // GetConsoleOutput retrieves console output for a specific instance via NATS.
 // Routes directly to the node running the instance via ec2.{instanceID}.GetConsoleOutput.
-func GetConsoleOutput(input *ec2.GetConsoleOutputInput, natsConn *nats.Conn) (*ec2.GetConsoleOutputOutput, error) {
+func GetConsoleOutput(input *ec2.GetConsoleOutputInput, natsConn *nats.Conn, accountID string) (*ec2.GetConsoleOutputOutput, error) {
 	if input.InstanceId == nil || *input.InstanceId == "" {
 		return nil, fmt.Errorf("InstanceId is required")
 	}
@@ -26,7 +25,10 @@ func GetConsoleOutput(input *ec2.GetConsoleOutputInput, natsConn *nats.Conn) (*e
 	}
 
 	topic := fmt.Sprintf("ec2.%s.GetConsoleOutput", *input.InstanceId)
-	msg, err := natsConn.Request(topic, jsonData, 5*time.Second)
+	reqMsg := nats.NewMsg(topic)
+	reqMsg.Data = jsonData
+	reqMsg.Header.Set(utils.AccountIDHeader, accountID)
+	msg, err := natsConn.RequestMsg(reqMsg, 5*time.Second)
 	if err != nil {
 		if err == nats.ErrNoResponders || err == nats.ErrTimeout {
 			return nil, fmt.Errorf("instance %s not found or not running", *input.InstanceId)

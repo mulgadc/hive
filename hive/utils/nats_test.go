@@ -113,7 +113,7 @@ func TestNATSRequest_Success(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	result, err := NATSRequest[Resp](nc, "test.greet", Req{Name: "world"}, 2*time.Second)
+	result, err := NATSRequest[Resp](nc, "test.greet", Req{Name: "world"}, 2*time.Second, "")
 	require.NoError(t, err)
 	assert.Equal(t, "hello world", result.Greeting)
 }
@@ -133,7 +133,7 @@ func TestNATSRequest_ErrorResponse(t *testing.T) {
 	require.NoError(t, err)
 
 	type Resp struct{}
-	_, err = NATSRequest[Resp](nc, "test.fail", struct{}{}, 2*time.Second)
+	_, err = NATSRequest[Resp](nc, "test.fail", struct{}{}, 2*time.Second, "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "InvalidParameterValue")
 }
@@ -146,7 +146,7 @@ func TestNATSRequest_NoResponders(t *testing.T) {
 	defer nc.Close()
 
 	type Resp struct{}
-	_, err = NATSRequest[Resp](nc, "test.nobody", struct{}{}, 500*time.Millisecond)
+	_, err = NATSRequest[Resp](nc, "test.nobody", struct{}{}, 500*time.Millisecond, "")
 	assert.Error(t, err)
 }
 
@@ -164,7 +164,7 @@ func TestNATSRequest_Timeout(t *testing.T) {
 	require.NoError(t, err)
 
 	type Resp struct{}
-	_, err = NATSRequest[Resp](nc, "test.slow", struct{}{}, 100*time.Millisecond)
+	_, err = NATSRequest[Resp](nc, "test.slow", struct{}{}, 100*time.Millisecond, "")
 	assert.Error(t, err)
 }
 
@@ -184,7 +184,78 @@ func TestNATSRequest_InvalidUnmarshal(t *testing.T) {
 	type Resp struct {
 		Value int `json:"value"`
 	}
-	_, err = NATSRequest[Resp](nc, "test.badjson", struct{}{}, 2*time.Second)
+	_, err = NATSRequest[Resp](nc, "test.badjson", struct{}{}, 2*time.Second, "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unmarshal")
+}
+
+// --- NATSRequest with account ID tests ---
+
+func TestNATSRequest_AccountIDHeader(t *testing.T) {
+	ns := startTestNATSServer(t)
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	defer nc.Close()
+
+	type Req struct {
+		Name string `json:"name"`
+	}
+	type Resp struct {
+		Greeting  string `json:"greeting"`
+		AccountID string `json:"account_id"`
+	}
+
+	// Responder echoes back the account ID from the header
+	_, err = nc.Subscribe("test.account", func(msg *nats.Msg) {
+		var req Req
+		json.Unmarshal(msg.Data, &req)
+		acct := AccountIDFromMsg(msg)
+		resp := Resp{Greeting: "hello " + req.Name, AccountID: acct}
+		data, _ := json.Marshal(resp)
+		msg.Respond(data)
+	})
+	require.NoError(t, err)
+
+	result, err := NATSRequest[Resp](nc, "test.account", Req{Name: "world"}, 2*time.Second, "111122223333")
+	require.NoError(t, err)
+	assert.Equal(t, "hello world", result.Greeting)
+	assert.Equal(t, "111122223333", result.AccountID)
+}
+
+func TestNATSRequest_MarshalError(t *testing.T) {
+	ns := startTestNATSServer(t)
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	defer nc.Close()
+
+	type Resp struct{}
+	// Channels cannot be marshaled to JSON
+	_, err = NATSRequest[Resp](nc, "test.marshalfail", make(chan int), 2*time.Second, "")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to marshal input")
+}
+
+// --- AccountIDFromMsg tests ---
+
+func TestAccountIDFromMsg(t *testing.T) {
+	msg := nats.NewMsg("test")
+	msg.Header.Set(AccountIDHeader, "444455556666")
+
+	assert.Equal(t, "444455556666", AccountIDFromMsg(msg))
+}
+
+func TestAccountIDFromMsg_Missing(t *testing.T) {
+	msg := nats.NewMsg("test")
+	assert.Equal(t, "", AccountIDFromMsg(msg))
+}
+
+func TestAccountIDFromMsg_NilMsg(t *testing.T) {
+	assert.Equal(t, "", AccountIDFromMsg(nil))
+}
+
+func TestAccountIDFromMsg_NilHeader(t *testing.T) {
+	msg := &nats.Msg{Subject: "test"}
+	assert.Equal(t, "", AccountIDFromMsg(msg))
 }

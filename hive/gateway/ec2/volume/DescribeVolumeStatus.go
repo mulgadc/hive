@@ -27,7 +27,7 @@ func ValidateDescribeVolumeStatusInput(input *ec2.DescribeVolumeStatusInput) err
 }
 
 // DescribeVolumeStatus handles the DescribeVolumeStatus API call
-func DescribeVolumeStatus(input *ec2.DescribeVolumeStatusInput, natsConn *nats.Conn) (ec2.DescribeVolumeStatusOutput, error) {
+func DescribeVolumeStatus(input *ec2.DescribeVolumeStatusInput, natsConn *nats.Conn, accountID string) (ec2.DescribeVolumeStatusOutput, error) {
 	var output ec2.DescribeVolumeStatusOutput
 
 	err := ValidateDescribeVolumeStatusInput(input)
@@ -36,7 +36,7 @@ func DescribeVolumeStatus(input *ec2.DescribeVolumeStatusInput, natsConn *nats.C
 	}
 
 	volumeService := handlers_ec2_volume.NewNATSVolumeService(natsConn)
-	result, err := volumeService.DescribeVolumeStatus(input)
+	result, err := volumeService.DescribeVolumeStatus(input, accountID)
 	if err != nil {
 		return output, err
 	}

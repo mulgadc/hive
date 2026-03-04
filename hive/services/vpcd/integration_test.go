@@ -13,6 +13,8 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+const testIGWAccountID = "123456789012"
+
 // startTestJetStreamNATS starts an embedded NATS server with JetStream for integration tests.
 func startTestJetStreamNATS(t *testing.T) (*server.Server, *nats.Conn) {
 	t.Helper()
@@ -165,7 +167,7 @@ func TestIntegration_VPCLifecycle(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, testIGWAccountID)
 	if err != nil {
 		t.Fatalf("CreateInternetGateway: %v", err)
 	}
@@ -175,7 +177,7 @@ func TestIntegration_VPCLifecycle(t *testing.T) {
 	_, err = igwSvc.AttachInternetGateway(&ec2.AttachInternetGatewayInput{
 		InternetGatewayId: aws.String(igwID),
 		VpcId:             aws.String("vpc-integ1"),
-	})
+	}, testIGWAccountID)
 	if err != nil {
 		t.Fatalf("AttachInternetGateway: %v", err)
 	}
@@ -206,7 +208,7 @@ func TestIntegration_VPCLifecycle(t *testing.T) {
 	// Verify IGW state via Describe
 	descOut, err := igwSvc.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{
 		InternetGatewayIds: []*string{aws.String(igwID)},
-	})
+	}, testIGWAccountID)
 	if err != nil {
 		t.Fatalf("DescribeInternetGateways: %v", err)
 	}
@@ -238,7 +240,7 @@ func TestIntegration_VPCLifecycle(t *testing.T) {
 	_, err = igwSvc.DetachInternetGateway(&ec2.DetachInternetGatewayInput{
 		InternetGatewayId: aws.String(igwID),
 		VpcId:             aws.String("vpc-integ1"),
-	})
+	}, testIGWAccountID)
 	if err != nil {
 		t.Fatalf("DetachInternetGateway: %v", err)
 	}
@@ -265,7 +267,7 @@ func TestIntegration_VPCLifecycle(t *testing.T) {
 	// === Phase 7: Delete IGW ===
 	_, err = igwSvc.DeleteInternetGateway(&ec2.DeleteInternetGatewayInput{
 		InternetGatewayId: aws.String(igwID),
-	})
+	}, testIGWAccountID)
 	if err != nil {
 		t.Fatalf("DeleteInternetGateway: %v", err)
 	}
@@ -294,7 +296,7 @@ func TestIntegration_VPCLifecycle(t *testing.T) {
 		t.Errorf("expected 0 DHCP options after cleanup, got %d", len(dhcpList))
 	}
 
-	descOut, err = igwSvc.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{})
+	descOut, err = igwSvc.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{}, testIGWAccountID)
 	if err != nil {
 		t.Fatalf("DescribeInternetGateways: %v", err)
 	}
@@ -373,13 +375,13 @@ func TestIntegration_MultiSubnetWithIGW(t *testing.T) {
 
 	// Attach IGW
 	igwSvc, _ := handlers_ec2_igw.NewIGWServiceImplWithNATS(nil, nc)
-	igwOut, _ := igwSvc.CreateInternetGateway(&ec2.CreateInternetGatewayInput{})
+	igwOut, _ := igwSvc.CreateInternetGateway(&ec2.CreateInternetGatewayInput{}, testIGWAccountID)
 	igwID := *igwOut.InternetGateway.InternetGatewayId
 
 	_, err = igwSvc.AttachInternetGateway(&ec2.AttachInternetGatewayInput{
 		InternetGatewayId: aws.String(igwID),
 		VpcId:             aws.String("vpc-multi"),
-	})
+	}, testIGWAccountID)
 	if err != nil {
 		t.Fatalf("AttachInternetGateway: %v", err)
 	}
@@ -405,11 +407,11 @@ func TestIntegration_MultiSubnetWithIGW(t *testing.T) {
 	_, _ = igwSvc.DetachInternetGateway(&ec2.DetachInternetGatewayInput{
 		InternetGatewayId: aws.String(igwID),
 		VpcId:             aws.String("vpc-multi"),
-	})
+	}, testIGWAccountID)
 	time.Sleep(100 * time.Millisecond)
 	_, _ = igwSvc.DeleteInternetGateway(&ec2.DeleteInternetGatewayInput{
 		InternetGatewayId: aws.String(igwID),
-	})
+	}, testIGWAccountID)
 
 	// Delete ports
 	for _, port := range ports {
@@ -463,18 +465,18 @@ func TestIntegration_IGWErrorPaths(t *testing.T) {
 	}
 
 	// Create and attach IGW
-	igwOut, _ := igwSvc.CreateInternetGateway(&ec2.CreateInternetGatewayInput{})
+	igwOut, _ := igwSvc.CreateInternetGateway(&ec2.CreateInternetGatewayInput{}, testIGWAccountID)
 	igwID := *igwOut.InternetGateway.InternetGatewayId
 
 	// Can't delete while attached
 	_, _ = igwSvc.AttachInternetGateway(&ec2.AttachInternetGatewayInput{
 		InternetGatewayId: aws.String(igwID),
 		VpcId:             aws.String("vpc-err1"),
-	})
+	}, testIGWAccountID)
 
 	_, err = igwSvc.DeleteInternetGateway(&ec2.DeleteInternetGatewayInput{
 		InternetGatewayId: aws.String(igwID),
-	})
+	}, testIGWAccountID)
 	if err == nil {
 		t.Error("expected DependencyViolation error")
 	}
@@ -483,7 +485,7 @@ func TestIntegration_IGWErrorPaths(t *testing.T) {
 	_, err = igwSvc.AttachInternetGateway(&ec2.AttachInternetGatewayInput{
 		InternetGatewayId: aws.String(igwID),
 		VpcId:             aws.String("vpc-err2"),
-	})
+	}, testIGWAccountID)
 	if err == nil {
 		t.Error("expected ResourceAlreadyAssociated error")
 	}
@@ -492,7 +494,7 @@ func TestIntegration_IGWErrorPaths(t *testing.T) {
 	_, err = igwSvc.DetachInternetGateway(&ec2.DetachInternetGatewayInput{
 		InternetGatewayId: aws.String(igwID),
 		VpcId:             aws.String("vpc-wrong"),
-	})
+	}, testIGWAccountID)
 	if err == nil {
 		t.Error("expected GatewayNotAttached error")
 	}
@@ -501,7 +503,7 @@ func TestIntegration_IGWErrorPaths(t *testing.T) {
 	_, err = igwSvc.AttachInternetGateway(&ec2.AttachInternetGatewayInput{
 		InternetGatewayId: aws.String("igw-doesnotexist"),
 		VpcId:             aws.String("vpc-err1"),
-	})
+	}, testIGWAccountID)
 	if err == nil {
 		t.Error("expected NotFound error for attach")
 	}
@@ -509,7 +511,7 @@ func TestIntegration_IGWErrorPaths(t *testing.T) {
 	_, err = igwSvc.DetachInternetGateway(&ec2.DetachInternetGatewayInput{
 		InternetGatewayId: aws.String("igw-doesnotexist"),
 		VpcId:             aws.String("vpc-err1"),
-	})
+	}, testIGWAccountID)
 	if err == nil {
 		t.Error("expected NotFound error for detach")
 	}
@@ -518,8 +520,8 @@ func TestIntegration_IGWErrorPaths(t *testing.T) {
 	_, _ = igwSvc.DetachInternetGateway(&ec2.DetachInternetGatewayInput{
 		InternetGatewayId: aws.String(igwID),
 		VpcId:             aws.String("vpc-err1"),
-	})
+	}, testIGWAccountID)
 	_, _ = igwSvc.DeleteInternetGateway(&ec2.DeleteInternetGatewayInput{
 		InternetGatewayId: aws.String(igwID),
-	})
+	}, testIGWAccountID)
 }

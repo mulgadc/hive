@@ -10,7 +10,7 @@ import (
 )
 
 // CreateInternetGateway handles the EC2 CreateInternetGateway API call
-func CreateInternetGateway(input *ec2.CreateInternetGatewayInput, natsConn *nats.Conn) (ec2.CreateInternetGatewayOutput, error) {
+func CreateInternetGateway(input *ec2.CreateInternetGatewayInput, natsConn *nats.Conn, accountID string) (ec2.CreateInternetGatewayOutput, error) {
 	var output ec2.CreateInternetGatewayOutput
 
 	if input == nil {
@@ -18,7 +18,7 @@ func CreateInternetGateway(input *ec2.CreateInternetGatewayInput, natsConn *nats
 	}
 
 	svc := handlers_ec2_igw.NewNATSIGWService(natsConn)
-	result, err := svc.CreateInternetGateway(input)
+	result, err := svc.CreateInternetGateway(input, accountID)
 	if err != nil {
 		return output, err
 	}

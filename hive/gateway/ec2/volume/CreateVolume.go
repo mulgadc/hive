@@ -32,7 +32,7 @@ func ValidateCreateVolumeInput(input *ec2.CreateVolumeInput) error {
 }
 
 // CreateVolume handles the CreateVolume API call
-func CreateVolume(input *ec2.CreateVolumeInput, natsConn *nats.Conn) (ec2.Volume, error) {
+func CreateVolume(input *ec2.CreateVolumeInput, natsConn *nats.Conn, accountID string) (ec2.Volume, error) {
 	var output ec2.Volume
 
 	err := ValidateCreateVolumeInput(input)
@@ -41,7 +41,7 @@ func CreateVolume(input *ec2.CreateVolumeInput, natsConn *nats.Conn) (ec2.Volume
 	}
 
 	volumeService := handlers_ec2_volume.NewNATSVolumeService(natsConn)
-	result, err := volumeService.CreateVolume(input)
+	result, err := volumeService.CreateVolume(input, accountID)
 
 	if err != nil {
 		return output, err

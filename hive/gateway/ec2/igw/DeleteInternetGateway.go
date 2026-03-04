@@ -10,7 +10,7 @@ import (
 )
 
 // DeleteInternetGateway handles the EC2 DeleteInternetGateway API call
-func DeleteInternetGateway(input *ec2.DeleteInternetGatewayInput, natsConn *nats.Conn) (ec2.DeleteInternetGatewayOutput, error) {
+func DeleteInternetGateway(input *ec2.DeleteInternetGatewayInput, natsConn *nats.Conn, accountID string) (ec2.DeleteInternetGatewayOutput, error) {
 	var output ec2.DeleteInternetGatewayOutput
 
 	if input == nil {
@@ -21,7 +21,7 @@ func DeleteInternetGateway(input *ec2.DeleteInternetGatewayInput, natsConn *nats
 	}
 
 	svc := handlers_ec2_igw.NewNATSIGWService(natsConn)
-	result, err := svc.DeleteInternetGateway(input)
+	result, err := svc.DeleteInternetGateway(input, accountID)
 	if err != nil {
 		return output, err
 	}

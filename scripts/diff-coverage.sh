@@ -47,7 +47,7 @@ if [[ -z "$BASE_REF" ]]; then
         dev)  BASE_REF="origin/main" ;;
         *)    BASE_REF="origin/dev" ;;
     esac
-    echo "Base ref: $BASE_REF (branch: $BRANCH)"
+    [[ -z "$QUIET" ]] && echo "Base ref: $BASE_REF (branch: $BRANCH)"
 fi
 
 # Verify base ref exists
@@ -135,8 +135,6 @@ awk -v threshold="$THRESHOLD" '
             total++
             if (cov[$1]) {
                 covered++
-            } else {
-                uncov[uncov_n++] = $1
             }
         } else {
             skipped++
@@ -157,19 +155,16 @@ awk -v threshold="$THRESHOLD" '
         uncovered = total - covered
         pct = (covered / total) * 100
 
-        printf "\n=== Diff Coverage ===\n"
-        printf "Instrumentable lines:   %d\n", total
-        printf "Covered:                %d\n", covered+0
-        printf "Uncovered:              %d\n", uncovered
-        printf "Non-instrumentable:     %d (skipped)\n", skipped+0
-        printf "Diff coverage:          %.1f%%\n", pct
-        printf "Threshold:              %d%%\n", threshold
+        quiet = ENVIRON["QUIET"]
 
-        if (uncovered > 0) {
-            printf "\nUncovered lines:\n"
-            for (i = 0; i < uncov_n; i++) {
-                printf "  %s\n", uncov[i]
-            }
+        if (!quiet) {
+            printf "\n=== Diff Coverage ===\n"
+            printf "Instrumentable lines:   %d\n", total
+            printf "Covered:                %d\n", covered+0
+            printf "Uncovered:              %d\n", uncovered
+            printf "Non-instrumentable:     %d (skipped)\n", skipped+0
+            printf "Diff coverage:          %.1f%%\n", pct
+            printf "Threshold:              %d%%\n", threshold
         }
 
         if (pct + 0.05 < threshold) {

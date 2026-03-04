@@ -29,7 +29,7 @@ func ValidateDescribeVolumesInput(input *ec2.DescribeVolumesInput) error {
 }
 
 // DescribeVolumes handles the DescribeVolumes API call
-func DescribeVolumes(input *ec2.DescribeVolumesInput, natsConn *nats.Conn) (ec2.DescribeVolumesOutput, error) {
+func DescribeVolumes(input *ec2.DescribeVolumesInput, natsConn *nats.Conn, accountID string) (ec2.DescribeVolumesOutput, error) {
 	var output ec2.DescribeVolumesOutput
 
 	// Validate input
@@ -40,7 +40,7 @@ func DescribeVolumes(input *ec2.DescribeVolumesInput, natsConn *nats.Conn) (ec2.
 
 	// Create NATS service and call handler
 	volumeService := handlers_ec2_volume.NewNATSVolumeService(natsConn)
-	result, err := volumeService.DescribeVolumes(input)
+	result, err := volumeService.DescribeVolumes(input, accountID)
 
 	if err != nil {
 		return output, err

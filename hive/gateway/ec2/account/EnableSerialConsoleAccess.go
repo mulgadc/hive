@@ -16,7 +16,7 @@ func ValidateEnableSerialConsoleAccessInput(input *ec2.EnableSerialConsoleAccess
 	return nil
 }
 
-func EnableSerialConsoleAccess(input *ec2.EnableSerialConsoleAccessInput, natsConn *nats.Conn) (ec2.EnableSerialConsoleAccessOutput, error) {
+func EnableSerialConsoleAccess(input *ec2.EnableSerialConsoleAccessInput, natsConn *nats.Conn, accountID string) (ec2.EnableSerialConsoleAccessOutput, error) {
 	var output ec2.EnableSerialConsoleAccessOutput
 
 	if err := ValidateEnableSerialConsoleAccessInput(input); err != nil {
@@ -24,7 +24,7 @@ func EnableSerialConsoleAccess(input *ec2.EnableSerialConsoleAccessInput, natsCo
 	}
 
 	svc := handlers_ec2_account.NewNATSAccountSettingsService(natsConn)
-	result, err := svc.EnableSerialConsoleAccess(input)
+	result, err := svc.EnableSerialConsoleAccess(input, accountID)
 	if err != nil {
 		return output, err
 	}

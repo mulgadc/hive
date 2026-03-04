@@ -23,6 +23,14 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	slog.Debug("Received message on subject", "subject", msg.Subject)
 	slog.Debug("Message data", "data", string(msg.Data))
 
+	// Extract account ID from NATS header
+	accountID := utils.AccountIDFromMsg(msg)
+	if accountID == "" {
+		slog.Error("handleEC2RunInstances: missing account ID in NATS header")
+		respondWithError(msg, awserrors.ErrorServerInternal)
+		return
+	}
+
 	// Initialize runInstancesInput before unmarshaling into it
 	runInstancesInput := &ec2.RunInstancesInput{}
 	errResp := utils.UnmarshalJsonPayload(runInstancesInput, msg.Data)
@@ -56,15 +64,38 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
-	if _, err := d.imageService.GetAMIConfig(*runInstancesInput.ImageId); err != nil {
+	amiMeta, err := d.imageService.GetAMIConfig(*runInstancesInput.ImageId)
+	if err != nil {
 		slog.Error("handleEC2RunInstances AMI not found", "imageId", *runInstancesInput.ImageId, "err", err)
 		respondWithError(msg, awserrors.ErrorInvalidAMIIDNotFound)
 		return
 	}
+	// Verify the caller can use this AMI: must own it or it must be a system/pre-phase4 AMI.
+	// System AMIs have non-account-ID owner aliases (e.g. "self", "hive", empty).
+	amiOwner := amiMeta.ImageOwnerAlias
+	if amiOwner != "" && amiOwner != accountID {
+		// Check if this is a system/pre-phase4 AMI (non-account-ID owner)
+		isSystem := len(amiOwner) != 12
+		if !isSystem {
+			allDigits := true
+			for _, c := range amiOwner {
+				if c < '0' || c > '9' {
+					allDigits = false
+					break
+				}
+			}
+			isSystem = !allDigits
+		}
+		if !isSystem {
+			slog.Warn("handleEC2RunInstances AMI not owned by caller", "imageId", *runInstancesInput.ImageId, "amiOwner", amiOwner, "accountID", accountID)
+			respondWithError(msg, awserrors.ErrorInvalidAMIIDNotFound)
+			return
+		}
+	}
 
 	// Validate key pair exists (if specified)
 	if runInstancesInput.KeyName != nil && *runInstancesInput.KeyName != "" {
-		if err := d.keyService.ValidateKeyPairExists(*runInstancesInput.KeyName); err != nil {
+		if err := d.keyService.ValidateKeyPairExists(accountID, *runInstancesInput.KeyName); err != nil {
 			slog.Error("handleEC2RunInstances key pair not found", "keyName", *runInstancesInput.KeyName, "err", err)
 			respondWithError(msg, awserrors.ErrorInvalidKeyPairNotFound)
 			return
@@ -142,7 +173,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 			eniOut, eniErr := d.vpcService.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
 				SubnetId:    runInstancesInput.SubnetId,
 				Description: aws.String("Primary network interface for " + instance.ID),
-			})
+			}, accountID)
 			if eniErr != nil {
 				slog.Error("handleEC2RunInstances auto-create ENI failed", "instanceId", instance.ID, "subnetId", *runInstancesInput.SubnetId, "err", eniErr)
 				lastRunErr = eniErr
@@ -205,12 +236,13 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	// Build reservation with all instances
 	reservation := ec2.Reservation{}
 	reservation.SetReservationId(utils.GenerateResourceID("r"))
-	reservation.SetOwnerId("123456789012") // TODO: Use actual owner ID from config
+	reservation.SetOwnerId(accountID)
 	reservation.Instances = allEC2Instances
 
-	// Store reservation reference in all VMs
+	// Store reservation reference and account ID in all VMs
 	for _, instance := range instances {
 		instance.Reservation = &reservation
+		instance.AccountID = accountID
 	}
 
 	// Respond to NATS immediately with reservation (instances are provisioning)
@@ -443,9 +475,12 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command qmp.Comman
 }
 
 // handleEC2DescribeInstances processes incoming EC2 DescribeInstances requests
-// This handler responds with all instances running on this node
+// This handler responds with instances running on this node owned by the caller's account
 func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 	slog.Debug("Received message", "subject", msg.Subject, "data", string(msg.Data))
+
+	// Extract account ID from NATS header for scoping
+	accountID := utils.AccountIDFromMsg(msg)
 
 	// Initialize describeInstancesInput before unmarshaling into it
 	describeInstancesInput := &ec2.DescribeInstancesInput{}
@@ -459,7 +494,7 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 		return
 	}
 
-	slog.Info("Processing DescribeInstances request from this node")
+	slog.Info("Processing DescribeInstances request from this node", "accountID", accountID)
 
 	d.Instances.Mu.Lock()
 	defer d.Instances.Mu.Unlock()
@@ -483,6 +518,12 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 
 	// Iterate through all instances on this node
 	for _, instance := range d.Instances.VMS {
+		// Skip instances not owned by the caller's account.
+		// Pre-Phase4 instances (empty AccountID) are visible to all accounts.
+		if accountID != "" && instance.AccountID != "" && instance.AccountID != accountID {
+			continue
+		}
+
 		// Skip if filtering by instance IDs and this instance is not in the filter
 		if len(instanceIDFilter) > 0 && !instanceIDFilter[instance.ID] {
 			continue
@@ -613,6 +654,8 @@ type startStoppedInstanceRequest struct {
 // handleEC2StartStoppedInstance picks up a stopped instance from shared KV,
 // re-launches it on this daemon node, and removes it from shared KV.
 func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
+	// Extract account ID from NATS header for ownership verification
+	callerAccountID := utils.AccountIDFromMsg(msg)
 
 	var req startStoppedInstanceRequest
 	if err := json.Unmarshal(msg.Data, &req); err != nil {
@@ -649,6 +692,13 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 	if instance.Status != vm.StateStopped {
 		slog.Error("handleEC2StartStoppedInstance: instance not in stopped state", "instanceId", req.InstanceID, "status", instance.Status)
 		respondWithError(msg, awserrors.ErrorIncorrectInstanceState)
+		return
+	}
+
+	// Verify the caller owns this instance
+	if callerAccountID != "" && instance.AccountID != "" && instance.AccountID != callerAccountID {
+		slog.Warn("handleEC2StartStoppedInstance: account does not own instance", "instanceId", req.InstanceID, "callerAccount", callerAccountID, "ownerAccount", instance.AccountID)
+		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
 		return
 	}
 
@@ -719,6 +769,8 @@ type terminateStoppedInstanceRequest struct {
 // handleEC2TerminateStoppedInstance picks up a stopped instance from shared KV,
 // deletes its volumes, and removes it from shared KV.
 func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
+	// Extract account ID from NATS header for ownership verification
+	callerAccountID := utils.AccountIDFromMsg(msg)
 
 	var req terminateStoppedInstanceRequest
 	if err := json.Unmarshal(msg.Data, &req); err != nil {
@@ -758,6 +810,13 @@ func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
 		return
 	}
 
+	// Verify the caller owns this instance
+	if callerAccountID != "" && instance.AccountID != "" && instance.AccountID != callerAccountID {
+		slog.Warn("handleEC2TerminateStoppedInstance: account does not own instance", "instanceId", req.InstanceID, "callerAccount", callerAccountID, "ownerAccount", instance.AccountID)
+		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
+		return
+	}
+
 	// Delete volumes — no QEMU shutdown or unmount needed (already done during stop)
 	instance.EBSRequests.Mu.Lock()
 	for _, ebsRequest := range instance.EBSRequests.Requests {
@@ -786,7 +845,7 @@ func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
 		slog.Info("handleEC2TerminateStoppedInstance: deleting volume with DeleteOnTermination=true", "name", ebsRequest.Name)
 		_, err := d.volumeService.DeleteVolume(&ec2.DeleteVolumeInput{
 			VolumeId: &ebsRequest.Name,
-		})
+		}, instance.AccountID)
 		if err != nil {
 			slog.Error("handleEC2TerminateStoppedInstance: failed to delete volume", "name", ebsRequest.Name, "err", err)
 		}
@@ -814,6 +873,9 @@ func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
+
+	// Extract account ID from NATS header for scoping
+	accountID := utils.AccountIDFromMsg(msg)
 
 	// Parse optional filters from the request
 	describeInput := &ec2.DescribeInstancesInput{}
@@ -847,6 +909,12 @@ func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
 	reservationMap := make(map[string]*ec2.Reservation)
 
 	for _, instance := range instances {
+		// Skip instances not owned by the caller's account.
+		// Pre-Phase4 instances (empty AccountID) are visible to all accounts.
+		if accountID != "" && instance.AccountID != "" && instance.AccountID != accountID {
+			continue
+		}
+
 		// Apply instance ID filter
 		if len(instanceIDFilter) > 0 && !instanceIDFilter[instance.ID] {
 			continue
@@ -909,6 +977,8 @@ func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
 // handleEC2ModifyInstanceAttribute modifies attributes of a stopped instance in shared KV.
 // All supported attributes (InstanceType, UserData) require the instance to be stopped.
 func (d *Daemon) handleEC2ModifyInstanceAttribute(msg *nats.Msg) {
+	// Extract account ID from NATS header for ownership verification
+	callerAccountID := utils.AccountIDFromMsg(msg)
 
 	var input ec2.ModifyInstanceAttributeInput
 	if err := json.Unmarshal(msg.Data, &input); err != nil {
@@ -946,6 +1016,13 @@ func (d *Daemon) handleEC2ModifyInstanceAttribute(msg *nats.Msg) {
 	if instance.Status != vm.StateStopped {
 		slog.Error("handleEC2ModifyInstanceAttribute: instance not in stopped state", "instanceId", instanceID, "status", instance.Status)
 		respondWithError(msg, awserrors.ErrorIncorrectInstanceState)
+		return
+	}
+
+	// Verify the caller owns this instance
+	if callerAccountID != "" && instance.AccountID != "" && instance.AccountID != callerAccountID {
+		slog.Warn("handleEC2ModifyInstanceAttribute: account does not own instance", "instanceId", instanceID, "callerAccount", callerAccountID, "ownerAccount", instance.AccountID)
+		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
 		return
 	}
 
