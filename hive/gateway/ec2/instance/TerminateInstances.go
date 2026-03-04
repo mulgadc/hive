@@ -87,6 +87,12 @@ func TerminateInstances(input *ec2.TerminateInstancesInput, natsConn *nats.Conn,
 			continue
 		}
 
+		// Check if the daemon returned an error response (e.g. ownership check failure)
+		if responseError, parseErr := utils.ValidateErrorPayload(msg.Data); parseErr != nil {
+			slog.Error("TerminateInstances: Daemon returned error", "instance_id", instanceID, "code", *responseError.Code)
+			return nil, errors.New(*responseError.Code)
+		}
+
 		slog.Info("TerminateInstances: Command sent successfully", "instance_id", instanceID, "response", string(msg.Data))
 
 		stateChanges = append(stateChanges, newStateChange(instanceID, 32, "shutting-down", 16, "running"))

@@ -2,6 +2,7 @@ package gateway_ec2_instance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -61,6 +62,12 @@ func StopInstances(input *ec2.StopInstancesInput, natsConn *nats.Conn, accountID
 			slog.Error("StopInstances: Failed to send command", "instance_id", instanceID, "err", err)
 			stateChanges = append(stateChanges, newStateChange(instanceID, 16, "running", 16, "running"))
 			continue
+		}
+
+		// Check if the daemon returned an error response (e.g. ownership check failure)
+		if responseError, parseErr := utils.ValidateErrorPayload(msg.Data); parseErr != nil {
+			slog.Error("StopInstances: Daemon returned error", "instance_id", instanceID, "code", *responseError.Code)
+			return nil, errors.New(*responseError.Code)
 		}
 
 		slog.Info("StopInstances: Command sent successfully", "instance_id", instanceID, "response", string(msg.Data))
