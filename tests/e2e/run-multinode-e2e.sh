@@ -1534,7 +1534,7 @@ echo "  Beta cannot delete Alpha's volume"
 
 expect_error "InvalidVolume.NotFound" \
     $AWS_EC2 attach-volume --volume-id "$ALPHA_VOL" \
-    --instance-id "$ALPHA_INST" --device /dev/sdf --profile hive-team-beta
+    --instance-id "$BETA_INST" --device /dev/sdf --profile hive-team-beta
 echo "  Beta cannot attach Alpha's volume"
 
 # Attach Alpha's volume, then test cross-account detach
