@@ -22,8 +22,9 @@ func respondWithError(msg *nats.Msg, errCode string) {
 }
 
 // handleNATSRequest is a generic helper for the common unmarshal → service → marshal → respond pattern.
-// used for basic requests that don't modify any daemon state, just return the result
-func handleNATSRequest[I any, O any](msg *nats.Msg, serviceFn func(*I) (*O, error)) {
+// It extracts the account ID from the NATS message header and passes it to the service function.
+func handleNATSRequest[I any, O any](msg *nats.Msg, serviceFn func(*I, string) (*O, error)) {
+	accountID := utils.AccountIDFromMsg(msg)
 	input := new(I)
 	if errResp := utils.UnmarshalJsonPayload(input, msg.Data); errResp != nil {
 		if err := msg.Respond(errResp); err != nil {
@@ -31,7 +32,7 @@ func handleNATSRequest[I any, O any](msg *nats.Msg, serviceFn func(*I) (*O, erro
 		}
 		return
 	}
-	output, err := serviceFn(input)
+	output, err := serviceFn(input, accountID)
 	if err != nil {
 		if err := msg.Respond(utils.GenerateErrorPayload(awserrors.ValidErrorCode(err.Error()))); err != nil {
 			slog.Error("Failed to respond to NATS request", "err", err)
@@ -48,15 +49,6 @@ func handleNATSRequest[I any, O any](msg *nats.Msg, serviceFn func(*I) (*O, erro
 	if err := msg.Respond(jsonResponse); err != nil {
 		slog.Error("Failed to respond to NATS request", "err", err)
 	}
-}
-
-// handleNATSRequestWithAccount is like handleNATSRequest but extracts the account ID
-// from the NATS message header and passes it to the service function.
-func handleNATSRequestWithAccount[I any, O any](msg *nats.Msg, serviceFn func(*I, string) (*O, error)) {
-	accountID := utils.AccountIDFromMsg(msg)
-	handleNATSRequest(msg, func(input *I) (*O, error) {
-		return serviceFn(input, accountID)
-	})
 }
 
 // handleEC2Events processes incoming EC2 instance events (start, stop, terminate, attach-volume)

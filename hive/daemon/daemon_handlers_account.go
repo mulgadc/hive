@@ -5,25 +5,25 @@ import (
 )
 
 func (d *Daemon) handleEC2EnableEbsEncryptionByDefault(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.accountService.EnableEbsEncryptionByDefault)
+	handleNATSRequest(msg, d.accountService.EnableEbsEncryptionByDefault)
 }
 
 func (d *Daemon) handleEC2DisableEbsEncryptionByDefault(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.accountService.DisableEbsEncryptionByDefault)
+	handleNATSRequest(msg, d.accountService.DisableEbsEncryptionByDefault)
 }
 
 func (d *Daemon) handleEC2GetEbsEncryptionByDefault(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.accountService.GetEbsEncryptionByDefault)
+	handleNATSRequest(msg, d.accountService.GetEbsEncryptionByDefault)
 }
 
 func (d *Daemon) handleEC2GetSerialConsoleAccessStatus(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.accountService.GetSerialConsoleAccessStatus)
+	handleNATSRequest(msg, d.accountService.GetSerialConsoleAccessStatus)
 }
 
 func (d *Daemon) handleEC2EnableSerialConsoleAccess(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.accountService.EnableSerialConsoleAccess)
+	handleNATSRequest(msg, d.accountService.EnableSerialConsoleAccess)
 }
 
 func (d *Daemon) handleEC2DisableSerialConsoleAccess(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.accountService.DisableSerialConsoleAccess)
+	handleNATSRequest(msg, d.accountService.DisableSerialConsoleAccess)
 }

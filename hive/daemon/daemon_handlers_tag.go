@@ -5,13 +5,13 @@ import (
 )
 
 func (d *Daemon) handleEC2CreateTags(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.tagsService.CreateTags)
+	handleNATSRequest(msg, d.tagsService.CreateTags)
 }
 
 func (d *Daemon) handleEC2DeleteTags(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.tagsService.DeleteTags)
+	handleNATSRequest(msg, d.tagsService.DeleteTags)
 }
 
 func (d *Daemon) handleEC2DescribeTags(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.tagsService.DescribeTags)
+	handleNATSRequest(msg, d.tagsService.DescribeTags)
 }

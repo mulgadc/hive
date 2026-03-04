@@ -128,7 +128,7 @@ func TestHandleNATSRequest_ValidRequest(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	serviceFn := func(in *testInput) (*testOutput, error) {
+	serviceFn := func(in *testInput, accountID string) (*testOutput, error) {
 		return &testOutput{Greeting: "hello " + in.Name}, nil
 	}
 
@@ -155,7 +155,7 @@ func TestHandleNATSRequest_MalformedJSON(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	serviceFn := func(in *testInput) (*testOutput, error) {
+	serviceFn := func(in *testInput, accountID string) (*testOutput, error) {
 		return &testOutput{Greeting: "hello"}, nil
 	}
 
@@ -181,7 +181,7 @@ func TestHandleNATSRequest_ServiceError(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	serviceFn := func(in *testInput) (*testOutput, error) {
+	serviceFn := func(in *testInput, accountID string) (*testOutput, error) {
 		return nil, fmt.Errorf("something went wrong")
 	}
 

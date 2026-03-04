@@ -13,7 +13,7 @@ import (
 )
 
 func (d *Daemon) handleEC2DescribeImages(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.imageService.DescribeImages)
+	handleNATSRequest(msg, d.imageService.DescribeImages)
 }
 
 // handleEC2CreateImage is a stateful handler that extracts instance context

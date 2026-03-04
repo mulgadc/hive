@@ -430,15 +430,15 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command qmp.Command, instance
 }
 
 func (d *Daemon) handleEC2CreateVolume(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.volumeService.CreateVolume)
+	handleNATSRequest(msg, d.volumeService.CreateVolume)
 }
 
 func (d *Daemon) handleEC2DescribeVolumes(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.volumeService.DescribeVolumes)
+	handleNATSRequest(msg, d.volumeService.DescribeVolumes)
 }
 
 func (d *Daemon) handleEC2DescribeVolumeStatus(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.volumeService.DescribeVolumeStatus)
+	handleNATSRequest(msg, d.volumeService.DescribeVolumeStatus)
 }
 
 // handleEC2ModifyVolume processes incoming EC2 ModifyVolume requests
@@ -497,5 +497,5 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 }
 
 func (d *Daemon) handleEC2DeleteVolume(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.volumeService.DeleteVolume)
+	handleNATSRequest(msg, d.volumeService.DeleteVolume)
 }

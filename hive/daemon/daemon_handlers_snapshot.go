@@ -5,17 +5,17 @@ import (
 )
 
 func (d *Daemon) handleEC2CreateSnapshot(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.snapshotService.CreateSnapshot)
+	handleNATSRequest(msg, d.snapshotService.CreateSnapshot)
 }
 
 func (d *Daemon) handleEC2DescribeSnapshots(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.snapshotService.DescribeSnapshots)
+	handleNATSRequest(msg, d.snapshotService.DescribeSnapshots)
 }
 
 func (d *Daemon) handleEC2DeleteSnapshot(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.snapshotService.DeleteSnapshot)
+	handleNATSRequest(msg, d.snapshotService.DeleteSnapshot)
 }
 
 func (d *Daemon) handleEC2CopySnapshot(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.snapshotService.CopySnapshot)
+	handleNATSRequest(msg, d.snapshotService.CopySnapshot)
 }

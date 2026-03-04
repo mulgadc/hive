@@ -5,17 +5,17 @@ import (
 )
 
 func (d *Daemon) handleEC2CreateKeyPair(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.keyService.CreateKeyPair)
+	handleNATSRequest(msg, d.keyService.CreateKeyPair)
 }
 
 func (d *Daemon) handleEC2DeleteKeyPair(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.keyService.DeleteKeyPair)
+	handleNATSRequest(msg, d.keyService.DeleteKeyPair)
 }
 
 func (d *Daemon) handleEC2DescribeKeyPairs(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.keyService.DescribeKeyPairs)
+	handleNATSRequest(msg, d.keyService.DescribeKeyPairs)
 }
 
 func (d *Daemon) handleEC2ImportKeyPair(msg *nats.Msg) {
-	handleNATSRequestWithAccount(msg, d.keyService.ImportKeyPair)
+	handleNATSRequest(msg, d.keyService.ImportKeyPair)
 }
