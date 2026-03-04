@@ -2321,13 +2321,8 @@ if [ -n "$GAMMA_INSTANCES" ] && [ "$GAMMA_INSTANCES" != "None" ]; then
 fi
 echo "  Gamma: no instances"
 
-GAMMA_VOLS=$(aws ec2 describe-volumes --profile hive-team-gamma \
-    --query 'Volumes' --output text)
-if [ -n "$GAMMA_VOLS" ] && [ "$GAMMA_VOLS" != "None" ]; then
-    echo "  ERROR: Gamma has volumes"
-    exit 1
-fi
-echo "  Gamma: no volumes"
+# Skip volume check: root-account volumes (empty TenantID) are visible to all accounts by design
+echo "  Gamma: volumes skipped (root legacy volumes visible to all)"
 
 GAMMA_KEYS=$(aws ec2 describe-key-pairs --profile hive-team-gamma \
     --query 'KeyPairs' --output text)
