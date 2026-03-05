@@ -11,12 +11,15 @@ import (
 
 // NATSImageService handles image operations via NATS messaging
 type NATSImageService struct {
-	natsConn *nats.Conn
+	natsConn      *nats.Conn
+	expectedNodes int
 }
 
-// NewNATSImageService creates a new NATS-based image service
-func NewNATSImageService(conn *nats.Conn) ImageService {
-	return &NATSImageService{natsConn: conn}
+// NewNATSImageService creates a new NATS-based image service.
+// expectedNodes is used by scatter-gather operations (e.g. CreateImage) to
+// enable early exit once all nodes have responded.
+func NewNATSImageService(conn *nats.Conn, expectedNodes int) ImageService {
+	return &NATSImageService{natsConn: conn, expectedNodes: expectedNodes}
 }
 
 func (s *NATSImageService) DescribeImages(input *ec2.DescribeImagesInput, accountID string) (*ec2.DescribeImagesOutput, error) {
@@ -24,7 +27,7 @@ func (s *NATSImageService) DescribeImages(input *ec2.DescribeImagesInput, accoun
 }
 
 func (s *NATSImageService) CreateImage(input *ec2.CreateImageInput, accountID string) (*ec2.CreateImageOutput, error) {
-	return utils.NATSRequest[ec2.CreateImageOutput](s.natsConn, "ec2.CreateImage", input, 120*time.Second, accountID)
+	return utils.NATSScatterGather[ec2.CreateImageOutput](s.natsConn, "ec2.CreateImage", input, 120*time.Second, s.expectedNodes, accountID)
 }
 
 func (s *NATSImageService) CopyImage(input *ec2.CopyImageInput, accountID string) (*ec2.CopyImageOutput, error) {

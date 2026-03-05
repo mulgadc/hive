@@ -32,14 +32,14 @@ func ValidateCreateImageInput(input *ec2.CreateImageInput) error {
 }
 
 // CreateImage handles the EC2 CreateImage API call
-func CreateImage(input *ec2.CreateImageInput, natsConn *nats.Conn, accountID string) (ec2.CreateImageOutput, error) {
+func CreateImage(input *ec2.CreateImageInput, natsConn *nats.Conn, expectedNodes int, accountID string) (ec2.CreateImageOutput, error) {
 	var output ec2.CreateImageOutput
 
 	if err := ValidateCreateImageInput(input); err != nil {
 		return output, err
 	}
 
-	svc := handlers_ec2_image.NewNATSImageService(natsConn)
+	svc := handlers_ec2_image.NewNATSImageService(natsConn, expectedNodes)
 	result, err := svc.CreateImage(input, accountID)
 	if err != nil {
 		return output, err

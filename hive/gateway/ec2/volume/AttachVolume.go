@@ -74,7 +74,7 @@ func AttachVolume(input *ec2.AttachVolumeInput, natsConn *nats.Conn, accountID s
 		slog.Error("AttachVolume: NATS request failed", "instanceId", instanceID, "volumeId", volumeID, "err", err)
 		if errors.Is(err, nats.ErrNoResponders) {
 			// Check shared KV for stopped instances before returning NotFound
-			if isStoppedInstance(instanceID, natsConn) {
+			if isStoppedInstance(instanceID, natsConn, accountID) {
 				return output, errors.New(awserrors.ErrorIncorrectInstanceState)
 			}
 			return output, errors.New(awserrors.ErrorInvalidInstanceIDNotFound)
@@ -98,7 +98,7 @@ func AttachVolume(input *ec2.AttachVolumeInput, natsConn *nats.Conn, accountID s
 
 // isStoppedInstance checks the shared KV (via ec2.DescribeStoppedInstances) to
 // determine whether instanceID exists as a stopped instance.
-func isStoppedInstance(instanceID string, natsConn *nats.Conn) bool {
+func isStoppedInstance(instanceID string, natsConn *nats.Conn, accountID string) bool {
 	input := &ec2.DescribeInstancesInput{
 		InstanceIds: []*string{aws.String(instanceID)},
 	}
@@ -107,7 +107,10 @@ func isStoppedInstance(instanceID string, natsConn *nats.Conn) bool {
 		return false
 	}
 
-	msg, err := natsConn.Request("ec2.DescribeStoppedInstances", reqData, 3*time.Second)
+	reqMsg := nats.NewMsg("ec2.DescribeStoppedInstances")
+	reqMsg.Data = reqData
+	reqMsg.Header.Set(utils.AccountIDHeader, accountID)
+	msg, err := natsConn.RequestMsg(reqMsg, 3*time.Second)
 	if err != nil {
 		return false
 	}
