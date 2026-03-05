@@ -48,7 +48,6 @@ type PortEvent struct {
 	MacAddress         string `json:"mac_address"`
 }
 
-
 // TopologyHandler translates VPC lifecycle NATS events into OVN NB DB operations.
 type TopologyHandler struct {
 	ovn OVNClient

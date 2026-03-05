@@ -47,7 +47,6 @@ type DetachVolumeData struct {
 	Force    bool   `json:"force,omitempty"`
 }
 
-
 type Status struct {
 	Status     string `json:"status"`
 	Singlestep bool   `json:"singlestep"`
