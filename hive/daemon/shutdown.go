@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"os"
@@ -242,8 +243,8 @@ func (d *Daemon) handleShutdownInfra(msg *nats.Msg) {
 	}
 
 	// Shutdown cluster manager
-	if d.clusterApp != nil {
-		if err := d.clusterApp.Shutdown(); err != nil {
+	if d.clusterServer != nil {
+		if err := d.clusterServer.Shutdown(context.Background()); err != nil {
 			slog.Warn("Failed to shutdown cluster manager", "error", err)
 		}
 	}

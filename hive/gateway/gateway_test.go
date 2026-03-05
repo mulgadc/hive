@@ -1,22 +1,30 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// doRequest sends a request through an http.Handler and returns the response.
+func doRequest(handler http.Handler, req *http.Request) *http.Response {
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	return w.Result()
+}
 
 func TestGenerateEC2ErrorResponse_Structure(t *testing.T) {
 	tests := []struct {
@@ -156,19 +164,16 @@ func TestGenerateIAMErrorResponse_ValidXML(t *testing.T) {
 
 func TestErrorHandler_IAMService(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true}
-	app := fiber.New(fiber.Config{
-		ErrorHandler: func(ctx *fiber.Ctx, err error) error {
-			return gw.ErrorHandler(ctx, err)
-		},
-	})
-	app.Get("/", func(c *fiber.Ctx) error {
-		c.Locals("sigv4.service", "iam")
-		return errors.New(awserrors.ErrorIAMNoSuchEntity)
+
+	// Build a handler that sets service context and returns an IAM error
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), ctxService, "iam")
+		r = r.WithContext(ctx)
+		gw.ErrorHandler(w, r, errors.New(awserrors.ErrorIAMNoSuchEntity))
 	})
 
 	req := httptest.NewRequest("GET", "/", nil)
-	resp, err := app.Test(req)
-	require.NoError(t, err)
+	resp := doRequest(handler, req)
 	assert.Equal(t, 404, resp.StatusCode)
 
 	body, _ := io.ReadAll(resp.Body)

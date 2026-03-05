@@ -6,14 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/mulgadc/hive/hive/awsec2query"
 	"github.com/mulgadc/hive/hive/awserrors"
@@ -21,6 +20,17 @@ import (
 	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats.go"
+)
+
+// contextKey is a typed key for storing values in request context.
+type contextKey string
+
+const (
+	ctxIdentity  contextKey = "sigv4.identity"
+	ctxAccountID contextKey = "sigv4.accountId"
+	ctxService   contextKey = "sigv4.service"
+	ctxRegion    contextKey = "sigv4.region"
+	ctxAccessKey contextKey = "sigv4.accessKey"
 )
 
 type GatewayConfig struct {
@@ -55,7 +65,7 @@ type ErrorDetail struct {
 	Message error  `xml:"Message"`
 }
 
-func (gw *GatewayConfig) SetupRoutes() *fiber.App {
+func (gw *GatewayConfig) SetupRoutes() http.Handler {
 
 	var logLevel slog.Level
 
@@ -77,49 +87,37 @@ func (gw *GatewayConfig) SetupRoutes() *fiber.App {
 	// Set it as the default logger
 	slog.SetDefault(slogger)
 
-	// Configure slog for logging
-	slog.New(slog.NewTextHandler(os.Stdout, nil))
-
-	app := fiber.New(fiber.Config{
-
-		// Disable the startup banner
-		DisableStartupMessage: gw.DisableLogging,
-
-		// Set the body limit for S3 specs to 5GiB
-		//BodyLimit: 5 * 1024 * 1024 * 1024,
-
-		// Override default error handler
-		ErrorHandler: func(ctx *fiber.Ctx, err error) error {
-			return gw.ErrorHandler(ctx, err)
-		}},
-	)
+	r := chi.NewRouter()
 
 	if !gw.DisableLogging {
-		app.Use(logger.New())
+		r.Use(slogRequestLogger)
 	}
 
-	// Add CORS middleware for browser requests
-	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "https://localhost:3000",
-		AllowMethods:     "GET,POST,PUT,DELETE,HEAD,OPTIONS",
-		AllowHeaders:     "*",
-		AllowCredentials: true,
-	}))
+	// CORS middleware for browser requests
+	r.Use(corsMiddleware)
 
-	// Add AWS SigV4 authentication middleware
-	app.Use(gw.SigV4AuthMiddleware())
-	// Define routes
-	app.Get("/*", func(c *fiber.Ctx) error {
+	// AWS SigV4 authentication middleware
+	r.Use(gw.SigV4AuthMiddleware())
 
-		return gw.Request(c)
+	// Catch-all routes
+	r.HandleFunc("/*", gw.Request)
+
+	return r
+}
+
+// corsMiddleware adds CORS headers for browser requests from the dev UI.
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "https://localhost:3000")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,HEAD,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "*")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
-
-	app.Post("/*", func(c *fiber.Ctx) error {
-
-		return gw.Request(c)
-	})
-
-	return app
 }
 
 // Note, custom endpoints can be configured via ENV vars to the AWS SDK/CLI tool, with individual endpoints depending the service
@@ -127,41 +125,39 @@ func (gw *GatewayConfig) SetupRoutes() *fiber.App {
 // aws --endpoint-url https://localhost:9999/  --no-verify-ssl eks list-clusters
 // AWS_ENDPOINT_URL=https://localhost:9999/ aws  --no-verify-ssl ec2 describe-instances
 
-func (gw *GatewayConfig) Request(ctx *fiber.Ctx) error {
+func (gw *GatewayConfig) Request(w http.ResponseWriter, r *http.Request) {
 
 	// Route the request to the appropriate endpoint (e.g EC2, IAM, etc)
-	svc, err := gw.GetService(ctx)
-	slog.Info("Request", "service", svc, "method", ctx.Method(), "path", ctx.Path())
+	svc, err := gw.GetService(r)
+	slog.Info("Request", "service", svc, "method", r.Method, "path", r.URL.Path)
 
 	if err != nil {
 		slog.Error("GetService error", "error", err)
-		return gw.ErrorHandler(ctx, err)
+		gw.ErrorHandler(w, r, err)
+		return
 	}
 
 	switch svc {
 	case "ec2":
-		err = gw.EC2_Request(ctx)
+		err = gw.EC2_Request(w, r)
 	case "account":
-		err = gw.Account_Request(ctx)
+		err = gw.Account_Request(w, r)
 	case "iam":
-		err = gw.IAM_Request(ctx)
+		err = gw.IAM_Request(w, r)
 	default:
 		err = errors.New(awserrors.ErrorUnsupportedOperation)
 	}
 
 	if err != nil {
 		slog.Error("Service request error", "service", svc, "error", err)
-		return gw.ErrorHandler(ctx, err)
+		gw.ErrorHandler(w, r, err)
 	} else {
 		slog.Info("Service request completed", "service", svc)
 	}
-
-	return nil
-
 }
 
-func (gw *GatewayConfig) GetService(ctx *fiber.Ctx) (string, error) {
-	svc, ok := ctx.Locals("sigv4.service").(string)
+func (gw *GatewayConfig) GetService(r *http.Request) (string, error) {
+	svc, ok := r.Context().Value(ctxService).(string)
 	if !ok {
 		return "", errors.New(awserrors.ErrorAuthFailure)
 	}
@@ -176,14 +172,14 @@ func (gw *GatewayConfig) GetService(ctx *fiber.Ctx) (string, error) {
 // if access is allowed, or an ErrorAccessDenied error if denied.
 // Root users bypass evaluation entirely. If the IAM service is unavailable,
 // access is allowed (pre-IAM compatibility).
-func (gw *GatewayConfig) checkPolicy(ctx *fiber.Ctx, service, action string) error {
+func (gw *GatewayConfig) checkPolicy(r *http.Request, service, action string) error {
 	if gw.IAMService == nil {
 		slog.Warn("checkPolicy: IAM service not available, skipping policy check",
 			"service", service, "action", action)
 		return nil
 	}
 
-	identityVal := ctx.Locals("sigv4.identity")
+	identityVal := r.Context().Value(ctxIdentity)
 	if identityVal == nil {
 		// No auth context — pre-IAM compatibility
 		return nil
@@ -194,7 +190,7 @@ func (gw *GatewayConfig) checkPolicy(ctx *fiber.Ctx, service, action string) err
 		return errors.New(awserrors.ErrorInternalError)
 	}
 	// Extract account ID from auth context
-	accountID, _ := ctx.Locals("sigv4.accountId").(string)
+	accountID, _ := r.Context().Value(ctxAccountID).(string)
 	if accountID == "" {
 		slog.Error("checkPolicy: no account ID in auth context", "user", identity)
 		return errors.New(awserrors.ErrorInternalError)
@@ -221,13 +217,15 @@ func (gw *GatewayConfig) checkPolicy(ctx *fiber.Ctx, service, action string) err
 	return nil
 }
 
-func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {
-	svc, _ := gw.GetService(ctx)
+func (gw *GatewayConfig) ErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
+	svc, _ := gw.GetService(r)
 	slog.Debug("ErrorHandler", "service", svc, "error", err.Error())
 
 	// Get the request ID
 	var requestId = uuid.NewString()
-	requestId = ctx.Get("x-amz-request-id", requestId)
+	if rid := r.Header.Get("x-amz-request-id"); rid != "" {
+		requestId = rid
+	}
 
 	var errorMsg = awserrors.ErrorMessage{}
 
@@ -253,8 +251,9 @@ func (gw *GatewayConfig) ErrorHandler(ctx *fiber.Ctx, err error) error {
 		errorMsg.HTTPCode = 500
 	}
 
-	ctx.Set("Content-Type", "application/xml")
-	return ctx.Status(errorMsg.HTTPCode).Send(xmlError)
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(errorMsg.HTTPCode)
+	_, _ = w.Write(xmlError)
 }
 
 // Parse AWS query arguments (used by some services like EC2/S3)
@@ -418,4 +417,25 @@ func (gw *GatewayConfig) DiscoverActiveNodes() int {
 
 	slog.Debug("DiscoverActiveNodes: Discovered active nodes", "count", activeNodes)
 	return activeNodes
+}
+
+// statusWriter wraps http.ResponseWriter to capture the status code.
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// SlogRequestLogger is a middleware that logs each request using slog.
+func slogRequestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		ww := &statusWriter{ResponseWriter: w, status: 200}
+		next.ServeHTTP(ww, r)
+		slog.Info("request", "method", r.Method, "path", r.URL.Path, "status", ww.status, "duration", time.Since(start))
+	})
 }

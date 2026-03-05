@@ -1,8 +1,8 @@
 package gateway
 
-import "github.com/gofiber/fiber/v2"
+import "net/http"
 
-func (gw *GatewayConfig) Account_Request(ctx *fiber.Ctx) error {
+func (gw *GatewayConfig) Account_Request(w http.ResponseWriter, r *http.Request) error {
 
 	return nil
 }

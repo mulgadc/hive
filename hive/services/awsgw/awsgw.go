@@ -1,8 +1,10 @@
 package awsgw
 
 import (
+	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -113,15 +115,31 @@ func launchService(config *config.ClusterConfig) error {
 		IAMService:     iamService,
 	}
 
-	app := gw.SetupRoutes()
+	handler := gw.SetupRoutes()
 
-	if err := app.ListenTLS(nodeConfig.AWSGW.Host, nodeConfig.AWSGW.TLSCert, nodeConfig.AWSGW.TLSKey); err != nil {
+	// Load TLS certificate
+	cert, err := tls.LoadX509KeyPair(nodeConfig.AWSGW.TLSCert, nodeConfig.AWSGW.TLSKey)
+	if err != nil {
+		return fmt.Errorf("load TLS cert: %w", err)
+	}
+
+	server := &http.Server{
+		Addr:              nodeConfig.AWSGW.Host,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			NextProtos:   []string{"h2", "http/1.1"},
+		},
+	}
+
+	slog.Info("AWS Gateway listening", "addr", nodeConfig.AWSGW.Host)
+	if err := server.ListenAndServeTLS("", ""); err != nil {
 		slog.Error("Failed to start TLS listener", "err", err)
 		os.Exit(1)
 	}
 
 	return nil
-
 }
 
 // connectNATS establishes a connection to NATS with retry/backoff. On concurrent
