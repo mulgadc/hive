@@ -47,20 +47,6 @@ type DetachVolumeData struct {
 	Force    bool   `json:"force,omitempty"`
 }
 
-// (QEMU) stop / cont (resume) / system_powerdown / system_reset / system_wakeup
-type EventLifeCycleResponse struct {
-	ID     string          `json:"id"`
-	Return json.RawMessage `json:"return"`
-	Error  *QMPError       `json:"error,omitempty"`
-}
-
-// (QEMU) query-status
-// {"return": {"status": "running", "singlestep": false, "running": true}}
-type EventQueryStatusResponse struct {
-	ID     string    `json:"id"`
-	Return Status    `json:"return"`
-	Error  *QMPError `json:"error,omitempty"`
-}
 
 type Status struct {
 	Status     string `json:"status"`

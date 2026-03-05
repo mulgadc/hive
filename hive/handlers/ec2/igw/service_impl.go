@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/awserrors"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/config"
 	handlers_ec2_vpc "github.com/mulgadc/hive/hive/handlers/ec2/vpc"
 	"github.com/mulgadc/hive/hive/utils"
@@ -245,7 +246,7 @@ func (s *IGWServiceImpl) AttachInternetGateway(input *ec2.AttachInternetGatewayI
 
 	// Publish event for vpcd to create OVN external switch + gateway + SNAT
 	if s.natsConn != nil {
-		event := IGWAttachEvent{
+		event := types.IGWEvent{
 			InternetGatewayId: igwID,
 			VpcId:             vpcID,
 		}
@@ -301,7 +302,7 @@ func (s *IGWServiceImpl) DetachInternetGateway(input *ec2.DetachInternetGatewayI
 
 	// Publish event for vpcd to clean up OVN external switch + gateway + NAT
 	if s.natsConn != nil {
-		event := IGWDetachEvent{
+		event := types.IGWEvent{
 			InternetGatewayId: igwID,
 			VpcId:             vpcID,
 		}
@@ -341,14 +342,3 @@ func (s *IGWServiceImpl) recordToEC2(record *IGWRecord) *ec2.InternetGateway {
 	return igw
 }
 
-// IGWAttachEvent is published to NATS when an IGW is attached to a VPC.
-type IGWAttachEvent struct {
-	InternetGatewayId string `json:"internet_gateway_id"`
-	VpcId             string `json:"vpc_id"`
-}
-
-// IGWDetachEvent is published to NATS when an IGW is detached from a VPC.
-type IGWDetachEvent struct {
-	InternetGatewayId string `json:"internet_gateway_id"`
-	VpcId             string `json:"vpc_id"`
-}

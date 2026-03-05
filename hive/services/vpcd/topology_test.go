@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mulgadc/hive/hive/services/vpcd/nbdb"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
@@ -816,7 +817,7 @@ func TestTopologyHandler_IGWAttach(t *testing.T) {
 	})
 
 	// Attach IGW
-	evt := IGWEvent{InternetGatewayId: "igw-test1", VpcId: "vpc-igw1"}
+	evt := types.IGWEvent{InternetGatewayId: "igw-test1", VpcId: "vpc-igw1"}
 	data, _ := json.Marshal(evt)
 	resp, err := nc.Request(TopicIGWAttach, data, 5_000_000_000)
 	if err != nil {
@@ -895,7 +896,7 @@ func TestTopologyHandler_IGWDetach(t *testing.T) {
 	})
 
 	// Attach IGW first
-	attachEvt := IGWEvent{InternetGatewayId: "igw-test2", VpcId: "vpc-igw2"}
+	attachEvt := types.IGWEvent{InternetGatewayId: "igw-test2", VpcId: "vpc-igw2"}
 	data, _ := json.Marshal(attachEvt)
 	resp, err := nc.Request(TopicIGWAttach, data, 5_000_000_000)
 	if err != nil {
@@ -910,7 +911,7 @@ func TestTopologyHandler_IGWDetach(t *testing.T) {
 	}
 
 	// Detach IGW
-	detachEvt := IGWEvent{InternetGatewayId: "igw-test2", VpcId: "vpc-igw2"}
+	detachEvt := types.IGWEvent{InternetGatewayId: "igw-test2", VpcId: "vpc-igw2"}
 	data, _ = json.Marshal(detachEvt)
 	resp, err = nc.Request(TopicIGWDetach, data, 5_000_000_000)
 	if err != nil {
@@ -970,7 +971,7 @@ func TestTopologyHandler_IGWAttachDetachLifecycle(t *testing.T) {
 	assertSuccess(t, resp, "create subnet")
 
 	// 3. Attach IGW
-	igwEvt := IGWEvent{InternetGatewayId: "igw-lc1", VpcId: "vpc-igwlc"}
+	igwEvt := types.IGWEvent{InternetGatewayId: "igw-lc1", VpcId: "vpc-igwlc"}
 	data, _ = json.Marshal(igwEvt)
 	resp, _ = nc.Request(TopicIGWAttach, data, 5_000_000_000)
 	assertSuccess(t, resp, "attach IGW")
@@ -1038,7 +1039,7 @@ func TestTopologyHandler_IGWNilOVN(t *testing.T) {
 	}()
 
 	// Should fail gracefully when OVN is nil
-	evt := IGWEvent{InternetGatewayId: "igw-nil", VpcId: "vpc-nil"}
+	evt := types.IGWEvent{InternetGatewayId: "igw-nil", VpcId: "vpc-nil"}
 	data, _ := json.Marshal(evt)
 	resp, err := nc.Request(TopicIGWAttach, data, 5_000_000_000)
 	if err != nil {
@@ -1420,7 +1421,7 @@ func TestTopologyHandler_IGWAttach_RouterNotFound(t *testing.T) {
 	}()
 
 	// Attach IGW without VPC router — CreateLogicalRouterPort fails
-	evt := IGWEvent{InternetGatewayId: "igw-orphan", VpcId: "vpc-norouter"}
+	evt := types.IGWEvent{InternetGatewayId: "igw-orphan", VpcId: "vpc-norouter"}
 	data, _ := json.Marshal(evt)
 	resp, err := nc.Request(TopicIGWAttach, data, 5_000_000_000)
 	if err != nil {
@@ -1461,7 +1462,7 @@ func TestTopologyHandler_IGWAttach_Idempotent(t *testing.T) {
 		},
 	})
 
-	evt := IGWEvent{InternetGatewayId: "igw-idem", VpcId: "vpc-igw-idem"}
+	evt := types.IGWEvent{InternetGatewayId: "igw-idem", VpcId: "vpc-igw-idem"}
 	data, _ := json.Marshal(evt)
 	resp, err := nc.Request(TopicIGWAttach, data, 5_000_000_000)
 	if err != nil {
@@ -1505,7 +1506,7 @@ func TestTopologyHandler_IGWDetach_PartialCleanup(t *testing.T) {
 		},
 	})
 
-	evt := IGWEvent{InternetGatewayId: "igw-partial", VpcId: "vpc-partial"}
+	evt := types.IGWEvent{InternetGatewayId: "igw-partial", VpcId: "vpc-partial"}
 	data, _ := json.Marshal(evt)
 	resp, err := nc.Request(TopicIGWDetach, data, 5_000_000_000)
 	if err != nil {
@@ -1547,7 +1548,7 @@ func TestTopologyHandler_IGWDetach_NoRouter(t *testing.T) {
 		},
 	})
 
-	evt := IGWEvent{InternetGatewayId: "igw-nortr", VpcId: "vpc-nortr"}
+	evt := types.IGWEvent{InternetGatewayId: "igw-nortr", VpcId: "vpc-nortr"}
 	data, _ := json.Marshal(evt)
 	resp, err := nc.Request(TopicIGWDetach, data, 5_000_000_000)
 	if err != nil {
@@ -1579,7 +1580,7 @@ func TestTopologyHandler_IGWDetach_SwitchNotFound(t *testing.T) {
 	}()
 
 	// No external switch — final DeleteLogicalSwitch fails
-	evt := IGWEvent{InternetGatewayId: "igw-nosw", VpcId: "vpc-nosw"}
+	evt := types.IGWEvent{InternetGatewayId: "igw-nosw", VpcId: "vpc-nosw"}
 	data, _ := json.Marshal(evt)
 	resp, err := nc.Request(TopicIGWDetach, data, 5_000_000_000)
 	if err != nil {

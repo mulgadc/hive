@@ -8,6 +8,7 @@ import (
 	"net"
 
 	"github.com/mulgadc/hive/hive/services/vpcd/nbdb"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/nats-io/nats.go"
 )
 
@@ -47,11 +48,6 @@ type PortEvent struct {
 	MacAddress         string `json:"mac_address"`
 }
 
-// IGWEvent is published on vpc.igw-attach / vpc.igw-detach.
-type IGWEvent struct {
-	InternetGatewayId string `json:"internet_gateway_id"`
-	VpcId             string `json:"vpc_id"`
-}
 
 // TopologyHandler translates VPC lifecycle NATS events into OVN NB DB operations.
 type TopologyHandler struct {
@@ -481,7 +477,7 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 		return
 	}
 
-	var evt IGWEvent
+	var evt types.IGWEvent
 	if err := json.Unmarshal(msg.Data, &evt); err != nil {
 		slog.Error("vpcd: failed to unmarshal vpc.igw-attach event", "err", err)
 		respond(msg, err)
@@ -630,7 +626,7 @@ func (h *TopologyHandler) handleIGWDetach(msg *nats.Msg) {
 		return
 	}
 
-	var evt IGWEvent
+	var evt types.IGWEvent
 	if err := json.Unmarshal(msg.Data, &evt); err != nil {
 		slog.Error("vpcd: failed to unmarshal vpc.igw-detach event", "err", err)
 		respond(msg, err)
