@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/mulgadc/viperblock/viperblock/backends/file"
 	"github.com/nats-io/nats.go"
@@ -75,11 +75,11 @@ func TestIntegration_EBSDeleteMountedVolume(t *testing.T) {
 	go func() { launchService(cfg) }()
 	time.Sleep(500 * time.Millisecond)
 
-	reqData, _ := json.Marshal(config.EBSDeleteRequest{Volume: "vol-del-test"})
+	reqData, _ := json.Marshal(types.EBSDeleteRequest{Volume: "vol-del-test"})
 	msg, err := nc.Request("ebs.delete", reqData, 3*time.Second)
 	require.NoError(t, err)
 
-	var resp config.EBSDeleteResponse
+	var resp types.EBSDeleteResponse
 	require.NoError(t, json.Unmarshal(msg.Data, &resp))
 
 	assert.Equal(t, "vol-del-test", resp.Volume)
@@ -117,11 +117,11 @@ func TestIntegration_EBSDeleteUnmountedVolume(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	reqData, _ := json.Marshal(config.EBSDeleteRequest{Volume: "vol-not-mounted"})
+	reqData, _ := json.Marshal(types.EBSDeleteRequest{Volume: "vol-not-mounted"})
 	msg, err := nc.Request("ebs.delete", reqData, 3*time.Second)
 	require.NoError(t, err)
 
-	var resp config.EBSDeleteResponse
+	var resp types.EBSDeleteResponse
 	require.NoError(t, json.Unmarshal(msg.Data, &resp))
 	assert.True(t, resp.Success)
 }
@@ -147,7 +147,7 @@ func TestIntegration_EBSDeleteInvalidJSON(t *testing.T) {
 	msg, err := nc.Request("ebs.delete", []byte("not json {{{"), 3*time.Second)
 	require.NoError(t, err)
 
-	var resp config.EBSDeleteResponse
+	var resp types.EBSDeleteResponse
 	require.NoError(t, json.Unmarshal(msg.Data, &resp))
 	assert.Contains(t, resp.Error, "bad request:")
 }
@@ -172,11 +172,11 @@ func TestIntegration_EBSSyncVolumeNotMounted(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	reqData, _ := json.Marshal(config.EBSSyncRequest{Volume: "vol-not-here"})
+	reqData, _ := json.Marshal(types.EBSSyncRequest{Volume: "vol-not-here"})
 	msg, err := nc.Request("ebs.sync", reqData, 3*time.Second)
 	require.NoError(t, err)
 
-	var resp config.EBSSyncResponse
+	var resp types.EBSSyncResponse
 	require.NoError(t, json.Unmarshal(msg.Data, &resp))
 	assert.False(t, resp.Synced)
 	assert.Contains(t, resp.Error, "not mounted")
@@ -203,11 +203,11 @@ func TestIntegration_EBSSyncVolumeNoVBInstance(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	reqData, _ := json.Marshal(config.EBSSyncRequest{Volume: "vol-no-vb"})
+	reqData, _ := json.Marshal(types.EBSSyncRequest{Volume: "vol-no-vb"})
 	msg, err := nc.Request("ebs.sync", reqData, 3*time.Second)
 	require.NoError(t, err)
 
-	var resp config.EBSSyncResponse
+	var resp types.EBSSyncResponse
 	require.NoError(t, json.Unmarshal(msg.Data, &resp))
 	assert.False(t, resp.Synced)
 	assert.Contains(t, resp.Error, "not mounted")
@@ -234,7 +234,7 @@ func TestIntegration_EBSSyncInvalidJSON(t *testing.T) {
 	msg, err := nc.Request("ebs.sync", []byte("garbage"), 3*time.Second)
 	require.NoError(t, err)
 
-	var resp config.EBSSyncResponse
+	var resp types.EBSSyncResponse
 	require.NoError(t, json.Unmarshal(msg.Data, &resp))
 	assert.Contains(t, resp.Error, "bad request:")
 }
@@ -271,11 +271,11 @@ func TestIntegration_EBSUnmountRemovesSocket(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	reqData, _ := json.Marshal(config.EBSRequest{Name: "vol-unmount-socket"})
+	reqData, _ := json.Marshal(types.EBSRequest{Name: "vol-unmount-socket"})
 	msg, err := nc.Request("ebs.test-node.unmount", reqData, 3*time.Second)
 	require.NoError(t, err)
 
-	var resp config.EBSUnMountResponse
+	var resp types.EBSUnMountResponse
 	require.NoError(t, json.Unmarshal(msg.Data, &resp))
 	assert.Empty(t, resp.Error)
 
@@ -310,11 +310,11 @@ func TestIntegration_EBSDeleteRemovesSocket(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	reqData, _ := json.Marshal(config.EBSDeleteRequest{Volume: "vol-del-socket"})
+	reqData, _ := json.Marshal(types.EBSDeleteRequest{Volume: "vol-del-socket"})
 	msg, err := nc.Request("ebs.delete", reqData, 3*time.Second)
 	require.NoError(t, err)
 
-	var resp config.EBSDeleteResponse
+	var resp types.EBSDeleteResponse
 	require.NoError(t, json.Unmarshal(msg.Data, &resp))
 	assert.True(t, resp.Success)
 	assert.False(t, fileExistsCheck(socketPath))
@@ -342,11 +342,11 @@ func TestIntegration_SnapshotHandler_Success(t *testing.T) {
 	defer snapSub.Unsubscribe()
 	nc.Flush()
 
-	reqData, _ := json.Marshal(config.EBSSnapshotRequest{Volume: "vol-snap-ok", SnapshotID: "snap-001"})
+	reqData, _ := json.Marshal(types.EBSSnapshotRequest{Volume: "vol-snap-ok", SnapshotID: "snap-001"})
 	msg, err := nc.Request("ebs.snapshot.vol-snap-ok", reqData, 3*time.Second)
 	require.NoError(t, err)
 
-	var resp config.EBSSnapshotResponse
+	var resp types.EBSSnapshotResponse
 	require.NoError(t, json.Unmarshal(msg.Data, &resp))
 	assert.True(t, resp.Success)
 	assert.Equal(t, "snap-001", resp.SnapshotID)
@@ -376,7 +376,7 @@ func TestIntegration_SnapshotHandler_InvalidJSON(t *testing.T) {
 	msg, err := nc.Request("ebs.snapshot.vol-snap-badjson", []byte("not json {{{"), 3*time.Second)
 	require.NoError(t, err)
 
-	var resp config.EBSSnapshotResponse
+	var resp types.EBSSnapshotResponse
 	require.NoError(t, json.Unmarshal(msg.Data, &resp))
 	assert.Contains(t, resp.Error, "bad request:")
 }
@@ -405,11 +405,11 @@ func TestIntegration_SnapshotHandler_CreateSnapshotFailure(t *testing.T) {
 	defer snapSub.Unsubscribe()
 	nc.Flush()
 
-	reqData, _ := json.Marshal(config.EBSSnapshotRequest{Volume: "vol-snap-fail", SnapshotID: "snap-fail-001"})
+	reqData, _ := json.Marshal(types.EBSSnapshotRequest{Volume: "vol-snap-fail", SnapshotID: "snap-fail-001"})
 	msg, err := nc.Request("ebs.snapshot.vol-snap-fail", reqData, 3*time.Second)
 	require.NoError(t, err)
 
-	var resp config.EBSSnapshotResponse
+	var resp types.EBSSnapshotResponse
 	require.NoError(t, json.Unmarshal(msg.Data, &resp))
 	assert.False(t, resp.Success)
 	assert.Contains(t, resp.Error, "snapshot failed:")
@@ -440,11 +440,11 @@ func TestIntegration_EBSSyncWithVBInstance(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	reqData, _ := json.Marshal(config.EBSSyncRequest{Volume: "vol-sync-vb"})
+	reqData, _ := json.Marshal(types.EBSSyncRequest{Volume: "vol-sync-vb"})
 	msg, err := nc.Request("ebs.sync", reqData, 3*time.Second)
 	require.NoError(t, err)
 
-	var resp config.EBSSyncResponse
+	var resp types.EBSSyncResponse
 	require.NoError(t, json.Unmarshal(msg.Data, &resp))
 	assert.True(t, resp.Synced)
 	assert.Empty(t, resp.Error)
@@ -513,11 +513,11 @@ func TestIntegration_EBSDeleteWithVBInstance(t *testing.T) {
 	go func() { launchService(cfg) }()
 	time.Sleep(500 * time.Millisecond)
 
-	reqData, _ := json.Marshal(config.EBSDeleteRequest{Volume: "vol-del-vb"})
+	reqData, _ := json.Marshal(types.EBSDeleteRequest{Volume: "vol-del-vb"})
 	msg, err := nc.Request("ebs.delete", reqData, 3*time.Second)
 	require.NoError(t, err)
 
-	var resp config.EBSDeleteResponse
+	var resp types.EBSDeleteResponse
 	require.NoError(t, json.Unmarshal(msg.Data, &resp))
 	assert.True(t, resp.Success)
 	assert.Empty(t, resp.Error)
@@ -565,11 +565,11 @@ func TestIntegration_EBSUnmountWithVBInstance(t *testing.T) {
 	go func() { launchService(cfg) }()
 	time.Sleep(500 * time.Millisecond)
 
-	reqData, _ := json.Marshal(config.EBSRequest{Name: "vol-unmount-vb"})
+	reqData, _ := json.Marshal(types.EBSRequest{Name: "vol-unmount-vb"})
 	msg, err := nc.Request("ebs.test-node.unmount", reqData, 3*time.Second)
 	require.NoError(t, err)
 
-	var resp config.EBSUnMountResponse
+	var resp types.EBSUnMountResponse
 	require.NoError(t, json.Unmarshal(msg.Data, &resp))
 	assert.Equal(t, "vol-unmount-vb", resp.Volume)
 	assert.False(t, resp.Mounted)
@@ -611,12 +611,12 @@ func TestIntegration_EBSUnmountDualPublish(t *testing.T) {
 	require.NoError(t, err)
 	nc.Flush()
 
-	reqData, _ := json.Marshal(config.EBSRequest{Name: "vol-dual-pub"})
+	reqData, _ := json.Marshal(types.EBSRequest{Name: "vol-dual-pub"})
 	msg, err := nc.Request("ebs.test-node.unmount", reqData, 3*time.Second)
 	require.NoError(t, err)
 
 	// Verify direct reply
-	var directResp config.EBSUnMountResponse
+	var directResp types.EBSUnMountResponse
 	require.NoError(t, json.Unmarshal(msg.Data, &directResp))
 	assert.Equal(t, "vol-dual-pub", directResp.Volume)
 	assert.False(t, directResp.Mounted)
@@ -624,7 +624,7 @@ func TestIntegration_EBSUnmountDualPublish(t *testing.T) {
 	// Verify broadcast response received
 	select {
 	case broadcastMsg := <-broadcastCh:
-		var broadcastResp config.EBSUnMountResponse
+		var broadcastResp types.EBSUnMountResponse
 		require.NoError(t, json.Unmarshal(broadcastMsg.Data, &broadcastResp))
 		assert.Equal(t, "vol-dual-pub", broadcastResp.Volume)
 	case <-time.After(2 * time.Second):

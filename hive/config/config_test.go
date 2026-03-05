@@ -1,14 +1,10 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
-	"github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -304,13 +300,6 @@ func TestNodeBaseDir_EmptyBaseDir(t *testing.T) {
 	assert.Equal(t, "", cc.NodeBaseDir())
 }
 
-// Tests for type constants
-
-func TestNBDTransportConstants(t *testing.T) {
-	assert.Equal(t, NBDTransport("socket"), NBDTransportSocket)
-	assert.Equal(t, NBDTransport("tcp"), NBDTransportTCP)
-}
-
 // Tests for ViperblockConfig
 
 func TestLoadConfig_ViperblockShardWAL_Explicit(t *testing.T) {
@@ -381,76 +370,3 @@ shardwal = true
 	assert.True(t, *n.Viperblock.ShardWAL)
 }
 
-// TestEC2StartInstancesResponseRespond verifies Respond marshals and sends the response via NATS.
-func TestEC2StartInstancesResponseRespond(t *testing.T) {
-	ns, err := server.NewServer(&server.Options{
-		Host:   "127.0.0.1",
-		Port:   -1,
-		NoLog:  true,
-		NoSigs: true,
-	})
-	require.NoError(t, err)
-	go ns.Start()
-	require.True(t, ns.ReadyForConnections(5*time.Second))
-	defer ns.Shutdown()
-
-	nc, err := nats.Connect(ns.ClientURL())
-	require.NoError(t, err)
-	defer nc.Close()
-
-	tests := []struct {
-		name string
-		resp EC2StartInstancesResponse
-	}{
-		{
-			name: "successful start",
-			resp: EC2StartInstancesResponse{
-				InstanceID: "i-abc123",
-				Status:     "pending",
-			},
-		},
-		{
-			name: "start with error",
-			resp: EC2StartInstancesResponse{
-				InstanceID: "i-def456",
-				Status:     "failed",
-				Error:      "instance not found",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			subject := "test.ec2.start"
-
-			sub, err := nc.SubscribeSync(subject)
-			require.NoError(t, err)
-			defer sub.Unsubscribe()
-
-			inbox := nc.NewRespInbox()
-			replySub, err := nc.SubscribeSync(inbox)
-			require.NoError(t, err)
-			defer replySub.Unsubscribe()
-			require.NoError(t, nc.Flush())
-
-			err = nc.PublishRequest(subject, inbox, []byte("{}"))
-			require.NoError(t, err)
-
-			msg, err := sub.NextMsg(2 * time.Second)
-			require.NoError(t, err)
-
-			tt.resp.Respond(msg)
-
-			reply, err := replySub.NextMsg(2 * time.Second)
-			require.NoError(t, err)
-
-			var decoded EC2StartInstancesResponse
-			err = json.Unmarshal(reply.Data, &decoded)
-			require.NoError(t, err)
-
-			assert.Equal(t, tt.resp.InstanceID, decoded.InstanceID)
-			assert.Equal(t, tt.resp.Status, decoded.Status)
-			assert.Equal(t, tt.resp.Error, decoded.Error)
-		})
-	}
-}

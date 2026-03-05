@@ -17,6 +17,7 @@ import (
 	awss3 "github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/hive/hive/config"
 	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
+	"github.com/mulgadc/hive/hive/types"
 	handlers_ec2_volume "github.com/mulgadc/hive/hive/handlers/ec2/volume"
 	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/hive/hive/qmp"
@@ -1618,7 +1619,7 @@ func TestResourceManager_ConcurrentAccess(t *testing.T) {
 
 // TestEBSRequest_DeleteOnTermination_DefaultFalse verifies the default value
 func TestEBSRequest_DeleteOnTermination_DefaultFalse(t *testing.T) {
-	req := config.EBSRequest{
+	req := types.EBSRequest{
 		Name: "vol-test",
 		Boot: true,
 	}
@@ -1627,7 +1628,7 @@ func TestEBSRequest_DeleteOnTermination_DefaultFalse(t *testing.T) {
 
 // TestEBSRequest_DeleteOnTermination_SetTrue verifies the field can be set
 func TestEBSRequest_DeleteOnTermination_SetTrue(t *testing.T) {
-	req := config.EBSRequest{
+	req := types.EBSRequest{
 		Name:                "vol-test",
 		Boot:                true,
 		DeleteOnTermination: true,
@@ -1697,7 +1698,7 @@ func TestGenerateVolumes_DeleteOnTermination_FromBlockDeviceMapping(t *testing.T
 				"deleteOnTermination should match expected value")
 
 			// Verify the flag is correctly assigned to an EBSRequest
-			ebsReq := config.EBSRequest{
+			ebsReq := types.EBSRequest{
 				Name:                "vol-test",
 				Boot:                true,
 				DeleteOnTermination: deleteOnTermination,
@@ -1722,12 +1723,12 @@ func TestStopInstance_DeleteOnTermination_VolumeDeletion(t *testing.T) {
 
 	// Mock ebs.unmount subscriber
 	unmountSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
-		var req config.EBSRequest
+		var req types.EBSRequest
 		json.Unmarshal(msg.Data, &req)
 		mu.Lock()
 		unmountedVolumes[req.Name] = true
 		mu.Unlock()
-		resp := config.EBSUnMountResponse{Volume: req.Name, Mounted: false}
+		resp := types.EBSUnMountResponse{Volume: req.Name, Mounted: false}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
 	})
@@ -1736,12 +1737,12 @@ func TestStopInstance_DeleteOnTermination_VolumeDeletion(t *testing.T) {
 
 	// Mock ebs.delete subscriber
 	deleteSub, err := daemon.natsConn.Subscribe("ebs.delete", func(msg *nats.Msg) {
-		var req config.EBSDeleteRequest
+		var req types.EBSDeleteRequest
 		json.Unmarshal(msg.Data, &req)
 		mu.Lock()
 		ebsDeletedVolumes[req.Volume] = true
 		mu.Unlock()
-		resp := config.EBSDeleteResponse{Volume: req.Volume, Success: true}
+		resp := types.EBSDeleteResponse{Volume: req.Volume, Success: true}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
 	})
@@ -1760,8 +1761,8 @@ func TestStopInstance_DeleteOnTermination_VolumeDeletion(t *testing.T) {
 		Status:       vm.StateRunning,
 		AccountID:    testAccountID,
 		QMPClient:    &qmp.QMPClient{}, // nil encoder/decoder => QMP will fail, which is fine
-		EBSRequests: config.EBSRequests{
-			Requests: []config.EBSRequest{
+		EBSRequests: types.EBSRequests{
+			Requests: []types.EBSRequest{
 				{
 					Name:                "vol-root",
 					Boot:                true,
@@ -1820,12 +1821,12 @@ func TestStopInstance_DeleteOnTermination_False_SkipsVolumeDeletion(t *testing.T
 
 	// Mock ebs.unmount subscriber
 	unmountSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
-		var req config.EBSRequest
+		var req types.EBSRequest
 		json.Unmarshal(msg.Data, &req)
 		mu.Lock()
 		unmountedVolumes[req.Name] = true
 		mu.Unlock()
-		resp := config.EBSUnMountResponse{Volume: req.Name, Mounted: false}
+		resp := types.EBSUnMountResponse{Volume: req.Name, Mounted: false}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
 	})
@@ -1834,12 +1835,12 @@ func TestStopInstance_DeleteOnTermination_False_SkipsVolumeDeletion(t *testing.T
 
 	// Mock ebs.delete subscriber
 	deleteSub, err := daemon.natsConn.Subscribe("ebs.delete", func(msg *nats.Msg) {
-		var req config.EBSDeleteRequest
+		var req types.EBSDeleteRequest
 		json.Unmarshal(msg.Data, &req)
 		mu.Lock()
 		ebsDeletedVolumes[req.Volume] = true
 		mu.Unlock()
-		resp := config.EBSDeleteResponse{Volume: req.Volume, Success: true}
+		resp := types.EBSDeleteResponse{Volume: req.Volume, Success: true}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
 	})
@@ -1858,8 +1859,8 @@ func TestStopInstance_DeleteOnTermination_False_SkipsVolumeDeletion(t *testing.T
 		Status:       vm.StateRunning,
 		AccountID:    testAccountID,
 		QMPClient:    &qmp.QMPClient{},
-		EBSRequests: config.EBSRequests{
-			Requests: []config.EBSRequest{
+		EBSRequests: types.EBSRequests{
+			Requests: []types.EBSRequest{
 				{
 					Name:                "vol-keep",
 					Boot:                true,
@@ -1918,7 +1919,7 @@ func TestStopInstance_NoDelete_OnStop(t *testing.T) {
 
 	// Mock ebs.unmount subscriber
 	unmountSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
-		resp := config.EBSUnMountResponse{Mounted: false}
+		resp := types.EBSUnMountResponse{Mounted: false}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
 	})
@@ -1927,12 +1928,12 @@ func TestStopInstance_NoDelete_OnStop(t *testing.T) {
 
 	// Mock ebs.delete subscriber - should NOT be called
 	deleteSub, err := daemon.natsConn.Subscribe("ebs.delete", func(msg *nats.Msg) {
-		var req config.EBSDeleteRequest
+		var req types.EBSDeleteRequest
 		json.Unmarshal(msg.Data, &req)
 		mu.Lock()
 		ebsDeletedVolumes[req.Volume] = true
 		mu.Unlock()
-		resp := config.EBSDeleteResponse{Volume: req.Volume, Success: true}
+		resp := types.EBSDeleteResponse{Volume: req.Volume, Success: true}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
 	})
@@ -1945,8 +1946,8 @@ func TestStopInstance_NoDelete_OnStop(t *testing.T) {
 		Status:       vm.StateRunning,
 		AccountID:    testAccountID,
 		QMPClient:    &qmp.QMPClient{},
-		EBSRequests: config.EBSRequests{
-			Requests: []config.EBSRequest{
+		EBSRequests: types.EBSRequests{
+			Requests: []types.EBSRequest{
 				{
 					Name:                "vol-stop-root",
 					Boot:                true,
@@ -2089,7 +2090,7 @@ func TestHandleEC2Events_AttachVolume(t *testing.T) {
 // TestEBSRequest_JSON_Serialization verifies DeleteOnTermination survives JSON round-trip
 // (important for JetStream state persistence)
 func TestEBSRequest_JSON_Serialization(t *testing.T) {
-	original := config.EBSRequest{
+	original := types.EBSRequest{
 		Name:                "vol-test-json",
 		Boot:                true,
 		DeleteOnTermination: true,
@@ -2099,7 +2100,7 @@ func TestEBSRequest_JSON_Serialization(t *testing.T) {
 	data, err := json.Marshal(original)
 	require.NoError(t, err)
 
-	var restored config.EBSRequest
+	var restored types.EBSRequest
 	err = json.Unmarshal(data, &restored)
 	require.NoError(t, err)
 
@@ -2136,8 +2137,8 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 			},
 		},
 		QMPClient: &qmp.QMPClient{}, // nil encoder/decoder
-		EBSRequests: config.EBSRequests{
-			Requests: []config.EBSRequest{
+		EBSRequests: types.EBSRequests{
+			Requests: []types.EBSRequest{
 				{
 					Name:       volumeID,
 					DeviceName: "/dev/sdf",
@@ -2231,7 +2232,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 
 		// Add a boot volume to the instance
 		instance.EBSRequests.Mu.Lock()
-		instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, config.EBSRequest{
+		instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, types.EBSRequest{
 			Name: bootVolumeID,
 			Boot: true,
 		})
@@ -2266,7 +2267,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 		efiVolumeID := "vol-efi-protected"
 
 		instance.EBSRequests.Mu.Lock()
-		instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, config.EBSRequest{
+		instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, types.EBSRequest{
 			Name: efiVolumeID,
 			EFI:  true,
 		})
@@ -2300,7 +2301,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 		ciVolumeID := "vol-cloudinit-protected"
 
 		instance.EBSRequests.Mu.Lock()
-		instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, config.EBSRequest{
+		instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, types.EBSRequest{
 			Name:      ciVolumeID,
 			CloudInit: true,
 		})
@@ -2479,8 +2480,8 @@ func TestDetachVolume_SuccessPath(t *testing.T) {
 			},
 		},
 		QMPClient: qmpClient,
-		EBSRequests: config.EBSRequests{
-			Requests: []config.EBSRequest{
+		EBSRequests: types.EBSRequests{
+			Requests: []types.EBSRequest{
 				{
 					Name:       "vol-root",
 					Boot:       true,
@@ -2499,10 +2500,10 @@ func TestDetachVolume_SuccessPath(t *testing.T) {
 	// Subscribe a mock ebs.unmount handler
 	ebsUnmountCalled := make(chan string, 1)
 	ebsSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
-		var req config.EBSRequest
+		var req types.EBSRequest
 		json.Unmarshal(msg.Data, &req)
 		ebsUnmountCalled <- req.Name
-		resp := config.EBSUnMountResponse{Volume: req.Name, Mounted: false}
+		resp := types.EBSUnMountResponse{Volume: req.Name, Mounted: false}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
 	})
@@ -2627,8 +2628,8 @@ func TestDetachVolume_ForceFlag(t *testing.T) {
 			},
 		},
 		QMPClient: qmpClient,
-		EBSRequests: config.EBSRequests{
-			Requests: []config.EBSRequest{
+		EBSRequests: types.EBSRequests{
+			Requests: []types.EBSRequest{
 				{
 					Name:       volumeID,
 					DeviceName: "/dev/sdf",
@@ -2641,7 +2642,7 @@ func TestDetachVolume_ForceFlag(t *testing.T) {
 
 	// Mock ebs.unmount
 	ebsSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
-		resp := config.EBSUnMountResponse{Mounted: false}
+		resp := types.EBSUnMountResponse{Mounted: false}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
 	})
@@ -2741,8 +2742,8 @@ func TestDetachVolume_BlockdevDelFailure(t *testing.T) {
 			},
 		},
 		QMPClient: qmpClient,
-		EBSRequests: config.EBSRequests{
-			Requests: []config.EBSRequest{
+		EBSRequests: types.EBSRequests{
+			Requests: []types.EBSRequest{
 				{
 					Name:       volumeID,
 					DeviceName: "/dev/sdf",
@@ -2833,8 +2834,8 @@ func TestDetachVolume_SuccessWithDeviceMatch(t *testing.T) {
 			},
 		},
 		QMPClient: qmpClient,
-		EBSRequests: config.EBSRequests{
-			Requests: []config.EBSRequest{
+		EBSRequests: types.EBSRequests{
+			Requests: []types.EBSRequest{
 				{
 					Name:       volumeID,
 					DeviceName: "/dev/sdh",
@@ -2846,7 +2847,7 @@ func TestDetachVolume_SuccessWithDeviceMatch(t *testing.T) {
 	daemon.Instances.VMS[instanceID] = instance
 
 	ebsSub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
-		resp := config.EBSUnMountResponse{Mounted: false}
+		resp := types.EBSUnMountResponse{Mounted: false}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
 	})
@@ -2909,8 +2910,8 @@ func TestAttachVolume_ReplacesStaleEBSRequest(t *testing.T) {
 		AccountID:    testAccountID,
 		Instance:     &ec2.Instance{},
 		QMPClient:    qmpClient,
-		EBSRequests: config.EBSRequests{
-			Requests: []config.EBSRequest{
+		EBSRequests: types.EBSRequests{
+			Requests: []types.EBSRequest{
 				{
 					Name:       volumeID,
 					DeviceName: "/dev/sdf", // stale entry from before stop
@@ -2923,7 +2924,7 @@ func TestAttachVolume_ReplacesStaleEBSRequest(t *testing.T) {
 
 	// Mock ebs.mount to return success with a new NBDURI
 	ebsSub, err := daemon.natsConn.Subscribe("ebs.node-1.mount", func(msg *nats.Msg) {
-		resp := config.EBSMountResponse{URI: "nbd://new:2222"}
+		resp := types.EBSMountResponse{URI: "nbd://new:2222"}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
 	})
@@ -2966,7 +2967,7 @@ func TestAttachVolume_ReplacesStaleEBSRequest(t *testing.T) {
 
 	// Direct unit test: simulate what the fixed attach handler does
 	instance.EBSRequests.Mu.Lock()
-	newReq := config.EBSRequest{
+	newReq := types.EBSRequest{
 		Name:       volumeID,
 		DeviceName: "/dev/sdg",
 		NBDURI:     "nbd://new:2222",
@@ -3309,17 +3310,17 @@ func TestRollbackEBSMount_Success(t *testing.T) {
 
 	// Mock ebs.unmount subscriber that returns success
 	sub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
-		var req config.EBSRequest
+		var req types.EBSRequest
 		json.Unmarshal(msg.Data, &req)
 		unmountCalled <- req.Name
-		resp := config.EBSUnMountResponse{Volume: req.Name, Mounted: false}
+		resp := types.EBSUnMountResponse{Volume: req.Name, Mounted: false}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
 	})
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	ebsReq := config.EBSRequest{
+	ebsReq := types.EBSRequest{
 		Name:       "vol-rollback-test",
 		DeviceName: "/dev/sdf",
 	}
@@ -3343,14 +3344,14 @@ func TestRollbackEBSMount_UnmountError(t *testing.T) {
 
 	// Mock ebs.unmount subscriber that returns an error
 	sub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
-		resp := config.EBSUnMountResponse{Error: "unmount failed: device busy"}
+		resp := types.EBSUnMountResponse{Error: "unmount failed: device busy"}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
 	})
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	ebsReq := config.EBSRequest{Name: "vol-rollback-err"}
+	ebsReq := types.EBSRequest{Name: "vol-rollback-err"}
 
 	// Should not panic — errors are logged but not propagated
 	daemon.rollbackEBSMount(ebsReq)
@@ -3364,14 +3365,14 @@ func TestRollbackEBSMount_StillMounted(t *testing.T) {
 	daemon := createTestDaemon(t, natsURL)
 
 	sub, err := daemon.natsConn.Subscribe("ebs.node-1.unmount", func(msg *nats.Msg) {
-		resp := config.EBSUnMountResponse{Mounted: true} // still mounted
+		resp := types.EBSUnMountResponse{Mounted: true} // still mounted
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
 	})
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	ebsReq := config.EBSRequest{Name: "vol-still-mounted"}
+	ebsReq := types.EBSRequest{Name: "vol-still-mounted"}
 
 	// Should not panic
 	daemon.rollbackEBSMount(ebsReq)
@@ -3385,7 +3386,7 @@ func TestRollbackEBSMount_NATSTimeout(t *testing.T) {
 	daemon := createTestDaemon(t, natsURL)
 
 	// No ebs.unmount subscriber — will timeout
-	ebsReq := config.EBSRequest{Name: "vol-timeout"}
+	ebsReq := types.EBSRequest{Name: "vol-timeout"}
 
 	// Should not panic, just log the timeout
 	daemon.rollbackEBSMount(ebsReq)
@@ -3531,8 +3532,8 @@ func TestNextAvailableDevice(t *testing.T) {
 			name: "existing EBSRequests skipped",
 			instance: &vm.VM{
 				Instance: &ec2.Instance{},
-				EBSRequests: config.EBSRequests{
-					Requests: []config.EBSRequest{
+				EBSRequests: types.EBSRequests{
+					Requests: []types.EBSRequest{
 						{Name: "vol-1", DeviceName: "/dev/sdf"},
 					},
 				},
@@ -3547,8 +3548,8 @@ func TestNextAvailableDevice(t *testing.T) {
 						{DeviceName: aws.String("/dev/sdf")},
 					},
 				},
-				EBSRequests: config.EBSRequests{
-					Requests: []config.EBSRequest{
+				EBSRequests: types.EBSRequests{
+					Requests: []types.EBSRequest{
 						{Name: "vol-1", DeviceName: "/dev/sdg"},
 					},
 				},
@@ -3586,8 +3587,8 @@ func TestNextAvailableDevice(t *testing.T) {
 		{
 			name: "empty DeviceName in EBSRequests ignored",
 			instance: &vm.VM{
-				EBSRequests: config.EBSRequests{
-					Requests: []config.EBSRequest{
+				EBSRequests: types.EBSRequests{
+					Requests: []types.EBSRequest{
 						{DeviceName: ""},
 						{DeviceName: "/dev/sdf"},
 					},

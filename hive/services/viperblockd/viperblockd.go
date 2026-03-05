@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/nbd"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
@@ -54,7 +54,7 @@ type Config struct {
 
 	// NBDTransport controls the transport type: "socket" (default) or "tcp"
 	// Socket is faster for local connections, TCP required for remote/DPU scenarios
-	NBDTransport config.NBDTransport
+	NBDTransport types.NBDTransport
 
 	// ShardWAL enables sharded WAL for mounted volumes (default false)
 	ShardWAL bool
@@ -79,10 +79,10 @@ func New(config any) (svc *Service, err error) {
 // makeSnapshotHandler returns a NATS handler for volume-specific snapshot requests (ebs.snapshot.{volumeID}).
 func makeSnapshotHandler(vb *viperblock.VB, volumeName string) nats.MsgHandler {
 	return func(msg *nats.Msg) {
-		var snapRequest config.EBSSnapshotRequest
+		var snapRequest types.EBSSnapshotRequest
 		if err := json.Unmarshal(msg.Data, &snapRequest); err != nil {
 			slog.Error("Failed to unmarshal ebs.snapshot message", "volume", volumeName, "err", err)
-			errResp, _ := json.Marshal(config.EBSSnapshotResponse{Error: fmt.Sprintf("bad request: %v", err)})
+			errResp, _ := json.Marshal(types.EBSSnapshotResponse{Error: fmt.Sprintf("bad request: %v", err)})
 			if err := msg.Respond(errResp); err != nil {
 				slog.Error("Failed to respond to ebs.snapshot request", "err", err)
 			}
@@ -91,7 +91,7 @@ func makeSnapshotHandler(vb *viperblock.VB, volumeName string) nats.MsgHandler {
 
 		slog.Info("ebs.snapshot: processing snapshot request", "volume", volumeName, "snapshotId", snapRequest.SnapshotID)
 
-		snapResponse := config.EBSSnapshotResponse{SnapshotID: snapRequest.SnapshotID}
+		snapResponse := types.EBSSnapshotResponse{SnapshotID: snapRequest.SnapshotID}
 
 		if _, err := vb.CreateSnapshot(snapRequest.SnapshotID); err != nil {
 			snapResponse.Error = fmt.Sprintf("snapshot failed: %v", err)
@@ -167,18 +167,18 @@ func launchService(cfg *Config) (err error) {
 	if _, err := nc.QueueSubscribe("ebs.delete", "hive-workers", func(msg *nats.Msg) {
 		slog.Info("Received ebs.delete message", "data", string(msg.Data))
 
-		var ebsRequest config.EBSDeleteRequest
+		var ebsRequest types.EBSDeleteRequest
 		err := json.Unmarshal(msg.Data, &ebsRequest)
 		if err != nil {
 			slog.Error("Failed to unmarshal ebs.delete message", "err", err)
-			errResp, _ := json.Marshal(config.EBSDeleteResponse{Error: fmt.Sprintf("bad request: %v", err)})
+			errResp, _ := json.Marshal(types.EBSDeleteResponse{Error: fmt.Sprintf("bad request: %v", err)})
 			if err := msg.Respond(errResp); err != nil {
 				slog.Error("Failed to respond to ebs.delete request", "err", err)
 			}
 			return
 		}
 
-		response := config.EBSDeleteResponse{Volume: ebsRequest.Volume, Success: true}
+		response := types.EBSDeleteResponse{Volume: ebsRequest.Volume, Success: true}
 
 		// Find and clean up the mounted volume if it exists
 		cfg.mu.Lock()
@@ -254,7 +254,7 @@ func launchService(cfg *Config) (err error) {
 		slog.Info("Received message", "data", string(msg.Data))
 
 		// Parse the message
-		var ebsRequest config.EBSRequest
+		var ebsRequest types.EBSRequest
 		err := json.Unmarshal(msg.Data, &ebsRequest)
 		if err != nil {
 			slog.Error("Failed to unmarshal message", "err", err)
@@ -263,7 +263,7 @@ func launchService(cfg *Config) (err error) {
 
 		// Find the volume and extract references while holding the lock,
 		// then release before calling VB.Close() (which does heavy S3 I/O).
-		var ebsResponse config.EBSUnMountResponse
+		var ebsResponse types.EBSUnMountResponse
 		var matched MountedVolume
 		var matchIdx int = -1
 		cfg.mu.Lock()
@@ -279,7 +279,7 @@ func launchService(cfg *Config) (err error) {
 		cfg.mu.Unlock()
 
 		if matchIdx >= 0 {
-			ebsResponse = config.EBSUnMountResponse{
+			ebsResponse = types.EBSUnMountResponse{
 				Volume:  matched.Name,
 				Mounted: false,
 			}
@@ -311,7 +311,7 @@ func launchService(cfg *Config) (err error) {
 		}
 
 		if matchIdx < 0 {
-			ebsResponse = config.EBSUnMountResponse{
+			ebsResponse = types.EBSUnMountResponse{
 				Volume: ebsRequest.Name,
 				Error:  fmt.Sprintf("Volume %s not found", ebsRequest.Name),
 			}
@@ -337,17 +337,17 @@ func launchService(cfg *Config) (err error) {
 	if _, err := nc.QueueSubscribe("ebs.sync", "hive-workers", func(msg *nats.Msg) {
 		slog.Info("Received ebs.sync message", "data", string(msg.Data))
 
-		var syncRequest config.EBSSyncRequest
+		var syncRequest types.EBSSyncRequest
 		if err := json.Unmarshal(msg.Data, &syncRequest); err != nil {
 			slog.Error("Failed to unmarshal ebs.sync message", "err", err)
-			errResp, _ := json.Marshal(config.EBSSyncResponse{Error: fmt.Sprintf("bad request: %v", err)})
+			errResp, _ := json.Marshal(types.EBSSyncResponse{Error: fmt.Sprintf("bad request: %v", err)})
 			if err := msg.Respond(errResp); err != nil {
 				slog.Error("Failed to respond to ebs.sync request", "err", err)
 			}
 			return
 		}
 
-		syncResponse := config.EBSSyncResponse{Volume: syncRequest.Volume}
+		syncResponse := types.EBSSyncResponse{Volume: syncRequest.Volume}
 
 		// Find the mounted volume and reload its state from the backend
 		cfg.mu.Lock()
@@ -407,7 +407,7 @@ func launchService(cfg *Config) (err error) {
 		slog.Info("Received message:", "data", string(msg.Data))
 
 		// Parse the message
-		var ebsRequest config.EBSRequest
+		var ebsRequest types.EBSRequest
 		err := json.Unmarshal(msg.Data, &ebsRequest)
 		if err != nil {
 			slog.Error("Failed to unmarshal message", "err", err)
@@ -416,7 +416,7 @@ func launchService(cfg *Config) (err error) {
 
 		slog.Info("ebs.mount", "request", ebsRequest)
 
-		var ebsResponse config.EBSMountResponse
+		var ebsResponse types.EBSMountResponse
 		ebsResponse.Mounted = false
 
 		s3cfg := s3.S3Config{
@@ -516,7 +516,7 @@ func launchService(cfg *Config) (err error) {
 		// Next, mount the volume using nbdkit
 
 		// Determine transport type (default to socket)
-		useTCP := cfg.NBDTransport == config.NBDTransportTCP
+		useTCP := cfg.NBDTransport == types.NBDTransportTCP
 
 		var nbdURI string
 		var nbdSocket string

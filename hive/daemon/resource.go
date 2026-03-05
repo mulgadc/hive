@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/types"
 )
 
 // errInsufficientCapacity is returned by allocateForLaunch when MinCount
@@ -38,7 +38,7 @@ func canAllocateCount(availVCPU, allocVCPU int, availMem, allocMem float64,
 
 // resourceStatsForType computes the InstanceTypeCap for a single instance type
 // given the remaining host resources. Pure function — no locks or side effects.
-func resourceStatsForType(remainVCPU int, remainMem float64, it *ec2.InstanceTypeInfo) config.InstanceTypeCap {
+func resourceStatsForType(remainVCPU int, remainMem float64, it *ec2.InstanceTypeInfo) types.InstanceTypeCap {
 	vCPUs := instanceTypeVCPUs(it)
 	memGB := float64(instanceTypeMemoryMiB(it)) / 1024.0
 
@@ -54,7 +54,7 @@ func resourceStatsForType(remainVCPU int, remainMem float64, it *ec2.InstanceTyp
 		name = *it.InstanceType
 	}
 
-	return config.InstanceTypeCap{
+	return types.InstanceTypeCap{
 		Name:      name,
 		VCPU:      int(vCPUs),
 		MemoryGB:  memGB,

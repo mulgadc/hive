@@ -22,7 +22,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
 )
@@ -62,9 +62,9 @@ func runTopNodes(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	respondedNodes := make(map[string]config.NodeStatusResponse)
+	respondedNodes := make(map[string]types.NodeStatusResponse)
 	for _, data := range responses {
-		var resp config.NodeStatusResponse
+		var resp types.NodeStatusResponse
 		if err := json.Unmarshal(data, &resp); err != nil {
 			continue
 		}

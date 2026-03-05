@@ -17,6 +17,7 @@ import (
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/objectstore"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
 	s3backend "github.com/mulgadc/viperblock/viperblock/backends/s3"
@@ -776,7 +777,7 @@ func (s *VolumeServiceImpl) DeleteVolume(input *ec2.DeleteVolumeInput, accountID
 
 	// Notify viperblockd to stop nbdkit/WAL syncer (best-effort)
 	if s.natsConn != nil {
-		deleteReq := config.EBSDeleteRequest{Volume: volumeID}
+		deleteReq := types.EBSDeleteRequest{Volume: volumeID}
 		deleteData, err := json.Marshal(deleteReq)
 		if err != nil {
 			slog.Error("DeleteVolume failed to marshal ebs.delete request", "volumeId", volumeID, "err", err)
@@ -785,7 +786,7 @@ func (s *VolumeServiceImpl) DeleteVolume(input *ec2.DeleteVolumeInput, accountID
 			if err != nil {
 				slog.Warn("ebs.delete notification failed (volume may not be mounted)", "volumeId", volumeID, "err", err)
 			} else {
-				var deleteResp config.EBSDeleteResponse
+				var deleteResp types.EBSDeleteResponse
 				if json.Unmarshal(msg.Data, &deleteResp) == nil && deleteResp.Error != "" {
 					slog.Error("ebs.delete returned error", "volumeId", volumeID, "err", deleteResp.Error)
 					return nil, errors.New(awserrors.ErrorServerInternal)

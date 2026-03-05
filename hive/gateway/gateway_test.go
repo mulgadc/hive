@@ -14,6 +14,7 @@ import (
 
 	"github.com/mulgadc/hive/hive/awserrors"
 	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -312,7 +313,7 @@ func TestDiscoverActiveNodes_WithResponders(t *testing.T) {
 	for _, nodeName := range []string{"node-1", "node-2"} {
 		name := nodeName
 		_, err := nc.Subscribe("hive.nodes.discover", func(msg *nats.Msg) {
-			resp := NodeDiscoverResponse{Node: name}
+			resp := types.NodeDiscoverResponse{Node: name}
 			data, _ := json.Marshal(resp)
 			msg.Respond(data)
 		})
@@ -352,7 +353,7 @@ func TestDiscoverActiveNodes_DuplicateNodes(t *testing.T) {
 
 	for range 2 {
 		_, err := nc.Subscribe("hive.nodes.discover", func(msg *nats.Msg) {
-			resp := NodeDiscoverResponse{Node: "same-node"}
+			resp := types.NodeDiscoverResponse{Node: "same-node"}
 			data, _ := json.Marshal(resp)
 			msg.Respond(data)
 		})

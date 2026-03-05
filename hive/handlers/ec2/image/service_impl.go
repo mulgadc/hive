@@ -16,6 +16,7 @@ import (
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	handlers_ec2_snapshot "github.com/mulgadc/hive/hive/handlers/ec2/snapshot"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
@@ -398,7 +399,7 @@ func (s *ImageServiceImpl) snapshotRunningVolume(volumeID, snapshotID string) er
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 
-	snapReq := config.EBSSnapshotRequest{Volume: volumeID, SnapshotID: snapshotID}
+	snapReq := types.EBSSnapshotRequest{Volume: volumeID, SnapshotID: snapshotID}
 	snapData, err := json.Marshal(snapReq)
 	if err != nil {
 		slog.Error("snapshotRunningVolume: failed to marshal snapshot request", "volumeId", volumeID, "err", err)
@@ -411,7 +412,7 @@ func (s *ImageServiceImpl) snapshotRunningVolume(volumeID, snapshotID string) er
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 
-	var snapResp config.EBSSnapshotResponse
+	var snapResp types.EBSSnapshotResponse
 	if err := json.Unmarshal(msg.Data, &snapResp); err != nil {
 		slog.Error("snapshotRunningVolume: failed to unmarshal response", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)

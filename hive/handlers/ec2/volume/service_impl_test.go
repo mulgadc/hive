@@ -13,6 +13,7 @@ import (
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/objectstore"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -1357,7 +1358,7 @@ func TestDeleteVolume_WithNATSNotification(t *testing.T) {
 
 	// Subscribe to ebs.delete and reply with success
 	sub, err := nc.Subscribe("ebs.delete", func(msg *nats.Msg) {
-		resp := config.EBSDeleteResponse{Volume: volumeID, Success: true}
+		resp := types.EBSDeleteResponse{Volume: volumeID, Success: true}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
 	})
@@ -1496,7 +1497,7 @@ func TestDeleteVolume_NATSErrorResponse(t *testing.T) {
 
 	// Subscribe and respond with an error
 	sub, err := nc.Subscribe("ebs.delete", func(msg *nats.Msg) {
-		resp := config.EBSDeleteResponse{Volume: volumeID, Error: "volume still mounted"}
+		resp := types.EBSDeleteResponse{Volume: volumeID, Error: "volume still mounted"}
 		data, _ := json.Marshal(resp)
 		msg.Respond(data)
 	})

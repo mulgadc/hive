@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/mulgadc/hive/hive/awsec2query"
 	"github.com/mulgadc/hive/hive/awserrors"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/gateway/policy"
 	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
 	"github.com/mulgadc/hive/hive/utils"
@@ -347,11 +348,6 @@ func ParseArgsToStruct(input *any, args map[string]string) (err error) {
 
 }
 
-// NodeDiscoverResponse is the response from a node discovery request
-type NodeDiscoverResponse struct {
-	Node string `json:"node"`
-}
-
 // DiscoverActiveNodes discovers the number of active hive daemon nodes in the cluster
 // by publishing a discovery request and counting unique responses.
 // Returns the number of active nodes (minimum 1 if fallback is needed).
@@ -399,7 +395,7 @@ func (gw *GatewayConfig) DiscoverActiveNodes() int {
 			break
 		}
 
-		var response NodeDiscoverResponse
+		var response types.NodeDiscoverResponse
 		if err := json.Unmarshal(msg.Data, &response); err != nil {
 			slog.Debug("DiscoverActiveNodes: Failed to unmarshal response", "err", err)
 			continue

@@ -8,7 +8,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/awserrors"
-	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/hive/hive/vm"
@@ -89,7 +89,7 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 	}
 
 	// Create EBS mount request
-	ebsRequest := config.EBSRequest{
+	ebsRequest := types.EBSRequest{
 		Name:       volumeID,
 		DeviceName: device,
 	}
@@ -108,7 +108,7 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 		return
 	}
 
-	var mountResp config.EBSMountResponse
+	var mountResp types.EBSMountResponse
 	if err := json.Unmarshal(mountReply.Data, &mountResp); err != nil {
 		slog.Error("AttachVolume: failed to unmarshal mount response", "err", err)
 		respondWithError(msg, awserrors.ErrorServerInternal)
@@ -321,7 +321,7 @@ func (d *Daemon) handleDetachVolume(msg *nats.Msg, command qmp.Command, instance
 
 	// Find the volume in EBSRequests
 	instance.EBSRequests.Mu.Lock()
-	var ebsReq config.EBSRequest
+	var ebsReq types.EBSRequest
 	found := false
 	for _, req := range instance.EBSRequests.Requests {
 		if req.Name == volumeID {
@@ -481,7 +481,7 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 
 	// Notify viperblockd to reload state after volume modification (e.g. resize)
 	if modifyVolumeInput.VolumeId != nil {
-		syncData, err := json.Marshal(config.EBSSyncRequest{Volume: *modifyVolumeInput.VolumeId})
+		syncData, err := json.Marshal(types.EBSSyncRequest{Volume: *modifyVolumeInput.VolumeId})
 		if err != nil {
 			slog.Error("failed to marshal ebs.sync request", "volumeId", *modifyVolumeInput.VolumeId, "err", err)
 		} else {

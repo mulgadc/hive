@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/qmp"
+	"github.com/mulgadc/hive/hive/types"
 )
 
 // InstanceHealthState tracks crash detection and auto-restart metadata for a VM.
@@ -32,7 +32,7 @@ type VM struct {
 	InstanceType string        `json:"instance_type"`
 	Config       Config        `json:"config"`
 
-	EBSRequests config.EBSRequests `json:"ebs_requests"`
+	EBSRequests types.EBSRequests `json:"ebs_requests"`
 
 	QMPClient *qmp.QMPClient `json:"-"`
 

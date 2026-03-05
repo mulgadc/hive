@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/nats-io/nats-server/v2/server"
 	natstest "github.com/nats-io/nats-server/v2/test"
 	"github.com/nats-io/nats.go"
@@ -151,7 +151,7 @@ func TestIntegration_EBSMountRequest(t *testing.T) {
 	nc.Flush()
 
 	// Create mount request
-	request := config.EBSRequest{
+	request := types.EBSRequest{
 		Name:    "vol-test-001",
 		VolType: "gp3",
 		Boot:    false,
@@ -170,7 +170,7 @@ func TestIntegration_EBSMountRequest(t *testing.T) {
 		return
 	}
 
-	var response config.EBSMountResponse
+	var response types.EBSMountResponse
 	err = json.Unmarshal(msg.Data, &response)
 	assert.NoError(t, err)
 
@@ -223,7 +223,7 @@ func TestIntegration_EBSUnmountRequest(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Create unmount request
-	request := config.EBSRequest{
+	request := types.EBSRequest{
 		Name: "vol-test-unmount",
 	}
 
@@ -236,7 +236,7 @@ func TestIntegration_EBSUnmountRequest(t *testing.T) {
 	assert.NotNil(t, msg)
 
 	// Parse response
-	var response config.EBSUnMountResponse
+	var response types.EBSUnMountResponse
 	err = json.Unmarshal(msg.Data, &response)
 	assert.NoError(t, err)
 
@@ -280,7 +280,7 @@ func TestIntegration_EBSUnmountNonExistentVolume(t *testing.T) {
 	defer nc.Close()
 
 	// Create unmount request for non-existent volume
-	request := config.EBSRequest{
+	request := types.EBSRequest{
 		Name: "vol-does-not-exist",
 	}
 
@@ -293,7 +293,7 @@ func TestIntegration_EBSUnmountNonExistentVolume(t *testing.T) {
 	assert.NotNil(t, msg)
 
 	// Parse response
-	var response config.EBSUnMountResponse
+	var response types.EBSUnMountResponse
 	err = json.Unmarshal(msg.Data, &response)
 	assert.NoError(t, err)
 
@@ -339,7 +339,7 @@ func TestIntegration_ConcurrentMountRequests(t *testing.T) {
 	errorCount := 0
 
 	for _, name := range volumeNames {
-		request := config.EBSRequest{
+		request := types.EBSRequest{
 			Name:    name,
 			VolType: "gp3",
 		}
@@ -357,7 +357,7 @@ func TestIntegration_ConcurrentMountRequests(t *testing.T) {
 			continue
 		}
 
-		var response config.EBSMountResponse
+		var response types.EBSMountResponse
 		if err := json.Unmarshal(msg.Data, &response); err == nil {
 			successCount++
 			// We expect errors in responses due to mocked backend
@@ -407,7 +407,7 @@ func TestIntegration_MessageSubscriptions(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, msg)
 
-	var response config.EBSUnMountResponse
+	var response types.EBSUnMountResponse
 	err = json.Unmarshal(msg.Data, &response)
 	assert.NoError(t, err)
 
@@ -464,7 +464,7 @@ func TestIntegration_ServiceGracefulShutdown(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Test that service is responsive
-	request := config.EBSRequest{Name: "test"}
+	request := types.EBSRequest{Name: "test"}
 	requestData, _ := json.Marshal(request)
 
 	_, err = nc.Request("ebs.test-node.unmount", requestData, 2*time.Second)
@@ -499,13 +499,13 @@ func TestIntegration_GenericTopicRouting(t *testing.T) {
 	defer nc.Close()
 
 	// Send to generic topic (not ebs.{node}.unmount)
-	request := config.EBSRequest{Name: "vol-generic"}
+	request := types.EBSRequest{Name: "vol-generic"}
 	requestData, _ := json.Marshal(request)
 
 	msg, err := nc.Request("ebs.unmount", requestData, 3*time.Second)
 	assert.NoError(t, err)
 
-	var response config.EBSUnMountResponse
+	var response types.EBSUnMountResponse
 	assert.NoError(t, json.Unmarshal(msg.Data, &response))
 	assert.Equal(t, "vol-generic", response.Volume)
 	assert.False(t, response.Mounted)
@@ -535,7 +535,7 @@ func TestIntegration_MountAuxiliaryVolumeSuffix(t *testing.T) {
 	nc.Flush()
 
 	// Send mount request for auxiliary volume (will fail at S3 backend, but validates routing)
-	request := config.EBSRequest{
+	request := types.EBSRequest{
 		Name:    "vol-test-cloudinit",
 		VolType: "gp3",
 	}
@@ -549,7 +549,7 @@ func TestIntegration_MountAuxiliaryVolumeSuffix(t *testing.T) {
 		return
 	}
 
-	var response config.EBSMountResponse
+	var response types.EBSMountResponse
 	assert.NoError(t, json.Unmarshal(msg.Data, &response))
 	// Expect an error because S3 backend is mocked, but the request was processed
 	assert.NotEmpty(t, response.Error)

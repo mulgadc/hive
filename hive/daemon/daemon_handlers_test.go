@@ -14,6 +14,7 @@ import (
 	awss3 "github.com/aws/aws-sdk-go/service/s3"
 
 	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/types"
 	handlers_ec2_account "github.com/mulgadc/hive/hive/handlers/ec2/account"
 	handlers_ec2_eigw "github.com/mulgadc/hive/hive/handlers/ec2/eigw"
 	handlers_ec2_igw "github.com/mulgadc/hive/hive/handlers/ec2/igw"
@@ -329,7 +330,7 @@ func TestHandleHealthCheck(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, reply)
 
-	var resp config.NodeHealthResponse
+	var resp types.NodeHealthResponse
 	err = json.Unmarshal(reply.Data, &resp)
 	require.NoError(t, err)
 
@@ -363,7 +364,7 @@ func TestHandleNodeDiscover(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, reply)
 
-	var resp NodeDiscoverResponse
+	var resp types.NodeDiscoverResponse
 	err = json.Unmarshal(reply.Data, &resp)
 	require.NoError(t, err)
 
@@ -1940,7 +1941,7 @@ func TestHandleNodeStatus(t *testing.T) {
 	reply, err := daemon.natsConn.Request("hive.node.status.test", nil, 5*time.Second)
 	require.NoError(t, err)
 
-	var resp config.NodeStatusResponse
+	var resp types.NodeStatusResponse
 	err = json.Unmarshal(reply.Data, &resp)
 	require.NoError(t, err)
 
@@ -1966,7 +1967,7 @@ func TestHandleNodeStatus_NoVMs(t *testing.T) {
 	reply, err := daemon.natsConn.Request("hive.node.status.empty", nil, 5*time.Second)
 	require.NoError(t, err)
 
-	var resp config.NodeStatusResponse
+	var resp types.NodeStatusResponse
 	err = json.Unmarshal(reply.Data, &resp)
 	require.NoError(t, err)
 
@@ -2007,7 +2008,7 @@ func TestHandleNodeVMs(t *testing.T) {
 	reply, err := daemon.natsConn.Request("hive.node.vms.test", nil, 5*time.Second)
 	require.NoError(t, err)
 
-	var resp config.NodeVMsResponse
+	var resp types.NodeVMsResponse
 	err = json.Unmarshal(reply.Data, &resp)
 	require.NoError(t, err)
 
@@ -2016,7 +2017,7 @@ func TestHandleNodeVMs(t *testing.T) {
 	assert.Len(t, resp.VMs, 2)
 
 	// Build a lookup by instance ID
-	vmsByID := make(map[string]config.VMInfo)
+	vmsByID := make(map[string]types.VMInfo)
 	for _, v := range resp.VMs {
 		vmsByID[v.InstanceID] = v
 	}
@@ -2044,7 +2045,7 @@ func TestHandleNodeVMs_Empty(t *testing.T) {
 	reply, err := daemon.natsConn.Request("hive.node.vms.empty", nil, 5*time.Second)
 	require.NoError(t, err)
 
-	var resp config.NodeVMsResponse
+	var resp types.NodeVMsResponse
 	err = json.Unmarshal(reply.Data, &resp)
 	require.NoError(t, err)
 
@@ -2071,7 +2072,7 @@ func TestHandleNodeVMs_UnknownInstanceType(t *testing.T) {
 	reply, err := daemon.natsConn.Request("hive.node.vms.unknown", nil, 5*time.Second)
 	require.NoError(t, err)
 
-	var resp config.NodeVMsResponse
+	var resp types.NodeVMsResponse
 	err = json.Unmarshal(reply.Data, &resp)
 	require.NoError(t, err)
 
@@ -2547,7 +2548,7 @@ func TestHandleEC2TerminateStoppedInstance_WithVolumes(t *testing.T) {
 		},
 	}
 	// Add EFI, CloudInit, and a user volume with DeleteOnTermination
-	stoppedVM.EBSRequests.Requests = []config.EBSRequest{
+	stoppedVM.EBSRequests.Requests = []types.EBSRequest{
 		{Name: "vol-efi-001", EFI: true},
 		{Name: "vol-ci-001", CloudInit: true},
 		{Name: "vol-user-001", DeleteOnTermination: true},
@@ -3051,7 +3052,7 @@ func TestDetachVolume_BootVolumeRejected(t *testing.T) {
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
-	instance.EBSRequests.Requests = []config.EBSRequest{
+	instance.EBSRequests.Requests = []types.EBSRequest{
 		{Name: "vol-boot-001", Boot: true, DeviceName: "/dev/sda1"},
 	}
 	daemon.Instances.VMS[instanceID] = instance
@@ -3095,7 +3096,7 @@ func TestDetachVolume_DeviceMismatch(t *testing.T) {
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
-	instance.EBSRequests.Requests = []config.EBSRequest{
+	instance.EBSRequests.Requests = []types.EBSRequest{
 		{Name: "vol-mismatch-001", DeviceName: "/dev/sdf"},
 	}
 	daemon.Instances.VMS[instanceID] = instance

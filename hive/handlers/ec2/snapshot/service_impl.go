@@ -17,6 +17,7 @@ import (
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/objectstore"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/nats-io/nats.go"
@@ -217,7 +218,7 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput, acc
 	// This sends a NATS message to the EBS daemon that owns the volume, which
 	// calls vb.CreateSnapshot() on the live viperblock instance.
 	if s.natsConn != nil {
-		snapReq := config.EBSSnapshotRequest{Volume: volumeID, SnapshotID: snapshotID}
+		snapReq := types.EBSSnapshotRequest{Volume: volumeID, SnapshotID: snapshotID}
 		snapData, err := json.Marshal(snapReq)
 		if err != nil {
 			slog.Error("CreateSnapshot: failed to marshal ebs.snapshot request", "volumeId", volumeID, "err", err)
@@ -232,7 +233,7 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput, acc
 			slog.Error("CreateSnapshot: ebs.snapshot NATS request failed", "volumeId", volumeID, "snapshotId", snapshotID, "err", err)
 			return nil, errors.New(awserrors.ErrorServerInternal)
 		} else {
-			var snapResp config.EBSSnapshotResponse
+			var snapResp types.EBSSnapshotResponse
 			if err := json.Unmarshal(msg.Data, &snapResp); err != nil {
 				slog.Error("CreateSnapshot: failed to unmarshal ebs.snapshot response", "volumeId", volumeID, "snapshotId", snapshotID, "err", err)
 				return nil, errors.New(awserrors.ErrorServerInternal)

@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats.go"
 	"github.com/pterm/pterm"
@@ -161,9 +162,9 @@ func runGetNodes(cmd *cobra.Command, args []string) {
 	}
 
 	// Parse responses into a map by node name
-	respondedNodes := make(map[string]config.NodeStatusResponse)
+	respondedNodes := make(map[string]types.NodeStatusResponse)
 	for _, data := range responses {
-		var resp config.NodeStatusResponse
+		var resp types.NodeStatusResponse
 		if err := json.Unmarshal(data, &resp); err != nil {
 			continue
 		}
@@ -235,14 +236,14 @@ func runGetVMs(cmd *cobra.Command, args []string) {
 	}
 
 	type vmRow struct {
-		config.VMInfo
+		types.VMInfo
 		Node string
 		Host string
 	}
 
 	var allVMs []vmRow
 	for _, data := range responses {
-		var resp config.NodeVMsResponse
+		var resp types.NodeVMsResponse
 		if err := json.Unmarshal(data, &resp); err != nil {
 			continue
 		}

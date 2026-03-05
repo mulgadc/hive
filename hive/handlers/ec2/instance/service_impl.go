@@ -18,6 +18,7 @@ import (
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/objectstore"
+	hivetypes "github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/mulgadc/viperblock/types"
@@ -324,7 +325,7 @@ func (s *InstanceServiceImpl) prepareRootVolume(input *ec2.RunInstancesInput, im
 
 	// Append root volume to instance
 	instance.EBSRequests.Mu.Lock()
-	instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, config.EBSRequest{
+	instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, hivetypes.EBSRequest{
 		Name:                imageId,
 		Boot:                true,
 		DeleteOnTermination: deleteOnTermination,
@@ -466,7 +467,7 @@ func (s *InstanceServiceImpl) prepareEFIVolume(imageId string, volumeConfig vipe
 	}
 
 	instance.EBSRequests.Mu.Lock()
-	instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, config.EBSRequest{
+	instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, hivetypes.EBSRequest{
 		Name: efiVb.VolumeName,
 		Boot: false,
 		EFI:  true,
@@ -542,7 +543,7 @@ func (s *InstanceServiceImpl) prepareCloudInitVolume(input *ec2.RunInstancesInpu
 	}
 
 	instance.EBSRequests.Mu.Lock()
-	instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, config.EBSRequest{
+	instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, hivetypes.EBSRequest{
 		Name:      cloudInitVolumeName,
 		Boot:      false,
 		CloudInit: true,

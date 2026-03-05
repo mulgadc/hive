@@ -40,6 +40,7 @@ import (
 	"github.com/mulgadc/hive/hive/instancetypes"
 	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/hive/hive/qmp"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/mulgadc/viperblock/viperblock"
@@ -284,7 +285,7 @@ func (rm *ResourceManager) GetAvailableInstanceTypeInfos(showCapacity bool) []*e
 }
 
 // GetResourceStats returns current resource allocation stats for the node status response.
-func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64, allocVCPU int, allocMemGB float64, caps []config.InstanceTypeCap) {
+func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64, allocVCPU int, allocMemGB float64, caps []types.InstanceTypeCap) {
 	rm.mu.RLock()
 	defer rm.mu.RUnlock()
 
@@ -951,7 +952,7 @@ func (d *Daemon) awaitShutdown() {
 // computeConfigHash computes SHA256 hash of the shared cluster config (excluding node-specific fields)
 func (d *Daemon) computeConfigHash() (string, error) {
 	// Only hash the shared cluster data, not the node-specific top-level field
-	sharedData := config.SharedClusterData{
+	sharedData := types.SharedClusterData{
 		Epoch:   d.clusterConfig.Epoch,
 		Version: d.clusterConfig.Version,
 		Nodes:   d.clusterConfig.Nodes,
@@ -1038,7 +1039,7 @@ func (d *Daemon) ClusterManager() error {
 			status = "starting"
 		}
 
-		response := config.NodeHealthResponse{
+		response := types.NodeHealthResponse{
 			Node:          d.node,
 			Status:        status,
 			ConfigHash:    configHash,
@@ -1054,11 +1055,11 @@ func (d *Daemon) ClusterManager() error {
 
 	// Join endpoint - accepts new nodes joining the cluster
 	r.Post("/join", func(w http.ResponseWriter, r *http.Request) {
-		var req config.NodeJoinRequest
+		var req types.NodeJoinRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(400)
-			_ = json.NewEncoder(w).Encode(config.NodeJoinResponse{
+			_ = json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: "invalid request body",
 			})
@@ -1071,7 +1072,7 @@ func (d *Daemon) ClusterManager() error {
 		if req.Node == "" || req.Region == "" || req.AZ == "" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(400)
-			_ = json.NewEncoder(w).Encode(config.NodeJoinResponse{
+			_ = json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: "node, region, and az are required",
 			})
@@ -1082,7 +1083,7 @@ func (d *Daemon) ClusterManager() error {
 		if _, exists := d.clusterConfig.Nodes[req.Node]; exists {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(409)
-			_ = json.NewEncoder(w).Encode(config.NodeJoinResponse{
+			_ = json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: fmt.Sprintf("node %s already exists in cluster", req.Node),
 			})
@@ -1115,7 +1116,7 @@ func (d *Daemon) ClusterManager() error {
 			slog.Error("Failed to save cluster config", "error", err)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(500)
-			_ = json.NewEncoder(w).Encode(config.NodeJoinResponse{
+			_ = json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: "failed to save cluster config",
 			})
@@ -1137,7 +1138,7 @@ func (d *Daemon) ClusterManager() error {
 		}
 
 		// Send only shared cluster data (exclude node-specific top-level fields)
-		sharedData := &config.SharedClusterData{
+		sharedData := &types.SharedClusterData{
 			Epoch:   d.clusterConfig.Epoch,
 			Version: d.clusterConfig.Version,
 			Nodes:   d.clusterConfig.Nodes,
@@ -1171,7 +1172,7 @@ func (d *Daemon) ClusterManager() error {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(config.NodeJoinResponse{
+		_ = json.NewEncoder(w).Encode(types.NodeJoinResponse{
 			Success:          true,
 			Message:          fmt.Sprintf("node %s successfully joined cluster", req.Node),
 			SharedData:       sharedData,
@@ -1352,7 +1353,7 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 					// to stop viperblockd processes. S3 data cleanup happens via DeleteVolume
 					// on the parent root volume (which deletes -efi/ and -cloudinit/ prefixes).
 					if ebsRequest.EFI || ebsRequest.CloudInit {
-						ebsDeleteData, err := json.Marshal(config.EBSDeleteRequest{Volume: ebsRequest.Name})
+						ebsDeleteData, err := json.Marshal(types.EBSDeleteRequest{Volume: ebsRequest.Name})
 						if err != nil {
 							slog.Error("Failed to marshal ebs.delete request for internal volume", "name", ebsRequest.Name, "err", err)
 							continue
@@ -2042,7 +2043,7 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 		}
 
 		// Unmarshal the response
-		var ebsMountResponse config.EBSMountResponse
+		var ebsMountResponse types.EBSMountResponse
 		err = json.Unmarshal(reply.Data, &ebsMountResponse)
 
 		if err != nil {
@@ -2072,7 +2073,7 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 
 // rollbackEBSMount sends an ebs.unmount request to undo a previously successful ebs.mount.
 // Rollback failures are logged but not propagated; callers treat this as best-effort cleanup.
-func (d *Daemon) rollbackEBSMount(req config.EBSRequest) {
+func (d *Daemon) rollbackEBSMount(req types.EBSRequest) {
 	data, err := json.Marshal(req)
 	if err != nil {
 		slog.Error("rollbackEBSMount: failed to marshal unmount request", "volume", req.Name, "err", err)
@@ -2083,7 +2084,7 @@ func (d *Daemon) rollbackEBSMount(req config.EBSRequest) {
 		slog.Error("rollbackEBSMount: ebs.unmount NATS request failed", "volume", req.Name, "err", err)
 		return
 	}
-	var resp config.EBSUnMountResponse
+	var resp types.EBSUnMountResponse
 	if err := json.Unmarshal(msg.Data, &resp); err != nil {
 		slog.Error("rollbackEBSMount: failed to unmarshal response", "volume", req.Name, "err", err)
 		return

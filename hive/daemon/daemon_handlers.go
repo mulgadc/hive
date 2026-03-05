@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/mulgadc/hive/hive/awserrors"
-	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/qmp"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/nats-io/nats.go"
@@ -153,7 +153,7 @@ func (d *Daemon) handleHealthCheck(msg *nats.Msg) {
 		status = "starting"
 	}
 
-	response := config.NodeHealthResponse{
+	response := types.NodeHealthResponse{
 		Node:       d.node,
 		Status:     status,
 		ConfigHash: configHash,
@@ -165,15 +165,10 @@ func (d *Daemon) handleHealthCheck(msg *nats.Msg) {
 	slog.Debug("Health check responded", "node", d.node, "epoch", d.clusterConfig.Epoch)
 }
 
-// NodeDiscoverResponse is the response for node discovery requests
-type NodeDiscoverResponse struct {
-	Node string `json:"node"`
-}
-
 // handleNodeDiscover responds to node discovery requests with this node's ID
 // Used by the gateway to dynamically discover active hive nodes in the cluster
 func (d *Daemon) handleNodeDiscover(msg *nats.Msg) {
-	response := NodeDiscoverResponse{
+	response := types.NodeDiscoverResponse{
 		Node: d.node,
 	}
 
@@ -204,7 +199,7 @@ func (d *Daemon) handleNodeStatus(msg *nats.Msg) {
 	}
 	d.Instances.Mu.Unlock()
 
-	resp := config.NodeStatusResponse{
+	resp := types.NodeStatusResponse{
 		Node:          d.node,
 		Status:        "Ready",
 		Host:          d.daemonIP(),
@@ -227,9 +222,9 @@ func (d *Daemon) handleNodeStatus(msg *nats.Msg) {
 // Used by the CLI: hive get vms.
 func (d *Daemon) handleNodeVMs(msg *nats.Msg) {
 	d.Instances.Mu.Lock()
-	vms := make([]config.VMInfo, 0, len(d.Instances.VMS))
+	vms := make([]types.VMInfo, 0, len(d.Instances.VMS))
 	for _, v := range d.Instances.VMS {
-		info := config.VMInfo{
+		info := types.VMInfo{
 			InstanceID:   v.ID,
 			Status:       string(v.Status),
 			InstanceType: v.InstanceType,
@@ -246,7 +241,7 @@ func (d *Daemon) handleNodeVMs(msg *nats.Msg) {
 	}
 	d.Instances.Mu.Unlock()
 
-	resp := config.NodeVMsResponse{
+	resp := types.NodeVMsResponse{
 		Node: d.node,
 		Host: d.daemonIP(),
 		VMs:  vms,
