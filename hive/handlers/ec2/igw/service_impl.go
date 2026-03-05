@@ -51,10 +51,10 @@ func NewIGWServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*IGWSer
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketIGW, err)
 	}
 
-	// Get VPC KV bucket for cross-resource ownership validation
-	vpcKV, err := js.KeyValue(handlers_ec2_vpc.KVBucketVPCs)
+	// Get or create VPC KV bucket for cross-resource ownership validation
+	vpcKV, err := utils.GetOrCreateKVBucket(js, handlers_ec2_vpc.KVBucketVPCs, 10)
 	if err != nil {
-		slog.Warn("IGW service: VPC KV bucket not available, VPC ownership checks disabled", "error", err)
+		return nil, fmt.Errorf("failed to get VPC KV bucket: %w", err)
 	}
 
 	slog.Info("IGW service initialized with JetStream KV", "bucket", KVBucketIGW)

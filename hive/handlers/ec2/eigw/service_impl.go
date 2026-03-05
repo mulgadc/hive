@@ -50,10 +50,10 @@ func NewEgressOnlyIGWServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketEgressOnlyIGW, err)
 	}
 
-	// Get VPC KV bucket for cross-resource ownership validation
-	vpcKV, err := js.KeyValue(handlers_ec2_vpc.KVBucketVPCs)
+	// Get or create VPC KV bucket for cross-resource ownership validation
+	vpcKV, err := utils.GetOrCreateKVBucket(js, handlers_ec2_vpc.KVBucketVPCs, 10)
 	if err != nil {
-		slog.Warn("EIGW service: VPC KV bucket not available, VPC ownership checks disabled", "error", err)
+		return nil, fmt.Errorf("failed to get VPC KV bucket: %w", err)
 	}
 
 	slog.Info("Egress-only IGW service initialized with JetStream KV", "bucket", KVBucketEgressOnlyIGW)
