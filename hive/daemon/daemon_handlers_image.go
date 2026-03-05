@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"encoding/json"
 	"log/slog"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -96,16 +95,6 @@ func (d *Daemon) handleEC2CreateImage(msg *nats.Msg) {
 		return
 	}
 
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("CreateImage: failed to marshal response", "err", err)
-		respondWithError(msg, awserrors.ErrorServerInternal)
-		return
-	}
-
-	if err := msg.Respond(jsonResponse); err != nil {
-		slog.Error("Failed to respond to NATS request", "err", err)
-	}
-
+	respondWithJSON(msg, output)
 	slog.Info("CreateImage completed", "instanceId", instanceID, "imageId", *output.ImageId)
 }

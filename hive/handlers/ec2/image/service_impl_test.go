@@ -417,3 +417,246 @@ func TestDescribeImages_SystemAMIVisibleToAll(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, result2.Images, 1)
 }
+
+func TestDescribeImages_NilInput(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+
+	result, err := svc.DescribeImages(nil, testAccountID)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Empty(t, result.Images)
+}
+
+func TestDescribeImages_EmptyBucket(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+
+	result, err := svc.DescribeImages(&ec2.DescribeImagesInput{}, testAccountID)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Empty(t, result.Images)
+}
+
+func TestDescribeImages_NonAMIPrefixIgnored(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// Create a non-AMI object (e.g. a volume config)
+	createTestVolumeConfig(t, store, "vol-abc123", 10)
+
+	result, err := svc.DescribeImages(&ec2.DescribeImagesInput{}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, result.Images)
+}
+
+func TestDescribeImages_InvalidConfigJSON(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// Store invalid JSON as an AMI config
+	_, err := store.PutObject(&awss3.PutObjectInput{
+		Bucket: aws.String(testBucket),
+		Key:    aws.String("ami-bad123/config.json"),
+		Body:   strings.NewReader("not valid json"),
+	})
+	require.NoError(t, err)
+
+	// Should skip the invalid AMI without error
+	result, err := svc.DescribeImages(&ec2.DescribeImagesInput{}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, result.Images)
+}
+
+func TestDescribeImages_EmptyImageIDSkipped(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// AMI config with empty ImageID
+	amiState := viperblock.VBState{
+		VolumeConfig: viperblock.VolumeConfig{
+			AMIMetadata: viperblock.AMIMetadata{
+				ImageID: "",
+				Name:    "empty-id-ami",
+			},
+		},
+	}
+	data, err := json.Marshal(amiState)
+	require.NoError(t, err)
+
+	_, err = store.PutObject(&awss3.PutObjectInput{
+		Bucket: aws.String(testBucket),
+		Key:    aws.String("ami-emptyid/config.json"),
+		Body:   strings.NewReader(string(data)),
+	})
+	require.NoError(t, err)
+
+	result, err := svc.DescribeImages(&ec2.DescribeImagesInput{}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, result.Images)
+}
+
+func TestDescribeImages_WithTags(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	amiState := viperblock.VBState{
+		VolumeConfig: viperblock.VolumeConfig{
+			AMIMetadata: viperblock.AMIMetadata{
+				ImageID:         "ami-tagged123",
+				Name:            "tagged-ami",
+				Architecture:    "x86_64",
+				PlatformDetails: "Linux/UNIX",
+				Virtualization:  "hvm",
+				RootDeviceType:  "ebs",
+				VolumeSizeGiB:   8,
+				ImageOwnerAlias: testAccountID,
+				Tags:            map[string]string{"Environment": "test", "Name": "my-ami"},
+			},
+		},
+	}
+	data, err := json.Marshal(amiState)
+	require.NoError(t, err)
+
+	_, err = store.PutObject(&awss3.PutObjectInput{
+		Bucket: aws.String(testBucket),
+		Key:    aws.String("ami-tagged123/config.json"),
+		Body:   strings.NewReader(string(data)),
+	})
+	require.NoError(t, err)
+
+	result, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		ImageIds: []*string{aws.String("ami-tagged123")},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, result.Images, 1)
+
+	img := result.Images[0]
+	assert.Len(t, img.Tags, 2)
+	assert.NotNil(t, img.RootDeviceName)
+	assert.Equal(t, "/dev/sda1", *img.RootDeviceName)
+	assert.Len(t, img.BlockDeviceMappings, 1)
+}
+
+func TestDescribeImages_FilterByExplicitOwnerID(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	createTestAMIConfigWithOwner(t, store, "ami-owned1", "owned-ami", testAccountID)
+
+	// Filter by explicit account ID
+	result, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		Owners: []*string{aws.String(testAccountID)},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, result.Images, 1)
+	assert.Equal(t, "ami-owned1", *result.Images[0].ImageId)
+
+	// Filter by wrong account ID — should return empty
+	result, err = svc.DescribeImages(&ec2.DescribeImagesInput{
+		Owners: []*string{aws.String("999999999999")},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, result.Images)
+}
+
+func TestDescribeImages_OwnerFilterNilEntry(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	createTestAMIConfigWithOwner(t, store, "ami-test1", "test-ami", testAccountID)
+
+	result, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		Owners: []*string{nil, aws.String(testAccountID)},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, result.Images, 1)
+}
+
+func TestGetAMIConfig_InvalidJSON(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	_, err := store.PutObject(&awss3.PutObjectInput{
+		Bucket: aws.String(testBucket),
+		Key:    aws.String("ami-badjson/config.json"),
+		Body:   strings.NewReader("not json"),
+	})
+	require.NoError(t, err)
+
+	_, err = svc.GetAMIConfig("ami-badjson")
+	assert.Error(t, err)
+}
+
+func TestGetVolumeConfig_InvalidJSON(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	_, err := store.PutObject(&awss3.PutObjectInput{
+		Bucket: aws.String(testBucket),
+		Key:    aws.String("vol-badjson/config.json"),
+		Body:   strings.NewReader("{invalid"),
+	})
+	require.NoError(t, err)
+
+	_, err = svc.getVolumeConfig("vol-badjson")
+	assert.Error(t, err)
+}
+
+func TestAmiNameExists_NoAMIs(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+
+	exists, err := svc.amiNameExists("nonexistent")
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestAmiNameExists_Found(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	createTestAMIConfigWithName(t, store, "ami-found123", "target-name")
+
+	exists, err := svc.amiNameExists("target-name")
+	require.NoError(t, err)
+	assert.True(t, exists)
+}
+
+func TestAmiNameExists_NotFound(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	createTestAMIConfigWithName(t, store, "ami-other123", "other-name")
+
+	exists, err := svc.amiNameExists("different-name")
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestAmiNameExists_InvalidJSON(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	_, err := store.PutObject(&awss3.PutObjectInput{
+		Bucket: aws.String(testBucket),
+		Key:    aws.String("ami-bad/config.json"),
+		Body:   strings.NewReader("not json"),
+	})
+	require.NoError(t, err)
+
+	exists, err := svc.amiNameExists("any-name")
+	require.NoError(t, err)
+	assert.False(t, exists)
+}
+
+func TestUnimplementedMethods(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+
+	_, err := svc.CreateImage(nil, "")
+	assert.Error(t, err)
+
+	_, err = svc.CopyImage(nil, "")
+	assert.Error(t, err)
+
+	_, err = svc.DescribeImageAttribute(nil, "")
+	assert.Error(t, err)
+
+	_, err = svc.RegisterImage(nil, "")
+	assert.Error(t, err)
+
+	_, err = svc.DeregisterImage(nil, "")
+	assert.Error(t, err)
+
+	_, err = svc.ModifyImageAttribute(nil, "")
+	assert.Error(t, err)
+
+	_, err = svc.ResetImageAttribute(nil, "")
+	assert.Error(t, err)
+}

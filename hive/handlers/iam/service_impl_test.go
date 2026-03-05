@@ -1,6 +1,9 @@
 package handlers_iam
 
 import (
+	"fmt"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -382,6 +385,51 @@ func TestCreateAccessKey_MaxLimit(t *testing.T) {
 	assert.Contains(t, err.Error(), awserrors.ErrorIAMLimitExceeded)
 }
 
+func TestAccessKeyQuota_Recovery(t *testing.T) {
+	svc := setupTestIAMService(t)
+	createTestUser(t, svc, "quotauser")
+
+	// Create 2 keys (at limit)
+	key1, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
+		UserName: aws.String("quotauser"),
+	})
+	require.NoError(t, err)
+
+	_, err = svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
+		UserName: aws.String("quotauser"),
+	})
+	require.NoError(t, err)
+
+	// Delete 1
+	_, err = svc.DeleteAccessKey(testAccountID, &iam.DeleteAccessKeyInput{
+		UserName:    aws.String("quotauser"),
+		AccessKeyId: key1.AccessKey.AccessKeyId,
+	})
+	require.NoError(t, err)
+
+	// Create another — should succeed (back under quota)
+	_, err = svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
+		UserName: aws.String("quotauser"),
+	})
+	assert.NoError(t, err, "should be able to create key after deleting one")
+}
+
+func TestAccessKeyQuota_PerUser(t *testing.T) {
+	svc := setupTestIAMService(t)
+	createTestUser(t, svc, "user1")
+	createTestUser(t, svc, "user2")
+
+	// Fill user1's quota
+	_, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{UserName: aws.String("user1")})
+	require.NoError(t, err)
+	_, err = svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{UserName: aws.String("user1")})
+	require.NoError(t, err)
+
+	// user2 should still be able to create keys
+	_, err = svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{UserName: aws.String("user2")})
+	assert.NoError(t, err, "user2 quota should be independent of user1")
+}
+
 func TestListAccessKeys(t *testing.T) {
 	svc := setupTestIAMService(t)
 	createTestUser(t, svc, "listkeysuser")
@@ -508,6 +556,60 @@ func TestUpdateAccessKey_NotFound(t *testing.T) {
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), awserrors.ErrorIAMNoSuchEntity)
+}
+
+func TestUpdateAccessKey_CaseSensitiveStatus(t *testing.T) {
+	svc := setupTestIAMService(t)
+	createTestUser(t, svc, "caseuser")
+
+	keyOut, _ := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
+		UserName: aws.String("caseuser"),
+	})
+
+	// "active" (lowercase) should be rejected — must be "Active"
+	_, err := svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
+		AccessKeyId: keyOut.AccessKey.AccessKeyId,
+		Status:      aws.String("active"),
+	})
+	assert.Error(t, err, "lowercase 'active' should be rejected")
+
+	// "inactive" (lowercase) should be rejected
+	_, err = svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
+		AccessKeyId: keyOut.AccessKey.AccessKeyId,
+		Status:      aws.String("inactive"),
+	})
+	assert.Error(t, err, "lowercase 'inactive' should be rejected")
+
+	// "ACTIVE" (uppercase) should be rejected
+	_, err = svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
+		AccessKeyId: keyOut.AccessKey.AccessKeyId,
+		Status:      aws.String("ACTIVE"),
+	})
+	assert.Error(t, err, "uppercase 'ACTIVE' should be rejected")
+}
+
+func TestUpdateAccessKey_CrossAccountBlocked(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	accA, err := svc.CreateAccount("Status Org A")
+	require.NoError(t, err)
+	accB, err := svc.CreateAccount("Status Org B")
+	require.NoError(t, err)
+
+	_, err = svc.CreateUser(accA.AccountID, &iam.CreateUserInput{UserName: aws.String("alice")})
+	require.NoError(t, err)
+
+	keyOut, err := svc.CreateAccessKey(accA.AccountID, &iam.CreateAccessKeyInput{
+		UserName: aws.String("alice"),
+	})
+	require.NoError(t, err)
+
+	// Account B trying to update Account A's key should fail
+	_, err = svc.UpdateAccessKey(accB.AccountID, &iam.UpdateAccessKeyInput{
+		AccessKeyId: keyOut.AccessKey.AccessKeyId,
+		Status:      aws.String("Inactive"),
+	})
+	assert.Error(t, err, "cross-account key update should be blocked")
 }
 
 // ============================================================================
@@ -864,6 +966,39 @@ func TestGetPolicy_MalformedARN(t *testing.T) {
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), awserrors.ErrorIAMNoSuchEntity)
+}
+
+func TestGetPolicy_ARNParsingEdgeCases(t *testing.T) {
+	svc := setupTestIAMService(t)
+	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`
+
+	// Create a real policy so we can test ARN mismatches
+	_, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
+		PolicyName:     aws.String("TestARN"),
+		PolicyDocument: aws.String(doc),
+	})
+	require.NoError(t, err)
+
+	testCases := []struct {
+		name string
+		arn  string
+	}{
+		{"wrong partition", "arn:aws-cn:iam::" + testAccountID + ":policy/TestARN"},
+		{"wrong service", "arn:aws:s3::" + testAccountID + ":policy/TestARN"},
+		{"extra path segments", "arn:aws:iam::" + testAccountID + ":policy/extra/path/TestARN"},
+		{"trailing slash only", "arn:aws:iam::" + testAccountID + ":policy/"},
+		{"empty after policy", "arn:aws:iam::" + testAccountID + ":policy"},
+		{"no policy segment", "arn:aws:iam::" + testAccountID + ":user/TestARN"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.GetPolicy(testAccountID, &iam.GetPolicyInput{
+				PolicyArn: aws.String(tc.arn),
+			})
+			assert.Error(t, err, "ARN %q should fail", tc.arn)
+		})
+	}
 }
 
 func TestGetPolicy_WithAttachments(t *testing.T) {
@@ -1305,6 +1440,206 @@ func TestValidatePolicyDocument_MissingResource(t *testing.T) {
 	_, err := ValidatePolicyDocument(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*"}]}`)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "Resource is required")
+}
+
+// ============================================================================
+// Sensitive Data Not Logged Tests
+// ============================================================================
+
+func TestSensitiveDataNotLogged_CreateAccessKey(t *testing.T) {
+	svc := setupTestIAMService(t)
+	createTestUser(t, svc, "loguser")
+
+	// Capture log output
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	slog.SetDefault(logger)
+	t.Cleanup(func() {
+		slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	})
+
+	akOut, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
+		UserName: aws.String("loguser"),
+	})
+	require.NoError(t, err)
+
+	secretKey := *akOut.AccessKey.SecretAccessKey
+	logOutput := buf.String()
+
+	// The plaintext secret key must never appear in logs
+	assert.NotContains(t, logOutput, secretKey,
+		"plaintext secret access key must not appear in log output")
+
+	// The encrypted secret should also not appear in logs
+	ak, err := svc.LookupAccessKey(*akOut.AccessKey.AccessKeyId)
+	require.NoError(t, err)
+	assert.NotContains(t, logOutput, ak.SecretAccessKey,
+		"encrypted secret must not appear in log output")
+}
+
+func TestSensitiveDataNotLogged_MasterKey(t *testing.T) {
+	// Capture log output during service init
+	var buf strings.Builder
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	slog.SetDefault(logger)
+	t.Cleanup(func() {
+		slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	})
+
+	svc := setupTestIAMService(t)
+
+	logOutput := buf.String()
+	masterKeyHex := fmt.Sprintf("%x", svc.masterKey)
+
+	assert.NotContains(t, logOutput, masterKeyHex,
+		"master key hex must not appear in log output")
+	assert.NotContains(t, logOutput, string(svc.masterKey),
+		"raw master key bytes must not appear in log output")
+}
+
+// ============================================================================
+// Input Validation Boundary Tests
+// ============================================================================
+
+func TestInputValidation_UserNameLength(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	// 64 chars — should pass
+	name64 := strings.Repeat("a", 64)
+	_, err := svc.CreateUser(testAccountID, &iam.CreateUserInput{UserName: aws.String(name64)})
+	assert.NoError(t, err, "64-char username should be valid")
+
+	// 65 chars — should fail
+	name65 := strings.Repeat("a", 65)
+	_, err = svc.CreateUser(testAccountID, &iam.CreateUserInput{UserName: aws.String(name65)})
+	assert.Error(t, err, "65-char username should be rejected")
+}
+
+func TestInputValidation_PolicyNameLength(t *testing.T) {
+	svc := setupTestIAMService(t)
+	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`
+
+	// 128 chars — should pass
+	name128 := strings.Repeat("P", 128)
+	_, err := svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
+		PolicyName:     aws.String(name128),
+		PolicyDocument: aws.String(doc),
+	})
+	assert.NoError(t, err, "128-char policy name should be valid")
+
+	// 129 chars — should fail
+	name129 := strings.Repeat("P", 129)
+	_, err = svc.CreatePolicy(testAccountID, &iam.CreatePolicyInput{
+		PolicyName:     aws.String(name129),
+		PolicyDocument: aws.String(doc),
+	})
+	assert.Error(t, err, "129-char policy name should be rejected")
+}
+
+func TestInputValidation_PathLength(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	// 512 chars — should pass (path must start and end with /)
+	path512 := "/" + strings.Repeat("a", 510) + "/"
+	assert.Len(t, path512, 512)
+	_, err := svc.CreateUser(testAccountID, &iam.CreateUserInput{
+		UserName: aws.String("pathuser512"),
+		Path:     aws.String(path512),
+	})
+	assert.NoError(t, err, "512-char path should be valid")
+
+	// 513 chars — should fail
+	path513 := "/" + strings.Repeat("a", 511) + "/"
+	assert.Len(t, path513, 513)
+	_, err = svc.CreateUser(testAccountID, &iam.CreateUserInput{
+		UserName: aws.String("pathuser513"),
+		Path:     aws.String(path513),
+	})
+	assert.Error(t, err, "513-char path should be rejected")
+}
+
+func TestInputValidation_PolicyDocumentSize(t *testing.T) {
+	// 6144 bytes — should pass
+	filler6144 := strings.Repeat("a", 6144-len(`{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"`)-len(`"}]}`))
+	doc6144 := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"` + filler6144 + `"}]}`
+	assert.Len(t, doc6144, 6144)
+	_, err := ValidatePolicyDocument(doc6144)
+	assert.NoError(t, err, "6144-byte policy document should be valid")
+
+	// 6145 bytes — should fail
+	doc6145 := doc6144 + " "
+	_, err = ValidatePolicyDocument(doc6145)
+	assert.Error(t, err, "6145-byte policy document should be rejected")
+}
+
+func TestValidatePolicyDocument_OverlappingDenyAllow(t *testing.T) {
+	doc, err := ValidatePolicyDocument(`{
+		"Version":"2012-10-17",
+		"Statement":[
+			{"Effect":"Allow","Action":"ec2:*","Resource":"*"},
+			{"Effect":"Deny","Action":"ec2:TerminateInstances","Resource":"*"},
+			{"Effect":"Allow","Action":"ec2:TerminateInstances","Resource":"arn:aws:ec2:*:*:instance/i-abc123"}
+		]
+	}`)
+	require.NoError(t, err)
+	assert.Len(t, doc.Statement, 3)
+	assert.Equal(t, PolicyEffectAllow, doc.Statement[0].Effect)
+	assert.Equal(t, PolicyEffectDeny, doc.Statement[1].Effect)
+	assert.Equal(t, PolicyEffectAllow, doc.Statement[2].Effect)
+}
+
+func TestValidatePolicyDocument_WithoutSid(t *testing.T) {
+	doc, err := ValidatePolicyDocument(`{
+		"Version":"2012-10-17",
+		"Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"*"}]
+	}`)
+	require.NoError(t, err)
+	assert.Empty(t, doc.Statement[0].Sid, "Sid should be empty when omitted")
+}
+
+func TestValidatePolicyDocument_ActionSingleString(t *testing.T) {
+	doc, err := ValidatePolicyDocument(`{
+		"Version":"2012-10-17",
+		"Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]
+	}`)
+	require.NoError(t, err)
+	assert.Equal(t, StringOrArr{"s3:*"}, doc.Statement[0].Action)
+}
+
+func TestValidatePolicyDocument_ActionArray(t *testing.T) {
+	doc, err := ValidatePolicyDocument(`{
+		"Version":"2012-10-17",
+		"Statement":[{"Effect":"Allow","Action":["s3:Get*","s3:List*"],"Resource":"*"}]
+	}`)
+	require.NoError(t, err)
+	assert.Equal(t, StringOrArr{"s3:Get*", "s3:List*"}, doc.Statement[0].Action)
+}
+
+func TestValidatePolicyDocument_EmptyActionArray(t *testing.T) {
+	_, err := ValidatePolicyDocument(`{
+		"Version":"2012-10-17",
+		"Statement":[{"Effect":"Allow","Action":[],"Resource":"*"}]
+	}`)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Action is required")
+}
+
+func TestValidatePolicyDocument_EmptyResourceArray(t *testing.T) {
+	_, err := ValidatePolicyDocument(`{
+		"Version":"2012-10-17",
+		"Statement":[{"Effect":"Allow","Action":"s3:*","Resource":[]}]
+	}`)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "Resource is required")
+}
+
+func TestValidatePolicyDocument_ResourceARNFormat(t *testing.T) {
+	doc, err := ValidatePolicyDocument(`{
+		"Version":"2012-10-17",
+		"Statement":[{"Effect":"Allow","Action":"s3:GetObject","Resource":"arn:aws:s3:::my-bucket/*"}]
+	}`)
+	require.NoError(t, err)
+	assert.Equal(t, StringOrArr{"arn:aws:s3:::my-bucket/*"}, doc.Statement[0].Resource)
 }
 
 // ============================================================================

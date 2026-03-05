@@ -75,7 +75,7 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 
 	// Initialize services (needed for handler tests)
 	daemon.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(cfg, daemon.resourceMgr.instanceTypes, nc, &daemon.Instances, objectstore.NewMemoryObjectStore())
-	daemon.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(cfg, nc, nil)
+	daemon.volumeService = handlers_ec2_volume.NewVolumeServiceImplWithStore(cfg, objectstore.NewMemoryObjectStore(), nc)
 
 	t.Cleanup(func() {
 		if daemon.natsConn != nil {
@@ -3764,25 +3764,17 @@ func TestConnectNATS_RetriesOnFailure(t *testing.T) {
 	}
 	clusterCfg.Nodes["node-1"] = cfg
 	daemon := NewDaemon(clusterCfg)
+	daemon.natsMaxWait = 500 * time.Millisecond
+	daemon.natsRetryDelay = 50 * time.Millisecond
 
-	// Run connectNATS in a goroutine and verify it retries (takes > 1s)
-	// then verify it eventually errors. We don't wait for the full 5min timeout;
-	// just confirm it retried at least once by checking elapsed time.
-	errCh := make(chan error, 1)
 	start := time.Now()
-	go func() { errCh <- daemon.connectNATS() }()
+	err := daemon.connectNATS()
+	elapsed := time.Since(start)
 
-	select {
-	case err := <-errCh:
-		elapsed := time.Since(start)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "NATS connect failed")
-		assert.Greater(t, elapsed, 1*time.Second, "should have retried at least once")
-	case <-time.After(10 * time.Second):
-		// connectNATS is still retrying after 10s — that proves retry works.
-		// We don't wait for the full 5min timeout in tests.
-		t.Log("connectNATS still retrying after 10s (retry logic confirmed)")
-	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NATS connect failed")
+	assert.Greater(t, elapsed, 100*time.Millisecond, "should have retried at least once")
+	assert.Less(t, elapsed, 5*time.Second, "should fail within a few seconds")
 }
 
 // TestConnectNATS_SucceedsImmediately tests that connectNATS succeeds immediately when NATS is available.

@@ -584,6 +584,32 @@ func TestBuildCanonicalQueryString(t *testing.T) {
 	}
 }
 
+func TestBuildCanonicalQueryString_EdgeCases(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"empty value", "key=", "key="},
+		{"param with multiple equals", "key=a=b", "key=a%3Db"},
+		{"duplicate keys sorted by value", "x=b&x=a", "x=a&x=b"},
+		{"unicode in value", "name=café", "name=caf%C3%A9"},
+		{"unicode in key", "clé=val", "cl%C3%A9=val"},
+		{"long query string", "a=" + strings.Repeat("x", 500), "a=" + strings.Repeat("x", 500)},
+		{"no value (key only)", "key", "key="},
+		{"empty pair skipped", "a=1&&b=2", "a=1&b=2"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := buildCanonicalQueryString(tc.input)
+			if result != tc.expected {
+				t.Errorf("Expected %q, got %q", tc.expected, result)
+			}
+		})
+	}
+}
+
 func TestSigV4Auth_DecryptFailure(t *testing.T) {
 	// Encrypt secret with a DIFFERENT master key so decryption fails
 	otherKey, err := handlers_iam.GenerateMasterKey()
@@ -649,6 +675,11 @@ func TestCanonicalHeaderName(t *testing.T) {
 		{"host", "Host"},
 		{"x-amz-date", "X-Amz-Date"},
 		{"content-type", "Content-Type"},
+		{"x-amz-security-token", "X-Amz-Security-Token"},
+		{"authorization", "Authorization"},
+		{"", ""},
+		{"Host", "Host"},             // already canonical (no-op for uppercase first char)
+		{"X-Amz-Date", "X-Amz-Date"}, // already canonical
 	}
 
 	for _, tc := range testCases {
@@ -822,6 +853,49 @@ func TestSigV4Auth_TimestampWithinSkew(t *testing.T) {
 	}
 }
 
+// --- Clock Skew Boundary Tests ---
+
+func TestSigV4Auth_ClockSkewBoundary(t *testing.T) {
+	handler := setupTestApp(testAccessKey, testSecretKey)
+
+	testCases := []struct {
+		name       string
+		offset     time.Duration
+		expectPass bool
+	}{
+		// Use 4m59s (not exact 5m) because test execution adds a few ms
+		{"just within 5 min past", -(4*time.Minute + 59*time.Second), true},
+		{"just beyond 5 min past", -(5*time.Minute + 1*time.Second), false},
+		{"just within 5 min future", 4*time.Minute + 59*time.Second, true},
+		{"just beyond 5 min future", 5*time.Minute + 1*time.Second, false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			at := time.Now().UTC().Add(tc.offset)
+			authHeader, timestamp := generateTestAuthHeaderAt(
+				"GET", "/", "", "",
+				testAccessKey, testSecretKey, testRegion, testService, at,
+			)
+
+			req := httptest.NewRequest("GET", "/", nil)
+			req.Host = "localhost:9999"
+			req.Header.Set("Authorization", authHeader)
+			req.Header.Set("X-Amz-Date", timestamp)
+
+			resp := doRequest(handler, req)
+
+			if tc.expectPass && resp.StatusCode != 200 {
+				body, _ := io.ReadAll(resp.Body)
+				t.Errorf("Expected 200, got %d, body: %s", resp.StatusCode, string(body))
+			}
+			if !tc.expectPass && resp.StatusCode != 403 {
+				t.Errorf("Expected 403, got %d", resp.StatusCode)
+			}
+		})
+	}
+}
+
 func TestSigV4Auth_MissingXAmzDate(t *testing.T) {
 	handler := setupTestApp(testAccessKey, testSecretKey)
 
@@ -869,6 +943,73 @@ func TestSigV4Auth_MalformedTimestamp(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(body), "IncompleteSignature") {
 		t.Errorf("Expected IncompleteSignature error, got: %s", string(body))
+	}
+}
+
+// --- writeSigV4Error Response Format Tests ---
+
+func TestWriteSigV4Error_ResponseFormat(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true, Region: testRegion}
+
+	testCases := []struct {
+		errorCode      string
+		expectedStatus int
+	}{
+		{awserrors.ErrorMissingAuthenticationToken, 403},
+		{awserrors.ErrorIncompleteSignature, 400},
+		{awserrors.ErrorInvalidClientTokenId, 403},
+		{awserrors.ErrorSignatureDoesNotMatch, 403},
+		{awserrors.ErrorInternalError, 500},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.errorCode, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest("GET", "/", nil)
+
+			gw.writeSigV4Error(w, req, tc.errorCode)
+			resp := w.Result()
+
+			// Correct HTTP status code
+			if resp.StatusCode != tc.expectedStatus {
+				t.Errorf("Expected status %d for %s, got %d", tc.expectedStatus, tc.errorCode, resp.StatusCode)
+			}
+
+			// Content-Type is application/xml
+			ct := resp.Header.Get("Content-Type")
+			if ct != "application/xml" {
+				t.Errorf("Expected Content-Type application/xml, got %q", ct)
+			}
+
+			// Body is well-formed XML containing the error code and RequestID
+			body, _ := io.ReadAll(resp.Body)
+			bodyStr := string(body)
+
+			if !strings.Contains(bodyStr, "<Code>"+tc.errorCode+"</Code>") {
+				t.Errorf("Response body missing error code %q: %s", tc.errorCode, bodyStr)
+			}
+			if !strings.Contains(bodyStr, "<RequestID>") {
+				t.Errorf("Response body missing RequestID: %s", bodyStr)
+			}
+			if !strings.Contains(bodyStr, "<?xml") {
+				t.Errorf("Response body missing XML declaration: %s", bodyStr)
+			}
+		})
+	}
+}
+
+func TestWriteSigV4Error_PreservesRequestID(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true, Region: testRegion}
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("x-amz-request-id", "test-request-id-123")
+
+	gw.writeSigV4Error(w, req, awserrors.ErrorIncompleteSignature)
+
+	body, _ := io.ReadAll(w.Result().Body)
+	if !strings.Contains(string(body), "<RequestID>test-request-id-123</RequestID>") {
+		t.Errorf("Expected preserved request ID, got: %s", string(body))
 	}
 }
 
@@ -947,6 +1088,85 @@ func TestSigV4Auth_ContextPropagation(t *testing.T) {
 		if !strings.Contains(result, check.expected) {
 			t.Errorf("Expected %s in response, got: %s", check.expected, result)
 		}
+	}
+}
+
+func TestSigV4Auth_ContextDoesNotLeakBetweenRequests(t *testing.T) {
+	encryptedSecret, err := handlers_iam.EncryptSecret(testSecretKey, testMasterKey)
+	if err != nil {
+		t.Fatalf("Failed to encrypt secret: %v", err)
+	}
+
+	secondKey := "AKIAIOSFODNN7SECOND0"
+	encryptedSecret2, err := handlers_iam.EncryptSecret(testSecretKey, testMasterKey)
+	if err != nil {
+		t.Fatalf("Failed to encrypt secret: %v", err)
+	}
+
+	mockSvc := &mockIAMService{
+		masterKey: testMasterKey,
+		accessKeys: map[string]*handlers_iam.AccessKey{
+			testAccessKey: {
+				AccessKeyID:     testAccessKey,
+				SecretAccessKey: encryptedSecret,
+				UserName:        "alice",
+				AccountID:       "111111111111",
+				Status:          "Active",
+			},
+			secondKey: {
+				AccessKeyID:     secondKey,
+				SecretAccessKey: encryptedSecret2,
+				UserName:        "bob",
+				AccountID:       "222222222222",
+				Status:          "Active",
+			},
+		},
+	}
+
+	gw := &GatewayConfig{
+		DisableLogging: true,
+		Region:         testRegion,
+		IAMService:     mockSvc,
+	}
+
+	r := chi.NewRouter()
+	r.Use(gw.SigV4AuthMiddleware())
+	r.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
+		identity := r.Context().Value(ctxIdentity)
+		accountID := r.Context().Value(ctxAccountID)
+		fmt.Fprintf(w, "%v:%v", identity, accountID)
+	})
+
+	// First request as alice
+	authHeader1, timestamp1 := generateTestAuthHeader(
+		"GET", "/", "", "",
+		testAccessKey, testSecretKey, testRegion, testService,
+	)
+	req1 := httptest.NewRequest("GET", "/", nil)
+	req1.Host = "localhost:9999"
+	req1.Header.Set("Authorization", authHeader1)
+	req1.Header.Set("X-Amz-Date", timestamp1)
+
+	resp1 := doRequest(r, req1)
+	body1, _ := io.ReadAll(resp1.Body)
+	if string(body1) != "alice:111111111111" {
+		t.Errorf("Request 1: expected alice:111111111111, got %s", string(body1))
+	}
+
+	// Second request as bob
+	authHeader2, timestamp2 := generateTestAuthHeader(
+		"GET", "/", "", "",
+		secondKey, testSecretKey, testRegion, testService,
+	)
+	req2 := httptest.NewRequest("GET", "/", nil)
+	req2.Host = "localhost:9999"
+	req2.Header.Set("Authorization", authHeader2)
+	req2.Header.Set("X-Amz-Date", timestamp2)
+
+	resp2 := doRequest(r, req2)
+	body2, _ := io.ReadAll(resp2.Body)
+	if string(body2) != "bob:222222222222" {
+		t.Errorf("Request 2: expected bob:222222222222, got %s", string(body2))
 	}
 }
 
@@ -1104,6 +1324,135 @@ func TestSigV4Auth_EmptyBodyPOST(t *testing.T) {
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("Expected status 200, got %d, body: %s", resp.StatusCode, string(body))
+	}
+}
+
+// --- computeSignatureWithSecret Direct Unit Tests ---
+
+func TestComputeSignatureWithSecret_DifferentMethods(t *testing.T) {
+	secret := "test-secret-key"
+	date := "20260305"
+	timestamp := "20260305T120000Z"
+	region := "us-east-1"
+	service := "ec2"
+	signedHeaders := "host;x-amz-date"
+
+	methods := []string{"GET", "POST", "PUT", "PATCH", "DELETE"}
+	signatures := make(map[string]string)
+
+	for _, method := range methods {
+		req := httptest.NewRequest(method, "/", nil)
+		req.Host = "localhost:9999"
+		req.Header.Set("X-Amz-Date", timestamp)
+
+		sig := computeSignatureWithSecret(req, nil, secret, date, timestamp, region, service, signedHeaders)
+		if sig == "" {
+			t.Errorf("Empty signature for method %s", method)
+		}
+		signatures[method] = sig
+	}
+
+	// Each method should produce a different signature
+	for i, m1 := range methods {
+		for _, m2 := range methods[i+1:] {
+			if signatures[m1] == signatures[m2] {
+				t.Errorf("Methods %s and %s produced same signature", m1, m2)
+			}
+		}
+	}
+}
+
+func TestComputeSignatureWithSecret_SpecialURIPaths(t *testing.T) {
+	secret := "test-secret-key"
+	date := "20260305"
+	timestamp := "20260305T120000Z"
+	region := "us-east-1"
+	service := "ec2"
+	signedHeaders := "host;x-amz-date"
+
+	testCases := []struct {
+		name string
+		path string
+	}{
+		{"root path", "/"},
+		{"nested path", "/a/b/c"},
+		{"path with encoded space", "/my%20resource"},
+		{"trailing slash", "/path/"},
+		{"empty path defaults to /", ""},
+	}
+
+	signatures := make(map[string]string)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			reqPath := tc.path
+			if reqPath == "" {
+				reqPath = "/"
+			}
+			req := httptest.NewRequest("GET", reqPath, nil)
+			req.Host = "localhost:9999"
+			req.Header.Set("X-Amz-Date", timestamp)
+
+			sig := computeSignatureWithSecret(req, nil, secret, date, timestamp, region, service, signedHeaders)
+			if sig == "" {
+				t.Errorf("Empty signature for path %q", tc.path)
+			}
+			signatures[tc.name] = sig
+		})
+	}
+}
+
+func TestComputeSignatureWithSecret_Determinism(t *testing.T) {
+	secret := "test-secret-key"
+	date := "20260305"
+	timestamp := "20260305T120000Z"
+	region := "us-east-1"
+	service := "ec2"
+	signedHeaders := "host;x-amz-date"
+	body := []byte("Action=DescribeInstances")
+
+	var first string
+	for i := range 10 {
+		req := httptest.NewRequest("POST", "/", nil)
+		req.Host = "localhost:9999"
+		req.Header.Set("X-Amz-Date", timestamp)
+
+		sig := computeSignatureWithSecret(req, body, secret, date, timestamp, region, service, signedHeaders)
+		if i == 0 {
+			first = sig
+		} else if sig != first {
+			t.Fatalf("Signature not deterministic: iteration %d got %q, expected %q", i, sig, first)
+		}
+	}
+}
+
+func TestComputeSignatureWithSecret_MultipartContentType(t *testing.T) {
+	handler := setupTestApp(testAccessKey, testSecretKey)
+
+	body := "Action=DescribeInstances"
+	headers := map[string]string{
+		"content-type": "multipart/form-data; boundary=something",
+		"host":         "localhost:9999",
+	}
+
+	now := time.Now().UTC()
+	headers["x-amz-date"] = now.Format(auth.TimeFormat)
+	authHeader, timestamp := generateTestAuthHeaderWithSignedHeaders(
+		"POST", "/", "", body,
+		testAccessKey, testSecretKey, testRegion, testService,
+		headers, "content-type;host;x-amz-date",
+	)
+
+	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	req.Host = "localhost:9999"
+	req.Header.Set("Authorization", authHeader)
+	req.Header.Set("X-Amz-Date", timestamp)
+	req.Header.Set("Content-Type", "multipart/form-data; boundary=something")
+
+	resp := doRequest(handler, req)
+
+	if resp.StatusCode != 200 {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Errorf("Expected status 200 for multipart content-type, got %d, body: %s", resp.StatusCode, string(respBody))
 	}
 }
 

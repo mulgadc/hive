@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mulgadc/hive/hive/awserrors"
+	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -371,6 +372,522 @@ func TestParseAWSQueryArgs(t *testing.T) {
 			assert.Equal(t, tc.expected, result)
 		})
 	}
+}
+
+func TestGetService(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true}
+
+	tests := []struct {
+		name      string
+		ctxVal    any // value to set in ctxService, nil means no value
+		wantSvc   string
+		wantError string
+	}{
+		{
+			name:      "no service in context",
+			ctxVal:    nil,
+			wantError: awserrors.ErrorAuthFailure,
+		},
+		{
+			name:      "non-string value in context",
+			ctxVal:    12345,
+			wantError: awserrors.ErrorAuthFailure,
+		},
+		{
+			name:      "unsupported service",
+			ctxVal:    "s3",
+			wantError: awserrors.ErrorUnsupportedOperation,
+		},
+		{
+			name:    "ec2 service",
+			ctxVal:  "ec2",
+			wantSvc: "ec2",
+		},
+		{
+			name:    "iam service",
+			ctxVal:  "iam",
+			wantSvc: "iam",
+		},
+		{
+			name:    "account service",
+			ctxVal:  "account",
+			wantSvc: "account",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/", nil)
+			if tc.ctxVal != nil {
+				ctx := context.WithValue(req.Context(), ctxService, tc.ctxVal)
+				req = req.WithContext(ctx)
+			}
+
+			svc, err := gw.GetService(req)
+			if tc.wantError != "" {
+				require.Error(t, err)
+				assert.Equal(t, tc.wantError, err.Error())
+				assert.Empty(t, svc)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.wantSvc, svc)
+			}
+		})
+	}
+}
+
+func TestRequest_NoServiceContext(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true}
+	req := httptest.NewRequest("POST", "/", nil)
+	w := httptest.NewRecorder()
+
+	gw.Request(w, req)
+
+	resp := w.Result()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, 403, resp.StatusCode)
+	assert.Contains(t, string(body), "AuthFailure")
+}
+
+func TestRequest_UnsupportedService(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true}
+	req := httptest.NewRequest("POST", "/", nil)
+	ctx := context.WithValue(req.Context(), ctxService, "s3")
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	gw.Request(w, req)
+
+	resp := w.Result()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, 400, resp.StatusCode)
+	assert.Contains(t, string(body), "UnsupportedOperation")
+}
+
+func TestRequest_EC2MissingAction(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true}
+	req := httptest.NewRequest("POST", "/", strings.NewReader(""))
+	ctx := context.WithValue(req.Context(), ctxService, "ec2")
+	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	gw.Request(w, req)
+
+	resp := w.Result()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, 400, resp.StatusCode)
+	assert.Contains(t, string(body), "InvalidAction")
+}
+
+func TestRequest_IAMNilService(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true, IAMService: nil}
+	req := httptest.NewRequest("POST", "/", strings.NewReader("Action=CreateUser&UserName=test"))
+	ctx := context.WithValue(req.Context(), ctxService, "iam")
+	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	gw.Request(w, req)
+
+	resp := w.Result()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, 500, resp.StatusCode)
+	assert.Contains(t, string(body), "InternalError")
+}
+
+func TestRequest_AccountReturns200(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true}
+	req := httptest.NewRequest("POST", "/", nil)
+	ctx := context.WithValue(req.Context(), ctxService, "account")
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	gw.Request(w, req)
+
+	resp := w.Result()
+	assert.Equal(t, 200, resp.StatusCode)
+}
+
+// setupEC2Request creates an http.Request with EC2 service context and optional account ID.
+func setupEC2Request(body string, accountID string) *http.Request {
+	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	ctx := context.WithValue(req.Context(), ctxService, "ec2")
+	if accountID != "" {
+		ctx = context.WithValue(ctx, ctxAccountID, accountID)
+	}
+	req = req.WithContext(ctx)
+	return req
+}
+
+func TestEC2Request_MissingAction(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true}
+	req := setupEC2Request("", "123456789012")
+	w := httptest.NewRecorder()
+
+	err := gw.EC2_Request(w, req)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAction, err.Error())
+}
+
+func TestEC2Request_UnknownAction(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true}
+	req := setupEC2Request("Action=FakeAction", "123456789012")
+	w := httptest.NewRecorder()
+
+	err := gw.EC2_Request(w, req)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAction, err.Error())
+}
+
+func TestEC2Request_NilNATSNonLocalAction(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true, NATSConn: nil}
+	req := setupEC2Request("Action=DescribeInstances", "123456789012")
+	w := httptest.NewRecorder()
+
+	err := gw.EC2_Request(w, req)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorServerInternal, err.Error())
+}
+
+func TestEC2Request_NilNATSLocalAction(t *testing.T) {
+	gw := &GatewayConfig{
+		DisableLogging: true,
+		NATSConn:       nil,
+		Region:         "us-east-1",
+		AZ:             "us-east-1a",
+	}
+	req := setupEC2Request("Action=DescribeRegions", "123456789012")
+	w := httptest.NewRecorder()
+
+	err := gw.EC2_Request(w, req)
+	require.NoError(t, err)
+
+	resp := w.Result()
+	assert.Equal(t, 200, resp.StatusCode)
+	assert.Equal(t, "text/xml", resp.Header.Get("Content-Type"))
+
+	body, _ := io.ReadAll(resp.Body)
+	assert.Contains(t, string(body), "DescribeRegionsResponse")
+}
+
+func TestEC2Request_MissingAccountID(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true, NATSConn: nil}
+	// Use a local action so we don't fail on nil NATS first
+	req := setupEC2Request("Action=DescribeRegions", "")
+	w := httptest.NewRecorder()
+
+	err := gw.EC2_Request(w, req)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorServerInternal, err.Error())
+}
+
+func TestEC2Request_DescribeAccountAttributes(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true, NATSConn: nil}
+	req := setupEC2Request("Action=DescribeAccountAttributes", "123456789012")
+	w := httptest.NewRecorder()
+
+	err := gw.EC2_Request(w, req)
+	require.NoError(t, err)
+
+	resp := w.Result()
+	assert.Equal(t, 200, resp.StatusCode)
+	assert.Equal(t, "text/xml", resp.Header.Get("Content-Type"))
+
+	body, _ := io.ReadAll(resp.Body)
+	assert.Contains(t, string(body), "DescribeAccountAttributesResponse")
+}
+
+func TestEC2Request_DescribeAvailabilityZones(t *testing.T) {
+	gw := &GatewayConfig{
+		DisableLogging: true,
+		NATSConn:       nil,
+		Region:         "us-east-1",
+		AZ:             "us-east-1a",
+	}
+	req := setupEC2Request("Action=DescribeAvailabilityZones", "123456789012")
+	w := httptest.NewRecorder()
+
+	err := gw.EC2_Request(w, req)
+	require.NoError(t, err)
+
+	resp := w.Result()
+	assert.Equal(t, 200, resp.StatusCode)
+	assert.Equal(t, "text/xml", resp.Header.Get("Content-Type"))
+
+	body, _ := io.ReadAll(resp.Body)
+	assert.Contains(t, string(body), "DescribeAvailabilityZonesResponse")
+}
+
+func TestCheckPolicy_NilIAMService(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true, IAMService: nil}
+	req := httptest.NewRequest("POST", "/", nil)
+
+	err := gw.checkPolicy(req, "ec2", "DescribeInstances")
+	assert.NoError(t, err)
+}
+
+func TestCheckPolicy_NoIdentityInContext(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true, IAMService: &mockIAMService{}}
+	req := httptest.NewRequest("POST", "/", nil)
+
+	err := gw.checkPolicy(req, "ec2", "DescribeInstances")
+	assert.NoError(t, err)
+}
+
+func TestCheckPolicy_RootUserGlobalAccount(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true, IAMService: &mockIAMService{}}
+	req := httptest.NewRequest("POST", "/", nil)
+	ctx := context.WithValue(req.Context(), ctxIdentity, "root")
+	ctx = context.WithValue(ctx, ctxAccountID, "000000000000") // GlobalAccountID
+	req = req.WithContext(ctx)
+
+	err := gw.checkPolicy(req, "ec2", "DescribeInstances")
+	assert.NoError(t, err)
+}
+
+func TestCheckPolicy_NonRootAllowPolicy(t *testing.T) {
+	mock := &policyMockIAMService{
+		getUserPoliciesFn: func(_, _ string) ([]handlers_iam.PolicyDocument, error) {
+			return []handlers_iam.PolicyDocument{
+				{
+					Version: "2012-10-17",
+					Statement: []handlers_iam.Statement{
+						{Effect: "Allow", Action: handlers_iam.StringOrArr{"ec2:*"}, Resource: handlers_iam.StringOrArr{"*"}},
+					},
+				},
+			}, nil
+		},
+	}
+	gw := &GatewayConfig{DisableLogging: true, IAMService: mock}
+	req := httptest.NewRequest("POST", "/", nil)
+	ctx := context.WithValue(req.Context(), ctxIdentity, "alice")
+	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
+	req = req.WithContext(ctx)
+
+	err := gw.checkPolicy(req, "ec2", "DescribeInstances")
+	assert.NoError(t, err)
+}
+
+func TestCheckPolicy_NonRootDenyPolicy(t *testing.T) {
+	mock := &policyMockIAMService{
+		getUserPoliciesFn: func(_, _ string) ([]handlers_iam.PolicyDocument, error) {
+			return []handlers_iam.PolicyDocument{
+				{
+					Version: "2012-10-17",
+					Statement: []handlers_iam.Statement{
+						{Effect: "Deny", Action: handlers_iam.StringOrArr{"ec2:*"}, Resource: handlers_iam.StringOrArr{"*"}},
+					},
+				},
+			}, nil
+		},
+	}
+	gw := &GatewayConfig{DisableLogging: true, IAMService: mock}
+	req := httptest.NewRequest("POST", "/", nil)
+	ctx := context.WithValue(req.Context(), ctxIdentity, "alice")
+	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
+	req = req.WithContext(ctx)
+
+	err := gw.checkPolicy(req, "ec2", "DescribeInstances")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorAccessDenied, err.Error())
+}
+
+func TestCheckPolicy_NonRootNoPolicies(t *testing.T) {
+	mock := &policyMockIAMService{
+		getUserPoliciesFn: func(_, _ string) ([]handlers_iam.PolicyDocument, error) {
+			return nil, nil
+		},
+	}
+	gw := &GatewayConfig{DisableLogging: true, IAMService: mock}
+	req := httptest.NewRequest("POST", "/", nil)
+	ctx := context.WithValue(req.Context(), ctxIdentity, "alice")
+	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
+	req = req.WithContext(ctx)
+
+	err := gw.checkPolicy(req, "ec2", "DescribeInstances")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorAccessDenied, err.Error())
+}
+
+func TestCheckPolicy_GetUserPoliciesError(t *testing.T) {
+	mock := &policyMockIAMService{
+		getUserPoliciesFn: func(_, _ string) ([]handlers_iam.PolicyDocument, error) {
+			return nil, errors.New("db connection failed")
+		},
+	}
+	gw := &GatewayConfig{DisableLogging: true, IAMService: mock}
+	req := httptest.NewRequest("POST", "/", nil)
+	ctx := context.WithValue(req.Context(), ctxIdentity, "alice")
+	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
+	req = req.WithContext(ctx)
+
+	err := gw.checkPolicy(req, "ec2", "DescribeInstances")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInternalError, err.Error())
+}
+
+func TestCheckPolicy_EmptyIdentity(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true, IAMService: &mockIAMService{}}
+	req := httptest.NewRequest("POST", "/", nil)
+	ctx := context.WithValue(req.Context(), ctxIdentity, "")
+	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
+	req = req.WithContext(ctx)
+
+	err := gw.checkPolicy(req, "ec2", "DescribeInstances")
+	assert.NoError(t, err)
+}
+
+func TestCheckPolicy_MissingAccountID(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true, IAMService: &mockIAMService{}}
+	req := httptest.NewRequest("POST", "/", nil)
+	ctx := context.WithValue(req.Context(), ctxIdentity, "alice")
+	// No account ID
+	req = req.WithContext(ctx)
+
+	err := gw.checkPolicy(req, "ec2", "DescribeInstances")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInternalError, err.Error())
+}
+
+func TestCorsMiddleware_GETRequest(t *testing.T) {
+	nextCalled := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nextCalled = true
+		w.WriteHeader(200)
+	})
+
+	handler := corsMiddleware(next)
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.True(t, nextCalled)
+	assert.Equal(t, "https://localhost:3000", w.Header().Get("Access-Control-Allow-Origin"))
+	assert.Equal(t, "GET,POST,PUT,DELETE,HEAD,OPTIONS", w.Header().Get("Access-Control-Allow-Methods"))
+	assert.Equal(t, "*", w.Header().Get("Access-Control-Allow-Headers"))
+	assert.Equal(t, "true", w.Header().Get("Access-Control-Allow-Credentials"))
+}
+
+func TestCorsMiddleware_OPTIONSRequest(t *testing.T) {
+	nextCalled := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nextCalled = true
+	})
+
+	handler := corsMiddleware(next)
+	req := httptest.NewRequest("OPTIONS", "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.False(t, nextCalled, "next handler should not be called for OPTIONS")
+	assert.Equal(t, http.StatusNoContent, w.Code)
+	assert.Equal(t, "https://localhost:3000", w.Header().Get("Access-Control-Allow-Origin"))
+}
+
+func TestSlogRequestLogger_CallsNext(t *testing.T) {
+	nextCalled := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nextCalled = true
+	})
+
+	handler := slogRequestLogger(next)
+	req := httptest.NewRequest("GET", "/test", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.True(t, nextCalled)
+	assert.Equal(t, 200, w.Code)
+}
+
+func TestSlogRequestLogger_CapturesStatusCode(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	handler := slogRequestLogger(next)
+	req := httptest.NewRequest("GET", "/missing", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, 404, w.Code)
+}
+
+func TestEC2ActionMapCompleteness(t *testing.T) {
+	expectedActions := []string{
+		"DescribeInstances", "RunInstances", "StartInstances", "StopInstances",
+		"TerminateInstances", "DescribeInstanceTypes", "GetConsoleOutput",
+		"ModifyInstanceAttribute",
+		"CreateKeyPair", "DeleteKeyPair", "DescribeKeyPairs", "ImportKeyPair",
+		"DescribeImages", "CreateImage",
+		"DescribeRegions", "DescribeAvailabilityZones",
+		"DescribeVolumes", "ModifyVolume", "CreateVolume", "DeleteVolume",
+		"AttachVolume", "DescribeVolumeStatus", "DetachVolume",
+		"DescribeAccountAttributes", "EnableEbsEncryptionByDefault",
+		"DisableEbsEncryptionByDefault", "GetEbsEncryptionByDefault",
+		"GetSerialConsoleAccessStatus", "EnableSerialConsoleAccess",
+		"DisableSerialConsoleAccess",
+		"CreateTags", "DeleteTags", "DescribeTags",
+		"CreateSnapshot", "DeleteSnapshot", "DescribeSnapshots", "CopySnapshot",
+		"CreateInternetGateway", "DeleteInternetGateway",
+		"DescribeInternetGateways", "AttachInternetGateway", "DetachInternetGateway",
+		"CreateEgressOnlyInternetGateway", "DeleteEgressOnlyInternetGateway",
+		"DescribeEgressOnlyInternetGateways",
+		"CreateVpc", "DeleteVpc", "DescribeVpcs",
+		"CreateSubnet", "DeleteSubnet", "DescribeSubnets",
+		"CreateNetworkInterface", "DeleteNetworkInterface", "DescribeNetworkInterfaces",
+	}
+
+	for _, action := range expectedActions {
+		assert.Contains(t, ec2Actions, action, "ec2Actions missing %s", action)
+	}
+	assert.Len(t, ec2Actions, len(expectedActions), "ec2Actions has unexpected entries")
+}
+
+func TestEC2LocalActionsCompleteness(t *testing.T) {
+	expected := []string{"DescribeRegions", "DescribeAvailabilityZones", "DescribeAccountAttributes"}
+	for _, action := range expected {
+		assert.True(t, ec2LocalActions[action], "ec2LocalActions missing %s", action)
+	}
+	assert.Len(t, ec2LocalActions, len(expected), "ec2LocalActions has unexpected entries")
+}
+
+func TestIAMActionMapCompleteness(t *testing.T) {
+	expectedActions := []string{
+		"CreateUser", "GetUser", "ListUsers", "DeleteUser",
+		"CreateAccessKey", "ListAccessKeys", "DeleteAccessKey", "UpdateAccessKey",
+		"CreatePolicy", "GetPolicy", "GetPolicyVersion", "ListPolicies", "DeletePolicy",
+		"AttachUserPolicy", "DetachUserPolicy", "ListAttachedUserPolicies",
+	}
+
+	for _, action := range expectedActions {
+		assert.Contains(t, iamActions, action, "iamActions missing %s", action)
+	}
+	assert.Len(t, iamActions, len(expectedActions), "iamActions has unexpected entries")
+}
+
+func TestImportKeyPair_Base64PaddingWorkaround(t *testing.T) {
+	// The ImportKeyPair handler has a workaround that decodes URL-encoded
+	// Base64 padding (%3D%3D → ==) before passing to the generic handler.
+	handler := ec2Actions["ImportKeyPair"]
+	require.NotNil(t, handler)
+
+	q := map[string]string{
+		"Action":            "ImportKeyPair",
+		"KeyName":           "test-key",
+		"PublicKeyMaterial": "c3NoLXJzYSBBQUFBQjNOemFDMXljMkVBQUFBREFRQUJBQUFCZ1FD%3D%3D",
+	}
+
+	gw := &GatewayConfig{DisableLogging: true, NATSConn: nil}
+	// The handler will fail because NATS is nil, but we can verify the
+	// workaround ran by checking that q["PublicKeyMaterial"] was modified.
+	_, _ = handler("ImportKeyPair", q, gw, "123456789012")
+
+	// After the workaround, the URL-encoded padding should be decoded
+	assert.True(t, strings.HasSuffix(q["PublicKeyMaterial"], "=="),
+		"Expected PublicKeyMaterial to end with == but got: %s", q["PublicKeyMaterial"])
+	assert.False(t, strings.Contains(q["PublicKeyMaterial"], "%3D"),
+		"Expected no URL-encoded padding remaining")
 }
 
 func TestParseArgsToStruct(t *testing.T) {

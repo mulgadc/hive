@@ -125,3 +125,45 @@ func TestValidateDescribeEgressOnlyInternetGatewaysInput(t *testing.T) {
 		})
 	}
 }
+
+// Handler tests — call handlers directly to cover validation + NATS error paths
+
+func TestCreateEgressOnlyInternetGateway_ValidationErrors(t *testing.T) {
+	_, err := CreateEgressOnlyInternetGateway(nil, nil, "")
+	assert.EqualError(t, err, awserrors.ErrorInvalidParameterValue)
+
+	_, err = CreateEgressOnlyInternetGateway(&ec2.CreateEgressOnlyInternetGatewayInput{}, nil, "")
+	assert.EqualError(t, err, awserrors.ErrorMissingParameter)
+}
+
+func TestCreateEgressOnlyInternetGateway_NilNATS(t *testing.T) {
+	_, err := CreateEgressOnlyInternetGateway(&ec2.CreateEgressOnlyInternetGatewayInput{
+		VpcId: aws.String("vpc-123"),
+	}, nil, "acct-123")
+	assert.Error(t, err)
+}
+
+func TestDeleteEgressOnlyInternetGateway_ValidationErrors(t *testing.T) {
+	_, err := DeleteEgressOnlyInternetGateway(nil, nil, "")
+	assert.EqualError(t, err, awserrors.ErrorInvalidParameterValue)
+
+	_, err = DeleteEgressOnlyInternetGateway(&ec2.DeleteEgressOnlyInternetGatewayInput{}, nil, "")
+	assert.EqualError(t, err, awserrors.ErrorMissingParameter)
+}
+
+func TestDeleteEgressOnlyInternetGateway_NilNATS(t *testing.T) {
+	_, err := DeleteEgressOnlyInternetGateway(&ec2.DeleteEgressOnlyInternetGatewayInput{
+		EgressOnlyInternetGatewayId: aws.String("eigw-abc123"),
+	}, nil, "acct-123")
+	assert.Error(t, err)
+}
+
+func TestDescribeEgressOnlyInternetGateways_ValidationErrors(t *testing.T) {
+	_, err := DescribeEgressOnlyInternetGateways(nil, nil, "")
+	assert.EqualError(t, err, awserrors.ErrorInvalidParameterValue)
+}
+
+func TestDescribeEgressOnlyInternetGateways_NilNATS(t *testing.T) {
+	_, err := DescribeEgressOnlyInternetGateways(&ec2.DescribeEgressOnlyInternetGatewaysInput{}, nil, "acct-123")
+	assert.Error(t, err)
+}

@@ -221,6 +221,128 @@ func TestAccessKeyReturnsAccountID(t *testing.T) {
 // SeedRootUser Account-Scoped Tests
 // ============================================================================
 
+// ============================================================================
+// Cross-Account Isolation Tests
+// ============================================================================
+
+func TestCrossAccount_UserIsolation(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	accA, err := svc.CreateAccount("Account A")
+	require.NoError(t, err)
+	accB, err := svc.CreateAccount("Account B")
+	require.NoError(t, err)
+
+	// Create user in Account A
+	_, err = svc.CreateUser(accA.AccountID, &iam.CreateUserInput{
+		UserName: aws.String("alice"),
+	})
+	require.NoError(t, err)
+
+	// Account B cannot get Account A's user
+	_, err = svc.GetUser(accB.AccountID, &iam.GetUserInput{
+		UserName: aws.String("alice"),
+	})
+	assert.Error(t, err, "should not be able to get Account A user from Account B")
+
+	// Account B listing should not include Account A's user
+	list, err := svc.ListUsers(accB.AccountID, &iam.ListUsersInput{})
+	require.NoError(t, err)
+	assert.Empty(t, list.Users, "Account B should have no users")
+}
+
+func TestCrossAccount_AccessKeyIsolation(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	accA, err := svc.CreateAccount("Key Org A")
+	require.NoError(t, err)
+	accB, err := svc.CreateAccount("Key Org B")
+	require.NoError(t, err)
+
+	_, err = svc.CreateUser(accA.AccountID, &iam.CreateUserInput{
+		UserName: aws.String("keyuser"),
+	})
+	require.NoError(t, err)
+
+	akOut, err := svc.CreateAccessKey(accA.AccountID, &iam.CreateAccessKeyInput{
+		UserName: aws.String("keyuser"),
+	})
+	require.NoError(t, err)
+
+	// LookupAccessKey returns Account A's ID, not Account B's
+	ak, err := svc.LookupAccessKey(*akOut.AccessKey.AccessKeyId)
+	require.NoError(t, err)
+	assert.Equal(t, accA.AccountID, ak.AccountID, "access key must belong to Account A")
+	assert.NotEqual(t, accB.AccountID, ak.AccountID, "access key must not belong to Account B")
+}
+
+func TestCrossAccount_PolicyAttachmentFails(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	accA, err := svc.CreateAccount("Policy Org A")
+	require.NoError(t, err)
+	accB, err := svc.CreateAccount("Policy Org B")
+	require.NoError(t, err)
+
+	doc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"s3:*","Resource":"*"}]}`
+
+	// Create policy in Account A
+	pOut, err := svc.CreatePolicy(accA.AccountID, &iam.CreatePolicyInput{
+		PolicyName:     aws.String("S3Access"),
+		PolicyDocument: aws.String(doc),
+	})
+	require.NoError(t, err)
+
+	// Create user in Account B
+	_, err = svc.CreateUser(accB.AccountID, &iam.CreateUserInput{
+		UserName: aws.String("bob"),
+	})
+	require.NoError(t, err)
+
+	// Attaching Account A's policy to Account B's user should fail
+	_, err = svc.AttachUserPolicy(accB.AccountID, &iam.AttachUserPolicyInput{
+		UserName:  aws.String("bob"),
+		PolicyArn: pOut.Policy.Arn,
+	})
+	assert.Error(t, err, "cross-account policy attachment should fail")
+}
+
+func TestCrossAccount_LookupAccessKeyReturnsCorrectAccount(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	accA, err := svc.CreateAccount("Lookup A")
+	require.NoError(t, err)
+	accB, err := svc.CreateAccount("Lookup B")
+	require.NoError(t, err)
+
+	// Create same username in both accounts with access keys
+	_, err = svc.CreateUser(accA.AccountID, &iam.CreateUserInput{UserName: aws.String("shared")})
+	require.NoError(t, err)
+	_, err = svc.CreateUser(accB.AccountID, &iam.CreateUserInput{UserName: aws.String("shared")})
+	require.NoError(t, err)
+
+	akA, err := svc.CreateAccessKey(accA.AccountID, &iam.CreateAccessKeyInput{UserName: aws.String("shared")})
+	require.NoError(t, err)
+	akB, err := svc.CreateAccessKey(accB.AccountID, &iam.CreateAccessKeyInput{UserName: aws.String("shared")})
+	require.NoError(t, err)
+
+	// Each key resolves to its own account
+	lookupA, err := svc.LookupAccessKey(*akA.AccessKey.AccessKeyId)
+	require.NoError(t, err)
+	assert.Equal(t, accA.AccountID, lookupA.AccountID)
+
+	lookupB, err := svc.LookupAccessKey(*akB.AccessKey.AccessKeyId)
+	require.NoError(t, err)
+	assert.Equal(t, accB.AccountID, lookupB.AccountID)
+
+	// Keys are distinct
+	assert.NotEqual(t, *akA.AccessKey.AccessKeyId, *akB.AccessKey.AccessKeyId)
+}
+
+// ============================================================================
+// SeedRootUser Account-Scoped Tests
+// ============================================================================
+
 func TestSeedRootUser_AccountScoped(t *testing.T) {
 	svc := setupTestIAMService(t)
 

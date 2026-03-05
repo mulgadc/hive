@@ -83,3 +83,30 @@ func TestDescribeInternetGateways_NilInput(t *testing.T) {
 	_, err := DescribeInternetGateways(nil, nil, "")
 	assert.EqualError(t, err, awserrors.ErrorInvalidParameterValue)
 }
+
+// Handler tests with valid input + nil NATS — covers NATS error paths
+
+func TestCreateInternetGateway_NilNATS(t *testing.T) {
+	_, err := CreateInternetGateway(&ec2.CreateInternetGatewayInput{}, nil, "acct-123")
+	assert.Error(t, err)
+}
+
+func TestDeleteInternetGateway_NilNATS(t *testing.T) {
+	_, err := DeleteInternetGateway(&ec2.DeleteInternetGatewayInput{InternetGatewayId: aws.String("igw-123")}, nil, "acct-123")
+	assert.Error(t, err)
+}
+
+func TestAttachInternetGateway_NilNATS(t *testing.T) {
+	_, err := AttachInternetGateway(&ec2.AttachInternetGatewayInput{InternetGatewayId: aws.String("igw-123"), VpcId: aws.String("vpc-123")}, nil, "acct-123")
+	assert.Error(t, err)
+}
+
+func TestDetachInternetGateway_NilNATS(t *testing.T) {
+	_, err := DetachInternetGateway(&ec2.DetachInternetGatewayInput{InternetGatewayId: aws.String("igw-123"), VpcId: aws.String("vpc-123")}, nil, "acct-123")
+	assert.Error(t, err)
+}
+
+func TestDescribeInternetGateways_NilNATS(t *testing.T) {
+	_, err := DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{}, nil, "acct-123")
+	assert.Error(t, err)
+}

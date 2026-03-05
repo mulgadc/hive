@@ -566,17 +566,7 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 		Reservations: reservations,
 	}
 
-	// Respond to NATS with DescribeInstancesOutput
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2DescribeInstances failed to marshal output", "err", err)
-		respondWithError(msg, awserrors.ErrorServerInternal)
-		return
-	}
-	if err := msg.Respond(jsonResponse); err != nil {
-		slog.Error("Failed to respond to NATS request", "err", err)
-	}
-
+	respondWithJSON(msg, output)
 	slog.Info("handleEC2DescribeInstances completed", "count", len(reservations))
 }
 
@@ -620,17 +610,7 @@ func (d *Daemon) handleEC2DescribeInstanceTypes(msg *nats.Msg) {
 		InstanceTypes: filteredTypes,
 	}
 
-	// Respond to NATS
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2DescribeInstanceTypes failed to marshal output", "err", err)
-		respondWithError(msg, awserrors.ErrorServerInternal)
-		return
-	}
-	if err := msg.Respond(jsonResponse); err != nil {
-		slog.Error("Failed to respond to NATS request", "err", err)
-	}
-
+	respondWithJSON(msg, output)
 	slog.Info("handleEC2DescribeInstanceTypes completed", "count", len(filteredTypes))
 }
 
@@ -938,17 +918,7 @@ func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
 		Reservations: reservations,
 	}
 
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2DescribeStoppedInstances: failed to marshal output", "err", err)
-		respondWithError(msg, awserrors.ErrorServerInternal)
-		return
-	}
-
-	if err := msg.Respond(jsonResponse); err != nil {
-		slog.Error("Failed to respond to NATS request", "err", err)
-	}
-
+	respondWithJSON(msg, output)
 	slog.Info("handleEC2DescribeStoppedInstances completed", "count", len(reservations))
 }
 

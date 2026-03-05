@@ -452,3 +452,25 @@ func TestErrorLookup(t *testing.T) {
 		}
 	}
 }
+
+func TestValidErrorCode(t *testing.T) {
+	tests := []struct {
+		name string
+		code string
+		want string
+	}{
+		{name: "known error code", code: ErrorAuthFailure, want: ErrorAuthFailure},
+		{name: "another known code", code: ErrorInvalidParameterValue, want: ErrorInvalidParameterValue},
+		{name: "unknown code returns ServerInternal", code: "CompletelyMadeUp", want: ErrorServerInternal},
+		{name: "empty string returns ServerInternal", code: "", want: ErrorServerInternal},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ValidErrorCode(tt.code)
+			if got != tt.want {
+				t.Errorf("ValidErrorCode(%q) = %q, want %q", tt.code, got, tt.want)
+			}
+		})
+	}
+}

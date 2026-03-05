@@ -477,15 +477,7 @@ func (d *Daemon) handleEC2ModifyVolume(msg *nats.Msg) {
 		return
 	}
 
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("handleEC2ModifyVolume failed to marshal output", "err", err)
-		respondWithError(msg, awserrors.ErrorServerInternal)
-		return
-	}
-	if err := msg.Respond(jsonResponse); err != nil {
-		slog.Error("Failed to respond to NATS request", "err", err)
-	}
+	respondWithJSON(msg, output)
 
 	// Notify viperblockd to reload state after volume modification (e.g. resize)
 	if modifyVolumeInput.VolumeId != nil {

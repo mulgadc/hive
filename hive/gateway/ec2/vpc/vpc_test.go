@@ -110,3 +110,59 @@ func TestDeleteNetworkInterface_EmptyNetworkInterfaceId(t *testing.T) {
 	_, err := DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{NetworkInterfaceId: aws.String("")}, nil, testAccountID)
 	assert.EqualError(t, err, awserrors.ErrorMissingParameter)
 }
+
+// Handler tests with valid input + nil NATS — covers NATS error paths
+
+func TestCreateVpc_NilNATS(t *testing.T) {
+	_, err := CreateVpc(&ec2.CreateVpcInput{CidrBlock: aws.String("10.0.0.0/16")}, nil, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestDeleteVpc_NilNATS(t *testing.T) {
+	_, err := DeleteVpc(&ec2.DeleteVpcInput{VpcId: aws.String("vpc-123")}, nil, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestCreateSubnet_NilNATS(t *testing.T) {
+	_, err := CreateSubnet(&ec2.CreateSubnetInput{VpcId: aws.String("vpc-123"), CidrBlock: aws.String("10.0.1.0/24")}, nil, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestDeleteSubnet_NilNATS(t *testing.T) {
+	_, err := DeleteSubnet(&ec2.DeleteSubnetInput{SubnetId: aws.String("subnet-123")}, nil, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestCreateNetworkInterface_NilNATS(t *testing.T) {
+	_, err := CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{SubnetId: aws.String("subnet-123")}, nil, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestDeleteNetworkInterface_NilNATS(t *testing.T) {
+	_, err := DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{NetworkInterfaceId: aws.String("eni-123")}, nil, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestDescribeVpcs_NilNATS(t *testing.T) {
+	_, err := DescribeVpcs(nil, nil, testAccountID)
+	assert.Error(t, err)
+
+	_, err = DescribeVpcs(&ec2.DescribeVpcsInput{}, nil, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestDescribeSubnets_NilNATS(t *testing.T) {
+	_, err := DescribeSubnets(nil, nil, testAccountID)
+	assert.Error(t, err)
+
+	_, err = DescribeSubnets(&ec2.DescribeSubnetsInput{}, nil, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestDescribeNetworkInterfaces_NilNATS(t *testing.T) {
+	_, err := DescribeNetworkInterfaces(nil, nil, testAccountID)
+	assert.Error(t, err)
+
+	_, err = DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{}, nil, testAccountID)
+	assert.Error(t, err)
+}

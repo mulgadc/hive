@@ -277,6 +277,30 @@ func TestIAMRequest_ServiceError(t *testing.T) {
 	assert.Contains(t, xmlStr, "<ErrorResponse>")
 }
 
+func TestIAMRequest_MissingAccountID(t *testing.T) {
+	gw := &GatewayConfig{
+		DisableLogging: true,
+		IAMService:     &flexMockIAMService{},
+	}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), ctxService, "iam")
+		// No ctxAccountID set
+		r = r.WithContext(ctx)
+		if err := gw.IAM_Request(w, r); err != nil {
+			gw.ErrorHandler(w, r, err)
+		}
+	})
+
+	req := httptest.NewRequest("POST", "/", strings.NewReader("Action=CreateUser&UserName=alice"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp := doRequest(handler, req)
+	assert.Equal(t, 500, resp.StatusCode)
+
+	body, _ := io.ReadAll(resp.Body)
+	assert.Contains(t, string(body), "InternalError")
+}
+
 func TestIAMRequest_ValidationError(t *testing.T) {
 	// CreateUser with missing UserName should return MissingParameter
 	handler := setupIAMRequestHandler(&flexMockIAMService{})

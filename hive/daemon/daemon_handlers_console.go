@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"log/slog"
 	"os"
 	"time"
@@ -88,16 +87,6 @@ func (d *Daemon) handleEC2GetConsoleOutput(msg *nats.Msg) {
 		Timestamp:  &modTime,
 	}
 
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		slog.Error("Failed to marshal GetConsoleOutput response", "err", err)
-		respondWithError(msg, awserrors.ErrorServerInternal)
-		return
-	}
-
-	if err := msg.Respond(jsonResponse); err != nil {
-		slog.Error("Failed to respond to NATS request", "err", err)
-	}
-
+	respondWithJSON(msg, output)
 	slog.Info("handleEC2GetConsoleOutput completed", "instance_id", instanceID, "output_bytes", len(outputData))
 }

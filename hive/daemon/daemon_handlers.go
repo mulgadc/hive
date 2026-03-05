@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"time"
@@ -21,6 +22,20 @@ func respondWithError(msg *nats.Msg, errCode string) {
 	}
 }
 
+// respondWithJSON marshals data to JSON and sends it as a NATS response.
+// On marshal failure it responds with an internal server error.
+func respondWithJSON(msg *nats.Msg, data any) {
+	jsonResponse, err := json.Marshal(data)
+	if err != nil {
+		slog.Error("Failed to marshal response", "type", fmt.Sprintf("%T", data), "err", err)
+		respondWithError(msg, awserrors.ErrorServerInternal)
+		return
+	}
+	if err := msg.Respond(jsonResponse); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
+}
+
 // handleNATSRequest is a generic helper for the common unmarshal → service → marshal → respond pattern.
 // It extracts the account ID from the NATS message header and passes it to the service function.
 func handleNATSRequest[I any, O any](msg *nats.Msg, serviceFn func(*I, string) (*O, error)) {
@@ -34,21 +49,10 @@ func handleNATSRequest[I any, O any](msg *nats.Msg, serviceFn func(*I, string) (
 	}
 	output, err := serviceFn(input, accountID)
 	if err != nil {
-		if err := msg.Respond(utils.GenerateErrorPayload(awserrors.ValidErrorCode(err.Error()))); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
+		respondWithError(msg, awserrors.ValidErrorCode(err.Error()))
 		return
 	}
-	jsonResponse, err := json.Marshal(output)
-	if err != nil {
-		if err := msg.Respond(utils.GenerateErrorPayload(awserrors.ErrorServerInternal)); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
-		return
-	}
-	if err := msg.Respond(jsonResponse); err != nil {
-		slog.Error("Failed to respond to NATS request", "err", err)
-	}
+	respondWithJSON(msg, output)
 }
 
 // handleEC2Events processes incoming EC2 instance events (start, stop, terminate, attach-volume)
@@ -157,15 +161,7 @@ func (d *Daemon) handleHealthCheck(msg *nats.Msg) {
 		Uptime:     int64(time.Since(d.startTime).Seconds()),
 	}
 
-	jsonResponse, err := json.Marshal(response)
-	if err != nil {
-		slog.Error("handleHealthCheck failed to marshal response", "err", err)
-		return
-	}
-
-	if err := msg.Respond(jsonResponse); err != nil {
-		slog.Error("Failed to respond to NATS request", "err", err)
-	}
+	respondWithJSON(msg, response)
 	slog.Debug("Health check responded", "node", d.node, "epoch", d.clusterConfig.Epoch)
 }
 
@@ -181,15 +177,7 @@ func (d *Daemon) handleNodeDiscover(msg *nats.Msg) {
 		Node: d.node,
 	}
 
-	jsonResponse, err := json.Marshal(response)
-	if err != nil {
-		slog.Error("handleNodeDiscover failed to marshal response", "err", err)
-		return
-	}
-
-	if err := msg.Respond(jsonResponse); err != nil {
-		slog.Error("Failed to respond to NATS request", "err", err)
-	}
+	respondWithJSON(msg, response)
 	slog.Debug("Node discovery responded", "node", d.node)
 }
 
@@ -232,14 +220,7 @@ func (d *Daemon) handleNodeStatus(msg *nats.Msg) {
 		InstanceTypes: caps,
 	}
 
-	data, err := json.Marshal(resp)
-	if err != nil {
-		slog.Error("handleNodeStatus failed to marshal response", "err", err)
-		return
-	}
-	if err := msg.Respond(data); err != nil {
-		slog.Error("Failed to respond to hive.node.status", "err", err)
-	}
+	respondWithJSON(msg, resp)
 }
 
 // handleNodeVMs responds with the list of VMs running on this node.
@@ -271,12 +252,5 @@ func (d *Daemon) handleNodeVMs(msg *nats.Msg) {
 		VMs:  vms,
 	}
 
-	data, err := json.Marshal(resp)
-	if err != nil {
-		slog.Error("handleNodeVMs failed to marshal response", "err", err)
-		return
-	}
-	if err := msg.Respond(data); err != nil {
-		slog.Error("Failed to respond to hive.node.vms", "err", err)
-	}
+	respondWithJSON(msg, resp)
 }

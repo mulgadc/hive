@@ -123,6 +123,10 @@ type Daemon struct {
 	// Delay after QMP device_del before blockdev-del (default 1s, 0 in tests)
 	detachDelay time.Duration
 
+	// NATS connect retry parameters (zero values use defaults: 5min max, 500ms initial delay)
+	natsMaxWait    time.Duration
+	natsRetryDelay time.Duration
+
 	// NetworkPlumber handles tap device lifecycle for VPC networking
 	networkPlumber NetworkPlumber
 
@@ -546,8 +550,14 @@ func (d *Daemon) Start() error {
 // be ready immediately after daemon start (e.g. if start-dev.sh is still
 // launching services). This retries for up to 5 minutes before giving up.
 func (d *Daemon) connectNATS() error {
-	const maxWait = 5 * time.Minute
+	maxWait := 5 * time.Minute
 	retryDelay := 500 * time.Millisecond
+	if d.natsMaxWait > 0 {
+		maxWait = d.natsMaxWait
+	}
+	if d.natsRetryDelay > 0 {
+		retryDelay = d.natsRetryDelay
+	}
 	start := time.Now()
 
 	for {

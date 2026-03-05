@@ -258,6 +258,56 @@ func TestCloudInitMetaTemplateRendering(t *testing.T) {
 // unique root volume IDs, which in turn produce unique cloud-init volume names.
 // This prevents the bug where a cached cloud-init ISO (keyed by AMI) would
 // serve stale SSH keys or hostnames to subsequent instances.
+func TestRunInstance_NoImageId(t *testing.T) {
+	instanceTypes := map[string]*ec2.InstanceTypeInfo{
+		"t3.micro": {InstanceType: aws.String("t3.micro")},
+	}
+
+	svc := &InstanceServiceImpl{instanceTypes: instanceTypes}
+
+	input := &ec2.RunInstancesInput{
+		InstanceType: aws.String("t3.micro"),
+	}
+
+	instance, ec2Instance, err := svc.RunInstance(input)
+	require.NoError(t, err)
+	require.NotNil(t, instance)
+	assert.Nil(t, ec2Instance.ImageId)
+	assert.Nil(t, ec2Instance.KeyName)
+}
+
+func TestMockInstanceService(t *testing.T) {
+	svc := NewMockInstanceService()
+	require.NotNil(t, svc)
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-0123456789abcdef0"),
+		InstanceType: aws.String("t3.micro"),
+		KeyName:      aws.String("my-key"),
+		SubnetId:     aws.String("subnet-abc123"),
+	}
+
+	reservation, err := svc.RunInstances(input, "123456789012")
+	require.NoError(t, err)
+	require.NotNil(t, reservation)
+	assert.Equal(t, "123456789012", *reservation.OwnerId)
+	require.Len(t, reservation.Instances, 1)
+
+	inst := reservation.Instances[0]
+	assert.Equal(t, "i-0123456789abcdef0", *inst.InstanceId)
+	assert.Equal(t, "running", *inst.State.Name)
+	assert.Equal(t, "ami-0123456789abcdef0", *inst.ImageId)
+	assert.Equal(t, "t3.micro", *inst.InstanceType)
+	assert.Equal(t, "my-key", *inst.KeyName)
+	assert.Equal(t, "subnet-abc123", *inst.SubnetId)
+}
+
+func TestCloudInitNetworkConfig(t *testing.T) {
+	assert.Contains(t, cloudInitNetworkConfig, "version: 2")
+	assert.Contains(t, cloudInitNetworkConfig, "dhcp4: true")
+	assert.Contains(t, cloudInitNetworkConfig, "dhcp-identifier: mac")
+}
+
 func TestCloudInitVolumeNamePerInstance(t *testing.T) {
 	amiID := "ami-0abcdef1234567890"
 
