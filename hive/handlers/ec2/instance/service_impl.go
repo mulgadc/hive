@@ -99,6 +99,57 @@ type VolumeInfo struct {
 	DeleteOnTermination bool
 }
 
+// volumeParams holds parsed block device mapping parameters for volume creation.
+type volumeParams struct {
+	size                int
+	deviceName          string
+	volumeType          string
+	iops                int
+	imageId             string
+	snapshotId          string
+	deleteOnTermination bool
+}
+
+// parseVolumeParams extracts volume parameters from RunInstancesInput,
+// applying defaults and resolving AMI-based image IDs.
+func parseVolumeParams(input *ec2.RunInstancesInput) volumeParams {
+	p := volumeParams{
+		size:                4 * 1024 * 1024 * 1024, // 4GB default
+		deviceName:          "/dev/vda",
+		deleteOnTermination: true, // matches AWS RunInstances behavior
+	}
+
+	if len(input.BlockDeviceMappings) > 0 {
+		bdm := input.BlockDeviceMappings[0]
+		if bdm.DeviceName != nil {
+			p.deviceName = *bdm.DeviceName
+		}
+		if bdm.Ebs != nil {
+			if bdm.Ebs.VolumeSize != nil {
+				p.size = int(*bdm.Ebs.VolumeSize) * 1024 * 1024 * 1024
+			}
+			if bdm.Ebs.VolumeType != nil {
+				p.volumeType = *bdm.Ebs.VolumeType
+			}
+			if bdm.Ebs.Iops != nil {
+				p.iops = int(*bdm.Ebs.Iops)
+			}
+			if bdm.Ebs.DeleteOnTermination != nil {
+				p.deleteOnTermination = *bdm.Ebs.DeleteOnTermination
+			}
+		}
+	}
+
+	if strings.HasPrefix(*input.ImageId, "ami-") {
+		p.imageId = utils.GenerateResourceID("vol")
+		p.snapshotId = *input.ImageId
+	} else {
+		p.imageId = *input.ImageId
+	}
+
+	return p
+}
+
 // InstanceServiceImpl handles daemon-side EC2 instance operations
 type InstanceServiceImpl struct {
 	config        *config.Config
@@ -161,60 +212,28 @@ func (s *InstanceServiceImpl) RunInstance(input *ec2.RunInstancesInput) (*vm.VM,
 }
 
 func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, instance *vm.VM) ([]VolumeInfo, error) {
-
-	var size int = 4 * 1024 * 1024 * 1024 // 4GB default size
-	var deviceName = "/dev/vda"           // Default device name (virtio-blk-pci)
-	var volumeType string
-	var iops int
-	var imageId string
-	var snapshotId string
-	var deleteOnTermination = true // Default to true (matches AWS RunInstances behavior)
-
-	// Handle block device mappings
-	if len(input.BlockDeviceMappings) > 0 {
-		bdm := input.BlockDeviceMappings[0]
-		if bdm.DeviceName != nil {
-			deviceName = *bdm.DeviceName
-		}
-		if bdm.Ebs != nil {
-			if bdm.Ebs.VolumeSize != nil {
-				size = int(*bdm.Ebs.VolumeSize) * 1024 * 1024 * 1024 // AWS API sends GiB, convert to bytes
-			}
-			if bdm.Ebs.VolumeType != nil {
-				volumeType = *bdm.Ebs.VolumeType
-			}
-			if bdm.Ebs.Iops != nil {
-				iops = int(*bdm.Ebs.Iops)
-			}
-			if bdm.Ebs.DeleteOnTermination != nil {
-				deleteOnTermination = *bdm.Ebs.DeleteOnTermination
-			}
-		}
-	}
-
-	// Determine image ID and snapshot ID
-	if strings.HasPrefix(*input.ImageId, "ami-") {
-		imageId = utils.GenerateResourceID("vol")
-		snapshotId = *input.ImageId
-	} else {
-		imageId = *input.ImageId
-	}
+	p := parseVolumeParams(input)
 
 	// Capture attach time for the root volume
 	attachTime := time.Now()
 
 	volumeConfig := viperblock.VolumeConfig{
 		VolumeMetadata: viperblock.VolumeMetadata{
-			VolumeID:            imageId,
-			SizeGiB:             utils.SafeIntToUint64(size / 1024 / 1024 / 1024),
+			VolumeID:            p.imageId,
+			SizeGiB:             utils.SafeIntToUint64(p.size / 1024 / 1024 / 1024),
 			CreatedAt:           attachTime,
-			DeviceName:          deviceName,
-			VolumeType:          volumeType,
-			IOPS:                iops,
-			SnapshotID:          snapshotId,
-			DeleteOnTermination: deleteOnTermination,
+			DeviceName:          p.deviceName,
+			VolumeType:          p.volumeType,
+			IOPS:                p.iops,
+			SnapshotID:          p.snapshotId,
+			DeleteOnTermination: p.deleteOnTermination,
 		},
 	}
+
+	size := p.size
+	imageId := p.imageId
+	deviceName := p.deviceName
+	deleteOnTermination := p.deleteOnTermination
 
 	// Step 1: Create or validate root volume
 	err := s.prepareRootVolume(input, imageId, size, volumeConfig, instance, deleteOnTermination)

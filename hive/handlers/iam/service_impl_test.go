@@ -1654,3 +1654,147 @@ func TestGeneratePolicyID(t *testing.T) {
 	id2 := generateIAMID("ANPA")
 	assert.NotEqual(t, id, id2)
 }
+
+// ============================================================================
+// Validator Tests
+// ============================================================================
+
+func TestIsIAMNameChar(t *testing.T) {
+	// Valid characters
+	for _, c := range "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+=,.@-_" {
+		assert.True(t, isIAMNameChar(byte(c)), "expected valid: %c", c)
+	}
+	// Invalid characters
+	for _, c := range " !#$%^&*(){}[]|\\:;\"'<>?/`~\t\n" {
+		assert.False(t, isIAMNameChar(byte(c)), "expected invalid: %c", c)
+	}
+}
+
+func TestValidateUserName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"valid simple", "alice", false},
+		{"valid with special chars", "alice.bob+test@example_com", false},
+		{"valid single char", "a", false},
+		{"valid 64 chars", strings.Repeat("a", 64), false},
+		{"empty", "", true},
+		{"too long 65 chars", strings.Repeat("a", 65), true},
+		{"invalid space", "alice bob", true},
+		{"invalid slash", "alice/bob", true},
+		{"invalid colon", "alice:bob", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateUserName(tt.input)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidatePolicyName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"valid simple", "MyPolicy", false},
+		{"valid with special chars", "My.Policy-v2_test+1", false},
+		{"valid single char", "P", false},
+		{"valid 128 chars", strings.Repeat("x", 128), false},
+		{"empty", "", true},
+		{"too long 129 chars", strings.Repeat("x", 129), true},
+		{"invalid space", "My Policy", true},
+		{"invalid slash", "My/Policy", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePolicyName(tt.input)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestValidatePath(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"root path", "/", false},
+		{"nested path", "/division/engineering/", false},
+		{"no leading slash", "division/", true},
+		{"no trailing slash", "/division", true},
+		{"empty string", "", true},
+		{"just text", "division", true},
+		{"max length 512", "/" + strings.Repeat("a", 510) + "/", false},
+		{"over max length 513", "/" + strings.Repeat("a", 511) + "/", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePath(tt.input)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestParseCreatedAt(t *testing.T) {
+	// Valid RFC3339
+	ts := "2024-01-15T10:30:00Z"
+	result := parseCreatedAt(ts)
+	assert.Equal(t, 2024, result.Year())
+	assert.Equal(t, time.January, result.Month())
+	assert.Equal(t, 15, result.Day())
+	assert.Equal(t, 10, result.Hour())
+	assert.Equal(t, 30, result.Minute())
+
+	// With timezone offset
+	ts2 := "2024-06-01T12:00:00+05:00"
+	result2 := parseCreatedAt(ts2)
+	assert.Equal(t, 2024, result2.Year())
+	assert.Equal(t, time.June, result2.Month())
+
+	// Invalid — returns zero time (fallback)
+	result3 := parseCreatedAt("not-a-date")
+	assert.True(t, result3.IsZero())
+
+	// Empty string — returns zero time
+	result4 := parseCreatedAt("")
+	assert.True(t, result4.IsZero())
+}
+
+func TestGenerateIAMID_AllUpperHex(t *testing.T) {
+	for range 20 {
+		id := generateIAMID("AIDA")
+		suffix := id[4:]
+		for _, c := range suffix {
+			assert.True(t, (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'),
+				"expected uppercase hex char, got %c in ID %s", c, id)
+		}
+	}
+}
+
+func TestGenerateAccessKeyID_AllUpperHex(t *testing.T) {
+	for range 20 {
+		id := generateAccessKeyID()
+		suffix := id[4:]
+		for _, c := range suffix {
+			assert.True(t, (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'),
+				"expected uppercase hex char, got %c in ID %s", c, id)
+		}
+	}
+}

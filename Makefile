@@ -78,11 +78,10 @@ test:
 # Note: go test may exit non-zero due to Go version mismatch in coverage instrumentation
 # for packages without test files. We check actual test results + coverage threshold instead.
 COVERPROFILE ?= coverage.out
-MIN_COVERAGE ?= 60.0
 test-cover:
 	@echo -e "\n....Running tests with coverage for $(GO_PROJECT_NAME)...."
 	$(_Q)LOG_IGNORE=1 go test -timeout 120s -coverprofile=$(COVERPROFILE) -covermode=atomic ./hive/... $(_COVQ)
-	@scripts/check-coverage.sh $(COVERPROFILE) $(MIN_COVERAGE) $(QUIET)
+	@scripts/check-coverage.sh $(COVERPROFILE) $(QUIET)
 
 # Run unit tests with race detector
 test-race:

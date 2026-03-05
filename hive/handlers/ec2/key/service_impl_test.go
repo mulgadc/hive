@@ -531,3 +531,82 @@ func TestValidateKeyPairExists_NotFound(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidKeyPairNotFound, err.Error())
 }
+
+// ============================================================
+// formatFingerprint Tests
+// ============================================================
+
+func TestFormatFingerprint_MD5(t *testing.T) {
+	hash := []byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99}
+	result := formatFingerprint(hash, "MD5")
+	assert.Equal(t, "aabbccddeeff00112233445566778899", result)
+	// Should be lowercase hex, no colons
+	assert.False(t, strings.Contains(result, ":"))
+	assert.Equal(t, strings.ToLower(result), result)
+}
+
+func TestFormatFingerprint_SHA256(t *testing.T) {
+	hash := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+	result := formatFingerprint(hash, "SHA256")
+	assert.True(t, strings.HasPrefix(result, "SHA256:"))
+	// Should be raw base64 (no padding)
+	assert.False(t, strings.HasSuffix(result, "="))
+}
+
+func TestFormatFingerprint_EmptyHash(t *testing.T) {
+	result := formatFingerprint([]byte{}, "MD5")
+	assert.Equal(t, "", result)
+
+	result = formatFingerprint([]byte{}, "SHA256")
+	assert.Equal(t, "SHA256:", result)
+}
+
+// ============================================================
+// calculateFingerprint Tests
+// ============================================================
+
+func TestCalculateFingerprint_ED25519(t *testing.T) {
+	svc, _ := newTestKeyService()
+
+	fp, err := svc.calculateFingerprint([]byte(testED25519PubKey), "ed25519")
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(fp, "SHA256:"), "ed25519 should use SHA256 fingerprint")
+	assert.NotEqual(t, "SHA256:", fp, "fingerprint should have content after prefix")
+}
+
+func TestCalculateFingerprint_RSA(t *testing.T) {
+	svc, _ := newTestKeyService()
+
+	fp, err := svc.calculateFingerprint([]byte(testRSAPubKey), "rsa")
+	require.NoError(t, err)
+	assert.False(t, strings.HasPrefix(fp, "SHA256:"), "RSA should use MD5 fingerprint")
+	assert.NotEmpty(t, fp)
+	// MD5 of RSA key data = 32 hex chars
+	assert.Len(t, fp, 32)
+}
+
+func TestCalculateFingerprint_Deterministic(t *testing.T) {
+	svc, _ := newTestKeyService()
+
+	fp1, err := svc.calculateFingerprint([]byte(testED25519PubKey), "ed25519")
+	require.NoError(t, err)
+	fp2, err := svc.calculateFingerprint([]byte(testED25519PubKey), "ed25519")
+	require.NoError(t, err)
+	assert.Equal(t, fp1, fp2, "same key should produce same fingerprint")
+}
+
+func TestCalculateFingerprint_InvalidFormat(t *testing.T) {
+	svc, _ := newTestKeyService()
+
+	_, err := svc.calculateFingerprint([]byte("no-space-here"), "ed25519")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid public key format")
+}
+
+func TestCalculateFingerprint_InvalidBase64(t *testing.T) {
+	svc, _ := newTestKeyService()
+
+	_, err := svc.calculateFingerprint([]byte("ssh-ed25519 !!!not-base64!!!"), "ed25519")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to decode public key")
+}

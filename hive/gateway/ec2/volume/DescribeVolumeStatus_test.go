@@ -8,6 +8,57 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestValidateDescribeVolumeStatusInput(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   *ec2.DescribeVolumeStatusInput
+		wantErr bool
+	}{
+		{
+			name:    "NilInput",
+			input:   nil,
+			wantErr: false,
+		},
+		{
+			name:    "EmptyInput",
+			input:   &ec2.DescribeVolumeStatusInput{},
+			wantErr: false,
+		},
+		{
+			name: "ValidVolumeId",
+			input: &ec2.DescribeVolumeStatusInput{
+				VolumeIds: []*string{aws.String("vol-abc123")},
+			},
+			wantErr: false,
+		},
+		{
+			name: "MultipleValidVolumeIds",
+			input: &ec2.DescribeVolumeStatusInput{
+				VolumeIds: []*string{aws.String("vol-abc123"), aws.String("vol-def456")},
+			},
+			wantErr: false,
+		},
+		{
+			name: "NilVolumeIdEntry",
+			input: &ec2.DescribeVolumeStatusInput{
+				VolumeIds: []*string{nil, aws.String("vol-abc123")},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateDescribeVolumeStatusInput(tt.input)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestDescribeVolumeStatus_InputValidation(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -13,7 +13,7 @@ set -euo pipefail
 
 PROFILE=""
 BASE_REF=""
-THRESHOLD=50
+THRESHOLD=65
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

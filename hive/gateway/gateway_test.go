@@ -186,6 +186,80 @@ func TestErrorHandler_IAMService(t *testing.T) {
 	assert.NotContains(t, xmlStr, "<Errors>")
 }
 
+func TestErrorHandler_UnknownError(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), ctxService, "ec2")
+		r = r.WithContext(ctx)
+		gw.ErrorHandler(w, r, errors.New("SomeCompletelyBogusError"))
+	})
+
+	req := httptest.NewRequest("POST", "/", nil)
+	resp := doRequest(handler, req)
+	assert.Equal(t, 500, resp.StatusCode)
+
+	body, _ := io.ReadAll(resp.Body)
+	xmlStr := string(body)
+	// Unknown errors should be remapped to InternalError
+	assert.Contains(t, xmlStr, "<Code>InternalError</Code>")
+	// EC2 format
+	assert.Contains(t, xmlStr, "<Response>")
+}
+
+func TestErrorHandler_EC2Service(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), ctxService, "ec2")
+		r = r.WithContext(ctx)
+		gw.ErrorHandler(w, r, errors.New(awserrors.ErrorInvalidParameterValue))
+	})
+
+	req := httptest.NewRequest("POST", "/", nil)
+	resp := doRequest(handler, req)
+	assert.Equal(t, 400, resp.StatusCode)
+
+	body, _ := io.ReadAll(resp.Body)
+	xmlStr := string(body)
+	// EC2 uses <Response> root, not <ErrorResponse>
+	assert.Contains(t, xmlStr, "<Response>")
+	assert.Contains(t, xmlStr, "<Errors>")
+	assert.Contains(t, xmlStr, "<Code>InvalidParameterValue</Code>")
+	assert.NotContains(t, xmlStr, "<ErrorResponse>")
+}
+
+func TestErrorHandler_UsesRequestIDHeader(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), ctxService, "ec2")
+		r = r.WithContext(ctx)
+		gw.ErrorHandler(w, r, errors.New(awserrors.ErrorInternalError))
+	})
+
+	req := httptest.NewRequest("POST", "/", nil)
+	req.Header.Set("x-amz-request-id", "custom-req-id-123")
+	resp := doRequest(handler, req)
+
+	body, _ := io.ReadAll(resp.Body)
+	assert.Contains(t, string(body), "custom-req-id-123")
+}
+
+func TestErrorHandler_ContentTypeXML(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), ctxService, "ec2")
+		r = r.WithContext(ctx)
+		gw.ErrorHandler(w, r, errors.New(awserrors.ErrorInternalError))
+	})
+
+	req := httptest.NewRequest("POST", "/", nil)
+	resp := doRequest(handler, req)
+	assert.Equal(t, "application/xml", resp.Header.Get("Content-Type"))
+}
+
 func startTestNATS(t *testing.T) *nats.Conn {
 	t.Helper()
 	ns, err := server.NewServer(&server.Options{

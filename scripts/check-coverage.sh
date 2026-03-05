@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # Check total coverage meets minimum threshold.
-# Usage: scripts/check-coverage.sh <coverprofile> <min_coverage> [quiet]
+# Usage: scripts/check-coverage.sh <coverprofile> [quiet]
 
-PROFILE="${1:?Usage: check-coverage.sh <coverprofile> <min_coverage> [quiet]}"
-MIN="${2:-60.0}"
-QUIET="${3:-}"
+PROFILE="${1:?Usage: check-coverage.sh <coverprofile> [quiet]}"
+MIN=65.0
+QUIET="${2:-}"
 
 if [[ ! -s "$PROFILE" ]]; then
     echo "ERROR: No coverage data generated — tests may have failed to compile"

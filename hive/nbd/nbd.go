@@ -27,14 +27,8 @@ type NBDKitConfig struct {
 	UseTCP     bool   `json:"use_tcp"`  // If true, use TCP transport; otherwise use Unix socket
 }
 
-func (cfg *NBDKitConfig) Execute() (*exec.Cmd, error) {
-	// TODO: Consider setting threads to X% of the host availability (preference for VMs)
-	/*
-			--threads=THREADS
-		           Set the number of threads to be used per connection, which in turn controls the number of outstanding requests  that  can
-		           be  processed  at  once.   Only  matters  for  plugins  with  thread_model=parallel  (where it defaults to 16).  To force
-		           serialized behavior (useful if the client is not prepared for out-of-order responses), set this to 1.
-	*/
+// buildArgs constructs the nbdkit command-line arguments from the config.
+func (cfg *NBDKitConfig) buildArgs() ([]string, error) {
 	args := []string{
 		"-f", // foreground required for Golang plugin via nbdkit
 		"--pidfile", cfg.PidFile,
@@ -73,6 +67,21 @@ func (cfg *NBDKitConfig) Execute() (*exec.Cmd, error) {
 	}
 
 	args = append(args, pluginArgs...)
+	return args, nil
+}
+
+func (cfg *NBDKitConfig) Execute() (*exec.Cmd, error) {
+	// TODO: Consider setting threads to X% of the host availability (preference for VMs)
+	/*
+			--threads=THREADS
+		           Set the number of threads to be used per connection, which in turn controls the number of outstanding requests  that  can
+		           be  processed  at  once.   Only  matters  for  plugins  with  thread_model=parallel  (where it defaults to 16).  To force
+		           serialized behavior (useful if the client is not prepared for out-of-order responses), set this to 1.
+	*/
+	args, err := cfg.buildArgs()
+	if err != nil {
+		return nil, err
+	}
 
 	cmd := exec.Command("nbdkit", args...)
 	cmd.Stdout = os.Stdout

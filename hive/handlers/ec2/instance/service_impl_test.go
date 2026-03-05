@@ -276,6 +276,98 @@ func TestRunInstance_NoImageId(t *testing.T) {
 	assert.Nil(t, ec2Instance.KeyName)
 }
 
+func TestParseVolumeParams_Defaults(t *testing.T) {
+	input := &ec2.RunInstancesInput{
+		ImageId: aws.String("ami-0abcdef1234567890"),
+	}
+
+	p := parseVolumeParams(input)
+
+	assert.Equal(t, 4*1024*1024*1024, p.size, "default size should be 4GB")
+	assert.Equal(t, "/dev/vda", p.deviceName, "default device should be /dev/vda")
+	assert.True(t, p.deleteOnTermination, "deleteOnTermination should default to true")
+	assert.Empty(t, p.volumeType)
+	assert.Zero(t, p.iops)
+	// AMI-based: imageId should be a generated vol-*, snapshotId should be the AMI
+	assert.True(t, strings.HasPrefix(p.imageId, "vol-"), "AMI launch should generate vol- ID")
+	assert.Equal(t, "ami-0abcdef1234567890", p.snapshotId)
+}
+
+func TestParseVolumeParams_CustomBlockDeviceMapping(t *testing.T) {
+	input := &ec2.RunInstancesInput{
+		ImageId: aws.String("ami-test123"),
+		BlockDeviceMappings: []*ec2.BlockDeviceMapping{
+			{
+				DeviceName: aws.String("/dev/sda1"),
+				Ebs: &ec2.EbsBlockDevice{
+					VolumeSize:          aws.Int64(20),
+					VolumeType:          aws.String("gp3"),
+					Iops:                aws.Int64(3000),
+					DeleteOnTermination: aws.Bool(false),
+				},
+			},
+		},
+	}
+
+	p := parseVolumeParams(input)
+
+	assert.Equal(t, 20*1024*1024*1024, p.size, "size should be 20 GiB in bytes")
+	assert.Equal(t, "/dev/sda1", p.deviceName)
+	assert.Equal(t, "gp3", p.volumeType)
+	assert.Equal(t, 3000, p.iops)
+	assert.False(t, p.deleteOnTermination)
+}
+
+func TestParseVolumeParams_BlockDeviceMappingNoEbs(t *testing.T) {
+	input := &ec2.RunInstancesInput{
+		ImageId: aws.String("ami-test"),
+		BlockDeviceMappings: []*ec2.BlockDeviceMapping{
+			{
+				DeviceName: aws.String("/dev/xvda"),
+			},
+		},
+	}
+
+	p := parseVolumeParams(input)
+
+	assert.Equal(t, "/dev/xvda", p.deviceName)
+	assert.Equal(t, 4*1024*1024*1024, p.size, "size should stay at default without Ebs")
+	assert.True(t, p.deleteOnTermination)
+}
+
+func TestParseVolumeParams_NonAMIImageId(t *testing.T) {
+	rawImageId := "vol-existing-volume-id"
+	input := &ec2.RunInstancesInput{
+		ImageId: aws.String(rawImageId),
+	}
+
+	p := parseVolumeParams(input)
+
+	assert.Equal(t, rawImageId, p.imageId, "non-AMI imageId should be used directly")
+	assert.Empty(t, p.snapshotId, "non-AMI launch should have no snapshotId")
+}
+
+func TestParseVolumeParams_PartialEbs(t *testing.T) {
+	input := &ec2.RunInstancesInput{
+		ImageId: aws.String("ami-partial"),
+		BlockDeviceMappings: []*ec2.BlockDeviceMapping{
+			{
+				Ebs: &ec2.EbsBlockDevice{
+					VolumeSize: aws.Int64(8),
+				},
+			},
+		},
+	}
+
+	p := parseVolumeParams(input)
+
+	assert.Equal(t, 8*1024*1024*1024, p.size)
+	assert.Equal(t, "/dev/vda", p.deviceName, "device should stay at default")
+	assert.Empty(t, p.volumeType, "volumeType should stay empty")
+	assert.Zero(t, p.iops, "iops should stay zero")
+	assert.True(t, p.deleteOnTermination, "deleteOnTermination should stay at default")
+}
+
 func TestMockInstanceService(t *testing.T) {
 	svc := NewMockInstanceService()
 	require.NotNil(t, svc)
