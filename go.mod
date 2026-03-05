@@ -3,7 +3,6 @@ module github.com/mulgadc/hive
 go 1.26.0
 
 require (
-	github.com/NYTimes/gziphandler v1.1.1
 	github.com/aws/aws-sdk-go v1.55.8
 	github.com/go-chi/chi/v5 v5.2.4
 	github.com/google/uuid v1.6.0

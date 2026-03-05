@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/NYTimes/gziphandler"
+	"compress/gzip"
 	"github.com/mulgadc/hive/hive/utils"
 )
 
@@ -270,19 +270,65 @@ func buildCSP() string {
 	)
 }
 
-func gzipMiddleware(next http.Handler) http.Handler {
-	g, err := gziphandler.GzipHandlerWithOpts(gziphandler.ContentTypes([]string{
-		"text/html",
-		"text/css",
-		"application/javascript",
-		"text/javascript",
-		"application/json",
-		"image/svg+xml",
-		"text/plain",
-	}))
-	if err != nil {
-		slog.Warn("Failed to create gzip middleware, serving uncompressed", "error", err)
-		return next
+// gzipContentTypes lists the MIME types eligible for gzip compression.
+var gzipContentTypes = map[string]bool{
+	"text/html":              true,
+	"text/css":               true,
+	"application/javascript": true,
+	"text/javascript":        true,
+	"application/json":       true,
+	"image/svg+xml":          true,
+	"text/plain":             true,
+}
+
+// gzipResponseWriter wraps http.ResponseWriter to compress eligible responses.
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	gw          *gzip.Writer
+	wroteHeader bool
+	compress    bool
+}
+
+func (w *gzipResponseWriter) Write(b []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
 	}
-	return g(next)
+	if w.compress {
+		return w.gw.Write(b)
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+func (w *gzipResponseWriter) WriteHeader(code int) {
+	if w.wroteHeader {
+		return
+	}
+	w.wroteHeader = true
+
+	ct := w.ResponseWriter.Header().Get("Content-Type")
+	// Strip parameters (e.g. "text/html; charset=utf-8" → "text/html")
+	if idx := strings.IndexByte(ct, ';'); idx != -1 {
+		ct = strings.TrimSpace(ct[:idx])
+	}
+	if gzipContentTypes[ct] {
+		w.compress = true
+		w.ResponseWriter.Header().Set("Content-Encoding", "gzip")
+		w.ResponseWriter.Header().Del("Content-Length")
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func gzipMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		gz, _ := gzip.NewWriterLevel(w, gzip.DefaultCompression)
+		defer gz.Close()
+
+		grw := &gzipResponseWriter{ResponseWriter: w, gw: gz}
+		next.ServeHTTP(grw, r)
+	})
 }
