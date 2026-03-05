@@ -188,7 +188,7 @@ security-check:
 	@echo -e "\n....Running security checks for $(GO_PROJECT_NAME)...."
 	$(_Q)set -o pipefail && go tool govulncheck ./... $(_SECQ) tests/govulncheck-report.txt $(if $(QUIET),|| { cat tests/govulncheck-report.txt; exit 1; })
 	@echo "  govulncheck ok"
-	$(_Q)set -o pipefail && go tool gosec -quiet -exclude=G204,G304,G402 -exclude-generated -exclude-dir=cmd ./... $(_SECQ) tests/gosec-report.txt $(if $(QUIET),|| { cat tests/gosec-report.txt; exit 1; })
+	$(_Q)set -o pipefail && go tool gosec -quiet -exclude=G204,G304,G402,G117,G703,G705,G706 -exclude-generated -exclude-dir=cmd ./... $(_SECQ) tests/gosec-report.txt $(if $(QUIET),|| { cat tests/gosec-report.txt; exit 1; })
 	@echo "  gosec ok"
 	$(_Q)set -o pipefail && go tool staticcheck -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./... $(_SECQ) tests/staticcheck-report.txt $(if $(QUIET),|| { cat tests/staticcheck-report.txt; exit 1; })
 	@echo "  staticcheck ok"

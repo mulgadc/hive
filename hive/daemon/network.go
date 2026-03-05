@@ -111,7 +111,7 @@ func OVSIfaceID(eniId string) string {
 func generateDevMAC(instanceId string) string {
 	h := uint32(0)
 	for _, c := range instanceId {
-		h = h*31 + uint32(c)
+		h = h*31 + uint32(c) // #nosec G115 -- intentional overflow for hashing
 	}
 	return fmt.Sprintf("02:de:00:%02x:%02x:%02x", (h>>16)&0xff, (h>>8)&0xff, h&0xff)
 }
