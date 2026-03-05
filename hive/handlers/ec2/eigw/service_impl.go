@@ -38,13 +38,6 @@ type EgressOnlyIGWServiceImpl struct {
 	vpcKV  nats.KeyValue
 }
 
-// NewEgressOnlyIGWServiceImpl creates a new Egress-only Internet Gateway service implementation
-func NewEgressOnlyIGWServiceImpl(cfg *config.Config) *EgressOnlyIGWServiceImpl {
-	return &EgressOnlyIGWServiceImpl{
-		config: cfg,
-	}
-}
-
 // NewEgressOnlyIGWServiceImplWithNATS creates an Egress-only Internet Gateway service with NATS JetStream for persistence
 func NewEgressOnlyIGWServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*EgressOnlyIGWServiceImpl, error) {
 	js, err := natsConn.JetStream()

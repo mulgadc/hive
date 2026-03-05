@@ -455,14 +455,6 @@ func TestCreateInternetGateway_PublishesNoEvent(t *testing.T) {
 	}
 }
 
-func TestNewIGWServiceImpl(t *testing.T) {
-	svc := NewIGWServiceImpl(nil)
-	require.NotNil(t, svc)
-	// Without KV, IGW operations will panic (nil KV), so just verify constructor
-	assert.Nil(t, svc.igwKV)
-	assert.Nil(t, svc.natsConn)
-}
-
 // TestAttachInternetGateway_CrossAccountVPCRejected tests that attaching an IGW to another account's VPC is rejected.
 func TestAttachInternetGateway_CrossAccountVPCRejected(t *testing.T) {
 	svc, nc := setupTestIGWService(t)

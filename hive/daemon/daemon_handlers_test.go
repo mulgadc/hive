@@ -58,7 +58,6 @@ func createFullTestDaemonWithStore(t *testing.T, natsURL string) (*Daemon, *obje
 	daemon.volumeService = handlers_ec2_volume.NewVolumeServiceImplWithStore(cfg, memStore, daemon.natsConn)
 	daemon.snapshotService = handlers_ec2_snapshot.NewSnapshotServiceImplWithStore(cfg, memStore, daemon.natsConn)
 	daemon.tagsService = handlers_ec2_tags.NewTagsServiceImplWithStore(cfg, memStore)
-	daemon.eigwService = handlers_ec2_eigw.NewEgressOnlyIGWServiceImpl(cfg)
 	initAccountServiceForTest(t, daemon)
 
 	return daemon, memStore

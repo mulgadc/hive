@@ -39,13 +39,6 @@ type IGWServiceImpl struct {
 	natsConn *nats.Conn
 }
 
-// NewIGWServiceImpl creates a new Internet Gateway service without NATS persistence
-func NewIGWServiceImpl(cfg *config.Config) *IGWServiceImpl {
-	return &IGWServiceImpl{
-		config: cfg,
-	}
-}
-
 // NewIGWServiceImplWithNATS creates an Internet Gateway service with NATS JetStream for persistence
 func NewIGWServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*IGWServiceImpl, error) {
 	js, err := natsConn.JetStream()
