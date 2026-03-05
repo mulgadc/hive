@@ -4,11 +4,12 @@ package gateway
 
 import (
 	"errors"
+	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/gofiber/fiber/v2"
 	"github.com/mulgadc/hive/hive/awsec2query"
 	"github.com/mulgadc/hive/hive/awserrors"
 	gateway_ec2_account "github.com/mulgadc/hive/hive/gateway/ec2/account"
@@ -229,8 +230,9 @@ var ec2LocalActions = map[string]bool{
 	"DescribeAccountAttributes": true,
 }
 
-func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
-	queryArgs := ParseAWSQueryArgs(string(ctx.Body()))
+func (gw *GatewayConfig) EC2_Request(w http.ResponseWriter, r *http.Request) error {
+	body, _ := io.ReadAll(r.Body)
+	queryArgs := ParseAWSQueryArgs(string(body))
 
 	action := queryArgs["Action"]
 	handler, ok := ec2Actions[action]
@@ -238,7 +240,7 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 		return errors.New(awserrors.ErrorInvalidAction)
 	}
 
-	if err := gw.checkPolicy(ctx, "ec2", action); err != nil {
+	if err := gw.checkPolicy(r, "ec2", action); err != nil {
 		return err
 	}
 
@@ -247,7 +249,7 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 	}
 
 	// Extract account ID from auth context
-	accountID, _ := ctx.Locals("sigv4.accountId").(string)
+	accountID, _ := r.Context().Value(ctxAccountID).(string)
 	if accountID == "" {
 		slog.Error("EC2_Request: no account ID in auth context")
 		return errors.New(awserrors.ErrorServerInternal)
@@ -258,5 +260,8 @@ func (gw *GatewayConfig) EC2_Request(ctx *fiber.Ctx) error {
 		return err
 	}
 
-	return ctx.Status(fiber.StatusOK).Type("text/xml").Send(xmlOutput)
+	w.Header().Set("Content-Type", "text/xml")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(xmlOutput)
+	return nil
 }

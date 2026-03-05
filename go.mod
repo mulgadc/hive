@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/NYTimes/gziphandler v1.1.1
 	github.com/aws/aws-sdk-go v1.55.8
+	github.com/go-chi/chi/v5 v5.2.4
 	github.com/gofiber/fiber/v2 v2.52.12
 	github.com/google/uuid v1.6.0
 	github.com/kdomanski/iso9660 v0.4.0
@@ -54,7 +55,6 @@ require (
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.8.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.8 // indirect
-	github.com/go-chi/chi/v5 v5.2.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect

@@ -1,19 +1,19 @@
 package gateway
 
 import (
+	"context"
 	"errors"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/iam"
-	"github.com/gofiber/fiber/v2"
 	"github.com/mulgadc/hive/hive/awserrors"
 	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // flexMockIAMService is a configurable mock with per-method overrides.
@@ -134,23 +134,22 @@ func (m *flexMockIAMService) CreateAccount(_ string) (*handlers_iam.Account, err
 func (m *flexMockIAMService) GetAccount(_ string) (*handlers_iam.Account, error) { return nil, nil }
 func (m *flexMockIAMService) ListAccounts() ([]*handlers_iam.Account, error)     { return nil, nil }
 
-// setupIAMRequestApp creates a Fiber app wired for IAM_Request testing.
-func setupIAMRequestApp(svc handlers_iam.IAMService) *fiber.App {
+// setupIAMRequestHandler creates an http.Handler wired for IAM_Request testing.
+// It injects sigv4 context values so individual tests don't need SigV4 auth.
+func setupIAMRequestHandler(svc handlers_iam.IAMService) http.Handler {
 	gw := &GatewayConfig{
 		DisableLogging: true,
 		IAMService:     svc,
 	}
-	app := fiber.New(fiber.Config{
-		ErrorHandler: func(ctx *fiber.Ctx, err error) error {
-			return gw.ErrorHandler(ctx, err)
-		},
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		ctx = context.WithValue(ctx, ctxService, "iam")
+		ctx = context.WithValue(ctx, ctxAccountID, "000000000000")
+		r = r.WithContext(ctx)
+		if err := gw.IAM_Request(w, r); err != nil {
+			gw.ErrorHandler(w, r, err)
+		}
 	})
-	app.Post("/", func(c *fiber.Ctx) error {
-		c.Locals("sigv4.service", "iam")
-		c.Locals("sigv4.accountId", "000000000000")
-		return gw.IAM_Request(c)
-	})
-	return app
 }
 
 func TestIAMRequest_CreateUser_Success(t *testing.T) {
@@ -166,13 +165,12 @@ func TestIAMRequest_CreateUser_Success(t *testing.T) {
 			}, nil
 		},
 	}
-	app := setupIAMRequestApp(svc)
+	handler := setupIAMRequestHandler(svc)
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader("Action=CreateUser&UserName=alice"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := app.Test(req)
-	require.NoError(t, err)
+	resp := doRequest(handler, req)
 	assert.Equal(t, 200, resp.StatusCode)
 
 	body, _ := io.ReadAll(resp.Body)
@@ -193,13 +191,12 @@ func TestIAMRequest_ListUsers_Success(t *testing.T) {
 			}, nil
 		},
 	}
-	app := setupIAMRequestApp(svc)
+	handler := setupIAMRequestHandler(svc)
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader("Action=ListUsers"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := app.Test(req)
-	require.NoError(t, err)
+	resp := doRequest(handler, req)
 	assert.Equal(t, 200, resp.StatusCode)
 
 	body, _ := io.ReadAll(resp.Body)
@@ -210,13 +207,12 @@ func TestIAMRequest_ListUsers_Success(t *testing.T) {
 }
 
 func TestIAMRequest_UnknownAction(t *testing.T) {
-	app := setupIAMRequestApp(&flexMockIAMService{})
+	handler := setupIAMRequestHandler(&flexMockIAMService{})
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader("Action=DoesNotExist"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := app.Test(req)
-	require.NoError(t, err)
+	resp := doRequest(handler, req)
 	assert.Equal(t, 400, resp.StatusCode)
 
 	body, _ := io.ReadAll(resp.Body)
@@ -224,13 +220,12 @@ func TestIAMRequest_UnknownAction(t *testing.T) {
 }
 
 func TestIAMRequest_EmptyAction(t *testing.T) {
-	app := setupIAMRequestApp(&flexMockIAMService{})
+	handler := setupIAMRequestHandler(&flexMockIAMService{})
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader("UserName=alice"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := app.Test(req)
-	require.NoError(t, err)
+	resp := doRequest(handler, req)
 	assert.Equal(t, 400, resp.StatusCode)
 
 	body, _ := io.ReadAll(resp.Body)
@@ -242,22 +237,20 @@ func TestIAMRequest_NilService(t *testing.T) {
 		DisableLogging: true,
 		IAMService:     nil,
 	}
-	app := fiber.New(fiber.Config{
-		ErrorHandler: func(ctx *fiber.Ctx, err error) error {
-			return gw.ErrorHandler(ctx, err)
-		},
-	})
-	app.Post("/", func(c *fiber.Ctx) error {
-		c.Locals("sigv4.service", "iam")
-		c.Locals("sigv4.accountId", "000000000000")
-		return gw.IAM_Request(c)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		ctx = context.WithValue(ctx, ctxService, "iam")
+		ctx = context.WithValue(ctx, ctxAccountID, "000000000000")
+		r = r.WithContext(ctx)
+		if err := gw.IAM_Request(w, r); err != nil {
+			gw.ErrorHandler(w, r, err)
+		}
 	})
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader("Action=CreateUser&UserName=alice"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := app.Test(req)
-	require.NoError(t, err)
+	resp := doRequest(handler, req)
 	assert.Equal(t, 500, resp.StatusCode)
 
 	body, _ := io.ReadAll(resp.Body)
@@ -270,13 +263,12 @@ func TestIAMRequest_ServiceError(t *testing.T) {
 			return nil, errors.New(awserrors.ErrorIAMEntityAlreadyExists)
 		},
 	}
-	app := setupIAMRequestApp(svc)
+	handler := setupIAMRequestHandler(svc)
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader("Action=CreateUser&UserName=alice"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := app.Test(req)
-	require.NoError(t, err)
+	resp := doRequest(handler, req)
 	assert.Equal(t, 409, resp.StatusCode)
 
 	body, _ := io.ReadAll(resp.Body)
@@ -287,13 +279,12 @@ func TestIAMRequest_ServiceError(t *testing.T) {
 
 func TestIAMRequest_ValidationError(t *testing.T) {
 	// CreateUser with missing UserName should return MissingParameter
-	app := setupIAMRequestApp(&flexMockIAMService{})
+	handler := setupIAMRequestHandler(&flexMockIAMService{})
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader("Action=CreateUser"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := app.Test(req)
-	require.NoError(t, err)
+	resp := doRequest(handler, req)
 	assert.Equal(t, 400, resp.StatusCode)
 
 	body, _ := io.ReadAll(resp.Body)

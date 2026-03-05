@@ -4,13 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/iam"
-	"github.com/gofiber/fiber/v2"
+	"github.com/go-chi/chi/v5"
 	"github.com/mulgadc/hive/hive/awserrors"
 	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
 	"github.com/mulgadc/hive/hive/utils"
@@ -174,7 +175,7 @@ func generateTestAuthHeader(method, path, queryString, body, accessKey, secretKe
 	return authHeader, timestamp
 }
 
-func setupTestApp(accessKey, secretKey string) *fiber.App {
+func setupTestApp(accessKey, secretKey string) http.Handler {
 	encryptedSecret, err := handlers_iam.EncryptSecret(secretKey, testMasterKey)
 	if err != nil {
 		panic("failed to encrypt test secret: " + err.Error())
@@ -198,27 +199,22 @@ func setupTestApp(accessKey, secretKey string) *fiber.App {
 		IAMService:     mockSvc,
 	}
 
-	app := fiber.New()
-	app.Use(gw.SigV4AuthMiddleware())
-
-	// Simple test handler
-	app.All("/*", func(c *fiber.Ctx) error {
-		return c.SendString("OK")
+	r := chi.NewRouter()
+	r.Use(gw.SigV4AuthMiddleware())
+	r.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("OK"))
 	})
 
-	return app
+	return r
 }
 
 func TestSigV4Auth_NoAuthorizationHeader(t *testing.T) {
-	app := setupTestApp(testAccessKey, testSecretKey)
+	handler := setupTestApp(testAccessKey, testSecretKey)
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Host = "localhost:9999"
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 403 {
 		t.Errorf("Expected status 403, got %d", resp.StatusCode)
@@ -231,7 +227,7 @@ func TestSigV4Auth_NoAuthorizationHeader(t *testing.T) {
 }
 
 func TestSigV4Auth_MalformedHeader(t *testing.T) {
-	app := setupTestApp(testAccessKey, testSecretKey)
+	handler := setupTestApp(testAccessKey, testSecretKey)
 
 	testCases := []struct {
 		name       string
@@ -251,10 +247,7 @@ func TestSigV4Auth_MalformedHeader(t *testing.T) {
 			req.Header.Set("Authorization", tc.authHeader)
 			req.Header.Set("X-Amz-Date", time.Now().UTC().Format(auth.TimeFormat))
 
-			resp, err := app.Test(req)
-			if err != nil {
-				t.Fatalf("Failed to test request: %v", err)
-			}
+			resp := doRequest(handler, req)
 
 			if resp.StatusCode != 400 {
 				t.Errorf("Expected status 400, got %d", resp.StatusCode)
@@ -269,7 +262,7 @@ func TestSigV4Auth_MalformedHeader(t *testing.T) {
 }
 
 func TestSigV4Auth_InvalidAccessKey(t *testing.T) {
-	app := setupTestApp(testAccessKey, testSecretKey)
+	handler := setupTestApp(testAccessKey, testSecretKey)
 
 	authHeader, timestamp := generateTestAuthHeader(
 		"GET", "/", "", "",
@@ -281,10 +274,7 @@ func TestSigV4Auth_InvalidAccessKey(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 403 {
 		t.Errorf("Expected status 403, got %d", resp.StatusCode)
@@ -297,7 +287,7 @@ func TestSigV4Auth_InvalidAccessKey(t *testing.T) {
 }
 
 func TestSigV4Auth_InvalidSignature(t *testing.T) {
-	app := setupTestApp(testAccessKey, testSecretKey)
+	handler := setupTestApp(testAccessKey, testSecretKey)
 
 	// Generate auth header with wrong secret key
 	authHeader, timestamp := generateTestAuthHeader(
@@ -310,10 +300,7 @@ func TestSigV4Auth_InvalidSignature(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 403 {
 		t.Errorf("Expected status 403, got %d", resp.StatusCode)
@@ -326,7 +313,7 @@ func TestSigV4Auth_InvalidSignature(t *testing.T) {
 }
 
 func TestSigV4Auth_ValidSignature(t *testing.T) {
-	app := setupTestApp(testAccessKey, testSecretKey)
+	handler := setupTestApp(testAccessKey, testSecretKey)
 
 	authHeader, timestamp := generateTestAuthHeader(
 		"GET", "/", "", "",
@@ -338,10 +325,7 @@ func TestSigV4Auth_ValidSignature(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
@@ -350,16 +334,13 @@ func TestSigV4Auth_ValidSignature(t *testing.T) {
 }
 
 func TestSigV4Auth_OptionsSkipsAuth(t *testing.T) {
-	app := setupTestApp(testAccessKey, testSecretKey)
+	handler := setupTestApp(testAccessKey, testSecretKey)
 
 	req := httptest.NewRequest("OPTIONS", "/", nil)
 	req.Host = "localhost:9999"
 	// No Authorization header
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 200 {
 		t.Errorf("Expected status 200 for OPTIONS, got %d", resp.StatusCode)
@@ -367,7 +348,7 @@ func TestSigV4Auth_OptionsSkipsAuth(t *testing.T) {
 }
 
 func TestSigV4Auth_ValidSignatureWithBody(t *testing.T) {
-	app := setupTestApp(testAccessKey, testSecretKey)
+	handler := setupTestApp(testAccessKey, testSecretKey)
 
 	body := "Action=DescribeInstances&Version=2016-11-15"
 	authHeader, timestamp := generateTestAuthHeader(
@@ -381,10 +362,7 @@ func TestSigV4Auth_ValidSignatureWithBody(t *testing.T) {
 	req.Header.Set("X-Amz-Date", timestamp)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 200 {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -393,7 +371,7 @@ func TestSigV4Auth_ValidSignatureWithBody(t *testing.T) {
 }
 
 func TestSigV4Auth_ValidSignatureWithQueryString(t *testing.T) {
-	app := setupTestApp(testAccessKey, testSecretKey)
+	handler := setupTestApp(testAccessKey, testSecretKey)
 
 	queryString := "Action=DescribeInstances&Version=2016-11-15"
 	authHeader, timestamp := generateTestAuthHeader(
@@ -406,10 +384,7 @@ func TestSigV4Auth_ValidSignatureWithQueryString(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 200 {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -441,10 +416,10 @@ func TestSigV4Auth_InactiveAccessKey(t *testing.T) {
 		IAMService:     mockSvc,
 	}
 
-	app := fiber.New()
-	app.Use(gw.SigV4AuthMiddleware())
-	app.All("/*", func(c *fiber.Ctx) error {
-		return c.SendString("OK")
+	r := chi.NewRouter()
+	r.Use(gw.SigV4AuthMiddleware())
+	r.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("OK"))
 	})
 
 	authHeader, timestamp := generateTestAuthHeader(
@@ -457,10 +432,7 @@ func TestSigV4Auth_InactiveAccessKey(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(r, req)
 
 	if resp.StatusCode != 403 {
 		t.Errorf("Expected status 403 for inactive key, got %d", resp.StatusCode)
@@ -479,10 +451,10 @@ func TestSigV4Auth_NilIAMService(t *testing.T) {
 		IAMService:     nil,
 	}
 
-	app := fiber.New()
-	app.Use(gw.SigV4AuthMiddleware())
-	app.All("/*", func(c *fiber.Ctx) error {
-		return c.SendString("OK")
+	r := chi.NewRouter()
+	r.Use(gw.SigV4AuthMiddleware())
+	r.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("OK"))
 	})
 
 	authHeader, timestamp := generateTestAuthHeader(
@@ -495,10 +467,7 @@ func TestSigV4Auth_NilIAMService(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(r, req)
 
 	if resp.StatusCode != 500 {
 		t.Errorf("Expected status 500 for nil IAM service, got %d", resp.StatusCode)
@@ -534,11 +503,11 @@ func TestSigV4Auth_CallerIdentity(t *testing.T) {
 		IAMService:     mockSvc,
 	}
 
-	app := fiber.New()
-	app.Use(gw.SigV4AuthMiddleware())
-	app.All("/*", func(c *fiber.Ctx) error {
-		identity := c.Locals("sigv4.identity")
-		return c.SendString(fmt.Sprintf("identity=%v", identity))
+	r := chi.NewRouter()
+	r.Use(gw.SigV4AuthMiddleware())
+	r.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
+		identity := r.Context().Value(ctxIdentity)
+		fmt.Fprintf(w, "identity=%v", identity)
 	})
 
 	authHeader, timestamp := generateTestAuthHeader(
@@ -551,10 +520,7 @@ func TestSigV4Auth_CallerIdentity(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(r, req)
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
@@ -647,10 +613,10 @@ func TestSigV4Auth_DecryptFailure(t *testing.T) {
 		IAMService:     mockSvc,
 	}
 
-	app := fiber.New()
-	app.Use(gw.SigV4AuthMiddleware())
-	app.All("/*", func(c *fiber.Ctx) error {
-		return c.SendString("OK")
+	r := chi.NewRouter()
+	r.Use(gw.SigV4AuthMiddleware())
+	r.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("OK"))
 	})
 
 	authHeader, timestamp := generateTestAuthHeader(
@@ -663,10 +629,7 @@ func TestSigV4Auth_DecryptFailure(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(r, req)
 
 	if resp.StatusCode != 500 {
 		t.Errorf("Expected status 500 for decrypt failure, got %d", resp.StatusCode)
@@ -783,7 +746,7 @@ func generateTestAuthHeaderWithSignedHeaders(method, path, queryString, body, ac
 // --- Clock Skew / Replay Protection Tests ---
 
 func TestSigV4Auth_ExpiredTimestamp(t *testing.T) {
-	app := setupTestApp(testAccessKey, testSecretKey)
+	handler := setupTestApp(testAccessKey, testSecretKey)
 
 	// 6 minutes in the past — exceeds the 5-minute maxClockSkew
 	past := time.Now().UTC().Add(-6 * time.Minute)
@@ -797,10 +760,7 @@ func TestSigV4Auth_ExpiredTimestamp(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 403 {
 		t.Errorf("Expected status 403, got %d", resp.StatusCode)
@@ -813,7 +773,7 @@ func TestSigV4Auth_ExpiredTimestamp(t *testing.T) {
 }
 
 func TestSigV4Auth_FutureTimestamp(t *testing.T) {
-	app := setupTestApp(testAccessKey, testSecretKey)
+	handler := setupTestApp(testAccessKey, testSecretKey)
 
 	// 6 minutes in the future — exceeds the 5-minute maxClockSkew
 	future := time.Now().UTC().Add(6 * time.Minute)
@@ -827,10 +787,7 @@ func TestSigV4Auth_FutureTimestamp(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 403 {
 		t.Errorf("Expected status 403, got %d", resp.StatusCode)
@@ -843,7 +800,7 @@ func TestSigV4Auth_FutureTimestamp(t *testing.T) {
 }
 
 func TestSigV4Auth_TimestampWithinSkew(t *testing.T) {
-	app := setupTestApp(testAccessKey, testSecretKey)
+	handler := setupTestApp(testAccessKey, testSecretKey)
 
 	// 4 minutes ago — within the 5-minute window
 	recent := time.Now().UTC().Add(-4 * time.Minute)
@@ -857,10 +814,7 @@ func TestSigV4Auth_TimestampWithinSkew(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
@@ -869,7 +823,7 @@ func TestSigV4Auth_TimestampWithinSkew(t *testing.T) {
 }
 
 func TestSigV4Auth_MissingXAmzDate(t *testing.T) {
-	app := setupTestApp(testAccessKey, testSecretKey)
+	handler := setupTestApp(testAccessKey, testSecretKey)
 
 	authHeader, _ := generateTestAuthHeader(
 		"GET", "/", "", "",
@@ -881,10 +835,7 @@ func TestSigV4Auth_MissingXAmzDate(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	// Deliberately omit X-Amz-Date
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 400 {
 		t.Errorf("Expected status 400, got %d", resp.StatusCode)
@@ -897,7 +848,7 @@ func TestSigV4Auth_MissingXAmzDate(t *testing.T) {
 }
 
 func TestSigV4Auth_MalformedTimestamp(t *testing.T) {
-	app := setupTestApp(testAccessKey, testSecretKey)
+	handler := setupTestApp(testAccessKey, testSecretKey)
 
 	authHeader, _ := generateTestAuthHeader(
 		"GET", "/", "", "",
@@ -909,10 +860,7 @@ func TestSigV4Auth_MalformedTimestamp(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", "not-a-valid-date")
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 400 {
 		t.Errorf("Expected status 400, got %d", resp.StatusCode)
@@ -951,18 +899,18 @@ func TestSigV4Auth_ContextPropagation(t *testing.T) {
 		IAMService:     mockSvc,
 	}
 
-	app := fiber.New()
-	app.Use(gw.SigV4AuthMiddleware())
-	app.All("/*", func(c *fiber.Ctx) error {
-		identity := c.Locals("sigv4.identity")
-		accountId := c.Locals("sigv4.accountId")
-		service := c.Locals("sigv4.service")
-		region := c.Locals("sigv4.region")
-		accessKey := c.Locals("sigv4.accessKey")
-		return c.SendString(fmt.Sprintf(
+	r := chi.NewRouter()
+	r.Use(gw.SigV4AuthMiddleware())
+	r.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
+		identity := r.Context().Value(ctxIdentity)
+		accountId := r.Context().Value(ctxAccountID)
+		service := r.Context().Value(ctxService)
+		region := r.Context().Value(ctxRegion)
+		accessKey := r.Context().Value(ctxAccessKey)
+		fmt.Fprintf(w,
 			"identity=%v|accountId=%v|service=%v|region=%v|accessKey=%v",
 			identity, accountId, service, region, accessKey,
-		))
+		)
 	})
 
 	authHeader, timestamp := generateTestAuthHeader(
@@ -975,10 +923,7 @@ func TestSigV4Auth_ContextPropagation(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(r, req)
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
@@ -1015,10 +960,10 @@ func TestSigV4Auth_LookupAccessKeyUnexpectedError(t *testing.T) {
 		IAMService:     &errorLookupMockIAMService{err: errors.New("nats: connection closed")},
 	}
 
-	app := fiber.New()
-	app.Use(gw.SigV4AuthMiddleware())
-	app.All("/*", func(c *fiber.Ctx) error {
-		return c.SendString("OK")
+	r := chi.NewRouter()
+	r.Use(gw.SigV4AuthMiddleware())
+	r.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("OK"))
 	})
 
 	authHeader, timestamp := generateTestAuthHeader(
@@ -1031,10 +976,7 @@ func TestSigV4Auth_LookupAccessKeyUnexpectedError(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(r, req)
 
 	if resp.StatusCode != 500 {
 		t.Errorf("Expected status 500 for unexpected lookup error, got %d", resp.StatusCode)
@@ -1049,33 +991,31 @@ func TestSigV4Auth_LookupAccessKeyUnexpectedError(t *testing.T) {
 // --- Signature Edge Cases ---
 
 func TestSigV4Auth_PathWithSpecialCharacters(t *testing.T) {
-	app := setupTestApp(testAccessKey, testSecretKey)
+	handler := setupTestApp(testAccessKey, testSecretKey)
 
 	testCases := []struct {
-		name string
-		path string
+		name     string
+		signPath string // decoded path used for signing
+		reqPath  string // percent-encoded path for the HTTP request line
 	}{
-		{"encoded space", "/my%20resource"},
-		{"nested slashes", "/a/b/c/d"},
-		{"trailing slash", "/path/"},
+		{"encoded space", "/my resource", "/my%20resource"},
+		{"nested slashes", "/a/b/c/d", "/a/b/c/d"},
+		{"trailing slash", "/path/", "/path/"},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			authHeader, timestamp := generateTestAuthHeader(
-				"GET", tc.path, "", "",
+				"GET", tc.signPath, "", "",
 				testAccessKey, testSecretKey, testRegion, testService,
 			)
 
-			req := httptest.NewRequest("GET", tc.path, nil)
+			req := httptest.NewRequest("GET", tc.reqPath, nil)
 			req.Host = "localhost:9999"
 			req.Header.Set("Authorization", authHeader)
 			req.Header.Set("X-Amz-Date", timestamp)
 
-			resp, err := app.Test(req)
-			if err != nil {
-				t.Fatalf("Failed to test request: %v", err)
-			}
+			resp := doRequest(handler, req)
 
 			if resp.StatusCode != 200 {
 				body, _ := io.ReadAll(resp.Body)
@@ -1110,10 +1050,10 @@ func TestSigV4Auth_SignedContentType(t *testing.T) {
 		IAMService:     mockSvc,
 	}
 
-	app := fiber.New()
-	app.Use(gw.SigV4AuthMiddleware())
-	app.All("/*", func(c *fiber.Ctx) error {
-		return c.SendString("OK")
+	r := chi.NewRouter()
+	r.Use(gw.SigV4AuthMiddleware())
+	r.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("OK"))
 	})
 
 	body := "Action=DescribeInstances"
@@ -1137,10 +1077,7 @@ func TestSigV4Auth_SignedContentType(t *testing.T) {
 	req.Header.Set("X-Amz-Date", timestamp)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(r, req)
 
 	if resp.StatusCode != 200 {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -1149,7 +1086,7 @@ func TestSigV4Auth_SignedContentType(t *testing.T) {
 }
 
 func TestSigV4Auth_EmptyBodyPOST(t *testing.T) {
-	app := setupTestApp(testAccessKey, testSecretKey)
+	handler := setupTestApp(testAccessKey, testSecretKey)
 
 	// POST with empty body — payload hash is hash of ""
 	authHeader, timestamp := generateTestAuthHeader(
@@ -1162,10 +1099,7 @@ func TestSigV4Auth_EmptyBodyPOST(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
@@ -1174,7 +1108,7 @@ func TestSigV4Auth_EmptyBodyPOST(t *testing.T) {
 }
 
 func TestSigV4Auth_QueryStringEdgeCases(t *testing.T) {
-	app := setupTestApp(testAccessKey, testSecretKey)
+	handler := setupTestApp(testAccessKey, testSecretKey)
 
 	testCases := []struct {
 		name        string
@@ -1197,10 +1131,7 @@ func TestSigV4Auth_QueryStringEdgeCases(t *testing.T) {
 			req.Header.Set("Authorization", authHeader)
 			req.Header.Set("X-Amz-Date", timestamp)
 
-			resp, err := app.Test(req)
-			if err != nil {
-				t.Fatalf("Failed to test request: %v", err)
-			}
+			resp := doRequest(handler, req)
 
 			if resp.StatusCode != 200 {
 				body, _ := io.ReadAll(resp.Body)
@@ -1235,21 +1166,18 @@ func (m *errorLookupMockIAMService) LookupAccessKey(_ string) (*handlers_iam.Acc
 	return nil, m.err
 }
 
-// setupPolicyTestApp creates a Fiber app that authenticates with SigV4 then calls checkPolicy.
-func setupPolicyTestApp(gw *GatewayConfig) *fiber.App {
-	app := fiber.New(fiber.Config{
-		ErrorHandler: func(ctx *fiber.Ctx, err error) error {
-			return gw.ErrorHandler(ctx, err)
-		},
-	})
-	app.Use(gw.SigV4AuthMiddleware())
-	app.All("/*", func(c *fiber.Ctx) error {
-		if err := gw.checkPolicy(c, "ec2", "RunInstances"); err != nil {
-			return err
+// setupPolicyTestHandler creates an http.Handler that authenticates with SigV4 then calls checkPolicy.
+func setupPolicyTestHandler(gw *GatewayConfig) http.Handler {
+	r := chi.NewRouter()
+	r.Use(gw.SigV4AuthMiddleware())
+	r.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
+		if err := gw.checkPolicy(r, "ec2", "RunInstances"); err != nil {
+			gw.ErrorHandler(w, r, err)
+			return
 		}
-		return c.SendString("OK")
+		w.Write([]byte("OK"))
 	})
-	return app
+	return r
 }
 
 func TestCheckPolicy_NonRootNoPolicies_Denied(t *testing.T) {
@@ -1282,7 +1210,7 @@ func TestCheckPolicy_NonRootNoPolicies_Denied(t *testing.T) {
 		IAMService:     mockSvc,
 	}
 
-	app := setupPolicyTestApp(gw)
+	handler := setupPolicyTestHandler(gw)
 
 	authHeader, timestamp := generateTestAuthHeader(
 		"GET", "/", "", "",
@@ -1294,10 +1222,7 @@ func TestCheckPolicy_NonRootNoPolicies_Denied(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 403 {
 		body, _ := io.ReadAll(resp.Body)
@@ -1351,7 +1276,7 @@ func TestCheckPolicy_NonRootWithAllow_Passes(t *testing.T) {
 		IAMService:     mockSvc,
 	}
 
-	app := setupPolicyTestApp(gw)
+	handler := setupPolicyTestHandler(gw)
 
 	authHeader, timestamp := generateTestAuthHeader(
 		"GET", "/", "", "",
@@ -1363,10 +1288,7 @@ func TestCheckPolicy_NonRootWithAllow_Passes(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
@@ -1420,7 +1342,7 @@ func TestCheckPolicy_NonRootWithExplicitDeny_Denied(t *testing.T) {
 		IAMService:     mockSvc,
 	}
 
-	app := setupPolicyTestApp(gw)
+	handler := setupPolicyTestHandler(gw)
 
 	authHeader, timestamp := generateTestAuthHeader(
 		"GET", "/", "", "",
@@ -1432,10 +1354,7 @@ func TestCheckPolicy_NonRootWithExplicitDeny_Denied(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 403 {
 		body, _ := io.ReadAll(resp.Body)
@@ -1490,7 +1409,7 @@ func TestCheckPolicy_RootGlobalAccount_Bypasses(t *testing.T) {
 		IAMService:     mockSvc,
 	}
 
-	app := setupPolicyTestApp(gw)
+	handler := setupPolicyTestHandler(gw)
 
 	authHeader, timestamp := generateTestAuthHeader(
 		"GET", "/", "", "",
@@ -1502,10 +1421,7 @@ func TestCheckPolicy_RootGlobalAccount_Bypasses(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
@@ -1541,7 +1457,7 @@ func TestCheckPolicy_MissingAccountID_InternalError(t *testing.T) {
 		IAMService:     mockSvc,
 	}
 
-	app := setupPolicyTestApp(gw)
+	handler := setupPolicyTestHandler(gw)
 
 	authHeader, timestamp := generateTestAuthHeader(
 		"GET", "/", "", "",
@@ -1553,10 +1469,7 @@ func TestCheckPolicy_MissingAccountID_InternalError(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 500 {
 		body, _ := io.ReadAll(resp.Body)
@@ -1594,7 +1507,7 @@ func TestCheckPolicy_GetUserPoliciesError_InternalError(t *testing.T) {
 		IAMService:     mockSvc,
 	}
 
-	app := setupPolicyTestApp(gw)
+	handler := setupPolicyTestHandler(gw)
 
 	authHeader, timestamp := generateTestAuthHeader(
 		"GET", "/", "", "",
@@ -1606,10 +1519,7 @@ func TestCheckPolicy_GetUserPoliciesError_InternalError(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	if resp.StatusCode != 500 {
 		body, _ := io.ReadAll(resp.Body)
@@ -1649,7 +1559,7 @@ func TestCheckPolicy_RootNonGlobalAccount_StillEvaluated(t *testing.T) {
 		IAMService:     mockSvc,
 	}
 
-	app := setupPolicyTestApp(gw)
+	handler := setupPolicyTestHandler(gw)
 
 	authHeader, timestamp := generateTestAuthHeader(
 		"GET", "/", "", "",
@@ -1661,10 +1571,7 @@ func TestCheckPolicy_RootNonGlobalAccount_StillEvaluated(t *testing.T) {
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to test request: %v", err)
-	}
+	resp := doRequest(handler, req)
 
 	// root on non-global account is evaluated by the policy engine like any
 	// other user. With no policies attached, the default deny applies.

@@ -2,10 +2,11 @@ package gateway
 
 import (
 	"errors"
+	"io"
 	"log/slog"
+	"net/http"
 
 	"github.com/aws/aws-sdk-go/service/iam"
-	"github.com/gofiber/fiber/v2"
 	"github.com/mulgadc/hive/hive/awsec2query"
 	"github.com/mulgadc/hive/hive/awserrors"
 	gateway_iam "github.com/mulgadc/hive/hive/gateway/iam"
@@ -92,8 +93,9 @@ var iamActions = map[string]IAMHandler{
 	}),
 }
 
-func (gw *GatewayConfig) IAM_Request(ctx *fiber.Ctx) error {
-	queryArgs := ParseAWSQueryArgs(string(ctx.Body()))
+func (gw *GatewayConfig) IAM_Request(w http.ResponseWriter, r *http.Request) error {
+	body, _ := io.ReadAll(r.Body)
+	queryArgs := ParseAWSQueryArgs(string(body))
 
 	action := queryArgs["Action"]
 	handler, ok := iamActions[action]
@@ -107,12 +109,12 @@ func (gw *GatewayConfig) IAM_Request(ctx *fiber.Ctx) error {
 		return errors.New(awserrors.ErrorInternalError)
 	}
 
-	if err := gw.checkPolicy(ctx, "iam", action); err != nil {
+	if err := gw.checkPolicy(r, "iam", action); err != nil {
 		return err
 	}
 
 	// Extract account ID from auth context
-	accountID, _ := ctx.Locals("sigv4.accountId").(string)
+	accountID, _ := r.Context().Value(ctxAccountID).(string)
 	if accountID == "" {
 		slog.Error("IAM_Request: no account ID in auth context")
 		return errors.New(awserrors.ErrorInternalError)
@@ -123,5 +125,8 @@ func (gw *GatewayConfig) IAM_Request(ctx *fiber.Ctx) error {
 		return err
 	}
 
-	return ctx.Status(fiber.StatusOK).Type("text/xml").Send(xmlOutput)
+	w.Header().Set("Content-Type", "text/xml")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(xmlOutput)
+	return nil
 }
