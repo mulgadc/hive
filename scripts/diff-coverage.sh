@@ -14,6 +14,7 @@ set -euo pipefail
 PROFILE=""
 BASE_REF=""
 THRESHOLD=65
+QUIET="${QUIET:-}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
