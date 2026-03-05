@@ -74,19 +74,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	// System AMIs have non-account-ID owner aliases (e.g. "self", "hive", empty).
 	amiOwner := amiMeta.ImageOwnerAlias
 	if amiOwner != "" && amiOwner != accountID {
-		// Check if this is a system/pre-phase4 AMI (non-account-ID owner)
-		isSystem := len(amiOwner) != 12
-		if !isSystem {
-			allDigits := true
-			for _, c := range amiOwner {
-				if c < '0' || c > '9' {
-					allDigits = false
-					break
-				}
-			}
-			isSystem = !allDigits
-		}
-		if !isSystem {
+		if utils.IsAccountID(amiOwner) {
 			slog.Warn("handleEC2RunInstances AMI not owned by caller", "imageId", *runInstancesInput.ImageId, "amiOwner", amiOwner, "accountID", accountID)
 			respondWithError(msg, awserrors.ErrorInvalidAMIIDNotFound)
 			return
@@ -519,8 +507,8 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 	// Iterate through all instances on this node
 	for _, instance := range d.Instances.VMS {
 		// Skip instances not owned by the caller's account.
-		// Pre-Phase4 instances (empty AccountID) are visible to all accounts.
-		if accountID != "" && instance.AccountID != "" && instance.AccountID != accountID {
+		// Pre-Phase4 instances (empty AccountID) are only visible to root.
+		if !isInstanceVisible(accountID, instance.AccountID) {
 			continue
 		}
 
@@ -654,9 +642,6 @@ type startStoppedInstanceRequest struct {
 // handleEC2StartStoppedInstance picks up a stopped instance from shared KV,
 // re-launches it on this daemon node, and removes it from shared KV.
 func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
-	// Extract account ID from NATS header for ownership verification
-	callerAccountID := utils.AccountIDFromMsg(msg)
-
 	var req startStoppedInstanceRequest
 	if err := json.Unmarshal(msg.Data, &req); err != nil {
 		slog.Error("handleEC2StartStoppedInstance: failed to unmarshal request", "err", err)
@@ -696,9 +681,7 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 	}
 
 	// Verify the caller owns this instance
-	if callerAccountID != "" && instance.AccountID != "" && instance.AccountID != callerAccountID {
-		slog.Warn("handleEC2StartStoppedInstance: account does not own instance", "instanceId", req.InstanceID, "callerAccount", callerAccountID, "ownerAccount", instance.AccountID)
-		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
+	if !checkInstanceOwnership(msg, req.InstanceID, instance.AccountID) {
 		return
 	}
 
@@ -769,9 +752,6 @@ type terminateStoppedInstanceRequest struct {
 // handleEC2TerminateStoppedInstance picks up a stopped instance from shared KV,
 // deletes its volumes, and removes it from shared KV.
 func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
-	// Extract account ID from NATS header for ownership verification
-	callerAccountID := utils.AccountIDFromMsg(msg)
-
 	var req terminateStoppedInstanceRequest
 	if err := json.Unmarshal(msg.Data, &req); err != nil {
 		slog.Error("handleEC2TerminateStoppedInstance: failed to unmarshal request", "err", err)
@@ -811,9 +791,7 @@ func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
 	}
 
 	// Verify the caller owns this instance
-	if callerAccountID != "" && instance.AccountID != "" && instance.AccountID != callerAccountID {
-		slog.Warn("handleEC2TerminateStoppedInstance: account does not own instance", "instanceId", req.InstanceID, "callerAccount", callerAccountID, "ownerAccount", instance.AccountID)
-		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
+	if !checkInstanceOwnership(msg, req.InstanceID, instance.AccountID) {
 		return
 	}
 
@@ -910,8 +888,8 @@ func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
 
 	for _, instance := range instances {
 		// Skip instances not owned by the caller's account.
-		// Pre-Phase4 instances (empty AccountID) are visible to all accounts.
-		if accountID != "" && instance.AccountID != "" && instance.AccountID != accountID {
+		// Pre-Phase4 instances (empty AccountID) are only visible to root.
+		if !isInstanceVisible(accountID, instance.AccountID) {
 			continue
 		}
 
@@ -977,9 +955,6 @@ func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
 // handleEC2ModifyInstanceAttribute modifies attributes of a stopped instance in shared KV.
 // All supported attributes (InstanceType, UserData) require the instance to be stopped.
 func (d *Daemon) handleEC2ModifyInstanceAttribute(msg *nats.Msg) {
-	// Extract account ID from NATS header for ownership verification
-	callerAccountID := utils.AccountIDFromMsg(msg)
-
 	var input ec2.ModifyInstanceAttributeInput
 	if err := json.Unmarshal(msg.Data, &input); err != nil {
 		slog.Error("handleEC2ModifyInstanceAttribute: failed to unmarshal request", "err", err)
@@ -1020,9 +995,7 @@ func (d *Daemon) handleEC2ModifyInstanceAttribute(msg *nats.Msg) {
 	}
 
 	// Verify the caller owns this instance
-	if callerAccountID != "" && instance.AccountID != "" && instance.AccountID != callerAccountID {
-		slog.Warn("handleEC2ModifyInstanceAttribute: account does not own instance", "instanceId", instanceID, "callerAccount", callerAccountID, "ownerAccount", instance.AccountID)
-		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
+	if !checkInstanceOwnership(msg, instanceID, instance.AccountID) {
 		return
 	}
 

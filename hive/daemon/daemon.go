@@ -454,40 +454,55 @@ func (d *Daemon) Start() error {
 	d.instanceService = handlers_ec2_instance.NewInstanceServiceImpl(d.config, d.resourceMgr.instanceTypes, d.natsConn, &d.Instances, store)
 	d.keyService = handlers_ec2_key.NewKeyServiceImpl(d.config)
 	d.imageService = handlers_ec2_image.NewImageServiceImpl(d.config, d.natsConn)
-	snapSvc, snapshotKV, err := d.initSnapshotService()
-	if err != nil {
-		return fmt.Errorf("failed to initialize snapshot service with NATS KV: %w", err)
+
+	type snapResult struct {
+		svc *handlers_ec2_snapshot.SnapshotServiceImpl
+		kv  nats.KeyValue
 	}
-	d.snapshotService = snapSvc
-	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config, d.natsConn, snapshotKV)
+	snap, err := initServiceWithRetry("snapshot service", func() (snapResult, error) {
+		svc, kv, err := handlers_ec2_snapshot.NewSnapshotServiceImplWithNATS(d.config, d.natsConn)
+		return snapResult{svc, kv}, err
+	})
+	if err != nil {
+		return fmt.Errorf("failed to initialize snapshot service: %w", err)
+	}
+	d.snapshotService = snap.svc
+
+	d.volumeService = handlers_ec2_volume.NewVolumeServiceImpl(d.config, d.natsConn, snap.kv)
 	d.tagsService = handlers_ec2_tags.NewTagsServiceImpl(d.config)
 
-	if eigwSvc, err := handlers_ec2_eigw.NewEgressOnlyIGWServiceImplWithNATS(d.config, d.natsConn); err != nil {
-		slog.Warn("Failed to initialize EIGW service, falling back to in-memory", "error", err)
-		d.eigwService = handlers_ec2_eigw.NewEgressOnlyIGWServiceImpl(d.config)
-	} else {
-		d.eigwService = eigwSvc
+	d.eigwService, err = initServiceWithRetry("EIGW service", func() (*handlers_ec2_eigw.EgressOnlyIGWServiceImpl, error) {
+		return handlers_ec2_eigw.NewEgressOnlyIGWServiceImplWithNATS(d.config, d.natsConn)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to initialize EIGW service: %w", err)
 	}
-	if igwSvc, err := handlers_ec2_igw.NewIGWServiceImplWithNATS(d.config, d.natsConn); err != nil {
-		slog.Warn("Failed to initialize IGW service, falling back to in-memory", "error", err)
-		d.igwService = handlers_ec2_igw.NewIGWServiceImpl(d.config)
-	} else {
-		d.igwService = igwSvc
+
+	d.igwService, err = initServiceWithRetry("IGW service", func() (*handlers_ec2_igw.IGWServiceImpl, error) {
+		return handlers_ec2_igw.NewIGWServiceImplWithNATS(d.config, d.natsConn)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to initialize IGW service: %w", err)
 	}
-	if vpcSvc, err := handlers_ec2_vpc.NewVPCServiceImplWithNATS(d.config, d.natsConn); err != nil {
-		slog.Warn("Failed to initialize VPC service, falling back to in-memory", "error", err)
-		d.vpcService = handlers_ec2_vpc.NewVPCServiceImpl(d.config)
-	} else {
-		d.vpcService = vpcSvc
+
+	d.vpcService, err = initServiceWithRetry("VPC service", func() (*handlers_ec2_vpc.VPCServiceImpl, error) {
+		return handlers_ec2_vpc.NewVPCServiceImplWithNATS(d.config, d.natsConn)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to initialize VPC service: %w", err)
 	}
-	if err := d.initAccountService(); err != nil {
+
+	d.accountService, err = initServiceWithRetry("account settings service", func() (*handlers_ec2_account.AccountSettingsServiceImpl, error) {
+		return handlers_ec2_account.NewAccountSettingsServiceImplWithNATS(d.config, d.natsConn)
+	})
+	if err != nil {
 		return fmt.Errorf("failed to initialize account settings service: %w", err)
 	}
 
 	// Ensure default VPC exists (matches AWS: every account has a default VPC)
 	if d.vpcService != nil {
-		if err := d.vpcService.EnsureDefaultVPC(handlers_ec2_vpc.GlobalAccountID); err != nil {
-			slog.Warn("Failed to ensure default VPC", "error", err)
+		if err := d.vpcService.EnsureDefaultVPC(utils.GlobalAccountID); err != nil {
+			slog.Error("Failed to ensure default VPC", "error", err)
 		}
 	}
 
@@ -603,10 +618,11 @@ func (d *Daemon) initJetStream() error {
 	return nil
 }
 
-// initSnapshotService initializes the snapshot service with retry/backoff.
-// During cluster restarts, JetStream KV may be temporarily unavailable while
-// NATS routes re-establish and the cluster forms quorum.
-func (d *Daemon) initSnapshotService() (*handlers_ec2_snapshot.SnapshotServiceImpl, nats.KeyValue, error) {
+// initServiceWithRetry initializes a service using the provided init function,
+// retrying with exponential backoff (500ms→10s) for up to 5 minutes. During
+// cluster restarts, JetStream KV may be temporarily unavailable while NATS
+// routes re-establish and the cluster forms quorum.
+func initServiceWithRetry[T any](name string, initFn func() (T, error)) (T, error) {
 	const maxWait = 5 * time.Minute
 	retryDelay := 500 * time.Millisecond
 	start := time.Now()
@@ -614,49 +630,21 @@ func (d *Daemon) initSnapshotService() (*handlers_ec2_snapshot.SnapshotServiceIm
 
 	for {
 		attempt++
-		snapSvc, snapshotKV, err := handlers_ec2_snapshot.NewSnapshotServiceImplWithNATS(d.config, d.natsConn)
+		result, err := initFn()
 		if err == nil {
 			if attempt > 1 {
-				slog.Info("Snapshot service initialized successfully", "attempts", attempt, "elapsed", time.Since(start).Round(time.Second))
+				slog.Info(name+" initialized successfully", "attempts", attempt, "elapsed", time.Since(start).Round(time.Second))
 			}
-			return snapSvc, snapshotKV, nil
+			return result, nil
 		}
 
 		elapsed := time.Since(start)
 		if elapsed >= maxWait {
-			return nil, nil, fmt.Errorf("snapshot service unavailable after %s (%d attempts): %w", elapsed.Round(time.Second), attempt, err)
+			var zero T
+			return zero, fmt.Errorf("%s unavailable after %s (%d attempts): %w", name, elapsed.Round(time.Second), attempt, err)
 		}
 
-		slog.Warn("Failed to init snapshot service", "error", err, "attempt", attempt, "elapsed", elapsed.Round(time.Second))
-		time.Sleep(retryDelay)
-		retryDelay = min(retryDelay*2, 10*time.Second)
-	}
-}
-
-// initAccountService initializes the account settings service with retry/backoff.
-func (d *Daemon) initAccountService() error {
-	const maxWait = 5 * time.Minute
-	retryDelay := 500 * time.Millisecond
-	start := time.Now()
-	attempt := 0
-
-	for {
-		attempt++
-		svc, err := handlers_ec2_account.NewAccountSettingsServiceImplWithNATS(d.config, d.natsConn)
-		if err == nil {
-			if attempt > 1 {
-				slog.Info("Account settings service initialized successfully", "attempts", attempt, "elapsed", time.Since(start).Round(time.Second))
-			}
-			d.accountService = svc
-			return nil
-		}
-
-		elapsed := time.Since(start)
-		if elapsed >= maxWait {
-			return fmt.Errorf("account settings service unavailable after %s (%d attempts): %w", elapsed.Round(time.Second), attempt, err)
-		}
-
-		slog.Warn("Failed to init account settings service", "error", err, "attempt", attempt, "elapsed", elapsed.Round(time.Second))
+		slog.Warn("Failed to init "+name, "error", err, "attempt", attempt, "elapsed", elapsed.Round(time.Second))
 		time.Sleep(retryDelay)
 		retryDelay = min(retryDelay*2, 10*time.Second)
 	}
@@ -1384,7 +1372,7 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 					NetworkInterfaceId: &instance.ENIId,
 				}, instance.AccountID)
 				if eniErr != nil {
-					slog.Warn("Failed to delete ENI on termination", "eni", instance.ENIId, "err", eniErr)
+					slog.Error("Failed to delete ENI on termination", "eni", instance.ENIId, "err", eniErr)
 				} else {
 					slog.Info("Deleted ENI on termination", "eni", instance.ENIId, "instanceId", instance.ID)
 				}

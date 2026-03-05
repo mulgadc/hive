@@ -163,7 +163,7 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accoun
 		// in ImageOwnerAlias. Pre-phase4 AMIs have non-account values like "self"
 		// or "hive" and are treated as system/public images visible to all.
 		amiOwner := amiMeta.ImageOwnerAlias
-		isSystemAMI := !isAccountID(amiOwner)
+		isSystemAMI := !utils.IsAccountID(amiOwner)
 
 		// Visibility check: callers can only see their own AMIs and system AMIs.
 		// This runs regardless of whether an owner filter is specified.
@@ -202,7 +202,7 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accoun
 		// Resolve the OwnerId for the response. System AMIs use global account.
 		ownerID := amiOwner
 		if isSystemAMI {
-			ownerID = "000000000000"
+			ownerID = utils.GlobalAccountID
 		}
 
 		// Build EC2 Image from AMIMetadata
@@ -591,20 +591,6 @@ func (s *ImageServiceImpl) putSnapshotMetadata(snapshotID, volumeID string, volu
 		ContentType: aws.String("application/json"),
 	})
 	return err
-}
-
-// isAccountID returns true if the string looks like a valid Hive account ID
-// (12-digit zero-padded number). Pre-phase4 values like "self" or "hive" return false.
-func isAccountID(s string) bool {
-	if len(s) != 12 {
-		return false
-	}
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 func (s *ImageServiceImpl) CopyImage(input *ec2.CopyImageInput, accountID string) (*ec2.CopyImageOutput, error) {

@@ -37,7 +37,7 @@ func DescribeImages(input *ec2.DescribeImagesInput, natsConn *nats.Conn, account
 	}
 
 	// Create NATS service and call handler
-	imageService := handlers_ec2_image.NewNATSImageService(natsConn)
+	imageService := handlers_ec2_image.NewNATSImageService(natsConn, 0)
 	result, err := imageService.DescribeImages(input, accountID)
 
 	if err != nil {

@@ -39,7 +39,7 @@ func NewAccountSettingsServiceImplWithNATS(cfg *config.Config, natsConn *nats.Co
 		return nil, fmt.Errorf("failed to get JetStream context: %w", err)
 	}
 
-	settingsKV, err := getOrCreateKVBucket(js, KVBucketAccountSettings, 10)
+	settingsKV, err := utils.GetOrCreateKVBucket(js, KVBucketAccountSettings, 10)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create account settings KV bucket: %w", err)
 	}
@@ -53,25 +53,11 @@ func NewAccountSettingsServiceImplWithNATS(cfg *config.Config, natsConn *nats.Co
 	}, nil
 }
 
-func getOrCreateKVBucket(js nats.JetStreamContext, bucketName string, history int) (nats.KeyValue, error) {
-	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{
-		Bucket:  bucketName,
-		History: utils.SafeIntToUint8(history),
-	})
-	if err != nil {
-		kv, err = js.KeyValue(bucketName)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return kv, nil
-}
-
 // settingsKey returns the per-account KV key for storing settings.
-// Falls back to "default" for pre-Phase-4 resources with no accountID.
+// Falls back to GlobalAccountID for pre-Phase-4 resources with no accountID.
 func settingsKey(accountID string) string {
 	if accountID == "" {
-		return "default"
+		return utils.GlobalAccountID
 	}
 	return accountID
 }

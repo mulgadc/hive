@@ -13,6 +13,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/mulgadc/hive/hive/awserrors"
 	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/predastore/auth"
 )
 
@@ -1461,7 +1462,7 @@ func TestCheckPolicy_RootGlobalAccount_Bypasses(t *testing.T) {
 					AccessKeyID:     testAccessKey,
 					SecretAccessKey: encryptedSecret,
 					UserName:        "root",
-					AccountID:       handlers_iam.GlobalAccountID,
+					AccountID:       utils.GlobalAccountID,
 					Status:          "Active",
 				},
 			},

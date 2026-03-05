@@ -98,7 +98,7 @@ var ec2Actions = map[string]EC2Handler{
 		return gateway_ec2_image.DescribeImages(input, gw.NATSConn, accountID)
 	}),
 	"CreateImage": ec2Handler(func(input *ec2.CreateImageInput, gw *GatewayConfig, accountID string) (any, error) {
-		return gateway_ec2_image.CreateImage(input, gw.NATSConn, accountID)
+		return gateway_ec2_image.CreateImage(input, gw.NATSConn, gw.DiscoverActiveNodes(), accountID)
 	}),
 	"DescribeRegions": ec2Handler(func(input *ec2.DescribeRegionsInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_zone.DescribeRegions(input, gw.Region)

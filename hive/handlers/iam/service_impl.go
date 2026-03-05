@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/mulgadc/hive/hive/admin"
 	"github.com/mulgadc/hive/hive/awserrors"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats.go"
 )
 
@@ -25,8 +26,6 @@ const (
 	KVBucketPolicies       = "hive-iam-policies"
 	KVBucketAccounts       = "hive-accounts"
 	KVBucketAccountCounter = "hive-account-counter"
-
-	GlobalAccountID = "000000000000"
 
 	maxAccessKeysPerUser = 2
 )
@@ -512,7 +511,7 @@ func (s *IAMServiceImpl) DecryptSecret(ciphertext string) (string, error) {
 func (s *IAMServiceImpl) SeedRootUser(data *BootstrapData) error {
 	// Ensure the global account record exists
 	globalAccount := Account{
-		AccountID:   GlobalAccountID,
+		AccountID:   utils.GlobalAccountID,
 		AccountName: "Global",
 		Status:      AccountStatusActive,
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
@@ -521,16 +520,16 @@ func (s *IAMServiceImpl) SeedRootUser(data *BootstrapData) error {
 	if err != nil {
 		return fmt.Errorf("marshal global account: %w", err)
 	}
-	if _, err := s.accountsBucket.Create(GlobalAccountID, accountData); err != nil && !errors.Is(err, nats.ErrKeyExists) {
+	if _, err := s.accountsBucket.Create(utils.GlobalAccountID, accountData); err != nil && !errors.Is(err, nats.ErrKeyExists) {
 		return fmt.Errorf("seed global account: %w", err)
 	}
 
-	kvKey := GlobalAccountID + ".root"
+	kvKey := utils.GlobalAccountID + ".root"
 	rootUser := User{
 		UserName:         "root",
 		UserID:           "AIDAAAAAAAAAAAAAAAAA",
-		AccountID:        GlobalAccountID,
-		ARN:              fmt.Sprintf("arn:aws:iam::%s:root", GlobalAccountID),
+		AccountID:        utils.GlobalAccountID,
+		ARN:              fmt.Sprintf("arn:aws:iam::%s:root", utils.GlobalAccountID),
 		Path:             "/",
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		AccessKeys:       []string{data.AccessKeyID},
@@ -558,7 +557,7 @@ func (s *IAMServiceImpl) SeedRootUser(data *BootstrapData) error {
 		AccessKeyID:     data.AccessKeyID,
 		SecretAccessKey: data.EncryptedSecret,
 		UserName:        "root",
-		AccountID:       GlobalAccountID,
+		AccountID:       utils.GlobalAccountID,
 		Status:          AccessKeyStatusActive,
 		CreatedAt:       rootUser.CreatedAt,
 	}
@@ -577,7 +576,7 @@ func (s *IAMServiceImpl) SeedRootUser(data *BootstrapData) error {
 		return fmt.Errorf("seed root access key: %w", err)
 	}
 
-	slog.Info("Root IAM user seeded", "accountID", GlobalAccountID, "accessKeyID", data.AccessKeyID)
+	slog.Info("Root IAM user seeded", "accountID", utils.GlobalAccountID, "accessKeyID", data.AccessKeyID)
 	return nil
 }
 

@@ -642,74 +642,6 @@ func TestVpcCidrBlockAssociation(t *testing.T) {
 	assert.Equal(t, "associated", *out.Vpc.CidrBlockAssociationSet[0].CidrBlockState.State)
 }
 
-// --- KV nil guard tests (mulga-x83) ---
-
-func TestKVNilGuard_CreateVpc(t *testing.T) {
-	svc := NewVPCServiceImpl(nil) // in-memory fallback, all KV fields nil
-	_, err := svc.CreateVpc(&ec2.CreateVpcInput{CidrBlock: aws.String("10.0.0.0/16")}, testAccountID)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ServerInternal")
-}
-
-func TestKVNilGuard_DeleteVpc(t *testing.T) {
-	svc := NewVPCServiceImpl(nil)
-	_, err := svc.DeleteVpc(&ec2.DeleteVpcInput{VpcId: aws.String("vpc-123")}, testAccountID)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ServerInternal")
-}
-
-func TestKVNilGuard_DescribeVpcs(t *testing.T) {
-	svc := NewVPCServiceImpl(nil)
-	_, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{}, testAccountID)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ServerInternal")
-}
-
-func TestKVNilGuard_CreateSubnet(t *testing.T) {
-	svc := NewVPCServiceImpl(nil)
-	_, err := svc.CreateSubnet(&ec2.CreateSubnetInput{
-		VpcId:     aws.String("vpc-123"),
-		CidrBlock: aws.String("10.0.1.0/24"),
-	}, testAccountID)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ServerInternal")
-}
-
-func TestKVNilGuard_DeleteSubnet(t *testing.T) {
-	svc := NewVPCServiceImpl(nil)
-	_, err := svc.DeleteSubnet(&ec2.DeleteSubnetInput{SubnetId: aws.String("subnet-123")}, testAccountID)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ServerInternal")
-}
-
-func TestKVNilGuard_DescribeSubnets(t *testing.T) {
-	svc := NewVPCServiceImpl(nil)
-	_, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{}, testAccountID)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ServerInternal")
-}
-
-func TestKVNilGuard_CreateNetworkInterface(t *testing.T) {
-	svc := NewVPCServiceImpl(nil)
-	_, err := svc.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{SubnetId: aws.String("subnet-123")}, testAccountID)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ServerInternal")
-}
-
-func TestKVNilGuard_DeleteNetworkInterface(t *testing.T) {
-	svc := NewVPCServiceImpl(nil)
-	_, err := svc.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{NetworkInterfaceId: aws.String("eni-123")}, testAccountID)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ServerInternal")
-}
-
-func TestKVNilGuard_DescribeNetworkInterfaces(t *testing.T) {
-	svc := NewVPCServiceImpl(nil)
-	_, err := svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{}, testAccountID)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ServerInternal")
-}
-
 // --- Filter tests ---
 
 func TestDescribeVpcs_NilFields(t *testing.T) {
@@ -881,14 +813,6 @@ func TestEnsureDefaultVPC_WithConfigAZ(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, subDesc.Subnets, 1)
 	assert.Equal(t, "us-west-2b", *subDesc.Subnets[0].AvailabilityZone)
-}
-
-func TestGetDefaultSubnet_NoKV(t *testing.T) {
-	// Service without KV should return error
-	svc := NewVPCServiceImpl(nil)
-	_, err := svc.GetDefaultSubnet(testAccountID)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not initialized")
 }
 
 func TestCreateVpc_NormalizesNetworkCidr(t *testing.T) {

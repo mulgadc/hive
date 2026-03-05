@@ -65,7 +65,7 @@ func NewSnapshotServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*S
 		return nil, nil, fmt.Errorf("failed to get JetStream context: %w", err)
 	}
 
-	kv, err := getOrCreateKVBucket(js, KVBucketVolumeSnapshots, 10)
+	kv, err := utils.GetOrCreateKVBucket(js, KVBucketVolumeSnapshots, 10)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketVolumeSnapshots, err)
 	}
@@ -92,20 +92,6 @@ func NewSnapshotServiceImplWithStore(cfg *config.Config, store objectstore.Objec
 		svc.snapKV = snapshotKV[0]
 	}
 	return svc
-}
-
-func getOrCreateKVBucket(js nats.JetStreamContext, bucketName string, history int) (nats.KeyValue, error) {
-	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{
-		Bucket:  bucketName,
-		History: utils.SafeIntToUint8(history),
-	})
-	if err != nil {
-		kv, err = js.KeyValue(bucketName)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return kv, nil
 }
 
 // getSnapshotKey returns the S3 key for storing snapshot metadata.

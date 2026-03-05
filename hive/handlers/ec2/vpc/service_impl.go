@@ -62,13 +62,6 @@ type VPCServiceImpl struct {
 	ipam     *IPAM
 }
 
-// NewVPCServiceImpl creates a new VPC service implementation (in-memory, no persistence)
-func NewVPCServiceImpl(cfg *config.Config) *VPCServiceImpl {
-	return &VPCServiceImpl{
-		config: cfg,
-	}
-}
-
 // NewVPCServiceImplWithNATS creates a VPC service with NATS JetStream for persistence
 func NewVPCServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*VPCServiceImpl, error) {
 	js, err := natsConn.JetStream()
@@ -76,22 +69,22 @@ func NewVPCServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*VPCSer
 		return nil, fmt.Errorf("failed to get JetStream context: %w", err)
 	}
 
-	vpcKV, err := getOrCreateKVBucket(js, KVBucketVPCs, 10)
+	vpcKV, err := utils.GetOrCreateKVBucket(js, KVBucketVPCs, 10)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketVPCs, err)
 	}
 
-	subnetKV, err := getOrCreateKVBucket(js, KVBucketSubnets, 10)
+	subnetKV, err := utils.GetOrCreateKVBucket(js, KVBucketSubnets, 10)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketSubnets, err)
 	}
 
-	vniKV, err := getOrCreateKVBucket(js, KVBucketVNICounter, 10)
+	vniKV, err := utils.GetOrCreateKVBucket(js, KVBucketVNICounter, 10)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketVNICounter, err)
 	}
 
-	eniKV, err := getOrCreateKVBucket(js, KVBucketENIs, 10)
+	eniKV, err := utils.GetOrCreateKVBucket(js, KVBucketENIs, 10)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketENIs, err)
 	}
@@ -116,35 +109,6 @@ func NewVPCServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*VPCSer
 		eniKV:    eniKV,
 		ipam:     ipam,
 	}, nil
-}
-
-func getOrCreateKVBucket(js nats.JetStreamContext, bucketName string, history int) (nats.KeyValue, error) {
-	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{
-		Bucket:  bucketName,
-		History: utils.SafeIntToUint8(history),
-	})
-	if err != nil {
-		kv, err = js.KeyValue(bucketName)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return kv, nil
-}
-
-// errKVNotReady is returned when the VPC service was initialized without NATS KV
-// (in-memory fallback mode). Callers receive an internal server error.
-var errKVNotReady = errors.New("VPC KV stores not initialized (in-memory fallback mode)")
-
-// ensureKVReady returns an error if any required KV store is nil.
-// This guards against nil pointer dereferences when the daemon fell back to
-// NewVPCServiceImpl (no NATS) but still receives VPC requests via queue group.
-func (s *VPCServiceImpl) ensureKVReady() error {
-	if s.vpcKV == nil || s.subnetKV == nil || s.vniKV == nil || s.eniKV == nil {
-		slog.Error("VPC service called without KV stores initialized")
-		return errKVNotReady
-	}
-	return nil
 }
 
 // nextVNI allocates the next VNI using atomic increment on the NATS KV counter
@@ -177,16 +141,8 @@ func (s *VPCServiceImpl) nextVNI() (int64, error) {
 	return current, nil
 }
 
-// accountKey returns a KV key scoped to the given account: "{accountID}.{resourceID}".
-func accountKey(accountID, resourceID string) string {
-	return accountID + "." + resourceID
-}
-
 // CreateVpc creates a new VPC
 func (s *VPCServiceImpl) CreateVpc(input *ec2.CreateVpcInput, accountID string) (*ec2.CreateVpcOutput, error) {
-	if err := s.ensureKVReady(); err != nil {
-		return nil, errors.New(awserrors.ErrorServerInternal)
-	}
 	if input.CidrBlock == nil || *input.CidrBlock == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
@@ -235,7 +191,7 @@ func (s *VPCServiceImpl) CreateVpc(input *ec2.CreateVpcInput, accountID string) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal VPC record: %w", err)
 	}
-	if _, err := s.vpcKV.Put(accountKey(accountID, vpcID), data); err != nil {
+	if _, err := s.vpcKV.Put(utils.AccountKey(accountID, vpcID), data); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -251,15 +207,12 @@ func (s *VPCServiceImpl) CreateVpc(input *ec2.CreateVpcInput, accountID string) 
 
 // DeleteVpc deletes a VPC
 func (s *VPCServiceImpl) DeleteVpc(input *ec2.DeleteVpcInput, accountID string) (*ec2.DeleteVpcOutput, error) {
-	if err := s.ensureKVReady(); err != nil {
-		return nil, errors.New(awserrors.ErrorServerInternal)
-	}
 	if input.VpcId == nil || *input.VpcId == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
 
 	vpcID := *input.VpcId
-	key := accountKey(accountID, vpcID)
+	key := utils.AccountKey(accountID, vpcID)
 
 	if _, err := s.vpcKV.Get(key); err != nil {
 		return nil, errors.New(awserrors.ErrorInvalidVpcIDNotFound)
@@ -302,9 +255,6 @@ func (s *VPCServiceImpl) DeleteVpc(input *ec2.DeleteVpcInput, accountID string) 
 
 // DescribeVpcs describes VPCs
 func (s *VPCServiceImpl) DescribeVpcs(input *ec2.DescribeVpcsInput, accountID string) (*ec2.DescribeVpcsOutput, error) {
-	if err := s.ensureKVReady(); err != nil {
-		return nil, errors.New(awserrors.ErrorServerInternal)
-	}
 	var vpcs []*ec2.Vpc
 
 	vpcIDs := make(map[string]bool)
@@ -344,6 +294,32 @@ func (s *VPCServiceImpl) DescribeVpcs(input *ec2.DescribeVpcsInput, accountID st
 		vpcs = append(vpcs, s.vpcRecordToEC2(&record, accountID))
 	}
 
+	// Include global default VPCs (created at startup) for non-root accounts.
+	// This matches AWS behavior where all accounts have a default VPC.
+	if accountID != utils.GlobalAccountID {
+		globalPrefix := utils.GlobalAccountID + "."
+		for _, key := range keys {
+			if !strings.HasPrefix(key, globalPrefix) {
+				continue
+			}
+			entry, err := s.vpcKV.Get(key)
+			if err != nil {
+				continue
+			}
+			var record VPCRecord
+			if err := json.Unmarshal(entry.Value(), &record); err != nil {
+				continue
+			}
+			if !record.IsDefault {
+				continue
+			}
+			if len(vpcIDs) > 0 && !vpcIDs[record.VpcId] {
+				continue
+			}
+			vpcs = append(vpcs, s.vpcRecordToEC2(&record, accountID))
+		}
+	}
+
 	// If specific VPC IDs were requested but not found, return error
 	if len(vpcIDs) > 0 {
 		found := make(map[string]bool)
@@ -368,9 +344,6 @@ func (s *VPCServiceImpl) DescribeVpcs(input *ec2.DescribeVpcsInput, accountID st
 
 // CreateSubnet creates a new subnet within a VPC
 func (s *VPCServiceImpl) CreateSubnet(input *ec2.CreateSubnetInput, accountID string) (*ec2.CreateSubnetOutput, error) {
-	if err := s.ensureKVReady(); err != nil {
-		return nil, errors.New(awserrors.ErrorServerInternal)
-	}
 	if input.VpcId == nil || *input.VpcId == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
@@ -381,7 +354,7 @@ func (s *VPCServiceImpl) CreateSubnet(input *ec2.CreateSubnetInput, accountID st
 	vpcID := *input.VpcId
 
 	// Verify VPC exists and belongs to this account
-	vpcEntry, err := s.vpcKV.Get(accountKey(accountID, vpcID))
+	vpcEntry, err := s.vpcKV.Get(utils.AccountKey(accountID, vpcID))
 	if err != nil {
 		return nil, errors.New(awserrors.ErrorInvalidVpcIDNotFound)
 	}
@@ -483,7 +456,7 @@ func (s *VPCServiceImpl) CreateSubnet(input *ec2.CreateSubnetInput, accountID st
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal subnet record: %w", err)
 	}
-	if _, err := s.subnetKV.Put(accountKey(accountID, subnetID), data); err != nil {
+	if _, err := s.subnetKV.Put(utils.AccountKey(accountID, subnetID), data); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -499,15 +472,12 @@ func (s *VPCServiceImpl) CreateSubnet(input *ec2.CreateSubnetInput, accountID st
 
 // DeleteSubnet deletes a subnet
 func (s *VPCServiceImpl) DeleteSubnet(input *ec2.DeleteSubnetInput, accountID string) (*ec2.DeleteSubnetOutput, error) {
-	if err := s.ensureKVReady(); err != nil {
-		return nil, errors.New(awserrors.ErrorServerInternal)
-	}
 	if input.SubnetId == nil || *input.SubnetId == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
 
 	subnetID := *input.SubnetId
-	key := accountKey(accountID, subnetID)
+	key := utils.AccountKey(accountID, subnetID)
 
 	// Read subnet record before deletion (needed for vpcd event)
 	subnetEntry, err := s.subnetKV.Get(key)
@@ -531,9 +501,6 @@ func (s *VPCServiceImpl) DeleteSubnet(input *ec2.DeleteSubnetInput, accountID st
 
 // DescribeSubnets describes subnets
 func (s *VPCServiceImpl) DescribeSubnets(input *ec2.DescribeSubnetsInput, accountID string) (*ec2.DescribeSubnetsOutput, error) {
-	if err := s.ensureKVReady(); err != nil {
-		return nil, errors.New(awserrors.ErrorServerInternal)
-	}
 	var subnets []*ec2.Subnet
 
 	subnetIDs := make(map[string]bool)
@@ -677,11 +644,6 @@ const (
 	DefaultSubnetCidr = "172.31.0.0/20"
 )
 
-// GlobalAccountID is used for resources created without an explicit account context
-// (e.g., default VPC at daemon startup). Pre-existing resources with no accountID
-// are treated as owned by this account.
-const GlobalAccountID = "000000000000"
-
 // EnsureDefaultVPC creates a default VPC and subnet if none exists for the given account.
 // This matches AWS behavior where a default VPC is present on account creation.
 // Safe to call multiple times — no-ops if a default VPC already exists.
@@ -736,7 +698,7 @@ func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string) error {
 	if err != nil {
 		return fmt.Errorf("marshal default VPC: %w", err)
 	}
-	if _, err := s.vpcKV.Put(accountKey(accountID, vpcID), data); err != nil {
+	if _, err := s.vpcKV.Put(utils.AccountKey(accountID, vpcID), data); err != nil {
 		return fmt.Errorf("store default VPC: %w", err)
 	}
 
@@ -765,7 +727,7 @@ func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string) error {
 	if err != nil {
 		return fmt.Errorf("marshal default subnet: %w", err)
 	}
-	if _, err := s.subnetKV.Put(accountKey(accountID, subnetID), data); err != nil {
+	if _, err := s.subnetKV.Put(utils.AccountKey(accountID, subnetID), data); err != nil {
 		return fmt.Errorf("store default subnet: %w", err)
 	}
 
@@ -784,10 +746,6 @@ func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string) error {
 
 // GetDefaultSubnet returns the default subnet for RunInstances when no SubnetId is specified.
 func (s *VPCServiceImpl) GetDefaultSubnet(accountID string) (*SubnetRecord, error) {
-	if s.subnetKV == nil {
-		return nil, fmt.Errorf("VPC service not initialized")
-	}
-
 	prefix := accountID + "."
 	keys, err := s.subnetKV.Keys()
 	if err != nil {
