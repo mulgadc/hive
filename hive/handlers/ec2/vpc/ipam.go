@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net"
 
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats.go"
 )
 
@@ -29,7 +30,7 @@ type IPAM struct {
 
 // NewIPAM creates a new IPAM instance backed by NATS JetStream KV.
 func NewIPAM(js nats.JetStreamContext) (*IPAM, error) {
-	kv, err := getOrCreateKVBucket(js, KVBucketIPAM, 5)
+	kv, err := utils.GetOrCreateKVBucket(js, KVBucketIPAM, 5)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create IPAM KV bucket: %w", err)
 	}

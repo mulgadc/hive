@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
+	handlers_ec2_vpc "github.com/mulgadc/hive/hive/handlers/ec2/vpc"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -20,7 +21,6 @@ import (
 var _ IGWService = (*IGWServiceImpl)(nil)
 
 const KVBucketIGW = "hive-igw"
-const kvBucketVPCs = "hive-vpc-vpcs"
 
 // IGWRecord represents a stored Internet Gateway
 type IGWRecord struct {
@@ -53,13 +53,13 @@ func NewIGWServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*IGWSer
 		return nil, fmt.Errorf("failed to get JetStream context: %w", err)
 	}
 
-	igwKV, err := getOrCreateKVBucket(js, KVBucketIGW, 10)
+	igwKV, err := utils.GetOrCreateKVBucket(js, KVBucketIGW, 10)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketIGW, err)
 	}
 
 	// Get VPC KV bucket for cross-resource ownership validation
-	vpcKV, err := js.KeyValue(kvBucketVPCs)
+	vpcKV, err := js.KeyValue(handlers_ec2_vpc.KVBucketVPCs)
 	if err != nil {
 		slog.Warn("IGW service: VPC KV bucket not available, VPC ownership checks disabled", "error", err)
 	}
@@ -72,24 +72,6 @@ func NewIGWServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*IGWSer
 		vpcKV:    vpcKV,
 		natsConn: natsConn,
 	}, nil
-}
-
-func getOrCreateKVBucket(js nats.JetStreamContext, bucketName string, history int) (nats.KeyValue, error) {
-	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{
-		Bucket:  bucketName,
-		History: utils.SafeIntToUint8(history),
-	})
-	if err != nil {
-		kv, err = js.KeyValue(bucketName)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return kv, nil
-}
-
-func accountKey(accountID, resourceID string) string {
-	return accountID + "." + resourceID
 }
 
 // CreateInternetGateway creates a new Internet Gateway (initially detached)
@@ -117,7 +99,7 @@ func (s *IGWServiceImpl) CreateInternetGateway(input *ec2.CreateInternetGatewayI
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal IGW record: %w", err)
 	}
-	if _, err := s.igwKV.Put(accountKey(accountID, igwID), data); err != nil {
+	if _, err := s.igwKV.Put(utils.AccountKey(accountID, igwID), data); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -135,7 +117,7 @@ func (s *IGWServiceImpl) DeleteInternetGateway(input *ec2.DeleteInternetGatewayI
 	}
 
 	igwID := *input.InternetGatewayId
-	key := accountKey(accountID, igwID)
+	key := utils.AccountKey(accountID, igwID)
 
 	entry, err := s.igwKV.Get(key)
 	if err != nil {
@@ -231,7 +213,7 @@ func (s *IGWServiceImpl) AttachInternetGateway(input *ec2.AttachInternetGatewayI
 
 	igwID := *input.InternetGatewayId
 	vpcID := *input.VpcId
-	key := accountKey(accountID, igwID)
+	key := utils.AccountKey(accountID, igwID)
 
 	entry, err := s.igwKV.Get(key)
 	if err != nil {
@@ -247,12 +229,14 @@ func (s *IGWServiceImpl) AttachInternetGateway(input *ec2.AttachInternetGatewayI
 		return nil, errors.New(awserrors.ErrorResourceAlreadyAssociated)
 	}
 
-	// Verify the caller owns the target VPC
-	if s.vpcKV != nil {
-		if _, err := s.vpcKV.Get(accountKey(accountID, vpcID)); err != nil {
-			slog.Warn("AttachInternetGateway: VPC not found for account", "vpcId", vpcID, "accountID", accountID)
-			return nil, errors.New(awserrors.ErrorInvalidVpcIDNotFound)
-		}
+	// Verify the caller owns the target VPC (fail-closed if KV unavailable)
+	if s.vpcKV == nil {
+		slog.Error("VPC KV unavailable, cannot verify VPC ownership")
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+	if _, err := s.vpcKV.Get(utils.AccountKey(accountID, vpcID)); err != nil {
+		slog.Warn("AttachInternetGateway: VPC not found for account", "vpcId", vpcID, "accountID", accountID)
+		return nil, errors.New(awserrors.ErrorInvalidVpcIDNotFound)
 	}
 
 	record.VpcId = vpcID
@@ -295,7 +279,7 @@ func (s *IGWServiceImpl) DetachInternetGateway(input *ec2.DetachInternetGatewayI
 
 	igwID := *input.InternetGatewayId
 	vpcID := *input.VpcId
-	key := accountKey(accountID, igwID)
+	key := utils.AccountKey(accountID, igwID)
 
 	entry, err := s.igwKV.Get(key)
 	if err != nil {

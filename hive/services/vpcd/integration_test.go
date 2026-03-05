@@ -9,6 +9,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	handlers_ec2_igw "github.com/mulgadc/hive/hive/handlers/ec2/igw"
+	handlers_ec2_vpc "github.com/mulgadc/hive/hive/handlers/ec2/vpc"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )
@@ -153,6 +155,19 @@ func TestIntegration_VPCLifecycle(t *testing.T) {
 	}
 
 	// === Phase 4: Create and Attach Internet Gateway ===
+	// Create VPC KV bucket and register test VPC so IGW ownership checks pass
+	js, err := nc.JetStream()
+	if err != nil {
+		t.Fatalf("JetStream: %v", err)
+	}
+	vpcKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketVPCs, History: 1})
+	if err != nil {
+		t.Fatalf("create VPC KV: %v", err)
+	}
+	if _, err := vpcKV.Put(utils.AccountKey(testIGWAccountID, "vpc-integ1"), []byte(`{"vpc_id":"vpc-integ1","state":"available"}`)); err != nil {
+		t.Fatalf("register test VPC: %v", err)
+	}
+
 	igwSvc, err := handlers_ec2_igw.NewIGWServiceImplWithNATS(nil, nc)
 	if err != nil {
 		t.Fatalf("create IGW service: %v", err)
@@ -373,6 +388,19 @@ func TestIntegration_MultiSubnetWithIGW(t *testing.T) {
 		t.Errorf("router ports = %d, want 3", len(router.Ports))
 	}
 
+	// Create VPC KV bucket and register test VPC so IGW ownership checks pass
+	js, err := nc.JetStream()
+	if err != nil {
+		t.Fatalf("JetStream: %v", err)
+	}
+	vpcKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketVPCs, History: 1})
+	if err != nil {
+		t.Fatalf("create VPC KV: %v", err)
+	}
+	if _, err := vpcKV.Put(utils.AccountKey(testIGWAccountID, "vpc-multi"), []byte(`{"vpc_id":"vpc-multi","state":"available"}`)); err != nil {
+		t.Fatalf("register test VPC: %v", err)
+	}
+
 	// Attach IGW
 	igwSvc, _ := handlers_ec2_igw.NewIGWServiceImplWithNATS(nil, nc)
 	igwOut, _ := igwSvc.CreateInternetGateway(&ec2.CreateInternetGatewayInput{}, testIGWAccountID)
@@ -458,6 +486,21 @@ func TestIntegration_IGWErrorPaths(t *testing.T) {
 			_ = s.Unsubscribe()
 		}
 	}()
+
+	// Create VPC KV bucket and register test VPCs so IGW ownership checks pass
+	js, err := nc.JetStream()
+	if err != nil {
+		t.Fatalf("JetStream: %v", err)
+	}
+	vpcKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketVPCs, History: 1})
+	if err != nil {
+		t.Fatalf("create VPC KV: %v", err)
+	}
+	for _, vpcID := range []string{"vpc-err1", "vpc-err2"} {
+		if _, err := vpcKV.Put(utils.AccountKey(testIGWAccountID, vpcID), []byte(`{"vpc_id":"`+vpcID+`","state":"available"}`)); err != nil {
+			t.Fatalf("register test VPC: %v", err)
+		}
+	}
 
 	igwSvc, err := handlers_ec2_igw.NewIGWServiceImplWithNATS(nil, nc)
 	if err != nil {

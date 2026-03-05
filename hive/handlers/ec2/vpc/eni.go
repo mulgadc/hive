@@ -48,7 +48,7 @@ func (s *VPCServiceImpl) CreateNetworkInterface(input *ec2.CreateNetworkInterfac
 	subnetId := *input.SubnetId
 
 	// Verify subnet exists and belongs to this account
-	subnetEntry, err := s.subnetKV.Get(accountKey(accountID, subnetId))
+	subnetEntry, err := s.subnetKV.Get(utils.AccountKey(accountID, subnetId))
 	if err != nil {
 		return nil, errors.New(awserrors.ErrorInvalidSubnetIDNotFound)
 	}
@@ -108,7 +108,7 @@ func (s *VPCServiceImpl) CreateNetworkInterface(input *ec2.CreateNetworkInterfac
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal ENI record: %w", err)
 	}
-	if _, err := s.eniKV.Put(accountKey(accountID, eniId), data); err != nil {
+	if _, err := s.eniKV.Put(utils.AccountKey(accountID, eniId), data); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -132,7 +132,7 @@ func (s *VPCServiceImpl) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfac
 	}
 
 	eniId := *input.NetworkInterfaceId
-	key := accountKey(accountID, eniId)
+	key := utils.AccountKey(accountID, eniId)
 
 	// Get the ENI record
 	entry, err := s.eniKV.Get(key)
@@ -267,7 +267,7 @@ func (s *VPCServiceImpl) AttachENI(accountID, eniId, instanceId string, deviceIn
 	if err := s.ensureKVReady(); err != nil {
 		return "", errors.New(awserrors.ErrorServerInternal)
 	}
-	key := accountKey(accountID, eniId)
+	key := utils.AccountKey(accountID, eniId)
 	entry, err := s.eniKV.Get(key)
 	if err != nil {
 		return "", errors.New(awserrors.ErrorInvalidNetworkInterfaceIDNotFound)
@@ -306,7 +306,7 @@ func (s *VPCServiceImpl) DetachENI(accountID, eniId string) error {
 	if err := s.ensureKVReady(); err != nil {
 		return errors.New(awserrors.ErrorServerInternal)
 	}
-	key := accountKey(accountID, eniId)
+	key := utils.AccountKey(accountID, eniId)
 	entry, err := s.eniKV.Get(key)
 	if err != nil {
 		return errors.New(awserrors.ErrorInvalidNetworkInterfaceIDNotFound)

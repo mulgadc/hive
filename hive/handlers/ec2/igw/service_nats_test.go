@@ -6,6 +6,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,7 +45,7 @@ func handleNATSMsg[In any, Out any](msg *nats.Msg, fn func(*In, string) (*Out, e
 		_ = msg.Respond([]byte(`{"error":"unmarshal"}`))
 		return
 	}
-	accountID := msg.Header.Get("X-Account-ID")
+	accountID := msg.Header.Get(utils.AccountIDHeader)
 	result, err := fn(&input, accountID)
 	if err != nil {
 		errResp, _ := json.Marshal(map[string]string{"error": err.Error()})

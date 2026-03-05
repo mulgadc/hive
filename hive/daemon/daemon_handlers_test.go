@@ -543,6 +543,7 @@ func TestHandleEC2Events_StopInstance(t *testing.T) {
 		Status:       vm.StateRunning,
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
+		AccountID:    testAccountID,
 	}
 
 	sub, err := daemon.natsConn.Subscribe(
@@ -558,7 +559,7 @@ func TestHandleEC2Events_StopInstance(t *testing.T) {
 	}
 	cmdData, _ := json.Marshal(cmd)
 
-	reply, err := daemon.natsConn.Request(
+	reply, err := natsRequest(daemon.natsConn,
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
 		cmdData,
 		5*time.Second,
@@ -588,6 +589,7 @@ func TestHandleEC2Events_TerminateInstance(t *testing.T) {
 		Status:       vm.StateRunning,
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
+		AccountID:    testAccountID,
 	}
 
 	sub, err := daemon.natsConn.Subscribe(
@@ -603,7 +605,7 @@ func TestHandleEC2Events_TerminateInstance(t *testing.T) {
 	}
 	cmdData, _ := json.Marshal(cmd)
 
-	reply, err := daemon.natsConn.Request(
+	reply, err := natsRequest(daemon.natsConn,
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
 		cmdData,
 		5*time.Second,
@@ -914,8 +916,9 @@ func TestHandleEC2CreateImage_InvalidState(t *testing.T) {
 	// Add an instance in "pending" state (not running or stopped)
 	daemon.Instances.Mu.Lock()
 	daemon.Instances.VMS["i-pending123"] = &vm.VM{
-		ID:     "i-pending123",
-		Status: vm.StatePending,
+		ID:        "i-pending123",
+		Status:    vm.StatePending,
+		AccountID: testAccountID,
 		Instance: &ec2.Instance{
 			InstanceId: aws.String("i-pending123"),
 			ImageId:    aws.String("ami-source"),
@@ -938,7 +941,7 @@ func TestHandleEC2CreateImage_InvalidState(t *testing.T) {
 		Name:       aws.String("my-image"),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.CreateImage", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.CreateImage", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var errResp map[string]any
@@ -955,8 +958,9 @@ func TestHandleEC2CreateImage_NoRootVolume(t *testing.T) {
 	// Add instance with no block device mappings
 	daemon.Instances.Mu.Lock()
 	daemon.Instances.VMS["i-novol123"] = &vm.VM{
-		ID:     "i-novol123",
-		Status: vm.StateRunning,
+		ID:        "i-novol123",
+		Status:    vm.StateRunning,
+		AccountID: testAccountID,
 		Instance: &ec2.Instance{
 			InstanceId:          aws.String("i-novol123"),
 			ImageId:             aws.String("ami-source"),
@@ -974,7 +978,7 @@ func TestHandleEC2CreateImage_NoRootVolume(t *testing.T) {
 		Name:       aws.String("my-image"),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.CreateImage", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.CreateImage", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var errResp map[string]any
@@ -1067,6 +1071,7 @@ func TestHandleEC2StartStoppedInstance_NotStoppedState(t *testing.T) {
 		ID:           "i-running-shared",
 		Status:       vm.StateRunning,
 		InstanceType: getTestInstanceType(),
+		AccountID:    testAccountID,
 	}
 	err := daemon.jsManager.WriteStoppedInstance(runningVM.ID, runningVM)
 	require.NoError(t, err)
@@ -1076,7 +1081,7 @@ func TestHandleEC2StartStoppedInstance_NotStoppedState(t *testing.T) {
 	defer sub.Unsubscribe()
 
 	reqData, _ := json.Marshal(map[string]string{"instance_id": "i-running-shared"})
-	reply, err := daemon.natsConn.Request("ec2.start", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.start", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var errResp map[string]any
@@ -1101,6 +1106,7 @@ func TestHandleEC2DescribeStoppedInstances_ReturnsStoppedInstances(t *testing.T)
 		Status:       vm.StateStopped,
 		InstanceType: getTestInstanceType(),
 		LastNode:     "node-1",
+		AccountID:    testAccountID,
 		Reservation: &ec2.Reservation{
 			ReservationId: aws.String("r-test-001"),
 			OwnerId:       aws.String("123456789012"),
@@ -1119,7 +1125,7 @@ func TestHandleEC2DescribeStoppedInstances_ReturnsStoppedInstances(t *testing.T)
 
 	input := &ec2.DescribeInstancesInput{}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.DescribeStoppedInstances", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeStoppedInstances", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.DescribeInstancesOutput
@@ -1151,9 +1157,10 @@ func TestHandleEC2DescribeStoppedInstances_WithFilter(t *testing.T) {
 	// Write two stopped instances
 	for _, id := range []string{"i-filter-001", "i-filter-002"} {
 		v := &vm.VM{
-			ID:       id,
-			Status:   vm.StateStopped,
-			LastNode: "node-1",
+			ID:        id,
+			Status:    vm.StateStopped,
+			LastNode:  "node-1",
+			AccountID: testAccountID,
 			Reservation: &ec2.Reservation{
 				ReservationId: aws.String("r-filter"),
 				OwnerId:       aws.String("123456789012"),
@@ -1175,7 +1182,7 @@ func TestHandleEC2DescribeStoppedInstances_WithFilter(t *testing.T) {
 		InstanceIds: []*string{aws.String("i-filter-001")},
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.DescribeStoppedInstances", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeStoppedInstances", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.DescribeInstancesOutput
@@ -1252,6 +1259,7 @@ func TestHandleEC2TerminateStoppedInstance_NotStoppedState(t *testing.T) {
 		ID:           "i-term-running",
 		Status:       vm.StateRunning,
 		InstanceType: getTestInstanceType(),
+		AccountID:    testAccountID,
 	}
 	err := daemon.jsManager.WriteStoppedInstance(runningVM.ID, runningVM)
 	require.NoError(t, err)
@@ -1261,7 +1269,7 @@ func TestHandleEC2TerminateStoppedInstance_NotStoppedState(t *testing.T) {
 	defer sub.Unsubscribe()
 
 	reqData, _ := json.Marshal(map[string]string{"instance_id": "i-term-running"})
-	reply, err := daemon.natsConn.Request("ec2.terminate", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.terminate", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var errResp map[string]any
@@ -1284,6 +1292,7 @@ func TestHandleEC2TerminateStoppedInstance_Success(t *testing.T) {
 		Status:       vm.StateStopped,
 		InstanceType: getTestInstanceType(),
 		LastNode:     "node-1",
+		AccountID:    testAccountID,
 		Reservation: &ec2.Reservation{
 			ReservationId: aws.String("r-term-001"),
 			OwnerId:       aws.String("123456789012"),
@@ -1301,7 +1310,7 @@ func TestHandleEC2TerminateStoppedInstance_Success(t *testing.T) {
 	defer sub.Unsubscribe()
 
 	reqData, _ := json.Marshal(map[string]string{"instance_id": "i-term-stopped-001"})
-	reply, err := daemon.natsConn.Request("ec2.terminate", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.terminate", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var resp map[string]string
@@ -1330,8 +1339,9 @@ func TestHandleEC2GetConsoleOutput(t *testing.T) {
 	// Add an instance with console log path
 	daemon.Instances.Mu.Lock()
 	daemon.Instances.VMS[instanceID] = &vm.VM{
-		ID:     instanceID,
-		Status: vm.StateRunning,
+		ID:        instanceID,
+		Status:    vm.StateRunning,
+		AccountID: testAccountID,
 		Config: vm.Config{
 			ConsoleLogPath: logPath,
 		},
@@ -1347,7 +1357,7 @@ func TestHandleEC2GetConsoleOutput(t *testing.T) {
 		InstanceId: aws.String(instanceID),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request(topic, reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, topic, reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.GetConsoleOutputOutput
@@ -1373,8 +1383,9 @@ func TestHandleEC2GetConsoleOutput_EmptyLog(t *testing.T) {
 	// Instance exists but no log file yet
 	daemon.Instances.Mu.Lock()
 	daemon.Instances.VMS[instanceID] = &vm.VM{
-		ID:     instanceID,
-		Status: vm.StateRunning,
+		ID:        instanceID,
+		Status:    vm.StateRunning,
+		AccountID: testAccountID,
 		Config: vm.Config{
 			ConsoleLogPath: "/nonexistent/console.log",
 		},
@@ -1390,7 +1401,7 @@ func TestHandleEC2GetConsoleOutput_EmptyLog(t *testing.T) {
 		InstanceId: aws.String(instanceID),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request(topic, reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, topic, reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var output ec2.GetConsoleOutputOutput
@@ -1439,6 +1450,7 @@ func TestAttachVolume_ZoneMismatch(t *testing.T) {
 		ID:           instanceID,
 		InstanceType: getTestInstanceType(),
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
@@ -1483,7 +1495,7 @@ func TestAttachVolume_ZoneMismatch(t *testing.T) {
 	}
 	cmdData, _ := json.Marshal(command)
 
-	resp, err := daemon.natsConn.Request(
+	resp, err := natsRequest(daemon.natsConn,
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
 		cmdData,
 		5*time.Second,
@@ -1508,6 +1520,7 @@ func TestHandleEC2ModifyInstanceAttribute_ChangeInstanceType(t *testing.T) {
 		ID:           instanceID,
 		Status:       vm.StateStopped,
 		InstanceType: "t3.micro",
+		AccountID:    testAccountID,
 		Config:       vm.Config{InstanceType: "t3.micro"},
 		Instance: &ec2.Instance{
 			InstanceId:   aws.String(instanceID),
@@ -1523,7 +1536,7 @@ func TestHandleEC2ModifyInstanceAttribute_ChangeInstanceType(t *testing.T) {
 		InstanceType: &ec2.AttributeValue{Value: aws.String("t3.medium")},
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, `{}`, string(reply.Data))
 
@@ -1549,6 +1562,7 @@ func TestHandleEC2ModifyInstanceAttribute_ChangeUserData(t *testing.T) {
 		ID:           instanceID,
 		Status:       vm.StateStopped,
 		InstanceType: "t3.micro",
+		AccountID:    testAccountID,
 		UserData:     "old data",
 		RunInstancesInput: &ec2.RunInstancesInput{
 			UserData: aws.String("b2xkIGRhdGE="),
@@ -1569,7 +1583,7 @@ func TestHandleEC2ModifyInstanceAttribute_ChangeUserData(t *testing.T) {
 		UserData:   &ec2.BlobAttributeValue{Value: []byte(newContent)},
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, `{}`, string(reply.Data))
 
@@ -1617,6 +1631,7 @@ func TestHandleEC2ModifyInstanceAttribute_NotStopped(t *testing.T) {
 		ID:           instanceID,
 		Status:       vm.StateRunning,
 		InstanceType: "t3.micro",
+		AccountID:    testAccountID,
 	}
 	err = daemon.jsManager.WriteStoppedInstance(instanceID, instance)
 	require.NoError(t, err)
@@ -1627,7 +1642,7 @@ func TestHandleEC2ModifyInstanceAttribute_NotStopped(t *testing.T) {
 		InstanceType: &ec2.AttributeValue{Value: aws.String("t3.medium")},
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var errResp map[string]any
@@ -1650,6 +1665,7 @@ func TestHandleEC2ModifyInstanceAttribute_ClearsStateReason(t *testing.T) {
 		ID:           instanceID,
 		Status:       vm.StateStopped,
 		InstanceType: "m7i.small",
+		AccountID:    testAccountID,
 		Config:       vm.Config{InstanceType: "m7i.small"},
 		Instance: &ec2.Instance{
 			InstanceId:   aws.String(instanceID),
@@ -1669,7 +1685,7 @@ func TestHandleEC2ModifyInstanceAttribute_ClearsStateReason(t *testing.T) {
 		InstanceType: &ec2.AttributeValue{Value: aws.String("t3.micro")},
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, `{}`, string(reply.Data))
 
@@ -1696,6 +1712,7 @@ func TestHandleEC2ModifyInstanceAttribute_InvalidTypeAccepted(t *testing.T) {
 		ID:           instanceID,
 		Status:       vm.StateStopped,
 		InstanceType: "t3.micro",
+		AccountID:    testAccountID,
 		Config:       vm.Config{InstanceType: "t3.micro"},
 		Instance: &ec2.Instance{
 			InstanceId:   aws.String(instanceID),
@@ -1712,7 +1729,7 @@ func TestHandleEC2ModifyInstanceAttribute_InvalidTypeAccepted(t *testing.T) {
 		InstanceType: &ec2.AttributeValue{Value: aws.String("z99.mega")},
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request("ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, `{}`, string(reply.Data))
 
@@ -2518,6 +2535,7 @@ func TestHandleEC2TerminateStoppedInstance_WithVolumes(t *testing.T) {
 	stoppedVM := &vm.VM{
 		ID:           "i-term-vol-001",
 		Status:       vm.StateStopped,
+		AccountID:    testAccountID,
 		InstanceType: getTestInstanceType(),
 		LastNode:     "node-1",
 		Reservation: &ec2.Reservation{
@@ -2545,7 +2563,7 @@ func TestHandleEC2TerminateStoppedInstance_WithVolumes(t *testing.T) {
 	defer sub.Unsubscribe()
 
 	reqData, _ := json.Marshal(map[string]string{"instance_id": "i-term-vol-001"})
-	reply, err := daemon.natsConn.Request("ec2.terminate", reqData, 10*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.terminate", reqData, 10*time.Second)
 	require.NoError(t, err)
 
 	var resp map[string]string
@@ -2616,6 +2634,7 @@ func TestHandleEC2StartStoppedInstance_InstanceTypeNotAvailable(t *testing.T) {
 		ID:           "i-start-badtype-001",
 		Status:       vm.StateStopped,
 		InstanceType: "z99.nonexistent",
+		AccountID:    testAccountID,
 		Instance: &ec2.Instance{
 			InstanceId:   aws.String("i-start-badtype-001"),
 			InstanceType: aws.String("z99.nonexistent"),
@@ -2630,7 +2649,7 @@ func TestHandleEC2StartStoppedInstance_InstanceTypeNotAvailable(t *testing.T) {
 	defer sub.Unsubscribe()
 
 	reqData, _ := json.Marshal(map[string]string{"instance_id": "i-start-badtype-001"})
-	reply, err := daemon.natsConn.Request("ec2.start", reqData, 5*time.Second)
+	reply, err := natsRequest(daemon.natsConn, "ec2.start", reqData, 5*time.Second)
 	require.NoError(t, err)
 
 	var errResp map[string]any
@@ -2672,6 +2691,7 @@ func TestHandleEC2CreateImage_RunningInstanceReachesService(t *testing.T) {
 		ID:           instanceID,
 		Status:       vm.StateRunning,
 		InstanceType: getTestInstanceType(),
+		AccountID:    testAccountID,
 		Instance: &ec2.Instance{
 			InstanceId: aws.String(instanceID),
 			ImageId:    aws.String(sourceImageID),
@@ -2699,7 +2719,7 @@ func TestHandleEC2CreateImage_RunningInstanceReachesService(t *testing.T) {
 		Name:       aws.String("test-image-snapshot"),
 	}
 	reqData, _ := json.Marshal(input)
-	reply, err := daemon.natsConn.Request(
+	reply, err := natsRequest(daemon.natsConn,
 		fmt.Sprintf("ec2.%s.CreateImage", instanceID),
 		reqData,
 		5*time.Second,
@@ -2720,6 +2740,7 @@ func TestAttachVolume_MissingVolumeData(t *testing.T) {
 	instance := &vm.VM{
 		ID:           instanceID,
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 		InstanceType: getTestInstanceType(),
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
@@ -2743,7 +2764,7 @@ func TestAttachVolume_MissingVolumeData(t *testing.T) {
 	}
 	cmdData, _ := json.Marshal(command)
 
-	resp, err := daemon.natsConn.Request(
+	resp, err := natsRequest(daemon.natsConn,
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
 		cmdData,
 		5*time.Second,
@@ -2759,6 +2780,7 @@ func TestAttachVolume_InstanceNotRunning(t *testing.T) {
 	instance := &vm.VM{
 		ID:           instanceID,
 		Status:       vm.StateStopped,
+		AccountID:    testAccountID,
 		InstanceType: getTestInstanceType(),
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
@@ -2783,7 +2805,7 @@ func TestAttachVolume_InstanceNotRunning(t *testing.T) {
 	}
 	cmdData, _ := json.Marshal(command)
 
-	resp, err := daemon.natsConn.Request(
+	resp, err := natsRequest(daemon.natsConn,
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
 		cmdData,
 		5*time.Second,
@@ -2799,6 +2821,7 @@ func TestAttachVolume_VolumeNotFound(t *testing.T) {
 	instance := &vm.VM{
 		ID:           instanceID,
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 		InstanceType: getTestInstanceType(),
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
@@ -2823,7 +2846,7 @@ func TestAttachVolume_VolumeNotFound(t *testing.T) {
 	}
 	cmdData, _ := json.Marshal(command)
 
-	resp, err := daemon.natsConn.Request(
+	resp, err := natsRequest(daemon.natsConn,
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
 		cmdData,
 		5*time.Second,
@@ -2841,6 +2864,7 @@ func TestAttachVolume_VolumeInUse(t *testing.T) {
 	instance := &vm.VM{
 		ID:           instanceID,
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 		InstanceType: getTestInstanceType(),
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
@@ -2884,7 +2908,7 @@ func TestAttachVolume_VolumeInUse(t *testing.T) {
 	}
 	cmdData, _ := json.Marshal(command)
 
-	resp, err := daemon.natsConn.Request(
+	resp, err := natsRequest(daemon.natsConn,
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
 		cmdData,
 		5*time.Second,
@@ -2902,6 +2926,7 @@ func TestDetachVolume_MissingVolumeData(t *testing.T) {
 	instance := &vm.VM{
 		ID:           instanceID,
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 		InstanceType: getTestInstanceType(),
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
@@ -2924,7 +2949,7 @@ func TestDetachVolume_MissingVolumeData(t *testing.T) {
 	}
 	cmdData, _ := json.Marshal(command)
 
-	resp, err := daemon.natsConn.Request(
+	resp, err := natsRequest(daemon.natsConn,
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
 		cmdData,
 		5*time.Second,
@@ -2940,6 +2965,7 @@ func TestDetachVolume_InstanceNotRunning(t *testing.T) {
 	instance := &vm.VM{
 		ID:           instanceID,
 		Status:       vm.StateStopped,
+		AccountID:    testAccountID,
 		InstanceType: getTestInstanceType(),
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
@@ -2964,7 +2990,7 @@ func TestDetachVolume_InstanceNotRunning(t *testing.T) {
 	}
 	cmdData, _ := json.Marshal(command)
 
-	resp, err := daemon.natsConn.Request(
+	resp, err := natsRequest(daemon.natsConn,
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
 		cmdData,
 		5*time.Second,
@@ -2980,6 +3006,7 @@ func TestDetachVolume_VolumeNotAttached(t *testing.T) {
 	instance := &vm.VM{
 		ID:           instanceID,
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 		InstanceType: getTestInstanceType(),
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
@@ -3004,7 +3031,7 @@ func TestDetachVolume_VolumeNotAttached(t *testing.T) {
 	}
 	cmdData, _ := json.Marshal(command)
 
-	resp, err := daemon.natsConn.Request(
+	resp, err := natsRequest(daemon.natsConn,
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
 		cmdData,
 		5*time.Second,
@@ -3020,6 +3047,7 @@ func TestDetachVolume_BootVolumeRejected(t *testing.T) {
 	instance := &vm.VM{
 		ID:           instanceID,
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 		InstanceType: getTestInstanceType(),
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
@@ -3047,7 +3075,7 @@ func TestDetachVolume_BootVolumeRejected(t *testing.T) {
 	}
 	cmdData, _ := json.Marshal(command)
 
-	resp, err := daemon.natsConn.Request(
+	resp, err := natsRequest(daemon.natsConn,
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
 		cmdData,
 		5*time.Second,
@@ -3063,6 +3091,7 @@ func TestDetachVolume_DeviceMismatch(t *testing.T) {
 	instance := &vm.VM{
 		ID:           instanceID,
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 		InstanceType: getTestInstanceType(),
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
@@ -3091,7 +3120,7 @@ func TestDetachVolume_DeviceMismatch(t *testing.T) {
 	}
 	cmdData, _ := json.Marshal(command)
 
-	resp, err := daemon.natsConn.Request(
+	resp, err := natsRequest(daemon.natsConn,
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
 		cmdData,
 		5*time.Second,

@@ -486,8 +486,8 @@ func (d *Daemon) Start() error {
 
 	// Ensure default VPC exists (matches AWS: every account has a default VPC)
 	if d.vpcService != nil {
-		if err := d.vpcService.EnsureDefaultVPC(handlers_ec2_vpc.GlobalAccountID); err != nil {
-			slog.Warn("Failed to ensure default VPC", "error", err)
+		if err := d.vpcService.EnsureDefaultVPC(utils.GlobalAccountID); err != nil {
+			slog.Error("Failed to ensure default VPC", "error", err)
 		}
 	}
 
@@ -1384,7 +1384,7 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 					NetworkInterfaceId: &instance.ENIId,
 				}, instance.AccountID)
 				if eniErr != nil {
-					slog.Warn("Failed to delete ENI on termination", "eni", instance.ENIId, "err", eniErr)
+					slog.Error("Failed to delete ENI on termination", "eni", instance.ENIId, "err", eniErr)
 				} else {
 					slog.Info("Deleted ENI on termination", "eni", instance.ENIId, "instanceId", instance.ID)
 				}

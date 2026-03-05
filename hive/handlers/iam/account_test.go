@@ -5,6 +5,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/iam"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -229,28 +230,28 @@ func TestSeedRootUser_AccountScoped(t *testing.T) {
 	err = svc.SeedRootUser(&BootstrapData{
 		AccessKeyID:     "AKIAROOTEXAMPLE12345",
 		EncryptedSecret: encryptedSecret,
-		AccountID:       GlobalAccountID,
+		AccountID:       utils.GlobalAccountID,
 	})
 	require.NoError(t, err)
 
 	// Root user stored at 000000000000:root
-	out, err := svc.GetUser(GlobalAccountID, &iam.GetUserInput{
+	out, err := svc.GetUser(utils.GlobalAccountID, &iam.GetUserInput{
 		UserName: aws.String("root"),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "root", *out.User.UserName)
-	assert.Contains(t, *out.User.Arn, GlobalAccountID)
+	assert.Contains(t, *out.User.Arn, utils.GlobalAccountID)
 
 	// Access key has correct AccountID
 	ak, err := svc.LookupAccessKey("AKIAROOTEXAMPLE12345")
 	require.NoError(t, err)
-	assert.Equal(t, GlobalAccountID, ak.AccountID)
+	assert.Equal(t, utils.GlobalAccountID, ak.AccountID)
 	assert.Equal(t, "root", ak.UserName)
 
 	// Global account record was created
-	account, err := svc.GetAccount(GlobalAccountID)
+	account, err := svc.GetAccount(utils.GlobalAccountID)
 	require.NoError(t, err)
-	assert.Equal(t, GlobalAccountID, account.AccountID)
+	assert.Equal(t, utils.GlobalAccountID, account.AccountID)
 	assert.Equal(t, "Global", account.AccountName)
 	assert.Equal(t, "ACTIVE", account.Status)
 }

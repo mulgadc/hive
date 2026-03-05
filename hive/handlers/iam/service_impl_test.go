@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/mulgadc/hive/hive/admin"
 	"github.com/mulgadc/hive/hive/awserrors"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -18,7 +19,7 @@ import (
 // Interface compliance check
 var _ IAMService = (*IAMServiceImpl)(nil)
 
-const testAccountID = GlobalAccountID
+const testAccountID = utils.GlobalAccountID
 
 func setupTestIAMService(t *testing.T) *IAMServiceImpl {
 	t.Helper()
@@ -570,24 +571,24 @@ func TestSeedRootUser(t *testing.T) {
 	err = svc.SeedRootUser(&BootstrapData{
 		AccessKeyID:     "AKIAEXAMPLE123456789",
 		EncryptedSecret: encryptedSecret,
-		AccountID:       GlobalAccountID,
+		AccountID:       utils.GlobalAccountID,
 	})
 	require.NoError(t, err)
 
 	// Verify root user exists at account-scoped key
-	out, err := svc.GetUser(GlobalAccountID, &iam.GetUserInput{
+	out, err := svc.GetUser(utils.GlobalAccountID, &iam.GetUserInput{
 		UserName: aws.String("root"),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "root", *out.User.UserName)
-	assert.Contains(t, *out.User.Arn, GlobalAccountID)
+	assert.Contains(t, *out.User.Arn, utils.GlobalAccountID)
 	assert.Contains(t, *out.User.Arn, "root")
 
 	// Verify access key exists with AccountID
 	ak, err := svc.LookupAccessKey("AKIAEXAMPLE123456789")
 	require.NoError(t, err)
 	assert.Equal(t, "root", ak.UserName)
-	assert.Equal(t, GlobalAccountID, ak.AccountID)
+	assert.Equal(t, utils.GlobalAccountID, ak.AccountID)
 	assert.Equal(t, "Active", ak.Status)
 
 	// Verify secret is decryptable
@@ -596,9 +597,9 @@ func TestSeedRootUser(t *testing.T) {
 	assert.Equal(t, "test-secret-key", decrypted)
 
 	// Verify global account record was created
-	account, err := svc.GetAccount(GlobalAccountID)
+	account, err := svc.GetAccount(utils.GlobalAccountID)
 	require.NoError(t, err)
-	assert.Equal(t, GlobalAccountID, account.AccountID)
+	assert.Equal(t, utils.GlobalAccountID, account.AccountID)
 	assert.Equal(t, "Global", account.AccountName)
 	assert.Equal(t, "ACTIVE", account.Status)
 }
@@ -610,7 +611,7 @@ func TestSeedRootUser_Idempotent(t *testing.T) {
 	data := &BootstrapData{
 		AccessKeyID:     "AKIAEXAMPLE123456789",
 		EncryptedSecret: encryptedSecret,
-		AccountID:       GlobalAccountID,
+		AccountID:       utils.GlobalAccountID,
 	}
 
 	// First call seeds
@@ -622,7 +623,7 @@ func TestSeedRootUser_Idempotent(t *testing.T) {
 	require.NoError(t, err)
 
 	// Root user should still exist with original data
-	out, err := svc.GetUser(GlobalAccountID, &iam.GetUserInput{
+	out, err := svc.GetUser(utils.GlobalAccountID, &iam.GetUserInput{
 		UserName: aws.String("root"),
 	})
 	require.NoError(t, err)

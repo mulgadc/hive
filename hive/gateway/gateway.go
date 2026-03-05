@@ -19,6 +19,7 @@ import (
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/gateway/policy"
 	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats.go"
 )
 
@@ -199,7 +200,7 @@ func (gw *GatewayConfig) checkPolicy(ctx *fiber.Ctx, service, action string) err
 		return errors.New(awserrors.ErrorInternalError)
 	}
 
-	if identity == "" || (identity == "root" && accountID == handlers_iam.GlobalAccountID) {
+	if identity == "" || (identity == "root" && accountID == utils.GlobalAccountID) {
 		return nil
 	}
 

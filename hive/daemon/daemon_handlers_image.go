@@ -66,9 +66,7 @@ func (d *Daemon) handleEC2CreateImage(msg *nats.Msg) {
 	}
 
 	// Verify the caller owns this instance
-	if accountID != "" && instance.AccountID != "" && instance.AccountID != accountID {
-		slog.Warn("CreateImage: account does not own instance", "instanceId", instanceID, "accountID", accountID, "ownerAccountID", instance.AccountID)
-		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
+	if !checkInstanceOwnership(msg, instanceID, instance.AccountID) {
 		return
 	}
 

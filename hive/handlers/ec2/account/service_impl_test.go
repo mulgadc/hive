@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -169,6 +170,6 @@ func TestSerialConsole_MultiAccountIsolation(t *testing.T) {
 }
 
 func TestSettingsKey_EmptyAccountIDFallback(t *testing.T) {
-	assert.Equal(t, "default", settingsKey(""))
+	assert.Equal(t, utils.GlobalAccountID, settingsKey(""))
 	assert.Equal(t, "123456789012", settingsKey("123456789012"))
 }

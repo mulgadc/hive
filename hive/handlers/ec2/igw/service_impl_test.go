@@ -6,6 +6,8 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	handlers_ec2_vpc "github.com/mulgadc/hive/hive/handlers/ec2/vpc"
+	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -31,6 +33,16 @@ func setupTestIGWService(t *testing.T) (*IGWServiceImpl, *nats.Conn) {
 	nc, err := nats.Connect(ns.ClientURL())
 	require.NoError(t, err)
 	t.Cleanup(func() { nc.Close() })
+
+	// Create VPC KV bucket and register test VPCs so fail-closed ownership checks pass
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	vpcKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketVPCs, History: 1})
+	require.NoError(t, err)
+	for _, vpcID := range []string{"vpc-test123", "vpc-other", "vpc-lifecycle", "vpc-event-test"} {
+		_, err = vpcKV.Put(utils.AccountKey(testAccountID, vpcID), []byte(`{"vpc_id":"`+vpcID+`","state":"available"}`))
+		require.NoError(t, err)
+	}
 
 	svc, err := NewIGWServiceImplWithNATS(nil, nc)
 	require.NoError(t, err)
@@ -458,11 +470,11 @@ func TestAttachInternetGateway_CrossAccountVPCRejected(t *testing.T) {
 	// Create VPC KV bucket and add a VPC owned by testAccountID
 	js, err := nc.JetStream()
 	require.NoError(t, err)
-	vpcKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: kvBucketVPCs, History: 1})
+	vpcKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketVPCs, History: 1})
 	require.NoError(t, err)
 
 	vpcID := "vpc-alpha123"
-	_, err = vpcKV.Put(accountKey(testAccountID, vpcID), []byte(`{"vpc_id":"vpc-alpha123","state":"available"}`))
+	_, err = vpcKV.Put(utils.AccountKey(testAccountID, vpcID), []byte(`{"vpc_id":"vpc-alpha123","state":"available"}`))
 	require.NoError(t, err)
 
 	// Refresh service to pick up the VPC KV bucket

@@ -860,12 +860,14 @@ func TestDaemon_BootAllocation(t *testing.T) {
 			ID:           "i-running",
 			InstanceType: getTestInstanceType(),
 			Status:       vm.StateRunning,
+			AccountID:    testAccountID,
 			Attributes:   qmp.Attributes{StopInstance: false},
 		},
 		"i-stopped": {
 			ID:           "i-stopped",
 			InstanceType: getTestInstanceType(),
 			Status:       vm.StateStopped,
+			AccountID:    testAccountID,
 			Attributes:   qmp.Attributes{StopInstance: true},
 		},
 		"i-terminated": {
@@ -940,6 +942,7 @@ func TestStopInstance_Deallocation(t *testing.T) {
 		ID:           instanceId,
 		InstanceType: instanceTypeStr,
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 	}
 
 	err := daemon.resourceMgr.allocate(instanceType)
@@ -1123,6 +1126,7 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 		daemon.Instances.VMS[instanceID] = &vm.VM{
 			ID:          instanceID,
 			Status:      vm.StateRunning,
+			AccountID:   testAccountID,
 			Reservation: reservation1,
 			Instance:    ec2Instance,
 		}
@@ -1142,6 +1146,7 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 		daemon.Instances.VMS[instanceID] = &vm.VM{
 			ID:          instanceID,
 			Status:      vm.StateRunning,
+			AccountID:   testAccountID,
 			Reservation: reservation2,
 			Instance:    ec2Instance,
 		}
@@ -1159,6 +1164,7 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 	daemon.Instances.VMS["i-single-001"] = &vm.VM{
 		ID:          "i-single-001",
 		Status:      vm.StateStopped,
+		AccountID:   testAccountID,
 		Reservation: reservation3,
 		Instance:    ec2Instance,
 	}
@@ -1172,7 +1178,7 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 		input := &ec2.DescribeInstancesInput{}
 		inputJSON, _ := json.Marshal(input)
 
-		resp, err := daemon.natsConn.Request("ec2.DescribeInstances", inputJSON, 5*time.Second)
+		resp, err := natsRequest(daemon.natsConn, "ec2.DescribeInstances", inputJSON, 5*time.Second)
 		require.NoError(t, err)
 
 		var output ec2.DescribeInstancesOutput
@@ -1202,7 +1208,7 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 		}
 		inputJSON, _ := json.Marshal(input)
 
-		resp, err := daemon.natsConn.Request("ec2.DescribeInstances", inputJSON, 5*time.Second)
+		resp, err := natsRequest(daemon.natsConn, "ec2.DescribeInstances", inputJSON, 5*time.Second)
 		require.NoError(t, err)
 
 		var output ec2.DescribeInstancesOutput
@@ -1226,7 +1232,7 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 		}
 		inputJSON, _ := json.Marshal(input)
 
-		resp, err := daemon.natsConn.Request("ec2.DescribeInstances", inputJSON, 5*time.Second)
+		resp, err := natsRequest(daemon.natsConn, "ec2.DescribeInstances", inputJSON, 5*time.Second)
 		require.NoError(t, err)
 
 		var output ec2.DescribeInstancesOutput
@@ -1250,7 +1256,7 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 		}
 		inputJSON, _ := json.Marshal(input)
 
-		resp, err := daemon.natsConn.Request("ec2.DescribeInstances", inputJSON, 5*time.Second)
+		resp, err := natsRequest(daemon.natsConn, "ec2.DescribeInstances", inputJSON, 5*time.Second)
 		require.NoError(t, err)
 
 		var output ec2.DescribeInstancesOutput
@@ -1268,7 +1274,7 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 		input := &ec2.DescribeInstancesInput{}
 		inputJSON, _ := json.Marshal(input)
 
-		resp, err := daemon.natsConn.Request("ec2.DescribeInstances", inputJSON, 5*time.Second)
+		resp, err := natsRequest(daemon.natsConn, "ec2.DescribeInstances", inputJSON, 5*time.Second)
 		require.NoError(t, err)
 
 		var output ec2.DescribeInstancesOutput
@@ -1752,6 +1758,7 @@ func TestStopInstance_DeleteOnTermination_VolumeDeletion(t *testing.T) {
 		ID:           "i-test-dot",
 		InstanceType: getTestInstanceType(),
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 		QMPClient:    &qmp.QMPClient{}, // nil encoder/decoder => QMP will fail, which is fine
 		EBSRequests: config.EBSRequests{
 			Requests: []config.EBSRequest{
@@ -1849,6 +1856,7 @@ func TestStopInstance_DeleteOnTermination_False_SkipsVolumeDeletion(t *testing.T
 		ID:           "i-test-no-delete",
 		InstanceType: getTestInstanceType(),
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 		QMPClient:    &qmp.QMPClient{},
 		EBSRequests: config.EBSRequests{
 			Requests: []config.EBSRequest{
@@ -1935,6 +1943,7 @@ func TestStopInstance_NoDelete_OnStop(t *testing.T) {
 		ID:           "i-test-stop-only",
 		InstanceType: getTestInstanceType(),
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 		QMPClient:    &qmp.QMPClient{},
 		EBSRequests: config.EBSRequests{
 			Requests: []config.EBSRequest{
@@ -1986,6 +1995,7 @@ func TestHandleEC2Events_AttachVolume(t *testing.T) {
 		ID:           instanceID,
 		InstanceType: instanceType,
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{}, // nil encoder/decoder
 	}
@@ -2009,7 +2019,7 @@ func TestHandleEC2Events_AttachVolume(t *testing.T) {
 		}
 		data, _ := json.Marshal(command)
 
-		resp, err := daemon.natsConn.Request(
+		resp, err := natsRequest(daemon.natsConn,
 			fmt.Sprintf("ec2.cmd.%s", instanceID),
 			data,
 			5*time.Second,
@@ -2037,7 +2047,7 @@ func TestHandleEC2Events_AttachVolume(t *testing.T) {
 		}
 		data, _ := json.Marshal(command)
 
-		resp, err := daemon.natsConn.Request(
+		resp, err := natsRequest(daemon.natsConn,
 			fmt.Sprintf("ec2.cmd.%s", instanceID),
 			data,
 			5*time.Second,
@@ -2065,7 +2075,7 @@ func TestHandleEC2Events_AttachVolume(t *testing.T) {
 		}
 		data, _ := json.Marshal(command)
 
-		resp, err := daemon.natsConn.Request(
+		resp, err := natsRequest(daemon.natsConn,
 			fmt.Sprintf("ec2.cmd.%s", instanceID),
 			data,
 			5*time.Second,
@@ -2114,6 +2124,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 		ID:           instanceID,
 		InstanceType: instanceType,
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 		Instance: &ec2.Instance{
 			BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{
 				{
@@ -2154,7 +2165,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 		}
 		data, _ := json.Marshal(command)
 
-		resp, err := daemon.natsConn.Request(
+		resp, err := natsRequest(daemon.natsConn,
 			fmt.Sprintf("ec2.cmd.%s", instanceID),
 			data,
 			5*time.Second,
@@ -2180,7 +2191,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 		}
 		data, _ := json.Marshal(command)
 
-		resp, err := daemon.natsConn.Request(
+		resp, err := natsRequest(daemon.natsConn,
 			fmt.Sprintf("ec2.cmd.%s", instanceID),
 			data,
 			5*time.Second,
@@ -2206,7 +2217,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 		}
 		data, _ := json.Marshal(command)
 
-		resp, err := daemon.natsConn.Request(
+		resp, err := natsRequest(daemon.natsConn,
 			fmt.Sprintf("ec2.cmd.%s", instanceID),
 			data,
 			5*time.Second,
@@ -2237,7 +2248,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 		}
 		data, _ := json.Marshal(command)
 
-		resp, err := daemon.natsConn.Request(
+		resp, err := natsRequest(daemon.natsConn,
 			fmt.Sprintf("ec2.cmd.%s", instanceID),
 			data,
 			5*time.Second,
@@ -2272,7 +2283,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 		}
 		data, _ := json.Marshal(command)
 
-		resp, err := daemon.natsConn.Request(
+		resp, err := natsRequest(daemon.natsConn,
 			fmt.Sprintf("ec2.cmd.%s", instanceID),
 			data,
 			5*time.Second,
@@ -2306,7 +2317,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 		}
 		data, _ := json.Marshal(command)
 
-		resp, err := daemon.natsConn.Request(
+		resp, err := natsRequest(daemon.natsConn,
 			fmt.Sprintf("ec2.cmd.%s", instanceID),
 			data,
 			5*time.Second,
@@ -2332,7 +2343,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 		}
 		data, _ := json.Marshal(command)
 
-		resp, err := daemon.natsConn.Request(
+		resp, err := natsRequest(daemon.natsConn,
 			fmt.Sprintf("ec2.cmd.%s", instanceID),
 			data,
 			5*time.Second,
@@ -2356,7 +2367,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 		}
 		data, _ := json.Marshal(command)
 
-		resp, err := daemon.natsConn.Request(
+		resp, err := natsRequest(daemon.natsConn,
 			fmt.Sprintf("ec2.cmd.%s", instanceID),
 			data,
 			5*time.Second,
@@ -2450,6 +2461,7 @@ func TestDetachVolume_SuccessPath(t *testing.T) {
 		ID:           instanceID,
 		InstanceType: instanceType,
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 		Instance: &ec2.Instance{
 			BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{
 				{
@@ -2515,7 +2527,7 @@ func TestDetachVolume_SuccessPath(t *testing.T) {
 	}
 	data, _ := json.Marshal(command)
 
-	resp, err := daemon.natsConn.Request(
+	resp, err := natsRequest(daemon.natsConn,
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
 		data,
 		10*time.Second,
@@ -2603,6 +2615,7 @@ func TestDetachVolume_ForceFlag(t *testing.T) {
 		ID:           instanceID,
 		InstanceType: instanceType,
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 		Instance: &ec2.Instance{
 			BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{
 				{
@@ -2654,7 +2667,7 @@ func TestDetachVolume_ForceFlag(t *testing.T) {
 	}
 	data, _ := json.Marshal(command)
 
-	resp, err := daemon.natsConn.Request(
+	resp, err := natsRequest(daemon.natsConn,
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
 		data,
 		10*time.Second,
@@ -2716,6 +2729,7 @@ func TestDetachVolume_BlockdevDelFailure(t *testing.T) {
 		ID:           instanceID,
 		InstanceType: instanceType,
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 		Instance: &ec2.Instance{
 			BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{
 				{
@@ -2757,7 +2771,7 @@ func TestDetachVolume_BlockdevDelFailure(t *testing.T) {
 	}
 	data, _ := json.Marshal(command)
 
-	resp, err := daemon.natsConn.Request(
+	resp, err := natsRequest(daemon.natsConn,
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
 		data,
 		10*time.Second,
@@ -2807,6 +2821,7 @@ func TestDetachVolume_SuccessWithDeviceMatch(t *testing.T) {
 		ID:           instanceID,
 		InstanceType: instanceType,
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 		Instance: &ec2.Instance{
 			BlockDeviceMappings: []*ec2.InstanceBlockDeviceMapping{
 				{
@@ -2857,7 +2872,7 @@ func TestDetachVolume_SuccessWithDeviceMatch(t *testing.T) {
 	}
 	data, _ := json.Marshal(command)
 
-	resp, err := daemon.natsConn.Request(
+	resp, err := natsRequest(daemon.natsConn,
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
 		data,
 		10*time.Second,
@@ -2891,6 +2906,7 @@ func TestAttachVolume_ReplacesStaleEBSRequest(t *testing.T) {
 		ID:           instanceID,
 		InstanceType: instanceType,
 		Status:       vm.StateRunning,
+		AccountID:    testAccountID,
 		Instance:     &ec2.Instance{},
 		QMPClient:    qmpClient,
 		EBSRequests: config.EBSRequests{
@@ -2933,7 +2949,7 @@ func TestAttachVolume_ReplacesStaleEBSRequest(t *testing.T) {
 	}
 	data, _ := json.Marshal(command)
 
-	resp, err := daemon.natsConn.Request(
+	resp, err := natsRequest(daemon.natsConn,
 		fmt.Sprintf("ec2.cmd.%s", instanceID),
 		data,
 		10*time.Second,
@@ -3236,6 +3252,7 @@ func TestMarkInstanceFailed(t *testing.T) {
 		ID:           instanceID,
 		InstanceType: getTestInstanceType(),
 		Status:       vm.StatePending,
+		AccountID:    testAccountID,
 		Instance:     ec2Instance,
 		QMPClient:    &qmp.QMPClient{},
 	}
@@ -3267,6 +3284,7 @@ func TestMarkInstanceFailed_NilInstance(t *testing.T) {
 		ID:           instanceID,
 		InstanceType: getTestInstanceType(),
 		Status:       vm.StatePending,
+		AccountID:    testAccountID,
 		Instance:     nil, // no ec2.Instance
 		QMPClient:    &qmp.QMPClient{},
 	}
@@ -3389,7 +3407,7 @@ func TestDescribeInstances_InvalidInstanceIDMalformed(t *testing.T) {
 		}
 		inputJSON, _ := json.Marshal(input)
 
-		resp, err := daemon.natsConn.Request("ec2.DescribeInstances", inputJSON, 5*time.Second)
+		resp, err := natsRequest(daemon.natsConn, "ec2.DescribeInstances", inputJSON, 5*time.Second)
 		require.NoError(t, err)
 		assert.Contains(t, string(resp.Data), "InvalidInstanceID.Malformed")
 	})
@@ -3400,7 +3418,7 @@ func TestDescribeInstances_InvalidInstanceIDMalformed(t *testing.T) {
 		}
 		inputJSON, _ := json.Marshal(input)
 
-		resp, err := daemon.natsConn.Request("ec2.DescribeInstances", inputJSON, 5*time.Second)
+		resp, err := natsRequest(daemon.natsConn, "ec2.DescribeInstances", inputJSON, 5*time.Second)
 		require.NoError(t, err)
 		// Should not contain a malformed error — returns empty results instead
 		assert.NotContains(t, string(resp.Data), "InvalidInstanceID.Malformed")
@@ -3419,6 +3437,7 @@ func TestStopTerminate_IncorrectInstanceState(t *testing.T) {
 		ID:           instanceID,
 		InstanceType: getTestInstanceType(),
 		Status:       vm.StateStopped,
+		AccountID:    testAccountID,
 		Instance:     &ec2.Instance{},
 	}
 	daemon.Instances.VMS[instanceID] = instance
@@ -3443,7 +3462,7 @@ func TestStopTerminate_IncorrectInstanceState(t *testing.T) {
 		}
 		data, _ := json.Marshal(command)
 
-		resp, err := daemon.natsConn.Request(
+		resp, err := natsRequest(daemon.natsConn,
 			fmt.Sprintf("ec2.cmd.%s", instanceID),
 			data,
 			5*time.Second,
@@ -3466,7 +3485,7 @@ func TestStopTerminate_IncorrectInstanceState(t *testing.T) {
 		}
 		data, _ := json.Marshal(command)
 
-		resp, err := daemon.natsConn.Request(
+		resp, err := natsRequest(daemon.natsConn,
 			fmt.Sprintf("ec2.cmd.%s", instanceID),
 			data,
 			5*time.Second,
