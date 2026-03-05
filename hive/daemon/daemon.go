@@ -24,7 +24,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/gofiber/fiber/v2"
+	"github.com/go-chi/chi/v5"
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	handlers_ec2_account "github.com/mulgadc/hive/hive/handlers/ec2/account"
@@ -45,6 +45,7 @@ import (
 	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/nats-io/nats.go"
 	"github.com/pelletier/go-toml/v2"
+	"net/http"
 )
 
 type BlockDeviceMapping struct {
@@ -112,9 +113,9 @@ type Daemon struct {
 	natsSubscriptions map[string]*nats.Subscription
 
 	// Cluster manager
-	clusterApp *fiber.App
-	startTime  time.Time
-	configPath string
+	clusterServer *http.Server
+	startTime     time.Time
+	configPath    string
 
 	// JetStream manager for KV state storage (nil if JetStream disabled)
 	jsManager *JetStreamManager
@@ -984,19 +985,16 @@ func (d *Daemon) ClusterManager() error {
 		return fmt.Errorf("daemon.host not configured")
 	}
 
-	// Create Fiber app
-	d.clusterApp = fiber.New(fiber.Config{
-		DisableStartupMessage: true,
-		AppName:               "Hive Cluster Manager",
-	})
+	r := chi.NewRouter()
 
 	// Health endpoint - responds to HTTP and NATS
-	d.clusterApp.Get("/health", func(c *fiber.Ctx) error {
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		configHash, err := d.computeConfigHash()
 		if err != nil {
-			return c.Status(500).JSON(fiber.Map{
-				"error": "failed to compute config hash",
-			})
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(500)
+			_, _ = w.Write([]byte(`{"error":"failed to compute config hash"}`))
+			return
 		}
 
 		serviceHealth := make(map[string]string)
@@ -1040,35 +1038,45 @@ func (d *Daemon) ClusterManager() error {
 			ServiceHealth: serviceHealth,
 		}
 
-		return c.JSON(response)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
 	})
 
 	// Join endpoint - accepts new nodes joining the cluster
-	d.clusterApp.Post("/join", func(c *fiber.Ctx) error {
+	r.Post("/join", func(w http.ResponseWriter, r *http.Request) {
 		var req config.NodeJoinRequest
-		if err := c.BodyParser(&req); err != nil {
-			return c.Status(400).JSON(config.NodeJoinResponse{
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(400)
+			_ = json.NewEncoder(w).Encode(config.NodeJoinResponse{
 				Success: false,
 				Message: "invalid request body",
 			})
+			return
 		}
 
 		slog.Info("Node join request received", "node", req.Node, "region", req.Region, "az", req.AZ)
 
 		// Validate request
 		if req.Node == "" || req.Region == "" || req.AZ == "" {
-			return c.Status(400).JSON(config.NodeJoinResponse{
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(400)
+			_ = json.NewEncoder(w).Encode(config.NodeJoinResponse{
 				Success: false,
 				Message: "node, region, and az are required",
 			})
+			return
 		}
 
 		// Check if node already exists
 		if _, exists := d.clusterConfig.Nodes[req.Node]; exists {
-			return c.Status(409).JSON(config.NodeJoinResponse{
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(409)
+			_ = json.NewEncoder(w).Encode(config.NodeJoinResponse{
 				Success: false,
 				Message: fmt.Sprintf("node %s already exists in cluster", req.Node),
 			})
+			return
 		}
 
 		// Add new node to cluster config
@@ -1095,10 +1103,13 @@ func (d *Daemon) ClusterManager() error {
 		// Save updated config
 		if err := d.saveClusterConfig(); err != nil {
 			slog.Error("Failed to save cluster config", "error", err)
-			return c.Status(500).JSON(config.NodeJoinResponse{
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(500)
+			_ = json.NewEncoder(w).Encode(config.NodeJoinResponse{
 				Success: false,
 				Message: "failed to save cluster config",
 			})
+			return
 		}
 
 		configHash, _ := d.computeConfigHash()
@@ -1149,7 +1160,8 @@ func (d *Daemon) ClusterManager() error {
 			slog.Warn("Could not read predastore.toml for join response", "path", predastorePath, "error", err)
 		}
 
-		return c.JSON(config.NodeJoinResponse{
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(config.NodeJoinResponse{
 			Success:          true,
 			Message:          fmt.Sprintf("node %s successfully joined cluster", req.Node),
 			SharedData:       sharedData,
@@ -1162,19 +1174,25 @@ func (d *Daemon) ClusterManager() error {
 	})
 
 	// Get cluster config endpoint
-	d.clusterApp.Get("/config", func(c *fiber.Ctx) error {
+	r.Get("/config", func(w http.ResponseWriter, r *http.Request) {
 		configHash, _ := d.computeConfigHash()
 
-		return c.JSON(fiber.Map{
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"config":      d.clusterConfig,
 			"config_hash": configHash,
 		})
 	})
 
 	// Start HTTP server in goroutine
+	d.clusterServer = &http.Server{
+		Addr:              daemonHost,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 	go func() {
 		slog.Info("Starting cluster manager", "host", daemonHost)
-		if err := d.clusterApp.Listen(daemonHost); err != nil {
+		if err := d.clusterServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("Cluster manager failed to start", "error", err)
 		}
 	}()
@@ -1465,9 +1483,9 @@ func (d *Daemon) setupShutdown() {
 		d.natsConn.Close()
 
 		// Shutdown cluster manager
-		if d.clusterApp != nil {
+		if d.clusterServer != nil {
 			slog.Info("Shutting down cluster manager...")
-			if err := d.clusterApp.Shutdown(); err != nil {
+			if err := d.clusterServer.Shutdown(context.Background()); err != nil {
 				slog.Error("Error shutting down cluster manager", "err", err)
 			}
 		}

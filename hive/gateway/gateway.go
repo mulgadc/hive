@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/mulgadc/hive/hive/awsec2query"
 	"github.com/mulgadc/hive/hive/awserrors"
@@ -91,7 +90,7 @@ func (gw *GatewayConfig) SetupRoutes() http.Handler {
 	r := chi.NewRouter()
 
 	if !gw.DisableLogging {
-		r.Use(chimw.Logger)
+		r.Use(slogRequestLogger)
 	}
 
 	// CORS middleware for browser requests
@@ -418,4 +417,25 @@ func (gw *GatewayConfig) DiscoverActiveNodes() int {
 
 	slog.Debug("DiscoverActiveNodes: Discovered active nodes", "count", activeNodes)
 	return activeNodes
+}
+
+// statusWriter wraps http.ResponseWriter to capture the status code.
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// SlogRequestLogger is a middleware that logs each request using slog.
+func slogRequestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		ww := &statusWriter{ResponseWriter: w, status: 200}
+		next.ServeHTTP(ww, r)
+		slog.Info("request", "method", r.Method, "path", r.URL.Path, "status", ww.status, "duration", time.Since(start))
+	})
 }
