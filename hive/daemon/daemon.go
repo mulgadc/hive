@@ -796,7 +796,11 @@ func (d *Daemon) restoreInstances() {
 		instance := d.Instances.VMS[i]
 
 		if instance.Status == vm.StateTerminated {
-			d.migrateTerminatedToKV(instance)
+			if !d.migrateTerminatedToKV(instance) {
+				// KV write failed — still remove from local map. The VM is gone;
+				// keeping it here would make it retry forever on every restart.
+				delete(d.Instances.VMS, instance.ID)
+			}
 			continue
 		}
 

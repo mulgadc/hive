@@ -153,18 +153,18 @@ func isStreamUnavailable(err error) bool {
 	return strings.Contains(err.Error(), "stream not found")
 }
 
-// recoverKVBucket attempts to reconnect to or re-create the instance-state KV bucket
-// after the underlying JetStream stream was lost during cluster formation.
-// Returns the recovered KV handle directly so callers avoid a racy re-read of m.kv.
-func (m *JetStreamManager) recoverKVBucket() (nats.KeyValue, error) {
+// recoverBucket attempts to reconnect to or re-create a KV bucket after the
+// underlying JetStream stream was lost during cluster formation.
+// Returns the recovered KV handle directly so callers avoid a racy re-read.
+func (m *JetStreamManager) recoverBucket(cfg *nats.KeyValueConfig, field *nats.KeyValue) (nats.KeyValue, error) {
 	m.kvMu.Lock()
 	defer m.kvMu.Unlock()
 
 	// Try to reconnect to existing bucket first (another goroutine may have recovered it)
-	kv, err := m.js.KeyValue(InstanceStateBucket)
+	kv, err := m.js.KeyValue(cfg.Bucket)
 	if err == nil {
-		m.kv = kv
-		slog.Info("Reconnected to KV bucket", "bucket", InstanceStateBucket)
+		*field = kv
+		slog.Info("Reconnected to KV bucket", "bucket", cfg.Bucket)
 		return kv, nil
 	}
 
@@ -173,56 +173,33 @@ func (m *JetStreamManager) recoverKVBucket() (nats.KeyValue, error) {
 	}
 
 	// Bucket truly doesn't exist — recreate it
-	slog.Warn("KV bucket stream lost, recreating", "bucket", InstanceStateBucket, "replicas", m.replicas)
-	kv, err = m.js.CreateKeyValue(&nats.KeyValueConfig{
-		Bucket:      InstanceStateBucket,
-		Description: "Hive instance state storage",
-		History:     1,
-		Replicas:    m.replicas,
-	})
+	slog.Warn("KV bucket stream lost, recreating", "bucket", cfg.Bucket, "replicas", m.replicas)
+	cfg.History = 1
+	cfg.Replicas = m.replicas
+	kv, err = m.js.CreateKeyValue(cfg)
 	if err != nil {
-		slog.Error("Failed to recreate KV bucket", "bucket", InstanceStateBucket, "err", err)
+		slog.Error("Failed to recreate KV bucket", "bucket", cfg.Bucket, "err", err)
 		return nil, err
 	}
 
-	m.kv = kv
-	slog.Info("KV bucket recreated successfully", "bucket", InstanceStateBucket)
+	*field = kv
+	slog.Info("KV bucket recreated successfully", "bucket", cfg.Bucket)
 	return kv, nil
 }
 
-// recoverTerminatedKVBucket attempts to reconnect to or re-create the terminated-instances
-// KV bucket after the underlying JetStream stream was lost during cluster formation.
+func (m *JetStreamManager) recoverKVBucket() (nats.KeyValue, error) {
+	return m.recoverBucket(&nats.KeyValueConfig{
+		Bucket:      InstanceStateBucket,
+		Description: "Hive instance state storage",
+	}, &m.kv)
+}
+
 func (m *JetStreamManager) recoverTerminatedKVBucket() (nats.KeyValue, error) {
-	m.kvMu.Lock()
-	defer m.kvMu.Unlock()
-
-	kv, err := m.js.KeyValue(TerminatedInstanceBucket)
-	if err == nil {
-		m.terminatedKV = kv
-		slog.Info("Reconnected to KV bucket", "bucket", TerminatedInstanceBucket)
-		return kv, nil
-	}
-
-	if !errors.Is(err, nats.ErrBucketNotFound) && !isStreamUnavailable(err) {
-		return nil, err
-	}
-
-	slog.Warn("KV bucket stream lost, recreating", "bucket", TerminatedInstanceBucket, "replicas", m.replicas)
-	kv, err = m.js.CreateKeyValue(&nats.KeyValueConfig{
+	return m.recoverBucket(&nats.KeyValueConfig{
 		Bucket:      TerminatedInstanceBucket,
 		Description: "Terminated instances (auto-expire after 1 hour)",
-		History:     1,
-		Replicas:    m.replicas,
 		TTL:         1 * time.Hour,
-	})
-	if err != nil {
-		slog.Error("Failed to recreate KV bucket", "bucket", TerminatedInstanceBucket, "err", err)
-		return nil, err
-	}
-
-	m.terminatedKV = kv
-	slog.Info("KV bucket recreated successfully", "bucket", TerminatedInstanceBucket)
-	return kv, nil
+	}, &m.terminatedKV)
 }
 
 // Heartbeat represents a daemon's periodic health status published to cluster KV.

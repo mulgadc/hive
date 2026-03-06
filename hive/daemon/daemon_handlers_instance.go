@@ -824,10 +824,15 @@ func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
 		return
 	}
 
-	// Now safe to remove from shared stopped KV — instance already exists in terminated bucket
+	// Now safe to remove from shared stopped KV — instance already exists in terminated bucket.
+	// Retry once on failure to avoid duplicate entries in DescribeInstances.
 	if err := d.jsManager.DeleteStoppedInstance(req.InstanceID); err != nil {
-		slog.Error("handleEC2TerminateStoppedInstance: failed to delete from stopped KV", "instanceId", req.InstanceID, "err", err)
-		// Non-fatal: instance exists in terminated bucket, stale stopped entry won't cause harm
+		slog.Warn("handleEC2TerminateStoppedInstance: first stopped KV delete failed, retrying",
+			"instanceId", req.InstanceID, "err", err)
+		if retryErr := d.jsManager.DeleteStoppedInstance(req.InstanceID); retryErr != nil {
+			slog.Error("handleEC2TerminateStoppedInstance: stopped KV delete failed after retry, instance may appear in both buckets",
+				"instanceId", req.InstanceID, "err", retryErr)
+		}
 	}
 
 	slog.Info("Terminated stopped instance from shared KV", "instanceId", req.InstanceID)
