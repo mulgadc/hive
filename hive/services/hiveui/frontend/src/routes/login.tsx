@@ -1,5 +1,7 @@
+import { DescribeInstancesCommand } from "@aws-sdk/client-ec2"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router"
+import { useState } from "react"
 import { useForm } from "react-hook-form"
 
 import { Button } from "@/components/ui/button"
@@ -14,9 +16,11 @@ import { Input } from "@/components/ui/input"
 import {
   type AwsCredentials,
   awsCredentialsSchema,
+  clearCredentials,
   getCredentials,
   setCredentials,
 } from "@/lib/auth"
+import { clearClients, getEc2Client } from "@/lib/awsClient"
 
 export const Route = createFileRoute("/login")({
   beforeLoad: () => {
@@ -29,6 +33,7 @@ export const Route = createFileRoute("/login")({
 
 function LoginPage() {
   const navigate = useNavigate()
+  const [authError, setAuthError] = useState<string | null>(null)
   const {
     register,
     handleSubmit,
@@ -37,9 +42,21 @@ function LoginPage() {
     resolver: zodResolver(awsCredentialsSchema),
   })
 
-  function onSubmit(data: AwsCredentials) {
+  async function onSubmit(data: AwsCredentials) {
+    setAuthError(null)
+    // Clear cached clients so the new creds are picked up
+    clearClients()
     setCredentials(data)
-    navigate({ to: "/" })
+    try {
+      await getEc2Client().send(new DescribeInstancesCommand({}))
+      navigate({ to: "/" })
+    } catch {
+      clearCredentials()
+      clearClients()
+      setAuthError(
+        "Invalid credentials. Please check your Access Key ID and Secret Access Key.",
+      )
+    }
   }
 
   return (
@@ -49,6 +66,11 @@ function LoginPage() {
           <CardTitle>AWS Credentials</CardTitle>
         </CardHeader>
         <CardContent>
+          {authError && (
+            <p className="mb-4 rounded-md bg-destructive/10 p-3 text-destructive text-sm">
+              {authError}
+            </p>
+          )}
           <form onSubmit={handleSubmit(onSubmit)}>
             <FieldGroup>
               <Field>
@@ -79,7 +101,7 @@ function LoginPage() {
                 <FieldError errors={[errors.secretAccessKey]} />
               </Field>
               <Button className="w-full" disabled={isSubmitting} type="submit">
-                Sign In
+                {isSubmitting ? "Signing in..." : "Sign In"}
               </Button>
             </FieldGroup>
           </form>
