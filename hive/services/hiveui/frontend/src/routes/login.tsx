@@ -44,15 +44,13 @@ function LoginPage() {
 
   async function onSubmit(data: AwsCredentials) {
     setAuthError(null)
-    // Set credentials and clear cached clients so the new creds are used
-    setCredentials(data)
+    // Clear cached clients so the new creds are picked up
     clearClients()
+    setCredentials(data)
     try {
-      // Validate credentials with a lightweight API call
       await getEc2Client().send(new DescribeInstancesCommand({}))
       navigate({ to: "/" })
     } catch {
-      // Credentials are invalid or server unreachable — clear and show error
       clearCredentials()
       clearClients()
       setAuthError(

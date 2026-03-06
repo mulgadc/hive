@@ -2,7 +2,12 @@ export function StateBadge({ state }: { state: string | undefined }) {
   let className =
     "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-100"
 
-  if (state === "running" || state === "available" || state === "completed") {
+  if (
+    state === "running" ||
+    state === "available" ||
+    state === "completed" ||
+    state === "Active"
+  ) {
     className =
       "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100"
   } else if (state === "stopped" || state === "error") {

@@ -7,19 +7,18 @@ import {
   DeletePolicyCommand,
   DeleteUserCommand,
   DetachUserPolicyCommand,
-  type StatusType,
   UpdateAccessKeyCommand,
 } from "@aws-sdk/client-iam"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 
 import { getIamClient } from "@/lib/awsClient"
-import {
-  iamAccessKeysQueryOptions,
-  iamAttachedUserPoliciesQueryOptions,
-  iamPoliciesQueryOptions,
-  iamUsersQueryOptions,
-} from "@/queries/iam"
-import type { CreatePolicyFormData, CreateUserFormData } from "@/types/iam"
+import type {
+  CreatePolicyFormData,
+  CreateUserFormData,
+  DeleteAccessKeyParams,
+  UpdateAccessKeyParams,
+  UserPolicyParams,
+} from "@/types/iam"
 
 export function useCreateUser() {
   const queryClient = useQueryClient()
@@ -32,7 +31,7 @@ export function useCreateUser() {
       return getIamClient().send(command)
     },
     onSuccess: () => {
-      queryClient.invalidateQueries(iamUsersQueryOptions)
+      queryClient.invalidateQueries({ queryKey: ["iam", "users"] })
     },
   })
 }
@@ -45,7 +44,7 @@ export function useDeleteUser() {
       return getIamClient().send(command)
     },
     onSuccess: () => {
-      queryClient.invalidateQueries(iamUsersQueryOptions)
+      queryClient.invalidateQueries({ queryKey: ["iam", "users"] })
     },
   })
 }
@@ -57,8 +56,8 @@ export function useCreateAccessKey() {
       const command = new CreateAccessKeyCommand({ UserName: userName })
       return getIamClient().send(command)
     },
-    onSuccess: (_data, userName) => {
-      queryClient.invalidateQueries(iamAccessKeysQueryOptions(userName))
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["iam", "access-keys"] })
     },
   })
 }
@@ -66,21 +65,15 @@ export function useCreateAccessKey() {
 export function useDeleteAccessKey() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({
-      userName,
-      accessKeyId,
-    }: {
-      userName: string
-      accessKeyId: string
-    }) => {
+    mutationFn: ({ userName, accessKeyId }: DeleteAccessKeyParams) => {
       const command = new DeleteAccessKeyCommand({
         UserName: userName,
         AccessKeyId: accessKeyId,
       })
       return getIamClient().send(command)
     },
-    onSuccess: (_data, { userName }) => {
-      queryClient.invalidateQueries(iamAccessKeysQueryOptions(userName))
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["iam", "access-keys"] })
     },
   })
 }
@@ -88,15 +81,7 @@ export function useDeleteAccessKey() {
 export function useUpdateAccessKey() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({
-      userName,
-      accessKeyId,
-      status,
-    }: {
-      userName: string
-      accessKeyId: string
-      status: StatusType
-    }) => {
+    mutationFn: ({ userName, accessKeyId, status }: UpdateAccessKeyParams) => {
       const command = new UpdateAccessKeyCommand({
         UserName: userName,
         AccessKeyId: accessKeyId,
@@ -104,8 +89,8 @@ export function useUpdateAccessKey() {
       })
       return getIamClient().send(command)
     },
-    onSuccess: (_data, { userName }) => {
-      queryClient.invalidateQueries(iamAccessKeysQueryOptions(userName))
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["iam", "access-keys"] })
     },
   })
 }
@@ -122,7 +107,7 @@ export function useCreatePolicy() {
       return getIamClient().send(command)
     },
     onSuccess: () => {
-      queryClient.invalidateQueries(iamPoliciesQueryOptions)
+      queryClient.invalidateQueries({ queryKey: ["iam", "policies"] })
     },
   })
 }
@@ -135,7 +120,7 @@ export function useDeletePolicy() {
       return getIamClient().send(command)
     },
     onSuccess: () => {
-      queryClient.invalidateQueries(iamPoliciesQueryOptions)
+      queryClient.invalidateQueries({ queryKey: ["iam", "policies"] })
     },
   })
 }
@@ -143,23 +128,17 @@ export function useDeletePolicy() {
 export function useAttachUserPolicy() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({
-      userName,
-      policyArn,
-    }: {
-      userName: string
-      policyArn: string
-    }) => {
+    mutationFn: ({ userName, policyArn }: UserPolicyParams) => {
       const command = new AttachUserPolicyCommand({
         UserName: userName,
         PolicyArn: policyArn,
       })
       return getIamClient().send(command)
     },
-    onSuccess: (_data, { userName }) => {
-      queryClient.invalidateQueries(
-        iamAttachedUserPoliciesQueryOptions(userName),
-      )
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["iam", "attached-user-policies"],
+      })
     },
   })
 }
@@ -167,23 +146,17 @@ export function useAttachUserPolicy() {
 export function useDetachUserPolicy() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({
-      userName,
-      policyArn,
-    }: {
-      userName: string
-      policyArn: string
-    }) => {
+    mutationFn: ({ userName, policyArn }: UserPolicyParams) => {
       const command = new DetachUserPolicyCommand({
         UserName: userName,
         PolicyArn: policyArn,
       })
       return getIamClient().send(command)
     },
-    onSuccess: (_data, { userName }) => {
-      queryClient.invalidateQueries(
-        iamAttachedUserPoliciesQueryOptions(userName),
-      )
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["iam", "attached-user-policies"],
+      })
     },
   })
 }

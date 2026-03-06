@@ -9,6 +9,7 @@ import { DetailCard } from "@/components/detail-card"
 import { DetailRow } from "@/components/detail-row"
 import { ErrorBanner } from "@/components/error-banner"
 import { PageHeading } from "@/components/page-heading"
+import { StateBadge } from "@/components/state-badge"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -260,15 +261,7 @@ function UserDetail() {
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span
-                        className={`rounded-full px-2 py-1 font-medium text-xs ${
-                          key.Status === "Active"
-                            ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
-                            : "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200"
-                        }`}
-                      >
-                        {key.Status}
-                      </span>
+                      <StateBadge state={key.Status} />
                       <Button
                         disabled={pendingKeyAction === key.AccessKeyId}
                         onClick={() => handleToggleAccessKey(key)}
@@ -407,7 +400,6 @@ function UserDetail() {
         <AccessKeyModal
           accessKeyId={newAccessKey.accessKeyId}
           onClose={() => setNewAccessKey(null)}
-          open={!!newAccessKey}
           secretAccessKey={newAccessKey.secretAccessKey}
         />
       )}

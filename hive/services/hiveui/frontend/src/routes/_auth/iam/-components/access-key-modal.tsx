@@ -1,5 +1,5 @@
 import { AlertTriangle, Check } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import {
   AlertDialog,
@@ -16,29 +16,42 @@ import { Button } from "@/components/ui/button"
 const COPY_FEEDBACK_DURATION_MS = 2000
 
 interface AccessKeyModalProps {
-  open: boolean
   onClose: () => void
   accessKeyId: string
   secretAccessKey: string
 }
 
 export function AccessKeyModal({
-  open,
   onClose,
   accessKeyId,
   secretAccessKey,
 }: AccessKeyModalProps) {
   const [copied, setCopied] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(null)
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current)
+      }
+    }
+  }, [])
 
   const handleCopy = async () => {
     const text = `Access Key ID: ${accessKeyId}\nSecret Access Key: ${secretAccessKey}`
     await navigator.clipboard.writeText(text)
     setCopied(true)
-    setTimeout(() => setCopied(false), COPY_FEEDBACK_DURATION_MS)
+    if (timerRef.current) {
+      clearTimeout(timerRef.current)
+    }
+    timerRef.current = setTimeout(
+      () => setCopied(false),
+      COPY_FEEDBACK_DURATION_MS,
+    )
   }
 
   return (
-    <AlertDialog open={open}>
+    <AlertDialog open>
       <AlertDialogContent className="max-w-2xl">
         <AlertDialogHeader>
           <AlertDialogMedia>

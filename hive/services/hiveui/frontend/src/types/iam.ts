@@ -11,12 +11,6 @@ export const createUserSchema = z.object({
 
 export type CreateUserFormData = z.infer<typeof createUserSchema>
 
-export const createAccessKeySchema = z.object({
-  userName: z.string().min(1, "User name is required"),
-})
-
-export type CreateAccessKeyFormData = z.infer<typeof createAccessKeySchema>
-
 export const createPolicySchema = z.object({
   policyName: z
     .string()
@@ -41,9 +35,18 @@ export const createPolicySchema = z.object({
 
 export type CreatePolicyFormData = z.infer<typeof createPolicySchema>
 
-export const attachUserPolicySchema = z.object({
-  userName: z.string().min(1, "User name is required"),
-  policyArn: z.string().min(1, "Policy ARN is required"),
-})
+export interface DeleteAccessKeyParams {
+  userName: string
+  accessKeyId: string
+}
 
-export type AttachUserPolicyFormData = z.infer<typeof attachUserPolicySchema>
+export interface UpdateAccessKeyParams {
+  userName: string
+  accessKeyId: string
+  status: "Active" | "Inactive"
+}
+
+export interface UserPolicyParams {
+  userName: string
+  policyArn: string
+}
