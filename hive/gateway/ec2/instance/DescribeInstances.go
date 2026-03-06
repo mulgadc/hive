@@ -127,6 +127,28 @@ func DescribeInstances(input *ec2.DescribeInstancesInput, natsConn *nats.Conn, e
 		}
 	}
 
+	// Query terminated instances from the terminated KV bucket (via queue group — only one daemon handles it)
+	terminatedReqMsg := nats.NewMsg("ec2.DescribeTerminatedInstances")
+	terminatedReqMsg.Data = jsonData
+	terminatedReqMsg.Header.Set(utils.AccountIDHeader, accountID)
+	terminatedMsg, err := natsConn.RequestMsg(terminatedReqMsg, 3*time.Second)
+	if err != nil {
+		slog.Warn("DescribeInstances: Failed to query terminated instances (may not be available)", "err", err)
+	} else {
+		responseError, parseErr := utils.ValidateErrorPayload(terminatedMsg.Data)
+		if parseErr != nil {
+			slog.Warn("DescribeInstances: Terminated instances query returned error", "code", responseError.Code)
+		} else {
+			var terminatedOutput ec2.DescribeInstancesOutput
+			if err := json.Unmarshal(terminatedMsg.Data, &terminatedOutput); err != nil {
+				slog.Error("DescribeInstances: Failed to unmarshal terminated instances response", "err", err)
+			} else if terminatedOutput.Reservations != nil {
+				allReservations = append(allReservations, terminatedOutput.Reservations...)
+				slog.Info("DescribeInstances: Collected terminated instance reservations", "count", len(terminatedOutput.Reservations))
+			}
+		}
+	}
+
 	// Build final aggregated response
 	output := &ec2.DescribeInstancesOutput{
 		Reservations: allReservations,

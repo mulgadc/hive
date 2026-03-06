@@ -389,6 +389,7 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.start", d.handleEC2StartStoppedInstance, "hive-workers"},
 		{"ec2.terminate", d.handleEC2TerminateStoppedInstance, "hive-workers"},
 		{"ec2.DescribeStoppedInstances", d.handleEC2DescribeStoppedInstances, "hive-workers"},
+		{"ec2.DescribeTerminatedInstances", d.handleEC2DescribeTerminatedInstances, "hive-workers"},
 		// these 2 fan out to all nodes and gateway aggregates the results
 		{"ec2.DescribeInstances", d.handleEC2DescribeInstances, ""},
 		{"ec2.DescribeInstanceTypes", d.handleEC2DescribeInstanceTypes, ""},
@@ -605,6 +606,10 @@ func (d *Daemon) initJetStream() error {
 		}
 
 		if err == nil {
+			err = d.jsManager.InitTerminatedInstanceBucket()
+		}
+
+		if err == nil {
 			slog.Info("JetStream KV stores initialized successfully", "replicas", 1, "attempts", attempt, "elapsed", time.Since(start).Round(time.Second))
 			break
 		}
@@ -739,6 +744,23 @@ func (d *Daemon) migrateStoppedToSharedKV(instance *vm.VM) bool {
 	return true
 }
 
+// migrateTerminatedToKV writes a terminated instance to the terminated KV bucket
+// and removes it from the local instance map. Returns true if migration succeeded.
+func (d *Daemon) migrateTerminatedToKV(instance *vm.VM) bool {
+	if d.jsManager == nil {
+		return false
+	}
+	instance.LastNode = d.node
+	if err := d.jsManager.WriteTerminatedInstance(instance.ID, instance); err != nil {
+		slog.Error("Failed to migrate terminated instance to KV",
+			"instance", instance.ID, "err", err)
+		return false
+	}
+	delete(d.Instances.VMS, instance.ID)
+	slog.Info("Migrated terminated instance to terminated KV", "instance", instance.ID)
+	return true
+}
+
 // maxConcurrentRecovery limits how many VMs are relaunched in parallel during recovery.
 const maxConcurrentRecovery = 2
 
@@ -783,7 +805,17 @@ func (d *Daemon) restoreInstances() {
 		instance := d.Instances.VMS[i]
 
 		if instance.Status == vm.StateTerminated {
-			slog.Info("Instance state is terminated, skipping", "instance", instance.ID)
+			// Migrate legacy terminated instances from per-node blob to dedicated bucket
+			if d.jsManager != nil {
+				instance.LastNode = d.node
+				if err := d.jsManager.WriteTerminatedInstance(instance.ID, instance); err != nil {
+					slog.Error("Failed to migrate terminated instance to terminated KV",
+						"instance", instance.ID, "err", err)
+				} else {
+					slog.Info("Migrated terminated instance to terminated KV", "instance", instance.ID)
+				}
+			}
+			delete(d.Instances.VMS, instance.ID)
 			continue
 		}
 
@@ -836,6 +868,10 @@ func (d *Daemon) restoreInstances() {
 				"instance", instance.ID, "from", prevStatus, "to", instance.Status)
 
 			if instance.Status == vm.StateStopped && d.migrateStoppedToSharedKV(instance) {
+				continue
+			}
+
+			if instance.Status == vm.StateTerminated && d.migrateTerminatedToKV(instance) {
 				continue
 			}
 

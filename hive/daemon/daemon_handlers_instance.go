@@ -417,44 +417,48 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 			}
 			slog.Info("Instance "+string(finalState), "id", inst.ID)
 
-			// For stop (not terminate): release ownership to shared KV so any
-			// daemon can pick up the next StartInstance request.
-			if !isTerminate && d.jsManager != nil {
-
-				// Write to shared KV first — if daemon crashes after this but
-				// before local cleanup, restoreInstances handles the overlap.
-				if err := d.jsManager.WriteStoppedInstance(inst.ID, inst); err != nil {
-					slog.Error("Failed to write stopped instance to shared KV, keeping local ownership",
-						"instanceId", inst.ID, "err", err)
-				} else {
-					// Unsubscribe from per-instance NATS topic
-					d.mu.Lock()
-					if sub, ok := d.natsSubscriptions[inst.ID]; ok {
-						if err := sub.Unsubscribe(); err != nil {
-							slog.Error("Failed to unsubscribe stopped instance", "instanceId", inst.ID, "err", err)
-						}
-						delete(d.natsSubscriptions, inst.ID)
-					}
-					d.mu.Unlock()
-
-					// Remove from local instance map
-					d.Instances.Mu.Lock()
-					delete(d.Instances.VMS, inst.ID)
-					d.Instances.Mu.Unlock()
-
-					// Persist local state without the stopped instance
-					if err := d.WriteState(); err != nil {
-						slog.Error("Failed to persist state after releasing stopped instance, re-adding to local map for consistency",
+			if d.jsManager != nil {
+				if isTerminate {
+					// Write to terminated KV bucket (auto-expires after 1 hour via TTL)
+					if err := d.jsManager.WriteTerminatedInstance(inst.ID, inst); err != nil {
+						slog.Error("Failed to write terminated instance to KV",
 							"instanceId", inst.ID, "err", err)
-						// Re-add to local map so in-memory state matches on-disk state.
-						// On next restart, restoreInstances will retry the migration.
-						d.Instances.Mu.Lock()
-						d.Instances.VMS[inst.ID] = inst
-						d.Instances.Mu.Unlock()
-					} else {
-						slog.Info("Released stopped instance ownership to shared KV",
-							"instanceId", inst.ID, "lastNode", d.node)
 					}
+				} else {
+					// Write to shared KV first — if daemon crashes after this but
+					// before local cleanup, restoreInstances handles the overlap.
+					if err := d.jsManager.WriteStoppedInstance(inst.ID, inst); err != nil {
+						slog.Error("Failed to write stopped instance to shared KV, keeping local ownership",
+							"instanceId", inst.ID, "err", err)
+						return
+					}
+				}
+
+				// Unsubscribe from per-instance NATS topic
+				d.mu.Lock()
+				if sub, ok := d.natsSubscriptions[inst.ID]; ok {
+					if err := sub.Unsubscribe(); err != nil {
+						slog.Error("Failed to unsubscribe instance", "instanceId", inst.ID, "err", err)
+					}
+					delete(d.natsSubscriptions, inst.ID)
+				}
+				d.mu.Unlock()
+
+				// Remove from local instance map
+				d.Instances.Mu.Lock()
+				delete(d.Instances.VMS, inst.ID)
+				d.Instances.Mu.Unlock()
+
+				// Persist local state without the instance
+				if err := d.WriteState(); err != nil {
+					slog.Error("Failed to persist state after releasing instance, re-adding to local map for consistency",
+						"instanceId", inst.ID, "err", err)
+					d.Instances.Mu.Lock()
+					d.Instances.VMS[inst.ID] = inst
+					d.Instances.Mu.Unlock()
+				} else {
+					slog.Info("Released instance ownership to KV",
+						"instanceId", inst.ID, "state", string(finalState), "lastNode", d.node)
 				}
 			}
 		}
@@ -809,11 +813,17 @@ func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
 	}
 	instance.EBSRequests.Mu.Unlock()
 
-	// Remove from shared KV
+	// Remove from shared stopped KV
 	if err := d.jsManager.DeleteStoppedInstance(req.InstanceID); err != nil {
 		slog.Error("handleEC2TerminateStoppedInstance: failed to delete from shared KV", "instanceId", req.InstanceID, "err", err)
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
+	}
+
+	// Write to terminated KV bucket so it appears in DescribeInstances for ~1 hour
+	instance.Status = vm.StateTerminated
+	if err := d.jsManager.WriteTerminatedInstance(req.InstanceID, instance); err != nil {
+		slog.Error("handleEC2TerminateStoppedInstance: failed to write to terminated KV", "instanceId", req.InstanceID, "err", err)
 	}
 
 	slog.Info("Terminated stopped instance from shared KV", "instanceId", req.InstanceID)
@@ -919,6 +929,95 @@ func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
 
 	respondWithJSON(msg, output)
 	slog.Info("handleEC2DescribeStoppedInstances completed", "count", len(reservations))
+}
+
+// handleEC2DescribeTerminatedInstances returns terminated instances from the terminated KV bucket.
+func (d *Daemon) handleEC2DescribeTerminatedInstances(msg *nats.Msg) {
+	if d.jsManager == nil {
+		respondWithError(msg, awserrors.ErrorServerInternal)
+		return
+	}
+
+	accountID := utils.AccountIDFromMsg(msg)
+
+	describeInput := &ec2.DescribeInstancesInput{}
+	if len(msg.Data) > 0 {
+		if errResp := utils.UnmarshalJsonPayload(describeInput, msg.Data); errResp != nil {
+			if err := msg.Respond(errResp); err != nil {
+				slog.Error("Failed to respond to NATS request", "err", err)
+			}
+			return
+		}
+	}
+
+	instanceIDFilter := make(map[string]bool)
+	if len(describeInput.InstanceIds) > 0 {
+		for _, id := range describeInput.InstanceIds {
+			if id != nil {
+				instanceIDFilter[*id] = true
+			}
+		}
+	}
+
+	instances, err := d.jsManager.ListTerminatedInstances()
+	if err != nil {
+		slog.Error("handleEC2DescribeTerminatedInstances: failed to list terminated instances", "err", err)
+		respondWithError(msg, awserrors.ErrorServerInternal)
+		return
+	}
+
+	reservationMap := make(map[string]*ec2.Reservation)
+
+	for _, instance := range instances {
+		if !isInstanceVisible(accountID, instance.AccountID) {
+			continue
+		}
+
+		if len(instanceIDFilter) > 0 && !instanceIDFilter[instance.ID] {
+			continue
+		}
+
+		if instance.Reservation != nil && instance.Instance != nil {
+			resID := ""
+			if instance.Reservation.ReservationId != nil {
+				resID = *instance.Reservation.ReservationId
+			}
+
+			if _, exists := reservationMap[resID]; !exists {
+				reservation := &ec2.Reservation{}
+				reservation.SetReservationId(resID)
+				if instance.Reservation.OwnerId != nil {
+					reservation.SetOwnerId(*instance.Reservation.OwnerId)
+				}
+				reservation.Instances = []*ec2.Instance{}
+				reservationMap[resID] = reservation
+			}
+
+			instanceCopy := *instance.Instance
+			instanceCopy.State = &ec2.InstanceState{}
+			if info, ok := vm.EC2StateCodes[instance.Status]; ok {
+				instanceCopy.State.SetCode(info.Code)
+				instanceCopy.State.SetName(info.Name)
+			} else {
+				instanceCopy.State.SetCode(48)
+				instanceCopy.State.SetName("terminated")
+			}
+
+			reservationMap[resID].Instances = append(reservationMap[resID].Instances, &instanceCopy)
+		}
+	}
+
+	reservations := make([]*ec2.Reservation, 0, len(reservationMap))
+	for _, reservation := range reservationMap {
+		reservations = append(reservations, reservation)
+	}
+
+	output := &ec2.DescribeInstancesOutput{
+		Reservations: reservations,
+	}
+
+	respondWithJSON(msg, output)
+	slog.Info("handleEC2DescribeTerminatedInstances completed", "count", len(reservations))
 }
 
 // handleEC2ModifyInstanceAttribute modifies attributes of a stopped instance in shared KV.
