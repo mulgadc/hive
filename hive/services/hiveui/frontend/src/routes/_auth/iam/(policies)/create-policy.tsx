@@ -4,8 +4,8 @@ import { useForm } from "react-hook-form"
 
 import { BackLink } from "@/components/back-link"
 import { ErrorBanner } from "@/components/error-banner"
+import { FormActions } from "@/components/form-actions"
 import { PageHeading } from "@/components/page-heading"
-import { Button } from "@/components/ui/button"
 import { Field, FieldError, FieldTitle } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -106,24 +106,13 @@ function CreatePolicy() {
           <FieldError errors={[errors.policyDocument]} />
         </Field>
 
-        <div className="flex gap-2">
-          <Button
-            disabled={isSubmitting || createMutation.isPending}
-            onClick={() => navigate({ to: "/iam/list-policies" })}
-            type="button"
-            variant="outline"
-          >
-            Cancel
-          </Button>
-          <Button
-            disabled={isSubmitting || createMutation.isPending}
-            type="submit"
-          >
-            {isSubmitting || createMutation.isPending
-              ? "Creating..."
-              : "Create Policy"}
-          </Button>
-        </div>
+        <FormActions
+          isPending={createMutation.isPending}
+          isSubmitting={isSubmitting}
+          onCancel={() => navigate({ to: "/iam/list-policies" })}
+          pendingLabel="Creating..."
+          submitLabel="Create Policy"
+        />
       </form>
     </>
   )

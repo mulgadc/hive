@@ -5,6 +5,7 @@ import { createFileRoute, Link } from "@tanstack/react-router"
 import { ListCard } from "@/components/list-card"
 import { PageHeading } from "@/components/page-heading"
 import { Button } from "@/components/ui/button"
+import { formatDateTime } from "@/lib/utils"
 import { s3BucketsQueryOptions } from "@/queries/s3"
 
 export const Route = createFileRoute("/_auth/s3/ls/")({
@@ -49,7 +50,7 @@ function Buckets() {
                 params={{ bucket: bucket.Name }}
                 subtitle={
                   bucket.CreationDate
-                    ? `Created: ${bucket.CreationDate.toLocaleString()}`
+                    ? `Created: ${formatDateTime(bucket.CreationDate)}`
                     : undefined
                 }
                 title={bucket.Name}

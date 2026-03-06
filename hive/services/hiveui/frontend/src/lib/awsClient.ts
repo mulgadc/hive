@@ -4,6 +4,7 @@ import { S3Client } from "@aws-sdk/client-s3"
 
 import { getCredentials } from "./auth"
 
+const AWS_REGION = "ap-southeast-2"
 const awsEndpoint = `${window.location.protocol}//${window.location.hostname}:9999`
 const s3Endpoint = `${window.location.protocol}//${window.location.hostname}:8443`
 
@@ -20,7 +21,7 @@ export function getEc2Client(): EC2Client {
     }
     ec2Client = new EC2Client({
       endpoint: awsEndpoint,
-      region: "ap-southeast-2",
+      region: AWS_REGION,
       credentials: {
         accessKeyId: credentials.accessKeyId,
         secretAccessKey: credentials.secretAccessKey,
@@ -38,7 +39,7 @@ export function getIamClient(): IAMClient {
     }
     iamClient = new IAMClient({
       endpoint: awsEndpoint,
-      region: "ap-southeast-2",
+      region: AWS_REGION,
       credentials: {
         accessKeyId: credentials.accessKeyId,
         secretAccessKey: credentials.secretAccessKey,
@@ -56,7 +57,7 @@ export function getS3Client(): S3Client {
     }
     s3Client = new S3Client({
       endpoint: s3Endpoint,
-      region: "ap-southeast-2",
+      region: AWS_REGION,
       credentials: {
         accessKeyId: credentials.accessKeyId,
         secretAccessKey: credentials.secretAccessKey,

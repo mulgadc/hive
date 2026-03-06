@@ -5,21 +5,12 @@ import { Trash2 } from "lucide-react"
 import { useState } from "react"
 
 import { BackLink } from "@/components/back-link"
+import { DeleteConfirmationDialog } from "@/components/delete-confirmation-dialog"
 import { DetailCard } from "@/components/detail-card"
 import { DetailRow } from "@/components/detail-row"
 import { ErrorBanner } from "@/components/error-banner"
 import { PageHeading } from "@/components/page-heading"
 import { StateBadge } from "@/components/state-badge"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { useDeleteVpc } from "@/mutations/ec2"
 import { ec2SubnetsQueryOptions, ec2VpcQueryOptions } from "@/queries/ec2"
@@ -152,27 +143,14 @@ function VpcDetail() {
         )}
       </div>
 
-      <AlertDialog onOpenChange={setShowDeleteDialog} open={showDeleteDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete VPC</AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to delete the VPC "{vpc.VpcId}"? This action
-              cannot be undone. The VPC must have no associated subnets or
-              internet gateways.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={deleteMutation.isPending}
-              onClick={handleDelete}
-            >
-              {deleteMutation.isPending ? "Deleting\u2026" : "Delete"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <DeleteConfirmationDialog
+        description={`Are you sure you want to delete the VPC "${vpc.VpcId}"? This action cannot be undone. The VPC must have no associated subnets or internet gateways.`}
+        isPending={deleteMutation.isPending}
+        onConfirm={handleDelete}
+        onOpenChange={setShowDeleteDialog}
+        open={showDeleteDialog}
+        title="Delete VPC"
+      />
     </>
   )
 }

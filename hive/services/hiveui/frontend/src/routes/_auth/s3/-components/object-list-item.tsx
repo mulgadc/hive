@@ -3,19 +3,10 @@ import { GetObjectCommand } from "@aws-sdk/client-s3"
 import { Download, File, Trash2 } from "lucide-react"
 import { useState } from "react"
 
+import { DeleteConfirmationDialog } from "@/components/delete-confirmation-dialog"
 import { ErrorBanner } from "@/components/error-banner"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
 import { getS3Client } from "@/lib/awsClient"
-import { formatSize } from "@/lib/utils"
+import { formatDateTime, formatSize } from "@/lib/utils"
 import { useDeleteObject } from "@/mutations/s3"
 
 interface ObjectListItemProps {
@@ -85,7 +76,7 @@ export function ObjectListItem({
             <h3 className="font-medium">{displayName}</h3>
             {object.LastModified && (
               <p className="text-muted-foreground text-sm">
-                Last Modified: {object.LastModified.toLocaleString()}
+                Last Modified: {formatDateTime(object.LastModified)}
               </p>
             )}
           </div>
@@ -110,26 +101,19 @@ export function ObjectListItem({
           </button>
         </div>
 
-        <AlertDialog onOpenChange={setShowDeleteDialog} open={showDeleteDialog}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete Object</AlertDialogTitle>
-              <AlertDialogDescription>
-                Are you sure you want to delete <strong>{displayName}</strong>?
-                This action cannot be undone.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                className="bg-destructive hover:bg-destructive/90"
-                onClick={handleDelete}
-              >
-                {deleteMutation.isPending ? "Deleting…" : "Delete"}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        <DeleteConfirmationDialog
+          description={
+            <>
+              Are you sure you want to delete <strong>{displayName}</strong>?
+              This action cannot be undone.
+            </>
+          }
+          isPending={deleteMutation.isPending}
+          onConfirm={handleDelete}
+          onOpenChange={setShowDeleteDialog}
+          open={showDeleteDialog}
+          title="Delete Object"
+        />
       </div>
     </div>
   )

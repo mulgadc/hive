@@ -1,6 +1,5 @@
 import { useNavigate } from "@tanstack/react-router"
 import { AlertTriangle, Check, Download } from "lucide-react"
-import { useState } from "react"
 
 import {
   AlertDialog,
@@ -14,8 +13,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-
-const COPY_FEEDBACK_DURATION_MS = 2000
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard"
 
 interface PrivateKeyModalProps {
   open: boolean
@@ -29,13 +27,7 @@ export function PrivateKeyModal({
   keyMaterial,
 }: PrivateKeyModalProps) {
   const navigate = useNavigate()
-  const [copied, setCopied] = useState(false)
-
-  const handleCopy = async () => {
-    await navigator.clipboard.writeText(keyMaterial)
-    setCopied(true)
-    setTimeout(() => setCopied(false), COPY_FEEDBACK_DURATION_MS)
-  }
+  const { copied, copy } = useCopyToClipboard()
 
   const handleDownload = () => {
     const blob = new Blob([keyMaterial], { type: "text/plain" })
@@ -77,7 +69,7 @@ export function PrivateKeyModal({
           <div className="flex gap-2">
             <Button
               className="flex-1"
-              onClick={handleCopy}
+              onClick={() => copy(keyMaterial)}
               type="button"
               variant="outline"
             >
