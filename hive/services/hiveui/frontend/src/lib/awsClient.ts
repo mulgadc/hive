@@ -1,4 +1,5 @@
 import { EC2Client } from "@aws-sdk/client-ec2"
+import { IAMClient } from "@aws-sdk/client-iam"
 import { S3Client } from "@aws-sdk/client-s3"
 
 import { getCredentials } from "./auth"
@@ -8,6 +9,7 @@ const s3Endpoint = `${window.location.protocol}//${window.location.hostname}:844
 
 // Cached singleton clients
 let ec2Client: EC2Client | null = null
+let iamClient: IAMClient | null = null
 let s3Client: S3Client | null = null
 
 export function getEc2Client(): EC2Client {
@@ -26,6 +28,24 @@ export function getEc2Client(): EC2Client {
     })
   }
   return ec2Client
+}
+
+export function getIamClient(): IAMClient {
+  if (!iamClient) {
+    const credentials = getCredentials()
+    if (!credentials) {
+      throw new Error("AWS credentials not configured")
+    }
+    iamClient = new IAMClient({
+      endpoint: awsEndpoint,
+      region: "ap-southeast-2",
+      credentials: {
+        accessKeyId: credentials.accessKeyId,
+        secretAccessKey: credentials.secretAccessKey,
+      },
+    })
+  }
+  return iamClient
 }
 
 export function getS3Client(): S3Client {
@@ -67,5 +87,6 @@ export function getS3Client(): S3Client {
 // Call on logout to clear cached clients
 export function clearClients(): void {
   ec2Client = null
+  iamClient = null
   s3Client = null
 }

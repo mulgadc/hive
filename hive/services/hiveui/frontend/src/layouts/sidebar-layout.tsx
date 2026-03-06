@@ -10,6 +10,8 @@ import {
   LogOut,
   Network,
   Server,
+  Shield,
+  Users,
 } from "lucide-react"
 
 // import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -175,6 +177,41 @@ export function SidebarLayout() {
                 >
                   <LayoutGrid className="size-4" />
                   <span>Subnets</span>
+                </SidebarMenuButton>
+              </Link>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroup>
+
+        <SidebarGroup>
+          <SidebarGroupLabel>IAM</SidebarGroupLabel>
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <Link to="/iam/list-users">
+                <SidebarMenuButton
+                  isActive={
+                    pathname.startsWith("/iam/list-users") ||
+                    pathname.startsWith("/iam/create-user")
+                  }
+                  tooltip="Users"
+                >
+                  <Users className="size-4" />
+                  <span>Users</span>
+                </SidebarMenuButton>
+              </Link>
+            </SidebarMenuItem>
+
+            <SidebarMenuItem>
+              <Link to="/iam/list-policies">
+                <SidebarMenuButton
+                  isActive={
+                    pathname.startsWith("/iam/list-policies") ||
+                    pathname.startsWith("/iam/create-policy")
+                  }
+                  tooltip="Policies"
+                >
+                  <Shield className="size-4" />
+                  <span>Policies</span>
                 </SidebarMenuButton>
               </Link>
             </SidebarMenuItem>

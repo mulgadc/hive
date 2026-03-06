@@ -1,0 +1,135 @@
+import { zodResolver } from "@hookform/resolvers/zod"
+import { createFileRoute, useNavigate } from "@tanstack/react-router"
+import { useForm } from "react-hook-form"
+
+import { BackLink } from "@/components/back-link"
+import { ErrorBanner } from "@/components/error-banner"
+import { PageHeading } from "@/components/page-heading"
+import { Button } from "@/components/ui/button"
+import { Field, FieldError, FieldTitle } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
+import { useCreatePolicy } from "@/mutations/iam"
+import { type CreatePolicyFormData, createPolicySchema } from "@/types/iam"
+
+const DEFAULT_POLICY_DOCUMENT = JSON.stringify(
+  {
+    Version: "2012-10-17",
+    Statement: [
+      {
+        Effect: "Allow",
+        Action: "*",
+        Resource: "*",
+      },
+    ],
+  },
+  null,
+  2,
+)
+
+export const Route = createFileRoute("/_auth/iam/(policies)/create-policy")({
+  head: () => ({
+    meta: [{ title: "Create Policy | IAM | Mulga" }],
+  }),
+  component: CreatePolicy,
+})
+
+function CreatePolicy() {
+  const navigate = useNavigate()
+  const createMutation = useCreatePolicy()
+
+  const {
+    handleSubmit,
+    register,
+    formState: { errors, isSubmitting },
+  } = useForm({
+    resolver: zodResolver(createPolicySchema),
+    defaultValues: {
+      policyDocument: DEFAULT_POLICY_DOCUMENT,
+    },
+  })
+
+  const onSubmit = async (data: CreatePolicyFormData) => {
+    const response = await createMutation.mutateAsync(data)
+    if (response.Policy?.Arn) {
+      navigate({
+        to: "/iam/list-policies/$policyArn",
+        params: { policyArn: encodeURIComponent(response.Policy.Arn) },
+      })
+    }
+  }
+
+  return (
+    <>
+      <BackLink to="/iam/list-policies">Back to policies</BackLink>
+      <PageHeading title="Create Policy" />
+
+      {createMutation.error && (
+        <ErrorBanner
+          error={createMutation.error}
+          msg="Failed to create policy"
+        />
+      )}
+
+      <form className="max-w-4xl space-y-6" onSubmit={handleSubmit(onSubmit)}>
+        <Field>
+          <FieldTitle>
+            <label htmlFor="policyName">Policy Name</label>
+          </FieldTitle>
+          <Input
+            aria-invalid={!!errors.policyName}
+            id="policyName"
+            placeholder="my-policy..."
+            {...register("policyName")}
+          />
+          <FieldError errors={[errors.policyName]} />
+        </Field>
+
+        <Field>
+          <FieldTitle>
+            <label htmlFor="description">Description (optional)</label>
+          </FieldTitle>
+          <Input
+            id="description"
+            placeholder="A brief description of this policy..."
+            {...register("description")}
+          />
+          <FieldError errors={[errors.description]} />
+        </Field>
+
+        <Field>
+          <FieldTitle>
+            <label htmlFor="policyDocument">Policy Document (JSON)</label>
+          </FieldTitle>
+          <Textarea
+            aria-invalid={!!errors.policyDocument}
+            className="font-mono text-sm"
+            id="policyDocument"
+            rows={15}
+            {...register("policyDocument")}
+          />
+          <FieldError errors={[errors.policyDocument]} />
+        </Field>
+
+        <div className="flex gap-2">
+          <Button
+            disabled={isSubmitting || createMutation.isPending}
+            onClick={() => navigate({ to: "/iam/list-policies" })}
+            type="button"
+            variant="outline"
+          >
+            Cancel
+          </Button>
+          <Button
+            disabled={isSubmitting || createMutation.isPending}
+            type="submit"
+          >
+            {isSubmitting || createMutation.isPending
+              ? "Creating..."
+              : "Create Policy"}
+          </Button>
+        </div>
+      </form>
+    </>
+  )
+}

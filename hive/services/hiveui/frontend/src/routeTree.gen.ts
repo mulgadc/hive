@@ -14,6 +14,8 @@ import { Route as AuthRouteRouteImport } from './routes/_auth/route'
 import { Route as AuthIndexRouteImport } from './routes/_auth/index'
 import { Route as AuthS3LsIndexRouteImport } from './routes/_auth/s3/ls/index'
 import { Route as AuthS3bucketsCreateBucketRouteImport } from './routes/_auth/s3/(buckets)/create-bucket'
+import { Route as AuthIamusersCreateUserRouteImport } from './routes/_auth/iam/(users)/create-user'
+import { Route as AuthIampoliciesCreatePolicyRouteImport } from './routes/_auth/iam/(policies)/create-policy'
 import { Route as AuthEc2vpcCreateVpcRouteImport } from './routes/_auth/ec2/(vpc)/create-vpc'
 import { Route as AuthEc2volumesCreateVolumeRouteImport } from './routes/_auth/ec2/(volumes)/create-volume'
 import { Route as AuthEc2subnetCreateSubnetRouteImport } from './routes/_auth/ec2/(subnet)/create-subnet'
@@ -23,6 +25,8 @@ import { Route as AuthEc2keyCreateKeyPairRouteImport } from './routes/_auth/ec2/
 import { Route as AuthEc2instancesRunInstancesRouteImport } from './routes/_auth/ec2/(instances)/run-instances'
 import { Route as AuthS3LsBucketRouteRouteImport } from './routes/_auth/s3/ls/$bucket/route'
 import { Route as AuthS3LsBucketIndexRouteImport } from './routes/_auth/s3/ls/$bucket/index'
+import { Route as AuthIamusersListUsersIndexRouteImport } from './routes/_auth/iam/(users)/list-users/index'
+import { Route as AuthIampoliciesListPoliciesIndexRouteImport } from './routes/_auth/iam/(policies)/list-policies/index'
 import { Route as AuthEc2vpcDescribeVpcsIndexRouteImport } from './routes/_auth/ec2/(vpc)/describe-vpcs/index'
 import { Route as AuthEc2volumesDescribeVolumesIndexRouteImport } from './routes/_auth/ec2/(volumes)/describe-volumes/index'
 import { Route as AuthEc2subnetDescribeSubnetsIndexRouteImport } from './routes/_auth/ec2/(subnet)/describe-subnets/index'
@@ -31,6 +35,8 @@ import { Route as AuthEc2keyDescribeKeyPairsIndexRouteImport } from './routes/_a
 import { Route as AuthEc2instancesDescribeInstancesIndexRouteImport } from './routes/_auth/ec2/(instances)/describe-instances/index'
 import { Route as AuthEc2imagesDescribeImagesIndexRouteImport } from './routes/_auth/ec2/(images)/describe-images/index'
 import { Route as AuthS3LsBucketSplatRouteImport } from './routes/_auth/s3/ls/$bucket/$'
+import { Route as AuthIamusersListUsersUserNameRouteImport } from './routes/_auth/iam/(users)/list-users/$userName'
+import { Route as AuthIampoliciesListPoliciesPolicyArnRouteImport } from './routes/_auth/iam/(policies)/list-policies/$policyArn'
 import { Route as AuthEc2vpcDescribeVpcsIdRouteImport } from './routes/_auth/ec2/(vpc)/describe-vpcs/$id'
 import { Route as AuthEc2volumesModifyVolumeIdRouteImport } from './routes/_auth/ec2/(volumes)/modify-volume/$id'
 import { Route as AuthEc2volumesDescribeVolumesIdRouteImport } from './routes/_auth/ec2/(volumes)/describe-volumes/$id'
@@ -63,6 +69,17 @@ const AuthS3bucketsCreateBucketRoute =
   AuthS3bucketsCreateBucketRouteImport.update({
     id: '/s3/(buckets)/create-bucket',
     path: '/s3/create-bucket',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
+const AuthIamusersCreateUserRoute = AuthIamusersCreateUserRouteImport.update({
+  id: '/iam/(users)/create-user',
+  path: '/iam/create-user',
+  getParentRoute: () => AuthRouteRoute,
+} as any)
+const AuthIampoliciesCreatePolicyRoute =
+  AuthIampoliciesCreatePolicyRouteImport.update({
+    id: '/iam/(policies)/create-policy',
+    path: '/iam/create-policy',
     getParentRoute: () => AuthRouteRoute,
   } as any)
 const AuthEc2vpcCreateVpcRoute = AuthEc2vpcCreateVpcRouteImport.update({
@@ -114,6 +131,18 @@ const AuthS3LsBucketIndexRoute = AuthS3LsBucketIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AuthS3LsBucketRouteRoute,
 } as any)
+const AuthIamusersListUsersIndexRoute =
+  AuthIamusersListUsersIndexRouteImport.update({
+    id: '/iam/(users)/list-users/',
+    path: '/iam/list-users/',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
+const AuthIampoliciesListPoliciesIndexRoute =
+  AuthIampoliciesListPoliciesIndexRouteImport.update({
+    id: '/iam/(policies)/list-policies/',
+    path: '/iam/list-policies/',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
 const AuthEc2vpcDescribeVpcsIndexRoute =
   AuthEc2vpcDescribeVpcsIndexRouteImport.update({
     id: '/ec2/(vpc)/describe-vpcs/',
@@ -161,6 +190,18 @@ const AuthS3LsBucketSplatRoute = AuthS3LsBucketSplatRouteImport.update({
   path: '/$',
   getParentRoute: () => AuthS3LsBucketRouteRoute,
 } as any)
+const AuthIamusersListUsersUserNameRoute =
+  AuthIamusersListUsersUserNameRouteImport.update({
+    id: '/iam/(users)/list-users/$userName',
+    path: '/iam/list-users/$userName',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
+const AuthIampoliciesListPoliciesPolicyArnRoute =
+  AuthIampoliciesListPoliciesPolicyArnRouteImport.update({
+    id: '/iam/(policies)/list-policies/$policyArn',
+    path: '/iam/list-policies/$policyArn',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
 const AuthEc2vpcDescribeVpcsIdRoute =
   AuthEc2vpcDescribeVpcsIdRouteImport.update({
     id: '/ec2/(vpc)/describe-vpcs/$id',
@@ -221,6 +262,8 @@ export interface FileRoutesByFullPath {
   '/ec2/create-subnet': typeof AuthEc2subnetCreateSubnetRoute
   '/ec2/create-volume': typeof AuthEc2volumesCreateVolumeRoute
   '/ec2/create-vpc': typeof AuthEc2vpcCreateVpcRoute
+  '/iam/create-policy': typeof AuthIampoliciesCreatePolicyRoute
+  '/iam/create-user': typeof AuthIamusersCreateUserRoute
   '/s3/create-bucket': typeof AuthS3bucketsCreateBucketRoute
   '/s3/ls/': typeof AuthS3LsIndexRoute
   '/ec2/describe-images/$id': typeof AuthEc2imagesDescribeImagesIdRoute
@@ -231,6 +274,8 @@ export interface FileRoutesByFullPath {
   '/ec2/describe-volumes/$id': typeof AuthEc2volumesDescribeVolumesIdRoute
   '/ec2/modify-volume/$id': typeof AuthEc2volumesModifyVolumeIdRoute
   '/ec2/describe-vpcs/$id': typeof AuthEc2vpcDescribeVpcsIdRoute
+  '/iam/list-policies/$policyArn': typeof AuthIampoliciesListPoliciesPolicyArnRoute
+  '/iam/list-users/$userName': typeof AuthIamusersListUsersUserNameRoute
   '/s3/ls/$bucket/$': typeof AuthS3LsBucketSplatRoute
   '/ec2/describe-images/': typeof AuthEc2imagesDescribeImagesIndexRoute
   '/ec2/describe-instances/': typeof AuthEc2instancesDescribeInstancesIndexRoute
@@ -239,6 +284,8 @@ export interface FileRoutesByFullPath {
   '/ec2/describe-subnets/': typeof AuthEc2subnetDescribeSubnetsIndexRoute
   '/ec2/describe-volumes/': typeof AuthEc2volumesDescribeVolumesIndexRoute
   '/ec2/describe-vpcs/': typeof AuthEc2vpcDescribeVpcsIndexRoute
+  '/iam/list-policies/': typeof AuthIampoliciesListPoliciesIndexRoute
+  '/iam/list-users/': typeof AuthIamusersListUsersIndexRoute
   '/s3/ls/$bucket/': typeof AuthS3LsBucketIndexRoute
 }
 export interface FileRoutesByTo {
@@ -251,6 +298,8 @@ export interface FileRoutesByTo {
   '/ec2/create-subnet': typeof AuthEc2subnetCreateSubnetRoute
   '/ec2/create-volume': typeof AuthEc2volumesCreateVolumeRoute
   '/ec2/create-vpc': typeof AuthEc2vpcCreateVpcRoute
+  '/iam/create-policy': typeof AuthIampoliciesCreatePolicyRoute
+  '/iam/create-user': typeof AuthIamusersCreateUserRoute
   '/s3/create-bucket': typeof AuthS3bucketsCreateBucketRoute
   '/s3/ls': typeof AuthS3LsIndexRoute
   '/ec2/describe-images/$id': typeof AuthEc2imagesDescribeImagesIdRoute
@@ -261,6 +310,8 @@ export interface FileRoutesByTo {
   '/ec2/describe-volumes/$id': typeof AuthEc2volumesDescribeVolumesIdRoute
   '/ec2/modify-volume/$id': typeof AuthEc2volumesModifyVolumeIdRoute
   '/ec2/describe-vpcs/$id': typeof AuthEc2vpcDescribeVpcsIdRoute
+  '/iam/list-policies/$policyArn': typeof AuthIampoliciesListPoliciesPolicyArnRoute
+  '/iam/list-users/$userName': typeof AuthIamusersListUsersUserNameRoute
   '/s3/ls/$bucket/$': typeof AuthS3LsBucketSplatRoute
   '/ec2/describe-images': typeof AuthEc2imagesDescribeImagesIndexRoute
   '/ec2/describe-instances': typeof AuthEc2instancesDescribeInstancesIndexRoute
@@ -269,6 +320,8 @@ export interface FileRoutesByTo {
   '/ec2/describe-subnets': typeof AuthEc2subnetDescribeSubnetsIndexRoute
   '/ec2/describe-volumes': typeof AuthEc2volumesDescribeVolumesIndexRoute
   '/ec2/describe-vpcs': typeof AuthEc2vpcDescribeVpcsIndexRoute
+  '/iam/list-policies': typeof AuthIampoliciesListPoliciesIndexRoute
+  '/iam/list-users': typeof AuthIamusersListUsersIndexRoute
   '/s3/ls/$bucket': typeof AuthS3LsBucketIndexRoute
 }
 export interface FileRoutesById {
@@ -284,6 +337,8 @@ export interface FileRoutesById {
   '/_auth/ec2/(subnet)/create-subnet': typeof AuthEc2subnetCreateSubnetRoute
   '/_auth/ec2/(volumes)/create-volume': typeof AuthEc2volumesCreateVolumeRoute
   '/_auth/ec2/(vpc)/create-vpc': typeof AuthEc2vpcCreateVpcRoute
+  '/_auth/iam/(policies)/create-policy': typeof AuthIampoliciesCreatePolicyRoute
+  '/_auth/iam/(users)/create-user': typeof AuthIamusersCreateUserRoute
   '/_auth/s3/(buckets)/create-bucket': typeof AuthS3bucketsCreateBucketRoute
   '/_auth/s3/ls/': typeof AuthS3LsIndexRoute
   '/_auth/ec2/(images)/describe-images/$id': typeof AuthEc2imagesDescribeImagesIdRoute
@@ -294,6 +349,8 @@ export interface FileRoutesById {
   '/_auth/ec2/(volumes)/describe-volumes/$id': typeof AuthEc2volumesDescribeVolumesIdRoute
   '/_auth/ec2/(volumes)/modify-volume/$id': typeof AuthEc2volumesModifyVolumeIdRoute
   '/_auth/ec2/(vpc)/describe-vpcs/$id': typeof AuthEc2vpcDescribeVpcsIdRoute
+  '/_auth/iam/(policies)/list-policies/$policyArn': typeof AuthIampoliciesListPoliciesPolicyArnRoute
+  '/_auth/iam/(users)/list-users/$userName': typeof AuthIamusersListUsersUserNameRoute
   '/_auth/s3/ls/$bucket/$': typeof AuthS3LsBucketSplatRoute
   '/_auth/ec2/(images)/describe-images/': typeof AuthEc2imagesDescribeImagesIndexRoute
   '/_auth/ec2/(instances)/describe-instances/': typeof AuthEc2instancesDescribeInstancesIndexRoute
@@ -302,6 +359,8 @@ export interface FileRoutesById {
   '/_auth/ec2/(subnet)/describe-subnets/': typeof AuthEc2subnetDescribeSubnetsIndexRoute
   '/_auth/ec2/(volumes)/describe-volumes/': typeof AuthEc2volumesDescribeVolumesIndexRoute
   '/_auth/ec2/(vpc)/describe-vpcs/': typeof AuthEc2vpcDescribeVpcsIndexRoute
+  '/_auth/iam/(policies)/list-policies/': typeof AuthIampoliciesListPoliciesIndexRoute
+  '/_auth/iam/(users)/list-users/': typeof AuthIamusersListUsersIndexRoute
   '/_auth/s3/ls/$bucket/': typeof AuthS3LsBucketIndexRoute
 }
 export interface FileRouteTypes {
@@ -317,6 +376,8 @@ export interface FileRouteTypes {
     | '/ec2/create-subnet'
     | '/ec2/create-volume'
     | '/ec2/create-vpc'
+    | '/iam/create-policy'
+    | '/iam/create-user'
     | '/s3/create-bucket'
     | '/s3/ls/'
     | '/ec2/describe-images/$id'
@@ -327,6 +388,8 @@ export interface FileRouteTypes {
     | '/ec2/describe-volumes/$id'
     | '/ec2/modify-volume/$id'
     | '/ec2/describe-vpcs/$id'
+    | '/iam/list-policies/$policyArn'
+    | '/iam/list-users/$userName'
     | '/s3/ls/$bucket/$'
     | '/ec2/describe-images/'
     | '/ec2/describe-instances/'
@@ -335,6 +398,8 @@ export interface FileRouteTypes {
     | '/ec2/describe-subnets/'
     | '/ec2/describe-volumes/'
     | '/ec2/describe-vpcs/'
+    | '/iam/list-policies/'
+    | '/iam/list-users/'
     | '/s3/ls/$bucket/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -347,6 +412,8 @@ export interface FileRouteTypes {
     | '/ec2/create-subnet'
     | '/ec2/create-volume'
     | '/ec2/create-vpc'
+    | '/iam/create-policy'
+    | '/iam/create-user'
     | '/s3/create-bucket'
     | '/s3/ls'
     | '/ec2/describe-images/$id'
@@ -357,6 +424,8 @@ export interface FileRouteTypes {
     | '/ec2/describe-volumes/$id'
     | '/ec2/modify-volume/$id'
     | '/ec2/describe-vpcs/$id'
+    | '/iam/list-policies/$policyArn'
+    | '/iam/list-users/$userName'
     | '/s3/ls/$bucket/$'
     | '/ec2/describe-images'
     | '/ec2/describe-instances'
@@ -365,6 +434,8 @@ export interface FileRouteTypes {
     | '/ec2/describe-subnets'
     | '/ec2/describe-volumes'
     | '/ec2/describe-vpcs'
+    | '/iam/list-policies'
+    | '/iam/list-users'
     | '/s3/ls/$bucket'
   id:
     | '__root__'
@@ -379,6 +450,8 @@ export interface FileRouteTypes {
     | '/_auth/ec2/(subnet)/create-subnet'
     | '/_auth/ec2/(volumes)/create-volume'
     | '/_auth/ec2/(vpc)/create-vpc'
+    | '/_auth/iam/(policies)/create-policy'
+    | '/_auth/iam/(users)/create-user'
     | '/_auth/s3/(buckets)/create-bucket'
     | '/_auth/s3/ls/'
     | '/_auth/ec2/(images)/describe-images/$id'
@@ -389,6 +462,8 @@ export interface FileRouteTypes {
     | '/_auth/ec2/(volumes)/describe-volumes/$id'
     | '/_auth/ec2/(volumes)/modify-volume/$id'
     | '/_auth/ec2/(vpc)/describe-vpcs/$id'
+    | '/_auth/iam/(policies)/list-policies/$policyArn'
+    | '/_auth/iam/(users)/list-users/$userName'
     | '/_auth/s3/ls/$bucket/$'
     | '/_auth/ec2/(images)/describe-images/'
     | '/_auth/ec2/(instances)/describe-instances/'
@@ -397,6 +472,8 @@ export interface FileRouteTypes {
     | '/_auth/ec2/(subnet)/describe-subnets/'
     | '/_auth/ec2/(volumes)/describe-volumes/'
     | '/_auth/ec2/(vpc)/describe-vpcs/'
+    | '/_auth/iam/(policies)/list-policies/'
+    | '/_auth/iam/(users)/list-users/'
     | '/_auth/s3/ls/$bucket/'
   fileRoutesById: FileRoutesById
 }
@@ -440,6 +517,20 @@ declare module '@tanstack/react-router' {
       path: '/s3/create-bucket'
       fullPath: '/s3/create-bucket'
       preLoaderRoute: typeof AuthS3bucketsCreateBucketRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/_auth/iam/(users)/create-user': {
+      id: '/_auth/iam/(users)/create-user'
+      path: '/iam/create-user'
+      fullPath: '/iam/create-user'
+      preLoaderRoute: typeof AuthIamusersCreateUserRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/_auth/iam/(policies)/create-policy': {
+      id: '/_auth/iam/(policies)/create-policy'
+      path: '/iam/create-policy'
+      fullPath: '/iam/create-policy'
+      preLoaderRoute: typeof AuthIampoliciesCreatePolicyRouteImport
       parentRoute: typeof AuthRouteRoute
     }
     '/_auth/ec2/(vpc)/create-vpc': {
@@ -505,6 +596,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthS3LsBucketIndexRouteImport
       parentRoute: typeof AuthS3LsBucketRouteRoute
     }
+    '/_auth/iam/(users)/list-users/': {
+      id: '/_auth/iam/(users)/list-users/'
+      path: '/iam/list-users'
+      fullPath: '/iam/list-users/'
+      preLoaderRoute: typeof AuthIamusersListUsersIndexRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/_auth/iam/(policies)/list-policies/': {
+      id: '/_auth/iam/(policies)/list-policies/'
+      path: '/iam/list-policies'
+      fullPath: '/iam/list-policies/'
+      preLoaderRoute: typeof AuthIampoliciesListPoliciesIndexRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
     '/_auth/ec2/(vpc)/describe-vpcs/': {
       id: '/_auth/ec2/(vpc)/describe-vpcs/'
       path: '/ec2/describe-vpcs'
@@ -560,6 +665,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/s3/ls/$bucket/$'
       preLoaderRoute: typeof AuthS3LsBucketSplatRouteImport
       parentRoute: typeof AuthS3LsBucketRouteRoute
+    }
+    '/_auth/iam/(users)/list-users/$userName': {
+      id: '/_auth/iam/(users)/list-users/$userName'
+      path: '/iam/list-users/$userName'
+      fullPath: '/iam/list-users/$userName'
+      preLoaderRoute: typeof AuthIamusersListUsersUserNameRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/_auth/iam/(policies)/list-policies/$policyArn': {
+      id: '/_auth/iam/(policies)/list-policies/$policyArn'
+      path: '/iam/list-policies/$policyArn'
+      fullPath: '/iam/list-policies/$policyArn'
+      preLoaderRoute: typeof AuthIampoliciesListPoliciesPolicyArnRouteImport
+      parentRoute: typeof AuthRouteRoute
     }
     '/_auth/ec2/(vpc)/describe-vpcs/$id': {
       id: '/_auth/ec2/(vpc)/describe-vpcs/$id'
@@ -643,6 +762,8 @@ interface AuthRouteRouteChildren {
   AuthEc2subnetCreateSubnetRoute: typeof AuthEc2subnetCreateSubnetRoute
   AuthEc2volumesCreateVolumeRoute: typeof AuthEc2volumesCreateVolumeRoute
   AuthEc2vpcCreateVpcRoute: typeof AuthEc2vpcCreateVpcRoute
+  AuthIampoliciesCreatePolicyRoute: typeof AuthIampoliciesCreatePolicyRoute
+  AuthIamusersCreateUserRoute: typeof AuthIamusersCreateUserRoute
   AuthS3bucketsCreateBucketRoute: typeof AuthS3bucketsCreateBucketRoute
   AuthS3LsIndexRoute: typeof AuthS3LsIndexRoute
   AuthEc2imagesDescribeImagesIdRoute: typeof AuthEc2imagesDescribeImagesIdRoute
@@ -653,6 +774,8 @@ interface AuthRouteRouteChildren {
   AuthEc2volumesDescribeVolumesIdRoute: typeof AuthEc2volumesDescribeVolumesIdRoute
   AuthEc2volumesModifyVolumeIdRoute: typeof AuthEc2volumesModifyVolumeIdRoute
   AuthEc2vpcDescribeVpcsIdRoute: typeof AuthEc2vpcDescribeVpcsIdRoute
+  AuthIampoliciesListPoliciesPolicyArnRoute: typeof AuthIampoliciesListPoliciesPolicyArnRoute
+  AuthIamusersListUsersUserNameRoute: typeof AuthIamusersListUsersUserNameRoute
   AuthEc2imagesDescribeImagesIndexRoute: typeof AuthEc2imagesDescribeImagesIndexRoute
   AuthEc2instancesDescribeInstancesIndexRoute: typeof AuthEc2instancesDescribeInstancesIndexRoute
   AuthEc2keyDescribeKeyPairsIndexRoute: typeof AuthEc2keyDescribeKeyPairsIndexRoute
@@ -660,6 +783,8 @@ interface AuthRouteRouteChildren {
   AuthEc2subnetDescribeSubnetsIndexRoute: typeof AuthEc2subnetDescribeSubnetsIndexRoute
   AuthEc2volumesDescribeVolumesIndexRoute: typeof AuthEc2volumesDescribeVolumesIndexRoute
   AuthEc2vpcDescribeVpcsIndexRoute: typeof AuthEc2vpcDescribeVpcsIndexRoute
+  AuthIampoliciesListPoliciesIndexRoute: typeof AuthIampoliciesListPoliciesIndexRoute
+  AuthIamusersListUsersIndexRoute: typeof AuthIamusersListUsersIndexRoute
 }
 
 const AuthRouteRouteChildren: AuthRouteRouteChildren = {
@@ -672,6 +797,8 @@ const AuthRouteRouteChildren: AuthRouteRouteChildren = {
   AuthEc2subnetCreateSubnetRoute: AuthEc2subnetCreateSubnetRoute,
   AuthEc2volumesCreateVolumeRoute: AuthEc2volumesCreateVolumeRoute,
   AuthEc2vpcCreateVpcRoute: AuthEc2vpcCreateVpcRoute,
+  AuthIampoliciesCreatePolicyRoute: AuthIampoliciesCreatePolicyRoute,
+  AuthIamusersCreateUserRoute: AuthIamusersCreateUserRoute,
   AuthS3bucketsCreateBucketRoute: AuthS3bucketsCreateBucketRoute,
   AuthS3LsIndexRoute: AuthS3LsIndexRoute,
   AuthEc2imagesDescribeImagesIdRoute: AuthEc2imagesDescribeImagesIdRoute,
@@ -684,6 +811,9 @@ const AuthRouteRouteChildren: AuthRouteRouteChildren = {
   AuthEc2volumesDescribeVolumesIdRoute: AuthEc2volumesDescribeVolumesIdRoute,
   AuthEc2volumesModifyVolumeIdRoute: AuthEc2volumesModifyVolumeIdRoute,
   AuthEc2vpcDescribeVpcsIdRoute: AuthEc2vpcDescribeVpcsIdRoute,
+  AuthIampoliciesListPoliciesPolicyArnRoute:
+    AuthIampoliciesListPoliciesPolicyArnRoute,
+  AuthIamusersListUsersUserNameRoute: AuthIamusersListUsersUserNameRoute,
   AuthEc2imagesDescribeImagesIndexRoute: AuthEc2imagesDescribeImagesIndexRoute,
   AuthEc2instancesDescribeInstancesIndexRoute:
     AuthEc2instancesDescribeInstancesIndexRoute,
@@ -695,6 +825,8 @@ const AuthRouteRouteChildren: AuthRouteRouteChildren = {
   AuthEc2volumesDescribeVolumesIndexRoute:
     AuthEc2volumesDescribeVolumesIndexRoute,
   AuthEc2vpcDescribeVpcsIndexRoute: AuthEc2vpcDescribeVpcsIndexRoute,
+  AuthIampoliciesListPoliciesIndexRoute: AuthIampoliciesListPoliciesIndexRoute,
+  AuthIamusersListUsersIndexRoute: AuthIamusersListUsersIndexRoute,
 }
 
 const AuthRouteRouteWithChildren = AuthRouteRoute._addFileChildren(
