@@ -654,9 +654,9 @@ func TestRestoreInstances_ShuttingDownFinalizedToTerminated(t *testing.T) {
 		"shutting-down instance should be finalized to terminated on recovery")
 }
 
-// TestRestoreInstances_TerminatedMigratedToKV verifies that terminated instances
-// are migrated from per-node state to the terminated KV bucket on restore.
-func TestRestoreInstances_TerminatedMigratedToKV(t *testing.T) {
+// TestRestoreInstances_TerminatedRemoved verifies that terminated instances
+// are removed from per-node state on restore (no migration, just cleanup).
+func TestRestoreInstances_TerminatedRemoved(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
 	daemon.Instances.VMS["i-restore-term"] = &vm.VM{
@@ -668,14 +668,8 @@ func TestRestoreInstances_TerminatedMigratedToKV(t *testing.T) {
 	daemon.Instances.VMS = make(map[string]*vm.VM)
 	simulateCleanRestore(t, daemon)
 
-	// Terminated instances should be migrated to terminated KV and removed from local map
 	_, ok := daemon.Instances.VMS["i-restore-term"]
 	assert.False(t, ok, "terminated instance should be removed from local map")
-
-	terminatedInst, err := daemon.jsManager.LoadTerminatedInstance("i-restore-term")
-	require.NoError(t, err)
-	require.NotNil(t, terminatedInst, "terminated instance should exist in terminated KV")
-	assert.Equal(t, vm.StateTerminated, terminatedInst.Status)
 }
 
 // TestRestoreInstances_UserStoppedMigratedToSharedKV verifies that instances
@@ -803,13 +797,9 @@ func TestRestoreInstances_MixedStates(t *testing.T) {
 	require.NotNil(t, terminatedFromShutting, "shutting-down→terminated should exist in terminated KV")
 	assert.Equal(t, vm.StateTerminated, terminatedFromShutting.Status)
 
-	// already-terminated should migrate to terminated KV
+	// already-terminated should be removed from local map (no migration, just cleanup)
 	assert.Nil(t, daemon.Instances.VMS["i-mix-terminated"],
-		"terminated should be migrated to terminated KV")
-	terminatedFromLegacy, err3 := daemon.jsManager.LoadTerminatedInstance("i-mix-terminated")
-	require.NoError(t, err3)
-	require.NotNil(t, terminatedFromLegacy, "terminated should exist in terminated KV")
-	assert.Equal(t, vm.StateTerminated, terminatedFromLegacy.Status)
+		"terminated should be removed from local map")
 
 	assert.Nil(t, daemon.Instances.VMS["i-mix-stopped"],
 		"user-stopped should be migrated to shared KV")

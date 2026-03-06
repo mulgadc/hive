@@ -796,7 +796,7 @@ func (d *Daemon) restoreInstances() {
 		instance := d.Instances.VMS[i]
 
 		if instance.Status == vm.StateTerminated {
-			d.migrateTerminatedToKV(instance)
+			delete(d.Instances.VMS, instance.ID)
 			continue
 		}
 
