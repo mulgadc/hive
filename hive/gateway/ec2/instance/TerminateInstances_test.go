@@ -6,7 +6,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/qmp"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,12 +18,11 @@ func TestTerminateInstances_Success(t *testing.T) {
 	instanceID := "i-0123456789abcdef0"
 
 	nc.Subscribe("ec2.cmd."+instanceID, func(msg *nats.Msg) {
-		var cmd qmp.Command
+		var cmd types.EC2InstanceCommand
 		err := json.Unmarshal(msg.Data, &cmd)
 		require.NoError(t, err)
 
 		assert.Equal(t, instanceID, cmd.ID)
-		assert.Equal(t, "system_powerdown", cmd.QMPCommand.Execute)
 		assert.True(t, cmd.Attributes.StopInstance)
 		assert.True(t, cmd.Attributes.TerminateInstance)
 
@@ -161,7 +160,7 @@ func TestTerminateInstances_VerifiesQMPAttributes(t *testing.T) {
 	_, nc := startTestNATSServer(t)
 
 	instanceID := "i-verify"
-	var receivedCmd qmp.Command
+	var receivedCmd types.EC2InstanceCommand
 
 	nc.Subscribe("ec2.cmd."+instanceID, func(msg *nats.Msg) {
 		json.Unmarshal(msg.Data, &receivedCmd)

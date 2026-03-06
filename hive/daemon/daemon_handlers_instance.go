@@ -11,7 +11,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/awserrors"
-	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/hive/hive/vm"
@@ -306,7 +305,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	slog.Info("handleEC2RunInstances completed", "requested", launchCount, "created", len(instances), "launched", successCount)
 }
 
-func (d *Daemon) handleStartInstance(msg *nats.Msg, command qmp.Command, instance *vm.VM) {
+func (d *Daemon) handleStartInstance(msg *nats.Msg, command types.EC2InstanceCommand, instance *vm.VM) {
 	slog.Info("Starting instance", "id", command.ID)
 
 	// Validate instance is in stopped state
@@ -360,7 +359,7 @@ func (d *Daemon) handleStartInstance(msg *nats.Msg, command qmp.Command, instanc
 	}
 }
 
-func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command qmp.Command, instance *vm.VM) {
+func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2InstanceCommand, instance *vm.VM) {
 	isTerminate := command.Attributes.TerminateInstance
 	action := "Stopping"
 	initialState := vm.StateStopping
@@ -399,7 +398,7 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command qmp.Comman
 	}
 
 	// Run cleanup in goroutine to not block NATS
-	go func(inst *vm.VM, attrs qmp.Attributes) {
+	go func(inst *vm.VM, attrs types.EC2CommandAttributes) {
 		stopErr := d.stopInstance(map[string]*vm.VM{inst.ID: inst}, isTerminate)
 
 		if stopErr != nil {
@@ -685,7 +684,7 @@ func (d *Daemon) handleEC2StartStoppedInstance(msg *nats.Msg) {
 	// Add instance to local map and clear stop attribute before launch
 	d.Instances.Mu.Lock()
 	d.Instances.VMS[instance.ID] = instance
-	instance.Attributes = qmp.Attributes{StartInstance: true}
+	instance.Attributes = types.EC2CommandAttributes{StartInstance: true}
 	d.Instances.Mu.Unlock()
 
 	// Launch the instance infrastructure (QEMU, QMP, NATS subscriptions)

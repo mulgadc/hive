@@ -8,8 +8,8 @@ import (
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/awserrors"
-	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/qmp"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/nats-io/nats.go"
@@ -20,7 +20,7 @@ import (
 //	Phase 1: ebs.mount via NATS   (rolls back with ebs.unmount)
 //	Phase 2: QMP blockdev-add     (rolls back Phase 1)
 //	Phase 3: QMP device_add       (rolls back Phase 2 + Phase 1)
-func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance *vm.VM) {
+func (d *Daemon) handleAttachVolume(msg *nats.Msg, command types.EC2InstanceCommand, instance *vm.VM) {
 	slog.Info("Attaching volume to instance", "instanceId", command.ID)
 
 	// Validate AttachVolumeData
@@ -294,7 +294,7 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command qmp.Command, instance
 //	Phase 1: QMP device_del    (remove guest device)
 //	Phase 2: QMP blockdev-del  (remove block node)
 //	Phase 3: ebs.unmount NATS  (stop NBD server)
-func (d *Daemon) handleDetachVolume(msg *nats.Msg, command qmp.Command, instance *vm.VM) {
+func (d *Daemon) handleDetachVolume(msg *nats.Msg, command types.EC2InstanceCommand, instance *vm.VM) {
 	slog.Info("Detaching volume from instance", "instanceId", command.ID)
 
 	// Validate DetachVolumeData

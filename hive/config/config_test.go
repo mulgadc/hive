@@ -369,4 +369,3 @@ shardwal = true
 	require.NotNil(t, n.Viperblock.ShardWAL)
 	assert.True(t, *n.Viperblock.ShardWAL)
 }
-

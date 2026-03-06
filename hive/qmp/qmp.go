@@ -20,33 +20,6 @@ var CommandResponseTypes = map[string]unmarshalTarget{
 	"query-status": &Status{},
 }
 
-type Command struct {
-	ID               string            `json:"id"`
-	QMPCommand       QMPCommand        `json:"command"`
-	Attributes       Attributes        `json:"attributes"`
-	AttachVolumeData *AttachVolumeData `json:"attach_volume_data,omitempty"`
-	DetachVolumeData *DetachVolumeData `json:"detach_volume_data,omitempty"`
-}
-
-type Attributes struct {
-	StopInstance      bool `json:"stop_instance"`
-	TerminateInstance bool `json:"delete_instance"`
-	StartInstance     bool `json:"start_instance"`
-	AttachVolume      bool `json:"attach_volume"`
-	DetachVolume      bool `json:"detach_volume"`
-}
-
-type AttachVolumeData struct {
-	VolumeID string `json:"volume_id"`
-	Device   string `json:"device,omitempty"`
-}
-
-type DetachVolumeData struct {
-	VolumeID string `json:"volume_id"`
-	Device   string `json:"device,omitempty"`
-	Force    bool   `json:"force,omitempty"`
-}
-
 type Status struct {
 	Status     string `json:"status"`
 	Singlestep bool   `json:"singlestep"`

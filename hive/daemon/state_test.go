@@ -9,7 +9,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/config"
-	"github.com/mulgadc/hive/hive/qmp"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -676,7 +676,7 @@ func TestRestoreInstances_UserStoppedMigratedToSharedKV(t *testing.T) {
 	daemon.Instances.VMS["i-restore-userstop"] = &vm.VM{
 		ID:     "i-restore-userstop",
 		Status: vm.StateStopped,
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			StopInstance: true,
 		},
 	}
@@ -770,7 +770,7 @@ func TestRestoreInstances_MixedStates(t *testing.T) {
 	}
 	daemon.Instances.VMS["i-mix-stopped"] = &vm.VM{
 		ID: "i-mix-stopped", Status: vm.StateStopped,
-		Attributes: qmp.Attributes{StopInstance: true},
+		Attributes: types.EC2CommandAttributes{StopInstance: true},
 	}
 	require.NoError(t, daemon.WriteState())
 
@@ -850,7 +850,7 @@ func TestStatePersistence_RoundTrip(t *testing.T) {
 		ID:           "i-roundtrip",
 		Status:       vm.StateRunning,
 		InstanceType: "t3.micro",
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			StopInstance:      false,
 			TerminateInstance: false,
 		},
@@ -881,7 +881,7 @@ func TestRestoreInstances_StoppedInstanceMigratedToSharedKV(t *testing.T) {
 		ID:           instanceID,
 		InstanceType: "t3.micro",
 		Status:       vm.StateStopped,
-		Attributes:   qmp.Attributes{StopInstance: true},
+		Attributes:   types.EC2CommandAttributes{StopInstance: true},
 	}
 	require.NoError(t, daemon.WriteState())
 

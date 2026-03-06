@@ -10,7 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/awserrors"
-	"github.com/mulgadc/hive/hive/qmp"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -48,12 +48,12 @@ func AttachVolume(input *ec2.AttachVolumeInput, natsConn *nats.Conn, accountID s
 		device = *input.Device
 	}
 
-	command := qmp.Command{
+	command := types.EC2InstanceCommand{
 		ID: instanceID,
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			AttachVolume: true,
 		},
-		AttachVolumeData: &qmp.AttachVolumeData{
+		AttachVolumeData: &types.AttachVolumeData{
 			VolumeID: volumeID,
 			Device:   device,
 		},

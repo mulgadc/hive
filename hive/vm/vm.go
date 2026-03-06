@@ -37,7 +37,7 @@ type VM struct {
 	QMPClient *qmp.QMPClient `json:"-"`
 
 	// User attributes (user initiated stop/delete)
-	Attributes qmp.Attributes `json:"attributes"`
+	Attributes types.EC2CommandAttributes `json:"attributes"`
 
 	// EC2 API metadata - stored for AWS API compatibility
 	// RunInstancesInput contains the original request parameters (ImageId, KeyName, UserData, etc.)

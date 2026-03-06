@@ -10,7 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/awserrors"
 	handlers_ec2_volume "github.com/mulgadc/hive/hive/handlers/ec2/volume"
-	"github.com/mulgadc/hive/hive/qmp"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -66,12 +66,12 @@ func DetachVolume(input *ec2.DetachVolumeInput, natsConn *nats.Conn, accountID s
 		device = *input.Device
 	}
 
-	command := qmp.Command{
+	command := types.EC2InstanceCommand{
 		ID: instanceID,
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			DetachVolume: true,
 		},
-		DetachVolumeData: &qmp.DetachVolumeData{
+		DetachVolumeData: &types.DetachVolumeData{
 			VolumeID: volumeID,
 			Device:   device,
 			Force:    input.Force != nil && *input.Force,

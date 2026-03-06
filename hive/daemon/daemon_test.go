@@ -17,10 +17,10 @@ import (
 	awss3 "github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/hive/hive/config"
 	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
-	"github.com/mulgadc/hive/hive/types"
 	handlers_ec2_volume "github.com/mulgadc/hive/hive/handlers/ec2/volume"
 	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/hive/hive/qmp"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/nats-io/nats.go"
 	"github.com/pelletier/go-toml/v2"
@@ -862,20 +862,20 @@ func TestDaemon_BootAllocation(t *testing.T) {
 			InstanceType: getTestInstanceType(),
 			Status:       vm.StateRunning,
 			AccountID:    testAccountID,
-			Attributes:   qmp.Attributes{StopInstance: false},
+			Attributes:   types.EC2CommandAttributes{StopInstance: false},
 		},
 		"i-stopped": {
 			ID:           "i-stopped",
 			InstanceType: getTestInstanceType(),
 			Status:       vm.StateStopped,
 			AccountID:    testAccountID,
-			Attributes:   qmp.Attributes{StopInstance: true},
+			Attributes:   types.EC2CommandAttributes{StopInstance: true},
 		},
 		"i-terminated": {
 			ID:           "i-terminated",
 			InstanceType: getTestInstanceType(),
 			Status:       vm.StateTerminated,
-			Attributes:   qmp.Attributes{StopInstance: false},
+			Attributes:   types.EC2CommandAttributes{StopInstance: false},
 		},
 	}
 
@@ -2011,9 +2011,9 @@ func TestHandleEC2Events_AttachVolume(t *testing.T) {
 	defer sub.Unsubscribe()
 
 	t.Run("MissingAttachVolumeData", func(t *testing.T) {
-		command := qmp.Command{
+		command := types.EC2InstanceCommand{
 			ID: instanceID,
-			Attributes: qmp.Attributes{
+			Attributes: types.EC2CommandAttributes{
 				AttachVolume: true,
 			},
 			// No AttachVolumeData
@@ -2037,12 +2037,12 @@ func TestHandleEC2Events_AttachVolume(t *testing.T) {
 		instance.Status = vm.StateStopped
 		daemon.Instances.Mu.Unlock()
 
-		command := qmp.Command{
+		command := types.EC2InstanceCommand{
 			ID: instanceID,
-			Attributes: qmp.Attributes{
+			Attributes: types.EC2CommandAttributes{
 				AttachVolume: true,
 			},
-			AttachVolumeData: &qmp.AttachVolumeData{
+			AttachVolumeData: &types.AttachVolumeData{
 				VolumeID: volumeID,
 			},
 		}
@@ -2064,12 +2064,12 @@ func TestHandleEC2Events_AttachVolume(t *testing.T) {
 
 	t.Run("VolumeNotFound", func(t *testing.T) {
 		// volumeService.GetVolumeConfig will fail since we have no S3 backend
-		command := qmp.Command{
+		command := types.EC2InstanceCommand{
 			ID: instanceID,
-			Attributes: qmp.Attributes{
+			Attributes: types.EC2CommandAttributes{
 				AttachVolume: true,
 			},
-			AttachVolumeData: &qmp.AttachVolumeData{
+			AttachVolumeData: &types.AttachVolumeData{
 				VolumeID: "vol-nonexistent",
 				Device:   "/dev/sdf",
 			},
@@ -2157,9 +2157,9 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 	defer sub.Unsubscribe()
 
 	t.Run("MissingDetachVolumeData", func(t *testing.T) {
-		command := qmp.Command{
+		command := types.EC2InstanceCommand{
 			ID: instanceID,
-			Attributes: qmp.Attributes{
+			Attributes: types.EC2CommandAttributes{
 				DetachVolume: true,
 			},
 			// No DetachVolumeData
@@ -2181,12 +2181,12 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 		instance.Status = vm.StateStopped
 		daemon.Instances.Mu.Unlock()
 
-		command := qmp.Command{
+		command := types.EC2InstanceCommand{
 			ID: instanceID,
-			Attributes: qmp.Attributes{
+			Attributes: types.EC2CommandAttributes{
 				DetachVolume: true,
 			},
-			DetachVolumeData: &qmp.DetachVolumeData{
+			DetachVolumeData: &types.DetachVolumeData{
 				VolumeID: volumeID,
 			},
 		}
@@ -2207,12 +2207,12 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 	})
 
 	t.Run("VolumeNotAttached", func(t *testing.T) {
-		command := qmp.Command{
+		command := types.EC2InstanceCommand{
 			ID: instanceID,
-			Attributes: qmp.Attributes{
+			Attributes: types.EC2CommandAttributes{
 				DetachVolume: true,
 			},
-			DetachVolumeData: &qmp.DetachVolumeData{
+			DetachVolumeData: &types.DetachVolumeData{
 				VolumeID: "vol-nonexistent",
 			},
 		}
@@ -2238,12 +2238,12 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 		})
 		instance.EBSRequests.Mu.Unlock()
 
-		command := qmp.Command{
+		command := types.EC2InstanceCommand{
 			ID: instanceID,
-			Attributes: qmp.Attributes{
+			Attributes: types.EC2CommandAttributes{
 				DetachVolume: true,
 			},
-			DetachVolumeData: &qmp.DetachVolumeData{
+			DetachVolumeData: &types.DetachVolumeData{
 				VolumeID: bootVolumeID,
 			},
 		}
@@ -2273,12 +2273,12 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 		})
 		instance.EBSRequests.Mu.Unlock()
 
-		command := qmp.Command{
+		command := types.EC2InstanceCommand{
 			ID: instanceID,
-			Attributes: qmp.Attributes{
+			Attributes: types.EC2CommandAttributes{
 				DetachVolume: true,
 			},
-			DetachVolumeData: &qmp.DetachVolumeData{
+			DetachVolumeData: &types.DetachVolumeData{
 				VolumeID: efiVolumeID,
 			},
 		}
@@ -2307,12 +2307,12 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 		})
 		instance.EBSRequests.Mu.Unlock()
 
-		command := qmp.Command{
+		command := types.EC2InstanceCommand{
 			ID: instanceID,
-			Attributes: qmp.Attributes{
+			Attributes: types.EC2CommandAttributes{
 				DetachVolume: true,
 			},
-			DetachVolumeData: &qmp.DetachVolumeData{
+			DetachVolumeData: &types.DetachVolumeData{
 				VolumeID: ciVolumeID,
 			},
 		}
@@ -2332,12 +2332,12 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 	})
 
 	t.Run("DeviceMismatch", func(t *testing.T) {
-		command := qmp.Command{
+		command := types.EC2InstanceCommand{
 			ID: instanceID,
-			Attributes: qmp.Attributes{
+			Attributes: types.EC2CommandAttributes{
 				DetachVolume: true,
 			},
-			DetachVolumeData: &qmp.DetachVolumeData{
+			DetachVolumeData: &types.DetachVolumeData{
 				VolumeID: volumeID,
 				Device:   "/dev/sdg", // actual is /dev/sdf
 			},
@@ -2356,12 +2356,12 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 	t.Run("QMPDeviceDelFails_NoForce", func(t *testing.T) {
 		// With nil QMPClient encoder/decoder, SendQMPCommand returns error.
 		// Without force=true, this should return ServerInternal.
-		command := qmp.Command{
+		command := types.EC2InstanceCommand{
 			ID: instanceID,
-			Attributes: qmp.Attributes{
+			Attributes: types.EC2CommandAttributes{
 				DetachVolume: true,
 			},
-			DetachVolumeData: &qmp.DetachVolumeData{
+			DetachVolumeData: &types.DetachVolumeData{
 				VolumeID: volumeID,
 				Force:    false,
 			},
@@ -2517,12 +2517,12 @@ func TestDetachVolume_SuccessPath(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	command := qmp.Command{
+	command := types.EC2InstanceCommand{
 		ID: instanceID,
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			DetachVolume: true,
 		},
-		DetachVolumeData: &qmp.DetachVolumeData{
+		DetachVolumeData: &types.DetachVolumeData{
 			VolumeID: volumeID,
 		},
 	}
@@ -2656,12 +2656,12 @@ func TestDetachVolume_ForceFlag(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	command := qmp.Command{
+	command := types.EC2InstanceCommand{
 		ID: instanceID,
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			DetachVolume: true,
 		},
-		DetachVolumeData: &qmp.DetachVolumeData{
+		DetachVolumeData: &types.DetachVolumeData{
 			VolumeID: volumeID,
 			Force:    true,
 		},
@@ -2761,12 +2761,12 @@ func TestDetachVolume_BlockdevDelFailure(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	command := qmp.Command{
+	command := types.EC2InstanceCommand{
 		ID: instanceID,
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			DetachVolume: true,
 		},
-		DetachVolumeData: &qmp.DetachVolumeData{
+		DetachVolumeData: &types.DetachVolumeData{
 			VolumeID: volumeID,
 		},
 	}
@@ -2861,12 +2861,12 @@ func TestDetachVolume_SuccessWithDeviceMatch(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	command := qmp.Command{
+	command := types.EC2InstanceCommand{
 		ID: instanceID,
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			DetachVolume: true,
 		},
-		DetachVolumeData: &qmp.DetachVolumeData{
+		DetachVolumeData: &types.DetachVolumeData{
 			VolumeID: volumeID,
 			Device:   "/dev/sdh", // matches actual device
 		},
@@ -2938,12 +2938,12 @@ func TestAttachVolume_ReplacesStaleEBSRequest(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	command := qmp.Command{
+	command := types.EC2InstanceCommand{
 		ID: instanceID,
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			AttachVolume: true,
 		},
-		AttachVolumeData: &qmp.AttachVolumeData{
+		AttachVolumeData: &types.AttachVolumeData{
 			VolumeID: volumeID,
 			Device:   "/dev/sdg", // new device
 		},
@@ -3455,9 +3455,9 @@ func TestStopTerminate_IncorrectInstanceState(t *testing.T) {
 		instance.Status = vm.StateStopped
 		daemon.Instances.Mu.Unlock()
 
-		command := qmp.Command{
+		command := types.EC2InstanceCommand{
 			ID: instanceID,
-			Attributes: qmp.Attributes{
+			Attributes: types.EC2CommandAttributes{
 				StopInstance: true,
 			},
 		}
@@ -3478,9 +3478,9 @@ func TestStopTerminate_IncorrectInstanceState(t *testing.T) {
 		instance.Status = vm.StateTerminated
 		daemon.Instances.Mu.Unlock()
 
-		command := qmp.Command{
+		command := types.EC2InstanceCommand{
 			ID: instanceID,
-			Attributes: qmp.Attributes{
+			Attributes: types.EC2CommandAttributes{
 				TerminateInstance: true,
 			},
 		}

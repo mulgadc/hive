@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/qmp"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -31,15 +31,9 @@ func StopInstances(input *ec2.StopInstancesInput, natsConn *nats.Conn, accountID
 		}
 		instanceID := *instanceIDPtr
 
-		// Build the QMP command to stop the instance
-		// Note: system_powerdown with stop_instance=true prevents auto-restart on daemon boot
-		command := qmp.Command{
+		command := types.EC2InstanceCommand{
 			ID: instanceID,
-			QMPCommand: qmp.QMPCommand{
-				Execute:   "system_powerdown",
-				Arguments: map[string]any{},
-			},
-			Attributes: qmp.Attributes{
+			Attributes: types.EC2CommandAttributes{
 				StopInstance:      true, // Don't auto-restart on daemon boot
 				TerminateInstance: false,
 			},

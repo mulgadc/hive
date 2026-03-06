@@ -14,7 +14,6 @@ import (
 	awss3 "github.com/aws/aws-sdk-go/service/s3"
 
 	"github.com/mulgadc/hive/hive/config"
-	"github.com/mulgadc/hive/hive/types"
 	handlers_ec2_account "github.com/mulgadc/hive/hive/handlers/ec2/account"
 	handlers_ec2_eigw "github.com/mulgadc/hive/hive/handlers/ec2/eigw"
 	handlers_ec2_igw "github.com/mulgadc/hive/hive/handlers/ec2/igw"
@@ -27,6 +26,7 @@ import (
 	handlers_ec2_vpc "github.com/mulgadc/hive/hive/handlers/ec2/vpc"
 	"github.com/mulgadc/hive/hive/objectstore"
 	"github.com/mulgadc/hive/hive/qmp"
+	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/vm"
 	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/nats-io/nats-server/v2/server"
@@ -553,9 +553,9 @@ func TestHandleEC2Events_StopInstance(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	cmd := qmp.Command{
+	cmd := types.EC2InstanceCommand{
 		ID:         instanceID,
-		Attributes: qmp.Attributes{StopInstance: true},
+		Attributes: types.EC2CommandAttributes{StopInstance: true},
 	}
 	cmdData, _ := json.Marshal(cmd)
 
@@ -599,9 +599,9 @@ func TestHandleEC2Events_TerminateInstance(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	cmd := qmp.Command{
+	cmd := types.EC2InstanceCommand{
 		ID:         instanceID,
-		Attributes: qmp.Attributes{TerminateInstance: true},
+		Attributes: types.EC2CommandAttributes{TerminateInstance: true},
 	}
 	cmdData, _ := json.Marshal(cmd)
 
@@ -630,9 +630,9 @@ func TestHandleEC2Events_InstanceNotFound(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	cmd := qmp.Command{
+	cmd := types.EC2InstanceCommand{
 		ID:         "i-nonexistent",
-		Attributes: qmp.Attributes{StopInstance: true},
+		Attributes: types.EC2CommandAttributes{StopInstance: true},
 	}
 	cmdData, _ := json.Marshal(cmd)
 
@@ -1484,12 +1484,12 @@ func TestAttachVolume_ZoneMismatch(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	command := qmp.Command{
+	command := types.EC2InstanceCommand{
 		ID: instanceID,
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			AttachVolume: true,
 		},
-		AttachVolumeData: &qmp.AttachVolumeData{
+		AttachVolumeData: &types.AttachVolumeData{
 			VolumeID: volumeID,
 		},
 	}
@@ -2755,9 +2755,9 @@ func TestAttachVolume_MissingVolumeData(t *testing.T) {
 	defer sub.Unsubscribe()
 
 	// AttachVolume with nil AttachVolumeData
-	command := qmp.Command{
+	command := types.EC2InstanceCommand{
 		ID: instanceID,
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			AttachVolume: true,
 		},
 		AttachVolumeData: nil,
@@ -2794,12 +2794,12 @@ func TestAttachVolume_InstanceNotRunning(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	command := qmp.Command{
+	command := types.EC2InstanceCommand{
 		ID: instanceID,
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			AttachVolume: true,
 		},
-		AttachVolumeData: &qmp.AttachVolumeData{
+		AttachVolumeData: &types.AttachVolumeData{
 			VolumeID: "vol-test-123",
 		},
 	}
@@ -2835,12 +2835,12 @@ func TestAttachVolume_VolumeNotFound(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	command := qmp.Command{
+	command := types.EC2InstanceCommand{
 		ID: instanceID,
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			AttachVolume: true,
 		},
-		AttachVolumeData: &qmp.AttachVolumeData{
+		AttachVolumeData: &types.AttachVolumeData{
 			VolumeID: "vol-nonexistent-999",
 		},
 	}
@@ -2897,12 +2897,12 @@ func TestAttachVolume_VolumeInUse(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	command := qmp.Command{
+	command := types.EC2InstanceCommand{
 		ID: instanceID,
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			AttachVolume: true,
 		},
-		AttachVolumeData: &qmp.AttachVolumeData{
+		AttachVolumeData: &types.AttachVolumeData{
 			VolumeID: volumeID,
 		},
 	}
@@ -2940,9 +2940,9 @@ func TestDetachVolume_MissingVolumeData(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	command := qmp.Command{
+	command := types.EC2InstanceCommand{
 		ID: instanceID,
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			DetachVolume: true,
 		},
 		DetachVolumeData: nil,
@@ -2979,12 +2979,12 @@ func TestDetachVolume_InstanceNotRunning(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	command := qmp.Command{
+	command := types.EC2InstanceCommand{
 		ID: instanceID,
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			DetachVolume: true,
 		},
-		DetachVolumeData: &qmp.DetachVolumeData{
+		DetachVolumeData: &types.DetachVolumeData{
 			VolumeID: "vol-test-123",
 		},
 	}
@@ -3020,12 +3020,12 @@ func TestDetachVolume_VolumeNotAttached(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	command := qmp.Command{
+	command := types.EC2InstanceCommand{
 		ID: instanceID,
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			DetachVolume: true,
 		},
-		DetachVolumeData: &qmp.DetachVolumeData{
+		DetachVolumeData: &types.DetachVolumeData{
 			VolumeID: "vol-not-attached-999",
 		},
 	}
@@ -3064,12 +3064,12 @@ func TestDetachVolume_BootVolumeRejected(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	command := qmp.Command{
+	command := types.EC2InstanceCommand{
 		ID: instanceID,
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			DetachVolume: true,
 		},
-		DetachVolumeData: &qmp.DetachVolumeData{
+		DetachVolumeData: &types.DetachVolumeData{
 			VolumeID: "vol-boot-001",
 		},
 	}
@@ -3108,12 +3108,12 @@ func TestDetachVolume_DeviceMismatch(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	command := qmp.Command{
+	command := types.EC2InstanceCommand{
 		ID: instanceID,
-		Attributes: qmp.Attributes{
+		Attributes: types.EC2CommandAttributes{
 			DetachVolume: true,
 		},
-		DetachVolumeData: &qmp.DetachVolumeData{
+		DetachVolumeData: &types.DetachVolumeData{
 			VolumeID: "vol-mismatch-001",
 			Device:   "/dev/sdg",
 		},

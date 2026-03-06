@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/mulgadc/hive/hive/awserrors"
-	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/hive/hive/vm"
@@ -57,10 +56,10 @@ func handleNATSRequest[I any, O any](msg *nats.Msg, serviceFn func(*I, string) (
 
 // handleEC2Events processes incoming EC2 instance events (start, stop, terminate, attach-volume)
 func (d *Daemon) handleEC2Events(msg *nats.Msg) {
-	var command qmp.Command
+	var command types.EC2InstanceCommand
 
 	if err := json.Unmarshal(msg.Data, &command); err != nil {
-		slog.Error("Error unmarshaling QMP command", "err", err)
+		slog.Error("Error unmarshaling EC2 instance command", "err", err)
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
@@ -92,49 +91,8 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 	case command.Attributes.StopInstance, command.Attributes.TerminateInstance:
 		d.handleStopOrTerminateInstance(msg, command, instance)
 	default:
-		d.handleQMPCommand(msg, command, instance)
-	}
-}
-
-func (d *Daemon) handleQMPCommand(msg *nats.Msg, command qmp.Command, instance *vm.VM) {
-	resp, err := d.SendQMPCommand(instance.QMPClient, command.QMPCommand, instance.ID)
-	if err != nil {
-		slog.Error("Failed to send QMP command", "err", err)
+		slog.Warn("Unhandled EC2 instance command", "id", command.ID, "attributes", command.Attributes)
 		respondWithError(msg, awserrors.ErrorServerInternal)
-		return
-	}
-
-	slog.Debug("RAW QMP Response", "resp", string(resp.Return))
-
-	// Unmarshal the response
-	target, ok := qmp.CommandResponseTypes[command.QMPCommand.Execute]
-	if !ok {
-		slog.Warn("Unhandled QMP command", "cmd", command.QMPCommand.Execute)
-		if err := msg.Respond(resp.Return); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
-		return
-	}
-
-	if err := json.Unmarshal(resp.Return, target); err != nil {
-		slog.Error("Failed to unmarshal QMP response", "cmd", command.QMPCommand.Execute, "err", err)
-		if err := msg.Respond(resp.Return); err != nil {
-			slog.Error("Failed to respond to NATS request", "err", err)
-		}
-		return
-	}
-
-	// Update attributes and respond
-	d.Instances.Mu.Lock()
-	instance.Attributes = command.Attributes
-	d.Instances.Mu.Unlock()
-
-	if err := d.WriteState(); err != nil {
-		slog.Error("Failed to write state to disk", "err", err)
-	}
-
-	if err := msg.Respond(resp.Return); err != nil {
-		slog.Error("Failed to respond to NATS request", "err", err)
 	}
 }
 
