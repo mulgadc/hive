@@ -1,5 +1,4 @@
 import { AlertTriangle, Check } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
 
 import {
   AlertDialog,
@@ -12,8 +11,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-
-const COPY_FEEDBACK_DURATION_MS = 2000
+import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard"
 
 interface AccessKeyModalProps {
   onClose: () => void
@@ -26,29 +24,7 @@ export function AccessKeyModal({
   accessKeyId,
   secretAccessKey,
 }: AccessKeyModalProps) {
-  const [copied, setCopied] = useState(false)
-  const timerRef = useRef<ReturnType<typeof setTimeout>>(null)
-
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current)
-      }
-    }
-  }, [])
-
-  const handleCopy = async () => {
-    const text = `Access Key ID: ${accessKeyId}\nSecret Access Key: ${secretAccessKey}`
-    await navigator.clipboard.writeText(text)
-    setCopied(true)
-    if (timerRef.current) {
-      clearTimeout(timerRef.current)
-    }
-    timerRef.current = setTimeout(
-      () => setCopied(false),
-      COPY_FEEDBACK_DURATION_MS,
-    )
-  }
+  const { copied, copy } = useCopyToClipboard()
 
   return (
     <AlertDialog open>
@@ -78,7 +54,11 @@ export function AccessKeyModal({
 
           <Button
             className="w-full"
-            onClick={handleCopy}
+            onClick={() =>
+              copy(
+                `Access Key ID: ${accessKeyId}\nSecret Access Key: ${secretAccessKey}`,
+              )
+            }
             type="button"
             variant="outline"
           >
