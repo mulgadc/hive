@@ -16,6 +16,7 @@ import (
 
 // RebootInstances sends reboot commands to specified instances via NATS.
 // Unlike stop+start, reboot keeps the instance running and sends a QMP system_reset.
+// Returns an empty response on success (AWS returns no state-change data).
 func RebootInstances(input *ec2.RebootInstancesInput, natsConn *nats.Conn, accountID string) (*ec2.RebootInstancesOutput, error) {
 	if len(input.InstanceIds) == 0 {
 		return nil, fmt.Errorf("no instance IDs provided")
@@ -52,6 +53,7 @@ func RebootInstances(input *ec2.RebootInstancesInput, natsConn *nats.Conn, accou
 			return nil, errors.New(awserrors.ErrorInvalidInstanceIDNotFound)
 		}
 
+		// Check if the daemon returned an error response (e.g. ownership check failure)
 		if responseError, parseErr := utils.ValidateErrorPayload(msg.Data); parseErr != nil {
 			slog.Error("RebootInstances: Daemon returned error", "instance_id", instanceID, "code", *responseError.Code)
 			return nil, errors.New(*responseError.Code)

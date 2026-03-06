@@ -73,13 +73,11 @@ func TestRebootInstances_EmptyInstanceIds(t *testing.T) {
 	assert.Contains(t, err.Error(), "no instance IDs provided")
 }
 
-func TestRebootInstances_NATSTimeout(t *testing.T) {
+func TestRebootInstances_NATSRequestFails(t *testing.T) {
 	_, nc := startTestNATSServer(t)
 
-	instanceID := "i-nosubscriber"
-
 	input := &ec2.RebootInstancesInput{
-		InstanceIds: []*string{aws.String(instanceID)},
+		InstanceIds: []*string{aws.String("i-nosubscriber")},
 	}
 
 	_, err := RebootInstances(input, nc, "123456789012")
