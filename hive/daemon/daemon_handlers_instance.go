@@ -419,11 +419,12 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 
 			if d.jsManager != nil {
 				if isTerminate {
-					// Write to terminated KV bucket (auto-expires after 1 hour via TTL)
+					// Write to terminated KV bucket (auto-expires after 1 hour via TTL).
+					// On failure, continue cleanup — VM is already stopped, keeping it
+					// in the local map just delays data loss to the next restart.
 					if err := d.jsManager.WriteTerminatedInstance(inst.ID, inst); err != nil {
-						slog.Error("Failed to write terminated instance to KV, keeping local ownership",
+						slog.Error("Failed to write terminated instance to KV, instance will not appear in DescribeInstances",
 							"instanceId", inst.ID, "err", err)
-						return
 					}
 				} else {
 					// Write to shared KV first — if daemon crashes after this but
@@ -814,17 +815,19 @@ func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
 	}
 	instance.EBSRequests.Mu.Unlock()
 
-	// Remove from shared stopped KV
-	if err := d.jsManager.DeleteStoppedInstance(req.InstanceID); err != nil {
-		slog.Error("handleEC2TerminateStoppedInstance: failed to delete from shared KV", "instanceId", req.InstanceID, "err", err)
+	// Write to terminated KV bucket FIRST so the instance is visible in DescribeInstances.
+	// If this fails, the instance remains in the stopped bucket (safe to retry).
+	instance.Status = vm.StateTerminated
+	if err := d.jsManager.WriteTerminatedInstance(req.InstanceID, instance); err != nil {
+		slog.Error("handleEC2TerminateStoppedInstance: failed to write to terminated KV, aborting", "instanceId", req.InstanceID, "err", err)
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
 
-	// Write to terminated KV bucket so it appears in DescribeInstances for ~1 hour
-	instance.Status = vm.StateTerminated
-	if err := d.jsManager.WriteTerminatedInstance(req.InstanceID, instance); err != nil {
-		slog.Error("handleEC2TerminateStoppedInstance: failed to write to terminated KV", "instanceId", req.InstanceID, "err", err)
+	// Now safe to remove from shared stopped KV — instance already exists in terminated bucket
+	if err := d.jsManager.DeleteStoppedInstance(req.InstanceID); err != nil {
+		slog.Error("handleEC2TerminateStoppedInstance: failed to delete from stopped KV", "instanceId", req.InstanceID, "err", err)
+		// Non-fatal: instance exists in terminated bucket, stale stopped entry won't cause harm
 	}
 
 	slog.Info("Terminated stopped instance from shared KV", "instanceId", req.InstanceID)
@@ -888,6 +891,8 @@ func (d *Daemon) describeInstancesFromKV(msg *nats.Msg, listFn func() ([]*vm.VM,
 			continue
 		}
 		if instance.Reservation == nil || instance.Instance == nil {
+			slog.Warn(handlerName+": skipping instance with nil Reservation/Instance (data integrity issue)",
+				"instanceId", instance.ID)
 			continue
 		}
 

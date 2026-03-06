@@ -190,6 +190,41 @@ func (m *JetStreamManager) recoverKVBucket() (nats.KeyValue, error) {
 	return kv, nil
 }
 
+// recoverTerminatedKVBucket attempts to reconnect to or re-create the terminated-instances
+// KV bucket after the underlying JetStream stream was lost during cluster formation.
+func (m *JetStreamManager) recoverTerminatedKVBucket() (nats.KeyValue, error) {
+	m.kvMu.Lock()
+	defer m.kvMu.Unlock()
+
+	kv, err := m.js.KeyValue(TerminatedInstanceBucket)
+	if err == nil {
+		m.terminatedKV = kv
+		slog.Info("Reconnected to KV bucket", "bucket", TerminatedInstanceBucket)
+		return kv, nil
+	}
+
+	if !errors.Is(err, nats.ErrBucketNotFound) && !isStreamUnavailable(err) {
+		return nil, err
+	}
+
+	slog.Warn("KV bucket stream lost, recreating", "bucket", TerminatedInstanceBucket, "replicas", m.replicas)
+	kv, err = m.js.CreateKeyValue(&nats.KeyValueConfig{
+		Bucket:      TerminatedInstanceBucket,
+		Description: "Terminated instances (auto-expire after 1 hour)",
+		History:     1,
+		Replicas:    m.replicas,
+		TTL:         1 * time.Hour,
+	})
+	if err != nil {
+		slog.Error("Failed to recreate KV bucket", "bucket", TerminatedInstanceBucket, "err", err)
+		return nil, err
+	}
+
+	m.terminatedKV = kv
+	slog.Info("KV bucket recreated successfully", "bucket", TerminatedInstanceBucket)
+	return kv, nil
+}
+
 // Heartbeat represents a daemon's periodic health status published to cluster KV.
 type Heartbeat struct {
 	Node          string   `json:"node"`
@@ -700,6 +735,18 @@ func (m *JetStreamManager) WriteTerminatedInstance(instanceID string, instance *
 	key := TerminatedInstancePrefix + instanceID
 	_, err = m.terminatedKV.Put(key, jsonData)
 	if err != nil {
+		if isStreamUnavailable(err) {
+			slog.Warn("KV stream unavailable, attempting recovery", "operation", "WriteTerminatedInstance", "key", key, "err", err)
+			kv, recoverErr := m.recoverTerminatedKVBucket()
+			if recoverErr != nil {
+				return err
+			}
+			if _, retryErr := kv.Put(key, jsonData); retryErr != nil {
+				return retryErr
+			}
+			slog.Debug("Wrote terminated instance to JetStream KV (after recovery)", "key", key, "instanceId", instanceID)
+			return nil
+		}
 		return err
 	}
 
@@ -718,7 +765,22 @@ func (m *JetStreamManager) ListTerminatedInstances() ([]*vm.VM, error) {
 		if errors.Is(err, nats.ErrNoKeysFound) {
 			return nil, nil
 		}
-		return nil, err
+		if isStreamUnavailable(err) {
+			slog.Warn("KV stream unavailable, attempting recovery", "operation", "ListTerminatedInstances", "err", err)
+			kv, recoverErr := m.recoverTerminatedKVBucket()
+			if recoverErr != nil {
+				return nil, err
+			}
+			keys, err = kv.Keys()
+			if err != nil {
+				if errors.Is(err, nats.ErrNoKeysFound) {
+					return nil, nil
+				}
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
 	}
 
 	var instances []*vm.VM
@@ -756,6 +818,17 @@ func (m *JetStreamManager) DeleteTerminatedInstance(instanceID string) error {
 	key := TerminatedInstancePrefix + instanceID
 	err := m.terminatedKV.Delete(key)
 	if err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
+		if isStreamUnavailable(err) {
+			slog.Warn("KV stream unavailable, attempting recovery", "operation", "DeleteTerminatedInstance", "key", key, "err", err)
+			kv, recoverErr := m.recoverTerminatedKVBucket()
+			if recoverErr != nil {
+				return err
+			}
+			if retryErr := kv.Delete(key); retryErr != nil && !errors.Is(retryErr, nats.ErrKeyNotFound) {
+				return retryErr
+			}
+			return nil
+		}
 		return err
 	}
 
@@ -776,7 +849,22 @@ func (m *JetStreamManager) LoadTerminatedInstance(instanceID string) (*vm.VM, er
 		if errors.Is(err, nats.ErrKeyNotFound) {
 			return nil, nil
 		}
-		return nil, err
+		if isStreamUnavailable(err) {
+			slog.Warn("KV stream unavailable, attempting recovery", "operation", "LoadTerminatedInstance", "key", key, "err", err)
+			kv, recoverErr := m.recoverTerminatedKVBucket()
+			if recoverErr != nil {
+				return nil, err
+			}
+			entry, err = kv.Get(key)
+			if err != nil {
+				if errors.Is(err, nats.ErrKeyNotFound) {
+					return nil, nil
+				}
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
 	}
 
 	var instance vm.VM

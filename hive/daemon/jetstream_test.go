@@ -1127,3 +1127,84 @@ func TestJetStreamManager_TerminatedInstance_KVNotInitialized(t *testing.T) {
 	_, err = jsm.ListTerminatedInstances()
 	assert.Error(t, err)
 }
+
+// --- Terminated KV bucket recovery tests ---
+
+// deleteTerminatedInstanceBucket deletes the underlying JetStream stream for the terminated-instances KV bucket.
+func deleteTerminatedInstanceBucket(t *testing.T, nc *nats.Conn) {
+	t.Helper()
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	err = js.DeleteStream("KV_" + TerminatedInstanceBucket)
+	require.NoError(t, err)
+}
+
+func TestJetStreamManager_WriteTerminatedInstance_RecoverAfterStreamLost(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	require.NoError(t, jsm.InitTerminatedInstanceBucket())
+
+	deleteTerminatedInstanceBucket(t, nc)
+
+	testVM := &vm.VM{ID: "i-term-recover", Status: vm.StateTerminated, InstanceType: "t3.micro"}
+	err = jsm.WriteTerminatedInstance(testVM.ID, testVM)
+	require.NoError(t, err, "WriteTerminatedInstance should recover after stream loss")
+
+	loaded, err := jsm.LoadTerminatedInstance(testVM.ID)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, "i-term-recover", loaded.ID)
+
+	_ = jsm.DeleteTerminatedInstance(testVM.ID)
+}
+
+func TestJetStreamManager_LoadTerminatedInstance_RecoverAfterStreamLost(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	require.NoError(t, jsm.InitTerminatedInstanceBucket())
+
+	deleteTerminatedInstanceBucket(t, nc)
+
+	loaded, err := jsm.LoadTerminatedInstance("i-nonexistent")
+	require.NoError(t, err, "LoadTerminatedInstance should recover after stream loss")
+	assert.Nil(t, loaded)
+}
+
+func TestJetStreamManager_DeleteTerminatedInstance_RecoverAfterStreamLost(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	require.NoError(t, jsm.InitTerminatedInstanceBucket())
+
+	deleteTerminatedInstanceBucket(t, nc)
+
+	err = jsm.DeleteTerminatedInstance("i-any")
+	require.NoError(t, err, "DeleteTerminatedInstance should recover after stream loss")
+}
+
+func TestJetStreamManager_ListTerminatedInstances_RecoverAfterStreamLost(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	require.NoError(t, jsm.InitTerminatedInstanceBucket())
+
+	deleteTerminatedInstanceBucket(t, nc)
+
+	instances, err := jsm.ListTerminatedInstances()
+	require.NoError(t, err, "ListTerminatedInstances should recover after stream loss")
+	assert.Empty(t, instances)
+}
