@@ -4,6 +4,7 @@ import { Camera, Link2, Link2Off, Trash2 } from "lucide-react"
 import { useState } from "react"
 
 import { BackLink } from "@/components/back-link"
+import { DeleteConfirmationDialog } from "@/components/delete-confirmation-dialog"
 import { DetailCard } from "@/components/detail-card"
 import { DetailRow } from "@/components/detail-row"
 import { ErrorBanner } from "@/components/error-banner"
@@ -275,33 +276,18 @@ function VolumeDetail() {
         )}
       </div>
 
-      <AlertDialog
+      <DeleteConfirmationDialog
+        description={`Are you sure you want to delete the volume "${volume.VolumeId}"? This action cannot be undone.`}
+        isPending={deleteMutation.isPending}
+        onConfirm={handleDelete}
         onOpenChange={(open) => {
           if (!open) {
             closeDialog()
           }
         }}
         open={activeDialog === "delete"}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Volume</AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to delete the volume "{volume.VolumeId}"?
-              This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={deleteMutation.isPending}
-              onClick={handleDelete}
-            >
-              {deleteMutation.isPending ? "Deleting\u2026" : "Delete"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        title="Delete Volume"
+      />
 
       <AlertDialog
         onOpenChange={(open) => {
