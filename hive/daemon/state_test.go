@@ -62,6 +62,7 @@ func createDaemonWithJetStream(t *testing.T) *Daemon {
 	require.NoError(t, err)
 	require.NoError(t, daemon.jsManager.InitKVBucket())
 	require.NoError(t, daemon.jsManager.InitClusterStateBucket())
+	require.NoError(t, daemon.jsManager.InitTerminatedInstanceBucket())
 
 	return daemon
 }
@@ -642,15 +643,20 @@ func TestRestoreInstances_ShuttingDownFinalizedToTerminated(t *testing.T) {
 	daemon.Instances.VMS = make(map[string]*vm.VM)
 	simulateCleanRestore(t, daemon)
 
-	instance, ok := daemon.Instances.VMS["i-restore-shut"]
-	require.True(t, ok, "instance should be loaded from state")
-	assert.Equal(t, vm.StateTerminated, instance.Status,
+	// shutting-down→terminated should be migrated to terminated KV
+	_, ok := daemon.Instances.VMS["i-restore-shut"]
+	assert.False(t, ok, "terminated instance should be removed from local map")
+
+	terminatedInst, err := daemon.jsManager.LoadTerminatedInstance("i-restore-shut")
+	require.NoError(t, err)
+	require.NotNil(t, terminatedInst, "terminated instance should exist in terminated KV")
+	assert.Equal(t, vm.StateTerminated, terminatedInst.Status,
 		"shutting-down instance should be finalized to terminated on recovery")
 }
 
-// TestRestoreInstances_TerminatedSkipped verifies that terminated instances
-// are loaded but not relaunched or modified.
-func TestRestoreInstances_TerminatedSkipped(t *testing.T) {
+// TestRestoreInstances_TerminatedRemoved verifies that terminated instances
+// are removed from per-node state on restore (no migration, just cleanup).
+func TestRestoreInstances_TerminatedRemoved(t *testing.T) {
 	daemon := createDaemonWithJetStream(t)
 
 	daemon.Instances.VMS["i-restore-term"] = &vm.VM{
@@ -662,10 +668,8 @@ func TestRestoreInstances_TerminatedSkipped(t *testing.T) {
 	daemon.Instances.VMS = make(map[string]*vm.VM)
 	simulateCleanRestore(t, daemon)
 
-	instance, ok := daemon.Instances.VMS["i-restore-term"]
-	require.True(t, ok, "terminated instance should still be loaded")
-	assert.Equal(t, vm.StateTerminated, instance.Status,
-		"terminated instance should remain terminated")
+	_, ok := daemon.Instances.VMS["i-restore-term"]
+	assert.False(t, ok, "terminated instance should be removed from local map")
 }
 
 // TestRestoreInstances_UserStoppedMigratedToSharedKV verifies that instances
@@ -785,10 +789,17 @@ func TestRestoreInstances_MixedStates(t *testing.T) {
 	require.NotNil(t, stoppedFromStopping, "stopping→stopped should exist in shared KV")
 	assert.Equal(t, vm.StateStopped, stoppedFromStopping.Status)
 
-	assert.Equal(t, vm.StateTerminated, daemon.Instances.VMS["i-mix-shutting"].Status,
-		"shutting-down should finalize to terminated")
-	assert.Equal(t, vm.StateTerminated, daemon.Instances.VMS["i-mix-terminated"].Status,
-		"terminated should remain terminated")
+	// shutting-down should finalize to terminated and migrate to terminated KV
+	assert.Nil(t, daemon.Instances.VMS["i-mix-shutting"],
+		"shutting-down→terminated should be migrated to terminated KV")
+	terminatedFromShutting, err2 := daemon.jsManager.LoadTerminatedInstance("i-mix-shutting")
+	require.NoError(t, err2)
+	require.NotNil(t, terminatedFromShutting, "shutting-down→terminated should exist in terminated KV")
+	assert.Equal(t, vm.StateTerminated, terminatedFromShutting.Status)
+
+	// already-terminated should be removed from local map (no migration, just cleanup)
+	assert.Nil(t, daemon.Instances.VMS["i-mix-terminated"],
+		"terminated should be removed from local map")
 
 	assert.Nil(t, daemon.Instances.VMS["i-mix-stopped"],
 		"user-stopped should be migrated to shared KV")
@@ -824,10 +835,16 @@ func TestRestoreInstances_StatePersistsAfterRecovery(t *testing.T) {
 	require.NotNil(t, stoppedInst)
 	assert.Equal(t, vm.StateStopped, stoppedInst.Status)
 
-	assert.Equal(t, vm.StateTerminated, daemon.Instances.VMS["i-persist-shut"].Status)
+	// shutting-down→terminated should be migrated to terminated KV
+	assert.Nil(t, daemon.Instances.VMS["i-persist-shut"],
+		"terminated instance should be removed from local map")
+	terminatedInst, err := daemon.jsManager.LoadTerminatedInstance("i-persist-shut")
+	require.NoError(t, err)
+	require.NotNil(t, terminatedInst)
+	assert.Equal(t, vm.StateTerminated, terminatedInst.Status)
 
 	// Second restart: stopped instance is in shared KV (not per-node state),
-	// so local map won't have it. Terminated instance persists in per-node state.
+	// terminated instance is in terminated KV (not per-node state).
 	daemon.Instances.VMS = make(map[string]*vm.VM)
 	simulateCleanRestore(t, daemon)
 
@@ -837,8 +854,49 @@ func TestRestoreInstances_StatePersistsAfterRecovery(t *testing.T) {
 	require.NotNil(t, stoppedInst2, "stopped instance should persist in shared KV through second restart")
 	assert.Equal(t, vm.StateStopped, stoppedInst2.Status)
 
-	assert.Equal(t, vm.StateTerminated, daemon.Instances.VMS["i-persist-shut"].Status,
-		"terminated state should persist through second restart")
+	// Terminated instance should still be in terminated KV (within TTL window)
+	terminatedInst2, err := daemon.jsManager.LoadTerminatedInstance("i-persist-shut")
+	require.NoError(t, err)
+	require.NotNil(t, terminatedInst2, "terminated instance should persist in terminated KV through second restart")
+	assert.Equal(t, vm.StateTerminated, terminatedInst2.Status)
+}
+
+// TestMigrateInstanceToKV verifies the unified migration helper works for both stopped and terminated paths.
+func TestMigrateInstanceToKV(t *testing.T) {
+	daemon := createDaemonWithJetStream(t)
+
+	// Test stopped migration
+	stoppedVM := &vm.VM{ID: "i-migrate-stop", Status: vm.StateStopped}
+	daemon.Instances.VMS[stoppedVM.ID] = stoppedVM
+	assert.True(t, daemon.migrateStoppedToSharedKV(stoppedVM))
+	assert.Nil(t, daemon.Instances.VMS[stoppedVM.ID], "should be removed from local map")
+	loaded, err := daemon.jsManager.LoadStoppedInstance(stoppedVM.ID)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, daemon.node, loaded.LastNode)
+
+	// Test terminated migration
+	terminatedVM := &vm.VM{ID: "i-migrate-term", Status: vm.StateTerminated}
+	daemon.Instances.VMS[terminatedVM.ID] = terminatedVM
+	assert.True(t, daemon.migrateTerminatedToKV(terminatedVM))
+	assert.Nil(t, daemon.Instances.VMS[terminatedVM.ID], "should be removed from local map")
+	loadedTerm, err := daemon.jsManager.LoadTerminatedInstance(terminatedVM.ID)
+	require.NoError(t, err)
+	require.NotNil(t, loadedTerm)
+	assert.Equal(t, daemon.node, loadedTerm.LastNode)
+}
+
+// TestMigrateInstanceToKV_NoJetStream verifies graceful failure when JetStream is nil.
+func TestMigrateInstanceToKV_NoJetStream(t *testing.T) {
+	daemon := createDaemonWithJetStream(t)
+	daemon.jsManager = nil
+
+	vm1 := &vm.VM{ID: "i-no-js", Status: vm.StateStopped}
+	daemon.Instances.VMS[vm1.ID] = vm1
+	assert.False(t, daemon.migrateStoppedToSharedKV(vm1))
+	assert.False(t, daemon.migrateTerminatedToKV(vm1))
+	// Instance should still be in local map since migration failed
+	assert.NotNil(t, daemon.Instances.VMS[vm1.ID])
 }
 
 // TestStatePersistence_RoundTrip verifies that all instance fields survive

@@ -62,7 +62,11 @@ func TerminateInstances(input *ec2.TerminateInstancesInput, natsConn *nats.Conn,
 			if errors.Is(err, nats.ErrNoResponders) {
 				slog.Info("TerminateInstances: No responder on per-instance topic, trying ec2.terminate", "instance_id", instanceID)
 
-				terminateReq, _ := json.Marshal(terminateStoppedInstanceRequest{InstanceID: instanceID})
+				terminateReq, err := json.Marshal(terminateStoppedInstanceRequest{InstanceID: instanceID})
+				if err != nil {
+					slog.Error("TerminateInstances: Failed to marshal terminate request", "instance_id", instanceID, "err", err)
+					continue
+				}
 				terminateReqMsg := nats.NewMsg("ec2.terminate")
 				terminateReqMsg.Data = terminateReq
 				terminateReqMsg.Header.Set(utils.AccountIDHeader, accountID)
@@ -73,6 +77,13 @@ func TerminateInstances(input *ec2.TerminateInstancesInput, natsConn *nats.Conn,
 						stateChanges = append(stateChanges, newStateChange(instanceID, 32, "shutting-down", 80, "stopped"))
 						continue
 					}
+				}
+
+				// Check if instance is already terminated (idempotent, matches AWS behavior)
+				if isAlreadyTerminated(natsConn, instanceID, accountID) {
+					slog.Info("TerminateInstances: Instance already terminated", "instance_id", instanceID)
+					stateChanges = append(stateChanges, newStateChange(instanceID, 48, "terminated", 48, "terminated"))
+					continue
 				}
 			}
 
@@ -98,4 +109,37 @@ func TerminateInstances(input *ec2.TerminateInstancesInput, natsConn *nats.Conn,
 
 	slog.Info("TerminateInstances: Completed", "total_instances", len(stateChanges))
 	return output, nil
+}
+
+// isAlreadyTerminated checks if an instance exists in the terminated KV bucket.
+func isAlreadyTerminated(natsConn *nats.Conn, instanceID, accountID string) bool {
+	describeInput := &ec2.DescribeInstancesInput{
+		InstanceIds: []*string{&instanceID},
+	}
+	reqData, err := json.Marshal(describeInput)
+	if err != nil {
+		slog.Warn("isAlreadyTerminated: failed to marshal request", "instanceId", instanceID, "err", err)
+		return false
+	}
+	reqMsg := nats.NewMsg("ec2.DescribeTerminatedInstances")
+	reqMsg.Data = reqData
+	reqMsg.Header.Set(utils.AccountIDHeader, accountID)
+	msg, err := natsConn.RequestMsg(reqMsg, 3*time.Second)
+	if err != nil {
+		slog.Warn("isAlreadyTerminated: failed to query terminated instances", "instanceId", instanceID, "err", err)
+		return false
+	}
+	var output ec2.DescribeInstancesOutput
+	if unmarshalErr := json.Unmarshal(msg.Data, &output); unmarshalErr != nil {
+		slog.Warn("isAlreadyTerminated: failed to unmarshal response", "instanceId", instanceID, "err", unmarshalErr)
+		return false
+	}
+	for _, res := range output.Reservations {
+		for _, inst := range res.Instances {
+			if inst.InstanceId != nil && *inst.InstanceId == instanceID {
+				return true
+			}
+		}
+	}
+	return false
 }

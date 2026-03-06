@@ -389,6 +389,7 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.start", d.handleEC2StartStoppedInstance, "hive-workers"},
 		{"ec2.terminate", d.handleEC2TerminateStoppedInstance, "hive-workers"},
 		{"ec2.DescribeStoppedInstances", d.handleEC2DescribeStoppedInstances, "hive-workers"},
+		{"ec2.DescribeTerminatedInstances", d.handleEC2DescribeTerminatedInstances, "hive-workers"},
 		// these 2 fan out to all nodes and gateway aggregates the results
 		{"ec2.DescribeInstances", d.handleEC2DescribeInstances, ""},
 		{"ec2.DescribeInstanceTypes", d.handleEC2DescribeInstanceTypes, ""},
@@ -605,6 +606,10 @@ func (d *Daemon) initJetStream() error {
 		}
 
 		if err == nil {
+			err = d.jsManager.InitTerminatedInstanceBucket()
+		}
+
+		if err == nil {
 			slog.Info("JetStream KV stores initialized successfully", "replicas", 1, "attempts", attempt, "elapsed", time.Since(start).Round(time.Second))
 			break
 		}
@@ -722,21 +727,29 @@ func (d *Daemon) checkPredastoreReady() bool {
 	return true
 }
 
-// migrateStoppedToSharedKV writes a stopped instance to shared KV and removes
+// migrateInstanceToKV writes an instance to the given KV write function and removes
 // it from the local instance map. Returns true if migration succeeded.
-func (d *Daemon) migrateStoppedToSharedKV(instance *vm.VM) bool {
+func (d *Daemon) migrateInstanceToKV(instance *vm.VM, writeFn func(string, *vm.VM) error, label string) bool {
 	if d.jsManager == nil {
 		return false
 	}
 	instance.LastNode = d.node
-	if err := d.jsManager.WriteStoppedInstance(instance.ID, instance); err != nil {
-		slog.Error("Failed to migrate stopped instance to shared KV",
-			"instance", instance.ID, "err", err)
+	if err := writeFn(instance.ID, instance); err != nil {
+		slog.Error("Failed to migrate instance to KV",
+			"instance", instance.ID, "bucket", label, "err", err)
 		return false
 	}
 	delete(d.Instances.VMS, instance.ID)
-	slog.Info("Migrated stopped instance to shared KV", "instance", instance.ID)
+	slog.Info("Migrated instance to KV", "instance", instance.ID, "bucket", label)
 	return true
+}
+
+func (d *Daemon) migrateStoppedToSharedKV(instance *vm.VM) bool {
+	return d.migrateInstanceToKV(instance, d.jsManager.WriteStoppedInstance, "stopped")
+}
+
+func (d *Daemon) migrateTerminatedToKV(instance *vm.VM) bool {
+	return d.migrateInstanceToKV(instance, d.jsManager.WriteTerminatedInstance, "terminated")
 }
 
 // maxConcurrentRecovery limits how many VMs are relaunched in parallel during recovery.
@@ -783,7 +796,11 @@ func (d *Daemon) restoreInstances() {
 		instance := d.Instances.VMS[i]
 
 		if instance.Status == vm.StateTerminated {
-			slog.Info("Instance state is terminated, skipping", "instance", instance.ID)
+			if !d.migrateTerminatedToKV(instance) {
+				// KV write failed — still remove from local map. The VM is gone;
+				// keeping it here would make it retry forever on every restart.
+				delete(d.Instances.VMS, instance.ID)
+			}
 			continue
 		}
 
@@ -836,6 +853,10 @@ func (d *Daemon) restoreInstances() {
 				"instance", instance.ID, "from", prevStatus, "to", instance.Status)
 
 			if instance.Status == vm.StateStopped && d.migrateStoppedToSharedKV(instance) {
+				continue
+			}
+
+			if instance.Status == vm.StateTerminated && d.migrateTerminatedToKV(instance) {
 				continue
 			}
 

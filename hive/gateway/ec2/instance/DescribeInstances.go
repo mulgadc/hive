@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -105,27 +106,22 @@ func DescribeInstances(input *ec2.DescribeInstancesInput, natsConn *nats.Conn, e
 		}
 	}
 
-	// Query stopped instances from shared KV (via queue group — only one daemon handles it)
-	stoppedReqMsg := nats.NewMsg("ec2.DescribeStoppedInstances")
-	stoppedReqMsg.Data = jsonData
-	stoppedReqMsg.Header.Set(utils.AccountIDHeader, accountID)
-	stoppedMsg, err := natsConn.RequestMsg(stoppedReqMsg, 3*time.Second)
-	if err != nil {
-		slog.Warn("DescribeInstances: Failed to query stopped instances (may not be available)", "err", err)
-	} else {
-		responseError, parseErr := utils.ValidateErrorPayload(stoppedMsg.Data)
-		if parseErr != nil {
-			slog.Warn("DescribeInstances: Stopped instances query returned error", "code", responseError.Code)
-		} else {
-			var stoppedOutput ec2.DescribeInstancesOutput
-			if err := json.Unmarshal(stoppedMsg.Data, &stoppedOutput); err != nil {
-				slog.Error("DescribeInstances: Failed to unmarshal stopped instances response", "err", err)
-			} else if stoppedOutput.Reservations != nil {
-				allReservations = append(allReservations, stoppedOutput.Reservations...)
-				slog.Info("DescribeInstances: Collected stopped instance reservations", "count", len(stoppedOutput.Reservations))
+	// Query stopped and terminated instances in parallel (both use queue groups — single responder each)
+	var kvMu sync.Mutex
+	var kvWg sync.WaitGroup
+	for _, topic := range []string{"ec2.DescribeStoppedInstances", "ec2.DescribeTerminatedInstances"} {
+		kvWg.Add(1)
+		go func(topic string) {
+			defer kvWg.Done()
+			reservations := queryInstanceBucket(natsConn, topic, jsonData, accountID)
+			if len(reservations) > 0 {
+				kvMu.Lock()
+				allReservations = append(allReservations, reservations...)
+				kvMu.Unlock()
 			}
-		}
+		}(topic)
 	}
+	kvWg.Wait()
 
 	// Build final aggregated response
 	output := &ec2.DescribeInstancesOutput{
@@ -134,4 +130,29 @@ func DescribeInstances(input *ec2.DescribeInstancesInput, natsConn *nats.Conn, e
 
 	slog.Info("DescribeInstances: Aggregated response", "total_reservations", len(allReservations))
 	return output, nil
+}
+
+// queryInstanceBucket sends a NATS request to a describe topic and returns the reservations.
+func queryInstanceBucket(natsConn *nats.Conn, topic string, jsonData []byte, accountID string) []*ec2.Reservation {
+	reqMsg := nats.NewMsg(topic)
+	reqMsg.Data = jsonData
+	reqMsg.Header.Set(utils.AccountIDHeader, accountID)
+	msg, err := natsConn.RequestMsg(reqMsg, 3*time.Second)
+	if err != nil {
+		slog.Warn("DescribeInstances: Failed to query instance bucket", "topic", topic, "err", err)
+		return nil
+	}
+	if responseError, parseErr := utils.ValidateErrorPayload(msg.Data); parseErr != nil {
+		slog.Warn("DescribeInstances: Instance bucket query returned error", "topic", topic, "code", responseError.Code)
+		return nil
+	}
+	var output ec2.DescribeInstancesOutput
+	if err := json.Unmarshal(msg.Data, &output); err != nil {
+		slog.Error("DescribeInstances: Failed to unmarshal instance bucket response", "topic", topic, "err", err)
+		return nil
+	}
+	if len(output.Reservations) > 0 {
+		slog.Info("DescribeInstances: Collected reservations from bucket", "topic", topic, "count", len(output.Reservations))
+	}
+	return output.Reservations
 }

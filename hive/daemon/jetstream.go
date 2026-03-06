@@ -21,15 +21,20 @@ const (
 	InstanceStatePrefix = "node."
 	// StoppedInstancePrefix is the key prefix for stopped instances in shared KV
 	StoppedInstancePrefix = "instance."
+	// TerminatedInstanceBucket is the name of the KV bucket for terminated instances (auto-expiry via TTL)
+	TerminatedInstanceBucket = "hive-terminated-instances"
+	// TerminatedInstancePrefix is the key prefix for terminated instances
+	TerminatedInstancePrefix = "terminated."
 )
 
 // JetStreamManager manages JetStream KV store operations for instance state
 type JetStreamManager struct {
-	js        nats.JetStreamContext
-	kv        nats.KeyValue // hive-instance-state
-	clusterKV nats.KeyValue // hive-cluster-state
-	replicas  int
-	kvMu      sync.Mutex // protects kv during recovery
+	js           nats.JetStreamContext
+	kv           nats.KeyValue // hive-instance-state
+	clusterKV    nats.KeyValue // hive-cluster-state
+	terminatedKV nats.KeyValue // hive-terminated-instances
+	replicas     int
+	kvMu         sync.Mutex // protects kv during recovery
 }
 
 // NewJetStreamManager creates a new JetStreamManager from a NATS connection.
@@ -101,6 +106,34 @@ func (m *JetStreamManager) InitClusterStateBucket() error {
 	return nil
 }
 
+// InitTerminatedInstanceBucket initializes the terminated-instances KV bucket with a 1-hour TTL.
+// JetStream automatically purges keys after 1 hour, matching AWS behavior for terminated instances.
+func (m *JetStreamManager) InitTerminatedInstanceBucket() error {
+	kv, err := m.js.KeyValue(TerminatedInstanceBucket)
+	if err != nil {
+		if errors.Is(err, nats.ErrBucketNotFound) {
+			slog.Debug("Creating JetStream KV bucket", "bucket", TerminatedInstanceBucket, "replicas", m.replicas)
+			kv, err = m.js.CreateKeyValue(&nats.KeyValueConfig{
+				Bucket:      TerminatedInstanceBucket,
+				Description: "Terminated instances (auto-expire after 1 hour)",
+				History:     1,
+				Replicas:    m.replicas,
+				TTL:         1 * time.Hour,
+			})
+			if err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+	} else {
+		slog.Debug("Connected to existing JetStream KV bucket", "bucket", TerminatedInstanceBucket)
+	}
+
+	m.terminatedKV = kv
+	return nil
+}
+
 // isStreamUnavailable checks if an error indicates the underlying JetStream stream
 // was lost or is unreachable. This can happen during NATS cluster formation when
 // streams created with low replication are disrupted by node join/catchup operations.
@@ -120,18 +153,18 @@ func isStreamUnavailable(err error) bool {
 	return strings.Contains(err.Error(), "stream not found")
 }
 
-// recoverKVBucket attempts to reconnect to or re-create the instance-state KV bucket
-// after the underlying JetStream stream was lost during cluster formation.
-// Returns the recovered KV handle directly so callers avoid a racy re-read of m.kv.
-func (m *JetStreamManager) recoverKVBucket() (nats.KeyValue, error) {
+// recoverBucket attempts to reconnect to or re-create a KV bucket after the
+// underlying JetStream stream was lost during cluster formation.
+// Returns the recovered KV handle directly so callers avoid a racy re-read.
+func (m *JetStreamManager) recoverBucket(cfg *nats.KeyValueConfig, field *nats.KeyValue) (nats.KeyValue, error) {
 	m.kvMu.Lock()
 	defer m.kvMu.Unlock()
 
 	// Try to reconnect to existing bucket first (another goroutine may have recovered it)
-	kv, err := m.js.KeyValue(InstanceStateBucket)
+	kv, err := m.js.KeyValue(cfg.Bucket)
 	if err == nil {
-		m.kv = kv
-		slog.Info("Reconnected to KV bucket", "bucket", InstanceStateBucket)
+		*field = kv
+		slog.Info("Reconnected to KV bucket", "bucket", cfg.Bucket)
 		return kv, nil
 	}
 
@@ -140,21 +173,33 @@ func (m *JetStreamManager) recoverKVBucket() (nats.KeyValue, error) {
 	}
 
 	// Bucket truly doesn't exist — recreate it
-	slog.Warn("KV bucket stream lost, recreating", "bucket", InstanceStateBucket, "replicas", m.replicas)
-	kv, err = m.js.CreateKeyValue(&nats.KeyValueConfig{
-		Bucket:      InstanceStateBucket,
-		Description: "Hive instance state storage",
-		History:     1,
-		Replicas:    m.replicas,
-	})
+	slog.Warn("KV bucket stream lost, recreating", "bucket", cfg.Bucket, "replicas", m.replicas)
+	cfg.History = 1
+	cfg.Replicas = m.replicas
+	kv, err = m.js.CreateKeyValue(cfg)
 	if err != nil {
-		slog.Error("Failed to recreate KV bucket", "bucket", InstanceStateBucket, "err", err)
+		slog.Error("Failed to recreate KV bucket", "bucket", cfg.Bucket, "err", err)
 		return nil, err
 	}
 
-	m.kv = kv
-	slog.Info("KV bucket recreated successfully", "bucket", InstanceStateBucket)
+	*field = kv
+	slog.Info("KV bucket recreated successfully", "bucket", cfg.Bucket)
 	return kv, nil
+}
+
+func (m *JetStreamManager) recoverKVBucket() (nats.KeyValue, error) {
+	return m.recoverBucket(&nats.KeyValueConfig{
+		Bucket:      InstanceStateBucket,
+		Description: "Hive instance state storage",
+	}, &m.kv)
+}
+
+func (m *JetStreamManager) recoverTerminatedKVBucket() (nats.KeyValue, error) {
+	return m.recoverBucket(&nats.KeyValueConfig{
+		Bucket:      TerminatedInstanceBucket,
+		Description: "Terminated instances (auto-expire after 1 hour)",
+		TTL:         1 * time.Hour,
+	}, &m.terminatedKV)
 }
 
 // Heartbeat represents a daemon's periodic health status published to cluster KV.
@@ -475,6 +520,20 @@ func (m *JetStreamManager) UpdateReplicas(newReplicas int) error {
 		}
 	}
 
+	// Also update the terminated-instances bucket if it exists
+	if m.terminatedKV != nil {
+		terminatedStreamName := "KV_" + TerminatedInstanceBucket
+		terminatedInfo, err := m.js.StreamInfo(terminatedStreamName)
+		if err == nil && terminatedInfo.Config.Replicas < newReplicas {
+			terminatedInfo.Config.Replicas = newReplicas
+			if _, err := m.js.UpdateStream(&terminatedInfo.Config); err != nil {
+				slog.Warn("Failed to update terminated-instances bucket replicas", "error", err)
+			} else {
+				slog.Info("Updated terminated-instances bucket replicas", "bucket", TerminatedInstanceBucket, "newReplicas", newReplicas)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -636,4 +695,159 @@ func (m *JetStreamManager) ListStoppedInstances() ([]*vm.VM, error) {
 	}
 
 	return instances, nil
+}
+
+// WriteTerminatedInstance writes a terminated instance to the terminated KV bucket.
+// The entry will auto-expire after the bucket's TTL (1 hour).
+func (m *JetStreamManager) WriteTerminatedInstance(instanceID string, instance *vm.VM) error {
+	if m.terminatedKV == nil {
+		return errors.New("terminated instance KV bucket not initialized")
+	}
+
+	jsonData, err := json.Marshal(instance)
+	if err != nil {
+		return err
+	}
+
+	key := TerminatedInstancePrefix + instanceID
+	_, err = m.terminatedKV.Put(key, jsonData)
+	if err != nil {
+		if isStreamUnavailable(err) {
+			slog.Warn("KV stream unavailable, attempting recovery", "operation", "WriteTerminatedInstance", "key", key, "err", err)
+			kv, recoverErr := m.recoverTerminatedKVBucket()
+			if recoverErr != nil {
+				return err
+			}
+			if _, retryErr := kv.Put(key, jsonData); retryErr != nil {
+				return retryErr
+			}
+			slog.Debug("Wrote terminated instance to JetStream KV (after recovery)", "key", key, "instanceId", instanceID)
+			return nil
+		}
+		return err
+	}
+
+	slog.Debug("Wrote terminated instance to JetStream KV", "key", key, "instanceId", instanceID)
+	return nil
+}
+
+// ListTerminatedInstances returns all terminated instances from the terminated KV bucket.
+func (m *JetStreamManager) ListTerminatedInstances() ([]*vm.VM, error) {
+	if m.terminatedKV == nil {
+		return nil, errors.New("terminated instance KV bucket not initialized")
+	}
+
+	keys, err := m.terminatedKV.Keys()
+	if err != nil {
+		if errors.Is(err, nats.ErrNoKeysFound) {
+			return nil, nil
+		}
+		if isStreamUnavailable(err) {
+			slog.Warn("KV stream unavailable, attempting recovery", "operation", "ListTerminatedInstances", "err", err)
+			kv, recoverErr := m.recoverTerminatedKVBucket()
+			if recoverErr != nil {
+				return nil, err
+			}
+			keys, err = kv.Keys()
+			if err != nil {
+				if errors.Is(err, nats.ErrNoKeysFound) {
+					return nil, nil
+				}
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
+	}
+
+	var instances []*vm.VM
+	for _, key := range keys {
+		if !strings.HasPrefix(key, TerminatedInstancePrefix) {
+			continue
+		}
+
+		entry, err := m.terminatedKV.Get(key)
+		if err != nil {
+			if errors.Is(err, nats.ErrKeyNotFound) {
+				continue
+			}
+			return nil, err
+		}
+
+		var instance vm.VM
+		if err := json.Unmarshal(entry.Value(), &instance); err != nil {
+			slog.Error("Failed to unmarshal terminated instance", "key", key, "err", err)
+			continue
+		}
+
+		instances = append(instances, &instance)
+	}
+
+	return instances, nil
+}
+
+// DeleteTerminatedInstance removes a terminated instance from the terminated KV bucket.
+func (m *JetStreamManager) DeleteTerminatedInstance(instanceID string) error {
+	if m.terminatedKV == nil {
+		return errors.New("terminated instance KV bucket not initialized")
+	}
+
+	key := TerminatedInstancePrefix + instanceID
+	err := m.terminatedKV.Delete(key)
+	if err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
+		if isStreamUnavailable(err) {
+			slog.Warn("KV stream unavailable, attempting recovery", "operation", "DeleteTerminatedInstance", "key", key, "err", err)
+			kv, recoverErr := m.recoverTerminatedKVBucket()
+			if recoverErr != nil {
+				return err
+			}
+			if retryErr := kv.Delete(key); retryErr != nil && !errors.Is(retryErr, nats.ErrKeyNotFound) {
+				return retryErr
+			}
+			return nil
+		}
+		return err
+	}
+
+	slog.Debug("Deleted terminated instance from JetStream KV", "key", key)
+	return nil
+}
+
+// LoadTerminatedInstance loads a single terminated instance from the terminated KV bucket.
+// Returns nil, nil if the key does not exist.
+func (m *JetStreamManager) LoadTerminatedInstance(instanceID string) (*vm.VM, error) {
+	if m.terminatedKV == nil {
+		return nil, errors.New("terminated instance KV bucket not initialized")
+	}
+
+	key := TerminatedInstancePrefix + instanceID
+	entry, err := m.terminatedKV.Get(key)
+	if err != nil {
+		if errors.Is(err, nats.ErrKeyNotFound) {
+			return nil, nil
+		}
+		if isStreamUnavailable(err) {
+			slog.Warn("KV stream unavailable, attempting recovery", "operation", "LoadTerminatedInstance", "key", key, "err", err)
+			kv, recoverErr := m.recoverTerminatedKVBucket()
+			if recoverErr != nil {
+				return nil, err
+			}
+			entry, err = kv.Get(key)
+			if err != nil {
+				if errors.Is(err, nats.ErrKeyNotFound) {
+					return nil, nil
+				}
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
+	}
+
+	var instance vm.VM
+	if err := json.Unmarshal(entry.Value(), &instance); err != nil {
+		return nil, err
+	}
+
+	return &instance, nil
 }
