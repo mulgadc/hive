@@ -37,14 +37,14 @@ jobs:
           repository: mulgadc/predastore
           path: predastore
 
-      - name: Setup Go Workspace
-        run: go work init ./hive ./viperblock ./predastore
-
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
           cache-dependency-path: "hive/go.sum"
           go-version-file: "hive/go.mod"
+
+      - name: Setup Go Workspace
+        run: go work init ./hive ./viperblock ./predastore
 
       - name: Build Hive
         run: make -C hive build
@@ -77,14 +77,14 @@ jobs:
           repository: mulgadc/predastore
           path: predastore
 
-      - name: Setup Go Workspace
-        run: go work init ./hive ./viperblock ./predastore
-
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
           cache-dependency-path: "hive/go.sum"
           go-version-file: "hive/go.mod"
+
+      - name: Setup Go Workspace
+        run: go work init ./hive ./viperblock ./predastore
 
       - name: Run Tests with Race Detector
         run: make -C hive test-race
@@ -111,14 +111,14 @@ jobs:
           repository: mulgadc/predastore
           path: predastore
 
-      - name: Setup Go Workspace
-        run: go work init ./hive ./viperblock ./predastore
-
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
           cache-dependency-path: "hive/go.sum"
           go-version-file: "hive/go.mod"
+
+      - name: Setup Go Workspace
+        run: go work init ./hive ./viperblock ./predastore
 
       - name: Check Format
         run: make -C hive check-format
