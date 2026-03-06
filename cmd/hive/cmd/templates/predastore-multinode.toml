@@ -11,7 +11,8 @@ debug = false
 [rs]
 data = 2
 parity = 1
-{{range .Nodes}}
+{{- range .Nodes}}
+
 [[db]]
 id = {{.ID}}
 host = "{{.Host}}"
@@ -22,14 +23,16 @@ secret_access_key = "{{$.SecretKey}}"
 {{- if eq .ID 1}}
 leader = true
 {{- end}}
-{{end}}
+{{- end}}
 {{- range .Nodes}}
+
 [[nodes]]
 id = {{.ID}}
 host = "{{.Host}}"
 port = 9991
 path = "distributed/nodes/node-{{.ID}}/"
-{{end}}
+{{- end}}
+
 [[buckets]]
 name = "predastore"
 region = "{{.Region}}"

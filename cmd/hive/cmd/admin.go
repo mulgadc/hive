@@ -195,8 +195,8 @@ func init() {
 	accountCreateCmd.MarkFlagRequired("name")
 
 	homeDir, _ := os.UserHomeDir()
-	configDir := fmt.Sprintf("%s/hive/config", homeDir)
-	hiveDir := fmt.Sprintf("%s/hive/", homeDir)
+	configDir := filepath.Join(homeDir, "hive", "config")
+	hiveDir := filepath.Join(homeDir, "hive")
 
 	rootCmd.PersistentFlags().String("config-dir", configDir, "Configuration directory")
 	rootCmd.PersistentFlags().String("hive-dir", hiveDir, "Hive base directory")
@@ -628,6 +628,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		homeDir, _ := os.UserHomeDir()
 		hiveRoot = filepath.Join(homeDir, "hive")
 	}
+	hiveRoot = filepath.Clean(hiveRoot)
 
 	// Determine if this is a multi-node formation
 	isMultiNode := nodes >= 2 && bindIP != "0.0.0.0"
