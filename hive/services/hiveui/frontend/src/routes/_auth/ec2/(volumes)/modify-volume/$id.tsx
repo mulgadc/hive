@@ -5,8 +5,8 @@ import { useForm } from "react-hook-form"
 
 import { BackLink } from "@/components/back-link"
 import { ErrorBanner } from "@/components/error-banner"
+import { FormActions } from "@/components/form-actions"
 import { PageHeading } from "@/components/page-heading"
-import { Button } from "@/components/ui/button"
 import { Field, FieldError, FieldTitle } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { useModifyVolume } from "@/mutations/ec2"
@@ -107,29 +107,18 @@ function ModifyVolume() {
           <FieldError errors={[errors.size]} />
         </Field>
 
-        <div className="flex gap-2">
-          <Button
-            disabled={isSubmitting || modifyMutation.isPending}
-            onClick={() =>
-              navigate({
-                to: "/ec2/describe-volumes/$id",
-                params: { id: volumeId },
-              })
-            }
-            type="button"
-            variant="outline"
-          >
-            Cancel
-          </Button>
-          <Button
-            disabled={isSubmitting || modifyMutation.isPending}
-            type="submit"
-          >
-            {isSubmitting || modifyMutation.isPending
-              ? "Resizing\u2026"
-              : "Resize Volume"}
-          </Button>
-        </div>
+        <FormActions
+          isPending={modifyMutation.isPending}
+          isSubmitting={isSubmitting}
+          onCancel={() =>
+            navigate({
+              to: "/ec2/describe-volumes/$id",
+              params: { id: volumeId },
+            })
+          }
+          pendingLabel="Resizing\u2026"
+          submitLabel="Resize Volume"
+        />
       </form>
     </>
   )

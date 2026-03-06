@@ -4,8 +4,8 @@ import { useForm } from "react-hook-form"
 
 import { BackLink } from "@/components/back-link"
 import { ErrorBanner } from "@/components/error-banner"
+import { FormActions } from "@/components/form-actions"
 import { PageHeading } from "@/components/page-heading"
-import { Button } from "@/components/ui/button"
 import { Field, FieldError, FieldTitle } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { useCreateBucket } from "@/mutations/s3"
@@ -67,24 +67,13 @@ function CreateBucket() {
           <FieldError errors={[errors.bucketName]} />
         </Field>
 
-        <div className="flex gap-2">
-          <Button
-            disabled={isSubmitting || createMutation.isPending}
-            onClick={() => navigate({ to: "/s3/ls" })}
-            type="button"
-            variant="outline"
-          >
-            Cancel
-          </Button>
-          <Button
-            disabled={isSubmitting || createMutation.isPending}
-            type="submit"
-          >
-            {isSubmitting || createMutation.isPending
-              ? "Creating\u2026"
-              : "Create Bucket"}
-          </Button>
-        </div>
+        <FormActions
+          isPending={createMutation.isPending}
+          isSubmitting={isSubmitting}
+          onCancel={() => navigate({ to: "/s3/ls" })}
+          pendingLabel="Creating\u2026"
+          submitLabel="Create Bucket"
+        />
       </form>
     </>
   )
