@@ -41,11 +41,12 @@ export const Route = createFileRoute(
         iamPolicyVersionQueryOptions(policyArn, versionId),
       )
     }
+    return policyData
   },
-  head: ({ params }) => ({
+  head: ({ loaderData }) => ({
     meta: [
       {
-        title: `${decodeURIComponent(params.policyArn)} | IAM | Mulga`,
+        title: `${loaderData?.Policy?.PolicyName ?? "Policy"} | IAM | Mulga`,
       },
     ],
   }),

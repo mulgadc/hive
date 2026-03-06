@@ -31,13 +31,8 @@ function CreateUser() {
   })
 
   const onSubmit = async (data: CreateUserFormData) => {
-    const response = await createMutation.mutateAsync(data)
-    if (response.User?.UserName) {
-      navigate({
-        to: "/iam/list-users/$userName",
-        params: { userName: response.User.UserName },
-      })
-    }
+    await createMutation.mutateAsync(data)
+    navigate({ to: "/iam/list-users" })
   }
 
   return (

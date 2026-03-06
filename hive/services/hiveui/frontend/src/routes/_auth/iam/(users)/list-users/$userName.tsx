@@ -85,6 +85,10 @@ function UserDetail() {
     secretAccessKey: string
   } | null>(null)
   const [showAttachSelect, setShowAttachSelect] = useState(false)
+  const [pendingKeyAction, setPendingKeyAction] = useState<string | null>(null)
+  const [pendingPolicyAction, setPendingPolicyAction] = useState<string | null>(
+    null,
+  )
 
   const user = userData.User
   const accessKeys = accessKeysData.AccessKeyMetadata || []
@@ -119,15 +123,25 @@ function UserDetail() {
     if (!key.AccessKeyId) {
       return
     }
-    await updateAccessKeyMutation.mutateAsync({
-      userName,
-      accessKeyId: key.AccessKeyId,
-      status: key.Status === "Active" ? "Inactive" : "Active",
-    })
+    setPendingKeyAction(key.AccessKeyId)
+    try {
+      await updateAccessKeyMutation.mutateAsync({
+        userName,
+        accessKeyId: key.AccessKeyId,
+        status: key.Status === "Active" ? "Inactive" : "Active",
+      })
+    } finally {
+      setPendingKeyAction(null)
+    }
   }
 
   const handleDeleteAccessKey = async (accessKeyId: string) => {
-    await deleteAccessKeyMutation.mutateAsync({ userName, accessKeyId })
+    setPendingKeyAction(accessKeyId)
+    try {
+      await deleteAccessKeyMutation.mutateAsync({ userName, accessKeyId })
+    } finally {
+      setPendingKeyAction(null)
+    }
   }
 
   const handleAttachPolicy = async (policyArn: string) => {
@@ -136,7 +150,12 @@ function UserDetail() {
   }
 
   const handleDetachPolicy = async (policyArn: string) => {
-    await detachPolicyMutation.mutateAsync({ userName, policyArn })
+    setPendingPolicyAction(policyArn)
+    try {
+      await detachPolicyMutation.mutateAsync({ userName, policyArn })
+    } finally {
+      setPendingPolicyAction(null)
+    }
   }
 
   if (!user) {
@@ -251,7 +270,7 @@ function UserDetail() {
                         {key.Status}
                       </span>
                       <Button
-                        disabled={updateAccessKeyMutation.isPending}
+                        disabled={pendingKeyAction === key.AccessKeyId}
                         onClick={() => handleToggleAccessKey(key)}
                         size="sm"
                         variant="outline"
@@ -259,7 +278,7 @@ function UserDetail() {
                         {key.Status === "Active" ? "Deactivate" : "Activate"}
                       </Button>
                       <Button
-                        disabled={deleteAccessKeyMutation.isPending}
+                        disabled={pendingKeyAction === key.AccessKeyId}
                         onClick={() =>
                           key.AccessKeyId &&
                           handleDeleteAccessKey(key.AccessKeyId)
@@ -339,7 +358,7 @@ function UserDetail() {
                       </p>
                     </div>
                     <Button
-                      disabled={detachPolicyMutation.isPending}
+                      disabled={pendingPolicyAction === policy.PolicyArn}
                       onClick={() =>
                         policy.PolicyArn && handleDetachPolicy(policy.PolicyArn)
                       }

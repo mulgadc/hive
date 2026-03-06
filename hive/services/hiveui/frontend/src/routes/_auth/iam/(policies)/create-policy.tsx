@@ -50,13 +50,8 @@ function CreatePolicy() {
   })
 
   const onSubmit = async (data: CreatePolicyFormData) => {
-    const response = await createMutation.mutateAsync(data)
-    if (response.Policy?.Arn) {
-      navigate({
-        to: "/iam/list-policies/$policyArn",
-        params: { policyArn: encodeURIComponent(response.Policy.Arn) },
-      })
-    }
+    await createMutation.mutateAsync(data)
+    navigate({ to: "/iam/list-policies" })
   }
 
   return (
