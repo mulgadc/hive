@@ -871,6 +871,44 @@ func TestRestoreInstances_StatePersistsAfterRecovery(t *testing.T) {
 	assert.Equal(t, vm.StateTerminated, terminatedInst2.Status)
 }
 
+// TestMigrateInstanceToKV verifies the unified migration helper works for both stopped and terminated paths.
+func TestMigrateInstanceToKV(t *testing.T) {
+	daemon := createDaemonWithJetStream(t)
+
+	// Test stopped migration
+	stoppedVM := &vm.VM{ID: "i-migrate-stop", Status: vm.StateStopped}
+	daemon.Instances.VMS[stoppedVM.ID] = stoppedVM
+	assert.True(t, daemon.migrateStoppedToSharedKV(stoppedVM))
+	assert.Nil(t, daemon.Instances.VMS[stoppedVM.ID], "should be removed from local map")
+	loaded, err := daemon.jsManager.LoadStoppedInstance(stoppedVM.ID)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, daemon.node, loaded.LastNode)
+
+	// Test terminated migration
+	terminatedVM := &vm.VM{ID: "i-migrate-term", Status: vm.StateTerminated}
+	daemon.Instances.VMS[terminatedVM.ID] = terminatedVM
+	assert.True(t, daemon.migrateTerminatedToKV(terminatedVM))
+	assert.Nil(t, daemon.Instances.VMS[terminatedVM.ID], "should be removed from local map")
+	loadedTerm, err := daemon.jsManager.LoadTerminatedInstance(terminatedVM.ID)
+	require.NoError(t, err)
+	require.NotNil(t, loadedTerm)
+	assert.Equal(t, daemon.node, loadedTerm.LastNode)
+}
+
+// TestMigrateInstanceToKV_NoJetStream verifies graceful failure when JetStream is nil.
+func TestMigrateInstanceToKV_NoJetStream(t *testing.T) {
+	daemon := createDaemonWithJetStream(t)
+	daemon.jsManager = nil
+
+	vm1 := &vm.VM{ID: "i-no-js", Status: vm.StateStopped}
+	daemon.Instances.VMS[vm1.ID] = vm1
+	assert.False(t, daemon.migrateStoppedToSharedKV(vm1))
+	assert.False(t, daemon.migrateTerminatedToKV(vm1))
+	// Instance should still be in local map since migration failed
+	assert.NotNil(t, daemon.Instances.VMS[vm1.ID])
+}
+
 // TestStatePersistence_RoundTrip verifies that all instance fields survive
 // a write-load cycle through JetStream, simulating a daemon restart.
 func TestStatePersistence_RoundTrip(t *testing.T) {

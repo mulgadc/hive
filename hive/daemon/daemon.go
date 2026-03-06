@@ -727,38 +727,29 @@ func (d *Daemon) checkPredastoreReady() bool {
 	return true
 }
 
-// migrateStoppedToSharedKV writes a stopped instance to shared KV and removes
+// migrateInstanceToKV writes an instance to the given KV write function and removes
 // it from the local instance map. Returns true if migration succeeded.
-func (d *Daemon) migrateStoppedToSharedKV(instance *vm.VM) bool {
+func (d *Daemon) migrateInstanceToKV(instance *vm.VM, writeFn func(string, *vm.VM) error, label string) bool {
 	if d.jsManager == nil {
 		return false
 	}
 	instance.LastNode = d.node
-	if err := d.jsManager.WriteStoppedInstance(instance.ID, instance); err != nil {
-		slog.Error("Failed to migrate stopped instance to shared KV",
-			"instance", instance.ID, "err", err)
+	if err := writeFn(instance.ID, instance); err != nil {
+		slog.Error("Failed to migrate instance to KV",
+			"instance", instance.ID, "bucket", label, "err", err)
 		return false
 	}
 	delete(d.Instances.VMS, instance.ID)
-	slog.Info("Migrated stopped instance to shared KV", "instance", instance.ID)
+	slog.Info("Migrated instance to KV", "instance", instance.ID, "bucket", label)
 	return true
 }
 
-// migrateTerminatedToKV writes a terminated instance to the terminated KV bucket
-// and removes it from the local instance map. Returns true if migration succeeded.
+func (d *Daemon) migrateStoppedToSharedKV(instance *vm.VM) bool {
+	return d.migrateInstanceToKV(instance, d.jsManager.WriteStoppedInstance, "stopped")
+}
+
 func (d *Daemon) migrateTerminatedToKV(instance *vm.VM) bool {
-	if d.jsManager == nil {
-		return false
-	}
-	instance.LastNode = d.node
-	if err := d.jsManager.WriteTerminatedInstance(instance.ID, instance); err != nil {
-		slog.Error("Failed to migrate terminated instance to KV",
-			"instance", instance.ID, "err", err)
-		return false
-	}
-	delete(d.Instances.VMS, instance.ID)
-	slog.Info("Migrated terminated instance to terminated KV", "instance", instance.ID)
-	return true
+	return d.migrateInstanceToKV(instance, d.jsManager.WriteTerminatedInstance, "terminated")
 }
 
 // maxConcurrentRecovery limits how many VMs are relaunched in parallel during recovery.
@@ -805,17 +796,7 @@ func (d *Daemon) restoreInstances() {
 		instance := d.Instances.VMS[i]
 
 		if instance.Status == vm.StateTerminated {
-			// Migrate legacy terminated instances from per-node blob to dedicated bucket
-			if d.jsManager != nil {
-				instance.LastNode = d.node
-				if err := d.jsManager.WriteTerminatedInstance(instance.ID, instance); err != nil {
-					slog.Error("Failed to migrate terminated instance to terminated KV",
-						"instance", instance.ID, "err", err)
-				} else {
-					slog.Info("Migrated terminated instance to terminated KV", "instance", instance.ID)
-				}
-			}
-			delete(d.Instances.VMS, instance.ID)
+			d.migrateTerminatedToKV(instance)
 			continue
 		}
 

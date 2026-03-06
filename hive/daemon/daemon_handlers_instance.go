@@ -421,8 +421,9 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 				if isTerminate {
 					// Write to terminated KV bucket (auto-expires after 1 hour via TTL)
 					if err := d.jsManager.WriteTerminatedInstance(inst.ID, inst); err != nil {
-						slog.Error("Failed to write terminated instance to KV",
+						slog.Error("Failed to write terminated instance to KV, keeping local ownership",
 							"instanceId", inst.ID, "err", err)
+						return
 					}
 				} else {
 					// Write to shared KV first — if daemon crashes after this but
@@ -835,104 +836,17 @@ func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
 
 // handleEC2DescribeStoppedInstances returns stopped instances from shared KV.
 func (d *Daemon) handleEC2DescribeStoppedInstances(msg *nats.Msg) {
-
-	if d.jsManager == nil {
-		respondWithError(msg, awserrors.ErrorServerInternal)
-		return
-	}
-
-	// Extract account ID from NATS header for scoping
-	accountID := utils.AccountIDFromMsg(msg)
-
-	// Parse optional filters from the request
-	describeInput := &ec2.DescribeInstancesInput{}
-	if len(msg.Data) > 0 {
-		if errResp := utils.UnmarshalJsonPayload(describeInput, msg.Data); errResp != nil {
-			if err := msg.Respond(errResp); err != nil {
-				slog.Error("Failed to respond to NATS request", "err", err)
-			}
-			return
-		}
-	}
-
-	// Build instance ID filter
-	instanceIDFilter := make(map[string]bool)
-	if len(describeInput.InstanceIds) > 0 {
-		for _, id := range describeInput.InstanceIds {
-			if id != nil {
-				instanceIDFilter[*id] = true
-			}
-		}
-	}
-
-	instances, err := d.jsManager.ListStoppedInstances()
-	if err != nil {
-		slog.Error("handleEC2DescribeStoppedInstances: failed to list stopped instances", "err", err)
-		respondWithError(msg, awserrors.ErrorServerInternal)
-		return
-	}
-
-	// Group instances by reservation ID
-	reservationMap := make(map[string]*ec2.Reservation)
-
-	for _, instance := range instances {
-		// Skip instances not owned by the caller's account.
-		// Pre-Phase4 instances (empty AccountID) are only visible to root.
-		if !isInstanceVisible(accountID, instance.AccountID) {
-			continue
-		}
-
-		// Apply instance ID filter
-		if len(instanceIDFilter) > 0 && !instanceIDFilter[instance.ID] {
-			continue
-		}
-
-		if instance.Reservation != nil && instance.Instance != nil {
-			resID := ""
-			if instance.Reservation.ReservationId != nil {
-				resID = *instance.Reservation.ReservationId
-			}
-
-			if _, exists := reservationMap[resID]; !exists {
-				reservation := &ec2.Reservation{}
-				reservation.SetReservationId(resID)
-				if instance.Reservation.OwnerId != nil {
-					reservation.SetOwnerId(*instance.Reservation.OwnerId)
-				}
-				reservation.Instances = []*ec2.Instance{}
-				reservationMap[resID] = reservation
-			}
-
-			// Update the instance state
-			instanceCopy := *instance.Instance
-			instanceCopy.State = &ec2.InstanceState{}
-			if info, ok := vm.EC2StateCodes[instance.Status]; ok {
-				instanceCopy.State.SetCode(info.Code)
-				instanceCopy.State.SetName(info.Name)
-			} else {
-				instanceCopy.State.SetCode(80)
-				instanceCopy.State.SetName("stopped")
-			}
-
-			reservationMap[resID].Instances = append(reservationMap[resID].Instances, &instanceCopy)
-		}
-	}
-
-	reservations := make([]*ec2.Reservation, 0, len(reservationMap))
-	for _, reservation := range reservationMap {
-		reservations = append(reservations, reservation)
-	}
-
-	output := &ec2.DescribeInstancesOutput{
-		Reservations: reservations,
-	}
-
-	respondWithJSON(msg, output)
-	slog.Info("handleEC2DescribeStoppedInstances completed", "count", len(reservations))
+	d.describeInstancesFromKV(msg, d.jsManager.ListStoppedInstances, 80, "stopped", "handleEC2DescribeStoppedInstances")
 }
 
 // handleEC2DescribeTerminatedInstances returns terminated instances from the terminated KV bucket.
 func (d *Daemon) handleEC2DescribeTerminatedInstances(msg *nats.Msg) {
+	d.describeInstancesFromKV(msg, d.jsManager.ListTerminatedInstances, 48, "terminated", "handleEC2DescribeTerminatedInstances")
+}
+
+// describeInstancesFromKV is a shared helper for DescribeStopped/TerminatedInstances handlers.
+// It lists instances from a KV bucket, filters by account/instance ID, and responds with reservations.
+func (d *Daemon) describeInstancesFromKV(msg *nats.Msg, listFn func() ([]*vm.VM, error), fallbackCode int64, fallbackName, handlerName string) {
 	if d.jsManager == nil {
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
@@ -951,17 +865,15 @@ func (d *Daemon) handleEC2DescribeTerminatedInstances(msg *nats.Msg) {
 	}
 
 	instanceIDFilter := make(map[string]bool)
-	if len(describeInput.InstanceIds) > 0 {
-		for _, id := range describeInput.InstanceIds {
-			if id != nil {
-				instanceIDFilter[*id] = true
-			}
+	for _, id := range describeInput.InstanceIds {
+		if id != nil {
+			instanceIDFilter[*id] = true
 		}
 	}
 
-	instances, err := d.jsManager.ListTerminatedInstances()
+	instances, err := listFn()
 	if err != nil {
-		slog.Error("handleEC2DescribeTerminatedInstances: failed to list terminated instances", "err", err)
+		slog.Error(handlerName+": failed to list instances", "err", err)
 		respondWithError(msg, awserrors.ErrorServerInternal)
 		return
 	}
@@ -972,39 +884,39 @@ func (d *Daemon) handleEC2DescribeTerminatedInstances(msg *nats.Msg) {
 		if !isInstanceVisible(accountID, instance.AccountID) {
 			continue
 		}
-
 		if len(instanceIDFilter) > 0 && !instanceIDFilter[instance.ID] {
 			continue
 		}
-
-		if instance.Reservation != nil && instance.Instance != nil {
-			resID := ""
-			if instance.Reservation.ReservationId != nil {
-				resID = *instance.Reservation.ReservationId
-			}
-
-			if _, exists := reservationMap[resID]; !exists {
-				reservation := &ec2.Reservation{}
-				reservation.SetReservationId(resID)
-				if instance.Reservation.OwnerId != nil {
-					reservation.SetOwnerId(*instance.Reservation.OwnerId)
-				}
-				reservation.Instances = []*ec2.Instance{}
-				reservationMap[resID] = reservation
-			}
-
-			instanceCopy := *instance.Instance
-			instanceCopy.State = &ec2.InstanceState{}
-			if info, ok := vm.EC2StateCodes[instance.Status]; ok {
-				instanceCopy.State.SetCode(info.Code)
-				instanceCopy.State.SetName(info.Name)
-			} else {
-				instanceCopy.State.SetCode(48)
-				instanceCopy.State.SetName("terminated")
-			}
-
-			reservationMap[resID].Instances = append(reservationMap[resID].Instances, &instanceCopy)
+		if instance.Reservation == nil || instance.Instance == nil {
+			continue
 		}
+
+		resID := ""
+		if instance.Reservation.ReservationId != nil {
+			resID = *instance.Reservation.ReservationId
+		}
+
+		if _, exists := reservationMap[resID]; !exists {
+			reservation := &ec2.Reservation{}
+			reservation.SetReservationId(resID)
+			if instance.Reservation.OwnerId != nil {
+				reservation.SetOwnerId(*instance.Reservation.OwnerId)
+			}
+			reservation.Instances = []*ec2.Instance{}
+			reservationMap[resID] = reservation
+		}
+
+		instanceCopy := *instance.Instance
+		instanceCopy.State = &ec2.InstanceState{}
+		if info, ok := vm.EC2StateCodes[instance.Status]; ok {
+			instanceCopy.State.SetCode(info.Code)
+			instanceCopy.State.SetName(info.Name)
+		} else {
+			instanceCopy.State.SetCode(fallbackCode)
+			instanceCopy.State.SetName(fallbackName)
+		}
+
+		reservationMap[resID].Instances = append(reservationMap[resID].Instances, &instanceCopy)
 	}
 
 	reservations := make([]*ec2.Reservation, 0, len(reservationMap))
@@ -1012,12 +924,8 @@ func (d *Daemon) handleEC2DescribeTerminatedInstances(msg *nats.Msg) {
 		reservations = append(reservations, reservation)
 	}
 
-	output := &ec2.DescribeInstancesOutput{
-		Reservations: reservations,
-	}
-
-	respondWithJSON(msg, output)
-	slog.Info("handleEC2DescribeTerminatedInstances completed", "count", len(reservations))
+	respondWithJSON(msg, &ec2.DescribeInstancesOutput{Reservations: reservations})
+	slog.Info(handlerName+" completed", "count", len(reservations))
 }
 
 // handleEC2ModifyInstanceAttribute modifies attributes of a stopped instance in shared KV.

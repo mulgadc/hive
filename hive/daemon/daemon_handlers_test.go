@@ -81,6 +81,8 @@ func createFullTestDaemonWithJetStream(t *testing.T, natsURL string) *Daemon {
 	require.NoError(t, err)
 	err = daemon.jsManager.InitKVBucket()
 	require.NoError(t, err)
+	err = daemon.jsManager.InitTerminatedInstanceBucket()
+	require.NoError(t, err)
 
 	return daemon
 }
@@ -3211,4 +3213,135 @@ func TestHandleEC2DescribeInstances_MalformedInstanceID(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, string(reply.Data), "InvalidInstanceID.Malformed")
+}
+
+// --- Terminated instance handler tests ---
+
+func TestHandleEC2DescribeTerminatedInstances_ReturnsTerminatedInstances(t *testing.T) {
+	daemon := createFullTestDaemonWithJetStream(t, sharedJSNATSURL)
+
+	terminatedVM := &vm.VM{
+		ID:           "i-describe-term-001",
+		Status:       vm.StateTerminated,
+		InstanceType: getTestInstanceType(),
+		LastNode:     "node-1",
+		AccountID:    testAccountID,
+		Reservation: &ec2.Reservation{
+			ReservationId: aws.String("r-term-001"),
+			OwnerId:       aws.String("123456789012"),
+		},
+		Instance: &ec2.Instance{
+			InstanceId:   aws.String("i-describe-term-001"),
+			InstanceType: aws.String(getTestInstanceType()),
+		},
+	}
+	err := daemon.jsManager.WriteTerminatedInstance(terminatedVM.ID, terminatedVM)
+	require.NoError(t, err)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeTerminatedInstances", "hive-workers", daemon.handleEC2DescribeTerminatedInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.DescribeInstancesInput{}
+	reqData, _ := json.Marshal(input)
+	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeTerminatedInstances", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.DescribeInstancesOutput
+	err = json.Unmarshal(reply.Data, &output)
+	require.NoError(t, err)
+
+	found := false
+	for _, res := range output.Reservations {
+		for _, inst := range res.Instances {
+			if inst.InstanceId != nil && *inst.InstanceId == "i-describe-term-001" {
+				found = true
+				assert.Equal(t, "terminated", *inst.State.Name)
+				assert.Equal(t, int64(48), *inst.State.Code)
+			}
+		}
+	}
+	assert.True(t, found, "Should find terminated instance in DescribeTerminatedInstances output")
+
+	_ = daemon.jsManager.DeleteTerminatedInstance(terminatedVM.ID)
+}
+
+func TestHandleEC2DescribeTerminatedInstances_WithFilter(t *testing.T) {
+	daemon := createFullTestDaemonWithJetStream(t, sharedJSNATSURL)
+
+	for _, id := range []string{"i-tfilter-001", "i-tfilter-002"} {
+		v := &vm.VM{
+			ID:        id,
+			Status:    vm.StateTerminated,
+			LastNode:  "node-1",
+			AccountID: testAccountID,
+			Reservation: &ec2.Reservation{
+				ReservationId: aws.String("r-tfilter"),
+				OwnerId:       aws.String("123456789012"),
+			},
+			Instance: &ec2.Instance{
+				InstanceId:   aws.String(id),
+				InstanceType: aws.String(getTestInstanceType()),
+			},
+		}
+		require.NoError(t, daemon.jsManager.WriteTerminatedInstance(v.ID, v))
+	}
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeTerminatedInstances", "hive-workers", daemon.handleEC2DescribeTerminatedInstances)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	// Filter for only one instance
+	input := &ec2.DescribeInstancesInput{
+		InstanceIds: []*string{aws.String("i-tfilter-001")},
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeTerminatedInstances", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.DescribeInstancesOutput
+	require.NoError(t, json.Unmarshal(reply.Data, &output))
+
+	instanceCount := 0
+	for _, res := range output.Reservations {
+		instanceCount += len(res.Instances)
+	}
+	assert.Equal(t, 1, instanceCount, "Filter should return only the requested instance")
+
+	_ = daemon.jsManager.DeleteTerminatedInstance("i-tfilter-001")
+	_ = daemon.jsManager.DeleteTerminatedInstance("i-tfilter-002")
+}
+
+func TestHandleEC2TerminateStoppedInstance_WritesToTerminatedKV(t *testing.T) {
+	daemon := createFullTestDaemonWithJetStream(t, sharedJSNATSURL)
+
+	stoppedVM := &vm.VM{
+		ID:           "i-stop-to-term-001",
+		Status:       vm.StateStopped,
+		InstanceType: getTestInstanceType(),
+		AccountID:    testAccountID,
+	}
+	require.NoError(t, daemon.jsManager.WriteStoppedInstance(stoppedVM.ID, stoppedVM))
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.terminate", "hive-workers", daemon.handleEC2TerminateStoppedInstance)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reqData, _ := json.Marshal(terminateStoppedInstanceRequest{InstanceID: stoppedVM.ID})
+	reply, err := natsRequest(daemon.natsConn, "ec2.terminate", reqData, 30*time.Second)
+	require.NoError(t, err)
+	assert.Contains(t, string(reply.Data), "terminated")
+
+	// Verify instance is in terminated KV
+	terminatedInst, err := daemon.jsManager.LoadTerminatedInstance(stoppedVM.ID)
+	require.NoError(t, err)
+	require.NotNil(t, terminatedInst, "terminated instance should exist in terminated KV")
+	assert.Equal(t, vm.StateTerminated, terminatedInst.Status)
+
+	// Verify instance is removed from stopped KV
+	stoppedInst, err := daemon.jsManager.LoadStoppedInstance(stoppedVM.ID)
+	require.NoError(t, err)
+	assert.Nil(t, stoppedInst, "instance should be removed from stopped KV")
+
+	_ = daemon.jsManager.DeleteTerminatedInstance(stoppedVM.ID)
 }

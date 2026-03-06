@@ -962,3 +962,168 @@ func TestIsStreamUnavailable(t *testing.T) {
 	assert.False(t, isStreamUnavailable(errors.New("some other error")))
 	assert.False(t, isStreamUnavailable(nats.ErrKeyNotFound))
 }
+
+// --- Terminated instance KV tests ---
+
+func TestJetStreamManager_WriteAndLoadTerminatedInstance(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	require.NoError(t, jsm.InitTerminatedInstanceBucket())
+
+	testVM := &vm.VM{
+		ID:           "i-term-001",
+		Status:       vm.StateTerminated,
+		InstanceType: "t3.micro",
+		LastNode:     "node-1",
+	}
+
+	err = jsm.WriteTerminatedInstance(testVM.ID, testVM)
+	require.NoError(t, err)
+
+	loaded, err := jsm.LoadTerminatedInstance(testVM.ID)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, testVM.ID, loaded.ID)
+	assert.Equal(t, vm.StateTerminated, loaded.Status)
+	assert.Equal(t, "t3.micro", loaded.InstanceType)
+	assert.Equal(t, "node-1", loaded.LastNode)
+
+	_ = jsm.DeleteTerminatedInstance(testVM.ID)
+}
+
+func TestJetStreamManager_LoadTerminatedInstance_NotFound(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	require.NoError(t, jsm.InitTerminatedInstanceBucket())
+
+	loaded, err := jsm.LoadTerminatedInstance("i-nonexistent")
+	require.NoError(t, err)
+	assert.Nil(t, loaded)
+}
+
+func TestJetStreamManager_DeleteTerminatedInstance(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	require.NoError(t, jsm.InitTerminatedInstanceBucket())
+
+	testVM := &vm.VM{
+		ID:     "i-term-del",
+		Status: vm.StateTerminated,
+	}
+
+	err = jsm.WriteTerminatedInstance(testVM.ID, testVM)
+	require.NoError(t, err)
+
+	err = jsm.DeleteTerminatedInstance(testVM.ID)
+	require.NoError(t, err)
+
+	loaded, err := jsm.LoadTerminatedInstance(testVM.ID)
+	require.NoError(t, err)
+	assert.Nil(t, loaded)
+
+	// Delete non-existent should not error
+	err = jsm.DeleteTerminatedInstance("i-does-not-exist")
+	require.NoError(t, err)
+}
+
+func TestJetStreamManager_ListTerminatedInstances(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	require.NoError(t, jsm.InitTerminatedInstanceBucket())
+
+	vms := []*vm.VM{
+		{ID: "i-tlist-001", Status: vm.StateTerminated, InstanceType: "t3.micro"},
+		{ID: "i-tlist-002", Status: vm.StateTerminated, InstanceType: "t3.small"},
+	}
+
+	for _, v := range vms {
+		require.NoError(t, jsm.WriteTerminatedInstance(v.ID, v))
+	}
+	defer func() {
+		for _, v := range vms {
+			_ = jsm.DeleteTerminatedInstance(v.ID)
+		}
+	}()
+
+	instances, err := jsm.ListTerminatedInstances()
+	require.NoError(t, err)
+	// Use >= because other tests may leave entries in the shared bucket
+	assert.GreaterOrEqual(t, len(instances), 2)
+
+	idSet := map[string]bool{}
+	for _, inst := range instances {
+		idSet[inst.ID] = true
+	}
+	assert.True(t, idSet["i-tlist-001"])
+	assert.True(t, idSet["i-tlist-002"])
+}
+
+func TestJetStreamManager_WriteLoadDeleteTerminatedInstance_RoundTrip(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	require.NoError(t, jsm.InitTerminatedInstanceBucket())
+
+	testVM := &vm.VM{
+		ID:     "i-trt-001",
+		Status: vm.StateTerminated,
+	}
+
+	// Write
+	require.NoError(t, jsm.WriteTerminatedInstance(testVM.ID, testVM))
+
+	// Load — should find it
+	loaded, err := jsm.LoadTerminatedInstance(testVM.ID)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, vm.StateTerminated, loaded.Status)
+
+	// Delete
+	require.NoError(t, jsm.DeleteTerminatedInstance(testVM.ID))
+
+	// Load — should be gone
+	loaded, err = jsm.LoadTerminatedInstance(testVM.ID)
+	require.NoError(t, err)
+	assert.Nil(t, loaded)
+}
+
+func TestJetStreamManager_TerminatedInstance_KVNotInitialized(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	// Don't call InitTerminatedInstanceBucket
+
+	err = jsm.WriteTerminatedInstance("i-test", &vm.VM{})
+	assert.Error(t, err)
+
+	_, err = jsm.LoadTerminatedInstance("i-test")
+	assert.Error(t, err)
+
+	err = jsm.DeleteTerminatedInstance("i-test")
+	assert.Error(t, err)
+
+	_, err = jsm.ListTerminatedInstances()
+	assert.Error(t, err)
+}
