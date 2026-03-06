@@ -6,7 +6,7 @@ import { useState } from "react"
 import { DeleteConfirmationDialog } from "@/components/delete-confirmation-dialog"
 import { ErrorBanner } from "@/components/error-banner"
 import { getS3Client } from "@/lib/awsClient"
-import { formatSize } from "@/lib/utils"
+import { formatDateTime, formatSize } from "@/lib/utils"
 import { useDeleteObject } from "@/mutations/s3"
 
 interface ObjectListItemProps {
@@ -76,7 +76,7 @@ export function ObjectListItem({
             <h3 className="font-medium">{displayName}</h3>
             {object.LastModified && (
               <p className="text-muted-foreground text-sm">
-                Last Modified: {object.LastModified.toLocaleString()}
+                Last Modified: {formatDateTime(object.LastModified)}
               </p>
             )}
           </div>
