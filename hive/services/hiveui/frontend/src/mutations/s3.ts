@@ -16,21 +16,17 @@ export function useUploadObject() {
 
   return useMutation({
     mutationFn: async ({ bucket, key, file }: UploadObjectParams) => {
-      try {
-        const upload = new Upload({
-          client: getS3Client(),
-          params: {
-            Bucket: bucket,
-            Key: key,
-            Body: file,
-            ContentType: file.type,
-          },
-        })
+      const upload = new Upload({
+        client: getS3Client(),
+        params: {
+          Bucket: bucket,
+          Key: key,
+          Body: file,
+          ContentType: file.type,
+        },
+      })
 
-        return await upload.done()
-      } catch {
-        throw new Error("Failed to upload object")
-      }
+      return await upload.done()
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({
@@ -44,16 +40,12 @@ export function useCreateBucket() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ bucketName }: CreateBucketFormData) => {
-      try {
-        const command = new CreateBucketCommand({
-          Bucket: bucketName,
-        })
+    mutationFn: ({ bucketName }: CreateBucketFormData) => {
+      const command = new CreateBucketCommand({
+        Bucket: bucketName,
+      })
 
-        return await getS3Client().send(command)
-      } catch {
-        throw new Error("Failed to create bucket")
-      }
+      return getS3Client().send(command)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({
@@ -67,17 +59,13 @@ export function useDeleteObject() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ bucket, key }: { bucket: string; key: string }) => {
-      try {
-        const command = new DeleteObjectCommand({
-          Bucket: bucket,
-          Key: key,
-        })
+    mutationFn: ({ bucket, key }: { bucket: string; key: string }) => {
+      const command = new DeleteObjectCommand({
+        Bucket: bucket,
+        Key: key,
+      })
 
-        return await getS3Client().send(command)
-      } catch {
-        throw new Error("Failed to delete object")
-      }
+      return getS3Client().send(command)
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({

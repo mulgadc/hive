@@ -5,13 +5,9 @@ import { getS3Client } from "@/lib/awsClient"
 
 export const s3BucketsQueryOptions = queryOptions({
   queryKey: ["s3", "buckets"],
-  queryFn: async () => {
-    try {
-      const command = new ListBucketsCommand({})
-      return await getS3Client().send(command)
-    } catch {
-      throw new Error("Failed to fetch S3 buckets")
-    }
+  queryFn: () => {
+    const command = new ListBucketsCommand({})
+    return getS3Client().send(command)
   },
 })
 
@@ -21,16 +17,12 @@ export const s3BucketObjectsQueryOptions = (
 ) =>
   queryOptions({
     queryKey: ["s3", "buckets", bucketName, "objects", prefix ?? ""],
-    queryFn: async () => {
-      try {
-        const command = new ListObjectsV2Command({
-          Bucket: bucketName,
-          Prefix: prefix,
-          Delimiter: "/",
-        })
-        return await getS3Client().send(command)
-      } catch {
-        throw new Error("Failed to fetch S3 bucket objects")
-      }
+    queryFn: () => {
+      const command = new ListObjectsV2Command({
+        Bucket: bucketName,
+        Prefix: prefix,
+        Delimiter: "/",
+      })
+      return getS3Client().send(command)
     },
   })
