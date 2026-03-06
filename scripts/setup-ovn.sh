@@ -255,19 +255,38 @@ else
     echo "  sudoers rule: already exists"
 fi
 
-# --- Step 9: Disable auto-start on boot ---
+# --- Step 9: Configure OVN log rotation ---
+# OVN logs can grow to 10GB+ without rotation, filling the root partition.
+echo ""
+echo "Step 9: Configuring OVN log rotation..."
+
+LOGROTATE_FILE="/etc/logrotate.d/ovn-hive"
+sudo tee "$LOGROTATE_FILE" >/dev/null <<'LOGROTATE'
+/var/log/ovn/*.log {
+    daily
+    rotate 3
+    maxsize 100M
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+LOGROTATE
+echo "  logrotate config: $LOGROTATE_FILE (daily, 100M max, 3 rotations)"
+
+# --- Step 10: Disable auto-start on boot ---
 # start-dev.sh / stop-dev.sh manage the OVN lifecycle. Without hive services
 # running, ovn-controller spins in a tight reconnect loop burning CPU.
 echo ""
-echo "Step 9: Disabling OVN auto-start on boot (start-dev.sh will manage lifecycle)..."
+echo "Step 10: Disabling OVN auto-start on boot (start-dev.sh will manage lifecycle)..."
 sudo systemctl disable openvswitch-switch 2>/dev/null || true
 sudo systemctl disable ovn-controller 2>/dev/null || true
 echo "  openvswitch-switch: disabled on boot"
 echo "  ovn-controller: disabled on boot"
 
-# --- Step 10: Health check ---
+# --- Step 11: Health check ---
 echo ""
-echo "Step 10: Verifying setup..."
+echo "Step 11: Verifying setup..."
 
 OK=true
 
