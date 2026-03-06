@@ -88,6 +88,8 @@ func (d *Daemon) handleEC2Events(msg *nats.Msg) {
 		d.handleDetachVolume(msg, command, instance)
 	case command.Attributes.StartInstance:
 		d.handleStartInstance(msg, command, instance)
+	case command.Attributes.RebootInstance:
+		d.handleRebootInstance(msg, command, instance)
 	case command.Attributes.StopInstance, command.Attributes.TerminateInstance:
 		d.handleStopOrTerminateInstance(msg, command, instance)
 	default:

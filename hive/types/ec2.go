@@ -17,6 +17,7 @@ type EC2CommandAttributes struct {
 	StartInstance     bool `json:"start_instance"`
 	AttachVolume      bool `json:"attach_volume"`
 	DetachVolume      bool `json:"detach_volume"`
+	RebootInstance    bool `json:"reboot_instance"`
 }
 
 // AttachVolumeData carries parameters for an attach-volume command.
