@@ -291,10 +291,10 @@ github.com/modern-go/concurrent v0.0.0-20180228061459-e0a39a4cb421/go.mod h1:6dJ
 github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd/go.mod h1:6dJC0mAP4ikYIbvyc7fijjWJddQyLn8Ig3JB5CqoB9Q=
 github.com/modern-go/reflect2 v0.0.0-20180701023420-4b7aa43c6742/go.mod h1:bx2lNnkwVCuqBIxFjflWJWanXIb3RllmbCylyMrvgv0=
 github.com/modern-go/reflect2 v1.0.1/go.mod h1:bx2lNnkwVCuqBIxFjflWJWanXIb3RllmbCylyMrvgv0=
-github.com/mulgadc/predastore v1.0.2 h1:7BRE5a0geTShZGHWaXAdkrH3MfhcJ5KnRmhY5V8P5Hw=
-github.com/mulgadc/predastore v1.0.2/go.mod h1:RQyt9BROgyPfqC6TU69PuZ7RlHRDzZr11RYHL7eQwgk=
-github.com/mulgadc/viperblock v1.0.16 h1:eMICuMGjsHqmKsBLDBYwdWzoncPBCHCoPFY8f5VtM00=
-github.com/mulgadc/viperblock v1.0.16/go.mod h1:qck/WYWiXjGRJzoNM99JsFX/z00sZOmf9PM7umKYq3w=
+github.com/mulgadc/predastore v1.0.3 h1:qkuOEUH9B98QzVByn5osKeXm7SSPgk+ardQ3MibPSok=
+github.com/mulgadc/predastore v1.0.3/go.mod h1:x3Z6Ts/PONpmVx/R6t/hkHDJ3+0xRieYS3BuuVaNgyA=
+github.com/mulgadc/viperblock v1.0.17 h1:bGRVlXgcqnmH+Xxon03W/ZsbXqu/EE5+/VG3J4E3EBU=
+github.com/mulgadc/viperblock v1.0.17/go.mod h1:w9V0DjUH5hMXbXsiLbDr9lpqzXBGhEiYB1BeV6TYBkw=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
 github.com/mwitkow/go-conntrack v0.0.0-20161129095857-cc309e4a2223/go.mod h1:qRWi+5nqEBWmkhHvq77mSJWrCKwh8bxhgT7d/eI7P4U=

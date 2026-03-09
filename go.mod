@@ -8,8 +8,8 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/kdomanski/iso9660 v0.4.0
 	github.com/klauspost/cpuid/v2 v2.3.0
-	github.com/mulgadc/predastore v1.0.2
-	github.com/mulgadc/viperblock v1.0.16
+	github.com/mulgadc/predastore v1.0.3
+	github.com/mulgadc/viperblock v1.0.17
 	github.com/nats-io/nats-server/v2 v2.12.4
 	github.com/nats-io/nats.go v1.49.0
 	github.com/ovn-kubernetes/libovsdb v0.8.1
