@@ -7,7 +7,7 @@ Builds a Proxmox VM template with all Hive dependencies pre-installed. Cloning f
 | Component | Details |
 |---|---|
 | System packages | QEMU, nbdkit, libvirt, gcc, jq, curl, etc. (`make install-system`) |
-| Go | 1.26.0 (`make install-go`) |
+| Go | 1.26.1 (`make install-go`) |
 | AWS CLI | v2 (`make install-aws`) |
 | Repositories | hive, viperblock, predastore (with `go.work` configured) |
 | Module cache | `go mod download` completed for all repos |

@@ -384,7 +384,7 @@ func (ln *tlsSplitListener) Accept() (net.Conn, error) {
 
 		var buf [1]byte
 		if _, err := io.ReadFull(conn, buf[:]); err != nil {
-			conn.Close()
+			_ = conn.Close()
 			continue
 		}
 
