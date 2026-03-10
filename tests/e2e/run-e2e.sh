@@ -1788,12 +1788,16 @@ if [ "$FINAL_USER_COUNT" -ne 1 ]; then
 fi
 echo "  Users cleaned up (root only)"
 
-# Delete remaining policies
+# Delete remaining policies (including bootstrap AdministratorAccess)
 echo "  Cleaning up policies..."
 aws iam delete-policy --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/EC2ReadOnly"
 aws iam delete-policy --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/admin/FullAdmin"
 aws iam delete-policy --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/IAMReadOnly"
 aws iam delete-policy --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/EC2DescribeAll"
+# AdministratorAccess was created by 'admin init' and attached to the admin user
+aws iam detach-user-policy --user-name admin \
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/AdministratorAccess"
+aws iam delete-policy --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/AdministratorAccess"
 
 FINAL_POLICY_COUNT=$(aws iam list-policies | jq '.Policies | length')
 if [ "$FINAL_POLICY_COUNT" -ne 0 ]; then
