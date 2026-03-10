@@ -1478,11 +1478,8 @@ echo "IAM Phase 3 passed"
 echo ""
 echo "IAM Phase 4: Policy CRUD"
 
-GLOBAL_ACCOUNT="000000000000"
-
-# CreatePolicy — EC2ReadOnly
-echo "  Creating EC2ReadOnly policy..."
-aws iam create-policy \
+# Get the admin account ID from the current profile
+POLICY_OUTPUT=$(aws iam create-policy \
     --policy-name EC2ReadOnly \
     --policy-document '{
         "Version": "2012-10-17",
@@ -1491,8 +1488,13 @@ aws iam create-policy \
             "Action": ["ec2:DescribeInstances", "ec2:DescribeVolumes", "ec2:DescribeVpcs"],
             "Resource": "*"
         }]
-    }' > /dev/null
-echo "  Created EC2ReadOnly"
+    }')
+ADMIN_ACCOUNT=$(echo "$POLICY_OUTPUT" | jq -r '.Policy.Arn' | cut -d: -f5)
+if [ -z "$ADMIN_ACCOUNT" ]; then
+    echo "  ERROR: Failed to extract account ID from CreatePolicy response"
+    exit 1
+fi
+echo "  Created EC2ReadOnly (account=$ADMIN_ACCOUNT)"
 
 # CreatePolicy — FullAdmin
 echo "  Creating FullAdmin policy..."
@@ -1564,19 +1566,19 @@ expect_error "MalformedPolicyDocument" aws iam create-policy --policy-name BadPo
 # GetPolicy
 echo "  Getting EC2ReadOnly policy..."
 aws iam get-policy \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2ReadOnly" | \
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/EC2ReadOnly" | \
     jq -e '.Policy.PolicyName == "EC2ReadOnly"' > /dev/null
 echo "  GetPolicy passed"
 
 # GetPolicy — not found
 echo "  Getting non-existent policy (expect error)..."
 expect_error "NoSuchEntity" aws iam get-policy \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/Ghost"
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/Ghost"
 
 # GetPolicyVersion
 echo "  Getting EC2ReadOnly policy version v1..."
 aws iam get-policy-version \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2ReadOnly" \
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/EC2ReadOnly" \
     --version-id v1 | jq -e '.PolicyVersion.VersionId == "v1"' > /dev/null
 echo "  GetPolicyVersion passed"
 
@@ -1606,13 +1608,13 @@ setup_test_profile hive-charlie "$CHARLIE_KEY_ID" "$CHARLIE_SECRET"
 # Attach policies
 echo "  Attaching EC2ReadOnly + IAMReadOnly to alice..."
 aws iam attach-user-policy --user-name alice \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2ReadOnly"
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/EC2ReadOnly"
 aws iam attach-user-policy --user-name alice \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/IAMReadOnly"
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/IAMReadOnly"
 
 echo "  Attaching DenyTerminate to bob..."
 aws iam attach-user-policy --user-name bob \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/DenyTerminate"
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/DenyTerminate"
 
 # ListAttachedUserPolicies
 echo "  Verifying alice's attached policies..."
@@ -1626,7 +1628,7 @@ echo "  Alice has $ALICE_POLICIES policies"
 # Idempotent attach
 echo "  Testing idempotent attach..."
 aws iam attach-user-policy --user-name alice \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2ReadOnly"
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/EC2ReadOnly"
 ALICE_POLICIES=$(aws iam list-attached-user-policies --user-name alice | jq '.AttachedPolicies | length')
 if [ "$ALICE_POLICIES" -ne 2 ]; then
     echo "  ERROR: Expected 2 policies after idempotent attach, got $ALICE_POLICIES"
@@ -1637,11 +1639,11 @@ echo "  Idempotent attach passed"
 # Attach edge cases
 echo "  Attaching non-existent policy (expect error)..."
 expect_error "NoSuchEntity" aws iam attach-user-policy --user-name alice \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/Ghost"
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/Ghost"
 
 echo "  Attaching to non-existent user (expect error)..."
 expect_error "NoSuchEntity" aws iam attach-user-policy --user-name ghost \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2ReadOnly"
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/EC2ReadOnly"
 
 # --- Enforcement Tests ---
 
@@ -1696,11 +1698,11 @@ echo "  Root bypass passed"
 # Prefix wildcard — swap alice to EC2DescribeAll
 echo "  Testing prefix wildcard (swap alice to EC2DescribeAll)..."
 aws iam detach-user-policy --user-name alice \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2ReadOnly"
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/EC2ReadOnly"
 aws iam detach-user-policy --user-name alice \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/IAMReadOnly"
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/IAMReadOnly"
 aws iam attach-user-policy --user-name alice \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2DescribeAll"
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/EC2DescribeAll"
 
 aws ec2 describe-instances --profile hive-alice > /dev/null
 echo "    ec2:DescribeInstances — allowed (Describe*)"
@@ -1717,7 +1719,7 @@ echo "  Prefix wildcard passed"
 # FullAdmin — give charlie full access
 echo "  Testing FullAdmin (charlie)..."
 aws iam attach-user-policy --user-name charlie \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/admin/FullAdmin"
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/admin/FullAdmin"
 aws ec2 describe-instances --profile hive-charlie > /dev/null
 echo "    ec2:DescribeInstances — allowed (was denied)"
 aws iam list-users --profile hive-charlie > /dev/null
@@ -1733,7 +1735,7 @@ echo "IAM Phase 6: Policy Lifecycle — Detach & Delete"
 # Detach alice's policy → she loses access
 echo "  Detaching EC2DescribeAll from alice..."
 aws iam detach-user-policy --user-name alice \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2DescribeAll"
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/EC2DescribeAll"
 expect_error "AccessDenied" \
     aws ec2 describe-instances --profile hive-alice
 echo "  Alice lost access after detach"
@@ -1741,18 +1743,18 @@ echo "  Alice lost access after detach"
 # DeletePolicy — conflict (DenyTerminate still attached to bob)
 echo "  Deleting DenyTerminate while attached (expect DeleteConflict)..."
 expect_error "DeleteConflict" aws iam delete-policy \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/DenyTerminate"
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/DenyTerminate"
 
 # Detach first, then delete
 echo "  Detaching DenyTerminate from bob, then deleting..."
 aws iam detach-user-policy --user-name bob \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/DenyTerminate"
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/DenyTerminate"
 aws iam delete-policy \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/DenyTerminate"
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/DenyTerminate"
 
 # Verify it's gone
 expect_error "NoSuchEntity" aws iam get-policy \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/DenyTerminate"
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/DenyTerminate"
 echo "  DenyTerminate deleted"
 
 echo "IAM Phase 6 passed"
@@ -1774,7 +1776,7 @@ aws iam delete-user --user-name bob
 # Delete charlie (detach FullAdmin first)
 echo "  Cleaning up charlie..."
 aws iam detach-user-policy --user-name charlie \
-    --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/admin/FullAdmin"
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/admin/FullAdmin"
 aws iam delete-access-key --user-name charlie --access-key-id "$CHARLIE_KEY_ID"
 aws iam delete-user --user-name charlie
 
@@ -1786,12 +1788,16 @@ if [ "$FINAL_USER_COUNT" -ne 1 ]; then
 fi
 echo "  Users cleaned up (root only)"
 
-# Delete remaining policies
+# Delete remaining policies (including bootstrap AdministratorAccess)
 echo "  Cleaning up policies..."
-aws iam delete-policy --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2ReadOnly"
-aws iam delete-policy --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/admin/FullAdmin"
-aws iam delete-policy --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/IAMReadOnly"
-aws iam delete-policy --policy-arn "arn:aws:iam::${GLOBAL_ACCOUNT}:policy/EC2DescribeAll"
+aws iam delete-policy --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/EC2ReadOnly"
+aws iam delete-policy --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/admin/FullAdmin"
+aws iam delete-policy --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/IAMReadOnly"
+aws iam delete-policy --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/EC2DescribeAll"
+# AdministratorAccess was created by 'admin init' and attached to the admin user
+aws iam detach-user-policy --user-name admin \
+    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/AdministratorAccess"
+aws iam delete-policy --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/AdministratorAccess"
 
 FINAL_POLICY_COUNT=$(aws iam list-policies | jq '.Policies | length')
 if [ "$FINAL_POLICY_COUNT" -ne 0 ]; then

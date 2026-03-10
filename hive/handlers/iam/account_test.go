@@ -218,7 +218,7 @@ func TestAccessKeyReturnsAccountID(t *testing.T) {
 }
 
 // ============================================================================
-// SeedRootUser Account-Scoped Tests
+// SeedBootstrap Account-Scoped Tests
 // ============================================================================
 
 // ============================================================================
@@ -340,16 +340,16 @@ func TestCrossAccount_LookupAccessKeyReturnsCorrectAccount(t *testing.T) {
 }
 
 // ============================================================================
-// SeedRootUser Account-Scoped Tests
+// SeedBootstrap Account-Scoped Tests
 // ============================================================================
 
-func TestSeedRootUser_AccountScoped(t *testing.T) {
+func TestSeedBootstrap_AccountScoped(t *testing.T) {
 	svc := setupTestIAMService(t)
 
 	encryptedSecret, err := EncryptSecret("root-secret", svc.masterKey)
 	require.NoError(t, err)
 
-	err = svc.SeedRootUser(&BootstrapData{
+	err = svc.SeedBootstrap(&BootstrapData{
 		AccessKeyID:     "AKIAROOTEXAMPLE12345",
 		EncryptedSecret: encryptedSecret,
 		AccountID:       utils.GlobalAccountID,
@@ -374,6 +374,6 @@ func TestSeedRootUser_AccountScoped(t *testing.T) {
 	account, err := svc.GetAccount(utils.GlobalAccountID)
 	require.NoError(t, err)
 	assert.Equal(t, utils.GlobalAccountID, account.AccountID)
-	assert.Equal(t, "Global", account.AccountName)
+	assert.Equal(t, "system", account.AccountName)
 	assert.Equal(t, "ACTIVE", account.Status)
 }

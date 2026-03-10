@@ -87,9 +87,9 @@ func (s *stubIAMService) LookupAccessKey(_ string) (*handlers_iam.AccessKey, err
 	return nil, nil
 }
 
-func (s *stubIAMService) DecryptSecret(_ string) (string, error)           { return "", nil }
-func (s *stubIAMService) SeedRootUser(_ *handlers_iam.BootstrapData) error { return nil }
-func (s *stubIAMService) IsEmpty() (bool, error)                           { return true, nil }
+func (s *stubIAMService) DecryptSecret(_ string) (string, error)            { return "", nil }
+func (s *stubIAMService) SeedBootstrap(_ *handlers_iam.BootstrapData) error { return nil }
+func (s *stubIAMService) IsEmpty() (bool, error)                            { return true, nil }
 
 func (s *stubIAMService) CreateAccount(_ string) (*handlers_iam.Account, error) {
 	return nil, nil

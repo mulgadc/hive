@@ -37,6 +37,7 @@ type ConfigSettings struct {
 	Region    string
 	NatsToken string
 	DataDir   string
+	ConfigDir string
 
 	// Add more fields as needed
 	Node   string
@@ -264,11 +265,21 @@ func GenerateAWSSecretKey() string {
 	return base64.StdEncoding.EncodeToString(bytes)
 }
 
-// GenerateAccountID returns the global platform account ID (000000000000).
-// This is used during bootstrap (hive admin init) for the root/platform account.
-// Customer accounts are created via IAMService.CreateAccount() with sequential IDs.
-func GenerateAccountID() string {
+// SystemAccountID returns the system/root account ID (000000000000).
+// Used for service-to-service auth credentials baked into config files.
+func SystemAccountID() string {
 	return "000000000000"
+}
+
+// DefaultAccountID returns the default admin account ID (000000000001).
+// This is the first human-facing account created during bootstrap.
+func DefaultAccountID() string {
+	return "000000000001"
+}
+
+// DefaultAccountName returns the default admin account name ("hive").
+func DefaultAccountName() string {
+	return "hive"
 }
 
 // generateNATSToken generates a secure random token for NATS
@@ -600,7 +611,7 @@ func SetupAWSCredentials(accessKey, secretKey, region, certPath, bindIP string) 
 // GenerateMultiNodePredastoreConfig produces a complete predastore.toml for a
 // multi-node Predastore cluster. Each node gets its own DB entry (port 6660)
 // and shard entry (port 9991) on a distinct IP. Node ID 1 is the bootstrap leader.
-func GenerateMultiNodePredastoreConfig(templateStr string, nodes []PredastoreNodeConfig, accessKey, secretKey, region string) (string, error) {
+func GenerateMultiNodePredastoreConfig(templateStr string, nodes []PredastoreNodeConfig, accessKey, secretKey, region, natsToken, configDir, bindIP string) (string, error) {
 	if len(nodes) < 3 {
 		return "", fmt.Errorf("multi-node predastore requires at least 3 nodes, got %d", len(nodes))
 	}
@@ -610,7 +621,10 @@ func GenerateMultiNodePredastoreConfig(templateStr string, nodes []PredastoreNod
 		AccessKey string
 		SecretKey string
 		Region    string
-	}{nodes, accessKey, secretKey, region}
+		NatsToken string
+		ConfigDir string
+		BindIP    string
+	}{nodes, accessKey, secretKey, region, natsToken, configDir, bindIP}
 
 	tmpl, err := template.New("predastore-multinode").Parse(templateStr)
 	if err != nil {

@@ -504,24 +504,27 @@ func (s *IAMServiceImpl) DecryptSecret(ciphertext string) (string, error) {
 	return s.decrypter.Decrypt(ciphertext)
 }
 
-// SeedRootUser consumes bootstrap data to create the root IAM user and access
-// key in NATS KV. Uses conditional create (put-if-not-exists) for multi-node
-// race safety — the first node to call this wins; others skip silently.
-// Also creates the global account record (000000000000) if it doesn't exist.
-func (s *IAMServiceImpl) SeedRootUser(data *BootstrapData) error {
-	// Ensure the global account record exists
-	globalAccount := Account{
+// SeedBootstrap consumes bootstrap data to create the system root IAM user and
+// (optionally) the default admin account in NATS KV. Uses conditional create
+// (put-if-not-exists) for multi-node race safety — the first node wins; others
+// skip silently. Also creates the system account record (000000000000).
+// If data.Admin is non-nil, it also seeds the admin account, user, access key,
+// AdministratorAccess policy, and sets the account counter so subsequent
+// CreateAccount calls start at 000000000002.
+func (s *IAMServiceImpl) SeedBootstrap(data *BootstrapData) error {
+	// --- Seed system account (000000000000) ---
+	systemAccount := Account{
 		AccountID:   utils.GlobalAccountID,
-		AccountName: "Global",
+		AccountName: "system",
 		Status:      AccountStatusActive,
 		CreatedAt:   time.Now().UTC().Format(time.RFC3339),
 	}
-	accountData, err := json.Marshal(globalAccount)
+	accountData, err := json.Marshal(systemAccount)
 	if err != nil {
-		return fmt.Errorf("marshal global account: %w", err)
+		return fmt.Errorf("marshal system account: %w", err)
 	}
 	if _, err := s.accountsBucket.Create(utils.GlobalAccountID, accountData); err != nil && !errors.Is(err, nats.ErrKeyExists) {
-		return fmt.Errorf("seed global account: %w", err)
+		return fmt.Errorf("seed system account: %w", err)
 	}
 
 	kvKey := utils.GlobalAccountID + ".root"
@@ -546,9 +549,7 @@ func (s *IAMServiceImpl) SeedRootUser(data *BootstrapData) error {
 	_, err = s.usersBucket.Create(kvKey, userData)
 	if errors.Is(err, nats.ErrKeyExists) {
 		slog.Info("Root user already seeded by another node, skipping")
-		return nil
-	}
-	if err != nil {
+	} else if err != nil {
 		return fmt.Errorf("seed root user: %w", err)
 	}
 
@@ -567,16 +568,112 @@ func (s *IAMServiceImpl) SeedRootUser(data *BootstrapData) error {
 		return fmt.Errorf("marshal root access key: %w", err)
 	}
 
-	_, err = s.accessKeysBucket.Create(data.AccessKeyID, akData)
-	if errors.Is(err, nats.ErrKeyExists) {
+	if _, err = s.accessKeysBucket.Create(data.AccessKeyID, akData); errors.Is(err, nats.ErrKeyExists) {
 		slog.Info("Root access key already seeded by another node, skipping")
-		return nil
-	}
-	if err != nil {
+	} else if err != nil {
 		return fmt.Errorf("seed root access key: %w", err)
+	} else {
+		slog.Info("System root user seeded", "accountID", utils.GlobalAccountID, "accessKeyID", data.AccessKeyID)
 	}
 
-	slog.Info("Root IAM user seeded", "accountID", utils.GlobalAccountID, "accessKeyID", data.AccessKeyID)
+	// --- Seed admin account (000000000001) if present ---
+	if data.Admin != nil {
+		if err := s.seedAdminAccount(data.Admin); err != nil {
+			return fmt.Errorf("seed admin account: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// seedAdminAccount creates the default admin account, user, access key,
+// AdministratorAccess policy, and sets the account counter to 2.
+func (s *IAMServiceImpl) seedAdminAccount(admin *AdminBootstrapData) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// Create admin account record
+	account := Account{
+		AccountID:   admin.AccountID,
+		AccountName: admin.AccountName,
+		Status:      AccountStatusActive,
+		CreatedAt:   now,
+	}
+	accountData, err := json.Marshal(account)
+	if err != nil {
+		return fmt.Errorf("marshal admin account: %w", err)
+	}
+	if _, err := s.accountsBucket.Create(admin.AccountID, accountData); err != nil && !errors.Is(err, nats.ErrKeyExists) {
+		return fmt.Errorf("store admin account: %w", err)
+	}
+
+	// Set account counter to 2 so next CreateAccount gets 000000000002
+	if _, err := s.accountCounterBucket.Create("next_id", []byte("2")); err != nil && !errors.Is(err, nats.ErrKeyExists) {
+		return fmt.Errorf("seed account counter: %w", err)
+	}
+
+	// Create AdministratorAccess policy
+	policyARN := fmt.Sprintf("arn:aws:iam::%s:policy/AdministratorAccess", admin.AccountID)
+	policyDoc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`
+	policy := Policy{
+		PolicyName:     "AdministratorAccess",
+		PolicyID:       generateIAMID("ANPA"),
+		ARN:            policyARN,
+		Path:           "/",
+		Description:    "Full administrator access",
+		PolicyDocument: policyDoc,
+		CreatedAt:      now,
+		DefaultVersion: "v1",
+		Tags:           []Tag{},
+	}
+	policyData, err := json.Marshal(policy)
+	if err != nil {
+		return fmt.Errorf("marshal admin policy: %w", err)
+	}
+	policyKVKey := admin.AccountID + ".AdministratorAccess"
+	if _, err := s.policiesBucket.Create(policyKVKey, policyData); err != nil && !errors.Is(err, nats.ErrKeyExists) {
+		return fmt.Errorf("store admin policy: %w", err)
+	}
+
+	// Create admin user (with policy already attached)
+	kvKey := admin.AccountID + "." + admin.UserName
+	adminUser := User{
+		UserName:         admin.UserName,
+		UserID:           generateIAMID("AIDA"),
+		AccountID:        admin.AccountID,
+		ARN:              fmt.Sprintf("arn:aws:iam::%s:user/%s", admin.AccountID, admin.UserName),
+		Path:             "/",
+		CreatedAt:        now,
+		AccessKeys:       []string{admin.AccessKeyID},
+		Tags:             []Tag{},
+		AttachedPolicies: []string{policyARN},
+	}
+
+	userData, err := json.Marshal(adminUser)
+	if err != nil {
+		return fmt.Errorf("marshal admin user: %w", err)
+	}
+	if _, err := s.usersBucket.Create(kvKey, userData); err != nil && !errors.Is(err, nats.ErrKeyExists) {
+		return fmt.Errorf("store admin user: %w", err)
+	}
+
+	// Create admin access key
+	ak := AccessKey{
+		AccessKeyID:     admin.AccessKeyID,
+		SecretAccessKey: admin.EncryptedSecret,
+		UserName:        admin.UserName,
+		AccountID:       admin.AccountID,
+		Status:          AccessKeyStatusActive,
+		CreatedAt:       now,
+	}
+	akData, err := json.Marshal(ak)
+	if err != nil {
+		return fmt.Errorf("marshal admin access key: %w", err)
+	}
+	if _, err := s.accessKeysBucket.Create(admin.AccessKeyID, akData); err != nil && !errors.Is(err, nats.ErrKeyExists) {
+		return fmt.Errorf("store admin access key: %w", err)
+	}
+
+	slog.Info("Admin account seeded", "accountID", admin.AccountID, "userName", admin.UserName, "accessKeyID", admin.AccessKeyID)
 	return nil
 }
 

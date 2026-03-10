@@ -93,8 +93,8 @@ func (m *mockIAMService) GetUserPolicies(_, _ string) ([]handlers_iam.PolicyDocu
 func (m *mockIAMService) DecryptSecret(ciphertext string) (string, error) {
 	return handlers_iam.DecryptSecret(ciphertext, m.masterKey)
 }
-func (m *mockIAMService) SeedRootUser(_ *handlers_iam.BootstrapData) error { return nil }
-func (m *mockIAMService) IsEmpty() (bool, error)                           { return true, nil }
+func (m *mockIAMService) SeedBootstrap(_ *handlers_iam.BootstrapData) error { return nil }
+func (m *mockIAMService) IsEmpty() (bool, error)                            { return true, nil }
 func (m *mockIAMService) CreateAccount(_ string) (*handlers_iam.Account, error) {
 	return nil, nil
 }
