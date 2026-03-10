@@ -10,45 +10,40 @@
     "fix": "biome check --fix"
   },
   "dependencies": {
-    "@aws-sdk/client-ec2": "^3.1000.0",
-    "@aws-sdk/client-iam": "^3.1000.0",
-    "@aws-sdk/client-s3": "^3.995.0",
-    "@aws-sdk/lib-storage": "^3.995.0",
+    "@aws-sdk/client-ec2": "^3.1004.0",
+    "@aws-sdk/client-iam": "^3.1004.0",
+    "@aws-sdk/client-s3": "^3.1004.0",
+    "@aws-sdk/lib-storage": "^3.1004.0",
     "@base-ui/react": "^1.2.0",
     "@fontsource-variable/geist": "^5.2.8",
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@hookform/resolvers": "^5.2.2",
     "@tanstack/react-query": "^5.90.21",
-    "@tanstack/react-router": "^1.162.1",
+    "@tanstack/react-router": "^1.166.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "lucide-react": "^0.575.0",
+    "lucide-react": "^0.577.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-hook-form": "^7.71.2",
     "tailwind-merge": "^3.5.0",
-    "tailwindcss": "^4.2.0",
+    "tailwindcss": "^4.2.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.4",
-    "@tailwindcss/vite": "^4.2.0",
-    "@tanstack/router-plugin": "^1.162.1",
-    "@types/node": "^24.10.13",
+    "@biomejs/biome": "^2.4.6",
+    "@tailwindcss/vite": "^4.2.1",
+    "@tanstack/router-plugin": "^1.166.2",
+    "@types/node": "24.12.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "@typescript/native-preview": "7.0.0-dev.20260302.1",
+    "@typescript/native-preview": "7.0.0-dev.20260307.1",
     "@vitejs/plugin-basic-ssl": "^2.1.4",
     "@vitejs/plugin-react": "^5.1.4",
     "babel-plugin-react-compiler": "^1.0.0",
     "typescript": "^5.9.3",
-    "ultracite": "^7.2.4",
+    "ultracite": "^7.2.5",
     "vite": "^7.3.1"
-  },
-  "pnpm": {
-    "overrides": {
-      "fast-xml-parser": ">=5.3.8"
-    }
   },
   "packageManager": "pnpm@10.30.3+sha512.c961d1e0a2d8e354ecaa5166b822516668b7f44cb5bd95122d590dd81922f606f5473b6d23ec4a5be05e7fcd18e8488d47d978bbe981872f1145d06e9a740017"
 }
