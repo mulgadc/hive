@@ -103,9 +103,20 @@ func (s StringOrArr) MarshalJSON() ([]byte, error) {
 // BootstrapData is the on-disk JSON file consumed on first gateway start
 // to seed the root IAM user into NATS KV.
 type BootstrapData struct {
+	AccessKeyID     string              `json:"access_key_id"`
+	EncryptedSecret string              `json:"encrypted_secret"`
+	AccountID       string              `json:"account_id"`
+	Admin           *AdminBootstrapData `json:"admin,omitempty"`
+}
+
+// AdminBootstrapData holds the default admin account credentials seeded
+// alongside the system account during first boot.
+type AdminBootstrapData struct {
+	AccountID       string `json:"account_id"`
+	AccountName     string `json:"account_name"`
+	UserName        string `json:"user_name"`
 	AccessKeyID     string `json:"access_key_id"`
 	EncryptedSecret string `json:"encrypted_secret"`
-	AccountID       string `json:"account_id"`
 }
 
 // Account represents a Hive account. Accounts namespace IAM users,

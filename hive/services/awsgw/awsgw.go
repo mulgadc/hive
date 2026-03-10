@@ -90,12 +90,12 @@ func launchService(config *config.ClusterConfig) error {
 		return fmt.Errorf("initialize IAM service: %w", err)
 	}
 
-	// First boot: consume bootstrap.json → seed root user into NATS KV → delete file
+	// First boot: consume bootstrap.json → seed IAM users into NATS KV → delete file
 	bootstrapPath := filepath.Join(nodeConfig.BaseDir, "config", "bootstrap.json")
 	if data, err := handlers_iam.LoadBootstrapData(bootstrapPath); err == nil {
-		slog.Info("Bootstrap file found, seeding root IAM user")
-		if err := iamService.SeedRootUser(data); err != nil {
-			return fmt.Errorf("seed root user from bootstrap.json: %w", err)
+		slog.Info("Bootstrap file found, seeding IAM users")
+		if err := iamService.SeedBootstrap(data); err != nil {
+			return fmt.Errorf("seed bootstrap from bootstrap.json: %w", err)
 		}
 		if err := os.Remove(bootstrapPath); err != nil {
 			slog.Warn("Failed to delete bootstrap file", "path", bootstrapPath, "err", err)

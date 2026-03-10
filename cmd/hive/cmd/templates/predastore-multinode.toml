@@ -46,3 +46,10 @@ secret_access_key = "{{.SecretKey}}"
 policy = [
   { bucket = "predastore", actions = ["s3:ListBucket", "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListAllMyBuckets"] },
 ]
+
+# IAM authentication via NATS KV (enables multi-account S3 access)
+[iam]
+nats_url = "nats://{{.BindIP}}:4222"
+nats_token = "{{.NatsToken}}"
+master_key_path = "{{.ConfigDir}}/master.key"
+access_keys_bucket = "hive-iam-access-keys"

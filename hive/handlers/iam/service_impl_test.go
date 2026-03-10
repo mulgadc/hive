@@ -661,16 +661,16 @@ func TestLookupAccessKey_InactiveKey(t *testing.T) {
 }
 
 // ============================================================================
-// SeedRootUser Tests
+// SeedBootstrap Tests
 // ============================================================================
 
-func TestSeedRootUser(t *testing.T) {
+func TestSeedBootstrap(t *testing.T) {
 	svc := setupTestIAMService(t)
 
 	encryptedSecret, err := EncryptSecret("test-secret-key", svc.masterKey)
 	require.NoError(t, err)
 
-	err = svc.SeedRootUser(&BootstrapData{
+	err = svc.SeedBootstrap(&BootstrapData{
 		AccessKeyID:     "AKIAEXAMPLE123456789",
 		EncryptedSecret: encryptedSecret,
 		AccountID:       utils.GlobalAccountID,
@@ -702,11 +702,11 @@ func TestSeedRootUser(t *testing.T) {
 	account, err := svc.GetAccount(utils.GlobalAccountID)
 	require.NoError(t, err)
 	assert.Equal(t, utils.GlobalAccountID, account.AccountID)
-	assert.Equal(t, "Global", account.AccountName)
+	assert.Equal(t, "system", account.AccountName)
 	assert.Equal(t, "ACTIVE", account.Status)
 }
 
-func TestSeedRootUser_Idempotent(t *testing.T) {
+func TestSeedBootstrap_Idempotent(t *testing.T) {
 	svc := setupTestIAMService(t)
 
 	encryptedSecret, _ := EncryptSecret("test-secret", svc.masterKey)
@@ -717,11 +717,11 @@ func TestSeedRootUser_Idempotent(t *testing.T) {
 	}
 
 	// First call seeds
-	err := svc.SeedRootUser(data)
+	err := svc.SeedBootstrap(data)
 	require.NoError(t, err)
 
 	// Second call should succeed (no-op, idempotent)
-	err = svc.SeedRootUser(data)
+	err = svc.SeedBootstrap(data)
 	require.NoError(t, err)
 
 	// Root user should still exist with original data
@@ -730,6 +730,100 @@ func TestSeedRootUser_Idempotent(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "root", *out.User.UserName)
+}
+
+func TestSeedBootstrap_WithAdmin(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	systemSecret, err := EncryptSecret("system-secret", svc.masterKey)
+	require.NoError(t, err)
+	adminSecret, err := EncryptSecret("admin-secret", svc.masterKey)
+	require.NoError(t, err)
+
+	err = svc.SeedBootstrap(&BootstrapData{
+		AccessKeyID:     "AKIASYSTEM1234567890",
+		EncryptedSecret: systemSecret,
+		AccountID:       utils.GlobalAccountID,
+		Admin: &AdminBootstrapData{
+			AccountID:       "000000000001",
+			AccountName:     "hive",
+			UserName:        "admin",
+			AccessKeyID:     "AKIAADMIN12345678901",
+			EncryptedSecret: adminSecret,
+		},
+	})
+	require.NoError(t, err)
+
+	// Verify system root user exists
+	out, err := svc.GetUser(utils.GlobalAccountID, &iam.GetUserInput{
+		UserName: aws.String("root"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "root", *out.User.UserName)
+
+	// Verify admin account created
+	account, err := svc.GetAccount("000000000001")
+	require.NoError(t, err)
+	assert.Equal(t, "000000000001", account.AccountID)
+	assert.Equal(t, "hive", account.AccountName)
+	assert.Equal(t, "ACTIVE", account.Status)
+
+	// Verify admin user exists
+	adminOut, err := svc.GetUser("000000000001", &iam.GetUserInput{
+		UserName: aws.String("admin"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "admin", *adminOut.User.UserName)
+	assert.Contains(t, *adminOut.User.Arn, "000000000001")
+
+	// Verify admin access key
+	ak, err := svc.LookupAccessKey("AKIAADMIN12345678901")
+	require.NoError(t, err)
+	assert.Equal(t, "admin", ak.UserName)
+	assert.Equal(t, "000000000001", ak.AccountID)
+
+	decrypted, err := DecryptSecret(ak.SecretAccessKey, svc.masterKey)
+	require.NoError(t, err)
+	assert.Equal(t, "admin-secret", decrypted)
+
+	// Verify AdministratorAccess policy was created and attached
+	policies, err := svc.GetUserPolicies("000000000001", "admin")
+	require.NoError(t, err)
+	require.Len(t, policies, 1)
+	assert.Equal(t, "Allow", string(policies[0].Statement[0].Effect))
+	assert.Equal(t, StringOrArr{"*"}, policies[0].Statement[0].Action)
+	assert.Equal(t, StringOrArr{"*"}, policies[0].Statement[0].Resource)
+
+	// Verify account counter set to 2 (next CreateAccount gets 000000000002)
+	nextAccount, err := svc.CreateAccount("test-org")
+	require.NoError(t, err)
+	assert.Equal(t, "000000000002", nextAccount.AccountID)
+}
+
+func TestSeedBootstrap_AdminNil_BackwardCompat(t *testing.T) {
+	svc := setupTestIAMService(t)
+
+	encryptedSecret, err := EncryptSecret("test-secret", svc.masterKey)
+	require.NoError(t, err)
+
+	// No Admin field — backward compatibility with old bootstrap.json
+	err = svc.SeedBootstrap(&BootstrapData{
+		AccessKeyID:     "AKIAEXAMPLE123456789",
+		EncryptedSecret: encryptedSecret,
+		AccountID:       utils.GlobalAccountID,
+	})
+	require.NoError(t, err)
+
+	// Root user should exist
+	out, err := svc.GetUser(utils.GlobalAccountID, &iam.GetUserInput{
+		UserName: aws.String("root"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "root", *out.User.UserName)
+
+	// Admin account should NOT exist
+	_, err = svc.GetAccount("000000000001")
+	assert.Error(t, err)
 }
 
 // ============================================================================
