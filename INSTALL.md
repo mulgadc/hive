@@ -123,12 +123,6 @@ Verify the certificate was added:
 ls -la /usr/local/share/ca-certificates/hive-ca.crt
 ```
 
-Next, set the AWS profile to use `hive` which points to the local environment.
-
-```bash
-export AWS_PROFILE=hive
-```
-
 ## Launch Services
 
 Start the core services for development.
@@ -136,6 +130,24 @@ Start the core services for development.
 ```bash
 ./scripts/start-dev.sh
 ```
+
+## Create Account
+
+With the cluster running, create an account. This provisions an IAM account with an admin user, generates access keys, and configures your local AWS CLI profile automatically.
+
+```bash
+./bin/hive admin account create --name myaccount
+```
+
+The command outputs your account ID and credentials. It also creates an AWS CLI profile named `hive-myaccount` in `~/.aws/credentials` and `~/.aws/config`, pointing to your local Hive endpoint.
+
+Set the AWS profile to use your new account:
+
+```bash
+export AWS_PROFILE=hive-myaccount
+```
+
+All subsequent `aws` CLI commands will use this account.
 
 ## Create SSH Key
 
@@ -959,10 +971,20 @@ sudo cp ~/node1/config/ca.pem /usr/local/share/ca-certificates/hive-ca.crt
 sudo update-ca-certificates
 ```
 
-Set the AWS profile:
+## Create Account
+
+With the cluster running, create an account from any node:
 
 ```bash
-export AWS_PROFILE=hive
+./bin/hive admin account create --name myaccount
+```
+
+This creates an IAM account with an admin user, generates access keys, and configures your local AWS CLI profile automatically.
+
+Set the AWS profile to use your new account:
+
+```bash
+export AWS_PROFILE=hive-myaccount
 ```
 
 ## Using the Cluster
