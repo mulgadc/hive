@@ -281,12 +281,6 @@ func DefaultAccountName() string {
 	return "hive"
 }
 
-// GenerateAccountID returns the global platform account ID (000000000000).
-// Deprecated: use SystemAccountID instead.
-func GenerateAccountID() string {
-	return SystemAccountID()
-}
-
 // generateNATSToken generates a secure random token for NATS
 func GenerateNATSToken() string {
 	bytes := make([]byte, 32)

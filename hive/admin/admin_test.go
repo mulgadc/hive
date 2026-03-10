@@ -42,14 +42,16 @@ func TestGenerateAWSSecretKey_Uniqueness(t *testing.T) {
 	assert.NotEqual(t, GenerateAWSSecretKey(), GenerateAWSSecretKey())
 }
 
-func TestGenerateAccountID_ReturnsGlobalID(t *testing.T) {
-	id := GenerateAccountID()
+func TestSystemAccountID(t *testing.T) {
+	id := SystemAccountID()
 	assert.Equal(t, "000000000000", id)
 	assert.Len(t, id, 12)
 }
 
-func TestGenerateAccountID_Deterministic(t *testing.T) {
-	assert.Equal(t, GenerateAccountID(), GenerateAccountID())
+func TestDefaultAccountID(t *testing.T) {
+	id := DefaultAccountID()
+	assert.Equal(t, "000000000001", id)
+	assert.Len(t, id, 12)
 }
 
 func TestGenerateNATSToken_Format(t *testing.T) {

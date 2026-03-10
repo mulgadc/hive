@@ -616,7 +616,30 @@ func (s *IAMServiceImpl) seedAdminAccount(admin *AdminBootstrapData) error {
 		return fmt.Errorf("seed account counter: %w", err)
 	}
 
-	// Create admin user
+	// Create AdministratorAccess policy
+	policyARN := fmt.Sprintf("arn:aws:iam::%s:policy/AdministratorAccess", admin.AccountID)
+	policyDoc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`
+	policy := Policy{
+		PolicyName:     "AdministratorAccess",
+		PolicyID:       generateIAMID("ANPA"),
+		ARN:            policyARN,
+		Path:           "/",
+		Description:    "Full administrator access",
+		PolicyDocument: policyDoc,
+		CreatedAt:      now,
+		DefaultVersion: "v1",
+		Tags:           []Tag{},
+	}
+	policyData, err := json.Marshal(policy)
+	if err != nil {
+		return fmt.Errorf("marshal admin policy: %w", err)
+	}
+	policyKVKey := admin.AccountID + ".AdministratorAccess"
+	if _, err := s.policiesBucket.Create(policyKVKey, policyData); err != nil && !errors.Is(err, nats.ErrKeyExists) {
+		return fmt.Errorf("store admin policy: %w", err)
+	}
+
+	// Create admin user (with policy already attached)
 	kvKey := admin.AccountID + "." + admin.UserName
 	adminUser := User{
 		UserName:         admin.UserName,
@@ -627,7 +650,7 @@ func (s *IAMServiceImpl) seedAdminAccount(admin *AdminBootstrapData) error {
 		CreatedAt:        now,
 		AccessKeys:       []string{admin.AccessKeyID},
 		Tags:             []Tag{},
-		AttachedPolicies: []string{},
+		AttachedPolicies: []string{policyARN},
 	}
 
 	userData, err := json.Marshal(adminUser)
@@ -653,40 +676,6 @@ func (s *IAMServiceImpl) seedAdminAccount(admin *AdminBootstrapData) error {
 	}
 	if _, err := s.accessKeysBucket.Create(admin.AccessKeyID, akData); err != nil && !errors.Is(err, nats.ErrKeyExists) {
 		return fmt.Errorf("store admin access key: %w", err)
-	}
-
-	// Create AdministratorAccess policy
-	policyARN := fmt.Sprintf("arn:aws:iam::%s:policy/AdministratorAccess", admin.AccountID)
-	policyDoc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`
-	policy := Policy{
-		PolicyName:     "AdministratorAccess",
-		PolicyID:       generateIAMID("ANPA"),
-		ARN:            policyARN,
-		Path:           "/",
-		Description:    "Full administrator access",
-		PolicyDocument: policyDoc,
-		CreatedAt:      now,
-		DefaultVersion: "v1",
-		Tags:           []Tag{},
-	}
-	policyData, err := json.Marshal(policy)
-	if err != nil {
-		return fmt.Errorf("marshal admin policy: %w", err)
-	}
-	policyKVKey := admin.AccountID + ".AdministratorAccess"
-	if _, err := s.policiesBucket.Create(policyKVKey, policyData); err != nil && !errors.Is(err, nats.ErrKeyExists) {
-		return fmt.Errorf("store admin policy: %w", err)
-	}
-
-	// Attach policy to admin user
-	adminUser.AttachedPolicies = []string{policyARN}
-	userData, err = json.Marshal(adminUser)
-	if err != nil {
-		return fmt.Errorf("marshal admin user with policy: %w", err)
-	}
-	// Use Put (not Create) since the user was just created above
-	if _, err := s.usersBucket.Put(kvKey, userData); err != nil {
-		return fmt.Errorf("attach policy to admin user: %w", err)
 	}
 
 	slog.Info("Admin account seeded", "accountID", admin.AccountID, "userName", admin.UserName, "accessKeyID", admin.AccessKeyID)

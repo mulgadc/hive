@@ -809,12 +809,14 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 	}
 
 	creds := &formation.SharedCredentials{
-		AccessKey:   accessKey,
-		SecretKey:   secretKey,
-		AccountID:   accountID,
-		NatsToken:   natsToken,
-		ClusterName: clusterName,
-		Region:      region,
+		AccessKey:      accessKey,
+		SecretKey:      secretKey,
+		AccountID:      accountID,
+		NatsToken:      natsToken,
+		ClusterName:    clusterName,
+		Region:         region,
+		AdminAccessKey: bootstrapResult.AdminAccessKey,
+		AdminSecretKey: bootstrapResult.AdminSecretKey,
 	}
 
 	fs := formation.NewFormationServer(expectedNodes, creds, string(caCertData), string(caKeyData))
@@ -1158,8 +1160,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "❌ Error decoding master key: %v\n", err)
 		os.Exit(1)
 	}
-	bootstrapResult, err := writeBootstrapFiles(configDir, masterKeyBytes, creds.AccessKey, creds.SecretKey, creds.AccountID)
-	if err != nil {
+	if err := writeBootstrapFilesWithAdmin(configDir, masterKeyBytes, creds.AccessKey, creds.SecretKey, creds.AccountID, creds.AdminAccessKey, creds.AdminSecretKey); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error writing bootstrap files: %v\n", err)
 		os.Exit(1)
 	}
@@ -1263,7 +1264,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 
 	// Update ~/.aws/credentials and ~/.aws/config with admin credentials (not system)
 	fmt.Println("\n🔧 Configuring AWS credentials...")
-	if err := admin.SetupAWSCredentials(bootstrapResult.AdminAccessKey, bootstrapResult.AdminSecretKey, creds.Region, caCertPath, bindIP); err != nil {
+	if err := admin.SetupAWSCredentials(creds.AdminAccessKey, creds.AdminSecretKey, creds.Region, caCertPath, bindIP); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Could not update AWS credentials: %v\n", err)
 	} else {
 		fmt.Println("✅ AWS credentials configured")
@@ -1466,28 +1467,41 @@ func runAccountList(cmd *cobra.Command, args []string) {
 	}
 }
 
-// writeBootstrapResult holds the generated admin credentials so callers can
+// writeBootstrapResult holds the admin credentials so callers can
 // write them to ~/.aws/credentials instead of the system credentials.
 type writeBootstrapResult struct {
 	AdminAccessKey string
 	AdminSecretKey string
 }
 
+// writeBootstrapFiles generates new admin credentials and writes the bootstrap
+// files (master.key + bootstrap.json). Used by init flows (single and multi-node).
 func writeBootstrapFiles(configDir string, masterKey []byte, accessKey, secretKey, accountID string) (*writeBootstrapResult, error) {
+	adminAccessKey := admin.GenerateAWSAccessKey()
+	adminSecretKey := admin.GenerateAWSSecretKey()
+	if err := writeBootstrapFilesWithAdmin(configDir, masterKey, accessKey, secretKey, accountID, adminAccessKey, adminSecretKey); err != nil {
+		return nil, err
+	}
+	return &writeBootstrapResult{
+		AdminAccessKey: adminAccessKey,
+		AdminSecretKey: adminSecretKey,
+	}, nil
+}
+
+// writeBootstrapFilesWithAdmin writes the bootstrap files using the provided
+// admin credentials. Used by join flows where admin creds come from the leader.
+func writeBootstrapFilesWithAdmin(configDir string, masterKey []byte, accessKey, secretKey, accountID, adminAccessKey, adminSecretKey string) error {
 	if err := handlers_iam.SaveMasterKey(filepath.Join(configDir, "master.key"), masterKey); err != nil {
-		return nil, fmt.Errorf("saving master key: %w", err)
+		return fmt.Errorf("saving master key: %w", err)
 	}
 	encryptedSecret, err := handlers_iam.EncryptSecret(secretKey, masterKey)
 	if err != nil {
-		return nil, fmt.Errorf("encrypting system secret: %w", err)
+		return fmt.Errorf("encrypting system secret: %w", err)
 	}
 
-	// Generate admin credentials (separate from system credentials)
-	adminAccessKey := admin.GenerateAWSAccessKey()
-	adminSecretKey := admin.GenerateAWSSecretKey()
 	adminEncryptedSecret, err := handlers_iam.EncryptSecret(adminSecretKey, masterKey)
 	if err != nil {
-		return nil, fmt.Errorf("encrypting admin secret: %w", err)
+		return fmt.Errorf("encrypting admin secret: %w", err)
 	}
 
 	bd := &handlers_iam.BootstrapData{
@@ -1503,12 +1517,5 @@ func writeBootstrapFiles(configDir string, masterKey []byte, accessKey, secretKe
 		},
 	}
 
-	if err := handlers_iam.SaveBootstrapData(filepath.Join(configDir, "bootstrap.json"), bd); err != nil {
-		return nil, err
-	}
-
-	return &writeBootstrapResult{
-		AdminAccessKey: adminAccessKey,
-		AdminSecretKey: adminSecretKey,
-	}, nil
+	return handlers_iam.SaveBootstrapData(filepath.Join(configDir, "bootstrap.json"), bd)
 }
