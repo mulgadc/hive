@@ -1,5 +1,16 @@
 import { z } from "zod"
 
+const CIDR_REGEX = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$/
+
+const keyNameField = z
+  .string()
+  .min(1, "Key name is required")
+  .max(255, "Key name must be 255 characters or less")
+  .regex(
+    /^[\w\s._\-:/()#,@[\]+=&;{}!$*]+$/,
+    "Key name contains invalid characters",
+  )
+
 export const createInstanceSchema = z.object({
   imageId: z.string("Please select an Image"),
   instanceType: z.string("Please select an instance type"),
@@ -15,27 +26,13 @@ export type CreateInstanceFormData = z.infer<typeof createInstanceSchema>
 export type CreateInstanceParams = CreateInstanceFormData
 
 export const createKeyPairSchema = z.object({
-  keyName: z
-    .string()
-    .min(1, "Key name is required")
-    .max(255, "Key name must be 255 characters or less")
-    .regex(
-      /^[\w\s._\-:/()#,@[\]+=&;{}!$*]+$/,
-      "Key name contains invalid characters",
-    ),
+  keyName: keyNameField,
 })
 
 export type CreateKeyPairData = z.infer<typeof createKeyPairSchema>
 
 export const importKeyPairSchema = z.object({
-  keyName: z
-    .string()
-    .min(1, "Key name is required")
-    .max(255, "Key name must be 255 characters or less")
-    .regex(
-      /^[\w\s._\-:/()#,@[\]+=&;{}!$*]+$/,
-      "Key name contains invalid characters",
-    ),
+  keyName: keyNameField,
   publicKeyMaterial: z
     .string()
     .min(1, "Public key is required")
@@ -119,10 +116,7 @@ export const createSubnetSchema = z.object({
   cidrBlock: z
     .string()
     .min(1, "CIDR block is required")
-    .regex(
-      /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$/,
-      "Must be a valid CIDR block (e.g. 10.0.1.0/24)",
-    ),
+    .regex(CIDR_REGEX, "Must be a valid CIDR block (e.g. 10.0.1.0/24)"),
   availabilityZone: z.string().optional(),
 })
 
@@ -132,10 +126,7 @@ export const createVpcSchema = z.object({
   cidrBlock: z
     .string()
     .min(1, "CIDR block is required")
-    .regex(
-      /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$/,
-      "Must be a valid CIDR block (e.g. 10.0.0.0/16)",
-    ),
+    .regex(CIDR_REGEX, "Must be a valid CIDR block (e.g. 10.0.0.0/16)"),
   name: z.string().optional(),
 })
 

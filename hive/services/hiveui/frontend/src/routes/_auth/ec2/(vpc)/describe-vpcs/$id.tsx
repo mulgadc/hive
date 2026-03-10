@@ -12,6 +12,7 @@ import { ErrorBanner } from "@/components/error-banner"
 import { PageHeading } from "@/components/page-heading"
 import { StateBadge } from "@/components/state-badge"
 import { Button } from "@/components/ui/button"
+import { getNameTag } from "@/lib/utils"
 import { useDeleteVpc } from "@/mutations/ec2"
 import { ec2SubnetsQueryOptions, ec2VpcQueryOptions } from "@/queries/ec2"
 
@@ -62,7 +63,7 @@ function VpcDetail() {
     )
   }
 
-  const name = vpc.Tags?.find((t) => t.Key === "Name")?.Value
+  const name = getNameTag(vpc.Tags)
 
   return (
     <>

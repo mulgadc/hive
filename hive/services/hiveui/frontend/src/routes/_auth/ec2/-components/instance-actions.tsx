@@ -9,12 +9,12 @@ import {
   useTerminateInstance,
 } from "@/mutations/ec2"
 
-const TRANSITIONING_STATES = [
+const TRANSITIONING_STATES = new Set([
   "pending",
   "stopping",
   "shutting-down",
   "terminated",
-]
+])
 
 interface InstanceActionsProps {
   instanceId: string
@@ -27,7 +27,7 @@ export function InstanceActions({ instanceId, state }: InstanceActionsProps) {
   const rebootMutation = useRebootInstance()
   const terminateMutation = useTerminateInstance()
 
-  const isTransitioning = TRANSITIONING_STATES.includes(state || "")
+  const isTransitioning = TRANSITIONING_STATES.has(state || "")
 
   if (isTransitioning && state !== "terminated") {
     return (

@@ -5,28 +5,37 @@ export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs))
 }
 
+const dateFormatter = new Intl.DateTimeFormat(undefined, {
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+})
+
 export function formatDateTime(date: Date | string | undefined): string {
   if (!date) {
     return "Unknown"
   }
 
-  return new Date(date).toLocaleString(undefined, {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  })
+  return dateFormatter.format(new Date(date))
 }
+
+const SIZE_UNITS = ["B", "KB", "MB", "GB", "TB"]
 
 export function formatSize(bytes: number): string {
   if (bytes === 0) {
     return "0 B"
   }
-  const sizes = ["B", "KB", "MB", "GB", "TB"]
   const i = Math.floor(Math.log(bytes) / Math.log(1024))
-  return `${(bytes / 1024 ** i).toFixed(2)} ${sizes[i]}`
+  return `${(bytes / 1024 ** i).toFixed(2)} ${SIZE_UNITS[i]}`
+}
+
+export function getNameTag(
+  tags?: { Key?: string; Value?: string }[],
+): string | undefined {
+  return tags?.find((t) => t.Key === "Name")?.Value
 }
 
 const TRAILING_SLASH_REGEX = /\/$/

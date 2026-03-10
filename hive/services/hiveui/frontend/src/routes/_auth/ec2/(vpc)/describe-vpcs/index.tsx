@@ -6,6 +6,7 @@ import { ListCard } from "@/components/list-card"
 import { PageHeading } from "@/components/page-heading"
 import { StateBadge } from "@/components/state-badge"
 import { Button } from "@/components/ui/button"
+import { getNameTag } from "@/lib/utils"
 import { ec2VpcsQueryOptions } from "@/queries/ec2"
 
 export const Route = createFileRoute("/_auth/ec2/(vpc)/describe-vpcs/")({
@@ -44,7 +45,7 @@ function Vpcs() {
             if (!vpc.VpcId) {
               return null
             }
-            const name = vpc.Tags?.find((t) => t.Key === "Name")?.Value
+            const name = getNameTag(vpc.Tags)
             return (
               <ListCard
                 badge={<StateBadge state={vpc.State} />}
