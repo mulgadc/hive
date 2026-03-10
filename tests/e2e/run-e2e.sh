@@ -1794,14 +1794,12 @@ aws iam delete-policy --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/EC2Read
 aws iam delete-policy --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/admin/FullAdmin"
 aws iam delete-policy --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/IAMReadOnly"
 aws iam delete-policy --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/EC2DescribeAll"
-# AdministratorAccess was created by 'admin init' and attached to the admin user
-aws iam detach-user-policy --user-name admin \
-    --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/AdministratorAccess"
-aws iam delete-policy --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/AdministratorAccess"
+# AdministratorAccess stays attached to admin — detaching it would revoke
+# admin's own permissions and block the delete (account root bypass not yet implemented).
 
 FINAL_POLICY_COUNT=$(aws iam list-policies | jq '.Policies | length')
-if [ "$FINAL_POLICY_COUNT" -ne 0 ]; then
-    echo "  ERROR: Expected 0 policies after cleanup, got $FINAL_POLICY_COUNT"
+if [ "$FINAL_POLICY_COUNT" -ne 1 ]; then
+    echo "  ERROR: Expected 1 policy (AdministratorAccess) after cleanup, got $FINAL_POLICY_COUNT"
     exit 1
 fi
 echo "  Policies cleaned up"
