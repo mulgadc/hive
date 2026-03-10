@@ -691,7 +691,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		}
 
 		// Generate multi-node predastore.toml
-		predastoreContent, err := admin.GenerateMultiNodePredastoreConfig(predastoreMultiNodeTemplate, predastoreNodes, accessKey, secretKey, region)
+		predastoreContent, err := admin.GenerateMultiNodePredastoreConfig(predastoreMultiNodeTemplate, predastoreNodes, accessKey, secretKey, region, natsToken, configDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error generating multi-node predastore config: %v\n", err)
 			os.Exit(1)
@@ -712,6 +712,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		Region:    region,
 		NatsToken: natsToken,
 		DataDir:   hiveRoot,
+		ConfigDir: configDir,
 
 		Node:          node,
 		Az:            az,
@@ -883,7 +884,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 	// Generate multi-node predastore config
 	var predastoreNodeID int
 	if len(predastoreNodes) >= 3 {
-		predastoreContent, err := admin.GenerateMultiNodePredastoreConfig(predastoreMultiNodeTemplate, predastoreNodes, accessKey, secretKey, region)
+		predastoreContent, err := admin.GenerateMultiNodePredastoreConfig(predastoreMultiNodeTemplate, predastoreNodes, accessKey, secretKey, region, natsToken, configDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error generating multi-node predastore config: %v\n", err)
 			os.Exit(1)
@@ -908,6 +909,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		Region:    region,
 		NatsToken: natsToken,
 		DataDir:   hiveRoot,
+		ConfigDir: configDir,
 
 		Node:          node,
 		Az:            az,
@@ -1200,7 +1202,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	hasPredastoreConfig := len(predastoreNodes) >= 3
 
 	if hasPredastoreConfig {
-		predastoreContent, err := admin.GenerateMultiNodePredastoreConfig(predastoreMultiNodeTemplate, predastoreNodes, creds.AccessKey, creds.SecretKey, creds.Region)
+		predastoreContent, err := admin.GenerateMultiNodePredastoreConfig(predastoreMultiNodeTemplate, predastoreNodes, creds.AccessKey, creds.SecretKey, creds.Region, creds.NatsToken, configDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error generating multi-node predastore config: %v\n", err)
 			os.Exit(1)
@@ -1229,6 +1231,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		Region:    creds.Region,
 		NatsToken: creds.NatsToken,
 		DataDir:   dataDir,
+		ConfigDir: configDir,
 
 		Node:          node,
 		Az:            az,
