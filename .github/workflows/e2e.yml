@@ -28,8 +28,6 @@ jobs:
 
       - name: Clone Dependencies
         run: ./hive/scripts/clone-deps.sh
-        env:
-          PREDASTORE_REF: feat/iam-auth
 
       - name: Build E2E Image
         run: |

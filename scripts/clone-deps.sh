@@ -30,16 +30,8 @@ clone_or_update() {
         echo "📂 $repo_name already exists at $target_dir"
         echo "   To update, run: cd $target_dir && git pull"
     else
-        local branch_var="${repo_name^^}_REF"
-        branch_var="${branch_var//-/_}"
-        local ref="${!branch_var:-}"
         echo "📥 Cloning $repo_name to $target_dir..."
-        if [[ -n "$ref" ]]; then
-            echo "   Branch: $ref"
-            git clone --branch "$ref" "$repo_url" "$target_dir"
-        else
-            git clone "$repo_url" "$target_dir"
-        fi
+        git clone "$repo_url" "$target_dir"
         echo "✅ Successfully cloned $repo_name"
     fi
 }
