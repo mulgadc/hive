@@ -623,6 +623,142 @@ func TestHandleEC2Events_TerminateInstance(t *testing.T) {
 	assert.Equal(t, vm.StateShuttingDown, status)
 }
 
+func TestHandleEC2Events_RebootRunningInstance(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon := createTestDaemon(t, natsURL)
+
+	instanceID := "i-test-reboot-001"
+	daemon.Instances.VMS[instanceID] = &vm.VM{
+		ID:           instanceID,
+		InstanceType: getTestInstanceType(),
+		Status:       vm.StateRunning,
+		Instance:     &ec2.Instance{},
+		QMPClient:    &qmp.QMPClient{},
+		AccountID:    testAccountID,
+	}
+
+	sub, err := daemon.natsConn.Subscribe(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		daemon.handleEC2Events,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	cmd := types.EC2InstanceCommand{
+		ID:         instanceID,
+		Attributes: types.EC2CommandAttributes{RebootInstance: true},
+	}
+	cmdData, _ := json.Marshal(cmd)
+
+	reply, err := natsRequest(daemon.natsConn,
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		cmdData,
+		5*time.Second,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, reply)
+
+	// With nil QMPClient encoder/decoder, SendQMPCommand returns error,
+	// so we expect an error response (ServerInternal).
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+
+	// Instance should remain in running state (reboot doesn't change state)
+	daemon.Instances.Mu.Lock()
+	status := daemon.Instances.VMS[instanceID].Status
+	daemon.Instances.Mu.Unlock()
+	assert.Equal(t, vm.StateRunning, status)
+}
+
+func TestHandleEC2Events_RebootStoppedInstance(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon := createTestDaemon(t, natsURL)
+
+	instanceID := "i-test-reboot-stopped"
+	daemon.Instances.VMS[instanceID] = &vm.VM{
+		ID:           instanceID,
+		InstanceType: getTestInstanceType(),
+		Status:       vm.StateStopped,
+		Instance:     &ec2.Instance{},
+		QMPClient:    &qmp.QMPClient{},
+		AccountID:    testAccountID,
+	}
+
+	sub, err := daemon.natsConn.Subscribe(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		daemon.handleEC2Events,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	cmd := types.EC2InstanceCommand{
+		ID:         instanceID,
+		Attributes: types.EC2CommandAttributes{RebootInstance: true},
+	}
+	cmdData, _ := json.Marshal(cmd)
+
+	reply, err := natsRequest(daemon.natsConn,
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		cmdData,
+		5*time.Second,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, reply)
+
+	// Should get IncorrectInstanceState error
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+}
+
+func TestHandleEC2Events_RebootTerminatedInstance(t *testing.T) {
+	natsURL := sharedNATSURL
+
+	daemon := createTestDaemon(t, natsURL)
+
+	instanceID := "i-test-reboot-terminated"
+	daemon.Instances.VMS[instanceID] = &vm.VM{
+		ID:           instanceID,
+		InstanceType: getTestInstanceType(),
+		Status:       vm.StateTerminated,
+		Instance:     &ec2.Instance{},
+		QMPClient:    &qmp.QMPClient{},
+		AccountID:    testAccountID,
+	}
+
+	sub, err := daemon.natsConn.Subscribe(
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		daemon.handleEC2Events,
+	)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	cmd := types.EC2InstanceCommand{
+		ID:         instanceID,
+		Attributes: types.EC2CommandAttributes{RebootInstance: true},
+	}
+	cmdData, _ := json.Marshal(cmd)
+
+	reply, err := natsRequest(daemon.natsConn,
+		fmt.Sprintf("ec2.cmd.%s", instanceID),
+		cmdData,
+		5*time.Second,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, reply)
+
+	// Should get IncorrectInstanceState error
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp, "Code")
+}
+
 func TestHandleEC2Events_InstanceNotFound(t *testing.T) {
 	natsURL := sharedNATSURL
 

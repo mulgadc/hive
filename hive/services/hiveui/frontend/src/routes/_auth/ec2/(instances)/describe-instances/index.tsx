@@ -24,18 +24,17 @@ export const Route = createFileRoute(
   component: Ec2,
 })
 
-function Ec2() {
-  // useInitialSidebar(false)
-  const { data } = useSuspenseQuery(ec2InstancesQueryOptions)
+const statePriority: Record<string, number> = {
+  running: 0,
+  pending: 1,
+  stopping: 2,
+  "shutting-down": 3,
+  stopped: 4,
+  terminated: 5,
+}
 
-  const statePriority: Record<string, number> = {
-    running: 0,
-    pending: 1,
-    stopping: 2,
-    "shutting-down": 3,
-    stopped: 4,
-    terminated: 5,
-  }
+function Ec2() {
+  const { data } = useSuspenseQuery(ec2InstancesQueryOptions)
 
   const instances = (
     data.Reservations?.flatMap(

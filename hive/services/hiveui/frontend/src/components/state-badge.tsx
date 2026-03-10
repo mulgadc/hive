@@ -1,29 +1,29 @@
-export function StateBadge({ state }: { state: string | undefined }) {
-  let className =
-    "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-100"
+import { cn } from "@/lib/utils"
 
-  if (
-    state === "running" ||
-    state === "available" ||
-    state === "completed" ||
-    state === "Active"
-  ) {
-    className =
-      "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100"
-  } else if (state === "stopped" || state === "error") {
-    className = "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100"
-  } else if (
-    state === "pending" ||
-    state === "shutting-down" ||
-    state === "stopping"
-  ) {
-    className =
-      "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-100"
-  } else if (state === "terminated") {
-    className = "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
+const SUCCESS_STATES = ["running", "available", "completed", "Active"]
+const ERROR_STATES = ["stopped", "error"]
+const WARNING_STATES = ["pending", "shutting-down", "stopping"]
+
+function getStateClass(state: string | undefined): string {
+  if (state && SUCCESS_STATES.includes(state)) {
+    return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100"
   }
+  if (state && ERROR_STATES.includes(state)) {
+    return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100"
+  }
+  if (state && WARNING_STATES.includes(state)) {
+    return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-100"
+  }
+  if (state === "terminated") {
+    return "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
+  }
+  return "bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-100"
+}
 
+export function StateBadge({ state }: { state: string | undefined }) {
   return (
-    <div className={`rounded-full px-2 py-1 text-xs ${className}`}>{state}</div>
+    <div className={cn("rounded-full px-2 py-1 text-xs", getStateClass(state))}>
+      {state}
+    </div>
   )
 }

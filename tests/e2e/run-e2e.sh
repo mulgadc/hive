@@ -965,6 +965,11 @@ if [ "$STATE" != "stopped" ]; then
     exit 1
 fi
 
+# Reboot stopped instance (should fail)
+echo "Attempting reboot of stopped instance (should fail)..."
+expect_error "IncorrectInstanceState" aws ec2 reboot-instances --instance-ids "$INSTANCE_ID"
+echo "Reboot-stopped correctly rejected"
+
 # Phase 7a: Attach volume to stopped instance (should fail)
 echo "Phase 7a: Attach Volume to Stopped Instance (Error Path)"
 echo "Creating a volume to test attach-to-stopped..."
@@ -1076,6 +1081,55 @@ fi
 echo "Memory verified"
 
 echo "ModifyInstanceAttribute test passed (type change + vCPU + memory verified via SSH)"
+
+# Phase 7c-pre: Reboot Running Instance
+echo "Phase 7c-pre: Reboot Instance"
+
+# Capture pre-reboot metadata
+PRE_REBOOT_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+    --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+
+echo "Rebooting instance..."
+aws ec2 reboot-instances --instance-ids "$INSTANCE_ID"
+
+# Verify state stays running (poll a few times to confirm no transient state change)
+COUNT=0
+while [ $COUNT -lt 5 ]; do
+    STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+        --query 'Reservations[0].Instances[0].State.Name' --output text)
+    if [ "$STATE" != "running" ]; then
+        echo "Instance unexpectedly left running state: $STATE"
+        exit 1
+    fi
+    sleep 2
+    COUNT=$((COUNT + 1))
+done
+echo "Instance state remained running during reboot"
+
+# Wait for SSH to come back (guest OS restarts)
+SSH_PORT=$(get_ssh_port "$INSTANCE_ID")
+SSH_HOST=$(get_ssh_host "$INSTANCE_ID")
+wait_for_ssh "$SSH_HOST" "$SSH_PORT" "test-key-1.pem" 30
+
+# Verify guest actually rebooted (uptime < 120 seconds)
+UPTIME_SECS=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o LogLevel=ERROR -o ConnectTimeout=5 -o BatchMode=yes \
+    -p "$SSH_PORT" -i "test-key-1.pem" \
+    ec2-user@"$SSH_HOST" 'cat /proc/uptime | cut -d. -f1' | tr -d '[:space:]')
+echo "Guest uptime after reboot: ${UPTIME_SECS}s"
+if [ "$UPTIME_SECS" -gt 120 ]; then
+    echo "Guest uptime too high — reboot may not have occurred"
+    exit 1
+fi
+
+# Verify metadata unchanged
+POST_REBOOT_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+    --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+if [ "$PRE_REBOOT_IP" != "$POST_REBOOT_IP" ]; then
+    echo "IP changed after reboot: $PRE_REBOOT_IP -> $POST_REBOOT_IP"
+    exit 1
+fi
+echo "Reboot instance test passed"
 
 # Phase 7c: RunInstances with count > 1
 echo "Phase 7c: RunInstances with MinCount/MaxCount > 1"
@@ -1233,6 +1287,10 @@ echo "  DeleteKeyPair for non-existent key succeeded (idempotent)"
 echo "8q: ModifyInstanceAttribute on running instance..."
 expect_error "InvalidInstanceID.NotFound" aws ec2 modify-instance-attribute \
     --instance-id "$INSTANCE_ID" --instance-type "{\"Value\": \"$INSTANCE_TYPE\"}"
+
+# 8r: Reboot non-existent instance
+echo "8r: Reboot non-existent instance..."
+expect_error "InvalidInstanceID.NotFound" aws ec2 reboot-instances --instance-ids "i-nonexistent"
 
 echo "Negative test suite passed"
 
@@ -1879,6 +1937,10 @@ echo "  Alpha cannot stop Beta's instance"
 expect_error "InvalidInstanceID.NotFound" \
     aws ec2 terminate-instances --instance-ids "$ALPHA_INST" --profile hive-team-beta
 echo "  Beta cannot terminate Alpha's instance"
+
+expect_error "InvalidInstanceID.NotFound" \
+    aws ec2 reboot-instances --instance-ids "$BETA_INST" --profile hive-team-alpha
+echo "  Alpha cannot reboot Beta's instance"
 
 # Stop Alpha's instance for cross-account start/modify/console tests
 aws ec2 stop-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha > /dev/null

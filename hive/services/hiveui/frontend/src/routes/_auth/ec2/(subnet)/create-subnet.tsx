@@ -16,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { getNameTag } from "@/lib/utils"
 import { useCreateSubnet } from "@/mutations/ec2"
 import {
   ec2AvailabilityZonesQueryOptions,
@@ -108,7 +109,7 @@ function CreateSubnet() {
                 </SelectTrigger>
                 <SelectContent>
                   {vpcs.map((vpc) => {
-                    const name = vpc.Tags?.find((t) => t.Key === "Name")?.Value
+                    const name = getNameTag(vpc.Tags)
                     return (
                       <SelectItem key={vpc.VpcId} value={vpc.VpcId ?? ""}>
                         {name

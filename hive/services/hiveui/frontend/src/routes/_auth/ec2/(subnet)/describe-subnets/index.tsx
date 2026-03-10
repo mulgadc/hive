@@ -6,6 +6,7 @@ import { ListCard } from "@/components/list-card"
 import { PageHeading } from "@/components/page-heading"
 import { StateBadge } from "@/components/state-badge"
 import { Button } from "@/components/ui/button"
+import { getNameTag } from "@/lib/utils"
 import { ec2SubnetsQueryOptions } from "@/queries/ec2"
 
 export const Route = createFileRoute("/_auth/ec2/(subnet)/describe-subnets/")({
@@ -44,7 +45,7 @@ function Subnets() {
             if (!subnet.SubnetId) {
               return null
             }
-            const name = subnet.Tags?.find((t) => t.Key === "Name")?.Value
+            const name = getNameTag(subnet.Tags)
             return (
               <ListCard
                 badge={<StateBadge state={subnet.State} />}

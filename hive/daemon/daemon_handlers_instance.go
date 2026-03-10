@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/hive/hive/awserrors"
+	"github.com/mulgadc/hive/hive/qmp"
 	"github.com/mulgadc/hive/hive/types"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/hive/hive/vm"
@@ -309,6 +310,33 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	}
 
 	slog.Info("handleEC2RunInstances completed", "requested", launchCount, "created", len(instances), "launched", successCount)
+}
+
+func (d *Daemon) handleRebootInstance(msg *nats.Msg, command types.EC2InstanceCommand, instance *vm.VM) {
+	slog.Info("Rebooting instance", "id", command.ID)
+
+	d.Instances.Mu.Lock()
+	status := instance.Status
+	d.Instances.Mu.Unlock()
+
+	if status != vm.StateRunning {
+		slog.Error("RebootInstance: instance not in running state", "instanceId", command.ID, "status", status)
+		respondWithError(msg, awserrors.ErrorIncorrectInstanceState)
+		return
+	}
+
+	_, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "system_reset"}, command.ID)
+	if err != nil {
+		slog.Error("RebootInstance: QMP system_reset failed", "instanceId", command.ID, "err", err)
+		respondWithError(msg, awserrors.ErrorServerInternal)
+		return
+	}
+
+	slog.Info("Instance rebooted", "instanceId", command.ID)
+
+	if err := msg.Respond([]byte(`{}`)); err != nil {
+		slog.Error("Failed to respond to NATS request", "err", err)
+	}
 }
 
 func (d *Daemon) handleStartInstance(msg *nats.Msg, command types.EC2InstanceCommand, instance *vm.VM) {

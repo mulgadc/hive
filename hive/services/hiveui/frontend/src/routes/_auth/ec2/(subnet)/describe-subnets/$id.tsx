@@ -11,6 +11,7 @@ import { ErrorBanner } from "@/components/error-banner"
 import { PageHeading } from "@/components/page-heading"
 import { StateBadge } from "@/components/state-badge"
 import { Button } from "@/components/ui/button"
+import { getNameTag } from "@/lib/utils"
 import { useDeleteSubnet } from "@/mutations/ec2"
 import { ec2SubnetQueryOptions } from "@/queries/ec2"
 
@@ -56,7 +57,7 @@ function SubnetDetail() {
     )
   }
 
-  const name = subnet.Tags?.find((t) => t.Key === "Name")?.Value
+  const name = getNameTag(subnet.Tags)
 
   return (
     <>
