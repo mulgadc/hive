@@ -264,6 +264,12 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	// Launch all instances (volumes and VMs)
 	var successCount int
 	for _, instance := range instances {
+		// Pre-compute dev MAC so cloud-init can generate per-interface netplan
+		// that suppresses the default route on the dev/hostfwd NIC.
+		if d.config.Daemon.DevNetworking && instance.ENIId != "" {
+			instance.DevMAC = generateDevMAC(instance.ID)
+		}
+
 		// Prepare the root volume, cloud-init, EFI drives via NBD (AMI clone to new volume)
 		volumeInfos, err := d.instanceService.GenerateVolumes(runInstancesInput, instance)
 		if err != nil {

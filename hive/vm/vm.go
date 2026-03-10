@@ -67,6 +67,10 @@ type VM struct {
 	// VPC networking: ENI attached to this instance (set by RunInstances when VPC mode is active)
 	ENIId  string `json:"eni_id,omitempty"`
 	ENIMac string `json:"eni_mac,omitempty"`
+
+	// DevMAC is the MAC for the dev/hostfwd NIC (DEV_NETWORKING mode).
+	// Set before cloud-init ISO generation so netplan can suppress its default route.
+	DevMAC string `json:"dev_mac,omitempty"`
 }
 
 // ResetNodeLocalState zeroes out fields that are specific to the daemon node

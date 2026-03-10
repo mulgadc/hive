@@ -64,11 +64,9 @@ instance-id: {{.InstanceID}}
 local-hostname: {{.Hostname}}
 `
 
-// cloudInitNetworkConfig enables DHCP on all NICs. Without this, Ubuntu cloud
-// images only configure the first NIC and the guest may have no IPv4 connectivity.
-// This is essential for DEV_NETWORKING dual-NIC setups (TAP + hostfwd) and
-// also ensures OVN DHCP works reliably on the TAP interface.
-const cloudInitNetworkConfig = `network:
+// cloudInitNetworkConfigWildcard enables DHCP on all NICs via wildcard match.
+// Used when there's no dual-NIC setup (non-VPC or VPC without DEV_NETWORKING).
+const cloudInitNetworkConfigWildcard = `network:
   version: 2
   ethernets:
     allnics:
@@ -77,6 +75,38 @@ const cloudInitNetworkConfig = `network:
       dhcp4: true
       dhcp-identifier: mac
 `
+
+// generateNetworkConfig produces the cloud-init network-config for the instance.
+//
+// When both eniMAC and devMAC are provided (VPC + DEV_NETWORKING), it generates
+// per-interface config that suppresses the default route on the dev/hostfwd NIC.
+// Without this, both NICs get DHCP default routes at equal metric, causing
+// nondeterministic routing — SSH via hostfwd times out and VPC traffic leaks.
+//
+// The dev NIC still gets an IP via DHCP (needed for hostfwd port forwarding)
+// but dhcp4-overrides prevents it from installing routes or DNS.
+func generateNetworkConfig(eniMAC, devMAC string) string {
+	if eniMAC == "" || devMAC == "" {
+		return cloudInitNetworkConfigWildcard
+	}
+	return fmt.Sprintf(`network:
+  version: 2
+  ethernets:
+    vpc0:
+      match:
+        macaddress: "%s"
+      dhcp4: true
+      dhcp-identifier: mac
+    dev0:
+      match:
+        macaddress: "%s"
+      dhcp4: true
+      dhcp-identifier: mac
+      dhcp4-overrides:
+        use-routes: false
+        use-dns: false
+`, eniMAC, devMAC)
+}
 
 type CloudInitData struct {
 	Username            string
@@ -527,7 +557,7 @@ func (s *InstanceServiceImpl) prepareCloudInitVolume(input *ec2.RunInstancesInpu
 	}
 
 	// Create the cloud-init ISO
-	err = s.createCloudInitISO(input, instance.ID, instance.AccountID, cloudInitVb)
+	err = s.createCloudInitISO(input, instance, cloudInitVb)
 	if err != nil {
 		return err
 	}
@@ -554,7 +584,7 @@ func (s *InstanceServiceImpl) prepareCloudInitVolume(input *ec2.RunInstancesInpu
 }
 
 // createCloudInitISO generates the cloud-init ISO image
-func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, instanceId string, accountID string, cloudInitVb *viperblock.VB) error {
+func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, instance *vm.VM, cloudInitVb *viperblock.VB) error {
 	// Create ISO writer
 	writer, err := iso9660.NewWriter()
 	if err != nil {
@@ -564,7 +594,7 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 	defer writer.Cleanup()
 
 	// Generate instance metadata
-	hostname := generateHostname(instanceId)
+	hostname := generateHostname(instance.ID)
 
 	// Retrieve SSH pubkey from S3
 	keyName := ""
@@ -572,7 +602,7 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 		keyName = *input.KeyName
 	}
 
-	keyPath := fmt.Sprintf("keys/%s/%s", accountID, keyName)
+	keyPath := fmt.Sprintf("keys/%s/%s", instance.AccountID, keyName)
 	result, err := s.objectStore.GetObject(&awss3.GetObjectInput{
 		Bucket: aws.String(s.config.Predastore.Bucket),
 		Key:    aws.String(keyPath),
@@ -615,7 +645,7 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 
 	// Add meta-data
 	metaData := CloudInitMetaData{
-		InstanceID: instanceId,
+		InstanceID: instance.ID,
 		Hostname:   hostname,
 	}
 
@@ -633,8 +663,10 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 
-	// Add network-config (enables DHCP on all NICs)
-	err = writer.AddFile(strings.NewReader(cloudInitNetworkConfig), "network-config")
+	// Add network-config: per-interface when VPC+dev (suppresses dev default route),
+	// wildcard DHCP otherwise.
+	networkConfig := generateNetworkConfig(instance.ENIMac, instance.DevMAC)
+	err = writer.AddFile(strings.NewReader(networkConfig), "network-config")
 	if err != nil {
 		slog.Error("failed to add network-config file", "err", err)
 		return errors.New(awserrors.ErrorServerInternal)

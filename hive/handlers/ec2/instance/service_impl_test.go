@@ -394,10 +394,48 @@ func TestMockInstanceService(t *testing.T) {
 	assert.Equal(t, "subnet-abc123", *inst.SubnetId)
 }
 
-func TestCloudInitNetworkConfig(t *testing.T) {
-	assert.Contains(t, cloudInitNetworkConfig, "version: 2")
-	assert.Contains(t, cloudInitNetworkConfig, "dhcp4: true")
-	assert.Contains(t, cloudInitNetworkConfig, "dhcp-identifier: mac")
+func TestCloudInitNetworkConfigWildcard(t *testing.T) {
+	// No MACs → wildcard config (non-VPC or VPC without DEV_NETWORKING)
+	cfg := generateNetworkConfig("", "")
+	assert.Contains(t, cfg, "version: 2")
+	assert.Contains(t, cfg, "dhcp4: true")
+	assert.Contains(t, cfg, "dhcp-identifier: mac")
+	assert.Contains(t, cfg, `name: "en*"`, "wildcard should match all en* interfaces")
+	assert.NotContains(t, cfg, "use-routes")
+}
+
+func TestCloudInitNetworkConfigDualNIC(t *testing.T) {
+	eniMAC := "02:00:00:61:ef:c2"
+	devMAC := "02:de:00:60:83:0d"
+
+	cfg := generateNetworkConfig(eniMAC, devMAC)
+
+	// Both MACs present in config
+	assert.Contains(t, cfg, eniMAC)
+	assert.Contains(t, cfg, devMAC)
+
+	// VPC NIC gets normal DHCP (with default route)
+	assert.Contains(t, cfg, "vpc0:")
+	assert.Contains(t, cfg, "dev0:")
+
+	// Dev NIC has route/DNS suppressed
+	assert.Contains(t, cfg, "use-routes: false")
+	assert.Contains(t, cfg, "use-dns: false")
+
+	// No wildcard match — per-interface only
+	assert.NotContains(t, cfg, `name: "en*"`)
+}
+
+func TestCloudInitNetworkConfigPartialMAC(t *testing.T) {
+	// Only ENI MAC (VPC without dev) → wildcard
+	cfg := generateNetworkConfig("02:00:00:61:ef:c2", "")
+	assert.Contains(t, cfg, `name: "en*"`)
+	assert.NotContains(t, cfg, "use-routes")
+
+	// Only dev MAC (shouldn't happen, but defensive) → wildcard
+	cfg = generateNetworkConfig("", "02:de:00:60:83:0d")
+	assert.Contains(t, cfg, `name: "en*"`)
+	assert.NotContains(t, cfg, "use-routes")
 }
 
 func TestCloudInitVolumeNamePerInstance(t *testing.T) {
