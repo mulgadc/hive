@@ -244,6 +244,31 @@ if has_service "nats"; then
     NATS_CMD="./bin/hive service nats start"
     start_service "nats" "$NATS_CMD"
     set_oom_score "nats" "-500"
+    check_service "NATS" "127.0.0.1" "4222"
+
+    # Ensure NATS JetStream is ready before Predastore starts.
+    # Predastore opens the hive-iam-access-keys KV bucket at init; if NATS
+    # JetStream isn't ready yet, Predastore falls back to config-only auth
+    # and IAM credentials won't work until the next restart.
+    echo "🔍 Waiting for NATS JetStream..."
+    NATS_JS_READY=false
+    for i in $(seq 1 15); do
+        if nats -s nats://127.0.0.1:4222 stream ls --names 2>/dev/null | grep -q "KV_" 2>/dev/null; then
+            echo "   ✅ NATS JetStream is ready (KV streams found)"
+            NATS_JS_READY=true
+            break
+        fi
+        # JetStream may be up with no KV buckets yet (fresh install before admin init)
+        if nats -s nats://127.0.0.1:4222 account info 2>/dev/null | grep -q "JetStream" 2>/dev/null; then
+            echo "   ✅ NATS JetStream is ready (no KV buckets yet — run 'hive admin init' to bootstrap)"
+            NATS_JS_READY=true
+            break
+        fi
+        sleep 1
+    done
+    if [ "$NATS_JS_READY" = "false" ]; then
+        echo "   ⚠️  NATS JetStream not confirmed ready — Predastore may fall back to config-only auth"
+    fi
 else
     echo "1️⃣  Skipping NATS (not a local service)"
 fi

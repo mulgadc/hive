@@ -1419,8 +1419,12 @@ func runAccountCreate(cmd *cobra.Command, args []string) {
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not update AWS credentials: %v\n", err)
 	}
+	region := cfg.Nodes[cfg.Node].Region
+	if region == "" {
+		region = "ap-southeast-2"
+	}
 	if err := admin.UpdateAWSINIFile(configPath, "profile "+profileName, map[string]string{
-		"region":       "us-east-1",
+		"region":       region,
 		"endpoint_url": endpointURL,
 		"ca_bundle":    certPath,
 		"output":       "json",
