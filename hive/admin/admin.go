@@ -611,7 +611,7 @@ func SetupAWSCredentials(accessKey, secretKey, region, certPath, bindIP string) 
 // GenerateMultiNodePredastoreConfig produces a complete predastore.toml for a
 // multi-node Predastore cluster. Each node gets its own DB entry (port 6660)
 // and shard entry (port 9991) on a distinct IP. Node ID 1 is the bootstrap leader.
-func GenerateMultiNodePredastoreConfig(templateStr string, nodes []PredastoreNodeConfig, accessKey, secretKey, region, natsToken, configDir string) (string, error) {
+func GenerateMultiNodePredastoreConfig(templateStr string, nodes []PredastoreNodeConfig, accessKey, secretKey, region, natsToken, configDir, bindIP string) (string, error) {
 	if len(nodes) < 3 {
 		return "", fmt.Errorf("multi-node predastore requires at least 3 nodes, got %d", len(nodes))
 	}
@@ -623,7 +623,8 @@ func GenerateMultiNodePredastoreConfig(templateStr string, nodes []PredastoreNod
 		Region    string
 		NatsToken string
 		ConfigDir string
-	}{nodes, accessKey, secretKey, region, natsToken, configDir}
+		BindIP    string
+	}{nodes, accessKey, secretKey, region, natsToken, configDir, bindIP}
 
 	tmpl, err := template.New("predastore-multinode").Parse(templateStr)
 	if err != nil {
