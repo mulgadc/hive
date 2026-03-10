@@ -85,6 +85,32 @@ func TestRebootInstances_NATSRequestFails(t *testing.T) {
 	assert.Equal(t, awserrors.ErrorInvalidInstanceIDNotFound, err.Error())
 }
 
+func TestRebootInstances_StoppedInstance(t *testing.T) {
+	_, nc := startTestNATSServer(t)
+
+	instanceID := "i-stopped"
+
+	// No ec2.cmd subscription — simulates a stopped instance with no daemon listener.
+	// Subscribe to the stopped-instances describe topic to return the instance.
+	nc.Subscribe("ec2.DescribeStoppedInstances", func(msg *nats.Msg) {
+		resp := ec2.DescribeInstancesOutput{
+			Reservations: []*ec2.Reservation{
+				{Instances: []*ec2.Instance{{InstanceId: aws.String(instanceID)}}},
+			},
+		}
+		data, _ := json.Marshal(resp)
+		msg.Respond(data)
+	})
+
+	input := &ec2.RebootInstancesInput{
+		InstanceIds: []*string{aws.String(instanceID)},
+	}
+
+	_, err := RebootInstances(input, nc, "123456789012")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorIncorrectInstanceState, err.Error())
+}
+
 func TestRebootInstances_DaemonError(t *testing.T) {
 	_, nc := startTestNATSServer(t)
 

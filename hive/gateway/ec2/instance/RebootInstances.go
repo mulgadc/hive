@@ -50,6 +50,18 @@ func RebootInstances(input *ec2.RebootInstancesInput, natsConn *nats.Conn, accou
 		msg, err := natsConn.RequestMsg(reqMsg, 5*time.Second)
 		if err != nil {
 			slog.Error("RebootInstances: Failed to send command", "instance_id", instanceID, "err", err)
+
+			// NATS timeout means no daemon has a subscription for this instance.
+			// Check if the instance exists in the stopped-instances KV bucket —
+			// if so, return IncorrectInstanceState instead of NotFound.
+			describeInput := &ec2.DescribeInstancesInput{
+				InstanceIds: []*string{&instanceID},
+			}
+			describeData, _ := json.Marshal(describeInput)
+			if reservations := queryInstanceBucket(natsConn, "ec2.DescribeStoppedInstances", describeData, accountID); len(reservations) > 0 {
+				return nil, errors.New(awserrors.ErrorIncorrectInstanceState)
+			}
+
 			return nil, errors.New(awserrors.ErrorInvalidInstanceIDNotFound)
 		}
 
