@@ -241,10 +241,19 @@ if has_service "nats"; then
         export HIVE_NATS_JETSTREAM=false
     fi
 
+    # Extract NATS listen address from config (multi-node binds to specific IP, not 127.0.0.1)
+    NATS_CHECK_HOST="127.0.0.1"
+    if [ -f "$CONFIG_DIR/nats/nats.conf" ]; then
+        NATS_LISTEN_IP=$(grep -oP '^listen:\s*\K[^:]+' "$CONFIG_DIR/nats/nats.conf" 2>/dev/null || true)
+        if [ -n "$NATS_LISTEN_IP" ] && [ "$NATS_LISTEN_IP" != "0.0.0.0" ]; then
+            NATS_CHECK_HOST="$NATS_LISTEN_IP"
+        fi
+    fi
+
     NATS_CMD="./bin/hive service nats start"
     start_service "nats" "$NATS_CMD"
     set_oom_score "nats" "-500"
-    check_service "NATS" "127.0.0.1" "4222"
+    check_service "NATS" "$NATS_CHECK_HOST" "4222"
 
     # Ensure NATS JetStream is ready before Predastore starts.
     # Predastore lazily opens IAM KV buckets — it starts with config-only auth
@@ -252,13 +261,13 @@ if has_service "nats"; then
     echo "🔍 Waiting for NATS JetStream..."
     NATS_JS_READY=false
     for i in $(seq 1 15); do
-        if nats -s nats://127.0.0.1:4222 stream ls --names 2>/dev/null | grep -q "KV_" 2>/dev/null; then
+        if nats -s nats://$NATS_CHECK_HOST:4222 stream ls --names 2>/dev/null | grep -q "KV_" 2>/dev/null; then
             echo "   ✅ NATS JetStream is ready (KV streams found)"
             NATS_JS_READY=true
             break
         fi
         # JetStream may be up with no KV buckets yet (fresh install before admin init)
-        if nats -s nats://127.0.0.1:4222 account info 2>/dev/null | grep -q "JetStream" 2>/dev/null; then
+        if nats -s nats://$NATS_CHECK_HOST:4222 account info 2>/dev/null | grep -q "JetStream" 2>/dev/null; then
             echo "   ✅ NATS JetStream is ready (no KV buckets yet — run 'hive admin init' to bootstrap)"
             NATS_JS_READY=true
             break
