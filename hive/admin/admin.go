@@ -264,11 +264,27 @@ func GenerateAWSSecretKey() string {
 	return base64.StdEncoding.EncodeToString(bytes)
 }
 
-// GenerateAccountID returns the global platform account ID (000000000000).
-// This is used during bootstrap (hive admin init) for the root/platform account.
-// Customer accounts are created via IAMService.CreateAccount() with sequential IDs.
-func GenerateAccountID() string {
+// SystemAccountID returns the system/root account ID (000000000000).
+// Used for service-to-service auth credentials baked into config files.
+func SystemAccountID() string {
 	return "000000000000"
+}
+
+// DefaultAccountID returns the default admin account ID (000000000001).
+// This is the first human-facing account created during bootstrap.
+func DefaultAccountID() string {
+	return "000000000001"
+}
+
+// DefaultAccountName returns the default admin account name ("hive").
+func DefaultAccountName() string {
+	return "hive"
+}
+
+// GenerateAccountID returns the global platform account ID (000000000000).
+// Deprecated: use SystemAccountID instead.
+func GenerateAccountID() string {
+	return SystemAccountID()
 }
 
 // generateNATSToken generates a secure random token for NATS

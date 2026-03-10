@@ -592,15 +592,10 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	}
 	fmt.Printf("✅ Created config directory: %s\n", configDir)
 
-	// Generate AWS credentials
+	// Generate system credentials (for service-to-service auth in config files)
 	accessKey := admin.GenerateAWSAccessKey()
 	secretKey := admin.GenerateAWSSecretKey()
-	accountID := admin.GenerateAccountID()
-
-	fmt.Println("\n🔑 Generated root credentials (save these — they won't be shown again):")
-	fmt.Printf("   Access Key: %s\n", accessKey)
-	fmt.Printf("   Secret Key: %s\n", secretKey)
-	fmt.Printf("   Account ID: %s\n", accountID)
+	accountID := admin.SystemAccountID()
 
 	// Generate IAM master key (AES-256, used to encrypt secrets in NATS KV)
 	masterKey, err := handlers_iam.GenerateMasterKey()
@@ -608,13 +603,20 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "Error generating IAM master key: %v\n", err)
 		os.Exit(1)
 	}
-	if err := writeBootstrapFiles(configDir, masterKey, accessKey, secretKey, accountID); err != nil {
+	bootstrapResult, err := writeBootstrapFiles(configDir, masterKey, accessKey, secretKey, accountID)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing bootstrap files: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println("\n🔐 Generated IAM master key")
 	fmt.Printf("   Master key: %s\n", filepath.Join(configDir, "master.key"))
 	fmt.Printf("   Bootstrap: %s\n", filepath.Join(configDir, "bootstrap.json"))
+
+	fmt.Printf("\n🔑 Generated admin credentials (save these — they won't be shown again):\n")
+	fmt.Printf("   Access Key:  %s\n", bootstrapResult.AdminAccessKey)
+	fmt.Printf("   Secret Key:  %s\n", bootstrapResult.AdminSecretKey)
+	fmt.Printf("   Account:     %s (%s)\n", admin.DefaultAccountName(), admin.DefaultAccountID())
+	fmt.Printf("   AWS Profile: hive\n")
 
 	// Generate SSL certificates (with bind IP in SANs for multi-node support)
 	certPath := admin.GenerateCertificatesIfNeeded(configDir, force, bindIP)
@@ -741,9 +743,9 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Update ~/.aws/credentials and ~/.aws/config
+	// Update ~/.aws/credentials and ~/.aws/config with admin credentials (not system)
 	fmt.Println("\n🔧 Configuring AWS credentials...")
-	if err := admin.SetupAWSCredentials(accessKey, secretKey, region, certPath, bindIP); err != nil {
+	if err := admin.SetupAWSCredentials(bootstrapResult.AdminAccessKey, bootstrapResult.AdminSecretKey, region, certPath, bindIP); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Could not update AWS credentials: %v\n", err)
 	} else {
 		fmt.Println("✅ AWS credentials configured")
@@ -786,7 +788,8 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		fmt.Fprintf(os.Stderr, "❌ Error generating IAM master key: %v\n", err)
 		os.Exit(1)
 	}
-	if err := writeBootstrapFiles(configDir, masterKey, accessKey, secretKey, accountID); err != nil {
+	bootstrapResult, err := writeBootstrapFiles(configDir, masterKey, accessKey, secretKey, accountID)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error writing bootstrap files: %v\n", err)
 		os.Exit(1)
 	}
@@ -935,9 +938,9 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		os.Exit(1)
 	}
 
-	// Update ~/.aws/credentials and ~/.aws/config
+	// Update ~/.aws/credentials and ~/.aws/config with admin credentials (not system)
 	fmt.Println("\n🔧 Configuring AWS credentials...")
-	if err := admin.SetupAWSCredentials(accessKey, secretKey, region, certPath, bindIP); err != nil {
+	if err := admin.SetupAWSCredentials(bootstrapResult.AdminAccessKey, bootstrapResult.AdminSecretKey, region, certPath, bindIP); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Could not update AWS credentials: %v\n", err)
 	} else {
 		fmt.Println("✅ AWS credentials configured")
@@ -1155,7 +1158,8 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "❌ Error decoding master key: %v\n", err)
 		os.Exit(1)
 	}
-	if err := writeBootstrapFiles(configDir, masterKeyBytes, creds.AccessKey, creds.SecretKey, creds.AccountID); err != nil {
+	bootstrapResult, err := writeBootstrapFiles(configDir, masterKeyBytes, creds.AccessKey, creds.SecretKey, creds.AccountID)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error writing bootstrap files: %v\n", err)
 		os.Exit(1)
 	}
@@ -1257,9 +1261,9 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Update ~/.aws/credentials and ~/.aws/config
+	// Update ~/.aws/credentials and ~/.aws/config with admin credentials (not system)
 	fmt.Println("\n🔧 Configuring AWS credentials...")
-	if err := admin.SetupAWSCredentials(creds.AccessKey, creds.SecretKey, creds.Region, caCertPath, bindIP); err != nil {
+	if err := admin.SetupAWSCredentials(bootstrapResult.AdminAccessKey, bootstrapResult.AdminSecretKey, creds.Region, caCertPath, bindIP); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Could not update AWS credentials: %v\n", err)
 	} else {
 		fmt.Println("✅ AWS credentials configured")
@@ -1462,18 +1466,49 @@ func runAccountList(cmd *cobra.Command, args []string) {
 	}
 }
 
-func writeBootstrapFiles(configDir string, masterKey []byte, accessKey, secretKey, accountID string) error {
+// writeBootstrapResult holds the generated admin credentials so callers can
+// write them to ~/.aws/credentials instead of the system credentials.
+type writeBootstrapResult struct {
+	AdminAccessKey string
+	AdminSecretKey string
+}
+
+func writeBootstrapFiles(configDir string, masterKey []byte, accessKey, secretKey, accountID string) (*writeBootstrapResult, error) {
 	if err := handlers_iam.SaveMasterKey(filepath.Join(configDir, "master.key"), masterKey); err != nil {
-		return fmt.Errorf("saving master key: %w", err)
+		return nil, fmt.Errorf("saving master key: %w", err)
 	}
 	encryptedSecret, err := handlers_iam.EncryptSecret(secretKey, masterKey)
 	if err != nil {
-		return fmt.Errorf("encrypting root secret: %w", err)
+		return nil, fmt.Errorf("encrypting system secret: %w", err)
 	}
-	return handlers_iam.SaveBootstrapData(
-		filepath.Join(configDir, "bootstrap.json"),
-		&handlers_iam.BootstrapData{
-			AccessKeyID: accessKey, EncryptedSecret: encryptedSecret, AccountID: accountID,
+
+	// Generate admin credentials (separate from system credentials)
+	adminAccessKey := admin.GenerateAWSAccessKey()
+	adminSecretKey := admin.GenerateAWSSecretKey()
+	adminEncryptedSecret, err := handlers_iam.EncryptSecret(adminSecretKey, masterKey)
+	if err != nil {
+		return nil, fmt.Errorf("encrypting admin secret: %w", err)
+	}
+
+	bd := &handlers_iam.BootstrapData{
+		AccessKeyID:     accessKey,
+		EncryptedSecret: encryptedSecret,
+		AccountID:       accountID,
+		Admin: &handlers_iam.AdminBootstrapData{
+			AccountID:       admin.DefaultAccountID(),
+			AccountName:     admin.DefaultAccountName(),
+			UserName:        "admin",
+			AccessKeyID:     adminAccessKey,
+			EncryptedSecret: adminEncryptedSecret,
 		},
-	)
+	}
+
+	if err := handlers_iam.SaveBootstrapData(filepath.Join(configDir, "bootstrap.json"), bd); err != nil {
+		return nil, err
+	}
+
+	return &writeBootstrapResult{
+		AdminAccessKey: adminAccessKey,
+		AdminSecretKey: adminSecretKey,
+	}, nil
 }

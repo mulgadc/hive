@@ -270,6 +270,84 @@ func TestSaveBootstrapData_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestBootstrapData_ExtendedRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bootstrap.json")
+
+	data := &BootstrapData{
+		AccessKeyID:     "AKIASYSTEM1234567890",
+		EncryptedSecret: "c3lzdGVtLXNlY3JldA==",
+		AccountID:       "000000000000",
+		Admin: &AdminBootstrapData{
+			AccountID:       "000000000001",
+			AccountName:     "hive",
+			UserName:        "admin",
+			AccessKeyID:     "AKIAADMIN12345678901",
+			EncryptedSecret: "YWRtaW4tc2VjcmV0",
+		},
+	}
+
+	if err := SaveBootstrapData(path, data); err != nil {
+		t.Fatalf("SaveBootstrapData() error: %v", err)
+	}
+
+	loaded, err := LoadBootstrapData(path)
+	if err != nil {
+		t.Fatalf("LoadBootstrapData() error: %v", err)
+	}
+
+	// System fields
+	if loaded.AccessKeyID != data.AccessKeyID {
+		t.Fatalf("AccessKeyID: expected %q, got %q", data.AccessKeyID, loaded.AccessKeyID)
+	}
+	if loaded.AccountID != data.AccountID {
+		t.Fatalf("AccountID: expected %q, got %q", data.AccountID, loaded.AccountID)
+	}
+
+	// Admin fields
+	if loaded.Admin == nil {
+		t.Fatal("Admin field should not be nil")
+	}
+	if loaded.Admin.AccountID != "000000000001" {
+		t.Fatalf("Admin.AccountID: expected %q, got %q", "000000000001", loaded.Admin.AccountID)
+	}
+	if loaded.Admin.AccountName != "hive" {
+		t.Fatalf("Admin.AccountName: expected %q, got %q", "hive", loaded.Admin.AccountName)
+	}
+	if loaded.Admin.UserName != "admin" {
+		t.Fatalf("Admin.UserName: expected %q, got %q", "admin", loaded.Admin.UserName)
+	}
+	if loaded.Admin.AccessKeyID != "AKIAADMIN12345678901" {
+		t.Fatalf("Admin.AccessKeyID: expected %q, got %q", "AKIAADMIN12345678901", loaded.Admin.AccessKeyID)
+	}
+	if loaded.Admin.EncryptedSecret != "YWRtaW4tc2VjcmV0" {
+		t.Fatalf("Admin.EncryptedSecret mismatch")
+	}
+}
+
+func TestBootstrapData_NoAdmin_BackwardCompat(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bootstrap.json")
+
+	// Write bootstrap data without admin field (old format)
+	oldJSON := `{"access_key_id":"AKIAOLD123","encrypted_secret":"b2xk","account_id":"000000000000"}`
+	if err := os.WriteFile(path, []byte(oldJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := LoadBootstrapData(path)
+	if err != nil {
+		t.Fatalf("LoadBootstrapData() error: %v", err)
+	}
+
+	if loaded.AccessKeyID != "AKIAOLD123" {
+		t.Fatalf("AccessKeyID: expected %q, got %q", "AKIAOLD123", loaded.AccessKeyID)
+	}
+	if loaded.Admin != nil {
+		t.Fatal("Admin field should be nil for old-format bootstrap data")
+	}
+}
+
 func TestSaveBootstrapData_InvalidPath(t *testing.T) {
 	data := &BootstrapData{
 		AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",

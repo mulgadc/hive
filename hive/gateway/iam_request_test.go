@@ -124,9 +124,9 @@ func (m *flexMockIAMService) LookupAccessKey(_ string) (*handlers_iam.AccessKey,
 	return nil, errors.New("not implemented")
 }
 
-func (m *flexMockIAMService) DecryptSecret(_ string) (string, error)           { return "", nil }
-func (m *flexMockIAMService) SeedRootUser(_ *handlers_iam.BootstrapData) error { return nil }
-func (m *flexMockIAMService) IsEmpty() (bool, error)                           { return true, nil }
+func (m *flexMockIAMService) DecryptSecret(_ string) (string, error)            { return "", nil }
+func (m *flexMockIAMService) SeedBootstrap(_ *handlers_iam.BootstrapData) error { return nil }
+func (m *flexMockIAMService) IsEmpty() (bool, error)                            { return true, nil }
 
 func (m *flexMockIAMService) CreateAccount(_ string) (*handlers_iam.Account, error) {
 	return nil, nil
