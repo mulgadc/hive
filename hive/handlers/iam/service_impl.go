@@ -549,9 +549,7 @@ func (s *IAMServiceImpl) SeedBootstrap(data *BootstrapData) error {
 	_, err = s.usersBucket.Create(kvKey, userData)
 	if errors.Is(err, nats.ErrKeyExists) {
 		slog.Info("Root user already seeded by another node, skipping")
-		return nil
-	}
-	if err != nil {
+	} else if err != nil {
 		return fmt.Errorf("seed root user: %w", err)
 	}
 
@@ -570,16 +568,13 @@ func (s *IAMServiceImpl) SeedBootstrap(data *BootstrapData) error {
 		return fmt.Errorf("marshal root access key: %w", err)
 	}
 
-	_, err = s.accessKeysBucket.Create(data.AccessKeyID, akData)
-	if errors.Is(err, nats.ErrKeyExists) {
+	if _, err = s.accessKeysBucket.Create(data.AccessKeyID, akData); errors.Is(err, nats.ErrKeyExists) {
 		slog.Info("Root access key already seeded by another node, skipping")
-		return nil
-	}
-	if err != nil {
+	} else if err != nil {
 		return fmt.Errorf("seed root access key: %w", err)
+	} else {
+		slog.Info("System root user seeded", "accountID", utils.GlobalAccountID, "accessKeyID", data.AccessKeyID)
 	}
-
-	slog.Info("System root user seeded", "accountID", utils.GlobalAccountID, "accessKeyID", data.AccessKeyID)
 
 	// --- Seed admin account (000000000001) if present ---
 	if data.Admin != nil {

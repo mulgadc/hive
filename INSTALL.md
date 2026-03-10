@@ -131,20 +131,10 @@ Start the core services for development.
 ./scripts/start-dev.sh
 ```
 
-## Create Account
-
-With the cluster running, create an account. This provisions an IAM account with an admin user, generates access keys, and configures your local AWS CLI profile automatically.
+Set the AWS profile to use the default admin account created during init:
 
 ```bash
-./bin/hive admin account create --name myaccount
-```
-
-The command outputs your account ID and credentials. It also creates an AWS CLI profile named `hive-myaccount` in `~/.aws/credentials` and `~/.aws/config`, pointing to your local Hive endpoint.
-
-Set the AWS profile to use your new account:
-
-```bash
-export AWS_PROFILE=hive-myaccount
+export AWS_PROFILE=hive
 ```
 
 All subsequent `aws` CLI commands will use this account.
@@ -652,6 +642,20 @@ aws ec2 describe-instances  --instance-ids $INSTANCE_ID
 
 On success no data will be returned, since the instance is no longer available.
 
+## Additional Accounts (Optional)
+
+The default `hive` account is created automatically during init. To create additional isolated accounts with their own resources (instances, volumes, VPCs, key pairs):
+
+```bash
+./bin/hive admin account create --name myteam
+```
+
+This provisions an IAM account with an admin user, generates access keys, and configures a local AWS CLI profile named `hive-myteam`. Resources created under one account are isolated from other accounts.
+
+```bash
+export AWS_PROFILE=hive-myteam
+```
+
 ## UI Management Panel
 
 The Hive Platform also offers a web interface for managing hive services. Simply have the hive server running and go to [https://localhost:3000](https://localhost:3000) in your browser to continue.
@@ -971,20 +975,10 @@ sudo cp ~/node1/config/ca.pem /usr/local/share/ca-certificates/hive-ca.crt
 sudo update-ca-certificates
 ```
 
-## Create Account
-
-With the cluster running, create an account from any node:
+Set the AWS profile to use the default admin account created during init:
 
 ```bash
-./bin/hive admin account create --name myaccount
-```
-
-This creates an IAM account with an admin user, generates access keys, and configures your local AWS CLI profile automatically.
-
-Set the AWS profile to use your new account:
-
-```bash
-export AWS_PROFILE=hive-myaccount
+export AWS_PROFILE=hive
 ```
 
 ## Using the Cluster
