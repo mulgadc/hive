@@ -247,9 +247,8 @@ if has_service "nats"; then
     check_service "NATS" "127.0.0.1" "4222"
 
     # Ensure NATS JetStream is ready before Predastore starts.
-    # Predastore opens the hive-iam-access-keys KV bucket at init; if NATS
-    # JetStream isn't ready yet, Predastore falls back to config-only auth
-    # and IAM credentials won't work until the next restart.
+    # Predastore lazily opens IAM KV buckets — it starts with config-only auth
+    # and activates IAM auth once the hive daemon creates the KV buckets.
     echo "🔍 Waiting for NATS JetStream..."
     NATS_JS_READY=false
     for i in $(seq 1 15); do
