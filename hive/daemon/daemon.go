@@ -1855,7 +1855,7 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 					bindIP = "127.0.0.1"
 				}
 				instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
-					Value: fmt.Sprintf("user,id=dev0,hostfwd=tcp:%s:%s-:22,restrict=on", bindIP, sshDebugPort),
+					Value: fmt.Sprintf("user,id=dev0,hostfwd=tcp:%s:%s-:22", bindIP, sshDebugPort),
 				})
 				devMac := generateDevMAC(instance.ID)
 				instance.Config.Devices = append(instance.Config.Devices, vm.Device{
