@@ -96,9 +96,7 @@ describe("staleTime", () => {
   })
 
   it("attached user policies use staleTime", () => {
-    expect(iamAttachedUserPoliciesQueryOptions("admin").staleTime).toBe(
-      300_000,
-    )
+    expect(iamAttachedUserPoliciesQueryOptions("admin").staleTime).toBe(300_000)
   })
 })
 

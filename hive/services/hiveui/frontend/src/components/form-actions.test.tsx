@@ -8,11 +8,11 @@ describe("FormActions", () => {
   it("renders submit and cancel buttons", () => {
     render(
       <FormActions
-        isSubmitting={false}
         isPending={false}
+        isSubmitting={false}
         onCancel={vi.fn()}
-        submitLabel="Create"
         pendingLabel="Creating..."
+        submitLabel="Create"
       />,
     )
     expect(screen.getByRole("button", { name: "Create" })).toBeInTheDocument()
@@ -22,11 +22,11 @@ describe("FormActions", () => {
   it("shows pending label when submitting", () => {
     render(
       <FormActions
-        isSubmitting={true}
         isPending={false}
+        isSubmitting={true}
         onCancel={vi.fn()}
-        submitLabel="Create"
         pendingLabel="Creating..."
+        submitLabel="Create"
       />,
     )
     expect(
@@ -37,11 +37,11 @@ describe("FormActions", () => {
   it("shows pending label when isPending", () => {
     render(
       <FormActions
-        isSubmitting={false}
         isPending={true}
+        isSubmitting={false}
         onCancel={vi.fn()}
-        submitLabel="Create"
         pendingLabel="Creating..."
+        submitLabel="Create"
       />,
     )
     expect(
@@ -52,11 +52,11 @@ describe("FormActions", () => {
   it("disables both buttons when submitting", () => {
     render(
       <FormActions
-        isSubmitting={true}
         isPending={false}
+        isSubmitting={true}
         onCancel={vi.fn()}
-        submitLabel="Create"
         pendingLabel="Creating..."
+        submitLabel="Create"
       />,
     )
     expect(screen.getByRole("button", { name: "Creating..." })).toBeDisabled()
@@ -68,11 +68,11 @@ describe("FormActions", () => {
     const user = userEvent.setup()
     render(
       <FormActions
-        isSubmitting={false}
         isPending={false}
+        isSubmitting={false}
         onCancel={onCancel}
-        submitLabel="Create"
         pendingLabel="Creating..."
+        submitLabel="Create"
       />,
     )
     await user.click(screen.getByRole("button", { name: "Cancel" }))
