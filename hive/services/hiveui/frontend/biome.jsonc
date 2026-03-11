@@ -38,7 +38,7 @@
             "useFilenamingConvention": {
               "level": "error",
               "options": {
-                "filenameCases": ["camelCase"]
+                "filenameCases": ["camelCase", "kebab-case"]
               }
             }
           }

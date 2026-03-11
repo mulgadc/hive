@@ -42,5 +42,8 @@ jobs:
       - name: Run Biome Check
         run: pnpm check
 
+      - name: Run Tests
+        run: pnpm test
+
       - name: Build Frontend
         run: pnpm build
