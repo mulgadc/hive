@@ -83,7 +83,7 @@ policy = [
 
 # IAM authentication via NATS KV (enables multi-account S3 access)
 [iam]
-nats_url = "nats://localhost:4222"
+nats_url = "nats://{{if eq .BindIP "0.0.0.0"}}localhost{{else}}{{.BindIP}}{{end}}:4222"
 nats_token = "{{.NatsToken}}"
 master_key_path = "{{.ConfigDir}}/master.key"
 access_keys_bucket = "hive-iam-access-keys"
