@@ -10,9 +10,26 @@ vi.mock("@/lib/awsClient", () => ({
 }))
 
 import {
+  useAttachVolume,
+  useCopySnapshot,
+  useCreateImage,
   useCreateInstance,
+  useCreateKeyPair,
+  useCreateSnapshot,
+  useCreateSubnet,
+  useCreateVolume,
   useCreateVpc,
+  useDeleteKeyPair,
+  useDeleteSnapshot,
+  useDeleteSubnet,
+  useDeleteVolume,
+  useDeleteVpc,
+  useDetachVolume,
+  useGetConsoleOutput,
   useImportKeyPair,
+  useModifyInstanceAttribute,
+  useModifyVolume,
+  useRebootInstance,
   useStartInstance,
   useStopInstance,
   useTerminateInstance,
@@ -187,6 +204,247 @@ describe("useImportKeyPair", () => {
   })
 })
 
+describe("useRebootInstance", () => {
+  it("sends RebootInstancesCommand with the instance ID", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useRebootInstance(), { wrapper })
+
+    result.current.mutate("i-abc123")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      InstanceIds: ["i-abc123"],
+    })
+  })
+})
+
+describe("useCreateKeyPair", () => {
+  it("sends CreateKeyPairCommand with key name and rsa type", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCreateKeyPair(), { wrapper })
+
+    result.current.mutate({ keyName: "my-key" })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      KeyName: "my-key",
+      KeyType: "rsa",
+    })
+  })
+})
+
+describe("useDeleteKeyPair", () => {
+  it("sends DeleteKeyPairCommand with key pair ID", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useDeleteKeyPair(), { wrapper })
+
+    result.current.mutate("kp-abc123")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      KeyPairId: "kp-abc123",
+    })
+  })
+})
+
+describe("useCreateVolume", () => {
+  it("sends CreateVolumeCommand with size and availability zone", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCreateVolume(), { wrapper })
+
+    result.current.mutate({ size: 100, availabilityZone: "us-east-1a" })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      Size: 100,
+      AvailabilityZone: "us-east-1a",
+      VolumeType: "gp3",
+    })
+  })
+})
+
+describe("useModifyVolume", () => {
+  it("sends ModifyVolumeCommand with volume ID and new size", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useModifyVolume(), { wrapper })
+
+    result.current.mutate({ volumeId: "vol-123", size: 200 })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      VolumeId: "vol-123",
+      Size: 200,
+    })
+  })
+})
+
+describe("useDeleteVolume", () => {
+  it("sends DeleteVolumeCommand with volume ID", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useDeleteVolume(), { wrapper })
+
+    result.current.mutate("vol-123")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      VolumeId: "vol-123",
+    })
+  })
+})
+
+describe("useCreateSnapshot", () => {
+  it("sends CreateSnapshotCommand with volume ID and description", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCreateSnapshot(), { wrapper })
+
+    result.current.mutate({ volumeId: "vol-123", description: "backup" })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      VolumeId: "vol-123",
+      Description: "backup",
+    })
+  })
+
+  it("omits Description when empty", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCreateSnapshot(), { wrapper })
+
+    result.current.mutate({ volumeId: "vol-123", description: "" })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input.Description).toBeUndefined()
+  })
+})
+
+describe("useDeleteSnapshot", () => {
+  it("sends DeleteSnapshotCommand with snapshot ID", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useDeleteSnapshot(), { wrapper })
+
+    result.current.mutate("snap-123")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      SnapshotId: "snap-123",
+    })
+  })
+})
+
+describe("useCopySnapshot", () => {
+  it("sends CopySnapshotCommand with source details", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCopySnapshot(), { wrapper })
+
+    result.current.mutate({
+      sourceSnapshotId: "snap-123",
+      sourceRegion: "us-east-1",
+      description: "copy",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      SourceSnapshotId: "snap-123",
+      SourceRegion: "us-east-1",
+      Description: "copy",
+    })
+  })
+})
+
+describe("useAttachVolume", () => {
+  it("sends AttachVolumeCommand with volume, instance, and device", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useAttachVolume(), { wrapper })
+
+    result.current.mutate({
+      volumeId: "vol-123",
+      instanceId: "i-abc",
+      device: "/dev/sdf",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      VolumeId: "vol-123",
+      InstanceId: "i-abc",
+      Device: "/dev/sdf",
+    })
+  })
+})
+
+describe("useDetachVolume", () => {
+  it("sends DetachVolumeCommand with volume, instance, and force", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useDetachVolume(), { wrapper })
+
+    result.current.mutate({
+      volumeId: "vol-123",
+      instanceId: "i-abc",
+      force: true,
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      VolumeId: "vol-123",
+      InstanceId: "i-abc",
+      Force: true,
+    })
+  })
+})
+
+describe("useModifyInstanceAttribute", () => {
+  it("sends ModifyInstanceAttributeCommand with instance type", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useModifyInstanceAttribute(), {
+      wrapper,
+    })
+
+    result.current.mutate({
+      instanceId: "i-abc",
+      instanceType: "t3.large",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      InstanceId: "i-abc",
+      InstanceType: { Value: "t3.large" },
+    })
+  })
+})
+
+describe("useGetConsoleOutput", () => {
+  it("sends GetConsoleOutputCommand with instance ID", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useGetConsoleOutput(), { wrapper })
+
+    result.current.mutate("i-abc123")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      InstanceId: "i-abc123",
+    })
+  })
+})
+
+describe("useCreateImage", () => {
+  it("sends CreateImageCommand with instance ID and name", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCreateImage(), { wrapper })
+
+    result.current.mutate({
+      instanceId: "i-abc",
+      name: "my-image",
+      description: "test image",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      InstanceId: "i-abc",
+      Name: "my-image",
+      Description: "test image",
+    })
+  })
+})
+
 describe("useCreateVpc", () => {
   it("includes TagSpecifications when name is provided", async () => {
     createQueryClient()
@@ -214,5 +472,53 @@ describe("useCreateVpc", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(mockSend.mock.calls[0]?.[0].input.TagSpecifications).toBeUndefined()
+  })
+})
+
+describe("useDeleteVpc", () => {
+  it("sends DeleteVpcCommand with VPC ID", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useDeleteVpc(), { wrapper })
+
+    result.current.mutate("vpc-123")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      VpcId: "vpc-123",
+    })
+  })
+})
+
+describe("useCreateSubnet", () => {
+  it("sends CreateSubnetCommand with VPC ID and CIDR block", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCreateSubnet(), { wrapper })
+
+    result.current.mutate({
+      vpcId: "vpc-123",
+      cidrBlock: "10.0.1.0/24",
+      availabilityZone: "us-east-1a",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      VpcId: "vpc-123",
+      CidrBlock: "10.0.1.0/24",
+      AvailabilityZone: "us-east-1a",
+    })
+  })
+})
+
+describe("useDeleteSubnet", () => {
+  it("sends DeleteSubnetCommand with subnet ID", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useDeleteSubnet(), { wrapper })
+
+    result.current.mutate("subnet-123")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      SubnetId: "subnet-123",
+    })
   })
 })

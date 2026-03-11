@@ -9,6 +9,7 @@
     "check": "biome check",
     "fix": "biome check --fix",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -45,6 +46,7 @@
     "@typescript/native-preview": "7.0.0-dev.20260307.1",
     "@vitejs/plugin-basic-ssl": "^2.1.4",
     "@vitejs/plugin-react": "^5.1.4",
+    "@vitest/coverage-v8": "^4.0.18",
     "babel-plugin-react-compiler": "^1.0.0",
     "jsdom": "^28.1.0",
     "typescript": "^5.9.3",
