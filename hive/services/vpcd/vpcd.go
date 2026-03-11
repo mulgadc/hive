@@ -48,8 +48,12 @@ type Service struct {
 
 // New creates a new vpcd Service.
 func New(config any) (*Service, error) {
+	cfg, ok := config.(*Config)
+	if !ok {
+		return nil, fmt.Errorf("invalid config type for vpcd service")
+	}
 	return &Service{
-		Config: config.(*Config),
+		Config: cfg,
 	}, nil
 }
 
