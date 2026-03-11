@@ -2042,6 +2042,8 @@ func (d *Daemon) ebsTopic(action string) string {
 func (d *Daemon) MountVolumes(instance *vm.VM) error {
 
 	instance.EBSRequests.Mu.Lock()
+	defer instance.EBSRequests.Mu.Unlock()
+
 	for k, v := range instance.EBSRequests.Requests {
 
 		// Send the volume payload as JSON
@@ -2084,8 +2086,6 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 		}
 
 	}
-
-	instance.EBSRequests.Mu.Unlock()
 
 	return nil
 
