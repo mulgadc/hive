@@ -1273,6 +1273,12 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 	q.Mu.Lock()
 	defer q.Mu.Unlock()
 
+	// Set a read deadline so we don't block forever on a hung QEMU process
+	if err := q.Conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		return nil, fmt.Errorf("set read deadline: %w", err)
+	}
+	defer q.Conn.SetReadDeadline(time.Time{}) // clear deadline after command
+
 	if err := q.Encoder.Encode(cmd); err != nil {
 		return nil, fmt.Errorf("encode error: %w", err)
 	}
@@ -1288,6 +1294,10 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 			// by the command handlers that initiate the action, avoiding races
 			// between event-driven and command-driven transitions.
 			slog.Info("QMP event", "event", msg["event"], "instanceId", instanceId)
+			// Extend deadline after receiving an event (QEMU is alive, just chatty)
+			if err := q.Conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+				return nil, fmt.Errorf("set read deadline: %w", err)
+			}
 			continue
 		}
 		if errObj, ok := msg["error"].(map[string]any); ok {
