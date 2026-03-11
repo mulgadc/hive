@@ -201,12 +201,11 @@ var viperblockStartCmd = &cobra.Command{
 
 		// TODO: Support ENV vars, CLI, otherwise revert to config.LoadConfig()
 		clusterConfig, err := config.LoadConfig(cfgFile)
-		nodeConfig := clusterConfig.Nodes[clusterConfig.Node]
-
 		if err != nil {
 			fmt.Println("Error loading config file:", err)
 			return
 		}
+		nodeConfig := clusterConfig.Nodes[clusterConfig.Node]
 
 		natsHost := viper.GetString("nats-host")
 
@@ -412,12 +411,11 @@ var hiveStartCmd = &cobra.Command{
 
 		// TODO: Support ENV vars, CLI, otherwise revert to config.LoadConfig()
 		clusterConfig, err := config.LoadConfig(cfgFile)
-		nodeConfig := clusterConfig.Nodes[clusterConfig.Node]
-
 		if err != nil {
 			fmt.Println("Error loading config file:", err)
 			return
 		}
+		nodeConfig := clusterConfig.Nodes[clusterConfig.Node]
 
 		// Overwrite defaults (CLI first, config second, env third)
 		baseDir := viper.GetString("base-dir")
@@ -501,12 +499,11 @@ var awsgwStartCmd = &cobra.Command{
 
 		// TODO: Support ENV vars, CLI, otherwise revert to config.LoadConfig()
 		clusterConfig, err := config.LoadConfig(cfgFile)
-		nodeConfig := clusterConfig.Nodes[clusterConfig.Node]
-
 		if err != nil {
 			fmt.Println("Error loading config file:", err)
 			return
 		}
+		nodeConfig := clusterConfig.Nodes[clusterConfig.Node]
 
 		// Overwrite defaults (CLI first, config second, env third)
 		awsgwHost := viper.GetString("host")
