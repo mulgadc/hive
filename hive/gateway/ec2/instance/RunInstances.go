@@ -30,6 +30,11 @@ func ValidateRunInstancesInput(input *ec2.RunInstancesInput) (err error) {
 		return errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
+	// AWS spec: MaxCount defaults to MinCount when not specified
+	if input.MaxCount == nil {
+		input.MaxCount = input.MinCount
+	}
+
 	if *input.MaxCount == 0 {
 		return errors.New(awserrors.ErrorInvalidParameterValue)
 	}
