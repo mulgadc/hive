@@ -30,8 +30,8 @@ jobs:
       - uses: actions/create-github-app-token@v2
         id: app-token
         with:
-          app-id: ${{ secrets.MULGA_APP_ID }}
-          private-key: ${{ secrets.MULGA_APP_KEY }}
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
           repositories: mulga
 
       - uses: actions/checkout@v6
