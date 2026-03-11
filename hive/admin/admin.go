@@ -285,13 +285,13 @@ func DefaultAccountName() string {
 	return "hive"
 }
 
-// generateNATSToken generates a secure random token for NATS
-func GenerateNATSToken() string {
+// GenerateNATSToken generates a secure random token for NATS
+func GenerateNATSToken() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
-		panic(err)
+		return "", fmt.Errorf("crypto/rand failure: %w", err)
 	}
-	return "nats_" + base64.URLEncoding.EncodeToString(bytes)[:32]
+	return "nats_" + base64.URLEncoding.EncodeToString(bytes)[:32], nil
 }
 
 // GenerateCACert generates a Certificate Authority certificate and key

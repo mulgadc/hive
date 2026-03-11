@@ -630,7 +630,11 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	certPath := admin.GenerateCertificatesIfNeeded(configDir, force, bindIP)
 
 	// Generate NATS token
-	natsToken := admin.GenerateNATSToken()
+	natsToken, err := admin.GenerateNATSToken()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error generating NATS token: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Println("\n🔒 Generated NATS authentication token")
 
 	if hiveRoot == "" {

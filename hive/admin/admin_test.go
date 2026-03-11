@@ -65,7 +65,8 @@ func TestDefaultAccountID(t *testing.T) {
 }
 
 func TestGenerateNATSToken_Format(t *testing.T) {
-	token := GenerateNATSToken()
+	token, err := GenerateNATSToken()
+	assert.NoError(t, err)
 	assert.True(t, strings.HasPrefix(token, "nats_"))
 	assert.Len(t, token, 37) // 5 prefix + 32 random
 	// URL-safe base64: no '+' or '/'
@@ -74,7 +75,11 @@ func TestGenerateNATSToken_Format(t *testing.T) {
 }
 
 func TestGenerateNATSToken_Uniqueness(t *testing.T) {
-	assert.NotEqual(t, GenerateNATSToken(), GenerateNATSToken())
+	t1, err := GenerateNATSToken()
+	assert.NoError(t, err)
+	t2, err := GenerateNATSToken()
+	assert.NoError(t, err)
+	assert.NotEqual(t, t1, t2)
 }
 
 // --- Config file generation ---
