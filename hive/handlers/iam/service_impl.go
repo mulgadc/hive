@@ -299,7 +299,10 @@ func (s *IAMServiceImpl) CreateAccessKey(accountID string, input *iam.CreateAcce
 	}
 
 	accessKeyID := generateAccessKeyID()
-	secretAccessKey := admin.GenerateAWSSecretKey()
+	secretAccessKey, err := admin.GenerateAWSSecretKey()
+	if err != nil {
+		return nil, fmt.Errorf("generate secret key: %w", err)
+	}
 
 	encryptedSecret, err := EncryptSecret(secretAccessKey, s.masterKey)
 	if err != nil {

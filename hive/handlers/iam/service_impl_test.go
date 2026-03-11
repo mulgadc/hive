@@ -876,10 +876,12 @@ func TestGenerateAccessKeyID(t *testing.T) {
 }
 
 func TestGenerateSecretAccessKey(t *testing.T) {
-	secret := admin.GenerateAWSSecretKey()
+	secret, err := admin.GenerateAWSSecretKey()
+	assert.NoError(t, err)
 	assert.Len(t, secret, 40)
 
-	secret2 := admin.GenerateAWSSecretKey()
+	secret2, err := admin.GenerateAWSSecretKey()
+	assert.NoError(t, err)
 	assert.NotEqual(t, secret, secret2)
 }
 

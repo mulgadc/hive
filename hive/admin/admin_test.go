@@ -18,7 +18,8 @@ import (
 // --- Key / Token generation ---
 
 func TestGenerateAWSAccessKey_Format(t *testing.T) {
-	key := GenerateAWSAccessKey()
+	key, err := GenerateAWSAccessKey()
+	assert.NoError(t, err)
 	assert.Len(t, key, 20)
 	assert.True(t, strings.HasPrefix(key, "AKIA"))
 	for _, c := range key[4:] {
@@ -28,18 +29,27 @@ func TestGenerateAWSAccessKey_Format(t *testing.T) {
 }
 
 func TestGenerateAWSAccessKey_Uniqueness(t *testing.T) {
-	assert.NotEqual(t, GenerateAWSAccessKey(), GenerateAWSAccessKey())
+	k1, err := GenerateAWSAccessKey()
+	assert.NoError(t, err)
+	k2, err := GenerateAWSAccessKey()
+	assert.NoError(t, err)
+	assert.NotEqual(t, k1, k2)
 }
 
 func TestGenerateAWSSecretKey_Format(t *testing.T) {
-	key := GenerateAWSSecretKey()
+	key, err := GenerateAWSSecretKey()
+	assert.NoError(t, err)
 	assert.Len(t, key, 40)
-	_, err := base64.StdEncoding.DecodeString(key)
+	_, err = base64.StdEncoding.DecodeString(key)
 	assert.NoError(t, err, "secret key should be valid base64")
 }
 
 func TestGenerateAWSSecretKey_Uniqueness(t *testing.T) {
-	assert.NotEqual(t, GenerateAWSSecretKey(), GenerateAWSSecretKey())
+	k1, err := GenerateAWSSecretKey()
+	assert.NoError(t, err)
+	k2, err := GenerateAWSSecretKey()
+	assert.NoError(t, err)
+	assert.NotEqual(t, k1, k2)
 }
 
 func TestSystemAccountID(t *testing.T) {
