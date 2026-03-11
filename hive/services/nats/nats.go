@@ -27,8 +27,12 @@ type Service struct {
 }
 
 func New(config any) (svc *Service, err error) {
+	cfg, ok := config.(*Config)
+	if !ok {
+		return nil, fmt.Errorf("invalid config type for nats service")
+	}
 	svc = &Service{
-		Config: config.(*Config),
+		Config: cfg,
 	}
 	return svc, nil
 }

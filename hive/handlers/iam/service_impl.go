@@ -133,10 +133,15 @@ func (s *IAMServiceImpl) CreateUser(accountID string, input *iam.CreateUserInput
 		}
 	}
 
+	userID, err := generateIAMID("AIDA")
+	if err != nil {
+		return nil, fmt.Errorf("generate user ID: %w", err)
+	}
+
 	kvKey := accountID + "." + userName
 	user := User{
 		UserName:         userName,
-		UserID:           generateIAMID("AIDA"),
+		UserID:           userID,
 		AccountID:        accountID,
 		ARN:              fmt.Sprintf("arn:aws:iam::%s:user%s%s", accountID, path, userName),
 		Path:             path,
@@ -298,8 +303,14 @@ func (s *IAMServiceImpl) CreateAccessKey(accountID string, input *iam.CreateAcce
 		return nil, errors.New(awserrors.ErrorIAMLimitExceeded)
 	}
 
-	accessKeyID := generateAccessKeyID()
-	secretAccessKey := admin.GenerateAWSSecretKey()
+	accessKeyID, err := generateAccessKeyID()
+	if err != nil {
+		return nil, fmt.Errorf("generate access key ID: %w", err)
+	}
+	secretAccessKey, err := admin.GenerateAWSSecretKey()
+	if err != nil {
+		return nil, fmt.Errorf("generate secret key: %w", err)
+	}
 
 	encryptedSecret, err := EncryptSecret(secretAccessKey, s.masterKey)
 	if err != nil {
@@ -614,9 +625,13 @@ func (s *IAMServiceImpl) seedAdminAccount(admin *AdminBootstrapData) error {
 	// Create AdministratorAccess policy
 	policyARN := fmt.Sprintf("arn:aws:iam::%s:policy/AdministratorAccess", admin.AccountID)
 	policyDoc := `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"*","Resource":"*"}]}`
+	policyID, err := generateIAMID("ANPA")
+	if err != nil {
+		return fmt.Errorf("generate policy ID: %w", err)
+	}
 	policy := Policy{
 		PolicyName:     "AdministratorAccess",
-		PolicyID:       generateIAMID("ANPA"),
+		PolicyID:       policyID,
 		ARN:            policyARN,
 		Path:           "/",
 		Description:    "Full administrator access",
@@ -635,10 +650,14 @@ func (s *IAMServiceImpl) seedAdminAccount(admin *AdminBootstrapData) error {
 	}
 
 	// Create admin user (with policy already attached)
+	adminUserID, err := generateIAMID("AIDA")
+	if err != nil {
+		return fmt.Errorf("generate admin user ID: %w", err)
+	}
 	kvKey := admin.AccountID + "." + admin.UserName
 	adminUser := User{
 		UserName:         admin.UserName,
-		UserID:           generateIAMID("AIDA"),
+		UserID:           adminUserID,
 		AccountID:        admin.AccountID,
 		ARN:              fmt.Sprintf("arn:aws:iam::%s:user/%s", admin.AccountID, admin.UserName),
 		Path:             "/",
@@ -827,9 +846,13 @@ func (s *IAMServiceImpl) CreatePolicy(accountID string, input *iam.CreatePolicyI
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
 	}
 
+	newPolicyID, err := generateIAMID("ANPA")
+	if err != nil {
+		return nil, fmt.Errorf("generate policy ID: %w", err)
+	}
 	policy := Policy{
 		PolicyName:     policyName,
-		PolicyID:       generateIAMID("ANPA"),
+		PolicyID:       newPolicyID,
 		ARN:            fmt.Sprintf("arn:aws:iam::%s:policy%s%s", accountID, path, policyName),
 		Path:           path,
 		Description:    aws.StringValue(input.Description),
@@ -1264,20 +1287,20 @@ func (s *IAMServiceImpl) getUser(accountID, userName string) (*User, error) {
 	return &user, nil
 }
 
-func generateIAMID(prefix string) string {
+func generateIAMID(prefix string) (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		panic("crypto/rand failed: " + err.Error())
+		return "", fmt.Errorf("crypto/rand failure: %w", err)
 	}
-	return prefix + strings.ToUpper(hex.EncodeToString(b))[:17]
+	return prefix + strings.ToUpper(hex.EncodeToString(b))[:17], nil
 }
 
-func generateAccessKeyID() string {
+func generateAccessKeyID() (string, error) {
 	b := make([]byte, 10)
 	if _, err := rand.Read(b); err != nil {
-		panic("crypto/rand failed: " + err.Error())
+		return "", fmt.Errorf("crypto/rand failure: %w", err)
 	}
-	return "AKIA" + strings.ToUpper(hex.EncodeToString(b))
+	return "AKIA" + strings.ToUpper(hex.EncodeToString(b)), nil
 }
 
 func parseCreatedAt(raw string) time.Time {

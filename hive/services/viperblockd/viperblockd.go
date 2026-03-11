@@ -69,8 +69,12 @@ type Service struct {
 //  nbdkit -p 10812 --pidfile /tmp/vb-vol-1.pid ./lib/nbdkit-viperblock-plugin.so -v -f size=67108864 volume=vol-2 bucket=predastore region=ap-southeast-2 access_key="X" secret_key="Y" base_dir="/tmp/vb/" host="https://127.0.0.1:8443" cache_size=0
 
 func New(config any) (svc *Service, err error) {
+	cfg, ok := config.(*Config)
+	if !ok {
+		return nil, fmt.Errorf("invalid config type for viperblockd service")
+	}
 	svc = &Service{
-		Config: config.(*Config),
+		Config: cfg,
 	}
 
 	return svc, nil
@@ -598,11 +602,9 @@ func launchService(cfg *Config) (err error) {
 
 		// TODO: Improve, use a process manager to track the (multiple) nbdkit process
 		go func() {
-			fmt.Println("Executing nbdkit")
+			slog.Debug("Executing nbdkit")
 
 			cmd, err := nbdConfig.Execute()
-			pid := cmd.Process.Pid
-
 			if err != nil {
 				slog.Error("Failed to execute nbdkit", "err", err)
 				// Signal error (no PID) to parent goroutine
@@ -610,6 +612,7 @@ func launchService(cfg *Config) (err error) {
 				return
 			}
 
+			pid := cmd.Process.Pid
 			// Signal successful startup w/ PID
 			processChan <- pid
 

@@ -30,6 +30,10 @@ func ValidateRunInstancesInput(input *ec2.RunInstancesInput) (err error) {
 		return errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
+	if input.MaxCount == nil {
+		return errors.New(awserrors.ErrorMissingParameter)
+	}
+
 	if *input.MaxCount == 0 {
 		return errors.New(awserrors.ErrorInvalidParameterValue)
 	}

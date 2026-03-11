@@ -1,6 +1,7 @@
 package hive
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -17,8 +18,12 @@ type Service struct {
 }
 
 func New(cfg any) (svc *Service, err error) {
+	c, ok := cfg.(*config.ClusterConfig)
+	if !ok {
+		return nil, fmt.Errorf("invalid config type for hive service")
+	}
 	svc = &Service{
-		Config: cfg.(*config.ClusterConfig),
+		Config: c,
 	}
 	return svc, nil
 }

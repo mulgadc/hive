@@ -852,34 +852,41 @@ func TestIsEmpty_False(t *testing.T) {
 // ============================================================================
 
 func TestGenerateIAMID(t *testing.T) {
-	id := generateIAMID("AIDA")
+	id, err := generateIAMID("AIDA")
+	assert.NoError(t, err)
 	assert.Equal(t, "AIDA", id[:4])
 	assert.True(t, len(id) == 21) // AIDA + 17 hex chars
 
 	// Two IDs should differ
-	id2 := generateIAMID("AIDA")
+	id2, err := generateIAMID("AIDA")
+	assert.NoError(t, err)
 	assert.NotEqual(t, id, id2)
 
 	// Policy ID prefix
-	pid := generateIAMID("ANPA")
+	pid, err := generateIAMID("ANPA")
+	assert.NoError(t, err)
 	assert.Equal(t, "ANPA", pid[:4])
 	assert.Len(t, pid, 21)
 }
 
 func TestGenerateAccessKeyID(t *testing.T) {
-	id := generateAccessKeyID()
+	id, err := generateAccessKeyID()
+	assert.NoError(t, err)
 	assert.Equal(t, "AKIA", id[:4])
 	assert.True(t, len(id) == 24) // AKIA + 20 hex chars
 
-	id2 := generateAccessKeyID()
+	id2, err := generateAccessKeyID()
+	assert.NoError(t, err)
 	assert.NotEqual(t, id, id2)
 }
 
 func TestGenerateSecretAccessKey(t *testing.T) {
-	secret := admin.GenerateAWSSecretKey()
+	secret, err := admin.GenerateAWSSecretKey()
+	assert.NoError(t, err)
 	assert.Len(t, secret, 40)
 
-	secret2 := admin.GenerateAWSSecretKey()
+	secret2, err := admin.GenerateAWSSecretKey()
+	assert.NoError(t, err)
 	assert.NotEqual(t, secret, secret2)
 }
 
@@ -1741,11 +1748,13 @@ func TestValidatePolicyDocument_ResourceARNFormat(t *testing.T) {
 // ============================================================================
 
 func TestGeneratePolicyID(t *testing.T) {
-	id := generateIAMID("ANPA")
+	id, err := generateIAMID("ANPA")
+	assert.NoError(t, err)
 	assert.Equal(t, "ANPA", id[:4])
 	assert.Len(t, id, 21) // ANPA + 17 hex chars
 
-	id2 := generateIAMID("ANPA")
+	id2, err := generateIAMID("ANPA")
+	assert.NoError(t, err)
 	assert.NotEqual(t, id, id2)
 }
 
@@ -1873,7 +1882,8 @@ func TestParseCreatedAt(t *testing.T) {
 
 func TestGenerateIAMID_AllUpperHex(t *testing.T) {
 	for range 20 {
-		id := generateIAMID("AIDA")
+		id, err := generateIAMID("AIDA")
+		assert.NoError(t, err)
 		suffix := id[4:]
 		for _, c := range suffix {
 			assert.True(t, (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'),
@@ -1884,7 +1894,8 @@ func TestGenerateIAMID_AllUpperHex(t *testing.T) {
 
 func TestGenerateAccessKeyID_AllUpperHex(t *testing.T) {
 	for range 20 {
-		id := generateAccessKeyID()
+		id, err := generateAccessKeyID()
+		assert.NoError(t, err)
 		suffix := id[4:]
 		for _, c := range suffix {
 			assert.True(t, (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'),

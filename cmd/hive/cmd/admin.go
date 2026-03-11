@@ -593,8 +593,16 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	fmt.Printf("✅ Created config directory: %s\n", configDir)
 
 	// Generate system credentials (for service-to-service auth in config files)
-	accessKey := admin.GenerateAWSAccessKey()
-	secretKey := admin.GenerateAWSSecretKey()
+	accessKey, err := admin.GenerateAWSAccessKey()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error generating access key: %v\n", err)
+		os.Exit(1)
+	}
+	secretKey, err := admin.GenerateAWSSecretKey()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error generating secret key: %v\n", err)
+		os.Exit(1)
+	}
 	accountID := admin.SystemAccountID()
 
 	// Generate IAM master key (AES-256, used to encrypt secrets in NATS KV)
@@ -1484,8 +1492,14 @@ type writeBootstrapResult struct {
 // writeBootstrapFiles generates new admin credentials and writes the bootstrap
 // files (master.key + bootstrap.json). Used by init flows (single and multi-node).
 func writeBootstrapFiles(configDir string, masterKey []byte, accessKey, secretKey, accountID string) (*writeBootstrapResult, error) {
-	adminAccessKey := admin.GenerateAWSAccessKey()
-	adminSecretKey := admin.GenerateAWSSecretKey()
+	adminAccessKey, err := admin.GenerateAWSAccessKey()
+	if err != nil {
+		return nil, fmt.Errorf("generate admin access key: %w", err)
+	}
+	adminSecretKey, err := admin.GenerateAWSSecretKey()
+	if err != nil {
+		return nil, fmt.Errorf("generate admin secret key: %w", err)
+	}
 	if err := writeBootstrapFilesWithAdmin(configDir, masterKey, accessKey, secretKey, accountID, adminAccessKey, adminSecretKey); err != nil {
 		return nil, err
 	}

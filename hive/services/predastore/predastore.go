@@ -2,6 +2,7 @@ package predastore
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -43,8 +44,12 @@ type Service struct {
 
 // New creates a new predastore service
 func New(config any) (svc *Service, err error) {
+	cfg, ok := config.(*Config)
+	if !ok {
+		return nil, fmt.Errorf("invalid config type for predastore service")
+	}
 	svc = &Service{
-		Config: config.(*Config),
+		Config: cfg,
 	}
 	return svc, nil
 }

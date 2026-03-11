@@ -241,28 +241,31 @@ func UpdateAWSINIFile(path, section string, values map[string]string) error {
 
 // generateAWSAccessKey generates an AWS-style access key
 // Format: AKIA + 16 random uppercase alphanumeric characters
-func GenerateAWSAccessKey() string {
+func GenerateAWSAccessKey() (string, error) {
 	const prefix = "AKIA"
 	const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	const length = 16
 
 	result := make([]byte, length)
 	for i := range result {
-		num, _ := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			return "", fmt.Errorf("crypto/rand failure: %w", err)
+		}
 		result[i] = charset[num.Int64()]
 	}
 
-	return prefix + string(result)
+	return prefix + string(result), nil
 }
 
 // generateAWSSecretKey generates an AWS-style secret key
 // 40 character base64-encoded string
-func GenerateAWSSecretKey() string {
+func GenerateAWSSecretKey() (string, error) {
 	bytes := make([]byte, 30) // 30 bytes = 40 chars in base64
 	if _, err := rand.Read(bytes); err != nil {
-		panic(err)
+		return "", fmt.Errorf("crypto/rand failure: %w", err)
 	}
-	return base64.StdEncoding.EncodeToString(bytes)
+	return base64.StdEncoding.EncodeToString(bytes), nil
 }
 
 // SystemAccountID returns the system/root account ID (000000000000).

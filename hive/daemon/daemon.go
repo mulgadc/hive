@@ -1273,6 +1273,12 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 	q.Mu.Lock()
 	defer q.Mu.Unlock()
 
+	// Set a read deadline so we don't block forever on a hung QEMU process
+	if err := q.Conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		return nil, fmt.Errorf("set read deadline: %w", err)
+	}
+	defer q.Conn.SetReadDeadline(time.Time{}) // clear deadline after command
+
 	if err := q.Encoder.Encode(cmd); err != nil {
 		return nil, fmt.Errorf("encode error: %w", err)
 	}
@@ -1288,6 +1294,10 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 			// by the command handlers that initiate the action, avoiding races
 			// between event-driven and command-driven transitions.
 			slog.Info("QMP event", "event", msg["event"], "instanceId", instanceId)
+			// Extend deadline after receiving an event (QEMU is alive, just chatty)
+			if err := q.Conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+				return nil, fmt.Errorf("set read deadline: %w", err)
+			}
 			continue
 		}
 		if errObj, ok := msg["error"].(map[string]any); ok {
@@ -1538,6 +1548,10 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 
 	// Send qmp_capabilities handshake to init
 	_, err = d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "qmp_capabilities"}, instance.ID)
+	if err != nil {
+		slog.Error("Failed QMP capabilities handshake", "err", err)
+		return err
+	}
 
 	// Simple heartbeat to confirm QMP and the instance is running / healthy
 	go func() {
@@ -1573,11 +1587,6 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 			slog.Debug("QMP status", "instance", instance.ID, "status", string(qmpStatus.Return))
 		}
 	}()
-
-	if err != nil {
-		slog.Error("Failed to create QMP client", "err", err)
-		return err
-	}
 
 	return nil
 
@@ -2043,6 +2052,8 @@ func (d *Daemon) ebsTopic(action string) string {
 func (d *Daemon) MountVolumes(instance *vm.VM) error {
 
 	instance.EBSRequests.Mu.Lock()
+	defer instance.EBSRequests.Mu.Unlock()
+
 	for k, v := range instance.EBSRequests.Requests {
 
 		// Send the volume payload as JSON
@@ -2085,8 +2096,6 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 		}
 
 	}
-
-	instance.EBSRequests.Mu.Unlock()
 
 	return nil
 
