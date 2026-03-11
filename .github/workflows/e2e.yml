@@ -1,80 +1,161 @@
-name: Hive E2E Test
+name: Hive E2E Tests
 
 on:
   push:
-    branches:
-      - main
-      - dev
+    branches: [main, dev]
     paths:
       - "**/*.go"
       - go.mod
       - go.sum
       - Makefile
       - tests/e2e/**
-      - scripts/**
       - .github/workflows/e2e.yml
   workflow_dispatch:
 
+env:
+  GIT_BRANCH: ${{ github.ref_name }}
+  TOFU_LOG: /tmp/e2e-tofu-${{ github.run_id }}.log
+
 jobs:
-  build_e2e_image:
-    name: Build E2E Image
-    runs-on: self-hosted
-
+  e2e_single:
+    name: Single-Node E2E
+    runs-on: [self-hosted, ci-single]
+    timeout-minutes: 20
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v6
+      - name: Clean workspace
+        run: rm -rf mulga
+
+      - uses: actions/checkout@v6
         with:
-          path: hive
+          repository: mulgadc/mulga
+          sparse-checkout: scripts/tofu-cluster
+          path: mulga
 
-      - name: Clone Dependencies
-        run: ./hive/scripts/clone-deps.sh
-
-      - name: Build E2E Image
+      - name: Provision VM
+        working-directory: mulga/scripts/tofu-cluster
         run: |
-          docker build \
-            -t hive-e2e:latest \
-            -f hive/tests/e2e/Dockerfile.e2e \
-            .
+          export TF_VAR_git_branch="${GIT_BRANCH}"
+          tofu init -input=false >> "$TOFU_LOG" 2>&1
+          tofu workspace select env3 >> "$TOFU_LOG" 2>&1
+          tofu destroy -var-file=envs/env3.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
+          tofu apply -var-file=envs/env3.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
-  hive_e2e_test:
-    name: Hive Single-Node E2E Test
-    runs-on: self-hosted
-    needs: build_e2e_image
+      - name: Bootstrap cluster
+        working-directory: mulga/scripts/tofu-cluster
+        run: ./bootstrap.sh env3 >> "$TOFU_LOG" 2>&1
 
+      - name: Run E2E tests
+        working-directory: mulga/scripts/tofu-cluster
+        run: |
+          INVENTORY=$(tofu output -json inventory)
+          WAN_IP=$(echo "$INVENTORY" | jq -r '.nodes[0].wan_ip')
+          SSH_KEY=$(echo "$INVENTORY" | jq -r '.ssh_key_path')
+          SSH_KEY="${SSH_KEY/#\~/$HOME}"
+          ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${WAN_IP} \
+            'cd ~/Development/mulga/hive && ./tests/e2e/run-e2e.sh'
+
+      - name: Teardown
+        if: always()
+        working-directory: mulga/scripts/tofu-cluster
+        run: |
+          tofu workspace select env3 >> "$TOFU_LOG" 2>&1
+          tofu destroy -var-file=envs/env3.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+
+  e2e_pseudo_multi:
+    name: Pseudo Multi-Node E2E
+    runs-on: [self-hosted, ci-pseudo]
+    timeout-minutes: 20
     steps:
-      - name: Run E2E Tests
+      - name: Clean workspace
+        run: rm -rf mulga
+
+      - uses: actions/checkout@v6
+        with:
+          repository: mulgadc/mulga
+          sparse-checkout: scripts/tofu-cluster
+          path: mulga
+
+      - name: Provision VM
+        working-directory: mulga/scripts/tofu-cluster
         run: |
-          docker run --privileged --rm \
-            -v /dev/kvm:/dev/kvm \
-            --name hive-e2e-test \
-            hive-e2e:latest
+          export TF_VAR_git_branch="${GIT_BRANCH}"
+          tofu init -input=false >> "$TOFU_LOG" 2>&1
+          tofu workspace select env4 >> "$TOFU_LOG" 2>&1
+          tofu destroy -var-file=envs/env4.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
+          tofu apply -var-file=envs/env4.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
-  hive_multinode_e2e_test:
-    name: Hive Multi-Node E2E Test
-    runs-on: self-hosted
-    needs: build_e2e_image
+      - name: Bootstrap cluster
+        working-directory: mulga/scripts/tofu-cluster
+        run: ./bootstrap.sh env4 >> "$TOFU_LOG" 2>&1
 
-    steps:
-      - name: Run Multi-Node E2E Tests
+      - name: Run E2E tests
+        working-directory: mulga/scripts/tofu-cluster
         run: |
-          docker run --privileged --rm \
-            -v /dev/kvm:/dev/kvm \
-            --cap-add=NET_ADMIN \
-            --name hive-multinode-e2e-test \
-            hive-e2e:latest \
-            ./tests/e2e/run-multinode-e2e.sh
+          INVENTORY=$(tofu output -json inventory)
+          WAN_IP=$(echo "$INVENTORY" | jq -r '.nodes[0].wan_ip')
+          SSH_KEY=$(echo "$INVENTORY" | jq -r '.ssh_key_path')
+          SSH_KEY="${SSH_KEY/#\~/$HOME}"
+          ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${WAN_IP} \
+            'cd ~/Development/mulga/hive && ./tests/e2e/run-multinode-e2e.sh'
 
-  cleanup:
-    name: Cleanup
-    runs-on: self-hosted
-    needs: [hive_e2e_test, hive_multinode_e2e_test]
-    if: always()
-
-    steps:
-      - name: Remove Stale Containers
+      - name: Teardown
+        if: always()
+        working-directory: mulga/scripts/tofu-cluster
         run: |
-          docker rm -f hive-e2e-test 2>/dev/null || true
-          docker rm -f hive-multinode-e2e-test 2>/dev/null || true
+          tofu workspace select env4 >> "$TOFU_LOG" 2>&1
+          tofu destroy -var-file=envs/env4.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
-      - name: Prune Docker Images
-        run: docker image prune -f
+  # TODO: Uncomment when hive/tests/e2e/run-real-multinode-tests.sh exists
+  # e2e_real_multi:
+  #   name: Real Multi-Node E2E
+  #   runs-on: [self-hosted, ci-multi]
+  #   timeout-minutes: 30
+  #   continue-on-error: true  # Advisory until stable
+  #   steps:
+  #     - name: Clean workspace
+  #       run: rm -rf mulga
+  #
+  #     - uses: actions/checkout@v6
+  #       with:
+  #         repository: mulgadc/mulga
+  #         sparse-checkout: scripts/tofu-cluster
+  #         path: mulga
+  #
+  #     - name: Provision VMs
+  #       working-directory: mulga/scripts/tofu-cluster
+  #       run: |
+  #         export TF_VAR_git_branch="${GIT_BRANCH}"
+  #         tofu init -input=false >> "$TOFU_LOG" 2>&1
+  #         tofu workspace select env2 >> "$TOFU_LOG" 2>&1
+  #         tofu destroy -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
+  #         tofu apply -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+  #
+  #     - name: Bootstrap cluster
+  #       working-directory: mulga/scripts/tofu-cluster
+  #       run: ./bootstrap.sh env2 >> "$TOFU_LOG" 2>&1
+  #
+  #     - name: Run E2E tests
+  #       working-directory: mulga/scripts/tofu-cluster
+  #       run: |
+  #         INVENTORY=$(tofu output -json inventory)
+  #         NODE1_IP=$(echo "$INVENTORY" | jq -r '.nodes[0].wan_ip')
+  #         SSH_KEY=$(echo "$INVENTORY" | jq -r '.ssh_key_path')
+  #         SSH_KEY="${SSH_KEY/#\~/$HOME}"
+  #
+  #         # Build node IP list
+  #         NODE_IPS=""
+  #         NODE_COUNT=$(echo "$INVENTORY" | jq '.nodes | length')
+  #         for i in $(seq 0 $((NODE_COUNT - 1))); do
+  #           NODE_IPS="${NODE_IPS} $(echo "$INVENTORY" | jq -r ".nodes[$i].wan_ip")"
+  #         done
+  #
+  #         # Run real multi-node tests from node1
+  #         ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${NODE1_IP} \
+  #           "cd ~/Development/mulga/hive && ./tests/e2e/run-real-multinode-tests.sh ${NODE_IPS}"
+  #
+  #     - name: Teardown
+  #       if: always()
+  #       working-directory: mulga/scripts/tofu-cluster
+  #       run: |
+  #         tofu workspace select env2 >> "$TOFU_LOG" 2>&1
+  #         tofu destroy -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
