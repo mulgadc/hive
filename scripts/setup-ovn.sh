@@ -256,13 +256,26 @@ else
 fi
 
 # --- Step 9: Configure OVN log rotation ---
-# OVN logs can grow to 10GB+ without rotation, filling the root partition.
+# OVN has built-in rotation that renames foo.log → foo.log.log. A previous
+# logrotate config used a *.log glob that caught those .log.log files too,
+# creating .log.log.1 files that accumulated to 27GB. Fix: use explicit
+# filenames so logrotate only touches the primary logs, not OVN's backups.
 echo ""
 echo "Step 9: Configuring OVN log rotation..."
 
+# Clean up stale .log.log files from the old double-rotation bug
+if ls /var/log/ovn/*.log.log* 1>/dev/null 2>&1; then
+    sudo rm -f /var/log/ovn/*.log.log*
+    echo "  cleaned up stale .log.log files"
+fi
+
 LOGROTATE_FILE="/etc/logrotate.d/ovn-hive"
 sudo tee "$LOGROTATE_FILE" >/dev/null <<'LOGROTATE'
-/var/log/ovn/*.log {
+/var/log/ovn/ovn-controller.log
+/var/log/ovn/ovn-northd.log
+/var/log/ovn/ovsdb-server-nb.log
+/var/log/ovn/ovsdb-server-sb.log
+{
     daily
     rotate 3
     maxsize 100M
@@ -272,7 +285,7 @@ sudo tee "$LOGROTATE_FILE" >/dev/null <<'LOGROTATE'
     copytruncate
 }
 LOGROTATE
-echo "  logrotate config: $LOGROTATE_FILE (daily, 100M max, 3 rotations)"
+echo "  logrotate config: $LOGROTATE_FILE (daily, 100M max, 3 rotations, explicit filenames)"
 
 # --- Step 10: Disable auto-start on boot ---
 # start-dev.sh / stop-dev.sh manage the OVN lifecycle. Without hive services
