@@ -1,0 +1,269 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { renderHook, waitFor } from "@testing-library/react"
+import type { ReactNode } from "react"
+import { afterEach, describe, expect, it, vi } from "vitest"
+
+const mockSend = vi.fn().mockResolvedValue({})
+
+vi.mock("@/lib/awsClient", () => ({
+  getIamClient: () => ({ send: mockSend }),
+}))
+
+import {
+  useAttachUserPolicy,
+  useCreateAccessKey,
+  useCreatePolicy,
+  useCreateUser,
+  useDeleteAccessKey,
+  useDeletePolicy,
+  useDeleteUser,
+  useDetachUserPolicy,
+  useUpdateAccessKey,
+} from "./iam"
+
+let queryClient: QueryClient
+
+function wrapper({ children }: { children: ReactNode }) {
+  return (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  )
+}
+
+function createQueryClient() {
+  queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  })
+  return queryClient
+}
+
+afterEach(() => {
+  mockSend.mockClear()
+})
+
+describe("useCreateUser", () => {
+  it("sends CreateUserCommand with userName", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCreateUser(), { wrapper })
+
+    result.current.mutate({ userName: "admin" })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      UserName: "admin",
+      Path: undefined,
+    })
+  })
+
+  it("includes Path when provided", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCreateUser(), { wrapper })
+
+    result.current.mutate({ userName: "admin", path: "/engineering/" })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      UserName: "admin",
+      Path: "/engineering/",
+    })
+  })
+
+  it("invalidates users query on success", async () => {
+    createQueryClient()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+    const { result } = renderHook(() => useCreateUser(), { wrapper })
+
+    result.current.mutate({ userName: "admin" })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["iam", "users"] })
+  })
+})
+
+describe("useDeleteUser", () => {
+  it("sends DeleteUserCommand with userName", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useDeleteUser(), { wrapper })
+
+    result.current.mutate("admin")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({ UserName: "admin" })
+  })
+})
+
+describe("useCreateAccessKey", () => {
+  it("sends CreateAccessKeyCommand with userName", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCreateAccessKey(), { wrapper })
+
+    result.current.mutate("admin")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({ UserName: "admin" })
+  })
+
+  it("invalidates access-keys query on success", async () => {
+    createQueryClient()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+    const { result } = renderHook(() => useCreateAccessKey(), { wrapper })
+
+    result.current.mutate("admin")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["iam", "access-keys"] })
+  })
+})
+
+describe("useDeleteAccessKey", () => {
+  it("sends DeleteAccessKeyCommand with userName and accessKeyId", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useDeleteAccessKey(), { wrapper })
+
+    result.current.mutate({ userName: "admin", accessKeyId: "AKIA123" })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      UserName: "admin",
+      AccessKeyId: "AKIA123",
+    })
+  })
+})
+
+describe("useUpdateAccessKey", () => {
+  it("sends UpdateAccessKeyCommand with status", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useUpdateAccessKey(), { wrapper })
+
+    result.current.mutate({
+      userName: "admin",
+      accessKeyId: "AKIA123",
+      status: "Inactive",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      UserName: "admin",
+      AccessKeyId: "AKIA123",
+      Status: "Inactive",
+    })
+  })
+})
+
+describe("useCreatePolicy", () => {
+  it("sends CreatePolicyCommand with policy data", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCreatePolicy(), { wrapper })
+
+    result.current.mutate({
+      policyName: "ReadOnly",
+      policyDocument: '{"Version":"2012-10-17"}',
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      PolicyName: "ReadOnly",
+      Description: undefined,
+      PolicyDocument: '{"Version":"2012-10-17"}',
+    })
+  })
+
+  it("includes Description when provided", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCreatePolicy(), { wrapper })
+
+    result.current.mutate({
+      policyName: "ReadOnly",
+      description: "Read-only access",
+      policyDocument: "{}",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input.Description).toBe(
+      "Read-only access",
+    )
+  })
+
+  it("invalidates policies query on success", async () => {
+    createQueryClient()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+    const { result } = renderHook(() => useCreatePolicy(), { wrapper })
+
+    result.current.mutate({ policyName: "ReadOnly", policyDocument: "{}" })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["iam", "policies"] })
+  })
+})
+
+describe("useDeletePolicy", () => {
+  it("sends DeletePolicyCommand with policyArn", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useDeletePolicy(), { wrapper })
+
+    result.current.mutate("arn:aws:iam::123:policy/ReadOnly")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      PolicyArn: "arn:aws:iam::123:policy/ReadOnly",
+    })
+  })
+})
+
+describe("useAttachUserPolicy", () => {
+  it("sends AttachUserPolicyCommand with userName and policyArn", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useAttachUserPolicy(), { wrapper })
+
+    result.current.mutate({ userName: "admin", policyArn: "arn:test" })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      UserName: "admin",
+      PolicyArn: "arn:test",
+    })
+  })
+
+  it("invalidates attached-user-policies query on success", async () => {
+    createQueryClient()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+    const { result } = renderHook(() => useAttachUserPolicy(), { wrapper })
+
+    result.current.mutate({ userName: "admin", policyArn: "arn:test" })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["iam", "attached-user-policies"],
+    })
+  })
+})
+
+describe("useDetachUserPolicy", () => {
+  it("sends DetachUserPolicyCommand with userName and policyArn", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useDetachUserPolicy(), { wrapper })
+
+    result.current.mutate({ userName: "admin", policyArn: "arn:test" })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      UserName: "admin",
+      PolicyArn: "arn:test",
+    })
+  })
+
+  it("invalidates attached-user-policies query on success", async () => {
+    createQueryClient()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+    const { result } = renderHook(() => useDetachUserPolicy(), { wrapper })
+
+    result.current.mutate({ userName: "admin", policyArn: "arn:test" })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["iam", "attached-user-policies"],
+    })
+  })
+})
