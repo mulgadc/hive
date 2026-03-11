@@ -2,7 +2,9 @@ name: Hive E2E Tests
 
 on:
   push:
-    branches: [main, dev]
+    branches:
+      - main
+      - dev
     paths:
       - "**/*.go"
       - go.mod
@@ -25,9 +27,17 @@ jobs:
       - name: Clean workspace
         run: rm -rf mulga
 
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.MULGA_APP_ID }}
+          private-key: ${{ secrets.MULGA_APP_KEY }}
+          repositories: mulga
+
       - uses: actions/checkout@v6
         with:
           repository: mulgadc/mulga
+          token: ${{ steps.app-token.outputs.token }}
           sparse-checkout: scripts/tofu-cluster
           path: mulga
 
@@ -40,11 +50,11 @@ jobs:
           tofu destroy -var-file=envs/env3.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
           tofu apply -var-file=envs/env3.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
-      - name: Bootstrap cluster
+      - name: Bootstrap Cluster
         working-directory: mulga/scripts/tofu-cluster
         run: ./bootstrap.sh env3 >> "$TOFU_LOG" 2>&1
 
-      - name: Run E2E tests
+      - name: Run E2E Tests
         working-directory: mulga/scripts/tofu-cluster
         run: |
           INVENTORY=$(tofu output -json inventory)
@@ -69,10 +79,19 @@ jobs:
       - name: Clean workspace
         run: rm -rf mulga
 
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.MULGA_APP_ID }}
+          private-key: ${{ secrets.MULGA_APP_KEY }}
+          repositories: mulga
+
       - uses: actions/checkout@v6
         with:
           repository: mulgadc/mulga
+          token: ${{ steps.app-token.outputs.token }}
           sparse-checkout: scripts/tofu-cluster
+
           path: mulga
 
       - name: Provision VM
@@ -84,11 +103,11 @@ jobs:
           tofu destroy -var-file=envs/env4.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
           tofu apply -var-file=envs/env4.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
-      - name: Bootstrap cluster
+      - name: Bootstrap Cluster
         working-directory: mulga/scripts/tofu-cluster
         run: ./bootstrap.sh env4 >> "$TOFU_LOG" 2>&1
 
-      - name: Run E2E tests
+      - name: Run E2E Tests
         working-directory: mulga/scripts/tofu-cluster
         run: |
           INVENTORY=$(tofu output -json inventory)
@@ -115,10 +134,19 @@ jobs:
   #     - name: Clean workspace
   #       run: rm -rf mulga
   #
+  #     - uses: actions/create-github-app-token@v2
+  #       id: app-token
+  #       with:
+  #         app-id: ${{ secrets.MULGA_APP_ID }}
+  #         private-key: ${{ secrets.MULGA_APP_KEY }}
+  #         repositories: mulga
+  #
   #     - uses: actions/checkout@v6
   #       with:
   #         repository: mulgadc/mulga
+  #         token: ${{ steps.app-token.outputs.token }}
   #         sparse-checkout: scripts/tofu-cluster
+  #         fetch-depth: 1
   #         path: mulga
   #
   #     - name: Provision VMs
@@ -130,11 +158,11 @@ jobs:
   #         tofu destroy -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
   #         tofu apply -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
   #
-  #     - name: Bootstrap cluster
+  #     - name: Bootstrap Cluster
   #       working-directory: mulga/scripts/tofu-cluster
   #       run: ./bootstrap.sh env2 >> "$TOFU_LOG" 2>&1
   #
-  #     - name: Run E2E tests
+  #     - name: Run E2E Tests
   #       working-directory: mulga/scripts/tofu-cluster
   #       run: |
   #         INVENTORY=$(tofu output -json inventory)
