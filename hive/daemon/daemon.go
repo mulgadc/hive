@@ -1538,6 +1538,10 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 
 	// Send qmp_capabilities handshake to init
 	_, err = d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "qmp_capabilities"}, instance.ID)
+	if err != nil {
+		slog.Error("Failed QMP capabilities handshake", "err", err)
+		return err
+	}
 
 	// Simple heartbeat to confirm QMP and the instance is running / healthy
 	go func() {
@@ -1573,11 +1577,6 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 			slog.Debug("QMP status", "instance", instance.ID, "status", string(qmpStatus.Return))
 		}
 	}()
-
-	if err != nil {
-		slog.Error("Failed to create QMP client", "err", err)
-		return err
-	}
 
 	return nil
 
