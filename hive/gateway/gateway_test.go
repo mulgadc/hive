@@ -860,6 +860,43 @@ func TestCorsMiddleware_OPTIONSRequest(t *testing.T) {
 	assert.Equal(t, "https://localhost:3000", w.Header().Get("Access-Control-Allow-Origin"))
 }
 
+func TestCorsMiddleware_LocalIPOrigin(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	})
+
+	handler := corsMiddleware(next)
+
+	// Request from a local IP should be reflected
+	allowed := corsAllowedOrigins()
+	for origin := range allowed {
+		if origin == "https://localhost:3000" {
+			continue
+		}
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("Origin", origin)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		assert.Equal(t, origin, w.Header().Get("Access-Control-Allow-Origin"))
+		return // test one IP is enough
+	}
+}
+
+func TestCorsMiddleware_UnknownOrigin(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+	})
+
+	handler := corsMiddleware(next)
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Origin", "https://evil.example.com")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	// Unknown origins fall back to localhost
+	assert.Equal(t, "https://localhost:3000", w.Header().Get("Access-Control-Allow-Origin"))
+}
+
 func TestSlogRequestLogger_CallsNext(t *testing.T) {
 	nextCalled := false
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
