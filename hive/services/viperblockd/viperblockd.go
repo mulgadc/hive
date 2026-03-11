@@ -598,11 +598,9 @@ func launchService(cfg *Config) (err error) {
 
 		// TODO: Improve, use a process manager to track the (multiple) nbdkit process
 		go func() {
-			fmt.Println("Executing nbdkit")
+			slog.Debug("Executing nbdkit")
 
 			cmd, err := nbdConfig.Execute()
-			pid := cmd.Process.Pid
-
 			if err != nil {
 				slog.Error("Failed to execute nbdkit", "err", err)
 				// Signal error (no PID) to parent goroutine
@@ -610,6 +608,7 @@ func launchService(cfg *Config) (err error) {
 				return
 			}
 
+			pid := cmd.Process.Pid
 			// Signal successful startup w/ PID
 			processChan <- pid
 
