@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Ensure Go is on PATH (SSH non-interactive shells don't source .bashrc)
+export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
+
 # Ensure we are in the project root
 cd "$(dirname "$0")/../.."
 
@@ -288,17 +291,23 @@ fi
 echo "Using image: $IMAGE_NAME"
 
 # Import the pre-downloaded Ubuntu image using file-based import
-echo "Importing pre-cached Ubuntu image..."
-IMPORT_LOG=$(./bin/hive admin images import \
-    --file /root/images/ubuntu-24.04.img \
-    --arch "$ARCH" \
-    --distro ubuntu \
-    --version 24.04 \
-    --force 2>/dev/null)
-AMI_ID=$(echo "$IMPORT_LOG" | grep -o 'ami-[a-z0-9]\+')
+# When bootstrapped, the image is already imported — discover the existing AMI
+if [ "$BOOTSTRAPPED" = "true" ]; then
+    echo "Discovering existing AMI (imported by bootstrap)..."
+    AMI_ID=$(aws ec2 describe-images --query 'Images[0].ImageId' --output text)
+else
+    echo "Importing pre-cached Ubuntu image..."
+    IMPORT_LOG=$(./bin/hive admin images import \
+        --file ~/images/ubuntu-24.04.img \
+        --arch "$ARCH" \
+        --distro ubuntu \
+        --version 24.04 \
+        --force 2>/dev/null)
+    AMI_ID=$(echo "$IMPORT_LOG" | grep -o 'ami-[a-z0-9]\+')
+fi
 
-if [ -z "$AMI_ID" ]; then
-    echo "Failed to capture AMI ID from import command"
+if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
+    echo "Failed to capture AMI ID"
     exit 1
 fi
 echo "Captured AMI ID: $AMI_ID"

@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+# Ensure Go is on PATH (SSH non-interactive shells don't source .bashrc)
+export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
+
 # Multi-node E2E test runner
 # This script sets up a 3-node Hive cluster using simulated IPs on the loopback interface
 # and runs distributed instance tests.
@@ -251,7 +254,7 @@ echo "  Key created: multinode-test-key"
 echo ""
 echo "Importing Ubuntu image..."
 IMPORT_LOG=$(./bin/hive admin images import \
-    --file /root/images/ubuntu-24.04.img \
+    --file ~/images/ubuntu-24.04.img \
     --arch "$ARCH" \
     --distro ubuntu \
     --version 24.04 \
