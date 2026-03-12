@@ -6,9 +6,9 @@
     "dev": "vite --port 3000",
     "build": "vite build && tsgo",
     "preview": "vite preview",
-    "lint": "oxlint",
-    "fix": "oxlint --fix && oxfmt --write .",
-    "format": "oxfmt --write .",
+    "check": "oxlint && oxfmt --check",
+    "fix": "oxlint --fix && oxfmt",
+    "format": "oxfmt",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest"
@@ -36,6 +36,8 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.1",
+    "@tanstack/eslint-plugin-query": "^5.91.4",
+    "@tanstack/eslint-plugin-router": "^1.161.4",
     "@tanstack/router-plugin": "^1.166.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
