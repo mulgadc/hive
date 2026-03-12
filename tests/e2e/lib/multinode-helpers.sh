@@ -28,7 +28,7 @@ add_simulated_ips() {
     for i in 1 2 3; do
         local ip="${SIMULATED_NETWORK}.$i"
         if ! ip addr show lo | grep -q "$ip"; then
-            ip addr add "${ip}/24" dev lo
+            sudo ip addr add "${ip}/24" dev lo
             echo "  Added $ip to lo"
         else
             echo "  $ip already exists on lo"
@@ -57,7 +57,7 @@ remove_simulated_ips() {
     for i in 1 2 3; do
         local ip="${SIMULATED_NETWORK}.$i"
         if ip addr show lo | grep -q "$ip"; then
-            ip addr del "${ip}/24" dev lo 2>/dev/null || true
+            sudo ip addr del "${ip}/24" dev lo 2>/dev/null || true
             echo "  Removed $ip from lo"
         fi
     done
