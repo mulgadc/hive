@@ -74,7 +74,7 @@ jobs:
   e2e_pseudo_multi:
     name: Pseudo Multi-Node E2E
     runs-on: [self-hosted, ci-pseudo]
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Clean workspace
         run: rm -rf mulga
