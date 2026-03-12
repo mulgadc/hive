@@ -116,7 +116,7 @@ export function useCreateInstance() {
         KeyName: params.keyName,
         MinCount: params.count,
         MaxCount: params.count,
-        SubnetId: params.subnetId || undefined,
+        SubnetId: params.subnetId ?? undefined,
       })
       return getEc2Client().send(command)
     },
@@ -231,7 +231,7 @@ export function useCreateSnapshot() {
     mutationFn: (params: CreateSnapshotFormData) => {
       const command = new CreateSnapshotCommand({
         VolumeId: params.volumeId,
-        Description: params.description || undefined,
+        Description: params.description ?? undefined,
       })
       return getEc2Client().send(command)
     },
@@ -263,7 +263,7 @@ export function useCopySnapshot() {
       const command = new CopySnapshotCommand({
         SourceSnapshotId: params.sourceSnapshotId,
         SourceRegion: params.sourceRegion,
-        Description: params.description || undefined,
+        Description: params.description ?? undefined,
       })
       return getEc2Client().send(command)
     },
@@ -280,7 +280,7 @@ export function useAttachVolume() {
       const command = new AttachVolumeCommand({
         VolumeId: params.volumeId,
         InstanceId: params.instanceId,
-        Device: params.device || undefined,
+        Device: params.device ?? undefined,
       })
       return getEc2Client().send(command)
     },
@@ -297,7 +297,7 @@ export function useDetachVolume() {
     mutationFn: (params: DetachVolumeFormData) => {
       const command = new DetachVolumeCommand({
         VolumeId: params.volumeId,
-        InstanceId: params.instanceId || undefined,
+        InstanceId: params.instanceId ?? undefined,
         Force: params.force,
       })
       return getEc2Client().send(command)
@@ -346,7 +346,7 @@ export function useCreateImage() {
       const command = new CreateImageCommand({
         InstanceId: params.instanceId,
         Name: params.name,
-        Description: params.description || undefined,
+        Description: params.description ?? undefined,
       })
       return getEc2Client().send(command)
     },
@@ -401,7 +401,7 @@ export function useCreateSubnet() {
       const command = new CreateSubnetCommand({
         VpcId: params.vpcId,
         CidrBlock: params.cidrBlock,
-        AvailabilityZone: params.availabilityZone || undefined,
+        AvailabilityZone: params.availabilityZone ?? undefined,
       })
       return getEc2Client().send(command)
     },

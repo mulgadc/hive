@@ -246,10 +246,10 @@ function InstanceDetail() {
         </DetailCard>
 
         {/* Network & Security */}
-        {(instance.PrivateIpAddress ||
-          instance.PublicIpAddress ||
-          instance.VpcId ||
-          instance.SubnetId ||
+        {(instance.PrivateIpAddress ??
+          instance.PublicIpAddress ??
+          instance.VpcId ??
+          instance.SubnetId ??
           (instance.SecurityGroups && instance.SecurityGroups.length > 0)) && (
           <DetailCard>
             <DetailCard.Header>Network & Security</DetailCard.Header>

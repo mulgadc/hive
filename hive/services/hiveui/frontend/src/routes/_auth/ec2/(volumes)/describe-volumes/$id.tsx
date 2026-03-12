@@ -98,7 +98,7 @@ function VolumeDetail() {
       await attachMutation.mutateAsync({
         volumeId: id,
         instanceId: attachInstanceId,
-        device: attachDevice || undefined,
+        device: attachDevice ?? undefined,
       })
       closeDialog()
       setAttachInstanceId("")
@@ -113,8 +113,8 @@ function VolumeDetail() {
     try {
       await detachMutation.mutateAsync({
         volumeId: id,
-        instanceId: instanceId || undefined,
-        force: detachForce || undefined,
+        instanceId: instanceId ?? undefined,
+        force: detachForce ?? undefined,
       })
       closeDialog()
       setDetachForce(false)

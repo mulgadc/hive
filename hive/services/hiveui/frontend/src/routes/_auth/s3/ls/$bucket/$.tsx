@@ -18,13 +18,13 @@ import { UploadButton } from "@/routes/_auth/s3/-components/upload-button"
 
 export const Route = createFileRoute("/_auth/s3/ls/$bucket/$")({
   loader: async ({ context, params }) => {
-    const prefix = ensureTrailingSlash(params._splat || "")
+    const prefix = ensureTrailingSlash(params._splat ?? "")
     await context.queryClient.ensureQueryData(
       s3BucketObjectsQueryOptions(params.bucket, prefix),
     )
   },
   head: ({ params }) => {
-    const path = buildFullS3Key(params._splat || "", `${params.bucket}/`)
+    const path = buildFullS3Key(params._splat ?? "", `${params.bucket}/`)
     return {
       meta: [
         {
@@ -39,13 +39,13 @@ export const Route = createFileRoute("/_auth/s3/ls/$bucket/$")({
 function BucketObjectsWithPrefix() {
   const { bucket, _splat } = Route.useParams()
 
-  const prefix = ensureTrailingSlash(_splat || "")
+  const prefix = ensureTrailingSlash(_splat ?? "")
 
   const { data } = useSuspenseQuery(s3BucketObjectsQueryOptions(bucket, prefix))
   const uploadMutation = useUploadObject()
 
-  const objects = data.Contents || []
-  const commonPrefixes = data.CommonPrefixes || []
+  const objects = data.Contents ?? []
+  const commonPrefixes = data.CommonPrefixes ?? []
 
   // Build breadcrumb navigation
   const pathParts = prefix.split("/").filter(Boolean)

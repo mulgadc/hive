@@ -33,8 +33,8 @@ function BucketObjects() {
   const { data } = useSuspenseQuery(s3BucketObjectsQueryOptions(bucketName))
   const uploadMutation = useUploadObject()
 
-  const objects = data.Contents || []
-  const commonPrefixes = data.CommonPrefixes || []
+  const objects = data.Contents ?? []
+  const commonPrefixes = data.CommonPrefixes ?? []
 
   return (
     <>

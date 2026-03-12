@@ -26,7 +26,7 @@ export function useCreateUser() {
     mutationFn: (params: CreateUserFormData) => {
       const command = new CreateUserCommand({
         UserName: params.userName,
-        Path: params.path || undefined,
+        Path: params.path ?? undefined,
       })
       return getIamClient().send(command)
     },
@@ -101,7 +101,7 @@ export function useCreatePolicy() {
     mutationFn: (params: CreatePolicyFormData) => {
       const command = new CreatePolicyCommand({
         PolicyName: params.policyName,
-        Description: params.description || undefined,
+        Description: params.description ?? undefined,
         PolicyDocument: params.policyDocument,
       })
       return getIamClient().send(command)
