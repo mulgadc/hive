@@ -26,7 +26,7 @@ jobs:
       TOFU_LOG: /tmp/e2e-tofu-single-${{ github.run_id }}.log
     steps:
       - name: Clean workspace
-        run: rm -rf mulga
+        run: rm -rf "$GITHUB_WORKSPACE"/*
 
       - uses: actions/create-github-app-token@v2
         id: app-token
@@ -82,7 +82,7 @@ jobs:
       TOFU_LOG: /tmp/e2e-tofu-pseudo-${{ github.run_id }}.log
     steps:
       - name: Clean workspace
-        run: rm -rf mulga
+        run: rm -rf "$GITHUB_WORKSPACE"/*
 
       - uses: actions/create-github-app-token@v2
         id: app-token
@@ -140,7 +140,7 @@ jobs:
       TOFU_LOG: /tmp/e2e-tofu-multi-${{ github.run_id }}.log
     steps:
       - name: Clean workspace
-        run: rm -rf mulga
+        run: rm -rf "$GITHUB_WORKSPACE"/*
 
       - uses: actions/create-github-app-token@v2
         id: app-token
