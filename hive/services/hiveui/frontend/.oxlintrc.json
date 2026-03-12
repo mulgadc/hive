@@ -25,7 +25,16 @@
     "sort-vars": "off",
     "prefer-destructuring": "off",
     "unicorn/no-useless-undefined": "off",
-    "max-statements": "off"
+    "max-statements": "off",
+    "react-perf/jsx-no-new-function-as-prop": "off",
+    "import/no-relative-parent-imports": "off",
+    "unicorn/filename-case": [
+      "error",
+      { "cases": { "kebabCase": true, "camelCase": true } }
+    ],
+    "complexity": "off",
+    "react/no-unescaped-entities": "off",
+    "no-shadow": "off"
   },
   // "options": {
   //   "typeAware": true
@@ -37,7 +46,8 @@
         "**/__tests__/**/*.{ts,tsx,js,jsx}"
       ],
       "rules": {
-        "typescript/consistent-type-imports": "off"
+        "typescript/consistent-type-imports": "off",
+        "import/first": "off"
       }
     }
   ],
