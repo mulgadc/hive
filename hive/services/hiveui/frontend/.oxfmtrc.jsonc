@@ -12,5 +12,5 @@
     "stylesheet": "./src/styles.css",
     "functions": ["clsx", "cn", "cva"],
   },
-  "ignorePatterns": ["dist/**"]
+  "ignorePatterns": ["dist/**", "src/routeTree.gen.ts"],
 }

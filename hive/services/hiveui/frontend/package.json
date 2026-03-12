@@ -7,7 +7,7 @@
     "build": "vite build && tsgo",
     "preview": "vite preview",
     "check": "oxlint && oxfmt --check",
-    "fix": "oxlint --fix && oxfmt",
+    "fix": "oxlint --fix; oxfmt",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest"
