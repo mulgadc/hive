@@ -100,7 +100,7 @@ echo "Setting up simulated network..."
 add_simulated_ips
 
 # Create ramdisk mount point
-mkdir -p /mnt/ramdisk
+sudo mkdir -p /mnt/ramdisk
 
 echo ""
 

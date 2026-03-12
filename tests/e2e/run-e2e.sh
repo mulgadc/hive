@@ -83,7 +83,7 @@ sudo update-ca-certificates
 # Start all services
 # Ensure logs directory exists for start-dev.sh
 mkdir -p ~/hive/logs
-mkdir -p /mnt/ramdisk
+sudo mkdir -p /mnt/ramdisk
 ./scripts/start-dev.sh
 
 # Wait for health checks on https://localhost:9999 (AWS Gateway)
