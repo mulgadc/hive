@@ -46,7 +46,7 @@ jobs:
         run: |
           export TF_VAR_git_branch="${GIT_BRANCH}"
           tofu init -input=false >> "$TOFU_LOG" 2>&1
-          tofu workspace select env3 >> "$TOFU_LOG" 2>&1
+          tofu workspace select -or-create env3 >> "$TOFU_LOG" 2>&1
           tofu destroy -var-file=envs/env3.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
           tofu apply -var-file=envs/env3.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
@@ -68,7 +68,7 @@ jobs:
         if: always()
         working-directory: mulga/scripts/tofu-cluster
         run: |
-          tofu workspace select env3 >> "$TOFU_LOG" 2>&1
+          tofu workspace select -or-create env3 >> "$TOFU_LOG" 2>&1
           tofu destroy -var-file=envs/env3.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
   e2e_pseudo_multi:
@@ -99,7 +99,7 @@ jobs:
         run: |
           export TF_VAR_git_branch="${GIT_BRANCH}"
           tofu init -input=false >> "$TOFU_LOG" 2>&1
-          tofu workspace select env4 >> "$TOFU_LOG" 2>&1
+          tofu workspace select -or-create env4 >> "$TOFU_LOG" 2>&1
           tofu destroy -var-file=envs/env4.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
           tofu apply -var-file=envs/env4.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
@@ -121,7 +121,7 @@ jobs:
         if: always()
         working-directory: mulga/scripts/tofu-cluster
         run: |
-          tofu workspace select env4 >> "$TOFU_LOG" 2>&1
+          tofu workspace select -or-create env4 >> "$TOFU_LOG" 2>&1
           tofu destroy -var-file=envs/env4.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
   # TODO: Uncomment when hive/tests/e2e/run-real-multinode-tests.sh exists
@@ -154,7 +154,7 @@ jobs:
   #       run: |
   #         export TF_VAR_git_branch="${GIT_BRANCH}"
   #         tofu init -input=false >> "$TOFU_LOG" 2>&1
-  #         tofu workspace select env2 >> "$TOFU_LOG" 2>&1
+  #         tofu workspace select -or-create env2 >> "$TOFU_LOG" 2>&1
   #         tofu destroy -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
   #         tofu apply -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
   #
@@ -185,5 +185,5 @@ jobs:
   #       if: always()
   #       working-directory: mulga/scripts/tofu-cluster
   #       run: |
-  #         tofu workspace select env2 >> "$TOFU_LOG" 2>&1
+  #         tofu workspace select -or-create env2 >> "$TOFU_LOG" 2>&1
   #         tofu destroy -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
