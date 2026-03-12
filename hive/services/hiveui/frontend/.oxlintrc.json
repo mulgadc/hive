@@ -20,6 +20,7 @@
     "@tanstack/router/create-route-property-order": "warn",
     "@tanstack/router/route-param-names": "error",
     "vitest/prefer-describe-function-title": "off",
+    "jest/valid-title": "off",
     "func-style": "off",
     "no-use-before-define": "off",
     "sort-keys": "off",
@@ -28,6 +29,19 @@
   "options": {
     "typeAware": true
   },
+  "overrides": [
+    {
+      "files": [
+        "**/*.{test,spec}.{ts,tsx,js,jsx}",
+        "**/__tests__/**/*.{ts,tsx,js,jsx}"
+      ],
+      "plugins": ["jest", "vitest"],
+      "rules": {
+        "vitest/prefer-describe-function-title": "off",
+        "jest/valid-title": "off"
+      }
+    }
+  ],
   "ignorePatterns": [
     "dist",
     "src/routeTree.gen.ts"

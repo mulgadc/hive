@@ -8,7 +8,6 @@
     "preview": "vite preview",
     "check": "oxlint && oxfmt --check",
     "fix": "oxlint --fix && oxfmt",
-    "format": "oxfmt",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest"
@@ -53,6 +52,7 @@
     "jsdom": "^28.1.0",
     "oxfmt": "^0.36.0",
     "oxlint": "^1.51.0",
+    "oxlint-tsgolint": "^0.16.0",
     "typescript": "^5.9.3",
     "ultracite": "7.2.5",
     "vite": "^7.3.1",

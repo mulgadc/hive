@@ -6,13 +6,10 @@
   "semi": false,
   "sortPackageJson": false,
   "sortImports": {
-    "ignoreCase": true,
     "newlinesBetween": true,
-    "order": "asc"
   },
   "sortTailwindcss": {
     "stylesheet": "./src/styles.css",
-    "functions": ["clsx", "cn"],
-    "preserveWhitespace": true
+    "functions": ["clsx", "cn", "cva"],
   }
 }
