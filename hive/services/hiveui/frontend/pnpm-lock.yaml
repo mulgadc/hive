@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  ultracite:
+    hash: 24dbf0489667f3ea4bc9bd680e715519eee685e6390407923ab1fc2b45eba21c
+    path: patches/ultracite.patch
+
 importers:
 
   .:
@@ -128,7 +133,7 @@ importers:
         version: 5.9.3
       ultracite:
         specifier: 7.2.5
-        version: 7.2.5(oxlint@1.51.0(oxlint-tsgolint@0.16.0))
+        version: 7.2.5(patch_hash=24dbf0489667f3ea4bc9bd680e715519eee685e6390407923ab1fc2b45eba21c)(oxlint@1.51.0(oxlint-tsgolint@0.16.0))
       vite:
         specifier: ^7.3.1
         version: 7.3.1(@types/node@24.12.0)(jiti@2.6.1)(lightningcss@1.31.1)(tsx@4.21.0)
@@ -5751,7 +5756,7 @@ snapshots:
 
   typescript@5.9.3: {}
 
-  ultracite@7.2.5(oxlint@1.51.0(oxlint-tsgolint@0.16.0)):
+  ultracite@7.2.5(patch_hash=24dbf0489667f3ea4bc9bd680e715519eee685e6390407923ab1fc2b45eba21c)(oxlint@1.51.0(oxlint-tsgolint@0.16.0)):
     dependencies:
       '@clack/prompts': 1.1.0
       commander: 14.0.3
