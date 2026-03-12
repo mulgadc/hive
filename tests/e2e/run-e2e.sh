@@ -1,7 +1,11 @@
 #!/bin/bash
 set -e
 
-# Source helper functions for SSH testing
+# Ensure we are in the project root
+cd "$(dirname "$0")/../.."
+
+# Source helper functions
+source ./tests/e2e/lib/multinode-helpers.sh
 
 # Ensure services are stopped on exit and print logs on failure
 cleanup() {
@@ -33,13 +37,43 @@ cleanup() {
             tail -200 ~/hive/logs/awsgw.log 2>/dev/null
         fi
     fi
-    ./scripts/stop-dev.sh
+    # Only stop services if we started them (not when bootstrapped)
+    if [ "$BOOTSTRAPPED" != "true" ]; then
+        ./scripts/stop-dev.sh
+    fi
     exit $EXIT_CODE
 }
 trap cleanup EXIT
 
 # Use Hive profile (hive admin init sets endpoint_url, ca_bundle, region in ~/.aws/config)
 export AWS_PROFILE=hive
+
+# Detect bootstrapped environment from hive.toml config
+BOOTSTRAPPED="false"
+GATEWAY_HOST="localhost"
+PREDASTORE_HOST="localhost"
+if [ -f ~/hive/config/hive.toml ]; then
+    # Resolve gateway host from AWS profile endpoint_url (set by hive admin init)
+    ENDPOINT_URL=$(aws configure get endpoint_url 2>/dev/null || true)
+    if [ -n "$ENDPOINT_URL" ]; then
+        DETECTED_GW_HOST=$(echo "$ENDPOINT_URL" | sed 's|https\?://||;s|:.*||')
+        if [ -n "$DETECTED_GW_HOST" ]; then
+            GATEWAY_HOST="$DETECTED_GW_HOST"
+        fi
+    fi
+    # Resolve predastore host from hive.toml
+    DETECTED_PS_HOST=$(awk -F'"' '/\[nodes\..*\.predastore\]/{found=1} found && /^host/{print $2; exit}' ~/hive/config/hive.toml)
+    if [ -n "$DETECTED_PS_HOST" ]; then
+        PREDASTORE_HOST="${DETECTED_PS_HOST%%:*}"
+    fi
+    # Check if gateway is actually responding
+    if curl -sk "https://${GATEWAY_HOST}:9999" > /dev/null 2>&1; then
+        BOOTSTRAPPED="true"
+        echo "Detected bootstrapped environment — skipping cluster setup"
+        echo "  Gateway host: $GATEWAY_HOST"
+        echo "  Predastore host: $PREDASTORE_HOST"
+    fi
+fi
 
 # Helper: set up an AWS CLI profile with credentials + endpoint/CA config from the hive profile
 setup_test_profile() {
@@ -50,9 +84,6 @@ setup_test_profile() {
     aws configure set endpoint_url "$(aws configure get endpoint_url)" --profile "$profile"
     aws configure set ca_bundle "$(aws configure get ca_bundle)" --profile "$profile"
 }
-
-# Ensure we are in the project root
-cd "$(dirname "$0")/../.."
 
 # Phase 1: Environment Setup
 echo "Phase 1: Environment Setup"
@@ -72,26 +103,27 @@ else
     exit 1
 fi
 
+if [ "$BOOTSTRAPPED" != "true" ]; then
+    ./bin/hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
 
-./bin/hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
+    # Trust the Hive CA certificate for AWS CLI SSL verification
+    echo "Adding Hive CA certificate to system trust store..."
+    sudo cp ~/hive/config/ca.pem /usr/local/share/ca-certificates/hive-ca.crt
+    sudo update-ca-certificates
 
-# Trust the Hive CA certificate for AWS CLI SSL verification
-echo "Adding Hive CA certificate to system trust store..."
-sudo cp ~/hive/config/ca.pem /usr/local/share/ca-certificates/hive-ca.crt
-sudo update-ca-certificates
+    # Start all services
+    # Ensure logs directory exists for start-dev.sh
+    mkdir -p ~/hive/logs
+    sudo mkdir -p /mnt/ramdisk
+    ./scripts/start-dev.sh
+fi
 
-# Start all services
-# Ensure logs directory exists for start-dev.sh
-mkdir -p ~/hive/logs
-sudo mkdir -p /mnt/ramdisk
-./scripts/start-dev.sh
-
-# Wait for health checks on https://localhost:9999 (AWS Gateway)
+# Wait for health checks on AWS Gateway
 echo "Waiting for AWS Gateway..."
 MAX_RETRIES=15
 COUNT=0
 
-until curl -s https://localhost:9999 > /dev/null || [ $COUNT -eq $MAX_RETRIES ]; do
+until curl -sk "https://${GATEWAY_HOST}:9999" > /dev/null || [ $COUNT -eq $MAX_RETRIES ]; do
     echo "Waiting for gateway... ($COUNT/$MAX_RETRIES)"
     sleep 2
     COUNT=$((COUNT + 1))
@@ -103,7 +135,7 @@ if [ $COUNT -eq $MAX_RETRIES ]; then
 fi
 
 # Wait for daemon NATS subscriptions to be active
-wait_for_daemon_ready "https://localhost:9999"
+wait_for_daemon_ready "https://${GATEWAY_HOST}:9999"
 
 # No need for AWS_EC2/AWS_IAM vars — endpoint_url and ca_bundle are in the profile config
 
@@ -773,7 +805,7 @@ echo "Phase 5d: Verify Snapshot-Backed Instance Launch"
 echo "All run-instances calls go through cloneAMIToVolume() -> OpenFromSnapshot(),"
 echo "so the Phase 5 instance is already snapshot-backed. Verify its volume config."
 
-AWS_S3="aws --endpoint-url https://localhost:8443 s3"
+AWS_S3="aws --endpoint-url https://${PREDASTORE_HOST}:8443 s3"
 
 # Verify the AMI snapshot exists in Predastore
 echo "Checking AMI snapshot in Predastore..."
@@ -1218,7 +1250,7 @@ expect_error "InvalidSnapshot.NotFound" aws ec2 delete-snapshot \
 # 8f: Call an unsupported Action (use raw curl to send an invalid Action)
 echo "8f: Unsupported Action..."
 set +e
-UNSUPPORTED_OUTPUT=$(curl -s -k -X POST https://localhost:9999/ \
+UNSUPPORTED_OUTPUT=$(curl -s -k -X POST "https://${GATEWAY_HOST}:9999/" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "Action=DescribeFakeThings&Version=2016-11-15" 2>&1)
 set -e
