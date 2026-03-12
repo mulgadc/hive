@@ -180,6 +180,11 @@ wait_for_daemon_ready "https://${NODE1_IP}:${AWSGW_PORT}"
 AWS_EC2="aws --endpoint-url https://${NODE1_IP}:${AWSGW_PORT} ec2"
 AWS_IAM="aws --endpoint-url https://${NODE1_IP}:${AWSGW_PORT} iam"
 
+# Discover the cluster's availability zone and region dynamically
+HIVE_AZ=$($AWS_EC2 describe-availability-zones --query 'AvailabilityZones[0].ZoneName' --output text)
+HIVE_REGION=$($AWS_EC2 describe-availability-zones --query 'AvailabilityZones[0].RegionName' --output text)
+echo "Discovered AZ: $HIVE_AZ, Region: $HIVE_REGION"
+
 # Phase 3b: Cluster Stats CLI (Multi-Node)
 echo ""
 echo "Phase 3b: Cluster Stats CLI (Multi-Node)"
@@ -468,8 +473,8 @@ echo "----------------------------------------"
 echo "Testing volume create -> resize -> attach -> detach -> delete..."
 
 # Create a test volume
-echo "  Creating 10GB volume in ap-southeast-2a..."
-CREATE_OUTPUT=$($AWS_EC2 create-volume --size 10 --availability-zone ap-southeast-2a)
+echo "  Creating 10GB volume in ${HIVE_AZ}..."
+CREATE_OUTPUT=$($AWS_EC2 create-volume --size 10 --availability-zone "$HIVE_AZ")
 TEST_VOLUME_ID=$(echo "$CREATE_OUTPUT" | jq -r '.VolumeId')
 
 if [ -z "$TEST_VOLUME_ID" ] || [ "$TEST_VOLUME_ID" == "null" ]; then
@@ -674,7 +679,7 @@ echo "  Describe verified (VolumeId=$DESC_VOL_ID, Size=$DESC_SIZE, Description=$
 
 # Copy the snapshot
 echo "  Copying snapshot $SNAPSHOT_ID..."
-COPY_OUTPUT=$($AWS_EC2 copy-snapshot --source-snapshot-id "$SNAPSHOT_ID" --source-region ap-southeast-2 --description "multinode-e2e-copy")
+COPY_OUTPUT=$($AWS_EC2 copy-snapshot --source-snapshot-id "$SNAPSHOT_ID" --source-region "$HIVE_REGION" --description "multinode-e2e-copy")
 COPY_SNAPSHOT_ID=$(echo "$COPY_OUTPUT" | jq -r '.SnapshotId')
 
 if [ -z "$COPY_SNAPSHOT_ID" ] || [ "$COPY_SNAPSHOT_ID" == "null" ]; then
@@ -1505,11 +1510,11 @@ echo ""
 echo "Step 7b: Volume Scoping"
 echo "----------------------------------------"
 
-ALPHA_VOL=$($AWS_EC2 create-volume --availability-zone ap-southeast-2a --size 10 \
+ALPHA_VOL=$($AWS_EC2 create-volume --availability-zone "$HIVE_AZ" --size 10 \
     --volume-type gp3 --profile hive-team-alpha | jq -r '.VolumeId')
 echo "  Alpha volume: $ALPHA_VOL"
 
-BETA_VOL=$($AWS_EC2 create-volume --availability-zone ap-southeast-2a --size 10 \
+BETA_VOL=$($AWS_EC2 create-volume --availability-zone "$HIVE_AZ" --size 10 \
     --volume-type gp3 --profile hive-team-beta | jq -r '.VolumeId')
 echo "  Beta volume: $BETA_VOL"
 

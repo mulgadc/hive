@@ -140,6 +140,11 @@ fi
 # Wait for daemon NATS subscriptions to be active
 wait_for_daemon_ready "https://${GATEWAY_HOST}:9999"
 
+# Discover the cluster's availability zone and region dynamically
+HIVE_AZ=$(aws ec2 describe-availability-zones --query 'AvailabilityZones[0].ZoneName' --output text)
+HIVE_REGION=$(aws ec2 describe-availability-zones --query 'AvailabilityZones[0].RegionName' --output text)
+echo "Discovered AZ: $HIVE_AZ, Region: $HIVE_REGION"
+
 # No need for AWS_EC2/AWS_IAM vars — endpoint_url and ca_bundle are in the profile config
 
 # Phase 1b: Cluster Stats CLI
@@ -514,8 +519,8 @@ echo "Phase 5b: Volume Lifecycle (Attach/Detach)"
 echo "Testing volume create -> resize -> attach -> detach -> delete..."
 
 # Create a test volume
-echo "Creating 10GB volume in ap-southeast-2a..."
-CREATE_OUTPUT=$(aws ec2 create-volume --size 10 --availability-zone ap-southeast-2a)
+echo "Creating 10GB volume in ${HIVE_AZ}..."
+CREATE_OUTPUT=$(aws ec2 create-volume --size 10 --availability-zone "$HIVE_AZ")
 TEST_VOLUME_ID=$(echo "$CREATE_OUTPUT" | jq -r '.VolumeId')
 
 if [ -z "$TEST_VOLUME_ID" ] || [ "$TEST_VOLUME_ID" == "null" ]; then
@@ -731,7 +736,7 @@ echo "Describe snapshot verified (VolumeId=$DESC_VOL_ID, Size=$DESC_SIZE, Descri
 
 # Copy the snapshot
 echo "Copying snapshot $SNAPSHOT_ID..."
-COPY_OUTPUT=$(aws ec2 copy-snapshot --source-snapshot-id "$SNAPSHOT_ID" --source-region ap-southeast-2 --description "e2e-copy")
+COPY_OUTPUT=$(aws ec2 copy-snapshot --source-snapshot-id "$SNAPSHOT_ID" --source-region "$HIVE_REGION" --description "e2e-copy")
 COPY_SNAPSHOT_ID=$(echo "$COPY_OUTPUT" | jq -r '.SnapshotId')
 
 if [ -z "$COPY_SNAPSHOT_ID" ] || [ "$COPY_SNAPSHOT_ID" == "null" ]; then
@@ -1010,7 +1015,7 @@ echo "Reboot-stopped correctly rejected"
 # Phase 7a: Attach volume to stopped instance (should fail)
 echo "Phase 7a: Attach Volume to Stopped Instance (Error Path)"
 echo "Creating a volume to test attach-to-stopped..."
-STOPPED_VOL_OUTPUT=$(aws ec2 create-volume --size 10 --availability-zone ap-southeast-2a)
+STOPPED_VOL_OUTPUT=$(aws ec2 create-volume --size 10 --availability-zone "$HIVE_AZ")
 STOPPED_VOL_ID=$(echo "$STOPPED_VOL_OUTPUT" | jq -r '.VolumeId')
 echo "Created volume: $STOPPED_VOL_ID"
 
