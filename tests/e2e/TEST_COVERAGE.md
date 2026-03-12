@@ -298,12 +298,12 @@ Tests that EC2 resources are properly isolated between tenant accounts (Alpha, B
 
 ---
 
-## Multi-Node (`run-multinode-e2e.sh`)
+## Pseudo Multi-Node (`run-pseudo-multinode-e2e.sh`)
 
 ### Phase 1: Environment Setup
 - KVM support check
 - Simulated network IPs (10.11.12.{1,2,3} on loopback)
-- Create ramdisk mount
+- Simulated network IPs (no ramdisk — start-dev.sh uses disk-backed WAL/VB in CI)
 
 ### Phase 2: Cluster Initialization
 - `hive admin init` (leader node1)
@@ -547,6 +547,91 @@ Tests that EC2 resources are properly isolated between the Alpha/Beta accounts. 
 ### Cleanup
 - Coordinated cluster shutdown (with fallback to per-node PID stops)
 - Remove simulated IPs
+
+---
+
+## Real Multi-Node (`run-multinode-e2e.sh`)
+
+Runs on a real 3-node libvirt cluster provisioned by OpenTofu (`scripts/tofu-cluster/`). Each node is a separate VM with its own OVN, NATS, Predastore, and Hive daemon. Bootstrap (`bootstrap.sh`) handles all provisioning before the test script runs.
+
+### Bootstrap (pre-test)
+
+1. OpenTofu provisions 3 libvirt VMs (bottlebrush, ironbark, casuarina) with cloud-init
+2. Wait for all nodes to be SSH-reachable
+3. Copy SSH key to node1 for peer access
+4. `git fetch` + checkout test branch on all nodes (all 3 repos)
+5. `make build` on all nodes (parallel)
+6. `setup-ovn.sh` — primary gets `--management`, secondaries connect to primary's OVN central
+7. `hive admin init` on primary, `hive admin join` on secondaries (formation server handshake)
+8. `start-dev.sh` on all nodes
+9. Wait for `/health` (awsgw=ok) on all nodes
+10. Install Hive CA certificate on all nodes
+11. `import-key-pair` (hive-key) + `hive admin images import` (Ubuntu 24.04)
+12. `create-vpc` (10.200.0.0/16) + `create-subnet` (10.200.1.0/24)
+
+### Phase 1: Pre-flight Validation
+- KVM support check (`/dev/kvm` writable)
+- SSH connectivity to all peer nodes
+
+### Phase 2: Cluster Health
+- NATS cluster: verify 2 unique route peers (3-node quorum)
+- Predastore reachable on all 3 nodes
+- AWS gateway reachable on all 3 nodes
+- Daemon readiness (`describe-instance-types` returns results)
+- `hive get nodes` — verify all 3 nodes show Ready
+- `hive get vms` — verify empty (no instances yet)
+
+### Phase 3: Instance Lifecycle + Distribution
+- Discover nano instance type and AMI (from bootstrap import)
+- `run-instances` x3 with staggered launches
+- Poll all instances to running state
+- Check instance distribution across physical nodes (QEMU process check)
+- Verify at least 2 different hosting nodes (non-deterministic, non-fatal if all on 1)
+- `hive get vms` — verify all 3 instances visible
+
+### Phase 4: SSH into Guest VMs
+- For each instance across all nodes:
+  - Find hosting node via QEMU process scan
+  - Extract SSH hostfwd port from QEMU command line on remote node
+  - Wait for SSH readiness (up to 60s)
+  - Verify SSH connectivity (`id` returns ec2-user)
+  - Verify block device (`lsblk`)
+
+### Phase 5: Volume Lifecycle
+- `create-volume` (10GB)
+- `attach-volume` (to first instance, /dev/sdf)
+- Poll for in-use + attached state
+- `detach-volume` (poll for available)
+- `delete-volume` (verify gone)
+
+### Phase 6: Cross-Node Gateway Access
+- `describe-instances` via node1 gateway (baseline count)
+- `describe-instances` via node2 and node3 gateways
+- Verify all gateways return the same instance count (fan-out aggregation)
+
+### Phase 7: Cross-Node Operations
+- Find which node hosts instance 0
+- Pick a different node's gateway for stop
+- `stop-instances` via remote gateway (poll -> stopped)
+- Pick a third node's gateway for start
+- `start-instances` via another remote gateway (poll -> running)
+
+### Phase 8: Node Failure
+- `stop-dev.sh` on node2 (simulate node failure)
+- Verify node1 still serves requests (`describe-instance-types`)
+- Verify node3 still serves requests
+- Check NATS degraded state (1 peer instead of 2)
+- `describe-instances` still works from surviving nodes
+
+### Phase 9: Node Recovery
+- `start-dev.sh` on node2 (restart failed node)
+- Wait for NATS cluster to reform (2 peers again)
+- Verify node2 gateway is back
+- `hive get nodes` — verify all 3 nodes Ready again
+- Verify node2 serves requests after recovery
+
+### Phase 10: Cleanup
+- `terminate-instances` (all 3 instances, poll -> terminated)
 
 ---
 

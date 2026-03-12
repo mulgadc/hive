@@ -5,8 +5,10 @@ import { useCopyToClipboard } from "./use-copy-to-clipboard"
 
 beforeEach(() => {
   vi.useFakeTimers()
-  Object.assign(navigator, {
-    clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
+  Object.defineProperty(navigator, "clipboard", {
+    value: { writeText: vi.fn().mockResolvedValue(undefined) },
+    writable: true,
+    configurable: true,
   })
 })
 
