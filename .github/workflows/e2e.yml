@@ -22,7 +22,7 @@ jobs:
   e2e_single:
     name: Single-Node E2E
     runs-on: [self-hosted, ci-single]
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Clean workspace
         run: rm -rf mulga
@@ -115,7 +115,7 @@ jobs:
           SSH_KEY=$(echo "$INVENTORY" | jq -r '.ssh_key_path')
           SSH_KEY="${SSH_KEY/#\~/$HOME}"
           ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${WAN_IP} \
-            'cd ~/Development/mulga/hive && ./tests/e2e/run-multinode-e2e.sh'
+            'cd ~/Development/mulga/hive && ./tests/e2e/run-pseudo-multinode-e2e.sh'
 
       - name: Teardown
         if: always()
@@ -124,66 +124,63 @@ jobs:
           tofu workspace select -or-create env4 >> "$TOFU_LOG" 2>&1
           tofu destroy -var-file=envs/env4.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
-  # TODO: Uncomment when hive/tests/e2e/run-real-multinode-tests.sh exists
-  # e2e_real_multi:
-  #   name: Real Multi-Node E2E
-  #   runs-on: [self-hosted, ci-multi]
-  #   timeout-minutes: 30
-  #   continue-on-error: true  # Advisory until stable
-  #   steps:
-  #     - name: Clean workspace
-  #       run: rm -rf mulga
-  #
-  #     - uses: actions/create-github-app-token@v2
-  #       id: app-token
-  #       with:
-  #         app-id: ${{ secrets.MULGA_APP_ID }}
-  #         private-key: ${{ secrets.MULGA_APP_KEY }}
-  #         repositories: mulga
-  #
-  #     - uses: actions/checkout@v6
-  #       with:
-  #         repository: mulgadc/mulga
-  #         token: ${{ steps.app-token.outputs.token }}
-  #         sparse-checkout: scripts/tofu-cluster
-  #         fetch-depth: 1
-  #         path: mulga
-  #
-  #     - name: Provision VMs
-  #       working-directory: mulga/scripts/tofu-cluster
-  #       run: |
-  #         export TF_VAR_git_branch="${GIT_BRANCH}"
-  #         tofu init -input=false >> "$TOFU_LOG" 2>&1
-  #         tofu workspace select -or-create env2 >> "$TOFU_LOG" 2>&1
-  #         tofu destroy -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
-  #         tofu apply -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
-  #
-  #     - name: Bootstrap Cluster
-  #       working-directory: mulga/scripts/tofu-cluster
-  #       run: ./bootstrap.sh env2 >> "$TOFU_LOG" 2>&1
-  #
-  #     - name: Run E2E Tests
-  #       working-directory: mulga/scripts/tofu-cluster
-  #       run: |
-  #         INVENTORY=$(tofu output -json inventory)
-  #         NODE1_IP=$(echo "$INVENTORY" | jq -r '.nodes[0].wan_ip')
-  #         SSH_KEY=$(echo "$INVENTORY" | jq -r '.ssh_key_path')
-  #         SSH_KEY="${SSH_KEY/#\~/$HOME}"
-  #
-  #         # Build node IP list
-  #         NODE_IPS=""
-  #         NODE_COUNT=$(echo "$INVENTORY" | jq '.nodes | length')
-  #         for i in $(seq 0 $((NODE_COUNT - 1))); do
-  #           NODE_IPS="${NODE_IPS} $(echo "$INVENTORY" | jq -r ".nodes[$i].wan_ip")"
-  #         done
-  #
-  #         # Run real multi-node tests from node1
-  #         ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${NODE1_IP} \
-  #           "cd ~/Development/mulga/hive && ./tests/e2e/run-real-multinode-tests.sh ${NODE_IPS}"
-  #
-  #     - name: Teardown
-  #       if: always()
-  #       working-directory: mulga/scripts/tofu-cluster
-  #       run: |
-  #         tofu workspace select -or-create env2 >> "$TOFU_LOG" 2>&1
-  #         tofu destroy -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+  e2e_real_multi:
+    name: Real Multi-Node E2E
+    runs-on: [self-hosted, ci-multi]
+    timeout-minutes: 25
+    continue-on-error: true # Advisory until stable
+    steps:
+      - name: Clean workspace
+        run: rm -rf mulga
+
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          repositories: mulga
+
+      - uses: actions/checkout@v6
+        with:
+          repository: mulgadc/mulga
+          token: ${{ steps.app-token.outputs.token }}
+          sparse-checkout: scripts/tofu-cluster
+          path: mulga
+
+      - name: Provision VMs
+        working-directory: mulga/scripts/tofu-cluster
+        run: |
+          export TF_VAR_git_branch="${GIT_BRANCH}"
+          tofu init -input=false >> "$TOFU_LOG" 2>&1
+          tofu workspace select -or-create env2 >> "$TOFU_LOG" 2>&1
+          tofu destroy -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
+          tofu apply -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+
+      - name: Bootstrap Cluster
+        working-directory: mulga/scripts/tofu-cluster
+        run: ./bootstrap.sh env2 >> "$TOFU_LOG" 2>&1
+
+      - name: Run E2E Tests
+        working-directory: mulga/scripts/tofu-cluster
+        run: |
+          INVENTORY=$(tofu output -json inventory)
+          NODE1_IP=$(echo "$INVENTORY" | jq -r '.nodes[0].wan_ip')
+          SSH_KEY=$(echo "$INVENTORY" | jq -r '.ssh_key_path')
+          SSH_KEY="${SSH_KEY/#\~/$HOME}"
+
+          # Build node IP list
+          NODE_IPS=""
+          NODE_COUNT=$(echo "$INVENTORY" | jq '.nodes | length')
+          for i in $(seq 0 $((NODE_COUNT - 1))); do
+            NODE_IPS="${NODE_IPS} $(echo "$INVENTORY" | jq -r ".nodes[$i].wan_ip")"
+          done
+
+          ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${NODE1_IP} \
+            "cd ~/Development/mulga/hive && ./tests/e2e/run-multinode-e2e.sh ${NODE_IPS}"
+
+      - name: Teardown
+        if: always()
+        working-directory: mulga/scripts/tofu-cluster
+        run: |
+          tofu workspace select -or-create env2 >> "$TOFU_LOG" 2>&1
+          tofu destroy -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1

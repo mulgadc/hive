@@ -298,7 +298,7 @@ Tests that EC2 resources are properly isolated between tenant accounts (Alpha, B
 
 ---
 
-## Multi-Node (`run-multinode-e2e.sh`)
+## Pseudo Multi-Node (`run-pseudo-multinode-e2e.sh`)
 
 ### Phase 1: Environment Setup
 - KVM support check

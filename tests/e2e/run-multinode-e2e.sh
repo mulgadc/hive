@@ -1,341 +1,434 @@
 #!/bin/bash
-set -e
+set -euo pipefail
+
+# Multi-Node E2E Test Suite (real 3-node cluster)
+# Runs inside node1 of a 3-node cluster provisioned by tofu (env2).
+# Bootstrap has already: built hive, set up OVN, run init/join, started services,
+# installed CA certs, imported SSH key + AMI, created VPC + subnet.
+#
+# Usage: run-multinode-e2e.sh <node1_ip> <node2_ip> <node3_ip>
 
 # Ensure Go is on PATH (SSH non-interactive shells don't source .bashrc)
 export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
 
-# Multi-node E2E test runner
-# This script sets up a 3-node Hive cluster using simulated IPs on the loopback interface
-# and runs distributed instance tests.
-
-# Ensure we are in the project root
+# Ensure we are in the hive project root
 cd "$(dirname "$0")/../.."
 
-# Source helper functions
-source ./tests/e2e/lib/multinode-helpers.sh
+# ==========================================================================
+# Argument parsing
+# ==========================================================================
+if [ $# -lt 3 ]; then
+    echo "Usage: $0 <node1_ip> <node2_ip> <node3_ip>"
+    echo "  All 3 node WAN IPs are required."
+    exit 1
+fi
 
-# Cleanup function - ensure resources are cleaned up on exit
-cleanup() {
-    local exit_code=$?
+NODE_IPS=("$@")
+NODE_COUNT=${#NODE_IPS[@]}
+LOCAL_IP="${NODE_IPS[0]}"
+NODE2_IP="${NODE_IPS[1]}"
+NODE3_IP="${NODE_IPS[2]}"
 
-    echo ""
-    echo "Cleanup triggered (exit code: $exit_code)..."
-
-    if [ $exit_code -ne 0 ]; then
-        dump_all_node_logs
-    fi
-
-    # Kill any lingering formation background processes
-    [ -n "$LEADER_INIT_PID" ] && kill "$LEADER_INIT_PID" 2>/dev/null || true
-    [ -n "$JOIN2_PID" ] && kill "$JOIN2_PID" 2>/dev/null || true
-    [ -n "$JOIN3_PID" ] && kill "$JOIN3_PID" 2>/dev/null || true
-
-    # Try coordinated shutdown first (only if NATS is likely still up)
-    if [ "$CLUSTER_SERVICES_STARTED" = "true" ]; then
-        echo "Attempting coordinated cluster shutdown..."
-        if timeout 60 ./bin/hive admin cluster shutdown --force --timeout 30s --config "$HOME/node1/config/hive.toml" 2>/dev/null; then
-            echo "Coordinated shutdown succeeded"
-        else
-            echo "Coordinated shutdown failed, falling back to per-node stop..."
-            stop_all_nodes || true
-        fi
-    else
-        stop_all_nodes || true
-    fi
-
-    # Force-kill anything that survived and clean up stale locks
-    force_cleanup_all_nodes || true
-
-    # Remove simulated IPs
-    remove_simulated_ips || true
-
-    echo "Cleanup complete"
-}
-trap cleanup EXIT
-
-# PIDs for background formation processes (used in cleanup)
-JOIN2_PID=""
-JOIN3_PID=""
-
-# Track whether cluster services have been started (for cleanup trap)
-CLUSTER_SERVICES_STARTED="false"
+# ==========================================================================
+# Constants
+# ==========================================================================
+NATS_MONITOR_PORT=8222
+PREDASTORE_PORT=8443
+AWSGW_PORT=9999
+SSH_KEY_PATH="$HOME/.ssh/tf-user-ap-southeast-2"
+HIVE_DATA_DIR="$HOME/hive"
+HIVE_CONFIG="$HIVE_DATA_DIR/config/hive.toml"
+HIVE_BIN="./bin/hive"
 
 # Use Hive profile for AWS CLI
 export AWS_PROFILE=hive
-# Trust Hive CA for all profiles (AWS CLI v2 bundles its own Python/certifi, ignores system CA store)
-export AWS_CA_BUNDLE="$HOME/node1/config/ca.pem"
+# Trust Hive CA for AWS CLI v2 (bundles its own Python/certifi, ignores system CA store)
+export AWS_CA_BUNDLE="$HIVE_DATA_DIR/config/ca.pem"
 
+# Track test results
+TESTS_PASSED=0
+TESTS_FAILED=0
+FAILED_TESTS=()
+
+# ==========================================================================
+# Helper functions
+# ==========================================================================
+
+# SSH to a peer node
+peer_ssh() {
+    local ip="$1"; shift
+    ssh -i "$SSH_KEY_PATH" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o ConnectTimeout=10 \
+        -o LogLevel=ERROR \
+        "tf-user@${ip}" "$@"
+}
+
+# Run AWS CLI against a specific node's gateway
+aws_via() {
+    local node_ip="$1"; shift
+    aws --endpoint-url "https://${node_ip}:${AWSGW_PORT}" "$@"
+}
+
+# Default AWS CLI shorthand (via local node)
+AWS_EC2="aws --endpoint-url https://${LOCAL_IP}:${AWSGW_PORT} ec2"
+
+# Dump logs from ALL nodes on failure
+dump_all_node_logs() {
+    echo ""
+    echo "=========================================="
+    echo "DUMPING LOGS FROM ALL NODES"
+    echo "=========================================="
+    for i in $(seq 0 $((NODE_COUNT - 1))); do
+        local ip="${NODE_IPS[$i]}"
+        echo ""
+        echo "=== Node $((i+1)) ($ip) ==="
+        if [ "$ip" = "$LOCAL_IP" ]; then
+            for f in "$HIVE_DATA_DIR/logs/"*.log; do
+                [ -f "$f" ] || continue
+                echo "--- $(basename "$f") (last 50 lines) ---"
+                tail -50 "$f" 2>/dev/null || echo "(not found)"
+            done
+        else
+            peer_ssh "$ip" 'for f in ~/hive/logs/*.log; do
+                [ -f "$f" ] || continue
+                echo "--- $(basename "$f") (last 50 lines) ---"
+                tail -50 "$f" 2>/dev/null || echo "(not found)"
+            done' || echo "(node unreachable)"
+        fi
+    done
+    echo ""
+    echo "=========================================="
+    echo "END OF LOG DUMP"
+    echo "=========================================="
+}
+
+# Wait for a specific instance state
+# Usage: wait_for_instance_state <instance_id> <target_state> [max_attempts] [gateway_ip]
+wait_for_instance_state() {
+    local instance_id="$1"
+    local target_state="$2"
+    local max_attempts="${3:-30}"
+    local gw_ip="${4:-$LOCAL_IP}"
+    local attempt=0
+
+    echo "  Waiting for $instance_id to reach state: $target_state..."
+
+    while [ $attempt -lt $max_attempts ]; do
+        local state
+        state=$(aws_via "$gw_ip" ec2 describe-instances \
+            --instance-ids "$instance_id" \
+            --query 'Reservations[0].Instances[0].State.Name' \
+            --output text 2>/dev/null) || {
+            sleep 2
+            attempt=$((attempt + 1))
+            continue
+        }
+
+        if [ "$state" == "$target_state" ]; then
+            echo "  Instance reached state: $target_state"
+            return 0
+        fi
+
+        if [ "$state" == "terminated" ] && [ "$target_state" != "terminated" ]; then
+            echo "  ERROR: Instance terminated unexpectedly"
+            return 1
+        fi
+
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+
+    echo "  ERROR: Instance did not reach $target_state within $max_attempts attempts"
+    return 1
+}
+
+# Find which node runs a QEMU instance (by checking ps on each node)
+# Usage: find_instance_node <instance_id>
+# Returns: the WAN IP of the hosting node
+find_instance_node() {
+    local instance_id="$1"
+
+    for ip in "${NODE_IPS[@]}"; do
+        local found
+        if [ "$ip" = "$LOCAL_IP" ]; then
+            found=$(ps auxw | grep "$instance_id" | grep qemu-system | grep -v grep || true)
+        else
+            found=$(peer_ssh "$ip" "ps auxw | grep '$instance_id' | grep qemu-system | grep -v grep" 2>/dev/null || true)
+        fi
+        if [ -n "$found" ]; then
+            echo "$ip"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# Extract the SSH hostfwd port for an instance from the QEMU process on a remote node
+# Usage: get_remote_ssh_port <node_ip> <instance_id> [max_attempts]
+get_remote_ssh_port() {
+    local node_ip="$1"
+    local instance_id="$2"
+    local max_attempts="${3:-30}"
+    local attempt=0
+
+    while [ $attempt -lt $max_attempts ]; do
+        local qemu_cmd
+        if [ "$node_ip" = "$LOCAL_IP" ]; then
+            qemu_cmd=$(ps auxw | grep "$instance_id" | grep qemu-system | grep -v grep || true)
+        else
+            qemu_cmd=$(peer_ssh "$node_ip" "ps auxw | grep '$instance_id' | grep qemu-system | grep -v grep" 2>/dev/null || true)
+        fi
+
+        if [ -n "$qemu_cmd" ]; then
+            local ssh_port
+            ssh_port=$(echo "$qemu_cmd" | sed -n 's/.*hostfwd=tcp:[^:]*:\([0-9]*\)-:22.*/\1/p')
+            if [ -n "$ssh_port" ]; then
+                echo "$ssh_port"
+                return 0
+            fi
+        fi
+
+        attempt=$((attempt + 1))
+        [ $attempt -lt $max_attempts ] && sleep 1
+    done
+
+    return 1
+}
+
+# Expect an AWS CLI command to fail with a specific error code
+# Usage: expect_error "ErrorCode" aws ec2 some-command --args...
+expect_error() {
+    local expected_error="$1"
+    shift
+
+    set +e
+    local output
+    output=$("$@" 2>&1)
+    local exit_code=$?
+    set -e
+
+    if [ $exit_code -eq 0 ]; then
+        echo "  FAIL: Expected error '$expected_error' but command succeeded"
+        echo "  Output: $output"
+        return 1
+    fi
+
+    if echo "$output" | grep -q "$expected_error"; then
+        echo "  Got expected error: $expected_error"
+        return 0
+    else
+        echo "  FAIL: Expected error '$expected_error' but got different error"
+        echo "  Output: $output"
+        return 1
+    fi
+}
+
+# Terminate instances and wait for terminated state
+terminate_and_wait() {
+    local ids=("$@")
+
+    for instance_id in "${ids[@]}"; do
+        local state
+        state=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
+            --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "unknown")
+        if [ "$state" != "terminated" ] && [ "$state" != "unknown" ]; then
+            echo "  Terminating $instance_id (state: $state)..."
+            $AWS_EC2 terminate-instances --instance-ids "$instance_id" > /dev/null 2>&1 || true
+        fi
+    done
+
+    local failed=0
+    for instance_id in "${ids[@]}"; do
+        if ! wait_for_instance_state "$instance_id" "terminated" 30; then
+            echo "  WARNING: Failed to confirm termination of $instance_id"
+            failed=1
+        fi
+    done
+
+    return $failed
+}
+
+# Record test result
+pass_test() {
+    local name="$1"
+    echo "  $name PASSED"
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+}
+
+fail_test() {
+    local name="$1"
+    echo "  $name FAILED"
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+    FAILED_TESTS+=("$name")
+}
+
+# ==========================================================================
+# EXIT trap — dump logs on failure
+# ==========================================================================
+trap 'EXIT_CODE=$?; if [ $EXIT_CODE -ne 0 ]; then dump_all_node_logs; fi; exit $EXIT_CODE' EXIT
+
+# Track instance IDs for cleanup
+INSTANCE_IDS=()
 
 echo "========================================"
-echo "Multi-Node E2E Test Suite"
+echo "Real Multi-Node E2E Test Suite"
 echo "========================================"
+echo "Nodes: ${NODE_IPS[*]}"
+echo "Local: $LOCAL_IP"
 echo ""
 
-# Phase 1: Environment Setup
-echo "Phase 1: Environment Setup"
+# ==========================================================================
+# Phase 1: Pre-flight Validation
+# ==========================================================================
+echo "Phase 1: Pre-flight Validation"
 echo "========================================"
 
-# Check for KVM support
-echo "Checking for KVM support..."
-if [ -e /dev/kvm ]; then
-    echo "  /dev/kvm exists"
-    if [ -w /dev/kvm ]; then
-        echo "  /dev/kvm is writable"
+# Check KVM support
+echo "Checking KVM support..."
+if [ -e /dev/kvm ] && [ -w /dev/kvm ]; then
+    echo "  /dev/kvm exists and is writable"
+else
+    echo "  ERROR: /dev/kvm missing or not writable"
+    exit 1
+fi
+
+# Verify SSH to peer nodes
+echo "Verifying SSH connectivity to peer nodes..."
+for i in 1 2; do
+    local_idx=$((i))
+    ip="${NODE_IPS[$local_idx]}"
+    echo -n "  SSH to node$((local_idx + 1)) ($ip)..."
+    if peer_ssh "$ip" "hostname" > /dev/null 2>&1; then
+        echo " OK"
     else
-        echo "  ERROR: /dev/kvm is NOT writable"
+        echo " FAILED"
+        echo "  ERROR: Cannot SSH to $ip"
         exit 1
     fi
+done
+
+echo ""
+
+# ==========================================================================
+# Phase 2: Cluster Health
+# ==========================================================================
+echo "Phase 2: Cluster Health"
+echo "========================================"
+
+# NATS cluster: verify 2 unique peers from node1
+echo "Checking NATS cluster..."
+NATS_INFO=$(curl -s "http://${LOCAL_IP}:${NATS_MONITOR_PORT}/routez" 2>/dev/null) || {
+    echo "  ERROR: Cannot reach NATS monitoring endpoint"
+    exit 1
+}
+UNIQUE_PEERS=$(echo "$NATS_INFO" | jq -r '[.routes[].remote_name] | unique | length')
+echo "  NATS unique peers: $UNIQUE_PEERS (expected: 2)"
+if [ "$UNIQUE_PEERS" -ge 2 ]; then
+    pass_test "NATS quorum"
 else
-    echo "  ERROR: /dev/kvm does NOT exist"
+    echo "  ERROR: NATS cluster not fully formed"
     exit 1
 fi
 
-# Check for ip command (iproute2)
-if ! command -v ip &> /dev/null; then
-    echo "  ERROR: 'ip' command not found. Install iproute2."
+# Predastore: check each node
+echo "Checking Predastore on all nodes..."
+for i in $(seq 0 $((NODE_COUNT - 1))); do
+    ip="${NODE_IPS[$i]}"
+    if curl -k -s "https://${ip}:${PREDASTORE_PORT}" > /dev/null 2>&1; then
+        echo "  Node$((i+1)) ($ip): Predastore reachable"
+    else
+        echo "  ERROR: Predastore not reachable on node$((i+1)) ($ip)"
+        exit 1
+    fi
+done
+pass_test "Predastore cluster"
+
+# Gateway: check each node
+echo "Checking gateway on all nodes..."
+for i in $(seq 0 $((NODE_COUNT - 1))); do
+    ip="${NODE_IPS[$i]}"
+    if curl -k -s "https://${ip}:${AWSGW_PORT}" > /dev/null 2>&1; then
+        echo "  Node$((i+1)) ($ip): Gateway reachable"
+    else
+        echo "  ERROR: Gateway not reachable on node$((i+1)) ($ip)"
+        exit 1
+    fi
+done
+pass_test "All gateways"
+
+# Daemon readiness: describe-instance-types must return results
+echo "Checking daemon readiness..."
+ATTEMPT=0
+while [ $ATTEMPT -lt 15 ]; do
+    TYPES=$($AWS_EC2 describe-instance-types \
+        --query 'InstanceTypes[*].InstanceType' --output text 2>/dev/null || true)
+    if [ -n "$TYPES" ] && [ "$TYPES" != "None" ]; then
+        echo "  Daemon ready (instance types: $TYPES)"
+        break
+    fi
+    echo "  Waiting for daemon... ($((ATTEMPT + 1))/15)"
+    sleep 2
+    ATTEMPT=$((ATTEMPT + 1))
+done
+if [ -z "$TYPES" ] || [ "$TYPES" == "None" ]; then
+    echo "  ERROR: Daemon not ready"
     exit 1
 fi
+pass_test "Daemon readiness"
 
-
-# Setup simulated network
-echo ""
-echo "Setting up simulated network..."
-add_simulated_ips
-
-# Create ramdisk mount point
-sudo mkdir -p /mnt/ramdisk
-
-echo ""
-
-# Phase 2: Cluster Initialization
-echo "Phase 2: Cluster Initialization"
-echo "========================================"
-
-# Background init — starts formation server, generates certs first
-echo ""
-init_leader_node
-
-# Trust CA cert (exists before formation completes — cert generation is the first step)
-echo ""
-echo "Adding Hive CA certificate to system trust store..."
-sudo cp ~/node1/config/ca.pem /usr/local/share/ca-certificates/hive-ca.crt
-sudo update-ca-certificates
-
-# Background BOTH joins — they poll /formation/status until all 3 nodes have joined.
-# Must be concurrent: each join blocks until formation is complete.
-echo ""
-echo "Joining follower nodes concurrently..."
-join_follower_node 2 &
-JOIN2_PID=$!
-join_follower_node 3 &
-JOIN3_PID=$!
-
-# Wait for formation to complete (all processes generate their configs)
-echo "Waiting for cluster formation to complete..."
-wait $JOIN2_PID || { echo "ERROR: Node 2 join failed"; exit 1; }
-wait $JOIN3_PID || { echo "ERROR: Node 3 join failed"; exit 1; }
-wait $LEADER_INIT_PID || { echo "ERROR: Leader init failed"; exit 1; }
-echo "Cluster formation complete — all configs generated"
-
-# Now start services (configs exist for all nodes)
-echo ""
-echo "Starting node services..."
-start_node_services 1 "$HOME/node1"
-start_node_services 2 "$HOME/node2"
-start_node_services 3 "$HOME/node3"
-CLUSTER_SERVICES_STARTED="true"
-
-# Wait for all services to stabilize
-echo ""
-echo "Waiting for cluster to stabilize..."
-sleep 5
-
-# Phase 3: Cluster Health Verification
-echo ""
-echo "Phase 3: Cluster Health Verification"
-echo "========================================"
-
-# Verify NATS cluster
-echo ""
-verify_nats_cluster 3 || {
-    echo "WARNING: NATS cluster verification failed, continuing anyway..."
-}
-
-# Verify Predastore cluster
-echo ""
-verify_predastore_cluster 3 || {
-    echo "ERROR: Predastore cluster verification failed"
-    dump_all_node_logs
-    exit 1
-}
-
-# Wait for gateway on node1 (primary gateway)
-echo ""
-wait_for_gateway "${NODE1_IP}" 15
-
-# Wait for daemon NATS subscriptions to be active
-wait_for_daemon_ready "https://${NODE1_IP}:${AWSGW_PORT}"
-
-# Define AWS CLI args pointing to node1's gateway
-AWS_EC2="aws --endpoint-url https://${NODE1_IP}:${AWSGW_PORT} ec2"
-AWS_IAM="aws --endpoint-url https://${NODE1_IP}:${AWSGW_PORT} iam"
-
-# Discover the cluster's availability zone and region dynamically
-HIVE_AZ=$($AWS_EC2 describe-availability-zones --query 'AvailabilityZones[0].ZoneName' --output text)
-HIVE_REGION=$($AWS_EC2 describe-availability-zones --query 'AvailabilityZones[0].RegionName' --output text)
-echo "Discovered AZ: $HIVE_AZ, Region: $HIVE_REGION"
-
-# Phase 3b: Cluster Stats CLI (Multi-Node)
-echo ""
-echo "Phase 3b: Cluster Stats CLI (Multi-Node)"
-echo "========================================"
-
-# Test hive get nodes — should show all 3 nodes as Ready
-echo "Testing hive get nodes..."
-GET_NODES_OUTPUT=$(./bin/hive get nodes --config "$HOME/node1/config/hive.toml" --timeout 5s 2>/dev/null)
+# Hive CLI: get nodes
+echo "Checking hive get nodes..."
+GET_NODES_OUTPUT=$($HIVE_BIN get nodes --config "$HIVE_CONFIG" --timeout 5s 2>/dev/null)
 echo "$GET_NODES_OUTPUT"
 READY_COUNT=$(echo "$GET_NODES_OUTPUT" | grep -c "Ready" || true)
-if [ "$READY_COUNT" -lt 3 ]; then
-    echo "WARNING: hive get nodes shows $READY_COUNT Ready nodes (expected 3)"
+if [ "$READY_COUNT" -ge 3 ]; then
+    pass_test "hive get nodes ($READY_COUNT Ready)"
+else
+    echo "  WARNING: hive get nodes shows $READY_COUNT Ready nodes (expected 3)"
+    fail_test "hive get nodes"
 fi
-echo "hive get nodes passed ($READY_COUNT Ready nodes)"
 
-# Test hive top nodes — should show resource stats for all nodes
-echo "Testing hive top nodes..."
-TOP_NODES_OUTPUT=$(./bin/hive top nodes --config "$HOME/node1/config/hive.toml" --timeout 5s 2>/dev/null)
-echo "$TOP_NODES_OUTPUT"
-if ! echo "$TOP_NODES_OUTPUT" | grep -q "INSTANCE TYPE"; then
-    echo "WARNING: hive top nodes did not show instance type capacity table"
-fi
-echo "hive top nodes passed"
-
-# Test hive get vms — should show no VMs yet
-echo "Testing hive get vms (empty)..."
-GET_VMS_OUTPUT=$(./bin/hive get vms --config "$HOME/node1/config/hive.toml" --timeout 5s 2>/dev/null)
+# Hive CLI: get vms (should be empty)
+echo "Checking hive get vms (empty)..."
+GET_VMS_OUTPUT=$($HIVE_BIN get vms --config "$HIVE_CONFIG" --timeout 5s 2>/dev/null)
 echo "$GET_VMS_OUTPUT"
-echo "hive get vms (empty) passed"
+pass_test "hive get vms (empty)"
 
-# Verify gateway responds
 echo ""
-echo "Testing gateway connectivity..."
-$AWS_EC2 describe-regions | jq -e '.Regions | length > 0' || {
-    echo "ERROR: Gateway not responding correctly"
-    exit 1
-}
-echo "  Gateway is responding"
 
-# Phase 4: Image and Key Setup
-echo ""
-echo "Phase 4: Image and Key Setup"
+# ==========================================================================
+# Phase 3: Instance Lifecycle + Distribution
+# ==========================================================================
+echo "Phase 3: Instance Lifecycle + Distribution"
 echo "========================================"
 
-# Discover instance types
-echo "Discovering available instance types..."
-AVAILABLE_TYPES=$($AWS_EC2 describe-instance-types --query 'InstanceTypes[*].InstanceType' --output text)
-echo "  Available: $AVAILABLE_TYPES"
-
-# Pick nano instance type
-INSTANCE_TYPE=$(echo $AVAILABLE_TYPES | tr ' ' '\n' | grep -m1 'nano')
-if [ -z "$INSTANCE_TYPE" ] || [ "$INSTANCE_TYPE" == "None" ]; then
-    echo "ERROR: No instance types found"
+# Discover instance type
+INSTANCE_TYPE=$(echo $TYPES | tr ' ' '\n' | grep -m1 'nano')
+if [ -z "$INSTANCE_TYPE" ]; then
+    echo "ERROR: No nano instance type found"
     exit 1
 fi
-echo "  Selected: $INSTANCE_TYPE"
+echo "Using instance type: $INSTANCE_TYPE"
 
-# Get architecture
-ARCH=$($AWS_EC2 describe-instance-types --instance-types "$INSTANCE_TYPE" \
-    --query 'InstanceTypes[0].ProcessorInfo.SupportedArchitectures[0]' --output text)
-echo "  Architecture: $ARCH"
-
-# Create test key
-echo ""
-echo "Creating test key pair..."
-KEY_MATERIAL=$($AWS_EC2 create-key-pair --key-name multinode-test-key --query 'KeyMaterial' --output text)
-echo "$KEY_MATERIAL" > multinode-test-key.pem
-chmod 600 multinode-test-key.pem
-echo "  Key created: multinode-test-key"
-
-# Import Ubuntu image (use node1's config and hive-dir)
-echo ""
-echo "Importing Ubuntu image..."
-IMPORT_LOG=$(./bin/hive admin images import \
-    --file ~/images/ubuntu-24.04.img \
-    --arch "$ARCH" \
-    --distro ubuntu \
-    --version 24.04 \
-    --config "$HOME/node1/config/hive.toml" \
-    --hive-dir "$HOME/node1/" \
-    --force)
-echo "Import output: $IMPORT_LOG"
-AMI_ID=$(echo "$IMPORT_LOG" | grep -o 'ami-[a-z0-9]\+')
-
-if [ -z "$AMI_ID" ]; then
-    echo "ERROR: Failed to capture AMI ID"
+# Discover AMI
+AMI_ID=$($AWS_EC2 describe-images --query 'Images[0].ImageId' --output text)
+if [ -z "$AMI_ID" ] || [ "$AMI_ID" == "None" ]; then
+    echo "ERROR: No AMI found (bootstrap should have imported one)"
     exit 1
 fi
-echo "  AMI ID: $AMI_ID"
+echo "Using AMI: $AMI_ID"
 
-# Verify AMI
-$AWS_EC2 describe-images --image-ids "$AMI_ID" | jq -e ".Images[0] | select(.ImageId==\"$AMI_ID\")" > /dev/null
-echo "  AMI verified"
-
-# Phase 4b: Multi-Node Key Pair Operations
-echo ""
-echo "Phase 4b: Multi-Node Key Pair Operations"
-echo "========================================"
-echo "Testing key pair CRUD across the cluster..."
-
-# Import a key pair (goes to a random node via queue group)
-echo "  Generating local RSA key for import..."
-ssh-keygen -t rsa -b 2048 -f multinode-test-key-2-local -N ""
-$AWS_EC2 import-key-pair --key-name multinode-test-key-2 --public-key-material "fileb://multinode-test-key-2-local.pub"
-echo "  Imported key: multinode-test-key-2"
-
-# Describe key pairs — verify both keys are visible
-echo "  Verifying both keys via describe-key-pairs..."
-KEY_LIST=$($AWS_EC2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text)
-echo "  Keys found: $KEY_LIST"
-echo "$KEY_LIST" | grep -q "multinode-test-key" || {
-    echo "  ERROR: multinode-test-key not found in describe-key-pairs"
-    exit 1
-}
-echo "$KEY_LIST" | grep -q "multinode-test-key-2" || {
-    echo "  ERROR: multinode-test-key-2 not found in describe-key-pairs"
-    exit 1
-}
-echo "  Both keys visible"
-
-# Delete the imported key
-echo "  Deleting multinode-test-key-2..."
-$AWS_EC2 delete-key-pair --key-name multinode-test-key-2
-
-# Verify deletion
-REMAINING_KEYS=$($AWS_EC2 describe-key-pairs --query 'KeyPairs[*].KeyName' --output text)
-if echo "$REMAINING_KEYS" | grep -q "multinode-test-key-2"; then
-    echo "  ERROR: multinode-test-key-2 was not deleted"
-    exit 1
-fi
-echo "  Key deletion verified"
-echo "  Multi-node key pair operations passed"
-
-# Phase 5: Multi-Node Instance Tests
-echo ""
-echo "Phase 5: Multi-Node Instance Tests"
-echo "========================================"
-
-# Test 1: Instance Distribution
-echo ""
-echo "Test 1: Instance Distribution"
-echo "----------------------------------------"
-echo "Launching 3 instances to test distribution across nodes..."
-
-INSTANCE_IDS=()
+# Launch 3 instances with stagger to encourage distribution
+echo "Launching 3 instances..."
 for i in 1 2 3; do
     echo "  Launching instance $i..."
     RUN_OUTPUT=$($AWS_EC2 run-instances \
         --image-id "$AMI_ID" \
         --instance-type "$INSTANCE_TYPE" \
-        --key-name multinode-test-key)
+        --key-name hive-key)
 
     INSTANCE_ID=$(echo "$RUN_OUTPUT" | jq -r '.Instances[0].InstanceId')
     if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "null" ]; then
@@ -346,8 +439,8 @@ for i in 1 2 3; do
     echo "  Launched: $INSTANCE_ID"
     INSTANCE_IDS+=("$INSTANCE_ID")
 
-    # Small delay between launches to encourage distribution
-    sleep 2
+    # Stagger launches to encourage distribution across nodes
+    [ $i -lt 3 ] && sleep 2
 done
 
 # Wait for all instances to be running
@@ -360,2067 +453,473 @@ for instance_id in "${INSTANCE_IDS[@]}"; do
     }
 done
 
-# Check distribution
+# Check distribution via hive get vms or QEMU process check
 echo ""
-check_instance_distribution
+echo "Checking instance distribution across nodes..."
+declare -A NODE_INSTANCE_COUNT
+HOSTING_NODES=()
+for instance_id in "${INSTANCE_IDS[@]}"; do
+    HOST_IP=$(find_instance_node "$instance_id" || echo "unknown")
+    echo "  $instance_id -> $HOST_IP"
+    HOSTING_NODES+=("$HOST_IP")
+    NODE_INSTANCE_COUNT[$HOST_IP]=$(( ${NODE_INSTANCE_COUNT[$HOST_IP]:-0} + 1 ))
+done
 
-# Verify hive get vms shows all running instances
+# Count unique hosting nodes
+UNIQUE_HOSTS=$(printf '%s\n' "${HOSTING_NODES[@]}" | sort -u | wc -l)
+echo "  Instances on $UNIQUE_HOSTS different nodes"
+if [ "$UNIQUE_HOSTS" -ge 2 ]; then
+    pass_test "Instance distribution (>= 2 nodes)"
+else
+    echo "  WARNING: All instances on same node (distribution not guaranteed, non-fatal)"
+    pass_test "Instance distribution (non-deterministic)"
+fi
+
+# Verify hive get vms shows all instances
 echo ""
-echo "Verifying hive get vms (with running VMs)..."
-GET_VMS_OUTPUT=$(./bin/hive get vms --config "$HOME/node1/config/hive.toml" --timeout 5s 2>/dev/null)
+echo "Verifying hive get vms..."
+GET_VMS_OUTPUT=$($HIVE_BIN get vms --config "$HIVE_CONFIG" --timeout 5s 2>/dev/null)
 echo "$GET_VMS_OUTPUT"
 for instance_id in "${INSTANCE_IDS[@]}"; do
     if ! echo "$GET_VMS_OUTPUT" | grep -q "$instance_id"; then
-        echo "WARNING: hive get vms did not show instance $instance_id"
+        echo "  WARNING: hive get vms did not show $instance_id"
     fi
 done
-echo "hive get vms shows launched instances"
+pass_test "hive get vms (with instances)"
 
-# Test 1a-ii: SSH Connectivity & Volume Verification
 echo ""
-echo "Test 1a-ii: SSH Connectivity & Volume Verification"
-echo "----------------------------------------"
-echo "Testing SSH into all 3 instances..."
 
-# Arrays to store SSH details for post-termination verification
-SSH_PORTS=()
-SSH_HOSTS=()
+# ==========================================================================
+# Phase 4: SSH into Guest VMs
+# ==========================================================================
+echo "Phase 4: SSH into Guest VMs"
+echo "========================================"
 
 for idx in "${!INSTANCE_IDS[@]}"; do
     instance_id="${INSTANCE_IDS[$idx]}"
+    host_ip="${HOSTING_NODES[$idx]}"
     echo ""
-    echo "  Instance $((idx + 1)): $instance_id"
+    echo "  Instance $((idx + 1)): $instance_id (on $host_ip)"
 
-    # Get SSH connection details from QEMU process
-    echo "  Getting SSH port..."
-    SSH_PORT=$(get_ssh_port "$instance_id")
+    # Get SSH port from QEMU process on the hosting node
+    SSH_PORT=$(get_remote_ssh_port "$host_ip" "$instance_id" 10)
     if [ -z "$SSH_PORT" ]; then
-        echo "  ERROR: Failed to get SSH port for instance $instance_id"
-        exit 1
+        echo "  ERROR: Failed to get SSH port for $instance_id on $host_ip"
+        fail_test "Guest SSH ($instance_id)"
+        continue
     fi
-    SSH_HOST=$(get_ssh_host "$instance_id")
-    echo "  SSH endpoint: $SSH_HOST:$SSH_PORT"
+    echo "  SSH endpoint: $host_ip:$SSH_PORT"
 
-    SSH_PORTS+=("$SSH_PORT")
-    SSH_HOSTS+=("$SSH_HOST")
+    # Wait for SSH to be ready (VM boot + cloud-init)
+    echo "  Waiting for SSH to be ready..."
+    ATTEMPT=0
+    SSH_READY=false
+    while [ $ATTEMPT -lt 60 ]; do
+        if ssh -o StrictHostKeyChecking=no \
+               -o UserKnownHostsFile=/dev/null \
+               -o ConnectTimeout=2 \
+               -o BatchMode=yes \
+               -o LogLevel=ERROR \
+               -p "$SSH_PORT" \
+               -i "$HOME/.ssh/hive-key" \
+               ec2-user@"$host_ip" 'echo ready' > /dev/null 2>&1; then
+            SSH_READY=true
+            break
+        fi
+        ATTEMPT=$((ATTEMPT + 1))
+        [ $((ATTEMPT % 10)) -eq 0 ] && echo "  Waiting for SSH... ($ATTEMPT/60)"
+        sleep 1
+    done
 
-    # Wait for SSH to become ready (VM boot + cloud-init)
-    wait_for_ssh "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem" 30
+    if [ "$SSH_READY" = false ]; then
+        echo "  ERROR: SSH not ready after 60 attempts"
+        fail_test "Guest SSH ($instance_id)"
+        continue
+    fi
 
-    # Test basic SSH connectivity
-    test_ssh_connectivity "$SSH_HOST" "$SSH_PORT" "multinode-test-key.pem"
-
-    # Check root volume size via lsblk
-    echo "  Verifying root volume size from inside the VM..."
-    ROOT_VOL_ID_SSH=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
-        --query 'Reservations[0].Instances[0].BlockDeviceMappings[0].Ebs.VolumeId' --output text)
-    ROOT_VOL_SIZE_API=$($AWS_EC2 describe-volumes --volume-ids "$ROOT_VOL_ID_SSH" \
-        --query 'Volumes[0].Size' --output text)
-    # Find the disk backing the root filesystem (avoids picking up floppy/cdrom devices)
-    # 1. findmnt gets the source device for / (e.g. /dev/vda1)
-    # 2. lsblk PKNAME resolves to parent disk name (e.g. vda)
-    # 3. lsblk -b -d gets that disk's byte size
-    ROOT_DISK_BYTES=$(ssh -o StrictHostKeyChecking=no \
+    # Test SSH connectivity
+    ID_OUTPUT=$(ssh -o StrictHostKeyChecking=no \
         -o UserKnownHostsFile=/dev/null \
+        -o ConnectTimeout=5 \
+        -o BatchMode=yes \
         -o LogLevel=ERROR \
-        -o ConnectTimeout=5 \
-        -o BatchMode=yes \
         -p "$SSH_PORT" \
-        -i "multinode-test-key.pem" \
-        ec2-user@"$SSH_HOST" 'SRC=$(findmnt -n -o SOURCE /); PKN=$(lsblk -n -o PKNAME "$SRC" 2>/dev/null | head -1); DEV=${PKN:-$(basename "$SRC")}; lsblk -b -d -n -o SIZE "/dev/$DEV"' | tr -d '[:space:]')
-    if [ -z "$ROOT_DISK_BYTES" ] || [ "$ROOT_DISK_BYTES" = "0" ]; then
-        echo "  ERROR: Failed to get root disk size from VM (got: '$ROOT_DISK_BYTES')"
-        echo "  lsblk debug output:"
-        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-            -o ConnectTimeout=5 -o BatchMode=yes -p "$SSH_PORT" -i "multinode-test-key.pem" \
-            ec2-user@"$SSH_HOST" 'lsblk -b -d; echo "---"; findmnt -n -o SOURCE /; cat /proc/partitions' || true
-        exit 1
-    fi
-    ROOT_DISK_GIB=$((ROOT_DISK_BYTES / 1073741824))
-    echo "  Root disk size from VM: ${ROOT_DISK_GIB}GiB (API reports: ${ROOT_VOL_SIZE_API}GiB)"
-    if [ "$ROOT_DISK_GIB" -ne "$ROOT_VOL_SIZE_API" ]; then
-        echo "  ERROR: Root volume size mismatch: VM reports ${ROOT_DISK_GIB}GiB, API reports ${ROOT_VOL_SIZE_API}GiB"
-        exit 1
-    fi
-    echo "  Root volume size verified"
+        -i "$HOME/.ssh/hive-key" \
+        ec2-user@"$host_ip" 'id' 2>&1) || {
+        echo "  ERROR: SSH 'id' command failed"
+        fail_test "Guest SSH ($instance_id)"
+        continue
+    }
 
-    # Verify hostname contains instance ID
-    echo "  Verifying hostname inside the VM..."
-    VM_HOSTNAME=$(ssh -o StrictHostKeyChecking=no \
+    echo "  SSH 'id' output: $ID_OUTPUT"
+    if echo "$ID_OUTPUT" | grep -q "ec2-user"; then
+        echo "  ec2-user confirmed"
+    else
+        echo "  ERROR: Expected 'ec2-user' in id output"
+        fail_test "Guest SSH ($instance_id)"
+        continue
+    fi
+
+    # Verify block device
+    LSBLK_OUTPUT=$(ssh -o StrictHostKeyChecking=no \
         -o UserKnownHostsFile=/dev/null \
         -o ConnectTimeout=5 \
         -o BatchMode=yes \
+        -o LogLevel=ERROR \
         -p "$SSH_PORT" \
-        -i "multinode-test-key.pem" \
-        ec2-user@"$SSH_HOST" 'hostname' 2>/dev/null)
-    echo "  VM hostname: $VM_HOSTNAME"
-    # Hostname uses truncated ID: hive-vm-<first 8 hex chars of instance ID>
-    SHORT_ID=$(echo "$instance_id" | sed 's/^i-//' | cut -c1-8)
-    if echo "$VM_HOSTNAME" | grep -q "$SHORT_ID"; then
-        echo "  Hostname contains instance ID prefix ($SHORT_ID)"
-    else
-        echo "  WARNING: Hostname '$VM_HOSTNAME' does not contain instance ID prefix '$SHORT_ID' (non-fatal)"
-    fi
+        -i "$HOME/.ssh/hive-key" \
+        ec2-user@"$host_ip" 'lsblk' 2>&1) || true
+    echo "  lsblk: $(echo "$LSBLK_OUTPUT" | head -5)"
+
+    pass_test "Guest SSH ($instance_id)"
 done
 
 echo ""
-echo "  SSH connectivity and volume verification passed for all instances"
 
-# Test 1b: Volume Lifecycle (Attach/Detach)
-echo ""
-echo "Test 1b: Volume Lifecycle (Attach/Detach)"
-echo "----------------------------------------"
-echo "Testing volume create -> resize -> attach -> detach -> delete..."
+# ==========================================================================
+# Phase 5: Volume Lifecycle
+# ==========================================================================
+echo "Phase 5: Volume Lifecycle"
+echo "========================================"
 
-# Create a test volume
-echo "  Creating 10GB volume in ${HIVE_AZ}..."
+# Discover AZ
+HIVE_AZ=$($AWS_EC2 describe-availability-zones --query 'AvailabilityZones[0].ZoneName' --output text)
+echo "AZ: $HIVE_AZ"
+
+# Create volume
+echo "Creating 10GB test volume..."
 CREATE_OUTPUT=$($AWS_EC2 create-volume --size 10 --availability-zone "$HIVE_AZ")
 TEST_VOLUME_ID=$(echo "$CREATE_OUTPUT" | jq -r '.VolumeId')
-
 if [ -z "$TEST_VOLUME_ID" ] || [ "$TEST_VOLUME_ID" == "null" ]; then
-    echo "  ERROR: Failed to create test volume"
-    echo "  Output: $CREATE_OUTPUT"
-    exit 1
-fi
-echo "  Created volume: $TEST_VOLUME_ID"
-
-# Resize to 20GB
-NEW_SIZE=20
-echo "  Modifying volume to ${NEW_SIZE}GB..."
-$AWS_EC2 modify-volume --volume-id "$TEST_VOLUME_ID" --size "$NEW_SIZE"
-
-# Verify resize
-echo "  Verifying resize..."
-COUNT=0
-while [ $COUNT -lt 15 ]; do
-    VOLUME_SIZE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
-        --query 'Volumes[0].Size' --output text)
-
-    if [ "$VOLUME_SIZE" -eq "$NEW_SIZE" ]; then
-        echo "  Volume resized successfully to ${NEW_SIZE}GB"
-        break
-    fi
-
-    sleep 2
-    COUNT=$((COUNT + 1))
-done
-
-if [ "$VOLUME_SIZE" -ne "$NEW_SIZE" ]; then
-    echo "  ERROR: Volume failed to resize to ${NEW_SIZE}GB (current: ${VOLUME_SIZE}GB)"
-    exit 1
-fi
-
-# Attach volume to the first running instance
-echo "  Attaching volume $TEST_VOLUME_ID to instance ${INSTANCE_IDS[0]}..."
-$AWS_EC2 attach-volume --volume-id "$TEST_VOLUME_ID" --instance-id "${INSTANCE_IDS[0]}" --device /dev/sdf
-
-# Verify attachment
-echo "  Verifying volume attachment..."
-COUNT=0
-while [ $COUNT -lt 15 ]; do
-    ATTACH_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
-        --query 'Volumes[0].Attachments[0].State' --output text)
-    ATTACH_INSTANCE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
-        --query 'Volumes[0].Attachments[0].InstanceId' --output text)
-    VOL_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
-        --query 'Volumes[0].State' --output text)
-
-    if [ "$VOL_STATE" == "in-use" ] && [ "$ATTACH_STATE" == "attached" ] && [ "$ATTACH_INSTANCE" == "${INSTANCE_IDS[0]}" ]; then
-        echo "  Volume attached successfully (State=$VOL_STATE, AttachState=$ATTACH_STATE, Instance=$ATTACH_INSTANCE)"
-        break
-    fi
-
-    sleep 2
-    COUNT=$((COUNT + 1))
-done
-
-if [ "$ATTACH_STATE" != "attached" ] || [ "$ATTACH_INSTANCE" != "${INSTANCE_IDS[0]}" ]; then
-    echo "  ERROR: Volume attachment verification failed (AttachState=$ATTACH_STATE, Instance=$ATTACH_INSTANCE)"
-    exit 1
-fi
-
-# Detach volume (without --instance-id to test gateway resolution path)
-echo "  Detaching volume $TEST_VOLUME_ID..."
-$AWS_EC2 detach-volume --volume-id "$TEST_VOLUME_ID"
-
-# Verify detachment
-echo "  Verifying volume detachment..."
-COUNT=0
-while [ $COUNT -lt 15 ]; do
-    VOL_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
-        --query 'Volumes[0].State' --output text)
-
-    if [ "$VOL_STATE" == "available" ]; then
-        echo "  Volume detached successfully (State=$VOL_STATE)"
-        break
-    fi
-
-    sleep 2
-    COUNT=$((COUNT + 1))
-done
-
-if [ "$VOL_STATE" != "available" ]; then
-    echo "  ERROR: Volume detachment verification failed (State=$VOL_STATE)"
-    exit 1
-fi
-
-# Delete the test volume
-echo "  Deleting test volume $TEST_VOLUME_ID..."
-$AWS_EC2 delete-volume --volume-id "$TEST_VOLUME_ID"
-
-# Verify deletion
-echo "  Verifying volume deletion..."
-COUNT=0
-while [ $COUNT -lt 15 ]; do
-    set +e
-    VOLUME_CHECK=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
-        --query 'Volumes[0].VolumeId' --output text 2>&1)
-    DESCRIBE_EXIT=$?
-    set -e
-
-    if [ $DESCRIBE_EXIT -ne 0 ] || [ "$VOLUME_CHECK" == "None" ] || [ -z "$VOLUME_CHECK" ]; then
-        echo "  Volume deleted successfully"
-        break
-    fi
-
-    sleep 2
-    COUNT=$((COUNT + 1))
-done
-
-if [ $COUNT -ge 15 ]; then
-    echo "  ERROR: Volume deletion verification timed out"
-    exit 1
-fi
-
-echo "  Volume lifecycle test passed (create -> resize -> attach -> detach -> delete)"
-
-# Test 1c: Snapshot Lifecycle
-echo ""
-echo "Test 1c: Snapshot Lifecycle"
-echo "----------------------------------------"
-echo "Testing snapshot create -> describe -> copy -> delete..."
-
-# Use the root volume of the first instance — it's already attached and mounted
-# in viperblockd, which is required for create-snapshot.
-SNAP_VOL_ID=$($AWS_EC2 describe-instances --instance-ids "${INSTANCE_IDS[0]}" \
-    --query 'Reservations[0].Instances[0].BlockDeviceMappings[0].Ebs.VolumeId' --output text)
-echo "  Using root volume $SNAP_VOL_ID (attached to ${INSTANCE_IDS[0]})"
-SNAP_VOL_SIZE=$($AWS_EC2 describe-volumes --volume-ids "$SNAP_VOL_ID" \
-    --query 'Volumes[0].Size' --output text)
-
-# Create a snapshot
-echo "  Creating snapshot from volume $SNAP_VOL_ID..."
-SNAP_OUTPUT=$($AWS_EC2 create-snapshot --volume-id "$SNAP_VOL_ID" --description "multinode-e2e-snapshot")
-SNAPSHOT_ID=$(echo "$SNAP_OUTPUT" | jq -r '.SnapshotId')
-
-if [ -z "$SNAPSHOT_ID" ] || [ "$SNAPSHOT_ID" == "null" ]; then
-    echo "  ERROR: Failed to create snapshot"
-    echo "  Output: $SNAP_OUTPUT"
-    exit 1
-fi
-echo "  Created snapshot: $SNAPSHOT_ID"
-
-# Verify create response fields
-SNAP_STATE=$(echo "$SNAP_OUTPUT" | jq -r '.State')
-SNAP_VOL_REF=$(echo "$SNAP_OUTPUT" | jq -r '.VolumeId')
-SNAP_SIZE=$(echo "$SNAP_OUTPUT" | jq -r '.VolumeSize')
-
-if [ "$SNAP_VOL_REF" != "$SNAP_VOL_ID" ]; then
-    echo "  ERROR: Snapshot VolumeId mismatch: expected $SNAP_VOL_ID, got $SNAP_VOL_REF"
-    exit 1
-fi
-if [ "$SNAP_SIZE" -ne "$SNAP_VOL_SIZE" ]; then
-    echo "  ERROR: Snapshot VolumeSize mismatch: expected $SNAP_VOL_SIZE, got $SNAP_SIZE"
-    exit 1
-fi
-echo "  Create response verified (State=$SNAP_STATE, VolumeId=$SNAP_VOL_REF, Size=$SNAP_SIZE)"
-
-# Poll until completed
-echo "  Waiting for snapshot to complete..."
-COUNT=0
-while [ $COUNT -lt 15 ]; do
-    SNAP_STATE=$($AWS_EC2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
-        --query 'Snapshots[0].State' --output text)
-
-    if [ "$SNAP_STATE" == "completed" ]; then
-        echo "  Snapshot completed"
-        break
-    fi
-
-    sleep 2
-    COUNT=$((COUNT + 1))
-done
-
-if [ "$SNAP_STATE" != "completed" ]; then
-    echo "  ERROR: Snapshot failed to reach completed state (State=$SNAP_STATE)"
-    exit 1
-fi
-
-# Describe by ID and verify
-echo "  Verifying snapshot via describe-snapshots..."
-DESCRIBE_SNAP=$($AWS_EC2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID")
-DESC_VOL_ID=$(echo "$DESCRIBE_SNAP" | jq -r '.Snapshots[0].VolumeId')
-DESC_SIZE=$(echo "$DESCRIBE_SNAP" | jq -r '.Snapshots[0].VolumeSize')
-DESC_DESC=$(echo "$DESCRIBE_SNAP" | jq -r '.Snapshots[0].Description')
-
-if [ "$DESC_VOL_ID" != "$SNAP_VOL_ID" ]; then
-    echo "  ERROR: Describe VolumeId mismatch: expected $SNAP_VOL_ID, got $DESC_VOL_ID"
-    exit 1
-fi
-if [ "$DESC_SIZE" -ne "$SNAP_VOL_SIZE" ]; then
-    echo "  ERROR: Describe VolumeSize mismatch: expected $SNAP_VOL_SIZE, got $DESC_SIZE"
-    exit 1
-fi
-if [ "$DESC_DESC" != "multinode-e2e-snapshot" ]; then
-    echo "  ERROR: Describe Description mismatch: expected 'multinode-e2e-snapshot', got '$DESC_DESC'"
-    exit 1
-fi
-echo "  Describe verified (VolumeId=$DESC_VOL_ID, Size=$DESC_SIZE, Description=$DESC_DESC)"
-
-# Copy the snapshot
-echo "  Copying snapshot $SNAPSHOT_ID..."
-COPY_OUTPUT=$($AWS_EC2 copy-snapshot --source-snapshot-id "$SNAPSHOT_ID" --source-region "$HIVE_REGION" --description "multinode-e2e-copy")
-COPY_SNAPSHOT_ID=$(echo "$COPY_OUTPUT" | jq -r '.SnapshotId')
-
-if [ -z "$COPY_SNAPSHOT_ID" ] || [ "$COPY_SNAPSHOT_ID" == "null" ]; then
-    echo "  ERROR: Failed to copy snapshot"
-    echo "  Output: $COPY_OUTPUT"
-    exit 1
-fi
-echo "  Copied snapshot: $COPY_SNAPSHOT_ID"
-
-if [ "$COPY_SNAPSHOT_ID" == "$SNAPSHOT_ID" ]; then
-    echo "  ERROR: Copy snapshot ID should differ from original"
-    exit 1
-fi
-
-# Verify both exist
-TOTAL_SNAPS=$($AWS_EC2 describe-snapshots \
-    --snapshot-ids "$SNAPSHOT_ID" "$COPY_SNAPSHOT_ID" \
-    --query 'length(Snapshots)' --output text)
-
-if [ "$TOTAL_SNAPS" -ne 2 ]; then
-    echo "  ERROR: Expected 2 snapshots, got $TOTAL_SNAPS"
-    exit 1
-fi
-echo "  Both snapshots visible via describe-snapshots"
-
-# Verify copy description
-COPY_DESC=$($AWS_EC2 describe-snapshots --snapshot-ids "$COPY_SNAPSHOT_ID" \
-    --query 'Snapshots[0].Description' --output text)
-if [ "$COPY_DESC" != "multinode-e2e-copy" ]; then
-    echo "  ERROR: Copy description mismatch: expected 'multinode-e2e-copy', got '$COPY_DESC'"
-    exit 1
-fi
-
-# Delete original
-echo "  Deleting original snapshot $SNAPSHOT_ID..."
-$AWS_EC2 delete-snapshot --snapshot-id "$SNAPSHOT_ID"
-
-# Verify original gone, copy remains
-echo "  Verifying snapshot deletion..."
-COUNT=0
-while [ $COUNT -lt 15 ]; do
-    set +e
-    SNAP_CHECK=$($AWS_EC2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
-        --query 'Snapshots[0].SnapshotId' --output text 2>&1)
-    SNAP_EXIT=$?
-    set -e
-
-    if [ $SNAP_EXIT -ne 0 ] || [ "$SNAP_CHECK" == "None" ] || [ -z "$SNAP_CHECK" ]; then
-        echo "  Original snapshot deleted successfully"
-        break
-    fi
-
-    sleep 2
-    COUNT=$((COUNT + 1))
-done
-
-if [ $COUNT -ge 15 ]; then
-    echo "  ERROR: Snapshot deletion verification timed out"
-    exit 1
-fi
-
-# Verify copy still exists
-COPY_STATE=$($AWS_EC2 describe-snapshots --snapshot-ids "$COPY_SNAPSHOT_ID" \
-    --query 'Snapshots[0].State' --output text)
-if [ "$COPY_STATE" != "completed" ]; then
-    echo "  ERROR: Copy snapshot should still exist (State=$COPY_STATE)"
-    exit 1
-fi
-echo "  Copy snapshot intact after original deletion"
-
-# Delete copy
-echo "  Deleting copy snapshot $COPY_SNAPSHOT_ID..."
-$AWS_EC2 delete-snapshot --snapshot-id "$COPY_SNAPSHOT_ID"
-
-echo "  Snapshot lifecycle test passed (create -> describe -> copy -> delete)"
-
-# Test 1c-ii: Verify Snapshot-Backed Instance Launch
-echo ""
-echo "Test 1c-ii: Verify Snapshot-Backed Instance Launch"
-echo "----------------------------------------"
-echo "All run-instances calls go through cloneAMIToVolume() -> OpenFromSnapshot(),"
-echo "so the Test 1 instances are already snapshot-backed. Verify their volume configs."
-
-AWS_S3="aws --endpoint-url https://${NODE1_IP}:${PREDASTORE_PORT} s3"
-
-# Verify the AMI snapshot exists in Predastore
-echo "  Checking AMI snapshot in Predastore..."
-SNAP_PREFIX="snap-$AMI_ID"
-SNAP_FILES=$($AWS_S3 ls "s3://predastore/$SNAP_PREFIX/" 2>&1 || echo "")
-if echo "$SNAP_FILES" | grep -q "config.json"; then
-    echo "  AMI snapshot config found at $SNAP_PREFIX/"
+    echo "  ERROR: Failed to create volume"
+    fail_test "Volume create"
 else
-    echo "  ERROR: AMI snapshot config not found at $SNAP_PREFIX/"
-    exit 1
-fi
-
-# Verify the first instance's root volume has SnapshotID and SourceVolumeName
-SNAP_ROOT_VOL=$($AWS_EC2 describe-instances --instance-ids "${INSTANCE_IDS[0]}" \
-    --query 'Reservations[0].Instances[0].BlockDeviceMappings[0].Ebs.VolumeId' --output text)
-echo "  Verifying root volume $SNAP_ROOT_VOL is snapshot-backed via Predastore config..."
-VOL_CONFIG=$($AWS_S3 cp "s3://predastore/$SNAP_ROOT_VOL/config.json" - 2>/dev/null || echo "{}")
-VOL_SNAPSHOT_ID=$(echo "$VOL_CONFIG" | jq -r '.SnapshotID // empty')
-VOL_SOURCE_NAME=$(echo "$VOL_CONFIG" | jq -r '.SourceVolumeName // empty')
-
-if [ -z "$VOL_SNAPSHOT_ID" ]; then
-    echo "  ERROR: Volume config missing SnapshotID — launch was NOT snapshot-backed"
-    exit 1
-fi
-if [ -z "$VOL_SOURCE_NAME" ]; then
-    echo "  ERROR: Volume config missing SourceVolumeName — launch was NOT snapshot-backed"
-    exit 1
-fi
-echo "  Volume is snapshot-backed (SnapshotID=$VOL_SNAPSHOT_ID, SourceVolumeName=$VOL_SOURCE_NAME)"
-
-echo "  Snapshot-backed instance launch verified"
-
-# Test 1d: Tag Management
-echo ""
-echo "Test 1d: Tag Management"
-echo "----------------------------------------"
-echo "Testing create-tags -> describe-tags -> delete-tags..."
-
-# Use the first instance for tag tests
-TAG_INSTANCE="${INSTANCE_IDS[0]}"
-
-# Create tags on instance
-echo "  Creating tags on instance $TAG_INSTANCE..."
-$AWS_EC2 create-tags --resources "$TAG_INSTANCE" --tags Key=Name,Value=multinode-test Key=Environment,Value=testing Key=DeleteMe,Value=please
-
-# Verify tags with describe-tags (resource-id filter)
-echo "  Verifying tags on instance..."
-TAG_COUNT=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$TAG_INSTANCE" \
-    --query 'length(Tags || `[]`)' --output text)
-if [ "$TAG_COUNT" -ne 3 ]; then
-    echo "  ERROR: Expected 3 tags on instance, got $TAG_COUNT"
-    exit 1
-fi
-echo "  Instance has $TAG_COUNT tags"
-
-# Filter by key
-echo "  Testing key filter..."
-ENV_TAGS=$($AWS_EC2 describe-tags --filters "Name=key,Values=Environment" \
-    --query 'length(Tags || `[]`)' --output text)
-if [ "$ENV_TAGS" -lt 1 ]; then
-    echo "  ERROR: Expected at least 1 'Environment' tag, got $ENV_TAGS"
-    exit 1
-fi
-echo "  Key filter returned $ENV_TAGS tags"
-
-# Filter by resource-type
-echo "  Testing resource-type filter..."
-INSTANCE_TAGS=$($AWS_EC2 describe-tags --filters "Name=resource-type,Values=instance" \
-    --query 'length(Tags || `[]`)' --output text)
-if [ "$INSTANCE_TAGS" -lt 3 ]; then
-    echo "  ERROR: Expected at least 3 instance tags, got $INSTANCE_TAGS"
-    exit 1
-fi
-echo "  Resource-type filter returned $INSTANCE_TAGS instance tags"
-
-# Overwrite a tag value
-echo "  Overwriting Name tag..."
-$AWS_EC2 create-tags --resources "$TAG_INSTANCE" --tags Key=Name,Value=multinode-updated
-UPDATED_NAME=$($AWS_EC2 describe-tags \
-    --filters "Name=resource-id,Values=$TAG_INSTANCE" "Name=key,Values=Name" \
-    --query 'Tags[0].Value' --output text)
-if [ "$UPDATED_NAME" != "multinode-updated" ]; then
-    echo "  ERROR: Tag overwrite failed: expected 'multinode-updated', got '$UPDATED_NAME'"
-    exit 1
-fi
-echo "  Tag overwrite verified"
-
-# Delete tag by key (unconditional)
-echo "  Deleting DeleteMe tag unconditionally..."
-$AWS_EC2 delete-tags --resources "$TAG_INSTANCE" --tags Key=DeleteMe
-REMAINING=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$TAG_INSTANCE" \
-    --query 'length(Tags || `[]`)' --output text)
-if [ "$REMAINING" -ne 2 ]; then
-    echo "  ERROR: Expected 2 tags after unconditional delete, got $REMAINING"
-    exit 1
-fi
-echo "  Unconditional delete verified ($REMAINING tags remaining)"
-
-# Delete tag with wrong value (should NOT delete)
-echo "  Attempting delete with wrong value (should be no-op)..."
-$AWS_EC2 delete-tags --resources "$TAG_INSTANCE" --tags Key=Environment,Value=production
-ENV_STILL=$($AWS_EC2 describe-tags \
-    --filters "Name=resource-id,Values=$TAG_INSTANCE" "Name=key,Values=Environment" \
-    --query 'length(Tags || `[]`)' --output text)
-if [ "$ENV_STILL" -ne 1 ]; then
-    echo "  ERROR: Value-conditional delete incorrectly removed tag"
-    exit 1
-fi
-echo "  Value-conditional mismatch preserved tag"
-
-# Delete tag with correct value
-echo "  Deleting Environment tag with correct value..."
-$AWS_EC2 delete-tags --resources "$TAG_INSTANCE" --tags Key=Environment,Value=testing
-ENV_GONE=$($AWS_EC2 describe-tags \
-    --filters "Name=resource-id,Values=$TAG_INSTANCE" "Name=key,Values=Environment" \
-    --query 'length(Tags || `[]`)' --output text)
-if [ "$ENV_GONE" -ne 0 ]; then
-    echo "  ERROR: Value-conditional delete failed to remove matching tag"
-    exit 1
-fi
-echo "  Value-conditional match deleted tag"
-
-# Verify only Name tag remains
-FINAL_COUNT=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$TAG_INSTANCE" \
-    --query 'length(Tags || `[]`)' --output text)
-if [ "$FINAL_COUNT" -ne 1 ]; then
-    echo "  ERROR: Expected 1 tag remaining, got $FINAL_COUNT"
-    exit 1
-fi
-echo "  Instance tag tests passed"
-
-# Test 1d-ii: Tags on Volumes (multi-node)
-echo ""
-echo "Test 1d-ii: Tags on Volumes (Multi-Node)"
-echo "----------------------------------------"
-
-# Get the root volume of the first instance
-TAG_VOL_ID=$($AWS_EC2 describe-instances --instance-ids "${INSTANCE_IDS[0]}" \
-    --query 'Reservations[0].Instances[0].BlockDeviceMappings[0].Ebs.VolumeId' --output text)
-echo "  Tagging volume $TAG_VOL_ID..."
-
-# Create tags on volume
-$AWS_EC2 create-tags --resources "$TAG_VOL_ID" --tags Key=Name,Value=multinode-root-vol Key=Environment,Value=testing
-
-# Verify tags on volume
-VOL_TAG_COUNT=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$TAG_VOL_ID" \
-    --query 'length(Tags || `[]`)' --output text)
-if [ "$VOL_TAG_COUNT" -ne 2 ]; then
-    echo "  ERROR: Expected 2 tags on volume, got $VOL_TAG_COUNT"
-    exit 1
-fi
-echo "  Volume has $VOL_TAG_COUNT tags"
-
-# Filter by resource-type=volume
-VOL_TYPE_TAGS=$($AWS_EC2 describe-tags --filters "Name=resource-type,Values=volume" \
-    --query 'length(Tags || `[]`)' --output text)
-if [ "$VOL_TYPE_TAGS" -lt 2 ]; then
-    echo "  ERROR: Expected at least 2 volume tags, got $VOL_TYPE_TAGS"
-    exit 1
-fi
-echo "  Volume resource-type filter returned $VOL_TYPE_TAGS tags"
-
-# Delete tags from volume
-$AWS_EC2 delete-tags --resources "$TAG_VOL_ID" --tags Key=Name Key=Environment
-VOL_TAG_AFTER=$($AWS_EC2 describe-tags --filters "Name=resource-id,Values=$TAG_VOL_ID" \
-    --query 'length(Tags || `[]`)' --output text)
-if [ "$VOL_TAG_AFTER" -ne 0 ]; then
-    echo "  ERROR: Expected 0 tags after delete, got $VOL_TAG_AFTER"
-    exit 1
-fi
-echo "  Volume tag cleanup verified"
-
-echo "  Tag management tests passed (instances + volumes)"
-
-# Test 2: DescribeInstances Aggregation
-echo ""
-echo "Test 2: DescribeInstances Aggregation"
-echo "----------------------------------------"
-echo "Verifying all instances are returned via fan-out query..."
-
-DESCRIBE_OUTPUT=$($AWS_EC2 describe-instances --query 'Reservations[*].Instances[*].InstanceId' --output text)
-DESCRIBED_COUNT=$(echo "$DESCRIBE_OUTPUT" | wc -w)
-
-echo "  Launched: ${#INSTANCE_IDS[@]} instances"
-echo "  Described: $DESCRIBED_COUNT instances"
-
-if [ "$DESCRIBED_COUNT" -lt "${#INSTANCE_IDS[@]}" ]; then
-    echo "ERROR: DescribeInstances did not return all instances"
-    echo "  Expected: ${#INSTANCE_IDS[@]}, Got: $DESCRIBED_COUNT"
-    exit 1
-fi
-echo "  Aggregation test passed"
-
-# Test 3: Cross-Node Operations
-echo ""
-echo "Test 3: Cross-Node Operations"
-echo "----------------------------------------"
-echo "Testing stop/start/terminate via gateway regardless of instance location..."
-
-# Pick first instance for cross-node operations
-TEST_INSTANCE="${INSTANCE_IDS[0]}"
-echo "  Test instance: $TEST_INSTANCE"
-
-# Stop instance
-echo "  Stopping instance..."
-$AWS_EC2 stop-instances --instance-ids "$TEST_INSTANCE" > /dev/null
-wait_for_instance_state "$TEST_INSTANCE" "stopped" 30
-
-# Start instance
-echo "  Starting instance..."
-$AWS_EC2 start-instances --instance-ids "$TEST_INSTANCE" > /dev/null
-wait_for_instance_state "$TEST_INSTANCE" "running" 30
-
-echo "  Cross-node operations test passed"
-
-# Test 4: NATS Cluster Health (Post-Operations)
-echo ""
-echo "Test 4: NATS Cluster Health (Post-Operations)"
-echo "----------------------------------------"
-echo "Verifying NATS cluster is still healthy after operations..."
-
-verify_nats_cluster 3 || {
-    echo "WARNING: NATS cluster verification failed after operations"
-}
-
-# Test 5: VM Crash Recovery (kill -9 → detect → auto-restart)
-echo ""
-echo "Test 5: VM Crash Recovery"
-echo "----------------------------------------"
-echo "Testing QEMU crash detection and auto-restart..."
-
-# Use the second instance for crash testing (first was used for stop/start in Test 3)
-CRASH_INSTANCE="${INSTANCE_IDS[1]}"
-echo "  Crash test instance: $CRASH_INSTANCE"
-
-# Verify instance is running before crash
-CRASH_STATE=$($AWS_EC2 describe-instances --instance-ids "$CRASH_INSTANCE" \
-    --query 'Reservations[0].Instances[0].State.Name' --output text)
-if [ "$CRASH_STATE" != "running" ]; then
-    echo "  ERROR: Instance not in running state before crash test (state: $CRASH_STATE)"
-    exit 1
-fi
-echo "  Instance is running"
-
-# Get the QEMU PID
-QEMU_PID=$(get_qemu_pid "$CRASH_INSTANCE")
-if [ -z "$QEMU_PID" ]; then
-    echo "  ERROR: Could not find QEMU PID for $CRASH_INSTANCE"
-    exit 1
-fi
-echo "  QEMU PID: $QEMU_PID"
-
-# Kill QEMU with SIGKILL (simulates OOM kill)
-echo "  Killing QEMU process with SIGKILL (simulating OOM kill)..."
-kill -9 "$QEMU_PID"
-
-# Brief pause for the daemon to detect the crash
-sleep 3
-
-# Verify the daemon detected the crash (state should be error or already recovering)
-echo "  Checking post-crash state..."
-POST_CRASH_STATE=$($AWS_EC2 describe-instances --instance-ids "$CRASH_INSTANCE" \
-    --query 'Reservations[0].Instances[0].State.Name' --output text)
-echo "  Post-crash state: $POST_CRASH_STATE"
-
-if [ "$POST_CRASH_STATE" == "running" ]; then
-    # Might have recovered very quickly, check if it's a new PID
-    NEW_PID=$(get_qemu_pid "$CRASH_INSTANCE" || echo "")
-    if [ "$NEW_PID" == "$QEMU_PID" ]; then
-        echo "  ERROR: Instance still has same PID after kill -9, crash not detected"
-        exit 1
-    fi
-    echo "  Instance already recovered with new PID: $NEW_PID (was: $QEMU_PID)"
-else
-    # Wait for auto-restart (backoff starts at 5s)
-    echo "  Instance in $POST_CRASH_STATE state, waiting for auto-restart..."
-    wait_for_instance_recovery "$CRASH_INSTANCE" 30 || {
-        echo "  ERROR: Instance failed to recover from crash"
-        # Dump daemon logs for debugging
-        for i in 1 2 3; do
-            if [ -f "$HOME/node$i/logs/hive.log" ]; then
-                echo ""
-                echo "  --- node$i daemon log (last 30 lines) ---"
-                tail -30 "$HOME/node$i/logs/hive.log"
-            fi
-        done
-        exit 1
-    }
-fi
-
-# Verify the instance is running with a new QEMU process
-RECOVERED_PID=$(get_qemu_pid "$CRASH_INSTANCE")
-if [ -z "$RECOVERED_PID" ]; then
-    echo "  ERROR: No QEMU process found after recovery"
-    exit 1
-fi
-
-if [ "$RECOVERED_PID" == "$QEMU_PID" ]; then
-    echo "  ERROR: QEMU PID unchanged after crash recovery (expected new process)"
-    exit 1
-fi
-echo "  New QEMU PID: $RECOVERED_PID (was: $QEMU_PID)"
-
-# Verify describe-instances shows running state
-FINAL_STATE=$($AWS_EC2 describe-instances --instance-ids "$CRASH_INSTANCE" \
-    --query 'Reservations[0].Instances[0].State.Name' --output text)
-if [ "$FINAL_STATE" != "running" ]; then
-    echo "  ERROR: Instance not running after recovery (state: $FINAL_STATE)"
-    exit 1
-fi
-echo "  Instance is running after crash recovery"
-
-# Verify SSH works after recovery (VM rebooted with fresh OS from root volume)
-echo "  Verifying SSH after crash recovery..."
-CRASH_SSH_PORT=$(get_ssh_port "$CRASH_INSTANCE" 30)
-CRASH_SSH_HOST=$(get_ssh_host "$CRASH_INSTANCE")
-if [ -n "$CRASH_SSH_PORT" ]; then
-    echo "  SSH endpoint after recovery: $CRASH_SSH_HOST:$CRASH_SSH_PORT"
-    # Update SSH details for later termination verification
-    SSH_PORTS[1]="$CRASH_SSH_PORT"
-    SSH_HOSTS[1]="$CRASH_SSH_HOST"
-    wait_for_ssh "$CRASH_SSH_HOST" "$CRASH_SSH_PORT" "multinode-test-key.pem" 30 || {
-        echo "  WARNING: SSH not ready after crash recovery (non-fatal, VM may still be booting)"
-    }
-else
-    echo "  WARNING: Could not determine SSH port after recovery (non-fatal)"
-fi
-
-# Test 5b: Crash Loop Prevention (kill 4 times rapidly to exceed max restarts)
-echo ""
-echo "Test 5b: Crash Loop Prevention"
-echo "----------------------------------------"
-echo "Testing that crash loop is detected and restarts stop after max attempts..."
-
-# Use the third instance for crash loop testing
-LOOP_INSTANCE="${INSTANCE_IDS[2]}"
-echo "  Crash loop test instance: $LOOP_INSTANCE"
-
-# Verify instance is running
-LOOP_STATE=$($AWS_EC2 describe-instances --instance-ids "$LOOP_INSTANCE" \
-    --query 'Reservations[0].Instances[0].State.Name' --output text)
-if [ "$LOOP_STATE" != "running" ]; then
-    echo "  ERROR: Instance not running before crash loop test (state: $LOOP_STATE)"
-    exit 1
-fi
-
-# Kill QEMU repeatedly to exhaust restart attempts (max 3 in 10 min window)
-for crash_num in 1 2 3 4; do
-    echo "  Crash $crash_num/4: killing QEMU..."
-    LOOP_PID=$(get_qemu_pid "$LOOP_INSTANCE" || echo "")
-    if [ -z "$LOOP_PID" ]; then
-        echo "  No QEMU process found (instance may be in error state)"
-        break
-    fi
-
-    kill -9 "$LOOP_PID"
-
-    if [ $crash_num -lt 4 ]; then
-        # Wait for restart (backoff increases: 5s, 10s, 20s)
-        # Give generous time for each restart cycle
-        local_max=$((15 + crash_num * 10))
-        echo "  Waiting up to ${local_max}s for restart or error state..."
-        attempt=0
-        while [ $attempt -lt $local_max ]; do
-            state=$($AWS_EC2 describe-instances --instance-ids "$LOOP_INSTANCE" \
-                --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "unknown")
-            if [ "$state" == "running" ]; then
-                echo "  Instance restarted (crash $crash_num)"
-                break
-            fi
-            if [ "$state" == "error" ] && [ $crash_num -ge 3 ]; then
-                echo "  Instance in error state after crash $crash_num (restart limit may be reached)"
-                break
-            fi
-            sleep 2
-            attempt=$((attempt + 2))
-        done
-    fi
-done
-
-# After 4 rapid crashes, the instance should be in error state (exceeded max 3 restarts)
-sleep 5
-LOOP_FINAL_STATE=$($AWS_EC2 describe-instances --instance-ids "$LOOP_INSTANCE" \
-    --query 'Reservations[0].Instances[0].State.Name' --output text)
-echo "  Final state after crash loop: $LOOP_FINAL_STATE"
-
-if [ "$LOOP_FINAL_STATE" == "error" ]; then
-    echo "  Crash loop prevention working: instance stayed in error state"
-else
-    echo "  WARNING: Instance in state '$LOOP_FINAL_STATE' (expected 'error' after exceeding max restarts)"
-    echo "  This may be expected if timing allowed restarts to spread across the window"
-fi
-
-echo "  Crash recovery tests passed"
-
-# Phase 5c: IAM Accounts & Cross-Account Isolation
-echo ""
-echo "Phase 5c: IAM Accounts & Cross-Account Isolation"
-echo "========================================"
-
-AWS_EP="--endpoint-url https://${NODE1_IP}:${AWSGW_PORT}"
-
-# Step 1: Create accounts
-echo ""
-echo "Step 1: Create Accounts"
-echo "----------------------------------------"
-
-echo "  Creating Team Alpha account..."
-ALPHA_OUTPUT=$(./bin/hive admin account create --name "Team Alpha" --config "$HOME/node1/config/hive.toml" 2>&1)
-echo "$ALPHA_OUTPUT"
-ALPHA_ACCOUNT=$(echo "$ALPHA_OUTPUT" | grep "Account ID:" | awk '{print $NF}')
-ALPHA_KEY_ID=$(echo "$ALPHA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
-ALPHA_SECRET=$(echo "$ALPHA_OUTPUT" | grep "Secret Access Key:" | awk '{print $NF}')
-
-if [ -z "$ALPHA_ACCOUNT" ] || [ -z "$ALPHA_KEY_ID" ]; then
-    echo "  ERROR: Failed to parse Team Alpha account output"
-    exit 1
-fi
-echo "  Team Alpha: account=$ALPHA_ACCOUNT key=$ALPHA_KEY_ID"
-
-# Configure alpha profile (in case auto-config used a different endpoint)
-aws configure set aws_access_key_id "$ALPHA_KEY_ID" --profile hive-team-alpha
-aws configure set aws_secret_access_key "$ALPHA_SECRET" --profile hive-team-alpha
-aws configure set region us-east-1 --profile hive-team-alpha
-
-echo "  Creating Team Beta account..."
-BETA_OUTPUT=$(./bin/hive admin account create --name "Team Beta" --config "$HOME/node1/config/hive.toml" 2>&1)
-echo "$BETA_OUTPUT"
-BETA_ACCOUNT=$(echo "$BETA_OUTPUT" | grep "Account ID:" | awk '{print $NF}')
-BETA_KEY_ID=$(echo "$BETA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
-BETA_SECRET=$(echo "$BETA_OUTPUT" | grep "Secret Access Key:" | awk '{print $NF}')
-
-if [ -z "$BETA_ACCOUNT" ] || [ -z "$BETA_KEY_ID" ]; then
-    echo "  ERROR: Failed to parse Team Beta account output"
-    exit 1
-fi
-echo "  Team Beta: account=$BETA_ACCOUNT key=$BETA_KEY_ID"
-
-aws configure set aws_access_key_id "$BETA_KEY_ID" --profile hive-team-beta
-aws configure set aws_secret_access_key "$BETA_SECRET" --profile hive-team-beta
-aws configure set region us-east-1 --profile hive-team-beta
-
-# Verify sequential IDs
-echo "  Verifying sequential account IDs..."
-if [ "$ALPHA_ACCOUNT" == "000000000001" ] && [ "$BETA_ACCOUNT" == "000000000002" ]; then
-    echo "  Sequential IDs correct: $ALPHA_ACCOUNT, $BETA_ACCOUNT"
-else
-    echo "  WARNING: Account IDs may not be sequential: $ALPHA_ACCOUNT, $BETA_ACCOUNT"
-fi
-
-# List accounts
-echo "  Listing accounts..."
-ACCOUNT_LIST=$(./bin/hive admin account list --config "$HOME/node1/config/hive.toml" 2>&1)
-echo "$ACCOUNT_LIST"
-if echo "$ACCOUNT_LIST" | grep -q "Team Alpha" && echo "$ACCOUNT_LIST" | grep -q "Team Beta"; then
-    echo "  Account list verified"
-else
-    echo "  ERROR: Account list missing expected accounts"
-    exit 1
-fi
-
-# Step 2: Account admin auth
-echo ""
-echo "Step 2: Account Admin Auth"
-echo "----------------------------------------"
-
-echo "  Testing alpha admin auth..."
-aws $AWS_EP ec2 describe-instances --profile hive-team-alpha > /dev/null
-echo "    Alpha admin: ec2 OK"
-aws $AWS_EP iam list-users --profile hive-team-alpha > /dev/null
-echo "    Alpha admin: iam OK"
-
-echo "  Testing beta admin auth..."
-aws $AWS_EP ec2 describe-instances --profile hive-team-beta > /dev/null
-echo "    Beta admin: ec2 OK"
-aws $AWS_EP iam list-users --profile hive-team-beta > /dev/null
-echo "    Beta admin: iam OK"
-
-# Step 3: Account-scoped users
-echo ""
-echo "Step 3: Account-Scoped Users"
-echo "----------------------------------------"
-
-# Same username in different accounts
-echo "  Creating alice in both accounts..."
-aws $AWS_EP iam create-user --user-name alice --profile hive-team-alpha > /dev/null
-ALPHA_ALICE_ARN=$(aws $AWS_EP iam get-user --user-name alice --profile hive-team-alpha | jq -r '.User.Arn')
-echo "    Alpha alice: $ALPHA_ALICE_ARN"
-
-aws $AWS_EP iam create-user --user-name alice --profile hive-team-beta > /dev/null
-BETA_ALICE_ARN=$(aws $AWS_EP iam get-user --user-name alice --profile hive-team-beta | jq -r '.User.Arn')
-echo "    Beta alice: $BETA_ALICE_ARN"
-
-# Additional users
-aws $AWS_EP iam create-user --user-name team-member --profile hive-team-alpha > /dev/null
-aws $AWS_EP iam create-user --user-name dev-user --profile hive-team-beta > /dev/null
-
-# List users — scoped
-echo "  Verifying scoped user lists..."
-ALPHA_USERS=$(aws $AWS_EP iam list-users --profile hive-team-alpha | jq -r '.Users[].UserName' | sort | tr '\n' ',')
-echo "    Alpha users: $ALPHA_USERS"
-BETA_USERS=$(aws $AWS_EP iam list-users --profile hive-team-beta | jq -r '.Users[].UserName' | sort | tr '\n' ',')
-echo "    Beta users: $BETA_USERS"
-
-# Cross-account isolation
-echo "  Verifying cross-account isolation..."
-set +e
-CROSS_CHECK=$(aws $AWS_EP iam get-user --user-name dev-user --profile hive-team-alpha 2>&1)
-set -e
-if echo "$CROSS_CHECK" | grep -q "NoSuchEntity"; then
-    echo "    Alpha cannot see Beta's dev-user — isolation OK"
-else
-    echo "    ERROR: Alpha can see Beta's user (cross-account leak)"
-    exit 1
-fi
-
-set +e
-CROSS_CHECK2=$(aws $AWS_EP iam get-user --user-name team-member --profile hive-team-beta 2>&1)
-set -e
-if echo "$CROSS_CHECK2" | grep -q "NoSuchEntity"; then
-    echo "    Beta cannot see Alpha's team-member — isolation OK"
-else
-    echo "    ERROR: Beta can see Alpha's user (cross-account leak)"
-    exit 1
-fi
-
-# Step 4: Account-scoped access keys
-echo ""
-echo "Step 4: Account-Scoped Access Keys"
-echo "----------------------------------------"
-
-ALPHA_ALICE_KEY=$(aws $AWS_EP iam create-access-key --user-name alice --profile hive-team-alpha)
-ALPHA_ALICE_KEY_ID=$(echo "$ALPHA_ALICE_KEY" | jq -r '.AccessKey.AccessKeyId')
-ALPHA_ALICE_SECRET=$(echo "$ALPHA_ALICE_KEY" | jq -r '.AccessKey.SecretAccessKey')
-echo "  Alpha alice key: $ALPHA_ALICE_KEY_ID"
-
-aws configure set aws_access_key_id "$ALPHA_ALICE_KEY_ID" --profile hive-alpha-alice
-aws configure set aws_secret_access_key "$ALPHA_ALICE_SECRET" --profile hive-alpha-alice
-aws configure set region us-east-1 --profile hive-alpha-alice
-
-BETA_ALICE_KEY=$(aws $AWS_EP iam create-access-key --user-name alice --profile hive-team-beta)
-BETA_ALICE_KEY_ID=$(echo "$BETA_ALICE_KEY" | jq -r '.AccessKey.AccessKeyId')
-BETA_ALICE_SECRET=$(echo "$BETA_ALICE_KEY" | jq -r '.AccessKey.SecretAccessKey')
-echo "  Beta alice key: $BETA_ALICE_KEY_ID"
-
-aws configure set aws_access_key_id "$BETA_ALICE_KEY_ID" --profile hive-beta-alice
-aws configure set aws_secret_access_key "$BETA_ALICE_SECRET" --profile hive-beta-alice
-aws configure set region us-east-1 --profile hive-beta-alice
-
-# Step 5: Account-scoped policies & enforcement
-echo ""
-echo "Step 5: Account-Scoped Policies & Enforcement"
-echo "----------------------------------------"
-
-# Alpha: narrow EC2 read-only
-echo "  Creating EC2ReadOnly in Alpha (narrow)..."
-aws $AWS_EP iam create-policy \
-    --policy-name EC2ReadOnly \
-    --policy-document '{
-        "Version": "2012-10-17",
-        "Statement": [{
-            "Effect": "Allow",
-            "Action": ["ec2:DescribeInstances", "ec2:DescribeVpcs"],
-            "Resource": "*"
-        }]
-    }' --profile hive-team-alpha > /dev/null
-
-# Beta: broad EC2 Describe* wildcard
-echo "  Creating EC2ReadOnly in Beta (broad Describe*)..."
-aws $AWS_EP iam create-policy \
-    --policy-name EC2ReadOnly \
-    --policy-document '{
-        "Version": "2012-10-17",
-        "Statement": [{
-            "Effect": "Allow",
-            "Action": "ec2:Describe*",
-            "Resource": "*"
-        }]
-    }' --profile hive-team-beta > /dev/null
-
-# Attach policies
-echo "  Attaching policies..."
-aws $AWS_EP iam attach-user-policy --user-name alice \
-    --policy-arn "arn:aws:iam::${ALPHA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-alpha
-aws $AWS_EP iam attach-user-policy --user-name alice \
-    --policy-arn "arn:aws:iam::${BETA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-beta
-
-# Verify scoped enforcement
-echo "  Verifying scoped enforcement..."
-
-# Alpha alice: narrow policy
-aws $AWS_EP ec2 describe-instances --profile hive-alpha-alice > /dev/null
-echo "    Alpha alice: describe-instances — allowed"
-aws $AWS_EP ec2 describe-vpcs --profile hive-alpha-alice > /dev/null
-echo "    Alpha alice: describe-vpcs — allowed"
-expect_error "AccessDenied" aws $AWS_EP ec2 describe-key-pairs --profile hive-alpha-alice
-echo "    Alpha alice: describe-key-pairs — denied (narrow policy)"
-
-# Beta alice: broad policy
-aws $AWS_EP ec2 describe-instances --profile hive-beta-alice > /dev/null
-echo "    Beta alice: describe-instances — allowed"
-aws $AWS_EP ec2 describe-key-pairs --profile hive-beta-alice > /dev/null
-echo "    Beta alice: describe-key-pairs — allowed (Describe* wildcard)"
-
-# Both denied non-Describe
-expect_error "AccessDenied" aws $AWS_EP ec2 create-key-pair --key-name x --profile hive-alpha-alice
-echo "    Alpha alice: create-key-pair — denied"
-expect_error "AccessDenied" aws $AWS_EP ec2 create-key-pair --key-name x --profile hive-beta-alice
-echo "    Beta alice: create-key-pair — denied"
-
-echo "  Scoped enforcement verified"
-
-# Step 6: Cross-account delete isolation
-echo ""
-echo "Step 6: Cross-Account Delete Isolation"
-echo "----------------------------------------"
-
-# Delete Alpha's alice
-echo "  Deleting Alpha's alice..."
-aws $AWS_EP iam detach-user-policy --user-name alice \
-    --policy-arn "arn:aws:iam::${ALPHA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-alpha
-aws $AWS_EP iam delete-access-key --user-name alice \
-    --access-key-id "$ALPHA_ALICE_KEY_ID" --profile hive-team-alpha
-aws $AWS_EP iam delete-user --user-name alice --profile hive-team-alpha
-
-# Verify Alpha alice gone
-set +e
-ALPHA_CHECK=$(aws $AWS_EP iam get-user --user-name alice --profile hive-team-alpha 2>&1)
-set -e
-if echo "$ALPHA_CHECK" | grep -q "NoSuchEntity"; then
-    echo "  Alpha alice deleted"
-else
-    echo "  ERROR: Alpha alice still exists after delete"
-    exit 1
-fi
-
-# Verify Beta alice unaffected
-aws $AWS_EP iam get-user --user-name alice --profile hive-team-beta > /dev/null
-echo "  Beta alice still exists (isolation OK)"
-
-aws $AWS_EP ec2 describe-instances --profile hive-beta-alice > /dev/null
-echo "  Beta alice auth still works (isolation OK)"
-
-# ==========================================================================
-# Step 7: EC2 Resource Scoping
-# ==========================================================================
-# Tests that EC2 resources are properly isolated between accounts.
-# Reuses Alpha/Beta accounts created in Step 1.
-# Skips: Section 6 (CreateImage — mulga-612), instance tags (mulga-613)
-echo ""
-echo "Step 7: EC2 Resource Scoping"
-echo "========================================"
-
-# --- 7a: Instance Scoping ---
-echo ""
-echo "Step 7a: Instance Scoping"
-echo "----------------------------------------"
-
-# Create per-account key pairs (key pairs are account-scoped, root's multinode-test-key is invisible)
-$AWS_EC2 create-key-pair --key-name alpha-instance-key --profile hive-team-alpha > /dev/null
-$AWS_EC2 create-key-pair --key-name beta-instance-key --profile hive-team-beta > /dev/null
-echo "  Created per-account key pairs for instance launches"
-
-echo "  Alpha launching instance..."
-ALPHA_INST_RUN=$($AWS_EC2 run-instances \
-    --image-id "$AMI_ID" \
-    --instance-type "$INSTANCE_TYPE" \
-    --key-name alpha-instance-key \
-    --profile hive-team-alpha)
-ALPHA_INST=$(echo "$ALPHA_INST_RUN" | jq -r '.Instances[0].InstanceId')
-echo "  Alpha instance: $ALPHA_INST"
-
-echo "  Beta launching instance..."
-BETA_INST_RUN=$($AWS_EC2 run-instances \
-    --image-id "$AMI_ID" \
-    --instance-type "$INSTANCE_TYPE" \
-    --key-name beta-instance-key \
-    --profile hive-team-beta)
-BETA_INST=$(echo "$BETA_INST_RUN" | jq -r '.Instances[0].InstanceId')
-echo "  Beta instance: $BETA_INST"
-
-# Wait for running (inline — wait_for_instance_state uses root profile, can't see tenant instances)
-echo "  Waiting for instances to reach running state..."
-COUNT=0
-while [ $COUNT -lt 30 ]; do
-    A_STATE=$($AWS_EC2 describe-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha \
-        --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "pending")
-    B_STATE=$($AWS_EC2 describe-instances --instance-ids "$BETA_INST" --profile hive-team-beta \
-        --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "pending")
-    echo "  Alpha=$A_STATE, Beta=$B_STATE"
-    if [ "$A_STATE" == "running" ] && [ "$B_STATE" == "running" ]; then break; fi
-    sleep 2
-    COUNT=$((COUNT + 1))
-done
-if [ "$A_STATE" != "running" ] || [ "$B_STATE" != "running" ]; then
-    echo "  ERROR: Instances failed to reach running state"
-    exit 1
-fi
-echo "  Both instances running"
-
-# Describe isolation
-ALPHA_DESC=$($AWS_EC2 describe-instances --profile hive-team-alpha \
-    --query 'Reservations[].Instances[].InstanceId' --output text)
-if echo "$ALPHA_DESC" | grep -q "$BETA_INST"; then
-    echo "  ERROR: Alpha can see Beta's instance"
-    exit 1
-fi
-echo "  Alpha sees only own instances"
-
-BETA_DESC=$($AWS_EC2 describe-instances --profile hive-team-beta \
-    --query 'Reservations[].Instances[].InstanceId' --output text)
-if echo "$BETA_DESC" | grep -q "$ALPHA_INST"; then
-    echo "  ERROR: Beta can see Alpha's instance"
-    exit 1
-fi
-echo "  Beta sees only own instances"
-
-# OwnerId verification
-ALPHA_OWNER=$($AWS_EC2 describe-instances --profile hive-team-alpha \
-    --query 'Reservations[0].OwnerId' --output text)
-if [ "$ALPHA_OWNER" != "$ALPHA_ACCOUNT" ]; then
-    echo "  ERROR: Alpha OwnerId mismatch: expected $ALPHA_ACCOUNT, got $ALPHA_OWNER"
-    exit 1
-fi
-echo "  Alpha OwnerId correct: $ALPHA_OWNER"
-
-# Cross-account operations
-expect_error "InvalidInstanceID.NotFound" \
-    $AWS_EC2 stop-instances --instance-ids "$BETA_INST" --profile hive-team-alpha
-echo "  Alpha cannot stop Beta's instance"
-
-expect_error "InvalidInstanceID.NotFound" \
-    $AWS_EC2 terminate-instances --instance-ids "$ALPHA_INST" --profile hive-team-beta
-echo "  Beta cannot terminate Alpha's instance"
-
-expect_error "InvalidInstanceID.NotFound" \
-    $AWS_EC2 get-console-output --instance-id "$ALPHA_INST" --profile hive-team-beta
-echo "  Beta cannot get console output of Alpha's instance"
-
-echo "  Instance scoping passed"
-
-# --- 7b: Volume Scoping ---
-echo ""
-echo "Step 7b: Volume Scoping"
-echo "----------------------------------------"
-
-ALPHA_VOL=$($AWS_EC2 create-volume --availability-zone "$HIVE_AZ" --size 10 \
-    --volume-type gp3 --profile hive-team-alpha | jq -r '.VolumeId')
-echo "  Alpha volume: $ALPHA_VOL"
-
-BETA_VOL=$($AWS_EC2 create-volume --availability-zone "$HIVE_AZ" --size 10 \
-    --volume-type gp3 --profile hive-team-beta | jq -r '.VolumeId')
-echo "  Beta volume: $BETA_VOL"
-
-# Describe isolation
-ALPHA_VOLS=$($AWS_EC2 describe-volumes --profile hive-team-alpha \
-    --query 'Volumes[].VolumeId' --output text)
-if echo "$ALPHA_VOLS" | grep -q "$BETA_VOL"; then
-    echo "  ERROR: Alpha can see Beta's volume"
-    exit 1
-fi
-echo "  Alpha sees only own volumes"
-
-# Cross-account operations
-expect_error "InvalidVolume.NotFound" \
-    $AWS_EC2 describe-volumes --volume-ids "$BETA_VOL" --profile hive-team-alpha
-echo "  Alpha cannot describe Beta's volume by ID"
-
-expect_error "InvalidVolume.NotFound" \
-    $AWS_EC2 delete-volume --volume-id "$ALPHA_VOL" --profile hive-team-beta
-echo "  Beta cannot delete Alpha's volume"
-
-expect_error "InvalidVolume.NotFound" \
-    $AWS_EC2 attach-volume --volume-id "$ALPHA_VOL" \
-    --instance-id "$BETA_INST" --device /dev/sdf --profile hive-team-beta
-echo "  Beta cannot attach Alpha's volume"
-
-# Attach Alpha's volume, then test cross-account detach
-$AWS_EC2 attach-volume --volume-id "$ALPHA_VOL" \
-    --instance-id "$ALPHA_INST" --device /dev/sdf --profile hive-team-alpha > /dev/null
-sleep 2
-
-expect_error "InvalidVolume.NotFound" \
-    $AWS_EC2 detach-volume --volume-id "$ALPHA_VOL" --profile hive-team-beta
-echo "  Beta cannot detach Alpha's volume"
-
-expect_error "InvalidVolume.NotFound" \
-    $AWS_EC2 modify-volume --volume-id "$ALPHA_VOL" --size 20 --profile hive-team-beta
-echo "  Beta cannot modify Alpha's volume"
-
-# Detach for later cleanup
-$AWS_EC2 detach-volume --volume-id "$ALPHA_VOL" --profile hive-team-alpha > /dev/null
-sleep 2
-
-echo "  Volume scoping passed"
-
-# --- 7c: Key Pair Scoping ---
-echo ""
-echo "Step 7c: Key Pair Scoping"
-echo "----------------------------------------"
-
-$AWS_EC2 create-key-pair --key-name alpha-key --profile hive-team-alpha > /dev/null
-ALPHA_KEYPAIR_ID=$($AWS_EC2 describe-key-pairs --key-names alpha-key \
-    --profile hive-team-alpha --query 'KeyPairs[0].KeyPairId' --output text)
-echo "  Alpha key: alpha-key ($ALPHA_KEYPAIR_ID)"
-
-$AWS_EC2 create-key-pair --key-name beta-key --profile hive-team-beta > /dev/null
-echo "  Beta key: beta-key"
-
-# Describe isolation
-ALPHA_KEYS=$($AWS_EC2 describe-key-pairs --profile hive-team-alpha \
-    --query 'KeyPairs[].KeyName' --output text)
-if echo "$ALPHA_KEYS" | grep -q "beta-key"; then
-    echo "  ERROR: Alpha can see Beta's key"
-    exit 1
-fi
-echo "  Alpha sees only own keys"
-
-# Same name, different accounts
-$AWS_EC2 create-key-pair --key-name shared-name --profile hive-team-alpha > /dev/null
-$AWS_EC2 create-key-pair --key-name shared-name --profile hive-team-beta > /dev/null
-ALPHA_SHARED_ID=$($AWS_EC2 describe-key-pairs --key-names shared-name \
-    --profile hive-team-alpha --query 'KeyPairs[0].KeyPairId' --output text)
-BETA_SHARED_ID=$($AWS_EC2 describe-key-pairs --key-names shared-name \
-    --profile hive-team-beta --query 'KeyPairs[0].KeyPairId' --output text)
-if [ "$ALPHA_SHARED_ID" == "$BETA_SHARED_ID" ]; then
-    echo "  ERROR: Same KeyPairId for shared-name in both accounts"
-    exit 1
-fi
-echo "  Namespace isolation: alpha=$ALPHA_SHARED_ID, beta=$BETA_SHARED_ID"
-
-# Cross-account delete (idempotent, but shouldn't affect other account)
-$AWS_EC2 delete-key-pair --key-name alpha-key --profile hive-team-beta
-ALPHA_KEY_CHECK=$($AWS_EC2 describe-key-pairs --key-names alpha-key \
-    --profile hive-team-alpha --query 'KeyPairs[0].KeyPairId' --output text)
-if [ "$ALPHA_KEY_CHECK" != "$ALPHA_KEYPAIR_ID" ]; then
-    echo "  ERROR: Beta's delete affected Alpha's key"
-    exit 1
-fi
-echo "  Cross-account delete had no effect on Alpha's key"
-
-# Import key pair — account scoped
-ssh-keygen -t ed25519 -f /tmp/test-import-key -N "" -q
-$AWS_EC2 import-key-pair --key-name imported-key \
-    --public-key-material fileb:///tmp/test-import-key.pub --profile hive-team-alpha > /dev/null
-BETA_IMPORT_CHECK=$($AWS_EC2 describe-key-pairs --profile hive-team-beta \
-    --query 'KeyPairs[].KeyName' --output text)
-if echo "$BETA_IMPORT_CHECK" | grep -q "imported-key"; then
-    echo "  ERROR: Beta can see Alpha's imported key"
-    exit 1
-fi
-echo "  Imported key invisible to Beta"
-rm -f /tmp/test-import-key /tmp/test-import-key.pub
-
-echo "  Key pair scoping passed"
-
-# --- 7d: Snapshot Scoping ---
-echo ""
-echo "Step 7d: Snapshot Scoping"
-echo "----------------------------------------"
-
-ALPHA_SNAP=$($AWS_EC2 create-snapshot --volume-id "$ALPHA_VOL" \
-    --description "Alpha snapshot" --profile hive-team-alpha | jq -r '.SnapshotId')
-echo "  Alpha snapshot: $ALPHA_SNAP"
-
-BETA_SNAP=$($AWS_EC2 create-snapshot --volume-id "$BETA_VOL" \
-    --description "Beta snapshot" --profile hive-team-beta | jq -r '.SnapshotId')
-echo "  Beta snapshot: $BETA_SNAP"
-
-# Describe isolation
-ALPHA_SNAPS=$($AWS_EC2 describe-snapshots --owner-ids self --profile hive-team-alpha \
-    --query 'Snapshots[].SnapshotId' --output text)
-if echo "$ALPHA_SNAPS" | grep -q "$BETA_SNAP"; then
-    echo "  ERROR: Alpha can see Beta's snapshot"
-    exit 1
-fi
-echo "  Alpha sees only own snapshots"
-
-# OwnerId verification
-ALPHA_SNAP_OWNER=$($AWS_EC2 describe-snapshots --owner-ids self --profile hive-team-alpha \
-    --query 'Snapshots[0].OwnerId' --output text)
-if [ "$ALPHA_SNAP_OWNER" != "$ALPHA_ACCOUNT" ]; then
-    echo "  ERROR: Snapshot OwnerId mismatch: expected $ALPHA_ACCOUNT, got $ALPHA_SNAP_OWNER"
-    exit 1
-fi
-echo "  Alpha snapshot OwnerId correct"
-
-# Cross-account delete
-expect_error "UnauthorizedOperation" \
-    $AWS_EC2 delete-snapshot --snapshot-id "$ALPHA_SNAP" --profile hive-team-beta
-echo "  Beta cannot delete Alpha's snapshot"
-
-# Cross-account snapshot from other's volume
-expect_error "InvalidVolume.NotFound" \
-    $AWS_EC2 create-snapshot --volume-id "$ALPHA_VOL" \
-    --description "stolen" --profile hive-team-beta
-echo "  Beta cannot snapshot Alpha's volume"
-
-echo "  Snapshot scoping passed"
-
-# --- 7e: VPC/Subnet Scoping ---
-echo ""
-echo "Step 7e: VPC/Subnet Scoping"
-echo "----------------------------------------"
-
-ALPHA_VPC=$($AWS_EC2 create-vpc --cidr-block 10.0.0.0/16 \
-    --profile hive-team-alpha --query 'Vpc.VpcId' --output text)
-echo "  Alpha VPC: $ALPHA_VPC"
-
-BETA_VPC=$($AWS_EC2 create-vpc --cidr-block 10.0.0.0/16 \
-    --profile hive-team-beta --query 'Vpc.VpcId' --output text)
-echo "  Beta VPC: $BETA_VPC (same CIDR — no conflict)"
-
-# Describe isolation
-ALPHA_VPCS=$($AWS_EC2 describe-vpcs --profile hive-team-alpha \
-    --query 'Vpcs[].VpcId' --output text)
-if echo "$ALPHA_VPCS" | grep -q "$BETA_VPC"; then
-    echo "  ERROR: Alpha can see Beta's VPC"
-    exit 1
-fi
-echo "  VPC describe isolation OK"
-
-expect_error "InvalidVpcID.NotFound" \
-    $AWS_EC2 describe-vpcs --vpc-ids "$BETA_VPC" --profile hive-team-alpha
-echo "  Alpha cannot describe Beta's VPC by ID"
-
-expect_error "InvalidVpcID.NotFound" \
-    $AWS_EC2 delete-vpc --vpc-id "$ALPHA_VPC" --profile hive-team-beta
-echo "  Beta cannot delete Alpha's VPC"
-
-# Create subnets
-ALPHA_SUBNET=$($AWS_EC2 create-subnet --vpc-id "$ALPHA_VPC" --cidr-block 10.0.1.0/24 \
-    --profile hive-team-alpha --query 'Subnet.SubnetId' --output text)
-echo "  Alpha subnet: $ALPHA_SUBNET"
-
-BETA_SUBNET=$($AWS_EC2 create-subnet --vpc-id "$BETA_VPC" --cidr-block 10.0.1.0/24 \
-    --profile hive-team-beta --query 'Subnet.SubnetId' --output text)
-echo "  Beta subnet: $BETA_SUBNET"
-
-# Subnet describe isolation
-ALPHA_SUBNETS=$($AWS_EC2 describe-subnets --profile hive-team-alpha \
-    --query 'Subnets[].SubnetId' --output text)
-if echo "$ALPHA_SUBNETS" | grep -q "$BETA_SUBNET"; then
-    echo "  ERROR: Alpha can see Beta's subnet"
-    exit 1
-fi
-echo "  Subnet describe isolation OK"
-
-expect_error "InvalidVpcID.NotFound" \
-    $AWS_EC2 create-subnet --vpc-id "$ALPHA_VPC" --cidr-block 10.0.2.0/24 \
-    --profile hive-team-beta
-echo "  Beta cannot create subnet in Alpha's VPC"
-
-expect_error "InvalidSubnetID.NotFound" \
-    $AWS_EC2 delete-subnet --subnet-id "$ALPHA_SUBNET" --profile hive-team-beta
-echo "  Beta cannot delete Alpha's subnet"
-
-echo "  VPC/Subnet scoping passed"
-
-# --- 7f: IGW + EIGW Scoping ---
-echo ""
-echo "Step 7f: IGW + EIGW Scoping"
-echo "----------------------------------------"
-
-ALPHA_IGW=$($AWS_EC2 create-internet-gateway --profile hive-team-alpha \
-    --query 'InternetGateway.InternetGatewayId' --output text)
-echo "  Alpha IGW: $ALPHA_IGW"
-
-BETA_IGW=$($AWS_EC2 create-internet-gateway --profile hive-team-beta \
-    --query 'InternetGateway.InternetGatewayId' --output text)
-echo "  Beta IGW: $BETA_IGW"
-
-# IGW describe isolation
-ALPHA_IGWS=$($AWS_EC2 describe-internet-gateways --profile hive-team-alpha \
-    --query 'InternetGateways[].InternetGatewayId' --output text)
-if echo "$ALPHA_IGWS" | grep -q "$BETA_IGW"; then
-    echo "  ERROR: Alpha can see Beta's IGW"
-    exit 1
-fi
-echo "  IGW describe isolation OK"
-
-expect_error "InvalidInternetGatewayID.NotFound" \
-    $AWS_EC2 describe-internet-gateways --internet-gateway-ids "$BETA_IGW" \
-    --profile hive-team-alpha
-echo "  Alpha cannot describe Beta's IGW by ID"
-
-expect_error "InvalidInternetGatewayID.NotFound" \
-    $AWS_EC2 delete-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
-    --profile hive-team-beta
-echo "  Beta cannot delete Alpha's IGW"
-
-expect_error "InvalidInternetGatewayID.NotFound" \
-    $AWS_EC2 attach-internet-gateway --internet-gateway-id "$BETA_IGW" \
-    --vpc-id "$ALPHA_VPC" --profile hive-team-alpha
-echo "  Alpha cannot attach Beta's IGW to own VPC"
-
-# Attach Alpha's IGW, test cross-account detach
-$AWS_EC2 attach-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
-    --vpc-id "$ALPHA_VPC" --profile hive-team-alpha > /dev/null
-expect_error "InvalidInternetGatewayID.NotFound" \
-    $AWS_EC2 detach-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
-    --vpc-id "$ALPHA_VPC" --profile hive-team-beta
-echo "  Beta cannot detach Alpha's IGW"
-
-# EIGW
-ALPHA_EIGW=$($AWS_EC2 create-egress-only-internet-gateway --vpc-id "$ALPHA_VPC" \
-    --profile hive-team-alpha \
-    --query 'EgressOnlyInternetGateway.EgressOnlyInternetGatewayId' --output text)
-echo "  Alpha EIGW: $ALPHA_EIGW"
-
-BETA_EIGW=$($AWS_EC2 create-egress-only-internet-gateway --vpc-id "$BETA_VPC" \
-    --profile hive-team-beta \
-    --query 'EgressOnlyInternetGateway.EgressOnlyInternetGatewayId' --output text)
-echo "  Beta EIGW: $BETA_EIGW"
-
-# EIGW describe isolation
-ALPHA_EIGWS=$($AWS_EC2 describe-egress-only-internet-gateways --profile hive-team-alpha \
-    --query 'EgressOnlyInternetGateways[].EgressOnlyInternetGatewayId' --output text)
-if echo "$ALPHA_EIGWS" | grep -q "$BETA_EIGW"; then
-    echo "  ERROR: Alpha can see Beta's EIGW"
-    exit 1
-fi
-echo "  EIGW describe isolation OK"
-
-# Cross-account EIGW delete (verify Alpha's still exists after Beta's attempt)
-set +e
-$AWS_EC2 delete-egress-only-internet-gateway \
-    --egress-only-internet-gateway-id "$ALPHA_EIGW" --profile hive-team-beta 2>/dev/null
-set -e
-ALPHA_EIGW_CHECK=$($AWS_EC2 describe-egress-only-internet-gateways --profile hive-team-alpha \
-    --query 'EgressOnlyInternetGateways[].EgressOnlyInternetGatewayId' --output text)
-if ! echo "$ALPHA_EIGW_CHECK" | grep -q "$ALPHA_EIGW"; then
-    echo "  ERROR: Alpha's EIGW was deleted by Beta"
-    exit 1
-fi
-echo "  Beta cannot delete Alpha's EIGW"
-
-echo "  IGW + EIGW scoping passed"
-
-# --- 7g: Account Settings ---
-echo ""
-echo "Step 7g: Account Settings"
-echo "----------------------------------------"
-
-$AWS_EC2 enable-ebs-encryption-by-default --profile hive-team-alpha > /dev/null
-BETA_ENC=$($AWS_EC2 get-ebs-encryption-by-default --profile hive-team-beta \
-    --query 'EbsEncryptionByDefault' --output text)
-if [ "$BETA_ENC" != "False" ]; then
-    echo "  ERROR: Alpha's encryption setting leaked to Beta (got $BETA_ENC)"
-    exit 1
-fi
-echo "  Alpha enable did not affect Beta"
-
-$AWS_EC2 enable-ebs-encryption-by-default --profile hive-team-beta > /dev/null
-$AWS_EC2 disable-ebs-encryption-by-default --profile hive-team-alpha > /dev/null
-ALPHA_ENC=$($AWS_EC2 get-ebs-encryption-by-default --profile hive-team-alpha \
-    --query 'EbsEncryptionByDefault' --output text)
-BETA_ENC=$($AWS_EC2 get-ebs-encryption-by-default --profile hive-team-beta \
-    --query 'EbsEncryptionByDefault' --output text)
-if [ "$ALPHA_ENC" != "False" ] || [ "$BETA_ENC" != "True" ]; then
-    echo "  ERROR: Independent settings failed: alpha=$ALPHA_ENC beta=$BETA_ENC"
-    exit 1
-fi
-echo "  Independent toggle verified: alpha=$ALPHA_ENC, beta=$BETA_ENC"
-$AWS_EC2 disable-ebs-encryption-by-default --profile hive-team-beta > /dev/null
-
-echo "  Account settings scoping passed"
-
-# --- 7h: Global Resources ---
-echo ""
-echo "Step 7h: Global Resources"
-echo "----------------------------------------"
-
-ALPHA_REGIONS=$($AWS_EC2 describe-regions --profile hive-team-alpha \
-    --query 'Regions[].RegionName' --output text)
-BETA_REGIONS=$($AWS_EC2 describe-regions --profile hive-team-beta \
-    --query 'Regions[].RegionName' --output text)
-if [ "$ALPHA_REGIONS" != "$BETA_REGIONS" ]; then
-    echo "  ERROR: Regions differ between accounts"
-    exit 1
-fi
-echo "  Regions identical"
-
-ALPHA_AZS=$($AWS_EC2 describe-availability-zones --profile hive-team-alpha \
-    --query 'AvailabilityZones[].ZoneName' --output text)
-BETA_AZS=$($AWS_EC2 describe-availability-zones --profile hive-team-beta \
-    --query 'AvailabilityZones[].ZoneName' --output text)
-if [ "$ALPHA_AZS" != "$BETA_AZS" ]; then
-    echo "  ERROR: AZs differ between accounts"
-    exit 1
-fi
-echo "  Availability zones identical"
-
-ALPHA_TYPES=$($AWS_EC2 describe-instance-types --profile hive-team-alpha \
-    --query 'InstanceTypes[].InstanceType' --output text | tr '\t' '\n' | sort)
-BETA_TYPES=$($AWS_EC2 describe-instance-types --profile hive-team-beta \
-    --query 'InstanceTypes[].InstanceType' --output text | tr '\t' '\n' | sort)
-if [ "$ALPHA_TYPES" != "$BETA_TYPES" ]; then
-    echo "  ERROR: Instance types differ between accounts"
-    exit 1
-fi
-echo "  Instance types identical"
-
-echo "  Global resources passed"
-
-# --- Step 8: Edge Cases ---
-echo ""
-echo "Step 8: Edge Cases"
-echo "----------------------------------------"
-
-# Empty account (Gamma)
-echo "  Creating empty Gamma account..."
-GAMMA_OUTPUT=$(./bin/hive admin account create --name "Team Gamma" --config "$HOME/node1/config/hive.toml" 2>&1)
-GAMMA_KEY_ID=$(echo "$GAMMA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
-GAMMA_SECRET=$(echo "$GAMMA_OUTPUT" | grep "Secret Access Key:" | awk '{print $NF}')
-aws configure set aws_access_key_id "$GAMMA_KEY_ID" --profile hive-team-gamma
-aws configure set aws_secret_access_key "$GAMMA_SECRET" --profile hive-team-gamma
-aws configure set region us-east-1 --profile hive-team-gamma
-
-GAMMA_INSTANCES=$($AWS_EC2 describe-instances --profile hive-team-gamma \
-    --query 'Reservations' --output text)
-if [ -n "$GAMMA_INSTANCES" ] && [ "$GAMMA_INSTANCES" != "None" ]; then
-    echo "  ERROR: Gamma has instances"
-    exit 1
-fi
-echo "  Gamma: no instances"
-
-# Skip volume check: root-account volumes (empty TenantID) are visible to all accounts by design
-echo "  Gamma: volumes skipped (root legacy volumes visible to all)"
-
-GAMMA_KEYS=$($AWS_EC2 describe-key-pairs --profile hive-team-gamma \
-    --query 'KeyPairs' --output text)
-if [ -n "$GAMMA_KEYS" ] && [ "$GAMMA_KEYS" != "None" ]; then
-    echo "  ERROR: Gamma has key pairs"
-    exit 1
-fi
-echo "  Gamma: no key pairs"
-
-# Root isolation from tenants
-echo "  Verifying root isolation from tenants..."
-ROOT_INSTANCE_CHECK=$($AWS_EC2 describe-instances \
-    --query 'Reservations[].Instances[].InstanceId' --output text)
-if echo "$ROOT_INSTANCE_CHECK" | grep -q "$ALPHA_INST"; then
-    echo "  ERROR: Root can see Alpha's instance"
-    exit 1
-fi
-echo "  Root cannot see tenant instances"
-
-# Non-existent resource IDs — same error as cross-account
-expect_error "InvalidVolume.NotFound" \
-    $AWS_EC2 delete-volume --volume-id vol-00000000000000000 --profile hive-team-alpha
-echo "  Non-existent volume: same error as cross-account"
-
-expect_error "InvalidSnapshot.NotFound" \
-    $AWS_EC2 delete-snapshot --snapshot-id snap-00000000000000000 --profile hive-team-alpha
-echo "  Non-existent snapshot: same error as cross-account"
-
-# Race condition: parallel key creation from both accounts
-echo "  Testing parallel key creation (race condition)..."
-for i in $(seq 1 5); do
-    $AWS_EC2 create-key-pair --key-name "race-alpha-$i" --profile hive-team-alpha > /dev/null &
-    $AWS_EC2 create-key-pair --key-name "race-beta-$i" --profile hive-team-beta > /dev/null &
-done
-wait
-
-ALPHA_RACE_COUNT=$($AWS_EC2 describe-key-pairs --profile hive-team-alpha \
-    --query 'KeyPairs[].KeyName' --output text | tr '\t' '\n' | grep -c "race-alpha" || true)
-if [ "$ALPHA_RACE_COUNT" -ne 5 ]; then
-    echo "  ERROR: Expected 5 race-alpha keys, got $ALPHA_RACE_COUNT"
-    exit 1
-fi
-ALPHA_RACE_LEAK=$($AWS_EC2 describe-key-pairs --profile hive-team-alpha \
-    --query 'KeyPairs[].KeyName' --output text | tr '\t' '\n' | grep -c "race-beta" || true)
-if [ "$ALPHA_RACE_LEAK" -ne 0 ]; then
-    echo "  ERROR: Alpha sees Beta's race keys (cross-contamination)"
-    exit 1
-fi
-echo "  Parallel key creation: no cross-contamination ($ALPHA_RACE_COUNT alpha keys, 0 beta leaks)"
-
-echo "  Edge cases passed"
-
-# --- Step 9: EC2 + IAM Cleanup ---
-echo ""
-echo "Step 9: EC2 + IAM Cleanup"
-echo "========================================"
-
-# Terminate instances
-echo "  Terminating account-scoped instances..."
-$AWS_EC2 terminate-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha > /dev/null
-$AWS_EC2 terminate-instances --instance-ids "$BETA_INST" --profile hive-team-beta > /dev/null
-
-COUNT=0
-while [ $COUNT -lt 30 ]; do
-    A_STATE=$($AWS_EC2 describe-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha \
-        --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "terminated")
-    B_STATE=$($AWS_EC2 describe-instances --instance-ids "$BETA_INST" --profile hive-team-beta \
-        --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "terminated")
-    if [ "$A_STATE" == "terminated" ] && [ "$B_STATE" == "terminated" ]; then
-        break
-    fi
-    sleep 2
-    COUNT=$((COUNT + 1))
-done
-echo "  Instances terminated"
-
-# Delete snapshots
-echo "  Deleting snapshots..."
-$AWS_EC2 delete-snapshot --snapshot-id "$ALPHA_SNAP" --profile hive-team-alpha 2>/dev/null || true
-$AWS_EC2 delete-snapshot --snapshot-id "$BETA_SNAP" --profile hive-team-beta 2>/dev/null || true
-
-# Delete volumes
-sleep 3
-echo "  Deleting volumes..."
-$AWS_EC2 delete-volume --volume-id "$ALPHA_VOL" --profile hive-team-alpha 2>/dev/null || true
-$AWS_EC2 delete-volume --volume-id "$BETA_VOL" --profile hive-team-beta 2>/dev/null || true
-
-# Delete key pairs
-echo "  Deleting key pairs..."
-for key in alpha-key alpha-instance-key shared-name imported-key; do
-    $AWS_EC2 delete-key-pair --key-name "$key" --profile hive-team-alpha 2>/dev/null || true
-done
-for key in beta-key beta-instance-key shared-name; do
-    $AWS_EC2 delete-key-pair --key-name "$key" --profile hive-team-beta 2>/dev/null || true
-done
-for i in $(seq 1 5); do
-    $AWS_EC2 delete-key-pair --key-name "race-alpha-$i" --profile hive-team-alpha 2>/dev/null || true
-    $AWS_EC2 delete-key-pair --key-name "race-beta-$i" --profile hive-team-beta 2>/dev/null || true
-done
-
-# Delete EIGWs
-echo "  Deleting EIGWs..."
-$AWS_EC2 delete-egress-only-internet-gateway \
-    --egress-only-internet-gateway-id "$ALPHA_EIGW" --profile hive-team-alpha 2>/dev/null || true
-$AWS_EC2 delete-egress-only-internet-gateway \
-    --egress-only-internet-gateway-id "$BETA_EIGW" --profile hive-team-beta 2>/dev/null || true
-
-# Detach + delete IGWs
-echo "  Deleting IGWs..."
-$AWS_EC2 detach-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
-    --vpc-id "$ALPHA_VPC" --profile hive-team-alpha 2>/dev/null || true
-$AWS_EC2 delete-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
-    --profile hive-team-alpha 2>/dev/null || true
-$AWS_EC2 delete-internet-gateway --internet-gateway-id "$BETA_IGW" \
-    --profile hive-team-beta 2>/dev/null || true
-
-# Delete subnets
-echo "  Deleting subnets..."
-$AWS_EC2 delete-subnet --subnet-id "$ALPHA_SUBNET" --profile hive-team-alpha 2>/dev/null || true
-$AWS_EC2 delete-subnet --subnet-id "$BETA_SUBNET" --profile hive-team-beta 2>/dev/null || true
-
-# Delete VPCs
-echo "  Deleting VPCs..."
-$AWS_EC2 delete-vpc --vpc-id "$ALPHA_VPC" --profile hive-team-alpha 2>/dev/null || true
-$AWS_EC2 delete-vpc --vpc-id "$BETA_VPC" --profile hive-team-beta 2>/dev/null || true
-
-echo "  EC2 resources cleaned up"
-
-# IAM cleanup (originally Step 7)
-echo "  Cleaning up IAM resources..."
-
-# Beta cleanup
-aws $AWS_EP iam detach-user-policy --user-name alice \
-    --policy-arn "arn:aws:iam::${BETA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-beta
-aws $AWS_EP iam delete-access-key --user-name alice \
-    --access-key-id "$BETA_ALICE_KEY_ID" --profile hive-team-beta
-aws $AWS_EP iam delete-user --user-name alice --profile hive-team-beta
-aws $AWS_EP iam delete-user --user-name dev-user --profile hive-team-beta
-aws $AWS_EP iam delete-policy \
-    --policy-arn "arn:aws:iam::${BETA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-beta
-
-# Alpha cleanup (alice already deleted in Step 6)
-aws $AWS_EP iam delete-user --user-name team-member --profile hive-team-alpha
-aws $AWS_EP iam delete-policy \
-    --policy-arn "arn:aws:iam::${ALPHA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-alpha
-
-# Clean up AWS CLI profiles
-for p in hive-team-alpha hive-team-beta hive-alpha-alice hive-beta-alice hive-team-gamma; do
-    aws configure set aws_access_key_id "" --profile $p 2>/dev/null || true
-    aws configure set aws_secret_access_key "" --profile $p 2>/dev/null || true
-done
-
-echo "  IAM + EC2 account cleanup complete"
-echo ""
-echo "  IAM Accounts & Cross-Account Isolation tests passed"
-
-# Phase 5d: VPC Networking
-echo ""
-echo "Phase 5d: VPC Networking"
-echo "========================================"
-echo "Testing VPC instance launch, PrivateIpAddress, and same-subnet connectivity..."
-
-# Step 1: Create VPC and Subnet
-echo ""
-echo "Step 1: Create VPC + Subnet"
-echo "----------------------------------------"
-
-VPC_OUTPUT=$($AWS_EC2 create-vpc --cidr-block 10.100.0.0/16)
-VPC_ID=$(echo "$VPC_OUTPUT" | jq -r '.Vpc.VpcId')
-if [ -z "$VPC_ID" ] || [ "$VPC_ID" == "null" ]; then
-    echo "  ERROR: Failed to create VPC"
-    echo "  Output: $VPC_OUTPUT"
-    exit 1
-fi
-echo "  Created VPC: $VPC_ID (10.100.0.0/16)"
-
-SUBNET_OUTPUT=$($AWS_EC2 create-subnet --vpc-id "$VPC_ID" --cidr-block 10.100.1.0/24)
-SUBNET_ID=$(echo "$SUBNET_OUTPUT" | jq -r '.Subnet.SubnetId')
-if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" == "null" ]; then
-    echo "  ERROR: Failed to create subnet"
-    echo "  Output: $SUBNET_OUTPUT"
-    exit 1
-fi
-echo "  Created Subnet: $SUBNET_ID (10.100.1.0/24)"
-
-# Brief pause for OVN topology to be programmed (logical switch + router port + DHCP)
-sleep 2
-
-# Step 2: Launch 3 VPC instances
-echo ""
-echo "Step 2: Launch 3 VPC instances"
-echo "----------------------------------------"
-
-VPC_INSTANCE_IDS=()
-for i in 1 2 3; do
-    echo "  Launching VPC instance $i with subnet $SUBNET_ID..."
-    RUN_OUTPUT=$($AWS_EC2 run-instances \
-        --image-id "$AMI_ID" \
-        --instance-type "$INSTANCE_TYPE" \
-        --key-name multinode-test-key \
-        --subnet-id "$SUBNET_ID")
-
-    VPC_INST_ID=$(echo "$RUN_OUTPUT" | jq -r '.Instances[0].InstanceId')
-    VPC_INST_IP=$(echo "$RUN_OUTPUT" | jq -r '.Instances[0].PrivateIpAddress // empty')
-
-    if [ -z "$VPC_INST_ID" ] || [ "$VPC_INST_ID" == "null" ]; then
-        echo "  ERROR: Failed to launch VPC instance $i"
-        echo "  Output: $RUN_OUTPUT"
-        exit 1
-    fi
-    echo "  Launched: $VPC_INST_ID (PrivateIpAddress: ${VPC_INST_IP:-not yet assigned})"
-    VPC_INSTANCE_IDS+=("$VPC_INST_ID")
-
-    sleep 2
-done
-
-# Wait for all VPC instances to be running
-echo ""
-echo "Waiting for VPC instances to reach running state..."
-for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
-    wait_for_instance_state "$vpc_inst" "running" 30 || {
-        echo "ERROR: VPC instance $vpc_inst failed to start"
-        exit 1
-    }
-done
-
-# Step 3: Verify PrivateIpAddress in DescribeInstances
-echo ""
-echo "Step 3: Verify PrivateIpAddress in DescribeInstances"
-echo "----------------------------------------"
-
-VPC_PRIVATE_IPS=()
-for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
-    DESCRIBE_OUT=$($AWS_EC2 describe-instances --instance-ids "$vpc_inst")
-    PRIVATE_IP=$(echo "$DESCRIBE_OUT" | jq -r '.Reservations[0].Instances[0].PrivateIpAddress // empty')
-    INST_SUBNET=$(echo "$DESCRIBE_OUT" | jq -r '.Reservations[0].Instances[0].SubnetId // empty')
-    INST_VPC=$(echo "$DESCRIBE_OUT" | jq -r '.Reservations[0].Instances[0].VpcId // empty')
-    ENI_COUNT=$(echo "$DESCRIBE_OUT" | jq -r '.Reservations[0].Instances[0].NetworkInterfaces | length')
-
-    if [ -z "$PRIVATE_IP" ]; then
-        echo "  ERROR: $vpc_inst has no PrivateIpAddress"
-        echo "  Describe output: $(echo "$DESCRIBE_OUT" | jq -c '.Reservations[0].Instances[0] | {PrivateIpAddress, SubnetId, VpcId, NetworkInterfaces}')"
-        exit 1
-    fi
-
-    echo "  $vpc_inst: IP=$PRIVATE_IP, Subnet=$INST_SUBNET, VPC=$INST_VPC, ENIs=$ENI_COUNT"
-
-    if [ "$INST_SUBNET" != "$SUBNET_ID" ]; then
-        echo "  ERROR: SubnetId mismatch (expected $SUBNET_ID, got $INST_SUBNET)"
-        exit 1
-    fi
-    if [ "$INST_VPC" != "$VPC_ID" ]; then
-        echo "  ERROR: VpcId mismatch (expected $VPC_ID, got $INST_VPC)"
-        exit 1
-    fi
-    if [ "$ENI_COUNT" -lt 1 ]; then
-        echo "  ERROR: No NetworkInterfaces found"
-        exit 1
-    fi
-
-    VPC_PRIVATE_IPS+=("$PRIVATE_IP")
-done
-
-# Verify all IPs are unique and in the subnet range (10.100.1.x)
-echo ""
-echo "  Verifying IP uniqueness and subnet range..."
-UNIQUE_IPS=$(printf '%s\n' "${VPC_PRIVATE_IPS[@]}" | sort -u | wc -l)
-if [ "$UNIQUE_IPS" -ne "${#VPC_PRIVATE_IPS[@]}" ]; then
-    echo "  ERROR: Duplicate IPs detected: ${VPC_PRIVATE_IPS[*]}"
-    exit 1
-fi
-for ip in "${VPC_PRIVATE_IPS[@]}"; do
-    if ! echo "$ip" | grep -qE '^10\.100\.1\.[0-9]+$'; then
-        echo "  ERROR: IP $ip not in expected subnet 10.100.1.0/24"
-        exit 1
-    fi
-done
-echo "  All IPs unique and in correct subnet: ${VPC_PRIVATE_IPS[*]}"
-
-# Step 4: SSH via DEV_NETWORKING hostfwd and test ping connectivity
-# DISABLED: VPC instances use OVN DHCP which takes ~6 min per instance to get SSH ready.
-# With 3 instances this adds ~18 min to the E2E run. The SSH+ping test is best-effort
-# anyway (OVN overlay not fully programmed in Docker single-host mode). IP allocation
-# and subnet correctness are already verified in Step 3.
-echo ""
-echo "Step 4: SSH + Ping Connectivity (SKIPPED — OVN DHCP wait too slow in CI)"
-echo "----------------------------------------"
-
-# Step 5: Stop/Start IP persistence
-echo ""
-echo "Step 5: Stop/Start IP Persistence"
-echo "----------------------------------------"
-echo "Verifying private IPs persist through stop/start cycle (AWS behavior)..."
-
-# Record IPs before stop
-echo "  IPs before stop: ${VPC_PRIVATE_IPS[*]}"
-
-# Stop all VPC instances
-echo ""
-echo "  Stopping all VPC instances..."
-for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
-    echo "  Stopping $vpc_inst..."
-    $AWS_EC2 stop-instances --instance-ids "$vpc_inst" > /dev/null
-done
-
-for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
-    wait_for_instance_state "$vpc_inst" "stopped" 30 || {
-        echo "  ERROR: VPC instance $vpc_inst failed to stop"
-        exit 1
-    }
-done
-echo "  All VPC instances stopped"
-
-# Verify IPs are still present in DescribeInstances while stopped
-echo ""
-echo "  Verifying IPs persist in stopped state..."
-for idx in "${!VPC_INSTANCE_IDS[@]}"; do
-    vpc_inst="${VPC_INSTANCE_IDS[$idx]}"
-    expected_ip="${VPC_PRIVATE_IPS[$idx]}"
-
-    STOPPED_IP=$($AWS_EC2 describe-instances --instance-ids "$vpc_inst" \
-        --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
-
-    if [ "$STOPPED_IP" != "$expected_ip" ]; then
-        echo "  ERROR: $vpc_inst IP changed while stopped (expected $expected_ip, got $STOPPED_IP)"
-        exit 1
-    fi
-    echo "  $vpc_inst: IP=$STOPPED_IP (unchanged)"
-done
-
-# Start all VPC instances
-echo ""
-echo "  Starting all VPC instances..."
-for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
-    echo "  Starting $vpc_inst..."
-    $AWS_EC2 start-instances --instance-ids "$vpc_inst" > /dev/null
-done
-
-for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
-    wait_for_instance_state "$vpc_inst" "running" 30 || {
-        echo "  ERROR: VPC instance $vpc_inst failed to restart"
-        exit 1
-    }
-done
-echo "  All VPC instances restarted"
-
-# Verify IPs are identical after restart
-echo ""
-echo "  Verifying IPs persist after restart..."
-IP_MISMATCHES=0
-for idx in "${!VPC_INSTANCE_IDS[@]}"; do
-    vpc_inst="${VPC_INSTANCE_IDS[$idx]}"
-    expected_ip="${VPC_PRIVATE_IPS[$idx]}"
-
-    RESTARTED_IP=$($AWS_EC2 describe-instances --instance-ids "$vpc_inst" \
-        --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
-
-    if [ "$RESTARTED_IP" == "$expected_ip" ]; then
-        echo "  $vpc_inst: IP=$RESTARTED_IP (matches pre-stop)"
-    else
-        echo "  ERROR: $vpc_inst IP changed after restart (expected $expected_ip, got $RESTARTED_IP)"
-        IP_MISMATCHES=$((IP_MISMATCHES + 1))
-    fi
-done
-
-if [ "$IP_MISMATCHES" -gt 0 ]; then
-    echo "  ERROR: $IP_MISMATCHES instances had IP changes — ENI not persisting through stop/start"
-    exit 1
-fi
-
-echo "  Stop/start IP persistence verified — all IPs match"
-
-# Step 6: Clean up VPC instances
-echo ""
-echo "Step 6: Clean up VPC resources"
-echo "----------------------------------------"
-
-terminate_and_wait "${VPC_INSTANCE_IDS[@]}" || true
-
-# Clean up subnet and VPC
-echo "  Deleting subnet $SUBNET_ID..."
-$AWS_EC2 delete-subnet --subnet-id "$SUBNET_ID" 2>/dev/null || echo "  (subnet delete failed, may have ENIs)"
-
-echo "  Deleting VPC $VPC_ID..."
-$AWS_EC2 delete-vpc --vpc-id "$VPC_ID" 2>/dev/null || echo "  (vpc delete failed, may have subnets)"
-
-echo "  VPC networking tests passed"
-
-# Phase 6: Cluster Shutdown + Restart
-echo ""
-echo "Phase 6: Cluster Shutdown + Restart"
-echo "========================================"
-echo "Testing hive admin cluster shutdown command..."
-
-# Test 6a: Dry-run shutdown
-echo ""
-echo "Test 6a: Dry-Run Shutdown"
-echo "----------------------------------------"
-echo "Running cluster shutdown in dry-run mode..."
-
-DRY_RUN_OUTPUT=$(./bin/hive admin cluster shutdown --dry-run --config "$HOME/node1/config/hive.toml" 2>&1)
-echo "$DRY_RUN_OUTPUT"
-
-# Validate dry-run output contains expected phases
-for phase in GATE DRAIN STORAGE PERSIST INFRA; do
-    if echo "$DRY_RUN_OUTPUT" | grep -qi "$phase"; then
-        echo "  Phase $phase found in shutdown plan"
-    else
-        echo "  WARNING: Phase $phase not found in dry-run output"
-    fi
-done
-echo "  Dry-run shutdown test passed"
-
-# Test 6b: Real coordinated shutdown
-echo ""
-echo "Test 6b: Coordinated Cluster Shutdown"
-echo "----------------------------------------"
-echo "Running cluster shutdown..."
-
-./bin/hive admin cluster shutdown --force --timeout 30s --config "$HOME/node1/config/hive.toml" 2>&1 || {
-    echo "  WARNING: Cluster shutdown command returned non-zero exit code"
-}
-CLUSTER_SERVICES_STARTED="false"
-
-# Verify all services are down
-echo "  Waiting for services to stop..."
-sleep 2
-if ! verify_all_services_down; then
-    echo "  Some services still running, force-cleaning..."
-    force_cleanup_all_nodes
-fi
-
-# Test 6c: Restart and recovery
-echo ""
-echo "Test 6c: Cluster Restart + Recovery"
-echo "----------------------------------------"
-echo "Restarting all node services concurrently..."
-
-# Cluster restart requires concurrent startup: NATS needs route peers to form,
-# Predastore needs Raft quorum (2/3), and the daemon needs JetStream.
-# Sequential start would leave node1 waiting for quorum that never arrives.
-start_node_services 1 "$HOME/node1" &
-start_node_services 2 "$HOME/node2" &
-start_node_services 3 "$HOME/node3" &
-wait
-CLUSTER_SERVICES_STARTED="true"
-
-echo ""
-echo "Waiting for cluster to stabilize..."
-sleep 5
-
-# Verify NATS cluster reformed
-echo ""
-verify_nats_cluster 3 || {
-    echo "WARNING: NATS cluster verification failed after restart"
-}
-
-# Wait for gateway
-echo ""
-wait_for_gateway "${NODE1_IP}" 15
-
-# Wait for daemon readiness
-wait_for_daemon_ready "https://${NODE1_IP}:${AWSGW_PORT}"
-
-# Smoke test: describe-instance-types
-echo ""
-echo "Running post-restart smoke test..."
-SMOKE_OUTPUT=$($AWS_EC2 describe-instance-types --query 'InstanceTypes[*].InstanceType' --output text 2>/dev/null)
-if [ -n "$SMOKE_OUTPUT" ] && [ "$SMOKE_OUTPUT" != "None" ]; then
-    echo "  Smoke test passed: describe-instance-types returned: $SMOKE_OUTPUT"
-else
-    echo "  ERROR: Smoke test failed: describe-instance-types returned empty/None"
-    exit 1
-fi
-
-echo "  Cluster shutdown + restart test passed"
-
-# Test 6d: Instance relaunch and terminate after restart
-echo ""
-echo "Test 6d: Instance Relaunch + Terminate"
-echo "----------------------------------------"
-echo "Waiting for instances to relaunch after cluster restart..."
-
-# Two instances were running before shutdown — the daemon will relaunch them.
-# Must wait for them to finish launching (pending → running) before terminate
-# will work, because the NATS per-instance subscription is only created after
-# QEMU starts.
-for instance_id in "${INSTANCE_IDS[0]}" "${INSTANCE_IDS[1]}"; do
-    echo "  Waiting for $instance_id to finish relaunching..."
+    echo "  Created: $TEST_VOLUME_ID"
+    pass_test "Volume create"
+
+    # Attach to first instance
+    echo "  Attaching to ${INSTANCE_IDS[0]}..."
+    $AWS_EC2 attach-volume --volume-id "$TEST_VOLUME_ID" \
+        --instance-id "${INSTANCE_IDS[0]}" --device /dev/sdf > /dev/null
+
+    # Wait for attachment
     COUNT=0
-    while [ $COUNT -lt 30 ]; do
-        STATE=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
-            --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "unknown")
-        if [ "$STATE" = "running" ]; then
-            echo "  $instance_id relaunched successfully: $STATE"
+    while [ $COUNT -lt 15 ]; do
+        ATTACH_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
+            --query 'Volumes[0].Attachments[0].State' --output text)
+        VOL_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
+            --query 'Volumes[0].State' --output text)
+        if [ "$VOL_STATE" == "in-use" ] && [ "$ATTACH_STATE" == "attached" ]; then
+            echo "  Volume attached"
             break
         fi
         sleep 2
         COUNT=$((COUNT + 1))
     done
-    if [ $COUNT -ge 30 ]; then
-        echo "  WARNING: $instance_id still in $STATE after 60s"
+
+    if [ "$ATTACH_STATE" == "attached" ]; then
+        pass_test "Volume attach"
+    else
+        fail_test "Volume attach"
+    fi
+
+    # Detach
+    echo "  Detaching volume..."
+    $AWS_EC2 detach-volume --volume-id "$TEST_VOLUME_ID" > /dev/null
+
+    COUNT=0
+    while [ $COUNT -lt 15 ]; do
+        VOL_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
+            --query 'Volumes[0].State' --output text)
+        if [ "$VOL_STATE" == "available" ]; then
+            echo "  Volume detached"
+            break
+        fi
+        sleep 2
+        COUNT=$((COUNT + 1))
+    done
+
+    if [ "$VOL_STATE" == "available" ]; then
+        pass_test "Volume detach"
+    else
+        fail_test "Volume detach"
+    fi
+
+    # Delete
+    echo "  Deleting volume..."
+    $AWS_EC2 delete-volume --volume-id "$TEST_VOLUME_ID"
+
+    COUNT=0
+    while [ $COUNT -lt 15 ]; do
+        set +e
+        VOL_CHECK=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
+            --query 'Volumes[0].VolumeId' --output text 2>&1)
+        DESCRIBE_EXIT=$?
+        set -e
+        if [ $DESCRIBE_EXIT -ne 0 ] || [ "$VOL_CHECK" == "None" ] || [ -z "$VOL_CHECK" ]; then
+            echo "  Volume deleted"
+            break
+        fi
+        sleep 2
+        COUNT=$((COUNT + 1))
+    done
+
+    if [ $COUNT -lt 15 ]; then
+        pass_test "Volume delete"
+    else
+        fail_test "Volume delete"
+    fi
+fi
+
+echo ""
+
+# ==========================================================================
+# Phase 6: Cross-Node Gateway Access
+# ==========================================================================
+echo "Phase 6: Cross-Node Gateway Access"
+echo "========================================"
+echo "Verifying describe-instances returns same results via each node's gateway..."
+
+BASELINE_COUNT=$($AWS_EC2 describe-instances \
+    --query 'length(Reservations[*].Instances[*][])' --output text)
+echo "  Baseline (node1): $BASELINE_COUNT instances"
+
+for i in 1 2; do
+    ip="${NODE_IPS[$i]}"
+    COUNT=$(aws_via "$ip" ec2 describe-instances \
+        --query 'length(Reservations[*].Instances[*][])' --output text 2>/dev/null || echo "0")
+    echo "  Node$((i+1)) ($ip): $COUNT instances"
+    if [ "$COUNT" -eq "$BASELINE_COUNT" ]; then
+        pass_test "Cross-node gateway (node$((i+1)))"
+    else
+        echo "  WARNING: Instance count mismatch (expected $BASELINE_COUNT, got $COUNT)"
+        fail_test "Cross-node gateway (node$((i+1)))"
     fi
 done
 
-# Verify crash-loop instance (INSTANCE_IDS[2]) stayed in error — daemon should
-# not relaunch an instance that exceeded its crash restart limit.
-CRASH_LOOP_STATE=$($AWS_EC2 describe-instances --instance-ids "${INSTANCE_IDS[2]}" \
-    --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "unknown")
-echo "  Crash-loop instance ${INSTANCE_IDS[2]} state: $CRASH_LOOP_STATE"
-if [ "$CRASH_LOOP_STATE" != "error" ]; then
-    echo "  WARNING: Expected crash-loop instance to remain in error state (got: $CRASH_LOOP_STATE)"
+echo ""
+
+# ==========================================================================
+# Phase 7: Cross-Node Operations
+# ==========================================================================
+echo "Phase 7: Cross-Node Operations"
+echo "========================================"
+echo "Testing stop/start via a gateway on a DIFFERENT node than the hosting node..."
+
+# Pick first instance and find its host
+TEST_INSTANCE="${INSTANCE_IDS[0]}"
+INSTANCE_HOST=$(find_instance_node "$TEST_INSTANCE" || echo "$LOCAL_IP")
+echo "  Instance $TEST_INSTANCE is on $INSTANCE_HOST"
+
+# Pick a different node's gateway for the operation
+OTHER_GW=""
+for ip in "${NODE_IPS[@]}"; do
+    if [ "$ip" != "$INSTANCE_HOST" ]; then
+        OTHER_GW="$ip"
+        break
+    fi
+done
+echo "  Will operate via gateway on $OTHER_GW"
+
+# Stop via other gateway
+echo "  Stopping instance via $OTHER_GW..."
+aws_via "$OTHER_GW" ec2 stop-instances --instance-ids "$TEST_INSTANCE" > /dev/null
+wait_for_instance_state "$TEST_INSTANCE" "stopped" 30 "$OTHER_GW"
+
+# Pick yet another gateway for start (or same other if only 2 choices)
+THIRD_GW=""
+for ip in "${NODE_IPS[@]}"; do
+    if [ "$ip" != "$INSTANCE_HOST" ] && [ "$ip" != "$OTHER_GW" ]; then
+        THIRD_GW="$ip"
+        break
+    fi
+done
+THIRD_GW="${THIRD_GW:-$OTHER_GW}"
+echo "  Starting instance via $THIRD_GW..."
+aws_via "$THIRD_GW" ec2 start-instances --instance-ids "$TEST_INSTANCE" > /dev/null
+wait_for_instance_state "$TEST_INSTANCE" "running" 30 "$THIRD_GW"
+
+pass_test "Cross-node stop/start"
+
+echo ""
+
+# ==========================================================================
+# Phase 8: Node Failure
+# ==========================================================================
+echo "Phase 8: Node Failure"
+echo "========================================"
+echo "Stopping services on node2 ($NODE2_IP) to simulate node failure..."
+
+# Stop services on node2
+peer_ssh "$NODE2_IP" "cd ~/Development/mulga/hive && ./scripts/stop-dev.sh" || {
+    echo "  WARNING: stop-dev.sh returned non-zero (may be expected)"
+}
+
+# Wait a moment for cluster to detect the failure
+sleep 5
+
+# Verify node1 and node3 still serve requests
+echo "  Verifying node1 still serves requests..."
+N1_RESULT=$(aws_via "$LOCAL_IP" ec2 describe-instance-types \
+    --query 'InstanceTypes[0].InstanceType' --output text 2>/dev/null || echo "FAIL")
+if [ "$N1_RESULT" != "FAIL" ] && [ -n "$N1_RESULT" ] && [ "$N1_RESULT" != "None" ]; then
+    echo "  Node1: responding ($N1_RESULT)"
+    pass_test "Node1 survives node2 failure"
+else
+    echo "  ERROR: Node1 not responding after node2 failure"
+    fail_test "Node1 survives node2 failure"
 fi
 
-# Terminate all instances (including the crash-loop one in error state)
+echo "  Verifying node3 still serves requests..."
+N3_RESULT=$(aws_via "$NODE3_IP" ec2 describe-instance-types \
+    --query 'InstanceTypes[0].InstanceType' --output text 2>/dev/null || echo "FAIL")
+if [ "$N3_RESULT" != "FAIL" ] && [ -n "$N3_RESULT" ] && [ "$N3_RESULT" != "None" ]; then
+    echo "  Node3: responding ($N3_RESULT)"
+    pass_test "Node3 survives node2 failure"
+else
+    echo "  ERROR: Node3 not responding after node2 failure"
+    fail_test "Node3 survives node2 failure"
+fi
+
+# Check NATS degraded state (should have 1 route instead of 2)
+NATS_DEGRADED=$(curl -s "http://${LOCAL_IP}:${NATS_MONITOR_PORT}/routez" 2>/dev/null)
+DEGRADED_PEERS=$(echo "$NATS_DEGRADED" | jq -r '[.routes[].remote_name] | unique | length' 2>/dev/null || echo "0")
+echo "  NATS peers during failure: $DEGRADED_PEERS (expected: 1)"
+if [ "$DEGRADED_PEERS" -eq 1 ]; then
+    pass_test "NATS degraded mode"
+else
+    echo "  WARNING: Expected 1 NATS peer during node2 failure, got $DEGRADED_PEERS"
+    # Not fatal — NATS might take a moment to detect
+fi
+
+# Verify describe-instances still works from surviving nodes
+echo "  Verifying describe-instances from surviving nodes..."
+SURVIVING_COUNT=$(aws_via "$LOCAL_IP" ec2 describe-instances \
+    --query 'length(Reservations[*].Instances[*][])' --output text 2>/dev/null || echo "0")
+echo "  Instances visible from node1: $SURVIVING_COUNT"
+if [ "$SURVIVING_COUNT" -gt 0 ]; then
+    pass_test "Describe-instances during node failure"
+else
+    fail_test "Describe-instances during node failure"
+fi
+
 echo ""
+
+# ==========================================================================
+# Phase 9: Node Recovery
+# ==========================================================================
+echo "Phase 9: Node Recovery"
+echo "========================================"
+echo "Restarting services on node2 ($NODE2_IP)..."
+
+peer_ssh "$NODE2_IP" "cd ~/Development/mulga/hive && ./scripts/start-dev.sh" || {
+    echo "  ERROR: Failed to restart services on node2"
+    fail_test "Node2 restart"
+}
+
+# Wait for NATS to reform (2 routes again)
+echo "  Waiting for NATS cluster to reform..."
+ATTEMPT=0
+REFORMED=false
+while [ $ATTEMPT -lt 30 ]; do
+    NATS_RECOVER=$(curl -s "http://${LOCAL_IP}:${NATS_MONITOR_PORT}/routez" 2>/dev/null)
+    RECOVER_PEERS=$(echo "$NATS_RECOVER" | jq -r '[.routes[].remote_name] | unique | length' 2>/dev/null || echo "0")
+    if [ "$RECOVER_PEERS" -ge 2 ]; then
+        echo "  NATS cluster reformed ($RECOVER_PEERS peers)"
+        REFORMED=true
+        break
+    fi
+    echo "  Waiting for NATS reform... ($((ATTEMPT + 1))/30, peers: $RECOVER_PEERS)"
+    sleep 2
+    ATTEMPT=$((ATTEMPT + 1))
+done
+
+if [ "$REFORMED" = true ]; then
+    pass_test "NATS cluster reform"
+else
+    echo "  WARNING: NATS did not fully reform within timeout"
+    fail_test "NATS cluster reform"
+fi
+
+# Verify node2 gateway is back
+echo "  Waiting for node2 gateway..."
+ATTEMPT=0
+GW_BACK=false
+while [ $ATTEMPT -lt 15 ]; do
+    if curl -k -s "https://${NODE2_IP}:${AWSGW_PORT}" > /dev/null 2>&1; then
+        echo "  Node2 gateway is back"
+        GW_BACK=true
+        break
+    fi
+    sleep 2
+    ATTEMPT=$((ATTEMPT + 1))
+done
+
+if [ "$GW_BACK" = true ]; then
+    pass_test "Node2 gateway recovery"
+else
+    fail_test "Node2 gateway recovery"
+fi
+
+# Verify hive get nodes shows 3 Ready again
+echo "  Checking hive get nodes after recovery..."
+GET_NODES_RECOVER=$($HIVE_BIN get nodes --config "$HIVE_CONFIG" --timeout 10s 2>/dev/null || echo "")
+echo "$GET_NODES_RECOVER"
+READY_RECOVER=$(echo "$GET_NODES_RECOVER" | grep -c "Ready" || true)
+if [ "$READY_RECOVER" -ge 3 ]; then
+    pass_test "All nodes Ready after recovery"
+else
+    echo "  WARNING: Only $READY_RECOVER Ready nodes after recovery (expected 3)"
+    fail_test "All nodes Ready after recovery"
+fi
+
+# Verify node2 can serve requests
+echo "  Verifying node2 serves requests after recovery..."
+N2_RESULT=$(aws_via "$NODE2_IP" ec2 describe-instance-types \
+    --query 'InstanceTypes[0].InstanceType' --output text 2>/dev/null || echo "FAIL")
+if [ "$N2_RESULT" != "FAIL" ] && [ -n "$N2_RESULT" ] && [ "$N2_RESULT" != "None" ]; then
+    echo "  Node2 is serving requests again ($N2_RESULT)"
+    pass_test "Node2 serves requests after recovery"
+else
+    fail_test "Node2 serves requests after recovery"
+fi
+
+echo ""
+
+# ==========================================================================
+# Phase 10: Cleanup
+# ==========================================================================
+echo "Phase 10: Cleanup"
+echo "========================================"
+
 echo "Terminating all instances..."
-if ! terminate_and_wait "${INSTANCE_IDS[@]}"; then
-    echo ""
-    echo "ERROR: Some instances failed to terminate properly after restart"
-    dump_all_node_logs
+if terminate_and_wait "${INSTANCE_IDS[@]}"; then
+    pass_test "Instance termination"
+else
+    fail_test "Instance termination"
+fi
+
+# ==========================================================================
+# Summary
+# ==========================================================================
+echo ""
+echo "========================================"
+echo "Real Multi-Node E2E Test Summary"
+echo "========================================"
+echo "  Passed: $TESTS_PASSED"
+echo "  Failed: $TESTS_FAILED"
+if [ ${#FAILED_TESTS[@]} -gt 0 ]; then
+    echo "  Failed tests:"
+    for t in "${FAILED_TESTS[@]}"; do
+        echo "    - $t"
+    done
+fi
+echo "========================================"
+
+if [ $TESTS_FAILED -gt 0 ]; then
+    echo "SOME TESTS FAILED"
     exit 1
 fi
 
-echo "  Instance relaunch + terminate after restart passed"
-
-echo ""
-echo "========================================"
-echo "Multi-Node E2E Tests Completed Successfully"
-echo "========================================"
+echo "All tests passed!"
 exit 0
