@@ -16,13 +16,14 @@ on:
 
 env:
   GIT_BRANCH: ${{ github.ref_name }}
-  TOFU_LOG: /tmp/e2e-tofu-${{ github.run_id }}.log
 
 jobs:
   e2e_single:
     name: Single-Node E2E
     runs-on: [self-hosted, ci-single]
     timeout-minutes: 25
+    env:
+      TOFU_LOG: /tmp/e2e-tofu-single-${{ github.run_id }}.log
     steps:
       - name: Clean workspace
         run: rm -rf mulga
@@ -77,6 +78,8 @@ jobs:
     name: Pseudo Multi-Node E2E
     runs-on: [self-hosted, ci-pseudo]
     timeout-minutes: 25
+    env:
+      TOFU_LOG: /tmp/e2e-tofu-pseudo-${{ github.run_id }}.log
     steps:
       - name: Clean workspace
         run: rm -rf mulga
@@ -133,6 +136,8 @@ jobs:
     runs-on: [self-hosted, ci-multi]
     timeout-minutes: 25
     continue-on-error: true # Advisory until stable
+    env:
+      TOFU_LOG: /tmp/e2e-tofu-multi-${{ github.run_id }}.log
     steps:
       - name: Clean workspace
         run: rm -rf mulga
