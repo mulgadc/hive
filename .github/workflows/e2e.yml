@@ -48,6 +48,7 @@ jobs:
           tofu init -input=false >> "$TOFU_LOG" 2>&1
           tofu workspace select -or-create env3 >> "$TOFU_LOG" 2>&1
           tofu destroy -var-file=envs/env3.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
+          ./scrub-env.sh env3 >> "$TOFU_LOG" 2>&1 || true
           tofu apply -var-file=envs/env3.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
       - name: Bootstrap Cluster
@@ -70,6 +71,7 @@ jobs:
         run: |
           tofu workspace select -or-create env3 >> "$TOFU_LOG" 2>&1
           tofu destroy -var-file=envs/env3.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+          ./scrub-env.sh env3 >> "$TOFU_LOG" 2>&1 || true
 
   e2e_pseudo_multi:
     name: Pseudo Multi-Node E2E
@@ -101,6 +103,7 @@ jobs:
           tofu init -input=false >> "$TOFU_LOG" 2>&1
           tofu workspace select -or-create env4 >> "$TOFU_LOG" 2>&1
           tofu destroy -var-file=envs/env4.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
+          ./scrub-env.sh env4 >> "$TOFU_LOG" 2>&1 || true
           tofu apply -var-file=envs/env4.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
       - name: Bootstrap Cluster
@@ -123,6 +126,7 @@ jobs:
         run: |
           tofu workspace select -or-create env4 >> "$TOFU_LOG" 2>&1
           tofu destroy -var-file=envs/env4.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+          ./scrub-env.sh env4 >> "$TOFU_LOG" 2>&1 || true
 
   e2e_real_multi:
     name: Real Multi-Node E2E
@@ -154,6 +158,7 @@ jobs:
           tofu init -input=false >> "$TOFU_LOG" 2>&1
           tofu workspace select -or-create env2 >> "$TOFU_LOG" 2>&1
           tofu destroy -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
+          ./scrub-env.sh env2 >> "$TOFU_LOG" 2>&1 || true
           tofu apply -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
       - name: Bootstrap Cluster
@@ -184,3 +189,4 @@ jobs:
         run: |
           tofu workspace select -or-create env2 >> "$TOFU_LOG" 2>&1
           tofu destroy -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+          ./scrub-env.sh env2 >> "$TOFU_LOG" 2>&1 || true
