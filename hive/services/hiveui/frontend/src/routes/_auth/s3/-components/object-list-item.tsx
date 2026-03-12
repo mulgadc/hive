@@ -83,7 +83,7 @@ export function ObjectListItem({
         </div>
         <div className="flex items-center gap-3">
           <div className="text-muted-foreground text-sm">
-            {formatSize(object.Size ?? 0)}
+            {formatSize(object.Size || 0)}
           </div>
           <button
             className="rounded-md p-2 transition-colors hover:bg-accent"

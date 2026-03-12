@@ -16,7 +16,6 @@ import {
   iamPolicyQueryOptions,
   iamPolicyVersionQueryOptions,
 } from "@/queries/iam"
-
 import { PolicyDocumentViewer } from "../../-components/policy-document-viewer"
 
 export const Route = createFileRoute(
@@ -117,7 +116,7 @@ function PolicyDetail() {
             <DetailRow label="Policy ID" value={policy.PolicyId} />
             <DetailRow label="ARN" value={policy.Arn} />
             <DetailRow label="Path" value={policy.Path} />
-            <DetailRow label="Description" value={policy.Description ?? "-"} />
+            <DetailRow label="Description" value={policy.Description || "-"} />
             <DetailRow
               label="Created"
               value={formatDateTime(policy.CreateDate)}

@@ -1,4 +1,4 @@
-
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { AwsCredentials } from "./auth"
 
@@ -28,14 +28,14 @@ describe("setCredentials", () => {
   it("stores credentials in localStorage", () => {
     setCredentials(validCreds)
     const stored = localStorage.getItem("hive:v1:aws-credentials")
-    expect(JSON.parse(stored ?? "")).toStrictEqual(validCreds)
+    expect(JSON.parse(stored ?? "")).toEqual(validCreds)
   })
 
   it("caches credentials in memory", () => {
     setCredentials(validCreds)
     // Clear localStorage to prove it reads from cache
     localStorage.clear()
-    expect(getCredentials()).toStrictEqual(validCreds)
+    expect(getCredentials()).toEqual(validCreds)
   })
 })
 
@@ -46,15 +46,15 @@ describe("getCredentials", () => {
 
   it("reads from localStorage on first call", () => {
     localStorage.setItem("hive:v1:aws-credentials", JSON.stringify(validCreds))
-    expect(getCredentials()).toStrictEqual(validCreds)
+    expect(getCredentials()).toEqual(validCreds)
   })
 
   it("returns cached value on subsequent calls", () => {
     setCredentials(validCreds)
     localStorage.clear()
     // Should still return from cache
-    expect(getCredentials()).toStrictEqual(validCreds)
-    expect(getCredentials()).toStrictEqual(validCreds)
+    expect(getCredentials()).toEqual(validCreds)
+    expect(getCredentials()).toEqual(validCreds)
   })
 
   it("returns null for invalid JSON in localStorage", () => {

@@ -21,7 +21,7 @@ export const Route = createFileRoute("/_auth/iam/(users)/list-users/")({
 function Users() {
   const { data } = useSuspenseQuery(iamUsersQueryOptions)
 
-  const users = (data.Users ?? []).toSorted((a, b) => {
+  const users = (data.Users || []).toSorted((a, b) => {
     const nameA = a.UserName?.toLowerCase() ?? ""
     const nameB = b.UserName?.toLowerCase() ?? ""
     return nameA.localeCompare(nameB)

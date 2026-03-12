@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react"
+import { describe, expect, it } from "vitest"
 
 import { DetailRow } from "./detail-row"
 
@@ -14,10 +15,9 @@ describe("DetailRow", () => {
     expect(screen.getByText("—")).toBeInTheDocument()
   })
 
-  it("renders empty string as value", () => {
+  it("renders dash when value is empty string", () => {
     render(<DetailRow label="Subnet" value="" />)
-    // With nullish coalescing, empty string is a valid value
-    expect(screen.queryByText("—")).not.toBeInTheDocument()
+    expect(screen.getByText("—")).toBeInTheDocument()
   })
 
   it("renders ReactNode as value", () => {

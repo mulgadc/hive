@@ -24,7 +24,7 @@ export const Route = createFileRoute("/_auth/ec2/(images)/describe-images/")({
 function Images() {
   const { data } = useSuspenseQuery(ec2ImagesQueryOptions)
 
-  const images = data.Images ?? []
+  const images = data.Images || []
 
   return (
     <>

@@ -27,7 +27,7 @@ export function InstanceActions({ instanceId, state }: InstanceActionsProps) {
   const rebootMutation = useRebootInstance()
   const terminateMutation = useTerminateInstance()
 
-  const isTransitioning = TRANSITIONING_STATES.has(state ?? "")
+  const isTransitioning = TRANSITIONING_STATES.has(state || "")
 
   if (isTransitioning && state !== "terminated") {
     return (

@@ -25,7 +25,7 @@ export const Route = createFileRoute("/_auth/ec2/(volumes)/describe-volumes/")({
 function Volumes() {
   const { data } = useSuspenseQuery(ec2VolumesQueryOptions)
 
-  const volumes = data.Volumes ?? []
+  const volumes = data.Volumes || []
 
   return (
     <>

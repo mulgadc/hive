@@ -25,7 +25,7 @@ export const Route = createFileRoute("/_auth/s3/ls/")({
 function Buckets() {
   const { data } = useSuspenseQuery(s3BucketsQueryOptions)
 
-  const buckets = data.Buckets ?? []
+  const buckets = data.Buckets || []
 
   return (
     <>

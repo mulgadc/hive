@@ -38,8 +38,8 @@ function Ec2() {
 
   const instances = (
     data.Reservations?.flatMap(
-      (reservation: Reservation) => reservation.Instances ?? [],
-    ) ?? []
+      (reservation: Reservation) => reservation.Instances || [],
+    ) || []
   ).toSorted((a, b) => {
     const pa = statePriority[a.State?.Name ?? ""] ?? 6
     const pb = statePriority[b.State?.Name ?? ""] ?? 6

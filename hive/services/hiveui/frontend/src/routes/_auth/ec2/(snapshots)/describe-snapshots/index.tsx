@@ -27,7 +27,7 @@ export const Route = createFileRoute(
 function Snapshots() {
   const { data } = useSuspenseQuery(ec2SnapshotsQueryOptions)
 
-  const snapshots = data.Snapshots ?? []
+  const snapshots = data.Snapshots || []
 
   return (
     <>

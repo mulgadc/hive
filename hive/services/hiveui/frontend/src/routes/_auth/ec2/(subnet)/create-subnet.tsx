@@ -152,7 +152,7 @@ function CreateSubnet() {
                 onValueChange={(value) =>
                   field.onChange(value === "none" ? "" : value)
                 }
-                value={field.value ?? "none"}
+                value={field.value || "none"}
               >
                 <SelectTrigger className="w-full" id="availabilityZone">
                   <SelectValue />

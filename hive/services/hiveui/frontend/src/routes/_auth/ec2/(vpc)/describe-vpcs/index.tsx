@@ -26,7 +26,7 @@ export const Route = createFileRoute("/_auth/ec2/(vpc)/describe-vpcs/")({
 function Vpcs() {
   const { data } = useSuspenseQuery(ec2VpcsQueryOptions)
 
-  const vpcs = data.Vpcs ?? []
+  const vpcs = data.Vpcs || []
 
   return (
     <>

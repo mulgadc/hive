@@ -21,7 +21,7 @@ export const Route = createFileRoute("/_auth/iam/(policies)/list-policies/")({
 function Policies() {
   const { data } = useSuspenseQuery(iamPoliciesQueryOptions)
 
-  const policies = (data.Policies ?? []).toSorted((a, b) => {
+  const policies = (data.Policies || []).toSorted((a, b) => {
     const nameA = a.PolicyName?.toLowerCase() ?? ""
     const nameB = b.PolicyName?.toLowerCase() ?? ""
     return nameA.localeCompare(nameB)
