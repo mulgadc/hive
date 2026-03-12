@@ -1032,8 +1032,9 @@ echo "Cleaned up test volume $STOPPED_VOL_ID"
 echo "Phase 7b: ModifyInstanceAttribute"
 echo "Instance is stopped — modifying instance type to verify changes take effect on restart"
 
-# Derive an upsized type in the same family: nano → xlarge (4 vCPUs instead of 2)
-MODIFY_TYPE="${INSTANCE_TYPE%.nano}.xlarge"
+# Derive an upsized type in the same family: nano → small (same vCPUs, more RAM)
+# Note: xlarge needs 16GB RAM which exceeds the 8GB CI VM — use small (2GB) instead
+MODIFY_TYPE="${INSTANCE_TYPE%.nano}.small"
 echo "Changing instance type from $INSTANCE_TYPE to $MODIFY_TYPE..."
 
 # Get expected vCPU and memory for the new type
