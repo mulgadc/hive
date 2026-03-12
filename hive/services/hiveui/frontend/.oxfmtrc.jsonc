@@ -11,5 +11,6 @@
   "sortTailwindcss": {
     "stylesheet": "./src/styles.css",
     "functions": ["clsx", "cn", "cva"],
-  }
+  },
+  "ignorePatterns": ["dist/**"]
 }

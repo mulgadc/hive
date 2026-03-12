@@ -23,7 +23,9 @@
     "func-style": "off",
     "no-use-before-define": "off",
     "sort-keys": "off",
-    "sort-vars": "off"
+    "sort-vars": "off",
+    "prefer-destructuring": "off",
+    "unicorn/no-useless-undefined": "off"
   },
   "options": {
     "typeAware": true
@@ -34,9 +36,10 @@
         "**/*.{test,spec}.{ts,tsx,js,jsx}",
         "**/__tests__/**/*.{ts,tsx,js,jsx}"
       ],
-      "plugins": ["vitest"],
+      "plugins": ["vitest", "jest"],
       "rules": {
         "vitest/prefer-describe-function-title": "off",
+        "vitest/prefer-import-in-mock": "off",
         "jest/prefer-lowercase-title": "off",
         "jest/prefer-strict-equal": "off",
         "jest/no-hooks": "off",
@@ -92,8 +95,5 @@
       }
     }
   ],
-  "ignorePatterns": [
-    "dist",
-    "src/routeTree.gen.ts"
-  ]
+  "ignorePatterns": ["dist", "src/routeTree.gen.ts"]
 }
