@@ -135,7 +135,6 @@ jobs:
     name: Real Multi-Node E2E
     runs-on: [self-hosted, ci-multi]
     timeout-minutes: 25
-    continue-on-error: true # Advisory until stable
     env:
       TOFU_LOG: /tmp/e2e-tofu-multi-${{ github.run_id }}.log
     steps:

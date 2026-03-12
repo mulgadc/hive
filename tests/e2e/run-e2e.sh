@@ -117,7 +117,6 @@ if [ "$BOOTSTRAPPED" != "true" ]; then
     # Start all services
     # Ensure logs directory exists for start-dev.sh
     mkdir -p ~/hive/logs
-    sudo mkdir -p /mnt/ramdisk
     ./scripts/start-dev.sh
 fi
 

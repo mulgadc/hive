@@ -102,9 +102,6 @@ echo ""
 echo "Setting up simulated network..."
 add_simulated_ips
 
-# Create ramdisk mount point
-sudo mkdir -p /mnt/ramdisk
-
 echo ""
 
 # Phase 2: Cluster Initialization

@@ -750,8 +750,9 @@ echo "Phase 8: Node Failure"
 echo "========================================"
 echo "Stopping services on node2 ($NODE2_IP) to simulate node failure..."
 
-# Stop services on node2
-peer_ssh "$NODE2_IP" "cd ~/Development/mulga/hive && ./scripts/stop-dev.sh" || {
+# Stop services on node2 only — HIVE_FORCE_LOCAL_STOP prevents coordinated
+# cluster shutdown which would kill all nodes via NATS
+peer_ssh "$NODE2_IP" "cd ~/Development/mulga/hive && HIVE_FORCE_LOCAL_STOP=1 ./scripts/stop-dev.sh" || {
     echo "  WARNING: stop-dev.sh returned non-zero (may be expected)"
 }
 
