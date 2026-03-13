@@ -44,37 +44,42 @@ type IAMServiceImpl struct {
 }
 
 // NewIAMServiceImpl creates a new IAM service backed by NATS JetStream KV.
-func NewIAMServiceImpl(natsConn *nats.Conn, masterKey []byte) (*IAMServiceImpl, error) {
+// clusterSize sets the JetStream replication factor for KV buckets. For
+// multi-node clusters this must match the number of NATS servers so that
+// buckets survive node failures. Pass 1 for single-node or test setups.
+func NewIAMServiceImpl(natsConn *nats.Conn, masterKey []byte, clusterSize int) (*IAMServiceImpl, error) {
 	if len(masterKey) != 32 {
 		return nil, fmt.Errorf("master key must be 32 bytes, got %d", len(masterKey))
 	}
+
+	replicas := max(clusterSize, 1)
 
 	js, err := natsConn.JetStream()
 	if err != nil {
 		return nil, fmt.Errorf("get JetStream context: %w", err)
 	}
 
-	usersBucket, err := getOrCreateBucket(js, KVBucketUsers, 10)
+	usersBucket, err := getOrCreateBucket(js, KVBucketUsers, 10, replicas)
 	if err != nil {
 		return nil, fmt.Errorf("init users bucket: %w", err)
 	}
 
-	accessKeysBucket, err := getOrCreateBucket(js, KVBucketAccessKeys, 5)
+	accessKeysBucket, err := getOrCreateBucket(js, KVBucketAccessKeys, 5, replicas)
 	if err != nil {
 		return nil, fmt.Errorf("init access keys bucket: %w", err)
 	}
 
-	policiesBucket, err := getOrCreateBucket(js, KVBucketPolicies, 10)
+	policiesBucket, err := getOrCreateBucket(js, KVBucketPolicies, 10, replicas)
 	if err != nil {
 		return nil, fmt.Errorf("init policies bucket: %w", err)
 	}
 
-	accountsBucket, err := getOrCreateBucket(js, KVBucketAccounts, 5)
+	accountsBucket, err := getOrCreateBucket(js, KVBucketAccounts, 5, replicas)
 	if err != nil {
 		return nil, fmt.Errorf("init accounts bucket: %w", err)
 	}
 
-	accountCounterBucket, err := getOrCreateBucket(js, KVBucketAccountCounter, 5)
+	accountCounterBucket, err := getOrCreateBucket(js, KVBucketAccountCounter, 5, replicas)
 	if err != nil {
 		return nil, fmt.Errorf("init account counter bucket: %w", err)
 	}
@@ -88,7 +93,8 @@ func NewIAMServiceImpl(natsConn *nats.Conn, masterKey []byte) (*IAMServiceImpl, 
 		"users_bucket", KVBucketUsers,
 		"access_keys_bucket", KVBucketAccessKeys,
 		"policies_bucket", KVBucketPolicies,
-		"accounts_bucket", KVBucketAccounts)
+		"accounts_bucket", KVBucketAccounts,
+		"replicas", replicas)
 
 	return &IAMServiceImpl{
 		js:                   js,
@@ -103,10 +109,11 @@ func NewIAMServiceImpl(natsConn *nats.Conn, masterKey []byte) (*IAMServiceImpl, 
 	}, nil
 }
 
-func getOrCreateBucket(js nats.JetStreamContext, name string, history uint8) (nats.KeyValue, error) {
+func getOrCreateBucket(js nats.JetStreamContext, name string, history uint8, replicas int) (nats.KeyValue, error) {
 	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{
-		Bucket:  name,
-		History: history,
+		Bucket:   name,
+		History:  history,
+		Replicas: replicas,
 	})
 	if err != nil {
 		kv, err = js.KeyValue(name)

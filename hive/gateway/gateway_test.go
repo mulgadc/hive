@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -823,6 +824,80 @@ func TestCheckPolicy_MissingAccountID(t *testing.T) {
 	err := gw.checkPolicy(req, "ec2", "DescribeInstances")
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInternalError, err.Error())
+}
+
+func TestCheckPolicy_NATSTransientRetriesAllAttempts(t *testing.T) {
+	calls := 0
+	mock := &policyMockIAMService{
+		getUserPoliciesFn: func(_, _ string) ([]handlers_iam.PolicyDocument, error) {
+			calls++
+			return nil, fmt.Errorf("get user: %w", nats.ErrNoResponders)
+		},
+	}
+	gw := &GatewayConfig{DisableLogging: true, IAMService: mock}
+	req := httptest.NewRequest("POST", "/", nil)
+	ctx := context.WithValue(req.Context(), ctxIdentity, "alice")
+	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
+	req = req.WithContext(ctx)
+
+	err := gw.checkPolicy(req, "ec2", "DescribeInstances")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInternalError, err.Error())
+	assert.Equal(t, 3, calls, "should have retried all 3 attempts")
+}
+
+func TestCheckPolicy_NATSTransientRetriesThenSucceeds(t *testing.T) {
+	calls := 0
+	mock := &policyMockIAMService{
+		getUserPoliciesFn: func(_, _ string) ([]handlers_iam.PolicyDocument, error) {
+			calls++
+			if calls < 3 {
+				return nil, fmt.Errorf("get user: %w", nats.ErrNoResponders)
+			}
+			return []handlers_iam.PolicyDocument{
+				{
+					Version: "2012-10-17",
+					Statement: []handlers_iam.Statement{
+						{Effect: "Allow", Action: handlers_iam.StringOrArr{"ec2:*"}, Resource: handlers_iam.StringOrArr{"*"}},
+					},
+				},
+			}, nil
+		},
+	}
+	gw := &GatewayConfig{DisableLogging: true, IAMService: mock}
+	req := httptest.NewRequest("POST", "/", nil)
+	ctx := context.WithValue(req.Context(), ctxIdentity, "alice")
+	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
+	req = req.WithContext(ctx)
+
+	err := gw.checkPolicy(req, "ec2", "DescribeInstances")
+	assert.NoError(t, err)
+	assert.Equal(t, 3, calls, "should have retried until success")
+}
+
+func TestCheckPolicy_NonTransientErrorStillFails(t *testing.T) {
+	mock := &policyMockIAMService{
+		getUserPoliciesFn: func(_, _ string) ([]handlers_iam.PolicyDocument, error) {
+			return nil, errors.New("database corruption")
+		},
+	}
+	gw := &GatewayConfig{DisableLogging: true, IAMService: mock}
+	req := httptest.NewRequest("POST", "/", nil)
+	ctx := context.WithValue(req.Context(), ctxIdentity, "alice")
+	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
+	req = req.WithContext(ctx)
+
+	err := gw.checkPolicy(req, "ec2", "DescribeInstances")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInternalError, err.Error())
+}
+
+func TestIsNATSTransient(t *testing.T) {
+	assert.False(t, isNATSTransient(nil))
+	assert.True(t, isNATSTransient(nats.ErrNoResponders))
+	assert.True(t, isNATSTransient(nats.ErrTimeout))
+	assert.True(t, isNATSTransient(fmt.Errorf("get user: %w", nats.ErrNoResponders)))
+	assert.False(t, isNATSTransient(errors.New("some other error")))
 }
 
 func TestCorsMiddleware_GETRequest(t *testing.T) {

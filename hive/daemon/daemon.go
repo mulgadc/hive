@@ -526,6 +526,7 @@ func (d *Daemon) Start() error {
 	}
 
 	d.waitForClusterReady()
+	d.upgradeJetStreamReplicas()
 	d.restoreInstances()
 
 	if err := d.subscribeAll(); err != nil {
@@ -626,15 +627,24 @@ func (d *Daemon) initJetStream() error {
 		retryDelay = min(retryDelay*2, 10*time.Second)
 	}
 
-	// Upgrade replicas if cluster has more than one node
-	clusterSize := len(d.clusterConfig.Nodes)
-	if clusterSize > 1 {
-		if err := d.jsManager.UpdateReplicas(clusterSize); err != nil {
-			slog.Warn("Failed to upgrade JetStream replicas on startup (other NATS nodes may not be ready)", "targetReplicas", clusterSize, "error", err)
-		}
-	}
+	// Replica upgrade is deferred to after all services have created their
+	// KV buckets and the cluster is ready (see upgradeJetStreamReplicas).
 
 	return nil
+}
+
+// upgradeJetStreamReplicas bumps the replication factor on ALL KV_* streams
+// to match the cluster size. This runs after all services have created their
+// buckets and after waitForClusterReady so that enough NATS peers are online
+// to accept the new replica count.
+func (d *Daemon) upgradeJetStreamReplicas() {
+	clusterSize := len(d.clusterConfig.Nodes)
+	if clusterSize <= 1 || d.jsManager == nil {
+		return
+	}
+	if err := d.jsManager.UpdateReplicas(clusterSize); err != nil {
+		slog.Warn("Failed to upgrade JetStream replicas", "targetReplicas", clusterSize, "error", err)
+	}
 }
 
 // initServiceWithRetry initializes a service using the provided init function,

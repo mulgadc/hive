@@ -215,6 +215,14 @@ func (gw *GatewayConfig) GetService(r *http.Request) (string, error) {
 	return svc, nil
 }
 
+// isNATSTransient reports whether err represents a transient NATS/JetStream
+// failure that may resolve after cluster leader election completes.
+func isNATSTransient(err error) bool {
+	return err != nil && (errors.Is(err, nats.ErrNoResponders) ||
+		errors.Is(err, nats.ErrTimeout) ||
+		errors.Is(err, nats.ErrNoStreamResponse))
+}
+
 // checkPolicy evaluates IAM policies for the current request. Returns nil
 // if access is allowed, or an ErrorAccessDenied error if denied.
 // Root users bypass evaluation entirely. If the IAM service is unavailable,
@@ -250,7 +258,20 @@ func (gw *GatewayConfig) checkPolicy(r *http.Request, service, action string) er
 	// Resolve the IAM action string (e.g. "ec2:RunInstances")
 	iamAction := policy.IAMAction(service, action)
 
-	policies, err := gw.IAMService.GetUserPolicies(accountID, identity)
+	// Retry on transient NATS errors (e.g. during node failure / leader election).
+	var policies []handlers_iam.PolicyDocument
+	var err error
+	for attempt := range 3 {
+		policies, err = gw.IAMService.GetUserPolicies(accountID, identity)
+		if err == nil || !isNATSTransient(err) {
+			break
+		}
+		if attempt < 2 {
+			slog.Debug("checkPolicy: transient NATS error, retrying",
+				"user", identity, "attempt", attempt+1, "err", err)
+			time.Sleep(time.Duration(attempt+1) * 200 * time.Millisecond)
+		}
+	}
 	if err != nil {
 		slog.Error("checkPolicy: failed to get user policies", "user", identity, "err", err)
 		return errors.New(awserrors.ErrorInternalError)

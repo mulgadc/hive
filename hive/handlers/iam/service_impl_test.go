@@ -47,7 +47,7 @@ func setupTestIAMService(t *testing.T) *IAMServiceImpl {
 	masterKey, err := GenerateMasterKey()
 	require.NoError(t, err)
 
-	svc, err := NewIAMServiceImpl(nc, masterKey)
+	svc, err := NewIAMServiceImpl(nc, masterKey, 1)
 	require.NoError(t, err)
 	return svc
 }
