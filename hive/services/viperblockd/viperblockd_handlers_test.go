@@ -470,9 +470,13 @@ func TestIntegration_EBSUnmountInvalidJSON(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
-	// Current code silently returns without responding on unmarshal failure
-	_, err = nc.Request("ebs.test-node.unmount", []byte("not json {{{"), 1*time.Second)
-	assert.Error(t, err, "expected timeout because handler silently drops invalid JSON")
+	// Handler responds with an error payload on invalid JSON
+	msg, err := nc.Request("ebs.test-node.unmount", []byte("not json {{{"), 1*time.Second)
+	require.NoError(t, err, "handler should respond even on invalid JSON")
+
+	var resp types.EBSUnMountResponse
+	require.NoError(t, json.Unmarshal(msg.Data, &resp))
+	assert.Contains(t, resp.Error, "bad request")
 }
 
 // --- ebs.delete with VB instance (StopWALSyncer path) ---

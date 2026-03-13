@@ -255,20 +255,15 @@ if has_service "nats"; then
     set_oom_score "nats" "-500"
     check_service "NATS" "$NATS_CHECK_HOST" "4222"
 
-    # Ensure NATS JetStream is ready before Predastore starts.
+    # Wait for NATS JetStream to be ready before Predastore starts.
     # Predastore lazily opens IAM KV buckets — it starts with config-only auth
     # and activates IAM auth once the hive daemon creates the KV buckets.
     echo "🔍 Waiting for NATS JetStream..."
     NATS_JS_READY=false
     for i in $(seq 1 15); do
-        if nats -s nats://$NATS_CHECK_HOST:4222 stream ls --names 2>/dev/null | grep -q "KV_" 2>/dev/null; then
-            echo "   ✅ NATS JetStream is ready (KV streams found)"
-            NATS_JS_READY=true
-            break
-        fi
-        # JetStream may be up with no KV buckets yet (fresh install before admin init)
-        if nats -s nats://$NATS_CHECK_HOST:4222 account info 2>/dev/null | grep -q "JetStream" 2>/dev/null; then
-            echo "   ✅ NATS JetStream is ready (no KV buckets yet — run 'hive admin init' to bootstrap)"
+        # Send a NATS INFO probe — JetStream-enabled servers include "jetstream" in the INFO response
+        if echo "" | nc -w 1 "$NATS_CHECK_HOST" 4222 2>/dev/null | grep -q "jetstream"; then
+            echo "   ✅ NATS JetStream is ready"
             NATS_JS_READY=true
             break
         fi

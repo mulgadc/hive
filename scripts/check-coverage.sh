@@ -26,7 +26,7 @@ if [[ -z "$QUIET" ]]; then
     go tool cover -func="$PROFILE" | tail -1
 fi
 
-PASS=$(echo "$TOTAL >= $MIN" | bc -l)
+PASS=$(awk "BEGIN {print ($TOTAL >= $MIN) ? 1 : 0}")
 if [[ "$PASS" != "1" ]]; then
     echo "ERROR: Total coverage ${TOTAL}% is below minimum ${MIN}%"
     exit 1
