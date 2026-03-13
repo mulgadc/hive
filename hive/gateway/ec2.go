@@ -234,7 +234,11 @@ var ec2LocalActions = map[string]bool{
 }
 
 func (gw *GatewayConfig) EC2_Request(w http.ResponseWriter, r *http.Request) error {
-	body, _ := io.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		slog.Error("Failed to read EC2 request body", "error", err)
+		return errors.New(awserrors.ErrorInternalError)
+	}
 	queryArgs := ParseAWSQueryArgs(string(body))
 
 	action := queryArgs["Action"]

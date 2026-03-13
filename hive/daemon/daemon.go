@@ -15,12 +15,15 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"net/http"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -46,7 +49,6 @@ import (
 	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/nats-io/nats.go"
 	"github.com/pelletier/go-toml/v2"
-	"net/http"
 )
 
 type BlockDeviceMapping struct {
@@ -910,6 +912,11 @@ func (d *Daemon) restoreInstances() {
 			go func(inst *vm.VM) {
 				defer wg.Done()
 				defer func() { <-sem }() // release
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("Panic during instance recovery", "instanceId", inst.ID, "panic", r, "stack", string(debug.Stack()))
+					}
+				}()
 				slog.Info("Launching instance (recovery)", "instance", inst.ID)
 				if err := d.LaunchInstance(inst); err != nil {
 					slog.Error("Failed to launch instance", "instanceId", inst.ID, "err", err)
@@ -1087,7 +1094,9 @@ func (d *Daemon) ClusterManager() error {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(response)
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			slog.Error("Failed to encode health response", "error", err)
+		}
 	})
 
 	// Join endpoint - accepts new nodes joining the cluster
@@ -1096,10 +1105,12 @@ func (d *Daemon) ClusterManager() error {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(400)
-			_ = json.NewEncoder(w).Encode(types.NodeJoinResponse{
+			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: "invalid request body",
-			})
+			}); err != nil {
+				slog.Error("Failed to encode join error response", "error", err)
+			}
 			return
 		}
 
@@ -1109,10 +1120,12 @@ func (d *Daemon) ClusterManager() error {
 		if req.Node == "" || req.Region == "" || req.AZ == "" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(400)
-			_ = json.NewEncoder(w).Encode(types.NodeJoinResponse{
+			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: "node, region, and az are required",
-			})
+			}); err != nil {
+				slog.Error("Failed to encode join validation response", "error", err)
+			}
 			return
 		}
 
@@ -1120,10 +1133,12 @@ func (d *Daemon) ClusterManager() error {
 		if _, exists := d.clusterConfig.Nodes[req.Node]; exists {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(409)
-			_ = json.NewEncoder(w).Encode(types.NodeJoinResponse{
+			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: fmt.Sprintf("node %s already exists in cluster", req.Node),
-			})
+			}); err != nil {
+				slog.Error("Failed to encode join conflict response", "error", err)
+			}
 			return
 		}
 
@@ -1153,10 +1168,12 @@ func (d *Daemon) ClusterManager() error {
 			slog.Error("Failed to save cluster config", "error", err)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(500)
-			_ = json.NewEncoder(w).Encode(types.NodeJoinResponse{
+			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: "failed to save cluster config",
-			})
+			}); err != nil {
+				slog.Error("Failed to encode join save-error response", "error", err)
+			}
 			return
 		}
 
@@ -1209,7 +1226,7 @@ func (d *Daemon) ClusterManager() error {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(types.NodeJoinResponse{
+		if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
 			Success:          true,
 			Message:          fmt.Sprintf("node %s successfully joined cluster", req.Node),
 			SharedData:       sharedData,
@@ -1218,7 +1235,9 @@ func (d *Daemon) ClusterManager() error {
 			CACert:           caCert,
 			CAKey:            caKey,
 			PredastoreConfig: predastoreConfig,
-		})
+		}); err != nil {
+			slog.Error("Failed to encode join success response", "error", err)
+		}
 	})
 
 	// Get cluster config endpoint
@@ -1226,10 +1245,12 @@ func (d *Daemon) ClusterManager() error {
 		configHash, _ := d.computeConfigHash()
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		if err := json.NewEncoder(w).Encode(map[string]any{
 			"config":      d.clusterConfig,
 			"config_hash": configHash,
-		})
+		}); err != nil {
+			slog.Error("Failed to encode config response", "error", err)
+		}
 	})
 
 	// Start HTTP server in goroutine

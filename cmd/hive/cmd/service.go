@@ -148,7 +148,10 @@ var predastoreStartCmd = &cobra.Command{
 			return
 		}
 
-		service.Start()
+		if _, err := service.Start(); err != nil {
+			fmt.Println("Error starting predastore service:", err)
+			os.Exit(1)
+		}
 
 		fmt.Println("Predastore service started", service)
 	},
@@ -167,7 +170,10 @@ var predastoreStopCmd = &cobra.Command{
 			return
 		}
 
-		service.Stop()
+		if err = service.Stop(); err != nil {
+			fmt.Println("Error stopping predastore service:", err)
+			os.Exit(1)
+		}
 
 		fmt.Println("Predastore service stopped")
 
@@ -319,7 +325,10 @@ var viperblockStopCmd = &cobra.Command{
 			return
 		}
 
-		service.Stop()
+		if err = service.Stop(); err != nil {
+			fmt.Println("Error stopping viperblock service:", err)
+			os.Exit(1)
+		}
 
 		fmt.Println("Viperblock service stopped")
 
@@ -363,7 +372,10 @@ var natsStartCmd = &cobra.Command{
 			return
 		}
 
-		service.Start()
+		if _, err = service.Start(); err != nil {
+			fmt.Println("Error starting nats service:", err)
+			os.Exit(1)
+		}
 		fmt.Println("NATS service started")
 	},
 }
@@ -381,7 +393,10 @@ var natsStopCmd = &cobra.Command{
 			return
 		}
 
-		service.Stop()
+		if err = service.Stop(); err != nil {
+			fmt.Println("Error stopping nats service:", err)
+			os.Exit(1)
+		}
 
 		fmt.Println("Nats service stopped")
 	},
@@ -448,7 +463,10 @@ var hiveStartCmd = &cobra.Command{
 			hiveSvc.SetConfigPath(cfgFile)
 		}
 
-		svc.Start()
+		if _, err = svc.Start(); err != nil {
+			fmt.Println("Error starting hive service:", err)
+			os.Exit(1)
+		}
 		fmt.Println("HIVE service started")
 	},
 }
@@ -466,7 +484,10 @@ var hiveStopCmd = &cobra.Command{
 			return
 		}
 
-		service.Stop()
+		if err = service.Stop(); err != nil {
+			fmt.Println("Error stopping hive service:", err)
+			os.Exit(1)
+		}
 
 		fmt.Println("Hive service stopped")
 	},
@@ -542,7 +563,10 @@ var awsgwStartCmd = &cobra.Command{
 			return
 		}
 
-		service.Start()
+		if _, err = service.Start(); err != nil {
+			fmt.Println("Error starting awsgw service:", err)
+			os.Exit(1)
+		}
 		fmt.Println("AWSGW service started")
 	},
 }
@@ -560,7 +584,10 @@ var awsgwStopCmd = &cobra.Command{
 			return
 		}
 
-		service.Stop()
+		if err = service.Stop(); err != nil {
+			fmt.Println("Error stopping awsgw service:", err)
+			os.Exit(1)
+		}
 
 		fmt.Println("AWSGW service stopped")
 	},
@@ -597,7 +624,10 @@ var hiveUIStartCmd = &cobra.Command{
 			return
 		}
 
-		svc.Start()
+		if _, err = svc.Start(); err != nil {
+			fmt.Println("Error starting hive-ui service:", err)
+			os.Exit(1)
+		}
 		fmt.Println("hive-ui service started")
 	},
 }
@@ -615,7 +645,10 @@ var hiveUIStopCmd = &cobra.Command{
 			return
 		}
 
-		svc.Stop()
+		if err = svc.Stop(); err != nil {
+			fmt.Println("Error stopping hive-ui service:", err)
+			os.Exit(1)
+		}
 		fmt.Println("hive-ui service stopped")
 	},
 }
@@ -674,7 +707,10 @@ var vpcdStartCmd = &cobra.Command{
 			return
 		}
 
-		svc.Start()
+		if _, err = svc.Start(); err != nil {
+			fmt.Println("Error starting vpcd service:", err)
+			os.Exit(1)
+		}
 		fmt.Println("vpcd service started")
 	},
 }
@@ -691,7 +727,10 @@ var vpcdStopCmd = &cobra.Command{
 			return
 		}
 
-		svc.Stop()
+		if err = svc.Stop(); err != nil {
+			fmt.Println("Error stopping vpcd service:", err)
+			os.Exit(1)
+		}
 		fmt.Println("vpcd service stopped")
 	},
 }

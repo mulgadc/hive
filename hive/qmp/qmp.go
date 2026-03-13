@@ -2,8 +2,10 @@ package qmp
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"sync"
+	"time"
 )
 
 type unmarshalTarget any
@@ -117,7 +119,11 @@ func NewQMPClient(path string) (*QMPClient, error) {
 		return nil, err
 	}
 
-	//conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	// Set deadline for greeting — a hung QEMU would block forever without this
+	if err := conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("set read deadline: %w", err)
+	}
 
 	client := &QMPClient{
 		Conn:    conn,
@@ -129,7 +135,13 @@ func NewQMPClient(path string) (*QMPClient, error) {
 	var greeting QMPGreeting
 	if err := client.Decoder.Decode(&greeting); err != nil {
 		_ = conn.Close()
-		return nil, err
+		return nil, fmt.Errorf("waiting for QMP greeting: %w", err)
+	}
+
+	// Clear deadline for normal operations
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("clear read deadline: %w", err)
 	}
 
 	// enable capabilities

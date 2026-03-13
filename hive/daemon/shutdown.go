@@ -53,6 +53,7 @@ func (d *Daemon) handleShutdownGate(msg *nats.Msg) {
 	var req ShutdownRequest
 	if err := json.Unmarshal(msg.Data, &req); err != nil {
 		slog.Error("handleShutdownGate: failed to unmarshal request", "error", err)
+		d.respondShutdownACK(msg, ShutdownACK{Node: d.node, Phase: "gate", Error: err.Error()})
 		return
 	}
 
@@ -105,6 +106,7 @@ func (d *Daemon) handleShutdownDrain(msg *nats.Msg) {
 	var req ShutdownRequest
 	if err := json.Unmarshal(msg.Data, &req); err != nil {
 		slog.Error("handleShutdownDrain: failed to unmarshal request", "error", err)
+		d.respondShutdownACK(msg, ShutdownACK{Node: d.node, Phase: "drain", Error: err.Error()})
 		return
 	}
 
@@ -162,6 +164,7 @@ func (d *Daemon) handleShutdownStorage(msg *nats.Msg) {
 	var req ShutdownRequest
 	if err := json.Unmarshal(msg.Data, &req); err != nil {
 		slog.Error("handleShutdownStorage: failed to unmarshal request", "error", err)
+		d.respondShutdownACK(msg, ShutdownACK{Node: d.node, Phase: "storage", Error: err.Error()})
 		return
 	}
 
@@ -196,6 +199,7 @@ func (d *Daemon) handleShutdownPersist(msg *nats.Msg) {
 	var req ShutdownRequest
 	if err := json.Unmarshal(msg.Data, &req); err != nil {
 		slog.Error("handleShutdownPersist: failed to unmarshal request", "error", err)
+		d.respondShutdownACK(msg, ShutdownACK{Node: d.node, Phase: "persist", Error: err.Error()})
 		return
 	}
 
@@ -226,6 +230,7 @@ func (d *Daemon) handleShutdownInfra(msg *nats.Msg) {
 	var req ShutdownRequest
 	if err := json.Unmarshal(msg.Data, &req); err != nil {
 		slog.Error("handleShutdownInfra: failed to unmarshal request", "error", err)
+		d.respondShutdownACK(msg, ShutdownACK{Node: d.node, Phase: "infra", Error: err.Error()})
 		return
 	}
 
@@ -290,9 +295,10 @@ func (d *Daemon) publishShutdownProgress(phase string, total, remaining int) {
 	}
 	data, err := json.Marshal(progress)
 	if err != nil {
+		slog.Error("Failed to marshal shutdown progress", "error", err)
 		return
 	}
 	if err := d.natsConn.Publish("hive.cluster.shutdown.progress", data); err != nil {
-		slog.Debug("Failed to publish shutdown progress", "error", err)
+		slog.Warn("Failed to publish shutdown progress", "error", err)
 	}
 }

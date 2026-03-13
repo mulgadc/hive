@@ -96,7 +96,9 @@ func launchService(config *config.ClusterConfig) error {
 
 	// First boot: consume bootstrap.json → seed IAM users into NATS KV → delete file
 	bootstrapPath := filepath.Join(nodeConfig.BaseDir, "config", "bootstrap.json")
-	if data, err := handlers_iam.LoadBootstrapData(bootstrapPath); err == nil {
+	data, err := handlers_iam.LoadBootstrapData(bootstrapPath)
+	switch {
+	case err == nil:
 		slog.Info("Bootstrap file found, seeding IAM users")
 		if err := iamService.SeedBootstrap(data); err != nil {
 			return fmt.Errorf("seed bootstrap from bootstrap.json: %w", err)
@@ -105,6 +107,10 @@ func launchService(config *config.ClusterConfig) error {
 			slog.Warn("Failed to delete bootstrap file", "path", bootstrapPath, "err", err)
 		}
 		slog.Info("Bootstrap complete, bootstrap.json deleted")
+	case os.IsNotExist(err):
+		// No bootstrap file — normal after first boot
+	default:
+		return fmt.Errorf("load bootstrap from %s: %w", bootstrapPath, err)
 	}
 
 	// Create gateway with NATS connection
