@@ -81,6 +81,7 @@
 
     "promise/catch-or-return": "off",
     "promise/always-return": "off",
+    "promise/prefer-await-to-callbacks": "off",
 
     "react/only-export-components": "off",
     "react/jsx-boolean-value": "off",

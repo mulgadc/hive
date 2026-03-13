@@ -285,6 +285,7 @@ export function SidebarRail({
   const { toggleSidebar } = useSidebar()
 
   return (
+    // oxlint-disable-next-line react/button-has-type
     <button
       aria-label="Toggle Sidebar"
       className={cn(
