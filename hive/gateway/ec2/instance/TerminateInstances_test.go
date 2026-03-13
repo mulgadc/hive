@@ -114,18 +114,11 @@ func TestTerminateInstances_NATSRequestFails(t *testing.T) {
 		InstanceIds: []*string{aws.String(instanceID)},
 	}
 
-	output, err := TerminateInstances(input, nc, "123456789012")
-
-	require.NoError(t, err)
-	require.Len(t, output.TerminatingInstances, 1)
-
-	// On NATS failure, state should reflect "still running"
-	sc := output.TerminatingInstances[0]
-	assert.Equal(t, instanceID, *sc.InstanceId)
-	assert.Equal(t, int64(16), *sc.CurrentState.Code)
-	assert.Equal(t, "running", *sc.CurrentState.Name)
-	assert.Equal(t, int64(16), *sc.PreviousState.Code)
-	assert.Equal(t, "running", *sc.PreviousState.Name)
+	// When no subscriber exists and all fallback paths fail, an error is
+	// returned so the caller knows the terminate did not succeed.
+	_, err := TerminateInstances(input, nc, "123456789012")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), instanceID)
 }
 
 func TestTerminateInstances_MixedSuccessAndFailure(t *testing.T) {
@@ -142,18 +135,12 @@ func TestTerminateInstances_MixedSuccessAndFailure(t *testing.T) {
 		InstanceIds: []*string{aws.String(goodID), aws.String(badID)},
 	}
 
-	output, err := TerminateInstances(input, nc, "123456789012")
-
-	require.NoError(t, err)
-	require.Len(t, output.TerminatingInstances, 2)
-
-	// First: success → shutting-down
-	assert.Equal(t, goodID, *output.TerminatingInstances[0].InstanceId)
-	assert.Equal(t, "shutting-down", *output.TerminatingInstances[0].CurrentState.Name)
-
-	// Second: failure → still running
-	assert.Equal(t, badID, *output.TerminatingInstances[1].InstanceId)
-	assert.Equal(t, "running", *output.TerminatingInstances[1].CurrentState.Name)
+	// When a running instance cannot be reached (ErrNoResponders exhausted after
+	// retries), TerminateInstances returns an error rather than silently
+	// reporting the instance as "running".
+	_, err := TerminateInstances(input, nc, "123456789012")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), badID)
 }
 
 func TestTerminateInstances_VerifiesQMPAttributes(t *testing.T) {

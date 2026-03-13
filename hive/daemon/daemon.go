@@ -797,9 +797,12 @@ func (d *Daemon) restoreInstances() {
 
 		if instance.Status == vm.StateTerminated {
 			if !d.migrateTerminatedToKV(instance) {
-				// KV write failed — still remove from local map. The VM is gone;
-				// keeping it here would make it retry forever on every restart.
-				delete(d.Instances.VMS, instance.ID)
+				// KV write failed — keep in local state so the next restart
+				// retries the migration. Deleting here would create a "void":
+				// the instance disappears from both local state and the
+				// terminated KV, making it invisible to DescribeInstances.
+				slog.Warn("Terminated instance KV migration failed, will retry on next restart",
+					"instance", instance.ID)
 			}
 			continue
 		}

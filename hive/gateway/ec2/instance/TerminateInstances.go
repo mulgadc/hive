@@ -51,12 +51,26 @@ func TerminateInstances(input *ec2.TerminateInstancesInput, natsConn *nats.Conn,
 			continue
 		}
 
-		// Send NATS request to the specific instance topic with account ID header
+		// Send NATS request to the specific instance topic with account ID header.
+		// Retry briefly on ErrNoResponders — after a cluster restart the
+		// per-instance NATS subscription may not have propagated to all
+		// servers yet.
 		subject := fmt.Sprintf("ec2.cmd.%s", instanceID)
-		reqMsg := nats.NewMsg(subject)
-		reqMsg.Data = jsonData
-		reqMsg.Header.Set(utils.AccountIDHeader, accountID)
-		msg, err := natsConn.RequestMsg(reqMsg, 5*time.Second)
+		var msg *nats.Msg
+		for attempt := range 3 {
+			reqMsg := nats.NewMsg(subject)
+			reqMsg.Data = jsonData
+			reqMsg.Header.Set(utils.AccountIDHeader, accountID)
+			msg, err = natsConn.RequestMsg(reqMsg, 5*time.Second)
+			if err == nil || !errors.Is(err, nats.ErrNoResponders) {
+				break
+			}
+			if attempt < 2 {
+				slog.Debug("TerminateInstances: No responder on per-instance topic, retrying",
+					"instance_id", instanceID, "attempt", attempt+1)
+				time.Sleep(time.Duration(attempt+1) * time.Second)
+			}
+		}
 		if err != nil {
 			// If no daemon owns this instance, try the ec2.terminate topic for stopped instances
 			if errors.Is(err, nats.ErrNoResponders) {
@@ -88,8 +102,7 @@ func TerminateInstances(input *ec2.TerminateInstancesInput, natsConn *nats.Conn,
 			}
 
 			slog.Error("TerminateInstances: Failed to send command", "instance_id", instanceID, "err", err)
-			stateChanges = append(stateChanges, newStateChange(instanceID, 16, "running", 16, "running"))
-			continue
+			return nil, fmt.Errorf("failed to terminate instance %s: %w", instanceID, err)
 		}
 
 		// Check if the daemon returned an error response (e.g. ownership check failure)
