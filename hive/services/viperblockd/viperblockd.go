@@ -418,7 +418,11 @@ func launchService(cfg *Config) (err error) {
 		var ebsRequest types.EBSRequest
 		err := json.Unmarshal(msg.Data, &ebsRequest)
 		if err != nil {
-			slog.Error("Failed to unmarshal message", "err", err)
+			slog.Error("Failed to unmarshal ebs.mount message", "err", err)
+			errResp, _ := json.Marshal(types.EBSMountResponse{Error: fmt.Sprintf("bad request: %v", err)})
+			if err := msg.Respond(errResp); err != nil {
+				slog.Error("Failed to respond to ebs.mount request", "err", err)
+			}
 			return
 		}
 
@@ -550,6 +554,11 @@ func launchService(cfg *Config) (err error) {
 			nbdPort, err = strconv.Atoi(parts[len(parts)-1])
 			if err != nil {
 				slog.Error("Failed to convert port to int", "err", err)
+				ebsResponse.Error = fmt.Sprintf("failed to parse port: %v", err)
+				response, _ := json.Marshal(ebsResponse)
+				if err := msg.Respond(response); err != nil {
+					slog.Error("Failed to respond to ebs.mount request", "err", err)
+				}
 				return
 			}
 
@@ -577,7 +586,12 @@ func launchService(cfg *Config) (err error) {
 		// Generate PID file for nbdkit process
 		nbdPidFile, err := utils.GeneratePidFile(fmt.Sprintf("nbdkit-vol-%s", ebsRequest.Name))
 		if err != nil {
-			slog.Error("Failed to generate nbdkit pid file:", "err", err)
+			slog.Error("Failed to generate nbdkit pid file", "err", err)
+			ebsResponse.Error = fmt.Sprintf("failed to generate pid file: %v", err)
+			response, _ := json.Marshal(ebsResponse)
+			if err := msg.Respond(response); err != nil {
+				slog.Error("Failed to respond to ebs.mount request", "err", err)
+			}
 			return
 		}
 
