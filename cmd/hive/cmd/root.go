@@ -116,7 +116,11 @@ func initConfig() {
 	appConfig, err = config.LoadConfig(cfgFile)
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
-		fmt.Fprintln(os.Stderr, "Continuing with environment variables and defaults...")
+		// If a config file was explicitly provided, treat load failure as fatal
+		if cfgFile != "" {
+			fmt.Fprintf(os.Stderr, "Error: failed to load config %s: %v\n", cfgFile, err)
+			os.Exit(1)
+		}
+		// No config specified — continue with env/defaults (e.g., hive --help)
 	}
 }
