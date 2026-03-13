@@ -1,0 +1,1 @@
+import{n as e,t}from"./compiler-runtime.js";import{t as n}from"./useSuspenseQuery.js";import"./awsClient.js";import{l as r}from"./ec22.js";import{t as i}from"./page-heading.js";var a=t(),o=e();function s(){let e=(0,a.c)(2),{data:t}=n(r),s=`${t?.Regions?.[0]?.RegionName} Dashboard`,c;return e[0]===s?c=e[1]:(c=(0,o.jsx)(i,{title:s}),e[0]=s,e[1]=c),c}export{s as component};

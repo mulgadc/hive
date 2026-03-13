@@ -1,0 +1,1 @@
+import{a as e,r as t}from"./compiler-runtime.js";var n=!0;function r(e,t){if(!n){if(e)return;var r=`Warning: `+t;typeof console<`u`&&console.warn(r);try{throw Error(r)}catch{}}}var i=e(t(),1),a=i.createContext(null);function o(e){let t=i.useContext(a);return r(!((e?.warn??!0)&&!t),`useRouter must be used inside a <RouterProvider> component!`),t}export{a as n,r,o as t};

@@ -45,7 +45,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@typescript/native-preview": "7.0.0-dev.20260307.1",
-    "@vitejs/plugin-basic-ssl": "^2.1.4",
+    "@vitejs/plugin-basic-ssl": "^2.2.0",
     "@vitejs/plugin-react": "^5.1.4",
     "@vitest/coverage-v8": "^4.0.18",
     "babel-plugin-react-compiler": "^1.0.0",
@@ -54,7 +54,7 @@
     "oxlint": "^1.51.0",
     "oxlint-tsgolint": "^0.16.0",
     "typescript": "^5.9.3",
-    "vite": "^7.3.1",
+    "vite": "^8.0.0",
     "vitest": "^4.0.18"
   },
   "packageManager": "pnpm@10.30.3+sha512.c961d1e0a2d8e354ecaa5166b822516668b7f44cb5bd95122d590dd81922f606f5473b6d23ec4a5be05e7fcd18e8488d47d978bbe981872f1145d06e9a740017"

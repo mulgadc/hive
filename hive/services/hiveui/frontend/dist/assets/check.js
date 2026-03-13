@@ -1,1 +1,1 @@
-import{K as c}from"./index.js";const e=[["path",{d:"M20 6 9 17l-5-5",key:"1gmf2c"}]],t=c("check",e);export{t as C};
+import{t as e}from"./createLucideIcon.js";var t=e(`check`,[[`path`,{d:`M20 6 9 17l-5-5`,key:`1gmf2c`}]]);export{t};
