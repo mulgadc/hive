@@ -42,7 +42,7 @@ export function ObjectListItem({
         link.download = displayName
         document.body.append(link)
         link.click()
-        document.body.removeChild(link)
+        link.remove()
         URL.revokeObjectURL(url)
       }
     } catch {

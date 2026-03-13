@@ -1,7 +1,7 @@
 export function ErrorBanner({ msg, error }: { msg?: string; error?: Error }) {
   let errorText: string | undefined
   if (error) {
-    errorText = error.name !== "Error" ? error.name : error.message
+    errorText = error.name === "Error" ? error.message : error.name
   }
 
   return (

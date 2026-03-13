@@ -56,17 +56,13 @@ function CreateInstance() {
   const images = imagesData.Images ?? []
   const keyPairs = keyPairsData.KeyPairs ?? []
   const subnets = subnetsData.Subnets ?? []
-  const instanceTypeCounts =
-    instanceTypesData.InstanceTypes?.reduce(
-      (acc, type) => {
-        const typeName = type.InstanceType
-        if (typeName) {
-          acc[typeName] = (acc[typeName] || 0) + 1
-        }
-        return acc
-      },
-      {} as Record<string, number>,
-    ) ?? {}
+  const instanceTypeCounts: Record<string, number> = {}
+  for (const type of instanceTypesData.InstanceTypes ?? []) {
+    const typeName = type.InstanceType
+    if (typeName) {
+      instanceTypeCounts[typeName] = (instanceTypeCounts[typeName] || 0) + 1
+    }
+  }
 
   const uniqueInstanceTypes = Object.keys(instanceTypeCounts).toSorted()
 
@@ -187,7 +183,7 @@ function CreateInstance() {
             render={({ field }) => (
               <Select
                 onValueChange={(value) => field.onChange(value)}
-                value={field.value ? field.value : ""}
+                value={field.value || ""}
               >
                 <SelectTrigger
                   aria-invalid={!!errors.instanceType}
@@ -220,7 +216,7 @@ function CreateInstance() {
             render={({ field }) => (
               <Select
                 onValueChange={(value) => field.onChange(value)}
-                value={field.value ? field.value : ""}
+                value={field.value || ""}
               >
                 <SelectTrigger
                   aria-invalid={!!errors.keyName}
