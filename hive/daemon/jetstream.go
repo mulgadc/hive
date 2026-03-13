@@ -3,6 +3,7 @@ package daemon
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -301,11 +302,14 @@ func (m *JetStreamManager) WriteShutdownMarker(nodeID string) error {
 	if m.clusterKV == nil {
 		return errors.New("cluster state KV not initialized")
 	}
-	data, _ := json.Marshal(map[string]any{
+	data, err := json.Marshal(map[string]any{
 		"node":      nodeID,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	})
-	_, err := m.clusterKV.Put("shutdown."+nodeID, data)
+	if err != nil {
+		return fmt.Errorf("marshal shutdown marker: %w", err)
+	}
+	_, err = m.clusterKV.Put("shutdown."+nodeID, data)
 	return err
 }
 
@@ -341,14 +345,17 @@ func (m *JetStreamManager) WriteServiceManifest(nodeID string, services []string
 	if m.clusterKV == nil {
 		return errors.New("cluster state KV not initialized")
 	}
-	data, _ := json.Marshal(map[string]any{
+	data, err := json.Marshal(map[string]any{
 		"node":            nodeID,
 		"services":        services,
 		"nats_host":       natsHost,
 		"predastore_host": predastoreHost,
 		"timestamp":       time.Now().UTC().Format(time.RFC3339),
 	})
-	_, err := m.clusterKV.Put("node."+nodeID+".services", data)
+	if err != nil {
+		return fmt.Errorf("marshal service manifest: %w", err)
+	}
+	_, err = m.clusterKV.Put("node."+nodeID+".services", data)
 	return err
 }
 
