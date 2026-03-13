@@ -94,7 +94,11 @@ var iamActions = map[string]IAMHandler{
 }
 
 func (gw *GatewayConfig) IAM_Request(w http.ResponseWriter, r *http.Request) error {
-	body, _ := io.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		slog.Error("Failed to read IAM request body", "error", err)
+		return errors.New(awserrors.ErrorInternalError)
+	}
 	queryArgs := ParseAWSQueryArgs(string(body))
 
 	action := queryArgs["Action"]
