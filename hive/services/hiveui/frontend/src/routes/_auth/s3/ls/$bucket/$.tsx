@@ -68,7 +68,7 @@ function BucketObjectsWithPrefix() {
 
   return (
     <>
-      {/* biome-ignore lint/suspicious/noExplicitAny: Dynamic S3 path construction */}
+      {/* oxlint-disable-next-line typescript/no-explicit-any valid }*/}
       <BackLink to={parentPath as any}>Back</BackLink>
       <div className="mb-6">
         <div className="mb-2 flex items-center justify-between">
