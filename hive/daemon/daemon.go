@@ -131,8 +131,9 @@ type Daemon struct {
 	// NetworkPlumber handles tap device lifecycle for VPC networking
 	networkPlumber NetworkPlumber
 
-	// shuttingDown is set to true during coordinated cluster shutdown (GATE phase).
-	// When true, the daemon rejects new work and setupShutdown skips VM stops.
+	// shuttingDown is set to true during coordinated cluster shutdown (GATE phase)
+	// or during SIGTERM-based shutdown. When true, the daemon rejects new work,
+	// crash handlers bail out, and setupShutdown skips redundant VM stops.
 	shuttingDown atomic.Bool
 
 	// ready is set to true once NATS connection, JetStream, and all services
@@ -1503,10 +1504,13 @@ func (d *Daemon) setupShutdown() {
 		// Cancel context to stop heartbeat and other goroutines
 		d.cancel()
 
-		// If coordinated shutdown already handled VMs (DRAIN phase), skip stopInstance
+		// If coordinated shutdown already handled VMs (DRAIN phase), skip stopInstance.
+		// Otherwise, set the flag now so crash handlers and restart schedulers
+		// know to bail out during SIGTERM-based shutdown.
 		if d.shuttingDown.Load() {
 			slog.Info("Coordinated shutdown in progress, skipping VM stop (already handled by DRAIN phase)")
 		} else {
+			d.shuttingDown.Store(true)
 			// Pass instances to terminate
 			if err := d.stopInstance(d.Instances.VMS, false); err != nil {
 				slog.Error("Failed to stop instances during shutdown", "err", err)

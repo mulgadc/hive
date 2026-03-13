@@ -471,7 +471,25 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 					}
 				}
 
-				// Unsubscribe from per-instance NATS topic
+				// Guard + delete must be atomic under the same lock hold.
+				// A concurrent ec2.start handler may have loaded the instance
+				// from stopped KV, re-added it to VMS with a new pointer, and
+				// launched it. Deleting here would destroy the running instance's
+				// state — creating a "ghost instance" visible nowhere.
+				d.Instances.Mu.Lock()
+				current, exists := d.Instances.VMS[inst.ID]
+				if !exists || current != inst {
+					d.Instances.Mu.Unlock()
+					slog.Info("Instance was reclaimed by another handler, skipping local cleanup",
+						"instanceId", inst.ID, "state", string(finalState))
+					return
+				}
+				delete(d.Instances.VMS, inst.ID)
+				d.Instances.Mu.Unlock()
+
+				// Unsubscribe from per-instance NATS topic. Safe to do after
+				// the delete — LaunchInstance already unsubscribes stale entries
+				// before creating new ones (daemon.go:1658-1664).
 				d.mu.Lock()
 				if sub, ok := d.natsSubscriptions[inst.ID]; ok {
 					if err := sub.Unsubscribe(); err != nil {
@@ -481,17 +499,15 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 				}
 				d.mu.Unlock()
 
-				// Remove from local instance map
-				d.Instances.Mu.Lock()
-				delete(d.Instances.VMS, inst.ID)
-				d.Instances.Mu.Unlock()
-
 				// Persist local state without the instance
 				if err := d.WriteState(); err != nil {
 					slog.Error("Failed to persist state after releasing instance, re-adding to local map for consistency",
 						"instanceId", inst.ID, "err", err)
+					// Only re-add if another handler hasn't claimed the slot
 					d.Instances.Mu.Lock()
-					d.Instances.VMS[inst.ID] = inst
+					if _, occupied := d.Instances.VMS[inst.ID]; !occupied {
+						d.Instances.VMS[inst.ID] = inst
+					}
 					d.Instances.Mu.Unlock()
 				} else {
 					slog.Info("Released instance ownership to KV",
