@@ -454,11 +454,12 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 			if d.jsManager != nil {
 				if isTerminate {
 					// Write to terminated KV bucket (auto-expires after 1 hour via TTL).
-					// On failure, continue cleanup — VM is already stopped, keeping it
-					// in the local map just delays data loss to the next restart.
+					// If this fails, keep the instance in local state so DescribeInstances
+					// still sees it and restoreInstances can retry the KV migration.
 					if err := d.jsManager.WriteTerminatedInstance(inst.ID, inst); err != nil {
-						slog.Error("Failed to write terminated instance to KV, instance will not appear in DescribeInstances",
+						slog.Error("Failed to write terminated instance to KV, keeping in local state for retry",
 							"instanceId", inst.ID, "err", err)
+						return
 					}
 				} else {
 					// Write to shared KV first — if daemon crashes after this but
