@@ -240,7 +240,7 @@ func launchService(cfg *Config) (err error) {
 			slog.Error("Failed to respond to ebs.delete request", "err", err)
 		}
 	}); err != nil {
-		slog.Error("Failed to subscribe to ebs.delete", "err", err)
+		return fmt.Errorf("failed to subscribe to ebs.delete: %w", err)
 	}
 
 	// Subscribe to node-specific unmount topic if NodeName is set, otherwise fall back to generic queue group
@@ -339,7 +339,7 @@ func launchService(cfg *Config) (err error) {
 			slog.Error("Failed to publish ebs.unmount.response", "err", err)
 		}
 	}); err != nil {
-		slog.Error("Failed to subscribe to unmount topic", "topic", unmountTopic, "err", err)
+		return fmt.Errorf("failed to subscribe to %s: %w", unmountTopic, err)
 	}
 
 	if _, err := nc.QueueSubscribe("ebs.sync", "hive-workers", func(msg *nats.Msg) {
@@ -393,7 +393,7 @@ func launchService(cfg *Config) (err error) {
 			slog.Error("Failed to respond to ebs.sync request", "err", err)
 		}
 	}); err != nil {
-		slog.Error("Failed to subscribe to ebs.sync", "err", err)
+		return fmt.Errorf("failed to subscribe to ebs.sync: %w", err)
 	}
 
 	// Note: ebs.snapshot is handled per-volume via ebs.snapshot.{volumeID} topics,
@@ -727,7 +727,7 @@ func launchService(cfg *Config) (err error) {
 
 		slog.Debug("Sent ebs.mount response", "response", string(response))
 	}); err != nil {
-		slog.Error("Failed to subscribe to mount topic", "topic", mountTopic, "err", err)
+		return fmt.Errorf("failed to subscribe to %s: %w", mountTopic, err)
 	}
 
 	// Create a channel to receive shutdown signals
