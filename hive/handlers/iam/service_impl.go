@@ -776,11 +776,13 @@ func (s *IAMServiceImpl) CreateAccount(name string) (*Account, error) {
 	slog.Info("Account created", "accountID", accountID, "name", name)
 
 	if s.natsConn != nil {
-		evt, _ := json.Marshal(struct {
+		evt, err := json.Marshal(struct {
 			AccountID   string `json:"account_id"`
 			AccountName string `json:"account_name"`
 		}{AccountID: accountID, AccountName: name})
-		if err := s.natsConn.Publish("iam.account.created", evt); err != nil {
+		if err != nil {
+			slog.Error("Failed to marshal account creation event", "accountID", accountID, "error", err)
+		} else if err := s.natsConn.Publish("iam.account.created", evt); err != nil {
 			slog.Error("Failed to publish account creation event", "accountID", accountID, "error", err)
 		}
 	}

@@ -52,6 +52,10 @@ func (d *Daemon) handleAccountCreated(msg *nats.Msg) {
 		slog.Error("Failed to unmarshal account creation event", "error", err)
 		return
 	}
+	if evt.AccountID == "" {
+		slog.Error("Account creation event has empty account ID")
+		return
+	}
 	if err := d.vpcService.EnsureDefaultVPC(evt.AccountID); err != nil {
 		slog.Error("Failed to create default VPC for new account",
 			"accountID", evt.AccountID, "error", err)
