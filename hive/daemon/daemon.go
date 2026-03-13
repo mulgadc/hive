@@ -910,6 +910,11 @@ func (d *Daemon) restoreInstances() {
 			go func(inst *vm.VM) {
 				defer wg.Done()
 				defer func() { <-sem }() // release
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("Panic during instance recovery", "instanceId", inst.ID, "panic", r)
+					}
+				}()
 				slog.Info("Launching instance (recovery)", "instance", inst.ID)
 				if err := d.LaunchInstance(inst); err != nil {
 					slog.Error("Failed to launch instance", "instanceId", inst.ID, "err", err)
