@@ -299,6 +299,6 @@ func (d *Daemon) publishShutdownProgress(phase string, total, remaining int) {
 		return
 	}
 	if err := d.natsConn.Publish("hive.cluster.shutdown.progress", data); err != nil {
-		slog.Debug("Failed to publish shutdown progress", "error", err)
+		slog.Warn("Failed to publish shutdown progress", "error", err)
 	}
 }

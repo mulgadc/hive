@@ -15,12 +15,15 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"net/http"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -46,7 +49,6 @@ import (
 	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/nats-io/nats.go"
 	"github.com/pelletier/go-toml/v2"
-	"net/http"
 )
 
 type BlockDeviceMapping struct {
@@ -912,7 +914,7 @@ func (d *Daemon) restoreInstances() {
 				defer func() { <-sem }() // release
 				defer func() {
 					if r := recover(); r != nil {
-						slog.Error("Panic during instance recovery", "instanceId", inst.ID, "panic", r)
+						slog.Error("Panic during instance recovery", "instanceId", inst.ID, "panic", r, "stack", string(debug.Stack()))
 					}
 				}()
 				slog.Info("Launching instance (recovery)", "instance", inst.ID)

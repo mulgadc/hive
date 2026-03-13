@@ -559,6 +559,9 @@ func launchService(cfg *Config) (err error) {
 				if err := msg.Respond(response); err != nil {
 					slog.Error("Failed to respond to ebs.mount request", "err", err)
 				}
+				if err := nc.Publish("ebs.mount.response", response); err != nil {
+					slog.Error("Failed to publish ebs.mount.response", "err", err)
+				}
 				return
 			}
 
@@ -591,6 +594,9 @@ func launchService(cfg *Config) (err error) {
 			response, _ := json.Marshal(ebsResponse)
 			if err := msg.Respond(response); err != nil {
 				slog.Error("Failed to respond to ebs.mount request", "err", err)
+			}
+			if err := nc.Publish("ebs.mount.response", response); err != nil {
+				slog.Error("Failed to publish ebs.mount.response", "err", err)
 			}
 			return
 		}
