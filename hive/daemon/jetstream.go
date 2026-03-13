@@ -472,66 +472,48 @@ func (m *JetStreamManager) DeleteState(nodeID string) error {
 	return nil
 }
 
-// UpdateReplicas updates the replica count for the KV bucket's underlying stream.
+// UpdateReplicas updates the replica count for ALL JetStream KV buckets.
+// It iterates over every KV_* stream and bumps replicas to match the cluster size.
+// This ensures service buckets (IAM, VPC, IGW, etc.) are replicated alongside daemon buckets.
 // This should be called when new nodes join the cluster.
-// Note: Increasing replicas requires the new replica count of NATS servers to be available.
 func (m *JetStreamManager) UpdateReplicas(newReplicas int) error {
 	if m.js == nil {
 		return errors.New("JetStream context not initialized")
 	}
 
-	// KV buckets are backed by streams with name "KV_<bucket>"
-	streamName := "KV_" + InstanceStateBucket
-
-	// Get current stream info
-	streamInfo, err := m.js.StreamInfo(streamName)
-	if err != nil {
-		return err
-	}
-
-	currentReplicas := streamInfo.Config.Replicas
-	if currentReplicas >= newReplicas {
-		slog.Debug("Stream already has sufficient replicas", "current", currentReplicas, "requested", newReplicas)
-		return nil
-	}
-
-	// Update the stream config with new replica count
-	streamInfo.Config.Replicas = newReplicas
-
-	_, err = m.js.UpdateStream(&streamInfo.Config)
-	if err != nil {
-		return err
-	}
-
 	m.replicas = newReplicas
-	slog.Info("Updated JetStream KV bucket replicas", "bucket", InstanceStateBucket, "oldReplicas", currentReplicas, "newReplicas", newReplicas)
 
-	// Also update the cluster-state bucket if it exists
-	if m.clusterKV != nil {
-		clusterStreamName := "KV_" + ClusterStateBucket
-		clusterInfo, err := m.js.StreamInfo(clusterStreamName)
-		if err == nil && clusterInfo.Config.Replicas < newReplicas {
-			clusterInfo.Config.Replicas = newReplicas
-			if _, err := m.js.UpdateStream(&clusterInfo.Config); err != nil {
-				slog.Warn("Failed to update cluster-state bucket replicas", "error", err)
-			} else {
-				slog.Info("Updated cluster-state bucket replicas", "bucket", ClusterStateBucket, "newReplicas", newReplicas)
-			}
+	// Iterate all streams and update any KV-backed stream (prefixed "KV_")
+	updated := 0
+	for name := range m.js.StreamNames() {
+		if !strings.HasPrefix(name, "KV_") {
+			continue
 		}
+
+		info, err := m.js.StreamInfo(name)
+		if err != nil {
+			slog.Warn("Failed to get stream info", "stream", name, "error", err)
+			continue
+		}
+
+		if info.Config.Replicas >= newReplicas {
+			continue
+		}
+
+		oldReplicas := info.Config.Replicas
+		info.Config.Replicas = newReplicas
+		if _, err := m.js.UpdateStream(&info.Config); err != nil {
+			slog.Warn("Failed to update KV bucket replicas", "stream", name, "error", err)
+			continue
+		}
+
+		bucket := strings.TrimPrefix(name, "KV_")
+		slog.Info("Updated KV bucket replicas", "bucket", bucket, "oldReplicas", oldReplicas, "newReplicas", newReplicas)
+		updated++
 	}
 
-	// Also update the terminated-instances bucket if it exists
-	if m.terminatedKV != nil {
-		terminatedStreamName := "KV_" + TerminatedInstanceBucket
-		terminatedInfo, err := m.js.StreamInfo(terminatedStreamName)
-		if err == nil && terminatedInfo.Config.Replicas < newReplicas {
-			terminatedInfo.Config.Replicas = newReplicas
-			if _, err := m.js.UpdateStream(&terminatedInfo.Config); err != nil {
-				slog.Warn("Failed to update terminated-instances bucket replicas", "error", err)
-			} else {
-				slog.Info("Updated terminated-instances bucket replicas", "bucket", TerminatedInstanceBucket, "newReplicas", newReplicas)
-			}
-		}
+	if updated > 0 {
+		slog.Info("KV replication update complete", "bucketsUpdated", updated, "replicas", newReplicas)
 	}
 
 	return nil
