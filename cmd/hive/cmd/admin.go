@@ -37,6 +37,7 @@ import (
 	"github.com/mulgadc/hive/hive/admin"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/mulgadc/hive/hive/formation"
+	handlers_ec2_vpc "github.com/mulgadc/hive/hive/handlers/ec2/vpc"
 	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
@@ -1368,6 +1369,19 @@ func runAccountCreate(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 	accountID := account.AccountID
+
+	// Create default VPC for the new account (belt-and-suspenders: daemon also
+	// does this via iam.account.created event, but daemon may not be running).
+	if vpcCfg, vpcNC, vpcErr := loadConfigAndConnect(); vpcErr == nil {
+		defer vpcNC.Close()
+		nodeConfig := vpcCfg.Nodes[vpcCfg.Node]
+		vpcSvc, vpcErr := handlers_ec2_vpc.NewVPCServiceImplWithNATS(&nodeConfig, vpcNC)
+		if vpcErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not create default VPC: %v\n", vpcErr)
+		} else if vpcErr = vpcSvc.EnsureDefaultVPC(accountID); vpcErr != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not create default VPC: %v\n", vpcErr)
+		}
+	}
 
 	// 2. Create admin user
 	_, err = svc.CreateUser(accountID, &iam.CreateUserInput{

@@ -33,6 +33,7 @@ const (
 // IAMServiceImpl implements IAM operations using NATS JetStream KV.
 type IAMServiceImpl struct {
 	js                   nats.JetStreamContext
+	natsConn             *nats.Conn
 	usersBucket          nats.KeyValue
 	accessKeysBucket     nats.KeyValue
 	policiesBucket       nats.KeyValue
@@ -91,6 +92,7 @@ func NewIAMServiceImpl(natsConn *nats.Conn, masterKey []byte) (*IAMServiceImpl, 
 
 	return &IAMServiceImpl{
 		js:                   js,
+		natsConn:             natsConn,
 		usersBucket:          usersBucket,
 		accessKeysBucket:     accessKeysBucket,
 		policiesBucket:       policiesBucket,
@@ -772,6 +774,17 @@ func (s *IAMServiceImpl) CreateAccount(name string) (*Account, error) {
 	}
 
 	slog.Info("Account created", "accountID", accountID, "name", name)
+
+	if s.natsConn != nil {
+		evt, _ := json.Marshal(struct {
+			AccountID   string `json:"account_id"`
+			AccountName string `json:"account_name"`
+		}{AccountID: accountID, AccountName: name})
+		if err := s.natsConn.Publish("iam.account.created", evt); err != nil {
+			slog.Error("Failed to publish account creation event", "accountID", accountID, "error", err)
+		}
+	}
+
 	return &account, nil
 }
 

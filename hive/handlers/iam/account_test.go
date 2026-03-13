@@ -1,11 +1,15 @@
 package handlers_iam
 
 import (
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/mulgadc/hive/hive/utils"
+	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -376,4 +380,57 @@ func TestSeedBootstrap_AccountScoped(t *testing.T) {
 	assert.Equal(t, utils.GlobalAccountID, account.AccountID)
 	assert.Equal(t, "system", account.AccountName)
 	assert.Equal(t, "ACTIVE", account.Status)
+}
+
+// ============================================================================
+// Account Creation Event Tests
+// ============================================================================
+
+func TestCreateAccount_PublishesEvent(t *testing.T) {
+	opts := &server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		JetStream: true,
+		StoreDir:  t.TempDir(),
+		NoLog:     true,
+		NoSigs:    true,
+	}
+	ns, err := server.NewServer(opts)
+	require.NoError(t, err)
+	go ns.Start()
+	require.True(t, ns.ReadyForConnections(5*time.Second))
+	t.Cleanup(func() { ns.Shutdown() })
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(func() { nc.Close() })
+
+	masterKey, err := GenerateMasterKey()
+	require.NoError(t, err)
+
+	svc, err := NewIAMServiceImpl(nc, masterKey)
+	require.NoError(t, err)
+
+	eventCh := make(chan *nats.Msg, 1)
+	sub, err := nc.Subscribe("iam.account.created", func(msg *nats.Msg) {
+		eventCh <- msg
+	})
+	require.NoError(t, err)
+	defer func() { _ = sub.Unsubscribe() }()
+
+	acc, err := svc.CreateAccount("Event Test")
+	require.NoError(t, err)
+
+	select {
+	case msg := <-eventCh:
+		var evt struct {
+			AccountID   string `json:"account_id"`
+			AccountName string `json:"account_name"`
+		}
+		require.NoError(t, json.Unmarshal(msg.Data, &evt))
+		assert.Equal(t, acc.AccountID, evt.AccountID)
+		assert.Equal(t, "Event Test", evt.AccountName)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for iam.account.created event")
+	}
 }

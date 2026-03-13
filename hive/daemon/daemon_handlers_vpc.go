@@ -1,6 +1,9 @@
 package daemon
 
 import (
+	"encoding/json"
+	"log/slog"
+
 	"github.com/nats-io/nats.go"
 )
 
@@ -38,4 +41,19 @@ func (d *Daemon) handleEC2DeleteNetworkInterface(msg *nats.Msg) {
 
 func (d *Daemon) handleEC2DescribeNetworkInterfaces(msg *nats.Msg) {
 	handleNATSRequest(msg, d.vpcService.DescribeNetworkInterfaces)
+}
+
+// handleAccountCreated creates a default VPC for a newly created account.
+func (d *Daemon) handleAccountCreated(msg *nats.Msg) {
+	var evt struct {
+		AccountID string `json:"account_id"`
+	}
+	if err := json.Unmarshal(msg.Data, &evt); err != nil {
+		slog.Error("Failed to unmarshal account creation event", "error", err)
+		return
+	}
+	if err := d.vpcService.EnsureDefaultVPC(evt.AccountID); err != nil {
+		slog.Error("Failed to create default VPC for new account",
+			"accountID", evt.AccountID, "error", err)
+	}
 }
