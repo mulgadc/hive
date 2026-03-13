@@ -40,7 +40,7 @@ export function ObjectListItem({
         const link = document.createElement("a")
         link.href = url
         link.download = displayName
-        document.body.appendChild(link)
+        document.body.append(link)
         link.click()
         document.body.removeChild(link)
         URL.revokeObjectURL(url)
@@ -75,14 +75,14 @@ export function ObjectListItem({
           <div>
             <h3 className="font-medium">{displayName}</h3>
             {object.LastModified && (
-              <p className="text-muted-foreground text-sm">
+              <p className="text-sm text-muted-foreground">
                 Last Modified: {formatDateTime(object.LastModified)}
               </p>
             )}
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <div className="text-muted-foreground text-sm">
+          <div className="text-sm text-muted-foreground">
             {formatSize(object.Size || 0)}
           </div>
           <button

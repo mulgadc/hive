@@ -38,6 +38,7 @@ import {
   ec2InstanceQueryOptions,
   ec2InstanceTypesQueryOptions,
 } from "@/queries/ec2"
+
 import { AmiDetails } from "../../-components/ami-details"
 import { CreateImageDialog } from "../../-components/create-image-dialog"
 import { InstanceActions } from "../../-components/instance-actions"
@@ -219,7 +220,7 @@ function InstanceDetail() {
               </div>
             </DetailCard.Header>
             <div className="p-4">
-              <pre className="max-h-96 overflow-y-auto whitespace-pre-wrap rounded bg-muted p-3 font-mono text-xs">
+              <pre className="max-h-96 overflow-y-auto rounded bg-muted p-3 font-mono text-xs whitespace-pre-wrap">
                 {consoleOutput}
               </pre>
             </div>

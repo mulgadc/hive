@@ -11,6 +11,7 @@ import { Field, FieldError, FieldTitle } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { useCreateKeyPair } from "@/mutations/ec2"
 import { type CreateKeyPairData, createKeyPairSchema } from "@/types/ec2"
+
 import { PrivateKeyModal } from "../-components/private-key-modal"
 
 export const Route = createFileRoute("/_auth/ec2/(key)/create-key-pair")({

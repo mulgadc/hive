@@ -5,15 +5,15 @@ import { BackLink } from "@/components/back-link"
 import { PageHeading } from "@/components/page-heading"
 import { StateBadge } from "@/components/state-badge"
 import { ec2ImageQueryOptions } from "@/queries/ec2"
+
 import { AmiDetails } from "../../-components/ami-details"
 
 export const Route = createFileRoute("/_auth/ec2/(images)/describe-images/$id")(
   {
-    loader: async ({ context, params }) => {
-      return await context.queryClient.ensureQueryData(
+    loader: async ({ context, params }) =>
+      await context.queryClient.ensureQueryData(
         ec2ImageQueryOptions(params.id),
-      )
-    },
+      ),
     head: ({ loaderData }) => ({
       meta: [
         {

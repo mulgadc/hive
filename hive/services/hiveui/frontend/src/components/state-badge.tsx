@@ -1,11 +1,11 @@
 import { cn } from "@/lib/utils"
 
-const SUCCESS_STATES = ["running", "available", "completed", "Active"]
+const SUCCESS_STATES = new Set(["running", "available", "completed", "Active"])
 const ERROR_STATES = ["stopped", "error"]
 const WARNING_STATES = ["pending", "shutting-down", "stopping"]
 
 function getStateClass(state: string | undefined): string {
-  if (state && SUCCESS_STATES.includes(state)) {
+  if (state && SUCCESS_STATES.has(state)) {
     return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100"
   }
   if (state && ERROR_STATES.includes(state)) {

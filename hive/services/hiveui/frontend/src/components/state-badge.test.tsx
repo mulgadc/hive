@@ -4,16 +4,14 @@ import { describe, expect, it } from "vitest"
 import { StateBadge } from "./state-badge"
 
 describe("StateBadge", () => {
-  it.each([
-    "running",
-    "available",
-    "completed",
-    "Active",
-  ])("renders green for success state '%s'", (state) => {
-    render(<StateBadge state={state} />)
-    const badge = screen.getByText(state)
-    expect(badge.className).toContain("bg-green-100")
-  })
+  it.each(["running", "available", "completed", "Active"])(
+    "renders green for success state '%s'",
+    (state) => {
+      render(<StateBadge state={state} />)
+      const badge = screen.getByText(state)
+      expect(badge.className).toContain("bg-green-100")
+    },
+  )
 
   it.each(["stopped", "error"])("renders red for error state '%s'", (state) => {
     render(<StateBadge state={state} />)
@@ -21,15 +19,14 @@ describe("StateBadge", () => {
     expect(badge.className).toContain("bg-red-100")
   })
 
-  it.each([
-    "pending",
-    "shutting-down",
-    "stopping",
-  ])("renders yellow for warning state '%s'", (state) => {
-    render(<StateBadge state={state} />)
-    const badge = screen.getByText(state)
-    expect(badge.className).toContain("bg-yellow-100")
-  })
+  it.each(["pending", "shutting-down", "stopping"])(
+    "renders yellow for warning state '%s'",
+    (state) => {
+      render(<StateBadge state={state} />)
+      const badge = screen.getByText(state)
+      expect(badge.className).toContain("bg-yellow-100")
+    },
+  )
 
   it("renders gray for terminated state", () => {
     render(<StateBadge state="terminated" />)

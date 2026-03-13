@@ -67,7 +67,7 @@ function LoginPage() {
         </CardHeader>
         <CardContent>
           {authError && (
-            <p className="mb-4 rounded-md bg-destructive/10 p-3 text-destructive text-sm">
+            <p className="mb-4 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
               {authError}
             </p>
           )}

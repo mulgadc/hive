@@ -88,7 +88,7 @@ function ModifyVolume() {
 
       <form className="max-w-4xl space-y-6" onSubmit={handleSubmit(onSubmit)}>
         <div className="space-y-2">
-          <p className="text-muted-foreground text-sm">
+          <p className="text-sm text-muted-foreground">
             Current size: {currentSize} GiB
           </p>
         </div>

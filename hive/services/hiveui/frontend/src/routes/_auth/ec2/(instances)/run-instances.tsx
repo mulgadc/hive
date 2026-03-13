@@ -68,7 +68,7 @@ function CreateInstance() {
       {} as Record<string, number>,
     ) ?? {}
 
-  const uniqueInstanceTypes = Object.keys(instanceTypeCounts).sort()
+  const uniqueInstanceTypes = Object.keys(instanceTypeCounts).toSorted()
 
   // Compute default values from loaded data
   const defaultImageId = images[0]?.ImageId
@@ -291,7 +291,7 @@ function CreateInstance() {
             type="number"
             {...register("count", { valueAsNumber: true })}
           />
-          <p className="text-muted-foreground text-xs" id="count-description">
+          <p className="text-xs text-muted-foreground" id="count-description">
             {selectedInstanceType &&
               `Available capacity for ${selectedInstanceType}: ${maxCount}`}
           </p>

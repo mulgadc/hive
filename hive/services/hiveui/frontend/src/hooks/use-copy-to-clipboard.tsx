@@ -6,13 +6,14 @@ export function useCopyToClipboard() {
   const [copied, setCopied] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout>>(null)
 
-  useEffect(() => {
-    return () => {
+  useEffect(
+    () => () => {
       if (timerRef.current) {
         clearTimeout(timerRef.current)
       }
-    }
-  }, [])
+    },
+    [],
+  )
 
   const copy = async (text: string) => {
     await navigator.clipboard.writeText(text)

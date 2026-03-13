@@ -5,14 +5,16 @@
     "typescript",
     "unicorn",
     "oxc",
-    "import",
     "node",
     "promise",
     "react",
     "react-perf",
     "jsx-a11y"
   ],
-  "jsPlugins": ["@tanstack/eslint-plugin-query", "@tanstack/eslint-plugin-router"],
+  "jsPlugins": [
+    "@tanstack/eslint-plugin-query",
+    "@tanstack/eslint-plugin-router"
+  ],
   "env": { "browser": true },
   "categories": {
     "correctness": "error",
@@ -50,24 +52,6 @@
     "complexity": "off",
     "no-shadow": "off",
 
-    "import/no-default-export": "off",
-    "import/exports-last": "off",
-    "import/no-named-export": "off",
-    "import/max-dependencies": "off",
-    "import/no-unresolved": "off",
-    "import/extensions": "off",
-    "import/no-namespace": "off",
-    "import/no-anonymous-default-export": "off",
-    "import/prefer-default-export": "off",
-    "import/group-exports": "off",
-    "import/no-commonjs": "off",
-    "import/unambiguous": "off",
-    "import/consistent-type-specifier-style": ["error", "prefer-inline"],
-    "import/no-dynamic-require": "off",
-    "import/no-unassigned-import": "off",
-    "import/no-nodejs-modules": "off",
-    "import/no-relative-parent-imports": "off",
-
     "unicorn/explicit-length-check": "off",
     "unicorn/no-array-callback-reference": "off",
     "unicorn/no-process-exit": "off",
@@ -76,8 +60,12 @@
     "unicorn/prefer-top-level-await": "off",
     "unicorn/prefer-string-raw": "off",
     "unicorn/no-useless-undefined": "off",
-    "unicorn/filename-case": ["error", { "cases": { "kebabCase": true, "camelCase": true } }],
+    "unicorn/filename-case": [
+      "error",
+      { "cases": { "kebabCase": true, "camelCase": true } }
+    ],
 
+    "typescript/no-import-type-side-effects": "off",
     "typescript/explicit-module-boundary-types": "off",
     "typescript/no-require-imports": "off",
     "typescript/explicit-function-return-type": "off",
@@ -129,10 +117,12 @@
       }
     },
     {
-      "files": ["**/*.{test,spec}.{ts,tsx,js,jsx}", "**/__tests__/**/*.{ts,tsx,js,jsx}"],
+      "files": [
+        "**/*.{test,spec}.{ts,tsx,js,jsx}",
+        "**/__tests__/**/*.{ts,tsx,js,jsx}"
+      ],
       "rules": {
-        "typescript/consistent-type-imports": "off",
-        "import/first": "off"
+        "typescript/consistent-type-imports": "off"
       }
     }
   ],
