@@ -71,6 +71,28 @@ aws_via() {
     aws --endpoint-url "https://${node_ip}:${AWSGW_PORT}" "$@"
 }
 
+# Retry wrapper for aws_via — retries on transient failures (e.g. NATS cluster reformation)
+# Usage: aws_via_retry <max_attempts> <node_ip> <aws args...>
+aws_via_retry() {
+    local max_attempts="$1"; shift
+    local node_ip="$1"; shift
+    local attempt=0
+    local result
+
+    while [ $attempt -lt $max_attempts ]; do
+        result=$(aws_via "$node_ip" "$@" 2>/dev/null) && {
+            if [ -n "$result" ] && [ "$result" != "None" ]; then
+                echo "$result"
+                return 0
+            fi
+        }
+        attempt=$((attempt + 1))
+        echo "  Retry $attempt/$max_attempts..." >&2
+        sleep 2
+    done
+    return 1
+}
+
 # Default AWS CLI shorthand (via local node)
 AWS_EC2="aws --endpoint-url https://${LOCAL_IP}:${AWSGW_PORT} ec2"
 
@@ -756,14 +778,14 @@ peer_ssh "$NODE2_IP" "cd ~/Development/mulga/hive && HIVE_FORCE_LOCAL_STOP=1 ./s
     echo "  WARNING: stop-dev.sh returned non-zero (may be expected)"
 }
 
-# Wait a moment for cluster to detect the failure
-sleep 5
+# Wait for NATS cluster to detect the failure and reform
+sleep 10
 
-# Verify node1 and node3 still serve requests
+# Verify node1 and node3 still serve requests (with retries for NATS reformation)
 echo "  Verifying node1 still serves requests..."
-N1_RESULT=$(aws_via "$LOCAL_IP" ec2 describe-instance-types \
-    --query 'InstanceTypes[0].InstanceType' --output text 2>/dev/null || echo "FAIL")
-if [ "$N1_RESULT" != "FAIL" ] && [ -n "$N1_RESULT" ] && [ "$N1_RESULT" != "None" ]; then
+N1_RESULT=$(aws_via_retry 10 "$LOCAL_IP" ec2 describe-instance-types \
+    --query 'InstanceTypes[0].InstanceType' --output text) || N1_RESULT="FAIL"
+if [ "$N1_RESULT" != "FAIL" ]; then
     echo "  Node1: responding ($N1_RESULT)"
     pass_test "Node1 survives node2 failure"
 else
@@ -772,9 +794,9 @@ else
 fi
 
 echo "  Verifying node3 still serves requests..."
-N3_RESULT=$(aws_via "$NODE3_IP" ec2 describe-instance-types \
-    --query 'InstanceTypes[0].InstanceType' --output text 2>/dev/null || echo "FAIL")
-if [ "$N3_RESULT" != "FAIL" ] && [ -n "$N3_RESULT" ] && [ "$N3_RESULT" != "None" ]; then
+N3_RESULT=$(aws_via_retry 10 "$NODE3_IP" ec2 describe-instance-types \
+    --query 'InstanceTypes[0].InstanceType' --output text) || N3_RESULT="FAIL"
+if [ "$N3_RESULT" != "FAIL" ]; then
     echo "  Node3: responding ($N3_RESULT)"
     pass_test "Node3 survives node2 failure"
 else
@@ -795,8 +817,8 @@ fi
 
 # Verify describe-instances still works from surviving nodes
 echo "  Verifying describe-instances from surviving nodes..."
-SURVIVING_COUNT=$(aws_via "$LOCAL_IP" ec2 describe-instances \
-    --query 'length(Reservations[*].Instances[*][])' --output text 2>/dev/null || echo "0")
+SURVIVING_COUNT=$(aws_via_retry 10 "$LOCAL_IP" ec2 describe-instances \
+    --query 'length(Reservations[*].Instances[*][])' --output text) || SURVIVING_COUNT="0"
 echo "  Instances visible from node1: $SURVIVING_COUNT"
 if [ "$SURVIVING_COUNT" -gt 0 ]; then
     pass_test "Describe-instances during node failure"
