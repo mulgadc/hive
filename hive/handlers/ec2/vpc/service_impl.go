@@ -294,32 +294,6 @@ func (s *VPCServiceImpl) DescribeVpcs(input *ec2.DescribeVpcsInput, accountID st
 		vpcs = append(vpcs, s.vpcRecordToEC2(&record, accountID))
 	}
 
-	// Include global default VPCs (created at startup) for non-root accounts.
-	// This matches AWS behavior where all accounts have a default VPC.
-	if accountID != utils.GlobalAccountID {
-		globalPrefix := utils.GlobalAccountID + "."
-		for _, key := range keys {
-			if !strings.HasPrefix(key, globalPrefix) {
-				continue
-			}
-			entry, err := s.vpcKV.Get(key)
-			if err != nil {
-				continue
-			}
-			var record VPCRecord
-			if err := json.Unmarshal(entry.Value(), &record); err != nil {
-				continue
-			}
-			if !record.IsDefault {
-				continue
-			}
-			if len(vpcIDs) > 0 && !vpcIDs[record.VpcId] {
-				continue
-			}
-			vpcs = append(vpcs, s.vpcRecordToEC2(&record, accountID))
-		}
-	}
-
 	// If specific VPC IDs were requested but not found, return error
 	if len(vpcIDs) > 0 {
 		found := make(map[string]bool)

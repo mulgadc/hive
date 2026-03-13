@@ -1,6 +1,7 @@
 package handlers_ec2_vpc
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -871,6 +872,96 @@ func TestDetachENI_NotFound(t *testing.T) {
 	svc := setupTestVPCService(t)
 	err := svc.DetachENI(testAccountID, "eni-nonexistent")
 	assert.ErrorContains(t, err, "InvalidNetworkInterfaceID.NotFound")
+}
+
+// --- Per-account isolation tests ---
+
+func TestEnsureDefaultVPC_PerAccountIsolation(t *testing.T) {
+	svc := setupTestVPCService(t)
+	accountA := "111111111111"
+	accountB := "222222222222"
+
+	require.NoError(t, svc.EnsureDefaultVPC(accountA))
+	require.NoError(t, svc.EnsureDefaultVPC(accountB))
+
+	// Each account should see only their own default VPC
+	descA, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{}, accountA)
+	require.NoError(t, err)
+	require.Len(t, descA.Vpcs, 1)
+	assert.Equal(t, accountA, *descA.Vpcs[0].OwnerId)
+
+	descB, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{}, accountB)
+	require.NoError(t, err)
+	require.Len(t, descB.Vpcs, 1)
+	assert.Equal(t, accountB, *descB.Vpcs[0].OwnerId)
+
+	// VPC IDs should be different
+	assert.NotEqual(t, *descA.Vpcs[0].VpcId, *descB.Vpcs[0].VpcId)
+}
+
+func TestEnsureDefaultVPC_IndependentVNIs(t *testing.T) {
+	svc, nc := setupTestVPCServiceWithNC(t)
+	accountA := "111111111111"
+	accountB := "222222222222"
+
+	// Capture VNIs from vpc.create events
+	vniCh := make(chan int64, 2)
+	sub, err := nc.Subscribe("vpc.create", func(msg *nats.Msg) {
+		var evt struct {
+			VNI int64 `json:"vni"`
+		}
+		if err := json.Unmarshal(msg.Data, &evt); err == nil {
+			vniCh <- evt.VNI
+		}
+	})
+	require.NoError(t, err)
+	defer func() { _ = sub.Unsubscribe() }()
+
+	require.NoError(t, svc.EnsureDefaultVPC(accountA))
+	require.NoError(t, svc.EnsureDefaultVPC(accountB))
+
+	var vnis []int64
+	for range 2 {
+		select {
+		case vni := <-vniCh:
+			vnis = append(vnis, vni)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for vpc.create event")
+		}
+	}
+	assert.NotEqual(t, vnis[0], vnis[1], "each account should get a unique VNI")
+}
+
+func TestDescribeVpcs_NoGlobalSharing(t *testing.T) {
+	svc := setupTestVPCService(t)
+	globalAccount := "000000000000"
+	otherAccount := "111111111111"
+
+	// Create default VPC for global account only
+	require.NoError(t, svc.EnsureDefaultVPC(globalAccount))
+
+	// Other account should NOT see the global default VPC
+	desc, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{}, otherAccount)
+	require.NoError(t, err)
+	assert.Empty(t, desc.Vpcs)
+}
+
+func TestGetDefaultSubnet_PerAccount(t *testing.T) {
+	svc := setupTestVPCService(t)
+	accountA := "111111111111"
+	accountB := "222222222222"
+
+	require.NoError(t, svc.EnsureDefaultVPC(accountA))
+	require.NoError(t, svc.EnsureDefaultVPC(accountB))
+
+	subA, err := svc.GetDefaultSubnet(accountA)
+	require.NoError(t, err)
+	subB, err := svc.GetDefaultSubnet(accountB)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, subA.SubnetId, subB.SubnetId)
+	assert.Equal(t, "172.31.0.0/20", subA.CidrBlock)
+	assert.Equal(t, "172.31.0.0/20", subB.CidrBlock)
 }
 
 // --- EnsureDefaultVPC event test ---

@@ -156,8 +156,8 @@ fi
 echo ""
 echo "✅ Hive development environment stopped"
 
-# Show any remaining related processes
-remaining=$(ps aux | grep -E "(hive|hive-ui|nats|predastore|viperblock|vpcd)" | grep -v grep | grep -v "stop-dev.sh" || true)
+# Show any remaining hive-related processes
+remaining=$(pgrep -af '(bin/hive|hive-ui|nats-server|predastore|viperblock|vpcd|qemu-system)' | grep -v "stop-dev.sh" || true)
 if [[ -n "$remaining" ]]; then
     echo ""
     echo "⚠️  Some related processes may still be running:"
