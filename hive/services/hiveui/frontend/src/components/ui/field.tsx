@@ -64,7 +64,7 @@ const fieldVariants = cva(
         horizontal:
           "flex-row items-center has-[>[data-slot=field-content]]:items-start [&>[data-slot=field-label]]:flex-auto has-[>[data-slot=field-content]]:[&>[role=checkbox],[role=radio]]:mt-px",
         responsive:
-          "@md/field-group:flex-row flex-col @md/field-group:items-center @md/field-group:has-[>[data-slot=field-content]]:items-start @md/field-group:[&>*]:w-auto [&>*]:w-full [&>.sr-only]:w-auto @md/field-group:[&>[data-slot=field-label]]:flex-auto @md/field-group:has-[>[data-slot=field-content]]:[&>[role=checkbox],[role=radio]]:mt-px",
+          "flex-col @md/field-group:flex-row @md/field-group:items-center @md/field-group:has-[>[data-slot=field-content]]:items-start [&>*]:w-full @md/field-group:[&>*]:w-auto [&>.sr-only]:w-auto @md/field-group:[&>[data-slot=field-label]]:flex-auto @md/field-group:has-[>[data-slot=field-content]]:[&>[role=checkbox],[role=radio]]:mt-px",
       },
     },
     defaultVariants: {
@@ -79,7 +79,6 @@ export function Field({
   ...props
 }: React.ComponentProps<"div"> & VariantProps<typeof fieldVariants>) {
   return (
-    // biome-ignore lint/a11y/useSemanticElements: valid
     <div
       className={cn(fieldVariants({ orientation }), className)}
       data-orientation={orientation}
@@ -113,7 +112,7 @@ export function FieldLabel({
   return (
     <Label
       className={cn(
-        "group/field-label peer/field-label flex w-fit gap-2 leading-snug has-[>[data-slot=field]]:rounded-md has-[>[data-slot=field]]:border has-data-checked:bg-primary/5 *:data-[slot=field]:p-2 group-data-[disabled=true]/field:opacity-50 dark:has-data-checked:bg-primary/10",
+        "group/field-label peer/field-label flex w-fit gap-2 leading-snug group-data-[disabled=true]/field:opacity-50 has-data-checked:bg-primary/5 has-[>[data-slot=field]]:rounded-md has-[>[data-slot=field]]:border *:data-[slot=field]:p-2 dark:has-data-checked:bg-primary/10",
         "has-[>[data-slot=field]]:w-full has-[>[data-slot=field]]:flex-col",
         className,
       )}
@@ -130,7 +129,7 @@ export function FieldTitle({
   return (
     <div
       className={cn(
-        "flex w-fit items-center gap-2 font-medium text-xs/relaxed leading-snug group-data-[disabled=true]/field:opacity-50",
+        "flex w-fit items-center gap-2 text-xs/relaxed leading-snug font-medium group-data-[disabled=true]/field:opacity-50",
         className,
       )}
       data-slot="field-label"
@@ -146,9 +145,9 @@ export function FieldDescription({
   return (
     <p
       className={cn(
-        "text-left font-normal text-muted-foreground text-xs/relaxed leading-normal group-has-data-[orientation=horizontal]/field:text-balance [[data-variant=legend]+&]:-mt-1.5",
-        "nth-last-2:-mt-1 last:mt-0",
-        "[&>a:hover]:text-primary [&>a]:underline [&>a]:underline-offset-4",
+        "text-left text-xs/relaxed leading-normal font-normal text-muted-foreground group-has-data-[orientation=horizontal]/field:text-balance [[data-variant=legend]+&]:-mt-1.5",
+        "last:mt-0 nth-last-2:-mt-1",
+        "[&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
         className,
       )}
       data-slot="field-description"
@@ -193,7 +192,7 @@ export function FieldError({
   errors,
   ...props
 }: React.ComponentProps<"div"> & {
-  errors?: Array<{ message?: string } | undefined>
+  errors?: ({ message?: string } | undefined)[]
 }) {
   const content = useMemo(() => {
     if (children) {
@@ -228,7 +227,7 @@ export function FieldError({
 
   return (
     <div
-      className={cn("font-normal text-destructive text-xs/relaxed", className)}
+      className={cn("text-xs/relaxed font-normal text-destructive", className)}
       data-slot="field-error"
       role="alert"
       {...props}

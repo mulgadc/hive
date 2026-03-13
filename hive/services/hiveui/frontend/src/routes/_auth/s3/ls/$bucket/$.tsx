@@ -68,11 +68,11 @@ function BucketObjectsWithPrefix() {
 
   return (
     <>
-      {/* biome-ignore lint/suspicious/noExplicitAny: Dynamic S3 path construction */}
+      {/* oxlint-disable-next-line typescript/no-explicit-any valid }*/}
       <BackLink to={parentPath as any}>Back</BackLink>
       <div className="mb-6">
         <div className="mb-2 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-muted-foreground text-sm">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
             {breadcrumbs.map((crumb, index) => (
               <div className="flex items-center gap-2" key={crumb.path}>
                 {index > 0 && <span>/</span>}
@@ -102,7 +102,7 @@ function BucketObjectsWithPrefix() {
       )}
       {commonPrefixes.length > 0 && (
         <div className="mb-6">
-          <h2 className="mb-3 font-semibold text-lg">Folders</h2>
+          <h2 className="mb-3 text-lg font-semibold">Folders</h2>
           <div className="space-y-2">
             {commonPrefixes.map((prefixObj) => {
               if (!prefixObj.Prefix) {
@@ -128,7 +128,7 @@ function BucketObjectsWithPrefix() {
       )}
       {objects.length > 0 && (
         <div className="space-y-2">
-          <h2 className="mb-3 font-semibold text-lg">Objects</h2>
+          <h2 className="mb-3 text-lg font-semibold">Objects</h2>
           {objects.map((object: _Object) => {
             if (!object.Key) {
               return null

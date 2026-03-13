@@ -6,7 +6,7 @@
     "jsx": "react-jsx",
     "module": "ESNext",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
-    "types": ["vite/client"],
+    "types": ["vite/client", "vitest/globals"],
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,

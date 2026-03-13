@@ -9,6 +9,9 @@ import { formatDateTime } from "@/lib/utils"
 import { s3BucketsQueryOptions } from "@/queries/s3"
 
 export const Route = createFileRoute("/_auth/s3/ls/")({
+  loader: async ({ context }) => {
+    await context.queryClient.ensureQueryData(s3BucketsQueryOptions)
+  },
   head: () => ({
     meta: [
       {
@@ -16,9 +19,6 @@ export const Route = createFileRoute("/_auth/s3/ls/")({
       },
     ],
   }),
-  loader: async ({ context }) => {
-    await context.queryClient.ensureQueryData(s3BucketsQueryOptions)
-  },
   component: Buckets,
 })
 

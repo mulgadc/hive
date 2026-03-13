@@ -5,7 +5,9 @@ import ReactDOM from "react-dom/client"
 
 import { ThemeProvider } from "@/components/theme-provider"
 import { SidebarProvider } from "@/components/ui/sidebar"
+
 import { routeTree } from "./routeTree.gen"
+
 import "./styles.css"
 
 const queryClient = new QueryClient({
@@ -33,7 +35,7 @@ declare module "@tanstack/react-router" {
   }
 }
 
-const rootElement = document.getElementById("app")
+const rootElement = document.querySelector("#app")
 if (rootElement && !rootElement.innerHTML) {
   const root = ReactDOM.createRoot(rootElement)
   root.render(

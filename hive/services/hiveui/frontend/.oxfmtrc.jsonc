@@ -1,0 +1,16 @@
+// Ultracite oxfmt Configuration
+// https://oxc.rs/docs/guide/usage/formatter/config-file-reference.html
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 80,
+  "semi": false,
+  "sortPackageJson": false,
+  "sortImports": {
+    "newlinesBetween": true,
+  },
+  "sortTailwindcss": {
+    "stylesheet": "./src/styles.css",
+    "functions": ["clsx", "cn", "cva"],
+  },
+  "ignorePatterns": ["dist/**", "src/routeTree.gen.ts"],
+}

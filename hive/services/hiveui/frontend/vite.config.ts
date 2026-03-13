@@ -25,11 +25,6 @@ export default defineConfig({
     tanstackRouter({
       target: "react",
       autoCodeSplitting: true,
-      routeTreeFileHeader: [
-        "// @ts-nocheck",
-        "// noinspection JSUnusedGlobalSymbols",
-        "// biome-ignore-all lint assist: Auto-generated file",
-      ],
     }),
     viteReact({
       babel: {
@@ -40,7 +35,7 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      "@": fileURLToPath(new URL("./src", import.meta.url)),
+      "@": fileURLToPath(new URL("src", import.meta.url)),
     },
   },
   test: {

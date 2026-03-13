@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { describe, expect, it, vi } from "vitest"
 
 import { renderWithProviders } from "@/test/utils"
+
 import { InstanceActions } from "./instance-actions"
 
 const TRANSITIONING_RE = /Actions will be available/
@@ -54,16 +55,17 @@ describe("InstanceActions", () => {
   })
 
   describe("transitioning states", () => {
-    it.each([
-      "pending",
-      "stopping",
-      "shutting-down",
-    ])("shows transitioning message for '%s' state", (state) => {
-      renderWithProviders(<InstanceActions instanceId="i-123" state={state} />)
-      expect(screen.getByText(TRANSITIONING_RE)).toBeInTheDocument()
-      expect(screen.queryByText("Start")).not.toBeInTheDocument()
-      expect(screen.queryByText("Stop")).not.toBeInTheDocument()
-    })
+    it.each(["pending", "stopping", "shutting-down"])(
+      "shows transitioning message for '%s' state",
+      (state) => {
+        renderWithProviders(
+          <InstanceActions instanceId="i-123" state={state} />,
+        )
+        expect(screen.getByText(TRANSITIONING_RE)).toBeInTheDocument()
+        expect(screen.queryByText("Start")).not.toBeInTheDocument()
+        expect(screen.queryByText("Stop")).not.toBeInTheDocument()
+      },
+    )
   })
 
   describe("terminated instance", () => {

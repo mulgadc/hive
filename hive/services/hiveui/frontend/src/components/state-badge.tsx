@@ -1,17 +1,17 @@
 import { cn } from "@/lib/utils"
 
-const SUCCESS_STATES = ["running", "available", "completed", "Active"]
-const ERROR_STATES = ["stopped", "error"]
-const WARNING_STATES = ["pending", "shutting-down", "stopping"]
+const SUCCESS_STATES = new Set(["running", "available", "completed", "Active"])
+const ERROR_STATES = new Set(["stopped", "error"])
+const WARNING_STATES = new Set(["pending", "shutting-down", "stopping"])
 
 function getStateClass(state: string | undefined): string {
-  if (state && SUCCESS_STATES.includes(state)) {
+  if (state && SUCCESS_STATES.has(state)) {
     return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100"
   }
-  if (state && ERROR_STATES.includes(state)) {
+  if (state && ERROR_STATES.has(state)) {
     return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100"
   }
-  if (state && WARNING_STATES.includes(state)) {
+  if (state && WARNING_STATES.has(state)) {
     return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-100"
   }
   if (state === "terminated") {

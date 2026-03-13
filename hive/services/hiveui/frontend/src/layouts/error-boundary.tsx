@@ -27,7 +27,7 @@ export function ErrorBoundary({ error, reset }: ErrorComponentProps) {
             <div className="flex justify-center">
               <AlertCircle className="size-12 text-destructive" />
             </div>
-            <h1 className="font-semibold text-2xl">Something went wrong</h1>
+            <h1 className="text-2xl font-semibold">Something went wrong</h1>
             <p className="text-muted-foreground">
               {error.message || "An unexpected error occurred"}
             </p>

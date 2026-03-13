@@ -57,7 +57,7 @@ function BucketObjects() {
       )}
       {commonPrefixes.length > 0 && (
         <div className="mb-6">
-          <h2 className="mb-3 font-semibold text-lg">Folders</h2>
+          <h2 className="mb-3 text-lg font-semibold">Folders</h2>
           <div className="space-y-2">
             {commonPrefixes.map((prefix) => {
               if (!prefix.Prefix) {
@@ -80,7 +80,7 @@ function BucketObjects() {
       )}
       {objects.length > 0 && (
         <div className="space-y-2">
-          <h2 className="mb-3 font-semibold text-lg">Objects</h2>
+          <h2 className="mb-3 text-lg font-semibold">Objects</h2>
           {objects.map((object: _Object) => {
             if (!object.Key) {
               return null

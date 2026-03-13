@@ -32,7 +32,7 @@ export function InstanceActions({ instanceId, state }: InstanceActionsProps) {
   if (isTransitioning && state !== "terminated") {
     return (
       <div className="rounded-lg border bg-muted/50 p-4">
-        <p className="text-center text-muted-foreground text-sm">
+        <p className="text-center text-sm text-muted-foreground">
           Instance is {state}. Actions will be available once the operation
           completes.
         </p>
@@ -43,7 +43,7 @@ export function InstanceActions({ instanceId, state }: InstanceActionsProps) {
   if (state === "terminated") {
     return (
       <div className="rounded-lg border bg-muted/50 p-4">
-        <p className="text-center text-muted-foreground text-sm">
+        <p className="text-center text-sm text-muted-foreground">
           This instance has been terminated and cannot be managed.
         </p>
       </div>

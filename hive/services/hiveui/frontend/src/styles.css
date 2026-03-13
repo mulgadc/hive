@@ -196,12 +196,12 @@
 
 @layer base {
   * {
-    @apply border-border outline-ring/50 overscroll-none;
+    @apply overscroll-none border-border outline-ring/50;
     scrollbar-width: thin;
   }
 
   body {
-    @apply bg-background text-foreground min-h-svh w-full;
+    @apply min-h-svh w-full bg-background text-foreground;
     font-family: var(--font-sans), sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;

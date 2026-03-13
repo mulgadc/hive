@@ -25,7 +25,7 @@ export function ListCard({
         <div className="flex-1">
           <h3 className="font-semibold">{title}</h3>
           {subtitle && (
-            <p className="mt-1 font-medium text-muted-foreground text-sm">
+            <p className="mt-1 text-sm font-medium text-muted-foreground">
               {subtitle}
             </p>
           )}

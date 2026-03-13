@@ -27,6 +27,7 @@ import {
   iamPoliciesQueryOptions,
   iamUserQueryOptions,
 } from "@/queries/iam"
+
 import { AccessKeyModal } from "../../-components/access-key-modal"
 
 export const Route = createFileRoute("/_auth/iam/(users)/list-users/$userName")(
@@ -247,7 +248,7 @@ function UserDetail() {
                   >
                     <div className="space-y-1">
                       <p className="font-mono text-sm">{key.AccessKeyId}</p>
-                      <p className="text-muted-foreground text-xs">
+                      <p className="text-xs text-muted-foreground">
                         Created {formatDateTime(key.CreateDate)}
                       </p>
                     </div>
@@ -277,7 +278,7 @@ function UserDetail() {
                 ))}
               </div>
             ) : (
-              <p className="col-span-2 text-muted-foreground text-sm">
+              <p className="col-span-2 text-sm text-muted-foreground">
                 No access keys.
               </p>
             )}
@@ -300,7 +301,7 @@ function UserDetail() {
           <DetailCard.Content>
             {showAttachSelect && availablePolicies.length > 0 && (
               <div className="col-span-2 space-y-2 rounded-md border p-3">
-                <p className="font-medium text-sm">
+                <p className="text-sm font-medium">
                   Select a policy to attach:
                 </p>
                 <div className="space-y-1">
@@ -315,7 +316,7 @@ function UserDetail() {
                       type="button"
                     >
                       <span>{policy.PolicyName}</span>
-                      <span className="text-muted-foreground text-xs">
+                      <span className="text-xs text-muted-foreground">
                         {policy.Arn}
                       </span>
                     </button>
@@ -324,7 +325,7 @@ function UserDetail() {
               </div>
             )}
             {showAttachSelect && availablePolicies.length === 0 && (
-              <p className="col-span-2 text-muted-foreground text-sm">
+              <p className="col-span-2 text-sm text-muted-foreground">
                 No policies available to attach.
               </p>
             )}
@@ -336,8 +337,8 @@ function UserDetail() {
                     key={policy.PolicyArn}
                   >
                     <div className="space-y-1">
-                      <p className="font-medium text-sm">{policy.PolicyName}</p>
-                      <p className="text-muted-foreground text-xs">
+                      <p className="text-sm font-medium">{policy.PolicyName}</p>
+                      <p className="text-xs text-muted-foreground">
                         {policy.PolicyArn}
                       </p>
                     </div>
@@ -355,7 +356,7 @@ function UserDetail() {
                 ))}
               </div>
             ) : (
-              <p className="col-span-2 text-muted-foreground text-sm">
+              <p className="col-span-2 text-sm text-muted-foreground">
                 No attached policies.
               </p>
             )}

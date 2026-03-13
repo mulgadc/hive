@@ -74,7 +74,7 @@ function ImportKeyPair() {
             <label htmlFor="publicKeyMaterial">Public Key</label>
           </FieldTitle>
           <p
-            className="text-muted-foreground text-xs"
+            className="text-xs text-muted-foreground"
             id="publicKey-description"
           >
             Paste your OpenSSH public key (e.g. the contents of id_rsa.pub)

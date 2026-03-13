@@ -56,19 +56,15 @@ function CreateInstance() {
   const images = imagesData.Images ?? []
   const keyPairs = keyPairsData.KeyPairs ?? []
   const subnets = subnetsData.Subnets ?? []
-  const instanceTypeCounts =
-    instanceTypesData.InstanceTypes?.reduce(
-      (acc, type) => {
-        const typeName = type.InstanceType
-        if (typeName) {
-          acc[typeName] = (acc[typeName] || 0) + 1
-        }
-        return acc
-      },
-      {} as Record<string, number>,
-    ) ?? {}
+  const instanceTypeCounts: Record<string, number> = {}
+  for (const type of instanceTypesData.InstanceTypes ?? []) {
+    const typeName = type.InstanceType
+    if (typeName) {
+      instanceTypeCounts[typeName] = (instanceTypeCounts[typeName] || 0) + 1
+    }
+  }
 
-  const uniqueInstanceTypes = Object.keys(instanceTypeCounts).sort()
+  const uniqueInstanceTypes = Object.keys(instanceTypeCounts).toSorted()
 
   // Compute default values from loaded data
   const defaultImageId = images[0]?.ImageId
@@ -187,7 +183,7 @@ function CreateInstance() {
             render={({ field }) => (
               <Select
                 onValueChange={(value) => field.onChange(value)}
-                value={field.value ? field.value : ""}
+                value={field.value || ""}
               >
                 <SelectTrigger
                   aria-invalid={!!errors.instanceType}
@@ -220,7 +216,7 @@ function CreateInstance() {
             render={({ field }) => (
               <Select
                 onValueChange={(value) => field.onChange(value)}
-                value={field.value ? field.value : ""}
+                value={field.value || ""}
               >
                 <SelectTrigger
                   aria-invalid={!!errors.keyName}
@@ -291,7 +287,7 @@ function CreateInstance() {
             type="number"
             {...register("count", { valueAsNumber: true })}
           />
-          <p className="text-muted-foreground text-xs" id="count-description">
+          <p className="text-xs text-muted-foreground" id="count-description">
             {selectedInstanceType &&
               `Available capacity for ${selectedInstanceType}: ${maxCount}`}
           </p>
