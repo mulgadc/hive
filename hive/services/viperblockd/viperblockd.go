@@ -261,7 +261,11 @@ func launchService(cfg *Config) (err error) {
 		var ebsRequest types.EBSRequest
 		err := json.Unmarshal(msg.Data, &ebsRequest)
 		if err != nil {
-			slog.Error("Failed to unmarshal message", "err", err)
+			slog.Error("Failed to unmarshal ebs.unmount message", "err", err)
+			errResp, _ := json.Marshal(types.EBSUnMountResponse{Error: fmt.Sprintf("bad request: %v", err)})
+			if err := msg.Respond(errResp); err != nil {
+				slog.Error("Failed to respond to ebs.unmount request", "err", err)
+			}
 			return
 		}
 
