@@ -403,6 +403,8 @@ func (d *Daemon) subscribeAll() error {
 		{"hive.nodes.discover", d.handleNodeDiscover, ""},
 		{"hive.node.status", d.handleNodeStatus, ""},
 		{"hive.node.vms", d.handleNodeVMs, ""},
+		// Account creation → create default VPC for new account
+		{"iam.account.created", d.handleAccountCreated, "hive-workers"},
 		// Coordinated cluster shutdown phases (fan-out, no queue group)
 		{"hive.cluster.shutdown.gate", d.handleShutdownGate, ""},
 		{"hive.cluster.shutdown.drain", d.handleShutdownDrain, ""},
