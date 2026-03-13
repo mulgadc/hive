@@ -1334,6 +1334,8 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 
 	// Signal to shutdown each VM
 	var wg sync.WaitGroup
+	var stopErrors []error
+	var stopErrorsMu sync.Mutex
 
 	// Run asynchronously within a worker group
 	for _, instance := range instances {
@@ -1381,6 +1383,9 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				msg, err := d.natsConn.Request(d.ebsTopic("unmount"), ebsUnMountRequest, 30*time.Second)
 				if err != nil {
 					slog.Error("Failed to unmount volume", "name", ebsRequest.Name, "id", instance.ID, "err", err)
+					stopErrorsMu.Lock()
+					stopErrors = append(stopErrors, fmt.Errorf("unmount %s for %s: %w", ebsRequest.Name, instance.ID, err))
+					stopErrorsMu.Unlock()
 				} else {
 					slog.Info("Unmounted Viperblock volume", "id", instance.ID, "data", string(msg.Data))
 				}
@@ -1488,7 +1493,7 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 			d.mu.Unlock()
 		}
 	}
-	return nil
+	return errors.Join(stopErrors...)
 
 }
 
