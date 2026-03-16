@@ -1,0 +1,74 @@
+---
+title: "Hybrid Sync"
+description: "Synchronize data between Hive and AWS when network connectivity is available."
+category: "Migration"
+tags:
+  - hybrid
+  - sync
+  - s3
+resources:
+  - title: "Hive Repository"
+    url: "https://github.com/mulgadc/hive"
+---
+
+# Hybrid Sync
+
+> Synchronize data between Hive and AWS when network connectivity is available.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Instructions](#instructions)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Overview
+
+Hive's hybrid mode enables bidirectional data synchronization between local infrastructure and AWS cloud services. Ideal for intermittent connectivity environments.
+
+## Instructions
+
+## Push Local to Cloud
+
+```bash
+aws s3 sync s3://local-bucket/ s3://cloud-bucket/ \
+  --source-region hive --region us-east-1
+```
+
+## Pull Cloud to Local
+
+```bash
+aws s3 sync s3://cloud-bucket/ s3://local-bucket/ \
+  --source-region us-east-1 --region hive
+```
+
+## EBS Volume Backup
+
+```bash
+rsync -avz /data/ user@cloud-server:/backup/hive-data/
+```
+
+## Troubleshooting
+
+## Sync fails mid-transfer
+
+S3 sync is idempotent — re-run the same command to resume where it left off:
+
+```bash
+aws s3 sync s3://local-bucket/ s3://cloud-bucket/ \
+  --source-region hive --region us-east-1
+```
+
+Only changed or missing files will be transferred on subsequent runs.
+
+## Permissions errors during sync
+
+Verify your AWS credentials are configured for both the source and destination:
+
+```bash
+aws sts get-caller-identity --profile hive
+aws sts get-caller-identity --profile default
+```
+
+Ensure the IAM user has `s3:GetObject`, `s3:PutObject`, and `s3:ListBucket` permissions on both buckets.

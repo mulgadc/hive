@@ -1,0 +1,102 @@
+---
+title: "Moving an AWS Workload to Mulga"
+description: "Migrate existing AWS workloads to Hive using compatible APIs, SDKs, and Terraform."
+category: "Migration"
+tags:
+  - migration
+  - aws
+  - terraform
+badge: new
+resources:
+  - title: "Hive Repository"
+    url: "https://github.com/mulgadc/hive"
+  - title: "AWS CLI Reference"
+    url: "https://docs.aws.amazon.com/cli/latest/reference/"
+  - title: "Terraform AWS Provider"
+    url: "https://registry.terraform.io/providers/hashicorp/aws/latest"
+---
+
+# Moving an AWS Workload to Mulga
+
+> Migrate existing AWS workloads to Hive using compatible APIs, SDKs, and Terraform.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Instructions](#instructions)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Overview
+
+Hive provides drop-in compatibility with AWS APIs, making it possible to migrate existing workloads with minimal changes.
+
+**Supported Services:** VPC, EC2, EBS, S3, IAM
+
+**Compatible Tools:** AWS CLI, AWS SDKs, Terraform, any S3-compatible client
+
+## Instructions
+
+## Configure AWS CLI
+
+```bash
+export AWS_PROFILE=hive
+aws ec2 describe-instances
+aws s3 ls
+```
+
+## Terraform
+
+```hcl
+provider "aws" {
+  region     = "ap-southeast-2"
+  access_key = "your-hive-access-key"
+  secret_key = "your-hive-secret-key"
+
+  endpoints {
+    ec2 = "https://localhost:9999"
+    s3  = "https://localhost:8443"
+  }
+
+  skip_credentials_validation = true
+  skip_metadata_api_check     = true
+  skip_requesting_account_id  = true
+}
+```
+
+## Hybrid S3 Sync
+
+```bash
+aws s3 sync s3://local-bucket/ s3://cloud-bucket/ --source-region hive --region us-east-1
+```
+
+## Troubleshooting
+
+## Terraform provider errors
+
+Ensure all three skip flags are set in your provider configuration:
+
+```hcl
+skip_credentials_validation = true
+skip_metadata_api_check     = true
+skip_requesting_account_id  = true
+```
+
+Without these, Terraform will try to validate credentials and metadata against real AWS endpoints.
+
+## S3 signature errors
+
+Hive uses AWS Signature V4. Ensure your AWS CLI is version 2.0 or higher:
+
+```bash
+aws --version
+```
+
+If using an older version, upgrade:
+
+```bash
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install --update
+```
