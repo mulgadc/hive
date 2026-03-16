@@ -52,23 +52,30 @@ AWS-Compatible Interfaces – Provision infrastructure with awscli, Terraform, o
 - Works Offline – No reliance on centralized cloud services or external networks.
 - Open Source – Licensed under Apache 2.0. Fork it, extend it, or deploy it as-is.
 
-## Development Setup
+## Installation
 
-### For Developers
+Installation requires an Ubuntu / Debian system. See the detailed documentation at [https://docs.mulgadc.com](https://docs.mulgadc.com/) for maintaining and installing Hive.
 
-Get started with Hive development in minutes:
+### Single node install
+
+The installation is straightforward to set up and running on a single node for testing purposes.
 
 ```bash
-# Clone the repository
-git clone https://github.com/mulgadc/hive.git
-cd hive
-
-# Setup dependencies and development environment
-./scripts/clone-deps.sh    # Clone viperblock + predastore repositories
-./scripts/dev-setup.sh     # Setup complete development environment
+export AWS_PROFILE=hive
+export AWS_REGION=ap-southeast-2-sc
 ```
 
-Next, follow the detailed [Installation Guide](./INSTALL.md) to bootstrap a new environment with SSH keys, AMI (OS images) and how to spin up new EC2 instances using Hive.
+```bash
+curl https://install.mulgadc.com/ | bash
+
+hive admin init --region $AWS_REGION
+
+aws ec2 describe-instance-types
+```
+
+### Development Setup
+
+For a complete development environment see the [Source Install](https://docs.mulgadc.com/docs/source-install/) documentation
 
 ### Component Repositories
 
@@ -78,12 +85,6 @@ Hive coordinates these independent components:
 - **[Viperblock](https://github.com/mulgadc/viperblock)** - EBS-compatible block storage
 
 Each component can be developed independently. See component-specific documentation for focused development guides.
-
-## Detailed Installation Method
-
-See [Installation Guide](INSTALL.md) on how to setup a Hive node to get started.
-
-Then configure your AWS CLI to point to Hive's endpoints and start launching VMs, buckets, and volumes using familiar commands and Terraform scripts.
 
 ## Development Philosophy
 
