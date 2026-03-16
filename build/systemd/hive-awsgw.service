@@ -1,0 +1,22 @@
+[Unit]
+Description=Hive AWS Gateway
+PartOf=hive.target
+After=hive-nats.service hive-daemon.service
+Requires=hive-nats.service
+
+[Service]
+Type=simple
+User=hive
+Group=hive
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do nc -z 127.0.0.1 4222 && exit 0; sleep 1; done; exit 1'
+ExecStart=/usr/local/bin/hive service awsgw start
+Restart=on-failure
+RestartSec=5
+OOMScoreAdjust=-500
+Environment=HIVE_CONFIG_PATH=/etc/hive/hive.toml
+Environment=HIVE_BASE_DIR=/var/lib/hive/
+Environment=HIVE_AWSGW_TLS_CERT=/etc/hive/server.pem
+Environment=HIVE_AWSGW_TLS_KEY=/etc/hive/server.key
+
+[Install]
+WantedBy=hive.target

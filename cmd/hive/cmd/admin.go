@@ -196,12 +196,8 @@ func init() {
 	accountCreateCmd.Flags().String("name", "", "Account name (required)")
 	accountCreateCmd.MarkFlagRequired("name")
 
-	homeDir, _ := os.UserHomeDir()
-	configDir := filepath.Join(homeDir, "hive", "config")
-	hiveDir := filepath.Join(homeDir, "hive")
-
-	rootCmd.PersistentFlags().String("config-dir", configDir, "Configuration directory")
-	rootCmd.PersistentFlags().String("hive-dir", hiveDir, "Hive base directory")
+	rootCmd.PersistentFlags().String("config-dir", DefaultConfigDir(), "Configuration directory")
+	rootCmd.PersistentFlags().String("hive-dir", DefaultDataDir(), "Hive base directory")
 
 	// Flags for admin init
 	adminInitCmd.Flags().Bool("force", false, "Force re-initialization (overwrites existing config)")
@@ -259,8 +255,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 
 	// Use default config path
 	if cfgFile == "" {
-		homeDir, _ := os.UserHomeDir()
-		cfgFile = fmt.Sprintf("%s/hive/config/hive.toml", homeDir)
+		cfgFile = DefaultConfigFile()
 	}
 
 	//configDir, _ := cmd.Flags().GetString("config-dir")
@@ -566,12 +561,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 	// Default config directory
 	if configDir == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error getting home directory: %v\n", err)
-			os.Exit(1)
-		}
-		configDir = filepath.Join(homeDir, "hive", "config")
+		configDir = DefaultConfigDir()
 	}
 
 	fmt.Println("🚀 Initializing Hive platform...")
@@ -640,9 +630,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	fmt.Println("\n🔒 Generated NATS authentication token")
 
 	if hiveRoot == "" {
-		// Get home directory for data path
-		homeDir, _ := os.UserHomeDir()
-		hiveRoot = filepath.Join(homeDir, "hive")
+		hiveRoot = DefaultDataDir()
 	}
 	hiveRoot = filepath.Clean(hiveRoot)
 
@@ -767,6 +755,16 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	}
 
 	admin.CreateServiceDirectories(hiveRoot)
+
+	// In production layout (running as root), fix ownership so the service user
+	// can read config and write data. SUDO_USER identifies the operator account.
+	if os.Getuid() == 0 {
+		sudoUser := os.Getenv("SUDO_USER")
+		if sudoUser != "" {
+			admin.ChownRecursive(configDir, sudoUser)
+			admin.ChownRecursive(hiveRoot, sudoUser)
+		}
+	}
 
 	// Print success message
 	fmt.Println("\n🎉 Hive initialization complete!")
@@ -1028,12 +1026,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 
 	// Set default data directory
 	if dataDir == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "❌ Error getting home directory: %v\n", err)
-			os.Exit(1)
-		}
-		dataDir = filepath.Join(homeDir, "hive")
+		dataDir = DefaultDataDir()
 	}
 
 	fmt.Println("🚀 Joining Hive cluster...")
@@ -1134,12 +1127,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 
 	// Set up config directory
 	if configDir == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error getting home directory: %v\n", err)
-			os.Exit(1)
-		}
-		configDir = filepath.Join(homeDir, "hive", "config")
+		configDir = DefaultConfigDir()
 	}
 
 	if err := os.MkdirAll(configDir, 0700); err != nil {

@@ -1,0 +1,48 @@
+ARG VERSION=dev
+
+FROM golang:1.26-bookworm AS builder
+
+ARG VERSION
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nbdkit nbdkit-plugin-dev pkg-config gcc make \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy go.work first (lives in hive/)
+COPY hive/go.work ./hive/
+
+# Copy module files for dependency caching
+COPY hive/go.mod hive/go.sum ./hive/
+COPY predastore/go.mod predastore/go.sum ./predastore/
+COPY viperblock/go.mod viperblock/go.sum ./viperblock/
+COPY viperblock/nbd/go.mod viperblock/nbd/go.sum ./viperblock/nbd/
+COPY viperblock/nbd/libguestfs.org/nbdkit/go.mod ./viperblock/nbd/libguestfs.org/nbdkit/
+
+# Download dependencies (cached layer)
+RUN cd hive && go mod download
+
+# Copy full source
+COPY hive/ ./hive/
+COPY predastore/ ./predastore/
+COPY viperblock/ ./viperblock/
+
+# Build hive binary
+RUN COMMIT=$(cd hive && git rev-parse --short HEAD 2>/dev/null || echo "unknown") && \
+    cd hive && go build -ldflags "-s -w \
+    -X github.com/mulgadc/hive/cmd/hive/cmd.Version=${VERSION} \
+    -X github.com/mulgadc/hive/cmd/hive/cmd.Commit=${COMMIT}" \
+    -o /out/hive cmd/hive/main.go
+
+# Build nbdkit viperblock plugin (.so)
+RUN cd viperblock && go build -o /out/nbdkit-viperblock-plugin.so -buildmode=c-shared nbd/viperblock.go
+
+# Copy setup scripts and systemd units
+RUN cp hive/scripts/setup.sh /out/setup.sh 2>/dev/null || true
+RUN cp hive/scripts/setup-ovn.sh /out/setup-ovn.sh
+RUN mkdir -p /out/systemd && cp hive/build/systemd/* /out/systemd/
+RUN cp hive/build/logrotate/hive /out/logrotate-hive
+
+FROM scratch AS export
+COPY --from=builder /out/ /

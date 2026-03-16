@@ -13,6 +13,7 @@ go.work.sum
 
 # Build outputs
 bin/
+dist/
 tmp/
 *.test
 *.out

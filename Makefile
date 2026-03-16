@@ -55,9 +55,13 @@ build-ui:
 	cd hive/services/hiveui/frontend && pnpm build
 
 # GO commands
+VERSION ?= $(shell git describe --tags --always --dirty)
+COMMIT  ?= $(shell git rev-parse --short HEAD)
+LDFLAGS := -s -w -X github.com/mulgadc/hive/cmd/hive/cmd.Version=$(VERSION) -X github.com/mulgadc/hive/cmd/hive/cmd.Commit=$(COMMIT)
+
 go_build:
 	@echo -e "\n....Building $(GO_PROJECT_NAME)"
-	go build $(GO_BUILD_MOD) -ldflags "-s -w" -o ./bin/$(GO_PROJECT_NAME) cmd/hive/main.go
+	go build $(GO_BUILD_MOD) -ldflags "$(LDFLAGS)" -o ./bin/$(GO_PROJECT_NAME) cmd/hive/main.go
 
 go_run:
 	@echo -e "\n....Running $(GO_PROJECT_NAME)...."
@@ -193,6 +197,38 @@ security-check:
 	$(_Q)set -o pipefail && go tool staticcheck -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./... $(_SECQ) tests/staticcheck-report.txt $(if $(QUIET),|| { cat tests/staticcheck-report.txt; exit 1; })
 	@echo "  staticcheck ok"
 
+# Build release tarballs for both architectures via Docker
+distro:
+	@echo "Building hive $(VERSION) distribution tarballs..."
+	@mkdir -p dist/
+	@echo "Building linux/amd64..."
+	docker buildx build \
+		--platform linux/amd64 \
+		--build-arg VERSION=$(VERSION) \
+		-f build/Dockerfile.distro \
+		--output type=local,dest=dist/amd64/ \
+		../
+	tar -czf dist/hive-$(VERSION)-linux-amd64.tar.gz -C dist/amd64 .
+	sha256sum dist/hive-$(VERSION)-linux-amd64.tar.gz > dist/hive-$(VERSION)-linux-amd64.tar.gz.sha256
+	@echo "Building linux/arm64..."
+	docker buildx build \
+		--platform linux/arm64 \
+		--build-arg VERSION=$(VERSION) \
+		-f build/Dockerfile.distro \
+		--output type=local,dest=dist/arm64/ \
+		../
+	tar -czf dist/hive-$(VERSION)-linux-arm64.tar.gz -C dist/arm64 .
+	sha256sum dist/hive-$(VERSION)-linux-arm64.tar.gz > dist/hive-$(VERSION)-linux-arm64.tar.gz.sha256
+	@echo ""
+	@echo "Distribution tarballs:"
+	@ls -lh dist/*.tar.gz
+	@echo ""
+	@cat dist/*.sha256
+
+distro-clean:
+	rm -rf dist/
+
 .PHONY: build build-ui go_build go_run preflight test test-cover test-race diff-coverage bench run clean \
 	install-system install-go install-aws quickinstall \
-	format check-format modernize check-modernize vet security-check
+	format check-format modernize check-modernize vet security-check \
+	distro distro-clean

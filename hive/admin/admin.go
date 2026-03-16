@@ -8,11 +8,14 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"math/big"
 	"net"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -203,6 +206,26 @@ func CreateServiceDirectories(hiveRoot string) {
 func FileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// ChownRecursive changes ownership of a path and all its contents to the
+// specified username. Used after init to hand production directories back
+// to the service user when init runs as root via sudo.
+func ChownRecursive(path, username string) {
+	u, err := user.Lookup(username)
+	if err != nil {
+		return
+	}
+	uid, _ := strconv.Atoi(u.Uid)
+	gid, _ := strconv.Atoi(u.Gid)
+
+	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		os.Chown(p, uid, gid)
+		return nil
+	})
 }
 
 // updateAWSINIFile updates or creates an AWS INI file section with given key-value pairs

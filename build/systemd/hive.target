@@ -1,0 +1,8 @@
+[Unit]
+Description=Hive Infrastructure Platform
+After=network-online.target
+Wants=network-online.target
+Wants=hive-nats.service hive-predastore.service hive-viperblock.service hive-daemon.service hive-awsgw.service hive-vpcd.service hive-ui.service
+
+[Install]
+WantedBy=multi-user.target

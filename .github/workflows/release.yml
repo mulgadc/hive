@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  distro:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: hive
+
+      - uses: actions/checkout@v4
+        with:
+          repository: mulgadc/predastore
+          path: predastore
+
+      - uses: actions/checkout@v4
+        with:
+          repository: mulgadc/viperblock
+          path: viperblock
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up QEMU (for arm64 cross-build)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build distribution tarballs
+        run: cd hive && make distro VERSION=${{ github.ref_name }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            hive/dist/*.tar.gz
+            hive/dist/*.sha256
+            hive/scripts/setup.sh
+          generate_release_notes: true

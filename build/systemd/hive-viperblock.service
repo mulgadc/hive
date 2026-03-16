@@ -1,0 +1,21 @@
+[Unit]
+Description=Hive Viperblock (Block Storage)
+PartOf=hive.target
+After=hive-nats.service hive-predastore.service
+Requires=hive-nats.service
+
+[Service]
+Type=simple
+User=hive
+Group=hive
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do nc -z 127.0.0.1 4222 && exit 0; sleep 1; done; exit 1'
+ExecStart=/usr/local/bin/hive service viperblock start
+Restart=on-failure
+RestartSec=5
+OOMScoreAdjust=-500
+EnvironmentFile=/etc/hive/systemd.env
+Environment=HIVE_CONFIG_PATH=/etc/hive/hive.toml
+Environment=HIVE_BASE_DIR=/var/lib/hive/viperblock/
+
+[Install]
+WantedBy=hive.target

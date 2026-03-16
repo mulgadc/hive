@@ -66,8 +66,7 @@ func init() {
 func loadConfigAndConnect() (*config.ClusterConfig, *nats.Conn, error) {
 	cfgPath := viper.GetString("config")
 	if cfgPath == "" {
-		homeDir, _ := os.UserHomeDir()
-		cfgPath = fmt.Sprintf("%s/hive/config/hive.toml", homeDir)
+		cfgPath = DefaultConfigFile()
 	}
 
 	cfg, err := config.LoadConfig(cfgPath)
