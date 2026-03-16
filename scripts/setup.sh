@@ -1,6 +1,6 @@
 #!/bin/bash
 # Hive binary installer
-# Usage: curl -sfL https://install.mulgadc.com/setup.sh | bash
+# Usage: curl -sfL https://install.mulgadc.com | bash
 #
 # Environment variables:
 #   INSTALL_HIVE_CHANNEL   Release channel: latest (default), dev
@@ -24,10 +24,18 @@ info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 fatal() { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
 
-# --- Root check ---
-check_root() {
-    if [ "$(id -u)" -ne 0 ]; then
-        fatal "This script must be run as root. Use: curl -sfL ... | sudo bash"
+# --- Sudo setup ---
+setup_sudo() {
+    if [ "$(id -u)" -eq 0 ]; then
+        SUDO=""
+    elif command -v sudo >/dev/null 2>&1; then
+        SUDO="sudo"
+        if ! $SUDO -n true 2>/dev/null; then
+            info "This installer requires sudo access for system-level operations"
+            $SUDO true || fatal "Failed to obtain sudo access"
+        fi
+    else
+        fatal "This script requires root or sudo access"
     fi
 }
 
@@ -83,24 +91,24 @@ detect_arch() {
 
 # --- Detect service user ---
 detect_service_user() {
-    # Use the real user who invoked sudo (not root)
+    # Use the real user — either the current user, or SUDO_USER if running via sudo
     HIVE_USER="${SUDO_USER:-$(whoami)}"
     HIVE_GROUP="$(id -gn "$HIVE_USER")"
 
     if [ "$HIVE_USER" = "root" ]; then
-        fatal "Cannot determine service user. Do not run as root directly — use: sudo bash setup.sh"
+        fatal "Cannot determine service user. Do not run as root directly — use: curl ... | bash (as a normal user)"
     fi
 
     info "Services will run as: $HIVE_USER:$HIVE_GROUP"
 
     # Allow the service user to manage OVN/OVS and tap devices
-    cat > /etc/sudoers.d/hive-network << SUDOERS
+    $SUDO tee /etc/sudoers.d/hive-network > /dev/null << SUDOERS
 # Hive VPC networking: allow service user to manage tap devices, OVS, and OVN
 ${HIVE_USER} ALL=(root) NOPASSWD: /sbin/ip, /usr/sbin/ip
 ${HIVE_USER} ALL=(root) NOPASSWD: /usr/bin/ovs-vsctl, /usr/bin/ovs-appctl
 ${HIVE_USER} ALL=(root) NOPASSWD: /usr/bin/ovn-nbctl, /usr/bin/ovn-sbctl
 SUDOERS
-    chmod 0440 /etc/sudoers.d/hive-network
+    $SUDO chmod 0440 /etc/sudoers.d/hive-network
     info "Sudoers rules installed for $HIVE_USER"
 }
 
@@ -112,9 +120,9 @@ install_apt_deps() {
     fi
 
     info "Installing system dependencies..."
-    apt-get update -qq
+    $SUDO apt-get update -qq
 
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y -qq \
         nbdkit \
         $QEMU_PACKAGES qemu-utils qemu-kvm \
         libvirt-daemon-system libvirt-clients \
@@ -141,7 +149,7 @@ install_aws_cli() {
     AWS_TMPDIR=$(mktemp -d)
     curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_ARCH}.zip" -o "$AWS_TMPDIR/awscliv2.zip"
     unzip -q "$AWS_TMPDIR/awscliv2.zip" -d "$AWS_TMPDIR"
-    "$AWS_TMPDIR/aws/install" --update > /dev/null
+    $SUDO "$AWS_TMPDIR/aws/install" --update > /dev/null
     rm -rf "$AWS_TMPDIR"
 
     info "AWS CLI installed: $(aws --version 2>&1 | head -1)"
@@ -202,7 +210,7 @@ install_files() {
     info "Installing files..."
 
     # Binary
-    install -m 0755 "$EXTRACT_DIR/hive" /usr/local/bin/hive
+    $SUDO install -m 0755 "$EXTRACT_DIR/hive" /usr/local/bin/hive
     info "  /usr/local/bin/hive"
 
     # nbdkit plugin
@@ -215,55 +223,54 @@ install_files() {
             PLUGINDIR="/usr/lib/x86_64-linux-gnu/nbdkit/plugins"
         fi
     fi
-    mkdir -p "$PLUGINDIR"
-    install -m 0755 "$EXTRACT_DIR/nbdkit-viperblock-plugin.so" "$PLUGINDIR/nbdkit-viperblock-plugin.so"
+    $SUDO mkdir -p "$PLUGINDIR"
+    $SUDO install -m 0755 "$EXTRACT_DIR/nbdkit-viperblock-plugin.so" "$PLUGINDIR/nbdkit-viperblock-plugin.so"
     info "  $PLUGINDIR/nbdkit-viperblock-plugin.so"
 
     # Setup scripts
-    mkdir -p /usr/local/share/hive
+    $SUDO mkdir -p /usr/local/share/hive
     if [ -f "$EXTRACT_DIR/setup-ovn.sh" ]; then
-        install -m 0755 "$EXTRACT_DIR/setup-ovn.sh" /usr/local/share/hive/setup-ovn.sh
+        $SUDO install -m 0755 "$EXTRACT_DIR/setup-ovn.sh" /usr/local/share/hive/setup-ovn.sh
         info "  /usr/local/share/hive/setup-ovn.sh"
     fi
-
-    # Cleanup temp dir after all install steps complete (defer to main)
 }
 
 # --- Create directories ---
 create_directories() {
     info "Creating directories..."
 
-    mkdir -p /etc/hive
-    chmod 0700 /etc/hive
-    chown "$HIVE_USER:$HIVE_GROUP" /etc/hive
+    $SUDO mkdir -p /etc/hive
+    $SUDO chmod 0700 /etc/hive
+    $SUDO chown "$HIVE_USER:$HIVE_GROUP" /etc/hive
 
-    mkdir -p /var/lib/hive
-    chown "$HIVE_USER:$HIVE_GROUP" /var/lib/hive
+    $SUDO mkdir -p /var/lib/hive
+    $SUDO chown "$HIVE_USER:$HIVE_GROUP" /var/lib/hive
 
     # Symlink so services that expect BaseDir/config/ can find /etc/hive/
     if [ ! -e /var/lib/hive/config ]; then
-        ln -s /etc/hive /var/lib/hive/config
+        $SUDO ln -s /etc/hive /var/lib/hive/config
     fi
 
     # Symlink so services that write logs to BaseDir/logs/ use /var/log/hive/
     if [ ! -e /var/lib/hive/logs ]; then
-        ln -s /var/log/hive /var/lib/hive/logs
+        $SUDO ln -s /var/log/hive /var/lib/hive/logs
     fi
 
-    mkdir -p /var/log/hive
-    chown "$HIVE_USER:$HIVE_GROUP" /var/log/hive
+    $SUDO mkdir -p /var/log/hive
+    $SUDO chown "$HIVE_USER:$HIVE_GROUP" /var/log/hive
 
-    mkdir -p /run/hive
-    chown "$HIVE_USER:$HIVE_GROUP" /run/hive
+    $SUDO mkdir -p /run/hive
+    $SUDO chown "$HIVE_USER:$HIVE_GROUP" /run/hive
 
-    mkdir -p /var/lib/hive/viperblock
+    $SUDO mkdir -p /var/lib/hive/viperblock
+    $SUDO chown "$HIVE_USER:$HIVE_GROUP" /var/lib/hive/viperblock
 
     # Generate environment file with install-specific values (e.g. arch-dependent paths)
-    cat > /etc/hive/systemd.env << EOF
+    $SUDO tee /etc/hive/systemd.env > /dev/null << EOF
 # Generated by setup.sh — install-specific environment variables
 HIVE_VIPERBLOCK_PLUGIN_PATH=${PLUGINDIR}/nbdkit-viperblock-plugin.so
 EOF
-    chown "$HIVE_USER:$HIVE_GROUP" /etc/hive/systemd.env
+    $SUDO chown "$HIVE_USER:$HIVE_GROUP" /etc/hive/systemd.env
     info "Generated /etc/hive/systemd.env"
 }
 
@@ -278,19 +285,19 @@ install_systemd() {
     for unit in "$EXTRACT_DIR"/systemd/*; do
         # Substitute User= and Group= with the detected service user
         sed "s/^User=hive$/User=$HIVE_USER/;s/^Group=hive$/Group=$HIVE_GROUP/" \
-            "$unit" > "/etc/systemd/system/$(basename "$unit")"
-        chmod 0644 "/etc/systemd/system/$(basename "$unit")"
+            "$unit" | $SUDO tee "/etc/systemd/system/$(basename "$unit")" > /dev/null
+        $SUDO chmod 0644 "/etc/systemd/system/$(basename "$unit")"
         info "  /etc/systemd/system/$(basename "$unit")"
     done
 
-    systemctl daemon-reload
+    $SUDO systemctl daemon-reload
     info "Systemd units installed (running as $HIVE_USER:$HIVE_GROUP)"
 }
 
 # --- Install logrotate ---
 install_logrotate() {
     if [ -f "$EXTRACT_DIR/logrotate-hive" ]; then
-        install -m 0644 "$EXTRACT_DIR/logrotate-hive" /etc/logrotate.d/hive
+        $SUDO install -m 0644 "$EXTRACT_DIR/logrotate-hive" /etc/logrotate.d/hive
     else
         warn "Logrotate config not found in tarball, skipping"
         return
@@ -300,9 +307,9 @@ install_logrotate() {
 
 # --- Upgrade handling ---
 handle_upgrade() {
-    if systemctl is-active --quiet hive.target 2>/dev/null; then
+    if $SUDO systemctl is-active --quiet hive.target 2>/dev/null; then
         warn "Hive services are running. Stopping for upgrade..."
-        systemctl stop hive.target
+        $SUDO systemctl stop hive.target
         RESTART_AFTER=true
     fi
 }
@@ -310,7 +317,7 @@ handle_upgrade() {
 restart_if_needed() {
     if [ "${RESTART_AFTER}" = "true" ]; then
         info "Restarting Hive services..."
-        systemctl start hive.target
+        $SUDO systemctl start hive.target
     fi
 }
 
@@ -325,6 +332,7 @@ print_summary() {
     echo ""
     echo "  Version:      $INSTALLED_VERSION"
     echo "  Architecture: $ARCH"
+    echo "  Service user: $HIVE_USER"
     echo "  Binary:       /usr/local/bin/hive"
     echo "  Config:       /etc/hive/"
     echo "  Data:         /var/lib/hive/"
@@ -356,7 +364,7 @@ main() {
     info "Hive installer"
     echo ""
 
-    check_root
+    setup_sudo
     detect_os
     detect_arch
     handle_upgrade
