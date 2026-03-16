@@ -632,3 +632,46 @@ secretkey = "{{.SecretKey}}"
 	assert.Contains(t, content, `region = "us-east-1"`)
 	assert.Contains(t, content, fmt.Sprintf(`accesskey = "%s"`, settings.AccessKey))
 }
+
+func TestChownRecursive_InvalidUser(t *testing.T) {
+	// ChownRecursive should silently return on invalid username
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "test.txt")
+	os.WriteFile(testFile, []byte("test"), 0644)
+
+	// Should not panic or error with a non-existent user
+	ChownRecursive(tmpDir, "nonexistent-user-that-does-not-exist-12345")
+
+	// File should still exist and be readable
+	_, err := os.ReadFile(testFile)
+	assert.NoError(t, err)
+}
+
+func TestChownRecursive_CurrentUser(t *testing.T) {
+	tmpDir := t.TempDir()
+	subDir := filepath.Join(tmpDir, "sub")
+	os.MkdirAll(subDir, 0755)
+	testFile := filepath.Join(subDir, "test.txt")
+	os.WriteFile(testFile, []byte("test"), 0644)
+
+	// Chown to current user should succeed (no-op effectively)
+	currentUser := os.Getenv("USER")
+	if currentUser == "" {
+		t.Skip("USER env not set")
+	}
+
+	ChownRecursive(tmpDir, currentUser)
+
+	// Verify files are still accessible
+	_, err := os.ReadFile(testFile)
+	assert.NoError(t, err)
+}
+
+func TestChownRecursive_NonExistentPath(t *testing.T) {
+	// Should not panic on a path that doesn't exist
+	currentUser := os.Getenv("USER")
+	if currentUser == "" {
+		t.Skip("USER env not set")
+	}
+	ChownRecursive("/tmp/nonexistent-path-12345", currentUser)
+}

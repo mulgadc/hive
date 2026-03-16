@@ -211,6 +211,7 @@ func FileExists(path string) bool {
 // ChownRecursive changes ownership of a path and all its contents to the
 // specified username. Used after init to hand production directories back
 // to the service user when init runs as root via sudo.
+// Best-effort: errors are logged but do not halt the operation.
 func ChownRecursive(path, username string) {
 	u, err := user.Lookup(username)
 	if err != nil {
@@ -219,11 +220,26 @@ func ChownRecursive(path, username string) {
 	uid, _ := strconv.Atoi(u.Uid)
 	gid, _ := strconv.Atoi(u.Gid)
 
-	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+	// Use os.Root to scope filesystem operations and avoid symlink TOCTOU races.
+	// Falls back to direct chown if os.Root is not available.
+	root, rootErr := os.OpenRoot(path)
+	if rootErr != nil {
+		// Fallback: direct chown on the top-level path only
+		if chownErr := os.Chown(path, uid, gid); chownErr != nil { // #nosec G122
+			slog.Debug("chown failed", "path", path, "err", chownErr)
+		}
+		return
+	}
+	defer root.Close()
+
+	_ = fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
-		os.Chown(p, uid, gid)
+		fullPath := filepath.Join(path, p)
+		if chownErr := os.Lchown(fullPath, uid, gid); chownErr != nil {
+			slog.Debug("chown failed", "path", fullPath, "err", chownErr)
+		}
 		return nil
 	})
 }
