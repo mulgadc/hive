@@ -58,7 +58,7 @@ The installer downloads the Hive binary and bootstraps all dependencies (QEMU, O
 
 ## Step 2. Initialize a region
 
-Create your first region and availability zone:
+Create your first region and availability zone, replace `ap-southeast-2` with your desired region:
 
 ```bash
 hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
@@ -76,7 +76,7 @@ sudo update-ca-certificates
 ## Step 4. Start services
 
 ```bash
-hive start
+sudo systemctl start hive.target
 ```
 
 Set the AWS profile to use the default admin account:

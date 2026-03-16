@@ -71,6 +71,13 @@ To find your server's IP:
 ip addr show | grep "inet "
 ```
 
+Next, define the AWS region and AZ you are deploying locally.
+
+```bash
+export AWS_REGION=us-east-1
+export AWS_AZ=us-east-1a
+```
+
 ## Step 3. Setup OVN networking
 
 OVN must be configured on every server before forming the cluster. Server 1 runs OVN central (NB and SB databases) and must be set up first.
@@ -78,7 +85,7 @@ OVN must be configured on every server before forming the cluster. Server 1 runs
 **Server 1 — OVN central + compute (run first):**
 
 ```bash
-hive setup-ovn --management --encap-ip=$HIVE_NODE1
+sudo /usr/local/share/hive/setup-ovn.sh --management --encap-ip=$HIVE_NODE1
 ```
 
 Verify OVN central is ready before proceeding:
@@ -90,13 +97,13 @@ sudo ovn-sbctl show
 **Server 2 — Compute node (after server 1 is ready):**
 
 ```bash
-hive setup-ovn --ovn-remote=tcp:$HIVE_NODE1:6642 --encap-ip=$HIVE_NODE2
+sudo /usr/local/share/hive/setup-ovn.sh --ovn-remote=tcp:$HIVE_NODE1:6642 --encap-ip=$HIVE_NODE2
 ```
 
 **Server 3 — Compute node (after server 1 is ready):**
 
 ```bash
-hive setup-ovn --ovn-remote=tcp:$HIVE_NODE1:6642 --encap-ip=$HIVE_NODE3
+sudo /usr/local/share/hive/setup-ovn.sh --ovn-remote=tcp:$HIVE_NODE1:6642 --encap-ip=$HIVE_NODE3
 ```
 
 Verify all chassis have registered (from server 1):
@@ -114,16 +121,14 @@ The formation process requires running init and join commands concurrently. The 
 **Server 1 — Initialize the cluster:**
 
 ```bash
-hive admin init \
+sudo hive admin init \
   --node node1 \
   --nodes 3 \
   --bind $HIVE_NODE1 \
   --cluster-bind $HIVE_NODE1 \
   --port 4432 \
-  --hive-dir ~/hive/ \
-  --config-dir ~/hive/config/ \
-  --region us-east-1 \
-  --az us-east-1a
+  --region $AWS_REGION \
+  --az $AWS_AZ
 ```
 
 **Server 2 — Join the cluster (while init is running):**
@@ -134,10 +139,8 @@ hive admin join \
   --bind $HIVE_NODE2 \
   --cluster-bind $HIVE_NODE2 \
   --host $HIVE_NODE1:4432 \
-  --data-dir ~/hive/ \
-  --config-dir ~/hive/config/ \
-  --region us-east-1 \
-  --az us-east-1a
+  --region $AWS_REGION \
+  --az $AWS_AZ
 ```
 
 **Server 3 — Join the cluster (while init is running):**
@@ -148,10 +151,8 @@ hive admin join \
   --bind $HIVE_NODE3 \
   --cluster-bind $HIVE_NODE3 \
   --host $HIVE_NODE1:4432 \
-  --data-dir ~/hive/ \
-  --config-dir ~/hive/config/ \
-  --region us-east-1 \
-  --az us-east-1a
+  --region $AWS_REGION \
+  --az $AWS_AZ
 ```
 
 All three processes will exit with a cluster summary once formation is complete.
@@ -161,7 +162,7 @@ All three processes will exit with a cluster summary once formation is complete.
 Start services on **all servers**:
 
 ```bash
-hive start
+sudo systemctl start hive.target
 ```
 
 From any node, verify the cluster:
