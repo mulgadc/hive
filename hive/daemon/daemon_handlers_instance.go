@@ -275,7 +275,6 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		volumeInfos, err := d.instanceService.GenerateVolumes(runInstancesInput, instance)
 		if err != nil {
 			slog.Error("handleEC2RunInstances GenerateVolumes failed", "instanceId", instance.ID, "err", err)
-			d.resourceMgr.deallocate(instanceType)
 			d.markInstanceFailed(instance, "volume_preparation_failed")
 			continue
 		}
@@ -297,7 +296,6 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		err = d.LaunchInstance(instance)
 		if err != nil {
 			slog.Error("handleEC2RunInstances LaunchInstance failed", "instanceId", instance.ID, "err", err)
-			d.resourceMgr.deallocate(instanceType)
 			d.markInstanceFailed(instance, "launch_failed")
 			continue
 		}
@@ -411,6 +409,17 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 	d.Instances.Mu.Lock()
 	currentState := instance.Status
 	d.Instances.Mu.Unlock()
+
+	// If instance is already shutting-down and we're asked to terminate, treat
+	// as idempotent — the finalizeTermination goroutine is already cleaning up.
+	if isTerminate && currentState == vm.StateShuttingDown {
+		slog.Info("Instance already shutting down, terminate is idempotent", "instanceId", instance.ID)
+		if err := msg.Respond([]byte(`{}`)); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
+		return
+	}
+
 	if !vm.IsValidTransition(currentState, initialState) {
 		slog.Warn("Instance in incorrect state for "+strings.ToLower(action),
 			"instanceId", instance.ID, "currentState", string(currentState))

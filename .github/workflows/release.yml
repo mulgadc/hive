@@ -2,25 +2,28 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
 
 permissions:
   contents: write
 
 jobs:
   distro:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Hive
+        uses: actions/checkout@v6
         with:
           path: hive
 
-      - uses: actions/checkout@v4
+      - name: Checkout Predastore
+        uses: actions/checkout@v6
         with:
           repository: mulgadc/predastore
           path: predastore
 
-      - uses: actions/checkout@v4
+      - name: Checkout Viperblock
+        uses: actions/checkout@v6
         with:
           repository: mulgadc/viperblock
           path: viperblock

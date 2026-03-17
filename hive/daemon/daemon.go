@@ -1302,7 +1302,7 @@ func (d *Daemon) LoadState() error {
 func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId string) (*qmp.QMPResponse, error) {
 
 	// Confirm QMP client is initialized
-	if q.Encoder == nil || q.Decoder == nil {
+	if q == nil || q.Encoder == nil || q.Decoder == nil {
 		return nil, fmt.Errorf("QMP client is not initialized")
 	}
 
@@ -1724,7 +1724,9 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	return nil
 }
 
-// markInstanceFailed updates an instance status to indicate a failure during launch
+// markInstanceFailed updates an instance status to indicate a failure during launch,
+// then completes the termination lifecycle in the background so the instance
+// reaches terminated state and doesn't get stuck in shutting-down.
 func (d *Daemon) markInstanceFailed(instance *vm.VM, reason string) {
 	// Set state reason before transition (requires lock)
 	d.Instances.Mu.Lock()
@@ -1737,9 +1739,77 @@ func (d *Daemon) markInstanceFailed(instance *vm.VM, reason string) {
 
 	if err := d.TransitionState(instance, vm.StateShuttingDown); err != nil {
 		slog.Error("markInstanceFailed transition failed", "instanceId", instance.ID, "err", err)
+		// If the error was a write failure, the in-memory state is already
+		// shutting-down. Still proceed with finalization to avoid getting stuck.
+		if instance.Status != vm.StateShuttingDown {
+			return
+		}
 	}
 
 	slog.Info("Instance marked as failed", "instanceId", instance.ID, "reason", reason)
+
+	// Complete termination in the background — clean up any partially-created
+	// resources and transition to terminated so the instance doesn't get stuck
+	// in shutting-down indefinitely.
+	go d.finalizeTermination(instance)
+}
+
+// finalizeTermination completes the termination lifecycle for an instance already
+// in shutting-down state. It cleans up resources (processes, volumes, ENIs),
+// transitions to terminated, writes to the terminated KV bucket, and removes
+// the instance from local state.
+func (d *Daemon) finalizeTermination(instance *vm.VM) {
+	stopErr := d.stopInstance(map[string]*vm.VM{instance.ID: instance}, true)
+	if stopErr != nil {
+		slog.Error("Failed to cleanup failed instance", "err", stopErr, "id", instance.ID)
+		if err := d.TransitionState(instance, vm.StateError); err != nil {
+			slog.Error("Failed to transition to error state", "instanceId", instance.ID, "err", err)
+		}
+		return
+	}
+
+	d.Instances.Mu.Lock()
+	instance.LastNode = d.node
+	d.Instances.Mu.Unlock()
+
+	if err := d.TransitionState(instance, vm.StateTerminated); err != nil {
+		slog.Error("Failed to transition failed instance to terminated", "instanceId", instance.ID, "err", err)
+		return
+	}
+	slog.Info("Instance terminated (failed launch cleanup)", "id", instance.ID)
+
+	if d.jsManager != nil {
+		if err := d.jsManager.WriteTerminatedInstance(instance.ID, instance); err != nil {
+			slog.Error("Failed to write terminated instance to KV, keeping in local state for retry",
+				"instanceId", instance.ID, "err", err)
+			return
+		}
+	}
+
+	// Guard + delete: another handler may have reclaimed this instance.
+	d.Instances.Mu.Lock()
+	current, exists := d.Instances.VMS[instance.ID]
+	if !exists || current != instance {
+		d.Instances.Mu.Unlock()
+		slog.Info("Instance was reclaimed by another handler, skipping local cleanup",
+			"instanceId", instance.ID, "state", "terminated")
+		return
+	}
+	delete(d.Instances.VMS, instance.ID)
+	d.Instances.Mu.Unlock()
+
+	if err := d.WriteState(); err != nil {
+		slog.Error("Failed to persist state after terminating failed instance, re-adding to local map",
+			"instanceId", instance.ID, "err", err)
+		d.Instances.Mu.Lock()
+		if _, occupied := d.Instances.VMS[instance.ID]; !occupied {
+			d.Instances.VMS[instance.ID] = instance
+		}
+		d.Instances.Mu.Unlock()
+	} else {
+		slog.Info("Released failed instance ownership to KV",
+			"instanceId", instance.ID, "lastNode", d.node)
+	}
 }
 
 const pendingWatchdogInterval = 60 * time.Second
