@@ -50,10 +50,11 @@
     "@vitest/coverage-v8": "^4.1.0",
     "babel-plugin-react-compiler": "^1.0.0",
     "happy-dom": "^20.8.4",
-    "oxfmt": "^0.36.0",
+    "oxfmt": "^0.41.0",
     "oxlint": "^1.56.0",
     "oxlint-tsgolint": "^0.16.0",
     "typescript": "^5.9.3",
+    "ultracite": "7.3.2",
     "vite": "^8.0.0",
     "vitest": "^4.1.0"
   },
