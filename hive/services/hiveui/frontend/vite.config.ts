@@ -1,10 +1,11 @@
 /// <reference types="vitest/config" />
 import { fileURLToPath, URL } from "node:url"
 
+import babel from "@rolldown/plugin-babel"
 import tailwindcss from "@tailwindcss/vite"
 import { tanstackRouter } from "@tanstack/router-plugin/vite"
 import basicSsl from "@vitejs/plugin-basic-ssl"
-import react from "@vitejs/plugin-react"
+import react, { reactCompilerPreset } from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
 
 export default defineConfig({
@@ -26,10 +27,9 @@ export default defineConfig({
       target: "react",
       autoCodeSplitting: true,
     }),
-    react({
-      babel: {
-        plugins: ["babel-plugin-react-compiler"],
-      },
+    react(),
+    babel({
+      presets: [reactCompilerPreset()],
     }),
     tailwindcss(),
   ],
@@ -52,8 +52,8 @@ export default defineConfig({
         "src/routes/**/!(-components)/*.{ts,tsx}",
         "src/test/**",
         "src/**/*.test.*",
-        "src/routeTree.gen.ts",
         "src/main.tsx",
+        "src/routeTree.gen.ts",
       ],
       thresholds: {
         lines: 70,
