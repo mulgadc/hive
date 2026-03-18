@@ -1,0 +1,17 @@
+[Unit]
+Description=Spinifex NATS Message Bus
+PartOf=spinifex.target
+Before=spinifex-predastore.service spinifex-daemon.service spinifex-awsgw.service spinifex-vpcd.service
+
+[Service]
+Type=simple
+User=spinifex
+Group=spinifex
+ExecStart=/usr/local/bin/spx service nats start
+Restart=on-failure
+RestartSec=5
+OOMScoreAdjust=-500
+Environment=SPINIFEX_CONFIG_PATH=/etc/spinifex/nats/nats.conf
+
+[Install]
+WantedBy=spinifex.target

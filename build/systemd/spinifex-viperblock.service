@@ -1,0 +1,21 @@
+[Unit]
+Description=Spinifex Viperblock (Block Storage)
+PartOf=spinifex.target
+After=spinifex-nats.service spinifex-predastore.service
+Requires=spinifex-nats.service
+
+[Service]
+Type=simple
+User=spinifex
+Group=spinifex
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do nc -z 127.0.0.1 4222 && exit 0; sleep 1; done; exit 1'
+ExecStart=/usr/local/bin/spx service viperblock start
+Restart=on-failure
+RestartSec=5
+OOMScoreAdjust=-500
+EnvironmentFile=/etc/spinifex/systemd.env
+Environment=SPINIFEX_CONFIG_PATH=/etc/spinifex/spinifex.toml
+Environment=SPINIFEX_BASE_DIR=/var/lib/spinifex/viperblock/
+
+[Install]
+WantedBy=spinifex.target

@@ -1,0 +1,8 @@
+[Unit]
+Description=Spinifex Infrastructure Platform
+After=network-online.target
+Wants=network-online.target
+Wants=spinifex-nats.service spinifex-predastore.service spinifex-viperblock.service spinifex-daemon.service spinifex-awsgw.service spinifex-vpcd.service spinifex-ui.service
+
+[Install]
+WantedBy=multi-user.target
