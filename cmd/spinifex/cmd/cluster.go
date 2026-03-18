@@ -77,7 +77,7 @@ func runClusterShutdown(cmd *cobra.Command, args []string) {
 
 	// Execute phases sequentially (except INFRA which is fire-and-forget)
 	for _, phase := range phases {
-		topic := "hive.cluster.shutdown." + phase
+		topic := "spinifex.cluster.shutdown." + phase
 		req := daemon.ShutdownRequest{
 			Phase:   phase,
 			Force:   force,
@@ -106,7 +106,7 @@ func runClusterShutdown(cmd *cobra.Command, args []string) {
 		// For DRAIN phase, subscribe to progress updates
 		var progressSub *nats.Subscription
 		if phase == "drain" {
-			progressSub, err = nc.Subscribe("hive.cluster.shutdown.progress", func(msg *nats.Msg) {
+			progressSub, err = nc.Subscribe("spinifex.cluster.shutdown.progress", func(msg *nats.Msg) {
 				var progress daemon.ShutdownProgress
 				if err := json.Unmarshal(msg.Data, &progress); err != nil {
 					return

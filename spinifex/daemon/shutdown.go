@@ -298,7 +298,7 @@ func (d *Daemon) publishShutdownProgress(phase string, total, remaining int) {
 		slog.Error("Failed to marshal shutdown progress", "error", err)
 		return
 	}
-	if err := d.natsConn.Publish("hive.cluster.shutdown.progress", data); err != nil {
+	if err := d.natsConn.Publish("spinifex.cluster.shutdown.progress", data); err != nil {
 		slog.Warn("Failed to publish shutdown progress", "error", err)
 	}
 }

@@ -17,7 +17,7 @@ func TestStartInstances_Success(t *testing.T) {
 	instanceID := "i-0123456789abcdef0"
 
 	// Mock subscriber for the ec2.start queue group topic
-	nc.QueueSubscribe("ec2.start", "hive-workers", func(msg *nats.Msg) {
+	nc.QueueSubscribe("ec2.start", "spinifex-workers", func(msg *nats.Msg) {
 		var req startStoppedInstanceRequest
 		err := json.Unmarshal(msg.Data, &req)
 		require.NoError(t, err)
@@ -51,7 +51,7 @@ func TestStartInstances_MultipleInstances(t *testing.T) {
 	ids := []string{"i-001", "i-002", "i-003"}
 
 	// Single subscriber handles all start requests via queue group
-	nc.QueueSubscribe("ec2.start", "hive-workers", func(msg *nats.Msg) {
+	nc.QueueSubscribe("ec2.start", "spinifex-workers", func(msg *nats.Msg) {
 		var req startStoppedInstanceRequest
 		json.Unmarshal(msg.Data, &req)
 		msg.Respond([]byte(`{"status":"running","instanceId":"` + req.InstanceID + `"}`))
@@ -89,7 +89,7 @@ func TestStartInstances_NilInstanceIdSkipped(t *testing.T) {
 	_, nc := startTestNATSServer(t)
 
 	instanceID := "i-valid"
-	nc.QueueSubscribe("ec2.start", "hive-workers", func(msg *nats.Msg) {
+	nc.QueueSubscribe("ec2.start", "spinifex-workers", func(msg *nats.Msg) {
 		msg.Respond([]byte(`{"status":"running","instanceId":"` + instanceID + `"}`))
 	})
 
@@ -138,7 +138,7 @@ func TestStartInstances_MixedSuccessAndFailure(t *testing.T) {
 	badID := "i-bad"
 
 	// Subscribe to ec2.start but only respond for goodID
-	nc.QueueSubscribe("ec2.start", "hive-workers", func(msg *nats.Msg) {
+	nc.QueueSubscribe("ec2.start", "spinifex-workers", func(msg *nats.Msg) {
 		var req startStoppedInstanceRequest
 		json.Unmarshal(msg.Data, &req)
 		if req.InstanceID == goodID {

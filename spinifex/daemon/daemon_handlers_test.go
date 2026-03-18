@@ -210,7 +210,7 @@ func TestHandleEC2CreateKeyPair_RoundTrip(t *testing.T) {
 
 	daemon := createFullTestDaemon(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.CreateKeyPair", "hive-workers", daemon.handleEC2CreateKeyPair)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.CreateKeyPair", "spinifex-workers", daemon.handleEC2CreateKeyPair)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -235,7 +235,7 @@ func TestHandleEC2CreateTags_RoundTrip(t *testing.T) {
 
 	daemon := createFullTestDaemon(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.CreateTags", "hive-workers", daemon.handleEC2CreateTags)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.CreateTags", "spinifex-workers", daemon.handleEC2CreateTags)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -260,7 +260,7 @@ func TestHandleEC2DescribeImages_RoundTrip(t *testing.T) {
 
 	daemon := createFullTestDaemon(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeImages", "hive-workers", daemon.handleEC2DescribeImages)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeImages", "spinifex-workers", daemon.handleEC2DescribeImages)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -280,7 +280,7 @@ func TestHandleEC2DescribeVolumes_RoundTrip(t *testing.T) {
 
 	daemon := createFullTestDaemon(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeVolumes", "hive-workers", daemon.handleEC2DescribeVolumes)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeVolumes", "spinifex-workers", daemon.handleEC2DescribeVolumes)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -300,7 +300,7 @@ func TestHandleEC2DescribeKeyPairs_RoundTrip(t *testing.T) {
 
 	daemon := createFullTestDaemon(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeKeyPairs", "hive-workers", daemon.handleEC2DescribeKeyPairs)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeKeyPairs", "spinifex-workers", daemon.handleEC2DescribeKeyPairs)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -322,7 +322,7 @@ func TestHandleHealthCheck(t *testing.T) {
 
 	daemon := createTestDaemon(t, natsURL)
 
-	topic := fmt.Sprintf("hive.admin.%s.health", daemon.node)
+	topic := fmt.Sprintf("spinifex.admin.%s.health", daemon.node)
 	sub, err := daemon.natsConn.Subscribe(topic, daemon.handleHealthCheck)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
@@ -358,11 +358,11 @@ func TestHandleNodeDiscover(t *testing.T) {
 
 	daemon := createTestDaemon(t, natsURL)
 
-	sub, err := daemon.natsConn.Subscribe("hive.nodes.discover", daemon.handleNodeDiscover)
+	sub, err := daemon.natsConn.Subscribe("spinifex.nodes.discover", daemon.handleNodeDiscover)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	reply, err := daemon.natsConn.Request("hive.nodes.discover", nil, 5*time.Second)
+	reply, err := daemon.natsConn.Request("spinifex.nodes.discover", nil, 5*time.Second)
 	require.NoError(t, err)
 	require.NotNil(t, reply)
 
@@ -380,7 +380,7 @@ func TestHandleEC2RunInstances_InvalidAMI(t *testing.T) {
 
 	daemon := createFullTestDaemon(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", daemon.handleEC2RunInstances)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "spinifex-workers", daemon.handleEC2RunInstances)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -406,7 +406,7 @@ func TestHandleEC2RunInstances_InvalidKeyPair(t *testing.T) {
 	// Seed a valid AMI so AMI validation passes
 	seedTestAMI(t, memStore, daemon.config.Predastore.Bucket, "ami-test123")
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", daemon.handleEC2RunInstances)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "spinifex-workers", daemon.handleEC2RunInstances)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -450,7 +450,7 @@ func TestHandleEC2RunInstances_ValidKeyPairPassesValidation(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", daemon.handleEC2RunInstances)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "spinifex-workers", daemon.handleEC2RunInstances)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -475,7 +475,7 @@ func TestHandleEC2RunInstances_EmptyKeyNameSkipsValidation(t *testing.T) {
 	daemon, memStore := createFullTestDaemonWithStore(t, natsURL)
 	seedTestAMI(t, memStore, daemon.config.Predastore.Bucket, "ami-test789")
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", daemon.handleEC2RunInstances)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "spinifex-workers", daemon.handleEC2RunInstances)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -511,7 +511,7 @@ func TestHandleEC2RunInstances_ServiceErrorPropagated(t *testing.T) {
 		objectstore.NewMemoryObjectStore(),
 	)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", daemon.handleEC2RunInstances)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "spinifex-workers", daemon.handleEC2RunInstances)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -836,7 +836,7 @@ func TestHandleEC2ModifyVolume_MalformedInput(t *testing.T) {
 
 	daemon := createFullTestDaemon(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyVolume", "hive-workers", daemon.handleEC2ModifyVolume)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyVolume", "spinifex-workers", daemon.handleEC2ModifyVolume)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -854,7 +854,7 @@ func TestHandleEC2ModifyVolume_VolumeNotFound(t *testing.T) {
 
 	daemon := createFullTestDaemon(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyVolume", "hive-workers", daemon.handleEC2ModifyVolume)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyVolume", "spinifex-workers", daemon.handleEC2ModifyVolume)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -880,7 +880,7 @@ func TestHandleEC2GetEbsEncryptionByDefault(t *testing.T) {
 
 	daemon := createFullTestDaemon(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.GetEbsEncryptionByDefault", "hive-workers", daemon.handleEC2GetEbsEncryptionByDefault)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.GetEbsEncryptionByDefault", "spinifex-workers", daemon.handleEC2GetEbsEncryptionByDefault)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -900,7 +900,7 @@ func TestHandleEC2GetSerialConsoleAccessStatus(t *testing.T) {
 
 	daemon := createFullTestDaemon(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.GetSerialConsoleAccessStatus", "hive-workers", daemon.handleEC2GetSerialConsoleAccessStatus)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.GetSerialConsoleAccessStatus", "spinifex-workers", daemon.handleEC2GetSerialConsoleAccessStatus)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -920,7 +920,7 @@ func TestHandleEC2EnableEbsEncryptionByDefault(t *testing.T) {
 
 	daemon := createFullTestDaemon(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.EnableEbsEncryptionByDefault", "hive-workers", daemon.handleEC2EnableEbsEncryptionByDefault)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.EnableEbsEncryptionByDefault", "spinifex-workers", daemon.handleEC2EnableEbsEncryptionByDefault)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -941,7 +941,7 @@ func TestHandleEC2DisableEbsEncryptionByDefault(t *testing.T) {
 
 	daemon := createFullTestDaemon(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.DisableEbsEncryptionByDefault", "hive-workers", daemon.handleEC2DisableEbsEncryptionByDefault)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DisableEbsEncryptionByDefault", "spinifex-workers", daemon.handleEC2DisableEbsEncryptionByDefault)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -962,7 +962,7 @@ func TestHandleEC2EnableSerialConsoleAccess(t *testing.T) {
 
 	daemon := createFullTestDaemon(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.EnableSerialConsoleAccess", "hive-workers", daemon.handleEC2EnableSerialConsoleAccess)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.EnableSerialConsoleAccess", "spinifex-workers", daemon.handleEC2EnableSerialConsoleAccess)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -983,7 +983,7 @@ func TestHandleEC2DisableSerialConsoleAccess(t *testing.T) {
 
 	daemon := createFullTestDaemon(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.DisableSerialConsoleAccess", "hive-workers", daemon.handleEC2DisableSerialConsoleAccess)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DisableSerialConsoleAccess", "spinifex-workers", daemon.handleEC2DisableSerialConsoleAccess)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -1164,7 +1164,7 @@ func TestHandleEC2StartStoppedInstance_MissingInstance(t *testing.T) {
 
 	daemon := createFullTestDaemonWithJetStream(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.start", "hive-workers", daemon.handleEC2StartStoppedInstance)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.start", "spinifex-workers", daemon.handleEC2StartStoppedInstance)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -1184,7 +1184,7 @@ func TestHandleEC2StartStoppedInstance_MissingInstanceID(t *testing.T) {
 
 	daemon := createFullTestDaemonWithJetStream(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.start", "hive-workers", daemon.handleEC2StartStoppedInstance)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.start", "spinifex-workers", daemon.handleEC2StartStoppedInstance)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -1214,7 +1214,7 @@ func TestHandleEC2StartStoppedInstance_NotStoppedState(t *testing.T) {
 	err := daemon.jsManager.WriteStoppedInstance(runningVM.ID, runningVM)
 	require.NoError(t, err)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.start", "hive-workers", daemon.handleEC2StartStoppedInstance)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.start", "spinifex-workers", daemon.handleEC2StartStoppedInstance)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -1257,7 +1257,7 @@ func TestHandleEC2DescribeStoppedInstances_ReturnsStoppedInstances(t *testing.T)
 	err := daemon.jsManager.WriteStoppedInstance(stoppedVM.ID, stoppedVM)
 	require.NoError(t, err)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeStoppedInstances", "hive-workers", daemon.handleEC2DescribeStoppedInstances)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeStoppedInstances", "spinifex-workers", daemon.handleEC2DescribeStoppedInstances)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -1311,7 +1311,7 @@ func TestHandleEC2DescribeStoppedInstances_WithFilter(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeStoppedInstances", "hive-workers", daemon.handleEC2DescribeStoppedInstances)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeStoppedInstances", "spinifex-workers", daemon.handleEC2DescribeStoppedInstances)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -1354,7 +1354,7 @@ func TestHandleEC2TerminateStoppedInstance_MissingInstanceID(t *testing.T) {
 
 	daemon := createFullTestDaemonWithJetStream(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.terminate", "hive-workers", daemon.handleEC2TerminateStoppedInstance)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.terminate", "spinifex-workers", daemon.handleEC2TerminateStoppedInstance)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -1373,7 +1373,7 @@ func TestHandleEC2TerminateStoppedInstance_MissingInstance(t *testing.T) {
 
 	daemon := createFullTestDaemonWithJetStream(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.terminate", "hive-workers", daemon.handleEC2TerminateStoppedInstance)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.terminate", "spinifex-workers", daemon.handleEC2TerminateStoppedInstance)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -1402,7 +1402,7 @@ func TestHandleEC2TerminateStoppedInstance_NotStoppedState(t *testing.T) {
 	err := daemon.jsManager.WriteStoppedInstance(runningVM.ID, runningVM)
 	require.NoError(t, err)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.terminate", "hive-workers", daemon.handleEC2TerminateStoppedInstance)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.terminate", "spinifex-workers", daemon.handleEC2TerminateStoppedInstance)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -1443,7 +1443,7 @@ func TestHandleEC2TerminateStoppedInstance_Success(t *testing.T) {
 	err := daemon.jsManager.WriteStoppedInstance(stoppedVM.ID, stoppedVM)
 	require.NoError(t, err)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.terminate", "hive-workers", daemon.handleEC2TerminateStoppedInstance)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.terminate", "spinifex-workers", daemon.handleEC2TerminateStoppedInstance)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -1649,7 +1649,7 @@ func TestHandleEC2ModifyInstanceAttribute_ChangeInstanceType(t *testing.T) {
 
 	daemon := createFullTestDaemonWithJetStream(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", daemon.handleEC2ModifyInstanceAttribute)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "spinifex-workers", daemon.handleEC2ModifyInstanceAttribute)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -1691,7 +1691,7 @@ func TestHandleEC2ModifyInstanceAttribute_ChangeUserData(t *testing.T) {
 
 	daemon := createFullTestDaemonWithJetStream(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", daemon.handleEC2ModifyInstanceAttribute)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "spinifex-workers", daemon.handleEC2ModifyInstanceAttribute)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -1737,7 +1737,7 @@ func TestHandleEC2ModifyInstanceAttribute_InstanceNotFound(t *testing.T) {
 
 	daemon := createFullTestDaemonWithJetStream(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", daemon.handleEC2ModifyInstanceAttribute)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "spinifex-workers", daemon.handleEC2ModifyInstanceAttribute)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -1760,7 +1760,7 @@ func TestHandleEC2ModifyInstanceAttribute_NotStopped(t *testing.T) {
 
 	daemon := createFullTestDaemonWithJetStream(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", daemon.handleEC2ModifyInstanceAttribute)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "spinifex-workers", daemon.handleEC2ModifyInstanceAttribute)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -1794,7 +1794,7 @@ func TestHandleEC2ModifyInstanceAttribute_ClearsStateReason(t *testing.T) {
 
 	daemon := createFullTestDaemonWithJetStream(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", daemon.handleEC2ModifyInstanceAttribute)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "spinifex-workers", daemon.handleEC2ModifyInstanceAttribute)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -1841,7 +1841,7 @@ func TestHandleEC2ModifyInstanceAttribute_InvalidTypeAccepted(t *testing.T) {
 
 	daemon := createFullTestDaemonWithJetStream(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", daemon.handleEC2ModifyInstanceAttribute)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "spinifex-workers", daemon.handleEC2ModifyInstanceAttribute)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -1884,7 +1884,7 @@ func TestHandleEC2ModifyInstanceAttribute_MissingInstanceID(t *testing.T) {
 
 	daemon := createFullTestDaemonWithJetStream(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", daemon.handleEC2ModifyInstanceAttribute)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "spinifex-workers", daemon.handleEC2ModifyInstanceAttribute)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -1904,7 +1904,7 @@ func TestHandleEC2ModifyInstanceAttribute_InvalidJSON(t *testing.T) {
 
 	daemon := createFullTestDaemonWithJetStream(t, natsURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", daemon.handleEC2ModifyInstanceAttribute)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "spinifex-workers", daemon.handleEC2ModifyInstanceAttribute)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -2012,7 +2012,7 @@ func TestDelegateHandlers_RoundTrip(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "hive-workers", tt.handler)
+			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "spinifex-workers", tt.handler)
 			require.NoError(t, err)
 			defer sub.Unsubscribe()
 
@@ -2072,11 +2072,11 @@ func TestHandleNodeStatus(t *testing.T) {
 	daemon.Instances.VMS["i-stop-1"] = &vm.VM{ID: "i-stop-1", Status: vm.StateStopped}
 	daemon.Instances.Mu.Unlock()
 
-	sub, err := daemon.natsConn.Subscribe("hive.node.status.test", daemon.handleNodeStatus)
+	sub, err := daemon.natsConn.Subscribe("spinifex.node.status.test", daemon.handleNodeStatus)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	reply, err := daemon.natsConn.Request("hive.node.status.test", nil, 5*time.Second)
+	reply, err := daemon.natsConn.Request("spinifex.node.status.test", nil, 5*time.Second)
 	require.NoError(t, err)
 
 	var resp types.NodeStatusResponse
@@ -2098,11 +2098,11 @@ func TestHandleNodeStatus_NoVMs(t *testing.T) {
 	daemon := createTestDaemon(t, sharedNATSURL)
 	daemon.config.Daemon.Host = "192.168.1.1:4432"
 
-	sub, err := daemon.natsConn.Subscribe("hive.node.status.empty", daemon.handleNodeStatus)
+	sub, err := daemon.natsConn.Subscribe("spinifex.node.status.empty", daemon.handleNodeStatus)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	reply, err := daemon.natsConn.Request("hive.node.status.empty", nil, 5*time.Second)
+	reply, err := daemon.natsConn.Request("spinifex.node.status.empty", nil, 5*time.Second)
 	require.NoError(t, err)
 
 	var resp types.NodeStatusResponse
@@ -2139,11 +2139,11 @@ func TestHandleNodeVMs(t *testing.T) {
 	}
 	daemon.Instances.Mu.Unlock()
 
-	sub, err := daemon.natsConn.Subscribe("hive.node.vms.test", daemon.handleNodeVMs)
+	sub, err := daemon.natsConn.Subscribe("spinifex.node.vms.test", daemon.handleNodeVMs)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	reply, err := daemon.natsConn.Request("hive.node.vms.test", nil, 5*time.Second)
+	reply, err := daemon.natsConn.Request("spinifex.node.vms.test", nil, 5*time.Second)
 	require.NoError(t, err)
 
 	var resp types.NodeVMsResponse
@@ -2176,11 +2176,11 @@ func TestHandleNodeVMs_Empty(t *testing.T) {
 	daemon := createTestDaemon(t, sharedNATSURL)
 	daemon.config.Daemon.Host = "10.0.0.5:4432"
 
-	sub, err := daemon.natsConn.Subscribe("hive.node.vms.empty", daemon.handleNodeVMs)
+	sub, err := daemon.natsConn.Subscribe("spinifex.node.vms.empty", daemon.handleNodeVMs)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	reply, err := daemon.natsConn.Request("hive.node.vms.empty", nil, 5*time.Second)
+	reply, err := daemon.natsConn.Request("spinifex.node.vms.empty", nil, 5*time.Second)
 	require.NoError(t, err)
 
 	var resp types.NodeVMsResponse
@@ -2203,11 +2203,11 @@ func TestHandleNodeVMs_UnknownInstanceType(t *testing.T) {
 	}
 	daemon.Instances.Mu.Unlock()
 
-	sub, err := daemon.natsConn.Subscribe("hive.node.vms.unknown", daemon.handleNodeVMs)
+	sub, err := daemon.natsConn.Subscribe("spinifex.node.vms.unknown", daemon.handleNodeVMs)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
-	reply, err := daemon.natsConn.Request("hive.node.vms.unknown", nil, 5*time.Second)
+	reply, err := daemon.natsConn.Request("spinifex.node.vms.unknown", nil, 5*time.Second)
 	require.NoError(t, err)
 
 	var resp types.NodeVMsResponse
@@ -2326,7 +2326,7 @@ func TestDelegateHandlers_VPC(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "hive-workers", tt.handler)
+			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "spinifex-workers", tt.handler)
 			require.NoError(t, err)
 			defer sub.Unsubscribe()
 
@@ -2393,7 +2393,7 @@ func TestDelegateHandlers_IGW(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "hive-workers", tt.handler)
+			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "spinifex-workers", tt.handler)
 			require.NoError(t, err)
 			defer sub.Unsubscribe()
 
@@ -2414,7 +2414,7 @@ func TestDelegateHandlers_IGW(t *testing.T) {
 func TestHandleEC2CreateVpc_SuccessPath(t *testing.T) {
 	daemon := createVPCTestDaemon(t)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.CreateVpc", "hive-workers", daemon.handleEC2CreateVpc)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.CreateVpc", "spinifex-workers", daemon.handleEC2CreateVpc)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -2435,11 +2435,11 @@ func TestHandleEC2CreateVpc_SuccessPath(t *testing.T) {
 func TestHandleEC2CreateAndDescribeVpc_RoundTrip(t *testing.T) {
 	daemon := createVPCTestDaemon(t)
 
-	createSub, err := daemon.natsConn.QueueSubscribe("ec2.CreateVpc", "hive-workers", daemon.handleEC2CreateVpc)
+	createSub, err := daemon.natsConn.QueueSubscribe("ec2.CreateVpc", "spinifex-workers", daemon.handleEC2CreateVpc)
 	require.NoError(t, err)
 	defer createSub.Unsubscribe()
 
-	describeSub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeVpcs", "hive-workers", daemon.handleEC2DescribeVpcs)
+	describeSub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeVpcs", "spinifex-workers", daemon.handleEC2DescribeVpcs)
 	require.NoError(t, err)
 	defer describeSub.Unsubscribe()
 
@@ -2475,7 +2475,7 @@ func TestHandleEC2CreateAndDescribeVpc_RoundTrip(t *testing.T) {
 func TestHandleEC2CreateInternetGateway_SuccessPath(t *testing.T) {
 	daemon := createVPCTestDaemon(t)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.CreateInternetGateway", "hive-workers", daemon.handleEC2CreateInternetGateway)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.CreateInternetGateway", "spinifex-workers", daemon.handleEC2CreateInternetGateway)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -2495,11 +2495,11 @@ func TestHandleEC2CreateInternetGateway_SuccessPath(t *testing.T) {
 func TestHandleEC2CreateSubnet_SuccessPath(t *testing.T) {
 	daemon := createVPCTestDaemon(t)
 
-	createVpcSub, err := daemon.natsConn.QueueSubscribe("ec2.CreateVpc", "hive-workers", daemon.handleEC2CreateVpc)
+	createVpcSub, err := daemon.natsConn.QueueSubscribe("ec2.CreateVpc", "spinifex-workers", daemon.handleEC2CreateVpc)
 	require.NoError(t, err)
 	defer createVpcSub.Unsubscribe()
 
-	createSubnetSub, err := daemon.natsConn.QueueSubscribe("ec2.CreateSubnet", "hive-workers", daemon.handleEC2CreateSubnet)
+	createSubnetSub, err := daemon.natsConn.QueueSubscribe("ec2.CreateSubnet", "spinifex-workers", daemon.handleEC2CreateSubnet)
 	require.NoError(t, err)
 	defer createSubnetSub.Unsubscribe()
 
@@ -2585,7 +2585,7 @@ func TestDelegateHandlers_EIGW(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "hive-workers", tt.handler)
+			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "spinifex-workers", tt.handler)
 			require.NoError(t, err)
 			defer sub.Unsubscribe()
 
@@ -2636,7 +2636,7 @@ func TestHandleEC2ModifyVolume_Success(t *testing.T) {
 	require.NoError(t, err)
 	defer syncSub.Unsubscribe()
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyVolume", "hive-workers", daemon.handleEC2ModifyVolume)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyVolume", "spinifex-workers", daemon.handleEC2ModifyVolume)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -2696,7 +2696,7 @@ func TestHandleEC2TerminateStoppedInstance_WithVolumes(t *testing.T) {
 	err = daemon.jsManager.WriteStoppedInstance(stoppedVM.ID, stoppedVM)
 	require.NoError(t, err)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.terminate", "hive-workers", daemon.handleEC2TerminateStoppedInstance)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.terminate", "spinifex-workers", daemon.handleEC2TerminateStoppedInstance)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -2720,7 +2720,7 @@ func TestHandleEC2TerminateStoppedInstance_WithVolumes(t *testing.T) {
 func TestHandleEC2DescribeInstanceTypes_CapacityFilter(t *testing.T) {
 	daemon := createFullTestDaemon(t, sharedNATSURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeInstanceTypes", "hive-workers", daemon.handleEC2DescribeInstanceTypes)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeInstanceTypes", "spinifex-workers", daemon.handleEC2DescribeInstanceTypes)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -2747,7 +2747,7 @@ func TestHandleEC2DescribeInstanceTypes_CapacityFilter(t *testing.T) {
 func TestHandleEC2DescribeInstanceTypes_NoFilter(t *testing.T) {
 	daemon := createFullTestDaemon(t, sharedNATSURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeInstanceTypes.nofilter", "hive-workers", daemon.handleEC2DescribeInstanceTypes)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeInstanceTypes.nofilter", "spinifex-workers", daemon.handleEC2DescribeInstanceTypes)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -2782,7 +2782,7 @@ func TestHandleEC2StartStoppedInstance_InstanceTypeNotAvailable(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = daemon.jsManager.DeleteStoppedInstance(stoppedVM.ID) })
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.start", "hive-workers", daemon.handleEC2StartStoppedInstance)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.start", "spinifex-workers", daemon.handleEC2StartStoppedInstance)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -3272,7 +3272,7 @@ func TestDetachVolume_DeviceMismatch(t *testing.T) {
 func TestHandleEC2RunInstances_InsufficientCapacity(t *testing.T) {
 	daemon := createFullTestDaemon(t, sharedNATSURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "hive-workers", daemon.handleEC2RunInstances)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances", "spinifex-workers", daemon.handleEC2RunInstances)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -3296,7 +3296,7 @@ func TestHandleEC2RunInstances_InsufficientCapacity(t *testing.T) {
 func TestHandleEC2RunInstances_UnsupportedInstanceType(t *testing.T) {
 	daemon := createFullTestDaemon(t, sharedNATSURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances.badtype", "hive-workers", daemon.handleEC2RunInstances)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances.badtype", "spinifex-workers", daemon.handleEC2RunInstances)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -3319,7 +3319,7 @@ func TestHandleEC2RunInstances_UnsupportedInstanceType(t *testing.T) {
 func TestHandleEC2RunInstances_MalformedInput(t *testing.T) {
 	daemon := createFullTestDaemon(t, sharedNATSURL)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances.bad", "hive-workers", daemon.handleEC2RunInstances)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.RunInstances.bad", "spinifex-workers", daemon.handleEC2RunInstances)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -3374,7 +3374,7 @@ func TestHandleEC2DescribeTerminatedInstances_ReturnsTerminatedInstances(t *test
 	err := daemon.jsManager.WriteTerminatedInstance(terminatedVM.ID, terminatedVM)
 	require.NoError(t, err)
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeTerminatedInstances", "hive-workers", daemon.handleEC2DescribeTerminatedInstances)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeTerminatedInstances", "spinifex-workers", daemon.handleEC2DescribeTerminatedInstances)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -3423,7 +3423,7 @@ func TestHandleEC2DescribeTerminatedInstances_WithFilter(t *testing.T) {
 		require.NoError(t, daemon.jsManager.WriteTerminatedInstance(v.ID, v))
 	}
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeTerminatedInstances", "hive-workers", daemon.handleEC2DescribeTerminatedInstances)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeTerminatedInstances", "spinifex-workers", daemon.handleEC2DescribeTerminatedInstances)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 
@@ -3459,7 +3459,7 @@ func TestHandleEC2TerminateStoppedInstance_WritesToTerminatedKV(t *testing.T) {
 	}
 	require.NoError(t, daemon.jsManager.WriteStoppedInstance(stoppedVM.ID, stoppedVM))
 
-	sub, err := daemon.natsConn.QueueSubscribe("ec2.terminate", "hive-workers", daemon.handleEC2TerminateStoppedInstance)
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.terminate", "spinifex-workers", daemon.handleEC2TerminateStoppedInstance)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 

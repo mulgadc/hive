@@ -174,7 +174,7 @@ func TestTerminateInstances_StoppedInstanceFallback(t *testing.T) {
 
 	// No ec2.cmd.<id> subscriber — simulate stopped instance with no daemon owning it.
 	// Subscribe to ec2.terminate to handle the fallback.
-	nc.QueueSubscribe("ec2.terminate", "hive-workers", func(msg *nats.Msg) {
+	nc.QueueSubscribe("ec2.terminate", "spinifex-workers", func(msg *nats.Msg) {
 		var req terminateStoppedInstanceRequest
 		json.Unmarshal(msg.Data, &req)
 		assert.Equal(t, instanceID, req.InstanceID)
@@ -210,7 +210,7 @@ func TestTerminateInstances_MixedRunningAndStopped(t *testing.T) {
 	})
 
 	// Stopped instance: no ec2.cmd subscriber, but ec2.terminate responds
-	nc.QueueSubscribe("ec2.terminate", "hive-workers", func(msg *nats.Msg) {
+	nc.QueueSubscribe("ec2.terminate", "spinifex-workers", func(msg *nats.Msg) {
 		var req terminateStoppedInstanceRequest
 		json.Unmarshal(msg.Data, &req)
 		msg.Respond([]byte(`{"status":"terminated","instanceId":"` + req.InstanceID + `"}`))

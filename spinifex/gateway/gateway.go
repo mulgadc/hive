@@ -434,7 +434,7 @@ func (gw *GatewayConfig) DiscoverActiveNodes() int {
 	defer sub.Unsubscribe()
 
 	// Publish discovery request to all nodes
-	err = gw.NATSConn.PublishRequest("hive.nodes.discover", inbox, []byte("{}"))
+	err = gw.NATSConn.PublishRequest("spinifex.nodes.discover", inbox, []byte("{}"))
 	if err != nil {
 		slog.Error("DiscoverActiveNodes: Failed to publish request", "err", err)
 		return gw.ExpectedNodes

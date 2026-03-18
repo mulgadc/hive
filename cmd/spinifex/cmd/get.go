@@ -154,7 +154,7 @@ func runGetNodes(cmd *cobra.Command, args []string) {
 	defer nc.Close()
 
 	timeout, _ := cmd.Flags().GetDuration("timeout")
-	responses, err := collectResponses(nc, "hive.node.status", timeout)
+	responses, err := collectResponses(nc, "spinifex.node.status", timeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -228,7 +228,7 @@ func runGetVMs(cmd *cobra.Command, args []string) {
 	defer nc.Close()
 
 	timeout, _ := cmd.Flags().GetDuration("timeout")
-	responses, err := collectResponses(nc, "hive.node.vms", timeout)
+	responses, err := collectResponses(nc, "spinifex.node.vms", timeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

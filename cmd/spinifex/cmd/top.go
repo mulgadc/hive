@@ -56,7 +56,7 @@ func runTopNodes(cmd *cobra.Command, args []string) {
 	defer nc.Close()
 
 	timeout, _ := cmd.Flags().GetDuration("timeout")
-	responses, err := collectResponses(nc, "hive.node.status", timeout)
+	responses, err := collectResponses(nc, "spinifex.node.status", timeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

@@ -227,7 +227,7 @@ func TestHandleEC2RunInstances_MessageParsing(t *testing.T) {
 			daemon := createFullTestDaemon(t, natsURL)
 
 			// Subscribe to the ec2.launch topic with the handler
-			sub, err := daemon.natsConn.QueueSubscribe("ec2.launch", "hive-workers", daemon.handleEC2RunInstances)
+			sub, err := daemon.natsConn.QueueSubscribe("ec2.launch", "spinifex-workers", daemon.handleEC2RunInstances)
 			require.NoError(t, err, "Failed to subscribe to ec2.launch")
 			defer sub.Unsubscribe()
 
@@ -306,7 +306,7 @@ func TestHandleEC2RunInstances_ResourceManagement(t *testing.T) {
 
 			daemon := createTestDaemon(t, natsURL)
 
-			sub, err := daemon.natsConn.QueueSubscribe("ec2.launch", "hive-workers", daemon.handleEC2RunInstances)
+			sub, err := daemon.natsConn.QueueSubscribe("ec2.launch", "spinifex-workers", daemon.handleEC2RunInstances)
 			require.NoError(t, err)
 			defer sub.Unsubscribe()
 
@@ -1310,7 +1310,7 @@ func TestRunInstances_CountValidation(t *testing.T) {
 	seedTestAMI(t, memStore, daemon.config.Predastore.Bucket, "ami-test")
 
 	// Subscribe to the per-instance-type topic (matches production routing)
-	sub, err := daemon.natsConn.QueueSubscribe(topic, "hive-workers", daemon.handleEC2RunInstances)
+	sub, err := daemon.natsConn.QueueSubscribe(topic, "spinifex-workers", daemon.handleEC2RunInstances)
 	require.NoError(t, err)
 	defer sub.Unsubscribe()
 

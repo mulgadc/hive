@@ -5,7 +5,7 @@ type NodeDiscoverResponse struct {
 	Node string `json:"node"`
 }
 
-// NodeStatusResponse is returned by the hive.node.status NATS topic (fan-out).
+// NodeStatusResponse is returned by the spinifex.node.status NATS topic (fan-out).
 type NodeStatusResponse struct {
 	Node          string            `json:"node"`
 	Status        string            `json:"status"`
@@ -40,7 +40,7 @@ type VMInfo struct {
 	LaunchTime   int64   `json:"launch_time"`
 }
 
-// NodeVMsResponse is returned by the hive.node.vms NATS topic (fan-out).
+// NodeVMsResponse is returned by the spinifex.node.vms NATS topic (fan-out).
 type NodeVMsResponse struct {
 	Node string   `json:"node"`
 	Host string   `json:"host"`

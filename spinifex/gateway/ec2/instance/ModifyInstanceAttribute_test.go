@@ -100,7 +100,7 @@ func TestValidateModifyInstanceAttributeInput_ValidUserData(t *testing.T) {
 func TestModifyInstanceAttribute_Success(t *testing.T) {
 	_, nc := startTestNATSServer(t)
 
-	nc.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", func(msg *nats.Msg) {
+	nc.QueueSubscribe("ec2.ModifyInstanceAttribute", "spinifex-workers", func(msg *nats.Msg) {
 		var input ec2.ModifyInstanceAttributeInput
 		err := json.Unmarshal(msg.Data, &input)
 		require.NoError(t, err)
@@ -120,7 +120,7 @@ func TestModifyInstanceAttribute_Success(t *testing.T) {
 func TestModifyInstanceAttribute_DaemonError(t *testing.T) {
 	_, nc := startTestNATSServer(t)
 
-	nc.QueueSubscribe("ec2.ModifyInstanceAttribute", "hive-workers", func(msg *nats.Msg) {
+	nc.QueueSubscribe("ec2.ModifyInstanceAttribute", "spinifex-workers", func(msg *nats.Msg) {
 		msg.Respond([]byte(`{"Code":"InvalidInstanceID.NotFound"}`))
 	})
 

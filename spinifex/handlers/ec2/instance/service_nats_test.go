@@ -99,7 +99,7 @@ func TestNATSInstanceService_RunInstances_Success(t *testing.T) {
 	// Create mock daemon subscriber that responds with valid reservation
 	// Subscribe to the per-instance-type topic (t3.micro from createValidRunInstancesInput)
 	mockReservation := createValidReservation()
-	_, err = nc.QueueSubscribe("ec2.RunInstances.t3.micro", "hive-workers", func(msg *nats.Msg) {
+	_, err = nc.QueueSubscribe("ec2.RunInstances.t3.micro", "spinifex-workers", func(msg *nats.Msg) {
 		// Validate that request is properly formatted
 		var input ec2.RunInstancesInput
 		err := json.Unmarshal(msg.Data, &input)
@@ -155,7 +155,7 @@ func TestNATSInstanceService_RunInstances_DaemonError(t *testing.T) {
 
 	// Create mock daemon that responds with error
 	// Subscribe to the per-instance-type topic for the requested type
-	_, err = nc.QueueSubscribe("ec2.RunInstances.invalid.type", "hive-workers", func(msg *nats.Msg) {
+	_, err = nc.QueueSubscribe("ec2.RunInstances.invalid.type", "spinifex-workers", func(msg *nats.Msg) {
 		// Send back error response
 		errorResponse := utils.GenerateErrorPayload("InvalidInstanceType")
 		msg.Respond(errorResponse)
@@ -227,7 +227,7 @@ func TestNATSInstanceService_RunInstances_InvalidResponse(t *testing.T) {
 	defer nc.Close()
 
 	// Create mock daemon that responds with invalid JSON
-	_, err = nc.QueueSubscribe("ec2.RunInstances.t3.micro", "hive-workers", func(msg *nats.Msg) {
+	_, err = nc.QueueSubscribe("ec2.RunInstances.t3.micro", "spinifex-workers", func(msg *nats.Msg) {
 		// Send back malformed JSON
 		msg.Respond([]byte(`{"invalid": json response`))
 	})
@@ -281,7 +281,7 @@ func TestNATSInstanceService_RunInstances_MultipleInstances(t *testing.T) {
 	defer nc.Close()
 
 	// Create mock daemon that returns multiple instances
-	_, err = nc.QueueSubscribe("ec2.RunInstances.t3.micro", "hive-workers", func(msg *nats.Msg) {
+	_, err = nc.QueueSubscribe("ec2.RunInstances.t3.micro", "spinifex-workers", func(msg *nats.Msg) {
 		var input ec2.RunInstancesInput
 		json.Unmarshal(msg.Data, &input)
 
@@ -343,7 +343,7 @@ func TestNATSInstanceService_RunInstances_QueueGroup(t *testing.T) {
 	worker1Count := 0
 	worker2Count := 0
 
-	_, err = nc.QueueSubscribe("ec2.RunInstances.t3.micro", "hive-workers", func(msg *nats.Msg) {
+	_, err = nc.QueueSubscribe("ec2.RunInstances.t3.micro", "spinifex-workers", func(msg *nats.Msg) {
 		worker1Count++
 		reservation := createValidReservation()
 		responseData, _ := json.Marshal(reservation)
@@ -351,7 +351,7 @@ func TestNATSInstanceService_RunInstances_QueueGroup(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = nc.QueueSubscribe("ec2.RunInstances.t3.micro", "hive-workers", func(msg *nats.Msg) {
+	_, err = nc.QueueSubscribe("ec2.RunInstances.t3.micro", "spinifex-workers", func(msg *nats.Msg) {
 		worker2Count++
 		reservation := createValidReservation()
 		responseData, _ := json.Marshal(reservation)

@@ -168,7 +168,7 @@ func launchService(cfg *Config) (err error) {
 		slog.Info("Waiting for EBS events (single-node mode)")
 	}
 
-	if _, err := nc.QueueSubscribe("ebs.delete", "hive-workers", func(msg *nats.Msg) {
+	if _, err := nc.QueueSubscribe("ebs.delete", "spinifex-workers", func(msg *nats.Msg) {
 		slog.Info("Received ebs.delete message", "data", string(msg.Data))
 
 		var ebsRequest types.EBSDeleteRequest
@@ -252,7 +252,7 @@ func launchService(cfg *Config) (err error) {
 		if cfg.NodeName != "" {
 			return nc.Subscribe(topic, handler)
 		}
-		return nc.QueueSubscribe(topic, "hive-workers", handler)
+		return nc.QueueSubscribe(topic, "spinifex-workers", handler)
 	}
 	if _, err := unmountSubscribe(unmountTopic, func(msg *nats.Msg) {
 		slog.Info("Received message", "data", string(msg.Data))
@@ -342,7 +342,7 @@ func launchService(cfg *Config) (err error) {
 		return fmt.Errorf("failed to subscribe to %s: %w", unmountTopic, err)
 	}
 
-	if _, err := nc.QueueSubscribe("ebs.sync", "hive-workers", func(msg *nats.Msg) {
+	if _, err := nc.QueueSubscribe("ebs.sync", "spinifex-workers", func(msg *nats.Msg) {
 		slog.Info("Received ebs.sync message", "data", string(msg.Data))
 
 		var syncRequest types.EBSSyncRequest
@@ -409,7 +409,7 @@ func launchService(cfg *Config) (err error) {
 		if cfg.NodeName != "" {
 			return nc.Subscribe(topic, handler)
 		}
-		return nc.QueueSubscribe(topic, "hive-workers", handler)
+		return nc.QueueSubscribe(topic, "spinifex-workers", handler)
 	}
 	if _, err := mountSubscribe(mountTopic, func(msg *nats.Msg) {
 		slog.Info("Received message:", "data", string(msg.Data))

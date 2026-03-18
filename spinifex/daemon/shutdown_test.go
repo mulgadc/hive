@@ -249,7 +249,7 @@ func TestPublishShutdownProgress(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sub, err := nc.SubscribeSync("hive.cluster.shutdown.progress")
+			sub, err := nc.SubscribeSync("spinifex.cluster.shutdown.progress")
 			require.NoError(t, err)
 			defer sub.Unsubscribe()
 			require.NoError(t, nc.Flush())
