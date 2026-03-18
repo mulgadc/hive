@@ -59,10 +59,10 @@ sudo apt install --download-only nbdkit nbdkit-plugin-dev pkg-config \
 ## Step 2. Create USB deployment media
 
 ```bash
-mkdir -p /media/hive-deploy/{apt-packages,go-cache,hive-source}
-cp /var/cache/apt/archives/*.deb /media/hive-deploy/apt-packages/
-cp -r ~/go/pkg/mod/cache/ /media/hive-deploy/go-cache/
-cp -r ~/Development/mulga/spinifex /media/hive-deploy/hive-source/
+mkdir -p /media/spinifex-deploy/{apt-packages,go-cache,spinifex-source}
+cp /var/cache/apt/archives/*.deb /media/spinifex-deploy/apt-packages/
+cp -r ~/go/pkg/mod/cache/ /media/spinifex-deploy/go-cache/
+cp -r ~/Development/mulga/spinifex /media/spinifex-deploy/spinifex-source/
 ```
 
 ## Step 3. Verify package integrity
@@ -70,9 +70,9 @@ cp -r ~/Development/mulga/spinifex /media/hive-deploy/hive-source/
 Sign and verify packages before transferring to the target:
 
 ```bash
-gpg --import /media/hive-deploy/mulga-signing-key.asc
-gpg --verify hive-v1.0.tar.gz.sig hive-v1.0.tar.gz
-sha256sum -c /media/hive-deploy/checksums.sha256
+gpg --import /media/spinifex-deploy/mulga-signing-key.asc
+gpg --verify spinifex-v1.0.tar.gz.sig spinifex-v1.0.tar.gz
+sha256sum -c /media/spinifex-deploy/checksums.sha256
 ```
 
 ## Step 4. Install on the target server
@@ -82,7 +82,7 @@ Mount the USB and install:
 ```bash
 sudo mount /dev/sdb1 /mnt/usb
 sudo dpkg -i /mnt/usb/apt-packages/*.deb
-cp -r /mnt/usb/hive-source ~/Development/mulga/spinifex
+cp -r /mnt/usb/spinifex-source ~/Development/mulga/spinifex
 cd ~/Development/mulga/spinifex && make build
 ```
 
@@ -106,14 +106,14 @@ The `-f` flag tells apt to fix broken dependencies using what's available locall
 The signing key may not match or the download was corrupted. Re-import the key and verify:
 
 ```bash
-gpg --import /media/hive-deploy/mulga-signing-key.asc
-gpg --verify hive-v1.0.tar.gz.sig hive-v1.0.tar.gz
+gpg --import /media/spinifex-deploy/mulga-signing-key.asc
+gpg --verify spinifex-v1.0.tar.gz.sig spinifex-v1.0.tar.gz
 ```
 
 If verification still fails, re-download the package on the connected machine and compare checksums:
 
 ```bash
-sha256sum hive-v1.0.tar.gz
+sha256sum spinifex-v1.0.tar.gz
 ```
 
 ## Go module cache errors
@@ -121,7 +121,7 @@ sha256sum hive-v1.0.tar.gz
 The Go module cache may have been incompletely copied. On the connected machine, re-export the full cache:
 
 ```bash
-cp -r ~/go/pkg/mod/cache/ /media/hive-deploy/go-cache/
+cp -r ~/go/pkg/mod/cache/ /media/spinifex-deploy/go-cache/
 ```
 
 On the target, restore it:
