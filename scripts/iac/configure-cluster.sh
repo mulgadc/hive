@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Configure a provisioned Hive cluster: clone repo, build, form cluster, start services.
+# Configure a provisioned Spinifex cluster: clone repo, build, form cluster, start services.
 # Usage: configure-cluster.sh <cluster_name> <state_file>
 
 CLUSTER_NAME="${1:?Usage: configure-cluster.sh <cluster_name> <state_file>}"
@@ -93,7 +93,7 @@ NODE1_IP="${MGMT_IPS[0]}"
 
 # Node 1: init
 echo "    Starting init on node1 ($NODE1_IP)..."
-remote_bg "$NODE1_IP" "export PATH=\$PATH:/usr/local/go/bin && cd ~/Development/mulga/hive && ./bin/hive admin init \
+remote_bg "$NODE1_IP" "export PATH=\$PATH:/usr/local/go/bin && cd ~/Development/mulga/hive && ./bin/spx admin init \
     --node node1 \
     --bind $NODE1_IP \
     --cluster-bind $NODE1_IP \
@@ -103,8 +103,8 @@ remote_bg "$NODE1_IP" "export PATH=\$PATH:/usr/local/go/bin && cd ~/Development/
     --nodes $NODE_COUNT \
     --region $REGION \
     --az $AZ \
-    --hive-dir ~/hive/ \
-    --config-dir ~/hive/config/"
+    --hive-dir ~/spinifex/ \
+    --config-dir ~/spinifex/config/"
 INIT_PID=$!
 
 # Wait for formation server to be ready
@@ -128,14 +128,14 @@ if [ "$NODE_COUNT" -gt 1 ]; then
         ip="${MGMT_IPS[$i]}"
         node_num=$((i + 1))
         echo "    Starting join on node$node_num ($ip)..."
-        remote_bg "$ip" "export PATH=\$PATH:/usr/local/go/bin && cd ~/Development/mulga/hive && ./bin/hive admin join \
+        remote_bg "$ip" "export PATH=\$PATH:/usr/local/go/bin && cd ~/Development/mulga/hive && ./bin/spx admin join \
             --node node$node_num \
             --bind $ip \
             --cluster-bind $ip \
             --cluster-routes $NODE1_IP:4248 \
             --host $NODE1_IP:4432 \
-            --data-dir ~/hive/ \
-            --config-dir ~/hive/config/ \
+            --data-dir ~/spinifex/ \
+            --config-dir ~/spinifex/config/ \
             --region $REGION \
             --az $AZ"
         JOIN_PIDS+=($!)

@@ -8,26 +8,26 @@ echo "Shutting down services"
 
 echo "Removing data"
 
-rm -rf ~/hive/predastore/
+rm -rf ~/spinifex/predastore/
 
-rm -rf ~/hive/hive/*
+rm -rf ~/spinifex/hive/*
 
-rm -rf ~/hive/viperblock/*
+rm -rf ~/spinifex/viperblock/*
 
-rm -rf ~/hive/nats/*
+rm -rf ~/spinifex/nats/*
 
-rm -rf ~/hive/images/*
+rm -rf ~/spinifex/images/*
 
 # Enable pprof for development
-PPROF_ENABLED=1 PPROF_OUTPUT=/tmp/hive-vm.prof ./scripts/start-dev.sh --build
+PPROF_ENABLED=1 PPROF_OUTPUT=/tmp/spinifex-vm.prof ./scripts/start-dev.sh --build
 
 # Follow INSTALL.md steps
 echo "Importing AMI"
 
-export AWS_PROFILE=hive
+export AWS_PROFILE=spinifex
 
 # Step 1 SSH key
-aws ec2 import-key-pair --key-name "hive-key" --public-key-material fileb://~/.ssh/hive-key.pub
+aws ec2 import-key-pair --key-name "spinifex-key" --public-key-material fileb://~/.ssh/spinifex-key.pub
 
 echo "Validating key pair imported"
 
@@ -45,7 +45,7 @@ else
 fi
 
 echo "Detected architecture: $ARCH, using image: $IMAGE_NAME"
-./bin/hive admin images import --name "$IMAGE_NAME"
+./bin/spx admin images import --name "$IMAGE_NAME"
 
 aws ec2 describe-images
 

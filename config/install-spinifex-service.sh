@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Hive Service Installation Script
-# This script installs the hive systemd service on Ubuntu/Debian systems
+# Spinifex Service Installation Script
+# This script installs the spinifex systemd service on Ubuntu/Debian systems
 
 set -e
 
@@ -38,7 +38,7 @@ fi
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVICE_FILE="$SCRIPT_DIR/hive.service"
+SERVICE_FILE="$SCRIPT_DIR/spinifex.service"
 
 # Check if service file exists
 if [[ ! -f "$SERVICE_FILE" ]]; then
@@ -46,7 +46,7 @@ if [[ ! -f "$SERVICE_FILE" ]]; then
     exit 1
 fi
 
-print_status "Installing Hive systemd service..."
+print_status "Installing Spinifex systemd service..."
 
 # Copy service file to systemd directory
 cp "$SERVICE_FILE" /etc/systemd/system/
@@ -55,20 +55,20 @@ cp "$SERVICE_FILE" /etc/systemd/system/
 systemctl daemon-reload
 
 # Enable the service to start on boot
-systemctl enable hive.service
+systemctl enable spinifex.service
 
 print_status "Service installed successfully!"
 print_status "You can now use the following commands:"
-echo "  systemctl start hive    # Start the service"
-echo "  systemctl stop hive     # Stop the service"
-echo "  systemctl status hive   # Check service status"
-echo "  systemctl restart hive  # Restart the service"
-echo "  journalctl -u hive -f   # View service logs"
+echo "  systemctl start spinifex    # Start the service"
+echo "  systemctl stop spinifex     # Stop the service"
+echo "  systemctl status spinifex   # Check service status"
+echo "  systemctl restart spinifex  # Restart the service"
+echo "  journalctl -u spinifex -f   # View service logs"
 
-# Check if hive binary exists
-if [[ ! -f "/opt/hive/bin/hive" ]]; then
-    print_warning "Hive binary not found at /opt/hive/bin/hive"
-    print_warning "Please ensure hive is installed in /opt/hive before starting the service"
+# Check if spinifex binary exists
+if [[ ! -f "/opt/spinifex/bin/spinifex" ]]; then
+    print_warning "Spinifex binary not found at /opt/spinifex/bin/spinifex"
+    print_warning "Please ensure spinifex is installed in /opt/spinifex before starting the service"
 fi
 
 print_status "Installation complete!" 

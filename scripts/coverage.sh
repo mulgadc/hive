@@ -3,12 +3,12 @@ set -euo pipefail
 
 # Run Go tests with coverage and report total code coverage.
 
-COVERPROFILE=$(mktemp /tmp/hive-coverage-XXXXXX.out)
+COVERPROFILE=$(mktemp /tmp/spinifex-coverage-XXXXXX.out)
 trap 'rm -f "$COVERPROFILE"' EXIT
 
 echo "Running tests with coverage..."
 echo ""
-LOG_IGNORE=1 go test -timeout 120s -coverprofile="$COVERPROFILE" -covermode=atomic ./hive/... 2>&1
+LOG_IGNORE=1 go test -timeout 120s -coverprofile="$COVERPROFILE" -covermode=atomic ./spinifex/... 2>&1
 
 if [[ ! -s "$COVERPROFILE" ]]; then
     echo "No coverage data collected."

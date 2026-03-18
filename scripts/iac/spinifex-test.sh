@@ -7,7 +7,7 @@ CLUSTERS_DIR="$TOFU_DIR/clusters"
 
 usage() {
     cat <<'USAGE'
-Usage: hive-test.sh <command> <cluster_name> [options]
+Usage: spinifex-test.sh <command> <cluster_name> [options]
 
 Commands:
   up          Provision VMs with OpenTofu
@@ -25,13 +25,13 @@ Options:
   --disk-size-gb=N   Disk size per VM in GB (default: 32)
 
 Examples:
-  ./scripts/iac/hive-test.sh up hive-test1
-  ./scripts/iac/hive-test.sh configure hive-test1
-  ./scripts/iac/hive-test.sh test hive-test1
-  ./scripts/iac/hive-test.sh status hive-test1
-  ./scripts/iac/hive-test.sh ssh hive-test1 2
-  ./scripts/iac/hive-test.sh down hive-test1
-  ./scripts/iac/hive-test.sh full hive-test1 --node-count=3
+  ./scripts/iac/spinifex-test.sh up spinifex-test1
+  ./scripts/iac/spinifex-test.sh configure spinifex-test1
+  ./scripts/iac/spinifex-test.sh test spinifex-test1
+  ./scripts/iac/spinifex-test.sh status spinifex-test1
+  ./scripts/iac/spinifex-test.sh ssh spinifex-test1 2
+  ./scripts/iac/spinifex-test.sh down spinifex-test1
+  ./scripts/iac/spinifex-test.sh full spinifex-test1 --node-count=3
 USAGE
     exit 1
 }
@@ -195,7 +195,7 @@ cmd_status() {
 
 cmd_ssh() {
     if [ -z "$SSH_NODE" ]; then
-        echo "Usage: hive-test.sh ssh <cluster_name> <node_number>"
+        echo "Usage: spinifex-test.sh ssh <cluster_name> <node_number>"
         exit 1
     fi
 

@@ -26,13 +26,13 @@ echo "========================="
 echo "Starting init node (127.0.0.1) and joining nodes (127.0.0.2, 127.0.0.3)..."
 
 # Init blocks until all nodes join, so run in background
-./bin/hive admin init \
+./bin/spx admin init \
   --node node1 \
   --nodes 3 \
   --bind 127.0.0.1 \
   --cluster-bind 127.0.0.1 \
   --port 4432 \
-  --hive-dir ~/node1/ \
+  --spinifex-dir ~/node1/ \
   --config-dir ~/node1/config/ \
   --region ap-southeast-2 \
   --az ap-southeast-2a &
@@ -42,7 +42,7 @@ INIT_PID=$!
 sleep 2
 
 # Join nodes concurrently
-./bin/hive admin join \
+./bin/spx admin join \
   --node node2 \
   --bind 127.0.0.2 \
   --cluster-bind 127.0.0.2 \
@@ -53,7 +53,7 @@ sleep 2
   --az ap-southeast-2a &
 JOIN2_PID=$!
 
-./bin/hive admin join \
+./bin/spx admin join \
   --node node3 \
   --bind 127.0.0.3 \
   --cluster-bind 127.0.0.3 \

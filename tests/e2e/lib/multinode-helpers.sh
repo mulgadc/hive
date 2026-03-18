@@ -348,7 +348,7 @@ get_instance_node() {
 
     for i in 1 2 3; do
         local data_dir="$HOME/node$i"
-        local instances_file="$data_dir/hive/instances.json"
+        local instances_file="$data_dir/spinifex/instances.json"
 
         if [ -f "$instances_file" ]; then
             if jq -e ".[\"$instance_id\"]" "$instances_file" > /dev/null 2>&1; then
@@ -506,7 +506,7 @@ dump_all_node_logs() {
             echo ""
             echo "=== Node$i Logs ==="
 
-            for log in nats predastore viperblock hive awsgw; do
+            for log in nats predastore viperblock spinifex awsgw; do
                 if [ -f "$logs_dir/$log.log" ]; then
                     echo ""
                     echo "--- $log.log (last 50 lines) ---"
@@ -631,7 +631,7 @@ force_cleanup_all_nodes() {
         local logs_dir="$data_dir/logs"
 
         if [ -d "$logs_dir" ]; then
-            for svc in hive-ui hive awsgw viperblock predastore nats; do
+            for svc in spinifex-ui spinifex awsgw viperblock predastore nats; do
                 local pidfile="$logs_dir/$svc.pid"
                 if [ -f "$pidfile" ]; then
                     local pid
@@ -654,7 +654,7 @@ force_cleanup_all_nodes() {
         local logs_dir="$data_dir/logs"
 
         if [ -d "$logs_dir" ]; then
-            for svc in hive-ui hive awsgw viperblock predastore nats; do
+            for svc in spinifex-ui spinifex awsgw viperblock predastore nats; do
                 local pidfile="$logs_dir/$svc.pid"
                 if [ -f "$pidfile" ]; then
                     local pid
@@ -722,7 +722,7 @@ init_leader_node() {
     rm -rf "$HOME/node1/"
 
     # Start init in background — formation server will wait for joins
-    ./bin/hive admin init \
+    ./bin/spinifex admin init \
         --node node1 \
         --bind "${NODE1_IP}" \
         --cluster-bind "${NODE1_IP}" \
@@ -731,7 +731,7 @@ init_leader_node() {
         --port ${CLUSTER_PORT} \
         --region ap-southeast-2 \
         --az ap-southeast-2a \
-        --hive-dir "$HOME/node1/" \
+        --spinifex-dir "$HOME/node1/" \
         --config-dir "$HOME/node1/config/" &
     LEADER_INIT_PID=$!
 
@@ -762,7 +762,7 @@ join_follower_node() {
     rm -rf "$data_dir/"
 
     # Route to node1 (seed node) - other nodes discovered via NATS gossip
-    ./bin/hive admin join \
+    ./bin/spinifex admin join \
         --node "node$node_num" \
         --bind "$node_ip" \
         --cluster-bind "$node_ip" \
