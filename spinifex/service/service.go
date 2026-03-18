@@ -1,0 +1,50 @@
+package service
+
+import (
+	"fmt"
+
+	"github.com/mulgadc/spinifex/spinifex/services/awsgw"
+	"github.com/mulgadc/spinifex/spinifex/services/spinifex"
+	"github.com/mulgadc/spinifex/spinifex/services/spinifexui"
+	"github.com/mulgadc/spinifex/spinifex/services/nats"
+	"github.com/mulgadc/spinifex/spinifex/services/predastore"
+	"github.com/mulgadc/spinifex/spinifex/services/viperblockd"
+	"github.com/mulgadc/spinifex/spinifex/services/vpcd"
+)
+
+type Service interface {
+	Start() (int, error)
+	Stop() error
+	Status() (string, error)
+	Shutdown() error
+	Reload() error
+}
+
+func New(btype string, config any) (Service, error) {
+
+	switch btype {
+	case "nats":
+		return nats.New(config)
+
+	case "predastore":
+		return predastore.New(config)
+
+	case "viperblock":
+		return viperblockd.New(config)
+
+	case "spinifex":
+		return spinifex.New(config)
+
+	case "awsgw":
+		return awsgw.New(config)
+
+	case "spinifex-ui":
+		return spinifexui.New(config)
+
+	case "vpcd":
+		return vpcd.New(config)
+
+	}
+
+	return nil, fmt.Errorf("unknown service type: %s", btype)
+}
