@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/mulgadc/predastore/s3"
+	"github.com/mulgadc/spinifex/spinifex/utils"
 
 	// Import backends to trigger their init() registration
 	_ "github.com/mulgadc/predastore/backend/filesystem"

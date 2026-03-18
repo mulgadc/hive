@@ -12,10 +12,10 @@ import (
 
 	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/go-chi/chi/v5"
+	"github.com/mulgadc/predastore/auth"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	handlers_iam "github.com/mulgadc/spinifex/spinifex/handlers/iam"
 	"github.com/mulgadc/spinifex/spinifex/utils"
-	"github.com/mulgadc/predastore/auth"
 )
 
 const (

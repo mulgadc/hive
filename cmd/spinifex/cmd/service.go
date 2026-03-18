@@ -21,14 +21,14 @@ import (
 	"os"
 	"strings"
 
+	"github.com/mulgadc/predastore/s3"
 	"github.com/mulgadc/spinifex/spinifex/config"
 	"github.com/mulgadc/spinifex/spinifex/service"
-	"github.com/mulgadc/spinifex/spinifex/services/spinifexui"
 	"github.com/mulgadc/spinifex/spinifex/services/nats"
 	"github.com/mulgadc/spinifex/spinifex/services/predastore"
+	"github.com/mulgadc/spinifex/spinifex/services/spinifexui"
 	"github.com/mulgadc/spinifex/spinifex/services/viperblockd"
 	"github.com/mulgadc/spinifex/spinifex/services/vpcd"
-	"github.com/mulgadc/predastore/s3"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )

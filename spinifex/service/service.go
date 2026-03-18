@@ -4,10 +4,10 @@ import (
 	"fmt"
 
 	"github.com/mulgadc/spinifex/spinifex/services/awsgw"
-	"github.com/mulgadc/spinifex/spinifex/services/spinifex"
-	"github.com/mulgadc/spinifex/spinifex/services/spinifexui"
 	"github.com/mulgadc/spinifex/spinifex/services/nats"
 	"github.com/mulgadc/spinifex/spinifex/services/predastore"
+	"github.com/mulgadc/spinifex/spinifex/services/spinifex"
+	"github.com/mulgadc/spinifex/spinifex/services/spinifexui"
 	"github.com/mulgadc/spinifex/spinifex/services/viperblockd"
 	"github.com/mulgadc/spinifex/spinifex/services/vpcd"
 )
