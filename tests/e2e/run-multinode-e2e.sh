@@ -88,7 +88,7 @@ aws_via_retry() {
         }
         attempt=$((attempt + 1))
         echo "  Retry $attempt/$max_attempts..." >&2
-        sleep 2
+        sleep 1
     done
     return 1
 }
@@ -143,7 +143,7 @@ wait_for_instance_state() {
             --instance-ids "$instance_id" \
             --query 'Reservations[0].Instances[0].State.Name' \
             --output text 2>/dev/null) || {
-            sleep 2
+            sleep 1
             attempt=$((attempt + 1))
             continue
         }
@@ -158,7 +158,7 @@ wait_for_instance_state() {
             return 1
         fi
 
-        sleep 2
+        sleep 1
         attempt=$((attempt + 1))
     done
 
@@ -392,7 +392,7 @@ while [ $ATTEMPT -lt 15 ]; do
         break
     fi
     echo "  Waiting for daemon... ($((ATTEMPT + 1))/15)"
-    sleep 2
+    sleep 1
     ATTEMPT=$((ATTEMPT + 1))
 done
 if [ -z "$TYPES" ] || [ "$TYPES" == "None" ]; then
@@ -635,7 +635,7 @@ else
             echo "  Volume attached"
             break
         fi
-        sleep 2
+        sleep 1
         COUNT=$((COUNT + 1))
     done
 
@@ -657,7 +657,7 @@ else
             echo "  Volume detached"
             break
         fi
-        sleep 2
+        sleep 1
         COUNT=$((COUNT + 1))
     done
 
@@ -682,7 +682,7 @@ else
             echo "  Volume deleted"
             break
         fi
-        sleep 2
+        sleep 1
         COUNT=$((COUNT + 1))
     done
 
@@ -853,7 +853,7 @@ while [ $ATTEMPT -lt 30 ]; do
         break
     fi
     echo "  Waiting for NATS reform... ($((ATTEMPT + 1))/30, peers: $RECOVER_PEERS)"
-    sleep 2
+    sleep 1
     ATTEMPT=$((ATTEMPT + 1))
 done
 
@@ -874,7 +874,7 @@ while [ $ATTEMPT -lt 15 ]; do
         GW_BACK=true
         break
     fi
-    sleep 2
+    sleep 1
     ATTEMPT=$((ATTEMPT + 1))
 done
 

@@ -127,7 +127,7 @@ COUNT=0
 
 until curl -sk "https://${GATEWAY_HOST}:9999" > /dev/null || [ $COUNT -eq $MAX_RETRIES ]; do
     echo "Waiting for gateway... ($COUNT/$MAX_RETRIES)"
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -350,14 +350,14 @@ while [ $COUNT -lt 30 ]; do
     # Capture full output to check if instance even exists in the response
     DESCRIBE_OUTPUT=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID") || {
         echo "⚠️  Gateway request failed, retrying... ($COUNT/30)"
-        sleep 2
+        sleep 1
         COUNT=$((COUNT + 1))
         continue
     }
 
     if [ -z "$DESCRIBE_OUTPUT" ]; then
         echo "⚠️  Gateway returned empty response, retrying..."
-        sleep 2
+        sleep 1
         COUNT=$((COUNT + 1))
         continue
     fi
@@ -375,7 +375,7 @@ while [ $COUNT -lt 30 ]; do
         exit 1
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -546,7 +546,7 @@ while [ $COUNT -lt 30 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -575,7 +575,7 @@ while [ $COUNT -lt 30 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -600,7 +600,7 @@ while [ $COUNT -lt 30 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -628,7 +628,7 @@ while [ $COUNT -lt 30 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -703,7 +703,7 @@ while [ $COUNT -lt 30 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -789,7 +789,7 @@ while [ $COUNT -lt 30 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -997,7 +997,7 @@ while [ $COUNT -lt 30 ]; do
     if [ "$STATE" == "stopped" ]; then
         break
     fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -1067,7 +1067,7 @@ while [ $COUNT -lt 30 ]; do
     if [ "$STATE" == "running" ]; then
         break
     fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -1143,7 +1143,7 @@ while [ $COUNT -lt 5 ]; do
         echo "Instance unexpectedly left running state: $STATE"
         exit 1
     fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 echo "Instance state remained running during reboot"
@@ -1199,7 +1199,7 @@ for MID in "$MULTI_ID_1" "$MULTI_ID_2"; do
     while [ $COUNT -lt 30 ]; do
         MSTATE=$(aws ec2 describe-instances --instance-ids "$MID" \
             --query 'Reservations[0].Instances[0].State.Name' --output text) || {
-            sleep 2
+            sleep 1
             COUNT=$((COUNT + 1))
             continue
         }
@@ -1207,7 +1207,7 @@ for MID in "$MULTI_ID_1" "$MULTI_ID_2"; do
             echo "Instance $MID is running"
             break
         fi
-        sleep 2
+        sleep 1
         COUNT=$((COUNT + 1))
     done
     if [ "$MSTATE" != "running" ]; then
@@ -1227,7 +1227,7 @@ for MID in "$MULTI_ID_1" "$MULTI_ID_2"; do
         if [ "$MSTATE" == "terminated" ] || [ "$MSTATE" == "None" ]; then
             break
         fi
-        sleep 2
+        sleep 1
         COUNT=$((COUNT + 1))
     done
 done
@@ -1940,7 +1940,7 @@ while [ $COUNT -lt 30 ]; do
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "pending")
     echo "  Alpha=$A_STATE, Beta=$B_STATE"
     if [ "$A_STATE" == "running" ] && [ "$B_STATE" == "running" ]; then break; fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 if [ "$A_STATE" != "running" ] || [ "$B_STATE" != "running" ]; then
@@ -1995,7 +1995,7 @@ while [ $COUNT -lt 30 ]; do
     A_STATE=$(aws ec2 describe-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha \
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null)
     if [ "$A_STATE" == "stopped" ]; then break; fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -2019,7 +2019,7 @@ while [ $COUNT -lt 30 ]; do
     A_STATE=$(aws ec2 describe-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha \
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null)
     if [ "$A_STATE" == "running" ]; then break; fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -2066,7 +2066,7 @@ echo "  Beta cannot attach Alpha's volume"
 # Attach Alpha's volume to Alpha's instance, then test cross-account detach
 aws ec2 attach-volume --volume-id "$ALPHA_VOL" \
     --instance-id "$ALPHA_INST" --device /dev/sdf --profile hive-team-alpha > /dev/null
-sleep 2
+sleep 1
 
 expect_error "InvalidVolume.NotFound" \
     aws ec2 detach-volume --volume-id "$ALPHA_VOL" --profile hive-team-beta
@@ -2079,7 +2079,7 @@ echo "  Beta cannot modify Alpha's volume"
 
 # Detach for cleanup later
 aws ec2 detach-volume --volume-id "$ALPHA_VOL" --profile hive-team-alpha > /dev/null
-sleep 2
+sleep 1
 
 echo "  Volume scoping passed"
 
@@ -2500,7 +2500,7 @@ while [ $COUNT -lt 30 ]; do
     if [ "$A_STATE" == "terminated" ] && [ "$B_STATE" == "terminated" ]; then
         break
     fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 echo "  Instances terminated"
@@ -2586,7 +2586,7 @@ while [ $COUNT -lt 30 ]; do
     if [ "$STATE" == "terminated" ] || [ "$STATE" == "None" ]; then
         break
     fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 

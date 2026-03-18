@@ -344,7 +344,7 @@ for i in 1 2 3; do
     INSTANCE_IDS+=("$INSTANCE_ID")
 
     # Small delay between launches to encourage distribution
-    sleep 2
+    sleep 1
 done
 
 # Wait for all instances to be running
@@ -498,7 +498,7 @@ while [ $COUNT -lt 15 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -527,7 +527,7 @@ while [ $COUNT -lt 15 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -552,7 +552,7 @@ while [ $COUNT -lt 15 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -580,7 +580,7 @@ while [ $COUNT -lt 15 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -644,7 +644,7 @@ while [ $COUNT -lt 15 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -729,7 +729,7 @@ while [ $COUNT -lt 15 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -1135,7 +1135,7 @@ for crash_num in 1 2 3 4; do
                 echo "  Instance in error state after crash $crash_num (restart limit may be reached)"
                 break
             fi
-            sleep 2
+            sleep 1
             attempt=$((attempt + 2))
         done
     fi
@@ -1452,7 +1452,7 @@ while [ $COUNT -lt 30 ]; do
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "pending")
     echo "  Alpha=$A_STATE, Beta=$B_STATE"
     if [ "$A_STATE" == "running" ] && [ "$B_STATE" == "running" ]; then break; fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 if [ "$A_STATE" != "running" ] || [ "$B_STATE" != "running" ]; then
@@ -1541,7 +1541,7 @@ echo "  Beta cannot attach Alpha's volume"
 # Attach Alpha's volume, then test cross-account detach
 $AWS_EC2 attach-volume --volume-id "$ALPHA_VOL" \
     --instance-id "$ALPHA_INST" --device /dev/sdf --profile hive-team-alpha > /dev/null
-sleep 2
+sleep 1
 
 expect_error "InvalidVolume.NotFound" \
     $AWS_EC2 detach-volume --volume-id "$ALPHA_VOL" --profile hive-team-beta
@@ -1553,7 +1553,7 @@ echo "  Beta cannot modify Alpha's volume"
 
 # Detach for later cleanup
 $AWS_EC2 detach-volume --volume-id "$ALPHA_VOL" --profile hive-team-alpha > /dev/null
-sleep 2
+sleep 1
 
 echo "  Volume scoping passed"
 
@@ -1961,7 +1961,7 @@ while [ $COUNT -lt 30 ]; do
     if [ "$A_STATE" == "terminated" ] && [ "$B_STATE" == "terminated" ]; then
         break
     fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 echo "  Instances terminated"
@@ -2076,7 +2076,7 @@ fi
 echo "  Created Subnet: $SUBNET_ID (10.100.1.0/24)"
 
 # Brief pause for OVN topology to be programmed (logical switch + router port + DHCP)
-sleep 2
+sleep 1
 
 # Step 2: Launch 3 VPC instances
 echo ""
@@ -2103,7 +2103,7 @@ for i in 1 2 3; do
     echo "  Launched: $VPC_INST_ID (PrivateIpAddress: ${VPC_INST_IP:-not yet assigned})"
     VPC_INSTANCE_IDS+=("$VPC_INST_ID")
 
-    sleep 2
+    sleep 1
 done
 
 # Wait for all VPC instances to be running
@@ -2316,7 +2316,7 @@ CLUSTER_SERVICES_STARTED="false"
 
 # Verify all services are down
 echo "  Waiting for services to stop..."
-sleep 2
+sleep 1
 if ! verify_all_services_down; then
     echo "  Some services still running, force-cleaning..."
     force_cleanup_all_nodes
@@ -2387,7 +2387,7 @@ for instance_id in "${INSTANCE_IDS[0]}" "${INSTANCE_IDS[1]}"; do
             echo "  $instance_id relaunched successfully: $STATE"
             break
         fi
-        sleep 2
+        sleep 1
         COUNT=$((COUNT + 1))
     done
     if [ $COUNT -ge 30 ]; then

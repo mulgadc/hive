@@ -162,7 +162,7 @@ wait_for_instance_state() {
             --query 'Reservations[0].Instances[0].State.Name' \
             --output text) || {
             echo "  Attempt $((attempt + 1))/$max_attempts - Gateway request failed, retrying..."
-            sleep 2
+            sleep 1
             attempt=$((attempt + 1))
             continue
         }
@@ -179,7 +179,7 @@ wait_for_instance_state() {
             return 1
         fi
 
-        sleep 2
+        sleep 1
         attempt=$((attempt + 1))
     done
 
@@ -229,7 +229,7 @@ wait_for_gateway() {
         fi
 
         echo "  Waiting for gateway... ($((attempt + 1))/$max_attempts)"
-        sleep 2
+        sleep 1
         attempt=$((attempt + 1))
     done
 
@@ -256,7 +256,7 @@ wait_for_daemon_ready() {
             return 0
         fi
         echo "  Waiting... ($((attempt + 1))/$max_attempts)"
-        sleep 2
+        sleep 1
         attempt=$((attempt + 1))
     done
 
@@ -556,7 +556,7 @@ wait_for_instance_recovery() {
             --instance-ids "$instance_id" \
             --query 'Reservations[0].Instances[0].State.Name' \
             --output text 2>/dev/null) || {
-            sleep 2
+            sleep 1
             attempt=$((attempt + 1))
             continue
         }
@@ -576,7 +576,7 @@ wait_for_instance_recovery() {
             :
         fi
 
-        sleep 2
+        sleep 1
         attempt=$((attempt + 1))
     done
 
@@ -671,7 +671,7 @@ force_cleanup_all_nodes() {
     # Kill any remaining QEMU processes
     pkill -9 -x qemu-system-x86_64 2>/dev/null || true
 
-    sleep 2
+    sleep 1
 
     # Step 3: Remove stale badger LOCK files from predastore directories
     for i in 1 2 3; do
