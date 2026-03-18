@@ -1,5 +1,5 @@
 #!/bin/bash
-# provision.sh — Installs all Hive dependencies, clones repos, caches Go modules,
+# provision.sh — Installs all Spinifex dependencies, clones repos, caches Go modules,
 # and generalizes the VM for use as a Proxmox template.
 #
 # Runs as tf-user via Terraform remote-exec. Uses sudo for system operations.
@@ -11,7 +11,7 @@ GIT_BRANCH="${GIT_BRANCH:-main}"
 WORK_DIR="$HOME/Development/mulga"
 
 echo "========================================"
-echo "  Hive Template Provisioning"
+echo "  Spinifex Template Provisioning"
 echo "  Branch: ${GIT_BRANCH}"
 echo "  Arch:   $(uname -m)"
 echo "========================================"
@@ -27,7 +27,7 @@ echo "=== [2/8] Cloning repositories ==="
 mkdir -p "$WORK_DIR"
 cd "$WORK_DIR"
 
-for repo in hive viperblock predastore; do
+for repo in spinifex viperblock predastore; do
     if [ ! -d "$repo" ]; then
         echo "  Cloning $repo (branch: $GIT_BRANCH)..."
         git clone -b "$GIT_BRANCH" "https://github.com/mulgadc/${repo}.git"
@@ -39,7 +39,7 @@ done
 # ── 3. Install system dependencies via Makefile ─────────────────────────────
 echo ""
 echo "=== [3/8] Installing system dependencies ==="
-cd "$WORK_DIR/hive"
+cd "$WORK_DIR/spinifex"
 sudo make quickinstall
 
 # Ensure Go is in PATH for the rest of the script
@@ -52,10 +52,10 @@ echo ""
 echo "=== [4/8] Creating go.work ==="
 
 # Detect Go version from go.mod
-GO_VERSION=$(grep '^go ' "$WORK_DIR/hive/go.mod" | awk '{print $2}')
+GO_VERSION=$(grep '^go ' "$WORK_DIR/spinifex/go.mod" | awk '{print $2}')
 echo "  Using Go version from go.mod: ${GO_VERSION}"
 
-cat > "$WORK_DIR/hive/go.work" << GOWORK
+cat > "$WORK_DIR/spinifex/go.work" << GOWORK
 go ${GO_VERSION}
 
 use (
@@ -67,12 +67,12 @@ use (
 )
 GOWORK
 
-echo "  Created $WORK_DIR/hive/go.work"
+echo "  Created $WORK_DIR/spinifex/go.work"
 
 # ── 5. Download Go modules ──────────────────────────────────────────────────
 echo ""
 echo "=== [5/8] Downloading Go modules ==="
-cd "$WORK_DIR/hive"       && go mod download && echo "  hive: done"
+cd "$WORK_DIR/spinifex"    && go mod download && echo "  spinifex: done"
 cd "$WORK_DIR/viperblock"  && go mod download && echo "  viperblock: done"
 cd "$WORK_DIR/predastore"  && go mod download && echo "  predastore: done"
 
@@ -110,7 +110,7 @@ echo ""
 echo "=== [7/8] Applying system tuning ==="
 
 # Persistent sysctl for NATS / high-throughput networking
-sudo tee /etc/sysctl.d/99-hive.conf > /dev/null << 'SYSCTL'
+sudo tee /etc/sysctl.d/99-spinifex.conf > /dev/null << 'SYSCTL'
 net.core.rmem_max=4194304
 net.core.wmem_max=4194304
 SYSCTL

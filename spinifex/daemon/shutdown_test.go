@@ -16,7 +16,7 @@ func TestShutdownACKMarshal(t *testing.T) {
 	ack := ShutdownACK{
 		Node:    "node1",
 		Phase:   "gate",
-		Stopped: []string{"awsgw", "hive-ui"},
+		Stopped: []string{"awsgw", "spinifex-ui"},
 	}
 
 	data, err := json.Marshal(ack)
@@ -165,7 +165,7 @@ func TestRespondShutdownACK(t *testing.T) {
 			ack: ShutdownACK{
 				Node:    "test-node",
 				Phase:   "gate",
-				Stopped: []string{"awsgw", "hive-ui"},
+				Stopped: []string{"awsgw", "spinifex-ui"},
 			},
 		},
 		{

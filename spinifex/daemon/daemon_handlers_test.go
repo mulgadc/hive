@@ -1153,8 +1153,8 @@ func TestSetConfigPath(t *testing.T) {
 	daemon := NewDaemon(clusterCfg)
 
 	assert.Empty(t, daemon.configPath)
-	daemon.SetConfigPath("/etc/hive/config.toml")
-	assert.Equal(t, "/etc/hive/config.toml", daemon.configPath)
+	daemon.SetConfigPath("/etc/spinifex/config.toml")
+	assert.Equal(t, "/etc/spinifex/config.toml", daemon.configPath)
 }
 
 // --- handleEC2StartStoppedInstance tests ---

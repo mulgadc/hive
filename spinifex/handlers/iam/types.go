@@ -119,7 +119,7 @@ type AdminBootstrapData struct {
 	EncryptedSecret string `json:"encrypted_secret"`
 }
 
-// Account represents a Hive account. Accounts namespace IAM users,
+// Account represents a Spinifex account. Accounts namespace IAM users,
 // policies, and resources. Created via CLI only in v1.
 type Account struct {
 	AccountID   string `json:"account_id"`   // 12-digit zero-padded, sequential

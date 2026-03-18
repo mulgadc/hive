@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	KVBucketENIs = "hive-vpc-enis"
+	KVBucketENIs = "spinifex-vpc-enis"
 )
 
 // ENIRecord represents a stored Elastic Network Interface

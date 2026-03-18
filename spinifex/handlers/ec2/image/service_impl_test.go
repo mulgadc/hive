@@ -317,7 +317,7 @@ func TestDescribeImages_FilterByOwnerSelf(t *testing.T) {
 	createTestAMIConfigWithOwner(t, store, "ami-selfowned", "self-owned-ami", testAccountID)
 
 	// Create a system AMI (should not appear with --owners self)
-	createTestAMIConfigWithOwner(t, store, "ami-system", "system-ami", "hive")
+	createTestAMIConfigWithOwner(t, store, "ami-system", "system-ami", "spinifex")
 
 	// Filter by "self" should return only the caller's AMI
 	result, err := svc.DescribeImages(&ec2.DescribeImagesInput{
@@ -401,7 +401,7 @@ func TestDescribeImages_SystemAMIVisibleToAll(t *testing.T) {
 	svc, store := setupTestImageService(t)
 
 	// Create a system/pre-phase4 AMI (non-account-ID owner)
-	createTestAMIConfigWithOwner(t, store, "ami-system123", "system-ami", "hive")
+	createTestAMIConfigWithOwner(t, store, "ami-system123", "system-ami", "spinifex")
 
 	// Any account should be able to see system AMIs
 	result, err := svc.DescribeImages(&ec2.DescribeImagesInput{

@@ -16,9 +16,9 @@ var (
 
 var versionCmd = &cobra.Command{
 	Use:   "version",
-	Short: "Print the Hive version",
+	Short: "Print the Spinifex version",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("hive %s (%s) %s/%s\n", Version, Commit, runtime.GOOS, runtime.GOARCH)
+		fmt.Printf("spinifex %s (%s) %s/%s\n", Version, Commit, runtime.GOOS, runtime.GOARCH)
 	},
 }
 

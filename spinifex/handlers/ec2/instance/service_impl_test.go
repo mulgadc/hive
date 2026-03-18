@@ -45,22 +45,22 @@ func TestGenerateHostname(t *testing.T) {
 		{
 			name:       "Normal instance ID",
 			instanceID: "i-0123456789abcdef0",
-			want:       "hive-vm-01234567",
+			want:       "spinifex-vm-01234567",
 		},
 		{
 			name:       "Too short (2 chars)",
 			instanceID: "ab",
-			want:       "hive-vm-unknown",
+			want:       "spinifex-vm-unknown",
 		},
 		{
 			name:       "Empty string",
 			instanceID: "",
-			want:       "hive-vm-unknown",
+			want:       "spinifex-vm-unknown",
 		},
 		{
 			name:       "Exactly 10 chars",
 			instanceID: "i-abcdef01",
-			want:       "hive-vm-abcdef01",
+			want:       "spinifex-vm-abcdef01",
 		},
 	}
 
@@ -181,12 +181,12 @@ func TestCloudInitTemplateRendering(t *testing.T) {
 			data: CloudInitData{
 				Username: "ec2-user",
 				SSHKey:   "ssh-rsa AAAAB3... user@host",
-				Hostname: "hive-vm-01234567",
+				Hostname: "spinifex-vm-01234567",
 			},
 			contains: []string{
 				"ec2-user",
 				"ssh-rsa AAAAB3... user@host",
-				"hive-vm-01234567",
+				"spinifex-vm-01234567",
 				"#cloud-config",
 			},
 		},
@@ -195,7 +195,7 @@ func TestCloudInitTemplateRendering(t *testing.T) {
 			data: CloudInitData{
 				Username:            "ec2-user",
 				SSHKey:              "ssh-ed25519 AAAA...",
-				Hostname:            "hive-vm-abcdef01",
+				Hostname:            "spinifex-vm-abcdef01",
 				UserDataCloudConfig: "packages:\n  - nginx",
 			},
 			contains: []string{
@@ -209,7 +209,7 @@ func TestCloudInitTemplateRendering(t *testing.T) {
 			data: CloudInitData{
 				Username:       "ec2-user",
 				SSHKey:         "ssh-rsa AAAA...",
-				Hostname:       "hive-vm-test",
+				Hostname:       "spinifex-vm-test",
 				UserDataScript: "    #!/bin/bash\n    echo hello",
 			},
 			contains: []string{
@@ -239,7 +239,7 @@ func TestCloudInitTemplateRendering(t *testing.T) {
 func TestCloudInitMetaTemplateRendering(t *testing.T) {
 	data := CloudInitMetaData{
 		InstanceID: "i-0123456789abcdef0",
-		Hostname:   "hive-vm-01234567",
+		Hostname:   "spinifex-vm-01234567",
 	}
 
 	tmpl := template.Must(template.New("meta-data").Parse(cloudInitMetaTemplate))
@@ -249,7 +249,7 @@ func TestCloudInitMetaTemplateRendering(t *testing.T) {
 
 	rendered := buf.String()
 	assert.Contains(t, rendered, "i-0123456789abcdef0")
-	assert.Contains(t, rendered, "hive-vm-01234567")
+	assert.Contains(t, rendered, "spinifex-vm-01234567")
 	assert.Contains(t, rendered, "instance-id:")
 	assert.Contains(t, rendered, "local-hostname:")
 }

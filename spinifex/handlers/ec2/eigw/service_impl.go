@@ -20,7 +20,7 @@ import (
 // Ensure EgressOnlyIGWServiceImpl implements EgressOnlyIGWService
 var _ EgressOnlyIGWService = (*EgressOnlyIGWServiceImpl)(nil)
 
-const KVBucketEgressOnlyIGW = "hive-eigw"
+const KVBucketEgressOnlyIGW = "spinifex-eigw"
 
 // EgressOnlyIGWRecord represents a stored Egress-only Internet Gateway
 type EgressOnlyIGWRecord struct {

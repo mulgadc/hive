@@ -41,7 +41,7 @@ type Config struct {
 	Debug bool
 }
 
-// Service implements the Hive service interface for vpcd.
+// Service implements the Spinifex service interface for vpcd.
 type Service struct {
 	Config *Config
 }

@@ -4,7 +4,7 @@ Full-stack application for managing Spinifex AWS compatible products (EC2, S3)
 
 ## Development Setup
 
-Note: This is not needed for actually building spinifex-ui and running it. We commit the assets so that when you build hive, it will include spinifex-ui without you needing to install node and build frontend from source.
+Note: This is not needed for actually building spinifex-ui and running it. We commit the assets so that when you build spinifex, it will include spinifex-ui without you needing to install node and build frontend from source.
 
 1. **Install Node.js using nvm**
 
@@ -37,7 +37,7 @@ Note: This is not needed for actually building spinifex-ui and running it. We co
 
 4. **Accept Certs In Browser**
 
-   If you have added the CA to your machine you do not need to do this. But if you are sshd into a hive machine and want to view the ui, go to [https://localhost:9999](https://localhost:9999) and [https://localhost:8443](https://localhost:8443) and accept the certificates
+   If you have added the CA to your machine you do not need to do this. But if you are sshd into a spinifex machine and want to view the ui, go to [https://localhost:9999](https://localhost:9999) and [https://localhost:8443](https://localhost:8443) and accept the certificates
 
 5. **Launch Server**
 

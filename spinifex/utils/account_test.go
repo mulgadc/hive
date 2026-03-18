@@ -29,7 +29,7 @@ func TestIsAccountID(t *testing.T) {
 		{"123456789012", true},
 		{"999999999999", true},
 		{"self", false},
-		{"hive", false},
+		{"spinifex", false},
 		{"", false},
 		{"12345678901", false},   // 11 digits
 		{"1234567890123", false}, // 13 digits

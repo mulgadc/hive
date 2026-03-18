@@ -364,7 +364,7 @@ if has_service "daemon"; then
     export SPINIFEX_BASE_DIR=$DATA_DIR/spinifex/
     export SPINIFEX_WAL_DIR=$WAL_DIR
 
-    SPINIFEX_CMD="./bin/spx service hive start"
+    SPINIFEX_CMD="./bin/spx service spinifex start"
     start_service "spinifex" "$SPINIFEX_CMD"
     set_oom_score "spinifex" "-500"
 else
@@ -411,8 +411,8 @@ if [ "${UI}" != "false" ] && has_service "ui"; then
     echo ""
     echo "7️⃣. Starting Spinifex UI..."
 
-    HIVEUI_CMD="./bin/spx service spinifex-ui start"
-    start_service "spinifex-ui" "$HIVEUI_CMD"
+    SPXUI_CMD="./bin/spx service spinifex-ui start"
+    start_service "spinifex-ui" "$SPXUI_CMD"
     set_oom_score "spinifex-ui" "-500"
 else
     echo ""

@@ -118,6 +118,6 @@ func initConfig() {
 			fmt.Fprintf(os.Stderr, "Error: failed to load config %s: %v\n", cfgFile, err)
 			os.Exit(1)
 		}
-		// No config specified — continue with env/defaults (e.g., hive --help)
+		// No config specified — continue with env/defaults (e.g., spx --help)
 	}
 }

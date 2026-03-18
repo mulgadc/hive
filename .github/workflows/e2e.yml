@@ -44,7 +44,7 @@ jobs:
 
       - name: Clone and build
         working-directory: mulga/scripts/tofu-cluster
-        run: ./build-artifacts.sh "${GIT_BRANCH}" "${RUNNER_TEMP}/hive-artifacts.tar"
+        run: ./build-artifacts.sh "${GIT_BRANCH}" "${RUNNER_TEMP}/spinifex-artifacts.tar"
 
       - name: Provision VM
         working-directory: mulga/scripts/tofu-cluster
@@ -59,8 +59,8 @@ jobs:
       - name: Bootstrap Cluster
         working-directory: mulga/scripts/tofu-cluster
         run: |
-          HIVE_PREBUILT=true \
-          HIVE_ARTIFACT_TAR="${RUNNER_TEMP}/hive-artifacts.tar" \
+          SPX_PREBUILT=true \
+          SPX_ARTIFACT_TAR="${RUNNER_TEMP}/spinifex-artifacts.tar" \
           ./bootstrap.sh env3 >> "$TOFU_LOG" 2>&1
 
       - name: Run E2E Tests
@@ -107,7 +107,7 @@ jobs:
 
       - name: Clone and build
         working-directory: mulga/scripts/tofu-cluster
-        run: ./build-artifacts.sh "${GIT_BRANCH}" "${RUNNER_TEMP}/hive-artifacts.tar"
+        run: ./build-artifacts.sh "${GIT_BRANCH}" "${RUNNER_TEMP}/spinifex-artifacts.tar"
 
       - name: Provision VM
         working-directory: mulga/scripts/tofu-cluster
@@ -122,8 +122,8 @@ jobs:
       - name: Bootstrap Cluster
         working-directory: mulga/scripts/tofu-cluster
         run: |
-          HIVE_PREBUILT=true \
-          HIVE_ARTIFACT_TAR="${RUNNER_TEMP}/hive-artifacts.tar" \
+          SPX_PREBUILT=true \
+          SPX_ARTIFACT_TAR="${RUNNER_TEMP}/spinifex-artifacts.tar" \
           ./bootstrap.sh env4 >> "$TOFU_LOG" 2>&1
 
       - name: Run E2E Tests
@@ -170,7 +170,7 @@ jobs:
 
       - name: Clone and build
         working-directory: mulga/scripts/tofu-cluster
-        run: ./build-artifacts.sh "${GIT_BRANCH}" "${RUNNER_TEMP}/hive-artifacts.tar"
+        run: ./build-artifacts.sh "${GIT_BRANCH}" "${RUNNER_TEMP}/spinifex-artifacts.tar"
 
       - name: Provision VMs
         working-directory: mulga/scripts/tofu-cluster
@@ -185,8 +185,8 @@ jobs:
       - name: Bootstrap Cluster
         working-directory: mulga/scripts/tofu-cluster
         run: |
-          HIVE_PREBUILT=true \
-          HIVE_ARTIFACT_TAR="${RUNNER_TEMP}/hive-artifacts.tar" \
+          SPX_PREBUILT=true \
+          SPX_ARTIFACT_TAR="${RUNNER_TEMP}/spinifex-artifacts.tar" \
           ./bootstrap.sh env2 >> "$TOFU_LOG" 2>&1
 
       - name: Run E2E Tests

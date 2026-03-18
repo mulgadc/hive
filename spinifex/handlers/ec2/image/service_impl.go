@@ -162,7 +162,7 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accoun
 
 		// Determine AMI ownership. Phase4+ AMIs store the creator's account ID
 		// in ImageOwnerAlias. Pre-phase4 AMIs have non-account values like "self"
-		// or "hive" and are treated as system/public images visible to all.
+		// or "spinifex" and are treated as system/public images visible to all.
 		amiOwner := amiMeta.ImageOwnerAlias
 		isSystemAMI := !utils.IsAccountID(amiOwner)
 

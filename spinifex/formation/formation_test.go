@@ -18,7 +18,7 @@ func testCreds() *SharedCredentials {
 		SecretKey:   "testSecretKey1234567890",
 		AccountID:   "123456789012",
 		NatsToken:   "nats_testtoken123456",
-		ClusterName: "hive",
+		ClusterName: "spinifex",
 		Region:      "us-west-1",
 	}
 }

@@ -116,7 +116,7 @@ func TestMemoryObjectStore_ListObjects(t *testing.T) {
 
 	for key, value := range objects {
 		_, err := store.PutObject(&s3.PutObjectInput{
-			Bucket: aws.String("hive-metadata"),
+			Bucket: aws.String("spinifex-metadata"),
 			Key:    aws.String(key),
 			Body:   bytes.NewReader([]byte(value)),
 		})
@@ -125,14 +125,14 @@ func TestMemoryObjectStore_ListObjects(t *testing.T) {
 
 	// List all objects in bucket
 	output, err := store.ListObjects(&s3.ListObjectsInput{
-		Bucket: aws.String("hive-metadata"),
+		Bucket: aws.String("spinifex-metadata"),
 	})
 	require.NoError(t, err)
 	assert.Len(t, output.Contents, 5)
 
 	// List objects with prefix
 	output, err = store.ListObjects(&s3.ListObjectsInput{
-		Bucket: aws.String("hive-metadata"),
+		Bucket: aws.String("spinifex-metadata"),
 		Prefix: aws.String("images/"),
 	})
 	require.NoError(t, err)
@@ -162,7 +162,7 @@ func TestMemoryObjectStore_ListObjectsWithDelimiter(t *testing.T) {
 
 	for _, key := range objects {
 		_, err := store.PutObject(&s3.PutObjectInput{
-			Bucket: aws.String("hive"),
+			Bucket: aws.String("spinifex"),
 			Key:    aws.String(key),
 			Body:   bytes.NewReader([]byte("{}")),
 		})
@@ -171,7 +171,7 @@ func TestMemoryObjectStore_ListObjectsWithDelimiter(t *testing.T) {
 
 	// List with delimiter at root level
 	output, err := store.ListObjects(&s3.ListObjectsInput{
-		Bucket:    aws.String("hive"),
+		Bucket:    aws.String("spinifex"),
 		Delimiter: aws.String("/"),
 	})
 	require.NoError(t, err)

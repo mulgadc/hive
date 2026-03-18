@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	KVBucketAccountSettings = "hive-ec2-account-settings"
+	KVBucketAccountSettings = "spinifex-ec2-account-settings"
 	KeyEbsEncryptionDefault = "ebs-encryption-default"
 	KeySerialConsoleAccess  = "serial-console-access"
 )

@@ -658,7 +658,7 @@ export AWS_PROFILE=spinifex-myteam
 
 ## UI Management Panel
 
-The Spinifex Platform also offers a web interface for managing spx services. Simply have the hive server running and go to [https://localhost:3000](https://localhost:3000) in your browser to continue.
+The Spinifex Platform also offers a web interface for managing spx services. Simply have the spinifex server running and go to [https://localhost:3000](https://localhost:3000) in your browser to continue.
 
 **Note:** If you are not viewing the website on the same machine that is running the spinifex server, you will need to go to [https://localhost:9999](https://localhost:9999) and [https://localhost:8443](https://localhost:8443) and accept the certificates. If you have added the CA to your local machine this is not needed.
 

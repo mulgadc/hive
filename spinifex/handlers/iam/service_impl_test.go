@@ -746,7 +746,7 @@ func TestSeedBootstrap_WithAdmin(t *testing.T) {
 		AccountID:       utils.GlobalAccountID,
 		Admin: &AdminBootstrapData{
 			AccountID:       "000000000001",
-			AccountName:     "hive",
+			AccountName:     "spinifex",
 			UserName:        "admin",
 			AccessKeyID:     "AKIAADMIN12345678901",
 			EncryptedSecret: adminSecret,
@@ -765,7 +765,7 @@ func TestSeedBootstrap_WithAdmin(t *testing.T) {
 	account, err := svc.GetAccount("000000000001")
 	require.NoError(t, err)
 	assert.Equal(t, "000000000001", account.AccountID)
-	assert.Equal(t, "hive", account.AccountName)
+	assert.Equal(t, "spinifex", account.AccountName)
 	assert.Equal(t, "ACTIVE", account.Status)
 
 	// Verify admin user exists

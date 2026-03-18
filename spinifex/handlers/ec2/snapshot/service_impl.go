@@ -26,7 +26,7 @@ import (
 // Ensure SnapshotServiceImpl implements SnapshotService
 var _ SnapshotService = (*SnapshotServiceImpl)(nil)
 
-const KVBucketVolumeSnapshots = "hive-volume-snapshots"
+const KVBucketVolumeSnapshots = "spinifex-volume-snapshots"
 
 // SnapshotServiceImpl implements SnapshotService with S3-backed storage
 type SnapshotServiceImpl struct {

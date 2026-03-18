@@ -158,7 +158,7 @@ install_aws_cli() {
 # --- Download tarball ---
 download_spinifex() {
     SPINIFEX_TMPDIR=$(mktemp -d)
-    TARBALL="$SPINIFEX_TMPDIR/hive.tar.gz"
+    TARBALL="$SPINIFEX_TMPDIR/spinifex.tar.gz"
 
     # Local tarball override — skip download (for testing and air-gapped installs)
     if [ -n "$INSTALL_SPINIFEX_TARBALL" ]; then
@@ -284,7 +284,7 @@ install_systemd() {
 
     for unit in "$EXTRACT_DIR"/systemd/*; do
         # Substitute User= and Group= with the detected service user
-        sed "s/^User=hive$/User=$SPINIFEX_USER/;s/^Group=hive$/Group=$SPINIFEX_GROUP/" \
+        sed "s/^User=spinifex$/User=$SPINIFEX_USER/;s/^Group=spinifex$/Group=$SPINIFEX_GROUP/" \
             "$unit" | $SUDO tee "/etc/systemd/system/$(basename "$unit")" > /dev/null
         $SUDO chmod 0644 "/etc/systemd/system/$(basename "$unit")"
         info "  /etc/systemd/system/$(basename "$unit")"
@@ -297,7 +297,7 @@ install_systemd() {
 # --- Install logrotate ---
 install_logrotate() {
     if [ -f "$EXTRACT_DIR/logrotate-spinifex" ]; then
-        $SUDO install -m 0644 "$EXTRACT_DIR/logrotate-spinifex" /etc/logrotate.d/hive
+        $SUDO install -m 0644 "$EXTRACT_DIR/logrotate-spinifex" /etc/logrotate.d/spinifex
     else
         warn "Logrotate config not found in tarball, skipping"
         return
@@ -347,7 +347,7 @@ print_summary() {
     echo "     sudo spx admin init --region <region> --az <az> --node node1 --nodes 1"
     echo ""
     echo "  3. Trust the CA certificate:"
-    echo "     sudo cp /etc/spinifex/ca.pem /usr/local/share/ca-certificates/hive-ca.crt"
+    echo "     sudo cp /etc/spinifex/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt"
     echo "     sudo update-ca-certificates"
     echo ""
     echo "  4. Start services:"

@@ -32,7 +32,7 @@ resources:
 
 Spinifex is an open-source infrastructure platform that brings core AWS services — EC2, VPC, EBS, and S3 — to bare-metal, edge, and on-prem environments.
 
-This guide installs Spinifex on a single server using the binary installer. For multi-server clusters, see [Multi-Node Installation](/docs/installing-hive-multi-node). To build from source, see [Source Install](/docs/source-install).
+This guide installs Spinifex on a single server using the binary installer. For multi-server clusters, see [Multi-Node Installation](/docs/installing-spinifex-multi-node). To build from source, see [Source Install](/docs/source-install).
 
 **Supported Operating Systems:**
 - Ubuntu 22.04 / 24.04 / 25.10
@@ -126,7 +126,7 @@ ssh -i ~/.ssh/spinifex-key ec2-user@127.0.0.1 -p <port>
 
 ## Troubleshooting
 
-## hive command not found
+## spx command not found
 
 The binary is not in your PATH. Run the installer again or add the install directory to your PATH:
 

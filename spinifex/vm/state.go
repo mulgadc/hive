@@ -23,7 +23,7 @@ type EC2StateInfo struct {
 }
 
 // EC2StateCodes maps each InstanceState to its EC2 API code and name.
-// Note: StateError and StateProvisioning are Hive-specific states with no direct
+// Note: StateError and StateProvisioning are Spinifex-specific states with no direct
 // AWS EC2 equivalent. Their Code/Name values are best-effort mappings.
 var EC2StateCodes = map[InstanceState]EC2StateInfo{
 	StateProvisioning: {Code: 0, Name: "pending"},

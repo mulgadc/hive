@@ -1,13 +1,13 @@
 // Package nbdb contains Go structs representing the OVN Northbound Database schema.
 // These models are used with libovsdb to interact with the OVN NB DB.
 //
-// The structs cover the core tables needed for Hive VPC networking:
+// The structs cover the core tables needed for Spinifex VPC networking:
 // LogicalSwitch, LogicalSwitchPort, LogicalRouter, LogicalRouterPort, and DHCPOptions.
 //
 // To regenerate from the full OVN NB schema (requires OVN installed):
 //
 //	go install github.com/ovn-kubernetes/libovsdb/cmd/modelgen@latest
-//	modelgen -p nbdb -o hive/services/vpcd/nbdb /usr/share/ovn/ovn-nb.ovsschema
+//	modelgen -p nbdb -o spinifex/services/vpcd/nbdb /usr/share/ovn/ovn-nb.ovsschema
 package nbdb
 
 import "github.com/ovn-kubernetes/libovsdb/model"
@@ -102,7 +102,7 @@ type GatewayChassis struct {
 }
 
 // FullDatabaseModel returns a ClientDBModel for the OVN Northbound database
-// containing all tables needed for Hive VPC networking.
+// containing all tables needed for Spinifex VPC networking.
 func FullDatabaseModel() (model.ClientDBModel, error) {
 	return model.NewClientDBModel("OVN_Northbound", map[string]model.Model{
 		"Logical_Switch":              &LogicalSwitch{},

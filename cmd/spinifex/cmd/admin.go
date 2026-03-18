@@ -77,8 +77,8 @@ var supportedPlatforms = map[string]bool{
 
 var adminCmd = &cobra.Command{
 	Use:   "admin",
-	Short: "Administrative commands for Hive platform management",
-	Long:  `Administrative commands for initializing and managing the Hive platform.`,
+	Short: "Administrative commands for Spinifex platform management",
+	Long:  `Administrative commands for initializing and managing the Spinifex platform.`,
 }
 
 var clusterCmd = &cobra.Command{
@@ -98,8 +98,8 @@ Each phase waits for all nodes to ACK before proceeding to the next.`,
 
 var adminInitCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Initialize Hive platform configuration",
-	Long: `Initialize Hive platform by creating configuration files, generating SSL certificates,
+	Short: "Initialize Spinifex platform configuration",
+	Long: `Initialize Spinifex platform by creating configuration files, generating SSL certificates,
 and setting up AWS credentials. This creates the necessary directory structure and
 configuration files in ~/spinifex/config.`,
 	Run: runAdminInit,
@@ -107,8 +107,8 @@ configuration files in ~/spinifex/config.`,
 
 var adminJoinCmd = &cobra.Command{
 	Use:   "join",
-	Short: "Join an existing Hive cluster",
-	Long: `Join an existing Hive cluster by connecting to a leader node and retrieving
+	Short: "Join an existing Spinifex cluster",
+	Long: `Join an existing Spinifex cluster by connecting to a leader node and retrieving
 the cluster configuration. This command will configure the local node to join
 the cluster and participate in distributed operations.`,
 	Run: runAdminJoin,
@@ -136,14 +136,14 @@ var imagesListCmd = &cobra.Command{
 
 var accountCmd = &cobra.Command{
 	Use:   "account",
-	Short: "Manage Hive accounts",
-	Long:  `Create and manage Hive accounts. Each account namespaces IAM users, policies, and resources.`,
+	Short: "Manage Spinifex accounts",
+	Long:  `Create and manage Spinifex accounts. Each account namespaces IAM users, policies, and resources.`,
 }
 
 var accountCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a new account with an admin user",
-	Long: `Create a new Hive account. This creates an account with a sequential 12-digit ID,
+	Long: `Create a new Spinifex account. This creates an account with a sequential 12-digit ID,
 an admin user, and an AdministratorAccess policy attached to the admin user.
 Requires the cluster to be running (connects to NATS).`,
 	Run: runAccountCreate,
@@ -152,7 +152,7 @@ Requires the cluster to be running (connects to NATS).`,
 var accountListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all accounts",
-	Long:  `List all Hive accounts with their ID, name, status, and creation time.`,
+	Long:  `List all Spinifex accounts with their ID, name, status, and creation time.`,
 	Run:   runAccountList,
 }
 
@@ -400,7 +400,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	volumeId := utils.GenerateResourceID("ami")
 	manifest.AMIMetadata.ImageID = volumeId
 
-	manifest.AMIMetadata.Description = fmt.Sprintf("%s cloud image prepared for Hive", manifest.AMIMetadata.Name)
+	manifest.AMIMetadata.Description = fmt.Sprintf("%s cloud image prepared for Spinifex", manifest.AMIMetadata.Name)
 	manifest.AMIMetadata.Architecture = image.Arch
 	manifest.AMIMetadata.PlatformDetails = image.Platform
 	manifest.AMIMetadata.CreationDate = time.Now()
@@ -557,20 +557,20 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		clusterBind = bindIP
 	}
 
-	fmt.Printf("Initializing Hive with bind IP: %s, port: %d\n", bindIP, port)
+	fmt.Printf("Initializing Spinifex with bind IP: %s, port: %d\n", bindIP, port)
 
 	// Default config directory
 	if configDir == "" {
 		configDir = DefaultConfigDir()
 	}
 
-	fmt.Println("🚀 Initializing Hive platform...")
+	fmt.Println("🚀 Initializing Spinifex platform...")
 	fmt.Printf("Configuration directory: %s\n\n", configDir)
 
 	// Check if already initialized
 	spinifexTomlPath := filepath.Join(configDir, "spinifex.toml")
 	if !force && admin.FileExists(spinifexTomlPath) {
-		fmt.Println("⚠️  Hive already initialized!")
+		fmt.Println("⚠️  Spinifex already initialized!")
 		fmt.Printf("Config file exists: %s\n", spinifexTomlPath)
 		fmt.Println("\nTo re-initialize, run with --force flag:")
 		fmt.Println("  spx admin init --force")
@@ -767,7 +767,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	}
 
 	// Print success message
-	fmt.Println("\n🎉 Hive initialization complete!")
+	fmt.Println("\n🎉 Spinifex initialization complete!")
 	fmt.Println("\n📋 Next steps:")
 	fmt.Println("   1. Start services:")
 	fmt.Println("      ./scripts/start-dev.sh")
@@ -1029,7 +1029,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		dataDir = DefaultDataDir()
 	}
 
-	fmt.Println("🚀 Joining Hive cluster...")
+	fmt.Println("🚀 Joining Spinifex cluster...")
 	fmt.Printf("Node: %s\n", node)
 	fmt.Printf("Leader: %s\n", leaderHost)
 	fmt.Printf("Region: %s\n", region)

@@ -40,7 +40,7 @@ func TestDescribeAvailabilityZones(t *testing.T) {
 			assert.Equal(t, "opt-in-not-required", *zone.OptInStatus)
 			assert.Equal(t, tt.region, *zone.RegionName)
 			assert.Equal(t, tt.az, *zone.ZoneName)
-			assert.Equal(t, "hivez1", *zone.ZoneId)
+			assert.Equal(t, "spinifexz1", *zone.ZoneId)
 			assert.Equal(t, tt.region, *zone.GroupName)
 			assert.Equal(t, tt.region, *zone.NetworkBorderGroup)
 			assert.Equal(t, "availability-zone", *zone.ZoneType)

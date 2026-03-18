@@ -40,7 +40,7 @@ type GatewayConfig struct {
 	DisableLogging bool       `json:"disable_logging"`
 	NATSConn       *nats.Conn // Shared NATS connection for service communication
 	Config         string     // Shared AWS Gateway config for S3 auth
-	ExpectedNodes  int        // Number of expected hive nodes for multi-node operations
+	ExpectedNodes  int        // Number of expected spinifex nodes for multi-node operations
 	Region         string     // Region this gateway is running in
 	AZ             string     // Availability zone this gateway is running in
 	IAMService     handlers_iam.IAMService
@@ -108,7 +108,7 @@ func (gw *GatewayConfig) SetupRoutes() http.Handler {
 }
 
 // corsAllowedOrigins builds the set of allowed CORS origins from localhost and
-// all local non-loopback IPs on the hive-ui port (default 3000). This allows
+// all local non-loopback IPs on the spinifex-ui port (default 3000). This allows
 // the UI to be accessed from any local address, not just localhost.
 func corsAllowedOrigins() map[string]struct{} {
 	origins := map[string]struct{}{
@@ -143,7 +143,7 @@ func corsAllowedOrigins() map[string]struct{} {
 	return origins
 }
 
-// corsMiddleware adds CORS headers for browser requests from the hive-ui.
+// corsMiddleware adds CORS headers for browser requests from the spinifex-ui.
 func corsMiddleware(next http.Handler) http.Handler {
 	allowed := corsAllowedOrigins()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -415,7 +415,7 @@ func ParseArgsToStruct(input *any, args map[string]string) (err error) {
 
 }
 
-// DiscoverActiveNodes discovers the number of active hive daemon nodes in the cluster
+// DiscoverActiveNodes discovers the number of active spinifex daemon nodes in the cluster
 // by publishing a discovery request and counting unique responses.
 // Returns the number of active nodes (minimum 1 if fallback is needed).
 func (gw *GatewayConfig) DiscoverActiveNodes() int {
