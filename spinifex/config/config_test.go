@@ -17,7 +17,7 @@ func resetViper(t *testing.T) {
 func TestLoadConfig_ValidTOMLFile(t *testing.T) {
 	resetViper(t)
 	dir := t.TempDir()
-	path := filepath.Join(dir, "hive.toml")
+	path := filepath.Join(dir, "spinifex.toml")
 
 	toml := `
 version = "1.0"
@@ -66,7 +66,7 @@ region = "us-east-1"
 func TestLoadConfig_MultipleNodes(t *testing.T) {
 	resetViper(t)
 	dir := t.TempDir()
-	path := filepath.Join(dir, "hive.toml")
+	path := filepath.Join(dir, "spinifex.toml")
 
 	toml := `
 epoch = 2
@@ -100,7 +100,7 @@ func TestLoadConfig_EmptyConfigPath(t *testing.T) {
 
 func TestLoadConfig_NonexistentFile(t *testing.T) {
 	resetViper(t)
-	cfg, err := LoadConfig("/tmp/nonexistent-hive-config-test-12345.toml")
+	cfg, err := LoadConfig("/tmp/nonexistent-spinifex-config-test-12345.toml")
 	// Not an error - falls through to defaults
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
@@ -137,7 +137,7 @@ epoch = 5
 func TestLoadConfig_EnvVarOverrideWithFile(t *testing.T) {
 	resetViper(t)
 	dir := t.TempDir()
-	path := filepath.Join(dir, "hive.toml")
+	path := filepath.Join(dir, "spinifex.toml")
 
 	// Viper's AutomaticEnv only works for keys Viper already knows about
 	// (from a config file or explicit BindEnv). Provide a minimal config
@@ -146,7 +146,7 @@ func TestLoadConfig_EnvVarOverrideWithFile(t *testing.T) {
 node = "file-node"
 `), 0600))
 
-	t.Setenv("HIVE_NODE", "env-node")
+	t.Setenv("SPINIFEX_NODE", "env-node")
 
 	cfg, err := LoadConfig(path)
 	require.NoError(t, err)
@@ -305,7 +305,7 @@ func TestNodeBaseDir_EmptyBaseDir(t *testing.T) {
 func TestLoadConfig_ViperblockShardWAL_Explicit(t *testing.T) {
 	resetViper(t)
 	dir := t.TempDir()
-	path := filepath.Join(dir, "hive.toml")
+	path := filepath.Join(dir, "spinifex.toml")
 
 	toml := `
 node = "n1"
@@ -329,7 +329,7 @@ shardwal = false
 func TestLoadConfig_ViperblockShardWAL_DefaultNil(t *testing.T) {
 	resetViper(t)
 	dir := t.TempDir()
-	path := filepath.Join(dir, "hive.toml")
+	path := filepath.Join(dir, "spinifex.toml")
 
 	toml := `
 node = "n1"
@@ -349,7 +349,7 @@ region = "us-east-1"
 func TestLoadConfig_ViperblockShardWAL_True(t *testing.T) {
 	resetViper(t)
 	dir := t.TempDir()
-	path := filepath.Join(dir, "hive.toml")
+	path := filepath.Join(dir, "spinifex.toml")
 
 	toml := `
 node = "n1"

@@ -48,8 +48,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-//go:embed templates/hive.toml
-var hiveTomlTemplate string
+//go:embed templates/spinifex.toml
+var spinifexTomlTemplate string
 
 //go:embed templates/awsgw.toml
 var awsgwTomlTemplate string
@@ -101,7 +101,7 @@ var adminInitCmd = &cobra.Command{
 	Short: "Initialize Hive platform configuration",
 	Long: `Initialize Hive platform by creating configuration files, generating SSL certificates,
 and setting up AWS credentials. This creates the necessary directory structure and
-configuration files in ~/hive/config.`,
+configuration files in ~/spinifex/config.`,
 	Run: runAdminInit,
 }
 
@@ -159,18 +159,18 @@ var accountListCmd = &cobra.Command{
 /*
 CLI ideas
 
-hive admin images list
+spx admin images list
 
 - fetches from remote endpoint for common/trusted images to bootstrap environment, or baked in from compile.
 
 // If --name specified, download
-hive admin images import --name debian-12-x86_64
+spx admin images import --name debian-12-x86_64
 
 // List available images
-hive admin images list
+spx admin images list
 
 // Manually import a path
-hive admin images import --file /path/to/image --distro debian --version 12 --arch x86_64
+spx admin images import --file /path/to/image --distro debian --version 12 --arch x86_64
 
 -> x <-
 */
@@ -197,7 +197,7 @@ func init() {
 	accountCreateCmd.MarkFlagRequired("name")
 
 	rootCmd.PersistentFlags().String("config-dir", DefaultConfigDir(), "Configuration directory")
-	rootCmd.PersistentFlags().String("hive-dir", DefaultDataDir(), "Hive base directory")
+	rootCmd.PersistentFlags().String("spinifex-dir", DefaultDataDir(), "Spinifex base directory")
 
 	// Flags for admin init
 	adminInitCmd.Flags().Bool("force", false, "Force re-initialization (overwrites existing config)")
@@ -212,7 +212,7 @@ func init() {
 	adminInitCmd.Flags().String("cluster-routes", "", "NATS cluster hosts for routing specify multiple with comma (e.g., 10.11.12.1:4248,10.11.12.2:4248 for multi-node)")
 	adminInitCmd.Flags().String("predastore-nodes", "", "Comma-separated IPs for multi-node Predastore cluster (e.g., 10.11.12.1,10.11.12.2,10.11.12.3). Requires >= 3 nodes.")
 	adminInitCmd.Flags().String("formation-timeout", "10m", "Timeout for cluster formation (e.g., 5m, 30s)")
-	adminInitCmd.Flags().String("cluster-name", "hive", "NATS cluster name")
+	adminInitCmd.Flags().String("cluster-name", "spinifex", "NATS cluster name")
 	adminInitCmd.Flags().StringSlice("services", nil, "Services this node runs (default: all). Valid: nats,predastore,viperblock,daemon,awsgw,ui")
 
 	// Flags for admin join
@@ -220,7 +220,7 @@ func init() {
 	adminJoinCmd.Flags().String("az", "ap-southeast-2a", "Availability zone for this node")
 	adminJoinCmd.Flags().String("node", "", "Node name (required)")
 	adminJoinCmd.Flags().String("host", "", "Leader node host:port (e.g., node1.local:4432) (required)")
-	adminJoinCmd.Flags().String("data-dir", "", "Data directory for this node (default: ~/hive)")
+	adminJoinCmd.Flags().String("data-dir", "", "Data directory for this node (default: ~/spinifex)")
 	adminJoinCmd.Flags().Int("port", 4432, "Port to bind cluster services on")
 	adminJoinCmd.Flags().String("bind", "0.0.0.0", "IP address to bind services to (e.g., 10.11.12.2 for multi-node on single host)")
 	adminJoinCmd.Flags().String("cluster-bind", "", "IP address to bind NATS cluster services to (e.g., 10.11.12.1 for multi-node)")
@@ -259,7 +259,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	}
 
 	//configDir, _ := cmd.Flags().GetString("config-dir")
-	baseDir, _ := cmd.Flags().GetString("hive-dir")
+	baseDir, _ := cmd.Flags().GetString("spinifex-dir")
 
 	// Strip trailing slash
 	baseDir = filepath.Clean(baseDir)
@@ -368,7 +368,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	}
 
 	// Next, validate if the image is raw, tar, gz, xv, etc. We need to upload the raw image
-	tmpDir, err := os.MkdirTemp(ostmpDir, "hive-image-tmp-*")
+	tmpDir, err := os.MkdirTemp(ostmpDir, "spinifex-image-tmp-*")
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not create temp dir: %v\n", err)
@@ -515,14 +515,14 @@ func runimagesListCmd(cmd *cobra.Command, args []string) {
 
 	pterm.Println("To install a selected image as an AMI use:")
 
-	pterm.Println("hive admin images import --name <image-name>")
+	pterm.Println("spx admin images import --name <image-name>")
 }
 
 // TODO: Move all logic to a module, use minimal application logic in viper commands
 func runAdminInit(cmd *cobra.Command, args []string) {
 	force, _ := cmd.Flags().GetBool("force")
 	configDir, _ := cmd.Flags().GetString("config-dir")
-	hiveRoot, _ := cmd.Flags().GetString("hive-dir")
+	spxRoot, _ := cmd.Flags().GetString("spinifex-dir")
 	region, _ := cmd.Flags().GetString("region")
 	az, _ := cmd.Flags().GetString("az")
 	node, _ := cmd.Flags().GetString("node")
@@ -568,12 +568,12 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	fmt.Printf("Configuration directory: %s\n\n", configDir)
 
 	// Check if already initialized
-	hiveTomlPath := filepath.Join(configDir, "hive.toml")
-	if !force && admin.FileExists(hiveTomlPath) {
+	spinifexTomlPath := filepath.Join(configDir, "spinifex.toml")
+	if !force && admin.FileExists(spinifexTomlPath) {
 		fmt.Println("⚠️  Hive already initialized!")
-		fmt.Printf("Config file exists: %s\n", hiveTomlPath)
+		fmt.Printf("Config file exists: %s\n", spinifexTomlPath)
 		fmt.Println("\nTo re-initialize, run with --force flag:")
-		fmt.Println("  hive admin init --force")
+		fmt.Println("  spx admin init --force")
 		os.Exit(0)
 	}
 
@@ -616,7 +616,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	fmt.Printf("   Access Key:  %s\n", bootstrapResult.AdminAccessKey)
 	fmt.Printf("   Secret Key:  %s\n", bootstrapResult.AdminSecretKey)
 	fmt.Printf("   Account:     %s (%s)\n", admin.DefaultAccountName(), admin.DefaultAccountID())
-	fmt.Printf("   AWS Profile: hive\n")
+	fmt.Printf("   AWS Profile: spinifex\n")
 
 	// Generate SSL certificates (with bind IP in SANs for multi-node support)
 	certPath := admin.GenerateCertificatesIfNeeded(configDir, force, bindIP)
@@ -629,17 +629,17 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	}
 	fmt.Println("\n🔒 Generated NATS authentication token")
 
-	if hiveRoot == "" {
-		hiveRoot = DefaultDataDir()
+	if spxRoot == "" {
+		spxRoot = DefaultDataDir()
 	}
-	hiveRoot = filepath.Clean(hiveRoot)
+	spxRoot = filepath.Clean(spxRoot)
 
 	// Determine if this is a multi-node formation
 	isMultiNode := nodes >= 2 && bindIP != "0.0.0.0"
 
 	if isMultiNode {
 		runAdminInitMultiNode(cmd, accessKey, secretKey, accountID, natsToken, clusterName,
-			configDir, hiveRoot, certPath, region, az, node, bindIP, clusterBind,
+			configDir, spxRoot, certPath, region, az, node, bindIP, clusterBind,
 			port, nodes, formationTimeoutStr, services)
 		return
 	}
@@ -653,9 +653,9 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	awsgwDir := filepath.Join(configDir, "awsgw")
 	predastoreDir := filepath.Join(configDir, "predastore")
 	natsDir := filepath.Join(configDir, "nats")
-	hiveDir := filepath.Join(configDir, "hive")
+	spinifexDir := filepath.Join(configDir, "spinifex")
 
-	for _, dir := range []string{awsgwDir, predastoreDir, natsDir, hiveDir} {
+	for _, dir := range []string{awsgwDir, predastoreDir, natsDir, spinifexDir} {
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating directory %s: %v\n", dir, err)
 			os.Exit(1)
@@ -713,7 +713,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		AccountID: accountID,
 		Region:    region,
 		NatsToken: natsToken,
-		DataDir:   hiveRoot,
+		DataDir:   spxRoot,
 		ConfigDir: configDir,
 
 		Node:          node,
@@ -730,7 +730,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 	// Generate config files
 	configs := []admin.ConfigFile{
-		{Name: "hive.toml", Path: hiveTomlPath, Template: hiveTomlTemplate},
+		{Name: "spinifex.toml", Path: spinifexTomlPath, Template: spinifexTomlTemplate},
 		{Name: filepath.Join(awsgwDir, "awsgw.toml"), Path: filepath.Join(awsgwDir, "awsgw.toml"), Template: awsgwTomlTemplate},
 		{Name: filepath.Join(natsDir, "nats.conf"), Path: filepath.Join(natsDir, "nats.conf"), Template: natsConfTemplate},
 	}
@@ -754,7 +754,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		fmt.Println("✅ AWS credentials configured")
 	}
 
-	admin.CreateServiceDirectories(hiveRoot)
+	admin.CreateServiceDirectories(spxRoot)
 
 	// In production layout (running as root), fix ownership so the service user
 	// can read config and write data. SUDO_USER identifies the operator account.
@@ -762,7 +762,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		sudoUser := os.Getenv("SUDO_USER")
 		if sudoUser != "" {
 			admin.ChownRecursive(configDir, sudoUser)
-			admin.ChownRecursive(hiveRoot, sudoUser)
+			admin.ChownRecursive(spxRoot, sudoUser)
 		}
 	}
 
@@ -773,12 +773,12 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	fmt.Println("      ./scripts/start-dev.sh")
 	fmt.Println()
 	fmt.Println("   2. Test with AWS CLI:")
-	fmt.Println("      export AWS_PROFILE=hive")
+	fmt.Println("      export AWS_PROFILE=spinifex")
 	fmt.Println("      aws ec2 describe-instances")
 	fmt.Println()
 	fmt.Println("🔗 Configuration:")
-	fmt.Printf("   Config file: %s\n", hiveTomlPath)
-	fmt.Printf("   Data directory: %s\n", hiveRoot)
+	fmt.Printf("   Config file: %s\n", spinifexTomlPath)
+	fmt.Printf("   Data directory: %s\n", spxRoot)
 	fmt.Println()
 }
 
@@ -786,7 +786,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 // It starts a formation server, registers this node, waits for all nodes to join,
 // then generates configs with complete cluster topology.
 func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, natsToken, clusterName,
-	configDir, hiveRoot, certPath, region, az, node, bindIP, clusterBind string,
+	configDir, spxRoot, certPath, region, az, node, bindIP, clusterBind string,
 	port, expectedNodes int, formationTimeoutStr string, services []string) {
 
 	formationTimeout, err := time.ParseDuration(formationTimeoutStr)
@@ -860,7 +860,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 	fmt.Printf("\n📡 Formation server started on %s\n", formationAddr)
 	fmt.Printf("   Waiting for %d more node(s) to join...\n", expectedNodes-1)
-	fmt.Printf("   Other nodes should run: hive admin join --host %s --node <name> --bind <ip>\n\n", formationAddr)
+	fmt.Printf("   Other nodes should run: spx admin join --host %s --node <name> --bind <ip>\n\n", formationAddr)
 
 	// Wait for all nodes to register
 	if err := fs.WaitForCompletion(formationTimeout); err != nil {
@@ -882,9 +882,9 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 	awsgwDir := filepath.Join(configDir, "awsgw")
 	predastoreDir := filepath.Join(configDir, "predastore")
 	natsDir := filepath.Join(configDir, "nats")
-	hiveDir := filepath.Join(configDir, "hive")
+	spinifexDir := filepath.Join(configDir, "spinifex")
 
-	for _, dir := range []string{awsgwDir, predastoreDir, natsDir, hiveDir} {
+	for _, dir := range []string{awsgwDir, predastoreDir, natsDir, spinifexDir} {
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating directory %s: %v\n", dir, err)
 			os.Exit(1)
@@ -912,7 +912,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		fmt.Printf("✅ Created: multi-node predastore.toml (node ID: %d)\n", predastoreNodeID)
 	}
 
-	hiveTomlPath := filepath.Join(configDir, "hive.toml")
+	spinifexTomlPath := filepath.Join(configDir, "spinifex.toml")
 
 	configSettings := admin.ConfigSettings{
 		AccessKey: accessKey,
@@ -920,7 +920,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		AccountID: accountID,
 		Region:    region,
 		NatsToken: natsToken,
-		DataDir:   hiveRoot,
+		DataDir:   spxRoot,
 		ConfigDir: configDir,
 
 		Node:          node,
@@ -938,7 +938,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 	// Generate config files
 	configs := []admin.ConfigFile{
-		{Name: "hive.toml", Path: hiveTomlPath, Template: hiveTomlTemplate},
+		{Name: "spinifex.toml", Path: spinifexTomlPath, Template: spinifexTomlTemplate},
 		{Name: filepath.Join(awsgwDir, "awsgw.toml"), Path: filepath.Join(awsgwDir, "awsgw.toml"), Template: awsgwTomlTemplate},
 		{Name: filepath.Join(natsDir, "nats.conf"), Path: filepath.Join(natsDir, "nats.conf"), Template: natsConfTemplate},
 	}
@@ -962,7 +962,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		fmt.Println("✅ AWS credentials configured")
 	}
 
-	admin.CreateServiceDirectories(hiveRoot)
+	admin.CreateServiceDirectories(spxRoot)
 
 	// Keep formation server running briefly so joining nodes can fetch complete status
 	fmt.Println("\n⏳ Waiting for joining nodes to fetch cluster data...")
@@ -1061,7 +1061,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	resp, err := client.Post(joinURL, "application/json", bytes.NewBuffer(reqBody))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error connecting to formation server: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Make sure the leader node has run 'hive admin init' and is accessible at %s\n", leaderHost)
+		fmt.Fprintf(os.Stderr, "Make sure the leader node has run 'spx admin init' and is accessible at %s\n", leaderHost)
 		os.Exit(1)
 	}
 
@@ -1188,9 +1188,9 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	awsgwDir := filepath.Join(configDir, "awsgw")
 	predastoreDir := filepath.Join(configDir, "predastore")
 	natsDir := filepath.Join(configDir, "nats")
-	hiveDir := filepath.Join(configDir, "hive")
+	spinifexDir := filepath.Join(configDir, "spinifex")
 
-	for _, dir := range []string{awsgwDir, predastoreDir, natsDir, hiveDir} {
+	for _, dir := range []string{awsgwDir, predastoreDir, natsDir, spinifexDir} {
 		if err := os.MkdirAll(dir, 0700); err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating directory %s: %v\n", dir, err)
 			os.Exit(1)
@@ -1224,7 +1224,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		fmt.Printf("✅ Created: multi-node predastore.toml (node ID: %d)\n", predastoreNodeID)
 	}
 
-	hiveTomlPath := filepath.Join(configDir, "hive.toml")
+	spinifexTomlPath := filepath.Join(configDir, "spinifex.toml")
 
 	configSettings := admin.ConfigSettings{
 		AccessKey: creds.AccessKey,
@@ -1250,7 +1250,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 
 	// Generate config files
 	configs := []admin.ConfigFile{
-		{Name: "hive.toml", Path: hiveTomlPath, Template: hiveTomlTemplate},
+		{Name: "spinifex.toml", Path: spinifexTomlPath, Template: spinifexTomlTemplate},
 		{Name: filepath.Join(awsgwDir, "awsgw.toml"), Path: filepath.Join(awsgwDir, "awsgw.toml"), Template: awsgwTomlTemplate},
 		{Name: filepath.Join(natsDir, "nats.conf"), Path: filepath.Join(natsDir, "nats.conf"), Template: natsConfTemplate},
 	}
@@ -1291,7 +1291,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 }
 
 // buildRemoteNodes converts formation NodeInfo into RemoteNode entries,
-// excluding the local node. This puts all cluster members into hive.toml
+// excluding the local node. This puts all cluster members into spinifex.toml
 // so config is the source of truth for expected cluster membership.
 func buildRemoteNodes(allNodes map[string]formation.NodeInfo, localNode string) []admin.RemoteNode {
 	var remote []admin.RemoteNode
@@ -1409,7 +1409,7 @@ func runAccountCreate(cmd *cobra.Command, args []string) {
 	}
 
 	// Configure AWS CLI profile automatically
-	profileName := "hive-" + strings.ToLower(strings.ReplaceAll(name, " ", "-"))
+	profileName := "spinifex-" + strings.ToLower(strings.ReplaceAll(name, " ", "-"))
 	homeDir, _ := os.UserHomeDir()
 
 	endpointHost := "localhost"

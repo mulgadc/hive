@@ -43,7 +43,7 @@ func GeneratePidFile(name string) (string, error) {
 
 func WritePidFile(name string, pid int) error {
 
-	// Write PID to file, check XDG, otherwise user home directory ~/hive/
+	// Write PID to file, check XDG, otherwise user home directory ~/spinifex/
 	pidFilename, err := GeneratePidFile(name)
 
 	if err != nil {

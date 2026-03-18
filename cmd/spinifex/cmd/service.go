@@ -745,7 +745,7 @@ var vpcdStatusCmd = &cobra.Command{
 
 func init() {
 
-	viper.SetEnvPrefix("HIVE") // Prefix for environment variables
+	viper.SetEnvPrefix("SPINIFEX") // Prefix for environment variables
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 
 	viper.AutomaticEnv() // Read environment variables automatically
@@ -756,47 +756,47 @@ func init() {
 
 	// Predastore Port
 	predastoreCmd.PersistentFlags().Int("port", 8443, "Predastore (S3) port")
-	viper.BindEnv("port", "HIVE_PREDASTORE_PORT")
+	viper.BindEnv("port", "SPINIFEX_PREDASTORE_PORT")
 	viper.BindPFlag("port", predastoreCmd.PersistentFlags().Lookup("port"))
 
 	// Predastore Host
 	predastoreCmd.PersistentFlags().String("host", "0.0.0.0", "Predastore (S3) host")
-	viper.BindEnv("host", "HIVE_PREDASTORE_HOST")
+	viper.BindEnv("host", "SPINIFEX_PREDASTORE_HOST")
 	viper.BindPFlag("host", predastoreCmd.PersistentFlags().Lookup("host"))
 
 	// Base path
 	predastoreCmd.PersistentFlags().String("base-path", "", "Predastore (S3) base path")
-	viper.BindEnv("base-path", "HIVE_PREDASTORE_BASE_PATH")
+	viper.BindEnv("base-path", "SPINIFEX_PREDASTORE_BASE_PATH")
 	viper.BindPFlag("base-path", predastoreCmd.PersistentFlags().Lookup("base-path"))
 
 	// Predastore Config Path
 	predastoreCmd.PersistentFlags().String("config-path", "", "Predastore (S3) config path")
-	viper.BindEnv("config-path", "HIVE_PREDASTORE_CONFIG_PATH")
+	viper.BindEnv("config-path", "SPINIFEX_PREDASTORE_CONFIG_PATH")
 	viper.BindPFlag("config-path", predastoreCmd.PersistentFlags().Lookup("config-path"))
 
 	// Predastore Debug
 	predastoreCmd.PersistentFlags().Bool("debug", false, "Predastore (S3) debug")
-	viper.BindEnv("debug", "HIVE_PREDASTORE_DEBUG")
+	viper.BindEnv("debug", "SPINIFEX_PREDASTORE_DEBUG")
 	viper.BindPFlag("debug", predastoreCmd.PersistentFlags().Lookup("debug"))
 
 	// Predastore TLS Cert
 	predastoreCmd.PersistentFlags().String("tls-cert", "", "Predastore (S3) TLS certificate")
-	viper.BindEnv("tls-cert", "HIVE_PREDASTORE_TLS_CERT")
+	viper.BindEnv("tls-cert", "SPINIFEX_PREDASTORE_TLS_CERT")
 	viper.BindPFlag("tls-cert", predastoreCmd.PersistentFlags().Lookup("tls-cert"))
 
 	// Predastore TLS Key
 	predastoreCmd.PersistentFlags().String("tls-key", "", "Predastore (S3) TLS key")
-	viper.BindEnv("tls-key", "HIVE_PREDASTORE_TLS_KEY")
+	viper.BindEnv("tls-key", "SPINIFEX_PREDASTORE_TLS_KEY")
 	viper.BindPFlag("tls-key", predastoreCmd.PersistentFlags().Lookup("tls-key"))
 
 	// Predastore Backend
 	predastoreCmd.PersistentFlags().String("backend", "distributed", "Predastore (S3) backend")
-	viper.BindEnv("backend", "HIVE_PREDASTORE_BACKEND")
+	viper.BindEnv("backend", "SPINIFEX_PREDASTORE_BACKEND")
 	viper.BindPFlag("backend", predastoreCmd.PersistentFlags().Lookup("backend"))
 
 	// Predastore Node ID
 	predastoreCmd.PersistentFlags().Int("node-id", 0, "Predastore (S3) node ID")
-	viper.BindEnv("node-id", "HIVE_PREDASTORE_NODE_ID")
+	viper.BindEnv("node-id", "SPINIFEX_PREDASTORE_NODE_ID")
 	viper.BindPFlag("node-id", predastoreCmd.PersistentFlags().Lookup("node-id"))
 
 	// Predastore CPU Profiling
@@ -816,19 +816,19 @@ func init() {
 	serviceCmd.AddCommand(viperblockCmd)
 
 	viperblockCmd.PersistentFlags().String("s3-host", "0.0.0.0:8443", "Predastore (S3) host URI")
-	viper.BindEnv("s3-host", "HIVE_VIPERBLOCK_S3_HOST")
+	viper.BindEnv("s3-host", "SPINIFEX_VIPERBLOCK_S3_HOST")
 	viper.BindPFlag("s3-host", predastoreCmd.PersistentFlags().Lookup("s3-host"))
 
 	viperblockCmd.PersistentFlags().String("s3-bucket", "predastore", "Predastore (S3) bucket")
-	viper.BindEnv("s3-bucket", "HIVE_VIPERBLOCK_S3_BUCKET")
+	viper.BindEnv("s3-bucket", "SPINIFEX_VIPERBLOCK_S3_BUCKET")
 	viper.BindPFlag("s3-bucket", predastoreCmd.PersistentFlags().Lookup("s3-bucket"))
 
 	viperblockCmd.PersistentFlags().String("s3-region", "ap-southeast-2", "Predastore (S3) region")
-	viper.BindEnv("s3-region", "HIVE_VIPERBLOCK_S3_REGION")
+	viper.BindEnv("s3-region", "SPINIFEX_VIPERBLOCK_S3_REGION")
 	viper.BindPFlag("s3-region", predastoreCmd.PersistentFlags().Lookup("s3-region"))
 
 	viperblockCmd.PersistentFlags().String("plugin-path", "/opt/spinifex/lib/nbdkit-viperblock-plugin.so", "Pathname to the nbdkit viperblockplugin")
-	viper.BindEnv("plugin-path", "HIVE_VIPERBLOCK_PLUGIN_PATH")
+	viper.BindEnv("plugin-path", "SPINIFEX_VIPERBLOCK_PLUGIN_PATH")
 	viper.BindPFlag("plugin-path", predastoreCmd.PersistentFlags().Lookup("plugin-path"))
 
 	viperblockCmd.AddCommand(viperblockStartCmd)
@@ -844,23 +844,23 @@ func init() {
 
 	// Add NATS flags
 	natsCmd.PersistentFlags().Int("port", 4222, "NATS server port")
-	viper.BindEnv("port", "HIVE_NATS_PORT")
+	viper.BindEnv("port", "SPINIFEX_NATS_PORT")
 	viper.BindPFlag("port", natsCmd.PersistentFlags().Lookup("port"))
 
 	natsCmd.PersistentFlags().String("host", "0.0.0.0", "NATS server host")
-	viper.BindEnv("host", "HIVE_NATS_HOST")
+	viper.BindEnv("host", "SPINIFEX_NATS_HOST")
 	viper.BindPFlag("host", natsCmd.PersistentFlags().Lookup("host"))
 
 	natsCmd.PersistentFlags().Bool("debug", false, "Enable debug logging")
-	viper.BindEnv("debug", "HIVE_NATS_DEBUG")
+	viper.BindEnv("debug", "SPINIFEX_NATS_DEBUG")
 	viper.BindPFlag("debug", natsCmd.PersistentFlags().Lookup("debug"))
 
 	natsCmd.PersistentFlags().String("data-dir", "", "NATS data directory")
-	viper.BindEnv("data-dir", "HIVE_NATS_DATA_DIR")
+	viper.BindEnv("data-dir", "SPINIFEX_NATS_DATA_DIR")
 	viper.BindPFlag("data-dir", natsCmd.PersistentFlags().Lookup("data-dir"))
 
 	natsCmd.PersistentFlags().Bool("jetstream", false, "Enable JetStream")
-	viper.BindEnv("jetstream", "HIVE_NATS_JETSTREAM")
+	viper.BindEnv("jetstream", "SPINIFEX_NATS_JETSTREAM")
 	viper.BindPFlag("jetstream", natsCmd.PersistentFlags().Lookup("jetstream"))
 
 	// Hive
@@ -871,28 +871,28 @@ func init() {
 	spinifexCmd.AddCommand(spinifexStatusCmd)
 
 	spinifexCmd.PersistentFlags().String("wal-dir", "", "Write-ahead log (WAL) directory. Place on high-speed NVMe disk, or tmpfs for development.")
-	viper.BindEnv("wal-dir", "HIVE_WAL_DIR")
+	viper.BindEnv("wal-dir", "SPINIFEX_WAL_DIR")
 	viper.BindPFlag("wal-dir", spinifexCmd.PersistentFlags().Lookup("wal-dir"))
 
 	// AWS GW
 	serviceCmd.AddCommand(awsgwCmd)
 
 	awsgwCmd.PersistentFlags().String("host", "0.0.0.0:9999", "AWS Gateway server host")
-	viper.BindEnv("host", "HIVE_AWSGW_HOST")
+	viper.BindEnv("host", "SPINIFEX_AWSGW_HOST")
 	viper.BindPFlag("host", awsgwCmd.PersistentFlags().Lookup("host"))
 
 	// AWS GW TLS Cert
 	awsgwCmd.PersistentFlags().String("tls-cert", "", "AWS Gateway TLS certificate")
-	viper.BindEnv("tls-cert", "HIVE_AWSGW_TLS_CERT")
+	viper.BindEnv("tls-cert", "SPINIFEX_AWSGW_TLS_CERT")
 	viper.BindPFlag("tls-cert", awsgwCmd.PersistentFlags().Lookup("tls-cert"))
 
 	// AWS GW TLS Key
 	awsgwCmd.PersistentFlags().String("tls-key", "", "AWS Gateway TLS key")
-	viper.BindEnv("tls-key", "HIVE_AWSGW_TLS_KEY")
+	viper.BindEnv("tls-key", "SPINIFEX_AWSGW_TLS_KEY")
 	viper.BindPFlag("tls-key", awsgwCmd.PersistentFlags().Lookup("tls-key"))
 
 	awsgwCmd.PersistentFlags().Bool("debug", false, "AWS Gateway Debug")
-	viper.BindEnv("debug", "HIVE_AWSGW_DEBUG")
+	viper.BindEnv("debug", "SPINIFEX_AWSGW_DEBUG")
 	viper.BindPFlag("debug", awsgwCmd.PersistentFlags().Lookup("debug"))
 
 	awsgwCmd.AddCommand(awsgwStartCmd)
@@ -903,19 +903,19 @@ func init() {
 	serviceCmd.AddCommand(spinifexUICmd)
 
 	spinifexUICmd.PersistentFlags().Int("port", 3000, "spinifex-ui server port")
-	viper.BindEnv("spinifex-ui-port", "HIVE_UI_PORT")
+	viper.BindEnv("spinifex-ui-port", "SPINIFEX_UI_PORT")
 	viper.BindPFlag("spinifex-ui-port", spinifexUICmd.PersistentFlags().Lookup("port"))
 
 	spinifexUICmd.PersistentFlags().String("host", "0.0.0.0", "spinifex-ui server host")
-	viper.BindEnv("spinifex-ui-host", "HIVE_UI_HOST")
+	viper.BindEnv("spinifex-ui-host", "SPINIFEX_UI_HOST")
 	viper.BindPFlag("spinifex-ui-host", spinifexUICmd.PersistentFlags().Lookup("host"))
 
 	spinifexUICmd.PersistentFlags().String("tls-cert", "", "TLS certificate path")
-	viper.BindEnv("spinifex-ui-tls-cert", "HIVE_UI_TLS_CERT")
+	viper.BindEnv("spinifex-ui-tls-cert", "SPINIFEX_UI_TLS_CERT")
 	viper.BindPFlag("spinifex-ui-tls-cert", spinifexUICmd.PersistentFlags().Lookup("tls-cert"))
 
 	spinifexUICmd.PersistentFlags().String("tls-key", "", "TLS key path")
-	viper.BindEnv("spinifex-ui-tls-key", "HIVE_UI_TLS_KEY")
+	viper.BindEnv("spinifex-ui-tls-key", "SPINIFEX_UI_TLS_KEY")
 	viper.BindPFlag("spinifex-ui-tls-key", spinifexUICmd.PersistentFlags().Lookup("tls-key"))
 
 	spinifexUICmd.AddCommand(spinifexUIStartCmd)

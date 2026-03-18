@@ -64,38 +64,38 @@ func init() {
 
 	// Global flags
 	rootCmd.PersistentFlags().String("config", "", "config file (required)")
-	viper.BindEnv("config", "HIVE_CONFIG_PATH")
+	viper.BindEnv("config", "SPINIFEX_CONFIG_PATH")
 	viper.BindPFlag("config", rootCmd.PersistentFlags().Lookup("config"))
 
 	// Authentication (access_key, secret)
 	rootCmd.PersistentFlags().String("access-key", "", "AWS access key (overrides config file and env)")
-	viper.BindEnv("access-key", "HIVE_ACCESS_KEY")
+	viper.BindEnv("access-key", "SPINIFEX_ACCESS_KEY")
 	viper.BindPFlag("access-key", rootCmd.PersistentFlags().Lookup("access-key"))
 
 	rootCmd.PersistentFlags().String("secret-key", "", "AWS secret key (overrides config file and env)")
-	viper.BindEnv("secret-key", "HIVE_SECRET_KEY")
+	viper.BindEnv("secret-key", "SPINIFEX_SECRET_KEY")
 	viper.BindPFlag("secret-key", rootCmd.PersistentFlags().Lookup("secret-key"))
 
 	rootCmd.PersistentFlags().String("host", "", "AWS Endpoint (overrides config file and env)")
-	viper.BindEnv("host", "HIVE_HOST")
+	viper.BindEnv("host", "SPINIFEX_HOST")
 	viper.BindPFlag("host", rootCmd.PersistentFlags().Lookup("host"))
 
 	// Viperblock config
 	rootCmd.PersistentFlags().String("base-dir", "", "Viperblock base directory (overrides config file and env)")
-	viper.BindEnv("base-dir", "HIVE_BASE_DIR")
+	viper.BindEnv("base-dir", "SPINIFEX_BASE_DIR")
 	viper.BindPFlag("base-dir", rootCmd.PersistentFlags().Lookup("base-dir"))
 
 	// NATS specific flags
 	rootCmd.PersistentFlags().String("nats-host", "", "NATS server host (overrides config file and env)")
-	viper.BindEnv("nats-host", "HIVE_NATS_HOST")
+	viper.BindEnv("nats-host", "SPINIFEX_NATS_HOST")
 	viper.BindPFlag("nats-host", rootCmd.PersistentFlags().Lookup("nats-host"))
 
 	rootCmd.PersistentFlags().String("nats-token", "", "NATS authentication token (overrides config file and env)")
-	viper.BindEnv("nats-token", "HIVE_NATS_TOKEN")
+	viper.BindEnv("nats-token", "SPINIFEX_NATS_TOKEN")
 	viper.BindPFlag("nats-token", rootCmd.PersistentFlags().Lookup("nats-token"))
 
 	rootCmd.PersistentFlags().String("nats-subject", "", "NATS subscription subject (overrides config file and env)")
-	viper.BindEnv("nats-subject", "HIVE_NATS_SUBJECT")
+	viper.BindEnv("nats-subject", "SPINIFEX_NATS_SUBJECT")
 	viper.BindPFlag("nats-subject", rootCmd.PersistentFlags().Lookup("nats-subject"))
 
 	// Bind flags to viper

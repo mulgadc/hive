@@ -15,7 +15,7 @@ import (
 
 // pidDir returns the directory containing shell-level PID files for this node.
 // start-dev.sh writes PID files to $DATA_DIR/logs/ and the daemon's BaseDir is
-// always $DATA_DIR/hive/, so we derive the logs directory from that. Each node
+// always $DATA_DIR/spinifex/, so we derive the logs directory from that. Each node
 // has its own DATA_DIR, so this is safe for simulated multi-node on a single host.
 func (d *Daemon) pidDir() string {
 	if d.config.BaseDir != "" {

@@ -12,7 +12,7 @@ import (
 type ClusterConfig struct {
 	Epoch   uint64            `mapstructure:"epoch"`   // bump when leader commits changes
 	Node    string            `mapstructure:"node"`    // my node name
-	Version string            `mapstructure:"version"` // hive version
+	Version string            `mapstructure:"version"` // spinifex version
 	Nodes   map[string]Config `mapstructure:"nodes"`   // full config for every node
 }
 
@@ -134,7 +134,7 @@ func (c Config) GetServices() []string {
 // LoadConfig loads the configuration from file and environment variables
 func LoadConfig(configPath string) (*ClusterConfig, error) {
 	// Set environment variable prefix
-	viper.SetEnvPrefix("HIVE")
+	viper.SetEnvPrefix("SPINIFEX")
 	viper.AutomaticEnv()
 
 	// Try to load config file if it exists

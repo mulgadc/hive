@@ -75,7 +75,7 @@ func loadConfigAndConnect() (*config.ClusterConfig, *nats.Conn, error) {
 	}
 
 	// Backfill BaseDir from config file path when not set in the config.
-	// Config lives at <baseDir>/config/hive.toml, so baseDir is two levels up.
+	// Config lives at <baseDir>/config/spinifex.toml, so baseDir is two levels up.
 	if nodeConfig, ok := cfg.Nodes[cfg.Node]; ok && nodeConfig.BaseDir == "" {
 		nodeConfig.BaseDir = filepath.Dir(filepath.Dir(cfgPath))
 		cfg.Nodes[cfg.Node] = nodeConfig

@@ -145,7 +145,7 @@ func GenerateCertificatesIfNeeded(configDir string, force bool, bindIP string) (
 
 		// Print instructions for adding CA to system trust store
 		fmt.Println("\n📋 To trust the Hive CA system-wide (recommended):")
-		fmt.Printf("   sudo cp %s /usr/local/share/ca-certificates/hive-ca.crt\n", caCertPath)
+		fmt.Printf("   sudo cp %s /usr/local/share/ca-certificates/spinifex-ca.crt\n", caCertPath)
 		fmt.Println("   sudo update-ca-certificates")
 		fmt.Println("\n   This allows AWS CLI and other tools to trust Hive services automatically.")
 	} else {
