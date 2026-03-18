@@ -1,4 +1,4 @@
-name: Hive Build and Test
+name: Spinifex Build and Test
 
 on:
   push:
@@ -15,11 +15,11 @@ on:
 
 jobs:
   build_and_test:
-    name: Hive Build and Test
+    name: Spinifex Build and Test
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout Hive
+      - name: Checkout Spinifex
         uses: actions/checkout@v6
         with:
           path: hive
@@ -40,13 +40,13 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          cache-dependency-path: "hive/go.sum"
-          go-version-file: "hive/go.mod"
+          cache-dependency-path: "spinifex/go.sum"
+          go-version-file: "spinifex/go.mod"
 
       - name: Setup Go Workspace
         run: go work init ./hive ./viperblock ./predastore
 
-      - name: Build Hive
+      - name: Build Spinifex
         run: make -C hive build
 
       - name: Run Tests with Coverage
@@ -56,11 +56,11 @@ jobs:
         run: cd hive && scripts/diff-coverage.sh coverage.out --base HEAD~1
 
   race_detection:
-    name: Hive Race Detection
+    name: Spinifex Race Detection
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout Hive
+      - name: Checkout Spinifex
         uses: actions/checkout@v6
         with:
           path: hive
@@ -80,8 +80,8 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          cache-dependency-path: "hive/go.sum"
-          go-version-file: "hive/go.mod"
+          cache-dependency-path: "spinifex/go.sum"
+          go-version-file: "spinifex/go.mod"
 
       - name: Setup Go Workspace
         run: go work init ./hive ./viperblock ./predastore
@@ -90,11 +90,11 @@ jobs:
         run: make -C hive test-race
 
   lint_and_security:
-    name: Hive Lint and Security
+    name: Spinifex Lint and Security
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout Hive
+      - name: Checkout Spinifex
         uses: actions/checkout@v6
         with:
           path: hive
@@ -114,8 +114,8 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          cache-dependency-path: "hive/go.sum"
-          go-version-file: "hive/go.mod"
+          cache-dependency-path: "spinifex/go.sum"
+          go-version-file: "spinifex/go.mod"
 
       - name: Setup Go Workspace
         run: go work init ./hive ./viperblock ./predastore

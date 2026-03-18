@@ -11,10 +11,10 @@ jobs:
   distro:
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout Hive
+      - name: Checkout Spinifex
         uses: actions/checkout@v6
         with:
-          path: hive
+          path: spinifex
 
       - name: Checkout Predastore
         uses: actions/checkout@v6
@@ -35,13 +35,13 @@ jobs:
         uses: docker/setup-qemu-action@v3
 
       - name: Build distribution tarballs
-        run: cd hive && make distro VERSION=${{ github.ref_name }}
+        run: cd spinifex cd hive &&cd hive && make distro VERSION=${{ github.ref_name }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            hive/dist/*.tar.gz
-            hive/dist/*.sha256
-            hive/scripts/setup.sh
+            spinifex/dist/*.tar.gz
+            spinifex/dist/*.sha256
+            spinifex/scripts/setup.sh
           generate_release_notes: true
