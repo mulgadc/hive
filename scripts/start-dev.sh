@@ -115,7 +115,7 @@ start_service() {
     echo "   PID: $pid, Log: $logfile"
 
     # Brief pause to let service start
-    sleep 2
+    sleep 1
 }
 
 # Function to start service in foreground (for final daemon)
