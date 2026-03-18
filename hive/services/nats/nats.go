@@ -7,7 +7,6 @@ import (
 
 	"github.com/mulgadc/hive/hive/utils"
 	"github.com/nats-io/nats-server/v2/server"
-	"go.uber.org/automaxprocs/maxprocs"
 )
 
 var serviceName = "nats"
@@ -116,14 +115,6 @@ func launchService(config *Config) (err error) {
 	if err := server.Run(ns); err != nil {
 		// Will exit() here
 		server.PrintAndDie(err.Error())
-	}
-
-	// Adjust MAXPROCS if running under linux/cgroups quotas.
-	undo, err := maxprocs.Set(maxprocs.Logger(ns.Debugf))
-	if err != nil {
-		slog.Warn("Failed to set GOMAXPROCS", "err", err)
-	} else {
-		defer undo()
 	}
 
 	ns.WaitForShutdown()

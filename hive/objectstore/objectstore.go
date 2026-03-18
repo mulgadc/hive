@@ -8,7 +8,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -18,7 +17,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
-	"golang.org/x/net/http2"
 )
 
 // NoSuchKeyError represents a missing object error, compatible with AWS S3 errors
@@ -65,10 +63,6 @@ func NewS3ObjectStoreFromConfig(host, region, accessKey, secretKey string) *S3Ob
 			NextProtos:         []string{"h2", "http/1.1"},
 		},
 		ForceAttemptHTTP2: true,
-	}
-
-	if err := http2.ConfigureTransport(tr); err != nil {
-		slog.Warn("Failed to configure HTTP/2", "error", err)
 	}
 
 	httpClient := &http.Client{Transport: tr}

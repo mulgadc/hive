@@ -27,7 +27,6 @@ import (
 	"github.com/mulgadc/hive/hive/awserrors"
 	"github.com/mulgadc/hive/hive/config"
 	"github.com/pterm/pterm"
-	"golang.org/x/net/http2"
 )
 
 // GenerateResourceID generates a unique resource ID with the given prefix.
@@ -212,11 +211,6 @@ func CreateS3Client(cfg *config.Config) *s3.S3 {
 			NextProtos:         []string{"h2", "http/1.1"},
 		},
 		ForceAttemptHTTP2: true,
-	}
-
-	// CRITICAL: Configure HTTP/2 support with custom TLS config
-	if err := http2.ConfigureTransport(tr); err != nil {
-		slog.Warn("Failed to configure HTTP/2", "error", err)
 	}
 
 	httpClient := &http.Client{Transport: tr}
