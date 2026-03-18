@@ -91,7 +91,7 @@ Check the daemon logs for specific errors:
 
 ```bash
 ls ~/spinifex/logs/
-cat ~/spinifex/logs/daemon.log
+cat ~/spinifex/logs/spinifex.log
 ```
 
 Common causes include port conflicts, missing OVN configuration, or untrusted CA certificates.

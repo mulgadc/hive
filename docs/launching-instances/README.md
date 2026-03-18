@@ -30,6 +30,7 @@ resources:
 Spinifex provides EC2-compatible VM management built on QEMU/KVM. Instances support cloud-init, SSH key injection, VPC networking, and standard AWS lifecycle operations.
 
 **Supported operations:**
+
 - `run-instances` — Launch new VMs
 - `describe-instances` — Query state
 - `stop-instances` / `start-instances` — Lifecycle
@@ -73,7 +74,7 @@ ssh -i ~/.ssh/spinifex-key ec2-user@127.0.0.1 -p <port>
 Check QEMU logs for the instance and verify the AMI architecture matches your host:
 
 ```bash
-cat ~/spinifex/logs/daemon.log
+cat ~/spinifex/logs/spinifex.log
 aws ec2 describe-images --image-ids $SPINIFEX_AMI
 ```
 

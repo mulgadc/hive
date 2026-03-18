@@ -33,6 +33,7 @@ resources:
 A Spinifex cluster operates as a fully distributed infrastructure region — similar to an AWS Region — where multiple nodes provide high availability, data durability, and fault tolerance.
 
 **Services distributed across nodes:**
+
 - **NATS** — Clustered message bus for request routing and JetStream replication
 - **Predastore** — Raft consensus with Reed-Solomon erasure coding (RS 2+1)
 - **Viperblock** — Block storage co-located with compute nodes
@@ -41,6 +42,7 @@ A Spinifex cluster operates as a fully distributed infrastructure region — sim
 Cluster formation is automatic. When initializing with `--nodes 3`, the init node starts a formation server and waits for peers to join. Once all nodes register, each receives the full cluster topology — credentials, CA certificates, NATS routes, Predastore peer lists — no manual configuration synchronization required.
 
 **Network requirements:**
+
 - Minimum 1 NIC per server
 - 2 NICs recommended for production (management + overlay)
 - UDP port 6081 open between hosts (Geneve tunnels)
@@ -52,7 +54,7 @@ Cluster formation is automatic. When initializing with `--nodes 3`, the init nod
 Run the binary installer on **every server** in the cluster:
 
 ```bash
-curl https://install.mulgadc.com/ | bash
+curl https://install.mulgadc.com | bash
 ```
 
 ## Step 2. Set node IP variables
@@ -270,7 +272,7 @@ curl -s http://$SPINIFEX_NODE1:4432/health
 Review the daemon logs for errors:
 
 ```bash
-cat ~/spinifex/logs/daemon.log
+cat ~/spinifex/logs/spinifex.log
 ```
 
 Verify `--bind` was set to the correct IP during cluster formation.

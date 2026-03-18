@@ -35,10 +35,12 @@ Spinifex is an open-source infrastructure platform that brings core AWS services
 This guide installs Spinifex on a single server using the binary installer. For multi-server clusters, see [Multi-Node Installation](/docs/installing-spinifex-multi-node). To build from source, see [Source Install](/docs/source-install).
 
 **Supported Operating Systems:**
+
 - Ubuntu 22.04 / 24.04 / 25.10
 - Debian 12.13
 
 **What gets installed:**
+
 - Spinifex daemon and CLI
 - QEMU/KVM for virtual machine management
 - OVN/Open vSwitch for VPC networking
@@ -51,7 +53,7 @@ This guide installs Spinifex on a single server using the binary installer. For 
 ## Step 1. Install Spinifex
 
 ```bash
-curl https://install.mulgadc.com/ | bash
+curl https://install.mulgadc.com | bash
 ```
 
 The installer downloads the Spinifex binary and bootstraps all dependencies (QEMU, OVN/OVS, AWS CLI).
@@ -172,7 +174,7 @@ Check the Spinifex daemon logs for errors:
 
 ```bash
 ls ~/spinifex/logs/
-cat ~/spinifex/logs/daemon.log
+cat ~/spinifex/logs/spinifex.log
 ```
 
 Verify the AMI was imported successfully:
