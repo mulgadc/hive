@@ -33,7 +33,7 @@ jobs:
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          repositories: mulga,hive,predastore,viperblock
+          repositories: mulga
 
       - uses: actions/checkout@v6
         with:
@@ -44,7 +44,7 @@ jobs:
 
       - name: Clone and build
         working-directory: mulga/scripts/tofu-cluster
-        run: GIT_TOKEN="${{ steps.app-token.outputs.token }}" ./build-artifacts.sh "${GIT_BRANCH}" "${RUNNER_TEMP}/hive-artifacts.tar"
+        run: ./build-artifacts.sh "${GIT_BRANCH}" "${RUNNER_TEMP}/hive-artifacts.tar"
 
       - name: Provision VM
         working-directory: mulga/scripts/tofu-cluster
@@ -96,7 +96,7 @@ jobs:
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          repositories: mulga,hive,predastore,viperblock
+          repositories: mulga
 
       - uses: actions/checkout@v6
         with:
@@ -107,7 +107,7 @@ jobs:
 
       - name: Clone and build
         working-directory: mulga/scripts/tofu-cluster
-        run: GIT_TOKEN="${{ steps.app-token.outputs.token }}" ./build-artifacts.sh "${GIT_BRANCH}" "${RUNNER_TEMP}/hive-artifacts.tar"
+        run: ./build-artifacts.sh "${GIT_BRANCH}" "${RUNNER_TEMP}/hive-artifacts.tar"
 
       - name: Provision VM
         working-directory: mulga/scripts/tofu-cluster
@@ -159,7 +159,7 @@ jobs:
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          repositories: mulga,hive,predastore,viperblock
+          repositories: mulga
 
       - uses: actions/checkout@v6
         with:
@@ -170,7 +170,7 @@ jobs:
 
       - name: Clone and build
         working-directory: mulga/scripts/tofu-cluster
-        run: GIT_TOKEN="${{ steps.app-token.outputs.token }}" ./build-artifacts.sh "${GIT_BRANCH}" "${RUNNER_TEMP}/hive-artifacts.tar"
+        run: ./build-artifacts.sh "${GIT_BRANCH}" "${RUNNER_TEMP}/hive-artifacts.tar"
 
       - name: Provision VMs
         working-directory: mulga/scripts/tofu-cluster
