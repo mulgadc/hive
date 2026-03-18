@@ -8,8 +8,8 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/kdomanski/iso9660 v0.4.0
 	github.com/klauspost/cpuid/v2 v2.3.0
-	github.com/mulgadc/predastore v1.0.3
-	github.com/mulgadc/viperblock v1.0.17
+	github.com/mulgadc/predastore v1.1.0
+	github.com/mulgadc/viperblock v1.1.0
 	github.com/nats-io/nats-server/v2 v2.12.4
 	github.com/nats-io/nats.go v1.49.0
 	github.com/ovn-kubernetes/libovsdb v0.8.1
@@ -39,7 +39,6 @@ require (
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cenkalti/hub v1.0.2 // indirect
 	github.com/cenkalti/rpc2 v1.0.5 // indirect
-	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/containerd/console v1.0.5 // indirect
@@ -112,7 +111,6 @@ require (
 	go.opentelemetry.io/otel v1.41.0 // indirect
 	go.opentelemetry.io/otel/metric v1.41.0 // indirect
 	go.opentelemetry.io/otel/trace v1.41.0 // indirect
-	go.uber.org/automaxprocs v1.6.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
