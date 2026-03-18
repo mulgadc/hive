@@ -11,7 +11,7 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// DescribeInstanceTypes queries all hive nodes for their instance types via NATS
+// DescribeInstanceTypes queries all spinifex nodes for their instance types via NATS
 func DescribeInstanceTypes(input *ec2.DescribeInstanceTypesInput, natsConn *nats.Conn, expectedNodes int) (*ec2.DescribeInstanceTypesOutput, error) {
 	// Marshal input to JSON
 	jsonData, err := json.Marshal(input)

@@ -31,8 +31,8 @@ cleanup() {
         fi
         echo ""
         echo "=== Spinifex Daemon Log ==="
-        if [ -f ~/spinifex/logs/hive.log ]; then
-            tail -200 ~/spinifex/logs/hive.log 2>/dev/null
+        if [ -f ~/spinifex/logs/spinifex.log ]; then
+            tail -200 ~/spinifex/logs/spinifex.log 2>/dev/null
         fi
         echo ""
         echo "=== AWS Gateway Log ==="
@@ -111,7 +111,7 @@ if [ "$BOOTSTRAPPED" != "true" ]; then
 
     # Trust the Spinifex CA certificate for AWS CLI SSL verification
     echo "Adding Spinifex CA certificate to system trust store..."
-    sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/hive-ca.crt
+    sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
     sudo update-ca-certificates
 
     # Start all services
@@ -122,12 +122,12 @@ fi
 
 # Wait for health checks on AWS Gateway
 echo "Waiting for AWS Gateway..."
-MAX_RETRIES=15
+MAX_RETRIES=30
 COUNT=0
 
 until curl -sk "https://${GATEWAY_HOST}:9999" > /dev/null || [ $COUNT -eq $MAX_RETRIES ]; do
     echo "Waiting for gateway... ($COUNT/$MAX_RETRIES)"
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -159,15 +159,15 @@ if ! echo "$GET_NODES_OUTPUT" | grep -q "Ready"; then
 fi
 echo "spx get nodes passed"
 
-# Test hive top nodes — should show CPU/MEM stats
-echo "Testing hive top nodes..."
+# Test spx top nodes — should show CPU/MEM stats
+echo "Testing spx top nodes..."
 TOP_NODES_OUTPUT=$(./bin/spx top nodes --config ~/spinifex/config/spinifex.toml --timeout 5s 2>/dev/null)
 echo "$TOP_NODES_OUTPUT"
 if ! echo "$TOP_NODES_OUTPUT" | grep -q "0/"; then
-    echo "hive top nodes did not show resource stats"
+    echo "spx top nodes did not show resource stats"
     exit 1
 fi
-echo "hive top nodes passed"
+echo "spx top nodes passed"
 
 # Test spx get vms — should show no VMs yet
 echo "Testing spx get vms (empty)..."
@@ -346,18 +346,18 @@ echo "Launched Instance ID: $INSTANCE_ID"
 echo "Polling for instance running state..."
 COUNT=0
 STATE="unknown"
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     # Capture full output to check if instance even exists in the response
     DESCRIBE_OUTPUT=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID") || {
-        echo "⚠️  Gateway request failed, retrying... ($COUNT/30)"
-        sleep 2
+        echo "⚠️  Gateway request failed, retrying... ($COUNT/60)"
+        sleep 1
         COUNT=$((COUNT + 1))
         continue
     }
 
     if [ -z "$DESCRIBE_OUTPUT" ]; then
         echo "⚠️  Gateway returned empty response, retrying..."
-        sleep 2
+        sleep 1
         COUNT=$((COUNT + 1))
         continue
     fi
@@ -375,7 +375,7 @@ while [ $COUNT -lt 30 ]; do
         exit 1
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -480,7 +480,7 @@ VM_HOSTNAME=$(ssh -o StrictHostKeyChecking=no \
     -i "test-key-1.pem" \
     ec2-user@"$SSH_HOST" 'hostname' 2>/dev/null)
 echo "VM hostname: $VM_HOSTNAME"
-# Hostname uses truncated ID: hive-vm-<first 8 hex chars of instance ID>
+# Hostname uses truncated ID: spinifex-vm-<first 8 hex chars of instance ID>
 SHORT_ID=$(echo "$INSTANCE_ID" | sed 's/^i-//' | cut -c1-8)
 if echo "$VM_HOSTNAME" | grep -q "$SHORT_ID"; then
     echo "Hostname contains instance ID prefix ($SHORT_ID)"
@@ -537,7 +537,7 @@ aws ec2 modify-volume --volume-id "$TEST_VOLUME_ID" --size "$NEW_SIZE"
 # Verify resize
 echo "Verifying resize..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     VOLUME_SIZE=$(aws ec2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].Size' --output text)
 
@@ -546,7 +546,7 @@ while [ $COUNT -lt 30 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -562,7 +562,7 @@ aws ec2 attach-volume --volume-id "$TEST_VOLUME_ID" --instance-id "$INSTANCE_ID"
 # Verify attachment
 echo "Verifying volume attachment..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     ATTACH_STATE=$(aws ec2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].Attachments[0].State' --output text)
     ATTACH_INSTANCE=$(aws ec2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
@@ -575,7 +575,7 @@ while [ $COUNT -lt 30 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -591,7 +591,7 @@ aws ec2 detach-volume --volume-id "$TEST_VOLUME_ID"
 # Verify detachment
 echo "Verifying volume detachment..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     VOL_STATE=$(aws ec2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].State' --output text)
 
@@ -600,7 +600,7 @@ while [ $COUNT -lt 30 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -616,7 +616,7 @@ aws ec2 delete-volume --volume-id "$TEST_VOLUME_ID"
 # Verify deletion
 echo "Verifying volume deletion..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     set +e
     VOLUME_CHECK=$(aws ec2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].VolumeId' --output text 2>&1)
@@ -628,11 +628,11 @@ while [ $COUNT -lt 30 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
-if [ $COUNT -ge 30 ]; then
+if [ $COUNT -ge 60 ]; then
     echo "Volume deletion verification timed out"
     exit 1
 fi
@@ -694,7 +694,7 @@ echo "Snapshot create response verified (State=$SNAP_STATE, VolumeId=$SNAP_VOL_R
 # Poll until snapshot is completed (should be immediate in v1, but poll for forward-compat)
 echo "Waiting for snapshot to complete..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     SNAP_STATE=$(aws ec2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
         --query 'Snapshots[0].State' --output text)
 
@@ -703,7 +703,7 @@ while [ $COUNT -lt 30 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -777,7 +777,7 @@ aws ec2 delete-snapshot --snapshot-id "$SNAPSHOT_ID"
 # Verify original is gone, copy remains
 echo "Verifying snapshot deletion..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     set +e
     SNAP_CHECK=$(aws ec2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
         --query 'Snapshots[0].SnapshotId' --output text 2>&1)
@@ -789,11 +789,11 @@ while [ $COUNT -lt 30 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
-if [ $COUNT -ge 30 ]; then
+if [ $COUNT -ge 60 ]; then
     echo "Snapshot deletion verification timed out"
     exit 1
 fi
@@ -991,13 +991,13 @@ echo "Phase 7: Instance State Transitions"
 echo "Stopping instance..."
 aws ec2 stop-instances --instance-ids "$INSTANCE_ID"
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)
     echo "Instance state: $STATE"
     if [ "$STATE" == "stopped" ]; then
         break
     fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -1060,14 +1060,14 @@ echo "Instance type updated to $MODIFIED_TYPE"
 echo "Starting instance with modified type..."
 aws ec2 start-instances --instance-ids "$INSTANCE_ID"
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
         --query 'Reservations[0].Instances[0].State.Name' --output text)
     echo "Instance state: $STATE"
     if [ "$STATE" == "running" ]; then
         break
     fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -1136,14 +1136,14 @@ aws ec2 reboot-instances --instance-ids "$INSTANCE_ID"
 
 # Verify state stays running (poll a few times to confirm no transient state change)
 COUNT=0
-while [ $COUNT -lt 5 ]; do
+while [ $COUNT -lt 10 ]; do
     STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
         --query 'Reservations[0].Instances[0].State.Name' --output text)
     if [ "$STATE" != "running" ]; then
         echo "Instance unexpectedly left running state: $STATE"
         exit 1
     fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 echo "Instance state remained running during reboot"
@@ -1196,10 +1196,10 @@ echo "Launched 2 instances: $MULTI_ID_1, $MULTI_ID_2"
 for MID in "$MULTI_ID_1" "$MULTI_ID_2"; do
     echo "Waiting for $MID to reach running state..."
     COUNT=0
-    while [ $COUNT -lt 30 ]; do
+    while [ $COUNT -lt 60 ]; do
         MSTATE=$(aws ec2 describe-instances --instance-ids "$MID" \
             --query 'Reservations[0].Instances[0].State.Name' --output text) || {
-            sleep 2
+            sleep 1
             COUNT=$((COUNT + 1))
             continue
         }
@@ -1207,7 +1207,7 @@ for MID in "$MULTI_ID_1" "$MULTI_ID_2"; do
             echo "Instance $MID is running"
             break
         fi
-        sleep 2
+        sleep 1
         COUNT=$((COUNT + 1))
     done
     if [ "$MSTATE" != "running" ]; then
@@ -1221,13 +1221,13 @@ echo "Terminating multi-launch instances..."
 aws ec2 terminate-instances --instance-ids "$MULTI_ID_1" "$MULTI_ID_2"
 for MID in "$MULTI_ID_1" "$MULTI_ID_2"; do
     COUNT=0
-    while [ $COUNT -lt 30 ]; do
+    while [ $COUNT -lt 60 ]; do
         MSTATE=$(aws ec2 describe-instances --instance-ids "$MID" \
             --query 'Reservations[0].Instances[0].State.Name' --output text)
         if [ "$MSTATE" == "terminated" ] || [ "$MSTATE" == "None" ]; then
             break
         fi
-        sleep 2
+        sleep 1
         COUNT=$((COUNT + 1))
     done
 done
@@ -1476,14 +1476,14 @@ echo ""
 echo "IAM Phase 3: User Authentication"
 
 # Configure alice profile
-echo "  Configuring hive-alice profile..."
-setup_test_profile hive-alice "$ALICE_KEY_ID" "$ALICE_SECRET"
+echo "  Configuring spx-alice profile..."
+setup_test_profile spx-alice "$ALICE_KEY_ID" "$ALICE_SECRET"
 
 # Deactivate key → auth should fail
 echo "  Deactivating alice key, verifying auth rejection..."
 aws iam update-access-key --user-name alice --access-key-id "$ALICE_KEY_ID" --status Inactive
 expect_error "InvalidClientTokenId" \
-    aws ec2 describe-instances --profile hive-alice
+    aws ec2 describe-instances --profile spx-alice
 echo "  Inactive key correctly rejected"
 
 # Reactivate key
@@ -1492,22 +1492,22 @@ aws iam update-access-key --user-name alice --access-key-id "$ALICE_KEY_ID" --st
 
 # Bad secret → SignatureDoesNotMatch
 echo "  Testing bad secret (expect SignatureDoesNotMatch)..."
-setup_test_profile hive-bad "$ALICE_KEY_ID" "WRONG_SECRET_KEY_HERE_12345678901"
+setup_test_profile spx-bad "$ALICE_KEY_ID" "WRONG_SECRET_KEY_HERE_12345678901"
 expect_error "SignatureDoesNotMatch" \
-    aws ec2 describe-instances --profile hive-bad
+    aws ec2 describe-instances --profile spx-bad
 
 # Non-existent key ID → InvalidClientTokenId
 echo "  Testing fake key ID (expect InvalidClientTokenId)..."
-setup_test_profile hive-fake "AKIAXXXXXXXXXXXXXXXX" "doesntmatter"
+setup_test_profile spx-fake "AKIAXXXXXXXXXXXXXXXX" "doesntmatter"
 expect_error "InvalidClientTokenId" \
-    aws ec2 describe-instances --profile hive-fake
+    aws ec2 describe-instances --profile spx-fake
 
 # Multi-user auth — create bob key and verify both auth
 echo "  Creating access key for bob..."
 BOB_KEY=$(aws iam create-access-key --user-name bob)
 BOB_KEY_ID=$(echo "$BOB_KEY" | jq -r '.AccessKey.AccessKeyId')
 BOB_SECRET=$(echo "$BOB_KEY" | jq -r '.AccessKey.SecretAccessKey')
-setup_test_profile hive-bob "$BOB_KEY_ID" "$BOB_SECRET"
+setup_test_profile spx-bob "$BOB_KEY_ID" "$BOB_SECRET"
 
 # Root still works
 echo "  Verifying root auth..."
@@ -1645,7 +1645,7 @@ aws iam create-user --user-name charlie > /dev/null
 CHARLIE_KEY=$(aws iam create-access-key --user-name charlie)
 CHARLIE_KEY_ID=$(echo "$CHARLIE_KEY" | jq -r '.AccessKey.AccessKeyId')
 CHARLIE_SECRET=$(echo "$CHARLIE_KEY" | jq -r '.AccessKey.SecretAccessKey')
-setup_test_profile hive-charlie "$CHARLIE_KEY_ID" "$CHARLIE_SECRET"
+setup_test_profile spx-charlie "$CHARLIE_KEY_ID" "$CHARLIE_SECRET"
 
 # Attach policies
 echo "  Attaching EC2ReadOnly + IAMReadOnly to alice..."
@@ -1692,40 +1692,40 @@ expect_error "NoSuchEntity" aws iam attach-user-policy --user-name ghost \
 # Default Deny — charlie has no policies
 echo "  Testing default deny (charlie, no policies)..."
 expect_error "AccessDenied" \
-    aws ec2 describe-instances --profile hive-charlie
+    aws ec2 describe-instances --profile spx-charlie
 expect_error "AccessDenied" \
-    aws iam list-users --profile hive-charlie
+    aws iam list-users --profile spx-charlie
 echo "  Default deny passed"
 
 # Explicit Allow — alice has EC2ReadOnly + IAMReadOnly
 echo "  Testing explicit allow (alice, EC2ReadOnly + IAMReadOnly)..."
-aws ec2 describe-instances --profile hive-alice > /dev/null
+aws ec2 describe-instances --profile spx-alice > /dev/null
 echo "    ec2:DescribeInstances — allowed"
-aws ec2 describe-vpcs --profile hive-alice > /dev/null
+aws ec2 describe-vpcs --profile spx-alice > /dev/null
 echo "    ec2:DescribeVpcs — allowed"
-aws iam list-users --profile hive-alice > /dev/null
+aws iam list-users --profile spx-alice > /dev/null
 echo "    iam:ListUsers — allowed"
 
 # Actions NOT in alice's policies → denied
 expect_error "AccessDenied" \
-    aws ec2 describe-key-pairs --profile hive-alice
+    aws ec2 describe-key-pairs --profile spx-alice
 echo "    ec2:DescribeKeyPairs — denied (not in policy)"
 expect_error "AccessDenied" \
-    aws iam create-user --user-name hack --profile hive-alice
+    aws iam create-user --user-name hack --profile spx-alice
 echo "    iam:CreateUser — denied (not in policy)"
 echo "  Explicit allow passed"
 
 # Wildcard Allow with Explicit Deny — bob has DenyTerminate (ec2:* Allow + ec2:TerminateInstances Deny)
 echo "  Testing deny override (bob, DenyTerminate)..."
-aws ec2 describe-instances --profile hive-bob > /dev/null
+aws ec2 describe-instances --profile spx-bob > /dev/null
 echo "    ec2:DescribeInstances — allowed (ec2:* wildcard)"
-aws ec2 describe-key-pairs --profile hive-bob > /dev/null
+aws ec2 describe-key-pairs --profile spx-bob > /dev/null
 echo "    ec2:DescribeKeyPairs — allowed (ec2:* wildcard)"
 expect_error "AccessDenied" \
-    aws ec2 terminate-instances --instance-ids i-fake --profile hive-bob
+    aws ec2 terminate-instances --instance-ids i-fake --profile spx-bob
 echo "    ec2:TerminateInstances — denied (explicit Deny overrides Allow)"
 expect_error "AccessDenied" \
-    aws iam list-users --profile hive-bob
+    aws iam list-users --profile spx-bob
 echo "    iam:ListUsers — denied (IAM not covered by ec2:*)"
 echo "  Deny override passed"
 
@@ -1746,15 +1746,15 @@ aws iam detach-user-policy --user-name alice \
 aws iam attach-user-policy --user-name alice \
     --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/EC2DescribeAll"
 
-aws ec2 describe-instances --profile hive-alice > /dev/null
+aws ec2 describe-instances --profile spx-alice > /dev/null
 echo "    ec2:DescribeInstances — allowed (Describe*)"
-aws ec2 describe-key-pairs --profile hive-alice > /dev/null
+aws ec2 describe-key-pairs --profile spx-alice > /dev/null
 echo "    ec2:DescribeKeyPairs — allowed (Describe*)"
 expect_error "AccessDenied" \
-    aws ec2 create-key-pair --key-name x --profile hive-alice
+    aws ec2 create-key-pair --key-name x --profile spx-alice
 echo "    ec2:CreateKeyPair — denied (not Describe*)"
 expect_error "AccessDenied" \
-    aws iam list-users --profile hive-alice
+    aws iam list-users --profile spx-alice
 echo "    iam:ListUsers — denied (not ec2:Describe*)"
 echo "  Prefix wildcard passed"
 
@@ -1762,9 +1762,9 @@ echo "  Prefix wildcard passed"
 echo "  Testing FullAdmin (charlie)..."
 aws iam attach-user-policy --user-name charlie \
     --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/admin/FullAdmin"
-aws ec2 describe-instances --profile hive-charlie > /dev/null
+aws ec2 describe-instances --profile spx-charlie > /dev/null
 echo "    ec2:DescribeInstances — allowed (was denied)"
-aws iam list-users --profile hive-charlie > /dev/null
+aws iam list-users --profile spx-charlie > /dev/null
 echo "    iam:ListUsers — allowed (was denied)"
 echo "  FullAdmin passed"
 
@@ -1779,7 +1779,7 @@ echo "  Detaching EC2DescribeAll from alice..."
 aws iam detach-user-policy --user-name alice \
     --policy-arn "arn:aws:iam::${ADMIN_ACCOUNT}:policy/EC2DescribeAll"
 expect_error "AccessDenied" \
-    aws ec2 describe-instances --profile hive-alice
+    aws ec2 describe-instances --profile spx-alice
 echo "  Alice lost access after detach"
 
 # DeletePolicy — conflict (DenyTerminate still attached to bob)
@@ -1878,7 +1878,7 @@ if [ -z "$ALPHA_ACCOUNT" ] || [ -z "$ALPHA_KEY_ID" ]; then
     exit 1
 fi
 echo "  Team Alpha: account=$ALPHA_ACCOUNT key=$ALPHA_KEY_ID"
-setup_test_profile hive-team-alpha "$ALPHA_KEY_ID" "$ALPHA_SECRET"
+setup_test_profile spx-team-alpha "$ALPHA_KEY_ID" "$ALPHA_SECRET"
 
 echo "  Creating Team Beta account..."
 BETA_OUTPUT=$(./bin/spx admin account create --name "Team Beta" 2>&1)
@@ -1892,12 +1892,12 @@ if [ -z "$BETA_ACCOUNT" ] || [ -z "$BETA_KEY_ID" ]; then
     exit 1
 fi
 echo "  Team Beta: account=$BETA_ACCOUNT key=$BETA_KEY_ID"
-setup_test_profile hive-team-beta "$BETA_KEY_ID" "$BETA_SECRET"
+setup_test_profile spx-team-beta "$BETA_KEY_ID" "$BETA_SECRET"
 
 # Verify auth
-aws ec2 describe-instances --profile hive-team-alpha > /dev/null
+aws ec2 describe-instances --profile spx-team-alpha > /dev/null
 echo "  Alpha auth OK"
-aws ec2 describe-instances --profile hive-team-beta > /dev/null
+aws ec2 describe-instances --profile spx-team-beta > /dev/null
 echo "  Beta auth OK"
 
 echo "  Account setup complete"
@@ -1908,8 +1908,8 @@ echo "Phase 8 Step 2: Instance Scoping"
 echo "----------------------------------------"
 
 # Create per-account key pairs (key pairs are account-scoped, root's test-key-1 is invisible)
-aws ec2 create-key-pair --key-name alpha-instance-key --profile hive-team-alpha > /dev/null
-aws ec2 create-key-pair --key-name beta-instance-key --profile hive-team-beta > /dev/null
+aws ec2 create-key-pair --key-name alpha-instance-key --profile spx-team-alpha > /dev/null
+aws ec2 create-key-pair --key-name beta-instance-key --profile spx-team-beta > /dev/null
 echo "  Created per-account key pairs for instance launches"
 
 echo "  Alpha launching instance..."
@@ -1917,7 +1917,7 @@ ALPHA_RUN=$(aws ec2 run-instances \
     --image-id "$AMI_ID" \
     --instance-type "$INSTANCE_TYPE" \
     --key-name alpha-instance-key \
-    --profile hive-team-alpha)
+    --profile spx-team-alpha)
 ALPHA_INST=$(echo "$ALPHA_RUN" | jq -r '.Instances[0].InstanceId')
 echo "  Alpha instance: $ALPHA_INST"
 
@@ -1926,21 +1926,21 @@ BETA_RUN=$(aws ec2 run-instances \
     --image-id "$AMI_ID" \
     --instance-type "$INSTANCE_TYPE" \
     --key-name beta-instance-key \
-    --profile hive-team-beta)
+    --profile spx-team-beta)
 BETA_INST=$(echo "$BETA_RUN" | jq -r '.Instances[0].InstanceId')
 echo "  Beta instance: $BETA_INST"
 
 # Wait for running
 echo "  Waiting for instances to reach running state..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
-    A_STATE=$(aws ec2 describe-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha \
+while [ $COUNT -lt 60 ]; do
+    A_STATE=$(aws ec2 describe-instances --instance-ids "$ALPHA_INST" --profile spx-team-alpha \
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "pending")
-    B_STATE=$(aws ec2 describe-instances --instance-ids "$BETA_INST" --profile hive-team-beta \
+    B_STATE=$(aws ec2 describe-instances --instance-ids "$BETA_INST" --profile spx-team-beta \
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "pending")
     echo "  Alpha=$A_STATE, Beta=$B_STATE"
     if [ "$A_STATE" == "running" ] && [ "$B_STATE" == "running" ]; then break; fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 if [ "$A_STATE" != "running" ] || [ "$B_STATE" != "running" ]; then
@@ -1950,7 +1950,7 @@ fi
 echo "  Both instances running"
 
 # Describe isolation
-ALPHA_INSTANCES=$(aws ec2 describe-instances --profile hive-team-alpha \
+ALPHA_INSTANCES=$(aws ec2 describe-instances --profile spx-team-alpha \
     --query 'Reservations[].Instances[].InstanceId' --output text)
 if echo "$ALPHA_INSTANCES" | grep -q "$BETA_INST"; then
     echo "  ERROR: Alpha can see Beta's instance"
@@ -1958,7 +1958,7 @@ if echo "$ALPHA_INSTANCES" | grep -q "$BETA_INST"; then
 fi
 echo "  Alpha sees only own instances"
 
-BETA_INSTANCES=$(aws ec2 describe-instances --profile hive-team-beta \
+BETA_INSTANCES=$(aws ec2 describe-instances --profile spx-team-beta \
     --query 'Reservations[].Instances[].InstanceId' --output text)
 if echo "$BETA_INSTANCES" | grep -q "$ALPHA_INST"; then
     echo "  ERROR: Beta can see Alpha's instance"
@@ -1967,7 +1967,7 @@ fi
 echo "  Beta sees only own instances"
 
 # OwnerId verification
-ALPHA_OWNER=$(aws ec2 describe-instances --profile hive-team-alpha \
+ALPHA_OWNER=$(aws ec2 describe-instances --profile spx-team-alpha \
     --query 'Reservations[0].OwnerId' --output text)
 if [ "$ALPHA_OWNER" != "$ALPHA_ACCOUNT" ]; then
     echo "  ERROR: Alpha OwnerId mismatch: expected $ALPHA_ACCOUNT, got $ALPHA_OWNER"
@@ -1977,49 +1977,49 @@ echo "  Alpha OwnerId correct: $ALPHA_OWNER"
 
 # Cross-account operations
 expect_error "InvalidInstanceID.NotFound" \
-    aws ec2 stop-instances --instance-ids "$BETA_INST" --profile hive-team-alpha
+    aws ec2 stop-instances --instance-ids "$BETA_INST" --profile spx-team-alpha
 echo "  Alpha cannot stop Beta's instance"
 
 expect_error "InvalidInstanceID.NotFound" \
-    aws ec2 terminate-instances --instance-ids "$ALPHA_INST" --profile hive-team-beta
+    aws ec2 terminate-instances --instance-ids "$ALPHA_INST" --profile spx-team-beta
 echo "  Beta cannot terminate Alpha's instance"
 
 expect_error "InvalidInstanceID.NotFound" \
-    aws ec2 reboot-instances --instance-ids "$BETA_INST" --profile hive-team-alpha
+    aws ec2 reboot-instances --instance-ids "$BETA_INST" --profile spx-team-alpha
 echo "  Alpha cannot reboot Beta's instance"
 
 # Stop Alpha's instance for cross-account start/modify/console tests
-aws ec2 stop-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha > /dev/null
+aws ec2 stop-instances --instance-ids "$ALPHA_INST" --profile spx-team-alpha > /dev/null
 COUNT=0
-while [ $COUNT -lt 30 ]; do
-    A_STATE=$(aws ec2 describe-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha \
+while [ $COUNT -lt 60 ]; do
+    A_STATE=$(aws ec2 describe-instances --instance-ids "$ALPHA_INST" --profile spx-team-alpha \
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null)
     if [ "$A_STATE" == "stopped" ]; then break; fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
 expect_error "InvalidInstanceID.NotFound" \
-    aws ec2 start-instances --instance-ids "$ALPHA_INST" --profile hive-team-beta
+    aws ec2 start-instances --instance-ids "$ALPHA_INST" --profile spx-team-beta
 echo "  Beta cannot start Alpha's stopped instance"
 
 expect_error "InvalidInstanceID.NotFound" \
     aws ec2 modify-instance-attribute --instance-id "$ALPHA_INST" \
-    --instance-type '{"Value":"t2.small"}' --profile hive-team-beta
+    --instance-type '{"Value":"t2.small"}' --profile spx-team-beta
 echo "  Beta cannot modify Alpha's instance"
 
 expect_error "InvalidInstanceID.NotFound" \
-    aws ec2 get-console-output --instance-id "$ALPHA_INST" --profile hive-team-beta
+    aws ec2 get-console-output --instance-id "$ALPHA_INST" --profile spx-team-beta
 echo "  Beta cannot get console output of Alpha's instance"
 
 # Restart Alpha's instance for later tests
-aws ec2 start-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha > /dev/null
+aws ec2 start-instances --instance-ids "$ALPHA_INST" --profile spx-team-alpha > /dev/null
 COUNT=0
-while [ $COUNT -lt 30 ]; do
-    A_STATE=$(aws ec2 describe-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha \
+while [ $COUNT -lt 60 ]; do
+    A_STATE=$(aws ec2 describe-instances --instance-ids "$ALPHA_INST" --profile spx-team-alpha \
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null)
     if [ "$A_STATE" == "running" ]; then break; fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -2031,15 +2031,15 @@ echo "Phase 8 Step 3: Volume Scoping"
 echo "----------------------------------------"
 
 ALPHA_VOL=$(aws ec2 create-volume --availability-zone "$AZ_NAME" --size 10 \
-    --volume-type gp3 --profile hive-team-alpha | jq -r '.VolumeId')
+    --volume-type gp3 --profile spx-team-alpha | jq -r '.VolumeId')
 echo "  Alpha volume: $ALPHA_VOL"
 
 BETA_VOL=$(aws ec2 create-volume --availability-zone "$AZ_NAME" --size 10 \
-    --volume-type gp3 --profile hive-team-beta | jq -r '.VolumeId')
+    --volume-type gp3 --profile spx-team-beta | jq -r '.VolumeId')
 echo "  Beta volume: $BETA_VOL"
 
 # Describe isolation
-ALPHA_VOLS=$(aws ec2 describe-volumes --profile hive-team-alpha \
+ALPHA_VOLS=$(aws ec2 describe-volumes --profile spx-team-alpha \
     --query 'Volumes[].VolumeId' --output text)
 if echo "$ALPHA_VOLS" | grep -q "$BETA_VOL"; then
     echo "  ERROR: Alpha can see Beta's volume"
@@ -2049,37 +2049,37 @@ echo "  Alpha sees only own volumes"
 
 # Cross-account filter
 expect_error "InvalidVolume.NotFound" \
-    aws ec2 describe-volumes --volume-ids "$BETA_VOL" --profile hive-team-alpha
+    aws ec2 describe-volumes --volume-ids "$BETA_VOL" --profile spx-team-alpha
 echo "  Alpha cannot describe Beta's volume by ID"
 
 # Cross-account delete
 expect_error "InvalidVolume.NotFound" \
-    aws ec2 delete-volume --volume-id "$ALPHA_VOL" --profile hive-team-beta
+    aws ec2 delete-volume --volume-id "$ALPHA_VOL" --profile spx-team-beta
 echo "  Beta cannot delete Alpha's volume"
 
 # Cross-account attach (other's volume)
 expect_error "InvalidVolume.NotFound" \
     aws ec2 attach-volume --volume-id "$ALPHA_VOL" \
-    --instance-id "$BETA_INST" --device /dev/sdf --profile hive-team-beta
+    --instance-id "$BETA_INST" --device /dev/sdf --profile spx-team-beta
 echo "  Beta cannot attach Alpha's volume"
 
 # Attach Alpha's volume to Alpha's instance, then test cross-account detach
 aws ec2 attach-volume --volume-id "$ALPHA_VOL" \
-    --instance-id "$ALPHA_INST" --device /dev/sdf --profile hive-team-alpha > /dev/null
-sleep 2
+    --instance-id "$ALPHA_INST" --device /dev/sdf --profile spx-team-alpha > /dev/null
+sleep 1
 
 expect_error "InvalidVolume.NotFound" \
-    aws ec2 detach-volume --volume-id "$ALPHA_VOL" --profile hive-team-beta
+    aws ec2 detach-volume --volume-id "$ALPHA_VOL" --profile spx-team-beta
 echo "  Beta cannot detach Alpha's volume"
 
 # Cross-account modify
 expect_error "InvalidVolume.NotFound" \
-    aws ec2 modify-volume --volume-id "$ALPHA_VOL" --size 20 --profile hive-team-beta
+    aws ec2 modify-volume --volume-id "$ALPHA_VOL" --size 20 --profile spx-team-beta
 echo "  Beta cannot modify Alpha's volume"
 
 # Detach for cleanup later
-aws ec2 detach-volume --volume-id "$ALPHA_VOL" --profile hive-team-alpha > /dev/null
-sleep 2
+aws ec2 detach-volume --volume-id "$ALPHA_VOL" --profile spx-team-alpha > /dev/null
+sleep 1
 
 echo "  Volume scoping passed"
 
@@ -2088,16 +2088,16 @@ echo ""
 echo "Phase 8 Step 4: Key Pair Scoping"
 echo "----------------------------------------"
 
-aws ec2 create-key-pair --key-name alpha-key --profile hive-team-alpha > /dev/null
+aws ec2 create-key-pair --key-name alpha-key --profile spx-team-alpha > /dev/null
 ALPHA_KEYPAIR_ID=$(aws ec2 describe-key-pairs --key-names alpha-key \
-    --profile hive-team-alpha --query 'KeyPairs[0].KeyPairId' --output text)
+    --profile spx-team-alpha --query 'KeyPairs[0].KeyPairId' --output text)
 echo "  Alpha key: alpha-key ($ALPHA_KEYPAIR_ID)"
 
-aws ec2 create-key-pair --key-name beta-key --profile hive-team-beta > /dev/null
+aws ec2 create-key-pair --key-name beta-key --profile spx-team-beta > /dev/null
 echo "  Beta key: beta-key"
 
 # Describe isolation
-ALPHA_KEYS=$(aws ec2 describe-key-pairs --profile hive-team-alpha \
+ALPHA_KEYS=$(aws ec2 describe-key-pairs --profile spx-team-alpha \
     --query 'KeyPairs[].KeyName' --output text)
 if echo "$ALPHA_KEYS" | grep -q "beta-key"; then
     echo "  ERROR: Alpha can see Beta's key"
@@ -2106,12 +2106,12 @@ fi
 echo "  Alpha sees only own keys"
 
 # Same name in both accounts (namespace isolation)
-aws ec2 create-key-pair --key-name shared-name --profile hive-team-alpha > /dev/null
-aws ec2 create-key-pair --key-name shared-name --profile hive-team-beta > /dev/null
+aws ec2 create-key-pair --key-name shared-name --profile spx-team-alpha > /dev/null
+aws ec2 create-key-pair --key-name shared-name --profile spx-team-beta > /dev/null
 ALPHA_SHARED_ID=$(aws ec2 describe-key-pairs --key-names shared-name \
-    --profile hive-team-alpha --query 'KeyPairs[0].KeyPairId' --output text)
+    --profile spx-team-alpha --query 'KeyPairs[0].KeyPairId' --output text)
 BETA_SHARED_ID=$(aws ec2 describe-key-pairs --key-names shared-name \
-    --profile hive-team-beta --query 'KeyPairs[0].KeyPairId' --output text)
+    --profile spx-team-beta --query 'KeyPairs[0].KeyPairId' --output text)
 if [ "$ALPHA_SHARED_ID" == "$BETA_SHARED_ID" ]; then
     echo "  ERROR: Same KeyPairId for shared-name in both accounts"
     exit 1
@@ -2119,9 +2119,9 @@ fi
 echo "  Namespace isolation: alpha=$ALPHA_SHARED_ID, beta=$BETA_SHARED_ID"
 
 # Cross-account delete (idempotent, but shouldn't affect other account)
-aws ec2 delete-key-pair --key-name alpha-key --profile hive-team-beta
+aws ec2 delete-key-pair --key-name alpha-key --profile spx-team-beta
 ALPHA_KEY_CHECK=$(aws ec2 describe-key-pairs --key-names alpha-key \
-    --profile hive-team-alpha --query 'KeyPairs[0].KeyPairId' --output text)
+    --profile spx-team-alpha --query 'KeyPairs[0].KeyPairId' --output text)
 if [ "$ALPHA_KEY_CHECK" != "$ALPHA_KEYPAIR_ID" ]; then
     echo "  ERROR: Beta's delete affected Alpha's key"
     exit 1
@@ -2131,8 +2131,8 @@ echo "  Cross-account delete had no effect on Alpha's key"
 # Import key pair — account scoped
 ssh-keygen -t ed25519 -f /tmp/test-import-key -N "" -q
 aws ec2 import-key-pair --key-name imported-key \
-    --public-key-material fileb:///tmp/test-import-key.pub --profile hive-team-alpha > /dev/null
-BETA_IMPORT_CHECK=$(aws ec2 describe-key-pairs --profile hive-team-beta \
+    --public-key-material fileb:///tmp/test-import-key.pub --profile spx-team-alpha > /dev/null
+BETA_IMPORT_CHECK=$(aws ec2 describe-key-pairs --profile spx-team-beta \
     --query 'KeyPairs[].KeyName' --output text)
 if echo "$BETA_IMPORT_CHECK" | grep -q "imported-key"; then
     echo "  ERROR: Beta can see Alpha's imported key"
@@ -2149,15 +2149,15 @@ echo "Phase 8 Step 5: Snapshot Scoping"
 echo "----------------------------------------"
 
 ALPHA_SNAP=$(aws ec2 create-snapshot --volume-id "$ALPHA_VOL" \
-    --description "Alpha snapshot" --profile hive-team-alpha | jq -r '.SnapshotId')
+    --description "Alpha snapshot" --profile spx-team-alpha | jq -r '.SnapshotId')
 echo "  Alpha snapshot: $ALPHA_SNAP"
 
 BETA_SNAP=$(aws ec2 create-snapshot --volume-id "$BETA_VOL" \
-    --description "Beta snapshot" --profile hive-team-beta | jq -r '.SnapshotId')
+    --description "Beta snapshot" --profile spx-team-beta | jq -r '.SnapshotId')
 echo "  Beta snapshot: $BETA_SNAP"
 
 # Describe isolation
-ALPHA_SNAPS=$(aws ec2 describe-snapshots --owner-ids self --profile hive-team-alpha \
+ALPHA_SNAPS=$(aws ec2 describe-snapshots --owner-ids self --profile spx-team-alpha \
     --query 'Snapshots[].SnapshotId' --output text)
 if echo "$ALPHA_SNAPS" | grep -q "$BETA_SNAP"; then
     echo "  ERROR: Alpha can see Beta's snapshot"
@@ -2166,7 +2166,7 @@ fi
 echo "  Alpha sees only own snapshots"
 
 # OwnerId verification
-ALPHA_SNAP_OWNER=$(aws ec2 describe-snapshots --owner-ids self --profile hive-team-alpha \
+ALPHA_SNAP_OWNER=$(aws ec2 describe-snapshots --owner-ids self --profile spx-team-alpha \
     --query 'Snapshots[0].OwnerId' --output text)
 if [ "$ALPHA_SNAP_OWNER" != "$ALPHA_ACCOUNT" ]; then
     echo "  ERROR: Snapshot OwnerId mismatch: expected $ALPHA_ACCOUNT, got $ALPHA_SNAP_OWNER"
@@ -2176,13 +2176,13 @@ echo "  Alpha snapshot OwnerId correct"
 
 # Cross-account delete
 expect_error "UnauthorizedOperation" \
-    aws ec2 delete-snapshot --snapshot-id "$ALPHA_SNAP" --profile hive-team-beta
+    aws ec2 delete-snapshot --snapshot-id "$ALPHA_SNAP" --profile spx-team-beta
 echo "  Beta cannot delete Alpha's snapshot"
 
 # Cross-account snapshot from other's volume
 expect_error "InvalidVolume.NotFound" \
     aws ec2 create-snapshot --volume-id "$ALPHA_VOL" \
-    --description "stolen" --profile hive-team-beta
+    --description "stolen" --profile spx-team-beta
 echo "  Beta cannot snapshot Alpha's volume"
 
 echo "  Snapshot scoping passed"
@@ -2193,15 +2193,15 @@ echo "Phase 8 Step 6: VPC/Subnet Scoping"
 echo "----------------------------------------"
 
 ALPHA_VPC=$(aws ec2 create-vpc --cidr-block 10.0.0.0/16 \
-    --profile hive-team-alpha --query 'Vpc.VpcId' --output text)
+    --profile spx-team-alpha --query 'Vpc.VpcId' --output text)
 echo "  Alpha VPC: $ALPHA_VPC"
 
 BETA_VPC=$(aws ec2 create-vpc --cidr-block 10.0.0.0/16 \
-    --profile hive-team-beta --query 'Vpc.VpcId' --output text)
+    --profile spx-team-beta --query 'Vpc.VpcId' --output text)
 echo "  Beta VPC: $BETA_VPC (same CIDR — no conflict)"
 
 # Describe isolation
-ALPHA_VPCS=$(aws ec2 describe-vpcs --profile hive-team-alpha \
+ALPHA_VPCS=$(aws ec2 describe-vpcs --profile spx-team-alpha \
     --query 'Vpcs[].VpcId' --output text)
 if echo "$ALPHA_VPCS" | grep -q "$BETA_VPC"; then
     echo "  ERROR: Alpha can see Beta's VPC"
@@ -2211,25 +2211,25 @@ echo "  VPC describe isolation OK"
 
 # Cross-account describe by ID
 expect_error "InvalidVpcID.NotFound" \
-    aws ec2 describe-vpcs --vpc-ids "$BETA_VPC" --profile hive-team-alpha
+    aws ec2 describe-vpcs --vpc-ids "$BETA_VPC" --profile spx-team-alpha
 echo "  Alpha cannot describe Beta's VPC by ID"
 
 # Cross-account delete
 expect_error "InvalidVpcID.NotFound" \
-    aws ec2 delete-vpc --vpc-id "$ALPHA_VPC" --profile hive-team-beta
+    aws ec2 delete-vpc --vpc-id "$ALPHA_VPC" --profile spx-team-beta
 echo "  Beta cannot delete Alpha's VPC"
 
 # Create subnets
 ALPHA_SUBNET=$(aws ec2 create-subnet --vpc-id "$ALPHA_VPC" --cidr-block 10.0.1.0/24 \
-    --profile hive-team-alpha --query 'Subnet.SubnetId' --output text)
+    --profile spx-team-alpha --query 'Subnet.SubnetId' --output text)
 echo "  Alpha subnet: $ALPHA_SUBNET"
 
 BETA_SUBNET=$(aws ec2 create-subnet --vpc-id "$BETA_VPC" --cidr-block 10.0.1.0/24 \
-    --profile hive-team-beta --query 'Subnet.SubnetId' --output text)
+    --profile spx-team-beta --query 'Subnet.SubnetId' --output text)
 echo "  Beta subnet: $BETA_SUBNET"
 
 # Subnet describe isolation
-ALPHA_SUBNETS=$(aws ec2 describe-subnets --profile hive-team-alpha \
+ALPHA_SUBNETS=$(aws ec2 describe-subnets --profile spx-team-alpha \
     --query 'Subnets[].SubnetId' --output text)
 if echo "$ALPHA_SUBNETS" | grep -q "$BETA_SUBNET"; then
     echo "  ERROR: Alpha can see Beta's subnet"
@@ -2240,12 +2240,12 @@ echo "  Subnet describe isolation OK"
 # Cross-account create subnet in other's VPC
 expect_error "InvalidVpcID.NotFound" \
     aws ec2 create-subnet --vpc-id "$ALPHA_VPC" --cidr-block 10.0.2.0/24 \
-    --profile hive-team-beta
+    --profile spx-team-beta
 echo "  Beta cannot create subnet in Alpha's VPC"
 
 # Cross-account subnet delete
 expect_error "InvalidSubnetID.NotFound" \
-    aws ec2 delete-subnet --subnet-id "$ALPHA_SUBNET" --profile hive-team-beta
+    aws ec2 delete-subnet --subnet-id "$ALPHA_SUBNET" --profile spx-team-beta
 echo "  Beta cannot delete Alpha's subnet"
 
 echo "  VPC/Subnet scoping passed"
@@ -2256,16 +2256,16 @@ echo "Phase 8 Step 7: IGW + EIGW Scoping"
 echo "----------------------------------------"
 
 # IGW
-ALPHA_IGW=$(aws ec2 create-internet-gateway --profile hive-team-alpha \
+ALPHA_IGW=$(aws ec2 create-internet-gateway --profile spx-team-alpha \
     --query 'InternetGateway.InternetGatewayId' --output text)
 echo "  Alpha IGW: $ALPHA_IGW"
 
-BETA_IGW=$(aws ec2 create-internet-gateway --profile hive-team-beta \
+BETA_IGW=$(aws ec2 create-internet-gateway --profile spx-team-beta \
     --query 'InternetGateway.InternetGatewayId' --output text)
 echo "  Beta IGW: $BETA_IGW"
 
 # IGW describe isolation
-ALPHA_IGWS=$(aws ec2 describe-internet-gateways --profile hive-team-alpha \
+ALPHA_IGWS=$(aws ec2 describe-internet-gateways --profile spx-team-alpha \
     --query 'InternetGateways[].InternetGatewayId' --output text)
 if echo "$ALPHA_IGWS" | grep -q "$BETA_IGW"; then
     echo "  ERROR: Alpha can see Beta's IGW"
@@ -2276,42 +2276,42 @@ echo "  IGW describe isolation OK"
 # Cross-account IGW describe by ID
 expect_error "InvalidInternetGatewayID.NotFound" \
     aws ec2 describe-internet-gateways --internet-gateway-ids "$BETA_IGW" \
-    --profile hive-team-alpha
+    --profile spx-team-alpha
 echo "  Alpha cannot describe Beta's IGW by ID"
 
 # Cross-account IGW delete
 expect_error "InvalidInternetGatewayID.NotFound" \
     aws ec2 delete-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
-    --profile hive-team-beta
+    --profile spx-team-beta
 echo "  Beta cannot delete Alpha's IGW"
 
 # Cross-account attach IGW to other's VPC
 expect_error "InvalidInternetGatewayID.NotFound" \
     aws ec2 attach-internet-gateway --internet-gateway-id "$BETA_IGW" \
-    --vpc-id "$ALPHA_VPC" --profile hive-team-alpha
+    --vpc-id "$ALPHA_VPC" --profile spx-team-alpha
 echo "  Alpha cannot attach Beta's IGW to own VPC"
 
 # Attach Alpha's IGW, test cross-account detach
 aws ec2 attach-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
-    --vpc-id "$ALPHA_VPC" --profile hive-team-alpha > /dev/null
+    --vpc-id "$ALPHA_VPC" --profile spx-team-alpha > /dev/null
 expect_error "InvalidInternetGatewayID.NotFound" \
     aws ec2 detach-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
-    --vpc-id "$ALPHA_VPC" --profile hive-team-beta
+    --vpc-id "$ALPHA_VPC" --profile spx-team-beta
 echo "  Beta cannot detach Alpha's IGW"
 
 # EIGW
 ALPHA_EIGW=$(aws ec2 create-egress-only-internet-gateway --vpc-id "$ALPHA_VPC" \
-    --profile hive-team-alpha \
+    --profile spx-team-alpha \
     --query 'EgressOnlyInternetGateway.EgressOnlyInternetGatewayId' --output text)
 echo "  Alpha EIGW: $ALPHA_EIGW"
 
 BETA_EIGW=$(aws ec2 create-egress-only-internet-gateway --vpc-id "$BETA_VPC" \
-    --profile hive-team-beta \
+    --profile spx-team-beta \
     --query 'EgressOnlyInternetGateway.EgressOnlyInternetGatewayId' --output text)
 echo "  Beta EIGW: $BETA_EIGW"
 
 # EIGW describe isolation
-ALPHA_EIGWS=$(aws ec2 describe-egress-only-internet-gateways --profile hive-team-alpha \
+ALPHA_EIGWS=$(aws ec2 describe-egress-only-internet-gateways --profile spx-team-alpha \
     --query 'EgressOnlyInternetGateways[].EgressOnlyInternetGatewayId' --output text)
 if echo "$ALPHA_EIGWS" | grep -q "$BETA_EIGW"; then
     echo "  ERROR: Alpha can see Beta's EIGW"
@@ -2322,9 +2322,9 @@ echo "  EIGW describe isolation OK"
 # Cross-account EIGW delete
 expect_error "" \
     aws ec2 delete-egress-only-internet-gateway \
-    --egress-only-internet-gateway-id "$ALPHA_EIGW" --profile hive-team-beta 2>&1 || true
+    --egress-only-internet-gateway-id "$ALPHA_EIGW" --profile spx-team-beta 2>&1 || true
 # Verify Alpha's EIGW still exists
-ALPHA_EIGW_CHECK=$(aws ec2 describe-egress-only-internet-gateways --profile hive-team-alpha \
+ALPHA_EIGW_CHECK=$(aws ec2 describe-egress-only-internet-gateways --profile spx-team-alpha \
     --query 'EgressOnlyInternetGateways[].EgressOnlyInternetGatewayId' --output text)
 if ! echo "$ALPHA_EIGW_CHECK" | grep -q "$ALPHA_EIGW"; then
     echo "  ERROR: Alpha's EIGW was deleted by Beta"
@@ -2335,7 +2335,7 @@ echo "  Beta cannot delete Alpha's EIGW"
 # Cross-account EIGW creation in other's VPC
 expect_error "" \
     aws ec2 create-egress-only-internet-gateway --vpc-id "$ALPHA_VPC" \
-    --profile hive-team-beta 2>&1 || true
+    --profile spx-team-beta 2>&1 || true
 echo "  Beta cannot create EIGW in Alpha's VPC"
 
 echo "  IGW + EIGW scoping passed"
@@ -2345,8 +2345,8 @@ echo ""
 echo "Phase 8 Step 8: Account Settings"
 echo "----------------------------------------"
 
-aws ec2 enable-ebs-encryption-by-default --profile hive-team-alpha > /dev/null
-BETA_ENC=$(aws ec2 get-ebs-encryption-by-default --profile hive-team-beta \
+aws ec2 enable-ebs-encryption-by-default --profile spx-team-alpha > /dev/null
+BETA_ENC=$(aws ec2 get-ebs-encryption-by-default --profile spx-team-beta \
     --query 'EbsEncryptionByDefault' --output text)
 if [ "$BETA_ENC" != "False" ]; then
     echo "  ERROR: Alpha's encryption setting leaked to Beta (got $BETA_ENC)"
@@ -2355,11 +2355,11 @@ fi
 echo "  Alpha enable did not affect Beta"
 
 # Independent toggle
-aws ec2 enable-ebs-encryption-by-default --profile hive-team-beta > /dev/null
-aws ec2 disable-ebs-encryption-by-default --profile hive-team-alpha > /dev/null
-ALPHA_ENC=$(aws ec2 get-ebs-encryption-by-default --profile hive-team-alpha \
+aws ec2 enable-ebs-encryption-by-default --profile spx-team-beta > /dev/null
+aws ec2 disable-ebs-encryption-by-default --profile spx-team-alpha > /dev/null
+ALPHA_ENC=$(aws ec2 get-ebs-encryption-by-default --profile spx-team-alpha \
     --query 'EbsEncryptionByDefault' --output text)
-BETA_ENC=$(aws ec2 get-ebs-encryption-by-default --profile hive-team-beta \
+BETA_ENC=$(aws ec2 get-ebs-encryption-by-default --profile spx-team-beta \
     --query 'EbsEncryptionByDefault' --output text)
 if [ "$ALPHA_ENC" != "False" ] || [ "$BETA_ENC" != "True" ]; then
     echo "  ERROR: Independent settings failed: alpha=$ALPHA_ENC beta=$BETA_ENC"
@@ -2368,7 +2368,7 @@ fi
 echo "  Independent toggle verified: alpha=$ALPHA_ENC, beta=$BETA_ENC"
 
 # Reset
-aws ec2 disable-ebs-encryption-by-default --profile hive-team-beta > /dev/null
+aws ec2 disable-ebs-encryption-by-default --profile spx-team-beta > /dev/null
 
 echo "  Account settings scoping passed"
 
@@ -2377,9 +2377,9 @@ echo ""
 echo "Phase 8 Step 9: Global Resources"
 echo "----------------------------------------"
 
-ALPHA_REGIONS=$(aws ec2 describe-regions --profile hive-team-alpha \
+ALPHA_REGIONS=$(aws ec2 describe-regions --profile spx-team-alpha \
     --query 'Regions[].RegionName' --output text)
-BETA_REGIONS=$(aws ec2 describe-regions --profile hive-team-beta \
+BETA_REGIONS=$(aws ec2 describe-regions --profile spx-team-beta \
     --query 'Regions[].RegionName' --output text)
 if [ "$ALPHA_REGIONS" != "$BETA_REGIONS" ]; then
     echo "  ERROR: Regions differ between accounts"
@@ -2387,9 +2387,9 @@ if [ "$ALPHA_REGIONS" != "$BETA_REGIONS" ]; then
 fi
 echo "  Regions identical"
 
-ALPHA_AZS=$(aws ec2 describe-availability-zones --profile hive-team-alpha \
+ALPHA_AZS=$(aws ec2 describe-availability-zones --profile spx-team-alpha \
     --query 'AvailabilityZones[].ZoneName' --output text)
-BETA_AZS=$(aws ec2 describe-availability-zones --profile hive-team-beta \
+BETA_AZS=$(aws ec2 describe-availability-zones --profile spx-team-beta \
     --query 'AvailabilityZones[].ZoneName' --output text)
 if [ "$ALPHA_AZS" != "$BETA_AZS" ]; then
     echo "  ERROR: AZs differ between accounts"
@@ -2397,9 +2397,9 @@ if [ "$ALPHA_AZS" != "$BETA_AZS" ]; then
 fi
 echo "  Availability zones identical"
 
-ALPHA_TYPES=$(aws ec2 describe-instance-types --profile hive-team-alpha \
+ALPHA_TYPES=$(aws ec2 describe-instance-types --profile spx-team-alpha \
     --query 'InstanceTypes[].InstanceType' --output text | tr '\t' '\n' | sort)
-BETA_TYPES=$(aws ec2 describe-instance-types --profile hive-team-beta \
+BETA_TYPES=$(aws ec2 describe-instance-types --profile spx-team-beta \
     --query 'InstanceTypes[].InstanceType' --output text | tr '\t' '\n' | sort)
 if [ "$ALPHA_TYPES" != "$BETA_TYPES" ]; then
     echo "  ERROR: Instance types differ between accounts"
@@ -2419,9 +2419,9 @@ echo "  Creating empty Gamma account..."
 GAMMA_OUTPUT=$(./bin/spx admin account create --name "Team Gamma" 2>&1)
 GAMMA_KEY_ID=$(echo "$GAMMA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
 GAMMA_SECRET=$(echo "$GAMMA_OUTPUT" | grep "Secret Access Key:" | awk '{print $NF}')
-setup_test_profile hive-team-gamma "$GAMMA_KEY_ID" "$GAMMA_SECRET"
+setup_test_profile spx-team-gamma "$GAMMA_KEY_ID" "$GAMMA_SECRET"
 
-GAMMA_INSTANCES=$(aws ec2 describe-instances --profile hive-team-gamma \
+GAMMA_INSTANCES=$(aws ec2 describe-instances --profile spx-team-gamma \
     --query 'Reservations' --output text)
 if [ -n "$GAMMA_INSTANCES" ] && [ "$GAMMA_INSTANCES" != "None" ]; then
     echo "  ERROR: Gamma has instances"
@@ -2432,7 +2432,7 @@ echo "  Gamma: no instances"
 # Skip volume check: root-account volumes (empty TenantID) are visible to all accounts by design
 echo "  Gamma: volumes skipped (root legacy volumes visible to all)"
 
-GAMMA_KEYS=$(aws ec2 describe-key-pairs --profile hive-team-gamma \
+GAMMA_KEYS=$(aws ec2 describe-key-pairs --profile spx-team-gamma \
     --query 'KeyPairs' --output text)
 if [ -n "$GAMMA_KEYS" ] && [ "$GAMMA_KEYS" != "None" ]; then
     echo "  ERROR: Gamma has key pairs"
@@ -2440,7 +2440,7 @@ if [ -n "$GAMMA_KEYS" ] && [ "$GAMMA_KEYS" != "None" ]; then
 fi
 echo "  Gamma: no key pairs"
 
-GAMMA_SNAPS=$(aws ec2 describe-snapshots --owner-ids self --profile hive-team-gamma \
+GAMMA_SNAPS=$(aws ec2 describe-snapshots --owner-ids self --profile spx-team-gamma \
     --query 'Snapshots' --output text)
 if [ -n "$GAMMA_SNAPS" ] && [ "$GAMMA_SNAPS" != "None" ]; then
     echo "  ERROR: Gamma has snapshots"
@@ -2451,7 +2451,7 @@ echo "  Gamma: no snapshots"
 # Root isolation from tenants
 echo "  Verifying root isolation from tenants..."
 aws ec2 create-key-pair --key-name root-scoping-key > /dev/null
-ALPHA_ROOT_CHECK=$(aws ec2 describe-key-pairs --profile hive-team-alpha \
+ALPHA_ROOT_CHECK=$(aws ec2 describe-key-pairs --profile spx-team-alpha \
     --query 'KeyPairs[].KeyName' --output text)
 if echo "$ALPHA_ROOT_CHECK" | grep -q "root-scoping-key"; then
     echo "  ERROR: Alpha can see root's key pair"
@@ -2470,11 +2470,11 @@ aws ec2 delete-key-pair --key-name root-scoping-key > /dev/null
 
 # Non-existent resource IDs — same error as cross-account
 expect_error "InvalidVolume.NotFound" \
-    aws ec2 delete-volume --volume-id vol-00000000000000000 --profile hive-team-alpha
+    aws ec2 delete-volume --volume-id vol-00000000000000000 --profile spx-team-alpha
 echo "  Non-existent volume: same error as cross-account"
 
 expect_error "InvalidSnapshot.NotFound" \
-    aws ec2 delete-snapshot --snapshot-id snap-00000000000000000 --profile hive-team-alpha
+    aws ec2 delete-snapshot --snapshot-id snap-00000000000000000 --profile spx-team-alpha
 echo "  Non-existent snapshot: same error as cross-account"
 
 echo "  Edge cases passed"
@@ -2486,73 +2486,73 @@ echo "----------------------------------------"
 
 # Terminate instances
 echo "  Terminating Alpha instance..."
-aws ec2 terminate-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha > /dev/null
+aws ec2 terminate-instances --instance-ids "$ALPHA_INST" --profile spx-team-alpha > /dev/null
 echo "  Terminating Beta instance..."
-aws ec2 terminate-instances --instance-ids "$BETA_INST" --profile hive-team-beta > /dev/null
+aws ec2 terminate-instances --instance-ids "$BETA_INST" --profile spx-team-beta > /dev/null
 
 # Wait for termination
 COUNT=0
-while [ $COUNT -lt 30 ]; do
-    A_STATE=$(aws ec2 describe-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha \
+while [ $COUNT -lt 60 ]; do
+    A_STATE=$(aws ec2 describe-instances --instance-ids "$ALPHA_INST" --profile spx-team-alpha \
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "terminated")
-    B_STATE=$(aws ec2 describe-instances --instance-ids "$BETA_INST" --profile hive-team-beta \
+    B_STATE=$(aws ec2 describe-instances --instance-ids "$BETA_INST" --profile spx-team-beta \
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "terminated")
     if [ "$A_STATE" == "terminated" ] && [ "$B_STATE" == "terminated" ]; then
         break
     fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 echo "  Instances terminated"
 
 # Delete snapshots
 echo "  Deleting snapshots..."
-aws ec2 delete-snapshot --snapshot-id "$ALPHA_SNAP" --profile hive-team-alpha 2>/dev/null || true
-aws ec2 delete-snapshot --snapshot-id "$BETA_SNAP" --profile hive-team-beta 2>/dev/null || true
+aws ec2 delete-snapshot --snapshot-id "$ALPHA_SNAP" --profile spx-team-alpha 2>/dev/null || true
+aws ec2 delete-snapshot --snapshot-id "$BETA_SNAP" --profile spx-team-beta 2>/dev/null || true
 
 # Delete volumes (wait for detach/termination cleanup)
 sleep 3
 echo "  Deleting volumes..."
-aws ec2 delete-volume --volume-id "$ALPHA_VOL" --profile hive-team-alpha 2>/dev/null || true
-aws ec2 delete-volume --volume-id "$BETA_VOL" --profile hive-team-beta 2>/dev/null || true
+aws ec2 delete-volume --volume-id "$ALPHA_VOL" --profile spx-team-alpha 2>/dev/null || true
+aws ec2 delete-volume --volume-id "$BETA_VOL" --profile spx-team-beta 2>/dev/null || true
 
 # Delete key pairs
 echo "  Deleting key pairs..."
 for key in alpha-key alpha-instance-key shared-name imported-key; do
-    aws ec2 delete-key-pair --key-name "$key" --profile hive-team-alpha 2>/dev/null || true
+    aws ec2 delete-key-pair --key-name "$key" --profile spx-team-alpha 2>/dev/null || true
 done
 for key in beta-key beta-instance-key shared-name; do
-    aws ec2 delete-key-pair --key-name "$key" --profile hive-team-beta 2>/dev/null || true
+    aws ec2 delete-key-pair --key-name "$key" --profile spx-team-beta 2>/dev/null || true
 done
 
 # Delete EIGWs
 echo "  Deleting EIGWs..."
 aws ec2 delete-egress-only-internet-gateway \
-    --egress-only-internet-gateway-id "$ALPHA_EIGW" --profile hive-team-alpha 2>/dev/null || true
+    --egress-only-internet-gateway-id "$ALPHA_EIGW" --profile spx-team-alpha 2>/dev/null || true
 aws ec2 delete-egress-only-internet-gateway \
-    --egress-only-internet-gateway-id "$BETA_EIGW" --profile hive-team-beta 2>/dev/null || true
+    --egress-only-internet-gateway-id "$BETA_EIGW" --profile spx-team-beta 2>/dev/null || true
 
 # Detach + delete IGWs
 echo "  Deleting IGWs..."
 aws ec2 detach-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
-    --vpc-id "$ALPHA_VPC" --profile hive-team-alpha 2>/dev/null || true
+    --vpc-id "$ALPHA_VPC" --profile spx-team-alpha 2>/dev/null || true
 aws ec2 delete-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
-    --profile hive-team-alpha 2>/dev/null || true
+    --profile spx-team-alpha 2>/dev/null || true
 aws ec2 delete-internet-gateway --internet-gateway-id "$BETA_IGW" \
-    --profile hive-team-beta 2>/dev/null || true
+    --profile spx-team-beta 2>/dev/null || true
 
 # Delete subnets
 echo "  Deleting subnets..."
-aws ec2 delete-subnet --subnet-id "$ALPHA_SUBNET" --profile hive-team-alpha 2>/dev/null || true
-aws ec2 delete-subnet --subnet-id "$BETA_SUBNET" --profile hive-team-beta 2>/dev/null || true
+aws ec2 delete-subnet --subnet-id "$ALPHA_SUBNET" --profile spx-team-alpha 2>/dev/null || true
+aws ec2 delete-subnet --subnet-id "$BETA_SUBNET" --profile spx-team-beta 2>/dev/null || true
 
 # Delete VPCs
 echo "  Deleting VPCs..."
-aws ec2 delete-vpc --vpc-id "$ALPHA_VPC" --profile hive-team-alpha 2>/dev/null || true
-aws ec2 delete-vpc --vpc-id "$BETA_VPC" --profile hive-team-beta 2>/dev/null || true
+aws ec2 delete-vpc --vpc-id "$ALPHA_VPC" --profile spx-team-alpha 2>/dev/null || true
+aws ec2 delete-vpc --vpc-id "$BETA_VPC" --profile spx-team-beta 2>/dev/null || true
 
 # Clean up AWS CLI profiles
-for p in hive-team-alpha hive-team-beta hive-team-gamma; do
+for p in spx-team-alpha spx-team-beta spx-team-gamma; do
     aws configure set aws_access_key_id "" --profile $p 2>/dev/null || true
     aws configure set aws_secret_access_key "" --profile $p 2>/dev/null || true
 done
@@ -2580,13 +2580,13 @@ fi
 echo "Terminating instance..."
 aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)
     echo "Instance state: $STATE"
     if [ "$STATE" == "terminated" ] || [ "$STATE" == "None" ]; then
         break
     fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 

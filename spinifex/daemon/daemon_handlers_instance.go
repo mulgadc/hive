@@ -71,7 +71,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		return
 	}
 	// Verify the caller can use this AMI: must own it or it must be a system/pre-phase4 AMI.
-	// System AMIs have non-account-ID owner aliases (e.g. "self", "hive", empty).
+	// System AMIs have non-account-ID owner aliases (e.g. "self", "spinifex", empty).
 	amiOwner := amiMeta.ImageOwnerAlias
 	if amiOwner != "" && amiOwner != accountID {
 		if utils.IsAccountID(amiOwner) {

@@ -18,7 +18,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
 	"github.com/mulgadc/spinifex/spinifex/objectstore"
-	hivetypes "github.com/mulgadc/spinifex/spinifex/types"
+	spxtypes "github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/mulgadc/spinifex/spinifex/vm"
 	"github.com/mulgadc/viperblock/types"
@@ -355,7 +355,7 @@ func (s *InstanceServiceImpl) prepareRootVolume(input *ec2.RunInstancesInput, im
 
 	// Append root volume to instance
 	instance.EBSRequests.Mu.Lock()
-	instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, hivetypes.EBSRequest{
+	instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, spxtypes.EBSRequest{
 		Name:                imageId,
 		Boot:                true,
 		DeleteOnTermination: deleteOnTermination,
@@ -497,7 +497,7 @@ func (s *InstanceServiceImpl) prepareEFIVolume(imageId string, volumeConfig vipe
 	}
 
 	instance.EBSRequests.Mu.Lock()
-	instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, hivetypes.EBSRequest{
+	instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, spxtypes.EBSRequest{
 		Name: efiVb.VolumeName,
 		Boot: false,
 		EFI:  true,
@@ -573,7 +573,7 @@ func (s *InstanceServiceImpl) prepareCloudInitVolume(input *ec2.RunInstancesInpu
 	}
 
 	instance.EBSRequests.Mu.Lock()
-	instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, hivetypes.EBSRequest{
+	instance.EBSRequests.Requests = append(instance.EBSRequests.Requests, spxtypes.EBSRequest{
 		Name:      cloudInitVolumeName,
 		Boot:      false,
 		CloudInit: true,
@@ -739,7 +739,7 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 func generateHostname(instanceID string) string {
 	if len(instanceID) > 2 {
 		uniquePart := instanceID[2:10] // Take first 8 chars after "i-"
-		return fmt.Sprintf("hive-vm-%s", uniquePart)
+		return fmt.Sprintf("spinifex-vm-%s", uniquePart)
 	}
-	return "hive-vm-unknown"
+	return "spinifex-vm-unknown"
 }

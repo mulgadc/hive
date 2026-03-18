@@ -21,11 +21,11 @@ import (
 )
 
 const (
-	KVBucketUsers          = "hive-iam-users"
-	KVBucketAccessKeys     = "hive-iam-access-keys"
-	KVBucketPolicies       = "hive-iam-policies"
-	KVBucketAccounts       = "hive-accounts"
-	KVBucketAccountCounter = "hive-account-counter"
+	KVBucketUsers          = "spinifex-iam-users"
+	KVBucketAccessKeys     = "spinifex-iam-access-keys"
+	KVBucketPolicies       = "spinifex-iam-policies"
+	KVBucketAccounts       = "spinifex-accounts"
+	KVBucketAccountCounter = "spinifex-account-counter"
 
 	maxAccessKeysPerUser = 2
 )

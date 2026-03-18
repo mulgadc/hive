@@ -131,8 +131,8 @@ func (h *TopologyHandler) handleVPCCreate(msg *nats.Msg) {
 	lr := &nbdb.LogicalRouter{
 		Name: routerName,
 		ExternalIDs: map[string]string{
-			"hive:vpc_id": evt.VpcId,
-			"hive:vni":    fmt.Sprintf("%d", evt.VNI),
+			"spinifex:vpc_id": evt.VpcId,
+			"spinifex:vni":    fmt.Sprintf("%d", evt.VNI),
 		},
 	}
 
@@ -168,7 +168,7 @@ func (h *TopologyHandler) handleVPCDelete(msg *nats.Msg) {
 		slog.Warn("vpcd: failed to list switches during VPC delete", "err", err)
 	} else {
 		for _, ls := range switches {
-			if ls.ExternalIDs["hive:vpc_id"] == evt.VpcId {
+			if ls.ExternalIDs["spinifex:vpc_id"] == evt.VpcId {
 				// Delete switch ports first
 				for range ls.Ports {
 					// Ports are UUIDs; best-effort cleanup
@@ -186,7 +186,7 @@ func (h *TopologyHandler) handleVPCDelete(msg *nats.Msg) {
 		slog.Warn("vpcd: failed to list DHCP options during VPC delete", "err", err)
 	} else {
 		for _, opts := range dhcpOpts {
-			if opts.ExternalIDs["hive:vpc_id"] == evt.VpcId {
+			if opts.ExternalIDs["spinifex:vpc_id"] == evt.VpcId {
 				if err := h.ovn.DeleteDHCPOptions(ctx, opts.UUID); err != nil {
 					slog.Warn("vpcd: failed to delete DHCP options during VPC cascade", "uuid", opts.UUID, "err", err)
 				}
@@ -248,8 +248,8 @@ func (h *TopologyHandler) handleSubnetCreate(msg *nats.Msg) {
 	ls := &nbdb.LogicalSwitch{
 		Name: switchName,
 		ExternalIDs: map[string]string{
-			"hive:subnet_id": evt.SubnetId,
-			"hive:vpc_id":    evt.VpcId,
+			"spinifex:subnet_id": evt.SubnetId,
+			"spinifex:vpc_id":    evt.VpcId,
 		},
 	}
 	if err := h.ovn.CreateLogicalSwitch(ctx, ls); err != nil {
@@ -264,8 +264,8 @@ func (h *TopologyHandler) handleSubnetCreate(msg *nats.Msg) {
 		MAC:      routerMAC,
 		Networks: []string{gwCIDR},
 		ExternalIDs: map[string]string{
-			"hive:subnet_id": evt.SubnetId,
-			"hive:vpc_id":    evt.VpcId,
+			"spinifex:subnet_id": evt.SubnetId,
+			"spinifex:vpc_id":    evt.VpcId,
 		},
 	}
 	if err := h.ovn.CreateLogicalRouterPort(ctx, routerName, lrp); err != nil {
@@ -285,8 +285,8 @@ func (h *TopologyHandler) handleSubnetCreate(msg *nats.Msg) {
 			"router-port": routerPortName,
 		},
 		ExternalIDs: map[string]string{
-			"hive:subnet_id": evt.SubnetId,
-			"hive:vpc_id":    evt.VpcId,
+			"spinifex:subnet_id": evt.SubnetId,
+			"spinifex:vpc_id":    evt.VpcId,
 		},
 	}
 	if err := h.ovn.CreateLogicalSwitchPort(ctx, switchName, lsp); err != nil {
@@ -309,8 +309,8 @@ func (h *TopologyHandler) handleSubnetCreate(msg *nats.Msg) {
 			"mtu":        "1442", // Geneve overhead
 		},
 		ExternalIDs: map[string]string{
-			"hive:subnet_id": evt.SubnetId,
-			"hive:vpc_id":    evt.VpcId,
+			"spinifex:subnet_id": evt.SubnetId,
+			"spinifex:vpc_id":    evt.VpcId,
 		},
 	}
 	if _, err := h.ovn.CreateDHCPOptions(ctx, dhcpOpts); err != nil {
@@ -408,14 +408,14 @@ func (h *TopologyHandler) handleCreatePort(msg *nats.Msg) {
 		Addresses:    []string{addrStr},
 		PortSecurity: []string{addrStr},
 		ExternalIDs: map[string]string{
-			"hive:eni_id":    evt.NetworkInterfaceId,
-			"hive:subnet_id": evt.SubnetId,
-			"hive:vpc_id":    evt.VpcId,
+			"spinifex:eni_id":    evt.NetworkInterfaceId,
+			"spinifex:subnet_id": evt.SubnetId,
+			"spinifex:vpc_id":    evt.VpcId,
 		},
 	}
 
 	// Look up DHCP options for the subnet and attach to the port
-	dhcpOpts, err := h.ovn.FindDHCPOptionsByExternalID(ctx, "hive:subnet_id", evt.SubnetId)
+	dhcpOpts, err := h.ovn.FindDHCPOptionsByExternalID(ctx, "spinifex:subnet_id", evt.SubnetId)
 	if err != nil {
 		slog.Warn("vpcd: DHCP options not found for subnet, port will not have DHCP", "subnet", evt.SubnetId, "err", err)
 	} else {
@@ -501,9 +501,9 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 	extSwitch := &nbdb.LogicalSwitch{
 		Name: extSwitchName,
 		ExternalIDs: map[string]string{
-			"hive:vpc_id": evt.VpcId,
-			"hive:igw_id": evt.InternetGatewayId,
-			"hive:role":   "external",
+			"spinifex:vpc_id": evt.VpcId,
+			"spinifex:igw_id": evt.InternetGatewayId,
+			"spinifex:role":   "external",
 		},
 	}
 	if err := h.ovn.CreateLogicalSwitch(ctx, extSwitch); err != nil {
@@ -521,8 +521,8 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 			"network_name": "external",
 		},
 		ExternalIDs: map[string]string{
-			"hive:vpc_id": evt.VpcId,
-			"hive:igw_id": evt.InternetGatewayId,
+			"spinifex:vpc_id": evt.VpcId,
+			"spinifex:igw_id": evt.InternetGatewayId,
 		},
 	}
 	if err := h.ovn.CreateLogicalSwitchPort(ctx, extSwitchName, localnetPort); err != nil {
@@ -539,9 +539,9 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 		MAC:      gwMAC,
 		Networks: []string{"169.254.0.1/30"}, // link-local for external transit
 		ExternalIDs: map[string]string{
-			"hive:vpc_id": evt.VpcId,
-			"hive:igw_id": evt.InternetGatewayId,
-			"hive:role":   "gateway",
+			"spinifex:vpc_id": evt.VpcId,
+			"spinifex:igw_id": evt.InternetGatewayId,
+			"spinifex:role":   "gateway",
 		},
 	}
 	if err := h.ovn.CreateLogicalRouterPort(ctx, routerName, lrp); err != nil {
@@ -560,8 +560,8 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 			"router-port": gwPortName,
 		},
 		ExternalIDs: map[string]string{
-			"hive:vpc_id": evt.VpcId,
-			"hive:igw_id": evt.InternetGatewayId,
+			"spinifex:vpc_id": evt.VpcId,
+			"spinifex:igw_id": evt.InternetGatewayId,
 		},
 	}
 	if err := h.ovn.CreateLogicalSwitchPort(ctx, extSwitchName, switchGWPort); err != nil {
@@ -578,7 +578,7 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 	if err != nil {
 		slog.Warn("vpcd: failed to get router for SNAT, skipping NAT setup", "router", routerName, "err", err)
 	} else {
-		vpcCIDR := router.ExternalIDs["hive:cidr"]
+		vpcCIDR := router.ExternalIDs["spinifex:cidr"]
 		if vpcCIDR == "" {
 			// Fall back to a reasonable default — list subnets for this VPC
 			vpcCIDR = "10.0.0.0/8"
@@ -588,8 +588,8 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 			ExternalIP: "169.254.0.1",
 			LogicalIP:  vpcCIDR,
 			ExternalIDs: map[string]string{
-				"hive:vpc_id": evt.VpcId,
-				"hive:igw_id": evt.InternetGatewayId,
+				"spinifex:vpc_id": evt.VpcId,
+				"spinifex:igw_id": evt.InternetGatewayId,
 			},
 		}
 		if err := h.ovn.AddNAT(ctx, routerName, snatRule); err != nil {
@@ -602,8 +602,8 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 		IPPrefix: "0.0.0.0/0",
 		Nexthop:  "169.254.0.2",
 		ExternalIDs: map[string]string{
-			"hive:vpc_id": evt.VpcId,
-			"hive:igw_id": evt.InternetGatewayId,
+			"spinifex:vpc_id": evt.VpcId,
+			"spinifex:igw_id": evt.InternetGatewayId,
 		},
 	}
 	if err := h.ovn.AddStaticRoute(ctx, routerName, defaultRoute); err != nil {
@@ -650,7 +650,7 @@ func (h *TopologyHandler) handleIGWDetach(msg *nats.Msg) {
 	if err != nil {
 		slog.Warn("vpcd: failed to get router for NAT cleanup", "router", routerName, "err", err)
 	} else {
-		vpcCIDR := router.ExternalIDs["hive:cidr"]
+		vpcCIDR := router.ExternalIDs["spinifex:cidr"]
 		if vpcCIDR == "" {
 			vpcCIDR = "10.0.0.0/8"
 		}

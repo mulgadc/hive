@@ -85,7 +85,7 @@ OVN must be configured on every server before forming the cluster. Server 1 runs
 **Server 1 — OVN central + compute (run first):**
 
 ```bash
-sudo /usr/local/share/hive/setup-ovn.sh --management --encap-ip=$SPINIFEX_NODE1
+sudo /usr/local/share/spinifex/setup-ovn.sh --management --encap-ip=$SPINIFEX_NODE1
 ```
 
 Verify OVN central is ready before proceeding:
@@ -97,13 +97,13 @@ sudo ovn-sbctl show
 **Server 2 — Compute node (after server 1 is ready):**
 
 ```bash
-sudo /usr/local/share/hive/setup-ovn.sh --ovn-remote=tcp:$SPINIFEX_NODE1:6642 --encap-ip=$SPINIFEX_NODE2
+sudo /usr/local/share/spinifex/setup-ovn.sh --ovn-remote=tcp:$SPINIFEX_NODE1:6642 --encap-ip=$SPINIFEX_NODE2
 ```
 
 **Server 3 — Compute node (after server 1 is ready):**
 
 ```bash
-sudo /usr/local/share/hive/setup-ovn.sh --ovn-remote=tcp:$SPINIFEX_NODE1:6642 --encap-ip=$SPINIFEX_NODE3
+sudo /usr/local/share/spinifex/setup-ovn.sh --ovn-remote=tcp:$SPINIFEX_NODE1:6642 --encap-ip=$SPINIFEX_NODE3
 ```
 
 Verify all chassis have registered (from server 1):

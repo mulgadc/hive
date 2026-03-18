@@ -351,8 +351,8 @@ spinifex/
 1. Start NATS broker
 2. Start Predastore (S3)
 3. Start Viperblock (EBS)
-4. Start Spinifex Gateway (`hive awsgw`)
-5. Start Spinifex Daemon(s) (`hive daemon`)
+4. Start Spinifex Gateway (`spx awsgw`)
+5. Start Spinifex Daemon(s) (`spx daemon`)
 
 ### Testing with AWS CLI
 

@@ -31,7 +31,7 @@ import (
 // createTestDaemon creates a test daemon instance with minimal configuration
 func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 	// Create a temporary directory for test data
-	tmpDir, err := os.MkdirTemp("", "hive-daemon-test-*")
+	tmpDir, err := os.MkdirTemp("", "spx-daemon-test-*")
 	require.NoError(t, err, "Failed to create temp directory")
 
 	t.Cleanup(func() {
@@ -217,7 +217,7 @@ func TestHandleEC2RunInstances_MessageParsing(t *testing.T) {
 			// Skip "Valid RunInstancesInput" test as it requires full infrastructure
 			// (Predastore S3 backend, Viperblock, NBDkit) to actually create volumes
 			if tt.name == "Valid RunInstancesInput" {
-				t.Skip("Skipping valid input test - requires full hive infrastructure (viperblock, nbdkit, predastore)")
+				t.Skip("Skipping valid input test - requires full spinifex infrastructure (viperblock, nbdkit, predastore)")
 			}
 
 			// Start test NATS server
@@ -272,7 +272,7 @@ func TestHandleEC2RunInstances_ResourceManagement(t *testing.T) {
 	// - viperblock library with S3 backend
 	// - nbdkit for NBD mounting
 	// - QEMU for VM launch
-	t.Skip("Skipping resource management test - requires full hive infrastructure (viperblock, nbdkit, predastore)")
+	t.Skip("Skipping resource management test - requires full spinifex infrastructure (viperblock, nbdkit, predastore)")
 
 	tests := []struct {
 		name             string
@@ -342,7 +342,7 @@ func TestHandleEC2RunInstances_ResourceManagement(t *testing.T) {
 
 // TestDaemon_Initialization tests daemon initialization
 func TestDaemon_Initialization(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "hive-daemon-init-test-*")
+	tmpDir, err := os.MkdirTemp("", "spx-daemon-init-test-*")
 	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
@@ -851,7 +851,7 @@ func TestDaemon_BootAllocation(t *testing.T) {
 	natsURL := sharedJSNATSURL
 
 	// Create daemon temp directory
-	tmpDir, err := os.MkdirTemp("", "hive-daemon-boot-test-*")
+	tmpDir, err := os.MkdirTemp("", "spx-daemon-boot-test-*")
 	require.NoError(t, err)
 	defer os.RemoveAll(tmpDir)
 
@@ -3059,7 +3059,7 @@ func TestComputeConfigHash_ExcludesNodeField(t *testing.T) {
 
 func TestSaveClusterConfig_WritesToDisk(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "hive.toml")
+	path := filepath.Join(dir, "spinifex.toml")
 
 	d := &Daemon{
 		configPath: path,
@@ -3102,7 +3102,7 @@ func TestSaveClusterConfig_ErrorOnEmptyPath(t *testing.T) {
 
 func TestSaveClusterConfig_ErrorOnInvalidPath(t *testing.T) {
 	d := &Daemon{
-		configPath:    "/nonexistent/dir/hive.toml",
+		configPath:    "/nonexistent/dir/spinifex.toml",
 		clusterConfig: &config.ClusterConfig{},
 	}
 	err := d.saveClusterConfig()
@@ -3213,14 +3213,14 @@ func TestNewDaemon_WalDirDefaultsToBaseDir(t *testing.T) {
 		Node: "n1",
 		Nodes: map[string]config.Config{
 			"n1": {
-				BaseDir: "/data/hive",
+				BaseDir: "/data/spinifex",
 				WalDir:  "", // Empty - should default to BaseDir
 			},
 		},
 	}
 
 	d := NewDaemon(cfg)
-	assert.Equal(t, "/data/hive", d.config.WalDir)
+	assert.Equal(t, "/data/spinifex", d.config.WalDir)
 }
 
 func TestNewDaemon_WalDirPreservedIfSet(t *testing.T) {
@@ -3228,7 +3228,7 @@ func TestNewDaemon_WalDirPreservedIfSet(t *testing.T) {
 		Node: "n1",
 		Nodes: map[string]config.Config{
 			"n1": {
-				BaseDir: "/data/hive",
+				BaseDir: "/data/spinifex",
 				WalDir:  "/fast-ssd/wal",
 			},
 		},

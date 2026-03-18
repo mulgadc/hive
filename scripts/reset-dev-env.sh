@@ -10,7 +10,7 @@ echo "Removing data"
 
 rm -rf ~/spinifex/predastore/
 
-rm -rf ~/spinifex/hive/*
+rm -rf ~/spinifex/spinifex/*
 
 rm -rf ~/spinifex/viperblock/*
 

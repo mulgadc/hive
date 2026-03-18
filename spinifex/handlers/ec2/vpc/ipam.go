@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	KVBucketIPAM = "hive-vpc-ipam"
+	KVBucketIPAM = "spinifex-vpc-ipam"
 )
 
 // IPAMRecord tracks allocated IPs for a subnet.

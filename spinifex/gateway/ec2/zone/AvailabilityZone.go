@@ -14,7 +14,7 @@ func DescribeAvailabilityZones(input *ec2.DescribeAvailabilityZonesInput, region
 				OptInStatus:        aws.String("opt-in-not-required"),
 				RegionName:         aws.String(region),
 				ZoneName:           aws.String(az),
-				ZoneId:             aws.String("hivez1"),
+				ZoneId:             aws.String("spinifexz1"),
 				GroupName:          aws.String(region),
 				NetworkBorderGroup: aws.String(region),
 				ZoneType:           aws.String("availability-zone"),

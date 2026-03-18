@@ -64,15 +64,15 @@ done
 
 # --- Step 2: Clone repo and build on all nodes ---
 echo ""
-echo "==> Cloning hive repo and building on all nodes..."
+echo "==> Cloning Spinifex repo and building on all nodes..."
 PIDS=()
 for i in $(seq 0 $((NODE_COUNT - 1))); do
     ip="${MGMT_IPS[$i]}"
     (
         echo "    node$((i + 1)) ($ip): cloning..."
-        remote "$ip" "mkdir -p ~/Development/mulga && cd ~/Development/mulga && git clone https://github.com/mulgadc/hive.git && export PATH=\$PATH:/usr/local/go/bin && sudo make -C hive quickinstall"
+        remote "$ip" "mkdir -p ~/Development/mulga && cd ~/Development/mulga && git clone https://github.com/mulgadc/spinifex.git && export PATH=\$PATH:/usr/local/go/bin && sudo make -C spinifex quickinstall"
         echo "    node$((i + 1)) ($ip): clone-deps + dev-setup..."
-        remote "$ip" "export PATH=\$PATH:/usr/local/go/bin && cd ~/Development/mulga/hive && ./scripts/clone-deps.sh && ./scripts/dev-setup.sh"
+        remote "$ip" "export PATH=\$PATH:/usr/local/go/bin && cd ~/Development/mulga/spinifex && ./scripts/clone-deps.sh && ./scripts/dev-setup.sh"
         echo "    node$((i + 1)) ($ip): build complete"
     ) &
     PIDS+=($!)
@@ -93,7 +93,7 @@ NODE1_IP="${MGMT_IPS[0]}"
 
 # Node 1: init
 echo "    Starting init on node1 ($NODE1_IP)..."
-remote_bg "$NODE1_IP" "export PATH=\$PATH:/usr/local/go/bin && cd ~/Development/mulga/hive && ./bin/spx admin init \
+remote_bg "$NODE1_IP" "export PATH=\$PATH:/usr/local/go/bin && cd ~/Development/mulga/spinifex && ./bin/spx admin init \
     --node node1 \
     --bind $NODE1_IP \
     --cluster-bind $NODE1_IP \
@@ -103,7 +103,7 @@ remote_bg "$NODE1_IP" "export PATH=\$PATH:/usr/local/go/bin && cd ~/Development/
     --nodes $NODE_COUNT \
     --region $REGION \
     --az $AZ \
-    --hive-dir ~/spinifex/ \
+    --spinifex-dir ~/spinifex/ \
     --config-dir ~/spinifex/config/"
 INIT_PID=$!
 
@@ -128,7 +128,7 @@ if [ "$NODE_COUNT" -gt 1 ]; then
         ip="${MGMT_IPS[$i]}"
         node_num=$((i + 1))
         echo "    Starting join on node$node_num ($ip)..."
-        remote_bg "$ip" "export PATH=\$PATH:/usr/local/go/bin && cd ~/Development/mulga/hive && ./bin/spx admin join \
+        remote_bg "$ip" "export PATH=\$PATH:/usr/local/go/bin && cd ~/Development/mulga/spinifex && ./bin/spx admin join \
             --node node$node_num \
             --bind $ip \
             --cluster-bind $ip \
@@ -158,7 +158,7 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     ip="${MGMT_IPS[$i]}"
     (
         echo "    node$((i + 1)) ($ip): starting services..."
-        remote "$ip" "export PATH=\$PATH:/usr/local/go/bin && cd ~/Development/mulga/hive && ./scripts/start-dev.sh"
+        remote "$ip" "export PATH=\$PATH:/usr/local/go/bin && cd ~/Development/mulga/spinifex && ./scripts/start-dev.sh"
         echo "    node$((i + 1)) ($ip): services started"
     ) &
     PIDS+=($!)

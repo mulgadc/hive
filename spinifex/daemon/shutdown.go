@@ -72,10 +72,10 @@ func (d *Daemon) handleShutdownGate(msg *nats.Msg) {
 
 	// Stop UI
 	if d.config.HasService("ui") {
-		if err := utils.StopProcessAt(d.pidDir(), "hive-ui"); err != nil {
-			slog.Warn("Failed to stop hive-ui", "error", err)
+		if err := utils.StopProcessAt(d.pidDir(), "spinifex-ui"); err != nil {
+			slog.Warn("Failed to stop spinifex-ui", "error", err)
 		} else {
-			stopped = append(stopped, "hive-ui")
+			stopped = append(stopped, "spinifex-ui")
 		}
 	}
 

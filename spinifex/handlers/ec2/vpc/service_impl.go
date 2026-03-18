@@ -21,9 +21,9 @@ import (
 var _ VPCService = (*VPCServiceImpl)(nil)
 
 const (
-	KVBucketVPCs       = "hive-vpc-vpcs"
-	KVBucketSubnets    = "hive-vpc-subnets"
-	KVBucketVNICounter = "hive-vpc-vni-counter"
+	KVBucketVPCs       = "spinifex-vpc-vpcs"
+	KVBucketSubnets    = "spinifex-vpc-subnets"
+	KVBucketVNICounter = "spinifex-vpc-vni-counter"
 	vniCounterKey      = "counter"
 	vniStart           = 100 // Starting VNI value (avoid 0 and low numbers)
 )

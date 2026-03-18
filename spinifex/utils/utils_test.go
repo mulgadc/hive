@@ -594,7 +594,7 @@ func TestStopProcess(t *testing.T) {
 
 func TestExtractDiskImageFromFile(t *testing.T) {
 
-	tmpDir, err := os.MkdirTemp("", "hive-utils-test-*")
+	tmpDir, err := os.MkdirTemp("", "spx-utils-test-*")
 
 	t.Log("Temp dir:", tmpDir)
 
@@ -953,15 +953,15 @@ func TestPidPath_XDG(t *testing.T) {
 	assert.Equal(t, "/tmp/test-xdg-runtime", pidPath())
 }
 
-func TestPidPath_HomeHiveFallback(t *testing.T) {
+func TestPidPath_HomeSpinifexFallback(t *testing.T) {
 	tmpHome := t.TempDir()
-	hiveDir := fmt.Sprintf("%s/hive", tmpHome)
-	require.NoError(t, os.Mkdir(hiveDir, 0755))
+	spinifexDir := fmt.Sprintf("%s/spinifex", tmpHome)
+	require.NoError(t, os.Mkdir(spinifexDir, 0755))
 
 	t.Setenv("XDG_RUNTIME_DIR", "")
 	t.Setenv("HOME", tmpHome)
 
-	assert.Equal(t, hiveDir, pidPath())
+	assert.Equal(t, spinifexDir, pidPath())
 }
 
 func TestPidPath_TempDirFallback(t *testing.T) {

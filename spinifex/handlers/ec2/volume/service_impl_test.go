@@ -282,7 +282,7 @@ func TestCreateVolume_FromSnapshot_PassesValidation(t *testing.T) {
 
 	snapshotID := "snap-test123"
 
-	// Create snapshot metadata in store (matches hive snapshot service format)
+	// Create snapshot metadata in store (matches spinifex snapshot service format)
 	snapMeta := snapshotMetadata{
 		VolumeID:   "vol-source",
 		VolumeSize: 50,
@@ -461,7 +461,7 @@ func setupTestVolumeKV(t *testing.T) nats.KeyValue {
 	require.NoError(t, err)
 
 	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{
-		Bucket: "hive-volume-snapshots",
+		Bucket: "spinifex-volume-snapshots",
 	})
 	require.NoError(t, err)
 	return kv

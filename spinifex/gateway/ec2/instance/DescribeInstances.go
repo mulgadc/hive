@@ -12,7 +12,7 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// DescribeInstances queries all hive nodes for their instances via NATS
+// DescribeInstances queries all spinifex nodes for their instances via NATS
 // and aggregates the results into a single response
 func DescribeInstances(input *ec2.DescribeInstancesInput, natsConn *nats.Conn, expectedNodes int, accountID string) (*ec2.DescribeInstancesOutput, error) {
 	// Marshal input to JSON

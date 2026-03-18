@@ -153,8 +153,8 @@ func pidPath() string {
 	if os.Getenv("XDG_RUNTIME_DIR") != "" {
 		return os.Getenv("XDG_RUNTIME_DIR")
 	}
-	if dirExists(fmt.Sprintf("%s/%s", os.Getenv("HOME"), "hive")) {
-		return filepath.Join(os.Getenv("HOME"), "hive")
+	if dirExists(fmt.Sprintf("%s/%s", os.Getenv("HOME"), "spinifex")) {
+		return filepath.Join(os.Getenv("HOME"), "spinifex")
 	}
 	return os.TempDir()
 }

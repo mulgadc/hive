@@ -15,15 +15,15 @@ import (
 
 const (
 	// InstanceStateBucket is the name of the KV bucket for storing instance state
-	InstanceStateBucket = "hive-instance-state"
+	InstanceStateBucket = "spinifex-instance-state"
 	// ClusterStateBucket is the name of the KV bucket for cluster state (heartbeats, shutdown markers, service maps)
-	ClusterStateBucket = "hive-cluster-state"
+	ClusterStateBucket = "spinifex-cluster-state"
 	// InstanceStatePrefix is the key prefix for per-node instance state entries
 	InstanceStatePrefix = "node."
 	// StoppedInstancePrefix is the key prefix for stopped instances in shared KV
 	StoppedInstancePrefix = "instance."
 	// TerminatedInstanceBucket is the name of the KV bucket for terminated instances (auto-expiry via TTL)
-	TerminatedInstanceBucket = "hive-terminated-instances"
+	TerminatedInstanceBucket = "spinifex-terminated-instances"
 	// TerminatedInstancePrefix is the key prefix for terminated instances
 	TerminatedInstancePrefix = "terminated."
 )
@@ -31,9 +31,9 @@ const (
 // JetStreamManager manages JetStream KV store operations for instance state
 type JetStreamManager struct {
 	js           nats.JetStreamContext
-	kv           nats.KeyValue // hive-instance-state
-	clusterKV    nats.KeyValue // hive-cluster-state
-	terminatedKV nats.KeyValue // hive-terminated-instances
+	kv           nats.KeyValue // spinifex-instance-state
+	clusterKV    nats.KeyValue // spinifex-cluster-state
+	terminatedKV nats.KeyValue // spinifex-terminated-instances
 	replicas     int
 	kvMu         sync.Mutex // protects kv during recovery
 }
@@ -62,7 +62,7 @@ func (m *JetStreamManager) InitKVBucket() error {
 			slog.Debug("Creating JetStream KV bucket", "bucket", InstanceStateBucket, "replicas", m.replicas)
 			kv, err = m.js.CreateKeyValue(&nats.KeyValueConfig{
 				Bucket:      InstanceStateBucket,
-				Description: "Hive instance state storage",
+				Description: "Spinifex instance state storage",
 				History:     1,          // Only keep latest value
 				Replicas:    m.replicas, // Replication across cluster nodes
 			})
@@ -88,7 +88,7 @@ func (m *JetStreamManager) InitClusterStateBucket() error {
 			slog.Debug("Creating JetStream KV bucket", "bucket", ClusterStateBucket, "replicas", m.replicas)
 			kv, err = m.js.CreateKeyValue(&nats.KeyValueConfig{
 				Bucket:      ClusterStateBucket,
-				Description: "Hive cluster state (heartbeats, shutdown markers, service maps)",
+				Description: "Spinifex cluster state (heartbeats, shutdown markers, service maps)",
 				History:     1,
 				Replicas:    m.replicas,
 				TTL:         1 * time.Hour,
@@ -191,7 +191,7 @@ func (m *JetStreamManager) recoverBucket(cfg *nats.KeyValueConfig, field *nats.K
 func (m *JetStreamManager) recoverKVBucket() (nats.KeyValue, error) {
 	return m.recoverBucket(&nats.KeyValueConfig{
 		Bucket:      InstanceStateBucket,
-		Description: "Hive instance state storage",
+		Description: "Spinifex instance state storage",
 	}, &m.kv)
 }
 

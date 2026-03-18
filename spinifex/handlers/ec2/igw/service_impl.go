@@ -21,7 +21,7 @@ import (
 // Ensure IGWServiceImpl implements IGWService
 var _ IGWService = (*IGWServiceImpl)(nil)
 
-const KVBucketIGW = "hive-igw"
+const KVBucketIGW = "spinifex-igw"
 
 // IGWRecord represents a stored Internet Gateway
 type IGWRecord struct {

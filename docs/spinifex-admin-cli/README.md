@@ -75,7 +75,7 @@ node3   Ready     127.0.0.3       ap-southeast-2   ap-southeast-2a  2m       0
 
 ## Troubleshooting
 
-## Permission denied running hive
+## Permission denied running spinifex
 
 The binary may not be executable. Fix permissions:
 

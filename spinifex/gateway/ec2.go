@@ -1,4 +1,4 @@
-// Package gateway provides the AWS Gateway for the Hive platform.
+// Package gateway provides the AWS Gateway for the Spinifex platform.
 // It handles the incoming requests from the AWS SDK and delegates to the appropriate gateway functions (which calls the NATS handlers).
 package gateway
 

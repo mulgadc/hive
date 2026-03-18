@@ -863,7 +863,7 @@ func init() {
 	viper.BindEnv("jetstream", "SPINIFEX_NATS_JETSTREAM")
 	viper.BindPFlag("jetstream", natsCmd.PersistentFlags().Lookup("jetstream"))
 
-	// Hive
+	// Spinifex
 	serviceCmd.AddCommand(spinifexCmd)
 
 	spinifexCmd.AddCommand(spinifexStartCmd)

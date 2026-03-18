@@ -86,4 +86,4 @@ policy = [
 nats_url = "nats://{{if eq .BindIP "0.0.0.0"}}localhost{{else}}{{.BindIP}}{{end}}:4222"
 nats_token = "{{.NatsToken}}"
 master_key_path = "{{.ConfigDir}}/master.key"
-access_keys_bucket = "hive-iam-access-keys"
+access_keys_bucket = "spinifex-iam-access-keys"

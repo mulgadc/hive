@@ -86,8 +86,8 @@ func TestIntegration_VPCLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected VPC router: %v", err)
 	}
-	if router.ExternalIDs["hive:vpc_id"] != "vpc-integ1" {
-		t.Errorf("router vpc_id = %s, want vpc-integ1", router.ExternalIDs["hive:vpc_id"])
+	if router.ExternalIDs["spinifex:vpc_id"] != "vpc-integ1" {
+		t.Errorf("router vpc_id = %s, want vpc-integ1", router.ExternalIDs["spinifex:vpc_id"])
 	}
 
 	// === Phase 2: Create Subnet ===
@@ -104,8 +104,8 @@ func TestIntegration_VPCLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected logical switch: %v", err)
 	}
-	if ls.ExternalIDs["hive:subnet_id"] != "subnet-integ1" {
-		t.Errorf("switch subnet_id = %s, want subnet-integ1", ls.ExternalIDs["hive:subnet_id"])
+	if ls.ExternalIDs["spinifex:subnet_id"] != "subnet-integ1" {
+		t.Errorf("switch subnet_id = %s, want subnet-integ1", ls.ExternalIDs["spinifex:subnet_id"])
 	}
 	dhcp, err := mock.FindDHCPOptionsByCIDR(ctx, "10.0.1.0/24")
 	if err != nil {

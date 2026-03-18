@@ -82,11 +82,11 @@ func TestTopologyHandler_VPCCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected logical router: %v", err)
 	}
-	if lr.ExternalIDs["hive:vpc_id"] != "vpc-abc123" {
+	if lr.ExternalIDs["spinifex:vpc_id"] != "vpc-abc123" {
 		t.Errorf("expected vpc_id external_id, got %v", lr.ExternalIDs)
 	}
-	if lr.ExternalIDs["hive:vni"] != "100" {
-		t.Errorf("expected vni external_id=100, got %v", lr.ExternalIDs["hive:vni"])
+	if lr.ExternalIDs["spinifex:vni"] != "100" {
+		t.Errorf("expected vni external_id=100, got %v", lr.ExternalIDs["spinifex:vni"])
 	}
 }
 
@@ -173,7 +173,7 @@ func TestTopologyHandler_SubnetCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected logical switch: %v", err)
 	}
-	if ls.ExternalIDs["hive:subnet_id"] != "subnet-aaa" {
+	if ls.ExternalIDs["spinifex:subnet_id"] != "subnet-aaa" {
 		t.Errorf("expected subnet_id external_id, got %v", ls.ExternalIDs)
 	}
 
@@ -509,14 +509,14 @@ func TestTopologyHandler_CreatePort(t *testing.T) {
 	}
 
 	// Verify external IDs
-	if lsp.ExternalIDs["hive:eni_id"] != "eni-aaa111" {
-		t.Errorf("expected eni_id=eni-aaa111, got %s", lsp.ExternalIDs["hive:eni_id"])
+	if lsp.ExternalIDs["spinifex:eni_id"] != "eni-aaa111" {
+		t.Errorf("expected eni_id=eni-aaa111, got %s", lsp.ExternalIDs["spinifex:eni_id"])
 	}
-	if lsp.ExternalIDs["hive:subnet_id"] != "subnet-port1" {
-		t.Errorf("expected subnet_id=subnet-port1, got %s", lsp.ExternalIDs["hive:subnet_id"])
+	if lsp.ExternalIDs["spinifex:subnet_id"] != "subnet-port1" {
+		t.Errorf("expected subnet_id=subnet-port1, got %s", lsp.ExternalIDs["spinifex:subnet_id"])
 	}
-	if lsp.ExternalIDs["hive:vpc_id"] != "vpc-port1" {
-		t.Errorf("expected vpc_id=vpc-port1, got %s", lsp.ExternalIDs["hive:vpc_id"])
+	if lsp.ExternalIDs["spinifex:vpc_id"] != "vpc-port1" {
+		t.Errorf("expected vpc_id=vpc-port1, got %s", lsp.ExternalIDs["spinifex:vpc_id"])
 	}
 
 	// Verify port was added to the switch
@@ -553,9 +553,9 @@ func TestTopologyHandler_DeletePort(t *testing.T) {
 		Addresses:    []string{"02:00:00:44:55:66 10.0.2.4"},
 		PortSecurity: []string{"02:00:00:44:55:66 10.0.2.4"},
 		ExternalIDs: map[string]string{
-			"hive:eni_id":    "eni-bbb222",
-			"hive:subnet_id": "subnet-del2",
-			"hive:vpc_id":    "vpc-del2",
+			"spinifex:eni_id":    "eni-bbb222",
+			"spinifex:subnet_id": "subnet-del2",
+			"spinifex:vpc_id":    "vpc-del2",
 		},
 	})
 
@@ -811,8 +811,8 @@ func TestTopologyHandler_IGWAttach(t *testing.T) {
 	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
 		Name: "vpc-vpc-igw1",
 		ExternalIDs: map[string]string{
-			"hive:vpc_id": "vpc-igw1",
-			"hive:cidr":   "10.0.0.0/16",
+			"spinifex:vpc_id": "vpc-igw1",
+			"spinifex:cidr":   "10.0.0.0/16",
 		},
 	})
 
@@ -830,11 +830,11 @@ func TestTopologyHandler_IGWAttach(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected external switch: %v", err)
 	}
-	if extSwitch.ExternalIDs["hive:role"] != "external" {
-		t.Errorf("expected role=external, got %s", extSwitch.ExternalIDs["hive:role"])
+	if extSwitch.ExternalIDs["spinifex:role"] != "external" {
+		t.Errorf("expected role=external, got %s", extSwitch.ExternalIDs["spinifex:role"])
 	}
-	if extSwitch.ExternalIDs["hive:igw_id"] != "igw-test1" {
-		t.Errorf("expected igw_id=igw-test1, got %s", extSwitch.ExternalIDs["hive:igw_id"])
+	if extSwitch.ExternalIDs["spinifex:igw_id"] != "igw-test1" {
+		t.Errorf("expected igw_id=igw-test1, got %s", extSwitch.ExternalIDs["spinifex:igw_id"])
 	}
 
 	// Verify localnet port created on external switch
@@ -890,8 +890,8 @@ func TestTopologyHandler_IGWDetach(t *testing.T) {
 	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
 		Name: "vpc-vpc-igw2",
 		ExternalIDs: map[string]string{
-			"hive:vpc_id": "vpc-igw2",
-			"hive:cidr":   "10.0.0.0/16",
+			"spinifex:vpc_id": "vpc-igw2",
+			"spinifex:cidr":   "10.0.0.0/16",
 		},
 	})
 
@@ -1351,7 +1351,7 @@ func TestTopologyHandler_CreatePort_Idempotent(t *testing.T) {
 		Name:      "port-eni-idem",
 		Addresses: []string{"02:00:00:11:22:33 10.0.1.4"},
 		ExternalIDs: map[string]string{
-			"hive:eni_id": "eni-idem",
+			"spinifex:eni_id": "eni-idem",
 		},
 	})
 
@@ -1457,8 +1457,8 @@ func TestTopologyHandler_IGWAttach_Idempotent(t *testing.T) {
 	_ = mock.CreateLogicalSwitch(ctx, &nbdb.LogicalSwitch{
 		Name: "ext-vpc-igw-idem",
 		ExternalIDs: map[string]string{
-			"hive:vpc_id": "vpc-igw-idem",
-			"hive:role":   "external",
+			"spinifex:vpc_id": "vpc-igw-idem",
+			"spinifex:role":   "external",
 		},
 	})
 
@@ -1493,16 +1493,16 @@ func TestTopologyHandler_IGWDetach_PartialCleanup(t *testing.T) {
 	_ = mock.CreateLogicalSwitch(ctx, &nbdb.LogicalSwitch{
 		Name: "ext-vpc-partial",
 		ExternalIDs: map[string]string{
-			"hive:vpc_id": "vpc-partial",
-			"hive:role":   "external",
+			"spinifex:vpc_id": "vpc-partial",
+			"spinifex:role":   "external",
 		},
 	})
 	// Create router so NAT cleanup path is exercised (but NAT won't be found)
 	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
 		Name: "vpc-vpc-partial",
 		ExternalIDs: map[string]string{
-			"hive:vpc_id": "vpc-partial",
-			"hive:cidr":   "10.0.0.0/16",
+			"spinifex:vpc_id": "vpc-partial",
+			"spinifex:cidr":   "10.0.0.0/16",
 		},
 	})
 
@@ -1543,8 +1543,8 @@ func TestTopologyHandler_IGWDetach_NoRouter(t *testing.T) {
 	_ = mock.CreateLogicalSwitch(ctx, &nbdb.LogicalSwitch{
 		Name: "ext-vpc-nortr",
 		ExternalIDs: map[string]string{
-			"hive:vpc_id": "vpc-nortr",
-			"hive:role":   "external",
+			"spinifex:vpc_id": "vpc-nortr",
+			"spinifex:role":   "external",
 		},
 	})
 
@@ -1613,18 +1613,18 @@ func TestTopologyHandler_VPCDeleteCascade_WithPorts(t *testing.T) {
 		Name:      "port-eni-casp1",
 		Addresses: []string{"02:00:00:11:22:33 10.0.1.4"},
 		ExternalIDs: map[string]string{
-			"hive:eni_id":    "eni-casp1",
-			"hive:subnet_id": "sub-casp",
-			"hive:vpc_id":    "vpc-casp",
+			"spinifex:eni_id":    "eni-casp1",
+			"spinifex:subnet_id": "sub-casp",
+			"spinifex:vpc_id":    "vpc-casp",
 		},
 	})
 	_ = mock.CreateLogicalSwitchPort(ctx, "subnet-sub-casp", &nbdb.LogicalSwitchPort{
 		Name:      "port-eni-casp2",
 		Addresses: []string{"02:00:00:44:55:66 10.0.1.5"},
 		ExternalIDs: map[string]string{
-			"hive:eni_id":    "eni-casp2",
-			"hive:subnet_id": "sub-casp",
-			"hive:vpc_id":    "vpc-casp",
+			"spinifex:eni_id":    "eni-casp2",
+			"spinifex:subnet_id": "sub-casp",
+			"spinifex:vpc_id":    "vpc-casp",
 		},
 	})
 	_, _ = mock.CreateDHCPOptions(ctx, nbdbDHCPOptions("10.0.1.0/24", "sub-casp", "vpc-casp"))
@@ -1714,7 +1714,7 @@ func nbdbLogicalRouter(name, vpcId string) *nbdb.LogicalRouter {
 	return &nbdb.LogicalRouter{
 		Name: name,
 		ExternalIDs: map[string]string{
-			"hive:vpc_id": vpcId,
+			"spinifex:vpc_id": vpcId,
 		},
 	}
 }
@@ -1723,8 +1723,8 @@ func nbdbLogicalSwitch(name, subnetId, vpcId string) *nbdb.LogicalSwitch {
 	return &nbdb.LogicalSwitch{
 		Name: name,
 		ExternalIDs: map[string]string{
-			"hive:subnet_id": subnetId,
-			"hive:vpc_id":    vpcId,
+			"spinifex:subnet_id": subnetId,
+			"spinifex:vpc_id":    vpcId,
 		},
 	}
 }
@@ -1735,8 +1735,8 @@ func nbdbLogicalRouterPort(name, subnetId, vpcId string) *nbdb.LogicalRouterPort
 		MAC:      "02:00:00:aa:bb:cc",
 		Networks: []string{"10.0.2.1/24"},
 		ExternalIDs: map[string]string{
-			"hive:subnet_id": subnetId,
-			"hive:vpc_id":    vpcId,
+			"spinifex:subnet_id": subnetId,
+			"spinifex:vpc_id":    vpcId,
 		},
 	}
 }
@@ -1750,8 +1750,8 @@ func nbdbLogicalSwitchPortRouter(name, routerPort, subnetId, vpcId string) *nbdb
 			"router-port": routerPort,
 		},
 		ExternalIDs: map[string]string{
-			"hive:subnet_id": subnetId,
-			"hive:vpc_id":    vpcId,
+			"spinifex:subnet_id": subnetId,
+			"spinifex:vpc_id":    vpcId,
 		},
 	}
 }
@@ -1764,8 +1764,8 @@ func nbdbDHCPOptions(cidr, subnetId, vpcId string) *nbdb.DHCPOptions {
 			"lease_time": "3600",
 		},
 		ExternalIDs: map[string]string{
-			"hive:subnet_id": subnetId,
-			"hive:vpc_id":    vpcId,
+			"spinifex:subnet_id": subnetId,
+			"spinifex:vpc_id":    vpcId,
 		},
 	}
 }

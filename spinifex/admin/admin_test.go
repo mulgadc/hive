@@ -174,7 +174,7 @@ func TestUpdateAWSINIFile_CreateNew(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "credentials")
 
-	err := UpdateAWSINIFile(path, "hive", map[string]string{
+	err := UpdateAWSINIFile(path, "spinifex", map[string]string{
 		"aws_access_key_id":     "AKIATEST",
 		"aws_secret_access_key": "secrettest",
 	})
@@ -182,7 +182,7 @@ func TestUpdateAWSINIFile_CreateNew(t *testing.T) {
 
 	data, _ := os.ReadFile(path)
 	content := string(data)
-	assert.Contains(t, content, "[hive]")
+	assert.Contains(t, content, "[spinifex]")
 	assert.Contains(t, content, "AKIATEST")
 	assert.Contains(t, content, "secrettest")
 }
@@ -192,9 +192,9 @@ func TestUpdateAWSINIFile_UpdateExisting(t *testing.T) {
 	path := filepath.Join(dir, "credentials")
 
 	// Create with initial value
-	require.NoError(t, UpdateAWSINIFile(path, "hive", map[string]string{"key": "old"}))
+	require.NoError(t, UpdateAWSINIFile(path, "spinifex", map[string]string{"key": "old"}))
 	// Update
-	require.NoError(t, UpdateAWSINIFile(path, "hive", map[string]string{"key": "new"}))
+	require.NoError(t, UpdateAWSINIFile(path, "spinifex", map[string]string{"key": "new"}))
 
 	data, _ := os.ReadFile(path)
 	content := string(data)
@@ -206,14 +206,14 @@ func TestUpdateAWSINIFile_AddNewSection(t *testing.T) {
 	path := filepath.Join(dir, "credentials")
 
 	require.NoError(t, UpdateAWSINIFile(path, "default", map[string]string{"key": "default-val"}))
-	require.NoError(t, UpdateAWSINIFile(path, "hive", map[string]string{"key": "hive-val"}))
+	require.NoError(t, UpdateAWSINIFile(path, "spinifex", map[string]string{"key": "spinifex-val"}))
 
 	data, _ := os.ReadFile(path)
 	content := string(data)
 	assert.Contains(t, content, "[default]")
-	assert.Contains(t, content, "[hive]")
+	assert.Contains(t, content, "[spinifex]")
 	assert.Contains(t, content, "default-val")
-	assert.Contains(t, content, "hive-val")
+	assert.Contains(t, content, "spinifex-val")
 }
 
 // --- SetupAWSCredentials ---
@@ -297,7 +297,7 @@ func TestGenerateCACert_CreatesValidCA(t *testing.T) {
 	cert, err := x509.ParseCertificate(block.Bytes)
 	require.NoError(t, err)
 	assert.True(t, cert.IsCA)
-	assert.Equal(t, "Hive Local CA", cert.Subject.CommonName)
+	assert.Equal(t, "Spinifex Local CA", cert.Subject.CommonName)
 	assert.NotZero(t, cert.KeyUsage&x509.KeyUsageCertSign)
 
 	// Parse key
@@ -505,7 +505,7 @@ func TestCreateServiceDirectories_CreatesAll(t *testing.T) {
 	dir := t.TempDir()
 	CreateServiceDirectories(dir)
 
-	expected := []string{"images", "amis", "volumes", "state", "logs", "nats", "predastore", "viperblock", "hive"}
+	expected := []string{"images", "amis", "volumes", "state", "logs", "nats", "predastore", "viperblock", "spinifex"}
 	for _, name := range expected {
 		path := filepath.Join(dir, name)
 		info, err := os.Stat(path)
@@ -603,9 +603,9 @@ host = "10.0.0.3"
 
 // --- Integration: Full config generation flow ---
 
-func TestGenerateConfigFile_HiveTomlTemplate(t *testing.T) {
+func TestGenerateConfigFile_SpinifexTomlTemplate(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "hive.toml")
+	path := filepath.Join(dir, "spinifex.toml")
 
 	tmpl := `version = "1.0"
 epoch = 1

@@ -150,7 +150,7 @@ verify_nats_cluster() {
 wait_for_instance_state() {
     local instance_id="$1"
     local target_state="$2"
-    local max_attempts="${3:-10}"
+    local max_attempts="${3:-20}"
     local attempt=0
 
     echo "Waiting for instance $instance_id to reach state: $target_state..."
@@ -162,7 +162,7 @@ wait_for_instance_state() {
             --query 'Reservations[0].Instances[0].State.Name' \
             --output text) || {
             echo "  Attempt $((attempt + 1))/$max_attempts - Gateway request failed, retrying..."
-            sleep 2
+            sleep 1
             attempt=$((attempt + 1))
             continue
         }
@@ -179,7 +179,7 @@ wait_for_instance_state() {
             return 1
         fi
 
-        sleep 2
+        sleep 1
         attempt=$((attempt + 1))
     done
 
@@ -204,7 +204,7 @@ terminate_and_wait() {
 
     local failed=0
     for instance_id in "${ids[@]}"; do
-        if ! wait_for_instance_state "$instance_id" "terminated" 30; then
+        if ! wait_for_instance_state "$instance_id" "terminated" 60; then
             echo "  WARNING: Failed to confirm termination of $instance_id"
             failed=1
         fi
@@ -217,7 +217,7 @@ terminate_and_wait() {
 # Usage: wait_for_gateway [host] [max_attempts]
 wait_for_gateway() {
     local host="${1:-localhost}"
-    local max_attempts="${2:-15}"
+    local max_attempts="${2:-30}"
     local attempt=0
 
     echo "Waiting for AWS Gateway at $host:${AWSGW_PORT}..."
@@ -229,7 +229,7 @@ wait_for_gateway() {
         fi
 
         echo "  Waiting for gateway... ($((attempt + 1))/$max_attempts)"
-        sleep 2
+        sleep 1
         attempt=$((attempt + 1))
     done
 
@@ -242,7 +242,7 @@ wait_for_gateway() {
 # Usage: wait_for_daemon_ready <gateway_endpoint> [max_attempts]
 wait_for_daemon_ready() {
     local endpoint="$1"
-    local max_attempts="${2:-15}"
+    local max_attempts="${2:-30}"
     local attempt=0
 
     echo "Waiting for daemon readiness (NATS subscriptions)..."
@@ -256,7 +256,7 @@ wait_for_daemon_ready() {
             return 0
         fi
         echo "  Waiting... ($((attempt + 1))/$max_attempts)"
-        sleep 2
+        sleep 1
         attempt=$((attempt + 1))
     done
 
@@ -544,7 +544,7 @@ get_qemu_pid() {
 # Expects state transition: error → pending → running
 wait_for_instance_recovery() {
     local instance_id="$1"
-    local max_attempts="${2:-30}"
+    local max_attempts="${2:-60}"
     local attempt=0
     local saw_error=false
 
@@ -556,7 +556,7 @@ wait_for_instance_recovery() {
             --instance-ids "$instance_id" \
             --query 'Reservations[0].Instances[0].State.Name' \
             --output text 2>/dev/null) || {
-            sleep 2
+            sleep 1
             attempt=$((attempt + 1))
             continue
         }
@@ -576,7 +576,7 @@ wait_for_instance_recovery() {
             :
         fi
 
-        sleep 2
+        sleep 1
         attempt=$((attempt + 1))
     done
 
@@ -671,7 +671,7 @@ force_cleanup_all_nodes() {
     # Kill any remaining QEMU processes
     pkill -9 -x qemu-system-x86_64 2>/dev/null || true
 
-    sleep 2
+    sleep 1
 
     # Step 3: Remove stale badger LOCK files from predastore directories
     for i in 1 2 3; do

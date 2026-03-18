@@ -126,7 +126,7 @@ func (d *Daemon) handleHealthCheck(msg *nats.Msg) {
 }
 
 // handleNodeDiscover responds to node discovery requests with this node's ID
-// Used by the gateway to dynamically discover active hive nodes in the cluster
+// Used by the gateway to dynamically discover active spinifex nodes in the cluster
 func (d *Daemon) handleNodeDiscover(msg *nats.Msg) {
 	response := types.NodeDiscoverResponse{
 		Node: d.node,
@@ -146,7 +146,7 @@ func (d *Daemon) daemonIP() string {
 }
 
 // handleNodeStatus responds with this node's status and resource stats.
-// Used by the CLI: hive get nodes, hive top nodes.
+// Used by the CLI: spx get nodes, spx top nodes.
 func (d *Daemon) handleNodeStatus(msg *nats.Msg) {
 	totalVCPU, totalMemGB, allocVCPU, allocMemGB, caps := d.resourceMgr.GetResourceStats()
 
@@ -179,7 +179,7 @@ func (d *Daemon) handleNodeStatus(msg *nats.Msg) {
 }
 
 // handleNodeVMs responds with the list of VMs running on this node.
-// Used by the CLI: hive get vms.
+// Used by the CLI: spx get vms.
 func (d *Daemon) handleNodeVMs(msg *nats.Msg) {
 	d.Instances.Mu.Lock()
 	vms := make([]types.VMInfo, 0, len(d.Instances.VMS))

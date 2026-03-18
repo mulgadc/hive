@@ -42,7 +42,7 @@ func createDaemonWithJetStream(t *testing.T) *Daemon {
 
 	natsURL := ns.ClientURL()
 
-	tmpDir, err := os.MkdirTemp("", "hive-state-test-*")
+	tmpDir, err := os.MkdirTemp("", "spx-state-test-*")
 	require.NoError(t, err)
 	t.Cleanup(func() { os.RemoveAll(tmpDir) })
 

@@ -280,7 +280,7 @@ func TestBootstrapData_ExtendedRoundTrip(t *testing.T) {
 		AccountID:       "000000000000",
 		Admin: &AdminBootstrapData{
 			AccountID:       "000000000001",
-			AccountName:     "hive",
+			AccountName:     "spinifex",
 			UserName:        "admin",
 			AccessKeyID:     "AKIAADMIN12345678901",
 			EncryptedSecret: "YWRtaW4tc2VjcmV0",
@@ -311,8 +311,8 @@ func TestBootstrapData_ExtendedRoundTrip(t *testing.T) {
 	if loaded.Admin.AccountID != "000000000001" {
 		t.Fatalf("Admin.AccountID: expected %q, got %q", "000000000001", loaded.Admin.AccountID)
 	}
-	if loaded.Admin.AccountName != "hive" {
-		t.Fatalf("Admin.AccountName: expected %q, got %q", "hive", loaded.Admin.AccountName)
+	if loaded.Admin.AccountName != "spinifex" {
+		t.Fatalf("Admin.AccountName: expected %q, got %q", "spinifex", loaded.Admin.AccountName)
 	}
 	if loaded.Admin.UserName != "admin" {
 		t.Fatalf("Admin.UserName: expected %q, got %q", "admin", loaded.Admin.UserName)

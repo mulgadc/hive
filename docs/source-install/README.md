@@ -34,7 +34,7 @@ resources:
 
 ## Overview
 
-This guide covers building Spinifex from source code. Use this if you want to contribute to Spinifex, build custom versions, or inspect the codebase. For production deployments, the [binary installer](/docs/installing-hive) is recommended.
+This guide covers building Spinifex from source code. Use this if you want to contribute to Spinifex, build custom versions, or inspect the codebase. For production deployments, the [binary installer](/docs/installing-spinifex) is recommended.
 
 **Supported Operating Systems:**
 - Ubuntu 22.04 / 24.04 / 25.10

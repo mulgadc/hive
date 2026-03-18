@@ -7,10 +7,10 @@ package viperblockd
 // which blocks waiting for SIGTERM. The goroutines are cleaned up when the test process exits.
 //
 // IMPORTANT: Run these tests with a timeout flag to prevent hanging:
-//   go test ./hive/services/viperblockd/... -timeout 40s
+//   go test ./spinifex/services/viperblockd/... -timeout 40s
 //
 // To skip integration tests and run only unit tests:
-//   go test -short ./hive/services/viperblockd/...
+//   go test -short ./spinifex/services/viperblockd/...
 
 import (
 	"encoding/json"

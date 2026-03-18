@@ -101,7 +101,7 @@ func (s *KeyServiceImpl) CreateKeyPair(input *ec2.CreateKeyPairInput, accountID 
 	}
 
 	// Create temporary directory for key generation
-	tmpDir, err := os.MkdirTemp("", "hive-keypair-*")
+	tmpDir, err := os.MkdirTemp("", "spinifex-keypair-*")
 	if err != nil {
 		slog.Error("Failed to create temp directory", "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)

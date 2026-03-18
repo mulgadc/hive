@@ -144,10 +144,10 @@ func GenerateCertificatesIfNeeded(configDir string, force bool, bindIP string) (
 		fmt.Printf("   Key: %s\n", serverKeyPath)
 
 		// Print instructions for adding CA to system trust store
-		fmt.Println("\n📋 To trust the Hive CA system-wide (recommended):")
+		fmt.Println("\n📋 To trust the Spinifex CA system-wide (recommended):")
 		fmt.Printf("   sudo cp %s /usr/local/share/ca-certificates/spinifex-ca.crt\n", caCertPath)
 		fmt.Println("   sudo update-ca-certificates")
-		fmt.Println("\n   This allows AWS CLI and other tools to trust Hive services automatically.")
+		fmt.Println("\n   This allows AWS CLI and other tools to trust Spinifex services automatically.")
 	} else {
 		fmt.Println("\n✅ CA and SSL certificates already exist")
 	}
@@ -172,19 +172,19 @@ func GenerateServerCertOnly(configDir string, bindIP string) error {
 	return GenerateSignedCert(serverCertPath, serverKeyPath, caCertPath, caKeyPath, bindIP)
 }
 
-func CreateServiceDirectories(hiveRoot string) {
+func CreateServiceDirectories(spxRoot string) {
 
 	// Create additional directories
 	dirs := []string{
-		filepath.Join(hiveRoot, "images"),
-		filepath.Join(hiveRoot, "amis"),
-		filepath.Join(hiveRoot, "volumes"),
-		filepath.Join(hiveRoot, "state"),
-		filepath.Join(hiveRoot, "logs"),
-		filepath.Join(hiveRoot, "nats"),
-		filepath.Join(hiveRoot, "predastore"),
-		filepath.Join(hiveRoot, "viperblock"),
-		filepath.Join(hiveRoot, "hive"),
+		filepath.Join(spxRoot, "images"),
+		filepath.Join(spxRoot, "amis"),
+		filepath.Join(spxRoot, "volumes"),
+		filepath.Join(spxRoot, "state"),
+		filepath.Join(spxRoot, "logs"),
+		filepath.Join(spxRoot, "nats"),
+		filepath.Join(spxRoot, "predastore"),
+		filepath.Join(spxRoot, "viperblock"),
+		filepath.Join(spxRoot, "spinifex"),
 	}
 
 	fmt.Println("\n📁 Creating directory structure...")
@@ -197,7 +197,7 @@ func CreateServiceDirectories(hiveRoot string) {
 			}
 		}
 	}
-	fmt.Printf("✅ Directory structure created in %s\n", hiveRoot)
+	fmt.Printf("✅ Directory structure created in %s\n", spxRoot)
 
 }
 
@@ -319,9 +319,9 @@ func DefaultAccountID() string {
 	return "000000000001"
 }
 
-// DefaultAccountName returns the default admin account name ("hive").
+// DefaultAccountName returns the default admin account name ("spinifex").
 func DefaultAccountName() string {
-	return "hive"
+	return "spinifex"
 }
 
 // GenerateNATSToken generates a secure random token for NATS
@@ -353,8 +353,8 @@ func GenerateCACert(caCertPath, caKeyPath string) error {
 	caTemplate := x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
-			CommonName:   "Hive Local CA",
-			Organization: []string{"Hive Platform"},
+			CommonName:   "Spinifex Local CA",
+			Organization: []string{"Spinifex Platform"},
 		},
 		NotBefore:             notBefore,
 		NotAfter:              notAfter,
@@ -469,7 +469,7 @@ func GenerateSignedCert(certPath, keyPath, caCertPath, caKeyPath string, extraIP
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			CommonName:   "localhost",
-			Organization: []string{"Hive Platform"},
+			Organization: []string{"Spinifex Platform"},
 		},
 		NotBefore:             notBefore,
 		NotAfter:              notAfter,
@@ -537,7 +537,7 @@ func GenerateSelfSignedCert(certPath, keyPath string) error {
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			CommonName:   "localhost",
-			Organization: []string{"Hive Platform"},
+			Organization: []string{"Spinifex Platform"},
 		},
 		NotBefore:             notBefore,
 		NotAfter:              notAfter,
@@ -603,14 +603,14 @@ func SetupAWSCredentials(accessKey, secretKey, region, certPath, bindIP string) 
 	// Determine profile name
 	//profileName := "default"
 
-	// Use hive as the default profile
-	profileName := "hive"
+	// Use Spinifex as the default profile
+	profileName := "spinifex"
 
 	if FileExists(credPath) {
 		// Check if default profile already exists
 		cfg, err := ini.Load(credPath)
 		if err == nil && cfg.HasSection("default") {
-			profileName = "hive"
+			profileName = "spinifex"
 		}
 	}
 
