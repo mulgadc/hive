@@ -15,7 +15,7 @@ limitations under the License.
 */
 package main
 
-import "github.com/mulgadc/hive/cmd/hive/cmd"
+import "github.com/mulgadc/spinifex/cmd/hive/cmd"
 
 func main() {
 	cmd.Execute()

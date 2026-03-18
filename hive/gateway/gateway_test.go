@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mulgadc/hive/hive/awserrors"
-	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
-	"github.com/mulgadc/hive/hive/types"
+	"github.com/mulgadc/spinifex/hive/awserrors"
+	handlers_iam "github.com/mulgadc/spinifex/hive/handlers/iam"
+	"github.com/mulgadc/spinifex/hive/types"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"

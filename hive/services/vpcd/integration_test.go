@@ -8,9 +8,9 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	handlers_ec2_igw "github.com/mulgadc/hive/hive/handlers/ec2/igw"
-	handlers_ec2_vpc "github.com/mulgadc/hive/hive/handlers/ec2/vpc"
-	"github.com/mulgadc/hive/hive/utils"
+	handlers_ec2_igw "github.com/mulgadc/spinifex/hive/handlers/ec2/igw"
+	handlers_ec2_vpc "github.com/mulgadc/spinifex/hive/handlers/ec2/vpc"
+	"github.com/mulgadc/spinifex/hive/utils"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )

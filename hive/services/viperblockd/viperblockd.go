@@ -12,9 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mulgadc/hive/hive/nbd"
-	"github.com/mulgadc/hive/hive/types"
-	"github.com/mulgadc/hive/hive/utils"
+	"github.com/mulgadc/spinifex/hive/nbd"
+	"github.com/mulgadc/spinifex/hive/types"
+	"github.com/mulgadc/spinifex/hive/utils"
 	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/mulgadc/viperblock/viperblock/backends/s3"
 

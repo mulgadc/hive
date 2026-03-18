@@ -2,7 +2,7 @@ package gateway_ec2_key
 
 import (
 	"github.com/aws/aws-sdk-go/service/ec2"
-	handlers_ec2_key "github.com/mulgadc/hive/hive/handlers/ec2/key"
+	handlers_ec2_key "github.com/mulgadc/spinifex/hive/handlers/ec2/key"
 	"github.com/nats-io/nats.go"
 )
 

@@ -2,7 +2,7 @@ package gateway_ec2_tags
 
 import (
 	"github.com/aws/aws-sdk-go/service/ec2"
-	handlers_ec2_tags "github.com/mulgadc/hive/hive/handlers/ec2/tags"
+	handlers_ec2_tags "github.com/mulgadc/spinifex/hive/handlers/ec2/tags"
 	"github.com/nats-io/nats.go"
 )
 

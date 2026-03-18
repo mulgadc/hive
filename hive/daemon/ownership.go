@@ -3,8 +3,8 @@ package daemon
 import (
 	"log/slog"
 
-	"github.com/mulgadc/hive/hive/awserrors"
-	"github.com/mulgadc/hive/hive/utils"
+	"github.com/mulgadc/spinifex/hive/awserrors"
+	"github.com/mulgadc/spinifex/hive/utils"
 	"github.com/nats-io/nats.go"
 )
 

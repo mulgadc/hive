@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mulgadc/hive/hive/config"
+	"github.com/mulgadc/spinifex/hive/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )

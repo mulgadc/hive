@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"strings"
 
-	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
+	handlers_iam "github.com/mulgadc/spinifex/hive/handlers/iam"
 )
 
 // Decision represents the outcome of a policy evaluation.

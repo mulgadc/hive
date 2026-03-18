@@ -3,7 +3,7 @@ package daemon
 import (
 	"testing"
 
-	"github.com/mulgadc/hive/hive/qmp"
+	"github.com/mulgadc/spinifex/hive/qmp"
 	"github.com/stretchr/testify/assert"
 )
 

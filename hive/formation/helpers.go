@@ -4,7 +4,7 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/mulgadc/hive/hive/admin"
+	"github.com/mulgadc/spinifex/hive/admin"
 )
 
 // hasService reports whether the node's service list includes name.

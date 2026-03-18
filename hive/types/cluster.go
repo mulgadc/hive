@@ -1,6 +1,6 @@
 package types
 
-import "github.com/mulgadc/hive/hive/config"
+import "github.com/mulgadc/spinifex/hive/config"
 
 // Cluster manager API types
 

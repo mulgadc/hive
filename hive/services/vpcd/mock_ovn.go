@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/mulgadc/hive/hive/services/vpcd/nbdb"
-	"github.com/mulgadc/hive/hive/utils"
+	"github.com/mulgadc/spinifex/hive/services/vpcd/nbdb"
+	"github.com/mulgadc/spinifex/hive/utils"
 )
 
 // MockOVNClient implements OVNClient with in-memory storage for testing.

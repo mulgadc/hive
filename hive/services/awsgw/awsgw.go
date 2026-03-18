@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mulgadc/hive/hive/config"
-	"github.com/mulgadc/hive/hive/gateway"
-	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
-	"github.com/mulgadc/hive/hive/utils"
+	"github.com/mulgadc/spinifex/hive/config"
+	"github.com/mulgadc/spinifex/hive/gateway"
+	handlers_iam "github.com/mulgadc/spinifex/hive/handlers/iam"
+	"github.com/mulgadc/spinifex/hive/utils"
 	"github.com/nats-io/nats.go"
 )
 

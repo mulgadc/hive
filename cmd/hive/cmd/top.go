@@ -22,7 +22,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/mulgadc/hive/hive/types"
+	"github.com/mulgadc/spinifex/hive/types"
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
 )

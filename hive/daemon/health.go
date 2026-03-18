@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mulgadc/hive/hive/vm"
+	"github.com/mulgadc/spinifex/hive/vm"
 )
 
 const (

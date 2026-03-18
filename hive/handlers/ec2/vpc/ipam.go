@@ -8,7 +8,7 @@ import (
 	"math/big"
 	"net"
 
-	"github.com/mulgadc/hive/hive/utils"
+	"github.com/mulgadc/spinifex/hive/utils"
 	"github.com/nats-io/nats.go"
 )
 

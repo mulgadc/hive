@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/types"
-	"github.com/mulgadc/hive/hive/utils"
+	"github.com/mulgadc/spinifex/hive/types"
+	"github.com/mulgadc/spinifex/hive/utils"
 	"github.com/nats-io/nats.go"
 )
 

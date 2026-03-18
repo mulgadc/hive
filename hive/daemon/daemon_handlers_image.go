@@ -4,10 +4,10 @@ import (
 	"log/slog"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/awserrors"
-	handlers_ec2_image "github.com/mulgadc/hive/hive/handlers/ec2/image"
-	"github.com/mulgadc/hive/hive/utils"
-	"github.com/mulgadc/hive/hive/vm"
+	"github.com/mulgadc/spinifex/hive/awserrors"
+	handlers_ec2_image "github.com/mulgadc/spinifex/hive/handlers/ec2/image"
+	"github.com/mulgadc/spinifex/hive/utils"
+	"github.com/mulgadc/spinifex/hive/vm"
 	"github.com/nats-io/nats.go"
 )
 

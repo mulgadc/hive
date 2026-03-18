@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/awserrors"
-	handlers_ec2_snapshot "github.com/mulgadc/hive/hive/handlers/ec2/snapshot"
+	"github.com/mulgadc/spinifex/hive/awserrors"
+	handlers_ec2_snapshot "github.com/mulgadc/spinifex/hive/handlers/ec2/snapshot"
 	"github.com/nats-io/nats.go"
 )
 

@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/mulgadc/hive/hive/utils"
+	"github.com/mulgadc/spinifex/hive/utils"
 )
 
 // sudoCommand wraps exec.Command with sudo when running as non-root.

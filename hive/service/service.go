@@ -3,13 +3,13 @@ package service
 import (
 	"fmt"
 
-	"github.com/mulgadc/hive/hive/services/awsgw"
-	"github.com/mulgadc/hive/hive/services/hive"
-	"github.com/mulgadc/hive/hive/services/hiveui"
-	"github.com/mulgadc/hive/hive/services/nats"
-	"github.com/mulgadc/hive/hive/services/predastore"
-	"github.com/mulgadc/hive/hive/services/viperblockd"
-	"github.com/mulgadc/hive/hive/services/vpcd"
+	"github.com/mulgadc/spinifex/hive/services/awsgw"
+	"github.com/mulgadc/spinifex/hive/services/hive"
+	"github.com/mulgadc/spinifex/hive/services/hiveui"
+	"github.com/mulgadc/spinifex/hive/services/nats"
+	"github.com/mulgadc/spinifex/hive/services/predastore"
+	"github.com/mulgadc/spinifex/hive/services/viperblockd"
+	"github.com/mulgadc/spinifex/hive/services/vpcd"
 )
 
 type Service interface {

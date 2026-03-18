@@ -24,9 +24,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mulgadc/hive/hive/config"
-	"github.com/mulgadc/hive/hive/types"
-	"github.com/mulgadc/hive/hive/utils"
+	"github.com/mulgadc/spinifex/hive/config"
+	"github.com/mulgadc/spinifex/hive/types"
+	"github.com/mulgadc/spinifex/hive/utils"
 	"github.com/nats-io/nats.go"
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"

@@ -21,7 +21,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mulgadc/hive/hive/utils"
+	"github.com/mulgadc/spinifex/hive/utils"
 )
 
 var serviceName = "hive-ui"

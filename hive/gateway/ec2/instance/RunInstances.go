@@ -6,10 +6,10 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/awserrors"
-	"github.com/mulgadc/hive/hive/utils"
+	"github.com/mulgadc/spinifex/hive/awserrors"
+	"github.com/mulgadc/spinifex/hive/utils"
 
-	handlers_ec2_instance "github.com/mulgadc/hive/hive/handlers/ec2/instance"
+	handlers_ec2_instance "github.com/mulgadc/spinifex/hive/handlers/ec2/instance"
 	"github.com/nats-io/nats.go"
 )
 

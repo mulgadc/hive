@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mulgadc/hive/hive/awserrors"
-	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
+	"github.com/mulgadc/spinifex/hive/awserrors"
+	handlers_iam "github.com/mulgadc/spinifex/hive/handlers/iam"
 	"github.com/mulgadc/predastore/auth"
 )
 

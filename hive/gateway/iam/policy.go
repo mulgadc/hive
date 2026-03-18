@@ -4,8 +4,8 @@ import (
 	"errors"
 
 	"github.com/aws/aws-sdk-go/service/iam"
-	"github.com/mulgadc/hive/hive/awserrors"
-	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
+	"github.com/mulgadc/spinifex/hive/awserrors"
+	handlers_iam "github.com/mulgadc/spinifex/hive/handlers/iam"
 )
 
 func CreatePolicy(accountID string, input *iam.CreatePolicyInput, svc handlers_iam.IAMService) (*iam.CreatePolicyOutput, error) {

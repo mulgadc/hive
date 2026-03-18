@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/types"
+	"github.com/mulgadc/spinifex/hive/types"
 )
 
 // errInsufficientCapacity is returned by allocateForLaunch when MinCount

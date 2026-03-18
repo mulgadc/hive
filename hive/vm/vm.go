@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/qmp"
-	"github.com/mulgadc/hive/hive/types"
+	"github.com/mulgadc/spinifex/hive/qmp"
+	"github.com/mulgadc/spinifex/hive/types"
 )
 
 // InstanceHealthState tracks crash detection and auto-restart metadata for a VM.

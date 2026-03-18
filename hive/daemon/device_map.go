@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mulgadc/hive/hive/qmp"
-	"github.com/mulgadc/hive/hive/vm"
+	"github.com/mulgadc/spinifex/hive/qmp"
+	"github.com/mulgadc/spinifex/hive/vm"
 )
 
 // pciAddrRegexp extracts the device index from a boot-time QDev path.

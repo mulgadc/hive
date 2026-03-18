@@ -11,9 +11,9 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/mulgadc/hive/hive/awserrors"
-	"github.com/mulgadc/hive/hive/config"
-	"github.com/mulgadc/hive/hive/objectstore"
+	"github.com/mulgadc/spinifex/hive/awserrors"
+	"github.com/mulgadc/spinifex/hive/config"
+	"github.com/mulgadc/spinifex/hive/objectstore"
 )
 
 // Ensure TagsServiceImpl implements TagsService

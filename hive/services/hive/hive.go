@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/mulgadc/hive/hive/config"
-	"github.com/mulgadc/hive/hive/daemon"
-	"github.com/mulgadc/hive/hive/utils"
+	"github.com/mulgadc/spinifex/hive/config"
+	"github.com/mulgadc/spinifex/hive/daemon"
+	"github.com/mulgadc/spinifex/hive/utils"
 )
 
 var serviceName = "hive"

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/mulgadc/hive/hive/vm"
+	"github.com/mulgadc/spinifex/hive/vm"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

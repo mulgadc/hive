@@ -9,11 +9,11 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/hive/hive/awserrors"
-	"github.com/mulgadc/hive/hive/config"
-	"github.com/mulgadc/hive/hive/objectstore"
-	"github.com/mulgadc/hive/hive/utils"
-	"github.com/mulgadc/hive/hive/vm"
+	"github.com/mulgadc/spinifex/hive/awserrors"
+	"github.com/mulgadc/spinifex/hive/config"
+	"github.com/mulgadc/spinifex/hive/objectstore"
+	"github.com/mulgadc/spinifex/hive/utils"
+	"github.com/mulgadc/spinifex/hive/vm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

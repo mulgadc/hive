@@ -15,12 +15,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/mulgadc/hive/hive/awsec2query"
-	"github.com/mulgadc/hive/hive/awserrors"
-	"github.com/mulgadc/hive/hive/gateway/policy"
-	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
-	"github.com/mulgadc/hive/hive/types"
-	"github.com/mulgadc/hive/hive/utils"
+	"github.com/mulgadc/spinifex/hive/awsec2query"
+	"github.com/mulgadc/spinifex/hive/awserrors"
+	"github.com/mulgadc/spinifex/hive/gateway/policy"
+	handlers_iam "github.com/mulgadc/spinifex/hive/handlers/iam"
+	"github.com/mulgadc/spinifex/hive/types"
+	"github.com/mulgadc/spinifex/hive/utils"
 	"github.com/nats-io/nats.go"
 )
 

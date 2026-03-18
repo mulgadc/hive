@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mulgadc/hive/hive/vm"
+	"github.com/mulgadc/spinifex/hive/vm"
 	"github.com/nats-io/nats.go"
 )
 

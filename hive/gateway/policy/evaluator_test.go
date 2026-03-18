@@ -3,7 +3,7 @@ package policy
 import (
 	"testing"
 
-	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
+	handlers_iam "github.com/mulgadc/spinifex/hive/handlers/iam"
 )
 
 // helper to build a single-statement policy document.

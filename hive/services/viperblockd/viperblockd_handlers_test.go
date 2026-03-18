@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mulgadc/hive/hive/types"
+	"github.com/mulgadc/spinifex/hive/types"
 	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/mulgadc/viperblock/viperblock/backends/file"
 	"github.com/nats-io/nats.go"

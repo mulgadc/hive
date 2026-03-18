@@ -7,11 +7,11 @@ import (
 	"net/http"
 
 	"github.com/aws/aws-sdk-go/service/iam"
-	"github.com/mulgadc/hive/hive/awsec2query"
-	"github.com/mulgadc/hive/hive/awserrors"
-	gateway_iam "github.com/mulgadc/hive/hive/gateway/iam"
-	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
-	"github.com/mulgadc/hive/hive/utils"
+	"github.com/mulgadc/spinifex/hive/awsec2query"
+	"github.com/mulgadc/spinifex/hive/awserrors"
+	gateway_iam "github.com/mulgadc/spinifex/hive/gateway/iam"
+	handlers_iam "github.com/mulgadc/spinifex/hive/handlers/iam"
+	"github.com/mulgadc/spinifex/hive/utils"
 )
 
 // IAMHandler processes parsed query args and returns XML response bytes.

@@ -2,7 +2,7 @@ package gateway_ec2_vpc
 
 import (
 	"github.com/aws/aws-sdk-go/service/ec2"
-	handlers_ec2_vpc "github.com/mulgadc/hive/hive/handlers/ec2/vpc"
+	handlers_ec2_vpc "github.com/mulgadc/spinifex/hive/handlers/ec2/vpc"
 	"github.com/nats-io/nats.go"
 )
 

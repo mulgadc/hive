@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mulgadc/hive/hive/daemon"
+	"github.com/mulgadc/spinifex/hive/daemon"
 	"github.com/nats-io/nats.go"
 	"github.com/spf13/cobra"
 )

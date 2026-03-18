@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/mulgadc/hive/hive/services/vpcd/nbdb"
-	"github.com/mulgadc/hive/hive/types"
+	"github.com/mulgadc/spinifex/hive/services/vpcd/nbdb"
+	"github.com/mulgadc/spinifex/hive/types"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 )

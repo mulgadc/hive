@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/mulgadc/hive/hive/utils"
+	"github.com/mulgadc/spinifex/hive/utils"
 	"github.com/nats-io/nats-server/v2/server"
 )
 

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/mulgadc/hive/hive/services/vpcd/nbdb"
+	"github.com/mulgadc/spinifex/hive/services/vpcd/nbdb"
 	"github.com/ovn-kubernetes/libovsdb/client"
 	"github.com/ovn-kubernetes/libovsdb/model"
 	"github.com/ovn-kubernetes/libovsdb/ovsdb"

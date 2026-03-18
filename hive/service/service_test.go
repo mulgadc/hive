@@ -3,10 +3,10 @@ package service
 import (
 	"testing"
 
-	"github.com/mulgadc/hive/hive/config"
-	"github.com/mulgadc/hive/hive/services/nats"
-	"github.com/mulgadc/hive/hive/services/predastore"
-	"github.com/mulgadc/hive/hive/services/viperblockd"
+	"github.com/mulgadc/spinifex/hive/config"
+	"github.com/mulgadc/spinifex/hive/services/nats"
+	"github.com/mulgadc/spinifex/hive/services/predastore"
+	"github.com/mulgadc/spinifex/hive/services/viperblockd"
 	"github.com/stretchr/testify/assert"
 )
 

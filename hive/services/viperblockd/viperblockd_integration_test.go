@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mulgadc/hive/hive/types"
+	"github.com/mulgadc/spinifex/hive/types"
 	"github.com/nats-io/nats-server/v2/server"
 	natstest "github.com/nats-io/nats-server/v2/test"
 	"github.com/nats-io/nats.go"

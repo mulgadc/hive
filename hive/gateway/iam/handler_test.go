@@ -3,8 +3,8 @@ package gateway_iam
 import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/iam"
-	"github.com/mulgadc/hive/hive/awserrors"
-	handlers_iam "github.com/mulgadc/hive/hive/handlers/iam"
+	"github.com/mulgadc/spinifex/hive/awserrors"
+	handlers_iam "github.com/mulgadc/spinifex/hive/handlers/iam"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"testing"

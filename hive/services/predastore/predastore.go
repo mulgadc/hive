@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mulgadc/hive/hive/utils"
+	"github.com/mulgadc/spinifex/hive/utils"
 	"github.com/mulgadc/predastore/s3"
 
 	// Import backends to trigger their init() registration
