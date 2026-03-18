@@ -1,3 +1,3 @@
-# Hive Installation
+# Spinifex Installation
 
-For documentation on using and installing Hive see [https://docs.mulgadc.com](https://docs.mulgadc.com/)
+For documentation on using and installing Spinifex see [https://docs.mulgadc.com](https://docs.mulgadc.com/)

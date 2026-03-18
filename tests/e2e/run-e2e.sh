@@ -16,28 +16,28 @@ cleanup() {
     if [ $EXIT_CODE -ne 0 ]; then
         echo ""
         echo "=== NATS Service Log ==="
-        if [ -f ~/hive/logs/nats.log ]; then
-            tail -100 ~/hive/logs/nats.log 2>/dev/null
+        if [ -f ~/spinifex/logs/nats.log ]; then
+            tail -100 ~/spinifex/logs/nats.log 2>/dev/null
         fi
         echo ""
         echo "=== Predastore Service Log ==="
-        if [ -f ~/hive/logs/predastore.log ]; then
-            tail -100 ~/hive/logs/predastore.log 2>/dev/null
+        if [ -f ~/spinifex/logs/predastore.log ]; then
+            tail -100 ~/spinifex/logs/predastore.log 2>/dev/null
         fi
         echo ""
         echo "=== Viperblock Service Log ==="
-        if [ -f ~/hive/logs/viperblock.log ]; then
-            tail -100 ~/hive/logs/viperblock.log 2>/dev/null
+        if [ -f ~/spinifex/logs/viperblock.log ]; then
+            tail -100 ~/spinifex/logs/viperblock.log 2>/dev/null
         fi
         echo ""
-        echo "=== Hive Daemon Log ==="
-        if [ -f ~/hive/logs/hive.log ]; then
-            tail -200 ~/hive/logs/hive.log 2>/dev/null
+        echo "=== Spinifex Daemon Log ==="
+        if [ -f ~/spinifex/logs/hive.log ]; then
+            tail -200 ~/spinifex/logs/hive.log 2>/dev/null
         fi
         echo ""
         echo "=== AWS Gateway Log ==="
-        if [ -f ~/hive/logs/awsgw.log ]; then
-            tail -200 ~/hive/logs/awsgw.log 2>/dev/null
+        if [ -f ~/spinifex/logs/awsgw.log ]; then
+            tail -200 ~/spinifex/logs/awsgw.log 2>/dev/null
         fi
     fi
     # Only stop services if we started them (not when bootstrapped)
@@ -48,15 +48,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Use Hive profile (hive admin init sets endpoint_url, ca_bundle, region in ~/.aws/config)
-export AWS_PROFILE=hive
+# Use Spinifex profile (spx admin init sets endpoint_url, ca_bundle, region in ~/.aws/config)
+export AWS_PROFILE=spinifex
 
-# Detect bootstrapped environment from hive.toml config
+# Detect bootstrapped environment from spinifex.toml config
 BOOTSTRAPPED="false"
 GATEWAY_HOST="localhost"
 PREDASTORE_HOST="localhost"
-if [ -f ~/hive/config/hive.toml ]; then
-    # Resolve gateway host from AWS profile endpoint_url (set by hive admin init)
+if [ -f ~/spinifex/config/spinifex.toml ]; then
+    # Resolve gateway host from AWS profile endpoint_url (set by spx admin init)
     ENDPOINT_URL=$(aws configure get endpoint_url 2>/dev/null || true)
     if [ -n "$ENDPOINT_URL" ]; then
         DETECTED_GW_HOST=$(echo "$ENDPOINT_URL" | sed 's|https\?://||;s|:.*||')
@@ -64,8 +64,8 @@ if [ -f ~/hive/config/hive.toml ]; then
             GATEWAY_HOST="$DETECTED_GW_HOST"
         fi
     fi
-    # Resolve predastore host from hive.toml
-    DETECTED_PS_HOST=$(awk -F'"' '/\[nodes\..*\.predastore\]/{found=1} found && /^host/{print $2; exit}' ~/hive/config/hive.toml)
+    # Resolve predastore host from spinifex.toml
+    DETECTED_PS_HOST=$(awk -F'"' '/\[nodes\..*\.predastore\]/{found=1} found && /^host/{print $2; exit}' ~/spinifex/config/spinifex.toml)
     if [ -n "$DETECTED_PS_HOST" ]; then
         PREDASTORE_HOST="${DETECTED_PS_HOST%%:*}"
     fi
@@ -78,7 +78,7 @@ if [ -f ~/hive/config/hive.toml ]; then
     fi
 fi
 
-# Helper: set up an AWS CLI profile with credentials + endpoint/CA config from the hive profile
+# Helper: set up an AWS CLI profile with credentials + endpoint/CA config from the spinifex profile
 setup_test_profile() {
     local profile="$1" key_id="$2" secret="$3"
     aws configure set aws_access_key_id "$key_id" --profile "$profile"
@@ -107,16 +107,16 @@ else
 fi
 
 if [ "$BOOTSTRAPPED" != "true" ]; then
-    ./bin/hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
+    ./bin/spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
 
-    # Trust the Hive CA certificate for AWS CLI SSL verification
-    echo "Adding Hive CA certificate to system trust store..."
-    sudo cp ~/hive/config/ca.pem /usr/local/share/ca-certificates/hive-ca.crt
+    # Trust the Spinifex CA certificate for AWS CLI SSL verification
+    echo "Adding Spinifex CA certificate to system trust store..."
+    sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/hive-ca.crt
     sudo update-ca-certificates
 
     # Start all services
     # Ensure logs directory exists for start-dev.sh
-    mkdir -p ~/hive/logs
+    mkdir -p ~/spinifex/logs
     ./scripts/start-dev.sh
 fi
 
@@ -140,28 +140,28 @@ fi
 wait_for_daemon_ready "https://${GATEWAY_HOST}:9999"
 
 # Discover the cluster's availability zone and region dynamically
-HIVE_AZ=$(aws ec2 describe-availability-zones --query 'AvailabilityZones[0].ZoneName' --output text)
-HIVE_REGION=$(aws ec2 describe-availability-zones --query 'AvailabilityZones[0].RegionName' --output text)
-echo "Discovered AZ: $HIVE_AZ, Region: $HIVE_REGION"
+SPINIFEX_AZ=$(aws ec2 describe-availability-zones --query 'AvailabilityZones[0].ZoneName' --output text)
+SPINIFEX_REGION=$(aws ec2 describe-availability-zones --query 'AvailabilityZones[0].RegionName' --output text)
+echo "Discovered AZ: $SPINIFEX_AZ, Region: $SPINIFEX_REGION"
 
 # No need for AWS_EC2/AWS_IAM vars — endpoint_url and ca_bundle are in the profile config
 
 # Phase 1b: Cluster Stats CLI
 echo "Phase 1b: Cluster Stats CLI"
 
-# Test hive get nodes — should show node1 as Ready
-echo "Testing hive get nodes..."
-GET_NODES_OUTPUT=$(./bin/hive get nodes --config ~/hive/config/hive.toml --timeout 5s 2>/dev/null)
+# Test spx get nodes — should show node1 as Ready
+echo "Testing spx get nodes..."
+GET_NODES_OUTPUT=$(./bin/spx get nodes --config ~/spinifex/config/spinifex.toml --timeout 5s 2>/dev/null)
 echo "$GET_NODES_OUTPUT"
 if ! echo "$GET_NODES_OUTPUT" | grep -q "Ready"; then
-    echo "hive get nodes did not show any Ready nodes"
+    echo "spx get nodes did not show any Ready nodes"
     exit 1
 fi
-echo "hive get nodes passed"
+echo "spx get nodes passed"
 
 # Test hive top nodes — should show CPU/MEM stats
 echo "Testing hive top nodes..."
-TOP_NODES_OUTPUT=$(./bin/hive top nodes --config ~/hive/config/hive.toml --timeout 5s 2>/dev/null)
+TOP_NODES_OUTPUT=$(./bin/spx top nodes --config ~/spinifex/config/spinifex.toml --timeout 5s 2>/dev/null)
 echo "$TOP_NODES_OUTPUT"
 if ! echo "$TOP_NODES_OUTPUT" | grep -q "0/"; then
     echo "hive top nodes did not show resource stats"
@@ -169,15 +169,15 @@ if ! echo "$TOP_NODES_OUTPUT" | grep -q "0/"; then
 fi
 echo "hive top nodes passed"
 
-# Test hive get vms — should show no VMs yet
-echo "Testing hive get vms (empty)..."
-GET_VMS_OUTPUT=$(./bin/hive get vms --config ~/hive/config/hive.toml --timeout 5s 2>/dev/null)
+# Test spx get vms — should show no VMs yet
+echo "Testing spx get vms (empty)..."
+GET_VMS_OUTPUT=$(./bin/spx get vms --config ~/spinifex/config/spinifex.toml --timeout 5s 2>/dev/null)
 echo "$GET_VMS_OUTPUT"
 if ! echo "$GET_VMS_OUTPUT" | grep -q "No VMs found"; then
-    echo "hive get vms should show 'No VMs found' before any launches"
+    echo "spx get vms should show 'No VMs found' before any launches"
     exit 1
 fi
-echo "hive get vms (empty) passed"
+echo "spx get vms (empty) passed"
 
 # Phase 2: Discovery & Metadata
 echo "Phase 2: Discovery & Metadata"
@@ -196,8 +196,8 @@ if [ "$AZ_STATE" != "available" ]; then
 fi
 echo "DescribeAvailabilityZones verified (Zone=$AZ_NAME, State=$AZ_STATE)"
 
-# Discover available instance types from Hive
-# Hive generates these based on the host CPU (e.g., m7i.micro, m8g.small, etc.)
+# Discover available instance types from Spinifex
+# Spinifex generates these based on the host CPU (e.g., m7i.micro, m8g.small, etc.)
 echo "Discovering available instance types..."
 AVAILABLE_TYPES=$(aws ec2 describe-instance-types --query 'InstanceTypes[*].InstanceType' --output text)
 echo "Available instance types: $AVAILABLE_TYPES"
@@ -301,7 +301,7 @@ if [ "$BOOTSTRAPPED" = "true" ]; then
     AMI_ID=$(aws ec2 describe-images --query 'Images[0].ImageId' --output text)
 else
     echo "Importing pre-cached Ubuntu image..."
-    IMPORT_LOG=$(./bin/hive admin images import \
+    IMPORT_LOG=$(./bin/spx admin images import \
         --file ~/images/ubuntu-24.04.img \
         --arch "$ARCH" \
         --distro ubuntu \
@@ -384,15 +384,15 @@ if [ "$STATE" != "running" ]; then
     exit 1
 fi
 
-# Phase 5a-pre: Verify hive get vms shows running instance
+# Phase 5a-pre: Verify spx get vms shows running instance
 echo "Phase 5a-pre: Cluster Stats CLI (with running VM)"
-GET_VMS_OUTPUT=$(./bin/hive get vms --config ~/hive/config/hive.toml --timeout 5s 2>/dev/null)
+GET_VMS_OUTPUT=$(./bin/spx get vms --config ~/spinifex/config/spinifex.toml --timeout 5s 2>/dev/null)
 echo "$GET_VMS_OUTPUT"
 if ! echo "$GET_VMS_OUTPUT" | grep -q "$INSTANCE_ID"; then
-    echo "hive get vms did not show running instance $INSTANCE_ID"
+    echo "spx get vms did not show running instance $INSTANCE_ID"
     exit 1
 fi
-echo "hive get vms shows running instance"
+echo "spx get vms shows running instance"
 
 # Phase 5a: Validate instance metadata fields
 echo "Phase 5a: Instance Metadata Validation"
@@ -518,8 +518,8 @@ echo "Phase 5b: Volume Lifecycle (Attach/Detach)"
 echo "Testing volume create -> resize -> attach -> detach -> delete..."
 
 # Create a test volume
-echo "Creating 10GB volume in ${HIVE_AZ}..."
-CREATE_OUTPUT=$(aws ec2 create-volume --size 10 --availability-zone "$HIVE_AZ")
+echo "Creating 10GB volume in ${SPINIFEX_AZ}..."
+CREATE_OUTPUT=$(aws ec2 create-volume --size 10 --availability-zone "$SPINIFEX_AZ")
 TEST_VOLUME_ID=$(echo "$CREATE_OUTPUT" | jq -r '.VolumeId')
 
 if [ -z "$TEST_VOLUME_ID" ] || [ "$TEST_VOLUME_ID" == "null" ]; then
@@ -735,7 +735,7 @@ echo "Describe snapshot verified (VolumeId=$DESC_VOL_ID, Size=$DESC_SIZE, Descri
 
 # Copy the snapshot
 echo "Copying snapshot $SNAPSHOT_ID..."
-COPY_OUTPUT=$(aws ec2 copy-snapshot --source-snapshot-id "$SNAPSHOT_ID" --source-region "$HIVE_REGION" --description "e2e-copy")
+COPY_OUTPUT=$(aws ec2 copy-snapshot --source-snapshot-id "$SNAPSHOT_ID" --source-region "$SPINIFEX_REGION" --description "e2e-copy")
 COPY_SNAPSHOT_ID=$(echo "$COPY_OUTPUT" | jq -r '.SnapshotId')
 
 if [ -z "$COPY_SNAPSHOT_ID" ] || [ "$COPY_SNAPSHOT_ID" == "null" ]; then
@@ -1014,7 +1014,7 @@ echo "Reboot-stopped correctly rejected"
 # Phase 7a: Attach volume to stopped instance (should fail)
 echo "Phase 7a: Attach Volume to Stopped Instance (Error Path)"
 echo "Creating a volume to test attach-to-stopped..."
-STOPPED_VOL_OUTPUT=$(aws ec2 create-volume --size 10 --availability-zone "$HIVE_AZ")
+STOPPED_VOL_OUTPUT=$(aws ec2 create-volume --size 10 --availability-zone "$SPINIFEX_AZ")
 STOPPED_VOL_ID=$(echo "$STOPPED_VOL_OUTPUT" | jq -r '.VolumeId')
 echo "Created volume: $STOPPED_VOL_ID"
 
@@ -1867,7 +1867,7 @@ echo "Phase 8 Step 1: Account Setup"
 echo "----------------------------------------"
 
 echo "  Creating Team Alpha account..."
-ALPHA_OUTPUT=$(./bin/hive admin account create --name "Team Alpha" 2>&1)
+ALPHA_OUTPUT=$(./bin/spx admin account create --name "Team Alpha" 2>&1)
 echo "$ALPHA_OUTPUT"
 ALPHA_ACCOUNT=$(echo "$ALPHA_OUTPUT" | grep "Account ID:" | awk '{print $NF}')
 ALPHA_KEY_ID=$(echo "$ALPHA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
@@ -1881,7 +1881,7 @@ echo "  Team Alpha: account=$ALPHA_ACCOUNT key=$ALPHA_KEY_ID"
 setup_test_profile hive-team-alpha "$ALPHA_KEY_ID" "$ALPHA_SECRET"
 
 echo "  Creating Team Beta account..."
-BETA_OUTPUT=$(./bin/hive admin account create --name "Team Beta" 2>&1)
+BETA_OUTPUT=$(./bin/spx admin account create --name "Team Beta" 2>&1)
 echo "$BETA_OUTPUT"
 BETA_ACCOUNT=$(echo "$BETA_OUTPUT" | grep "Account ID:" | awk '{print $NF}')
 BETA_KEY_ID=$(echo "$BETA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
@@ -2416,7 +2416,7 @@ echo "----------------------------------------"
 
 # Empty account (Gamma)
 echo "  Creating empty Gamma account..."
-GAMMA_OUTPUT=$(./bin/hive admin account create --name "Team Gamma" 2>&1)
+GAMMA_OUTPUT=$(./bin/spx admin account create --name "Team Gamma" 2>&1)
 GAMMA_KEY_ID=$(echo "$GAMMA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
 GAMMA_SECRET=$(echo "$GAMMA_OUTPUT" | grep "Secret Access Key:" | awk '{print $NF}')
 setup_test_profile hive-team-gamma "$GAMMA_KEY_ID" "$GAMMA_SECRET"

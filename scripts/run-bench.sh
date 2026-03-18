@@ -1,15 +1,15 @@
 #!/bin/sh
 
 # List running instances using ubuntu image and run disk performance benchmark
-export AWS_PROFILE=hive
+export AWS_PROFILE=spinifex
 
 # Initialize perf tracking variables
 PERF_PID=""
 NBDKIT_PID=""
 
-# Check HIVE_AMI set, if not try to detect it
-if [ -z "$HIVE_AMI" ]; then
-    echo "HIVE_AMI not set, attempting to detect..."
+# Check SPINIFEX_AMI set, if not try to detect it
+if [ -z "$SPINIFEX_AMI" ]; then
+    echo "SPINIFEX_AMI not set, attempting to detect..."
     ARCH=$(uname -m)
     if [ "$ARCH" = "x86_64" ]; then
         IMAGE_NAME="ami-ubuntu-24.04-x86_64"
@@ -18,23 +18,23 @@ if [ -z "$HIVE_AMI" ]; then
     else
         IMAGE_NAME="ami-ubuntu-24.04-x86_64"
     fi
-    HIVE_AMI=$(aws ec2 describe-images --query "Images[?Name=='$IMAGE_NAME'].ImageId" --output text)
-    if [ -z "$HIVE_AMI" ]; then
+    SPINIFEX_AMI=$(aws ec2 describe-images --query "Images[?Name=='$IMAGE_NAME'].ImageId" --output text)
+    if [ -z "$SPINIFEX_AMI" ]; then
         echo "Error: Could not find image with Name '$IMAGE_NAME'"
         exit 1
     fi
-    echo "Detected HIVE_AMI: $HIVE_AMI"
+    echo "Detected SPINIFEX_AMI: $SPINIFEX_AMI"
 fi
 
 # Get running instances matching the AMI
 # Retry loop: wait for instance to come online (up to 120 seconds)
-echo "Finding running instances with ImageId: $HIVE_AMI"
+echo "Finding running instances with ImageId: $SPINIFEX_AMI"
 MAX_ATTEMPTS=120
 ATTEMPT=0
 INSTANCE_ID=""
 
 while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-    INSTANCE_JSON=$(aws ec2 describe-instances --filters "Name=image-id,Values=$HIVE_AMI" "Name=instance-state-name,Values=running" --output json 2>/dev/null)
+    INSTANCE_JSON=$(aws ec2 describe-instances --filters "Name=image-id,Values=$SPINIFEX_AMI" "Name=instance-state-name,Values=running" --output json 2>/dev/null)
 
     # Extract InstanceId using jq (handle nested structure)
     INSTANCE_ID=$(echo "$INSTANCE_JSON" | jq -r '.Reservations[0].Instances[0].InstanceId // empty' 2>/dev/null)
@@ -52,7 +52,7 @@ while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
 done
 
 if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "null" ]; then
-    echo "Error: No running instances found with ImageId $HIVE_AMI after $MAX_ATTEMPTS attempts"
+    echo "Error: No running instances found with ImageId $SPINIFEX_AMI after $MAX_ATTEMPTS attempts"
     echo "Available instances:"
     aws ec2 describe-instances --query "Reservations[*].Instances[*].[InstanceId,ImageId,State.Name]" --output table
     exit 1
@@ -113,7 +113,7 @@ else
 
     # Start perf record in the background (will run until interrupted)
     echo "Starting perf profiling for nbdkit process (PID: $NBDKIT_PID)..."
-    sudo perf record -g -p "$NBDKIT_PID" -o /tmp/hive-nbdkit-perf.data > /tmp/perf.log 2>&1 &
+    sudo perf record -g -p "$NBDKIT_PID" -o /tmp/spinifex-nbdkit-perf.data > /tmp/perf.log 2>&1 &
     PERF_PID=$!
     echo "Perf profiling started (PID: $PERF_PID), will record during benchmark execution"
 fi
@@ -137,7 +137,7 @@ SSH_READY=false
 
 while [ $SSH_ATTEMPTS -lt $MAX_SSH_ATTEMPTS ]; do
     ssh-keyscan -p "$SSH_PORT" 127.0.0.1 >> ~/.ssh/known_hosts 2>/dev/null
-    if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=2 -p "$SSH_PORT" -i ~/.ssh/hive-key ec2-user@127.0.0.1 'echo ready' >/dev/null 2>&1; then
+    if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=2 -p "$SSH_PORT" -i ~/.ssh/spinifex-key ec2-user@127.0.0.1 'echo ready' >/dev/null 2>&1; then
         SSH_READY=true
         echo "SSH is ready!"
         break
@@ -156,7 +156,7 @@ if [ "$SSH_READY" != "true" ]; then
 fi
 
 echo "Copying benchmark script to instance..."
-scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$SSH_PORT" -i ~/.ssh/hive-key "$BENCH_SCRIPT" ec2-user@127.0.0.1:~/disk-performance.sh
+scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -P "$SSH_PORT" -i ~/.ssh/spinifex-key "$BENCH_SCRIPT" ec2-user@127.0.0.1:~/disk-performance.sh
 
 if [ $? -ne 0 ]; then
     echo "Error: Failed to copy benchmark script to instance"
@@ -165,19 +165,19 @@ fi
 
 # Execute benchmark script
 echo "Running benchmark on instance..."
-ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$SSH_PORT" -i ~/.ssh/hive-key ec2-user@127.0.0.1 'chmod +x ~/disk-performance.sh && ~/disk-performance.sh' > /tmp/hive-vm-disk.log 2>&1
+ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "$SSH_PORT" -i ~/.ssh/spinifex-key ec2-user@127.0.0.1 'chmod +x ~/disk-performance.sh && ~/disk-performance.sh' > /tmp/spinifex-vm-disk.log 2>&1
 
 if [ $? -ne 0 ]; then
-    echo "Error: Benchmark execution failed, check /tmp/hive-vm-disk.log for details"
+    echo "Error: Benchmark execution failed, check /tmp/spinifex-vm-disk.log for details"
     # Stop perf if it was running
     if [ -n "$PERF_PID" ]; then
         echo "Stopping perf profiling..."
         sudo kill -INT "$PERF_PID" 2>/dev/null || true
         # Wait for perf to finish writing
         sleep 3
-        if [ -f /tmp/hive-nbdkit-perf.data ]; then
-            sudo chmod 644 /tmp/hive-nbdkit-perf.data
-            echo "Perf data saved to /tmp/hive-nbdkit-perf.data"
+        if [ -f /tmp/spinifex-nbdkit-perf.data ]; then
+            sudo chmod 644 /tmp/spinifex-nbdkit-perf.data
+            echo "Perf data saved to /tmp/spinifex-nbdkit-perf.data"
         fi
     fi
     exit 1
@@ -191,19 +191,19 @@ if [ -n "$PERF_PID" ]; then
     # Wait for perf to finish writing data
     sleep 3
 
-    if [ -f /tmp/hive-nbdkit-perf.data ]; then
-        sudo chmod 644 /tmp/hive-nbdkit-perf.data
-        echo "Perf benchmarks saved to /tmp/hive-nbdkit-perf.data"
-        echo "To view: sudo perf report -i /tmp/hive-nbdkit-perf.data"
+    if [ -f /tmp/spinifex-nbdkit-perf.data ]; then
+        sudo chmod 644 /tmp/spinifex-nbdkit-perf.data
+        echo "Perf benchmarks saved to /tmp/spinifex-nbdkit-perf.data"
+        echo "To view: sudo perf report -i /tmp/spinifex-nbdkit-perf.data"
     else
-        echo "Warning: Perf data file not found at /tmp/hive-nbdkit-perf.data"
+        echo "Warning: Perf data file not found at /tmp/spinifex-nbdkit-perf.data"
     fi
 fi
 
 # Display results
 echo ""
 echo "Benchmark completed successfully!"
-echo "Results saved to /tmp/hive-vm-disk.log"
+echo "Results saved to /tmp/spinifex-vm-disk.log"
 echo ""
 echo "=== Benchmark Results ==="
-cat /tmp/hive-vm-disk.log
+cat /tmp/spinifex-vm-disk.log

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# OVN Compute Node Setup for Hive VPC Networking
+# OVN Compute Node Setup for Spinifex VPC Networking
 #
 # This script bootstraps a compute node for OVN-based VPC networking:
 #   1. Installs OVN/OVS packages (if not present)
@@ -71,7 +71,7 @@ if [ -z "$CHASSIS_ID" ]; then
     echo "Auto-detected chassis ID: $CHASSIS_ID"
 fi
 
-echo "=== Hive OVN Compute Node Setup ==="
+echo "=== Spinifex OVN Compute Node Setup ==="
 echo "  Management node: $MANAGEMENT"
 echo "  OVN Remote (SB): $OVN_REMOTE"
 echo "  Encap IP:        $ENCAP_IP"
@@ -161,8 +161,8 @@ echo "  ovn-controller: started"
 echo ""
 echo "Step 6: Applying sysctl for overlay networking..."
 
-sudo tee /etc/sysctl.d/99-hive-vpc.conf >/dev/null <<'SYSCTL'
-# Hive VPC networking: enable IP forwarding and disable rp_filter
+sudo tee /etc/sysctl.d/99-spinifex-vpc.conf >/dev/null <<'SYSCTL'
+# Spinifex VPC networking: enable IP forwarding and disable rp_filter
 # for Geneve overlay traffic on OVS bridges.
 net.ipv4.ip_forward=1
 net.ipv4.conf.all.rp_filter=0
@@ -226,9 +226,9 @@ fi
 
 # Create persistent systemd override so permissions survive OVS restarts
 OVERRIDE_DIR="/etc/systemd/system/openvswitch-switch.service.d"
-if [ ! -f "$OVERRIDE_DIR/hive-perms.conf" ]; then
+if [ ! -f "$OVERRIDE_DIR/spinifex-perms.conf" ]; then
     sudo mkdir -p "$OVERRIDE_DIR"
-    sudo tee "$OVERRIDE_DIR/hive-perms.conf" >/dev/null <<'OVERRIDE'
+    sudo tee "$OVERRIDE_DIR/spinifex-perms.conf" >/dev/null <<'OVERRIDE'
 [Service]
 ExecStartPost=/bin/chmod 0666 /var/run/openvswitch/db.sock
 OVERRIDE
@@ -240,11 +240,11 @@ fi
 
 # Create sudoers rule for network commands that always need root
 # (ip tuntap, ip link set — NET_ADMIN operations)
-SUDOERS_FILE="/etc/sudoers.d/hive-network"
+SUDOERS_FILE="/etc/sudoers.d/spinifex-network"
 if [ ! -f "$SUDOERS_FILE" ]; then
     CURRENT_USER=$(whoami)
     sudo tee "$SUDOERS_FILE" >/dev/null <<EOF
-# Hive VPC networking: allow non-root daemon to manage tap devices and OVS
+# Spinifex VPC networking: allow non-root daemon to manage tap devices and OVS
 $CURRENT_USER ALL=(root) NOPASSWD: /sbin/ip, /usr/sbin/ip
 $CURRENT_USER ALL=(root) NOPASSWD: /usr/bin/ovs-vsctl, /usr/bin/ovs-appctl
 $CURRENT_USER ALL=(root) NOPASSWD: /usr/bin/ovn-nbctl, /usr/bin/ovn-sbctl
@@ -269,7 +269,7 @@ if ls /var/log/ovn/*.log.log* 1>/dev/null 2>&1; then
     echo "  cleaned up stale .log.log files"
 fi
 
-LOGROTATE_FILE="/etc/logrotate.d/ovn-hive"
+LOGROTATE_FILE="/etc/logrotate.d/ovn-spinifex"
 sudo tee "$LOGROTATE_FILE" >/dev/null <<'LOGROTATE'
 /var/log/ovn/ovn-controller.log
 /var/log/ovn/ovn-northd.log
@@ -288,7 +288,7 @@ LOGROTATE
 echo "  logrotate config: $LOGROTATE_FILE (daily, 100M max, 3 rotations, explicit filenames)"
 
 # --- Step 10: Disable auto-start on boot ---
-# start-dev.sh / stop-dev.sh manage the OVN lifecycle. Without hive services
+# start-dev.sh / stop-dev.sh manage the OVN lifecycle. Without spinifex services
 # running, ovn-controller spins in a tight reconnect loop burning CPU.
 echo ""
 echo "Step 10: Disabling OVN auto-start on boot (start-dev.sh will manage lifecycle)..."

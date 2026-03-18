@@ -1,17 +1,17 @@
 #!/bin/bash
-# Hive binary installer
+# Spinifex binary installer
 # Usage: curl -sfL https://install.mulgadc.com | bash
 #
 # Environment variables:
-#   INSTALL_HIVE_CHANNEL   Release channel: latest (default), dev
-#   INSTALL_HIVE_VERSION   Pin to specific version (overrides channel)
-#   INSTALL_HIVE_TARBALL   Path to local tarball (skips download, for testing/air-gapped)
-#   INSTALL_HIVE_SKIP_APT  Set to 1 to skip apt dependency install
-#   INSTALL_HIVE_SKIP_AWS  Set to 1 to skip AWS CLI install
+#   INSTALL_SPINIFEX_CHANNEL   Release channel: latest (default), dev
+#   INSTALL_SPINIFEX_VERSION   Pin to specific version (overrides channel)
+#   INSTALL_SPINIFEX_TARBALL   Path to local tarball (skips download, for testing/air-gapped)
+#   INSTALL_SPINIFEX_SKIP_APT  Set to 1 to skip apt dependency install
+#   INSTALL_SPINIFEX_SKIP_AWS  Set to 1 to skip AWS CLI install
 
 set -e
 
-INSTALL_HIVE_CHANNEL="${INSTALL_HIVE_CHANNEL:-latest}"
+INSTALL_SPINIFEX_CHANNEL="${INSTALL_SPINIFEX_CHANNEL:-latest}"
 INSTALL_BASE_URL="${INSTALL_BASE_URL:-https://install.mulgadc.com}"
 
 # --- Colors ---
@@ -60,7 +60,7 @@ detect_os() {
             fi
             ;;
         *)
-            fatal "Unsupported OS: $ID $VERSION_ID. Hive requires Debian 12+ or Ubuntu 22.04+"
+            fatal "Unsupported OS: $ID $VERSION_ID. Spinifex requires Debian 12+ or Ubuntu 22.04+"
             ;;
     esac
 
@@ -82,7 +82,7 @@ detect_arch() {
             AWS_ARCH="aarch64"
             ;;
         *)
-            fatal "Unsupported architecture: $MACHINE. Hive requires x86_64 or aarch64"
+            fatal "Unsupported architecture: $MACHINE. Spinifex requires x86_64 or aarch64"
             ;;
     esac
 
@@ -92,30 +92,30 @@ detect_arch() {
 # --- Detect service user ---
 detect_service_user() {
     # Use the real user — either the current user, or SUDO_USER if running via sudo
-    HIVE_USER="${SUDO_USER:-$(whoami)}"
-    HIVE_GROUP="$(id -gn "$HIVE_USER")"
+    SPINIFEX_USER="${SUDO_USER:-$(whoami)}"
+    SPINIFEX_GROUP="$(id -gn "$SPINIFEX_USER")"
 
-    if [ "$HIVE_USER" = "root" ]; then
+    if [ "$SPINIFEX_USER" = "root" ]; then
         fatal "Cannot determine service user. Do not run as root directly — use: curl ... | bash (as a normal user)"
     fi
 
-    info "Services will run as: $HIVE_USER:$HIVE_GROUP"
+    info "Services will run as: $SPINIFEX_USER:$SPINIFEX_GROUP"
 
     # Allow the service user to manage OVN/OVS and tap devices
-    $SUDO tee /etc/sudoers.d/hive-network > /dev/null << SUDOERS
-# Hive VPC networking: allow service user to manage tap devices, OVS, and OVN
-${HIVE_USER} ALL=(root) NOPASSWD: /sbin/ip, /usr/sbin/ip
-${HIVE_USER} ALL=(root) NOPASSWD: /usr/bin/ovs-vsctl, /usr/bin/ovs-appctl
-${HIVE_USER} ALL=(root) NOPASSWD: /usr/bin/ovn-nbctl, /usr/bin/ovn-sbctl
+    $SUDO tee /etc/sudoers.d/spinifex-network > /dev/null << SUDOERS
+# Spinifex VPC networking: allow service user to manage tap devices, OVS, and OVN
+${SPINIFEX_USER} ALL=(root) NOPASSWD: /sbin/ip, /usr/sbin/ip
+${SPINIFEX_USER} ALL=(root) NOPASSWD: /usr/bin/ovs-vsctl, /usr/bin/ovs-appctl
+${SPINIFEX_USER} ALL=(root) NOPASSWD: /usr/bin/ovn-nbctl, /usr/bin/ovn-sbctl
 SUDOERS
-    $SUDO chmod 0440 /etc/sudoers.d/hive-network
-    info "Sudoers rules installed for $HIVE_USER"
+    $SUDO chmod 0440 /etc/sudoers.d/spinifex-network
+    info "Sudoers rules installed for $SPINIFEX_USER"
 }
 
 # --- Install apt dependencies ---
 install_apt_deps() {
-    if [ "${INSTALL_HIVE_SKIP_APT}" = "1" ]; then
-        info "Skipping apt dependencies (INSTALL_HIVE_SKIP_APT=1)"
+    if [ "${INSTALL_SPINIFEX_SKIP_APT}" = "1" ]; then
+        info "Skipping apt dependencies (INSTALL_SPINIFEX_SKIP_APT=1)"
         return
     fi
 
@@ -135,8 +135,8 @@ install_apt_deps() {
 
 # --- Install AWS CLI ---
 install_aws_cli() {
-    if [ "${INSTALL_HIVE_SKIP_AWS}" = "1" ]; then
-        info "Skipping AWS CLI (INSTALL_HIVE_SKIP_AWS=1)"
+    if [ "${INSTALL_SPINIFEX_SKIP_AWS}" = "1" ]; then
+        info "Skipping AWS CLI (INSTALL_SPINIFEX_SKIP_AWS=1)"
         return
     fi
 
@@ -156,42 +156,42 @@ install_aws_cli() {
 }
 
 # --- Download tarball ---
-download_hive() {
-    HIVE_TMPDIR=$(mktemp -d)
-    TARBALL="$HIVE_TMPDIR/hive.tar.gz"
+download_spinifex() {
+    SPINIFEX_TMPDIR=$(mktemp -d)
+    TARBALL="$SPINIFEX_TMPDIR/hive.tar.gz"
 
     # Local tarball override — skip download (for testing and air-gapped installs)
-    if [ -n "$INSTALL_HIVE_TARBALL" ]; then
-        info "Using local tarball: $INSTALL_HIVE_TARBALL"
-        cp "$INSTALL_HIVE_TARBALL" "$TARBALL"
+    if [ -n "$INSTALL_SPINIFEX_TARBALL" ]; then
+        info "Using local tarball: $INSTALL_SPINIFEX_TARBALL"
+        cp "$INSTALL_SPINIFEX_TARBALL" "$TARBALL"
         info "Extracting..."
-        tar -xzf "$TARBALL" -C "$HIVE_TMPDIR"
-        EXTRACT_DIR="$HIVE_TMPDIR"
+        tar -xzf "$TARBALL" -C "$SPINIFEX_TMPDIR"
+        EXTRACT_DIR="$SPINIFEX_TMPDIR"
         return
     fi
 
-    if [ -n "$INSTALL_HIVE_VERSION" ]; then
-        DOWNLOAD_URL="${INSTALL_BASE_URL}/download/${INSTALL_HIVE_VERSION}/${ARCH}"
-        info "Downloading Hive $INSTALL_HIVE_VERSION ($ARCH)..."
+    if [ -n "$INSTALL_SPINIFEX_VERSION" ]; then
+        DOWNLOAD_URL="${INSTALL_BASE_URL}/download/${INSTALL_SPINIFEX_VERSION}/${ARCH}"
+        info "Downloading Spinifex $INSTALL_SPINIFEX_VERSION ($ARCH)..."
     else
-        DOWNLOAD_URL="${INSTALL_BASE_URL}/download/${INSTALL_HIVE_CHANNEL}/${ARCH}"
-        info "Downloading Hive ($INSTALL_HIVE_CHANNEL channel, $ARCH)..."
+        DOWNLOAD_URL="${INSTALL_BASE_URL}/download/${INSTALL_SPINIFEX_CHANNEL}/${ARCH}"
+        info "Downloading Spinifex ($INSTALL_SPINIFEX_CHANNEL channel, $ARCH)..."
     fi
 
     HTTP_CODE=$(curl -fsSL -w '%{http_code}' -o "$TARBALL" "$DOWNLOAD_URL" 2>/dev/null) || true
     if [ ! -f "$TARBALL" ] || [ "$HTTP_CODE" -ge 400 ] 2>/dev/null; then
-        rm -rf "$HIVE_TMPDIR"
-        fatal "Failed to download Hive from $DOWNLOAD_URL (HTTP $HTTP_CODE)"
+        rm -rf "$SPINIFEX_TMPDIR"
+        fatal "Failed to download Spinifex from $DOWNLOAD_URL (HTTP $HTTP_CODE)"
     fi
 
     # Verify checksum if available
     CHECKSUM_URL="${DOWNLOAD_URL}.sha256"
-    if curl -fsSL -o "$HIVE_TMPDIR/checksum.sha256" "$CHECKSUM_URL" 2>/dev/null; then
+    if curl -fsSL -o "$SPINIFEX_TMPDIR/checksum.sha256" "$CHECKSUM_URL" 2>/dev/null; then
         info "Verifying checksum..."
-        EXPECTED=$(awk '{print $1}' "$HIVE_TMPDIR/checksum.sha256")
+        EXPECTED=$(awk '{print $1}' "$SPINIFEX_TMPDIR/checksum.sha256")
         ACTUAL=$(sha256sum "$TARBALL" | awk '{print $1}')
         if [ "$EXPECTED" != "$ACTUAL" ]; then
-            rm -rf "$HIVE_TMPDIR"
+            rm -rf "$SPINIFEX_TMPDIR"
             fatal "Checksum verification failed. Expected: $EXPECTED, Got: $ACTUAL"
         fi
         info "Checksum verified"
@@ -201,8 +201,8 @@ download_hive() {
 
     # Extract
     info "Extracting..."
-    tar -xzf "$TARBALL" -C "$HIVE_TMPDIR"
-    EXTRACT_DIR="$HIVE_TMPDIR"
+    tar -xzf "$TARBALL" -C "$SPINIFEX_TMPDIR"
+    EXTRACT_DIR="$SPINIFEX_TMPDIR"
 }
 
 # --- Place files ---
@@ -210,8 +210,8 @@ install_files() {
     info "Installing files..."
 
     # Binary
-    $SUDO install -m 0755 "$EXTRACT_DIR/hive" /usr/local/bin/hive
-    info "  /usr/local/bin/hive"
+    $SUDO install -m 0755 "$EXTRACT_DIR/spx" /usr/local/bin/spx
+    info "  /usr/local/bin/spx"
 
     # nbdkit plugin
     PLUGINDIR=$(nbdkit --dump-config 2>/dev/null | grep ^plugindir= | cut -d= -f2)
@@ -228,10 +228,10 @@ install_files() {
     info "  $PLUGINDIR/nbdkit-viperblock-plugin.so"
 
     # Setup scripts
-    $SUDO mkdir -p /usr/local/share/hive
+    $SUDO mkdir -p /usr/local/share/spinifex
     if [ -f "$EXTRACT_DIR/setup-ovn.sh" ]; then
-        $SUDO install -m 0755 "$EXTRACT_DIR/setup-ovn.sh" /usr/local/share/hive/setup-ovn.sh
-        info "  /usr/local/share/hive/setup-ovn.sh"
+        $SUDO install -m 0755 "$EXTRACT_DIR/setup-ovn.sh" /usr/local/share/spinifex/setup-ovn.sh
+        info "  /usr/local/share/spinifex/setup-ovn.sh"
     fi
 }
 
@@ -239,39 +239,39 @@ install_files() {
 create_directories() {
     info "Creating directories..."
 
-    $SUDO mkdir -p /etc/hive
-    $SUDO chmod 0700 /etc/hive
-    $SUDO chown "$HIVE_USER:$HIVE_GROUP" /etc/hive
+    $SUDO mkdir -p /etc/spinifex
+    $SUDO chmod 0700 /etc/spinifex
+    $SUDO chown "$SPINIFEX_USER:$SPINIFEX_GROUP" /etc/spinifex
 
-    $SUDO mkdir -p /var/lib/hive
-    $SUDO chown "$HIVE_USER:$HIVE_GROUP" /var/lib/hive
+    $SUDO mkdir -p /var/lib/spinifex
+    $SUDO chown "$SPINIFEX_USER:$SPINIFEX_GROUP" /var/lib/spinifex
 
-    # Symlink so services that expect BaseDir/config/ can find /etc/hive/
-    if [ ! -e /var/lib/hive/config ]; then
-        $SUDO ln -s /etc/hive /var/lib/hive/config
+    # Symlink so services that expect BaseDir/config/ can find /etc/spinifex/
+    if [ ! -e /var/lib/spinifex/config ]; then
+        $SUDO ln -s /etc/spinifex /var/lib/spinifex/config
     fi
 
-    # Symlink so services that write logs to BaseDir/logs/ use /var/log/hive/
-    if [ ! -e /var/lib/hive/logs ]; then
-        $SUDO ln -s /var/log/hive /var/lib/hive/logs
+    # Symlink so services that write logs to BaseDir/logs/ use /var/log/spinifex/
+    if [ ! -e /var/lib/spinifex/logs ]; then
+        $SUDO ln -s /var/log/spinifex /var/lib/spinifex/logs
     fi
 
-    $SUDO mkdir -p /var/log/hive
-    $SUDO chown "$HIVE_USER:$HIVE_GROUP" /var/log/hive
+    $SUDO mkdir -p /var/log/spinifex
+    $SUDO chown "$SPINIFEX_USER:$SPINIFEX_GROUP" /var/log/spinifex
 
-    $SUDO mkdir -p /run/hive
-    $SUDO chown "$HIVE_USER:$HIVE_GROUP" /run/hive
+    $SUDO mkdir -p /run/spinifex
+    $SUDO chown "$SPINIFEX_USER:$SPINIFEX_GROUP" /run/spinifex
 
-    $SUDO mkdir -p /var/lib/hive/viperblock
-    $SUDO chown "$HIVE_USER:$HIVE_GROUP" /var/lib/hive/viperblock
+    $SUDO mkdir -p /var/lib/spinifex/viperblock
+    $SUDO chown "$SPINIFEX_USER:$SPINIFEX_GROUP" /var/lib/spinifex/viperblock
 
     # Generate environment file with install-specific values (e.g. arch-dependent paths)
-    $SUDO tee /etc/hive/systemd.env > /dev/null << EOF
+    $SUDO tee /etc/spinifex/systemd.env > /dev/null << EOF
 # Generated by setup.sh — install-specific environment variables
-HIVE_VIPERBLOCK_PLUGIN_PATH=${PLUGINDIR}/nbdkit-viperblock-plugin.so
+SPINIFEX_VIPERBLOCK_PLUGIN_PATH=${PLUGINDIR}/nbdkit-viperblock-plugin.so
 EOF
-    $SUDO chown "$HIVE_USER:$HIVE_GROUP" /etc/hive/systemd.env
-    info "Generated /etc/hive/systemd.env"
+    $SUDO chown "$SPINIFEX_USER:$SPINIFEX_GROUP" /etc/spinifex/systemd.env
+    info "Generated /etc/spinifex/systemd.env"
 }
 
 # --- Install systemd units ---
@@ -284,20 +284,20 @@ install_systemd() {
 
     for unit in "$EXTRACT_DIR"/systemd/*; do
         # Substitute User= and Group= with the detected service user
-        sed "s/^User=hive$/User=$HIVE_USER/;s/^Group=hive$/Group=$HIVE_GROUP/" \
+        sed "s/^User=hive$/User=$SPINIFEX_USER/;s/^Group=hive$/Group=$SPINIFEX_GROUP/" \
             "$unit" | $SUDO tee "/etc/systemd/system/$(basename "$unit")" > /dev/null
         $SUDO chmod 0644 "/etc/systemd/system/$(basename "$unit")"
         info "  /etc/systemd/system/$(basename "$unit")"
     done
 
     $SUDO systemctl daemon-reload
-    info "Systemd units installed (running as $HIVE_USER:$HIVE_GROUP)"
+    info "Systemd units installed (running as $SPINIFEX_USER:$SPINIFEX_GROUP)"
 }
 
 # --- Install logrotate ---
 install_logrotate() {
-    if [ -f "$EXTRACT_DIR/logrotate-hive" ]; then
-        $SUDO install -m 0644 "$EXTRACT_DIR/logrotate-hive" /etc/logrotate.d/hive
+    if [ -f "$EXTRACT_DIR/logrotate-spinifex" ]; then
+        $SUDO install -m 0644 "$EXTRACT_DIR/logrotate-spinifex" /etc/logrotate.d/hive
     else
         warn "Logrotate config not found in tarball, skipping"
         return
@@ -307,61 +307,61 @@ install_logrotate() {
 
 # --- Upgrade handling ---
 handle_upgrade() {
-    if $SUDO systemctl is-active --quiet hive.target 2>/dev/null; then
-        warn "Hive services are running. Stopping for upgrade..."
-        $SUDO systemctl stop hive.target
+    if $SUDO systemctl is-active --quiet spinifex.target 2>/dev/null; then
+        warn "Spinifex services are running. Stopping for upgrade..."
+        $SUDO systemctl stop spinifex.target
         RESTART_AFTER=true
     fi
 }
 
 restart_if_needed() {
     if [ "${RESTART_AFTER}" = "true" ]; then
-        info "Restarting Hive services..."
-        $SUDO systemctl start hive.target
+        info "Restarting Spinifex services..."
+        $SUDO systemctl start spinifex.target
     fi
 }
 
 # --- Print summary ---
 print_summary() {
-    INSTALLED_VERSION=$(/usr/local/bin/hive version 2>/dev/null || echo "unknown")
+    INSTALLED_VERSION=$(/usr/local/bin/spx version 2>/dev/null || echo "unknown")
 
     echo ""
     echo "============================================"
-    echo "  Hive installed successfully"
+    echo "  Spinifex installed successfully"
     echo "============================================"
     echo ""
     echo "  Version:      $INSTALLED_VERSION"
     echo "  Architecture: $ARCH"
-    echo "  Service user: $HIVE_USER"
-    echo "  Binary:       /usr/local/bin/hive"
-    echo "  Config:       /etc/hive/"
-    echo "  Data:         /var/lib/hive/"
-    echo "  Logs:         /var/log/hive/"
+    echo "  Service user: $SPINIFEX_USER"
+    echo "  Binary:       /usr/local/bin/spx"
+    echo "  Config:       /etc/spinifex/"
+    echo "  Data:         /var/lib/spinifex/"
+    echo "  Logs:         /var/log/spinifex/"
     echo ""
     echo "  Next steps:"
     echo ""
     echo "  1. Setup OVN networking:"
-    echo "     sudo /usr/local/share/hive/setup-ovn.sh --management"
+    echo "     sudo /usr/local/share/spinifex/setup-ovn.sh --management"
     echo ""
     echo "  2. Initialize a region:"
-    echo "     sudo hive admin init --region <region> --az <az> --node node1 --nodes 1"
+    echo "     sudo spx admin init --region <region> --az <az> --node node1 --nodes 1"
     echo ""
     echo "  3. Trust the CA certificate:"
-    echo "     sudo cp /etc/hive/ca.pem /usr/local/share/ca-certificates/hive-ca.crt"
+    echo "     sudo cp /etc/spinifex/ca.pem /usr/local/share/ca-certificates/hive-ca.crt"
     echo "     sudo update-ca-certificates"
     echo ""
     echo "  4. Start services:"
-    echo "     sudo systemctl start hive.target"
+    echo "     sudo systemctl start spinifex.target"
     echo ""
     echo "  5. Verify:"
-    echo "     export AWS_PROFILE=hive"
+    echo "     export AWS_PROFILE=spinifex"
     echo "     aws ec2 describe-instance-types"
     echo ""
 }
 
 # --- Main ---
 main() {
-    info "Hive installer"
+    info "Spinifex installer"
     echo ""
 
     setup_sudo
@@ -371,12 +371,12 @@ main() {
     install_apt_deps
     install_aws_cli
     detect_service_user
-    download_hive
+    download_spinifex
     install_files
     create_directories
     install_systemd
     install_logrotate
-    rm -rf "$HIVE_TMPDIR"
+    rm -rf "$SPINIFEX_TMPDIR"
     restart_if_needed
     print_summary
 }

@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# Start Hive development environment
-# This script starts all required services in the correct order using Hive service commands
+# Start Spinifex development environment
+# This script starts all required services in the correct order using Spinifex service commands
 # Usage: ./scripts/start-dev.sh [--build] [data-dir]
 #   --build:  Rebuild all binaries before starting (default: skip build)
-#   data-dir: Optional data directory path (default: ~/hive)
+#   data-dir: Optional data directory path (default: ~/spinifex)
 #
 # Environment variables:
-#   UI=false              Skip starting Hive UI (e.g., UI=false ./scripts/start-dev.sh)
+#   UI=false              Skip starting Spinifex UI (e.g., UI=false ./scripts/start-dev.sh)
 
 set -e
 
@@ -17,7 +17,7 @@ MULGA_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"
 
 # Parse arguments
 BUILD=false
-DATA_DIR="$HOME/hive"
+DATA_DIR="$HOME/spinifex"
 for arg in "$@"; do
     case "$arg" in
         --build) BUILD=true ;;
@@ -31,15 +31,15 @@ CONFIG_DIR="${CONFIG_DIR:-$DATA_DIR/config}"
 echo "Using data directory: $DATA_DIR"
 echo "Using configuration directory: $CONFIG_DIR"
 LOGS_DIR="$DATA_DIR/logs"
-WAL_DIR="$DATA_DIR/hive"
+WAL_DIR="$DATA_DIR/spinifex"
 
-echo "🚀 Starting Hive development environment..."
+echo "🚀 Starting Spinifex development environment..."
 echo "Project root: $PROJECT_ROOT"
 echo "Data directory: $DATA_DIR"
 
-# Parse services from hive.toml — defaults to all if not set
+# Parse services from spinifex.toml — defaults to all if not set
 parse_services() {
-    local config_file="$CONFIG_DIR/hive.toml"
+    local config_file="$CONFIG_DIR/spinifex.toml"
     if [ -f "$config_file" ]; then
         local svc_line=$(grep -m1 '^services' "$config_file" | sed 's/.*\[//;s/\].*//;s/"//g;s/,/ /g')
         if [ -n "$svc_line" ]; then
@@ -59,7 +59,7 @@ echo "Services: $SERVICES"
 
 # Detect multi-node cluster from config
 is_multinode() {
-    local config_file="$CONFIG_DIR/hive.toml"
+    local config_file="$CONFIG_DIR/spinifex.toml"
     if [ -f "$config_file" ]; then
         local node_count=$(grep -c '^\[nodes\.' "$config_file")
         [ "$node_count" -gt 1 ]
@@ -71,8 +71,8 @@ is_multinode() {
 # Confirm configuration directory exists
 if [ ! -d "$CONFIG_DIR" ]; then
     echo "⚠️  Configuration directory $CONFIG_DIR does not exist."
-    echo "Please init the hive environment using the CLI."
-    echo "hive admin init"
+    echo "Please init the spinifex environment using the CLI."
+    echo "spx admin init"
     exit 1
 fi
 
@@ -177,7 +177,7 @@ check_service() {
 if [ "$BUILD" = "true" ]; then
     echo "✈️  Pre-flight, compiling latest..."
 
-    echo "   Building hive..."
+    echo "   Building spinifex..."
     make build
 
     echo "   Building predastore..."
@@ -231,14 +231,14 @@ if has_service "nats"; then
     echo "1️⃣  Starting NATS server..."
 
     if [ -f "$CONFIG_DIR/nats/nats.conf" ]; then
-        export HIVE_CONFIG_PATH=$CONFIG_DIR/nats/nats.conf
+        export SPINIFEX_CONFIG_PATH=$CONFIG_DIR/nats/nats.conf
         echo " Using NATS config file: $CONFIG_DIR/nats/nats.conf"
     else
         echo " ⚠️ NATS config file not found at $CONFIG_DIR/nats/nats.conf, using defaults"
-        export HIVE_NATS_HOST=0.0.0.0
-        export HIVE_NATS_PORT=4222
-        export HIVE_NATS_DATA_DIR=$DATA_DIR/nats/
-        export HIVE_NATS_JETSTREAM=false
+        export SPINIFEX_NATS_HOST=0.0.0.0
+        export SPINIFEX_NATS_PORT=4222
+        export SPINIFEX_NATS_DATA_DIR=$DATA_DIR/nats/
+        export SPINIFEX_NATS_JETSTREAM=false
     fi
 
     # Extract NATS listen address from config (multi-node binds to specific IP, not 127.0.0.1)
@@ -250,14 +250,14 @@ if has_service "nats"; then
         fi
     fi
 
-    NATS_CMD="./bin/hive service nats start"
+    NATS_CMD="./bin/spx service nats start"
     start_service "nats" "$NATS_CMD"
     set_oom_score "nats" "-500"
     check_service "NATS" "$NATS_CHECK_HOST" "4222"
 
     # Wait for NATS JetStream to be ready before Predastore starts.
     # Predastore lazily opens IAM KV buckets — it starts with config-only auth
-    # and activates IAM auth once the hive daemon creates the KV buckets.
+    # and activates IAM auth once the spinifex daemon creates the KV buckets.
     echo "🔍 Waiting for NATS JetStream..."
     NATS_JS_READY=false
     for i in $(seq 1 15); do
@@ -280,43 +280,43 @@ fi
 echo ""
 if has_service "predastore"; then
     echo "2️⃣  Starting Predastore..."
-    unset HIVE_CONFIG_PATH
+    unset SPINIFEX_CONFIG_PATH
 
-    export HIVE_PREDASTORE_BASE_PATH=$DATA_DIR/predastore/
-    export HIVE_PREDASTORE_CONFIG_PATH=$CONFIG_DIR/predastore/predastore.toml
-    export HIVE_PREDASTORE_TLS_CERT=$CONFIG_DIR/server.pem
-    export HIVE_PREDASTORE_TLS_KEY=$CONFIG_DIR/server.key
+    export SPINIFEX_PREDASTORE_BASE_PATH=$DATA_DIR/predastore/
+    export SPINIFEX_PREDASTORE_CONFIG_PATH=$CONFIG_DIR/predastore/predastore.toml
+    export SPINIFEX_PREDASTORE_TLS_CERT=$CONFIG_DIR/server.pem
+    export SPINIFEX_PREDASTORE_TLS_KEY=$CONFIG_DIR/server.key
 
-    # Auto-detect Predastore host:port from hive.toml [nodes.<name>.predastore] section
+    # Auto-detect Predastore host:port from spinifex.toml [nodes.<name>.predastore] section
     PREDASTORE_BIND="0.0.0.0:8443"
-    if [ -f "$CONFIG_DIR/hive.toml" ]; then
-        DETECTED_PREDASTORE_HOST=$(awk -F'"' '/\[nodes\..*\.predastore\]/{found=1} found && /^host/{print $2; exit}' "$CONFIG_DIR/hive.toml")
+    if [ -f "$CONFIG_DIR/spinifex.toml" ]; then
+        DETECTED_PREDASTORE_HOST=$(awk -F'"' '/\[nodes\..*\.predastore\]/{found=1} found && /^host/{print $2; exit}' "$CONFIG_DIR/spinifex.toml")
         if [ -n "$DETECTED_PREDASTORE_HOST" ]; then
             PREDASTORE_BIND="$DETECTED_PREDASTORE_HOST"
-            echo "   Auto-detected Predastore bind=$PREDASTORE_BIND from hive.toml"
+            echo "   Auto-detected Predastore bind=$PREDASTORE_BIND from spinifex.toml"
         fi
     fi
-    export HIVE_PREDASTORE_HOST="${PREDASTORE_BIND%%:*}"
-    export HIVE_PREDASTORE_PORT="${PREDASTORE_BIND##*:}"
+    export SPINIFEX_PREDASTORE_HOST="${PREDASTORE_BIND%%:*}"
+    export SPINIFEX_PREDASTORE_PORT="${PREDASTORE_BIND##*:}"
 
-    export HIVE_PREDASTORE_BACKEND=distributed
+    export SPINIFEX_PREDASTORE_BACKEND=distributed
 
-    # Auto-detect Predastore NODE_ID from hive.toml if not already set
-    if [ -z "$HIVE_PREDASTORE_NODE_ID" ]; then
-        if [ -f "$CONFIG_DIR/hive.toml" ]; then
-            DETECTED_NODE_ID=$(awk -F'= *' '/node_id/{gsub(/ /,"",$2); print $2; exit}' "$CONFIG_DIR/hive.toml")
+    # Auto-detect Predastore NODE_ID from spinifex.toml if not already set
+    if [ -z "$SPINIFEX_PREDASTORE_NODE_ID" ]; then
+        if [ -f "$CONFIG_DIR/spinifex.toml" ]; then
+            DETECTED_NODE_ID=$(awk -F'= *' '/node_id/{gsub(/ /,"",$2); print $2; exit}' "$CONFIG_DIR/spinifex.toml")
             if [ -n "$DETECTED_NODE_ID" ] && [ "$DETECTED_NODE_ID" != "0" ]; then
-                export HIVE_PREDASTORE_NODE_ID="$DETECTED_NODE_ID"
-                echo "   Auto-detected Predastore NODE_ID=$DETECTED_NODE_ID from hive.toml"
+                export SPINIFEX_PREDASTORE_NODE_ID="$DETECTED_NODE_ID"
+                echo "   Auto-detected Predastore NODE_ID=$DETECTED_NODE_ID from spinifex.toml"
             fi
         fi
     fi
-    export HIVE_PREDASTORE_NODE_ID="${HIVE_PREDASTORE_NODE_ID:-}"
+    export SPINIFEX_PREDASTORE_NODE_ID="${SPINIFEX_PREDASTORE_NODE_ID:-}"
 
-    PREDASTORE_CMD="./bin/hive service predastore start"
+    PREDASTORE_CMD="./bin/spx service predastore start"
     start_service "predastore" "$PREDASTORE_CMD"
     set_oom_score "predastore" "-500"
-    check_service "Predastore" "$HIVE_PREDASTORE_HOST" "$HIVE_PREDASTORE_PORT"
+    check_service "Predastore" "$SPINIFEX_PREDASTORE_HOST" "$SPINIFEX_PREDASTORE_PORT"
 else
     echo "2️⃣  Skipping Predastore (not a local service)"
 fi
@@ -344,31 +344,31 @@ if has_service "viperblock"; then
         cd "$PROJECT_ROOT"
     fi
 
-    export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
-    export HIVE_VIPERBLOCK_PLUGIN_PATH=$NBD_PLUGIN_PATH
-    export HIVE_BASE_DIR=$VB_BASE_DIR
+    export SPINIFEX_CONFIG_PATH=$CONFIG_DIR/spinifex.toml
+    export SPINIFEX_VIPERBLOCK_PLUGIN_PATH=$NBD_PLUGIN_PATH
+    export SPINIFEX_BASE_DIR=$VB_BASE_DIR
 
-    VIPERBLOCK_CMD="./bin/hive service viperblock start"
+    VIPERBLOCK_CMD="./bin/spx service viperblock start"
     start_service "viperblock" "$VIPERBLOCK_CMD"
     set_oom_score "viperblock" "-500"
 else
     echo "3️⃣  Skipping Viperblock (not a local service)"
 fi
 
-# 4️⃣ Start Hive Gateway/Daemon
+# 4️⃣ Start Spinifex Gateway/Daemon
 echo ""
 if has_service "daemon"; then
-    echo "4️⃣. Starting Hive Gateway..."
+    echo "4️⃣. Starting Spinifex Gateway..."
 
-    export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
-    export HIVE_BASE_DIR=$DATA_DIR/hive/
-    export HIVE_WAL_DIR=$WAL_DIR
+    export SPINIFEX_CONFIG_PATH=$CONFIG_DIR/spinifex.toml
+    export SPINIFEX_BASE_DIR=$DATA_DIR/spinifex/
+    export SPINIFEX_WAL_DIR=$WAL_DIR
 
-    HIVE_CMD="./bin/hive service hive start"
-    start_service "hive" "$HIVE_CMD"
-    set_oom_score "hive" "-500"
+    SPINIFEX_CMD="./bin/spx service hive start"
+    start_service "spinifex" "$SPINIFEX_CMD"
+    set_oom_score "spinifex" "-500"
 else
-    echo "4️⃣. Skipping Hive Gateway (not a local service)"
+    echo "4️⃣. Skipping Spinifex Gateway (not a local service)"
 fi
 
 
@@ -377,14 +377,14 @@ echo ""
 if has_service "awsgw"; then
     echo "5️⃣. Starting AWS Gateway..."
 
-    unset HIVE_NATS_HOST
-    unset HIVE_PREDASTORE_HOST
-    export HIVE_BASE_DIR=$DATA_DIR
-    export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
-    export HIVE_AWSGW_TLS_CERT=$CONFIG_DIR/server.pem
-    export HIVE_AWSGW_TLS_KEY=$CONFIG_DIR/server.key
+    unset SPINIFEX_NATS_HOST
+    unset SPINIFEX_PREDASTORE_HOST
+    export SPINIFEX_BASE_DIR=$DATA_DIR
+    export SPINIFEX_CONFIG_PATH=$CONFIG_DIR/spinifex.toml
+    export SPINIFEX_AWSGW_TLS_CERT=$CONFIG_DIR/server.pem
+    export SPINIFEX_AWSGW_TLS_KEY=$CONFIG_DIR/server.key
 
-    AWSGW_CMD="./bin/hive service awsgw start"
+    AWSGW_CMD="./bin/spx service awsgw start"
     start_service "awsgw" "$AWSGW_CMD"
     set_oom_score "awsgw" "-500"
 else
@@ -397,33 +397,33 @@ echo ""
 if has_service "vpcd"; then
     echo "6️⃣. Starting vpcd (VPC daemon)..."
 
-    export HIVE_CONFIG_PATH=$CONFIG_DIR/hive.toml
+    export SPINIFEX_CONFIG_PATH=$CONFIG_DIR/spinifex.toml
 
-    VPCD_CMD="./bin/hive service vpcd start"
+    VPCD_CMD="./bin/spx service vpcd start"
     start_service "vpcd" "$VPCD_CMD"
     set_oom_score "vpcd" "-500"
 else
     echo "6️⃣. Skipping vpcd (not a local service)"
 fi
 
-# 7️⃣ Start Hive UI (skip with UI=false or if not a local service)
+# 7️⃣ Start Spinifex UI (skip with UI=false or if not a local service)
 if [ "${UI}" != "false" ] && has_service "ui"; then
     echo ""
-    echo "7️⃣. Starting Hive UI..."
+    echo "7️⃣. Starting Spinifex UI..."
 
-    HIVEUI_CMD="./bin/hive service hive-ui start"
-    start_service "hive-ui" "$HIVEUI_CMD"
-    set_oom_score "hive-ui" "-500"
+    HIVEUI_CMD="./bin/spx service spinifex-ui start"
+    start_service "spinifex-ui" "$HIVEUI_CMD"
+    set_oom_score "spinifex-ui" "-500"
 else
     echo ""
-    echo "7️⃣. Skipping Hive UI"
+    echo "7️⃣. Skipping Spinifex UI"
 fi
 
 
 echo ""
 echo "🔗 Service endpoints will be:"
 if [ "${UI}" != "false" ]; then
-    echo "   - Hive UI:       https://localhost:3000"
+    echo "   - Spinifex UI:       https://localhost:3000"
 fi
 echo "   - NATS:          nats://localhost:4222"
 echo "   - Predastore:    https://localhost:8443"
@@ -433,7 +433,7 @@ echo "📊 Monitor background service logs:"
 echo "   tail -f $LOGS_DIR/*.log"
 echo ""
 echo "🧪 Test with AWS CLI (once daemon is running):"
-echo "   export AWS_PROFILE=hive"
+echo "   export AWS_PROFILE=spinifex"
 echo "   aws ec2 describe-instances"
 echo ""
 
@@ -445,7 +445,7 @@ if is_multinode; then
         /^\[nodes\./ { node=1; daemon=0 }
         node && /^\[.*\.daemon\]/ { daemon=1 }
         daemon && /^host/ { gsub(/[" ]/, "", $3); print $3; daemon=0 }
-    ' "$CONFIG_DIR/hive.toml")
+    ' "$CONFIG_DIR/spinifex.toml")
 
     for peer in $peer_hosts; do
         attempts=0
@@ -469,4 +469,4 @@ fi
 
 # This will only be reached if air/daemon exits normally
 #echo ""
-#echo "🛑 Hive development environment stopped"
+#echo "🛑 Spinifex development environment stopped"

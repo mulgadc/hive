@@ -14,7 +14,7 @@ This directory contains OpenTofu/Terraform configuration files for deploying inf
    ```
 
 2. **MulgaOS services running**
-   - `hive daemon` - Core daemon with NATS subscriptions
+   - `spinifex daemon` - Core daemon with NATS subscriptions
    - `awsd` - AWS API gateway (default: http://localhost:8080)
    - `predastore` - S3-compatible storage
    - `viperblock` - EBS-compatible block storage
@@ -26,14 +26,14 @@ This directory contains OpenTofu/Terraform configuration files for deploying inf
    export AWS_SECRET_ACCESS_KEY=your_secret_key
 
    # Option 2: AWS CLI profile
-   aws configure --profile hive
-   export AWS_PROFILE=hive
+   aws configure --profile spinifex
+   export AWS_PROFILE=spinifex
    ```
 
 4. **AMI available**
    Before running, ensure you have a Debian 12 AMI imported:
    ```bash
-   # Import an AMI using the hive CLI or aws CLI
+   # Import an AMI using the spinifex CLI or aws CLI
    aws --endpoint-url http://localhost:8080 ec2 describe-images
    ```
 
@@ -106,7 +106,7 @@ The `main.tf` creates:
 5. **Security Group** - Allows SSH (22), HTTP (80), HTTPS (443) inbound
 6. **Placement Group** - Spread strategy for HA
 7. **3 EC2 Instances** - t3.small Debian 12 VMs
-8. **SSH Key Pair** - ED25519 key saved to `hive-test.pem`
+8. **SSH Key Pair** - ED25519 key saved to `spinifex-test.pem`
 
 ## SSH Access
 
@@ -114,11 +114,11 @@ After `tofu apply`, SSH into instances:
 
 ```bash
 # Using the generated key
-ssh -i hive-test.pem admin@<public_ip>
+ssh -i spinifex-test.pem admin@<public_ip>
 
 # For local development with QEMU port forwarding
 # Find the forwarded port from QEMU args (-netdev user,id=net0,hostfwd=tcp:127.0.0.1:PORT-:22)
-ssh -p PORT -i hive-test.pem admin@127.0.0.1
+ssh -p PORT -i spinifex-test.pem admin@127.0.0.1
 ```
 
 ## Troubleshooting
@@ -143,7 +143,7 @@ Ensure MulgaOS services are running:
 curl http://localhost:8080/health
 
 # Check daemon status
-hive daemon status
+spinifex daemon status
 ```
 
 ### "InvalidAction" errors
@@ -193,7 +193,7 @@ resource "aws_instance" "vm" {
 | File | Description |
 |------|-------------|
 | `main.tf` | Main Terraform/OpenTofu configuration |
-| `hive-test.pem` | Generated SSH private key (after apply) |
+| `spinifex-test.pem` | Generated SSH private key (after apply) |
 | `.terraform/` | Provider plugins (after init) |
 | `terraform.tfstate` | State file (after apply) |
 | `terraform.tfvars` | Custom variables (optional) |

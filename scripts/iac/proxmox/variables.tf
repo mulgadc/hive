@@ -62,7 +62,7 @@ variable "nodes" {
 
 variable "cluster_name" {
   type        = string
-  description = "Name for the Hive cluster (used in VM names and tags)"
+  description = "Name for the Spinifex cluster (used in VM names and tags)"
 
   validation {
     condition     = can(regex("^[a-z0-9-]+$", var.cluster_name))
@@ -72,7 +72,7 @@ variable "cluster_name" {
 
 variable "node_count" {
   type        = number
-  description = "Number of Hive VMs to create"
+  description = "Number of Spinifex VMs to create"
   default     = 3
 
   validation {

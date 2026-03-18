@@ -3,7 +3,7 @@ resource "proxmox_virtual_environment_vm" "hive_node" {
 
   name        = "${var.cluster_name}-${count.index + 1}"
   description = "Managed by Terraform"
-  tags        = ["terraform", "hive", var.cluster_name]
+  tags        = ["terraform", "spinifex", var.cluster_name]
   node_name   = var.nodes[count.index % length(var.nodes)].name
 
   initialization {

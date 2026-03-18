@@ -1,6 +1,6 @@
 # Proxmox IaC
 
-OpenTofu/Terraform templates for provisioning Hive development clusters on Proxmox VE.
+OpenTofu/Terraform templates for provisioning Spinifex development clusters on Proxmox VE.
 
 ## Prerequisites
 
@@ -12,9 +12,9 @@ OpenTofu/Terraform templates for provisioning Hive development clusters on Proxm
 - SSH keypair for cloud-init VM access
 - A hardcoded Debian ISO is used, which needs to be pre-installed on each Proxmox host ("debian-12-genericcloud-amd64-20240211-1654.img") https://cdimage.debian.org/images/cloud/bookworm/20240211-1654/debian-12-genericcloud-amd64-20240211-1654.qcow2
 
-## Quick Start (hive-test.sh)
+## Quick Start (spinifex-test.sh)
 
-The `hive-test.sh` wrapper script manages the full lifecycle: provision, configure, test, and destroy.
+The `spinifex-test.sh` wrapper script manages the full lifecycle: provision, configure, test, and destroy.
 
 ```sh
 # Source environment
@@ -22,25 +22,25 @@ source scripts/iac/proxmox/.env
 source ~/prox   # Proxmox API token
 
 # Provision a 3-node cluster
-./scripts/iac/hive-test.sh up my-cluster
+./scripts/iac/spinifex-test.sh up my-cluster
 
 # Configure: clone repo, build, form cluster, start services
-./scripts/iac/hive-test.sh configure my-cluster
+./scripts/iac/spinifex-test.sh configure my-cluster
 
 # Run smoke tests
-./scripts/iac/hive-test.sh test my-cluster
+./scripts/iac/spinifex-test.sh test my-cluster
 
 # Check cluster health
-./scripts/iac/hive-test.sh status my-cluster
+./scripts/iac/spinifex-test.sh status my-cluster
 
 # SSH to a specific node
-./scripts/iac/hive-test.sh ssh my-cluster 2
+./scripts/iac/spinifex-test.sh ssh my-cluster 2
 
 # Destroy when done
-./scripts/iac/hive-test.sh down my-cluster
+./scripts/iac/spinifex-test.sh down my-cluster
 
 # Or run the full lifecycle (up → configure → test → down)
-./scripts/iac/hive-test.sh full my-cluster
+./scripts/iac/spinifex-test.sh full my-cluster
 ```
 
 ### Options
@@ -55,7 +55,7 @@ source ~/prox   # Proxmox API token
 Example with custom sizing:
 
 ```sh
-./scripts/iac/hive-test.sh up my-cluster --node-count=5 --memory-mb=8192 --cpu-cores=2
+./scripts/iac/spinifex-test.sh up my-cluster --node-count=5 --memory-mb=8192 --cpu-cores=2
 ```
 
 Per-cluster state is stored in `scripts/iac/proxmox/clusters/<name>/terraform.tfstate`, allowing multiple clusters to coexist.
@@ -185,7 +185,7 @@ ssh -i ~/.ssh/your-cloud-init-key tf-user@<VM_IP>
 
 ## Known issues
 
-- `~/hive/config/hive.toml` - Does not add node1, node2, node3 from config automatically
-- `~/hive/config/predastore/predastore.toml` - Uses previous static local node config, needs to use the IPs for each node in the cluster
+- `~/spinifex/config/spinifex.toml` - Does not add node1, node2, node3 from config automatically
+- `~/spinifex/config/predastore/predastore.toml` - Uses previous static local node config, needs to use the IPs for each node in the cluster
 - On multi-node deployments, NATS on the primary can timeout waiting for other nodes to start, causing a race condition where NATS fails and all dependent services fail
 - When adding 3 nodes, `nats.conf` is not updated with the 3rd node. Each node's cluster name is hardcoded to `C1` instead of per-node names

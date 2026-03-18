@@ -7,8 +7,8 @@ tags:
   - networking
   - ovn
 resources:
-  - title: "Hive Repository"
-    url: "https://github.com/mulgadc/hive"
+  - title: "Spinifex Repository"
+    url: "https://github.com/mulgadc/spinifex"
   - title: "OVN Architecture"
     url: "https://www.ovn.org/en/"
 ---
@@ -27,7 +27,7 @@ resources:
 
 ## Overview
 
-Every EC2 instance runs inside a VPC with an isolated virtual network. Hive uses OVN (Open Virtual Network) to provide the networking layer.
+Every EC2 instance runs inside a VPC with an isolated virtual network. Spinifex uses OVN (Open Virtual Network) to provide the networking layer.
 
 **How it works:**
 - VPC becomes an OVN logical router
@@ -41,14 +41,14 @@ Every EC2 instance runs inside a VPC with an isolated virtual network. Hive uses
 
 ```bash
 aws ec2 create-vpc --cidr-block 10.200.0.0/16
-export HIVE_VPC="vpc-XXX"
+export SPINIFEX_VPC="vpc-XXX"
 ```
 
 ## Create Subnet
 
 ```bash
-aws ec2 create-subnet --vpc-id $HIVE_VPC --cidr-block 10.200.1.0/24
-export HIVE_SUBNET="subnet-XXX"
+aws ec2 create-subnet --vpc-id $SPINIFEX_VPC --cidr-block 10.200.1.0/24
+export SPINIFEX_SUBNET="subnet-XXX"
 ```
 
 ## Verify
@@ -73,7 +73,7 @@ sudo systemctl is-active ovn-controller
 Check the vpcd logs for errors:
 
 ```bash
-cat ~/hive/logs/vpcd.log
+cat ~/spinifex/logs/vpcd.log
 ```
 
 ## Instances cannot reach each other

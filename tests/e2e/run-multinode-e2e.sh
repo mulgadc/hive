@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Multi-Node E2E Test Suite (real 3-node cluster)
 # Runs inside node1 of a 3-node cluster provisioned by tofu (env2).
-# Bootstrap has already: built hive, set up OVN, run init/join, started services,
+# Bootstrap has already: built spinifex, set up OVN, run init/join, started services,
 # installed CA certs, imported SSH key + AMI, created VPC + subnet.
 #
 # Usage: run-multinode-e2e.sh <node1_ip> <node2_ip> <node3_ip>
@@ -11,7 +11,7 @@ set -euo pipefail
 # Ensure Go is on PATH (SSH non-interactive shells don't source .bashrc)
 export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
 
-# Ensure we are in the hive project root
+# Ensure we are in the spinifex project root
 cd "$(dirname "$0")/../.."
 
 # ==========================================================================
@@ -36,14 +36,14 @@ NATS_MONITOR_PORT=8222
 PREDASTORE_PORT=8443
 AWSGW_PORT=9999
 SSH_KEY_PATH="$HOME/.ssh/tf-user-ap-southeast-2"
-HIVE_DATA_DIR="$HOME/hive"
-HIVE_CONFIG="$HIVE_DATA_DIR/config/hive.toml"
-HIVE_BIN="./bin/hive"
+SPINIFEX_DATA_DIR="$HOME/spinifex"
+SPINIFEX_CONFIG="$SPINIFEX_DATA_DIR/config/spinifex.toml"
+SPINIFEX_BIN="./bin/spx"
 
-# Use Hive profile for AWS CLI
-export AWS_PROFILE=hive
-# Trust Hive CA for AWS CLI v2 (bundles its own Python/certifi, ignores system CA store)
-export AWS_CA_BUNDLE="$HIVE_DATA_DIR/config/ca.pem"
+# Use Spinifex profile for AWS CLI
+export AWS_PROFILE=spinifex
+# Trust Spinifex CA for AWS CLI v2 (bundles its own Python/certifi, ignores system CA store)
+export AWS_CA_BUNDLE="$SPINIFEX_DATA_DIR/config/ca.pem"
 
 # Track test results
 TESTS_PASSED=0
@@ -107,13 +107,13 @@ dump_all_node_logs() {
         echo ""
         echo "=== Node $((i+1)) ($ip) ==="
         if [ "$ip" = "$LOCAL_IP" ]; then
-            for f in "$HIVE_DATA_DIR/logs/"*.log; do
+            for f in "$SPINIFEX_DATA_DIR/logs/"*.log; do
                 [ -f "$f" ] || continue
                 echo "--- $(basename "$f") (last 50 lines) ---"
                 tail -50 "$f" 2>/dev/null || echo "(not found)"
             done
         else
-            peer_ssh "$ip" 'for f in ~/hive/logs/*.log; do
+            peer_ssh "$ip" 'for f in ~/spinifex/logs/*.log; do
                 [ -f "$f" ] || continue
                 echo "--- $(basename "$f") (last 50 lines) ---"
                 tail -50 "$f" 2>/dev/null || echo "(not found)"
@@ -401,23 +401,23 @@ if [ -z "$TYPES" ] || [ "$TYPES" == "None" ]; then
 fi
 pass_test "Daemon readiness"
 
-# Hive CLI: get nodes
-echo "Checking hive get nodes..."
-GET_NODES_OUTPUT=$($HIVE_BIN get nodes --config "$HIVE_CONFIG" --timeout 5s 2>/dev/null)
+# Spinifex CLI: get nodes
+echo "Checking spx get nodes..."
+GET_NODES_OUTPUT=$($SPINIFEX_BIN get nodes --config "$SPINIFEX_CONFIG" --timeout 5s 2>/dev/null)
 echo "$GET_NODES_OUTPUT"
 READY_COUNT=$(echo "$GET_NODES_OUTPUT" | grep -c "Ready" || true)
 if [ "$READY_COUNT" -ge 3 ]; then
-    pass_test "hive get nodes ($READY_COUNT Ready)"
+    pass_test "spx get nodes ($READY_COUNT Ready)"
 else
-    echo "  WARNING: hive get nodes shows $READY_COUNT Ready nodes (expected 3)"
-    fail_test "hive get nodes"
+    echo "  WARNING: spx get nodes shows $READY_COUNT Ready nodes (expected 3)"
+    fail_test "spx get nodes"
 fi
 
-# Hive CLI: get vms (should be empty)
-echo "Checking hive get vms (empty)..."
-GET_VMS_OUTPUT=$($HIVE_BIN get vms --config "$HIVE_CONFIG" --timeout 5s 2>/dev/null)
+# Spinifex CLI: get vms (should be empty)
+echo "Checking spx get vms (empty)..."
+GET_VMS_OUTPUT=$($SPINIFEX_BIN get vms --config "$SPINIFEX_CONFIG" --timeout 5s 2>/dev/null)
 echo "$GET_VMS_OUTPUT"
-pass_test "hive get vms (empty)"
+pass_test "spx get vms (empty)"
 
 echo ""
 
@@ -450,7 +450,7 @@ for i in 1 2 3; do
     RUN_OUTPUT=$($AWS_EC2 run-instances \
         --image-id "$AMI_ID" \
         --instance-type "$INSTANCE_TYPE" \
-        --key-name hive-key)
+        --key-name spinifex-key)
 
     INSTANCE_ID=$(echo "$RUN_OUTPUT" | jq -r '.Instances[0].InstanceId')
     if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "null" ]; then
@@ -475,7 +475,7 @@ for instance_id in "${INSTANCE_IDS[@]}"; do
     }
 done
 
-# Check distribution via hive get vms or QEMU process check
+# Check distribution via spx get vms or QEMU process check
 echo ""
 echo "Checking instance distribution across nodes..."
 declare -A NODE_INSTANCE_COUNT
@@ -497,17 +497,17 @@ else
     pass_test "Instance distribution (non-deterministic)"
 fi
 
-# Verify hive get vms shows all instances
+# Verify spx get vms shows all instances
 echo ""
-echo "Verifying hive get vms..."
-GET_VMS_OUTPUT=$($HIVE_BIN get vms --config "$HIVE_CONFIG" --timeout 5s 2>/dev/null)
+echo "Verifying spx get vms..."
+GET_VMS_OUTPUT=$($SPINIFEX_BIN get vms --config "$SPINIFEX_CONFIG" --timeout 5s 2>/dev/null)
 echo "$GET_VMS_OUTPUT"
 for instance_id in "${INSTANCE_IDS[@]}"; do
     if ! echo "$GET_VMS_OUTPUT" | grep -q "$instance_id"; then
-        echo "  WARNING: hive get vms did not show $instance_id"
+        echo "  WARNING: spx get vms did not show $instance_id"
     fi
 done
-pass_test "hive get vms (with instances)"
+pass_test "spx get vms (with instances)"
 
 echo ""
 
@@ -543,7 +543,7 @@ for idx in "${!INSTANCE_IDS[@]}"; do
                -o BatchMode=yes \
                -o LogLevel=ERROR \
                -p "$SSH_PORT" \
-               -i "$HOME/.ssh/hive-key" \
+               -i "$HOME/.ssh/spinifex-key" \
                ec2-user@"$host_ip" 'echo ready' > /dev/null 2>&1; then
             SSH_READY=true
             break
@@ -566,7 +566,7 @@ for idx in "${!INSTANCE_IDS[@]}"; do
         -o BatchMode=yes \
         -o LogLevel=ERROR \
         -p "$SSH_PORT" \
-        -i "$HOME/.ssh/hive-key" \
+        -i "$HOME/.ssh/spinifex-key" \
         ec2-user@"$host_ip" 'id' 2>&1) || {
         echo "  ERROR: SSH 'id' command failed"
         fail_test "Guest SSH ($instance_id)"
@@ -589,7 +589,7 @@ for idx in "${!INSTANCE_IDS[@]}"; do
         -o BatchMode=yes \
         -o LogLevel=ERROR \
         -p "$SSH_PORT" \
-        -i "$HOME/.ssh/hive-key" \
+        -i "$HOME/.ssh/spinifex-key" \
         ec2-user@"$host_ip" 'lsblk' 2>&1) || true
     echo "  lsblk: $(echo "$LSBLK_OUTPUT" | head -5)"
 
@@ -605,12 +605,12 @@ echo "Phase 5: Volume Lifecycle"
 echo "========================================"
 
 # Discover AZ
-HIVE_AZ=$($AWS_EC2 describe-availability-zones --query 'AvailabilityZones[0].ZoneName' --output text)
-echo "AZ: $HIVE_AZ"
+SPINIFEX_AZ=$($AWS_EC2 describe-availability-zones --query 'AvailabilityZones[0].ZoneName' --output text)
+echo "AZ: $SPINIFEX_AZ"
 
 # Create volume
 echo "Creating 10GB test volume..."
-CREATE_OUTPUT=$($AWS_EC2 create-volume --size 10 --availability-zone "$HIVE_AZ")
+CREATE_OUTPUT=$($AWS_EC2 create-volume --size 10 --availability-zone "$SPINIFEX_AZ")
 TEST_VOLUME_ID=$(echo "$CREATE_OUTPUT" | jq -r '.VolumeId')
 if [ -z "$TEST_VOLUME_ID" ] || [ "$TEST_VOLUME_ID" == "null" ]; then
     echo "  ERROR: Failed to create volume"
@@ -772,9 +772,9 @@ echo "Phase 8: Node Failure"
 echo "========================================"
 echo "Stopping services on node2 ($NODE2_IP) to simulate node failure..."
 
-# Stop services on node2 only — HIVE_FORCE_LOCAL_STOP prevents coordinated
+# Stop services on node2 only — SPINIFEX_FORCE_LOCAL_STOP prevents coordinated
 # cluster shutdown which would kill all nodes via NATS
-peer_ssh "$NODE2_IP" "cd ~/Development/mulga/hive && HIVE_FORCE_LOCAL_STOP=1 ./scripts/stop-dev.sh" || {
+peer_ssh "$NODE2_IP" "cd ~/Development/mulga/spinifex && SPINIFEX_FORCE_LOCAL_STOP=1 ./scripts/stop-dev.sh" || {
     echo "  WARNING: stop-dev.sh returned non-zero (may be expected)"
 }
 
@@ -835,7 +835,7 @@ echo "Phase 9: Node Recovery"
 echo "========================================"
 echo "Restarting services on node2 ($NODE2_IP)..."
 
-peer_ssh "$NODE2_IP" "cd ~/Development/mulga/hive && ./scripts/start-dev.sh" || {
+peer_ssh "$NODE2_IP" "cd ~/Development/mulga/spinifex && ./scripts/start-dev.sh" || {
     echo "  ERROR: Failed to restart services on node2"
     fail_test "Node2 restart"
 }
@@ -884,9 +884,9 @@ else
     fail_test "Node2 gateway recovery"
 fi
 
-# Verify hive get nodes shows 3 Ready again
-echo "  Checking hive get nodes after recovery..."
-GET_NODES_RECOVER=$($HIVE_BIN get nodes --config "$HIVE_CONFIG" --timeout 10s 2>/dev/null || echo "")
+# Verify spx get nodes shows 3 Ready again
+echo "  Checking spx get nodes after recovery..."
+GET_NODES_RECOVER=$($SPINIFEX_BIN get nodes --config "$SPINIFEX_CONFIG" --timeout 10s 2>/dev/null || echo "")
 echo "$GET_NODES_RECOVER"
 READY_RECOVER=$(echo "$GET_NODES_RECOVER" | grep -c "Ready" || true)
 if [ "$READY_RECOVER" -ge 3 ]; then

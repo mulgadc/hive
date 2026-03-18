@@ -1,0 +1,16 @@
+[Unit]
+Description=Spinifex Web UI
+PartOf=spinifex.target
+After=spinifex-awsgw.service
+
+[Service]
+Type=simple
+User=spinifex
+Group=spinifex
+ExecStart=/usr/local/bin/spx service spinifex-ui start
+Restart=on-failure
+RestartSec=5
+OOMScoreAdjust=-500
+
+[Install]
+WantedBy=spinifex.target

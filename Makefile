@@ -1,4 +1,4 @@
-GO_PROJECT_NAME := hive
+GO_PROJECT_NAME := spx
 SHELL := /bin/bash
 
 # Detect architecture for cross-platform support
@@ -49,19 +49,19 @@ endif
 build:
 	$(MAKE) go_build
 
-# Build hive-ui frontend (requires pnpm)
+# Build spinifex-ui frontend (requires pnpm)
 build-ui:
-	@echo -e "\n....Building hive-ui frontend...."
-	cd hive/services/hiveui/frontend && pnpm build
+	@echo -e "\n....Building spinifex-ui frontend...."
+	cd spinifex/services/spinifexui/frontend && pnpm build
 
 # GO commands
 VERSION ?= $(shell git describe --tags --always --dirty)
 COMMIT  ?= $(shell git rev-parse --short HEAD)
-LDFLAGS := -s -w -X github.com/mulgadc/hive/cmd/hive/cmd.Version=$(VERSION) -X github.com/mulgadc/hive/cmd/hive/cmd.Commit=$(COMMIT)
+LDFLAGS := -s -w -X github.com/mulgadc/spinifex/cmd/spinifex/cmd.Version=$(VERSION) -X github.com/mulgadc/spinifex/cmd/spinifex/cmd.Commit=$(COMMIT)
 
 go_build:
 	@echo -e "\n....Building $(GO_PROJECT_NAME)"
-	go build $(GO_BUILD_MOD) -ldflags "$(LDFLAGS)" -o ./bin/$(GO_PROJECT_NAME) cmd/hive/main.go
+	go build $(GO_BUILD_MOD) -ldflags "$(LDFLAGS)" -o ./bin/$(GO_PROJECT_NAME) cmd/spinifex/main.go
 
 go_run:
 	@echo -e "\n....Running $(GO_PROJECT_NAME)...."
@@ -76,7 +76,7 @@ preflight:
 # Run unit tests
 test:
 	@echo -e "\n....Running tests for $(GO_PROJECT_NAME)...."
-	LOG_IGNORE=1 go test -timeout 120s ./hive/...
+	LOG_IGNORE=1 go test -timeout 120s ./spinifex/...
 
 # Run unit tests with coverage profile
 # Note: go test may exit non-zero due to Go version mismatch in coverage instrumentation
@@ -84,13 +84,13 @@ test:
 COVERPROFILE ?= coverage.out
 test-cover:
 	@echo -e "\n....Running tests with coverage for $(GO_PROJECT_NAME)...."
-	$(_Q)LOG_IGNORE=1 go test -timeout 120s -coverprofile=$(COVERPROFILE) -covermode=atomic ./hive/... $(_COVQ)
+	$(_Q)LOG_IGNORE=1 go test -timeout 120s -coverprofile=$(COVERPROFILE) -covermode=atomic ./spinifex/... $(_COVQ)
 	@scripts/check-coverage.sh $(COVERPROFILE) $(QUIET)
 
 # Run unit tests with race detector
 test-race:
 	@echo -e "\n....Running tests with race detector for $(GO_PROJECT_NAME)...."
-	$(_Q)LOG_IGNORE=1 go test -race -timeout 300s ./hive/... $(_RACEQ)
+	$(_Q)LOG_IGNORE=1 go test -race -timeout 300s ./spinifex/... $(_RACEQ)
 
 # Check that new/changed code meets coverage threshold (runs tests first)
 diff-coverage: test-cover
@@ -107,7 +107,7 @@ run:
 
 clean:
 	rm -f ./bin/$(GO_PROJECT_NAME)
-	rm -rf hive/services/hiveui/frontend/dist
+	rm -rf spinifex/services/spinifexui/frontend/dist
 
 install-system:
 	@echo -e "\n....Installing system dependencies for $(ARCH)...."
@@ -199,7 +199,7 @@ security-check:
 
 # Build release tarballs for both architectures via Docker
 distro:
-	@echo "Building hive $(VERSION) distribution tarballs..."
+	@echo "Building spinifex $(VERSION) distribution tarballs..."
 	@mkdir -p dist/
 	@echo "Building linux/amd64..."
 	docker buildx build \
@@ -208,8 +208,8 @@ distro:
 		-f build/Dockerfile.distro \
 		--output type=local,dest=dist/amd64/ \
 		../
-	tar -czf dist/hive-$(VERSION)-linux-amd64.tar.gz -C dist/amd64 .
-	sha256sum dist/hive-$(VERSION)-linux-amd64.tar.gz > dist/hive-$(VERSION)-linux-amd64.tar.gz.sha256
+	tar -czf dist/spinifex-$(VERSION)-linux-amd64.tar.gz -C dist/amd64 .
+	sha256sum dist/spinifex-$(VERSION)-linux-amd64.tar.gz > dist/spinifex-$(VERSION)-linux-amd64.tar.gz.sha256
 	@echo "Building linux/arm64..."
 	docker buildx build \
 		--platform linux/arm64 \
@@ -217,8 +217,8 @@ distro:
 		-f build/Dockerfile.distro \
 		--output type=local,dest=dist/arm64/ \
 		../
-	tar -czf dist/hive-$(VERSION)-linux-arm64.tar.gz -C dist/arm64 .
-	sha256sum dist/hive-$(VERSION)-linux-arm64.tar.gz > dist/hive-$(VERSION)-linux-arm64.tar.gz.sha256
+	tar -czf dist/spinifex-$(VERSION)-linux-arm64.tar.gz -C dist/arm64 .
+	sha256sum dist/spinifex-$(VERSION)-linux-arm64.tar.gz > dist/spinifex-$(VERSION)-linux-arm64.tar.gz.sha256
 	@echo ""
 	@echo "Distribution tarballs:"
 	@ls -lh dist/*.tar.gz

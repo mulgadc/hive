@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run smoke tests against a configured Hive cluster.
+# Run smoke tests against a configured Spinifex cluster.
 # Usage: test-cluster.sh <cluster_name> <state_file>
 
 CLUSTER_NAME="${1:?Usage: test-cluster.sh <cluster_name> <state_file>}"

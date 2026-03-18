@@ -79,19 +79,19 @@ data "aws_ami" "debian12" {
   }
 }
 
-# Keypair: hive-test
+# Keypair: spinifex-test
 resource "tls_private_key" "hive_test" {
   algorithm = "ED25519"
 }
 
 resource "aws_key_pair" "hive_test" {
-  key_name   = "hive-test"
+  key_name   = "spinifex-test"
   public_key = tls_private_key.hive_test.public_key_openssh
 }
 
 # Save private key locally for SSH
 resource "local_file" "hive_test_pem" {
-  filename        = "${path.module}/hive-test.pem"
+  filename        = "${path.module}/spinifex-test.pem"
   content         = tls_private_key.hive_test.private_key_openssh
   file_permission = "0600"
 }
@@ -103,7 +103,7 @@ resource "aws_vpc" "main" {
   enable_dns_support   = true
 
   tags = {
-    Name = "hive-test-vpc"
+    Name = "spinifex-test-vpc"
   }
 }
 
@@ -112,7 +112,7 @@ resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
 
   tags = {
-    Name = "hive-test-igw"
+    Name = "spinifex-test-igw"
   }
 }
 
@@ -124,7 +124,7 @@ resource "aws_subnet" "public" {
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "hive-test-public-subnet"
+    Name = "spinifex-test-public-subnet"
   }
 }
 
@@ -137,7 +137,7 @@ resource "aws_route_table" "public" {
   }
 
   tags = {
-    Name = "hive-test-public-rt"
+    Name = "spinifex-test-public-rt"
   }
 }
 
@@ -148,7 +148,7 @@ resource "aws_route_table_association" "public" {
 
 # 3: Security group
 resource "aws_security_group" "web_ssh" {
-  name        = "hive-test-sg"
+  name        = "spinifex-test-sg"
   description = "Allow inbound 22,80,443; allow all outbound"
   vpc_id      = aws_vpc.main.id
 
@@ -185,13 +185,13 @@ resource "aws_security_group" "web_ssh" {
   }
 
   tags = {
-    Name = "hive-test-sg"
+    Name = "spinifex-test-sg"
   }
 }
 
 # 4: Ensure 3 servers on different underlying hardware (spread placement group)
 resource "aws_placement_group" "spread" {
-  name     = "hive-test-spread"
+  name     = "spinifex-test-spread"
   strategy = "spread"
 }
 
@@ -208,7 +208,7 @@ resource "aws_instance" "vm" {
   placement_group             = aws_placement_group.spread.name
 
   tags = {
-    Name = "hive-test-vm-${count.index + 1}"
+    Name = "spinifex-test-vm-${count.index + 1}"
   }
 }
 
@@ -219,6 +219,6 @@ output "instance_public_ips" {
 output "ssh_commands" {
   value = [
     for ip in aws_instance.vm[*].public_ip :
-    "ssh -i hive-test.pem admin@${ip}"
+    "ssh -i spinifex-test.pem admin@${ip}"
   ]
 }

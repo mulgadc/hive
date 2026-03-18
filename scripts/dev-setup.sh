@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Hive Platform Development Environment Setup
-# This script sets up a complete development environment for the Hive platform
+# Spinifex Platform Development Environment Setup
+# This script sets up a complete development environment for the Spinifex platform
 
 set -e
 
@@ -12,17 +12,17 @@ MULGA_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"
 # Default configuration
 NATS_PORT=4222
 PREDASTORE_PORT=8443
-HIVE_GATEWAY_PORT=9999
-DATA_DIR="$HOME/hive"
-# Use CONFIG_DIR environment variable if set, otherwise default to ~/hive/config
-CONFIG_DIR="${CONFIG_DIR:-$HOME/hive/config}"
+SPINIFEX_GATEWAY_PORT=9999
+DATA_DIR="$HOME/spinifex"
+# Use CONFIG_DIR environment variable if set, otherwise default to ~/spinifex/config
+CONFIG_DIR="${CONFIG_DIR:-$HOME/spinifex/config}"
 
-echo "🚀 Setting up Hive development environment..."
+echo "🚀 Setting up Spinifex development environment..."
 echo "Project root: $PROJECT_ROOT"
 echo "Data directory: $DATA_DIR"
 
 # Create necessary directories
-mkdir -p "$DATA_DIR"/{nats,predastore,viperblock,logs,hive}
+mkdir -p "$DATA_DIR"/{nats,predastore,viperblock,logs,spinifex}
 mkdir -p "$CONFIG_DIR"
 
 # Function to check if command exists
@@ -124,7 +124,7 @@ done
 echo ""
 echo "🔌 Checking port availability..."
 
-ports=("$NATS_PORT:NATS" "$PREDASTORE_PORT:Predastore" "$HIVE_GATEWAY_PORT:Hive Gateway")
+ports=("$NATS_PORT:NATS" "$PREDASTORE_PORT:Predastore" "$SPINIFEX_GATEWAY_PORT:Spinifex Gateway")
 for port_info in "${ports[@]}"; do
     port="${port_info%:*}"
     service="${port_info#*:}"
@@ -135,24 +135,24 @@ for port_info in "${ports[@]}"; do
     fi
 done
 
-# Build Hive first (needed for admin init)
+# Build Spinifex first (needed for admin init)
 echo ""
-echo "🔨 Building Hive..."
+echo "🔨 Building Spinifex..."
 cd "$PROJECT_ROOT"
 make build
-echo "✅ Hive built successfully"
+echo "✅ Spinifex built successfully"
 
-# Initialize Hive configuration using admin init
+# Initialize Spinifex configuration using admin init
 #echo ""
-#echo "🔐 Initializing Hive configuration..."
+#echo "🔐 Initializing Spinifex configuration..."
 
-#if [[ ! -f "$CONFIG_DIR/hive.toml" ]]; then
-#    echo "📋 Running hive admin init..."
-#    ./bin/hive admin init --config-dir "$CONFIG_DIR"
-#    echo "✅ Hive configuration initialized"
+#if [[ ! -f "$CONFIG_DIR/spinifex.toml" ]]; then
+#    echo "📋 Running spx admin init..."
+#    ./bin/spx admin init --config-dir "$CONFIG_DIR"
+#    echo "✅ Spinifex configuration initialized"
 #else
-#    echo "✅ Hive configuration already exists"
-#    echo "   To re-initialize, run: ./bin/hive admin init --force"
+#    echo "✅ Spinifex configuration already exists"
+#    echo "   To re-initialize, run: ./bin/spx admin init --force"
 #fi
 
 # Build components
@@ -182,9 +182,9 @@ fi
 echo ""
 echo "🎉 Development environment setup complete!"
 echo ""
-echo "When running Hive for the first time, run the init function to create the"
+echo "When running Spinifex for the first time, run the init function to create the"
 echo "default directories for data, config files and layout required."
-echo "./bin/hive admin init"
+echo "./bin/spx admin init"
 echo ""
 echo "🚀 To start the development environment:"
 echo "   ./scripts/start-dev.sh"
@@ -193,7 +193,7 @@ echo "🛑 To stop the development environment:"
 echo "   ./scripts/stop-dev.sh"
 echo ""
 echo "🔧 Development endpoints:"
-echo "   - Hive Gateway:  https://localhost:$HIVE_GATEWAY_PORT"
+echo "   - Spinifex Gateway:  https://localhost:$SPINIFEX_GATEWAY_PORT"
 echo "   - Predastore S3: https://localhost:$PREDASTORE_PORT"
 echo "   - NATS:          nats://localhost:$NATS_PORT"
 echo ""
@@ -201,4 +201,4 @@ echo "📊 Monitor logs:"
 echo "   tail -f $DATA_DIR/logs/*.log"
 echo ""
 echo "🧪 Test with AWS CLI:"
-echo "   aws --endpoint-url https://localhost:$HIVE_GATEWAY_PORT --no-verify-ssl ec2 describe-instances"
+echo "   aws --endpoint-url https://localhost:$SPINIFEX_GATEWAY_PORT --no-verify-ssl ec2 describe-instances"

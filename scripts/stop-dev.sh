@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# Stop Hive development environment
+# Stop Spinifex development environment
 # This script stops all services started by start-dev.sh
 # Usage: ./scripts/stop-dev.sh
 # Note: Services are stopped using PID files, so data-dir is not required
 
 # Accept optional data directory argument
-DATA_DIR="${1:-$HOME/hive}"
+DATA_DIR="${1:-$HOME/spinifex}"
 
 # Always use the logs directory for PID files — start-dev.sh writes shell PIDs
 # there, and Go services write PIDs to their own data dirs. This ensures
@@ -20,16 +20,16 @@ LOGS_DIR="$PROJECT_ROOT/data/logs"
 
 # Check if /mnt/ramdisk is mounted
 #if mountpoint -q /mnt/ramdisk; then
-    #echo "🛑 Stopping Hive development environment..."
+    #echo "🛑 Stopping Spinifex development environment..."
     #sudo umount /mnt/ramdisk
 #fi
 
-echo "Stopping Hive development environment..."
+echo "Stopping Spinifex development environment..."
 
-# Parse services from hive.toml — defaults to all if not set
+# Parse services from spinifex.toml — defaults to all if not set
 CONFIG_DIR="${CONFIG_DIR:-$DATA_DIR/config}"
 parse_services() {
-    local config_file="$CONFIG_DIR/hive.toml"
+    local config_file="$CONFIG_DIR/spinifex.toml"
     if [ -f "$config_file" ]; then
         local svc_line=$(grep -m1 '^services' "$config_file" | sed 's/.*\[//;s/\].*//;s/"//g;s/,/ /g')
         if [ -n "$svc_line" ]; then
@@ -44,15 +44,15 @@ SERVICES=$(parse_services)
 has_service() {
     local svc="$1"
     case "$svc" in
-        hive) svc="daemon" ;;
-        hive-ui) svc="ui" ;;
+        spinifex) svc="daemon" ;;
+        spinifex-ui) svc="ui" ;;
     esac
     echo "$SERVICES" | grep -qw "$svc"
 }
 
 # Detect multi-node cluster from config
 is_multinode() {
-    local config_file="$CONFIG_DIR/hive.toml"
+    local config_file="$CONFIG_DIR/spinifex.toml"
     if [ -f "$config_file" ]; then
         # Count only top-level node sections [nodes.X], not subsections [nodes.X.Y]
         local node_count=$(grep -cE '^\[nodes\.[^.]+\]' "$config_file")
@@ -65,10 +65,10 @@ is_multinode() {
 # For multi-node clusters, delegate to coordinated shutdown via NATS.
 # Only when called without arguments (default path). When a data-dir is
 # explicitly provided (e.g., E2E per-node cleanup), use per-service stop.
-if is_multinode && [ -z "$HIVE_FORCE_LOCAL_STOP" ] && [ -z "$1" ]; then
+if is_multinode && [ -z "$SPINIFEX_FORCE_LOCAL_STOP" ] && [ -z "$1" ]; then
     echo "Multi-node cluster detected. Using coordinated shutdown..."
-    echo "  (Set HIVE_FORCE_LOCAL_STOP=1 to force per-service stop)"
-    exec $PROJECT_ROOT/bin/hive admin cluster shutdown
+    echo "  (Set SPINIFEX_FORCE_LOCAL_STOP=1 to force per-service stop)"
+    exec $PROJECT_ROOT/bin/spx admin cluster shutdown
 fi
 
 # Function to stop service by PID file
@@ -84,8 +84,8 @@ stop_service() {
         kill -SIGTERM $(cat "$pidpath/$name.pid" 2>/dev/null) 2>/dev/null || rc=$?
         sleep 1
     else
-    # Correct graceful shutdown via hive binary, waits for clean exit
-        $PROJECT_ROOT/bin/hive service $name stop || rc=$?
+    # Correct graceful shutdown via spx binary, waits for clean exit
+        $PROJECT_ROOT/bin/spx service $name stop || rc=$?
     fi
 
     if [[ $rc -ne 0 ]]; then
@@ -101,11 +101,11 @@ stop_service() {
 # Stop services in reverse order
 echo "Stopping services..."
 echo ""
-# Stop Hive UI first (last to start)
-has_service "hive-ui" && stop_service "hive-ui" "$PID_DIR"
+# Stop Spinifex UI first (last to start)
+has_service "spinifex-ui" && stop_service "spinifex-ui" "$PID_DIR"
 
-# Stop Hive daemon/gateway (it will terminate running instances, unmount nbd devices)
-has_service "hive" && stop_service "hive" "$PID_DIR"
+# Stop Spinifex daemon/gateway (it will terminate running instances, unmount nbd devices)
+has_service "spinifex" && stop_service "spinifex" "$PID_DIR"
 
 # Wait for all QEMU instances to exit before stopping infrastructure services.
 # The daemon sends system_powerdown to VMs during shutdown, but may be killed
@@ -143,7 +143,7 @@ has_service "predastore" && stop_service "predastore" "$PID_DIR"
 # Stop NATS
 has_service "nats" && stop_service "nats" "$PID_DIR"
 
-# Stop OVN networking (prevents idle CPU burn when hive isn't running)
+# Stop OVN networking (prevents idle CPU burn when spinifex isn't running)
 if pidof systemd >/dev/null 2>&1; then
     echo "🛑 Stopping OVN networking..."
     sudo systemctl stop ovn-controller 2>/dev/null && echo "✅ ovn-controller stopped" || true
@@ -154,10 +154,10 @@ if pidof systemd >/dev/null 2>&1; then
 fi
 
 echo ""
-echo "✅ Hive development environment stopped"
+echo "✅ Spinifex development environment stopped"
 
-# Show any remaining hive-related processes
-remaining=$(pgrep -af '(bin/hive|hive-ui|nats-server|predastore|viperblock|vpcd|qemu-system)' | grep -v "stop-dev.sh" || true)
+# Show any remaining spinifex-related processes
+remaining=$(pgrep -af '(bin/spx|spinifex-ui|nats-server|predastore|viperblock|vpcd|qemu-system)' | grep -v "stop-dev.sh" || true)
 if [[ -n "$remaining" ]]; then
     echo ""
     echo "⚠️  Some related processes may still be running:"

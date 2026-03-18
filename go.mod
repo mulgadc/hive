@@ -1,4 +1,4 @@
-module github.com/mulgadc/hive
+module github.com/mulgadc/spinifex
 
 go 1.26.1
 
