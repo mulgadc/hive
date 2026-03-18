@@ -902,6 +902,21 @@ func (d *Daemon) restoreInstances() {
 
 	// Phase 2: Relaunch crashed VMs with semaphore-based throttling
 	if len(toLaunch) > 0 {
+		// Subscribe to per-instance NATS topics before launching so that
+		// terminate/stop commands can reach this daemon while instances are
+		// still being relaunched. Without this, pending instances are
+		// unreachable via ec2.cmd.<id> and TerminateInstances fails.
+		d.mu.Lock()
+		for _, instance := range toLaunch {
+			sub, subErr := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
+			if subErr != nil {
+				slog.Error("Failed to early-subscribe during recovery", "instanceId", instance.ID, "err", subErr)
+			} else {
+				d.natsSubscriptions[instance.ID] = sub
+			}
+		}
+		d.mu.Unlock()
+
 		slog.Info("Launching instances (recovery)", "count", len(toLaunch), "maxConcurrent", maxConcurrentRecovery)
 		sem := make(chan struct{}, maxConcurrentRecovery)
 		var wg sync.WaitGroup
@@ -917,9 +932,19 @@ func (d *Daemon) restoreInstances() {
 						slog.Error("Panic during instance recovery", "instanceId", inst.ID, "panic", r, "stack", string(debug.Stack()))
 					}
 				}()
+				// Skip if instance was terminated while waiting for semaphore
+				d.Instances.Mu.Lock()
+				status := inst.Status
+				d.Instances.Mu.Unlock()
+				if status != vm.StatePending {
+					slog.Info("Instance state changed during recovery, skipping launch",
+						"instanceId", inst.ID, "status", string(status))
+					return
+				}
 				slog.Info("Launching instance (recovery)", "instance", inst.ID)
 				if err := d.LaunchInstance(inst); err != nil {
-					slog.Error("Failed to launch instance", "instanceId", inst.ID, "err", err)
+					slog.Error("Failed to launch instance during recovery", "instanceId", inst.ID, "err", err)
+					d.markInstanceFailed(inst, "recovery_launch_failed")
 				}
 			}(instance)
 		}
@@ -1634,6 +1659,15 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 
 func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 
+	// Abort if instance is no longer in a launchable state (e.g., terminated
+	// by a concurrent request while waiting in the launch queue).
+	d.Instances.Mu.Lock()
+	status := instance.Status
+	d.Instances.Mu.Unlock()
+	if status != vm.StatePending && status != vm.StateStopped && status != vm.StateProvisioning {
+		return fmt.Errorf("instance %s in %s state, not launchable", instance.ID, status)
+	}
+
 	// First, confirm if the instance is already running
 	pid, err := utils.ReadPidFile(instance.ID)
 
@@ -1728,8 +1762,19 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 // then completes the termination lifecycle in the background so the instance
 // reaches terminated state and doesn't get stuck in shutting-down.
 func (d *Daemon) markInstanceFailed(instance *vm.VM, reason string) {
-	// Set state reason before transition (requires lock)
+	// If the instance is already being cleaned up (e.g., a concurrent terminate
+	// request transitioned it to shutting-down while LaunchInstance was running),
+	// don't spawn a second finalizeTermination goroutine — the existing cleanup
+	// handler owns the lifecycle from here.
 	d.Instances.Mu.Lock()
+	if instance.Status == vm.StateShuttingDown || instance.Status == vm.StateTerminated {
+		d.Instances.Mu.Unlock()
+		slog.Info("markInstanceFailed: instance already in cleanup state, skipping",
+			"instanceId", instance.ID, "status", string(instance.Status), "reason", reason)
+		return
+	}
+
+	// Set state reason before transition
 	if instance.Instance != nil {
 		instance.Instance.StateReason = &ec2.StateReason{}
 		instance.Instance.StateReason.SetCode("Server.InternalError")

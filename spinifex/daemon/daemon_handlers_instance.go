@@ -262,9 +262,33 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 
 	slog.Info("Instances added to state with pending status", "count", len(instances))
 
+	// Subscribe to per-instance NATS topics early so terminate/stop commands
+	// can reach this daemon while volumes are being prepared. LaunchInstance
+	// will replace these subscriptions when it completes.
+	d.mu.Lock()
+	for _, instance := range instances {
+		sub, subErr := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
+		if subErr != nil {
+			slog.Error("Failed to early-subscribe to per-instance topic", "instanceId", instance.ID, "err", subErr)
+		} else {
+			d.natsSubscriptions[instance.ID] = sub
+		}
+	}
+	d.mu.Unlock()
+
 	// Launch all instances (volumes and VMs)
 	var successCount int
 	for _, instance := range instances {
+		// Skip if instance was terminated by a concurrent request
+		d.Instances.Mu.Lock()
+		status := instance.Status
+		d.Instances.Mu.Unlock()
+		if status != vm.StatePending {
+			slog.Info("Instance state changed during provisioning, skipping launch",
+				"instanceId", instance.ID, "status", string(status))
+			continue
+		}
+
 		// Pre-compute dev MAC so cloud-init can generate per-interface netplan
 		// that suppresses the default route on the dev/hostfwd NIC.
 		if d.config.Daemon.DevNetworking && instance.ENIId != "" {
