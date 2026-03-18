@@ -31,6 +31,7 @@ resources:
 This guide walks through the complete workflow for creating a production-ready Spinifex environment.
 
 **Steps:**
+
 1. Create a user account
 2. Import or create SSH keys
 3. Create a VPC and subnet
@@ -93,7 +94,7 @@ Check the Spinifex daemon and QEMU logs for boot errors:
 
 ```bash
 ls ~/spinifex/logs/
-cat ~/spinifex/logs/daemon.log
+cat ~/spinifex/logs/spinifex.log
 ```
 
 Verify the AMI exists and architecture matches your host:
