@@ -52,7 +52,7 @@ Cluster formation is automatic. When initializing with `--nodes 3`, the init nod
 Run the binary installer on **every server** in the cluster:
 
 ```bash
-curl https://install.mulgadc.com/ | bash
+curl https://install.mulgadc.com | bash
 ```
 
 ## Step 2. Set node IP variables

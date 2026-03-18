@@ -51,7 +51,7 @@ This guide installs Spinifex on a single server using the binary installer. For 
 ## Step 1. Install Spinifex
 
 ```bash
-curl https://install.mulgadc.com/ | bash
+curl https://install.mulgadc.com | bash
 ```
 
 The installer downloads the Spinifex binary and bootstraps all dependencies (QEMU, OVN/OVS, AWS CLI).
