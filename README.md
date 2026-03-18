@@ -1,10 +1,10 @@
-# Hive: An Open Source AWS-Compatible Stack for Bare-Metal, Edge, and On-Prem Deployments
+# Spinifex: An Open Source AWS-Compatible Stack for Bare-Metal, Edge, and On-Prem Deployments
 
-(Developer Preview) - Hive developed by [Mulga Defense Corporation](https://mulgadc.com/) is an open source infrastructure platform that brings the core services of AWS—like EC2, VPC, EBS, and S3—to environments where running in the cloud isn't an option. Whether you're deploying to edge sites, private data-centers, or need to operate in low-connectivity or highly contested environments, Hive gives you AWS-style workflows on your own hardware.
+(Developer Preview) - Spinifex developed by [Mulga Defense Corporation](https://mulgadc.com/) is an open source infrastructure platform that brings the core services of AWS—like EC2, VPC, EBS, and S3—to environments where running in the cloud isn't an option. Whether you're deploying to edge sites, private data-centers, or need to operate in low-connectivity or highly contested environments, Spinifex gives you AWS-style workflows on your own hardware.
 
-## What is Hive?
+## What is Spinifex?
 
-Hive replicates essential AWS primitives—virtual machines, block volumes, and object storage—using lightweight, self-contained components that are easy to deploy and integrate.
+Spinifex replicates essential AWS primitives—virtual machines, block volumes, and object storage—using lightweight, self-contained components that are easy to deploy and integrate.
 
 It’s designed for developers and operators who need:
 
@@ -13,13 +13,13 @@ It’s designed for developers and operators who need:
 - Drop-in compatibility with tools like the AWS CLI, SDKs, and Terraform
 - A secure cloud environment you control and own the entire hardware, network and software stack
 
-You can run Hive on a few servers in a rack, a field site, or anywhere centralized cloud services aren’t feasible.
+You can run Spinifex on a few servers in a rack, a field site, or anywhere centralized cloud services aren’t feasible.
 
 ## Core Components
 
-### Hive (Compute Service – EC2 Alternative)
+### Spinifex (Compute Service – EC2 Alternative)
 
-Hive is a minimal VM orchestration layer built on top of QEMU, exposing APIs similar to EC2. It manages lifecycle operations like start, stop, and terminate, using QEMU’s QMP interface. Designed to be straightforward and scriptable, Hive lets you launch VMs using the AWS CLI, SDKs, or Terraform—without needing Kubernetes or heavyweight orchestrators. Keep in mind, you can also setup a Kubernetes environment using Hive with underlying instances.
+Spinifex is a minimal VM orchestration layer built on top of QEMU, exposing APIs similar to EC2. It manages lifecycle operations like start, stop, and terminate, using QEMU’s QMP interface. Designed to be straightforward and scriptable, Spinifex lets you launch VMs using the AWS CLI, SDKs, or Terraform—without needing Kubernetes or heavyweight orchestrators. Keep in mind, you can also setup a Kubernetes environment using Spinifex with underlying instances.
 
 - EC2-like VM management on bare metal
 - Launches with cloud-init metadata support
@@ -54,21 +54,21 @@ AWS-Compatible Interfaces – Provision infrastructure with awscli, Terraform, o
 
 ## Installation
 
-Installation requires an Ubuntu / Debian system. See the detailed documentation at [https://docs.mulgadc.com](https://docs.mulgadc.com/) for maintaining and installing Hive.
+Installation requires an Ubuntu / Debian system. See the detailed documentation at [https://docs.mulgadc.com](https://docs.mulgadc.com/) for maintaining and installing Spinifex.
 
 ### Single node install
 
 The installation is straightforward to set up and running on a single node for testing purposes.
 
 ```bash
-export AWS_PROFILE=hive
+export AWS_PROFILE=spinifex
 export AWS_REGION=ap-southeast-2-sc
 ```
 
 ```bash
 curl https://install.mulgadc.com/ | bash
 
-hive admin init --region $AWS_REGION
+spx admin init --region $AWS_REGION
 
 aws ec2 describe-instance-types
 ```
@@ -79,7 +79,7 @@ For a complete development environment see the [Source Install](https://docs.mul
 
 ### Component Repositories
 
-Hive coordinates these independent components:
+Spinifex coordinates these independent components:
 
 - **[Predastore](https://github.com/mulgadc/predastore)** - S3-compatible object storage
 - **[Viperblock](https://github.com/mulgadc/viperblock)** - EBS-compatible block storage
@@ -90,7 +90,7 @@ Each component can be developed independently. See component-specific documentat
 
 ### Built by Engineers, For Engineers
 
-Hive is developed by experienced infrastructure engineers with deep AWS expertise, including former AWS team members who understand the intricacies of building production-grade cloud services. Our team brings decades of combined experience from AWS, enterprise infrastructure, and edge computing environments.
+Spinifex is developed by experienced infrastructure engineers with deep AWS expertise, including former AWS team members who understand the intricacies of building production-grade cloud services. Our team brings decades of combined experience from AWS, enterprise infrastructure, and edge computing environments.
 
 **Real-World Experience:**
 
@@ -101,7 +101,7 @@ Hive is developed by experienced infrastructure engineers with deep AWS expertis
 
 ### AI-Assisted Development
 
-While Hive is architected and implemented by experienced engineers, we leverage **Claude Code** (Anthropic's AI coding assistant) to accelerate certain development tasks. This approach combines human expertise with AI efficiency:
+While Spinifex is architected and implemented by experienced engineers, we leverage **Claude Code** (Anthropic's AI coding assistant) to accelerate certain development tasks. This approach combines human expertise with AI efficiency:
 
 **How We Use Claude Code:**
 
@@ -117,8 +117,8 @@ While Hive is architected and implemented by experienced engineers, we leverage 
 - **Performance Optimization**: Real-world performance tuning and benchmarking
 - **Production Operations**: Deployment strategies and operational procedures
 
-This hybrid approach ensures Hive benefits from both proven engineering expertise and modern development acceleration, while maintaining the quality and reliability standards required for production infrastructure.
+This hybrid approach ensures Spinifex benefits from both proven engineering expertise and modern development acceleration, while maintaining the quality and reliability standards required for production infrastructure.
 
 ## License
 
-Hive is open source under the Apache 2.0 License. You're free to use, modify, and deploy it—anywhere you need reliable infrastructure without depending on centralized cloud platforms.
+Spinifex is open source under the Apache 2.0 License. You're free to use, modify, and deploy it—anywhere you need reliable infrastructure without depending on centralized cloud platforms.

@@ -1,10 +1,10 @@
-# Hive UI
+# Spinifex UI
 
-Full-stack application for managing Hive AWS compatible products (EC2, S3)
+Full-stack application for managing Spinifex AWS compatible products (EC2, S3)
 
 ## Development Setup
 
-Note: This is not needed for actually building hive-ui and running it. We commit the assets so that when you build hive, it will include hive-ui without you needing to install node and build frontend from source.
+Note: This is not needed for actually building spinifex-ui and running it. We commit the assets so that when you build hive, it will include spinifex-ui without you needing to install node and build frontend from source.
 
 1. **Install Node.js using nvm**
 

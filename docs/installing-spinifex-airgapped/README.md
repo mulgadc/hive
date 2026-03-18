@@ -1,6 +1,6 @@
 ---
 title: "Air-Gapped Installation"
-description: "Deploy Hive in environments without internet connectivity. Covers offline package caching, USB deployment, and package verification."
+description: "Deploy Spinifex in environments without internet connectivity. Covers offline package caching, USB deployment, and package verification."
 category: "Getting Started"
 tags:
   - install
@@ -8,15 +8,15 @@ tags:
   - offline
 badge: advanced
 resources:
-  - title: "Hive Repository"
-    url: "https://github.com/mulgadc/hive"
+  - title: "Spinifex Repository"
+    url: "https://github.com/mulgadc/spinifex"
   - title: "apt-cacher-ng"
     url: "https://wiki.debian.org/AptCacherNg"
 ---
 
 # Air-Gapped Installation
 
-> Deploy Hive in environments without internet connectivity.
+> Deploy Spinifex in environments without internet connectivity.
 
 ## Table of Contents
 
@@ -28,7 +28,7 @@ resources:
 
 ## Overview
 
-In air-gapped or disconnected environments, Hive can be deployed without internet access. This guide covers preparing offline packages on a connected machine, creating USB deployment media, and installing on the target server with package verification.
+In air-gapped or disconnected environments, Spinifex can be deployed without internet access. This guide covers preparing offline packages on a connected machine, creating USB deployment media, and installing on the target server with package verification.
 
 **Deployment methods:**
 - **apt-cacher-ng** — Local APT cache for Debian/Ubuntu packages
@@ -47,7 +47,7 @@ sudo apt install apt-cacher-ng
 sudo systemctl enable --now apt-cacher-ng
 ```
 
-Pre-download all Hive dependencies:
+Pre-download all Spinifex dependencies:
 
 ```bash
 sudo apt install --download-only nbdkit nbdkit-plugin-dev pkg-config \
@@ -62,7 +62,7 @@ sudo apt install --download-only nbdkit nbdkit-plugin-dev pkg-config \
 mkdir -p /media/hive-deploy/{apt-packages,go-cache,hive-source}
 cp /var/cache/apt/archives/*.deb /media/hive-deploy/apt-packages/
 cp -r ~/go/pkg/mod/cache/ /media/hive-deploy/go-cache/
-cp -r ~/Development/mulga/hive /media/hive-deploy/hive-source/
+cp -r ~/Development/mulga/spinifex /media/hive-deploy/hive-source/
 ```
 
 ## Step 3. Verify package integrity
@@ -82,8 +82,8 @@ Mount the USB and install:
 ```bash
 sudo mount /dev/sdb1 /mnt/usb
 sudo dpkg -i /mnt/usb/apt-packages/*.deb
-cp -r /mnt/usb/hive-source ~/Development/mulga/hive
-cd ~/Development/mulga/hive && make build
+cp -r /mnt/usb/hive-source ~/Development/mulga/spinifex
+cd ~/Development/mulga/spinifex && make build
 ```
 
 Then follow the [Source Install](/docs/source-install) guide from Step 3 (Setup OVN) onwards.

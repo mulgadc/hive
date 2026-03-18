@@ -39,7 +39,7 @@ Reset services first to apply latest changes:
 
 ```sh
 ./scripts/stop-dev.sh
-PPROF_ENABLED=1 PPROF_OUTPUT=/tmp/hive-vm.prof ./scripts/start-dev.sh
+PPROF_ENABLED=1 PPROF_OUTPUT=/tmp/spinifex-vm.prof ./scripts/start-dev.sh
 ```
 
 Once services are started, connect to the benchmarking VM
@@ -48,15 +48,15 @@ Once services are started, connect to the benchmarking VM
 ./scripts/run-bench.sh
 ```
 
-This will run the benchmark listed in `./scripts/disk-performance.sh` and store the results in `/tmp/hive-vm-disk.log`
+This will run the benchmark listed in `./scripts/disk-performance.sh` and store the results in `/tmp/spinifex-vm-disk.log`
 
-The Linux `perf` tool is also used to benchmark the `nbdkit` process used to create the QEMU > disk > NBD > viperblock > predastore sequence, which is an important tool for debugging purposes. The results will be stored in `/tmp/hive-nbdkit-perf.data`
+The Linux `perf` tool is also used to benchmark the `nbdkit` process used to create the QEMU > disk > NBD > viperblock > predastore sequence, which is an important tool for debugging purposes. The results will be stored in `/tmp/spinifex-nbdkit-perf.data`
 
 ### Analyze results
 
-Place the output of `/tmp/hive-vm-disk.log` into the results section below, increment the VM-$ID as the test case, and provide a short description of the last changes that were benchmarked.
+Place the output of `/tmp/spinifex-vm-disk.log` into the results section below, increment the VM-$ID as the test case, and provide a short description of the last changes that were benchmarked.
 
-Store the benchmark file in `predastore-rewrite/tests/hive-vm$id.prof` for later analysis.
+Store the benchmark file in `predastore-rewrite/tests/spinifex-vm$id.prof` for later analysis.
 
 # Results
 
@@ -575,7 +575,7 @@ Disk stats (read/write):
 
 ## Root Cause: TLS Handshakes Per Request
 
-**Profile analysis (`hive-vm.prof`) reveals 84% of CPU spent on TLS handshakes:**
+**Profile analysis (`spinifex-vm.prof`) reveals 84% of CPU spent on TLS handshakes:**
 
 ```
 84.06%  crypto/tls.(*Conn).HandshakeContext   ← 84% of CPU!
@@ -736,13 +736,13 @@ With many short-lived connections, ports stuck in TIME_WAIT can exhaust the rang
 
 ## Host Configuration (sysctl)
 
-### Recommended Settings for Hive Host
+### Recommended Settings for Spinifex Host
 
-Create `/etc/sysctl.d/99-hive.conf`:
+Create `/etc/sysctl.d/99-spinifex.conf`:
 
 ```bash
 # =============================================================================
-# Hive Platform - System Tuning for High-Connection Workloads
+# Spinifex Platform - System Tuning for High-Connection Workloads
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -827,21 +827,21 @@ vm.dirty_background_ratio = 5
 
 Apply settings:
 ```bash
-sudo sysctl -p /etc/sysctl.d/99-hive.conf
+sudo sysctl -p /etc/sysctl.d/99-spinifex.conf
 ```
 
 ### Process Limits (/etc/security/limits.conf)
 
 ```bash
-# Add to /etc/security/limits.conf or /etc/security/limits.d/hive.conf
+# Add to /etc/security/limits.conf or /etc/security/limits.d/spinifex.conf
 
-# For predastore/hive user
-hive    soft    nofile    1048576
-hive    hard    nofile    1048576
-hive    soft    nproc     unlimited
-hive    hard    nproc     unlimited
-hive    soft    memlock   unlimited
-hive    hard    memlock   unlimited
+# For predastore/spinifex user
+spinifex    soft    nofile    1048576
+spinifex    hard    nofile    1048576
+spinifex    soft    nproc     unlimited
+spinifex    hard    nproc     unlimited
+spinifex    soft    memlock   unlimited
+spinifex    hard    memlock   unlimited
 
 # Or for all users (dev environments)
 *       soft    nofile    1048576
@@ -891,7 +891,7 @@ MaxConnsPerHost:     64
 IdleConnTimeout:     60 * time.Second
 ```
 
-**sysctl:** Apply full 99-hive.conf settings.
+**sysctl:** Apply full 99-spinifex.conf settings.
 
 ### Large Deployment (65-256 VMs)
 
@@ -1105,7 +1105,7 @@ client := &http.Client{
 - [ ] Validate fix with fio benchmark (VM-4)
 - [ ] Add predastore connection metrics endpoint
 - [ ] Test with 8-VM deployment
-- [ ] Create hive-tuning.sh script for automated sysctl configuration
+- [ ] Create spinifex-tuning.sh script for automated sysctl configuration
 - [ ] Add Prometheus metrics for connection tracking
 
 ---
@@ -1186,7 +1186,7 @@ After migrating predastore to net/http with HTTP/2 support, profiling still show
 Additionally, logs showed **126K+ HTTP/1.1 requests** despite HTTP/2 being configured:
 
 ```bash
-cat ~/hive/logs/predastore.log | grep "HTTP/1" | wc -l
+cat ~/spinifex/logs/predastore.log | grep "HTTP/1" | wc -l
 # 126277
 ```
 
@@ -1235,12 +1235,12 @@ All S3 clients across the codebase were updated:
 | File | Purpose |
 |------|---------|
 | `viperblock/viperblock/backends/s3/s3.go` | Block storage S3 backend |
-| `hive/s3client/s3client.go` | Hive S3 client |
-| `hive/handlers/ec2/key/service_impl.go` | EC2 key pair operations |
-| `hive/handlers/ec2/volume/service_impl.go` | EBS volume operations |
-| `hive/handlers/ec2/image/service_impl.go` | AMI image operations |
-| `hive/utils/utils.go` | Shared S3 client utility |
-| `hive/cmd/hive/cmd/admin.go` | Admin CLI operations |
+| `spinifex/s3client/s3client.go` | Spinifex S3 client |
+| `spinifex/handlers/ec2/key/service_impl.go` | EC2 key pair operations |
+| `spinifex/handlers/ec2/volume/service_impl.go` | EBS volume operations |
+| `spinifex/handlers/ec2/image/service_impl.go` | AMI image operations |
+| `spinifex/utils/utils.go` | Shared S3 client utility |
+| `spinifex/cmd/spinifex/cmd/admin.go` | Admin CLI operations |
 | `predastore/s3db/client.go` | S3DB distributed client |
 
 ### Complete HTTP/2 Client Pattern
@@ -1323,14 +1323,14 @@ After deploying the fix, verify HTTP/2 is working:
 
 ```bash
 # Check predastore logs for HTTP/2 requests
-grep "HTTP/2" ~/hive/logs/predastore.log | head
+grep "HTTP/2" ~/spinifex/logs/predastore.log | head
 
 # Count HTTP/1.1 vs HTTP/2 requests
-echo "HTTP/1.1: $(grep -c 'HTTP/1' ~/hive/logs/predastore.log)"
-echo "HTTP/2.0: $(grep -c 'HTTP/2' ~/hive/logs/predastore.log)"
+echo "HTTP/1.1: $(grep -c 'HTTP/1' ~/spinifex/logs/predastore.log)"
+echo "HTTP/2.0: $(grep -c 'HTTP/2' ~/spinifex/logs/predastore.log)"
 
 # Profile should show minimal TLS overhead
-go tool pprof -top hive-vm.prof | head -20
+go tool pprof -top spinifex-vm.prof | head -20
 # TLS functions should be <5% instead of 60-84%
 ```
 
@@ -1354,15 +1354,15 @@ go tool pprof -top hive-vm.prof | head -20
 
 ### Mandatory Testing Before Changes
 
-The Hive platform consists of three interdependent repositories:
+The Spinifex platform consists of three interdependent repositories:
 
 ```
-hive ──depends on──► viperblock ──depends on──► predastore
+spinifex ──depends on──► viperblock ──depends on──► predastore
 ```
 
 **CRITICAL: All tests must pass across all three repositories before committing changes.**
 
-Changes in predastore can break viperblock and hive. Changes in viperblock can break hive.
+Changes in predastore can break viperblock and spinifex. Changes in viperblock can break spinifex.
 
 ### Testing Workflow
 
@@ -1375,8 +1375,8 @@ LOG_IGNORE=1 go test ./... -count=1
 cd /path/to/viperblock
 LOG_IGNORE=1 go test ./... -count=1
 
-# 3. Finally test hive (depends on both)
-cd /path/to/hive
+# 3. Finally test spinifex (depends on both)
+cd /path/to/spinifex
 LOG_IGNORE=1 go test ./... -count=1
 ```
 
@@ -1384,7 +1384,7 @@ LOG_IGNORE=1 go test ./... -count=1
 
 Each repository uses `go.work` for local development with replace directives:
 
-**hive/go.work:**
+**spinifex/go.work:**
 ```go
 go 1.25.5
 
@@ -1423,7 +1423,7 @@ LOG_IGNORE=1  # Suppress log output during tests
 
 - [ ] `cd predastore && go test ./...` passes
 - [ ] `cd viperblock && go test ./...` passes
-- [ ] `cd hive && go test ./...` passes
+- [ ] `cd spinifex && go test ./...` passes
 - [ ] `go build ./...` succeeds in all repos
 - [ ] No new compiler warnings
 
@@ -1799,7 +1799,7 @@ go tool trace /tmp/trace.out
 
 - `viperblock/viperblock/viperblock.go` - Core read/write logic (lines 1688-1856 for read path)
 - `viperblock/nbd/viperblock.go` - NBD plugin interface
-- `predastore-rewrite/tests/hive-vm7.prof` - Predastore profile (post-HTTP2 fix)
+- `predastore-rewrite/tests/spinifex-vm7.prof` - Predastore profile (post-HTTP2 fix)
 - `/tmp/nbdkit-perf2.data` - Viperblock perf profile
 
 ### References
@@ -1851,7 +1851,7 @@ The `mapassign_fast64` bottleneck has been completely eliminated:
 | `crypto/md5.block` | 0.83% | AWS v4 signatures |
 | `crypto/sha256` | 0.58% | TLS crypto |
 
-**Predastore Server (hive-vm8.prof):**
+**Predastore Server (spinifex-vm8.prof):**
 
 | Function | CPU % | Category |
 |----------|-------|----------|
@@ -2011,7 +2011,7 @@ Profile is now evenly distributed:
 - `runtime.memclrNoHeapPointers`: 1.32%
 - All other functions < 1.5%
 
-### Predastore Profile (hive-vm9.prof) - Now the Bottleneck
+### Predastore Profile (spinifex-vm9.prof) - Now the Bottleneck
 
 | Function | CPU % | Category |
 |----------|-------|----------|
@@ -2058,7 +2058,7 @@ These logs were firing on every operation, adding unnecessary overhead.
 
 ### Chi Middleware Logger Overhead
 
-**Problem Identified:** The Go profile (hive-vm9.prof) showed significant overhead from chi's RequestLogger middleware:
+**Problem Identified:** The Go profile (spinifex-vm9.prof) showed significant overhead from chi's RequestLogger middleware:
 
 ```
 chi/v5/middleware.init.0.RequestLogger.func1.1  27.47s  17.39%
@@ -2166,11 +2166,11 @@ After deploying, run benchmark and verify:
 
 ```bash
 # Profile should show no chi Logger overhead
-go tool pprof -top hive-vm10.prof | grep -i logger
+go tool pprof -top spinifex-vm10.prof | grep -i logger
 # Expected: No results
 
 # I/O should now dominate
-go tool pprof -top hive-vm10.prof | head -10
+go tool pprof -top spinifex-vm10.prof | head -10
 # Expected: syscall.Syscall6 > 45%
 ```
 
@@ -2180,7 +2180,7 @@ go tool pprof -top hive-vm10.prof | head -10
 
 ### Profile Analysis
 
-**Predastore (hive-vm10.prof):**
+**Predastore (spinifex-vm10.prof):**
 | Function | CPU % | Notes |
 |----------|-------|-------|
 | `syscall.Syscall6` | **37.32%** | I/O bound - expected |
@@ -2346,7 +2346,7 @@ The `UnifiedBlockStore` has `EvictCache()` method but no automatic LRU eviction 
 
 | File | Change |
 |------|--------|
-| `hive/services/viperblockd/viperblockd.go` | Fixed HasSuffix args, fixed cache logic |
+| `spinifex/services/viperblockd/viperblockd.go` | Fixed HasSuffix args, fixed cache logic |
 | `viperblock/viperblock/viperblock.go` | 8 read logs changed to Debug level |
 
 ### Expected Impact (VM-11)
@@ -2417,11 +2417,11 @@ if hitRate < 0.5 && cacheSize < maxCache {
 
 ```bash
 # Check cache is enabled for main volumes
-grep "Enabling 64MB cache" ~/hive/logs/viperblockd.log
+grep "Enabling 64MB cache" ~/spinifex/logs/viperblockd.log
 # Expected: One line per main volume
 
 # Check cache disabled for auxiliary volumes
-grep "Disabling cache for auxiliary" ~/hive/logs/viperblockd.log
+grep "Disabling cache for auxiliary" ~/spinifex/logs/viperblockd.log
 # Expected: Lines for *-cloudinit and *-efi volumes
 
 # Monitor cache hit rate (if stats endpoint available)

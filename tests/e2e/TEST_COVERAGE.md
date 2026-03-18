@@ -4,15 +4,15 @@
 
 ### Phase 1: Environment Setup
 - KVM support check
-- `hive admin init` (region/az/node config)
+- `spx admin init` (region/az/node config)
 - CA certificate trust
 - Start all services (`start-dev.sh`)
 - Wait for AWS gateway on `localhost:9999`
 
 ### Phase 1b: Cluster Stats CLI
-- `hive get nodes` — verify node shows Ready
-- `hive top nodes` — verify CPU/MEM resource stats
-- `hive get vms` — verify "No VMs found" before any launches
+- `spx get nodes` — verify node shows Ready
+- `spx top nodes` — verify CPU/MEM resource stats
+- `spx get vms` — verify "No VMs found" before any launches
 
 ### Phase 2: Discovery & Metadata
 - `describe-regions`
@@ -32,7 +32,7 @@
 - `delete-key-pair` (test-key-2, verify only test-key-1 remains)
 
 ### Phase 4: Image Management
-- `hive admin images import` (file-based, architecture-aware)
+- `spx admin images import` (file-based, architecture-aware)
 - `describe-images` (verify AMI by ID)
 
 ### Phase 5: Instance Lifecycle
@@ -40,7 +40,7 @@
 - `describe-instances` (poll pending -> running)
 
 ### Phase 5a-pre: Cluster Stats CLI (with running VM)
-- `hive get vms` — verify running instance appears in output
+- `spx get vms` — verify running instance appears in output
 
 ### Phase 5a: Instance Metadata Validation
 - `describe-instances` — verify InstanceType matches requested type
@@ -210,7 +210,7 @@
 Tests that EC2 resources are properly isolated between tenant accounts (Alpha, Beta). Based on `docs/development/feature/iam-phase4-e2e-test-guide.md`. Skips CreateImage (mulga-612) and instance tags (mulga-613).
 
 #### Step 1: Account Setup
-- `hive admin account create` (Team Alpha, Team Beta)
+- `spx admin account create` (Team Alpha, Team Beta)
 - Configure AWS CLI profiles
 - Verify auth for both accounts
 
@@ -306,10 +306,10 @@ Tests that EC2 resources are properly isolated between tenant accounts (Alpha, B
 - Simulated network IPs (no ramdisk — start-dev.sh uses disk-backed WAL/VB in CI)
 
 ### Phase 2: Cluster Initialization
-- `hive admin init` (leader node1)
+- `spx admin init` (leader node1)
 - CA certificate trust
 - Start node1 services
-- `hive admin join` (node2, node3)
+- `spx admin join` (node2, node3)
 - Start node2 + node3 services
 
 ### Phase 3: Cluster Health Verification
@@ -320,14 +320,14 @@ Tests that EC2 resources are properly isolated between tenant accounts (Alpha, B
 - `describe-regions` (gateway connectivity check)
 
 ### Phase 3b: Cluster Stats CLI
-- `hive get nodes` — verify all 3 nodes show Ready
-- `hive top nodes` — verify instance type capacity table
-- `hive get vms` — verify empty (no instances yet)
+- `spx get nodes` — verify all 3 nodes show Ready
+- `spx top nodes` — verify instance type capacity table
+- `spx get vms` — verify empty (no instances yet)
 
 ### Phase 4: Image and Key Setup
 - `describe-instance-types` (discover + select nano)
 - `create-key-pair`
-- `hive admin images import` (with node1 config paths)
+- `spx admin images import` (with node1 config paths)
 - `describe-images` (verify AMI)
 
 ### Phase 4b: Multi-Node Key Pair Operations
@@ -341,7 +341,7 @@ Tests that EC2 resources are properly isolated between tenant accounts (Alpha, B
 - `run-instances` x3 (distribute across nodes)
 - Poll all instances to running state
 - Check instance distribution across nodes
-- `hive get vms` — verify all instances visible
+- `spx get vms` — verify all instances visible
 
 #### Test 1a-ii: SSH Connectivity & Volume Verification
 - SSH into all 3 instances via QEMU hostfwd port
@@ -415,9 +415,9 @@ Tests that EC2 resources are properly isolated between tenant accounts (Alpha, B
 ### Phase 5c: IAM Accounts & Cross-Account Isolation
 
 #### Step 1: Create Accounts
-- `hive admin account create` (Team Alpha, Team Beta)
+- `spx admin account create` (Team Alpha, Team Beta)
 - Verify sequential 12-digit account IDs
-- `hive admin account list` (verify both accounts)
+- `spx admin account list` (verify both accounts)
 
 #### Step 2: Account Admin Auth
 - Alpha admin authenticates via ec2 + iam
@@ -526,11 +526,11 @@ Tests that EC2 resources are properly isolated between the Alpha/Beta accounts. 
 ### Phase 6: Cluster Shutdown + Restart
 
 #### Test 6a: Dry-Run Shutdown
-- `hive admin cluster shutdown --dry-run`
+- `spx admin cluster shutdown --dry-run`
 - Validate output contains all 5 phases (GATE, DRAIN, STORAGE, PERSIST, INFRA)
 
 #### Test 6b: Coordinated Cluster Shutdown
-- `hive admin cluster shutdown --force --timeout 60s`
+- `spx admin cluster shutdown --force --timeout 60s`
 - Verify all services down on all nodes (gateway, NATS, QEMU)
 
 #### Test 6c: Cluster Restart + Recovery
@@ -552,7 +552,7 @@ Tests that EC2 resources are properly isolated between the Alpha/Beta accounts. 
 
 ## Real Multi-Node (`run-multinode-e2e.sh`)
 
-Runs on a real 3-node libvirt cluster provisioned by OpenTofu (`scripts/tofu-cluster/`). Each node is a separate VM with its own OVN, NATS, Predastore, and Hive daemon. Bootstrap (`bootstrap.sh`) handles all provisioning before the test script runs.
+Runs on a real 3-node libvirt cluster provisioned by OpenTofu (`scripts/tofu-cluster/`). Each node is a separate VM with its own OVN, NATS, Predastore, and Spinifex daemon. Bootstrap (`bootstrap.sh`) handles all provisioning before the test script runs.
 
 ### Bootstrap (pre-test)
 
@@ -562,11 +562,11 @@ Runs on a real 3-node libvirt cluster provisioned by OpenTofu (`scripts/tofu-clu
 4. `git fetch` + checkout test branch on all nodes (all 3 repos)
 5. `make build` on all nodes (parallel)
 6. `setup-ovn.sh` — primary gets `--management`, secondaries connect to primary's OVN central
-7. `hive admin init` on primary, `hive admin join` on secondaries (formation server handshake)
+7. `spx admin init` on primary, `spx admin join` on secondaries (formation server handshake)
 8. `start-dev.sh` on all nodes
 9. Wait for `/health` (awsgw=ok) on all nodes
-10. Install Hive CA certificate on all nodes
-11. `import-key-pair` (hive-key) + `hive admin images import` (Ubuntu 24.04)
+10. Install Spinifex CA certificate on all nodes
+11. `import-key-pair` (spinifex-key) + `spx admin images import` (Ubuntu 24.04)
 12. `create-vpc` (10.200.0.0/16) + `create-subnet` (10.200.1.0/24)
 
 ### Phase 1: Pre-flight Validation
@@ -578,8 +578,8 @@ Runs on a real 3-node libvirt cluster provisioned by OpenTofu (`scripts/tofu-clu
 - Predastore reachable on all 3 nodes
 - AWS gateway reachable on all 3 nodes
 - Daemon readiness (`describe-instance-types` returns results)
-- `hive get nodes` — verify all 3 nodes show Ready
-- `hive get vms` — verify empty (no instances yet)
+- `spx get nodes` — verify all 3 nodes show Ready
+- `spx get vms` — verify empty (no instances yet)
 
 ### Phase 3: Instance Lifecycle + Distribution
 - Discover nano instance type and AMI (from bootstrap import)
@@ -587,7 +587,7 @@ Runs on a real 3-node libvirt cluster provisioned by OpenTofu (`scripts/tofu-clu
 - Poll all instances to running state
 - Check instance distribution across physical nodes (QEMU process check)
 - Verify at least 2 different hosting nodes (non-deterministic, non-fatal if all on 1)
-- `hive get vms` — verify all 3 instances visible
+- `spx get vms` — verify all 3 instances visible
 
 ### Phase 4: SSH into Guest VMs
 - For each instance across all nodes:
@@ -627,7 +627,7 @@ Runs on a real 3-node libvirt cluster provisioned by OpenTofu (`scripts/tofu-clu
 - `start-dev.sh` on node2 (restart failed node)
 - Wait for NATS cluster to reform (2 peers again)
 - Verify node2 gateway is back
-- `hive get nodes` — verify all 3 nodes Ready again
+- `spx get nodes` — verify all 3 nodes Ready again
 - Verify node2 serves requests after recovery
 
 ### Phase 10: Cleanup
@@ -637,7 +637,7 @@ Runs on a real 3-node libvirt cluster provisioned by OpenTofu (`scripts/tofu-clu
 
 ## VPC (`run-vpc-e2e.sh`)
 
-Standalone VPC networking test suite. Runs against a running Hive endpoint (configurable via `ENDPOINT` env var). OVN topology tests are skipped when OVN is unavailable.
+Standalone VPC networking test suite. Runs against a running Spinifex endpoint (configurable via `ENDPOINT` env var). OVN topology tests are skipped when OVN is unavailable.
 
 ### Phase 1: VPC CRUD
 - `create-vpc` (10.99.0.0/16, verify VpcId)

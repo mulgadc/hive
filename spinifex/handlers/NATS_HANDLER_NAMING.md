@@ -1,6 +1,6 @@
 # NATS Handler Naming Convention
 
-This document defines the naming convention for NATS message handlers in the Hive daemon.
+This document defines the naming convention for NATS message handlers in the Spinifex daemon.
 
 ## Pattern
 
@@ -95,7 +95,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 // Subscribe to EC2 RunInstances with queue group
 d.natsSubscriptions["ec2.RunInstances"], err = d.natsConn.QueueSubscribe(
     "ec2.RunInstances",           // NATS topic
-    "hive-workers",               // Queue group for load balancing
+    "spinifex-workers",               // Queue group for load balancing
     d.handleEC2RunInstances,      // Handler method
 )
 ```
@@ -114,18 +114,18 @@ For backward compatibility, some handlers may subscribe to both old and new topi
 ```go
 // Legacy topic (deprecated, for backward compatibility)
 d.natsSubscriptions["ec2.launch"], err = d.natsConn.QueueSubscribe(
-    "ec2.launch", "hive-workers", d.handleEC2RunInstances)
+    "ec2.launch", "spinifex-workers", d.handleEC2RunInstances)
 
 // New topic (recommended)
 d.natsSubscriptions["ec2.RunInstances"], err = d.natsConn.QueueSubscribe(
-    "ec2.RunInstances", "hive-workers", d.handleEC2RunInstances)
+    "ec2.RunInstances", "spinifex-workers", d.handleEC2RunInstances)
 ```
 
 **Recommendation**: New code should use the AWS Action name format (`ec2.RunInstances`).
 
 ## Queue Groups
 
-All handlers use the `"hive-workers"` queue group for:
+All handlers use the `"spinifex-workers"` queue group for:
 - **Load Balancing** - NATS distributes requests across available daemon instances
 - **High Availability** - If one daemon fails, others continue processing
 - **Scalability** - Add more daemon instances to handle increased load

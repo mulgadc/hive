@@ -1,6 +1,6 @@
-# Hive Node Template Builder
+# Spinifex Node Template Builder
 
-Builds a Proxmox VM template with all Hive dependencies pre-installed. Cloning from this template reduces cluster spin-up from ~15 minutes to ~1-2 minutes (`git pull` + `make build`).
+Builds a Proxmox VM template with all Spinifex dependencies pre-installed. Cloning from this template reduces cluster spin-up from ~15 minutes to ~1-2 minutes (`git pull` + `make build`).
 
 ## What's in the template
 
@@ -9,7 +9,7 @@ Builds a Proxmox VM template with all Hive dependencies pre-installed. Cloning f
 | System packages | QEMU, nbdkit, libvirt, gcc, jq, curl, etc. (`make install-system`) |
 | Go | 1.26.1 (`make install-go`) |
 | AWS CLI | v2 (`make install-aws`) |
-| Repositories | hive, viperblock, predastore (with `go.work` configured) |
+| Repositories | spinifex, viperblock, predastore (with `go.work` configured) |
 | Module cache | `go mod download` completed for all repos |
 | Cloud images | Ubuntu 24.04 for nested VMs (`~/images/ubuntu-24.04.img`) |
 | Tuning | sysctl (rmem_max/wmem_max), kvm group, ufw disabled |
@@ -65,12 +65,12 @@ On each cloned VM after boot:
 
 ```bash
 # Pull latest code
-cd ~/Development/mulga/hive && git pull
+cd ~/Development/mulga/spinifex && git pull
 cd ~/Development/mulga/viperblock && git pull
 cd ~/Development/mulga/predastore && git pull
 
 # Build (~30s with cached modules)
-cd ~/Development/mulga/hive && export PATH=/usr/local/go/bin:$PATH && make build
+cd ~/Development/mulga/spinifex && export PATH=/usr/local/go/bin:$PATH && make build
 ```
 
 ## Testing a Different Base Image
