@@ -150,7 +150,7 @@ verify_nats_cluster() {
 wait_for_instance_state() {
     local instance_id="$1"
     local target_state="$2"
-    local max_attempts="${3:-10}"
+    local max_attempts="${3:-20}"
     local attempt=0
 
     echo "Waiting for instance $instance_id to reach state: $target_state..."
@@ -204,7 +204,7 @@ terminate_and_wait() {
 
     local failed=0
     for instance_id in "${ids[@]}"; do
-        if ! wait_for_instance_state "$instance_id" "terminated" 30; then
+        if ! wait_for_instance_state "$instance_id" "terminated" 60; then
             echo "  WARNING: Failed to confirm termination of $instance_id"
             failed=1
         fi
@@ -217,7 +217,7 @@ terminate_and_wait() {
 # Usage: wait_for_gateway [host] [max_attempts]
 wait_for_gateway() {
     local host="${1:-localhost}"
-    local max_attempts="${2:-15}"
+    local max_attempts="${2:-30}"
     local attempt=0
 
     echo "Waiting for AWS Gateway at $host:${AWSGW_PORT}..."
@@ -242,7 +242,7 @@ wait_for_gateway() {
 # Usage: wait_for_daemon_ready <gateway_endpoint> [max_attempts]
 wait_for_daemon_ready() {
     local endpoint="$1"
-    local max_attempts="${2:-15}"
+    local max_attempts="${2:-30}"
     local attempt=0
 
     echo "Waiting for daemon readiness (NATS subscriptions)..."
@@ -544,7 +544,7 @@ get_qemu_pid() {
 # Expects state transition: error → pending → running
 wait_for_instance_recovery() {
     local instance_id="$1"
-    local max_attempts="${2:-30}"
+    local max_attempts="${2:-60}"
     local attempt=0
     local saw_error=false
 

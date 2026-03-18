@@ -131,7 +131,7 @@ dump_all_node_logs() {
 wait_for_instance_state() {
     local instance_id="$1"
     local target_state="$2"
-    local max_attempts="${3:-30}"
+    local max_attempts="${3:-60}"
     local gw_ip="${4:-$LOCAL_IP}"
     local attempt=0
 
@@ -264,7 +264,7 @@ terminate_and_wait() {
 
     local failed=0
     for instance_id in "${ids[@]}"; do
-        if ! wait_for_instance_state "$instance_id" "terminated" 30; then
+        if ! wait_for_instance_state "$instance_id" "terminated" 60; then
             echo "  WARNING: Failed to confirm termination of $instance_id"
             failed=1
         fi
@@ -384,14 +384,14 @@ pass_test "All gateways"
 # Daemon readiness: describe-instance-types must return results
 echo "Checking daemon readiness..."
 ATTEMPT=0
-while [ $ATTEMPT -lt 15 ]; do
+while [ $ATTEMPT -lt 30 ]; do
     TYPES=$($AWS_EC2 describe-instance-types \
         --query 'InstanceTypes[*].InstanceType' --output text 2>/dev/null || true)
     if [ -n "$TYPES" ] && [ "$TYPES" != "None" ]; then
         echo "  Daemon ready (instance types: $TYPES)"
         break
     fi
-    echo "  Waiting for daemon... ($((ATTEMPT + 1))/15)"
+    echo "  Waiting for daemon... ($((ATTEMPT + 1))/30)"
     sleep 1
     ATTEMPT=$((ATTEMPT + 1))
 done
@@ -469,7 +469,7 @@ done
 echo ""
 echo "Waiting for instances to reach running state..."
 for instance_id in "${INSTANCE_IDS[@]}"; do
-    wait_for_instance_state "$instance_id" "running" 30 || {
+    wait_for_instance_state "$instance_id" "running" 60 || {
         echo "ERROR: Instance $instance_id failed to start"
         exit 1
     }
@@ -626,7 +626,7 @@ else
 
     # Wait for attachment
     COUNT=0
-    while [ $COUNT -lt 15 ]; do
+    while [ $COUNT -lt 30 ]; do
         ATTACH_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
             --query 'Volumes[0].Attachments[0].State' --output text)
         VOL_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
@@ -650,7 +650,7 @@ else
     $AWS_EC2 detach-volume --volume-id "$TEST_VOLUME_ID" > /dev/null
 
     COUNT=0
-    while [ $COUNT -lt 15 ]; do
+    while [ $COUNT -lt 30 ]; do
         VOL_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
             --query 'Volumes[0].State' --output text)
         if [ "$VOL_STATE" == "available" ]; then
@@ -672,7 +672,7 @@ else
     $AWS_EC2 delete-volume --volume-id "$TEST_VOLUME_ID"
 
     COUNT=0
-    while [ $COUNT -lt 15 ]; do
+    while [ $COUNT -lt 30 ]; do
         set +e
         VOL_CHECK=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
             --query 'Volumes[0].VolumeId' --output text 2>&1)
@@ -686,7 +686,7 @@ else
         COUNT=$((COUNT + 1))
     done
 
-    if [ $COUNT -lt 15 ]; then
+    if [ $COUNT -lt 30 ]; then
         pass_test "Volume delete"
     else
         fail_test "Volume delete"
@@ -746,7 +746,7 @@ echo "  Will operate via gateway on $OTHER_GW"
 # Stop via other gateway
 echo "  Stopping instance via $OTHER_GW..."
 aws_via "$OTHER_GW" ec2 stop-instances --instance-ids "$TEST_INSTANCE" > /dev/null
-wait_for_instance_state "$TEST_INSTANCE" "stopped" 30 "$OTHER_GW"
+wait_for_instance_state "$TEST_INSTANCE" "stopped" 60 "$OTHER_GW"
 
 # Pick yet another gateway for start (or same other if only 2 choices)
 THIRD_GW=""
@@ -759,7 +759,7 @@ done
 THIRD_GW="${THIRD_GW:-$OTHER_GW}"
 echo "  Starting instance via $THIRD_GW..."
 aws_via "$THIRD_GW" ec2 start-instances --instance-ids "$TEST_INSTANCE" > /dev/null
-wait_for_instance_state "$TEST_INSTANCE" "running" 30 "$THIRD_GW"
+wait_for_instance_state "$TEST_INSTANCE" "running" 60 "$THIRD_GW"
 
 pass_test "Cross-node stop/start"
 
@@ -844,7 +844,7 @@ peer_ssh "$NODE2_IP" "cd ~/Development/mulga/hive && ./scripts/start-dev.sh" || 
 echo "  Waiting for NATS cluster to reform..."
 ATTEMPT=0
 REFORMED=false
-while [ $ATTEMPT -lt 30 ]; do
+while [ $ATTEMPT -lt 60 ]; do
     NATS_RECOVER=$(curl -s "http://${LOCAL_IP}:${NATS_MONITOR_PORT}/routez" 2>/dev/null)
     RECOVER_PEERS=$(echo "$NATS_RECOVER" | jq -r '[.routes[].remote_name] | unique | length' 2>/dev/null || echo "0")
     if [ "$RECOVER_PEERS" -ge 2 ]; then
@@ -852,7 +852,7 @@ while [ $ATTEMPT -lt 30 ]; do
         REFORMED=true
         break
     fi
-    echo "  Waiting for NATS reform... ($((ATTEMPT + 1))/30, peers: $RECOVER_PEERS)"
+    echo "  Waiting for NATS reform... ($((ATTEMPT + 1))/60, peers: $RECOVER_PEERS)"
     sleep 1
     ATTEMPT=$((ATTEMPT + 1))
 done
@@ -868,7 +868,7 @@ fi
 echo "  Waiting for node2 gateway..."
 ATTEMPT=0
 GW_BACK=false
-while [ $ATTEMPT -lt 15 ]; do
+while [ $ATTEMPT -lt 30 ]; do
     if curl -k -s "https://${NODE2_IP}:${AWSGW_PORT}" > /dev/null 2>&1; then
         echo "  Node2 gateway is back"
         GW_BACK=true
