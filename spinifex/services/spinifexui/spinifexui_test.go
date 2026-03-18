@@ -107,7 +107,7 @@ func TestStatus_ReturnsValidState(t *testing.T) {
 	status, err := svc.Status()
 
 	assert.NoError(t, err)
-	// On a dev machine the hive-ui PID file may exist, so accept either outcome
+	// On a dev machine the spinifex-ui PID file may exist, so accept either outcome
 	assert.True(t, status == "stopped" || len(status) > 0, "status should be non-empty")
 }
 
@@ -121,7 +121,7 @@ func TestReload_ReturnsNil(t *testing.T) {
 }
 
 func TestServiceName(t *testing.T) {
-	assert.Equal(t, "hive-ui", serviceName)
+	assert.Equal(t, "spinifex-ui", serviceName)
 }
 
 func TestSecurityHeadersMiddleware(t *testing.T) {

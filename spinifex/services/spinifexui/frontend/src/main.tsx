@@ -40,7 +40,7 @@ if (rootElement && !rootElement.innerHTML) {
   const root = ReactDOM.createRoot(rootElement)
   root.render(
     <StrictMode>
-      <ThemeProvider defaultTheme="system" storageKey="hive-ui-theme">
+      <ThemeProvider defaultTheme="system" storageKey="spinifex-ui-theme">
         <QueryClientProvider client={queryClient}>
           <SidebarProvider>
             <RouterProvider router={router} />

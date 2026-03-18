@@ -1,7 +1,7 @@
 import { z } from "zod"
 
 // Versioned storage key - increment version when schema changes
-const STORAGE_KEY = "hive:v1:aws-credentials"
+const STORAGE_KEY = "spinifex:v1:aws-credentials"
 
 export const awsCredentialsSchema = z.object({
   accessKeyId: z

@@ -260,12 +260,12 @@ export function SidebarLayout() {
                     {...props}
                   >
                     <Avatar className="h-8 w-8 rounded-lg">
-                      <AvatarImage alt="Mulga Hive" src="/favicon.ico" />
+                      <AvatarImage alt="Mulga Spinifex" src="/favicon.ico" />
                       <AvatarFallback className="rounded-lg">MH</AvatarFallback>
                     </Avatar>
                     <div className="grid flex-1 text-left text-sm leading-tight">
-                      <span className="truncate font-semibold">Mulga Hive</span>
-                      <span className="truncate text-xs">hive@mulgadc.com</span>
+                      <span className="truncate font-semibold">Mulga Spinifex</span>
+                      <span className="truncate text-xs">spinifex@mulgadc.com</span>
                     </div>
                     <ChevronsUpDown className="ml-auto size-4" />
                   </SidebarMenuButton>

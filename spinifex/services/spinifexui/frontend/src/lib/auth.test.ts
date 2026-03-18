@@ -27,7 +27,7 @@ afterEach(() => {
 describe("setCredentials", () => {
   it("stores credentials in localStorage", () => {
     setCredentials(validCreds)
-    const stored = localStorage.getItem("hive:v1:aws-credentials")
+    const stored = localStorage.getItem("spinifex:v1:aws-credentials")
     expect(JSON.parse(stored ?? "")).toEqual(validCreds)
   })
 
@@ -45,7 +45,7 @@ describe("getCredentials", () => {
   })
 
   it("reads from localStorage on first call", () => {
-    localStorage.setItem("hive:v1:aws-credentials", JSON.stringify(validCreds))
+    localStorage.setItem("spinifex:v1:aws-credentials", JSON.stringify(validCreds))
     expect(getCredentials()).toEqual(validCreds)
   })
 
@@ -58,13 +58,13 @@ describe("getCredentials", () => {
   })
 
   it("returns null for invalid JSON in localStorage", () => {
-    localStorage.setItem("hive:v1:aws-credentials", "not-json")
+    localStorage.setItem("spinifex:v1:aws-credentials", "not-json")
     expect(getCredentials()).toBeNull()
   })
 
   it("returns null when stored data fails schema validation", () => {
     localStorage.setItem(
-      "hive:v1:aws-credentials",
+      "spinifex:v1:aws-credentials",
       JSON.stringify({ accessKeyId: "short", secretAccessKey: "" }),
     )
     expect(getCredentials()).toBeNull()
@@ -72,7 +72,7 @@ describe("getCredentials", () => {
 
   it("returns null when stored object is missing fields", () => {
     localStorage.setItem(
-      "hive:v1:aws-credentials",
+      "spinifex:v1:aws-credentials",
       JSON.stringify({ accessKeyId: "AKIAIOSFODNN7EXAMPLE" }),
     )
     expect(getCredentials()).toBeNull()
@@ -83,7 +83,7 @@ describe("clearCredentials", () => {
   it("removes credentials from localStorage", () => {
     setCredentials(validCreds)
     clearCredentials()
-    expect(localStorage.getItem("hive:v1:aws-credentials")).toBeNull()
+    expect(localStorage.getItem("spinifex:v1:aws-credentials")).toBeNull()
   })
 
   it("clears the in-memory cache", () => {
