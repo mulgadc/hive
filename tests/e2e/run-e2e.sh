@@ -122,12 +122,12 @@ fi
 
 # Wait for health checks on AWS Gateway
 echo "Waiting for AWS Gateway..."
-MAX_RETRIES=15
+MAX_RETRIES=30
 COUNT=0
 
 until curl -sk "https://${GATEWAY_HOST}:9999" > /dev/null || [ $COUNT -eq $MAX_RETRIES ]; do
     echo "Waiting for gateway... ($COUNT/$MAX_RETRIES)"
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -346,18 +346,18 @@ echo "Launched Instance ID: $INSTANCE_ID"
 echo "Polling for instance running state..."
 COUNT=0
 STATE="unknown"
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     # Capture full output to check if instance even exists in the response
     DESCRIBE_OUTPUT=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID") || {
-        echo "⚠️  Gateway request failed, retrying... ($COUNT/30)"
-        sleep 2
+        echo "⚠️  Gateway request failed, retrying... ($COUNT/60)"
+        sleep 1
         COUNT=$((COUNT + 1))
         continue
     }
 
     if [ -z "$DESCRIBE_OUTPUT" ]; then
         echo "⚠️  Gateway returned empty response, retrying..."
-        sleep 2
+        sleep 1
         COUNT=$((COUNT + 1))
         continue
     fi
@@ -375,7 +375,7 @@ while [ $COUNT -lt 30 ]; do
         exit 1
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -537,7 +537,7 @@ aws ec2 modify-volume --volume-id "$TEST_VOLUME_ID" --size "$NEW_SIZE"
 # Verify resize
 echo "Verifying resize..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     VOLUME_SIZE=$(aws ec2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].Size' --output text)
 
@@ -546,7 +546,7 @@ while [ $COUNT -lt 30 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -562,7 +562,7 @@ aws ec2 attach-volume --volume-id "$TEST_VOLUME_ID" --instance-id "$INSTANCE_ID"
 # Verify attachment
 echo "Verifying volume attachment..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     ATTACH_STATE=$(aws ec2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].Attachments[0].State' --output text)
     ATTACH_INSTANCE=$(aws ec2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
@@ -575,7 +575,7 @@ while [ $COUNT -lt 30 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -591,7 +591,7 @@ aws ec2 detach-volume --volume-id "$TEST_VOLUME_ID"
 # Verify detachment
 echo "Verifying volume detachment..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     VOL_STATE=$(aws ec2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].State' --output text)
 
@@ -600,7 +600,7 @@ while [ $COUNT -lt 30 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -616,7 +616,7 @@ aws ec2 delete-volume --volume-id "$TEST_VOLUME_ID"
 # Verify deletion
 echo "Verifying volume deletion..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     set +e
     VOLUME_CHECK=$(aws ec2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].VolumeId' --output text 2>&1)
@@ -628,11 +628,11 @@ while [ $COUNT -lt 30 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
-if [ $COUNT -ge 30 ]; then
+if [ $COUNT -ge 60 ]; then
     echo "Volume deletion verification timed out"
     exit 1
 fi
@@ -694,7 +694,7 @@ echo "Snapshot create response verified (State=$SNAP_STATE, VolumeId=$SNAP_VOL_R
 # Poll until snapshot is completed (should be immediate in v1, but poll for forward-compat)
 echo "Waiting for snapshot to complete..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     SNAP_STATE=$(aws ec2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
         --query 'Snapshots[0].State' --output text)
 
@@ -703,7 +703,7 @@ while [ $COUNT -lt 30 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -777,7 +777,7 @@ aws ec2 delete-snapshot --snapshot-id "$SNAPSHOT_ID"
 # Verify original is gone, copy remains
 echo "Verifying snapshot deletion..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     set +e
     SNAP_CHECK=$(aws ec2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
         --query 'Snapshots[0].SnapshotId' --output text 2>&1)
@@ -789,11 +789,11 @@ while [ $COUNT -lt 30 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
-if [ $COUNT -ge 30 ]; then
+if [ $COUNT -ge 60 ]; then
     echo "Snapshot deletion verification timed out"
     exit 1
 fi
@@ -991,13 +991,13 @@ echo "Phase 7: Instance State Transitions"
 echo "Stopping instance..."
 aws ec2 stop-instances --instance-ids "$INSTANCE_ID"
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)
     echo "Instance state: $STATE"
     if [ "$STATE" == "stopped" ]; then
         break
     fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -1060,14 +1060,14 @@ echo "Instance type updated to $MODIFIED_TYPE"
 echo "Starting instance with modified type..."
 aws ec2 start-instances --instance-ids "$INSTANCE_ID"
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
         --query 'Reservations[0].Instances[0].State.Name' --output text)
     echo "Instance state: $STATE"
     if [ "$STATE" == "running" ]; then
         break
     fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -1136,14 +1136,14 @@ aws ec2 reboot-instances --instance-ids "$INSTANCE_ID"
 
 # Verify state stays running (poll a few times to confirm no transient state change)
 COUNT=0
-while [ $COUNT -lt 5 ]; do
+while [ $COUNT -lt 10 ]; do
     STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
         --query 'Reservations[0].Instances[0].State.Name' --output text)
     if [ "$STATE" != "running" ]; then
         echo "Instance unexpectedly left running state: $STATE"
         exit 1
     fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 echo "Instance state remained running during reboot"
@@ -1196,10 +1196,10 @@ echo "Launched 2 instances: $MULTI_ID_1, $MULTI_ID_2"
 for MID in "$MULTI_ID_1" "$MULTI_ID_2"; do
     echo "Waiting for $MID to reach running state..."
     COUNT=0
-    while [ $COUNT -lt 30 ]; do
+    while [ $COUNT -lt 60 ]; do
         MSTATE=$(aws ec2 describe-instances --instance-ids "$MID" \
             --query 'Reservations[0].Instances[0].State.Name' --output text) || {
-            sleep 2
+            sleep 1
             COUNT=$((COUNT + 1))
             continue
         }
@@ -1207,7 +1207,7 @@ for MID in "$MULTI_ID_1" "$MULTI_ID_2"; do
             echo "Instance $MID is running"
             break
         fi
-        sleep 2
+        sleep 1
         COUNT=$((COUNT + 1))
     done
     if [ "$MSTATE" != "running" ]; then
@@ -1221,13 +1221,13 @@ echo "Terminating multi-launch instances..."
 aws ec2 terminate-instances --instance-ids "$MULTI_ID_1" "$MULTI_ID_2"
 for MID in "$MULTI_ID_1" "$MULTI_ID_2"; do
     COUNT=0
-    while [ $COUNT -lt 30 ]; do
+    while [ $COUNT -lt 60 ]; do
         MSTATE=$(aws ec2 describe-instances --instance-ids "$MID" \
             --query 'Reservations[0].Instances[0].State.Name' --output text)
         if [ "$MSTATE" == "terminated" ] || [ "$MSTATE" == "None" ]; then
             break
         fi
-        sleep 2
+        sleep 1
         COUNT=$((COUNT + 1))
     done
 done
@@ -1933,14 +1933,14 @@ echo "  Beta instance: $BETA_INST"
 # Wait for running
 echo "  Waiting for instances to reach running state..."
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     A_STATE=$(aws ec2 describe-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha \
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "pending")
     B_STATE=$(aws ec2 describe-instances --instance-ids "$BETA_INST" --profile hive-team-beta \
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "pending")
     echo "  Alpha=$A_STATE, Beta=$B_STATE"
     if [ "$A_STATE" == "running" ] && [ "$B_STATE" == "running" ]; then break; fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 if [ "$A_STATE" != "running" ] || [ "$B_STATE" != "running" ]; then
@@ -1991,11 +1991,11 @@ echo "  Alpha cannot reboot Beta's instance"
 # Stop Alpha's instance for cross-account start/modify/console tests
 aws ec2 stop-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha > /dev/null
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     A_STATE=$(aws ec2 describe-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha \
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null)
     if [ "$A_STATE" == "stopped" ]; then break; fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -2015,11 +2015,11 @@ echo "  Beta cannot get console output of Alpha's instance"
 # Restart Alpha's instance for later tests
 aws ec2 start-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha > /dev/null
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     A_STATE=$(aws ec2 describe-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha \
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null)
     if [ "$A_STATE" == "running" ]; then break; fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -2066,7 +2066,7 @@ echo "  Beta cannot attach Alpha's volume"
 # Attach Alpha's volume to Alpha's instance, then test cross-account detach
 aws ec2 attach-volume --volume-id "$ALPHA_VOL" \
     --instance-id "$ALPHA_INST" --device /dev/sdf --profile hive-team-alpha > /dev/null
-sleep 2
+sleep 1
 
 expect_error "InvalidVolume.NotFound" \
     aws ec2 detach-volume --volume-id "$ALPHA_VOL" --profile hive-team-beta
@@ -2079,7 +2079,7 @@ echo "  Beta cannot modify Alpha's volume"
 
 # Detach for cleanup later
 aws ec2 detach-volume --volume-id "$ALPHA_VOL" --profile hive-team-alpha > /dev/null
-sleep 2
+sleep 1
 
 echo "  Volume scoping passed"
 
@@ -2492,7 +2492,7 @@ aws ec2 terminate-instances --instance-ids "$BETA_INST" --profile hive-team-beta
 
 # Wait for termination
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     A_STATE=$(aws ec2 describe-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha \
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "terminated")
     B_STATE=$(aws ec2 describe-instances --instance-ids "$BETA_INST" --profile hive-team-beta \
@@ -2500,7 +2500,7 @@ while [ $COUNT -lt 30 ]; do
     if [ "$A_STATE" == "terminated" ] && [ "$B_STATE" == "terminated" ]; then
         break
     fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 echo "  Instances terminated"
@@ -2580,13 +2580,13 @@ fi
 echo "Terminating instance..."
 aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
 COUNT=0
-while [ $COUNT -lt 30 ]; do
+while [ $COUNT -lt 60 ]; do
     STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[0].Instances[0].State.Name' --output text)
     echo "Instance state: $STATE"
     if [ "$STATE" == "terminated" ] || [ "$STATE" == "None" ]; then
         break
     fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 

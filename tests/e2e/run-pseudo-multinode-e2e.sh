@@ -344,7 +344,7 @@ for i in 1 2 3; do
     INSTANCE_IDS+=("$INSTANCE_ID")
 
     # Small delay between launches to encourage distribution
-    sleep 2
+    sleep 1
 done
 
 # Wait for all instances to be running
@@ -489,7 +489,7 @@ $AWS_EC2 modify-volume --volume-id "$TEST_VOLUME_ID" --size "$NEW_SIZE"
 # Verify resize
 echo "  Verifying resize..."
 COUNT=0
-while [ $COUNT -lt 15 ]; do
+while [ $COUNT -lt 30 ]; do
     VOLUME_SIZE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].Size' --output text)
 
@@ -498,7 +498,7 @@ while [ $COUNT -lt 15 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -514,7 +514,7 @@ $AWS_EC2 attach-volume --volume-id "$TEST_VOLUME_ID" --instance-id "${INSTANCE_I
 # Verify attachment
 echo "  Verifying volume attachment..."
 COUNT=0
-while [ $COUNT -lt 15 ]; do
+while [ $COUNT -lt 30 ]; do
     ATTACH_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].Attachments[0].State' --output text)
     ATTACH_INSTANCE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
@@ -527,7 +527,7 @@ while [ $COUNT -lt 15 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -543,7 +543,7 @@ $AWS_EC2 detach-volume --volume-id "$TEST_VOLUME_ID"
 # Verify detachment
 echo "  Verifying volume detachment..."
 COUNT=0
-while [ $COUNT -lt 15 ]; do
+while [ $COUNT -lt 30 ]; do
     VOL_STATE=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].State' --output text)
 
@@ -552,7 +552,7 @@ while [ $COUNT -lt 15 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -568,7 +568,7 @@ $AWS_EC2 delete-volume --volume-id "$TEST_VOLUME_ID"
 # Verify deletion
 echo "  Verifying volume deletion..."
 COUNT=0
-while [ $COUNT -lt 15 ]; do
+while [ $COUNT -lt 30 ]; do
     set +e
     VOLUME_CHECK=$($AWS_EC2 describe-volumes --volume-ids "$TEST_VOLUME_ID" \
         --query 'Volumes[0].VolumeId' --output text 2>&1)
@@ -580,11 +580,11 @@ while [ $COUNT -lt 15 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
-if [ $COUNT -ge 15 ]; then
+if [ $COUNT -ge 30 ]; then
     echo "  ERROR: Volume deletion verification timed out"
     exit 1
 fi
@@ -635,7 +635,7 @@ echo "  Create response verified (State=$SNAP_STATE, VolumeId=$SNAP_VOL_REF, Siz
 # Poll until completed
 echo "  Waiting for snapshot to complete..."
 COUNT=0
-while [ $COUNT -lt 15 ]; do
+while [ $COUNT -lt 30 ]; do
     SNAP_STATE=$($AWS_EC2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
         --query 'Snapshots[0].State' --output text)
 
@@ -644,7 +644,7 @@ while [ $COUNT -lt 15 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
@@ -717,7 +717,7 @@ $AWS_EC2 delete-snapshot --snapshot-id "$SNAPSHOT_ID"
 # Verify original gone, copy remains
 echo "  Verifying snapshot deletion..."
 COUNT=0
-while [ $COUNT -lt 15 ]; do
+while [ $COUNT -lt 30 ]; do
     set +e
     SNAP_CHECK=$($AWS_EC2 describe-snapshots --snapshot-ids "$SNAPSHOT_ID" \
         --query 'Snapshots[0].SnapshotId' --output text 2>&1)
@@ -729,11 +729,11 @@ while [ $COUNT -lt 15 ]; do
         break
     fi
 
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 
-if [ $COUNT -ge 15 ]; then
+if [ $COUNT -ge 30 ]; then
     echo "  ERROR: Snapshot deletion verification timed out"
     exit 1
 fi
@@ -1121,7 +1121,7 @@ for crash_num in 1 2 3 4; do
     if [ $crash_num -lt 4 ]; then
         # Wait for restart (backoff increases: 5s, 10s, 20s)
         # Give generous time for each restart cycle
-        local_max=$((15 + crash_num * 10))
+        local_max=$((30 + crash_num * 20))
         echo "  Waiting up to ${local_max}s for restart or error state..."
         attempt=0
         while [ $attempt -lt $local_max ]; do
@@ -1135,7 +1135,7 @@ for crash_num in 1 2 3 4; do
                 echo "  Instance in error state after crash $crash_num (restart limit may be reached)"
                 break
             fi
-            sleep 2
+            sleep 1
             attempt=$((attempt + 2))
         done
     fi
@@ -1452,7 +1452,7 @@ while [ $COUNT -lt 30 ]; do
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "pending")
     echo "  Alpha=$A_STATE, Beta=$B_STATE"
     if [ "$A_STATE" == "running" ] && [ "$B_STATE" == "running" ]; then break; fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 if [ "$A_STATE" != "running" ] || [ "$B_STATE" != "running" ]; then
@@ -1961,7 +1961,7 @@ while [ $COUNT -lt 30 ]; do
     if [ "$A_STATE" == "terminated" ] && [ "$B_STATE" == "terminated" ]; then
         break
     fi
-    sleep 2
+    sleep 1
     COUNT=$((COUNT + 1))
 done
 echo "  Instances terminated"
@@ -2076,7 +2076,7 @@ fi
 echo "  Created Subnet: $SUBNET_ID (10.100.1.0/24)"
 
 # Brief pause for OVN topology to be programmed (logical switch + router port + DHCP)
-sleep 2
+sleep 1
 
 # Step 2: Launch 3 VPC instances
 echo ""
@@ -2103,7 +2103,7 @@ for i in 1 2 3; do
     echo "  Launched: $VPC_INST_ID (PrivateIpAddress: ${VPC_INST_IP:-not yet assigned})"
     VPC_INSTANCE_IDS+=("$VPC_INST_ID")
 
-    sleep 2
+    sleep 1
 done
 
 # Wait for all VPC instances to be running
@@ -2316,7 +2316,7 @@ CLUSTER_SERVICES_STARTED="false"
 
 # Verify all services are down
 echo "  Waiting for services to stop..."
-sleep 2
+sleep 1
 if ! verify_all_services_down; then
     echo "  Some services still running, force-cleaning..."
     force_cleanup_all_nodes
@@ -2380,17 +2380,17 @@ echo "Waiting for instances to relaunch after cluster restart..."
 for instance_id in "${INSTANCE_IDS[0]}" "${INSTANCE_IDS[1]}"; do
     echo "  Waiting for $instance_id to finish relaunching..."
     COUNT=0
-    while [ $COUNT -lt 30 ]; do
+    while [ $COUNT -lt 60 ]; do
         STATE=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
             --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "unknown")
         if [ "$STATE" = "running" ]; then
             echo "  $instance_id relaunched successfully: $STATE"
             break
         fi
-        sleep 2
+        sleep 1
         COUNT=$((COUNT + 1))
     done
-    if [ $COUNT -ge 30 ]; then
+    if [ $COUNT -ge 60 ]; then
         echo "  WARNING: $instance_id still in $STATE after 60s"
     fi
 done
