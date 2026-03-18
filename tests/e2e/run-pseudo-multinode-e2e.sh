@@ -5,7 +5,7 @@ set -e
 export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
 
 # Pseudo Multi-Node E2E test runner
-# This script sets up a 3-node Hive cluster using simulated IPs on the loopback interface
+# This script sets up a 3-node Spinifex cluster using simulated IPs on the loopback interface
 # and runs distributed instance tests on a single VM.
 
 # Ensure we are in the project root
@@ -33,7 +33,7 @@ cleanup() {
     # Try coordinated shutdown first (only if NATS is likely still up)
     if [ "$CLUSTER_SERVICES_STARTED" = "true" ]; then
         echo "Attempting coordinated cluster shutdown..."
-        if timeout 60 ./bin/hive admin cluster shutdown --force --timeout 30s --config "$HOME/node1/config/hive.toml" 2>/dev/null; then
+        if timeout 60 ./bin/spx admin cluster shutdown --force --timeout 30s --config "$HOME/node1/config/spinifex.toml" 2>/dev/null; then
             echo "Coordinated shutdown succeeded"
         else
             echo "Coordinated shutdown failed, falling back to per-node stop..."
@@ -60,9 +60,9 @@ JOIN3_PID=""
 # Track whether cluster services have been started (for cleanup trap)
 CLUSTER_SERVICES_STARTED="false"
 
-# Use Hive profile for AWS CLI
-export AWS_PROFILE=hive
-# Trust Hive CA for all profiles (AWS CLI v2 bundles its own Python/certifi, ignores system CA store)
+# Use Spinifex profile for AWS CLI
+export AWS_PROFILE=spinifex
+# Trust Spinifex CA for all profiles (AWS CLI v2 bundles its own Python/certifi, ignores system CA store)
 export AWS_CA_BUNDLE="$HOME/node1/config/ca.pem"
 
 
@@ -114,8 +114,8 @@ init_leader_node
 
 # Trust CA cert (exists before formation completes — cert generation is the first step)
 echo ""
-echo "Adding Hive CA certificate to system trust store..."
-sudo cp ~/node1/config/ca.pem /usr/local/share/ca-certificates/hive-ca.crt
+echo "Adding Spinifex CA certificate to system trust store..."
+sudo cp ~/node1/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
 sudo update-ca-certificates
 
 # Background BOTH joins — they poll /formation/status until all 3 nodes have joined.
@@ -178,39 +178,39 @@ AWS_EC2="aws --endpoint-url https://${NODE1_IP}:${AWSGW_PORT} ec2"
 AWS_IAM="aws --endpoint-url https://${NODE1_IP}:${AWSGW_PORT} iam"
 
 # Discover the cluster's availability zone and region dynamically
-HIVE_AZ=$($AWS_EC2 describe-availability-zones --query 'AvailabilityZones[0].ZoneName' --output text)
-HIVE_REGION=$($AWS_EC2 describe-availability-zones --query 'AvailabilityZones[0].RegionName' --output text)
-echo "Discovered AZ: $HIVE_AZ, Region: $HIVE_REGION"
+SPINIFEX_AZ=$($AWS_EC2 describe-availability-zones --query 'AvailabilityZones[0].ZoneName' --output text)
+SPINIFEX_REGION=$($AWS_EC2 describe-availability-zones --query 'AvailabilityZones[0].RegionName' --output text)
+echo "Discovered AZ: $SPINIFEX_AZ, Region: $SPINIFEX_REGION"
 
 # Phase 3b: Cluster Stats CLI (Multi-Node)
 echo ""
 echo "Phase 3b: Cluster Stats CLI (Multi-Node)"
 echo "========================================"
 
-# Test hive get nodes — should show all 3 nodes as Ready
-echo "Testing hive get nodes..."
-GET_NODES_OUTPUT=$(./bin/hive get nodes --config "$HOME/node1/config/hive.toml" --timeout 5s 2>/dev/null)
+# Test spx get nodes — should show all 3 nodes as Ready
+echo "Testing spx get nodes..."
+GET_NODES_OUTPUT=$(./bin/spx get nodes --config "$HOME/node1/config/spinifex.toml" --timeout 5s 2>/dev/null)
 echo "$GET_NODES_OUTPUT"
 READY_COUNT=$(echo "$GET_NODES_OUTPUT" | grep -c "Ready" || true)
 if [ "$READY_COUNT" -lt 3 ]; then
-    echo "WARNING: hive get nodes shows $READY_COUNT Ready nodes (expected 3)"
+    echo "WARNING: spx get nodes shows $READY_COUNT Ready nodes (expected 3)"
 fi
-echo "hive get nodes passed ($READY_COUNT Ready nodes)"
+echo "spx get nodes passed ($READY_COUNT Ready nodes)"
 
-# Test hive top nodes — should show resource stats for all nodes
-echo "Testing hive top nodes..."
-TOP_NODES_OUTPUT=$(./bin/hive top nodes --config "$HOME/node1/config/hive.toml" --timeout 5s 2>/dev/null)
+# Test spx top nodes — should show resource stats for all nodes
+echo "Testing spx top nodes..."
+TOP_NODES_OUTPUT=$(./bin/spx top nodes --config "$HOME/node1/config/spinifex.toml" --timeout 5s 2>/dev/null)
 echo "$TOP_NODES_OUTPUT"
 if ! echo "$TOP_NODES_OUTPUT" | grep -q "INSTANCE TYPE"; then
-    echo "WARNING: hive top nodes did not show instance type capacity table"
+    echo "WARNING: spx top nodes did not show instance type capacity table"
 fi
-echo "hive top nodes passed"
+echo "spx top nodes passed"
 
-# Test hive get vms — should show no VMs yet
-echo "Testing hive get vms (empty)..."
-GET_VMS_OUTPUT=$(./bin/hive get vms --config "$HOME/node1/config/hive.toml" --timeout 5s 2>/dev/null)
+# Test spx get vms — should show no VMs yet
+echo "Testing spx get vms (empty)..."
+GET_VMS_OUTPUT=$(./bin/spx get vms --config "$HOME/node1/config/spinifex.toml" --timeout 5s 2>/dev/null)
 echo "$GET_VMS_OUTPUT"
-echo "hive get vms (empty) passed"
+echo "spx get vms (empty) passed"
 
 # Verify gateway responds
 echo ""
@@ -252,16 +252,16 @@ echo "$KEY_MATERIAL" > multinode-test-key.pem
 chmod 600 multinode-test-key.pem
 echo "  Key created: multinode-test-key"
 
-# Import Ubuntu image (use node1's config and hive-dir)
+# Import Ubuntu image (use node1's config and spinifex-dir)
 echo ""
 echo "Importing Ubuntu image..."
-IMPORT_LOG=$(./bin/hive admin images import \
+IMPORT_LOG=$(./bin/spx admin images import \
     --file ~/images/ubuntu-24.04.img \
     --arch "$ARCH" \
     --distro ubuntu \
     --version 24.04 \
-    --config "$HOME/node1/config/hive.toml" \
-    --hive-dir "$HOME/node1/" \
+    --config "$HOME/node1/config/spinifex.toml" \
+    --spinifex-dir "$HOME/node1/" \
     --force)
 echo "Import output: $IMPORT_LOG"
 AMI_ID=$(echo "$IMPORT_LOG" | grep -o 'ami-[a-z0-9]\+')
@@ -361,17 +361,17 @@ done
 echo ""
 check_instance_distribution
 
-# Verify hive get vms shows all running instances
+# Verify spx get vms shows all running instances
 echo ""
-echo "Verifying hive get vms (with running VMs)..."
-GET_VMS_OUTPUT=$(./bin/hive get vms --config "$HOME/node1/config/hive.toml" --timeout 5s 2>/dev/null)
+echo "Verifying spx get vms (with running VMs)..."
+GET_VMS_OUTPUT=$(./bin/spx get vms --config "$HOME/node1/config/spinifex.toml" --timeout 5s 2>/dev/null)
 echo "$GET_VMS_OUTPUT"
 for instance_id in "${INSTANCE_IDS[@]}"; do
     if ! echo "$GET_VMS_OUTPUT" | grep -q "$instance_id"; then
-        echo "WARNING: hive get vms did not show instance $instance_id"
+        echo "WARNING: spx get vms did not show instance $instance_id"
     fi
 done
-echo "hive get vms shows launched instances"
+echo "spx get vms shows launched instances"
 
 # Test 1a-ii: SSH Connectivity & Volume Verification
 echo ""
@@ -451,7 +451,7 @@ for idx in "${!INSTANCE_IDS[@]}"; do
         -i "multinode-test-key.pem" \
         ec2-user@"$SSH_HOST" 'hostname' 2>/dev/null)
     echo "  VM hostname: $VM_HOSTNAME"
-    # Hostname uses truncated ID: hive-vm-<first 8 hex chars of instance ID>
+    # Hostname uses truncated ID: spinifex-vm-<first 8 hex chars of instance ID>
     SHORT_ID=$(echo "$instance_id" | sed 's/^i-//' | cut -c1-8)
     if echo "$VM_HOSTNAME" | grep -q "$SHORT_ID"; then
         echo "  Hostname contains instance ID prefix ($SHORT_ID)"
@@ -470,8 +470,8 @@ echo "----------------------------------------"
 echo "Testing volume create -> resize -> attach -> detach -> delete..."
 
 # Create a test volume
-echo "  Creating 10GB volume in ${HIVE_AZ}..."
-CREATE_OUTPUT=$($AWS_EC2 create-volume --size 10 --availability-zone "$HIVE_AZ")
+echo "  Creating 10GB volume in ${SPINIFEX_AZ}..."
+CREATE_OUTPUT=$($AWS_EC2 create-volume --size 10 --availability-zone "$SPINIFEX_AZ")
 TEST_VOLUME_ID=$(echo "$CREATE_OUTPUT" | jq -r '.VolumeId')
 
 if [ -z "$TEST_VOLUME_ID" ] || [ "$TEST_VOLUME_ID" == "null" ]; then
@@ -676,7 +676,7 @@ echo "  Describe verified (VolumeId=$DESC_VOL_ID, Size=$DESC_SIZE, Description=$
 
 # Copy the snapshot
 echo "  Copying snapshot $SNAPSHOT_ID..."
-COPY_OUTPUT=$($AWS_EC2 copy-snapshot --source-snapshot-id "$SNAPSHOT_ID" --source-region "$HIVE_REGION" --description "multinode-e2e-copy")
+COPY_OUTPUT=$($AWS_EC2 copy-snapshot --source-snapshot-id "$SNAPSHOT_ID" --source-region "$SPINIFEX_REGION" --description "multinode-e2e-copy")
 COPY_SNAPSHOT_ID=$(echo "$COPY_OUTPUT" | jq -r '.SnapshotId')
 
 if [ -z "$COPY_SNAPSHOT_ID" ] || [ "$COPY_SNAPSHOT_ID" == "null" ]; then
@@ -1041,10 +1041,10 @@ else
         echo "  ERROR: Instance failed to recover from crash"
         # Dump daemon logs for debugging
         for i in 1 2 3; do
-            if [ -f "$HOME/node$i/logs/hive.log" ]; then
+            if [ -f "$HOME/node$i/logs/spinifex.log" ]; then
                 echo ""
                 echo "  --- node$i daemon log (last 30 lines) ---"
-                tail -30 "$HOME/node$i/logs/hive.log"
+                tail -30 "$HOME/node$i/logs/spinifex.log"
             fi
         done
         exit 1
@@ -1169,7 +1169,7 @@ echo "Step 1: Create Accounts"
 echo "----------------------------------------"
 
 echo "  Creating Team Alpha account..."
-ALPHA_OUTPUT=$(./bin/hive admin account create --name "Team Alpha" --config "$HOME/node1/config/hive.toml" 2>&1)
+ALPHA_OUTPUT=$(./bin/spx admin account create --name "Team Alpha" --config "$HOME/node1/config/spinifex.toml" 2>&1)
 echo "$ALPHA_OUTPUT"
 ALPHA_ACCOUNT=$(echo "$ALPHA_OUTPUT" | grep "Account ID:" | awk '{print $NF}')
 ALPHA_KEY_ID=$(echo "$ALPHA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
@@ -1182,12 +1182,12 @@ fi
 echo "  Team Alpha: account=$ALPHA_ACCOUNT key=$ALPHA_KEY_ID"
 
 # Configure alpha profile (in case auto-config used a different endpoint)
-aws configure set aws_access_key_id "$ALPHA_KEY_ID" --profile hive-team-alpha
-aws configure set aws_secret_access_key "$ALPHA_SECRET" --profile hive-team-alpha
-aws configure set region us-east-1 --profile hive-team-alpha
+aws configure set aws_access_key_id "$ALPHA_KEY_ID" --profile spinifex-team-alpha
+aws configure set aws_secret_access_key "$ALPHA_SECRET" --profile spinifex-team-alpha
+aws configure set region us-east-1 --profile spinifex-team-alpha
 
 echo "  Creating Team Beta account..."
-BETA_OUTPUT=$(./bin/hive admin account create --name "Team Beta" --config "$HOME/node1/config/hive.toml" 2>&1)
+BETA_OUTPUT=$(./bin/spx admin account create --name "Team Beta" --config "$HOME/node1/config/spinifex.toml" 2>&1)
 echo "$BETA_OUTPUT"
 BETA_ACCOUNT=$(echo "$BETA_OUTPUT" | grep "Account ID:" | awk '{print $NF}')
 BETA_KEY_ID=$(echo "$BETA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
@@ -1199,9 +1199,9 @@ if [ -z "$BETA_ACCOUNT" ] || [ -z "$BETA_KEY_ID" ]; then
 fi
 echo "  Team Beta: account=$BETA_ACCOUNT key=$BETA_KEY_ID"
 
-aws configure set aws_access_key_id "$BETA_KEY_ID" --profile hive-team-beta
-aws configure set aws_secret_access_key "$BETA_SECRET" --profile hive-team-beta
-aws configure set region us-east-1 --profile hive-team-beta
+aws configure set aws_access_key_id "$BETA_KEY_ID" --profile spinifex-team-beta
+aws configure set aws_secret_access_key "$BETA_SECRET" --profile spinifex-team-beta
+aws configure set region us-east-1 --profile spinifex-team-beta
 
 # Verify sequential IDs
 echo "  Verifying sequential account IDs..."
@@ -1213,7 +1213,7 @@ fi
 
 # List accounts
 echo "  Listing accounts..."
-ACCOUNT_LIST=$(./bin/hive admin account list --config "$HOME/node1/config/hive.toml" 2>&1)
+ACCOUNT_LIST=$(./bin/spx admin account list --config "$HOME/node1/config/spinifex.toml" 2>&1)
 echo "$ACCOUNT_LIST"
 if echo "$ACCOUNT_LIST" | grep -q "Team Alpha" && echo "$ACCOUNT_LIST" | grep -q "Team Beta"; then
     echo "  Account list verified"
@@ -1228,15 +1228,15 @@ echo "Step 2: Account Admin Auth"
 echo "----------------------------------------"
 
 echo "  Testing alpha admin auth..."
-aws $AWS_EP ec2 describe-instances --profile hive-team-alpha > /dev/null
+aws $AWS_EP ec2 describe-instances --profile spinifex-team-alpha > /dev/null
 echo "    Alpha admin: ec2 OK"
-aws $AWS_EP iam list-users --profile hive-team-alpha > /dev/null
+aws $AWS_EP iam list-users --profile spinifex-team-alpha > /dev/null
 echo "    Alpha admin: iam OK"
 
 echo "  Testing beta admin auth..."
-aws $AWS_EP ec2 describe-instances --profile hive-team-beta > /dev/null
+aws $AWS_EP ec2 describe-instances --profile spinifex-team-beta > /dev/null
 echo "    Beta admin: ec2 OK"
-aws $AWS_EP iam list-users --profile hive-team-beta > /dev/null
+aws $AWS_EP iam list-users --profile spinifex-team-beta > /dev/null
 echo "    Beta admin: iam OK"
 
 # Step 3: Account-scoped users
@@ -1246,29 +1246,29 @@ echo "----------------------------------------"
 
 # Same username in different accounts
 echo "  Creating alice in both accounts..."
-aws $AWS_EP iam create-user --user-name alice --profile hive-team-alpha > /dev/null
-ALPHA_ALICE_ARN=$(aws $AWS_EP iam get-user --user-name alice --profile hive-team-alpha | jq -r '.User.Arn')
+aws $AWS_EP iam create-user --user-name alice --profile spinifex-team-alpha > /dev/null
+ALPHA_ALICE_ARN=$(aws $AWS_EP iam get-user --user-name alice --profile spinifex-team-alpha | jq -r '.User.Arn')
 echo "    Alpha alice: $ALPHA_ALICE_ARN"
 
-aws $AWS_EP iam create-user --user-name alice --profile hive-team-beta > /dev/null
-BETA_ALICE_ARN=$(aws $AWS_EP iam get-user --user-name alice --profile hive-team-beta | jq -r '.User.Arn')
+aws $AWS_EP iam create-user --user-name alice --profile spinifex-team-beta > /dev/null
+BETA_ALICE_ARN=$(aws $AWS_EP iam get-user --user-name alice --profile spinifex-team-beta | jq -r '.User.Arn')
 echo "    Beta alice: $BETA_ALICE_ARN"
 
 # Additional users
-aws $AWS_EP iam create-user --user-name team-member --profile hive-team-alpha > /dev/null
-aws $AWS_EP iam create-user --user-name dev-user --profile hive-team-beta > /dev/null
+aws $AWS_EP iam create-user --user-name team-member --profile spinifex-team-alpha > /dev/null
+aws $AWS_EP iam create-user --user-name dev-user --profile spinifex-team-beta > /dev/null
 
 # List users — scoped
 echo "  Verifying scoped user lists..."
-ALPHA_USERS=$(aws $AWS_EP iam list-users --profile hive-team-alpha | jq -r '.Users[].UserName' | sort | tr '\n' ',')
+ALPHA_USERS=$(aws $AWS_EP iam list-users --profile spinifex-team-alpha | jq -r '.Users[].UserName' | sort | tr '\n' ',')
 echo "    Alpha users: $ALPHA_USERS"
-BETA_USERS=$(aws $AWS_EP iam list-users --profile hive-team-beta | jq -r '.Users[].UserName' | sort | tr '\n' ',')
+BETA_USERS=$(aws $AWS_EP iam list-users --profile spinifex-team-beta | jq -r '.Users[].UserName' | sort | tr '\n' ',')
 echo "    Beta users: $BETA_USERS"
 
 # Cross-account isolation
 echo "  Verifying cross-account isolation..."
 set +e
-CROSS_CHECK=$(aws $AWS_EP iam get-user --user-name dev-user --profile hive-team-alpha 2>&1)
+CROSS_CHECK=$(aws $AWS_EP iam get-user --user-name dev-user --profile spinifex-team-alpha 2>&1)
 set -e
 if echo "$CROSS_CHECK" | grep -q "NoSuchEntity"; then
     echo "    Alpha cannot see Beta's dev-user — isolation OK"
@@ -1278,7 +1278,7 @@ else
 fi
 
 set +e
-CROSS_CHECK2=$(aws $AWS_EP iam get-user --user-name team-member --profile hive-team-beta 2>&1)
+CROSS_CHECK2=$(aws $AWS_EP iam get-user --user-name team-member --profile spinifex-team-beta 2>&1)
 set -e
 if echo "$CROSS_CHECK2" | grep -q "NoSuchEntity"; then
     echo "    Beta cannot see Alpha's team-member — isolation OK"
@@ -1292,23 +1292,23 @@ echo ""
 echo "Step 4: Account-Scoped Access Keys"
 echo "----------------------------------------"
 
-ALPHA_ALICE_KEY=$(aws $AWS_EP iam create-access-key --user-name alice --profile hive-team-alpha)
+ALPHA_ALICE_KEY=$(aws $AWS_EP iam create-access-key --user-name alice --profile spinifex-team-alpha)
 ALPHA_ALICE_KEY_ID=$(echo "$ALPHA_ALICE_KEY" | jq -r '.AccessKey.AccessKeyId')
 ALPHA_ALICE_SECRET=$(echo "$ALPHA_ALICE_KEY" | jq -r '.AccessKey.SecretAccessKey')
 echo "  Alpha alice key: $ALPHA_ALICE_KEY_ID"
 
-aws configure set aws_access_key_id "$ALPHA_ALICE_KEY_ID" --profile hive-alpha-alice
-aws configure set aws_secret_access_key "$ALPHA_ALICE_SECRET" --profile hive-alpha-alice
-aws configure set region us-east-1 --profile hive-alpha-alice
+aws configure set aws_access_key_id "$ALPHA_ALICE_KEY_ID" --profile spinifex-alpha-alice
+aws configure set aws_secret_access_key "$ALPHA_ALICE_SECRET" --profile spinifex-alpha-alice
+aws configure set region us-east-1 --profile spinifex-alpha-alice
 
-BETA_ALICE_KEY=$(aws $AWS_EP iam create-access-key --user-name alice --profile hive-team-beta)
+BETA_ALICE_KEY=$(aws $AWS_EP iam create-access-key --user-name alice --profile spinifex-team-beta)
 BETA_ALICE_KEY_ID=$(echo "$BETA_ALICE_KEY" | jq -r '.AccessKey.AccessKeyId')
 BETA_ALICE_SECRET=$(echo "$BETA_ALICE_KEY" | jq -r '.AccessKey.SecretAccessKey')
 echo "  Beta alice key: $BETA_ALICE_KEY_ID"
 
-aws configure set aws_access_key_id "$BETA_ALICE_KEY_ID" --profile hive-beta-alice
-aws configure set aws_secret_access_key "$BETA_ALICE_SECRET" --profile hive-beta-alice
-aws configure set region us-east-1 --profile hive-beta-alice
+aws configure set aws_access_key_id "$BETA_ALICE_KEY_ID" --profile spinifex-beta-alice
+aws configure set aws_secret_access_key "$BETA_ALICE_SECRET" --profile spinifex-beta-alice
+aws configure set region us-east-1 --profile spinifex-beta-alice
 
 # Step 5: Account-scoped policies & enforcement
 echo ""
@@ -1326,7 +1326,7 @@ aws $AWS_EP iam create-policy \
             "Action": ["ec2:DescribeInstances", "ec2:DescribeVpcs"],
             "Resource": "*"
         }]
-    }' --profile hive-team-alpha > /dev/null
+    }' --profile spinifex-team-alpha > /dev/null
 
 # Beta: broad EC2 Describe* wildcard
 echo "  Creating EC2ReadOnly in Beta (broad Describe*)..."
@@ -1339,36 +1339,36 @@ aws $AWS_EP iam create-policy \
             "Action": "ec2:Describe*",
             "Resource": "*"
         }]
-    }' --profile hive-team-beta > /dev/null
+    }' --profile spinifex-team-beta > /dev/null
 
 # Attach policies
 echo "  Attaching policies..."
 aws $AWS_EP iam attach-user-policy --user-name alice \
-    --policy-arn "arn:aws:iam::${ALPHA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-alpha
+    --policy-arn "arn:aws:iam::${ALPHA_ACCOUNT}:policy/EC2ReadOnly" --profile spinifex-team-alpha
 aws $AWS_EP iam attach-user-policy --user-name alice \
-    --policy-arn "arn:aws:iam::${BETA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-beta
+    --policy-arn "arn:aws:iam::${BETA_ACCOUNT}:policy/EC2ReadOnly" --profile spinifex-team-beta
 
 # Verify scoped enforcement
 echo "  Verifying scoped enforcement..."
 
 # Alpha alice: narrow policy
-aws $AWS_EP ec2 describe-instances --profile hive-alpha-alice > /dev/null
+aws $AWS_EP ec2 describe-instances --profile spinifex-alpha-alice > /dev/null
 echo "    Alpha alice: describe-instances — allowed"
-aws $AWS_EP ec2 describe-vpcs --profile hive-alpha-alice > /dev/null
+aws $AWS_EP ec2 describe-vpcs --profile spinifex-alpha-alice > /dev/null
 echo "    Alpha alice: describe-vpcs — allowed"
-expect_error "AccessDenied" aws $AWS_EP ec2 describe-key-pairs --profile hive-alpha-alice
+expect_error "AccessDenied" aws $AWS_EP ec2 describe-key-pairs --profile spinifex-alpha-alice
 echo "    Alpha alice: describe-key-pairs — denied (narrow policy)"
 
 # Beta alice: broad policy
-aws $AWS_EP ec2 describe-instances --profile hive-beta-alice > /dev/null
+aws $AWS_EP ec2 describe-instances --profile spinifex-beta-alice > /dev/null
 echo "    Beta alice: describe-instances — allowed"
-aws $AWS_EP ec2 describe-key-pairs --profile hive-beta-alice > /dev/null
+aws $AWS_EP ec2 describe-key-pairs --profile spinifex-beta-alice > /dev/null
 echo "    Beta alice: describe-key-pairs — allowed (Describe* wildcard)"
 
 # Both denied non-Describe
-expect_error "AccessDenied" aws $AWS_EP ec2 create-key-pair --key-name x --profile hive-alpha-alice
+expect_error "AccessDenied" aws $AWS_EP ec2 create-key-pair --key-name x --profile spinifex-alpha-alice
 echo "    Alpha alice: create-key-pair — denied"
-expect_error "AccessDenied" aws $AWS_EP ec2 create-key-pair --key-name x --profile hive-beta-alice
+expect_error "AccessDenied" aws $AWS_EP ec2 create-key-pair --key-name x --profile spinifex-beta-alice
 echo "    Beta alice: create-key-pair — denied"
 
 echo "  Scoped enforcement verified"
@@ -1381,14 +1381,14 @@ echo "----------------------------------------"
 # Delete Alpha's alice
 echo "  Deleting Alpha's alice..."
 aws $AWS_EP iam detach-user-policy --user-name alice \
-    --policy-arn "arn:aws:iam::${ALPHA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-alpha
+    --policy-arn "arn:aws:iam::${ALPHA_ACCOUNT}:policy/EC2ReadOnly" --profile spinifex-team-alpha
 aws $AWS_EP iam delete-access-key --user-name alice \
-    --access-key-id "$ALPHA_ALICE_KEY_ID" --profile hive-team-alpha
-aws $AWS_EP iam delete-user --user-name alice --profile hive-team-alpha
+    --access-key-id "$ALPHA_ALICE_KEY_ID" --profile spinifex-team-alpha
+aws $AWS_EP iam delete-user --user-name alice --profile spinifex-team-alpha
 
 # Verify Alpha alice gone
 set +e
-ALPHA_CHECK=$(aws $AWS_EP iam get-user --user-name alice --profile hive-team-alpha 2>&1)
+ALPHA_CHECK=$(aws $AWS_EP iam get-user --user-name alice --profile spinifex-team-alpha 2>&1)
 set -e
 if echo "$ALPHA_CHECK" | grep -q "NoSuchEntity"; then
     echo "  Alpha alice deleted"
@@ -1398,10 +1398,10 @@ else
 fi
 
 # Verify Beta alice unaffected
-aws $AWS_EP iam get-user --user-name alice --profile hive-team-beta > /dev/null
+aws $AWS_EP iam get-user --user-name alice --profile spinifex-team-beta > /dev/null
 echo "  Beta alice still exists (isolation OK)"
 
-aws $AWS_EP ec2 describe-instances --profile hive-beta-alice > /dev/null
+aws $AWS_EP ec2 describe-instances --profile spinifex-beta-alice > /dev/null
 echo "  Beta alice auth still works (isolation OK)"
 
 # ==========================================================================
@@ -1420,8 +1420,8 @@ echo "Step 7a: Instance Scoping"
 echo "----------------------------------------"
 
 # Create per-account key pairs (key pairs are account-scoped, root's multinode-test-key is invisible)
-$AWS_EC2 create-key-pair --key-name alpha-instance-key --profile hive-team-alpha > /dev/null
-$AWS_EC2 create-key-pair --key-name beta-instance-key --profile hive-team-beta > /dev/null
+$AWS_EC2 create-key-pair --key-name alpha-instance-key --profile spinifex-team-alpha > /dev/null
+$AWS_EC2 create-key-pair --key-name beta-instance-key --profile spinifex-team-beta > /dev/null
 echo "  Created per-account key pairs for instance launches"
 
 echo "  Alpha launching instance..."
@@ -1429,7 +1429,7 @@ ALPHA_INST_RUN=$($AWS_EC2 run-instances \
     --image-id "$AMI_ID" \
     --instance-type "$INSTANCE_TYPE" \
     --key-name alpha-instance-key \
-    --profile hive-team-alpha)
+    --profile spinifex-team-alpha)
 ALPHA_INST=$(echo "$ALPHA_INST_RUN" | jq -r '.Instances[0].InstanceId')
 echo "  Alpha instance: $ALPHA_INST"
 
@@ -1438,7 +1438,7 @@ BETA_INST_RUN=$($AWS_EC2 run-instances \
     --image-id "$AMI_ID" \
     --instance-type "$INSTANCE_TYPE" \
     --key-name beta-instance-key \
-    --profile hive-team-beta)
+    --profile spinifex-team-beta)
 BETA_INST=$(echo "$BETA_INST_RUN" | jq -r '.Instances[0].InstanceId')
 echo "  Beta instance: $BETA_INST"
 
@@ -1446,9 +1446,9 @@ echo "  Beta instance: $BETA_INST"
 echo "  Waiting for instances to reach running state..."
 COUNT=0
 while [ $COUNT -lt 30 ]; do
-    A_STATE=$($AWS_EC2 describe-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha \
+    A_STATE=$($AWS_EC2 describe-instances --instance-ids "$ALPHA_INST" --profile spinifex-team-alpha \
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "pending")
-    B_STATE=$($AWS_EC2 describe-instances --instance-ids "$BETA_INST" --profile hive-team-beta \
+    B_STATE=$($AWS_EC2 describe-instances --instance-ids "$BETA_INST" --profile spinifex-team-beta \
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "pending")
     echo "  Alpha=$A_STATE, Beta=$B_STATE"
     if [ "$A_STATE" == "running" ] && [ "$B_STATE" == "running" ]; then break; fi
@@ -1462,7 +1462,7 @@ fi
 echo "  Both instances running"
 
 # Describe isolation
-ALPHA_DESC=$($AWS_EC2 describe-instances --profile hive-team-alpha \
+ALPHA_DESC=$($AWS_EC2 describe-instances --profile spinifex-team-alpha \
     --query 'Reservations[].Instances[].InstanceId' --output text)
 if echo "$ALPHA_DESC" | grep -q "$BETA_INST"; then
     echo "  ERROR: Alpha can see Beta's instance"
@@ -1470,7 +1470,7 @@ if echo "$ALPHA_DESC" | grep -q "$BETA_INST"; then
 fi
 echo "  Alpha sees only own instances"
 
-BETA_DESC=$($AWS_EC2 describe-instances --profile hive-team-beta \
+BETA_DESC=$($AWS_EC2 describe-instances --profile spinifex-team-beta \
     --query 'Reservations[].Instances[].InstanceId' --output text)
 if echo "$BETA_DESC" | grep -q "$ALPHA_INST"; then
     echo "  ERROR: Beta can see Alpha's instance"
@@ -1479,7 +1479,7 @@ fi
 echo "  Beta sees only own instances"
 
 # OwnerId verification
-ALPHA_OWNER=$($AWS_EC2 describe-instances --profile hive-team-alpha \
+ALPHA_OWNER=$($AWS_EC2 describe-instances --profile spinifex-team-alpha \
     --query 'Reservations[0].OwnerId' --output text)
 if [ "$ALPHA_OWNER" != "$ALPHA_ACCOUNT" ]; then
     echo "  ERROR: Alpha OwnerId mismatch: expected $ALPHA_ACCOUNT, got $ALPHA_OWNER"
@@ -1489,15 +1489,15 @@ echo "  Alpha OwnerId correct: $ALPHA_OWNER"
 
 # Cross-account operations
 expect_error "InvalidInstanceID.NotFound" \
-    $AWS_EC2 stop-instances --instance-ids "$BETA_INST" --profile hive-team-alpha
+    $AWS_EC2 stop-instances --instance-ids "$BETA_INST" --profile spinifex-team-alpha
 echo "  Alpha cannot stop Beta's instance"
 
 expect_error "InvalidInstanceID.NotFound" \
-    $AWS_EC2 terminate-instances --instance-ids "$ALPHA_INST" --profile hive-team-beta
+    $AWS_EC2 terminate-instances --instance-ids "$ALPHA_INST" --profile spinifex-team-beta
 echo "  Beta cannot terminate Alpha's instance"
 
 expect_error "InvalidInstanceID.NotFound" \
-    $AWS_EC2 get-console-output --instance-id "$ALPHA_INST" --profile hive-team-beta
+    $AWS_EC2 get-console-output --instance-id "$ALPHA_INST" --profile spinifex-team-beta
 echo "  Beta cannot get console output of Alpha's instance"
 
 echo "  Instance scoping passed"
@@ -1507,16 +1507,16 @@ echo ""
 echo "Step 7b: Volume Scoping"
 echo "----------------------------------------"
 
-ALPHA_VOL=$($AWS_EC2 create-volume --availability-zone "$HIVE_AZ" --size 10 \
-    --volume-type gp3 --profile hive-team-alpha | jq -r '.VolumeId')
+ALPHA_VOL=$($AWS_EC2 create-volume --availability-zone "$SPINIFEX_AZ" --size 10 \
+    --volume-type gp3 --profile spinifex-team-alpha | jq -r '.VolumeId')
 echo "  Alpha volume: $ALPHA_VOL"
 
-BETA_VOL=$($AWS_EC2 create-volume --availability-zone "$HIVE_AZ" --size 10 \
-    --volume-type gp3 --profile hive-team-beta | jq -r '.VolumeId')
+BETA_VOL=$($AWS_EC2 create-volume --availability-zone "$SPINIFEX_AZ" --size 10 \
+    --volume-type gp3 --profile spinifex-team-beta | jq -r '.VolumeId')
 echo "  Beta volume: $BETA_VOL"
 
 # Describe isolation
-ALPHA_VOLS=$($AWS_EC2 describe-volumes --profile hive-team-alpha \
+ALPHA_VOLS=$($AWS_EC2 describe-volumes --profile spinifex-team-alpha \
     --query 'Volumes[].VolumeId' --output text)
 if echo "$ALPHA_VOLS" | grep -q "$BETA_VOL"; then
     echo "  ERROR: Alpha can see Beta's volume"
@@ -1526,33 +1526,33 @@ echo "  Alpha sees only own volumes"
 
 # Cross-account operations
 expect_error "InvalidVolume.NotFound" \
-    $AWS_EC2 describe-volumes --volume-ids "$BETA_VOL" --profile hive-team-alpha
+    $AWS_EC2 describe-volumes --volume-ids "$BETA_VOL" --profile spinifex-team-alpha
 echo "  Alpha cannot describe Beta's volume by ID"
 
 expect_error "InvalidVolume.NotFound" \
-    $AWS_EC2 delete-volume --volume-id "$ALPHA_VOL" --profile hive-team-beta
+    $AWS_EC2 delete-volume --volume-id "$ALPHA_VOL" --profile spinifex-team-beta
 echo "  Beta cannot delete Alpha's volume"
 
 expect_error "InvalidVolume.NotFound" \
     $AWS_EC2 attach-volume --volume-id "$ALPHA_VOL" \
-    --instance-id "$BETA_INST" --device /dev/sdf --profile hive-team-beta
+    --instance-id "$BETA_INST" --device /dev/sdf --profile spinifex-team-beta
 echo "  Beta cannot attach Alpha's volume"
 
 # Attach Alpha's volume, then test cross-account detach
 $AWS_EC2 attach-volume --volume-id "$ALPHA_VOL" \
-    --instance-id "$ALPHA_INST" --device /dev/sdf --profile hive-team-alpha > /dev/null
+    --instance-id "$ALPHA_INST" --device /dev/sdf --profile spinifex-team-alpha > /dev/null
 sleep 2
 
 expect_error "InvalidVolume.NotFound" \
-    $AWS_EC2 detach-volume --volume-id "$ALPHA_VOL" --profile hive-team-beta
+    $AWS_EC2 detach-volume --volume-id "$ALPHA_VOL" --profile spinifex-team-beta
 echo "  Beta cannot detach Alpha's volume"
 
 expect_error "InvalidVolume.NotFound" \
-    $AWS_EC2 modify-volume --volume-id "$ALPHA_VOL" --size 20 --profile hive-team-beta
+    $AWS_EC2 modify-volume --volume-id "$ALPHA_VOL" --size 20 --profile spinifex-team-beta
 echo "  Beta cannot modify Alpha's volume"
 
 # Detach for later cleanup
-$AWS_EC2 detach-volume --volume-id "$ALPHA_VOL" --profile hive-team-alpha > /dev/null
+$AWS_EC2 detach-volume --volume-id "$ALPHA_VOL" --profile spinifex-team-alpha > /dev/null
 sleep 2
 
 echo "  Volume scoping passed"
@@ -1562,16 +1562,16 @@ echo ""
 echo "Step 7c: Key Pair Scoping"
 echo "----------------------------------------"
 
-$AWS_EC2 create-key-pair --key-name alpha-key --profile hive-team-alpha > /dev/null
+$AWS_EC2 create-key-pair --key-name alpha-key --profile spinifex-team-alpha > /dev/null
 ALPHA_KEYPAIR_ID=$($AWS_EC2 describe-key-pairs --key-names alpha-key \
-    --profile hive-team-alpha --query 'KeyPairs[0].KeyPairId' --output text)
+    --profile spinifex-team-alpha --query 'KeyPairs[0].KeyPairId' --output text)
 echo "  Alpha key: alpha-key ($ALPHA_KEYPAIR_ID)"
 
-$AWS_EC2 create-key-pair --key-name beta-key --profile hive-team-beta > /dev/null
+$AWS_EC2 create-key-pair --key-name beta-key --profile spinifex-team-beta > /dev/null
 echo "  Beta key: beta-key"
 
 # Describe isolation
-ALPHA_KEYS=$($AWS_EC2 describe-key-pairs --profile hive-team-alpha \
+ALPHA_KEYS=$($AWS_EC2 describe-key-pairs --profile spinifex-team-alpha \
     --query 'KeyPairs[].KeyName' --output text)
 if echo "$ALPHA_KEYS" | grep -q "beta-key"; then
     echo "  ERROR: Alpha can see Beta's key"
@@ -1580,12 +1580,12 @@ fi
 echo "  Alpha sees only own keys"
 
 # Same name, different accounts
-$AWS_EC2 create-key-pair --key-name shared-name --profile hive-team-alpha > /dev/null
-$AWS_EC2 create-key-pair --key-name shared-name --profile hive-team-beta > /dev/null
+$AWS_EC2 create-key-pair --key-name shared-name --profile spinifex-team-alpha > /dev/null
+$AWS_EC2 create-key-pair --key-name shared-name --profile spinifex-team-beta > /dev/null
 ALPHA_SHARED_ID=$($AWS_EC2 describe-key-pairs --key-names shared-name \
-    --profile hive-team-alpha --query 'KeyPairs[0].KeyPairId' --output text)
+    --profile spinifex-team-alpha --query 'KeyPairs[0].KeyPairId' --output text)
 BETA_SHARED_ID=$($AWS_EC2 describe-key-pairs --key-names shared-name \
-    --profile hive-team-beta --query 'KeyPairs[0].KeyPairId' --output text)
+    --profile spinifex-team-beta --query 'KeyPairs[0].KeyPairId' --output text)
 if [ "$ALPHA_SHARED_ID" == "$BETA_SHARED_ID" ]; then
     echo "  ERROR: Same KeyPairId for shared-name in both accounts"
     exit 1
@@ -1593,9 +1593,9 @@ fi
 echo "  Namespace isolation: alpha=$ALPHA_SHARED_ID, beta=$BETA_SHARED_ID"
 
 # Cross-account delete (idempotent, but shouldn't affect other account)
-$AWS_EC2 delete-key-pair --key-name alpha-key --profile hive-team-beta
+$AWS_EC2 delete-key-pair --key-name alpha-key --profile spinifex-team-beta
 ALPHA_KEY_CHECK=$($AWS_EC2 describe-key-pairs --key-names alpha-key \
-    --profile hive-team-alpha --query 'KeyPairs[0].KeyPairId' --output text)
+    --profile spinifex-team-alpha --query 'KeyPairs[0].KeyPairId' --output text)
 if [ "$ALPHA_KEY_CHECK" != "$ALPHA_KEYPAIR_ID" ]; then
     echo "  ERROR: Beta's delete affected Alpha's key"
     exit 1
@@ -1605,8 +1605,8 @@ echo "  Cross-account delete had no effect on Alpha's key"
 # Import key pair — account scoped
 ssh-keygen -t ed25519 -f /tmp/test-import-key -N "" -q
 $AWS_EC2 import-key-pair --key-name imported-key \
-    --public-key-material fileb:///tmp/test-import-key.pub --profile hive-team-alpha > /dev/null
-BETA_IMPORT_CHECK=$($AWS_EC2 describe-key-pairs --profile hive-team-beta \
+    --public-key-material fileb:///tmp/test-import-key.pub --profile spinifex-team-alpha > /dev/null
+BETA_IMPORT_CHECK=$($AWS_EC2 describe-key-pairs --profile spinifex-team-beta \
     --query 'KeyPairs[].KeyName' --output text)
 if echo "$BETA_IMPORT_CHECK" | grep -q "imported-key"; then
     echo "  ERROR: Beta can see Alpha's imported key"
@@ -1623,15 +1623,15 @@ echo "Step 7d: Snapshot Scoping"
 echo "----------------------------------------"
 
 ALPHA_SNAP=$($AWS_EC2 create-snapshot --volume-id "$ALPHA_VOL" \
-    --description "Alpha snapshot" --profile hive-team-alpha | jq -r '.SnapshotId')
+    --description "Alpha snapshot" --profile spinifex-team-alpha | jq -r '.SnapshotId')
 echo "  Alpha snapshot: $ALPHA_SNAP"
 
 BETA_SNAP=$($AWS_EC2 create-snapshot --volume-id "$BETA_VOL" \
-    --description "Beta snapshot" --profile hive-team-beta | jq -r '.SnapshotId')
+    --description "Beta snapshot" --profile spinifex-team-beta | jq -r '.SnapshotId')
 echo "  Beta snapshot: $BETA_SNAP"
 
 # Describe isolation
-ALPHA_SNAPS=$($AWS_EC2 describe-snapshots --owner-ids self --profile hive-team-alpha \
+ALPHA_SNAPS=$($AWS_EC2 describe-snapshots --owner-ids self --profile spinifex-team-alpha \
     --query 'Snapshots[].SnapshotId' --output text)
 if echo "$ALPHA_SNAPS" | grep -q "$BETA_SNAP"; then
     echo "  ERROR: Alpha can see Beta's snapshot"
@@ -1640,7 +1640,7 @@ fi
 echo "  Alpha sees only own snapshots"
 
 # OwnerId verification
-ALPHA_SNAP_OWNER=$($AWS_EC2 describe-snapshots --owner-ids self --profile hive-team-alpha \
+ALPHA_SNAP_OWNER=$($AWS_EC2 describe-snapshots --owner-ids self --profile spinifex-team-alpha \
     --query 'Snapshots[0].OwnerId' --output text)
 if [ "$ALPHA_SNAP_OWNER" != "$ALPHA_ACCOUNT" ]; then
     echo "  ERROR: Snapshot OwnerId mismatch: expected $ALPHA_ACCOUNT, got $ALPHA_SNAP_OWNER"
@@ -1650,13 +1650,13 @@ echo "  Alpha snapshot OwnerId correct"
 
 # Cross-account delete
 expect_error "UnauthorizedOperation" \
-    $AWS_EC2 delete-snapshot --snapshot-id "$ALPHA_SNAP" --profile hive-team-beta
+    $AWS_EC2 delete-snapshot --snapshot-id "$ALPHA_SNAP" --profile spinifex-team-beta
 echo "  Beta cannot delete Alpha's snapshot"
 
 # Cross-account snapshot from other's volume
 expect_error "InvalidVolume.NotFound" \
     $AWS_EC2 create-snapshot --volume-id "$ALPHA_VOL" \
-    --description "stolen" --profile hive-team-beta
+    --description "stolen" --profile spinifex-team-beta
 echo "  Beta cannot snapshot Alpha's volume"
 
 echo "  Snapshot scoping passed"
@@ -1667,15 +1667,15 @@ echo "Step 7e: VPC/Subnet Scoping"
 echo "----------------------------------------"
 
 ALPHA_VPC=$($AWS_EC2 create-vpc --cidr-block 10.0.0.0/16 \
-    --profile hive-team-alpha --query 'Vpc.VpcId' --output text)
+    --profile spinifex-team-alpha --query 'Vpc.VpcId' --output text)
 echo "  Alpha VPC: $ALPHA_VPC"
 
 BETA_VPC=$($AWS_EC2 create-vpc --cidr-block 10.0.0.0/16 \
-    --profile hive-team-beta --query 'Vpc.VpcId' --output text)
+    --profile spinifex-team-beta --query 'Vpc.VpcId' --output text)
 echo "  Beta VPC: $BETA_VPC (same CIDR — no conflict)"
 
 # Describe isolation
-ALPHA_VPCS=$($AWS_EC2 describe-vpcs --profile hive-team-alpha \
+ALPHA_VPCS=$($AWS_EC2 describe-vpcs --profile spinifex-team-alpha \
     --query 'Vpcs[].VpcId' --output text)
 if echo "$ALPHA_VPCS" | grep -q "$BETA_VPC"; then
     echo "  ERROR: Alpha can see Beta's VPC"
@@ -1684,24 +1684,24 @@ fi
 echo "  VPC describe isolation OK"
 
 expect_error "InvalidVpcID.NotFound" \
-    $AWS_EC2 describe-vpcs --vpc-ids "$BETA_VPC" --profile hive-team-alpha
+    $AWS_EC2 describe-vpcs --vpc-ids "$BETA_VPC" --profile spinifex-team-alpha
 echo "  Alpha cannot describe Beta's VPC by ID"
 
 expect_error "InvalidVpcID.NotFound" \
-    $AWS_EC2 delete-vpc --vpc-id "$ALPHA_VPC" --profile hive-team-beta
+    $AWS_EC2 delete-vpc --vpc-id "$ALPHA_VPC" --profile spinifex-team-beta
 echo "  Beta cannot delete Alpha's VPC"
 
 # Create subnets
 ALPHA_SUBNET=$($AWS_EC2 create-subnet --vpc-id "$ALPHA_VPC" --cidr-block 10.0.1.0/24 \
-    --profile hive-team-alpha --query 'Subnet.SubnetId' --output text)
+    --profile spinifex-team-alpha --query 'Subnet.SubnetId' --output text)
 echo "  Alpha subnet: $ALPHA_SUBNET"
 
 BETA_SUBNET=$($AWS_EC2 create-subnet --vpc-id "$BETA_VPC" --cidr-block 10.0.1.0/24 \
-    --profile hive-team-beta --query 'Subnet.SubnetId' --output text)
+    --profile spinifex-team-beta --query 'Subnet.SubnetId' --output text)
 echo "  Beta subnet: $BETA_SUBNET"
 
 # Subnet describe isolation
-ALPHA_SUBNETS=$($AWS_EC2 describe-subnets --profile hive-team-alpha \
+ALPHA_SUBNETS=$($AWS_EC2 describe-subnets --profile spinifex-team-alpha \
     --query 'Subnets[].SubnetId' --output text)
 if echo "$ALPHA_SUBNETS" | grep -q "$BETA_SUBNET"; then
     echo "  ERROR: Alpha can see Beta's subnet"
@@ -1711,11 +1711,11 @@ echo "  Subnet describe isolation OK"
 
 expect_error "InvalidVpcID.NotFound" \
     $AWS_EC2 create-subnet --vpc-id "$ALPHA_VPC" --cidr-block 10.0.2.0/24 \
-    --profile hive-team-beta
+    --profile spinifex-team-beta
 echo "  Beta cannot create subnet in Alpha's VPC"
 
 expect_error "InvalidSubnetID.NotFound" \
-    $AWS_EC2 delete-subnet --subnet-id "$ALPHA_SUBNET" --profile hive-team-beta
+    $AWS_EC2 delete-subnet --subnet-id "$ALPHA_SUBNET" --profile spinifex-team-beta
 echo "  Beta cannot delete Alpha's subnet"
 
 echo "  VPC/Subnet scoping passed"
@@ -1725,16 +1725,16 @@ echo ""
 echo "Step 7f: IGW + EIGW Scoping"
 echo "----------------------------------------"
 
-ALPHA_IGW=$($AWS_EC2 create-internet-gateway --profile hive-team-alpha \
+ALPHA_IGW=$($AWS_EC2 create-internet-gateway --profile spinifex-team-alpha \
     --query 'InternetGateway.InternetGatewayId' --output text)
 echo "  Alpha IGW: $ALPHA_IGW"
 
-BETA_IGW=$($AWS_EC2 create-internet-gateway --profile hive-team-beta \
+BETA_IGW=$($AWS_EC2 create-internet-gateway --profile spinifex-team-beta \
     --query 'InternetGateway.InternetGatewayId' --output text)
 echo "  Beta IGW: $BETA_IGW"
 
 # IGW describe isolation
-ALPHA_IGWS=$($AWS_EC2 describe-internet-gateways --profile hive-team-alpha \
+ALPHA_IGWS=$($AWS_EC2 describe-internet-gateways --profile spinifex-team-alpha \
     --query 'InternetGateways[].InternetGatewayId' --output text)
 if echo "$ALPHA_IGWS" | grep -q "$BETA_IGW"; then
     echo "  ERROR: Alpha can see Beta's IGW"
@@ -1744,40 +1744,40 @@ echo "  IGW describe isolation OK"
 
 expect_error "InvalidInternetGatewayID.NotFound" \
     $AWS_EC2 describe-internet-gateways --internet-gateway-ids "$BETA_IGW" \
-    --profile hive-team-alpha
+    --profile spinifex-team-alpha
 echo "  Alpha cannot describe Beta's IGW by ID"
 
 expect_error "InvalidInternetGatewayID.NotFound" \
     $AWS_EC2 delete-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
-    --profile hive-team-beta
+    --profile spinifex-team-beta
 echo "  Beta cannot delete Alpha's IGW"
 
 expect_error "InvalidInternetGatewayID.NotFound" \
     $AWS_EC2 attach-internet-gateway --internet-gateway-id "$BETA_IGW" \
-    --vpc-id "$ALPHA_VPC" --profile hive-team-alpha
+    --vpc-id "$ALPHA_VPC" --profile spinifex-team-alpha
 echo "  Alpha cannot attach Beta's IGW to own VPC"
 
 # Attach Alpha's IGW, test cross-account detach
 $AWS_EC2 attach-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
-    --vpc-id "$ALPHA_VPC" --profile hive-team-alpha > /dev/null
+    --vpc-id "$ALPHA_VPC" --profile spinifex-team-alpha > /dev/null
 expect_error "InvalidInternetGatewayID.NotFound" \
     $AWS_EC2 detach-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
-    --vpc-id "$ALPHA_VPC" --profile hive-team-beta
+    --vpc-id "$ALPHA_VPC" --profile spinifex-team-beta
 echo "  Beta cannot detach Alpha's IGW"
 
 # EIGW
 ALPHA_EIGW=$($AWS_EC2 create-egress-only-internet-gateway --vpc-id "$ALPHA_VPC" \
-    --profile hive-team-alpha \
+    --profile spinifex-team-alpha \
     --query 'EgressOnlyInternetGateway.EgressOnlyInternetGatewayId' --output text)
 echo "  Alpha EIGW: $ALPHA_EIGW"
 
 BETA_EIGW=$($AWS_EC2 create-egress-only-internet-gateway --vpc-id "$BETA_VPC" \
-    --profile hive-team-beta \
+    --profile spinifex-team-beta \
     --query 'EgressOnlyInternetGateway.EgressOnlyInternetGatewayId' --output text)
 echo "  Beta EIGW: $BETA_EIGW"
 
 # EIGW describe isolation
-ALPHA_EIGWS=$($AWS_EC2 describe-egress-only-internet-gateways --profile hive-team-alpha \
+ALPHA_EIGWS=$($AWS_EC2 describe-egress-only-internet-gateways --profile spinifex-team-alpha \
     --query 'EgressOnlyInternetGateways[].EgressOnlyInternetGatewayId' --output text)
 if echo "$ALPHA_EIGWS" | grep -q "$BETA_EIGW"; then
     echo "  ERROR: Alpha can see Beta's EIGW"
@@ -1788,9 +1788,9 @@ echo "  EIGW describe isolation OK"
 # Cross-account EIGW delete (verify Alpha's still exists after Beta's attempt)
 set +e
 $AWS_EC2 delete-egress-only-internet-gateway \
-    --egress-only-internet-gateway-id "$ALPHA_EIGW" --profile hive-team-beta 2>/dev/null
+    --egress-only-internet-gateway-id "$ALPHA_EIGW" --profile spinifex-team-beta 2>/dev/null
 set -e
-ALPHA_EIGW_CHECK=$($AWS_EC2 describe-egress-only-internet-gateways --profile hive-team-alpha \
+ALPHA_EIGW_CHECK=$($AWS_EC2 describe-egress-only-internet-gateways --profile spinifex-team-alpha \
     --query 'EgressOnlyInternetGateways[].EgressOnlyInternetGatewayId' --output text)
 if ! echo "$ALPHA_EIGW_CHECK" | grep -q "$ALPHA_EIGW"; then
     echo "  ERROR: Alpha's EIGW was deleted by Beta"
@@ -1805,8 +1805,8 @@ echo ""
 echo "Step 7g: Account Settings"
 echo "----------------------------------------"
 
-$AWS_EC2 enable-ebs-encryption-by-default --profile hive-team-alpha > /dev/null
-BETA_ENC=$($AWS_EC2 get-ebs-encryption-by-default --profile hive-team-beta \
+$AWS_EC2 enable-ebs-encryption-by-default --profile spinifex-team-alpha > /dev/null
+BETA_ENC=$($AWS_EC2 get-ebs-encryption-by-default --profile spinifex-team-beta \
     --query 'EbsEncryptionByDefault' --output text)
 if [ "$BETA_ENC" != "False" ]; then
     echo "  ERROR: Alpha's encryption setting leaked to Beta (got $BETA_ENC)"
@@ -1814,18 +1814,18 @@ if [ "$BETA_ENC" != "False" ]; then
 fi
 echo "  Alpha enable did not affect Beta"
 
-$AWS_EC2 enable-ebs-encryption-by-default --profile hive-team-beta > /dev/null
-$AWS_EC2 disable-ebs-encryption-by-default --profile hive-team-alpha > /dev/null
-ALPHA_ENC=$($AWS_EC2 get-ebs-encryption-by-default --profile hive-team-alpha \
+$AWS_EC2 enable-ebs-encryption-by-default --profile spinifex-team-beta > /dev/null
+$AWS_EC2 disable-ebs-encryption-by-default --profile spinifex-team-alpha > /dev/null
+ALPHA_ENC=$($AWS_EC2 get-ebs-encryption-by-default --profile spinifex-team-alpha \
     --query 'EbsEncryptionByDefault' --output text)
-BETA_ENC=$($AWS_EC2 get-ebs-encryption-by-default --profile hive-team-beta \
+BETA_ENC=$($AWS_EC2 get-ebs-encryption-by-default --profile spinifex-team-beta \
     --query 'EbsEncryptionByDefault' --output text)
 if [ "$ALPHA_ENC" != "False" ] || [ "$BETA_ENC" != "True" ]; then
     echo "  ERROR: Independent settings failed: alpha=$ALPHA_ENC beta=$BETA_ENC"
     exit 1
 fi
 echo "  Independent toggle verified: alpha=$ALPHA_ENC, beta=$BETA_ENC"
-$AWS_EC2 disable-ebs-encryption-by-default --profile hive-team-beta > /dev/null
+$AWS_EC2 disable-ebs-encryption-by-default --profile spinifex-team-beta > /dev/null
 
 echo "  Account settings scoping passed"
 
@@ -1834,9 +1834,9 @@ echo ""
 echo "Step 7h: Global Resources"
 echo "----------------------------------------"
 
-ALPHA_REGIONS=$($AWS_EC2 describe-regions --profile hive-team-alpha \
+ALPHA_REGIONS=$($AWS_EC2 describe-regions --profile spinifex-team-alpha \
     --query 'Regions[].RegionName' --output text)
-BETA_REGIONS=$($AWS_EC2 describe-regions --profile hive-team-beta \
+BETA_REGIONS=$($AWS_EC2 describe-regions --profile spinifex-team-beta \
     --query 'Regions[].RegionName' --output text)
 if [ "$ALPHA_REGIONS" != "$BETA_REGIONS" ]; then
     echo "  ERROR: Regions differ between accounts"
@@ -1844,9 +1844,9 @@ if [ "$ALPHA_REGIONS" != "$BETA_REGIONS" ]; then
 fi
 echo "  Regions identical"
 
-ALPHA_AZS=$($AWS_EC2 describe-availability-zones --profile hive-team-alpha \
+ALPHA_AZS=$($AWS_EC2 describe-availability-zones --profile spinifex-team-alpha \
     --query 'AvailabilityZones[].ZoneName' --output text)
-BETA_AZS=$($AWS_EC2 describe-availability-zones --profile hive-team-beta \
+BETA_AZS=$($AWS_EC2 describe-availability-zones --profile spinifex-team-beta \
     --query 'AvailabilityZones[].ZoneName' --output text)
 if [ "$ALPHA_AZS" != "$BETA_AZS" ]; then
     echo "  ERROR: AZs differ between accounts"
@@ -1854,9 +1854,9 @@ if [ "$ALPHA_AZS" != "$BETA_AZS" ]; then
 fi
 echo "  Availability zones identical"
 
-ALPHA_TYPES=$($AWS_EC2 describe-instance-types --profile hive-team-alpha \
+ALPHA_TYPES=$($AWS_EC2 describe-instance-types --profile spinifex-team-alpha \
     --query 'InstanceTypes[].InstanceType' --output text | tr '\t' '\n' | sort)
-BETA_TYPES=$($AWS_EC2 describe-instance-types --profile hive-team-beta \
+BETA_TYPES=$($AWS_EC2 describe-instance-types --profile spinifex-team-beta \
     --query 'InstanceTypes[].InstanceType' --output text | tr '\t' '\n' | sort)
 if [ "$ALPHA_TYPES" != "$BETA_TYPES" ]; then
     echo "  ERROR: Instance types differ between accounts"
@@ -1873,14 +1873,14 @@ echo "----------------------------------------"
 
 # Empty account (Gamma)
 echo "  Creating empty Gamma account..."
-GAMMA_OUTPUT=$(./bin/hive admin account create --name "Team Gamma" --config "$HOME/node1/config/hive.toml" 2>&1)
+GAMMA_OUTPUT=$(./bin/spx admin account create --name "Team Gamma" --config "$HOME/node1/config/spinifex.toml" 2>&1)
 GAMMA_KEY_ID=$(echo "$GAMMA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
 GAMMA_SECRET=$(echo "$GAMMA_OUTPUT" | grep "Secret Access Key:" | awk '{print $NF}')
-aws configure set aws_access_key_id "$GAMMA_KEY_ID" --profile hive-team-gamma
-aws configure set aws_secret_access_key "$GAMMA_SECRET" --profile hive-team-gamma
-aws configure set region us-east-1 --profile hive-team-gamma
+aws configure set aws_access_key_id "$GAMMA_KEY_ID" --profile spinifex-team-gamma
+aws configure set aws_secret_access_key "$GAMMA_SECRET" --profile spinifex-team-gamma
+aws configure set region us-east-1 --profile spinifex-team-gamma
 
-GAMMA_INSTANCES=$($AWS_EC2 describe-instances --profile hive-team-gamma \
+GAMMA_INSTANCES=$($AWS_EC2 describe-instances --profile spinifex-team-gamma \
     --query 'Reservations' --output text)
 if [ -n "$GAMMA_INSTANCES" ] && [ "$GAMMA_INSTANCES" != "None" ]; then
     echo "  ERROR: Gamma has instances"
@@ -1891,7 +1891,7 @@ echo "  Gamma: no instances"
 # Skip volume check: root-account volumes (empty TenantID) are visible to all accounts by design
 echo "  Gamma: volumes skipped (root legacy volumes visible to all)"
 
-GAMMA_KEYS=$($AWS_EC2 describe-key-pairs --profile hive-team-gamma \
+GAMMA_KEYS=$($AWS_EC2 describe-key-pairs --profile spinifex-team-gamma \
     --query 'KeyPairs' --output text)
 if [ -n "$GAMMA_KEYS" ] && [ "$GAMMA_KEYS" != "None" ]; then
     echo "  ERROR: Gamma has key pairs"
@@ -1911,28 +1911,28 @@ echo "  Root cannot see tenant instances"
 
 # Non-existent resource IDs — same error as cross-account
 expect_error "InvalidVolume.NotFound" \
-    $AWS_EC2 delete-volume --volume-id vol-00000000000000000 --profile hive-team-alpha
+    $AWS_EC2 delete-volume --volume-id vol-00000000000000000 --profile spinifex-team-alpha
 echo "  Non-existent volume: same error as cross-account"
 
 expect_error "InvalidSnapshot.NotFound" \
-    $AWS_EC2 delete-snapshot --snapshot-id snap-00000000000000000 --profile hive-team-alpha
+    $AWS_EC2 delete-snapshot --snapshot-id snap-00000000000000000 --profile spinifex-team-alpha
 echo "  Non-existent snapshot: same error as cross-account"
 
 # Race condition: parallel key creation from both accounts
 echo "  Testing parallel key creation (race condition)..."
 for i in $(seq 1 5); do
-    $AWS_EC2 create-key-pair --key-name "race-alpha-$i" --profile hive-team-alpha > /dev/null &
-    $AWS_EC2 create-key-pair --key-name "race-beta-$i" --profile hive-team-beta > /dev/null &
+    $AWS_EC2 create-key-pair --key-name "race-alpha-$i" --profile spinifex-team-alpha > /dev/null &
+    $AWS_EC2 create-key-pair --key-name "race-beta-$i" --profile spinifex-team-beta > /dev/null &
 done
 wait
 
-ALPHA_RACE_COUNT=$($AWS_EC2 describe-key-pairs --profile hive-team-alpha \
+ALPHA_RACE_COUNT=$($AWS_EC2 describe-key-pairs --profile spinifex-team-alpha \
     --query 'KeyPairs[].KeyName' --output text | tr '\t' '\n' | grep -c "race-alpha" || true)
 if [ "$ALPHA_RACE_COUNT" -ne 5 ]; then
     echo "  ERROR: Expected 5 race-alpha keys, got $ALPHA_RACE_COUNT"
     exit 1
 fi
-ALPHA_RACE_LEAK=$($AWS_EC2 describe-key-pairs --profile hive-team-alpha \
+ALPHA_RACE_LEAK=$($AWS_EC2 describe-key-pairs --profile spinifex-team-alpha \
     --query 'KeyPairs[].KeyName' --output text | tr '\t' '\n' | grep -c "race-beta" || true)
 if [ "$ALPHA_RACE_LEAK" -ne 0 ]; then
     echo "  ERROR: Alpha sees Beta's race keys (cross-contamination)"
@@ -1949,14 +1949,14 @@ echo "========================================"
 
 # Terminate instances
 echo "  Terminating account-scoped instances..."
-$AWS_EC2 terminate-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha > /dev/null
-$AWS_EC2 terminate-instances --instance-ids "$BETA_INST" --profile hive-team-beta > /dev/null
+$AWS_EC2 terminate-instances --instance-ids "$ALPHA_INST" --profile spinifex-team-alpha > /dev/null
+$AWS_EC2 terminate-instances --instance-ids "$BETA_INST" --profile spinifex-team-beta > /dev/null
 
 COUNT=0
 while [ $COUNT -lt 30 ]; do
-    A_STATE=$($AWS_EC2 describe-instances --instance-ids "$ALPHA_INST" --profile hive-team-alpha \
+    A_STATE=$($AWS_EC2 describe-instances --instance-ids "$ALPHA_INST" --profile spinifex-team-alpha \
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "terminated")
-    B_STATE=$($AWS_EC2 describe-instances --instance-ids "$BETA_INST" --profile hive-team-beta \
+    B_STATE=$($AWS_EC2 describe-instances --instance-ids "$BETA_INST" --profile spinifex-team-beta \
         --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "terminated")
     if [ "$A_STATE" == "terminated" ] && [ "$B_STATE" == "terminated" ]; then
         break
@@ -1968,53 +1968,53 @@ echo "  Instances terminated"
 
 # Delete snapshots
 echo "  Deleting snapshots..."
-$AWS_EC2 delete-snapshot --snapshot-id "$ALPHA_SNAP" --profile hive-team-alpha 2>/dev/null || true
-$AWS_EC2 delete-snapshot --snapshot-id "$BETA_SNAP" --profile hive-team-beta 2>/dev/null || true
+$AWS_EC2 delete-snapshot --snapshot-id "$ALPHA_SNAP" --profile spinifex-team-alpha 2>/dev/null || true
+$AWS_EC2 delete-snapshot --snapshot-id "$BETA_SNAP" --profile spinifex-team-beta 2>/dev/null || true
 
 # Delete volumes
 sleep 3
 echo "  Deleting volumes..."
-$AWS_EC2 delete-volume --volume-id "$ALPHA_VOL" --profile hive-team-alpha 2>/dev/null || true
-$AWS_EC2 delete-volume --volume-id "$BETA_VOL" --profile hive-team-beta 2>/dev/null || true
+$AWS_EC2 delete-volume --volume-id "$ALPHA_VOL" --profile spinifex-team-alpha 2>/dev/null || true
+$AWS_EC2 delete-volume --volume-id "$BETA_VOL" --profile spinifex-team-beta 2>/dev/null || true
 
 # Delete key pairs
 echo "  Deleting key pairs..."
 for key in alpha-key alpha-instance-key shared-name imported-key; do
-    $AWS_EC2 delete-key-pair --key-name "$key" --profile hive-team-alpha 2>/dev/null || true
+    $AWS_EC2 delete-key-pair --key-name "$key" --profile spinifex-team-alpha 2>/dev/null || true
 done
 for key in beta-key beta-instance-key shared-name; do
-    $AWS_EC2 delete-key-pair --key-name "$key" --profile hive-team-beta 2>/dev/null || true
+    $AWS_EC2 delete-key-pair --key-name "$key" --profile spinifex-team-beta 2>/dev/null || true
 done
 for i in $(seq 1 5); do
-    $AWS_EC2 delete-key-pair --key-name "race-alpha-$i" --profile hive-team-alpha 2>/dev/null || true
-    $AWS_EC2 delete-key-pair --key-name "race-beta-$i" --profile hive-team-beta 2>/dev/null || true
+    $AWS_EC2 delete-key-pair --key-name "race-alpha-$i" --profile spinifex-team-alpha 2>/dev/null || true
+    $AWS_EC2 delete-key-pair --key-name "race-beta-$i" --profile spinifex-team-beta 2>/dev/null || true
 done
 
 # Delete EIGWs
 echo "  Deleting EIGWs..."
 $AWS_EC2 delete-egress-only-internet-gateway \
-    --egress-only-internet-gateway-id "$ALPHA_EIGW" --profile hive-team-alpha 2>/dev/null || true
+    --egress-only-internet-gateway-id "$ALPHA_EIGW" --profile spinifex-team-alpha 2>/dev/null || true
 $AWS_EC2 delete-egress-only-internet-gateway \
-    --egress-only-internet-gateway-id "$BETA_EIGW" --profile hive-team-beta 2>/dev/null || true
+    --egress-only-internet-gateway-id "$BETA_EIGW" --profile spinifex-team-beta 2>/dev/null || true
 
 # Detach + delete IGWs
 echo "  Deleting IGWs..."
 $AWS_EC2 detach-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
-    --vpc-id "$ALPHA_VPC" --profile hive-team-alpha 2>/dev/null || true
+    --vpc-id "$ALPHA_VPC" --profile spinifex-team-alpha 2>/dev/null || true
 $AWS_EC2 delete-internet-gateway --internet-gateway-id "$ALPHA_IGW" \
-    --profile hive-team-alpha 2>/dev/null || true
+    --profile spinifex-team-alpha 2>/dev/null || true
 $AWS_EC2 delete-internet-gateway --internet-gateway-id "$BETA_IGW" \
-    --profile hive-team-beta 2>/dev/null || true
+    --profile spinifex-team-beta 2>/dev/null || true
 
 # Delete subnets
 echo "  Deleting subnets..."
-$AWS_EC2 delete-subnet --subnet-id "$ALPHA_SUBNET" --profile hive-team-alpha 2>/dev/null || true
-$AWS_EC2 delete-subnet --subnet-id "$BETA_SUBNET" --profile hive-team-beta 2>/dev/null || true
+$AWS_EC2 delete-subnet --subnet-id "$ALPHA_SUBNET" --profile spinifex-team-alpha 2>/dev/null || true
+$AWS_EC2 delete-subnet --subnet-id "$BETA_SUBNET" --profile spinifex-team-beta 2>/dev/null || true
 
 # Delete VPCs
 echo "  Deleting VPCs..."
-$AWS_EC2 delete-vpc --vpc-id "$ALPHA_VPC" --profile hive-team-alpha 2>/dev/null || true
-$AWS_EC2 delete-vpc --vpc-id "$BETA_VPC" --profile hive-team-beta 2>/dev/null || true
+$AWS_EC2 delete-vpc --vpc-id "$ALPHA_VPC" --profile spinifex-team-alpha 2>/dev/null || true
+$AWS_EC2 delete-vpc --vpc-id "$BETA_VPC" --profile spinifex-team-beta 2>/dev/null || true
 
 echo "  EC2 resources cleaned up"
 
@@ -2023,21 +2023,21 @@ echo "  Cleaning up IAM resources..."
 
 # Beta cleanup
 aws $AWS_EP iam detach-user-policy --user-name alice \
-    --policy-arn "arn:aws:iam::${BETA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-beta
+    --policy-arn "arn:aws:iam::${BETA_ACCOUNT}:policy/EC2ReadOnly" --profile spinifex-team-beta
 aws $AWS_EP iam delete-access-key --user-name alice \
-    --access-key-id "$BETA_ALICE_KEY_ID" --profile hive-team-beta
-aws $AWS_EP iam delete-user --user-name alice --profile hive-team-beta
-aws $AWS_EP iam delete-user --user-name dev-user --profile hive-team-beta
+    --access-key-id "$BETA_ALICE_KEY_ID" --profile spinifex-team-beta
+aws $AWS_EP iam delete-user --user-name alice --profile spinifex-team-beta
+aws $AWS_EP iam delete-user --user-name dev-user --profile spinifex-team-beta
 aws $AWS_EP iam delete-policy \
-    --policy-arn "arn:aws:iam::${BETA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-beta
+    --policy-arn "arn:aws:iam::${BETA_ACCOUNT}:policy/EC2ReadOnly" --profile spinifex-team-beta
 
 # Alpha cleanup (alice already deleted in Step 6)
-aws $AWS_EP iam delete-user --user-name team-member --profile hive-team-alpha
+aws $AWS_EP iam delete-user --user-name team-member --profile spinifex-team-alpha
 aws $AWS_EP iam delete-policy \
-    --policy-arn "arn:aws:iam::${ALPHA_ACCOUNT}:policy/EC2ReadOnly" --profile hive-team-alpha
+    --policy-arn "arn:aws:iam::${ALPHA_ACCOUNT}:policy/EC2ReadOnly" --profile spinifex-team-alpha
 
 # Clean up AWS CLI profiles
-for p in hive-team-alpha hive-team-beta hive-alpha-alice hive-beta-alice hive-team-gamma; do
+for p in spinifex-team-alpha spinifex-team-beta spinifex-alpha-alice spinifex-beta-alice spinifex-team-gamma; do
     aws configure set aws_access_key_id "" --profile $p 2>/dev/null || true
     aws configure set aws_secret_access_key "" --profile $p 2>/dev/null || true
 done
@@ -2282,7 +2282,7 @@ echo "  VPC networking tests passed"
 echo ""
 echo "Phase 6: Cluster Shutdown + Restart"
 echo "========================================"
-echo "Testing hive admin cluster shutdown command..."
+echo "Testing spx admin cluster shutdown command..."
 
 # Test 6a: Dry-run shutdown
 echo ""
@@ -2290,7 +2290,7 @@ echo "Test 6a: Dry-Run Shutdown"
 echo "----------------------------------------"
 echo "Running cluster shutdown in dry-run mode..."
 
-DRY_RUN_OUTPUT=$(./bin/hive admin cluster shutdown --dry-run --config "$HOME/node1/config/hive.toml" 2>&1)
+DRY_RUN_OUTPUT=$(./bin/spx admin cluster shutdown --dry-run --config "$HOME/node1/config/spinifex.toml" 2>&1)
 echo "$DRY_RUN_OUTPUT"
 
 # Validate dry-run output contains expected phases
@@ -2309,7 +2309,7 @@ echo "Test 6b: Coordinated Cluster Shutdown"
 echo "----------------------------------------"
 echo "Running cluster shutdown..."
 
-./bin/hive admin cluster shutdown --force --timeout 30s --config "$HOME/node1/config/hive.toml" 2>&1 || {
+./bin/spx admin cluster shutdown --force --timeout 30s --config "$HOME/node1/config/spinifex.toml" 2>&1 || {
     echo "  WARNING: Cluster shutdown command returned non-zero exit code"
 }
 CLUSTER_SERVICES_STARTED="false"

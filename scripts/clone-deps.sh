@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Hive Development Dependencies Setup Script
+# Spinifex Development Dependencies Setup Script
 # This script clones Viperblock and Predastore repositories for cross-repo development
 
 # TODO: Improve, remove CLAUDE readme reference, simplify next-steps
@@ -10,13 +10,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MULGA_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"
 
-echo "🏗️  Setting up Hive development environment..."
+echo "🏗️  Setting up Spinifex development environment..."
 echo "Project root: $PROJECT_ROOT"
 echo "Mulga root: $MULGA_ROOT"
 
 # Check if we're in the correct directory structure
 if [[ ! -f "$PROJECT_ROOT/go.mod" ]]; then
-    echo "❌ Error: Cannot find go.mod. Please run this script from the hive repository."
+    echo "❌ Error: Cannot find go.mod. Please run this script from the spinifex repository."
     exit 1
 fi
 
@@ -70,7 +70,7 @@ fi
 # Verify directory structure
 echo ""
 echo "📁 Directory structure:"
-ls -la "$MULGA_ROOT" | grep -E "(hive|viperblock|predastore)" || true
+ls -la "$MULGA_ROOT" | grep -E "(spinifex|viperblock|predastore)" || true
 
 echo ""
 echo "🎉 Development environment setup complete!"

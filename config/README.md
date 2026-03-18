@@ -1,71 +1,71 @@
-# Hive Systemd Service
+# Spinifex Systemd Service
 
-This directory contains the systemd service configuration for running Hive services on Ubuntu and Debian systems.
+This directory contains the systemd service configuration for running Spinifex services on Ubuntu and Debian systems.
 
 ## Files
 
-- `hive.service` - The systemd service file that manages all Hive services
-- `install-hive-service.sh` - Installation script to set up the service
+- `spinifex.service` - The systemd service file that manages all Spinifex services
+- `install-spinifex-service.sh` - Installation script to set up the service
 - `README.md` - This documentation file
 
 ## Installation
 
 ### Prerequisites
 
-1. Ensure Hive is installed in `/opt/hive/`
-2. Ensure the `hive` binary is available at `/opt/hive/bin/hive`
+1. Ensure Spinifex is installed in `/opt/spinifex/`
+2. Ensure the `spx` binary is available at `/opt/spinifex/bin/spx`
 3. Run the installation script as root
 
 ### Setup Configuration
 
 ```
-/opt/hive/bin/hive admin init
+/opt/spinifex/bin/spx admin init
 ```
 
-This will init the Hive environment and create the default configuration files in the home directory, e.g `~/hive/`.
+This will init the Spinifex environment and create the default configuration files in the home directory, e.g `~/spinifex/`.
 
 ```
-/home/username/hive:
+/home/username/spinifex:
 amis  config  images  logs  nats  predastore  state  viperblock  volumes
 
-/home/username/hive/amis:
+/home/username/spinifex/amis:
 
-/home/username/hive/config:
-awsgw  hive.toml  nats  predastore  server.key  server.pem
+/home/username/spinifex/config:
+awsgw  spinifex.toml  nats  predastore  server.key  server.pem
 
-/home/username/hive/config/awsgw:
+/home/username/spinifex/config/awsgw:
 awsgw.toml
 
-/home/username/hive/config/nats:
+/home/username/spinifex/config/nats:
 nats.conf
 
-/home/username/hive/config/predastore:
+/home/username/spinifex/config/predastore:
 predastore.toml
 
-/home/username/hive/images:
+/home/username/spinifex/images:
 
-/home/username/hive/logs:
-awsgw.log  awsgw.pid  hive.log  hive.pid  nats.log  nats.pid  predastore.log  predastore.pid  viperblock.log  viperblock.pid
+/home/username/spinifex/logs:
+awsgw.log  awsgw.pid  spinifex.log  spinifex.pid  nats.log  nats.pid  predastore.log  predastore.pid  viperblock.log  viperblock.pid
 
-/home/username/hive/nats:
+/home/username/spinifex/nats:
 
-/home/username/hive/predastore:
+/home/username/spinifex/predastore:
 data
 
-/home/username/hive/predastore/data:
+/home/username/spinifex/predastore/data:
 predastore
 
-/home/ben/hive/state:
+/home/ben/spinifex/state:
 
-/home/ben/hive/viperblock:
+/home/ben/spinifex/viperblock:
 
-/home/ben/hive/volumes:
+/home/ben/spinifex/volumes:
 ```
 
 ### Quick Installation
 
 ```bash
-sudo ./config/install-hive-service.sh
+sudo ./config/install-spinifex-service.sh
 ```
 
 ### Manual Installation
@@ -74,7 +74,7 @@ If you prefer to install manually:
 
 1. Copy the service file:
    ```bash
-   sudo cp config/hive.service /etc/systemd/system/
+   sudo cp config/spinifex.service /etc/systemd/system/
    ```
 
 2. Reload systemd:
@@ -84,44 +84,44 @@ If you prefer to install manually:
 
 3. Enable the service:
    ```bash
-   sudo systemctl enable hive.service
+   sudo systemctl enable spinifex.service
    ```
 
 ## Service Management
 
 ### Start the service
 ```bash
-sudo systemctl start hive
+sudo systemctl start spinifex
 ```
 
 ### Stop the service
 ```bash
-sudo systemctl stop hive
+sudo systemctl stop spinifex
 ```
 
 ### Check service status
 ```bash
-sudo systemctl status hive
+sudo systemctl status spinifex
 ```
 
 ### Restart the service
 ```bash
-sudo systemctl restart hive
+sudo systemctl restart spinifex
 ```
 
 ### View service logs
 ```bash
-sudo journalctl -u hive -f
+sudo journalctl -u spinifex -f
 ```
 
 ### Disable auto-start
 ```bash
-sudo systemctl disable hive
+sudo systemctl disable spinifex
 ```
 
 ## Service Details
 
-The `hive.service` file:
+The `spinifex.service` file:
 
 - Starts services in the correct order: NATS → Predastore → Viperblock
 - Includes proper delays between service starts to ensure dependencies are ready
@@ -143,41 +143,41 @@ The service starts the following components in order:
 
 ### Check if the service is running
 ```bash
-sudo systemctl is-active hive
+sudo systemctl is-active spinifex
 ```
 
 ### View recent logs
 ```bash
-sudo journalctl -u hive --since "1 hour ago"
+sudo journalctl -u spinifex --since "1 hour ago"
 ```
 
 ### Check service configuration
 ```bash
-sudo systemctl cat hive
+sudo systemctl cat spinifex
 ```
 
 ### Verify binary exists
 ```bash
-ls -la /opt/hive/bin/hive
+ls -la /opt/spinifex/bin/spx
 ```
 
 ### Test service commands manually
 ```bash
-/opt/hive/bin/hive service nats start
-/opt/hive/bin/hive service predastore start
-/opt/hive/bin/hive service viperblock start
+/opt/spinifex/bin/spx service nats start
+/opt/spinifex/bin/spx service predastore start
+/opt/spinifex/bin/spx service viperblock start
 ```
 
 ## Customization
 
 If you need to modify the service configuration:
 
-1. Edit the service file: `sudo nano /etc/systemd/system/hive.service`
+1. Edit the service file: `sudo nano /etc/systemd/system/spinifex.service`
 2. Reload systemd: `sudo systemctl daemon-reload`
-3. Restart the service: `sudo systemctl restart hive`
+3. Restart the service: `sudo systemctl restart spinifex`
 
 ## Security Notes
 
 - The service runs as root, which is necessary for system-level services
 - Security hardening is enabled with `ProtectSystem=strict` and `NoNewPrivileges=true`
-- Only specific paths are writable: `/opt/hive`, `/var/log`, `/var/run` 
+- Only specific paths are writable: `/opt/spinifex`, `/var/log`, `/var/run` 

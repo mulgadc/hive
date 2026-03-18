@@ -1,6 +1,6 @@
 ---
 title: "Source Install"
-description: "Build Hive from source for development, custom builds, or contributing. Includes dependency setup, compilation, and OVN configuration."
+description: "Build Spinifex from source for development, custom builds, or contributing. Includes dependency setup, compilation, and OVN configuration."
 category: "Getting Started"
 tags:
   - install
@@ -8,8 +8,8 @@ tags:
   - development
 badge: source
 resources:
-  - title: "Hive Repository"
-    url: "https://github.com/mulgadc/hive"
+  - title: "Spinifex Repository"
+    url: "https://github.com/mulgadc/spinifex"
   - title: "Predastore (S3)"
     url: "https://github.com/mulgadc/predastore"
   - title: "Viperblock (EBS)"
@@ -22,7 +22,7 @@ resources:
 
 # Source Install
 
-> Build Hive from source for development, custom builds, or contributing.
+> Build Spinifex from source for development, custom builds, or contributing.
 
 ## Table of Contents
 
@@ -34,7 +34,7 @@ resources:
 
 ## Overview
 
-This guide covers building Hive from source code. Use this if you want to contribute to Hive, build custom versions, or inspect the codebase. For production deployments, the [binary installer](/docs/installing-hive) is recommended.
+This guide covers building Spinifex from source code. Use this if you want to contribute to Spinifex, build custom versions, or inspect the codebase. For production deployments, the [binary installer](/docs/installing-hive) is recommended.
 
 **Supported Operating Systems:**
 - Ubuntu 22.04 / 24.04 / 25.10
@@ -56,7 +56,7 @@ This guide covers building Hive from source code. Use this if you want to contri
 Bootstrap all dependencies in one step:
 
 ```bash
-sudo make -C hive quickinstall
+sudo make -C spinifex quickinstall
 ```
 
 Ensure Go is in your PATH:
@@ -94,13 +94,13 @@ aws --version
 ```bash
 mkdir -p ~/Development/mulga/
 cd ~/Development/mulga/
-git clone https://github.com/mulgadc/hive.git
-cd hive
+git clone https://github.com/mulgadc/spinifex.git
+cd spinifex
 ./scripts/clone-deps.sh    # Clone viperblock + predastore
 ./scripts/dev-setup.sh     # Setup complete dev environment
 ```
 
-Confirm `./bin/hive` exists and is executable.
+Confirm `./bin/spx` exists and is executable.
 
 ## Step 3. Setup OVN
 
@@ -117,13 +117,13 @@ This creates the `br-int` integration bridge, starts `ovn-controller`, configure
 Create a region and availability zone:
 
 ```bash
-./bin/hive admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
+./bin/spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
 ```
 
 ## Step 5. Trust the CA certificate
 
 ```bash
-sudo cp ~/hive/config/ca.pem /usr/local/share/ca-certificates/hive-ca.crt
+sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
 sudo update-ca-certificates
 ```
 
@@ -131,7 +131,7 @@ sudo update-ca-certificates
 
 ```bash
 ./scripts/start-dev.sh
-export AWS_PROFILE=hive
+export AWS_PROFILE=spinifex
 ```
 
 ## Troubleshooting
@@ -150,7 +150,7 @@ Add this to your `~/.bashrc` or `~/.zshrc` for persistence. Verify with:
 go version
 ```
 
-## ./bin/hive missing after build
+## ./bin/spx missing after build
 
 The build did not complete successfully. Re-run the setup:
 
@@ -177,10 +177,10 @@ sudo ovn-sbctl show
 
 ## CA certificate not trusted
 
-AWS CLI will reject HTTPS connections to Hive services. Re-add the certificate:
+AWS CLI will reject HTTPS connections to Spinifex services. Re-add the certificate:
 
 ```bash
-sudo cp ~/hive/config/ca.pem /usr/local/share/ca-certificates/hive-ca.crt
+sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
 sudo update-ca-certificates
 ```
 

@@ -2,7 +2,7 @@
 set -e
 
 # VPC E2E Test Suite
-# Tests VPC networking operations via the AWS CLI against a running Hive cluster.
+# Tests VPC networking operations via the AWS CLI against a running Spinifex cluster.
 # Can run with or without OVN — skips network-level tests when OVN is unavailable.
 #
 # Usage:
@@ -12,7 +12,7 @@ set -e
 cd "$(dirname "$0")/../.."
 
 ENDPOINT="${ENDPOINT:-https://127.0.0.1:9999}"
-export AWS_PROFILE=hive
+export AWS_PROFILE=spinifex
 AWS_EC2="aws --endpoint-url ${ENDPOINT} ec2"
 
 PASSED=0

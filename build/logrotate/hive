@@ -1,9 +1,0 @@
-/var/log/hive/*.log {
-    daily
-    rotate 14
-    compress
-    delaycompress
-    missingok
-    notifempty
-    copytruncate
-}

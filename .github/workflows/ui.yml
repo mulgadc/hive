@@ -6,7 +6,7 @@ on:
       - main
       - dev
     paths:
-      - hive/services/hiveui/frontend/**
+      - spinifex/services/spinifexui/frontend/**
       - .github/workflows/ui.yml
   workflow_dispatch:
 
@@ -16,25 +16,25 @@ jobs:
     runs-on: ubuntu-24.04
     defaults:
       run:
-        working-directory: hive/services/hiveui/frontend
+        working-directory: spinifex/services/spinifexui/frontend
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v6
         with:
-          sparse-checkout: hive/services/hiveui/frontend
+          sparse-checkout: spinifex/services/spinifexui/frontend
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          package_json_file: hive/services/hiveui/frontend/package.json
+          package_json_file: spinifex/services/spinifexui/frontend/package.json
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           cache: "pnpm"
-          cache-dependency-path: hive/services/hiveui/frontend/pnpm-lock.yaml
-          node-version-file: hive/services/hiveui/frontend/.nvmrc
+          cache-dependency-path: spinifex/services/spinifexui/frontend/pnpm-lock.yaml
+          node-version-file: spinifex/services/spinifexui/frontend/.nvmrc
 
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile

@@ -7,8 +7,8 @@ tags:
   - iam
   - admin
 resources:
-  - title: "Hive Repository"
-    url: "https://github.com/mulgadc/hive"
+  - title: "Spinifex Repository"
+    url: "https://github.com/mulgadc/spinifex"
 ---
 
 # Creating Accounts
@@ -25,15 +25,15 @@ resources:
 
 ## Overview
 
-Hive supports multi-tenant account isolation. Each account gets its own IAM credentials, AWS CLI profile, and isolated resource namespace.
+Spinifex supports multi-tenant account isolation. Each account gets its own IAM credentials, AWS CLI profile, and isolated resource namespace.
 
 ## Instructions
 
 ## Create Account
 
 ```bash
-./bin/hive admin account create --name myteam
-export AWS_PROFILE=hive-myteam
+./bin/spx admin account create --name myteam
+export AWS_PROFILE=spinifex-myteam
 ```
 
 ## Verify
@@ -57,5 +57,5 @@ Ensure the `AWS_PROFILE` environment variable matches the profile name:
 
 ```bash
 echo $AWS_PROFILE
-export AWS_PROFILE=hive-myteam
+export AWS_PROFILE=spinifex-myteam
 ```

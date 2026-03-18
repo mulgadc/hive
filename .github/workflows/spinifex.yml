@@ -1,0 +1,133 @@
+name: Spinifex Build and Test
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+    paths:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - Makefile
+      - .github/workflows/hive.yml
+  workflow_dispatch:
+
+jobs:
+  build_and_test:
+    name: Spinifex Build and Test
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout Spinifex
+        uses: actions/checkout@v6
+        with:
+          path: hive
+          fetch-depth: 2
+
+      - name: Checkout Viperblock
+        uses: actions/checkout@v6
+        with:
+          repository: mulgadc/viperblock
+          path: viperblock
+
+      - name: Checkout Predastore
+        uses: actions/checkout@v6
+        with:
+          repository: mulgadc/predastore
+          path: predastore
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          cache-dependency-path: "spinifex/go.sum"
+          go-version-file: "spinifex/go.mod"
+
+      - name: Setup Go Workspace
+        run: go work init ./hive ./viperblock ./predastore
+
+      - name: Build Spinifex
+        run: make -C hive build
+
+      - name: Run Tests with Coverage
+        run: make -C hive test-cover
+
+      - name: Check Diff Coverage
+        run: cd hive && scripts/diff-coverage.sh coverage.out --base HEAD~1
+
+  race_detection:
+    name: Spinifex Race Detection
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout Spinifex
+        uses: actions/checkout@v6
+        with:
+          path: hive
+
+      - name: Checkout Viperblock
+        uses: actions/checkout@v6
+        with:
+          repository: mulgadc/viperblock
+          path: viperblock
+
+      - name: Checkout Predastore
+        uses: actions/checkout@v6
+        with:
+          repository: mulgadc/predastore
+          path: predastore
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          cache-dependency-path: "spinifex/go.sum"
+          go-version-file: "spinifex/go.mod"
+
+      - name: Setup Go Workspace
+        run: go work init ./hive ./viperblock ./predastore
+
+      - name: Run Tests with Race Detector
+        run: make -C hive test-race
+
+  lint_and_security:
+    name: Spinifex Lint and Security
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout Spinifex
+        uses: actions/checkout@v6
+        with:
+          path: hive
+
+      - name: Checkout Viperblock
+        uses: actions/checkout@v6
+        with:
+          repository: mulgadc/viperblock
+          path: viperblock
+
+      - name: Checkout Predastore
+        uses: actions/checkout@v6
+        with:
+          repository: mulgadc/predastore
+          path: predastore
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          cache-dependency-path: "spinifex/go.sum"
+          go-version-file: "spinifex/go.mod"
+
+      - name: Setup Go Workspace
+        run: go work init ./hive ./viperblock ./predastore
+
+      - name: Check Format
+        run: make -C hive check-format
+
+      - name: Check Modernize
+        run: make -C hive check-modernize
+
+      - name: Go Vet
+        run: make -C hive vet
+
+      - name: Security Checks
+        run: make -C hive security-check
