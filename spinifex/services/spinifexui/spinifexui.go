@@ -24,12 +24,12 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/utils"
 )
 
-var serviceName = "hive-ui"
+var serviceName = "spinifex-ui"
 
 //go:embed all:frontend/dist
 var distFS embed.FS
 
-// Config holds the configuration for the hive-ui service
+// Config holds the configuration for the spinifex-ui service
 type Config struct {
 	Port    int    `json:"port"`
 	Host    string `json:"host"`
@@ -37,18 +37,18 @@ type Config struct {
 	TLSKey  string `json:"tls_key"`
 }
 
-// Service represents the hive-ui service
+// Service represents the spinifex-ui service
 type Service struct {
 	Config *Config
 	server *http.Server
 	mu     sync.Mutex
 }
 
-// New creates a new hive-ui service
+// New creates a new spinifex-ui service
 func New(config any) (*Service, error) {
 	cfg, ok := config.(*Config)
 	if !ok {
-		return nil, fmt.Errorf("invalid config type for hive-ui service")
+		return nil, fmt.Errorf("invalid config type for spinifex-ui service")
 	}
 
 	// Set defaults
@@ -64,10 +64,10 @@ func New(config any) (*Service, error) {
 		homeDir, err := os.UserHomeDir()
 		if err == nil {
 			if cfg.TLSCert == "" {
-				cfg.TLSCert = filepath.Join(homeDir, "hive", "config", "server.pem")
+				cfg.TLSCert = filepath.Join(homeDir, "spinifex", "config", "server.pem")
 			}
 			if cfg.TLSKey == "" {
-				cfg.TLSKey = filepath.Join(homeDir, "hive", "config", "server.key")
+				cfg.TLSKey = filepath.Join(homeDir, "spinifex", "config", "server.key")
 			}
 		}
 	}
@@ -77,7 +77,7 @@ func New(config any) (*Service, error) {
 	}, nil
 }
 
-// Start starts the hive-ui service
+// Start starts the spinifex-ui service
 func (svc *Service) Start() (int, error) {
 	if err := utils.WritePidFile(serviceName, os.Getpid()); err != nil {
 		slog.Error("Failed to write pid file", "err", err)
@@ -91,12 +91,12 @@ func (svc *Service) Start() (int, error) {
 	return os.Getpid(), nil
 }
 
-// Stop stops the hive-ui service
+// Stop stops the spinifex-ui service
 func (svc *Service) Stop() error {
 	return utils.StopProcess(serviceName)
 }
 
-// Status returns the status of the hive-ui service
+// Status returns the status of the spinifex-ui service
 func (svc *Service) Status() (string, error) {
 	pid, err := utils.ReadPidFile(serviceName)
 	if err != nil {
@@ -105,7 +105,7 @@ func (svc *Service) Status() (string, error) {
 	return fmt.Sprintf("running (pid: %d)", pid), nil
 }
 
-// Shutdown gracefully shuts down the hive-ui service
+// Shutdown gracefully shuts down the spinifex-ui service
 func (svc *Service) Shutdown() error {
 	svc.mu.Lock()
 	server := svc.server
@@ -119,7 +119,7 @@ func (svc *Service) Shutdown() error {
 	return svc.Stop()
 }
 
-// Reload reloads the hive-ui service configuration
+// Reload reloads the spinifex-ui service configuration
 func (svc *Service) Reload() error {
 	return nil
 }
@@ -233,7 +233,7 @@ func (svc *Service) launchService() error {
 		tlsCfg:   tlsConfig,
 	}
 
-	slog.Info("Starting hive-ui service with HTTPS (auto-redirect HTTP)", "addr", addr)
+	slog.Info("Starting spinifex-ui service with HTTPS (auto-redirect HTTP)", "addr", addr)
 	return server.Serve(splitLn)
 }
 

@@ -32,20 +32,17 @@ var (
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "hive",
-	Short: "Hive - Open source AWS-compatible platform for secure edge deployments",
+	Use:   "spx",
+	Short: "Spinifex - Open source AWS-compatible platform for secure edge deployments",
 	Long: `
-__/\\\________/\\\__/\\\\\\\\\\\__/\\\________/\\\__/\\\\\\\\\\\\\\\_
- _\/\\\_______\/\\\_\/////\\\///__\/\\\_______\/\\\_\/\\\///////////__
-  _\/\\\_______\/\\\_____\/\\\_____\//\\\______/\\\__\/\\\_____________
-   _\/\\\\\\\\\\\\\\\_____\/\\\______\//\\\____/\\\___\/\\\\\\\\\\\_____
-    _\/\\\/////////\\\_____\/\\\_______\//\\\__/\\\____\/\\\///////______
-     _\/\\\_______\/\\\_____\/\\\________\//\\\/\\\_____\/\\\_____________
-      _\/\\\_______\/\\\_____\/\\\_________\//\\\\\______\/\\\_____________
-       _\/\\\_______\/\\\__/\\\\\\\\\\\______\//\\\_______\/\\\\\\\\\\\\\\\_
-        _\///________\///__\///////////________\///________\///////////////__
+   _____ _____ _____ _   _ _____ ______ ________   __
+  / ____|  __ \_   _| \ | |_   _|  ____|  ____\ \ / /
+ | (___ | |__) || | |  \| | | | | |__  | |__   \ V /
+  \___ \|  ___/ | | | . ‘ | | | |  __| |  __|   > <
+  ____) | |    _| |_| |\  |_| |_| |    | |____ / . \
+ |_____/|_|   |_____|_| \_|_____|_|    |______/_/ \_\
 
-Hive – Open source AWS-compatible platform for secure edge deployments.
+Spinifex – Open source AWS-compatible platform for secure edge deployments.
 Run EC2, VPC, S3, and EBS-like services on bare metal with full control.
 Built for environments where running in the cloud isn’t an option.
 Whether you’re deploying to edge sites, private data-centers, or operating

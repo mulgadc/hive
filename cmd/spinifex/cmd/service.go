@@ -35,7 +35,7 @@ import (
 
 var serviceCmd = &cobra.Command{
 	Use:   "service",
-	Short: "Manage Hive services",
+	Short: "Manage Spinifex services",
 }
 
 var predastoreCmd = &cobra.Command{
@@ -53,9 +53,9 @@ var natsCmd = &cobra.Command{
 	Short: "Manage the nats service",
 }
 
-var hiveCmd = &cobra.Command{
-	Use:   "hive",
-	Short: "Manage the hive service",
+var spinifexCmd = &cobra.Command{
+	Use:   "spinifex",
+	Short: "Manage the spinifex service",
 }
 
 var awsgwCmd = &cobra.Command{
@@ -68,10 +68,10 @@ var vpcdCmd = &cobra.Command{
 	Short: "Manage the vpcd (VPC daemon) service",
 }
 
-var hiveUICmd = &cobra.Command{
-	Use:     "hive-ui",
-	Aliases: []string{"ui", "hiveui"},
-	Short:   "Manage the hive-ui service",
+var spinifexUICmd = &cobra.Command{
+	Use:     "spinifex-ui",
+	Aliases: []string{"ui", "spinifexui"},
+	Short:   "Manage the spinifex-ui service",
 }
 
 var predastoreStartCmd = &cobra.Command{
@@ -410,12 +410,12 @@ var natsStatusCmd = &cobra.Command{
 	},
 }
 
-// Repeat for hive
-var hiveStartCmd = &cobra.Command{
+// Repeat for spinifex
+var spinifexStartCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Start the hive service",
+	Short: "Start the spinifex service",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Starting hive service...")
+		fmt.Println("Starting spinifex service...")
 
 		cfgFile := viper.GetString("config")
 
@@ -451,53 +451,53 @@ var hiveStartCmd = &cobra.Command{
 		// Apply changes back to cluster config
 		clusterConfig.Nodes[clusterConfig.Node] = nodeConfig
 
-		svc, err := service.New("hive", clusterConfig)
+		svc, err := service.New("spinifex", clusterConfig)
 
 		if err != nil {
-			fmt.Println("Error starting hive service:", err)
+			fmt.Println("Error starting spinifex service:", err)
 			return
 		}
 
 		// Set config path for cluster manager
-		if hiveSvc, ok := svc.(interface{ SetConfigPath(string) }); ok {
-			hiveSvc.SetConfigPath(cfgFile)
+		if spxSvc, ok := svc.(interface{ SetConfigPath(string) }); ok {
+			spxSvc.SetConfigPath(cfgFile)
 		}
 
 		if _, err = svc.Start(); err != nil {
-			fmt.Println("Error starting hive service:", err)
+			fmt.Println("Error starting spinifex service:", err)
 			os.Exit(1)
 		}
-		fmt.Println("HIVE service started")
+		fmt.Println("Spinifex service started")
 	},
 }
 
-var hiveStopCmd = &cobra.Command{
+var spinifexStopCmd = &cobra.Command{
 	Use:   "stop",
-	Short: "Stop the hive service",
+	Short: "Stop the spinifex service",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Stopping hive service...")
+		fmt.Println("Stopping spinifex service...")
 
-		service, err := service.New("hive", &config.ClusterConfig{})
+		service, err := service.New("spinifex", &config.ClusterConfig{})
 
 		if err != nil {
-			fmt.Println("Error stopping hive service:", err)
+			fmt.Println("Error stopping spinifex service:", err)
 			return
 		}
 
 		if err = service.Stop(); err != nil {
-			fmt.Println("Error stopping hive service:", err)
+			fmt.Println("Error stopping spinifex service:", err)
 			os.Exit(1)
 		}
 
-		fmt.Println("Hive service stopped")
+		fmt.Println("Spinifex service stopped")
 	},
 }
 
-var hiveStatusCmd = &cobra.Command{
+var spinifexStatusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Get status of the hive service",
+	Short: "Get status of the spinifex service",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Hive service status: ...")
+		fmt.Println("Spinifex service status: ...")
 	},
 }
 
@@ -601,18 +601,18 @@ var awsgwStatusCmd = &cobra.Command{
 	},
 }
 
-var hiveUIStartCmd = &cobra.Command{
+var spinifexUIStartCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Start the hive-ui service",
+	Short: "Start the spinifex-ui service",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Starting hive-ui service...")
+		fmt.Println("Starting spinifex-ui service...")
 
-		port := viper.GetInt("hive-ui-port")
-		host := viper.GetString("hive-ui-host")
-		tlsCert := viper.GetString("hive-ui-tls-cert")
-		tlsKey := viper.GetString("hive-ui-tls-key")
+		port := viper.GetInt("spinifex-ui-port")
+		host := viper.GetString("spinifex-ui-host")
+		tlsCert := viper.GetString("spinifex-ui-tls-cert")
+		tlsKey := viper.GetString("spinifex-ui-tls-key")
 
-		svc, err := service.New("hive-ui", &hiveui.Config{
+		svc, err := service.New("spinifex-ui", &spinifexui.Config{
 			Port:    port,
 			Host:    host,
 			TLSCert: tlsCert,
@@ -620,57 +620,57 @@ var hiveUIStartCmd = &cobra.Command{
 		})
 
 		if err != nil {
-			fmt.Println("Error starting hive-ui service:", err)
+			fmt.Println("Error starting spinifex-ui service:", err)
 			return
 		}
 
 		if _, err = svc.Start(); err != nil {
-			fmt.Println("Error starting hive-ui service:", err)
+			fmt.Println("Error starting spinifex-ui service:", err)
 			os.Exit(1)
 		}
-		fmt.Println("hive-ui service started")
+		fmt.Println("spinifex-ui service started")
 	},
 }
 
-var hiveUIStopCmd = &cobra.Command{
+var spinifexUIStopCmd = &cobra.Command{
 	Use:   "stop",
-	Short: "Stop the hive-ui service",
+	Short: "Stop the spinifex-ui service",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Stopping hive-ui service...")
+		fmt.Println("Stopping spinifex-ui service...")
 
-		svc, err := service.New("hive-ui", &hiveui.Config{})
+		svc, err := service.New("spinifex-ui", &spinifexui.Config{})
 
 		if err != nil {
-			fmt.Println("Error stopping hive-ui service:", err)
+			fmt.Println("Error stopping spinifex-ui service:", err)
 			return
 		}
 
 		if err = svc.Stop(); err != nil {
-			fmt.Println("Error stopping hive-ui service:", err)
+			fmt.Println("Error stopping spinifex-ui service:", err)
 			os.Exit(1)
 		}
-		fmt.Println("hive-ui service stopped")
+		fmt.Println("spinifex-ui service stopped")
 	},
 }
 
-var hiveUIStatusCmd = &cobra.Command{
+var spinifexUIStatusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Get status of the hive-ui service",
+	Short: "Get status of the spinifex-ui service",
 	Run: func(cmd *cobra.Command, args []string) {
-		svc, err := service.New("hive-ui", &hiveui.Config{})
+		svc, err := service.New("spinifex-ui", &spinifexui.Config{})
 
 		if err != nil {
-			fmt.Println("Error getting hive-ui service status:", err)
+			fmt.Println("Error getting spinifex-ui service status:", err)
 			return
 		}
 
 		status, err := svc.Status()
 		if err != nil {
-			fmt.Println("Error getting hive-ui service status:", err)
+			fmt.Println("Error getting spinifex-ui service status:", err)
 			return
 		}
 
-		fmt.Println("hive-ui service status:", status)
+		fmt.Println("spinifex-ui service status:", status)
 	},
 }
 
@@ -827,7 +827,7 @@ func init() {
 	viper.BindEnv("s3-region", "HIVE_VIPERBLOCK_S3_REGION")
 	viper.BindPFlag("s3-region", predastoreCmd.PersistentFlags().Lookup("s3-region"))
 
-	viperblockCmd.PersistentFlags().String("plugin-path", "/opt/hive/lib/nbdkit-viperblock-plugin.so", "Pathname to the nbdkit viperblockplugin")
+	viperblockCmd.PersistentFlags().String("plugin-path", "/opt/spinifex/lib/nbdkit-viperblock-plugin.so", "Pathname to the nbdkit viperblockplugin")
 	viper.BindEnv("plugin-path", "HIVE_VIPERBLOCK_PLUGIN_PATH")
 	viper.BindPFlag("plugin-path", predastoreCmd.PersistentFlags().Lookup("plugin-path"))
 
@@ -864,15 +864,15 @@ func init() {
 	viper.BindPFlag("jetstream", natsCmd.PersistentFlags().Lookup("jetstream"))
 
 	// Hive
-	serviceCmd.AddCommand(hiveCmd)
+	serviceCmd.AddCommand(spinifexCmd)
 
-	hiveCmd.AddCommand(hiveStartCmd)
-	hiveCmd.AddCommand(hiveStopCmd)
-	hiveCmd.AddCommand(hiveStatusCmd)
+	spinifexCmd.AddCommand(spinifexStartCmd)
+	spinifexCmd.AddCommand(spinifexStopCmd)
+	spinifexCmd.AddCommand(spinifexStatusCmd)
 
-	hiveCmd.PersistentFlags().String("wal-dir", "", "Write-ahead log (WAL) directory. Place on high-speed NVMe disk, or tmpfs for development.")
+	spinifexCmd.PersistentFlags().String("wal-dir", "", "Write-ahead log (WAL) directory. Place on high-speed NVMe disk, or tmpfs for development.")
 	viper.BindEnv("wal-dir", "HIVE_WAL_DIR")
-	viper.BindPFlag("wal-dir", hiveCmd.PersistentFlags().Lookup("wal-dir"))
+	viper.BindPFlag("wal-dir", spinifexCmd.PersistentFlags().Lookup("wal-dir"))
 
 	// AWS GW
 	serviceCmd.AddCommand(awsgwCmd)
@@ -899,28 +899,28 @@ func init() {
 	awsgwCmd.AddCommand(awsgwStopCmd)
 	awsgwCmd.AddCommand(awsgwStatusCmd)
 
-	// hive-ui
-	serviceCmd.AddCommand(hiveUICmd)
+	// spinifex-ui
+	serviceCmd.AddCommand(spinifexUICmd)
 
-	hiveUICmd.PersistentFlags().Int("port", 3000, "hive-ui server port")
-	viper.BindEnv("hive-ui-port", "HIVE_UI_PORT")
-	viper.BindPFlag("hive-ui-port", hiveUICmd.PersistentFlags().Lookup("port"))
+	spinifexUICmd.PersistentFlags().Int("port", 3000, "spinifex-ui server port")
+	viper.BindEnv("spinifex-ui-port", "HIVE_UI_PORT")
+	viper.BindPFlag("spinifex-ui-port", spinifexUICmd.PersistentFlags().Lookup("port"))
 
-	hiveUICmd.PersistentFlags().String("host", "0.0.0.0", "hive-ui server host")
-	viper.BindEnv("hive-ui-host", "HIVE_UI_HOST")
-	viper.BindPFlag("hive-ui-host", hiveUICmd.PersistentFlags().Lookup("host"))
+	spinifexUICmd.PersistentFlags().String("host", "0.0.0.0", "spinifex-ui server host")
+	viper.BindEnv("spinifex-ui-host", "HIVE_UI_HOST")
+	viper.BindPFlag("spinifex-ui-host", spinifexUICmd.PersistentFlags().Lookup("host"))
 
-	hiveUICmd.PersistentFlags().String("tls-cert", "", "TLS certificate path")
-	viper.BindEnv("hive-ui-tls-cert", "HIVE_UI_TLS_CERT")
-	viper.BindPFlag("hive-ui-tls-cert", hiveUICmd.PersistentFlags().Lookup("tls-cert"))
+	spinifexUICmd.PersistentFlags().String("tls-cert", "", "TLS certificate path")
+	viper.BindEnv("spinifex-ui-tls-cert", "HIVE_UI_TLS_CERT")
+	viper.BindPFlag("spinifex-ui-tls-cert", spinifexUICmd.PersistentFlags().Lookup("tls-cert"))
 
-	hiveUICmd.PersistentFlags().String("tls-key", "", "TLS key path")
-	viper.BindEnv("hive-ui-tls-key", "HIVE_UI_TLS_KEY")
-	viper.BindPFlag("hive-ui-tls-key", hiveUICmd.PersistentFlags().Lookup("tls-key"))
+	spinifexUICmd.PersistentFlags().String("tls-key", "", "TLS key path")
+	viper.BindEnv("spinifex-ui-tls-key", "HIVE_UI_TLS_KEY")
+	viper.BindPFlag("spinifex-ui-tls-key", spinifexUICmd.PersistentFlags().Lookup("tls-key"))
 
-	hiveUICmd.AddCommand(hiveUIStartCmd)
-	hiveUICmd.AddCommand(hiveUIStopCmd)
-	hiveUICmd.AddCommand(hiveUIStatusCmd)
+	spinifexUICmd.AddCommand(spinifexUIStartCmd)
+	spinifexUICmd.AddCommand(spinifexUIStopCmd)
+	spinifexUICmd.AddCommand(spinifexUIStatusCmd)
 
 	// vpcd
 	serviceCmd.AddCommand(vpcdCmd)

@@ -10,7 +10,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/utils"
 )
 
-var serviceName = "hive"
+var serviceName = "spinifex"
 
 type Service struct {
 	Config     *config.ClusterConfig
@@ -20,7 +20,7 @@ type Service struct {
 func New(cfg any) (svc *Service, err error) {
 	c, ok := cfg.(*config.ClusterConfig)
 	if !ok {
-		return nil, fmt.Errorf("invalid config type for hive service")
+		return nil, fmt.Errorf("invalid config type for spinifex service")
 	}
 	svc = &Service{
 		Config: c,
@@ -64,11 +64,11 @@ func launchService(config *config.ClusterConfig, configPath string) (err error) 
 
 	d := daemon.NewDaemon(config)
 	d.SetConfigPath(configPath)
-	slog.Info("Starting Hive daemon ...")
+	slog.Info("Starting Spinifex daemon ...")
 	err = d.Start()
 
 	if err != nil {
-		slog.Warn("Failed to start Hive daemon", "err", err)
+		slog.Warn("Failed to start Spinifex daemon", "err", err)
 		return err
 	}
 

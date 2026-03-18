@@ -12,7 +12,7 @@ import (
 
 func TestNew(t *testing.T) {
 	// Test known service types
-	services := []string{"nats", "predastore", "viperblock", "hive", "awsgw"}
+	services := []string{"nats", "predastore", "viperblock", "spinifex", "awsgw"}
 
 	for _, s := range services {
 
@@ -29,7 +29,7 @@ func TestNew(t *testing.T) {
 			// No special setup needed
 		case "viperblock":
 			svc, err = New(s, &viperblockd.Config{})
-		case "hive":
+		case "spinifex":
 			svc, err = New(s, &config.ClusterConfig{})
 		case "awsgw":
 			svc, err = New(s, &config.ClusterConfig{})
