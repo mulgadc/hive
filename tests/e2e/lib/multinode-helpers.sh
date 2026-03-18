@@ -722,7 +722,7 @@ init_leader_node() {
     rm -rf "$HOME/node1/"
 
     # Start init in background — formation server will wait for joins
-    ./bin/spinifex admin init \
+    ./bin/spx admin init \
         --node node1 \
         --bind "${NODE1_IP}" \
         --cluster-bind "${NODE1_IP}" \
@@ -762,7 +762,7 @@ join_follower_node() {
     rm -rf "$data_dir/"
 
     # Route to node1 (seed node) - other nodes discovered via NATS gossip
-    ./bin/spinifex admin join \
+    ./bin/spx admin join \
         --node "node$node_num" \
         --bind "$node_ip" \
         --cluster-bind "$node_ip" \
