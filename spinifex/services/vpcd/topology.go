@@ -580,8 +580,9 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 	} else {
 		vpcCIDR := router.ExternalIDs["spinifex:cidr"]
 		if vpcCIDR == "" {
-			// Fall back to a reasonable default — list subnets for this VPC
 			vpcCIDR = "10.0.0.0/8"
+			slog.Warn("vpcd: VPC CIDR missing from router metadata, using overbroad fallback",
+				"router", routerName, "fallbackCIDR", vpcCIDR, "vpcId", evt.VpcId)
 		}
 		snatRule := &nbdb.NAT{
 			Type:       "snat",
@@ -653,6 +654,8 @@ func (h *TopologyHandler) handleIGWDetach(msg *nats.Msg) {
 		vpcCIDR := router.ExternalIDs["spinifex:cidr"]
 		if vpcCIDR == "" {
 			vpcCIDR = "10.0.0.0/8"
+			slog.Warn("vpcd: VPC CIDR missing from router metadata, using overbroad fallback for NAT cleanup",
+				"router", routerName, "fallbackCIDR", vpcCIDR)
 		}
 		if err := h.ovn.DeleteNAT(ctx, routerName, "snat", vpcCIDR); err != nil {
 			slog.Warn("vpcd: failed to delete SNAT rule", "router", routerName, "err", err)
@@ -739,7 +742,11 @@ func respond(msg *nats.Msg, err error) {
 		resp.Error = err.Error()
 	}
 
-	data, _ := json.Marshal(resp)
+	data, marshalErr := json.Marshal(resp)
+	if marshalErr != nil {
+		slog.Error("vpcd: failed to marshal NATS response", "err", marshalErr)
+		data = []byte(`{"success":false,"error":"internal marshal failure"}`)
+	}
 	if err := msg.Respond(data); err != nil {
 		slog.Error("vpcd: failed to respond to NATS request", "err", err)
 	}

@@ -295,10 +295,8 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 			os.Exit(1)
 		}
 
-		//imageStat, err = os.Stat(imageFile)
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "File could not be found %s", err)
+		if _, err := os.Stat(imageFile); err != nil {
+			fmt.Fprintf(os.Stderr, "File could not be found: %s", err)
 			os.Exit(1)
 		}
 
@@ -726,6 +724,9 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 		PredastoreNodeID: predastoreNodeID,
 		Services:         services,
+
+		OVNNBAddr: "tcp:127.0.0.1:6641",
+		OVNSBAddr: "tcp:127.0.0.1:6642",
 	}
 
 	// Generate config files
@@ -934,6 +935,10 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		PredastoreNodeID: predastoreNodeID,
 		Services:         services,
 		RemoteNodes:      buildRemoteNodes(allNodes, node),
+
+		// Init node runs ovn-central locally
+		OVNNBAddr: "tcp:127.0.0.1:6641",
+		OVNSBAddr: "tcp:127.0.0.1:6642",
 	}
 
 	// Generate config files
@@ -1005,6 +1010,13 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	if leaderHost == "" {
 		fmt.Fprintf(os.Stderr, "❌ Error: --host is required\n")
 		os.Exit(1)
+	}
+
+	// Extract leader IP for OVN NB/SB DB address (strip port from host:port)
+	leaderIP, _, err := net.SplitHostPort(leaderHost)
+	if err != nil {
+		// leaderHost might be an IP without port
+		leaderIP = leaderHost
 	}
 
 	// Validate IP address format
@@ -1246,6 +1258,10 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		PredastoreNodeID: predastoreNodeID,
 		Services:         services,
 		RemoteNodes:      buildRemoteNodes(statusResp.Nodes, node),
+
+		// Joining nodes connect to the init node's OVN NB/SB DB
+		OVNNBAddr: fmt.Sprintf("tcp:%s:6641", leaderIP),
+		OVNSBAddr: fmt.Sprintf("tcp:%s:6642", leaderIP),
 	}
 
 	// Generate config files

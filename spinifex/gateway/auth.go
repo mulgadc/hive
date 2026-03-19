@@ -154,8 +154,7 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() func(http.Handler) http.Handler {
 			// Compare signatures using constant-time comparison to prevent timing attacks
 			if subtle.ConstantTimeCompare([]byte(expectedSignature), []byte(providedSignature)) != 1 {
 				slog.Debug("Signature mismatch",
-					"expected", expectedSignature,
-					"provided", providedSignature,
+					"accessKeyId", accessKey,
 				)
 				gw.writeSigV4Error(w, r, awserrors.ErrorSignatureDoesNotMatch)
 				return

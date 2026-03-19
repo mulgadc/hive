@@ -188,16 +188,17 @@ func getSystemMemory() (float64, error) {
 	}
 }
 
-// NewResourceManager creates a new resource manager with system capabilities
-func NewResourceManager() *ResourceManager {
+// NewResourceManager creates a new resource manager with system capabilities.
+// Returns an error if system memory cannot be detected, since an incorrect
+// default would either under-provision (large servers) or over-commit (small devices).
+func NewResourceManager() (*ResourceManager, error) {
 	// Get system CPU cores
 	numCPU := runtime.NumCPU()
 
 	// Get system memory (in GB)
 	totalMemGB, err := getSystemMemory()
 	if err != nil {
-		slog.Warn("Failed to get system memory, using default of 8GB", "err", err)
-		totalMemGB = 8.0 // Default to 8GB if we can't get the actual memory
+		return nil, fmt.Errorf("detect system memory: %w", err)
 	}
 
 	// Determine architecture
@@ -217,7 +218,7 @@ func NewResourceManager() *ResourceManager {
 		availableVCPU: numCPU,
 		availableMem:  totalMemGB,
 		instanceTypes: instanceTypes,
-	}
+	}, nil
 }
 
 // instanceTypeVCPUs returns the default vCPU count for an instance type, or 0 if unavailable.
@@ -316,7 +317,7 @@ func (d *Daemon) SetConfigPath(path string) {
 }
 
 // NewDaemon creates a new daemon instance
-func NewDaemon(cfg *config.ClusterConfig) *Daemon {
+func NewDaemon(cfg *config.ClusterConfig) (*Daemon, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// If WalDir is not set, use BaseDir
@@ -327,18 +328,24 @@ func NewDaemon(cfg *config.ClusterConfig) *Daemon {
 		cfg.Nodes[cfg.Node] = config
 	}
 
+	rm, err := NewResourceManager()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("initialize resource manager: %w", err)
+	}
+
 	return &Daemon{
 		node:              cfg.Node,
 		clusterConfig:     cfg,
 		config:            &config,
-		resourceMgr:       NewResourceManager(),
+		resourceMgr:       rm,
 		ctx:               ctx,
 		cancel:            cancel,
 		Instances:         vm.Instances{VMS: make(map[string]*vm.VM)},
 		natsSubscriptions: make(map[string]*nats.Subscription),
 		startTime:         time.Now(),
 		detachDelay:       1 * time.Second,
-	}
+	}, nil
 }
 
 // natsSub defines a single NATS subscription entry for the table-driven setup.
@@ -845,7 +852,17 @@ func (d *Daemon) restoreInstances() {
 		if ok {
 			slog.Info("Re-allocating resources for instance", "instanceId", instance.ID, "type", instance.InstanceType)
 			if err := d.resourceMgr.allocate(instanceType); err != nil {
-				slog.Error("Failed to re-allocate resources for instance on startup", "instanceId", instance.ID, "err", err)
+				slog.Error("Failed to re-allocate resources for instance on startup, moving to stopped",
+					"instanceId", instance.ID, "err", err)
+				instance.Status = vm.StateStopped
+				if instance.Instance != nil {
+					instance.Instance.StateReason = &ec2.StateReason{}
+					instance.Instance.StateReason.SetCode("Server.InsufficientInstanceCapacity")
+					instance.Instance.StateReason.SetMessage(
+						fmt.Sprintf("insufficient resources to restore instance: %v", err))
+				}
+				d.migrateStoppedToSharedKV(instance)
+				continue
 			}
 		}
 
@@ -1334,16 +1351,23 @@ func (d *Daemon) ClusterManager() error {
 		}
 	})
 
-	// Start HTTP server in goroutine
+	// Start HTTP server in goroutine — use a channel to propagate bind errors
+	// back to the caller so Start() fails visibly instead of silently.
 	d.clusterServer = &http.Server{
 		Addr:              daemonHost,
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+
+	ln, err := net.Listen("tcp", daemonHost)
+	if err != nil {
+		return fmt.Errorf("cluster manager listen on %s: %w", daemonHost, err)
+	}
+
 	go func() {
 		slog.Info("Starting cluster manager", "host", daemonHost)
-		if err := d.clusterServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("Cluster manager failed to start", "error", err)
+		if err := d.clusterServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+			slog.Error("Cluster manager failed", "error", err)
 		}
 	}()
 
@@ -2065,34 +2089,42 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 
 		// DEV_NETWORKING: add a second NIC with hostfwd for SSH dev access
 		if d.config.Daemon.DevNetworking {
-			sshDebugPort, err := viperblock.FindFreePort()
+			sshDebugAddr, err := viperblock.FindFreePort()
 			if err != nil {
 				slog.Warn("DEV_NETWORKING: failed to find free port for dev NIC", "err", err)
 			} else {
-				_, sshDebugPort, _ = net.SplitHostPort(sshDebugPort)
-				bindIP := d.config.Host
-				if bindIP == "" || bindIP == "0.0.0.0" {
-					bindIP = "127.0.0.1"
+				_, sshDebugPort, err := net.SplitHostPort(sshDebugAddr)
+				if err != nil {
+					slog.Warn("DEV_NETWORKING: failed to parse port from address", "addr", sshDebugAddr, "err", err)
+				} else {
+					bindIP := d.config.Host
+					if bindIP == "" || bindIP == "0.0.0.0" {
+						bindIP = "127.0.0.1"
+					}
+					instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
+						Value: fmt.Sprintf("user,id=dev0,hostfwd=tcp:%s:%s-:22", bindIP, sshDebugPort),
+					})
+					devMac := generateDevMAC(instance.ID)
+					instance.Config.Devices = append(instance.Config.Devices, vm.Device{
+						Value: fmt.Sprintf("virtio-net-pci,netdev=dev0,mac=%s", devMac),
+					})
+					slog.Info("DEV_NETWORKING: added dev NIC with SSH hostfwd",
+						"bindIP", bindIP, "port", sshDebugPort, "mac", devMac, "instanceId", instance.ID)
 				}
-				instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
-					Value: fmt.Sprintf("user,id=dev0,hostfwd=tcp:%s:%s-:22", bindIP, sshDebugPort),
-				})
-				devMac := generateDevMAC(instance.ID)
-				instance.Config.Devices = append(instance.Config.Devices, vm.Device{
-					Value: fmt.Sprintf("virtio-net-pci,netdev=dev0,mac=%s", devMac),
-				})
-				slog.Info("DEV_NETWORKING: added dev NIC with SSH hostfwd",
-					"bindIP", bindIP, "port", sshDebugPort, "mac", devMac, "instanceId", instance.ID)
 			}
 		}
 	} else {
 		// Non-VPC fallback: user-mode networking with SSH port forwarding
-		sshDebugPort, err := viperblock.FindFreePort()
+		sshDebugAddr, err := viperblock.FindFreePort()
 		if err != nil {
 			slog.Error("Failed to find free port", "err", err)
 			return err
 		}
-		_, sshDebugPort, _ = net.SplitHostPort(sshDebugPort)
+		_, sshDebugPort, err := net.SplitHostPort(sshDebugAddr)
+		if err != nil {
+			slog.Error("Failed to parse port from address", "addr", sshDebugAddr, "err", err)
+			return fmt.Errorf("parse port from %s: %w", sshDebugAddr, err)
+		}
 
 		bindIP := d.config.Host
 		if bindIP == "" || bindIP == "0.0.0.0" {

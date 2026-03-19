@@ -51,9 +51,12 @@ func TestHandleInstanceCrash_SkipsNonRunning(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
+	rm, err := NewResourceManager()
+	require.NoError(t, err)
+
 	d := &Daemon{
 		natsConn:    nc,
-		resourceMgr: NewResourceManager(),
+		resourceMgr: rm,
 		Instances:   vm.Instances{VMS: make(map[string]*vm.VM)},
 	}
 
@@ -73,9 +76,12 @@ func TestHandleInstanceCrash_SkipsShuttingDown(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
+	rm, err := NewResourceManager()
+	require.NoError(t, err)
+
 	d := &Daemon{
 		natsConn:    nc,
-		resourceMgr: NewResourceManager(),
+		resourceMgr: rm,
 		Instances:   vm.Instances{VMS: make(map[string]*vm.VM)},
 	}
 	d.shuttingDown.Store(true)
@@ -97,13 +103,16 @@ func TestMaybeRestart_ExceedsMaxInWindow(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
+	rm, err := NewResourceManager()
+	require.NoError(t, err)
+
 	d := &Daemon{
 		node:     "test-node",
 		natsConn: nc,
 		config: &config.Config{
 			Services: []string{"daemon"},
 		},
-		resourceMgr: NewResourceManager(),
+		resourceMgr: rm,
 		Instances:   vm.Instances{VMS: make(map[string]*vm.VM)},
 	}
 
@@ -139,13 +148,16 @@ func TestMaybeRestart_ResetsAfterWindow(t *testing.T) {
 	require.NoError(t, err)
 	defer nc.Close()
 
+	rm, err := NewResourceManager()
+	require.NoError(t, err)
+
 	d := &Daemon{
 		node:     "test-node",
 		natsConn: nc,
 		config: &config.Config{
 			Services: []string{"daemon"},
 		},
-		resourceMgr: NewResourceManager(),
+		resourceMgr: rm,
 		Instances:   vm.Instances{VMS: make(map[string]*vm.VM)},
 	}
 
@@ -206,13 +218,16 @@ func newTestDaemon(t *testing.T) (*Daemon, func()) {
 	nc, err := nats.Connect(sharedNATSURL)
 	require.NoError(t, err)
 
+	rm, err := NewResourceManager()
+	require.NoError(t, err)
+
 	d := &Daemon{
 		node:     "test-node",
 		natsConn: nc,
 		config: &config.Config{
 			Services: []string{"daemon"},
 		},
-		resourceMgr: NewResourceManager(),
+		resourceMgr: rm,
 		Instances:   vm.Instances{VMS: make(map[string]*vm.VM)},
 	}
 	return d, func() { nc.Close() }

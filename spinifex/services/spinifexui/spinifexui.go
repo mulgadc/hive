@@ -100,7 +100,10 @@ func (svc *Service) Stop() error {
 func (svc *Service) Status() (string, error) {
 	pid, err := utils.ReadPidFile(serviceName)
 	if err != nil {
-		return "stopped", nil
+		if os.IsNotExist(err) {
+			return "stopped", nil
+		}
+		return "", fmt.Errorf("read pid file: %w", err)
 	}
 	return fmt.Sprintf("running (pid: %d)", pid), nil
 }

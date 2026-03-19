@@ -321,7 +321,9 @@ func (gw *GatewayConfig) ErrorHandler(w http.ResponseWriter, r *http.Request, er
 
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(errorMsg.HTTPCode)
-	_, _ = w.Write(xmlError)
+	if _, err := w.Write(xmlError); err != nil {
+		slog.Error("Failed to write error response", "err", err)
+	}
 }
 
 // Parse AWS query arguments (used by some services like EC2/S3)

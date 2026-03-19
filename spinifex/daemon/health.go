@@ -259,10 +259,25 @@ func (d *Daemon) restartCrashedInstance(instance *vm.VM) {
 		"instance", instance.ID,
 		"restartCount", instance.Health.RestartCount)
 
+	// Re-allocate resources before relaunch — handleCrashedInstance deallocates
+	// them, so we must re-reserve before starting the VM again.
+	instanceType, ok := d.resourceMgr.instanceTypes[instance.InstanceType]
+	if !ok || instanceType == nil {
+		slog.Error("Unknown instance type during restart, cannot re-allocate resources",
+			"instance", instance.ID, "type", instance.InstanceType)
+		return
+	}
+	if err := d.resourceMgr.allocate(instanceType); err != nil {
+		slog.Error("Insufficient resources to restart crashed instance",
+			"instance", instance.ID, "type", instance.InstanceType, "err", err)
+		return
+	}
+
 	// Transition Error → Pending (valid now that we added it to the transitions map)
 	if err := d.TransitionState(instance, vm.StatePending); err != nil {
 		slog.Error("Failed to transition instance to pending for restart",
 			"instance", instance.ID, "err", err)
+		d.resourceMgr.deallocate(instanceType)
 		return
 	}
 
@@ -271,6 +286,7 @@ func (d *Daemon) restartCrashedInstance(instance *vm.VM) {
 	if err := d.LaunchInstance(instance); err != nil {
 		slog.Error("Failed to restart crashed instance",
 			"instance", instance.ID, "err", err)
+		d.resourceMgr.deallocate(instanceType)
 		if err := d.TransitionState(instance, vm.StateError); err != nil {
 			slog.Error("Failed to transition instance back to error after restart failure",
 				"instance", instance.ID, "err", err)

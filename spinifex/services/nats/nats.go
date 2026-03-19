@@ -38,7 +38,7 @@ func New(config any) (svc *Service, err error) {
 
 func (svc *Service) Start() (int, error) {
 	if err := utils.WritePidFileTo(svc.Config.DataDir, serviceName, os.Getpid()); err != nil {
-		slog.Error("Failed to write pid file", "err", err)
+		return 0, fmt.Errorf("write pid file: %w", err)
 	}
 	err := launchService(svc.Config)
 	if err != nil {
@@ -52,7 +52,14 @@ func (svc *Service) Stop() (err error) {
 }
 
 func (svc *Service) Status() (string, error) {
-	return "", nil
+	pid, err := utils.ReadPidFileFrom(svc.Config.DataDir, serviceName)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "stopped", nil
+		}
+		return "", fmt.Errorf("read pid file: %w", err)
+	}
+	return fmt.Sprintf("running (pid: %d)", pid), nil
 }
 
 func (svc *Service) Shutdown() (err error) {
@@ -99,7 +106,7 @@ func launchService(config *Config) (err error) {
 
 	}
 
-	fmt.Println(opts)
+	slog.Debug("NATS server options", "opts", opts)
 
 	// Initialize new server with options
 	ns, err := server.NewServer(opts)

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -263,25 +264,25 @@ func extractDiskImagePath(imagedir string, output []byte) (diskimage string, err
 	r := bufio.NewReader(reader)
 
 	for {
-		line, err := r.ReadString('\n')
-		line = strings.Replace(line, "\n", "", 1)
+		line, readErr := r.ReadString('\n')
+		line = strings.TrimRight(line, "\n")
 
 		// MacOS tar, filenames begin with `x FILE` (to STDERR)
 		if runtime.GOOS == "darwin" && strings.HasPrefix(line, "x ") {
 			line = strings.Replace(line, "x ", "", 1)
-
 		}
 
 		if strings.HasSuffix(line, ".raw") || strings.HasSuffix(line, ".img") {
 			diskimage := fmt.Sprintf("%s/%s", imagedir, line)
-
 			err = validateDiskImagePath(diskimage)
-
 			return diskimage, err
 		}
 
-		if err != nil && err.Error() == "EOF" {
-			break
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return "", fmt.Errorf("read tar output: %w", readErr)
 		}
 	}
 
@@ -296,7 +297,10 @@ func validateDiskImagePath(diskimage string) (err error) {
 	}
 
 	cmd := exec.Command("file", args...)
-	output, _ := cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("run file command on %s: %w", diskimage, err)
+	}
 
 	filetype := strings.Split(string(output), ":")
 

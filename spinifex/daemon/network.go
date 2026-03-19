@@ -40,8 +40,12 @@ func (p *OVSNetworkPlumber) SetupTapDevice(eniId, mac string) error {
 	// 0. If tap already exists (e.g. unclean shutdown), clean it up first
 	if _, err := os.Stat("/sys/class/net/" + tapName); err == nil {
 		slog.Warn("Stale tap device found, cleaning up before recreate", "tap", tapName)
-		_ = sudoCommand("ovs-vsctl", "--if-exists", "del-port", "br-int", tapName).Run()
-		_ = sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run()
+		if err := sudoCommand("ovs-vsctl", "--if-exists", "del-port", "br-int", tapName).Run(); err != nil {
+			slog.Warn("Failed to remove stale tap from br-int", "tap", tapName, "err", err)
+		}
+		if err := sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run(); err != nil {
+			slog.Warn("Failed to delete stale tap device", "tap", tapName, "err", err)
+		}
 	}
 
 	// 1. Create tap device
@@ -51,7 +55,9 @@ func (p *OVSNetworkPlumber) SetupTapDevice(eniId, mac string) error {
 
 	// 2. Bring tap up
 	if out, err := sudoCommand("ip", "link", "set", tapName, "up").CombinedOutput(); err != nil {
-		_ = sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run()
+		if cleanErr := sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run(); cleanErr != nil {
+			slog.Warn("Failed to clean up tap device after bring-up failure", "tap", tapName, "err", cleanErr)
+		}
 		return fmt.Errorf("bring up tap %s: %s: %w", tapName, strings.TrimSpace(string(out)), err)
 	}
 
@@ -62,7 +68,9 @@ func (p *OVSNetworkPlumber) SetupTapDevice(eniId, mac string) error {
 		fmt.Sprintf("external_ids:iface-id=%s", ifaceID),
 		fmt.Sprintf("external_ids:attached-mac=%s", mac),
 	).CombinedOutput(); err != nil {
-		_ = sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run()
+		if cleanErr := sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run(); cleanErr != nil {
+			slog.Warn("Failed to clean up tap device after OVS failure", "tap", tapName, "err", cleanErr)
+		}
 		return fmt.Errorf("add tap to br-int: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 

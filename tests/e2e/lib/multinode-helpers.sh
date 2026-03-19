@@ -76,7 +76,8 @@ start_node_services() {
     echo "Starting services for node$node_num at $node_ip..."
 
     # Start all services - each node's config binds to its specific IP
-    ./scripts/start-dev.sh "$data_dir"
+    # UI is not needed for E2E tests and fails in pseudo multi-node (wrong cert path)
+    UI=false ./scripts/start-dev.sh "$data_dir"
 
     echo "Node$node_num services started"
 }

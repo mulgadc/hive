@@ -39,8 +39,8 @@ token = "{{.NatsToken}}"
 shardwal = false
 
 [nodes.{{.Node}}.vpcd]
-ovn_nb_addr = "tcp:127.0.0.1:6641"
-ovn_sb_addr = "tcp:127.0.0.1:6642"
+ovn_nb_addr = "{{.OVNNBAddr}}"
+ovn_sb_addr = "{{.OVNSBAddr}}"
 
 [nodes.{{.Node}}.predastore]
 host = "{{.BindIP}}:8443"

@@ -9,7 +9,7 @@
 # Environment variables:
 #   UI=false              Skip starting Spinifex UI (e.g., UI=false ./scripts/start-dev.sh)
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -114,8 +114,14 @@ start_service() {
 
     echo "   PID: $pid, Log: $logfile"
 
-    # Brief pause to let service start
+    # Brief pause to let service start, then verify it's still alive
     sleep 1
+    if ! kill -0 "$pid" 2>/dev/null; then
+        echo "   ❌ $name failed to start (exited immediately)"
+        echo "   Check log: $logfile"
+        tail -5 "$logfile" 2>/dev/null || true
+        exit 1
+    fi
 }
 
 # Function to start service in foreground (for final daemon)
@@ -302,7 +308,7 @@ if has_service "predastore"; then
     export SPINIFEX_PREDASTORE_BACKEND=distributed
 
     # Auto-detect Predastore NODE_ID from spinifex.toml if not already set
-    if [ -z "$SPINIFEX_PREDASTORE_NODE_ID" ]; then
+    if [ -z "${SPINIFEX_PREDASTORE_NODE_ID:-}" ]; then
         if [ -f "$CONFIG_DIR/spinifex.toml" ]; then
             DETECTED_NODE_ID=$(awk -F'= *' '/node_id/{gsub(/ /,"",$2); print $2; exit}' "$CONFIG_DIR/spinifex.toml")
             if [ -n "$DETECTED_NODE_ID" ] && [ "$DETECTED_NODE_ID" != "0" ]; then
@@ -407,7 +413,7 @@ else
 fi
 
 # 7️⃣ Start Spinifex UI (skip with UI=false or if not a local service)
-if [ "${UI}" != "false" ] && has_service "ui"; then
+if [ "${UI:-}" != "false" ] && has_service "ui"; then
     echo ""
     echo "7️⃣. Starting Spinifex UI..."
 
@@ -422,7 +428,7 @@ fi
 
 echo ""
 echo "🔗 Service endpoints will be:"
-if [ "${UI}" != "false" ]; then
+if [ "${UI:-}" != "false" ]; then
     echo "   - Spinifex UI:       https://localhost:3000"
 fi
 echo "   - NATS:          nats://localhost:4222"

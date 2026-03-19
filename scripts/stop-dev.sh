@@ -5,6 +5,8 @@
 # Usage: ./scripts/stop-dev.sh
 # Note: Services are stopped using PID files, so data-dir is not required
 
+set -uo pipefail
+
 # Accept optional data directory argument
 DATA_DIR="${1:-$HOME/spinifex}"
 
@@ -65,7 +67,7 @@ is_multinode() {
 # For multi-node clusters, delegate to coordinated shutdown via NATS.
 # Only when called without arguments (default path). When a data-dir is
 # explicitly provided (e.g., E2E per-node cleanup), use per-service stop.
-if is_multinode && [ -z "$SPINIFEX_FORCE_LOCAL_STOP" ] && [ -z "$1" ]; then
+if is_multinode && [ -z "${SPINIFEX_FORCE_LOCAL_STOP:-}" ] && [ -z "${1:-}" ]; then
     echo "Multi-node cluster detected. Using coordinated shutdown..."
     echo "  (Set SPINIFEX_FORCE_LOCAL_STOP=1 to force per-service stop)"
     exec $PROJECT_ROOT/bin/spx admin cluster shutdown

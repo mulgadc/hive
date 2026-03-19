@@ -65,7 +65,8 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 
 	clusterCfg.Nodes["node-1"] = *cfg
 
-	daemon := NewDaemon(clusterCfg)
+	daemon, err := NewDaemon(clusterCfg)
+	require.NoError(t, err)
 
 	// Connect to NATS
 	nc, err := nats.Connect(natsURL)
@@ -88,8 +89,10 @@ func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 }
 
 // getTestInstanceType returns a valid instance type for testing based on the system's CPU
-func getTestInstanceType() string {
-	rm := NewResourceManager()
+func getTestInstanceType(t *testing.T) string {
+	t.Helper()
+	rm, err := NewResourceManager()
+	require.NoError(t, err)
 	// Find any .micro instance type
 	for key := range rm.instanceTypes {
 		if strings.HasSuffix(key, ".micro") {
@@ -133,7 +136,7 @@ func TestHandleEC2RunInstances_MessageParsing(t *testing.T) {
 	}{
 		{
 			name:           "Valid RunInstancesInput",
-			input:          createValidRunInstancesInput(),
+			input:          createValidRunInstancesInput(t),
 			expectError:    false,
 			errorInPayload: false,
 			validate: func(t *testing.T, reply *nats.Msg) {
@@ -362,7 +365,8 @@ func TestDaemon_Initialization(t *testing.T) {
 
 	clusterCfg.Nodes["node-1"] = *cfg
 
-	daemon := NewDaemon(clusterCfg)
+	daemon, err := NewDaemon(clusterCfg)
+	require.NoError(t, err)
 
 	assert.NotNil(t, daemon)
 	assert.NotNil(t, daemon.resourceMgr)
@@ -372,7 +376,8 @@ func TestDaemon_Initialization(t *testing.T) {
 
 // TestResourceManager tests resource manager functionality
 func TestResourceManager(t *testing.T) {
-	rm := NewResourceManager()
+	rm, err := NewResourceManager()
+	require.NoError(t, err)
 
 	require.NotNil(t, rm)
 	assert.Greater(t, rm.availableVCPU, 0)
@@ -398,7 +403,7 @@ func TestResourceManager(t *testing.T) {
 	assert.Equal(t, 1, canAlloc)
 
 	// Allocate
-	err := rm.allocate(instanceType)
+	err = rm.allocate(instanceType)
 	assert.NoError(t, err)
 
 	// Check resources were allocated
@@ -421,7 +426,8 @@ func TestResourceManager(t *testing.T) {
 	// Test canAllocate with count parameter
 	t.Run("canAllocate_with_count", func(t *testing.T) {
 		// Fresh resource manager for predictable testing
-		rm := NewResourceManager()
+		rm, err := NewResourceManager()
+		require.NoError(t, err)
 
 		// Find a .micro instance type
 		var microType *ec2.InstanceTypeInfo
@@ -457,7 +463,8 @@ func TestResourceManager(t *testing.T) {
 
 // TestGetInstanceTypeInfos tests the GetInstanceTypeInfos method
 func TestGetInstanceTypeInfos(t *testing.T) {
-	rm := NewResourceManager()
+	rm, err := NewResourceManager()
+	require.NoError(t, err)
 
 	infos := rm.GetInstanceTypeInfos()
 
@@ -484,7 +491,8 @@ func TestGetInstanceTypeInfos(t *testing.T) {
 
 // TestGetAvailableInstanceTypeInfos_ResourceFiltering tests that instance types are filtered by available resources
 func TestGetAvailableInstanceTypeInfos_ResourceFiltering(t *testing.T) {
-	rm := NewResourceManager()
+	rm, err := NewResourceManager()
+	require.NoError(t, err)
 
 	// Get initial count of all available types
 	allTypes := rm.GetInstanceTypeInfos()
@@ -524,7 +532,7 @@ func TestGetAvailableInstanceTypeInfos_ResourceFiltering(t *testing.T) {
 	}
 	require.True(t, exists, "Should have at least one .nano instance type")
 
-	err := rm.allocate(nanoType)
+	err = rm.allocate(nanoType)
 	require.NoError(t, err, "Should be able to allocate %s", nanoKey)
 
 	t.Logf("After allocating %s: allocated %d vCPUs, %.2f GB RAM",
@@ -859,21 +867,21 @@ func TestDaemon_BootAllocation(t *testing.T) {
 	vms := map[string]*vm.VM{
 		"i-running": {
 			ID:           "i-running",
-			InstanceType: getTestInstanceType(),
+			InstanceType: getTestInstanceType(t),
 			Status:       vm.StateRunning,
 			AccountID:    testAccountID,
 			Attributes:   types.EC2CommandAttributes{StopInstance: false},
 		},
 		"i-stopped": {
 			ID:           "i-stopped",
-			InstanceType: getTestInstanceType(),
+			InstanceType: getTestInstanceType(t),
 			Status:       vm.StateStopped,
 			AccountID:    testAccountID,
 			Attributes:   types.EC2CommandAttributes{StopInstance: true},
 		},
 		"i-terminated": {
 			ID:           "i-terminated",
-			InstanceType: getTestInstanceType(),
+			InstanceType: getTestInstanceType(t),
 			Status:       vm.StateTerminated,
 			Attributes:   types.EC2CommandAttributes{StopInstance: false},
 		},
@@ -884,7 +892,8 @@ func TestDaemon_BootAllocation(t *testing.T) {
 		Node:  "node-1",
 		Nodes: map[string]config.Config{"node-1": {BaseDir: tmpDir}},
 	}
-	daemon := NewDaemon(clusterCfg)
+	daemon, err := NewDaemon(clusterCfg)
+	require.NoError(t, err)
 	daemon.config = &config.Config{BaseDir: tmpDir}
 
 	// Connect to NATS and initialize JetStream
@@ -933,11 +942,12 @@ func TestStopInstance_Deallocation(t *testing.T) {
 		Node:  "node-1",
 		Nodes: map[string]config.Config{"node-1": {BaseDir: "/tmp"}},
 	}
-	daemon := NewDaemon(clusterCfg)
+	daemon, err := NewDaemon(clusterCfg)
+	require.NoError(t, err)
 
 	// Setup a running instance with allocated resources
 	instanceId := "i-test-stop"
-	instanceTypeStr := getTestInstanceType()
+	instanceTypeStr := getTestInstanceType(t)
 	instanceType := daemon.resourceMgr.instanceTypes[instanceTypeStr]
 	daemon.Instances.VMS[instanceId] = &vm.VM{
 		ID:           instanceId,
@@ -946,7 +956,7 @@ func TestStopInstance_Deallocation(t *testing.T) {
 		AccountID:    testAccountID,
 	}
 
-	err := daemon.resourceMgr.allocate(instanceType)
+	err = daemon.resourceMgr.allocate(instanceType)
 	require.NoError(t, err)
 	assert.Greater(t, daemon.resourceMgr.allocatedVCPU, 0)
 
@@ -961,10 +971,11 @@ func TestStopInstance_Deallocation(t *testing.T) {
 }
 
 // createValidRunInstancesInput creates a valid RunInstancesInput for testing
-func createValidRunInstancesInput() *ec2.RunInstancesInput {
+func createValidRunInstancesInput(t *testing.T) *ec2.RunInstancesInput {
+	t.Helper()
 	return &ec2.RunInstancesInput{
 		ImageId:      aws.String("ami-0abcdef1234567890"),
-		InstanceType: aws.String(getTestInstanceType()),
+		InstanceType: aws.String(getTestInstanceType(t)),
 		MinCount:     aws.Int64(1),
 		MaxCount:     aws.Int64(1),
 		KeyName:      aws.String("test-key"),
@@ -976,7 +987,8 @@ func createValidRunInstancesInput() *ec2.RunInstancesInput {
 // TestCanAllocate_CountEdgeCases tests edge cases for canAllocate with count parameter
 func TestCanAllocate_CountEdgeCases(t *testing.T) {
 	t.Run("MinCount_equals_MaxCount", func(t *testing.T) {
-		rm := NewResourceManager()
+		rm, err := NewResourceManager()
+		require.NoError(t, err)
 
 		var microType *ec2.InstanceTypeInfo
 		for key, it := range rm.instanceTypes {
@@ -994,7 +1006,8 @@ func TestCanAllocate_CountEdgeCases(t *testing.T) {
 	})
 
 	t.Run("Request_exceeds_capacity", func(t *testing.T) {
-		rm := NewResourceManager()
+		rm, err := NewResourceManager()
+		require.NoError(t, err)
 
 		// Find the largest instance type to exhaust resources faster
 		var largeType *ec2.InstanceTypeInfo
@@ -1016,7 +1029,8 @@ func TestCanAllocate_CountEdgeCases(t *testing.T) {
 	})
 
 	t.Run("Capacity_decreases_after_allocation", func(t *testing.T) {
-		rm := NewResourceManager()
+		rm, err := NewResourceManager()
+		require.NoError(t, err)
 
 		var microType *ec2.InstanceTypeInfo
 		for key, it := range rm.instanceTypes {
@@ -1031,7 +1045,7 @@ func TestCanAllocate_CountEdgeCases(t *testing.T) {
 		t.Logf("Initial capacity: %d micro instances", initial)
 
 		// Allocate one
-		err := rm.allocate(microType)
+		err = rm.allocate(microType)
 		require.NoError(t, err)
 
 		afterOne := rm.canAllocate(microType, 100)
@@ -1053,7 +1067,8 @@ func TestCanAllocate_CountEdgeCases(t *testing.T) {
 	})
 
 	t.Run("Mixed_instance_types", func(t *testing.T) {
-		rm := NewResourceManager()
+		rm, err := NewResourceManager()
+		require.NoError(t, err)
 
 		var microType, mediumType *ec2.InstanceTypeInfo
 		for key, it := range rm.instanceTypes {
@@ -1071,7 +1086,7 @@ func TestCanAllocate_CountEdgeCases(t *testing.T) {
 		initialMedium := rm.canAllocate(mediumType, 100)
 
 		// Allocate a medium (uses more resources)
-		err := rm.allocate(mediumType)
+		err = rm.allocate(mediumType)
 		require.NoError(t, err)
 
 		// Both capacities should decrease
@@ -1085,7 +1100,8 @@ func TestCanAllocate_CountEdgeCases(t *testing.T) {
 	})
 
 	t.Run("Zero_and_negative_counts", func(t *testing.T) {
-		rm := NewResourceManager()
+		rm, err := NewResourceManager()
+		require.NoError(t, err)
 
 		var microType *ec2.InstanceTypeInfo
 		for key, it := range rm.instanceTypes {
@@ -1300,7 +1316,7 @@ func TestDescribeInstances_ReservationGrouping(t *testing.T) {
 // TestRunInstances_CountValidation tests MinCount/MaxCount validation scenarios
 func TestRunInstances_CountValidation(t *testing.T) {
 	natsURL := sharedNATSURL
-	instanceType := getTestInstanceType()
+	instanceType := getTestInstanceType(t)
 	topic := fmt.Sprintf("ec2.RunInstances.%s", instanceType)
 
 	daemon, memStore := createFullTestDaemonWithStore(t, natsURL)
@@ -1380,7 +1396,8 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 
 	t.Run("InitialSubscriptions", func(t *testing.T) {
 		// A fresh ResourceManager should subscribe to all instance types that fit
-		rm := NewResourceManager()
+		rm, err := NewResourceManager()
+		require.NoError(t, err)
 		nc, err := nats.Connect(natsURL)
 		require.NoError(t, err)
 		defer nc.Close()
@@ -1409,7 +1426,8 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 	})
 
 	t.Run("UnsubscribesWhenFull", func(t *testing.T) {
-		rm := NewResourceManager()
+		rm, err := NewResourceManager()
+		require.NoError(t, err)
 		nc, err := nats.Connect(natsURL)
 		require.NoError(t, err)
 		defer nc.Close()
@@ -1433,7 +1451,8 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 	})
 
 	t.Run("ResubscribesWhenFreed", func(t *testing.T) {
-		rm := NewResourceManager()
+		rm, err := NewResourceManager()
+		require.NoError(t, err)
 		nc, err := nats.Connect(natsURL)
 		require.NoError(t, err)
 		defer nc.Close()
@@ -1463,7 +1482,8 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 	})
 
 	t.Run("PartialCapacity", func(t *testing.T) {
-		rm := NewResourceManager()
+		rm, err := NewResourceManager()
+		require.NoError(t, err)
 		nc, err := nats.Connect(natsURL)
 		require.NoError(t, err)
 		defer nc.Close()
@@ -1491,7 +1511,8 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 	})
 
 	t.Run("AllocateTriggersSubs", func(t *testing.T) {
-		rm := NewResourceManager()
+		rm, err := NewResourceManager()
+		require.NoError(t, err)
 		nc, err := nats.Connect(natsURL)
 		require.NoError(t, err)
 		defer nc.Close()
@@ -1534,7 +1555,8 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 	})
 
 	t.Run("NoRespondersWhenFull", func(t *testing.T) {
-		rm := NewResourceManager()
+		rm, err := NewResourceManager()
+		require.NoError(t, err)
 		nc, err := nats.Connect(natsURL)
 		require.NoError(t, err)
 		defer nc.Close()
@@ -1551,7 +1573,7 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 		assert.Equal(t, 0, len(rm.instanceSubs))
 
 		// Publishing to an instance type topic should get no responders
-		instanceType := getTestInstanceType()
+		instanceType := getTestInstanceType(t)
 		topic := fmt.Sprintf("ec2.RunInstances.%s", instanceType)
 
 		_, err = nc.Request(topic, []byte("{}"), 500*time.Millisecond)
@@ -1562,7 +1584,8 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 
 // TestResourceManager_ConcurrentAccess tests thread safety of resource manager
 func TestResourceManager_ConcurrentAccess(t *testing.T) {
-	rm := NewResourceManager()
+	rm, err := NewResourceManager()
+	require.NoError(t, err)
 
 	var microType *ec2.InstanceTypeInfo
 	for key, it := range rm.instanceTypes {
@@ -1757,7 +1780,7 @@ func TestStopInstance_DeleteOnTermination_VolumeDeletion(t *testing.T) {
 
 	instance := &vm.VM{
 		ID:           "i-test-dot",
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Status:       vm.StateRunning,
 		AccountID:    testAccountID,
 		QMPClient:    &qmp.QMPClient{}, // nil encoder/decoder => QMP will fail, which is fine
@@ -1855,7 +1878,7 @@ func TestStopInstance_DeleteOnTermination_False_SkipsVolumeDeletion(t *testing.T
 
 	instance := &vm.VM{
 		ID:           "i-test-no-delete",
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Status:       vm.StateRunning,
 		AccountID:    testAccountID,
 		QMPClient:    &qmp.QMPClient{},
@@ -1942,7 +1965,7 @@ func TestStopInstance_NoDelete_OnStop(t *testing.T) {
 
 	instance := &vm.VM{
 		ID:           "i-test-stop-only",
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Status:       vm.StateRunning,
 		AccountID:    testAccountID,
 		QMPClient:    &qmp.QMPClient{},
@@ -1989,7 +2012,7 @@ func TestHandleEC2Events_AttachVolume(t *testing.T) {
 
 	instanceID := "i-test-attach"
 	volumeID := "vol-test-attach"
-	instanceType := getTestInstanceType()
+	instanceType := getTestInstanceType(t)
 
 	// Create a running instance (no actual QMP client - will fail at QMP step)
 	instance := &vm.VM{
@@ -2118,7 +2141,7 @@ func TestHandleEC2Events_DetachVolume(t *testing.T) {
 
 	instanceID := "i-test-detach"
 	volumeID := "vol-test-detach"
-	instanceType := getTestInstanceType()
+	instanceType := getTestInstanceType(t)
 
 	// Create a running instance with an attached volume
 	instance := &vm.VM{
@@ -2444,7 +2467,7 @@ func TestDetachVolume_SuccessPath(t *testing.T) {
 
 	instanceID := "i-test-detach-success"
 	volumeID := "vol-detach-success"
-	instanceType := getTestInstanceType()
+	instanceType := getTestInstanceType(t)
 
 	// Track QMP commands issued
 	var mu sync.Mutex
@@ -2585,7 +2608,7 @@ func TestDetachVolume_ForceFlag(t *testing.T) {
 
 	instanceID := "i-test-detach-force"
 	volumeID := "vol-detach-force"
-	instanceType := getTestInstanceType()
+	instanceType := getTestInstanceType(t)
 
 	var mu sync.Mutex
 	var qmpCommands []string
@@ -2701,7 +2724,7 @@ func TestDetachVolume_BlockdevDelFailure(t *testing.T) {
 
 	instanceID := "i-test-blockdev-fail"
 	volumeID := "vol-blockdev-fail"
-	instanceType := getTestInstanceType()
+	instanceType := getTestInstanceType(t)
 
 	callCount := 0
 	var mu sync.Mutex
@@ -2813,7 +2836,7 @@ func TestDetachVolume_SuccessWithDeviceMatch(t *testing.T) {
 
 	instanceID := "i-test-device-match"
 	volumeID := "vol-device-match"
-	instanceType := getTestInstanceType()
+	instanceType := getTestInstanceType(t)
 
 	qmpClient, cancelQMP := newMockQMPClient(t, nil)
 	defer cancelQMP()
@@ -2897,7 +2920,7 @@ func TestAttachVolume_ReplacesStaleEBSRequest(t *testing.T) {
 
 	instanceID := "i-test-stale-replace"
 	volumeID := "vol-stale-replace"
-	instanceType := getTestInstanceType()
+	instanceType := getTestInstanceType(t)
 
 	qmpClient, cancelQMP := newMockQMPClient(t, nil)
 	defer cancelQMP()
@@ -3219,7 +3242,8 @@ func TestNewDaemon_WalDirDefaultsToBaseDir(t *testing.T) {
 		},
 	}
 
-	d := NewDaemon(cfg)
+	d, err := NewDaemon(cfg)
+	require.NoError(t, err)
 	assert.Equal(t, "/data/spinifex", d.config.WalDir)
 }
 
@@ -3234,7 +3258,8 @@ func TestNewDaemon_WalDirPreservedIfSet(t *testing.T) {
 		},
 	}
 
-	d := NewDaemon(cfg)
+	d, err := NewDaemon(cfg)
+	require.NoError(t, err)
 	assert.Equal(t, "/fast-ssd/wal", d.config.WalDir)
 }
 
@@ -3251,7 +3276,7 @@ func TestMarkInstanceFailed(t *testing.T) {
 
 	instance := &vm.VM{
 		ID:           instanceID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Status:       vm.StatePending,
 		AccountID:    testAccountID,
 		Instance:     ec2Instance,
@@ -3283,7 +3308,7 @@ func TestMarkInstanceFailed_NilInstance(t *testing.T) {
 	instanceID := "i-test-mark-failed-nil"
 	instance := &vm.VM{
 		ID:           instanceID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Status:       vm.StatePending,
 		AccountID:    testAccountID,
 		Instance:     nil, // no ec2.Instance
@@ -3436,7 +3461,7 @@ func TestStopTerminate_IncorrectInstanceState(t *testing.T) {
 	instanceID := "i-test-state-check"
 	instance := &vm.VM{
 		ID:           instanceID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Status:       vm.StateStopped,
 		AccountID:    testAccountID,
 		Instance:     &ec2.Instance{},
@@ -3764,12 +3789,13 @@ func TestConnectNATS_RetriesOnFailure(t *testing.T) {
 		},
 	}
 	clusterCfg.Nodes["node-1"] = cfg
-	daemon := NewDaemon(clusterCfg)
+	daemon, err := NewDaemon(clusterCfg)
+	require.NoError(t, err)
 	daemon.natsMaxWait = 500 * time.Millisecond
 	daemon.natsRetryDelay = 50 * time.Millisecond
 
 	start := time.Now()
-	err := daemon.connectNATS()
+	err = daemon.connectNATS()
 	elapsed := time.Since(start)
 
 	require.Error(t, err)
@@ -3790,10 +3816,11 @@ func TestConnectNATS_SucceedsImmediately(t *testing.T) {
 		},
 	}
 	clusterCfg.Nodes["node-1"] = cfg
-	daemon := NewDaemon(clusterCfg)
+	daemon, err := NewDaemon(clusterCfg)
+	require.NoError(t, err)
 
 	start := time.Now()
-	err := daemon.connectNATS()
+	err = daemon.connectNATS()
 	elapsed := time.Since(start)
 
 	require.NoError(t, err)
@@ -3811,7 +3838,8 @@ func TestDaemonReadyFlag(t *testing.T) {
 	}
 	cfg := config.Config{}
 	clusterCfg.Nodes["node-1"] = cfg
-	daemon := NewDaemon(clusterCfg)
+	daemon, err := NewDaemon(clusterCfg)
+	require.NoError(t, err)
 
 	assert.False(t, daemon.ready.Load(), "daemon should not be ready before Start()")
 

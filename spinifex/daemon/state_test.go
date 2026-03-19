@@ -52,7 +52,8 @@ func createDaemonWithJetStream(t *testing.T) *Daemon {
 		Node:  "node-1",
 		Nodes: map[string]config.Config{"node-1": {BaseDir: tmpDir}},
 	}
-	daemon := NewDaemon(clusterCfg)
+	daemon, err := NewDaemon(clusterCfg)
+	require.NoError(t, err)
 	daemon.config = &config.Config{BaseDir: tmpDir}
 
 	nc, err := nats.Connect(natsURL)

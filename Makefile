@@ -36,12 +36,12 @@ endif
 # Quiet-mode filters (active when QUIET=1, set by preflight via recursive make)
 ifdef QUIET
   _Q     = @
-  _COVQ  = 2>&1 | grep -Ev '^\s*(ok|PASS|\?|=== RUN|--- PASS:)\s' | grep -v 'coverage: 0\.0%' || true
+  _COVQ  = 2>&1 | { grep -Ev '^\s*(ok|PASS|\?|=== RUN|--- PASS:)\s' | grep -v 'coverage: 0\.0%' || true; }; exit $${PIPESTATUS[0]}
   _RACEQ = 2>&1 | { grep -Ev '^\s*(ok|PASS|\?|=== RUN|--- PASS:)\s' || true; }; exit $${PIPESTATUS[0]}
   _SECQ  = >
 else
   _Q     =
-  _COVQ  = || true
+  _COVQ  =
   _RACEQ =
   _SECQ  = 2>&1 | tee
 endif
@@ -79,8 +79,6 @@ test:
 	LOG_IGNORE=1 go test -timeout 120s ./spinifex/...
 
 # Run unit tests with coverage profile
-# Note: go test may exit non-zero due to Go version mismatch in coverage instrumentation
-# for packages without test files. We check actual test results + coverage threshold instead.
 COVERPROFILE ?= coverage.out
 test-cover:
 	@echo -e "\n....Running tests with coverage for $(GO_PROJECT_NAME)...."
@@ -199,11 +197,17 @@ security-check:
 	$(_Q)set -o pipefail && go tool staticcheck -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./... $(_SECQ) tests/staticcheck-report.txt $(if $(QUIET),|| { cat tests/staticcheck-report.txt; exit 1; })
 	@echo "  staticcheck ok"
 
-# Build release tarballs for both architectures via Docker
-distro:
-	@echo "Building spinifex $(VERSION) distribution tarballs..."
+# Build release tarballs — use distro-ARCH for single arch, distro for both
+distro: distro-amd64 distro-arm64
+	@echo ""
+	@echo "Distribution tarballs:"
+	@ls -lh dist/*.tar.gz
+	@echo ""
+	@cat dist/*.sha256
+
+distro-amd64:
+	@echo "Building spinifex $(VERSION) linux/amd64..."
 	@mkdir -p dist/
-	@echo "Building linux/amd64..."
 	docker buildx build \
 		--platform linux/amd64 \
 		--build-arg VERSION=$(VERSION) \
@@ -212,7 +216,10 @@ distro:
 		../
 	tar -czf dist/spinifex-$(VERSION)-linux-amd64.tar.gz -C dist/amd64 .
 	sha256sum dist/spinifex-$(VERSION)-linux-amd64.tar.gz > dist/spinifex-$(VERSION)-linux-amd64.tar.gz.sha256
-	@echo "Building linux/arm64..."
+
+distro-arm64:
+	@echo "Building spinifex $(VERSION) linux/arm64..."
+	@mkdir -p dist/
 	docker buildx build \
 		--platform linux/arm64 \
 		--build-arg VERSION=$(VERSION) \
@@ -221,11 +228,6 @@ distro:
 		../
 	tar -czf dist/spinifex-$(VERSION)-linux-arm64.tar.gz -C dist/arm64 .
 	sha256sum dist/spinifex-$(VERSION)-linux-arm64.tar.gz > dist/spinifex-$(VERSION)-linux-arm64.tar.gz.sha256
-	@echo ""
-	@echo "Distribution tarballs:"
-	@ls -lh dist/*.tar.gz
-	@echo ""
-	@cat dist/*.sha256
 
 distro-clean:
 	rm -rf dist/
@@ -233,4 +235,4 @@ distro-clean:
 .PHONY: build build-ui go_build go_run preflight test test-cover test-race diff-coverage bench run clean \
 	install-system install-go install-aws quickinstall \
 	format check-format modernize check-modernize vet security-check \
-	distro distro-clean
+	distro distro-amd64 distro-arm64 distro-clean

@@ -3,7 +3,7 @@
 # Spinifex Platform Development Environment Setup
 # This script sets up a complete development environment for the Spinifex platform
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -40,11 +40,13 @@ echo "🔍 Checking dependencies..."
 
 # Check for required commands
 required_commands=("go" "make")
+missing_required=false
 for cmd in "${required_commands[@]}"; do
     if command_exists "$cmd"; then
         echo "✅ $cmd found"
     else
         echo "❌ $cmd not found. Please install $cmd"
+        missing_required=true
         case "$cmd" in
             "go")
                 echo "   Install Go: https://golang.org/dl/"
@@ -52,6 +54,10 @@ for cmd in "${required_commands[@]}"; do
         esac
     fi
 done
+if [ "$missing_required" = true ]; then
+    echo "❌ Missing required dependencies. Cannot continue."
+    exit 1
+fi
 
 # Check optional commands
 optional_commands=("air" "nbdkit")

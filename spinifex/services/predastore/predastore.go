@@ -57,7 +57,7 @@ func New(config any) (svc *Service, err error) {
 // Start starts the predastore service
 func (svc *Service) Start() (int, error) {
 	if err := utils.WritePidFileTo(svc.Config.BasePath, serviceName, os.Getpid()); err != nil {
-		slog.Error("Failed to write pid file", "err", err)
+		return 0, fmt.Errorf("write pid file: %w", err)
 	}
 
 	server, err := s3.NewServer(
@@ -106,7 +106,14 @@ func (svc *Service) Stop() error {
 
 // Status returns the status of the predastore service
 func (svc *Service) Status() (string, error) {
-	return "", nil
+	pid, err := utils.ReadPidFileFrom(svc.Config.BasePath, serviceName)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "stopped", nil
+		}
+		return "", fmt.Errorf("read pid file: %w", err)
+	}
+	return fmt.Sprintf("running (pid: %d)", pid), nil
 }
 
 // Shutdown gracefully shuts down the predastore service
