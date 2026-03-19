@@ -851,11 +851,28 @@ func (d *Daemon) restoreInstances() {
 
 		// Check if QEMU process is still alive from before the restart
 		if d.isInstanceProcessRunning(instance) {
-			slog.Info("Instance QEMU process still alive, reconnecting", "instance", instance.ID)
-			if err := d.reconnectInstance(instance); err != nil {
-				slog.Error("Failed to reconnect to running instance", "instanceId", instance.ID, "err", err)
+			// Verify NBD sockets are still valid. After a viperblock restart,
+			// old sockets are gone and QEMU's block devices are broken. Kill
+			// the orphaned QEMU and relaunch from scratch instead of
+			// reconnecting to an instance with dead storage.
+			if !d.areVolumeSocketsValid(instance) {
+				slog.Warn("QEMU alive but NBD sockets are stale, killing orphaned process for relaunch",
+					"instance", instance.ID)
+				pid, _ := utils.ReadPidFile(instance.ID)
+				if pid > 0 {
+					if err := utils.KillProcess(pid); err != nil {
+						slog.Error("Failed to kill orphaned QEMU", "instanceId", instance.ID, "pid", pid, "err", err)
+					}
+					_ = utils.WaitForPidFileRemoval(instance.ID, 10*time.Second)
+				}
+				// Fall through to the relaunch path below
+			} else {
+				slog.Info("Instance QEMU process still alive, reconnecting", "instance", instance.ID)
+				if err := d.reconnectInstance(instance); err != nil {
+					slog.Error("Failed to reconnect to running instance", "instanceId", instance.ID, "err", err)
+				}
+				continue
 			}
-			continue
 		}
 
 		// QEMU is not running -- resolve transitional states from interrupted operations
@@ -968,6 +985,32 @@ func (d *Daemon) isInstanceProcessRunning(instance *vm.VM) bool {
 		return false
 	}
 	return process.Signal(syscall.Signal(0)) == nil
+}
+
+// areVolumeSocketsValid checks whether the NBD Unix sockets backing an instance's
+// volumes still exist on disk. After a viperblock restart, old sockets are removed
+// and new ones are created — an orphaned QEMU still referencing the old paths will
+// have broken block devices.
+func (d *Daemon) areVolumeSocketsValid(instance *vm.VM) bool {
+	instance.EBSRequests.Mu.Lock()
+	defer instance.EBSRequests.Mu.Unlock()
+
+	for _, req := range instance.EBSRequests.Requests {
+		if req.NBDURI == "" {
+			continue
+		}
+		// NBDURI format: "nbd:unix:/path/to/socket.sock"
+		sockPath := strings.TrimPrefix(req.NBDURI, "nbd:unix:")
+		if sockPath == req.NBDURI {
+			// TCP transport (nbd://host:port) — can't validate locally, assume OK
+			continue
+		}
+		if _, err := os.Stat(sockPath); err != nil {
+			slog.Debug("NBD socket missing", "volume", req.Name, "socket", sockPath)
+			return false
+		}
+	}
+	return true
 }
 
 // reconnectInstance re-establishes QMP and NATS connections to a running QEMU instance
