@@ -301,7 +301,7 @@ func canonicalHeaderName(header string) string {
 
 // writeSigV4Error writes an EC2-compatible XML error response for authentication failures.
 func (gw *GatewayConfig) writeSigV4Error(w http.ResponseWriter, r *http.Request, errorCode string) {
-	requestID := r.Header.Get("x-amz-request-id")
+	requestID := r.Header.Get("X-Amz-Request-Id")
 	if requestID == "" {
 		requestID = uuid.NewString()
 	}

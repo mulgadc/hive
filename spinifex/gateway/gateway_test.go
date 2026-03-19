@@ -241,7 +241,7 @@ func TestErrorHandler_UsesRequestIDHeader(t *testing.T) {
 	})
 
 	req := httptest.NewRequest("POST", "/", nil)
-	req.Header.Set("x-amz-request-id", "custom-req-id-123")
+	req.Header.Set("X-Amz-Request-Id", "custom-req-id-123")
 	resp := doRequest(handler, req)
 
 	body, _ := io.ReadAll(resp.Body)

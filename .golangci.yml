@@ -14,7 +14,6 @@ linters:
     - bidichk # checks for dangerous unicode bidi character sequences
     - bodyclose # checks whether HTTP response body is closed successfully
     - canonicalheader # checks whether net/http.Header uses canonical header keys
-    - copyloopvar # detects unnecessary loop variable copies (Go 1.22+)
     - durationcheck # checks for two durations multiplied together
     - embeddedstructfieldcheck # checks embedded sync.Mutex/RWMutex in structs
     - errcheck # checks for unchecked errors in type assertions and I/O
@@ -28,7 +27,6 @@ linters:
     - gosec # inspects source code for security problems
     - govet # reports suspicious constructs (Printf alignment, shadow, etc.)
     - ineffassign # detects assignments to existing variables that are not used
-    - intrange # finds places where for loops could use integer range syntax
     - makezero # finds slice declarations with non-zero initial length followed by append
     - mirror # catches wrong mirror patterns in bytes/strings usage
     - modernize # modernizes code to use newer Go idioms (go fix analyzers)

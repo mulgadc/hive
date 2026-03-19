@@ -1003,7 +1003,7 @@ func TestWriteSigV4Error_PreservesRequestID(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/", nil)
-	req.Header.Set("x-amz-request-id", "test-request-id-123")
+	req.Header.Set("X-Amz-Request-Id", "test-request-id-123")
 
 	gw.writeSigV4Error(w, req, awserrors.ErrorIncompleteSignature)
 

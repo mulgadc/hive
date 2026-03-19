@@ -289,7 +289,7 @@ func (gw *GatewayConfig) ErrorHandler(w http.ResponseWriter, r *http.Request, er
 
 	// Get the request ID
 	var requestId = uuid.NewString()
-	if rid := r.Header.Get("x-amz-request-id"); rid != "" {
+	if rid := r.Header.Get("X-Amz-Request-Id"); rid != "" {
 		requestId = rid
 	}
 
