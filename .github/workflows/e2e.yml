@@ -28,7 +28,7 @@ jobs:
       - name: Clean workspace
         run: rm -rf "$GITHUB_WORKSPACE"/*
 
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         with:
           app-id: ${{ secrets.APP_ID }}
@@ -91,7 +91,7 @@ jobs:
       - name: Clean workspace
         run: rm -rf "$GITHUB_WORKSPACE"/*
 
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         with:
           app-id: ${{ secrets.APP_ID }}
@@ -154,7 +154,7 @@ jobs:
       - name: Clean workspace
         run: rm -rf "$GITHUB_WORKSPACE"/*
 
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: app-token
         with:
           app-id: ${{ secrets.APP_ID }}
