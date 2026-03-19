@@ -283,7 +283,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 		d.Instances.Mu.Lock()
 		status := instance.Status
 		d.Instances.Mu.Unlock()
-		if status != vm.StatePending {
+		if status != vm.StatePending && status != vm.StateProvisioning {
 			slog.Info("Instance state changed during provisioning, skipping launch",
 				"instanceId", instance.ID, "status", string(status))
 			continue
