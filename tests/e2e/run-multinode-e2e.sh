@@ -910,9 +910,223 @@ fi
 echo ""
 
 # ==========================================================================
-# Phase 10: Cleanup
+# Phase 10: VPC Networking
 # ==========================================================================
-echo "Phase 10: Cleanup"
+echo "Phase 10: VPC Networking"
+echo "========================================"
+echo "Testing VPC instance launch, PrivateIpAddress, and stop/start IP persistence..."
+
+# Create a fresh VPC + subnet (don't reuse bootstrap's to avoid interference)
+echo ""
+echo "Creating test VPC + subnet..."
+VPC_OUTPUT=$($AWS_EC2 create-vpc --cidr-block 10.200.0.0/16)
+VPC_ID=$(echo "$VPC_OUTPUT" | jq -r '.Vpc.VpcId')
+if [ -z "$VPC_ID" ] || [ "$VPC_ID" == "null" ]; then
+    echo "  ERROR: Failed to create VPC"
+    fail_test "VPC create"
+else
+    echo "  Created VPC: $VPC_ID (10.200.0.0/16)"
+    pass_test "VPC create"
+
+    SUBNET_OUTPUT=$($AWS_EC2 create-subnet --vpc-id "$VPC_ID" --cidr-block 10.200.1.0/24)
+    SUBNET_ID=$(echo "$SUBNET_OUTPUT" | jq -r '.Subnet.SubnetId')
+    if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" == "null" ]; then
+        echo "  ERROR: Failed to create subnet"
+        fail_test "Subnet create"
+    else
+        echo "  Created Subnet: $SUBNET_ID (10.200.1.0/24)"
+        pass_test "Subnet create"
+
+        # Brief pause for OVN topology programming
+        sleep 2
+
+        # Launch 3 instances with subnet
+        echo ""
+        echo "Launching 3 VPC instances..."
+        VPC_INSTANCE_IDS=()
+        VPC_LAUNCH_OK=true
+        for i in 1 2 3; do
+            echo "  Launching VPC instance $i with subnet $SUBNET_ID..."
+            RUN_OUTPUT=$($AWS_EC2 run-instances \
+                --image-id "$AMI_ID" \
+                --instance-type "$INSTANCE_TYPE" \
+                --key-name spinifex-key \
+                --subnet-id "$SUBNET_ID")
+
+            VPC_INST_ID=$(echo "$RUN_OUTPUT" | jq -r '.Instances[0].InstanceId')
+            VPC_INST_IP=$(echo "$RUN_OUTPUT" | jq -r '.Instances[0].PrivateIpAddress // empty')
+
+            if [ -z "$VPC_INST_ID" ] || [ "$VPC_INST_ID" == "null" ]; then
+                echo "  ERROR: Failed to launch VPC instance $i"
+                VPC_LAUNCH_OK=false
+                break
+            fi
+            echo "  Launched: $VPC_INST_ID (PrivateIpAddress: ${VPC_INST_IP:-not yet assigned})"
+            VPC_INSTANCE_IDS+=("$VPC_INST_ID")
+            sleep 1
+        done
+
+        if [ "$VPC_LAUNCH_OK" = true ] && [ ${#VPC_INSTANCE_IDS[@]} -eq 3 ]; then
+            pass_test "VPC instance launch"
+
+            # Wait for all VPC instances to be running
+            echo ""
+            echo "Waiting for VPC instances to reach running state..."
+            VPC_ALL_RUNNING=true
+            for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+                wait_for_instance_state "$vpc_inst" "running" 60 || {
+                    echo "  ERROR: VPC instance $vpc_inst failed to start"
+                    VPC_ALL_RUNNING=false
+                }
+            done
+
+            if [ "$VPC_ALL_RUNNING" = true ]; then
+                # Verify PrivateIpAddress in DescribeInstances
+                echo ""
+                echo "Verifying PrivateIpAddress in DescribeInstances..."
+                VPC_PRIVATE_IPS=()
+                VPC_IP_OK=true
+                for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+                    DESCRIBE_OUT=$($AWS_EC2 describe-instances --instance-ids "$vpc_inst")
+                    PRIVATE_IP=$(echo "$DESCRIBE_OUT" | jq -r '.Reservations[0].Instances[0].PrivateIpAddress // empty')
+                    INST_SUBNET=$(echo "$DESCRIBE_OUT" | jq -r '.Reservations[0].Instances[0].SubnetId // empty')
+                    INST_VPC=$(echo "$DESCRIBE_OUT" | jq -r '.Reservations[0].Instances[0].VpcId // empty')
+
+                    if [ -z "$PRIVATE_IP" ]; then
+                        echo "  ERROR: $vpc_inst has no PrivateIpAddress"
+                        VPC_IP_OK=false
+                        continue
+                    fi
+
+                    echo "  $vpc_inst: IP=$PRIVATE_IP, Subnet=$INST_SUBNET, VPC=$INST_VPC"
+
+                    if [ "$INST_SUBNET" != "$SUBNET_ID" ]; then
+                        echo "  ERROR: SubnetId mismatch (expected $SUBNET_ID, got $INST_SUBNET)"
+                        VPC_IP_OK=false
+                    fi
+                    if [ "$INST_VPC" != "$VPC_ID" ]; then
+                        echo "  ERROR: VpcId mismatch (expected $VPC_ID, got $INST_VPC)"
+                        VPC_IP_OK=false
+                    fi
+
+                    VPC_PRIVATE_IPS+=("$PRIVATE_IP")
+                done
+
+                if [ "$VPC_IP_OK" = true ]; then
+                    # Verify all IPs are unique and in the subnet range (10.200.1.x)
+                    UNIQUE_IPS=$(printf '%s\n' "${VPC_PRIVATE_IPS[@]}" | sort -u | wc -l)
+                    IP_RANGE_OK=true
+                    if [ "$UNIQUE_IPS" -ne "${#VPC_PRIVATE_IPS[@]}" ]; then
+                        echo "  ERROR: Duplicate IPs detected: ${VPC_PRIVATE_IPS[*]}"
+                        IP_RANGE_OK=false
+                    fi
+                    for ip in "${VPC_PRIVATE_IPS[@]}"; do
+                        if ! echo "$ip" | grep -qE '^10\.200\.1\.[0-9]+$'; then
+                            echo "  ERROR: IP $ip not in expected subnet 10.200.1.0/24"
+                            IP_RANGE_OK=false
+                        fi
+                    done
+
+                    if [ "$IP_RANGE_OK" = true ]; then
+                        echo "  All IPs unique and in correct subnet: ${VPC_PRIVATE_IPS[*]}"
+                        pass_test "VPC IP allocation"
+                    else
+                        fail_test "VPC IP allocation"
+                    fi
+
+                    # Stop/Start IP persistence
+                    echo ""
+                    echo "Testing stop/start IP persistence..."
+                    echo "  IPs before stop: ${VPC_PRIVATE_IPS[*]}"
+
+                    # Stop all VPC instances
+                    for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+                        $AWS_EC2 stop-instances --instance-ids "$vpc_inst" > /dev/null
+                    done
+                    VPC_ALL_STOPPED=true
+                    for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+                        wait_for_instance_state "$vpc_inst" "stopped" 60 || {
+                            echo "  ERROR: VPC instance $vpc_inst failed to stop"
+                            VPC_ALL_STOPPED=false
+                        }
+                    done
+
+                    if [ "$VPC_ALL_STOPPED" = true ]; then
+                        # Verify IPs persist while stopped
+                        IP_PERSIST_OK=true
+                        for idx in "${!VPC_INSTANCE_IDS[@]}"; do
+                            vpc_inst="${VPC_INSTANCE_IDS[$idx]}"
+                            expected_ip="${VPC_PRIVATE_IPS[$idx]}"
+                            STOPPED_IP=$($AWS_EC2 describe-instances --instance-ids "$vpc_inst" \
+                                --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+                            if [ "$STOPPED_IP" != "$expected_ip" ]; then
+                                echo "  ERROR: $vpc_inst IP changed while stopped (expected $expected_ip, got $STOPPED_IP)"
+                                IP_PERSIST_OK=false
+                            fi
+                        done
+
+                        # Restart all VPC instances
+                        for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+                            $AWS_EC2 start-instances --instance-ids "$vpc_inst" > /dev/null
+                        done
+                        for vpc_inst in "${VPC_INSTANCE_IDS[@]}"; do
+                            wait_for_instance_state "$vpc_inst" "running" 60 || true
+                        done
+
+                        # Verify IPs persist after restart
+                        for idx in "${!VPC_INSTANCE_IDS[@]}"; do
+                            vpc_inst="${VPC_INSTANCE_IDS[$idx]}"
+                            expected_ip="${VPC_PRIVATE_IPS[$idx]}"
+                            RESTARTED_IP=$($AWS_EC2 describe-instances --instance-ids "$vpc_inst" \
+                                --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+                            if [ "$RESTARTED_IP" != "$expected_ip" ]; then
+                                echo "  ERROR: $vpc_inst IP changed after restart (expected $expected_ip, got $RESTARTED_IP)"
+                                IP_PERSIST_OK=false
+                            else
+                                echo "  $vpc_inst: IP=$RESTARTED_IP (matches pre-stop)"
+                            fi
+                        done
+
+                        if [ "$IP_PERSIST_OK" = true ]; then
+                            pass_test "VPC stop/start IP persistence"
+                        else
+                            fail_test "VPC stop/start IP persistence"
+                        fi
+                    fi
+                else
+                    fail_test "VPC IP verification"
+                fi
+            fi
+
+            # Cleanup VPC instances
+            echo ""
+            echo "Cleaning up VPC instances..."
+            terminate_and_wait "${VPC_INSTANCE_IDS[@]}" || true
+        else
+            fail_test "VPC instance launch"
+            # Cleanup any partially-launched VPC instances
+            if [ ${#VPC_INSTANCE_IDS[@]} -gt 0 ]; then
+                echo "  Cleaning up partially-launched VPC instances..."
+                terminate_and_wait "${VPC_INSTANCE_IDS[@]}" || true
+            fi
+        fi
+
+        # Cleanup subnet
+        echo "  Deleting subnet $SUBNET_ID..."
+        $AWS_EC2 delete-subnet --subnet-id "$SUBNET_ID" 2>/dev/null || true
+    fi
+
+    # Cleanup VPC
+    echo "  Deleting VPC $VPC_ID..."
+    $AWS_EC2 delete-vpc --vpc-id "$VPC_ID" 2>/dev/null || true
+fi
+
+echo ""
+
+# ==========================================================================
+# Phase 11: Cleanup
+# ==========================================================================
+echo "Phase 11: Cleanup"
 echo "========================================"
 
 echo "Terminating all instances..."

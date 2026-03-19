@@ -553,7 +553,7 @@ wait_for_instance_recovery() {
 
     while [ $attempt -lt $max_attempts ]; do
         local state
-        state=$(aws --endpoint-url https://${NODE1_IP}:${AWSGW_PORT} ec2 describe-instances \
+        state=$(aws ec2 describe-instances \
             --instance-ids "$instance_id" \
             --query 'Reservations[0].Instances[0].State.Name' \
             --output text 2>/dev/null) || {
