@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -157,6 +158,32 @@ func pidPath() string {
 		return filepath.Join(os.Getenv("HOME"), "spinifex")
 	}
 	return os.TempDir()
+}
+
+// WaitForProcessExit polls until the given PID is no longer alive or the
+// timeout expires. Unlike WaitForPidFileRemoval, this checks the process
+// itself via kill(pid, 0), so it works after SIGKILL where the target
+// cannot clean up its own PID file.
+func WaitForProcessExit(pid int, timeout time.Duration) error {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timer.C:
+			return fmt.Errorf("timeout waiting for process %d to exit", pid)
+		case <-ticker.C:
+			proc, err := os.FindProcess(pid)
+			if err != nil {
+				return nil // process gone
+			}
+			if proc.Signal(syscall.Signal(0)) != nil {
+				return nil // process no longer alive
+			}
+		}
+	}
 }
 
 func WaitForPidFileRemoval(instanceID string, timeout time.Duration) error {
