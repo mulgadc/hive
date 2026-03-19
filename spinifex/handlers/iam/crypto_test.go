@@ -185,6 +185,7 @@ func TestLoadBootstrapData(t *testing.T) {
 	path := filepath.Join(dir, "bootstrap.json")
 
 	bd := BootstrapData{
+		Version:         BootstrapVersion,
 		AccessKeyID:     "AKIAIOSFODNN7EXAMPLE",
 		EncryptedSecret: "dGVzdC1lbmNyeXB0ZWQ=",
 		AccountID:       "000000000000",
@@ -199,6 +200,9 @@ func TestLoadBootstrapData(t *testing.T) {
 		t.Fatalf("LoadBootstrapData() error: %v", err)
 	}
 
+	if loaded.Version != BootstrapVersion {
+		t.Fatalf("Version: expected %q, got %q", BootstrapVersion, loaded.Version)
+	}
 	if loaded.AccessKeyID != bd.AccessKeyID {
 		t.Fatalf("AccessKeyID: expected %q, got %q", bd.AccessKeyID, loaded.AccessKeyID)
 	}
@@ -258,6 +262,9 @@ func TestSaveBootstrapData_RoundTrip(t *testing.T) {
 	loaded, err := LoadBootstrapData(path)
 	if err != nil {
 		t.Fatalf("LoadBootstrapData() error: %v", err)
+	}
+	if loaded.Version != BootstrapVersion {
+		t.Fatalf("Version: expected %q, got %q", BootstrapVersion, loaded.Version)
 	}
 	if loaded.AccessKeyID != data.AccessKeyID {
 		t.Fatalf("AccessKeyID: expected %q, got %q", data.AccessKeyID, loaded.AccessKeyID)
@@ -325,13 +332,12 @@ func TestBootstrapData_ExtendedRoundTrip(t *testing.T) {
 	}
 }
 
-func TestBootstrapData_NoAdmin_BackwardCompat(t *testing.T) {
+func TestBootstrapData_NoAdmin(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bootstrap.json")
 
-	// Write bootstrap data without admin field (old format)
-	oldJSON := `{"access_key_id":"AKIAOLD123","encrypted_secret":"b2xk","account_id":"000000000000"}`
-	if err := os.WriteFile(path, []byte(oldJSON), 0600); err != nil {
+	noAdminJSON := `{"version":"1.0","access_key_id":"AKIAOLD123","encrypted_secret":"b2xk","account_id":"000000000000"}`
+	if err := os.WriteFile(path, []byte(noAdminJSON), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -344,7 +350,22 @@ func TestBootstrapData_NoAdmin_BackwardCompat(t *testing.T) {
 		t.Fatalf("AccessKeyID: expected %q, got %q", "AKIAOLD123", loaded.AccessKeyID)
 	}
 	if loaded.Admin != nil {
-		t.Fatal("Admin field should be nil for old-format bootstrap data")
+		t.Fatal("Admin field should be nil")
+	}
+}
+
+func TestLoadBootstrapData_MissingVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bootstrap.json")
+
+	noVersion := `{"access_key_id":"AKIA123","encrypted_secret":"dGVzdA==","account_id":"000000000000"}`
+	if err := os.WriteFile(path, []byte(noVersion), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadBootstrapData(path)
+	if err == nil {
+		t.Fatal("LoadBootstrapData() should fail for missing version")
 	}
 }
 

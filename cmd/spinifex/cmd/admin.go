@@ -1546,6 +1546,7 @@ func writeBootstrapFilesWithAdmin(configDir string, masterKey []byte, accessKey,
 	}
 
 	bd := &handlers_iam.BootstrapData{
+		Version:         handlers_iam.BootstrapVersion,
 		AccessKeyID:     accessKey,
 		EncryptedSecret: encryptedSecret,
 		AccountID:       accountID,

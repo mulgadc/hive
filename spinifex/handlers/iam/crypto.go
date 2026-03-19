@@ -12,6 +12,9 @@ import (
 
 const masterKeySize = 32 // AES-256
 
+// BootstrapVersion is the current bootstrap.json config version.
+const BootstrapVersion = "1.0"
+
 // GenerateMasterKey returns 32 cryptographically random bytes suitable
 // for use as an AES-256-GCM key.
 func GenerateMasterKey() ([]byte, error) {
@@ -117,7 +120,9 @@ func DecryptSecret(ciphertext string, key []byte) (string, error) {
 }
 
 // SaveBootstrapData writes bootstrap data as JSON to disk with 0600 permissions.
+// It always sets the version to BootstrapVersion.
 func SaveBootstrapData(path string, data *BootstrapData) error {
+	data.Version = BootstrapVersion
 	b, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("marshal bootstrap data: %w", err)
@@ -137,6 +142,9 @@ func LoadBootstrapData(path string) (*BootstrapData, error) {
 	var bd BootstrapData
 	if err := json.Unmarshal(data, &bd); err != nil {
 		return nil, fmt.Errorf("parse bootstrap data: %w", err)
+	}
+	if bd.Version == "" {
+		return nil, fmt.Errorf("bootstrap data missing version field")
 	}
 	return &bd, nil
 }

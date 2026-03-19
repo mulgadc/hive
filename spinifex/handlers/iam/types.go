@@ -103,6 +103,7 @@ func (s StringOrArr) MarshalJSON() ([]byte, error) {
 // BootstrapData is the on-disk JSON file consumed on first gateway start
 // to seed the root IAM user into NATS KV.
 type BootstrapData struct {
+	Version         string              `json:"version"`
 	AccessKeyID     string              `json:"access_key_id"`
 	EncryptedSecret string              `json:"encrypted_secret"`
 	AccountID       string              `json:"account_id"`
