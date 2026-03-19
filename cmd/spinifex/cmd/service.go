@@ -694,13 +694,30 @@ var vpcdStartCmd = &cobra.Command{
 
 		nodeConfig := clusterConfig.Nodes[clusterConfig.Node]
 
+		// Map cluster-wide external pools to vpcd config
+		var extPools []vpcd.ExternalPoolConfig
+		for _, p := range clusterConfig.Network.ExternalPools {
+			extPools = append(extPools, vpcd.ExternalPoolConfig{
+				Name:       p.Name,
+				RangeStart: p.RangeStart,
+				RangeEnd:   p.RangeEnd,
+				Gateway:    p.Gateway,
+				GatewayIP:  p.GatewayIP,
+				PrefixLen:  p.PrefixLen,
+				Region:     p.Region,
+				AZ:         p.AZ,
+			})
+		}
+
 		svc, err := service.New("vpcd", &vpcd.Config{
-			NatsHost:  nodeConfig.NATS.Host,
-			NatsToken: nodeConfig.NATS.ACL.Token,
-			OVNNBAddr: nodeConfig.VPCD.OVNNBAddr,
-			OVNSBAddr: nodeConfig.VPCD.OVNSBAddr,
-			BaseDir:   nodeConfig.BaseDir,
-			Debug:     false,
+			NatsHost:      nodeConfig.NATS.Host,
+			NatsToken:     nodeConfig.NATS.ACL.Token,
+			OVNNBAddr:     nodeConfig.VPCD.OVNNBAddr,
+			OVNSBAddr:     nodeConfig.VPCD.OVNSBAddr,
+			BaseDir:       nodeConfig.BaseDir,
+			Debug:         false,
+			ExternalMode:  clusterConfig.Network.ExternalMode,
+			ExternalPools: extPools,
 		})
 		if err != nil {
 			fmt.Println("Error starting vpcd service:", err)

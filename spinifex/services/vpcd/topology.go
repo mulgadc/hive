@@ -50,12 +50,56 @@ type PortEvent struct {
 
 // TopologyHandler translates VPC lifecycle NATS events into OVN NB DB operations.
 type TopologyHandler struct {
-	ovn OVNClient
+	ovn           OVNClient
+	externalMode  string
+	externalPools []ExternalPoolConfig
 }
 
-// NewTopologyHandler creates a new TopologyHandler.
-func NewTopologyHandler(ovn OVNClient) *TopologyHandler {
-	return &TopologyHandler{ovn: ovn}
+// NewTopologyHandler creates a new TopologyHandler with optional external network config.
+func NewTopologyHandler(ovn OVNClient, opts ...TopologyOption) *TopologyHandler {
+	h := &TopologyHandler{ovn: ovn}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
+}
+
+// TopologyOption configures a TopologyHandler.
+type TopologyOption func(*TopologyHandler)
+
+// WithExternalNetwork configures external connectivity for public subnets.
+func WithExternalNetwork(mode string, pools []ExternalPoolConfig) TopologyOption {
+	return func(h *TopologyHandler) {
+		h.externalMode = mode
+		h.externalPools = pools
+	}
+}
+
+// findExternalPool returns the first pool matching the given region/AZ,
+// using the fallback order: AZ-scoped → region-scoped → unscoped.
+func (h *TopologyHandler) findExternalPool(region, az string) *ExternalPoolConfig {
+	// 1. AZ-scoped match
+	for i := range h.externalPools {
+		p := &h.externalPools[i]
+		if p.AZ != "" && p.AZ == az && p.Region == region {
+			return p
+		}
+	}
+	// 2. Region-scoped (no AZ)
+	for i := range h.externalPools {
+		p := &h.externalPools[i]
+		if p.AZ == "" && p.Region != "" && p.Region == region {
+			return p
+		}
+	}
+	// 3. Unscoped (no region, no AZ — global pool)
+	for i := range h.externalPools {
+		p := &h.externalPools[i]
+		if p.Region == "" && p.AZ == "" {
+			return p
+		}
+	}
+	return nil
 }
 
 // Subscribe registers NATS subscriptions for VPC lifecycle topics.
@@ -532,12 +576,41 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 		return
 	}
 
+	// Resolve external pool for this VPC's gateway
+	// TODO: use VPC's region/AZ once we track it; for now use first matching pool
+	pool := h.findExternalPool("", "")
+	gatewayIP := "169.254.0.1"
+	gatewayNetwork := "169.254.0.1/30"
+	wanGateway := "169.254.0.2"
+	prefixLen := 30
+
+	if pool != nil {
+		gip := pool.GatewayIP
+		if gip == "" {
+			gip = pool.RangeStart // Default: first IP in range
+		}
+		gatewayIP = gip
+		prefixLen = pool.PrefixLen
+		if prefixLen == 0 {
+			prefixLen = 24
+		}
+		gatewayNetwork = fmt.Sprintf("%s/%d", gip, prefixLen)
+		wanGateway = pool.Gateway
+		slog.Info("vpcd: using external pool for IGW",
+			"pool", pool.Name,
+			"gateway_ip", gatewayIP,
+			"wan_gateway", wanGateway,
+		)
+	} else if h.externalMode == "pool" || h.externalMode == "nat" {
+		slog.Warn("vpcd: external mode is set but no matching pool found, using link-local fallback")
+	}
+
 	// 3. Create gateway router port on the VPC router connecting to external switch
 	gwMAC := generateMAC("gw-" + evt.VpcId)
 	lrp := &nbdb.LogicalRouterPort{
 		Name:     gwPortName,
 		MAC:      gwMAC,
-		Networks: []string{"169.254.0.1/30"}, // link-local for external transit
+		Networks: []string{gatewayNetwork},
 		ExternalIDs: map[string]string{
 			"spinifex:vpc_id": evt.VpcId,
 			"spinifex:igw_id": evt.InternetGatewayId,
@@ -573,19 +646,17 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 	}
 
 	// 5. Add SNAT rule — masquerade all VPC traffic going through the gateway
-	//    Get the VPC CIDR from the router's external_ids
 	router, err := h.ovn.GetLogicalRouter(ctx, routerName)
 	if err != nil {
 		slog.Warn("vpcd: failed to get router for SNAT, skipping NAT setup", "router", routerName, "err", err)
 	} else {
 		vpcCIDR := router.ExternalIDs["spinifex:cidr"]
 		if vpcCIDR == "" {
-			// Fall back to a reasonable default — list subnets for this VPC
 			vpcCIDR = "10.0.0.0/8"
 		}
 		snatRule := &nbdb.NAT{
 			Type:       "snat",
-			ExternalIP: "169.254.0.1",
+			ExternalIP: gatewayIP,
 			LogicalIP:  vpcCIDR,
 			ExternalIDs: map[string]string{
 				"spinifex:vpc_id": evt.VpcId,
@@ -597,10 +668,10 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 		}
 	}
 
-	// 6. Add default route pointing to the external gateway
+	// 6. Add default route pointing to the WAN gateway
 	defaultRoute := &nbdb.LogicalRouterStaticRoute{
 		IPPrefix: "0.0.0.0/0",
-		Nexthop:  "169.254.0.2",
+		Nexthop:  wanGateway,
 		ExternalIDs: map[string]string{
 			"spinifex:vpc_id": evt.VpcId,
 			"spinifex:igw_id": evt.InternetGatewayId,
@@ -615,6 +686,8 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 		"vpc_id", evt.VpcId,
 		"ext_switch", extSwitchName,
 		"gw_port", gwPortName,
+		"gateway_ip", gatewayIP,
+		"wan_gateway", wanGateway,
 	)
 	respond(msg, nil)
 }

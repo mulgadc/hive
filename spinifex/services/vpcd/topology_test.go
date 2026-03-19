@@ -869,6 +869,175 @@ func TestTopologyHandler_IGWAttach(t *testing.T) {
 	}
 }
 
+func TestTopologyHandler_IGWAttach_WithExternalPool(t *testing.T) {
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	pools := []ExternalPoolConfig{
+		{
+			Name:       "wan",
+			RangeStart: "192.168.1.150",
+			RangeEnd:   "192.168.1.250",
+			Gateway:    "192.168.1.1",
+			PrefixLen:  24,
+		},
+	}
+	topo := NewTopologyHandler(mock, WithExternalNetwork("pool", pools))
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	// Pre-create VPC router
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name: "vpc-vpc-extpool",
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id": "vpc-extpool",
+			"spinifex:cidr":   "10.0.0.0/16",
+		},
+	})
+
+	// Attach IGW
+	evt := types.IGWEvent{InternetGatewayId: "igw-ext1", VpcId: "vpc-extpool"}
+	data, _ := json.Marshal(evt)
+	resp, err := nc.Request(TopicIGWAttach, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request vpc.igw-attach: %v", err)
+	}
+	assertSuccess(t, resp, "attach IGW with external pool")
+
+	// Verify gateway router port uses real external IP, not link-local
+	router, err := mock.GetLogicalRouter(ctx, "vpc-vpc-extpool")
+	if err != nil {
+		t.Fatalf("expected router: %v", err)
+	}
+	if len(router.Ports) < 1 {
+		t.Fatal("expected at least 1 router port")
+	}
+
+	gwPort, err := mock.GetLogicalRouterPort(ctx, "gw-vpc-extpool")
+	if err != nil {
+		t.Fatalf("expected gateway router port: %v", err)
+	}
+	if len(gwPort.Networks) != 1 || gwPort.Networks[0] != "192.168.1.150/24" {
+		t.Errorf("expected gateway network 192.168.1.150/24, got %v", gwPort.Networks)
+	}
+
+	// Verify SNAT uses real external IP (look up NAT by UUID from router)
+	if len(router.NAT) != 1 {
+		t.Fatalf("expected 1 NAT rule, got %d", len(router.NAT))
+	}
+	natRule := mock.nats[router.NAT[0]]
+	if natRule == nil {
+		t.Fatal("NAT rule not found in mock")
+	}
+	if natRule.ExternalIP != "192.168.1.150" {
+		t.Errorf("expected SNAT external IP 192.168.1.150, got %s", natRule.ExternalIP)
+	}
+
+	// Verify default route points to WAN gateway, not link-local
+	if len(router.StaticRoutes) != 1 {
+		t.Fatalf("expected 1 static route, got %d", len(router.StaticRoutes))
+	}
+	route := mock.staticRoutes[router.StaticRoutes[0]]
+	if route == nil {
+		t.Fatal("static route not found in mock")
+	}
+	if route.Nexthop != "192.168.1.1" {
+		t.Errorf("expected nexthop 192.168.1.1, got %s", route.Nexthop)
+	}
+}
+
+func TestTopologyHandler_IGWAttach_PoolWithGatewayIP(t *testing.T) {
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	pools := []ExternalPoolConfig{
+		{
+			Name:       "dc1",
+			RangeStart: "203.0.113.2",
+			RangeEnd:   "203.0.113.14",
+			Gateway:    "203.0.113.1",
+			GatewayIP:  "203.0.113.2", // Explicit gateway IP
+			PrefixLen:  28,
+		},
+	}
+	topo := NewTopologyHandler(mock, WithExternalNetwork("pool", pools))
+	subs, _ := topo.Subscribe(nc)
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name:        "vpc-vpc-gwip",
+		ExternalIDs: map[string]string{"spinifex:vpc_id": "vpc-gwip", "spinifex:cidr": "10.0.0.0/16"},
+	})
+
+	evt := types.IGWEvent{InternetGatewayId: "igw-gwip", VpcId: "vpc-gwip"}
+	data, _ := json.Marshal(evt)
+	resp, _ := nc.Request(TopicIGWAttach, data, 5_000_000_000)
+	assertSuccess(t, resp, "attach IGW with explicit gateway IP")
+
+	router, _ := mock.GetLogicalRouter(ctx, "vpc-vpc-gwip")
+	gwPort, _ := mock.GetLogicalRouterPort(ctx, "gw-vpc-gwip")
+	if gwPort.Networks[0] != "203.0.113.2/28" {
+		t.Errorf("expected 203.0.113.2/28, got %s", gwPort.Networks[0])
+	}
+	natRule := mock.nats[router.NAT[0]]
+	if natRule.ExternalIP != "203.0.113.2" {
+		t.Errorf("expected SNAT IP 203.0.113.2, got %s", natRule.ExternalIP)
+	}
+	route := mock.staticRoutes[router.StaticRoutes[0]]
+	if route.Nexthop != "203.0.113.1" {
+		t.Errorf("expected nexthop 203.0.113.1, got %s", route.Nexthop)
+	}
+}
+
+func TestTopologyHandler_FindExternalPool(t *testing.T) {
+	pools := []ExternalPoolConfig{
+		{Name: "az-a", Region: "us-east-1", AZ: "us-east-1a", RangeStart: "1.1.1.1"},
+		{Name: "region", Region: "us-east-1", RangeStart: "2.2.2.2"},
+		{Name: "global", RangeStart: "3.3.3.3"},
+	}
+	topo := NewTopologyHandler(nil, WithExternalNetwork("pool", pools))
+
+	// AZ match
+	p := topo.findExternalPool("us-east-1", "us-east-1a")
+	if p == nil || p.Name != "az-a" {
+		t.Errorf("expected az-a pool, got %v", p)
+	}
+
+	// Region fallback (no matching AZ)
+	p = topo.findExternalPool("us-east-1", "us-east-1b")
+	if p == nil || p.Name != "region" {
+		t.Errorf("expected region pool, got %v", p)
+	}
+
+	// Global fallback
+	p = topo.findExternalPool("eu-west-1", "eu-west-1a")
+	if p == nil || p.Name != "global" {
+		t.Errorf("expected global pool, got %v", p)
+	}
+
+	// No pools
+	topo2 := NewTopologyHandler(nil)
+	p = topo2.findExternalPool("us-east-1", "us-east-1a")
+	if p != nil {
+		t.Errorf("expected nil pool, got %v", p)
+	}
+}
+
 func TestTopologyHandler_IGWDetach(t *testing.T) {
 	_, nc := startTestNATS(t)
 	mock := NewMockOVNClient()

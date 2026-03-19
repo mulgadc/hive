@@ -39,6 +39,22 @@ type Config struct {
 	BaseDir string
 	// Debug enables debug logging.
 	Debug bool
+	// ExternalMode is "pool", "nat", or "" (disabled).
+	ExternalMode string
+	// ExternalPools holds the cluster-wide external IP pool configs.
+	ExternalPools []ExternalPoolConfig
+}
+
+// ExternalPoolConfig mirrors config.ExternalPool for vpcd's internal use.
+type ExternalPoolConfig struct {
+	Name       string
+	RangeStart string
+	RangeEnd   string
+	Gateway    string
+	GatewayIP  string
+	PrefixLen  int
+	Region     string
+	AZ         string
 }
 
 // Service implements the Spinifex service interface for vpcd.
@@ -174,7 +190,12 @@ func launchService(cfg *Config) error {
 	slog.Info("Connected to OVN NB DB", "endpoint", cfg.OVNNBAddr)
 
 	// Subscribe to VPC lifecycle topics for OVN topology translation
-	topo := NewTopologyHandler(liveClient)
+	var topoOpts []TopologyOption
+	if cfg.ExternalMode != "" {
+		topoOpts = append(topoOpts, WithExternalNetwork(cfg.ExternalMode, cfg.ExternalPools))
+		slog.Info("External network enabled", "mode", cfg.ExternalMode, "pools", len(cfg.ExternalPools))
+	}
+	topo := NewTopologyHandler(liveClient, topoOpts...)
 	subs, err := topo.Subscribe(nc)
 	if err != nil {
 		slog.Error("Failed to subscribe to VPC topics", "err", err)
