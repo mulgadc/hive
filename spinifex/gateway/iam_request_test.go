@@ -167,7 +167,7 @@ func TestIAMRequest_CreateUser_Success(t *testing.T) {
 	}
 	handler := setupIAMRequestHandler(svc)
 
-	req := httptest.NewRequest("POST", "/", strings.NewReader("Action=CreateUser&UserName=alice"))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("Action=CreateUser&UserName=alice"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp := doRequest(handler, req)
@@ -193,7 +193,7 @@ func TestIAMRequest_ListUsers_Success(t *testing.T) {
 	}
 	handler := setupIAMRequestHandler(svc)
 
-	req := httptest.NewRequest("POST", "/", strings.NewReader("Action=ListUsers"))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("Action=ListUsers"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp := doRequest(handler, req)
@@ -209,7 +209,7 @@ func TestIAMRequest_ListUsers_Success(t *testing.T) {
 func TestIAMRequest_UnknownAction(t *testing.T) {
 	handler := setupIAMRequestHandler(&flexMockIAMService{})
 
-	req := httptest.NewRequest("POST", "/", strings.NewReader("Action=DoesNotExist"))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("Action=DoesNotExist"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp := doRequest(handler, req)
@@ -222,7 +222,7 @@ func TestIAMRequest_UnknownAction(t *testing.T) {
 func TestIAMRequest_EmptyAction(t *testing.T) {
 	handler := setupIAMRequestHandler(&flexMockIAMService{})
 
-	req := httptest.NewRequest("POST", "/", strings.NewReader("UserName=alice"))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("UserName=alice"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp := doRequest(handler, req)
@@ -247,7 +247,7 @@ func TestIAMRequest_NilService(t *testing.T) {
 		}
 	})
 
-	req := httptest.NewRequest("POST", "/", strings.NewReader("Action=CreateUser&UserName=alice"))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("Action=CreateUser&UserName=alice"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp := doRequest(handler, req)
@@ -265,7 +265,7 @@ func TestIAMRequest_ServiceError(t *testing.T) {
 	}
 	handler := setupIAMRequestHandler(svc)
 
-	req := httptest.NewRequest("POST", "/", strings.NewReader("Action=CreateUser&UserName=alice"))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("Action=CreateUser&UserName=alice"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp := doRequest(handler, req)
@@ -291,7 +291,7 @@ func TestIAMRequest_MissingAccountID(t *testing.T) {
 		}
 	})
 
-	req := httptest.NewRequest("POST", "/", strings.NewReader("Action=CreateUser&UserName=alice"))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("Action=CreateUser&UserName=alice"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp := doRequest(handler, req)
@@ -305,7 +305,7 @@ func TestIAMRequest_ValidationError(t *testing.T) {
 	// CreateUser with missing UserName should return MissingParameter
 	handler := setupIAMRequestHandler(&flexMockIAMService{})
 
-	req := httptest.NewRequest("POST", "/", strings.NewReader("Action=CreateUser"))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("Action=CreateUser"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp := doRequest(handler, req)

@@ -211,12 +211,12 @@ func setupTestApp(accessKey, secretKey string) http.Handler {
 func TestSigV4Auth_NoAuthorizationHeader(t *testing.T) {
 	handler := setupTestApp(testAccessKey, testSecretKey)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 403 {
+	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("Expected status 403, got %d", resp.StatusCode)
 	}
 
@@ -242,14 +242,14 @@ func TestSigV4Auth_MalformedHeader(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "/", nil)
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req.Host = "localhost:9999"
 			req.Header.Set("Authorization", tc.authHeader)
 			req.Header.Set("X-Amz-Date", time.Now().UTC().Format(auth.TimeFormat))
 
 			resp := doRequest(handler, req)
 
-			if resp.StatusCode != 400 {
+			if resp.StatusCode != http.StatusBadRequest {
 				t.Errorf("Expected status 400, got %d", resp.StatusCode)
 			}
 
@@ -269,14 +269,14 @@ func TestSigV4Auth_InvalidAccessKey(t *testing.T) {
 		"INVALID_ACCESS_KEY", testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 403 {
+	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("Expected status 403, got %d", resp.StatusCode)
 	}
 
@@ -295,14 +295,14 @@ func TestSigV4Auth_InvalidSignature(t *testing.T) {
 		testAccessKey, "WRONG_SECRET_KEY", testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 403 {
+	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("Expected status 403, got %d", resp.StatusCode)
 	}
 
@@ -320,14 +320,14 @@ func TestSigV4Auth_ValidSignature(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("Expected status 200, got %d, body: %s", resp.StatusCode, string(body))
 	}
@@ -336,13 +336,13 @@ func TestSigV4Auth_ValidSignature(t *testing.T) {
 func TestSigV4Auth_OptionsSkipsAuth(t *testing.T) {
 	handler := setupTestApp(testAccessKey, testSecretKey)
 
-	req := httptest.NewRequest("OPTIONS", "/", nil)
+	req := httptest.NewRequest(http.MethodOptions, "/", nil)
 	req.Host = "localhost:9999"
 	// No Authorization header
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200 for OPTIONS, got %d", resp.StatusCode)
 	}
 }
@@ -356,7 +356,7 @@ func TestSigV4Auth_ValidSignatureWithBody(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
@@ -364,7 +364,7 @@ func TestSigV4Auth_ValidSignatureWithBody(t *testing.T) {
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		t.Errorf("Expected status 200, got %d, body: %s", resp.StatusCode, string(respBody))
 	}
@@ -379,14 +379,14 @@ func TestSigV4Auth_ValidSignatureWithQueryString(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/?"+queryString, nil)
+	req := httptest.NewRequest(http.MethodGet, "/?"+queryString, nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		t.Errorf("Expected status 200, got %d, body: %s", resp.StatusCode, string(respBody))
 	}
@@ -427,14 +427,14 @@ func TestSigV4Auth_InactiveAccessKey(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(r, req)
 
-	if resp.StatusCode != 403 {
+	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("Expected status 403 for inactive key, got %d", resp.StatusCode)
 	}
 
@@ -462,14 +462,14 @@ func TestSigV4Auth_NilIAMService(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(r, req)
 
-	if resp.StatusCode != 500 {
+	if resp.StatusCode != http.StatusInternalServerError {
 		t.Errorf("Expected status 500 for nil IAM service, got %d", resp.StatusCode)
 	}
 
@@ -515,14 +515,14 @@ func TestSigV4Auth_CallerIdentity(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(r, req)
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("Expected status 200, got %d, body: %s", resp.StatusCode, string(body))
 	}
@@ -650,14 +650,14 @@ func TestSigV4Auth_DecryptFailure(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(r, req)
 
-	if resp.StatusCode != 500 {
+	if resp.StatusCode != http.StatusInternalServerError {
 		t.Errorf("Expected status 500 for decrypt failure, got %d", resp.StatusCode)
 	}
 
@@ -786,14 +786,14 @@ func TestSigV4Auth_ExpiredTimestamp(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService, past,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 403 {
+	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("Expected status 403, got %d", resp.StatusCode)
 	}
 
@@ -813,14 +813,14 @@ func TestSigV4Auth_FutureTimestamp(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService, future,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 403 {
+	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("Expected status 403, got %d", resp.StatusCode)
 	}
 
@@ -840,14 +840,14 @@ func TestSigV4Auth_TimestampWithinSkew(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService, recent,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("Expected status 200, got %d, body: %s", resp.StatusCode, string(body))
 	}
@@ -878,18 +878,18 @@ func TestSigV4Auth_ClockSkewBoundary(t *testing.T) {
 				testAccessKey, testSecretKey, testRegion, testService, at,
 			)
 
-			req := httptest.NewRequest("GET", "/", nil)
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req.Host = "localhost:9999"
 			req.Header.Set("Authorization", authHeader)
 			req.Header.Set("X-Amz-Date", timestamp)
 
 			resp := doRequest(handler, req)
 
-			if tc.expectPass && resp.StatusCode != 200 {
+			if tc.expectPass && resp.StatusCode != http.StatusOK {
 				body, _ := io.ReadAll(resp.Body)
 				t.Errorf("Expected 200, got %d, body: %s", resp.StatusCode, string(body))
 			}
-			if !tc.expectPass && resp.StatusCode != 403 {
+			if !tc.expectPass && resp.StatusCode != http.StatusForbidden {
 				t.Errorf("Expected 403, got %d", resp.StatusCode)
 			}
 		})
@@ -904,14 +904,14 @@ func TestSigV4Auth_MissingXAmzDate(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	// Deliberately omit X-Amz-Date
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 400 {
+	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("Expected status 400, got %d", resp.StatusCode)
 	}
 
@@ -929,14 +929,14 @@ func TestSigV4Auth_MalformedTimestamp(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", "not-a-valid-date")
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 400 {
+	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("Expected status 400, got %d", resp.StatusCode)
 	}
 
@@ -965,7 +965,7 @@ func TestWriteSigV4Error_ResponseFormat(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.errorCode, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest("GET", "/", nil)
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
 
 			gw.writeSigV4Error(w, req, tc.errorCode)
 			resp := w.Result()
@@ -1002,7 +1002,7 @@ func TestWriteSigV4Error_PreservesRequestID(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true, Region: testRegion}
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Amz-Request-Id", "test-request-id-123")
 
 	gw.writeSigV4Error(w, req, awserrors.ErrorIncompleteSignature)
@@ -1059,14 +1059,14 @@ func TestSigV4Auth_ContextPropagation(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(r, req)
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("Expected status 200, got %d, body: %s", resp.StatusCode, string(body))
 	}
@@ -1142,7 +1142,7 @@ func TestSigV4Auth_ContextDoesNotLeakBetweenRequests(t *testing.T) {
 		"GET", "/", "", "",
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
-	req1 := httptest.NewRequest("GET", "/", nil)
+	req1 := httptest.NewRequest(http.MethodGet, "/", nil)
 	req1.Host = "localhost:9999"
 	req1.Header.Set("Authorization", authHeader1)
 	req1.Header.Set("X-Amz-Date", timestamp1)
@@ -1158,7 +1158,7 @@ func TestSigV4Auth_ContextDoesNotLeakBetweenRequests(t *testing.T) {
 		"GET", "/", "", "",
 		secondKey, testSecretKey, testRegion, testService,
 	)
-	req2 := httptest.NewRequest("GET", "/", nil)
+	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
 	req2.Host = "localhost:9999"
 	req2.Header.Set("Authorization", authHeader2)
 	req2.Header.Set("X-Amz-Date", timestamp2)
@@ -1191,14 +1191,14 @@ func TestSigV4Auth_LookupAccessKeyUnexpectedError(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(r, req)
 
-	if resp.StatusCode != 500 {
+	if resp.StatusCode != http.StatusInternalServerError {
 		t.Errorf("Expected status 500 for unexpected lookup error, got %d", resp.StatusCode)
 	}
 
@@ -1230,14 +1230,14 @@ func TestSigV4Auth_PathWithSpecialCharacters(t *testing.T) {
 				testAccessKey, testSecretKey, testRegion, testService,
 			)
 
-			req := httptest.NewRequest("GET", tc.reqPath, nil)
+			req := httptest.NewRequest(http.MethodGet, tc.reqPath, nil)
 			req.Host = "localhost:9999"
 			req.Header.Set("Authorization", authHeader)
 			req.Header.Set("X-Amz-Date", timestamp)
 
 			resp := doRequest(handler, req)
 
-			if resp.StatusCode != 200 {
+			if resp.StatusCode != http.StatusOK {
 				body, _ := io.ReadAll(resp.Body)
 				t.Errorf("Expected status 200, got %d, body: %s", resp.StatusCode, string(body))
 			}
@@ -1291,7 +1291,7 @@ func TestSigV4Auth_SignedContentType(t *testing.T) {
 		headers, "content-type;host;x-amz-date",
 	)
 
-	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
@@ -1299,7 +1299,7 @@ func TestSigV4Auth_SignedContentType(t *testing.T) {
 
 	resp := doRequest(r, req)
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		t.Errorf("Expected status 200, got %d, body: %s", resp.StatusCode, string(respBody))
 	}
@@ -1314,14 +1314,14 @@ func TestSigV4Auth_EmptyBodyPOST(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("POST", "/", strings.NewReader(""))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(""))
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("Expected status 200, got %d, body: %s", resp.StatusCode, string(body))
 	}
@@ -1388,7 +1388,7 @@ func TestComputeSignatureWithSecret_SpecialURIPaths(t *testing.T) {
 			if reqPath == "" {
 				reqPath = "/"
 			}
-			req := httptest.NewRequest("GET", reqPath, nil)
+			req := httptest.NewRequest(http.MethodGet, reqPath, nil)
 			req.Host = "localhost:9999"
 			req.Header.Set("X-Amz-Date", timestamp)
 
@@ -1412,7 +1412,7 @@ func TestComputeSignatureWithSecret_Determinism(t *testing.T) {
 
 	var first string
 	for i := range 10 {
-		req := httptest.NewRequest("POST", "/", nil)
+		req := httptest.NewRequest(http.MethodPost, "/", nil)
 		req.Host = "localhost:9999"
 		req.Header.Set("X-Amz-Date", timestamp)
 
@@ -1442,7 +1442,7 @@ func TestComputeSignatureWithSecret_MultipartContentType(t *testing.T) {
 		headers, "content-type;host;x-amz-date",
 	)
 
-	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
@@ -1450,7 +1450,7 @@ func TestComputeSignatureWithSecret_MultipartContentType(t *testing.T) {
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		t.Errorf("Expected status 200 for multipart content-type, got %d, body: %s", resp.StatusCode, string(respBody))
 	}
@@ -1475,14 +1475,14 @@ func TestSigV4Auth_QueryStringEdgeCases(t *testing.T) {
 				testAccessKey, testSecretKey, testRegion, testService,
 			)
 
-			req := httptest.NewRequest("GET", "/?"+tc.queryString, nil)
+			req := httptest.NewRequest(http.MethodGet, "/?"+tc.queryString, nil)
 			req.Host = "localhost:9999"
 			req.Header.Set("Authorization", authHeader)
 			req.Header.Set("X-Amz-Date", timestamp)
 
 			resp := doRequest(handler, req)
 
-			if resp.StatusCode != 200 {
+			if resp.StatusCode != http.StatusOK {
 				body, _ := io.ReadAll(resp.Body)
 				t.Errorf("Expected status 200, got %d, body: %s", resp.StatusCode, string(body))
 			}
@@ -1566,14 +1566,14 @@ func TestCheckPolicy_NonRootNoPolicies_Denied(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 403 {
+	if resp.StatusCode != http.StatusForbidden {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("Expected status 403, got %d, body: %s", resp.StatusCode, string(body))
 	}
@@ -1632,14 +1632,14 @@ func TestCheckPolicy_NonRootWithAllow_Passes(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("Expected status 200, got %d, body: %s", resp.StatusCode, string(body))
 	}
@@ -1698,14 +1698,14 @@ func TestCheckPolicy_NonRootWithExplicitDeny_Denied(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 403 {
+	if resp.StatusCode != http.StatusForbidden {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("Expected status 403, got %d, body: %s", resp.StatusCode, string(body))
 	}
@@ -1765,14 +1765,14 @@ func TestCheckPolicy_RootGlobalAccount_Bypasses(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("Expected status 200 (root bypass), got %d, body: %s", resp.StatusCode, string(body))
 	}
@@ -1813,14 +1813,14 @@ func TestCheckPolicy_MissingAccountID_InternalError(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 500 {
+	if resp.StatusCode != http.StatusInternalServerError {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("Expected status 500, got %d, body: %s", resp.StatusCode, string(body))
 	}
@@ -1863,14 +1863,14 @@ func TestCheckPolicy_GetUserPoliciesError_InternalError(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
 
 	resp := doRequest(handler, req)
 
-	if resp.StatusCode != 500 {
+	if resp.StatusCode != http.StatusInternalServerError {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("Expected status 500, got %d, body: %s", resp.StatusCode, string(body))
 	}
@@ -1915,7 +1915,7 @@ func TestCheckPolicy_RootNonGlobalAccount_StillEvaluated(t *testing.T) {
 		testAccessKey, testSecretKey, testRegion, testService,
 	)
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
@@ -1924,7 +1924,7 @@ func TestCheckPolicy_RootNonGlobalAccount_StillEvaluated(t *testing.T) {
 
 	// root on non-global account is evaluated by the policy engine like any
 	// other user. With no policies attached, the default deny applies.
-	if resp.StatusCode != 403 {
+	if resp.StatusCode != http.StatusForbidden {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("Expected status 403, got %d, body: %s", resp.StatusCode, string(body))
 	}

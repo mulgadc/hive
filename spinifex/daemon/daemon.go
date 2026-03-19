@@ -1144,7 +1144,7 @@ func (d *Daemon) ClusterManager() error {
 		configHash, err := d.computeConfigHash()
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(500)
+			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte(`{"error":"failed to compute config hash"}`))
 			return
 		}
@@ -1201,7 +1201,7 @@ func (d *Daemon) ClusterManager() error {
 		var req types.NodeJoinRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(400)
+			w.WriteHeader(http.StatusBadRequest)
 			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: "invalid request body",
@@ -1216,7 +1216,7 @@ func (d *Daemon) ClusterManager() error {
 		// Validate request
 		if req.Node == "" || req.Region == "" || req.AZ == "" {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(400)
+			w.WriteHeader(http.StatusBadRequest)
 			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: "node, region, and az are required",
@@ -1229,7 +1229,7 @@ func (d *Daemon) ClusterManager() error {
 		// Check if node already exists
 		if _, exists := d.clusterConfig.Nodes[req.Node]; exists {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(409)
+			w.WriteHeader(http.StatusConflict)
 			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: fmt.Sprintf("node %s already exists in cluster", req.Node),
@@ -1264,7 +1264,7 @@ func (d *Daemon) ClusterManager() error {
 		if err := d.saveClusterConfig(); err != nil {
 			slog.Error("Failed to save cluster config", "error", err)
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(500)
+			w.WriteHeader(http.StatusInternalServerError)
 			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: "failed to save cluster config",
