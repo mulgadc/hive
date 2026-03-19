@@ -591,10 +591,20 @@ func GenerateSelfSignedCert(certPath, keyPath string) error {
 
 // SetupAWSCredentials updates ~/.aws/credentials and ~/.aws/config.
 // bindIP is the IP the AWS gateway listens on. If empty or "0.0.0.0", defaults to "localhost".
+// When running under sudo, writes to SUDO_USER's home instead of root's.
 func SetupAWSCredentials(accessKey, secretKey, region, certPath, bindIP string) error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return err
+	}
+
+	// When running under sudo, write to the invoking user's home directory
+	// so the operator can use AWS_PROFILE=spinifex without sudo.
+	sudoUser := os.Getenv("SUDO_USER")
+	if os.Getuid() == 0 && sudoUser != "" {
+		if u, err := user.Lookup(sudoUser); err == nil {
+			homeDir = u.HomeDir
+		}
 	}
 
 	awsDir := filepath.Join(homeDir, ".aws")
@@ -645,6 +655,11 @@ func SetupAWSCredentials(accessKey, secretKey, region, certPath, bindIP string) 
 		"output":       "json",
 	}); err != nil {
 		return err
+	}
+
+	// Fix ownership so the sudo invoking user can read the files
+	if os.Getuid() == 0 && sudoUser != "" {
+		ChownRecursive(awsDir, sudoUser)
 	}
 
 	fmt.Printf("   Profile: %s\n", profileName)
