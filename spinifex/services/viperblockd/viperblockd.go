@@ -615,7 +615,7 @@ func launchService(cfg *Config) (err error) {
 			PluginPath: cfg.PluginPath,
 			BaseDir:    cfg.BaseDir,
 			Host:       cfg.S3Host,
-			Verbose:    true,
+			Verbose:    false,
 			Size:       utils.SafeUint64ToInt64(vb.GetVolumeSize()),
 			Volume:     ebsRequest.Name,
 			Bucket:     cfg.Bucket,
