@@ -67,10 +67,10 @@ go_run:
 	@echo -e "\n....Running $(GO_PROJECT_NAME)...."
 	$(GOPATH)/bin/$(GO_PROJECT_NAME)
 
-# Preflight — runs the same checks as GitHub Actions (format + lint + security + tests).
+# Preflight — runs the same checks as GitHub Actions (lint + vuln + tests).
 # Use this before committing to catch CI failures locally.
 preflight:
-	@$(MAKE) --no-print-directory QUIET=1 check-format check-modernize vet security-check test-cover diff-coverage test-race
+	@$(MAKE) --no-print-directory QUIET=1 lint govulncheck test-cover diff-coverage test-race
 	@echo -e "\n ✅ Preflight passed — safe to commit."
 
 # Run unit tests
@@ -143,59 +143,21 @@ quickinstall: install-system install-go install-aws
 	@echo "   Please ensure /usr/local/go/bin is in your PATH."
 	@echo "   Installed: Go ($(GO_ARCH)), AWS CLI ($(AWS_ARCH)), QEMU ($(QEMU_PACKAGES))"
 
-# Format all Go files in place
-format:
-	gofmt -w .
+# Lint all Go code via golangci-lint (replaces check-format, vet, gosec, staticcheck)
+lint:
+	@echo "Running golangci-lint..."
+	$(_Q)golangci-lint run ./...
+	@echo "  golangci-lint ok"
 
-# Check that all Go files are formatted (CI-compatible, fails on diff)
-check-format:
-	@echo "Checking gofmt..."
-	@UNFORMATTED=$$(gofmt -l .); \
-	if [ -n "$$UNFORMATTED" ]; then \
-		echo "Files not formatted:"; \
-		echo "$$UNFORMATTED"; \
-		echo "Run 'make format' to fix."; \
-		exit 1; \
-	fi
-	@echo "  gofmt ok"
+# Auto-fix all linter issues that have fixers
+fix:
+	golangci-lint run --fix ./...
 
-# Go vet (fails on issues, matches CI)
-vet:
-	@echo "Running go vet..."
-	$(_Q)go vet ./...
-	@echo "  go vet ok"
-
-# Excluded: newexpr (replaces aws.String with new, not idiomatic for AWS SDK)
-# Excluded: stringsbuilder (replaces string += in loops with strings.Builder, not worth the complexity for small loops)
-GOFIX_EXCLUDE := -newexpr=false -stringsbuilder=false
-
-# Apply go fix modernizations
-modernize:
-	@echo "Applying go fix modernizations..."
-	go fix $(GOFIX_EXCLUDE) ./...
-	@echo "  go fix applied"
-
-# Check that code is modernized (CI-compatible, fails on diff)
-check-modernize:
-	@echo "Checking go fix modernizations..."
-	@DIFF=$$(go fix $(GOFIX_EXCLUDE) -diff ./...); \
-	if [ -n "$$DIFF" ]; then \
-		echo "$$DIFF"; \
-		echo "Run 'make modernize' to fix."; \
-		exit 1; \
-	fi
-	@echo "  go fix ok"
-
-# Security checks — each tool fails the build on findings (matches CI).
-# Reports are also saved to tests/ for review.
-security-check:
-	@echo -e "\n....Running security checks for $(GO_PROJECT_NAME)...."
-	$(_Q)set -o pipefail && go tool govulncheck ./... $(_SECQ) tests/govulncheck-report.txt $(if $(QUIET),|| { cat tests/govulncheck-report.txt; exit 1; })
+# Govulncheck — dependency vulnerability scanning (not covered by golangci-lint)
+govulncheck:
+	@echo "Running govulncheck..."
+	$(_Q)go tool govulncheck ./...
 	@echo "  govulncheck ok"
-	$(_Q)set -o pipefail && go tool gosec -quiet -exclude=G204,G304,G402,G117,G703,G705,G706 -exclude-generated -exclude-dir=cmd ./... $(_SECQ) tests/gosec-report.txt $(if $(QUIET),|| { cat tests/gosec-report.txt; exit 1; })
-	@echo "  gosec ok"
-	$(_Q)set -o pipefail && go tool staticcheck -checks="all,-ST1000,-ST1003,-ST1016,-ST1020,-ST1021,-ST1022,-SA1019,-SA9005" ./... $(_SECQ) tests/staticcheck-report.txt $(if $(QUIET),|| { cat tests/staticcheck-report.txt; exit 1; })
-	@echo "  staticcheck ok"
 
 # Build release tarballs — use distro-ARCH for single arch, distro for both
 distro: distro-amd64 distro-arm64
@@ -234,5 +196,5 @@ distro-clean:
 
 .PHONY: build build-ui go_build go_run preflight test test-cover test-race diff-coverage bench run clean \
 	install-system install-go install-aws quickinstall \
-	format check-format modernize check-modernize vet security-check \
+	lint fix govulncheck \
 	distro distro-amd64 distro-arm64 distro-clean

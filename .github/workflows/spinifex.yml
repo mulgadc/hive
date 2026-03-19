@@ -120,14 +120,11 @@ jobs:
       - name: Setup Go Workspace
         run: go work init ./spinifex ./viperblock ./predastore
 
-      - name: Check Format
-        run: make -C spinifex check-format
+      - name: Lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.11.3
+          working-directory: spinifex
 
-      - name: Check Modernize
-        run: make -C spinifex check-modernize
-
-      - name: Go Vet
-        run: make -C spinifex vet
-
-      - name: Security Checks
-        run: make -C spinifex security-check
+      - name: Govulncheck
+        run: make -C spinifex govulncheck
