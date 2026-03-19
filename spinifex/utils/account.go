@@ -1,6 +1,54 @@
 package utils
 
-import "github.com/nats-io/nats.go"
+import (
+	"errors"
+	"fmt"
+	"strconv"
+
+	"github.com/nats-io/nats.go"
+)
+
+// VersionKey is the well-known KV key used to store a bucket's schema version.
+const VersionKey = "_version"
+
+// WriteVersion writes the schema version to a bucket.
+// Only writes if the key doesn't exist or the stored version is older.
+// Returns an error if the stored value is corrupt (non-integer).
+func WriteVersion(kv nats.KeyValue, version int) error {
+	entry, err := kv.Get(VersionKey)
+	if err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
+		return fmt.Errorf("read current version: %w", err)
+	}
+	if err == nil {
+		stored, parseErr := strconv.Atoi(string(entry.Value()))
+		if parseErr != nil {
+			return fmt.Errorf("corrupted _version key (raw=%q): %w", string(entry.Value()), parseErr)
+		}
+		if stored >= version {
+			return nil
+		}
+	}
+	_, err = kv.PutString(VersionKey, strconv.Itoa(version))
+	return err
+}
+
+// ReadVersion reads the schema version from a bucket.
+// Returns 0 if the key is not set. Returns an error on network failures
+// or corrupt values so callers can distinguish "not set" from "unreachable".
+func ReadVersion(kv nats.KeyValue) (int, error) {
+	entry, err := kv.Get(VersionKey)
+	if err != nil {
+		if errors.Is(err, nats.ErrKeyNotFound) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("read version: %w", err)
+	}
+	v, parseErr := strconv.Atoi(string(entry.Value()))
+	if parseErr != nil {
+		return 0, fmt.Errorf("corrupted _version key (raw=%q): %w", string(entry.Value()), parseErr)
+	}
+	return v, nil
+}
 
 // GlobalAccountID is the root/system account. Pre-Phase4 resources are owned by this account.
 const GlobalAccountID = "000000000000"

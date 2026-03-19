@@ -16,7 +16,8 @@ import (
 )
 
 const (
-	KVBucketENIs = "spinifex-vpc-enis"
+	KVBucketENIs        = "spinifex-vpc-enis"
+	KVBucketENIsVersion = 1
 )
 
 // ENIRecord represents a stored Elastic Network Interface
@@ -197,6 +198,9 @@ func (s *VPCServiceImpl) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInt
 	}
 
 	for _, key := range keys {
+		if key == utils.VersionKey {
+			continue
+		}
 		if !strings.HasPrefix(key, prefix) {
 			continue
 		}

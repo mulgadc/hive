@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	KVBucketAccountSettings = "spinifex-ec2-account-settings"
-	KeyEbsEncryptionDefault = "ebs-encryption-default"
-	KeySerialConsoleAccess  = "serial-console-access"
+	KVBucketAccountSettings        = "spinifex-ec2-account-settings"
+	KVBucketAccountSettingsVersion = 1
+	KeyEbsEncryptionDefault        = "ebs-encryption-default"
+	KeySerialConsoleAccess         = "serial-console-access"
 )
 
 // AccountSettingsRecord represents stored account settings
@@ -42,6 +43,9 @@ func NewAccountSettingsServiceImplWithNATS(cfg *config.Config, natsConn *nats.Co
 	settingsKV, err := utils.GetOrCreateKVBucket(js, KVBucketAccountSettings, 10)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create account settings KV bucket: %w", err)
+	}
+	if err := utils.WriteVersion(settingsKV, KVBucketAccountSettingsVersion); err != nil {
+		return nil, fmt.Errorf("write version to %s: %w", KVBucketAccountSettings, err)
 	}
 
 	slog.Info("Account settings service initialized with JetStream KV", "bucket", KVBucketAccountSettings)

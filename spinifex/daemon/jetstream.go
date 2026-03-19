@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/mulgadc/spinifex/spinifex/vm"
 	"github.com/nats-io/nats.go"
 )
@@ -26,6 +27,11 @@ const (
 	TerminatedInstanceBucket = "spinifex-terminated-instances"
 	// TerminatedInstancePrefix is the key prefix for terminated instances
 	TerminatedInstancePrefix = "terminated."
+
+	// Schema versions for daemon KV buckets
+	InstanceStateBucketVersion      = 1
+	ClusterStateBucketVersion       = 1
+	TerminatedInstanceBucketVersion = 1
 )
 
 // JetStreamManager manages JetStream KV store operations for instance state
@@ -77,6 +83,9 @@ func (m *JetStreamManager) InitKVBucket() error {
 	}
 
 	m.kv = kv
+	if err := utils.WriteVersion(kv, InstanceStateBucketVersion); err != nil {
+		return fmt.Errorf("write version to %s: %w", InstanceStateBucket, err)
+	}
 	return nil
 }
 
@@ -104,6 +113,9 @@ func (m *JetStreamManager) InitClusterStateBucket() error {
 	}
 
 	m.clusterKV = kv
+	if err := utils.WriteVersion(kv, ClusterStateBucketVersion); err != nil {
+		return fmt.Errorf("write version to %s: %w", ClusterStateBucket, err)
+	}
 	return nil
 }
 
@@ -132,6 +144,9 @@ func (m *JetStreamManager) InitTerminatedInstanceBucket() error {
 	}
 
 	m.terminatedKV = kv
+	if err := utils.WriteVersion(kv, TerminatedInstanceBucketVersion); err != nil {
+		return fmt.Errorf("write version to %s: %w", TerminatedInstanceBucket, err)
+	}
 	return nil
 }
 
@@ -157,7 +172,8 @@ func isStreamUnavailable(err error) bool {
 // recoverBucket attempts to reconnect to or re-create a KV bucket after the
 // underlying JetStream stream was lost during cluster formation.
 // Returns the recovered KV handle directly so callers avoid a racy re-read.
-func (m *JetStreamManager) recoverBucket(cfg *nats.KeyValueConfig, field *nats.KeyValue) (nats.KeyValue, error) {
+// When a bucket is recreated, the schema version is re-stamped.
+func (m *JetStreamManager) recoverBucket(cfg *nats.KeyValueConfig, field *nats.KeyValue, version int) (nats.KeyValue, error) {
 	m.kvMu.Lock()
 	defer m.kvMu.Unlock()
 
@@ -183,6 +199,10 @@ func (m *JetStreamManager) recoverBucket(cfg *nats.KeyValueConfig, field *nats.K
 		return nil, err
 	}
 
+	if err := utils.WriteVersion(kv, version); err != nil {
+		slog.Error("Failed to write version to recreated bucket", "bucket", cfg.Bucket, "err", err)
+	}
+
 	*field = kv
 	slog.Info("KV bucket recreated successfully", "bucket", cfg.Bucket)
 	return kv, nil
@@ -192,7 +212,7 @@ func (m *JetStreamManager) recoverKVBucket() (nats.KeyValue, error) {
 	return m.recoverBucket(&nats.KeyValueConfig{
 		Bucket:      InstanceStateBucket,
 		Description: "Spinifex instance state storage",
-	}, &m.kv)
+	}, &m.kv, InstanceStateBucketVersion)
 }
 
 func (m *JetStreamManager) recoverTerminatedKVBucket() (nats.KeyValue, error) {
@@ -200,7 +220,7 @@ func (m *JetStreamManager) recoverTerminatedKVBucket() (nats.KeyValue, error) {
 		Bucket:      TerminatedInstanceBucket,
 		Description: "Terminated instances (auto-expire after 1 hour)",
 		TTL:         1 * time.Hour,
-	}, &m.terminatedKV)
+	}, &m.terminatedKV, TerminatedInstanceBucketVersion)
 }
 
 // Heartbeat represents a daemon's periodic health status published to cluster KV.
@@ -662,6 +682,9 @@ func (m *JetStreamManager) ListStoppedInstances() ([]*vm.VM, error) {
 
 	var instances []*vm.VM
 	for _, key := range keys {
+		if key == utils.VersionKey {
+			continue
+		}
 		if !strings.HasPrefix(key, StoppedInstancePrefix) {
 			continue
 		}
@@ -751,6 +774,9 @@ func (m *JetStreamManager) ListTerminatedInstances() ([]*vm.VM, error) {
 
 	var instances []*vm.VM
 	for _, key := range keys {
+		if key == utils.VersionKey {
+			continue
+		}
 		if !strings.HasPrefix(key, TerminatedInstancePrefix) {
 			continue
 		}

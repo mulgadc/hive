@@ -13,7 +13,8 @@ import (
 )
 
 const (
-	KVBucketIPAM = "spinifex-vpc-ipam"
+	KVBucketIPAM        = "spinifex-vpc-ipam"
+	KVBucketIPAMVersion = 1
 )
 
 // IPAMRecord tracks allocated IPs for a subnet.
@@ -33,6 +34,9 @@ func NewIPAM(js nats.JetStreamContext) (*IPAM, error) {
 	kv, err := utils.GetOrCreateKVBucket(js, KVBucketIPAM, 5)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create IPAM KV bucket: %w", err)
+	}
+	if err := utils.WriteVersion(kv, KVBucketIPAMVersion); err != nil {
+		return nil, fmt.Errorf("write version to %s: %w", KVBucketIPAM, err)
 	}
 	return &IPAM{kv: kv}, nil
 }
