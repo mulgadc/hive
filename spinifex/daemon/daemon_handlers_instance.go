@@ -112,7 +112,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 
 	// Allocate resources for all instances upfront
 	var allocatedCount int
-	for i := 0; i < launchCount; i++ {
+	for range launchCount {
 		if err := d.resourceMgr.allocate(instanceType); err != nil {
 			slog.Error("handleEC2RunInstances allocate failed mid-allocation", "allocated", allocatedCount, "err", err)
 			break
@@ -123,7 +123,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	// Check if we still meet MinCount after allocation
 	if allocatedCount < minCount {
 		// Rollback allocations
-		for i := 0; i < allocatedCount; i++ {
+		for range allocatedCount {
 			d.resourceMgr.deallocate(instanceType)
 		}
 		slog.Error("handleEC2RunInstances insufficient capacity after allocation", "allocated", allocatedCount, "minCount", minCount)
@@ -146,7 +146,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	var allEC2Instances []*ec2.Instance
 	var lastRunErr error
 
-	for i := 0; i < launchCount; i++ {
+	for i := range launchCount {
 		instance, ec2Instance, err := d.instanceService.RunInstance(runInstancesInput)
 		if err != nil {
 			slog.Error("handleEC2RunInstances service.RunInstance failed", "index", i, "err", err)

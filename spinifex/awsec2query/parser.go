@@ -48,7 +48,7 @@ func QueryParamsToStruct(params map[string]string, out any) error {
 func setStructFields(v reflect.Value, params map[string]string, prefix string) error {
 	t := v.Type()
 
-	for i := 0; i < v.NumField(); i++ {
+	for i := range v.NumField() {
 		field := v.Field(i)
 		fieldType := t.Field(i)
 
