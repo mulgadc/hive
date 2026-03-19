@@ -870,11 +870,15 @@ func (d *Daemon) restoreInstances() {
 				if proc, err := os.FindProcess(pid); err == nil {
 					_ = proc.Signal(syscall.SIGKILL)
 				}
-				if err := utils.WaitForPidFileRemoval(instance.ID, 10*time.Second); err != nil {
-					slog.Error("PID file not removed after killing orphaned QEMU, skipping relaunch",
+				// Wait for the process to actually die, then remove the PID
+				// file ourselves. SIGKILL cannot be caught, so QEMU never
+				// runs its cleanup handler and the PID file stays on disk.
+				if err := utils.WaitForProcessExit(pid, 10*time.Second); err != nil {
+					slog.Error("Orphaned QEMU did not exit after SIGKILL, skipping relaunch",
 						"instanceId", instance.ID, "pid", pid, "err", err)
 					continue
 				}
+				_ = utils.RemovePidFile(instance.ID)
 			} else {
 				slog.Info("Instance QEMU process still alive, reconnecting", "instance", instance.ID)
 				if err := d.reconnectInstance(instance); err != nil {
