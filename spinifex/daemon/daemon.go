@@ -858,14 +858,23 @@ func (d *Daemon) restoreInstances() {
 			if !d.areVolumeSocketsValid(instance) {
 				slog.Warn("QEMU alive but NBD sockets are stale, killing orphaned process for relaunch",
 					"instance", instance.ID)
-				pid, _ := utils.ReadPidFile(instance.ID)
-				if pid > 0 {
-					if err := utils.KillProcess(pid); err != nil {
-						slog.Error("Failed to kill orphaned QEMU", "instanceId", instance.ID, "pid", pid, "err", err)
-					}
-					_ = utils.WaitForPidFileRemoval(instance.ID, 10*time.Second)
+				pid, pidErr := utils.ReadPidFile(instance.ID)
+				if pidErr != nil || pid <= 0 {
+					slog.Error("Cannot read PID for orphaned QEMU, skipping relaunch",
+						"instanceId", instance.ID, "err", pidErr)
+					continue
 				}
-				// Fall through to the relaunch path below
+				// SIGKILL directly — orphaned QEMU with dead storage has no
+				// state worth a graceful shutdown, and KillProcess's 120s
+				// SIGTERM timeout would block daemon startup.
+				if proc, err := os.FindProcess(pid); err == nil {
+					_ = proc.Signal(syscall.SIGKILL)
+				}
+				if err := utils.WaitForPidFileRemoval(instance.ID, 10*time.Second); err != nil {
+					slog.Error("PID file not removed after killing orphaned QEMU, skipping relaunch",
+						"instanceId", instance.ID, "pid", pid, "err", err)
+					continue
+				}
 			} else {
 				slog.Info("Instance QEMU process still alive, reconnecting", "instance", instance.ID)
 				if err := d.reconnectInstance(instance); err != nil {
@@ -904,16 +913,16 @@ func (d *Daemon) restoreInstances() {
 		case vm.StateRunning:
 			// Was running but QEMU died - reset to pending so LaunchInstance can transition to running
 			instance.Status = vm.StatePending
-			// Reset LaunchTime so the pending watchdog gives a fresh timeout window.
-			// Without this, the stale LaunchTime from the original launch causes the
-			// watchdog to immediately mark the instance as failed.
-			now := time.Now()
-			if instance.Instance != nil {
-				instance.Instance.LaunchTime = &now
-			}
 			slog.Info("Instance was running but QEMU exited, relaunching", "instance", instance.ID)
 		}
 
+		// Reset LaunchTime so the pending watchdog gives a fresh timeout window.
+		// Without this, the stale LaunchTime from the original launch causes the
+		// watchdog to immediately mark the instance as failed after a prolonged outage.
+		now := time.Now()
+		if instance.Instance != nil {
+			instance.Instance.LaunchTime = &now
+		}
 		toLaunch = append(toLaunch, instance)
 	}
 
@@ -953,7 +962,7 @@ func (d *Daemon) restoreInstances() {
 				d.Instances.Mu.Lock()
 				status := inst.Status
 				d.Instances.Mu.Unlock()
-				if status != vm.StatePending {
+				if status != vm.StatePending && status != vm.StateProvisioning {
 					slog.Info("Instance state changed during recovery, skipping launch",
 						"instanceId", inst.ID, "status", string(status))
 					return
@@ -987,10 +996,10 @@ func (d *Daemon) isInstanceProcessRunning(instance *vm.VM) bool {
 	return process.Signal(syscall.Signal(0)) == nil
 }
 
-// areVolumeSocketsValid checks whether the NBD Unix sockets backing an instance's
-// volumes still exist on disk. After a viperblock restart, old sockets are removed
-// and new ones are created — an orphaned QEMU still referencing the old paths will
-// have broken block devices.
+// areVolumeSocketsValid checks whether the NBD Unix sockets backing an
+// instance's volumes are reachable. A dial probe (not just os.Stat) is used
+// because viperblock may restart with sockets at the same paths — the file
+// exists but no process is listening on the old fd that QEMU holds.
 func (d *Daemon) areVolumeSocketsValid(instance *vm.VM) bool {
 	instance.EBSRequests.Mu.Lock()
 	defer instance.EBSRequests.Mu.Unlock()
@@ -999,16 +1008,16 @@ func (d *Daemon) areVolumeSocketsValid(instance *vm.VM) bool {
 		if req.NBDURI == "" {
 			continue
 		}
-		// NBDURI format: "nbd:unix:/path/to/socket.sock"
-		sockPath := strings.TrimPrefix(req.NBDURI, "nbd:unix:")
-		if sockPath == req.NBDURI {
-			// TCP transport (nbd://host:port) — can't validate locally, assume OK
-			continue
+		serverType, sockPath, _, _, err := utils.ParseNBDURI(req.NBDURI)
+		if err != nil || serverType != "unix" {
+			continue // TCP or unparseable — can't validate locally
 		}
-		if _, err := os.Stat(sockPath); err != nil {
-			slog.Debug("NBD socket missing", "volume", req.Name, "socket", sockPath)
+		conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
+		if err != nil {
+			slog.Debug("NBD socket unreachable", "volume", req.Name, "socket", sockPath, "err", err)
 			return false
 		}
+		_ = conn.Close()
 	}
 	return true
 }
