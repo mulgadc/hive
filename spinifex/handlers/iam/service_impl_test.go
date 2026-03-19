@@ -790,7 +790,7 @@ func TestSeedBootstrap_WithAdmin(t *testing.T) {
 	policies, err := svc.GetUserPolicies("000000000001", "admin")
 	require.NoError(t, err)
 	require.Len(t, policies, 1)
-	assert.Equal(t, "Allow", string(policies[0].Statement[0].Effect))
+	assert.Equal(t, "Allow", policies[0].Statement[0].Effect)
 	assert.Equal(t, StringOrArr{"*"}, policies[0].Statement[0].Action)
 	assert.Equal(t, StringOrArr{"*"}, policies[0].Statement[0].Resource)
 
