@@ -7,6 +7,33 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/services/vpcd/nbdb"
 )
 
+func TestNamedUUID(t *testing.T) {
+	tests := []struct {
+		name     string
+		prefix   string
+		input    string
+		expected string
+	}{
+		{"hyphen replacement", "sw_", "vpc-abc123", "sw_vpc_abc123"},
+		{"slash and dot replacement", "rp_", "10.0.0.1/24", "rp_10_0_0_1_24"},
+		{"no special characters", "lr_", "vpcabc", "lr_vpcabc"},
+		{"empty name", "sw_", "", "sw_"},
+		{"empty prefix", "", "vpc-1", "vpc_1"},
+		{"both empty", "", "", ""},
+		{"multiple consecutive hyphens", "x_", "a--b", "x_a__b"},
+		{"mixed special chars", "p_", "a.b-c/d", "p_a_b_c_d"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := namedUUID(tt.prefix, tt.input)
+			if got != tt.expected {
+				t.Errorf("namedUUID(%q, %q) = %q, want %q", tt.prefix, tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestMockOVNClient_Connect(t *testing.T) {
 	mock := NewMockOVNClient()
 	if mock.Connected() {
