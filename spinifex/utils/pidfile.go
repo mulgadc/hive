@@ -12,7 +12,6 @@ import (
 )
 
 func ReadPidFile(name string) (int, error) {
-
 	pidPath := pidPath()
 
 	pidFile, err := os.ReadFile(filepath.Join(pidPath, fmt.Sprintf("%s.pid", name)))
@@ -28,7 +27,6 @@ func ReadPidFile(name string) (int, error) {
 }
 
 func GeneratePidFile(name string) (string, error) {
-
 	if name == "" {
 		return "", errors.New("name is required")
 	}
@@ -43,7 +41,6 @@ func GeneratePidFile(name string) (string, error) {
 }
 
 func WritePidFile(name string, pid int) error {
-
 	// Write PID to file, check XDG, otherwise user home directory ~/spinifex/
 	pidFilename, err := GeneratePidFile(name)
 
@@ -134,7 +131,6 @@ func StopProcessAt(dir string, name string) error {
 }
 
 func RemovePidFile(serviceName string) error {
-
 	pidPath := pidPath()
 
 	err := os.Remove(filepath.Join(pidPath, fmt.Sprintf("%s.pid", serviceName)))

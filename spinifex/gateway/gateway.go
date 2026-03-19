@@ -68,7 +68,6 @@ type ErrorDetail struct {
 }
 
 func (gw *GatewayConfig) SetupRoutes() http.Handler {
-
 	var logLevel slog.Level
 
 	if gw.Debug {
@@ -173,7 +172,6 @@ func corsMiddleware(next http.Handler) http.Handler {
 // AWS_ENDPOINT_URL=https://localhost:9999/ aws  --no-verify-ssl ec2 describe-instances
 
 func (gw *GatewayConfig) Request(w http.ResponseWriter, r *http.Request) {
-
 	// Route the request to the appropriate endpoint (e.g EC2, IAM, etc)
 	svc, err := gw.GetService(r)
 	slog.Info("Request", "service", svc, "method", r.Method, "path", r.URL.Path)
@@ -346,7 +344,6 @@ func ParseAWSQueryArgs(query string) map[string]string {
 }
 
 func GenerateEC2ErrorResponse(code, message, requestID string) (output []byte) {
-
 	errorXml := ErrorResponse{
 		Errors: Errors{
 			Error: ErrorDetail{
@@ -405,7 +402,6 @@ func GenerateIAMErrorResponse(code, message, requestID string) (output []byte) {
 }
 
 func ParseArgsToStruct(input *any, args map[string]string) (err error) {
-
 	// Generated from input shape: RunInstancesRequest
 	err = awsec2query.QueryParamsToStruct(args, input)
 
@@ -414,7 +410,6 @@ func ParseArgsToStruct(input *any, args map[string]string) (err error) {
 	}
 
 	return nil
-
 }
 
 // DiscoverActiveNodes discovers the number of active spinifex daemon nodes in the cluster

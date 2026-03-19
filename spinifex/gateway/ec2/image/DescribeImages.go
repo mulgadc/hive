@@ -28,7 +28,6 @@ func ValidateDescribeImagesInput(input *ec2.DescribeImagesInput) (err error) {
 }
 
 func DescribeImages(input *ec2.DescribeImagesInput, natsConn *nats.Conn, accountID string) (output ec2.DescribeImagesOutput, err error) {
-
 	// Validate input
 	err = ValidateDescribeImagesInput(input)
 

@@ -24,7 +24,6 @@ func ValidateDeleteKeyPairInput(input *ec2.DeleteKeyPairInput) (err error) {
 }
 
 func DeleteKeyPair(input *ec2.DeleteKeyPairInput, natsConn *nats.Conn, accountID string) (output ec2.DeleteKeyPairOutput, err error) {
-
 	// Validate input
 	err = ValidateDeleteKeyPairInput(input)
 

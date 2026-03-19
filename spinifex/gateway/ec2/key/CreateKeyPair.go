@@ -23,7 +23,6 @@ func ValidateCreateKeyPairInput(input *ec2.CreateKeyPairInput) (err error) {
 }
 
 func CreateKeyPair(input *ec2.CreateKeyPairInput, natsConn *nats.Conn, accountID string) (output ec2.CreateKeyPairOutput, err error) {
-
 	// Validate input
 	err = ValidateCreateKeyPairInput(input)
 

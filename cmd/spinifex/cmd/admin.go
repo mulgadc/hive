@@ -238,11 +238,9 @@ func init() {
 	imagesImportCmd.Flags().String("arch", "", "Specified distro arch (e.g aarch64, arm64, x86_64)")
 	imagesImportCmd.Flags().String("platform", "Linux/UNIX", "Specified platform (e.g Linux/UNIX, Windows)")
 	imagesImportCmd.Flags().Bool("force", false, "Force command execution (overwrites existing files)")
-
 }
 
 func runimagesImportCmd(cmd *cobra.Command, args []string) {
-
 	var image utils.Images
 
 	var imageFile string
@@ -276,7 +274,6 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	imageName, _ := cmd.Flags().GetString("name")
 
 	if imageName != "" {
-
 		var exists bool
 		// Confirm the image exists
 		image, exists = utils.AvailableImages[imageName]
@@ -285,9 +282,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 			fmt.Fprintf(os.Stderr, "Image name not found in available images")
 			os.Exit(1)
 		}
-
 	} else {
-
 		imageFile, _ = cmd.Flags().GetString("file")
 
 		if imageFile == "" {
@@ -304,7 +299,6 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		image.Version, _ = cmd.Flags().GetString("version")
 		image.Arch, _ = cmd.Flags().GetString("arch")
 		image.Platform, _ = cmd.Flags().GetString("platform")
-
 	}
 
 	if image.Distro == "" {
@@ -351,14 +345,12 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		if admin.FileExists(imageFile) && !forceCmd {
 			fmt.Printf("Image file already exists, skipping download, use --force to overwrite: %s\n", imageFile)
 		} else {
-
 			err := utils.DownloadFileWithProgress(image.URL, image.Name, imageFile, 0)
 
 			if err != nil {
 				fmt.Printf("Download failed: %v\n", err)
 				os.Exit(1)
 			}
-
 		}
 
 		// Update image file path for later extraction
@@ -475,12 +467,10 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	defer os.RemoveAll(tmpDir)
 
 	fmt.Printf("✅ Image import complete. Image-ID (AMI): %s\n", volumeId)
-
 }
 
 // List remote images available
 func runimagesListCmd(cmd *cobra.Command, args []string) {
-
 	//fmt.Println(availableImages)
 
 	tableData := pterm.TableData{
@@ -499,7 +489,6 @@ func runimagesListCmd(cmd *cobra.Command, args []string) {
 
 	// 3. Iterate in sorted order
 	for _, k := range keys {
-
 		img := utils.AvailableImages[k]
 
 		//for _, img := range utils.AvailableImages {
@@ -789,7 +778,6 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, natsToken, clusterName,
 	configDir, spxRoot, certPath, region, az, node, bindIP, clusterBind string,
 	port, expectedNodes int, formationTimeoutStr string, services []string) {
-
 	formationTimeout, err := time.ParseDuration(formationTimeoutStr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error: Invalid --formation-timeout: %v\n", err)

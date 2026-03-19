@@ -21,7 +21,6 @@ type Service interface {
 }
 
 func New(btype string, config any) (Service, error) {
-
 	switch btype {
 	case "nats":
 		return nats.New(config)
@@ -43,7 +42,6 @@ func New(btype string, config any) (Service, error) {
 
 	case "vpcd":
 		return vpcd.New(config)
-
 	}
 
 	return nil, fmt.Errorf("unknown service type: %s", btype)

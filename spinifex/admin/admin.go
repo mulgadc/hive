@@ -81,7 +81,6 @@ type ConfigFile struct {
 }
 
 func GenerateConfigFiles(configs []ConfigFile, configSettings ConfigSettings) error {
-
 	for _, cfg := range configs {
 		if err := GenerateConfigFile(cfg.Path, cfg.Template, configSettings); err != nil {
 			return fmt.Errorf("error creating %s: %v", cfg.Name, err)
@@ -178,7 +177,6 @@ func GenerateServerCertOnly(configDir string, bindIP string) error {
 }
 
 func CreateServiceDirectories(spxRoot string) {
-
 	// Create additional directories
 	dirs := []string{
 		filepath.Join(spxRoot, "images"),
@@ -194,7 +192,6 @@ func CreateServiceDirectories(spxRoot string) {
 
 	fmt.Println("\n📁 Creating directory structure...")
 	for _, dir := range dirs {
-
 		// Check if directory exists
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			if err := os.MkdirAll(dir, 0750); err != nil {
@@ -203,7 +200,6 @@ func CreateServiceDirectories(spxRoot string) {
 		}
 	}
 	fmt.Printf("✅ Directory structure created in %s\n", spxRoot)
-
 }
 
 // Helper functions

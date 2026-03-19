@@ -1131,7 +1131,6 @@ func (d *Daemon) saveClusterConfig() error {
 
 // ClusterManager starts the HTTP cluster management server
 func (d *Daemon) ClusterManager() error {
-
 	// Get daemon host from config
 	daemonHost := d.config.Daemon.Host
 	if daemonHost == "" {
@@ -1405,7 +1404,6 @@ func (d *Daemon) LoadState() error {
 }
 
 func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId string) (*qmp.QMPResponse, error) {
-
 	// Confirm QMP client is initialized
 	if q == nil || q.Encoder == nil || q.Decoder == nil {
 		return nil, fmt.Errorf("QMP client is not initialized")
@@ -1457,15 +1455,12 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 }
 
 func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) error {
-
 	// Signal to shutdown each VM
 	var wg sync.WaitGroup
 
 	// Run asynchronously within a worker group
 	for _, instance := range instances {
-
 		wg.Go(func() {
-
 			// Send shutdown command - if it fails, VM may already be dead, continue with cleanup
 			_, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "system_powerdown"}, instance.ID)
 			if err != nil {
@@ -1495,7 +1490,6 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 			defer instance.EBSRequests.Mu.Unlock()
 
 			for _, ebsRequest := range instance.EBSRequests.Requests {
-
 				// Send the volume payload as JSON
 				ebsUnMountRequest, err := json.Marshal(ebsRequest)
 
@@ -1615,12 +1609,10 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 		}
 	}
 	return nil
-
 }
 
 func (d *Daemon) setupShutdown() {
 	d.shutdownWg.Go(func() {
-
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
@@ -1650,7 +1642,6 @@ func (d *Daemon) setupShutdown() {
 			if err := sub.Unsubscribe(); err != nil {
 				slog.Error("Error unsubscribing from NATS", "err", err)
 			}
-
 		}
 
 		// Write shutdown marker to cluster state KV
@@ -1682,7 +1673,6 @@ func (d *Daemon) setupShutdown() {
 }
 
 func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
-
 	// Create a new QMP client to communicate with the instance
 	instance.QMPClient, err = qmp.NewQMPClient(instance.Config.QMPSocket)
 
@@ -1734,11 +1724,9 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 	}()
 
 	return nil
-
 }
 
 func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
-
 	// Abort if instance is no longer in a launchable state (e.g., terminated
 	// by a concurrent request while waiting in the launch queue).
 	d.Instances.Mu.Lock()
@@ -1974,7 +1962,6 @@ func (d *Daemon) startPendingWatchdog() {
 }
 
 func (d *Daemon) StartInstance(instance *vm.VM) error {
-
 	pidFile, err := utils.GeneratePidFile(instance.ID)
 
 	if err != nil {
@@ -2025,7 +2012,6 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	instance.EBSRequests.Mu.Lock()
 
 	for _, v := range instance.EBSRequests.Requests {
-
 		drive := vm.Drive{}
 
 		// Use the NBDURI from mount response - contains socket path or TCP address
@@ -2293,12 +2279,10 @@ func (d *Daemon) ebsTopic(action string) string {
 
 // MountVolumes mounts the volumes for an instance
 func (d *Daemon) MountVolumes(instance *vm.VM) error {
-
 	instance.EBSRequests.Mu.Lock()
 	defer instance.EBSRequests.Mu.Unlock()
 
 	for k, v := range instance.EBSRequests.Requests {
-
 		// Send the volume payload as JSON
 		ebsMountRequest, err := json.Marshal(v)
 
@@ -2327,21 +2311,17 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 		}
 
 		if ebsMountResponse.Error == "" {
-
 			slog.Debug("Mounted volume successfully", "response", ebsMountResponse.URI)
 
 			// Append the NBD URI to the request
 			instance.EBSRequests.Requests[k].NBDURI = ebsMountResponse.URI
-
 		} else {
 			slog.Error("Failed to mount volume", "error", ebsMountResponse.Error)
 			return fmt.Errorf("failed to mount volume: %s", ebsMountResponse.Error)
 		}
-
 	}
 
 	return nil
-
 }
 
 // rollbackEBSMount sends an ebs.unmount request to undo a previously successful ebs.mount.

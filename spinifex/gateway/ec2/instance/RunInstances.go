@@ -53,15 +53,12 @@ func ValidateRunInstancesInput(input *ec2.RunInstancesInput) (err error) {
 
 	if !strings.HasPrefix(*input.ImageId, "ami-") {
 		return errors.New(awserrors.ErrorInvalidAMIIDMalformed)
-
 	}
 
 	return
-
 }
 
 func RunInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn, accountID string) (reservation ec2.Reservation, err error) {
-
 	// Validate input
 	err = ValidateRunInstancesInput(input)
 

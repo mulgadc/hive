@@ -43,7 +43,6 @@ func TestGenerateResourceID(t *testing.T) {
 }
 
 func TestGeneratePidFile(t *testing.T) {
-
 	// Simulate a sample process running (e.g cat)
 	cmd := exec.Command("cat")
 	cmd.Start()
@@ -70,11 +69,9 @@ func TestGeneratePidFile(t *testing.T) {
 	//time.Sleep(2 * time.Second)
 
 	// Simulate process ending
-
 }
 
 func TestGenerateSocketFile(t *testing.T) {
-
 	socketPath := fmt.Sprintf("%s/%s", os.TempDir(), "utilsunittest")
 
 	name, err := GenerateSocketFile(socketPath)
@@ -87,11 +84,9 @@ func TestGenerateSocketFile(t *testing.T) {
 	_, err = GenerateSocketFile("")
 
 	assert.Error(t, err)
-
 }
 
 func TestExecProcessAndKill(t *testing.T) {
-
 	// Simulate a sample process running (e.g sleep, 30 secs)
 	cmd := exec.Command("sleep", "30")
 
@@ -142,7 +137,6 @@ func TestExecProcessAndKill(t *testing.T) {
 	// Verify process is killed
 	err = cmd.Process.Signal(syscall.Signal(0))
 	assert.Error(t, err) // Should return an error since process is killed
-
 }
 
 func TestUnmarshalJsonPayload(t *testing.T) {
@@ -593,7 +587,6 @@ func TestStopProcess(t *testing.T) {
 // Test file extraction process
 
 func TestExtractDiskImageFromFile(t *testing.T) {
-
 	tmpDir, err := os.MkdirTemp("", "spx-utils-test-*")
 
 	t.Log("Temp dir:", tmpDir)
@@ -631,7 +624,6 @@ func TestExtractDiskImageFromFile(t *testing.T) {
 	_, err = exec.LookPath("tar")
 
 	if err == nil {
-
 		// Sample .tgz
 		imagePath, err = ExtractDiskImageFromFile("../../tests/unit-test-disk-image2.tgz", tmpDir)
 
@@ -671,14 +663,12 @@ func TestExtractDiskImageFromFile(t *testing.T) {
 		assert.Contains(t, imagePath, ".raw")
 
 		assert.NoError(t, err, "Should not error")
-
 	} else {
 		t.Skip("tar command not found, skipping archive extraction tests")
 	}
 
 	//err = os.RemoveAll(tmpDir)
 	//assert.NoError(t, err, "Could not remove temp dir")
-
 }
 
 func TestIsSocketURI(t *testing.T) {

@@ -16,7 +16,6 @@ var errInsufficientCapacity = errors.New("insufficient capacity to satisfy MinCo
 // or side effects.
 func canAllocateCount(availVCPU, allocVCPU int, availMem, allocMem float64,
 	vCPUs int64, memMiB int64, maxCount int) int {
-
 	remainingVCPU := availVCPU - allocVCPU
 	remainingMem := availMem - allocMem
 	memoryGB := float64(memMiB) / 1024.0

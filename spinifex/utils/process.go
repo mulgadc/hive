@@ -41,7 +41,6 @@ func StopProcess(serviceName string) error {
 }
 
 func KillProcess(pid int) error {
-
 	process, err := os.FindProcess(pid)
 
 	if err != nil {
@@ -87,5 +86,4 @@ func KillProcess(pid int) error {
 	}
 
 	return nil
-
 }

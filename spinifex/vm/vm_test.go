@@ -9,7 +9,6 @@ import (
 )
 
 func TestExecute(t *testing.T) {
-
 	cfg := Config{
 		Name: "test-vm",
 	}
@@ -74,7 +73,6 @@ func TestExecute(t *testing.T) {
 
 	assert.Contains(t, cmd.Path, "qemu-system-aarch64")
 	assert.Equal(t, expectedArgs, cmd.Args[1:])
-
 }
 
 func TestExecute_IOThreadAndCache(t *testing.T) {

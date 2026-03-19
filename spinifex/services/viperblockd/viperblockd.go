@@ -158,7 +158,6 @@ func (svc *Service) Reload() (err error) {
 }
 
 func launchService(cfg *Config) (err error) {
-
 	// Connect to NATS
 	nc, err := utils.ConnectNATS(cfg.NatsHost, cfg.NatsToken)
 	if err != nil {
@@ -771,5 +770,4 @@ func launchService(cfg *Config) (err error) {
 	}
 
 	return nil
-
 }
