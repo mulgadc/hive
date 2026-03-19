@@ -73,21 +73,21 @@ if is_multinode && [ -z "${SPINIFEX_FORCE_LOCAL_STOP:-}" ] && [ -z "${1:-}" ]; t
     exec $PROJECT_ROOT/bin/spx admin cluster shutdown
 fi
 
-# Function to stop service by PID file
+# Function to stop a service. Uses `spx service stop` (graceful, kills the
+# actual Go process) and falls back to the shell-wrapper PID file if the
+# binary isn't available.
 stop_service() {
     local name="$1"
     local pidpath="$2"
 
-    echo "🛑 Stopping $name $pidpath..."
+    echo "🛑 Stopping $name..."
 
     local rc=0
-    # Workaround for local development for multi-node config on single instance
-    if [ -n "$pidpath" ]; then
+    if [ -x "$PROJECT_ROOT/bin/spx" ]; then
+        $PROJECT_ROOT/bin/spx service "$name" stop || rc=$?
+    elif [ -n "$pidpath" ]; then
         kill -SIGTERM $(cat "$pidpath/$name.pid" 2>/dev/null) 2>/dev/null || rc=$?
         sleep 1
-    else
-    # Correct graceful shutdown via spx binary, waits for clean exit
-        $PROJECT_ROOT/bin/spx service $name stop || rc=$?
     fi
 
     if [[ $rc -ne 0 ]]; then
