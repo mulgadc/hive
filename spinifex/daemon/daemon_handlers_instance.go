@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
+	handlers_ec2_placementgroup "github.com/mulgadc/spinifex/spinifex/handlers/ec2/placementgroup"
 	"github.com/mulgadc/spinifex/spinifex/qmp"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
@@ -487,6 +488,18 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 				slog.Error("Failed to transition to final state", "instanceId", inst.ID, "err", err)
 			}
 			slog.Info("Instance "+string(finalState), "id", inst.ID)
+
+			// Remove instance from placement group on terminate
+			if isTerminate && inst.PlacementGroupName != "" && d.placementGroupService != nil {
+				if _, pgErr := d.placementGroupService.RemoveInstance(&handlers_ec2_placementgroup.RemoveInstanceInput{
+					GroupName:  inst.PlacementGroupName,
+					NodeName:   inst.PlacementGroupNode,
+					InstanceID: inst.ID,
+				}, inst.AccountID); pgErr != nil {
+					slog.Error("Failed to remove instance from placement group",
+						"instanceId", inst.ID, "groupName", inst.PlacementGroupName, "err", pgErr)
+				}
+			}
 
 			if d.jsManager != nil {
 				if isTerminate {

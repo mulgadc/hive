@@ -25,3 +25,7 @@ func (d *Daemon) handleEC2FinalizeSpreadInstances(msg *nats.Msg) {
 func (d *Daemon) handleEC2ReleaseSpreadNodes(msg *nats.Msg) {
 	handleNATSRequest(msg, d.placementGroupService.ReleaseSpreadNodes)
 }
+
+func (d *Daemon) handleEC2RemoveInstanceFromPlacementGroup(msg *nats.Msg) {
+	handleNATSRequest(msg, d.placementGroupService.RemoveInstance)
+}

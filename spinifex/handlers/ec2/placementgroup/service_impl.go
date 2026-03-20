@@ -427,6 +427,54 @@ func (s *PlacementGroupServiceImpl) ReleaseSpreadNodes(input *ReleaseSpreadNodes
 	return nil, errors.New(awserrors.ErrorServerInternal)
 }
 
+// RemoveInstance removes a specific instance from a placement group's NodeInstances.
+// If the node's instance list becomes empty after removal, the node key is deleted.
+// Uses CAS with retries following the IPAM pattern.
+func (s *PlacementGroupServiceImpl) RemoveInstance(input *RemoveInstanceInput, accountID string) (*RemoveInstanceOutput, error) {
+	if input.GroupName == "" || input.InstanceID == "" || input.NodeName == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	for attempt := range maxCASRetries {
+		record, entry, lookupErr := s.GetPlacementGroupRecord(accountID, input.GroupName)
+		if lookupErr != nil {
+			// Group may have been deleted already — treat as success
+			slog.Debug("RemoveInstance: group not found, treating as success", "groupName", input.GroupName)
+			return &RemoveInstanceOutput{}, nil //nolint:nilerr // intentional: deleted group = success
+		}
+
+		instances, exists := record.NodeInstances[input.NodeName]
+		if !exists {
+			// Node not tracked — nothing to remove
+			return &RemoveInstanceOutput{}, nil
+		}
+
+		// Remove the specific instance ID
+		filtered := make([]string, 0, len(instances))
+		for _, id := range instances {
+			if id != input.InstanceID {
+				filtered = append(filtered, id)
+			}
+		}
+
+		if len(filtered) == 0 {
+			delete(record.NodeInstances, input.NodeName)
+		} else {
+			record.NodeInstances[input.NodeName] = filtered
+		}
+
+		if err := s.UpdatePlacementGroupRecord(accountID, input.GroupName, record, entry.Revision()); err != nil {
+			slog.Debug("RemoveInstance: CAS conflict, retrying", "attempt", attempt, "err", err)
+			continue
+		}
+
+		slog.Info("RemoveInstance completed", "groupName", input.GroupName, "instanceId", input.InstanceID, "node", input.NodeName, "accountID", accountID)
+		return &RemoveInstanceOutput{}, nil
+	}
+
+	return nil, errors.New(awserrors.ErrorServerInternal)
+}
+
 // recordToEC2 converts an internal record to the AWS SDK PlacementGroup type.
 func (s *PlacementGroupServiceImpl) recordToEC2(record *PlacementGroupRecord) *ec2.PlacementGroup {
 	pg := &ec2.PlacementGroup{

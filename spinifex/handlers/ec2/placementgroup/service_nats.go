@@ -41,3 +41,7 @@ func (s *NATSPlacementGroupService) FinalizeSpreadInstances(input *FinalizeSprea
 func (s *NATSPlacementGroupService) ReleaseSpreadNodes(input *ReleaseSpreadNodesInput, accountID string) (*ReleaseSpreadNodesOutput, error) {
 	return utils.NATSRequest[ReleaseSpreadNodesOutput](s.natsConn, "ec2.ReleaseSpreadNodes", input, 30*time.Second, accountID)
 }
+
+func (s *NATSPlacementGroupService) RemoveInstance(input *RemoveInstanceInput, accountID string) (*RemoveInstanceOutput, error) {
+	return utils.NATSRequest[RemoveInstanceOutput](s.natsConn, "ec2.RemoveInstanceFromPlacementGroup", input, 30*time.Second, accountID)
+}

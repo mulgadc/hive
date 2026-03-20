@@ -487,6 +487,130 @@ func TestRunInstances_SingleInstanceUsesQueueGroup(t *testing.T) {
 	assert.False(t, statusQueried, "single-instance launch should NOT query node status")
 }
 
+// --- placementGroupName tests ---
+
+func TestPlacementGroupName_WithGroupName(t *testing.T) {
+	input := &ec2.RunInstancesInput{
+		Placement: &ec2.Placement{
+			GroupName: aws.String("my-group"),
+		},
+	}
+	assert.Equal(t, "my-group", placementGroupName(input))
+}
+
+func TestPlacementGroupName_NilPlacement(t *testing.T) {
+	input := &ec2.RunInstancesInput{}
+	assert.Equal(t, "", placementGroupName(input))
+}
+
+func TestPlacementGroupName_NilGroupName(t *testing.T) {
+	input := &ec2.RunInstancesInput{
+		Placement: &ec2.Placement{},
+	}
+	assert.Equal(t, "", placementGroupName(input))
+}
+
+func TestPlacementGroupName_EmptyGroupName(t *testing.T) {
+	input := &ec2.RunInstancesInput{
+		Placement: &ec2.Placement{
+			GroupName: aws.String(""),
+		},
+	}
+	assert.Equal(t, "", placementGroupName(input))
+}
+
+// --- lookupPlacementGroupStrategy tests ---
+
+func TestLookupPlacementGroupStrategy_Success(t *testing.T) {
+	_, nc := startTestNATSServer(t)
+
+	// Mock DescribePlacementGroups responder
+	sub, err := nc.QueueSubscribe("ec2.DescribePlacementGroups", "spinifex-workers", func(msg *nats.Msg) {
+		out := ec2.DescribePlacementGroupsOutput{
+			PlacementGroups: []*ec2.PlacementGroup{
+				{
+					GroupName: aws.String("my-group"),
+					Strategy:  aws.String("spread"),
+					State:     aws.String("available"),
+				},
+			},
+		}
+		data, _ := json.Marshal(out)
+		_ = msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	time.Sleep(50 * time.Millisecond)
+
+	strategy, err := lookupPlacementGroupStrategy(nc, "test-account", "my-group")
+	require.NoError(t, err)
+	assert.Equal(t, "spread", strategy)
+}
+
+func TestLookupPlacementGroupStrategy_NotFound(t *testing.T) {
+	_, nc := startTestNATSServer(t)
+
+	// Mock responder returns error
+	sub, err := nc.QueueSubscribe("ec2.DescribePlacementGroups", "spinifex-workers", func(msg *nats.Msg) {
+		errPayload := `{"Code":"InvalidPlacementGroup.Unknown","Message":"not found"}`
+		_ = msg.Respond([]byte(errPayload))
+	})
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	time.Sleep(50 * time.Millisecond)
+
+	_, err = lookupPlacementGroupStrategy(nc, "test-account", "ghost-group")
+	require.Error(t, err)
+}
+
+func TestLookupPlacementGroupStrategy_NotAvailable(t *testing.T) {
+	_, nc := startTestNATSServer(t)
+
+	sub, err := nc.QueueSubscribe("ec2.DescribePlacementGroups", "spinifex-workers", func(msg *nats.Msg) {
+		out := ec2.DescribePlacementGroupsOutput{
+			PlacementGroups: []*ec2.PlacementGroup{
+				{
+					GroupName: aws.String("my-group"),
+					Strategy:  aws.String("spread"),
+					State:     aws.String("deleting"),
+				},
+			},
+		}
+		data, _ := json.Marshal(out)
+		_ = msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	time.Sleep(50 * time.Millisecond)
+
+	_, err = lookupPlacementGroupStrategy(nc, "test-account", "my-group")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidPlacementGroupUnknown, err.Error())
+}
+
+func TestLookupPlacementGroupStrategy_EmptyResult(t *testing.T) {
+	_, nc := startTestNATSServer(t)
+
+	sub, err := nc.QueueSubscribe("ec2.DescribePlacementGroups", "spinifex-workers", func(msg *nats.Msg) {
+		out := ec2.DescribePlacementGroupsOutput{
+			PlacementGroups: []*ec2.PlacementGroup{},
+		}
+		data, _ := json.Marshal(out)
+		_ = msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	time.Sleep(50 * time.Millisecond)
+
+	_, err = lookupPlacementGroupStrategy(nc, "test-account", "my-group")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidPlacementGroupUnknown, err.Error())
+}
+
 func TestRunInstances_MultiInstanceUsesDistribution(t *testing.T) {
 	// For MaxCount > 1, RunInstances should use the distribution path,
 	// which queries spinifex.node.status.

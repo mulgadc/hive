@@ -10,6 +10,7 @@ type PlacementGroupService interface {
 	ReserveSpreadNodes(input *ReserveSpreadNodesInput, accountID string) (*ReserveSpreadNodesOutput, error)
 	FinalizeSpreadInstances(input *FinalizeSpreadInstancesInput, accountID string) (*FinalizeSpreadInstancesOutput, error)
 	ReleaseSpreadNodes(input *ReleaseSpreadNodesInput, accountID string) (*ReleaseSpreadNodesOutput, error)
+	RemoveInstance(input *RemoveInstanceInput, accountID string) (*RemoveInstanceOutput, error)
 }
 
 // ReserveSpreadNodesInput requests atomic node reservation for a spread placement group.
@@ -42,3 +43,13 @@ type ReleaseSpreadNodesInput struct {
 
 // ReleaseSpreadNodesOutput is empty on success.
 type ReleaseSpreadNodesOutput struct{}
+
+// RemoveInstanceInput removes a specific instance from its placement group's NodeInstances.
+type RemoveInstanceInput struct {
+	GroupName  string `json:"group_name"`
+	NodeName   string `json:"node_name"`
+	InstanceID string `json:"instance_id"`
+}
+
+// RemoveInstanceOutput is empty on success.
+type RemoveInstanceOutput struct{}

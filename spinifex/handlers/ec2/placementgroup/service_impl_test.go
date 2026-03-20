@@ -516,6 +516,85 @@ func TestReleaseSpreadNodes_AllNodes(t *testing.T) {
 	assert.Empty(t, record.NodeInstances)
 }
 
+// --- RemoveInstance Tests ---
+
+func TestRemoveInstance_Success(t *testing.T) {
+	svc := setupTestService(t)
+	createTestGroup(t, svc, "remove-inst-group", "spread")
+
+	// Add instances to two nodes
+	record, entry, err := svc.GetPlacementGroupRecord(testAccountID, "remove-inst-group")
+	require.NoError(t, err)
+	record.NodeInstances["node-a"] = []string{"i-aaa"}
+	record.NodeInstances["node-b"] = []string{"i-bbb"}
+	require.NoError(t, svc.UpdatePlacementGroupRecord(testAccountID, "remove-inst-group", record, entry.Revision()))
+
+	// Remove i-aaa from node-a
+	_, err = svc.RemoveInstance(&RemoveInstanceInput{
+		GroupName:  "remove-inst-group",
+		NodeName:   "node-a",
+		InstanceID: "i-aaa",
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Verify node-a is removed (was the only instance), node-b remains
+	record, _, err = svc.GetPlacementGroupRecord(testAccountID, "remove-inst-group")
+	require.NoError(t, err)
+	assert.Len(t, record.NodeInstances, 1)
+	_, hasA := record.NodeInstances["node-a"]
+	assert.False(t, hasA)
+	assert.Equal(t, []string{"i-bbb"}, record.NodeInstances["node-b"])
+}
+
+func TestRemoveInstance_NodeNotFound(t *testing.T) {
+	svc := setupTestService(t)
+	createTestGroup(t, svc, "remove-nonode-group", "spread")
+
+	// Removing from a non-existent node is a no-op
+	_, err := svc.RemoveInstance(&RemoveInstanceInput{
+		GroupName:  "remove-nonode-group",
+		NodeName:   "ghost-node",
+		InstanceID: "i-xxx",
+	}, testAccountID)
+	require.NoError(t, err)
+}
+
+func TestRemoveInstance_GroupNotFound(t *testing.T) {
+	svc := setupTestService(t)
+
+	// Removing from a non-existent group is a no-op (group may have been deleted)
+	_, err := svc.RemoveInstance(&RemoveInstanceInput{
+		GroupName:  "deleted-group",
+		NodeName:   "node-a",
+		InstanceID: "i-xxx",
+	}, testAccountID)
+	require.NoError(t, err)
+}
+
+func TestRemoveInstance_MultipleInstancesOnNode(t *testing.T) {
+	svc := setupTestService(t)
+	createTestGroup(t, svc, "multi-inst-group", "cluster")
+
+	// Add multiple instances to same node (cluster scenario)
+	record, entry, err := svc.GetPlacementGroupRecord(testAccountID, "multi-inst-group")
+	require.NoError(t, err)
+	record.NodeInstances["node-a"] = []string{"i-111", "i-222", "i-333"}
+	require.NoError(t, svc.UpdatePlacementGroupRecord(testAccountID, "multi-inst-group", record, entry.Revision()))
+
+	// Remove i-222
+	_, err = svc.RemoveInstance(&RemoveInstanceInput{
+		GroupName:  "multi-inst-group",
+		NodeName:   "node-a",
+		InstanceID: "i-222",
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Verify i-111 and i-333 remain
+	record, _, err = svc.GetPlacementGroupRecord(testAccountID, "multi-inst-group")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"i-111", "i-333"}, record.NodeInstances["node-a"])
+}
+
 // --- End-to-End Spread Lifecycle Test ---
 
 func TestSpreadLifecycle_ReserveFinalizeDelete(t *testing.T) {
