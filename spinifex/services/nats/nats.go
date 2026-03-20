@@ -72,7 +72,7 @@ func (svc *Service) Reload() (err error) {
 
 func launchService(config *Config) (err error) {
 	// Create proper server options
-	opts := &server.Options{}
+	var opts *server.Options
 
 	// If configFile set use, otherwise set defaults
 	if config.ConfigFile != "" {

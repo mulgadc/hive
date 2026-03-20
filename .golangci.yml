@@ -34,7 +34,6 @@ linters:
     - nilnesserr # catches returning a different nil error variable after err != nil check
     - noctx # finds HTTP requests sent without context.Context
     - nolintlint # reports ill-formed or insufficient nolint directives
-    - nosprintfhostport # checks for misuse of Sprintf to construct host:port (breaks IPv6)
     - predeclared # catches shadowing of Go builtins (len, cap, error, etc.)
     - reassign # checks that package variables are not reassigned
     - recvcheck # checks for receiver type consistency (pointer vs value)

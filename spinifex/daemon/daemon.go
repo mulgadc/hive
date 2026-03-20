@@ -1737,7 +1737,7 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	}
 
 	// First, confirm if the instance is already running
-	pid, err := utils.ReadPidFile(instance.ID)
+	pid, _ := utils.ReadPidFile(instance.ID)
 
 	if pid > 0 {
 		process, err := os.FindProcess(pid)

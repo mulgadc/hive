@@ -1495,6 +1495,7 @@ func TestSigV4Auth_QueryStringEdgeCases(t *testing.T) {
 // policyMockIAMService extends mockIAMService with configurable GetUserPolicies.
 type policyMockIAMService struct {
 	mockIAMService
+
 	getUserPoliciesFn func(accountID, userName string) ([]handlers_iam.PolicyDocument, error)
 }
 
