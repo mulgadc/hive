@@ -36,7 +36,7 @@ func New(cfg any) (svc *Service, err error) {
 
 func (svc *Service) Start() (int, error) {
 	if err := utils.WritePidFileTo(svc.Config.NodeBaseDir(), serviceName, os.Getpid()); err != nil {
-		slog.Error("Failed to write pid file", "err", err)
+		return 0, fmt.Errorf("write pid file: %w", err)
 	}
 	err := launchService(svc.Config)
 	if err != nil {
@@ -51,7 +51,14 @@ func (svc *Service) Stop() (err error) {
 }
 
 func (svc *Service) Status() (string, error) {
-	return "", nil
+	pid, err := utils.ReadPidFileFrom(svc.Config.NodeBaseDir(), serviceName)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "stopped", nil
+		}
+		return "", fmt.Errorf("read pid file: %w", err)
+	}
+	return fmt.Sprintf("running (pid: %d)", pid), nil
 }
 
 func (svc *Service) Shutdown() (err error) {
@@ -63,7 +70,6 @@ func (svc *Service) Reload() (err error) {
 }
 
 func launchService(config *config.ClusterConfig) error {
-
 	nodeConfig := config.Nodes[config.Node]
 
 	// Connect to NATS for service communication. On concurrent startup the

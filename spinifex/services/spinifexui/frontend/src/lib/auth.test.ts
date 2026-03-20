@@ -45,7 +45,10 @@ describe("getCredentials", () => {
   })
 
   it("reads from localStorage on first call", () => {
-    localStorage.setItem("spinifex:v1:aws-credentials", JSON.stringify(validCreds))
+    localStorage.setItem(
+      "spinifex:v1:aws-credentials",
+      JSON.stringify(validCreds),
+    )
     expect(getCredentials()).toEqual(validCreds)
   })
 

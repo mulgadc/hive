@@ -20,7 +20,10 @@ import (
 // Ensure EgressOnlyIGWServiceImpl implements EgressOnlyIGWService
 var _ EgressOnlyIGWService = (*EgressOnlyIGWServiceImpl)(nil)
 
-const KVBucketEgressOnlyIGW = "spinifex-eigw"
+const (
+	KVBucketEgressOnlyIGW        = "spinifex-eigw"
+	KVBucketEgressOnlyIGWVersion = 1
+)
 
 // EgressOnlyIGWRecord represents a stored Egress-only Internet Gateway
 type EgressOnlyIGWRecord struct {
@@ -48,6 +51,9 @@ func NewEgressOnlyIGWServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn
 	eigwKV, err := utils.GetOrCreateKVBucket(js, KVBucketEgressOnlyIGW, 10)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketEgressOnlyIGW, err)
+	}
+	if err := utils.WriteVersion(eigwKV, KVBucketEgressOnlyIGWVersion); err != nil {
+		return nil, fmt.Errorf("write version to %s: %w", KVBucketEgressOnlyIGW, err)
 	}
 
 	// Get or create VPC KV bucket for cross-resource ownership validation
@@ -161,6 +167,9 @@ func (s *EgressOnlyIGWServiceImpl) DescribeEgressOnlyInternetGateways(input *ec2
 	}
 
 	for _, key := range keys {
+		if key == utils.VersionKey {
+			continue
+		}
 		if !strings.HasPrefix(key, prefix) {
 			continue
 		}

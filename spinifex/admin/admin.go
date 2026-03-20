@@ -59,6 +59,11 @@ type ConfigSettings struct {
 	// Node capabilities
 	Services []string
 
+	// OVN Northbound DB address — "tcp:127.0.0.1:6641" on the primary node,
+	// "tcp:<primary-mgmt-ip>:6641" on joining nodes.
+	OVNNBAddr string
+	OVNSBAddr string
+
 	// Other nodes in the cluster (for config source of truth)
 	RemoteNodes []RemoteNode
 }
@@ -76,7 +81,6 @@ type ConfigFile struct {
 }
 
 func GenerateConfigFiles(configs []ConfigFile, configSettings ConfigSettings) error {
-
 	for _, cfg := range configs {
 		if err := GenerateConfigFile(cfg.Path, cfg.Template, configSettings); err != nil {
 			return fmt.Errorf("error creating %s: %v", cfg.Name, err)
@@ -173,7 +177,6 @@ func GenerateServerCertOnly(configDir string, bindIP string) error {
 }
 
 func CreateServiceDirectories(spxRoot string) {
-
 	// Create additional directories
 	dirs := []string{
 		filepath.Join(spxRoot, "images"),
@@ -189,7 +192,6 @@ func CreateServiceDirectories(spxRoot string) {
 
 	fmt.Println("\n📁 Creating directory structure...")
 	for _, dir := range dirs {
-
 		// Check if directory exists
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			if err := os.MkdirAll(dir, 0750); err != nil {
@@ -198,7 +200,6 @@ func CreateServiceDirectories(spxRoot string) {
 		}
 	}
 	fmt.Printf("✅ Directory structure created in %s\n", spxRoot)
-
 }
 
 // Helper functions
@@ -234,7 +235,8 @@ func ChownRecursive(path, username string) {
 
 	_ = fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil
+			slog.Debug("chown walk: skipping inaccessible entry", "path", p, "err", err)
+			return nil // best-effort: continue past inaccessible entries
 		}
 		fullPath := filepath.Join(path, p)
 		if chownErr := os.Lchown(fullPath, uid, gid); chownErr != nil {
@@ -586,10 +588,20 @@ func GenerateSelfSignedCert(certPath, keyPath string) error {
 
 // SetupAWSCredentials updates ~/.aws/credentials and ~/.aws/config.
 // bindIP is the IP the AWS gateway listens on. If empty or "0.0.0.0", defaults to "localhost".
+// When running under sudo, writes to SUDO_USER's home instead of root's.
 func SetupAWSCredentials(accessKey, secretKey, region, certPath, bindIP string) error {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return err
+	}
+
+	// When running under sudo, write to the invoking user's home directory
+	// so the operator can use AWS_PROFILE=spinifex without sudo.
+	sudoUser := os.Getenv("SUDO_USER")
+	if os.Getuid() == 0 && sudoUser != "" {
+		if u, err := user.Lookup(sudoUser); err == nil {
+			homeDir = u.HomeDir
+		}
 	}
 
 	awsDir := filepath.Join(homeDir, ".aws")
@@ -640,6 +652,11 @@ func SetupAWSCredentials(accessKey, secretKey, region, certPath, bindIP string) 
 		"output":       "json",
 	}); err != nil {
 		return err
+	}
+
+	// Fix ownership so the sudo invoking user can read the files
+	if os.Getuid() == 0 && sudoUser != "" {
+		ChownRecursive(awsDir, sudoUser)
 	}
 
 	fmt.Printf("   Profile: %s\n", profileName)

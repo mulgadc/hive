@@ -12,6 +12,9 @@ import (
 
 // TestBuildHeartbeat verifies that buildHeartbeat populates the struct from daemon state.
 func TestBuildHeartbeat(t *testing.T) {
+	rm, err := NewResourceManager()
+	require.NoError(t, err)
+
 	d := &Daemon{
 		node: "test-node",
 		clusterConfig: &config.ClusterConfig{
@@ -20,7 +23,7 @@ func TestBuildHeartbeat(t *testing.T) {
 		config: &config.Config{
 			Services: []string{"daemon", "nats", "viperblock"},
 		},
-		resourceMgr: NewResourceManager(),
+		resourceMgr: rm,
 		Instances:   vm.Instances{VMS: make(map[string]*vm.VM)},
 	}
 
@@ -38,6 +41,9 @@ func TestBuildHeartbeat(t *testing.T) {
 
 // TestHeartbeatReflectsAllocation verifies that allocating resources changes the heartbeat values.
 func TestHeartbeatReflectsAllocation(t *testing.T) {
+	rm, err := NewResourceManager()
+	require.NoError(t, err)
+
 	d := &Daemon{
 		node: "alloc-node",
 		clusterConfig: &config.ClusterConfig{
@@ -46,7 +52,7 @@ func TestHeartbeatReflectsAllocation(t *testing.T) {
 		config: &config.Config{
 			Services: []string{"daemon"},
 		},
-		resourceMgr: NewResourceManager(),
+		resourceMgr: rm,
 		Instances:   vm.Instances{VMS: make(map[string]*vm.VM)},
 	}
 
@@ -64,7 +70,7 @@ func TestHeartbeatReflectsAllocation(t *testing.T) {
 	require.NotEmpty(t, allocType, "Should have at least one allocatable instance type")
 
 	// Allocate resources
-	err := d.resourceMgr.allocate(d.resourceMgr.instanceTypes[allocType])
+	err = d.resourceMgr.allocate(d.resourceMgr.instanceTypes[allocType])
 	require.NoError(t, err)
 
 	// Add a VM to the instance map

@@ -5,6 +5,8 @@
 # Usage: ./scripts/stop-dev.sh
 # Note: Services are stopped using PID files, so data-dir is not required
 
+set -uo pipefail
+
 # Accept optional data directory argument
 DATA_DIR="${1:-$HOME/spinifex}"
 
@@ -65,37 +67,41 @@ is_multinode() {
 # For multi-node clusters, delegate to coordinated shutdown via NATS.
 # Only when called without arguments (default path). When a data-dir is
 # explicitly provided (e.g., E2E per-node cleanup), use per-service stop.
-if is_multinode && [ -z "$SPINIFEX_FORCE_LOCAL_STOP" ] && [ -z "$1" ]; then
+if is_multinode && [ -z "${SPINIFEX_FORCE_LOCAL_STOP:-}" ] && [ -z "${1:-}" ]; then
     echo "Multi-node cluster detected. Using coordinated shutdown..."
     echo "  (Set SPINIFEX_FORCE_LOCAL_STOP=1 to force per-service stop)"
     exec $PROJECT_ROOT/bin/spx admin cluster shutdown
 fi
 
-# Function to stop service by PID file
+# Function to stop a service. Sends SIGTERM and waits for the process to exit
+# so resources (ports, DB locks) are fully released before returning.
 stop_service() {
     local name="$1"
     local pidpath="$2"
 
-    echo "🛑 Stopping $name $pidpath..."
+    echo "🛑 Stopping $name..."
 
-    local rc=0
-    # Workaround for local development for multi-node config on single instance
-    if [ -n "$pidpath" ]; then
-        kill -SIGTERM $(cat "$pidpath/$name.pid" 2>/dev/null) 2>/dev/null || rc=$?
+    local pid
+    pid=$(cat "$pidpath/$name.pid" 2>/dev/null) || { echo "⚠️  No PID file for $name"; return 1; }
+
+    kill -SIGTERM "$pid" 2>/dev/null || { rm -f "$pidpath/$name.pid"; echo "✅ $name already stopped"; echo ""; return 0; }
+
+    # Wait for process to fully exit (up to 15s) so ports/locks are released
+    local checks=0
+    while kill -0 "$pid" 2>/dev/null; do
         sleep 1
-    else
-    # Correct graceful shutdown via spx binary, waits for clean exit
-        $PROJECT_ROOT/bin/spx service $name stop || rc=$?
-    fi
+        checks=$((checks + 1))
+        if [ "$checks" -ge 15 ]; then
+            echo "  Force killing $name..."
+            kill -9 "$pid" 2>/dev/null || true
+            sleep 1
+            break
+        fi
+    done
 
-    if [[ $rc -ne 0 ]]; then
-        echo "⚠️  Failed to stop $name (exit code $rc)"
-        return 1
-    else
-        echo "✅ $name stopped"
-        echo ""
-    fi
-
+    rm -f "$pidpath/$name.pid"
+    echo "✅ $name stopped"
+    echo ""
 }
 
 # Stop services in reverse order

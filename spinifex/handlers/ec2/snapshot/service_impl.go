@@ -26,7 +26,10 @@ import (
 // Ensure SnapshotServiceImpl implements SnapshotService
 var _ SnapshotService = (*SnapshotServiceImpl)(nil)
 
-const KVBucketVolumeSnapshots = "spinifex-volume-snapshots"
+const (
+	KVBucketVolumeSnapshots        = "spinifex-volume-snapshots"
+	KVBucketVolumeSnapshotsVersion = 1
+)
 
 // SnapshotServiceImpl implements SnapshotService with S3-backed storage
 type SnapshotServiceImpl struct {
@@ -69,6 +72,9 @@ func NewSnapshotServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*S
 	kv, err := utils.GetOrCreateKVBucket(js, KVBucketVolumeSnapshots, 10)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketVolumeSnapshots, err)
+	}
+	if err := utils.WriteVersion(kv, KVBucketVolumeSnapshotsVersion); err != nil {
+		return nil, nil, fmt.Errorf("write version to %s: %w", KVBucketVolumeSnapshots, err)
 	}
 
 	slog.Info("Snapshot service initialized with JetStream KV", "bucket", KVBucketVolumeSnapshots)

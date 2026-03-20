@@ -536,6 +536,73 @@ func TestValidateKeyPairExists_NotFound(t *testing.T) {
 // formatFingerprint Tests
 // ============================================================
 
+// ============================================================
+// getKeyNameFromKeyPairId Tests
+// ============================================================
+
+func TestGetKeyNameFromKeyPairId_NotFound(t *testing.T) {
+	svc, _ := newTestKeyService()
+
+	_, err := svc.getKeyNameFromKeyPairId(testAccountID, "key-nonexistent")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidKeyPairNotFound, err.Error())
+}
+
+func TestGetKeyNameFromKeyPairId_InvalidJSON(t *testing.T) {
+	svc, store := newTestKeyService()
+
+	// Seed store with garbage data at the metadata path
+	metadataPath := "keys/" + testAccountID + "/key-badjson.json"
+	_, err := store.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String(testBucket),
+		Key:    aws.String(metadataPath),
+		Body:   strings.NewReader("this is not valid json{{{"),
+	})
+	require.NoError(t, err)
+
+	_, err = svc.getKeyNameFromKeyPairId(testAccountID, "key-badjson")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to unmarshal metadata")
+}
+
+func TestGetKeyNameFromKeyPairId_MissingKeyName(t *testing.T) {
+	svc, store := newTestKeyService()
+
+	// Seed store with valid JSON but missing KeyName field
+	metadataPath := "keys/" + testAccountID + "/key-noname.json"
+	jsonData, err := json.Marshal(map[string]string{
+		"KeyPairId":      "key-noname",
+		"KeyFingerprint": "SHA256:abc123",
+	})
+	require.NoError(t, err)
+
+	_, err = store.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String(testBucket),
+		Key:    aws.String(metadataPath),
+		Body:   strings.NewReader(string(jsonData)),
+	})
+	require.NoError(t, err)
+
+	_, err = svc.getKeyNameFromKeyPairId(testAccountID, "key-noname")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid metadata: missing KeyName")
+}
+
+func TestGetKeyNameFromKeyPairId_Success(t *testing.T) {
+	svc, _ := newTestKeyService()
+
+	// Import a key, then look it up by keyPairId
+	imported := importTestKey(t, svc, "lookup-test")
+
+	keyName, err := svc.getKeyNameFromKeyPairId(testAccountID, *imported.KeyPairId)
+	require.NoError(t, err)
+	assert.Equal(t, "lookup-test", keyName)
+}
+
+// ============================================================
+// formatFingerprint Tests
+// ============================================================
+
 func TestFormatFingerprint_MD5(t *testing.T) {
 	hash := []byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99}
 	result := formatFingerprint(hash, "MD5")

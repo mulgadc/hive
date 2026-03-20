@@ -238,11 +238,9 @@ func init() {
 	imagesImportCmd.Flags().String("arch", "", "Specified distro arch (e.g aarch64, arm64, x86_64)")
 	imagesImportCmd.Flags().String("platform", "Linux/UNIX", "Specified platform (e.g Linux/UNIX, Windows)")
 	imagesImportCmd.Flags().Bool("force", false, "Force command execution (overwrites existing files)")
-
 }
 
 func runimagesImportCmd(cmd *cobra.Command, args []string) {
-
 	var image utils.Images
 
 	var imageFile string
@@ -268,7 +266,8 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	imageDir := fmt.Sprintf("%s/images", baseDir)
 
 	if !admin.FileExists(imageDir) {
-		fmt.Fprintf(os.Stderr, "Image directory does not exist. Base path specified correctly? %s", imageDir)
+		fmt.Fprintf(os.Stderr, "Error: image directory does not exist: %s\n\n", imageDir)
+		fmt.Fprintf(os.Stderr, "Run 'spx admin init' first to initialize the Spinifex platform.\n")
 		os.Exit(1)
 	}
 
@@ -276,7 +275,6 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	imageName, _ := cmd.Flags().GetString("name")
 
 	if imageName != "" {
-
 		var exists bool
 		// Confirm the image exists
 		image, exists = utils.AvailableImages[imageName]
@@ -285,9 +283,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 			fmt.Fprintf(os.Stderr, "Image name not found in available images")
 			os.Exit(1)
 		}
-
 	} else {
-
 		imageFile, _ = cmd.Flags().GetString("file")
 
 		if imageFile == "" {
@@ -295,10 +291,8 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 			os.Exit(1)
 		}
 
-		//imageStat, err = os.Stat(imageFile)
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "File could not be found %s", err)
+		if _, err := os.Stat(imageFile); err != nil {
+			fmt.Fprintf(os.Stderr, "File could not be found: %s", err)
 			os.Exit(1)
 		}
 
@@ -306,7 +300,6 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		image.Version, _ = cmd.Flags().GetString("version")
 		image.Arch, _ = cmd.Flags().GetString("arch")
 		image.Platform, _ = cmd.Flags().GetString("platform")
-
 	}
 
 	if image.Distro == "" {
@@ -353,14 +346,12 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		if admin.FileExists(imageFile) && !forceCmd {
 			fmt.Printf("Image file already exists, skipping download, use --force to overwrite: %s\n", imageFile)
 		} else {
-
 			err := utils.DownloadFileWithProgress(image.URL, image.Name, imageFile, 0)
 
 			if err != nil {
 				fmt.Printf("Download failed: %v\n", err)
 				os.Exit(1)
 			}
-
 		}
 
 		// Update image file path for later extraction
@@ -477,12 +468,10 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	defer os.RemoveAll(tmpDir)
 
 	fmt.Printf("✅ Image import complete. Image-ID (AMI): %s\n", volumeId)
-
 }
 
 // List remote images available
 func runimagesListCmd(cmd *cobra.Command, args []string) {
-
 	//fmt.Println(availableImages)
 
 	tableData := pterm.TableData{
@@ -501,7 +490,6 @@ func runimagesListCmd(cmd *cobra.Command, args []string) {
 
 	// 3. Iterate in sorted order
 	for _, k := range keys {
-
 		img := utils.AvailableImages[k]
 
 		//for _, img := range utils.AvailableImages {
@@ -726,6 +714,9 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 		PredastoreNodeID: predastoreNodeID,
 		Services:         services,
+
+		OVNNBAddr: "tcp:127.0.0.1:6641",
+		OVNSBAddr: "tcp:127.0.0.1:6642",
 	}
 
 	// Generate config files
@@ -788,7 +779,6 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, natsToken, clusterName,
 	configDir, spxRoot, certPath, region, az, node, bindIP, clusterBind string,
 	port, expectedNodes int, formationTimeoutStr string, services []string) {
-
 	formationTimeout, err := time.ParseDuration(formationTimeoutStr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error: Invalid --formation-timeout: %v\n", err)
@@ -934,6 +924,10 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		PredastoreNodeID: predastoreNodeID,
 		Services:         services,
 		RemoteNodes:      buildRemoteNodes(allNodes, node),
+
+		// Init node runs ovn-central locally
+		OVNNBAddr: "tcp:127.0.0.1:6641",
+		OVNSBAddr: "tcp:127.0.0.1:6642",
 	}
 
 	// Generate config files
@@ -1005,6 +999,13 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	if leaderHost == "" {
 		fmt.Fprintf(os.Stderr, "❌ Error: --host is required\n")
 		os.Exit(1)
+	}
+
+	// Extract leader IP for OVN NB/SB DB address (strip port from host:port)
+	leaderIP, _, err := net.SplitHostPort(leaderHost)
+	if err != nil {
+		// leaderHost might be an IP without port
+		leaderIP = leaderHost
 	}
 
 	// Validate IP address format
@@ -1246,6 +1247,10 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		PredastoreNodeID: predastoreNodeID,
 		Services:         services,
 		RemoteNodes:      buildRemoteNodes(statusResp.Nodes, node),
+
+		// Joining nodes connect to the init node's OVN NB/SB DB
+		OVNNBAddr: fmt.Sprintf("tcp:%s:6641", leaderIP),
+		OVNSBAddr: fmt.Sprintf("tcp:%s:6642", leaderIP),
 	}
 
 	// Generate config files
@@ -1530,6 +1535,7 @@ func writeBootstrapFilesWithAdmin(configDir string, masterKey []byte, accessKey,
 	}
 
 	bd := &handlers_iam.BootstrapData{
+		Version:         handlers_iam.BootstrapVersion,
 		AccessKeyID:     accessKey,
 		EncryptedSecret: encryptedSecret,
 		AccountID:       accountID,

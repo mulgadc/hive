@@ -7,11 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 )
 
 func ReadPidFile(name string) (int, error) {
-
 	pidPath := pidPath()
 
 	pidFile, err := os.ReadFile(filepath.Join(pidPath, fmt.Sprintf("%s.pid", name)))
@@ -27,7 +27,6 @@ func ReadPidFile(name string) (int, error) {
 }
 
 func GeneratePidFile(name string) (string, error) {
-
 	if name == "" {
 		return "", errors.New("name is required")
 	}
@@ -42,7 +41,6 @@ func GeneratePidFile(name string) (string, error) {
 }
 
 func WritePidFile(name string, pid int) error {
-
 	// Write PID to file, check XDG, otherwise user home directory ~/spinifex/
 	pidFilename, err := GeneratePidFile(name)
 
@@ -57,7 +55,7 @@ func WritePidFile(name string, pid int) error {
 	}
 
 	defer pidFile.Close()
-	_, err = pidFile.WriteString(fmt.Sprintf("%d", pid))
+	_, err = fmt.Fprintf(pidFile, "%d", pid)
 	if err != nil {
 		return err
 	}
@@ -82,7 +80,7 @@ func WritePidFileTo(dir string, name string, pid int) error {
 	}
 
 	defer pidFile.Close()
-	_, err = pidFile.WriteString(fmt.Sprintf("%d", pid))
+	_, err = fmt.Fprintf(pidFile, "%d", pid)
 	return err
 }
 
@@ -133,7 +131,6 @@ func StopProcessAt(dir string, name string) error {
 }
 
 func RemovePidFile(serviceName string) error {
-
 	pidPath := pidPath()
 
 	err := os.Remove(filepath.Join(pidPath, fmt.Sprintf("%s.pid", serviceName)))
@@ -157,6 +154,32 @@ func pidPath() string {
 		return filepath.Join(os.Getenv("HOME"), "spinifex")
 	}
 	return os.TempDir()
+}
+
+// WaitForProcessExit polls until the given PID is no longer alive or the
+// timeout expires. Unlike WaitForPidFileRemoval, this checks the process
+// itself via kill(pid, 0), so it works after SIGKILL where the target
+// cannot clean up its own PID file.
+func WaitForProcessExit(pid int, timeout time.Duration) error {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timer.C:
+			return fmt.Errorf("timeout waiting for process %d to exit", pid)
+		case <-ticker.C:
+			proc, err := os.FindProcess(pid)
+			if err != nil {
+				return nil // process gone
+			}
+			if proc.Signal(syscall.Signal(0)) != nil {
+				return nil // process no longer alive
+			}
+		}
+	}
 }
 
 func WaitForPidFileRemoval(instanceID string, timeout time.Duration) error {

@@ -57,7 +57,10 @@ func RebootInstances(input *ec2.RebootInstancesInput, natsConn *nats.Conn, accou
 			describeInput := &ec2.DescribeInstancesInput{
 				InstanceIds: []*string{&instanceID},
 			}
-			describeData, _ := json.Marshal(describeInput)
+			describeData, err := json.Marshal(describeInput)
+			if err != nil {
+				return nil, fmt.Errorf("marshal describe input: %w", err)
+			}
 			if reservations := queryInstanceBucket(natsConn, "ec2.DescribeStoppedInstances", describeData, accountID); len(reservations) > 0 {
 				return nil, errors.New(awserrors.ErrorIncorrectInstanceState)
 			}

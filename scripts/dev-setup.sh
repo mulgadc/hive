@@ -3,7 +3,7 @@
 # Spinifex Platform Development Environment Setup
 # This script sets up a complete development environment for the Spinifex platform
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -13,17 +13,9 @@ MULGA_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"
 NATS_PORT=4222
 PREDASTORE_PORT=8443
 SPINIFEX_GATEWAY_PORT=9999
-DATA_DIR="$HOME/spinifex"
-# Use CONFIG_DIR environment variable if set, otherwise default to ~/spinifex/config
-CONFIG_DIR="${CONFIG_DIR:-$HOME/spinifex/config}"
 
 echo "🚀 Setting up Spinifex development environment..."
 echo "Project root: $PROJECT_ROOT"
-echo "Data directory: $DATA_DIR"
-
-# Create necessary directories
-mkdir -p "$DATA_DIR"/{nats,predastore,viperblock,logs,spinifex}
-mkdir -p "$CONFIG_DIR"
 
 # Function to check if command exists
 command_exists() {
@@ -40,11 +32,13 @@ echo "🔍 Checking dependencies..."
 
 # Check for required commands
 required_commands=("go" "make")
+missing_required=false
 for cmd in "${required_commands[@]}"; do
     if command_exists "$cmd"; then
         echo "✅ $cmd found"
     else
         echo "❌ $cmd not found. Please install $cmd"
+        missing_required=true
         case "$cmd" in
             "go")
                 echo "   Install Go: https://golang.org/dl/"
@@ -52,6 +46,10 @@ for cmd in "${required_commands[@]}"; do
         esac
     fi
 done
+if [ "$missing_required" = true ]; then
+    echo "❌ Missing required dependencies. Cannot continue."
+    exit 1
+fi
 
 # Check optional commands
 optional_commands=("air" "nbdkit")
@@ -142,19 +140,6 @@ cd "$PROJECT_ROOT"
 make build
 echo "✅ Spinifex built successfully"
 
-# Initialize Spinifex configuration using admin init
-#echo ""
-#echo "🔐 Initializing Spinifex configuration..."
-
-#if [[ ! -f "$CONFIG_DIR/spinifex.toml" ]]; then
-#    echo "📋 Running spx admin init..."
-#    ./bin/spx admin init --config-dir "$CONFIG_DIR"
-#    echo "✅ Spinifex configuration initialized"
-#else
-#    echo "✅ Spinifex configuration already exists"
-#    echo "   To re-initialize, run: ./bin/spx admin init --force"
-#fi
-
 # Build components
 echo ""
 echo "🔨 Building components..."
@@ -182,23 +167,26 @@ fi
 echo ""
 echo "🎉 Development environment setup complete!"
 echo ""
-echo "When running Spinifex for the first time, run the init function to create the"
-echo "default directories for data, config files and layout required."
-echo "./bin/spx admin init"
+echo "📋 Next steps:"
 echo ""
-echo "🚀 To start the development environment:"
-echo "   ./scripts/start-dev.sh"
+echo "   1. Setup OVN networking:"
+echo "      ./scripts/setup-ovn.sh --management"
 echo ""
-echo "🛑 To stop the development environment:"
-echo "   ./scripts/stop-dev.sh"
+echo "   2. Initialize Spinifex (creates ~/spinifex/ directories, config, and certs):"
+echo "      ./bin/spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1"
+echo ""
+echo "   3. Trust the CA certificate:"
+echo "      sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt"
+echo "      sudo update-ca-certificates"
+echo ""
+echo "   4. Start services:"
+echo "      ./scripts/start-dev.sh"
 echo ""
 echo "🔧 Development endpoints:"
 echo "   - Spinifex Gateway:  https://localhost:$SPINIFEX_GATEWAY_PORT"
 echo "   - Predastore S3: https://localhost:$PREDASTORE_PORT"
 echo "   - NATS:          nats://localhost:$NATS_PORT"
 echo ""
-echo "📊 Monitor logs:"
-echo "   tail -f $DATA_DIR/logs/*.log"
-echo ""
 echo "🧪 Test with AWS CLI:"
-echo "   aws --endpoint-url https://localhost:$SPINIFEX_GATEWAY_PORT --no-verify-ssl ec2 describe-instances"
+echo "   export AWS_PROFILE=spinifex"
+echo "   aws ec2 describe-instances"

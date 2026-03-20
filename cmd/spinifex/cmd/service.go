@@ -761,7 +761,6 @@ var vpcdStatusCmd = &cobra.Command{
 }
 
 func init() {
-
 	viper.SetEnvPrefix("SPINIFEX") // Prefix for environment variables
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 
@@ -945,5 +944,4 @@ func init() {
 	vpcdCmd.AddCommand(vpcdStartCmd)
 	vpcdCmd.AddCommand(vpcdStopCmd)
 	vpcdCmd.AddCommand(vpcdStatusCmd)
-
 }

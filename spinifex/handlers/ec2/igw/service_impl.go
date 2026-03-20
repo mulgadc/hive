@@ -21,7 +21,10 @@ import (
 // Ensure IGWServiceImpl implements IGWService
 var _ IGWService = (*IGWServiceImpl)(nil)
 
-const KVBucketIGW = "spinifex-igw"
+const (
+	KVBucketIGW        = "spinifex-igw"
+	KVBucketIGWVersion = 1
+)
 
 // IGWRecord represents a stored Internet Gateway
 type IGWRecord struct {
@@ -50,6 +53,9 @@ func NewIGWServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*IGWSer
 	igwKV, err := utils.GetOrCreateKVBucket(js, KVBucketIGW, 10)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketIGW, err)
+	}
+	if err := utils.WriteVersion(igwKV, KVBucketIGWVersion); err != nil {
+		return nil, fmt.Errorf("write version to %s: %w", KVBucketIGW, err)
 	}
 
 	// Get or create VPC KV bucket for cross-resource ownership validation
@@ -157,6 +163,9 @@ func (s *IGWServiceImpl) DescribeInternetGateways(input *ec2.DescribeInternetGat
 	foundIDs := make(map[string]bool)
 
 	for _, key := range keys {
+		if key == utils.VersionKey {
+			continue
+		}
 		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
@@ -250,8 +259,10 @@ func (s *IGWServiceImpl) AttachInternetGateway(input *ec2.AttachInternetGatewayI
 			InternetGatewayId: igwID,
 			VpcId:             vpcID,
 		}
-		eventData, _ := json.Marshal(event)
-		if err := s.natsConn.Publish("vpc.igw-attach", eventData); err != nil {
+		eventData, err := json.Marshal(event)
+		if err != nil {
+			slog.Warn("Failed to marshal IGW attach event", "error", err)
+		} else if err := s.natsConn.Publish("vpc.igw-attach", eventData); err != nil {
 			slog.Warn("Failed to publish IGW attach event", "error", err)
 		}
 	}
@@ -306,8 +317,10 @@ func (s *IGWServiceImpl) DetachInternetGateway(input *ec2.DetachInternetGatewayI
 			InternetGatewayId: igwID,
 			VpcId:             vpcID,
 		}
-		eventData, _ := json.Marshal(event)
-		if err := s.natsConn.Publish("vpc.igw-detach", eventData); err != nil {
+		eventData, err := json.Marshal(event)
+		if err != nil {
+			slog.Warn("Failed to marshal IGW detach event", "error", err)
+		} else if err := s.natsConn.Publish("vpc.igw-detach", eventData); err != nil {
 			slog.Warn("Failed to publish IGW detach event", "error", err)
 		}
 	}

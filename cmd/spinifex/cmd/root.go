@@ -102,7 +102,6 @@ func init() {
 	//viper.BindPFlag("nats.host", rootCmd.PersistentFlags().Lookup("nats-host"))
 	//viper.BindPFlag("nats.acl.token", rootCmd.PersistentFlags().Lookup("nats-token"))
 	//viper.BindPFlag("nats.sub.subject", rootCmd.PersistentFlags().Lookup("nats-subject"))
-
 }
 
 // initConfig reads in config file and ENV variables if set.

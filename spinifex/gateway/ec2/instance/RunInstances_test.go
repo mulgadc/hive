@@ -23,7 +23,6 @@ var defaults = ec2.RunInstancesInput{
 }
 
 func TestParseRunInstances(t *testing.T) {
-
 	// Group multiple tests
 	tests := []struct {
 		name  string
@@ -214,5 +213,4 @@ func TestParseRunInstances(t *testing.T) {
 	}
 
 	// Additional test
-
 }

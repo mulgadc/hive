@@ -386,7 +386,7 @@ func TestHandleEC2RunInstances_InvalidAMI(t *testing.T) {
 
 	input := &ec2.RunInstancesInput{
 		ImageId:      aws.String("ami-nonexistent"),
-		InstanceType: aws.String(getTestInstanceType()),
+		InstanceType: aws.String(getTestInstanceType(t)),
 		MinCount:     aws.Int64(1),
 		MaxCount:     aws.Int64(1),
 	}
@@ -412,7 +412,7 @@ func TestHandleEC2RunInstances_InvalidKeyPair(t *testing.T) {
 
 	input := &ec2.RunInstancesInput{
 		ImageId:      aws.String("ami-test123"),
-		InstanceType: aws.String(getTestInstanceType()),
+		InstanceType: aws.String(getTestInstanceType(t)),
 		KeyName:      aws.String("nonexistent-keypair"),
 		MinCount:     aws.Int64(1),
 		MaxCount:     aws.Int64(1),
@@ -456,7 +456,7 @@ func TestHandleEC2RunInstances_ValidKeyPairPassesValidation(t *testing.T) {
 
 	input := &ec2.RunInstancesInput{
 		ImageId:      aws.String("ami-test456"),
-		InstanceType: aws.String(getTestInstanceType()),
+		InstanceType: aws.String(getTestInstanceType(t)),
 		KeyName:      aws.String("my-key"),
 		MinCount:     aws.Int64(1),
 		MaxCount:     aws.Int64(1),
@@ -482,7 +482,7 @@ func TestHandleEC2RunInstances_EmptyKeyNameSkipsValidation(t *testing.T) {
 	// No KeyName at all — should skip validation
 	input := &ec2.RunInstancesInput{
 		ImageId:      aws.String("ami-test789"),
-		InstanceType: aws.String(getTestInstanceType()),
+		InstanceType: aws.String(getTestInstanceType(t)),
 		MinCount:     aws.Int64(1),
 		MaxCount:     aws.Int64(1),
 	}
@@ -517,7 +517,7 @@ func TestHandleEC2RunInstances_ServiceErrorPropagated(t *testing.T) {
 
 	input := &ec2.RunInstancesInput{
 		ImageId:      aws.String("ami-propatest"),
-		InstanceType: aws.String(getTestInstanceType()),
+		InstanceType: aws.String(getTestInstanceType(t)),
 		MinCount:     aws.Int64(1),
 		MaxCount:     aws.Int64(1),
 	}
@@ -541,7 +541,7 @@ func TestHandleEC2Events_StopInstance(t *testing.T) {
 	instanceID := "i-test-stop-001"
 	daemon.Instances.VMS[instanceID] = &vm.VM{
 		ID:           instanceID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Status:       vm.StateRunning,
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
@@ -587,7 +587,7 @@ func TestHandleEC2Events_TerminateInstance(t *testing.T) {
 	instanceID := "i-test-term-001"
 	daemon.Instances.VMS[instanceID] = &vm.VM{
 		ID:           instanceID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Status:       vm.StateRunning,
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
@@ -631,7 +631,7 @@ func TestHandleEC2Events_RebootRunningInstance(t *testing.T) {
 	instanceID := "i-test-reboot-001"
 	daemon.Instances.VMS[instanceID] = &vm.VM{
 		ID:           instanceID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Status:       vm.StateRunning,
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
@@ -681,7 +681,7 @@ func TestHandleEC2Events_RebootStoppedInstance(t *testing.T) {
 	instanceID := "i-test-reboot-stopped"
 	daemon.Instances.VMS[instanceID] = &vm.VM{
 		ID:           instanceID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Status:       vm.StateStopped,
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
@@ -724,7 +724,7 @@ func TestHandleEC2Events_RebootTerminatedInstance(t *testing.T) {
 	instanceID := "i-test-reboot-terminated"
 	daemon.Instances.VMS[instanceID] = &vm.VM{
 		ID:           instanceID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Status:       vm.StateTerminated,
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
@@ -1150,7 +1150,8 @@ func TestSetConfigPath(t *testing.T) {
 		Node:  "node-1",
 		Nodes: map[string]config.Config{"node-1": {BaseDir: "/tmp"}},
 	}
-	daemon := NewDaemon(clusterCfg)
+	daemon, err := NewDaemon(clusterCfg)
+	require.NoError(t, err)
 
 	assert.Empty(t, daemon.configPath)
 	daemon.SetConfigPath("/etc/spinifex/config.toml")
@@ -1208,7 +1209,7 @@ func TestHandleEC2StartStoppedInstance_NotStoppedState(t *testing.T) {
 	runningVM := &vm.VM{
 		ID:           "i-running-shared",
 		Status:       vm.StateRunning,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		AccountID:    testAccountID,
 	}
 	err := daemon.jsManager.WriteStoppedInstance(runningVM.ID, runningVM)
@@ -1242,7 +1243,7 @@ func TestHandleEC2DescribeStoppedInstances_ReturnsStoppedInstances(t *testing.T)
 	stoppedVM := &vm.VM{
 		ID:           "i-describe-stopped-001",
 		Status:       vm.StateStopped,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		LastNode:     "node-1",
 		AccountID:    testAccountID,
 		Reservation: &ec2.Reservation{
@@ -1251,7 +1252,7 @@ func TestHandleEC2DescribeStoppedInstances_ReturnsStoppedInstances(t *testing.T)
 		},
 		Instance: &ec2.Instance{
 			InstanceId:   aws.String("i-describe-stopped-001"),
-			InstanceType: aws.String(getTestInstanceType()),
+			InstanceType: aws.String(getTestInstanceType(t)),
 		},
 	}
 	err := daemon.jsManager.WriteStoppedInstance(stoppedVM.ID, stoppedVM)
@@ -1396,7 +1397,7 @@ func TestHandleEC2TerminateStoppedInstance_NotStoppedState(t *testing.T) {
 	runningVM := &vm.VM{
 		ID:           "i-term-running",
 		Status:       vm.StateRunning,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		AccountID:    testAccountID,
 	}
 	err := daemon.jsManager.WriteStoppedInstance(runningVM.ID, runningVM)
@@ -1428,7 +1429,7 @@ func TestHandleEC2TerminateStoppedInstance_Success(t *testing.T) {
 	stoppedVM := &vm.VM{
 		ID:           "i-term-stopped-001",
 		Status:       vm.StateStopped,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		LastNode:     "node-1",
 		AccountID:    testAccountID,
 		Reservation: &ec2.Reservation{
@@ -1437,7 +1438,7 @@ func TestHandleEC2TerminateStoppedInstance_Success(t *testing.T) {
 		},
 		Instance: &ec2.Instance{
 			InstanceId:   aws.String("i-term-stopped-001"),
-			InstanceType: aws.String(getTestInstanceType()),
+			InstanceType: aws.String(getTestInstanceType(t)),
 		},
 	}
 	err := daemon.jsManager.WriteStoppedInstance(stoppedVM.ID, stoppedVM)
@@ -1586,7 +1587,7 @@ func TestAttachVolume_ZoneMismatch(t *testing.T) {
 	// Create a running instance
 	instance := &vm.VM{
 		ID:           instanceID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Status:       vm.StateRunning,
 		AccountID:    testAccountID,
 		Instance:     &ec2.Instance{},
@@ -2119,7 +2120,7 @@ func TestHandleNodeVMs(t *testing.T) {
 	daemon := createTestDaemon(t, sharedNATSURL)
 	daemon.config.Daemon.Host = "10.0.0.5:4432"
 
-	instanceType := getTestInstanceType()
+	instanceType := getTestInstanceType(t)
 	launchTime := time.Date(2025, 1, 15, 10, 0, 0, 0, time.UTC)
 
 	daemon.Instances.Mu.Lock()
@@ -2674,7 +2675,7 @@ func TestHandleEC2TerminateStoppedInstance_WithVolumes(t *testing.T) {
 		ID:           "i-term-vol-001",
 		Status:       vm.StateStopped,
 		AccountID:    testAccountID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		LastNode:     "node-1",
 		Reservation: &ec2.Reservation{
 			ReservationId: aws.String("r-term-vol-001"),
@@ -2682,7 +2683,7 @@ func TestHandleEC2TerminateStoppedInstance_WithVolumes(t *testing.T) {
 		},
 		Instance: &ec2.Instance{
 			InstanceId:   aws.String("i-term-vol-001"),
-			InstanceType: aws.String(getTestInstanceType()),
+			InstanceType: aws.String(getTestInstanceType(t)),
 		},
 	}
 	// Add EFI, CloudInit, and a user volume with DeleteOnTermination
@@ -2828,7 +2829,7 @@ func TestHandleEC2CreateImage_RunningInstanceReachesService(t *testing.T) {
 	daemon.Instances.VMS[instanceID] = &vm.VM{
 		ID:           instanceID,
 		Status:       vm.StateRunning,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		AccountID:    testAccountID,
 		Instance: &ec2.Instance{
 			InstanceId: aws.String(instanceID),
@@ -2879,7 +2880,7 @@ func TestAttachVolume_MissingVolumeData(t *testing.T) {
 		ID:           instanceID,
 		Status:       vm.StateRunning,
 		AccountID:    testAccountID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
@@ -2919,7 +2920,7 @@ func TestAttachVolume_InstanceNotRunning(t *testing.T) {
 		ID:           instanceID,
 		Status:       vm.StateStopped,
 		AccountID:    testAccountID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
@@ -2960,7 +2961,7 @@ func TestAttachVolume_VolumeNotFound(t *testing.T) {
 		ID:           instanceID,
 		Status:       vm.StateRunning,
 		AccountID:    testAccountID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
@@ -3003,7 +3004,7 @@ func TestAttachVolume_VolumeInUse(t *testing.T) {
 		ID:           instanceID,
 		Status:       vm.StateRunning,
 		AccountID:    testAccountID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
@@ -3065,7 +3066,7 @@ func TestDetachVolume_MissingVolumeData(t *testing.T) {
 		ID:           instanceID,
 		Status:       vm.StateRunning,
 		AccountID:    testAccountID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
@@ -3104,7 +3105,7 @@ func TestDetachVolume_InstanceNotRunning(t *testing.T) {
 		ID:           instanceID,
 		Status:       vm.StateStopped,
 		AccountID:    testAccountID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
@@ -3145,7 +3146,7 @@ func TestDetachVolume_VolumeNotAttached(t *testing.T) {
 		ID:           instanceID,
 		Status:       vm.StateRunning,
 		AccountID:    testAccountID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
@@ -3186,7 +3187,7 @@ func TestDetachVolume_BootVolumeRejected(t *testing.T) {
 		ID:           instanceID,
 		Status:       vm.StateRunning,
 		AccountID:    testAccountID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
@@ -3230,7 +3231,7 @@ func TestDetachVolume_DeviceMismatch(t *testing.T) {
 		ID:           instanceID,
 		Status:       vm.StateRunning,
 		AccountID:    testAccountID,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		Instance:     &ec2.Instance{},
 		QMPClient:    &qmp.QMPClient{},
 	}
@@ -3279,7 +3280,7 @@ func TestHandleEC2RunInstances_InsufficientCapacity(t *testing.T) {
 	// Request a very large instance count that can't be satisfied
 	input := &ec2.RunInstancesInput{
 		ImageId:      aws.String("ami-test"),
-		InstanceType: aws.String(getTestInstanceType()),
+		InstanceType: aws.String(getTestInstanceType(t)),
 		MinCount:     aws.Int64(9999),
 		MaxCount:     aws.Int64(9999),
 	}
@@ -3359,7 +3360,7 @@ func TestHandleEC2DescribeTerminatedInstances_ReturnsTerminatedInstances(t *test
 	terminatedVM := &vm.VM{
 		ID:           "i-describe-term-001",
 		Status:       vm.StateTerminated,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		LastNode:     "node-1",
 		AccountID:    testAccountID,
 		Reservation: &ec2.Reservation{
@@ -3368,7 +3369,7 @@ func TestHandleEC2DescribeTerminatedInstances_ReturnsTerminatedInstances(t *test
 		},
 		Instance: &ec2.Instance{
 			InstanceId:   aws.String("i-describe-term-001"),
-			InstanceType: aws.String(getTestInstanceType()),
+			InstanceType: aws.String(getTestInstanceType(t)),
 		},
 	}
 	err := daemon.jsManager.WriteTerminatedInstance(terminatedVM.ID, terminatedVM)
@@ -3417,7 +3418,7 @@ func TestHandleEC2DescribeTerminatedInstances_WithFilter(t *testing.T) {
 			},
 			Instance: &ec2.Instance{
 				InstanceId:   aws.String(id),
-				InstanceType: aws.String(getTestInstanceType()),
+				InstanceType: aws.String(getTestInstanceType(t)),
 			},
 		}
 		require.NoError(t, daemon.jsManager.WriteTerminatedInstance(v.ID, v))
@@ -3454,7 +3455,7 @@ func TestHandleEC2TerminateStoppedInstance_WritesToTerminatedKV(t *testing.T) {
 	stoppedVM := &vm.VM{
 		ID:           "i-stop-to-term-001",
 		Status:       vm.StateStopped,
-		InstanceType: getTestInstanceType(),
+		InstanceType: getTestInstanceType(t),
 		AccountID:    testAccountID,
 	}
 	require.NoError(t, daemon.jsManager.WriteStoppedInstance(stoppedVM.ID, stoppedVM))

@@ -68,7 +68,6 @@ type ErrorDetail struct {
 }
 
 func (gw *GatewayConfig) SetupRoutes() http.Handler {
-
 	var logLevel slog.Level
 
 	if gw.Debug {
@@ -159,7 +158,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,HEAD,OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "*")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		if r.Method == "OPTIONS" {
+		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -173,7 +172,6 @@ func corsMiddleware(next http.Handler) http.Handler {
 // AWS_ENDPOINT_URL=https://localhost:9999/ aws  --no-verify-ssl ec2 describe-instances
 
 func (gw *GatewayConfig) Request(w http.ResponseWriter, r *http.Request) {
-
 	// Route the request to the appropriate endpoint (e.g EC2, IAM, etc)
 	svc, err := gw.GetService(r)
 	slog.Info("Request", "service", svc, "method", r.Method, "path", r.URL.Path)
@@ -291,7 +289,7 @@ func (gw *GatewayConfig) ErrorHandler(w http.ResponseWriter, r *http.Request, er
 
 	// Get the request ID
 	var requestId = uuid.NewString()
-	if rid := r.Header.Get("x-amz-request-id"); rid != "" {
+	if rid := r.Header.Get("X-Amz-Request-Id"); rid != "" {
 		requestId = rid
 	}
 
@@ -321,7 +319,9 @@ func (gw *GatewayConfig) ErrorHandler(w http.ResponseWriter, r *http.Request, er
 
 	w.Header().Set("Content-Type", "application/xml")
 	w.WriteHeader(errorMsg.HTTPCode)
-	_, _ = w.Write(xmlError)
+	if _, err := w.Write(xmlError); err != nil {
+		slog.Error("Failed to write error response", "err", err)
+	}
 }
 
 // Parse AWS query arguments (used by some services like EC2/S3)
@@ -344,7 +344,6 @@ func ParseAWSQueryArgs(query string) map[string]string {
 }
 
 func GenerateEC2ErrorResponse(code, message, requestID string) (output []byte) {
-
 	errorXml := ErrorResponse{
 		Errors: Errors{
 			Error: ErrorDetail{
@@ -403,7 +402,6 @@ func GenerateIAMErrorResponse(code, message, requestID string) (output []byte) {
 }
 
 func ParseArgsToStruct(input *any, args map[string]string) (err error) {
-
 	// Generated from input shape: RunInstancesRequest
 	err = awsec2query.QueryParamsToStruct(args, input)
 
@@ -412,7 +410,6 @@ func ParseArgsToStruct(input *any, args map[string]string) (err error) {
 	}
 
 	return nil
-
 }
 
 // DiscoverActiveNodes discovers the number of active spinifex daemon nodes in the cluster
@@ -485,6 +482,7 @@ func (gw *GatewayConfig) DiscoverActiveNodes() int {
 // statusWriter wraps http.ResponseWriter to capture the status code.
 type statusWriter struct {
 	http.ResponseWriter
+
 	status int
 }
 

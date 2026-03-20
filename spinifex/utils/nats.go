@@ -17,10 +17,10 @@ func ConnectNATS(host, token string) (*nats.Conn, error) {
 		nats.ReconnectWait(time.Second),
 		nats.MaxReconnects(-1),
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
-			slog.Debug("NATS disconnected", "err", err)
+			slog.Warn("NATS disconnected", "err", err)
 		}),
 		nats.ReconnectHandler(func(nc *nats.Conn) {
-			slog.Debug("NATS reconnected", "url", nc.ConnectedUrl())
+			slog.Warn("NATS reconnected", "url", nc.ConnectedUrl())
 		}),
 	}
 

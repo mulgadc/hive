@@ -100,10 +100,10 @@ func TestServiceMethods(t *testing.T) {
 	svc, err := New(cfg)
 	assert.NoError(t, err)
 
-	// Test Status - returns empty string and no error
+	// Test Status - returns "stopped" when no PID file exists
 	status, err := svc.Status()
 	assert.NoError(t, err)
-	assert.Empty(t, status)
+	assert.Equal(t, "stopped", status)
 
 	// Test Reload - returns no error
 	err = svc.Reload()

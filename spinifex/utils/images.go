@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -137,7 +138,6 @@ var AvailableImages = map[string]Images{
 
 // AMI / image extraction utils
 func ExtractDiskImageFromFile(imagepath string, tmpdir string) (diskimage string, err error) {
-
 	var args []string
 	var execCmd string
 
@@ -145,7 +145,7 @@ func ExtractDiskImageFromFile(imagepath string, tmpdir string) (diskimage string
 	_, err = os.Stat(imagepath)
 
 	if err != nil {
-		return
+		return diskimage, err
 	}
 
 	// Extract the filepath
@@ -153,7 +153,6 @@ func ExtractDiskImageFromFile(imagepath string, tmpdir string) (diskimage string
 
 	// Already in raw/image formt, confirm the file contains a valid disk image/MBR
 	if strings.HasSuffix(imagefile, ".raw") || strings.HasSuffix(imagefile, ".img") || strings.HasSuffix(imagefile, ".qcow2") || strings.HasSuffix(imagefile, ".qcow") {
-
 		path, err := filepath.Abs(imagepath)
 
 		if err != nil {
@@ -166,7 +165,6 @@ func ExtractDiskImageFromFile(imagepath string, tmpdir string) (diskimage string
 		// Check error response
 
 		if errors.Is(err, ErrQCOWDetected) {
-
 			extractpath := fmt.Sprintf("%s/%s", tmpdir, imagefile)
 			extractpath = strings.TrimSuffix(extractpath, ".qcow2") + ".raw"
 
@@ -191,13 +189,10 @@ func ExtractDiskImageFromFile(imagepath string, tmpdir string) (diskimage string
 			}
 
 			return extractpath, nil
-
 		}
 
 		return path, err
-
 	} else if strings.HasSuffix(imagefile, ".tar.xz") {
-
 		args = []string{
 			"xfvJ",
 			imagepath,
@@ -206,9 +201,7 @@ func ExtractDiskImageFromFile(imagepath string, tmpdir string) (diskimage string
 		}
 
 		execCmd = "tar"
-
 	} else if strings.HasSuffix(imagefile, ".tar.gz") || strings.HasSuffix(imagefile, ".tgz") {
-
 		args = []string{
 			"xfvz",
 			imagepath,
@@ -217,9 +210,7 @@ func ExtractDiskImageFromFile(imagepath string, tmpdir string) (diskimage string
 		}
 
 		execCmd = "tar"
-
 	} else if strings.HasSuffix(imagefile, ".tar") {
-
 		args = []string{
 			"xfv",
 			imagepath,
@@ -228,88 +219,81 @@ func ExtractDiskImageFromFile(imagepath string, tmpdir string) (diskimage string
 		}
 
 		execCmd = "tar"
-
 	} else if strings.HasSuffix(imagefile, ".xz") {
-
 		args = []string{
 			"-dk",
 			imagepath,
 		}
 
 		execCmd = "xz"
-
 	} else {
 		err = errors.New("unsupported filetype")
-		return
+		return diskimage, err
 	}
 
 	cmd := exec.Command(execCmd, args...)
 	output, err := cmd.CombinedOutput()
 
 	if err != nil {
-		return
+		return diskimage, err
 	}
 
 	diskimage, err = extractDiskImagePath(tmpdir, output)
 
-	return
-
+	return diskimage, err
 }
 
 func extractDiskImagePath(imagedir string, output []byte) (diskimage string, err error) {
-
 	reader := bytes.NewReader(output)
 
 	r := bufio.NewReader(reader)
 
 	for {
-		line, err := r.ReadString('\n')
-		line = strings.Replace(line, "\n", "", 1)
+		line, readErr := r.ReadString('\n')
+		line = strings.TrimRight(line, "\n")
 
 		// MacOS tar, filenames begin with `x FILE` (to STDERR)
 		if runtime.GOOS == "darwin" && strings.HasPrefix(line, "x ") {
 			line = strings.Replace(line, "x ", "", 1)
-
 		}
 
 		if strings.HasSuffix(line, ".raw") || strings.HasSuffix(line, ".img") {
 			diskimage := fmt.Sprintf("%s/%s", imagedir, line)
-
 			err = validateDiskImagePath(diskimage)
-
 			return diskimage, err
 		}
 
-		if err != nil && err.Error() == "EOF" {
-			break
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return "", fmt.Errorf("read tar output: %w", readErr)
 		}
 	}
 
-	return
-
+	return diskimage, err
 }
 
 func validateDiskImagePath(diskimage string) (err error) {
-
 	args := []string{
 		diskimage,
 	}
 
 	cmd := exec.Command("file", args...)
-	output, _ := cmd.CombinedOutput()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("run file command on %s: %w", diskimage, err)
+	}
 
 	filetype := strings.Split(string(output), ":")
 
 	if len(filetype) > 1 {
-
 		if strings.Contains(filetype[1], "DOS/MBR boot sector") || strings.Contains(filetype[1], "Linux ") {
 			return nil
 		} else if strings.Contains(filetype[1], "QEMU QCOW") {
 			return ErrQCOWDetected
 		}
-
 	}
 
 	return errors.New("no valid disk image found")
-
 }

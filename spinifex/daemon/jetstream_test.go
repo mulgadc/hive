@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/mulgadc/spinifex/spinifex/vm"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -1206,5 +1207,60 @@ func TestJetStreamManager_ListTerminatedInstances_RecoverAfterStreamLost(t *test
 
 	instances, err := jsm.ListTerminatedInstances()
 	require.NoError(t, err, "ListTerminatedInstances should recover after stream loss")
+	assert.Empty(t, instances)
+}
+
+func TestJetStreamManager_InitBuckets_WritesVersion(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+
+	require.NoError(t, jsm.InitKVBucket())
+	require.NoError(t, jsm.InitClusterStateBucket())
+	require.NoError(t, jsm.InitTerminatedInstanceBucket())
+
+	v, err := utils.ReadVersion(jsm.kv)
+	require.NoError(t, err)
+	assert.Equal(t, InstanceStateBucketVersion, v)
+
+	v, err = utils.ReadVersion(jsm.clusterKV)
+	require.NoError(t, err)
+	assert.Equal(t, ClusterStateBucketVersion, v)
+
+	v, err = utils.ReadVersion(jsm.terminatedKV)
+	require.NoError(t, err)
+	assert.Equal(t, TerminatedInstanceBucketVersion, v)
+}
+
+func TestJetStreamManager_ListStoppedInstances_SkipsVersionKey(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	require.NoError(t, jsm.InitKVBucket())
+
+	// _version key is written by InitKVBucket; listing should not include it
+	instances, err := jsm.ListStoppedInstances()
+	require.NoError(t, err)
+	assert.Empty(t, instances)
+}
+
+func TestJetStreamManager_ListTerminatedInstances_SkipsVersionKey(t *testing.T) {
+	nc, err := nats.Connect(sharedJSNATSURL)
+	require.NoError(t, err)
+	defer nc.Close()
+
+	jsm, err := NewJetStreamManager(nc, 1)
+	require.NoError(t, err)
+	require.NoError(t, jsm.InitTerminatedInstanceBucket())
+
+	// _version key is written by InitTerminatedInstanceBucket; listing should not include it
+	instances, err := jsm.ListTerminatedInstances()
+	require.NoError(t, err)
 	assert.Empty(t, instances)
 }

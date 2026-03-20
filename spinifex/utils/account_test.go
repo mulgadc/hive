@@ -1,6 +1,14 @@
 package utils
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats.go"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
 
 func TestAccountKey(t *testing.T) {
 	tests := []struct {
@@ -51,4 +59,121 @@ func TestGlobalAccountID(t *testing.T) {
 	if !IsAccountID(GlobalAccountID) {
 		t.Error("GlobalAccountID should be a valid account ID")
 	}
+}
+
+// startJSNATSServer starts an embedded JetStream-enabled NATS server for testing.
+func startJSNATSServer(t *testing.T) *server.Server {
+	t.Helper()
+	tmpDir := t.TempDir()
+
+	ns, err := server.NewServer(&server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		JetStream: true,
+		StoreDir:  tmpDir,
+		NoLog:     true,
+		NoSigs:    true,
+	})
+	require.NoError(t, err)
+	go ns.Start()
+	require.True(t, ns.ReadyForConnections(5*time.Second))
+	t.Cleanup(func() { ns.Shutdown() })
+	return ns
+}
+
+func TestWriteVersion_WritesKey(t *testing.T) {
+	ns := startJSNATSServer(t)
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	defer nc.Close()
+
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+
+	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: "test-write-version"})
+	require.NoError(t, err)
+
+	err = WriteVersion(kv, 1)
+	require.NoError(t, err)
+
+	entry, err := kv.Get(VersionKey)
+	require.NoError(t, err)
+	assert.Equal(t, "1", string(entry.Value()))
+}
+
+func TestReadVersion_ReturnsZeroWhenUnset(t *testing.T) {
+	ns := startJSNATSServer(t)
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	defer nc.Close()
+
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+
+	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: "test-read-unset"})
+	require.NoError(t, err)
+
+	v, err := ReadVersion(kv)
+	require.NoError(t, err)
+	assert.Equal(t, 0, v)
+}
+
+func TestWriteVersion_IdempotentOnSameVersion(t *testing.T) {
+	ns := startJSNATSServer(t)
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	defer nc.Close()
+
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+
+	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: "test-idempotent"})
+	require.NoError(t, err)
+
+	require.NoError(t, WriteVersion(kv, 1))
+	require.NoError(t, WriteVersion(kv, 1))
+
+	v, err := ReadVersion(kv)
+	require.NoError(t, err)
+	assert.Equal(t, 1, v)
+}
+
+func TestWriteVersion_UpdatesOnHigherVersion(t *testing.T) {
+	ns := startJSNATSServer(t)
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	defer nc.Close()
+
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+
+	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: "test-upgrade"})
+	require.NoError(t, err)
+
+	require.NoError(t, WriteVersion(kv, 1))
+	require.NoError(t, WriteVersion(kv, 2))
+
+	v, err := ReadVersion(kv)
+	require.NoError(t, err)
+	assert.Equal(t, 2, v)
+}
+
+func TestWriteVersion_NoOpOnLowerVersion(t *testing.T) {
+	ns := startJSNATSServer(t)
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	defer nc.Close()
+
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+
+	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: "test-downgrade"})
+	require.NoError(t, err)
+
+	require.NoError(t, WriteVersion(kv, 3))
+	require.NoError(t, WriteVersion(kv, 1))
+
+	v, err := ReadVersion(kv)
+	require.NoError(t, err)
+	assert.Equal(t, 3, v)
 }

@@ -26,6 +26,10 @@ const (
 	KVBucketVNICounter = "spinifex-vpc-vni-counter"
 	vniCounterKey      = "counter"
 	vniStart           = 100 // Starting VNI value (avoid 0 and low numbers)
+
+	KVBucketVPCsVersion       = 1
+	KVBucketSubnetsVersion    = 1
+	KVBucketVNICounterVersion = 1
 )
 
 // VPCRecord represents a stored VPC
@@ -73,20 +77,32 @@ func NewVPCServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*VPCSer
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketVPCs, err)
 	}
+	if err := utils.WriteVersion(vpcKV, KVBucketVPCsVersion); err != nil {
+		return nil, fmt.Errorf("write version to %s: %w", KVBucketVPCs, err)
+	}
 
 	subnetKV, err := utils.GetOrCreateKVBucket(js, KVBucketSubnets, 10)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketSubnets, err)
+	}
+	if err := utils.WriteVersion(subnetKV, KVBucketSubnetsVersion); err != nil {
+		return nil, fmt.Errorf("write version to %s: %w", KVBucketSubnets, err)
 	}
 
 	vniKV, err := utils.GetOrCreateKVBucket(js, KVBucketVNICounter, 10)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketVNICounter, err)
 	}
+	if err := utils.WriteVersion(vniKV, KVBucketVNICounterVersion); err != nil {
+		return nil, fmt.Errorf("write version to %s: %w", KVBucketVNICounter, err)
+	}
 
 	eniKV, err := utils.GetOrCreateKVBucket(js, KVBucketENIs, 10)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketENIs, err)
+	}
+	if err := utils.WriteVersion(eniKV, KVBucketENIsVersion); err != nil {
+		return nil, fmt.Errorf("write version to %s: %w", KVBucketENIs, err)
 	}
 
 	ipam, err := NewIPAM(js)
@@ -118,7 +134,10 @@ func (s *VPCServiceImpl) nextVNI() (int64, error) {
 		if errors.Is(err, nats.ErrKeyNotFound) {
 			// First VNI allocation — initialize counter
 			vni := int64(vniStart)
-			data, _ := json.Marshal(vni + 1)
+			data, marshalErr := json.Marshal(vni + 1)
+			if marshalErr != nil {
+				return 0, fmt.Errorf("failed to marshal VNI counter: %w", marshalErr)
+			}
 			if _, err := s.vniKV.Create(vniCounterKey, data); err != nil {
 				return 0, fmt.Errorf("failed to initialize VNI counter: %w", err)
 			}
@@ -133,7 +152,10 @@ func (s *VPCServiceImpl) nextVNI() (int64, error) {
 	}
 
 	next := current + 1
-	data, _ := json.Marshal(next)
+	data, marshalErr := json.Marshal(next)
+	if marshalErr != nil {
+		return 0, fmt.Errorf("failed to marshal VNI counter: %w", marshalErr)
+	}
 	if _, err := s.vniKV.Update(vniCounterKey, data, entry.Revision()); err != nil {
 		return 0, fmt.Errorf("failed to update VNI counter (CAS conflict): %w", err)
 	}
@@ -225,6 +247,9 @@ func (s *VPCServiceImpl) DeleteVpc(input *ec2.DeleteVpcInput, accountID string) 
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 	for _, k := range subnetKeys {
+		if k == utils.VersionKey {
+			continue
+		}
 		if !strings.HasPrefix(k, prefix) {
 			continue
 		}
@@ -271,6 +296,9 @@ func (s *VPCServiceImpl) DescribeVpcs(input *ec2.DescribeVpcsInput, accountID st
 	}
 
 	for _, key := range keys {
+		if key == utils.VersionKey {
+			continue
+		}
 		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
@@ -368,6 +396,9 @@ func (s *VPCServiceImpl) CreateSubnet(input *ec2.CreateSubnetInput, accountID st
 	}
 
 	for _, k := range subnetKeys {
+		if k == utils.VersionKey {
+			continue
+		}
 		if !strings.HasPrefix(k, prefix) {
 			continue
 		}
@@ -499,6 +530,9 @@ func (s *VPCServiceImpl) DescribeSubnets(input *ec2.DescribeSubnetsInput, accoun
 	}
 
 	for _, key := range keys {
+		if key == utils.VersionKey {
+			continue
+		}
 		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
@@ -634,6 +668,9 @@ func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string) error {
 	}
 
 	for _, key := range keys {
+		if key == utils.VersionKey {
+			continue
+		}
 		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
@@ -730,6 +767,9 @@ func (s *VPCServiceImpl) GetDefaultSubnet(accountID string) (*SubnetRecord, erro
 	}
 
 	for _, key := range keys {
+		if key == utils.VersionKey {
+			continue
+		}
 		if !strings.HasPrefix(key, prefix) {
 			continue
 		}

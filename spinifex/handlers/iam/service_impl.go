@@ -27,6 +27,12 @@ const (
 	KVBucketAccounts       = "spinifex-accounts"
 	KVBucketAccountCounter = "spinifex-account-counter"
 
+	KVBucketUsersVersion          = 1
+	KVBucketAccessKeysVersion     = 1
+	KVBucketPoliciesVersion       = 1
+	KVBucketAccountsVersion       = 1
+	KVBucketAccountCounterVersion = 1
+
 	maxAccessKeysPerUser = 2
 )
 
@@ -63,25 +69,40 @@ func NewIAMServiceImpl(natsConn *nats.Conn, masterKey []byte, clusterSize int) (
 	if err != nil {
 		return nil, fmt.Errorf("init users bucket: %w", err)
 	}
+	if err := utils.WriteVersion(usersBucket, KVBucketUsersVersion); err != nil {
+		return nil, fmt.Errorf("write version to %s: %w", KVBucketUsers, err)
+	}
 
 	accessKeysBucket, err := getOrCreateBucket(js, KVBucketAccessKeys, 5, replicas)
 	if err != nil {
 		return nil, fmt.Errorf("init access keys bucket: %w", err)
+	}
+	if err := utils.WriteVersion(accessKeysBucket, KVBucketAccessKeysVersion); err != nil {
+		return nil, fmt.Errorf("write version to %s: %w", KVBucketAccessKeys, err)
 	}
 
 	policiesBucket, err := getOrCreateBucket(js, KVBucketPolicies, 10, replicas)
 	if err != nil {
 		return nil, fmt.Errorf("init policies bucket: %w", err)
 	}
+	if err := utils.WriteVersion(policiesBucket, KVBucketPoliciesVersion); err != nil {
+		return nil, fmt.Errorf("write version to %s: %w", KVBucketPolicies, err)
+	}
 
 	accountsBucket, err := getOrCreateBucket(js, KVBucketAccounts, 5, replicas)
 	if err != nil {
 		return nil, fmt.Errorf("init accounts bucket: %w", err)
 	}
+	if err := utils.WriteVersion(accountsBucket, KVBucketAccountsVersion); err != nil {
+		return nil, fmt.Errorf("write version to %s: %w", KVBucketAccounts, err)
+	}
 
 	accountCounterBucket, err := getOrCreateBucket(js, KVBucketAccountCounter, 5, replicas)
 	if err != nil {
 		return nil, fmt.Errorf("init account counter bucket: %w", err)
+	}
+	if err := utils.WriteVersion(accountCounterBucket, KVBucketAccountCounterVersion); err != nil {
+		return nil, fmt.Errorf("write version to %s: %w", KVBucketAccountCounter, err)
 	}
 
 	decrypter, err := NewDecrypter(masterKey)
@@ -231,6 +252,9 @@ func (s *IAMServiceImpl) ListUsers(accountID string, input *iam.ListUsersInput) 
 	keyPrefix := accountID + "."
 	var users []*iam.User
 	for _, key := range keys {
+		if key == utils.VersionKey {
+			continue
+		}
 		if !strings.HasPrefix(key, keyPrefix) {
 			continue
 		}
@@ -714,7 +738,12 @@ func (s *IAMServiceImpl) IsEmpty() (bool, error) {
 		}
 		return false, fmt.Errorf("check users bucket: %w", err)
 	}
-	return len(keys) == 0, nil
+	for _, key := range keys {
+		if key != utils.VersionKey {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -826,6 +855,9 @@ func (s *IAMServiceImpl) ListAccounts() ([]*Account, error) {
 
 	accounts := make([]*Account, 0, len(keys))
 	for _, key := range keys {
+		if key == utils.VersionKey {
+			continue
+		}
 		entry, err := s.accountsBucket.Get(key)
 		if err != nil {
 			if errors.Is(err, nats.ErrKeyNotFound) {
@@ -984,6 +1016,9 @@ func (s *IAMServiceImpl) ListPolicies(accountID string, input *iam.ListPoliciesI
 	keyPrefix := accountID + "."
 	var policies []*iam.Policy
 	for _, key := range keys {
+		if key == utils.VersionKey {
+			continue
+		}
 		if !strings.HasPrefix(key, keyPrefix) {
 			continue
 		}
@@ -1229,6 +1264,9 @@ func (s *IAMServiceImpl) buildAttachmentCounts(accountID string) (map[string]int
 	counts := make(map[string]int64)
 	keyPrefix := accountID + "."
 	for _, key := range keys {
+		if key == utils.VersionKey {
+			continue
+		}
 		if !strings.HasPrefix(key, keyPrefix) {
 			continue
 		}
@@ -1267,6 +1305,9 @@ func (s *IAMServiceImpl) countPolicyAttachments(accountID, policyARN string) (in
 	keyPrefix := accountID + "."
 	var count int64
 	for _, key := range keys {
+		if key == utils.VersionKey {
+			continue
+		}
 		if !strings.HasPrefix(key, keyPrefix) {
 			continue
 		}

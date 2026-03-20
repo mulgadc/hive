@@ -1,10 +1,15 @@
-#!/bin/sh
+#!/bin/bash
 
 # Reset dev environment (will purge all data)
 
+set -euo pipefail
+
 echo "Shutting down services"
 
-./scripts/stop-dev.sh
+if ! ./scripts/stop-dev.sh; then
+    echo "❌ Failed to stop services. Aborting reset to prevent data loss."
+    exit 1
+fi
 
 echo "Removing data"
 

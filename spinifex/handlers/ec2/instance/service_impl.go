@@ -297,7 +297,6 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 	}
 
 	return volumeInfos, nil
-
 }
 
 // newViperblock creates a viperblock instance with the service's S3/Predastore credentials.

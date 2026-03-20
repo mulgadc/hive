@@ -15,12 +15,10 @@ func TestNew(t *testing.T) {
 	services := []string{"nats", "predastore", "viperblock", "spinifex", "awsgw"}
 
 	for _, s := range services {
-
 		var svc Service
 		var err error
 
 		switch s {
-
 		// TODO: Standardize service config handling (use config.Config for all?)
 		case "nats":
 			svc, err = New(s, &nats.Config{})
@@ -34,7 +32,6 @@ func TestNew(t *testing.T) {
 		case "awsgw":
 			svc, err = New(s, &config.ClusterConfig{})
 			// No special setup needed
-
 		}
 
 		assert.NoError(t, err)

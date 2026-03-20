@@ -41,7 +41,6 @@ func GenerateResourceID(prefix string) string {
 
 // Convert interface to XML
 func MarshalToXML(payload any) ([]byte, error) {
-
 	var buf bytes.Buffer
 	enc := xml.NewEncoder(&buf)
 
@@ -56,7 +55,6 @@ func MarshalToXML(payload any) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
-
 }
 
 // wrapWithLocation decorates payload with the requested locationName tag.
@@ -106,7 +104,6 @@ func GenerateIAMXMLPayload(action string, payload any) any {
 
 // Generate JSON Error Payload
 func GenerateErrorPayload(code string) (jsonResponse []byte) {
-
 	var responseError ec2.ResponseError
 	responseError.Code = aws.String(code)
 
@@ -117,13 +114,11 @@ func GenerateErrorPayload(code string) (jsonResponse []byte) {
 		return nil
 	}
 
-	return
-
+	return jsonResponse
 }
 
 // Validate the payload is an ec2.ResponseError
 func ValidateErrorPayload(payload []byte) (responseError ec2.ResponseError, err error) {
-
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 
@@ -137,13 +132,11 @@ func ValidateErrorPayload(payload []byte) (responseError ec2.ResponseError, err 
 
 	// Either failed to decode (not an error structure) or Code is nil (empty valid response)
 	return responseError, nil
-
 }
 
 // Unmarshal payload
 
 func UnmarshalJsonPayload(input any, jsonData []byte) []byte {
-
 	decoder := json.NewDecoder(bytes.NewReader(jsonData))
 	decoder.DisallowUnknownFields()
 
@@ -154,11 +147,9 @@ func UnmarshalJsonPayload(input any, jsonData []byte) []byte {
 	}
 
 	return nil
-
 }
 
 func MarshalJsonPayload(input any, jsonData []byte) []byte {
-
 	decoder := json.NewDecoder(bytes.NewReader(jsonData))
 	decoder.DisallowUnknownFields()
 
@@ -169,7 +160,6 @@ func MarshalJsonPayload(input any, jsonData []byte) []byte {
 	}
 
 	return nil
-
 }
 
 // ValidateKeyPairName validates that a key pair name only contains allowed characters:
@@ -204,7 +194,6 @@ func ValidateKeyPairName(name string) error {
 }
 
 func CreateS3Client(cfg *config.Config) *s3.S3 {
-
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
@@ -225,13 +214,11 @@ func CreateS3Client(cfg *config.Config) *s3.S3 {
 	}))
 
 	return s3.New(sess)
-
 }
 
 // Download helper
 
 func DownloadFileWithProgress(url string, name string, filename string, timeout time.Duration) (err error) {
-
 	// Context with optional timeout and Ctrl+C cancel
 	ctx, cancel := context.WithCancel(context.Background())
 	if timeout > 0 {
@@ -288,10 +275,8 @@ func DownloadFileWithProgress(url string, name string, filename string, timeout 
 		}
 
 		pterm.Printf("Saved %s (%s)\n", filename, humanBytes(SafeInt64ToUint64(written)))
-		return
-
+		return err
 	} else {
-
 		// Unknown size: spinner that shows bytes downloaded
 		spin, _ := pterm.DefaultSpinner.
 			WithText("Downloading (size unknown)...").
@@ -309,7 +294,6 @@ func DownloadFileWithProgress(url string, name string, filename string, timeout 
 		}
 
 		pterm.Printf("Saved %s (%s)\n", filename, humanBytes(SafeInt64ToUint64(written)))
-
 	}
 
 	return nil

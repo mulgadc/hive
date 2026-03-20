@@ -188,16 +188,17 @@ func getSystemMemory() (float64, error) {
 	}
 }
 
-// NewResourceManager creates a new resource manager with system capabilities
-func NewResourceManager() *ResourceManager {
+// NewResourceManager creates a new resource manager with system capabilities.
+// Returns an error if system memory cannot be detected, since an incorrect
+// default would either under-provision (large servers) or over-commit (small devices).
+func NewResourceManager() (*ResourceManager, error) {
 	// Get system CPU cores
 	numCPU := runtime.NumCPU()
 
 	// Get system memory (in GB)
 	totalMemGB, err := getSystemMemory()
 	if err != nil {
-		slog.Warn("Failed to get system memory, using default of 8GB", "err", err)
-		totalMemGB = 8.0 // Default to 8GB if we can't get the actual memory
+		return nil, fmt.Errorf("detect system memory: %w", err)
 	}
 
 	// Determine architecture
@@ -217,7 +218,7 @@ func NewResourceManager() *ResourceManager {
 		availableVCPU: numCPU,
 		availableMem:  totalMemGB,
 		instanceTypes: instanceTypes,
-	}
+	}, nil
 }
 
 // instanceTypeVCPUs returns the default vCPU count for an instance type, or 0 if unavailable.
@@ -301,13 +302,13 @@ func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64
 	remainingMem := rm.availableMem - rm.allocatedMem
 
 	for _, it := range rm.instanceTypes {
-		cap := resourceStatsForType(remainingVCPU, remainingMem, it)
-		if cap.VCPU == 0 || cap.MemoryGB == 0 {
+		typeCap := resourceStatsForType(remainingVCPU, remainingMem, it)
+		if typeCap.VCPU == 0 || typeCap.MemoryGB == 0 {
 			continue
 		}
-		caps = append(caps, cap)
+		caps = append(caps, typeCap)
 	}
-	return
+	return totalVCPU, totalMemGB, allocVCPU, allocMemGB, caps
 }
 
 // SetConfigPath sets the configuration file path for cluster management
@@ -316,7 +317,7 @@ func (d *Daemon) SetConfigPath(path string) {
 }
 
 // NewDaemon creates a new daemon instance
-func NewDaemon(cfg *config.ClusterConfig) *Daemon {
+func NewDaemon(cfg *config.ClusterConfig) (*Daemon, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// If WalDir is not set, use BaseDir
@@ -327,18 +328,24 @@ func NewDaemon(cfg *config.ClusterConfig) *Daemon {
 		cfg.Nodes[cfg.Node] = config
 	}
 
+	rm, err := NewResourceManager()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("initialize resource manager: %w", err)
+	}
+
 	return &Daemon{
 		node:              cfg.Node,
 		clusterConfig:     cfg,
 		config:            &config,
-		resourceMgr:       NewResourceManager(),
+		resourceMgr:       rm,
 		ctx:               ctx,
 		cancel:            cancel,
 		Instances:         vm.Instances{VMS: make(map[string]*vm.VM)},
 		natsSubscriptions: make(map[string]*nats.Subscription),
 		startTime:         time.Now(),
 		detachDelay:       1 * time.Second,
-	}
+	}, nil
 }
 
 // natsSub defines a single NATS subscription entry for the table-driven setup.
@@ -845,17 +852,57 @@ func (d *Daemon) restoreInstances() {
 		if ok {
 			slog.Info("Re-allocating resources for instance", "instanceId", instance.ID, "type", instance.InstanceType)
 			if err := d.resourceMgr.allocate(instanceType); err != nil {
-				slog.Error("Failed to re-allocate resources for instance on startup", "instanceId", instance.ID, "err", err)
+				slog.Error("Failed to re-allocate resources for instance on startup, moving to stopped",
+					"instanceId", instance.ID, "err", err)
+				instance.Status = vm.StateStopped
+				if instance.Instance != nil {
+					instance.Instance.StateReason = &ec2.StateReason{}
+					instance.Instance.StateReason.SetCode("Server.InsufficientInstanceCapacity")
+					instance.Instance.StateReason.SetMessage(
+						fmt.Sprintf("insufficient resources to restore instance: %v", err))
+				}
+				d.migrateStoppedToSharedKV(instance)
+				continue
 			}
 		}
 
 		// Check if QEMU process is still alive from before the restart
 		if d.isInstanceProcessRunning(instance) {
-			slog.Info("Instance QEMU process still alive, reconnecting", "instance", instance.ID)
-			if err := d.reconnectInstance(instance); err != nil {
-				slog.Error("Failed to reconnect to running instance", "instanceId", instance.ID, "err", err)
+			// Verify NBD sockets are still valid. After a viperblock restart,
+			// old sockets are gone and QEMU's block devices are broken. Kill
+			// the orphaned QEMU and relaunch from scratch instead of
+			// reconnecting to an instance with dead storage.
+			if !d.areVolumeSocketsValid(instance) {
+				slog.Warn("QEMU alive but NBD sockets are stale, killing orphaned process for relaunch",
+					"instance", instance.ID)
+				pid, pidErr := utils.ReadPidFile(instance.ID)
+				if pidErr != nil || pid <= 0 {
+					slog.Error("Cannot read PID for orphaned QEMU, skipping relaunch",
+						"instanceId", instance.ID, "err", pidErr)
+					continue
+				}
+				// SIGKILL directly — orphaned QEMU with dead storage has no
+				// state worth a graceful shutdown, and KillProcess's 120s
+				// SIGTERM timeout would block daemon startup.
+				if proc, err := os.FindProcess(pid); err == nil {
+					_ = proc.Signal(syscall.SIGKILL)
+				}
+				// Wait for the process to actually die, then remove the PID
+				// file ourselves. SIGKILL cannot be caught, so QEMU never
+				// runs its cleanup handler and the PID file stays on disk.
+				if err := utils.WaitForProcessExit(pid, 10*time.Second); err != nil {
+					slog.Error("Orphaned QEMU did not exit after SIGKILL, skipping relaunch",
+						"instanceId", instance.ID, "pid", pid, "err", err)
+					continue
+				}
+				_ = utils.RemovePidFile(instance.ID)
+			} else {
+				slog.Info("Instance QEMU process still alive, reconnecting", "instance", instance.ID)
+				if err := d.reconnectInstance(instance); err != nil {
+					slog.Error("Failed to reconnect to running instance", "instanceId", instance.ID, "err", err)
+				}
+				continue
 			}
-			continue
 		}
 
 		// QEMU is not running -- resolve transitional states from interrupted operations
@@ -887,21 +934,36 @@ func (d *Daemon) restoreInstances() {
 		case vm.StateRunning:
 			// Was running but QEMU died - reset to pending so LaunchInstance can transition to running
 			instance.Status = vm.StatePending
-			// Reset LaunchTime so the pending watchdog gives a fresh timeout window.
-			// Without this, the stale LaunchTime from the original launch causes the
-			// watchdog to immediately mark the instance as failed.
-			now := time.Now()
-			if instance.Instance != nil {
-				instance.Instance.LaunchTime = &now
-			}
 			slog.Info("Instance was running but QEMU exited, relaunching", "instance", instance.ID)
 		}
 
+		// Reset LaunchTime so the pending watchdog gives a fresh timeout window.
+		// Without this, the stale LaunchTime from the original launch causes the
+		// watchdog to immediately mark the instance as failed after a prolonged outage.
+		now := time.Now()
+		if instance.Instance != nil {
+			instance.Instance.LaunchTime = &now
+		}
 		toLaunch = append(toLaunch, instance)
 	}
 
 	// Phase 2: Relaunch crashed VMs with semaphore-based throttling
 	if len(toLaunch) > 0 {
+		// Subscribe to per-instance NATS topics before launching so that
+		// terminate/stop commands can reach this daemon while instances are
+		// still being relaunched. Without this, pending instances are
+		// unreachable via ec2.cmd.<id> and TerminateInstances fails.
+		d.mu.Lock()
+		for _, instance := range toLaunch {
+			sub, subErr := d.natsConn.Subscribe(fmt.Sprintf("ec2.cmd.%s", instance.ID), d.handleEC2Events)
+			if subErr != nil {
+				slog.Error("Failed to early-subscribe during recovery", "instanceId", instance.ID, "err", subErr)
+			} else {
+				d.natsSubscriptions[instance.ID] = sub
+			}
+		}
+		d.mu.Unlock()
+
 		slog.Info("Launching instances (recovery)", "count", len(toLaunch), "maxConcurrent", maxConcurrentRecovery)
 		sem := make(chan struct{}, maxConcurrentRecovery)
 		var wg sync.WaitGroup
@@ -917,9 +979,19 @@ func (d *Daemon) restoreInstances() {
 						slog.Error("Panic during instance recovery", "instanceId", inst.ID, "panic", r, "stack", string(debug.Stack()))
 					}
 				}()
+				// Skip if instance was terminated while waiting for semaphore
+				d.Instances.Mu.Lock()
+				status := inst.Status
+				d.Instances.Mu.Unlock()
+				if status != vm.StatePending && status != vm.StateProvisioning {
+					slog.Info("Instance state changed during recovery, skipping launch",
+						"instanceId", inst.ID, "status", string(status))
+					return
+				}
 				slog.Info("Launching instance (recovery)", "instance", inst.ID)
 				if err := d.LaunchInstance(inst); err != nil {
-					slog.Error("Failed to launch instance", "instanceId", inst.ID, "err", err)
+					slog.Error("Failed to launch instance during recovery", "instanceId", inst.ID, "err", err)
+					d.markInstanceFailed(inst, "recovery_launch_failed")
 				}
 			}(instance)
 		}
@@ -943,6 +1015,32 @@ func (d *Daemon) isInstanceProcessRunning(instance *vm.VM) bool {
 		return false
 	}
 	return process.Signal(syscall.Signal(0)) == nil
+}
+
+// areVolumeSocketsValid checks whether the NBD Unix sockets backing an
+// instance's volumes are reachable. A dial probe (not just os.Stat) is used
+// because viperblock may restart with sockets at the same paths — the file
+// exists but no process is listening on the old fd that QEMU holds.
+func (d *Daemon) areVolumeSocketsValid(instance *vm.VM) bool {
+	instance.EBSRequests.Mu.Lock()
+	defer instance.EBSRequests.Mu.Unlock()
+
+	for _, req := range instance.EBSRequests.Requests {
+		if req.NBDURI == "" {
+			continue
+		}
+		serverType, sockPath, _, _, err := utils.ParseNBDURI(req.NBDURI)
+		if err != nil || serverType != "unix" {
+			continue // TCP or unparseable — can't validate locally
+		}
+		conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
+		if err != nil {
+			slog.Debug("NBD socket unreachable", "volume", req.Name, "socket", sockPath, "err", err)
+			return false
+		}
+		_ = conn.Close()
+	}
+	return true
 }
 
 // reconnectInstance re-establishes QMP and NATS connections to a running QEMU instance
@@ -1033,7 +1131,6 @@ func (d *Daemon) saveClusterConfig() error {
 
 // ClusterManager starts the HTTP cluster management server
 func (d *Daemon) ClusterManager() error {
-
 	// Get daemon host from config
 	daemonHost := d.config.Daemon.Host
 	if daemonHost == "" {
@@ -1047,7 +1144,7 @@ func (d *Daemon) ClusterManager() error {
 		configHash, err := d.computeConfigHash()
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(500)
+			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte(`{"error":"failed to compute config hash"}`))
 			return
 		}
@@ -1104,7 +1201,7 @@ func (d *Daemon) ClusterManager() error {
 		var req types.NodeJoinRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(400)
+			w.WriteHeader(http.StatusBadRequest)
 			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: "invalid request body",
@@ -1119,7 +1216,7 @@ func (d *Daemon) ClusterManager() error {
 		// Validate request
 		if req.Node == "" || req.Region == "" || req.AZ == "" {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(400)
+			w.WriteHeader(http.StatusBadRequest)
 			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: "node, region, and az are required",
@@ -1132,7 +1229,7 @@ func (d *Daemon) ClusterManager() error {
 		// Check if node already exists
 		if _, exists := d.clusterConfig.Nodes[req.Node]; exists {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(409)
+			w.WriteHeader(http.StatusConflict)
 			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: fmt.Sprintf("node %s already exists in cluster", req.Node),
@@ -1167,7 +1264,7 @@ func (d *Daemon) ClusterManager() error {
 		if err := d.saveClusterConfig(); err != nil {
 			slog.Error("Failed to save cluster config", "error", err)
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(500)
+			w.WriteHeader(http.StatusInternalServerError)
 			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: "failed to save cluster config",
@@ -1253,16 +1350,23 @@ func (d *Daemon) ClusterManager() error {
 		}
 	})
 
-	// Start HTTP server in goroutine
+	// Start HTTP server in goroutine — use a channel to propagate bind errors
+	// back to the caller so Start() fails visibly instead of silently.
 	d.clusterServer = &http.Server{
 		Addr:              daemonHost,
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+
+	ln, err := net.Listen("tcp", daemonHost)
+	if err != nil {
+		return fmt.Errorf("cluster manager listen on %s: %w", daemonHost, err)
+	}
+
 	go func() {
 		slog.Info("Starting cluster manager", "host", daemonHost)
-		if err := d.clusterServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("Cluster manager failed to start", "error", err)
+		if err := d.clusterServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+			slog.Error("Cluster manager failed", "error", err)
 		}
 	}()
 
@@ -1300,7 +1404,6 @@ func (d *Daemon) LoadState() error {
 }
 
 func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId string) (*qmp.QMPResponse, error) {
-
 	// Confirm QMP client is initialized
 	if q == nil || q.Encoder == nil || q.Decoder == nil {
 		return nil, fmt.Errorf("QMP client is not initialized")
@@ -1314,7 +1417,7 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 	if err := q.Conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
 		return nil, fmt.Errorf("set read deadline: %w", err)
 	}
-	defer q.Conn.SetReadDeadline(time.Time{}) // clear deadline after command
+	defer func() { _ = q.Conn.SetReadDeadline(time.Time{}) }() // clear deadline after command
 
 	if err := q.Encoder.Encode(cmd); err != nil {
 		return nil, fmt.Errorf("encode error: %w", err)
@@ -1341,7 +1444,10 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 			return nil, fmt.Errorf("QMP error: %s: %s", errObj["class"], errObj["desc"])
 		}
 		if _, ok := msg["return"]; ok {
-			respBytes, _ := json.Marshal(msg)
+			respBytes, err := json.Marshal(msg)
+			if err != nil {
+				return nil, fmt.Errorf("marshal QMP response: %w", err)
+			}
 			var resp qmp.QMPResponse
 			if err := json.Unmarshal(respBytes, &resp); err != nil {
 				return nil, fmt.Errorf("unmarshal error: %w", err)
@@ -1352,15 +1458,12 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 }
 
 func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) error {
-
 	// Signal to shutdown each VM
 	var wg sync.WaitGroup
 
 	// Run asynchronously within a worker group
 	for _, instance := range instances {
-
 		wg.Go(func() {
-
 			// Send shutdown command - if it fails, VM may already be dead, continue with cleanup
 			_, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "system_powerdown"}, instance.ID)
 			if err != nil {
@@ -1390,7 +1493,6 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 			defer instance.EBSRequests.Mu.Unlock()
 
 			for _, ebsRequest := range instance.EBSRequests.Requests {
-
 				// Send the volume payload as JSON
 				ebsUnMountRequest, err := json.Marshal(ebsRequest)
 
@@ -1510,12 +1612,10 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 		}
 	}
 	return nil
-
 }
 
 func (d *Daemon) setupShutdown() {
 	d.shutdownWg.Go(func() {
-
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
@@ -1545,7 +1645,6 @@ func (d *Daemon) setupShutdown() {
 			if err := sub.Unsubscribe(); err != nil {
 				slog.Error("Error unsubscribing from NATS", "err", err)
 			}
-
 		}
 
 		// Write shutdown marker to cluster state KV
@@ -1577,7 +1676,6 @@ func (d *Daemon) setupShutdown() {
 }
 
 func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
-
 	// Create a new QMP client to communicate with the instance
 	instance.QMPClient, err = qmp.NewQMPClient(instance.Config.QMPSocket)
 
@@ -1629,13 +1727,20 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 	}()
 
 	return nil
-
 }
 
 func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
+	// Abort if instance is no longer in a launchable state (e.g., terminated
+	// by a concurrent request while waiting in the launch queue).
+	d.Instances.Mu.Lock()
+	status := instance.Status
+	d.Instances.Mu.Unlock()
+	if status != vm.StatePending && status != vm.StateStopped && status != vm.StateProvisioning {
+		return fmt.Errorf("instance %s in %s state, not launchable", instance.ID, status)
+	}
 
 	// First, confirm if the instance is already running
-	pid, err := utils.ReadPidFile(instance.ID)
+	pid, _ := utils.ReadPidFile(instance.ID)
 
 	if pid > 0 {
 		process, err := os.FindProcess(pid)
@@ -1728,8 +1833,19 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 // then completes the termination lifecycle in the background so the instance
 // reaches terminated state and doesn't get stuck in shutting-down.
 func (d *Daemon) markInstanceFailed(instance *vm.VM, reason string) {
-	// Set state reason before transition (requires lock)
+	// If the instance is already being cleaned up (e.g., a concurrent terminate
+	// request transitioned it to shutting-down while LaunchInstance was running),
+	// don't spawn a second finalizeTermination goroutine — the existing cleanup
+	// handler owns the lifecycle from here.
 	d.Instances.Mu.Lock()
+	if instance.Status == vm.StateShuttingDown || instance.Status == vm.StateTerminated {
+		d.Instances.Mu.Unlock()
+		slog.Info("markInstanceFailed: instance already in cleanup state, skipping",
+			"instanceId", instance.ID, "status", string(instance.Status), "reason", reason)
+		return
+	}
+
+	// Set state reason before transition
 	if instance.Instance != nil {
 		instance.Instance.StateReason = &ec2.StateReason{}
 		instance.Instance.StateReason.SetCode("Server.InternalError")
@@ -1849,7 +1965,6 @@ func (d *Daemon) startPendingWatchdog() {
 }
 
 func (d *Daemon) StartInstance(instance *vm.VM) error {
-
 	pidFile, err := utils.GeneratePidFile(instance.ID)
 
 	if err != nil {
@@ -1900,7 +2015,6 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	instance.EBSRequests.Mu.Lock()
 
 	for _, v := range instance.EBSRequests.Requests {
-
 		drive := vm.Drive{}
 
 		// Use the NBDURI from mount response - contains socket path or TCP address
@@ -1964,34 +2078,42 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 
 		// DEV_NETWORKING: add a second NIC with hostfwd for SSH dev access
 		if d.config.Daemon.DevNetworking {
-			sshDebugPort, err := viperblock.FindFreePort()
+			sshDebugAddr, err := viperblock.FindFreePort()
 			if err != nil {
 				slog.Warn("DEV_NETWORKING: failed to find free port for dev NIC", "err", err)
 			} else {
-				_, sshDebugPort, _ = net.SplitHostPort(sshDebugPort)
-				bindIP := d.config.Host
-				if bindIP == "" || bindIP == "0.0.0.0" {
-					bindIP = "127.0.0.1"
+				_, sshDebugPort, err := net.SplitHostPort(sshDebugAddr)
+				if err != nil {
+					slog.Warn("DEV_NETWORKING: failed to parse port from address", "addr", sshDebugAddr, "err", err)
+				} else {
+					bindIP := d.config.Host
+					if bindIP == "" || bindIP == "0.0.0.0" {
+						bindIP = "127.0.0.1"
+					}
+					instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
+						Value: fmt.Sprintf("user,id=dev0,hostfwd=tcp:%s:%s-:22", bindIP, sshDebugPort),
+					})
+					devMac := generateDevMAC(instance.ID)
+					instance.Config.Devices = append(instance.Config.Devices, vm.Device{
+						Value: fmt.Sprintf("virtio-net-pci,netdev=dev0,mac=%s", devMac),
+					})
+					slog.Info("DEV_NETWORKING: added dev NIC with SSH hostfwd",
+						"bindIP", bindIP, "port", sshDebugPort, "mac", devMac, "instanceId", instance.ID)
 				}
-				instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
-					Value: fmt.Sprintf("user,id=dev0,hostfwd=tcp:%s:%s-:22", bindIP, sshDebugPort),
-				})
-				devMac := generateDevMAC(instance.ID)
-				instance.Config.Devices = append(instance.Config.Devices, vm.Device{
-					Value: fmt.Sprintf("virtio-net-pci,netdev=dev0,mac=%s", devMac),
-				})
-				slog.Info("DEV_NETWORKING: added dev NIC with SSH hostfwd",
-					"bindIP", bindIP, "port", sshDebugPort, "mac", devMac, "instanceId", instance.ID)
 			}
 		}
 	} else {
 		// Non-VPC fallback: user-mode networking with SSH port forwarding
-		sshDebugPort, err := viperblock.FindFreePort()
+		sshDebugAddr, err := viperblock.FindFreePort()
 		if err != nil {
 			slog.Error("Failed to find free port", "err", err)
 			return err
 		}
-		_, sshDebugPort, _ = net.SplitHostPort(sshDebugPort)
+		_, sshDebugPort, err := net.SplitHostPort(sshDebugAddr)
+		if err != nil {
+			slog.Error("Failed to parse port from address", "addr", sshDebugAddr, "err", err)
+			return fmt.Errorf("parse port from %s: %w", sshDebugAddr, err)
+		}
 
 		bindIP := d.config.Host
 		if bindIP == "" || bindIP == "0.0.0.0" {
@@ -2160,12 +2282,10 @@ func (d *Daemon) ebsTopic(action string) string {
 
 // MountVolumes mounts the volumes for an instance
 func (d *Daemon) MountVolumes(instance *vm.VM) error {
-
 	instance.EBSRequests.Mu.Lock()
 	defer instance.EBSRequests.Mu.Unlock()
 
 	for k, v := range instance.EBSRequests.Requests {
-
 		// Send the volume payload as JSON
 		ebsMountRequest, err := json.Marshal(v)
 
@@ -2194,21 +2314,17 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 		}
 
 		if ebsMountResponse.Error == "" {
-
 			slog.Debug("Mounted volume successfully", "response", ebsMountResponse.URI)
 
 			// Append the NBD URI to the request
 			instance.EBSRequests.Requests[k].NBDURI = ebsMountResponse.URI
-
 		} else {
 			slog.Error("Failed to mount volume", "error", ebsMountResponse.Error)
 			return fmt.Errorf("failed to mount volume: %s", ebsMountResponse.Error)
 		}
-
 	}
 
 	return nil
-
 }
 
 // rollbackEBSMount sends an ebs.unmount request to undo a previously successful ebs.mount.

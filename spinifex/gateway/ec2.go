@@ -269,6 +269,8 @@ func (gw *GatewayConfig) EC2_Request(w http.ResponseWriter, r *http.Request) err
 
 	w.Header().Set("Content-Type", "text/xml")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(xmlOutput)
+	if _, err := w.Write(xmlOutput); err != nil {
+		slog.Error("Failed to write EC2 response", "err", err)
+	}
 	return nil
 }

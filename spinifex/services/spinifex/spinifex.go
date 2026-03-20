@@ -34,7 +34,7 @@ func (svc *Service) SetConfigPath(path string) {
 
 func (svc *Service) Start() (int, error) {
 	if err := utils.WritePidFileTo(svc.Config.NodeBaseDir(), serviceName, os.Getpid()); err != nil {
-		slog.Error("Failed to write pid file", "err", err)
+		return 0, fmt.Errorf("write pid file: %w", err)
 	}
 	err := launchService(svc.Config, svc.ConfigPath)
 	if err != nil {
@@ -49,7 +49,14 @@ func (svc *Service) Stop() (err error) {
 }
 
 func (svc *Service) Status() (string, error) {
-	return "", nil
+	pid, err := utils.ReadPidFileFrom(svc.Config.NodeBaseDir(), serviceName)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "stopped", nil
+		}
+		return "", fmt.Errorf("read pid file: %w", err)
+	}
+	return fmt.Sprintf("running (pid: %d)", pid), nil
 }
 
 func (svc *Service) Shutdown() (err error) {
@@ -61,8 +68,10 @@ func (svc *Service) Reload() (err error) {
 }
 
 func launchService(config *config.ClusterConfig, configPath string) (err error) {
-
-	d := daemon.NewDaemon(config)
+	d, err := daemon.NewDaemon(config)
+	if err != nil {
+		return fmt.Errorf("create daemon: %w", err)
+	}
 	d.SetConfigPath(configPath)
 	slog.Info("Starting Spinifex daemon ...")
 	err = d.Start()
@@ -73,5 +82,4 @@ func launchService(config *config.ClusterConfig, configPath string) (err error) 
 	}
 
 	return nil
-
 }

@@ -6,7 +6,6 @@ import (
 )
 
 func DescribeAvailabilityZones(input *ec2.DescribeAvailabilityZonesInput, region string, az string) (output *ec2.DescribeAvailabilityZonesOutput, err error) {
-
 	output = &ec2.DescribeAvailabilityZonesOutput{
 		AvailabilityZones: []*ec2.AvailabilityZone{
 			{
@@ -27,7 +26,6 @@ func DescribeAvailabilityZones(input *ec2.DescribeAvailabilityZonesInput, region
 }
 
 func DescribeRegions(input *ec2.DescribeRegionsInput, region string) (output *ec2.DescribeRegionsOutput, err error) {
-
 	output = &ec2.DescribeRegionsOutput{
 		Regions: []*ec2.Region{
 			{
