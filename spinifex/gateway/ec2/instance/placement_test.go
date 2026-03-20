@@ -2,6 +2,7 @@ package gateway_ec2_instance
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -609,6 +610,385 @@ func TestLookupPlacementGroupStrategy_EmptyResult(t *testing.T) {
 	_, err = lookupPlacementGroupStrategy(nc, "test-account", "my-group")
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidPlacementGroupUnknown, err.Error())
+}
+
+// --- distributeInstancesCluster tests ---
+
+func TestDistributeInstancesCluster_FirstLaunchPicksBestNode(t *testing.T) {
+	// First launch on empty cluster group should pick node with most capacity
+	_, nc := startTestNATSServer(t)
+
+	// Mock node.status: node-1 has 4, node-2 has 6 (node-2 should be picked)
+	statusSub, err := nc.Subscribe("spinifex.node.status", func(msg *nats.Msg) {
+		for _, resp := range []types.NodeStatusResponse{
+			{Node: "node-1", InstanceTypes: []types.InstanceTypeCap{{Name: "t3.micro", Available: 4}}},
+			{Node: "node-2", InstanceTypes: []types.InstanceTypeCap{{Name: "t3.micro", Available: 6}}},
+		} {
+			data, _ := json.Marshal(resp)
+			_ = nc.Publish(msg.Reply, data)
+		}
+	})
+	require.NoError(t, err)
+	defer statusSub.Unsubscribe()
+
+	// Mock ReserveClusterNode — returns node-2 (highest capacity)
+	reserveSub, err := nc.QueueSubscribe("ec2.ReserveClusterNode", "spinifex-workers", func(msg *nats.Msg) {
+		out := struct {
+			TargetNode string `json:"target_node"`
+		}{TargetNode: "node-2"}
+		data, _ := json.Marshal(out)
+		_ = msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer reserveSub.Unsubscribe()
+
+	// Mock daemon on node-2
+	daemonSub, err := nc.Subscribe("ec2.RunInstances.t3.micro.node-2", func(msg *nats.Msg) {
+		reservation := ec2.Reservation{
+			ReservationId: aws.String("r-cluster"),
+			Instances: []*ec2.Instance{
+				{InstanceId: aws.String("i-c1")},
+				{InstanceId: aws.String("i-c2")},
+				{InstanceId: aws.String("i-c3")},
+			},
+		}
+		data, _ := json.Marshal(reservation)
+		_ = msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer daemonSub.Unsubscribe()
+
+	// Mock FinalizeClusterInstances
+	finalizeSub, err := nc.QueueSubscribe("ec2.FinalizeClusterInstances", "spinifex-workers", func(msg *nats.Msg) {
+		data, _ := json.Marshal(struct{}{})
+		_ = msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer finalizeSub.Unsubscribe()
+
+	time.Sleep(50 * time.Millisecond)
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-test"),
+		InstanceType: aws.String("t3.micro"),
+		MinCount:     aws.Int64(3),
+		MaxCount:     aws.Int64(3),
+	}
+
+	reservation, err := distributeInstancesCluster(input, nc, "test-account", "my-cluster-group")
+	require.NoError(t, err)
+	assert.Len(t, reservation.Instances, 3)
+
+	// All instances should be from node-2
+	for _, inst := range reservation.Instances {
+		assert.NotNil(t, inst.InstanceId)
+	}
+}
+
+func TestDistributeInstancesCluster_SubsequentLaunchPinsToExistingNode(t *testing.T) {
+	// Subsequent launch should go to the same node the group already uses
+	_, nc := startTestNATSServer(t)
+
+	// Mock node.status: both nodes have capacity
+	statusSub, err := nc.Subscribe("spinifex.node.status", func(msg *nats.Msg) {
+		for _, resp := range []types.NodeStatusResponse{
+			{Node: "node-1", InstanceTypes: []types.InstanceTypeCap{{Name: "t3.micro", Available: 5}}},
+			{Node: "node-2", InstanceTypes: []types.InstanceTypeCap{{Name: "t3.micro", Available: 3}}},
+		} {
+			data, _ := json.Marshal(resp)
+			_ = nc.Publish(msg.Reply, data)
+		}
+	})
+	require.NoError(t, err)
+	defer statusSub.Unsubscribe()
+
+	// Mock ReserveClusterNode — returns node-2 (existing pinned node, even though node-1 has more capacity)
+	reserveSub, err := nc.QueueSubscribe("ec2.ReserveClusterNode", "spinifex-workers", func(msg *nats.Msg) {
+		out := struct {
+			TargetNode string `json:"target_node"`
+		}{TargetNode: "node-2"}
+		data, _ := json.Marshal(out)
+		_ = msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer reserveSub.Unsubscribe()
+
+	// Mock daemon on node-2 only — node-1 should NOT be contacted
+	node1Contacted := false
+	node1Sub, err := nc.Subscribe("ec2.RunInstances.t3.micro.node-1", func(msg *nats.Msg) {
+		node1Contacted = true
+	})
+	require.NoError(t, err)
+	defer node1Sub.Unsubscribe()
+
+	daemonSub, err := nc.Subscribe("ec2.RunInstances.t3.micro.node-2", func(msg *nats.Msg) {
+		reservation := ec2.Reservation{
+			ReservationId: aws.String("r-cluster2"),
+			Instances: []*ec2.Instance{
+				{InstanceId: aws.String("i-c4")},
+				{InstanceId: aws.String("i-c5")},
+			},
+		}
+		data, _ := json.Marshal(reservation)
+		_ = msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer daemonSub.Unsubscribe()
+
+	// Mock FinalizeClusterInstances
+	finalizeSub, err := nc.QueueSubscribe("ec2.FinalizeClusterInstances", "spinifex-workers", func(msg *nats.Msg) {
+		data, _ := json.Marshal(struct{}{})
+		_ = msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer finalizeSub.Unsubscribe()
+
+	time.Sleep(50 * time.Millisecond)
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-test"),
+		InstanceType: aws.String("t3.micro"),
+		MinCount:     aws.Int64(2),
+		MaxCount:     aws.Int64(2),
+	}
+
+	reservation, err := distributeInstancesCluster(input, nc, "test-account", "my-cluster-group")
+	require.NoError(t, err)
+	assert.Len(t, reservation.Instances, 2)
+	assert.False(t, node1Contacted, "cluster should only contact the pinned node")
+}
+
+func TestDistributeInstancesCluster_InsufficientCapacityOnPinnedNode(t *testing.T) {
+	// Pinned node doesn't have enough capacity → InsufficientInstanceCapacity
+	_, nc := startTestNATSServer(t)
+
+	// Mock node.status: pinned node-2 has only 1 slot, node-1 has plenty
+	statusSub, err := nc.Subscribe("spinifex.node.status", func(msg *nats.Msg) {
+		for _, resp := range []types.NodeStatusResponse{
+			{Node: "node-1", InstanceTypes: []types.InstanceTypeCap{{Name: "t3.micro", Available: 10}}},
+			{Node: "node-2", InstanceTypes: []types.InstanceTypeCap{{Name: "t3.micro", Available: 1}}},
+		} {
+			data, _ := json.Marshal(resp)
+			_ = nc.Publish(msg.Reply, data)
+		}
+	})
+	require.NoError(t, err)
+	defer statusSub.Unsubscribe()
+
+	// Mock ReserveClusterNode — returns node-2 (existing pinned node)
+	reserveSub, err := nc.QueueSubscribe("ec2.ReserveClusterNode", "spinifex-workers", func(msg *nats.Msg) {
+		out := struct {
+			TargetNode string `json:"target_node"`
+		}{TargetNode: "node-2"}
+		data, _ := json.Marshal(out)
+		_ = msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer reserveSub.Unsubscribe()
+
+	time.Sleep(50 * time.Millisecond)
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-test"),
+		InstanceType: aws.String("t3.micro"),
+		MinCount:     aws.Int64(3),
+		MaxCount:     aws.Int64(3),
+	}
+
+	_, err = distributeInstancesCluster(input, nc, "test-account", "my-cluster-group")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInsufficientInstanceCapacity, err.Error())
+}
+
+func TestDistributeInstancesCluster_PinnedNodeNotInCapacityResults(t *testing.T) {
+	// Pinned node has no capacity at all (not in fan-out results) → InsufficientInstanceCapacity
+	_, nc := startTestNATSServer(t)
+
+	// Mock node.status: only node-1 has capacity (pinned node-2 is at 0)
+	statusSub, err := nc.Subscribe("spinifex.node.status", func(msg *nats.Msg) {
+		resp := types.NodeStatusResponse{
+			Node:          "node-1",
+			InstanceTypes: []types.InstanceTypeCap{{Name: "t3.micro", Available: 5}},
+		}
+		data, _ := json.Marshal(resp)
+		_ = nc.Publish(msg.Reply, data)
+	})
+	require.NoError(t, err)
+	defer statusSub.Unsubscribe()
+
+	// Mock ReserveClusterNode — returns node-2 (pinned but no capacity)
+	reserveSub, err := nc.QueueSubscribe("ec2.ReserveClusterNode", "spinifex-workers", func(msg *nats.Msg) {
+		out := struct {
+			TargetNode string `json:"target_node"`
+		}{TargetNode: "node-2"}
+		data, _ := json.Marshal(out)
+		_ = msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer reserveSub.Unsubscribe()
+
+	time.Sleep(50 * time.Millisecond)
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-test"),
+		InstanceType: aws.String("t3.micro"),
+		MinCount:     aws.Int64(1),
+		MaxCount:     aws.Int64(1),
+	}
+
+	_, err = distributeInstancesCluster(input, nc, "test-account", "my-cluster-group")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInsufficientInstanceCapacity, err.Error())
+}
+
+func TestDistributeInstancesCluster_LaunchCountCappedByCapacityAndMaxCount(t *testing.T) {
+	// Target node has 3 available but MaxCount=2 → should launch 2
+	_, nc := startTestNATSServer(t)
+
+	statusSub, err := nc.Subscribe("spinifex.node.status", func(msg *nats.Msg) {
+		resp := types.NodeStatusResponse{
+			Node:          "node-1",
+			InstanceTypes: []types.InstanceTypeCap{{Name: "t3.micro", Available: 3}},
+		}
+		data, _ := json.Marshal(resp)
+		_ = nc.Publish(msg.Reply, data)
+	})
+	require.NoError(t, err)
+	defer statusSub.Unsubscribe()
+
+	reserveSub, err := nc.QueueSubscribe("ec2.ReserveClusterNode", "spinifex-workers", func(msg *nats.Msg) {
+		out := struct {
+			TargetNode string `json:"target_node"`
+		}{TargetNode: "node-1"}
+		data, _ := json.Marshal(out)
+		_ = msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer reserveSub.Unsubscribe()
+
+	// Daemon returns 2 instances (matching assigned count)
+	daemonSub, err := nc.Subscribe("ec2.RunInstances.t3.micro.node-1", func(msg *nats.Msg) {
+		var reqInput ec2.RunInstancesInput
+		_ = json.Unmarshal(msg.Data, &reqInput)
+		count := int(aws.Int64Value(reqInput.MaxCount))
+		instances := make([]*ec2.Instance, count)
+		for i := range instances {
+			instances[i] = &ec2.Instance{InstanceId: aws.String(fmt.Sprintf("i-%d", i))}
+		}
+		reservation := ec2.Reservation{
+			ReservationId: aws.String("r-capped"),
+			Instances:     instances,
+		}
+		data, _ := json.Marshal(reservation)
+		_ = msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer daemonSub.Unsubscribe()
+
+	finalizeSub, err := nc.QueueSubscribe("ec2.FinalizeClusterInstances", "spinifex-workers", func(msg *nats.Msg) {
+		data, _ := json.Marshal(struct{}{})
+		_ = msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer finalizeSub.Unsubscribe()
+
+	time.Sleep(50 * time.Millisecond)
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-test"),
+		InstanceType: aws.String("t3.micro"),
+		MinCount:     aws.Int64(1),
+		MaxCount:     aws.Int64(2),
+	}
+
+	reservation, err := distributeInstancesCluster(input, nc, "test-account", "my-cluster-group")
+	require.NoError(t, err)
+	assert.Len(t, reservation.Instances, 2, "should launch min(MaxCount=2, capacity=3) = 2")
+}
+
+func TestRunInstances_ClusterPlacementGroupRouting(t *testing.T) {
+	// RunInstances with a cluster placement group should route through
+	// the cluster path (lookupPlacementGroupStrategy → distributeInstancesCluster).
+	_, nc := startTestNATSServer(t)
+
+	// Mock DescribePlacementGroups (for lookupPlacementGroupStrategy)
+	pgSub, err := nc.QueueSubscribe("ec2.DescribePlacementGroups", "spinifex-workers", func(msg *nats.Msg) {
+		out := ec2.DescribePlacementGroupsOutput{
+			PlacementGroups: []*ec2.PlacementGroup{
+				{
+					GroupName: aws.String("my-cluster"),
+					Strategy:  aws.String("cluster"),
+					State:     aws.String("available"),
+				},
+			},
+		}
+		data, _ := json.Marshal(out)
+		_ = msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer pgSub.Unsubscribe()
+
+	// Mock node.status
+	statusSub, err := nc.Subscribe("spinifex.node.status", func(msg *nats.Msg) {
+		resp := types.NodeStatusResponse{
+			Node:          "node-1",
+			InstanceTypes: []types.InstanceTypeCap{{Name: "t3.micro", Available: 5}},
+		}
+		data, _ := json.Marshal(resp)
+		_ = nc.Publish(msg.Reply, data)
+	})
+	require.NoError(t, err)
+	defer statusSub.Unsubscribe()
+
+	// Mock ReserveClusterNode
+	reserveSub, err := nc.QueueSubscribe("ec2.ReserveClusterNode", "spinifex-workers", func(msg *nats.Msg) {
+		out := struct {
+			TargetNode string `json:"target_node"`
+		}{TargetNode: "node-1"}
+		data, _ := json.Marshal(out)
+		_ = msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer reserveSub.Unsubscribe()
+
+	// Mock daemon
+	daemonSub, err := nc.Subscribe("ec2.RunInstances.t3.micro.node-1", func(msg *nats.Msg) {
+		reservation := ec2.Reservation{
+			ReservationId: aws.String("r-cluster"),
+			Instances: []*ec2.Instance{
+				{InstanceId: aws.String("i-c1")},
+				{InstanceId: aws.String("i-c2")},
+			},
+		}
+		data, _ := json.Marshal(reservation)
+		_ = msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer daemonSub.Unsubscribe()
+
+	// Mock FinalizeClusterInstances
+	finalizeSub, err := nc.QueueSubscribe("ec2.FinalizeClusterInstances", "spinifex-workers", func(msg *nats.Msg) {
+		data, _ := json.Marshal(struct{}{})
+		_ = msg.Respond(data)
+	})
+	require.NoError(t, err)
+	defer finalizeSub.Unsubscribe()
+
+	time.Sleep(50 * time.Millisecond)
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-test"),
+		InstanceType: aws.String("t3.micro"),
+		MinCount:     aws.Int64(2),
+		MaxCount:     aws.Int64(2),
+		Placement: &ec2.Placement{
+			GroupName: aws.String("my-cluster"),
+		},
+	}
+
+	reservation, err := RunInstances(input, nc, "test-account")
+	require.NoError(t, err)
+	assert.Len(t, reservation.Instances, 2)
 }
 
 func TestRunInstances_MultiInstanceUsesDistribution(t *testing.T) {

@@ -475,6 +475,81 @@ func (s *PlacementGroupServiceImpl) RemoveInstance(input *RemoveInstanceInput, a
 	return nil, errors.New(awserrors.ErrorServerInternal)
 }
 
+// ReserveClusterNode determines the target node for a cluster placement group launch.
+// If the group already has instances, it returns the existing node (cluster = all on one node).
+// If empty, it picks the first eligible node (highest capacity) and writes a placeholder via CAS.
+func (s *PlacementGroupServiceImpl) ReserveClusterNode(input *ReserveClusterNodeInput, accountID string) (*ReserveClusterNodeOutput, error) {
+	if input.GroupName == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	for attempt := range maxCASRetries {
+		record, entry, err := s.GetPlacementGroupRecord(accountID, input.GroupName)
+		if err != nil {
+			return nil, err
+		}
+		if record.State != "available" {
+			return nil, errors.New(awserrors.ErrorInvalidPlacementGroupUnknown)
+		}
+		if record.Strategy != "cluster" {
+			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+		}
+
+		// If existing node, return it immediately (no CAS write needed)
+		for node := range record.NodeInstances {
+			return &ReserveClusterNodeOutput{TargetNode: node}, nil
+		}
+
+		// Empty group: need to pick and claim a node via CAS
+		if len(input.EligibleNodes) == 0 {
+			return nil, errors.New(awserrors.ErrorInsufficientInstanceCapacity)
+		}
+
+		targetNode := input.EligibleNodes[0] // first = highest capacity (sorted desc by caller)
+		record.NodeInstances[targetNode] = []string{}
+
+		if err := s.UpdatePlacementGroupRecord(accountID, input.GroupName, record, entry.Revision()); err != nil {
+			slog.Debug("ReserveClusterNode: CAS conflict, retrying", "attempt", attempt, "err", err)
+			continue
+		}
+
+		slog.Info("ReserveClusterNode completed", "groupName", input.GroupName, "targetNode", targetNode, "accountID", accountID)
+		return &ReserveClusterNodeOutput{TargetNode: targetNode}, nil
+	}
+
+	return nil, errors.New(awserrors.ErrorServerInternal)
+}
+
+// FinalizeClusterInstances appends launched instance IDs to the cluster placement group record.
+// Uses CAS with retries following the IPAM pattern.
+func (s *PlacementGroupServiceImpl) FinalizeClusterInstances(input *FinalizeClusterInstancesInput, accountID string) (*FinalizeClusterInstancesOutput, error) {
+	if input.GroupName == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	for attempt := range maxCASRetries {
+		record, entry, err := s.GetPlacementGroupRecord(accountID, input.GroupName)
+		if err != nil {
+			return nil, err
+		}
+
+		// Append new instance IDs to existing entries (cluster may have concurrent launches)
+		for node, ids := range input.NodeInstances {
+			record.NodeInstances[node] = append(record.NodeInstances[node], ids...)
+		}
+
+		if err := s.UpdatePlacementGroupRecord(accountID, input.GroupName, record, entry.Revision()); err != nil {
+			slog.Debug("FinalizeClusterInstances: CAS conflict, retrying", "attempt", attempt, "err", err)
+			continue
+		}
+
+		slog.Info("FinalizeClusterInstances completed", "groupName", input.GroupName, "accountID", accountID)
+		return &FinalizeClusterInstancesOutput{}, nil
+	}
+
+	return nil, errors.New(awserrors.ErrorServerInternal)
+}
+
 // recordToEC2 converts an internal record to the AWS SDK PlacementGroup type.
 func (s *PlacementGroupServiceImpl) recordToEC2(record *PlacementGroupRecord) *ec2.PlacementGroup {
 	pg := &ec2.PlacementGroup{

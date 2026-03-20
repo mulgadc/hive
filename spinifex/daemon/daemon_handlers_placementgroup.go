@@ -29,3 +29,11 @@ func (d *Daemon) handleEC2ReleaseSpreadNodes(msg *nats.Msg) {
 func (d *Daemon) handleEC2RemoveInstanceFromPlacementGroup(msg *nats.Msg) {
 	handleNATSRequest(msg, d.placementGroupService.RemoveInstance)
 }
+
+func (d *Daemon) handleEC2ReserveClusterNode(msg *nats.Msg) {
+	handleNATSRequest(msg, d.placementGroupService.ReserveClusterNode)
+}
+
+func (d *Daemon) handleEC2FinalizeClusterInstances(msg *nats.Msg) {
+	handleNATSRequest(msg, d.placementGroupService.FinalizeClusterInstances)
+}

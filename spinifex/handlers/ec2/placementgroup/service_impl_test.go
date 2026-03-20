@@ -595,6 +595,199 @@ func TestRemoveInstance_MultipleInstancesOnNode(t *testing.T) {
 	assert.Equal(t, []string{"i-111", "i-333"}, record.NodeInstances["node-a"])
 }
 
+// --- ReserveClusterNode Tests ---
+
+func TestReserveClusterNode_EmptyGroup(t *testing.T) {
+	svc := setupTestService(t)
+	createTestGroup(t, svc, "cluster-empty", "cluster")
+
+	out, err := svc.ReserveClusterNode(&ReserveClusterNodeInput{
+		GroupName:     "cluster-empty",
+		EligibleNodes: []string{"node-a", "node-b", "node-c"},
+	}, testAccountID)
+	require.NoError(t, err)
+	// Should pick first eligible node (highest capacity, sorted by caller)
+	assert.Equal(t, "node-a", out.TargetNode)
+
+	// Verify placeholder written
+	record, _, err := svc.GetPlacementGroupRecord(testAccountID, "cluster-empty")
+	require.NoError(t, err)
+	assert.Len(t, record.NodeInstances, 1)
+	_, ok := record.NodeInstances["node-a"]
+	assert.True(t, ok)
+}
+
+func TestReserveClusterNode_ExistingNode(t *testing.T) {
+	svc := setupTestService(t)
+	createTestGroup(t, svc, "cluster-existing", "cluster")
+
+	// Pre-populate with instances on node-b
+	record, entry, err := svc.GetPlacementGroupRecord(testAccountID, "cluster-existing")
+	require.NoError(t, err)
+	record.NodeInstances["node-b"] = []string{"i-existing"}
+	require.NoError(t, svc.UpdatePlacementGroupRecord(testAccountID, "cluster-existing", record, entry.Revision()))
+
+	// Even though node-a is in eligible list, should return existing node-b
+	out, err := svc.ReserveClusterNode(&ReserveClusterNodeInput{
+		GroupName:     "cluster-existing",
+		EligibleNodes: []string{"node-a", "node-c"},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Equal(t, "node-b", out.TargetNode)
+}
+
+func TestReserveClusterNode_NoEligibleNodes(t *testing.T) {
+	svc := setupTestService(t)
+	createTestGroup(t, svc, "cluster-noelig", "cluster")
+
+	_, err := svc.ReserveClusterNode(&ReserveClusterNodeInput{
+		GroupName:     "cluster-noelig",
+		EligibleNodes: []string{},
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInsufficientInstanceCapacity, err.Error())
+}
+
+func TestReserveClusterNode_WrongStrategy(t *testing.T) {
+	svc := setupTestService(t)
+	createTestGroup(t, svc, "spread-for-cluster", "spread")
+
+	_, err := svc.ReserveClusterNode(&ReserveClusterNodeInput{
+		GroupName:     "spread-for-cluster",
+		EligibleNodes: []string{"node-a"},
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidParameterValue, err.Error())
+}
+
+func TestReserveClusterNode_GroupNotFound(t *testing.T) {
+	svc := setupTestService(t)
+	_, err := svc.ReserveClusterNode(&ReserveClusterNodeInput{
+		GroupName:     "ghost-cluster",
+		EligibleNodes: []string{"node-a"},
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidPlacementGroupUnknown, err.Error())
+}
+
+func TestReserveClusterNode_MissingGroupName(t *testing.T) {
+	svc := setupTestService(t)
+	_, err := svc.ReserveClusterNode(&ReserveClusterNodeInput{
+		EligibleNodes: []string{"node-a"},
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
+}
+
+// --- FinalizeClusterInstances Tests ---
+
+func TestFinalizeClusterInstances_Success(t *testing.T) {
+	svc := setupTestService(t)
+	createTestGroup(t, svc, "cluster-finalize", "cluster")
+
+	// Reserve a node first
+	_, err := svc.ReserveClusterNode(&ReserveClusterNodeInput{
+		GroupName:     "cluster-finalize",
+		EligibleNodes: []string{"node-a"},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Finalize with instance IDs
+	_, err = svc.FinalizeClusterInstances(&FinalizeClusterInstancesInput{
+		GroupName: "cluster-finalize",
+		NodeInstances: map[string][]string{
+			"node-a": {"i-c1", "i-c2", "i-c3"},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Verify instances recorded
+	record, _, err := svc.GetPlacementGroupRecord(testAccountID, "cluster-finalize")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"i-c1", "i-c2", "i-c3"}, record.NodeInstances["node-a"])
+}
+
+func TestFinalizeClusterInstances_AppendsToExisting(t *testing.T) {
+	svc := setupTestService(t)
+	createTestGroup(t, svc, "cluster-append", "cluster")
+
+	// Pre-populate with existing instances
+	record, entry, err := svc.GetPlacementGroupRecord(testAccountID, "cluster-append")
+	require.NoError(t, err)
+	record.NodeInstances["node-a"] = []string{"i-existing1", "i-existing2"}
+	require.NoError(t, svc.UpdatePlacementGroupRecord(testAccountID, "cluster-append", record, entry.Revision()))
+
+	// Finalize with new instances (should append, not overwrite)
+	_, err = svc.FinalizeClusterInstances(&FinalizeClusterInstancesInput{
+		GroupName: "cluster-append",
+		NodeInstances: map[string][]string{
+			"node-a": {"i-new1", "i-new2"},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Verify all instances present
+	record, _, err = svc.GetPlacementGroupRecord(testAccountID, "cluster-append")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"i-existing1", "i-existing2", "i-new1", "i-new2"}, record.NodeInstances["node-a"])
+}
+
+func TestFinalizeClusterInstances_MissingGroupName(t *testing.T) {
+	svc := setupTestService(t)
+	_, err := svc.FinalizeClusterInstances(&FinalizeClusterInstancesInput{
+		NodeInstances: map[string][]string{"node-a": {"i-1"}},
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
+}
+
+// --- Cluster Lifecycle Test ---
+
+func TestClusterLifecycle_ReserveFinalizeRemoveDelete(t *testing.T) {
+	svc := setupTestService(t)
+	createTestGroup(t, svc, "cluster-lifecycle", "cluster")
+
+	// Reserve node
+	reserveOut, err := svc.ReserveClusterNode(&ReserveClusterNodeInput{
+		GroupName:     "cluster-lifecycle",
+		EligibleNodes: []string{"node-1"},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Equal(t, "node-1", reserveOut.TargetNode)
+
+	// Finalize with instances
+	_, err = svc.FinalizeClusterInstances(&FinalizeClusterInstancesInput{
+		GroupName: "cluster-lifecycle",
+		NodeInstances: map[string][]string{
+			"node-1": {"i-c1", "i-c2"},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Can't delete — instances present
+	_, err = svc.DeletePlacementGroup(&ec2.DeletePlacementGroupInput{
+		GroupName: aws.String("cluster-lifecycle"),
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidPlacementGroupInUse, err.Error())
+
+	// Remove instances via RemoveInstance (simulating terminate)
+	_, err = svc.RemoveInstance(&RemoveInstanceInput{
+		GroupName: "cluster-lifecycle", NodeName: "node-1", InstanceID: "i-c1",
+	}, testAccountID)
+	require.NoError(t, err)
+	_, err = svc.RemoveInstance(&RemoveInstanceInput{
+		GroupName: "cluster-lifecycle", NodeName: "node-1", InstanceID: "i-c2",
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Now delete succeeds
+	_, err = svc.DeletePlacementGroup(&ec2.DeletePlacementGroupInput{
+		GroupName: aws.String("cluster-lifecycle"),
+	}, testAccountID)
+	require.NoError(t, err)
+}
+
 // --- End-to-End Spread Lifecycle Test ---
 
 func TestSpreadLifecycle_ReserveFinalizeDelete(t *testing.T) {

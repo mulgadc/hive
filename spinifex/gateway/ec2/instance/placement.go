@@ -394,6 +394,87 @@ func distributeInstancesSpread(input *ec2.RunInstancesInput, natsConn *nats.Conn
 	}, nil
 }
 
+// distributeInstancesCluster implements cluster placement group routing.
+// All instances are pinned to a single node. If the group already has instances,
+// subsequent launches go to the same node. If empty, picks the node with most capacity.
+func distributeInstancesCluster(input *ec2.RunInstancesInput, natsConn *nats.Conn, accountID string, groupName string) (*ec2.Reservation, error) {
+	instanceType := aws.StringValue(input.InstanceType)
+	minCount := int(aws.Int64Value(input.MinCount))
+	maxCount := int(aws.Int64Value(input.MaxCount))
+
+	pgSvc := handlers_ec2_placementgroup.NewNATSPlacementGroupService(natsConn)
+
+	// Step 1: Query capacity from all nodes
+	nodes, err := queryNodeCapacity(natsConn, instanceType)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build eligible node IDs (already sorted by capacity desc)
+	eligibleNodeIDs := make([]string, len(nodes))
+	for i, n := range nodes {
+		eligibleNodeIDs[i] = n.NodeID
+	}
+
+	// Step 2: Reserve the cluster target node (CAS-based for empty groups)
+	reserveOut, err := pgSvc.ReserveClusterNode(&handlers_ec2_placementgroup.ReserveClusterNodeInput{
+		GroupName:     groupName,
+		EligibleNodes: eligibleNodeIDs,
+	}, accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	targetNode := reserveOut.TargetNode
+
+	// Step 3: Check capacity on the target node
+	var targetCapacity int
+	for _, n := range nodes {
+		if n.NodeID == targetNode {
+			targetCapacity = n.Available
+			break
+		}
+	}
+
+	if targetCapacity < minCount {
+		return nil, errors.New(awserrors.ErrorInsufficientInstanceCapacity)
+	}
+
+	// Cap launch count to available capacity and MaxCount
+	launchCount := min(maxCount, targetCapacity)
+
+	// Step 4: Targeted launch — all instances to the pinned node
+	allocations := []nodeAllocation{{
+		NodeID:   targetNode,
+		Assigned: launchCount,
+	}}
+	results := launchOnNodes(allocations, input, natsConn, accountID)
+
+	// Step 5: Handle result (single node, no partial failure logic needed)
+	if results[0].Err != nil {
+		return nil, results[0].Err
+	}
+
+	reservation := results[0].Reservation
+
+	// Step 6: CAS-update record with launched instance IDs
+	nodeInstances := make(map[string][]string)
+	for _, inst := range reservation.Instances {
+		if inst.InstanceId != nil {
+			nodeInstances[targetNode] = append(nodeInstances[targetNode], *inst.InstanceId)
+		}
+	}
+
+	if _, err := pgSvc.FinalizeClusterInstances(&handlers_ec2_placementgroup.FinalizeClusterInstancesInput{
+		GroupName:     groupName,
+		NodeInstances: nodeInstances,
+	}, accountID); err != nil {
+		slog.Error("distributeInstancesCluster: failed to finalize placement group record", "err", err)
+	}
+
+	return reservation, nil
+}
+
 // rollbackInstances terminates all instances from a failed multi-node launch.
 func rollbackInstances(instances []*ec2.Instance, natsConn *nats.Conn, accountID string) {
 	var ids []*string

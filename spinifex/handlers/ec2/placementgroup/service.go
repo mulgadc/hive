@@ -11,6 +11,8 @@ type PlacementGroupService interface {
 	FinalizeSpreadInstances(input *FinalizeSpreadInstancesInput, accountID string) (*FinalizeSpreadInstancesOutput, error)
 	ReleaseSpreadNodes(input *ReleaseSpreadNodesInput, accountID string) (*ReleaseSpreadNodesOutput, error)
 	RemoveInstance(input *RemoveInstanceInput, accountID string) (*RemoveInstanceOutput, error)
+	ReserveClusterNode(input *ReserveClusterNodeInput, accountID string) (*ReserveClusterNodeOutput, error)
+	FinalizeClusterInstances(input *FinalizeClusterInstancesInput, accountID string) (*FinalizeClusterInstancesOutput, error)
 }
 
 // ReserveSpreadNodesInput requests atomic node reservation for a spread placement group.
@@ -53,3 +55,23 @@ type RemoveInstanceInput struct {
 
 // RemoveInstanceOutput is empty on success.
 type RemoveInstanceOutput struct{}
+
+// ReserveClusterNodeInput requests target node determination for a cluster placement group.
+type ReserveClusterNodeInput struct {
+	GroupName     string   `json:"group_name"`
+	EligibleNodes []string `json:"eligible_nodes"` // nodes with capacity, sorted by capacity desc
+}
+
+// ReserveClusterNodeOutput contains the target node for cluster placement.
+type ReserveClusterNodeOutput struct {
+	TargetNode string `json:"target_node"`
+}
+
+// FinalizeClusterInstancesInput records instance IDs launched in a cluster placement group.
+type FinalizeClusterInstancesInput struct {
+	GroupName     string              `json:"group_name"`
+	NodeInstances map[string][]string `json:"node_instances"` // node -> instance IDs to append
+}
+
+// FinalizeClusterInstancesOutput is empty on success.
+type FinalizeClusterInstancesOutput struct{}

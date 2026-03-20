@@ -396,6 +396,8 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.FinalizeSpreadInstances", d.handleEC2FinalizeSpreadInstances, "spinifex-workers"},
 		{"ec2.ReleaseSpreadNodes", d.handleEC2ReleaseSpreadNodes, "spinifex-workers"},
 		{"ec2.RemoveInstanceFromPlacementGroup", d.handleEC2RemoveInstanceFromPlacementGroup, "spinifex-workers"},
+		{"ec2.ReserveClusterNode", d.handleEC2ReserveClusterNode, "spinifex-workers"},
+		{"ec2.FinalizeClusterInstances", d.handleEC2FinalizeClusterInstances, "spinifex-workers"},
 		{"ec2.CreateVpc", d.handleEC2CreateVpc, "spinifex-workers"},
 		{"ec2.DeleteVpc", d.handleEC2DeleteVpc, "spinifex-workers"},
 		{"ec2.DescribeVpcs", d.handleEC2DescribeVpcs, "spinifex-workers"},

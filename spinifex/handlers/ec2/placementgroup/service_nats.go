@@ -45,3 +45,11 @@ func (s *NATSPlacementGroupService) ReleaseSpreadNodes(input *ReleaseSpreadNodes
 func (s *NATSPlacementGroupService) RemoveInstance(input *RemoveInstanceInput, accountID string) (*RemoveInstanceOutput, error) {
 	return utils.NATSRequest[RemoveInstanceOutput](s.natsConn, "ec2.RemoveInstanceFromPlacementGroup", input, 30*time.Second, accountID)
 }
+
+func (s *NATSPlacementGroupService) ReserveClusterNode(input *ReserveClusterNodeInput, accountID string) (*ReserveClusterNodeOutput, error) {
+	return utils.NATSRequest[ReserveClusterNodeOutput](s.natsConn, "ec2.ReserveClusterNode", input, 30*time.Second, accountID)
+}
+
+func (s *NATSPlacementGroupService) FinalizeClusterInstances(input *FinalizeClusterInstancesInput, accountID string) (*FinalizeClusterInstancesOutput, error) {
+	return utils.NATSRequest[FinalizeClusterInstancesOutput](s.natsConn, "ec2.FinalizeClusterInstances", input, 30*time.Second, accountID)
+}

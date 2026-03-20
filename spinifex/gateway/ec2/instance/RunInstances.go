@@ -84,7 +84,11 @@ func RunInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn, accountID s
 			}
 			return *reservationPtr, nil
 		case "cluster":
-			// Phase 3: cluster routing (not yet implemented, fall through to default)
+			reservationPtr, err := distributeInstancesCluster(input, natsConn, accountID, groupName)
+			if err != nil {
+				return reservation, err
+			}
+			return *reservationPtr, nil
 		}
 	}
 
