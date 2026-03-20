@@ -24,6 +24,7 @@ resources:
 
 - [Overview](#overview)
 - [Instructions](#instructions)
+- [External Networking](#external-networking)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -43,13 +44,14 @@ Cluster formation is automatic. When initializing with `--nodes 3`, the init nod
 
 **Network requirements:**
 
-- Minimum 1 NIC per server
-- 2 NICs recommended for production (management + overlay)
+- Minimum 1 NIC per server (single-NIC uses macvlan for external bridge)
+- 2 NICs recommended for production (management + WAN)
 - UDP port 6081 open between hosts (Geneve tunnels)
+- TCP ports 4222, 4248, 6641, 6642 open between hosts (NATS, OVN)
 
 ## Instructions
 
-## Step 1. Install Spinifex on each server
+### Step 1. Install Spinifex on each server
 
 Run the binary installer on **every server** in the cluster:
 
@@ -57,9 +59,9 @@ Run the binary installer on **every server** in the cluster:
 curl https://install.mulgadc.com | bash
 ```
 
-## Step 2. Set node IP variables
+### Step 2. Set node IP variables
 
-On **each server**, export the IPs for all nodes (replace with your actual IPs):
+On **each server**, export the IPs for all nodes. Use the management network IP (the interface that other nodes can reach):
 
 ```bash
 export SPINIFEX_NODE1=192.168.1.10
@@ -70,25 +72,30 @@ export SPINIFEX_NODE3=192.168.1.12
 To find your server's IP:
 
 ```bash
-ip addr show | grep "inet "
+ip -4 route get 8.8.8.8 | awk '/src/{print $7}'
 ```
 
-Next, define the AWS region and AZ you are deploying locally.
+Define the region and AZ:
 
 ```bash
 export AWS_REGION=us-east-1
 export AWS_AZ=us-east-1a
 ```
 
-## Step 3. Setup OVN networking
+### Step 3. Setup OVN networking
 
 OVN must be configured on every server before forming the cluster. Server 1 runs OVN central (NB and SB databases) and must be set up first.
 
 **Server 1 — OVN central + compute (run first):**
 
 ```bash
-sudo /usr/local/share/spinifex/setup-ovn.sh --management --encap-ip=$SPINIFEX_NODE1
+sudo /usr/local/share/spinifex/setup-ovn.sh \
+  --management \
+  --external-bridge --external-iface=eth1 --dhcp \
+  --encap-ip=$SPINIFEX_NODE1
 ```
+
+Replace `eth1` with your WAN interface. The `--dhcp` flag obtains a gateway IP from your router automatically. For single-NIC servers, add `--single-nic`.
 
 Verify OVN central is ready before proceeding:
 
@@ -99,13 +106,19 @@ sudo ovn-sbctl show
 **Server 2 — Compute node (after server 1 is ready):**
 
 ```bash
-sudo /usr/local/share/spinifex/setup-ovn.sh --ovn-remote=tcp:$SPINIFEX_NODE1:6642 --encap-ip=$SPINIFEX_NODE2
+sudo /usr/local/share/spinifex/setup-ovn.sh \
+  --external-bridge --external-iface=eth1 --dhcp \
+  --ovn-remote=tcp:$SPINIFEX_NODE1:6642 \
+  --encap-ip=$SPINIFEX_NODE2
 ```
 
 **Server 3 — Compute node (after server 1 is ready):**
 
 ```bash
-sudo /usr/local/share/spinifex/setup-ovn.sh --ovn-remote=tcp:$SPINIFEX_NODE1:6642 --encap-ip=$SPINIFEX_NODE3
+sudo /usr/local/share/spinifex/setup-ovn.sh \
+  --external-bridge --external-iface=eth1 --dhcp \
+  --ovn-remote=tcp:$SPINIFEX_NODE1:6642 \
+  --encap-ip=$SPINIFEX_NODE3
 ```
 
 Verify all chassis have registered (from server 1):
@@ -116,7 +129,7 @@ sudo ovn-sbctl show
 
 You should see 3 chassis entries, one per server, each with a Geneve encap IP.
 
-## Step 4. Form the cluster
+### Step 4. Form the cluster
 
 The formation process requires running init and join commands concurrently. The init node blocks until all expected nodes have joined.
 
@@ -133,10 +146,12 @@ sudo spx admin init \
   --az $AWS_AZ
 ```
 
+> **Note:** Save the admin credentials printed during init. They will not be shown again. The CA certificate and cluster configuration are automatically distributed to joining nodes.
+
 **Server 2 — Join the cluster (while init is running):**
 
 ```bash
-spx admin join \
+sudo spx admin join \
   --node node2 \
   --bind $SPINIFEX_NODE2 \
   --cluster-bind $SPINIFEX_NODE2 \
@@ -148,7 +163,7 @@ spx admin join \
 **Server 3 — Join the cluster (while init is running):**
 
 ```bash
-spx admin join \
+sudo spx admin join \
   --node node3 \
   --bind $SPINIFEX_NODE3 \
   --cluster-bind $SPINIFEX_NODE3 \
@@ -159,13 +174,32 @@ spx admin join \
 
 All three processes will exit with a cluster summary once formation is complete.
 
-## Step 5. Start services and verify
+### Step 5. Trust the CA certificate
+
+On **each server**, trust the CA generated during init. Joining nodes receive the CA automatically during formation:
+
+```bash
+sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
+sudo update-ca-certificates
+```
+
+This is required for the AWS CLI and inter-service HTTPS communication to work.
+
+### Step 6. Start services
 
 Start services on **all servers**:
 
 ```bash
 sudo systemctl start spinifex.target
 ```
+
+Set the AWS profile on each server:
+
+```bash
+export AWS_PROFILE=spinifex
+```
+
+Add this to `~/.bashrc` for persistence.
 
 From any node, verify the cluster:
 
@@ -180,34 +214,67 @@ node2   Ready     192.168.1.11    us-east-1   us-east-1a   2m       0
 node3   Ready     192.168.1.12    us-east-1   us-east-1a   2m       0
 ```
 
-## Step 6. Trust the CA certificate
+### Step 7. Import an AMI
 
-On **each server**, trust the CA generated during init:
+From any node, list and import an image:
 
 ```bash
-sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
-sudo update-ca-certificates
-export AWS_PROFILE=spinifex
+spx admin images list
+spx admin images import --name debian-12-amd64
 ```
 
-## Step 7. Launch instances across the cluster
-
-Connect to any node's AWS Gateway — all nodes serve the same cluster state:
+Find the imported AMI ID:
 
 ```bash
+AMI_ID=$(aws ec2 describe-images --query 'Images[0].ImageId' --output text)
+```
+
+### Step 8. Create a VPC and launch instances
+
+```bash
+# Create a VPC
+VPC_ID=$(aws ec2 create-vpc --cidr-block 10.200.0.0/16 \
+  --query 'Vpc.VpcId' --output text)
+
+# Create a subnet
+SUBNET_ID=$(aws ec2 create-subnet --vpc-id $VPC_ID \
+  --cidr-block 10.200.1.0/24 \
+  --query 'Subnet.SubnetId' --output text)
+
+# Import your SSH key
+aws ec2 import-key-pair --key-name "spinifex-key" \
+  --public-key-material fileb://~/.ssh/id_rsa.pub
+
+# Launch 3 instances — Spinifex distributes them across nodes
 aws ec2 run-instances \
-  --image-id $SPINIFEX_AMI \
+  --image-id $AMI_ID \
   --instance-type t3.small \
   --key-name spinifex-key \
-  --subnet-id $SPINIFEX_SUBNET \
+  --subnet-id $SUBNET_ID \
   --count 3
 ```
 
-Spinifex distributes instances across nodes based on available capacity. Check which node each instance landed on:
+Check which node each instance landed on:
 
 ```bash
 spx get vms
 ```
+
+### Step 9. Connect via SSH
+
+Find an instance's private IP and connect:
+
+```bash
+INSTANCE_ID=$(aws ec2 describe-instances \
+  --query 'Reservations[0].Instances[0].InstanceId' --output text)
+
+PRIVATE_IP=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID \
+  --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+
+ssh -i ~/.ssh/id_rsa ec2-user@$PRIVATE_IP
+```
+
+Instances are reachable via their private IP from any node in the cluster (OVN Geneve overlay handles cross-host routing).
 
 ## Shutdown
 
@@ -217,11 +284,35 @@ A graceful shutdown coordinates all nodes — drains VMs, flushes storage, and s
 spx admin cluster shutdown
 ```
 
+---
+
+## External Networking
+
+By default, `setup-ovn.sh --dhcp` obtains a gateway IP from your router, giving VMs outbound internet via SNAT. To enable public IPs for VMs (inbound connectivity), pass `--external-pool` during `admin init`:
+
+```bash
+sudo spx admin init \
+  --node node1 --nodes 3 \
+  --bind $SPINIFEX_NODE1 --cluster-bind $SPINIFEX_NODE1 \
+  --region $AWS_REGION --az $AWS_AZ \
+  --external-pool=192.168.1.150-192.168.1.250
+```
+
+Then exclude that range from your router's DHCP scope. See the [VPC Public Subnets](/docs/vpc-public-subnets) guide for details on Elastic IPs, security groups, and public subnet configuration.
+
+| Tier | Setup | What VMs get |
+|---|---|---|
+| **Auto** (default) | `--dhcp` on setup-ovn.sh | Outbound internet (SNAT) |
+| **Pool** | `--external-pool=start-end` on admin init | Public IPs + inbound (1:1 NAT) |
+| **Disabled** | `--no-external` on admin init | Overlay only, no internet |
+
+---
+
 ## Troubleshooting
 
-## Nodes not joining the cluster
+### Nodes not joining the cluster
 
-The init command must still be running when you execute join on other servers. If init has already exited, re-run it.
+The init command must still be running when you execute join on other servers. If init has already exited, re-run it with `--force`.
 
 Check that all servers can reach the init node on the formation port:
 
@@ -229,7 +320,7 @@ Check that all servers can reach the init node on the formation port:
 curl -s http://$SPINIFEX_NODE1:4432/health
 ```
 
-## OVN chassis not registering
+### OVN chassis not registering
 
 Compute nodes need to reach OVN central on server 1. Verify from server 1:
 
@@ -245,7 +336,16 @@ sudo ss -tlnp | grep 6642
 
 Re-run the OVN setup on the affected compute node.
 
-## Cross-host VMs cannot communicate
+### CA certificate not trusted
+
+AWS CLI will reject HTTPS connections if the Spinifex CA is not trusted. Re-add the certificate on the affected node:
+
+```bash
+sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
+sudo update-ca-certificates
+```
+
+### Cross-host VMs cannot communicate
 
 This indicates a Geneve tunnel issue. Verify tunnels are established:
 
@@ -261,23 +361,7 @@ sudo ss -ulnp | grep 6081
 
 If tunnels are missing, verify `--encap-ip` was set correctly during OVN setup.
 
-## Health check fails on a node
-
-Check if the daemon is running and listening on the correct IP:
-
-```bash
-curl -s http://$SPINIFEX_NODE1:4432/health
-```
-
-Review the daemon logs for errors:
-
-```bash
-cat ~/spinifex/logs/spinifex.log
-```
-
-Verify `--bind` was set to the correct IP during cluster formation.
-
-## NATS cluster routing issues
+### NATS cluster routing issues
 
 Check NATS logs for connection errors between nodes:
 
@@ -286,3 +370,19 @@ grep -i "route\|cluster" ~/spinifex/logs/nats.log
 ```
 
 Ensure `--cluster-bind` IPs are reachable between all servers.
+
+### DHCP failed to obtain IP
+
+If `setup-ovn.sh --dhcp` reports a failure, verify a DHCP server is reachable on your WAN:
+
+```bash
+sudo dhcpcd --test enp0s3
+```
+
+As a fallback, set a static gateway IP in `~/spinifex/config/spinifex.toml` under `[[network.external_pools]]`:
+
+```toml
+gateway_ip = "192.168.1.100"
+```
+
+Then restart services.

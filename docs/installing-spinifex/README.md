@@ -24,6 +24,7 @@ resources:
 
 - [Overview](#overview)
 - [Instructions](#instructions)
+- [External Networking](#external-networking)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -37,7 +38,7 @@ This guide installs Spinifex on a single server using the binary installer. For 
 **Supported Operating Systems:**
 
 - Ubuntu 22.04 / 24.04 / 25.10
-- Debian 12.13
+- Debian 12 / 13
 
 **What gets installed:**
 
@@ -48,9 +49,15 @@ This guide installs Spinifex on a single server using the binary installer. For 
 - Viperblock (EBS-compatible block storage)
 - AWS CLI v2
 
+**Network requirements:**
+
+- Minimum 1 NIC (single-NIC uses macvlan for external bridge, SSH-safe)
+- 2 NICs recommended (management + WAN)
+- Network auto-detection configures everything by default
+
 ## Instructions
 
-## Step 1. Install Spinifex
+### Step 1. Install Spinifex
 
 ```bash
 curl https://install.mulgadc.com | bash
@@ -58,36 +65,71 @@ curl https://install.mulgadc.com | bash
 
 The installer downloads the Spinifex binary and bootstraps all dependencies (QEMU, OVN/OVS, AWS CLI).
 
-## Step 2. Initialize a region
+### Step 2. Initialize a region
 
-Create your first region and availability zone, replace `ap-southeast-2` with your desired region:
+Create your first region and availability zone:
 
 ```bash
 spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
 ```
 
-## Step 3. Trust the CA certificate
+This auto-detects your network topology and configures external networking:
 
-Spinifex generates a local CA during initialization. Add it to your system trust store:
+```
+🔍 Detected network topology:
+
+  Interface      IP                 Subnet               Gateway          Role
+  enp0s3         192.168.1.31       192.168.0.0/23       192.168.1.1      WAN
+  enp0s5         10.13.7.1          10.13.7.0/24         —                LAN
+
+  Mode: multi-NIC (1 LAN + 1 WAN)
+
+📡 External networking: nat
+  WAN interface: enp0s3
+  Gateway IP:    DHCP (obtained during OVN setup)
+  VMs get:       outbound internet via SNAT
+```
+
+The init output shows the exact `setup-ovn.sh` command to run next — copy it from the output.
+
+> **Note:** Save the admin credentials printed during init. They will not be shown again.
+
+### Step 3. Trust the CA certificate
+
+Spinifex generates a local CA during initialization. Add it to your system trust store so the AWS CLI trusts Spinifex's HTTPS endpoints:
 
 ```bash
 sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
 sudo update-ca-certificates
 ```
 
-## Step 4. Start services
+### Step 4. Setup OVN networking
+
+Run the `setup-ovn.sh` command printed by `admin init`. For a typical single-node setup:
+
+```bash
+sudo /usr/local/share/spinifex/setup-ovn.sh --management --external-bridge --external-iface=enp0s3 --dhcp
+```
+
+Replace `enp0s3` with your WAN interface name (shown in the init output). The `--dhcp` flag automatically obtains an IP from your router for OVN's gateway — no manual IP reservation needed.
+
+> **Single-NIC hosts:** If you only have one NIC, `admin init` adds `--single-nic` to the command. This creates a macvlan sub-interface so OVN gets its own IP without disrupting yours.
+
+### Step 5. Start services
 
 ```bash
 sudo systemctl start spinifex.target
 ```
 
-Set the AWS profile to use the default admin account:
+Set the AWS profile:
 
 ```bash
 export AWS_PROFILE=spinifex
 ```
 
-## Step 5. Import an AMI
+Add this to your `~/.bashrc` for persistence.
+
+### Step 6. Import an AMI
 
 List available images and import one matching your architecture:
 
@@ -96,49 +138,92 @@ spx admin images list
 spx admin images import --name debian-12-arm64
 ```
 
-## Step 6. Create a VPC and launch an instance
+Find the imported AMI ID:
 
 ```bash
-aws ec2 create-vpc --cidr-block 10.200.0.0/16
-export SPINIFEX_VPC="vpc-XXX"
+aws ec2 describe-images --query 'Images[0].ImageId' --output text
+```
 
-aws ec2 create-subnet --vpc-id $SPINIFEX_VPC --cidr-block 10.200.1.0/24
-export SPINIFEX_SUBNET="subnet-XXX"
+### Step 7. Create a VPC and launch an instance
 
-aws ec2 import-key-pair --key-name "spinifex-key" --public-key-material fileb://~/.ssh/id_rsa.pub
+```bash
+# Create a VPC
+VPC_ID=$(aws ec2 create-vpc --cidr-block 10.200.0.0/16 \
+  --query 'Vpc.VpcId' --output text)
 
+# Create a subnet
+SUBNET_ID=$(aws ec2 create-subnet --vpc-id $VPC_ID \
+  --cidr-block 10.200.1.0/24 \
+  --query 'Subnet.SubnetId' --output text)
+
+# Import your SSH key
+aws ec2 import-key-pair --key-name "spinifex-key" \
+  --public-key-material fileb://~/.ssh/id_rsa.pub
+
+# Get the AMI ID
+AMI_ID=$(aws ec2 describe-images --query 'Images[0].ImageId' --output text)
+
+# Launch an instance
 aws ec2 run-instances \
-  --image-id $SPINIFEX_AMI \
+  --image-id $AMI_ID \
   --instance-type t3.small \
   --key-name spinifex-key \
-  --subnet-id $SPINIFEX_SUBNET \
+  --subnet-id $SUBNET_ID \
   --count 1
 ```
 
-## Step 7. Connect via SSH
+### Step 8. Connect via SSH
 
-Find the forwarded SSH port and connect:
+Find the instance's private IP and connect through the VPC network:
 
 ```bash
-ps auxw | grep hostfwd
-# Look for: hostfwd=tcp:127.0.0.1:<port>-:22
+INSTANCE_ID=$(aws ec2 describe-instances \
+  --query 'Reservations[0].Instances[0].InstanceId' --output text)
 
-ssh -i ~/.ssh/spinifex-key ec2-user@127.0.0.1 -p <port>
+PRIVATE_IP=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID \
+  --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+
+ssh -i ~/.ssh/id_rsa ec2-user@$PRIVATE_IP
 ```
+
+> **Note:** cloud-init takes 30-60 seconds to configure the instance after boot. If SSH is refused, wait and retry.
+
+---
+
+## External Networking
+
+By default, `admin init` auto-detects your network and enables outbound internet for VMs via SNAT. Three tiers are available:
+
+| Tier | Flags | What VMs get |
+|---|---|---|
+| **Auto** (default) | None | Outbound internet (SNAT via DHCP) |
+| **Pool** | `--external-pool=start-end` | Public IPs + inbound (1:1 NAT) |
+| **Disabled** | `--no-external` | Overlay only, no internet |
+
+### Enabling public IPs for VMs
+
+To give VMs routable public IPs, reserve an IP range from your network and pass it during init:
+
+```bash
+spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1 \
+  --external-pool=192.168.1.150-192.168.1.250
+```
+
+Then exclude that range from your router's DHCP scope (e.g., set your router's DHCP to end at 192.168.1.149).
+
+---
 
 ## Troubleshooting
 
-## spx command not found
+### spx command not found
 
-The binary is not in your PATH. Run the installer again or add the install directory to your PATH:
+The binary is not in your PATH. Run the installer again or add the install directory:
 
 ```bash
-export PATH=$PATH:~/spinifex/bin/
+export PATH=$PATH:/usr/local/bin
 ```
 
-Add this to your `~/.bashrc` or `~/.zshrc` for persistence.
-
-## OVN services not starting
+### OVN services not starting
 
 Check if the OVN controller is active:
 
@@ -147,53 +232,38 @@ sudo systemctl is-active ovn-controller
 sudo ovn-sbctl show
 ```
 
-If inactive, re-run the OVN setup that the installer performs. Check system logs for details:
+If inactive, re-run the OVN setup. Check system logs:
 
 ```bash
 journalctl -u ovn-controller --no-pager -n 20
 ```
 
-## CA certificate not trusted
+### CA certificate not trusted
 
-AWS CLI will reject HTTPS connections if the Spinifex CA is not trusted. Re-add the certificate:
+AWS CLI will reject HTTPS connections if the Spinifex CA is not trusted:
 
 ```bash
 sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
 sudo update-ca-certificates
 ```
 
-Verify it was added:
+### Instance stuck in pending
+
+Check the Spinifex daemon logs:
 
 ```bash
-ls -la /usr/local/share/ca-certificates/spinifex-ca.crt
-```
-
-## Instance stuck in pending
-
-Check the Spinifex daemon logs for errors:
-
-```bash
-ls ~/spinifex/logs/
 cat ~/spinifex/logs/spinifex.log
 ```
 
-Verify the AMI was imported successfully:
+Verify the AMI was imported:
 
 ```bash
 aws ec2 describe-images
 ```
 
-## SSH connection refused
+### SSH connection refused
 
-cloud-init takes 30-60 seconds to configure the instance after boot. Wait and retry.
-
-Verify the SSH port forwarding is active:
-
-```bash
-ps auxw | grep hostfwd
-```
-
-If no `hostfwd` entry appears, the instance may not have started correctly. Check instance state:
+cloud-init takes 30-60 seconds after boot. Wait and retry. Check instance state:
 
 ```bash
 aws ec2 describe-instances --instance-ids $INSTANCE_ID
