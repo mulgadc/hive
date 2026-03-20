@@ -33,6 +33,8 @@ type ENIRecord struct {
 	AttachmentId       string            `json:"attachment_id,omitempty"`
 	InstanceId         string            `json:"instance_id,omitempty"`
 	DeviceIndex        int64             `json:"device_index"`
+	PublicIpAddress    string            `json:"public_ip_address,omitempty"` // Auto-assigned or EIP
+	PublicIpPool       string            `json:"public_ip_pool,omitempty"`    // Pool name the public IP came from
 	Tags               map[string]string `json:"tags"`
 	CreatedAt          time.Time         `json:"created_at"`
 }
@@ -344,6 +346,12 @@ func (s *VPCServiceImpl) eniRecordToEC2(record *ENIRecord, accountID string) *ec
 			},
 		},
 		Groups: []*ec2.GroupIdentifier{},
+	}
+
+	if record.PublicIpAddress != "" {
+		eni.Association = &ec2.NetworkInterfaceAssociation{
+			PublicIp: aws.String(record.PublicIpAddress),
+		}
 	}
 
 	if record.AttachmentId != "" {

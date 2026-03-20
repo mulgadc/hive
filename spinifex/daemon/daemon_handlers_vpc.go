@@ -31,6 +31,10 @@ func (d *Daemon) handleEC2DescribeSubnets(msg *nats.Msg) {
 	handleNATSRequest(msg, d.vpcService.DescribeSubnets)
 }
 
+func (d *Daemon) handleEC2ModifySubnetAttribute(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.ModifySubnetAttribute)
+}
+
 func (d *Daemon) handleEC2CreateNetworkInterface(msg *nats.Msg) {
 	handleNATSRequest(msg, d.vpcService.CreateNetworkInterface)
 }

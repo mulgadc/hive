@@ -215,6 +215,9 @@ var ec2Actions = map[string]EC2Handler{
 	"DescribeSubnets": ec2Handler(func(input *ec2.DescribeSubnetsInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_vpc.DescribeSubnets(input, gw.NATSConn, accountID)
 	}),
+	"ModifySubnetAttribute": ec2Handler(func(input *ec2.ModifySubnetAttributeInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_vpc.ModifySubnetAttribute(input, gw.NATSConn, accountID)
+	}),
 	"CreateNetworkInterface": ec2Handler(func(input *ec2.CreateNetworkInterfaceInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_vpc.CreateNetworkInterface(input, gw.NATSConn, accountID)
 	}),

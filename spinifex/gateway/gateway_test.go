@@ -1021,7 +1021,7 @@ func TestEC2ActionMapCompleteness(t *testing.T) {
 		"CreateEgressOnlyInternetGateway", "DeleteEgressOnlyInternetGateway",
 		"DescribeEgressOnlyInternetGateways",
 		"CreateVpc", "DeleteVpc", "DescribeVpcs",
-		"CreateSubnet", "DeleteSubnet", "DescribeSubnets",
+		"CreateSubnet", "DeleteSubnet", "DescribeSubnets", "ModifySubnetAttribute",
 		"CreateNetworkInterface", "DeleteNetworkInterface", "DescribeNetworkInterfaces",
 	}
 

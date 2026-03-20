@@ -23,6 +23,8 @@ const (
 	TopicPortStatus   = "vpc.port-status"
 	TopicIGWAttach    = "vpc.igw-attach"
 	TopicIGWDetach    = "vpc.igw-detach"
+	TopicAddNAT       = "vpc.add-nat"
+	TopicDeleteNAT    = "vpc.delete-nat"
 )
 
 // VPCEvent is published on vpc.create after a VPC is persisted.
@@ -46,6 +48,15 @@ type PortEvent struct {
 	VpcId              string `json:"vpc_id"`
 	PrivateIpAddress   string `json:"private_ip_address"`
 	MacAddress         string `json:"mac_address"`
+}
+
+// NATEvent is published on vpc.add-nat / vpc.delete-nat for 1:1 public IP NAT.
+type NATEvent struct {
+	VpcId      string `json:"vpc_id"`
+	ExternalIP string `json:"external_ip"`
+	LogicalIP  string `json:"logical_ip"`
+	PortName   string `json:"port_name"` // logical port for distributed NAT
+	MAC        string `json:"mac"`       // external MAC for distributed NAT
 }
 
 // TopologyHandler translates VPC lifecycle NATS events into OVN NB DB operations.
@@ -123,6 +134,11 @@ func (h *TopologyHandler) Subscribe(nc *nats.Conn) ([]*nats.Subscription, error)
 		{TopicDeletePort, h.handleDeletePort, true},
 		{TopicIGWAttach, h.handleIGWAttach, true},
 		{TopicIGWDetach, h.handleIGWDetach, true},
+		{TopicAddNAT, h.handleAddNAT, true},
+		{TopicDeleteNAT, h.handleDeleteNAT, true},
+		{TopicCreateSG, h.handleCreateSG, true},
+		{TopicDeleteSG, h.handleDeleteSG, true},
+		{TopicUpdateSG, h.handleUpdateSG, true},
 	}
 
 	var result []*nats.Subscription
@@ -761,6 +777,83 @@ func (h *TopologyHandler) handleIGWDetach(msg *nats.Msg) {
 	slog.Info("vpcd: detached internet gateway from VPC",
 		"igw_id", evt.InternetGatewayId,
 		"vpc_id", evt.VpcId,
+	)
+	respond(msg, nil)
+}
+
+// --- NAT (dnat_and_snat for public IPs) ---
+
+func (h *TopologyHandler) handleAddNAT(msg *nats.Msg) {
+	if h.ovn == nil {
+		respond(msg, fmt.Errorf("OVN client not connected"))
+		return
+	}
+
+	var evt NATEvent
+	if err := json.Unmarshal(msg.Data, &evt); err != nil {
+		slog.Error("vpcd: failed to unmarshal vpc.add-nat event", "err", err)
+		respond(msg, err)
+		return
+	}
+
+	ctx := context.Background()
+	routerName := "vpc-" + evt.VpcId
+
+	logicalPort := evt.PortName
+	externalMAC := evt.MAC
+
+	natRule := &nbdb.NAT{
+		Type:        "dnat_and_snat",
+		ExternalIP:  evt.ExternalIP,
+		LogicalIP:   evt.LogicalIP,
+		LogicalPort: &logicalPort,
+		ExternalMAC: &externalMAC,
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id":    evt.VpcId,
+			"spinifex:public_ip": evt.ExternalIP,
+		},
+	}
+
+	if err := h.ovn.AddNAT(ctx, routerName, natRule); err != nil {
+		slog.Error("vpcd: failed to add dnat_and_snat rule", "router", routerName, "externalIP", evt.ExternalIP, "logicalIP", evt.LogicalIP, "err", err)
+		respond(msg, err)
+		return
+	}
+
+	slog.Info("vpcd: added dnat_and_snat rule",
+		"router", routerName,
+		"external_ip", evt.ExternalIP,
+		"logical_ip", evt.LogicalIP,
+		"port", evt.PortName,
+	)
+	respond(msg, nil)
+}
+
+func (h *TopologyHandler) handleDeleteNAT(msg *nats.Msg) {
+	if h.ovn == nil {
+		respond(msg, fmt.Errorf("OVN client not connected"))
+		return
+	}
+
+	var evt NATEvent
+	if err := json.Unmarshal(msg.Data, &evt); err != nil {
+		slog.Error("vpcd: failed to unmarshal vpc.delete-nat event", "err", err)
+		respond(msg, err)
+		return
+	}
+
+	ctx := context.Background()
+	routerName := "vpc-" + evt.VpcId
+
+	if err := h.ovn.DeleteNAT(ctx, routerName, "dnat_and_snat", evt.LogicalIP); err != nil {
+		slog.Error("vpcd: failed to delete dnat_and_snat rule", "router", routerName, "logicalIP", evt.LogicalIP, "err", err)
+		respond(msg, err)
+		return
+	}
+
+	slog.Info("vpcd: deleted dnat_and_snat rule",
+		"router", routerName,
+		"logical_ip", evt.LogicalIP,
 	)
 	respond(msg, nil)
 }

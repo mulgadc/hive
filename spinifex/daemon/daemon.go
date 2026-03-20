@@ -392,6 +392,7 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.CreateSubnet", d.handleEC2CreateSubnet, "spinifex-workers"},
 		{"ec2.DeleteSubnet", d.handleEC2DeleteSubnet, "spinifex-workers"},
 		{"ec2.DescribeSubnets", d.handleEC2DescribeSubnets, "spinifex-workers"},
+		{"ec2.ModifySubnetAttribute", d.handleEC2ModifySubnetAttribute, "spinifex-workers"},
 		{"ec2.CreateNetworkInterface", d.handleEC2CreateNetworkInterface, "spinifex-workers"},
 		{"ec2.DeleteNetworkInterface", d.handleEC2DeleteNetworkInterface, "spinifex-workers"},
 		{"ec2.DescribeNetworkInterfaces", d.handleEC2DescribeNetworkInterfaces, "spinifex-workers"},

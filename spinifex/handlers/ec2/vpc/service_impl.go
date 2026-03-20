@@ -45,14 +45,15 @@ type VPCRecord struct {
 
 // SubnetRecord represents a stored Subnet
 type SubnetRecord struct {
-	SubnetId         string            `json:"subnet_id"`
-	VpcId            string            `json:"vpc_id"`
-	CidrBlock        string            `json:"cidr_block"`
-	AvailabilityZone string            `json:"availability_zone"`
-	State            string            `json:"state"`
-	IsDefault        bool              `json:"is_default"`
-	Tags             map[string]string `json:"tags"`
-	CreatedAt        time.Time         `json:"created_at"`
+	SubnetId            string            `json:"subnet_id"`
+	VpcId               string            `json:"vpc_id"`
+	CidrBlock           string            `json:"cidr_block"`
+	AvailabilityZone    string            `json:"availability_zone"`
+	State               string            `json:"state"`
+	IsDefault           bool              `json:"is_default"`
+	MapPublicIpOnLaunch bool              `json:"map_public_ip_on_launch"`
+	Tags                map[string]string `json:"tags"`
+	CreatedAt           time.Time         `json:"created_at"`
 }
 
 // VPCServiceImpl implements VPC, Subnet, and ENI operations with NATS JetStream persistence
@@ -63,6 +64,7 @@ type VPCServiceImpl struct {
 	subnetKV nats.KeyValue
 	vniKV    nats.KeyValue
 	eniKV    nats.KeyValue
+	sgKV     nats.KeyValue
 	ipam     *IPAM
 }
 
@@ -105,6 +107,14 @@ func NewVPCServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*VPCSer
 		return nil, fmt.Errorf("write version to %s: %w", KVBucketENIs, err)
 	}
 
+	sgKV, err := utils.GetOrCreateKVBucket(js, KVBucketSecurityGroups, 10)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketSecurityGroups, err)
+	}
+	if err := utils.WriteVersion(sgKV, KVBucketSecurityGroupsVersion); err != nil {
+		return nil, fmt.Errorf("write version to %s: %w", KVBucketSecurityGroups, err)
+	}
+
 	ipam, err := NewIPAM(js)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize IPAM: %w", err)
@@ -114,7 +124,8 @@ func NewVPCServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*VPCSer
 		"vpcBucket", KVBucketVPCs,
 		"subnetBucket", KVBucketSubnets,
 		"vniBucket", KVBucketVNICounter,
-		"eniBucket", KVBucketENIs)
+		"eniBucket", KVBucketENIs,
+		"sgBucket", KVBucketSecurityGroups)
 
 	return &VPCServiceImpl{
 		config:   cfg,
@@ -123,6 +134,7 @@ func NewVPCServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*VPCSer
 		subnetKV: subnetKV,
 		vniKV:    vniKV,
 		eniKV:    eniKV,
+		sgKV:     sgKV,
 		ipam:     ipam,
 	}, nil
 }
@@ -632,7 +644,7 @@ func (s *VPCServiceImpl) subnetRecordToEC2(record *SubnetRecord, availableIPs in
 		DefaultForAz:            aws.Bool(record.IsDefault),
 		AvailableIpAddressCount: aws.Int64(int64(availableIPs)),
 		OwnerId:                 aws.String(accountID),
-		MapPublicIpOnLaunch:     aws.Bool(false),
+		MapPublicIpOnLaunch:     aws.Bool(record.MapPublicIpOnLaunch),
 	}
 
 	if len(record.Tags) > 0 {
@@ -644,6 +656,42 @@ func (s *VPCServiceImpl) subnetRecordToEC2(record *SubnetRecord, availableIPs in
 	}
 
 	return subnet
+}
+
+// ModifySubnetAttribute modifies a subnet's attributes (e.g. MapPublicIpOnLaunch).
+func (s *VPCServiceImpl) ModifySubnetAttribute(input *ec2.ModifySubnetAttributeInput, accountID string) (*ec2.ModifySubnetAttributeOutput, error) {
+	if input.SubnetId == nil || *input.SubnetId == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	subnetID := *input.SubnetId
+	key := utils.AccountKey(accountID, subnetID)
+
+	entry, err := s.subnetKV.Get(key)
+	if err != nil {
+		return nil, errors.New(awserrors.ErrorInvalidSubnetIDNotFound)
+	}
+
+	var record SubnetRecord
+	if err := json.Unmarshal(entry.Value(), &record); err != nil {
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	if input.MapPublicIpOnLaunch != nil && input.MapPublicIpOnLaunch.Value != nil {
+		record.MapPublicIpOnLaunch = *input.MapPublicIpOnLaunch.Value
+	}
+
+	data, err := json.Marshal(record)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal subnet record: %w", err)
+	}
+	if _, err := s.subnetKV.Update(key, data, entry.Revision()); err != nil {
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	slog.Info("ModifySubnetAttribute completed", "subnetId", subnetID, "mapPublicIpOnLaunch", record.MapPublicIpOnLaunch, "accountID", accountID)
+
+	return &ec2.ModifySubnetAttributeOutput{}, nil
 }
 
 // Default VPC constants matching AWS defaults.
