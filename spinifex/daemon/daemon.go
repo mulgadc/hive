@@ -28,6 +28,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/go-chi/chi/v5"
+	"github.com/mulgadc/spinifex/spinifex/admin"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
 	handlers_ec2_account "github.com/mulgadc/spinifex/spinifex/handlers/ec2/account"
@@ -548,10 +549,13 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to initialize account settings service: %w", err)
 	}
 
-	// Ensure default VPC exists (matches AWS: every account has a default VPC)
+	// Ensure default VPC exists for system and admin accounts
+	// (matches AWS: every account has a default VPC)
 	if d.vpcService != nil {
-		if err := d.vpcService.EnsureDefaultVPC(utils.GlobalAccountID); err != nil {
-			slog.Error("Failed to ensure default VPC", "error", err)
+		for _, accountID := range []string{utils.GlobalAccountID, admin.DefaultAccountID()} {
+			if err := d.vpcService.EnsureDefaultVPC(accountID); err != nil {
+				slog.Error("Failed to ensure default VPC", "accountID", accountID, "error", err)
+			}
 		}
 	}
 
