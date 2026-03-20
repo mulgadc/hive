@@ -259,8 +259,10 @@ func (s *IGWServiceImpl) AttachInternetGateway(input *ec2.AttachInternetGatewayI
 			InternetGatewayId: igwID,
 			VpcId:             vpcID,
 		}
-		eventData, _ := json.Marshal(event)
-		if err := s.natsConn.Publish("vpc.igw-attach", eventData); err != nil {
+		eventData, err := json.Marshal(event)
+		if err != nil {
+			slog.Warn("Failed to marshal IGW attach event", "error", err)
+		} else if err := s.natsConn.Publish("vpc.igw-attach", eventData); err != nil {
 			slog.Warn("Failed to publish IGW attach event", "error", err)
 		}
 	}
@@ -315,8 +317,10 @@ func (s *IGWServiceImpl) DetachInternetGateway(input *ec2.DetachInternetGatewayI
 			InternetGatewayId: igwID,
 			VpcId:             vpcID,
 		}
-		eventData, _ := json.Marshal(event)
-		if err := s.natsConn.Publish("vpc.igw-detach", eventData); err != nil {
+		eventData, err := json.Marshal(event)
+		if err != nil {
+			slog.Warn("Failed to marshal IGW detach event", "error", err)
+		} else if err := s.natsConn.Publish("vpc.igw-detach", eventData); err != nil {
 			slog.Warn("Failed to publish IGW detach event", "error", err)
 		}
 	}

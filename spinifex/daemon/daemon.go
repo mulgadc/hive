@@ -1444,7 +1444,10 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 			return nil, fmt.Errorf("QMP error: %s: %s", errObj["class"], errObj["desc"])
 		}
 		if _, ok := msg["return"]; ok {
-			respBytes, _ := json.Marshal(msg)
+			respBytes, err := json.Marshal(msg)
+			if err != nil {
+				return nil, fmt.Errorf("marshal QMP response: %w", err)
+			}
 			var resp qmp.QMPResponse
 			if err := json.Unmarshal(respBytes, &resp); err != nil {
 				return nil, fmt.Errorf("unmarshal error: %w", err)

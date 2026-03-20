@@ -267,7 +267,11 @@ func launchService(cfg *Config) (err error) {
 		err := json.Unmarshal(msg.Data, &ebsRequest)
 		if err != nil {
 			slog.Error("Failed to unmarshal ebs.unmount message", "err", err)
-			errResp, _ := json.Marshal(types.EBSUnMountResponse{Error: fmt.Sprintf("bad request: %v", err)})
+			errResp, marshalErr := json.Marshal(types.EBSUnMountResponse{Error: fmt.Sprintf("bad request: %v", err)})
+			if marshalErr != nil {
+				slog.Error("Failed to marshal ebs.unmount error response", "err", marshalErr)
+				return
+			}
 			if err := msg.Respond(errResp); err != nil {
 				slog.Error("Failed to respond to ebs.unmount request", "err", err)
 			}
@@ -424,7 +428,11 @@ func launchService(cfg *Config) (err error) {
 		err := json.Unmarshal(msg.Data, &ebsRequest)
 		if err != nil {
 			slog.Error("Failed to unmarshal ebs.mount message", "err", err)
-			errResp, _ := json.Marshal(types.EBSMountResponse{Error: fmt.Sprintf("bad request: %v", err)})
+			errResp, marshalErr := json.Marshal(types.EBSMountResponse{Error: fmt.Sprintf("bad request: %v", err)})
+			if marshalErr != nil {
+				slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+				return
+			}
 			if err := msg.Respond(errResp); err != nil {
 				slog.Error("Failed to respond to ebs.mount request", "err", err)
 			}
@@ -483,7 +491,11 @@ func launchService(cfg *Config) (err error) {
 		if err != nil {
 			ebsResponse.Error = fmt.Sprintf("Failed to connect to Viperblock store: %v", err)
 			// Marshal and send error response immediately
-			response, _ := json.Marshal(ebsResponse)
+			response, marshalErr := json.Marshal(ebsResponse)
+			if marshalErr != nil {
+				slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+				return
+			}
 			if err := msg.Respond(response); err != nil {
 				slog.Error("Failed to respond to ebs.mount request", "err", err)
 			}
@@ -503,7 +515,11 @@ func launchService(cfg *Config) (err error) {
 		if err != nil {
 			ebsResponse.Error = err.Error()
 			// Marshal and send error response immediately
-			response, _ := json.Marshal(ebsResponse)
+			response, marshalErr := json.Marshal(ebsResponse)
+			if marshalErr != nil {
+				slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+				return
+			}
 			if err := msg.Respond(response); err != nil {
 				slog.Error("Failed to respond to ebs.mount request", "err", err)
 			}
@@ -520,7 +536,11 @@ func launchService(cfg *Config) (err error) {
 		if err != nil {
 			ebsResponse.Error = err.Error()
 			// Marshal and send error response immediately
-			response, _ := json.Marshal(ebsResponse)
+			response, marshalErr := json.Marshal(ebsResponse)
+			if marshalErr != nil {
+				slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+				return
+			}
 			if err := msg.Respond(response); err != nil {
 				slog.Error("Failed to respond to ebs.mount request", "err", err)
 			}
@@ -544,7 +564,11 @@ func launchService(cfg *Config) (err error) {
 			portStr, err := viperblock.FindFreePort()
 			if err != nil {
 				ebsResponse.Error = err.Error()
-				response, _ := json.Marshal(ebsResponse)
+				response, marshalErr := json.Marshal(ebsResponse)
+				if marshalErr != nil {
+					slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+					return
+				}
 				if err := msg.Respond(response); err != nil {
 					slog.Error("Failed to respond to ebs.mount request", "err", err)
 				}
@@ -560,7 +584,11 @@ func launchService(cfg *Config) (err error) {
 			if err != nil {
 				slog.Error("Failed to convert port to int", "err", err)
 				ebsResponse.Error = fmt.Sprintf("failed to parse port: %v", err)
-				response, _ := json.Marshal(ebsResponse)
+				response, marshalErr := json.Marshal(ebsResponse)
+				if marshalErr != nil {
+					slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+					return
+				}
 				if err := msg.Respond(response); err != nil {
 					slog.Error("Failed to respond to ebs.mount request", "err", err)
 				}
@@ -577,7 +605,11 @@ func launchService(cfg *Config) (err error) {
 			nbdSocket, err = utils.GenerateUniqueSocketFile(ebsRequest.Name)
 			if err != nil {
 				ebsResponse.Error = err.Error()
-				response, _ := json.Marshal(ebsResponse)
+				response, marshalErr := json.Marshal(ebsResponse)
+				if marshalErr != nil {
+					slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+					return
+				}
 				if err := msg.Respond(response); err != nil {
 					slog.Error("Failed to respond to ebs.mount request", "err", err)
 				}
@@ -596,7 +628,11 @@ func launchService(cfg *Config) (err error) {
 		if err != nil {
 			slog.Error("Failed to generate nbdkit pid file", "err", err)
 			ebsResponse.Error = fmt.Sprintf("failed to generate pid file: %v", err)
-			response, _ := json.Marshal(ebsResponse)
+			response, marshalErr := json.Marshal(ebsResponse)
+			if marshalErr != nil {
+				slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+				return
+			}
 			if err := msg.Respond(response); err != nil {
 				slog.Error("Failed to respond to ebs.mount request", "err", err)
 			}
@@ -666,7 +702,11 @@ func launchService(cfg *Config) (err error) {
 		if pid == 0 {
 			ebsResponse.Error = "Failed to start nbdkit"
 			// Marshal and send error response immediately
-			response, _ := json.Marshal(ebsResponse)
+			response, marshalErr := json.Marshal(ebsResponse)
+			if marshalErr != nil {
+				slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+				return
+			}
 			if err := msg.Respond(response); err != nil {
 				slog.Error("Failed to respond to ebs.mount request", "err", err)
 			}
@@ -684,7 +724,11 @@ func launchService(cfg *Config) (err error) {
 		case exitErr := <-exitChan:
 			if exitErr != 0 {
 				ebsResponse.Error = fmt.Sprintf("nbdkit failed: %v", exitErr)
-				response, _ := json.Marshal(ebsResponse)
+				response, marshalErr := json.Marshal(ebsResponse)
+				if marshalErr != nil {
+					slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+					return
+				}
 				if err := msg.Respond(response); err != nil {
 					slog.Error("Failed to respond to ebs.mount request", "err", err)
 				}

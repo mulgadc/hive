@@ -17,6 +17,7 @@ linters:
     - decorder # checks declaration order of types, consts, vars, and funcs
     - durationcheck # checks for two durations multiplied together
     - embeddedstructfieldcheck # checks embedded sync.Mutex/RWMutex in structs
+    - errchkjson # checks types passed to json encoding functions, flags omittable error checks
     - errcheck # checks for unchecked errors in type assertions and I/O
     - errname # checks that sentinel errors are prefixed with Err, error types suffixed with Error
     - exptostd # detects golang.org/x/exp/ functions replaceable by stdlib
@@ -110,6 +111,7 @@ linters:
         linters:
           - bodyclose
           - errcheck
+          - errchkjson
           - gosec
       - path: '_test\.go'
         text: "unusedwrite"
