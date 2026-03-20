@@ -149,15 +149,19 @@ func spreadAllocate(nodes []nodeAllocation, count int) []nodeAllocation {
 		remaining--
 	}
 
-	// Round 2+: pack remaining onto nodes with most remaining capacity
+	// Round 2+: pack remaining onto nodes with most remaining capacity.
+	// Ties are broken by preferring the node with fewer assigned instances,
+	// which produces a more balanced spread.
 	for remaining > 0 {
-		// Find the node with most remaining capacity (Available - Assigned)
 		bestIdx := -1
 		bestRemaining := 0
 		for i, a := range allocs {
 			nodeRemaining := a.Available - a.Assigned
 			if nodeRemaining > bestRemaining {
 				bestRemaining = nodeRemaining
+				bestIdx = i
+			} else if nodeRemaining == bestRemaining && nodeRemaining > 0 &&
+				(bestIdx < 0 || a.Assigned < allocs[bestIdx].Assigned) {
 				bestIdx = i
 			}
 		}
