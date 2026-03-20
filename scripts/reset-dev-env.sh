@@ -13,7 +13,7 @@ fi
 
 echo "Removing data"
 
-rm -rf ~/spinifex/predastore/
+rm -rf ~/spinifex/predastore/*
 
 rm -rf ~/spinifex/spinifex/*
 
@@ -23,15 +23,23 @@ rm -rf ~/spinifex/nats/*
 
 rm -rf ~/spinifex/images/*
 
+# Re-initialize platform (generates fresh credentials, certs, config, and updates ~/.aws/credentials)
+echo "Re-initializing platform..."
+./bin/spx admin init --force
+
+# Generate SSH key if it doesn't exist
+if [ ! -f ~/.ssh/spinifex-key.pub ]; then
+    echo "Generating SSH key pair..."
+    ssh-keygen -t ed25519 -f ~/.ssh/spinifex-key -N ""
+fi
+
 # Enable pprof for development
 PPROF_ENABLED=1 PPROF_OUTPUT=/tmp/spinifex-vm.prof ./scripts/start-dev.sh --build
 
-# Follow INSTALL.md steps
-echo "Importing AMI"
-
 export AWS_PROFILE=spinifex
 
-# Step 1 SSH key
+# Import SSH key
+echo "Importing SSH key pair..."
 aws ec2 import-key-pair --key-name "spinifex-key" --public-key-material fileb://~/.ssh/spinifex-key.pub
 
 echo "Validating key pair imported"

@@ -11,6 +11,10 @@ on:
       - go.sum
       - Makefile
       - .github/workflows/spinifex.yml
+  pull_request:
+    branches:
+      - main
+      - dev
   workflow_dispatch:
 
 jobs:

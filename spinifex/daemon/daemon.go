@@ -36,6 +36,7 @@ import (
 	handlers_ec2_image "github.com/mulgadc/spinifex/spinifex/handlers/ec2/image"
 	handlers_ec2_instance "github.com/mulgadc/spinifex/spinifex/handlers/ec2/instance"
 	handlers_ec2_key "github.com/mulgadc/spinifex/spinifex/handlers/ec2/key"
+	handlers_ec2_placementgroup "github.com/mulgadc/spinifex/spinifex/handlers/ec2/placementgroup"
 	handlers_ec2_snapshot "github.com/mulgadc/spinifex/spinifex/handlers/ec2/snapshot"
 	handlers_ec2_tags "github.com/mulgadc/spinifex/spinifex/handlers/ec2/tags"
 	handlers_ec2_volume "github.com/mulgadc/spinifex/spinifex/handlers/ec2/volume"
@@ -86,28 +87,30 @@ type ResourceManager struct {
 	natsConn     *nats.Conn
 	instanceSubs map[string]*nats.Subscription
 	handler      nats.MsgHandler
+	nodeID       string // node identifier for node-specific topic subscriptions
 }
 
 // Daemon represents the main daemon service
 type Daemon struct {
-	node            string
-	clusterConfig   *config.ClusterConfig
-	config          *config.Config
-	natsConn        *nats.Conn
-	resourceMgr     *ResourceManager
-	instanceService *handlers_ec2_instance.InstanceServiceImpl
-	keyService      *handlers_ec2_key.KeyServiceImpl
-	imageService    *handlers_ec2_image.ImageServiceImpl
-	volumeService   *handlers_ec2_volume.VolumeServiceImpl
-	accountService  *handlers_ec2_account.AccountSettingsServiceImpl
-	snapshotService *handlers_ec2_snapshot.SnapshotServiceImpl
-	tagsService     *handlers_ec2_tags.TagsServiceImpl
-	eigwService     *handlers_ec2_eigw.EgressOnlyIGWServiceImpl
-	igwService      *handlers_ec2_igw.IGWServiceImpl
-	vpcService      *handlers_ec2_vpc.VPCServiceImpl
-	ctx             context.Context
-	cancel          context.CancelFunc
-	shutdownWg      sync.WaitGroup
+	node                  string
+	clusterConfig         *config.ClusterConfig
+	config                *config.Config
+	natsConn              *nats.Conn
+	resourceMgr           *ResourceManager
+	instanceService       *handlers_ec2_instance.InstanceServiceImpl
+	keyService            *handlers_ec2_key.KeyServiceImpl
+	imageService          *handlers_ec2_image.ImageServiceImpl
+	volumeService         *handlers_ec2_volume.VolumeServiceImpl
+	accountService        *handlers_ec2_account.AccountSettingsServiceImpl
+	snapshotService       *handlers_ec2_snapshot.SnapshotServiceImpl
+	tagsService           *handlers_ec2_tags.TagsServiceImpl
+	eigwService           *handlers_ec2_eigw.EgressOnlyIGWServiceImpl
+	igwService            *handlers_ec2_igw.IGWServiceImpl
+	placementGroupService *handlers_ec2_placementgroup.PlacementGroupServiceImpl
+	vpcService            *handlers_ec2_vpc.VPCServiceImpl
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	shutdownWg            sync.WaitGroup
 
 	// Local VM Instances
 	Instances vm.Instances
@@ -386,6 +389,15 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.DescribeInternetGateways", d.handleEC2DescribeInternetGateways, "spinifex-workers"},
 		{"ec2.AttachInternetGateway", d.handleEC2AttachInternetGateway, "spinifex-workers"},
 		{"ec2.DetachInternetGateway", d.handleEC2DetachInternetGateway, "spinifex-workers"},
+		{"ec2.CreatePlacementGroup", d.handleEC2CreatePlacementGroup, "spinifex-workers"},
+		{"ec2.DeletePlacementGroup", d.handleEC2DeletePlacementGroup, "spinifex-workers"},
+		{"ec2.DescribePlacementGroups", d.handleEC2DescribePlacementGroups, "spinifex-workers"},
+		{"ec2.ReserveSpreadNodes", d.handleEC2ReserveSpreadNodes, "spinifex-workers"},
+		{"ec2.FinalizeSpreadInstances", d.handleEC2FinalizeSpreadInstances, "spinifex-workers"},
+		{"ec2.ReleaseSpreadNodes", d.handleEC2ReleaseSpreadNodes, "spinifex-workers"},
+		{"ec2.RemoveInstanceFromPlacementGroup", d.handleEC2RemoveInstanceFromPlacementGroup, "spinifex-workers"},
+		{"ec2.ReserveClusterNode", d.handleEC2ReserveClusterNode, "spinifex-workers"},
+		{"ec2.FinalizeClusterInstances", d.handleEC2FinalizeClusterInstances, "spinifex-workers"},
 		{"ec2.CreateVpc", d.handleEC2CreateVpc, "spinifex-workers"},
 		{"ec2.DeleteVpc", d.handleEC2DeleteVpc, "spinifex-workers"},
 		{"ec2.DescribeVpcs", d.handleEC2DescribeVpcs, "spinifex-workers"},
@@ -504,6 +516,13 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to initialize IGW service: %w", err)
 	}
 
+	d.placementGroupService, err = initServiceWithRetry("placement group service", func() (*handlers_ec2_placementgroup.PlacementGroupServiceImpl, error) {
+		return handlers_ec2_placementgroup.NewPlacementGroupServiceImplWithNATS(d.config, d.natsConn)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to initialize placement group service: %w", err)
+	}
+
 	d.vpcService, err = initServiceWithRetry("VPC service", func() (*handlers_ec2_vpc.VPCServiceImpl, error) {
 		return handlers_ec2_vpc.NewVPCServiceImplWithNATS(d.config, d.natsConn)
 	})
@@ -546,7 +565,7 @@ func (d *Daemon) Start() error {
 	// Initialize dynamic per-instance-type subscriptions for capacity-aware routing.
 	// Each instance type gets its own NATS topic (ec2.RunInstances.{type}) so requests
 	// are only routed to nodes with available capacity.
-	d.resourceMgr.initSubscriptions(d.natsConn, d.handleEC2RunInstances)
+	d.resourceMgr.initSubscriptions(d.natsConn, d.handleEC2RunInstances, d.node)
 
 	d.startHeartbeat()
 	d.startPendingWatchdog()
@@ -2464,17 +2483,21 @@ func (rm *ResourceManager) deallocate(instanceType *ec2.InstanceTypeInfo) {
 
 // initSubscriptions sets up dynamic per-instance-type NATS subscriptions.
 // Called once during daemon startup after NATS is connected.
-func (rm *ResourceManager) initSubscriptions(nc *nats.Conn, handler nats.MsgHandler) {
+func (rm *ResourceManager) initSubscriptions(nc *nats.Conn, handler nats.MsgHandler, nodeID string) {
 	rm.natsConn = nc
 	rm.handler = handler
+	rm.nodeID = nodeID
 	rm.instanceSubs = make(map[string]*nats.Subscription)
 	rm.updateInstanceSubscriptions()
 }
 
 // updateInstanceSubscriptions recalculates which instance types can fit on this
 // node and subscribes/unsubscribes from the corresponding NATS topics. Each type
-// gets its own topic (ec2.RunInstances.{type}) with the spinifex-workers queue group,
-// so NATS only routes requests to nodes that can actually serve them.
+// gets two topics:
+//   - ec2.RunInstances.{type} with spinifex-workers queue group (load-balanced, for single-instance launches)
+//   - ec2.RunInstances.{type}.{nodeId} without queue group (targeted, for multi-node distribution)
+//
+// Both use the same handler. NATS only routes requests to nodes with available capacity.
 func (rm *ResourceManager) updateInstanceSubscriptions() {
 	if rm.natsConn == nil {
 		return
@@ -2484,24 +2507,46 @@ func (rm *ResourceManager) updateInstanceSubscriptions() {
 	defer rm.subsMu.Unlock()
 
 	for typeName, typeInfo := range rm.instanceTypes {
-		topic := fmt.Sprintf("ec2.RunInstances.%s", typeName)
+		queueTopic := fmt.Sprintf("ec2.RunInstances.%s", typeName)
 		canFit := rm.canAllocate(typeInfo, 1) >= 1
 
-		_, subscribed := rm.instanceSubs[topic]
+		// Queue group subscription (load-balanced across nodes)
+		_, subscribed := rm.instanceSubs[queueTopic]
 		if canFit && !subscribed {
-			sub, err := rm.natsConn.QueueSubscribe(topic, "spinifex-workers", rm.handler)
+			sub, err := rm.natsConn.QueueSubscribe(queueTopic, "spinifex-workers", rm.handler)
 			if err != nil {
-				slog.Error("Failed to subscribe to instance type topic", "topic", topic, "err", err)
+				slog.Error("Failed to subscribe to instance type topic", "topic", queueTopic, "err", err)
 				continue
 			}
-			rm.instanceSubs[topic] = sub
-			slog.Debug("Subscribed to instance type", "topic", topic)
+			rm.instanceSubs[queueTopic] = sub
+			slog.Debug("Subscribed to instance type", "topic", queueTopic)
 		} else if !canFit && subscribed {
-			if err := rm.instanceSubs[topic].Unsubscribe(); err != nil {
-				slog.Error("Failed to unsubscribe from instance type topic", "topic", topic, "err", err)
+			if err := rm.instanceSubs[queueTopic].Unsubscribe(); err != nil {
+				slog.Error("Failed to unsubscribe from instance type topic", "topic", queueTopic, "err", err)
 			}
-			delete(rm.instanceSubs, topic)
-			slog.Info("Unsubscribed from instance type (capacity full)", "topic", topic)
+			delete(rm.instanceSubs, queueTopic)
+			slog.Info("Unsubscribed from instance type (capacity full)", "topic", queueTopic)
+		}
+
+		// Node-specific subscription (targeted routing for multi-node distribution)
+		if rm.nodeID != "" {
+			nodeTopic := fmt.Sprintf("ec2.RunInstances.%s.%s", typeName, rm.nodeID)
+			_, nodeSubscribed := rm.instanceSubs[nodeTopic]
+			if canFit && !nodeSubscribed {
+				sub, err := rm.natsConn.Subscribe(nodeTopic, rm.handler)
+				if err != nil {
+					slog.Error("Failed to subscribe to node-specific topic", "topic", nodeTopic, "err", err)
+					continue
+				}
+				rm.instanceSubs[nodeTopic] = sub
+				slog.Debug("Subscribed to node-specific instance type", "topic", nodeTopic)
+			} else if !canFit && nodeSubscribed {
+				if err := rm.instanceSubs[nodeTopic].Unsubscribe(); err != nil {
+					slog.Error("Failed to unsubscribe from node-specific topic", "topic", nodeTopic, "err", err)
+				}
+				delete(rm.instanceSubs, nodeTopic)
+				slog.Info("Unsubscribed from node-specific instance type (capacity full)", "topic", nodeTopic)
+			}
 		}
 	}
 }

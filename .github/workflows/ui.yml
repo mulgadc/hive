@@ -8,6 +8,13 @@ on:
     paths:
       - spinifex/services/spinifexui/frontend/**
       - .github/workflows/ui.yml
+  pull_request:
+    branches:
+      - main
+      - dev
+    paths:
+      - spinifex/services/spinifexui/frontend/**
+      - .github/workflows/ui.yml
   workflow_dispatch:
 
 jobs:

@@ -71,6 +71,10 @@ type VM struct {
 	// DevMAC is the MAC for the dev/hostfwd NIC (DEV_NETWORKING mode).
 	// Set before cloud-init ISO generation so netplan can suppress its default route.
 	DevMAC string `json:"dev_mac,omitempty"`
+
+	// Placement group tracking (set during RunInstances when a placement group is specified)
+	PlacementGroupName string `json:"placement_group_name,omitempty"`
+	PlacementGroupNode string `json:"placement_group_node,omitempty"`
 }
 
 // ResetNodeLocalState zeroes out fields that are specific to the daemon node

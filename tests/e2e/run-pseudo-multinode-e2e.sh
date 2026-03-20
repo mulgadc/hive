@@ -476,6 +476,291 @@ verify_nats_cluster 3 || {
     echo "WARNING: NATS cluster verification failed after operations"
 }
 
+# Phase 5b: Multi-Node Batch Distribution Tests
+# Tests batch launches with --count N (placement groups phase 1 routing)
+echo ""
+echo "Phase 5b: Multi-Node Batch Distribution Tests"
+echo "========================================"
+
+# Clean up instances from Phase 5 before batch tests
+echo "Cleaning up Phase 5 instances..."
+if ! terminate_and_wait "${INSTANCE_IDS[@]}"; then
+    echo "WARNING: Some Phase 5 instances failed to terminate cleanly"
+fi
+unset INSTANCE_IDS
+
+# Wait for clean state
+sleep 2
+
+# Test 5b-1: Batch launch spreads across nodes
+echo ""
+echo "Test 5b-1: Batch Launch Spread (3 instances on 3 nodes)"
+echo "----------------------------------------"
+echo "Launching 3 instances in a single API call..."
+
+RUN_OUTPUT=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name multinode-test-key \
+    --count 3)
+
+BATCH_COUNT=$(echo "$RUN_OUTPUT" | jq '.Instances | length')
+if [ "$BATCH_COUNT" -ne 3 ]; then
+    echo "FAIL: Expected 3 instances, got $BATCH_COUNT"
+    echo "Output: $RUN_OUTPUT"
+    exit 1
+fi
+
+# Verify single reservation in response
+RESERVATION_ID=$(echo "$RUN_OUTPUT" | jq -r '.ReservationId // empty')
+if [ -z "$RESERVATION_ID" ]; then
+    echo "FAIL: No ReservationId in response"
+    exit 1
+fi
+echo "  ReservationId: $RESERVATION_ID"
+echo "  Instances: $BATCH_COUNT"
+
+BATCH_IDS=($(echo "$RUN_OUTPUT" | jq -r '.Instances[].InstanceId'))
+echo "  Launched: ${BATCH_IDS[*]}"
+
+# Wait for all to reach running
+for id in "${BATCH_IDS[@]}"; do
+    wait_for_instance_state "$id" "running" 60 || {
+        echo "ERROR: Instance $id failed to reach running state"
+        exit 1
+    }
+done
+
+# Verify distribution: count QEMU processes per node IP
+echo "  Checking distribution..."
+NODES_USED=0
+for i in 1 2 3; do
+    NODE_IP="${SIMULATED_NETWORK}.$i"
+    NODE_COUNT=0
+    for id in "${BATCH_IDS[@]}"; do
+        if ps auxw | grep "$id" | grep qemu-system | grep -v grep | grep -q "hostfwd=tcp:${NODE_IP}:"; then
+            NODE_COUNT=$((NODE_COUNT + 1))
+        fi
+    done
+    echo "    Node$i ($NODE_IP): $NODE_COUNT instances"
+    if [ "$NODE_COUNT" -gt 0 ]; then
+        NODES_USED=$((NODES_USED + 1))
+    fi
+done
+
+if [ "$NODES_USED" -lt 3 ]; then
+    echo "FAIL: Expected instances on 3 nodes, only used $NODES_USED"
+    exit 1
+fi
+echo "  PASS: Instances distributed across $NODES_USED nodes"
+
+# Verify DescribeInstances from each node sees all batch-launched instances
+echo "  Verifying DescribeInstances aggregation from all gateways..."
+for i in 1 2 3; do
+    NODE_GW_IP="${SIMULATED_NETWORK}.$i"
+    DESCRIBE=$(aws --endpoint-url "https://${NODE_GW_IP}:${AWSGW_PORT}" \
+        ec2 describe-instances \
+        --query 'Reservations[*].Instances[?State.Name!=`terminated`].InstanceId' \
+        --output text 2>/dev/null) || {
+        echo "  WARNING: Could not query gateway on node$i"
+        continue
+    }
+
+    MISSING=0
+    for id in "${BATCH_IDS[@]}"; do
+        if ! echo "$DESCRIBE" | grep -q "$id"; then
+            echo "    Node$i missing instance $id"
+            MISSING=$((MISSING + 1))
+        fi
+    done
+
+    if [ "$MISSING" -gt 0 ]; then
+        echo "FAIL: Node$i gateway missing $MISSING instances"
+        exit 1
+    fi
+    echo "    Node$i gateway: all ${#BATCH_IDS[@]} instances visible"
+done
+echo "  PASS: All gateways see all batch-launched instances"
+
+# Cleanup
+echo "  Cleaning up..."
+if ! terminate_and_wait "${BATCH_IDS[@]}"; then
+    echo "WARNING: Some batch instances failed to terminate"
+fi
+sleep 2
+
+# Test 5b-2: Batch launch with overflow packing (5 on 3 nodes)
+echo ""
+echo "Test 5b-2: Batch Launch Overflow (5 instances on 3 nodes)"
+echo "----------------------------------------"
+echo "Launching 5 instances in a single API call..."
+
+RUN_OUTPUT=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name multinode-test-key \
+    --count 5)
+
+BATCH_COUNT=$(echo "$RUN_OUTPUT" | jq '.Instances | length')
+if [ "$BATCH_COUNT" -ne 5 ]; then
+    echo "FAIL: Expected 5 instances, got $BATCH_COUNT"
+    exit 1
+fi
+
+BATCH_IDS=($(echo "$RUN_OUTPUT" | jq -r '.Instances[].InstanceId'))
+echo "  Launched: ${BATCH_IDS[*]}"
+
+for id in "${BATCH_IDS[@]}"; do
+    wait_for_instance_state "$id" "running" 60 || {
+        echo "ERROR: Instance $id failed to reach running state"
+        exit 1
+    }
+done
+
+# All 3 nodes should have at least 1 instance (spread), some get 2 (pack)
+echo "  Checking distribution..."
+ALL_NODES_USED=true
+for i in 1 2 3; do
+    NODE_IP="${SIMULATED_NETWORK}.$i"
+    NODE_COUNT=0
+    for id in "${BATCH_IDS[@]}"; do
+        if ps auxw | grep "$id" | grep qemu-system | grep -v grep | grep -q "hostfwd=tcp:${NODE_IP}:"; then
+            NODE_COUNT=$((NODE_COUNT + 1))
+        fi
+    done
+    echo "    Node$i ($NODE_IP): $NODE_COUNT instances"
+    if [ "$NODE_COUNT" -eq 0 ]; then
+        ALL_NODES_USED=false
+    fi
+done
+
+if [ "$ALL_NODES_USED" = false ]; then
+    echo "FAIL: Not all nodes received instances"
+    exit 1
+fi
+echo "  PASS: All nodes received at least 1 instance, 5 total distributed"
+
+# Cleanup
+echo "  Cleaning up..."
+if ! terminate_and_wait "${BATCH_IDS[@]}"; then
+    echo "WARNING: Some batch instances failed to terminate"
+fi
+sleep 2
+
+# Test 5b-3: Insufficient capacity error
+echo ""
+echo "Test 5b-3: Insufficient Capacity Error"
+echo "----------------------------------------"
+echo "Requesting more instances than cluster can provide..."
+
+# Request an absurdly high count that definitely exceeds capacity
+if RUN_OUTPUT=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name multinode-test-key \
+    --count 100 2>&1); then
+    echo "FAIL: Expected error but got success"
+    echo "Output: $RUN_OUTPUT"
+    exit 1
+fi
+
+if echo "$RUN_OUTPUT" | grep -q "InsufficientInstanceCapacity"; then
+    echo "  PASS: Got InsufficientInstanceCapacity as expected"
+else
+    echo "FAIL: Wrong error: $RUN_OUTPUT"
+    exit 1
+fi
+
+# Verify no orphaned instances were left behind
+ORPHAN_CHECK=$($AWS_EC2 describe-instances \
+    --query 'Reservations[*].Instances[?State.Name!=`terminated`].InstanceId' --output text)
+if [ -n "$ORPHAN_CHECK" ] && [ "$ORPHAN_CHECK" != "None" ]; then
+    echo "  WARNING: Found non-terminated instances after capacity error: $ORPHAN_CHECK"
+else
+    echo "  PASS: No orphaned instances after capacity error"
+fi
+
+# Test 5b-4: MinCount/MaxCount capping
+echo ""
+echo "Test 5b-4: MinCount/MaxCount Capping"
+echo "----------------------------------------"
+echo "Launching with --count 2..."
+
+RUN_OUTPUT=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name multinode-test-key \
+    --count 2)
+
+BATCH_COUNT=$(echo "$RUN_OUTPUT" | jq '.Instances | length')
+if [ "$BATCH_COUNT" -ne 2 ]; then
+    echo "FAIL: Expected exactly 2 instances, got $BATCH_COUNT"
+    exit 1
+fi
+echo "  PASS: Launched exactly 2 instances (capped to MaxCount)"
+
+# Cleanup
+BATCH_IDS=($(echo "$RUN_OUTPUT" | jq -r '.Instances[].InstanceId'))
+for id in "${BATCH_IDS[@]}"; do
+    wait_for_instance_state "$id" "running" 60 || true
+done
+if ! terminate_and_wait "${BATCH_IDS[@]}"; then
+    echo "WARNING: Some batch instances failed to terminate"
+fi
+sleep 2
+
+# Test 5b-5: MinCount failure threshold
+echo ""
+echo "Test 5b-5: MinCount Failure Threshold"
+echo "----------------------------------------"
+echo "Requesting --count 100 (exceeds cluster capacity)..."
+
+if RUN_OUTPUT=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name multinode-test-key \
+    --count 100 2>&1); then
+    echo "FAIL: Expected InsufficientInstanceCapacity"
+    exit 1
+fi
+
+if echo "$RUN_OUTPUT" | grep -q "InsufficientInstanceCapacity"; then
+    echo "  PASS: Got InsufficientInstanceCapacity for MinCount > capacity"
+else
+    echo "FAIL: Wrong error: $RUN_OUTPUT"
+    exit 1
+fi
+
+echo ""
+echo "Phase 5b: All batch distribution tests passed"
+
+# Re-launch 3 instances for Phase 6 shutdown/restart tests
+echo ""
+echo "Launching 3 instances for Phase 6 shutdown/restart tests..."
+INSTANCE_IDS=()
+for i in 1 2 3; do
+    RUN_OUTPUT=$($AWS_EC2 run-instances \
+        --image-id "$AMI_ID" \
+        --instance-type "$INSTANCE_TYPE" \
+        --key-name multinode-test-key)
+    INSTANCE_ID=$(echo "$RUN_OUTPUT" | jq -r '.Instances[0].InstanceId')
+    if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" == "null" ]; then
+        echo "  ERROR: Failed to launch instance $i for Phase 6 setup"
+        exit 1
+    fi
+    echo "  Launched: $INSTANCE_ID"
+    INSTANCE_IDS+=("$INSTANCE_ID")
+    sleep 1
+done
+for id in "${INSTANCE_IDS[@]}"; do
+    wait_for_instance_state "$id" "running" 30 || {
+        echo "ERROR: Instance $id failed to start for Phase 6 setup"
+        exit 1
+    }
+done
+echo "  Phase 6 setup: ${#INSTANCE_IDS[@]} instances running"
+echo "========================================"
+
 # Phase 6: Cluster Shutdown + Restart
 echo ""
 echo "Phase 6: Cluster Shutdown + Restart"

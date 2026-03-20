@@ -1394,7 +1394,7 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 		defer nc.Close()
 
 		handler := func(msg *nats.Msg) {}
-		rm.initSubscriptions(nc, handler)
+		rm.initSubscriptions(nc, handler, "test-node")
 
 		// Count how many types actually fit on this machine
 		fittableTypes := 0
@@ -1404,8 +1404,9 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 			}
 		}
 
-		assert.Equal(t, fittableTypes, len(rm.instanceSubs),
-			"should subscribe to all instance types that fit")
+		// Each fittable type gets 2 subscriptions: queue group + node-specific
+		assert.Equal(t, fittableTypes*2, len(rm.instanceSubs),
+			"should subscribe to all instance types that fit (queue + node-specific)")
 		assert.Greater(t, len(rm.instanceSubs), 0,
 			"should subscribe to at least some instance types")
 
@@ -1424,7 +1425,7 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 		defer nc.Close()
 
 		handler := func(msg *nats.Msg) {}
-		rm.initSubscriptions(nc, handler)
+		rm.initSubscriptions(nc, handler, "test-node")
 
 		initialCount := len(rm.instanceSubs)
 		require.Greater(t, initialCount, 0)
@@ -1449,7 +1450,7 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 		defer nc.Close()
 
 		handler := func(msg *nats.Msg) {}
-		rm.initSubscriptions(nc, handler)
+		rm.initSubscriptions(nc, handler, "test-node")
 
 		expectedCount := len(rm.instanceSubs)
 
@@ -1480,7 +1481,7 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 		defer nc.Close()
 
 		handler := func(msg *nats.Msg) {}
-		rm.initSubscriptions(nc, handler)
+		rm.initSubscriptions(nc, handler, "test-node")
 
 		// Leave only 2 vCPUs and 1 GB free — enough for nano/micro but not larger types
 		rm.mu.Lock()
@@ -1492,7 +1493,7 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 		// Count subscribed types — should be less than total but more than zero
 		assert.Greater(t, len(rm.instanceSubs), 0,
 			"should still be subscribed to small instance types")
-		assert.Less(t, len(rm.instanceSubs), len(rm.instanceTypes),
+		assert.Less(t, len(rm.instanceSubs), len(rm.instanceTypes)*2,
 			"should not be subscribed to large instance types")
 
 		// Verify nano (0.5 GB) and micro (1 GB) are subscribed
@@ -1509,7 +1510,7 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 		defer nc.Close()
 
 		handler := func(msg *nats.Msg) {}
-		rm.initSubscriptions(nc, handler)
+		rm.initSubscriptions(nc, handler, "test-node")
 
 		initialCount := len(rm.instanceSubs)
 		require.Greater(t, initialCount, 0)
@@ -1553,7 +1554,7 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 		defer nc.Close()
 
 		handler := func(msg *nats.Msg) {}
-		rm.initSubscriptions(nc, handler)
+		rm.initSubscriptions(nc, handler, "test-node")
 
 		// Fill the node completely
 		rm.mu.Lock()
