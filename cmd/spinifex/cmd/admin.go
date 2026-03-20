@@ -893,32 +893,6 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 	// Print success message
 	fmt.Println("\n🎉 Spinifex initialization complete!")
-	fmt.Println("\n📋 Next steps:")
-	step := 1
-	if externalMode != "" {
-		ovnFlags := "--management --external-bridge --external-iface=" + externalIface
-		if singleNIC {
-			ovnFlags += " --single-nic"
-		}
-		if useExternalDHCP {
-			ovnFlags += " --dhcp"
-		}
-		fmt.Printf("   %d. Setup OVN with external bridge:\n", step)
-		fmt.Printf("      ./scripts/setup-ovn.sh %s\n", ovnFlags)
-		step++
-	} else {
-		fmt.Printf("   %d. Setup OVN:\n", step)
-		fmt.Println("      ./scripts/setup-ovn.sh --management")
-		step++
-	}
-	fmt.Println()
-	fmt.Printf("   %d. Start services:\n", step)
-	fmt.Println("      ./scripts/start-dev.sh")
-	step++
-	fmt.Println()
-	fmt.Printf("   %d. Test with AWS CLI:\n", step)
-	fmt.Println("      export AWS_PROFILE=spinifex")
-	fmt.Println("      aws ec2 describe-instances")
 	fmt.Println()
 	fmt.Println("🔗 Configuration:")
 	fmt.Printf("   Config file: %s\n", spinifexTomlPath)
