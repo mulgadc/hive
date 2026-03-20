@@ -124,15 +124,18 @@ func startPredastoreServer(t *testing.T) *Config {
 		return sharedConfig
 	}
 
-	// Use t.TempDir() for automatic cleanup
-	testDir := t.TempDir()
+	// Create persistent test environment (not using t.TempDir() for shared server)
+	testDir, err := os.MkdirTemp("", "predastore-integration-*") //nolint:usetesting // shared server outlives individual test
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
 	sharedTestDir = testDir
 
 	// Create bucket directories
 	testBucketDir := filepath.Join(testDir, "test-bucket")
 	publicBucketDir := filepath.Join(testDir, "public-bucket")
 
-	err := os.MkdirAll(testBucketDir, 0755)
+	err = os.MkdirAll(testBucketDir, 0755)
 	if err != nil {
 		t.Fatalf("Failed to create test-bucket dir: %v", err)
 	}
@@ -663,7 +666,7 @@ func TestIntegration_LargeFile(t *testing.T) {
 	downloadedData, err := io.ReadAll(result.Body)
 	result.Body.Close()
 	assert.NoError(t, err, "Reading large file should succeed")
-	assert.Equal(t, size, len(downloadedData), "Downloaded size should match")
+	assert.Len(t, downloadedData, size, "Downloaded size should match")
 	assert.Equal(t, largeData, downloadedData, "Downloaded content should match")
 
 	// Cleanup
