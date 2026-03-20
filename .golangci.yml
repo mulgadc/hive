@@ -125,6 +125,10 @@ linters:
           - errcheck
           - gosec
           - noctx
+      - path: '_test\.go'
+        text: 'unusedwrite'
+        linters:
+          - govet
       # spinifex-specific: gosec exclusions
       - path: "cmd/"
         linters: [gosec] # matches current -exclude-dir=cmd
