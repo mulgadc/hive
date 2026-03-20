@@ -302,11 +302,11 @@ func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64
 	remainingMem := rm.availableMem - rm.allocatedMem
 
 	for _, it := range rm.instanceTypes {
-		cap := resourceStatsForType(remainingVCPU, remainingMem, it)
-		if cap.VCPU == 0 || cap.MemoryGB == 0 {
+		typeCap := resourceStatsForType(remainingVCPU, remainingMem, it)
+		if typeCap.VCPU == 0 || typeCap.MemoryGB == 0 {
 			continue
 		}
-		caps = append(caps, cap)
+		caps = append(caps, typeCap)
 	}
 	return
 }

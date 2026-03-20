@@ -235,7 +235,7 @@ func ChownRecursive(path, username string) {
 
 	_ = fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil
+			return err
 		}
 		fullPath := filepath.Join(path, p)
 		if chownErr := os.Lchown(fullPath, uid, gid); chownErr != nil {

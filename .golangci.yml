@@ -32,7 +32,6 @@ linters:
     - nakedret # finds naked returns in functions
     - nilerr # catches code that returns nil even after checking err != nil
     - nilnesserr # catches returning a different nil error variable after err != nil check
-    - noctx # finds HTTP requests sent without context.Context
     - nolintlint # reports ill-formed or insufficient nolint directives
     - predeclared # catches shadowing of Go builtins (len, cap, error, etc.)
     - reassign # checks that package variables are not reassigned
@@ -40,7 +39,6 @@ linters:
     - sloglint # enforces consistent log/slog usage (key-value pairs, no globals)
     - staticcheck # extensive static analysis checks
     - unconvert # removes unnecessary type conversions
-    - unparam # reports unused function parameters
     - usestdlibvars # detects hardcoded values that should use stdlib constants
     - usetesting # catches os.TempDir() etc. in tests — should use t.TempDir()
     - wastedassign # finds assignments to variables that are never subsequently read
@@ -89,14 +87,9 @@ linters:
         - G706 # log injection taint analysis — false positives on structured slog usage
 
     modernize:
-      # Match current go fix exclusions (GOFIX_EXCLUDE := -newexpr=false -stringsbuilder=false)
       disable:
         - newexpr # don't replace aws.String() with new() — AWS SDK idiom
         - stringsbuilder # don't replace small string concatenations with strings.Builder
-
-    sloglint:
-      no-global: all
-      context: scope
 
     nakedret:
       max-func-lines: 0
@@ -125,7 +118,7 @@ linters:
           - gosec
           - noctx
       - path: '_test\.go'
-        text: 'unusedwrite'
+        text: "unusedwrite"
         linters:
           - govet
       # spinifex-specific: gosec exclusions

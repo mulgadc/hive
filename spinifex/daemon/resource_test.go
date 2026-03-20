@@ -201,11 +201,11 @@ func TestResourceStatsForType(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cap := resourceStatsForType(tc.remainVCPU, tc.remainMem, tc.it)
-			assert.Equal(t, tc.wantName, cap.Name)
-			assert.Equal(t, tc.wantVCPU, cap.VCPU)
-			assert.InDelta(t, tc.wantMemGB, cap.MemoryGB, 0.001)
-			assert.Equal(t, tc.wantAvail, cap.Available)
+			typeCap := resourceStatsForType(tc.remainVCPU, tc.remainMem, tc.it)
+			assert.Equal(t, tc.wantName, typeCap.Name)
+			assert.Equal(t, tc.wantVCPU, typeCap.VCPU)
+			assert.InDelta(t, tc.wantMemGB, typeCap.MemoryGB, 0.001)
+			assert.Equal(t, tc.wantAvail, typeCap.Available)
 		})
 	}
 }

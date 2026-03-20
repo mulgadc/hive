@@ -2,7 +2,6 @@ package handlers_iam
 
 import (
 	"fmt"
-	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -1556,7 +1555,7 @@ func TestSensitiveDataNotLogged_CreateAccessKey(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	slog.SetDefault(logger)
 	t.Cleanup(func() {
-		slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+		slog.SetDefault(slog.New(slog.DiscardHandler))
 	})
 
 	akOut, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
@@ -1584,7 +1583,7 @@ func TestSensitiveDataNotLogged_MasterKey(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	slog.SetDefault(logger)
 	t.Cleanup(func() {
-		slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+		slog.SetDefault(slog.New(slog.DiscardHandler))
 	})
 
 	svc := setupTestIAMService(t)

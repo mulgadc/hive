@@ -67,7 +67,8 @@ func KillProcess(pid int) error {
 		err = process.Signal(syscall.Signal(0))
 
 		if err != nil {
-			// Process terminated, break
+			// Signal(0) error means the process has terminated — this is the expected outcome.
+			err = nil
 			break
 		}
 
