@@ -29,3 +29,15 @@ func (s *NATSPlacementGroupService) DeletePlacementGroup(input *ec2.DeletePlacem
 func (s *NATSPlacementGroupService) DescribePlacementGroups(input *ec2.DescribePlacementGroupsInput, accountID string) (*ec2.DescribePlacementGroupsOutput, error) {
 	return utils.NATSRequest[ec2.DescribePlacementGroupsOutput](s.natsConn, "ec2.DescribePlacementGroups", input, 30*time.Second, accountID)
 }
+
+func (s *NATSPlacementGroupService) ReserveSpreadNodes(input *ReserveSpreadNodesInput, accountID string) (*ReserveSpreadNodesOutput, error) {
+	return utils.NATSRequest[ReserveSpreadNodesOutput](s.natsConn, "ec2.ReserveSpreadNodes", input, 30*time.Second, accountID)
+}
+
+func (s *NATSPlacementGroupService) FinalizeSpreadInstances(input *FinalizeSpreadInstancesInput, accountID string) (*FinalizeSpreadInstancesOutput, error) {
+	return utils.NATSRequest[FinalizeSpreadInstancesOutput](s.natsConn, "ec2.FinalizeSpreadInstances", input, 30*time.Second, accountID)
+}
+
+func (s *NATSPlacementGroupService) ReleaseSpreadNodes(input *ReleaseSpreadNodesInput, accountID string) (*ReleaseSpreadNodesOutput, error) {
+	return utils.NATSRequest[ReleaseSpreadNodesOutput](s.natsConn, "ec2.ReleaseSpreadNodes", input, 30*time.Second, accountID)
+}

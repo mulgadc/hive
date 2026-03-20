@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -299,6 +300,131 @@ func (s *PlacementGroupServiceImpl) UpdatePlacementGroupRecord(accountID, groupN
 		return err
 	}
 	return nil
+}
+
+const maxCASRetries = 5
+
+// ReserveSpreadNodes atomically reserves node slots for a spread placement group launch.
+// It reads the group record, filters eligible nodes (excluding already-occupied ones),
+// selects nodes, writes placeholder entries, and returns the selected nodes.
+// Uses CAS with retries following the IPAM pattern.
+func (s *PlacementGroupServiceImpl) ReserveSpreadNodes(input *ReserveSpreadNodesInput, accountID string) (*ReserveSpreadNodesOutput, error) {
+	if input.GroupName == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	for attempt := range maxCASRetries {
+		record, entry, err := s.GetPlacementGroupRecord(accountID, input.GroupName)
+		if err != nil {
+			return nil, err
+		}
+
+		if record.State != "available" {
+			return nil, errors.New(awserrors.ErrorInvalidPlacementGroupUnknown)
+		}
+		if record.Strategy != "spread" {
+			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+		}
+
+		// Build set of nodes already hosting instances in this group
+		occupiedNodes := make(map[string]bool)
+		for node := range record.NodeInstances {
+			occupiedNodes[node] = true
+		}
+
+		// Filter eligible nodes: must have capacity AND not already occupied
+		var available []string
+		for _, node := range input.EligibleNodes {
+			if !occupiedNodes[node] {
+				available = append(available, node)
+			}
+		}
+
+		if len(available) < input.MinCount {
+			return nil, errors.New(awserrors.ErrorInsufficientInstanceCapacity)
+		}
+
+		// Select nodes: up to MaxCount, at least MinCount
+		launchCount := min(input.MaxCount, len(available))
+		selected := available[:launchCount]
+
+		// Add placeholder entries (empty instance list = reserved but not yet launched)
+		for _, node := range selected {
+			record.NodeInstances[node] = []string{}
+		}
+
+		// CAS write — retry on conflict
+		if err := s.UpdatePlacementGroupRecord(accountID, input.GroupName, record, entry.Revision()); err != nil {
+			slog.Debug("ReserveSpreadNodes: CAS conflict, retrying", "attempt", attempt, "err", err)
+			continue
+		}
+
+		slog.Info("ReserveSpreadNodes completed", "groupName", input.GroupName, "nodes", selected, "accountID", accountID)
+		return &ReserveSpreadNodesOutput{ReservedNodes: selected}, nil
+	}
+
+	return nil, errors.New(awserrors.ErrorServerInternal)
+}
+
+// FinalizeSpreadInstances replaces placeholder entries with actual instance IDs.
+// Uses CAS with retries following the IPAM pattern.
+func (s *PlacementGroupServiceImpl) FinalizeSpreadInstances(input *FinalizeSpreadInstancesInput, accountID string) (*FinalizeSpreadInstancesOutput, error) {
+	if input.GroupName == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	for attempt := range maxCASRetries {
+		record, entry, err := s.GetPlacementGroupRecord(accountID, input.GroupName)
+		if err != nil {
+			return nil, err
+		}
+
+		maps.Copy(record.NodeInstances, input.NodeInstances)
+
+		if err := s.UpdatePlacementGroupRecord(accountID, input.GroupName, record, entry.Revision()); err != nil {
+			slog.Debug("FinalizeSpreadInstances: CAS conflict, retrying", "attempt", attempt, "err", err)
+			continue
+		}
+
+		slog.Info("FinalizeSpreadInstances completed", "groupName", input.GroupName, "accountID", accountID)
+		return &FinalizeSpreadInstancesOutput{}, nil
+	}
+
+	return nil, errors.New(awserrors.ErrorServerInternal)
+}
+
+// ReleaseSpreadNodes removes placeholder entries for nodes that failed to launch.
+// Uses CAS with retries following the IPAM pattern.
+func (s *PlacementGroupServiceImpl) ReleaseSpreadNodes(input *ReleaseSpreadNodesInput, accountID string) (*ReleaseSpreadNodesOutput, error) {
+	if input.GroupName == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	releaseSet := make(map[string]bool, len(input.Nodes))
+	for _, n := range input.Nodes {
+		releaseSet[n] = true
+	}
+
+	for attempt := range maxCASRetries {
+		record, entry, err := s.GetPlacementGroupRecord(accountID, input.GroupName)
+		if err != nil {
+			return nil, err
+		}
+
+		for node := range releaseSet {
+			delete(record.NodeInstances, node)
+		}
+
+		if err := s.UpdatePlacementGroupRecord(accountID, input.GroupName, record, entry.Revision()); err != nil {
+			slog.Debug("ReleaseSpreadNodes: CAS conflict, retrying", "attempt", attempt, "err", err)
+			continue
+		}
+
+		slog.Info("ReleaseSpreadNodes completed", "groupName", input.GroupName, "nodes", input.Nodes, "accountID", accountID)
+		return &ReleaseSpreadNodesOutput{}, nil
+	}
+
+	return nil, errors.New(awserrors.ErrorServerInternal)
 }
 
 // recordToEC2 converts an internal record to the AWS SDK PlacementGroup type.

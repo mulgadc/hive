@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
+	handlers_ec2_placementgroup "github.com/mulgadc/spinifex/spinifex/handlers/ec2/placementgroup"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
@@ -272,6 +273,119 @@ func aggregateResults(results []nodeLaunchResult, minCount int, natsConn *nats.C
 			rollbackInstances(allInstances, natsConn, accountID)
 		}
 		return nil, errors.New(awserrors.ErrorInsufficientInstanceCapacity)
+	}
+
+	return &ec2.Reservation{
+		ReservationId: reservationID,
+		Instances:     allInstances,
+	}, nil
+}
+
+// distributeInstancesSpread implements strict 1-per-node spread for placement groups.
+// It queries capacity, reserves unused nodes via CAS, launches 1 instance per node,
+// and finalizes or rolls back the placement group record.
+func distributeInstancesSpread(input *ec2.RunInstancesInput, natsConn *nats.Conn, accountID string, groupName string) (*ec2.Reservation, error) {
+	instanceType := aws.StringValue(input.InstanceType)
+	minCount := int(aws.Int64Value(input.MinCount))
+	maxCount := int(aws.Int64Value(input.MaxCount))
+
+	pgSvc := handlers_ec2_placementgroup.NewNATSPlacementGroupService(natsConn)
+
+	// Step 1: Query capacity from all nodes
+	nodes, err := queryNodeCapacity(natsConn, instanceType)
+	if err != nil {
+		return nil, err
+	}
+	if len(nodes) == 0 {
+		return nil, errors.New(awserrors.ErrorInsufficientInstanceCapacity)
+	}
+
+	// Build list of eligible node IDs
+	eligibleNodeIDs := make([]string, len(nodes))
+	for i, n := range nodes {
+		eligibleNodeIDs[i] = n.NodeID
+	}
+
+	// Step 2: Reserve nodes atomically (CAS-based, handles concurrent launches)
+	reserveOut, err := pgSvc.ReserveSpreadNodes(&handlers_ec2_placementgroup.ReserveSpreadNodesInput{
+		GroupName:     groupName,
+		EligibleNodes: eligibleNodeIDs,
+		MinCount:      minCount,
+		MaxCount:      maxCount,
+	}, accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	reservedNodes := reserveOut.ReservedNodes
+
+	// Step 3: Build allocations (1 instance per reserved node)
+	allocations := make([]nodeAllocation, len(reservedNodes))
+	for i, nodeID := range reservedNodes {
+		allocations[i] = nodeAllocation{NodeID: nodeID, Assigned: 1}
+	}
+
+	// Step 4: Launch instances on reserved nodes in parallel
+	results := launchOnNodes(allocations, input, natsConn, accountID)
+
+	// Step 5: Collect results
+	var allInstances []*ec2.Instance
+	var reservationID *string
+	nodeInstances := make(map[string][]string)
+	var failedNodes []string
+
+	for _, r := range results {
+		if r.Err != nil {
+			slog.Warn("distributeInstancesSpread: node launch failed", "node", r.NodeID, "err", r.Err)
+			failedNodes = append(failedNodes, r.NodeID)
+			continue
+		}
+		if r.Reservation != nil {
+			for _, inst := range r.Reservation.Instances {
+				allInstances = append(allInstances, inst)
+				if inst.InstanceId != nil {
+					nodeInstances[r.NodeID] = append(nodeInstances[r.NodeID], *inst.InstanceId)
+				}
+			}
+			if reservationID == nil {
+				reservationID = r.Reservation.ReservationId
+			}
+		}
+	}
+
+	totalLaunched := len(allInstances)
+
+	if totalLaunched < minCount {
+		// Rollback: terminate launched instances and release all reserved nodes
+		if totalLaunched > 0 {
+			rollbackInstances(allInstances, natsConn, accountID)
+		}
+		// Release all reserved nodes from the placement group
+		if _, err := pgSvc.ReleaseSpreadNodes(&handlers_ec2_placementgroup.ReleaseSpreadNodesInput{
+			GroupName: groupName,
+			Nodes:     reservedNodes,
+		}, accountID); err != nil {
+			slog.Error("distributeInstancesSpread: failed to release nodes after rollback", "err", err)
+		}
+		return nil, errors.New(awserrors.ErrorInsufficientInstanceCapacity)
+	}
+
+	// Step 6: Finalize — replace placeholders with actual instance IDs
+	if _, err := pgSvc.FinalizeSpreadInstances(&handlers_ec2_placementgroup.FinalizeSpreadInstancesInput{
+		GroupName:     groupName,
+		NodeInstances: nodeInstances,
+	}, accountID); err != nil {
+		slog.Error("distributeInstancesSpread: failed to finalize placement group record", "err", err)
+	}
+
+	// Release any failed nodes that didn't launch
+	if len(failedNodes) > 0 {
+		if _, err := pgSvc.ReleaseSpreadNodes(&handlers_ec2_placementgroup.ReleaseSpreadNodesInput{
+			GroupName: groupName,
+			Nodes:     failedNodes,
+		}, accountID); err != nil {
+			slog.Error("distributeInstancesSpread: failed to release failed nodes", "err", err)
+		}
 	}
 
 	return &ec2.Reservation{

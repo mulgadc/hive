@@ -227,10 +227,14 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	reservation.SetOwnerId(accountID)
 	reservation.Instances = allEC2Instances
 
-	// Store reservation reference and account ID in all VMs
+	// Store reservation reference, account ID, and placement group in all VMs
 	for _, instance := range instances {
 		instance.Reservation = &reservation
 		instance.AccountID = accountID
+		if runInstancesInput.Placement != nil && runInstancesInput.Placement.GroupName != nil && *runInstancesInput.Placement.GroupName != "" {
+			instance.PlacementGroupName = *runInstancesInput.Placement.GroupName
+			instance.PlacementGroupNode = d.node
+		}
 	}
 
 	// Respond to NATS immediately with reservation (instances are provisioning)

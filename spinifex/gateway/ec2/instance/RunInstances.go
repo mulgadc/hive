@@ -5,11 +5,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
-	"github.com/mulgadc/spinifex/spinifex/utils"
-
 	handlers_ec2_instance "github.com/mulgadc/spinifex/spinifex/handlers/ec2/instance"
+	handlers_ec2_placementgroup "github.com/mulgadc/spinifex/spinifex/handlers/ec2/placementgroup"
+	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
 
@@ -66,6 +67,27 @@ func RunInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn, accountID s
 		return reservation, err
 	}
 
+	// Placement group routing: when a placement group is specified, validate it
+	// and route based on its strategy (spread or cluster).
+	groupName := placementGroupName(input)
+	if groupName != "" {
+		strategy, err := lookupPlacementGroupStrategy(natsConn, accountID, groupName)
+		if err != nil {
+			return reservation, err
+		}
+
+		switch strategy {
+		case "spread":
+			reservationPtr, err := distributeInstancesSpread(input, natsConn, accountID, groupName)
+			if err != nil {
+				return reservation, err
+			}
+			return *reservationPtr, nil
+		case "cluster":
+			// Phase 3: cluster routing (not yet implemented, fall through to default)
+		}
+	}
+
 	// Multi-node routing: when count > 1 (and no placement group), use the
 	// distributeInstances path which fans out capacity queries and launches
 	// instances across multiple nodes for best-effort spread.
@@ -98,6 +120,33 @@ func RunInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn, accountID s
 
 	// Dereference pointer to return value
 	return *reservationPtr, nil
+}
+
+// placementGroupName extracts the placement group name from RunInstancesInput.
+func placementGroupName(input *ec2.RunInstancesInput) string {
+	if input.Placement != nil && input.Placement.GroupName != nil {
+		return aws.StringValue(input.Placement.GroupName)
+	}
+	return ""
+}
+
+// lookupPlacementGroupStrategy validates that a placement group exists and returns its strategy.
+func lookupPlacementGroupStrategy(natsConn *nats.Conn, accountID, groupName string) (string, error) {
+	pgSvc := handlers_ec2_placementgroup.NewNATSPlacementGroupService(natsConn)
+	out, err := pgSvc.DescribePlacementGroups(&ec2.DescribePlacementGroupsInput{
+		GroupNames: []*string{aws.String(groupName)},
+	}, accountID)
+	if err != nil {
+		return "", err
+	}
+	if len(out.PlacementGroups) == 0 {
+		return "", errors.New(awserrors.ErrorInvalidPlacementGroupUnknown)
+	}
+	pg := out.PlacementGroups[0]
+	if pg.State == nil || *pg.State != "available" {
+		return "", errors.New(awserrors.ErrorInvalidPlacementGroupUnknown)
+	}
+	return aws.StringValue(pg.Strategy), nil
 }
 
 // isKnownInstanceType checks whether any daemon recognizes the given instance type.
