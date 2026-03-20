@@ -268,7 +268,8 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	imageDir := fmt.Sprintf("%s/images", baseDir)
 
 	if !admin.FileExists(imageDir) {
-		fmt.Fprintf(os.Stderr, "Image directory does not exist. Base path specified correctly? %s", imageDir)
+		fmt.Fprintf(os.Stderr, "Error: image directory does not exist: %s\n\n", imageDir)
+		fmt.Fprintf(os.Stderr, "Run 'spx admin init' first to initialize the Spinifex platform.\n")
 		os.Exit(1)
 	}
 
