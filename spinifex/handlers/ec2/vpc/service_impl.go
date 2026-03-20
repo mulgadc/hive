@@ -837,6 +837,20 @@ func (s *VPCServiceImpl) GetDefaultSubnet(accountID string) (*SubnetRecord, erro
 	return nil, fmt.Errorf("no default subnet found")
 }
 
+// GetSubnet looks up a SubnetRecord by ID.
+func (s *VPCServiceImpl) GetSubnet(accountID, subnetId string) (*SubnetRecord, error) {
+	key := utils.AccountKey(accountID, subnetId)
+	entry, err := s.subnetKV.Get(key)
+	if err != nil {
+		return nil, fmt.Errorf("subnet %s not found: %w", subnetId, err)
+	}
+	var record SubnetRecord
+	if err := json.Unmarshal(entry.Value(), &record); err != nil {
+		return nil, fmt.Errorf("unmarshal subnet record: %w", err)
+	}
+	return &record, nil
+}
+
 // publishVPCEvent publishes a VPC lifecycle event to NATS for vpcd consumption.
 // This is fire-and-forget; errors are logged but do not fail the API response.
 func (s *VPCServiceImpl) publishVPCEvent(topic, vpcId, cidrBlock string, vni int64) {

@@ -68,6 +68,10 @@ type VM struct {
 	ENIId  string `json:"eni_id,omitempty"`
 	ENIMac string `json:"eni_mac,omitempty"`
 
+	// Public IP auto-assigned from external IPAM pool (released on termination)
+	PublicIP     string `json:"public_ip,omitempty"`
+	PublicIPPool string `json:"public_ip_pool,omitempty"`
+
 	// DevMAC is the MAC for the dev/hostfwd NIC (DEV_NETWORKING mode).
 	// Set before cloud-init ISO generation so netplan can suppress its default route.
 	DevMAC string `json:"dev_mac,omitempty"`

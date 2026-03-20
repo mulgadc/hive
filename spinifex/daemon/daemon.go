@@ -105,6 +105,7 @@ type Daemon struct {
 	eigwService     *handlers_ec2_eigw.EgressOnlyIGWServiceImpl
 	igwService      *handlers_ec2_igw.IGWServiceImpl
 	vpcService      *handlers_ec2_vpc.VPCServiceImpl
+	externalIPAM    *handlers_ec2_vpc.ExternalIPAM
 	ctx             context.Context
 	cancel          context.CancelFunc
 	shutdownWg      sync.WaitGroup
@@ -510,6 +511,34 @@ func (d *Daemon) Start() error {
 	})
 	if err != nil {
 		return fmt.Errorf("failed to initialize VPC service: %w", err)
+	}
+
+	// Initialize external IPAM if external networking is configured
+	if d.clusterConfig != nil && d.clusterConfig.Network.ExternalMode != "" {
+		js, jsErr := d.natsConn.JetStream()
+		if jsErr != nil {
+			slog.Warn("Failed to get JetStream for external IPAM", "err", jsErr)
+		} else {
+			var pools []handlers_ec2_vpc.ExternalPoolConfig
+			for _, p := range d.clusterConfig.Network.ExternalPools {
+				pools = append(pools, handlers_ec2_vpc.ExternalPoolConfig{
+					Name:       p.Name,
+					RangeStart: p.RangeStart,
+					RangeEnd:   p.RangeEnd,
+					Gateway:    p.Gateway,
+					GatewayIP:  p.GatewayIP,
+					PrefixLen:  p.PrefixLen,
+					Region:     p.Region,
+					AZ:         p.AZ,
+				})
+			}
+			d.externalIPAM, err = handlers_ec2_vpc.NewExternalIPAM(js, pools)
+			if err != nil {
+				slog.Warn("Failed to initialize external IPAM", "err", err)
+			} else {
+				slog.Info("External IPAM initialized", "mode", d.clusterConfig.Network.ExternalMode, "pools", len(pools))
+			}
+		}
 	}
 
 	d.accountService, err = initServiceWithRetry("account settings service", func() (*handlers_ec2_account.AccountSettingsServiceImpl, error) {
@@ -1562,6 +1591,24 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 			if instance.ENIId != "" && d.networkPlumber != nil {
 				if err := d.networkPlumber.CleanupTapDevice(instance.ENIId); err != nil {
 					slog.Warn("Failed to clean up tap device", "eni", instance.ENIId, "err", err)
+				}
+			}
+
+			// Release public IP before deleting ENI
+			if deleteVolume && instance.PublicIP != "" && instance.PublicIPPool != "" && d.externalIPAM != nil {
+				// Publish vpc.delete-nat to remove dnat_and_snat rule
+				portName := "port-" + instance.ENIId
+				vpcId := ""
+				if instance.Instance != nil && instance.Instance.VpcId != nil {
+					vpcId = *instance.Instance.VpcId
+				}
+				d.publishNATEvent("vpc.delete-nat", vpcId, instance.PublicIP, "", portName, "")
+
+				// Release IP back to pool
+				if err := d.externalIPAM.ReleaseIP(instance.PublicIPPool, instance.PublicIP); err != nil {
+					slog.Warn("Failed to release public IP on termination", "ip", instance.PublicIP, "pool", instance.PublicIPPool, "err", err)
+				} else {
+					slog.Info("Released public IP on termination", "ip", instance.PublicIP, "instanceId", instance.ID)
 				}
 			}
 

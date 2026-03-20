@@ -188,6 +188,10 @@ func SuggestPoolRange(wan *DetectedInterface) (start, end string) {
 // isVirtualInterface returns true for interfaces that shouldn't be
 // considered as physical NICs.
 func isVirtualInterface(name string) bool {
+	// Allow br-external (OVS WAN bridge used for external networking)
+	if name == "br-external" {
+		return false
+	}
 	prefixes := []string{
 		"docker", "br-", "veth", "ovs", "virbr",
 		"tun", "tap", "tailscale", "wg", "lo",
