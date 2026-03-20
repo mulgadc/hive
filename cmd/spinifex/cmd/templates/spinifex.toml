@@ -2,20 +2,18 @@
 version = "1.0"
 epoch = 1
 node = "{{.Node}}"
+{{- if .ExternalMode}}
 
-# External network for public subnets (disabled by default).
-# Set external_mode = "pool" and define pools to enable public IPs.
-# See docs/development/feature/vpc-public-subnet.md for details.
-#
-# [network]
-# external_mode = "pool"      # "pool" (public IPs), "nat" (outbound-only), or "" (disabled)
-#
-# [[network.external_pools]]
-# name        = "wan"
-# range_start = "192.168.1.150"
-# range_end   = "192.168.1.250"
-# gateway     = "192.168.1.1"
-# prefix_len  = 24
+[network]
+external_mode = "{{.ExternalMode}}"
+
+[[network.external_pools]]
+name        = "{{.PoolName}}"
+range_start = "{{.PoolStart}}"
+range_end   = "{{.PoolEnd}}"
+gateway     = "{{.PoolGateway}}"
+prefix_len  = {{if .PoolPrefixLen}}{{.PoolPrefixLen}}{{else}}24{{end}}
+{{- end}}
 
 [nodes.{{.Node}}]
 node = "{{.Node}}"
@@ -55,8 +53,12 @@ shardwal = false
 [nodes.{{.Node}}.vpcd]
 ovn_nb_addr = "{{.OVNNBAddr}}"
 ovn_sb_addr = "{{.OVNSBAddr}}"
-# external_interface = "eth1"  # WAN NIC for br-external (public subnets)
-# single_nic = false           # true = use macvlan (single-NIC hosts, SSH-safe)
+{{- if .ExternalIface}}
+external_interface = "{{.ExternalIface}}"
+{{- if .SingleNIC}}
+single_nic = true
+{{- end}}
+{{- end}}
 
 [nodes.{{.Node}}.predastore]
 host = "{{.BindIP}}:8443"

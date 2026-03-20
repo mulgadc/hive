@@ -215,6 +215,14 @@ func init() {
 	adminInitCmd.Flags().String("cluster-name", "spinifex", "NATS cluster name")
 	adminInitCmd.Flags().StringSlice("services", nil, "Services this node runs (default: all). Valid: nats,predastore,viperblock,daemon,awsgw,ui")
 
+	// External networking flags
+	adminInitCmd.Flags().String("external-mode", "", "External network mode: 'pool' (public IPs), 'nat' (outbound-only), or '' (disabled)")
+	adminInitCmd.Flags().String("external-iface", "", "WAN NIC for br-external (e.g., eth0, eth1)")
+	adminInitCmd.Flags().Bool("single-nic", false, "Use macvlan for external bridge (single-NIC hosts, SSH-safe)")
+	adminInitCmd.Flags().String("external-pool", "", "External IP pool range as start-end (e.g., 192.168.1.150-192.168.1.250)")
+	adminInitCmd.Flags().String("external-gateway", "", "WAN gateway IP (e.g., 192.168.1.1)")
+	adminInitCmd.Flags().Int("external-prefix-len", 24, "External pool subnet prefix length")
+
 	// Flags for admin join
 	adminJoinCmd.Flags().String("region", "ap-southeast-2", "Region for this node")
 	adminJoinCmd.Flags().String("az", "ap-southeast-2a", "Availability zone for this node")
@@ -528,6 +536,45 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	clusterName, _ := cmd.Flags().GetString("cluster-name")
 	services, _ := cmd.Flags().GetStringSlice("services")
 
+	// External networking flags
+	externalMode, _ := cmd.Flags().GetString("external-mode")
+	externalIface, _ := cmd.Flags().GetString("external-iface")
+	singleNIC, _ := cmd.Flags().GetBool("single-nic")
+	externalPool, _ := cmd.Flags().GetString("external-pool")
+	externalGateway, _ := cmd.Flags().GetString("external-gateway")
+	externalPrefixLen, _ := cmd.Flags().GetInt("external-prefix-len")
+
+	// Validate external networking flags
+	if externalMode != "" && externalMode != "pool" && externalMode != "nat" {
+		fmt.Fprintf(os.Stderr, "❌ Error: --external-mode must be 'pool', 'nat', or empty, got: %s\n", externalMode)
+		os.Exit(1)
+	}
+	var poolStart, poolEnd string
+	if externalMode == "pool" {
+		if externalPool == "" {
+			fmt.Fprintf(os.Stderr, "❌ Error: --external-pool is required when --external-mode=pool (e.g., 192.168.1.150-192.168.1.250)\n")
+			os.Exit(1)
+		}
+		if externalGateway == "" {
+			fmt.Fprintf(os.Stderr, "❌ Error: --external-gateway is required when --external-mode=pool (e.g., 192.168.1.1)\n")
+			os.Exit(1)
+		}
+		if externalIface == "" {
+			fmt.Fprintf(os.Stderr, "❌ Error: --external-iface is required when --external-mode=pool (e.g., eth0)\n")
+			os.Exit(1)
+		}
+		parts := strings.SplitN(externalPool, "-", 2)
+		if len(parts) != 2 || net.ParseIP(parts[0]) == nil || net.ParseIP(parts[1]) == nil {
+			fmt.Fprintf(os.Stderr, "❌ Error: --external-pool must be start-end IPs (e.g., 192.168.1.150-192.168.1.250), got: %s\n", externalPool)
+			os.Exit(1)
+		}
+		poolStart, poolEnd = parts[0], parts[1]
+		if net.ParseIP(externalGateway) == nil {
+			fmt.Fprintf(os.Stderr, "❌ Error: --external-gateway is not a valid IP: %s\n", externalGateway)
+			os.Exit(1)
+		}
+	}
+
 	// Validate IP address format
 	if net.ParseIP(bindIP) == nil {
 		fmt.Fprintf(os.Stderr, "❌ Error: Invalid IP address for --bind: %s\n", bindIP)
@@ -717,6 +764,15 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 		OVNNBAddr: "tcp:127.0.0.1:6641",
 		OVNSBAddr: "tcp:127.0.0.1:6642",
+
+		ExternalMode:  externalMode,
+		ExternalIface: externalIface,
+		SingleNIC:     singleNIC,
+		PoolName:      "wan",
+		PoolStart:     poolStart,
+		PoolEnd:       poolEnd,
+		PoolGateway:   externalGateway,
+		PoolPrefixLen: externalPrefixLen,
 	}
 
 	// Generate config files
@@ -760,10 +816,26 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	// Print success message
 	fmt.Println("\n🎉 Spinifex initialization complete!")
 	fmt.Println("\n📋 Next steps:")
-	fmt.Println("   1. Start services:")
-	fmt.Println("      ./scripts/start-dev.sh")
+	step := 1
+	if externalMode != "" {
+		ovnFlags := "--management --external-bridge --external-iface=" + externalIface
+		if singleNIC {
+			ovnFlags += " --single-nic"
+		}
+		fmt.Printf("   %d. Setup OVN with external bridge:\n", step)
+		fmt.Printf("      ./scripts/setup-ovn.sh %s\n", ovnFlags)
+		step++
+	} else {
+		fmt.Printf("   %d. Setup OVN:\n", step)
+		fmt.Println("      ./scripts/setup-ovn.sh --management")
+		step++
+	}
 	fmt.Println()
-	fmt.Println("   2. Test with AWS CLI:")
+	fmt.Printf("   %d. Start services:\n", step)
+	fmt.Println("      ./scripts/start-dev.sh")
+	step++
+	fmt.Println()
+	fmt.Printf("   %d. Test with AWS CLI:\n", step)
 	fmt.Println("      export AWS_PROFILE=spinifex")
 	fmt.Println("      aws ec2 describe-instances")
 	fmt.Println()
