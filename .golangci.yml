@@ -17,8 +17,8 @@ linters:
     - decorder # checks declaration order of types, consts, vars, and funcs
     - durationcheck # checks for two durations multiplied together
     - embeddedstructfieldcheck # checks embedded sync.Mutex/RWMutex in structs
-    - errchkjson # checks types passed to json encoding functions, flags omittable error checks
     - errcheck # checks for unchecked errors in type assertions and I/O
+    - errchkjson # checks types passed to json encoding functions, flags omittable error checks
     - errname # checks that sentinel errors are prefixed with Err, error types suffixed with Error
     - exptostd # detects golang.org/x/exp/ functions replaceable by stdlib
     - fatcontext # detects nested contexts in loops
@@ -60,6 +60,7 @@ linters:
       disable:
         - fieldalignment
         - shadow # too noisy to retrofit — all 50 findings are err re-declarations
+        - unusedwrite # false positives on struct field assignments before marshal/send
 
     staticcheck:
       checks:
@@ -106,22 +107,19 @@ linters:
       - std-error-handling
       - common-false-positives
     rules:
-      # tests: relax certain linters
       - path: '_test\.go'
         linters:
           - bodyclose
           - errcheck
           - errchkjson
           - gosec
-      - path: '_test\.go'
-        text: "unusedwrite"
-        linters:
-          - govet
+
       # spinifex-specific: gosec exclusions
       - path: "cmd/"
         linters:
           - errcheck # CLI glue code — viper/cobra/pterm errors not actionable
           - gosec # matches current -exclude-dir=cmd
+
       - text: "G204"
         linters: [gosec] # subprocess execution — legitimate in VM orchestration
       - text: "G304"

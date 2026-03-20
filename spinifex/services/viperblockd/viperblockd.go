@@ -270,6 +270,7 @@ func launchService(cfg *Config) (err error) {
 			errResp, marshalErr := json.Marshal(types.EBSUnMountResponse{Error: fmt.Sprintf("bad request: %v", err)})
 			if marshalErr != nil {
 				slog.Error("Failed to marshal ebs.unmount error response", "err", marshalErr)
+				_ = msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
 				return
 			}
 			if err := msg.Respond(errResp); err != nil {
@@ -338,6 +339,7 @@ func launchService(cfg *Config) (err error) {
 		response, err := json.Marshal(ebsResponse)
 		if err != nil {
 			slog.Error("Failed to marshal response", "err", err)
+			_ = msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
 			return
 		}
 
@@ -357,7 +359,12 @@ func launchService(cfg *Config) (err error) {
 		var syncRequest types.EBSSyncRequest
 		if err := json.Unmarshal(msg.Data, &syncRequest); err != nil {
 			slog.Error("Failed to unmarshal ebs.sync message", "err", err)
-			errResp, _ := json.Marshal(types.EBSSyncResponse{Error: fmt.Sprintf("bad request: %v", err)})
+			errResp, marshalErr := json.Marshal(types.EBSSyncResponse{Error: fmt.Sprintf("bad request: %v", err)})
+			if marshalErr != nil {
+				slog.Error("Failed to marshal ebs.sync error response", "err", marshalErr)
+				_ = msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
+				return
+			}
 			if err := msg.Respond(errResp); err != nil {
 				slog.Error("Failed to respond to ebs.sync request", "err", err)
 			}
@@ -431,6 +438,7 @@ func launchService(cfg *Config) (err error) {
 			errResp, marshalErr := json.Marshal(types.EBSMountResponse{Error: fmt.Sprintf("bad request: %v", err)})
 			if marshalErr != nil {
 				slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+				_ = msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
 				return
 			}
 			if err := msg.Respond(errResp); err != nil {
@@ -494,6 +502,7 @@ func launchService(cfg *Config) (err error) {
 			response, marshalErr := json.Marshal(ebsResponse)
 			if marshalErr != nil {
 				slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+				_ = msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
 				return
 			}
 			if err := msg.Respond(response); err != nil {
@@ -518,6 +527,7 @@ func launchService(cfg *Config) (err error) {
 			response, marshalErr := json.Marshal(ebsResponse)
 			if marshalErr != nil {
 				slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+				_ = msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
 				return
 			}
 			if err := msg.Respond(response); err != nil {
@@ -539,6 +549,7 @@ func launchService(cfg *Config) (err error) {
 			response, marshalErr := json.Marshal(ebsResponse)
 			if marshalErr != nil {
 				slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+				_ = msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
 				return
 			}
 			if err := msg.Respond(response); err != nil {
@@ -567,6 +578,7 @@ func launchService(cfg *Config) (err error) {
 				response, marshalErr := json.Marshal(ebsResponse)
 				if marshalErr != nil {
 					slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+					_ = msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
 					return
 				}
 				if err := msg.Respond(response); err != nil {
@@ -587,6 +599,7 @@ func launchService(cfg *Config) (err error) {
 				response, marshalErr := json.Marshal(ebsResponse)
 				if marshalErr != nil {
 					slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+					_ = msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
 					return
 				}
 				if err := msg.Respond(response); err != nil {
@@ -608,6 +621,7 @@ func launchService(cfg *Config) (err error) {
 				response, marshalErr := json.Marshal(ebsResponse)
 				if marshalErr != nil {
 					slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+					_ = msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
 					return
 				}
 				if err := msg.Respond(response); err != nil {
@@ -631,6 +645,7 @@ func launchService(cfg *Config) (err error) {
 			response, marshalErr := json.Marshal(ebsResponse)
 			if marshalErr != nil {
 				slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+				_ = msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
 				return
 			}
 			if err := msg.Respond(response); err != nil {
@@ -705,6 +720,7 @@ func launchService(cfg *Config) (err error) {
 			response, marshalErr := json.Marshal(ebsResponse)
 			if marshalErr != nil {
 				slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+				_ = msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
 				return
 			}
 			if err := msg.Respond(response); err != nil {
@@ -727,6 +743,7 @@ func launchService(cfg *Config) (err error) {
 				response, marshalErr := json.Marshal(ebsResponse)
 				if marshalErr != nil {
 					slog.Error("Failed to marshal ebs.mount error response", "err", marshalErr)
+					_ = msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
 					return
 				}
 				if err := msg.Respond(response); err != nil {
@@ -767,6 +784,7 @@ func launchService(cfg *Config) (err error) {
 		response, err := json.Marshal(ebsResponse)
 		if err != nil {
 			slog.Error("Failed to marshal response", "err", err)
+			_ = msg.Respond([]byte(`{"Error":"internal marshal failure"}`))
 			return
 		}
 

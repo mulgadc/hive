@@ -235,7 +235,8 @@ func ChownRecursive(path, username string) {
 
 	_ = fs.WalkDir(root.FS(), ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			slog.Debug("chown walk: skipping inaccessible entry", "path", p, "err", err)
+			return nil // best-effort: continue past inaccessible entries
 		}
 		fullPath := filepath.Join(path, p)
 		if chownErr := os.Lchown(fullPath, uid, gid); chownErr != nil {
