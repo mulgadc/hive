@@ -997,3 +997,42 @@ func TestEnsureDefaultVPC_PublishesEvents(t *testing.T) {
 		t.Fatal("timed out waiting for vpc.create-subnet event from EnsureDefaultVPC")
 	}
 }
+
+// --- MapPublicIpOnLaunch tests ---
+
+func TestSubnet_MapPublicIpOnLaunch(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	subnetID := createTestSubnet(t, svc, vpcID, "10.0.1.0/24")
+
+	// Verify MapPublicIpOnLaunch defaults to false
+	desc, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
+		SubnetIds: []*string{aws.String(subnetID)},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, desc.Subnets, 1)
+	assert.False(t, *desc.Subnets[0].MapPublicIpOnLaunch)
+}
+
+func TestSubnet_ModifyAttribute(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	subnetID := createTestSubnet(t, svc, vpcID, "10.0.1.0/24")
+
+	// Set MapPublicIpOnLaunch to true
+	_, err := svc.ModifySubnetAttribute(&ec2.ModifySubnetAttributeInput{
+		SubnetId: aws.String(subnetID),
+		MapPublicIpOnLaunch: &ec2.AttributeBooleanValue{
+			Value: aws.Bool(true),
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Verify via DescribeSubnets
+	desc, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
+		SubnetIds: []*string{aws.String(subnetID)},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, desc.Subnets, 1)
+	assert.True(t, *desc.Subnets[0].MapPublicIpOnLaunch)
+}
