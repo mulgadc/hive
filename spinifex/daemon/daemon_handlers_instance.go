@@ -639,6 +639,14 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 				instanceCopy.State.SetName("pending")
 			}
 
+			// Populate Placement if instance belongs to a placement group
+			if instance.PlacementGroupName != "" {
+				instanceCopy.Placement = &ec2.Placement{
+					GroupName:        aws.String(instance.PlacementGroupName),
+					AvailabilityZone: aws.String(d.config.AZ),
+				}
+			}
+
 			// Add instance to its reservation
 			reservationMap[resID].Instances = append(reservationMap[resID].Instances, &instanceCopy)
 		}
