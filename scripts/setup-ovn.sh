@@ -205,11 +205,32 @@ if [ "$EXTERNAL_BRIDGE" = true ]; then
         WAN_IP=$(ip -4 addr show dev "$EXTERNAL_IFACE" 2>/dev/null | awk '/inet /{print $2}' | head -1)
         if [ -n "$WAN_IP" ]; then
             WAN_GW=$(ip -4 route show default dev "$EXTERNAL_IFACE" 2>/dev/null | awk '{print $3}' | head -1)
+            # Capture DNS config from the original interface before migration
+            WAN_DNS=$(resolvectl dns "$EXTERNAL_IFACE" 2>/dev/null | awk '{for(i=2;i<=NF;i++) printf $i" "}' | xargs)
+
             sudo ip addr del "$WAN_IP" dev "$EXTERNAL_IFACE" 2>/dev/null || true
             sudo ip addr add "$WAN_IP" dev br-external
             if [ -n "$WAN_GW" ]; then
                 sudo ip route add default via "$WAN_GW" dev br-external 2>/dev/null || true
             fi
+
+            # Fix DNS: systemd-resolved associates DNS servers with interfaces.
+            # After IP migration, the resolver no longer knows which interface
+            # reaches the DNS server. Point it at br-external.
+            if [ -n "$WAN_DNS" ]; then
+                sudo resolvectl dns br-external $WAN_DNS 2>/dev/null || true
+                echo "  Migrated DNS ($WAN_DNS) to br-external"
+            else
+                # Fallback: set Google DNS on br-external
+                sudo resolvectl dns br-external 8.8.8.8 2>/dev/null || true
+                echo "  Set fallback DNS (8.8.8.8) on br-external"
+            fi
+            # Also set the search domain if it existed
+            WAN_DOMAIN=$(resolvectl domain "$EXTERNAL_IFACE" 2>/dev/null | awk '{for(i=2;i<=NF;i++) printf $i" "}' | xargs)
+            if [ -n "$WAN_DOMAIN" ]; then
+                sudo resolvectl domain br-external $WAN_DOMAIN 2>/dev/null || true
+            fi
+
             echo "  Migrated $WAN_IP from $EXTERNAL_IFACE to br-external"
         fi
 
