@@ -17,6 +17,7 @@
 #   --external-bridge  Create br-external for public subnet WAN uplink
 #   --external-iface   WAN NIC to add to br-external (default: eth1)
 #   --single-nic       Use macvlan instead of adding NIC directly (for single-NIC hosts)
+#   --dhcp             Obtain gateway IP via DHCP on the external bridge interface
 #   --ovn-remote       OVN SB DB address (default: tcp:127.0.0.1:6642)
 #   --encap-ip         Geneve tunnel endpoint IP (default: auto-detect)
 #   --chassis-id       OVN chassis identifier (default: hostname)
@@ -45,6 +46,7 @@ set -e
 MANAGEMENT=false
 EXTERNAL_BRIDGE=false
 SINGLE_NIC=false
+EXTERNAL_DHCP=false
 EXTERNAL_IFACE="eth1"
 OVN_REMOTE="tcp:127.0.0.1:6642"
 ENCAP_IP=""
@@ -56,6 +58,7 @@ for arg in "$@"; do
         --management)       MANAGEMENT=true ;;
         --external-bridge)  EXTERNAL_BRIDGE=true ;;
         --single-nic)       SINGLE_NIC=true ;;
+        --dhcp)             EXTERNAL_DHCP=true ;;
         --external-iface=*) EXTERNAL_IFACE="${arg#*=}" ;;
         --ovn-remote=*)     OVN_REMOTE="${arg#*=}" ;;
         --encap-ip=*)       ENCAP_IP="${arg#*=}" ;;
@@ -211,6 +214,54 @@ if [ "$EXTERNAL_BRIDGE" = true ]; then
         fi
 
         echo "  br-external: created with port $EXTERNAL_IFACE"
+    fi
+
+    # --- DHCP: obtain gateway IP for OVN SNAT ---
+    if [ "$EXTERNAL_DHCP" = true ]; then
+        echo ""
+        echo "Step 3c: Obtaining external gateway IP via DHCP..."
+
+        # Determine which interface to DHCP on
+        if [ "$SINGLE_NIC" = true ]; then
+            DHCP_IFACE="spx-ext-${EXTERNAL_IFACE}"
+        else
+            DHCP_IFACE="br-external"
+        fi
+
+        # Run DHCP client to get a lease
+        if command -v dhcpcd >/dev/null 2>&1; then
+            sudo dhcpcd --waitip=4 --timeout 15 "$DHCP_IFACE" 2>/dev/null || true
+        elif command -v dhclient >/dev/null 2>&1; then
+            sudo dhclient -1 -timeout 15 "$DHCP_IFACE" 2>/dev/null || true
+        else
+            echo "  WARNING: no DHCP client found (dhcpcd or dhclient)"
+            echo "  Install dhcpcd-base or isc-dhcp-client, or set gateway_ip manually"
+        fi
+
+        # Read the obtained IP
+        DHCP_IP=$(ip -4 addr show dev "$DHCP_IFACE" 2>/dev/null | awk '/inet /{print $2}' | head -1 | cut -d/ -f1)
+        if [ -n "$DHCP_IP" ]; then
+            echo "  DHCP obtained: $DHCP_IP on $DHCP_IFACE"
+
+            # Write the gateway IP to the spinifex config so vpcd can use it
+            CONFIG_DIR="${CONFIG_DIR:-$HOME/spinifex/config}"
+            CONFIG_FILE="$CONFIG_DIR/spinifex.toml"
+            if [ -f "$CONFIG_FILE" ]; then
+                # Update gateway_ip in the config
+                if grep -q "gateway_ip" "$CONFIG_FILE"; then
+                    sed -i "s/gateway_ip.*/gateway_ip = \"$DHCP_IP\"/" "$CONFIG_FILE"
+                else
+                    # Insert gateway_ip after the gateway line in the pool section
+                    sed -i "/^gateway *=.*/a gateway_ip  = \"$DHCP_IP\"" "$CONFIG_FILE"
+                fi
+                echo "  Updated $CONFIG_FILE with gateway_ip = $DHCP_IP"
+            else
+                echo "  WARNING: $CONFIG_FILE not found — set gateway_ip manually"
+            fi
+        else
+            echo "  WARNING: DHCP failed to obtain IP on $DHCP_IFACE"
+            echo "  VMs will not have external connectivity until gateway_ip is configured"
+        fi
     fi
 fi
 

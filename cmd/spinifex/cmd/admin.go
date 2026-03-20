@@ -216,12 +216,13 @@ func init() {
 	adminInitCmd.Flags().StringSlice("services", nil, "Services this node runs (default: all). Valid: nats,predastore,viperblock,daemon,awsgw,ui")
 
 	// External networking flags
-	adminInitCmd.Flags().String("external-mode", "", "External network mode: 'pool' (public IPs), 'nat' (outbound-only), or '' (disabled)")
-	adminInitCmd.Flags().String("external-iface", "", "WAN NIC for br-external (e.g., eth0, eth1)")
-	adminInitCmd.Flags().Bool("single-nic", false, "Use macvlan for external bridge (single-NIC hosts, SSH-safe)")
+	adminInitCmd.Flags().String("external-mode", "", "External network mode: 'pool' (public IPs), 'nat' (outbound-only, default), or '' (disabled)")
+	adminInitCmd.Flags().String("external-iface", "", "WAN NIC for br-external (auto-detected from default route)")
+	adminInitCmd.Flags().Bool("single-nic", false, "Use macvlan for external bridge (auto-detected if only one NIC)")
 	adminInitCmd.Flags().String("external-pool", "", "External IP pool range as start-end (e.g., 192.168.1.150-192.168.1.250)")
-	adminInitCmd.Flags().String("external-gateway", "", "WAN gateway IP (e.g., 192.168.1.1)")
-	adminInitCmd.Flags().Int("external-prefix-len", 24, "External pool subnet prefix length")
+	adminInitCmd.Flags().String("external-gateway", "", "WAN gateway IP (auto-detected from default route)")
+	adminInitCmd.Flags().Int("external-prefix-len", 24, "External pool subnet prefix length (auto-detected)")
+	adminInitCmd.Flags().Bool("no-external", false, "Disable external networking (overlay-only, no internet for VMs)")
 
 	// Flags for admin join
 	adminJoinCmd.Flags().String("region", "ap-southeast-2", "Region for this node")
@@ -543,24 +544,78 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	externalPool, _ := cmd.Flags().GetString("external-pool")
 	externalGateway, _ := cmd.Flags().GetString("external-gateway")
 	externalPrefixLen, _ := cmd.Flags().GetInt("external-prefix-len")
+	noExternal, _ := cmd.Flags().GetBool("no-external")
+
+	// Auto-detect network topology
+	var poolStart, poolEnd string
+	var detectedNet *admin.DetectedNetwork
+	if !noExternal {
+		detected, err := admin.DetectNetwork()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Network auto-detection failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "   Use --no-external to skip, or specify flags manually.\n")
+		} else {
+			detectedNet = detected
+
+			// Print detected topology
+			fmt.Println("\n🔍 Detected network topology:\n")
+			fmt.Printf("  %-14s %-18s %-20s %-16s %s\n", "Interface", "IP", "Subnet", "Gateway", "Role")
+			for _, iface := range detected.Interfaces {
+				gw := "—"
+				if iface.Gateway != "" {
+					gw = iface.Gateway
+				}
+				fmt.Printf("  %-14s %-18s %-20s %-16s %s\n", iface.Name, iface.IP, iface.Subnet, gw, strings.ToUpper(iface.Role))
+			}
+			if detected.SingleNIC {
+				fmt.Println("\n  Mode: single-NIC (will use macvlan for external bridge, SSH-safe)")
+			} else {
+				fmt.Printf("\n  Mode: multi-NIC (%d LAN + 1 WAN)\n", detected.LANCount)
+			}
+
+			// Apply auto-detected values when flags not explicitly set
+			if detected.WAN != nil {
+				if externalIface == "" {
+					externalIface = detected.WAN.Name
+				}
+				if externalGateway == "" {
+					externalGateway = detected.WAN.Gateway
+				}
+				if !cmd.Flags().Changed("external-prefix-len") {
+					externalPrefixLen = detected.WAN.PrefixLen
+				}
+				if !cmd.Flags().Changed("single-nic") {
+					singleNIC = detected.SingleNIC
+				}
+
+				// Default mode: "nat" with DHCP if no pool specified
+				if externalMode == "" && !cmd.Flags().Changed("external-mode") {
+					if externalPool != "" {
+						externalMode = "pool"
+					} else {
+						externalMode = "nat"
+					}
+				}
+			}
+		}
+	}
 
 	// Validate external networking flags
 	if externalMode != "" && externalMode != "pool" && externalMode != "nat" {
 		fmt.Fprintf(os.Stderr, "❌ Error: --external-mode must be 'pool', 'nat', or empty, got: %s\n", externalMode)
 		os.Exit(1)
 	}
-	var poolStart, poolEnd string
 	if externalMode == "pool" {
 		if externalPool == "" {
 			fmt.Fprintf(os.Stderr, "❌ Error: --external-pool is required when --external-mode=pool (e.g., 192.168.1.150-192.168.1.250)\n")
+			if detectedNet != nil && detectedNet.WAN != nil {
+				sugStart, sugEnd := admin.SuggestPoolRange(detectedNet.WAN)
+				fmt.Fprintf(os.Stderr, "   Suggested: --external-pool=%s-%s\n", sugStart, sugEnd)
+			}
 			os.Exit(1)
 		}
 		if externalGateway == "" {
-			fmt.Fprintf(os.Stderr, "❌ Error: --external-gateway is required when --external-mode=pool (e.g., 192.168.1.1)\n")
-			os.Exit(1)
-		}
-		if externalIface == "" {
-			fmt.Fprintf(os.Stderr, "❌ Error: --external-iface is required when --external-mode=pool (e.g., eth0)\n")
+			fmt.Fprintf(os.Stderr, "❌ Error: --external-gateway is required when --external-mode=pool\n")
 			os.Exit(1)
 		}
 		parts := strings.SplitN(externalPool, "-", 2)
@@ -569,11 +624,15 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 			os.Exit(1)
 		}
 		poolStart, poolEnd = parts[0], parts[1]
-		if net.ParseIP(externalGateway) == nil {
-			fmt.Fprintf(os.Stderr, "❌ Error: --external-gateway is not a valid IP: %s\n", externalGateway)
-			os.Exit(1)
-		}
 	}
+	if externalGateway != "" && net.ParseIP(externalGateway) == nil {
+		fmt.Fprintf(os.Stderr, "❌ Error: --external-gateway is not a valid IP: %s\n", externalGateway)
+		os.Exit(1)
+	}
+
+	// For nat mode, we need the gateway IP. The DHCP flag tells setup-ovn.sh
+	// to obtain one via DHCP on the macvlan/bridge interface.
+	useExternalDHCP := externalMode == "nat" && poolStart == ""
 
 	// Validate IP address format
 	if net.ParseIP(bindIP) == nil {
@@ -768,11 +827,30 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		ExternalMode:  externalMode,
 		ExternalIface: externalIface,
 		SingleNIC:     singleNIC,
+		ExternalDHCP:  useExternalDHCP,
 		PoolName:      "wan",
 		PoolStart:     poolStart,
 		PoolEnd:       poolEnd,
 		PoolGateway:   externalGateway,
 		PoolPrefixLen: externalPrefixLen,
+	}
+
+	// Print external networking summary
+	if externalMode != "" {
+		fmt.Printf("\n📡 External networking: %s\n", externalMode)
+		fmt.Printf("  WAN interface: %s\n", externalIface)
+		if singleNIC {
+			fmt.Println("  Bridge mode:   macvlan (single-NIC, SSH-safe)")
+		} else {
+			fmt.Println("  Bridge mode:   dedicated NIC")
+		}
+		if externalMode == "pool" {
+			fmt.Printf("  IP pool:       %s - %s\n", poolStart, poolEnd)
+			fmt.Printf("  ⚠️  Ensure %s-%s is excluded from your router's DHCP range.\n", poolStart, poolEnd)
+		} else if useExternalDHCP {
+			fmt.Println("  Gateway IP:    DHCP (obtained during OVN setup)")
+			fmt.Println("  VMs get:       outbound internet via SNAT")
+		}
 	}
 
 	// Generate config files
@@ -821,6 +899,9 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		ovnFlags := "--management --external-bridge --external-iface=" + externalIface
 		if singleNIC {
 			ovnFlags += " --single-nic"
+		}
+		if useExternalDHCP {
+			ovnFlags += " --dhcp"
 		}
 		fmt.Printf("   %d. Setup OVN with external bridge:\n", step)
 		fmt.Printf("      ./scripts/setup-ovn.sh %s\n", ovnFlags)
