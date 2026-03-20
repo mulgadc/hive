@@ -13,7 +13,7 @@ fi
 
 echo "Removing data"
 
-rm -rf ~/spinifex/predastore/
+rm -rf ~/spinifex/predastore/*
 
 rm -rf ~/spinifex/spinifex/*
 

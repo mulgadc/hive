@@ -72,6 +72,10 @@ func WritePidFileTo(dir string, name string, pid int) error {
 		return WritePidFile(name, pid)
 	}
 
+	if err := os.MkdirAll(dir, 0750); err != nil {
+		return fmt.Errorf("create pid directory %s: %w", dir, err)
+	}
+
 	pidFilename := filepath.Join(dir, fmt.Sprintf("%s.pid", name))
 
 	pidFile, err := os.Create(pidFilename)
