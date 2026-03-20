@@ -3,6 +3,20 @@ version = "1.0"
 epoch = 1
 node = "{{.Node}}"
 
+# External network for public subnets (disabled by default).
+# Set external_mode = "pool" and define pools to enable public IPs.
+# See docs/development/feature/vpc-public-subnet.md for details.
+#
+# [network]
+# external_mode = "pool"      # "pool" (public IPs), "nat" (outbound-only), or "" (disabled)
+#
+# [[network.external_pools]]
+# name        = "wan"
+# range_start = "192.168.1.150"
+# range_end   = "192.168.1.250"
+# gateway     = "192.168.1.1"
+# prefix_len  = 24
+
 [nodes.{{.Node}}]
 node = "{{.Node}}"
 host = "{{.BindIP}}"
@@ -41,6 +55,7 @@ shardwal = false
 [nodes.{{.Node}}.vpcd]
 ovn_nb_addr = "{{.OVNNBAddr}}"
 ovn_sb_addr = "{{.OVNSBAddr}}"
+# external_interface = "eth1"  # WAN NIC for br-external (public subnets)
 
 [nodes.{{.Node}}.predastore]
 host = "{{.BindIP}}:8443"
