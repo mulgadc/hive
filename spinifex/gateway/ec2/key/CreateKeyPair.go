@@ -19,11 +19,10 @@ func ValidateCreateKeyPairInput(input *ec2.CreateKeyPairInput) (err error) {
 		return errors.New(awserrors.ErrorMissingParameter)
 	}
 
-	return
+	return err
 }
 
 func CreateKeyPair(input *ec2.CreateKeyPairInput, natsConn *nats.Conn, accountID string) (output ec2.CreateKeyPairOutput, err error) {
-
 	// Validate input
 	err = ValidateCreateKeyPairInput(input)
 

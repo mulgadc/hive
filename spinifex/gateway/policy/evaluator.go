@@ -31,7 +31,7 @@ func EvaluateAccess(identity, action, resource string, policies []handlers_iam.P
 	hasAllow := false
 	for i := range policies {
 		for j := range policies[i].Statement {
-			stmt := &policies[i].Statement[j]
+			stmt := &policies[i].Statement[j] //nolint:gosec // G602 false positive: j is bounded by range
 
 			if !matchesAny(stmt.Action, action) {
 				continue

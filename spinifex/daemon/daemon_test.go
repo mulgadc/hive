@@ -31,12 +31,7 @@ import (
 // createTestDaemon creates a test daemon instance with minimal configuration
 func createTestDaemon(t *testing.T, natsURL string) *Daemon {
 	// Create a temporary directory for test data
-	tmpDir, err := os.MkdirTemp("", "spx-daemon-test-*")
-	require.NoError(t, err, "Failed to create temp directory")
-
-	t.Cleanup(func() {
-		os.RemoveAll(tmpDir)
-	})
+	tmpDir := t.TempDir()
 
 	// New cluster config
 	clusterCfg := &config.ClusterConfig{
@@ -345,9 +340,7 @@ func TestHandleEC2RunInstances_ResourceManagement(t *testing.T) {
 
 // TestDaemon_Initialization tests daemon initialization
 func TestDaemon_Initialization(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "spx-daemon-init-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	// New cluster config
 	clusterCfg := &config.ClusterConfig{
@@ -859,9 +852,7 @@ func TestDaemon_BootAllocation(t *testing.T) {
 	natsURL := sharedJSNATSURL
 
 	// Create daemon temp directory
-	tmpDir, err := os.MkdirTemp("", "spx-daemon-boot-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(tmpDir)
+	tmpDir := t.TempDir()
 
 	// Create test VMs with one running and one stopped instance
 	vms := map[string]*vm.VM{

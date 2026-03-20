@@ -70,7 +70,6 @@ func (svc *Service) Reload() (err error) {
 }
 
 func launchService(config *config.ClusterConfig) error {
-
 	nodeConfig := config.Nodes[config.Node]
 
 	// Connect to NATS for service communication. On concurrent startup the

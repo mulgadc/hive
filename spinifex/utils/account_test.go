@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"os"
 	"testing"
 	"time"
 
@@ -65,9 +64,7 @@ func TestGlobalAccountID(t *testing.T) {
 // startJSNATSServer starts an embedded JetStream-enabled NATS server for testing.
 func startJSNATSServer(t *testing.T) *server.Server {
 	t.Helper()
-	tmpDir, err := os.MkdirTemp("", "nats-js-test-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	tmpDir := t.TempDir()
 
 	ns, err := server.NewServer(&server.Options{
 		Host:      "127.0.0.1",

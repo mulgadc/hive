@@ -135,7 +135,6 @@ type Config struct {
 }
 
 func (cfg *Config) Execute() (*exec.Cmd, error) {
-
 	args := []string{}
 
 	if cfg.PIDFile != "" {
@@ -154,9 +153,7 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 		//slog.Warn("Setting -cpu max, `host` CPU type unavailable")
 		// Use qemu defaults
 		//args = append(args, "-cpu", "max")
-
 	} else {
-
 		if cfg.EnableKVM {
 			args = append(args, "-enable-kvm")
 		}
@@ -164,7 +161,6 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 		if cfg.CPUType != "" {
 			args = append(args, "-cpu", cfg.CPUType)
 		}
-
 	}
 
 	if cfg.NoGraphic {
@@ -198,7 +194,6 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 	}
 
 	for _, drive := range cfg.Drives {
-
 		var opts []string
 
 		//args = append(args, "-drive", fmt.Sprintf("file=%s", drive.File)
@@ -228,7 +223,6 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 		}
 
 		args = append(args, "-drive", strings.Join(opts, ","))
-
 	}
 
 	for _, device := range cfg.Devices {
@@ -267,7 +261,6 @@ func (cfg *Config) Execute() (*exec.Cmd, error) {
 			slog.Warn("UEFI firmware file not found for ARM virt machine. Ensure qemu-efi-aarch64 package is installed.", "path", uefiPath)
 			return nil, fmt.Errorf("UEFI firmware file not found for ARM virt machine")
 		}
-
 	} else if cfg.MachineType != "" {
 		args = append(args, "-M", cfg.MachineType)
 	}

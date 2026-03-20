@@ -314,6 +314,7 @@ var gzipContentTypes = map[string]bool{
 // gzipResponseWriter wraps http.ResponseWriter to compress eligible responses.
 type gzipResponseWriter struct {
 	http.ResponseWriter
+
 	gw          *gzip.Writer
 	wroteHeader bool
 	compress    bool
@@ -370,6 +371,7 @@ const tlsRecordTypeHandshake = 0x16
 // a plain-HTTP redirect to HTTPS is sent and the connection is closed.
 type tlsSplitListener struct {
 	net.Listener
+
 	port   int
 	tlsCfg *tls.Config
 }
@@ -445,6 +447,7 @@ func (ln *tlsSplitListener) redirectHTTP(conn net.Conn, firstByte byte) {
 // prefixConn wraps a net.Conn with a reader that replays prefixed bytes.
 type prefixConn struct {
 	net.Conn
+
 	r io.Reader
 }
 

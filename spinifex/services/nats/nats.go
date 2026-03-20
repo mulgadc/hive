@@ -72,20 +72,17 @@ func (svc *Service) Reload() (err error) {
 
 func launchService(config *Config) (err error) {
 	// Create proper server options
-	opts := &server.Options{}
+	var opts *server.Options
 
 	// If configFile set use, otherwise set defaults
 	if config.ConfigFile != "" {
-
 		opts, err = server.ProcessConfigFile(config.ConfigFile)
 
 		if err != nil {
 			slog.Error("Failed to process NATS config file", "err", err)
 			return err
 		}
-
 	} else {
-
 		opts = &server.Options{
 			ConfigFile: config.ConfigFile,
 			Port:       config.Port,
@@ -103,7 +100,6 @@ func launchService(config *Config) (err error) {
 		if opts.Host == "" {
 			opts.Host = "0.0.0.0"
 		}
-
 	}
 
 	slog.Debug("NATS server options", "opts", opts)
@@ -127,5 +123,4 @@ func launchService(config *Config) (err error) {
 	ns.WaitForShutdown()
 
 	return nil
-
 }

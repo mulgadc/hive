@@ -569,7 +569,7 @@ func createVolumeInStoreWithVBState(t *testing.T, store *objectstore.MemoryObjec
 	t.Helper()
 	state := viperblock.VBState{
 		VolumeName: volumeID,
-		VolumeSize: uint64(meta.SizeGiB) * 1024 * 1024 * 1024,
+		VolumeSize: meta.SizeGiB * 1024 * 1024 * 1024,
 		BlockSize:  blockSize,
 		SeqNum:     seqNum,
 		VolumeConfig: viperblock.VolumeConfig{

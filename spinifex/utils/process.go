@@ -41,7 +41,6 @@ func StopProcess(serviceName string) error {
 }
 
 func KillProcess(pid int) error {
-
 	process, err := os.FindProcess(pid)
 
 	if err != nil {
@@ -68,7 +67,7 @@ func KillProcess(pid int) error {
 		err = process.Signal(syscall.Signal(0))
 
 		if err != nil {
-			// Process terminated, break
+			// Signal(0) error means the process has terminated — this is the expected outcome.
 			break
 		}
 
@@ -86,6 +85,5 @@ func KillProcess(pid int) error {
 		}
 	}
 
-	return nil
-
+	return nil //nolint:nilerr // Signal(0) error means process exited — that's success
 }

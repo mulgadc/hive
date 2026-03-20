@@ -134,7 +134,10 @@ func (s *VPCServiceImpl) nextVNI() (int64, error) {
 		if errors.Is(err, nats.ErrKeyNotFound) {
 			// First VNI allocation — initialize counter
 			vni := int64(vniStart)
-			data, _ := json.Marshal(vni + 1)
+			data, marshalErr := json.Marshal(vni + 1)
+			if marshalErr != nil {
+				return 0, fmt.Errorf("failed to marshal VNI counter: %w", marshalErr)
+			}
 			if _, err := s.vniKV.Create(vniCounterKey, data); err != nil {
 				return 0, fmt.Errorf("failed to initialize VNI counter: %w", err)
 			}
@@ -149,7 +152,10 @@ func (s *VPCServiceImpl) nextVNI() (int64, error) {
 	}
 
 	next := current + 1
-	data, _ := json.Marshal(next)
+	data, marshalErr := json.Marshal(next)
+	if marshalErr != nil {
+		return 0, fmt.Errorf("failed to marshal VNI counter: %w", marshalErr)
+	}
 	if _, err := s.vniKV.Update(vniCounterKey, data, entry.Revision()); err != nil {
 		return 0, fmt.Errorf("failed to update VNI counter (CAS conflict): %w", err)
 	}

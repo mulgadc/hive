@@ -82,5 +82,4 @@ func launchService(config *config.ClusterConfig, configPath string) (err error) 
 	}
 
 	return nil
-
 }

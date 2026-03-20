@@ -12,7 +12,6 @@ import (
 // GenerateSocketFile generates a socket file path for the given name.
 // Deprecated: Use GenerateUniqueSocketFile for new code to ensure uniqueness.
 func GenerateSocketFile(name string) (string, error) {
-
 	if name == "" {
 		return "", errors.New("name is required")
 	}

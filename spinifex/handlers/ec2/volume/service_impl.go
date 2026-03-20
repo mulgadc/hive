@@ -620,7 +620,7 @@ func (s *VolumeServiceImpl) mergeVolumeConfig(configKey string, cfg *viperblock.
 
 	// Full VBState exists -- update VolumeConfig and reconcile VolumeSize
 	state.VolumeConfig = *cfg
-	configSizeBytes := uint64(cfg.VolumeMetadata.SizeGiB) * 1024 * 1024 * 1024
+	configSizeBytes := cfg.VolumeMetadata.SizeGiB * 1024 * 1024 * 1024
 	if configSizeBytes > 0 && configSizeBytes > state.VolumeSize {
 		state.VolumeSize = configSizeBytes
 	}

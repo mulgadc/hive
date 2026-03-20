@@ -302,13 +302,13 @@ func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64
 	remainingMem := rm.availableMem - rm.allocatedMem
 
 	for _, it := range rm.instanceTypes {
-		cap := resourceStatsForType(remainingVCPU, remainingMem, it)
-		if cap.VCPU == 0 || cap.MemoryGB == 0 {
+		typeCap := resourceStatsForType(remainingVCPU, remainingMem, it)
+		if typeCap.VCPU == 0 || typeCap.MemoryGB == 0 {
 			continue
 		}
-		caps = append(caps, cap)
+		caps = append(caps, typeCap)
 	}
-	return
+	return totalVCPU, totalMemGB, allocVCPU, allocMemGB, caps
 }
 
 // SetConfigPath sets the configuration file path for cluster management
@@ -1131,7 +1131,6 @@ func (d *Daemon) saveClusterConfig() error {
 
 // ClusterManager starts the HTTP cluster management server
 func (d *Daemon) ClusterManager() error {
-
 	// Get daemon host from config
 	daemonHost := d.config.Daemon.Host
 	if daemonHost == "" {
@@ -1145,7 +1144,7 @@ func (d *Daemon) ClusterManager() error {
 		configHash, err := d.computeConfigHash()
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(500)
+			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte(`{"error":"failed to compute config hash"}`))
 			return
 		}
@@ -1202,7 +1201,7 @@ func (d *Daemon) ClusterManager() error {
 		var req types.NodeJoinRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(400)
+			w.WriteHeader(http.StatusBadRequest)
 			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: "invalid request body",
@@ -1217,7 +1216,7 @@ func (d *Daemon) ClusterManager() error {
 		// Validate request
 		if req.Node == "" || req.Region == "" || req.AZ == "" {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(400)
+			w.WriteHeader(http.StatusBadRequest)
 			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: "node, region, and az are required",
@@ -1230,7 +1229,7 @@ func (d *Daemon) ClusterManager() error {
 		// Check if node already exists
 		if _, exists := d.clusterConfig.Nodes[req.Node]; exists {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(409)
+			w.WriteHeader(http.StatusConflict)
 			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: fmt.Sprintf("node %s already exists in cluster", req.Node),
@@ -1265,7 +1264,7 @@ func (d *Daemon) ClusterManager() error {
 		if err := d.saveClusterConfig(); err != nil {
 			slog.Error("Failed to save cluster config", "error", err)
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(500)
+			w.WriteHeader(http.StatusInternalServerError)
 			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
 				Success: false,
 				Message: "failed to save cluster config",
@@ -1405,7 +1404,6 @@ func (d *Daemon) LoadState() error {
 }
 
 func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId string) (*qmp.QMPResponse, error) {
-
 	// Confirm QMP client is initialized
 	if q == nil || q.Encoder == nil || q.Decoder == nil {
 		return nil, fmt.Errorf("QMP client is not initialized")
@@ -1419,7 +1417,7 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 	if err := q.Conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
 		return nil, fmt.Errorf("set read deadline: %w", err)
 	}
-	defer q.Conn.SetReadDeadline(time.Time{}) // clear deadline after command
+	defer func() { _ = q.Conn.SetReadDeadline(time.Time{}) }() // clear deadline after command
 
 	if err := q.Encoder.Encode(cmd); err != nil {
 		return nil, fmt.Errorf("encode error: %w", err)
@@ -1446,7 +1444,10 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 			return nil, fmt.Errorf("QMP error: %s: %s", errObj["class"], errObj["desc"])
 		}
 		if _, ok := msg["return"]; ok {
-			respBytes, _ := json.Marshal(msg)
+			respBytes, err := json.Marshal(msg)
+			if err != nil {
+				return nil, fmt.Errorf("marshal QMP response: %w", err)
+			}
 			var resp qmp.QMPResponse
 			if err := json.Unmarshal(respBytes, &resp); err != nil {
 				return nil, fmt.Errorf("unmarshal error: %w", err)
@@ -1457,15 +1458,12 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 }
 
 func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) error {
-
 	// Signal to shutdown each VM
 	var wg sync.WaitGroup
 
 	// Run asynchronously within a worker group
 	for _, instance := range instances {
-
 		wg.Go(func() {
-
 			// Send shutdown command - if it fails, VM may already be dead, continue with cleanup
 			_, err := d.SendQMPCommand(instance.QMPClient, qmp.QMPCommand{Execute: "system_powerdown"}, instance.ID)
 			if err != nil {
@@ -1495,7 +1493,6 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 			defer instance.EBSRequests.Mu.Unlock()
 
 			for _, ebsRequest := range instance.EBSRequests.Requests {
-
 				// Send the volume payload as JSON
 				ebsUnMountRequest, err := json.Marshal(ebsRequest)
 
@@ -1615,12 +1612,10 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 		}
 	}
 	return nil
-
 }
 
 func (d *Daemon) setupShutdown() {
 	d.shutdownWg.Go(func() {
-
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
@@ -1650,7 +1645,6 @@ func (d *Daemon) setupShutdown() {
 			if err := sub.Unsubscribe(); err != nil {
 				slog.Error("Error unsubscribing from NATS", "err", err)
 			}
-
 		}
 
 		// Write shutdown marker to cluster state KV
@@ -1682,7 +1676,6 @@ func (d *Daemon) setupShutdown() {
 }
 
 func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
-
 	// Create a new QMP client to communicate with the instance
 	instance.QMPClient, err = qmp.NewQMPClient(instance.Config.QMPSocket)
 
@@ -1734,11 +1727,9 @@ func (d *Daemon) CreateQMPClient(instance *vm.VM) (err error) {
 	}()
 
 	return nil
-
 }
 
 func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
-
 	// Abort if instance is no longer in a launchable state (e.g., terminated
 	// by a concurrent request while waiting in the launch queue).
 	d.Instances.Mu.Lock()
@@ -1749,7 +1740,7 @@ func (d *Daemon) LaunchInstance(instance *vm.VM) (err error) {
 	}
 
 	// First, confirm if the instance is already running
-	pid, err := utils.ReadPidFile(instance.ID)
+	pid, _ := utils.ReadPidFile(instance.ID)
 
 	if pid > 0 {
 		process, err := os.FindProcess(pid)
@@ -1974,7 +1965,6 @@ func (d *Daemon) startPendingWatchdog() {
 }
 
 func (d *Daemon) StartInstance(instance *vm.VM) error {
-
 	pidFile, err := utils.GeneratePidFile(instance.ID)
 
 	if err != nil {
@@ -2025,7 +2015,6 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	instance.EBSRequests.Mu.Lock()
 
 	for _, v := range instance.EBSRequests.Requests {
-
 		drive := vm.Drive{}
 
 		// Use the NBDURI from mount response - contains socket path or TCP address
@@ -2293,12 +2282,10 @@ func (d *Daemon) ebsTopic(action string) string {
 
 // MountVolumes mounts the volumes for an instance
 func (d *Daemon) MountVolumes(instance *vm.VM) error {
-
 	instance.EBSRequests.Mu.Lock()
 	defer instance.EBSRequests.Mu.Unlock()
 
 	for k, v := range instance.EBSRequests.Requests {
-
 		// Send the volume payload as JSON
 		ebsMountRequest, err := json.Marshal(v)
 
@@ -2327,21 +2314,17 @@ func (d *Daemon) MountVolumes(instance *vm.VM) error {
 		}
 
 		if ebsMountResponse.Error == "" {
-
 			slog.Debug("Mounted volume successfully", "response", ebsMountResponse.URI)
 
 			// Append the NBD URI to the request
 			instance.EBSRequests.Requests[k].NBDURI = ebsMountResponse.URI
-
 		} else {
 			slog.Error("Failed to mount volume", "error", ebsMountResponse.Error)
 			return fmt.Errorf("failed to mount volume: %s", ebsMountResponse.Error)
 		}
-
 	}
 
 	return nil
-
 }
 
 // rollbackEBSMount sends an ebs.unmount request to undo a previously successful ebs.mount.

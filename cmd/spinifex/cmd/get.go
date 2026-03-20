@@ -236,6 +236,7 @@ func runGetVMs(cmd *cobra.Command, args []string) {
 
 	type vmRow struct {
 		types.VMInfo
+
 		Node string
 		Host string
 	}

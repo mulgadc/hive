@@ -175,7 +175,7 @@ func TestErrorHandler_IAMService(t *testing.T) {
 		gw.ErrorHandler(w, r, errors.New(awserrors.ErrorIAMNoSuchEntity))
 	})
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	resp := doRequest(handler, req)
 	assert.Equal(t, 404, resp.StatusCode)
 
@@ -197,7 +197,7 @@ func TestErrorHandler_UnknownError(t *testing.T) {
 		gw.ErrorHandler(w, r, errors.New("SomeCompletelyBogusError"))
 	})
 
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	resp := doRequest(handler, req)
 	assert.Equal(t, 500, resp.StatusCode)
 
@@ -218,7 +218,7 @@ func TestErrorHandler_EC2Service(t *testing.T) {
 		gw.ErrorHandler(w, r, errors.New(awserrors.ErrorInvalidParameterValue))
 	})
 
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	resp := doRequest(handler, req)
 	assert.Equal(t, 400, resp.StatusCode)
 
@@ -240,8 +240,8 @@ func TestErrorHandler_UsesRequestIDHeader(t *testing.T) {
 		gw.ErrorHandler(w, r, errors.New(awserrors.ErrorInternalError))
 	})
 
-	req := httptest.NewRequest("POST", "/", nil)
-	req.Header.Set("x-amz-request-id", "custom-req-id-123")
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Header.Set("X-Amz-Request-Id", "custom-req-id-123")
 	resp := doRequest(handler, req)
 
 	body, _ := io.ReadAll(resp.Body)
@@ -257,7 +257,7 @@ func TestErrorHandler_ContentTypeXML(t *testing.T) {
 		gw.ErrorHandler(w, r, errors.New(awserrors.ErrorInternalError))
 	})
 
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	resp := doRequest(handler, req)
 	assert.Equal(t, "application/xml", resp.Header.Get("Content-Type"))
 }
@@ -493,7 +493,7 @@ func TestGetService(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest("POST", "/", nil)
+			req := httptest.NewRequest(http.MethodPost, "/", nil)
 			if tc.ctxVal != nil {
 				ctx := context.WithValue(req.Context(), ctxService, tc.ctxVal)
 				req = req.WithContext(ctx)
@@ -514,7 +514,7 @@ func TestGetService(t *testing.T) {
 
 func TestRequest_NoServiceContext(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true}
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	w := httptest.NewRecorder()
 
 	gw.Request(w, req)
@@ -527,7 +527,7 @@ func TestRequest_NoServiceContext(t *testing.T) {
 
 func TestRequest_UnsupportedService(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true}
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	ctx := context.WithValue(req.Context(), ctxService, "s3")
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
@@ -542,7 +542,7 @@ func TestRequest_UnsupportedService(t *testing.T) {
 
 func TestRequest_EC2MissingAction(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true}
-	req := httptest.NewRequest("POST", "/", strings.NewReader(""))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(""))
 	ctx := context.WithValue(req.Context(), ctxService, "ec2")
 	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
 	req = req.WithContext(ctx)
@@ -558,7 +558,7 @@ func TestRequest_EC2MissingAction(t *testing.T) {
 
 func TestRequest_IAMNilService(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true, IAMService: nil}
-	req := httptest.NewRequest("POST", "/", strings.NewReader("Action=CreateUser&UserName=test"))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("Action=CreateUser&UserName=test"))
 	ctx := context.WithValue(req.Context(), ctxService, "iam")
 	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
 	req = req.WithContext(ctx)
@@ -574,7 +574,7 @@ func TestRequest_IAMNilService(t *testing.T) {
 
 func TestRequest_AccountReturns200(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true}
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	ctx := context.WithValue(req.Context(), ctxService, "account")
 	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
@@ -587,7 +587,7 @@ func TestRequest_AccountReturns200(t *testing.T) {
 
 // setupEC2Request creates an http.Request with EC2 service context and optional account ID.
 func setupEC2Request(body string, accountID string) *http.Request {
-	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
 	ctx := context.WithValue(req.Context(), ctxService, "ec2")
 	if accountID != "" {
 		ctx = context.WithValue(ctx, ctxAccountID, accountID)
@@ -697,7 +697,7 @@ func TestEC2Request_DescribeAvailabilityZones(t *testing.T) {
 
 func TestCheckPolicy_NilIAMService(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true, IAMService: nil}
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 
 	err := gw.checkPolicy(req, "ec2", "DescribeInstances")
 	assert.NoError(t, err)
@@ -705,7 +705,7 @@ func TestCheckPolicy_NilIAMService(t *testing.T) {
 
 func TestCheckPolicy_NoIdentityInContext(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true, IAMService: &mockIAMService{}}
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 
 	err := gw.checkPolicy(req, "ec2", "DescribeInstances")
 	assert.NoError(t, err)
@@ -713,7 +713,7 @@ func TestCheckPolicy_NoIdentityInContext(t *testing.T) {
 
 func TestCheckPolicy_RootUserGlobalAccount(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true, IAMService: &mockIAMService{}}
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	ctx := context.WithValue(req.Context(), ctxIdentity, "root")
 	ctx = context.WithValue(ctx, ctxAccountID, "000000000000") // GlobalAccountID
 	req = req.WithContext(ctx)
@@ -736,7 +736,7 @@ func TestCheckPolicy_NonRootAllowPolicy(t *testing.T) {
 		},
 	}
 	gw := &GatewayConfig{DisableLogging: true, IAMService: mock}
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	ctx := context.WithValue(req.Context(), ctxIdentity, "alice")
 	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
 	req = req.WithContext(ctx)
@@ -759,7 +759,7 @@ func TestCheckPolicy_NonRootDenyPolicy(t *testing.T) {
 		},
 	}
 	gw := &GatewayConfig{DisableLogging: true, IAMService: mock}
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	ctx := context.WithValue(req.Context(), ctxIdentity, "alice")
 	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
 	req = req.WithContext(ctx)
@@ -776,7 +776,7 @@ func TestCheckPolicy_NonRootNoPolicies(t *testing.T) {
 		},
 	}
 	gw := &GatewayConfig{DisableLogging: true, IAMService: mock}
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	ctx := context.WithValue(req.Context(), ctxIdentity, "alice")
 	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
 	req = req.WithContext(ctx)
@@ -793,7 +793,7 @@ func TestCheckPolicy_GetUserPoliciesError(t *testing.T) {
 		},
 	}
 	gw := &GatewayConfig{DisableLogging: true, IAMService: mock}
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	ctx := context.WithValue(req.Context(), ctxIdentity, "alice")
 	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
 	req = req.WithContext(ctx)
@@ -805,7 +805,7 @@ func TestCheckPolicy_GetUserPoliciesError(t *testing.T) {
 
 func TestCheckPolicy_EmptyIdentity(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true, IAMService: &mockIAMService{}}
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	ctx := context.WithValue(req.Context(), ctxIdentity, "")
 	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
 	req = req.WithContext(ctx)
@@ -816,7 +816,7 @@ func TestCheckPolicy_EmptyIdentity(t *testing.T) {
 
 func TestCheckPolicy_MissingAccountID(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true, IAMService: &mockIAMService{}}
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	ctx := context.WithValue(req.Context(), ctxIdentity, "alice")
 	// No account ID
 	req = req.WithContext(ctx)
@@ -835,7 +835,7 @@ func TestCheckPolicy_NATSTransientRetriesAllAttempts(t *testing.T) {
 		},
 	}
 	gw := &GatewayConfig{DisableLogging: true, IAMService: mock}
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	ctx := context.WithValue(req.Context(), ctxIdentity, "alice")
 	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
 	req = req.WithContext(ctx)
@@ -865,7 +865,7 @@ func TestCheckPolicy_NATSTransientRetriesThenSucceeds(t *testing.T) {
 		},
 	}
 	gw := &GatewayConfig{DisableLogging: true, IAMService: mock}
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	ctx := context.WithValue(req.Context(), ctxIdentity, "alice")
 	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
 	req = req.WithContext(ctx)
@@ -882,7 +882,7 @@ func TestCheckPolicy_NonTransientErrorStillFails(t *testing.T) {
 		},
 	}
 	gw := &GatewayConfig{DisableLogging: true, IAMService: mock}
-	req := httptest.NewRequest("POST", "/", nil)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	ctx := context.WithValue(req.Context(), ctxIdentity, "alice")
 	ctx = context.WithValue(ctx, ctxAccountID, "123456789012")
 	req = req.WithContext(ctx)
@@ -904,11 +904,11 @@ func TestCorsMiddleware_GETRequest(t *testing.T) {
 	nextCalled := false
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		nextCalled = true
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 	})
 
 	handler := corsMiddleware(next)
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -926,7 +926,7 @@ func TestCorsMiddleware_OPTIONSRequest(t *testing.T) {
 	})
 
 	handler := corsMiddleware(next)
-	req := httptest.NewRequest("OPTIONS", "/", nil)
+	req := httptest.NewRequest(http.MethodOptions, "/", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -937,7 +937,7 @@ func TestCorsMiddleware_OPTIONSRequest(t *testing.T) {
 
 func TestCorsMiddleware_LocalIPOrigin(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 	})
 
 	handler := corsMiddleware(next)
@@ -948,7 +948,7 @@ func TestCorsMiddleware_LocalIPOrigin(t *testing.T) {
 		if origin == "https://localhost:3000" {
 			continue
 		}
-		req := httptest.NewRequest("GET", "/", nil)
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.Header.Set("Origin", origin)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -959,11 +959,11 @@ func TestCorsMiddleware_LocalIPOrigin(t *testing.T) {
 
 func TestCorsMiddleware_UnknownOrigin(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 	})
 
 	handler := corsMiddleware(next)
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Origin", "https://evil.example.com")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -979,7 +979,7 @@ func TestSlogRequestLogger_CallsNext(t *testing.T) {
 	})
 
 	handler := slogRequestLogger(next)
-	req := httptest.NewRequest("GET", "/test", nil)
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -993,7 +993,7 @@ func TestSlogRequestLogger_CapturesStatusCode(t *testing.T) {
 	})
 
 	handler := slogRequestLogger(next)
-	req := httptest.NewRequest("GET", "/missing", nil)
+	req := httptest.NewRequest(http.MethodGet, "/missing", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
