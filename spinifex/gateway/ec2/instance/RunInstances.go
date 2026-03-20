@@ -66,10 +66,22 @@ func RunInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn, accountID s
 		return reservation, err
 	}
 
-	// Create NATS-based instance service
+	// Multi-node routing: when count > 1 (and no placement group), use the
+	// distributeInstances path which fans out capacity queries and launches
+	// instances across multiple nodes for best-effort spread.
+	// Single-instance launches (MinCount=MaxCount=1) keep using the existing
+	// queue group topic for zero-overhead NATS load balancing.
+	if *input.MinCount > 1 || *input.MaxCount > 1 {
+		reservationPtr, err := distributeInstances(input, natsConn, accountID)
+		if err != nil {
+			return reservation, err
+		}
+		return *reservationPtr, nil
+	}
+
+	// Single-instance path: use existing queue group (NATS picks a node with capacity)
 	service := handlers_ec2_instance.NewNATSInstanceService(natsConn)
 
-	// Call the service directly (no need for JSON marshaling/unmarshaling in same process)
 	reservationPtr, err := service.RunInstances(input, accountID)
 	if err != nil {
 		if errors.Is(err, nats.ErrNoResponders) {
