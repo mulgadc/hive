@@ -44,6 +44,12 @@ func generateForGeneration(gen cpuGeneration, arch string) map[string]*ec2.Insta
 				Hypervisor:                    aws.String("kvm"),
 				SupportedVirtualizationTypes:  []*string{aws.String("hvm")},
 				SupportedRootDeviceTypes:      []*string{aws.String("ebs")},
+				PlacementGroupInfo: &ec2.PlacementGroupInfo{
+					SupportedStrategies: []*string{
+						aws.String("cluster"),
+						aws.String("spread"),
+					},
+				},
 			}
 		}
 	}
