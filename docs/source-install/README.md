@@ -1,6 +1,6 @@
 ---
 title: "Source Install"
-description: "Build Spinifex from source for development, custom builds, or contributing. Includes dependency setup, compilation, and OVN configuration."
+description: "Build Spinifex from source for development, custom builds, or contributing."
 category: "Getting Started"
 tags:
   - install
@@ -10,14 +10,8 @@ badge: source
 resources:
   - title: "Spinifex Repository"
     url: "https://github.com/mulgadc/spinifex"
-  - title: "Predastore (S3)"
-    url: "https://github.com/mulgadc/predastore"
-  - title: "Viperblock (EBS)"
-    url: "https://github.com/mulgadc/viperblock"
   - title: "Go Downloads"
     url: "https://go.dev/dl/"
-  - title: "AWS CLI Install"
-    url: "https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
 ---
 
 # Source Install
@@ -34,161 +28,97 @@ resources:
 
 ## Overview
 
-This guide covers building Spinifex from source code. Use this if you want to contribute to Spinifex, build custom versions, or inspect the codebase. For production deployments, the [binary installer](/docs/installing-spinifex) is recommended.
-
-**Supported Operating Systems:**
-- Ubuntu 22.04 / 24.04 / 25.10
-- Debian 12.13
+This guide builds Spinifex from source. For production deployments, the [binary installer](/docs/installing-spinifex) is recommended.
 
 **Requirements:**
+
+- Ubuntu 22.04+ / Debian 12+
 - Go 1.26.1+
 - GCC, make, pkg-config
-- QEMU/KVM
-- OVN/Open vSwitch
-- AWS CLI v2
+- QEMU/KVM, OVN/Open vSwitch, AWS CLI v2
 
 ## Instructions
 
-## Step 1. Install system dependencies
-
-### Quick Install
-
-Bootstrap all dependencies in one step:
+### Step 1. Install dependencies
 
 ```bash
-sudo make -C spinifex quickinstall
-```
-
-Ensure Go is in your PATH:
-
-```bash
-export PATH=$PATH:/usr/local/go/bin/
-```
-
-### Manual Install
-
-Alternatively, install packages individually:
-
-```bash
-sudo add-apt-repository universe
-sudo apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu-kvm libvirt-daemon-system libvirt-clients libvirt-dev make gcc unzip xz-utils file ovn-central ovn-host openvswitch-switch
-```
-
-Install Go 1.26.1+ from [https://go.dev/dl/](https://go.dev/dl/) and verify:
-
-```bash
-go version
-```
-
-Install AWS CLI v2:
-
-```bash
-curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-unzip awscliv2.zip
-sudo ./aws/install
-aws --version
-```
-
-## Step 2. Clone and build
-
-```bash
-mkdir -p ~/Development/mulga/
-cd ~/Development/mulga/
+mkdir -p ~/Development/mulga && cd ~/Development/mulga
 git clone https://github.com/mulgadc/spinifex.git
-cd spinifex
-./scripts/clone-deps.sh    # Clone viperblock + predastore
-./scripts/dev-setup.sh     # Setup complete dev environment
+sudo make -C spinifex quickinstall
+export PATH=$PATH:/usr/local/go/bin
 ```
 
-Confirm `./bin/spx` exists and is executable.
-
-## Step 3. Setup OVN
-
-For a single-node dev environment:
+### Step 2. Clone and build
 
 ```bash
-./scripts/setup-ovn.sh --management
+cd spinifex
+./scripts/clone-deps.sh
+./scripts/dev-setup.sh
 ```
 
-This creates the `br-int` integration bridge, starts `ovn-controller`, configures Geneve tunnel endpoints, and enables IP forwarding.
+Confirm `./bin/spx` exists.
 
-## Step 4. Initialize
-
-Create a region and availability zone:
+### Step 3. Initialize
 
 ```bash
 ./bin/spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
 ```
 
-## Step 5. Trust the CA certificate
+Save the admin credentials printed during init.
+
+### Step 4. Trust the CA certificate
 
 ```bash
 sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
 sudo update-ca-certificates
 ```
 
-## Step 6. Start services
+### Step 5. Setup OVN
+
+```bash
+./scripts/setup-ovn.sh --management --external-bridge --external-iface=enp0s3 --dhcp
+```
+
+Replace `enp0s3` with your WAN interface. Single-NIC hosts should add `--single-nic`.
+
+### Step 6. Start services
 
 ```bash
 ./scripts/start-dev.sh
 export AWS_PROFILE=spinifex
 ```
 
+### Step 7. Verify
+
+```bash
+aws ec2 describe-instance-types
+```
+
+If this returns a list of available instance types, your installation is working.
+
+**Congratulations! Spinifex is installed from source.**
+
+Continue to [Setting Up Your Cluster](/docs/setting-up-your-cluster) to import an AMI, create a VPC, and launch your first instance.
+
+---
+
 ## Troubleshooting
 
-## Go not found in PATH
-
-After installing Go, it may not be in your current shell session. Add it:
+### Go not found in PATH
 
 ```bash
-export PATH=$PATH:/usr/local/go/bin/
+export PATH=$PATH:/usr/local/go/bin
 ```
 
-Add this to your `~/.bashrc` or `~/.zshrc` for persistence. Verify with:
-
-```bash
-go version
-```
-
-## ./bin/spx missing after build
-
-The build did not complete successfully. Re-run the setup:
+### ./bin/spx missing after build
 
 ```bash
 ./scripts/dev-setup.sh
 ```
 
-Check the output for compilation errors. Common causes are missing Go version or missing system packages.
-
-## OVN services not starting
-
-Verify the setup script was run with `--management`:
-
-```bash
-./scripts/setup-ovn.sh --management
-```
-
-Check OVN controller status:
-
-```bash
-sudo systemctl is-active ovn-controller
-sudo ovn-sbctl show
-```
-
-## CA certificate not trusted
-
-AWS CLI will reject HTTPS connections to Spinifex services. Re-add the certificate:
+### CA certificate not trusted
 
 ```bash
 sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
 sudo update-ca-certificates
-```
-
-## clone-deps.sh fails
-
-Ensure you have access to the GitHub repositories. If using SSH and it fails, try HTTPS:
-
-```bash
-git config --global url."https://github.com/".insteadOf "git@github.com:"
-./scripts/clone-deps.sh
 ```
