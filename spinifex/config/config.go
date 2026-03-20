@@ -75,6 +75,7 @@ type VPCDConfig struct {
 	OVNNBAddr         string `mapstructure:"ovn_nb_addr"`        // OVN Northbound DB address (e.g., "tcp:127.0.0.1:6641")
 	OVNSBAddr         string `mapstructure:"ovn_sb_addr"`        // OVN Southbound DB address (e.g., "tcp:127.0.0.1:6642")
 	ExternalInterface string `mapstructure:"external_interface"` // WAN NIC name for br-external (per-node, e.g., "eth1", "enp0s3")
+	SingleNIC         bool   `mapstructure:"single_nic"`         // Use macvlan instead of adding NIC directly to br-external
 }
 
 type PredastoreConfig struct {

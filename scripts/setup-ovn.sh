@@ -16,6 +16,7 @@
 #   --management       Also start OVN central services (NB DB, SB DB, ovn-northd)
 #   --external-bridge  Create br-external for public subnet WAN uplink
 #   --external-iface   WAN NIC to add to br-external (default: eth1)
+#   --single-nic       Use macvlan instead of adding NIC directly (for single-NIC hosts)
 #   --ovn-remote       OVN SB DB address (default: tcp:127.0.0.1:6642)
 #   --encap-ip         Geneve tunnel endpoint IP (default: auto-detect)
 #   --chassis-id       OVN chassis identifier (default: hostname)
@@ -24,8 +25,11 @@
 #   # Single-node development (management + compute on same host):
 #   ./scripts/setup-ovn.sh --management
 #
-#   # With external bridge for public subnets:
+#   # With external bridge (dedicated WAN NIC):
 #   ./scripts/setup-ovn.sh --management --external-bridge --external-iface=eth1
+#
+#   # With external bridge (single NIC — uses macvlan, SSH-safe):
+#   ./scripts/setup-ovn.sh --management --external-bridge --external-iface=eth0 --single-nic
 #
 #   # Compute node joining an existing cluster:
 #   ./scripts/setup-ovn.sh --ovn-remote=tcp:10.0.0.1:6642 --encap-ip=10.0.0.2
@@ -40,6 +44,7 @@ set -e
 # Defaults
 MANAGEMENT=false
 EXTERNAL_BRIDGE=false
+SINGLE_NIC=false
 EXTERNAL_IFACE="eth1"
 OVN_REMOTE="tcp:127.0.0.1:6642"
 ENCAP_IP=""
@@ -50,12 +55,13 @@ for arg in "$@"; do
     case "$arg" in
         --management)       MANAGEMENT=true ;;
         --external-bridge)  EXTERNAL_BRIDGE=true ;;
+        --single-nic)       SINGLE_NIC=true ;;
         --external-iface=*) EXTERNAL_IFACE="${arg#*=}" ;;
         --ovn-remote=*)     OVN_REMOTE="${arg#*=}" ;;
         --encap-ip=*)       ENCAP_IP="${arg#*=}" ;;
         --chassis-id=*)     CHASSIS_ID="${arg#*=}" ;;
         --help|-h)
-            head -34 "$0" | tail -32
+            head -36 "$0" | tail -34
             exit 0
             ;;
         *)
@@ -85,6 +91,7 @@ echo "  Management node:  $MANAGEMENT"
 echo "  External bridge:  $EXTERNAL_BRIDGE"
 if [ "$EXTERNAL_BRIDGE" = true ]; then
 echo "  External iface:   $EXTERNAL_IFACE"
+echo "  Single NIC mode:  $SINGLE_NIC"
 fi
 echo "  OVN Remote (SB):  $OVN_REMOTE"
 echo "  Encap IP:         $ENCAP_IP"
@@ -161,26 +168,50 @@ if [ "$EXTERNAL_BRIDGE" = true ]; then
         exit 1
     fi
 
-    # Create br-external and add the WAN NIC
+    # Create br-external
     sudo ovs-vsctl --may-exist add-br br-external
-    sudo ovs-vsctl --may-exist add-port br-external "$EXTERNAL_IFACE"
     sudo ip link set br-external up
 
-    # If the WAN NIC has an IP, move it to br-external so the host keeps
-    # connectivity. This is the standard OpenStack/OVN approach for sharing
-    # a NIC between host and OVN localnet traffic.
-    WAN_IP=$(ip -4 addr show dev "$EXTERNAL_IFACE" 2>/dev/null | awk '/inet /{print $2}' | head -1)
-    if [ -n "$WAN_IP" ]; then
-        WAN_GW=$(ip -4 route show default dev "$EXTERNAL_IFACE" 2>/dev/null | awk '{print $3}' | head -1)
-        sudo ip addr del "$WAN_IP" dev "$EXTERNAL_IFACE" 2>/dev/null || true
-        sudo ip addr add "$WAN_IP" dev br-external
-        if [ -n "$WAN_GW" ]; then
-            sudo ip route add default via "$WAN_GW" dev br-external 2>/dev/null || true
-        fi
-        echo "  Migrated $WAN_IP from $EXTERNAL_IFACE to br-external"
-    fi
+    if [ "$SINGLE_NIC" = true ]; then
+        # --- macvlan strategy (single-NIC hosts) ---
+        # Create a macvlan sub-interface in bridge mode off the host's NIC.
+        # The host keeps its IP on the parent NIC — no migration, SSH-safe.
+        # OVN localnet traffic flows through the macvlan to the physical wire.
+        MACVLAN_NAME="spx-ext-${EXTERNAL_IFACE}"
 
-    echo "  br-external: created with port $EXTERNAL_IFACE"
+        if ip link show "$MACVLAN_NAME" >/dev/null 2>&1; then
+            echo "  macvlan $MACVLAN_NAME already exists"
+        else
+            sudo ip link add "$MACVLAN_NAME" link "$EXTERNAL_IFACE" type macvlan mode bridge
+            echo "  created macvlan: $MACVLAN_NAME (bridge mode) on $EXTERNAL_IFACE"
+        fi
+
+        sudo ip link set "$MACVLAN_NAME" up
+        sudo ovs-vsctl --may-exist add-port br-external "$MACVLAN_NAME"
+        echo "  br-external: created with macvlan port $MACVLAN_NAME"
+        echo "  NOTE: host keeps its IP on $EXTERNAL_IFACE (no migration)"
+        echo "  QUIRK: host cannot reach VMs at their public IPs (macvlan isolation)"
+    else
+        # --- dedicated NIC / IP migration strategy ---
+        # Add the WAN NIC directly to br-external.
+        sudo ovs-vsctl --may-exist add-port br-external "$EXTERNAL_IFACE"
+
+        # If the WAN NIC has an IP, move it to br-external so the host keeps
+        # connectivity. This is the standard OpenStack/OVN approach for sharing
+        # a NIC between host and OVN localnet traffic.
+        WAN_IP=$(ip -4 addr show dev "$EXTERNAL_IFACE" 2>/dev/null | awk '/inet /{print $2}' | head -1)
+        if [ -n "$WAN_IP" ]; then
+            WAN_GW=$(ip -4 route show default dev "$EXTERNAL_IFACE" 2>/dev/null | awk '{print $3}' | head -1)
+            sudo ip addr del "$WAN_IP" dev "$EXTERNAL_IFACE" 2>/dev/null || true
+            sudo ip addr add "$WAN_IP" dev br-external
+            if [ -n "$WAN_GW" ]; then
+                sudo ip route add default via "$WAN_GW" dev br-external 2>/dev/null || true
+            fi
+            echo "  Migrated $WAN_IP from $EXTERNAL_IFACE to br-external"
+        fi
+
+        echo "  br-external: created with port $EXTERNAL_IFACE"
+    fi
 fi
 
 # --- Step 4: Configure OVN external_ids ---
@@ -374,6 +405,15 @@ fi
 if [ "$EXTERNAL_BRIDGE" = true ]; then
     if sudo ovs-vsctl br-exists br-external; then
         echo "  br-external:     OK"
+        if [ "$SINGLE_NIC" = true ]; then
+            MACVLAN_NAME="spx-ext-${EXTERNAL_IFACE}"
+            if ip link show "$MACVLAN_NAME" >/dev/null 2>&1; then
+                echo "  macvlan:         OK ($MACVLAN_NAME)"
+            else
+                echo "  macvlan:         FAILED ($MACVLAN_NAME not found)"
+                OK=false
+            fi
+        fi
     else
         echo "  br-external:     FAILED"
         OK=false
