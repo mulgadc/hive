@@ -124,18 +124,15 @@ func startPredastoreServer(t *testing.T) *Config {
 		return sharedConfig
 	}
 
-	// Create persistent test environment (not using t.TempDir() for shared server)
-	testDir, err := os.MkdirTemp("", "predastore-integration-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
+	// Use t.TempDir() for automatic cleanup
+	testDir := t.TempDir()
 	sharedTestDir = testDir
 
 	// Create bucket directories
 	testBucketDir := filepath.Join(testDir, "test-bucket")
 	publicBucketDir := filepath.Join(testDir, "public-bucket")
 
-	err = os.MkdirAll(testBucketDir, 0755)
+	err := os.MkdirAll(testBucketDir, 0755)
 	if err != nil {
 		t.Fatalf("Failed to create test-bucket dir: %v", err)
 	}

@@ -1509,6 +1509,7 @@ func (m *policyMockIAMService) GetUserPolicies(accountID, userName string) ([]ha
 // errorLookupMockIAMService returns a configurable error from LookupAccessKey.
 type errorLookupMockIAMService struct {
 	mockIAMService
+
 	err error
 }
 

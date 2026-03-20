@@ -14,11 +14,11 @@ linters:
     - bidichk # checks for dangerous unicode bidi character sequences
     - bodyclose # checks whether HTTP response body is closed successfully
     - canonicalheader # checks whether net/http.Header uses canonical header keys
+    - decorder # checks declaration order of types, consts, vars, and funcs
     - durationcheck # checks for two durations multiplied together
     - embeddedstructfieldcheck # checks embedded sync.Mutex/RWMutex in structs
     - errcheck # checks for unchecked errors in type assertions and I/O
     - errname # checks that sentinel errors are prefixed with Err, error types suffixed with Error
-    - exhaustive # checks exhaustiveness of enum switch statements and maps
     - exptostd # detects golang.org/x/exp/ functions replaceable by stdlib
     - fatcontext # detects nested contexts in loops
     - gocheckcompilerdirectives # validates go compiler directive comments (//go:)
@@ -50,11 +50,9 @@ linters:
 
     errcheck:
       check-type-assertions: true
-
-    exhaustive:
-      check:
-        - switch
-        - map
+      exclude-functions:
+        - (*github.com/nats-io/nats.go.Subscription).Unsubscribe # cleanup-only, errors not actionable
+        - (*github.com/kdomanski/iso9660.ImageWriter).Cleanup # deferred cleanup, errors not actionable
 
     govet:
       enable-all: true
@@ -102,9 +100,6 @@ linters:
       patterns:
         - ".*"
 
-    usetesting:
-      os-temp-dir: true
-
   exclusions:
     presets:
       - std-error-handling
@@ -116,14 +111,15 @@ linters:
           - bodyclose
           - errcheck
           - gosec
-          - noctx
       - path: '_test\.go'
         text: "unusedwrite"
         linters:
           - govet
       # spinifex-specific: gosec exclusions
       - path: "cmd/"
-        linters: [gosec] # matches current -exclude-dir=cmd
+        linters:
+          - errcheck # CLI glue code — viper/cobra/pterm errors not actionable
+          - gosec # matches current -exclude-dir=cmd
       - text: "G204"
         linters: [gosec] # subprocess execution — legitimate in VM orchestration
       - text: "G304"

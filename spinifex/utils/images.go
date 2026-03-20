@@ -145,7 +145,7 @@ func ExtractDiskImageFromFile(imagepath string, tmpdir string) (diskimage string
 	_, err = os.Stat(imagepath)
 
 	if err != nil {
-		return
+		return diskimage, err
 	}
 
 	// Extract the filepath
@@ -228,19 +228,19 @@ func ExtractDiskImageFromFile(imagepath string, tmpdir string) (diskimage string
 		execCmd = "xz"
 	} else {
 		err = errors.New("unsupported filetype")
-		return
+		return diskimage, err
 	}
 
 	cmd := exec.Command(execCmd, args...)
 	output, err := cmd.CombinedOutput()
 
 	if err != nil {
-		return
+		return diskimage, err
 	}
 
 	diskimage, err = extractDiskImagePath(tmpdir, output)
 
-	return
+	return diskimage, err
 }
 
 func extractDiskImagePath(imagedir string, output []byte) (diskimage string, err error) {
@@ -271,7 +271,7 @@ func extractDiskImagePath(imagedir string, output []byte) (diskimage string, err
 		}
 	}
 
-	return
+	return diskimage, err
 }
 
 func validateDiskImagePath(diskimage string) (err error) {

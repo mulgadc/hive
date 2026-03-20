@@ -20,7 +20,7 @@ func ValidateDeleteKeyPairInput(input *ec2.DeleteKeyPairInput) (err error) {
 		return errors.New(awserrors.ErrorMissingParameter)
 	}
 
-	return
+	return err
 }
 
 func DeleteKeyPair(input *ec2.DeleteKeyPairInput, natsConn *nats.Conn, accountID string) (output ec2.DeleteKeyPairOutput, err error) {

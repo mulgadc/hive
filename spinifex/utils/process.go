@@ -68,7 +68,6 @@ func KillProcess(pid int) error {
 
 		if err != nil {
 			// Signal(0) error means the process has terminated — this is the expected outcome.
-			err = nil
 			break
 		}
 
@@ -86,5 +85,5 @@ func KillProcess(pid int) error {
 		}
 	}
 
-	return nil
+	return nil //nolint:nilerr // Signal(0) error means process exited — that's success
 }

@@ -308,7 +308,7 @@ func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64
 		}
 		caps = append(caps, typeCap)
 	}
-	return
+	return totalVCPU, totalMemGB, allocVCPU, allocMemGB, caps
 }
 
 // SetConfigPath sets the configuration file path for cluster management
@@ -1417,7 +1417,7 @@ func (d *Daemon) SendQMPCommand(q *qmp.QMPClient, cmd qmp.QMPCommand, instanceId
 	if err := q.Conn.SetReadDeadline(time.Now().Add(30 * time.Second)); err != nil {
 		return nil, fmt.Errorf("set read deadline: %w", err)
 	}
-	defer q.Conn.SetReadDeadline(time.Time{}) // clear deadline after command
+	defer func() { _ = q.Conn.SetReadDeadline(time.Time{}) }() // clear deadline after command
 
 	if err := q.Encoder.Encode(cmd); err != nil {
 		return nil, fmt.Errorf("encode error: %w", err)

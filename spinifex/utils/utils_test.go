@@ -72,7 +72,7 @@ func TestGeneratePidFile(t *testing.T) {
 }
 
 func TestGenerateSocketFile(t *testing.T) {
-	socketPath := fmt.Sprintf("%s/%s", os.TempDir(), "utilsunittest")
+	socketPath := fmt.Sprintf("%s/%s", t.TempDir(), "utilsunittest")
 
 	name, err := GenerateSocketFile(socketPath)
 
@@ -587,11 +587,9 @@ func TestStopProcess(t *testing.T) {
 // Test file extraction process
 
 func TestExtractDiskImageFromFile(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "spx-utils-test-*")
+	tmpDir := t.TempDir()
 
 	t.Log("Temp dir:", tmpDir)
-
-	assert.NoError(t, err, "Temp dir should be created")
 
 	// Sample .xz (fail)
 	imagePath, err := ExtractDiskImageFromFile("/tmp/file.xz", tmpDir)
@@ -764,9 +762,8 @@ func TestDirExists(t *testing.T) {
 	assert.False(t, dirExists("/nonexistent/path/should/not/exist"))
 
 	// File (not a directory)
-	tmpFile, err := os.CreateTemp("", "direxists-test-*")
+	tmpFile, err := os.CreateTemp(t.TempDir(), "direxists-test-*")
 	require.NoError(t, err)
-	defer os.Remove(tmpFile.Name())
 	tmpFile.Close()
 	assert.False(t, dirExists(tmpFile.Name()))
 }

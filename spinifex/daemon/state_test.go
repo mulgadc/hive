@@ -3,7 +3,6 @@ package daemon
 import (
 	"fmt"
 	"net"
-	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -24,9 +23,7 @@ import (
 func createDaemonWithJetStream(t *testing.T) *Daemon {
 	t.Helper()
 
-	jsTmpDir, err := os.MkdirTemp("", "nats-js-state-test-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(jsTmpDir) })
+	jsTmpDir := t.TempDir()
 
 	opts := &server.Options{
 		Host:      "127.0.0.1",
@@ -44,9 +41,7 @@ func createDaemonWithJetStream(t *testing.T) *Daemon {
 
 	natsURL := ns.ClientURL()
 
-	tmpDir, err := os.MkdirTemp("", "spx-state-test-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	tmpDir := t.TempDir()
 
 	clusterCfg := &config.ClusterConfig{
 		Node:  "node-1",
@@ -260,7 +255,7 @@ func TestEveryState_CanReachTerminated(t *testing.T) {
 			continue
 		}
 
-		visited := map[vm.InstanceState]bool{start: true}
+		visited := map[vm.InstanceState]bool{start: true} //nolint:exhaustive // BFS seed — populated dynamically
 		queue := []vm.InstanceState{start}
 		found := false
 
@@ -406,7 +401,7 @@ func TestTransitionState_ConcurrentTransitions(t *testing.T) {
 
 // reachableStates returns all states reachable from start via BFS.
 func reachableStates(start vm.InstanceState) map[vm.InstanceState]bool {
-	visited := map[vm.InstanceState]bool{start: true}
+	visited := map[vm.InstanceState]bool{start: true} //nolint:exhaustive // BFS seed — populated dynamically
 	queue := []vm.InstanceState{start}
 	for len(queue) > 0 {
 		current := queue[0]

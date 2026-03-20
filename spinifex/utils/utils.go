@@ -114,7 +114,7 @@ func GenerateErrorPayload(code string) (jsonResponse []byte) {
 		return nil
 	}
 
-	return
+	return jsonResponse
 }
 
 // Validate the payload is an ec2.ResponseError
@@ -275,7 +275,7 @@ func DownloadFileWithProgress(url string, name string, filename string, timeout 
 		}
 
 		pterm.Printf("Saved %s (%s)\n", filename, humanBytes(SafeInt64ToUint64(written)))
-		return
+		return err
 	} else {
 		// Unknown size: spinner that shows bytes downloaded
 		spin, _ := pterm.DefaultSpinner.

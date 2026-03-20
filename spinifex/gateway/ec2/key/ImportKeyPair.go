@@ -22,7 +22,7 @@ func ValidateImportKeyPairInput(input *ec2.ImportKeyPairInput) (err error) {
 		return errors.New(awserrors.ErrorMissingParameter)
 	}
 
-	return
+	return err
 }
 
 func ImportKeyPair(input *ec2.ImportKeyPairInput, natsConn *nats.Conn, accountID string) (output ec2.ImportKeyPairOutput, err error) {
