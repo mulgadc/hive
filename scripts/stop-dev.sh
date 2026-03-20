@@ -150,13 +150,23 @@ has_service "predastore" && stop_service "predastore" "$PID_DIR"
 has_service "nats" && stop_service "nats" "$PID_DIR"
 
 # Stop OVN networking (prevents idle CPU burn when spinifex isn't running)
+# CRITICAL: Do NOT stop openvswitch-switch if br-external has an IP.
+# When setup-ovn.sh migrates the host's WAN IP to br-external, stopping OVS
+# destroys the bridge and the host loses all WAN connectivity (unreachable via SSH).
+# OVS is infrastructure — only stop ovn-controller and ovn-central.
 if pidof systemd >/dev/null 2>&1; then
     echo "🛑 Stopping OVN networking..."
     sudo systemctl stop ovn-controller 2>/dev/null && echo "✅ ovn-controller stopped" || true
     if systemctl is-active --quiet ovn-central 2>/dev/null; then
         sudo systemctl stop ovn-central 2>/dev/null && echo "✅ ovn-central stopped" || true
     fi
-    sudo systemctl stop openvswitch-switch 2>/dev/null && echo "✅ openvswitch-switch stopped" || true
+
+    # Only stop OVS if br-external does NOT have an IP (safe to tear down)
+    if sudo ovs-vsctl br-exists br-external 2>/dev/null && ip -4 addr show br-external 2>/dev/null | grep -q "inet "; then
+        echo "⚠️  Skipping openvswitch-switch stop (br-external has WAN IP — stopping would kill connectivity)"
+    else
+        sudo systemctl stop openvswitch-switch 2>/dev/null && echo "✅ openvswitch-switch stopped" || true
+    fi
 fi
 
 echo ""
