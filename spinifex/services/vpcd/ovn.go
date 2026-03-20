@@ -79,6 +79,15 @@ type OVNClient interface {
 	// Static routes
 	AddStaticRoute(ctx context.Context, routerName string, route *nbdb.LogicalRouterStaticRoute) error
 	DeleteStaticRoute(ctx context.Context, routerName string, ipPrefix string) error
+
+	// Port Groups (security group enforcement)
+	CreatePortGroup(ctx context.Context, name string, ports []string) error
+	DeletePortGroup(ctx context.Context, name string) error
+	SetPortGroupPorts(ctx context.Context, name string, ports []string) error
+
+	// ACLs (attached to port groups)
+	AddACL(ctx context.Context, portGroupName string, direction string, priority int, match string, action string) error
+	ClearACLs(ctx context.Context, portGroupName string) error
 }
 
 // namedUUID generates a valid OVSDB named-uuid from a prefix and name.
@@ -652,4 +661,27 @@ func (c *LiveOVNClient) DeleteStaticRoute(ctx context.Context, routerName string
 		return fmt.Errorf("delete static route transact: %w", err)
 	}
 	return nil
+}
+
+// Port Group and ACL methods — stub implementations for LiveOVNClient.
+// Full libovsdb implementation will come in a future phase.
+
+func (c *LiveOVNClient) CreatePortGroup(_ context.Context, _ string, _ []string) error {
+	return fmt.Errorf("CreatePortGroup: not yet implemented for live OVN client")
+}
+
+func (c *LiveOVNClient) DeletePortGroup(_ context.Context, _ string) error {
+	return fmt.Errorf("DeletePortGroup: not yet implemented for live OVN client")
+}
+
+func (c *LiveOVNClient) SetPortGroupPorts(_ context.Context, _ string, _ []string) error {
+	return fmt.Errorf("SetPortGroupPorts: not yet implemented for live OVN client")
+}
+
+func (c *LiveOVNClient) AddACL(_ context.Context, _ string, _ string, _ int, _ string, _ string) error {
+	return fmt.Errorf("AddACL: not yet implemented for live OVN client")
+}
+
+func (c *LiveOVNClient) ClearACLs(_ context.Context, _ string) error {
+	return fmt.Errorf("ClearACLs: not yet implemented for live OVN client")
 }

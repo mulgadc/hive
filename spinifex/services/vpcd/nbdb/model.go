@@ -91,6 +91,26 @@ type LogicalRouterStaticRoute struct {
 	ExternalIDs map[string]string `ovsdb:"external_ids"`
 }
 
+// PortGroup represents an OVN Port_Group for grouping logical switch ports
+// (used for security group enforcement).
+type PortGroup struct {
+	UUID        string            `ovsdb:"_uuid"`
+	Name        string            `ovsdb:"name"`
+	Ports       []string          `ovsdb:"ports"`        // UUIDs of logical switch ports
+	ACLs        []string          `ovsdb:"acls"`         // UUIDs of ACLs
+	ExternalIDs map[string]string `ovsdb:"external_ids"`
+}
+
+// ACL represents an OVN ACL rule attached to a port group or logical switch.
+type ACL struct {
+	UUID        string            `ovsdb:"_uuid"`
+	Direction   string            `ovsdb:"direction"` // "to-lport" or "from-lport"
+	Priority    int               `ovsdb:"priority"`
+	Match       string            `ovsdb:"match"`
+	Action      string            `ovsdb:"action"` // "allow-related", "drop", "allow", "reject"
+	ExternalIDs map[string]string `ovsdb:"external_ids"`
+}
+
 // GatewayChassis represents an OVN Gateway_Chassis for HA scheduling.
 type GatewayChassis struct {
 	UUID        string            `ovsdb:"_uuid"`
@@ -113,5 +133,7 @@ func FullDatabaseModel() (model.ClientDBModel, error) {
 		"NAT":                         &NAT{},
 		"Logical_Router_Static_Route": &LogicalRouterStaticRoute{},
 		"Gateway_Chassis":             &GatewayChassis{},
+		"Port_Group":                  &PortGroup{},
+		"ACL":                         &ACL{},
 	})
 }
