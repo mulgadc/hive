@@ -36,6 +36,7 @@ import (
 	handlers_ec2_image "github.com/mulgadc/spinifex/spinifex/handlers/ec2/image"
 	handlers_ec2_instance "github.com/mulgadc/spinifex/spinifex/handlers/ec2/instance"
 	handlers_ec2_key "github.com/mulgadc/spinifex/spinifex/handlers/ec2/key"
+	handlers_ec2_placementgroup "github.com/mulgadc/spinifex/spinifex/handlers/ec2/placementgroup"
 	handlers_ec2_snapshot "github.com/mulgadc/spinifex/spinifex/handlers/ec2/snapshot"
 	handlers_ec2_tags "github.com/mulgadc/spinifex/spinifex/handlers/ec2/tags"
 	handlers_ec2_volume "github.com/mulgadc/spinifex/spinifex/handlers/ec2/volume"
@@ -91,24 +92,25 @@ type ResourceManager struct {
 
 // Daemon represents the main daemon service
 type Daemon struct {
-	node            string
-	clusterConfig   *config.ClusterConfig
-	config          *config.Config
-	natsConn        *nats.Conn
-	resourceMgr     *ResourceManager
-	instanceService *handlers_ec2_instance.InstanceServiceImpl
-	keyService      *handlers_ec2_key.KeyServiceImpl
-	imageService    *handlers_ec2_image.ImageServiceImpl
-	volumeService   *handlers_ec2_volume.VolumeServiceImpl
-	accountService  *handlers_ec2_account.AccountSettingsServiceImpl
-	snapshotService *handlers_ec2_snapshot.SnapshotServiceImpl
-	tagsService     *handlers_ec2_tags.TagsServiceImpl
-	eigwService     *handlers_ec2_eigw.EgressOnlyIGWServiceImpl
-	igwService      *handlers_ec2_igw.IGWServiceImpl
-	vpcService      *handlers_ec2_vpc.VPCServiceImpl
-	ctx             context.Context
-	cancel          context.CancelFunc
-	shutdownWg      sync.WaitGroup
+	node                  string
+	clusterConfig         *config.ClusterConfig
+	config                *config.Config
+	natsConn              *nats.Conn
+	resourceMgr           *ResourceManager
+	instanceService       *handlers_ec2_instance.InstanceServiceImpl
+	keyService            *handlers_ec2_key.KeyServiceImpl
+	imageService          *handlers_ec2_image.ImageServiceImpl
+	volumeService         *handlers_ec2_volume.VolumeServiceImpl
+	accountService        *handlers_ec2_account.AccountSettingsServiceImpl
+	snapshotService       *handlers_ec2_snapshot.SnapshotServiceImpl
+	tagsService           *handlers_ec2_tags.TagsServiceImpl
+	eigwService           *handlers_ec2_eigw.EgressOnlyIGWServiceImpl
+	igwService            *handlers_ec2_igw.IGWServiceImpl
+	placementGroupService *handlers_ec2_placementgroup.PlacementGroupServiceImpl
+	vpcService            *handlers_ec2_vpc.VPCServiceImpl
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	shutdownWg            sync.WaitGroup
 
 	// Local VM Instances
 	Instances vm.Instances
@@ -387,6 +389,9 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.DescribeInternetGateways", d.handleEC2DescribeInternetGateways, "spinifex-workers"},
 		{"ec2.AttachInternetGateway", d.handleEC2AttachInternetGateway, "spinifex-workers"},
 		{"ec2.DetachInternetGateway", d.handleEC2DetachInternetGateway, "spinifex-workers"},
+		{"ec2.CreatePlacementGroup", d.handleEC2CreatePlacementGroup, "spinifex-workers"},
+		{"ec2.DeletePlacementGroup", d.handleEC2DeletePlacementGroup, "spinifex-workers"},
+		{"ec2.DescribePlacementGroups", d.handleEC2DescribePlacementGroups, "spinifex-workers"},
 		{"ec2.CreateVpc", d.handleEC2CreateVpc, "spinifex-workers"},
 		{"ec2.DeleteVpc", d.handleEC2DeleteVpc, "spinifex-workers"},
 		{"ec2.DescribeVpcs", d.handleEC2DescribeVpcs, "spinifex-workers"},
@@ -503,6 +508,13 @@ func (d *Daemon) Start() error {
 	})
 	if err != nil {
 		return fmt.Errorf("failed to initialize IGW service: %w", err)
+	}
+
+	d.placementGroupService, err = initServiceWithRetry("placement group service", func() (*handlers_ec2_placementgroup.PlacementGroupServiceImpl, error) {
+		return handlers_ec2_placementgroup.NewPlacementGroupServiceImplWithNATS(d.config, d.natsConn)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to initialize placement group service: %w", err)
 	}
 
 	d.vpcService, err = initServiceWithRetry("VPC service", func() (*handlers_ec2_vpc.VPCServiceImpl, error) {

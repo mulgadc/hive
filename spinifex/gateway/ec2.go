@@ -18,6 +18,7 @@ import (
 	gateway_ec2_image "github.com/mulgadc/spinifex/spinifex/gateway/ec2/image"
 	gateway_ec2_instance "github.com/mulgadc/spinifex/spinifex/gateway/ec2/instance"
 	gateway_ec2_key "github.com/mulgadc/spinifex/spinifex/gateway/ec2/key"
+	gateway_ec2_placementgroup "github.com/mulgadc/spinifex/spinifex/gateway/ec2/placementgroup"
 	gateway_ec2_snapshot "github.com/mulgadc/spinifex/spinifex/gateway/ec2/snapshot"
 	gateway_ec2_tags "github.com/mulgadc/spinifex/spinifex/gateway/ec2/tags"
 	gateway_ec2_volume "github.com/mulgadc/spinifex/spinifex/gateway/ec2/volume"
@@ -196,6 +197,15 @@ var ec2Actions = map[string]EC2Handler{
 	}),
 	"DescribeEgressOnlyInternetGateways": ec2Handler(func(input *ec2.DescribeEgressOnlyInternetGatewaysInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_eigw.DescribeEgressOnlyInternetGateways(input, gw.NATSConn, accountID)
+	}),
+	"CreatePlacementGroup": ec2Handler(func(input *ec2.CreatePlacementGroupInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_placementgroup.CreatePlacementGroup(input, gw.NATSConn, accountID)
+	}),
+	"DeletePlacementGroup": ec2Handler(func(input *ec2.DeletePlacementGroupInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_placementgroup.DeletePlacementGroup(input, gw.NATSConn, accountID)
+	}),
+	"DescribePlacementGroups": ec2Handler(func(input *ec2.DescribePlacementGroupsInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_placementgroup.DescribePlacementGroups(input, gw.NATSConn, accountID)
 	}),
 	"CreateVpc": ec2Handler(func(input *ec2.CreateVpcInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_vpc.CreateVpc(input, gw.NATSConn, accountID)
