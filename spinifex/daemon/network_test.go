@@ -403,7 +403,7 @@ func TestGenerateDevMAC_Format(t *testing.T) {
 					t.Errorf("generateDevMAC(%q) = %q, expected ':' at pos %d", id, mac, i)
 				}
 			} else {
-				if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+				if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 					t.Errorf("generateDevMAC(%q) = %q, invalid hex char '%c' at pos %d", id, mac, c, i)
 				}
 			}

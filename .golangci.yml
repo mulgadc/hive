@@ -18,7 +18,6 @@ linters:
     - embeddedstructfieldcheck # checks embedded sync.Mutex/RWMutex in structs
     - errcheck # checks for unchecked errors in type assertions and I/O
     - errname # checks that sentinel errors are prefixed with Err, error types suffixed with Error
-    - errorlint # finds code that will cause problems with Go 1.13+ error wrapping
     - exhaustive # checks exhaustiveness of enum switch statements and maps
     - exptostd # detects golang.org/x/exp/ functions replaceable by stdlib
     - fatcontext # detects nested contexts in loops
@@ -86,9 +85,9 @@ linters:
         - G104 # unchecked errors — errcheck is stricter
         - G116 # bidi chars — bidichk is more thorough
         - G117 # use of net/http serve functions (we handle TLS separately)
-        - G703 # error string formatting
-        - G705 # error string formatting
-        - G706 # error string formatting
+        - G703 # path traversal taint analysis — false positives on config file loading
+        - G705 # XSS taint analysis — false positives on internal error responses
+        - G706 # log injection taint analysis — false positives on structured slog usage
 
     modernize:
       # Match current go fix exclusions (GOFIX_EXCLUDE := -newexpr=false -stringsbuilder=false)

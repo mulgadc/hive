@@ -55,7 +55,7 @@ func WritePidFile(name string, pid int) error {
 	}
 
 	defer pidFile.Close()
-	_, err = pidFile.WriteString(fmt.Sprintf("%d", pid))
+	_, err = fmt.Fprintf(pidFile, "%d", pid)
 	if err != nil {
 		return err
 	}
@@ -80,7 +80,7 @@ func WritePidFileTo(dir string, name string, pid int) error {
 	}
 
 	defer pidFile.Close()
-	_, err = pidFile.WriteString(fmt.Sprintf("%d", pid))
+	_, err = fmt.Fprintf(pidFile, "%d", pid)
 	return err
 }
 

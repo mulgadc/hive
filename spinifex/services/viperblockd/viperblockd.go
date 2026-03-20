@@ -278,7 +278,7 @@ func launchService(cfg *Config) (err error) {
 		// then release before calling VB.Close() (which does heavy S3 I/O).
 		var ebsResponse types.EBSUnMountResponse
 		var matched MountedVolume
-		var matchIdx int = -1
+		var matchIdx = -1
 		cfg.mu.Lock()
 		for i, volume := range cfg.MountedVolumes {
 			if volume.Name == ebsRequest.Name {
