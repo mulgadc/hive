@@ -709,6 +709,12 @@ var vpcdStartCmd = &cobra.Command{
 			})
 		}
 
+		// Derive OVN chassis names from cluster node names (format: "chassis-{hostname}")
+		var chassisNames []string
+		for nodeName := range clusterConfig.Nodes {
+			chassisNames = append(chassisNames, "chassis-"+nodeName)
+		}
+
 		svc, err := service.New("vpcd", &vpcd.Config{
 			NatsHost:      nodeConfig.NATS.Host,
 			NatsToken:     nodeConfig.NATS.ACL.Token,
@@ -718,6 +724,7 @@ var vpcdStartCmd = &cobra.Command{
 			Debug:         false,
 			ExternalMode:  clusterConfig.Network.ExternalMode,
 			ExternalPools: extPools,
+			ChassisNames:  chassisNames,
 		})
 		if err != nil {
 			fmt.Println("Error starting vpcd service:", err)

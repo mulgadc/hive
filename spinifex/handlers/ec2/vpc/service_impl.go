@@ -769,17 +769,18 @@ func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string) error {
 		az = s.config.AZ
 	}
 
-	// Create default subnet
+	// Create default subnet (public — matches AWS default VPC behavior)
 	subnetID := utils.GenerateResourceID("subnet")
 	subnetRecord := SubnetRecord{
-		SubnetId:         subnetID,
-		VpcId:            vpcID,
-		CidrBlock:        DefaultSubnetCidr,
-		AvailabilityZone: az,
-		State:            "available",
-		IsDefault:        true,
-		Tags:             map[string]string{"Name": "default"},
-		CreatedAt:        time.Now(),
+		SubnetId:            subnetID,
+		VpcId:               vpcID,
+		CidrBlock:           DefaultSubnetCidr,
+		AvailabilityZone:    az,
+		State:               "available",
+		IsDefault:           true,
+		MapPublicIpOnLaunch: true, // AWS default subnets auto-assign public IPs
+		Tags:                map[string]string{"Name": "default"},
+		CreatedAt:           time.Now(),
 	}
 
 	data, err = json.Marshal(subnetRecord)

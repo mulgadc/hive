@@ -499,3 +499,16 @@ func (m *MockOVNClient) ClearACLs(_ context.Context, portGroupName string) error
 	pg.ACLs = nil
 	return nil
 }
+
+func (m *MockOVNClient) SetGatewayChassis(_ context.Context, lrpName string, chassisName string, priority int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lrp, exists := m.routerPorts[lrpName]
+	if !exists {
+		return fmt.Errorf("logical router port %q not found", lrpName)
+	}
+	gcName := lrpName + "-" + chassisName
+	lrp.GatewayChassis = append(lrp.GatewayChassis, gcName)
+	_ = priority
+	return nil
+}

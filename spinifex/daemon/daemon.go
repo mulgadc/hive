@@ -32,6 +32,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
 	handlers_ec2_account "github.com/mulgadc/spinifex/spinifex/handlers/ec2/account"
+	handlers_ec2_eip "github.com/mulgadc/spinifex/spinifex/handlers/ec2/eip"
 	handlers_ec2_eigw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/eigw"
 	handlers_ec2_igw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/igw"
 	handlers_ec2_image "github.com/mulgadc/spinifex/spinifex/handlers/ec2/image"
@@ -106,6 +107,7 @@ type Daemon struct {
 	eigwService     *handlers_ec2_eigw.EgressOnlyIGWServiceImpl
 	igwService      *handlers_ec2_igw.IGWServiceImpl
 	vpcService      *handlers_ec2_vpc.VPCServiceImpl
+	eipService      *handlers_ec2_eip.EIPServiceImpl
 	externalIPAM    *handlers_ec2_vpc.ExternalIPAM
 	ctx             context.Context
 	cancel          context.CancelFunc
@@ -398,6 +400,18 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.CreateNetworkInterface", d.handleEC2CreateNetworkInterface, "spinifex-workers"},
 		{"ec2.DeleteNetworkInterface", d.handleEC2DeleteNetworkInterface, "spinifex-workers"},
 		{"ec2.DescribeNetworkInterfaces", d.handleEC2DescribeNetworkInterfaces, "spinifex-workers"},
+		{"ec2.CreateSecurityGroup", d.handleEC2CreateSecurityGroup, "spinifex-workers"},
+		{"ec2.DeleteSecurityGroup", d.handleEC2DeleteSecurityGroup, "spinifex-workers"},
+		{"ec2.DescribeSecurityGroups", d.handleEC2DescribeSecurityGroups, "spinifex-workers"},
+		{"ec2.AuthorizeSecurityGroupIngress", d.handleEC2AuthorizeSecurityGroupIngress, "spinifex-workers"},
+		{"ec2.AuthorizeSecurityGroupEgress", d.handleEC2AuthorizeSecurityGroupEgress, "spinifex-workers"},
+		{"ec2.RevokeSecurityGroupIngress", d.handleEC2RevokeSecurityGroupIngress, "spinifex-workers"},
+		{"ec2.RevokeSecurityGroupEgress", d.handleEC2RevokeSecurityGroupEgress, "spinifex-workers"},
+		{"ec2.AllocateAddress", d.handleEC2AllocateAddress, "spinifex-workers"},
+		{"ec2.ReleaseAddress", d.handleEC2ReleaseAddress, "spinifex-workers"},
+		{"ec2.AssociateAddress", d.handleEC2AssociateAddress, "spinifex-workers"},
+		{"ec2.DisassociateAddress", d.handleEC2DisassociateAddress, "spinifex-workers"},
+		{"ec2.DescribeAddresses", d.handleEC2DescribeAddresses, "spinifex-workers"},
 		{"ec2.ModifyInstanceAttribute", d.handleEC2ModifyInstanceAttribute, "spinifex-workers"},
 		{"ec2.start", d.handleEC2StartStoppedInstance, "spinifex-workers"},
 		{"ec2.terminate", d.handleEC2TerminateStoppedInstance, "spinifex-workers"},
@@ -542,6 +556,17 @@ func (d *Daemon) Start() error {
 		}
 	}
 
+	// Initialize EIP service if external IPAM is available
+	if d.externalIPAM != nil && d.vpcService != nil {
+		eipSvc, eipErr := handlers_ec2_eip.NewEIPServiceImpl(d.natsConn, d.externalIPAM, d.vpcService)
+		if eipErr != nil {
+			slog.Warn("Failed to initialize EIP service", "err", eipErr)
+		} else {
+			d.eipService = eipSvc
+			slog.Info("EIP service initialized")
+		}
+	}
+
 	d.accountService, err = initServiceWithRetry("account settings service", func() (*handlers_ec2_account.AccountSettingsServiceImpl, error) {
 		return handlers_ec2_account.NewAccountSettingsServiceImplWithNATS(d.config, d.natsConn)
 	})
@@ -550,13 +575,15 @@ func (d *Daemon) Start() error {
 	}
 
 	// Ensure default VPC exists for system and admin accounts
-	// (matches AWS: every account has a default VPC)
+	// (matches AWS: every account has a default VPC with IGW + default SG)
 	if d.vpcService != nil {
 		for _, accountID := range []string{utils.GlobalAccountID, admin.DefaultAccountID()} {
 			if err := d.vpcService.EnsureDefaultVPC(accountID); err != nil {
 				slog.Error("Failed to ensure default VPC", "accountID", accountID, "error", err)
 			}
 		}
+		// Ensure default VPC has an IGW and default security group
+		d.ensureDefaultVPCInfrastructure()
 	}
 
 	// Initialize network plumber for VPC tap device management

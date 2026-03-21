@@ -88,6 +88,9 @@ type OVNClient interface {
 	// ACLs (attached to port groups)
 	AddACL(ctx context.Context, portGroupName string, direction string, priority int, match string, action string) error
 	ClearACLs(ctx context.Context, portGroupName string) error
+
+	// Gateway Chassis (HA scheduling for gateway router ports)
+	SetGatewayChassis(ctx context.Context, lrpName string, chassisName string, priority int) error
 }
 
 // namedUUID generates a valid OVSDB named-uuid from a prefix and name.
@@ -445,6 +448,45 @@ func (c *LiveOVNClient) GetLogicalRouterPort(ctx context.Context, name string) (
 		return nil, fmt.Errorf("logical router port %q not found", name)
 	}
 	return &ports[0], nil
+}
+
+func (c *LiveOVNClient) SetGatewayChassis(ctx context.Context, lrpName string, chassisName string, priority int) error {
+	lrp, err := c.GetLogicalRouterPort(ctx, lrpName)
+	if err != nil {
+		return fmt.Errorf("get logical router port for gateway chassis: %w", err)
+	}
+
+	// Create the Gateway_Chassis row with a deterministic name
+	gcName := lrpName + "-" + chassisName
+	gc := &nbdb.GatewayChassis{
+		UUID:        namedUUID("gc_", gcName),
+		Name:        gcName,
+		ChassisName: chassisName,
+		Priority:    priority,
+		ExternalIDs: map[string]string{},
+		Options:     map[string]string{},
+	}
+
+	createOps, err := c.client.Create(gc)
+	if err != nil {
+		return fmt.Errorf("create gateway chassis ops: %w", err)
+	}
+
+	// Add the Gateway_Chassis UUID to the router port's gateway_chassis set
+	mutateOps, err := c.client.Where(lrp).Mutate(lrp, model.Mutation{
+		Field:   &lrp.GatewayChassis,
+		Mutator: "insert",
+		Value:   []string{gc.UUID},
+	})
+	if err != nil {
+		return fmt.Errorf("mutate logical router port gateway_chassis ops: %w", err)
+	}
+
+	ops := append(createOps, mutateOps...)
+	if err := c.transactOps(ctx, ops); err != nil {
+		return fmt.Errorf("set gateway chassis transact: %w", err)
+	}
+	return nil
 }
 
 func (c *LiveOVNClient) CreateDHCPOptions(ctx context.Context, opts *nbdb.DHCPOptions) (string, error) {

@@ -21,6 +21,7 @@ import (
 	gateway_ec2_snapshot "github.com/mulgadc/spinifex/spinifex/gateway/ec2/snapshot"
 	gateway_ec2_tags "github.com/mulgadc/spinifex/spinifex/gateway/ec2/tags"
 	gateway_ec2_volume "github.com/mulgadc/spinifex/spinifex/gateway/ec2/volume"
+	gateway_ec2_eip "github.com/mulgadc/spinifex/spinifex/gateway/ec2/eip"
 	gateway_ec2_vpc "github.com/mulgadc/spinifex/spinifex/gateway/ec2/vpc"
 	gateway_ec2_zone "github.com/mulgadc/spinifex/spinifex/gateway/ec2/zone"
 	"github.com/mulgadc/spinifex/spinifex/utils"
@@ -226,6 +227,42 @@ var ec2Actions = map[string]EC2Handler{
 	}),
 	"DescribeNetworkInterfaces": ec2Handler(func(input *ec2.DescribeNetworkInterfacesInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_vpc.DescribeNetworkInterfaces(input, gw.NATSConn, accountID)
+	}),
+	"CreateSecurityGroup": ec2Handler(func(input *ec2.CreateSecurityGroupInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_vpc.CreateSecurityGroup(input, gw.NATSConn, accountID)
+	}),
+	"DeleteSecurityGroup": ec2Handler(func(input *ec2.DeleteSecurityGroupInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_vpc.DeleteSecurityGroup(input, gw.NATSConn, accountID)
+	}),
+	"DescribeSecurityGroups": ec2Handler(func(input *ec2.DescribeSecurityGroupsInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_vpc.DescribeSecurityGroups(input, gw.NATSConn, accountID)
+	}),
+	"AuthorizeSecurityGroupIngress": ec2Handler(func(input *ec2.AuthorizeSecurityGroupIngressInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_vpc.AuthorizeSecurityGroupIngress(input, gw.NATSConn, accountID)
+	}),
+	"AuthorizeSecurityGroupEgress": ec2Handler(func(input *ec2.AuthorizeSecurityGroupEgressInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_vpc.AuthorizeSecurityGroupEgress(input, gw.NATSConn, accountID)
+	}),
+	"RevokeSecurityGroupIngress": ec2Handler(func(input *ec2.RevokeSecurityGroupIngressInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_vpc.RevokeSecurityGroupIngress(input, gw.NATSConn, accountID)
+	}),
+	"RevokeSecurityGroupEgress": ec2Handler(func(input *ec2.RevokeSecurityGroupEgressInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_vpc.RevokeSecurityGroupEgress(input, gw.NATSConn, accountID)
+	}),
+	"AllocateAddress": ec2Handler(func(input *ec2.AllocateAddressInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_eip.AllocateAddress(input, gw.NATSConn, accountID)
+	}),
+	"ReleaseAddress": ec2Handler(func(input *ec2.ReleaseAddressInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_eip.ReleaseAddress(input, gw.NATSConn, accountID)
+	}),
+	"AssociateAddress": ec2Handler(func(input *ec2.AssociateAddressInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_eip.AssociateAddress(input, gw.NATSConn, accountID)
+	}),
+	"DisassociateAddress": ec2Handler(func(input *ec2.DisassociateAddressInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_eip.DisassociateAddress(input, gw.NATSConn, accountID)
+	}),
+	"DescribeAddresses": ec2Handler(func(input *ec2.DescribeAddressesInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_eip.DescribeAddresses(input, gw.NATSConn, accountID)
 	}),
 }
 

@@ -64,6 +64,7 @@ type TopologyHandler struct {
 	ovn           OVNClient
 	externalMode  string
 	externalPools []ExternalPoolConfig
+	chassisNames  []string // OVN chassis names for gateway HA scheduling
 }
 
 // NewTopologyHandler creates a new TopologyHandler with optional external network config.
@@ -83,6 +84,13 @@ func WithExternalNetwork(mode string, pools []ExternalPoolConfig) TopologyOption
 	return func(h *TopologyHandler) {
 		h.externalMode = mode
 		h.externalPools = pools
+	}
+}
+
+// WithChassisNames sets the OVN chassis names for gateway HA scheduling.
+func WithChassisNames(names []string) TopologyOption {
+	return func(h *TopologyHandler) {
+		h.chassisNames = names
 	}
 }
 
@@ -699,6 +707,23 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 		slog.Warn("vpcd: failed to add default route", "router", routerName, "err", err)
 	}
 
+	// 7. Schedule gateway chassis for HA — tells OVN which hosts can handle external traffic
+	if len(h.chassisNames) > 0 {
+		for i, chassis := range h.chassisNames {
+			priority := 20 - (i * 5) // First chassis gets highest priority
+			if priority < 1 {
+				priority = 1
+			}
+			if err := h.ovn.SetGatewayChassis(ctx, gwPortName, chassis, priority); err != nil {
+				slog.Warn("vpcd: failed to set gateway chassis", "port", gwPortName, "chassis", chassis, "priority", priority, "err", err)
+			} else {
+				slog.Info("vpcd: set gateway chassis", "port", gwPortName, "chassis", chassis, "priority", priority)
+			}
+		}
+	} else {
+		slog.Warn("vpcd: no chassis names configured — gateway port has no chassis binding, external traffic will not flow")
+	}
+
 	slog.Info("vpcd: attached internet gateway to VPC",
 		"igw_id", evt.InternetGatewayId,
 		"vpc_id", evt.VpcId,
@@ -706,6 +731,7 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 		"gw_port", gwPortName,
 		"gateway_ip", gatewayIP,
 		"wan_gateway", wanGateway,
+		"chassis_count", len(h.chassisNames),
 	)
 	respond(msg, nil)
 }

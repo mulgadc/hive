@@ -1023,6 +1023,10 @@ func TestEC2ActionMapCompleteness(t *testing.T) {
 		"CreateVpc", "DeleteVpc", "DescribeVpcs",
 		"CreateSubnet", "DeleteSubnet", "DescribeSubnets", "ModifySubnetAttribute",
 		"CreateNetworkInterface", "DeleteNetworkInterface", "DescribeNetworkInterfaces",
+		"CreateSecurityGroup", "DeleteSecurityGroup", "DescribeSecurityGroups",
+		"AuthorizeSecurityGroupIngress", "AuthorizeSecurityGroupEgress",
+		"RevokeSecurityGroupIngress", "RevokeSecurityGroupEgress",
+		"AllocateAddress", "ReleaseAddress", "AssociateAddress", "DisassociateAddress", "DescribeAddresses",
 	}
 
 	for _, action := range expectedActions {

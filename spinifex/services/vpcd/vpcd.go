@@ -43,6 +43,9 @@ type Config struct {
 	ExternalMode string
 	// ExternalPools holds the cluster-wide external IP pool configs.
 	ExternalPools []ExternalPoolConfig
+	// ChassisNames are the OVN chassis identifiers for gateway HA scheduling.
+	// Format: "chassis-{hostname}" — one per node in the cluster.
+	ChassisNames []string
 }
 
 // ExternalPoolConfig mirrors config.ExternalPool for vpcd's internal use.
@@ -201,6 +204,10 @@ func launchService(cfg *Config) error {
 	if cfg.ExternalMode != "" {
 		topoOpts = append(topoOpts, WithExternalNetwork(cfg.ExternalMode, cfg.ExternalPools))
 		slog.Info("External network enabled", "mode", cfg.ExternalMode, "pools", len(cfg.ExternalPools))
+	}
+	if len(cfg.ChassisNames) > 0 {
+		topoOpts = append(topoOpts, WithChassisNames(cfg.ChassisNames))
+		slog.Info("Gateway chassis configured", "chassis", cfg.ChassisNames)
 	}
 	topo := NewTopologyHandler(liveClient, topoOpts...)
 	subs, err := topo.Subscribe(nc)
