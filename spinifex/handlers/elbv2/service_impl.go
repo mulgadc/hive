@@ -7,11 +7,22 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/elbv2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
+	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
+)
+
+const (
+	// elbv2ManagedByTag is the tag key used to mark ENIs as system-managed by ELBv2.
+	elbv2ManagedByTag = "spinifex:managed-by"
+	// elbv2ManagedByValue is the tag value for ELBv2-managed ENIs.
+	elbv2ManagedByValue = "elbv2"
+	// elbv2LBTag is the tag key storing the parent LB ARN on managed ENIs.
+	elbv2LBTag = "spinifex:lb-arn"
 )
 
 // Ensure ELBv2ServiceImpl implements ELBv2Service at compile time.
@@ -19,10 +30,11 @@ var _ ELBv2Service = (*ELBv2ServiceImpl)(nil)
 
 // ELBv2ServiceImpl implements ELBv2 operations with NATS JetStream persistence.
 type ELBv2ServiceImpl struct {
-	config *config.Config
-	store  *Store
-	nodeID string
-	region string
+	config     *config.Config
+	store      *Store
+	vpcService *handlers_ec2_vpc.VPCServiceImpl // nil-safe: ENI ops skipped when nil (e.g. in tests)
+	nodeID     string
+	region     string
 }
 
 // NewELBv2ServiceImplWithNATS creates an ELBv2 service backed by JetStream KV.
@@ -47,6 +59,12 @@ func NewELBv2ServiceImplWithNATS(cfg *config.Config, nc *nats.Conn) (*ELBv2Servi
 		nodeID: nodeID,
 		region: region,
 	}, nil
+}
+
+// SetVPCService sets the VPC service for ENI management. Called by the daemon
+// after both services are initialized.
+func (s *ELBv2ServiceImpl) SetVPCService(vpcService *handlers_ec2_vpc.VPCServiceImpl) {
+	s.vpcService = vpcService
 }
 
 // buildLBArn constructs an ALB ARN from components.
@@ -115,6 +133,53 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		}
 	}
 
+	// Create ENIs in each subnet (when VPC service is available)
+	var eniIDs []string
+	var availZones []AvailZoneInfo
+	vpcID := ""
+	if s.vpcService != nil && len(subnets) > 0 {
+		for _, subnetID := range subnets {
+			eniOut, eniErr := s.vpcService.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
+				SubnetId:    aws.String(subnetID),
+				Description: aws.String(fmt.Sprintf("ELB app/%s/%s", name, lbID)),
+				TagSpecifications: []*ec2.TagSpecification{
+					{
+						ResourceType: aws.String("network-interface"),
+						Tags: []*ec2.Tag{
+							{Key: aws.String(elbv2ManagedByTag), Value: aws.String(elbv2ManagedByValue)},
+							{Key: aws.String(elbv2LBTag), Value: aws.String(lbArn)},
+						},
+					},
+				},
+			}, accountID)
+			if eniErr != nil {
+				// Rollback: delete any ENIs already created
+				for _, rollbackENI := range eniIDs {
+					s.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+						NetworkInterfaceId: aws.String(rollbackENI),
+					}, accountID)
+				}
+				slog.Error("CreateLoadBalancer: failed to create ENI", "subnet", subnetID, "err", eniErr)
+				return nil, errors.New(awserrors.ErrorELBv2SubnetNotFound)
+			}
+
+			eni := eniOut.NetworkInterface
+			eniIDs = append(eniIDs, *eni.NetworkInterfaceId)
+
+			if eni.VpcId != nil && vpcID == "" {
+				vpcID = *eni.VpcId
+			}
+			az := ""
+			if eni.AvailabilityZone != nil {
+				az = *eni.AvailabilityZone
+			}
+			availZones = append(availZones, AvailZoneInfo{
+				ZoneName: az,
+				SubnetId: subnetID,
+			})
+		}
+	}
+
 	record := &LoadBalancerRecord{
 		LoadBalancerArn: lbArn,
 		LoadBalancerID:  lbID,
@@ -123,9 +188,11 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		Scheme:          scheme,
 		Type:            LoadBalancerTypeApplication,
 		State:           StateActive,
-		VpcId:           "", // Set from subnet lookup in Phase 4
+		VpcId:           vpcID,
 		SecurityGroups:  securityGroups,
 		Subnets:         subnets,
+		AvailZones:      availZones,
+		ENIs:            eniIDs,
 		IPAddressType:   IPAddressTypeIPv4,
 		NodeID:          s.nodeID,
 		Tags:            tags,
@@ -137,7 +204,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	slog.Info("CreateLoadBalancer completed", "name", name, "lbArn", lbArn, "accountID", accountID)
+	slog.Info("CreateLoadBalancer completed", "name", name, "lbArn", lbArn, "enis", len(eniIDs), "accountID", accountID)
 
 	return &elbv2.CreateLoadBalancerOutput{
 		LoadBalancers: []*elbv2.LoadBalancer{s.lbRecordToSDK(record)},
@@ -168,11 +235,23 @@ func (s *ELBv2ServiceImpl) DeleteLoadBalancer(input *elbv2.DeleteLoadBalancerInp
 		}
 	}
 
+	// Delete system-managed ENIs
+	if s.vpcService != nil {
+		for _, eniID := range lb.ENIs {
+			_, eniErr := s.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+				NetworkInterfaceId: aws.String(eniID),
+			}, accountID)
+			if eniErr != nil {
+				slog.Warn("Failed to delete ALB ENI during cleanup", "eniId", eniID, "err", eniErr)
+			}
+		}
+	}
+
 	if err := s.store.DeleteLoadBalancer(lb.LoadBalancerID); err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	slog.Info("DeleteLoadBalancer completed", "lbArn", *input.LoadBalancerArn, "accountID", accountID)
+	slog.Info("DeleteLoadBalancer completed", "lbArn", *input.LoadBalancerArn, "enis", len(lb.ENIs), "accountID", accountID)
 
 	return &elbv2.DeleteLoadBalancerOutput{}, nil
 }

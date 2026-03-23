@@ -595,6 +595,9 @@ func (d *Daemon) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize ELBv2 service: %w", err)
 	}
+	if d.vpcService != nil {
+		d.elbv2Service.SetVPCService(d.vpcService)
+	}
 
 	// Ensure default VPC exists for system and admin accounts
 	// (matches AWS: every account has a default VPC with IGW + default SG)

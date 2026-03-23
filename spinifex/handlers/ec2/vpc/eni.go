@@ -355,6 +355,9 @@ func (s *VPCServiceImpl) UpdateENIPublicIP(accountID, eniId, publicIP, poolName 
 
 // eniRecordToEC2 converts an ENI record to an EC2 NetworkInterface
 func (s *VPCServiceImpl) eniRecordToEC2(record *ENIRecord, accountID string) *ec2.NetworkInterface {
+	// ENIs with spinifex:managed-by tag are system-managed (e.g. by ELBv2)
+	requesterManaged := record.Tags["spinifex:managed-by"] != ""
+
 	eni := &ec2.NetworkInterface{
 		NetworkInterfaceId: aws.String(record.NetworkInterfaceId),
 		SubnetId:           aws.String(record.SubnetId),
@@ -365,6 +368,7 @@ func (s *VPCServiceImpl) eniRecordToEC2(record *ENIRecord, accountID string) *ec
 		Description:        aws.String(record.Description),
 		Status:             aws.String(record.Status),
 		OwnerId:            aws.String(accountID),
+		RequesterManaged:   aws.Bool(requesterManaged),
 		InterfaceType:      aws.String("interface"),
 		SourceDestCheck:    aws.Bool(true),
 		PrivateIpAddresses: []*ec2.NetworkInterfacePrivateIpAddress{
