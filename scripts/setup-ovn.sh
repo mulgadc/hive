@@ -16,7 +16,6 @@
 #   --management       Also start OVN central services (NB DB, SB DB, ovn-northd)
 #   --external-bridge  Create br-external for public subnet WAN uplink
 #   --external-iface   WAN NIC to add to br-external (default: eth1)
-#   --single-nic       Use macvlan instead of adding NIC directly (for single-NIC hosts)
 #   --dhcp             Obtain gateway IP via DHCP on the external bridge interface
 #   --ovn-remote       OVN SB DB address (default: tcp:127.0.0.1:6642)
 #   --encap-ip         Geneve tunnel endpoint IP (default: auto-detect)
@@ -26,11 +25,8 @@
 #   # Single-node development (management + compute on same host):
 #   ./scripts/setup-ovn.sh --management
 #
-#   # With external bridge (dedicated WAN NIC):
-#   ./scripts/setup-ovn.sh --management --external-bridge --external-iface=eth1
-#
-#   # With external bridge (single NIC — uses macvlan, SSH-safe):
-#   ./scripts/setup-ovn.sh --management --external-bridge --external-iface=eth0 --single-nic
+#   # With external bridge (macvlan on WAN NIC — SSH-safe):
+#   ./scripts/setup-ovn.sh --management --external-bridge --external-iface=eth0
 #
 #   # Compute node joining an existing cluster:
 #   ./scripts/setup-ovn.sh --ovn-remote=tcp:10.0.0.1:6642 --encap-ip=10.0.0.2
@@ -45,7 +41,6 @@ set -e
 # Defaults
 MANAGEMENT=false
 EXTERNAL_BRIDGE=false
-SINGLE_NIC=false
 EXTERNAL_DHCP=false
 EXTERNAL_IFACE="eth1"
 OVN_REMOTE="tcp:127.0.0.1:6642"
@@ -57,7 +52,6 @@ for arg in "$@"; do
     case "$arg" in
         --management)       MANAGEMENT=true ;;
         --external-bridge)  EXTERNAL_BRIDGE=true ;;
-        --single-nic)       SINGLE_NIC=true ;;
         --dhcp)             EXTERNAL_DHCP=true ;;
         --external-iface=*) EXTERNAL_IFACE="${arg#*=}" ;;
         --ovn-remote=*)     OVN_REMOTE="${arg#*=}" ;;
@@ -94,7 +88,6 @@ echo "  Management node:  $MANAGEMENT"
 echo "  External bridge:  $EXTERNAL_BRIDGE"
 if [ "$EXTERNAL_BRIDGE" = true ]; then
 echo "  External iface:   $EXTERNAL_IFACE"
-echo "  Single NIC mode:  $SINGLE_NIC"
 fi
 echo "  OVN Remote (SB):  $OVN_REMOTE"
 echo "  Encap IP:         $ENCAP_IP"
@@ -141,6 +134,15 @@ if [ "$MANAGEMENT" = true ]; then
     sudo systemctl start ovn-central
     echo "  ovn-central: started (NB DB + SB DB + ovn-northd)"
 
+    # Wait for OVN NB DB socket to become available
+    for i in $(seq 1 15); do
+        if sudo ovn-nbctl --timeout=2 get-connection >/dev/null 2>&1; then
+            break
+        fi
+        echo "  Waiting for OVN NB DB... ($i/15)"
+        sleep 1
+    done
+
     # Allow remote connections to NB and SB databases
     sudo ovn-nbctl set-connection ptcp:6641
     sudo ovn-sbctl set-connection ptcp:6642
@@ -175,79 +177,31 @@ if [ "$EXTERNAL_BRIDGE" = true ]; then
     sudo ovs-vsctl --may-exist add-br br-external
     sudo ip link set br-external up
 
-    if [ "$SINGLE_NIC" = true ]; then
-        # --- macvlan strategy (single-NIC hosts) ---
-        # Create a macvlan sub-interface in bridge mode off the host's NIC.
-        # The host keeps its IP on the parent NIC — no migration, SSH-safe.
-        # OVN localnet traffic flows through the macvlan to the physical wire.
-        MACVLAN_NAME="spx-ext-${EXTERNAL_IFACE}"
+    # macvlan strategy: create a macvlan sub-interface in bridge mode off the
+    # WAN NIC. The host keeps its IP on the parent NIC — SSH-safe. OVN localnet
+    # traffic flows through the macvlan to the physical wire.
+    MACVLAN_NAME="spx-ext-${EXTERNAL_IFACE}"
 
-        if ip link show "$MACVLAN_NAME" >/dev/null 2>&1; then
-            echo "  macvlan $MACVLAN_NAME already exists"
-        else
-            sudo ip link add "$MACVLAN_NAME" link "$EXTERNAL_IFACE" type macvlan mode bridge
-            echo "  created macvlan: $MACVLAN_NAME (bridge mode) on $EXTERNAL_IFACE"
-        fi
-
-        sudo ip link set "$MACVLAN_NAME" up
-        sudo ovs-vsctl --may-exist add-port br-external "$MACVLAN_NAME"
-        echo "  br-external: created with macvlan port $MACVLAN_NAME"
-        echo "  NOTE: host keeps its IP on $EXTERNAL_IFACE (no migration)"
-        echo "  QUIRK: host cannot reach VMs at their public IPs (macvlan isolation)"
+    if ip link show "$MACVLAN_NAME" >/dev/null 2>&1; then
+        echo "  macvlan $MACVLAN_NAME already exists"
     else
-        # --- dedicated NIC / IP migration strategy ---
-        # Add the WAN NIC directly to br-external.
-        sudo ovs-vsctl --may-exist add-port br-external "$EXTERNAL_IFACE"
-
-        # If the WAN NIC has an IP, move it to br-external so the host keeps
-        # connectivity. This is the standard OpenStack/OVN approach for sharing
-        # a NIC between host and OVN localnet traffic.
-        WAN_IP=$(ip -4 addr show dev "$EXTERNAL_IFACE" 2>/dev/null | awk '/inet /{print $2}' | head -1)
-        if [ -n "$WAN_IP" ]; then
-            WAN_GW=$(ip -4 route show default dev "$EXTERNAL_IFACE" 2>/dev/null | awk '{print $3}' | head -1)
-            # Capture DNS config from the original interface before migration
-            WAN_DNS=$(resolvectl dns "$EXTERNAL_IFACE" 2>/dev/null | awk '{for(i=2;i<=NF;i++) printf $i" "}' | xargs)
-
-            sudo ip addr del "$WAN_IP" dev "$EXTERNAL_IFACE" 2>/dev/null || true
-            sudo ip addr add "$WAN_IP" dev br-external
-            if [ -n "$WAN_GW" ]; then
-                sudo ip route add default via "$WAN_GW" dev br-external 2>/dev/null || true
-            fi
-
-            # Fix DNS: systemd-resolved associates DNS servers with interfaces.
-            # After IP migration, the resolver no longer knows which interface
-            # reaches the DNS server. Point it at br-external.
-            if [ -n "$WAN_DNS" ]; then
-                sudo resolvectl dns br-external $WAN_DNS 2>/dev/null || true
-                echo "  Migrated DNS ($WAN_DNS) to br-external"
-            else
-                # Fallback: set Google DNS on br-external
-                sudo resolvectl dns br-external 8.8.8.8 2>/dev/null || true
-                echo "  Set fallback DNS (8.8.8.8) on br-external"
-            fi
-            # Also set the search domain if it existed
-            WAN_DOMAIN=$(resolvectl domain "$EXTERNAL_IFACE" 2>/dev/null | awk '{for(i=2;i<=NF;i++) printf $i" "}' | xargs)
-            if [ -n "$WAN_DOMAIN" ]; then
-                sudo resolvectl domain br-external $WAN_DOMAIN 2>/dev/null || true
-            fi
-
-            echo "  Migrated $WAN_IP from $EXTERNAL_IFACE to br-external"
-        fi
-
-        echo "  br-external: created with port $EXTERNAL_IFACE"
+        sudo ip link add "$MACVLAN_NAME" link "$EXTERNAL_IFACE" type macvlan mode bridge
+        echo "  created macvlan: $MACVLAN_NAME (bridge mode) on $EXTERNAL_IFACE"
     fi
+
+    sudo ip link set "$MACVLAN_NAME" up
+    sudo ovs-vsctl --may-exist add-port br-external "$MACVLAN_NAME"
+    echo "  br-external: created with macvlan port $MACVLAN_NAME"
+    echo "  NOTE: host keeps its IP on $EXTERNAL_IFACE (no migration)"
+    echo "  QUIRK: host cannot reach VMs at their public IPs (macvlan isolation)"
 
     # --- DHCP: obtain gateway IP for OVN SNAT ---
     if [ "$EXTERNAL_DHCP" = true ]; then
         echo ""
         echo "Step 3c: Obtaining external gateway IP via DHCP..."
 
-        # Determine which interface to DHCP on
-        if [ "$SINGLE_NIC" = true ]; then
-            DHCP_IFACE="spx-ext-${EXTERNAL_IFACE}"
-        else
-            DHCP_IFACE="br-external"
-        fi
+        # DHCP on the macvlan interface (it has L2 access to the WAN)
+        DHCP_IFACE="spx-ext-${EXTERNAL_IFACE}"
 
         # Run DHCP client to get a lease
         if command -v dhcpcd >/dev/null 2>&1; then
@@ -477,14 +431,12 @@ fi
 if [ "$EXTERNAL_BRIDGE" = true ]; then
     if sudo ovs-vsctl br-exists br-external; then
         echo "  br-external:     OK"
-        if [ "$SINGLE_NIC" = true ]; then
-            MACVLAN_NAME="spx-ext-${EXTERNAL_IFACE}"
-            if ip link show "$MACVLAN_NAME" >/dev/null 2>&1; then
-                echo "  macvlan:         OK ($MACVLAN_NAME)"
-            else
-                echo "  macvlan:         FAILED ($MACVLAN_NAME not found)"
-                OK=false
-            fi
+        MACVLAN_NAME="spx-ext-${EXTERNAL_IFACE}"
+        if ip link show "$MACVLAN_NAME" >/dev/null 2>&1; then
+            echo "  macvlan:         OK ($MACVLAN_NAME)"
+        else
+            echo "  macvlan:         FAILED ($MACVLAN_NAME not found)"
+            OK=false
         fi
     else
         echo "  br-external:     FAILED"

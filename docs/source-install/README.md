@@ -79,7 +79,7 @@ sudo update-ca-certificates
 ./scripts/setup-ovn.sh --management --external-bridge --external-iface=enp0s3 --dhcp
 ```
 
-Replace `enp0s3` with your WAN interface. Single-NIC hosts should add `--single-nic`.
+Replace `enp0s3` with your WAN interface.
 
 ### Step 6. Start services
 

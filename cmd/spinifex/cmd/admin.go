@@ -218,7 +218,6 @@ func init() {
 	// External networking flags
 	adminInitCmd.Flags().String("external-mode", "", "External network mode: 'pool' (public IPs), 'nat' (outbound-only, default), or '' (disabled)")
 	adminInitCmd.Flags().String("external-iface", "", "WAN NIC for br-external (auto-detected from default route)")
-	adminInitCmd.Flags().Bool("single-nic", false, "Use macvlan for external bridge (auto-detected if only one NIC)")
 	adminInitCmd.Flags().String("external-pool", "", "External IP pool range as start-end (e.g., 192.168.1.150-192.168.1.250)")
 	adminInitCmd.Flags().String("external-gateway", "", "WAN gateway IP (auto-detected from default route)")
 	adminInitCmd.Flags().Int("external-prefix-len", 24, "External pool subnet prefix length (auto-detected)")
@@ -540,7 +539,6 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	// External networking flags
 	externalMode, _ := cmd.Flags().GetString("external-mode")
 	externalIface, _ := cmd.Flags().GetString("external-iface")
-	singleNIC, _ := cmd.Flags().GetBool("single-nic")
 	externalPool, _ := cmd.Flags().GetString("external-pool")
 	externalGateway, _ := cmd.Flags().GetString("external-gateway")
 	externalPrefixLen, _ := cmd.Flags().GetInt("external-prefix-len")
@@ -567,10 +565,10 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 				}
 				fmt.Printf("  %-14s %-18s %-20s %-16s %s\n", iface.Name, iface.IP, iface.Subnet, gw, strings.ToUpper(iface.Role))
 			}
-			if detected.SingleNIC {
-				fmt.Println("\n  Mode: single-NIC (will use macvlan for external bridge, SSH-safe)")
+			if detected.LANCount == 0 {
+				fmt.Println("\n  Mode: single-NIC (macvlan for external bridge)")
 			} else {
-				fmt.Printf("\n  Mode: multi-NIC (%d LAN + 1 WAN)\n", detected.LANCount)
+				fmt.Printf("\n  Mode: %d LAN + 1 WAN (macvlan for external bridge)\n", detected.LANCount)
 			}
 
 			// Apply auto-detected values when flags not explicitly set
@@ -583,9 +581,6 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 				}
 				if !cmd.Flags().Changed("external-prefix-len") {
 					externalPrefixLen = detected.WAN.PrefixLen
-				}
-				if !cmd.Flags().Changed("single-nic") {
-					singleNIC = detected.SingleNIC
 				}
 
 				// Default mode: "nat" with DHCP if no pool specified
@@ -826,7 +821,6 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 		ExternalMode:  externalMode,
 		ExternalIface: externalIface,
-		SingleNIC:     singleNIC,
 		ExternalDHCP:  useExternalDHCP,
 		PoolName:      "wan",
 		PoolStart:     poolStart,
@@ -838,12 +832,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	// Print external networking summary
 	if externalMode != "" {
 		fmt.Printf("\n📡 External networking: %s\n", externalMode)
-		fmt.Printf("  WAN interface: %s\n", externalIface)
-		if singleNIC {
-			fmt.Println("  Bridge mode:   macvlan (single-NIC, SSH-safe)")
-		} else {
-			fmt.Println("  Bridge mode:   dedicated NIC")
-		}
+		fmt.Printf("  WAN interface: %s (macvlan)\n", externalIface)
 		if externalMode == "pool" {
 			fmt.Printf("  IP pool:       %s - %s\n", poolStart, poolEnd)
 			fmt.Printf("  ⚠️  Ensure %s-%s is excluded from your router's DHCP range.\n", poolStart, poolEnd)

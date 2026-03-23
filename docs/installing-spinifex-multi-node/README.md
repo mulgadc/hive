@@ -89,7 +89,7 @@ sudo /usr/local/share/spinifex/setup-ovn.sh \
   --encap-ip=$SPINIFEX_NODE3
 ```
 
-Replace `eth1` with your WAN interface. For single-NIC servers, add `--single-nic`.
+Replace `eth1` with your WAN interface.
 
 Verify all 3 chassis registered:
 

@@ -22,12 +22,10 @@ type DetectedNetwork struct {
 	Interfaces []DetectedInterface
 	WAN        *DetectedInterface // The interface with the default route
 	LANCount   int                // Number of non-WAN interfaces
-	SingleNIC  bool               // Only one usable NIC
 }
 
 // DetectNetwork auto-detects the host's network topology from routing table.
-// It identifies the WAN interface (default route), LAN interfaces, and
-// determines single-NIC vs multi-NIC mode.
+// It identifies the WAN interface (default route) and LAN interfaces.
 func DetectNetwork() (*DetectedNetwork, error) {
 	// Get default route: "default via 192.168.1.1 dev enp0s3 ..."
 	out, err := exec.Command("ip", "-4", "route", "show", "default").Output()
@@ -136,9 +134,6 @@ func DetectNetwork() (*DetectedNetwork, error) {
 			result.LANCount++
 		}
 	}
-
-	// If only the WAN interface exists (no LANs), it's single-NIC
-	result.SingleNIC = result.LANCount == 0
 
 	return result, nil
 }

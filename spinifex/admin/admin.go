@@ -67,7 +67,6 @@ type ConfigSettings struct {
 	// External networking for public subnets
 	ExternalMode    string // "pool", "nat", or "" (disabled)
 	ExternalIface   string // WAN NIC name (e.g., "eth0", "eth1")
-	SingleNIC       bool   // Use macvlan instead of adding NIC directly
 	ExternalDHCP    bool   // Obtain gateway IP via DHCP on macvlan/bridge
 	PoolName        string // External pool name (e.g., "wan")
 	PoolStart       string // First IP in external pool range

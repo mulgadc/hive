@@ -201,7 +201,7 @@ Every Spinifex node has two OVS bridges:
 | Bridge | Purpose | Ports |
 |--------|---------|-------|
 | `br-int` | VM overlay traffic (Geneve tunnels) | VM TAP devices, tunnel ports |
-| `br-external` | WAN uplink for public subnet traffic | Physical NIC or macvlan |
+| `br-external` | WAN uplink for public subnet traffic | macvlan on WAN NIC |
 
 `br-int` is always created by `setup-ovn.sh`. `br-external` is created only when
 `--external-bridge` is passed (required for public subnets / external connectivity).
@@ -213,55 +213,19 @@ maps the logical external switch to `br-external` via `ovn-bridge-mappings`.
 VM TAP ──→ br-int ──→ OVN logical pipeline ──→ localnet ──→ br-external ──→ WAN
 ```
 
-## Multi-NIC Setup (Dedicated WAN NIC)
+## Bridge Setup (macvlan)
 
-**Recommended for production.** The host has two or more NICs. One is for
-management and overlay traffic (e.g., eth0), the other is dedicated to WAN
-uplink (e.g., eth1).
-
-```
-eth0 (management, overlay, host IP)     eth1 (WAN uplink — no host IP)
-                                           │
-                                      br-external
-                                           │
-                                   localnet → OVN ext switch
-```
-
-The WAN NIC has no host IP — it's a pure uplink. No IP migration, no risk to
-host connectivity.
-
-### Setup
-
-```bash
-sudo setup-ovn.sh --external-bridge --external-iface=eth1
-```
-
-### What Happens
-
-1. Creates OVS bridge `br-external` (fail-mode=secure)
-2. Adds eth1 directly to br-external: `ovs-vsctl add-port br-external eth1`
-3. Sets `ovn-bridge-mappings=external:br-external`
-4. Host IP on eth0 is untouched
-
-### When to Use
-
-- Datacenter / colo with separate management and public NICs
-- Servers with bonded NICs (use `bond0` as the external interface)
-- Any host where you can dedicate a NIC to VM public traffic
-
-## Single-NIC Setup (macvlan)
-
-**For dev, homelab, and edge deployments** where the host has only one NIC. A
-macvlan sub-interface is created off the host's NIC, and that macvlan is added
-to br-external. The host keeps its IP on the original NIC — SSH stays up, no
-risk of losing connectivity.
+A macvlan sub-interface is created in bridge mode off the WAN NIC, and that
+macvlan is added to br-external. The host keeps its IP on the original NIC —
+SSH stays up, no risk of losing connectivity. This works for all deployments:
+single-NIC homelabs, multi-NIC datacenters, and everything in between.
 
 ```
-eth0 (host IP — unchanged)
+WAN NIC (host IP — unchanged)
   │
   ├── host traffic (SSH, management, overlay)
   │
-  └── spx-ext-eth0 (macvlan, bridge mode, no IP)
+  └── spx-ext-{nic} (macvlan, bridge mode, no IP)
         │
    br-external
         │
@@ -271,14 +235,14 @@ eth0 (host IP — unchanged)
 ### Setup
 
 ```bash
-sudo setup-ovn.sh --external-bridge --external-iface=eth0 --single-nic
+sudo setup-ovn.sh --external-bridge --external-iface=eth0
 ```
 
 In environments where the WAN IP comes from a router's DHCP server (homelab,
 small office), add `--dhcp` to obtain a gateway IP from the router automatically:
 
 ```bash
-sudo setup-ovn.sh --external-bridge --external-iface=eth0 --single-nic --dhcp
+sudo setup-ovn.sh --external-bridge --external-iface=eth0 --dhcp
 ```
 
 This requests an IP from the **router's DHCP** (e.g., 192.168.1.1 serving
@@ -306,51 +270,38 @@ interface and its macvlan children.
 
 | Path | Works? | Why |
 |------|--------|-----|
-| VM → internet | Yes | SNAT through OVN router → macvlan → eth0 → WAN |
-| LAN device → VM public IP | Yes | LAN → eth0 → macvlan → br-external → OVN |
+| VM → internet | Yes | SNAT through OVN router → macvlan → WAN NIC → WAN |
+| LAN device → VM public IP | Yes | LAN → WAN NIC → macvlan → br-external → OVN |
 | Host → VM public IP | No | macvlan isolation (kernel blocks parent↔child) |
 | Host → VM private IP | Yes | Overlay via br-int (unrelated to br-external) |
 
 The host-to-VM-public-IP limitation is rarely a problem — the host manages VMs
 via the overlay (private IPs), not their public IPs.
 
-### When to Use
-
-- Single-NIC servers (dev, homelab, small edge)
-- Any scenario where you can't dedicate a NIC to WAN traffic
-- Situations where SSH safety is critical
-
 ## How setup-ovn.sh Decides
 
-| Flags | Strategy | Result |
-|-------|----------|--------|
-| `--external-bridge --external-iface=eth1` | Dedicated NIC | eth1 added directly to br-external |
-| `--external-bridge --external-iface=eth0 --single-nic` | macvlan | macvlan created, added to br-external |
-| (no `--external-bridge`) | No external bridge | Only br-int created, no WAN connectivity |
+| Flags | Result |
+|-------|--------|
+| `--external-bridge --external-iface=eth0` | macvlan created, added to br-external |
+| (no `--external-bridge`) | Only br-int created, no WAN connectivity |
 
 ## Per-Node Configuration
 
-Different nodes in a cluster can use different bridge strategies. This is common
-when nodes have different hardware:
+Different nodes in a cluster can have different WAN NICs:
 
 ```toml
-# Node with 2 NICs — dedicated WAN NIC
 [nodes.node1.vpcd]
 external_interface = "eth1"
 
-# Node with 1 NIC — macvlan
 [nodes.node2.vpcd]
 external_interface = "eth0"
-single_nic = true
 
-# Node with bonded NICs — bond treated as dedicated NIC
 [nodes.node3.vpcd]
-external_interface = "bond0"
+external_interface = "bond0"       # bonded NIC
 ```
 
-Each node runs `setup-ovn.sh` with the appropriate flags for its hardware.
-OVN doesn't care how br-external gets its physical uplink — only that
-`ovn-bridge-mappings` is set correctly.
+Each node runs `setup-ovn.sh` with its own `--external-iface`. OVN doesn't
+care which NIC the macvlan is on — only that `ovn-bridge-mappings` is set.
 
 ## Bridge Verification
 
@@ -372,31 +323,7 @@ ip link show spx-ext-eth0
 # Shows: state UP, type macvlan mode bridge
 ```
 
-## Network Flow Diagrams
-
-### Multi-NIC
-
-```
-┌──────────────────────────────────────────────────┐
-│ Bare-Metal Host                                  │
-│                                                  │
-│  ┌──────────┐         ┌──────────┐               │
-│  │ br-int   │         │br-external│              │
-│  │ (overlay)│         │  (WAN)   │               │
-│  │          │         │          │               │
-│  │ tap-eni1 │  OVN    │          │               │
-│  │ tap-eni2 ├──NAT───→│          │               │
-│  │ tap-eni3 │pipeline │          │               │
-│  └──────────┘         └────┬─────┘               │
-│                            │                     │
-│  eth0 (mgmt/overlay)    eth1 (WAN uplink)        │
-└──────┼────────────────────┼──────────────────────┘
-       │                    │
-   Management LAN       Physical WAN
-   (NATS, Geneve)       (public IPs)
-```
-
-### Single-NIC (macvlan)
+## Network Flow Diagram
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -407,15 +334,14 @@ ip link show spx-ext-eth0
 │  │ (overlay)│         │  (WAN)   │               │
 │  │          │         │          │               │
 │  │ tap-eni1 │  OVN    │spx-ext-  │               │
-│  │ tap-eni2 ├──NAT───→│eth0      │               │
+│  │ tap-eni2 ├──NAT───→│{nic}     │               │
 │  │ tap-eni3 │pipeline │(macvlan) │               │
 │  └──────────┘         └────┬─────┘               │
 │                            │ macvlan bridge mode  │
-│                      eth0 (host IP + overlay + WAN)
+│                        WAN NIC (host IP unchanged)│
 └───────────────────────┼──────────────────────────┘
                         │
-                 Single Physical NIC
-            (management + overlay + WAN)
+                   Physical WAN
 ```
 
 # Configuration Reference
@@ -436,8 +362,7 @@ spinifex.toml
 │   └── region, az (optional)
 │
 └── [nodes.NAME.vpcd]                # Per-node: which NIC?
-    ├── external_interface
-    └── single_nic
+    └── external_interface
 ```
 
 ## Cluster-Wide: external_mode
@@ -506,13 +431,11 @@ These are different things:
 ovn_nb_addr        = "tcp:10.1.3.181:6641"   # OVN Northbound DB
 ovn_sb_addr        = "tcp:10.1.3.181:6642"   # OVN Southbound DB
 external_interface = "eth1"                   # WAN NIC name
-single_nic         = false                    # true = use macvlan
 ```
 
 | Field | Description |
 |-------|-------------|
-| `external_interface` | Physical NIC for WAN traffic. Different servers may have different names (eth1, eno2, enp3s0, bond0). |
-| `single_nic` | When `true`, `setup-ovn.sh` creates a macvlan sub-interface instead of adding the NIC directly. See Bridge Setup above. |
+| `external_interface` | Physical NIC for WAN traffic. A macvlan sub-interface is created on this NIC for br-external. Different servers may have different names (eth1, eno2, enp3s0, bond0). |
 
 ## Pool Selection Logic
 
@@ -547,7 +470,7 @@ Pools are initialized from `spinifex.toml` on vpcd startup (idempotent).
 
 # Deployment Examples
 
-## Homelab / Dev (Single Pool, Single NIC)
+## Homelab / Dev (Single Pool)
 
 ```
 Network: 192.168.1.0/24
@@ -568,13 +491,12 @@ prefix_len  = 24
 
 [nodes.homelab.vpcd]
 external_interface = "eth0"
-single_nic = true
 ```
 
 **Setup:** Change your router's DHCP range to end at .149. Run
-`setup-ovn.sh --external-bridge --external-iface=eth0 --single-nic`.
+`setup-ovn.sh --external-bridge --external-iface=eth0`.
 
-## Datacenter / Colo (ISP Block, Multi-NIC)
+## Datacenter / Colo (ISP Block)
 
 ```
 ISP-assigned: 203.0.113.0/28 (14 usable IPs)
@@ -637,7 +559,6 @@ prefix_len = 24
 
 [nodes.edge1.vpcd]
 external_interface = "eth0"
-single_nic = true
 ```
 
 ## Multi-Region (Multiple Pools)
@@ -857,11 +778,7 @@ sudo ovn-nbctl pg-get-ports sg-{groupId}
 ## 1. Set Up OVN Bridges
 
 ```bash
-# Multi-NIC (dedicated WAN NIC):
-sudo setup-ovn.sh --external-bridge --external-iface=eth1
-
-# Single-NIC (macvlan — host keeps its IP):
-sudo setup-ovn.sh --external-bridge --external-iface=eth0 --single-nic
+sudo setup-ovn.sh --external-bridge --external-iface=eth0
 ```
 
 ## 2. Configure External IP Pool

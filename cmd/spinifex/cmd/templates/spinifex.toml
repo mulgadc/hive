@@ -67,9 +67,6 @@ ovn_nb_addr = "{{.OVNNBAddr}}"
 ovn_sb_addr = "{{.OVNSBAddr}}"
 {{- if .ExternalIface}}
 external_interface = "{{.ExternalIface}}"
-{{- if .SingleNIC}}
-single_nic = true
-{{- end}}
 {{- end}}
 
 [nodes.{{.Node}}.predastore]

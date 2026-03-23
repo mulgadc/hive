@@ -433,35 +433,6 @@ external_interface = "enp3s0"
 	assert.Equal(t, "enp3s0", cfg.Nodes["n3"].VPCD.ExternalInterface)
 }
 
-func TestLoadConfig_SingleNIC(t *testing.T) {
-	resetViper(t)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "spinifex.toml")
-
-	toml := `
-node = "dev1"
-
-[nodes.dev1.vpcd]
-external_interface = "eth0"
-single_nic = true
-
-[nodes.prod1.vpcd]
-external_interface = "eth1"
-`
-	require.NoError(t, os.WriteFile(path, []byte(toml), 0600))
-
-	cfg, err := LoadConfig(path)
-	require.NoError(t, err)
-
-	// dev1: single NIC mode — macvlan will be used
-	assert.Equal(t, "eth0", cfg.Nodes["dev1"].VPCD.ExternalInterface)
-	assert.True(t, cfg.Nodes["dev1"].VPCD.SingleNIC)
-
-	// prod1: dedicated NIC — no macvlan
-	assert.Equal(t, "eth1", cfg.Nodes["prod1"].VPCD.ExternalInterface)
-	assert.False(t, cfg.Nodes["prod1"].VPCD.SingleNIC)
-}
-
 // Tests for ViperblockConfig
 
 func TestLoadConfig_ViperblockShardWAL_Explicit(t *testing.T) {
