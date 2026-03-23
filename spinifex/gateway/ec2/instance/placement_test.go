@@ -2,6 +2,7 @@ package gateway_ec2_instance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/types"
+	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -288,6 +290,58 @@ func TestAggregateResults_AllFail(t *testing.T) {
 	assert.Equal(t, awserrors.ErrorInsufficientInstanceCapacity, err.Error())
 }
 
+// --- extractClientError tests ---
+
+func TestExtractClientError_NoErrors(t *testing.T) {
+	results := []nodeLaunchResult{
+		{NodeID: "node-1", Reservation: &ec2.Reservation{}},
+	}
+	assert.Nil(t, extractClientError(results))
+}
+
+func TestExtractClientError_GenericError(t *testing.T) {
+	results := []nodeLaunchResult{
+		{NodeID: "node-1", Err: assert.AnError},
+	}
+	assert.Nil(t, extractClientError(results))
+}
+
+func TestExtractClientError_AMINotFound(t *testing.T) {
+	// Simulate the error wrapping that launchOnNodes does
+	inner := errors.New(awserrors.ErrorInvalidAMIIDNotFound)
+	wrapped := fmt.Errorf("launch on node-1: %w", inner)
+	results := []nodeLaunchResult{
+		{NodeID: "node-1", Err: wrapped},
+	}
+	err := extractClientError(results)
+	require.NotNil(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
+}
+
+func TestExtractClientError_KeyPairNotFound(t *testing.T) {
+	inner := errors.New(awserrors.ErrorInvalidKeyPairNotFound)
+	wrapped := fmt.Errorf("launch on node-1: %w", inner)
+	results := []nodeLaunchResult{
+		{NodeID: "node-1", Err: wrapped},
+	}
+	err := extractClientError(results)
+	require.NotNil(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidKeyPairNotFound, err.Error())
+}
+
+func TestAggregateResults_PropagatesClientError(t *testing.T) {
+	inner := errors.New(awserrors.ErrorInvalidAMIIDNotFound)
+	wrapped := fmt.Errorf("launch on node-1: %w", inner)
+	results := []nodeLaunchResult{
+		{NodeID: "node-1", Err: wrapped},
+		{NodeID: "node-2", Err: wrapped},
+	}
+
+	_, err := aggregateResults(results, 1, nil, "")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
+}
+
 // --- distributeInstances integration tests (end-to-end with mock daemons) ---
 
 func TestDistributeInstances_SuccessfulSpread(t *testing.T) {
@@ -379,6 +433,43 @@ func TestDistributeInstances_InsufficientCapacity(t *testing.T) {
 	_, err = distributeInstances(input, nc, "test-account")
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInsufficientInstanceCapacity, err.Error())
+}
+
+func TestDistributeInstances_PropagatesAMINotFound(t *testing.T) {
+	_, nc := startTestNATSServer(t)
+
+	// Mock node.status with capacity available
+	statusSub, err := nc.Subscribe("spinifex.node.status", func(msg *nats.Msg) {
+		resp := types.NodeStatusResponse{
+			Node:          "node-1",
+			InstanceTypes: []types.InstanceTypeCap{{Name: "t3.micro", Available: 2}},
+		}
+		data, _ := json.Marshal(resp)
+		_ = nc.Publish(msg.Reply, data)
+	})
+	require.NoError(t, err)
+	defer statusSub.Unsubscribe()
+
+	// Mock daemon responds with InvalidAMIID.NotFound (AMI doesn't exist)
+	sub1, err := nc.Subscribe("ec2.RunInstances.t3.micro.node-1", func(msg *nats.Msg) {
+		_ = msg.Respond(utils.GenerateErrorPayload(awserrors.ErrorInvalidAMIIDNotFound))
+	})
+	require.NoError(t, err)
+	defer sub1.Unsubscribe()
+
+	time.Sleep(50 * time.Millisecond)
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-0000000000000dead"),
+		InstanceType: aws.String("t3.micro"),
+		MinCount:     aws.Int64(1),
+		MaxCount:     aws.Int64(1),
+	}
+
+	_, err = distributeInstances(input, nc, "test-account")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error(),
+		"should propagate InvalidAMIID.NotFound, not InsufficientInstanceCapacity")
 }
 
 func TestDistributeInstances_LaunchCountCappedToMaxCount(t *testing.T) {

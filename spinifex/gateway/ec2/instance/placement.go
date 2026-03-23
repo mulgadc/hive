@@ -278,6 +278,11 @@ func aggregateResults(results []nodeLaunchResult, minCount int, natsConn *nats.C
 		if totalLaunched > 0 {
 			rollbackInstances(allInstances, natsConn, accountID)
 		}
+		// Propagate specific client errors (e.g. InvalidAMIID.NotFound) instead
+		// of the generic InsufficientInstanceCapacity.
+		if clientErr := extractClientError(results); clientErr != nil {
+			return nil, clientErr
+		}
 		return nil, errors.New(awserrors.ErrorInsufficientInstanceCapacity)
 	}
 
@@ -372,6 +377,9 @@ func distributeInstancesSpread(input *ec2.RunInstancesInput, natsConn *nats.Conn
 			Nodes:     reservedNodes,
 		}, accountID); err != nil {
 			slog.Error("distributeInstancesSpread: failed to release nodes after rollback", "err", err)
+		}
+		if clientErr := extractClientError(results); clientErr != nil {
+			return nil, clientErr
 		}
 		return nil, errors.New(awserrors.ErrorInsufficientInstanceCapacity)
 	}
@@ -470,6 +478,9 @@ func distributeInstancesCluster(input *ec2.RunInstancesInput, natsConn *nats.Con
 
 	// Step 5: Handle result (single node, no partial failure logic needed)
 	if results[0].Err != nil {
+		if clientErr := extractClientError(results); clientErr != nil {
+			return nil, clientErr
+		}
 		return nil, results[0].Err
 	}
 
@@ -496,6 +507,30 @@ func distributeInstancesCluster(input *ec2.RunInstancesInput, natsConn *nats.Con
 	}
 
 	return reservation, nil
+}
+
+// extractClientError scans node launch results for specific client validation
+// errors (e.g. InvalidAMIID.NotFound) that should be propagated instead of the
+// generic InsufficientInstanceCapacity. Returns the first match, or nil.
+func extractClientError(results []nodeLaunchResult) error {
+	for _, r := range results {
+		if r.Err == nil {
+			continue
+		}
+		inner := errors.Unwrap(r.Err)
+		if inner == nil {
+			continue
+		}
+		switch inner.Error() {
+		case awserrors.ErrorInvalidAMIIDNotFound,
+			awserrors.ErrorInvalidAMIIDMalformed,
+			awserrors.ErrorInvalidAMIIDUnavailable,
+			awserrors.ErrorInvalidKeyPairNotFound,
+			awserrors.ErrorMissingParameter:
+			return inner
+		}
+	}
+	return nil
 }
 
 // rollbackInstances terminates all instances from a failed multi-node launch.
