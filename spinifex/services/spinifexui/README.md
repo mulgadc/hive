@@ -26,20 +26,28 @@ Note: This is not needed for actually building spinifex-ui and running it. We co
    The `.nvmrc` file in the project root ensures you use the correct Node.js version. Run `nvm use` whenever you enter this directory.
 
 2. **Enable Corepack**
+
    ```sh
    corepack enable
    ```
 
 3. **Install Dependencies**
+
    ```sh
    pnpm install
    ```
 
-4. **Accept Certs In Browser**
+4. **Install Agent Browser**
+   ```sh
+   npm install -g agent-browser
+   agent-browser install
+   ```
+
+5. **Accept Certs In Browser**
 
    If you have added the CA to your machine you do not need to do this. But if you are sshd into a spinifex machine and want to view the ui, go to [https://localhost:9999](https://localhost:9999) and [https://localhost:8443](https://localhost:8443) and accept the certificates
 
-5. **Launch Server**
+6. **Launch Server**
 
    For development use:
 
