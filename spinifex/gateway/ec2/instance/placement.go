@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"sort"
 	"sync"
 	"time"
@@ -72,7 +73,11 @@ func distributeInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn, acco
 
 // queryNodeCapacity fans out spinifex.node.status to all daemons and returns
 // eligible nodes (those with Available >= 1 for the requested instance type),
-// sorted by available capacity descending.
+// sorted by available capacity descending with random tiebreaking for fair
+// distribution among equal-capacity nodes.
+//
+// Uses a collection window: after the first response arrives, only waits an
+// additional 200ms for remaining responses (instead of the full 3s timeout).
 func queryNodeCapacity(natsConn *nats.Conn, instanceType string) ([]nodeAllocation, error) {
 	inbox := nats.NewInbox()
 	sub, err := natsConn.SubscribeSync(inbox)
@@ -88,8 +93,13 @@ func queryNodeCapacity(natsConn *nats.Conn, instanceType string) ([]nodeAllocati
 		return nil, fmt.Errorf("failed to publish node status request: %w", err)
 	}
 
-	timeout := 3 * time.Second
-	deadline := time.Now().Add(timeout)
+	const (
+		initialTimeout = 3 * time.Second
+		collectWindow  = 200 * time.Millisecond
+	)
+
+	deadline := time.Now().Add(initialTimeout)
+	gotFirst := false
 	var nodes []nodeAllocation
 
 	for time.Now().Before(deadline) {
@@ -126,10 +136,24 @@ func queryNodeCapacity(natsConn *nats.Conn, instanceType string) ([]nodeAllocati
 				break
 			}
 		}
+
+		// After the first valid response, tighten the deadline so we don't
+		// wait the full 3s for stragglers.
+		if !gotFirst {
+			gotFirst = true
+			collectDeadline := time.Now().Add(collectWindow)
+			if collectDeadline.Before(deadline) {
+				deadline = collectDeadline
+			}
+		}
 	}
 
-	// Sort by available capacity descending for optimal distribution
-	sort.Slice(nodes, func(i, j int) bool {
+	// Shuffle first for random tiebreaking, then stable-sort by capacity
+	// descending. This ensures fair distribution among equal-capacity nodes.
+	rand.Shuffle(len(nodes), func(i, j int) {
+		nodes[i], nodes[j] = nodes[j], nodes[i]
+	})
+	sort.SliceStable(nodes, func(i, j int) bool {
 		return nodes[i].Available > nodes[j].Available
 	})
 

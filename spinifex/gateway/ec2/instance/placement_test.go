@@ -447,21 +447,25 @@ func TestDistributeInstances_NoNodesAvailable(t *testing.T) {
 
 // --- RunInstances routing tests ---
 
-func TestRunInstances_SingleInstanceUsesQueueGroup(t *testing.T) {
-	// For MinCount=MaxCount=1, RunInstances should use the queue group path,
-	// not the multi-node distribution path. We verify this by confirming it
-	// does NOT query spinifex.node.status.
+func TestRunInstances_SingleInstanceDistributes(t *testing.T) {
+	// For MinCount=MaxCount=1, RunInstances should still query node capacity
+	// and route to a specific node via targeted topic (not queue group).
 	_, nc := startTestNATSServer(t)
 
-	statusQueried := false
+	// Mock node status response (1 node with capacity)
 	statusSub, err := nc.Subscribe("spinifex.node.status", func(msg *nats.Msg) {
-		statusQueried = true
+		resp := types.NodeStatusResponse{
+			Node:          "node-1",
+			InstanceTypes: []types.InstanceTypeCap{{Name: "t3.micro", Available: 4}},
+		}
+		data, _ := json.Marshal(resp)
+		_ = nc.Publish(msg.Reply, data)
 	})
 	require.NoError(t, err)
 	defer statusSub.Unsubscribe()
 
-	// Mock the queue group handler
-	queueSub, err := nc.QueueSubscribe("ec2.RunInstances.t3.micro", "spinifex-workers", func(msg *nats.Msg) {
+	// Mock the node-specific handler (targeted topic)
+	nodeSub, err := nc.Subscribe("ec2.RunInstances.t3.micro.node-1", func(msg *nats.Msg) {
 		reservation := ec2.Reservation{
 			ReservationId: aws.String("r-single"),
 			Instances:     []*ec2.Instance{{InstanceId: aws.String("i-single")}},
@@ -470,7 +474,7 @@ func TestRunInstances_SingleInstanceUsesQueueGroup(t *testing.T) {
 		_ = msg.Respond(data)
 	})
 	require.NoError(t, err)
-	defer queueSub.Unsubscribe()
+	defer nodeSub.Unsubscribe()
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -485,7 +489,6 @@ func TestRunInstances_SingleInstanceUsesQueueGroup(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, reservation.Instances, 1)
 	assert.Equal(t, "i-single", aws.StringValue(reservation.Instances[0].InstanceId))
-	assert.False(t, statusQueried, "single-instance launch should NOT query node status")
 }
 
 // --- placementGroupName tests ---

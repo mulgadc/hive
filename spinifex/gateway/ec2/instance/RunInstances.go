@@ -8,7 +8,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
-	handlers_ec2_instance "github.com/mulgadc/spinifex/spinifex/handlers/ec2/instance"
 	handlers_ec2_placementgroup "github.com/mulgadc/spinifex/spinifex/handlers/ec2/placementgroup"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
@@ -94,37 +93,21 @@ func RunInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn, accountID s
 		}
 	}
 
-	// Multi-node routing: when count > 1 (and no placement group), use the
-	// distributeInstances path which fans out capacity queries and launches
-	// instances across multiple nodes for best-effort spread.
-	// Single-instance launches (MinCount=MaxCount=1) keep using the existing
-	// queue group topic for zero-overhead NATS load balancing.
-	if *input.MinCount > 1 || *input.MaxCount > 1 {
-		reservationPtr, err := distributeInstances(input, natsConn, accountID)
-		if err != nil {
-			return reservation, err
-		}
-		return *reservationPtr, nil
-	}
-
-	// Single-instance path: use existing queue group (NATS picks a node with capacity)
-	service := handlers_ec2_instance.NewNATSInstanceService(natsConn)
-
-	reservationPtr, err := service.RunInstances(input, accountID)
+	// Capacity-aware routing: query all nodes for capacity and distribute
+	// instances across nodes with best-effort spread. This applies to both
+	// single-instance (count=1) and batch (count>1) launches, ensuring fair
+	// distribution across the cluster.
+	reservationPtr, err := distributeInstances(input, natsConn, accountID)
 	if err != nil {
-		if errors.Is(err, nats.ErrNoResponders) {
-			// ErrNoResponders means no daemon subscribes to ec2.RunInstances.{type}.
-			// This happens when either: (a) the type is unknown, or (b) all nodes
-			// are at capacity. Query DescribeInstanceTypes to differentiate.
+		// When no nodes have capacity, distinguish between "unknown instance type"
+		// and "all nodes full" by checking DescribeInstanceTypes.
+		if err.Error() == awserrors.ErrorInsufficientInstanceCapacity {
 			if !isKnownInstanceType(natsConn, *input.InstanceType) {
 				return reservation, errors.New(awserrors.ErrorInvalidInstanceType)
 			}
-			return reservation, errors.New(awserrors.ErrorInsufficientInstanceCapacity)
 		}
 		return reservation, err
 	}
-
-	// Dereference pointer to return value
 	return *reservationPtr, nil
 }
 
