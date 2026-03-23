@@ -556,7 +556,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 			detectedNet = detected
 
 			// Print detected topology
-			fmt.Println("\n🔍 Detected network topology:\n")
+			fmt.Println("\n🔍 Detected network topology:")
 			fmt.Printf("  %-14s %-18s %-20s %-16s %s\n", "Interface", "IP", "Subnet", "Gateway", "Role")
 			for _, iface := range detected.Interfaces {
 				gw := "—"
@@ -1486,7 +1486,7 @@ func runAccountCreate(cmd *cobra.Command, args []string) {
 	vpcSvc, vpcErr := handlers_ec2_vpc.NewVPCServiceImplWithNATS(&nodeConfig, nc)
 	if vpcErr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not create default VPC service: %v\n", vpcErr)
-	} else if vpcErr = vpcSvc.EnsureDefaultVPC(accountID); vpcErr != nil {
+	} else if _, vpcErr = vpcSvc.EnsureDefaultVPC(accountID); vpcErr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not create default VPC: %v\n", vpcErr)
 	}
 

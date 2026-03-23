@@ -578,8 +578,13 @@ func (d *Daemon) Start() error {
 	// (matches AWS: every account has a default VPC with IGW + default SG)
 	if d.vpcService != nil {
 		for _, accountID := range []string{utils.GlobalAccountID, admin.DefaultAccountID()} {
-			if err := d.vpcService.EnsureDefaultVPC(accountID); err != nil {
+			vpcInfo, err := d.vpcService.EnsureDefaultVPC(accountID)
+			if err != nil {
 				slog.Error("Failed to ensure default VPC", "accountID", accountID, "error", err)
+			}
+			// Write [bootstrap] to spinifex.toml for vpcd reconciliation (admin account only)
+			if vpcInfo != nil && accountID == admin.DefaultAccountID() && d.configPath != "" {
+				writeBootstrapConfig(d.configPath, accountID, vpcInfo)
 			}
 		}
 		// Ensure default VPC has an IGW and default security group

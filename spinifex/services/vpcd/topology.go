@@ -884,6 +884,248 @@ func (h *TopologyHandler) handleDeleteNAT(msg *nats.Msg) {
 	respond(msg, nil)
 }
 
+// --- Reconciliation (called on startup, not via NATS) ---
+
+// reconcileVPC creates the OVN logical router for a VPC if it doesn't exist.
+func (h *TopologyHandler) reconcileVPC(ctx context.Context, vpcId, cidr string) error {
+	routerName := "vpc-" + vpcId
+
+	lr := &nbdb.LogicalRouter{
+		Name: routerName,
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id": vpcId,
+			"spinifex:cidr":   cidr,
+		},
+	}
+	if err := h.ovn.CreateLogicalRouter(ctx, lr); err != nil {
+		return fmt.Errorf("create router %s: %w", routerName, err)
+	}
+
+	slog.Info("vpcd reconcile: created VPC router", "router", routerName, "vpc_id", vpcId)
+	return nil
+}
+
+// reconcileSubnet creates the OVN logical switch, router port, and DHCP options for a subnet.
+func (h *TopologyHandler) reconcileSubnet(ctx context.Context, subnetId, vpcId, cidr string) error {
+	switchName := "subnet-" + subnetId
+	routerName := "vpc-" + vpcId
+	routerPortName := "rtr-" + subnetId
+	switchRouterPortName := "rtr-port-" + subnetId
+
+	gwIP, mask, err := subnetGateway(cidr)
+	if err != nil {
+		return fmt.Errorf("compute gateway for %s: %w", cidr, err)
+	}
+	gwCIDR := fmt.Sprintf("%s/%d", gwIP, mask)
+	routerMAC := generateMAC(subnetId)
+
+	// 1. Create LogicalSwitch
+	ls := &nbdb.LogicalSwitch{
+		Name: switchName,
+		ExternalIDs: map[string]string{
+			"spinifex:subnet_id": subnetId,
+			"spinifex:vpc_id":    vpcId,
+		},
+	}
+	if err := h.ovn.CreateLogicalSwitch(ctx, ls); err != nil {
+		return fmt.Errorf("create switch %s: %w", switchName, err)
+	}
+
+	// 2. Create LogicalRouterPort
+	lrp := &nbdb.LogicalRouterPort{
+		Name:     routerPortName,
+		MAC:      routerMAC,
+		Networks: []string{gwCIDR},
+		ExternalIDs: map[string]string{
+			"spinifex:subnet_id": subnetId,
+			"spinifex:vpc_id":    vpcId,
+		},
+	}
+	if err := h.ovn.CreateLogicalRouterPort(ctx, routerName, lrp); err != nil {
+		_ = h.ovn.DeleteLogicalSwitch(ctx, switchName)
+		return fmt.Errorf("create router port %s: %w", routerPortName, err)
+	}
+
+	// 3. Create LogicalSwitchPort (type=router)
+	lsp := &nbdb.LogicalSwitchPort{
+		Name:      switchRouterPortName,
+		Type:      "router",
+		Addresses: []string{"router"},
+		Options:   map[string]string{"router-port": routerPortName},
+		ExternalIDs: map[string]string{
+			"spinifex:subnet_id": subnetId,
+			"spinifex:vpc_id":    vpcId,
+		},
+	}
+	if err := h.ovn.CreateLogicalSwitchPort(ctx, switchName, lsp); err != nil {
+		_ = h.ovn.DeleteLogicalRouterPort(ctx, routerName, routerPortName)
+		_ = h.ovn.DeleteLogicalSwitch(ctx, switchName)
+		return fmt.Errorf("create switch router port %s: %w", switchRouterPortName, err)
+	}
+
+	// 4. Create DHCP options
+	dhcpOpts := &nbdb.DHCPOptions{
+		CIDR: cidr,
+		Options: map[string]string{
+			"server_id":  gwIP,
+			"server_mac": routerMAC,
+			"lease_time": "3600",
+			"router":     gwIP,
+			"dns_server": "169.254.169.253",
+			"mtu":        "1442",
+		},
+		ExternalIDs: map[string]string{
+			"spinifex:subnet_id": subnetId,
+			"spinifex:vpc_id":    vpcId,
+		},
+	}
+	if _, err := h.ovn.CreateDHCPOptions(ctx, dhcpOpts); err != nil {
+		slog.Warn("vpcd reconcile: failed to create DHCP options (non-fatal)", "cidr", cidr, "err", err)
+	}
+
+	slog.Info("vpcd reconcile: created subnet topology",
+		"switch", switchName, "router_port", routerPortName, "gateway", gwCIDR)
+	return nil
+}
+
+// reconcileIGW creates the OVN external switch, gateway router port, SNAT rule,
+// default route, and gateway chassis for a VPC's internet gateway.
+func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId string) error {
+	routerName := "vpc-" + vpcId
+	extSwitchName := "ext-" + vpcId
+	extPortName := "ext-port-" + vpcId
+	gwPortName := "gw-" + vpcId
+	switchGWPortName := "gw-port-" + vpcId
+
+	// Resolve external pool
+	pool := h.findExternalPool("", "")
+	gatewayIP := "169.254.0.1"
+	gatewayNetwork := "169.254.0.1/30"
+	wanGateway := "169.254.0.2"
+	prefixLen := 30
+
+	if pool != nil {
+		gip := pool.GatewayIP
+		if gip == "" {
+			gip = pool.RangeStart
+		}
+		gatewayIP = gip
+		prefixLen = pool.PrefixLen
+		if prefixLen == 0 {
+			prefixLen = 24
+		}
+		gatewayNetwork = fmt.Sprintf("%s/%d", gip, prefixLen)
+		wanGateway = pool.Gateway
+	}
+
+	// 1. Create external logical switch
+	extSwitch := &nbdb.LogicalSwitch{
+		Name: extSwitchName,
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id": vpcId,
+			"spinifex:role":   "external",
+		},
+	}
+	if err := h.ovn.CreateLogicalSwitch(ctx, extSwitch); err != nil {
+		return fmt.Errorf("create external switch %s: %w", extSwitchName, err)
+	}
+
+	// 2. Create localnet port
+	localnetPort := &nbdb.LogicalSwitchPort{
+		Name:      extPortName,
+		Type:      "localnet",
+		Addresses: []string{"unknown"},
+		Options:   map[string]string{"network_name": "external"},
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id": vpcId,
+		},
+	}
+	if err := h.ovn.CreateLogicalSwitchPort(ctx, extSwitchName, localnetPort); err != nil {
+		_ = h.ovn.DeleteLogicalSwitch(ctx, extSwitchName)
+		return fmt.Errorf("create localnet port %s: %w", extPortName, err)
+	}
+
+	// 3. Create gateway router port
+	gwMAC := generateMAC("gw-" + vpcId)
+	lrp := &nbdb.LogicalRouterPort{
+		Name:     gwPortName,
+		MAC:      gwMAC,
+		Networks: []string{gatewayNetwork},
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id": vpcId,
+			"spinifex:role":   "gateway",
+		},
+	}
+	if err := h.ovn.CreateLogicalRouterPort(ctx, routerName, lrp); err != nil {
+		_ = h.ovn.DeleteLogicalSwitch(ctx, extSwitchName)
+		return fmt.Errorf("create gateway router port %s: %w", gwPortName, err)
+	}
+
+	// 4. Create switch port connecting external switch to router
+	switchGWPort := &nbdb.LogicalSwitchPort{
+		Name:      switchGWPortName,
+		Type:      "router",
+		Addresses: []string{"router"},
+		Options:   map[string]string{"router-port": gwPortName},
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id": vpcId,
+		},
+	}
+	if err := h.ovn.CreateLogicalSwitchPort(ctx, extSwitchName, switchGWPort); err != nil {
+		_ = h.ovn.DeleteLogicalRouterPort(ctx, routerName, gwPortName)
+		_ = h.ovn.DeleteLogicalSwitch(ctx, extSwitchName)
+		return fmt.Errorf("create switch gateway port %s: %w", switchGWPortName, err)
+	}
+
+	// 5. Add SNAT rule
+	router, err := h.ovn.GetLogicalRouter(ctx, routerName)
+	if err == nil {
+		vpcCIDR := router.ExternalIDs["spinifex:cidr"]
+		if vpcCIDR == "" {
+			vpcCIDR = "10.0.0.0/8"
+		}
+		snatRule := &nbdb.NAT{
+			Type:       "snat",
+			ExternalIP: gatewayIP,
+			LogicalIP:  vpcCIDR,
+			ExternalIDs: map[string]string{
+				"spinifex:vpc_id": vpcId,
+			},
+		}
+		if err := h.ovn.AddNAT(ctx, routerName, snatRule); err != nil {
+			slog.Warn("vpcd reconcile: failed to add SNAT rule", "err", err)
+		}
+	}
+
+	// 6. Add default route
+	defaultRoute := &nbdb.LogicalRouterStaticRoute{
+		IPPrefix: "0.0.0.0/0",
+		Nexthop:  wanGateway,
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id": vpcId,
+		},
+	}
+	if err := h.ovn.AddStaticRoute(ctx, routerName, defaultRoute); err != nil {
+		slog.Warn("vpcd reconcile: failed to add default route", "err", err)
+	}
+
+	// 7. Schedule gateway chassis
+	for i, chassis := range h.chassisNames {
+		priority := 20 - (i * 5)
+		if priority < 1 {
+			priority = 1
+		}
+		if err := h.ovn.SetGatewayChassis(ctx, gwPortName, chassis, priority); err != nil {
+			slog.Warn("vpcd reconcile: failed to set gateway chassis", "chassis", chassis, "err", err)
+		}
+	}
+
+	slog.Info("vpcd reconcile: created IGW topology",
+		"ext_switch", extSwitchName, "gw_port", gwPortName,
+		"gateway_ip", gatewayIP, "wan_gateway", wanGateway)
+	return nil
+}
+
 // --- Helpers ---
 
 // subnetGateway computes the gateway IP (.1) from a CIDR string.

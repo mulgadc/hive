@@ -156,6 +156,15 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 			continue
 		}
 
+		// Resolve default subnet when none specified (matches AWS behavior)
+		if (runInstancesInput.SubnetId == nil || *runInstancesInput.SubnetId == "") && d.vpcService != nil {
+			defaultSubnet, dsErr := d.vpcService.GetDefaultSubnet(accountID)
+			if dsErr == nil {
+				runInstancesInput.SubnetId = aws.String(defaultSubnet.SubnetId)
+				slog.Info("Resolved default subnet for instance", "instanceId", instance.ID, "subnetId", defaultSubnet.SubnetId)
+			}
+		}
+
 		// Auto-create ENI when SubnetId is provided (matches AWS behavior)
 		if runInstancesInput.SubnetId != nil && *runInstancesInput.SubnetId != "" && d.vpcService != nil {
 			eniOut, eniErr := d.vpcService.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{

@@ -700,19 +700,28 @@ const (
 	DefaultSubnetCidr = "172.31.0.0/20"
 )
 
+// DefaultVPCInfo holds the IDs of the default VPC and subnet for bootstrap config.
+type DefaultVPCInfo struct {
+	VpcId      string
+	SubnetId   string
+	Cidr       string
+	SubnetCidr string
+}
+
 // EnsureDefaultVPC creates a default VPC and subnet if none exists for the given account.
 // This matches AWS behavior where a default VPC is present on account creation.
 // Safe to call multiple times — no-ops if a default VPC already exists.
-func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string) error {
+// Returns the default VPC info (whether newly created or pre-existing).
+func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string) (*DefaultVPCInfo, error) {
 	if s.vpcKV == nil {
-		return nil // No persistence, skip
+		return nil, nil // No persistence, skip
 	}
 
 	// Check if a default VPC already exists for this account
 	prefix := accountID + "."
 	keys, err := s.vpcKV.Keys()
 	if err != nil && !errors.Is(err, nats.ErrNoKeysFound) {
-		return fmt.Errorf("list VPCs: %w", err)
+		return nil, fmt.Errorf("list VPCs: %w", err)
 	}
 
 	for _, key := range keys {
@@ -732,14 +741,21 @@ func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string) error {
 		}
 		if record.IsDefault {
 			slog.Debug("Default VPC already exists", "vpcId", record.VpcId, "accountID", accountID)
-			return nil
+			// Look up the default subnet to return full info
+			defaultSubnet, _ := s.GetDefaultSubnet(accountID)
+			info := &DefaultVPCInfo{VpcId: record.VpcId, Cidr: record.CidrBlock}
+			if defaultSubnet != nil {
+				info.SubnetId = defaultSubnet.SubnetId
+				info.SubnetCidr = defaultSubnet.CidrBlock
+			}
+			return info, nil
 		}
 	}
 
 	// Create default VPC
 	vni, err := s.nextVNI()
 	if err != nil {
-		return fmt.Errorf("allocate VNI for default VPC: %w", err)
+		return nil, fmt.Errorf("allocate VNI for default VPC: %w", err)
 	}
 
 	vpcID := utils.GenerateResourceID("vpc")
@@ -755,10 +771,10 @@ func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string) error {
 
 	data, err := json.Marshal(vpcRecord)
 	if err != nil {
-		return fmt.Errorf("marshal default VPC: %w", err)
+		return nil, fmt.Errorf("marshal default VPC: %w", err)
 	}
 	if _, err := s.vpcKV.Put(utils.AccountKey(accountID, vpcID), data); err != nil {
-		return fmt.Errorf("store default VPC: %w", err)
+		return nil, fmt.Errorf("store default VPC: %w", err)
 	}
 
 	s.publishVPCEvent("vpc.create", vpcID, DefaultVPCCidr, vni)
@@ -785,10 +801,10 @@ func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string) error {
 
 	data, err = json.Marshal(subnetRecord)
 	if err != nil {
-		return fmt.Errorf("marshal default subnet: %w", err)
+		return nil, fmt.Errorf("marshal default subnet: %w", err)
 	}
 	if _, err := s.subnetKV.Put(utils.AccountKey(accountID, subnetID), data); err != nil {
-		return fmt.Errorf("store default subnet: %w", err)
+		return nil, fmt.Errorf("store default subnet: %w", err)
 	}
 
 	s.publishSubnetEvent("vpc.create-subnet", subnetID, vpcID, DefaultSubnetCidr)
@@ -801,7 +817,12 @@ func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string) error {
 		"az", az,
 		"accountID", accountID,
 	)
-	return nil
+	return &DefaultVPCInfo{
+		VpcId:      vpcID,
+		SubnetId:   subnetID,
+		Cidr:       DefaultVPCCidr,
+		SubnetCidr: DefaultSubnetCidr,
+	}, nil
 }
 
 // GetDefaultSubnet returns the default subnet for RunInstances when no SubnetId is specified.

@@ -25,6 +25,17 @@ func sudoCommand(name string, args ...string) *exec.Cmd {
 
 var serviceName = "vpcd"
 
+// BootstrapVPC holds the default VPC infrastructure IDs from spinifex.toml.
+// vpcd uses this to ensure OVN topology exists on first boot (before NATS KV
+// has any data) and on subsequent boots where OVN state may have been lost.
+type BootstrapVPC struct {
+	AccountID  string
+	VpcId      string
+	SubnetId   string
+	Cidr       string
+	SubnetCidr string
+}
+
 // Config holds the vpcd service configuration.
 type Config struct {
 	// NatsHost is the NATS server address (host:port).
@@ -46,6 +57,8 @@ type Config struct {
 	// ChassisNames are the OVN chassis identifiers for gateway HA scheduling.
 	// Format: "chassis-{hostname}" — one per node in the cluster.
 	ChassisNames []string
+	// Bootstrap holds the default VPC config from spinifex.toml for first-boot reconciliation.
+	Bootstrap *BootstrapVPC
 }
 
 // ExternalPoolConfig mirrors config.ExternalPool for vpcd's internal use.
@@ -199,7 +212,9 @@ func launchService(cfg *Config) error {
 	defer liveClient.Close()
 	slog.Info("Connected to OVN NB DB", "endpoint", cfg.OVNNBAddr)
 
-	// Subscribe to VPC lifecycle topics for OVN topology translation
+	// Reconcile OVN topology from bootstrap config before subscribing.
+	// This ensures the default VPC topology exists even if admin init ran
+	// before services were started (first-install case).
 	var topoOpts []TopologyOption
 	if cfg.ExternalMode != "" {
 		topoOpts = append(topoOpts, WithExternalNetwork(cfg.ExternalMode, cfg.ExternalPools))
@@ -210,6 +225,10 @@ func launchService(cfg *Config) error {
 		slog.Info("Gateway chassis configured", "chassis", cfg.ChassisNames)
 	}
 	topo := NewTopologyHandler(liveClient, topoOpts...)
+
+	// Run reconciliation before subscribing
+	Reconcile(ctx, topo, cfg.Bootstrap)
+
 	subs, err := topo.Subscribe(nc)
 	if err != nil {
 		slog.Error("Failed to subscribe to VPC topics", "err", err)

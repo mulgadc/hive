@@ -10,11 +10,12 @@ import (
 )
 
 type ClusterConfig struct {
-	Epoch   uint64            `mapstructure:"epoch"`   // bump when leader commits changes
-	Node    string            `mapstructure:"node"`    // my node name
-	Version string            `mapstructure:"version"` // spinifex version
-	Network NetworkConfig     `mapstructure:"network"` // cluster-wide external network settings
-	Nodes   map[string]Config `mapstructure:"nodes"`   // full config for every node
+	Epoch     uint64            `mapstructure:"epoch"`     // bump when leader commits changes
+	Node      string            `mapstructure:"node"`      // my node name
+	Version   string            `mapstructure:"version"`   // spinifex version
+	Network   NetworkConfig     `mapstructure:"network"`   // cluster-wide external network settings
+	Bootstrap BootstrapConfig   `mapstructure:"bootstrap"` // default VPC IDs for OVN reconciliation
+	Nodes     map[string]Config `mapstructure:"nodes"`     // full config for every node
 }
 
 // ExternalPool defines a range of routable IPs that Spinifex manages for public subnets.
@@ -34,6 +35,17 @@ type NetworkConfig struct {
 	ExternalMode  string         `mapstructure:"external_mode"`  // "pool", "nat", or "" (disabled)
 	ExternalDHCP  bool           `mapstructure:"external_dhcp"`  // Gateway IP obtained via DHCP (nat mode)
 	ExternalPools []ExternalPool `mapstructure:"external_pools"` // One or more IP pools
+}
+
+// BootstrapConfig holds the default VPC infrastructure IDs written by admin init.
+// vpcd reads this on startup to ensure OVN topology exists for the bootstrap VPC,
+// covering the case where admin init ran before services were started.
+type BootstrapConfig struct {
+	AccountID  string `mapstructure:"account_id"`
+	VpcId      string `mapstructure:"vpc_id"`
+	SubnetId   string `mapstructure:"subnet_id"`
+	Cidr       string `mapstructure:"cidr"`
+	SubnetCidr string `mapstructure:"subnet_cidr"`
 }
 
 // Config holds all configuration for the application

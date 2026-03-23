@@ -715,6 +715,17 @@ var vpcdStartCmd = &cobra.Command{
 			chassisNames = append(chassisNames, "chassis-"+nodeName)
 		}
 
+		var bootstrap *vpcd.BootstrapVPC
+		if clusterConfig.Bootstrap.VpcId != "" {
+			bootstrap = &vpcd.BootstrapVPC{
+				AccountID:  clusterConfig.Bootstrap.AccountID,
+				VpcId:      clusterConfig.Bootstrap.VpcId,
+				SubnetId:   clusterConfig.Bootstrap.SubnetId,
+				Cidr:       clusterConfig.Bootstrap.Cidr,
+				SubnetCidr: clusterConfig.Bootstrap.SubnetCidr,
+			}
+		}
+
 		svc, err := service.New("vpcd", &vpcd.Config{
 			NatsHost:      nodeConfig.NATS.Host,
 			NatsToken:     nodeConfig.NATS.ACL.Token,
@@ -725,6 +736,7 @@ var vpcdStartCmd = &cobra.Command{
 			ExternalMode:  clusterConfig.Network.ExternalMode,
 			ExternalPools: extPools,
 			ChassisNames:  chassisNames,
+			Bootstrap:     bootstrap,
 		})
 		if err != nil {
 			fmt.Println("Error starting vpcd service:", err)

@@ -2,9 +2,13 @@ package daemon
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"os"
+	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
+	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
 	"github.com/mulgadc/spinifex/spinifex/admin"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
@@ -63,7 +67,7 @@ func (d *Daemon) handleAccountCreated(msg *nats.Msg) {
 		slog.Error("Account creation event has empty account ID")
 		return
 	}
-	if err := d.vpcService.EnsureDefaultVPC(evt.AccountID); err != nil {
+	if _, err := d.vpcService.EnsureDefaultVPC(evt.AccountID); err != nil {
 		slog.Error("Failed to create default VPC for new account",
 			"accountID", evt.AccountID, "error", err)
 	}
@@ -180,5 +184,39 @@ func (d *Daemon) ensureDefaultVPCInfrastructure() {
 			slog.Info("Created default security group for default VPC",
 				"groupId", sgId, "vpcId", defaultVpcId, "accountID", accountID)
 		}
+	}
+}
+
+// writeBootstrapConfig appends the [bootstrap] section to spinifex.toml if not already present.
+// This enables vpcd to reconcile OVN topology on startup for the default VPC.
+// configPath is the path to spinifex.toml (e.g., /home/user/spinifex/config/spinifex.toml).
+func writeBootstrapConfig(configPath, accountID string, info *handlers_ec2_vpc.DefaultVPCInfo) {
+	tomlPath := configPath
+
+	// Check if [bootstrap] already exists
+	data, err := os.ReadFile(tomlPath)
+	if err != nil {
+		slog.Debug("writeBootstrapConfig: could not read spinifex.toml", "err", err)
+		return
+	}
+	if strings.Contains(string(data), "[bootstrap]") {
+		return // already present
+	}
+
+	section := fmt.Sprintf("\n[bootstrap]\naccount_id  = %q\nvpc_id      = %q\nsubnet_id   = %q\ncidr        = %q\nsubnet_cidr = %q\n",
+		accountID, info.VpcId, info.SubnetId, info.Cidr, info.SubnetCidr)
+
+	f, err := os.OpenFile(tomlPath, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		slog.Warn("writeBootstrapConfig: could not open spinifex.toml for append", "err", err)
+		return
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(section); err != nil {
+		slog.Warn("writeBootstrapConfig: failed to write [bootstrap] section", "err", err)
+	} else {
+		slog.Info("Wrote [bootstrap] section to spinifex.toml",
+			"vpcId", info.VpcId, "subnetId", info.SubnetId)
 	}
 }
