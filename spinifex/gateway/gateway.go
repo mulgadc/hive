@@ -47,9 +47,10 @@ type GatewayConfig struct {
 }
 
 var supportedServices = map[string]bool{
-	"ec2":     true,
-	"iam":     true,
-	"account": true,
+	"ec2":                    true,
+	"iam":                    true,
+	"account":                true,
+	"elasticloadbalancing":   true,
 }
 
 type ErrorResponse struct {
@@ -189,6 +190,8 @@ func (gw *GatewayConfig) Request(w http.ResponseWriter, r *http.Request) {
 		err = gw.Account_Request(w, r)
 	case "iam":
 		err = gw.IAM_Request(w, r)
+	case "elasticloadbalancing":
+		err = gw.ELBv2_Request(w, r)
 	default:
 		err = errors.New(awserrors.ErrorUnsupportedOperation)
 	}

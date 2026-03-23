@@ -375,6 +375,7 @@ func TestSupportedServices(t *testing.T) {
 	assert.True(t, supportedServices["ec2"])
 	assert.True(t, supportedServices["iam"])
 	assert.True(t, supportedServices["account"])
+	assert.True(t, supportedServices["elasticloadbalancing"])
 	assert.False(t, supportedServices["s3"])
 	assert.False(t, supportedServices["dynamodb"])
 	assert.False(t, supportedServices[""])

@@ -42,6 +42,7 @@ import (
 	handlers_ec2_tags "github.com/mulgadc/spinifex/spinifex/handlers/ec2/tags"
 	handlers_ec2_volume "github.com/mulgadc/spinifex/spinifex/handlers/ec2/volume"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
+	handlers_elbv2 "github.com/mulgadc/spinifex/spinifex/handlers/elbv2"
 	"github.com/mulgadc/spinifex/spinifex/instancetypes"
 	"github.com/mulgadc/spinifex/spinifex/objectstore"
 	"github.com/mulgadc/spinifex/spinifex/qmp"
@@ -108,6 +109,7 @@ type Daemon struct {
 	igwService      *handlers_ec2_igw.IGWServiceImpl
 	vpcService      *handlers_ec2_vpc.VPCServiceImpl
 	eipService      *handlers_ec2_eip.EIPServiceImpl
+	elbv2Service    *handlers_elbv2.ELBv2ServiceImpl
 	externalIPAM    *handlers_ec2_vpc.ExternalIPAM
 	ctx             context.Context
 	cancel          context.CancelFunc
@@ -426,6 +428,19 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.GetSerialConsoleAccessStatus", d.handleEC2GetSerialConsoleAccessStatus, "spinifex-workers"},
 		{"ec2.EnableSerialConsoleAccess", d.handleEC2EnableSerialConsoleAccess, "spinifex-workers"},
 		{"ec2.DisableSerialConsoleAccess", d.handleEC2DisableSerialConsoleAccess, "spinifex-workers"},
+		// ELBv2 operations
+		{"elbv2.CreateLoadBalancer", d.handleELBv2CreateLoadBalancer, "spinifex-workers"},
+		{"elbv2.DeleteLoadBalancer", d.handleELBv2DeleteLoadBalancer, "spinifex-workers"},
+		{"elbv2.DescribeLoadBalancers", d.handleELBv2DescribeLoadBalancers, "spinifex-workers"},
+		{"elbv2.CreateTargetGroup", d.handleELBv2CreateTargetGroup, "spinifex-workers"},
+		{"elbv2.DeleteTargetGroup", d.handleELBv2DeleteTargetGroup, "spinifex-workers"},
+		{"elbv2.DescribeTargetGroups", d.handleELBv2DescribeTargetGroups, "spinifex-workers"},
+		{"elbv2.RegisterTargets", d.handleELBv2RegisterTargets, "spinifex-workers"},
+		{"elbv2.DeregisterTargets", d.handleELBv2DeregisterTargets, "spinifex-workers"},
+		{"elbv2.DescribeTargetHealth", d.handleELBv2DescribeTargetHealth, "spinifex-workers"},
+		{"elbv2.CreateListener", d.handleELBv2CreateListener, "spinifex-workers"},
+		{"elbv2.DeleteListener", d.handleELBv2DeleteListener, "spinifex-workers"},
+		{"elbv2.DescribeListeners", d.handleELBv2DescribeListeners, "spinifex-workers"},
 		{fmt.Sprintf("spinifex.admin.%s.health", d.node), d.handleHealthCheck, ""},
 		{"spinifex.nodes.discover", d.handleNodeDiscover, ""},
 		{"spinifex.node.status", d.handleNodeStatus, ""},
@@ -572,6 +587,13 @@ func (d *Daemon) Start() error {
 	})
 	if err != nil {
 		return fmt.Errorf("failed to initialize account settings service: %w", err)
+	}
+
+	d.elbv2Service, err = initServiceWithRetry("ELBv2 service", func() (*handlers_elbv2.ELBv2ServiceImpl, error) {
+		return handlers_elbv2.NewELBv2ServiceImplWithNATS(d.config, d.natsConn)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to initialize ELBv2 service: %w", err)
 	}
 
 	// Ensure default VPC exists for system and admin accounts
