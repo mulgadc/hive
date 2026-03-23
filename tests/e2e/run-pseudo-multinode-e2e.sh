@@ -319,9 +319,13 @@ for instance_id in "${INSTANCE_IDS[@]}"; do
     }
 done
 
-# Check distribution
+# Check distribution — enforce all 3 nodes received an instance
 echo ""
-check_instance_distribution
+check_instance_distribution 3 || {
+    echo "ERROR: Default spread did not distribute instances across all 3 nodes"
+    exit 1
+}
+echo "  Default spread distribution verified"
 
 # Verify spx get vms shows all running instances
 echo ""
@@ -733,6 +737,407 @@ fi
 
 echo ""
 echo "Phase 5b: All batch distribution tests passed"
+
+# Phase 5c: Placement Group E2E Tests
+echo ""
+echo "Phase 5c: Placement Group E2E Tests (CRUD + Spread + Cluster)"
+echo "=============================================================="
+
+# Test 5c-1: Create spread group
+echo ""
+echo "Test 5c-1: CreatePlacementGroup (spread)"
+echo "----------------------------------------"
+CREATE_OUTPUT=$($AWS_EC2 create-placement-group \
+    --group-name test-spread --strategy spread)
+SPREAD_GROUP_ID=$(echo "$CREATE_OUTPUT" | jq -r '.PlacementGroup.GroupId')
+SPREAD_STATE=$(echo "$CREATE_OUTPUT" | jq -r '.PlacementGroup.State')
+if [ -z "$SPREAD_GROUP_ID" ] || [ "$SPREAD_GROUP_ID" = "null" ]; then
+    echo "FAIL: No GroupId returned"; exit 1
+fi
+if [ "$SPREAD_STATE" != "available" ]; then
+    echo "FAIL: Expected state=available, got $SPREAD_STATE"; exit 1
+fi
+echo "  PASS: Created spread group $SPREAD_GROUP_ID (state=$SPREAD_STATE)"
+
+# Test 5c-2: Create cluster group
+echo ""
+echo "Test 5c-2: CreatePlacementGroup (cluster)"
+echo "----------------------------------------"
+CREATE_OUTPUT=$($AWS_EC2 create-placement-group \
+    --group-name test-cluster --strategy cluster)
+CLUSTER_GROUP_ID=$(echo "$CREATE_OUTPUT" | jq -r '.PlacementGroup.GroupId')
+CLUSTER_STATE=$(echo "$CREATE_OUTPUT" | jq -r '.PlacementGroup.State')
+if [ -z "$CLUSTER_GROUP_ID" ] || [ "$CLUSTER_GROUP_ID" = "null" ]; then
+    echo "FAIL: No GroupId returned"; exit 1
+fi
+if [ "$CLUSTER_STATE" != "available" ]; then
+    echo "FAIL: Expected state=available, got $CLUSTER_STATE"; exit 1
+fi
+echo "  PASS: Created cluster group $CLUSTER_GROUP_ID (state=$CLUSTER_STATE)"
+
+# Test 5c-3: Partition strategy rejected
+echo ""
+echo "Test 5c-3: CreatePlacementGroup (partition rejected)"
+echo "----------------------------------------"
+if PARTITION_OUTPUT=$($AWS_EC2 create-placement-group \
+    --group-name test-partition --strategy partition 2>&1); then
+    echo "FAIL: Expected error for partition strategy"; exit 1
+fi
+if echo "$PARTITION_OUTPUT" | grep -q "InvalidParameterValue"; then
+    echo "  PASS: partition strategy correctly rejected"
+else
+    echo "FAIL: Wrong error: $PARTITION_OUTPUT"; exit 1
+fi
+
+# Test 5c-4: Duplicate name rejected
+echo ""
+echo "Test 5c-4: CreatePlacementGroup (duplicate name)"
+echo "----------------------------------------"
+if DUP_OUTPUT=$($AWS_EC2 create-placement-group \
+    --group-name test-spread --strategy spread 2>&1); then
+    echo "FAIL: Expected error for duplicate name"; exit 1
+fi
+if echo "$DUP_OUTPUT" | grep -q "InvalidPlacementGroup.Duplicate"; then
+    echo "  PASS: Duplicate name correctly rejected"
+else
+    echo "FAIL: Wrong error: $DUP_OUTPUT"; exit 1
+fi
+
+# Test 5c-5: DescribePlacementGroups
+echo ""
+echo "Test 5c-5: DescribePlacementGroups"
+echo "----------------------------------------"
+DESCRIBE_OUTPUT=$($AWS_EC2 describe-placement-groups)
+PG_COUNT=$(echo "$DESCRIBE_OUTPUT" | jq '.PlacementGroups | length')
+if [ "$PG_COUNT" -lt 2 ]; then
+    echo "FAIL: Expected at least 2 placement groups, got $PG_COUNT"; exit 1
+fi
+
+SPREAD_STRATEGY=$(echo "$DESCRIBE_OUTPUT" | jq -r '.PlacementGroups[] | select(.GroupName=="test-spread") | .Strategy')
+SPREAD_LEVEL=$(echo "$DESCRIBE_OUTPUT" | jq -r '.PlacementGroups[] | select(.GroupName=="test-spread") | .SpreadLevel')
+if [ "$SPREAD_STRATEGY" != "spread" ]; then
+    echo "FAIL: Spread group strategy=$SPREAD_STRATEGY"; exit 1
+fi
+if [ "$SPREAD_LEVEL" != "host" ]; then
+    echo "FAIL: Spread group SpreadLevel=$SPREAD_LEVEL, expected host"; exit 1
+fi
+
+CLUSTER_STRATEGY=$(echo "$DESCRIBE_OUTPUT" | jq -r '.PlacementGroups[] | select(.GroupName=="test-cluster") | .Strategy')
+if [ "$CLUSTER_STRATEGY" != "cluster" ]; then
+    echo "FAIL: Cluster group strategy=$CLUSTER_STRATEGY"; exit 1
+fi
+echo "  PASS: Both groups described with correct fields"
+
+FILTER_OUTPUT=$($AWS_EC2 describe-placement-groups --group-names test-spread)
+FILTER_COUNT=$(echo "$FILTER_OUTPUT" | jq '.PlacementGroups | length')
+if [ "$FILTER_COUNT" -ne 1 ]; then
+    echo "FAIL: Name filter returned $FILTER_COUNT groups, expected 1"; exit 1
+fi
+echo "  PASS: Name filter works correctly"
+
+# Test 5c-6: DescribeInstanceTypes PlacementGroupInfo
+echo ""
+echo "Test 5c-6: DescribeInstanceTypes PlacementGroupInfo"
+echo "----------------------------------------"
+DIT_OUTPUT=$($AWS_EC2 describe-instance-types --instance-types "$INSTANCE_TYPE")
+STRATEGIES=$(echo "$DIT_OUTPUT" | jq -r '.InstanceTypes[0].PlacementGroupInfo.SupportedStrategies[]' 2>/dev/null | sort | tr '\n' ',')
+if ! echo "$STRATEGIES" | grep -q "cluster" || ! echo "$STRATEGIES" | grep -q "spread"; then
+    echo "FAIL: PlacementGroupInfo.SupportedStrategies missing spread/cluster: $STRATEGIES"; exit 1
+fi
+echo "  PASS: $INSTANCE_TYPE supports strategies: $STRATEGIES"
+
+# Test 5c-7: Spread — 3 instances on 3 nodes (strict 1-per-node)
+echo ""
+echo "Test 5c-7: Spread — Launch 3 Instances (1 per node)"
+echo "----------------------------------------"
+RUN_OUTPUT=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name multinode-test-key \
+    --count 3 \
+    --placement GroupName=test-spread)
+
+SPREAD_COUNT=$(echo "$RUN_OUTPUT" | jq '.Instances | length')
+if [ "$SPREAD_COUNT" -ne 3 ]; then
+    echo "FAIL: Expected 3 instances, got $SPREAD_COUNT"; exit 1
+fi
+
+SPREAD_IDS=($(echo "$RUN_OUTPUT" | jq -r '.Instances[].InstanceId'))
+echo "  Launched: ${SPREAD_IDS[*]}"
+
+for id in "${SPREAD_IDS[@]}"; do
+    wait_for_instance_state "$id" "running" 60 || {
+        echo "ERROR: Instance $id failed to reach running state"; exit 1
+    }
+done
+
+echo "  Checking strict 1-per-node distribution..."
+count_instances_per_node "${SPREAD_IDS[@]}"
+if [ "$NODE1_COUNT" -ne 1 ] || [ "$NODE2_COUNT" -ne 1 ] || [ "$NODE3_COUNT" -ne 1 ]; then
+    echo "FAIL: Spread group did not enforce strict 1-per-node"; exit 1
+fi
+echo "  PASS: Strict 1-per-node spread enforced"
+
+# Test 5c-8: DescribeInstances shows Placement field
+echo ""
+echo "Test 5c-8: Spread — DescribeInstances Placement Field"
+echo "----------------------------------------"
+verify_placement "test-spread" "${SPREAD_IDS[@]}" || exit 1
+echo "  PASS: Placement field correctly populated"
+
+# Test 5c-9: 4th instance fails (all nodes occupied)
+echo ""
+echo "Test 5c-9: Spread — 4th Instance Fails (all nodes used)"
+echo "----------------------------------------"
+if FOURTH_OUTPUT=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name multinode-test-key \
+    --count 1 \
+    --placement GroupName=test-spread 2>&1); then
+    echo "FAIL: Expected InsufficientInstanceCapacity for 4th spread instance"
+    ACCIDENTAL_ID=$(echo "$FOURTH_OUTPUT" | jq -r '.Instances[0].InstanceId // empty')
+    [ -n "$ACCIDENTAL_ID" ] && $AWS_EC2 terminate-instances --instance-ids "$ACCIDENTAL_ID" > /dev/null
+    exit 1
+fi
+if echo "$FOURTH_OUTPUT" | grep -q "InsufficientInstanceCapacity"; then
+    echo "  PASS: 4th instance correctly rejected (all nodes occupied)"
+else
+    echo "FAIL: Wrong error: $FOURTH_OUTPUT"; exit 1
+fi
+
+# Test 5c-10: Terminate frees node slot, replacement succeeds
+echo ""
+echo "Test 5c-10: Spread — Terminate Frees Node, Replacement Succeeds"
+echo "----------------------------------------"
+TERMINATED_ID="${SPREAD_IDS[0]}"
+echo "  Terminating $TERMINATED_ID to free a node slot..."
+$AWS_EC2 terminate-instances --instance-ids "$TERMINATED_ID" > /dev/null
+wait_for_instance_state "$TERMINATED_ID" "terminated" 30 || true
+sleep 2
+
+echo "  Launching replacement instance..."
+REPLACE_OUTPUT=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name multinode-test-key \
+    --count 1 \
+    --placement GroupName=test-spread)
+REPLACE_ID=$(echo "$REPLACE_OUTPUT" | jq -r '.Instances[0].InstanceId')
+if [ -z "$REPLACE_ID" ] || [ "$REPLACE_ID" = "null" ]; then
+    echo "FAIL: Replacement launch failed"; exit 1
+fi
+wait_for_instance_state "$REPLACE_ID" "running" 60 || {
+    echo "ERROR: Replacement instance failed to reach running state"; exit 1
+}
+echo "  PASS: Replacement launched successfully after terminate freed slot"
+
+# Cleanup spread instances
+echo "  Cleaning up spread instances..."
+SPREAD_CLEANUP_IDS=("${SPREAD_IDS[@]:1}" "$REPLACE_ID")
+if ! terminate_and_wait "${SPREAD_CLEANUP_IDS[@]}"; then
+    echo "WARNING: Some spread instances failed to terminate"
+fi
+sleep 2
+
+# Test 5c-11: Cluster — all instances on same node
+echo ""
+echo "Test 5c-11: Cluster — Launch 3 Instances (all on one node)"
+echo "----------------------------------------"
+RUN_OUTPUT=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name multinode-test-key \
+    --count 3 \
+    --placement GroupName=test-cluster)
+
+CLUSTER_COUNT=$(echo "$RUN_OUTPUT" | jq '.Instances | length')
+if [ "$CLUSTER_COUNT" -ne 3 ]; then
+    echo "FAIL: Expected 3 instances, got $CLUSTER_COUNT"; exit 1
+fi
+
+CLUSTER_IDS=($(echo "$RUN_OUTPUT" | jq -r '.Instances[].InstanceId'))
+echo "  Launched: ${CLUSTER_IDS[*]}"
+
+for id in "${CLUSTER_IDS[@]}"; do
+    wait_for_instance_state "$id" "running" 60 || {
+        echo "ERROR: Instance $id failed to reach running state"; exit 1
+    }
+done
+
+echo "  Checking cluster pinning..."
+count_instances_per_node "${CLUSTER_IDS[@]}"
+NODES_WITH_INSTANCES=0
+PINNED_NODE=""
+for i in 1 2 3; do
+    count_var="NODE${i}_COUNT"
+    if [ "${!count_var}" -gt 0 ]; then
+        NODES_WITH_INSTANCES=$((NODES_WITH_INSTANCES + 1))
+        PINNED_NODE=$i
+    fi
+done
+if [ "$NODES_WITH_INSTANCES" -ne 1 ]; then
+    echo "FAIL: Cluster instances spread across $NODES_WITH_INSTANCES nodes (expected 1)"; exit 1
+fi
+echo "  PASS: All 3 instances pinned to Node$PINNED_NODE"
+
+# Test 5c-12: DescribeInstances shows Placement field
+echo ""
+echo "Test 5c-12: Cluster — DescribeInstances Placement Field"
+echo "----------------------------------------"
+verify_placement "test-cluster" "${CLUSTER_IDS[@]}" || exit 1
+echo "  PASS: Placement field correctly populated"
+
+# Test 5c-13: Subsequent launch pins to same node
+echo ""
+echo "Test 5c-13: Cluster — Subsequent Launch Pins to Same Node"
+echo "----------------------------------------"
+echo "  Launching 1 more instance into cluster group..."
+EXTRA_OUTPUT=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name multinode-test-key \
+    --count 1 \
+    --placement GroupName=test-cluster)
+EXTRA_ID=$(echo "$EXTRA_OUTPUT" | jq -r '.Instances[0].InstanceId')
+if [ -z "$EXTRA_ID" ] || [ "$EXTRA_ID" = "null" ]; then
+    echo "FAIL: Subsequent launch failed"; exit 1
+fi
+wait_for_instance_state "$EXTRA_ID" "running" 60 || {
+    echo "ERROR: Extra instance failed to reach running state"; exit 1
+}
+
+echo "  Checking pinning..."
+ALL_CLUSTER_IDS=("${CLUSTER_IDS[@]}" "$EXTRA_ID")
+count_instances_per_node "${ALL_CLUSTER_IDS[@]}"
+NODES_WITH_INSTANCES=0
+for i in 1 2 3; do
+    count_var="NODE${i}_COUNT"
+    if [ "${!count_var}" -gt 0 ]; then
+        NODES_WITH_INSTANCES=$((NODES_WITH_INSTANCES + 1))
+    fi
+done
+if [ "$NODES_WITH_INSTANCES" -ne 1 ]; then
+    echo "FAIL: Extra instance not pinned to same node"; exit 1
+fi
+echo "  PASS: Subsequent launch pinned to same Node$PINNED_NODE"
+
+# Cleanup cluster instances
+echo "  Cleaning up cluster instances..."
+if ! terminate_and_wait "${ALL_CLUSTER_IDS[@]}"; then
+    echo "WARNING: Some cluster instances failed to terminate"
+fi
+sleep 2
+
+# Test 5c-14: Cluster capacity exhausted on pinned node
+echo ""
+echo "Test 5c-14: Cluster — Capacity Exhausted on Pinned Node"
+echo "----------------------------------------"
+FILL_OUTPUT=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name multinode-test-key \
+    --count 1 \
+    --placement GroupName=test-cluster)
+FILL_ID=$(echo "$FILL_OUTPUT" | jq -r '.Instances[0].InstanceId')
+wait_for_instance_state "$FILL_ID" "running" 60 || true
+
+if CAP_OUTPUT=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name multinode-test-key \
+    --count 100 \
+    --placement GroupName=test-cluster 2>&1); then
+    echo "FAIL: Expected InsufficientInstanceCapacity"; exit 1
+fi
+if echo "$CAP_OUTPUT" | grep -q "InsufficientInstanceCapacity"; then
+    echo "  PASS: Capacity exhaustion correctly detected on pinned node"
+else
+    echo "FAIL: Wrong error: $CAP_OUTPUT"; exit 1
+fi
+
+if [ -n "$FILL_ID" ] && [ "$FILL_ID" != "null" ]; then
+    terminate_and_wait "$FILL_ID" || true
+fi
+sleep 2
+
+# Test 5c-15: DeletePlacementGroup with running instances fails
+echo ""
+echo "Test 5c-15: DeletePlacementGroup with Instances (InUse)"
+echo "----------------------------------------"
+INUSE_OUTPUT=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name multinode-test-key \
+    --count 1 \
+    --placement GroupName=test-spread)
+INUSE_ID=$(echo "$INUSE_OUTPUT" | jq -r '.Instances[0].InstanceId')
+wait_for_instance_state "$INUSE_ID" "running" 60 || true
+
+if DEL_OUTPUT=$($AWS_EC2 delete-placement-group \
+    --group-name test-spread 2>&1); then
+    echo "FAIL: Expected InvalidPlacementGroup.InUse"; exit 1
+fi
+if echo "$DEL_OUTPUT" | grep -q "InvalidPlacementGroup.InUse"; then
+    echo "  PASS: Delete correctly blocked while instances running"
+else
+    echo "FAIL: Wrong error: $DEL_OUTPUT"; exit 1
+fi
+
+# Test 5c-16: Terminate all + delete succeeds
+echo ""
+echo "Test 5c-16: Terminate All + DeletePlacementGroup"
+echo "----------------------------------------"
+echo "  Terminating instance $INUSE_ID..."
+terminate_and_wait "$INUSE_ID" || true
+sleep 2
+
+$AWS_EC2 delete-placement-group --group-name test-spread
+echo "  PASS: Spread group deleted after terminating instances"
+
+$AWS_EC2 delete-placement-group --group-name test-cluster
+echo "  PASS: Cluster group deleted"
+
+REMAINING=$($AWS_EC2 describe-placement-groups \
+    --query 'PlacementGroups[?GroupName==`test-spread` || GroupName==`test-cluster`] | length(@)' \
+    --output text 2>/dev/null || echo "0")
+if [ "$REMAINING" != "0" ] && [ "$REMAINING" != "None" ]; then
+    echo "FAIL: Groups still exist after deletion"; exit 1
+fi
+echo "  PASS: Both groups deleted and verified gone"
+
+# Test 5c-17: Default spread unchanged (regression)
+echo ""
+echo "Test 5c-17: Default Spread (No Placement Group) Unchanged"
+echo "----------------------------------------"
+RUN_OUTPUT=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name multinode-test-key \
+    --count 3)
+REG_COUNT=$(echo "$RUN_OUTPUT" | jq '.Instances | length')
+if [ "$REG_COUNT" -ne 3 ]; then
+    echo "FAIL: Default spread launch failed, got $REG_COUNT instances"; exit 1
+fi
+REG_IDS=($(echo "$RUN_OUTPUT" | jq -r '.Instances[].InstanceId'))
+for id in "${REG_IDS[@]}"; do
+    wait_for_instance_state "$id" "running" 60 || true
+done
+
+PLACEMENT=$($AWS_EC2 describe-instances --instance-ids "${REG_IDS[0]}" \
+    --query 'Reservations[0].Instances[0].Placement.GroupName' --output text)
+if [ -n "$PLACEMENT" ] && [ "$PLACEMENT" != "None" ] && [ "$PLACEMENT" != "null" ]; then
+    echo "FAIL: Default spread instance has Placement.GroupName='$PLACEMENT' (should be empty)"; exit 1
+fi
+echo "  PASS: Default spread works, no Placement.GroupName set"
+
+if ! terminate_and_wait "${REG_IDS[@]}"; then
+    echo "WARNING: Some regression test instances failed to terminate"
+fi
+sleep 2
+
+echo ""
+echo "Phase 5c: All placement group E2E tests passed"
 
 # Re-launch 3 instances for Phase 6 shutdown/restart tests
 echo ""

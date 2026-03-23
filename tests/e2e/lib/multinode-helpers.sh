@@ -267,10 +267,15 @@ wait_for_daemon_ready() {
 
 # Check instance distribution across nodes
 # Counts QEMU processes per node IP from hostfwd bindings
+# Usage: check_instance_distribution [expected_nodes]
+# If expected_nodes is provided, fails when instances don't span that many nodes
 check_instance_distribution() {
+    local expected_nodes="${1:-0}"
+
     echo "Checking instance distribution across nodes..."
 
     local total=0
+    local nodes_used=0
     for i in 1 2 3; do
         local node_ip="${SIMULATED_NETWORK}.$i"
         # Count QEMU processes with hostfwd bound to this node's IP
@@ -278,9 +283,17 @@ check_instance_distribution() {
         count=$(ps auxw | grep qemu-system | grep -v grep | grep -c "hostfwd=tcp:${node_ip}:" 2>/dev/null) || count=0
         echo "  Node$i ($node_ip): $count instances"
         total=$((total + count))
+        if [ "$count" -gt 0 ]; then
+            nodes_used=$((nodes_used + 1))
+        fi
     done
 
-    echo "  Total instances: $total"
+    echo "  Total instances: $total (across $nodes_used nodes)"
+
+    if [ "$expected_nodes" -gt 0 ] && [ "$nodes_used" -lt "$expected_nodes" ]; then
+        echo "  FAIL: Expected instances on $expected_nodes nodes, only used $nodes_used"
+        return 1
+    fi
 }
 
 # Find the SSH port for an instance from the QEMU process
@@ -806,4 +819,47 @@ verify_predastore_cluster() {
         echo "  WARNING: Predastore cluster may not be fully formed"
         return 1
     fi
+}
+
+# Count instances per node for given instance IDs
+# Usage: count_instances_per_node INSTANCE_ID [INSTANCE_ID...]
+# Sets NODE1_COUNT, NODE2_COUNT, NODE3_COUNT
+count_instances_per_node() {
+    local ids=("$@")
+    NODE1_COUNT=0; NODE2_COUNT=0; NODE3_COUNT=0
+    for i in 1 2 3; do
+        local node_ip="${SIMULATED_NETWORK}.$i"
+        local count=0
+        for id in "${ids[@]}"; do
+            if ps auxw | grep "$id" | grep qemu-system | grep -v grep | grep -q "hostfwd=tcp:${node_ip}:"; then
+                count=$((count + 1))
+            fi
+        done
+        eval "NODE${i}_COUNT=$count"
+        echo "    Node$i ($node_ip): $count instances"
+    done
+}
+
+# Verify Placement field in DescribeInstances response
+# Usage: verify_placement GROUP_NAME INSTANCE_ID [INSTANCE_ID...]
+verify_placement() {
+    local group_name="$1"; shift
+    local ids=("$@")
+    for id in "${ids[@]}"; do
+        local placement_group
+        placement_group=$($AWS_EC2 describe-instances --instance-ids "$id" \
+            --query 'Reservations[0].Instances[0].Placement.GroupName' --output text)
+        if [ "$placement_group" != "$group_name" ]; then
+            echo "    FAIL: Instance $id Placement.GroupName='$placement_group', expected '$group_name'"
+            return 1
+        fi
+        local az
+        az=$($AWS_EC2 describe-instances --instance-ids "$id" \
+            --query 'Reservations[0].Instances[0].Placement.AvailabilityZone' --output text)
+        if [ -z "$az" ] || [ "$az" = "None" ]; then
+            echo "    FAIL: Instance $id missing Placement.AvailabilityZone"
+            return 1
+        fi
+    done
+    echo "    All instances show Placement.GroupName=$group_name"
 }
