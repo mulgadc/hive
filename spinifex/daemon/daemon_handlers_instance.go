@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
+	handlers_ec2_placementgroup "github.com/mulgadc/spinifex/spinifex/handlers/ec2/placementgroup"
 	"github.com/mulgadc/spinifex/spinifex/qmp"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
@@ -271,10 +272,14 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 	reservation.SetOwnerId(accountID)
 	reservation.Instances = allEC2Instances
 
-	// Store reservation reference and account ID in all VMs
+	// Store reservation reference, account ID, and placement group in all VMs
 	for _, instance := range instances {
 		instance.Reservation = &reservation
 		instance.AccountID = accountID
+		if runInstancesInput.Placement != nil && runInstancesInput.Placement.GroupName != nil && *runInstancesInput.Placement.GroupName != "" {
+			instance.PlacementGroupName = *runInstancesInput.Placement.GroupName
+			instance.PlacementGroupNode = d.node
+		}
 	}
 
 	// Respond to NATS immediately with reservation (instances are provisioning)
@@ -528,6 +533,18 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 			}
 			slog.Info("Instance "+string(finalState), "id", inst.ID)
 
+			// Remove instance from placement group on terminate
+			if isTerminate && inst.PlacementGroupName != "" && d.placementGroupService != nil {
+				if _, pgErr := d.placementGroupService.RemoveInstance(&handlers_ec2_placementgroup.RemoveInstanceInput{
+					GroupName:  inst.PlacementGroupName,
+					NodeName:   inst.PlacementGroupNode,
+					InstanceID: inst.ID,
+				}, inst.AccountID); pgErr != nil {
+					slog.Error("Failed to remove instance from placement group",
+						"instanceId", inst.ID, "groupName", inst.PlacementGroupName, "err", pgErr)
+				}
+			}
+
 			if d.jsManager != nil {
 				if isTerminate {
 					// Write to terminated KV bucket (auto-expires after 1 hour via TTL).
@@ -686,6 +703,14 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 					"instanceId", instance.ID, "status", string(instance.Status))
 				instanceCopy.State.SetCode(0)
 				instanceCopy.State.SetName("pending")
+			}
+
+			// Populate Placement if instance belongs to a placement group
+			if instance.PlacementGroupName != "" {
+				instanceCopy.Placement = &ec2.Placement{
+					GroupName:        aws.String(instance.PlacementGroupName),
+					AvailabilityZone: aws.String(d.config.AZ),
+				}
 			}
 
 			// Add instance to its reservation

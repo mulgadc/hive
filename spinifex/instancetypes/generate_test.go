@@ -313,3 +313,22 @@ func TestGenerateInstanceTypes_BurstableFlag(t *testing.T) {
 			"%s should be current generation", name)
 	}
 }
+
+func TestGenerateInstanceTypes_PlacementGroupInfo(t *testing.T) {
+	types := generateForGeneration(genIntelIceLake, "x86_64")
+	require.NotEmpty(t, types)
+
+	for name, info := range types {
+		require.NotNil(t, info.PlacementGroupInfo,
+			"%s should have PlacementGroupInfo", name)
+		assert.Len(t, info.PlacementGroupInfo.SupportedStrategies, 2,
+			"%s should support 2 strategies", name)
+
+		strategies := make(map[string]bool)
+		for _, s := range info.PlacementGroupInfo.SupportedStrategies {
+			strategies[*s] = true
+		}
+		assert.True(t, strategies["cluster"], "%s should support cluster", name)
+		assert.True(t, strategies["spread"], "%s should support spread", name)
+	}
+}

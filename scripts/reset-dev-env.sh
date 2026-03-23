@@ -154,6 +154,16 @@ if [ -n "$WAN_IFACE" ] && [ -n "$WAN_GW" ]; then
 fi
 ./bin/spx admin init $ADMIN_INIT_ARGS
 
+# Re-initialize platform (generates fresh credentials, certs, config, and updates ~/.aws/credentials)
+echo "Re-initializing platform..."
+./bin/spx admin init --force
+
+# Generate SSH key if it doesn't exist
+if [ ! -f ~/.ssh/spinifex-key.pub ]; then
+    echo "Generating SSH key pair..."
+    ssh-keygen -t ed25519 -f ~/.ssh/spinifex-key -N ""
+fi
+
 # Enable pprof for development
 PPROF_ENABLED=1 PPROF_OUTPUT=/tmp/spinifex-vm.prof ./scripts/start-dev.sh --build
 
