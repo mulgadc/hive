@@ -2,6 +2,39 @@
 version = "1.0"
 epoch = 1
 node = "{{.Node}}"
+{{- if .ExternalMode}}
+
+[network]
+external_mode = "{{.ExternalMode}}"
+{{- if .ExternalDHCP}}
+external_dhcp = true
+{{- end}}
+
+[[network.external_pools]]
+name        = "{{.PoolName}}"
+{{- if .PoolStart}}
+range_start = "{{.PoolStart}}"
+range_end   = "{{.PoolEnd}}"
+{{- end}}
+gateway     = "{{.PoolGateway}}"
+{{- if .PoolGatewayIP}}
+gateway_ip  = "{{.PoolGatewayIP}}"
+{{- end}}
+prefix_len  = {{if .PoolPrefixLen}}{{.PoolPrefixLen}}{{else}}24{{end}}
+{{- if .PoolDNSServers}}
+dns_servers = [{{range $i, $s := .PoolDNSServers}}{{if $i}}, {{end}}"{{$s}}"{{end}}]
+{{- end}}
+{{- end}}
+{{- if .BootstrapVpcId}}
+
+[bootstrap]
+account_id  = "{{.BootstrapAccountId}}"
+vpc_id      = "{{.BootstrapVpcId}}"
+subnet_id   = "{{.BootstrapSubnetId}}"
+igw_id      = "{{.BootstrapIgwId}}"
+cidr        = "{{.BootstrapCidr}}"
+subnet_cidr = "{{.BootstrapSubnetCidr}}"
+{{- end}}
 
 [nodes.{{.Node}}]
 node = "{{.Node}}"
@@ -18,7 +51,11 @@ account_id = "{{.AccountID}}"
 host = "{{.BindIP}}:{{.Port}}"
 tlskey = "config/server.key"
 tlscert = "config/server.pem"
+{{- if .ExternalMode}}
+dev_networking = false
+{{- else}}
 dev_networking = true
+{{- end}}
 
 [nodes.{{.Node}}.awsgw]
 host = "{{.BindIP}}:9999"
@@ -41,6 +78,9 @@ shardwal = false
 [nodes.{{.Node}}.vpcd]
 ovn_nb_addr = "{{.OVNNBAddr}}"
 ovn_sb_addr = "{{.OVNSBAddr}}"
+{{- if .ExternalIface}}
+external_interface = "{{.ExternalIface}}"
+{{- end}}
 
 [nodes.{{.Node}}.predastore]
 host = "{{.BindIP}}:8443"

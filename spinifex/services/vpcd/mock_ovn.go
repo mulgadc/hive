@@ -21,6 +21,8 @@ type MockOVNClient struct {
 	dhcpOpts     map[string]*nbdb.DHCPOptions
 	nats         map[string]*nbdb.NAT                      // keyed by UUID
 	staticRoutes map[string]*nbdb.LogicalRouterStaticRoute // keyed by UUID
+	portGroups   map[string]*nbdb.PortGroup                // keyed by name
+	acls         map[string]*nbdb.ACL                      // keyed by UUID
 }
 
 // NewMockOVNClient creates a new MockOVNClient for testing.
@@ -33,6 +35,8 @@ func NewMockOVNClient() *MockOVNClient {
 		dhcpOpts:     make(map[string]*nbdb.DHCPOptions),
 		nats:         make(map[string]*nbdb.NAT),
 		staticRoutes: make(map[string]*nbdb.LogicalRouterStaticRoute),
+		portGroups:   make(map[string]*nbdb.PortGroup),
+		acls:         make(map[string]*nbdb.ACL),
 	}
 }
 
@@ -415,5 +419,96 @@ func (m *MockOVNClient) DeleteStaticRoute(_ context.Context, routerName string, 
 		}
 	}
 	delete(m.staticRoutes, foundUUID)
+	return nil
+}
+
+// Port Groups
+
+func (m *MockOVNClient) CreatePortGroup(_ context.Context, name string, ports []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.portGroups[name]; exists {
+		return fmt.Errorf("port group %q already exists", name)
+	}
+	pg := &nbdb.PortGroup{
+		UUID:  utils.GenerateResourceID("pg"),
+		Name:  name,
+		Ports: ports,
+	}
+	m.portGroups[name] = pg
+	return nil
+}
+
+func (m *MockOVNClient) DeletePortGroup(_ context.Context, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.portGroups[name]; !exists {
+		return fmt.Errorf("port group %q not found", name)
+	}
+	// Remove ACLs associated with this port group
+	pg := m.portGroups[name]
+	for _, aclUUID := range pg.ACLs {
+		delete(m.acls, aclUUID)
+	}
+	delete(m.portGroups, name)
+	return nil
+}
+
+func (m *MockOVNClient) SetPortGroupPorts(_ context.Context, name string, ports []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pg, exists := m.portGroups[name]
+	if !exists {
+		return fmt.Errorf("port group %q not found", name)
+	}
+	pg.Ports = ports
+	return nil
+}
+
+// ACLs
+
+func (m *MockOVNClient) AddACL(_ context.Context, portGroupName string, direction string, priority int, match string, action string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pg, exists := m.portGroups[portGroupName]
+	if !exists {
+		return fmt.Errorf("port group %q not found", portGroupName)
+	}
+	acl := &nbdb.ACL{
+		UUID:      utils.GenerateResourceID("acl"),
+		Direction: direction,
+		Priority:  priority,
+		Match:     match,
+		Action:    action,
+	}
+	m.acls[acl.UUID] = acl
+	pg.ACLs = append(pg.ACLs, acl.UUID)
+	return nil
+}
+
+func (m *MockOVNClient) ClearACLs(_ context.Context, portGroupName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pg, exists := m.portGroups[portGroupName]
+	if !exists {
+		return fmt.Errorf("port group %q not found", portGroupName)
+	}
+	for _, aclUUID := range pg.ACLs {
+		delete(m.acls, aclUUID)
+	}
+	pg.ACLs = nil
+	return nil
+}
+
+func (m *MockOVNClient) SetGatewayChassis(_ context.Context, lrpName string, chassisName string, priority int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lrp, exists := m.routerPorts[lrpName]
+	if !exists {
+		return fmt.Errorf("logical router port %q not found", lrpName)
+	}
+	gcName := lrpName + "-" + chassisName
+	lrp.GatewayChassis = append(lrp.GatewayChassis, gcName)
+	_ = priority
 	return nil
 }

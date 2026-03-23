@@ -726,6 +726,20 @@ func (s *IAMServiceImpl) seedAdminAccount(admin *AdminBootstrapData) error {
 	}
 
 	slog.Info("Admin account seeded", "accountID", admin.AccountID, "userName", admin.UserName, "accessKeyID", admin.AccessKeyID)
+
+	// Publish account creation event so the daemon creates a default VPC for
+	// this account. Without this, the admin account has no default VPC/subnet
+	// and the user must create one manually.
+	if s.natsConn != nil {
+		evt, _ := json.Marshal(struct {
+			AccountID   string `json:"account_id"`
+			AccountName string `json:"account_name"`
+		}{AccountID: admin.AccountID, AccountName: admin.AccountName})
+		if err := s.natsConn.Publish("iam.account.created", evt); err != nil {
+			slog.Warn("Failed to publish account creation event for admin account", "accountID", admin.AccountID, "error", err)
+		}
+	}
+
 	return nil
 }
 

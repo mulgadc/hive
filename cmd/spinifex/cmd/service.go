@@ -694,13 +694,52 @@ var vpcdStartCmd = &cobra.Command{
 
 		nodeConfig := clusterConfig.Nodes[clusterConfig.Node]
 
+		// Map cluster-wide external pools to vpcd config
+		var extPools []vpcd.ExternalPoolConfig
+		for _, p := range clusterConfig.Network.ExternalPools {
+			extPools = append(extPools, vpcd.ExternalPoolConfig{
+				Name:       p.Name,
+				RangeStart: p.RangeStart,
+				RangeEnd:   p.RangeEnd,
+				Gateway:    p.Gateway,
+				GatewayIP:  p.GatewayIP,
+				PrefixLen:  p.PrefixLen,
+				DNSServers: p.DNSServers,
+				Region:     p.Region,
+				AZ:         p.AZ,
+			})
+		}
+
+		// Derive OVN chassis names from cluster node names (format: "chassis-{hostname}")
+		var chassisNames []string
+		for nodeName := range clusterConfig.Nodes {
+			chassisNames = append(chassisNames, "chassis-"+nodeName)
+		}
+
+		var bootstrap *vpcd.BootstrapVPC
+		if clusterConfig.Bootstrap.VpcId != "" {
+			bootstrap = &vpcd.BootstrapVPC{
+				AccountID:  clusterConfig.Bootstrap.AccountID,
+				VpcId:      clusterConfig.Bootstrap.VpcId,
+				SubnetId:   clusterConfig.Bootstrap.SubnetId,
+				IgwId:      clusterConfig.Bootstrap.IgwId,
+				Cidr:       clusterConfig.Bootstrap.Cidr,
+				SubnetCidr: clusterConfig.Bootstrap.SubnetCidr,
+			}
+		}
+
 		svc, err := service.New("vpcd", &vpcd.Config{
-			NatsHost:  nodeConfig.NATS.Host,
-			NatsToken: nodeConfig.NATS.ACL.Token,
-			OVNNBAddr: nodeConfig.VPCD.OVNNBAddr,
-			OVNSBAddr: nodeConfig.VPCD.OVNSBAddr,
-			BaseDir:   nodeConfig.BaseDir,
-			Debug:     false,
+			NatsHost:          nodeConfig.NATS.Host,
+			NatsToken:         nodeConfig.NATS.ACL.Token,
+			OVNNBAddr:         nodeConfig.VPCD.OVNNBAddr,
+			OVNSBAddr:         nodeConfig.VPCD.OVNSBAddr,
+			BaseDir:           nodeConfig.BaseDir,
+			Debug:             false,
+			ExternalMode:      clusterConfig.Network.ExternalMode,
+			ExternalPools:     extPools,
+			ChassisNames:      chassisNames,
+			Bootstrap:         bootstrap,
+			ExternalInterface: nodeConfig.VPCD.ExternalInterface,
 		})
 		if err != nil {
 			fmt.Println("Error starting vpcd service:", err)

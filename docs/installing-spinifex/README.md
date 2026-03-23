@@ -1,6 +1,6 @@
 ---
 title: "Installing Spinifex"
-description: "Install Spinifex on a single server using the binary installer. Get a working region with EC2, VPC, EBS, and S3 in minutes."
+description: "Install Spinifex on a single server using the binary installer."
 category: "Getting Started"
 tags:
   - install
@@ -37,7 +37,7 @@ This guide installs Spinifex on a single server using the binary installer. For 
 **Supported Operating Systems:**
 
 - Ubuntu 22.04 / 24.04 / 25.10
-- Debian 12.13
+- Debian 12 / 13
 
 **What gets installed:**
 
@@ -50,7 +50,7 @@ This guide installs Spinifex on a single server using the binary installer. For 
 
 ## Instructions
 
-## Step 1. Install Spinifex
+### Step 1. Install Spinifex
 
 ```bash
 curl https://install.mulgadc.com | bash
@@ -58,143 +58,68 @@ curl https://install.mulgadc.com | bash
 
 The installer downloads the Spinifex binary and bootstraps all dependencies (QEMU, OVN/OVS, AWS CLI).
 
-## Step 2. Initialize a region
-
-Create your first region and availability zone, replace `ap-southeast-2` with your desired region:
+### Step 2. Initialize
 
 ```bash
 spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
 ```
 
-## Step 3. Trust the CA certificate
+This auto-detects your network topology and configures external networking. Save the admin credentials printed during init — they will not be shown again.
 
-Spinifex generates a local CA during initialization. Add it to your system trust store:
+### Step 3. Trust the CA certificate
 
 ```bash
 sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
 sudo update-ca-certificates
 ```
 
-## Step 4. Start services
+### Step 4. Setup OVN networking
+
+```bash
+sudo /usr/local/share/spinifex/setup-ovn.sh --management --external-bridge --external-iface=enp0s3 --dhcp
+```
+
+Replace `enp0s3` with your WAN interface.
+
+### Step 5. Start services
 
 ```bash
 sudo systemctl start spinifex.target
-```
-
-Set the AWS profile to use the default admin account:
-
-```bash
 export AWS_PROFILE=spinifex
 ```
 
-## Step 5. Import an AMI
-
-List available images and import one matching your architecture:
+### Step 6. Verify
 
 ```bash
-spx admin images list
-spx admin images import --name debian-12-arm64
+aws ec2 describe-instance-types
 ```
 
-## Step 6. Create a VPC and launch an instance
+If this returns a list of available instance types, your installation is working.
 
-```bash
-aws ec2 create-vpc --cidr-block 10.200.0.0/16
-export SPINIFEX_VPC="vpc-XXX"
+**Congratulations! Spinifex is installed.**
 
-aws ec2 create-subnet --vpc-id $SPINIFEX_VPC --cidr-block 10.200.1.0/24
-export SPINIFEX_SUBNET="subnet-XXX"
+Continue to [Setting Up Your Cluster](/docs/setting-up-your-cluster) to import an AMI, create a VPC, and launch your first instance.
 
-aws ec2 import-key-pair --key-name "spinifex-key" --public-key-material fileb://~/.ssh/id_rsa.pub
-
-aws ec2 run-instances \
-  --image-id $SPINIFEX_AMI \
-  --instance-type t3.small \
-  --key-name spinifex-key \
-  --subnet-id $SPINIFEX_SUBNET \
-  --count 1
-```
-
-## Step 7. Connect via SSH
-
-Find the forwarded SSH port and connect:
-
-```bash
-ps auxw | grep hostfwd
-# Look for: hostfwd=tcp:127.0.0.1:<port>-:22
-
-ssh -i ~/.ssh/spinifex-key ec2-user@127.0.0.1 -p <port>
-```
+---
 
 ## Troubleshooting
 
-## spx command not found
-
-The binary is not in your PATH. Run the installer again or add the install directory to your PATH:
+### spx command not found
 
 ```bash
-export PATH=$PATH:~/spinifex/bin/
+export PATH=$PATH:/usr/local/bin
 ```
 
-Add this to your `~/.bashrc` or `~/.zshrc` for persistence.
-
-## OVN services not starting
-
-Check if the OVN controller is active:
-
-```bash
-sudo systemctl is-active ovn-controller
-sudo ovn-sbctl show
-```
-
-If inactive, re-run the OVN setup that the installer performs. Check system logs for details:
-
-```bash
-journalctl -u ovn-controller --no-pager -n 20
-```
-
-## CA certificate not trusted
-
-AWS CLI will reject HTTPS connections if the Spinifex CA is not trusted. Re-add the certificate:
+### CA certificate not trusted
 
 ```bash
 sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
 sudo update-ca-certificates
 ```
 
-Verify it was added:
+### OVN services not starting
 
 ```bash
-ls -la /usr/local/share/ca-certificates/spinifex-ca.crt
-```
-
-## Instance stuck in pending
-
-Check the Spinifex daemon logs for errors:
-
-```bash
-ls ~/spinifex/logs/
-cat ~/spinifex/logs/spinifex.log
-```
-
-Verify the AMI was imported successfully:
-
-```bash
-aws ec2 describe-images
-```
-
-## SSH connection refused
-
-cloud-init takes 30-60 seconds to configure the instance after boot. Wait and retry.
-
-Verify the SSH port forwarding is active:
-
-```bash
-ps auxw | grep hostfwd
-```
-
-If no `hostfwd` entry appears, the instance may not have started correctly. Check instance state:
-
-```bash
-aws ec2 describe-instances --instance-ids $INSTANCE_ID
+sudo systemctl is-active ovn-controller
+journalctl -u ovn-controller --no-pager -n 20
 ```

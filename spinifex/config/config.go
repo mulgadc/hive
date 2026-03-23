@@ -10,10 +10,44 @@ import (
 )
 
 type ClusterConfig struct {
-	Epoch   uint64            `mapstructure:"epoch"`   // bump when leader commits changes
-	Node    string            `mapstructure:"node"`    // my node name
-	Version string            `mapstructure:"version"` // spinifex version
-	Nodes   map[string]Config `mapstructure:"nodes"`   // full config for every node
+	Epoch     uint64            `mapstructure:"epoch"`     // bump when leader commits changes
+	Node      string            `mapstructure:"node"`      // my node name
+	Version   string            `mapstructure:"version"`   // spinifex version
+	Network   NetworkConfig     `mapstructure:"network"`   // cluster-wide external network settings
+	Bootstrap BootstrapConfig   `mapstructure:"bootstrap"` // default VPC IDs for OVN reconciliation
+	Nodes     map[string]Config `mapstructure:"nodes"`     // full config for every node
+}
+
+// ExternalPool defines a range of routable IPs that Spinifex manages for public subnets.
+type ExternalPool struct {
+	Name       string   `mapstructure:"name"`        // Pool identifier (e.g., "wan", "dc1-primary")
+	RangeStart string   `mapstructure:"range_start"` // First IP in range
+	RangeEnd   string   `mapstructure:"range_end"`   // Last IP in range
+	Gateway    string   `mapstructure:"gateway"`     // WAN default gateway (next hop for 0.0.0.0/0)
+	GatewayIP  string   `mapstructure:"gateway_ip"`  // OVN router external IP (override; defaults to first IP in range)
+	PrefixLen  int      `mapstructure:"prefix_len"`  // Subnet mask (default 24)
+	DNSServers []string `mapstructure:"dns_servers"` // DNS servers for VM DHCP (auto-detected from host; fallback: 8.8.8.8, 1.1.1.1)
+	Region     string   `mapstructure:"region"`      // Scope to region (optional — empty means any region)
+	AZ         string   `mapstructure:"az"`          // Scope to AZ (optional — empty means any AZ in region)
+}
+
+// NetworkConfig holds cluster-wide external network settings.
+type NetworkConfig struct {
+	ExternalMode  string         `mapstructure:"external_mode"`  // "pool", "nat", or "" (disabled)
+	ExternalDHCP  bool           `mapstructure:"external_dhcp"`  // Gateway IP obtained via DHCP (nat mode)
+	ExternalPools []ExternalPool `mapstructure:"external_pools"` // One or more IP pools
+}
+
+// BootstrapConfig holds the default VPC infrastructure IDs written by admin init.
+// vpcd reads this on startup to ensure OVN topology exists for the bootstrap VPC,
+// covering the case where admin init ran before services were started.
+type BootstrapConfig struct {
+	AccountID  string `mapstructure:"account_id"`
+	VpcId      string `mapstructure:"vpc_id"`
+	SubnetId   string `mapstructure:"subnet_id"`
+	IgwId      string `mapstructure:"igw_id"`
+	Cidr       string `mapstructure:"cidr"`
+	SubnetCidr string `mapstructure:"subnet_cidr"`
 }
 
 // Config holds all configuration for the application
@@ -53,8 +87,9 @@ type ViperblockConfig struct {
 
 // VPCDConfig holds the VPC daemon (vpcd) configuration.
 type VPCDConfig struct {
-	OVNNBAddr string `mapstructure:"ovn_nb_addr"` // OVN Northbound DB address (e.g., "tcp:127.0.0.1:6641")
-	OVNSBAddr string `mapstructure:"ovn_sb_addr"` // OVN Southbound DB address (e.g., "tcp:127.0.0.1:6642")
+	OVNNBAddr         string `mapstructure:"ovn_nb_addr"`        // OVN Northbound DB address (e.g., "tcp:127.0.0.1:6641")
+	OVNSBAddr         string `mapstructure:"ovn_sb_addr"`        // OVN Southbound DB address (e.g., "tcp:127.0.0.1:6642")
+	ExternalInterface string `mapstructure:"external_interface"` // WAN NIC name for br-external (per-node, e.g., "eth1", "enp0s3")
 }
 
 type PredastoreConfig struct {

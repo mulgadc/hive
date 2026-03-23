@@ -300,6 +300,139 @@ func TestNodeBaseDir_EmptyBaseDir(t *testing.T) {
 	assert.Equal(t, "", cc.NodeBaseDir())
 }
 
+// Tests for NetworkConfig (external pools)
+
+func TestLoadConfig_NetworkExternalPools(t *testing.T) {
+	resetViper(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "spinifex.toml")
+
+	toml := `
+node = "n1"
+
+[network]
+external_mode = "pool"
+
+[[network.external_pools]]
+name = "wan"
+range_start = "192.168.1.150"
+range_end = "192.168.1.250"
+gateway = "192.168.1.1"
+prefix_len = 24
+
+[[network.external_pools]]
+name = "overflow"
+range_start = "10.0.0.2"
+range_end = "10.0.0.254"
+gateway = "10.0.0.1"
+prefix_len = 24
+region = "us-east-1"
+az = "us-east-1a"
+
+[nodes.n1]
+region = "us-east-1"
+
+[nodes.n1.vpcd]
+ovn_nb_addr = "tcp:127.0.0.1:6641"
+external_interface = "enp0s3"
+`
+	require.NoError(t, os.WriteFile(path, []byte(toml), 0600))
+
+	cfg, err := LoadConfig(path)
+	require.NoError(t, err)
+
+	assert.Equal(t, "pool", cfg.Network.ExternalMode)
+	require.Len(t, cfg.Network.ExternalPools, 2)
+
+	wan := cfg.Network.ExternalPools[0]
+	assert.Equal(t, "wan", wan.Name)
+	assert.Equal(t, "192.168.1.150", wan.RangeStart)
+	assert.Equal(t, "192.168.1.250", wan.RangeEnd)
+	assert.Equal(t, "192.168.1.1", wan.Gateway)
+	assert.Equal(t, 24, wan.PrefixLen)
+	assert.Empty(t, wan.Region)
+	assert.Empty(t, wan.AZ)
+
+	overflow := cfg.Network.ExternalPools[1]
+	assert.Equal(t, "overflow", overflow.Name)
+	assert.Equal(t, "us-east-1", overflow.Region)
+	assert.Equal(t, "us-east-1a", overflow.AZ)
+
+	n := cfg.Nodes["n1"]
+	assert.Equal(t, "enp0s3", n.VPCD.ExternalInterface)
+}
+
+func TestLoadConfig_NetworkNATMode(t *testing.T) {
+	resetViper(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "spinifex.toml")
+
+	toml := `
+node = "n1"
+
+[network]
+external_mode = "nat"
+
+[[network.external_pools]]
+name = "wan"
+gateway = "192.168.1.1"
+gateway_ip = "192.168.1.100"
+prefix_len = 24
+
+[nodes.n1]
+region = "us-east-1"
+`
+	require.NoError(t, os.WriteFile(path, []byte(toml), 0600))
+
+	cfg, err := LoadConfig(path)
+	require.NoError(t, err)
+
+	assert.Equal(t, "nat", cfg.Network.ExternalMode)
+	require.Len(t, cfg.Network.ExternalPools, 1)
+	assert.Equal(t, "192.168.1.100", cfg.Network.ExternalPools[0].GatewayIP)
+}
+
+func TestLoadConfig_NetworkDisabledByDefault(t *testing.T) {
+	resetViper(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "spinifex.toml")
+
+	require.NoError(t, os.WriteFile(path, []byte(`node = "n1"`), 0600))
+
+	cfg, err := LoadConfig(path)
+	require.NoError(t, err)
+
+	assert.Empty(t, cfg.Network.ExternalMode)
+	assert.Empty(t, cfg.Network.ExternalPools)
+}
+
+func TestLoadConfig_ExternalInterfacePerNode(t *testing.T) {
+	resetViper(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "spinifex.toml")
+
+	toml := `
+node = "n1"
+
+[nodes.n1.vpcd]
+external_interface = "eth1"
+
+[nodes.n2.vpcd]
+external_interface = "eno2"
+
+[nodes.n3.vpcd]
+external_interface = "enp3s0"
+`
+	require.NoError(t, os.WriteFile(path, []byte(toml), 0600))
+
+	cfg, err := LoadConfig(path)
+	require.NoError(t, err)
+
+	assert.Equal(t, "eth1", cfg.Nodes["n1"].VPCD.ExternalInterface)
+	assert.Equal(t, "eno2", cfg.Nodes["n2"].VPCD.ExternalInterface)
+	assert.Equal(t, "enp3s0", cfg.Nodes["n3"].VPCD.ExternalInterface)
+}
+
 // Tests for ViperblockConfig
 
 func TestLoadConfig_ViperblockShardWAL_Explicit(t *testing.T) {

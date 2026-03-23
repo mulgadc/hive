@@ -157,6 +157,15 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 			continue
 		}
 
+		// Resolve default subnet when none specified (matches AWS behavior)
+		if (runInstancesInput.SubnetId == nil || *runInstancesInput.SubnetId == "") && d.vpcService != nil {
+			defaultSubnet, dsErr := d.vpcService.GetDefaultSubnet(accountID)
+			if dsErr == nil {
+				runInstancesInput.SubnetId = aws.String(defaultSubnet.SubnetId)
+				slog.Info("Resolved default subnet for instance", "instanceId", instance.ID, "subnetId", defaultSubnet.SubnetId)
+			}
+		}
+
 		// Auto-create ENI when SubnetId is provided (matches AWS behavior)
 		if runInstancesInput.SubnetId != nil && *runInstancesInput.SubnetId != "" && d.vpcService != nil {
 			eniOut, eniErr := d.vpcService.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
@@ -197,6 +206,41 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 				"privateIp", *eni.PrivateIpAddress,
 				"mac", instance.ENIMac,
 			)
+
+			// Auto-assign public IP if subnet has MapPublicIpOnLaunch and external IPAM is available
+			if d.externalIPAM != nil {
+				subnet, subErr := d.vpcService.GetSubnet(accountID, *runInstancesInput.SubnetId)
+				if subErr == nil && subnet.MapPublicIpOnLaunch {
+					region := ""
+					az := ""
+					if d.config != nil {
+						region = d.config.Region
+						az = d.config.AZ
+					}
+					publicIP, poolName, allocErr := d.externalIPAM.AllocateIP(region, az, "auto_assign", *eni.NetworkInterfaceId, instance.ID)
+					if allocErr != nil {
+						slog.Warn("Failed to allocate public IP for instance", "instanceId", instance.ID, "err", allocErr)
+					} else {
+						// Update ENI record with public IP
+						if updateErr := d.vpcService.UpdateENIPublicIP(accountID, *eni.NetworkInterfaceId, publicIP, poolName); updateErr != nil {
+							slog.Warn("Failed to update ENI with public IP", "eniId", *eni.NetworkInterfaceId, "err", updateErr)
+						}
+						// Publish vpc.add-nat for dnat_and_snat rule
+						portName := "port-" + *eni.NetworkInterfaceId
+						d.publishNATEvent("vpc.add-nat", *eni.VpcId, publicIP, *eni.PrivateIpAddress, portName, *eni.MacAddress)
+						// Set on ec2Instance response
+						ec2Instance.PublicIpAddress = aws.String(publicIP)
+						instance.PublicIP = publicIP
+						instance.PublicIPPool = poolName
+						slog.Info("Auto-assigned public IP",
+							"instanceId", instance.ID,
+							"publicIp", publicIP,
+							"privateIp", *eni.PrivateIpAddress,
+							"pool", poolName,
+						)
+					}
+				}
+			}
 		}
 
 		instances = append(instances, instance)
@@ -645,6 +689,11 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 			instanceCopy := *instance.Instance
 			instanceCopy.State = &ec2.InstanceState{}
 
+			// Populate PublicIpAddress from VM if stored
+			if instance.PublicIP != "" && instanceCopy.PublicIpAddress == nil {
+				instanceCopy.PublicIpAddress = aws.String(instance.PublicIP)
+			}
+
 			// Map internal status to EC2 state codes using the centralized mapping
 			if info, ok := vm.EC2StateCodes[instance.Status]; ok {
 				instanceCopy.State.SetCode(info.Code)
@@ -924,6 +973,34 @@ func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
 	}
 	instance.EBSRequests.Mu.Unlock()
 
+	// Release public IP before termination
+	if instance.PublicIP != "" && instance.PublicIPPool != "" && d.externalIPAM != nil {
+		portName := "port-" + instance.ENIId
+		vpcId := ""
+		if instance.Instance != nil && instance.Instance.VpcId != nil {
+			vpcId = *instance.Instance.VpcId
+		}
+		d.publishNATEvent("vpc.delete-nat", vpcId, instance.PublicIP, "", portName, "")
+
+		if err := d.externalIPAM.ReleaseIP(instance.PublicIPPool, instance.PublicIP); err != nil {
+			slog.Warn("handleEC2TerminateStoppedInstance: failed to release public IP", "ip", instance.PublicIP, "pool", instance.PublicIPPool, "err", err)
+		} else {
+			slog.Info("handleEC2TerminateStoppedInstance: released public IP", "ip", instance.PublicIP, "instanceId", req.InstanceID)
+		}
+	}
+
+	// Delete ENI if present
+	if instance.ENIId != "" && d.vpcService != nil {
+		_, eniErr := d.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+			NetworkInterfaceId: &instance.ENIId,
+		}, instance.AccountID)
+		if eniErr != nil {
+			slog.Error("handleEC2TerminateStoppedInstance: failed to delete ENI", "eni", instance.ENIId, "err", eniErr)
+		} else {
+			slog.Info("handleEC2TerminateStoppedInstance: deleted ENI", "eni", instance.ENIId, "instanceId", req.InstanceID)
+		}
+	}
+
 	// Write to terminated KV bucket FIRST so the instance is visible in DescribeInstances.
 	// If this fails, the instance remains in the stopped bucket (safe to retry).
 	instance.Status = vm.StateTerminated
@@ -1138,5 +1215,27 @@ func (d *Daemon) handleEC2ModifyInstanceAttribute(msg *nats.Msg) {
 
 	if err := msg.Respond([]byte(`{}`)); err != nil {
 		slog.Error("Failed to respond to NATS request", "err", err)
+	}
+}
+
+// publishNATEvent publishes a NAT lifecycle event (vpc.add-nat or vpc.delete-nat) to NATS.
+func (d *Daemon) publishNATEvent(topic, vpcId, externalIP, logicalIP, portName, mac string) {
+	if d.natsConn == nil {
+		return
+	}
+	evt := struct {
+		VpcId      string `json:"vpc_id"`
+		ExternalIP string `json:"external_ip"`
+		LogicalIP  string `json:"logical_ip"`
+		PortName   string `json:"port_name"`
+		MAC        string `json:"mac"`
+	}{VpcId: vpcId, ExternalIP: externalIP, LogicalIP: logicalIP, PortName: portName, MAC: mac}
+	data, err := json.Marshal(evt)
+	if err != nil {
+		slog.Error("Failed to marshal NAT event", "topic", topic, "err", err)
+		return
+	}
+	if err := d.natsConn.Publish(topic, data); err != nil {
+		slog.Error("Failed to publish NAT event", "topic", topic, "err", err)
 	}
 }

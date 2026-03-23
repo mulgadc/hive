@@ -23,6 +23,8 @@ func TestFullDatabaseModel(t *testing.T) {
 		"NAT",
 		"Logical_Router_Static_Route",
 		"Gateway_Chassis",
+		"Port_Group",
+		"ACL",
 	}
 
 	types := dbModel.Types()

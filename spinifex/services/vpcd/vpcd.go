@@ -25,6 +25,18 @@ func sudoCommand(name string, args ...string) *exec.Cmd {
 
 var serviceName = "vpcd"
 
+// BootstrapVPC holds the default VPC infrastructure IDs from spinifex.toml.
+// vpcd uses this to ensure OVN topology exists on first boot (before NATS KV
+// has any data) and on subsequent boots where OVN state may have been lost.
+type BootstrapVPC struct {
+	AccountID  string
+	VpcId      string
+	SubnetId   string
+	IgwId      string
+	Cidr       string
+	SubnetCidr string
+}
+
 // Config holds the vpcd service configuration.
 type Config struct {
 	// NatsHost is the NATS server address (host:port).
@@ -39,6 +51,31 @@ type Config struct {
 	BaseDir string
 	// Debug enables debug logging.
 	Debug bool
+	// ExternalMode is "pool", "nat", or "" (disabled).
+	ExternalMode string
+	// ExternalPools holds the cluster-wide external IP pool configs.
+	ExternalPools []ExternalPoolConfig
+	// ChassisNames are the OVN chassis identifiers for gateway HA scheduling.
+	// Format: "chassis-{hostname}" — one per node in the cluster.
+	ChassisNames []string
+	// Bootstrap holds the default VPC config from spinifex.toml for first-boot reconciliation.
+	Bootstrap *BootstrapVPC
+	// ExternalInterface is the WAN NIC name (e.g., "enp0s3"). Used to align
+	// the macvlan MAC with the OVN gateway MAC for inbound traffic.
+	ExternalInterface string
+}
+
+// ExternalPoolConfig mirrors config.ExternalPool for vpcd's internal use.
+type ExternalPoolConfig struct {
+	Name       string
+	RangeStart string
+	RangeEnd   string
+	Gateway    string
+	GatewayIP  string
+	PrefixLen  int
+	DNSServers []string
+	Region     string
+	AZ         string
 }
 
 // Service implements the Spinifex service interface for vpcd.
@@ -180,8 +217,37 @@ func launchService(cfg *Config) error {
 	defer liveClient.Close()
 	slog.Info("Connected to OVN NB DB", "endpoint", cfg.OVNNBAddr)
 
-	// Subscribe to VPC lifecycle topics for OVN topology translation
-	topo := NewTopologyHandler(liveClient)
+	// Reconcile OVN topology from bootstrap config before subscribing.
+	// This ensures the default VPC topology exists even if admin init ran
+	// before services were started (first-install case).
+	var topoOpts []TopologyOption
+	if cfg.ExternalMode != "" {
+		topoOpts = append(topoOpts, WithExternalNetwork(cfg.ExternalMode, cfg.ExternalPools))
+		slog.Info("External network enabled", "mode", cfg.ExternalMode, "pools", len(cfg.ExternalPools))
+	}
+	if len(cfg.ChassisNames) > 0 {
+		topoOpts = append(topoOpts, WithChassisNames(cfg.ChassisNames))
+		slog.Info("Gateway chassis configured", "chassis", cfg.ChassisNames)
+	}
+	topo := NewTopologyHandler(liveClient, topoOpts...)
+
+	// Run reconciliation before subscribing
+	Reconcile(ctx, topo, cfg.Bootstrap)
+
+	// Align macvlan MAC with the OVN gateway router MAC. The macvlan only
+	// delivers inbound unicast matching its own MAC. With centralized NAT,
+	// OVN uses the router MAC for all external ARP replies. Setting the
+	// macvlan MAC to the router MAC ensures inbound traffic reaches OVS.
+	if cfg.Bootstrap != nil && cfg.Bootstrap.VpcId != "" && cfg.ExternalInterface != "" {
+		gwMAC := generateMAC("gw-" + cfg.Bootstrap.VpcId)
+		macvlanName := "spx-ext-" + cfg.ExternalInterface
+		if err := setMacvlanMAC(macvlanName, gwMAC); err != nil {
+			slog.Warn("vpcd: failed to set macvlan MAC (inbound traffic may not work)", "iface", macvlanName, "mac", gwMAC, "err", err)
+		} else {
+			slog.Info("vpcd: macvlan MAC aligned with gateway", "iface", macvlanName, "mac", gwMAC)
+		}
+	}
+
 	subs, err := topo.Subscribe(nc)
 	if err != nil {
 		slog.Error("Failed to subscribe to VPC topics", "err", err)
@@ -201,5 +267,21 @@ func launchService(cfg *Config) error {
 	<-sigChan
 
 	slog.Info("vpcd service shutting down")
+	return nil
+}
+
+// setMacvlanMAC sets the MAC address on a macvlan interface. The interface is
+// brought down, MAC changed, and brought back up. Requires sudo/NET_ADMIN.
+func setMacvlanMAC(iface, mac string) error {
+	cmds := [][]string{
+		{"sudo", "ip", "link", "set", iface, "down"},
+		{"sudo", "ip", "link", "set", iface, "address", mac},
+		{"sudo", "ip", "link", "set", iface, "up"},
+	}
+	for _, args := range cmds {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			return fmt.Errorf("%s: %w (%s)", args[3], err, string(out))
+		}
+	}
 	return nil
 }

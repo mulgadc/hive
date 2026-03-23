@@ -64,8 +64,29 @@ type ConfigSettings struct {
 	OVNNBAddr string
 	OVNSBAddr string
 
+	// External networking for public subnets
+	ExternalMode    string // "pool", "nat", or "" (disabled)
+	ExternalIface   string // WAN NIC name (e.g., "eth0", "eth1")
+	ExternalDHCP    bool   // Obtain gateway IP via DHCP on macvlan/bridge
+	PoolName        string // External pool name (e.g., "wan")
+	PoolStart       string // First IP in external pool range
+	PoolEnd         string // Last IP in external pool range
+	PoolGateway     string // WAN gateway IP
+	PoolGatewayIP   string   // Explicit SNAT IP (for nat mode without DHCP)
+	PoolPrefixLen   int      // Subnet prefix length (default 24)
+	PoolDNSServers  []string // DNS servers for VM DHCP (auto-detected from host)
+
 	// Other nodes in the cluster (for config source of truth)
 	RemoteNodes []RemoteNode
+
+	// Bootstrap: pre-generated default VPC IDs for vpcd reconciliation.
+	// Written by admin init so [bootstrap] exists before services start.
+	BootstrapAccountId  string
+	BootstrapVpcId      string
+	BootstrapSubnetId   string
+	BootstrapIgwId      string
+	BootstrapCidr       string
+	BootstrapSubnetCidr string
 }
 
 // PredastoreNodeConfig describes a single Predastore node for multi-node config generation.

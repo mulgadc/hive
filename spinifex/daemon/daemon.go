@@ -28,9 +28,11 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/go-chi/chi/v5"
+	"github.com/mulgadc/spinifex/spinifex/admin"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
 	handlers_ec2_account "github.com/mulgadc/spinifex/spinifex/handlers/ec2/account"
+	handlers_ec2_eip "github.com/mulgadc/spinifex/spinifex/handlers/ec2/eip"
 	handlers_ec2_eigw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/eigw"
 	handlers_ec2_igw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/igw"
 	handlers_ec2_image "github.com/mulgadc/spinifex/spinifex/handlers/ec2/image"
@@ -108,6 +110,8 @@ type Daemon struct {
 	igwService            *handlers_ec2_igw.IGWServiceImpl
 	placementGroupService *handlers_ec2_placementgroup.PlacementGroupServiceImpl
 	vpcService            *handlers_ec2_vpc.VPCServiceImpl
+	eipService            *handlers_ec2_eip.EIPServiceImpl
+	externalIPAM          *handlers_ec2_vpc.ExternalIPAM
 	ctx                   context.Context
 	cancel                context.CancelFunc
 	shutdownWg            sync.WaitGroup
@@ -404,9 +408,22 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.CreateSubnet", d.handleEC2CreateSubnet, "spinifex-workers"},
 		{"ec2.DeleteSubnet", d.handleEC2DeleteSubnet, "spinifex-workers"},
 		{"ec2.DescribeSubnets", d.handleEC2DescribeSubnets, "spinifex-workers"},
+		{"ec2.ModifySubnetAttribute", d.handleEC2ModifySubnetAttribute, "spinifex-workers"},
 		{"ec2.CreateNetworkInterface", d.handleEC2CreateNetworkInterface, "spinifex-workers"},
 		{"ec2.DeleteNetworkInterface", d.handleEC2DeleteNetworkInterface, "spinifex-workers"},
 		{"ec2.DescribeNetworkInterfaces", d.handleEC2DescribeNetworkInterfaces, "spinifex-workers"},
+		{"ec2.CreateSecurityGroup", d.handleEC2CreateSecurityGroup, "spinifex-workers"},
+		{"ec2.DeleteSecurityGroup", d.handleEC2DeleteSecurityGroup, "spinifex-workers"},
+		{"ec2.DescribeSecurityGroups", d.handleEC2DescribeSecurityGroups, "spinifex-workers"},
+		{"ec2.AuthorizeSecurityGroupIngress", d.handleEC2AuthorizeSecurityGroupIngress, "spinifex-workers"},
+		{"ec2.AuthorizeSecurityGroupEgress", d.handleEC2AuthorizeSecurityGroupEgress, "spinifex-workers"},
+		{"ec2.RevokeSecurityGroupIngress", d.handleEC2RevokeSecurityGroupIngress, "spinifex-workers"},
+		{"ec2.RevokeSecurityGroupEgress", d.handleEC2RevokeSecurityGroupEgress, "spinifex-workers"},
+		{"ec2.AllocateAddress", d.handleEC2AllocateAddress, "spinifex-workers"},
+		{"ec2.ReleaseAddress", d.handleEC2ReleaseAddress, "spinifex-workers"},
+		{"ec2.AssociateAddress", d.handleEC2AssociateAddress, "spinifex-workers"},
+		{"ec2.DisassociateAddress", d.handleEC2DisassociateAddress, "spinifex-workers"},
+		{"ec2.DescribeAddresses", d.handleEC2DescribeAddresses, "spinifex-workers"},
 		{"ec2.ModifyInstanceAttribute", d.handleEC2ModifyInstanceAttribute, "spinifex-workers"},
 		{"ec2.start", d.handleEC2StartStoppedInstance, "spinifex-workers"},
 		{"ec2.terminate", d.handleEC2TerminateStoppedInstance, "spinifex-workers"},
@@ -530,6 +547,45 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to initialize VPC service: %w", err)
 	}
 
+	// Initialize external IPAM if external networking is configured
+	if d.clusterConfig != nil && d.clusterConfig.Network.ExternalMode != "" {
+		js, jsErr := d.natsConn.JetStream()
+		if jsErr != nil {
+			slog.Warn("Failed to get JetStream for external IPAM", "err", jsErr)
+		} else {
+			var pools []handlers_ec2_vpc.ExternalPoolConfig
+			for _, p := range d.clusterConfig.Network.ExternalPools {
+				pools = append(pools, handlers_ec2_vpc.ExternalPoolConfig{
+					Name:       p.Name,
+					RangeStart: p.RangeStart,
+					RangeEnd:   p.RangeEnd,
+					Gateway:    p.Gateway,
+					GatewayIP:  p.GatewayIP,
+					PrefixLen:  p.PrefixLen,
+					Region:     p.Region,
+					AZ:         p.AZ,
+				})
+			}
+			d.externalIPAM, err = handlers_ec2_vpc.NewExternalIPAM(js, pools)
+			if err != nil {
+				slog.Warn("Failed to initialize external IPAM", "err", err)
+			} else {
+				slog.Info("External IPAM initialized", "mode", d.clusterConfig.Network.ExternalMode, "pools", len(pools))
+			}
+		}
+	}
+
+	// Initialize EIP service if external IPAM is available
+	if d.externalIPAM != nil && d.vpcService != nil {
+		eipSvc, eipErr := handlers_ec2_eip.NewEIPServiceImpl(d.natsConn, d.externalIPAM, d.vpcService)
+		if eipErr != nil {
+			slog.Warn("Failed to initialize EIP service", "err", eipErr)
+		} else {
+			d.eipService = eipSvc
+			slog.Info("EIP service initialized")
+		}
+	}
+
 	d.accountService, err = initServiceWithRetry("account settings service", func() (*handlers_ec2_account.AccountSettingsServiceImpl, error) {
 		return handlers_ec2_account.NewAccountSettingsServiceImplWithNATS(d.config, d.natsConn)
 	})
@@ -537,11 +593,25 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to initialize account settings service: %w", err)
 	}
 
-	// Ensure default VPC exists (matches AWS: every account has a default VPC)
+	// Ensure default VPC exists for system and admin accounts
+	// (matches AWS: every account has a default VPC with IGW + default SG)
 	if d.vpcService != nil {
-		if err := d.vpcService.EnsureDefaultVPC(utils.GlobalAccountID); err != nil {
-			slog.Error("Failed to ensure default VPC", "error", err)
+		for _, accountID := range []string{utils.GlobalAccountID, admin.DefaultAccountID()} {
+			// Pass bootstrap IDs for the admin account so EnsureDefaultVPC uses
+			// the same IDs that admin init wrote to [bootstrap] in spinifex.toml.
+			var opts []handlers_ec2_vpc.BootstrapIDs
+			if accountID == admin.DefaultAccountID() && d.clusterConfig != nil && d.clusterConfig.Bootstrap.VpcId != "" {
+				opts = append(opts, handlers_ec2_vpc.BootstrapIDs{
+					VpcId:    d.clusterConfig.Bootstrap.VpcId,
+					SubnetId: d.clusterConfig.Bootstrap.SubnetId,
+				})
+			}
+			if _, err := d.vpcService.EnsureDefaultVPC(accountID, opts...); err != nil {
+				slog.Error("Failed to ensure default VPC", "accountID", accountID, "error", err)
+			}
 		}
+		// Ensure default VPC has an IGW and default security group
+		d.ensureDefaultVPCInfrastructure()
 	}
 
 	// Initialize network plumber for VPC tap device management
@@ -1580,6 +1650,24 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 			if instance.ENIId != "" && d.networkPlumber != nil {
 				if err := d.networkPlumber.CleanupTapDevice(instance.ENIId); err != nil {
 					slog.Warn("Failed to clean up tap device", "eni", instance.ENIId, "err", err)
+				}
+			}
+
+			// Release public IP before deleting ENI
+			if deleteVolume && instance.PublicIP != "" && instance.PublicIPPool != "" && d.externalIPAM != nil {
+				// Publish vpc.delete-nat to remove dnat_and_snat rule
+				portName := "port-" + instance.ENIId
+				vpcId := ""
+				if instance.Instance != nil && instance.Instance.VpcId != nil {
+					vpcId = *instance.Instance.VpcId
+				}
+				d.publishNATEvent("vpc.delete-nat", vpcId, instance.PublicIP, "", portName, "")
+
+				// Release IP back to pool
+				if err := d.externalIPAM.ReleaseIP(instance.PublicIPPool, instance.PublicIP); err != nil {
+					slog.Warn("Failed to release public IP on termination", "ip", instance.PublicIP, "pool", instance.PublicIPPool, "err", err)
+				} else {
+					slog.Info("Released public IP on termination", "ip", instance.PublicIP, "instanceId", instance.ID)
 				}
 			}
 

@@ -526,8 +526,13 @@ func TestCreateSubnet_CidrRanges(t *testing.T) {
 func TestEnsureDefaultVPC(t *testing.T) {
 	svc := setupTestVPCService(t)
 
-	err := svc.EnsureDefaultVPC(testAccountID)
+	info, err := svc.EnsureDefaultVPC(testAccountID)
 	require.NoError(t, err)
+	require.NotNil(t, info)
+	assert.NotEmpty(t, info.VpcId)
+	assert.NotEmpty(t, info.SubnetId)
+	assert.Equal(t, "172.31.0.0/16", info.Cidr)
+	assert.Equal(t, "172.31.0.0/20", info.SubnetCidr)
 
 	// Verify default VPC was created
 	desc, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{}, testAccountID)
@@ -549,8 +554,10 @@ func TestEnsureDefaultVPC_Idempotent(t *testing.T) {
 	svc := setupTestVPCService(t)
 
 	// Call twice — should be idempotent
-	require.NoError(t, svc.EnsureDefaultVPC(testAccountID))
-	require.NoError(t, svc.EnsureDefaultVPC(testAccountID))
+	_, err := svc.EnsureDefaultVPC(testAccountID)
+	require.NoError(t, err)
+	_, err = svc.EnsureDefaultVPC(testAccountID)
+	require.NoError(t, err)
 
 	// Should still have exactly 1 VPC and 1 subnet
 	desc, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{}, testAccountID)
@@ -566,13 +573,15 @@ func TestEnsureDefaultVPC_SkipsWhenDefaultExists(t *testing.T) {
 	svc := setupTestVPCService(t)
 
 	// Create default VPC first
-	require.NoError(t, svc.EnsureDefaultVPC(testAccountID))
+	_, err := svc.EnsureDefaultVPC(testAccountID)
+	require.NoError(t, err)
 
 	// Create a second (non-default) VPC
 	createTestVPC(t, svc, "10.0.0.0/16")
 
 	// Calling again should not create another default
-	require.NoError(t, svc.EnsureDefaultVPC(testAccountID))
+	_, err = svc.EnsureDefaultVPC(testAccountID)
+	require.NoError(t, err)
 
 	desc, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{}, testAccountID)
 	require.NoError(t, err)
@@ -596,7 +605,8 @@ func TestGetDefaultSubnet(t *testing.T) {
 	assert.Error(t, err)
 
 	// Create default VPC + subnet
-	require.NoError(t, svc.EnsureDefaultVPC(testAccountID))
+	_, err = svc.EnsureDefaultVPC(testAccountID)
+	require.NoError(t, err)
 
 	subnet, err := svc.GetDefaultSubnet(testAccountID)
 	require.NoError(t, err)
@@ -616,7 +626,8 @@ func TestGetDefaultSubnet_NotConfusedByNonDefault(t *testing.T) {
 	assert.Error(t, err)
 
 	// Now create default
-	require.NoError(t, svc.EnsureDefaultVPC(testAccountID))
+	_, err = svc.EnsureDefaultVPC(testAccountID)
+	require.NoError(t, err)
 	subnet, err := svc.GetDefaultSubnet(testAccountID)
 	require.NoError(t, err)
 	assert.True(t, subnet.IsDefault)
@@ -806,7 +817,7 @@ func TestEnsureDefaultVPC_WithConfigAZ(t *testing.T) {
 	svc, err := NewVPCServiceImplWithNATS(cfg, nc)
 	require.NoError(t, err)
 
-	err = svc.EnsureDefaultVPC(testAccountID)
+	_, err = svc.EnsureDefaultVPC(testAccountID)
 	require.NoError(t, err)
 
 	// Verify the subnet uses the configured AZ
@@ -881,8 +892,10 @@ func TestEnsureDefaultVPC_PerAccountIsolation(t *testing.T) {
 	accountA := "111111111111"
 	accountB := "222222222222"
 
-	require.NoError(t, svc.EnsureDefaultVPC(accountA))
-	require.NoError(t, svc.EnsureDefaultVPC(accountB))
+	_, err := svc.EnsureDefaultVPC(accountA)
+	require.NoError(t, err)
+	_, err = svc.EnsureDefaultVPC(accountB)
+	require.NoError(t, err)
 
 	// Each account should see only their own default VPC
 	descA, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{}, accountA)
@@ -917,8 +930,10 @@ func TestEnsureDefaultVPC_IndependentVNIs(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = sub.Unsubscribe() }()
 
-	require.NoError(t, svc.EnsureDefaultVPC(accountA))
-	require.NoError(t, svc.EnsureDefaultVPC(accountB))
+	_, err = svc.EnsureDefaultVPC(accountA)
+	require.NoError(t, err)
+	_, err = svc.EnsureDefaultVPC(accountB)
+	require.NoError(t, err)
 
 	var vnis []int64
 	for range 2 {
@@ -938,7 +953,8 @@ func TestDescribeVpcs_NoGlobalSharing(t *testing.T) {
 	otherAccount := "111111111111"
 
 	// Create default VPC for global account only
-	require.NoError(t, svc.EnsureDefaultVPC(globalAccount))
+	_, err := svc.EnsureDefaultVPC(globalAccount)
+	require.NoError(t, err)
 
 	// Other account should NOT see the global default VPC
 	desc, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{}, otherAccount)
@@ -951,8 +967,10 @@ func TestGetDefaultSubnet_PerAccount(t *testing.T) {
 	accountA := "111111111111"
 	accountB := "222222222222"
 
-	require.NoError(t, svc.EnsureDefaultVPC(accountA))
-	require.NoError(t, svc.EnsureDefaultVPC(accountB))
+	_, err := svc.EnsureDefaultVPC(accountA)
+	require.NoError(t, err)
+	_, err = svc.EnsureDefaultVPC(accountB)
+	require.NoError(t, err)
 
 	subA, err := svc.GetDefaultSubnet(accountA)
 	require.NoError(t, err)
@@ -978,7 +996,7 @@ func TestEnsureDefaultVPC_PublishesEvents(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = subSub.Unsubscribe() }()
 
-	err = svc.EnsureDefaultVPC(testAccountID)
+	_, err = svc.EnsureDefaultVPC(testAccountID)
 	require.NoError(t, err)
 
 	// Should publish vpc.create event
@@ -996,4 +1014,43 @@ func TestEnsureDefaultVPC_PublishesEvents(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for vpc.create-subnet event from EnsureDefaultVPC")
 	}
+}
+
+// --- MapPublicIpOnLaunch tests ---
+
+func TestSubnet_MapPublicIpOnLaunch(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	subnetID := createTestSubnet(t, svc, vpcID, "10.0.1.0/24")
+
+	// Verify MapPublicIpOnLaunch defaults to false
+	desc, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
+		SubnetIds: []*string{aws.String(subnetID)},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, desc.Subnets, 1)
+	assert.False(t, *desc.Subnets[0].MapPublicIpOnLaunch)
+}
+
+func TestSubnet_ModifyAttribute(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	subnetID := createTestSubnet(t, svc, vpcID, "10.0.1.0/24")
+
+	// Set MapPublicIpOnLaunch to true
+	_, err := svc.ModifySubnetAttribute(&ec2.ModifySubnetAttributeInput{
+		SubnetId: aws.String(subnetID),
+		MapPublicIpOnLaunch: &ec2.AttributeBooleanValue{
+			Value: aws.Bool(true),
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Verify via DescribeSubnets
+	desc, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
+		SubnetIds: []*string{aws.String(subnetID)},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, desc.Subnets, 1)
+	assert.True(t, *desc.Subnets[0].MapPublicIpOnLaunch)
 }

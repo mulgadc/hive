@@ -13,14 +13,20 @@
 #   ./scripts/setup-ovn.sh [options]
 #
 # Options:
-#   --management     Also start OVN central services (NB DB, SB DB, ovn-northd)
-#   --ovn-remote     OVN SB DB address (default: tcp:127.0.0.1:6642)
-#   --encap-ip       Geneve tunnel endpoint IP (default: auto-detect)
-#   --chassis-id     OVN chassis identifier (default: hostname)
+#   --management       Also start OVN central services (NB DB, SB DB, ovn-northd)
+#   --external-bridge  Create br-external for public subnet WAN uplink
+#   --external-iface   WAN NIC to add to br-external (default: eth1)
+#   --dhcp             Obtain gateway IP via DHCP on the external bridge interface
+#   --ovn-remote       OVN SB DB address (default: tcp:127.0.0.1:6642)
+#   --encap-ip         Geneve tunnel endpoint IP (default: auto-detect)
+#   --chassis-id       OVN chassis identifier (default: hostname)
 #
 # Examples:
 #   # Single-node development (management + compute on same host):
 #   ./scripts/setup-ovn.sh --management
+#
+#   # With external bridge (macvlan on WAN NIC — SSH-safe):
+#   ./scripts/setup-ovn.sh --management --external-bridge --external-iface=eth0
 #
 #   # Compute node joining an existing cluster:
 #   ./scripts/setup-ovn.sh --ovn-remote=tcp:10.0.0.1:6642 --encap-ip=10.0.0.2
@@ -34,6 +40,9 @@ set -e
 
 # Defaults
 MANAGEMENT=false
+EXTERNAL_BRIDGE=false
+EXTERNAL_DHCP=false
+EXTERNAL_IFACE="eth1"
 OVN_REMOTE="tcp:127.0.0.1:6642"
 ENCAP_IP=""
 CHASSIS_ID=""
@@ -41,12 +50,15 @@ CHASSIS_ID=""
 # Parse arguments
 for arg in "$@"; do
     case "$arg" in
-        --management)     MANAGEMENT=true ;;
-        --ovn-remote=*)   OVN_REMOTE="${arg#*=}" ;;
-        --encap-ip=*)     ENCAP_IP="${arg#*=}" ;;
-        --chassis-id=*)   CHASSIS_ID="${arg#*=}" ;;
+        --management)       MANAGEMENT=true ;;
+        --external-bridge)  EXTERNAL_BRIDGE=true ;;
+        --dhcp)             EXTERNAL_DHCP=true ;;
+        --external-iface=*) EXTERNAL_IFACE="${arg#*=}" ;;
+        --ovn-remote=*)     OVN_REMOTE="${arg#*=}" ;;
+        --encap-ip=*)       ENCAP_IP="${arg#*=}" ;;
+        --chassis-id=*)     CHASSIS_ID="${arg#*=}" ;;
         --help|-h)
-            head -30 "$0" | tail -28
+            head -36 "$0" | tail -34
             exit 0
             ;;
         *)
@@ -72,10 +84,14 @@ if [ -z "$CHASSIS_ID" ]; then
 fi
 
 echo "=== Spinifex OVN Compute Node Setup ==="
-echo "  Management node: $MANAGEMENT"
-echo "  OVN Remote (SB): $OVN_REMOTE"
-echo "  Encap IP:        $ENCAP_IP"
-echo "  Chassis ID:      $CHASSIS_ID"
+echo "  Management node:  $MANAGEMENT"
+echo "  External bridge:  $EXTERNAL_BRIDGE"
+if [ "$EXTERNAL_BRIDGE" = true ]; then
+echo "  External iface:   $EXTERNAL_IFACE"
+fi
+echo "  OVN Remote (SB):  $OVN_REMOTE"
+echo "  Encap IP:         $ENCAP_IP"
+echo "  Chassis ID:       $CHASSIS_ID"
 echo ""
 
 # --- Step 1: Install packages ---
@@ -118,6 +134,15 @@ if [ "$MANAGEMENT" = true ]; then
     sudo systemctl start ovn-central
     echo "  ovn-central: started (NB DB + SB DB + ovn-northd)"
 
+    # Wait for OVN NB DB socket to become available
+    for i in $(seq 1 15); do
+        if sudo ovn-nbctl --timeout=2 get-connection >/dev/null 2>&1; then
+            break
+        fi
+        echo "  Waiting for OVN NB DB... ($i/15)"
+        sleep 1
+    done
+
     # Allow remote connections to NB and SB databases
     sudo ovn-nbctl set-connection ptcp:6641
     sudo ovn-sbctl set-connection ptcp:6642
@@ -135,15 +160,106 @@ sudo ovs-vsctl set Bridge br-int other-config:disable-in-band=true
 sudo ip link set br-int up
 echo "  br-int: created, fail-mode=secure, up"
 
+# --- Step 3b: Create br-external for WAN uplink (optional) ---
+if [ "$EXTERNAL_BRIDGE" = true ]; then
+    echo ""
+    echo "Step 3b: Configuring br-external for public subnet WAN uplink..."
+
+    # Verify the WAN NIC exists
+    if ! ip link show "$EXTERNAL_IFACE" >/dev/null 2>&1; then
+        echo "  ERROR: interface $EXTERNAL_IFACE does not exist"
+        echo "  Available interfaces:"
+        ip -o link show | awk -F': ' '{print "    " $2}'
+        exit 1
+    fi
+
+    # Create br-external
+    sudo ovs-vsctl --may-exist add-br br-external
+    sudo ip link set br-external up
+
+    # macvlan strategy: create a macvlan sub-interface in bridge mode off the
+    # WAN NIC. The host keeps its IP on the parent NIC — SSH-safe. OVN localnet
+    # traffic flows through the macvlan to the physical wire.
+    MACVLAN_NAME="spx-ext-${EXTERNAL_IFACE}"
+
+    if ip link show "$MACVLAN_NAME" >/dev/null 2>&1; then
+        echo "  macvlan $MACVLAN_NAME already exists"
+    else
+        sudo ip link add "$MACVLAN_NAME" link "$EXTERNAL_IFACE" type macvlan mode bridge
+        echo "  created macvlan: $MACVLAN_NAME (bridge mode) on $EXTERNAL_IFACE"
+    fi
+
+    sudo ip link set "$MACVLAN_NAME" up
+    sudo ovs-vsctl --may-exist add-port br-external "$MACVLAN_NAME"
+    echo "  br-external: created with macvlan port $MACVLAN_NAME"
+    echo "  NOTE: host keeps its IP on $EXTERNAL_IFACE (no migration)"
+    echo "  QUIRK: host cannot reach VMs at their public IPs (macvlan isolation)"
+
+    # --- DHCP: obtain gateway IP for OVN SNAT ---
+    if [ "$EXTERNAL_DHCP" = true ]; then
+        echo ""
+        echo "Step 3c: Obtaining external gateway IP via DHCP..."
+
+        # DHCP on the macvlan interface (it has L2 access to the WAN)
+        DHCP_IFACE="spx-ext-${EXTERNAL_IFACE}"
+
+        # Run DHCP client to get a lease
+        if command -v dhcpcd >/dev/null 2>&1; then
+            sudo dhcpcd --waitip=4 --timeout 15 "$DHCP_IFACE" 2>/dev/null || true
+        elif command -v dhclient >/dev/null 2>&1; then
+            sudo dhclient -1 -timeout 15 "$DHCP_IFACE" 2>/dev/null || true
+        else
+            echo "  WARNING: no DHCP client found (dhcpcd or dhclient)"
+            echo "  Install dhcpcd-base or isc-dhcp-client, or set gateway_ip manually"
+        fi
+
+        # Read the obtained IP
+        DHCP_IP=$(ip -4 addr show dev "$DHCP_IFACE" 2>/dev/null | awk '/inet /{print $2}' | head -1 | cut -d/ -f1)
+        if [ -n "$DHCP_IP" ]; then
+            echo "  DHCP obtained: $DHCP_IP on $DHCP_IFACE"
+
+            # Write the gateway IP to the spinifex config so vpcd can use it
+            CONFIG_DIR="${CONFIG_DIR:-$HOME/spinifex/config}"
+            CONFIG_FILE="$CONFIG_DIR/spinifex.toml"
+            if [ -f "$CONFIG_FILE" ]; then
+                # Update gateway_ip in the config
+                if grep -q "gateway_ip" "$CONFIG_FILE"; then
+                    sed -i "s/gateway_ip.*/gateway_ip = \"$DHCP_IP\"/" "$CONFIG_FILE"
+                else
+                    # Insert gateway_ip after the gateway line in the pool section
+                    sed -i "/^gateway *=.*/a gateway_ip  = \"$DHCP_IP\"" "$CONFIG_FILE"
+                fi
+                echo "  Updated $CONFIG_FILE with gateway_ip = $DHCP_IP"
+            else
+                echo "  WARNING: $CONFIG_FILE not found — set gateway_ip manually"
+            fi
+        else
+            echo "  WARNING: DHCP failed to obtain IP on $DHCP_IFACE"
+            echo "  VMs will not have external connectivity until gateway_ip is configured"
+        fi
+    fi
+fi
+
 # --- Step 4: Configure OVN external_ids ---
 echo ""
 echo "Step 4: Setting OVS external_ids for OVN..."
 
-sudo ovs-vsctl set Open_vSwitch . \
-    external_ids:system-id="$CHASSIS_ID" \
-    external_ids:ovn-remote="$OVN_REMOTE" \
-    external_ids:ovn-encap-ip="$ENCAP_IP" \
-    external_ids:ovn-encap-type="geneve"
+BRIDGE_MAPPINGS="external:br-external"
+if [ "$EXTERNAL_BRIDGE" = true ]; then
+    sudo ovs-vsctl set Open_vSwitch . \
+        external_ids:system-id="$CHASSIS_ID" \
+        external_ids:ovn-remote="$OVN_REMOTE" \
+        external_ids:ovn-encap-ip="$ENCAP_IP" \
+        external_ids:ovn-encap-type="geneve" \
+        external_ids:ovn-bridge-mappings="$BRIDGE_MAPPINGS"
+    echo "  ovn-bridge-mappings: $BRIDGE_MAPPINGS"
+else
+    sudo ovs-vsctl set Open_vSwitch . \
+        external_ids:system-id="$CHASSIS_ID" \
+        external_ids:ovn-remote="$OVN_REMOTE" \
+        external_ids:ovn-encap-ip="$ENCAP_IP" \
+        external_ids:ovn-encap-type="geneve"
+fi
 
 echo "  system-id:      $CHASSIS_ID"
 echo "  ovn-remote:     $OVN_REMOTE"
@@ -309,6 +425,23 @@ if sudo ovs-vsctl br-exists br-int; then
 else
     echo "  br-int:          FAILED"
     OK=false
+fi
+
+# Check br-external (only if --external-bridge was used)
+if [ "$EXTERNAL_BRIDGE" = true ]; then
+    if sudo ovs-vsctl br-exists br-external; then
+        echo "  br-external:     OK"
+        MACVLAN_NAME="spx-ext-${EXTERNAL_IFACE}"
+        if ip link show "$MACVLAN_NAME" >/dev/null 2>&1; then
+            echo "  macvlan:         OK ($MACVLAN_NAME)"
+        else
+            echo "  macvlan:         FAILED ($MACVLAN_NAME not found)"
+            OK=false
+        fi
+    else
+        echo "  br-external:     FAILED"
+        OK=false
+    fi
 fi
 
 # Check ovn-controller

@@ -33,6 +33,8 @@ type ENIRecord struct {
 	AttachmentId       string            `json:"attachment_id,omitempty"`
 	InstanceId         string            `json:"instance_id,omitempty"`
 	DeviceIndex        int64             `json:"device_index"`
+	PublicIpAddress    string            `json:"public_ip_address,omitempty"` // Auto-assigned or EIP
+	PublicIpPool       string            `json:"public_ip_pool,omitempty"`    // Pool name the public IP came from
 	Tags               map[string]string `json:"tags"`
 	CreatedAt          time.Time         `json:"created_at"`
 }
@@ -323,6 +325,34 @@ func (s *VPCServiceImpl) DetachENI(accountID, eniId string) error {
 	return nil
 }
 
+// UpdateENIPublicIP updates the PublicIpAddress and PublicIpPool on an ENI record.
+func (s *VPCServiceImpl) UpdateENIPublicIP(accountID, eniId, publicIP, poolName string) error {
+	key := utils.AccountKey(accountID, eniId)
+	entry, err := s.eniKV.Get(key)
+	if err != nil {
+		return fmt.Errorf("ENI %s not found: %w", eniId, err)
+	}
+
+	var record ENIRecord
+	if err := json.Unmarshal(entry.Value(), &record); err != nil {
+		return fmt.Errorf("unmarshal ENI record: %w", err)
+	}
+
+	record.PublicIpAddress = publicIP
+	record.PublicIpPool = poolName
+
+	data, err := json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("marshal ENI record: %w", err)
+	}
+	if _, err := s.eniKV.Update(key, data, entry.Revision()); err != nil {
+		return fmt.Errorf("update ENI record: %w", err)
+	}
+
+	slog.Info("Updated ENI with public IP", "eniId", eniId, "publicIp", publicIP, "pool", poolName)
+	return nil
+}
+
 // eniRecordToEC2 converts an ENI record to an EC2 NetworkInterface
 func (s *VPCServiceImpl) eniRecordToEC2(record *ENIRecord, accountID string) *ec2.NetworkInterface {
 	eni := &ec2.NetworkInterface{
@@ -344,6 +374,12 @@ func (s *VPCServiceImpl) eniRecordToEC2(record *ENIRecord, accountID string) *ec
 			},
 		},
 		Groups: []*ec2.GroupIdentifier{},
+	}
+
+	if record.PublicIpAddress != "" {
+		eni.Association = &ec2.NetworkInterfaceAssociation{
+			PublicIp: aws.String(record.PublicIpAddress),
+		}
 	}
 
 	if record.AttachmentId != "" {

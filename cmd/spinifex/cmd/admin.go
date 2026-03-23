@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -214,6 +215,14 @@ func init() {
 	adminInitCmd.Flags().String("formation-timeout", "10m", "Timeout for cluster formation (e.g., 5m, 30s)")
 	adminInitCmd.Flags().String("cluster-name", "spinifex", "NATS cluster name")
 	adminInitCmd.Flags().StringSlice("services", nil, "Services this node runs (default: all). Valid: nats,predastore,viperblock,daemon,awsgw,ui")
+
+	// External networking flags
+	adminInitCmd.Flags().String("external-mode", "", "External network mode: 'pool' (public IPs), 'nat' (outbound-only, default), or '' (disabled)")
+	adminInitCmd.Flags().String("external-iface", "", "WAN NIC for br-external (auto-detected from default route)")
+	adminInitCmd.Flags().String("external-pool", "", "External IP pool range as start-end (e.g., 192.168.1.150-192.168.1.250)")
+	adminInitCmd.Flags().String("external-gateway", "", "WAN gateway IP (auto-detected from default route)")
+	adminInitCmd.Flags().Int("external-prefix-len", 24, "External pool subnet prefix length (auto-detected)")
+	adminInitCmd.Flags().Bool("no-external", false, "Disable external networking (overlay-only, no internet for VMs)")
 
 	// Flags for admin join
 	adminJoinCmd.Flags().String("region", "ap-southeast-2", "Region for this node")
@@ -528,6 +537,108 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	clusterName, _ := cmd.Flags().GetString("cluster-name")
 	services, _ := cmd.Flags().GetStringSlice("services")
 
+	// External networking flags
+	externalMode, _ := cmd.Flags().GetString("external-mode")
+	externalIface, _ := cmd.Flags().GetString("external-iface")
+	externalPool, _ := cmd.Flags().GetString("external-pool")
+	externalGateway, _ := cmd.Flags().GetString("external-gateway")
+	externalPrefixLen, _ := cmd.Flags().GetInt("external-prefix-len")
+	noExternal, _ := cmd.Flags().GetBool("no-external")
+
+	// Auto-detect network topology
+	var poolStart, poolEnd string
+	var detectedNet *admin.DetectedNetwork
+	if !noExternal {
+		detected, err := admin.DetectNetwork()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Network auto-detection failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "   Use --no-external to skip, or specify flags manually.\n")
+		} else {
+			detectedNet = detected
+
+			// Print detected topology
+			fmt.Println("\n🔍 Detected network topology:")
+			fmt.Printf("  %-14s %-18s %-20s %-16s %s\n", "Interface", "IP", "Subnet", "Gateway", "Role")
+			for _, iface := range detected.Interfaces {
+				gw := "—"
+				if iface.Gateway != "" {
+					gw = iface.Gateway
+				}
+				fmt.Printf("  %-14s %-18s %-20s %-16s %s\n", iface.Name, iface.IP, iface.Subnet, gw, strings.ToUpper(iface.Role))
+			}
+			if detected.LANCount == 0 {
+				fmt.Println("\n  Mode: single-NIC (macvlan for external bridge)")
+			} else {
+				fmt.Printf("\n  Mode: %d LAN + 1 WAN (macvlan for external bridge)\n", detected.LANCount)
+			}
+
+			// Apply auto-detected values when flags not explicitly set
+			if detected.WAN != nil {
+				if externalIface == "" {
+					externalIface = detected.WAN.Name
+				}
+				if externalGateway == "" {
+					externalGateway = detected.WAN.Gateway
+				}
+				if !cmd.Flags().Changed("external-prefix-len") {
+					externalPrefixLen = detected.WAN.PrefixLen
+				}
+
+				// Default mode: "nat" with DHCP if no pool specified
+				if externalMode == "" && !cmd.Flags().Changed("external-mode") {
+					if externalPool != "" {
+						externalMode = "pool"
+					} else {
+						externalMode = "nat"
+					}
+				}
+			}
+		}
+	}
+
+	// Validate external networking flags
+	if externalMode != "" && externalMode != "pool" && externalMode != "nat" {
+		fmt.Fprintf(os.Stderr, "❌ Error: --external-mode must be 'pool', 'nat', or empty, got: %s\n", externalMode)
+		os.Exit(1)
+	}
+	if externalMode == "pool" {
+		if externalPool == "" {
+			fmt.Fprintf(os.Stderr, "❌ Error: --external-pool is required when --external-mode=pool (e.g., 192.168.1.150-192.168.1.250)\n")
+			if detectedNet != nil && detectedNet.WAN != nil {
+				sugStart, sugEnd := admin.SuggestPoolRange(detectedNet.WAN)
+				fmt.Fprintf(os.Stderr, "   Suggested: --external-pool=%s-%s\n", sugStart, sugEnd)
+			}
+			os.Exit(1)
+		}
+		if externalGateway == "" {
+			fmt.Fprintf(os.Stderr, "❌ Error: --external-gateway is required when --external-mode=pool\n")
+			os.Exit(1)
+		}
+		parts := strings.SplitN(externalPool, "-", 2)
+		if len(parts) != 2 || net.ParseIP(parts[0]) == nil || net.ParseIP(parts[1]) == nil {
+			fmt.Fprintf(os.Stderr, "❌ Error: --external-pool must be start-end IPs (e.g., 192.168.1.150-192.168.1.250), got: %s\n", externalPool)
+			os.Exit(1)
+		}
+		poolStart, poolEnd = parts[0], parts[1]
+	}
+	if externalGateway != "" && net.ParseIP(externalGateway) == nil {
+		fmt.Fprintf(os.Stderr, "❌ Error: --external-gateway is not a valid IP: %s\n", externalGateway)
+		os.Exit(1)
+	}
+
+	// Detect DNS servers from the host for VM DHCP
+	var dnsServers []string
+	if externalMode != "" {
+		dnsServers = detectDNSServers(externalIface)
+		if len(dnsServers) > 0 {
+			fmt.Printf("  DNS servers: %s\n", strings.Join(dnsServers, ", "))
+		}
+	}
+
+	// For nat mode, we need the gateway IP. The DHCP flag tells setup-ovn.sh
+	// to obtain one via DHCP on the macvlan/bridge interface.
+	useExternalDHCP := externalMode == "nat" && poolStart == ""
+
 	// Validate IP address format
 	if net.ParseIP(bindIP) == nil {
 		fmt.Fprintf(os.Stderr, "❌ Error: Invalid IP address for --bind: %s\n", bindIP)
@@ -695,6 +806,14 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		fmt.Printf("✅ Created: multi-node predastore.toml (node ID: %d)\n", predastoreNodeID)
 	}
 
+	// Pre-generate default VPC/subnet/IGW IDs for bootstrap config.
+	// These are written to [bootstrap] in spinifex.toml so vpcd can
+	// create OVN topology on first boot. The daemon uses the same IDs
+	// when it creates the records in NATS KV via EnsureDefaultVPC.
+	bootstrapVpcId := utils.GenerateResourceID("vpc")
+	bootstrapSubnetId := utils.GenerateResourceID("subnet")
+	bootstrapIgwId := utils.GenerateResourceID("igw")
+
 	configSettings := admin.ConfigSettings{
 		AccessKey: accessKey,
 		SecretKey: secretKey,
@@ -717,6 +836,36 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 		OVNNBAddr: "tcp:127.0.0.1:6641",
 		OVNSBAddr: "tcp:127.0.0.1:6642",
+
+		ExternalMode:  externalMode,
+		ExternalIface: externalIface,
+		ExternalDHCP:  useExternalDHCP,
+		PoolName:      "wan",
+		PoolStart:     poolStart,
+		PoolEnd:       poolEnd,
+		PoolGateway:    externalGateway,
+		PoolPrefixLen:  externalPrefixLen,
+		PoolDNSServers: dnsServers,
+
+		BootstrapAccountId:  admin.DefaultAccountID(),
+		BootstrapVpcId:      bootstrapVpcId,
+		BootstrapSubnetId:   bootstrapSubnetId,
+		BootstrapIgwId:      bootstrapIgwId,
+		BootstrapCidr:       handlers_ec2_vpc.DefaultVPCCidr,
+		BootstrapSubnetCidr: handlers_ec2_vpc.DefaultSubnetCidr,
+	}
+
+	// Print external networking summary
+	if externalMode != "" {
+		fmt.Printf("\n📡 External networking: %s\n", externalMode)
+		fmt.Printf("  WAN interface: %s (macvlan)\n", externalIface)
+		if externalMode == "pool" {
+			fmt.Printf("  IP pool:       %s - %s\n", poolStart, poolEnd)
+			fmt.Printf("  ⚠️  Ensure %s-%s is excluded from your router's DHCP range.\n", poolStart, poolEnd)
+		} else if useExternalDHCP {
+			fmt.Println("  Gateway IP:    DHCP (obtained during OVN setup)")
+			fmt.Println("  VMs get:       outbound internet via SNAT")
+		}
 	}
 
 	// Generate config files
@@ -759,13 +908,6 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 	// Print success message
 	fmt.Println("\n🎉 Spinifex initialization complete!")
-	fmt.Println("\n📋 Next steps:")
-	fmt.Println("   1. Start services:")
-	fmt.Println("      ./scripts/start-dev.sh")
-	fmt.Println()
-	fmt.Println("   2. Test with AWS CLI:")
-	fmt.Println("      export AWS_PROFILE=spinifex")
-	fmt.Println("      aws ec2 describe-instances")
 	fmt.Println()
 	fmt.Println("🔗 Configuration:")
 	fmt.Printf("   Config file: %s\n", spinifexTomlPath)
@@ -1370,7 +1512,7 @@ func runAccountCreate(cmd *cobra.Command, args []string) {
 	vpcSvc, vpcErr := handlers_ec2_vpc.NewVPCServiceImplWithNATS(&nodeConfig, nc)
 	if vpcErr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not create default VPC service: %v\n", vpcErr)
-	} else if vpcErr = vpcSvc.EnsureDefaultVPC(accountID); vpcErr != nil {
+	} else if _, vpcErr = vpcSvc.EnsureDefaultVPC(accountID); vpcErr != nil {
 		fmt.Fprintf(os.Stderr, "Warning: could not create default VPC: %v\n", vpcErr)
 	}
 
@@ -1549,4 +1691,77 @@ func writeBootstrapFilesWithAdmin(configDir string, masterKey []byte, accessKey,
 	}
 
 	return handlers_iam.SaveBootstrapData(filepath.Join(configDir, "bootstrap.json"), bd)
+}
+
+// detectDNSServers reads the DNS servers configured on the host for the given
+// interface. Uses resolvectl (systemd-resolved) first, then falls back to
+// /etc/resolv.conf. Returns up to 3 servers. Falls back to public DNS if none found.
+func detectDNSServers(iface string) []string {
+	// Try resolvectl for the specific link first (most reliable on modern systems)
+	if iface != "" {
+		out, err := exec.Command("resolvectl", "dns", iface).CombinedOutput()
+		if err == nil {
+			servers := parseDNSFromResolvectl(string(out))
+			if len(servers) > 0 {
+				return servers
+			}
+		}
+	}
+
+	// Try resolvectl global
+	out, err := exec.Command("resolvectl", "dns").CombinedOutput()
+	if err == nil {
+		servers := parseDNSFromResolvectl(string(out))
+		if len(servers) > 0 {
+			return servers
+		}
+	}
+
+	// Fall back to /etc/resolv.conf
+	data, err := os.ReadFile("/etc/resolv.conf")
+	if err == nil {
+		var servers []string
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "nameserver ") {
+				ip := strings.TrimSpace(strings.TrimPrefix(line, "nameserver"))
+				// Skip localhost (systemd-resolved stub)
+				if ip != "127.0.0.53" && ip != "127.0.0.1" && net.ParseIP(ip) != nil {
+					servers = append(servers, ip)
+				}
+			}
+		}
+		if len(servers) > 0 {
+			if len(servers) > 3 {
+				servers = servers[:3]
+			}
+			return servers
+		}
+	}
+
+	// Fallback to well-known public DNS
+	return []string{"8.8.8.8", "1.1.1.1"}
+}
+
+// parseDNSFromResolvectl extracts IP addresses from resolvectl dns output.
+// Format: "Link 2 (enp0s3): 192.168.1.1 8.8.8.8 1.1.1.1"
+func parseDNSFromResolvectl(output string) []string {
+	var servers []string
+	for _, line := range strings.Split(output, "\n") {
+		// Find the colon separator, IPs come after it
+		idx := strings.Index(line, ":")
+		if idx < 0 {
+			continue
+		}
+		fields := strings.Fields(line[idx+1:])
+		for _, f := range fields {
+			if net.ParseIP(f) != nil && f != "127.0.0.53" && f != "127.0.0.1" {
+				servers = append(servers, f)
+			}
+		}
+	}
+	if len(servers) > 3 {
+		servers = servers[:3]
+	}
+	return servers
 }
