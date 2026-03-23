@@ -822,12 +822,15 @@ func TestSpreadLifecycle_ReserveFinalizeDelete(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidPlacementGroupInUse, err.Error())
 
-	// Release all nodes (simulating terminate)
-	_, err = svc.ReleaseSpreadNodes(&ReleaseSpreadNodesInput{
-		GroupName: "lifecycle-group",
-		Nodes:     reserveOut.ReservedNodes,
-	}, testAccountID)
-	require.NoError(t, err)
+	// Remove instances via RemoveInstance (simulating terminate)
+	for _, n := range reserveOut.ReservedNodes {
+		_, err = svc.RemoveInstance(&RemoveInstanceInput{
+			GroupName:  "lifecycle-group",
+			NodeName:   n,
+			InstanceID: "i-" + n,
+		}, testAccountID)
+		require.NoError(t, err)
+	}
 
 	// Now delete succeeds
 	_, err = svc.DeletePlacementGroup(&ec2.DeletePlacementGroupInput{

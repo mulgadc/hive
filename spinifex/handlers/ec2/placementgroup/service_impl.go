@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -81,29 +80,23 @@ func (s *PlacementGroupServiceImpl) CreatePlacementGroup(input *ec2.CreatePlacem
 	}
 
 	// Only spread and cluster are supported; partition is rejected.
-	if strategy == "partition" {
+	if strategy == ec2.PlacementStrategyPartition {
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
-	if strategy != "spread" && strategy != "cluster" {
+	if strategy != ec2.PlacementStrategySpread && strategy != ec2.PlacementStrategyCluster {
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
 	groupName := *input.GroupName
-
-	// Check for duplicate name within account
 	key := utils.AccountKey(accountID, groupName)
-	if _, err := s.kv.Get(key); err == nil {
-		return nil, errors.New(awserrors.ErrorInvalidPlacementGroupDuplicate)
-	}
-
 	groupID := utils.GenerateResourceID("pg")
 
 	record := PlacementGroupRecord{
 		GroupId:       groupID,
 		GroupName:     groupName,
 		Strategy:      strategy,
-		State:         "available",
-		SpreadLevel:   "host",
+		State:         ec2.PlacementGroupStateAvailable,
+		SpreadLevel:   ec2.SpreadLevelHost,
 		AccountID:     accountID,
 		NodeInstances: make(map[string][]string),
 	}
@@ -112,8 +105,10 @@ func (s *PlacementGroupServiceImpl) CreatePlacementGroup(input *ec2.CreatePlacem
 	if err != nil {
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
-	if _, err := s.kv.Put(key, data); err != nil {
-		return nil, errors.New(awserrors.ErrorServerInternal)
+	// Atomic create-if-not-exists to prevent TOCTOU race on duplicate names
+	if _, err := s.kv.Create(key, data); err != nil {
+		// Create fails if key already exists
+		return nil, errors.New(awserrors.ErrorInvalidPlacementGroupDuplicate)
 	}
 
 	slog.Info("CreatePlacementGroup completed", "groupId", groupID, "groupName", groupName, "strategy", strategy, "accountID", accountID)
@@ -319,10 +314,10 @@ func (s *PlacementGroupServiceImpl) ReserveSpreadNodes(input *ReserveSpreadNodes
 			return nil, err
 		}
 
-		if record.State != "available" {
+		if record.State != ec2.PlacementGroupStateAvailable {
 			return nil, errors.New(awserrors.ErrorInvalidPlacementGroupUnknown)
 		}
-		if record.Strategy != "spread" {
+		if record.Strategy != ec2.PlacementStrategySpread {
 			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 		}
 
@@ -363,6 +358,7 @@ func (s *PlacementGroupServiceImpl) ReserveSpreadNodes(input *ReserveSpreadNodes
 		return &ReserveSpreadNodesOutput{ReservedNodes: selected}, nil
 	}
 
+	slog.Error("ReserveSpreadNodes: CAS retries exhausted", "groupName", input.GroupName, "accountID", accountID)
 	return nil, errors.New(awserrors.ErrorServerInternal)
 }
 
@@ -379,7 +375,10 @@ func (s *PlacementGroupServiceImpl) FinalizeSpreadInstances(input *FinalizeSprea
 			return nil, err
 		}
 
-		maps.Copy(record.NodeInstances, input.NodeInstances)
+		// Replace placeholder entries with actual instance IDs per node
+		for node, ids := range input.NodeInstances {
+			record.NodeInstances[node] = ids
+		}
 
 		if err := s.UpdatePlacementGroupRecord(accountID, input.GroupName, record, entry.Revision()); err != nil {
 			slog.Debug("FinalizeSpreadInstances: CAS conflict, retrying", "attempt", attempt, "err", err)
@@ -390,6 +389,7 @@ func (s *PlacementGroupServiceImpl) FinalizeSpreadInstances(input *FinalizeSprea
 		return &FinalizeSpreadInstancesOutput{}, nil
 	}
 
+	slog.Error("FinalizeSpreadInstances: CAS retries exhausted", "groupName", input.GroupName, "accountID", accountID)
 	return nil, errors.New(awserrors.ErrorServerInternal)
 }
 
@@ -412,7 +412,11 @@ func (s *PlacementGroupServiceImpl) ReleaseSpreadNodes(input *ReleaseSpreadNodes
 		}
 
 		for node := range releaseSet {
-			delete(record.NodeInstances, node)
+			// Only release placeholder entries (empty instance list).
+			// Entries with real instance IDs must not be deleted.
+			if ids, ok := record.NodeInstances[node]; ok && len(ids) == 0 {
+				delete(record.NodeInstances, node)
+			}
 		}
 
 		if err := s.UpdatePlacementGroupRecord(accountID, input.GroupName, record, entry.Revision()); err != nil {
@@ -424,6 +428,7 @@ func (s *PlacementGroupServiceImpl) ReleaseSpreadNodes(input *ReleaseSpreadNodes
 		return &ReleaseSpreadNodesOutput{}, nil
 	}
 
+	slog.Error("ReleaseSpreadNodes: CAS retries exhausted", "groupName", input.GroupName, "accountID", accountID)
 	return nil, errors.New(awserrors.ErrorServerInternal)
 }
 
@@ -472,6 +477,7 @@ func (s *PlacementGroupServiceImpl) RemoveInstance(input *RemoveInstanceInput, a
 		return &RemoveInstanceOutput{}, nil
 	}
 
+	slog.Error("RemoveInstance: CAS retries exhausted", "groupName", input.GroupName, "instanceId", input.InstanceID, "accountID", accountID)
 	return nil, errors.New(awserrors.ErrorServerInternal)
 }
 
@@ -488,10 +494,10 @@ func (s *PlacementGroupServiceImpl) ReserveClusterNode(input *ReserveClusterNode
 		if err != nil {
 			return nil, err
 		}
-		if record.State != "available" {
+		if record.State != ec2.PlacementGroupStateAvailable {
 			return nil, errors.New(awserrors.ErrorInvalidPlacementGroupUnknown)
 		}
-		if record.Strategy != "cluster" {
+		if record.Strategy != ec2.PlacementStrategyCluster {
 			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 		}
 
@@ -517,6 +523,7 @@ func (s *PlacementGroupServiceImpl) ReserveClusterNode(input *ReserveClusterNode
 		return &ReserveClusterNodeOutput{TargetNode: targetNode}, nil
 	}
 
+	slog.Error("ReserveClusterNode: CAS retries exhausted", "groupName", input.GroupName, "accountID", accountID)
 	return nil, errors.New(awserrors.ErrorServerInternal)
 }
 
@@ -547,6 +554,7 @@ func (s *PlacementGroupServiceImpl) FinalizeClusterInstances(input *FinalizeClus
 		return &FinalizeClusterInstancesOutput{}, nil
 	}
 
+	slog.Error("FinalizeClusterInstances: CAS retries exhausted", "groupName", input.GroupName, "accountID", accountID)
 	return nil, errors.New(awserrors.ErrorServerInternal)
 }
 
@@ -558,7 +566,7 @@ func (s *PlacementGroupServiceImpl) recordToEC2(record *PlacementGroupRecord) *e
 		Strategy:  aws.String(record.Strategy),
 		State:     aws.String(record.State),
 	}
-	if record.Strategy == "spread" {
+	if record.Strategy == ec2.PlacementStrategySpread {
 		pg.SpreadLevel = aws.String(record.SpreadLevel)
 	}
 	return pg

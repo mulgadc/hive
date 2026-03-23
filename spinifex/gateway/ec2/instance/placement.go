@@ -15,6 +15,7 @@ import (
 	handlers_ec2_placementgroup "github.com/mulgadc/spinifex/spinifex/handlers/ec2/placementgroup"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
+
 	"github.com/nats-io/nats.go"
 )
 
@@ -209,35 +210,12 @@ func launchOnNodes(allocations []nodeAllocation, input *ec2.RunInstancesInput, n
 			nodeInput.MaxCount = aws.Int64(int64(a.Assigned))
 
 			topic := fmt.Sprintf("ec2.RunInstances.%s.%s", instanceType, a.NodeID)
-			jsonData, err := json.Marshal(&nodeInput)
+			reservation, err := utils.NATSRequest[ec2.Reservation](natsConn, topic, &nodeInput, 5*time.Minute, accountID)
 			if err != nil {
-				results[idx] = nodeLaunchResult{NodeID: a.NodeID, Err: fmt.Errorf("marshal input: %w", err)}
+				results[idx] = nodeLaunchResult{NodeID: a.NodeID, Err: fmt.Errorf("launch on %s: %w", a.NodeID, err)}
 				return
 			}
-
-			reqMsg := nats.NewMsg(topic)
-			reqMsg.Data = jsonData
-			reqMsg.Header.Set(utils.AccountIDHeader, accountID)
-
-			msg, err := natsConn.RequestMsg(reqMsg, 5*time.Minute)
-			if err != nil {
-				results[idx] = nodeLaunchResult{NodeID: a.NodeID, Err: fmt.Errorf("NATS request to %s: %w", a.NodeID, err)}
-				return
-			}
-
-			// Check for error payload
-			if responseError, parseErr := utils.ValidateErrorPayload(msg.Data); parseErr != nil {
-				results[idx] = nodeLaunchResult{NodeID: a.NodeID, Err: errors.New(*responseError.Code)}
-				return
-			}
-
-			var reservation ec2.Reservation
-			if err := json.Unmarshal(msg.Data, &reservation); err != nil {
-				results[idx] = nodeLaunchResult{NodeID: a.NodeID, Err: fmt.Errorf("unmarshal response from %s: %w", a.NodeID, err)}
-				return
-			}
-
-			results[idx] = nodeLaunchResult{NodeID: a.NodeID, Reservation: &reservation}
+			results[idx] = nodeLaunchResult{NodeID: a.NodeID, Reservation: reservation}
 		}(i, alloc)
 	}
 
@@ -370,12 +348,24 @@ func distributeInstancesSpread(input *ec2.RunInstancesInput, natsConn *nats.Conn
 		return nil, errors.New(awserrors.ErrorInsufficientInstanceCapacity)
 	}
 
-	// Step 6: Finalize — replace placeholders with actual instance IDs
+	// Step 6: Finalize — replace placeholders with actual instance IDs.
+	// If finalization fails, the placement group record has stale placeholders;
+	// roll back the launched instances to avoid untracked instances.
 	if _, err := pgSvc.FinalizeSpreadInstances(&handlers_ec2_placementgroup.FinalizeSpreadInstancesInput{
 		GroupName:     groupName,
 		NodeInstances: nodeInstances,
 	}, accountID); err != nil {
-		slog.Error("distributeInstancesSpread: failed to finalize placement group record", "err", err)
+		slog.Error("distributeInstancesSpread: finalize failed, rolling back instances", "err", err)
+		rollbackInstances(allInstances, natsConn, accountID)
+		// Release all reserved nodes (both succeeded and failed)
+		allReleaseNodes := append(reservedNodes[:0:0], reservedNodes...)
+		if _, releaseErr := pgSvc.ReleaseSpreadNodes(&handlers_ec2_placementgroup.ReleaseSpreadNodesInput{
+			GroupName: groupName,
+			Nodes:     allReleaseNodes,
+		}, accountID); releaseErr != nil {
+			slog.Error("distributeInstancesSpread: failed to release nodes after finalize rollback", "err", releaseErr)
+		}
+		return nil, fmt.Errorf("failed to finalize placement group record: %w", err)
 	}
 
 	// Release any failed nodes that didn't launch
@@ -469,7 +459,9 @@ func distributeInstancesCluster(input *ec2.RunInstancesInput, natsConn *nats.Con
 		GroupName:     groupName,
 		NodeInstances: nodeInstances,
 	}, accountID); err != nil {
-		slog.Error("distributeInstancesCluster: failed to finalize placement group record", "err", err)
+		slog.Error("distributeInstancesCluster: finalize failed, rolling back instances", "err", err)
+		rollbackInstances(reservation.Instances, natsConn, accountID)
+		return nil, fmt.Errorf("failed to finalize cluster placement group record: %w", err)
 	}
 
 	return reservation, nil

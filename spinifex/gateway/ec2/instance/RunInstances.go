@@ -77,13 +77,13 @@ func RunInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn, accountID s
 		}
 
 		switch strategy {
-		case "spread":
+		case ec2.PlacementStrategySpread:
 			reservationPtr, err := distributeInstancesSpread(input, natsConn, accountID, groupName)
 			if err != nil {
 				return reservation, err
 			}
 			return *reservationPtr, nil
-		case "cluster":
+		case ec2.PlacementStrategyCluster:
 			reservationPtr, err := distributeInstancesCluster(input, natsConn, accountID, groupName)
 			if err != nil {
 				return reservation, err
@@ -147,7 +147,7 @@ func lookupPlacementGroupStrategy(natsConn *nats.Conn, accountID, groupName stri
 		return "", errors.New(awserrors.ErrorInvalidPlacementGroupUnknown)
 	}
 	pg := out.PlacementGroups[0]
-	if pg.State == nil || *pg.State != "available" {
+	if pg.State == nil || *pg.State != ec2.PlacementGroupStateAvailable {
 		return "", errors.New(awserrors.ErrorInvalidPlacementGroupUnknown)
 	}
 	return aws.StringValue(pg.Strategy), nil
