@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -625,6 +626,15 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	// Detect DNS servers from the host for VM DHCP
+	var dnsServers []string
+	if externalMode != "" {
+		dnsServers = detectDNSServers(externalIface)
+		if len(dnsServers) > 0 {
+			fmt.Printf("  DNS servers: %s\n", strings.Join(dnsServers, ", "))
+		}
+	}
+
 	// For nat mode, we need the gateway IP. The DHCP flag tells setup-ovn.sh
 	// to obtain one via DHCP on the macvlan/bridge interface.
 	useExternalDHCP := externalMode == "nat" && poolStart == ""
@@ -833,8 +843,9 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		PoolName:      "wan",
 		PoolStart:     poolStart,
 		PoolEnd:       poolEnd,
-		PoolGateway:   externalGateway,
-		PoolPrefixLen: externalPrefixLen,
+		PoolGateway:    externalGateway,
+		PoolPrefixLen:  externalPrefixLen,
+		PoolDNSServers: dnsServers,
 
 		BootstrapAccountId:  admin.DefaultAccountID(),
 		BootstrapVpcId:      bootstrapVpcId,
@@ -1680,4 +1691,77 @@ func writeBootstrapFilesWithAdmin(configDir string, masterKey []byte, accessKey,
 	}
 
 	return handlers_iam.SaveBootstrapData(filepath.Join(configDir, "bootstrap.json"), bd)
+}
+
+// detectDNSServers reads the DNS servers configured on the host for the given
+// interface. Uses resolvectl (systemd-resolved) first, then falls back to
+// /etc/resolv.conf. Returns up to 3 servers. Falls back to public DNS if none found.
+func detectDNSServers(iface string) []string {
+	// Try resolvectl for the specific link first (most reliable on modern systems)
+	if iface != "" {
+		out, err := exec.Command("resolvectl", "dns", iface).CombinedOutput()
+		if err == nil {
+			servers := parseDNSFromResolvectl(string(out))
+			if len(servers) > 0 {
+				return servers
+			}
+		}
+	}
+
+	// Try resolvectl global
+	out, err := exec.Command("resolvectl", "dns").CombinedOutput()
+	if err == nil {
+		servers := parseDNSFromResolvectl(string(out))
+		if len(servers) > 0 {
+			return servers
+		}
+	}
+
+	// Fall back to /etc/resolv.conf
+	data, err := os.ReadFile("/etc/resolv.conf")
+	if err == nil {
+		var servers []string
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "nameserver ") {
+				ip := strings.TrimSpace(strings.TrimPrefix(line, "nameserver"))
+				// Skip localhost (systemd-resolved stub)
+				if ip != "127.0.0.53" && ip != "127.0.0.1" && net.ParseIP(ip) != nil {
+					servers = append(servers, ip)
+				}
+			}
+		}
+		if len(servers) > 0 {
+			if len(servers) > 3 {
+				servers = servers[:3]
+			}
+			return servers
+		}
+	}
+
+	// Fallback to well-known public DNS
+	return []string{"8.8.8.8", "1.1.1.1"}
+}
+
+// parseDNSFromResolvectl extracts IP addresses from resolvectl dns output.
+// Format: "Link 2 (enp0s3): 192.168.1.1 8.8.8.8 1.1.1.1"
+func parseDNSFromResolvectl(output string) []string {
+	var servers []string
+	for _, line := range strings.Split(output, "\n") {
+		// Find the colon separator, IPs come after it
+		idx := strings.Index(line, ":")
+		if idx < 0 {
+			continue
+		}
+		fields := strings.Fields(line[idx+1:])
+		for _, f := range fields {
+			if net.ParseIP(f) != nil && f != "127.0.0.53" && f != "127.0.0.1" {
+				servers = append(servers, f)
+			}
+		}
+	}
+	if len(servers) > 3 {
+		servers = servers[:3]
+	}
+	return servers
 }

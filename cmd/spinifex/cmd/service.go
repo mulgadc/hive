@@ -704,6 +704,7 @@ var vpcdStartCmd = &cobra.Command{
 				Gateway:    p.Gateway,
 				GatewayIP:  p.GatewayIP,
 				PrefixLen:  p.PrefixLen,
+				DNSServers: p.DNSServers,
 				Region:     p.Region,
 				AZ:         p.AZ,
 			})
@@ -728,16 +729,17 @@ var vpcdStartCmd = &cobra.Command{
 		}
 
 		svc, err := service.New("vpcd", &vpcd.Config{
-			NatsHost:      nodeConfig.NATS.Host,
-			NatsToken:     nodeConfig.NATS.ACL.Token,
-			OVNNBAddr:     nodeConfig.VPCD.OVNNBAddr,
-			OVNSBAddr:     nodeConfig.VPCD.OVNSBAddr,
-			BaseDir:       nodeConfig.BaseDir,
-			Debug:         false,
-			ExternalMode:  clusterConfig.Network.ExternalMode,
-			ExternalPools: extPools,
-			ChassisNames:  chassisNames,
-			Bootstrap:     bootstrap,
+			NatsHost:          nodeConfig.NATS.Host,
+			NatsToken:         nodeConfig.NATS.ACL.Token,
+			OVNNBAddr:         nodeConfig.VPCD.OVNNBAddr,
+			OVNSBAddr:         nodeConfig.VPCD.OVNSBAddr,
+			BaseDir:           nodeConfig.BaseDir,
+			Debug:             false,
+			ExternalMode:      clusterConfig.Network.ExternalMode,
+			ExternalPools:     extPools,
+			ChassisNames:      chassisNames,
+			Bootstrap:         bootstrap,
+			ExternalInterface: nodeConfig.VPCD.ExternalInterface,
 		})
 		if err != nil {
 			fmt.Println("Error starting vpcd service:", err)

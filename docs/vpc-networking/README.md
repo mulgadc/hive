@@ -718,10 +718,14 @@ ovn-nbctl lr-route-add vpc-{vpcId} 0.0.0.0/0 192.168.1.1
 ## Per-Instance Public IP
 
 ```bash
-# 1:1 NAT (distributed — NAT happens on VM's chassis, not gateway)
-ovn-nbctl lr-nat-add vpc-{vpcId} dnat_and_snat {public_ip} {private_ip} \
-  port-{eniId} {eni_mac}
+# 1:1 NAT (centralized — processed on gateway chassis, uses router MAC)
+ovn-nbctl lr-nat-add vpc-{vpcId} dnat_and_snat {public_ip} {private_ip}
 ```
+
+> **Note:** Spinifex uses centralized NAT (no `external_mac` / `logical_port`)
+> because macvlan-based external bridges can only receive unicast traffic matching
+> the macvlan's own MAC. The router port MAC is set on the macvlan, and OVN uses
+> it for all ARP replies. For single-node, there is no performance difference.
 
 ## Security Group
 
@@ -822,6 +826,121 @@ aws ec2 describe-instances --instance-ids $INSTANCE \
 
 # Troubleshooting
 
+## Debugging Toolkit
+
+These commands are used throughout the troubleshooting sections below. Learn
+them — they cover 90% of VPC networking issues.
+
+### OVN Northbound (logical topology)
+
+```bash
+# Full topology overview (routers, switches, ports)
+sudo ovn-nbctl show
+
+# List all VPC routers
+sudo ovn-nbctl lr-list
+
+# List all switches (subnets + external)
+sudo ovn-nbctl ls-list
+
+# NAT rules for a VPC
+sudo ovn-nbctl lr-nat-list vpc-{vpcId}
+
+# Routes for a VPC
+sudo ovn-nbctl lr-route-list vpc-{vpcId}
+
+# Port details (check "up" field for DHCP status)
+sudo ovn-nbctl list Logical_Switch_Port port-eni-{eniId}
+
+# Gateway chassis assignment
+sudo ovn-nbctl list Logical_Router_Port gw-vpc-{vpcId}
+
+# Localnet port options (check nat-addresses=router)
+sudo ovn-nbctl get Logical_Switch_Port ext-port-vpc-{vpcId} options
+```
+
+### OVN Southbound (runtime state)
+
+```bash
+# Chassis list + port bindings (which VM is on which host)
+sudo ovn-sbctl show
+
+# Detailed chassis info (check name matches expectations)
+sudo ovn-sbctl list Chassis
+
+# MAC binding table (shows ARP resolution for external traffic)
+sudo ovn-sbctl list MAC_Binding
+
+# Trace a packet through the OVN pipeline (invaluable for debugging)
+sudo ovn-trace ext-vpc-{vpcId} \
+  'inport=="ext-port-vpc-{vpcId}" && eth.dst==ff:ff:ff:ff:ff:ff && \
+   arp.op==1 && arp.spa==192.168.1.13 && arp.tpa==192.168.1.201'
+```
+
+### OVS (datapath / physical wiring)
+
+```bash
+# Full bridge + port topology
+sudo ovs-vsctl show
+
+# Kernel datapath ports and stats
+sudo ovs-dpctl show
+
+# Kernel datapath flow cache (actual forwarding rules)
+sudo ovs-dpctl dump-flows
+
+# OpenFlow rules installed by ovn-controller
+sudo ovs-ofctl dump-flows br-int | grep {pattern}
+
+# Conntrack entries (shows active NAT sessions)
+sudo ovs-appctl dpctl/dump-conntrack | grep {ip}
+
+# FDB (MAC address table) for a bridge
+sudo ovs-appctl fdb/show br-external
+
+# OVS external_ids (system-id, bridge-mappings, encap-ip)
+sudo ovs-vsctl get Open_vSwitch . external_ids
+```
+
+### Network Interfaces
+
+```bash
+# Check macvlan exists and has correct MAC
+ip -d link show spx-ext-{nic}
+
+# Check macvlan is attached to OVS (look for "openvswitch_slave")
+ip -d link show spx-ext-{nic} | grep openvswitch
+
+# Interface traffic stats (RX/TX counts, drops)
+ip -s link show spx-ext-{nic}
+```
+
+### Packet Capture
+
+```bash
+# Capture on the OVS bridge (sees traffic after OVS processing)
+sudo tcpdump -i br-external -n -e arp
+
+# Capture on the macvlan (sees what leaves/enters the wire)
+sudo tcpdump -i spx-ext-{nic} -n -e "host {public_ip}"
+
+# Capture on the physical NIC (sees everything on the wire)
+sudo tcpdump -i {nic} -n "host {public_ip}"
+```
+
+### Service Logs
+
+```bash
+# vpcd log (reconcile, NAT, topology operations)
+cat ~/spinifex/logs/vpcd.log
+
+# ovn-controller log (port binding, commit failures)
+sudo cat /var/log/ovn/ovn-controller.log | tail -50
+
+# Daemon log (instance launch, network setup)
+cat ~/spinifex/logs/spinifex.log
+```
+
 ## VPC creation fails
 
 Check OVN services and vpcd daemon:
@@ -873,25 +992,212 @@ ip route show
 
 ## Public IP not reachable from WAN
 
-1. Verify br-external:
-   ```bash
-   sudo ovs-vsctl show | grep -A5 br-external
-   ```
+Work through these checks in order — each eliminates a class of issues.
 
-2. Verify bridge mappings:
-   ```bash
-   sudo ovs-vsctl get Open_vSwitch . external-ids:ovn-bridge-mappings
-   ```
+### 1. Verify OVS wiring
 
-3. Check gateway chassis:
-   ```bash
-   sudo ovn-nbctl lrp-get-gateway-chassis gw-$VPC
-   ```
+```bash
+# br-external must exist with the macvlan port
+sudo ovs-vsctl show | grep -A5 br-external
 
-4. Verify `dnat_and_snat` rule:
-   ```bash
-   sudo ovn-nbctl lr-nat-list vpc-$VPC | grep dnat_and_snat
-   ```
+# Bridge mappings must be set
+sudo ovs-vsctl get Open_vSwitch . external-ids:ovn-bridge-mappings
+# Expected: "external:br-external"
+```
+
+### 2. Verify chassis and gateway scheduling
+
+```bash
+# What OVS thinks the chassis name is
+sudo ovs-vsctl get Open_vSwitch . external-ids:system-id
+
+# What OVN SB registered (must match the system-id above)
+sudo ovn-sbctl show
+# Look for: Chassis {name}
+
+# What vpcd scheduled as gateway chassis (must match SB chassis name)
+sudo ovn-nbctl list Logical_Router_Port gw-vpc-{vpcId} | grep gateway_chassis
+```
+
+If these don't match, see "Chassis name mismatch" below.
+
+### 3. Verify NAT rule
+
+```bash
+sudo ovn-nbctl lr-nat-list vpc-$VPC | grep dnat_and_snat
+# Must show the public IP → private IP mapping
+# Must NOT have external_mac or logical_port set (centralized NAT)
+```
+
+### 4. Verify ARP resolution
+
+From another host on the same LAN, check if OVN responds to ARP:
+
+```bash
+# On the remote host:
+ping -c 1 {public_ip}
+ip neigh show {public_ip}
+# Should show the OVN router MAC (02:00:00:xx:xx:xx)
+```
+
+If ARP fails, check the macvlan MAC alignment:
+
+```bash
+# On the Spinifex host:
+# Gateway router MAC
+sudo ovn-nbctl get Logical_Router_Port gw-vpc-{vpcId} mac
+# Macvlan MAC
+ip link show spx-ext-{nic} | grep ether
+
+# These MUST match. If they don't, vpcd failed to set the macvlan MAC.
+# Check vpcd.log for "macvlan MAC aligned" or errors.
+```
+
+### 5. Verify packet flow with tcpdump
+
+Capture at each layer to find where packets stop:
+
+```bash
+# Layer 1: Does the ARP/ICMP arrive on the physical NIC?
+sudo tcpdump -i {nic} -n "host {public_ip}"
+
+# Layer 2: Does it reach br-external?
+sudo tcpdump -i br-external -n "host {public_ip}"
+
+# Layer 3: Does it reach the macvlan output?
+sudo tcpdump -i spx-ext-{nic} -n -e "host {public_ip}"
+```
+
+If traffic arrives on the physical NIC but not br-external, the macvlan is
+filtering it. Check MAC alignment (step 4).
+
+### 6. Use ovn-trace for pipeline debugging
+
+Simulate a packet through the entire OVN pipeline:
+
+```bash
+sudo ovn-trace --ct=new ext-vpc-{vpcId} \
+  'inport=="ext-port-vpc-{vpcId}" && eth.dst==ff:ff:ff:ff:ff:ff && \
+   arp.op==1 && arp.sha=={remote_mac} && arp.spa=={remote_ip} && \
+   arp.tpa=={public_ip}'
+```
+
+The output shows every table the packet passes through and what action is
+taken. Look for `drop` actions or unexpected paths.
+
+## OVN SB commit failure loop
+
+**Symptom:** ovn-controller log shows:
+
+```
+OVNSB commit failed, force recompute next time.
+```
+
+Repeated millions of times. Port binding never happens (`up: false`).
+
+**Cause:** Stale entries in the OVN Southbound DB (old chassis records, port
+bindings, datapath bindings) conflict with ovn-controller's expected state.
+Happens when `reset-dev-env.sh` cleans NB but not SB, or after ungraceful
+shutdowns.
+
+**Fix:** Delete both OVN DB files and restart. `reset-dev-env.sh` does this
+automatically:
+
+```bash
+sudo systemctl stop ovn-central ovn-controller
+sudo rm -f /var/lib/ovn/ovnnb_db.db /var/lib/ovn/ovnsb_db.db
+sudo systemctl start ovn-central ovn-controller
+# vpcd reconcile will recreate the NB topology on next startup
+```
+
+## Chassis name mismatch
+
+**Symptom:** Gateway chassis is set in NB but the SB has no matching chassis.
+`ovn-nbctl show` reports a gateway chassis name that doesn't appear in
+`ovn-sbctl show`. Gateway traffic (SNAT/DNAT) doesn't work.
+
+**Cause:** Three names must align:
+1. OVS `external_ids:system-id` → what ovn-controller registers as
+2. OVN SB `Chassis.name` → what actually exists in the SB DB
+3. vpcd's chassis name → `chassis-{nodeName}` from config
+
+If `setup-ovn.sh` used `chassis-$(hostname -s)` but vpcd uses
+`chassis-{nodeName}`, they'll differ on any host where hostname ≠ node name.
+
+**Diagnosis:**
+
+```bash
+# What OVS has
+sudo ovs-vsctl get Open_vSwitch . external-ids:system-id
+# What SB registered
+sudo ovn-sbctl list Chassis | grep name
+# What vpcd expects
+grep node ~/spinifex/config/spinifex.toml | head -1
+```
+
+**Fix:** `reset-dev-env.sh` passes `--chassis-id=chassis-node1` to
+`setup-ovn.sh`. For manual fix:
+
+```bash
+sudo ovs-vsctl set Open_vSwitch . external_ids:system-id=chassis-node1
+sudo systemctl restart ovn-controller
+```
+
+## Macvlan unicast filtering (inbound traffic lost)
+
+**Symptom:** VM gets DHCP, outbound works (ping 8.8.8.8 from VM), but inbound
+from the LAN to the VM's public IP fails. ARP replies go out but ICMP never
+arrives at br-external.
+
+**Cause:** macvlan in bridge mode only delivers unicast frames matching its own
+MAC. OVN announces the router MAC for external IPs, but the macvlan has a
+different (random) MAC. Broadcasts (ARP requests) pass through; unicast return
+traffic is filtered by the kernel macvlan subsystem.
+
+**Diagnosis:**
+
+```bash
+# Compare these two — they must match
+sudo ovn-nbctl get Logical_Router_Port gw-vpc-{vpcId} mac
+ip link show spx-ext-{nic} | grep ether
+
+# If they differ, inbound unicast is being dropped
+```
+
+**Fix:** vpcd automatically aligns the macvlan MAC on startup. If it failed:
+
+```bash
+# Get the gateway MAC from OVN
+GW_MAC=$(sudo ovn-nbctl get Logical_Router_Port gw-vpc-{vpcId} mac | tr -d '"')
+
+# Set it on the macvlan
+sudo ip link set spx-ext-{nic} down
+sudo ip link set spx-ext-{nic} address $GW_MAC
+sudo ip link set spx-ext-{nic} up
+```
+
+Also ensure the DNAT rule uses centralized NAT (no `external_mac`):
+
+```bash
+sudo ovn-nbctl lr-nat-list vpc-{vpcId}
+# The dnat_and_snat row should have EMPTY external_mac and logical_port columns
+```
+
+## Stale ARP on remote hosts
+
+**Symptom:** Ping from a LAN host to a VM public IP fails after a reset, but
+worked before. The remote host has a stale ARP entry with the old MAC.
+
+**Fix:** Flush the ARP entry on the remote host:
+
+```bash
+# On the remote host:
+sudo ip neigh flush dev {nic} {public_ip}
+ping {public_ip}   # should work now
+```
+
+OVN's `nat-addresses=router` option sends periodic gratuitous ARPs that will
+eventually update remote ARP caches, but flushing is faster for testing.
 
 ## Security group rules not taking effect
 

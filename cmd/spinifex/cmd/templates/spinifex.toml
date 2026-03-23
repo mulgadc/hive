@@ -21,6 +21,9 @@ gateway     = "{{.PoolGateway}}"
 gateway_ip  = "{{.PoolGatewayIP}}"
 {{- end}}
 prefix_len  = {{if .PoolPrefixLen}}{{.PoolPrefixLen}}{{else}}24{{end}}
+{{- if .PoolDNSServers}}
+dns_servers = [{{range $i, $s := .PoolDNSServers}}{{if $i}}, {{end}}"{{$s}}"{{end}}]
+{{- end}}
 {{- end}}
 {{- if .BootstrapVpcId}}
 

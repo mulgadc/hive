@@ -86,37 +86,19 @@ if command -v ovs-vsctl >/dev/null 2>&1; then
     sudo systemctl stop openvswitch-switch 2>/dev/null || true
 fi
 
-# Clean OVN Northbound database (remove all logical routers, switches, NAT rules, etc.)
-echo "Cleaning OVN Northbound database"
-if command -v ovn-nbctl >/dev/null 2>&1; then
-    sudo systemctl start ovn-central 2>/dev/null || true
-    # Wait for NB DB
-    for i in $(seq 1 10); do
-        if sudo ovn-nbctl --timeout=2 show >/dev/null 2>&1; then break; fi
-        sleep 1
-    done
-
-    # Delete all logical routers (and their ports, NAT rules, routes)
-    for lr in $(sudo ovn-nbctl --no-headings --columns=name find Logical_Router 2>/dev/null | awk -F'"' '{print $2}'); do
-        [ -n "$lr" ] && sudo ovn-nbctl lr-del "$lr" 2>/dev/null && echo "  Deleted router: $lr"
-    done
-    # Delete all logical switches (and their ports)
-    for ls in $(sudo ovn-nbctl --no-headings --columns=name find Logical_Switch 2>/dev/null | awk -F'"' '{print $2}'); do
-        [ -n "$ls" ] && sudo ovn-nbctl ls-del "$ls" 2>/dev/null && echo "  Deleted switch: $ls"
-    done
-    # Delete all port groups
-    for pg in $(sudo ovn-nbctl --no-headings --columns=name find Port_Group 2>/dev/null | awk -F'"' '{print $2}'); do
-        [ -n "$pg" ] && sudo ovn-nbctl pg-del "$pg" 2>/dev/null && echo "  Deleted port group: $pg"
-    done
-    # Delete all DHCP options
-    for uuid in $(sudo ovn-nbctl --no-headings --columns=_uuid find DHCP_Options 2>/dev/null | awk '{print $NF}'); do
-        [ -n "$uuid" ] && sudo ovn-nbctl dhcp-options-del "$uuid" 2>/dev/null
-    done
-
-    sudo systemctl stop ovn-central 2>/dev/null || true
-    echo "  OVN NB database cleaned"
+# Clean OVN databases (both Northbound and Southbound)
+# Delete the DB files outright — setup-ovn.sh will restart ovn-central with fresh
+# empty databases. This eliminates stale SB state (chassis entries, port bindings,
+# datapath bindings) that accumulates across resets and causes ovn-controller to
+# enter a commit failure loop ("OVNSB commit failed, force recompute").
+echo "Removing OVN database files"
+sudo systemctl stop ovn-central 2>/dev/null || true
+sudo systemctl stop ovn-controller 2>/dev/null || true
+if [ -d /var/lib/ovn ]; then
+    sudo rm -f /var/lib/ovn/ovnnb_db.db /var/lib/ovn/ovnsb_db.db
+    echo "  Deleted /var/lib/ovn/ovn{nb,sb}_db.db"
 else
-    echo "  ovn-nbctl not found, skipping OVN cleanup"
+    echo "  /var/lib/ovn not found, skipping OVN DB cleanup"
 fi
 
 # Remove macvlan interfaces created by setup-ovn.sh
@@ -138,13 +120,20 @@ WAN_GW=$(ip -4 route show default | awk '{print $3}' | head -1)
 
 echo "Detected WAN interface: ${WAN_IFACE:-none}, gateway: ${WAN_GW:-none}"
 
-echo "Re-initializing OVN"
+# Chassis ID must match what vpcd derives from the node name in spinifex.toml.
+# vpcd generates "chassis-{nodeName}" (e.g., chassis-node1) and uses it to schedule
+# gateway chassis in the NB DB. ovn-controller registers in the SB DB using the OVS
+# system-id. If they don't match, gateway traffic has no host to schedule to.
+NODE_NAME="node1"
+CHASSIS_ID="chassis-${NODE_NAME}"
+
+echo "Re-initializing OVN (chassis-id: $CHASSIS_ID)"
 if [ -n "$WAN_IFACE" ]; then
     echo "  Using macvlan on $WAN_IFACE for br-external"
-    ./scripts/setup-ovn.sh --management --external-bridge --external-iface="$WAN_IFACE"
+    ./scripts/setup-ovn.sh --management --external-bridge --external-iface="$WAN_IFACE" --chassis-id="$CHASSIS_ID"
 else
     echo "  No WAN interface detected, management-only"
-    ./scripts/setup-ovn.sh --management
+    ./scripts/setup-ovn.sh --management --chassis-id="$CHASSIS_ID"
 fi
 
 echo "Initializing platform"

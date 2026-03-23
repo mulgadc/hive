@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 
 	"github.com/mulgadc/spinifex/spinifex/services/vpcd/nbdb"
 	"github.com/mulgadc/spinifex/spinifex/types"
@@ -92,6 +93,19 @@ func WithChassisNames(names []string) TopologyOption {
 	return func(h *TopologyHandler) {
 		h.chassisNames = names
 	}
+}
+
+// dnsServer returns the DNS server string for OVN DHCP options.
+// Uses dns_servers from the external pool config (auto-detected by admin init).
+// Falls back to 8.8.8.8 and 1.1.1.1 if none configured.
+// OVN DHCP expects the format "{ip1, ip2}" for multiple servers.
+func (h *TopologyHandler) dnsServer() string {
+	pool := h.findExternalPool("", "")
+	if pool != nil && len(pool.DNSServers) > 0 {
+		return "{" + strings.Join(pool.DNSServers, ", ") + "}"
+	}
+	// Fallback: public DNS
+	return "{8.8.8.8, 1.1.1.1}"
 }
 
 // findExternalPool returns the first pool matching the given region/AZ,
@@ -373,7 +387,7 @@ func (h *TopologyHandler) handleSubnetCreate(msg *nats.Msg) {
 			"server_mac": routerMAC,
 			"lease_time": "3600",
 			"router":     gwIP,
-			"dns_server": "169.254.169.253",
+			"dns_server": h.dnsServer(),
 			"mtu":        "1442", // Geneve overhead
 		},
 		ExternalIDs: map[string]string{
@@ -581,12 +595,16 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 	}
 
 	// 2. Create localnet port on external switch (maps to physical network)
+	// nat-addresses=router: OVN sends gratuitous ARPs for all NAT external IPs
+	// using the router port MAC. Required for macvlan-based external bridges
+	// where the macvlan MAC matches the router MAC.
 	localnetPort := &nbdb.LogicalSwitchPort{
 		Name:      extPortName,
 		Type:      "localnet",
 		Addresses: []string{"unknown"},
 		Options: map[string]string{
-			"network_name": "external",
+			"network_name":  "external",
+			"nat-addresses": "router",
 		},
 		ExternalIDs: map[string]string{
 			"spinifex:vpc_id": evt.VpcId,
@@ -825,15 +843,15 @@ func (h *TopologyHandler) handleAddNAT(msg *nats.Msg) {
 	ctx := context.Background()
 	routerName := "vpc-" + evt.VpcId
 
-	logicalPort := evt.PortName
-	externalMAC := evt.MAC
-
+	// Use centralized NAT (no ExternalMAC/LogicalPort). With macvlan-based
+	// external bridges, OVN must use the router port MAC for all ARP replies
+	// so the macvlan can receive inbound unicast traffic. Distributed NAT
+	// (ExternalMAC/LogicalPort) announces the VM's MAC which the macvlan
+	// filters out. For single-node, centralized NAT has zero overhead.
 	natRule := &nbdb.NAT{
-		Type:        "dnat_and_snat",
-		ExternalIP:  evt.ExternalIP,
-		LogicalIP:   evt.LogicalIP,
-		LogicalPort: &logicalPort,
-		ExternalMAC: &externalMAC,
+		Type:       "dnat_and_snat",
+		ExternalIP: evt.ExternalIP,
+		LogicalIP:  evt.LogicalIP,
 		ExternalIDs: map[string]string{
 			"spinifex:vpc_id":    evt.VpcId,
 			"spinifex:public_ip": evt.ExternalIP,
@@ -971,7 +989,7 @@ func (h *TopologyHandler) reconcileSubnet(ctx context.Context, subnetId, vpcId, 
 			"server_mac": routerMAC,
 			"lease_time": "3600",
 			"router":     gwIP,
-			"dns_server": "169.254.169.253",
+			"dns_server": h.dnsServer(),
 			"mtu":        "1442",
 		},
 		ExternalIDs: map[string]string{
@@ -1042,10 +1060,13 @@ func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId, igwId string)
 		portExtIDs["spinifex:igw_id"] = igwId
 	}
 	localnetPort := &nbdb.LogicalSwitchPort{
-		Name:        extPortName,
-		Type:        "localnet",
-		Addresses:   []string{"unknown"},
-		Options:     map[string]string{"network_name": "external"},
+		Name:      extPortName,
+		Type:      "localnet",
+		Addresses: []string{"unknown"},
+		Options: map[string]string{
+			"network_name":  "external",
+			"nat-addresses": "router",
+		},
 		ExternalIDs: portExtIDs,
 	}
 	if err := h.ovn.CreateLogicalSwitchPort(ctx, extSwitchName, localnetPort); err != nil {

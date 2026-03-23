@@ -72,8 +72,9 @@ type ConfigSettings struct {
 	PoolStart       string // First IP in external pool range
 	PoolEnd         string // Last IP in external pool range
 	PoolGateway     string // WAN gateway IP
-	PoolGatewayIP   string // Explicit SNAT IP (for nat mode without DHCP)
-	PoolPrefixLen   int    // Subnet prefix length (default 24)
+	PoolGatewayIP   string   // Explicit SNAT IP (for nat mode without DHCP)
+	PoolPrefixLen   int      // Subnet prefix length (default 24)
+	PoolDNSServers  []string // DNS servers for VM DHCP (auto-detected from host)
 
 	// Other nodes in the cluster (for config source of truth)
 	RemoteNodes []RemoteNode

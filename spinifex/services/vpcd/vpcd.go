@@ -60,6 +60,9 @@ type Config struct {
 	ChassisNames []string
 	// Bootstrap holds the default VPC config from spinifex.toml for first-boot reconciliation.
 	Bootstrap *BootstrapVPC
+	// ExternalInterface is the WAN NIC name (e.g., "enp0s3"). Used to align
+	// the macvlan MAC with the OVN gateway MAC for inbound traffic.
+	ExternalInterface string
 }
 
 // ExternalPoolConfig mirrors config.ExternalPool for vpcd's internal use.
@@ -70,6 +73,7 @@ type ExternalPoolConfig struct {
 	Gateway    string
 	GatewayIP  string
 	PrefixLen  int
+	DNSServers []string
 	Region     string
 	AZ         string
 }
@@ -230,6 +234,20 @@ func launchService(cfg *Config) error {
 	// Run reconciliation before subscribing
 	Reconcile(ctx, topo, cfg.Bootstrap)
 
+	// Align macvlan MAC with the OVN gateway router MAC. The macvlan only
+	// delivers inbound unicast matching its own MAC. With centralized NAT,
+	// OVN uses the router MAC for all external ARP replies. Setting the
+	// macvlan MAC to the router MAC ensures inbound traffic reaches OVS.
+	if cfg.Bootstrap != nil && cfg.Bootstrap.VpcId != "" && cfg.ExternalInterface != "" {
+		gwMAC := generateMAC("gw-" + cfg.Bootstrap.VpcId)
+		macvlanName := "spx-ext-" + cfg.ExternalInterface
+		if err := setMacvlanMAC(macvlanName, gwMAC); err != nil {
+			slog.Warn("vpcd: failed to set macvlan MAC (inbound traffic may not work)", "iface", macvlanName, "mac", gwMAC, "err", err)
+		} else {
+			slog.Info("vpcd: macvlan MAC aligned with gateway", "iface", macvlanName, "mac", gwMAC)
+		}
+	}
+
 	subs, err := topo.Subscribe(nc)
 	if err != nil {
 		slog.Error("Failed to subscribe to VPC topics", "err", err)
@@ -249,5 +267,21 @@ func launchService(cfg *Config) error {
 	<-sigChan
 
 	slog.Info("vpcd service shutting down")
+	return nil
+}
+
+// setMacvlanMAC sets the MAC address on a macvlan interface. The interface is
+// brought down, MAC changed, and brought back up. Requires sudo/NET_ADMIN.
+func setMacvlanMAC(iface, mac string) error {
+	cmds := [][]string{
+		{"sudo", "ip", "link", "set", iface, "down"},
+		{"sudo", "ip", "link", "set", iface, "address", mac},
+		{"sudo", "ip", "link", "set", iface, "up"},
+	}
+	for _, args := range cmds {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			return fmt.Errorf("%s: %w (%s)", args[3], err, string(out))
+		}
+	}
 	return nil
 }

@@ -20,14 +20,15 @@ type ClusterConfig struct {
 
 // ExternalPool defines a range of routable IPs that Spinifex manages for public subnets.
 type ExternalPool struct {
-	Name       string `mapstructure:"name"`        // Pool identifier (e.g., "wan", "dc1-primary")
-	RangeStart string `mapstructure:"range_start"` // First IP in range
-	RangeEnd   string `mapstructure:"range_end"`   // Last IP in range
-	Gateway    string `mapstructure:"gateway"`     // WAN default gateway (next hop for 0.0.0.0/0)
-	GatewayIP  string `mapstructure:"gateway_ip"`  // OVN router external IP (override; defaults to first IP in range)
-	PrefixLen  int    `mapstructure:"prefix_len"`  // Subnet mask (default 24)
-	Region     string `mapstructure:"region"`      // Scope to region (optional — empty means any region)
-	AZ         string `mapstructure:"az"`          // Scope to AZ (optional — empty means any AZ in region)
+	Name       string   `mapstructure:"name"`        // Pool identifier (e.g., "wan", "dc1-primary")
+	RangeStart string   `mapstructure:"range_start"` // First IP in range
+	RangeEnd   string   `mapstructure:"range_end"`   // Last IP in range
+	Gateway    string   `mapstructure:"gateway"`     // WAN default gateway (next hop for 0.0.0.0/0)
+	GatewayIP  string   `mapstructure:"gateway_ip"`  // OVN router external IP (override; defaults to first IP in range)
+	PrefixLen  int      `mapstructure:"prefix_len"`  // Subnet mask (default 24)
+	DNSServers []string `mapstructure:"dns_servers"` // DNS servers for VM DHCP (auto-detected from host; fallback: 8.8.8.8, 1.1.1.1)
+	Region     string   `mapstructure:"region"`      // Scope to region (optional — empty means any region)
+	AZ         string   `mapstructure:"az"`          // Scope to AZ (optional — empty means any AZ in region)
 }
 
 // NetworkConfig holds cluster-wide external network settings.
