@@ -213,12 +213,42 @@ maps the logical external switch to `br-external` via `ovn-bridge-mappings`.
 VM TAP ──→ br-int ──→ OVN logical pipeline ──→ localnet ──→ br-external ──→ WAN
 ```
 
-## Bridge Setup (macvlan)
+## Bridge Modes
+
+Spinifex supports two ways to wire `br-external` to the physical network.
+**Direct bridge** is preferred when the host has a dedicated WAN NIC. **Macvlan**
+is the fallback for single-NIC hosts where the WAN NIC is also the SSH NIC.
+
+### Direct Bridge (preferred)
+
+The WAN NIC is added directly to `br-external` as an OVS port. OVS sees all
+traffic on the wire — any MAC, any protocol. No filtering, no workarounds.
+
+```
+Management NIC (host IP, SSH)
+WAN NIC ──→ br-external (OVS port) ──→ OVN localnet
+```
+
+**Use when:** The host has a NIC dedicated to external/WAN traffic that is NOT
+used for SSH or management. Datacenter servers with separate management +
+public NICs. Homelab hosts with 2+ NICs.
+
+**Benefits over macvlan:**
+- **Distributed NAT**: DNAT processed on the VM's own chassis (no hairpin)
+- **No MAC workarounds**: OVS sees all frames, any MAC
+- **Host can reach VMs**: No macvlan parent↔child isolation
+- **Better multi-node performance**: External traffic stays local
+- **DHCP lease stability**: No MAC changes after lease
+
+```bash
+sudo setup-ovn.sh --external-bridge --external-iface=eth1 --direct
+```
+
+### Macvlan (fallback for single-NIC)
 
 A macvlan sub-interface is created in bridge mode off the WAN NIC, and that
 macvlan is added to br-external. The host keeps its IP on the original NIC —
-SSH stays up, no risk of losing connectivity. This works for all deployments:
-single-NIC homelabs, multi-NIC datacenters, and everything in between.
+SSH stays up.
 
 ```
 WAN NIC (host IP — unchanged)
@@ -232,11 +262,40 @@ WAN NIC (host IP — unchanged)
    localnet → OVN ext switch
 ```
 
-### Setup
+**Use when:** The WAN NIC is the same NIC used for SSH. Single-NIC homelabs,
+edge deployments. Adding the NIC directly to OVS would break host connectivity.
+
+**Limitations:**
+- Centralized NAT only (macvlan filters unicast not matching its MAC)
+- Host cannot reach VMs at their public IPs (macvlan isolation)
+- vpcd must align macvlan MAC with OVN router MAC on startup
+- Multi-node: all external traffic hairpins through the gateway chassis
 
 ```bash
 sudo setup-ovn.sh --external-bridge --external-iface=eth0
 ```
+
+### Mode comparison
+
+| Capability | Direct bridge | Macvlan |
+|------------|--------------|---------|
+| NAT mode | Distributed (local DNAT) | Centralized (gateway hairpin) |
+| Multi-node external perf | Optimal | Hairpin through gateway chassis |
+| Host → VM public IP | Works | Blocked (kernel isolation) |
+| MAC alignment needed | No | Yes (fragile startup step) |
+| Gratuitous ARPs needed | No | Yes (`nat-addresses=router`) |
+| Works on single-NIC | No (breaks SSH) | Yes |
+| DHCP lease stability | Clean | Fragile (MAC changes post-lease) |
+
+### How setup-ovn.sh decides
+
+| Flags | Result |
+|-------|--------|
+| `--external-bridge --external-iface=eth1 --direct` | Direct bridge: NIC added to br-external |
+| `--external-bridge --external-iface=eth0` | Macvlan: sub-interface created, added to br-external |
+| (no `--external-bridge`) | Only br-int created, no WAN connectivity |
+
+### Setup (macvlan mode)
 
 In environments where the WAN IP comes from a router's DHCP server (homelab,
 small office), add `--dhcp` to obtain a gateway IP from the router automatically:
@@ -249,24 +308,11 @@ This requests an IP from the **router's DHCP** (e.g., 192.168.1.1 serving
 addresses on the LAN). This is not Spinifex's internal OVN DHCP that assigns
 private IPs to VMs — it's your network's existing DHCP server.
 
-### What Happens
-
-1. Creates macvlan: `ip link add spx-ext-eth0 link eth0 type macvlan mode bridge`
-2. Brings it up: `ip link set spx-ext-eth0 up`
-3. Creates OVS bridge `br-external`
-4. Adds the macvlan (not the parent NIC) to br-external
-5. Sets `ovn-bridge-mappings=external:br-external`
-6. Host IP on eth0 is completely untouched
-7. (If `--dhcp`) Obtains gateway IP from router DHCP for OVN SNAT
-
-### macvlan Behavior
+### macvlan internals
 
 macvlan in `bridge` mode creates a virtual interface that shares the parent NIC's
-physical wire but has its own MAC address. Frames between the macvlan and external
-devices work normally. The Linux kernel blocks direct L2 frames between a parent
-interface and its macvlan children.
-
-**What this means in practice:**
+physical wire but has its own MAC address. The Linux kernel blocks direct L2
+frames between a parent interface and its macvlan children.
 
 | Path | Works? | Why |
 |------|--------|-----|
@@ -274,16 +320,6 @@ interface and its macvlan children.
 | LAN device → VM public IP | Yes | LAN → WAN NIC → macvlan → br-external → OVN |
 | Host → VM public IP | No | macvlan isolation (kernel blocks parent↔child) |
 | Host → VM private IP | Yes | Overlay via br-int (unrelated to br-external) |
-
-The host-to-VM-public-IP limitation is rarely a problem — the host manages VMs
-via the overlay (private IPs), not their public IPs.
-
-## How setup-ovn.sh Decides
-
-| Flags | Result |
-|-------|--------|
-| `--external-bridge --external-iface=eth0` | macvlan created, added to br-external |
-| (no `--external-bridge`) | Only br-int created, no WAN connectivity |
 
 ## Per-Node Configuration
 
