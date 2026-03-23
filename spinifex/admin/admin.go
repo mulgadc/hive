@@ -77,6 +77,15 @@ type ConfigSettings struct {
 
 	// Other nodes in the cluster (for config source of truth)
 	RemoteNodes []RemoteNode
+
+	// Bootstrap: pre-generated default VPC IDs for vpcd reconciliation.
+	// Written by admin init so [bootstrap] exists before services start.
+	BootstrapAccountId  string
+	BootstrapVpcId      string
+	BootstrapSubnetId   string
+	BootstrapIgwId      string
+	BootstrapCidr       string
+	BootstrapSubnetCidr string
 }
 
 // PredastoreNodeConfig describes a single Predastore node for multi-node config generation.

@@ -721,6 +721,7 @@ var vpcdStartCmd = &cobra.Command{
 				AccountID:  clusterConfig.Bootstrap.AccountID,
 				VpcId:      clusterConfig.Bootstrap.VpcId,
 				SubnetId:   clusterConfig.Bootstrap.SubnetId,
+				IgwId:      clusterConfig.Bootstrap.IgwId,
 				Cidr:       clusterConfig.Bootstrap.Cidr,
 				SubnetCidr: clusterConfig.Bootstrap.SubnetCidr,
 			}

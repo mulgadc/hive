@@ -796,6 +796,14 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		fmt.Printf("✅ Created: multi-node predastore.toml (node ID: %d)\n", predastoreNodeID)
 	}
 
+	// Pre-generate default VPC/subnet/IGW IDs for bootstrap config.
+	// These are written to [bootstrap] in spinifex.toml so vpcd can
+	// create OVN topology on first boot. The daemon uses the same IDs
+	// when it creates the records in NATS KV via EnsureDefaultVPC.
+	bootstrapVpcId := utils.GenerateResourceID("vpc")
+	bootstrapSubnetId := utils.GenerateResourceID("subnet")
+	bootstrapIgwId := utils.GenerateResourceID("igw")
+
 	configSettings := admin.ConfigSettings{
 		AccessKey: accessKey,
 		SecretKey: secretKey,
@@ -827,6 +835,13 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		PoolEnd:       poolEnd,
 		PoolGateway:   externalGateway,
 		PoolPrefixLen: externalPrefixLen,
+
+		BootstrapAccountId:  admin.DefaultAccountID(),
+		BootstrapVpcId:      bootstrapVpcId,
+		BootstrapSubnetId:   bootstrapSubnetId,
+		BootstrapIgwId:      bootstrapIgwId,
+		BootstrapCidr:       handlers_ec2_vpc.DefaultVPCCidr,
+		BootstrapSubnetCidr: handlers_ec2_vpc.DefaultSubnetCidr,
 	}
 
 	// Print external networking summary

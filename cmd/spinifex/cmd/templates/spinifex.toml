@@ -22,6 +22,16 @@ gateway_ip  = "{{.PoolGatewayIP}}"
 {{- end}}
 prefix_len  = {{if .PoolPrefixLen}}{{.PoolPrefixLen}}{{else}}24{{end}}
 {{- end}}
+{{- if .BootstrapVpcId}}
+
+[bootstrap]
+account_id  = "{{.BootstrapAccountId}}"
+vpc_id      = "{{.BootstrapVpcId}}"
+subnet_id   = "{{.BootstrapSubnetId}}"
+igw_id      = "{{.BootstrapIgwId}}"
+cidr        = "{{.BootstrapCidr}}"
+subnet_cidr = "{{.BootstrapSubnetCidr}}"
+{{- end}}
 
 [nodes.{{.Node}}]
 node = "{{.Node}}"

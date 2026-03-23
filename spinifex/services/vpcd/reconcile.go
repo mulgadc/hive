@@ -64,7 +64,7 @@ func Reconcile(ctx context.Context, topo *TopologyHandler, bootstrap *BootstrapV
 	extSwitchName := "ext-" + bootstrap.VpcId
 	if _, err := topo.ovn.GetLogicalSwitch(ctx, extSwitchName); err != nil {
 		slog.Info("vpcd reconcile: creating IGW topology", "switch", extSwitchName)
-		if err := topo.reconcileIGW(ctx, bootstrap.VpcId); err != nil {
+		if err := topo.reconcileIGW(ctx, bootstrap.VpcId, bootstrap.IgwId); err != nil {
 			slog.Error("vpcd reconcile: failed to create IGW topology", "err", err)
 		} else {
 			result.IGWsCreated++

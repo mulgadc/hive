@@ -139,6 +139,7 @@ func TestReconcile_PartialState(t *testing.T) {
 	// Pre-create just the router (simulating partial OVN state)
 	ctx := context.Background()
 	_ = topo.reconcileVPC(ctx, "vpc-partial", "172.31.0.0/16")
+	// IGW ID not needed for pre-creating just the router
 
 	// Reconcile should skip router but create subnet + IGW
 	result := Reconcile(ctx, topo, bootstrap)

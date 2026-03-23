@@ -990,7 +990,7 @@ func (h *TopologyHandler) reconcileSubnet(ctx context.Context, subnetId, vpcId, 
 
 // reconcileIGW creates the OVN external switch, gateway router port, SNAT rule,
 // default route, and gateway chassis for a VPC's internet gateway.
-func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId string) error {
+func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId, igwId string) error {
 	routerName := "vpc-" + vpcId
 	extSwitchName := "ext-" + vpcId
 	extPortName := "ext-port-" + vpcId
@@ -1018,27 +1018,35 @@ func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId string) error 
 		wanGateway = pool.Gateway
 	}
 
+	// Build external IDs with optional IGW ID
+	extIDs := map[string]string{
+		"spinifex:vpc_id": vpcId,
+		"spinifex:role":   "external",
+	}
+	if igwId != "" {
+		extIDs["spinifex:igw_id"] = igwId
+	}
+
 	// 1. Create external logical switch
 	extSwitch := &nbdb.LogicalSwitch{
-		Name: extSwitchName,
-		ExternalIDs: map[string]string{
-			"spinifex:vpc_id": vpcId,
-			"spinifex:role":   "external",
-		},
+		Name:        extSwitchName,
+		ExternalIDs: extIDs,
 	}
 	if err := h.ovn.CreateLogicalSwitch(ctx, extSwitch); err != nil {
 		return fmt.Errorf("create external switch %s: %w", extSwitchName, err)
 	}
 
 	// 2. Create localnet port
+	portExtIDs := map[string]string{"spinifex:vpc_id": vpcId}
+	if igwId != "" {
+		portExtIDs["spinifex:igw_id"] = igwId
+	}
 	localnetPort := &nbdb.LogicalSwitchPort{
-		Name:      extPortName,
-		Type:      "localnet",
-		Addresses: []string{"unknown"},
-		Options:   map[string]string{"network_name": "external"},
-		ExternalIDs: map[string]string{
-			"spinifex:vpc_id": vpcId,
-		},
+		Name:        extPortName,
+		Type:        "localnet",
+		Addresses:   []string{"unknown"},
+		Options:     map[string]string{"network_name": "external"},
+		ExternalIDs: portExtIDs,
 	}
 	if err := h.ovn.CreateLogicalSwitchPort(ctx, extSwitchName, localnetPort); err != nil {
 		_ = h.ovn.DeleteLogicalSwitch(ctx, extSwitchName)

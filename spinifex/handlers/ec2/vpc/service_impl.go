@@ -708,11 +708,19 @@ type DefaultVPCInfo struct {
 	SubnetCidr string
 }
 
+// BootstrapIDs holds pre-generated resource IDs from the [bootstrap] config.
+// When provided, EnsureDefaultVPC uses these IDs instead of generating random ones,
+// ensuring consistency between admin init, daemon, and vpcd.
+type BootstrapIDs struct {
+	VpcId    string
+	SubnetId string
+}
+
 // EnsureDefaultVPC creates a default VPC and subnet if none exists for the given account.
 // This matches AWS behavior where a default VPC is present on account creation.
 // Safe to call multiple times — no-ops if a default VPC already exists.
 // Returns the default VPC info (whether newly created or pre-existing).
-func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string) (*DefaultVPCInfo, error) {
+func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string, bootstrap ...BootstrapIDs) (*DefaultVPCInfo, error) {
 	if s.vpcKV == nil {
 		return nil, nil // No persistence, skip
 	}
@@ -752,13 +760,16 @@ func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string) (*DefaultVPCInfo, er
 		}
 	}
 
-	// Create default VPC
+	// Create default VPC — use bootstrap IDs if provided for consistency
 	vni, err := s.nextVNI()
 	if err != nil {
 		return nil, fmt.Errorf("allocate VNI for default VPC: %w", err)
 	}
 
 	vpcID := utils.GenerateResourceID("vpc")
+	if len(bootstrap) > 0 && bootstrap[0].VpcId != "" {
+		vpcID = bootstrap[0].VpcId
+	}
 	vpcRecord := VPCRecord{
 		VpcId:     vpcID,
 		CidrBlock: DefaultVPCCidr,
@@ -787,6 +798,9 @@ func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string) (*DefaultVPCInfo, er
 
 	// Create default subnet (public — matches AWS default VPC behavior)
 	subnetID := utils.GenerateResourceID("subnet")
+	if len(bootstrap) > 0 && bootstrap[0].SubnetId != "" {
+		subnetID = bootstrap[0].SubnetId
+	}
 	subnetRecord := SubnetRecord{
 		SubnetId:            subnetID,
 		VpcId:               vpcID,

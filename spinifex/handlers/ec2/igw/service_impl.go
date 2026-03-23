@@ -75,8 +75,18 @@ func NewIGWServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*IGWSer
 }
 
 // CreateInternetGateway creates a new Internet Gateway (initially detached)
+// CreateInternetGatewayWithID creates an IGW with a pre-determined ID.
+// Used by bootstrap to ensure the IGW ID matches [bootstrap] in spinifex.toml.
+func (s *IGWServiceImpl) CreateInternetGatewayWithID(input *ec2.CreateInternetGatewayInput, accountID, igwID string) (*ec2.CreateInternetGatewayOutput, error) {
+	return s.createIGW(input, accountID, igwID)
+}
+
 func (s *IGWServiceImpl) CreateInternetGateway(input *ec2.CreateInternetGatewayInput, accountID string) (*ec2.CreateInternetGatewayOutput, error) {
 	igwID := utils.GenerateResourceID("igw")
+	return s.createIGW(input, accountID, igwID)
+}
+
+func (s *IGWServiceImpl) createIGW(input *ec2.CreateInternetGatewayInput, accountID, igwID string) (*ec2.CreateInternetGatewayOutput, error) {
 
 	record := IGWRecord{
 		InternetGatewayId: igwID,

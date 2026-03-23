@@ -44,6 +44,7 @@ type BootstrapConfig struct {
 	AccountID  string `mapstructure:"account_id"`
 	VpcId      string `mapstructure:"vpc_id"`
 	SubnetId   string `mapstructure:"subnet_id"`
+	IgwId      string `mapstructure:"igw_id"`
 	Cidr       string `mapstructure:"cidr"`
 	SubnetCidr string `mapstructure:"subnet_cidr"`
 }

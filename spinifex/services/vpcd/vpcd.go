@@ -32,6 +32,7 @@ type BootstrapVPC struct {
 	AccountID  string
 	VpcId      string
 	SubnetId   string
+	IgwId      string
 	Cidr       string
 	SubnetCidr string
 }
