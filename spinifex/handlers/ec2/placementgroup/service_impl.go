@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -376,9 +377,7 @@ func (s *PlacementGroupServiceImpl) FinalizeSpreadInstances(input *FinalizeSprea
 		}
 
 		// Replace placeholder entries with actual instance IDs per node
-		for node, ids := range input.NodeInstances {
-			record.NodeInstances[node] = ids
-		}
+		maps.Copy(record.NodeInstances, input.NodeInstances)
 
 		if err := s.UpdatePlacementGroupRecord(accountID, input.GroupName, record, entry.Revision()); err != nil {
 			slog.Debug("FinalizeSpreadInstances: CAS conflict, retrying", "attempt", attempt, "err", err)
