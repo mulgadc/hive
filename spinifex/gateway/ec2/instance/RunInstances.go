@@ -89,6 +89,8 @@ func RunInstances(input *ec2.RunInstancesInput, natsConn *nats.Conn, accountID s
 				return reservation, err
 			}
 			return *reservationPtr, nil
+		default:
+			return reservation, errors.New(awserrors.ErrorInvalidParameterValue)
 		}
 	}
 

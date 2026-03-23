@@ -111,6 +111,10 @@ func queryNodeCapacity(natsConn *nats.Conn, instanceType string) ([]nodeAllocati
 			slog.Debug("queryNodeCapacity: failed to unmarshal response", "err", err)
 			continue
 		}
+		if status.Node == "" {
+			slog.Debug("queryNodeCapacity: skipping response with empty node ID")
+			continue
+		}
 
 		// Find capacity for the requested instance type on this node
 		for _, cap := range status.InstanceTypes {
@@ -446,6 +450,9 @@ func distributeInstancesCluster(input *ec2.RunInstancesInput, natsConn *nats.Con
 	}
 
 	reservation := results[0].Reservation
+	if reservation == nil {
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
 
 	// Step 6: CAS-update record with launched instance IDs
 	nodeInstances := make(map[string][]string)
