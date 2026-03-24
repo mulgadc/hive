@@ -6,49 +6,53 @@
 #   1. Installs OVN/OVS packages (if not present)
 #   2. Enables required services (openvswitch-switch, ovn-controller)
 #   3. Creates br-int with secure fail-mode
-#   4. Configures OVS external_ids for OVN chassis identity
-#   5. Applies sysctl tuning for overlay networking
+#   4. Configures WAN bridge for public subnet uplink (auto-detected or manual)
+#   5. Configures OVS external_ids for OVN chassis identity
+#   6. Applies sysctl tuning for overlay networking
 #
 # Usage:
 #   ./scripts/setup-ovn.sh [options]
 #
 # Options:
-#   --management       Also start OVN central services (NB DB, SB DB, ovn-northd)
-#   --external-bridge  Create br-external for public subnet WAN uplink
-#   --external-iface   WAN NIC to add to br-external (default: eth1)
-#   --direct           Add WAN NIC directly to br-external (no macvlan). Only safe
-#                      when the WAN NIC is NOT the SSH/management NIC.
-#   --dhcp             Obtain gateway IP via DHCP on the external bridge interface
-#   --ovn-remote       OVN SB DB address (default: tcp:127.0.0.1:6642)
-#   --encap-ip         Geneve tunnel endpoint IP (default: auto-detect)
-#   --chassis-id       OVN chassis identifier (default: hostname)
+#   --management         Also start OVN central services (NB DB, SB DB, ovn-northd)
+#   --wan-bridge=NAME    OVS bridge for WAN traffic (default: auto-detect from default route)
+#   --wan-iface=NAME     Physical NIC to add to the WAN bridge (use with --wan-bridge or --macvlan)
+#   --macvlan            Create macvlan off --wan-iface instead of moving NIC directly.
+#                        SSH-safe for single-NIC hosts where WAN NIC carries SSH.
+#   --dhcp               Obtain gateway IP via DHCP on the WAN bridge interface
+#   --ovn-remote=ADDR    OVN SB DB address (default: tcp:127.0.0.1:6642)
+#   --encap-ip=IP        Geneve tunnel endpoint IP (default: auto-detect)
+#   --chassis-id=ID      OVN chassis identifier (default: chassis-$(hostname -s))
+#
+# WAN Bridge Auto-Detection:
+#   When no --wan-bridge is given, the script checks the default route interface:
+#   - If it's already a bridge (e.g. br-wan from cloud-init) → use it directly
+#   - If it's a physical NIC → stop and print guidance (cannot safely move NIC)
 #
 # Examples:
-#   # Single-node development (management + compute on same host):
+#   # WAN is already on a bridge (tofu-cluster, production):
 #   ./scripts/setup-ovn.sh --management
 #
-#   # With external bridge (macvlan on WAN NIC — SSH-safe for single-NIC hosts):
-#   ./scripts/setup-ovn.sh --management --external-bridge --external-iface=eth0
+#   # Dedicated WAN NIC (not your SSH NIC — you take responsibility):
+#   ./scripts/setup-ovn.sh --management --wan-bridge=br-wan --wan-iface=eth1
 #
-#   # Direct bridge (WAN NIC added to OVS — use when WAN NIC != SSH NIC):
-#   ./scripts/setup-ovn.sh --management --external-bridge --external-iface=eth1 --direct
+#   # Single-NIC host (SSH-safe macvlan):
+#   ./scripts/setup-ovn.sh --management --macvlan --wan-iface=eth0
 #
 #   # Compute node joining an existing cluster:
 #   ./scripts/setup-ovn.sh --ovn-remote=tcp:10.0.0.1:6642 --encap-ip=10.0.0.2
 #
-#   # Multi-node dev cluster (node1 = management):
-#   Node 1: ./scripts/setup-ovn.sh --management --encap-ip=127.0.0.1
-#   Node 2: ./scripts/setup-ovn.sh --ovn-remote=tcp:127.0.0.1:6642 --encap-ip=127.0.0.2
-#   Node 3: ./scripts/setup-ovn.sh --ovn-remote=tcp:127.0.0.1:6642 --encap-ip=127.0.0.3
+#   # No WAN bridge (overlay-only, no public subnet):
+#   ./scripts/setup-ovn.sh --management --encap-ip=10.0.0.1
 
 set -e
 
 # Defaults
 MANAGEMENT=false
-EXTERNAL_BRIDGE=false
-DIRECT_BRIDGE=false
+WAN_BRIDGE=""
+WAN_IFACE=""
+MACVLAN_MODE=false
 EXTERNAL_DHCP=false
-EXTERNAL_IFACE="eth1"
 OVN_REMOTE="tcp:127.0.0.1:6642"
 ENCAP_IP=""
 CHASSIS_ID=""
@@ -57,15 +61,15 @@ CHASSIS_ID=""
 for arg in "$@"; do
     case "$arg" in
         --management)       MANAGEMENT=true ;;
-        --external-bridge)  EXTERNAL_BRIDGE=true ;;
-        --direct)           DIRECT_BRIDGE=true ;;
+        --macvlan)          MACVLAN_MODE=true ;;
         --dhcp)             EXTERNAL_DHCP=true ;;
-        --external-iface=*) EXTERNAL_IFACE="${arg#*=}" ;;
+        --wan-bridge=*)     WAN_BRIDGE="${arg#*=}" ;;
+        --wan-iface=*)      WAN_IFACE="${arg#*=}" ;;
         --ovn-remote=*)     OVN_REMOTE="${arg#*=}" ;;
         --encap-ip=*)       ENCAP_IP="${arg#*=}" ;;
         --chassis-id=*)     CHASSIS_ID="${arg#*=}" ;;
         --help|-h)
-            head -36 "$0" | tail -34
+            head -44 "$0" | tail -42
             exit 0
             ;;
         *)
@@ -75,13 +79,111 @@ for arg in "$@"; do
     esac
 done
 
+# --- WAN bridge auto-detection ---
+# Determine the WAN bridge name and how to set it up.
+WAN_BRIDGE_MODE=""  # "existing", "direct", "macvlan", or ""
+
+detect_wan_bridge() {
+    # If --wan-bridge was explicitly given, use it
+    if [ -n "$WAN_BRIDGE" ]; then
+        if [ "$MACVLAN_MODE" = true ] && [ -n "$WAN_IFACE" ]; then
+            WAN_BRIDGE_MODE="macvlan"
+        elif [ -n "$WAN_IFACE" ]; then
+            WAN_BRIDGE_MODE="direct"
+        elif sudo ovs-vsctl br-exists "$WAN_BRIDGE" 2>/dev/null; then
+            WAN_BRIDGE_MODE="existing"
+        else
+            # Bridge doesn't exist yet and no --wan-iface — create empty OVS bridge
+            WAN_BRIDGE_MODE="existing"
+        fi
+        return
+    fi
+
+    # If --macvlan was given without --wan-bridge, we need --wan-iface
+    if [ "$MACVLAN_MODE" = true ]; then
+        if [ -z "$WAN_IFACE" ]; then
+            echo "ERROR: --macvlan requires --wan-iface=<NIC>"
+            exit 1
+        fi
+        WAN_BRIDGE="br-wan"
+        WAN_BRIDGE_MODE="macvlan"
+        return
+    fi
+
+    # Auto-detect: find the default route interface
+    local default_dev
+    default_dev=$(ip -4 route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1)
+
+    if [ -z "$default_dev" ]; then
+        echo "  No default route found — no WAN bridge configured"
+        echo "  (VMs will not have external connectivity)"
+        return
+    fi
+
+    # Check if the default route device is a bridge (Linux or OVS)
+    local is_bridge=false
+    if ip -d link show "$default_dev" 2>/dev/null | grep -q "bridge"; then
+        is_bridge=true
+    fi
+    if sudo ovs-vsctl br-exists "$default_dev" 2>/dev/null; then
+        is_bridge=true
+    fi
+
+    if [ "$is_bridge" = true ]; then
+        # Default route goes through a bridge — use it directly
+        WAN_BRIDGE="$default_dev"
+        WAN_BRIDGE_MODE="existing"
+        echo "  Auto-detected WAN bridge: $WAN_BRIDGE (default route interface)"
+        return
+    fi
+
+    # Default route is a physical NIC — cannot safely move it to OVS
+    # because it might be carrying SSH.
+    local wan_ip
+    wan_ip=$(ip -4 -o addr show "$default_dev" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+
+    echo ""
+    echo "============================================================"
+    echo "  WAN interface '$default_dev' ($wan_ip) is a physical NIC."
+    echo "  Cannot auto-create a bridge — this may drop your connection."
+    echo ""
+    echo "  Options:"
+    echo ""
+    echo "  1. Create a WAN bridge first (e.g. via netplan), then re-run:"
+    echo "     ./scripts/setup-ovn.sh --management"
+    echo ""
+    echo "  2. Dedicated WAN NIC (NOT your SSH connection):"
+    echo "     ./scripts/setup-ovn.sh --management --wan-bridge=br-wan --wan-iface=$default_dev"
+    echo ""
+    echo "  3. Single-NIC host (SSH-safe macvlan):"
+    echo "     ./scripts/setup-ovn.sh --management --macvlan --wan-iface=$default_dev"
+    echo ""
+    echo "  4. No external networking (overlay-only):"
+    echo "     ./scripts/setup-ovn.sh --management --encap-ip=$wan_ip"
+    echo "============================================================"
+    echo ""
+    exit 1
+}
+
+detect_wan_bridge
+
 # Auto-detect encap IP if not specified
 if [ -z "$ENCAP_IP" ]; then
-    ENCAP_IP=$(ip -4 route get 8.8.8.8 2>/dev/null | awk '/src/{print $7}' | head -1)
-    if [ -z "$ENCAP_IP" ]; then
-        ENCAP_IP="127.0.0.1"
+    # Prefer br-vpc IP if it exists (dedicated VPC data plane)
+    if ip -4 addr show br-vpc >/dev/null 2>&1; then
+        ENCAP_IP=$(ip -4 -o addr show br-vpc 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+        if [ -n "$ENCAP_IP" ]; then
+            echo "Auto-detected encap IP from br-vpc: $ENCAP_IP"
+        fi
     fi
-    echo "Auto-detected encap IP: $ENCAP_IP"
+    # Fall back to default route source IP
+    if [ -z "$ENCAP_IP" ]; then
+        ENCAP_IP=$(ip -4 route get 8.8.8.8 2>/dev/null | awk '/src/{print $7}' | head -1)
+        if [ -z "$ENCAP_IP" ]; then
+            ENCAP_IP="127.0.0.1"
+        fi
+        echo "Auto-detected encap IP: $ENCAP_IP"
+    fi
 fi
 
 # Auto-detect chassis ID if not specified
@@ -92,14 +194,13 @@ fi
 
 echo "=== Spinifex OVN Compute Node Setup ==="
 echo "  Management node:  $MANAGEMENT"
-echo "  External bridge:  $EXTERNAL_BRIDGE"
-if [ "$EXTERNAL_BRIDGE" = true ]; then
-echo "  External iface:   $EXTERNAL_IFACE"
-if [ "$DIRECT_BRIDGE" = true ]; then
-echo "  Bridge mode:      direct (NIC added to OVS)"
+if [ -n "$WAN_BRIDGE" ]; then
+    echo "  WAN bridge:       $WAN_BRIDGE ($WAN_BRIDGE_MODE)"
+    if [ -n "$WAN_IFACE" ]; then
+        echo "  WAN interface:    $WAN_IFACE"
+    fi
 else
-echo "  Bridge mode:      macvlan (SSH-safe)"
-fi
+    echo "  WAN bridge:       none (overlay-only)"
 fi
 echo "  OVN Remote (SB):  $OVN_REMOTE"
 echo "  Encap IP:         $ENCAP_IP"
@@ -172,63 +273,93 @@ sudo ovs-vsctl set Bridge br-int other-config:disable-in-band=true
 sudo ip link set br-int up
 echo "  br-int: created, fail-mode=secure, up"
 
-# --- Step 3b: Create br-external for WAN uplink (optional) ---
-if [ "$EXTERNAL_BRIDGE" = true ]; then
+# --- Step 3b: Configure WAN bridge for public subnet uplink ---
+if [ -n "$WAN_BRIDGE" ]; then
     echo ""
-    echo "Step 3b: Configuring br-external for public subnet WAN uplink..."
+    echo "Step 3b: Configuring WAN bridge ($WAN_BRIDGE) for public subnet uplink..."
 
-    # Verify the WAN NIC exists
-    if ! ip link show "$EXTERNAL_IFACE" >/dev/null 2>&1; then
-        echo "  ERROR: interface $EXTERNAL_IFACE does not exist"
-        echo "  Available interfaces:"
-        ip -o link show | awk -F': ' '{print "    " $2}'
-        exit 1
-    fi
+    case "$WAN_BRIDGE_MODE" in
+        existing)
+            # Bridge already exists (e.g. br-wan from cloud-init).
+            # Ensure it's registered as an OVS bridge. If it's a Linux bridge
+            # that OVS doesn't know about, create a new OVS bridge with the
+            # same name — OVS will take over.
+            if ! sudo ovs-vsctl br-exists "$WAN_BRIDGE" 2>/dev/null; then
+                sudo ovs-vsctl --may-exist add-br "$WAN_BRIDGE"
+                echo "  created OVS bridge: $WAN_BRIDGE"
+            fi
+            sudo ip link set "$WAN_BRIDGE" up
+            echo "  $WAN_BRIDGE: existing bridge, up"
+            ;;
 
-    # Create br-external
-    sudo ovs-vsctl --may-exist add-br br-external
-    sudo ip link set br-external up
+        direct)
+            # Add WAN NIC directly to OVS bridge. The NIC becomes an OVS slave —
+            # its IP (if any) is no longer reachable from the host. The user has
+            # confirmed this NIC is NOT their SSH connection.
+            if ! ip link show "$WAN_IFACE" >/dev/null 2>&1; then
+                echo "  ERROR: interface $WAN_IFACE does not exist"
+                echo "  Available interfaces:"
+                ip -o link show | awk -F': ' '{print "    " $2}'
+                exit 1
+            fi
 
-    if [ "$DIRECT_BRIDGE" = true ]; then
-        # Direct bridge: add the WAN NIC directly to br-external as an OVS port.
-        # The NIC becomes an OVS slave — its IP (if any) is no longer reachable
-        # from the host. Only use when WAN NIC != SSH/management NIC.
-        if sudo ovs-vsctl port-to-br "$EXTERNAL_IFACE" >/dev/null 2>&1; then
-            echo "  $EXTERNAL_IFACE already on $(sudo ovs-vsctl port-to-br "$EXTERNAL_IFACE")"
-        else
-            sudo ovs-vsctl --may-exist add-port br-external "$EXTERNAL_IFACE"
-            echo "  added $EXTERNAL_IFACE directly to br-external (direct bridge mode)"
-        fi
-        sudo ip link set "$EXTERNAL_IFACE" up
-        echo "  br-external: direct bridge on $EXTERNAL_IFACE"
-        echo "  NOTE: $EXTERNAL_IFACE is now an OVS port — no host IP on this NIC"
-    else
-        # Macvlan strategy: create a macvlan sub-interface in bridge mode off the
-        # WAN NIC. The host keeps its IP on the parent NIC — SSH-safe. OVN localnet
-        # traffic flows through the macvlan to the physical wire.
-        MACVLAN_NAME="spx-ext-${EXTERNAL_IFACE}"
+            sudo ovs-vsctl --may-exist add-br "$WAN_BRIDGE"
+            sudo ip link set "$WAN_BRIDGE" up
 
-        if ip link show "$MACVLAN_NAME" >/dev/null 2>&1; then
-            echo "  macvlan $MACVLAN_NAME already exists"
-        else
-            sudo ip link add "$MACVLAN_NAME" link "$EXTERNAL_IFACE" type macvlan mode bridge
-            echo "  created macvlan: $MACVLAN_NAME (bridge mode) on $EXTERNAL_IFACE"
-        fi
+            if sudo ovs-vsctl port-to-br "$WAN_IFACE" >/dev/null 2>&1; then
+                echo "  $WAN_IFACE already on $(sudo ovs-vsctl port-to-br "$WAN_IFACE")"
+            else
+                sudo ovs-vsctl --may-exist add-port "$WAN_BRIDGE" "$WAN_IFACE"
+                echo "  added $WAN_IFACE directly to $WAN_BRIDGE"
+            fi
+            sudo ip link set "$WAN_IFACE" up
+            echo "  $WAN_BRIDGE: direct bridge on $WAN_IFACE"
+            echo "  NOTE: $WAN_IFACE is now an OVS port — no host IP on this NIC"
+            ;;
 
-        sudo ip link set "$MACVLAN_NAME" up
-        sudo ovs-vsctl --may-exist add-port br-external "$MACVLAN_NAME"
-        echo "  br-external: created with macvlan port $MACVLAN_NAME"
-        echo "  NOTE: host keeps its IP on $EXTERNAL_IFACE (no migration)"
-        echo "  QUIRK: host cannot reach VMs at their public IPs (macvlan isolation)"
-    fi
+        macvlan)
+            # Create a macvlan sub-interface in bridge mode off the WAN NIC.
+            # The host keeps its IP on the parent NIC — SSH-safe. OVN localnet
+            # traffic flows through the macvlan to the physical wire.
+            if ! ip link show "$WAN_IFACE" >/dev/null 2>&1; then
+                echo "  ERROR: interface $WAN_IFACE does not exist"
+                echo "  Available interfaces:"
+                ip -o link show | awk -F': ' '{print "    " $2}'
+                exit 1
+            fi
+
+            MACVLAN_NAME="spx-ext-${WAN_IFACE}"
+
+            sudo ovs-vsctl --may-exist add-br "$WAN_BRIDGE"
+            sudo ip link set "$WAN_BRIDGE" up
+
+            if ip link show "$MACVLAN_NAME" >/dev/null 2>&1; then
+                echo "  macvlan $MACVLAN_NAME already exists"
+            else
+                sudo ip link add "$MACVLAN_NAME" link "$WAN_IFACE" type macvlan mode bridge
+                echo "  created macvlan: $MACVLAN_NAME (bridge mode) on $WAN_IFACE"
+            fi
+
+            sudo ip link set "$MACVLAN_NAME" up
+            sudo ovs-vsctl --may-exist add-port "$WAN_BRIDGE" "$MACVLAN_NAME"
+            echo "  $WAN_BRIDGE: macvlan port $MACVLAN_NAME on $WAN_IFACE"
+            echo "  NOTE: host keeps its IP on $WAN_IFACE (SSH-safe)"
+            echo "  QUIRK: host cannot reach VMs at their public IPs (macvlan isolation)"
+            ;;
+    esac
 
     # --- DHCP: obtain gateway IP for OVN SNAT ---
     if [ "$EXTERNAL_DHCP" = true ]; then
         echo ""
         echo "Step 3c: Obtaining external gateway IP via DHCP..."
 
-        # DHCP on the macvlan interface (it has L2 access to the WAN)
-        DHCP_IFACE="spx-ext-${EXTERNAL_IFACE}"
+        # For macvlan mode, DHCP on the macvlan interface (it has L2 access to WAN).
+        # For direct/existing bridge, DHCP on the bridge itself.
+        if [ "$WAN_BRIDGE_MODE" = "macvlan" ]; then
+            DHCP_IFACE="spx-ext-${WAN_IFACE}"
+        else
+            DHCP_IFACE="$WAN_BRIDGE"
+        fi
 
         # Run DHCP client to get a lease
         if command -v dhcpcd >/dev/null 2>&1; then
@@ -249,11 +380,9 @@ if [ "$EXTERNAL_BRIDGE" = true ]; then
             CONFIG_DIR="${CONFIG_DIR:-$HOME/spinifex/config}"
             CONFIG_FILE="$CONFIG_DIR/spinifex.toml"
             if [ -f "$CONFIG_FILE" ]; then
-                # Update gateway_ip in the config
                 if grep -q "gateway_ip" "$CONFIG_FILE"; then
                     sed -i "s/gateway_ip.*/gateway_ip = \"$DHCP_IP\"/" "$CONFIG_FILE"
                 else
-                    # Insert gateway_ip after the gateway line in the pool section
                     sed -i "/^gateway *=.*/a gateway_ip  = \"$DHCP_IP\"" "$CONFIG_FILE"
                 fi
                 echo "  Updated $CONFIG_FILE with gateway_ip = $DHCP_IP"
@@ -271,8 +400,8 @@ fi
 echo ""
 echo "Step 4: Setting OVS external_ids for OVN..."
 
-BRIDGE_MAPPINGS="external:br-external"
-if [ "$EXTERNAL_BRIDGE" = true ]; then
+if [ -n "$WAN_BRIDGE" ]; then
+    BRIDGE_MAPPINGS="external:${WAN_BRIDGE}"
     sudo ovs-vsctl set Open_vSwitch . \
         external_ids:system-id="$CHASSIS_ID" \
         external_ids:ovn-remote="$OVN_REMOTE" \
@@ -454,19 +583,19 @@ else
     OK=false
 fi
 
-# Check br-external (only if --external-bridge was used)
-if [ "$EXTERNAL_BRIDGE" = true ]; then
-    if sudo ovs-vsctl br-exists br-external; then
-        echo "  br-external:     OK"
-        if [ "$DIRECT_BRIDGE" = true ]; then
-            if sudo ovs-vsctl port-to-br "$EXTERNAL_IFACE" >/dev/null 2>&1; then
-                echo "  direct bridge:   OK ($EXTERNAL_IFACE on br-external)"
+# Check WAN bridge (only if configured)
+if [ -n "$WAN_BRIDGE" ]; then
+    if sudo ovs-vsctl br-exists "$WAN_BRIDGE"; then
+        echo "  $WAN_BRIDGE:$(printf '%*s' $((15 - ${#WAN_BRIDGE})) '') OK"
+        if [ "$WAN_BRIDGE_MODE" = "direct" ]; then
+            if sudo ovs-vsctl port-to-br "$WAN_IFACE" >/dev/null 2>&1; then
+                echo "  direct bridge:   OK ($WAN_IFACE on $WAN_BRIDGE)"
             else
-                echo "  direct bridge:   FAILED ($EXTERNAL_IFACE not on br-external)"
+                echo "  direct bridge:   FAILED ($WAN_IFACE not on $WAN_BRIDGE)"
                 OK=false
             fi
-        else
-            MACVLAN_NAME="spx-ext-${EXTERNAL_IFACE}"
+        elif [ "$WAN_BRIDGE_MODE" = "macvlan" ]; then
+            MACVLAN_NAME="spx-ext-${WAN_IFACE}"
             if ip link show "$MACVLAN_NAME" >/dev/null 2>&1; then
                 echo "  macvlan:         OK ($MACVLAN_NAME)"
             else
@@ -475,7 +604,7 @@ if [ "$EXTERNAL_BRIDGE" = true ]; then
             fi
         fi
     else
-        echo "  br-external:     FAILED"
+        echo "  $WAN_BRIDGE:$(printf '%*s' $((15 - ${#WAN_BRIDGE})) '') FAILED"
         OK=false
     fi
 fi
