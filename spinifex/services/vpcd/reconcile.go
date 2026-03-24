@@ -2,14 +2,23 @@ package vpcd
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"log/slog"
+
+	handlers_ec2_igw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/igw"
+	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
+	"github.com/mulgadc/spinifex/spinifex/services/vpcd/nbdb"
+	"github.com/mulgadc/spinifex/spinifex/utils"
+	"github.com/nats-io/nats.go"
 )
 
 // ReconcileResult tracks what was created during reconciliation.
 type ReconcileResult struct {
-	RoutersCreated int
+	RoutersCreated  int
 	SwitchesCreated int
 	IGWsCreated     int
+	PortsCreated    int
 }
 
 // Reconcile ensures OVN topology matches the expected state from the bootstrap config.
@@ -77,6 +86,200 @@ func Reconcile(ctx context.Context, topo *TopologyHandler, bootstrap *BootstrapV
 		"routers_created", result.RoutersCreated,
 		"switches_created", result.SwitchesCreated,
 		"igws_created", result.IGWsCreated,
+	)
+
+	return result
+}
+
+// ReconcileFromKV reads all VPCs, subnets, IGW attachments, and ENIs from NATS KV
+// and ensures OVN topology matches. This is Pass 2 from the Phase 12 plan — it
+// handles reboots, OVN DB loss, and any missed events. All operations are idempotent.
+func ReconcileFromKV(ctx context.Context, nc *nats.Conn, topo *TopologyHandler) ReconcileResult {
+	var result ReconcileResult
+
+	js, err := nc.JetStream()
+	if err != nil {
+		slog.Warn("vpcd reconcile-kv: failed to get JetStream context", "err", err)
+		return result
+	}
+
+	// 1. Reconcile VPCs: ensure each VPC has a logical router
+	vpcKV, err := js.KeyValue(handlers_ec2_vpc.KVBucketVPCs)
+	if err != nil {
+		slog.Debug("vpcd reconcile-kv: VPC KV bucket not available (first boot before daemon?)", "err", err)
+		return result
+	}
+
+	// Build a map of VPC ID → CIDR for subnet/IGW reconciliation
+	type vpcInfo struct {
+		VpcId     string
+		CidrBlock string
+	}
+	vpcMap := make(map[string]vpcInfo)
+
+	vpcKeys, err := vpcKV.Keys()
+	if err != nil && !errors.Is(err, nats.ErrNoKeysFound) {
+		slog.Warn("vpcd reconcile-kv: failed to list VPC keys", "err", err)
+	}
+	for _, key := range vpcKeys {
+		if key == utils.VersionKey {
+			continue
+		}
+		entry, err := vpcKV.Get(key)
+		if err != nil {
+			continue
+		}
+		var rec handlers_ec2_vpc.VPCRecord
+		if err := json.Unmarshal(entry.Value(), &rec); err != nil {
+			slog.Warn("vpcd reconcile-kv: failed to unmarshal VPC record", "key", key, "err", err)
+			continue
+		}
+		vpcMap[rec.VpcId] = vpcInfo{VpcId: rec.VpcId, CidrBlock: rec.CidrBlock}
+
+		routerName := "vpc-" + rec.VpcId
+		if _, err := topo.ovn.GetLogicalRouter(ctx, routerName); err != nil {
+			slog.Info("vpcd reconcile-kv: creating VPC router", "router", routerName)
+			if err := topo.reconcileVPC(ctx, rec.VpcId, rec.CidrBlock); err != nil {
+				slog.Error("vpcd reconcile-kv: failed to create VPC router", "err", err)
+			} else {
+				result.RoutersCreated++
+			}
+		}
+	}
+
+	// 2. Reconcile subnets: ensure each subnet has a logical switch + router port + DHCP
+	subnetKV, err := js.KeyValue(handlers_ec2_vpc.KVBucketSubnets)
+	if err != nil {
+		slog.Debug("vpcd reconcile-kv: subnet KV bucket not available", "err", err)
+	} else {
+		subnetKeys, err := subnetKV.Keys()
+		if err != nil && !errors.Is(err, nats.ErrNoKeysFound) {
+			slog.Warn("vpcd reconcile-kv: failed to list subnet keys", "err", err)
+		}
+		for _, key := range subnetKeys {
+			if key == utils.VersionKey {
+				continue
+			}
+			entry, err := subnetKV.Get(key)
+			if err != nil {
+				continue
+			}
+			var rec handlers_ec2_vpc.SubnetRecord
+			if err := json.Unmarshal(entry.Value(), &rec); err != nil {
+				slog.Warn("vpcd reconcile-kv: failed to unmarshal subnet record", "key", key, "err", err)
+				continue
+			}
+
+			switchName := "subnet-" + rec.SubnetId
+			if _, err := topo.ovn.GetLogicalSwitch(ctx, switchName); err != nil {
+				slog.Info("vpcd reconcile-kv: creating subnet topology", "switch", switchName)
+				if err := topo.reconcileSubnet(ctx, rec.SubnetId, rec.VpcId, rec.CidrBlock); err != nil {
+					slog.Error("vpcd reconcile-kv: failed to create subnet topology", "err", err)
+				} else {
+					result.SwitchesCreated++
+				}
+			}
+		}
+	}
+
+	// 3. Reconcile IGW attachments: ensure attached IGWs have external switch + SNAT
+	igwKV, err := js.KeyValue(handlers_ec2_igw.KVBucketIGW)
+	if err != nil {
+		slog.Debug("vpcd reconcile-kv: IGW KV bucket not available", "err", err)
+	} else {
+		igwKeys, err := igwKV.Keys()
+		if err != nil && !errors.Is(err, nats.ErrNoKeysFound) {
+			slog.Warn("vpcd reconcile-kv: failed to list IGW keys", "err", err)
+		}
+		for _, key := range igwKeys {
+			if key == utils.VersionKey {
+				continue
+			}
+			entry, err := igwKV.Get(key)
+			if err != nil {
+				continue
+			}
+			var rec handlers_ec2_igw.IGWRecord
+			if err := json.Unmarshal(entry.Value(), &rec); err != nil {
+				slog.Warn("vpcd reconcile-kv: failed to unmarshal IGW record", "key", key, "err", err)
+				continue
+			}
+			// Only reconcile attached IGWs
+			if rec.VpcId == "" || rec.State != "attached" {
+				continue
+			}
+
+			extSwitchName := "ext-" + rec.VpcId
+			if _, err := topo.ovn.GetLogicalSwitch(ctx, extSwitchName); err != nil {
+				slog.Info("vpcd reconcile-kv: creating IGW topology", "switch", extSwitchName, "igw_id", rec.InternetGatewayId)
+				if err := topo.reconcileIGW(ctx, rec.VpcId, rec.InternetGatewayId); err != nil {
+					slog.Error("vpcd reconcile-kv: failed to create IGW topology", "err", err)
+				} else {
+					result.IGWsCreated++
+				}
+			}
+		}
+	}
+
+	// 4. Reconcile ENI ports: ensure each ENI has a logical switch port
+	eniKV, err := js.KeyValue(handlers_ec2_vpc.KVBucketENIs)
+	if err != nil {
+		slog.Debug("vpcd reconcile-kv: ENI KV bucket not available", "err", err)
+	} else {
+		eniKeys, err := eniKV.Keys()
+		if err != nil && !errors.Is(err, nats.ErrNoKeysFound) {
+			slog.Warn("vpcd reconcile-kv: failed to list ENI keys", "err", err)
+		}
+		for _, key := range eniKeys {
+			if key == utils.VersionKey {
+				continue
+			}
+			entry, err := eniKV.Get(key)
+			if err != nil {
+				continue
+			}
+			var rec handlers_ec2_vpc.ENIRecord
+			if err := json.Unmarshal(entry.Value(), &rec); err != nil {
+				slog.Warn("vpcd reconcile-kv: failed to unmarshal ENI record", "key", key, "err", err)
+				continue
+			}
+
+			portName := "port-" + rec.NetworkInterfaceId
+			if _, err := topo.ovn.GetLogicalSwitchPort(ctx, portName); err != nil {
+				switchName := "subnet-" + rec.SubnetId
+				addrStr := rec.MacAddress + " " + rec.PrivateIpAddress
+				lsp := &nbdb.LogicalSwitchPort{
+					Name:         portName,
+					Addresses:    []string{addrStr},
+					PortSecurity: []string{addrStr},
+					ExternalIDs: map[string]string{
+						"spinifex:eni_id":    rec.NetworkInterfaceId,
+						"spinifex:subnet_id": rec.SubnetId,
+						"spinifex:vpc_id":    rec.VpcId,
+					},
+				}
+
+				// Attach DHCP options if available
+				dhcpOpts, dhcpErr := topo.ovn.FindDHCPOptionsByExternalID(ctx, "spinifex:subnet_id", rec.SubnetId)
+				if dhcpErr == nil {
+					lsp.DHCPv4Options = &dhcpOpts.UUID
+				}
+
+				slog.Info("vpcd reconcile-kv: creating ENI port", "port", portName, "switch", switchName)
+				if err := topo.ovn.CreateLogicalSwitchPort(ctx, switchName, lsp); err != nil {
+					slog.Error("vpcd reconcile-kv: failed to create ENI port", "port", portName, "err", err)
+				} else {
+					result.PortsCreated++
+				}
+			}
+		}
+	}
+
+	slog.Info("vpcd reconcile-kv: complete",
+		"routers_created", result.RoutersCreated,
+		"switches_created", result.SwitchesCreated,
+		"igws_created", result.IGWsCreated,
+		"ports_created", result.PortsCreated,
 	)
 
 	return result

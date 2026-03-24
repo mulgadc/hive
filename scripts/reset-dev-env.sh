@@ -159,19 +159,31 @@ fi
 
 echo "Initializing platform"
 ADMIN_INIT_ARGS="--region $REGION --az ${REGION}a --node node1 --nodes 1"
+
+# External networking mode: set EXTERNAL_MODE=nat for NAT/DHCP mode (outbound-only),
+# or leave unset / EXTERNAL_MODE=pool for pool mode (per-VM public IPs).
+EXTERNAL_MODE="${EXTERNAL_MODE:-pool}"
+
 if [ -n "$WAN_IFACE" ] && [ -n "$WAN_GW" ]; then
-    # Suggest pool range at high end of WAN subnet to avoid DHCP conflicts
     WAN_IP=$(ip -4 -o addr show "$WAN_IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
     WAN_PREFIX=$(ip -4 -o addr show "$WAN_IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f2 | head -1)
     if [ -z "$WAN_PREFIX" ]; then WAN_PREFIX=24; fi
 
-    # Use high range of subnet: .200-.250 for /24, avoid common DHCP ranges
-    IFS='.' read -r o1 o2 o3 o4 <<< "$WAN_GW"
-    POOL_START="${o1}.${o2}.${o3}.200"
-    POOL_END="${o1}.${o2}.${o3}.250"
-
-    echo "  External pool: $POOL_START - $POOL_END (gateway: $WAN_GW)"
-    ADMIN_INIT_ARGS="$ADMIN_INIT_ARGS --external-mode=pool --external-pool=${POOL_START}-${POOL_END} --external-gateway=${WAN_GW} --external-prefix-len=${WAN_PREFIX}"
+    if [ "$EXTERNAL_MODE" = "nat" ]; then
+        # NAT mode: outbound-only via shared SNAT. Use a single IP from the
+        # high end of the WAN subnet as the gateway IP. No per-VM public IPs.
+        IFS='.' read -r o1 o2 o3 o4 <<< "$WAN_GW"
+        GATEWAY_IP="${GATEWAY_IP:-${o1}.${o2}.${o3}.200}"
+        echo "  External mode: nat (gateway IP: $GATEWAY_IP, WAN gateway: $WAN_GW)"
+        ADMIN_INIT_ARGS="$ADMIN_INIT_ARGS --external-mode=nat --gateway-ip=${GATEWAY_IP} --external-gateway=${WAN_GW} --external-prefix-len=${WAN_PREFIX}"
+    else
+        # Pool mode: per-VM public IPs from a static range
+        IFS='.' read -r o1 o2 o3 o4 <<< "$WAN_GW"
+        POOL_START="${o1}.${o2}.${o3}.200"
+        POOL_END="${o1}.${o2}.${o3}.250"
+        echo "  External pool: $POOL_START - $POOL_END (gateway: $WAN_GW)"
+        ADMIN_INIT_ARGS="$ADMIN_INIT_ARGS --external-mode=pool --external-pool=${POOL_START}-${POOL_END} --external-gateway=${WAN_GW} --external-prefix-len=${WAN_PREFIX}"
+    fi
 fi
 ./bin/spx admin init $ADMIN_INIT_ARGS
 

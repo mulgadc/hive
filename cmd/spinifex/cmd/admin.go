@@ -221,6 +221,7 @@ func init() {
 	adminInitCmd.Flags().String("external-iface", "", "WAN NIC for br-external (auto-detected from default route)")
 	adminInitCmd.Flags().String("external-pool", "", "External IP pool range as start-end (e.g., 192.168.1.150-192.168.1.250)")
 	adminInitCmd.Flags().String("external-gateway", "", "WAN gateway IP (auto-detected from default route)")
+	adminInitCmd.Flags().String("gateway-ip", "", "OVN gateway router's external IP for SNAT (default: pool range_start for pool mode, required for nat mode without DHCP)")
 	adminInitCmd.Flags().Int("external-prefix-len", 24, "External pool subnet prefix length (auto-detected)")
 	adminInitCmd.Flags().Bool("no-external", false, "Disable external networking (overlay-only, no internet for VMs)")
 
@@ -543,6 +544,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	externalPool, _ := cmd.Flags().GetString("external-pool")
 	externalGateway, _ := cmd.Flags().GetString("external-gateway")
 	externalPrefixLen, _ := cmd.Flags().GetInt("external-prefix-len")
+	gatewayIP, _ := cmd.Flags().GetString("gateway-ip")
 	noExternal, _ := cmd.Flags().GetBool("no-external")
 
 	// Auto-detect network topology
@@ -625,6 +627,10 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "❌ Error: --external-gateway is not a valid IP: %s\n", externalGateway)
 		os.Exit(1)
 	}
+	if gatewayIP != "" && net.ParseIP(gatewayIP) == nil {
+		fmt.Fprintf(os.Stderr, "❌ Error: --gateway-ip is not a valid IP: %s\n", gatewayIP)
+		os.Exit(1)
+	}
 
 	// Detect DNS servers from the host for VM DHCP
 	var dnsServers []string
@@ -635,9 +641,9 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	// For nat mode, we need the gateway IP. The DHCP flag tells setup-ovn.sh
-	// to obtain one via DHCP on the macvlan/bridge interface.
-	useExternalDHCP := externalMode == "nat" && poolStart == ""
+	// For nat mode, we need the gateway IP. Either provided via --gateway-ip
+	// or obtained via DHCP on the macvlan/bridge interface.
+	useExternalDHCP := externalMode == "nat" && gatewayIP == "" && poolStart == ""
 
 	// Validate IP address format
 	if net.ParseIP(bindIP) == nil {
@@ -844,6 +850,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		PoolStart:     poolStart,
 		PoolEnd:       poolEnd,
 		PoolGateway:    externalGateway,
+		PoolGatewayIP:  gatewayIP,
 		PoolPrefixLen:  externalPrefixLen,
 		PoolDNSServers: dnsServers,
 
@@ -858,10 +865,13 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	// Print external networking summary
 	if externalMode != "" {
 		fmt.Printf("\n📡 External networking: %s\n", externalMode)
-		fmt.Printf("  WAN interface: %s (macvlan)\n", externalIface)
+		fmt.Printf("  WAN interface: %s\n", externalIface)
 		if externalMode == "pool" {
 			fmt.Printf("  IP pool:       %s - %s\n", poolStart, poolEnd)
 			fmt.Printf("  ⚠️  Ensure %s-%s is excluded from your router's DHCP range.\n", poolStart, poolEnd)
+		} else if gatewayIP != "" {
+			fmt.Printf("  Gateway IP:    %s (static)\n", gatewayIP)
+			fmt.Println("  VMs get:       outbound internet via SNAT (no per-VM public IPs)")
 		} else if useExternalDHCP {
 			fmt.Println("  Gateway IP:    DHCP (obtained during OVN setup)")
 			fmt.Println("  VMs get:       outbound internet via SNAT")

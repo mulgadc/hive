@@ -277,6 +277,10 @@ func launchService(cfg *Config) error {
 		}
 	}()
 
+	// Pass 2: Reconcile from NATS KV (handles reboots, OVN DB loss, missed events).
+	// Runs after subscribing so new events are not missed during reconciliation.
+	ReconcileFromKV(ctx, nc, topo)
+
 	slog.Info("vpcd service started, waiting for VPC lifecycle events", "subscriptions", len(subs))
 
 	// Wait for shutdown signal
