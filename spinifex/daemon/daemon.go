@@ -547,8 +547,9 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to initialize VPC service: %w", err)
 	}
 
-	// Initialize external IPAM if external networking is configured
-	if d.clusterConfig != nil && d.clusterConfig.Network.ExternalMode != "" {
+	// Initialize external IPAM if pool mode is configured (per-VM public IPs).
+	// NAT mode only uses SNAT via a shared gateway IP — no per-VM allocation needed.
+	if d.clusterConfig != nil && d.clusterConfig.Network.ExternalMode == "pool" {
 		js, jsErr := d.natsConn.JetStream()
 		if jsErr != nil {
 			slog.Warn("Failed to get JetStream for external IPAM", "err", jsErr)
