@@ -194,9 +194,11 @@ if [ -n "$WAN_IFACE" ] && [ -n "$WAN_GW" ]; then
 fi
 ./bin/spx admin init $ADMIN_INIT_ARGS
 
-# Re-initialize platform (generates fresh credentials, certs, config, and updates ~/.aws/credentials)
+# Re-initialize with --force to regenerate credentials, certs, config, and
+# update ~/.aws/credentials. Must carry the same args so external networking
+# config isn't lost.
 echo "Re-initializing platform..."
-./bin/spx admin init --force
+./bin/spx admin init --force $ADMIN_INIT_ARGS
 
 # Generate SSH key if it doesn't exist
 if [ ! -f ~/.ssh/spinifex-key.pub ]; then
