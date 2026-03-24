@@ -50,7 +50,7 @@ AWS-Compatible Interfaces – Provision infrastructure with awscli, Terraform, o
 - Designed for Control – Run on your own terms, whether that’s in a datacenter, remote site, or sensitive environment.
 - Minimal Dependencies – Each service is standalone and avoids complex orchestration layers.
 - Works Offline – No reliance on centralized cloud services or external networks.
-- Open Source – Licensed under Apache 2.0. Fork it, extend it, or deploy it as-is.
+- Open Source – Licensed under AGPL 3.0. Fork it, extend it, or deploy it as-is.
 
 ## Installation
 
@@ -121,4 +121,4 @@ This hybrid approach ensures Spinifex benefits from both proven engineering expe
 
 ## License
 
-Spinifex is open source under the Apache 2.0 License. You're free to use, modify, and deploy it—anywhere you need reliable infrastructure without depending on centralized cloud platforms.
+Spinifex is open source under the [GNU Affero General Public License v3.0](LICENSE). You're free to use, modify, and deploy it—anywhere you need reliable infrastructure without depending on centralized cloud platforms.
