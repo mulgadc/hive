@@ -58,7 +58,25 @@ curl https://install.mulgadc.com | bash
 
 The installer downloads the Spinifex binary and bootstraps all dependencies (QEMU, OVN/OVS, AWS CLI).
 
-### Step 2. Initialize
+### Step 2. Setup OVN networking
+
+If your WAN interface is already a bridge (e.g. `br-wan`), setup-ovn.sh auto-detects it:
+
+```bash
+sudo /usr/local/share/spinifex/setup-ovn.sh --management
+```
+
+If your WAN is a physical NIC, choose one:
+
+```bash
+# Dedicated WAN NIC (not your SSH connection):
+sudo /usr/local/share/spinifex/setup-ovn.sh --management --wan-bridge=br-wan --wan-iface=eth1
+
+# Single-NIC host (SSH-safe macvlan):
+sudo /usr/local/share/spinifex/setup-ovn.sh --management --macvlan --wan-iface=enp0s3
+```
+
+### Step 3. Initialize
 
 ```bash
 spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
@@ -66,20 +84,12 @@ spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes
 
 This auto-detects your network topology and configures external networking. Save the admin credentials printed during init — they will not be shown again.
 
-### Step 3. Trust the CA certificate
+### Step 4. Trust the CA certificate
 
 ```bash
 sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
 sudo update-ca-certificates
 ```
-
-### Step 4. Setup OVN networking
-
-```bash
-sudo /usr/local/share/spinifex/setup-ovn.sh --management --external-bridge --external-iface=enp0s3 --dhcp
-```
-
-Replace `enp0s3` with your WAN interface.
 
 ### Step 5. Start services
 

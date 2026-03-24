@@ -60,14 +60,13 @@ export AWS_AZ=us-east-1a
 
 ### Step 3. Setup OVN networking
 
-Server 1 runs OVN central and must be set up first.
+Server 1 runs OVN central and must be set up first. If your WAN interface is already a bridge (e.g. `br-wan`), setup-ovn.sh auto-detects it. Otherwise use `--wan-bridge=br-wan --wan-iface=eth1` (dedicated WAN NIC) or `--macvlan --wan-iface=eth0` (single-NIC).
 
 **Server 1:**
 
 ```bash
 sudo /usr/local/share/spinifex/setup-ovn.sh \
   --management \
-  --external-bridge --external-iface=eth1 --dhcp \
   --encap-ip=$SPINIFEX_NODE1
 ```
 
@@ -75,7 +74,6 @@ sudo /usr/local/share/spinifex/setup-ovn.sh \
 
 ```bash
 sudo /usr/local/share/spinifex/setup-ovn.sh \
-  --external-bridge --external-iface=eth1 --dhcp \
   --ovn-remote=tcp:$SPINIFEX_NODE1:6642 \
   --encap-ip=$SPINIFEX_NODE2
 ```
@@ -84,12 +82,9 @@ sudo /usr/local/share/spinifex/setup-ovn.sh \
 
 ```bash
 sudo /usr/local/share/spinifex/setup-ovn.sh \
-  --external-bridge --external-iface=eth1 --dhcp \
   --ovn-remote=tcp:$SPINIFEX_NODE1:6642 \
   --encap-ip=$SPINIFEX_NODE3
 ```
-
-Replace `eth1` with your WAN interface.
 
 Verify all 3 chassis registered:
 

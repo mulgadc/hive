@@ -75,11 +75,21 @@ sudo update-ca-certificates
 
 ### Step 5. Setup OVN
 
+If your WAN interface is already a bridge (e.g. `br-wan`), setup-ovn.sh auto-detects it:
+
 ```bash
-./scripts/setup-ovn.sh --management --external-bridge --external-iface=enp0s3 --dhcp
+./scripts/setup-ovn.sh --management
 ```
 
-Replace `enp0s3` with your WAN interface.
+If your WAN is a physical NIC, choose one:
+
+```bash
+# Dedicated WAN NIC (not your SSH connection):
+./scripts/setup-ovn.sh --management --wan-bridge=br-wan --wan-iface=eth1
+
+# Single-NIC host (SSH-safe macvlan):
+./scripts/setup-ovn.sh --management --macvlan --wan-iface=enp0s3
+```
 
 ### Step 6. Start services
 
