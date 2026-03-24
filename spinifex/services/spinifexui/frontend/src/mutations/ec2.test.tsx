@@ -15,11 +15,13 @@ import {
   useCreateImage,
   useCreateInstance,
   useCreateKeyPair,
+  useCreatePlacementGroup,
   useCreateSnapshot,
   useCreateSubnet,
   useCreateVolume,
   useCreateVpc,
   useDeleteKeyPair,
+  useDeletePlacementGroup,
   useDeleteSnapshot,
   useDeleteSubnet,
   useDeleteVolume,
@@ -149,6 +151,40 @@ describe("useCreateInstance", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(mockSend.mock.calls[0]?.[0].input.SubnetId).toBeUndefined()
+  })
+
+  it("includes Placement when placementGroupName is provided", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCreateInstance(), { wrapper })
+
+    result.current.mutate({
+      imageId: "ami-123",
+      instanceType: "t2.micro",
+      keyName: "my-key",
+      count: 1,
+      placementGroupName: "my-group",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input.Placement).toEqual({
+      GroupName: "my-group",
+    })
+  })
+
+  it("omits Placement when placementGroupName is empty", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCreateInstance(), { wrapper })
+
+    result.current.mutate({
+      imageId: "ami-123",
+      instanceType: "t2.micro",
+      keyName: "my-key",
+      count: 1,
+      placementGroupName: "",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input.Placement).toBeUndefined()
   })
 })
 
@@ -519,6 +555,61 @@ describe("useDeleteSubnet", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(mockSend.mock.calls[0]?.[0].input).toEqual({
       SubnetId: "subnet-123",
+    })
+  })
+})
+
+describe("useCreatePlacementGroup", () => {
+  it("sends CreatePlacementGroupCommand with group name and strategy", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCreatePlacementGroup(), { wrapper })
+
+    result.current.mutate({ groupName: "my-group", strategy: "spread" })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      GroupName: "my-group",
+      Strategy: "spread",
+    })
+  })
+
+  it("invalidates placementGroups query on success", async () => {
+    createQueryClient()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+    const { result } = renderHook(() => useCreatePlacementGroup(), { wrapper })
+
+    result.current.mutate({ groupName: "my-group", strategy: "cluster" })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["ec2", "placementGroups"],
+    })
+  })
+})
+
+describe("useDeletePlacementGroup", () => {
+  it("sends DeletePlacementGroupCommand with group name", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useDeletePlacementGroup(), { wrapper })
+
+    result.current.mutate("my-group")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      GroupName: "my-group",
+    })
+  })
+
+  it("invalidates placementGroups query on success", async () => {
+    createQueryClient()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+    const { result } = renderHook(() => useDeletePlacementGroup(), { wrapper })
+
+    result.current.mutate("my-group")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["ec2", "placementGroups"],
     })
   })
 })

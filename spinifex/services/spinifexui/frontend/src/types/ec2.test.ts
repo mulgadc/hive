@@ -5,6 +5,7 @@ import {
   copySnapshotSchema,
   createInstanceSchema,
   createKeyPairSchema,
+  createPlacementGroupSchema,
   createSnapshotSchema,
   createSubnetSchema,
   createVolumeSchema,
@@ -51,6 +52,17 @@ describe("createInstanceSchema", () => {
       keyName: "my-key",
       count: 1,
       subnetId: "subnet-abc",
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("allows optional placementGroupName", () => {
+    const result = createInstanceSchema.safeParse({
+      imageId: "ami-123",
+      instanceType: "t2.micro",
+      keyName: "my-key",
+      count: 1,
+      placementGroupName: "my-group",
     })
     expect(result.success).toBe(true)
   })
@@ -251,6 +263,62 @@ describe("attachVolumeSchema", () => {
     const result = attachVolumeSchema.safeParse({
       volumeId: "vol-123",
       instanceId: "",
+    })
+    expect(result.success).toBe(false)
+  })
+})
+
+describe("createPlacementGroupSchema", () => {
+  it("accepts valid placement group params", () => {
+    const result = createPlacementGroupSchema.safeParse({
+      groupName: "my-group",
+      strategy: "spread",
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects empty group name", () => {
+    const result = createPlacementGroupSchema.safeParse({
+      groupName: "",
+      strategy: "spread",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects group name over 255 chars", () => {
+    const result = createPlacementGroupSchema.safeParse({
+      groupName: "a".repeat(256),
+      strategy: "cluster",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("accepts group name at 255 chars", () => {
+    const result = createPlacementGroupSchema.safeParse({
+      groupName: "a".repeat(255),
+      strategy: "spread",
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects empty strategy", () => {
+    const result = createPlacementGroupSchema.safeParse({
+      groupName: "my-group",
+      strategy: "",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects missing strategy", () => {
+    const result = createPlacementGroupSchema.safeParse({
+      groupName: "my-group",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects missing group name", () => {
+    const result = createPlacementGroupSchema.safeParse({
+      strategy: "spread",
     })
     expect(result.success).toBe(false)
   })
