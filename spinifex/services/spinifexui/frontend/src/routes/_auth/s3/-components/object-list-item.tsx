@@ -47,8 +47,8 @@ export function ObjectListItem({
         link.remove()
         URL.revokeObjectURL(url)
       }
-    } catch {
-      throw new Error("Failed to download object")
+    } catch (error) {
+      throw new Error("Failed to download object", { cause: error })
     }
   }
 
@@ -88,6 +88,7 @@ export function ObjectListItem({
             {formatSize(object.Size ?? 0)}
           </div>
           <button
+            aria-label={`Download ${displayName}`}
             className="rounded-md p-2 transition-colors hover:bg-accent"
             onClick={downloadObject}
             type="button"
@@ -95,6 +96,7 @@ export function ObjectListItem({
             <Download className="size-4" />
           </button>
           <button
+            aria-label={`Delete ${displayName}`}
             className="rounded-md p-2 text-destructive transition-colors hover:bg-accent"
             onClick={() => setShowDeleteDialog(true)}
             type="button"

@@ -30,7 +30,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { formatDateTime } from "@/lib/utils"
+import { formatDateTime, getNameTag } from "@/lib/utils"
 import {
   useAttachVolume,
   useDeleteVolume,
@@ -319,9 +319,7 @@ function VolumeDetail() {
               </SelectTrigger>
               <SelectContent>
                 {runningInstances.map((instance) => {
-                  const name = instance.Tags?.find(
-                    (t) => t.Key === "Name",
-                  )?.Value
+                  const name = getNameTag(instance.Tags)
                   return (
                     <SelectItem
                       key={instance.InstanceId}
