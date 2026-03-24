@@ -54,7 +54,7 @@ export function PrivateKeyModal({
           <AlertDialogDescription>
             This is your only chance to save the private key file for{" "}
             <strong>{keyName}</strong>. Please download or copy it now. You
-            won't be able to retrieve it again.
+            won&apos;t be able to retrieve it again.
           </AlertDialogDescription>
         </AlertDialogHeader>
 

@@ -43,7 +43,7 @@ function ModifyVolume() {
     formState: { errors, isSubmitting },
   } = useForm({
     resolver: zodResolver(
-      modifyVolumeSchema.refine((data) => data.size > currentSize, {
+      modifyVolumeSchema.refine((values) => values.size > currentSize, {
         message: `New size must be greater than current size (${currentSize} GiB)`,
         path: ["size"],
       }),
@@ -62,9 +62,9 @@ function ModifyVolume() {
     )
   }
 
-  const onSubmit = async (data: ModifyVolumeFormData) => {
+  const onSubmit = async (formData: ModifyVolumeFormData) => {
     await modifyMutation.mutateAsync({
-      ...data,
+      ...formData,
       volumeId,
     })
 

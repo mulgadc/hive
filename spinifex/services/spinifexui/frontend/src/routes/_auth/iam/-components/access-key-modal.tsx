@@ -36,7 +36,7 @@ export function AccessKeyModal({
           <AlertDialogTitle>Save Your Access Key</AlertDialogTitle>
           <AlertDialogDescription>
             This is your only chance to view the secret access key. Please copy
-            it now. You won't be able to retrieve it again.
+            it now. You won&apos;t be able to retrieve it again.
           </AlertDialogDescription>
         </AlertDialogHeader>
 

@@ -371,8 +371,9 @@ function VolumeDetail() {
           <AlertDialogHeader>
             <AlertDialogTitle>Detach Volume</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to detach the volume "{volume.VolumeId}"
-              from instance "{volume.Attachments?.[0]?.InstanceId}"?
+              Are you sure you want to detach the volume &quot;{volume.VolumeId}
+              &quot; from instance &quot;{volume.Attachments?.[0]?.InstanceId}
+              &quot;?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <label className="flex items-center gap-2 text-sm">

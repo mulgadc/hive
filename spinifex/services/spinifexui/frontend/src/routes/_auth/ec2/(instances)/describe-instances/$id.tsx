@@ -359,8 +359,8 @@ function InstanceDetail() {
           <AlertDialogHeader>
             <AlertDialogTitle>Modify Instance</AlertDialogTitle>
             <AlertDialogDescription>
-              Select a new instance type for "{instance.InstanceId}". The
-              instance must be stopped to modify its attributes.
+              Select a new instance type for &quot;{instance.InstanceId}&quot;.
+              The instance must be stopped to modify its attributes.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <Field>
