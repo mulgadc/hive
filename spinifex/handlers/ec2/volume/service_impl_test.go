@@ -815,18 +815,15 @@ func TestDescribeVolumes_AccountScoping_SlowPath(t *testing.T) {
 	store := objectstore.NewMemoryObjectStore()
 	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
 
-	// Create volumes for two different accounts and one pre-Phase4 (empty TenantID)
+	// Create volumes for two different accounts
 	createVolumeInStoreWithMeta(t, store, "vol-acctA", viperblock.VolumeMetadata{
 		VolumeID: "vol-acctA", SizeGiB: 10, State: "available", TenantID: "111111111111",
 	})
 	createVolumeInStoreWithMeta(t, store, "vol-acctB", viperblock.VolumeMetadata{
 		VolumeID: "vol-acctB", SizeGiB: 10, State: "available", TenantID: "222222222222",
 	})
-	createVolumeInStoreWithMeta(t, store, "vol-legacy", viperblock.VolumeMetadata{
-		VolumeID: "vol-legacy", SizeGiB: 10, State: "available", TenantID: "",
-	})
 
-	// Account A sees its own volume + legacy (empty TenantID)
+	// Account A sees only its own volume
 	output, err := svc.DescribeVolumes(&ec2.DescribeVolumesInput{}, "111111111111")
 	require.NoError(t, err)
 	ids := map[string]bool{}
@@ -835,9 +832,8 @@ func TestDescribeVolumes_AccountScoping_SlowPath(t *testing.T) {
 	}
 	assert.True(t, ids["vol-acctA"], "Account A should see its own volume")
 	assert.False(t, ids["vol-acctB"], "Account A should NOT see Account B's volume")
-	assert.True(t, ids["vol-legacy"], "Account A should see pre-Phase4 volumes")
 
-	// Account B sees its own volume + legacy
+	// Account B sees only its own volume
 	output, err = svc.DescribeVolumes(&ec2.DescribeVolumesInput{}, "222222222222")
 	require.NoError(t, err)
 	ids = map[string]bool{}
@@ -846,12 +842,6 @@ func TestDescribeVolumes_AccountScoping_SlowPath(t *testing.T) {
 	}
 	assert.True(t, ids["vol-acctB"], "Account B should see its own volume")
 	assert.False(t, ids["vol-acctA"], "Account B should NOT see Account A's volume")
-	assert.True(t, ids["vol-legacy"], "Account B should see pre-Phase4 volumes")
-
-	// Empty accountID sees all volumes (backward compat)
-	output, err = svc.DescribeVolumes(&ec2.DescribeVolumesInput{}, "")
-	require.NoError(t, err)
-	assert.Len(t, output.Volumes, 3)
 }
 
 func TestDescribeVolumes_AccountScoping_FastPath(t *testing.T) {

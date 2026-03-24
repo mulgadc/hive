@@ -266,8 +266,7 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput, acc
 		}
 
 		// Skip volumes not owned by the caller's account.
-		// Pre-Phase4 volumes (empty TenantID) are visible to all accounts.
-		if accountID != "" && result.tenantID != "" && result.tenantID != accountID {
+		if result.tenantID != accountID {
 			continue
 		}
 
@@ -303,7 +302,7 @@ func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatus
 				return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
 			}
 			// Skip volumes not owned by the caller's account
-			if accountID != "" && tenantID != "" && tenantID != accountID {
+			if tenantID != accountID {
 				return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
 			}
 			statusItems = append(statusItems, item)
@@ -326,8 +325,7 @@ func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatus
 		}
 
 		// Skip volumes not owned by the caller's account.
-		// Pre-Phase4 volumes (empty TenantID) are visible to all accounts.
-		if accountID != "" && tenantID != "" && tenantID != accountID {
+		if tenantID != accountID {
 			continue
 		}
 
@@ -433,8 +431,7 @@ func (s *VolumeServiceImpl) fetchVolumesByIDs(volumeIDs []*string, accountID str
 			}
 
 			// Skip volumes not owned by the caller's account.
-			// Pre-Phase4 volumes (empty TenantID) are visible to all accounts.
-			if accountID != "" && result.tenantID != "" && result.tenantID != accountID {
+			if result.tenantID != accountID {
 				return
 			}
 
@@ -669,7 +666,7 @@ func (s *VolumeServiceImpl) ModifyVolume(input *ec2.ModifyVolumeInput, accountID
 	}
 
 	// Verify caller owns this volume
-	if accountID != "" && cfg.VolumeMetadata.TenantID != "" && cfg.VolumeMetadata.TenantID != accountID {
+	if cfg.VolumeMetadata.TenantID != accountID {
 		return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
 	}
 
@@ -758,7 +755,7 @@ func (s *VolumeServiceImpl) DeleteVolume(input *ec2.DeleteVolumeInput, accountID
 	}
 
 	// Verify caller owns this volume
-	if accountID != "" && cfg.VolumeMetadata.TenantID != "" && cfg.VolumeMetadata.TenantID != accountID {
+	if cfg.VolumeMetadata.TenantID != accountID {
 		return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
 	}
 
