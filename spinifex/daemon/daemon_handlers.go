@@ -1,10 +1,13 @@
 package daemon
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
+	"sync"
 	"time"
 
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
@@ -175,7 +178,107 @@ func (d *Daemon) handleNodeStatus(msg *nats.Msg) {
 		InstanceTypes: caps,
 	}
 
+	// Query service roles concurrently to halve worst-case latency (500ms vs 1s).
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); resp.NATSRole = d.queryNATSRole() }()
+	go func() { defer wg.Done(); resp.PredastoreRole = d.queryPredastoreRole() }()
+	wg.Wait()
+
 	respondWithJSON(msg, resp)
+}
+
+const (
+	roleLeader   = "leader"
+	roleFollower = "follower"
+
+	natsMonitorPort  = 8222
+	predastoreDBPort = 6660
+)
+
+// queryNATSRole queries the local NATS monitoring endpoint to determine this
+// node's JetStream meta-leader status. Returns "leader", "follower", or "".
+func (d *Daemon) queryNATSRole() string {
+	if !d.config.HasService("nats") {
+		return ""
+	}
+	url := fmt.Sprintf("http://%s:%d/varz", d.daemonIP(), natsMonitorPort)
+	return fetchNATSRole(url, roleHTTPClient)
+}
+
+// queryPredastoreRole queries the local Predastore DB status endpoint to
+// determine this node's Raft role. Returns "leader", "follower", or "".
+func (d *Daemon) queryPredastoreRole() string {
+	if !d.config.HasService("predastore") {
+		return ""
+	}
+	url := fmt.Sprintf("https://%s:%d/status", d.daemonIP(), predastoreDBPort)
+	return fetchPredastoreRole(url, roleTLSHTTPClient)
+}
+
+var roleHTTPClient = &http.Client{Timeout: 500 * time.Millisecond}
+
+var roleTLSHTTPClient = &http.Client{
+	Timeout: 500 * time.Millisecond,
+	Transport: &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // local self-signed cert
+	},
+}
+
+// fetchNATSRole queries a NATS /varz endpoint and returns "leader", "follower", or "".
+func fetchNATSRole(url string, client *http.Client) string {
+	resp, err := client.Get(url) //nolint:noctx // internal monitoring call
+	if err != nil {
+		slog.Debug("Failed to query NATS monitoring", "err", err)
+		return ""
+	}
+	defer resp.Body.Close()
+
+	var varz struct {
+		ServerName string `json:"server_name"`
+		JetStream  struct {
+			Meta struct {
+				Leader      string `json:"leader"`
+				ClusterSize int    `json:"cluster_size"`
+			} `json:"meta"`
+		} `json:"jetstream"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&varz); err != nil {
+		slog.Debug("Failed to decode NATS varz", "err", err)
+		return ""
+	}
+
+	// Single node or no meta cluster — this node is the leader by default
+	if varz.JetStream.Meta.ClusterSize <= 1 {
+		return roleLeader
+	}
+	if varz.JetStream.Meta.Leader == varz.ServerName {
+		return roleLeader
+	}
+	return roleFollower
+}
+
+// fetchPredastoreRole queries a Predastore /status endpoint and returns "leader", "follower", or "".
+func fetchPredastoreRole(url string, client *http.Client) string {
+	resp, err := client.Get(url) //nolint:noctx // internal monitoring call
+	if err != nil {
+		slog.Debug("Failed to query Predastore status", "err", err)
+		return ""
+	}
+	defer resp.Body.Close()
+
+	var status struct {
+		IsLeader bool `json:"is_leader"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		slog.Debug("Failed to decode Predastore status", "err", err)
+		return ""
+	}
+
+	if status.IsLeader {
+		return roleLeader
+	}
+	return roleFollower
 }
 
 // handleNodeVMs responds with the list of VMs running on this node.

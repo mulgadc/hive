@@ -138,6 +138,20 @@ func formatUptime(seconds int64) string {
 	return fmt.Sprintf("%dm", mins)
 }
 
+func formatRoles(resp types.NodeStatusResponse) string {
+	var roles []string
+	if resp.NATSRole != "" {
+		roles = append(roles, "nats:"+resp.NATSRole)
+	}
+	if resp.PredastoreRole != "" {
+		roles = append(roles, "predastore:"+resp.PredastoreRole)
+	}
+	if len(roles) == 0 {
+		return "-"
+	}
+	return strings.Join(roles, ",")
+}
+
 func formatMemGB(gb float64) string {
 	if gb >= 1.0 {
 		return fmt.Sprintf("%.1fGi", gb)
@@ -172,7 +186,7 @@ func runGetNodes(cmd *cobra.Command, args []string) {
 
 	// Build table: union of config-known nodes + NATS responders
 	tableData := pterm.TableData{
-		{"NAME", "STATUS", "IP", "REGION", "AZ", "UPTIME", "VMs", "SERVICES"},
+		{"NAME", "STATUS", "ROLES", "IP", "REGION", "AZ", "UPTIME", "VMs", "SERVICES"},
 	}
 
 	// Collect all node names: config + responded (union)
@@ -195,6 +209,7 @@ func runGetNodes(cmd *cobra.Command, args []string) {
 			tableData = append(tableData, []string{
 				resp.Node,
 				resp.Status,
+				formatRoles(resp),
 				resp.Host,
 				resp.Region,
 				resp.AZ,
@@ -206,6 +221,7 @@ func runGetNodes(cmd *cobra.Command, args []string) {
 			tableData = append(tableData, []string{
 				name,
 				"NotReady",
+				"-",
 				nodeCfg.Host,
 				nodeCfg.Region,
 				nodeCfg.AZ,
