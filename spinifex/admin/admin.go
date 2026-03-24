@@ -65,16 +65,16 @@ type ConfigSettings struct {
 	OVNSBAddr string
 
 	// External networking for public subnets
-	ExternalMode    string // "pool", "nat", or "" (disabled)
-	ExternalIface   string // WAN NIC name (e.g., "eth0", "eth1")
-	ExternalDHCP    bool   // Obtain gateway IP via DHCP on macvlan/bridge
-	PoolName        string // External pool name (e.g., "wan")
-	PoolStart       string // First IP in external pool range
-	PoolEnd         string // Last IP in external pool range
-	PoolGateway     string // WAN gateway IP
-	PoolGatewayIP   string   // Explicit SNAT IP (for nat mode without DHCP)
-	PoolPrefixLen   int      // Subnet prefix length (default 24)
-	PoolDNSServers  []string // DNS servers for VM DHCP (auto-detected from host)
+	ExternalMode   string   // "pool", "nat", or "" (disabled)
+	ExternalIface  string   // WAN NIC name (e.g., "eth0", "eth1")
+	ExternalDHCP   bool     // Obtain gateway IP via DHCP on macvlan/bridge
+	PoolName       string   // External pool name (e.g., "wan")
+	PoolStart      string   // First IP in external pool range
+	PoolEnd        string   // Last IP in external pool range
+	PoolGateway    string   // WAN gateway IP
+	PoolGatewayIP  string   // Explicit SNAT IP (for nat mode without DHCP)
+	PoolPrefixLen  int      // Subnet prefix length (default 24)
+	PoolDNSServers []string // DNS servers for VM DHCP (auto-detected from host)
 
 	// Other nodes in the cluster (for config source of truth)
 	RemoteNodes []RemoteNode

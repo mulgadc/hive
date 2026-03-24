@@ -87,7 +87,6 @@ func (s *IGWServiceImpl) CreateInternetGateway(input *ec2.CreateInternetGatewayI
 }
 
 func (s *IGWServiceImpl) createIGW(input *ec2.CreateInternetGatewayInput, accountID, igwID string) (*ec2.CreateInternetGatewayOutput, error) {
-
 	record := IGWRecord{
 		InternetGatewayId: igwID,
 		State:             "available",

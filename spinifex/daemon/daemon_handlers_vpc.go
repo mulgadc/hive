@@ -188,4 +188,3 @@ func (d *Daemon) ensureDefaultVPCInfrastructure() {
 		}
 	}
 }
-

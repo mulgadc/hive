@@ -7,7 +7,7 @@ import (
 
 // ReconcileResult tracks what was created during reconciliation.
 type ReconcileResult struct {
-	RoutersCreated int
+	RoutersCreated  int
 	SwitchesCreated int
 	IGWsCreated     int
 }
