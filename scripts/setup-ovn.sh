@@ -16,6 +16,8 @@
 #   --management       Also start OVN central services (NB DB, SB DB, ovn-northd)
 #   --external-bridge  Create br-external for public subnet WAN uplink
 #   --external-iface   WAN NIC to add to br-external (default: eth1)
+#   --direct           Add WAN NIC directly to br-external (no macvlan). Only safe
+#                      when the WAN NIC is NOT the SSH/management NIC.
 #   --dhcp             Obtain gateway IP via DHCP on the external bridge interface
 #   --ovn-remote       OVN SB DB address (default: tcp:127.0.0.1:6642)
 #   --encap-ip         Geneve tunnel endpoint IP (default: auto-detect)
@@ -25,8 +27,11 @@
 #   # Single-node development (management + compute on same host):
 #   ./scripts/setup-ovn.sh --management
 #
-#   # With external bridge (macvlan on WAN NIC — SSH-safe):
+#   # With external bridge (macvlan on WAN NIC — SSH-safe for single-NIC hosts):
 #   ./scripts/setup-ovn.sh --management --external-bridge --external-iface=eth0
+#
+#   # Direct bridge (WAN NIC added to OVS — use when WAN NIC != SSH NIC):
+#   ./scripts/setup-ovn.sh --management --external-bridge --external-iface=eth1 --direct
 #
 #   # Compute node joining an existing cluster:
 #   ./scripts/setup-ovn.sh --ovn-remote=tcp:10.0.0.1:6642 --encap-ip=10.0.0.2
@@ -41,6 +46,7 @@ set -e
 # Defaults
 MANAGEMENT=false
 EXTERNAL_BRIDGE=false
+DIRECT_BRIDGE=false
 EXTERNAL_DHCP=false
 EXTERNAL_IFACE="eth1"
 OVN_REMOTE="tcp:127.0.0.1:6642"
@@ -52,6 +58,7 @@ for arg in "$@"; do
     case "$arg" in
         --management)       MANAGEMENT=true ;;
         --external-bridge)  EXTERNAL_BRIDGE=true ;;
+        --direct)           DIRECT_BRIDGE=true ;;
         --dhcp)             EXTERNAL_DHCP=true ;;
         --external-iface=*) EXTERNAL_IFACE="${arg#*=}" ;;
         --ovn-remote=*)     OVN_REMOTE="${arg#*=}" ;;
@@ -88,6 +95,11 @@ echo "  Management node:  $MANAGEMENT"
 echo "  External bridge:  $EXTERNAL_BRIDGE"
 if [ "$EXTERNAL_BRIDGE" = true ]; then
 echo "  External iface:   $EXTERNAL_IFACE"
+if [ "$DIRECT_BRIDGE" = true ]; then
+echo "  Bridge mode:      direct (NIC added to OVS)"
+else
+echo "  Bridge mode:      macvlan (SSH-safe)"
+fi
 fi
 echo "  OVN Remote (SB):  $OVN_REMOTE"
 echo "  Encap IP:         $ENCAP_IP"
@@ -177,23 +189,38 @@ if [ "$EXTERNAL_BRIDGE" = true ]; then
     sudo ovs-vsctl --may-exist add-br br-external
     sudo ip link set br-external up
 
-    # macvlan strategy: create a macvlan sub-interface in bridge mode off the
-    # WAN NIC. The host keeps its IP on the parent NIC — SSH-safe. OVN localnet
-    # traffic flows through the macvlan to the physical wire.
-    MACVLAN_NAME="spx-ext-${EXTERNAL_IFACE}"
-
-    if ip link show "$MACVLAN_NAME" >/dev/null 2>&1; then
-        echo "  macvlan $MACVLAN_NAME already exists"
+    if [ "$DIRECT_BRIDGE" = true ]; then
+        # Direct bridge: add the WAN NIC directly to br-external as an OVS port.
+        # The NIC becomes an OVS slave — its IP (if any) is no longer reachable
+        # from the host. Only use when WAN NIC != SSH/management NIC.
+        if sudo ovs-vsctl port-to-br "$EXTERNAL_IFACE" >/dev/null 2>&1; then
+            echo "  $EXTERNAL_IFACE already on $(sudo ovs-vsctl port-to-br "$EXTERNAL_IFACE")"
+        else
+            sudo ovs-vsctl --may-exist add-port br-external "$EXTERNAL_IFACE"
+            echo "  added $EXTERNAL_IFACE directly to br-external (direct bridge mode)"
+        fi
+        sudo ip link set "$EXTERNAL_IFACE" up
+        echo "  br-external: direct bridge on $EXTERNAL_IFACE"
+        echo "  NOTE: $EXTERNAL_IFACE is now an OVS port — no host IP on this NIC"
     else
-        sudo ip link add "$MACVLAN_NAME" link "$EXTERNAL_IFACE" type macvlan mode bridge
-        echo "  created macvlan: $MACVLAN_NAME (bridge mode) on $EXTERNAL_IFACE"
-    fi
+        # Macvlan strategy: create a macvlan sub-interface in bridge mode off the
+        # WAN NIC. The host keeps its IP on the parent NIC — SSH-safe. OVN localnet
+        # traffic flows through the macvlan to the physical wire.
+        MACVLAN_NAME="spx-ext-${EXTERNAL_IFACE}"
 
-    sudo ip link set "$MACVLAN_NAME" up
-    sudo ovs-vsctl --may-exist add-port br-external "$MACVLAN_NAME"
-    echo "  br-external: created with macvlan port $MACVLAN_NAME"
-    echo "  NOTE: host keeps its IP on $EXTERNAL_IFACE (no migration)"
-    echo "  QUIRK: host cannot reach VMs at their public IPs (macvlan isolation)"
+        if ip link show "$MACVLAN_NAME" >/dev/null 2>&1; then
+            echo "  macvlan $MACVLAN_NAME already exists"
+        else
+            sudo ip link add "$MACVLAN_NAME" link "$EXTERNAL_IFACE" type macvlan mode bridge
+            echo "  created macvlan: $MACVLAN_NAME (bridge mode) on $EXTERNAL_IFACE"
+        fi
+
+        sudo ip link set "$MACVLAN_NAME" up
+        sudo ovs-vsctl --may-exist add-port br-external "$MACVLAN_NAME"
+        echo "  br-external: created with macvlan port $MACVLAN_NAME"
+        echo "  NOTE: host keeps its IP on $EXTERNAL_IFACE (no migration)"
+        echo "  QUIRK: host cannot reach VMs at their public IPs (macvlan isolation)"
+    fi
 
     # --- DHCP: obtain gateway IP for OVN SNAT ---
     if [ "$EXTERNAL_DHCP" = true ]; then
@@ -431,12 +458,21 @@ fi
 if [ "$EXTERNAL_BRIDGE" = true ]; then
     if sudo ovs-vsctl br-exists br-external; then
         echo "  br-external:     OK"
-        MACVLAN_NAME="spx-ext-${EXTERNAL_IFACE}"
-        if ip link show "$MACVLAN_NAME" >/dev/null 2>&1; then
-            echo "  macvlan:         OK ($MACVLAN_NAME)"
+        if [ "$DIRECT_BRIDGE" = true ]; then
+            if sudo ovs-vsctl port-to-br "$EXTERNAL_IFACE" >/dev/null 2>&1; then
+                echo "  direct bridge:   OK ($EXTERNAL_IFACE on br-external)"
+            else
+                echo "  direct bridge:   FAILED ($EXTERNAL_IFACE not on br-external)"
+                OK=false
+            fi
         else
-            echo "  macvlan:         FAILED ($MACVLAN_NAME not found)"
-            OK=false
+            MACVLAN_NAME="spx-ext-${EXTERNAL_IFACE}"
+            if ip link show "$MACVLAN_NAME" >/dev/null 2>&1; then
+                echo "  macvlan:         OK ($MACVLAN_NAME)"
+            else
+                echo "  macvlan:         FAILED ($MACVLAN_NAME not found)"
+                OK=false
+            fi
         fi
     else
         echo "  br-external:     FAILED"

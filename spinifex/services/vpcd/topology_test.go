@@ -1938,3 +1938,228 @@ func nbdbDHCPOptions(cidr, subnetId, vpcId string) *nbdb.DHCPOptions {
 		},
 	}
 }
+
+// --- Bridge mode tests ---
+
+func TestTopologyHandler_IGWAttach_DirectBridge_NoNatAddresses(t *testing.T) {
+	// In direct bridge mode, the localnet port should NOT have nat-addresses=router
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeDirect))
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	// Pre-create VPC router
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name: "vpc-vpc-direct1",
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id": "vpc-direct1",
+			"spinifex:cidr":   "10.0.0.0/16",
+		},
+	})
+
+	// Attach IGW
+	evt := types.IGWEvent{InternetGatewayId: "igw-d1", VpcId: "vpc-direct1"}
+	data, _ := json.Marshal(evt)
+	resp, err := nc.Request(TopicIGWAttach, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request vpc.igw-attach: %v", err)
+	}
+	assertSuccess(t, resp, "attach IGW direct bridge")
+
+	// Verify localnet port does NOT have nat-addresses
+	port, err := mock.GetLogicalSwitchPort(ctx, "ext-port-vpc-direct1")
+	if err != nil {
+		t.Fatalf("expected localnet port: %v", err)
+	}
+	if _, ok := port.Options["nat-addresses"]; ok {
+		t.Errorf("direct bridge mode should NOT have nat-addresses option, got %q", port.Options["nat-addresses"])
+	}
+}
+
+func TestTopologyHandler_IGWAttach_MacvlanMode_HasNatAddresses(t *testing.T) {
+	// In macvlan mode (default), the localnet port SHOULD have nat-addresses=router
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeMacvlan))
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	// Pre-create VPC router
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name: "vpc-vpc-mv1",
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id": "vpc-mv1",
+			"spinifex:cidr":   "10.0.0.0/16",
+		},
+	})
+
+	// Attach IGW
+	evt := types.IGWEvent{InternetGatewayId: "igw-mv1", VpcId: "vpc-mv1"}
+	data, _ := json.Marshal(evt)
+	resp, err := nc.Request(TopicIGWAttach, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request vpc.igw-attach: %v", err)
+	}
+	assertSuccess(t, resp, "attach IGW macvlan")
+
+	// Verify localnet port HAS nat-addresses=router
+	port, err := mock.GetLogicalSwitchPort(ctx, "ext-port-vpc-mv1")
+	if err != nil {
+		t.Fatalf("expected localnet port: %v", err)
+	}
+	if port.Options["nat-addresses"] != "router" {
+		t.Errorf("macvlan mode should have nat-addresses=router, got %q", port.Options["nat-addresses"])
+	}
+}
+
+func TestTopologyHandler_AddNAT_DirectBridge_DistributedNAT(t *testing.T) {
+	// In direct bridge mode, DNAT rules should have ExternalMAC and LogicalPort set
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeDirect))
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	// Pre-create VPC router
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name: "vpc-vpc-dnat1",
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id": "vpc-dnat1",
+			"spinifex:cidr":   "10.0.0.0/16",
+		},
+	})
+
+	// Add NAT with MAC and port (simulating a VM with public IP)
+	evt := NATEvent{
+		VpcId:      "vpc-dnat1",
+		ExternalIP: "192.168.1.201",
+		LogicalIP:  "10.0.1.5",
+		PortName:   "port-eni-1234",
+		MAC:        "02:00:00:ab:cd:ef",
+	}
+	data, _ := json.Marshal(evt)
+	resp, err := nc.Request(TopicAddNAT, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request vpc.add-nat: %v", err)
+	}
+	assertSuccess(t, resp, "add NAT direct bridge")
+
+	// Verify the NAT rule has ExternalMAC and LogicalPort (distributed NAT)
+	router, err := mock.GetLogicalRouter(ctx, "vpc-vpc-dnat1")
+	if err != nil {
+		t.Fatalf("expected router: %v", err)
+	}
+	if len(router.NAT) != 1 {
+		t.Fatalf("expected 1 NAT rule, got %d", len(router.NAT))
+	}
+	nat := mock.nats[router.NAT[0]]
+	if nat.ExternalMAC == nil || *nat.ExternalMAC != "02:00:00:ab:cd:ef" {
+		t.Errorf("expected ExternalMAC=02:00:00:ab:cd:ef for distributed NAT, got %v", nat.ExternalMAC)
+	}
+	if nat.LogicalPort == nil || *nat.LogicalPort != "port-eni-1234" {
+		t.Errorf("expected LogicalPort=port-eni-1234 for distributed NAT, got %v", nat.LogicalPort)
+	}
+}
+
+func TestTopologyHandler_AddNAT_MacvlanMode_CentralizedNAT(t *testing.T) {
+	// In macvlan mode, DNAT rules should NOT have ExternalMAC/LogicalPort
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeMacvlan))
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	// Pre-create VPC router
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name: "vpc-vpc-cnat1",
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id": "vpc-cnat1",
+			"spinifex:cidr":   "10.0.0.0/16",
+		},
+	})
+
+	// Add NAT with MAC and port — macvlan mode should ignore them
+	evt := NATEvent{
+		VpcId:      "vpc-cnat1",
+		ExternalIP: "192.168.1.201",
+		LogicalIP:  "10.0.1.5",
+		PortName:   "port-eni-5678",
+		MAC:        "02:00:00:11:22:33",
+	}
+	data, _ := json.Marshal(evt)
+	resp, err := nc.Request(TopicAddNAT, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request vpc.add-nat: %v", err)
+	}
+	assertSuccess(t, resp, "add NAT macvlan")
+
+	// Verify the NAT rule does NOT have ExternalMAC/LogicalPort (centralized NAT)
+	router, err := mock.GetLogicalRouter(ctx, "vpc-vpc-cnat1")
+	if err != nil {
+		t.Fatalf("expected router: %v", err)
+	}
+	if len(router.NAT) != 1 {
+		t.Fatalf("expected 1 NAT rule, got %d", len(router.NAT))
+	}
+	nat := mock.nats[router.NAT[0]]
+	if nat.ExternalMAC != nil {
+		t.Errorf("macvlan mode should NOT have ExternalMAC, got %v", *nat.ExternalMAC)
+	}
+	if nat.LogicalPort != nil {
+		t.Errorf("macvlan mode should NOT have LogicalPort, got %v", *nat.LogicalPort)
+	}
+}
+
+func TestTopologyHandler_DefaultBridgeMode_IsMacvlan(t *testing.T) {
+	// When no bridge mode is set, it should default to macvlan behavior
+	topo := NewTopologyHandler(nil)
+	if !topo.isMacvlanMode() {
+		t.Error("expected default bridge mode to be macvlan-compatible")
+	}
+
+	topoDirect := NewTopologyHandler(nil, WithBridgeMode(BridgeModeDirect))
+	if topoDirect.isMacvlanMode() {
+		t.Error("expected direct bridge mode to NOT be macvlan")
+	}
+}

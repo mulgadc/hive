@@ -113,12 +113,33 @@ rm -rf ~/spinifex
 
 # --- Re-initialize ---
 # Detect WAN interface (default route) for external bridge.
-# Always uses macvlan — the WAN NIC is typically the SSH NIC too, so IP
-# migration is never safe for remote-access hosts.
 WAN_IFACE=$(ip -4 route show default | awk '{print $5}' | head -1)
 WAN_GW=$(ip -4 route show default | awk '{print $3}' | head -1)
 
 echo "Detected WAN interface: ${WAN_IFACE:-none}, gateway: ${WAN_GW:-none}"
+
+# Detect SSH/management NIC: the interface carrying the active SSH session.
+# If SSH_CONNECTION is set (remote session), extract the server IP and find its NIC.
+# If not set (local console), fall back to the WAN NIC (assume single-NIC host).
+SSH_NIC=""
+if [ -n "${SSH_CONNECTION:-}" ]; then
+    SSH_IP=$(echo "$SSH_CONNECTION" | awk '{print $3}')
+    SSH_NIC=$(ip -o -4 addr show | awk -v ip="$SSH_IP" '$0 ~ ip"/" {print $2}' | head -1)
+fi
+if [ -z "$SSH_NIC" ]; then
+    SSH_NIC="$WAN_IFACE"
+fi
+echo "Detected SSH/management NIC: ${SSH_NIC:-none}"
+
+# Choose bridge mode: direct bridge when WAN NIC != SSH NIC (dedicated WAN NIC
+# available). Macvlan fallback when they're the same (single-NIC host).
+BRIDGE_MODE_FLAG=""
+if [ -n "$WAN_IFACE" ] && [ "$WAN_IFACE" != "$SSH_NIC" ]; then
+    BRIDGE_MODE_FLAG="--direct"
+    echo "  Bridge mode: direct (WAN=$WAN_IFACE != SSH=$SSH_NIC)"
+else
+    echo "  Bridge mode: macvlan (WAN=$WAN_IFACE == SSH=$SSH_NIC)"
+fi
 
 # Chassis ID must match what vpcd derives from the node name in spinifex.toml.
 # vpcd generates "chassis-{nodeName}" (e.g., chassis-node1) and uses it to schedule
@@ -129,8 +150,8 @@ CHASSIS_ID="chassis-${NODE_NAME}"
 
 echo "Re-initializing OVN (chassis-id: $CHASSIS_ID)"
 if [ -n "$WAN_IFACE" ]; then
-    echo "  Using macvlan on $WAN_IFACE for br-external"
-    ./scripts/setup-ovn.sh --management --external-bridge --external-iface="$WAN_IFACE" --chassis-id="$CHASSIS_ID"
+    echo "  Using $WAN_IFACE for br-external"
+    ./scripts/setup-ovn.sh --management --external-bridge --external-iface="$WAN_IFACE" $BRIDGE_MODE_FLAG --chassis-id="$CHASSIS_ID"
 else
     echo "  No WAN interface detected, management-only"
     ./scripts/setup-ovn.sh --management --chassis-id="$CHASSIS_ID"

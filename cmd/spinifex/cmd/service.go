@@ -740,6 +740,7 @@ var vpcdStartCmd = &cobra.Command{
 			ChassisNames:      chassisNames,
 			Bootstrap:         bootstrap,
 			ExternalInterface: nodeConfig.VPCD.ExternalInterface,
+			BridgeMode:        nodeConfig.VPCD.BridgeMode,
 		})
 		if err != nil {
 			fmt.Println("Error starting vpcd service:", err)

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/mulgadc/spinifex/spinifex/utils"
@@ -63,6 +64,10 @@ type Config struct {
 	// ExternalInterface is the WAN NIC name (e.g., "enp0s3"). Used to align
 	// the macvlan MAC with the OVN gateway MAC for inbound traffic.
 	ExternalInterface string
+	// BridgeMode is "direct" or "macvlan". Direct bridge adds the WAN NIC
+	// directly to br-external; macvlan creates a sub-interface. When empty,
+	// auto-detected from the br-external port type at startup.
+	BridgeMode string
 }
 
 // ExternalPoolConfig mirrors config.ExternalPool for vpcd's internal use.
@@ -217,6 +222,17 @@ func launchService(cfg *Config) error {
 	defer liveClient.Close()
 	slog.Info("Connected to OVN NB DB", "endpoint", cfg.OVNNBAddr)
 
+	// Detect bridge mode: if not explicitly configured, auto-detect by checking
+	// whether br-external has a macvlan port or a physical NIC.
+	bridgeMode := cfg.BridgeMode
+	if bridgeMode == "" && cfg.ExternalInterface != "" {
+		bridgeMode = detectBridgeMode(cfg.ExternalInterface)
+	}
+	if bridgeMode == "" {
+		bridgeMode = BridgeModeMacvlan // default for backward compatibility
+	}
+	slog.Info("External bridge mode", "mode", bridgeMode)
+
 	// Reconcile OVN topology from bootstrap config before subscribing.
 	// This ensures the default VPC topology exists even if admin init ran
 	// before services were started (first-install case).
@@ -229,16 +245,18 @@ func launchService(cfg *Config) error {
 		topoOpts = append(topoOpts, WithChassisNames(cfg.ChassisNames))
 		slog.Info("Gateway chassis configured", "chassis", cfg.ChassisNames)
 	}
+	topoOpts = append(topoOpts, WithBridgeMode(bridgeMode))
 	topo := NewTopologyHandler(liveClient, topoOpts...)
 
 	// Run reconciliation before subscribing
 	Reconcile(ctx, topo, cfg.Bootstrap)
 
-	// Align macvlan MAC with the OVN gateway router MAC. The macvlan only
-	// delivers inbound unicast matching its own MAC. With centralized NAT,
-	// OVN uses the router MAC for all external ARP replies. Setting the
-	// macvlan MAC to the router MAC ensures inbound traffic reaches OVS.
-	if cfg.Bootstrap != nil && cfg.Bootstrap.VpcId != "" && cfg.ExternalInterface != "" {
+	// Macvlan mode only: align macvlan MAC with the OVN gateway router MAC.
+	// The macvlan only delivers inbound unicast matching its own MAC. With
+	// centralized NAT, OVN uses the router MAC for all external ARP replies.
+	// Setting the macvlan MAC to the router MAC ensures inbound traffic reaches OVS.
+	// Direct bridge mode doesn't need this — OVS sees all traffic on the wire.
+	if bridgeMode == BridgeModeMacvlan && cfg.Bootstrap != nil && cfg.Bootstrap.VpcId != "" && cfg.ExternalInterface != "" {
 		gwMAC := generateMAC("gw-" + cfg.Bootstrap.VpcId)
 		macvlanName := "spx-ext-" + cfg.ExternalInterface
 		if err := setMacvlanMAC(macvlanName, gwMAC); err != nil {
@@ -268,6 +286,20 @@ func launchService(cfg *Config) error {
 
 	slog.Info("vpcd service shutting down")
 	return nil
+}
+
+// detectBridgeMode checks how br-external is wired. If a macvlan interface
+// (spx-ext-{iface}) exists, we're in macvlan mode. Otherwise, the physical
+// NIC is added directly to br-external (direct bridge mode).
+func detectBridgeMode(externalIface string) string {
+	macvlanName := "spx-ext-" + externalIface
+	out, err := exec.Command("ip", "-d", "link", "show", macvlanName).CombinedOutput()
+	if err == nil && strings.Contains(string(out), "macvlan") {
+		slog.Debug("vpcd: detected macvlan interface on br-external", "iface", macvlanName)
+		return BridgeModeMacvlan
+	}
+	slog.Debug("vpcd: no macvlan found, assuming direct bridge mode", "checked", macvlanName)
+	return BridgeModeDirect
 }
 
 // setMacvlanMAC sets the MAC address on a macvlan interface. The interface is

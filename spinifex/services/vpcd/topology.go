@@ -60,12 +60,24 @@ type NATEvent struct {
 	MAC        string `json:"mac"`       // external MAC for distributed NAT
 }
 
+// Bridge mode constants for external connectivity.
+const (
+	// BridgeModeMacvlan uses a macvlan sub-interface on the WAN NIC. SSH-safe
+	// for single-NIC hosts but requires centralized NAT and MAC alignment.
+	BridgeModeMacvlan = "macvlan"
+	// BridgeModeDirect adds the WAN NIC directly to br-external as an OVS port.
+	// Enables distributed NAT and avoids macvlan workarounds. Only safe when
+	// the WAN NIC is NOT the SSH/management NIC.
+	BridgeModeDirect = "direct"
+)
+
 // TopologyHandler translates VPC lifecycle NATS events into OVN NB DB operations.
 type TopologyHandler struct {
 	ovn           OVNClient
 	externalMode  string
 	externalPools []ExternalPoolConfig
 	chassisNames  []string // OVN chassis names for gateway HA scheduling
+	bridgeMode    string   // "direct" or "macvlan" — controls NAT mode and localnet options
 }
 
 // NewTopologyHandler creates a new TopologyHandler with optional external network config.
@@ -93,6 +105,21 @@ func WithChassisNames(names []string) TopologyOption {
 	return func(h *TopologyHandler) {
 		h.chassisNames = names
 	}
+}
+
+// WithBridgeMode sets the external bridge mode ("direct" or "macvlan").
+// Direct bridge enables distributed NAT; macvlan uses centralized NAT.
+// Defaults to macvlan if not set (backward-compatible).
+func WithBridgeMode(mode string) TopologyOption {
+	return func(h *TopologyHandler) {
+		h.bridgeMode = mode
+	}
+}
+
+// isMacvlanMode returns true if the external bridge uses a macvlan interface.
+// This is the default when bridgeMode is unset for backward compatibility.
+func (h *TopologyHandler) isMacvlanMode() bool {
+	return h.bridgeMode != BridgeModeDirect
 }
 
 // dnsServer returns the DNS server string for OVN DHCP options.
@@ -595,17 +622,21 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 	}
 
 	// 2. Create localnet port on external switch (maps to physical network)
+	localnetOpts := map[string]string{
+		"network_name": "external",
+	}
 	// nat-addresses=router: OVN sends gratuitous ARPs for all NAT external IPs
 	// using the router port MAC. Required for macvlan-based external bridges
-	// where the macvlan MAC matches the router MAC.
+	// where the macvlan MAC matches the router MAC. Not needed for direct bridge
+	// since OVS sees all traffic on the wire without MAC filtering.
+	if h.isMacvlanMode() {
+		localnetOpts["nat-addresses"] = "router"
+	}
 	localnetPort := &nbdb.LogicalSwitchPort{
 		Name:      extPortName,
 		Type:      "localnet",
 		Addresses: []string{"unknown"},
-		Options: map[string]string{
-			"network_name":  "external",
-			"nat-addresses": "router",
-		},
+		Options:   localnetOpts,
 		ExternalIDs: map[string]string{
 			"spinifex:vpc_id": evt.VpcId,
 			"spinifex:igw_id": evt.InternetGatewayId,
@@ -843,11 +874,14 @@ func (h *TopologyHandler) handleAddNAT(msg *nats.Msg) {
 	ctx := context.Background()
 	routerName := "vpc-" + evt.VpcId
 
-	// Use centralized NAT (no ExternalMAC/LogicalPort). With macvlan-based
-	// external bridges, OVN must use the router port MAC for all ARP replies
-	// so the macvlan can receive inbound unicast traffic. Distributed NAT
-	// (ExternalMAC/LogicalPort) announces the VM's MAC which the macvlan
-	// filters out. For single-node, centralized NAT has zero overhead.
+	// NAT mode depends on bridge type:
+	// - Macvlan: centralized NAT (no ExternalMAC/LogicalPort). OVN uses the
+	//   router port MAC for all ARP replies so the macvlan can receive inbound
+	//   unicast. Distributed NAT would announce the VM's MAC which the macvlan
+	//   filters out. For single-node, centralized NAT has zero overhead.
+	// - Direct bridge: distributed NAT (ExternalMAC + LogicalPort set). DNAT
+	//   is processed on the VM's own chassis — no hairpin through the gateway
+	//   chassis. This is the preferred mode for multi-node performance.
 	natRule := &nbdb.NAT{
 		Type:       "dnat_and_snat",
 		ExternalIP: evt.ExternalIP,
@@ -856,6 +890,12 @@ func (h *TopologyHandler) handleAddNAT(msg *nats.Msg) {
 			"spinifex:vpc_id":    evt.VpcId,
 			"spinifex:public_ip": evt.ExternalIP,
 		},
+	}
+	if !h.isMacvlanMode() && evt.MAC != "" && evt.PortName != "" {
+		natRule.ExternalMAC = &evt.MAC
+		natRule.LogicalPort = &evt.PortName
+		slog.Debug("vpcd: using distributed NAT (direct bridge)",
+			"external_ip", evt.ExternalIP, "port", evt.PortName, "mac", evt.MAC)
 	}
 
 	if err := h.ovn.AddNAT(ctx, routerName, natRule); err != nil {
@@ -1059,14 +1099,17 @@ func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId, igwId string)
 	if igwId != "" {
 		portExtIDs["spinifex:igw_id"] = igwId
 	}
+	reconcileLocalnetOpts := map[string]string{
+		"network_name": "external",
+	}
+	if h.isMacvlanMode() {
+		reconcileLocalnetOpts["nat-addresses"] = "router"
+	}
 	localnetPort := &nbdb.LogicalSwitchPort{
 		Name:      extPortName,
 		Type:      "localnet",
 		Addresses: []string{"unknown"},
-		Options: map[string]string{
-			"network_name":  "external",
-			"nat-addresses": "router",
-		},
+		Options:   reconcileLocalnetOpts,
 		ExternalIDs: portExtIDs,
 	}
 	if err := h.ovn.CreateLogicalSwitchPort(ctx, extSwitchName, localnetPort); err != nil {
