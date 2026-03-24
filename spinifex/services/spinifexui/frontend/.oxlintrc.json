@@ -39,7 +39,6 @@
     "promise/prefer-await-to-callbacks": "off",
     "react-perf/jsx-no-new-function-as-prop": "off",
     "typescript/no-confusing-void-expression": "off",
-    "typescript/prefer-nullish-coalescing": "off",
     "typescript/return-await": "off",
     "typescript/no-floating-promises": "off",
     "typescript/strict-boolean-expressions": "off",

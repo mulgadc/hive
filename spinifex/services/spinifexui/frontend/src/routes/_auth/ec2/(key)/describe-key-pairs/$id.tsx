@@ -106,7 +106,7 @@ function KeyPairDetail() {
               {keyPair.Tags.map((tag) => (
                 <DetailRow
                   key={tag.Key}
-                  label={tag.Key || ""}
+                  label={tag.Key ?? ""}
                   value={tag.Value}
                 />
               ))}

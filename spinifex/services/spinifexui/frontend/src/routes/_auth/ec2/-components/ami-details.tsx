@@ -47,7 +47,7 @@ export function AmiDetails({
             label="Virtualization Type"
             value={image.VirtualizationType}
           />
-          <DetailRow label="Platform" value={image.Platform || "Linux"} />
+          <DetailRow label="Platform" value={image.Platform ?? "Linux"} />
           <DetailRow label="Platform Details" value={image.PlatformDetails} />
           <DetailRow label="Image Type" value={image.ImageType} />
           <DetailRow label="Root Device Type" value={image.RootDeviceType} />

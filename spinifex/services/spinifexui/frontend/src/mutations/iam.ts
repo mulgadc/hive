@@ -26,6 +26,7 @@ export function useCreateUser() {
     mutationFn: (params: CreateUserFormData) => {
       const command = new CreateUserCommand({
         UserName: params.userName,
+        // oxlint-disable-next-line typescript/prefer-nullish-coalescing
         Path: params.path || undefined,
       })
       return getIamClient().send(command)
@@ -101,6 +102,7 @@ export function useCreatePolicy() {
     mutationFn: (params: CreatePolicyFormData) => {
       const command = new CreatePolicyCommand({
         PolicyName: params.policyName,
+        // oxlint-disable-next-line typescript/prefer-nullish-coalescing
         Description: params.description || undefined,
         PolicyDocument: params.policyDocument,
       })

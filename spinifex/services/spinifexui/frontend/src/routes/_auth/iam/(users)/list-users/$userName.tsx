@@ -84,9 +84,9 @@ function UserDetail() {
   )
 
   const user = userData.User
-  const accessKeys = accessKeysData.AccessKeyMetadata || []
-  const attachedPolicies = attachedPoliciesData.AttachedPolicies || []
-  const allPolicies = allPoliciesData.Policies || []
+  const accessKeys = accessKeysData.AccessKeyMetadata ?? []
+  const attachedPolicies = attachedPoliciesData.AttachedPolicies ?? []
+  const allPolicies = allPoliciesData.Policies ?? []
 
   const attachedArns = new Set(attachedPolicies.map((p) => p.PolicyArn))
   const availablePolicies = allPolicies.filter(

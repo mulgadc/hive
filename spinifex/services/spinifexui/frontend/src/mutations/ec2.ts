@@ -117,6 +117,7 @@ export function useCreateInstance() {
         KeyName: params.keyName,
         MinCount: params.count,
         MaxCount: params.count,
+        // oxlint-disable-next-line typescript/prefer-nullish-coalescing
         SubnetId: params.subnetId || undefined,
       })
       return getEc2Client().send(command)
@@ -232,6 +233,7 @@ export function useCreateSnapshot() {
     mutationFn: (params: CreateSnapshotFormData) => {
       const command = new CreateSnapshotCommand({
         VolumeId: params.volumeId,
+        // oxlint-disable-next-line typescript/prefer-nullish-coalescing
         Description: params.description || undefined,
       })
       return getEc2Client().send(command)
@@ -264,6 +266,7 @@ export function useCopySnapshot() {
       const command = new CopySnapshotCommand({
         SourceSnapshotId: params.sourceSnapshotId,
         SourceRegion: params.sourceRegion,
+        // oxlint-disable-next-line typescript/prefer-nullish-coalescing
         Description: params.description || undefined,
       })
       return getEc2Client().send(command)
@@ -281,6 +284,7 @@ export function useAttachVolume() {
       const command = new AttachVolumeCommand({
         VolumeId: params.volumeId,
         InstanceId: params.instanceId,
+        // oxlint-disable-next-line typescript/prefer-nullish-coalescing
         Device: params.device || undefined,
       })
       return getEc2Client().send(command)
@@ -298,6 +302,7 @@ export function useDetachVolume() {
     mutationFn: (params: DetachVolumeFormData) => {
       const command = new DetachVolumeCommand({
         VolumeId: params.volumeId,
+        // oxlint-disable-next-line typescript/prefer-nullish-coalescing
         InstanceId: params.instanceId || undefined,
         Force: params.force,
       })
@@ -347,6 +352,7 @@ export function useCreateImage() {
       const command = new CreateImageCommand({
         InstanceId: params.instanceId,
         Name: params.name,
+        // oxlint-disable-next-line typescript/prefer-nullish-coalescing
         Description: params.description || undefined,
       })
       return getEc2Client().send(command)
@@ -402,6 +408,7 @@ export function useCreateSubnet() {
       const command = new CreateSubnetCommand({
         VpcId: params.vpcId,
         CidrBlock: params.cidrBlock,
+        // oxlint-disable-next-line typescript/prefer-nullish-coalescing
         AvailabilityZone: params.availabilityZone || undefined,
       })
       return getEc2Client().send(command)

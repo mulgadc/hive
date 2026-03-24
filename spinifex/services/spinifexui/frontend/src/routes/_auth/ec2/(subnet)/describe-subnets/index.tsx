@@ -26,7 +26,7 @@ export const Route = createFileRoute("/_auth/ec2/(subnet)/describe-subnets/")({
 function Subnets() {
   const { data } = useSuspenseQuery(ec2SubnetsQueryOptions)
 
-  const subnets = data.Subnets || []
+  const subnets = data.Subnets ?? []
 
   return (
     <>

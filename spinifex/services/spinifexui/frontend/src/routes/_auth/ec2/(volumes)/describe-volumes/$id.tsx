@@ -113,7 +113,7 @@ function VolumeDetail() {
     try {
       await detachMutation.mutateAsync({
         volumeId: id,
-        instanceId: instanceId || undefined,
+        instanceId: instanceId ?? undefined,
         force: detachForce || undefined,
       })
       closeDialog()

@@ -60,7 +60,7 @@ function CreateInstance() {
   for (const type of instanceTypesData.InstanceTypes ?? []) {
     const typeName = type.InstanceType
     if (typeName) {
-      instanceTypeCounts[typeName] = (instanceTypeCounts[typeName] || 0) + 1
+      instanceTypeCounts[typeName] = (instanceTypeCounts[typeName] ?? 0) + 1
     }
   }
 
@@ -151,7 +151,7 @@ function CreateInstance() {
                   >
                     <SelectValue>
                       {selectedImage
-                        ? `${selectedImage.Name || "Unnamed"} (${selectedImage.Architecture})`
+                        ? `${selectedImage.Name ?? "Unnamed"} (${selectedImage.Architecture})`
                         : ""}
                     </SelectValue>
                   </SelectTrigger>
@@ -161,7 +161,7 @@ function CreateInstance() {
                         key={image.ImageId}
                         value={image.ImageId ?? ""}
                       >
-                        {image.Name || "Unnamed"} ({image.Architecture})
+                        {image.Name ?? "Unnamed"} ({image.Architecture})
                       </SelectItem>
                     ))}
                   </SelectContent>
