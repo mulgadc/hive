@@ -16,6 +16,7 @@ export const createInstanceSchema = z.object({
   instanceType: z.string("Please select an instance type"),
   keyName: z.string("Please select a key pair"),
   subnetId: z.string().optional(),
+  placementGroupName: z.string().optional(),
   count: z
     .int("Instance count must be a whole number")
     .min(1, "Instance count must be at least 1"),
@@ -131,3 +132,15 @@ export const createVpcSchema = z.object({
 })
 
 export type CreateVpcFormData = z.infer<typeof createVpcSchema>
+
+export const createPlacementGroupSchema = z.object({
+  groupName: z
+    .string()
+    .min(1, "Group name is required")
+    .max(255, "Group name must be 255 characters or less"),
+  strategy: z.string().min(1, "Strategy is required"),
+})
+
+export type CreatePlacementGroupFormData = z.infer<
+  typeof createPlacementGroupSchema
+>

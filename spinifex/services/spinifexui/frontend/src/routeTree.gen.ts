@@ -20,6 +20,7 @@ import { Route as AuthEc2vpcCreateVpcRouteImport } from './routes/_auth/ec2/(vpc
 import { Route as AuthEc2volumesCreateVolumeRouteImport } from './routes/_auth/ec2/(volumes)/create-volume'
 import { Route as AuthEc2subnetCreateSubnetRouteImport } from './routes/_auth/ec2/(subnet)/create-subnet'
 import { Route as AuthEc2snapshotsCreateSnapshotRouteImport } from './routes/_auth/ec2/(snapshots)/create-snapshot'
+import { Route as AuthEc2placementGroupsCreatePlacementGroupRouteImport } from './routes/_auth/ec2/(placement-groups)/create-placement-group'
 import { Route as AuthEc2keyImportKeyPairRouteImport } from './routes/_auth/ec2/(key)/import-key-pair'
 import { Route as AuthEc2keyCreateKeyPairRouteImport } from './routes/_auth/ec2/(key)/create-key-pair'
 import { Route as AuthEc2instancesRunInstancesRouteImport } from './routes/_auth/ec2/(instances)/run-instances'
@@ -31,6 +32,7 @@ import { Route as AuthEc2vpcDescribeVpcsIndexRouteImport } from './routes/_auth/
 import { Route as AuthEc2volumesDescribeVolumesIndexRouteImport } from './routes/_auth/ec2/(volumes)/describe-volumes/index'
 import { Route as AuthEc2subnetDescribeSubnetsIndexRouteImport } from './routes/_auth/ec2/(subnet)/describe-subnets/index'
 import { Route as AuthEc2snapshotsDescribeSnapshotsIndexRouteImport } from './routes/_auth/ec2/(snapshots)/describe-snapshots/index'
+import { Route as AuthEc2placementGroupsDescribePlacementGroupsIndexRouteImport } from './routes/_auth/ec2/(placement-groups)/describe-placement-groups/index'
 import { Route as AuthEc2keyDescribeKeyPairsIndexRouteImport } from './routes/_auth/ec2/(key)/describe-key-pairs/index'
 import { Route as AuthEc2instancesDescribeInstancesIndexRouteImport } from './routes/_auth/ec2/(instances)/describe-instances/index'
 import { Route as AuthEc2imagesDescribeImagesIndexRouteImport } from './routes/_auth/ec2/(images)/describe-images/index'
@@ -42,6 +44,7 @@ import { Route as AuthEc2volumesModifyVolumeIdRouteImport } from './routes/_auth
 import { Route as AuthEc2volumesDescribeVolumesIdRouteImport } from './routes/_auth/ec2/(volumes)/describe-volumes/$id'
 import { Route as AuthEc2subnetDescribeSubnetsIdRouteImport } from './routes/_auth/ec2/(subnet)/describe-subnets/$id'
 import { Route as AuthEc2snapshotsDescribeSnapshotsIdRouteImport } from './routes/_auth/ec2/(snapshots)/describe-snapshots/$id'
+import { Route as AuthEc2placementGroupsDescribePlacementGroupsIdRouteImport } from './routes/_auth/ec2/(placement-groups)/describe-placement-groups/$id'
 import { Route as AuthEc2keyDescribeKeyPairsIdRouteImport } from './routes/_auth/ec2/(key)/describe-key-pairs/$id'
 import { Route as AuthEc2instancesDescribeInstancesIdRouteImport } from './routes/_auth/ec2/(instances)/describe-instances/$id'
 import { Route as AuthEc2imagesDescribeImagesIdRouteImport } from './routes/_auth/ec2/(images)/describe-images/$id'
@@ -105,6 +108,12 @@ const AuthEc2snapshotsCreateSnapshotRoute =
     path: '/ec2/create-snapshot',
     getParentRoute: () => AuthRouteRoute,
   } as any)
+const AuthEc2placementGroupsCreatePlacementGroupRoute =
+  AuthEc2placementGroupsCreatePlacementGroupRouteImport.update({
+    id: '/ec2/(placement-groups)/create-placement-group',
+    path: '/ec2/create-placement-group',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
 const AuthEc2keyImportKeyPairRoute = AuthEc2keyImportKeyPairRouteImport.update({
   id: '/ec2/(key)/import-key-pair',
   path: '/ec2/import-key-pair',
@@ -165,6 +174,12 @@ const AuthEc2snapshotsDescribeSnapshotsIndexRoute =
   AuthEc2snapshotsDescribeSnapshotsIndexRouteImport.update({
     id: '/ec2/(snapshots)/describe-snapshots/',
     path: '/ec2/describe-snapshots/',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
+const AuthEc2placementGroupsDescribePlacementGroupsIndexRoute =
+  AuthEc2placementGroupsDescribePlacementGroupsIndexRouteImport.update({
+    id: '/ec2/(placement-groups)/describe-placement-groups/',
+    path: '/ec2/describe-placement-groups/',
     getParentRoute: () => AuthRouteRoute,
   } as any)
 const AuthEc2keyDescribeKeyPairsIndexRoute =
@@ -232,6 +247,12 @@ const AuthEc2snapshotsDescribeSnapshotsIdRoute =
     path: '/ec2/describe-snapshots/$id',
     getParentRoute: () => AuthRouteRoute,
   } as any)
+const AuthEc2placementGroupsDescribePlacementGroupsIdRoute =
+  AuthEc2placementGroupsDescribePlacementGroupsIdRouteImport.update({
+    id: '/ec2/(placement-groups)/describe-placement-groups/$id',
+    path: '/ec2/describe-placement-groups/$id',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
 const AuthEc2keyDescribeKeyPairsIdRoute =
   AuthEc2keyDescribeKeyPairsIdRouteImport.update({
     id: '/ec2/(key)/describe-key-pairs/$id',
@@ -258,6 +279,7 @@ export interface FileRoutesByFullPath {
   '/ec2/run-instances': typeof AuthEc2instancesRunInstancesRoute
   '/ec2/create-key-pair': typeof AuthEc2keyCreateKeyPairRoute
   '/ec2/import-key-pair': typeof AuthEc2keyImportKeyPairRoute
+  '/ec2/create-placement-group': typeof AuthEc2placementGroupsCreatePlacementGroupRoute
   '/ec2/create-snapshot': typeof AuthEc2snapshotsCreateSnapshotRoute
   '/ec2/create-subnet': typeof AuthEc2subnetCreateSubnetRoute
   '/ec2/create-volume': typeof AuthEc2volumesCreateVolumeRoute
@@ -269,6 +291,7 @@ export interface FileRoutesByFullPath {
   '/ec2/describe-images/$id': typeof AuthEc2imagesDescribeImagesIdRoute
   '/ec2/describe-instances/$id': typeof AuthEc2instancesDescribeInstancesIdRoute
   '/ec2/describe-key-pairs/$id': typeof AuthEc2keyDescribeKeyPairsIdRoute
+  '/ec2/describe-placement-groups/$id': typeof AuthEc2placementGroupsDescribePlacementGroupsIdRoute
   '/ec2/describe-snapshots/$id': typeof AuthEc2snapshotsDescribeSnapshotsIdRoute
   '/ec2/describe-subnets/$id': typeof AuthEc2subnetDescribeSubnetsIdRoute
   '/ec2/describe-volumes/$id': typeof AuthEc2volumesDescribeVolumesIdRoute
@@ -280,6 +303,7 @@ export interface FileRoutesByFullPath {
   '/ec2/describe-images/': typeof AuthEc2imagesDescribeImagesIndexRoute
   '/ec2/describe-instances/': typeof AuthEc2instancesDescribeInstancesIndexRoute
   '/ec2/describe-key-pairs/': typeof AuthEc2keyDescribeKeyPairsIndexRoute
+  '/ec2/describe-placement-groups/': typeof AuthEc2placementGroupsDescribePlacementGroupsIndexRoute
   '/ec2/describe-snapshots/': typeof AuthEc2snapshotsDescribeSnapshotsIndexRoute
   '/ec2/describe-subnets/': typeof AuthEc2subnetDescribeSubnetsIndexRoute
   '/ec2/describe-volumes/': typeof AuthEc2volumesDescribeVolumesIndexRoute
@@ -294,6 +318,7 @@ export interface FileRoutesByTo {
   '/ec2/run-instances': typeof AuthEc2instancesRunInstancesRoute
   '/ec2/create-key-pair': typeof AuthEc2keyCreateKeyPairRoute
   '/ec2/import-key-pair': typeof AuthEc2keyImportKeyPairRoute
+  '/ec2/create-placement-group': typeof AuthEc2placementGroupsCreatePlacementGroupRoute
   '/ec2/create-snapshot': typeof AuthEc2snapshotsCreateSnapshotRoute
   '/ec2/create-subnet': typeof AuthEc2subnetCreateSubnetRoute
   '/ec2/create-volume': typeof AuthEc2volumesCreateVolumeRoute
@@ -305,6 +330,7 @@ export interface FileRoutesByTo {
   '/ec2/describe-images/$id': typeof AuthEc2imagesDescribeImagesIdRoute
   '/ec2/describe-instances/$id': typeof AuthEc2instancesDescribeInstancesIdRoute
   '/ec2/describe-key-pairs/$id': typeof AuthEc2keyDescribeKeyPairsIdRoute
+  '/ec2/describe-placement-groups/$id': typeof AuthEc2placementGroupsDescribePlacementGroupsIdRoute
   '/ec2/describe-snapshots/$id': typeof AuthEc2snapshotsDescribeSnapshotsIdRoute
   '/ec2/describe-subnets/$id': typeof AuthEc2subnetDescribeSubnetsIdRoute
   '/ec2/describe-volumes/$id': typeof AuthEc2volumesDescribeVolumesIdRoute
@@ -316,6 +342,7 @@ export interface FileRoutesByTo {
   '/ec2/describe-images': typeof AuthEc2imagesDescribeImagesIndexRoute
   '/ec2/describe-instances': typeof AuthEc2instancesDescribeInstancesIndexRoute
   '/ec2/describe-key-pairs': typeof AuthEc2keyDescribeKeyPairsIndexRoute
+  '/ec2/describe-placement-groups': typeof AuthEc2placementGroupsDescribePlacementGroupsIndexRoute
   '/ec2/describe-snapshots': typeof AuthEc2snapshotsDescribeSnapshotsIndexRoute
   '/ec2/describe-subnets': typeof AuthEc2subnetDescribeSubnetsIndexRoute
   '/ec2/describe-volumes': typeof AuthEc2volumesDescribeVolumesIndexRoute
@@ -333,6 +360,7 @@ export interface FileRoutesById {
   '/_auth/ec2/(instances)/run-instances': typeof AuthEc2instancesRunInstancesRoute
   '/_auth/ec2/(key)/create-key-pair': typeof AuthEc2keyCreateKeyPairRoute
   '/_auth/ec2/(key)/import-key-pair': typeof AuthEc2keyImportKeyPairRoute
+  '/_auth/ec2/(placement-groups)/create-placement-group': typeof AuthEc2placementGroupsCreatePlacementGroupRoute
   '/_auth/ec2/(snapshots)/create-snapshot': typeof AuthEc2snapshotsCreateSnapshotRoute
   '/_auth/ec2/(subnet)/create-subnet': typeof AuthEc2subnetCreateSubnetRoute
   '/_auth/ec2/(volumes)/create-volume': typeof AuthEc2volumesCreateVolumeRoute
@@ -344,6 +372,7 @@ export interface FileRoutesById {
   '/_auth/ec2/(images)/describe-images/$id': typeof AuthEc2imagesDescribeImagesIdRoute
   '/_auth/ec2/(instances)/describe-instances/$id': typeof AuthEc2instancesDescribeInstancesIdRoute
   '/_auth/ec2/(key)/describe-key-pairs/$id': typeof AuthEc2keyDescribeKeyPairsIdRoute
+  '/_auth/ec2/(placement-groups)/describe-placement-groups/$id': typeof AuthEc2placementGroupsDescribePlacementGroupsIdRoute
   '/_auth/ec2/(snapshots)/describe-snapshots/$id': typeof AuthEc2snapshotsDescribeSnapshotsIdRoute
   '/_auth/ec2/(subnet)/describe-subnets/$id': typeof AuthEc2subnetDescribeSubnetsIdRoute
   '/_auth/ec2/(volumes)/describe-volumes/$id': typeof AuthEc2volumesDescribeVolumesIdRoute
@@ -355,6 +384,7 @@ export interface FileRoutesById {
   '/_auth/ec2/(images)/describe-images/': typeof AuthEc2imagesDescribeImagesIndexRoute
   '/_auth/ec2/(instances)/describe-instances/': typeof AuthEc2instancesDescribeInstancesIndexRoute
   '/_auth/ec2/(key)/describe-key-pairs/': typeof AuthEc2keyDescribeKeyPairsIndexRoute
+  '/_auth/ec2/(placement-groups)/describe-placement-groups/': typeof AuthEc2placementGroupsDescribePlacementGroupsIndexRoute
   '/_auth/ec2/(snapshots)/describe-snapshots/': typeof AuthEc2snapshotsDescribeSnapshotsIndexRoute
   '/_auth/ec2/(subnet)/describe-subnets/': typeof AuthEc2subnetDescribeSubnetsIndexRoute
   '/_auth/ec2/(volumes)/describe-volumes/': typeof AuthEc2volumesDescribeVolumesIndexRoute
@@ -372,6 +402,7 @@ export interface FileRouteTypes {
     | '/ec2/run-instances'
     | '/ec2/create-key-pair'
     | '/ec2/import-key-pair'
+    | '/ec2/create-placement-group'
     | '/ec2/create-snapshot'
     | '/ec2/create-subnet'
     | '/ec2/create-volume'
@@ -383,6 +414,7 @@ export interface FileRouteTypes {
     | '/ec2/describe-images/$id'
     | '/ec2/describe-instances/$id'
     | '/ec2/describe-key-pairs/$id'
+    | '/ec2/describe-placement-groups/$id'
     | '/ec2/describe-snapshots/$id'
     | '/ec2/describe-subnets/$id'
     | '/ec2/describe-volumes/$id'
@@ -394,6 +426,7 @@ export interface FileRouteTypes {
     | '/ec2/describe-images/'
     | '/ec2/describe-instances/'
     | '/ec2/describe-key-pairs/'
+    | '/ec2/describe-placement-groups/'
     | '/ec2/describe-snapshots/'
     | '/ec2/describe-subnets/'
     | '/ec2/describe-volumes/'
@@ -408,6 +441,7 @@ export interface FileRouteTypes {
     | '/ec2/run-instances'
     | '/ec2/create-key-pair'
     | '/ec2/import-key-pair'
+    | '/ec2/create-placement-group'
     | '/ec2/create-snapshot'
     | '/ec2/create-subnet'
     | '/ec2/create-volume'
@@ -419,6 +453,7 @@ export interface FileRouteTypes {
     | '/ec2/describe-images/$id'
     | '/ec2/describe-instances/$id'
     | '/ec2/describe-key-pairs/$id'
+    | '/ec2/describe-placement-groups/$id'
     | '/ec2/describe-snapshots/$id'
     | '/ec2/describe-subnets/$id'
     | '/ec2/describe-volumes/$id'
@@ -430,6 +465,7 @@ export interface FileRouteTypes {
     | '/ec2/describe-images'
     | '/ec2/describe-instances'
     | '/ec2/describe-key-pairs'
+    | '/ec2/describe-placement-groups'
     | '/ec2/describe-snapshots'
     | '/ec2/describe-subnets'
     | '/ec2/describe-volumes'
@@ -446,6 +482,7 @@ export interface FileRouteTypes {
     | '/_auth/ec2/(instances)/run-instances'
     | '/_auth/ec2/(key)/create-key-pair'
     | '/_auth/ec2/(key)/import-key-pair'
+    | '/_auth/ec2/(placement-groups)/create-placement-group'
     | '/_auth/ec2/(snapshots)/create-snapshot'
     | '/_auth/ec2/(subnet)/create-subnet'
     | '/_auth/ec2/(volumes)/create-volume'
@@ -457,6 +494,7 @@ export interface FileRouteTypes {
     | '/_auth/ec2/(images)/describe-images/$id'
     | '/_auth/ec2/(instances)/describe-instances/$id'
     | '/_auth/ec2/(key)/describe-key-pairs/$id'
+    | '/_auth/ec2/(placement-groups)/describe-placement-groups/$id'
     | '/_auth/ec2/(snapshots)/describe-snapshots/$id'
     | '/_auth/ec2/(subnet)/describe-subnets/$id'
     | '/_auth/ec2/(volumes)/describe-volumes/$id'
@@ -468,6 +506,7 @@ export interface FileRouteTypes {
     | '/_auth/ec2/(images)/describe-images/'
     | '/_auth/ec2/(instances)/describe-instances/'
     | '/_auth/ec2/(key)/describe-key-pairs/'
+    | '/_auth/ec2/(placement-groups)/describe-placement-groups/'
     | '/_auth/ec2/(snapshots)/describe-snapshots/'
     | '/_auth/ec2/(subnet)/describe-subnets/'
     | '/_auth/ec2/(volumes)/describe-volumes/'
@@ -561,6 +600,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthEc2snapshotsCreateSnapshotRouteImport
       parentRoute: typeof AuthRouteRoute
     }
+    '/_auth/ec2/(placement-groups)/create-placement-group': {
+      id: '/_auth/ec2/(placement-groups)/create-placement-group'
+      path: '/ec2/create-placement-group'
+      fullPath: '/ec2/create-placement-group'
+      preLoaderRoute: typeof AuthEc2placementGroupsCreatePlacementGroupRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
     '/_auth/ec2/(key)/import-key-pair': {
       id: '/_auth/ec2/(key)/import-key-pair'
       path: '/ec2/import-key-pair'
@@ -636,6 +682,13 @@ declare module '@tanstack/react-router' {
       path: '/ec2/describe-snapshots'
       fullPath: '/ec2/describe-snapshots/'
       preLoaderRoute: typeof AuthEc2snapshotsDescribeSnapshotsIndexRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/_auth/ec2/(placement-groups)/describe-placement-groups/': {
+      id: '/_auth/ec2/(placement-groups)/describe-placement-groups/'
+      path: '/ec2/describe-placement-groups'
+      fullPath: '/ec2/describe-placement-groups/'
+      preLoaderRoute: typeof AuthEc2placementGroupsDescribePlacementGroupsIndexRouteImport
       parentRoute: typeof AuthRouteRoute
     }
     '/_auth/ec2/(key)/describe-key-pairs/': {
@@ -715,6 +768,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthEc2snapshotsDescribeSnapshotsIdRouteImport
       parentRoute: typeof AuthRouteRoute
     }
+    '/_auth/ec2/(placement-groups)/describe-placement-groups/$id': {
+      id: '/_auth/ec2/(placement-groups)/describe-placement-groups/$id'
+      path: '/ec2/describe-placement-groups/$id'
+      fullPath: '/ec2/describe-placement-groups/$id'
+      preLoaderRoute: typeof AuthEc2placementGroupsDescribePlacementGroupsIdRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
     '/_auth/ec2/(key)/describe-key-pairs/$id': {
       id: '/_auth/ec2/(key)/describe-key-pairs/$id'
       path: '/ec2/describe-key-pairs/$id'
@@ -758,6 +818,7 @@ interface AuthRouteRouteChildren {
   AuthEc2instancesRunInstancesRoute: typeof AuthEc2instancesRunInstancesRoute
   AuthEc2keyCreateKeyPairRoute: typeof AuthEc2keyCreateKeyPairRoute
   AuthEc2keyImportKeyPairRoute: typeof AuthEc2keyImportKeyPairRoute
+  AuthEc2placementGroupsCreatePlacementGroupRoute: typeof AuthEc2placementGroupsCreatePlacementGroupRoute
   AuthEc2snapshotsCreateSnapshotRoute: typeof AuthEc2snapshotsCreateSnapshotRoute
   AuthEc2subnetCreateSubnetRoute: typeof AuthEc2subnetCreateSubnetRoute
   AuthEc2volumesCreateVolumeRoute: typeof AuthEc2volumesCreateVolumeRoute
@@ -769,6 +830,7 @@ interface AuthRouteRouteChildren {
   AuthEc2imagesDescribeImagesIdRoute: typeof AuthEc2imagesDescribeImagesIdRoute
   AuthEc2instancesDescribeInstancesIdRoute: typeof AuthEc2instancesDescribeInstancesIdRoute
   AuthEc2keyDescribeKeyPairsIdRoute: typeof AuthEc2keyDescribeKeyPairsIdRoute
+  AuthEc2placementGroupsDescribePlacementGroupsIdRoute: typeof AuthEc2placementGroupsDescribePlacementGroupsIdRoute
   AuthEc2snapshotsDescribeSnapshotsIdRoute: typeof AuthEc2snapshotsDescribeSnapshotsIdRoute
   AuthEc2subnetDescribeSubnetsIdRoute: typeof AuthEc2subnetDescribeSubnetsIdRoute
   AuthEc2volumesDescribeVolumesIdRoute: typeof AuthEc2volumesDescribeVolumesIdRoute
@@ -779,6 +841,7 @@ interface AuthRouteRouteChildren {
   AuthEc2imagesDescribeImagesIndexRoute: typeof AuthEc2imagesDescribeImagesIndexRoute
   AuthEc2instancesDescribeInstancesIndexRoute: typeof AuthEc2instancesDescribeInstancesIndexRoute
   AuthEc2keyDescribeKeyPairsIndexRoute: typeof AuthEc2keyDescribeKeyPairsIndexRoute
+  AuthEc2placementGroupsDescribePlacementGroupsIndexRoute: typeof AuthEc2placementGroupsDescribePlacementGroupsIndexRoute
   AuthEc2snapshotsDescribeSnapshotsIndexRoute: typeof AuthEc2snapshotsDescribeSnapshotsIndexRoute
   AuthEc2subnetDescribeSubnetsIndexRoute: typeof AuthEc2subnetDescribeSubnetsIndexRoute
   AuthEc2volumesDescribeVolumesIndexRoute: typeof AuthEc2volumesDescribeVolumesIndexRoute
@@ -793,6 +856,8 @@ const AuthRouteRouteChildren: AuthRouteRouteChildren = {
   AuthEc2instancesRunInstancesRoute: AuthEc2instancesRunInstancesRoute,
   AuthEc2keyCreateKeyPairRoute: AuthEc2keyCreateKeyPairRoute,
   AuthEc2keyImportKeyPairRoute: AuthEc2keyImportKeyPairRoute,
+  AuthEc2placementGroupsCreatePlacementGroupRoute:
+    AuthEc2placementGroupsCreatePlacementGroupRoute,
   AuthEc2snapshotsCreateSnapshotRoute: AuthEc2snapshotsCreateSnapshotRoute,
   AuthEc2subnetCreateSubnetRoute: AuthEc2subnetCreateSubnetRoute,
   AuthEc2volumesCreateVolumeRoute: AuthEc2volumesCreateVolumeRoute,
@@ -805,6 +870,8 @@ const AuthRouteRouteChildren: AuthRouteRouteChildren = {
   AuthEc2instancesDescribeInstancesIdRoute:
     AuthEc2instancesDescribeInstancesIdRoute,
   AuthEc2keyDescribeKeyPairsIdRoute: AuthEc2keyDescribeKeyPairsIdRoute,
+  AuthEc2placementGroupsDescribePlacementGroupsIdRoute:
+    AuthEc2placementGroupsDescribePlacementGroupsIdRoute,
   AuthEc2snapshotsDescribeSnapshotsIdRoute:
     AuthEc2snapshotsDescribeSnapshotsIdRoute,
   AuthEc2subnetDescribeSubnetsIdRoute: AuthEc2subnetDescribeSubnetsIdRoute,
@@ -818,6 +885,8 @@ const AuthRouteRouteChildren: AuthRouteRouteChildren = {
   AuthEc2instancesDescribeInstancesIndexRoute:
     AuthEc2instancesDescribeInstancesIndexRoute,
   AuthEc2keyDescribeKeyPairsIndexRoute: AuthEc2keyDescribeKeyPairsIndexRoute,
+  AuthEc2placementGroupsDescribePlacementGroupsIndexRoute:
+    AuthEc2placementGroupsDescribePlacementGroupsIndexRoute,
   AuthEc2snapshotsDescribeSnapshotsIndexRoute:
     AuthEc2snapshotsDescribeSnapshotsIndexRoute,
   AuthEc2subnetDescribeSubnetsIndexRoute:
