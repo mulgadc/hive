@@ -161,9 +161,18 @@ if pidof systemd >/dev/null 2>&1; then
         sudo systemctl stop ovn-central 2>/dev/null && echo "✅ ovn-central stopped" || true
     fi
 
-    # Only stop OVS if br-external does NOT have an IP (safe to tear down)
-    if sudo ovs-vsctl br-exists br-external 2>/dev/null && ip -4 addr show br-external 2>/dev/null | grep -q "inet "; then
-        echo "⚠️  Skipping openvswitch-switch stop (br-external has WAN IP — stopping would kill connectivity)"
+    # Only stop OVS if the WAN bridge does NOT have an IP (safe to tear down).
+    # Check all OVS bridges — any bridge with a WAN IP means OVS is infrastructure.
+    WAN_BRIDGE_HAS_IP=false
+    for br in $(sudo ovs-vsctl list-br 2>/dev/null); do
+        if [ "$br" = "br-int" ]; then continue; fi
+        if ip -4 addr show "$br" 2>/dev/null | grep -q "inet "; then
+            WAN_BRIDGE_HAS_IP=true
+            break
+        fi
+    done
+    if [ "$WAN_BRIDGE_HAS_IP" = true ]; then
+        echo "⚠️  Skipping openvswitch-switch stop ($br has WAN IP — stopping would kill connectivity)"
     else
         sudo systemctl stop openvswitch-switch 2>/dev/null && echo "✅ openvswitch-switch stopped" || true
     fi

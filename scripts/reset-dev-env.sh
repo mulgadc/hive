@@ -112,33 +112,46 @@ echo "Removing ~/spinifex"
 rm -rf ~/spinifex
 
 # --- Re-initialize ---
-# Detect WAN interface (default route) for external bridge.
+# Detect WAN interface (default route).
 WAN_IFACE=$(ip -4 route show default | awk '{print $5}' | head -1)
 WAN_GW=$(ip -4 route show default | awk '{print $3}' | head -1)
 
 echo "Detected WAN interface: ${WAN_IFACE:-none}, gateway: ${WAN_GW:-none}"
 
-# Detect SSH/management NIC: the interface carrying the active SSH session.
-# If SSH_CONNECTION is set (remote session), extract the server IP and find its NIC.
-# If not set (local console), fall back to the WAN NIC (assume single-NIC host).
-SSH_NIC=""
-if [ -n "${SSH_CONNECTION:-}" ]; then
-    SSH_IP=$(echo "$SSH_CONNECTION" | awk '{print $3}')
-    SSH_NIC=$(ip -o -4 addr show | awk -v ip="$SSH_IP" '$0 ~ ip"/" {print $2}' | head -1)
+# Check if WAN interface is already a bridge (tofu-cluster / production setup).
+# If so, setup-ovn.sh auto-detects it. If it's a physical NIC, we need to
+# decide between direct bridge and macvlan based on SSH safety.
+WAN_IS_BRIDGE=false
+if [ -n "$WAN_IFACE" ]; then
+    if ip -d link show "$WAN_IFACE" 2>/dev/null | grep -q "bridge"; then
+        WAN_IS_BRIDGE=true
+    fi
 fi
-if [ -z "$SSH_NIC" ]; then
-    SSH_NIC="$WAN_IFACE"
-fi
-echo "Detected SSH/management NIC: ${SSH_NIC:-none}"
 
-# Choose bridge mode: direct bridge when WAN NIC != SSH NIC (dedicated WAN NIC
-# available). Macvlan fallback when they're the same (single-NIC host).
-BRIDGE_MODE_FLAG=""
-if [ -n "$WAN_IFACE" ] && [ "$WAN_IFACE" != "$SSH_NIC" ]; then
-    BRIDGE_MODE_FLAG="--direct"
-    echo "  Bridge mode: direct (WAN=$WAN_IFACE != SSH=$SSH_NIC)"
-else
-    echo "  Bridge mode: macvlan (WAN=$WAN_IFACE == SSH=$SSH_NIC)"
+# Build setup-ovn.sh flags based on detected topology
+SETUP_OVN_FLAGS=""
+if [ "$WAN_IS_BRIDGE" = true ]; then
+    # WAN is already a bridge (e.g. br-wan from cloud-init) — setup-ovn.sh
+    # auto-detects it, no explicit flags needed.
+    echo "  WAN is a bridge: $WAN_IFACE (auto-detected)"
+elif [ -n "$WAN_IFACE" ]; then
+    # WAN is a physical NIC. Detect SSH NIC to decide bridge strategy.
+    SSH_NIC=""
+    if [ -n "${SSH_CONNECTION:-}" ]; then
+        SSH_IP=$(echo "$SSH_CONNECTION" | awk '{print $3}')
+        SSH_NIC=$(ip -o -4 addr show | awk -v ip="$SSH_IP" '$0 ~ ip"/" {print $2}' | head -1)
+    fi
+    if [ -z "$SSH_NIC" ]; then
+        SSH_NIC="$WAN_IFACE"
+    fi
+
+    if [ "$WAN_IFACE" != "$SSH_NIC" ]; then
+        SETUP_OVN_FLAGS="--wan-bridge=br-wan --wan-iface=$WAN_IFACE"
+        echo "  Bridge mode: direct (WAN=$WAN_IFACE != SSH=$SSH_NIC)"
+    else
+        SETUP_OVN_FLAGS="--macvlan --wan-iface=$WAN_IFACE"
+        echo "  Bridge mode: macvlan (WAN=$WAN_IFACE == SSH=$SSH_NIC)"
+    fi
 fi
 
 # Chassis ID must match what vpcd derives from the node name in spinifex.toml.
@@ -149,13 +162,7 @@ NODE_NAME="node1"
 CHASSIS_ID="chassis-${NODE_NAME}"
 
 echo "Re-initializing OVN (chassis-id: $CHASSIS_ID)"
-if [ -n "$WAN_IFACE" ]; then
-    echo "  Using $WAN_IFACE for br-external"
-    ./scripts/setup-ovn.sh --management --external-bridge --external-iface="$WAN_IFACE" $BRIDGE_MODE_FLAG --chassis-id="$CHASSIS_ID"
-else
-    echo "  No WAN interface detected, management-only"
-    ./scripts/setup-ovn.sh --management --chassis-id="$CHASSIS_ID"
-fi
+./scripts/setup-ovn.sh --management $SETUP_OVN_FLAGS --chassis-id="$CHASSIS_ID"
 
 echo "Initializing platform"
 ADMIN_INIT_ARGS="--region $REGION --az ${REGION}a --node node1 --nodes 1"
