@@ -12,12 +12,18 @@ tags:
 
 # VPC Networking
 
+> How Spinifex implements AWS-compatible VPC networking with public and private subnets, security groups, and Elastic IPs using OVN.
+
+## Overview
+
 Spinifex provides AWS-compatible VPC networking on bare-metal. Every EC2 instance
 runs inside an isolated virtual network backed by OVN (Open Virtual Network).
 Instances can operate in two modes: **private** (overlay-only, no WAN access) or
 **public** (routable from the WAN with a unique public IP).
 
-# How It Works
+## Instructions
+
+## How It Works
 
 Spinifex maps AWS VPC concepts directly to OVN constructs:
 
@@ -40,36 +46,36 @@ Spinifex maps AWS VPC concepts directly to OVN constructs:
                         └──────┬──────┘
                                │  ovn-bridge-mappings: external:br-external
                                │
-                    ┌──────────┴──────────────────────────┐
+                    ┌──────────┴───────────────────────────┐
                     │     VPC Logical Router               │
                     │                                      │
                     │  Gateway port ──── ext switch ─────── localnet port
                     │    (public IP)     (OVN)              (maps to br-external)
                     │                                      │
                     │  NAT rules:                          │
-                    │    SNAT: VPC CIDR → gateway IP        │
-                    │    dnat_and_snat: public ↔ private    │
+                    │    SNAT: VPC CIDR → gateway IP       │
+                    │    dnat_and_snat: public ↔ private   │
                     │                                      │
                     │  Routes:                             │
-                    │    0.0.0.0/0 → WAN gateway            │
+                    │    0.0.0.0/0 → WAN gateway           │
                     │                                      │
                     ├────────────┬──────────────┤          │
                     │            │              │          │
-              ┌─────┴────┐ ┌────┴─────┐        │          │
-              │ subnet-a │ │ subnet-b │        │          │
-              │ (public) │ │ (private)│        │          │
-              │10.0.1/24 │ │10.0.2/24 │        │          │
-              │  eni-1   │ │  eni-3   │        │          │
-              │  eni-2   │ │  eni-4   │        │          │
-              └──────────┘ └──────────┘        │          │
-                                               └──────────┘
+              ┌─────┴────┐ ┌─────┴────┐         │          │
+              │ subnet-a │ │ subnet-b │         │          │
+              │ (public) │ │ (private)│         │          │
+              │10.0.1/24 │ │10.0.2/24 │         │          │
+              │  eni-1   │ │  eni-3   │         │          │
+              │  eni-2   │ │  eni-4   │         │          │
+              └──────────┘ └──────────┘         │          │
+                                                └──────────┘
 ```
 
 Cross-host traffic uses **Geneve tunnels** (UDP 6081) over the management/overlay
 NIC. Each host runs `ovn-controller` which programs OpenFlow rules on `br-int`
 (the integration bridge where all VM TAP devices connect).
 
-# Private vs Public Subnets
+## Private vs Public Subnets
 
 A subnet's behavior depends on two things: whether the VPC has an Internet
 Gateway, and whether the subnet has `MapPublicIpOnLaunch` enabled.
@@ -115,7 +121,7 @@ Inbound:  203.0.113.10 ──→ DNAT ──→ arrives at 10.0.1.5
 | Instance sees public IP? | N/A | No — only sees private IP |
 | Elastic IP support | Only if explicitly associated | Yes |
 
-# External Connectivity Modes
+## External Connectivity Modes
 
 The `[network]` section in `spinifex.toml` controls how VMs reach the outside
 world. There are three modes.
@@ -188,7 +194,7 @@ communicate within their VPC.
 If you start with `nat` and later need public subnets, switch to `pool` and
 define a range — no data migration needed.
 
-# Bridge Setup — Physical Network Wiring
+## Bridge Setup — Physical Network Wiring
 
 OVN needs an OVS bridge (`br-external`) with a physical uplink to the WAN for
 external connectivity. How that uplink is provided depends on whether the host
@@ -380,7 +386,7 @@ ip link show spx-ext-eth0
                    Physical WAN
 ```
 
-# Configuration Reference
+## Configuration Reference
 
 All network configuration lives in `spinifex.toml`. Settings are split into three
 levels: cluster-wide mode, IP pool definitions, and per-node NIC settings.
@@ -504,7 +510,7 @@ name. Allocation uses CAS (Compare-And-Set) for lock-free concurrent access:
 
 Pools are initialized from `spinifex.toml` on vpcd startup (idempotent).
 
-# Deployment Examples
+## Deployment Examples
 
 ## Homelab / Dev (Single Pool)
 
@@ -636,7 +642,7 @@ Spinifex allocates from the correct pool based on where the instance launches.
 An instance in `us-east-1a` gets an IP from `us-east-1a` first; if exhausted,
 falls back to `us-east-overflow`.
 
-# Security Groups
+## Security Groups
 
 Security groups are stateful firewalls enforced at the OVS datapath level on
 each hypervisor. Traffic is filtered before it reaches the wire — equivalent to
@@ -693,7 +699,7 @@ aws ec2 run-instances --image-id $AMI --instance-type t3.small \
 
 Rule changes take effect immediately — no instance restart needed.
 
-# Elastic IPs
+## Elastic IPs
 
 Elastic IPs are static public IPs that persist across instance stop/start cycles.
 Unlike auto-assigned public IPs (which change on stop/start), an Elastic IP stays
@@ -718,7 +724,7 @@ aws ec2 release-address --allocation-id $EIP
 When you associate an Elastic IP with an instance that already has an
 auto-assigned public IP, the auto-assigned IP is released and replaced.
 
-# OVN Reference
+## OVN Reference
 
 For operators debugging or verifying the OVN topology.
 
@@ -813,7 +819,7 @@ sudo ovn-nbctl acl-list sg-{groupId}
 sudo ovn-nbctl pg-get-ports sg-{groupId}
 ```
 
-# Quick Start
+## Quick Start
 
 ## 1. Set Up OVN Bridges
 
@@ -860,7 +866,7 @@ aws ec2 describe-instances --instance-ids $INSTANCE \
   --query 'Reservations[0].Instances[0].[PrivateIpAddress,PublicIpAddress]'
 ```
 
-# Troubleshooting
+## Troubleshooting
 
 ## Debugging Toolkit
 
