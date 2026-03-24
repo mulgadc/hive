@@ -168,11 +168,13 @@ func GenerateCertificatesIfNeeded(configDir string, force bool, bindIP string) (
 		fmt.Printf("   Certificate: %s\n", serverCertPath)
 		fmt.Printf("   Key: %s\n", serverKeyPath)
 
-		// Print instructions for adding CA to system trust store
-		fmt.Println("\n📋 To trust the Spinifex CA system-wide (recommended):")
-		fmt.Printf("   sudo cp %s /usr/local/share/ca-certificates/spinifex-ca.crt\n", caCertPath)
-		fmt.Println("   sudo update-ca-certificates")
-		fmt.Println("\n   This allows AWS CLI and other tools to trust Spinifex services automatically.")
+		// Print manual instructions only when not root (root gets auto-install)
+		if os.Getuid() != 0 {
+			fmt.Println("\n📋 To trust the Spinifex CA system-wide (recommended):")
+			fmt.Printf("   sudo cp %s /usr/local/share/ca-certificates/spinifex-ca.crt\n", caCertPath)
+			fmt.Println("   sudo update-ca-certificates")
+			fmt.Println("\n   This allows AWS CLI and other tools to trust Spinifex services automatically.")
+		}
 	} else {
 		fmt.Println("\n✅ CA and SSL certificates already exist")
 	}

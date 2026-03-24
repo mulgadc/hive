@@ -518,6 +518,12 @@ func runimagesListCmd(cmd *cobra.Command, args []string) {
 
 // TODO: Move all logic to a module, use minimal application logic in viper commands
 func runAdminInit(cmd *cobra.Command, args []string) {
+	if os.Getuid() != 0 {
+		fmt.Fprintln(os.Stderr, "⚠️  Not running as root — CA certificate will not be installed to system trust store.")
+		fmt.Fprintln(os.Stderr, "   Run with sudo, or manually: sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt && sudo update-ca-certificates")
+		fmt.Fprintln(os.Stderr)
+	}
+
 	force, _ := cmd.Flags().GetBool("force")
 	configDir, _ := cmd.Flags().GetString("config-dir")
 	spxRoot, _ := cmd.Flags().GetString("spinifex-dir")
@@ -720,6 +726,9 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 	// Generate SSL certificates (with bind IP in SANs for multi-node support)
 	certPath := admin.GenerateCertificatesIfNeeded(configDir, force, bindIP)
+
+	// Install CA certificate into system trust store
+	installCACertificate(filepath.Join(configDir, "ca.pem"))
 
 	// Generate NATS token
 	natsToken, err := admin.GenerateNATSToken()
@@ -1123,6 +1132,11 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 }
 
 func runAdminJoin(cmd *cobra.Command, args []string) {
+	if os.Getuid() != 0 {
+		fmt.Fprintln(os.Stderr, "⚠️  Not running as root — CA certificate will not be installed to system trust store.")
+		fmt.Fprintln(os.Stderr)
+	}
+
 	node, _ := cmd.Flags().GetString("node")
 	leaderHost, _ := cmd.Flags().GetString("host")
 	region, _ := cmd.Flags().GetString("region")
@@ -1297,6 +1311,9 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("✅ CA certificate received from leader: %s\n", caCertPath)
+
+	// Install CA certificate into system trust store
+	installCACertificate(caCertPath)
 
 	// Extract and write master key from formation server
 	if statusResp.MasterKey == "" {
@@ -1765,4 +1782,41 @@ func parseDNSFromResolvectl(output string) []string {
 		servers = servers[:3]
 	}
 	return servers
+}
+
+// installCACertificate copies the Spinifex CA certificate into the system
+// trust store and runs update-ca-certificates so TLS clients (AWS CLI, etc.)
+// trust the self-signed gateway certificate without extra configuration.
+func installCACertificate(caPemPath string) {
+	if os.Getuid() != 0 {
+		return
+	}
+
+	const systemCertPath = "/usr/local/share/ca-certificates/spinifex-ca.crt"
+
+	data, err := os.ReadFile(caPemPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not read CA certificate %s: %v\n", caPemPath, err)
+		return
+	}
+
+	if err := os.MkdirAll(filepath.Dir(systemCertPath), 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not create certificate directory: %v\n", err)
+		return
+	}
+
+	if err := os.WriteFile(systemCertPath, data, 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not install CA certificate: %v\n", err)
+		return
+	}
+
+	cmd := exec.Command("update-ca-certificates")
+	cmd.Stdout = io.Discard
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: update-ca-certificates failed: %v\n", err)
+		return
+	}
+
+	fmt.Printf("✅ CA certificate installed to system trust store\n")
 }
