@@ -27,7 +27,7 @@ export function getCredentials(): AwsCredentials | null {
       credentialsCache = null
       return null
     }
-    const parsed = JSON.parse(stored)
+    const parsed: unknown = JSON.parse(stored)
     const result = awsCredentialsSchema.safeParse(parsed)
     credentialsCache = result.success ? result.data : null
     return credentialsCache

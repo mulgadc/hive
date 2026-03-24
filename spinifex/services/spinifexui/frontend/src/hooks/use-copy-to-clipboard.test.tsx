@@ -29,6 +29,7 @@ describe("useCopyToClipboard", () => {
       await result.current.copy("hello")
     })
 
+    // oxlint-disable-next-line typescript/unbound-method -- vitest mock
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith("hello")
     expect(result.current.copied).toBe(true)
   })

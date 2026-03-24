@@ -112,6 +112,7 @@ export function useCreateInstance() {
     mutationFn: (params: CreateInstanceParams) => {
       const command = new RunInstancesCommand({
         ImageId: params.imageId,
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- AWS SDK expects _InstanceType enum
         InstanceType: params.instanceType as _InstanceType,
         KeyName: params.keyName,
         MinCount: params.count,

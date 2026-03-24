@@ -71,6 +71,7 @@ export function getS3Client(): S3Client {
       applyToStack: (stack) => {
         stack.add(
           (next) => (args) => {
+            // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- smithy middleware args.request is typed as unknown
             const request = (args as { request?: { path?: string } }).request
             if (request?.path?.endsWith("/") && request.path !== "/") {
               request.path = request.path.slice(0, -1)

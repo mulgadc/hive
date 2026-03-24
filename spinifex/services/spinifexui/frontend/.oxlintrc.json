@@ -10,6 +10,10 @@
     "@tanstack/eslint-plugin-query",
     "@tanstack/eslint-plugin-router"
   ],
+  "options": {
+    "typeAware": true,
+    "typeCheck": true
+  },
   "rules": {
     "@tanstack/router/create-route-property-order": "warn",
     "@tanstack/router/route-param-names": "error",
@@ -30,10 +34,18 @@
     "eslint/sort-vars": "off",
     "import/consistent-type-specifier-style": "off",
     "import/first": "off",
-    "promise/prefer-await-to-callbacks": "off",
     "react/jsx-handler-names": "off",
     "react/no-unescaped-entities": "off",
+    "promise/prefer-await-to-callbacks": "off",
     "react-perf/jsx-no-new-function-as-prop": "off",
+    "typescript/no-confusing-void-expression": "off",
+    "typescript/prefer-nullish-coalescing": "off",
+    "typescript/return-await": "off",
+    "typescript/no-floating-promises": "off",
+    "typescript/strict-boolean-expressions": "off",
+    "typescript/no-misused-promises": "off",
+    "typescript/only-throw-error": "off",
+    "typescript/promise-function-async": "off",
     "unicorn/filename-case": [
       "error",
       { "cases": { "kebabCase": true, "camelCase": true } }
@@ -47,6 +59,10 @@
       ],
       "rules": {
         "typescript/consistent-type-imports": "off",
+        "typescript/no-unsafe-argument": "off",
+        "typescript/no-unsafe-assignment": "off",
+        "typescript/no-unsafe-member-access": "off",
+        "typescript/no-unsafe-type-assertion": "off",
         "unicorn/no-useless-undefined": "off"
       }
     }

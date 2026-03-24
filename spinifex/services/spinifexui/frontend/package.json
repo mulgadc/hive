@@ -4,10 +4,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port 3000",
-    "build": "vite build && tsgo",
+    "build": "vite build",
     "preview": "vite preview",
-    "check": "oxlint; oxfmt --check",
-    "fix": "oxlint --fix; oxfmt",
+    "check": "oxlint src; oxfmt --check",
+    "fix": "oxlint --fix src; oxfmt",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest"

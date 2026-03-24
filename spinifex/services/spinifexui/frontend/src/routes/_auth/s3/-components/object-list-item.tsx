@@ -34,8 +34,10 @@ export function ObjectListItem({
       const response = await getS3Client().send(command)
 
       if (response.Body) {
+        // oxlint-disable-next-line typescript/no-unsafe-call, typescript/no-unsafe-member-access, typescript/no-unsafe-assignment
         const blob = await response.Body.transformToByteArray()
-        const url = URL.createObjectURL(new Blob([blob]))
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion
+        const url = URL.createObjectURL(new Blob([blob as BlobPart]))
 
         const link = document.createElement("a")
         link.href = url

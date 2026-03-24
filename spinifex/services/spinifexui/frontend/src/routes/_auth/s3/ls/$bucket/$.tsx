@@ -68,7 +68,7 @@ function BucketObjectsWithPrefix() {
 
   return (
     <>
-      {/* oxlint-disable-next-line typescript/no-explicit-any valid }*/}
+      {/* oxlint-disable-next-line typescript/no-explicit-any, typescript/no-unsafe-type-assertion, typescript/no-unsafe-assignment -- dynamic route path */}
       <BackLink to={parentPath as any}>Back</BackLink>
       <div className="mb-6">
         <div className="mb-2 flex items-center justify-between">
