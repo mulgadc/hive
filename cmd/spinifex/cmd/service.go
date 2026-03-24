@@ -740,6 +740,7 @@ var vpcdStartCmd = &cobra.Command{
 			ChassisNames:      chassisNames,
 			Bootstrap:         bootstrap,
 			ExternalInterface: nodeConfig.VPCD.ExternalInterface,
+			WanBridge:         nodeConfig.VPCD.WanBridge,
 			BridgeMode:        nodeConfig.VPCD.BridgeMode,
 		})
 		if err != nil {

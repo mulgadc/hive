@@ -81,6 +81,9 @@ ovn_sb_addr = "{{.OVNSBAddr}}"
 {{- if .ExternalIface}}
 external_interface = "{{.ExternalIface}}"
 {{- end}}
+{{- if .WanBridge}}
+wan_bridge = "{{.WanBridge}}"
+{{- end}}
 
 [nodes.{{.Node}}.predastore]
 host = "{{.BindIP}}:8443"

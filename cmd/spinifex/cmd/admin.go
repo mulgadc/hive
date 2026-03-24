@@ -845,6 +845,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 		ExternalMode:  externalMode,
 		ExternalIface: externalIface,
+		WanBridge:     detectedWanBridge(detectedNet),
 		ExternalDHCP:  useExternalDHCP,
 		PoolName:      "wan",
 		PoolStart:     poolStart,
@@ -1704,6 +1705,22 @@ func writeBootstrapFilesWithAdmin(configDir string, masterKey []byte, accessKey,
 }
 
 // detectDNSServers reads the DNS servers configured on the host for the given
+// detectedWanBridge returns the WAN bridge name from the detected network
+// topology. If the WAN interface is already a bridge, returns its name.
+// Otherwise returns "br-wan" as the default.
+func detectedWanBridge(detected *admin.DetectedNetwork) string {
+	if detected == nil || detected.WAN == nil {
+		return ""
+	}
+	// Check if the WAN interface name looks like a bridge (starts with "br-")
+	// If so, it's already set up — use it directly.
+	if strings.HasPrefix(detected.WAN.Name, "br-") {
+		return detected.WAN.Name
+	}
+	return "br-wan"
+}
+
+// detectDNSServers auto-detects DNS servers from the host for the specified
 // interface. Uses resolvectl (systemd-resolved) first, then falls back to
 // /etc/resolv.conf. Returns up to 3 servers. Falls back to public DNS if none found.
 func detectDNSServers(iface string) []string {

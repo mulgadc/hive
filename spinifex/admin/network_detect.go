@@ -85,8 +85,8 @@ func DetectNetwork() (*DetectedNetwork, error) {
 			continue
 		}
 
-		// Skip virtual/docker/ovs interfaces
-		if isVirtualInterface(ifaceName) {
+		// Skip virtual/docker/ovs interfaces (but allow the default route device)
+		if isVirtualInterface(ifaceName, wanIface) {
 			continue
 		}
 
@@ -181,10 +181,13 @@ func SuggestPoolRange(wan *DetectedInterface) (start, end string) {
 }
 
 // isVirtualInterface returns true for interfaces that shouldn't be
-// considered as physical NICs.
-func isVirtualInterface(name string) bool {
-	// Allow br-external (OVS WAN bridge used for external networking)
-	if name == "br-external" {
+// considered as physical NICs. The defaultRouteDev parameter is the
+// interface carrying the default route — it's always considered physical
+// even if its name matches a virtual prefix (e.g., br-wan).
+func isVirtualInterface(name string, defaultRouteDev string) bool {
+	// The default route interface is always considered physical — it's the
+	// WAN uplink, even if it's a bridge (br-wan, br-external, etc.).
+	if defaultRouteDev != "" && name == defaultRouteDev {
 		return false
 	}
 	prefixes := []string{

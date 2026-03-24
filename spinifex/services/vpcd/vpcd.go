@@ -64,9 +64,12 @@ type Config struct {
 	// ExternalInterface is the WAN NIC name (e.g., "enp0s3"). Used to align
 	// the macvlan MAC with the OVN gateway MAC for inbound traffic.
 	ExternalInterface string
+	// WanBridge is the OVS bridge name for WAN traffic (default "br-wan").
+	// Maps to OVN logical network "external" via ovn-bridge-mappings.
+	WanBridge string
 	// BridgeMode is "direct" or "macvlan". Direct bridge adds the WAN NIC
-	// directly to br-external; macvlan creates a sub-interface. When empty,
-	// auto-detected from the br-external port type at startup.
+	// directly to the WAN bridge; macvlan creates a sub-interface. When empty,
+	// auto-detected from the WAN bridge port type at startup.
 	BridgeMode string
 }
 
@@ -223,7 +226,7 @@ func launchService(cfg *Config) error {
 	slog.Info("Connected to OVN NB DB", "endpoint", cfg.OVNNBAddr)
 
 	// Detect bridge mode: if not explicitly configured, auto-detect by checking
-	// whether br-external has a macvlan port or a physical NIC.
+	// whether the WAN bridge has a macvlan port or a physical NIC.
 	bridgeMode := cfg.BridgeMode
 	if bridgeMode == "" && cfg.ExternalInterface != "" {
 		bridgeMode = detectBridgeMode(cfg.ExternalInterface)
@@ -231,7 +234,11 @@ func launchService(cfg *Config) error {
 	if bridgeMode == "" {
 		bridgeMode = BridgeModeMacvlan // default for backward compatibility
 	}
-	slog.Info("External bridge mode", "mode", bridgeMode)
+	wanBridge := cfg.WanBridge
+	if wanBridge == "" {
+		wanBridge = "br-wan"
+	}
+	slog.Info("External bridge mode", "mode", bridgeMode, "wan_bridge", wanBridge)
 
 	// Reconcile OVN topology from bootstrap config before subscribing.
 	// This ensures the default VPC topology exists even if admin init ran
@@ -292,14 +299,14 @@ func launchService(cfg *Config) error {
 	return nil
 }
 
-// detectBridgeMode checks how br-external is wired. If a macvlan interface
+// detectBridgeMode checks how the WAN bridge is wired. If a macvlan interface
 // (spx-ext-{iface}) exists, we're in macvlan mode. Otherwise, the physical
-// NIC is added directly to br-external (direct bridge mode).
+// NIC is added directly to the WAN bridge (direct bridge mode).
 func detectBridgeMode(externalIface string) string {
 	macvlanName := "spx-ext-" + externalIface
 	out, err := exec.Command("ip", "-d", "link", "show", macvlanName).CombinedOutput()
 	if err == nil && strings.Contains(string(out), "macvlan") {
-		slog.Debug("vpcd: detected macvlan interface on br-external", "iface", macvlanName)
+		slog.Debug("vpcd: detected macvlan interface on WAN bridge", "iface", macvlanName)
 		return BridgeModeMacvlan
 	}
 	slog.Debug("vpcd: no macvlan found, assuming direct bridge mode", "checked", macvlanName)

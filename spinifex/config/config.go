@@ -89,7 +89,8 @@ type ViperblockConfig struct {
 type VPCDConfig struct {
 	OVNNBAddr         string `mapstructure:"ovn_nb_addr"`        // OVN Northbound DB address (e.g., "tcp:127.0.0.1:6641")
 	OVNSBAddr         string `mapstructure:"ovn_sb_addr"`        // OVN Southbound DB address (e.g., "tcp:127.0.0.1:6642")
-	ExternalInterface string `mapstructure:"external_interface"` // WAN NIC name for br-external (per-node, e.g., "eth1", "enp0s3")
+	ExternalInterface string `mapstructure:"external_interface"` // WAN NIC name (e.g., "eth1", "enp0s3") — the physical NIC on the WAN bridge
+	WanBridge         string `mapstructure:"wan_bridge"`          // OVS bridge for WAN traffic (default "br-wan", maps to OVN "external" network)
 	BridgeMode        string `mapstructure:"bridge_mode"`        // "direct" or "macvlan" (auto-detected if empty)
 }
 
