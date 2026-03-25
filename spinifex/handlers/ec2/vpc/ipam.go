@@ -182,7 +182,7 @@ func (m *IPAM) nextAvailableIP(record *IPAMRecord) (string, error) {
 
 	ones, bits := ipNet.Mask.Size()
 	hostBits := bits - ones                                     // always 0-32 for IPv4 CIDRs, safe for uint conversion
-	totalIPs := new(big.Int).Lsh(big.NewInt(1), uint(hostBits)) //nolint:gosec // G115: hostBits is 0-32 for IPv4
+	totalIPs := new(big.Int).Lsh(big.NewInt(1), uint(hostBits)) //#nosec G115 - hostBits is 0-32 for IPv4
 
 	// Start at offset 4 (.0=network, .1=gateway, .2=DNS, .3=reserved)
 	networkIP := ipToInt(ipNet.IP)

@@ -407,7 +407,7 @@ func (s *VPCServiceImpl) eniRecordToEC2(record *ENIRecord, accountID string) *ec
 func generateENIMac(eniId string) string {
 	h := uint32(0)
 	for _, c := range eniId {
-		h = h*31 + uint32(c) //nolint:gosec // G115: intentional overflow for hashing
+		h = h*31 + uint32(c) // #nosec G115 -- intentional overflow for hashing
 	}
 	return fmt.Sprintf("02:00:00:%02x:%02x:%02x", (h>>16)&0xff, (h>>8)&0xff, h&0xff)
 }

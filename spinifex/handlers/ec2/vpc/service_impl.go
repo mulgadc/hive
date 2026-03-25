@@ -446,7 +446,7 @@ func (s *VPCServiceImpl) CreateSubnet(input *ec2.CreateSubnetInput, accountID st
 
 	// Calculate available IPs (total hosts minus AWS reserved: network, router, DNS, future, broadcast)
 	// ones is validated to be 16-28 above, so (32-ones) is always 4-16 and safe for uint conversion
-	totalHosts := max((1<<(32-ones))-5, 0)
+	totalHosts := max((1<<(32-ones))-5, 0) //#nosec G115 - ones validated 16-28
 
 	record := SubnetRecord{
 		SubnetId:         subnetID,
@@ -575,7 +575,7 @@ func (s *VPCServiceImpl) DescribeSubnets(input *ec2.DescribeSubnetsInput, accoun
 		availableIPs := 0
 		if err == nil {
 			ones, _ := subnetNet.Mask.Size()
-			availableIPs = max((1<<(32-ones))-5, 0)
+			availableIPs = max((1<<(32-ones))-5, 0) //#nosec G115 - ones from validated CIDR
 		}
 
 		subnets = append(subnets, s.subnetRecordToEC2(&record, availableIPs, accountID))

@@ -26,8 +26,9 @@ import (
 )
 
 var (
-	cfgFile   string
-	appConfig *config.ClusterConfig //nolint:unused // TODO: wire into config loading
+	cfgFile string
+	//lint:ignore U1000 fixing config loading later
+	appConfig *config.ClusterConfig
 )
 
 // rootCmd represents the base command when called without any subcommands
