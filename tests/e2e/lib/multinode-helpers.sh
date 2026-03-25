@@ -382,7 +382,7 @@ wait_for_ssh() {
     local host="$1"
     local port="$2"
     local key_file="$3"
-    local max_attempts="${4:-60}"
+    local max_attempts="${4:-30}"
     local attempt=0
 
     echo "  Waiting for SSH to be ready on $host:$port..."
