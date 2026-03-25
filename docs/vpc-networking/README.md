@@ -118,13 +118,19 @@ Inbound:  203.0.113.10 ──→ DNAT ──→ arrives at 10.0.1.5
 # External Connectivity Modes
 
 The `[network]` section in `spinifex.toml` controls how VMs reach the outside
-world. There are three modes.
+world. There are three modes, and pool mode has two IP sources (static or DHCP).
 
 ## `pool` — Full Public Networking (Recommended)
 
-The admin defines a range of routable IPs that Spinifex manages exclusively.
+Each VM in a public subnet gets its own public IP with bidirectional 1:1 NAT.
 Supports the full AWS feature set: public subnets, auto-assign public IPs,
-Elastic IPs, and bidirectional 1:1 NAT.
+Elastic IPs, and security groups.
+
+Pool mode supports two ways to obtain public IPs:
+
+### Static Range (default)
+
+The admin defines a range of routable IPs that Spinifex manages exclusively.
 
 **Use when:** You have a block of IPs you control — datacenter ISP allocation,
 homelab range carved out of your router's DHCP scope, enterprise DMZ range.
@@ -140,9 +146,78 @@ external_mode = "pool"
 name        = "wan"
 range_start = "192.168.1.150"
 range_end   = "192.168.1.250"
-gateway     = "192.168.1.1"
+gateway     = "192.168.1.1"       # Router / next-hop IP
 prefix_len  = 24
+dns_servers = ["192.168.1.1", "8.8.8.8"]
 ```
+
+### DHCP Source
+
+Instead of a static range, public IPs come from the upstream router's DHCP
+server. When a VM launches, Spinifex requests a DHCP lease from the router
+on behalf of the VM. When the VM terminates, the lease is released.
+
+The VM itself never talks to the router's DHCP — it only sees its private
+VPC IP (from OVN's internal DHCP). The host-side DHCP conversation is
+invisible to the guest.
+
+**Use when:** You don't control a static IP block but the router's DHCP
+server has enough leases. Homelabs where you don't want to carve out a range.
+Environments where IPs are managed centrally by the network team's DHCP.
+
+**Requirement:** `dhclient` or `dhcpcd-base` installed on the host.
+
+```toml
+[network]
+external_mode = "pool"
+
+[[network.external_pools]]
+name        = "wan"
+source      = "dhcp"              # "static" (default) or "dhcp"
+gateway     = "192.168.1.1"       # Router / next-hop IP
+prefix_len  = 24
+dns_servers = ["192.168.1.1", "8.8.8.8"]
+# No range_start/range_end — IPs come from router DHCP
+```
+
+### How Pool Mode Works (Both Sources)
+
+Regardless of whether IPs come from a static range or DHCP, the OVN behavior
+is identical:
+
+```
+                          Two DHCP conversations (completely independent):
+
+ ┌─────────────────────────────────────────────────────────────────────┐
+ │ HOST ↔ ROUTER DHCP (on br-ext, via veth pair → br-wan)             │
+ │   Spinifex asks router: "give me a public IP for this VM"          │
+ │   Router responds: 192.168.1.75                                    │
+ │   Spinifex stores IP, tells OVN: dnat_and_snat(192.168.1.75 ↔     │
+ │                                                 172.31.0.4)        │
+ │   (Only used in DHCP source mode. Static mode picks from range.)   │
+ └─────────────────────────────────────────────────────────────────────┘
+
+ ┌─────────────────────────────────────────────────────────────────────┐
+ │ VM ↔ OVN DHCP (on tap → br-int → OVN logical switch)              │
+ │   cloud-init asks: "what's my IP?"                                 │
+ │   OVN DHCP responds: "you are 172.31.0.4"                         │
+ │   VM never sees 192.168.1.x or the router                         │
+ └─────────────────────────────────────────────────────────────────────┘
+```
+
+### Choosing Static vs DHCP
+
+| | Static Range | DHCP Source |
+|---|---|---|
+| **Public IPs from** | Admin-defined `range_start`..`range_end` | Router's DHCP server |
+| **IP predictability** | You know the exact range | Router assigns whatever is available |
+| **Setup effort** | Must reserve range, shrink router DHCP scope | Just set `source = "dhcp"` |
+| **Dependency** | None | Requires `dhclient` on host, working router DHCP |
+| **Best for** | Datacenters, ISP blocks, production | Homelabs, dev environments, shared networks |
+| **Capacity** | Exact: `range_end - range_start` IPs | Limited by router's DHCP pool size |
+
+Both support the same AWS features: public subnets, Elastic IPs, security groups,
+DescribeInstances showing public IPs.
 
 ## `nat` — Outbound Only (Simple)
 
@@ -150,13 +225,13 @@ All VMs share a single external IP for outbound SNAT. No public IPs, no Elastic
 IPs, no inbound from WAN. All subnets behave as private subnets with internet
 access.
 
-The `gateway_ip` is the IP that OVN uses for SNAT. In a homelab or environment
-with a router DHCP server (e.g., 192.168.1.1), `setup-ovn.sh --dhcp` obtains an
-IP from the router's DHCP and uses it as the gateway IP. This is the router's
+The `gateway_ip` is the IP that OVN uses for SNAT. You can set it statically or
+use `setup-ovn.sh --dhcp` to obtain one from the router. This is the router's
 DHCP — not Spinifex's internal OVN DHCP for VMs.
 
 **Use when:** VMs only need outbound access (apt update, pulling images). Edge
-deployments behind ISP NAT. Single WAN IP available.
+deployments behind ISP NAT. Single WAN IP available. Future: use with AWS-style
+NAT Gateway for private subnet internet access.
 
 ```toml
 [network]
@@ -165,7 +240,7 @@ external_mode = "nat"
 [[network.external_pools]]
 name       = "wan"
 gateway    = "192.168.1.1"
-gateway_ip = "192.168.1.100"     # IP obtained from router DHCP or static
+gateway_ip = "192.168.1.100"     # Single IP for all VM outbound SNAT
 prefix_len = 24
 ```
 
@@ -176,23 +251,30 @@ communicate within their VPC.
 
 ## Mode Comparison
 
-| Capability | `pool` | `nat` | Disabled |
-|------------|--------|-------|----------|
-| Outbound internet | Yes | Yes | No |
-| Inbound from WAN | Yes (1:1 NAT) | No | No |
-| Public subnets | Yes | No | No |
-| Auto-assign public IPs | Yes | No | No |
-| Elastic IPs | Yes | No | No |
-| Admin effort | Reserve IP range | Set gateway IP | None |
+| Capability | `pool` (static) | `pool` (dhcp) | `nat` | Disabled |
+|------------|-----------------|---------------|-------|----------|
+| Outbound internet | Yes | Yes | Yes | No |
+| Inbound from WAN | Yes (1:1 NAT) | Yes (1:1 NAT) | No | No |
+| Public subnets | Yes | Yes | No | No |
+| Auto-assign public IPs | Yes | Yes | No | No |
+| Elastic IPs | Yes | Yes | No | No |
+| DescribeInstances shows public IP | Yes | Yes | No | No |
+| Admin must reserve IP range | Yes | No | No | No |
+| Needs router DHCP | No | Yes | Optional | No |
 
 If you start with `nat` and later need public subnets, switch to `pool` and
-define a range — no data migration needed.
+define a range (or use `source = "dhcp"`) — no data migration needed.
 
 # Bridge Setup — Physical Network Wiring
 
-OVN needs an OVS bridge (`br-wan`) with a physical uplink to the WAN for
-external connectivity. How that uplink is provided depends on whether the host
-has one NIC or multiple NICs.
+OVN needs an OVS bridge for external connectivity. `setup-ovn.sh` auto-detects
+the best approach:
+
+- **Linux bridge on default route** (e.g. `br-wan` from cloud-init): Creates
+  OVS bridge `br-ext` and links them with a veth pair. The Linux bridge keeps
+  its IP and routes — no interruption. Bridge-mapping: `external:br-ext`.
+- **OVS bridge on default route**: Uses it directly for bridge-mappings.
+- **Physical NIC**: Stops and prints guidance (cannot safely move the NIC).
 
 ## Two Bridges, Two Jobs
 
@@ -416,19 +498,21 @@ external_mode = "pool"    # "pool", "nat", or "" (disabled)
 
 ## IP Pools: network.external_pools
 
-Each pool defines a range of IPs that Spinifex allocates from. You can have
-one pool (homelab) or many (multi-region datacenter).
+Each pool defines where external IPs come from. You can have one pool (homelab)
+or many (multi-region datacenter).
 
 ```toml
 [[network.external_pools]]
 name        = "wan"                  # Pool identifier (unique within cluster)
-range_start = "192.168.1.150"        # First allocatable IP
-range_end   = "192.168.1.250"        # Last allocatable IP
+source      = "static"              # "static" (default) or "dhcp"
+range_start = "192.168.1.150"        # First allocatable IP (static source only)
+range_end   = "192.168.1.250"        # Last allocatable IP (static source only)
 gateway     = "192.168.1.1"          # WAN default gateway (next hop for 0.0.0.0/0)
 gateway_ip  = ""                     # OVN router SNAT address (defaults to range_start)
 prefix_len  = 24                     # Subnet mask length
 region      = ""                     # Scope to region (optional)
 az          = ""                     # Scope to AZ (optional)
+dns_servers = ["8.8.8.8"]           # DNS for VMs (optional)
 ```
 
 ### Field Details
@@ -436,13 +520,15 @@ az          = ""                     # Scope to AZ (optional)
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | Yes | Unique pool name. Used as NATS KV key and in `AllocateAddress`. |
-| `range_start` | Pool mode | First IP in the range. First IP is reserved for OVN gateway SNAT (unless `gateway_ip` overrides). |
-| `range_end` | Pool mode | Last IP in the range. |
+| `source` | No | IP source: `"static"` (default) uses `range_start`/`range_end`. `"dhcp"` obtains IPs from the router's DHCP server on each VM launch. |
+| `range_start` | Static only | First IP in the range. First IP is reserved for OVN gateway SNAT (unless `gateway_ip` overrides). |
+| `range_end` | Static only | Last IP in the range. |
 | `gateway` | Yes | Physical router/switch — the WAN default gateway. OVN sets `0.0.0.0/0 → gateway`. |
-| `gateway_ip` | NAT mode | Static IP for OVN router SNAT. In pool mode, defaults to `range_start`. In NAT mode, this is the single external IP all VMs share. |
+| `gateway_ip` | NAT mode | Static IP for OVN router SNAT. In pool mode, defaults to `range_start` (static) or first DHCP lease (dhcp). In NAT mode, this is the single external IP all VMs share. |
 | `prefix_len` | Yes | Subnet mask for the external network (e.g., 24 = /24). |
 | `region` | No | Scopes pool to a region. Instances in this region prefer this pool. |
 | `az` | No | Scopes pool to an AZ. More specific than region. |
+| `dns_servers` | No | DNS servers propagated to VMs via OVN DHCP. |
 
 ### Why range_start/range_end Instead of CIDR?
 
@@ -531,6 +617,33 @@ external_interface = "eth0"
 
 **Setup:** Change your router's DHCP range to end at .149. Run
 `setup-ovn.sh --macvlan --wan-iface=eth0` (or auto-detected if WAN is already a bridge).
+
+## Homelab / Dev (DHCP Pool — No Range Reservation)
+
+```
+Network: 192.168.1.0/24
+Router: 192.168.1.1 (DHCP serves full range, no carve-out needed)
+Spinifex: gets IPs from router DHCP on demand
+```
+
+```toml
+[network]
+external_mode = "pool"
+
+[[network.external_pools]]
+name        = "wan"
+source      = "dhcp"
+gateway     = "192.168.1.1"
+prefix_len  = 24
+dns_servers = ["192.168.1.1", "8.8.8.8"]
+
+[nodes.homelab.vpcd]
+external_interface = "eth0"
+```
+
+**Setup:** No router changes needed. Spinifex requests IPs from the router's
+DHCP server when VMs launch and releases them on terminate. Requires `dhclient`
+on the host (`apt install isc-dhcp-client`).
 
 ## Datacenter / Colo (ISP Block)
 
