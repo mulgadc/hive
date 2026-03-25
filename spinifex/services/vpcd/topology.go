@@ -717,30 +717,13 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 		return
 	}
 
-	// 5. Add SNAT rule — masquerade all VPC traffic going through the gateway
-	router, err := h.ovn.GetLogicalRouter(ctx, routerName)
-	if err != nil {
-		slog.Warn("vpcd: failed to get router for SNAT, skipping NAT setup", "router", routerName, "err", err)
-	} else {
-		vpcCIDR := router.ExternalIDs["spinifex:cidr"]
-		if vpcCIDR == "" {
-			vpcCIDR = "10.0.0.0/8"
-			slog.Warn("vpcd: VPC CIDR missing from router metadata, using overbroad fallback",
-				"router", routerName, "fallbackCIDR", vpcCIDR, "vpcId", evt.VpcId)
-		}
-		snatRule := &nbdb.NAT{
-			Type:       "snat",
-			ExternalIP: gatewayIP,
-			LogicalIP:  vpcCIDR,
-			ExternalIDs: map[string]string{
-				"spinifex:vpc_id": evt.VpcId,
-				"spinifex:igw_id": evt.InternetGatewayId,
-			},
-		}
-		if err := h.ovn.AddNAT(ctx, routerName, snatRule); err != nil {
-			slog.Warn("vpcd: failed to add SNAT rule", "router", routerName, "err", err)
-		}
-	}
+	// 5. No blanket SNAT rule — AWS behavior requires that only instances with
+	// public IPs (via MapPublicIpOnLaunch or EIPs) can route through the IGW.
+	// Per-VM dnat_and_snat rules created by handleAddNAT provide both inbound
+	// DNAT and outbound SNAT for public instances. Private subnet instances
+	// (no public IP, no NAT rule) cannot reach the internet — their packets
+	// leave the router with a private source IP that the upstream router drops.
+	// A future NAT Gateway feature will add scoped SNAT for private subnets.
 
 	// 6. Add default route pointing to the WAN gateway
 	defaultRoute := &nbdb.LogicalRouterStaticRoute{
@@ -1146,25 +1129,8 @@ func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId, igwId string)
 		return fmt.Errorf("create switch gateway port %s: %w", switchGWPortName, err)
 	}
 
-	// 5. Add SNAT rule
-	router, err := h.ovn.GetLogicalRouter(ctx, routerName)
-	if err == nil {
-		vpcCIDR := router.ExternalIDs["spinifex:cidr"]
-		if vpcCIDR == "" {
-			vpcCIDR = "10.0.0.0/8"
-		}
-		snatRule := &nbdb.NAT{
-			Type:       "snat",
-			ExternalIP: gatewayIP,
-			LogicalIP:  vpcCIDR,
-			ExternalIDs: map[string]string{
-				"spinifex:vpc_id": vpcId,
-			},
-		}
-		if err := h.ovn.AddNAT(ctx, routerName, snatRule); err != nil {
-			slog.Warn("vpcd reconcile: failed to add SNAT rule", "err", err)
-		}
-	}
+	// 5. No blanket SNAT — per-VM dnat_and_snat rules handle public instances.
+	// See handleIGWAttach comment for rationale (AWS parity).
 
 	// 6. Add default route
 	defaultRoute := &nbdb.LogicalRouterStaticRoute{

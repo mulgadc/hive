@@ -858,9 +858,10 @@ func TestTopologyHandler_IGWAttach(t *testing.T) {
 		t.Fatalf("expected switch gateway port: %v", err)
 	}
 
-	// Verify SNAT rule added
-	if len(router.NAT) != 1 {
-		t.Errorf("expected 1 NAT rule, got %d", len(router.NAT))
+	// Verify NO blanket SNAT rule — only per-VM dnat_and_snat rules should
+	// provide NAT (AWS parity: private subnet instances cannot route via IGW)
+	if len(router.NAT) != 0 {
+		t.Errorf("expected 0 NAT rules (no blanket SNAT), got %d", len(router.NAT))
 	}
 
 	// Verify default route added
@@ -930,16 +931,9 @@ func TestTopologyHandler_IGWAttach_WithExternalPool(t *testing.T) {
 		t.Errorf("expected gateway network 192.168.1.150/24, got %v", gwPort.Networks)
 	}
 
-	// Verify SNAT uses real external IP (look up NAT by UUID from router)
-	if len(router.NAT) != 1 {
-		t.Fatalf("expected 1 NAT rule, got %d", len(router.NAT))
-	}
-	natRule := mock.nats[router.NAT[0]]
-	if natRule == nil {
-		t.Fatal("NAT rule not found in mock")
-	}
-	if natRule.ExternalIP != "192.168.1.150" {
-		t.Errorf("expected SNAT external IP 192.168.1.150, got %s", natRule.ExternalIP)
+	// Verify NO blanket SNAT rule (AWS parity)
+	if len(router.NAT) != 0 {
+		t.Errorf("expected 0 NAT rules (no blanket SNAT), got %d", len(router.NAT))
 	}
 
 	// Verify default route points to WAN gateway, not link-local
@@ -994,9 +988,9 @@ func TestTopologyHandler_IGWAttach_PoolWithGatewayIP(t *testing.T) {
 	if gwPort.Networks[0] != "203.0.113.2/28" {
 		t.Errorf("expected 203.0.113.2/28, got %s", gwPort.Networks[0])
 	}
-	natRule := mock.nats[router.NAT[0]]
-	if natRule.ExternalIP != "203.0.113.2" {
-		t.Errorf("expected SNAT IP 203.0.113.2, got %s", natRule.ExternalIP)
+	// No blanket SNAT rule (AWS parity)
+	if len(router.NAT) != 0 {
+		t.Errorf("expected 0 NAT rules (no blanket SNAT), got %d", len(router.NAT))
 	}
 	route := mock.staticRoutes[router.StaticRoutes[0]]
 	if route.Nexthop != "203.0.113.1" {

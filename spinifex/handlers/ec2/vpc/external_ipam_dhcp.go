@@ -27,7 +27,6 @@ func ObtainDHCPLease(bridge, clientID string) (string, error) {
 	//   -4              = IPv4 only
 	//   -I clientID     = unique client identifier per ENI
 	//   -t 15           = 15 second timeout
-	//nolint:gosec // clientID is sanitized, bridge comes from config
 	cmd := exec.Command("sudo", dhcpcdBin,
 		"--noconfigure",
 		"-1",
@@ -62,7 +61,6 @@ func ReleaseDHCPLease(bridge, clientID string) error {
 		return nil
 	}
 
-	//nolint:gosec // clientID is sanitized, bridge comes from config
 	cmd := exec.Command("sudo", dhcpcdBin,
 		"--release",
 		"-4",
@@ -83,14 +81,12 @@ func ReleaseDHCPLease(bridge, clientID string) error {
 // parseDHCPCDLeasedIP extracts the leased IP from dhcpcd stdout.
 // Looks for: "<iface>: leased <IP> for <N> seconds"
 func parseDHCPCDLeasedIP(output string) string {
-	for _, line := range strings.Split(output, "\n") {
-		if idx := strings.Index(line, ": leased "); idx >= 0 {
-			rest := line[idx+len(": leased "):]
-			if spaceIdx := strings.IndexByte(rest, ' '); spaceIdx > 0 {
-				return rest[:spaceIdx]
+	for line := range strings.SplitSeq(output, "\n") {
+		if before, after, found := strings.Cut(line, ": leased "); found && before != "" {
+			if spaceIdx := strings.IndexByte(after, ' '); spaceIdx > 0 {
+				return after[:spaceIdx]
 			}
 		}
 	}
 	return ""
 }
-

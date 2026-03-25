@@ -211,9 +211,9 @@ func TestIntegration_VPCLifecycle(t *testing.T) {
 	if len(router.Ports) != 2 {
 		t.Errorf("router ports = %d, want 2 (subnet + gateway)", len(router.Ports))
 	}
-	// NAT rule should exist
-	if len(router.NAT) != 1 {
-		t.Errorf("router NAT rules = %d, want 1", len(router.NAT))
+	// No blanket SNAT — only per-VM dnat_and_snat rules provide NAT (AWS parity)
+	if len(router.NAT) != 0 {
+		t.Errorf("router NAT rules = %d, want 0 (no blanket SNAT)", len(router.NAT))
 	}
 	// Default route should exist
 	if len(router.StaticRoutes) != 1 {
@@ -424,8 +424,8 @@ func TestIntegration_MultiSubnetWithIGW(t *testing.T) {
 	if len(router.Ports) != 4 {
 		t.Errorf("router ports after IGW = %d, want 4", len(router.Ports))
 	}
-	if len(router.NAT) != 1 {
-		t.Errorf("router NAT = %d, want 1", len(router.NAT))
+	if len(router.NAT) != 0 {
+		t.Errorf("router NAT = %d, want 0 (no blanket SNAT)", len(router.NAT))
 	}
 	if len(router.StaticRoutes) != 1 {
 		t.Errorf("router routes = %d, want 1", len(router.StaticRoutes))
