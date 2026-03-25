@@ -262,7 +262,7 @@ IMPORT_LOG=$(./bin/spx admin images import \
     --version 24.04 \
     --config "$HOME/node1/config/spinifex.toml" \
     --spinifex-dir "$HOME/node1/" \
-    --force)
+    --force 2>/dev/null)
 echo "Import output: $IMPORT_LOG"
 AMI_ID=$(echo "$IMPORT_LOG" | grep -o 'ami-[a-z0-9]\+')
 
