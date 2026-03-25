@@ -765,9 +765,35 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	isMultiNode := nodes >= 2 && bindIP != "0.0.0.0"
 
 	if isMultiNode {
+		// Build cluster-wide network config for propagation to joining nodes
+		var networkConfig *formation.NetworkConfig
+		if externalMode != "" {
+			bootstrapVpcId := utils.GenerateResourceID("vpc")
+			bootstrapSubnetId := utils.GenerateResourceID("subnet")
+			bootstrapIgwId := utils.GenerateResourceID("igw")
+			networkConfig = &formation.NetworkConfig{
+				ExternalMode:        externalMode,
+				ExternalDHCP:        useExternalDHCP,
+				PoolName:            "wan",
+				PoolSource:          externalSource,
+				PoolStart:           poolStart,
+				PoolEnd:             poolEnd,
+				PoolGateway:         externalGateway,
+				PoolGatewayIP:       gatewayIP,
+				PoolPrefixLen:       externalPrefixLen,
+				PoolDNSServers:      dnsServers,
+				BootstrapAccountId:  admin.DefaultAccountID(),
+				BootstrapVpcId:      bootstrapVpcId,
+				BootstrapSubnetId:   bootstrapSubnetId,
+				BootstrapIgwId:      bootstrapIgwId,
+				BootstrapCidr:       handlers_ec2_vpc.DefaultVPCCidr,
+				BootstrapSubnetCidr: handlers_ec2_vpc.DefaultSubnetCidr,
+			}
+		}
+
 		runAdminInitMultiNode(cmd, accessKey, secretKey, accountID, natsToken, clusterName,
 			configDir, spxRoot, certPath, region, az, node, bindIP, clusterBind,
-			port, nodes, formationTimeoutStr, services)
+			port, nodes, formationTimeoutStr, services, networkConfig)
 		return
 	}
 
@@ -954,7 +980,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 // then generates configs with complete cluster topology.
 func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, natsToken, clusterName,
 	configDir, spxRoot, certPath, region, az, node, bindIP, clusterBind string,
-	port, expectedNodes int, formationTimeoutStr string, services []string) {
+	port, expectedNodes int, formationTimeoutStr string, services []string, networkConfig *formation.NetworkConfig) {
 	formationTimeout, err := time.ParseDuration(formationTimeoutStr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error: Invalid --formation-timeout: %v\n", err)
@@ -998,7 +1024,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		AdminSecretKey: bootstrapResult.AdminSecretKey,
 	}
 
-	fs := formation.NewFormationServer(expectedNodes, creds, string(caCertData), string(caKeyData))
+	fs := formation.NewFormationServer(expectedNodes, creds, string(caCertData), string(caKeyData), networkConfig)
 
 	// Include master key in formation server for distribution to joining nodes
 	fs.SetMasterKey(base64.StdEncoding.EncodeToString(masterKey))
@@ -1104,6 +1130,34 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		// Init node runs ovn-central locally
 		OVNNBAddr: "tcp:127.0.0.1:6641",
 		OVNSBAddr: "tcp:127.0.0.1:6642",
+	}
+
+	// Apply cluster-wide network config to init node's config
+	if networkConfig != nil {
+		configSettings.ExternalMode = networkConfig.ExternalMode
+		configSettings.ExternalDHCP = networkConfig.ExternalDHCP
+		configSettings.PoolName = networkConfig.PoolName
+		configSettings.PoolSource = networkConfig.PoolSource
+		configSettings.PoolStart = networkConfig.PoolStart
+		configSettings.PoolEnd = networkConfig.PoolEnd
+		configSettings.PoolGateway = networkConfig.PoolGateway
+		configSettings.PoolGatewayIP = networkConfig.PoolGatewayIP
+		configSettings.PoolPrefixLen = networkConfig.PoolPrefixLen
+		configSettings.PoolDNSServers = networkConfig.PoolDNSServers
+
+		configSettings.BootstrapAccountId = networkConfig.BootstrapAccountId
+		configSettings.BootstrapVpcId = networkConfig.BootstrapVpcId
+		configSettings.BootstrapSubnetId = networkConfig.BootstrapSubnetId
+		configSettings.BootstrapIgwId = networkConfig.BootstrapIgwId
+		configSettings.BootstrapCidr = networkConfig.BootstrapCidr
+		configSettings.BootstrapSubnetCidr = networkConfig.BootstrapSubnetCidr
+
+		// Auto-detect local network topology for per-node config
+		detected, err := admin.DetectNetwork()
+		if err == nil && detected.WAN != nil {
+			configSettings.ExternalIface = detected.WAN.Name
+			configSettings.WanBridge = detectedWanBridge(detected)
+		}
 	}
 
 	// Generate config files
@@ -1435,6 +1489,37 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		// Joining nodes connect to the init node's OVN NB/SB DB
 		OVNNBAddr: fmt.Sprintf("tcp:%s:6641", leaderIP),
 		OVNSBAddr: fmt.Sprintf("tcp:%s:6642", leaderIP),
+	}
+
+	// Apply cluster-wide network config from leader
+	if statusResp.NetworkConfig != nil {
+		nc := statusResp.NetworkConfig
+		configSettings.ExternalMode = nc.ExternalMode
+		configSettings.ExternalDHCP = nc.ExternalDHCP
+		configSettings.PoolName = nc.PoolName
+		configSettings.PoolSource = nc.PoolSource
+		configSettings.PoolStart = nc.PoolStart
+		configSettings.PoolEnd = nc.PoolEnd
+		configSettings.PoolGateway = nc.PoolGateway
+		configSettings.PoolGatewayIP = nc.PoolGatewayIP
+		configSettings.PoolPrefixLen = nc.PoolPrefixLen
+		configSettings.PoolDNSServers = nc.PoolDNSServers
+
+		configSettings.BootstrapAccountId = nc.BootstrapAccountId
+		configSettings.BootstrapVpcId = nc.BootstrapVpcId
+		configSettings.BootstrapSubnetId = nc.BootstrapSubnetId
+		configSettings.BootstrapIgwId = nc.BootstrapIgwId
+		configSettings.BootstrapCidr = nc.BootstrapCidr
+		configSettings.BootstrapSubnetCidr = nc.BootstrapSubnetCidr
+
+		// Auto-detect local network topology for per-node config
+		if nc.ExternalMode != "" {
+			detected, err := admin.DetectNetwork()
+			if err == nil && detected.WAN != nil {
+				configSettings.ExternalIface = detected.WAN.Name
+				configSettings.WanBridge = detectedWanBridge(detected)
+			}
+		}
 	}
 
 	// Generate config files

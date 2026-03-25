@@ -35,7 +35,7 @@ func testNode(name, ip string) NodeInfo {
 
 func TestNewFormationServer(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(3, testCreds(), "ca-cert-pem", "ca-key-pem")
+	fs := NewFormationServer(3, testCreds(), "ca-cert-pem", "ca-key-pem", nil)
 
 	assert.Equal(t, 3, fs.expected)
 	assert.Empty(t, fs.nodes)
@@ -44,7 +44,7 @@ func TestNewFormationServer(t *testing.T) {
 
 func TestRegisterNode(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(3, testCreds(), "", "")
+	fs := NewFormationServer(3, testCreds(), "", "", nil)
 
 	err := fs.RegisterNode(testNode("node1", "10.0.0.1"))
 	require.NoError(t, err)
@@ -56,7 +56,7 @@ func TestRegisterNode(t *testing.T) {
 
 func TestRegisterDuplicateName(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(3, testCreds(), "", "")
+	fs := NewFormationServer(3, testCreds(), "", "", nil)
 
 	require.NoError(t, fs.RegisterNode(testNode("node1", "10.0.0.1")))
 	err := fs.RegisterNode(testNode("node1", "10.0.0.2"))
@@ -66,7 +66,7 @@ func TestRegisterDuplicateName(t *testing.T) {
 
 func TestRegisterDuplicateIP(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(3, testCreds(), "", "")
+	fs := NewFormationServer(3, testCreds(), "", "", nil)
 
 	require.NoError(t, fs.RegisterNode(testNode("node1", "10.0.0.1")))
 	err := fs.RegisterNode(testNode("node2", "10.0.0.1"))
@@ -76,7 +76,7 @@ func TestRegisterDuplicateIP(t *testing.T) {
 
 func TestIsComplete(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(2, testCreds(), "", "")
+	fs := NewFormationServer(2, testCreds(), "", "", nil)
 
 	assert.False(t, fs.IsComplete())
 	require.NoError(t, fs.RegisterNode(testNode("node1", "10.0.0.1")))
@@ -87,7 +87,7 @@ func TestIsComplete(t *testing.T) {
 
 func TestWaitForCompletion(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(2, testCreds(), "", "")
+	fs := NewFormationServer(2, testCreds(), "", "", nil)
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
@@ -102,7 +102,7 @@ func TestWaitForCompletion(t *testing.T) {
 
 func TestWaitForCompletionTimeout(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(3, testCreds(), "", "")
+	fs := NewFormationServer(3, testCreds(), "", "", nil)
 
 	require.NoError(t, fs.RegisterNode(testNode("node1", "10.0.0.1")))
 
@@ -122,7 +122,7 @@ func testServer(t *testing.T, fs *FormationServer) *httptest.Server {
 
 func TestJoinEndpoint(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(3, testCreds(), "", "")
+	fs := NewFormationServer(3, testCreds(), "", "", nil)
 	ts := testServer(t, fs)
 	defer ts.Close()
 
@@ -142,7 +142,7 @@ func TestJoinEndpoint(t *testing.T) {
 
 func TestJoinEndpointDuplicate(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(3, testCreds(), "", "")
+	fs := NewFormationServer(3, testCreds(), "", "", nil)
 	ts := testServer(t, fs)
 	defer ts.Close()
 
@@ -161,7 +161,7 @@ func TestJoinEndpointDuplicate(t *testing.T) {
 
 func TestStatusEndpointIncomplete(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(3, testCreds(), "ca-cert", "ca-key")
+	fs := NewFormationServer(3, testCreds(), "ca-cert", "ca-key", nil)
 	ts := testServer(t, fs)
 	defer ts.Close()
 
@@ -184,7 +184,7 @@ func TestStatusEndpointIncomplete(t *testing.T) {
 func TestStatusEndpointComplete(t *testing.T) {
 	t.Parallel()
 	creds := testCreds()
-	fs := NewFormationServer(2, creds, "ca-cert-data", "ca-key-data")
+	fs := NewFormationServer(2, creds, "ca-cert-data", "ca-key-data", nil)
 	ts := testServer(t, fs)
 	defer ts.Close()
 
@@ -209,7 +209,7 @@ func TestStatusEndpointComplete(t *testing.T) {
 
 func TestStatusEndpointMasterKey(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(2, testCreds(), "ca-cert", "ca-key")
+	fs := NewFormationServer(2, testCreds(), "ca-cert", "ca-key", nil)
 	fs.SetMasterKey("dGVzdC1tYXN0ZXIta2V5LWJhc2U2NC1lbmNvZGVk")
 	ts := testServer(t, fs)
 	defer ts.Close()
@@ -237,7 +237,7 @@ func TestStatusEndpointMasterKey(t *testing.T) {
 
 func TestHealthEndpoint(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(1, testCreds(), "", "")
+	fs := NewFormationServer(1, testCreds(), "", "", nil)
 	ts := testServer(t, fs)
 	defer ts.Close()
 
@@ -292,7 +292,7 @@ func TestBuildPredastoreNodes(t *testing.T) {
 func TestFullFormationFlow(t *testing.T) {
 	t.Parallel()
 	creds := testCreds()
-	fs := NewFormationServer(3, creds, "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----", "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----")
+	fs := NewFormationServer(3, creds, "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----", "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----", nil)
 	ts := testServer(t, fs)
 	defer ts.Close()
 

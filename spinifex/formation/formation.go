@@ -38,14 +38,37 @@ type JoinResponse struct {
 
 // StatusResponse is returned by the formation server status endpoint.
 type StatusResponse struct {
-	Complete    bool                `json:"complete"`
-	Joined      int                 `json:"joined"`
-	Expected    int                 `json:"expected"`
-	Nodes       map[string]NodeInfo `json:"nodes,omitempty"`
-	Credentials *SharedCredentials  `json:"credentials,omitempty"`
-	CACert      string              `json:"ca_cert,omitempty"`
-	CAKey       string              `json:"ca_key,omitempty"`
-	MasterKey   string              `json:"master_key,omitempty"`
+	Complete      bool                `json:"complete"`
+	Joined        int                 `json:"joined"`
+	Expected      int                 `json:"expected"`
+	Nodes         map[string]NodeInfo `json:"nodes,omitempty"`
+	Credentials   *SharedCredentials  `json:"credentials,omitempty"`
+	CACert        string              `json:"ca_cert,omitempty"`
+	CAKey         string              `json:"ca_key,omitempty"`
+	MasterKey     string              `json:"master_key,omitempty"`
+	NetworkConfig *NetworkConfig      `json:"network_config,omitempty"`
+}
+
+// NetworkConfig holds the cluster-wide external networking configuration
+// propagated from the init node to joining nodes during formation.
+type NetworkConfig struct {
+	ExternalMode   string   `json:"external_mode"`
+	ExternalDHCP   bool     `json:"external_dhcp,omitempty"`
+	PoolName       string   `json:"pool_name"`
+	PoolSource     string   `json:"pool_source,omitempty"`
+	PoolStart      string   `json:"pool_start,omitempty"`
+	PoolEnd        string   `json:"pool_end,omitempty"`
+	PoolGateway    string   `json:"pool_gateway"`
+	PoolGatewayIP  string   `json:"pool_gateway_ip,omitempty"`
+	PoolPrefixLen  int      `json:"pool_prefix_len"`
+	PoolDNSServers []string `json:"pool_dns_servers,omitempty"`
+
+	BootstrapAccountId  string `json:"bootstrap_account_id,omitempty"`
+	BootstrapVpcId      string `json:"bootstrap_vpc_id,omitempty"`
+	BootstrapSubnetId   string `json:"bootstrap_subnet_id,omitempty"`
+	BootstrapIgwId      string `json:"bootstrap_igw_id,omitempty"`
+	BootstrapCidr       string `json:"bootstrap_cidr,omitempty"`
+	BootstrapSubnetCidr string `json:"bootstrap_subnet_cidr,omitempty"`
 }
 
 // SharedCredentials contains the cluster-wide credentials distributed during formation.
@@ -67,26 +90,28 @@ type SharedCredentials struct {
 // nodes have joined, the done channel is closed and full cluster data (credentials,
 // CA, node list) becomes available via GET /formation/status.
 type FormationServer struct {
-	mu          sync.RWMutex
-	expected    int
-	nodes       map[string]NodeInfo
-	credentials *SharedCredentials
-	caCert      string
-	caKey       string
-	masterKey   string
-	done        chan struct{}
-	server      *http.Server
+	mu            sync.RWMutex
+	expected      int
+	nodes         map[string]NodeInfo
+	credentials   *SharedCredentials
+	caCert        string
+	caKey         string
+	masterKey     string
+	networkConfig *NetworkConfig
+	done          chan struct{}
+	server        *http.Server
 }
 
 // NewFormationServer creates a new formation server expecting the given number of nodes.
-func NewFormationServer(expected int, creds *SharedCredentials, caCert, caKey string) *FormationServer {
+func NewFormationServer(expected int, creds *SharedCredentials, caCert, caKey string, networkConfig *NetworkConfig) *FormationServer {
 	return &FormationServer{
-		expected:    expected,
-		nodes:       make(map[string]NodeInfo),
-		credentials: creds,
-		caCert:      caCert,
-		caKey:       caKey,
-		done:        make(chan struct{}),
+		expected:      expected,
+		nodes:         make(map[string]NodeInfo),
+		credentials:   creds,
+		caCert:        caCert,
+		caKey:         caKey,
+		networkConfig: networkConfig,
+		done:          make(chan struct{}),
 	}
 }
 
@@ -252,6 +277,7 @@ func (fs *FormationServer) handleStatus(w http.ResponseWriter, r *http.Request) 
 		resp.CACert = fs.caCert
 		resp.CAKey = fs.caKey
 		resp.MasterKey = fs.masterKey
+		resp.NetworkConfig = fs.networkConfig
 	}
 
 	writeJSON(w, http.StatusOK, resp)
