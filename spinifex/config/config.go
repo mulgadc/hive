@@ -21,8 +21,9 @@ type ClusterConfig struct {
 // ExternalPool defines a range of routable IPs that Spinifex manages for public subnets.
 type ExternalPool struct {
 	Name       string   `mapstructure:"name"`        // Pool identifier (e.g., "wan", "dc1-primary")
-	RangeStart string   `mapstructure:"range_start"` // First IP in range
-	RangeEnd   string   `mapstructure:"range_end"`   // Last IP in range
+	Source     string   `mapstructure:"source"`      // IP source: "static" (default) or "dhcp" (from router DHCP)
+	RangeStart string   `mapstructure:"range_start"` // First IP in range (static source only)
+	RangeEnd   string   `mapstructure:"range_end"`   // Last IP in range (static source only)
 	Gateway    string   `mapstructure:"gateway"`     // WAN default gateway (next hop for 0.0.0.0/0)
 	GatewayIP  string   `mapstructure:"gateway_ip"`  // OVN router external IP (override; defaults to first IP in range)
 	PrefixLen  int      `mapstructure:"prefix_len"`  // Subnet mask (default 24)

@@ -219,6 +219,7 @@ func init() {
 	// External networking flags
 	adminInitCmd.Flags().String("external-mode", "", "External network mode: 'pool' (public IPs), 'nat' (outbound-only, default), or '' (disabled)")
 	adminInitCmd.Flags().String("external-iface", "", "WAN NIC for br-external (auto-detected from default route)")
+	adminInitCmd.Flags().String("external-source", "", "Pool IP source: 'static' (default, uses --external-pool range) or 'dhcp' (from router DHCP)")
 	adminInitCmd.Flags().String("external-pool", "", "External IP pool range as start-end (e.g., 192.168.1.150-192.168.1.250)")
 	adminInitCmd.Flags().String("external-gateway", "", "WAN gateway IP (auto-detected from default route)")
 	adminInitCmd.Flags().String("gateway-ip", "", "OVN gateway router's external IP for SNAT (default: pool range_start for pool mode, required for nat mode without DHCP)")
@@ -541,6 +542,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	// External networking flags
 	externalMode, _ := cmd.Flags().GetString("external-mode")
 	externalIface, _ := cmd.Flags().GetString("external-iface")
+	externalSource, _ := cmd.Flags().GetString("external-source")
 	externalPool, _ := cmd.Flags().GetString("external-pool")
 	externalGateway, _ := cmd.Flags().GetString("external-gateway")
 	externalPrefixLen, _ := cmd.Flags().GetInt("external-prefix-len")
@@ -604,24 +606,34 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 	if externalMode == "pool" {
-		if externalPool == "" {
-			fmt.Fprintf(os.Stderr, "❌ Error: --external-pool is required when --external-mode=pool (e.g., 192.168.1.150-192.168.1.250)\n")
-			if detectedNet != nil && detectedNet.WAN != nil {
-				sugStart, sugEnd := admin.SuggestPoolRange(detectedNet.WAN)
-				fmt.Fprintf(os.Stderr, "   Suggested: --external-pool=%s-%s\n", sugStart, sugEnd)
+		if externalSource == "dhcp" {
+			// DHCP source: no static range needed, just gateway
+			if externalGateway == "" {
+				fmt.Fprintf(os.Stderr, "❌ Error: --external-gateway is required when --external-mode=pool\n")
+				os.Exit(1)
 			}
-			os.Exit(1)
+		} else {
+			// Static source (default): need pool range
+			if externalPool == "" {
+				fmt.Fprintf(os.Stderr, "❌ Error: --external-pool is required when --external-mode=pool (e.g., 192.168.1.150-192.168.1.250)\n")
+				fmt.Fprintf(os.Stderr, "   Or use --external-source=dhcp to get IPs from router DHCP\n")
+				if detectedNet != nil && detectedNet.WAN != nil {
+					sugStart, sugEnd := admin.SuggestPoolRange(detectedNet.WAN)
+					fmt.Fprintf(os.Stderr, "   Suggested: --external-pool=%s-%s\n", sugStart, sugEnd)
+				}
+				os.Exit(1)
+			}
+			if externalGateway == "" {
+				fmt.Fprintf(os.Stderr, "❌ Error: --external-gateway is required when --external-mode=pool\n")
+				os.Exit(1)
+			}
+			parts := strings.SplitN(externalPool, "-", 2)
+			if len(parts) != 2 || net.ParseIP(parts[0]) == nil || net.ParseIP(parts[1]) == nil {
+				fmt.Fprintf(os.Stderr, "❌ Error: --external-pool must be start-end IPs (e.g., 192.168.1.150-192.168.1.250), got: %s\n", externalPool)
+				os.Exit(1)
+			}
+			poolStart, poolEnd = parts[0], parts[1]
 		}
-		if externalGateway == "" {
-			fmt.Fprintf(os.Stderr, "❌ Error: --external-gateway is required when --external-mode=pool\n")
-			os.Exit(1)
-		}
-		parts := strings.SplitN(externalPool, "-", 2)
-		if len(parts) != 2 || net.ParseIP(parts[0]) == nil || net.ParseIP(parts[1]) == nil {
-			fmt.Fprintf(os.Stderr, "❌ Error: --external-pool must be start-end IPs (e.g., 192.168.1.150-192.168.1.250), got: %s\n", externalPool)
-			os.Exit(1)
-		}
-		poolStart, poolEnd = parts[0], parts[1]
 	}
 	if externalGateway != "" && net.ParseIP(externalGateway) == nil {
 		fmt.Fprintf(os.Stderr, "❌ Error: --external-gateway is not a valid IP: %s\n", externalGateway)
@@ -848,6 +860,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		WanBridge:      detectedWanBridge(detectedNet),
 		ExternalDHCP:   useExternalDHCP,
 		PoolName:       "wan",
+		PoolSource:     externalSource,
 		PoolStart:      poolStart,
 		PoolEnd:        poolEnd,
 		PoolGateway:    externalGateway,

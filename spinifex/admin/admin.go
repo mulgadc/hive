@@ -70,8 +70,9 @@ type ConfigSettings struct {
 	WanBridge      string   // OVS bridge for WAN traffic (default "br-wan")
 	ExternalDHCP   bool     // Obtain gateway IP via DHCP on macvlan/bridge
 	PoolName       string   // External pool name (e.g., "wan")
-	PoolStart      string   // First IP in external pool range
-	PoolEnd        string   // Last IP in external pool range
+	PoolSource     string   // IP source: "static" (default) or "dhcp" (from router DHCP)
+	PoolStart      string   // First IP in external pool range (static source only)
+	PoolEnd        string   // Last IP in external pool range (static source only)
 	PoolGateway    string   // WAN gateway IP
 	PoolGatewayIP  string   // Explicit SNAT IP (for nat mode without DHCP)
 	PoolPrefixLen  int      // Subnet prefix length (default 24)

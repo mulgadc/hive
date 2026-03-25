@@ -12,6 +12,9 @@ external_dhcp = true
 
 [[network.external_pools]]
 name        = "{{.PoolName}}"
+{{- if .PoolSource}}
+source      = "{{.PoolSource}}"
+{{- end}}
 {{- if .PoolStart}}
 range_start = "{{.PoolStart}}"
 range_end   = "{{.PoolEnd}}"
