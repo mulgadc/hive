@@ -1219,7 +1219,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // G402: joining node doesn't have CA yet
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // joining node doesn't have CA yet
 		},
 	}
 
