@@ -205,7 +205,7 @@ expected_nodes = 3
 	assert.Equal(t, "0.0.0.0:4222", n.NATS.Host)
 	assert.Equal(t, "secret-token", n.NATS.ACL.Token)
 	assert.Equal(t, "test-subject", n.NATS.Sub.Subject)
-	assert.Equal(t, "0.0.0.0:8443", n.Predastore.Host)
+	assert.Equal(t, "127.0.0.1:8443", n.Predastore.Host) // 0.0.0.0 normalized to loopback
 	assert.Equal(t, "mybucket", n.Predastore.Bucket)
 	assert.Equal(t, "AK", n.Predastore.AccessKey)
 	assert.Equal(t, "/data", n.Predastore.BaseDir)

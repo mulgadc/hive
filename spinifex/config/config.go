@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -192,6 +193,16 @@ func LoadConfig(configPath string) (*ClusterConfig, error) {
 	var config ClusterConfig
 	if err := viper.Unmarshal(&config); err != nil {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
+	}
+
+	// Normalize the local node's bind address: 0.0.0.0 means "listen on all
+	// interfaces" but is not a valid connect address. Only rewrite for the
+	// local node — remote nodes use real IPs that must not be changed.
+	if local, ok := config.Nodes[config.Node]; ok {
+		if strings.HasPrefix(local.Predastore.Host, "0.0.0.0") {
+			local.Predastore.Host = strings.Replace(local.Predastore.Host, "0.0.0.0", "127.0.0.1", 1)
+			config.Nodes[config.Node] = local
+		}
 	}
 
 	return &config, nil

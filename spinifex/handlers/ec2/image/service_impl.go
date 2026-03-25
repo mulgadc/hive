@@ -186,8 +186,12 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accoun
 						found = true
 					}
 				default:
-					// Match by explicit account ID
+					// Match by explicit account ID. System AMIs are stored
+					// with a non-account owner (e.g. "spinifex") but report
+					// GlobalAccountID in the response, so match against both.
 					if amiOwner == *owner {
+						found = true
+					} else if isSystemAMI && *owner == utils.GlobalAccountID {
 						found = true
 					}
 				}
