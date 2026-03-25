@@ -14,6 +14,7 @@ go.work.sum
 # Build outputs
 bin/
 dist/
+!spinifex/services/spinifexui/frontend/dist/
 tmp/
 *.test
 *.out

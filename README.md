@@ -54,21 +54,21 @@ AWS-Compatible Interfaces – Provision infrastructure with awscli, Terraform, o
 
 ## Installation
 
-Installation requires an Ubuntu / Debian system. See the detailed documentation at [https://docs.mulgadc.com](https://docs.mulgadc.com/) for maintaining and installing Spinifex.
+Installation requires an Ubuntu / Debian system. See the detailed documentation at [https://docs.mulgadc.com](https://docs.mulgadc.com) for maintaining and installing Spinifex.
 
-### Single node install
+### Single Node Install
 
 The installation is straightforward to set up and running on a single node for testing purposes.
 
+
 ```bash
+curl https://install.mulgadc.com | bash
+
+sudo /usr/local/share/spinifex/setup-ovn.sh --management
+
+sudo spx admin init
+
 export AWS_PROFILE=spinifex
-export AWS_REGION=ap-southeast-2-sc
-```
-
-```bash
-curl https://install.mulgadc.com/ | bash
-
-spx admin init --region $AWS_REGION
 
 aws ec2 describe-instance-types
 ```
