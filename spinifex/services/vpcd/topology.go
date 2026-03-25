@@ -673,7 +673,7 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 			"gateway_ip", gatewayIP,
 			"wan_gateway", wanGateway,
 		)
-	} else if h.externalMode == "pool" || h.externalMode == "nat" {
+	} else if h.externalMode == "pool" {
 		slog.Warn("vpcd: external mode is set but no matching pool found, using link-local fallback")
 	}
 

@@ -336,3 +336,131 @@ func TestReconcileFromKV_NoBuckets(t *testing.T) {
 	assert.Equal(t, 0, result.IGWsCreated)
 	assert.Equal(t, 0, result.PortsCreated)
 }
+
+func TestReconcileFromKV_VersionKeysAndBadJSON(t *testing.T) {
+	// Tests that _version keys are skipped and malformed JSON records are handled gracefully.
+	// This covers the "continue" branches for version key filtering and unmarshal errors.
+	_, nc := startTestJetStreamNATS(t)
+	ovn := NewMockOVNClient()
+	_ = ovn.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(ovn,
+		WithExternalNetwork("pool", []ExternalPoolConfig{{
+			Name:       "wan",
+			RangeStart: "10.0.0.200",
+			RangeEnd:   "10.0.0.250",
+			Gateway:    "10.0.0.1",
+			GatewayIP:  "10.0.0.200",
+			PrefixLen:  24,
+		}}),
+		WithChassisNames([]string{"chassis-node1"}),
+	)
+
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+
+	// Create VPC bucket with _version key and one bad JSON record
+	vpcKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketVPCs, History: 1})
+	require.NoError(t, err)
+	_, err = vpcKV.PutString(utils.VersionKey, "1")
+	require.NoError(t, err)
+	_, err = vpcKV.Put("bad-vpc-record", []byte("not-json"))
+	require.NoError(t, err)
+	// Also add a valid VPC record
+	vpcData, _ := json.Marshal(handlers_ec2_vpc.VPCRecord{
+		VpcId: "vpc-ver1", CidrBlock: "10.100.0.0/16", State: "available",
+		CreatedAt: time.Now(),
+	})
+	_, err = vpcKV.Put(utils.AccountKey("000000000001", "vpc-ver1"), vpcData)
+	require.NoError(t, err)
+
+	// Create subnet bucket with _version key and one bad JSON record
+	subnetKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketSubnets, History: 1})
+	require.NoError(t, err)
+	_, err = subnetKV.PutString(utils.VersionKey, "1")
+	require.NoError(t, err)
+	_, err = subnetKV.Put("bad-subnet", []byte("{invalid"))
+	require.NoError(t, err)
+	subnetData, _ := json.Marshal(handlers_ec2_vpc.SubnetRecord{
+		SubnetId: "subnet-ver1", VpcId: "vpc-ver1", CidrBlock: "10.100.1.0/24",
+		State: "available", CreatedAt: time.Now(),
+	})
+	_, err = subnetKV.Put(utils.AccountKey("000000000001", "subnet-ver1"), subnetData)
+	require.NoError(t, err)
+
+	// Create IGW bucket with _version key and one bad JSON record
+	igwKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_igw.KVBucketIGW, History: 1})
+	require.NoError(t, err)
+	_, err = igwKV.PutString(utils.VersionKey, "1")
+	require.NoError(t, err)
+	_, err = igwKV.Put("bad-igw", []byte("???"))
+	require.NoError(t, err)
+	igwData, _ := json.Marshal(handlers_ec2_igw.IGWRecord{
+		InternetGatewayId: "igw-ver1", VpcId: "vpc-ver1", State: "attached",
+		CreatedAt: time.Now(),
+	})
+	_, err = igwKV.Put(utils.AccountKey("000000000001", "igw-ver1"), igwData)
+	require.NoError(t, err)
+
+	// Create ENI bucket with _version key and one bad JSON record
+	eniKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketENIs, History: 1})
+	require.NoError(t, err)
+	_, err = eniKV.PutString(utils.VersionKey, "1")
+	require.NoError(t, err)
+	_, err = eniKV.Put("bad-eni", []byte("nope"))
+	require.NoError(t, err)
+	eniData, _ := json.Marshal(handlers_ec2_vpc.ENIRecord{
+		NetworkInterfaceId: "eni-ver1", SubnetId: "subnet-ver1", VpcId: "vpc-ver1",
+		PrivateIpAddress: "10.100.1.10", MacAddress: "02:00:00:aa:bb:01",
+		Status: "in-use", CreatedAt: time.Now(),
+	})
+	_, err = eniKV.Put(utils.AccountKey("000000000001", "eni-ver1"), eniData)
+	require.NoError(t, err)
+
+	result := ReconcileFromKV(ctx, nc, topo)
+
+	// Valid records should still be reconciled despite bad records
+	assert.Equal(t, 1, result.RoutersCreated)
+	assert.Equal(t, 1, result.SwitchesCreated)
+	assert.Equal(t, 1, result.IGWsCreated)
+	assert.Equal(t, 1, result.PortsCreated)
+
+	// Verify OVN objects created from valid records
+	_, err = ovn.GetLogicalRouter(ctx, "vpc-vpc-ver1")
+	require.NoError(t, err)
+	_, err = ovn.GetLogicalSwitch(ctx, "subnet-subnet-ver1")
+	require.NoError(t, err)
+	_, err = ovn.GetLogicalSwitch(ctx, "ext-vpc-ver1")
+	require.NoError(t, err)
+	_, err = ovn.GetLogicalSwitchPort(ctx, "port-eni-ver1")
+	require.NoError(t, err)
+}
+
+func TestReconcileFromKV_EmptyBuckets(t *testing.T) {
+	// Tests the nats.ErrNoKeysFound branch when KV buckets exist but are empty.
+	_, nc := startTestJetStreamNATS(t)
+	ovn := NewMockOVNClient()
+	_ = ovn.Connect(context.Background())
+
+	topo := NewTopologyHandler(ovn)
+
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+
+	// Create all KV buckets but leave them empty (no keys at all)
+	_, err = js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketVPCs, History: 1})
+	require.NoError(t, err)
+	_, err = js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketSubnets, History: 1})
+	require.NoError(t, err)
+	_, err = js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_igw.KVBucketIGW, History: 1})
+	require.NoError(t, err)
+	_, err = js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketENIs, History: 1})
+	require.NoError(t, err)
+
+	result := ReconcileFromKV(context.Background(), nc, topo)
+	assert.Equal(t, 0, result.RoutersCreated)
+	assert.Equal(t, 0, result.SwitchesCreated)
+	assert.Equal(t, 0, result.IGWsCreated)
+	assert.Equal(t, 0, result.PortsCreated)
+}

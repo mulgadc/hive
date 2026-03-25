@@ -276,12 +276,15 @@ if [ "$HAS_OVN" = true ]; then
         fail "OVN external switch not found"
     fi
 
-    # Check NAT rules
-    NAT_COUNT=$(ovn-nbctl --no-leader-only lr-nat-list "vpc-${VPC_ID}" 2>/dev/null | grep -c "snat" || echo "0")
-    if [ "$NAT_COUNT" -ge 1 ]; then
-        pass "OVN SNAT rule exists on VPC router"
+    # Check NAT rules — after mulga-754, no blanket VPC CIDR SNAT exists.
+    # Per-VM dnat_and_snat rules are only created when instances launch with public IPs.
+    # Verify the router exists and has no blanket SNAT (correct AWS parity behavior).
+    NAT_RULES=$(ovn-nbctl --no-leader-only lr-nat-list "vpc-${VPC_ID}" 2>/dev/null || echo "")
+    VPC_CIDR="10.99.0.0/16"
+    if echo "$NAT_RULES" | grep -q "snat.*${VPC_CIDR}"; then
+        fail "Blanket VPC CIDR SNAT exists (should not — per mulga-754)"
     else
-        fail "OVN SNAT rule not found"
+        pass "No blanket VPC CIDR SNAT on router (AWS parity)"
     fi
 
     # Check default route

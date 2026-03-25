@@ -52,7 +52,7 @@ type Config struct {
 	BaseDir string
 	// Debug enables debug logging.
 	Debug bool
-	// ExternalMode is "pool", "nat", or "" (disabled).
+	// ExternalMode is "pool" or "" (disabled).
 	ExternalMode string
 	// ExternalPools holds the cluster-wide external IP pool configs.
 	ExternalPools []ExternalPoolConfig

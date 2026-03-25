@@ -219,7 +219,7 @@ func init() {
 	adminInitCmd.Flags().StringSlice("services", nil, "Services this node runs (default: all). Valid: nats,predastore,viperblock,daemon,awsgw,ui")
 
 	// External networking flags
-	adminInitCmd.Flags().String("external-mode", "", "External network mode: 'pool' (public IPs), 'nat' (outbound-only, default), or '' (disabled)")
+	adminInitCmd.Flags().String("external-mode", "", "External network mode: 'pool' (default when WAN detected) or '' (disabled)")
 	adminInitCmd.Flags().String("external-iface", "", "WAN NIC for br-external (auto-detected from default route)")
 	adminInitCmd.Flags().String("external-source", "", "Pool IP source: 'static' (default, uses --external-pool range) or 'dhcp' (from router DHCP)")
 	adminInitCmd.Flags().String("external-pool", "", "External IP pool range as start-end (e.g., 192.168.1.150-192.168.1.250)")
@@ -596,12 +596,12 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 					externalPrefixLen = detected.WAN.PrefixLen
 				}
 
-				// Default mode: "nat" with DHCP if no pool specified
+				// Default mode: always "pool" — with static range if --external-pool
+				// is given, otherwise with source=dhcp (gateway IP from router DHCP)
 				if externalMode == "" && !cmd.Flags().Changed("external-mode") {
-					if externalPool != "" {
-						externalMode = "pool"
-					} else {
-						externalMode = "nat"
+					externalMode = "pool"
+					if externalPool == "" && externalSource == "" {
+						externalSource = "dhcp"
 					}
 				}
 			}
@@ -609,8 +609,8 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	}
 
 	// Validate external networking flags
-	if externalMode != "" && externalMode != "pool" && externalMode != "nat" {
-		fmt.Fprintf(os.Stderr, "❌ Error: --external-mode must be 'pool', 'nat', or empty, got: %s\n", externalMode)
+	if externalMode != "" && externalMode != "pool" {
+		fmt.Fprintf(os.Stderr, "❌ Error: --external-mode must be 'pool' or empty, got: %s\n", externalMode)
 		os.Exit(1)
 	}
 	if externalMode == "pool" {
@@ -661,9 +661,9 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	// For nat mode, we need the gateway IP. Either provided via --gateway-ip
-	// or obtained via DHCP on the macvlan/bridge interface.
-	useExternalDHCP := externalMode == "nat" && gatewayIP == "" && poolStart == ""
+	// For pool/dhcp source, the gateway IP is obtained via DHCP on the
+	// macvlan/bridge interface (no static pool range or explicit gateway-ip).
+	useExternalDHCP := externalMode == "pool" && externalSource == "dhcp" && gatewayIP == ""
 
 	// Validate IP address format
 	if net.ParseIP(bindIP) == nil {
@@ -891,15 +891,15 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	if externalMode != "" {
 		fmt.Printf("\n📡 External networking: %s\n", externalMode)
 		fmt.Printf("  WAN interface: %s\n", externalIface)
-		if externalMode == "pool" {
+		if poolStart != "" {
+			fmt.Printf("  Source:        static (IP range)\n")
 			fmt.Printf("  IP pool:       %s - %s\n", poolStart, poolEnd)
 			fmt.Printf("  ⚠️  Ensure %s-%s is excluded from your router's DHCP range.\n", poolStart, poolEnd)
+		} else if useExternalDHCP {
+			fmt.Printf("  Source:        dhcp (from router DHCP)\n")
+			fmt.Println("  Gateway IP:    DHCP (obtained during OVN setup)")
 		} else if gatewayIP != "" {
 			fmt.Printf("  Gateway IP:    %s (static)\n", gatewayIP)
-			fmt.Println("  VMs get:       outbound internet via SNAT (no per-VM public IPs)")
-		} else if useExternalDHCP {
-			fmt.Println("  Gateway IP:    DHCP (obtained during OVN setup)")
-			fmt.Println("  VMs get:       outbound internet via SNAT")
 		}
 	}
 

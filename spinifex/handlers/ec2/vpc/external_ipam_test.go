@@ -419,3 +419,97 @@ func TestExternalIPAM_NoPoolAvailable(t *testing.T) {
 	_, _, err := ipam.AllocateIP("eu-west-1", "eu-west-1a", "auto_assign", "eni-1", "i-1")
 	assert.ErrorContains(t, err, "InsufficientAddressCapacity")
 }
+
+func TestExternalIPAM_FindPoolByName_NotFound(t *testing.T) {
+	pool := testPool()
+	ipam := setupTestExternalIPAM(t, []ExternalPoolConfig{pool})
+
+	// findPoolByName is private, but exercised via AllocateFromPool with unknown pool.
+	// The function returns nil when no pool matches, which means static allocation path.
+	// We verify by using NewExternalIPAMWithKV to directly check findPoolByName returns nil.
+	kv := ipam.kv
+	ipam2 := NewExternalIPAMWithKV(kv, []ExternalPoolConfig{pool})
+	// AllocateFromPool with a non-existent pool name: findPoolByName returns nil,
+	// so pool.IsDHCP() is skipped and static allocation is used.
+	// The pool "nonexistent" has no KV record, so getRecord fails.
+	_, err := ipam2.AllocateFromPool("nonexistent", "auto_assign", "eni-1", "i-1")
+	assert.Error(t, err)
+}
+
+func TestParseDHCPCDLeasedIP(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{
+			name:   "valid lease line",
+			output: "br-ext: leased 192.168.1.75 for 1800 seconds",
+			want:   "192.168.1.75",
+		},
+		{
+			name:   "lease in middle of multiline output",
+			output: "br-ext: soliciting a DHCP lease\nbr-ext: offered 192.168.1.75 from 192.168.1.1\nbr-ext: leased 192.168.1.75 for 1800 seconds\nbr-ext: adding route",
+			want:   "192.168.1.75",
+		},
+		{
+			name:   "no lease line",
+			output: "br-ext: soliciting a DHCP lease\nbr-ext: timed out",
+			want:   "",
+		},
+		{
+			name:   "empty output",
+			output: "",
+			want:   "",
+		},
+		{
+			name:   "malformed line - no space after IP",
+			output: ": leased 192.168.1.75",
+			want:   "",
+		},
+		{
+			name:   "empty before colon",
+			output: ": leased 192.168.1.75 for 600 seconds",
+			want:   "",
+		},
+		{
+			name:   "lease keyword but no IP after",
+			output: "br-ext: leased ",
+			want:   "",
+		},
+		{
+			name:   "different bridge name",
+			output: "br-wan: leased 10.0.0.50 for 3600 seconds",
+			want:   "10.0.0.50",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseDHCPCDLeasedIP(tt.output)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestExternalPoolConfig_IsDHCP(t *testing.T) {
+	p := ExternalPoolConfig{Source: "dhcp"}
+	assert.True(t, p.IsDHCP())
+
+	p2 := ExternalPoolConfig{Source: "static"}
+	assert.False(t, p2.IsDHCP())
+
+	p3 := ExternalPoolConfig{}
+	assert.False(t, p3.IsDHCP())
+}
+
+func TestValidatePoolConfig_DHCPPool(t *testing.T) {
+	// DHCP pools don't need range_start/range_end
+	pool := ExternalPoolConfig{
+		Name:    "dhcp-pool",
+		Source:  "dhcp",
+		Gateway: "192.168.1.1",
+	}
+	err := ValidatePoolConfig(pool)
+	assert.NoError(t, err)
+}

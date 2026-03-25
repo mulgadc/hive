@@ -35,8 +35,8 @@ type ExternalPool struct {
 
 // NetworkConfig holds cluster-wide external network settings.
 type NetworkConfig struct {
-	ExternalMode  string         `mapstructure:"external_mode"`  // "pool", "nat", or "" (disabled)
-	ExternalDHCP  bool           `mapstructure:"external_dhcp"`  // Gateway IP obtained via DHCP (nat mode)
+	ExternalMode  string         `mapstructure:"external_mode"`  // "pool" or "" (disabled)
+	ExternalDHCP  bool           `mapstructure:"external_dhcp"`  // Gateway IP obtained via DHCP (pool/dhcp source)
 	ExternalPools []ExternalPool `mapstructure:"external_pools"` // One or more IP pools
 }
 

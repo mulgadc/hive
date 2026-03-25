@@ -65,7 +65,7 @@ type ConfigSettings struct {
 	OVNSBAddr string
 
 	// External networking for public subnets
-	ExternalMode   string   // "pool", "nat", or "" (disabled)
+	ExternalMode   string   // "pool" or "" (disabled)
 	ExternalIface  string   // WAN NIC name (e.g., "eth0", "eth1")
 	WanBridge      string   // OVS bridge for WAN traffic (default "br-wan")
 	ExternalDHCP   bool     // Obtain gateway IP via DHCP on macvlan/bridge

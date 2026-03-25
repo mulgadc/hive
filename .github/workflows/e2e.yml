@@ -61,6 +61,7 @@ jobs:
         run: |
           SPX_PREBUILT=true \
           SPX_ARTIFACT_TAR="${RUNNER_TEMP}/spinifex-artifacts.tar" \
+          SPX_EXTERNAL_POOL="192.168.1.230-192.168.1.240" \
           ./bootstrap.sh env3 >> "$TOFU_LOG" 2>&1
 
       - name: Run E2E Tests
@@ -187,6 +188,7 @@ jobs:
         run: |
           SPX_PREBUILT=true \
           SPX_ARTIFACT_TAR="${RUNNER_TEMP}/spinifex-artifacts.tar" \
+          SPX_EXTERNAL_POOL="192.168.1.240-192.168.1.250" \
           ./bootstrap.sh env2 >> "$TOFU_LOG" 2>&1
 
       - name: Run E2E Tests
