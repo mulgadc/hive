@@ -258,6 +258,7 @@ func (s *InstanceServiceImpl) GenerateVolumes(input *ec2.RunInstancesInput, inst
 			IOPS:                p.iops,
 			SnapshotID:          p.snapshotId,
 			DeleteOnTermination: p.deleteOnTermination,
+			TenantID:            instance.AccountID,
 		},
 	}
 
