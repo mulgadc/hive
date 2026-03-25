@@ -523,14 +523,27 @@ for idx in "${!INSTANCE_IDS[@]}"; do
     echo ""
     echo "  Instance $((idx + 1)): $instance_id (on $host_ip)"
 
-    # Get SSH port from QEMU process on the hosting node
-    SSH_PORT=$(get_remote_ssh_port "$host_ip" "$instance_id" 10)
-    if [ -z "$SSH_PORT" ]; then
-        echo "  ERROR: Failed to get SSH port for $instance_id on $host_ip"
-        fail_test "Guest SSH ($instance_id)"
-        continue
+    # Determine SSH endpoint: use public IP if available, else QEMU hostfwd
+    INST_PUB_IP=$($AWS_EC2 describe-instances \
+        --instance-ids "$instance_id" \
+        --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null || echo "None")
+
+    if [ -n "$INST_PUB_IP" ] && [ "$INST_PUB_IP" != "None" ] && [ "$INST_PUB_IP" != "null" ]; then
+        SSH_HOST="$INST_PUB_IP"
+        SSH_PORT=22
+        SSH_KEY="$HOME/.ssh/spinifex-key"
+        echo "  SSH via public IP: $SSH_HOST:$SSH_PORT"
+    else
+        SSH_HOST="$host_ip"
+        SSH_PORT=$(get_remote_ssh_port "$host_ip" "$instance_id" 10)
+        SSH_KEY="$HOME/.ssh/spinifex-key"
+        if [ -z "$SSH_PORT" ]; then
+            echo "  ERROR: Failed to get SSH port for $instance_id on $host_ip"
+            fail_test "Guest SSH ($instance_id)"
+            continue
+        fi
+        echo "  SSH endpoint: $SSH_HOST:$SSH_PORT"
     fi
-    echo "  SSH endpoint: $host_ip:$SSH_PORT"
 
     # Wait for SSH to be ready (VM boot + cloud-init)
     echo "  Waiting for SSH to be ready..."
@@ -543,8 +556,8 @@ for idx in "${!INSTANCE_IDS[@]}"; do
                -o BatchMode=yes \
                -o LogLevel=ERROR \
                -p "$SSH_PORT" \
-               -i "$HOME/.ssh/spinifex-key" \
-               ec2-user@"$host_ip" 'echo ready' > /dev/null 2>&1; then
+               -i "$SSH_KEY" \
+               ec2-user@"$SSH_HOST" 'echo ready' > /dev/null 2>&1; then
             SSH_READY=true
             break
         fi
@@ -566,8 +579,8 @@ for idx in "${!INSTANCE_IDS[@]}"; do
         -o BatchMode=yes \
         -o LogLevel=ERROR \
         -p "$SSH_PORT" \
-        -i "$HOME/.ssh/spinifex-key" \
-        ec2-user@"$host_ip" 'id' 2>&1) || {
+        -i "$SSH_KEY" \
+        ec2-user@"$SSH_HOST" 'id' 2>&1) || {
         echo "  ERROR: SSH 'id' command failed"
         fail_test "Guest SSH ($instance_id)"
         continue
@@ -589,8 +602,8 @@ for idx in "${!INSTANCE_IDS[@]}"; do
         -o BatchMode=yes \
         -o LogLevel=ERROR \
         -p "$SSH_PORT" \
-        -i "$HOME/.ssh/spinifex-key" \
-        ec2-user@"$host_ip" 'lsblk' 2>&1) || true
+        -i "$SSH_KEY" \
+        ec2-user@"$SSH_HOST" 'lsblk' 2>&1) || true
     echo "  lsblk: $(echo "$LSBLK_OUTPUT" | head -5)"
 
     pass_test "Guest SSH ($instance_id)"
