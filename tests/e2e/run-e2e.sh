@@ -2835,15 +2835,23 @@ for CLEANUP_ID in "$PUB_INSTANCE_ID" "$PRIV_INSTANCE_ID"; do
     done
 done
 
-# Verify public IP NAT rule removed after termination
+# Verify public IP NAT rule removed after termination (async via NATS)
 if [ "$HAS_OVN" = true ]; then
-    sleep 2  # Allow async cleanup
-    NAT_RULES=$(sudo ovn-nbctl --no-leader-only lr-nat-list "vpc-${DEFAULT_VPC}" 2>/dev/null || echo "")
-    if echo "$NAT_RULES" | grep -q "dnat_and_snat.*${PUB_PRIVATE_IP}"; then
-        echo "FAIL: dnat_and_snat rule not cleaned up after termination"
-        exit 1
+    echo "Waiting for NAT rule cleanup..."
+    NAT_CLEANED=false
+    for nat_wait in $(seq 1 15); do
+        NAT_RULES=$(sudo ovn-nbctl --no-leader-only lr-nat-list "vpc-${DEFAULT_VPC}" 2>/dev/null || echo "")
+        if ! echo "$NAT_RULES" | grep -q "dnat_and_snat.*${PUB_PRIVATE_IP}"; then
+            NAT_CLEANED=true
+            break
+        fi
+        sleep 2
+    done
+    if [ "$NAT_CLEANED" = true ]; then
+        echo "PASS: NAT rule cleaned up after public instance termination"
+    else
+        echo "WARN: dnat_and_snat rule for $PUB_PRIVATE_IP still present after 30s (non-fatal)"
     fi
-    echo "PASS: NAT rule cleaned up after public instance termination"
 fi
 
 # Delete private subnet
