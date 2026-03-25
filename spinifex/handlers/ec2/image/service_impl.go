@@ -78,7 +78,7 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accoun
 	slog.Info("Describing images", "filters", input.Filters, "imageIds", input.ImageIds)
 
 	// List all prefixes in the bucket (AMIs are stored as ami-<id>/ directories)
-	result, err := s.store.ListObjects(&s3.ListObjectsInput{
+	result, err := s.store.ListObjectsV2(&s3.ListObjectsV2Input{
 		Bucket:    aws.String(s.bucketName),
 		Delimiter: aws.String("/"),
 	})
@@ -514,7 +514,7 @@ func (s *ImageServiceImpl) getVolumeConfig(volumeID string) (*viperblock.VolumeC
 
 // amiNameExists checks if any existing AMI already uses the given name.
 func (s *ImageServiceImpl) amiNameExists(name string) (bool, error) {
-	listResult, err := s.store.ListObjects(&s3.ListObjectsInput{
+	listResult, err := s.store.ListObjectsV2(&s3.ListObjectsV2Input{
 		Bucket:    aws.String(s.bucketName),
 		Prefix:    aws.String("ami-"),
 		Delimiter: aws.String("/"),

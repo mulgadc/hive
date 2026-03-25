@@ -124,14 +124,14 @@ func TestMemoryObjectStore_ListObjects(t *testing.T) {
 	}
 
 	// List all objects in bucket
-	output, err := store.ListObjects(&s3.ListObjectsInput{
+	output, err := store.ListObjectsV2(&s3.ListObjectsV2Input{
 		Bucket: aws.String("spinifex-metadata"),
 	})
 	require.NoError(t, err)
 	assert.Len(t, output.Contents, 5)
 
 	// List objects with prefix
-	output, err = store.ListObjects(&s3.ListObjectsInput{
+	output, err = store.ListObjectsV2(&s3.ListObjectsV2Input{
 		Bucket: aws.String("spinifex-metadata"),
 		Prefix: aws.String("images/"),
 	})
@@ -170,7 +170,7 @@ func TestMemoryObjectStore_ListObjectsWithDelimiter(t *testing.T) {
 	}
 
 	// List with delimiter at root level
-	output, err := store.ListObjects(&s3.ListObjectsInput{
+	output, err := store.ListObjectsV2(&s3.ListObjectsV2Input{
 		Bucket:    aws.String("spinifex"),
 		Delimiter: aws.String("/"),
 	})
@@ -219,13 +219,13 @@ func TestMemoryObjectStore_MultipleBuckets(t *testing.T) {
 	})
 
 	// List bucket-a
-	outputA, _ := store.ListObjects(&s3.ListObjectsInput{
+	outputA, _ := store.ListObjectsV2(&s3.ListObjectsV2Input{
 		Bucket: aws.String("bucket-a"),
 	})
 	assert.Len(t, outputA.Contents, 1)
 
 	// List bucket-b
-	outputB, _ := store.ListObjects(&s3.ListObjectsInput{
+	outputB, _ := store.ListObjectsV2(&s3.ListObjectsV2Input{
 		Bucket: aws.String("bucket-b"),
 	})
 	assert.Len(t, outputB.Contents, 1)
@@ -301,7 +301,7 @@ func TestMemoryObjectStore_ConcurrentAccess(t *testing.T) {
 	for range numGoroutines {
 		go func() {
 			defer wg.Done()
-			_, _ = store.ListObjects(&s3.ListObjectsInput{
+			_, _ = store.ListObjectsV2(&s3.ListObjectsV2Input{
 				Bucket: aws.String("bucket"),
 			})
 		}()

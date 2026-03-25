@@ -301,7 +301,7 @@ func (s *KeyServiceImpl) findKeyPairIdFromKeyName(accountID, keyName string) (st
 	prefix := fmt.Sprintf("keys/%s/", accountID)
 
 	// List all objects with the keys prefix
-	result, err := s.store.ListObjects(&s3.ListObjectsInput{
+	result, err := s.store.ListObjectsV2(&s3.ListObjectsV2Input{
 		Bucket: aws.String(s.bucketName),
 		Prefix: aws.String(prefix),
 	})
@@ -462,7 +462,7 @@ func (s *KeyServiceImpl) DescribeKeyPairs(input *ec2.DescribeKeyPairsInput, acco
 	prefix := fmt.Sprintf("keys/%s/", accountID)
 
 	// List all objects with the keys prefix
-	result, err := s.store.ListObjects(&s3.ListObjectsInput{
+	result, err := s.store.ListObjectsV2(&s3.ListObjectsV2Input{
 		Bucket: aws.String(s.bucketName),
 		Prefix: aws.String(prefix),
 	})

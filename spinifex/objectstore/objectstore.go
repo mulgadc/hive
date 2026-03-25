@@ -48,8 +48,8 @@ type ObjectStore interface {
 	// DeleteObject removes an object from storage
 	DeleteObject(input *s3.DeleteObjectInput) (*s3.DeleteObjectOutput, error)
 
-	// ListObjects lists objects in a bucket
-	ListObjects(input *s3.ListObjectsInput) (*s3.ListObjectsOutput, error)
+	// ListObjectsV2 lists objects in a bucket using the V2 API
+	ListObjectsV2(input *s3.ListObjectsV2Input) (*s3.ListObjectsV2Output, error)
 }
 
 // NewS3ObjectStoreFromConfig creates an S3ObjectStore from Predastore connection parameters,
@@ -95,8 +95,8 @@ func (s *S3ObjectStore) DeleteObject(input *s3.DeleteObjectInput) (*s3.DeleteObj
 	return s.client.DeleteObject(input)
 }
 
-func (s *S3ObjectStore) ListObjects(input *s3.ListObjectsInput) (*s3.ListObjectsOutput, error) {
-	return s.client.ListObjects(input)
+func (s *S3ObjectStore) ListObjectsV2(input *s3.ListObjectsV2Input) (*s3.ListObjectsV2Output, error) {
+	return s.client.ListObjectsV2(input)
 }
 
 // MemoryObjectStore implements ObjectStore using in-memory storage for testing
@@ -159,7 +159,7 @@ func (m *MemoryObjectStore) DeleteObject(input *s3.DeleteObjectInput) (*s3.Delet
 	return &s3.DeleteObjectOutput{}, nil
 }
 
-func (m *MemoryObjectStore) ListObjects(input *s3.ListObjectsInput) (*s3.ListObjectsOutput, error) {
+func (m *MemoryObjectStore) ListObjectsV2(input *s3.ListObjectsV2Input) (*s3.ListObjectsV2Output, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -216,10 +216,11 @@ func (m *MemoryObjectStore) ListObjects(input *s3.ListObjectsInput) (*s3.ListObj
 		})
 	}
 
-	return &s3.ListObjectsOutput{
+	return &s3.ListObjectsV2Output{
 		Contents:       contents,
 		CommonPrefixes: commonPrefixes,
 		Name:           input.Bucket,
+		KeyCount:       aws.Int64(int64(len(contents))),
 	}, nil
 }
 

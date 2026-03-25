@@ -372,7 +372,7 @@ func (s *VolumeServiceImpl) getVolumeStatusByID(volumeID string) (*ec2.VolumeSta
 // listAllVolumeIDs lists all volume IDs from S3 by scanning bucket prefixes.
 // It filters for vol-* prefixes and skips internal sub-volumes (EFI and cloud-init).
 func (s *VolumeServiceImpl) listAllVolumeIDs() ([]string, error) {
-	result, err := s.store.ListObjects(&s3.ListObjectsInput{
+	result, err := s.store.ListObjectsV2(&s3.ListObjectsV2Input{
 		Bucket:    aws.String(s.bucketName),
 		Delimiter: aws.String("/"),
 	})
@@ -819,12 +819,12 @@ func (s *VolumeServiceImpl) DeleteVolume(input *ec2.DeleteVolumeInput, accountID
 func (s *VolumeServiceImpl) deleteS3Prefix(prefix string) error {
 	bucket := s.bucketName
 
-	var marker *string
+	var continuationToken *string
 	for {
-		listOutput, err := s.store.ListObjects(&s3.ListObjectsInput{
-			Bucket: aws.String(bucket),
-			Prefix: aws.String(prefix),
-			Marker: marker,
+		listOutput, err := s.store.ListObjectsV2(&s3.ListObjectsV2Input{
+			Bucket:            aws.String(bucket),
+			Prefix:            aws.String(prefix),
+			ContinuationToken: continuationToken,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to list objects with prefix %s: %w", prefix, err)
@@ -847,9 +847,7 @@ func (s *VolumeServiceImpl) deleteS3Prefix(prefix string) error {
 		if !aws.BoolValue(listOutput.IsTruncated) {
 			break
 		}
-		// Use the last key as the marker for the next page
-		lastKey := listOutput.Contents[len(listOutput.Contents)-1].Key
-		marker = lastKey
+		continuationToken = listOutput.NextContinuationToken
 	}
 
 	return nil

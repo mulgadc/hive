@@ -208,7 +208,7 @@ func (s *TagsServiceImpl) DescribeTags(input *ec2.DescribeTagsInput, accountID s
 	var tags []*ec2.TagDescription
 
 	// List all tag files from S3 scoped to this account
-	listResult, err := s.store.ListObjects(&s3.ListObjectsInput{
+	listResult, err := s.store.ListObjectsV2(&s3.ListObjectsV2Input{
 		Bucket: aws.String(s.config.Predastore.Bucket),
 		Prefix: aws.String(getTagsPrefix(accountID)),
 	})

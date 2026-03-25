@@ -316,7 +316,7 @@ func (s *SnapshotServiceImpl) DescribeSnapshots(input *ec2.DescribeSnapshotsInpu
 		}
 	}
 
-	listResult, err := s.store.ListObjects(&s3.ListObjectsInput{
+	listResult, err := s.store.ListObjectsV2(&s3.ListObjectsV2Input{
 		Bucket:    aws.String(s.config.Predastore.Bucket),
 		Prefix:    aws.String("snap-"),
 		Delimiter: aws.String("/"),
@@ -361,7 +361,7 @@ func (s *SnapshotServiceImpl) DescribeSnapshots(input *ec2.DescribeSnapshotsInpu
 
 // snapshotInUseByVolumes checks if any volume was created from the given snapshot.
 func (s *SnapshotServiceImpl) snapshotInUseByVolumes(snapshotID string) (bool, error) {
-	listResult, err := s.store.ListObjects(&s3.ListObjectsInput{
+	listResult, err := s.store.ListObjectsV2(&s3.ListObjectsV2Input{
 		Bucket:    aws.String(s.config.Predastore.Bucket),
 		Prefix:    aws.String("vol-"),
 		Delimiter: aws.String("/"),
@@ -433,7 +433,7 @@ func (s *SnapshotServiceImpl) DeleteSnapshot(input *ec2.DeleteSnapshotInput, acc
 		return nil, errors.New(awserrors.ErrorInvalidSnapshotInUse)
 	}
 
-	listResult, err := s.store.ListObjects(&s3.ListObjectsInput{
+	listResult, err := s.store.ListObjectsV2(&s3.ListObjectsV2Input{
 		Bucket: aws.String(s.config.Predastore.Bucket),
 		Prefix: aws.String(snapshotID + "/"),
 	})
