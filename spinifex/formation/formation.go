@@ -2,6 +2,7 @@ package formation
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -165,8 +166,9 @@ func (fs *FormationServer) SetMasterKey(key string) {
 	fs.masterKey = key
 }
 
-// Start launches the HTTP server on the given address (e.g. "10.0.0.1:4432").
-func (fs *FormationServer) Start(bindAddr string) error {
+// Start launches the HTTPS server on the given address (e.g. "10.0.0.1:4432").
+// tlsCert and tlsKey are paths to the CA-signed server certificate and key.
+func (fs *FormationServer) Start(bindAddr, tlsCert, tlsKey string) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /formation/join", fs.handleJoin)
 	mux.HandleFunc("GET /formation/status", fs.handleStatus)
@@ -181,18 +183,28 @@ func (fs *FormationServer) Start(bindAddr string) error {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	cert, err := tls.LoadX509KeyPair(tlsCert, tlsKey)
+	if err != nil {
+		return fmt.Errorf("formation server TLS: %w", err)
+	}
+
 	ln, err := net.Listen("tcp", bindAddr)
 	if err != nil {
 		return fmt.Errorf("formation server listen: %w", err)
 	}
 
+	tlsLn := tls.NewListener(ln, &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	})
+
 	go func() {
-		if err := fs.server.Serve(ln); err != nil && err != http.ErrServerClosed {
+		if err := fs.server.Serve(tlsLn); err != nil && err != http.ErrServerClosed {
 			slog.Error("Formation server error", "error", err)
 		}
 	}()
 
-	slog.Info("Formation server started", "addr", bindAddr)
+	slog.Info("Formation server started", "addr", bindAddr, "tls", true)
 	return nil
 }
 

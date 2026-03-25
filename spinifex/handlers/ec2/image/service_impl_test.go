@@ -418,6 +418,23 @@ func TestDescribeImages_SystemAMIVisibleToAll(t *testing.T) {
 	require.Len(t, result2.Images, 1)
 }
 
+func TestDescribeImages_FilterSystemAMIByGlobalAccountID(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// Create a system AMI (non-account-ID owner like "spinifex")
+	createTestAMIConfigWithOwner(t, store, "ami-sysfilter", "system-debian", "spinifex")
+
+	// Filtering by GlobalAccountID ("000000000000") should match system AMIs
+	// because that's the OwnerId returned in the response
+	result, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		Owners: []*string{aws.String("000000000000")},
+	}, "000000000001")
+	require.NoError(t, err)
+	require.Len(t, result.Images, 1)
+	assert.Equal(t, "ami-sysfilter", *result.Images[0].ImageId)
+	assert.Equal(t, "000000000000", *result.Images[0].OwnerId)
+}
+
 func TestDescribeImages_NilInput(t *testing.T) {
 	svc, _ := setupTestImageService(t)
 

@@ -26,10 +26,10 @@ variable "region" {
 # Set these environment variables or use terraform.tfvars:
 #   export AWS_ACCESS_KEY_ID=your_access_key
 #   export AWS_SECRET_ACCESS_KEY=your_secret_key
-#   export TF_VAR_mulgaos_endpoint=http://localhost:8080
+#   export TF_VAR_mulgaos_endpoint=https://localhost:9999
 variable "mulgaos_endpoint" {
   type        = string
-  default     = "http://localhost:8080"
+  default     = "https://localhost:9999"
   description = "MulgaOS API endpoint (awsd gateway)"
 }
 
@@ -57,15 +57,15 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
-# Debian 12 AMI (official Debian account)
-# For MulgaOS, you may need to import a local AMI first
+# Debian 12 AMI
+# For MulgaOS, need to import a local AMI first
 data "aws_ami" "debian12" {
   most_recent = true
-  owners      = ["136693071363"] # Debian official
+  owners      = ["000000000000"] # Spinifex system images (on AWS use "136693071363" for Debian official)
 
   filter {
     name   = "name"
-    values = ["debian-12-amd64-*"]
+    values = ["*debian-12*"]
   }
 
   filter {
@@ -96,9 +96,9 @@ resource "local_file" "hive_test_pem" {
   file_permission = "0600"
 }
 
-# 1: VPC 10.1.1.0/16
+# 1: VPC 10.1.0.0/16
 resource "aws_vpc" "main" {
-  cidr_block           = "10.1.1.0/16"
+  cidr_block           = "10.1.0.0/16"
   enable_dns_hostnames = true
   enable_dns_support   = true
 

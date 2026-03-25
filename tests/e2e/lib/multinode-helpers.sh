@@ -382,7 +382,7 @@ wait_for_ssh() {
     local host="$1"
     local port="$2"
     local key_file="$3"
-    local max_attempts="${4:-60}"
+    local max_attempts="${4:-30}"
     local attempt=0
 
     echo "  Waiting for SSH to be ready on $host:$port..."
@@ -752,7 +752,7 @@ init_leader_node() {
     # Wait for formation server to be ready
     echo "Waiting for formation server..."
     for i in $(seq 1 60); do
-        if curl -s "http://${NODE1_IP}:${CLUSTER_PORT}/formation/health" > /dev/null 2>&1; then
+        if curl -sk "https://${NODE1_IP}:${CLUSTER_PORT}/formation/health" > /dev/null 2>&1; then
             echo "  Formation server is ready (PID: $LEADER_INIT_PID)"
             return 0
         fi

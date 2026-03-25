@@ -1,14 +1,17 @@
 import {
   type _InstanceType,
+  type PlacementStrategy,
   AttachVolumeCommand,
   CopySnapshotCommand,
   CreateImageCommand,
   CreateKeyPairCommand,
+  CreatePlacementGroupCommand,
   CreateSnapshotCommand,
   CreateSubnetCommand,
   CreateVolumeCommand,
   CreateVpcCommand,
   DeleteKeyPairCommand,
+  DeletePlacementGroupCommand,
   DeleteSnapshotCommand,
   DeleteSubnetCommand,
   DeleteVolumeCommand,
@@ -34,6 +37,7 @@ import type {
   CreateImageParams,
   CreateInstanceParams,
   CreateKeyPairData,
+  CreatePlacementGroupFormData,
   CreateSnapshotFormData,
   CreateSubnetFormData,
   CreateVolumeFormData,
@@ -119,6 +123,9 @@ export function useCreateInstance() {
         MaxCount: params.count,
         // oxlint-disable-next-line typescript/prefer-nullish-coalescing
         SubnetId: params.subnetId || undefined,
+        Placement: params.placementGroupName
+          ? { GroupName: params.placementGroupName }
+          : undefined,
       })
       return getEc2Client().send(command)
     },
@@ -430,6 +437,38 @@ export function useDeleteSubnet() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["ec2", "subnets"] })
+    },
+  })
+}
+
+export function useCreatePlacementGroup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (params: CreatePlacementGroupFormData) => {
+      const command = new CreatePlacementGroupCommand({
+        GroupName: params.groupName,
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- AWS SDK expects PlacementStrategy enum
+        Strategy: params.strategy as PlacementStrategy,
+      })
+      return getEc2Client().send(command)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ec2", "placementGroups"] })
+    },
+  })
+}
+
+export function useDeletePlacementGroup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (groupName: string) => {
+      const command = new DeletePlacementGroupCommand({
+        GroupName: groupName,
+      })
+      return getEc2Client().send(command)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ec2", "placementGroups"] })
     },
   })
 }

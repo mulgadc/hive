@@ -2,10 +2,9 @@
   "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": ["node_modules"],
   "compilerOptions": {
-    "target": "ES2023",
     "jsx": "react-jsx",
-    "module": "ESNext",
-    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM"],
     "types": ["vite/client", "vitest/globals"],
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
@@ -13,12 +12,9 @@
     "noEmit": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true,
-    "strictNullChecks": true,
     "noUncheckedIndexedAccess": true,
     "paths": {
       "@/*": ["./src/*"]

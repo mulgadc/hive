@@ -737,7 +737,9 @@ func (s *IAMServiceImpl) seedAdminAccount(admin *AdminBootstrapData) error {
 		}{AccountID: admin.AccountID, AccountName: admin.AccountName})
 		if err != nil {
 			slog.Warn("Failed to marshal account creation event", "accountID", admin.AccountID, "error", err)
-		} else if err := s.natsConn.Publish("iam.account.created", evt); err != nil {
+			return nil
+		}
+		if err := s.natsConn.Publish("iam.account.created", evt); err != nil {
 			slog.Warn("Failed to publish account creation event for admin account", "accountID", admin.AccountID, "error", err)
 		}
 	}

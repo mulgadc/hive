@@ -6,6 +6,7 @@ import {
   Home,
   Image,
   Key,
+  Layers,
   LayoutGrid,
   LogOut,
   Network,
@@ -142,6 +143,21 @@ export function SidebarLayout() {
                 >
                   <Camera className="size-4" />
                   <span>Snapshots</span>
+                </SidebarMenuButton>
+              </Link>
+            </SidebarMenuItem>
+
+            <SidebarMenuItem>
+              <Link to="/ec2/describe-placement-groups">
+                <SidebarMenuButton
+                  isActive={
+                    pathname.startsWith("/ec2/describe-placement-groups") ||
+                    pathname.startsWith("/ec2/create-placement-group")
+                  }
+                  tooltip="Placement Groups"
+                >
+                  <Layers className="size-4" />
+                  <span>Placement Groups</span>
                 </SidebarMenuButton>
               </Link>
             </SidebarMenuItem>

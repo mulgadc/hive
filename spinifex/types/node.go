@@ -20,6 +20,10 @@ type NodeStatusResponse struct {
 	AllocMemGB    float64           `json:"alloc_mem_gb"`
 	VMCount       int               `json:"vm_count"`
 	InstanceTypes []InstanceTypeCap `json:"instance_types"`
+
+	// Leader roles for clustered services (empty string = service not running or not clustered)
+	NATSRole       string `json:"nats_role,omitempty"`       // "leader" or "follower"
+	PredastoreRole string `json:"predastore_role,omitempty"` // "leader" or "follower"
 }
 
 // InstanceTypeCap describes available capacity for one instance type on a node.

@@ -21,6 +21,7 @@ import {
   ec2ImagesQueryOptions,
   ec2InstanceTypesQueryOptions,
   ec2KeyPairsQueryOptions,
+  ec2PlacementGroupsQueryOptions,
   ec2SubnetsQueryOptions,
 } from "@/queries/ec2"
 import { type CreateInstanceFormData, createInstanceSchema } from "@/types/ec2"
@@ -32,6 +33,7 @@ export const Route = createFileRoute("/_auth/ec2/(instances)/run-instances")({
       context.queryClient.ensureQueryData(ec2KeyPairsQueryOptions),
       context.queryClient.ensureQueryData(ec2InstanceTypesQueryOptions),
       context.queryClient.ensureQueryData(ec2SubnetsQueryOptions),
+      context.queryClient.ensureQueryData(ec2PlacementGroupsQueryOptions),
     ])
   },
   head: () => ({
@@ -52,10 +54,12 @@ function CreateInstance() {
     ec2InstanceTypesQueryOptions,
   )
   const { data: subnetsData } = useSuspenseQuery(ec2SubnetsQueryOptions)
+  const { data: pgData } = useSuspenseQuery(ec2PlacementGroupsQueryOptions)
   const createMutation = useCreateInstance()
   const images = imagesData.Images ?? []
   const keyPairs = keyPairsData.KeyPairs ?? []
   const subnets = subnetsData.Subnets ?? []
+  const placementGroups = pgData.PlacementGroups ?? []
   const instanceTypeCounts: Record<string, number> = {}
   for (const type of instanceTypesData.InstanceTypes ?? []) {
     const typeName = type.InstanceType
@@ -267,6 +271,37 @@ function CreateInstance() {
                       value={subnet.SubnetId ?? ""}
                     >
                       {subnet.SubnetId}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          />
+        </Field>
+
+        {/* Placement Group */}
+        <Field>
+          <FieldTitle>
+            <label htmlFor="placementGroupName">Placement Group</label>
+          </FieldTitle>
+          <Controller
+            control={control}
+            name="placementGroupName"
+            render={({ field }) => (
+              <Select
+                onValueChange={(value) =>
+                  field.onChange(value === "none" ? undefined : value)
+                }
+                value={field.value ?? "none"}
+              >
+                <SelectTrigger className="w-full" id="placementGroupName">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">none</SelectItem>
+                  {placementGroups.map((pg) => (
+                    <SelectItem key={pg.GroupId} value={pg.GroupName ?? ""}>
+                      {pg.GroupName} ({pg.Strategy})
                     </SelectItem>
                   ))}
                 </SelectContent>

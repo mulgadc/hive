@@ -4,6 +4,7 @@ import {
   DescribeInstancesCommand,
   DescribeInstanceTypesCommand,
   DescribeKeyPairsCommand,
+  DescribePlacementGroupsCommand,
   DescribeRegionsCommand,
   DescribeSnapshotsCommand,
   DescribeSubnetsCommand,
@@ -164,6 +165,25 @@ export const ec2VpcQueryOptions = (vpcId: string) =>
     queryFn: () => {
       const command = new DescribeVpcsCommand({
         VpcIds: [vpcId],
+      })
+      return getEc2Client().send(command)
+    },
+  })
+
+export const ec2PlacementGroupsQueryOptions = queryOptions({
+  queryKey: ["ec2", "placementGroups"],
+  queryFn: () => {
+    const command = new DescribePlacementGroupsCommand({})
+    return getEc2Client().send(command)
+  },
+})
+
+export const ec2PlacementGroupQueryOptions = (groupId: string) =>
+  queryOptions({
+    queryKey: ["ec2", "placementGroups", groupId],
+    queryFn: () => {
+      const command = new DescribePlacementGroupsCommand({
+        GroupIds: [groupId],
       })
       return getEc2Client().send(command)
     },

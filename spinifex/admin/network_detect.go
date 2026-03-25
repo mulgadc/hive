@@ -5,6 +5,8 @@ import (
 	"net"
 	"os/exec"
 	"strings"
+
+	"github.com/mulgadc/spinifex/spinifex/utils"
 )
 
 // DetectedInterface represents a network interface discovered on the host.
@@ -169,10 +171,10 @@ func SuggestPoolRange(wan *DetectedInterface) (start, end string) {
 	for i := 3; i >= 0 && carry > 0; i-- {
 		val := int(startIP[i]) - carry
 		if val < 0 {
-			startIP[i] = byte(256 + val) //nolint:gosec // val is in [-256,0), so 256+val is in [0,256)
+			startIP[i] = utils.SafeIntToUint8(256 + val)
 			carry = 1
 		} else {
-			startIP[i] = byte(val) //nolint:gosec // val is non-negative and <= 255
+			startIP[i] = utils.SafeIntToUint8(val)
 			carry = 0
 		}
 	}

@@ -1,23 +1,25 @@
 /*
-Copyright © 2025 Mulga Defense Corporation
+Copyright © 2026 Mulga Defense Corporation
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 
-	http://www.apache.org/licenses/LICENSE-2.0
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 package cmd
 
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -519,6 +521,12 @@ func runimagesListCmd(cmd *cobra.Command, args []string) {
 
 // TODO: Move all logic to a module, use minimal application logic in viper commands
 func runAdminInit(cmd *cobra.Command, args []string) {
+	if os.Getuid() != 0 {
+		fmt.Fprintln(os.Stderr, "⚠️  Not running as root — CA certificate will not be installed to system trust store.")
+		fmt.Fprintln(os.Stderr, "   Run with sudo, or manually: sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt && sudo update-ca-certificates")
+		fmt.Fprintln(os.Stderr)
+	}
+
 	force, _ := cmd.Flags().GetBool("force")
 	configDir, _ := cmd.Flags().GetString("config-dir")
 	spxRoot, _ := cmd.Flags().GetString("spinifex-dir")
@@ -737,6 +745,9 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 	// Generate SSL certificates (with bind IP in SANs for multi-node support)
 	certPath := admin.GenerateCertificatesIfNeeded(configDir, force, bindIP)
+
+	// Install CA certificate into system trust store
+	installCACertificate(filepath.Join(configDir, "ca.pem"))
 
 	// Generate NATS token
 	natsToken, err := admin.GenerateNATSToken()
@@ -1007,9 +1018,11 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		os.Exit(1)
 	}
 
-	// Start formation server
+	// Start formation server (HTTPS using the CA-signed server cert)
 	formationAddr := fmt.Sprintf("%s:%d", bindIP, port)
-	if err := fs.Start(formationAddr); err != nil {
+	serverCert := filepath.Join(configDir, "server.pem")
+	serverKey := filepath.Join(configDir, "server.key")
+	if err := fs.Start(formationAddr, serverCert, serverKey); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error starting formation server: %v\n", err)
 		os.Exit(1)
 	}
@@ -1146,6 +1159,11 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 }
 
 func runAdminJoin(cmd *cobra.Command, args []string) {
+	if os.Getuid() != 0 {
+		fmt.Fprintln(os.Stderr, "⚠️  Not running as root — CA certificate will not be installed to system trust store.")
+		fmt.Fprintln(os.Stderr)
+	}
+
 	node, _ := cmd.Flags().GetString("node")
 	leaderHost, _ := cmd.Flags().GetString("host")
 	region, _ := cmd.Flags().GetString("region")
@@ -1222,9 +1240,14 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // joining node doesn't have CA yet
+		},
+	}
 
-	joinURL := fmt.Sprintf("http://%s/formation/join", leaderHost)
+	joinURL := fmt.Sprintf("https://%s/formation/join", leaderHost)
 	resp, err := client.Post(joinURL, "application/json", bytes.NewBuffer(reqBody))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error connecting to formation server: %v\n", err)
@@ -1236,6 +1259,11 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	resp.Body.Close()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error reading response body: %v\n", err)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "❌ Formation server returned HTTP %d: %s\n", resp.StatusCode, strings.TrimSpace(string(body)))
 		os.Exit(1)
 	}
 
@@ -1253,7 +1281,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	fmt.Printf("✅ Registered with formation server (%d/%d nodes joined)\n", joinResp.Joined, joinResp.Expected)
 
 	// Poll status until formation is complete
-	statusURL := fmt.Sprintf("http://%s/formation/status", leaderHost)
+	statusURL := fmt.Sprintf("https://%s/formation/status", leaderHost)
 	var statusResp formation.StatusResponse
 
 	for {
@@ -1267,6 +1295,11 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		sResp.Body.Close()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "❌ Error reading status response: %v\n", err)
+			os.Exit(1)
+		}
+
+		if sResp.StatusCode != http.StatusOK {
+			fmt.Fprintf(os.Stderr, "❌ Formation server returned HTTP %d: %s\n", sResp.StatusCode, strings.TrimSpace(string(sBody)))
 			os.Exit(1)
 		}
 
@@ -1320,6 +1353,9 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("✅ CA certificate received from leader: %s\n", caCertPath)
+
+	// Install CA certificate into system trust store
+	installCACertificate(caCertPath)
 
 	// Extract and write master key from formation server
 	if statusResp.MasterKey == "" {
@@ -1809,4 +1845,41 @@ func parseDNSFromResolvectl(output string) []string {
 		servers = servers[:3]
 	}
 	return servers
+}
+
+// installCACertificate copies the Spinifex CA certificate into the system
+// trust store and runs update-ca-certificates so TLS clients (AWS CLI, etc.)
+// trust the self-signed gateway certificate without extra configuration.
+func installCACertificate(caPemPath string) {
+	if os.Getuid() != 0 {
+		return
+	}
+
+	const systemCertPath = "/usr/local/share/ca-certificates/spinifex-ca.crt"
+
+	data, err := os.ReadFile(caPemPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not read CA certificate %s: %v\n", caPemPath, err)
+		return
+	}
+
+	if err := os.MkdirAll(filepath.Dir(systemCertPath), 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not create certificate directory: %v\n", err)
+		return
+	}
+
+	if err := os.WriteFile(systemCertPath, data, 0644); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not install CA certificate: %v\n", err)
+		return
+	}
+
+	cmd := exec.Command("update-ca-certificates")
+	cmd.Stdout = io.Discard
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: update-ca-certificates failed: %v\n", err)
+		return
+	}
+
+	fmt.Printf("✅ CA certificate installed to system trust store\n")
 }

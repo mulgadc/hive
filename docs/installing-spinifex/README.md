@@ -79,26 +79,27 @@ sudo /usr/local/share/spinifex/setup-ovn.sh --management --macvlan --wan-iface=e
 ### Step 3. Initialize
 
 ```bash
-spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
+sudo spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
 ```
 
-This auto-detects your network topology and configures external networking. Save the admin credentials printed during init — they will not be shown again.
+This auto-detects your network topology, generates configuration and TLS certificates, installs the CA into the system trust store, and configures AWS CLI credentials. Save the admin credentials printed during init — they will not be shown again.
 
-### Step 4. Trust the CA certificate
+### Step 3. Setup OVN networking
 
 ```bash
-sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
-sudo update-ca-certificates
+sudo /usr/local/share/spinifex/setup-ovn.sh --management --external-bridge --external-iface=enp0s3 --dhcp
 ```
 
-### Step 5. Start services
+Replace `enp0s3` with your WAN interface.
+
+### Step 4. Start services
 
 ```bash
 sudo systemctl start spinifex.target
 export AWS_PROFILE=spinifex
 ```
 
-### Step 6. Verify
+### Step 5. Verify
 
 ```bash
 aws ec2 describe-instance-types
@@ -122,8 +123,10 @@ export PATH=$PATH:/usr/local/bin
 
 ### CA certificate not trusted
 
+`sudo spx admin init` installs the CA automatically. If you need to re-install it manually:
+
 ```bash
-sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
+sudo cp /etc/spinifex/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
 sudo update-ca-certificates
 ```
 

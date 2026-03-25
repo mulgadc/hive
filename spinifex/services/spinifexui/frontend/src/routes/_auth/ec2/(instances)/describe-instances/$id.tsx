@@ -243,6 +243,19 @@ function InstanceDetail() {
               label="Availability Zone"
               value={instance.Placement?.AvailabilityZone}
             />
+            <DetailRow
+              label="Placement Group"
+              value={
+                instance.Placement?.GroupName ? (
+                  <Link
+                    className="text-primary hover:underline"
+                    to="/ec2/describe-placement-groups"
+                  >
+                    {instance.Placement.GroupName}
+                  </Link>
+                ) : undefined
+              }
+            />
           </DetailCard.Content>
         </DetailCard>
 

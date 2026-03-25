@@ -39,6 +39,11 @@ cleanup() {
         if [ -f ~/spinifex/logs/awsgw.log ]; then
             tail -200 ~/spinifex/logs/awsgw.log 2>/dev/null
         fi
+        echo ""
+        echo "=== vpcd Log ==="
+        if [ -f ~/spinifex/logs/vpcd.log ]; then
+            tail -200 ~/spinifex/logs/vpcd.log 2>/dev/null
+        fi
     fi
     # Only stop services if we started them (not when bootstrapped)
     if [ "$BOOTSTRAPPED" != "true" ]; then
