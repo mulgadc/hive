@@ -5,10 +5,8 @@ package objectstore
 
 import (
 	"bytes"
-	"crypto/tls"
 	"errors"
 	"io"
-	"net/http"
 	"strings"
 	"sync"
 
@@ -57,22 +55,11 @@ type ObjectStore interface {
 // NewS3ObjectStoreFromConfig creates an S3ObjectStore from Predastore connection parameters,
 // eliminating the duplicated TLS+HTTP/2+session boilerplate in each service.
 func NewS3ObjectStoreFromConfig(host, region, accessKey, secretKey string) *S3ObjectStore {
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true, // Skip TLS verification for self-signed certs
-			NextProtos:         []string{"h2", "http/1.1"},
-		},
-		ForceAttemptHTTP2: true,
-	}
-
-	httpClient := &http.Client{Transport: tr}
-
 	sess := session.Must(session.NewSession(&aws.Config{
 		Endpoint:         aws.String(host),
 		Region:           aws.String(region),
 		Credentials:      credentials.NewStaticCredentials(accessKey, secretKey, ""),
 		S3ForcePathStyle: aws.Bool(true),
-		HTTPClient:       httpClient,
 	}))
 
 	return NewS3ObjectStore(s3.New(sess))

@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -218,12 +217,7 @@ func (d *Daemon) queryPredastoreRole() string {
 
 var roleHTTPClient = &http.Client{Timeout: 500 * time.Millisecond}
 
-var roleTLSHTTPClient = &http.Client{
-	Timeout: 500 * time.Millisecond,
-	Transport: &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // local self-signed cert
-	},
-}
+var roleTLSHTTPClient = &http.Client{Timeout: 500 * time.Millisecond}
 
 // fetchNATSRole queries a NATS /varz endpoint and returns "leader", "follower", or "".
 func fetchNATSRole(url string, client *http.Client) string {
