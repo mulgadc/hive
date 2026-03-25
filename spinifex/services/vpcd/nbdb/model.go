@@ -96,8 +96,8 @@ type LogicalRouterStaticRoute struct {
 type PortGroup struct {
 	UUID        string            `ovsdb:"_uuid"`
 	Name        string            `ovsdb:"name"`
-	Ports       []string          `ovsdb:"ports"`        // UUIDs of logical switch ports
-	ACLs        []string          `ovsdb:"acls"`         // UUIDs of ACLs
+	Ports       []string          `ovsdb:"ports"` // UUIDs of logical switch ports
+	ACLs        []string          `ovsdb:"acls"`  // UUIDs of ACLs
 	ExternalIDs map[string]string `ovsdb:"external_ids"`
 }
 

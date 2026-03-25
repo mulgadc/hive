@@ -21,7 +21,7 @@ const (
 type ExternalIPAllocation struct {
 	Type         string `json:"type"`                    // "gateway", "auto_assign", "elastic_ip"
 	AllocationID string `json:"allocation_id,omitempty"` // For elastic IPs
-	Association  string `json:"association,omitempty"`    // ENI ID for elastic IPs
+	Association  string `json:"association,omitempty"`   // ENI ID for elastic IPs
 	ENIId        string `json:"eni_id,omitempty"`        // ENI owning this IP
 	InstanceId   string `json:"instance_id,omitempty"`   // Instance owning this IP
 	Note         string `json:"note,omitempty"`          // Human-readable note

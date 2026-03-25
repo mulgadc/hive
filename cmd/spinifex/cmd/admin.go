@@ -843,13 +843,13 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		OVNNBAddr: "tcp:127.0.0.1:6641",
 		OVNSBAddr: "tcp:127.0.0.1:6642",
 
-		ExternalMode:  externalMode,
-		ExternalIface: externalIface,
-		WanBridge:     detectedWanBridge(detectedNet),
-		ExternalDHCP:  useExternalDHCP,
-		PoolName:      "wan",
-		PoolStart:     poolStart,
-		PoolEnd:       poolEnd,
+		ExternalMode:   externalMode,
+		ExternalIface:  externalIface,
+		WanBridge:      detectedWanBridge(detectedNet),
+		ExternalDHCP:   useExternalDHCP,
+		PoolName:       "wan",
+		PoolStart:      poolStart,
+		PoolEnd:        poolEnd,
 		PoolGateway:    externalGateway,
 		PoolGatewayIP:  gatewayIP,
 		PoolPrefixLen:  externalPrefixLen,
@@ -1704,18 +1704,23 @@ func writeBootstrapFilesWithAdmin(configDir string, masterKey []byte, accessKey,
 	return handlers_iam.SaveBootstrapData(filepath.Join(configDir, "bootstrap.json"), bd)
 }
 
-// detectDNSServers reads the DNS servers configured on the host for the given
-// detectedWanBridge returns the WAN bridge name from the detected network
-// topology. If the WAN interface is already a bridge, returns its name.
-// Otherwise returns "br-wan" as the default.
+// detectedWanBridge returns the OVS bridge name that OVN bridge-mappings should
+// use for WAN traffic. If the WAN interface is already an OVS bridge, returns
+// its name directly. If it's a Linux bridge, returns "br-ext" — setup-ovn.sh
+// will create this OVS bridge and link it to the Linux bridge via a veth pair.
+// If it's a physical NIC, returns "br-wan" as the default.
 func detectedWanBridge(detected *admin.DetectedNetwork) string {
 	if detected == nil || detected.WAN == nil {
 		return ""
 	}
-	// Check if the WAN interface name looks like a bridge (starts with "br-")
-	// If so, it's already set up — use it directly.
-	if strings.HasPrefix(detected.WAN.Name, "br-") {
-		return detected.WAN.Name
+	name := detected.WAN.Name
+	if strings.HasPrefix(name, "br-") {
+		// Check if it's an OVS bridge (use directly) or Linux bridge (need br-ext)
+		if out, err := exec.Command("sudo", "ovs-vsctl", "br-exists", name).CombinedOutput(); err == nil && len(out) == 0 {
+			return name // OVS bridge — use directly
+		}
+		// Linux bridge — setup-ovn.sh creates br-ext + veth pair
+		return "br-ext"
 	}
 	return "br-wan"
 }
@@ -1748,7 +1753,7 @@ func detectDNSServers(iface string) []string {
 	data, err := os.ReadFile("/etc/resolv.conf")
 	if err == nil {
 		var servers []string
-		for _, line := range strings.Split(string(data), "\n") {
+		for line := range strings.SplitSeq(string(data), "\n") {
 			line = strings.TrimSpace(line)
 			if strings.HasPrefix(line, "nameserver ") {
 				ip := strings.TrimSpace(strings.TrimPrefix(line, "nameserver"))
@@ -1774,14 +1779,14 @@ func detectDNSServers(iface string) []string {
 // Format: "Link 2 (enp0s3): 192.168.1.1 8.8.8.8 1.1.1.1"
 func parseDNSFromResolvectl(output string) []string {
 	var servers []string
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		// Find the colon separator, IPs come after it
-		idx := strings.Index(line, ":")
-		if idx < 0 {
+		_, after, ok := strings.Cut(line, ":")
+		if !ok {
 			continue
 		}
-		fields := strings.Fields(line[idx+1:])
-		for _, f := range fields {
+		fields := strings.FieldsSeq(after)
+		for f := range fields {
 			if net.ParseIP(f) != nil && f != "127.0.0.53" && f != "127.0.0.1" {
 				servers = append(servers, f)
 			}

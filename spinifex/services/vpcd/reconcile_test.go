@@ -39,7 +39,7 @@ func TestReconcile_CreatesBootstrapTopology(t *testing.T) {
 	_ = ovn.Connect(context.Background())
 	topo := NewTopologyHandler(ovn,
 		WithExternalNetwork("pool", []ExternalPoolConfig{{
-			Name:      "wan",
+			Name:       "wan",
 			RangeStart: "192.168.1.200",
 			RangeEnd:   "192.168.1.250",
 			Gateway:    "192.168.1.1",

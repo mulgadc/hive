@@ -450,12 +450,12 @@ func (s *VPCServiceImpl) RevokeSecurityGroupEgress(input *ec2.RevokeSecurityGrou
 // sgRecordToEC2 converts a SecurityGroupRecord to an EC2 SecurityGroup.
 func (s *VPCServiceImpl) sgRecordToEC2(record *SecurityGroupRecord, accountID string) *ec2.SecurityGroup {
 	sg := &ec2.SecurityGroup{
-		GroupId:      aws.String(record.GroupId),
-		GroupName:    aws.String(record.GroupName),
-		Description:  aws.String(record.Description),
-		VpcId:        aws.String(record.VpcId),
-		OwnerId:      aws.String(accountID),
-		IpPermissions: sgRulesToIpPermissions(record.IngressRules),
+		GroupId:             aws.String(record.GroupId),
+		GroupName:           aws.String(record.GroupName),
+		Description:         aws.String(record.Description),
+		VpcId:               aws.String(record.VpcId),
+		OwnerId:             aws.String(accountID),
+		IpPermissions:       sgRulesToIpPermissions(record.IngressRules),
 		IpPermissionsEgress: sgRulesToIpPermissions(record.EgressRules),
 	}
 

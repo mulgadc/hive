@@ -26,7 +26,9 @@
 #
 # WAN Bridge Auto-Detection:
 #   When no --wan-bridge is given, the script checks the default route interface:
-#   - If it's already a bridge (e.g. br-wan from cloud-init) → use it directly
+#   - If it's an OVS bridge → use it directly for bridge-mappings
+#   - If it's a Linux bridge → create OVS br-ext + veth pair to link them
+#     (non-destructive, Linux bridge keeps IP/routes, no interruption)
 #   - If it's a physical NIC → stop and print guidance (cannot safely move NIC)
 #
 # Examples:
@@ -81,7 +83,8 @@ done
 
 # --- WAN bridge auto-detection ---
 # Determine the WAN bridge name and how to set it up.
-WAN_BRIDGE_MODE=""  # "existing", "direct", "macvlan", or ""
+WAN_BRIDGE_MODE=""  # "existing", "veth", "direct", "macvlan", or ""
+LINUX_BRIDGE=""     # Set when WAN_BRIDGE_MODE="veth" — the Linux bridge behind the veth pair
 
 detect_wan_bridge() {
     # If --wan-bridge was explicitly given, use it
@@ -130,10 +133,19 @@ detect_wan_bridge() {
     fi
 
     if [ "$is_bridge" = true ]; then
-        # Default route goes through a bridge — use it directly
-        WAN_BRIDGE="$default_dev"
-        WAN_BRIDGE_MODE="existing"
-        echo "  Auto-detected WAN bridge: $WAN_BRIDGE (default route interface)"
+        if sudo ovs-vsctl br-exists "$default_dev" 2>/dev/null; then
+            # Already an OVS bridge — use it directly for bridge-mappings
+            WAN_BRIDGE="$default_dev"
+            WAN_BRIDGE_MODE="existing"
+            echo "  Auto-detected WAN bridge: $WAN_BRIDGE (OVS bridge, default route)"
+        else
+            # Linux bridge — link to OVS via veth pair (non-destructive)
+            LINUX_BRIDGE="$default_dev"
+            WAN_BRIDGE="br-ext"
+            WAN_BRIDGE_MODE="veth"
+            echo "  Auto-detected Linux bridge: $LINUX_BRIDGE (default route)"
+            echo "  Will create OVS bridge br-ext + veth pair to link them"
+        fi
         return
     fi
 
@@ -196,6 +208,9 @@ echo "=== Spinifex OVN Compute Node Setup ==="
 echo "  Management node:  $MANAGEMENT"
 if [ -n "$WAN_BRIDGE" ]; then
     echo "  WAN bridge:       $WAN_BRIDGE ($WAN_BRIDGE_MODE)"
+    if [ -n "$LINUX_BRIDGE" ]; then
+        echo "  Linux bridge:     $LINUX_BRIDGE (linked via veth pair)"
+    fi
     if [ -n "$WAN_IFACE" ]; then
         echo "  WAN interface:    $WAN_IFACE"
     fi
@@ -280,16 +295,56 @@ if [ -n "$WAN_BRIDGE" ]; then
 
     case "$WAN_BRIDGE_MODE" in
         existing)
-            # Bridge already exists (e.g. br-wan from cloud-init).
-            # Ensure it's registered as an OVS bridge. If it's a Linux bridge
-            # that OVS doesn't know about, create a new OVS bridge with the
-            # same name — OVS will take over.
+            # Already an OVS bridge (from a previous run or explicit --wan-bridge).
             if ! sudo ovs-vsctl br-exists "$WAN_BRIDGE" 2>/dev/null; then
                 sudo ovs-vsctl --may-exist add-br "$WAN_BRIDGE"
                 echo "  created OVS bridge: $WAN_BRIDGE"
             fi
             sudo ip link set "$WAN_BRIDGE" up
-            echo "  $WAN_BRIDGE: existing bridge, up"
+            echo "  $WAN_BRIDGE: OVS bridge, up"
+            ;;
+
+        veth)
+            # Linux bridge detected (e.g. br-wan from cloud-init/netplan).
+            # OVN bridge-mappings require an OVS bridge. Rather than converting
+            # the Linux bridge (destructive, causes WAN interruption), we create
+            # a separate OVS bridge and link them with a veth pair:
+            #
+            #   br-wan (Linux, keeps IP/routes) ←→ veth pair ←→ br-ext (OVS, for OVN)
+            #
+            # No network interruption. The Linux bridge is untouched.
+
+            # Create OVS bridge
+            if ! sudo ovs-vsctl br-exists "$WAN_BRIDGE" 2>/dev/null; then
+                sudo ovs-vsctl --may-exist add-br "$WAN_BRIDGE"
+                echo "  created OVS bridge: $WAN_BRIDGE"
+            fi
+            sudo ip link set "$WAN_BRIDGE" up
+
+            # Create veth pair (idempotent)
+            if ! ip link show veth-wan-br >/dev/null 2>&1; then
+                sudo ip link add veth-wan-br type veth peer name veth-wan-ovs
+                echo "  created veth pair: veth-wan-br ↔ veth-wan-ovs"
+            else
+                echo "  veth pair already exists: veth-wan-br ↔ veth-wan-ovs"
+            fi
+
+            # Enslave veth-wan-br to the Linux bridge
+            if ! ip link show veth-wan-br 2>/dev/null | grep -q "master $LINUX_BRIDGE"; then
+                sudo ip link set veth-wan-br master "$LINUX_BRIDGE"
+                echo "  veth-wan-br → $LINUX_BRIDGE (Linux bridge)"
+            fi
+            sudo ip link set veth-wan-br up
+
+            # Add veth-wan-ovs to the OVS bridge
+            if ! sudo ovs-vsctl port-to-br veth-wan-ovs >/dev/null 2>&1; then
+                sudo ovs-vsctl --may-exist add-port "$WAN_BRIDGE" veth-wan-ovs
+                echo "  veth-wan-ovs → $WAN_BRIDGE (OVS bridge)"
+            fi
+            sudo ip link set veth-wan-ovs up
+
+            echo "  $LINUX_BRIDGE (Linux) ↔ veth pair ↔ $WAN_BRIDGE (OVS)"
+            echo "  $LINUX_BRIDGE keeps its IP and routes — no interruption"
             ;;
 
         direct)
@@ -587,7 +642,15 @@ fi
 if [ -n "$WAN_BRIDGE" ]; then
     if sudo ovs-vsctl br-exists "$WAN_BRIDGE"; then
         echo "  $WAN_BRIDGE:$(printf '%*s' $((15 - ${#WAN_BRIDGE})) '') OK"
-        if [ "$WAN_BRIDGE_MODE" = "direct" ]; then
+        if [ "$WAN_BRIDGE_MODE" = "veth" ]; then
+            if ip link show veth-wan-br >/dev/null 2>&1 && ip link show veth-wan-ovs >/dev/null 2>&1; then
+                echo "  veth pair:       OK (veth-wan-br ↔ veth-wan-ovs)"
+                echo "  linux bridge:    $LINUX_BRIDGE (untouched)"
+            else
+                echo "  veth pair:       FAILED (veth-wan-br/veth-wan-ovs not found)"
+                OK=false
+            fi
+        elif [ "$WAN_BRIDGE_MODE" = "direct" ]; then
             if sudo ovs-vsctl port-to-br "$WAN_IFACE" >/dev/null 2>&1; then
                 echo "  direct bridge:   OK ($WAN_IFACE on $WAN_BRIDGE)"
             else

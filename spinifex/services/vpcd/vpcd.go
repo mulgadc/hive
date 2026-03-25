@@ -64,8 +64,10 @@ type Config struct {
 	// ExternalInterface is the WAN NIC name (e.g., "enp0s3"). Used to align
 	// the macvlan MAC with the OVN gateway MAC for inbound traffic.
 	ExternalInterface string
-	// WanBridge is the OVS bridge name for WAN traffic (default "br-wan").
+	// WanBridge is the OVS bridge name for WAN traffic.
 	// Maps to OVN logical network "external" via ovn-bridge-mappings.
+	// Typically "br-ext" (veth mode linking Linux bridge to OVS) or the
+	// bridge name itself when the default route is already on an OVS bridge.
 	WanBridge string
 	// BridgeMode is "direct" or "macvlan". Direct bridge adds the WAN NIC
 	// directly to the WAN bridge; macvlan creates a sub-interface. When empty,

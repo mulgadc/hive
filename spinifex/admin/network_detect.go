@@ -62,7 +62,7 @@ func DetectNetwork() (*DetectedNetwork, error) {
 	seen := make(map[string]bool)
 	var interfaces []DetectedInterface
 
-	for _, line := range strings.Split(strings.TrimSpace(string(allRoutes)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(allRoutes)), "\n") {
 		if line == "" {
 			continue
 		}
@@ -169,10 +169,10 @@ func SuggestPoolRange(wan *DetectedInterface) (start, end string) {
 	for i := 3; i >= 0 && carry > 0; i-- {
 		val := int(startIP[i]) - carry
 		if val < 0 {
-			startIP[i] = byte(256 + val)
+			startIP[i] = byte(256 + val) //nolint:gosec // val is in [-256,0), so 256+val is in [0,256)
 			carry = 1
 		} else {
-			startIP[i] = byte(val)
+			startIP[i] = byte(val) //nolint:gosec // val is non-negative and <= 255
 			carry = 0
 		}
 	}

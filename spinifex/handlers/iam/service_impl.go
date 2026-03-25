@@ -731,11 +731,13 @@ func (s *IAMServiceImpl) seedAdminAccount(admin *AdminBootstrapData) error {
 	// this account. Without this, the admin account has no default VPC/subnet
 	// and the user must create one manually.
 	if s.natsConn != nil {
-		evt, _ := json.Marshal(struct {
+		evt, err := json.Marshal(struct {
 			AccountID   string `json:"account_id"`
 			AccountName string `json:"account_name"`
 		}{AccountID: admin.AccountID, AccountName: admin.AccountName})
-		if err := s.natsConn.Publish("iam.account.created", evt); err != nil {
+		if err != nil {
+			slog.Warn("Failed to marshal account creation event", "accountID", admin.AccountID, "error", err)
+		} else if err := s.natsConn.Publish("iam.account.created", evt); err != nil {
 			slog.Warn("Failed to publish account creation event for admin account", "accountID", admin.AccountID, "error", err)
 		}
 	}

@@ -101,6 +101,12 @@ else
     echo "  /var/lib/ovn not found, skipping OVN DB cleanup"
 fi
 
+# Remove veth pair created by setup-ovn.sh (veth mode — Linux bridge ↔ OVS bridge)
+if ip link show veth-wan-br >/dev/null 2>&1; then
+    echo "  Deleting veth pair: veth-wan-br ↔ veth-wan-ovs"
+    sudo ip link del veth-wan-br 2>/dev/null || true
+fi
+
 # Remove macvlan interfaces created by setup-ovn.sh
 for iface in $(ip -o link show type macvlan 2>/dev/null | awk -F': ' '{print $2}' | grep '^spx-ext-'); do
     echo "  Deleting macvlan: $iface"

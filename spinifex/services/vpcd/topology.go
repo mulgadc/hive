@@ -655,7 +655,6 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 	gatewayIP := "169.254.0.1"
 	gatewayNetwork := "169.254.0.1/30"
 	wanGateway := "169.254.0.2"
-	prefixLen := 30
 
 	if pool != nil {
 		gip := pool.GatewayIP
@@ -663,7 +662,7 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 			gip = pool.RangeStart // Default: first IP in range
 		}
 		gatewayIP = gip
-		prefixLen = pool.PrefixLen
+		prefixLen := pool.PrefixLen
 		if prefixLen == 0 {
 			prefixLen = 24
 		}
@@ -759,10 +758,9 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 	// 7. Schedule gateway chassis for HA — tells OVN which hosts can handle external traffic
 	if len(h.chassisNames) > 0 {
 		for i, chassis := range h.chassisNames {
-			priority := 20 - (i * 5) // First chassis gets highest priority
-			if priority < 1 {
-				priority = 1
-			}
+			priority := max(
+				// First chassis gets highest priority
+				20-(i*5), 1)
 			if err := h.ovn.SetGatewayChassis(ctx, gwPortName, chassis, priority); err != nil {
 				slog.Warn("vpcd: failed to set gateway chassis", "port", gwPortName, "chassis", chassis, "priority", priority, "err", err)
 			} else {
@@ -1060,7 +1058,6 @@ func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId, igwId string)
 	gatewayIP := "169.254.0.1"
 	gatewayNetwork := "169.254.0.1/30"
 	wanGateway := "169.254.0.2"
-	prefixLen := 30
 
 	if pool != nil {
 		gip := pool.GatewayIP
@@ -1068,7 +1065,7 @@ func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId, igwId string)
 			gip = pool.RangeStart
 		}
 		gatewayIP = gip
-		prefixLen = pool.PrefixLen
+		prefixLen := pool.PrefixLen
 		if prefixLen == 0 {
 			prefixLen = 24
 		}
@@ -1106,10 +1103,10 @@ func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId, igwId string)
 		reconcileLocalnetOpts["nat-addresses"] = "router"
 	}
 	localnetPort := &nbdb.LogicalSwitchPort{
-		Name:      extPortName,
-		Type:      "localnet",
-		Addresses: []string{"unknown"},
-		Options:   reconcileLocalnetOpts,
+		Name:        extPortName,
+		Type:        "localnet",
+		Addresses:   []string{"unknown"},
+		Options:     reconcileLocalnetOpts,
 		ExternalIDs: portExtIDs,
 	}
 	if err := h.ovn.CreateLogicalSwitchPort(ctx, extSwitchName, localnetPort); err != nil {
@@ -1183,10 +1180,7 @@ func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId, igwId string)
 
 	// 7. Schedule gateway chassis
 	for i, chassis := range h.chassisNames {
-		priority := 20 - (i * 5)
-		if priority < 1 {
-			priority = 1
-		}
+		priority := max(20-(i*5), 1)
 		if err := h.ovn.SetGatewayChassis(ctx, gwPortName, chassis, priority); err != nil {
 			slog.Warn("vpcd reconcile: failed to set gateway chassis", "chassis", chassis, "err", err)
 		}
