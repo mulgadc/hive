@@ -1568,8 +1568,11 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				// Don't return - continue with cleanup
 			}
 
-			// Wait for PID file removal (or check if already gone)
-			err = utils.WaitForPidFileRemoval(instance.ID, 60*time.Second)
+			// Wait for PID file removal (or check if already gone).
+			// 20s is enough for a graceful ACPI shutdown — if the guest hasn't
+			// responded to system_powerdown by then, it won't (e.g. still booting,
+			// no ACPI handler). Force-kill at that point rather than wasting 60s.
+			err = utils.WaitForPidFileRemoval(instance.ID, 20*time.Second)
 			if err != nil {
 				slog.Warn("Timeout waiting for PID file removal", "id", instance.ID, "err", err)
 
