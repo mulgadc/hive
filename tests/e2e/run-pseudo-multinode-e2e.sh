@@ -354,15 +354,26 @@ for idx in "${!INSTANCE_IDS[@]}"; do
     echo ""
     echo "  Instance $((idx + 1)): $instance_id"
 
-    # Get SSH connection details from QEMU process
-    echo "  Getting SSH port..."
-    SSH_PORT=$(get_ssh_port "$instance_id")
-    if [ -z "$SSH_PORT" ]; then
-        echo "  ERROR: Failed to get SSH port for instance $instance_id"
-        exit 1
+    # Determine SSH connection method:
+    # - If instance has a public IP (external networking), SSH via public IP on port 22
+    # - Otherwise, fall back to QEMU hostfwd (dev_networking mode)
+    INST_PUBLIC_IP=$($AWS_EC2 describe-instances --instance-ids "$instance_id" \
+        --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null || echo "None")
+
+    if [ -n "$INST_PUBLIC_IP" ] && [ "$INST_PUBLIC_IP" != "None" ] && [ "$INST_PUBLIC_IP" != "null" ]; then
+        SSH_HOST="$INST_PUBLIC_IP"
+        SSH_PORT=22
+        echo "  SSH via public IP: $SSH_HOST:$SSH_PORT"
+    else
+        echo "  No public IP — using QEMU hostfwd for SSH"
+        SSH_PORT=$(get_ssh_port "$instance_id")
+        if [ -z "$SSH_PORT" ]; then
+            echo "  ERROR: Failed to get SSH port for instance $instance_id"
+            exit 1
+        fi
+        SSH_HOST=$(get_ssh_host "$instance_id")
+        echo "  SSH endpoint: $SSH_HOST:$SSH_PORT"
     fi
-    SSH_HOST=$(get_ssh_host "$instance_id")
-    echo "  SSH endpoint: $SSH_HOST:$SSH_PORT"
 
     SSH_PORTS+=("$SSH_PORT")
     SSH_HOSTS+=("$SSH_HOST")
@@ -535,14 +546,15 @@ for id in "${BATCH_IDS[@]}"; do
     }
 done
 
-# Verify distribution: count QEMU processes per node IP
+# Verify distribution: check which node hosts each instance via nbdkit process
 echo "  Checking distribution..."
 NODES_USED=0
 for i in 1 2 3; do
     NODE_IP="${SIMULATED_NETWORK}.$i"
     NODE_COUNT=0
     for id in "${BATCH_IDS[@]}"; do
-        if ps auxw | grep "$id" | grep qemu-system | grep -v grep | grep -q "hostfwd=tcp:${NODE_IP}:"; then
+        local_node=$(get_instance_node "$id") || continue
+        if [ "$local_node" = "$i" ]; then
             NODE_COUNT=$((NODE_COUNT + 1))
         fi
     done
@@ -628,7 +640,8 @@ for i in 1 2 3; do
     NODE_IP="${SIMULATED_NETWORK}.$i"
     NODE_COUNT=0
     for id in "${BATCH_IDS[@]}"; do
-        if ps auxw | grep "$id" | grep qemu-system | grep -v grep | grep -q "hostfwd=tcp:${NODE_IP}:"; then
+        local_node=$(get_instance_node "$id") || continue
+        if [ "$local_node" = "$i" ]; then
             NODE_COUNT=$((NODE_COUNT + 1))
         fi
     done

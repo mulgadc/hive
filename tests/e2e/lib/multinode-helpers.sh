@@ -266,7 +266,7 @@ wait_for_daemon_ready() {
 }
 
 # Check instance distribution across nodes
-# Counts QEMU processes per node IP from hostfwd bindings
+# Counts QEMU instances per node by matching nbdkit host= to simulated node IPs
 # Usage: check_instance_distribution [expected_nodes]
 # If expected_nodes is provided, fails when instances don't span that many nodes
 check_instance_distribution() {
@@ -278,9 +278,9 @@ check_instance_distribution() {
     local nodes_used=0
     for i in 1 2 3; do
         local node_ip="${SIMULATED_NETWORK}.$i"
-        # Count QEMU processes with hostfwd bound to this node's IP
+        # Count nbdkit root-volume processes (not cloudinit) bound to this node's predastore
         local count
-        count=$(ps auxw | grep qemu-system | grep -v grep | grep -c "hostfwd=tcp:${node_ip}:" 2>/dev/null) || count=0
+        count=$(ps auxw | grep nbdkit | grep -v grep | grep -v cloudinit | grep -c "host=${node_ip}:" 2>/dev/null) || count=0
         echo "  Node$i ($node_ip): $count instances"
         total=$((total + count))
         if [ "$count" -gt 0 ]; then
@@ -354,23 +354,41 @@ get_ssh_host() {
     return 0
 }
 
-# Find which node an instance is running on (for multi-node setups)
+# Find which node an instance is running on (for pseudo multi-node setups)
+# Matches the QEMU process's root nbd socket to its nbdkit process's host IP
 # Usage: get_instance_node <instance_id>
 # Returns: node number (1, 2, or 3), or empty if not found
 get_instance_node() {
     local instance_id="$1"
 
-    for i in 1 2 3; do
-        local data_dir="$HOME/node$i"
-        local instances_file="$data_dir/spinifex/instances.json"
+    # Find the QEMU process and extract the root nbd socket path
+    local qemu_cmd
+    qemu_cmd=$(ps auxw | grep "$instance_id" | grep qemu-system | grep -v grep || true)
+    if [ -z "$qemu_cmd" ]; then
+        return 1
+    fi
 
-        if [ -f "$instances_file" ]; then
-            if jq -e ".[\"$instance_id\"]" "$instances_file" > /dev/null 2>&1; then
-                echo "$i"
-                return 0
-            fi
-        fi
-    done
+    # Extract first nbd socket from drive args (root volume, not cloudinit)
+    local nbd_sock
+    nbd_sock=$(echo "$qemu_cmd" | grep -o 'nbd:unix:[^ ,]*' | head -1 | sed 's/nbd:unix://')
+    if [ -z "$nbd_sock" ]; then
+        return 1
+    fi
+
+    # Find the nbdkit process serving this socket and extract its host=IP
+    local nbdkit_cmd
+    nbdkit_cmd=$(ps auxw | grep nbdkit | grep -v grep | grep "$nbd_sock" || true)
+    if [ -z "$nbdkit_cmd" ]; then
+        return 1
+    fi
+
+    # Extract host=10.11.12.X from nbdkit args and map to node number
+    local host_ip
+    host_ip=$(echo "$nbdkit_cmd" | grep -o "host=${SIMULATED_NETWORK}\.[0-9]*" | sed "s/host=${SIMULATED_NETWORK}\.//" | head -1)
+    if [ -n "$host_ip" ]; then
+        echo "$host_ip"
+        return 0
+    fi
 
     return 1
 }
@@ -827,15 +845,14 @@ verify_predastore_cluster() {
 count_instances_per_node() {
     local ids=("$@")
     NODE1_COUNT=0; NODE2_COUNT=0; NODE3_COUNT=0
+    for id in "${ids[@]}"; do
+        local node
+        node=$(get_instance_node "$id") || continue
+        eval "NODE${node}_COUNT=\$((NODE${node}_COUNT + 1))"
+    done
     for i in 1 2 3; do
         local node_ip="${SIMULATED_NETWORK}.$i"
-        local count=0
-        for id in "${ids[@]}"; do
-            if ps auxw | grep "$id" | grep qemu-system | grep -v grep | grep -q "hostfwd=tcp:${node_ip}:"; then
-                count=$((count + 1))
-            fi
-        done
-        eval "NODE${i}_COUNT=$count"
+        eval "local count=\$NODE${i}_COUNT"
         echo "    Node$i ($node_ip): $count instances"
     done
 }
