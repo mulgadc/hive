@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os"
+	"os/user"
 	"path/filepath"
 )
 
@@ -12,8 +13,7 @@ func DefaultConfigDir() string {
 	if isProductionLayout() {
 		return "/etc/spinifex"
 	}
-	homeDir, _ := os.UserHomeDir()
-	return filepath.Join(homeDir, "spinifex", "config")
+	return filepath.Join(realUserHomeDir(), "spinifex", "config")
 }
 
 // DefaultDataDir returns the default data directory.
@@ -23,8 +23,20 @@ func DefaultDataDir() string {
 	if isProductionLayout() {
 		return "/var/lib/spinifex"
 	}
+	return filepath.Join(realUserHomeDir(), "spinifex")
+}
+
+// realUserHomeDir returns the home directory of the real (non-sudo) user.
+// When running under sudo, SUDO_USER is set to the invoking user — resolve
+// their home directory so config/data land in the right place.
+func realUserHomeDir() string {
+	if sudoUser := os.Getenv("SUDO_USER"); sudoUser != "" {
+		if u, err := user.Lookup(sudoUser); err == nil {
+			return u.HomeDir
+		}
+	}
 	homeDir, _ := os.UserHomeDir()
-	return filepath.Join(homeDir, "spinifex")
+	return homeDir
 }
 
 // DefaultConfigFile returns the default path to spinifex.toml.
