@@ -432,15 +432,26 @@ echo "Instance metadata validated (Type=$META_TYPE, Key=$META_KEY, Image=$META_I
 # Phase 5a-ii: SSH Connectivity & Volume Verification
 echo "Phase 5a-ii: SSH Connectivity & Volume Verification"
 
-# Get SSH connection details from QEMU process
-echo "Getting SSH port for instance $INSTANCE_ID..."
-SSH_PORT=$(get_ssh_port "$INSTANCE_ID")
-if [ -z "$SSH_PORT" ]; then
-    echo "Failed to get SSH port for instance $INSTANCE_ID"
-    exit 1
+# Determine SSH connection method:
+# - If instance has a public IP (external networking enabled), SSH via public IP on port 22
+# - Otherwise, fall back to QEMU hostfwd (dev_networking mode)
+INST_PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+    --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null || echo "None")
+
+if [ -n "$INST_PUBLIC_IP" ] && [ "$INST_PUBLIC_IP" != "None" ] && [ "$INST_PUBLIC_IP" != "null" ]; then
+    SSH_HOST="$INST_PUBLIC_IP"
+    SSH_PORT=22
+    echo "SSH via public IP: $SSH_HOST:$SSH_PORT"
+else
+    echo "No public IP — using QEMU hostfwd for SSH"
+    SSH_PORT=$(get_ssh_port "$INSTANCE_ID")
+    if [ -z "$SSH_PORT" ]; then
+        echo "Failed to get SSH port for instance $INSTANCE_ID"
+        exit 1
+    fi
+    SSH_HOST=$(get_ssh_host "$INSTANCE_ID")
+    echo "SSH endpoint: $SSH_HOST:$SSH_PORT"
 fi
-SSH_HOST=$(get_ssh_host "$INSTANCE_ID")
-echo "SSH endpoint: $SSH_HOST:$SSH_PORT"
 
 # Wait for SSH to become ready (VM boot + cloud-init)
 wait_for_ssh "$SSH_HOST" "$SSH_PORT" "test-key-1.pem" 30
@@ -1085,10 +1096,17 @@ if [ "$STATE" != "running" ]; then
     exit 1
 fi
 
-# Get SSH port (may have changed after restart with new QEMU config)
-echo "Getting SSH port for restarted instance..."
-SSH_PORT=$(get_ssh_port "$INSTANCE_ID")
-SSH_HOST=$(get_ssh_host "$INSTANCE_ID")
+# Re-detect SSH endpoint (may have changed after restart with new QEMU config)
+echo "Detecting SSH endpoint for restarted instance..."
+INST_PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+    --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null || echo "None")
+if [ -n "$INST_PUBLIC_IP" ] && [ "$INST_PUBLIC_IP" != "None" ] && [ "$INST_PUBLIC_IP" != "null" ]; then
+    SSH_HOST="$INST_PUBLIC_IP"
+    SSH_PORT=22
+else
+    SSH_PORT=$(get_ssh_port "$INSTANCE_ID")
+    SSH_HOST=$(get_ssh_host "$INSTANCE_ID")
+fi
 echo "SSH endpoint: $SSH_HOST:$SSH_PORT"
 
 # Wait for SSH to become ready
@@ -1158,8 +1176,15 @@ done
 echo "Instance state remained running during reboot"
 
 # Wait for SSH to come back (guest OS restarts)
-SSH_PORT=$(get_ssh_port "$INSTANCE_ID")
-SSH_HOST=$(get_ssh_host "$INSTANCE_ID")
+INST_PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+    --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null || echo "None")
+if [ -n "$INST_PUBLIC_IP" ] && [ "$INST_PUBLIC_IP" != "None" ] && [ "$INST_PUBLIC_IP" != "null" ]; then
+    SSH_HOST="$INST_PUBLIC_IP"
+    SSH_PORT=22
+else
+    SSH_PORT=$(get_ssh_port "$INSTANCE_ID")
+    SSH_HOST=$(get_ssh_host "$INSTANCE_ID")
+fi
 wait_for_ssh "$SSH_HOST" "$SSH_PORT" "test-key-1.pem" 30
 
 # Verify guest actually rebooted (uptime < 120 seconds)

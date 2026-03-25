@@ -54,7 +54,11 @@ account_id = "{{.AccountID}}"
 host = "{{.BindIP}}:{{.Port}}"
 tlskey = "config/server.key"
 tlscert = "config/server.pem"
+{{- if .ExternalMode}}
+dev_networking = false
+{{- else}}
 dev_networking = true
+{{- end}}
 
 [nodes.{{.Node}}.awsgw]
 host = "{{.BindIP}}:9999"
