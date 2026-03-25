@@ -127,7 +127,7 @@ install_apt_deps() {
         $QEMU_PACKAGES qemu-utils qemu-kvm \
         libvirt-daemon-system libvirt-clients \
         jq curl iproute2 netcat-openbsd wget unzip xz-utils file \
-        ovn-central ovn-host openvswitch-switch \
+        ovn-central ovn-host openvswitch-switch dhcpcd-base \
         > /dev/null
 
     info "System dependencies installed"
