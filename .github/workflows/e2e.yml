@@ -135,7 +135,7 @@ jobs:
           SSH_KEY=$(echo "$INVENTORY" | jq -r '.ssh_key_path')
           SSH_KEY="${SSH_KEY/#\~/$HOME}"
           ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${WAN_IP} \
-            'cd ~/Development/mulga/spinifex && ./tests/e2e/run-pseudo-multinode-e2e.sh'
+            'cd ~/Development/mulga/spinifex && SPX_EXTERNAL_POOL="192.168.1.220-192.168.1.229" ./tests/e2e/run-pseudo-multinode-e2e.sh'
 
       - name: Teardown
         if: always()

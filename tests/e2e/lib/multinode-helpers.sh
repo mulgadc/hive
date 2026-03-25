@@ -753,7 +753,15 @@ init_leader_node() {
     # Remove old node directory
     rm -rf "$HOME/node1/"
 
+    # External pool flags (optional — enables public subnet IP allocation)
+    local external_flags=""
+    if [ -n "${SPX_EXTERNAL_POOL:-}" ]; then
+        external_flags="--external-mode=pool --external-pool=${SPX_EXTERNAL_POOL}"
+        echo "  External pool: ${SPX_EXTERNAL_POOL}"
+    fi
+
     # Start init in background — formation server will wait for joins
+    # shellcheck disable=SC2086
     ./bin/spx admin init \
         --node node1 \
         --bind "${NODE1_IP}" \
@@ -764,7 +772,8 @@ init_leader_node() {
         --region ap-southeast-2 \
         --az ap-southeast-2a \
         --spinifex-dir "$HOME/node1/" \
-        --config-dir "$HOME/node1/config/" &
+        --config-dir "$HOME/node1/config/" \
+        $external_flags &
     LEADER_INIT_PID=$!
 
     # Wait for formation server to be ready
