@@ -1238,6 +1238,11 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "❌ Formation server returned HTTP %d: %s\n", resp.StatusCode, strings.TrimSpace(string(body)))
+		os.Exit(1)
+	}
+
 	var joinResp formation.JoinResponse
 	if err := json.Unmarshal(body, &joinResp); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing join response: %v\n", err)
@@ -1266,6 +1271,11 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		sResp.Body.Close()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "❌ Error reading status response: %v\n", err)
+			os.Exit(1)
+		}
+
+		if sResp.StatusCode != http.StatusOK {
+			fmt.Fprintf(os.Stderr, "❌ Formation server returned HTTP %d: %s\n", sResp.StatusCode, strings.TrimSpace(string(sBody)))
 			os.Exit(1)
 		}
 

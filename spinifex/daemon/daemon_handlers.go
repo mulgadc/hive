@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -256,7 +257,11 @@ func fetchNATSRole(url string, client *http.Client) string {
 func fetchPredastoreRole(url string, client *http.Client) string {
 	resp, err := client.Get(url) //nolint:noctx // internal monitoring call
 	if err != nil {
-		slog.Debug("Failed to query Predastore status", "err", err)
+		if strings.Contains(err.Error(), "x509") || strings.Contains(err.Error(), "certificate") || strings.Contains(err.Error(), "tls:") {
+			slog.Warn("Failed to query Predastore status (TLS misconfiguration — is the Spinifex CA installed in the system trust store?)", "err", err)
+		} else {
+			slog.Debug("Failed to query Predastore status", "err", err)
+		}
 		return ""
 	}
 	defer resp.Body.Close()
