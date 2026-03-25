@@ -2,12 +2,20 @@ package formation
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/mulgadc/spinifex/spinifex/admin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -338,4 +346,47 @@ func TestFullFormationFlow(t *testing.T) {
 	pnodes := BuildPredastoreNodes(sr.Nodes)
 	assert.Len(t, pnodes, 3)
 	assert.Equal(t, 1, pnodes[0].ID)
+}
+
+func TestStartTLS(t *testing.T) {
+	t.Parallel()
+
+	// Generate temp CA + server cert
+	tmpDir := t.TempDir()
+	caCertPath := filepath.Join(tmpDir, "ca.pem")
+	caKeyPath := filepath.Join(tmpDir, "ca.key")
+	serverCertPath := filepath.Join(tmpDir, "server.pem")
+	serverKeyPath := filepath.Join(tmpDir, "server.key")
+
+	require.NoError(t, admin.GenerateCACert(caCertPath, caKeyPath))
+	require.NoError(t, admin.GenerateSignedCert(serverCertPath, serverKeyPath, caCertPath, caKeyPath, "127.0.0.1"))
+
+	// Pick a free port
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	ln.Close()
+
+	// Start the formation server with TLS
+	fs := NewFormationServer(1, testCreds(), "ca-cert", "ca-key")
+	require.NoError(t, fs.Start(addr, serverCertPath, serverKeyPath))
+	defer fs.Shutdown(context.Background())
+
+	// Build an HTTPS client that trusts the CA
+	caCert, err := os.ReadFile(caCertPath)
+	require.NoError(t, err)
+	pool := x509.NewCertPool()
+	require.True(t, pool.AppendCertsFromPEM(caCert))
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{RootCAs: pool},
+		},
+	}
+
+	// Hit /formation/health over HTTPS and verify 200 OK
+	resp, err := client.Get(fmt.Sprintf("https://%s/formation/health", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }

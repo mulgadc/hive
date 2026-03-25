@@ -249,7 +249,7 @@ func ChownRecursive(path, username string) {
 	root, rootErr := os.OpenRoot(path)
 	if rootErr != nil {
 		// Fallback: direct chown on the top-level path only
-		if chownErr := os.Chown(path, uid, gid); chownErr != nil { // #nosec G122
+		if chownErr := os.Chown(path, uid, gid); chownErr != nil {
 			slog.Debug("chown failed", "path", path, "err", chownErr)
 		}
 		return

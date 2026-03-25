@@ -19,6 +19,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -993,9 +994,11 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		os.Exit(1)
 	}
 
-	// Start formation server
+	// Start formation server (HTTPS using the CA-signed server cert)
 	formationAddr := fmt.Sprintf("%s:%d", bindIP, port)
-	if err := fs.Start(formationAddr); err != nil {
+	serverCert := filepath.Join(configDir, "server.pem")
+	serverKey := filepath.Join(configDir, "server.key")
+	if err := fs.Start(formationAddr, serverCert, serverKey); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error starting formation server: %v\n", err)
 		os.Exit(1)
 	}
@@ -1213,9 +1216,14 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // joining node doesn't have CA yet
+		},
+	}
 
-	joinURL := fmt.Sprintf("http://%s/formation/join", leaderHost)
+	joinURL := fmt.Sprintf("https://%s/formation/join", leaderHost)
 	resp, err := client.Post(joinURL, "application/json", bytes.NewBuffer(reqBody))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error connecting to formation server: %v\n", err)
@@ -1227,6 +1235,11 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	resp.Body.Close()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error reading response body: %v\n", err)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "❌ Formation server returned HTTP %d: %s\n", resp.StatusCode, strings.TrimSpace(string(body)))
 		os.Exit(1)
 	}
 
@@ -1244,7 +1257,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	fmt.Printf("✅ Registered with formation server (%d/%d nodes joined)\n", joinResp.Joined, joinResp.Expected)
 
 	// Poll status until formation is complete
-	statusURL := fmt.Sprintf("http://%s/formation/status", leaderHost)
+	statusURL := fmt.Sprintf("https://%s/formation/status", leaderHost)
 	var statusResp formation.StatusResponse
 
 	for {
@@ -1258,6 +1271,11 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		sResp.Body.Close()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "❌ Error reading status response: %v\n", err)
+			os.Exit(1)
+		}
+
+		if sResp.StatusCode != http.StatusOK {
+			fmt.Fprintf(os.Stderr, "❌ Formation server returned HTTP %d: %s\n", sResp.StatusCode, strings.TrimSpace(string(sBody)))
 			os.Exit(1)
 		}
 

@@ -2,7 +2,7 @@ package handlers_ec2_key
 
 import (
 	"bytes"
-	"crypto/md5" //#nosec G501 - need md5 for AWS compatibility
+	"crypto/md5" //nolint:gosec // G501: need md5 for AWS compatibility
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -217,7 +217,7 @@ func (s *KeyServiceImpl) calculateFingerprint(publicKeyData []byte, keyType stri
 	} else {
 		// RSA uses SHA-1 or MD5 fingerprint
 		// AWS uses MD5 for RSA keys for backward compatibility
-		hash := md5.Sum(keyData) //#nosec G401 - need md5 for AWS compatibility
+		hash := md5.Sum(keyData) //nolint:gosec // G401: need md5 for AWS compatibility
 		return formatFingerprint(hash[:], "MD5"), nil
 	}
 }
