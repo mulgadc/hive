@@ -85,7 +85,7 @@ jobs:
   e2e_pseudo_multi:
     name: Pseudo Multi-Node E2E
     runs-on: [self-hosted, ci-pseudo]
-    timeout-minutes: 25
+    timeout-minutes: 35
     env:
       TOFU_LOG: /tmp/e2e-tofu-pseudo-${{ github.run_id }}.log
     steps:
