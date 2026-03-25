@@ -1,0 +1,29 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    target-branch: dev
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Australia/Sydney
+    cooldown:
+      default-days: 1
+    groups:
+      go-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: npm
+    target-branch: dev
+    directory: /spinifex/services/spinifexui/frontend
+    schedule:
+      interval: weekly
+      day: monday
+      timezone: Australia/Sydney
+    cooldown:
+      default-days: 1
+    groups:
+      npm-dependencies:
+        patterns:
+          - "*"
