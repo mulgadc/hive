@@ -116,7 +116,7 @@ install-system:
 		nbdkit nbdkit-plugin-dev pkg-config $(QEMU_PACKAGES) qemu-utils qemu-kvm \
 		libvirt-daemon-system libvirt-clients libvirt-dev make gcc jq curl \
 		iproute2 netcat-openbsd openssh-client wget git unzip sudo xz-utils file \
-		ovn-central ovn-host openvswitch-switch
+		ovn-central ovn-host openvswitch-switch dhcpcd-base
 
 install-go:
 	@echo -e "\n....Installing Go 1.26.1 for $(ARCH) ($(GO_ARCH))...."

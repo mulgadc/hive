@@ -22,8 +22,9 @@ type ClusterConfig struct {
 // ExternalPool defines a range of routable IPs that Spinifex manages for public subnets.
 type ExternalPool struct {
 	Name       string   `mapstructure:"name"`        // Pool identifier (e.g., "wan", "dc1-primary")
-	RangeStart string   `mapstructure:"range_start"` // First IP in range
-	RangeEnd   string   `mapstructure:"range_end"`   // Last IP in range
+	Source     string   `mapstructure:"source"`      // IP source: "static" (default) or "dhcp" (from router DHCP)
+	RangeStart string   `mapstructure:"range_start"` // First IP in range (static source only)
+	RangeEnd   string   `mapstructure:"range_end"`   // Last IP in range (static source only)
 	Gateway    string   `mapstructure:"gateway"`     // WAN default gateway (next hop for 0.0.0.0/0)
 	GatewayIP  string   `mapstructure:"gateway_ip"`  // OVN router external IP (override; defaults to first IP in range)
 	PrefixLen  int      `mapstructure:"prefix_len"`  // Subnet mask (default 24)
@@ -34,8 +35,8 @@ type ExternalPool struct {
 
 // NetworkConfig holds cluster-wide external network settings.
 type NetworkConfig struct {
-	ExternalMode  string         `mapstructure:"external_mode"`  // "pool", "nat", or "" (disabled)
-	ExternalDHCP  bool           `mapstructure:"external_dhcp"`  // Gateway IP obtained via DHCP (nat mode)
+	ExternalMode  string         `mapstructure:"external_mode"`  // "pool" or "" (disabled)
+	ExternalDHCP  bool           `mapstructure:"external_dhcp"`  // Gateway IP obtained via DHCP (pool/dhcp source)
 	ExternalPools []ExternalPool `mapstructure:"external_pools"` // One or more IP pools
 }
 
@@ -90,7 +91,9 @@ type ViperblockConfig struct {
 type VPCDConfig struct {
 	OVNNBAddr         string `mapstructure:"ovn_nb_addr"`        // OVN Northbound DB address (e.g., "tcp:127.0.0.1:6641")
 	OVNSBAddr         string `mapstructure:"ovn_sb_addr"`        // OVN Southbound DB address (e.g., "tcp:127.0.0.1:6642")
-	ExternalInterface string `mapstructure:"external_interface"` // WAN NIC name for br-external (per-node, e.g., "eth1", "enp0s3")
+	ExternalInterface string `mapstructure:"external_interface"` // WAN NIC name (e.g., "eth1", "enp0s3") — the physical NIC on the WAN bridge
+	WanBridge         string `mapstructure:"wan_bridge"`         // OVS bridge for WAN traffic (default "br-wan", maps to OVN "external" network)
+	BridgeMode        string `mapstructure:"bridge_mode"`        // "direct" or "macvlan" (auto-detected if empty)
 }
 
 type PredastoreConfig struct {

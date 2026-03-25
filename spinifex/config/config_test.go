@@ -362,7 +362,7 @@ external_interface = "enp0s3"
 	assert.Equal(t, "enp0s3", n.VPCD.ExternalInterface)
 }
 
-func TestLoadConfig_NetworkNATMode(t *testing.T) {
+func TestLoadConfig_NetworkPoolDHCPMode(t *testing.T) {
 	resetViper(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "spinifex.toml")
@@ -371,10 +371,11 @@ func TestLoadConfig_NetworkNATMode(t *testing.T) {
 node = "n1"
 
 [network]
-external_mode = "nat"
+external_mode = "pool"
 
 [[network.external_pools]]
 name = "wan"
+source = "dhcp"
 gateway = "192.168.1.1"
 gateway_ip = "192.168.1.100"
 prefix_len = 24
@@ -387,8 +388,9 @@ region = "us-east-1"
 	cfg, err := LoadConfig(path)
 	require.NoError(t, err)
 
-	assert.Equal(t, "nat", cfg.Network.ExternalMode)
+	assert.Equal(t, "pool", cfg.Network.ExternalMode)
 	require.Len(t, cfg.Network.ExternalPools, 1)
+	assert.Equal(t, "dhcp", cfg.Network.ExternalPools[0].Source)
 	assert.Equal(t, "192.168.1.100", cfg.Network.ExternalPools[0].GatewayIP)
 }
 

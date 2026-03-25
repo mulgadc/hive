@@ -101,6 +101,12 @@ else
     echo "  /var/lib/ovn not found, skipping OVN DB cleanup"
 fi
 
+# Remove veth pair created by setup-ovn.sh (veth mode — Linux bridge ↔ OVS bridge)
+if ip link show veth-wan-br >/dev/null 2>&1; then
+    echo "  Deleting veth pair: veth-wan-br ↔ veth-wan-ovs"
+    sudo ip link del veth-wan-br 2>/dev/null || true
+fi
+
 # Remove macvlan interfaces created by setup-ovn.sh
 for iface in $(ip -o link show type macvlan 2>/dev/null | awk -F': ' '{print $2}' | grep '^spx-ext-'); do
     echo "  Deleting macvlan: $iface"
@@ -112,13 +118,47 @@ echo "Removing ~/spinifex"
 rm -rf ~/spinifex
 
 # --- Re-initialize ---
-# Detect WAN interface (default route) for external bridge.
-# Always uses macvlan — the WAN NIC is typically the SSH NIC too, so IP
-# migration is never safe for remote-access hosts.
+# Detect WAN interface (default route).
 WAN_IFACE=$(ip -4 route show default | awk '{print $5}' | head -1)
 WAN_GW=$(ip -4 route show default | awk '{print $3}' | head -1)
 
 echo "Detected WAN interface: ${WAN_IFACE:-none}, gateway: ${WAN_GW:-none}"
+
+# Check if WAN interface is already a bridge (tofu-cluster / production setup).
+# If so, setup-ovn.sh auto-detects it. If it's a physical NIC, we need to
+# decide between direct bridge and macvlan based on SSH safety.
+WAN_IS_BRIDGE=false
+if [ -n "$WAN_IFACE" ]; then
+    if ip -d link show "$WAN_IFACE" 2>/dev/null | grep -q "bridge"; then
+        WAN_IS_BRIDGE=true
+    fi
+fi
+
+# Build setup-ovn.sh flags based on detected topology
+SETUP_OVN_FLAGS=""
+if [ "$WAN_IS_BRIDGE" = true ]; then
+    # WAN is already a bridge (e.g. br-wan from cloud-init) — setup-ovn.sh
+    # auto-detects it, no explicit flags needed.
+    echo "  WAN is a bridge: $WAN_IFACE (auto-detected)"
+elif [ -n "$WAN_IFACE" ]; then
+    # WAN is a physical NIC. Detect SSH NIC to decide bridge strategy.
+    SSH_NIC=""
+    if [ -n "${SSH_CONNECTION:-}" ]; then
+        SSH_IP=$(echo "$SSH_CONNECTION" | awk '{print $3}')
+        SSH_NIC=$(ip -o -4 addr show | awk -v ip="$SSH_IP" '$0 ~ ip"/" {print $2}' | head -1)
+    fi
+    if [ -z "$SSH_NIC" ]; then
+        SSH_NIC="$WAN_IFACE"
+    fi
+
+    if [ "$WAN_IFACE" != "$SSH_NIC" ]; then
+        SETUP_OVN_FLAGS="--wan-bridge=br-wan --wan-iface=$WAN_IFACE"
+        echo "  Bridge mode: direct (WAN=$WAN_IFACE != SSH=$SSH_NIC)"
+    else
+        SETUP_OVN_FLAGS="--macvlan --wan-iface=$WAN_IFACE"
+        echo "  Bridge mode: macvlan (WAN=$WAN_IFACE == SSH=$SSH_NIC)"
+    fi
+fi
 
 # Chassis ID must match what vpcd derives from the node name in spinifex.toml.
 # vpcd generates "chassis-{nodeName}" (e.g., chassis-node1) and uses it to schedule
@@ -128,35 +168,43 @@ NODE_NAME="node1"
 CHASSIS_ID="chassis-${NODE_NAME}"
 
 echo "Re-initializing OVN (chassis-id: $CHASSIS_ID)"
-if [ -n "$WAN_IFACE" ]; then
-    echo "  Using macvlan on $WAN_IFACE for br-external"
-    ./scripts/setup-ovn.sh --management --external-bridge --external-iface="$WAN_IFACE" --chassis-id="$CHASSIS_ID"
-else
-    echo "  No WAN interface detected, management-only"
-    ./scripts/setup-ovn.sh --management --chassis-id="$CHASSIS_ID"
-fi
+./scripts/setup-ovn.sh --management $SETUP_OVN_FLAGS --chassis-id="$CHASSIS_ID"
 
 echo "Initializing platform"
 ADMIN_INIT_ARGS="--region $REGION --az ${REGION}a --node node1 --nodes 1"
+
+# External networking mode: set EXTERNAL_MODE=nat for NAT/DHCP mode (outbound-only),
+# or leave unset / EXTERNAL_MODE=pool for pool mode (per-VM public IPs).
+EXTERNAL_MODE="${EXTERNAL_MODE:-pool}"
+
 if [ -n "$WAN_IFACE" ] && [ -n "$WAN_GW" ]; then
-    # Suggest pool range at high end of WAN subnet to avoid DHCP conflicts
     WAN_IP=$(ip -4 -o addr show "$WAN_IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
     WAN_PREFIX=$(ip -4 -o addr show "$WAN_IFACE" 2>/dev/null | awk '{print $4}' | cut -d/ -f2 | head -1)
     if [ -z "$WAN_PREFIX" ]; then WAN_PREFIX=24; fi
 
-    # Use high range of subnet: .200-.250 for /24, avoid common DHCP ranges
-    IFS='.' read -r o1 o2 o3 o4 <<< "$WAN_GW"
-    POOL_START="${o1}.${o2}.${o3}.200"
-    POOL_END="${o1}.${o2}.${o3}.250"
-
-    echo "  External pool: $POOL_START - $POOL_END (gateway: $WAN_GW)"
-    ADMIN_INIT_ARGS="$ADMIN_INIT_ARGS --external-mode=pool --external-pool=${POOL_START}-${POOL_END} --external-gateway=${WAN_GW} --external-prefix-len=${WAN_PREFIX}"
+    if [ "$EXTERNAL_MODE" = "nat" ]; then
+        # NAT mode: outbound-only via shared SNAT. Use a single IP from the
+        # high end of the WAN subnet as the gateway IP. No per-VM public IPs.
+        IFS='.' read -r o1 o2 o3 o4 <<< "$WAN_GW"
+        GATEWAY_IP="${GATEWAY_IP:-${o1}.${o2}.${o3}.200}"
+        echo "  External mode: nat (gateway IP: $GATEWAY_IP, WAN gateway: $WAN_GW)"
+        ADMIN_INIT_ARGS="$ADMIN_INIT_ARGS --external-mode=nat --gateway-ip=${GATEWAY_IP} --external-gateway=${WAN_GW} --external-prefix-len=${WAN_PREFIX}"
+    else
+        # Pool mode: per-VM public IPs from a static range
+        IFS='.' read -r o1 o2 o3 o4 <<< "$WAN_GW"
+        POOL_START="${o1}.${o2}.${o3}.200"
+        POOL_END="${o1}.${o2}.${o3}.250"
+        echo "  External pool: $POOL_START - $POOL_END (gateway: $WAN_GW)"
+        ADMIN_INIT_ARGS="$ADMIN_INIT_ARGS --external-mode=pool --external-pool=${POOL_START}-${POOL_END} --external-gateway=${WAN_GW} --external-prefix-len=${WAN_PREFIX}"
+    fi
 fi
 ./bin/spx admin init $ADMIN_INIT_ARGS
 
-# Re-initialize platform (generates fresh credentials, certs, config, and updates ~/.aws/credentials)
+# Re-initialize with --force to regenerate credentials, certs, config, and
+# update ~/.aws/credentials. Must carry the same args so external networking
+# config isn't lost.
 echo "Re-initializing platform..."
-./bin/spx admin init --force
+./bin/spx admin init --force $ADMIN_INIT_ARGS
 
 # Generate SSH key if it doesn't exist
 if [ ! -f ~/.ssh/spinifex-key.pub ]; then

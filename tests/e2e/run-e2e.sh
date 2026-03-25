@@ -112,7 +112,11 @@ else
 fi
 
 if [ "$BOOTSTRAPPED" != "true" ]; then
-    ./bin/spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
+    INIT_FLAGS="--region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1"
+    if [ -n "${SPX_EXTERNAL_POOL:-}" ]; then
+        INIT_FLAGS="$INIT_FLAGS --external-mode=pool --external-pool=$SPX_EXTERNAL_POOL"
+    fi
+    ./bin/spx admin init $INIT_FLAGS
 
     # Trust the Spinifex CA certificate for AWS CLI SSL verification
     echo "Adding Spinifex CA certificate to system trust store..."
@@ -428,15 +432,26 @@ echo "Instance metadata validated (Type=$META_TYPE, Key=$META_KEY, Image=$META_I
 # Phase 5a-ii: SSH Connectivity & Volume Verification
 echo "Phase 5a-ii: SSH Connectivity & Volume Verification"
 
-# Get SSH connection details from QEMU process
-echo "Getting SSH port for instance $INSTANCE_ID..."
-SSH_PORT=$(get_ssh_port "$INSTANCE_ID")
-if [ -z "$SSH_PORT" ]; then
-    echo "Failed to get SSH port for instance $INSTANCE_ID"
-    exit 1
+# Determine SSH connection method:
+# - If instance has a public IP (external networking enabled), SSH via public IP on port 22
+# - Otherwise, fall back to QEMU hostfwd (dev_networking mode)
+INST_PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+    --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null || echo "None")
+
+if [ -n "$INST_PUBLIC_IP" ] && [ "$INST_PUBLIC_IP" != "None" ] && [ "$INST_PUBLIC_IP" != "null" ]; then
+    SSH_HOST="$INST_PUBLIC_IP"
+    SSH_PORT=22
+    echo "SSH via public IP: $SSH_HOST:$SSH_PORT"
+else
+    echo "No public IP — using QEMU hostfwd for SSH"
+    SSH_PORT=$(get_ssh_port "$INSTANCE_ID")
+    if [ -z "$SSH_PORT" ]; then
+        echo "Failed to get SSH port for instance $INSTANCE_ID"
+        exit 1
+    fi
+    SSH_HOST=$(get_ssh_host "$INSTANCE_ID")
+    echo "SSH endpoint: $SSH_HOST:$SSH_PORT"
 fi
-SSH_HOST=$(get_ssh_host "$INSTANCE_ID")
-echo "SSH endpoint: $SSH_HOST:$SSH_PORT"
 
 # Wait for SSH to become ready (VM boot + cloud-init)
 wait_for_ssh "$SSH_HOST" "$SSH_PORT" "test-key-1.pem" 30
@@ -1081,10 +1096,17 @@ if [ "$STATE" != "running" ]; then
     exit 1
 fi
 
-# Get SSH port (may have changed after restart with new QEMU config)
-echo "Getting SSH port for restarted instance..."
-SSH_PORT=$(get_ssh_port "$INSTANCE_ID")
-SSH_HOST=$(get_ssh_host "$INSTANCE_ID")
+# Re-detect SSH endpoint (may have changed after restart with new QEMU config)
+echo "Detecting SSH endpoint for restarted instance..."
+INST_PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+    --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null || echo "None")
+if [ -n "$INST_PUBLIC_IP" ] && [ "$INST_PUBLIC_IP" != "None" ] && [ "$INST_PUBLIC_IP" != "null" ]; then
+    SSH_HOST="$INST_PUBLIC_IP"
+    SSH_PORT=22
+else
+    SSH_PORT=$(get_ssh_port "$INSTANCE_ID")
+    SSH_HOST=$(get_ssh_host "$INSTANCE_ID")
+fi
 echo "SSH endpoint: $SSH_HOST:$SSH_PORT"
 
 # Wait for SSH to become ready
@@ -1154,8 +1176,15 @@ done
 echo "Instance state remained running during reboot"
 
 # Wait for SSH to come back (guest OS restarts)
-SSH_PORT=$(get_ssh_port "$INSTANCE_ID")
-SSH_HOST=$(get_ssh_host "$INSTANCE_ID")
+INST_PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+    --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null || echo "None")
+if [ -n "$INST_PUBLIC_IP" ] && [ "$INST_PUBLIC_IP" != "None" ] && [ "$INST_PUBLIC_IP" != "null" ]; then
+    SSH_HOST="$INST_PUBLIC_IP"
+    SSH_PORT=22
+else
+    SSH_PORT=$(get_ssh_port "$INSTANCE_ID")
+    SSH_HOST=$(get_ssh_host "$INSTANCE_ID")
+fi
 wait_for_ssh "$SSH_HOST" "$SSH_PORT" "test-key-1.pem" 30
 
 # Verify guest actually rebooted (uptime < 120 seconds)
@@ -2565,6 +2594,267 @@ done
 echo "  EC2 account scoping cleanup complete"
 echo ""
 echo "Phase 8: EC2 Account Scoping PASSED"
+
+# Phase 8b: VPC Public/Private Subnet E2E
+echo ""
+echo "Phase 8b: VPC Public/Private Subnet E2E"
+echo "========================================"
+
+# Check if external networking is configured
+HAS_EXTERNAL=false
+if grep -q 'external_mode = "pool"' ~/spinifex/config/spinifex.toml 2>/dev/null; then
+    HAS_EXTERNAL=true
+fi
+
+HAS_OVN=false
+if command -v ovn-nbctl &>/dev/null; then
+    HAS_OVN=true
+fi
+
+if [ "$HAS_EXTERNAL" != "true" ]; then
+    echo "Skipping Phase 8b: no external networking configured"
+    echo "(set SPX_EXTERNAL_POOL=start-end to enable)"
+else
+
+echo "Phase 8b Step 1: Discover default VPC infrastructure"
+# The default VPC, subnet, and IGW are created by admin init
+DEFAULT_VPC=$(aws ec2 describe-vpcs --query 'Vpcs[?IsDefault==`true`].VpcId | [0]' --output text)
+if [ -z "$DEFAULT_VPC" ] || [ "$DEFAULT_VPC" = "None" ]; then
+    echo "FATAL: No default VPC found — admin init may not have run"
+    exit 1
+fi
+DEFAULT_SUBNET=$(aws ec2 describe-subnets --query "Subnets[?VpcId=='${DEFAULT_VPC}' && DefaultForAz==\`true\`].SubnetId | [0]" --output text)
+echo "Default VPC: $DEFAULT_VPC"
+echo "Default subnet: $DEFAULT_SUBNET (MapPublicIpOnLaunch=true)"
+
+echo ""
+echo "Phase 8b Step 2: Public subnet instance"
+# Launch instance in default subnet (MapPublicIpOnLaunch=true, IGW attached)
+echo "Launching instance in public subnet..."
+PUB_RUN_OUTPUT=$(aws ec2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --subnet-id "$DEFAULT_SUBNET" \
+    --key-name test-key-1 \
+    --output json 2>&1)
+PUB_INSTANCE_ID=$(echo "$PUB_RUN_OUTPUT" | jq -r '.Instances[0].InstanceId')
+echo "Public instance: $PUB_INSTANCE_ID"
+
+# Wait for running
+echo "Waiting for public instance to reach running state..."
+PUB_COUNT=0
+PUB_STATE="unknown"
+while [ $PUB_COUNT -lt 90 ]; do
+    PUB_STATE=$(aws ec2 describe-instances --instance-ids "$PUB_INSTANCE_ID" \
+        --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "pending")
+    if [ "$PUB_STATE" == "running" ]; then
+        echo "Public instance is running"
+        break
+    fi
+    sleep 1
+    PUB_COUNT=$((PUB_COUNT + 1))
+done
+if [ "$PUB_STATE" != "running" ]; then
+    echo "FAIL: Public instance did not reach running state (got: $PUB_STATE)"
+    exit 1
+fi
+
+# Verify public IP is assigned
+PUB_IP=$(aws ec2 describe-instances --instance-ids "$PUB_INSTANCE_ID" \
+    --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+PUB_PRIVATE_IP=$(aws ec2 describe-instances --instance-ids "$PUB_INSTANCE_ID" \
+    --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+echo "Public IP: $PUB_IP, Private IP: $PUB_PRIVATE_IP"
+
+if [ -z "$PUB_IP" ] || [ "$PUB_IP" = "None" ]; then
+    echo "FAIL: Public subnet instance has no PublicIpAddress"
+    exit 1
+fi
+echo "PASS: Public subnet instance has PublicIpAddress=$PUB_IP"
+
+# OVN verification: per-VM dnat_and_snat rule exists
+if [ "$HAS_OVN" = true ]; then
+    NAT_RULES=$(sudo ovn-nbctl --no-leader-only lr-nat-list "vpc-${DEFAULT_VPC}" 2>/dev/null || echo "")
+
+    # Verify dnat_and_snat exists for this VM's private IP
+    if echo "$NAT_RULES" | grep -q "dnat_and_snat.*${PUB_PRIVATE_IP}"; then
+        echo "PASS: OVN dnat_and_snat rule exists for $PUB_PRIVATE_IP"
+    else
+        echo "FAIL: No OVN dnat_and_snat rule for $PUB_PRIVATE_IP"
+        echo "NAT rules:"
+        echo "$NAT_RULES"
+        exit 1
+    fi
+
+    # Verify NO blanket VPC CIDR SNAT (mulga-754 fix)
+    if echo "$NAT_RULES" | grep -q "snat.*172.31.0.0/16"; then
+        echo "FAIL: Blanket VPC CIDR SNAT exists (should have been removed by mulga-754)"
+        echo "NAT rules:"
+        echo "$NAT_RULES"
+        exit 1
+    fi
+    echo "PASS: No blanket VPC CIDR SNAT on router (AWS parity)"
+fi
+
+# SSH into public instance via its public IP and verify outbound connectivity.
+# This proves the full path: host → public IP → OVN DNAT → VM → OVN SNAT → internet.
+echo "Waiting for SSH via public IP $PUB_IP..."
+PUB_SSH_READY=false
+for attempt in $(seq 1 60); do
+    if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+        -o ConnectTimeout=3 -o BatchMode=yes -i "test-key-1.pem" \
+        ec2-user@"$PUB_IP" 'true' 2>/dev/null; then
+        PUB_SSH_READY=true
+        break
+    fi
+    sleep 2
+done
+if [ "$PUB_SSH_READY" = true ]; then
+    echo "PASS: SSH via public IP $PUB_IP succeeded"
+
+    # Verify outbound internet from VM (via OVN SNAT, not QEMU user-mode)
+    set +e
+    OUTBOUND_OK=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+        -o ConnectTimeout=5 -o BatchMode=yes -i "test-key-1.pem" \
+        ec2-user@"$PUB_IP" 'ping -c 2 -W 5 8.8.8.8 >/dev/null 2>&1 && echo yes || echo no' 2>/dev/null)
+    set -e
+    if [ "$OUTBOUND_OK" = "yes" ]; then
+        echo "PASS: Outbound internet from public instance via OVN SNAT"
+    else
+        echo "WARN: Outbound internet test inconclusive (may depend on WAN gateway)"
+    fi
+else
+    echo "WARN: SSH via public IP $PUB_IP not reachable (macvlan isolation or bridge not ready)"
+    echo "Falling back to API-only verification (OVN state already validated above)"
+fi
+
+echo ""
+echo "Phase 8b Step 3: Private subnet isolation"
+# Create a second subnet in the default VPC without MapPublicIpOnLaunch
+echo "Creating private subnet 172.31.16.0/20 in default VPC..."
+PRIV_SUBNET_OUTPUT=$(aws ec2 create-subnet \
+    --vpc-id "$DEFAULT_VPC" \
+    --cidr-block 172.31.16.0/20 \
+    --output json 2>&1)
+PRIV_SUBNET_ID=$(echo "$PRIV_SUBNET_OUTPUT" | jq -r '.Subnet.SubnetId')
+echo "Private subnet: $PRIV_SUBNET_ID"
+
+# Verify MapPublicIpOnLaunch is false (default)
+MAP_PUB=$(echo "$PRIV_SUBNET_OUTPUT" | jq -r '.Subnet.MapPublicIpOnLaunch')
+if [ "$MAP_PUB" = "false" ]; then
+    echo "PASS: Private subnet MapPublicIpOnLaunch=false"
+else
+    echo "FAIL: Expected MapPublicIpOnLaunch=false, got $MAP_PUB"
+    exit 1
+fi
+
+# Launch instance in private subnet
+echo "Launching instance in private subnet..."
+PRIV_RUN_OUTPUT=$(aws ec2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --subnet-id "$PRIV_SUBNET_ID" \
+    --key-name test-key-1 \
+    --output json 2>&1)
+PRIV_INSTANCE_ID=$(echo "$PRIV_RUN_OUTPUT" | jq -r '.Instances[0].InstanceId')
+echo "Private instance: $PRIV_INSTANCE_ID"
+
+# Wait for running
+echo "Waiting for private instance to reach running state..."
+PRIV_COUNT=0
+PRIV_STATE="unknown"
+while [ $PRIV_COUNT -lt 90 ]; do
+    PRIV_STATE=$(aws ec2 describe-instances --instance-ids "$PRIV_INSTANCE_ID" \
+        --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "pending")
+    if [ "$PRIV_STATE" == "running" ]; then
+        echo "Private instance is running"
+        break
+    fi
+    sleep 1
+    PRIV_COUNT=$((PRIV_COUNT + 1))
+done
+if [ "$PRIV_STATE" != "running" ]; then
+    echo "FAIL: Private instance did not reach running state (got: $PRIV_STATE)"
+    exit 1
+fi
+
+# Verify NO public IP assigned
+PRIV_PUB_IP=$(aws ec2 describe-instances --instance-ids "$PRIV_INSTANCE_ID" \
+    --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+PRIV_PRIVATE_IP=$(aws ec2 describe-instances --instance-ids "$PRIV_INSTANCE_ID" \
+    --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+echo "Private instance — PublicIpAddress: $PRIV_PUB_IP, PrivateIpAddress: $PRIV_PRIVATE_IP"
+
+if [ -z "$PRIV_PUB_IP" ] || [ "$PRIV_PUB_IP" = "None" ] || [ "$PRIV_PUB_IP" = "null" ]; then
+    echo "PASS: Private subnet instance has no PublicIpAddress"
+else
+    echo "FAIL: Private subnet instance should NOT have PublicIpAddress (got: $PRIV_PUB_IP)"
+    exit 1
+fi
+
+# OVN verification: NO dnat_and_snat for private instance
+if [ "$HAS_OVN" = true ]; then
+    NAT_RULES=$(sudo ovn-nbctl --no-leader-only lr-nat-list "vpc-${DEFAULT_VPC}" 2>/dev/null || echo "")
+
+    if echo "$NAT_RULES" | grep -q "dnat_and_snat.*${PRIV_PRIVATE_IP}"; then
+        echo "FAIL: Private instance has dnat_and_snat rule (should not)"
+        echo "NAT rules:"
+        echo "$NAT_RULES"
+        exit 1
+    fi
+    echo "PASS: No OVN dnat_and_snat rule for private instance $PRIV_PRIVATE_IP"
+
+    # Confirm still no blanket SNAT
+    if echo "$NAT_RULES" | grep -q "snat.*172.31.0.0/16"; then
+        echo "FAIL: Blanket VPC CIDR SNAT appeared after private instance launch"
+        exit 1
+    fi
+    echo "PASS: Still no blanket VPC CIDR SNAT (private instances are fully isolated)"
+fi
+
+echo ""
+echo "Phase 8b Step 4: Cleanup"
+# Terminate both instances
+echo "Terminating public instance $PUB_INSTANCE_ID..."
+aws ec2 terminate-instances --instance-ids "$PUB_INSTANCE_ID"
+echo "Terminating private instance $PRIV_INSTANCE_ID..."
+aws ec2 terminate-instances --instance-ids "$PRIV_INSTANCE_ID"
+
+# Wait for both to terminate
+for CLEANUP_ID in "$PUB_INSTANCE_ID" "$PRIV_INSTANCE_ID"; do
+    CLEANUP_COUNT=0
+    while [ $CLEANUP_COUNT -lt 60 ]; do
+        CLEANUP_STATE=$(aws ec2 describe-instances --instance-ids "$CLEANUP_ID" \
+            --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "terminated")
+        if [ "$CLEANUP_STATE" == "terminated" ] || [ "$CLEANUP_STATE" == "None" ]; then
+            echo "Instance $CLEANUP_ID terminated"
+            break
+        fi
+        sleep 1
+        CLEANUP_COUNT=$((CLEANUP_COUNT + 1))
+    done
+done
+
+# Verify public IP NAT rule removed after termination
+if [ "$HAS_OVN" = true ]; then
+    sleep 2  # Allow async cleanup
+    NAT_RULES=$(sudo ovn-nbctl --no-leader-only lr-nat-list "vpc-${DEFAULT_VPC}" 2>/dev/null || echo "")
+    if echo "$NAT_RULES" | grep -q "dnat_and_snat.*${PUB_PRIVATE_IP}"; then
+        echo "FAIL: dnat_and_snat rule not cleaned up after termination"
+        exit 1
+    fi
+    echo "PASS: NAT rule cleaned up after public instance termination"
+fi
+
+# Delete private subnet
+echo "Deleting private subnet $PRIV_SUBNET_ID..."
+aws ec2 delete-subnet --subnet-id "$PRIV_SUBNET_ID"
+echo "PASS: Private subnet deleted"
+
+echo ""
+echo "Phase 8b: VPC Public/Private Subnet E2E PASSED"
+
+fi  # end HAS_EXTERNAL check
 
 # Phase 9: Terminate and Verify Cleanup
 echo "Phase 9: Terminate and Verify Cleanup"

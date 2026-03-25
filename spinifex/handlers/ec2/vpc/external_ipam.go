@@ -43,6 +43,7 @@ type ExternalIPAMRecord struct {
 // ExternalPoolConfig is the admin-defined pool from spinifex.toml.
 type ExternalPoolConfig struct {
 	Name       string
+	Source     string // "static" (default) or "dhcp"
 	RangeStart string
 	RangeEnd   string
 	Gateway    string
@@ -50,6 +51,12 @@ type ExternalPoolConfig struct {
 	PrefixLen  int
 	Region     string
 	AZ         string
+	WanBridge  string // OVS bridge for DHCP leases (e.g. "br-ext")
+}
+
+// IsDHCP returns true if this pool obtains IPs from router DHCP.
+func (p *ExternalPoolConfig) IsDHCP() bool {
+	return p.Source == "dhcp"
 }
 
 // ExternalIPAM manages external IP allocation from admin-defined pools using NATS KV with CAS.
@@ -101,8 +108,18 @@ func (m *ExternalIPAM) initPool(pool ExternalPoolConfig) error {
 	}
 
 	gwIP := pool.GatewayIP
-	if gwIP == "" {
+	if gwIP == "" && !pool.IsDHCP() {
 		gwIP = pool.RangeStart
+	}
+
+	// For DHCP pools, obtain the gateway IP from router DHCP if not set
+	if gwIP == "" && pool.IsDHCP() {
+		dhcpIP, dhcpErr := ObtainDHCPLease(pool.WanBridge, "gateway-"+pool.Name)
+		if dhcpErr != nil {
+			return fmt.Errorf("DHCP gateway lease for pool %q: %w", pool.Name, dhcpErr)
+		}
+		gwIP = dhcpIP
+		slog.Info("external IPAM obtained gateway IP via DHCP", "pool", pool.Name, "gateway_ip", gwIP)
 	}
 
 	record := &ExternalIPAMRecord{
@@ -132,7 +149,7 @@ func (m *ExternalIPAM) initPool(pool ExternalPoolConfig) error {
 		return fmt.Errorf("create pool KV entry: %w", err)
 	}
 
-	slog.Info("external IPAM pool initialized", "pool", pool.Name, "gateway_ip", gwIP)
+	slog.Info("external IPAM pool initialized", "pool", pool.Name, "gateway_ip", gwIP, "source", pool.Source)
 	return nil
 }
 
@@ -156,15 +173,32 @@ func (m *ExternalIPAM) AllocateFromPool(poolName, allocType, eniID, instanceID s
 }
 
 func (m *ExternalIPAM) allocateFromPool(poolName, allocType, eniID, instanceID string) (string, error) {
+	pool := m.findPoolByName(poolName)
+
 	for attempt := range 5 {
 		record, revision, err := m.getRecord(poolName)
 		if err != nil {
 			return "", fmt.Errorf("get external IPAM record: %w", err)
 		}
 
-		ip, err := nextAvailableExternalIP(record)
-		if err != nil {
-			return "", err
+		var ip string
+		if pool != nil && pool.IsDHCP() {
+			// DHCP source: obtain a lease from the router's DHCP server.
+			// Use ENI ID as the client identifier so each VM gets a unique lease.
+			clientID := eniID
+			if clientID == "" {
+				clientID = instanceID
+			}
+			ip, err = ObtainDHCPLease(pool.WanBridge, clientID)
+			if err != nil {
+				return "", fmt.Errorf("DHCP lease for %s: %w", clientID, err)
+			}
+		} else {
+			// Static source: pick next IP from range
+			ip, err = nextAvailableExternalIP(record)
+			if err != nil {
+				return "", err
+			}
 		}
 
 		record.Allocated[ip] = ExternalIPAllocation{
@@ -179,11 +213,15 @@ func (m *ExternalIPAM) allocateFromPool(poolName, allocType, eniID, instanceID s
 		}
 
 		if _, err := m.kv.Update(poolName, data, revision); err != nil {
+			// CAS conflict — if we obtained a DHCP lease, release it before retrying
+			if pool != nil && pool.IsDHCP() {
+				_ = ReleaseDHCPLease(pool.WanBridge, eniID)
+			}
 			slog.Debug("external IPAM CAS conflict, retrying", "pool", poolName, "attempt", attempt)
 			continue
 		}
 
-		slog.Info("external IPAM allocated IP", "pool", poolName, "ip", ip, "type", allocType)
+		slog.Info("external IPAM allocated IP", "pool", poolName, "ip", ip, "type", allocType, "source", pool.Source)
 		return ip, nil
 	}
 
@@ -192,6 +230,8 @@ func (m *ExternalIPAM) allocateFromPool(poolName, allocType, eniID, instanceID s
 
 // ReleaseIP releases a previously allocated external IP back to its pool.
 func (m *ExternalIPAM) ReleaseIP(poolName, ip string) error {
+	pool := m.findPoolByName(poolName)
+
 	for attempt := range 5 {
 		record, revision, err := m.getRecord(poolName)
 		if err != nil {
@@ -204,6 +244,17 @@ func (m *ExternalIPAM) ReleaseIP(poolName, ip string) error {
 		}
 		if alloc.Type == "gateway" {
 			return fmt.Errorf("cannot release gateway IP %s in pool %s", ip, poolName)
+		}
+
+		// Release DHCP lease if this is a DHCP-sourced pool
+		if pool != nil && pool.IsDHCP() {
+			clientID := alloc.ENIId
+			if clientID == "" {
+				clientID = alloc.InstanceId
+			}
+			if releaseErr := ReleaseDHCPLease(pool.WanBridge, clientID); releaseErr != nil {
+				slog.Warn("Failed to release DHCP lease", "pool", poolName, "ip", ip, "err", releaseErr)
+			}
 		}
 
 		delete(record.Allocated, ip)
@@ -258,6 +309,16 @@ func (m *ExternalIPAM) findPool(region, az string) *ExternalPoolConfig {
 	return nil
 }
 
+// findPoolByName returns the pool config by name.
+func (m *ExternalIPAM) findPoolByName(name string) *ExternalPoolConfig {
+	for i := range m.pools {
+		if m.pools[i].Name == name {
+			return &m.pools[i]
+		}
+	}
+	return nil
+}
+
 func (m *ExternalIPAM) getRecord(poolName string) (*ExternalIPAMRecord, uint64, error) {
 	entry, err := m.kv.Get(poolName)
 	if err != nil {
@@ -298,17 +359,6 @@ func ValidatePoolConfig(pool ExternalPoolConfig) error {
 	if pool.Name == "" {
 		return fmt.Errorf("pool name is required")
 	}
-	startIP := net.ParseIP(pool.RangeStart)
-	if startIP == nil {
-		return fmt.Errorf("invalid range_start: %q", pool.RangeStart)
-	}
-	endIP := net.ParseIP(pool.RangeEnd)
-	if endIP == nil {
-		return fmt.Errorf("invalid range_end: %q", pool.RangeEnd)
-	}
-	if ipToInt(startIP.To4()).Cmp(ipToInt(endIP.To4())) > 0 {
-		return fmt.Errorf("range_start %s is greater than range_end %s", pool.RangeStart, pool.RangeEnd)
-	}
 	if pool.Gateway == "" {
 		return fmt.Errorf("gateway is required for pool %q", pool.Name)
 	}
@@ -317,6 +367,20 @@ func ValidatePoolConfig(pool ExternalPoolConfig) error {
 	}
 	if pool.GatewayIP != "" && net.ParseIP(pool.GatewayIP) == nil {
 		return fmt.Errorf("invalid gateway_ip: %q", pool.GatewayIP)
+	}
+	// DHCP pools don't need range_start/range_end
+	if !pool.IsDHCP() {
+		startIP := net.ParseIP(pool.RangeStart)
+		if startIP == nil {
+			return fmt.Errorf("invalid range_start: %q", pool.RangeStart)
+		}
+		endIP := net.ParseIP(pool.RangeEnd)
+		if endIP == nil {
+			return fmt.Errorf("invalid range_end: %q", pool.RangeEnd)
+		}
+		if ipToInt(startIP.To4()).Cmp(ipToInt(endIP.To4())) > 0 {
+			return fmt.Errorf("range_start %s is greater than range_end %s", pool.RangeStart, pool.RangeEnd)
+		}
 	}
 	return nil
 }

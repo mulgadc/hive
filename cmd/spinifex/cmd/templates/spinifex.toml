@@ -12,6 +12,9 @@ external_dhcp = true
 
 [[network.external_pools]]
 name        = "{{.PoolName}}"
+{{- if .PoolSource}}
+source      = "{{.PoolSource}}"
+{{- end}}
 {{- if .PoolStart}}
 range_start = "{{.PoolStart}}"
 range_end   = "{{.PoolEnd}}"
@@ -80,6 +83,9 @@ ovn_nb_addr = "{{.OVNNBAddr}}"
 ovn_sb_addr = "{{.OVNSBAddr}}"
 {{- if .ExternalIface}}
 external_interface = "{{.ExternalIface}}"
+{{- end}}
+{{- if .WanBridge}}
+wan_bridge = "{{.WanBridge}}"
 {{- end}}
 
 [nodes.{{.Node}}.predastore]

@@ -150,9 +150,10 @@ has_service "predastore" && stop_service "predastore" "$PID_DIR"
 has_service "nats" && stop_service "nats" "$PID_DIR"
 
 # Stop OVN networking (prevents idle CPU burn when spinifex isn't running)
-# CRITICAL: Do NOT stop openvswitch-switch if br-external has an IP.
-# When setup-ovn.sh migrates the host's WAN IP to br-external, stopping OVS
-# destroys the bridge and the host loses all WAN connectivity (unreachable via SSH).
+# CRITICAL: Do NOT stop openvswitch-switch if OVS carries WAN traffic.
+# This can happen when an OVS bridge has a WAN IP (direct bridge mode) or
+# when a veth pair links an OVS bridge to a Linux WAN bridge (veth mode).
+# Stopping OVS would destroy the bridge and break WAN connectivity.
 # OVS is infrastructure — only stop ovn-controller and ovn-central.
 if pidof systemd >/dev/null 2>&1; then
     echo "🛑 Stopping OVN networking..."
@@ -161,9 +162,28 @@ if pidof systemd >/dev/null 2>&1; then
         sudo systemctl stop ovn-central 2>/dev/null && echo "✅ ovn-central stopped" || true
     fi
 
-    # Only stop OVS if br-external does NOT have an IP (safe to tear down)
-    if sudo ovs-vsctl br-exists br-external 2>/dev/null && ip -4 addr show br-external 2>/dev/null | grep -q "inet "; then
-        echo "⚠️  Skipping openvswitch-switch stop (br-external has WAN IP — stopping would kill connectivity)"
+    # Only stop OVS if tearing it down won't kill WAN connectivity.
+    # Two cases where OVS is load-bearing for WAN:
+    #   1. An OVS bridge has a WAN IP directly (direct bridge mode)
+    #   2. A veth pair links a Linux bridge to an OVS bridge (veth mode) —
+    #      stopping OVS destroys the OVS bridge end, breaking the link
+    WAN_BRIDGE_HAS_IP=false
+    VETH_LINKS_WAN=false
+    for br in $(sudo ovs-vsctl list-br 2>/dev/null); do
+        if [ "$br" = "br-int" ]; then continue; fi
+        if ip -4 addr show "$br" 2>/dev/null | grep -q "inet "; then
+            WAN_BRIDGE_HAS_IP=true
+            break
+        fi
+    done
+    # Check if a veth pair links an OVS bridge to a Linux bridge with a WAN IP
+    if ip link show veth-wan-br >/dev/null 2>&1; then
+        VETH_LINKS_WAN=true
+    fi
+    if [ "$WAN_BRIDGE_HAS_IP" = true ]; then
+        echo "⚠️  Skipping openvswitch-switch stop ($br has WAN IP — stopping would kill connectivity)"
+    elif [ "$VETH_LINKS_WAN" = true ]; then
+        echo "⚠️  Skipping openvswitch-switch stop (veth pair links OVS to WAN bridge)"
     else
         sudo systemctl stop openvswitch-switch 2>/dev/null && echo "✅ openvswitch-switch stopped" || true
     fi

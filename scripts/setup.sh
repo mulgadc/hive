@@ -127,7 +127,7 @@ install_apt_deps() {
         $QEMU_PACKAGES qemu-utils qemu-kvm \
         libvirt-daemon-system libvirt-clients \
         jq curl iproute2 netcat-openbsd wget unzip xz-utils file \
-        ovn-central ovn-host openvswitch-switch \
+        ovn-central ovn-host openvswitch-switch dhcpcd-base \
         > /dev/null
 
     info "System dependencies installed"
@@ -340,7 +340,13 @@ print_summary() {
     echo ""
     echo "  Next steps:"
     echo ""
-    echo "  1. Initialize (generates config, certs, and admin credentials):"
+    echo "  1. Setup OVN networking:"
+    echo "     sudo /usr/local/share/spinifex/setup-ovn.sh --management"
+    echo "     # If WAN is a physical NIC (not a bridge), add:"
+    echo "     #   --wan-bridge=br-wan --wan-iface=<WAN_NIC>   (dedicated WAN NIC)"
+    echo "     #   --macvlan --wan-iface=<WAN_NIC>              (single-NIC, SSH-safe)"
+    echo ""
+    echo "  2. Initialize a region:"
     echo "     sudo spx admin init --region <region> --az <az> --node node1 --nodes 1"
     echo ""
     echo "  2. Setup OVN networking:"

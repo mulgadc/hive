@@ -547,16 +547,23 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to initialize VPC service: %w", err)
 	}
 
-	// Initialize external IPAM if external networking is configured
-	if d.clusterConfig != nil && d.clusterConfig.Network.ExternalMode != "" {
+	// Initialize external IPAM if pool mode is configured (per-VM public IPs).
+	// NAT mode only uses SNAT via a shared gateway IP — no per-VM allocation needed.
+	if d.clusterConfig != nil && d.clusterConfig.Network.ExternalMode == "pool" {
 		js, jsErr := d.natsConn.JetStream()
 		if jsErr != nil {
 			slog.Warn("Failed to get JetStream for external IPAM", "err", jsErr)
 		} else {
 			var pools []handlers_ec2_vpc.ExternalPoolConfig
+			// Resolve WAN bridge name for DHCP pools
+			wanBridge := ""
+			if node, ok := d.clusterConfig.Nodes[d.clusterConfig.Node]; ok {
+				wanBridge = node.VPCD.WanBridge
+			}
 			for _, p := range d.clusterConfig.Network.ExternalPools {
 				pools = append(pools, handlers_ec2_vpc.ExternalPoolConfig{
 					Name:       p.Name,
+					Source:     p.Source,
 					RangeStart: p.RangeStart,
 					RangeEnd:   p.RangeEnd,
 					Gateway:    p.Gateway,
@@ -564,6 +571,7 @@ func (d *Daemon) Start() error {
 					PrefixLen:  p.PrefixLen,
 					Region:     p.Region,
 					AZ:         p.AZ,
+					WanBridge:  wanBridge,
 				})
 			}
 			d.externalIPAM, err = handlers_ec2_vpc.NewExternalIPAM(js, pools)
