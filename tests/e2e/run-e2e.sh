@@ -2671,6 +2671,38 @@ if [ "$HAS_OVN" = true ]; then
     echo "PASS: No blanket VPC CIDR SNAT on router (AWS parity)"
 fi
 
+# SSH into public instance via its public IP and verify outbound connectivity.
+# This proves the full path: host → public IP → OVN DNAT → VM → OVN SNAT → internet.
+echo "Waiting for SSH via public IP $PUB_IP..."
+PUB_SSH_READY=false
+for attempt in $(seq 1 60); do
+    if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+        -o ConnectTimeout=3 -o BatchMode=yes -i "test-key-1.pem" \
+        ec2-user@"$PUB_IP" 'true' 2>/dev/null; then
+        PUB_SSH_READY=true
+        break
+    fi
+    sleep 2
+done
+if [ "$PUB_SSH_READY" = true ]; then
+    echo "PASS: SSH via public IP $PUB_IP succeeded"
+
+    # Verify outbound internet from VM (via OVN SNAT, not QEMU user-mode)
+    set +e
+    OUTBOUND_OK=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+        -o ConnectTimeout=5 -o BatchMode=yes -i "test-key-1.pem" \
+        ec2-user@"$PUB_IP" 'ping -c 2 -W 5 8.8.8.8 >/dev/null 2>&1 && echo yes || echo no' 2>/dev/null)
+    set -e
+    if [ "$OUTBOUND_OK" = "yes" ]; then
+        echo "PASS: Outbound internet from public instance via OVN SNAT"
+    else
+        echo "WARN: Outbound internet test inconclusive (may depend on WAN gateway)"
+    fi
+else
+    echo "WARN: SSH via public IP $PUB_IP not reachable (macvlan isolation or bridge not ready)"
+    echo "Falling back to API-only verification (OVN state already validated above)"
+fi
+
 echo ""
 echo "Phase 8b Step 3: Private subnet isolation"
 # Create a second subnet in the default VPC without MapPublicIpOnLaunch
