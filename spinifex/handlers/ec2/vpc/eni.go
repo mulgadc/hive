@@ -35,6 +35,7 @@ type ENIRecord struct {
 	DeviceIndex        int64             `json:"device_index"`
 	PublicIpAddress    string            `json:"public_ip_address,omitempty"` // Auto-assigned or EIP
 	PublicIpPool       string            `json:"public_ip_pool,omitempty"`    // Pool name the public IP came from
+	SecurityGroupIds   []string          `json:"security_group_ids,omitempty"`
 	Tags               map[string]string `json:"tags"`
 	CreatedAt          time.Time         `json:"created_at"`
 }
@@ -81,6 +82,13 @@ func (s *VPCServiceImpl) CreateNetworkInterface(input *ec2.CreateNetworkInterfac
 		description = *input.Description
 	}
 
+	var sgIds []string
+	for _, id := range input.Groups {
+		if id != nil {
+			sgIds = append(sgIds, *id)
+		}
+	}
+
 	record := ENIRecord{
 		NetworkInterfaceId: eniId,
 		SubnetId:           subnetId,
@@ -90,6 +98,7 @@ func (s *VPCServiceImpl) CreateNetworkInterface(input *ec2.CreateNetworkInterfac
 		MacAddress:         macAddr,
 		Description:        description,
 		Status:             "available",
+		SecurityGroupIds:   sgIds,
 		Tags:               make(map[string]string),
 		CreatedAt:          time.Now(),
 	}
@@ -162,6 +171,58 @@ func (s *VPCServiceImpl) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfac
 	s.publishENIEvent("vpc.delete-port", eniId, record.SubnetId, record.VpcId, record.PrivateIpAddress, record.MacAddress)
 
 	return &ec2.DeleteNetworkInterfaceOutput{}, nil
+}
+
+// ModifyNetworkInterfaceAttribute modifies ENI attributes (security groups, description).
+func (s *VPCServiceImpl) ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput, accountID string) (*ec2.ModifyNetworkInterfaceAttributeOutput, error) {
+	if input.NetworkInterfaceId == nil || *input.NetworkInterfaceId == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+	if len(input.Groups) == 0 && input.Description == nil {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
+	eniId := *input.NetworkInterfaceId
+	key := utils.AccountKey(accountID, eniId)
+
+	entry, err := s.eniKV.Get(key)
+	if err != nil {
+		return nil, errors.New(awserrors.ErrorInvalidNetworkInterfaceIDNotFound)
+	}
+
+	var record ENIRecord
+	if err := json.Unmarshal(entry.Value(), &record); err != nil {
+		slog.Error("ModifyNetworkInterfaceAttribute: corrupted ENI record", "eniId", eniId, "accountID", accountID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	if len(input.Groups) > 0 {
+		sgIds := make([]string, 0, len(input.Groups))
+		for _, id := range input.Groups {
+			if id != nil {
+				sgIds = append(sgIds, *id)
+			}
+		}
+		record.SecurityGroupIds = sgIds
+	}
+
+	if input.Description != nil && input.Description.Value != nil {
+		record.Description = *input.Description.Value
+	}
+
+	data, err := json.Marshal(record)
+	if err != nil {
+		slog.Error("ModifyNetworkInterfaceAttribute: failed to marshal ENI record", "eniId", eniId, "accountID", accountID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+	if _, err := s.eniKV.Update(key, data, entry.Revision()); err != nil {
+		slog.Error("ModifyNetworkInterfaceAttribute: KV update failed", "eniId", eniId, "accountID", accountID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	slog.Info("ModifyNetworkInterfaceAttribute completed", "eniId", eniId, "accountID", accountID)
+
+	return &ec2.ModifyNetworkInterfaceAttributeOutput{}, nil
 }
 
 // DescribeNetworkInterfaces lists ENIs with optional filters
@@ -374,6 +435,16 @@ func (s *VPCServiceImpl) eniRecordToEC2(record *ENIRecord, accountID string) *ec
 			},
 		},
 		Groups: []*ec2.GroupIdentifier{},
+	}
+
+	if len(record.SecurityGroupIds) > 0 {
+		groups := make([]*ec2.GroupIdentifier, 0, len(record.SecurityGroupIds))
+		for _, sgId := range record.SecurityGroupIds {
+			groups = append(groups, &ec2.GroupIdentifier{
+				GroupId: aws.String(sgId),
+			})
+		}
+		eni.Groups = groups
 	}
 
 	if record.PublicIpAddress != "" {

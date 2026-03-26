@@ -54,6 +54,10 @@ func (d *Daemon) handleEC2DeleteNetworkInterface(msg *nats.Msg) {
 	handleNATSRequest(msg, d.vpcService.DeleteNetworkInterface)
 }
 
+func (d *Daemon) handleEC2ModifyNetworkInterfaceAttribute(msg *nats.Msg) {
+	handleNATSRequest(msg, d.vpcService.ModifyNetworkInterfaceAttribute)
+}
+
 func (d *Daemon) handleEC2DescribeNetworkInterfaces(msg *nats.Msg) {
 	handleNATSRequest(msg, d.vpcService.DescribeNetworkInterfaces)
 }

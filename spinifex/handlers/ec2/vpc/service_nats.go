@@ -66,6 +66,10 @@ func (s *NATSVPCService) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInt
 	return utils.NATSRequest[ec2.DescribeNetworkInterfacesOutput](s.natsConn, "ec2.DescribeNetworkInterfaces", input, 30*time.Second, accountID)
 }
 
+func (s *NATSVPCService) ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetworkInterfaceAttributeInput, accountID string) (*ec2.ModifyNetworkInterfaceAttributeOutput, error) {
+	return utils.NATSRequest[ec2.ModifyNetworkInterfaceAttributeOutput](s.natsConn, "ec2.ModifyNetworkInterfaceAttribute", input, 30*time.Second, accountID)
+}
+
 func (s *NATSVPCService) CreateSecurityGroup(input *ec2.CreateSecurityGroupInput, accountID string) (*ec2.CreateSecurityGroupOutput, error) {
 	return utils.NATSRequest[ec2.CreateSecurityGroupOutput](s.natsConn, "ec2.CreateSecurityGroup", input, 30*time.Second, accountID)
 }

@@ -278,6 +278,9 @@ var ec2Actions = map[string]EC2Handler{
 	"DescribeNetworkInterfaces": ec2Handler(func(input *ec2.DescribeNetworkInterfacesInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_vpc.DescribeNetworkInterfaces(input, gw.NATSConn, accountID)
 	}),
+	"ModifyNetworkInterfaceAttribute": ec2Handler(func(input *ec2.ModifyNetworkInterfaceAttributeInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_vpc.ModifyNetworkInterfaceAttribute(input, gw.NATSConn, accountID)
+	}),
 	"CreateSecurityGroup": ec2Handler(func(input *ec2.CreateSecurityGroupInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_vpc.CreateSecurityGroup(input, gw.NATSConn, accountID)
 	}),

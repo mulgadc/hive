@@ -1023,7 +1023,7 @@ func TestEC2ActionMapCompleteness(t *testing.T) {
 		"CreatePlacementGroup", "DeletePlacementGroup", "DescribePlacementGroups",
 		"CreateVpc", "DeleteVpc", "DescribeVpcs", "ModifyVpcAttribute", "DescribeVpcAttribute",
 		"CreateSubnet", "DeleteSubnet", "DescribeSubnets", "ModifySubnetAttribute",
-		"CreateNetworkInterface", "DeleteNetworkInterface", "DescribeNetworkInterfaces",
+		"CreateNetworkInterface", "DeleteNetworkInterface", "DescribeNetworkInterfaces", "ModifyNetworkInterfaceAttribute",
 		"CreateSecurityGroup", "DeleteSecurityGroup", "DescribeSecurityGroups",
 		"AuthorizeSecurityGroupIngress", "AuthorizeSecurityGroupEgress",
 		"RevokeSecurityGroupIngress", "RevokeSecurityGroupEgress",

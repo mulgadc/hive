@@ -407,3 +407,91 @@ func TestDeleteNetworkInterface_PublishesEvent(t *testing.T) {
 		t.Fatal("timed out waiting for vpc.delete-port event")
 	}
 }
+
+func TestModifyNetworkInterfaceAttribute_SecurityGroups(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcId := createTestVPC(t, svc, "10.0.0.0/16")
+	subnetId := createTestSubnet(t, svc, vpcId, "10.0.1.0/24")
+	eniId := createTestENI(t, svc, subnetId)
+
+	_, err := svc.ModifyNetworkInterfaceAttribute(&ec2.ModifyNetworkInterfaceAttributeInput{
+		NetworkInterfaceId: aws.String(eniId),
+		Groups:             []*string{aws.String("sg-111"), aws.String("sg-222")},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	desc, err := svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		NetworkInterfaceIds: []*string{aws.String(eniId)},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, desc.NetworkInterfaces, 1)
+	require.Len(t, desc.NetworkInterfaces[0].Groups, 2)
+	assert.Equal(t, "sg-111", *desc.NetworkInterfaces[0].Groups[0].GroupId)
+	assert.Equal(t, "sg-222", *desc.NetworkInterfaces[0].Groups[1].GroupId)
+}
+
+func TestModifyNetworkInterfaceAttribute_Description(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcId := createTestVPC(t, svc, "10.0.0.0/16")
+	subnetId := createTestSubnet(t, svc, vpcId, "10.0.1.0/24")
+	eniId := createTestENI(t, svc, subnetId)
+
+	_, err := svc.ModifyNetworkInterfaceAttribute(&ec2.ModifyNetworkInterfaceAttributeInput{
+		NetworkInterfaceId: aws.String(eniId),
+		Description:        &ec2.AttributeValue{Value: aws.String("updated description")},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	desc, err := svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		NetworkInterfaceIds: []*string{aws.String(eniId)},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, desc.NetworkInterfaces, 1)
+	assert.Equal(t, "updated description", *desc.NetworkInterfaces[0].Description)
+}
+
+func TestModifyNetworkInterfaceAttribute_NoAttributes(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcId := createTestVPC(t, svc, "10.0.0.0/16")
+	subnetId := createTestSubnet(t, svc, vpcId, "10.0.1.0/24")
+	eniId := createTestENI(t, svc, subnetId)
+
+	_, err := svc.ModifyNetworkInterfaceAttribute(&ec2.ModifyNetworkInterfaceAttributeInput{
+		NetworkInterfaceId: aws.String(eniId),
+	}, testAccountID)
+	assert.ErrorContains(t, err, "InvalidParameterValue")
+}
+
+func TestModifyNetworkInterfaceAttribute_NotFound(t *testing.T) {
+	svc := setupTestVPCService(t)
+
+	_, err := svc.ModifyNetworkInterfaceAttribute(&ec2.ModifyNetworkInterfaceAttributeInput{
+		NetworkInterfaceId: aws.String("eni-nonexistent"),
+		Groups:             []*string{aws.String("sg-111")},
+	}, testAccountID)
+	assert.ErrorContains(t, err, "InvalidNetworkInterfaceID.NotFound")
+}
+
+func TestModifyNetworkInterfaceAttribute_MissingID(t *testing.T) {
+	svc := setupTestVPCService(t)
+
+	_, err := svc.ModifyNetworkInterfaceAttribute(&ec2.ModifyNetworkInterfaceAttributeInput{
+		Groups: []*string{aws.String("sg-111")},
+	}, testAccountID)
+	assert.ErrorContains(t, err, "MissingParameter")
+}
+
+func TestCreateNetworkInterface_WithSecurityGroups(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcId := createTestVPC(t, svc, "10.0.0.0/16")
+	subnetId := createTestSubnet(t, svc, vpcId, "10.0.1.0/24")
+
+	out, err := svc.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
+		SubnetId: aws.String(subnetId),
+		Groups:   []*string{aws.String("sg-aaa"), aws.String("sg-bbb")},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, out.NetworkInterface.Groups, 2)
+	assert.Equal(t, "sg-aaa", *out.NetworkInterface.Groups[0].GroupId)
+	assert.Equal(t, "sg-bbb", *out.NetworkInterface.Groups[1].GroupId)
+}
