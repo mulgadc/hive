@@ -1952,7 +1952,7 @@ func TestHandleEC2DescribeInstanceAttribute_RunningInstance_InstanceType(t *test
 
 	input := &ec2.DescribeInstanceAttributeInput{
 		InstanceId: aws.String(instanceID),
-		Attribute:  aws.String("instanceType"),
+		Attribute:  aws.String(ec2.InstanceAttributeNameInstanceType),
 	}
 	reqData, _ := json.Marshal(input)
 	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeInstanceAttribute", reqData, 5*time.Second)
@@ -1992,7 +1992,7 @@ func TestHandleEC2DescribeInstanceAttribute_StoppedInstance_InstanceType(t *test
 
 	input := &ec2.DescribeInstanceAttributeInput{
 		InstanceId: aws.String(instanceID),
-		Attribute:  aws.String("instanceType"),
+		Attribute:  aws.String(ec2.InstanceAttributeNameInstanceType),
 	}
 	reqData, _ := json.Marshal(input)
 	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeInstanceAttribute", reqData, 5*time.Second)
@@ -2032,7 +2032,7 @@ func TestHandleEC2DescribeInstanceAttribute_UserData(t *testing.T) {
 
 	input := &ec2.DescribeInstanceAttributeInput{
 		InstanceId: aws.String(instanceID),
-		Attribute:  aws.String("userData"),
+		Attribute:  aws.String(ec2.InstanceAttributeNameUserData),
 	}
 	reqData, _ := json.Marshal(input)
 	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeInstanceAttribute", reqData, 5*time.Second)
@@ -2070,7 +2070,7 @@ func TestHandleEC2DescribeInstanceAttribute_DefaultAttribute_DisableApiTerminati
 
 	input := &ec2.DescribeInstanceAttributeInput{
 		InstanceId: aws.String(instanceID),
-		Attribute:  aws.String("disableApiTermination"),
+		Attribute:  aws.String(ec2.InstanceAttributeNameDisableApiTermination),
 	}
 	reqData, _ := json.Marshal(input)
 	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeInstanceAttribute", reqData, 5*time.Second)
@@ -2108,7 +2108,7 @@ func TestHandleEC2DescribeInstanceAttribute_DefaultAttribute_ShutdownBehavior(t 
 
 	input := &ec2.DescribeInstanceAttributeInput{
 		InstanceId: aws.String(instanceID),
-		Attribute:  aws.String("instanceInitiatedShutdownBehavior"),
+		Attribute:  aws.String(ec2.InstanceAttributeNameInstanceInitiatedShutdownBehavior),
 	}
 	reqData, _ := json.Marshal(input)
 	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeInstanceAttribute", reqData, 5*time.Second)
@@ -2119,6 +2119,93 @@ func TestHandleEC2DescribeInstanceAttribute_DefaultAttribute_ShutdownBehavior(t 
 	require.NoError(t, err)
 	require.NotNil(t, output.InstanceInitiatedShutdownBehavior)
 	assert.Equal(t, "stop", *output.InstanceInitiatedShutdownBehavior.Value)
+}
+
+func TestHandleEC2DescribeInstanceAttribute_GroupSet_WithSecurityGroups(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeInstanceAttribute", "spinifex-workers", daemon.handleEC2DescribeInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	instanceID := "i-describe-gs-001"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateRunning,
+		InstanceType: "t3.micro",
+		AccountID:    testAccountID,
+		Instance: &ec2.Instance{
+			InstanceId: aws.String(instanceID),
+			SecurityGroups: []*ec2.GroupIdentifier{
+				{GroupId: aws.String("sg-111"), GroupName: aws.String("default")},
+				{GroupId: aws.String("sg-222"), GroupName: aws.String("web")},
+			},
+		},
+	}
+
+	daemon.Instances.Mu.Lock()
+	daemon.Instances.VMS[instanceID] = instance
+	daemon.Instances.Mu.Unlock()
+	t.Cleanup(func() {
+		daemon.Instances.Mu.Lock()
+		delete(daemon.Instances.VMS, instanceID)
+		daemon.Instances.Mu.Unlock()
+	})
+
+	input := &ec2.DescribeInstanceAttributeInput{
+		InstanceId: aws.String(instanceID),
+		Attribute:  aws.String(ec2.InstanceAttributeNameGroupSet),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeInstanceAttribute", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.DescribeInstanceAttributeOutput
+	err = json.Unmarshal(reply.Data, &output)
+	require.NoError(t, err)
+	assert.Equal(t, instanceID, *output.InstanceId)
+	require.Len(t, output.Groups, 2)
+	assert.Equal(t, "sg-111", *output.Groups[0].GroupId)
+	assert.Equal(t, "sg-222", *output.Groups[1].GroupId)
+}
+
+func TestHandleEC2DescribeInstanceAttribute_GroupSet_NilInstance(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeInstanceAttribute", "spinifex-workers", daemon.handleEC2DescribeInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	instanceID := "i-describe-gs-nil-001"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateStopped,
+		InstanceType: "t3.micro",
+		AccountID:    testAccountID,
+		Instance:     nil,
+	}
+	err = daemon.jsManager.WriteStoppedInstance(instanceID, instance)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = daemon.jsManager.DeleteStoppedInstance(instanceID) })
+
+	input := &ec2.DescribeInstanceAttributeInput{
+		InstanceId: aws.String(instanceID),
+		Attribute:  aws.String(ec2.InstanceAttributeNameGroupSet),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeInstanceAttribute", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.DescribeInstanceAttributeOutput
+	err = json.Unmarshal(reply.Data, &output)
+	require.NoError(t, err)
+	assert.Equal(t, instanceID, *output.InstanceId)
+	require.NotNil(t, output.Groups, "Groups should be empty slice, not nil")
+	assert.Empty(t, output.Groups)
 }
 
 func TestHandleEC2DescribeInstanceAttribute_InstanceNotFound(t *testing.T) {
@@ -2132,7 +2219,7 @@ func TestHandleEC2DescribeInstanceAttribute_InstanceNotFound(t *testing.T) {
 
 	input := &ec2.DescribeInstanceAttributeInput{
 		InstanceId: aws.String("i-nonexistent"),
-		Attribute:  aws.String("instanceType"),
+		Attribute:  aws.String(ec2.InstanceAttributeNameInstanceType),
 	}
 	reqData, _ := json.Marshal(input)
 	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeInstanceAttribute", reqData, 5*time.Second)
@@ -2168,7 +2255,7 @@ func TestHandleEC2DescribeInstanceAttribute_UnsupportedAttribute(t *testing.T) {
 
 	input := &ec2.DescribeInstanceAttributeInput{
 		InstanceId: aws.String(instanceID),
-		Attribute:  aws.String("blockDeviceMapping"),
+		Attribute:  aws.String(ec2.InstanceAttributeNameBlockDeviceMapping),
 	}
 	reqData, _ := json.Marshal(input)
 	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeInstanceAttribute", reqData, 5*time.Second)

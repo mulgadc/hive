@@ -22,7 +22,7 @@ func TestValidateDescribeInstanceAttributeInput_NilInput(t *testing.T) {
 
 func TestValidateDescribeInstanceAttributeInput_MissingInstanceId(t *testing.T) {
 	err := ValidateDescribeInstanceAttributeInput(&ec2.DescribeInstanceAttributeInput{
-		Attribute: aws.String("instanceType"),
+		Attribute: aws.String(ec2.InstanceAttributeNameInstanceType),
 	})
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidInstanceIDMalformed, err.Error())
@@ -31,7 +31,7 @@ func TestValidateDescribeInstanceAttributeInput_MissingInstanceId(t *testing.T) 
 func TestValidateDescribeInstanceAttributeInput_EmptyInstanceId(t *testing.T) {
 	err := ValidateDescribeInstanceAttributeInput(&ec2.DescribeInstanceAttributeInput{
 		InstanceId: aws.String(""),
-		Attribute:  aws.String("instanceType"),
+		Attribute:  aws.String(ec2.InstanceAttributeNameInstanceType),
 	})
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidInstanceIDMalformed, err.Error())
@@ -40,7 +40,7 @@ func TestValidateDescribeInstanceAttributeInput_EmptyInstanceId(t *testing.T) {
 func TestValidateDescribeInstanceAttributeInput_BadPrefix(t *testing.T) {
 	err := ValidateDescribeInstanceAttributeInput(&ec2.DescribeInstanceAttributeInput{
 		InstanceId: aws.String("x-12345"),
-		Attribute:  aws.String("instanceType"),
+		Attribute:  aws.String(ec2.InstanceAttributeNameInstanceType),
 	})
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorInvalidInstanceIDMalformed, err.Error())
@@ -66,7 +66,7 @@ func TestValidateDescribeInstanceAttributeInput_EmptyAttribute(t *testing.T) {
 func TestValidateDescribeInstanceAttributeInput_Valid(t *testing.T) {
 	err := ValidateDescribeInstanceAttributeInput(&ec2.DescribeInstanceAttributeInput{
 		InstanceId: aws.String("i-abc123"),
-		Attribute:  aws.String("instanceType"),
+		Attribute:  aws.String(ec2.InstanceAttributeNameInstanceType),
 	})
 	assert.NoError(t, err)
 }
@@ -93,7 +93,7 @@ func TestDescribeInstanceAttribute_Success(t *testing.T) {
 
 	input := &ec2.DescribeInstanceAttributeInput{
 		InstanceId: aws.String("i-test123"),
-		Attribute:  aws.String("instanceType"),
+		Attribute:  aws.String(ec2.InstanceAttributeNameInstanceType),
 	}
 
 	output, err := DescribeInstanceAttribute(input, nc, "123456789012")
@@ -112,7 +112,7 @@ func TestDescribeInstanceAttribute_DaemonError(t *testing.T) {
 
 	input := &ec2.DescribeInstanceAttributeInput{
 		InstanceId: aws.String("i-notfound"),
-		Attribute:  aws.String("instanceType"),
+		Attribute:  aws.String(ec2.InstanceAttributeNameInstanceType),
 	}
 
 	_, err := DescribeInstanceAttribute(input, nc, "123456789012")

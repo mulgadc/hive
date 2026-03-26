@@ -1,9 +1,7 @@
 package gateway_ec2_instance
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -39,32 +37,11 @@ func DescribeInstanceAttribute(input *ec2.DescribeInstanceAttributeInput, natsCo
 
 	slog.Info("DescribeInstanceAttribute: Processing request", "instance_id", *input.InstanceId, "attribute", *input.Attribute)
 
-	jsonData, err := json.Marshal(input)
+	output, err := utils.NATSRequest[ec2.DescribeInstanceAttributeOutput](natsConn, "ec2.DescribeInstanceAttribute", input, 30*time.Second, accountID)
 	if err != nil {
-		slog.Error("DescribeInstanceAttribute: Failed to marshal request", "instance_id", *input.InstanceId, "err", err)
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	reqMsg := nats.NewMsg("ec2.DescribeInstanceAttribute")
-	reqMsg.Data = jsonData
-	reqMsg.Header.Set(utils.AccountIDHeader, accountID)
-	msg, err := natsConn.RequestMsg(reqMsg, 30*time.Second)
-	if err != nil {
-		slog.Error("DescribeInstanceAttribute: Failed to send request", "instance_id", *input.InstanceId, "err", err)
-		return nil, fmt.Errorf("failed to send describe request: %w", err)
-	}
-
-	if responseError, parseErr := utils.ValidateErrorPayload(msg.Data); parseErr != nil {
-		slog.Error("DescribeInstanceAttribute: Daemon returned error", "instance_id", *input.InstanceId, "code", *responseError.Code)
-		return nil, errors.New(*responseError.Code)
-	}
-
-	var output ec2.DescribeInstanceAttributeOutput
-	if err := json.Unmarshal(msg.Data, &output); err != nil {
-		slog.Error("DescribeInstanceAttribute: Failed to unmarshal response", "instance_id", *input.InstanceId, "err", err)
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+		return nil, err
 	}
 
 	slog.Info("DescribeInstanceAttribute: Completed successfully", "instance_id", *input.InstanceId)
-	return &output, nil
+	return output, nil
 }

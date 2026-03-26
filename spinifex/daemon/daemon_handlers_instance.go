@@ -1301,7 +1301,7 @@ func (d *Daemon) handleEC2DescribeInstanceAttribute(msg *nats.Msg) {
 		output.DisableApiStop = &ec2.AttributeBooleanValue{Value: &val}
 
 	case ec2.InstanceAttributeNameInstanceInitiatedShutdownBehavior:
-		val := "stop"
+		val := ec2.ShutdownBehaviorStop
 		output.InstanceInitiatedShutdownBehavior = &ec2.AttributeValue{Value: &val}
 
 	case ec2.InstanceAttributeNameEbsOptimized:
@@ -1317,15 +1317,10 @@ func (d *Daemon) handleEC2DescribeInstanceAttribute(msg *nats.Msg) {
 		output.SourceDestCheck = &ec2.AttributeBooleanValue{Value: &val}
 
 	case ec2.InstanceAttributeNameGroupSet:
-		if instance.Instance != nil {
-			groups := make([]*ec2.GroupIdentifier, len(instance.Instance.SecurityGroups))
-			for i, sg := range instance.Instance.SecurityGroups {
-				groups[i] = &ec2.GroupIdentifier{
-					GroupId:   sg.GroupId,
-					GroupName: sg.GroupName,
-				}
-			}
-			output.Groups = groups
+		if instance.Instance != nil && len(instance.Instance.SecurityGroups) > 0 {
+			output.Groups = instance.Instance.SecurityGroups
+		} else {
+			output.Groups = []*ec2.GroupIdentifier{}
 		}
 
 	default:
