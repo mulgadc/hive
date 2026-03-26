@@ -136,7 +136,7 @@ func TestGenerateHAProxyConfig_SkipsDrainingTargets(t *testing.T) {
 
 	assert.Contains(t, config, "10.0.0.1:80")
 	assert.NotContains(t, config, "10.0.0.2") // draining
-	assert.NotContains(t, config, "i-no-ip")   // no IP
+	assert.NotContains(t, config, "i-no-ip")  // no IP
 }
 
 func TestGenerateHAProxyConfig_SharedTargetGroup(t *testing.T) {

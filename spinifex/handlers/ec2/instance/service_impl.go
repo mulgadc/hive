@@ -646,14 +646,14 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 			slog.Warn("Failed to decode user-data, ignoring", "err", decErr)
 		} else {
 			raw := string(decoded)
-			if strings.HasPrefix(raw, "#cloud-config") {
+			if after, ok := strings.CutPrefix(raw, "#cloud-config"); ok {
 				// Strip the #cloud-config header — the template already has it
-				stripped := strings.TrimPrefix(raw, "#cloud-config")
+				stripped := after
 				userData.UserDataCloudConfig = strings.TrimSpace(stripped)
 			} else {
 				// Script — indent each line by 4 spaces for YAML write_files block
 				var indented strings.Builder
-				for _, line := range strings.Split(raw, "\n") {
+				for line := range strings.SplitSeq(raw, "\n") {
 					indented.WriteString("      " + line + "\n")
 				}
 				userData.UserDataScript = indented.String()

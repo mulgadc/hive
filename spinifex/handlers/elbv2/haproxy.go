@@ -357,7 +357,7 @@ func (m *HAProxyManager) WriteConfig(lbID, configContent string) (string, error)
 	}
 
 	path := filepath.Join(m.configDir, fmt.Sprintf("alb-%s.cfg", lbID))
-	if err := os.WriteFile(path, []byte(configContent), 0o640); err != nil {
+	if err := os.WriteFile(path, []byte(configContent), 0o600); err != nil {
 		return "", fmt.Errorf("write haproxy config: %w", err)
 	}
 

@@ -517,7 +517,7 @@ func TestQueryParamsToStruct_ELBv2RegisterTargets(t *testing.T) {
 	// ELBv2 uses Targets.member.N.Id format (IAM-style query protocol)
 	args := map[string]string{
 		"Action":              "RegisterTargets",
-		"TargetGroupArn":     "arn:aws:elasticloadbalancing:us-east-1:000000000001:targetgroup/my-tg/tg-abc123",
+		"TargetGroupArn":      "arn:aws:elasticloadbalancing:us-east-1:000000000001:targetgroup/my-tg/tg-abc123",
 		"Targets.member.1.Id": "i-1234567890abcdef0",
 		"Targets.member.2.Id": "i-0987654321fedcba0",
 	}
@@ -535,7 +535,7 @@ func TestQueryParamsToStruct_ELBv2RegisterTargets(t *testing.T) {
 func TestQueryParamsToStruct_ELBv2RegisterTargetsWithPort(t *testing.T) {
 	args := map[string]string{
 		"Action":                "RegisterTargets",
-		"TargetGroupArn":       "arn:aws:elasticloadbalancing:us-east-1:000000000001:targetgroup/my-tg/tg-abc123",
+		"TargetGroupArn":        "arn:aws:elasticloadbalancing:us-east-1:000000000001:targetgroup/my-tg/tg-abc123",
 		"Targets.member.1.Id":   "i-1234567890abcdef0",
 		"Targets.member.1.Port": "8080",
 	}
@@ -570,12 +570,12 @@ func TestQueryParamsToStruct_ELBv2CreateLoadBalancerMemberSubnets(t *testing.T) 
 
 func TestQueryParamsToStruct_ELBv2CreateListenerWithActions(t *testing.T) {
 	args := map[string]string{
-		"Action":                                    "CreateListener",
-		"LoadBalancerArn":                           "arn:aws:elasticloadbalancing:us-east-1:000000000001:loadbalancer/app/my-alb/lb-abc123",
-		"Protocol":                                  "HTTP",
-		"Port":                                      "80",
-		"DefaultActions.member.1.Type":              "forward",
-		"DefaultActions.member.1.TargetGroupArn":    "arn:aws:elasticloadbalancing:us-east-1:000000000001:targetgroup/my-tg/tg-abc123",
+		"Action":                                 "CreateListener",
+		"LoadBalancerArn":                        "arn:aws:elasticloadbalancing:us-east-1:000000000001:loadbalancer/app/my-alb/lb-abc123",
+		"Protocol":                               "HTTP",
+		"Port":                                   "80",
+		"DefaultActions.member.1.Type":           "forward",
+		"DefaultActions.member.1.TargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:000000000001:targetgroup/my-tg/tg-abc123",
 	}
 
 	input := &elbv2.CreateListenerInput{}

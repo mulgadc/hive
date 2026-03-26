@@ -187,7 +187,11 @@ func (a *Agent) handlePing(msg *nats.Msg) {
 		ConfigAge: configAge,
 	}
 
-	data, _ := json.Marshal(resp)
+	data, err := json.Marshal(resp)
+	if err != nil {
+		slog.Error("Failed to marshal ping response", "err", err)
+		return
+	}
 	if err := msg.Respond(data); err != nil {
 		slog.Warn("Failed to respond to ping", "err", err)
 	}
@@ -202,7 +206,11 @@ func (a *Agent) respond(msg *nats.Msg, status, errMsg string) {
 	if errMsg != "" {
 		resp["error"] = errMsg
 	}
-	data, _ := json.Marshal(resp)
+	data, err := json.Marshal(resp)
+	if err != nil {
+		slog.Error("Failed to marshal response", "err", err)
+		return
+	}
 	if err := msg.Respond(data); err != nil {
 		slog.Warn("Failed to respond", "err", err)
 	}
@@ -212,12 +220,12 @@ func (a *Agent) respond(msg *nats.Msg, status, errMsg string) {
 // It writes to a temp file first, then renames for atomicity.
 func WriteConfig(path, content string) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
 
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
 		return fmt.Errorf("write temp config: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
@@ -233,7 +241,7 @@ func WriteConfig(path, content string) error {
 func reloadHAProxy(configPath, pidPath string) error {
 	// Ensure the stats socket directory exists (the config may reference
 	// /tmp/spinifex-haproxy/ which doesn't exist on fresh Alpine VMs).
-	_ = os.MkdirAll("/tmp/spinifex-haproxy", 0755)
+	_ = os.MkdirAll("/tmp/spinifex-haproxy", 0o750)
 
 	oldPID := readPID(pidPath)
 

@@ -50,18 +50,18 @@ type LoadBalancerRecord struct {
 	LoadBalancerID  string            `json:"load_balancer_id"` // Short ID (hex suffix)
 	DNSName         string            `json:"dns_name"`
 	Name            string            `json:"name"`
-	Scheme          string            `json:"scheme"`           // "internet-facing" or "internal"
-	Type            string            `json:"type"`             // Always "application"
-	State           string            `json:"state"`            // "provisioning", "active", "failed"
+	Scheme          string            `json:"scheme"` // "internet-facing" or "internal"
+	Type            string            `json:"type"`   // Always "application"
+	State           string            `json:"state"`  // "provisioning", "active", "failed"
 	VpcId           string            `json:"vpc_id"`
 	SecurityGroups  []string          `json:"security_groups"`
 	Subnets         []string          `json:"subnets"`
 	AvailZones      []AvailZoneInfo   `json:"availability_zones"`
-	ENIs            []string          `json:"enis,omitempty"`   // ENI IDs created for this ALB (internal)
+	ENIs            []string          `json:"enis,omitempty"`        // ENI IDs created for this ALB (internal)
 	InstanceID      string            `json:"instance_id,omitempty"` // ALB VM instance ID (system-managed)
-	HostPorts       map[int]int       `json:"host_ports,omitempty"` // Dev mode: guest port → host port forwarding
-	NodeID          string            `json:"node_id"`          // Daemon node running this ALB
-	IPAddressType   string            `json:"ip_address_type"`  // "ipv4"
+	HostPorts       map[int]int       `json:"host_ports,omitempty"`  // Dev mode: guest port → host port forwarding
+	NodeID          string            `json:"node_id"`               // Daemon node running this ALB
+	IPAddressType   string            `json:"ip_address_type"`       // "ipv4"
 	Tags            map[string]string `json:"tags,omitempty"`
 	AccountID       string            `json:"account_id"`
 	CreatedAt       time.Time         `json:"created_at"`
@@ -78,10 +78,10 @@ type TargetGroupRecord struct {
 	TargetGroupArn string            `json:"target_group_arn"`
 	TargetGroupID  string            `json:"target_group_id"` // Short ID (hex suffix)
 	Name           string            `json:"name"`
-	Protocol       string            `json:"protocol"`        // "HTTP" or "HTTPS"
-	Port           int64             `json:"port"`            // Default target port
+	Protocol       string            `json:"protocol"` // "HTTP" or "HTTPS"
+	Port           int64             `json:"port"`     // Default target port
 	VpcId          string            `json:"vpc_id"`
-	TargetType     string            `json:"target_type"`     // "instance" for v1
+	TargetType     string            `json:"target_type"` // "instance" for v1
 	HealthCheck    HealthCheckConfig `json:"health_check"`
 	Targets        []Target          `json:"targets"`
 	Tags           map[string]string `json:"tags,omitempty"`
@@ -91,14 +91,14 @@ type TargetGroupRecord struct {
 
 // HealthCheckConfig defines health check parameters for a target group.
 type HealthCheckConfig struct {
-	Protocol            string `json:"protocol"`
-	Port                string `json:"port"`                 // Port number or "traffic-port"
-	Path                string `json:"path"`
-	IntervalSeconds     int64  `json:"interval_seconds"`
-	TimeoutSeconds      int64  `json:"timeout_seconds"`
-	HealthyThreshold    int64  `json:"healthy_threshold"`
-	UnhealthyThreshold  int64  `json:"unhealthy_threshold"`
-	Matcher             string `json:"matcher"`              // HTTP codes e.g. "200" or "200-299"
+	Protocol           string `json:"protocol"`
+	Port               string `json:"port"` // Port number or "traffic-port"
+	Path               string `json:"path"`
+	IntervalSeconds    int64  `json:"interval_seconds"`
+	TimeoutSeconds     int64  `json:"timeout_seconds"`
+	HealthyThreshold   int64  `json:"healthy_threshold"`
+	UnhealthyThreshold int64  `json:"unhealthy_threshold"`
+	Matcher            string `json:"matcher"` // HTTP codes e.g. "200" or "200-299"
 }
 
 // DefaultHealthCheck returns a HealthCheckConfig with AWS default values.
@@ -138,6 +138,6 @@ type ListenerRecord struct {
 
 // ListenerAction defines a listener's default action.
 type ListenerAction struct {
-	Type           string `json:"type"`             // "forward"
+	Type           string `json:"type"` // "forward"
 	TargetGroupArn string `json:"target_group_arn"`
 }

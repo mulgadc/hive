@@ -47,10 +47,10 @@ type GatewayConfig struct {
 }
 
 var supportedServices = map[string]bool{
-	"ec2":                    true,
-	"iam":                    true,
-	"account":                true,
-	"elasticloadbalancing":   true,
+	"ec2":                  true,
+	"iam":                  true,
+	"account":              true,
+	"elasticloadbalancing": true,
 }
 
 type ErrorResponse struct {

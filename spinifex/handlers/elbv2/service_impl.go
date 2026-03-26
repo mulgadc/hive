@@ -49,11 +49,11 @@ type ELBv2ServiceImpl struct {
 	store            *Store
 	nc               *nats.Conn                       // NATS connection for publishing config to ALB VMs
 	vpcService       *handlers_ec2_vpc.VPCServiceImpl // nil-safe: ENI ops skipped when nil (e.g. in tests)
-	instanceLauncher SystemInstanceLauncher            // nil-safe: system VM ops skipped when nil
+	instanceLauncher SystemInstanceLauncher           // nil-safe: system VM ops skipped when nil
 	nodeID           string
 	region           string
-	systemAMI      string // AMI ID for system VMs (ALB VMs), set by daemon
-	natsURL        string // NATS URL for ALB VM cloud-init, set by daemon
+	systemAMI        string // AMI ID for system VMs (ALB VMs), set by daemon
+	natsURL          string // NATS URL for ALB VM cloud-init, set by daemon
 }
 
 // NewELBv2ServiceImplWithNATS creates an ELBv2 service backed by JetStream KV.
@@ -102,7 +102,6 @@ func (s *ELBv2ServiceImpl) SetSystemAMI(amiID string) {
 func (s *ELBv2ServiceImpl) SetNATSURL(url string) {
 	s.natsURL = url
 }
-
 
 // resolveENIBindAddr looks up the private IP of the first ENI belonging to the ALB.
 // Returns empty string if VPC service is unavailable or no ENIs exist.
@@ -364,9 +363,11 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 			if eniErr != nil {
 				// Rollback: delete any ENIs already created
 				for _, rollbackENI := range eniIDs {
-					s.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+					if _, delErr := s.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
 						NetworkInterfaceId: aws.String(rollbackENI),
-					}, accountID)
+					}, accountID); delErr != nil {
+						slog.Error("CreateLoadBalancer: rollback failed to delete ENI", "eni", rollbackENI, "err", delErr)
+					}
 				}
 				slog.Error("CreateLoadBalancer: failed to create ENI", "subnet", subnetID, "err", eniErr)
 				return nil, errors.New(awserrors.ErrorELBv2SubnetNotFound)
@@ -1055,14 +1056,14 @@ func (s *ELBv2ServiceImpl) DescribeListeners(input *elbv2.DescribeListenersInput
 
 func (s *ELBv2ServiceImpl) lbRecordToSDK(r *LoadBalancerRecord) *elbv2.LoadBalancer {
 	lb := &elbv2.LoadBalancer{
-		LoadBalancerArn: aws.String(r.LoadBalancerArn),
+		LoadBalancerArn:  aws.String(r.LoadBalancerArn),
 		LoadBalancerName: aws.String(r.Name),
-		DNSName:         aws.String(r.DNSName),
-		Scheme:          aws.String(r.Scheme),
-		Type:            aws.String(r.Type),
-		IpAddressType:   aws.String(r.IPAddressType),
-		CreatedTime:     aws.Time(r.CreatedAt),
-		VpcId:           aws.String(r.VpcId),
+		DNSName:          aws.String(r.DNSName),
+		Scheme:           aws.String(r.Scheme),
+		Type:             aws.String(r.Type),
+		IpAddressType:    aws.String(r.IPAddressType),
+		CreatedTime:      aws.Time(r.CreatedAt),
+		VpcId:            aws.String(r.VpcId),
 		State: &elbv2.LoadBalancerState{
 			Code: aws.String(r.State),
 		},
@@ -1084,19 +1085,19 @@ func (s *ELBv2ServiceImpl) lbRecordToSDK(r *LoadBalancerRecord) *elbv2.LoadBalan
 
 func (s *ELBv2ServiceImpl) tgRecordToSDK(r *TargetGroupRecord) *elbv2.TargetGroup {
 	return &elbv2.TargetGroup{
-		TargetGroupArn:         aws.String(r.TargetGroupArn),
-		TargetGroupName:        aws.String(r.Name),
-		Protocol:               aws.String(r.Protocol),
-		Port:                   aws.Int64(r.Port),
-		VpcId:                  aws.String(r.VpcId),
-		TargetType:             aws.String(r.TargetType),
-		HealthCheckProtocol:    aws.String(r.HealthCheck.Protocol),
-		HealthCheckPort:        aws.String(r.HealthCheck.Port),
-		HealthCheckPath:        aws.String(r.HealthCheck.Path),
+		TargetGroupArn:             aws.String(r.TargetGroupArn),
+		TargetGroupName:            aws.String(r.Name),
+		Protocol:                   aws.String(r.Protocol),
+		Port:                       aws.Int64(r.Port),
+		VpcId:                      aws.String(r.VpcId),
+		TargetType:                 aws.String(r.TargetType),
+		HealthCheckProtocol:        aws.String(r.HealthCheck.Protocol),
+		HealthCheckPort:            aws.String(r.HealthCheck.Port),
+		HealthCheckPath:            aws.String(r.HealthCheck.Path),
 		HealthCheckIntervalSeconds: aws.Int64(r.HealthCheck.IntervalSeconds),
 		HealthCheckTimeoutSeconds:  aws.Int64(r.HealthCheck.TimeoutSeconds),
-		HealthyThresholdCount:     aws.Int64(r.HealthCheck.HealthyThreshold),
-		UnhealthyThresholdCount:   aws.Int64(r.HealthCheck.UnhealthyThreshold),
+		HealthyThresholdCount:      aws.Int64(r.HealthCheck.HealthyThreshold),
+		UnhealthyThresholdCount:    aws.Int64(r.HealthCheck.UnhealthyThreshold),
 		Matcher: &elbv2.Matcher{
 			HttpCode: aws.String(r.HealthCheck.Matcher),
 		},

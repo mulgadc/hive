@@ -43,8 +43,8 @@ func TestCreateLoadBalancer(t *testing.T) {
 	svc := setupTestService(t)
 
 	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
-		Name:    aws.String("my-alb"),
-		Subnets: []*string{aws.String("subnet-aaa")},
+		Name:           aws.String("my-alb"),
+		Subnets:        []*string{aws.String("subnet-aaa")},
 		SecurityGroups: []*string{aws.String("sg-111")},
 	}, testAccountID)
 
@@ -640,4 +640,3 @@ func (m *mockTerminateLauncher) TerminateSystemInstance(instanceID string) error
 	m.terminateCalls = append(m.terminateCalls, instanceID)
 	return nil
 }
-
