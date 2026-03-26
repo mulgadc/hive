@@ -159,6 +159,140 @@ func TestEIP_ReleaseWhileAssociated(t *testing.T) {
 	assert.Contains(t, err.Error(), "InvalidAddress.Locked")
 }
 
+func TestEIP_ReleaseMissingParams(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	// Nil AllocationId
+	_, err := svc.ReleaseAddress(&ec2.ReleaseAddressInput{}, testAccountID)
+	assert.Error(t, err)
+
+	// Empty AllocationId
+	_, err = svc.ReleaseAddress(&ec2.ReleaseAddressInput{AllocationId: aws.String("")}, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestEIP_ReleaseNotFound(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	_, err := svc.ReleaseAddress(&ec2.ReleaseAddressInput{AllocationId: aws.String("eipalloc-nonexistent")}, testAccountID)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidAllocationID.NotFound")
+}
+
+func TestEIP_AssociateMissingAllocationId(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	// Nil AllocationId
+	_, err := svc.AssociateAddress(&ec2.AssociateAddressInput{}, testAccountID)
+	assert.Error(t, err)
+
+	// Empty AllocationId
+	_, err = svc.AssociateAddress(&ec2.AssociateAddressInput{AllocationId: aws.String("")}, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestEIP_AssociateInvalidAllocationId(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	_, err := svc.AssociateAddress(&ec2.AssociateAddressInput{
+		AllocationId:       aws.String("eipalloc-nonexistent"),
+		NetworkInterfaceId: aws.String("eni-test"),
+	}, testAccountID)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidAllocationID.NotFound")
+}
+
+func TestEIP_AssociateMissingTarget(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	// Allocate first
+	out, err := svc.AllocateAddress(&ec2.AllocateAddressInput{}, testAccountID)
+	require.NoError(t, err)
+
+	// Associate without NetworkInterfaceId or InstanceId
+	_, err = svc.AssociateAddress(&ec2.AssociateAddressInput{
+		AllocationId: out.AllocationId,
+	}, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestEIP_DisassociateMissingParams(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	// Nil AssociationId
+	_, err := svc.DisassociateAddress(&ec2.DisassociateAddressInput{}, testAccountID)
+	assert.Error(t, err)
+
+	// Empty AssociationId
+	_, err = svc.DisassociateAddress(&ec2.DisassociateAddressInput{AssociationId: aws.String("")}, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestEIP_DisassociateNotFound(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	_, err := svc.DisassociateAddress(&ec2.DisassociateAddressInput{
+		AssociationId: aws.String("eipassoc-nonexistent"),
+	}, testAccountID)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidAssociationID.NotFound")
+}
+
+func TestEIP_RecordToEC2_WithTags(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	record := &EIPRecord{
+		AllocationId:  "eipalloc-test",
+		PublicIp:      "1.2.3.4",
+		PoolName:      "test-pool",
+		State:         "associated",
+		AssociationId: "eipassoc-test",
+		ENIId:         "eni-test",
+		InstanceId:    "i-test",
+		PrivateIp:     "10.0.0.5",
+		Tags:          map[string]string{"Name": "my-eip", "env": "test"},
+	}
+
+	addr := svc.eipRecordToEC2(record)
+	assert.Equal(t, "eipalloc-test", *addr.AllocationId)
+	assert.Equal(t, "1.2.3.4", *addr.PublicIp)
+	assert.Equal(t, "vpc", *addr.Domain)
+	assert.Equal(t, "eipassoc-test", *addr.AssociationId)
+	assert.Equal(t, "eni-test", *addr.NetworkInterfaceId)
+	assert.Equal(t, "i-test", *addr.InstanceId)
+	assert.Equal(t, "10.0.0.5", *addr.PrivateIpAddress)
+	assert.Len(t, addr.Tags, 2)
+}
+
+func TestEIP_RecordToEC2_WithoutTags(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	record := &EIPRecord{
+		AllocationId: "eipalloc-notags",
+		PublicIp:     "5.6.7.8",
+		PoolName:     "test-pool",
+		State:        "allocated",
+		Tags:         map[string]string{},
+	}
+
+	addr := svc.eipRecordToEC2(record)
+	assert.Equal(t, "eipalloc-notags", *addr.AllocationId)
+	assert.Equal(t, "5.6.7.8", *addr.PublicIp)
+	assert.Nil(t, addr.AssociationId)
+	assert.Nil(t, addr.NetworkInterfaceId)
+	assert.Nil(t, addr.InstanceId)
+	assert.Nil(t, addr.PrivateIpAddress)
+	assert.Empty(t, addr.Tags)
+}
+
+func TestEIP_FindByAssociationID_NotFound(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	_, _, _, err := svc.findByAssociationID(testAccountID, "eipassoc-nonexistent")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidAssociationID.NotFound")
+}
+
 func TestEIP_DescribeAddresses(t *testing.T) {
 	svc, _ := setupTestEIP(t)
 
