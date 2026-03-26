@@ -189,12 +189,6 @@ resource "aws_security_group" "web_ssh" {
   }
 }
 
-# 4: Ensure 3 servers on different underlying hardware (spread placement group)
-resource "aws_placement_group" "spread" {
-  name     = "spinifex-test-spread"
-  strategy = "spread"
-}
-
 resource "aws_instance" "vm" {
   count         = 3
   ami           = data.aws_ami.debian12.id
@@ -205,7 +199,6 @@ resource "aws_instance" "vm" {
   key_name               = aws_key_pair.hive_test.key_name
 
   associate_public_ip_address = true
-  placement_group             = aws_placement_group.spread.name
 
   tags = {
     Name = "spinifex-test-vm-${count.index + 1}"
