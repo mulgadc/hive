@@ -1027,6 +1027,7 @@ func TestEC2ActionMapCompleteness(t *testing.T) {
 		"CreateSecurityGroup", "DeleteSecurityGroup", "DescribeSecurityGroups",
 		"AuthorizeSecurityGroupIngress", "AuthorizeSecurityGroupEgress",
 		"RevokeSecurityGroupIngress", "RevokeSecurityGroupEgress",
+		"DescribeInstanceCreditSpecifications",
 		"AllocateAddress", "ReleaseAddress", "AssociateAddress", "DisassociateAddress", "DescribeAddresses",
 		"CreateRouteTable", "DeleteRouteTable", "DescribeRouteTables",
 		"CreateRoute", "DeleteRoute", "ReplaceRoute",

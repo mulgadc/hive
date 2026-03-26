@@ -230,14 +230,9 @@ resource "aws_ebs_volume" "data" {
   }
 }
 
-resource "aws_volume_attachment" "data" {
-  device_name = "/dev/sdf"
-  volume_id   = aws_ebs_volume.data.id
-  instance_id = aws_instance.test.id
-}
 
 # ---------------------------------------------------------------------------
-# 8. EBS Snapshot (of the data volume)
+# 8. EBS Snapshot (of the standalone volume)
 # ---------------------------------------------------------------------------
 
 resource "aws_ebs_snapshot" "data" {
@@ -246,8 +241,6 @@ resource "aws_ebs_snapshot" "data" {
   tags = {
     Name = "spx-basic-test-snapshot"
   }
-
-  depends_on = [aws_volume_attachment.data]
 }
 
 # ---------------------------------------------------------------------------
