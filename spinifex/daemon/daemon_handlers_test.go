@@ -16,7 +16,10 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/config"
 	handlers_ec2_account "github.com/mulgadc/spinifex/spinifex/handlers/ec2/account"
 	handlers_ec2_eigw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/eigw"
+	handlers_ec2_eip "github.com/mulgadc/spinifex/spinifex/handlers/ec2/eip"
 	handlers_ec2_igw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/igw"
+	handlers_ec2_placementgroup "github.com/mulgadc/spinifex/spinifex/handlers/ec2/placementgroup"
+	handlers_ec2_routetable "github.com/mulgadc/spinifex/spinifex/handlers/ec2/routetable"
 	handlers_ec2_image "github.com/mulgadc/spinifex/spinifex/handlers/ec2/image"
 	handlers_ec2_instance "github.com/mulgadc/spinifex/spinifex/handlers/ec2/instance"
 	handlers_ec2_key "github.com/mulgadc/spinifex/spinifex/handlers/ec2/key"
@@ -3848,4 +3851,506 @@ func TestHandleEC2TerminateStoppedInstance_WritesToTerminatedKV(t *testing.T) {
 	assert.Nil(t, stoppedInst, "instance should be removed from stopped KV")
 
 	_ = daemon.jsManager.DeleteTerminatedInstance(stoppedVM.ID)
+}
+
+// --- Bead 5: EIP daemon handler tests ---
+
+func TestDelegateHandlers_EIP(t *testing.T) {
+	daemon := createVPCTestDaemon(t)
+
+	ns, err := server.NewServer(&server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		JetStream: true,
+		StoreDir:  t.TempDir(),
+		NoLog:     true,
+		NoSigs:    true,
+	})
+	require.NoError(t, err)
+	go ns.Start()
+	require.True(t, ns.ReadyForConnections(5*time.Second))
+	t.Cleanup(func() { ns.Shutdown() })
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(func() { nc.Close() })
+
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	ipam, err := handlers_ec2_vpc.NewExternalIPAM(js, []handlers_ec2_vpc.ExternalPoolConfig{
+		{Name: "test-pool", RangeStart: "192.168.100.2", RangeEnd: "192.168.100.254", Gateway: "192.168.100.1", PrefixLen: 24},
+	})
+	require.NoError(t, err)
+
+	eipSvc, err := handlers_ec2_eip.NewEIPServiceImpl(nc, ipam, daemon.vpcService)
+	require.NoError(t, err)
+	daemon.eipService = eipSvc
+
+	tests := []struct {
+		name    string
+		topic   string
+		handler func(*nats.Msg)
+		input   any
+	}{
+		{
+			"AllocateAddress",
+			"ec2.test.AllocateAddress",
+			daemon.handleEC2AllocateAddress,
+			&ec2.AllocateAddressInput{},
+		},
+		{
+			"ReleaseAddress",
+			"ec2.test.ReleaseAddress",
+			daemon.handleEC2ReleaseAddress,
+			&ec2.ReleaseAddressInput{AllocationId: aws.String("eipalloc-nonexistent")},
+		},
+		{
+			"AssociateAddress",
+			"ec2.test.AssociateAddress",
+			daemon.handleEC2AssociateAddress,
+			&ec2.AssociateAddressInput{AllocationId: aws.String("eipalloc-nonexistent")},
+		},
+		{
+			"DisassociateAddress",
+			"ec2.test.DisassociateAddress",
+			daemon.handleEC2DisassociateAddress,
+			&ec2.DisassociateAddressInput{AssociationId: aws.String("eipassoc-nonexistent")},
+		},
+		{
+			"DescribeAddresses",
+			"ec2.test.DescribeAddresses",
+			daemon.handleEC2DescribeAddresses,
+			&ec2.DescribeAddressesInput{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "spinifex-workers", tt.handler)
+			require.NoError(t, err)
+			defer sub.Unsubscribe()
+
+			reqData, err := json.Marshal(tt.input)
+			require.NoError(t, err)
+
+			reply, err := natsRequest(daemon.natsConn, tt.topic, reqData, 5*time.Second)
+			require.NoError(t, err)
+			require.NotNil(t, reply)
+
+			var resp json.RawMessage
+			err = json.Unmarshal(reply.Data, &resp)
+			require.NoError(t, err, "EIP response should be valid JSON: %s", string(reply.Data))
+		})
+	}
+}
+
+// --- Bead 6: Security Group daemon handler tests ---
+
+func TestDelegateHandlers_SecurityGroup(t *testing.T) {
+	daemon := createVPCTestDaemon(t)
+
+	// Create a VPC first so SG operations have a valid target
+	createVpcSub, err := daemon.natsConn.QueueSubscribe("ec2.CreateVpc", "spinifex-workers", daemon.handleEC2CreateVpc)
+	require.NoError(t, err)
+	defer createVpcSub.Unsubscribe()
+
+	vpcInput := &ec2.CreateVpcInput{CidrBlock: aws.String("10.50.0.0/16")}
+	reqData, _ := json.Marshal(vpcInput)
+	reply, err := natsRequest(daemon.natsConn, "ec2.CreateVpc", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var vpcOut ec2.CreateVpcOutput
+	require.NoError(t, json.Unmarshal(reply.Data, &vpcOut))
+	vpcID := *vpcOut.Vpc.VpcId
+
+	tests := []struct {
+		name    string
+		topic   string
+		handler func(*nats.Msg)
+		input   any
+	}{
+		{
+			"CreateSecurityGroup",
+			"ec2.test.CreateSecurityGroup",
+			daemon.handleEC2CreateSecurityGroup,
+			&ec2.CreateSecurityGroupInput{
+				GroupName:   aws.String("test-sg"),
+				Description: aws.String("test security group"),
+				VpcId:       aws.String(vpcID),
+			},
+		},
+		{
+			"DescribeSecurityGroups",
+			"ec2.test.DescribeSecurityGroups",
+			daemon.handleEC2DescribeSecurityGroups,
+			&ec2.DescribeSecurityGroupsInput{},
+		},
+		{
+			"AuthorizeSecurityGroupIngress",
+			"ec2.test.AuthorizeSecurityGroupIngress",
+			daemon.handleEC2AuthorizeSecurityGroupIngress,
+			&ec2.AuthorizeSecurityGroupIngressInput{GroupId: aws.String("sg-nonexistent")},
+		},
+		{
+			"AuthorizeSecurityGroupEgress",
+			"ec2.test.AuthorizeSecurityGroupEgress",
+			daemon.handleEC2AuthorizeSecurityGroupEgress,
+			&ec2.AuthorizeSecurityGroupEgressInput{GroupId: aws.String("sg-nonexistent")},
+		},
+		{
+			"RevokeSecurityGroupIngress",
+			"ec2.test.RevokeSecurityGroupIngress",
+			daemon.handleEC2RevokeSecurityGroupIngress,
+			&ec2.RevokeSecurityGroupIngressInput{GroupId: aws.String("sg-nonexistent")},
+		},
+		{
+			"RevokeSecurityGroupEgress",
+			"ec2.test.RevokeSecurityGroupEgress",
+			daemon.handleEC2RevokeSecurityGroupEgress,
+			&ec2.RevokeSecurityGroupEgressInput{GroupId: aws.String("sg-nonexistent")},
+		},
+		{
+			"DeleteSecurityGroup",
+			"ec2.test.DeleteSecurityGroup",
+			daemon.handleEC2DeleteSecurityGroup,
+			&ec2.DeleteSecurityGroupInput{GroupId: aws.String("sg-nonexistent")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "spinifex-workers", tt.handler)
+			require.NoError(t, err)
+			defer sub.Unsubscribe()
+
+			reqData, err := json.Marshal(tt.input)
+			require.NoError(t, err)
+
+			reply, err := natsRequest(daemon.natsConn, tt.topic, reqData, 5*time.Second)
+			require.NoError(t, err)
+			require.NotNil(t, reply)
+
+			var resp json.RawMessage
+			err = json.Unmarshal(reply.Data, &resp)
+			require.NoError(t, err, "SG response should be valid JSON: %s", string(reply.Data))
+		})
+	}
+}
+
+// --- Bead 7: Route Table daemon handler tests ---
+
+func TestDelegateHandlers_RouteTable(t *testing.T) {
+	daemon := createVPCTestDaemon(t)
+
+	// Route table service needs its own JetStream for KV buckets
+	ns, err := server.NewServer(&server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		JetStream: true,
+		StoreDir:  t.TempDir(),
+		NoLog:     true,
+		NoSigs:    true,
+	})
+	require.NoError(t, err)
+	go ns.Start()
+	require.True(t, ns.ReadyForConnections(5*time.Second))
+	t.Cleanup(func() { ns.Shutdown() })
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(func() { nc.Close() })
+
+	rtbSvc, err := handlers_ec2_routetable.NewRouteTableServiceImplWithNATS(daemon.config, nc)
+	require.NoError(t, err)
+	daemon.routeTableService = rtbSvc
+
+	tests := []struct {
+		name    string
+		topic   string
+		handler func(*nats.Msg)
+		input   any
+	}{
+		{
+			"CreateRouteTable",
+			"ec2.test.CreateRouteTable",
+			daemon.handleEC2CreateRouteTable,
+			&ec2.CreateRouteTableInput{VpcId: aws.String("vpc-nonexistent")},
+		},
+		{
+			"DeleteRouteTable",
+			"ec2.test.DeleteRouteTable",
+			daemon.handleEC2DeleteRouteTable,
+			&ec2.DeleteRouteTableInput{RouteTableId: aws.String("rtb-nonexistent")},
+		},
+		{
+			"DescribeRouteTables",
+			"ec2.test.DescribeRouteTables",
+			daemon.handleEC2DescribeRouteTables,
+			&ec2.DescribeRouteTablesInput{},
+		},
+		{
+			"CreateRoute",
+			"ec2.test.CreateRoute",
+			daemon.handleEC2CreateRoute,
+			&ec2.CreateRouteInput{RouteTableId: aws.String("rtb-nonexistent")},
+		},
+		{
+			"DeleteRoute",
+			"ec2.test.DeleteRoute",
+			daemon.handleEC2DeleteRoute,
+			&ec2.DeleteRouteInput{RouteTableId: aws.String("rtb-nonexistent")},
+		},
+		{
+			"ReplaceRoute",
+			"ec2.test.ReplaceRoute",
+			daemon.handleEC2ReplaceRoute,
+			&ec2.ReplaceRouteInput{RouteTableId: aws.String("rtb-nonexistent")},
+		},
+		{
+			"AssociateRouteTable",
+			"ec2.test.AssociateRouteTable",
+			daemon.handleEC2AssociateRouteTable,
+			&ec2.AssociateRouteTableInput{RouteTableId: aws.String("rtb-nonexistent")},
+		},
+		{
+			"DisassociateRouteTable",
+			"ec2.test.DisassociateRouteTable",
+			daemon.handleEC2DisassociateRouteTable,
+			&ec2.DisassociateRouteTableInput{AssociationId: aws.String("rtbassoc-nonexistent")},
+		},
+		{
+			"ReplaceRouteTableAssociation",
+			"ec2.test.ReplaceRouteTableAssociation",
+			daemon.handleEC2ReplaceRouteTableAssociation,
+			&ec2.ReplaceRouteTableAssociationInput{
+				AssociationId: aws.String("rtbassoc-nonexistent"),
+				RouteTableId:  aws.String("rtb-nonexistent"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "spinifex-workers", tt.handler)
+			require.NoError(t, err)
+			defer sub.Unsubscribe()
+
+			reqData, err := json.Marshal(tt.input)
+			require.NoError(t, err)
+
+			reply, err := natsRequest(daemon.natsConn, tt.topic, reqData, 5*time.Second)
+			require.NoError(t, err)
+			require.NotNil(t, reply)
+
+			var resp json.RawMessage
+			err = json.Unmarshal(reply.Data, &resp)
+			require.NoError(t, err, "RouteTable response should be valid JSON: %s", string(reply.Data))
+		})
+	}
+}
+
+// --- Bead 8: Placement Group daemon handler tests ---
+
+func TestDelegateHandlers_PlacementGroup(t *testing.T) {
+	daemon := createTestDaemon(t, sharedNATSURL)
+
+	ns, err := server.NewServer(&server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		JetStream: true,
+		StoreDir:  t.TempDir(),
+		NoLog:     true,
+		NoSigs:    true,
+	})
+	require.NoError(t, err)
+	go ns.Start()
+	require.True(t, ns.ReadyForConnections(5*time.Second))
+	t.Cleanup(func() { ns.Shutdown() })
+
+	nc, err := nats.Connect(ns.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(func() { nc.Close() })
+
+	pgSvc, err := handlers_ec2_placementgroup.NewPlacementGroupServiceImplWithNATS(daemon.config, nc)
+	require.NoError(t, err)
+	daemon.placementGroupService = pgSvc
+
+	tests := []struct {
+		name    string
+		topic   string
+		handler func(*nats.Msg)
+		input   any
+	}{
+		{
+			"CreatePlacementGroup",
+			"ec2.test.CreatePlacementGroup",
+			daemon.handleEC2CreatePlacementGroup,
+			&ec2.CreatePlacementGroupInput{
+				GroupName: aws.String("test-pg"),
+				Strategy:  aws.String("spread"),
+			},
+		},
+		{
+			"DescribePlacementGroups",
+			"ec2.test.DescribePlacementGroups",
+			daemon.handleEC2DescribePlacementGroups,
+			&ec2.DescribePlacementGroupsInput{},
+		},
+		{
+			"DeletePlacementGroup",
+			"ec2.test.DeletePlacementGroup",
+			daemon.handleEC2DeletePlacementGroup,
+			&ec2.DeletePlacementGroupInput{GroupName: aws.String("pg-nonexistent")},
+		},
+		{
+			"ReserveSpreadNodes",
+			"ec2.test.ReserveSpreadNodes",
+			daemon.handleEC2ReserveSpreadNodes,
+			&handlers_ec2_placementgroup.ReserveSpreadNodesInput{
+				GroupName:     "pg-nonexistent",
+				EligibleNodes: []string{"node-1"},
+				MinCount:      1,
+				MaxCount:      1,
+			},
+		},
+		{
+			"FinalizeSpreadInstances",
+			"ec2.test.FinalizeSpreadInstances",
+			daemon.handleEC2FinalizeSpreadInstances,
+			&handlers_ec2_placementgroup.FinalizeSpreadInstancesInput{
+				GroupName:     "pg-nonexistent",
+				NodeInstances: map[string][]string{"node-1": {"i-123"}},
+			},
+		},
+		{
+			"ReleaseSpreadNodes",
+			"ec2.test.ReleaseSpreadNodes",
+			daemon.handleEC2ReleaseSpreadNodes,
+			&handlers_ec2_placementgroup.ReleaseSpreadNodesInput{
+				GroupName: "pg-nonexistent",
+				Nodes:     []string{"node-1"},
+			},
+		},
+		{
+			"RemoveInstanceFromPlacementGroup",
+			"ec2.test.RemoveInstanceFromPlacementGroup",
+			daemon.handleEC2RemoveInstanceFromPlacementGroup,
+			&handlers_ec2_placementgroup.RemoveInstanceInput{
+				GroupName:  "pg-nonexistent",
+				NodeName:   "node-1",
+				InstanceID: "i-123",
+			},
+		},
+		{
+			"ReserveClusterNode",
+			"ec2.test.ReserveClusterNode",
+			daemon.handleEC2ReserveClusterNode,
+			&handlers_ec2_placementgroup.ReserveClusterNodeInput{
+				GroupName:     "pg-nonexistent",
+				EligibleNodes: []string{"node-1"},
+			},
+		},
+		{
+			"FinalizeClusterInstances",
+			"ec2.test.FinalizeClusterInstances",
+			daemon.handleEC2FinalizeClusterInstances,
+			&handlers_ec2_placementgroup.FinalizeClusterInstancesInput{
+				GroupName:     "pg-nonexistent",
+				NodeInstances: map[string][]string{"node-1": {"i-123"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "spinifex-workers", tt.handler)
+			require.NoError(t, err)
+			defer sub.Unsubscribe()
+
+			reqData, err := json.Marshal(tt.input)
+			require.NoError(t, err)
+
+			reply, err := natsRequest(daemon.natsConn, tt.topic, reqData, 5*time.Second)
+			require.NoError(t, err)
+			require.NotNil(t, reply)
+
+			var resp json.RawMessage
+			err = json.Unmarshal(reply.Data, &resp)
+			require.NoError(t, err, "PlacementGroup response should be valid JSON: %s", string(reply.Data))
+		})
+	}
+}
+
+// --- Bead 9: VPC attribute daemon handler tests (untested handlers) ---
+
+func TestDelegateHandlers_VPCAttributes(t *testing.T) {
+	daemon := createVPCTestDaemon(t)
+
+	// Create a VPC first
+	createVpcSub, err := daemon.natsConn.QueueSubscribe("ec2.CreateVpc", "spinifex-workers", daemon.handleEC2CreateVpc)
+	require.NoError(t, err)
+	defer createVpcSub.Unsubscribe()
+
+	vpcInput := &ec2.CreateVpcInput{CidrBlock: aws.String("10.60.0.0/16")}
+	reqData, _ := json.Marshal(vpcInput)
+	reply, err := natsRequest(daemon.natsConn, "ec2.CreateVpc", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var vpcOut ec2.CreateVpcOutput
+	require.NoError(t, json.Unmarshal(reply.Data, &vpcOut))
+	vpcID := *vpcOut.Vpc.VpcId
+
+	tests := []struct {
+		name    string
+		topic   string
+		handler func(*nats.Msg)
+		input   any
+	}{
+		{
+			"ModifySubnetAttribute",
+			"ec2.test.ModifySubnetAttribute",
+			daemon.handleEC2ModifySubnetAttribute,
+			&ec2.ModifySubnetAttributeInput{SubnetId: aws.String("subnet-nonexistent")},
+		},
+		{
+			"ModifyVpcAttribute",
+			"ec2.test.ModifyVpcAttribute",
+			daemon.handleEC2ModifyVpcAttribute,
+			&ec2.ModifyVpcAttributeInput{VpcId: aws.String(vpcID)},
+		},
+		{
+			"DescribeVpcAttribute",
+			"ec2.test.DescribeVpcAttribute",
+			daemon.handleEC2DescribeVpcAttribute,
+			&ec2.DescribeVpcAttributeInput{
+				VpcId:     aws.String(vpcID),
+				Attribute: aws.String("enableDnsSupport"),
+			},
+		},
+		{
+			"ModifyNetworkInterfaceAttribute",
+			"ec2.test.ModifyNetworkInterfaceAttribute",
+			daemon.handleEC2ModifyNetworkInterfaceAttribute,
+			&ec2.ModifyNetworkInterfaceAttributeInput{NetworkInterfaceId: aws.String("eni-nonexistent")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub, err := daemon.natsConn.QueueSubscribe(tt.topic, "spinifex-workers", tt.handler)
+			require.NoError(t, err)
+			defer sub.Unsubscribe()
+
+			reqData, err := json.Marshal(tt.input)
+			require.NoError(t, err)
+
+			reply, err := natsRequest(daemon.natsConn, tt.topic, reqData, 5*time.Second)
+			require.NoError(t, err)
+			require.NotNil(t, reply)
+
+			var resp json.RawMessage
+			err = json.Unmarshal(reply.Data, &resp)
+			require.NoError(t, err, "VPC attribute response should be valid JSON: %s", string(reply.Data))
+		})
+	}
 }
