@@ -166,3 +166,47 @@ func TestDescribeNetworkInterfaces_NilNATS(t *testing.T) {
 	_, err = DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{}, nil, testAccountID)
 	assert.Error(t, err)
 }
+
+// --- ModifyVpcAttribute gateway tests ---
+
+func TestModifyVpcAttribute_NilInput(t *testing.T) {
+	_, err := ModifyVpcAttribute(nil, nil, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorInvalidParameterValue)
+}
+
+func TestModifyVpcAttribute_NilVpcId(t *testing.T) {
+	_, err := ModifyVpcAttribute(&ec2.ModifyVpcAttributeInput{}, nil, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorMissingParameter)
+}
+
+func TestModifyVpcAttribute_EmptyVpcId(t *testing.T) {
+	_, err := ModifyVpcAttribute(&ec2.ModifyVpcAttributeInput{VpcId: aws.String("")}, nil, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorMissingParameter)
+}
+
+func TestModifyVpcAttribute_NilNATS(t *testing.T) {
+	_, err := ModifyVpcAttribute(&ec2.ModifyVpcAttributeInput{VpcId: aws.String("vpc-123")}, nil, testAccountID)
+	assert.Error(t, err)
+}
+
+// --- DescribeVpcAttribute gateway tests ---
+
+func TestDescribeVpcAttribute_NilInput(t *testing.T) {
+	_, err := DescribeVpcAttribute(nil, nil, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorInvalidParameterValue)
+}
+
+func TestDescribeVpcAttribute_NilVpcId(t *testing.T) {
+	_, err := DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{}, nil, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorMissingParameter)
+}
+
+func TestDescribeVpcAttribute_EmptyVpcId(t *testing.T) {
+	_, err := DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{VpcId: aws.String("")}, nil, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorMissingParameter)
+}
+
+func TestDescribeVpcAttribute_NilNATS(t *testing.T) {
+	_, err := DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{VpcId: aws.String("vpc-123"), Attribute: aws.String("enableDnsSupport")}, nil, testAccountID)
+	assert.Error(t, err)
+}

@@ -46,6 +46,14 @@ func (s *NATSVPCService) ModifySubnetAttribute(input *ec2.ModifySubnetAttributeI
 	return utils.NATSRequest[ec2.ModifySubnetAttributeOutput](s.natsConn, "ec2.ModifySubnetAttribute", input, 30*time.Second, accountID)
 }
 
+func (s *NATSVPCService) ModifyVpcAttribute(input *ec2.ModifyVpcAttributeInput, accountID string) (*ec2.ModifyVpcAttributeOutput, error) {
+	return utils.NATSRequest[ec2.ModifyVpcAttributeOutput](s.natsConn, "ec2.ModifyVpcAttribute", input, 30*time.Second, accountID)
+}
+
+func (s *NATSVPCService) DescribeVpcAttribute(input *ec2.DescribeVpcAttributeInput, accountID string) (*ec2.DescribeVpcAttributeOutput, error) {
+	return utils.NATSRequest[ec2.DescribeVpcAttributeOutput](s.natsConn, "ec2.DescribeVpcAttribute", input, 30*time.Second, accountID)
+}
+
 func (s *NATSVPCService) CreateNetworkInterface(input *ec2.CreateNetworkInterfaceInput, accountID string) (*ec2.CreateNetworkInterfaceOutput, error) {
 	return utils.NATSRequest[ec2.CreateNetworkInterfaceOutput](s.natsConn, "ec2.CreateNetworkInterface", input, 30*time.Second, accountID)
 }
