@@ -1054,3 +1054,163 @@ func TestSubnet_ModifyAttribute(t *testing.T) {
 	require.Len(t, desc.Subnets, 1)
 	assert.True(t, *desc.Subnets[0].MapPublicIpOnLaunch)
 }
+
+// --- VPC Attribute Tests ---
+
+func TestVpc_DescribeVpcAttribute_Defaults(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+
+	// EnableDnsSupport defaults to true
+	desc, err := svc.DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{
+		VpcId:     aws.String(vpcID),
+		Attribute: aws.String(ec2.VpcAttributeNameEnableDnsSupport),
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Equal(t, vpcID, *desc.VpcId)
+	assert.True(t, *desc.EnableDnsSupport.Value)
+
+	// EnableDnsHostnames defaults to false
+	desc, err = svc.DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{
+		VpcId:     aws.String(vpcID),
+		Attribute: aws.String(ec2.VpcAttributeNameEnableDnsHostnames),
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.False(t, *desc.EnableDnsHostnames.Value)
+
+	// EnableNetworkAddressUsageMetrics defaults to false
+	desc, err = svc.DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{
+		VpcId:     aws.String(vpcID),
+		Attribute: aws.String(ec2.VpcAttributeNameEnableNetworkAddressUsageMetrics),
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.False(t, *desc.EnableNetworkAddressUsageMetrics.Value)
+}
+
+func TestVpc_ModifyVpcAttribute_EnableDnsHostnames(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+
+	// Set EnableDnsHostnames to true
+	_, err := svc.ModifyVpcAttribute(&ec2.ModifyVpcAttributeInput{
+		VpcId:              aws.String(vpcID),
+		EnableDnsHostnames: &ec2.AttributeBooleanValue{Value: aws.Bool(true)},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Verify via DescribeVpcAttribute
+	desc, err := svc.DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{
+		VpcId:     aws.String(vpcID),
+		Attribute: aws.String(ec2.VpcAttributeNameEnableDnsHostnames),
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.True(t, *desc.EnableDnsHostnames.Value)
+}
+
+func TestVpc_ModifyVpcAttribute_EnableDnsSupport(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+
+	// Set EnableDnsSupport to false
+	_, err := svc.ModifyVpcAttribute(&ec2.ModifyVpcAttributeInput{
+		VpcId:            aws.String(vpcID),
+		EnableDnsSupport: &ec2.AttributeBooleanValue{Value: aws.Bool(false)},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Verify via DescribeVpcAttribute
+	desc, err := svc.DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{
+		VpcId:     aws.String(vpcID),
+		Attribute: aws.String(ec2.VpcAttributeNameEnableDnsSupport),
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.False(t, *desc.EnableDnsSupport.Value)
+}
+
+func TestVpc_ModifyVpcAttribute_IndependentFields(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+
+	// Modify only EnableDnsHostnames — EnableDnsSupport should remain true
+	_, err := svc.ModifyVpcAttribute(&ec2.ModifyVpcAttributeInput{
+		VpcId:              aws.String(vpcID),
+		EnableDnsHostnames: &ec2.AttributeBooleanValue{Value: aws.Bool(true)},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	desc, err := svc.DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{
+		VpcId:     aws.String(vpcID),
+		Attribute: aws.String(ec2.VpcAttributeNameEnableDnsSupport),
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.True(t, *desc.EnableDnsSupport.Value, "EnableDnsSupport should remain true")
+}
+
+func TestVpc_DescribeVpcAttribute_InvalidVpcID(t *testing.T) {
+	svc := setupTestVPCService(t)
+
+	_, err := svc.DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{
+		VpcId:     aws.String("vpc-nonexistent"),
+		Attribute: aws.String(ec2.VpcAttributeNameEnableDnsSupport),
+	}, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestVpc_DescribeVpcAttribute_InvalidAttribute(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+
+	_, err := svc.DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{
+		VpcId:     aws.String(vpcID),
+		Attribute: aws.String("invalidAttribute"),
+	}, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestVpc_DescribeVpcAttribute_MissingAttribute(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+
+	_, err := svc.DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{
+		VpcId: aws.String(vpcID),
+	}, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestVpc_ModifyVpcAttribute_EnableNetworkAddressUsageMetrics(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+
+	_, err := svc.ModifyVpcAttribute(&ec2.ModifyVpcAttributeInput{
+		VpcId:                            aws.String(vpcID),
+		EnableNetworkAddressUsageMetrics: &ec2.AttributeBooleanValue{Value: aws.Bool(true)},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	desc, err := svc.DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{
+		VpcId:     aws.String(vpcID),
+		Attribute: aws.String(ec2.VpcAttributeNameEnableNetworkAddressUsageMetrics),
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.True(t, *desc.EnableNetworkAddressUsageMetrics.Value)
+}
+
+func TestVpc_ModifyVpcAttribute_NoAttributes(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+
+	_, err := svc.ModifyVpcAttribute(&ec2.ModifyVpcAttributeInput{
+		VpcId: aws.String(vpcID),
+	}, testAccountID)
+	assert.EqualError(t, err, "InvalidParameterValue")
+}
+
+func TestVpc_ModifyVpcAttribute_InvalidVpcID(t *testing.T) {
+	svc := setupTestVPCService(t)
+
+	_, err := svc.ModifyVpcAttribute(&ec2.ModifyVpcAttributeInput{
+		VpcId:              aws.String("vpc-nonexistent"),
+		EnableDnsHostnames: &ec2.AttributeBooleanValue{Value: aws.Bool(true)},
+	}, testAccountID)
+	assert.Error(t, err)
+}

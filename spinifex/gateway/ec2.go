@@ -218,6 +218,12 @@ var ec2Actions = map[string]EC2Handler{
 	"DescribeVpcs": ec2Handler(func(input *ec2.DescribeVpcsInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_vpc.DescribeVpcs(input, gw.NATSConn, accountID)
 	}),
+	"ModifyVpcAttribute": ec2Handler(func(input *ec2.ModifyVpcAttributeInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_vpc.ModifyVpcAttribute(input, gw.NATSConn, accountID)
+	}),
+	"DescribeVpcAttribute": ec2Handler(func(input *ec2.DescribeVpcAttributeInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_vpc.DescribeVpcAttribute(input, gw.NATSConn, accountID)
+	}),
 	"CreateSubnet": ec2Handler(func(input *ec2.CreateSubnetInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_vpc.CreateSubnet(input, gw.NATSConn, accountID)
 	}),

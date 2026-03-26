@@ -34,13 +34,16 @@ const (
 
 // VPCRecord represents a stored VPC
 type VPCRecord struct {
-	VpcId     string            `json:"vpc_id"`
-	CidrBlock string            `json:"cidr_block"`
-	State     string            `json:"state"`
-	IsDefault bool              `json:"is_default"`
-	VNI       int64             `json:"vni"`
-	Tags      map[string]string `json:"tags"`
-	CreatedAt time.Time         `json:"created_at"`
+	VpcId                            string            `json:"vpc_id"`
+	CidrBlock                        string            `json:"cidr_block"`
+	State                            string            `json:"state"`
+	IsDefault                        bool              `json:"is_default"`
+	VNI                              int64             `json:"vni"`
+	EnableDnsHostnames               bool              `json:"enable_dns_hostnames"`
+	EnableDnsSupport                 bool              `json:"enable_dns_support"`
+	EnableNetworkAddressUsageMetrics bool              `json:"enable_network_address_usage_metrics"`
+	Tags                             map[string]string `json:"tags"`
+	CreatedAt                        time.Time         `json:"created_at"`
 }
 
 // SubnetRecord represents a stored Subnet
@@ -209,13 +212,15 @@ func (s *VPCServiceImpl) CreateVpc(input *ec2.CreateVpcInput, accountID string) 
 	vpcID := utils.GenerateResourceID("vpc")
 
 	record := VPCRecord{
-		VpcId:     vpcID,
-		CidrBlock: ipNet.String(), // Normalize CIDR
-		State:     "available",
-		IsDefault: false,
-		VNI:       vni,
-		Tags:      make(map[string]string),
-		CreatedAt: time.Now(),
+		VpcId:              vpcID,
+		CidrBlock:          ipNet.String(), // Normalize CIDR
+		State:              "available",
+		IsDefault:          false,
+		VNI:                vni,
+		EnableDnsSupport:   true,  // AWS default
+		EnableDnsHostnames: false, // AWS default
+		Tags:               make(map[string]string),
+		CreatedAt:          time.Now(),
 	}
 
 	for _, tagSpec := range input.TagSpecifications {
@@ -706,6 +711,95 @@ func (s *VPCServiceImpl) ModifySubnetAttribute(input *ec2.ModifySubnetAttributeI
 	return &ec2.ModifySubnetAttributeOutput{}, nil
 }
 
+// ModifyVpcAttribute modifies a VPC's DNS attributes.
+func (s *VPCServiceImpl) ModifyVpcAttribute(input *ec2.ModifyVpcAttributeInput, accountID string) (*ec2.ModifyVpcAttributeOutput, error) {
+	if input.VpcId == nil || *input.VpcId == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+	if input.EnableDnsHostnames == nil && input.EnableDnsSupport == nil && input.EnableNetworkAddressUsageMetrics == nil {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
+	vpcID := *input.VpcId
+	key := utils.AccountKey(accountID, vpcID)
+
+	entry, err := s.vpcKV.Get(key)
+	if err != nil {
+		return nil, errors.New(awserrors.ErrorInvalidVpcIDNotFound)
+	}
+
+	var record VPCRecord
+	if err := json.Unmarshal(entry.Value(), &record); err != nil {
+		slog.Error("ModifyVpcAttribute: corrupted VPC record", "vpcId", vpcID, "accountID", accountID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	if input.EnableDnsHostnames != nil && input.EnableDnsHostnames.Value != nil {
+		record.EnableDnsHostnames = *input.EnableDnsHostnames.Value
+	}
+	if input.EnableDnsSupport != nil && input.EnableDnsSupport.Value != nil {
+		record.EnableDnsSupport = *input.EnableDnsSupport.Value
+	}
+	if input.EnableNetworkAddressUsageMetrics != nil && input.EnableNetworkAddressUsageMetrics.Value != nil {
+		record.EnableNetworkAddressUsageMetrics = *input.EnableNetworkAddressUsageMetrics.Value
+	}
+
+	data, err := json.Marshal(record)
+	if err != nil {
+		slog.Error("ModifyVpcAttribute: failed to marshal VPC record", "vpcId", vpcID, "accountID", accountID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+	if _, err := s.vpcKV.Update(key, data, entry.Revision()); err != nil {
+		slog.Error("ModifyVpcAttribute: KV update failed", "vpcId", vpcID, "accountID", accountID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	slog.Info("ModifyVpcAttribute completed", "vpcId", vpcID, "accountID", accountID)
+
+	return &ec2.ModifyVpcAttributeOutput{}, nil
+}
+
+// DescribeVpcAttribute returns a single VPC attribute per call (AWS behavior).
+func (s *VPCServiceImpl) DescribeVpcAttribute(input *ec2.DescribeVpcAttributeInput, accountID string) (*ec2.DescribeVpcAttributeOutput, error) {
+	if input.VpcId == nil || *input.VpcId == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+	if input.Attribute == nil || *input.Attribute == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	vpcID := *input.VpcId
+	key := utils.AccountKey(accountID, vpcID)
+
+	entry, err := s.vpcKV.Get(key)
+	if err != nil {
+		return nil, errors.New(awserrors.ErrorInvalidVpcIDNotFound)
+	}
+
+	var record VPCRecord
+	if err := json.Unmarshal(entry.Value(), &record); err != nil {
+		slog.Error("DescribeVpcAttribute: corrupted VPC record", "vpcId", vpcID, "accountID", accountID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	output := &ec2.DescribeVpcAttributeOutput{
+		VpcId: aws.String(vpcID),
+	}
+
+	switch *input.Attribute {
+	case ec2.VpcAttributeNameEnableDnsHostnames:
+		output.EnableDnsHostnames = &ec2.AttributeBooleanValue{Value: aws.Bool(record.EnableDnsHostnames)}
+	case ec2.VpcAttributeNameEnableDnsSupport:
+		output.EnableDnsSupport = &ec2.AttributeBooleanValue{Value: aws.Bool(record.EnableDnsSupport)}
+	case ec2.VpcAttributeNameEnableNetworkAddressUsageMetrics:
+		output.EnableNetworkAddressUsageMetrics = &ec2.AttributeBooleanValue{Value: aws.Bool(record.EnableNetworkAddressUsageMetrics)}
+	default:
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
+	return output, nil
+}
+
 // Default VPC constants matching AWS defaults.
 const (
 	DefaultVPCCidr    = "172.31.0.0/16"
@@ -783,13 +877,15 @@ func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string, bootstrap ...Bootstr
 		vpcID = bootstrap[0].VpcId
 	}
 	vpcRecord := VPCRecord{
-		VpcId:     vpcID,
-		CidrBlock: DefaultVPCCidr,
-		State:     "available",
-		IsDefault: true,
-		VNI:       vni,
-		Tags:      map[string]string{"Name": "default"},
-		CreatedAt: time.Now(),
+		VpcId:              vpcID,
+		CidrBlock:          DefaultVPCCidr,
+		State:              "available",
+		IsDefault:          true,
+		VNI:                vni,
+		EnableDnsSupport:   true, // AWS default
+		EnableDnsHostnames: true, // AWS default for default VPC
+		Tags:               map[string]string{"Name": "default"},
+		CreatedAt:          time.Now(),
 	}
 
 	data, err := json.Marshal(vpcRecord)

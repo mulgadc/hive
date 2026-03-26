@@ -97,9 +97,9 @@ data "aws_ami" "debian12" {
 # ---------------------------------------------------------------------------
 
 resource "aws_vpc" "test" {
-  cidr_block = "10.99.0.0/16"
-
-  # enable_dns_hostnames and enable_dns_support require ModifyVpcAttribute (not yet implemented)
+  cidr_block           = "10.99.0.0/16"
+  enable_dns_hostnames = true
+  enable_dns_support   = true
 
   tags = {
     Name = "spx-basic-test-vpc"
