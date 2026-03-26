@@ -704,6 +704,9 @@ func (s *VPCServiceImpl) ModifyVpcAttribute(input *ec2.ModifyVpcAttributeInput, 
 	if input.VpcId == nil || *input.VpcId == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
+	if input.EnableDnsHostnames == nil && input.EnableDnsSupport == nil && input.EnableNetworkAddressUsageMetrics == nil {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
 
 	vpcID := *input.VpcId
 	key := utils.AccountKey(accountID, vpcID)
@@ -715,24 +718,41 @@ func (s *VPCServiceImpl) ModifyVpcAttribute(input *ec2.ModifyVpcAttributeInput, 
 
 	var record VPCRecord
 	if err := json.Unmarshal(entry.Value(), &record); err != nil {
+		slog.Error("ModifyVpcAttribute: corrupted VPC record", "vpcId", vpcID, "accountID", accountID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
+	changed := false
 	if input.EnableDnsHostnames != nil && input.EnableDnsHostnames.Value != nil {
-		record.EnableDnsHostnames = *input.EnableDnsHostnames.Value
+		if record.EnableDnsHostnames != *input.EnableDnsHostnames.Value {
+			record.EnableDnsHostnames = *input.EnableDnsHostnames.Value
+			changed = true
+		}
 	}
 	if input.EnableDnsSupport != nil && input.EnableDnsSupport.Value != nil {
-		record.EnableDnsSupport = *input.EnableDnsSupport.Value
+		if record.EnableDnsSupport != *input.EnableDnsSupport.Value {
+			record.EnableDnsSupport = *input.EnableDnsSupport.Value
+			changed = true
+		}
 	}
 	if input.EnableNetworkAddressUsageMetrics != nil && input.EnableNetworkAddressUsageMetrics.Value != nil {
-		record.EnableNetworkAddressUsageMetrics = *input.EnableNetworkAddressUsageMetrics.Value
+		if record.EnableNetworkAddressUsageMetrics != *input.EnableNetworkAddressUsageMetrics.Value {
+			record.EnableNetworkAddressUsageMetrics = *input.EnableNetworkAddressUsageMetrics.Value
+			changed = true
+		}
+	}
+
+	if !changed {
+		return &ec2.ModifyVpcAttributeOutput{}, nil
 	}
 
 	data, err := json.Marshal(record)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal VPC record: %w", err)
+		slog.Error("ModifyVpcAttribute: failed to marshal VPC record", "vpcId", vpcID, "accountID", accountID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 	if _, err := s.vpcKV.Update(key, data, entry.Revision()); err != nil {
+		slog.Error("ModifyVpcAttribute: KV update failed", "vpcId", vpcID, "accountID", accountID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -760,6 +780,7 @@ func (s *VPCServiceImpl) DescribeVpcAttribute(input *ec2.DescribeVpcAttributeInp
 
 	var record VPCRecord
 	if err := json.Unmarshal(entry.Value(), &record); err != nil {
+		slog.Error("DescribeVpcAttribute: corrupted VPC record", "vpcId", vpcID, "accountID", accountID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -768,11 +789,11 @@ func (s *VPCServiceImpl) DescribeVpcAttribute(input *ec2.DescribeVpcAttributeInp
 	}
 
 	switch *input.Attribute {
-	case "enableDnsHostnames":
+	case ec2.VpcAttributeNameEnableDnsHostnames:
 		output.EnableDnsHostnames = &ec2.AttributeBooleanValue{Value: aws.Bool(record.EnableDnsHostnames)}
-	case "enableDnsSupport":
+	case ec2.VpcAttributeNameEnableDnsSupport:
 		output.EnableDnsSupport = &ec2.AttributeBooleanValue{Value: aws.Bool(record.EnableDnsSupport)}
-	case "enableNetworkAddressUsageMetrics":
+	case ec2.VpcAttributeNameEnableNetworkAddressUsageMetrics:
 		output.EnableNetworkAddressUsageMetrics = &ec2.AttributeBooleanValue{Value: aws.Bool(record.EnableNetworkAddressUsageMetrics)}
 	default:
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)

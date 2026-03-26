@@ -19,6 +19,9 @@ func DescribeVpcAttribute(input *ec2.DescribeVpcAttributeInput, natsConn *nats.C
 	if input.VpcId == nil || *input.VpcId == "" {
 		return output, errors.New(awserrors.ErrorMissingParameter)
 	}
+	if input.Attribute == nil || *input.Attribute == "" {
+		return output, errors.New(awserrors.ErrorMissingParameter)
+	}
 
 	svc := handlers_ec2_vpc.NewNATSVPCService(natsConn)
 	result, err := svc.DescribeVpcAttribute(input, accountID)

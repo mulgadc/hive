@@ -1064,7 +1064,7 @@ func TestVpc_DescribeVpcAttribute_Defaults(t *testing.T) {
 	// EnableDnsSupport defaults to true
 	desc, err := svc.DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{
 		VpcId:     aws.String(vpcID),
-		Attribute: aws.String("enableDnsSupport"),
+		Attribute: aws.String(ec2.VpcAttributeNameEnableDnsSupport),
 	}, testAccountID)
 	require.NoError(t, err)
 	assert.Equal(t, vpcID, *desc.VpcId)
@@ -1073,7 +1073,7 @@ func TestVpc_DescribeVpcAttribute_Defaults(t *testing.T) {
 	// EnableDnsHostnames defaults to false
 	desc, err = svc.DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{
 		VpcId:     aws.String(vpcID),
-		Attribute: aws.String("enableDnsHostnames"),
+		Attribute: aws.String(ec2.VpcAttributeNameEnableDnsHostnames),
 	}, testAccountID)
 	require.NoError(t, err)
 	assert.False(t, *desc.EnableDnsHostnames.Value)
@@ -1081,7 +1081,7 @@ func TestVpc_DescribeVpcAttribute_Defaults(t *testing.T) {
 	// EnableNetworkAddressUsageMetrics defaults to false
 	desc, err = svc.DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{
 		VpcId:     aws.String(vpcID),
-		Attribute: aws.String("enableNetworkAddressUsageMetrics"),
+		Attribute: aws.String(ec2.VpcAttributeNameEnableNetworkAddressUsageMetrics),
 	}, testAccountID)
 	require.NoError(t, err)
 	assert.False(t, *desc.EnableNetworkAddressUsageMetrics.Value)
@@ -1101,7 +1101,7 @@ func TestVpc_ModifyVpcAttribute_EnableDnsHostnames(t *testing.T) {
 	// Verify via DescribeVpcAttribute
 	desc, err := svc.DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{
 		VpcId:     aws.String(vpcID),
-		Attribute: aws.String("enableDnsHostnames"),
+		Attribute: aws.String(ec2.VpcAttributeNameEnableDnsHostnames),
 	}, testAccountID)
 	require.NoError(t, err)
 	assert.True(t, *desc.EnableDnsHostnames.Value)
@@ -1121,7 +1121,7 @@ func TestVpc_ModifyVpcAttribute_EnableDnsSupport(t *testing.T) {
 	// Verify via DescribeVpcAttribute
 	desc, err := svc.DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{
 		VpcId:     aws.String(vpcID),
-		Attribute: aws.String("enableDnsSupport"),
+		Attribute: aws.String(ec2.VpcAttributeNameEnableDnsSupport),
 	}, testAccountID)
 	require.NoError(t, err)
 	assert.False(t, *desc.EnableDnsSupport.Value)
@@ -1140,7 +1140,7 @@ func TestVpc_ModifyVpcAttribute_IndependentFields(t *testing.T) {
 
 	desc, err := svc.DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{
 		VpcId:     aws.String(vpcID),
-		Attribute: aws.String("enableDnsSupport"),
+		Attribute: aws.String(ec2.VpcAttributeNameEnableDnsSupport),
 	}, testAccountID)
 	require.NoError(t, err)
 	assert.True(t, *desc.EnableDnsSupport.Value, "EnableDnsSupport should remain true")
@@ -1151,7 +1151,7 @@ func TestVpc_DescribeVpcAttribute_InvalidVpcID(t *testing.T) {
 
 	_, err := svc.DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{
 		VpcId:     aws.String("vpc-nonexistent"),
-		Attribute: aws.String("enableDnsSupport"),
+		Attribute: aws.String(ec2.VpcAttributeNameEnableDnsSupport),
 	}, testAccountID)
 	assert.Error(t, err)
 }
@@ -1175,6 +1175,34 @@ func TestVpc_DescribeVpcAttribute_MissingAttribute(t *testing.T) {
 		VpcId: aws.String(vpcID),
 	}, testAccountID)
 	assert.Error(t, err)
+}
+
+func TestVpc_ModifyVpcAttribute_EnableNetworkAddressUsageMetrics(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+
+	_, err := svc.ModifyVpcAttribute(&ec2.ModifyVpcAttributeInput{
+		VpcId:                            aws.String(vpcID),
+		EnableNetworkAddressUsageMetrics: &ec2.AttributeBooleanValue{Value: aws.Bool(true)},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	desc, err := svc.DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{
+		VpcId:     aws.String(vpcID),
+		Attribute: aws.String(ec2.VpcAttributeNameEnableNetworkAddressUsageMetrics),
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.True(t, *desc.EnableNetworkAddressUsageMetrics.Value)
+}
+
+func TestVpc_ModifyVpcAttribute_NoAttributes(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+
+	_, err := svc.ModifyVpcAttribute(&ec2.ModifyVpcAttributeInput{
+		VpcId: aws.String(vpcID),
+	}, testAccountID)
+	assert.EqualError(t, err, "InvalidParameterValue")
 }
 
 func TestVpc_ModifyVpcAttribute_InvalidVpcID(t *testing.T) {

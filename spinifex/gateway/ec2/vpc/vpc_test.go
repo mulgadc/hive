@@ -206,7 +206,17 @@ func TestDescribeVpcAttribute_EmptyVpcId(t *testing.T) {
 	assert.EqualError(t, err, awserrors.ErrorMissingParameter)
 }
 
+func TestDescribeVpcAttribute_MissingAttribute(t *testing.T) {
+	_, err := DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{VpcId: aws.String("vpc-123")}, nil, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorMissingParameter)
+}
+
+func TestDescribeVpcAttribute_EmptyAttribute(t *testing.T) {
+	_, err := DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{VpcId: aws.String("vpc-123"), Attribute: aws.String("")}, nil, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorMissingParameter)
+}
+
 func TestDescribeVpcAttribute_NilNATS(t *testing.T) {
-	_, err := DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{VpcId: aws.String("vpc-123"), Attribute: aws.String("enableDnsSupport")}, nil, testAccountID)
+	_, err := DescribeVpcAttribute(&ec2.DescribeVpcAttributeInput{VpcId: aws.String("vpc-123"), Attribute: aws.String(ec2.VpcAttributeNameEnableDnsSupport)}, nil, testAccountID)
 	assert.Error(t, err)
 }
