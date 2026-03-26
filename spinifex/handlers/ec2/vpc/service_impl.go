@@ -722,28 +722,14 @@ func (s *VPCServiceImpl) ModifyVpcAttribute(input *ec2.ModifyVpcAttributeInput, 
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	changed := false
 	if input.EnableDnsHostnames != nil && input.EnableDnsHostnames.Value != nil {
-		if record.EnableDnsHostnames != *input.EnableDnsHostnames.Value {
-			record.EnableDnsHostnames = *input.EnableDnsHostnames.Value
-			changed = true
-		}
+		record.EnableDnsHostnames = *input.EnableDnsHostnames.Value
 	}
 	if input.EnableDnsSupport != nil && input.EnableDnsSupport.Value != nil {
-		if record.EnableDnsSupport != *input.EnableDnsSupport.Value {
-			record.EnableDnsSupport = *input.EnableDnsSupport.Value
-			changed = true
-		}
+		record.EnableDnsSupport = *input.EnableDnsSupport.Value
 	}
 	if input.EnableNetworkAddressUsageMetrics != nil && input.EnableNetworkAddressUsageMetrics.Value != nil {
-		if record.EnableNetworkAddressUsageMetrics != *input.EnableNetworkAddressUsageMetrics.Value {
-			record.EnableNetworkAddressUsageMetrics = *input.EnableNetworkAddressUsageMetrics.Value
-			changed = true
-		}
-	}
-
-	if !changed {
-		return &ec2.ModifyVpcAttributeOutput{}, nil
+		record.EnableNetworkAddressUsageMetrics = *input.EnableNetworkAddressUsageMetrics.Value
 	}
 
 	data, err := json.Marshal(record)
