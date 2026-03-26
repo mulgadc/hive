@@ -39,6 +39,7 @@ import (
 	handlers_ec2_instance "github.com/mulgadc/spinifex/spinifex/handlers/ec2/instance"
 	handlers_ec2_key "github.com/mulgadc/spinifex/spinifex/handlers/ec2/key"
 	handlers_ec2_placementgroup "github.com/mulgadc/spinifex/spinifex/handlers/ec2/placementgroup"
+	handlers_ec2_routetable "github.com/mulgadc/spinifex/spinifex/handlers/ec2/routetable"
 	handlers_ec2_snapshot "github.com/mulgadc/spinifex/spinifex/handlers/ec2/snapshot"
 	handlers_ec2_tags "github.com/mulgadc/spinifex/spinifex/handlers/ec2/tags"
 	handlers_ec2_volume "github.com/mulgadc/spinifex/spinifex/handlers/ec2/volume"
@@ -111,6 +112,7 @@ type Daemon struct {
 	placementGroupService *handlers_ec2_placementgroup.PlacementGroupServiceImpl
 	vpcService            *handlers_ec2_vpc.VPCServiceImpl
 	eipService            *handlers_ec2_eip.EIPServiceImpl
+	routeTableService     *handlers_ec2_routetable.RouteTableServiceImpl
 	externalIPAM          *handlers_ec2_vpc.ExternalIPAM
 	ctx                   context.Context
 	cancel                context.CancelFunc
@@ -402,6 +404,15 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.RemoveInstanceFromPlacementGroup", d.handleEC2RemoveInstanceFromPlacementGroup, "spinifex-workers"},
 		{"ec2.ReserveClusterNode", d.handleEC2ReserveClusterNode, "spinifex-workers"},
 		{"ec2.FinalizeClusterInstances", d.handleEC2FinalizeClusterInstances, "spinifex-workers"},
+		{"ec2.CreateRouteTable", d.handleEC2CreateRouteTable, "spinifex-workers"},
+		{"ec2.DeleteRouteTable", d.handleEC2DeleteRouteTable, "spinifex-workers"},
+		{"ec2.DescribeRouteTables", d.handleEC2DescribeRouteTables, "spinifex-workers"},
+		{"ec2.CreateRoute", d.handleEC2CreateRoute, "spinifex-workers"},
+		{"ec2.DeleteRoute", d.handleEC2DeleteRoute, "spinifex-workers"},
+		{"ec2.ReplaceRoute", d.handleEC2ReplaceRoute, "spinifex-workers"},
+		{"ec2.AssociateRouteTable", d.handleEC2AssociateRouteTable, "spinifex-workers"},
+		{"ec2.DisassociateRouteTable", d.handleEC2DisassociateRouteTable, "spinifex-workers"},
+		{"ec2.ReplaceRouteTableAssociation", d.handleEC2ReplaceRouteTableAssociation, "spinifex-workers"},
 		{"ec2.CreateVpc", d.handleEC2CreateVpc, "spinifex-workers"},
 		{"ec2.DeleteVpc", d.handleEC2DeleteVpc, "spinifex-workers"},
 		{"ec2.DescribeVpcs", d.handleEC2DescribeVpcs, "spinifex-workers"},
@@ -552,6 +563,13 @@ func (d *Daemon) Start() error {
 	})
 	if err != nil {
 		return fmt.Errorf("failed to initialize VPC service: %w", err)
+	}
+
+	d.routeTableService, err = initServiceWithRetry("RouteTable service", func() (*handlers_ec2_routetable.RouteTableServiceImpl, error) {
+		return handlers_ec2_routetable.NewRouteTableServiceImplWithNATS(d.config, d.natsConn)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to initialize RouteTable service: %w", err)
 	}
 
 	// Initialize external IPAM if pool mode is configured (per-VM public IPs).

@@ -20,6 +20,7 @@ import (
 	gateway_ec2_instance "github.com/mulgadc/spinifex/spinifex/gateway/ec2/instance"
 	gateway_ec2_key "github.com/mulgadc/spinifex/spinifex/gateway/ec2/key"
 	gateway_ec2_placementgroup "github.com/mulgadc/spinifex/spinifex/gateway/ec2/placementgroup"
+	gateway_ec2_routetable "github.com/mulgadc/spinifex/spinifex/gateway/ec2/routetable"
 	gateway_ec2_snapshot "github.com/mulgadc/spinifex/spinifex/gateway/ec2/snapshot"
 	gateway_ec2_tags "github.com/mulgadc/spinifex/spinifex/gateway/ec2/tags"
 	gateway_ec2_volume "github.com/mulgadc/spinifex/spinifex/gateway/ec2/volume"
@@ -228,6 +229,33 @@ var ec2Actions = map[string]EC2Handler{
 	}),
 	"ModifySubnetAttribute": ec2Handler(func(input *ec2.ModifySubnetAttributeInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_vpc.ModifySubnetAttribute(input, gw.NATSConn, accountID)
+	}),
+	"CreateRouteTable": ec2Handler(func(input *ec2.CreateRouteTableInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_routetable.CreateRouteTable(input, gw.NATSConn, accountID)
+	}),
+	"DeleteRouteTable": ec2Handler(func(input *ec2.DeleteRouteTableInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_routetable.DeleteRouteTable(input, gw.NATSConn, accountID)
+	}),
+	"DescribeRouteTables": ec2Handler(func(input *ec2.DescribeRouteTablesInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_routetable.DescribeRouteTables(input, gw.NATSConn, accountID)
+	}),
+	"CreateRoute": ec2Handler(func(input *ec2.CreateRouteInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_routetable.CreateRoute(input, gw.NATSConn, accountID)
+	}),
+	"DeleteRoute": ec2Handler(func(input *ec2.DeleteRouteInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_routetable.DeleteRoute(input, gw.NATSConn, accountID)
+	}),
+	"ReplaceRoute": ec2Handler(func(input *ec2.ReplaceRouteInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_routetable.ReplaceRoute(input, gw.NATSConn, accountID)
+	}),
+	"AssociateRouteTable": ec2Handler(func(input *ec2.AssociateRouteTableInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_routetable.AssociateRouteTable(input, gw.NATSConn, accountID)
+	}),
+	"DisassociateRouteTable": ec2Handler(func(input *ec2.DisassociateRouteTableInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_routetable.DisassociateRouteTable(input, gw.NATSConn, accountID)
+	}),
+	"ReplaceRouteTableAssociation": ec2Handler(func(input *ec2.ReplaceRouteTableAssociationInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_routetable.ReplaceRouteTableAssociation(input, gw.NATSConn, accountID)
 	}),
 	"CreateNetworkInterface": ec2Handler(func(input *ec2.CreateNetworkInterfaceInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_vpc.CreateNetworkInterface(input, gw.NATSConn, accountID)

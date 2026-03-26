@@ -65,6 +65,7 @@ type VPCServiceImpl struct {
 	vniKV    nats.KeyValue
 	eniKV    nats.KeyValue
 	sgKV     nats.KeyValue
+	rtbKV    nats.KeyValue // route table bucket for auto-creating main route table
 	ipam     *IPAM
 }
 
@@ -115,6 +116,11 @@ func NewVPCServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*VPCSer
 		return nil, fmt.Errorf("write version to %s: %w", KVBucketSecurityGroups, err)
 	}
 
+	rtbKV, err := utils.GetOrCreateKVBucket(js, "spinifex-vpc-route-tables", 10)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create KV bucket spinifex-vpc-route-tables: %w", err)
+	}
+
 	ipam, err := NewIPAM(js)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize IPAM: %w", err)
@@ -135,6 +141,7 @@ func NewVPCServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*VPCSer
 		vniKV:    vniKV,
 		eniKV:    eniKV,
 		sgKV:     sgKV,
+		rtbKV:    rtbKV,
 		ipam:     ipam,
 	}, nil
 }
@@ -233,6 +240,11 @@ func (s *VPCServiceImpl) CreateVpc(input *ec2.CreateVpcInput, accountID string) 
 
 	// Publish vpc.create event for vpcd topology translation
 	s.publishVPCEvent("vpc.create", record.VpcId, record.CidrBlock, record.VNI)
+
+	// Auto-create main route table with local route (matches AWS behavior)
+	if s.rtbKV != nil {
+		s.createMainRouteTable(accountID, vpcID, record.CidrBlock)
+	}
 
 	return &ec2.CreateVpcOutput{
 		Vpc: s.vpcRecordToEC2(&record, accountID),
@@ -823,6 +835,11 @@ func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string, bootstrap ...Bootstr
 
 	s.publishSubnetEvent("vpc.create-subnet", subnetID, vpcID, DefaultSubnetCidr)
 
+	// Create main route table with local route (written directly to KV to avoid circular import)
+	if s.rtbKV != nil {
+		s.createMainRouteTable(accountID, vpcID, DefaultVPCCidr)
+	}
+
 	slog.Info("Created default VPC and subnet",
 		"vpcId", vpcID,
 		"vpcCidr", DefaultVPCCidr,
@@ -837,6 +854,65 @@ func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string, bootstrap ...Bootstr
 		Cidr:       DefaultVPCCidr,
 		SubnetCidr: DefaultSubnetCidr,
 	}, nil
+}
+
+// createMainRouteTable writes a main route table record directly to the route table KV bucket.
+// This avoids a circular import (routetable package imports vpc package for validation).
+func (s *VPCServiceImpl) createMainRouteTable(accountID, vpcID, vpcCidr string) {
+	type rtbRecord struct {
+		RouteTableId string `json:"route_table_id"`
+		VpcId        string `json:"vpc_id"`
+		AccountID    string `json:"account_id"`
+		IsMain       bool   `json:"is_main"`
+		Routes       []struct {
+			DestinationCidrBlock string `json:"destination_cidr_block"`
+			GatewayId            string `json:"gateway_id,omitempty"`
+			State                string `json:"state"`
+			Origin               string `json:"origin"`
+		} `json:"routes"`
+		Associations []struct {
+			AssociationId string `json:"association_id"`
+			Main          bool   `json:"main"`
+		} `json:"associations"`
+		Tags      map[string]string `json:"tags"`
+		CreatedAt time.Time         `json:"created_at"`
+	}
+
+	rtbID := utils.GenerateResourceID("rtb")
+	record := rtbRecord{
+		RouteTableId: rtbID,
+		VpcId:        vpcID,
+		AccountID:    accountID,
+		IsMain:       true,
+		Routes: []struct {
+			DestinationCidrBlock string `json:"destination_cidr_block"`
+			GatewayId            string `json:"gateway_id,omitempty"`
+			State                string `json:"state"`
+			Origin               string `json:"origin"`
+		}{
+			{DestinationCidrBlock: vpcCidr, GatewayId: "local", State: "active", Origin: "CreateRouteTable"},
+		},
+		Associations: []struct {
+			AssociationId string `json:"association_id"`
+			Main          bool   `json:"main"`
+		}{
+			{AssociationId: utils.GenerateResourceID("rtbassoc"), Main: true},
+		},
+		Tags:      make(map[string]string),
+		CreatedAt: time.Now(),
+	}
+
+	data, err := json.Marshal(record)
+	if err != nil {
+		slog.Error("Failed to marshal main route table", "vpcId", vpcID, "err", err)
+		return
+	}
+	if _, err := s.rtbKV.Put(utils.AccountKey(accountID, rtbID), data); err != nil {
+		slog.Error("Failed to store main route table", "vpcId", vpcID, "err", err)
+		return
+	}
+
+	slog.Info("Created main route table for VPC", "routeTableId", rtbID, "vpcId", vpcID, "accountID", accountID)
 }
 
 // GetDefaultSubnet returns the default subnet for RunInstances when no SubnetId is specified.

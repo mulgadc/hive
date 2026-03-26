@@ -134,6 +134,11 @@ func (d *Daemon) ensureDefaultVPCInfrastructure() {
 			}
 		}
 
+		// Add 0.0.0.0/0 → IGW route to the main route table (if not already present)
+		if d.routeTableService != nil {
+			d.ensureDefaultIGWRoute(accountID, defaultVpcId)
+		}
+
 		// Check if default security group exists for this VPC
 		sgOut, err := d.vpcService.DescribeSecurityGroups(&ec2.DescribeSecurityGroupsInput{}, accountID)
 		if err != nil {
@@ -186,5 +191,64 @@ func (d *Daemon) ensureDefaultVPCInfrastructure() {
 			slog.Info("Created default security group for default VPC",
 				"groupId", sgId, "vpcId", defaultVpcId, "accountID", accountID)
 		}
+	}
+}
+
+// ensureDefaultIGWRoute adds 0.0.0.0/0 → igw-xxx to the main route table if not present
+func (d *Daemon) ensureDefaultIGWRoute(accountID, vpcID string) {
+	// Find the main route table for this VPC
+	vpcFilter := "vpc-id"
+	mainFilter := "association.main"
+	trueVal := "true"
+	descOut, err := d.routeTableService.DescribeRouteTables(&ec2.DescribeRouteTablesInput{
+		Filters: []*ec2.Filter{
+			{Name: &vpcFilter, Values: []*string{&vpcID}},
+			{Name: &mainFilter, Values: []*string{&trueVal}},
+		},
+	}, accountID)
+	if err != nil || len(descOut.RouteTables) == 0 {
+		slog.Debug("No main route table found for default IGW route", "vpcId", vpcID, "accountID", accountID)
+		return
+	}
+
+	mainRtb := descOut.RouteTables[0]
+
+	// Check if 0.0.0.0/0 route already exists
+	for _, r := range mainRtb.Routes {
+		if r.DestinationCidrBlock != nil && *r.DestinationCidrBlock == "0.0.0.0/0" {
+			return // Already has a default route
+		}
+	}
+
+	// Find the attached IGW for this VPC
+	igwOut, err := d.igwService.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{}, accountID)
+	if err != nil {
+		return
+	}
+	var igwID string
+	for _, igw := range igwOut.InternetGateways {
+		for _, att := range igw.Attachments {
+			if att.VpcId != nil && *att.VpcId == vpcID {
+				igwID = *igw.InternetGatewayId
+				break
+			}
+		}
+	}
+	if igwID == "" {
+		return // No IGW attached
+	}
+
+	// Add the default route
+	dest := "0.0.0.0/0"
+	_, err = d.routeTableService.CreateRoute(&ec2.CreateRouteInput{
+		RouteTableId:         mainRtb.RouteTableId,
+		DestinationCidrBlock: &dest,
+		GatewayId:            &igwID,
+	}, accountID)
+	if err != nil {
+		slog.Warn("Failed to add default IGW route to main route table", "err", err)
+	} else {
+		slog.Info("Added default IGW route to main route table",
+			"routeTableId", *mainRtb.RouteTableId, "igwId", igwID, "vpcId", vpcID)
 	}
 }
