@@ -419,11 +419,6 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.AuthorizeSecurityGroupEgress", d.handleEC2AuthorizeSecurityGroupEgress, "spinifex-workers"},
 		{"ec2.RevokeSecurityGroupIngress", d.handleEC2RevokeSecurityGroupIngress, "spinifex-workers"},
 		{"ec2.RevokeSecurityGroupEgress", d.handleEC2RevokeSecurityGroupEgress, "spinifex-workers"},
-		{"ec2.AllocateAddress", d.handleEC2AllocateAddress, "spinifex-workers"},
-		{"ec2.ReleaseAddress", d.handleEC2ReleaseAddress, "spinifex-workers"},
-		{"ec2.AssociateAddress", d.handleEC2AssociateAddress, "spinifex-workers"},
-		{"ec2.DisassociateAddress", d.handleEC2DisassociateAddress, "spinifex-workers"},
-		{"ec2.DescribeAddresses", d.handleEC2DescribeAddresses, "spinifex-workers"},
 		{"ec2.ModifyInstanceAttribute", d.handleEC2ModifyInstanceAttribute, "spinifex-workers"},
 		{"ec2.start", d.handleEC2StartStoppedInstance, "spinifex-workers"},
 		{"ec2.terminate", d.handleEC2TerminateStoppedInstance, "spinifex-workers"},
@@ -450,6 +445,18 @@ func (d *Daemon) subscribeAll() error {
 		{"spinifex.cluster.shutdown.storage", d.handleShutdownStorage, ""},
 		{"spinifex.cluster.shutdown.persist", d.handleShutdownPersist, ""},
 		{"spinifex.cluster.shutdown.infra", d.handleShutdownInfra, ""},
+	}
+
+	// EIP operations require external IPAM (pool mode). Only subscribe when available;
+	// without a subscriber the gateway returns a NATS timeout → clean error to the client.
+	if d.eipService != nil {
+		subs = append(subs,
+			natsSub{"ec2.AllocateAddress", d.handleEC2AllocateAddress, "spinifex-workers"},
+			natsSub{"ec2.ReleaseAddress", d.handleEC2ReleaseAddress, "spinifex-workers"},
+			natsSub{"ec2.AssociateAddress", d.handleEC2AssociateAddress, "spinifex-workers"},
+			natsSub{"ec2.DisassociateAddress", d.handleEC2DisassociateAddress, "spinifex-workers"},
+			natsSub{"ec2.DescribeAddresses", d.handleEC2DescribeAddresses, "spinifex-workers"},
+		)
 	}
 
 	for _, s := range subs {
