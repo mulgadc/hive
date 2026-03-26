@@ -6,7 +6,6 @@ tags:
   - install
   - air-gapped
   - offline
-badge: advanced
 resources:
   - title: "Spinifex Repository"
     url: "https://github.com/mulgadc/spinifex"
@@ -38,7 +37,7 @@ In air-gapped or disconnected environments, Spinifex can be deployed without int
 
 ## Instructions
 
-## Step 1. Prepare packages (on a connected machine)
+## Step 1. Prepare Packages (on a connected machine)
 
 Set up a local APT cache to collect all required packages:
 
@@ -56,7 +55,7 @@ sudo apt install --download-only nbdkit nbdkit-plugin-dev pkg-config \
   ovn-central ovn-host openvswitch-switch
 ```
 
-## Step 2. Create USB deployment media
+## Step 2. Create USB Deployment Media
 
 ```bash
 mkdir -p /media/spinifex-deploy/{apt-packages,go-cache,spinifex-source}
@@ -65,7 +64,7 @@ cp -r ~/go/pkg/mod/cache/ /media/spinifex-deploy/go-cache/
 cp -r ~/Development/mulga/spinifex /media/spinifex-deploy/spinifex-source/
 ```
 
-## Step 3. Verify package integrity
+## Step 3. Verify Package Integrity
 
 Sign and verify packages before transferring to the target:
 
@@ -75,7 +74,7 @@ gpg --verify spinifex-v1.0.tar.gz.sig spinifex-v1.0.tar.gz
 sha256sum -c /media/spinifex-deploy/checksums.sha256
 ```
 
-## Step 4. Install on the target server
+## Step 4. Install on the Target Server
 
 Mount the USB and install:
 
@@ -90,7 +89,7 @@ Then follow the [Source Install](/docs/source-install) guide from Step 3 (Setup 
 
 ## Troubleshooting
 
-## Missing dependencies after dpkg install
+### Missing Dependencies After dpkg Install
 
 Some packages may have unresolved dependencies. Fix with:
 
@@ -101,7 +100,7 @@ sudo apt-get install -f
 
 The `-f` flag tells apt to fix broken dependencies using what's available locally.
 
-## GPG verification fails
+### GPG Verification Fails
 
 The signing key may not match or the download was corrupted. Re-import the key and verify:
 
@@ -116,7 +115,7 @@ If verification still fails, re-download the package on the connected machine an
 sha256sum spinifex-v1.0.tar.gz
 ```
 
-## Go module cache errors
+### Go Module Cache Errors
 
 The Go module cache may have been incompletely copied. On the connected machine, re-export the full cache:
 

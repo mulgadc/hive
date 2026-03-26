@@ -6,7 +6,6 @@ tags:
   - cli
   - admin
   - reference
-badge: cli
 resources:
   - title: "Spinifex Repository"
     url: "https://github.com/mulgadc/spinifex"
@@ -75,7 +74,7 @@ node3   Ready     127.0.0.3       ap-southeast-2   ap-southeast-2a  2m       0
 
 ## Troubleshooting
 
-## Permission denied running spinifex
+### Permission Denied Running Spinifex
 
 The binary may not be executable. Fix permissions:
 
@@ -85,7 +84,7 @@ chmod +x ./bin/spx
 
 If you get permission errors during operations, ensure you're running with appropriate privileges. Some OVN and networking commands require `sudo`.
 
-## Services fail to start
+### Services Fail to Start
 
 Check the daemon logs for specific errors:
 

@@ -44,7 +44,7 @@ aws sts get-caller-identity
 
 ## Troubleshooting
 
-## Credentials not working
+## Credentials Not Working
 
 Verify the AWS CLI configuration files exist and contain the correct profile:
 

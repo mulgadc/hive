@@ -7,7 +7,6 @@ tags:
   - vpc
   - ec2
   - quickstart
-badge: setup
 resources:
   - title: "Spinifex Repository"
     url: "https://github.com/mulgadc/spinifex"
@@ -18,11 +17,6 @@ resources:
 # Setting Up Your Cluster
 
 > Import an AMI, create a VPC with a public subnet, and launch your first instance.
-
-This guide assumes Spinifex is already installed and running. If not, follow one of the installation guides first:
-- [Binary Install (Single Node)](/docs/installing-spinifex)
-- [Multi-Node Installation](/docs/installing-spinifex-multi-node)
-- [Source Install](/docs/source-install)
 
 ## Table of Contents
 
@@ -35,6 +29,15 @@ This guide assumes Spinifex is already installed and running. If not, follow one
 - [Troubleshooting](#troubleshooting)
 
 ---
+
+## Overview
+
+This guide assumes Spinifex is already installed and running. If not, follow one of the installation guides first:
+- [Binary Install (Single Node)](/docs/installing-spinifex)
+- [Multi-Node Installation](/docs/installing-spinifex-multi-node)
+- [Source Install](/docs/source-install)
+
+## Instructions
 
 ## Prerequisites
 
@@ -130,7 +133,7 @@ aws ec2 attach-internet-gateway \
 echo "IGW: $IGW_ID (attached to $VPC_ID)"
 ```
 
-### Create a public subnet
+### Create a Public Subnet
 
 A public subnet auto-assigns a routable IP to each instance, making it directly reachable from your network.
 
@@ -236,7 +239,7 @@ aws ec2 start-instances --instance-ids $INSTANCE_ID
 aws ec2 terminate-instances --instance-ids $INSTANCE_ID
 ```
 
-### Console output
+### Console Output
 
 View the instance's serial console log (useful for debugging boot issues):
 
@@ -245,7 +248,7 @@ aws ec2 get-console-output --instance-id $INSTANCE_ID \
   --query 'Output' --output text
 ```
 
-### Multi-node: check instance placement
+### Multi-Node: Check Instance Placement
 
 On a multi-node cluster, instances are distributed across nodes:
 
@@ -255,7 +258,7 @@ spx get vms
 
 ## Additional Options
 
-### Private subnets (no public IP)
+### Private Subnets (No Public IP)
 
 Create a subnet without `--map-public-ip-on-launch`:
 
@@ -268,7 +271,7 @@ PRIVATE_SUBNET=$(aws ec2 create-subnet \
 
 Instances in private subnets get a private IP only. They can still reach the internet via SNAT through the VPC router, but are not directly reachable from your network.
 
-### Multiple accounts
+### Multiple Accounts
 
 Create isolated accounts with their own resources:
 
@@ -281,18 +284,16 @@ export AWS_PROFILE=spinifex-myteam
 
 The Spinifex web interface is available at `https://localhost:3000` when services are running.
 
----
-
 ## Troubleshooting
 
-### Instance stuck in pending
+### Instance Stuck in Pending
 
 ```bash
 cat ~/spinifex/logs/spinifex.log
 aws ec2 describe-images
 ```
 
-### SSH connection refused
+### SSH Connection Refused
 
 cloud-init needs 30-60 seconds after boot. Check instance state:
 
@@ -300,7 +301,7 @@ cloud-init needs 30-60 seconds after boot. Check instance state:
 aws ec2 describe-instances --instance-ids $INSTANCE_ID
 ```
 
-### No public IP assigned
+### No Public IP Assigned
 
 Verify the subnet has `MapPublicIpOnLaunch` enabled:
 
@@ -320,7 +321,7 @@ Also verify an Internet Gateway is attached to the VPC:
 aws ec2 describe-internet-gateways
 ```
 
-### Instance has no internet access
+### Instance Has No Internet Access
 
 Check the VPC router's NAT rules (from the host):
 

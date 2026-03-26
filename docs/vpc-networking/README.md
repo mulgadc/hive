@@ -80,7 +80,7 @@ NIC. Each host runs `ovn-controller` which programs OpenFlow rules on `br-int`
 A subnet's behavior depends on two things: whether the VPC has an Internet
 Gateway, and whether the subnet has `MapPublicIpOnLaunch` enabled.
 
-## Private Subnet (default)
+## Private Subnet (Default)
 
 Instances get a private IP only. They can communicate with other instances in the
 same VPC (even across subnets and hosts via the overlay). They cannot reach the
@@ -195,19 +195,19 @@ is identical:
                           Two DHCP conversations (completely independent):
 
  ┌─────────────────────────────────────────────────────────────────────┐
- │ HOST ↔ ROUTER DHCP (on br-ext, via veth pair → br-wan)             │
- │   Spinifex asks router: "give me a public IP for this VM"          │
- │   Router responds: 192.168.1.75                                    │
- │   Spinifex stores IP, tells OVN: dnat_and_snat(192.168.1.75 ↔     │
- │                                                 172.31.0.4)        │
- │   (Only used in DHCP source mode. Static mode picks from range.)   │
+ │ HOST ↔ ROUTER DHCP (on br-ext, via veth pair → br-wan)              │
+ │   Spinifex asks router: "give me a public IP for this VM"           │
+ │   Router responds: 192.168.1.75                                     │
+ │   Spinifex stores IP, tells OVN: dnat_and_snat(192.168.1.75 ↔       │
+ │                                                 172.31.0.4)         │
+ │   (Only used in DHCP source mode. Static mode picks from range.)    │
  └─────────────────────────────────────────────────────────────────────┘
 
  ┌─────────────────────────────────────────────────────────────────────┐
- │ VM ↔ OVN DHCP (on tap → br-int → OVN logical switch)              │
- │   cloud-init asks: "what's my IP?"                                 │
- │   OVN DHCP responds: "you are 172.31.0.4"                         │
- │   VM never sees 192.168.1.x or the router                         │
+ │ VM ↔ OVN DHCP (on tap → br-int → OVN logical switch)                │
+ │   cloud-init asks: "what's my IP?"                                  │
+ │   OVN DHCP responds: "you are 172.31.0.4"                           │
+ │   VM never sees 192.168.1.x or the router                           │
  └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -250,7 +250,7 @@ gateway_ip = "192.168.1.100"     # Single IP for all VM outbound SNAT
 prefix_len = 24
 ```
 
-## Disabled (empty/omitted)
+## Disabled (Empty/Omitted)
 
 VPC networking is overlay-only. No external connectivity. Instances can only
 communicate within their VPC.
@@ -307,7 +307,7 @@ Spinifex supports two ways to wire `br-wan` to the physical network.
 **Direct bridge** is preferred when the host has a dedicated WAN NIC. **Macvlan**
 is the fallback for single-NIC hosts where the WAN NIC is also the SSH NIC.
 
-### Direct Bridge (preferred)
+### Direct Bridge (Preferred)
 
 The WAN NIC is added directly to `br-wan` as an OVS port. OVS sees all
 traffic on the wire — any MAC, any protocol. No filtering, no workarounds.
@@ -332,7 +332,7 @@ public NICs. Homelab hosts with 2+ NICs.
 sudo setup-ovn.sh --wan-bridge=br-wan --wan-iface=eth1
 ```
 
-### Macvlan (fallback for single-NIC)
+### Macvlan (Fallback for Single-NIC)
 
 A macvlan sub-interface is created in bridge mode off the WAN NIC, and that
 macvlan is added to br-wan. The host keeps its IP on the original NIC —
@@ -363,7 +363,7 @@ edge deployments. Adding the NIC directly to OVS would break host connectivity.
 sudo setup-ovn.sh --macvlan --wan-iface=eth0
 ```
 
-### Mode comparison
+### Mode Comparison
 
 | Capability | Direct bridge | Macvlan |
 |------------|--------------|---------|
@@ -375,7 +375,7 @@ sudo setup-ovn.sh --macvlan --wan-iface=eth0
 | Works on single-NIC | No (breaks SSH) | Yes |
 | DHCP lease stability | Clean | Fragile (MAC changes post-lease) |
 
-### How setup-ovn.sh decides
+### How setup-ovn.sh Decides
 
 | Flags | Result |
 |-------|--------|
@@ -383,7 +383,7 @@ sudo setup-ovn.sh --macvlan --wan-iface=eth0
 | `--macvlan --wan-iface=eth0` | Macvlan: sub-interface created, added to br-wan |
 | (no WAN bridge) | Only br-int created, no WAN connectivity |
 
-### Setup (macvlan mode)
+### Setup (Macvlan Mode)
 
 In environments where the WAN IP comes from a router's DHCP server (homelab,
 small office), add `--dhcp` to obtain a gateway IP from the router automatically:
@@ -396,7 +396,7 @@ This requests an IP from the **router's DHCP** (e.g., 192.168.1.1 serving
 addresses on the LAN). This is not Spinifex's internal OVN DHCP that assigns
 private IPs to VMs — it's your network's existing DHCP server.
 
-### macvlan internals
+### Macvlan Internals
 
 macvlan in `bridge` mode creates a virtual interface that shares the parent NIC's
 physical wire but has its own MAC address. The Linux kernel blocks direct L2
@@ -450,20 +450,20 @@ ip link show spx-ext-eth0
 ## Network Flow Diagram
 
 ```
-┌──────────────────────────────────────────────────┐
-│ Bare-Metal Host                                  │
-│                                                  │
-│  ┌──────────┐         ┌──────────┐               │
-│  │ br-int   │         │br-wan│              │
-│  │ (overlay)│         │  (WAN)   │               │
-│  │          │         │          │               │
-│  │ tap-eni1 │  OVN    │spx-ext-  │               │
-│  │ tap-eni2 ├──NAT───→│{nic}     │               │
-│  │ tap-eni3 │pipeline │(macvlan) │               │
-│  └──────────┘         └────┬─────┘               │
+┌───────────────────────────────────────────────────┐
+│ Bare-Metal Host                                   │
+│                                                   │
+│  ┌──────────┐         ┌──────────┐                │
+│  │ br-int   │         │br-wan.   │                │
+│  │ (overlay)│         │  (WAN)   │                │
+│  │          │         │          │                │
+│  │ tap-eni1 │  OVN    │spx-ext-  │                │
+│  │ tap-eni2 ├──NAT───→│{nic}     │                │
+│  │ tap-eni3 │pipeline │(macvlan) │                │
+│  └──────────┘         └────┬─────┘                │
 │                            │ macvlan bridge mode  │
 │                        WAN NIC (host IP unchanged)│
-└───────────────────────┼──────────────────────────┘
+└───────────────────────┼───────────────────────────┘
                         │
                    Physical WAN
 ```
@@ -981,12 +981,12 @@ aws ec2 describe-instances --instance-ids $INSTANCE \
 
 ## Troubleshooting
 
-## Debugging Toolkit
+### Debugging Toolkit
 
 These commands are used throughout the troubleshooting sections below. Learn
 them — they cover 90% of VPC networking issues.
 
-### OVN Northbound (logical topology)
+### OVN Northbound (Logical Topology)
 
 ```bash
 # Full topology overview (routers, switches, ports)
@@ -1096,7 +1096,7 @@ sudo cat /var/log/ovn/ovn-controller.log | tail -50
 cat ~/spinifex/logs/spinifex.log
 ```
 
-## VPC creation fails
+### VPC Creation Fails
 
 Check OVN services and vpcd daemon:
 
@@ -1105,7 +1105,7 @@ sudo systemctl is-active ovn-controller
 cat ~/spinifex/logs/vpcd.log
 ```
 
-## Instances cannot reach each other
+### Instances Cannot Reach Each Other
 
 Geneve tunnels may not be established:
 
@@ -1121,7 +1121,7 @@ ip addr show
 ip route show
 ```
 
-## Instance has no public IP
+### Instance Has No Public IP
 
 1. Check subnet has `MapPublicIpOnLaunch`:
    ```bash
@@ -1145,7 +1145,7 @@ ip route show
    sudo ovn-nbctl lr-nat-list vpc-$VPC
    ```
 
-## Public IP not reachable from WAN
+### Public IP Not Reachable from WAN
 
 Work through these checks in order — each eliminates a class of issues.
 
@@ -1240,7 +1240,7 @@ sudo ovn-trace --ct=new ext-vpc-{vpcId} \
 The output shows every table the packet passes through and what action is
 taken. Look for `drop` actions or unexpected paths.
 
-## OVN SB commit failure loop
+### OVN SB Commit Failure Loop
 
 **Symptom:** ovn-controller log shows:
 
@@ -1265,7 +1265,7 @@ sudo systemctl start ovn-central ovn-controller
 # vpcd reconcile will recreate the NB topology on next startup
 ```
 
-## Chassis name mismatch
+### Chassis Name Mismatch
 
 **Symptom:** Gateway chassis is set in NB but the SB has no matching chassis.
 `ovn-nbctl show` reports a gateway chassis name that doesn't appear in
@@ -1298,7 +1298,7 @@ sudo ovs-vsctl set Open_vSwitch . external_ids:system-id=chassis-node1
 sudo systemctl restart ovn-controller
 ```
 
-## Macvlan unicast filtering (inbound traffic lost)
+### Macvlan Unicast Filtering (Inbound Traffic Lost)
 
 **Symptom:** VM gets DHCP, outbound works (ping 8.8.8.8 from VM), but inbound
 from the LAN to the VM's public IP fails. ARP replies go out but ICMP never
@@ -1338,7 +1338,7 @@ sudo ovn-nbctl lr-nat-list vpc-{vpcId}
 # The dnat_and_snat row should have EMPTY external_mac and logical_port columns
 ```
 
-## Stale ARP on remote hosts
+### Stale ARP on Remote Hosts
 
 **Symptom:** Ping from a LAN host to a VM public IP fails after a reset, but
 worked before. The remote host has a stale ARP entry with the old MAC.
@@ -1354,7 +1354,7 @@ ping {public_ip}   # should work now
 OVN's `nat-addresses=router` option sends periodic gratuitous ARPs that will
 eventually update remote ARP caches, but flushing is faster for testing.
 
-## Security group rules not taking effect
+### Security Group Rules Not Taking Effect
 
 ```bash
 # Check port is in correct port group

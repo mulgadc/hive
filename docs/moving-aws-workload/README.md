@@ -6,7 +6,6 @@ tags:
   - migration
   - aws
   - terraform
-badge: new
 resources:
   - title: "Spinifex Repository"
     url: "https://github.com/mulgadc/spinifex"
@@ -73,7 +72,7 @@ aws s3 sync s3://local-bucket/ s3://cloud-bucket/ --source-region spinifex --reg
 
 ## Troubleshooting
 
-## Terraform provider errors
+## Terraform Provider Errors
 
 Ensure all three skip flags are set in your provider configuration:
 
@@ -85,7 +84,7 @@ skip_requesting_account_id  = true
 
 Without these, Terraform will try to validate credentials and metadata against real AWS endpoints.
 
-## S3 signature errors
+## S3 Signature Errors
 
 Spinifex uses AWS Signature V4. Ensure your AWS CLI is version 2.0 or higher:
 

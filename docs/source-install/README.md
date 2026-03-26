@@ -6,7 +6,6 @@ tags:
   - install
   - source
   - development
-badge: source
 resources:
   - title: "Spinifex Repository"
     url: "https://github.com/mulgadc/spinifex"
@@ -39,7 +38,7 @@ This guide builds Spinifex from source. For production deployments, the [binary 
 
 ## Instructions
 
-### Step 1. Install dependencies
+## Step 1. Install Dependencies
 
 ```bash
 mkdir -p ~/Development/mulga && cd ~/Development/mulga
@@ -48,7 +47,7 @@ sudo make -C spinifex quickinstall
 export PATH=$PATH:/usr/local/go/bin
 ```
 
-### Step 2. Clone and build
+## Step 2. Clone and Build
 
 ```bash
 cd spinifex
@@ -58,22 +57,15 @@ cd spinifex
 
 Confirm `./bin/spx` exists.
 
-### Step 3. Initialize
+## Step 3. Initialize
 
 ```bash
-./bin/spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
+sudo ./bin/spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
 ```
 
 Save the admin credentials printed during init.
 
-### Step 4. Trust the CA certificate
-
-```bash
-sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
-sudo update-ca-certificates
-```
-
-### Step 5. Setup OVN
+## Step 4. Setup OVN
 
 If your WAN interface is already a bridge (e.g. `br-wan`), setup-ovn.sh auto-detects it:
 
@@ -91,16 +83,16 @@ If your WAN is a physical NIC, choose one:
 ./scripts/setup-ovn.sh --management --macvlan --wan-iface=enp0s3
 ```
 
-### Step 6. Start services
+## Step 5. Start Services
 
 ```bash
 ./scripts/start-dev.sh
-export AWS_PROFILE=spinifex
 ```
 
-### Step 7. Verify
+## Step 6. Verify
 
 ```bash
+export AWS_PROFILE=spinifex
 aws ec2 describe-instance-types
 ```
 
@@ -110,23 +102,21 @@ If this returns a list of available instance types, your installation is working
 
 Continue to [Setting Up Your Cluster](/docs/setting-up-your-cluster) to import an AMI, create a VPC, and launch your first instance.
 
----
-
 ## Troubleshooting
 
-### Go not found in PATH
+### Go Not Found in PATH
 
 ```bash
 export PATH=$PATH:/usr/local/go/bin
 ```
 
-### ./bin/spx missing after build
+### ./bin/spx Missing After Build
 
 ```bash
 ./scripts/dev-setup.sh
 ```
 
-### CA certificate not trusted
+### CA Certificate Not Trusted
 
 ```bash
 sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt

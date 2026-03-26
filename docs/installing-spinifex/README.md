@@ -6,7 +6,6 @@ tags:
   - install
   - single node
   - quickstart
-badge: quickstart
 resources:
   - title: "Spinifex Repository"
     url: "https://github.com/mulgadc/spinifex"
@@ -50,7 +49,7 @@ This guide installs Spinifex on a single server using the binary installer. For 
 
 ## Instructions
 
-### Step 1. Install Spinifex
+## Step 1. Install Spinifex
 
 ```bash
 curl https://install.mulgadc.com | bash
@@ -58,7 +57,7 @@ curl https://install.mulgadc.com | bash
 
 The installer downloads the Spinifex binary and bootstraps all dependencies (QEMU, OVN/OVS, AWS CLI).
 
-### Step 2. Setup OVN networking
+## Step 2. Setup OVN Networking
 
 If your WAN interface is already a bridge (e.g. `br-wan`), setup-ovn.sh auto-detects it:
 
@@ -76,7 +75,7 @@ sudo /usr/local/share/spinifex/setup-ovn.sh --management --wan-bridge=br-wan --w
 sudo /usr/local/share/spinifex/setup-ovn.sh --management --macvlan --wan-iface=enp0s3
 ```
 
-### Step 3. Initialize
+## Step 3. Initialize
 
 ```bash
 sudo spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
@@ -84,13 +83,13 @@ sudo spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --
 
 This auto-detects your network topology, generates configuration and TLS certificates, installs the CA into the system trust store, and configures AWS CLI credentials. Save the admin credentials printed during init — they will not be shown again.
 
-### Step 4. Start services
+## Step 4. Start Services
 
 ```bash
 sudo systemctl start spinifex.target
 ```
 
-### Step 5. Verify
+## Step 5. Verify
 
 ```bash
 export AWS_PROFILE=spinifex
@@ -103,17 +102,15 @@ If this returns a list of available instance types, your installation is working
 
 Continue to [Setting Up Your Cluster](/docs/setting-up-your-cluster) to import an AMI, create a VPC, and launch your first instance.
 
----
-
 ## Troubleshooting
 
-### spx command not found
+### spx Command Not Found
 
 ```bash
 export PATH=$PATH:/usr/local/bin
 ```
 
-### CA certificate not trusted
+### CA Certificate Not Trusted
 
 `sudo spx admin init` installs the CA automatically. If you need to re-install it manually:
 
@@ -122,7 +119,7 @@ sudo cp /etc/spinifex/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
 sudo update-ca-certificates
 ```
 
-### OVN services not starting
+### OVN Services Not Starting
 
 ```bash
 sudo systemctl is-active ovn-controller

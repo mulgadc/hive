@@ -6,7 +6,6 @@ tags:
   - install
   - multi node
   - cluster
-badge: availability-zone
 resources:
   - title: "Spinifex Repository"
     url: "https://github.com/mulgadc/spinifex"
@@ -40,13 +39,13 @@ A Spinifex cluster distributes services across multiple servers for high availab
 
 ## Instructions
 
-### Step 1. Install Spinifex on each server
+## Step 1. Install Spinifex on Each Server
 
 ```bash
 curl https://install.mulgadc.com | bash
 ```
 
-### Step 2. Set node IP variables
+## Step 2. Set Node IP Variables
 
 On **each server**, export the management IPs for all nodes:
 
@@ -58,7 +57,7 @@ export AWS_REGION=us-east-1
 export AWS_AZ=us-east-1a
 ```
 
-### Step 3. Setup OVN networking
+## Step 3. Setup OVN Networking
 
 Server 1 runs OVN central and must be set up first. If your WAN interface is already a bridge (e.g. `br-wan`), setup-ovn.sh auto-detects it. Otherwise use `--wan-bridge=br-wan --wan-iface=eth1` (dedicated WAN NIC) or `--macvlan --wan-iface=eth0` (single-NIC).
 
@@ -92,7 +91,7 @@ Verify all 3 chassis registered:
 sudo ovn-sbctl show
 ```
 
-### Step 4. Form the cluster
+## Step 4. Form the Cluster
 
 Run init and join concurrently — init blocks until all nodes join.
 
@@ -123,29 +122,20 @@ sudo spx admin join \
   --host $SPINIFEX_NODE1:4432 --region $AWS_REGION --az $AWS_AZ
 ```
 
-### Step 5. Trust the CA certificate
-
-On **each server**:
-
-```bash
-sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
-sudo update-ca-certificates
-```
-
-### Step 6. Start services
+## Step 5. Start Services
 
 On **all servers**:
 
 ```bash
 sudo systemctl start spinifex.target
-export AWS_PROFILE=spinifex
 ```
 
-### Step 7. Verify
+## Step 6. Verify
 
 From any node:
 
 ```bash
+export AWS_PROFILE=spinifex
 aws ec2 describe-instance-types
 ```
 
@@ -155,11 +145,9 @@ If this returns a list of available instance types, your cluster is working.
 
 Continue to [Setting Up Your Cluster](/docs/setting-up-your-cluster) to import an AMI, create a VPC, and launch your first instance.
 
----
-
 ## Troubleshooting
 
-### Nodes not joining
+### Nodes Not Joining
 
 The init command must still be running when join executes. If init exited, re-run with `--force`.
 
@@ -167,21 +155,21 @@ The init command must still be running when join executes. If init exited, re-ru
 curl -s http://$SPINIFEX_NODE1:4432/health
 ```
 
-### OVN chassis not registering
+### OVN Chassis Not Registering
 
 ```bash
 sudo ovn-sbctl show
 sudo ss -tlnp | grep 6642
 ```
 
-### CA certificate not trusted
+### CA Certificate Not Trusted
 
 ```bash
 sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
 sudo update-ca-certificates
 ```
 
-### Cross-host VMs cannot communicate
+### Cross-Host VMs Cannot Communicate
 
 ```bash
 sudo ovs-vsctl show | grep -i geneve

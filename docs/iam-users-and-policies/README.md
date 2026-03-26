@@ -8,7 +8,6 @@ tags:
   - policies
   - access keys
   - security
-badge: setup
 resources:
   - title: "Spinifex Repository"
     url: "https://github.com/mulgadc/spinifex"
@@ -475,7 +474,7 @@ AWS_PROFILE=spinifex-carol aws ec2 terminate-instances --instance-ids i-123
 
 ## Troubleshooting
 
-### AccessDenied on IAM commands
+### AccessDenied on IAM Commands
 
 The calling user must have IAM permissions. Attach a policy with `iam:*` actions, or use the root account profile:
 
@@ -501,7 +500,7 @@ aws iam update-access-key --user-name alice \
 
 If the key was deleted, create a new one.
 
-### DeleteConflict when deleting a user
+### DeleteConflict When Deleting a User
 
 The user still has access keys or attached policies. Remove them first:
 
@@ -513,7 +512,7 @@ aws iam list-access-keys --user-name alice
 aws iam list-attached-user-policies --user-name alice
 ```
 
-### DeleteConflict when deleting a policy
+### DeleteConflict When Deleting a Policy
 
 The policy is still attached to one or more users. Detach it from all users before deleting:
 
@@ -526,7 +525,7 @@ aws iam delete-policy \
   --policy-arn arn:aws:iam::000000000001:policy/MyPolicy
 ```
 
-### LimitExceeded when creating access keys
+### LimitExceeded When Creating Access Keys
 
 Each user can have at most 2 access keys. Delete an existing key before creating a new one:
 

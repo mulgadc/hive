@@ -69,7 +69,7 @@ ssh -i ~/.ssh/spinifex-key ec2-user@127.0.0.1 -p <port>
 
 ## Troubleshooting
 
-## Instance fails to boot
+### Instance Fails to Boot
 
 Check QEMU logs for the instance and verify the AMI architecture matches your host:
 
@@ -85,7 +85,7 @@ If the AMI is for a different architecture (e.g. arm64 on an x86_64 host), impor
 ./bin/spx admin images import --name debian-12-x86_64
 ```
 
-## Cannot SSH into instance
+### Cannot SSH Into Instance
 
 cloud-init needs time to configure the instance after boot. Wait 30-60 seconds and retry.
 

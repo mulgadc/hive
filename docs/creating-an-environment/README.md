@@ -30,16 +30,6 @@ resources:
 
 This guide walks through the complete workflow for creating a production-ready Spinifex environment.
 
-**Steps:**
-
-1. Create a user account
-2. Import or create SSH keys
-3. Create a VPC and subnet
-4. Select and import an AMI
-5. Launch EC2 instances
-6. Connect via SSH
-7. Monitor instance health
-
 ## Instructions
 
 ## 1. Import SSH Key
@@ -88,7 +78,7 @@ ssh -i ~/.ssh/spinifex-key ec2-user@127.0.0.1 -p <port>
 
 ## Troubleshooting
 
-## Instance stuck in pending
+## Instance Stuck in Pending
 
 Check the Spinifex daemon and QEMU logs for boot errors:
 
@@ -103,7 +93,7 @@ Verify the AMI exists and architecture matches your host:
 aws ec2 describe-images --image-ids $SPINIFEX_AMI
 ```
 
-## SSH connection refused
+## SSH Connection Refused
 
 cloud-init takes 30-60 seconds to configure networking and SSH after boot. Wait and retry.
 

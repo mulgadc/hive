@@ -51,7 +51,7 @@ rsync -avz /data/ user@cloud-server:/backup/spinifex-data/
 
 ## Troubleshooting
 
-## Sync fails mid-transfer
+## Sync Fails Mid Transfer
 
 S3 sync is idempotent — re-run the same command to resume where it left off:
 
@@ -62,7 +62,7 @@ aws s3 sync s3://local-bucket/ s3://cloud-bucket/ \
 
 Only changed or missing files will be transferred on subsequent runs.
 
-## Permissions errors during sync
+## Permission Errors During Sync
 
 Verify your AWS credentials are configured for both the source and destination:
 
