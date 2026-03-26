@@ -19,6 +19,7 @@ import (
 	gateway_ec2_image "github.com/mulgadc/spinifex/spinifex/gateway/ec2/image"
 	gateway_ec2_instance "github.com/mulgadc/spinifex/spinifex/gateway/ec2/instance"
 	gateway_ec2_key "github.com/mulgadc/spinifex/spinifex/gateway/ec2/key"
+	gateway_ec2_natgw "github.com/mulgadc/spinifex/spinifex/gateway/ec2/natgw"
 	gateway_ec2_placementgroup "github.com/mulgadc/spinifex/spinifex/gateway/ec2/placementgroup"
 	gateway_ec2_routetable "github.com/mulgadc/spinifex/spinifex/gateway/ec2/routetable"
 	gateway_ec2_snapshot "github.com/mulgadc/spinifex/spinifex/gateway/ec2/snapshot"
@@ -316,6 +317,15 @@ var ec2Actions = map[string]EC2Handler{
 	}),
 	"DescribeAddresses": ec2Handler(func(input *ec2.DescribeAddressesInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_eip.DescribeAddresses(input, gw.NATSConn, accountID)
+	}),
+	"CreateNatGateway": ec2Handler(func(input *ec2.CreateNatGatewayInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_natgw.CreateNatGateway(input, gw.NATSConn, accountID)
+	}),
+	"DeleteNatGateway": ec2Handler(func(input *ec2.DeleteNatGatewayInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_natgw.DeleteNatGateway(input, gw.NATSConn, accountID)
+	}),
+	"DescribeNatGateways": ec2Handler(func(input *ec2.DescribeNatGatewaysInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_natgw.DescribeNatGateways(input, gw.NATSConn, accountID)
 	}),
 }
 
