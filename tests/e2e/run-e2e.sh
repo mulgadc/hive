@@ -2595,6 +2595,126 @@ echo "  EC2 account scoping cleanup complete"
 echo ""
 echo "Phase 8: EC2 Account Scoping PASSED"
 
+# Phase 8c: Route Table Validation
+echo ""
+echo "Phase 8c: Route Table Validation"
+echo "========================================"
+
+# Step 1: Default VPC has a main route table with local + IGW routes
+echo "Step 1: Verify default VPC main route table"
+RTB_DEFAULT_VPC=$(aws ec2 describe-vpcs --query 'Vpcs[?IsDefault==`true`].VpcId | [0]' --output text)
+if [ -z "$RTB_DEFAULT_VPC" ] || [ "$RTB_DEFAULT_VPC" = "None" ]; then
+    echo "SKIP: No default VPC found"
+else
+    MAIN_RTB=$(aws ec2 describe-route-tables \
+        --filters "Name=vpc-id,Values=$RTB_DEFAULT_VPC" "Name=association.main,Values=true" \
+        --query 'RouteTables[0].RouteTableId' --output text)
+    if [ -z "$MAIN_RTB" ] || [ "$MAIN_RTB" = "None" ]; then
+        echo "FAIL: No main route table found for default VPC $RTB_DEFAULT_VPC"
+        exit 1
+    fi
+    echo "  Main route table: $MAIN_RTB"
+
+    # Verify local route exists
+    LOCAL_ROUTE=$(aws ec2 describe-route-tables --route-table-ids "$MAIN_RTB" \
+        --query 'RouteTables[0].Routes[?GatewayId==`local`].DestinationCidrBlock | [0]' --output text)
+    if [ -z "$LOCAL_ROUTE" ] || [ "$LOCAL_ROUTE" = "None" ]; then
+        echo "FAIL: Main route table missing local route"
+        exit 1
+    fi
+    echo "  Local route: $LOCAL_ROUTE → local"
+
+    # Verify IGW route exists
+    IGW_ROUTE=$(aws ec2 describe-route-tables --route-table-ids "$MAIN_RTB" \
+        --query 'RouteTables[0].Routes[?DestinationCidrBlock==`0.0.0.0/0`].GatewayId | [0]' --output text)
+    if [ -z "$IGW_ROUTE" ] || [ "$IGW_ROUTE" = "None" ]; then
+        echo "FAIL: Main route table missing 0.0.0.0/0 → IGW route"
+        exit 1
+    fi
+    echo "  Default route: 0.0.0.0/0 → $IGW_ROUTE"
+    echo "  PASS: Default VPC main route table verified"
+fi
+
+# Step 2: Custom route table lifecycle
+echo ""
+echo "Step 2: Custom route table CRUD lifecycle"
+RTB_VPC=$RTB_DEFAULT_VPC
+
+# Create custom route table
+CUSTOM_RTB=$(aws ec2 create-route-table --vpc-id "$RTB_VPC" \
+    --query 'RouteTable.RouteTableId' --output text)
+echo "  Created: $CUSTOM_RTB"
+
+# Verify local route present
+CUSTOM_LOCAL=$(aws ec2 describe-route-tables --route-table-ids "$CUSTOM_RTB" \
+    --query 'RouteTables[0].Routes[?GatewayId==`local`].DestinationCidrBlock | [0]' --output text)
+if [ -z "$CUSTOM_LOCAL" ] || [ "$CUSTOM_LOCAL" = "None" ]; then
+    echo "FAIL: Custom route table missing local route"
+    exit 1
+fi
+echo "  Local route present: $CUSTOM_LOCAL"
+
+# Find attached IGW for this VPC
+RTB_IGW=$(aws ec2 describe-internet-gateways \
+    --filters "Name=attachment.vpc-id,Values=$RTB_VPC" \
+    --query 'InternetGateways[0].InternetGatewayId' --output text)
+
+# Add IGW route
+aws ec2 create-route --route-table-id "$CUSTOM_RTB" \
+    --destination-cidr-block 0.0.0.0/0 --gateway-id "$RTB_IGW" > /dev/null
+echo "  Added route: 0.0.0.0/0 → $RTB_IGW"
+
+# Find default subnet
+RTB_SUBNET=$(aws ec2 describe-subnets \
+    --filters "Name=vpc-id,Values=$RTB_VPC" "Name=default-for-az,Values=true" \
+    --query 'Subnets[0].SubnetId' --output text)
+
+# Associate with default subnet
+RTB_ASSOC=$(aws ec2 associate-route-table --route-table-id "$CUSTOM_RTB" \
+    --subnet-id "$RTB_SUBNET" --query 'AssociationId' --output text)
+echo "  Associated: $RTB_ASSOC ($RTB_SUBNET → $CUSTOM_RTB)"
+
+# Disassociate
+aws ec2 disassociate-route-table --association-id "$RTB_ASSOC"
+echo "  Disassociated: $RTB_ASSOC"
+
+# Delete route, then table
+aws ec2 delete-route --route-table-id "$CUSTOM_RTB" --destination-cidr-block 0.0.0.0/0
+echo "  Deleted route: 0.0.0.0/0"
+aws ec2 delete-route-table --route-table-id "$CUSTOM_RTB"
+echo "  Deleted route table: $CUSTOM_RTB"
+echo "  PASS: Custom route table lifecycle complete"
+
+# Step 3: Error paths
+echo ""
+echo "Step 3: Route table error paths"
+
+# Create a temporary route table for error testing
+ERR_RTB=$(aws ec2 create-route-table --vpc-id "$RTB_VPC" \
+    --query 'RouteTable.RouteTableId' --output text)
+
+# Cannot delete local route
+if aws ec2 delete-route --route-table-id "$ERR_RTB" \
+    --destination-cidr-block "$CUSTOM_LOCAL" 2>/dev/null; then
+    echo "FAIL: Should not be able to delete local route"
+    exit 1
+fi
+echo "  PASS: Delete local route correctly rejected"
+
+# Cannot delete main route table
+if aws ec2 delete-route-table --route-table-id "$MAIN_RTB" 2>/dev/null; then
+    echo "FAIL: Should not be able to delete main route table"
+    exit 1
+fi
+echo "  PASS: Delete main route table correctly rejected"
+
+# Cleanup
+aws ec2 delete-route-table --route-table-id "$ERR_RTB"
+echo "  Cleanup: deleted $ERR_RTB"
+
+echo ""
+echo "Phase 8c: Route Table Validation PASSED"
+
 # Phase 8b: VPC Public/Private Subnet E2E
 echo ""
 echo "Phase 8b: VPC Public/Private Subnet E2E"
