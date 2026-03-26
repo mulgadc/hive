@@ -37,7 +37,7 @@ jobs:
         run: cd spinifex && make distro-amd64 VERSION="$VERSION"
 
       - name: Upload amd64 Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: distro-amd64
           path: |
@@ -74,7 +74,7 @@ jobs:
         run: cd spinifex && make distro-arm64 VERSION="$VERSION"
 
       - name: Upload arm64 Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: distro-arm64
           path: |
@@ -86,13 +86,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download amd64 Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: distro-amd64
           path: artifacts
 
       - name: Download arm64 Artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: distro-arm64
           path: artifacts
@@ -108,7 +108,7 @@ jobs:
           generate_release_notes: true
 
       - name: Upload Tarball for Verify Job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-assets
           path: artifacts/
@@ -140,7 +140,7 @@ jobs:
           path: mulga
 
       - name: Download Release Assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: release-assets
           path: release-assets
