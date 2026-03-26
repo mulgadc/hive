@@ -63,6 +63,10 @@ go_build:
 	@echo -e "\n....Building $(GO_PROJECT_NAME)"
 	go build $(GO_BUILD_MOD) -ldflags "$(LDFLAGS)" -o ./bin/$(GO_PROJECT_NAME) cmd/spinifex/main.go
 
+build-alb-agent:
+	@echo -e "\n....Building alb-agent (static)"
+	CGO_ENABLED=0 go build -ldflags "-s -w" -o ./bin/alb-agent cmd/alb-agent/main.go
+
 go_run:
 	@echo -e "\n....Running $(GO_PROJECT_NAME)...."
 	$(GOPATH)/bin/$(GO_PROJECT_NAME)
@@ -194,7 +198,7 @@ distro-arm64:
 distro-clean:
 	rm -rf dist/
 
-.PHONY: build build-ui go_build go_run preflight test test-cover test-race diff-coverage bench run clean \
+.PHONY: build build-ui build-alb-agent go_build go_run preflight test test-cover test-race diff-coverage bench run clean \
 	install-system install-go install-aws quickinstall \
 	lint fix govulncheck \
 	distro distro-amd64 distro-arm64 distro-clean

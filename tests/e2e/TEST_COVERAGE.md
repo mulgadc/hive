@@ -674,3 +674,114 @@ Standalone VPC networking test suite. Runs against a running Spinifex endpoint (
 - `delete-subnet`
 - `delete-vpc`
 - Verify OVN cleanup (no VPC routers remaining, when OVN available)
+
+---
+
+## ELBv2 / ALB (`run-elbv2-e2e.sh`)
+
+Standalone ELBv2 (Application Load Balancer) E2E test suite. Requires VPC networking
+for ALB ENI creation. Configurable endpoint via `ENDPOINT` env var.
+
+### Phase 0: VPC + Subnet Setup
+- `create-vpc` (10.200.0.0/16, prerequisite for ALB)
+- `create-subnet` (10.200.1.0/24)
+
+### Phase 1: Target Group CRUD
+- `create-target-group` (HTTP, port 80, verify health check defaults)
+- `describe-target-groups` (by ARN, verify single result)
+- `create-target-group` (second TG, port 8080)
+- `describe-target-groups` (all, verify >= 2)
+- Duplicate name detection (same name → error)
+
+### Phase 2: Target Registration
+- `register-targets` (2 fake instances)
+- `describe-target-health` (verify 2 targets, initial state)
+- `deregister-targets` (remove 1 target)
+- `describe-target-health` (verify 1 target remains)
+
+### Phase 3: Load Balancer CRUD
+- `create-load-balancer` (ALB with subnet)
+- Verify fields: type=application, state=active, DNS name, scheme=internet-facing
+- Verify ENIs created (describe-network-interfaces with ELB filter)
+- `describe-load-balancers` (by ARN, verify single result)
+- Duplicate name detection (same name → error)
+
+### Phase 4: Listener CRUD
+- `create-listener` (port 80, forward to TG)
+- Verify fields: port=80, protocol=HTTP
+- `describe-listeners` (by LB ARN, verify single result)
+- Duplicate port detection (same port → error)
+
+### Phase 5: In-Use Protection
+- `delete-target-group` while referenced by listener → error (ResourceInUse)
+
+### Phase 6: Listener Deletion
+- `delete-listener`
+- Verify 0 listeners remain
+- `delete-target-group` (now succeeds after listener removed)
+
+### Phase 7: Load Balancer Deletion
+- `delete-load-balancer`
+- Verify ALB gone from describe
+- Verify ENIs cleaned up
+- `delete-target-group` (second TG)
+
+### Phase 8: Error Path Tests
+- Describe non-existent ALB → empty result
+- Delete non-existent ALB → error
+- Delete non-existent TG → error
+- Create TG without name → error
+- Create listener on non-existent ALB → error
+
+---
+
+## ELBv2 / ALB Data Plane (`run-elbv2-dataplane-e2e.sh`)
+
+Data plane test that verifies ALBs actually balance HTTP traffic across instances.
+Requires VPC networking (OVN), HAProxy on daemon node, and imported AMI. Designed
+for pseudo-multinode or real multi-node environments.
+
+### Phase 0: Prerequisites
+- Discover nano instance type
+- Discover AMI (must be pre-imported)
+
+### Phase 1: VPC + Subnet Setup
+- `create-vpc` (10.201.0.0/16)
+- `create-subnet` (10.201.1.0/24)
+
+### Phase 2: Launch Instances
+- `run-instances` x2 with cloud-init HTTP responder (Python http.server on port 80)
+- Cloud-init serves `{"instance_id": "<hostname>"}` on each instance
+- Poll both instances to running state
+- Verify both have `PrivateIpAddress` assigned
+
+### Phase 3: Target Group + Registration
+- `create-target-group` (HTTP, port 80, health check on /index.html, 5s interval)
+- `register-targets` (both instances)
+
+### Phase 4: ALB + Listener
+- `create-load-balancer` (ALB with subnet)
+- Resolve ALB ENI private IP (via describe-network-interfaces)
+- `create-listener` (port 80, forward to target group)
+
+### Phase 5: Wait for Target Health
+- Poll `describe-target-health` until both targets healthy (120s timeout)
+- Continue even if targets stay in "initial" (HAProxy may still forward)
+
+### Phase 6: Traffic Balancing — Round Robin
+- `curl` ALB ENI IP 20 times, parse `instance_id` from JSON response
+- Verify responses contain BOTH instance IDs (round-robin distribution)
+- Verify success rate >= 50%
+
+### Phase 7: Single Target After Deregister
+- `deregister-targets` (remove second instance)
+- Wait for HAProxy reload (3s)
+- `curl` ALB 20 times
+- Verify ONLY the remaining instance responds
+- Verify success rate >= 50%
+
+### Phase 8: Re-register + Recovery
+- `register-targets` (re-add deregistered instance)
+- Wait for HAProxy reload (5s)
+- `curl` ALB 20 times
+- Verify BOTH instances responding again

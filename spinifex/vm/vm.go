@@ -79,6 +79,11 @@ type VM struct {
 	// Placement group tracking (set during RunInstances when a placement group is specified)
 	PlacementGroupName string `json:"placement_group_name,omitempty"`
 	PlacementGroupNode string `json:"placement_group_node,omitempty"`
+
+	// ExtraHostfwdPorts lists additional guest ports to forward from the host
+	// via the QEMU user-mode dev NIC. Used by ALB VMs to expose HTTP ports.
+	// Maps guest port → host port (host port filled in by StartInstance).
+	ExtraHostfwd map[int]int `json:"extra_hostfwd,omitempty"`
 }
 
 // ResetNodeLocalState zeroes out fields that are specific to the daemon node

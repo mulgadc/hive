@@ -432,6 +432,24 @@ var (
 	ErrorIAMInvalidInput            = ErrorInvalidInput // alias for IAM usage
 	ErrorIAMMalformedPolicyDocument = "MalformedPolicyDocument"
 	ErrorAccessDenied               = "AccessDenied"
+
+	// ELBv2-specific error codes
+	ErrorELBv2LoadBalancerNotFound  = "LoadBalancerNotFound"
+	ErrorELBv2TargetGroupNotFound   = "TargetGroupNotFound"
+	ErrorELBv2ListenerNotFound      = "ListenerNotFound"
+	ErrorELBv2DuplicateLoadBalancer = "DuplicateLoadBalancerName"
+	ErrorELBv2DuplicateTargetGroup  = "DuplicateTargetGroupName"
+	ErrorELBv2DuplicateListener     = "DuplicateListener"
+	ErrorELBv2TooManyLoadBalancers  = "TooManyLoadBalancers"
+	ErrorELBv2TooManyTargetGroups   = "TooManyTargetGroups"
+	ErrorELBv2TooManyListeners      = "TooManyListeners"
+	ErrorELBv2TooManyTargets        = "TooManyRegistrationsForTargetId"
+	ErrorELBv2InvalidTarget         = "InvalidTarget"
+	ErrorELBv2TargetGroupInUse      = "ResourceInUse"
+	ErrorELBv2InvalidSecurityGroup  = "InvalidSecurityGroup"
+	ErrorELBv2InvalidScheme         = "InvalidScheme"
+	ErrorELBv2SubnetNotFound        = "SubnetNotFound"
+	ErrorELBv2AvailabilityZoneNotSupported = "AvailabilityZoneNotSupported"
 )
 
 // ValidErrorCode returns the error code if it exists in ErrorLookup,
@@ -870,4 +888,22 @@ var ErrorLookup = map[string]ErrorMessage{
 	ErrorIAMLimitExceeded:           {HTTPCode: 409, Message: "The request was rejected because it attempted to create resources beyond the current AWS account limits."},
 	ErrorIAMMalformedPolicyDocument: {HTTPCode: 400, Message: "The policy document is malformed."},
 	ErrorAccessDenied:               {HTTPCode: 403, Message: "User is not authorized to perform this action."},
+
+	// ELBv2 error codes
+	ErrorELBv2LoadBalancerNotFound:  {HTTPCode: 400, Message: "One or more load balancers not found."},
+	ErrorELBv2TargetGroupNotFound:   {HTTPCode: 400, Message: "One or more target groups not found."},
+	ErrorELBv2ListenerNotFound:      {HTTPCode: 400, Message: "One or more listeners not found."},
+	ErrorELBv2DuplicateLoadBalancer: {HTTPCode: 400, Message: "A load balancer with the same name already exists."},
+	ErrorELBv2DuplicateTargetGroup:  {HTTPCode: 400, Message: "A target group with the same name already exists."},
+	ErrorELBv2DuplicateListener:     {HTTPCode: 400, Message: "A listener with the specified port already exists on this load balancer."},
+	ErrorELBv2TooManyLoadBalancers:  {HTTPCode: 400, Message: "You've reached the limit on the number of load balancers for your account."},
+	ErrorELBv2TooManyTargetGroups:   {HTTPCode: 400, Message: "You've reached the limit on the number of target groups for your account."},
+	ErrorELBv2TooManyListeners:      {HTTPCode: 400, Message: "You've reached the limit on the number of listeners per load balancer."},
+	ErrorELBv2TooManyTargets:        {HTTPCode: 400, Message: "You've reached the limit on the number of times a target can be registered with a target group."},
+	ErrorELBv2InvalidTarget:         {HTTPCode: 400, Message: "The specified target does not exist, is not in the same VPC as the target group, or has an unsupported instance type."},
+	ErrorELBv2TargetGroupInUse:      {HTTPCode: 400, Message: "The target group is currently in use by a listener or rule."},
+	ErrorELBv2InvalidSecurityGroup:  {HTTPCode: 400, Message: "The specified security group does not exist."},
+	ErrorELBv2InvalidScheme:         {HTTPCode: 400, Message: "The specified scheme is not valid. Specify 'internet-facing' or 'internal'."},
+	ErrorELBv2SubnetNotFound:        {HTTPCode: 400, Message: "The specified subnet does not exist."},
+	ErrorELBv2AvailabilityZoneNotSupported: {HTTPCode: 400, Message: "The specified Availability Zone is not supported."},
 }

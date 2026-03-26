@@ -433,6 +433,23 @@ func TestErrorLookup(t *testing.T) {
 		{code: "LimitExceeded", http: 409, message: "The request was rejected because it attempted to create resources beyond the current AWS account limits."},
 		{code: "MalformedPolicyDocument", http: 400, message: "The policy document is malformed."},
 		{code: "AccessDenied", http: 403, message: "User is not authorized to perform this action."},
+		// ELBv2 error codes
+		{code: "LoadBalancerNotFound", http: 400, message: "One or more load balancers not found."},
+		{code: "TargetGroupNotFound", http: 400, message: "One or more target groups not found."},
+		{code: "ListenerNotFound", http: 400, message: "One or more listeners not found."},
+		{code: "DuplicateLoadBalancerName", http: 400, message: "A load balancer with the same name already exists."},
+		{code: "DuplicateTargetGroupName", http: 400, message: "A target group with the same name already exists."},
+		{code: "DuplicateListener", http: 400, message: "A listener with the specified port already exists on this load balancer."},
+		{code: "TooManyLoadBalancers", http: 400, message: "You've reached the limit on the number of load balancers for your account."},
+		{code: "TooManyTargetGroups", http: 400, message: "You've reached the limit on the number of target groups for your account."},
+		{code: "TooManyListeners", http: 400, message: "You've reached the limit on the number of listeners per load balancer."},
+		{code: "TooManyRegistrationsForTargetId", http: 400, message: "You've reached the limit on the number of times a target can be registered with a target group."},
+		{code: "InvalidTarget", http: 400, message: "The specified target does not exist, is not in the same VPC as the target group, or has an unsupported instance type."},
+		{code: "ResourceInUse", http: 400, message: "The target group is currently in use by a listener or rule."},
+		{code: "InvalidSecurityGroup", http: 400, message: "The specified security group does not exist."},
+		{code: "InvalidScheme", http: 400, message: "The specified scheme is not valid. Specify 'internet-facing' or 'internal'."},
+		{code: "SubnetNotFound", http: 400, message: "The specified subnet does not exist."},
+		{code: "AvailabilityZoneNotSupported", http: 400, message: "The specified Availability Zone is not supported."},
 	}
 
 	if len(ErrorLookup) != len(expected) {

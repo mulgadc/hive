@@ -45,6 +45,7 @@ import (
 	handlers_ec2_tags "github.com/mulgadc/spinifex/spinifex/handlers/ec2/tags"
 	handlers_ec2_volume "github.com/mulgadc/spinifex/spinifex/handlers/ec2/volume"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
+	handlers_elbv2 "github.com/mulgadc/spinifex/spinifex/handlers/elbv2"
 	"github.com/mulgadc/spinifex/spinifex/instancetypes"
 	"github.com/mulgadc/spinifex/spinifex/objectstore"
 	"github.com/mulgadc/spinifex/spinifex/qmp"
@@ -113,6 +114,7 @@ type Daemon struct {
 	placementGroupService *handlers_ec2_placementgroup.PlacementGroupServiceImpl
 	vpcService            *handlers_ec2_vpc.VPCServiceImpl
 	eipService            *handlers_ec2_eip.EIPServiceImpl
+	elbv2Service          *handlers_elbv2.ELBv2ServiceImpl
 	routeTableService     *handlers_ec2_routetable.RouteTableServiceImpl
 	natGatewayService     *handlers_ec2_natgw.NatGatewayServiceImpl
 	externalIPAM          *handlers_ec2_vpc.ExternalIPAM
@@ -453,6 +455,19 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.GetSerialConsoleAccessStatus", d.handleEC2GetSerialConsoleAccessStatus, "spinifex-workers"},
 		{"ec2.EnableSerialConsoleAccess", d.handleEC2EnableSerialConsoleAccess, "spinifex-workers"},
 		{"ec2.DisableSerialConsoleAccess", d.handleEC2DisableSerialConsoleAccess, "spinifex-workers"},
+		// ELBv2 operations
+		{"elbv2.CreateLoadBalancer", d.handleELBv2CreateLoadBalancer, "spinifex-workers"},
+		{"elbv2.DeleteLoadBalancer", d.handleELBv2DeleteLoadBalancer, "spinifex-workers"},
+		{"elbv2.DescribeLoadBalancers", d.handleELBv2DescribeLoadBalancers, "spinifex-workers"},
+		{"elbv2.CreateTargetGroup", d.handleELBv2CreateTargetGroup, "spinifex-workers"},
+		{"elbv2.DeleteTargetGroup", d.handleELBv2DeleteTargetGroup, "spinifex-workers"},
+		{"elbv2.DescribeTargetGroups", d.handleELBv2DescribeTargetGroups, "spinifex-workers"},
+		{"elbv2.RegisterTargets", d.handleELBv2RegisterTargets, "spinifex-workers"},
+		{"elbv2.DeregisterTargets", d.handleELBv2DeregisterTargets, "spinifex-workers"},
+		{"elbv2.DescribeTargetHealth", d.handleELBv2DescribeTargetHealth, "spinifex-workers"},
+		{"elbv2.CreateListener", d.handleELBv2CreateListener, "spinifex-workers"},
+		{"elbv2.DeleteListener", d.handleELBv2DeleteListener, "spinifex-workers"},
+		{"elbv2.DescribeListeners", d.handleELBv2DescribeListeners, "spinifex-workers"},
 		{fmt.Sprintf("spinifex.admin.%s.health", d.node), d.handleHealthCheck, ""},
 		{"spinifex.nodes.discover", d.handleNodeDiscover, ""},
 		{"spinifex.node.status", d.handleNodeStatus, ""},
@@ -640,6 +655,45 @@ func (d *Daemon) Start() error {
 	})
 	if err != nil {
 		return fmt.Errorf("failed to initialize account settings service: %w", err)
+	}
+
+	d.elbv2Service, err = initServiceWithRetry("ELBv2 service", func() (*handlers_elbv2.ELBv2ServiceImpl, error) {
+		return handlers_elbv2.NewELBv2ServiceImplWithNATS(d.config, d.natsConn)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to initialize ELBv2 service: %w", err)
+	}
+	if d.vpcService != nil {
+		d.elbv2Service.SetVPCService(d.vpcService)
+	}
+
+	// Wire ALB VM lifecycle: instance launcher + NATS URL for cloud-init.
+	// In dev mode (user-mode networking), VMs reach the host at 10.0.2.2
+	// (QEMU's default gateway). Replace 0.0.0.0 with this address.
+	d.elbv2Service.SetInstanceLauncher(d)
+	if d.config != nil && d.config.NATS.Host != "" {
+		natsHost := d.config.NATS.Host
+		if d.config.Daemon.DevNetworking && strings.HasPrefix(natsHost, "0.0.0.0") {
+			natsHost = strings.Replace(natsHost, "0.0.0.0", "10.0.2.2", 1)
+		}
+		d.elbv2Service.SetNATSURL("nats://" + natsHost)
+	}
+	// Discover system AMI for ALB VMs. Prefer an image with "alb" in the
+	// name (pre-baked Alpine with HAProxy), fall back to first available.
+	if d.imageService != nil {
+		imagesOut, imgErr := d.imageService.DescribeImages(&ec2.DescribeImagesInput{}, utils.GlobalAccountID)
+		if imgErr == nil && len(imagesOut.Images) > 0 {
+			systemAMI := aws.StringValue(imagesOut.Images[0].ImageId)
+			for _, img := range imagesOut.Images {
+				name := aws.StringValue(img.Name)
+				if strings.Contains(name, "alb") {
+					systemAMI = aws.StringValue(img.ImageId)
+					break
+				}
+			}
+			d.elbv2Service.SetSystemAMI(systemAMI)
+			slog.Info("System AMI set for ALB VMs", "amiId", systemAMI)
+		}
 	}
 
 	// Ensure default VPC exists for system and admin accounts
@@ -2249,8 +2303,24 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 					if bindIP == "" || bindIP == "0.0.0.0" {
 						bindIP = "127.0.0.1"
 					}
+					netdevVal := fmt.Sprintf("user,id=dev0,hostfwd=tcp:%s:%s-:22", bindIP, sshDebugPort)
+					// Add extra hostfwd rules for system instances (e.g. ALB VMs forwarding HTTP ports)
+					if instance.ExtraHostfwd != nil {
+						for guestPort := range instance.ExtraHostfwd {
+							fwdAddr, fwdErr := viperblock.FindFreePort()
+							if fwdErr != nil {
+								slog.Warn("DEV_NETWORKING: failed to find free port for extra hostfwd", "guestPort", guestPort, "err", fwdErr)
+								continue
+							}
+							_, hostPort, _ := net.SplitHostPort(fwdAddr)
+							netdevVal += fmt.Sprintf(",hostfwd=tcp:%s:%s-:%d", bindIP, hostPort, guestPort)
+							hostPortInt, _ := strconv.Atoi(hostPort)
+							instance.ExtraHostfwd[guestPort] = hostPortInt
+							slog.Info("DEV_NETWORKING: extra hostfwd", "guestPort", guestPort, "hostPort", hostPort, "instanceId", instance.ID)
+						}
+					}
 					instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
-						Value: fmt.Sprintf("user,id=dev0,hostfwd=tcp:%s:%s-:22", bindIP, sshDebugPort),
+						Value: netdevVal,
 					})
 					devMac := generateDevMAC(instance.ID)
 					instance.Config.Devices = append(instance.Config.Devices, vm.Device{

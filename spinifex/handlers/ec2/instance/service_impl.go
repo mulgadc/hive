@@ -2,6 +2,7 @@ package handlers_ec2_instance
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -28,23 +29,30 @@ import (
 )
 
 const cloudInitUserDataTemplate = `#cloud-config
+{{if .SSHKey}}
 users:
   - name: {{.Username}}
-    shell: /bin/bash
+    shell: /bin/sh
     groups:
       - sudo
     sudo: "ALL=(ALL) NOPASSWD:ALL"
     ssh_authorized_keys:
       - {{.SSHKey}}
+{{else}}
+chpasswd:
+  expire: false
+  users:
+    - name: root
+      password: spinifex
+      type: text
+ssh_pwauth: true
+{{end}}
 
 hostname: {{.Hostname}}
 manage_etc_hosts: true
 
 {{if .UserDataCloudConfig}}
-
-# custom userdata cloud-config
 {{.UserDataCloudConfig}}
-
 {{end}}
 
 {{if .UserDataScript}}
@@ -55,7 +63,7 @@ write_files:
 {{.UserDataScript}}
 
 runcmd:
-  - [ "/bin/bash", "/tmp/cloud-init-startup.sh" ]
+  - [ "/bin/sh", "/tmp/cloud-init-startup.sh" ]
 {{end}}
 `
 
@@ -596,36 +604,61 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 	// Generate instance metadata
 	hostname := generateHostname(instance.ID)
 
-	// Retrieve SSH pubkey from S3
+	// Retrieve SSH pubkey from S3 (optional — system instances may not have a key)
 	keyName := ""
 	if input.KeyName != nil {
 		keyName = *input.KeyName
 	}
 
-	keyPath := fmt.Sprintf("keys/%s/%s", instance.AccountID, keyName)
-	result, err := s.objectStore.GetObject(&awss3.GetObjectInput{
-		Bucket: aws.String(s.config.Predastore.Bucket),
-		Key:    aws.String(keyPath),
-	})
-	if err != nil {
-		if objectstore.IsNoSuchKeyError(err) {
-			slog.Error("key pair not found", "keyName", keyName, "err", err)
-			return errors.New(awserrors.ErrorInvalidKeyPairNotFound)
+	var sshKey []byte
+	if keyName != "" {
+		keyPath := fmt.Sprintf("keys/%s/%s", instance.AccountID, keyName)
+		result, err := s.objectStore.GetObject(&awss3.GetObjectInput{
+			Bucket: aws.String(s.config.Predastore.Bucket),
+			Key:    aws.String(keyPath),
+		})
+		if err != nil {
+			if objectstore.IsNoSuchKeyError(err) {
+				slog.Error("key pair not found", "keyName", keyName, "err", err)
+				return errors.New(awserrors.ErrorInvalidKeyPairNotFound)
+			}
+			slog.Error("failed to read SSH key", "err", err)
+			return errors.New(awserrors.ErrorServerInternal)
 		}
-		slog.Error("failed to read SSH key", "err", err)
-		return errors.New(awserrors.ErrorServerInternal)
-	}
 
-	sshKey, err := io.ReadAll(result.Body)
-	if err != nil {
-		slog.Error("failed to read SSH key body", "err", err)
-		return errors.New(awserrors.ErrorServerInternal)
+		sshKey, err = io.ReadAll(result.Body)
+		if err != nil {
+			slog.Error("failed to read SSH key body", "err", err)
+			return errors.New(awserrors.ErrorServerInternal)
+		}
 	}
 
 	userData := CloudInitData{
 		Username: "ec2-user",
 		SSHKey:   string(sshKey),
 		Hostname: hostname,
+	}
+
+	// Decode and classify user-data from RunInstances (base64-encoded).
+	if input.UserData != nil && *input.UserData != "" {
+		decoded, decErr := base64.StdEncoding.DecodeString(*input.UserData)
+		if decErr != nil {
+			slog.Warn("Failed to decode user-data, ignoring", "err", decErr)
+		} else {
+			raw := string(decoded)
+			if strings.HasPrefix(raw, "#cloud-config") {
+				// Strip the #cloud-config header — the template already has it
+				stripped := strings.TrimPrefix(raw, "#cloud-config")
+				userData.UserDataCloudConfig = strings.TrimSpace(stripped)
+			} else {
+				// Script — indent each line by 4 spaces for YAML write_files block
+				var indented strings.Builder
+				for _, line := range strings.Split(raw, "\n") {
+					indented.WriteString("      " + line + "\n")
+				}
+				userData.UserDataScript = indented.String()
+			}
+		}
 	}
 
 	var buf bytes.Buffer

@@ -5,6 +5,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go/service/elbv2"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -508,4 +509,82 @@ func TestQueryParamsToStruct_BlockDeviceMappingsWithIOPS(t *testing.T) {
 	assert.Equal(t, int64(5000), aws.Int64Value(bdm.Ebs.Iops))
 	assert.Equal(t, int64(500), aws.Int64Value(bdm.Ebs.Throughput))
 	assert.Equal(t, "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012", aws.StringValue(bdm.Ebs.KmsKeyId))
+}
+
+// --- ELBv2 member-style list tests ---
+
+func TestQueryParamsToStruct_ELBv2RegisterTargets(t *testing.T) {
+	// ELBv2 uses Targets.member.N.Id format (IAM-style query protocol)
+	args := map[string]string{
+		"Action":              "RegisterTargets",
+		"TargetGroupArn":     "arn:aws:elasticloadbalancing:us-east-1:000000000001:targetgroup/my-tg/tg-abc123",
+		"Targets.member.1.Id": "i-1234567890abcdef0",
+		"Targets.member.2.Id": "i-0987654321fedcba0",
+	}
+
+	input := &elbv2.RegisterTargetsInput{}
+	err := QueryParamsToStruct(args, input)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "arn:aws:elasticloadbalancing:us-east-1:000000000001:targetgroup/my-tg/tg-abc123", aws.StringValue(input.TargetGroupArn))
+	assert.Len(t, input.Targets, 2)
+	assert.Equal(t, "i-1234567890abcdef0", aws.StringValue(input.Targets[0].Id))
+	assert.Equal(t, "i-0987654321fedcba0", aws.StringValue(input.Targets[1].Id))
+}
+
+func TestQueryParamsToStruct_ELBv2RegisterTargetsWithPort(t *testing.T) {
+	args := map[string]string{
+		"Action":                "RegisterTargets",
+		"TargetGroupArn":       "arn:aws:elasticloadbalancing:us-east-1:000000000001:targetgroup/my-tg/tg-abc123",
+		"Targets.member.1.Id":   "i-1234567890abcdef0",
+		"Targets.member.1.Port": "8080",
+	}
+
+	input := &elbv2.RegisterTargetsInput{}
+	err := QueryParamsToStruct(args, input)
+
+	assert.NoError(t, err)
+	assert.Len(t, input.Targets, 1)
+	assert.Equal(t, "i-1234567890abcdef0", aws.StringValue(input.Targets[0].Id))
+	assert.Equal(t, int64(8080), aws.Int64Value(input.Targets[0].Port))
+}
+
+func TestQueryParamsToStruct_ELBv2CreateLoadBalancerMemberSubnets(t *testing.T) {
+	// ELBv2 uses Subnets.member.N format for string slices
+	args := map[string]string{
+		"Action":           "CreateLoadBalancer",
+		"Name":             "my-alb",
+		"Subnets.member.1": "subnet-abc123",
+		"Subnets.member.2": "subnet-def456",
+	}
+
+	input := &elbv2.CreateLoadBalancerInput{}
+	err := QueryParamsToStruct(args, input)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "my-alb", aws.StringValue(input.Name))
+	assert.Len(t, input.Subnets, 2)
+	assert.Equal(t, "subnet-abc123", aws.StringValue(input.Subnets[0]))
+	assert.Equal(t, "subnet-def456", aws.StringValue(input.Subnets[1]))
+}
+
+func TestQueryParamsToStruct_ELBv2CreateListenerWithActions(t *testing.T) {
+	args := map[string]string{
+		"Action":                                    "CreateListener",
+		"LoadBalancerArn":                           "arn:aws:elasticloadbalancing:us-east-1:000000000001:loadbalancer/app/my-alb/lb-abc123",
+		"Protocol":                                  "HTTP",
+		"Port":                                      "80",
+		"DefaultActions.member.1.Type":              "forward",
+		"DefaultActions.member.1.TargetGroupArn":    "arn:aws:elasticloadbalancing:us-east-1:000000000001:targetgroup/my-tg/tg-abc123",
+	}
+
+	input := &elbv2.CreateListenerInput{}
+	err := QueryParamsToStruct(args, input)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "HTTP", aws.StringValue(input.Protocol))
+	assert.Equal(t, int64(80), aws.Int64Value(input.Port))
+	assert.Len(t, input.DefaultActions, 1)
+	assert.Equal(t, "forward", aws.StringValue(input.DefaultActions[0].Type))
+	assert.Equal(t, "arn:aws:elasticloadbalancing:us-east-1:000000000001:targetgroup/my-tg/tg-abc123", aws.StringValue(input.DefaultActions[0].TargetGroupArn))
 }

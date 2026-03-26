@@ -186,10 +186,20 @@ func setFieldValue(field reflect.Value, value string) error {
 }
 
 func setSliceField(field reflect.Value, params map[string]string, prefix string) error {
-	// Find all indexed items for this slice
+	// Find all indexed items for this slice.
+	// Supports both EC2-style (Prefix.N) and IAM/ELBv2-style (Prefix.member.N) formats.
 	indices := make(map[int]bool)
+	useMember := false
 	for key := range params {
-		if strings.HasPrefix(key, prefix+".") {
+		if strings.HasPrefix(key, prefix+".member.") {
+			parts := strings.Split(key[len(prefix)+len(".member."):], ".")
+			if len(parts) > 0 {
+				if idx, err := strconv.Atoi(parts[0]); err == nil {
+					indices[idx] = true
+					useMember = true
+				}
+			}
+		} else if strings.HasPrefix(key, prefix+".") {
 			parts := strings.Split(key[len(prefix)+1:], ".")
 			if len(parts) > 0 {
 				if idx, err := strconv.Atoi(parts[0]); err == nil {
@@ -221,7 +231,12 @@ func setSliceField(field reflect.Value, params map[string]string, prefix string)
 		}
 
 		elem := slice.Index(idx - 1)
-		indexPrefix := fmt.Sprintf("%s.%d", prefix, idx)
+		var indexPrefix string
+		if useMember {
+			indexPrefix = fmt.Sprintf("%s.member.%d", prefix, idx)
+		} else {
+			indexPrefix = fmt.Sprintf("%s.%d", prefix, idx)
+		}
 
 		// Handle different element types
 		switch elemType.Kind() {

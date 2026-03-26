@@ -332,6 +332,35 @@ func TestDescribeNetworkInterfaces_FilterByAttachmentInstanceId(t *testing.T) {
 	assert.Equal(t, eni1, *out.NetworkInterfaces[0].NetworkInterfaceId)
 }
 
+func TestDescribeNetworkInterfaces_FilterByDescription(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcId := createTestVPC(t, svc, "10.0.0.0/16")
+	subnetId := createTestSubnet(t, svc, vpcId, "10.0.1.0/24")
+
+	// Create two ENIs with different descriptions
+	out1, err := svc.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
+		SubnetId:    aws.String(subnetId),
+		Description: aws.String("ELB app/my-alb/lb-123"),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	_, err = svc.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
+		SubnetId:    aws.String(subnetId),
+		Description: aws.String("regular ENI"),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Filter by description should return only the ALB ENI
+	desc, err := svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("description"), Values: []*string{aws.String("ELB app/my-alb/lb-123")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, desc.NetworkInterfaces, 1)
+	assert.Equal(t, *out1.NetworkInterface.NetworkInterfaceId, *desc.NetworkInterfaces[0].NetworkInterfaceId)
+}
+
 func TestCreateNetworkInterface_IPExhaustion(t *testing.T) {
 	svc := setupTestVPCService(t)
 	vpcId := createTestVPC(t, svc, "10.0.0.0/16")

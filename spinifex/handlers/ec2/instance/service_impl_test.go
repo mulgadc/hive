@@ -201,7 +201,6 @@ func TestCloudInitTemplateRendering(t *testing.T) {
 			contains: []string{
 				"packages:",
 				"nginx",
-				"custom userdata cloud-config",
 			},
 		},
 		{

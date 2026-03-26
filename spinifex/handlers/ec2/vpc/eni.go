@@ -227,7 +227,7 @@ func (s *VPCServiceImpl) ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetwor
 
 // DescribeNetworkInterfaces lists ENIs with optional filters
 func (s *VPCServiceImpl) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput, accountID string) (*ec2.DescribeNetworkInterfacesOutput, error) {
-	var enis []*ec2.NetworkInterface
+	enis := make([]*ec2.NetworkInterface, 0)
 
 	eniIDs := make(map[string]bool)
 	for _, id := range input.NetworkInterfaceIds {
@@ -239,6 +239,7 @@ func (s *VPCServiceImpl) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInt
 	// Extract filters
 	subnetFilter := ""
 	vpcFilter := ""
+	descriptionFilter := ""
 	attachmentInstanceFilter := ""
 	for _, f := range input.Filters {
 		if f.Name == nil || len(f.Values) == 0 || f.Values[0] == nil {
@@ -249,6 +250,8 @@ func (s *VPCServiceImpl) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInt
 			subnetFilter = *f.Values[0]
 		case "vpc-id":
 			vpcFilter = *f.Values[0]
+		case "description":
+			descriptionFilter = *f.Values[0]
 		case "attachment.instance-id":
 			attachmentInstanceFilter = *f.Values[0]
 		}
@@ -288,6 +291,9 @@ func (s *VPCServiceImpl) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInt
 			continue
 		}
 		if vpcFilter != "" && record.VpcId != vpcFilter {
+			continue
+		}
+		if descriptionFilter != "" && record.Description != descriptionFilter {
 			continue
 		}
 		if attachmentInstanceFilter != "" && record.InstanceId != attachmentInstanceFilter {
@@ -416,6 +422,9 @@ func (s *VPCServiceImpl) UpdateENIPublicIP(accountID, eniId, publicIP, poolName 
 
 // eniRecordToEC2 converts an ENI record to an EC2 NetworkInterface
 func (s *VPCServiceImpl) eniRecordToEC2(record *ENIRecord, accountID string) *ec2.NetworkInterface {
+	// ENIs with spinifex:managed-by tag are system-managed (e.g. by ELBv2)
+	requesterManaged := record.Tags["spinifex:managed-by"] != ""
+
 	eni := &ec2.NetworkInterface{
 		NetworkInterfaceId: aws.String(record.NetworkInterfaceId),
 		SubnetId:           aws.String(record.SubnetId),
@@ -426,6 +435,7 @@ func (s *VPCServiceImpl) eniRecordToEC2(record *ENIRecord, accountID string) *ec
 		Description:        aws.String(record.Description),
 		Status:             aws.String(record.Status),
 		OwnerId:            aws.String(accountID),
+		RequesterManaged:   aws.Bool(requesterManaged),
 		InterfaceType:      aws.String("interface"),
 		SourceDestCheck:    aws.Bool(true),
 		PrivateIpAddresses: []*ec2.NetworkInterfacePrivateIpAddress{
