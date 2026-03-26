@@ -38,9 +38,9 @@ func setupNATSEIPServiceTest(t *testing.T) (EIPService, *EIPServiceImpl) {
 	t.Cleanup(func() { nc.Close() })
 
 	topics := map[string]func(*nats.Msg){
-		"ec2.AllocateAddress":    func(msg *nats.Msg) { handleNATSMsg(msg, backend.AllocateAddress) },
-		"ec2.ReleaseAddress":     func(msg *nats.Msg) { handleNATSMsg(msg, backend.ReleaseAddress) },
-		"ec2.DescribeAddresses":  func(msg *nats.Msg) { handleNATSMsg(msg, backend.DescribeAddresses) },
+		"ec2.AllocateAddress":   func(msg *nats.Msg) { handleNATSMsg(msg, backend.AllocateAddress) },
+		"ec2.ReleaseAddress":    func(msg *nats.Msg) { handleNATSMsg(msg, backend.ReleaseAddress) },
+		"ec2.DescribeAddresses": func(msg *nats.Msg) { handleNATSMsg(msg, backend.DescribeAddresses) },
 	}
 
 	for topic, handler := range topics {

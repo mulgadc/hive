@@ -58,7 +58,7 @@ func TestCreateSecurityGroup_InvalidVpc(t *testing.T) {
 
 	_, err := svc.CreateSecurityGroup(&ec2.CreateSecurityGroupInput{
 		GroupName: aws.String("web-sg"),
-		VpcId:    aws.String("vpc-nonexistent"),
+		VpcId:     aws.String("vpc-nonexistent"),
 	}, testAccountID)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "InvalidVpcID.NotFound")
@@ -70,13 +70,13 @@ func TestCreateSecurityGroup_DuplicateName(t *testing.T) {
 
 	_, err := svc.CreateSecurityGroup(&ec2.CreateSecurityGroupInput{
 		GroupName: aws.String("dup-sg"),
-		VpcId:    aws.String(vpcID),
+		VpcId:     aws.String(vpcID),
 	}, testAccountID)
 	require.NoError(t, err)
 
 	_, err = svc.CreateSecurityGroup(&ec2.CreateSecurityGroupInput{
 		GroupName: aws.String("dup-sg"),
-		VpcId:    aws.String(vpcID),
+		VpcId:     aws.String(vpcID),
 	}, testAccountID)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "InvalidGroup.Duplicate")
@@ -379,9 +379,10 @@ func TestSGRulesToIpPermissions_Conversion(t *testing.T) {
 	// Order is non-deterministic (map-based), find each by protocol
 	var tcpPerm, allPerm *ec2.IpPermission
 	for _, p := range perms {
-		if *p.IpProtocol == "tcp" {
+		switch *p.IpProtocol {
+		case "tcp":
 			tcpPerm = p
-		} else if *p.IpProtocol == "-1" {
+		case "-1":
 			allPerm = p
 		}
 	}
