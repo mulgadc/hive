@@ -438,6 +438,104 @@ func TestCloudInitNetworkConfigPartialMAC(t *testing.T) {
 	assert.NotContains(t, cfg, "use-routes")
 }
 
+func TestRunInstance_WithTags(t *testing.T) {
+	instanceTypes := map[string]*ec2.InstanceTypeInfo{
+		"t3.micro": {InstanceType: aws.String("t3.micro")},
+	}
+	svc := &InstanceServiceImpl{instanceTypes: instanceTypes}
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-012345"),
+		InstanceType: aws.String("t3.micro"),
+		TagSpecifications: []*ec2.TagSpecification{
+			{
+				ResourceType: aws.String("instance"),
+				Tags: []*ec2.Tag{
+					{Key: aws.String("Name"), Value: aws.String("test-vm")},
+					{Key: aws.String("env"), Value: aws.String("dev")},
+				},
+			},
+		},
+	}
+
+	instance, _, err := svc.RunInstance(input)
+	require.NoError(t, err)
+	// Tags are stored in RunInstancesInput which is preserved on the VM
+	assert.Equal(t, input, instance.RunInstancesInput)
+	assert.Len(t, input.TagSpecifications, 1)
+	assert.Len(t, input.TagSpecifications[0].Tags, 2)
+}
+
+func TestRunInstance_WithPlacement(t *testing.T) {
+	instanceTypes := map[string]*ec2.InstanceTypeInfo{
+		"t3.micro": {InstanceType: aws.String("t3.micro")},
+	}
+	svc := &InstanceServiceImpl{instanceTypes: instanceTypes}
+
+	input := &ec2.RunInstancesInput{
+		ImageId:      aws.String("ami-012345"),
+		InstanceType: aws.String("t3.micro"),
+		Placement: &ec2.Placement{
+			GroupName: aws.String("my-pg"),
+		},
+	}
+
+	instance, _, err := svc.RunInstance(input)
+	require.NoError(t, err)
+	assert.Equal(t, "my-pg", *instance.RunInstancesInput.Placement.GroupName)
+}
+
+func TestParseVolumeParams_MultipleBlockDeviceMappings(t *testing.T) {
+	// parseVolumeParams only uses the first block device mapping
+	input := &ec2.RunInstancesInput{
+		ImageId: aws.String("ami-multi"),
+		BlockDeviceMappings: []*ec2.BlockDeviceMapping{
+			{
+				DeviceName: aws.String("/dev/sda1"),
+				Ebs: &ec2.EbsBlockDevice{
+					VolumeSize: aws.Int64(30),
+					VolumeType: aws.String("gp3"),
+				},
+			},
+			{
+				DeviceName: aws.String("/dev/sdb"),
+				Ebs: &ec2.EbsBlockDevice{
+					VolumeSize: aws.Int64(100),
+					VolumeType: aws.String("io1"),
+					Iops:       aws.Int64(5000),
+				},
+			},
+		},
+	}
+
+	p := parseVolumeParams(input)
+	// First mapping wins for root volume
+	assert.Equal(t, 30*1024*1024*1024, p.size)
+	assert.Equal(t, "/dev/sda1", p.deviceName)
+	assert.Equal(t, "gp3", p.volumeType)
+}
+
+func TestParseVolumeParams_Io1WithIops(t *testing.T) {
+	input := &ec2.RunInstancesInput{
+		ImageId: aws.String("ami-io1"),
+		BlockDeviceMappings: []*ec2.BlockDeviceMapping{
+			{
+				DeviceName: aws.String("/dev/sda1"),
+				Ebs: &ec2.EbsBlockDevice{
+					VolumeSize: aws.Int64(100),
+					VolumeType: aws.String("io1"),
+					Iops:       aws.Int64(5000),
+				},
+			},
+		},
+	}
+
+	p := parseVolumeParams(input)
+	assert.Equal(t, 100*1024*1024*1024, p.size)
+	assert.Equal(t, "io1", p.volumeType)
+	assert.Equal(t, 5000, p.iops)
+}
+
 func TestCloudInitVolumeNamePerInstance(t *testing.T) {
 	amiID := "ami-0abcdef1234567890"
 
