@@ -86,6 +86,9 @@ var ec2Actions = map[string]EC2Handler{
 	"DescribeInstanceAttribute": ec2Handler(func(input *ec2.DescribeInstanceAttributeInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_instance.DescribeInstanceAttribute(input, gw.NATSConn, accountID)
 	}),
+	"DescribeInstanceCreditSpecifications": ec2Handler(func(input *ec2.DescribeInstanceCreditSpecificationsInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_instance.DescribeInstanceCreditSpecifications(input)
+	}),
 	"CreateKeyPair": ec2Handler(func(input *ec2.CreateKeyPairInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_key.CreateKeyPair(input, gw.NATSConn, accountID)
 	}),
