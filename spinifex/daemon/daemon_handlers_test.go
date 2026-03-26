@@ -1918,6 +1918,286 @@ func TestHandleEC2ModifyInstanceAttribute_InvalidJSON(t *testing.T) {
 	assert.Equal(t, "ServerInternal", errResp["Code"])
 }
 
+// --- DescribeInstanceAttribute daemon tests ---
+
+func TestHandleEC2DescribeInstanceAttribute_RunningInstance_InstanceType(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeInstanceAttribute", "spinifex-workers", daemon.handleEC2DescribeInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	instanceID := "i-describe-run-001"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateRunning,
+		InstanceType: "t3.micro",
+		AccountID:    testAccountID,
+		Instance: &ec2.Instance{
+			InstanceId:   aws.String(instanceID),
+			InstanceType: aws.String("t3.micro"),
+		},
+	}
+
+	daemon.Instances.Mu.Lock()
+	daemon.Instances.VMS[instanceID] = instance
+	daemon.Instances.Mu.Unlock()
+	t.Cleanup(func() {
+		daemon.Instances.Mu.Lock()
+		delete(daemon.Instances.VMS, instanceID)
+		daemon.Instances.Mu.Unlock()
+	})
+
+	input := &ec2.DescribeInstanceAttributeInput{
+		InstanceId: aws.String(instanceID),
+		Attribute:  aws.String("instanceType"),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeInstanceAttribute", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.DescribeInstanceAttributeOutput
+	err = json.Unmarshal(reply.Data, &output)
+	require.NoError(t, err)
+	assert.Equal(t, instanceID, *output.InstanceId)
+	require.NotNil(t, output.InstanceType)
+	assert.Equal(t, "t3.micro", *output.InstanceType.Value)
+}
+
+func TestHandleEC2DescribeInstanceAttribute_StoppedInstance_InstanceType(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeInstanceAttribute", "spinifex-workers", daemon.handleEC2DescribeInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	instanceID := "i-describe-stop-001"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateStopped,
+		InstanceType: "t3.medium",
+		AccountID:    testAccountID,
+		Instance: &ec2.Instance{
+			InstanceId:   aws.String(instanceID),
+			InstanceType: aws.String("t3.medium"),
+		},
+	}
+	err = daemon.jsManager.WriteStoppedInstance(instanceID, instance)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = daemon.jsManager.DeleteStoppedInstance(instanceID) })
+
+	input := &ec2.DescribeInstanceAttributeInput{
+		InstanceId: aws.String(instanceID),
+		Attribute:  aws.String("instanceType"),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeInstanceAttribute", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.DescribeInstanceAttributeOutput
+	err = json.Unmarshal(reply.Data, &output)
+	require.NoError(t, err)
+	assert.Equal(t, instanceID, *output.InstanceId)
+	require.NotNil(t, output.InstanceType)
+	assert.Equal(t, "t3.medium", *output.InstanceType.Value)
+}
+
+func TestHandleEC2DescribeInstanceAttribute_UserData(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeInstanceAttribute", "spinifex-workers", daemon.handleEC2DescribeInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	instanceID := "i-describe-ud-001"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateStopped,
+		InstanceType: "t3.micro",
+		AccountID:    testAccountID,
+		UserData:     "#!/bin/bash",
+		Instance: &ec2.Instance{
+			InstanceId: aws.String(instanceID),
+		},
+	}
+	err = daemon.jsManager.WriteStoppedInstance(instanceID, instance)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = daemon.jsManager.DeleteStoppedInstance(instanceID) })
+
+	input := &ec2.DescribeInstanceAttributeInput{
+		InstanceId: aws.String(instanceID),
+		Attribute:  aws.String("userData"),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeInstanceAttribute", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.DescribeInstanceAttributeOutput
+	err = json.Unmarshal(reply.Data, &output)
+	require.NoError(t, err)
+	require.NotNil(t, output.UserData)
+	assert.Equal(t, "#!/bin/bash", *output.UserData.Value)
+}
+
+func TestHandleEC2DescribeInstanceAttribute_DefaultAttribute_DisableApiTermination(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeInstanceAttribute", "spinifex-workers", daemon.handleEC2DescribeInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	instanceID := "i-describe-def-001"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateStopped,
+		InstanceType: "t3.micro",
+		AccountID:    testAccountID,
+		Instance: &ec2.Instance{
+			InstanceId: aws.String(instanceID),
+		},
+	}
+	err = daemon.jsManager.WriteStoppedInstance(instanceID, instance)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = daemon.jsManager.DeleteStoppedInstance(instanceID) })
+
+	input := &ec2.DescribeInstanceAttributeInput{
+		InstanceId: aws.String(instanceID),
+		Attribute:  aws.String("disableApiTermination"),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeInstanceAttribute", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.DescribeInstanceAttributeOutput
+	err = json.Unmarshal(reply.Data, &output)
+	require.NoError(t, err)
+	require.NotNil(t, output.DisableApiTermination)
+	assert.Equal(t, false, *output.DisableApiTermination.Value)
+}
+
+func TestHandleEC2DescribeInstanceAttribute_DefaultAttribute_ShutdownBehavior(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeInstanceAttribute", "spinifex-workers", daemon.handleEC2DescribeInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	instanceID := "i-describe-shut-001"
+	instance := &vm.VM{
+		ID:           instanceID,
+		Status:       vm.StateStopped,
+		InstanceType: "t3.micro",
+		AccountID:    testAccountID,
+		Instance: &ec2.Instance{
+			InstanceId: aws.String(instanceID),
+		},
+	}
+	err = daemon.jsManager.WriteStoppedInstance(instanceID, instance)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = daemon.jsManager.DeleteStoppedInstance(instanceID) })
+
+	input := &ec2.DescribeInstanceAttributeInput{
+		InstanceId: aws.String(instanceID),
+		Attribute:  aws.String("instanceInitiatedShutdownBehavior"),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeInstanceAttribute", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var output ec2.DescribeInstanceAttributeOutput
+	err = json.Unmarshal(reply.Data, &output)
+	require.NoError(t, err)
+	require.NotNil(t, output.InstanceInitiatedShutdownBehavior)
+	assert.Equal(t, "stop", *output.InstanceInitiatedShutdownBehavior.Value)
+}
+
+func TestHandleEC2DescribeInstanceAttribute_InstanceNotFound(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeInstanceAttribute", "spinifex-workers", daemon.handleEC2DescribeInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	input := &ec2.DescribeInstanceAttributeInput{
+		InstanceId: aws.String("i-nonexistent"),
+		Attribute:  aws.String("instanceType"),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeInstanceAttribute", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Equal(t, "InvalidInstanceID.NotFound", errResp["Code"])
+}
+
+func TestHandleEC2DescribeInstanceAttribute_UnsupportedAttribute(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeInstanceAttribute", "spinifex-workers", daemon.handleEC2DescribeInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	instanceID := "i-describe-unsup-001"
+	instance := &vm.VM{
+		ID:        instanceID,
+		Status:    vm.StateStopped,
+		AccountID: testAccountID,
+		Instance: &ec2.Instance{
+			InstanceId: aws.String(instanceID),
+		},
+	}
+	err = daemon.jsManager.WriteStoppedInstance(instanceID, instance)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = daemon.jsManager.DeleteStoppedInstance(instanceID) })
+
+	input := &ec2.DescribeInstanceAttributeInput{
+		InstanceId: aws.String(instanceID),
+		Attribute:  aws.String("blockDeviceMapping"),
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := natsRequest(daemon.natsConn, "ec2.DescribeInstanceAttribute", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Equal(t, "InvalidParameterValue", errResp["Code"])
+}
+
+func TestHandleEC2DescribeInstanceAttribute_InvalidJSON(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.DescribeInstanceAttribute", "spinifex-workers", daemon.handleEC2DescribeInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	reply, err := daemon.natsConn.Request("ec2.DescribeInstanceAttribute", []byte(`{invalid`), 5*time.Second)
+	require.NoError(t, err)
+
+	var errResp map[string]any
+	err = json.Unmarshal(reply.Data, &errResp)
+	require.NoError(t, err)
+	assert.Equal(t, "ServerInternal", errResp["Code"])
+}
+
 // --- Delegate handler round-trip tests (table-driven) ---
 // Each of these handlers is a single line delegating to handleNATSRequest.
 // This test verifies the wiring is correct by sending a NATS request and

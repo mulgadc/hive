@@ -1004,7 +1004,7 @@ func TestEC2ActionMapCompleteness(t *testing.T) {
 	expectedActions := []string{
 		"DescribeInstances", "RunInstances", "StartInstances", "StopInstances",
 		"TerminateInstances", "RebootInstances", "DescribeInstanceTypes", "GetConsoleOutput",
-		"ModifyInstanceAttribute",
+		"ModifyInstanceAttribute", "DescribeInstanceAttribute",
 		"CreateKeyPair", "DeleteKeyPair", "DescribeKeyPairs", "ImportKeyPair",
 		"DescribeImages", "CreateImage",
 		"DescribeRegions", "DescribeAvailabilityZones",

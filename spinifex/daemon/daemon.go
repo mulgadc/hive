@@ -433,6 +433,7 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.RevokeSecurityGroupIngress", d.handleEC2RevokeSecurityGroupIngress, "spinifex-workers"},
 		{"ec2.RevokeSecurityGroupEgress", d.handleEC2RevokeSecurityGroupEgress, "spinifex-workers"},
 		{"ec2.ModifyInstanceAttribute", d.handleEC2ModifyInstanceAttribute, "spinifex-workers"},
+		{"ec2.DescribeInstanceAttribute", d.handleEC2DescribeInstanceAttribute, "spinifex-workers"},
 		{"ec2.start", d.handleEC2StartStoppedInstance, "spinifex-workers"},
 		{"ec2.terminate", d.handleEC2TerminateStoppedInstance, "spinifex-workers"},
 		{"ec2.DescribeStoppedInstances", d.handleEC2DescribeStoppedInstances, "spinifex-workers"},
