@@ -15,11 +15,14 @@ updates:
           - "*"
 
   - package-ecosystem: github-actions
+    target-branch: dev
     directory: /
     schedule:
       interval: weekly
       day: monday
       timezone: Australia/Sydney
+    cooldown:
+      default-days: 1
     ignore:
       - dependency-name: "*"
         update-types:
