@@ -84,24 +84,16 @@ sudo spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --
 
 This auto-detects your network topology, generates configuration and TLS certificates, installs the CA into the system trust store, and configures AWS CLI credentials. Save the admin credentials printed during init — they will not be shown again.
 
-### Step 3. Setup OVN networking
-
-```bash
-sudo /usr/local/share/spinifex/setup-ovn.sh --management --external-bridge --external-iface=enp0s3 --dhcp
-```
-
-Replace `enp0s3` with your WAN interface.
-
 ### Step 4. Start services
 
 ```bash
 sudo systemctl start spinifex.target
-export AWS_PROFILE=spinifex
 ```
 
 ### Step 5. Verify
 
 ```bash
+export AWS_PROFILE=spinifex
 aws ec2 describe-instance-types
 ```
 

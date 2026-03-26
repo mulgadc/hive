@@ -60,13 +60,14 @@ Installation requires an Ubuntu / Debian system. See the detailed documentation 
 
 The installation is straightforward to set up and running on a single node for testing purposes.
 
-
 ```bash
 curl https://install.mulgadc.com | bash
 
 sudo /usr/local/share/spinifex/setup-ovn.sh --management
 
 sudo spx admin init
+
+sudo systemctl start spinifex.target
 
 export AWS_PROFILE=spinifex
 
