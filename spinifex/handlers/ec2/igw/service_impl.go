@@ -252,7 +252,7 @@ func (s *IGWServiceImpl) AttachInternetGateway(input *ec2.AttachInternetGatewayI
 	}
 
 	record.VpcId = vpcID
-	record.State = "attached"
+	record.State = "available"
 
 	data, err := json.Marshal(record)
 	if err != nil {

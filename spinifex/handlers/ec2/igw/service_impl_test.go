@@ -210,7 +210,7 @@ func TestAttachInternetGateway(t *testing.T) {
 	require.Len(t, desc.InternetGateways, 1)
 	require.Len(t, desc.InternetGateways[0].Attachments, 1)
 	assert.Equal(t, "vpc-test123", *desc.InternetGateways[0].Attachments[0].VpcId)
-	assert.Equal(t, "attached", *desc.InternetGateways[0].Attachments[0].State)
+	assert.Equal(t, "available", *desc.InternetGateways[0].Attachments[0].State)
 }
 
 func TestAttachInternetGateway_NotFound(t *testing.T) {

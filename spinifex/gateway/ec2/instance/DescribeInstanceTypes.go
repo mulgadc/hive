@@ -113,6 +113,14 @@ func DescribeInstanceTypes(input *ec2.DescribeInstanceTypesInput, natsConn *nats
 		}
 	}
 
+	// Build set of requested instance type names (if any) for filtering.
+	requestedTypes := make(map[string]bool)
+	for _, it := range input.InstanceTypes {
+		if it != nil {
+			requestedTypes[*it] = true
+		}
+	}
+
 	var finalInstanceTypes []*ec2.InstanceTypeInfo
 	if showCapacity {
 		finalInstanceTypes = allInstanceTypes
@@ -126,6 +134,17 @@ func DescribeInstanceTypes(input *ec2.DescribeInstanceTypesInput, natsConn *nats
 				}
 			}
 		}
+	}
+
+	// Filter by requested instance type names if specified.
+	if len(requestedTypes) > 0 {
+		var filtered []*ec2.InstanceTypeInfo
+		for _, it := range finalInstanceTypes {
+			if it != nil && it.InstanceType != nil && requestedTypes[*it.InstanceType] {
+				filtered = append(filtered, it)
+			}
+		}
+		finalInstanceTypes = filtered
 	}
 
 	// Build final aggregated response
