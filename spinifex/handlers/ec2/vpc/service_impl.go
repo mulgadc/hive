@@ -248,7 +248,9 @@ func (s *VPCServiceImpl) CreateVpc(input *ec2.CreateVpcInput, accountID string) 
 
 	// Auto-create main route table with local route (matches AWS behavior)
 	if s.rtbKV != nil {
-		s.createMainRouteTable(accountID, vpcID, record.CidrBlock)
+		if err := s.createMainRouteTable(accountID, vpcID, record.CidrBlock); err != nil {
+			slog.Error("Failed to create main route table for VPC", "vpcId", vpcID, "err", err)
+		}
 	}
 
 	return &ec2.CreateVpcOutput{
@@ -933,7 +935,9 @@ func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string, bootstrap ...Bootstr
 
 	// Create main route table with local route (written directly to KV to avoid circular import)
 	if s.rtbKV != nil {
-		s.createMainRouteTable(accountID, vpcID, DefaultVPCCidr)
+		if err := s.createMainRouteTable(accountID, vpcID, DefaultVPCCidr); err != nil {
+			slog.Error("Failed to create main route table for VPC", "vpcId", vpcID, "err", err)
+		}
 	}
 
 	slog.Info("Created default VPC and subnet",
@@ -954,7 +958,7 @@ func (s *VPCServiceImpl) EnsureDefaultVPC(accountID string, bootstrap ...Bootstr
 
 // createMainRouteTable writes a main route table record directly to the route table KV bucket.
 // This avoids a circular import (routetable package imports vpc package for validation).
-func (s *VPCServiceImpl) createMainRouteTable(accountID, vpcID, vpcCidr string) {
+func (s *VPCServiceImpl) createMainRouteTable(accountID, vpcID, vpcCidr string) error {
 	type rtbRecord struct {
 		RouteTableId string `json:"route_table_id"`
 		VpcId        string `json:"vpc_id"`
@@ -1000,15 +1004,14 @@ func (s *VPCServiceImpl) createMainRouteTable(accountID, vpcID, vpcCidr string) 
 
 	data, err := json.Marshal(record)
 	if err != nil {
-		slog.Error("Failed to marshal main route table", "vpcId", vpcID, "err", err)
-		return
+		return fmt.Errorf("marshal main route table: %w", err)
 	}
 	if _, err := s.rtbKV.Put(utils.AccountKey(accountID, rtbID), data); err != nil {
-		slog.Error("Failed to store main route table", "vpcId", vpcID, "err", err)
-		return
+		return fmt.Errorf("store main route table: %w", err)
 	}
 
 	slog.Info("Created main route table for VPC", "routeTableId", rtbID, "vpcId", vpcID, "accountID", accountID)
+	return nil
 }
 
 // GetDefaultSubnet returns the default subnet for RunInstances when no SubnetId is specified.

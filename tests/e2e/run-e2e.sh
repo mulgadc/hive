@@ -2604,36 +2604,37 @@ echo "========================================"
 echo "Step 1: Verify default VPC main route table"
 RTB_DEFAULT_VPC=$(aws ec2 describe-vpcs --query 'Vpcs[?IsDefault==`true`].VpcId | [0]' --output text)
 if [ -z "$RTB_DEFAULT_VPC" ] || [ "$RTB_DEFAULT_VPC" = "None" ]; then
-    echo "SKIP: No default VPC found"
-else
-    MAIN_RTB=$(aws ec2 describe-route-tables \
-        --filters "Name=vpc-id,Values=$RTB_DEFAULT_VPC" "Name=association.main,Values=true" \
-        --query 'RouteTables[0].RouteTableId' --output text)
-    if [ -z "$MAIN_RTB" ] || [ "$MAIN_RTB" = "None" ]; then
-        echo "FAIL: No main route table found for default VPC $RTB_DEFAULT_VPC"
-        exit 1
-    fi
-    echo "  Main route table: $MAIN_RTB"
-
-    # Verify local route exists
-    LOCAL_ROUTE=$(aws ec2 describe-route-tables --route-table-ids "$MAIN_RTB" \
-        --query 'RouteTables[0].Routes[?GatewayId==`local`].DestinationCidrBlock | [0]' --output text)
-    if [ -z "$LOCAL_ROUTE" ] || [ "$LOCAL_ROUTE" = "None" ]; then
-        echo "FAIL: Main route table missing local route"
-        exit 1
-    fi
-    echo "  Local route: $LOCAL_ROUTE → local"
-
-    # Verify IGW route exists
-    IGW_ROUTE=$(aws ec2 describe-route-tables --route-table-ids "$MAIN_RTB" \
-        --query 'RouteTables[0].Routes[?DestinationCidrBlock==`0.0.0.0/0`].GatewayId | [0]' --output text)
-    if [ -z "$IGW_ROUTE" ] || [ "$IGW_ROUTE" = "None" ]; then
-        echo "FAIL: Main route table missing 0.0.0.0/0 → IGW route"
-        exit 1
-    fi
-    echo "  Default route: 0.0.0.0/0 → $IGW_ROUTE"
-    echo "  PASS: Default VPC main route table verified"
+    echo "FAIL: No default VPC found — route table tests require a default VPC"
+    exit 1
 fi
+
+MAIN_RTB=$(aws ec2 describe-route-tables \
+    --filters "Name=vpc-id,Values=$RTB_DEFAULT_VPC" "Name=association.main,Values=true" \
+    --query 'RouteTables[0].RouteTableId' --output text)
+if [ -z "$MAIN_RTB" ] || [ "$MAIN_RTB" = "None" ]; then
+    echo "FAIL: No main route table found for default VPC $RTB_DEFAULT_VPC"
+    exit 1
+fi
+echo "  Main route table: $MAIN_RTB"
+
+# Verify local route exists
+LOCAL_ROUTE=$(aws ec2 describe-route-tables --route-table-ids "$MAIN_RTB" \
+    --query 'RouteTables[0].Routes[?GatewayId==`local`].DestinationCidrBlock | [0]' --output text)
+if [ -z "$LOCAL_ROUTE" ] || [ "$LOCAL_ROUTE" = "None" ]; then
+    echo "FAIL: Main route table missing local route"
+    exit 1
+fi
+echo "  Local route: $LOCAL_ROUTE → local"
+
+# Verify IGW route exists
+IGW_ROUTE=$(aws ec2 describe-route-tables --route-table-ids "$MAIN_RTB" \
+    --query 'RouteTables[0].Routes[?DestinationCidrBlock==`0.0.0.0/0`].GatewayId | [0]' --output text)
+if [ -z "$IGW_ROUTE" ] || [ "$IGW_ROUTE" = "None" ]; then
+    echo "FAIL: Main route table missing 0.0.0.0/0 → IGW route"
+    exit 1
+fi
+echo "  Default route: 0.0.0.0/0 → $IGW_ROUTE"
+echo "  PASS: Default VPC main route table verified"
 
 # Step 2: Custom route table lifecycle
 echo ""

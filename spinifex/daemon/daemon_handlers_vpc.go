@@ -214,7 +214,11 @@ func (d *Daemon) ensureDefaultIGWRoute(accountID, vpcID string) {
 			{Name: &mainFilter, Values: []*string{&trueVal}},
 		},
 	}, accountID)
-	if err != nil || len(descOut.RouteTables) == 0 {
+	if err != nil {
+		slog.Warn("Failed to query main route table for default IGW route", "vpcId", vpcID, "err", err)
+		return
+	}
+	if len(descOut.RouteTables) == 0 {
 		slog.Debug("No main route table found for default IGW route", "vpcId", vpcID, "accountID", accountID)
 		return
 	}
@@ -231,6 +235,7 @@ func (d *Daemon) ensureDefaultIGWRoute(accountID, vpcID string) {
 	// Find the attached IGW for this VPC
 	igwOut, err := d.igwService.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{}, accountID)
 	if err != nil {
+		slog.Warn("Failed to query IGWs for default route", "vpcId", vpcID, "err", err)
 		return
 	}
 	var igwID string

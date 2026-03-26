@@ -78,10 +78,15 @@ func NewRouteTableServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (
 func (s *RouteTableServiceImpl) getRouteTable(accountID, rtbID string) (*RouteTableRecord, error) {
 	entry, err := s.rtbKV.Get(utils.AccountKey(accountID, rtbID))
 	if err != nil {
-		return nil, errors.New(awserrors.ErrorInvalidRouteTableIDNotFound)
+		if errors.Is(err, nats.ErrKeyNotFound) {
+			return nil, errors.New(awserrors.ErrorInvalidRouteTableIDNotFound)
+		}
+		slog.Error("Failed to read route table from KV", "routeTableId", rtbID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 	var record RouteTableRecord
 	if err := json.Unmarshal(entry.Value(), &record); err != nil {
+		slog.Error("Corrupt route table record in KV", "routeTableId", rtbID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 	return &record, nil
@@ -91,9 +96,11 @@ func (s *RouteTableServiceImpl) getRouteTable(accountID, rtbID string) (*RouteTa
 func (s *RouteTableServiceImpl) putRouteTable(accountID string, record *RouteTableRecord) error {
 	data, err := json.Marshal(record)
 	if err != nil {
+		slog.Error("Failed to marshal route table record", "routeTableId", record.RouteTableId, "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 	if _, err := s.rtbKV.Put(utils.AccountKey(accountID, record.RouteTableId), data); err != nil {
+		slog.Error("Failed to write route table to KV", "routeTableId", record.RouteTableId, "err", err)
 		return errors.New(awserrors.ErrorServerInternal)
 	}
 	return nil
@@ -130,11 +137,16 @@ func (s *RouteTableServiceImpl) allRouteTablesForVPC(accountID, vpcID string) ([
 		}
 		entry, err := s.rtbKV.Get(key)
 		if err != nil {
-			continue
+			if errors.Is(err, nats.ErrKeyNotFound) {
+				continue // deleted between Keys() and Get()
+			}
+			slog.Error("Failed to read route table during VPC scan", "key", key, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
 		}
 		var record RouteTableRecord
 		if err := json.Unmarshal(entry.Value(), &record); err != nil {
-			continue
+			slog.Error("Corrupt route table record", "key", key, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
 		}
 		if record.VpcId == vpcID {
 			results = append(results, record)
@@ -274,12 +286,17 @@ func (s *RouteTableServiceImpl) DescribeRouteTables(input *ec2.DescribeRouteTabl
 
 		entry, err := s.rtbKV.Get(key)
 		if err != nil {
-			continue
+			if errors.Is(err, nats.ErrKeyNotFound) {
+				continue
+			}
+			slog.Error("Failed to read route table during describe", "key", key, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
 		}
 
 		var record RouteTableRecord
 		if err := json.Unmarshal(entry.Value(), &record); err != nil {
-			continue
+			slog.Error("Corrupt route table record", "key", key, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
 		}
 
 		if len(rtbIDs) > 0 && !rtbIDs[record.RouteTableId] {
@@ -554,7 +571,11 @@ func (s *RouteTableServiceImpl) DisassociateRouteTable(input *ec2.DisassociateRo
 	prefix := accountID + "."
 	keys, err := s.rtbKV.Keys()
 	if err != nil {
-		return nil, errors.New(awserrors.ErrorInvalidAssociationIDNotFound)
+		if errors.Is(err, nats.ErrNoKeysFound) {
+			return nil, errors.New(awserrors.ErrorInvalidAssociationIDNotFound)
+		}
+		slog.Error("Failed to list route table keys", "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
 	for _, key := range keys {
@@ -564,12 +585,17 @@ func (s *RouteTableServiceImpl) DisassociateRouteTable(input *ec2.DisassociateRo
 
 		entry, err := s.rtbKV.Get(key)
 		if err != nil {
-			continue
+			if errors.Is(err, nats.ErrKeyNotFound) {
+				continue
+			}
+			slog.Error("Failed to read route table during disassociate scan", "key", key, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
 		}
 
 		var record RouteTableRecord
 		if err := json.Unmarshal(entry.Value(), &record); err != nil {
-			continue
+			slog.Error("Corrupt route table record", "key", key, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
 		}
 
 		for i, assoc := range record.Associations {
@@ -613,7 +639,11 @@ func (s *RouteTableServiceImpl) ReplaceRouteTableAssociation(input *ec2.ReplaceR
 	prefix := accountID + "."
 	keys, err := s.rtbKV.Keys()
 	if err != nil {
-		return nil, errors.New(awserrors.ErrorInvalidAssociationIDNotFound)
+		if errors.Is(err, nats.ErrNoKeysFound) {
+			return nil, errors.New(awserrors.ErrorInvalidAssociationIDNotFound)
+		}
+		slog.Error("Failed to list route table keys", "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
 	for _, key := range keys {
@@ -623,12 +653,17 @@ func (s *RouteTableServiceImpl) ReplaceRouteTableAssociation(input *ec2.ReplaceR
 
 		entry, err := s.rtbKV.Get(key)
 		if err != nil {
-			continue
+			if errors.Is(err, nats.ErrKeyNotFound) {
+				continue
+			}
+			slog.Error("Failed to read route table during replace scan", "key", key, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
 		}
 
 		var oldRecord RouteTableRecord
 		if err := json.Unmarshal(entry.Value(), &oldRecord); err != nil {
-			continue
+			slog.Error("Corrupt route table record", "key", key, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
 		}
 
 		for i, assoc := range oldRecord.Associations {
@@ -657,6 +692,13 @@ func (s *RouteTableServiceImpl) ReplaceRouteTableAssociation(input *ec2.ReplaceR
 				Main:          assoc.Main,
 			})
 			if err := s.putRouteTable(accountID, newRecord); err != nil {
+				// Compensate: restore association to old table to avoid data loss
+				oldRecord.Associations = append(oldRecord.Associations, assoc)
+				if restoreErr := s.putRouteTable(accountID, &oldRecord); restoreErr != nil {
+					slog.Error("CRITICAL: ReplaceRouteTableAssociation partial failure, association lost",
+						"associationId", assocID, "oldRouteTableId", oldRecord.RouteTableId,
+						"newRouteTableId", newRtbID, "restoreErr", restoreErr, "originalErr", err)
+				}
 				return nil, err
 			}
 
