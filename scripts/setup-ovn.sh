@@ -614,15 +614,16 @@ sudo tee "$LOGROTATE_FILE" >/dev/null <<'LOGROTATE'
 LOGROTATE
 echo "  logrotate config: $LOGROTATE_FILE (daily, 100M max, 3 rotations, explicit filenames)"
 
-# --- Step 10: Disable auto-start on boot ---
-# start-dev.sh / stop-dev.sh manage the OVN lifecycle. Without spinifex services
-# running, ovn-controller spins in a tight reconnect loop burning CPU.
+# --- Step 10: Enable auto-start on boot ---
+# OVN services should start with the system in production. ovn-controller uses
+# exponential backoff if the SB DB isn't ready yet, so CPU impact is negligible.
+# In dev, stop-dev.sh explicitly stops OVN when not needed.
 echo ""
-echo "Step 10: Disabling OVN auto-start on boot (start-dev.sh will manage lifecycle)..."
-sudo systemctl disable openvswitch-switch 2>/dev/null || true
-sudo systemctl disable ovn-controller 2>/dev/null || true
-echo "  openvswitch-switch: disabled on boot"
-echo "  ovn-controller: disabled on boot"
+echo "Step 10: Enabling OVN auto-start on boot..."
+sudo systemctl enable openvswitch-switch 2>/dev/null || true
+sudo systemctl enable ovn-controller 2>/dev/null || true
+echo "  openvswitch-switch: enabled on boot"
+echo "  ovn-controller: enabled on boot"
 
 # --- Step 11: Health check ---
 echo ""
