@@ -109,6 +109,13 @@ func (a *Agent) Start() error {
 	a.subs = append(a.subs, configSub, pingSub)
 	a.mu.Unlock()
 
+	// Flush to ensure the server has processed our subscriptions before
+	// we report that the agent is started and ready.
+	if err := nc.Flush(); err != nil {
+		nc.Close()
+		return fmt.Errorf("flush subscriptions: %w", err)
+	}
+
 	slog.Info("Agent started",
 		"lbId", a.lbID,
 		"configTopic", ConfigTopic(a.lbID),
