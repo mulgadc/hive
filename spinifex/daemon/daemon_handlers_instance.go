@@ -983,10 +983,16 @@ func (d *Daemon) handleEC2TerminateStoppedInstance(msg *nats.Msg) {
 	if instance.PublicIP != "" && instance.PublicIPPool != "" && d.externalIPAM != nil {
 		portName := "port-" + instance.ENIId
 		vpcId := ""
-		if instance.Instance != nil && instance.Instance.VpcId != nil {
-			vpcId = *instance.Instance.VpcId
+		logicalIP := ""
+		if instance.Instance != nil {
+			if instance.Instance.VpcId != nil {
+				vpcId = *instance.Instance.VpcId
+			}
+			if instance.Instance.PrivateIpAddress != nil {
+				logicalIP = *instance.Instance.PrivateIpAddress
+			}
 		}
-		d.publishNATEvent("vpc.delete-nat", vpcId, instance.PublicIP, "", portName, "")
+		d.publishNATEvent("vpc.delete-nat", vpcId, instance.PublicIP, logicalIP, portName, "")
 
 		if err := d.externalIPAM.ReleaseIP(instance.PublicIPPool, instance.PublicIP); err != nil {
 			slog.Warn("handleEC2TerminateStoppedInstance: failed to release public IP", "ip", instance.PublicIP, "pool", instance.PublicIPPool, "err", err)

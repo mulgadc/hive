@@ -1764,10 +1764,16 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				// Publish vpc.delete-nat to remove dnat_and_snat rule
 				portName := "port-" + instance.ENIId
 				vpcId := ""
-				if instance.Instance != nil && instance.Instance.VpcId != nil {
-					vpcId = *instance.Instance.VpcId
+				logicalIP := ""
+				if instance.Instance != nil {
+					if instance.Instance.VpcId != nil {
+						vpcId = *instance.Instance.VpcId
+					}
+					if instance.Instance.PrivateIpAddress != nil {
+						logicalIP = *instance.Instance.PrivateIpAddress
+					}
 				}
-				d.publishNATEvent("vpc.delete-nat", vpcId, instance.PublicIP, "", portName, "")
+				d.publishNATEvent("vpc.delete-nat", vpcId, instance.PublicIP, logicalIP, portName, "")
 
 				// Release IP back to pool
 				if err := d.externalIPAM.ReleaseIP(instance.PublicIPPool, instance.PublicIP); err != nil {

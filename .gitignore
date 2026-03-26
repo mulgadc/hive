@@ -40,3 +40,4 @@ docs/PLAN.md
 docs/TODO.md
 docs/development/
 docs/internal/
+scripts/iac/aws/spinifex-test.pem
