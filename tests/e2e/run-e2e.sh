@@ -2948,22 +2948,30 @@ echo "Setting up bastion SSH key..."
 scp -o StrictHostKeyChecking=no -o LogLevel=ERROR -i test-key-1.pem test-key-1.pem "ec2-user@$PUB_IP:/tmp/key.pem"
 $BASTION_SSH "chmod 600 /tmp/key.pem"
 
-# Step 1: Verify intra-VPC SSH works (bastion → private VM)
+# Step 1: Wait for private instance SSH to be ready via bastion hop
+# The private VM needs cloud-init time (~30-40s after "running" state).
 echo ""
-echo "Step 1: Verify bastion can reach private instance via VPC"
-PRIV_HOSTNAME=$($BASTION_SSH "$PRIV_SSH_CMD 'hostname'" 2>/dev/null) || {
-    echo "WARN: Cannot SSH from bastion to private instance (intra-VPC may need time)"
-    echo "Waiting 15s for OVN routing to settle..."
-    sleep 15
-    PRIV_HOSTNAME=$($BASTION_SSH "$PRIV_SSH_CMD 'hostname'" 2>/dev/null) || {
-        echo "FAIL: Cannot reach private instance from bastion (intra-VPC broken)"
-        echo "Skipping NAT Gateway tests — bastion hop not working"
-        # Fall through to cleanup
-        SKIP_NATGW=true
-    }
-}
-if [ "${SKIP_NATGW:-}" != "true" ]; then
-    echo "  PASS: Bastion → private instance SSH works (hostname: $PRIV_HOSTNAME)"
+echo "Step 1: Waiting for private instance SSH via bastion (cloud-init boot)..."
+BASTION_SSH_OK=false
+for attempt in $(seq 1 30); do
+    if PRIV_HOSTNAME=$($BASTION_SSH "$PRIV_SSH_CMD 'hostname'" 2>/dev/null); then
+        BASTION_SSH_OK=true
+        break
+    fi
+    echo "  Attempt $attempt/30: private instance SSH not ready yet..."
+    sleep 5
+done
+
+if [ "$BASTION_SSH_OK" != "true" ]; then
+    echo "FAIL: Cannot reach private instance from bastion after 150s"
+    echo "  Public VM (bastion): $PUB_IP → $PUB_PRIVATE_IP"
+    echo "  Private VM target: $PRIV_PRIVATE_IP"
+    echo "  Debugging: checking OVN port bindings..."
+    sudo ovn-sbctl --no-leader-only show 2>/dev/null | head -20 || true
+    exit 1
+fi
+echo "  PASS: Bastion → private instance SSH works (hostname: $PRIV_HOSTNAME)"
+{
 
     # Step 2: Baseline — private instance has NO internet
     echo ""
@@ -3042,7 +3050,7 @@ if [ "${SKIP_NATGW:-}" != "true" ]; then
 
     echo ""
     echo "Phase 8d: NAT Gateway E2E PASSED"
-fi
+}
 
 echo ""
 echo "Phase 8b/8d Step: Cleanup"
