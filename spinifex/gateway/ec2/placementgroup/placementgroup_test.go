@@ -84,10 +84,12 @@ func TestDeletePlacementGroup_NilNATS(t *testing.T) {
 
 // DescribePlacementGroups tests
 
-func TestDescribePlacementGroups_NilNATS(t *testing.T) {
+func TestDescribePlacementGroups_NilInput(t *testing.T) {
 	_, err := DescribePlacementGroups(nil, nil, testAccountID)
 	assert.Error(t, err)
+}
 
-	_, err = DescribePlacementGroups(&ec2.DescribePlacementGroupsInput{}, nil, testAccountID)
+func TestDescribePlacementGroups_NilNATS(t *testing.T) {
+	_, err := DescribePlacementGroups(&ec2.DescribePlacementGroupsInput{}, nil, testAccountID)
 	assert.Error(t, err)
 }

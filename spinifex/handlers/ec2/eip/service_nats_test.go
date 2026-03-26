@@ -14,14 +14,13 @@ import (
 func handleNATSMsg[In any, Out any](msg *nats.Msg, fn func(*In, string) (*Out, error)) {
 	var input In
 	if err := json.Unmarshal(msg.Data, &input); err != nil {
-		_ = msg.Respond([]byte(`{"error":"unmarshal"}`))
+		_ = msg.Respond(utils.GenerateErrorPayload("ValidationError"))
 		return
 	}
 	accountID := msg.Header.Get(utils.AccountIDHeader)
 	result, err := fn(&input, accountID)
 	if err != nil {
-		errResp, _ := json.Marshal(map[string]string{"error": err.Error()})
-		_ = msg.Respond(errResp)
+		_ = msg.Respond(utils.GenerateErrorPayload(err.Error()))
 		return
 	}
 	data, _ := json.Marshal(result)
@@ -38,9 +37,11 @@ func setupNATSEIPServiceTest(t *testing.T) (EIPService, *EIPServiceImpl) {
 	t.Cleanup(func() { nc.Close() })
 
 	topics := map[string]func(*nats.Msg){
-		"ec2.AllocateAddress":   func(msg *nats.Msg) { handleNATSMsg(msg, backend.AllocateAddress) },
-		"ec2.ReleaseAddress":    func(msg *nats.Msg) { handleNATSMsg(msg, backend.ReleaseAddress) },
-		"ec2.DescribeAddresses": func(msg *nats.Msg) { handleNATSMsg(msg, backend.DescribeAddresses) },
+		"ec2.AllocateAddress":    func(msg *nats.Msg) { handleNATSMsg(msg, backend.AllocateAddress) },
+		"ec2.ReleaseAddress":     func(msg *nats.Msg) { handleNATSMsg(msg, backend.ReleaseAddress) },
+		"ec2.AssociateAddress":   func(msg *nats.Msg) { handleNATSMsg(msg, backend.AssociateAddress) },
+		"ec2.DisassociateAddress": func(msg *nats.Msg) { handleNATSMsg(msg, backend.DisassociateAddress) },
+		"ec2.DescribeAddresses":  func(msg *nats.Msg) { handleNATSMsg(msg, backend.DescribeAddresses) },
 	}
 
 	for topic, handler := range topics {
@@ -85,6 +86,22 @@ func TestNATSEIPService_ReleaseAddress(t *testing.T) {
 		AllocationId: allocOut.AllocationId,
 	}, testAccountID)
 	require.NoError(t, err)
+}
+
+func TestNATSEIPService_AssociateAddress_MissingParams(t *testing.T) {
+	client, _ := setupNATSEIPServiceTest(t)
+
+	// Missing AllocationId should return error through NATS
+	_, err := client.AssociateAddress(&ec2.AssociateAddressInput{}, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestNATSEIPService_DisassociateAddress_MissingParams(t *testing.T) {
+	client, _ := setupNATSEIPServiceTest(t)
+
+	// Missing AssociationId should return error through NATS
+	_, err := client.DisassociateAddress(&ec2.DisassociateAddressInput{}, testAccountID)
+	assert.Error(t, err)
 }
 
 func TestNATSEIPService_AllocateAndDescribeRoundTrip(t *testing.T) {
