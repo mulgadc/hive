@@ -15,17 +15,19 @@ import (
 
 // NATS topics for VPC lifecycle events published by the daemon.
 const (
-	TopicVPCCreate    = "vpc.create"
-	TopicVPCDelete    = "vpc.delete"
-	TopicSubnetCreate = "vpc.create-subnet"
-	TopicSubnetDelete = "vpc.delete-subnet"
-	TopicCreatePort   = "vpc.create-port"
-	TopicDeletePort   = "vpc.delete-port"
-	TopicPortStatus   = "vpc.port-status"
-	TopicIGWAttach    = "vpc.igw-attach"
-	TopicIGWDetach    = "vpc.igw-detach"
-	TopicAddNAT       = "vpc.add-nat"
-	TopicDeleteNAT    = "vpc.delete-nat"
+	TopicVPCCreate        = "vpc.create"
+	TopicVPCDelete        = "vpc.delete"
+	TopicSubnetCreate     = "vpc.create-subnet"
+	TopicSubnetDelete     = "vpc.delete-subnet"
+	TopicCreatePort       = "vpc.create-port"
+	TopicDeletePort       = "vpc.delete-port"
+	TopicPortStatus       = "vpc.port-status"
+	TopicIGWAttach        = "vpc.igw-attach"
+	TopicIGWDetach        = "vpc.igw-detach"
+	TopicAddNAT           = "vpc.add-nat"
+	TopicDeleteNAT        = "vpc.delete-nat"
+	TopicAddNATGateway    = "vpc.add-nat-gateway"
+	TopicDeleteNATGateway = "vpc.delete-nat-gateway"
 )
 
 // VPCEvent is published on vpc.create after a VPC is persisted.
@@ -58,6 +60,14 @@ type NATEvent struct {
 	LogicalIP  string `json:"logical_ip"`
 	PortName   string `json:"port_name"` // logical port for distributed NAT
 	MAC        string `json:"mac"`       // external MAC for distributed NAT
+}
+
+// NATGatewayEvent is published on vpc.add-nat-gateway / vpc.delete-nat-gateway.
+type NATGatewayEvent struct {
+	VpcId        string `json:"vpc_id"`
+	NatGatewayId string `json:"nat_gateway_id"`
+	PublicIp     string `json:"public_ip"`
+	SubnetCidr   string `json:"subnet_cidr"` // private subnet CIDR for SNAT rule
 }
 
 // Bridge mode constants for external connectivity.
@@ -185,6 +195,8 @@ func (h *TopologyHandler) Subscribe(nc *nats.Conn) ([]*nats.Subscription, error)
 		{TopicIGWDetach, h.handleIGWDetach, true},
 		{TopicAddNAT, h.handleAddNAT, true},
 		{TopicDeleteNAT, h.handleDeleteNAT, true},
+		{TopicAddNATGateway, h.handleAddNATGateway, true},
+		{TopicDeleteNATGateway, h.handleDeleteNATGateway, true},
 		{TopicCreateSG, h.handleCreateSG, true},
 		{TopicDeleteSG, h.handleDeleteSG, true},
 		{TopicUpdateSG, h.handleUpdateSG, true},
@@ -1217,4 +1229,65 @@ func respond(msg *nats.Msg, err error) {
 	if err := msg.Respond(data); err != nil {
 		slog.Error("vpcd: failed to respond to NATS request", "err", err)
 	}
+}
+
+// handleAddNATGateway creates an OVN SNAT rule for a private subnet via a NAT Gateway.
+// The SNAT rule rewrites source IPs from the private subnet CIDR to the NAT GW's public IP.
+func (h *TopologyHandler) handleAddNATGateway(msg *nats.Msg) {
+	var evt NATGatewayEvent
+	if err := json.Unmarshal(msg.Data, &evt); err != nil {
+		slog.Error("vpcd: failed to unmarshal vpc.add-nat-gateway event", "err", err)
+		return
+	}
+
+	slog.Info("vpcd: adding NAT Gateway SNAT rule",
+		"vpcId", evt.VpcId, "natGatewayId", evt.NatGatewayId,
+		"publicIp", evt.PublicIp, "subnetCidr", evt.SubnetCidr)
+
+	ctx := context.Background()
+	routerName := "vpc-" + evt.VpcId
+
+	snatRule := &nbdb.NAT{
+		Type:       "snat",
+		ExternalIP: evt.PublicIp,
+		LogicalIP:  evt.SubnetCidr,
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id":         evt.VpcId,
+			"spinifex:nat_gateway_id": evt.NatGatewayId,
+		},
+	}
+
+	if err := h.ovn.AddNAT(ctx, routerName, snatRule); err != nil {
+		slog.Error("vpcd: failed to add NAT Gateway SNAT rule",
+			"router", routerName, "publicIp", evt.PublicIp,
+			"subnetCidr", evt.SubnetCidr, "err", err)
+		return
+	}
+
+	slog.Info("vpcd: NAT Gateway SNAT rule added",
+		"router", routerName, "publicIp", evt.PublicIp, "subnetCidr", evt.SubnetCidr)
+}
+
+// handleDeleteNATGateway removes the OVN SNAT rule for a private subnet's NAT Gateway.
+func (h *TopologyHandler) handleDeleteNATGateway(msg *nats.Msg) {
+	var evt NATGatewayEvent
+	if err := json.Unmarshal(msg.Data, &evt); err != nil {
+		slog.Error("vpcd: failed to unmarshal vpc.delete-nat-gateway event", "err", err)
+		return
+	}
+
+	slog.Info("vpcd: removing NAT Gateway SNAT rule",
+		"vpcId", evt.VpcId, "natGatewayId", evt.NatGatewayId, "subnetCidr", evt.SubnetCidr)
+
+	ctx := context.Background()
+	routerName := "vpc-" + evt.VpcId
+
+	if err := h.ovn.DeleteNAT(ctx, routerName, "snat", evt.SubnetCidr); err != nil {
+		slog.Warn("vpcd: failed to delete NAT Gateway SNAT rule",
+			"router", routerName, "subnetCidr", evt.SubnetCidr, "err", err)
+		return
+	}
+
+	slog.Info("vpcd: NAT Gateway SNAT rule removed",
+		"router", routerName, "subnetCidr", evt.SubnetCidr)
 }

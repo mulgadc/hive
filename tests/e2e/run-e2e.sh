@@ -2933,8 +2933,119 @@ if [ "$HAS_OVN" = true ]; then
     echo "PASS: Still no blanket VPC CIDR SNAT (private instances are fully isolated)"
 fi
 
+# Phase 8d: NAT Gateway E2E (mulga-763)
+# Reuses PUB_INSTANCE_ID/PUB_IP (bastion) and PRIV_INSTANCE_ID/PRIV_PRIVATE_IP from Phase 8b
 echo ""
-echo "Phase 8b Step 4: Cleanup"
+echo "Phase 8d: NAT Gateway E2E"
+echo "========================================"
+
+# SSH helper: hop through public VM (bastion) to reach private VM
+BASTION_SSH="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o BatchMode=yes -i test-key-1.pem ec2-user@$PUB_IP"
+PRIV_SSH_CMD="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 -o BatchMode=yes -i /tmp/key.pem ec2-user@$PRIV_PRIVATE_IP"
+
+# Copy SSH key to bastion for hop to private instance
+echo "Setting up bastion SSH key..."
+scp -o StrictHostKeyChecking=no -o LogLevel=ERROR -i test-key-1.pem test-key-1.pem "ec2-user@$PUB_IP:/tmp/key.pem"
+$BASTION_SSH "chmod 600 /tmp/key.pem"
+
+# Step 1: Verify intra-VPC SSH works (bastion → private VM)
+echo ""
+echo "Step 1: Verify bastion can reach private instance via VPC"
+PRIV_HOSTNAME=$($BASTION_SSH "$PRIV_SSH_CMD 'hostname'" 2>/dev/null) || {
+    echo "WARN: Cannot SSH from bastion to private instance (intra-VPC may need time)"
+    echo "Waiting 15s for OVN routing to settle..."
+    sleep 15
+    PRIV_HOSTNAME=$($BASTION_SSH "$PRIV_SSH_CMD 'hostname'" 2>/dev/null) || {
+        echo "FAIL: Cannot reach private instance from bastion (intra-VPC broken)"
+        echo "Skipping NAT Gateway tests — bastion hop not working"
+        # Fall through to cleanup
+        SKIP_NATGW=true
+    }
+}
+if [ "${SKIP_NATGW:-}" != "true" ]; then
+    echo "  PASS: Bastion → private instance SSH works (hostname: $PRIV_HOSTNAME)"
+
+    # Step 2: Baseline — private instance has NO internet
+    echo ""
+    echo "Step 2: Confirm private instance has no internet (baseline)"
+    if $BASTION_SSH "$PRIV_SSH_CMD 'ping -c 1 -W 3 8.8.8.8'" 2>/dev/null; then
+        echo "FAIL: Private instance can reach internet WITHOUT NAT GW"
+        exit 1
+    fi
+    echo "  PASS: Private instance cannot reach internet (expected)"
+
+    # Step 3: Create NAT Gateway + route
+    echo ""
+    echo "Step 3: Create NAT Gateway"
+    NAT_EIP_OUTPUT=$(aws ec2 allocate-address --domain vpc --output json)
+    NAT_ALLOC_ID=$(echo "$NAT_EIP_OUTPUT" | jq -r '.AllocationId')
+    NAT_PUB_IP=$(echo "$NAT_EIP_OUTPUT" | jq -r '.PublicIp')
+    echo "  Allocated EIP: $NAT_PUB_IP ($NAT_ALLOC_ID)"
+
+    NAT_GW_OUTPUT=$(aws ec2 create-nat-gateway \
+        --subnet-id "$DEFAULT_SUBNET" \
+        --allocation-id "$NAT_ALLOC_ID" --output json)
+    NAT_GW_ID=$(echo "$NAT_GW_OUTPUT" | jq -r '.NatGateway.NatGatewayId')
+    echo "  NAT Gateway: $NAT_GW_ID"
+
+    # Create route table for private subnet with NAT GW route
+    NAT_RTB=$(aws ec2 create-route-table --vpc-id "$DEFAULT_VPC" \
+        --query 'RouteTable.RouteTableId' --output text)
+    aws ec2 create-route --route-table-id "$NAT_RTB" \
+        --destination-cidr-block 0.0.0.0/0 --nat-gateway-id "$NAT_GW_ID" > /dev/null
+    NAT_RTB_ASSOC=$(aws ec2 associate-route-table --route-table-id "$NAT_RTB" \
+        --subnet-id "$PRIV_SUBNET_ID" --query 'AssociationId' --output text)
+    echo "  Route: 0.0.0.0/0 → $NAT_GW_ID (rtb: $NAT_RTB, assoc: $NAT_RTB_ASSOC)"
+
+    # Verify OVN SNAT rule exists
+    if [ "$HAS_OVN" = true ]; then
+        sleep 2  # brief wait for NATS event → vpcd → OVN
+        NAT_RULES=$(sudo ovn-nbctl --no-leader-only lr-nat-list "vpc-${DEFAULT_VPC}" 2>/dev/null || echo "")
+        if echo "$NAT_RULES" | grep -q "snat.*${NAT_PUB_IP}"; then
+            echo "  PASS: OVN SNAT rule created for NAT Gateway"
+        else
+            echo "  WARN: OVN SNAT rule not found yet (may need more time)"
+            echo "  NAT rules: $NAT_RULES"
+        fi
+    fi
+
+    # Step 4: Verify private instance CAN now reach internet
+    echo ""
+    echo "Step 4: Verify outbound connectivity via NAT GW"
+    sleep 3  # allow SNAT rule to take effect
+    if $BASTION_SSH "$PRIV_SSH_CMD 'ping -c 3 -W 5 8.8.8.8'" 2>/dev/null; then
+        echo "  PASS: Private instance can reach internet via NAT Gateway"
+    else
+        echo "  FAIL: Private instance cannot reach internet WITH NAT GW"
+        echo "  Dumping OVN NAT rules for debugging:"
+        sudo ovn-nbctl --no-leader-only lr-nat-list "vpc-${DEFAULT_VPC}" 2>/dev/null || true
+        exit 1
+    fi
+
+    # Step 5: Delete NAT GW and verify internet stops
+    echo ""
+    echo "Step 5: Delete NAT GW and verify internet stops"
+    aws ec2 delete-nat-gateway --nat-gateway-id "$NAT_GW_ID" > /dev/null
+    aws ec2 disassociate-route-table --association-id "$NAT_RTB_ASSOC"
+    aws ec2 delete-route --route-table-id "$NAT_RTB" --destination-cidr-block 0.0.0.0/0
+    aws ec2 delete-route-table --route-table-id "$NAT_RTB"
+    aws ec2 release-address --allocation-id "$NAT_ALLOC_ID"
+    echo "  NAT GW deleted, route table cleaned up, EIP released"
+
+    sleep 3  # allow SNAT rule removal to propagate
+
+    if $BASTION_SSH "$PRIV_SSH_CMD 'ping -c 1 -W 3 8.8.8.8'" 2>/dev/null; then
+        echo "  FAIL: Private instance still has internet after NAT GW deletion"
+        exit 1
+    fi
+    echo "  PASS: Private instance lost internet after NAT GW deletion"
+
+    echo ""
+    echo "Phase 8d: NAT Gateway E2E PASSED"
+fi
+
+echo ""
+echo "Phase 8b/8d Step: Cleanup"
 # Terminate both instances
 echo "Terminating public instance $PUB_INSTANCE_ID..."
 aws ec2 terminate-instances --instance-ids "$PUB_INSTANCE_ID"

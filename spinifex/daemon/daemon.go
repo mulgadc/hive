@@ -38,6 +38,7 @@ import (
 	handlers_ec2_image "github.com/mulgadc/spinifex/spinifex/handlers/ec2/image"
 	handlers_ec2_instance "github.com/mulgadc/spinifex/spinifex/handlers/ec2/instance"
 	handlers_ec2_key "github.com/mulgadc/spinifex/spinifex/handlers/ec2/key"
+	handlers_ec2_natgw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/natgw"
 	handlers_ec2_placementgroup "github.com/mulgadc/spinifex/spinifex/handlers/ec2/placementgroup"
 	handlers_ec2_routetable "github.com/mulgadc/spinifex/spinifex/handlers/ec2/routetable"
 	handlers_ec2_snapshot "github.com/mulgadc/spinifex/spinifex/handlers/ec2/snapshot"
@@ -113,6 +114,7 @@ type Daemon struct {
 	vpcService            *handlers_ec2_vpc.VPCServiceImpl
 	eipService            *handlers_ec2_eip.EIPServiceImpl
 	routeTableService     *handlers_ec2_routetable.RouteTableServiceImpl
+	natGatewayService     *handlers_ec2_natgw.NatGatewayServiceImpl
 	externalIPAM          *handlers_ec2_vpc.ExternalIPAM
 	ctx                   context.Context
 	cancel                context.CancelFunc
@@ -404,6 +406,9 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.RemoveInstanceFromPlacementGroup", d.handleEC2RemoveInstanceFromPlacementGroup, "spinifex-workers"},
 		{"ec2.ReserveClusterNode", d.handleEC2ReserveClusterNode, "spinifex-workers"},
 		{"ec2.FinalizeClusterInstances", d.handleEC2FinalizeClusterInstances, "spinifex-workers"},
+		{"ec2.CreateNatGateway", d.handleEC2CreateNatGateway, "spinifex-workers"},
+		{"ec2.DeleteNatGateway", d.handleEC2DeleteNatGateway, "spinifex-workers"},
+		{"ec2.DescribeNatGateways", d.handleEC2DescribeNatGateways, "spinifex-workers"},
 		{"ec2.CreateRouteTable", d.handleEC2CreateRouteTable, "spinifex-workers"},
 		{"ec2.DeleteRouteTable", d.handleEC2DeleteRouteTable, "spinifex-workers"},
 		{"ec2.DescribeRouteTables", d.handleEC2DescribeRouteTables, "spinifex-workers"},
@@ -574,6 +579,13 @@ func (d *Daemon) Start() error {
 	})
 	if err != nil {
 		return fmt.Errorf("failed to initialize RouteTable service: %w", err)
+	}
+
+	d.natGatewayService, err = initServiceWithRetry("NatGateway service", func() (*handlers_ec2_natgw.NatGatewayServiceImpl, error) {
+		return handlers_ec2_natgw.NewNatGatewayServiceImplWithNATS(d.natsConn)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to initialize NatGateway service: %w", err)
 	}
 
 	// Initialize external IPAM if pool mode is configured (per-VM public IPs).

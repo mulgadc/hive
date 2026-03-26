@@ -1032,6 +1032,7 @@ func TestEC2ActionMapCompleteness(t *testing.T) {
 		"CreateRouteTable", "DeleteRouteTable", "DescribeRouteTables",
 		"CreateRoute", "DeleteRoute", "ReplaceRoute",
 		"AssociateRouteTable", "DisassociateRouteTable", "ReplaceRouteTableAssociation",
+		"CreateNatGateway", "DeleteNatGateway", "DescribeNatGateways",
 	}
 
 	for _, action := range expectedActions {

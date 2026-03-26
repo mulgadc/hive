@@ -14,6 +14,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
 	handlers_ec2_igw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/igw"
+	handlers_ec2_natgw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/natgw"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
@@ -29,6 +30,7 @@ type RouteTableServiceImpl struct {
 	vpcKV    nats.KeyValue
 	igwKV    nats.KeyValue
 	subnetKV nats.KeyValue
+	natgwKV  nats.KeyValue
 	natsConn *nats.Conn
 }
 
@@ -62,6 +64,11 @@ func NewRouteTableServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (
 		return nil, fmt.Errorf("failed to get subnet KV bucket: %w", err)
 	}
 
+	natgwKV, err := utils.GetOrCreateKVBucket(js, handlers_ec2_natgw.KVBucketNatGateways, 10)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get NAT Gateway KV bucket: %w", err)
+	}
+
 	slog.Info("RouteTable service initialized with JetStream KV", "bucket", KVBucketRouteTables)
 
 	return &RouteTableServiceImpl{
@@ -70,6 +77,7 @@ func NewRouteTableServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (
 		vpcKV:    vpcKV,
 		igwKV:    igwKV,
 		subnetKV: subnetKV,
+		natgwKV:  natgwKV,
 		natsConn: natsConn,
 	}, nil
 }
@@ -347,39 +355,69 @@ func (s *RouteTableServiceImpl) CreateRoute(input *ec2.CreateRouteInput, account
 		}
 	}
 
-	// V1: only GatewayId target supported
-	if input.GatewayId == nil || *input.GatewayId == "" {
+	var route RouteRecord
+
+	switch {
+	case input.GatewayId != nil && *input.GatewayId != "":
+		igwID := *input.GatewayId
+		// Verify IGW exists and is attached to the same VPC
+		igwEntry, err := s.igwKV.Get(utils.AccountKey(accountID, igwID))
+		if err != nil {
+			return nil, errors.New(awserrors.ErrorInvalidInternetGatewayIDNotFound)
+		}
+		var igwRecord handlers_ec2_igw.IGWRecord
+		if err := json.Unmarshal(igwEntry.Value(), &igwRecord); err != nil {
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
+		if igwRecord.VpcId != record.VpcId {
+			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+		}
+		route = RouteRecord{
+			DestinationCidrBlock: destCidr,
+			GatewayId:            igwID,
+			State:                "active",
+			Origin:               "CreateRoute",
+		}
+
+	case input.NatGatewayId != nil && *input.NatGatewayId != "":
+		natgwID := *input.NatGatewayId
+		// Verify NAT GW exists and belongs to the same VPC
+		natgwEntry, err := s.natgwKV.Get(utils.AccountKey(accountID, natgwID))
+		if err != nil {
+			return nil, errors.New(awserrors.ErrorInvalidNatGatewayIDNotFound)
+		}
+		var natgwRecord struct {
+			NatGatewayId string `json:"nat_gateway_id"`
+			VpcId        string `json:"vpc_id"`
+			PublicIp     string `json:"public_ip"`
+		}
+		if err := json.Unmarshal(natgwEntry.Value(), &natgwRecord); err != nil {
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
+		if natgwRecord.VpcId != record.VpcId {
+			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+		}
+		route = RouteRecord{
+			DestinationCidrBlock: destCidr,
+			NatGatewayId:         natgwID,
+			State:                "active",
+			Origin:               "CreateRoute",
+		}
+
+		// Publish vpc.add-nat-gateway events for each subnet associated with this route table
+		s.publishNatGatewayEvents(accountID, record, natgwRecord.VpcId, natgwID, natgwRecord.PublicIp)
+
+	default:
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
-	igwID := *input.GatewayId
-
-	// Verify IGW exists and is attached to the same VPC
-	igwEntry, err := s.igwKV.Get(utils.AccountKey(accountID, igwID))
-	if err != nil {
-		return nil, errors.New(awserrors.ErrorInvalidInternetGatewayIDNotFound)
-	}
-	var igwRecord handlers_ec2_igw.IGWRecord
-	if err := json.Unmarshal(igwEntry.Value(), &igwRecord); err != nil {
-		return nil, errors.New(awserrors.ErrorServerInternal)
-	}
-	if igwRecord.VpcId != record.VpcId {
-		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
-	}
-
-	route := RouteRecord{
-		DestinationCidrBlock: destCidr,
-		GatewayId:            igwID,
-		State:                "active",
-		Origin:               "CreateRoute",
-	}
 	record.Routes = append(record.Routes, route)
 
 	if err := s.putRouteTable(accountID, record); err != nil {
 		return nil, err
 	}
 
-	slog.Info("CreateRoute completed", "routeTableId", rtbID, "destination", destCidr, "gatewayId", igwID, "accountID", accountID)
+	slog.Info("CreateRoute completed", "routeTableId", rtbID, "destination", destCidr, "accountID", accountID)
 
 	return &ec2.CreateRouteOutput{
 		Return: aws.Bool(true),
@@ -782,6 +820,49 @@ func matchesFilters(record *RouteTableRecord, filters map[string][]string) bool 
 
 func containsString(slice []string, s string) bool {
 	return slices.Contains(slice, s)
+}
+
+// publishNatGatewayEvents publishes vpc.add-nat-gateway events for each subnet
+// associated with this route table, so vpcd creates the SNAT rules.
+func (s *RouteTableServiceImpl) publishNatGatewayEvents(accountID string, record *RouteTableRecord, vpcID, natgwID, publicIp string) {
+	if s.natsConn == nil {
+		return
+	}
+	for _, assoc := range record.Associations {
+		if assoc.SubnetId == "" || assoc.Main {
+			continue
+		}
+		subnetEntry, err := s.subnetKV.Get(utils.AccountKey(accountID, assoc.SubnetId))
+		if err != nil {
+			continue
+		}
+		var subnet handlers_ec2_vpc.SubnetRecord
+		if err := json.Unmarshal(subnetEntry.Value(), &subnet); err != nil {
+			continue
+		}
+
+		evt := struct {
+			VpcId        string `json:"vpc_id"`
+			NatGatewayId string `json:"nat_gateway_id"`
+			PublicIp     string `json:"public_ip"`
+			SubnetCidr   string `json:"subnet_cidr"`
+		}{
+			VpcId:        vpcID,
+			NatGatewayId: natgwID,
+			PublicIp:     publicIp,
+			SubnetCidr:   subnet.CidrBlock,
+		}
+		eventData, err := json.Marshal(evt)
+		if err != nil {
+			slog.Warn("Failed to marshal NAT GW add event", "err", err)
+			continue
+		}
+		if err := s.natsConn.Publish("vpc.add-nat-gateway", eventData); err != nil {
+			slog.Warn("Failed to publish NAT GW add event", "subnet", assoc.SubnetId, "err", err)
+		} else {
+			slog.Info("Published NAT GW add event", "subnetCidr", subnet.CidrBlock, "publicIp", publicIp)
+		}
+	}
 }
 
 // recordToEC2 converts an internal record to an AWS SDK RouteTable struct
