@@ -212,8 +212,16 @@ if [ ! -f ~/.ssh/spinifex-key.pub ]; then
     ssh-keygen -t ed25519 -f ~/.ssh/spinifex-key -N ""
 fi
 
+# Trust the Spinifex CA certificate so TLS connections to predastore/awsgw work
+if [ -f "$HOME/spinifex/config/ca.pem" ]; then
+    echo "Adding Spinifex CA certificate to system trust store..."
+    sudo cp "$HOME/spinifex/config/ca.pem" /usr/local/share/ca-certificates/spinifex-ca.crt
+    sudo update-ca-certificates
+fi
+
 # Enable pprof for development
-PPROF_ENABLED=1 PPROF_OUTPUT=/tmp/spinifex-vm.prof ./scripts/start-dev.sh --build
+#PPROF_ENABLED=1 PPROF_OUTPUT=/tmp/spinifex-vm.prof ./scripts/start-dev.sh --build
+./scripts/start-dev.sh --build
 
 export AWS_PROFILE=spinifex
 

@@ -2996,13 +2996,15 @@ echo "  PASS: Bastion → private instance SSH works (hostname: $PRIV_HOSTNAME)"
     NAT_GW_ID=$(echo "$NAT_GW_OUTPUT" | jq -r '.NatGateway.NatGatewayId')
     echo "  NAT Gateway: $NAT_GW_ID"
 
-    # Create route table for private subnet with NAT GW route
+    # Create route table, associate with private subnet, THEN add NAT GW route.
+    # Order matters: CreateRoute publishes SNAT events for associated subnets,
+    # so the association must exist before the route is added.
     NAT_RTB=$(aws ec2 create-route-table --vpc-id "$DEFAULT_VPC" \
         --query 'RouteTable.RouteTableId' --output text)
-    aws ec2 create-route --route-table-id "$NAT_RTB" \
-        --destination-cidr-block 0.0.0.0/0 --nat-gateway-id "$NAT_GW_ID" > /dev/null
     NAT_RTB_ASSOC=$(aws ec2 associate-route-table --route-table-id "$NAT_RTB" \
         --subnet-id "$PRIV_SUBNET_ID" --query 'AssociationId' --output text)
+    aws ec2 create-route --route-table-id "$NAT_RTB" \
+        --destination-cidr-block 0.0.0.0/0 --nat-gateway-id "$NAT_GW_ID" > /dev/null
     echo "  Route: 0.0.0.0/0 → $NAT_GW_ID (rtb: $NAT_RTB, assoc: $NAT_RTB_ASSOC)"
 
     # Verify OVN SNAT rule exists
