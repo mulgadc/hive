@@ -1218,6 +1218,123 @@ func (d *Daemon) handleEC2ModifyInstanceAttribute(msg *nats.Msg) {
 	}
 }
 
+// handleEC2DescribeInstanceAttribute returns a single requested attribute for an instance.
+// It checks running instances first (in-memory), then falls back to stopped instances in KV.
+func (d *Daemon) handleEC2DescribeInstanceAttribute(msg *nats.Msg) {
+	var input ec2.DescribeInstanceAttributeInput
+	if err := json.Unmarshal(msg.Data, &input); err != nil {
+		slog.Error("handleEC2DescribeInstanceAttribute: failed to unmarshal request", "err", err)
+		respondWithError(msg, awserrors.ErrorServerInternal)
+		return
+	}
+
+	if input.InstanceId == nil || *input.InstanceId == "" {
+		slog.Error("handleEC2DescribeInstanceAttribute: missing instance_id")
+		respondWithError(msg, awserrors.ErrorMissingParameter)
+		return
+	}
+	if input.Attribute == nil || *input.Attribute == "" {
+		slog.Error("handleEC2DescribeInstanceAttribute: missing attribute")
+		respondWithError(msg, awserrors.ErrorMissingParameter)
+		return
+	}
+
+	instanceID := *input.InstanceId
+	attribute := *input.Attribute
+	accountID := utils.AccountIDFromMsg(msg)
+
+	// Look up instance: running first, then stopped KV.
+	var instance *vm.VM
+
+	d.Instances.Mu.Lock()
+	if running, ok := d.Instances.VMS[instanceID]; ok {
+		instance = running
+	}
+	d.Instances.Mu.Unlock()
+
+	if instance == nil {
+		if d.jsManager == nil {
+			slog.Error("handleEC2DescribeInstanceAttribute: JetStream not available")
+			respondWithError(msg, awserrors.ErrorServerInternal)
+			return
+		}
+		stopped, err := d.jsManager.LoadStoppedInstance(instanceID)
+		if err != nil {
+			slog.Error("handleEC2DescribeInstanceAttribute: failed to load stopped instance",
+				"instanceId", instanceID, "err", err)
+			respondWithError(msg, awserrors.ErrorServerInternal)
+			return
+		}
+		instance = stopped
+	}
+
+	if instance == nil {
+		slog.Warn("handleEC2DescribeInstanceAttribute: instance not found",
+			"instanceId", instanceID)
+		respondWithError(msg, awserrors.ErrorInvalidInstanceIDNotFound)
+		return
+	}
+
+	if !checkInstanceOwnership(msg, instanceID, instance.AccountID) {
+		return
+	}
+
+	output := &ec2.DescribeInstanceAttributeOutput{
+		InstanceId: &instanceID,
+	}
+
+	switch attribute {
+	case ec2.InstanceAttributeNameInstanceType:
+		val := instance.InstanceType
+		output.InstanceType = &ec2.AttributeValue{Value: &val}
+
+	case ec2.InstanceAttributeNameUserData:
+		val := instance.UserData
+		output.UserData = &ec2.AttributeValue{Value: &val}
+
+	case ec2.InstanceAttributeNameDisableApiTermination:
+		val := false
+		output.DisableApiTermination = &ec2.AttributeBooleanValue{Value: &val}
+
+	case ec2.InstanceAttributeNameDisableApiStop:
+		val := false
+		output.DisableApiStop = &ec2.AttributeBooleanValue{Value: &val}
+
+	case ec2.InstanceAttributeNameInstanceInitiatedShutdownBehavior:
+		val := ec2.ShutdownBehaviorStop
+		output.InstanceInitiatedShutdownBehavior = &ec2.AttributeValue{Value: &val}
+
+	case ec2.InstanceAttributeNameEbsOptimized:
+		val := false
+		output.EbsOptimized = &ec2.AttributeBooleanValue{Value: &val}
+
+	case ec2.InstanceAttributeNameEnaSupport:
+		val := true
+		output.EnaSupport = &ec2.AttributeBooleanValue{Value: &val}
+
+	case ec2.InstanceAttributeNameSourceDestCheck:
+		val := true
+		output.SourceDestCheck = &ec2.AttributeBooleanValue{Value: &val}
+
+	case ec2.InstanceAttributeNameGroupSet:
+		if instance.Instance != nil && len(instance.Instance.SecurityGroups) > 0 {
+			output.Groups = instance.Instance.SecurityGroups
+		} else {
+			output.Groups = []*ec2.GroupIdentifier{}
+		}
+
+	default:
+		slog.Warn("handleEC2DescribeInstanceAttribute: unsupported attribute",
+			"instanceId", instanceID, "attribute", attribute)
+		respondWithError(msg, awserrors.ErrorInvalidParameterValue)
+		return
+	}
+
+	slog.Info("handleEC2DescribeInstanceAttribute: completed",
+		"instanceId", instanceID, "attribute", attribute, "accountID", accountID)
+	respondWithJSON(msg, output)
+}
+
 // publishNATEvent publishes a NAT lifecycle event (vpc.add-nat or vpc.delete-nat) to NATS.
 func (d *Daemon) publishNATEvent(topic, vpcId, externalIP, logicalIP, portName, mac string) {
 	if d.natsConn == nil {
