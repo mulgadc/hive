@@ -169,7 +169,7 @@ func TestGetLoadBalancerByName(t *testing.T) {
 	lb := newTestLB("name123", "find-by-name")
 	require.NoError(t, store.PutLoadBalancer(lb))
 
-	got, err := store.GetLoadBalancerByName("find-by-name")
+	got, err := store.GetLoadBalancerByName("find-by-name", testAccountID)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, lb.LoadBalancerID, got.LoadBalancerID)

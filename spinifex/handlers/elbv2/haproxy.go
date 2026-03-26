@@ -230,6 +230,11 @@ func (m *HAProxyManager) Start(lbID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	return m.startLocked(lbID)
+}
+
+// startLocked is the lock-free core of Start. Caller must hold m.mu.
+func (m *HAProxyManager) startLocked(lbID string) error {
 	if err := os.MkdirAll(m.configDir, 0o750); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
@@ -269,11 +274,8 @@ func (m *HAProxyManager) Reload(lbID string) error {
 
 	oldPid, ok := m.pids[lbID]
 	if !ok || oldPid <= 0 {
-		// Not running — do a fresh start instead (unlock first)
-		m.mu.Unlock()
-		err := m.Start(lbID)
-		m.mu.Lock()
-		return err
+		// Not running — do a fresh start instead
+		return m.startLocked(lbID)
 	}
 
 	configPath := m.configFilePath(lbID)

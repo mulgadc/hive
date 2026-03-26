@@ -1857,6 +1857,11 @@ func (d *Daemon) setupShutdown() {
 			}
 		}
 
+		// Stop ELBv2 background goroutines
+		if d.elbv2Service != nil {
+			d.elbv2Service.Close()
+		}
+
 		// Final cleanup
 		for _, sub := range d.natsSubscriptions {
 			// Unsubscribe from each subscription
@@ -2318,9 +2323,17 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 								slog.Warn("DEV_NETWORKING: failed to find free port for extra hostfwd", "guestPort", guestPort, "err", fwdErr)
 								continue
 							}
-							_, hostPort, _ := net.SplitHostPort(fwdAddr)
+							_, hostPort, splitErr := net.SplitHostPort(fwdAddr)
+							if splitErr != nil {
+								slog.Warn("DEV_NETWORKING: failed to parse extra hostfwd address", "fwdAddr", fwdAddr, "err", splitErr)
+								continue
+							}
+							hostPortInt, convErr := strconv.Atoi(hostPort)
+							if convErr != nil {
+								slog.Warn("DEV_NETWORKING: failed to convert extra hostfwd port", "hostPort", hostPort, "err", convErr)
+								continue
+							}
 							netdevVal += fmt.Sprintf(",hostfwd=tcp:%s:%s-:%d", bindIP, hostPort, guestPort)
-							hostPortInt, _ := strconv.Atoi(hostPort)
 							instance.ExtraHostfwd[guestPort] = hostPortInt
 							slog.Info("DEV_NETWORKING: extra hostfwd", "guestPort", guestPort, "hostPort", hostPort, "instanceId", instance.ID)
 						}

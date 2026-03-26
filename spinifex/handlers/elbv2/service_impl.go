@@ -1,6 +1,7 @@
 package handlers_elbv2
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -54,6 +55,8 @@ type ELBv2ServiceImpl struct {
 	region           string
 	systemAMI        string // AMI ID for system VMs (ALB VMs), set by daemon
 	natsURL          string // NATS URL for ALB VM cloud-init, set by daemon
+	ctx              context.Context
+	cancel           context.CancelFunc
 }
 
 // NewELBv2ServiceImplWithNATS creates an ELBv2 service backed by JetStream KV.
@@ -72,13 +75,23 @@ func NewELBv2ServiceImplWithNATS(cfg *config.Config, nc *nats.Conn) (*ELBv2Servi
 		nodeID = cfg.Node
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	return &ELBv2ServiceImpl{
 		config: cfg,
 		store:  store,
 		nc:     nc,
 		nodeID: nodeID,
 		region: region,
+		ctx:    ctx,
+		cancel: cancel,
 	}, nil
+}
+
+// Close cancels background goroutines (e.g. waitForAgentReady).
+func (s *ELBv2ServiceImpl) Close() {
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
 
 // SetVPCService sets the VPC service for ENI management. Called by the daemon
@@ -132,6 +145,12 @@ func (s *ELBv2ServiceImpl) waitForAgentReady(lbArn, lbID string) {
 	timeout := 3 * time.Second
 
 	for attempt := 1; attempt <= 90; attempt++ { // up to ~5 minutes
+		select {
+		case <-s.ctx.Done():
+			slog.Info("waitForAgentReady cancelled", "lbId", lbID)
+			return
+		default:
+		}
 		if s.nc == nil {
 			return
 		}
@@ -156,7 +175,14 @@ func (s *ELBv2ServiceImpl) waitForAgentReady(lbArn, lbID string) {
 		time.Sleep(time.Second)
 	}
 
-	slog.Warn("ALB agent did not respond within timeout, LB remains in provisioning", "lbId", lbID)
+	slog.Error("ALB agent did not respond within timeout", "lbId", lbID)
+	lb, lbErr := s.store.GetLoadBalancerByArn(lbArn)
+	if lbErr == nil && lb != nil && lb.State == StateProvisioning {
+		lb.State = StateFailed
+		if putErr := s.store.PutLoadBalancer(lb); putErr != nil {
+			slog.Error("Failed to update LB state to failed", "lbId", lbID, "err", putErr)
+		}
+	}
 }
 
 // pushConfig generates the HAProxy config for an ALB and publishes it to the
@@ -269,7 +295,7 @@ func (s *ELBv2ServiceImpl) resolveTargetIP(instanceID, accountID string) string 
 		},
 	}, accountID)
 	if err != nil || len(result.NetworkInterfaces) == 0 {
-		slog.Debug("Could not resolve target IP", "instanceId", instanceID, "err", err)
+		slog.Warn("Could not resolve target IP — target will not receive traffic until ENI is attached", "instanceId", instanceID, "err", err)
 		return ""
 	}
 
@@ -300,8 +326,9 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 	name := *input.Name
 
 	// Check for duplicate name
-	existing, err := s.store.GetLoadBalancerByName(name)
+	existing, err := s.store.GetLoadBalancerByName(name, accountID)
 	if err != nil {
+		slog.Error("CreateLoadBalancer: failed to check duplicate name", "name", name, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 	if existing != nil {
@@ -458,6 +485,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 	}
 
 	if err := s.store.PutLoadBalancer(record); err != nil {
+		slog.Error("CreateLoadBalancer: failed to persist record", "lbId", lbID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -480,9 +508,10 @@ func (s *ELBv2ServiceImpl) DeleteLoadBalancer(input *elbv2.DeleteLoadBalancerInp
 
 	lb, err := s.store.GetLoadBalancerByArn(*input.LoadBalancerArn)
 	if err != nil {
+		slog.Error("DeleteLoadBalancer: failed to get LB", "arn", *input.LoadBalancerArn, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
-	if lb == nil {
+	if lb == nil || lb.AccountID != accountID {
 		return nil, errors.New(awserrors.ErrorELBv2LoadBalancerNotFound)
 	}
 
@@ -522,6 +551,7 @@ func (s *ELBv2ServiceImpl) DeleteLoadBalancer(input *elbv2.DeleteLoadBalancerInp
 	}
 
 	if err := s.store.DeleteLoadBalancer(lb.LoadBalancerID); err != nil {
+		slog.Error("DeleteLoadBalancer: failed to delete record", "lbId", lb.LoadBalancerID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -533,6 +563,7 @@ func (s *ELBv2ServiceImpl) DeleteLoadBalancer(input *elbv2.DeleteLoadBalancerInp
 func (s *ELBv2ServiceImpl) DescribeLoadBalancers(input *elbv2.DescribeLoadBalancersInput, accountID string) (*elbv2.DescribeLoadBalancersOutput, error) {
 	allLBs, err := s.store.ListLoadBalancers()
 	if err != nil {
+		slog.Error("DescribeLoadBalancers: failed to list LBs", "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -596,6 +627,7 @@ func (s *ELBv2ServiceImpl) CreateTargetGroup(input *elbv2.CreateTargetGroupInput
 	// Check duplicate name within VPC
 	existing, err := s.store.GetTargetGroupByName(name, vpcID)
 	if err != nil {
+		slog.Error("CreateTargetGroup: failed to check duplicate name", "name", name, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 	if existing != nil {
@@ -658,6 +690,7 @@ func (s *ELBv2ServiceImpl) CreateTargetGroup(input *elbv2.CreateTargetGroupInput
 	}
 
 	if err := s.store.PutTargetGroup(record); err != nil {
+		slog.Error("CreateTargetGroup: failed to persist record", "tgId", tgID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -675,15 +708,17 @@ func (s *ELBv2ServiceImpl) DeleteTargetGroup(input *elbv2.DeleteTargetGroupInput
 
 	tg, err := s.store.GetTargetGroupByArn(*input.TargetGroupArn)
 	if err != nil {
+		slog.Error("DeleteTargetGroup: failed to get TG", "arn", *input.TargetGroupArn, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
-	if tg == nil {
+	if tg == nil || tg.AccountID != accountID {
 		return nil, errors.New(awserrors.ErrorELBv2TargetGroupNotFound)
 	}
 
 	// Check if any listener references this target group
 	listeners, err := s.store.ListListeners()
 	if err != nil {
+		slog.Error("DeleteTargetGroup: failed to list listeners for in-use check", "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 	for _, l := range listeners {
@@ -695,6 +730,7 @@ func (s *ELBv2ServiceImpl) DeleteTargetGroup(input *elbv2.DeleteTargetGroupInput
 	}
 
 	if err := s.store.DeleteTargetGroup(tg.TargetGroupID); err != nil {
+		slog.Error("DeleteTargetGroup: failed to delete record", "tgId", tg.TargetGroupID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -706,6 +742,7 @@ func (s *ELBv2ServiceImpl) DeleteTargetGroup(input *elbv2.DeleteTargetGroupInput
 func (s *ELBv2ServiceImpl) DescribeTargetGroups(input *elbv2.DescribeTargetGroupsInput, accountID string) (*elbv2.DescribeTargetGroupsOutput, error) {
 	allTGs, err := s.store.ListTargetGroups()
 	if err != nil {
+		slog.Error("DescribeTargetGroups: failed to list TGs", "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -766,6 +803,7 @@ func (s *ELBv2ServiceImpl) RegisterTargets(input *elbv2.RegisterTargetsInput, ac
 
 	tg, err := s.store.GetTargetGroupByArn(*input.TargetGroupArn)
 	if err != nil {
+		slog.Error("RegisterTargets: failed to get TG", "arn", *input.TargetGroupArn, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 	if tg == nil {
@@ -805,6 +843,7 @@ func (s *ELBv2ServiceImpl) RegisterTargets(input *elbv2.RegisterTargetsInput, ac
 	}
 
 	if err := s.store.PutTargetGroup(tg); err != nil {
+		slog.Error("RegisterTargets: failed to persist TG", "arn", *input.TargetGroupArn, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -823,6 +862,7 @@ func (s *ELBv2ServiceImpl) DeregisterTargets(input *elbv2.DeregisterTargetsInput
 
 	tg, err := s.store.GetTargetGroupByArn(*input.TargetGroupArn)
 	if err != nil {
+		slog.Error("DeregisterTargets: failed to get TG", "arn", *input.TargetGroupArn, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 	if tg == nil {
@@ -852,6 +892,7 @@ func (s *ELBv2ServiceImpl) DeregisterTargets(input *elbv2.DeregisterTargetsInput
 	tg.Targets = remaining
 
 	if err := s.store.PutTargetGroup(tg); err != nil {
+		slog.Error("DeregisterTargets: failed to persist TG", "arn", *input.TargetGroupArn, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -870,6 +911,7 @@ func (s *ELBv2ServiceImpl) DescribeTargetHealth(input *elbv2.DescribeTargetHealt
 
 	tg, err := s.store.GetTargetGroupByArn(*input.TargetGroupArn)
 	if err != nil {
+		slog.Error("DescribeTargetHealth: failed to get TG", "arn", *input.TargetGroupArn, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 	if tg == nil {
@@ -920,6 +962,7 @@ func (s *ELBv2ServiceImpl) CreateListener(input *elbv2.CreateListenerInput, acco
 
 	lb, err := s.store.GetLoadBalancerByArn(*input.LoadBalancerArn)
 	if err != nil {
+		slog.Error("CreateListener: failed to get LB", "arn", *input.LoadBalancerArn, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 	if lb == nil {
@@ -939,6 +982,7 @@ func (s *ELBv2ServiceImpl) CreateListener(input *elbv2.CreateListenerInput, acco
 	// Check for duplicate listener on same port
 	existingListeners, err := s.store.ListListenersByLB(lb.LoadBalancerArn)
 	if err != nil {
+		slog.Error("CreateListener: failed to list existing listeners", "lbArn", lb.LoadBalancerArn, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 	for _, l := range existingListeners {
@@ -974,6 +1018,7 @@ func (s *ELBv2ServiceImpl) CreateListener(input *elbv2.CreateListenerInput, acco
 	}
 
 	if err := s.store.PutListener(record); err != nil {
+		slog.Error("CreateListener: failed to persist record", "listenerId", listenerID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -994,13 +1039,15 @@ func (s *ELBv2ServiceImpl) DeleteListener(input *elbv2.DeleteListenerInput, acco
 
 	listener, err := s.store.GetListenerByArn(*input.ListenerArn)
 	if err != nil {
+		slog.Error("DeleteListener: failed to get listener", "arn", *input.ListenerArn, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
-	if listener == nil {
+	if listener == nil || listener.AccountID != accountID {
 		return nil, errors.New(awserrors.ErrorELBv2ListenerNotFound)
 	}
 
 	if err := s.store.DeleteListener(listener.ListenerID); err != nil {
+		slog.Error("DeleteListener: failed to delete record", "listenerId", listener.ListenerID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -1025,6 +1072,7 @@ func (s *ELBv2ServiceImpl) DescribeListeners(input *elbv2.DescribeListenersInput
 		listeners, err = s.store.ListListeners()
 	}
 	if err != nil {
+		slog.Error("DescribeListeners: failed to list listeners", "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 

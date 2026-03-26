@@ -186,7 +186,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 			// Mark ENI as attached to this instance so attachment.instance-id
 			// filter works (used by ELBv2 RegisterTargets to resolve target IPs).
 			if _, attachErr := d.vpcService.AttachENI(accountID, instance.ENIId, instance.ID, 0); attachErr != nil {
-				slog.Warn("Failed to attach ENI to instance record", "eniId", instance.ENIId, "instanceId", instance.ID, "err", attachErr)
+				slog.Error("Failed to attach ENI to instance record — ELBv2 target IP resolution will fail", "eniId", instance.ENIId, "instanceId", instance.ID, "err", attachErr)
 			}
 			ec2Instance.SetPrivateIpAddress(*eni.PrivateIpAddress)
 			ec2Instance.SetSubnetId(*runInstancesInput.SubnetId)

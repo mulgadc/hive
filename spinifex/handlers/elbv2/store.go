@@ -102,14 +102,14 @@ func (s *Store) GetLoadBalancerByArn(arn string) (*LoadBalancerRecord, error) {
 	return nil, nil
 }
 
-// GetLoadBalancerByName finds a load balancer by name.
-func (s *Store) GetLoadBalancerByName(name string) (*LoadBalancerRecord, error) {
+// GetLoadBalancerByName finds a load balancer by name within an account.
+func (s *Store) GetLoadBalancerByName(name, accountID string) (*LoadBalancerRecord, error) {
 	lbs, err := s.ListLoadBalancers()
 	if err != nil {
 		return nil, err
 	}
 	for _, lb := range lbs {
-		if lb.Name == name {
+		if lb.Name == name && lb.AccountID == accountID {
 			return lb, nil
 		}
 	}
