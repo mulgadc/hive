@@ -780,6 +780,17 @@ func matchesFilters(record *RouteTableRecord, filters map[string][]string) bool 
 			if wantMain != hasMain {
 				return false
 			}
+		case "association.route-table-association-id":
+			found := false
+			for _, a := range record.Associations {
+				if containsString(values, a.AssociationId) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
 		case "association.subnet-id":
 			found := false
 			for _, a := range record.Associations {
