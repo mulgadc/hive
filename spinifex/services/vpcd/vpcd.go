@@ -191,10 +191,12 @@ var discoverChassis = func(sbAddr string) ([]string, error) {
 	if sbAddr != "" {
 		args = append(args, "--db="+sbAddr)
 	}
-	args = append(args, "list-chassis")
+	// OVN 25.03+ removed the "list-chassis" convenience command.
+	// Use "--columns=name list Chassis" which works on all versions.
+	args = append(args, "--bare", "--columns=name", "list", "Chassis")
 	out, err := sudoCommand("ovn-sbctl", args...).CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("ovn-sbctl list-chassis: %s: %w", strings.TrimSpace(string(out)), err)
+		return nil, fmt.Errorf("ovn-sbctl list Chassis: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	var names []string
 	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {

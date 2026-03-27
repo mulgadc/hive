@@ -220,7 +220,7 @@ func init() {
 	// External networking flags
 	adminInitCmd.Flags().String("external-mode", "", "External network mode: 'pool' (default when WAN detected) or '' (disabled)")
 	adminInitCmd.Flags().String("external-iface", "", "WAN NIC for br-external (auto-detected from default route)")
-	adminInitCmd.Flags().String("external-source", "", "Pool IP source: 'static' (default, uses --external-pool range) or 'dhcp' (from router DHCP)")
+	adminInitCmd.Flags().String("external-source", "dhcp", "Pool IP source: 'dhcp' (default, from router DHCP) or 'static' (uses --external-pool range)")
 	adminInitCmd.Flags().String("external-pool", "", "External IP pool range as start-end (e.g., 192.168.1.150-192.168.1.250)")
 	adminInitCmd.Flags().String("external-gateway", "", "WAN gateway IP (auto-detected from default route)")
 	adminInitCmd.Flags().String("gateway-ip", "", "OVN gateway router's external IP for SNAT (default: pool range_start for pool mode, required for nat mode without DHCP)")

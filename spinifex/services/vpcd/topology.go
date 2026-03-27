@@ -673,12 +673,18 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 		if gip == "" {
 			gip = pool.RangeStart // Default: first IP in range
 		}
-		gatewayIP = gip
-		prefixLen := pool.PrefixLen
-		if prefixLen == 0 {
-			prefixLen = 24
+		if gip != "" {
+			// Static pool: use the pool's IP for the gateway router port
+			gatewayIP = gip
+			prefixLen := pool.PrefixLen
+			if prefixLen == 0 {
+				prefixLen = 24
+			}
+			gatewayNetwork = fmt.Sprintf("%s/%d", gip, prefixLen)
 		}
-		gatewayNetwork = fmt.Sprintf("%s/%d", gip, prefixLen)
+		// DHCP-sourced pools have no GatewayIP/RangeStart — keep the
+		// link-local defaults for the OVN router port but still use the
+		// pool's WAN gateway for the default route.
 		wanGateway = pool.Gateway
 		slog.Info("vpcd: using external pool for IGW",
 			"pool", pool.Name,
@@ -1059,12 +1065,14 @@ func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId, igwId string)
 		if gip == "" {
 			gip = pool.RangeStart
 		}
-		gatewayIP = gip
-		prefixLen := pool.PrefixLen
-		if prefixLen == 0 {
-			prefixLen = 24
+		if gip != "" {
+			gatewayIP = gip
+			prefixLen := pool.PrefixLen
+			if prefixLen == 0 {
+				prefixLen = 24
+			}
+			gatewayNetwork = fmt.Sprintf("%s/%d", gip, prefixLen)
 		}
-		gatewayNetwork = fmt.Sprintf("%s/%d", gip, prefixLen)
 		wanGateway = pool.Gateway
 	}
 

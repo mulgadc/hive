@@ -197,7 +197,6 @@ if [ -n "$WAN_IFACE" ] && [ -n "$WAN_GW" ]; then
         ADMIN_INIT_ARGS="$ADMIN_INIT_ARGS --external-mode=pool --external-pool=${POOL_START}-${POOL_END} --external-gateway=${WAN_GW} --external-prefix-len=${WAN_PREFIX}"
     fi
 fi
-./bin/spx admin init $ADMIN_INIT_ARGS
 
 # Re-initialize with --force to regenerate credentials, certs, config, and
 # update ~/.aws/credentials. Must carry the same args so external networking
