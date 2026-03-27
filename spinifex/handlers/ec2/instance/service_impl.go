@@ -63,7 +63,7 @@ write_files:
 {{.UserDataScript}}
 
 runcmd:
-  - [ "/bin/sh", "/tmp/cloud-init-startup.sh" ]
+  - [ "/bin/bash", "/tmp/cloud-init-startup.sh" ]
 {{end}}
 `
 

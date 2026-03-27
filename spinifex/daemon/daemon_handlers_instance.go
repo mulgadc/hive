@@ -157,6 +157,20 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 			continue
 		}
 
+		// When Terraform sets associate_public_ip_address, it sends the subnet
+		// and security groups inside NetworkInterfaces[0] instead of the top-level
+		// fields. Extract them so the rest of the handler works uniformly.
+		if (runInstancesInput.SubnetId == nil || *runInstancesInput.SubnetId == "") &&
+			len(runInstancesInput.NetworkInterfaces) > 0 && runInstancesInput.NetworkInterfaces[0] != nil {
+			nic := runInstancesInput.NetworkInterfaces[0]
+			if nic.SubnetId != nil && *nic.SubnetId != "" {
+				runInstancesInput.SubnetId = nic.SubnetId
+			}
+			if len(runInstancesInput.SecurityGroupIds) == 0 && len(nic.Groups) > 0 {
+				runInstancesInput.SecurityGroupIds = nic.Groups
+			}
+		}
+
 		// Resolve default subnet when none specified (matches AWS behavior)
 		if (runInstancesInput.SubnetId == nil || *runInstancesInput.SubnetId == "") && d.vpcService != nil {
 			defaultSubnet, dsErr := d.vpcService.GetDefaultSubnet(accountID)
