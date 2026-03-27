@@ -8,6 +8,7 @@ import {
   DescribePlacementGroupsCommand,
   DescribeRegionsCommand,
   DescribeRouteTablesCommand,
+  DescribeSecurityGroupsCommand,
   DescribeSnapshotsCommand,
   DescribeSubnetsCommand,
   DescribeVolumesCommand,
@@ -201,6 +202,25 @@ export const ec2PlacementGroupQueryOptions = (groupId: string) =>
     queryKey: ["ec2", "placementGroups", groupId],
     queryFn: () => {
       const command = new DescribePlacementGroupsCommand({
+        GroupIds: [groupId],
+      })
+      return getEc2Client().send(command)
+    },
+  })
+
+export const ec2SecurityGroupsQueryOptions = queryOptions({
+  queryKey: ["ec2", "securityGroups"],
+  queryFn: () => {
+    const command = new DescribeSecurityGroupsCommand({})
+    return getEc2Client().send(command)
+  },
+})
+
+export const ec2SecurityGroupQueryOptions = (groupId: string) =>
+  queryOptions({
+    queryKey: ["ec2", "securityGroups", groupId],
+    queryFn: () => {
+      const command = new DescribeSecurityGroupsCommand({
         GroupIds: [groupId],
       })
       return getEc2Client().send(command)

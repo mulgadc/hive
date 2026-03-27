@@ -239,3 +239,31 @@ export const createPlacementGroupSchema = z.object({
 export type CreatePlacementGroupFormData = z.infer<
   typeof createPlacementGroupSchema
 >
+
+export const createSecurityGroupSchema = z.object({
+  groupName: z
+    .string()
+    .min(1, "Group name is required")
+    .max(255, "Group name must be 255 characters or less"),
+  description: z
+    .string()
+    .min(1, "Description is required")
+    .max(255, "Description must be 255 characters or less"),
+  vpcId: z.string().min(1, "VPC is required"),
+})
+
+export type CreateSecurityGroupFormData = z.infer<
+  typeof createSecurityGroupSchema
+>
+
+export const securityGroupRuleSchema = z.object({
+  ipProtocol: z.string().min(1, "Protocol is required"),
+  fromPort: z.number().int().min(-1).max(65_535),
+  toPort: z.number().int().min(-1).max(65_535),
+  cidrIp: z
+    .string()
+    .min(1, "CIDR is required")
+    .regex(CIDR_REGEX, "Must be a valid CIDR block (e.g. 0.0.0.0/0)"),
+})
+
+export type SecurityGroupRuleFormData = z.infer<typeof securityGroupRuleSchema>

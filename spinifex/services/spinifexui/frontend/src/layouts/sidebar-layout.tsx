@@ -12,6 +12,7 @@ import {
   Network,
   Server,
   Shield,
+  ShieldCheck,
   Users,
 } from "lucide-react"
 
@@ -193,6 +194,21 @@ export function SidebarLayout() {
                 >
                   <LayoutGrid className="size-4" />
                   <span>Subnets</span>
+                </SidebarMenuButton>
+              </Link>
+            </SidebarMenuItem>
+
+            <SidebarMenuItem>
+              <Link to="/ec2/describe-security-groups">
+                <SidebarMenuButton
+                  isActive={
+                    pathname.startsWith("/ec2/describe-security-groups") ||
+                    pathname.startsWith("/ec2/create-security-group")
+                  }
+                  tooltip="Security Groups"
+                >
+                  <ShieldCheck className="size-4" />
+                  <span>Security Groups</span>
                 </SidebarMenuButton>
               </Link>
             </SidebarMenuItem>
