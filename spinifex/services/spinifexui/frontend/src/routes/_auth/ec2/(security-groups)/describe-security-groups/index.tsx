@@ -49,18 +49,12 @@ function SecurityGroups() {
               <ListCard
                 key={sg.GroupId}
                 params={{ id: sg.GroupId }}
-                subtitle={sg.Description ?? ""}
+                subtitle={sg.VpcId ?? ""}
                 title={
                   sg.GroupName ? `${sg.GroupId} (${sg.GroupName})` : sg.GroupId
                 }
                 to="/ec2/describe-security-groups/$id"
-              >
-                {sg.VpcId && (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {sg.VpcId}
-                  </p>
-                )}
-              </ListCard>
+              />
             )
           })}
         </div>
