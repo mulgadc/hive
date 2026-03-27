@@ -7,6 +7,8 @@ import {
   AssociateRouteTableCommand,
   AttachInternetGatewayCommand,
   AttachVolumeCommand,
+  AuthorizeSecurityGroupEgressCommand,
+  AuthorizeSecurityGroupIngressCommand,
   CopySnapshotCommand,
   CreateImageCommand,
   CreateInternetGatewayCommand,
@@ -14,12 +16,14 @@ import {
   CreatePlacementGroupCommand,
   CreateRouteCommand,
   CreateRouteTableCommand,
+  CreateSecurityGroupCommand,
   CreateSnapshotCommand,
   CreateSubnetCommand,
   CreateVolumeCommand,
   CreateVpcCommand,
   DeleteKeyPairCommand,
   DeletePlacementGroupCommand,
+  DeleteSecurityGroupCommand,
   DeleteSnapshotCommand,
   DeleteSubnetCommand,
   DeleteVolumeCommand,
@@ -31,6 +35,8 @@ import {
   ModifyVolumeCommand,
   RebootInstancesCommand,
   ResourceType,
+  RevokeSecurityGroupEgressCommand,
+  RevokeSecurityGroupIngressCommand,
   RunInstancesCommand,
   StartInstancesCommand,
   StopInstancesCommand,
@@ -48,6 +54,7 @@ import type {
   CreateInstanceParams,
   CreateKeyPairData,
   CreatePlacementGroupFormData,
+  CreateSecurityGroupFormData,
   CreateSnapshotFormData,
   CreateSubnetFormData,
   CreateVolumeFormData,
@@ -57,6 +64,7 @@ import type {
   ImportKeyPairData,
   ModifyInstanceTypeFormData,
   ModifyVolumeParams,
+  SecurityGroupRuleFormData,
 } from "@/types/ec2"
 
 const WHITESPACE_REGEX = /\s+/
@@ -480,6 +488,142 @@ export function useDeletePlacementGroup() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["ec2", "placementGroups"] })
+    },
+  })
+}
+
+export function useCreateSecurityGroup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (params: CreateSecurityGroupFormData) => {
+      const command = new CreateSecurityGroupCommand({
+        GroupName: params.groupName,
+        Description: params.description,
+        VpcId: params.vpcId,
+      })
+      return getEc2Client().send(command)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ec2", "securityGroups"] })
+    },
+  })
+}
+
+export function useDeleteSecurityGroup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (groupId: string) => {
+      const command = new DeleteSecurityGroupCommand({
+        GroupId: groupId,
+      })
+      return getEc2Client().send(command)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ec2", "securityGroups"] })
+    },
+  })
+}
+
+export function useAuthorizeSecurityGroupIngress() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (params: SecurityGroupRuleFormData & { groupId: string }) => {
+      const command = new AuthorizeSecurityGroupIngressCommand({
+        GroupId: params.groupId,
+        IpPermissions: [
+          {
+            IpProtocol: params.ipProtocol,
+            FromPort: params.fromPort,
+            ToPort: params.toPort,
+            IpRanges: [{ CidrIp: params.cidrIp }],
+          },
+        ],
+      })
+      return getEc2Client().send(command)
+    },
+    onSuccess: (_data, params) => {
+      queryClient.invalidateQueries({ queryKey: ["ec2", "securityGroups"] })
+      queryClient.invalidateQueries({
+        queryKey: ["ec2", "securityGroups", params.groupId],
+      })
+    },
+  })
+}
+
+export function useAuthorizeSecurityGroupEgress() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (params: SecurityGroupRuleFormData & { groupId: string }) => {
+      const command = new AuthorizeSecurityGroupEgressCommand({
+        GroupId: params.groupId,
+        IpPermissions: [
+          {
+            IpProtocol: params.ipProtocol,
+            FromPort: params.fromPort,
+            ToPort: params.toPort,
+            IpRanges: [{ CidrIp: params.cidrIp }],
+          },
+        ],
+      })
+      return getEc2Client().send(command)
+    },
+    onSuccess: (_data, params) => {
+      queryClient.invalidateQueries({ queryKey: ["ec2", "securityGroups"] })
+      queryClient.invalidateQueries({
+        queryKey: ["ec2", "securityGroups", params.groupId],
+      })
+    },
+  })
+}
+
+export function useRevokeSecurityGroupIngress() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (params: SecurityGroupRuleFormData & { groupId: string }) => {
+      const command = new RevokeSecurityGroupIngressCommand({
+        GroupId: params.groupId,
+        IpPermissions: [
+          {
+            IpProtocol: params.ipProtocol,
+            FromPort: params.fromPort,
+            ToPort: params.toPort,
+            IpRanges: [{ CidrIp: params.cidrIp }],
+          },
+        ],
+      })
+      return getEc2Client().send(command)
+    },
+    onSuccess: (_data, params) => {
+      queryClient.invalidateQueries({ queryKey: ["ec2", "securityGroups"] })
+      queryClient.invalidateQueries({
+        queryKey: ["ec2", "securityGroups", params.groupId],
+      })
+    },
+  })
+}
+
+export function useRevokeSecurityGroupEgress() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (params: SecurityGroupRuleFormData & { groupId: string }) => {
+      const command = new RevokeSecurityGroupEgressCommand({
+        GroupId: params.groupId,
+        IpPermissions: [
+          {
+            IpProtocol: params.ipProtocol,
+            FromPort: params.fromPort,
+            ToPort: params.toPort,
+            IpRanges: [{ CidrIp: params.cidrIp }],
+          },
+        ],
+      })
+      return getEc2Client().send(command)
+    },
+    onSuccess: (_data, params) => {
+      queryClient.invalidateQueries({ queryKey: ["ec2", "securityGroups"] })
+      queryClient.invalidateQueries({
+        queryKey: ["ec2", "securityGroups", params.groupId],
+      })
     },
   })
 }
