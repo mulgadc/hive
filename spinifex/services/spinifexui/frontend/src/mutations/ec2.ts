@@ -578,7 +578,7 @@ export function useCreateVpcWizard() {
         // Step 2: Create public subnets
         currentStep = "creating public subnets"
         const publicSubnetIds: string[] = []
-        for (let i = 0; i < params.publicSubnetCount; i += 1) {
+        for (let i = 0; i < params.publicSubnetCount; i++) {
           const name = prefix ? `${prefix}-subnet-public-${i + 1}` : undefined
           const result = await client.send(
             new CreateSubnetCommand({
@@ -604,7 +604,7 @@ export function useCreateVpcWizard() {
         // Step 3: Create private subnets
         currentStep = "creating private subnets"
         const privateSubnetIds: string[] = []
-        for (let i = 0; i < params.privateSubnetCount; i += 1) {
+        for (let i = 0; i < params.privateSubnetCount; i++) {
           const name = prefix ? `${prefix}-subnet-private-${i + 1}` : undefined
           const result = await client.send(
             new CreateSubnetCommand({

@@ -9,6 +9,8 @@ vi.mock("@/lib/awsClient", () => ({
   getEc2Client: () => ({ send: mockSend }),
 }))
 
+import type { CreateVpcWizardFormData } from "@/types/ec2"
+
 import {
   useAttachVolume,
   useCopySnapshot,
@@ -37,8 +39,6 @@ import {
   useStopInstance,
   useTerminateInstance,
 } from "./ec2"
-
-import type { CreateVpcWizardFormData } from "@/types/ec2"
 
 let queryClient: QueryClient
 
@@ -677,16 +677,20 @@ describe("useCreateVpcWizard", () => {
       .mockResolvedValueOnce({
         InternetGateway: { InternetGatewayId: "igw-111" },
       })
-      .mockResolvedValueOnce({}) // AttachInternetGateway
+      // AttachInternetGateway
+      .mockResolvedValueOnce({})
       .mockResolvedValueOnce({
         RouteTable: { RouteTableId: "rtb-pub-1" },
       })
-      .mockResolvedValueOnce({}) // CreateRoute
-      .mockResolvedValueOnce({}) // AssociateRouteTable (public)
+      // CreateRoute
+      .mockResolvedValueOnce({})
+      // AssociateRouteTable (public)
+      .mockResolvedValueOnce({})
       .mockResolvedValueOnce({
         RouteTable: { RouteTableId: "rtb-priv-1" },
       })
-      .mockResolvedValueOnce({}) // AssociateRouteTable (private)
+      // AssociateRouteTable (private)
+      .mockResolvedValueOnce({})
 
     const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
 
@@ -712,7 +716,8 @@ describe("useCreateVpcWizard", () => {
       .mockResolvedValueOnce({
         RouteTable: { RouteTableId: "rtb-priv-1" },
       })
-      .mockResolvedValueOnce({}) // AssociateRouteTable
+      // AssociateRouteTable
+      .mockResolvedValueOnce({})
 
     const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
 
@@ -765,9 +770,7 @@ describe("useCreateVpcWizard", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(result.current.data?.error?.message).toBe("Access denied")
-    expect(result.current.data?.failedStep).toBe(
-      "Failed while creating VPC",
-    )
+    expect(result.current.data?.failedStep).toBe("Failed while creating VPC")
     expect(result.current.data?.vpcId).toBeUndefined()
     expect(result.current.data?.created).toHaveLength(0)
   })
@@ -784,9 +787,7 @@ describe("useCreateVpcWizard", () => {
     expect(result.current.data?.error?.message).toContain(
       "no VPC ID was returned",
     )
-    expect(result.current.data?.failedStep).toBe(
-      "Failed while creating VPC",
-    )
+    expect(result.current.data?.failedStep).toBe("Failed while creating VPC")
   })
 
   it("invalidates related queries on success", async () => {

@@ -167,45 +167,47 @@ export const createVpcWizardSchema = z
     tags: z.array(formTagSchema),
   })
   .superRefine((data, ctx) => {
-    if (data.mode !== "vpc-and-more") return
+    if (data.mode !== "vpc-and-more") {
+      return
+    }
 
     const allCidrs: { cidr: string; field: string; index: number }[] = []
 
     for (const [i, cidr] of data.publicSubnetCidrs.entries()) {
-      if (!isValidCidr(cidr, 16, 28)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "Invalid subnet CIDR format or prefix length",
-          path: ["publicSubnetCidrs", i],
-        })
-      } else {
+      if (isValidCidr(cidr, 16, 28)) {
         if (!cidrContains(data.cidrBlock, cidr)) {
           ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             message: "Subnet CIDR must be within the VPC CIDR range",
             path: ["publicSubnetCidrs", i],
           })
         }
         allCidrs.push({ cidr, field: "publicSubnetCidrs", index: i })
+      } else {
+        ctx.addIssue({
+          code: "custom",
+          message: "Invalid subnet CIDR format or prefix length",
+          path: ["publicSubnetCidrs", i],
+        })
       }
     }
 
     for (const [i, cidr] of data.privateSubnetCidrs.entries()) {
-      if (!isValidCidr(cidr, 16, 28)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "Invalid subnet CIDR format or prefix length",
-          path: ["privateSubnetCidrs", i],
-        })
-      } else {
+      if (isValidCidr(cidr, 16, 28)) {
         if (!cidrContains(data.cidrBlock, cidr)) {
           ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             message: "Subnet CIDR must be within the VPC CIDR range",
             path: ["privateSubnetCidrs", i],
           })
         }
         allCidrs.push({ cidr, field: "privateSubnetCidrs", index: i })
+      } else {
+        ctx.addIssue({
+          code: "custom",
+          message: "Invalid subnet CIDR format or prefix length",
+          path: ["privateSubnetCidrs", i],
+        })
       }
     }
 
@@ -215,7 +217,7 @@ export const createVpcWizardSchema = z
         const b = allCidrs[j]
         if (a && b && cidrsOverlap(a.cidr, b.cidr)) {
           ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             message: "Subnet CIDRs must not overlap",
             path: [b.field, b.index],
           })
