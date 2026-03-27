@@ -113,6 +113,43 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 		}
 	}
 
+	// Allocate public IP for internet-facing ALBs
+	publicIP := ""
+	if input.Scheme == handlers_elbv2.SchemeInternetFacing && d.externalIPAM != nil && d.vpcService != nil && instance.ENIId != "" {
+		region := ""
+		az := ""
+		if d.config != nil {
+			region = d.config.Region
+			az = d.config.AZ
+		}
+		allocatedIP, poolName, allocErr := d.externalIPAM.AllocateIP(region, az, "auto_assign", instance.ENIId, instance.ID)
+		if allocErr != nil {
+			slog.Warn("LaunchSystemInstance: failed to allocate public IP", "instanceId", instance.ID, "err", allocErr)
+		} else {
+			publicIP = allocatedIP
+			if updateErr := d.vpcService.UpdateENIPublicIP(accountID, instance.ENIId, publicIP, poolName); updateErr != nil {
+				slog.Warn("LaunchSystemInstance: failed to update ENI with public IP", "eniId", instance.ENIId, "err", updateErr)
+			}
+			// Look up VpcId from the ENI for the NAT event
+			vpcID := ""
+			result, descErr := d.vpcService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+				NetworkInterfaceIds: []*string{aws.String(instance.ENIId)},
+			}, accountID)
+			if descErr == nil && len(result.NetworkInterfaces) > 0 && result.NetworkInterfaces[0].VpcId != nil {
+				vpcID = *result.NetworkInterfaces[0].VpcId
+			}
+			portName := "port-" + instance.ENIId
+			d.publishNATEvent("vpc.add-nat", vpcID, publicIP, privateIP, portName, instance.ENIMac)
+			instance.PublicIP = publicIP
+			instance.PublicIPPool = poolName
+			slog.Info("LaunchSystemInstance: allocated public IP",
+				"instanceId", instance.ID,
+				"publicIp", publicIP,
+				"pool", poolName,
+			)
+		}
+	}
+
 	// Add to daemon state so LaunchInstance can find it
 	d.Instances.Mu.Lock()
 	d.Instances.VMS[instance.ID] = instance
@@ -174,11 +211,14 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 		"instanceId", instance.ID,
 		"instanceType", input.InstanceType,
 		"privateIp", privateIP,
+		"publicIp", publicIP,
+		"scheme", input.Scheme,
 	)
 
 	return &handlers_elbv2.SystemInstanceOutput{
 		InstanceID: instance.ID,
 		PrivateIP:  privateIP,
+		PublicIP:   publicIP,
 		HostfwdMap: instance.ExtraHostfwd,
 	}, nil
 }

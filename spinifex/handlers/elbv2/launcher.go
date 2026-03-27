@@ -32,6 +32,10 @@ type SystemInstanceInput struct {
 	ENIMac string
 	ENIIP  string
 
+	// Scheme is the ALB scheme ("internet-facing" or "internal").
+	// Internet-facing ALBs get a public IP and NAT rules; internal ALBs do not.
+	Scheme string
+
 	// HostfwdPorts specifies additional guest ports to forward from the host
 	// via the QEMU user-mode dev NIC (dev_networking mode only).
 	// Each entry is a guest port (e.g. 80, 443). The host port is auto-assigned.
@@ -42,6 +46,7 @@ type SystemInstanceInput struct {
 type SystemInstanceOutput struct {
 	InstanceID string // e.g. "i-xxxxx"
 	PrivateIP  string // VPC private IP
+	PublicIP   string // Public IP (only for internet-facing scheme)
 
 	// HostfwdMap maps guest port → host port for any forwarded ports.
 	// Only populated when dev_networking is enabled and HostfwdPorts were requested.
