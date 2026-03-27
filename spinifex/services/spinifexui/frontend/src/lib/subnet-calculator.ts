@@ -22,7 +22,6 @@ export function parseCidr(cidr: string): { network: number; prefix: number } {
   const o3 = octets[3] ?? 0
   const network = ((o0 << 24) | (o1 << 16) | (o2 << 8) | o3) >>> 0
   // Mask to the prefix length to normalise
-  // oxlint-disable-next-line unicorn/number-literal-case uppercase gets revrted back to lowercase by formatter
   const mask = prefix === 0 ? 0 : (0xff_ff_ff_ff << (32 - prefix)) >>> 0
   return { network: (network & mask) >>> 0, prefix }
 }
