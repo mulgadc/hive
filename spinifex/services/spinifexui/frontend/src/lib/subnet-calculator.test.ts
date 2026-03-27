@@ -81,8 +81,8 @@ describe("calculateSubnetCidrs", () => {
 
   it("sets correct labels", () => {
     const result = calculateSubnetCidrs("10.0.0.0/16", 1, 1)
-    expect(result.publicSubnets[0]?.label).toBe("Public subnet 1")
-    expect(result.privateSubnets[0]?.label).toBe("Private subnet 1")
+    expect(result.publicSubnets[0]?.label).toBe("Public Subnet 1")
+    expect(result.privateSubnets[0]?.label).toBe("Private Subnet 1")
   })
 })
 

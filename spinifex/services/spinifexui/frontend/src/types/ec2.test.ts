@@ -6,6 +6,7 @@ import {
   createInstanceSchema,
   createKeyPairSchema,
   createPlacementGroupSchema,
+  createSecurityGroupSchema,
   createSnapshotSchema,
   createSubnetSchema,
   createVolumeSchema,
@@ -14,6 +15,7 @@ import {
   formTagSchema,
   importKeyPairSchema,
   modifyVolumeSchema,
+  securityGroupRuleSchema,
 } from "./ec2"
 
 describe("createInstanceSchema", () => {
@@ -339,6 +341,163 @@ describe("formTagSchema", () => {
 
   it("rejects tag with empty key", () => {
     const result = formTagSchema.safeParse({ key: "", value: "prod" })
+    expect(result.success).toBe(false)
+  })
+})
+
+describe("createSecurityGroupSchema", () => {
+  it("accepts valid security group params", () => {
+    const result = createSecurityGroupSchema.safeParse({
+      groupName: "web-sg",
+      description: "Allow web traffic",
+      vpcId: "vpc-123",
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects empty group name", () => {
+    const result = createSecurityGroupSchema.safeParse({
+      groupName: "",
+      description: "Allow web traffic",
+      vpcId: "vpc-123",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects group name over 255 chars", () => {
+    const result = createSecurityGroupSchema.safeParse({
+      groupName: "a".repeat(256),
+      description: "Allow web traffic",
+      vpcId: "vpc-123",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("accepts group name at 255 chars", () => {
+    const result = createSecurityGroupSchema.safeParse({
+      groupName: "a".repeat(255),
+      description: "Allow web traffic",
+      vpcId: "vpc-123",
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects empty description", () => {
+    const result = createSecurityGroupSchema.safeParse({
+      groupName: "web-sg",
+      description: "",
+      vpcId: "vpc-123",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects description over 255 chars", () => {
+    const result = createSecurityGroupSchema.safeParse({
+      groupName: "web-sg",
+      description: "a".repeat(256),
+      vpcId: "vpc-123",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects empty vpcId", () => {
+    const result = createSecurityGroupSchema.safeParse({
+      groupName: "web-sg",
+      description: "Allow web traffic",
+      vpcId: "",
+    })
+    expect(result.success).toBe(false)
+  })
+})
+
+describe("securityGroupRuleSchema", () => {
+  it("accepts valid TCP rule", () => {
+    const result = securityGroupRuleSchema.safeParse({
+      ipProtocol: "tcp",
+      fromPort: 443,
+      toPort: 443,
+      cidrIp: "0.0.0.0/0",
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("accepts all-traffic protocol with port -1", () => {
+    const result = securityGroupRuleSchema.safeParse({
+      ipProtocol: "-1",
+      fromPort: -1,
+      toPort: -1,
+      cidrIp: "10.0.0.0/16",
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("accepts port 65535 (upper boundary)", () => {
+    const result = securityGroupRuleSchema.safeParse({
+      ipProtocol: "tcp",
+      fromPort: 65_535,
+      toPort: 65_535,
+      cidrIp: "0.0.0.0/0",
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects port 65536 (above boundary)", () => {
+    const result = securityGroupRuleSchema.safeParse({
+      ipProtocol: "tcp",
+      fromPort: 65_536,
+      toPort: 443,
+      cidrIp: "0.0.0.0/0",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects port -2 (below boundary)", () => {
+    const result = securityGroupRuleSchema.safeParse({
+      ipProtocol: "tcp",
+      fromPort: -2,
+      toPort: 443,
+      cidrIp: "0.0.0.0/0",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects fractional port", () => {
+    const result = securityGroupRuleSchema.safeParse({
+      ipProtocol: "tcp",
+      fromPort: 22.5,
+      toPort: 443,
+      cidrIp: "0.0.0.0/0",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects invalid CIDR format", () => {
+    const result = securityGroupRuleSchema.safeParse({
+      ipProtocol: "tcp",
+      fromPort: 22,
+      toPort: 22,
+      cidrIp: "not-a-cidr",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects empty CIDR", () => {
+    const result = securityGroupRuleSchema.safeParse({
+      ipProtocol: "tcp",
+      fromPort: 22,
+      toPort: 22,
+      cidrIp: "",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects empty protocol", () => {
+    const result = securityGroupRuleSchema.safeParse({
+      ipProtocol: "",
+      fromPort: 22,
+      toPort: 22,
+      cidrIp: "0.0.0.0/0",
+    })
     expect(result.success).toBe(false)
   })
 })

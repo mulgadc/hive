@@ -13,11 +13,14 @@ import type { CreateVpcWizardFormData } from "@/types/ec2"
 
 import {
   useAttachVolume,
+  useAuthorizeSecurityGroupEgress,
+  useAuthorizeSecurityGroupIngress,
   useCopySnapshot,
   useCreateImage,
   useCreateInstance,
   useCreateKeyPair,
   useCreatePlacementGroup,
+  useCreateSecurityGroup,
   useCreateSnapshot,
   useCreateSubnet,
   useCreateVolume,
@@ -25,6 +28,7 @@ import {
   useCreateVpcWizard,
   useDeleteKeyPair,
   useDeletePlacementGroup,
+  useDeleteSecurityGroup,
   useDeleteSnapshot,
   useDeleteSubnet,
   useDeleteVolume,
@@ -35,6 +39,8 @@ import {
   useModifyInstanceAttribute,
   useModifyVolume,
   useRebootInstance,
+  useRevokeSecurityGroupEgress,
+  useRevokeSecurityGroupIngress,
   useStartInstance,
   useStopInstance,
   useTerminateInstance,
@@ -613,6 +619,234 @@ describe("useDeletePlacementGroup", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(spy).toHaveBeenCalledWith({
       queryKey: ["ec2", "placementGroups"],
+    })
+  })
+})
+
+describe("useCreateSecurityGroup", () => {
+  it("sends CreateSecurityGroupCommand with form data", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCreateSecurityGroup(), { wrapper })
+
+    result.current.mutate({
+      groupName: "web-sg",
+      description: "Allow web traffic",
+      vpcId: "vpc-123",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      GroupName: "web-sg",
+      Description: "Allow web traffic",
+      VpcId: "vpc-123",
+    })
+  })
+
+  it("invalidates securityGroups query on success", async () => {
+    createQueryClient()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+    const { result } = renderHook(() => useCreateSecurityGroup(), { wrapper })
+
+    result.current.mutate({
+      groupName: "web-sg",
+      description: "Allow web traffic",
+      vpcId: "vpc-123",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["ec2", "securityGroups"],
+    })
+  })
+})
+
+describe("useDeleteSecurityGroup", () => {
+  it("sends DeleteSecurityGroupCommand with group ID", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useDeleteSecurityGroup(), { wrapper })
+
+    result.current.mutate("sg-123")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      GroupId: "sg-123",
+    })
+  })
+
+  it("invalidates securityGroups query on success", async () => {
+    createQueryClient()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+    const { result } = renderHook(() => useDeleteSecurityGroup(), { wrapper })
+
+    result.current.mutate("sg-123")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["ec2", "securityGroups"],
+    })
+  })
+})
+
+describe("useAuthorizeSecurityGroupIngress", () => {
+  const ruleParams = {
+    groupId: "sg-123",
+    ipProtocol: "tcp",
+    fromPort: 443,
+    toPort: 443,
+    cidrIp: "0.0.0.0/0",
+  }
+
+  it("sends AuthorizeSecurityGroupIngressCommand with IpPermissions", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useAuthorizeSecurityGroupIngress(), {
+      wrapper,
+    })
+
+    result.current.mutate(ruleParams)
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      GroupId: "sg-123",
+      IpPermissions: [
+        {
+          IpProtocol: "tcp",
+          FromPort: 443,
+          ToPort: 443,
+          IpRanges: [{ CidrIp: "0.0.0.0/0" }],
+        },
+      ],
+    })
+  })
+
+  it("invalidates securityGroups queries on success", async () => {
+    createQueryClient()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+    const { result } = renderHook(() => useAuthorizeSecurityGroupIngress(), {
+      wrapper,
+    })
+
+    result.current.mutate(ruleParams)
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["ec2", "securityGroups"],
+    })
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["ec2", "securityGroups", "sg-123"],
+    })
+  })
+})
+
+describe("useAuthorizeSecurityGroupEgress", () => {
+  it("sends AuthorizeSecurityGroupEgressCommand with IpPermissions", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useAuthorizeSecurityGroupEgress(), {
+      wrapper,
+    })
+
+    result.current.mutate({
+      groupId: "sg-456",
+      ipProtocol: "-1",
+      fromPort: -1,
+      toPort: -1,
+      cidrIp: "0.0.0.0/0",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      GroupId: "sg-456",
+      IpPermissions: [
+        {
+          IpProtocol: "-1",
+          FromPort: -1,
+          ToPort: -1,
+          IpRanges: [{ CidrIp: "0.0.0.0/0" }],
+        },
+      ],
+    })
+  })
+})
+
+describe("useRevokeSecurityGroupIngress", () => {
+  it("sends RevokeSecurityGroupIngressCommand with IpPermissions", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useRevokeSecurityGroupIngress(), {
+      wrapper,
+    })
+
+    result.current.mutate({
+      groupId: "sg-123",
+      ipProtocol: "tcp",
+      fromPort: 22,
+      toPort: 22,
+      cidrIp: "10.0.0.0/16",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      GroupId: "sg-123",
+      IpPermissions: [
+        {
+          IpProtocol: "tcp",
+          FromPort: 22,
+          ToPort: 22,
+          IpRanges: [{ CidrIp: "10.0.0.0/16" }],
+        },
+      ],
+    })
+  })
+
+  it("invalidates securityGroups queries on success", async () => {
+    createQueryClient()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+    const { result } = renderHook(() => useRevokeSecurityGroupIngress(), {
+      wrapper,
+    })
+
+    result.current.mutate({
+      groupId: "sg-123",
+      ipProtocol: "tcp",
+      fromPort: 22,
+      toPort: 22,
+      cidrIp: "10.0.0.0/16",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["ec2", "securityGroups"],
+    })
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["ec2", "securityGroups", "sg-123"],
+    })
+  })
+})
+
+describe("useRevokeSecurityGroupEgress", () => {
+  it("sends RevokeSecurityGroupEgressCommand with IpPermissions", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useRevokeSecurityGroupEgress(), {
+      wrapper,
+    })
+
+    result.current.mutate({
+      groupId: "sg-456",
+      ipProtocol: "udp",
+      fromPort: 53,
+      toPort: 53,
+      cidrIp: "0.0.0.0/0",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      GroupId: "sg-456",
+      IpPermissions: [
+        {
+          IpProtocol: "udp",
+          FromPort: 53,
+          ToPort: 53,
+          IpRanges: [{ CidrIp: "0.0.0.0/0" }],
+        },
+      ],
     })
   })
 })

@@ -235,7 +235,14 @@ function AddRuleDialog({
         </form>
 
         <AlertDialogFooter>
-          <AlertDialogCancel onClick={() => reset()}>Cancel</AlertDialogCancel>
+          <AlertDialogCancel
+            onClick={() => {
+              reset()
+              mutation.reset()
+            }}
+          >
+            Cancel
+          </AlertDialogCancel>
           <AlertDialogAction
             disabled={mutation.isPending}
             form="add-rule-form"
@@ -262,41 +269,52 @@ function RuleRow({ rule, cidr, groupId, direction }: RuleRowProps) {
   const mutation = direction === "ingress" ? revokeIngress : revokeEgress
 
   const handleRemove = async () => {
-    await mutation.mutateAsync({
-      groupId,
-      ipProtocol: rule.IpProtocol ?? "-1",
-      fromPort: rule.FromPort ?? -1,
-      toPort: rule.ToPort ?? -1,
-      cidrIp: cidr,
-    })
+    try {
+      await mutation.mutateAsync({
+        groupId,
+        ipProtocol: rule.IpProtocol ?? "-1",
+        fromPort: rule.FromPort ?? -1,
+        toPort: rule.ToPort ?? -1,
+        cidrIp: cidr,
+      })
+    } catch {
+      // Error is stored in mutation.error and rendered below
+    }
   }
 
   return (
-    <div className="flex items-center justify-between border-b px-4 py-3 last:border-b-0">
-      <div className="grid flex-1 grid-cols-3 gap-4 text-sm">
-        <div>
-          <span className="text-muted-foreground">Protocol: </span>
-          {formatProtocol(rule.IpProtocol)}
+    <div className="space-y-0">
+      <div className="flex items-center justify-between border-b px-4 py-3 last:border-b-0">
+        <div className="grid flex-1 grid-cols-3 gap-4 text-sm">
+          <div>
+            <span className="text-muted-foreground">Protocol: </span>
+            {formatProtocol(rule.IpProtocol)}
+          </div>
+          <div>
+            <span className="text-muted-foreground">Port Range: </span>
+            {formatPortRange(rule.FromPort, rule.ToPort, rule.IpProtocol)}
+          </div>
+          <div>
+            <span className="text-muted-foreground">
+              {direction === "ingress" ? "Source" : "Destination"}:{" "}
+            </span>
+            {cidr}
+          </div>
         </div>
-        <div>
-          <span className="text-muted-foreground">Port Range: </span>
-          {formatPortRange(rule.FromPort, rule.ToPort, rule.IpProtocol)}
-        </div>
-        <div>
-          <span className="text-muted-foreground">
-            {direction === "ingress" ? "Source" : "Destination"}:{" "}
-          </span>
-          {cidr}
-        </div>
+        <Button
+          disabled={mutation.isPending}
+          onClick={handleRemove}
+          size="icon-xs"
+          variant="ghost"
+        >
+          <X className="size-3" />
+        </Button>
       </div>
-      <Button
-        disabled={mutation.isPending}
-        onClick={handleRemove}
-        size="icon-xs"
-        variant="ghost"
-      >
-        <X className="size-3" />
-      </Button>
+      {mutation.error && (
+        <div className="px-4 pb-2">
+          <ErrorBanner error={mutation.error} msg="Failed to remove rule" />
+        </div>
+      )}
     </div>
   )
 }
