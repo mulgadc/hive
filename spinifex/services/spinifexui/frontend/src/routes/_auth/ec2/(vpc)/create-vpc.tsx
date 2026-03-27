@@ -1,6 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
-import { ChevronDown, ChevronRight } from "lucide-react"
 import { useState } from "react"
 import { Controller, useForm } from "react-hook-form"
 
@@ -19,7 +18,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { SubnetCidrInputs } from "@/components/vpc-wizard/subnet-cidr-inputs"
-import { TagEditor } from "@/components/vpc-wizard/tag-editor"
 import { VpcPreview } from "@/components/vpc-wizard/vpc-preview"
 import { calculateSubnetCidrs } from "@/lib/subnet-calculator"
 import {
@@ -43,14 +41,13 @@ export const Route = createFileRoute("/_auth/ec2/(vpc)/create-vpc")({
   component: CreateVpc,
 })
 
-const SUBNET_COUNTS = [0, 1, 2, 3, 4] as const
+const SUBNET_COUNTS = [0, 1, 2] as const
 
 function CreateVpc() {
   const navigate = useNavigate()
   const createVpcMutation = useCreateVpc()
   const wizardMutation = useCreateVpcWizard()
   const [wizardResult, setWizardResult] = useState<WizardResult | null>(null)
-  const [tagsExpanded, setTagsExpanded] = useState(false)
 
   const form = useForm<CreateVpcWizardFormData>({
     resolver: zodResolver(createVpcWizardSchema),
@@ -331,28 +328,6 @@ function CreateVpc() {
               </Field>
             </>
           )}
-
-          {/* Section 7: Additional Tags */}
-          <div>
-            <Button
-              className="gap-1 px-0 text-xs"
-              onClick={() => setTagsExpanded(!tagsExpanded)}
-              type="button"
-              variant="link"
-            >
-              {tagsExpanded ? (
-                <ChevronDown className="size-3" />
-              ) : (
-                <ChevronRight className="size-3" />
-              )}
-              Additional tags
-            </Button>
-            {tagsExpanded && (
-              <div className="mt-2">
-                <TagEditor form={form} />
-              </div>
-            )}
-          </div>
 
           <FormActions
             isPending={isPending}
