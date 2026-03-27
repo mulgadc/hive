@@ -711,7 +711,9 @@ var vpcdStartCmd = &cobra.Command{
 			})
 		}
 
-		// Derive OVN chassis names from cluster node names (format: "chassis-{hostname}")
+		// Fallback chassis names derived from config node names. vpcd prefers
+		// discovering chassis from the OVN Southbound DB at startup; these are
+		// only used if that discovery fails.
 		var chassisNames []string
 		for nodeName := range clusterConfig.Nodes {
 			chassisNames = append(chassisNames, "chassis-"+nodeName)

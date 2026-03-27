@@ -56,8 +56,9 @@ type Config struct {
 	ExternalMode string
 	// ExternalPools holds the cluster-wide external IP pool configs.
 	ExternalPools []ExternalPoolConfig
-	// ChassisNames are the OVN chassis identifiers for gateway HA scheduling.
-	// Format: "chassis-{hostname}" — one per node in the cluster.
+	// ChassisNames are fallback OVN chassis identifiers for gateway HA scheduling.
+	// Normally discovered from the OVN Southbound DB at startup. Only used if
+	// SBDB discovery fails.
 	ChassisNames []string
 	// Bootstrap holds the default VPC config from spinifex.toml for first-boot reconciliation.
 	Bootstrap *BootstrapVPC
@@ -181,6 +182,30 @@ var checkOVNController = func() error {
 	return fmt.Errorf("ovn-controller is not running: run ./scripts/setup-ovn.sh --management")
 }
 
+// discoverChassis queries the OVN Southbound DB for registered chassis names.
+// This is the source of truth — whatever names setup-ovn.sh registered are what
+// we use for gateway scheduling. Eliminates the brittle coupling between
+// spinifex.toml node names and the OVS system-id set during OVN setup.
+var discoverChassis = func(sbAddr string) ([]string, error) {
+	args := []string{"--no-leader-only"}
+	if sbAddr != "" {
+		args = append(args, "--db="+sbAddr)
+	}
+	args = append(args, "list-chassis")
+	out, err := sudoCommand("ovn-sbctl", args...).CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("ovn-sbctl list-chassis: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	var names []string
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
+		name := strings.TrimSpace(line)
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
 // preflightOVN runs all OVN preflight checks and returns the first failure.
 func preflightOVN() error {
 	if err := checkBrInt(); err != nil {
@@ -250,9 +275,16 @@ func launchService(cfg *Config) error {
 		topoOpts = append(topoOpts, WithExternalNetwork(cfg.ExternalMode, cfg.ExternalPools))
 		slog.Info("External network enabled", "mode", cfg.ExternalMode, "pools", len(cfg.ExternalPools))
 	}
-	if len(cfg.ChassisNames) > 0 {
-		topoOpts = append(topoOpts, WithChassisNames(cfg.ChassisNames))
-		slog.Info("Gateway chassis configured", "chassis", cfg.ChassisNames)
+	// Discover chassis from OVN SBDB (source of truth). Fall back to config
+	// if SBDB query fails (e.g., SBDB address not configured).
+	chassisNames, err := discoverChassis(cfg.OVNSBAddr)
+	if err != nil {
+		slog.Warn("Failed to discover chassis from OVN SBDB, falling back to config", "err", err)
+		chassisNames = cfg.ChassisNames
+	}
+	if len(chassisNames) > 0 {
+		topoOpts = append(topoOpts, WithChassisNames(chassisNames))
+		slog.Info("Gateway chassis configured", "source", "sbdb", "chassis", chassisNames)
 	}
 	topoOpts = append(topoOpts, WithBridgeMode(bridgeMode))
 	topo := NewTopologyHandler(liveClient, topoOpts...)

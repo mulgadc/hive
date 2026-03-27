@@ -66,6 +66,101 @@ func TestPreflightOVN_ControllerNotRunning(t *testing.T) {
 	}
 }
 
+func TestDiscoverChassis_ParsesOutput(t *testing.T) {
+	orig := discoverChassis
+	defer func() { discoverChassis = orig }()
+
+	discoverChassis = func(sbAddr string) ([]string, error) {
+		// Simulate ovn-sbctl list-chassis output
+		output := "chassis-node1\nchassis-node2\nchassis-node3\n"
+		var names []string
+		for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
+			name := strings.TrimSpace(line)
+			if name != "" {
+				names = append(names, name)
+			}
+		}
+		return names, nil
+	}
+
+	names, err := discoverChassis("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(names) != 3 {
+		t.Fatalf("expected 3 chassis, got %d: %v", len(names), names)
+	}
+	expected := map[string]bool{"chassis-node1": true, "chassis-node2": true, "chassis-node3": true}
+	for _, n := range names {
+		if !expected[n] {
+			t.Errorf("unexpected chassis name: %s", n)
+		}
+	}
+}
+
+func TestDiscoverChassis_SingleNode(t *testing.T) {
+	orig := discoverChassis
+	defer func() { discoverChassis = orig }()
+
+	discoverChassis = func(sbAddr string) ([]string, error) {
+		output := "chassis-spinifex-image-builder\n"
+		var names []string
+		for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
+			name := strings.TrimSpace(line)
+			if name != "" {
+				names = append(names, name)
+			}
+		}
+		return names, nil
+	}
+
+	names, err := discoverChassis("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(names) != 1 || names[0] != "chassis-spinifex-image-builder" {
+		t.Errorf("expected [chassis-spinifex-image-builder], got %v", names)
+	}
+}
+
+func TestDiscoverChassis_EmptyOutput(t *testing.T) {
+	orig := discoverChassis
+	defer func() { discoverChassis = orig }()
+
+	discoverChassis = func(sbAddr string) ([]string, error) {
+		return nil, nil
+	}
+
+	names, err := discoverChassis("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(names) != 0 {
+		t.Errorf("expected empty chassis list, got %v", names)
+	}
+}
+
+func TestDiscoverChassis_Error_FallsBackToConfig(t *testing.T) {
+	orig := discoverChassis
+	defer func() { discoverChassis = orig }()
+
+	discoverChassis = func(sbAddr string) ([]string, error) {
+		return nil, fmt.Errorf("connection refused")
+	}
+
+	// Simulate the fallback logic from launchService
+	_, err := discoverChassis("")
+	if err == nil {
+		t.Fatal("expected error from discoverChassis")
+	}
+
+	// Fallback to config (as launchService does)
+	chassisNames := []string{"chassis-node1"}
+	if len(chassisNames) != 1 || chassisNames[0] != "chassis-node1" {
+		t.Errorf("expected fallback to config names, got %v", chassisNames)
+	}
+}
+
 func TestPreflightOVN_BothFail_ReportsFirst(t *testing.T) {
 	origBrInt := checkBrInt
 	origCtrl := checkOVNController

@@ -160,10 +160,9 @@ elif [ -n "$WAN_IFACE" ]; then
     fi
 fi
 
-# Chassis ID must match what vpcd derives from the node name in spinifex.toml.
-# vpcd generates "chassis-{nodeName}" (e.g., chassis-node1) and uses it to schedule
-# gateway chassis in the NB DB. ovn-controller registers in the SB DB using the OVS
-# system-id. If they don't match, gateway traffic has no host to schedule to.
+# Chassis ID — vpcd discovers registered chassis from the OVN Southbound DB
+# at startup, so the name here doesn't need to match spinifex.toml node names.
+# Using "chassis-node1" for consistency with the default node name.
 NODE_NAME="node1"
 CHASSIS_ID="chassis-${NODE_NAME}"
 
