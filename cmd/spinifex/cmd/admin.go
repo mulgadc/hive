@@ -220,7 +220,7 @@ func init() {
 	// External networking flags
 	adminInitCmd.Flags().String("external-mode", "", "External network mode: 'pool' (default when WAN detected) or '' (disabled)")
 	adminInitCmd.Flags().String("external-iface", "", "WAN NIC for br-external (auto-detected from default route)")
-	adminInitCmd.Flags().String("external-source", "dhcp", "Pool IP source: 'dhcp' (default, from router DHCP) or 'static' (uses --external-pool range)")
+	adminInitCmd.Flags().String("external-source", "", "Pool IP source: 'dhcp' (default when no --external-pool) or 'static' (uses --external-pool range)")
 	adminInitCmd.Flags().String("external-pool", "", "External IP pool range as start-end (e.g., 192.168.1.150-192.168.1.250)")
 	adminInitCmd.Flags().String("external-gateway", "", "WAN gateway IP (auto-detected from default route)")
 	adminInitCmd.Flags().String("gateway-ip", "", "OVN gateway router's external IP for SNAT (default: pool range_start for pool mode, required for nat mode without DHCP)")
@@ -613,6 +613,14 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 	if externalMode == "pool" {
+		// Resolve source: if not explicitly set, infer from whether a pool range was given
+		if externalSource == "" {
+			if externalPool != "" {
+				externalSource = "static"
+			} else {
+				externalSource = "dhcp"
+			}
+		}
 		if externalSource == "dhcp" {
 			// DHCP source: no static range needed, just gateway
 			if externalGateway == "" {
@@ -620,7 +628,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 				os.Exit(1)
 			}
 		} else {
-			// Static source (default): need pool range
+			// Static source: need pool range
 			if externalPool == "" {
 				fmt.Fprintf(os.Stderr, "❌ Error: --external-pool is required when --external-mode=pool (e.g., 192.168.1.150-192.168.1.250)\n")
 				fmt.Fprintf(os.Stderr, "   Or use --external-source=dhcp to get IPs from router DHCP\n")
