@@ -1,1 +1,1 @@
-import{At as e,Pt as t,it as n,kt as r}from"./awsClient.js";var i=class extends t.classBuilder().ep(r).m(function(t,n,r,i){return[e(r,t.getEndpointParameterInstructions())]}).s(`AmazonEC2`,`DescribeInstances`,{}).n(`EC2Client`,`DescribeInstancesCommand`).sc(n).build(){};export{i as t};
+import{It as e,Lt as t,Vt as n,lt as r}from"./awsClient.js";var i=class extends n.classBuilder().ep(e).m(function(e,n,r,i){return[t(r,e.getEndpointParameterInstructions())]}).s(`AmazonEC2`,`DescribeInstances`,{}).n(`EC2Client`,`DescribeInstancesCommand`).sc(r).build(){};export{i as t};
