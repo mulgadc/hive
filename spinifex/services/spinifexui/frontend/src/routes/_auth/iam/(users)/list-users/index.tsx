@@ -5,7 +5,6 @@ import { createFileRoute, Link } from "@tanstack/react-router"
 import { ListCard } from "@/components/list-card"
 import { PageHeading } from "@/components/page-heading"
 import { Button } from "@/components/ui/button"
-import { formatDateTime } from "@/lib/utils"
 import { iamUsersQueryOptions } from "@/queries/iam"
 
 export const Route = createFileRoute("/_auth/iam/(users)/list-users/")({
@@ -48,7 +47,7 @@ function Users() {
               <ListCard
                 key={user.UserName}
                 params={{ userName: user.UserName }}
-                subtitle={`${user.UserId} • ${user.Path ?? "/"} • Created ${formatDateTime(user.CreateDate)}`}
+                subtitle={user.UserId ?? ""}
                 title={user.UserName}
                 to="/iam/list-users/$userName"
               />

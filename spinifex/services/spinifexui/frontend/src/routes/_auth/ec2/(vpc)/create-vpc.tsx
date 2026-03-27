@@ -41,7 +41,8 @@ export const Route = createFileRoute("/_auth/ec2/(vpc)/create-vpc")({
   component: CreateVpc,
 })
 
-const SUBNET_COUNTS = [0, 1, 2] as const
+const PUBLIC_SUBNET_COUNTS = [0, 1] as const
+const PRIVATE_SUBNET_COUNTS = [0, 1, 2] as const
 
 function CreateVpc() {
   const navigate = useNavigate()
@@ -256,8 +257,8 @@ function CreateVpc() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="default">Default</SelectItem>
-                    <SelectItem value="dedicated">Dedicated</SelectItem>
+                    <SelectItem value="default">default</SelectItem>
+                    <SelectItem value="dedicated">dedicated</SelectItem>
                   </SelectContent>
                 </Select>
               )}
@@ -275,7 +276,7 @@ function CreateVpc() {
                   name="publicSubnetCount"
                   render={({ field }) => (
                     <div className="flex gap-1">
-                      {SUBNET_COUNTS.map((n) => (
+                      {PUBLIC_SUBNET_COUNTS.map((n) => (
                         <Button
                           key={n}
                           onClick={() => field.onChange(n)}
@@ -305,7 +306,7 @@ function CreateVpc() {
                   name="privateSubnetCount"
                   render={({ field }) => (
                     <div className="flex gap-1">
-                      {SUBNET_COUNTS.map((n) => (
+                      {PRIVATE_SUBNET_COUNTS.map((n) => (
                         <Button
                           key={n}
                           onClick={() => field.onChange(n)}
@@ -339,7 +340,7 @@ function CreateVpc() {
         </form>
 
         {/* Right column: Preview */}
-        <div className="hidden w-80 shrink-0 lg:block">
+        <div className="hidden min-w-0 flex-1 lg:block">
           <VpcPreview
             hasIgw={mode === "vpc-and-more" && publicSubnetCount > 0}
             mode={mode}

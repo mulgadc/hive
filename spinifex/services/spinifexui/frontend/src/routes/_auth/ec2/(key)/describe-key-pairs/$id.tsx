@@ -90,8 +90,8 @@ function KeyPairDetail() {
         <DetailCard>
           <DetailCard.Header>Key Pair Information</DetailCard.Header>
           <DetailCard.Content>
-            <DetailRow label="Key Name" value={keyPair.KeyName} />
             <DetailRow label="Key Pair ID" value={keyPair.KeyPairId} />
+            <DetailRow label="Key Name" value={keyPair.KeyName} />
             <DetailRow label="Key Type" value={keyPair.KeyType} />
             <DetailRow label="Key Fingerprint" value={keyPair.KeyFingerprint} />
             <DetailRow label="Creation Date" value={createTime} />

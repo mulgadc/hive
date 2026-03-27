@@ -160,7 +160,7 @@ export const createVpcWizardSchema = z
         "CIDR has invalid octets or prefix length (must be /16 to /28)",
       ),
     tenancy: z.enum(["default", "dedicated"]),
-    publicSubnetCount: z.number().int().min(0).max(2),
+    publicSubnetCount: z.number().int().min(0).max(1),
     privateSubnetCount: z.number().int().min(0).max(2),
     publicSubnetCidrs: z.array(z.string()),
     privateSubnetCidrs: z.array(z.string()),

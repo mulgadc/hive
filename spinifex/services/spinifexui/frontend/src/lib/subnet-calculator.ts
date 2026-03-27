@@ -74,7 +74,7 @@ export function calculateSubnetCidrs(
     const addr = (network + i * subSize) >>> 0
     publicSubnets.push({
       cidr: `${numberToIp(addr)}/${subPrefix}`,
-      label: `Public subnet ${i + 1}`,
+      label: `Public Subnet ${i + 1}`,
     })
   }
 
@@ -83,7 +83,7 @@ export function calculateSubnetCidrs(
     const addr = (network + halfOffset + i * subSize) >>> 0
     privateSubnets.push({
       cidr: `${numberToIp(addr)}/${subPrefix}`,
-      label: `Private subnet ${i + 1}`,
+      label: `Private Subnet ${i + 1}`,
     })
   }
 
