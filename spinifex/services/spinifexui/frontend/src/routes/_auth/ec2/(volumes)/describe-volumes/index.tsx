@@ -49,7 +49,7 @@ function Volumes() {
                 badge={<StateBadge state={volume.State} />}
                 key={volume.VolumeId}
                 params={{ id: volume.VolumeId }}
-                subtitle={`${volume.Size} GiB • ${volume.VolumeType}`}
+                subtitle={`${volume.Size} GiB`}
                 title={volume.VolumeId}
                 to="/ec2/describe-volumes/$id"
               />

@@ -5,7 +5,6 @@ import { createFileRoute, Link } from "@tanstack/react-router"
 import { ListCard } from "@/components/list-card"
 import { PageHeading } from "@/components/page-heading"
 import { Button } from "@/components/ui/button"
-import { formatDateTime } from "@/lib/utils"
 import { iamPoliciesQueryOptions } from "@/queries/iam"
 
 export const Route = createFileRoute("/_auth/iam/(policies)/list-policies/")({
@@ -48,7 +47,7 @@ function Policies() {
               <ListCard
                 key={policy.Arn}
                 params={{ policyArn: encodeURIComponent(policy.Arn) }}
-                subtitle={`${policy.Arn} • Created ${formatDateTime(policy.CreateDate)}`}
+                subtitle={policy.Arn ?? ""}
                 title={policy.PolicyName ?? ""}
                 to="/iam/list-policies/$policyArn"
               />

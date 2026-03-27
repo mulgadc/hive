@@ -1,5 +1,11 @@
 import { z } from "zod"
 
+import {
+  cidrContains,
+  cidrsOverlap,
+  isValidCidr,
+} from "@/lib/subnet-calculator"
+
 const CIDR_REGEX = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$/
 
 const keyNameField = z
@@ -132,6 +138,93 @@ export const createVpcSchema = z.object({
 })
 
 export type CreateVpcFormData = z.infer<typeof createVpcSchema>
+
+export const formTagSchema = z.object({
+  key: z.string().min(1, "Key is required"),
+  value: z.string(),
+})
+
+export type FormTag = z.infer<typeof formTagSchema>
+
+export const createVpcWizardSchema = z
+  .object({
+    mode: z.enum(["vpc-only", "vpc-and-more"]),
+    namePrefix: z.string().optional(),
+    autoGenerateNames: z.boolean(),
+    cidrBlock: z
+      .string()
+      .min(1, "CIDR block is required")
+      .regex(CIDR_REGEX, "Must be a valid CIDR block (e.g. 10.0.0.0/16)")
+      .refine(
+        (cidr) => isValidCidr(cidr),
+        "CIDR has invalid octets or prefix length (must be /16 to /28)",
+      ),
+    tenancy: z.enum(["default", "dedicated"]),
+    publicSubnetCount: z.number().int().min(0).max(1),
+    privateSubnetCount: z.number().int().min(0).max(2),
+    publicSubnetCidrs: z.array(z.string()),
+    privateSubnetCidrs: z.array(z.string()),
+    tags: z.array(formTagSchema),
+  })
+  .superRefine((data, ctx) => {
+    if (data.mode !== "vpc-and-more") return
+
+    const allCidrs: { cidr: string; field: string; index: number }[] = []
+
+    for (const [i, cidr] of data.publicSubnetCidrs.entries()) {
+      if (!isValidCidr(cidr, 16, 28)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Invalid subnet CIDR format or prefix length",
+          path: ["publicSubnetCidrs", i],
+        })
+      } else {
+        if (!cidrContains(data.cidrBlock, cidr)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Subnet CIDR must be within the VPC CIDR range",
+            path: ["publicSubnetCidrs", i],
+          })
+        }
+        allCidrs.push({ cidr, field: "publicSubnetCidrs", index: i })
+      }
+    }
+
+    for (const [i, cidr] of data.privateSubnetCidrs.entries()) {
+      if (!isValidCidr(cidr, 16, 28)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Invalid subnet CIDR format or prefix length",
+          path: ["privateSubnetCidrs", i],
+        })
+      } else {
+        if (!cidrContains(data.cidrBlock, cidr)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Subnet CIDR must be within the VPC CIDR range",
+            path: ["privateSubnetCidrs", i],
+          })
+        }
+        allCidrs.push({ cidr, field: "privateSubnetCidrs", index: i })
+      }
+    }
+
+    for (let i = 0; i < allCidrs.length; i++) {
+      for (let j = i + 1; j < allCidrs.length; j++) {
+        const a = allCidrs[i]
+        const b = allCidrs[j]
+        if (a && b && cidrsOverlap(a.cidr, b.cidr)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Subnet CIDRs must not overlap",
+            path: [b.field, b.index],
+          })
+        }
+      }
+    }
+  })
+
+export type CreateVpcWizardFormData = z.infer<typeof createVpcWizardSchema>
 
 export const createPlacementGroupSchema = z.object({
   groupName: z

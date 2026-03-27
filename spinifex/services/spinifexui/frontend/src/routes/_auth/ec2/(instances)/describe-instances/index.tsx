@@ -71,7 +71,7 @@ function Ec2() {
                 badge={<StateBadge state={instance.State?.Name} />}
                 key={instance.InstanceId}
                 params={{ id: instance.InstanceId }}
-                subtitle={`${instance.InstanceType} • ${instance.ImageId}`}
+                subtitle={`${instance.InstanceType}`}
                 title={instance.InstanceId}
                 to="/ec2/describe-instances/$id"
               />

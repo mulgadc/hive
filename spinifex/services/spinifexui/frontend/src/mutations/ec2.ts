@@ -1,11 +1,19 @@
 import {
   type _InstanceType,
   type PlacementStrategy,
+  type Tag,
+  type TagSpecification,
+  type Tenancy,
+  AssociateRouteTableCommand,
+  AttachInternetGatewayCommand,
   AttachVolumeCommand,
   CopySnapshotCommand,
   CreateImageCommand,
+  CreateInternetGatewayCommand,
   CreateKeyPairCommand,
   CreatePlacementGroupCommand,
+  CreateRouteCommand,
+  CreateRouteTableCommand,
   CreateSnapshotCommand,
   CreateSubnetCommand,
   CreateVolumeCommand,
@@ -22,6 +30,7 @@ import {
   ModifyInstanceAttributeCommand,
   ModifyVolumeCommand,
   RebootInstancesCommand,
+  ResourceType,
   RunInstancesCommand,
   StartInstancesCommand,
   StopInstancesCommand,
@@ -30,6 +39,7 @@ import {
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 
 import { getEc2Client } from "@/lib/awsClient"
+import { calculateSubnetCidrs } from "@/lib/subnet-calculator"
 import { ec2KeyPairsQueryOptions } from "@/queries/ec2"
 import type {
   AttachVolumeFormData,
@@ -42,6 +52,7 @@ import type {
   CreateSubnetFormData,
   CreateVolumeFormData,
   CreateVpcFormData,
+  CreateVpcWizardFormData,
   DetachVolumeFormData,
   ImportKeyPairData,
   ModifyInstanceTypeFormData,
@@ -469,6 +480,275 @@ export function useDeletePlacementGroup() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["ec2", "placementGroups"] })
+    },
+  })
+}
+
+function buildTags(name: string | undefined, extraTags: Tag[]): Tag[] {
+  const tags: Tag[] = []
+  if (name) {
+    tags.push({ Key: "Name", Value: name })
+  }
+  tags.push(...extraTags)
+  return tags
+}
+
+function buildTagSpec(
+  resourceType: ResourceType,
+  name: string | undefined,
+  extraTags: Tag[],
+): TagSpecification[] | undefined {
+  const tags = buildTags(name, extraTags)
+  if (tags.length === 0) {
+    return undefined
+  }
+  return [{ ResourceType: resourceType, Tags: tags }]
+}
+
+export interface WizardCreatedResource {
+  type: string
+  id: string | undefined
+}
+
+export interface WizardResult {
+  vpcId: string | undefined
+  created: WizardCreatedResource[]
+  error?: Error
+  failedStep?: string
+}
+
+export function useCreateVpcWizard() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (
+      params: CreateVpcWizardFormData,
+    ): Promise<WizardResult> => {
+      const client = getEc2Client()
+      const created: WizardCreatedResource[] = []
+      const prefix = params.autoGenerateNames ? params.namePrefix : undefined
+      const extraTags: Tag[] = params.tags.map((t) => ({
+        Key: t.key,
+        Value: t.value,
+      }))
+
+      let currentStep = "creating VPC"
+      try {
+        // Step 1: Create VPC
+        const vpcName = prefix ? `${prefix}-vpc` : params.namePrefix
+        // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- AWS SDK expects Tenancy enum
+        const tenancy = params.tenancy as Tenancy
+        const vpcResult = await client.send(
+          new CreateVpcCommand({
+            CidrBlock: params.cidrBlock,
+            InstanceTenancy: tenancy,
+            TagSpecifications: buildTagSpec(
+              ResourceType.vpc,
+              vpcName,
+              extraTags,
+            ),
+          }),
+        )
+        const vpcId = vpcResult.Vpc?.VpcId
+        if (!vpcId) {
+          throw new Error(
+            "VPC was created but no VPC ID was returned by the API",
+          )
+        }
+        created.push({ type: "VPC", id: vpcId })
+
+        if (params.mode === "vpc-only") {
+          return { vpcId, created }
+        }
+
+        // Compute subnet CIDRs (use custom values if provided, else auto-calculate)
+        const defaults = calculateSubnetCidrs(
+          params.cidrBlock,
+          params.publicSubnetCount,
+          params.privateSubnetCount,
+        )
+        const publicCidrs =
+          params.publicSubnetCidrs.length > 0
+            ? params.publicSubnetCidrs
+            : defaults.publicSubnets.map((s) => s.cidr)
+        const privateCidrs =
+          params.privateSubnetCidrs.length > 0
+            ? params.privateSubnetCidrs
+            : defaults.privateSubnets.map((s) => s.cidr)
+
+        // Step 2: Create public subnets
+        currentStep = "creating public subnets"
+        const publicSubnetIds: string[] = []
+        for (let i = 0; i < params.publicSubnetCount; i += 1) {
+          const name = prefix ? `${prefix}-subnet-public-${i + 1}` : undefined
+          const result = await client.send(
+            new CreateSubnetCommand({
+              VpcId: vpcId,
+              CidrBlock: publicCidrs[i],
+              TagSpecifications: buildTagSpec(
+                ResourceType.subnet,
+                name,
+                extraTags,
+              ),
+            }),
+          )
+          const subnetId = result.Subnet?.SubnetId
+          if (!subnetId) {
+            throw new Error(
+              `Public subnet ${i + 1} was created but no subnet ID was returned`,
+            )
+          }
+          publicSubnetIds.push(subnetId)
+          created.push({ type: "Public Subnet", id: subnetId })
+        }
+
+        // Step 3: Create private subnets
+        currentStep = "creating private subnets"
+        const privateSubnetIds: string[] = []
+        for (let i = 0; i < params.privateSubnetCount; i += 1) {
+          const name = prefix ? `${prefix}-subnet-private-${i + 1}` : undefined
+          const result = await client.send(
+            new CreateSubnetCommand({
+              VpcId: vpcId,
+              CidrBlock: privateCidrs[i],
+              TagSpecifications: buildTagSpec(
+                ResourceType.subnet,
+                name,
+                extraTags,
+              ),
+            }),
+          )
+          const subnetId = result.Subnet?.SubnetId
+          if (!subnetId) {
+            throw new Error(
+              `Private subnet ${i + 1} was created but no subnet ID was returned`,
+            )
+          }
+          privateSubnetIds.push(subnetId)
+          created.push({ type: "Private Subnet", id: subnetId })
+        }
+
+        // Step 4: Create and attach internet gateway (if public subnets > 0)
+        if (params.publicSubnetCount > 0) {
+          currentStep = "creating internet gateway"
+          const igwName = prefix ? `${prefix}-igw` : undefined
+          const igwResult = await client.send(
+            new CreateInternetGatewayCommand({
+              TagSpecifications: buildTagSpec(
+                ResourceType.internet_gateway,
+                igwName,
+                extraTags,
+              ),
+            }),
+          )
+          const igwId = igwResult.InternetGateway?.InternetGatewayId
+          if (!igwId) {
+            throw new Error(
+              "Internet gateway was created but no ID was returned",
+            )
+          }
+          created.push({ type: "Internet Gateway", id: igwId })
+
+          // Step 5: Attach IGW to VPC
+          currentStep = "attaching internet gateway to VPC"
+          await client.send(
+            new AttachInternetGatewayCommand({
+              InternetGatewayId: igwId,
+              VpcId: vpcId,
+            }),
+          )
+
+          // Step 6: Create public route table
+          currentStep = "creating public route table"
+          const rtbPubName = prefix ? `${prefix}-rtb-public` : undefined
+          const rtbPubResult = await client.send(
+            new CreateRouteTableCommand({
+              VpcId: vpcId,
+              TagSpecifications: buildTagSpec(
+                ResourceType.route_table,
+                rtbPubName,
+                extraTags,
+              ),
+            }),
+          )
+          const pubRtbId = rtbPubResult.RouteTable?.RouteTableId
+          if (!pubRtbId) {
+            throw new Error(
+              "Public route table was created but no ID was returned",
+            )
+          }
+          created.push({ type: "Public Route Table", id: pubRtbId })
+
+          // Step 7: Add default route to IGW
+          currentStep = "creating default route to internet gateway"
+          await client.send(
+            new CreateRouteCommand({
+              RouteTableId: pubRtbId,
+              DestinationCidrBlock: "0.0.0.0/0",
+              GatewayId: igwId,
+            }),
+          )
+
+          // Step 8: Associate public subnets with public route table
+          currentStep = "associating public subnets with route table"
+          for (const subnetId of publicSubnetIds) {
+            await client.send(
+              new AssociateRouteTableCommand({
+                RouteTableId: pubRtbId,
+                SubnetId: subnetId,
+              }),
+            )
+          }
+        }
+
+        // Step 9: Create private route table (if private subnets > 0)
+        if (params.privateSubnetCount > 0) {
+          currentStep = "creating private route table"
+          const rtbPrivName = prefix ? `${prefix}-rtb-private` : undefined
+          const rtbPrivResult = await client.send(
+            new CreateRouteTableCommand({
+              VpcId: vpcId,
+              TagSpecifications: buildTagSpec(
+                ResourceType.route_table,
+                rtbPrivName,
+                extraTags,
+              ),
+            }),
+          )
+          const privRtbId = rtbPrivResult.RouteTable?.RouteTableId
+          if (!privRtbId) {
+            throw new Error(
+              "Private route table was created but no ID was returned",
+            )
+          }
+          created.push({ type: "Private Route Table", id: privRtbId })
+
+          // Step 10: Associate private subnets with private route table
+          currentStep = "associating private subnets with route table"
+          for (const subnetId of privateSubnetIds) {
+            await client.send(
+              new AssociateRouteTableCommand({
+                RouteTableId: privRtbId,
+                SubnetId: subnetId,
+              }),
+            )
+          }
+        }
+
+        return { vpcId, created }
+      } catch (error) {
+        return {
+          vpcId: created.find((r) => r.type === "VPC")?.id,
+          created,
+          error: error instanceof Error ? error : new Error(String(error)),
+          failedStep: `Failed while ${currentStep}`,
+        }
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["ec2", "vpcs"] })
+      queryClient.invalidateQueries({ queryKey: ["ec2", "subnets"] })
+      queryClient.invalidateQueries({ queryKey: ["ec2", "internetGateways"] })
+      queryClient.invalidateQueries({ queryKey: ["ec2", "routeTables"] })
     },
   })
 }

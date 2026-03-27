@@ -20,6 +20,7 @@ import {
   useCreateSubnet,
   useCreateVolume,
   useCreateVpc,
+  useCreateVpcWizard,
   useDeleteKeyPair,
   useDeletePlacementGroup,
   useDeleteSnapshot,
@@ -36,6 +37,8 @@ import {
   useStopInstance,
   useTerminateInstance,
 } from "./ec2"
+
+import type { CreateVpcWizardFormData } from "@/types/ec2"
 
 let queryClient: QueryClient
 
@@ -611,5 +614,211 @@ describe("useDeletePlacementGroup", () => {
     expect(spy).toHaveBeenCalledWith({
       queryKey: ["ec2", "placementGroups"],
     })
+  })
+})
+
+describe("useCreateVpcWizard", () => {
+  const baseParams: CreateVpcWizardFormData = {
+    mode: "vpc-only",
+    namePrefix: "test",
+    autoGenerateNames: true,
+    cidrBlock: "10.0.0.0/16",
+    tenancy: "default",
+    publicSubnetCount: 0,
+    privateSubnetCount: 0,
+    publicSubnetCidrs: [],
+    privateSubnetCidrs: [],
+    tags: [],
+  }
+
+  it("sends only CreateVpcCommand in vpc-only mode", async () => {
+    createQueryClient()
+    mockSend.mockResolvedValueOnce({
+      Vpc: { VpcId: "vpc-111" },
+    })
+    const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
+
+    result.current.mutate(baseParams)
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend).toHaveBeenCalledOnce()
+    expect(mockSend.mock.calls[0]?.[0].input.CidrBlock).toBe("10.0.0.0/16")
+    expect(result.current.data?.vpcId).toBe("vpc-111")
+    expect(result.current.data?.created).toHaveLength(1)
+  })
+
+  it("includes TagSpecifications with auto-generated name", async () => {
+    createQueryClient()
+    mockSend.mockResolvedValueOnce({
+      Vpc: { VpcId: "vpc-111" },
+    })
+    const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
+
+    result.current.mutate({
+      ...baseParams,
+      namePrefix: "proj",
+      autoGenerateNames: true,
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    const tags = mockSend.mock.calls[0]?.[0].input.TagSpecifications
+    expect(tags?.[0]?.Tags).toContainEqual({
+      Key: "Name",
+      Value: "proj-vpc",
+    })
+  })
+
+  it("sends correct command sequence for vpc-and-more with 1 public + 1 private", async () => {
+    createQueryClient()
+    mockSend
+      .mockResolvedValueOnce({ Vpc: { VpcId: "vpc-111" } })
+      .mockResolvedValueOnce({ Subnet: { SubnetId: "subnet-pub-1" } })
+      .mockResolvedValueOnce({ Subnet: { SubnetId: "subnet-priv-1" } })
+      .mockResolvedValueOnce({
+        InternetGateway: { InternetGatewayId: "igw-111" },
+      })
+      .mockResolvedValueOnce({}) // AttachInternetGateway
+      .mockResolvedValueOnce({
+        RouteTable: { RouteTableId: "rtb-pub-1" },
+      })
+      .mockResolvedValueOnce({}) // CreateRoute
+      .mockResolvedValueOnce({}) // AssociateRouteTable (public)
+      .mockResolvedValueOnce({
+        RouteTable: { RouteTableId: "rtb-priv-1" },
+      })
+      .mockResolvedValueOnce({}) // AssociateRouteTable (private)
+
+    const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
+
+    result.current.mutate({
+      ...baseParams,
+      mode: "vpc-and-more",
+      publicSubnetCount: 1,
+      privateSubnetCount: 1,
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend).toHaveBeenCalledTimes(10)
+    expect(result.current.data?.vpcId).toBe("vpc-111")
+    expect(result.current.data?.created).toHaveLength(6)
+    expect(result.current.data?.error).toBeUndefined()
+  })
+
+  it("skips IGW and public route table when publicSubnetCount is 0", async () => {
+    createQueryClient()
+    mockSend
+      .mockResolvedValueOnce({ Vpc: { VpcId: "vpc-111" } })
+      .mockResolvedValueOnce({ Subnet: { SubnetId: "subnet-priv-1" } })
+      .mockResolvedValueOnce({
+        RouteTable: { RouteTableId: "rtb-priv-1" },
+      })
+      .mockResolvedValueOnce({}) // AssociateRouteTable
+
+    const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
+
+    result.current.mutate({
+      ...baseParams,
+      mode: "vpc-and-more",
+      publicSubnetCount: 0,
+      privateSubnetCount: 1,
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend).toHaveBeenCalledTimes(4)
+    const types = result.current.data?.created.map((r) => r.type)
+    expect(types).not.toContain("Internet Gateway")
+    expect(types).not.toContain("Public Route Table")
+  })
+
+  it("returns partial result with failedStep on error mid-orchestration", async () => {
+    createQueryClient()
+    mockSend
+      .mockResolvedValueOnce({ Vpc: { VpcId: "vpc-111" } })
+      .mockResolvedValueOnce({ Subnet: { SubnetId: "subnet-pub-1" } })
+      .mockRejectedValueOnce(new Error("CIDR conflict"))
+
+    const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
+
+    result.current.mutate({
+      ...baseParams,
+      mode: "vpc-and-more",
+      publicSubnetCount: 1,
+      privateSubnetCount: 1,
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data?.error?.message).toBe("CIDR conflict")
+    expect(result.current.data?.failedStep).toBe(
+      "Failed while creating private subnets",
+    )
+    expect(result.current.data?.vpcId).toBe("vpc-111")
+    expect(result.current.data?.created).toHaveLength(2)
+  })
+
+  it("returns error when VPC creation fails", async () => {
+    createQueryClient()
+    mockSend.mockRejectedValueOnce(new Error("Access denied"))
+
+    const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
+
+    result.current.mutate(baseParams)
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data?.error?.message).toBe("Access denied")
+    expect(result.current.data?.failedStep).toBe(
+      "Failed while creating VPC",
+    )
+    expect(result.current.data?.vpcId).toBeUndefined()
+    expect(result.current.data?.created).toHaveLength(0)
+  })
+
+  it("returns error when VPC is created but no ID returned", async () => {
+    createQueryClient()
+    mockSend.mockResolvedValueOnce({ Vpc: {} })
+
+    const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
+
+    result.current.mutate(baseParams)
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data?.error?.message).toContain(
+      "no VPC ID was returned",
+    )
+    expect(result.current.data?.failedStep).toBe(
+      "Failed while creating VPC",
+    )
+  })
+
+  it("invalidates related queries on success", async () => {
+    createQueryClient()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+    mockSend.mockResolvedValueOnce({ Vpc: { VpcId: "vpc-111" } })
+    const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
+
+    result.current.mutate(baseParams)
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["ec2", "vpcs"] })
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["ec2", "subnets"] })
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["ec2", "internetGateways"],
+    })
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["ec2", "routeTables"] })
+  })
+
+  it("propagates extra tags to all resources", async () => {
+    createQueryClient()
+    mockSend.mockResolvedValueOnce({ Vpc: { VpcId: "vpc-111" } })
+
+    const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
+
+    result.current.mutate({
+      ...baseParams,
+      tags: [{ key: "Env", value: "prod" }],
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    const tags = mockSend.mock.calls[0]?.[0].input.TagSpecifications?.[0]?.Tags
+    expect(tags).toContainEqual({ Key: "Env", Value: "prod" })
   })
 })

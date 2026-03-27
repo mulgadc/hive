@@ -41,8 +41,8 @@ function Images() {
                 badge={<StateBadge state={image.State} />}
                 key={image.ImageId}
                 params={{ id: image.ImageId }}
-                subtitle={image.Name}
-                title={image.ImageId}
+                subtitle={image.ImageId ?? ""}
+                title={image.Name ?? image.ImageId ?? ""}
                 to="/ec2/describe-images/$id"
               />
             )
