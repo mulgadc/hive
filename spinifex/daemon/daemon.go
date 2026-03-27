@@ -648,6 +648,20 @@ func (d *Daemon) Start() error {
 			d.eipService = eipSvc
 			slog.Info("EIP service initialized")
 		}
+
+		// Inject external IPAM + EIP KV into VPC service so DeleteNetworkInterface
+		// can release auto-assigned public IPs and NAT rules.
+		eipJS, eipJSErr := d.natsConn.JetStream()
+		if eipJSErr != nil {
+			slog.Warn("Failed to get JetStream for VPC external IPAM injection", "err", eipJSErr)
+		} else {
+			eipKV, eipKVErr := utils.GetOrCreateKVBucket(eipJS, handlers_ec2_eip.KVBucketEIPs, 10)
+			if eipKVErr != nil {
+				slog.Warn("Failed to get EIP KV bucket for VPC service", "err", eipKVErr)
+			} else {
+				d.vpcService.SetExternalIPAM(d.externalIPAM, eipKV)
+			}
+		}
 	}
 
 	d.accountService, err = initServiceWithRetry("account settings service", func() (*handlers_ec2_account.AccountSettingsServiceImpl, error) {

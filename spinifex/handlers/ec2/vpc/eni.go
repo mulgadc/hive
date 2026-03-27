@@ -156,9 +156,25 @@ func (s *VPCServiceImpl) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfac
 		return nil, errors.New(awserrors.ErrorInvalidNetworkInterfaceInUse)
 	}
 
-	// Release the IP back to the IPAM pool
+	// Release the private IP back to the IPAM pool
 	if err := s.ipam.ReleaseIP(record.SubnetId, record.PrivateIpAddress); err != nil {
 		slog.Warn("Failed to release IP during ENI delete", "eni", eniId, "ip", record.PrivateIpAddress, "err", err)
+	}
+
+	// Release auto-assigned public IP (if any) and remove NAT rule.
+	// Skip if the public IP belongs to an EIP — those are managed independently.
+	if record.PublicIpAddress != "" && s.externalIPAM != nil {
+		if s.isEIPOwned(eniId, accountID) {
+			slog.Debug("DeleteNetworkInterface: public IP owned by EIP, skipping release", "eniId", eniId, "publicIp", record.PublicIpAddress)
+		} else {
+			portName := "port-" + eniId
+			s.publishNATEvent("vpc.delete-nat", record.VpcId, record.PublicIpAddress, record.PrivateIpAddress, portName, record.MacAddress)
+			if err := s.externalIPAM.ReleaseIP(record.PublicIpPool, record.PublicIpAddress); err != nil {
+				slog.Warn("Failed to release public IP during ENI delete", "eni", eniId, "ip", record.PublicIpAddress, "pool", record.PublicIpPool, "err", err)
+			} else {
+				slog.Info("Released auto-assigned public IP during ENI delete", "eniId", eniId, "publicIp", record.PublicIpAddress, "pool", record.PublicIpPool)
+			}
+		}
 	}
 
 	if err := s.eniKV.Delete(key); err != nil {
@@ -520,4 +536,59 @@ func (s *VPCServiceImpl) publishENIEvent(topic, eniId, subnetId, vpcId, privateI
 	if err := s.natsConn.Publish(topic, data); err != nil {
 		slog.Error("Failed to publish ENI event", "topic", topic, "err", err)
 	}
+}
+
+// publishNATEvent publishes a NAT lifecycle event (vpc.add-nat or vpc.delete-nat) to NATS.
+func (s *VPCServiceImpl) publishNATEvent(topic, vpcId, externalIP, logicalIP, portName, mac string) {
+	if s.natsConn == nil {
+		return
+	}
+	evt := struct {
+		VpcId      string `json:"vpc_id"`
+		ExternalIP string `json:"external_ip"`
+		LogicalIP  string `json:"logical_ip"`
+		PortName   string `json:"port_name"`
+		MAC        string `json:"mac"`
+	}{VpcId: vpcId, ExternalIP: externalIP, LogicalIP: logicalIP, PortName: portName, MAC: mac}
+	data, err := json.Marshal(evt)
+	if err != nil {
+		slog.Error("Failed to marshal NAT event", "topic", topic, "err", err)
+		return
+	}
+	if err := s.natsConn.Publish(topic, data); err != nil {
+		slog.Error("Failed to publish NAT event", "topic", topic, "err", err)
+	}
+}
+
+// isEIPOwned checks whether the given ENI's public IP is owned by an Elastic IP.
+// Returns true if an EIP record references this ENI, meaning the public IP should
+// not be released when the ENI is deleted.
+func (s *VPCServiceImpl) isEIPOwned(eniId, accountID string) bool {
+	if s.eipKV == nil {
+		return false
+	}
+	keys, err := s.eipKV.Keys()
+	if err != nil {
+		return false
+	}
+	prefix := accountID + "."
+	for _, k := range keys {
+		if len(k) < len(prefix) || k[:len(prefix)] != prefix {
+			continue
+		}
+		entry, err := s.eipKV.Get(k)
+		if err != nil {
+			continue
+		}
+		var record struct {
+			ENIId string `json:"eni_id"`
+		}
+		if err := json.Unmarshal(entry.Value(), &record); err != nil {
+			continue
+		}
+		if record.ENIId == eniId {
+			return true
+		}
+	}
+	return false
 }

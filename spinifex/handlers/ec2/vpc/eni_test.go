@@ -1,11 +1,13 @@
 package handlers_ec2_vpc
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -523,4 +525,182 @@ func TestCreateNetworkInterface_WithSecurityGroups(t *testing.T) {
 	require.Len(t, out.NetworkInterface.Groups, 2)
 	assert.Equal(t, "sg-aaa", *out.NetworkInterface.Groups[0].GroupId)
 	assert.Equal(t, "sg-bbb", *out.NetworkInterface.Groups[1].GroupId)
+}
+
+func TestDeleteNetworkInterface_ReleasesPublicIP(t *testing.T) {
+	svc, nc := setupTestVPCServiceWithNC(t)
+	vpcId := createTestVPC(t, svc, "10.0.0.0/16")
+	subnetId := createTestSubnet(t, svc, vpcId, "10.0.1.0/24")
+	eniId := createTestENI(t, svc, subnetId)
+
+	// Set up external IPAM with a static pool
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	ipamKV, err := utils.GetOrCreateKVBucket(js, KVBucketExternalIPAM, 5)
+	require.NoError(t, err)
+	pools := []ExternalPoolConfig{{
+		Name:       "test-pool",
+		Source:     "static",
+		RangeStart: "203.0.113.10",
+		RangeEnd:   "203.0.113.20",
+		Gateway:    "203.0.113.1",
+		PrefixLen:  24,
+		Region:     "us-east-1",
+		AZ:         "us-east-1a",
+	}}
+	extIPAM := NewExternalIPAMWithKV(ipamKV, pools)
+	require.NoError(t, extIPAM.initPools())
+
+	// Allocate a public IP and assign it to the ENI
+	publicIP, poolName, err := extIPAM.AllocateIP("us-east-1", "us-east-1a", "auto_assign", eniId, "i-test")
+	require.NoError(t, err)
+	require.NoError(t, svc.UpdateENIPublicIP(testAccountID, eniId, publicIP, poolName))
+
+	// Inject external IPAM (no EIP KV — all public IPs are auto-assigned)
+	svc.SetExternalIPAM(extIPAM, nil)
+
+	// Subscribe to vpc.delete-nat to verify event is published
+	natCh := make(chan *nats.Msg, 1)
+	sub, err := nc.Subscribe("vpc.delete-nat", func(msg *nats.Msg) {
+		natCh <- msg
+	})
+	require.NoError(t, err)
+	defer func() { _ = sub.Unsubscribe() }()
+
+	// Delete the ENI
+	_, err = svc.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+		NetworkInterfaceId: aws.String(eniId),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Verify vpc.delete-nat event was published with correct public IP
+	select {
+	case msg := <-natCh:
+		var evt struct {
+			ExternalIP string `json:"external_ip"`
+			VpcId      string `json:"vpc_id"`
+		}
+		require.NoError(t, json.Unmarshal(msg.Data, &evt))
+		assert.Equal(t, publicIP, evt.ExternalIP)
+		assert.Equal(t, vpcId, evt.VpcId)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for vpc.delete-nat event")
+	}
+
+	// Verify the public IP was released back to the pool — allocate again and
+	// confirm we get the same IP (it was the first in the range)
+	reusedIP, _, err := extIPAM.AllocateIP("us-east-1", "us-east-1a", "auto_assign", "eni-other", "i-other")
+	require.NoError(t, err)
+	assert.Equal(t, publicIP, reusedIP)
+}
+
+func TestDeleteNetworkInterface_SkipsEIPOwnedPublicIP(t *testing.T) {
+	svc, nc := setupTestVPCServiceWithNC(t)
+	vpcId := createTestVPC(t, svc, "10.0.0.0/16")
+	subnetId := createTestSubnet(t, svc, vpcId, "10.0.1.0/24")
+	eniId := createTestENI(t, svc, subnetId)
+
+	// Set up external IPAM
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	ipamKV, err := utils.GetOrCreateKVBucket(js, KVBucketExternalIPAM, 5)
+	require.NoError(t, err)
+	pools := []ExternalPoolConfig{{
+		Name:       "test-pool",
+		Source:     "static",
+		RangeStart: "203.0.113.10",
+		RangeEnd:   "203.0.113.20",
+		Gateway:    "203.0.113.1",
+		PrefixLen:  24,
+		Region:     "us-east-1",
+		AZ:         "us-east-1a",
+	}}
+	extIPAM := NewExternalIPAMWithKV(ipamKV, pools)
+	require.NoError(t, extIPAM.initPools())
+
+	// Allocate and assign public IP to the ENI
+	publicIP, poolName, err := extIPAM.AllocateIP("us-east-1", "us-east-1a", "auto_assign", eniId, "i-test")
+	require.NoError(t, err)
+	require.NoError(t, svc.UpdateENIPublicIP(testAccountID, eniId, publicIP, poolName))
+
+	// Create an EIP record that references this ENI
+	eipKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: "spinifex-vpc-elastic-ips", History: 1})
+	require.NoError(t, err)
+	eipRecord, _ := json.Marshal(struct {
+		AllocationId string `json:"allocation_id"`
+		PublicIp     string `json:"public_ip"`
+		ENIId        string `json:"eni_id"`
+		State        string `json:"state"`
+	}{
+		AllocationId: "eipalloc-test1",
+		PublicIp:     publicIP,
+		ENIId:        eniId,
+		State:        "associated",
+	})
+	_, err = eipKV.Put(utils.AccountKey(testAccountID, "eipalloc-test1"), eipRecord)
+	require.NoError(t, err)
+
+	// Inject external IPAM WITH EIP KV
+	svc.SetExternalIPAM(extIPAM, eipKV)
+
+	// Subscribe to vpc.delete-nat — should NOT receive an event
+	natCh := make(chan *nats.Msg, 1)
+	sub, err := nc.Subscribe("vpc.delete-nat", func(msg *nats.Msg) {
+		natCh <- msg
+	})
+	require.NoError(t, err)
+	defer func() { _ = sub.Unsubscribe() }()
+
+	// Delete the ENI
+	_, err = svc.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+		NetworkInterfaceId: aws.String(eniId),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Verify NO vpc.delete-nat event was published (EIP-owned, should be skipped)
+	select {
+	case <-natCh:
+		t.Fatal("unexpected vpc.delete-nat event — EIP-owned public IP should not be released")
+	case <-time.After(500 * time.Millisecond):
+		// Expected: no event
+	}
+}
+
+func TestDeleteNetworkInterface_NoPublicIP_NoExternalIPAM(t *testing.T) {
+	// Verify that delete still works when no external IPAM is configured
+	// (the common case — no public IP on the ENI)
+	svc, nc := setupTestVPCServiceWithNC(t)
+	vpcId := createTestVPC(t, svc, "10.0.0.0/16")
+	subnetId := createTestSubnet(t, svc, vpcId, "10.0.1.0/24")
+	eniId := createTestENI(t, svc, subnetId)
+
+	// No SetExternalIPAM call — externalIPAM is nil
+
+	// Subscribe to vpc.delete-nat — should NOT receive an event
+	natCh := make(chan *nats.Msg, 1)
+	sub, err := nc.Subscribe("vpc.delete-nat", func(msg *nats.Msg) {
+		natCh <- msg
+	})
+	require.NoError(t, err)
+	defer func() { _ = sub.Unsubscribe() }()
+
+	// Delete should succeed
+	_, err = svc.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+		NetworkInterfaceId: aws.String(eniId),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Verify no NAT event
+	select {
+	case <-natCh:
+		t.Fatal("unexpected vpc.delete-nat event when no external IPAM is configured")
+	case <-time.After(500 * time.Millisecond):
+		// Expected
+	}
+
+	// Verify ENI is deleted
+	_, err = svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		NetworkInterfaceIds: []*string{aws.String(eniId)},
+	}, testAccountID)
+	assert.ErrorContains(t, err, "InvalidNetworkInterfaceID.NotFound")
 }

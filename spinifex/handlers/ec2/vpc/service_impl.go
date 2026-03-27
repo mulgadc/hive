@@ -70,6 +70,17 @@ type VPCServiceImpl struct {
 	sgKV     nats.KeyValue
 	rtbKV    nats.KeyValue // route table bucket for auto-creating main route table
 	ipam     *IPAM
+
+	// Optional: injected after construction for public IP cleanup in DeleteNetworkInterface.
+	externalIPAM *ExternalIPAM
+	eipKV        nats.KeyValue
+}
+
+// SetExternalIPAM injects external IPAM and EIP KV store references so that
+// DeleteNetworkInterface can release auto-assigned public IPs and NAT rules.
+func (s *VPCServiceImpl) SetExternalIPAM(ipam *ExternalIPAM, eipKV nats.KeyValue) {
+	s.externalIPAM = ipam
+	s.eipKV = eipKV
 }
 
 // NewVPCServiceImplWithNATS creates a VPC service with NATS JetStream for persistence
