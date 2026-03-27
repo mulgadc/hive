@@ -3,9 +3,11 @@ import {
   DescribeImagesCommand,
   DescribeInstancesCommand,
   DescribeInstanceTypesCommand,
+  DescribeInternetGatewaysCommand,
   DescribeKeyPairsCommand,
   DescribePlacementGroupsCommand,
   DescribeRegionsCommand,
+  DescribeRouteTablesCommand,
   DescribeSnapshotsCommand,
   DescribeSubnetsCommand,
   DescribeVolumesCommand,
@@ -150,6 +152,22 @@ export const ec2SnapshotQueryOptions = (snapshotId: string) =>
     },
     refetchInterval: 5000,
   })
+
+export const ec2InternetGatewaysQueryOptions = queryOptions({
+  queryKey: ["ec2", "internetGateways"],
+  queryFn: () => {
+    const command = new DescribeInternetGatewaysCommand({})
+    return getEc2Client().send(command)
+  },
+})
+
+export const ec2RouteTablesQueryOptions = queryOptions({
+  queryKey: ["ec2", "routeTables"],
+  queryFn: () => {
+    const command = new DescribeRouteTablesCommand({})
+    return getEc2Client().send(command)
+  },
+})
 
 export const ec2VpcsQueryOptions = queryOptions({
   queryKey: ["ec2", "vpcs"],

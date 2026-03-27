@@ -196,6 +196,34 @@ export function SidebarLayout() {
                 </SidebarMenuButton>
               </Link>
             </SidebarMenuItem>
+
+            {/* uncomment when route pages are created
+            <SidebarMenuItem>
+              <Link to="/ec2/describe-route-tables">
+                <SidebarMenuButton
+                  isActive={pathname.startsWith("/ec2/describe-route-tables")}
+                  tooltip="Route Tables"
+                >
+                  <Route className="size-4" />
+                  <span>Route Tables</span>
+                </SidebarMenuButton>
+              </Link>
+            </SidebarMenuItem>
+
+            <SidebarMenuItem>
+              <Link to="/ec2/describe-internet-gateways">
+                <SidebarMenuButton
+                  isActive={pathname.startsWith(
+                    "/ec2/describe-internet-gateways",
+                  )}
+                  tooltip="Internet Gateways"
+                >
+                  <Globe className="size-4" />
+                  <span>Internet Gateways</span>
+                </SidebarMenuButton>
+              </Link>
+            </SidebarMenuItem>
+            */}
           </SidebarMenu>
         </SidebarGroup>
 

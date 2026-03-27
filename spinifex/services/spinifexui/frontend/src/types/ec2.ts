@@ -133,6 +133,31 @@ export const createVpcSchema = z.object({
 
 export type CreateVpcFormData = z.infer<typeof createVpcSchema>
 
+export const formTagSchema = z.object({
+  key: z.string().min(1, "Key is required"),
+  value: z.string(),
+})
+
+export type FormTag = z.infer<typeof formTagSchema>
+
+export const createVpcWizardSchema = z.object({
+  mode: z.enum(["vpc-only", "vpc-and-more"]),
+  namePrefix: z.string().optional(),
+  autoGenerateNames: z.boolean(),
+  cidrBlock: z
+    .string()
+    .min(1, "CIDR block is required")
+    .regex(CIDR_REGEX, "Must be a valid CIDR block (e.g. 10.0.0.0/16)"),
+  tenancy: z.enum(["default", "dedicated"]),
+  publicSubnetCount: z.number().int().min(0).max(4),
+  privateSubnetCount: z.number().int().min(0).max(4),
+  publicSubnetCidrs: z.array(z.string()),
+  privateSubnetCidrs: z.array(z.string()),
+  tags: z.array(formTagSchema),
+})
+
+export type CreateVpcWizardFormData = z.infer<typeof createVpcWizardSchema>
+
 export const createPlacementGroupSchema = z.object({
   groupName: z
     .string()
