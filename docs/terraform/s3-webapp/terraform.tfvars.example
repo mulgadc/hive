@@ -1,0 +1,14 @@
+# Copy this to terraform.tfvars and fill in your values.
+#
+# The predastore_host must be reachable from INSIDE the VPC guest — not
+# localhost. Use the host's br-wan or LAN IP, e.g. "192.168.1.10:8443".
+
+predastore_host = "192.168.1.10:8443"
+s3_access_key   = "AKIAIOSFODNN7EXAMPLE"
+s3_secret_key   = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+# Optional overrides:
+# spinifex_endpoint    = "https://localhost:9999"
+# predastore_endpoint  = "https://localhost:8443"
+# bucket_name          = "webapp-uploads"
+# region               = "ap-southeast-2"
