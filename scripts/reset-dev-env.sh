@@ -160,14 +160,12 @@ elif [ -n "$WAN_IFACE" ]; then
     fi
 fi
 
-# Chassis ID — vpcd discovers registered chassis from the OVN Southbound DB
-# at startup, so the name here doesn't need to match spinifex.toml node names.
-# Using "chassis-node1" for consistency with the default node name.
-NODE_NAME="node1"
-CHASSIS_ID="chassis-${NODE_NAME}"
+# Chassis ID — let setup-ovn.sh auto-detect from hostname. This ensures the
+# system-id matches what ovn-controller registers in the SBDB, which is what
+# vpcd discovers at startup for gateway scheduling.
 
-echo "Re-initializing OVN (chassis-id: $CHASSIS_ID)"
-./scripts/setup-ovn.sh --management $SETUP_OVN_FLAGS --chassis-id="$CHASSIS_ID"
+echo "Re-initializing OVN"
+./scripts/setup-ovn.sh --management $SETUP_OVN_FLAGS
 
 echo "Initializing platform"
 ADMIN_INIT_ARGS="--region $REGION --az ${REGION}a --node node1 --nodes 1"
