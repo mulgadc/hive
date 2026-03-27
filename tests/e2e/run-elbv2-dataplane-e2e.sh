@@ -497,9 +497,7 @@ if [ "$TARGETS_HEALTHY" = true ]; then
 else
     echo "  Current target health:"
     echo "$HEALTH_OUTPUT" | jq -r '.TargetHealthDescriptions[] | "    \(.Target.Id): \(.TargetHealth.State) (\(.TargetHealth.Reason // "n/a"))"'
-    # Health state reporting is not yet implemented — HAProxy does its own health
-    # checks. The traffic test below verifies actual connectivity.
-    echo "  ⚠️  Target health API not yet reporting — skipping (HAProxy health checks work independently)"
+    fail "targets did not become healthy within ${HEALTH_TIMEOUT}s"
 fi
 
 # ==========================================

@@ -57,6 +57,7 @@ type ELBv2ServiceImpl struct {
 	natsURL          string // NATS URL for ALB VM cloud-init, set by daemon
 	ctx              context.Context
 	cancel           context.CancelFunc
+	hc               *healthChecker
 }
 
 // NewELBv2ServiceImplWithNATS creates an ELBv2 service backed by JetStream KV.
@@ -76,6 +77,13 @@ func NewELBv2ServiceImplWithNATS(cfg *config.Config, nc *nats.Conn) (*ELBv2Servi
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	hc := newHealthChecker(store, nc)
+	if err := hc.start(); err != nil {
+		slog.Warn("Failed to start target health checker", "err", err)
+	} else {
+		slog.Info("Target health checker started")
+	}
+
 	return &ELBv2ServiceImpl{
 		config: cfg,
 		store:  store,
@@ -84,11 +92,15 @@ func NewELBv2ServiceImplWithNATS(cfg *config.Config, nc *nats.Conn) (*ELBv2Servi
 		region: region,
 		ctx:    ctx,
 		cancel: cancel,
+		hc:     hc,
 	}, nil
 }
 
 // Close cancels background goroutines (e.g. waitForAgentReady).
 func (s *ELBv2ServiceImpl) Close() {
+	if s.hc != nil {
+		s.hc.stop()
+	}
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -885,7 +897,9 @@ func (s *ELBv2ServiceImpl) DeregisterTargets(input *elbv2.DeregisterTargetsInput
 	var remaining []Target
 	for _, t := range tg.Targets {
 		key := fmt.Sprintf("%s:%d", t.Id, t.Port)
-		if !removeSet[key] {
+		if removeSet[key] {
+			s.hc.removeTarget(tg.TargetGroupID, t.Id, t.Port)
+		} else {
 			remaining = append(remaining, t)
 		}
 	}

@@ -25,9 +25,11 @@ const (
 	DefaultPIDPath    = "/run/haproxy.pid"
 
 	// NATS topic patterns.
-	configTopicPrefix = "elbv2.alb."
-	configTopicSuffix = ".config"
-	pingTopicSuffix   = ".ping"
+	configTopicPrefix    = "elbv2.alb."
+	configTopicSuffix    = ".config"
+	pingTopicSuffix      = ".ping"
+	healthTopicSuffix    = ".health"
+	healthReportInterval = 10 * time.Second
 )
 
 // Agent manages HAProxy configuration inside an ALB VM.
@@ -36,13 +38,17 @@ type Agent struct {
 	natsURL    string
 	configPath string
 	pidPath    string
+	socketPath string // HAProxy stats socket
 
 	nc   *nats.Conn
 	subs []*nats.Subscription
 	mu   sync.Mutex
+	stop chan struct{}
 
 	// For testing: override the reload function.
 	reloadFn func(configPath, pidPath string) error
+	// For testing: override the stats query function.
+	statsFn func(socketPath string) ([]ServerStatus, error)
 }
 
 // New creates a new ALB agent for the given load balancer.
@@ -59,7 +65,10 @@ func New(lbID, natsURL string) (*Agent, error) {
 		natsURL:    natsURL,
 		configPath: DefaultConfigPath,
 		pidPath:    DefaultPIDPath,
+		socketPath: fmt.Sprintf("/tmp/spinifex-haproxy/alb-%s.sock", lbID),
 		reloadFn:   reloadHAProxy,
+		statsFn:    queryHAProxyStats,
+		stop:       make(chan struct{}),
 	}, nil
 }
 
@@ -71,6 +80,11 @@ func ConfigTopic(lbID string) string {
 // PingTopic returns the NATS topic for health pings.
 func PingTopic(lbID string) string {
 	return configTopicPrefix + lbID + pingTopicSuffix
+}
+
+// HealthTopic returns the NATS topic for target health reports.
+func HealthTopic(lbID string) string {
+	return configTopicPrefix + lbID + healthTopicSuffix
 }
 
 // Start connects to NATS and subscribes to config and ping topics.
@@ -116,16 +130,23 @@ func (a *Agent) Start() error {
 		return fmt.Errorf("flush subscriptions: %w", err)
 	}
 
+	// Start background goroutine that periodically queries HAProxy stats
+	// and publishes target health to the control plane via NATS.
+	go a.reportHealth()
+
 	slog.Info("Agent started",
 		"lbId", a.lbID,
 		"configTopic", ConfigTopic(a.lbID),
 		"pingTopic", PingTopic(a.lbID),
+		"healthTopic", HealthTopic(a.lbID),
 	)
 	return nil
 }
 
 // Stop gracefully shuts down the agent.
 func (a *Agent) Stop() {
+	close(a.stop)
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
