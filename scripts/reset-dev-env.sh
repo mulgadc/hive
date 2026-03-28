@@ -256,4 +256,46 @@ fi
 
 aws ec2 describe-images
 
-echo "Reset complete, fresh AMI imported, proceed to creating instances"
+# --- Launch a smoke-test instance ---
+echo "Launching smoke-test instance..."
+
+# Pick instance type based on CPU vendor
+if grep -q 'AuthenticAMD' /proc/cpuinfo; then
+    INSTANCE_TYPE="t3a.small"
+else
+    INSTANCE_TYPE="t3.small"
+fi
+
+# Get the AMI we just imported
+AMI_ID=$(aws ec2 describe-images --query "Images[0].ImageId" --output text)
+if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
+    echo "❌ No AMI found, skipping instance launch"
+    exit 0
+fi
+
+# Find a public subnet (first available)
+SUBNET_ID=$(aws ec2 describe-subnets \
+    --filters "Name=map-public-ip-on-launch,Values=true" \
+    --query "Subnets[0].SubnetId" --output text 2>/dev/null)
+# Fallback: just grab the first subnet if no public-tagged one exists
+if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" = "None" ]; then
+    SUBNET_ID=$(aws ec2 describe-subnets --query "Subnets[0].SubnetId" --output text)
+fi
+if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" = "None" ]; then
+    echo "❌ No subnet found, skipping instance launch"
+    exit 0
+fi
+
+echo "  AMI: $AMI_ID"
+echo "  Instance type: $INSTANCE_TYPE"
+echo "  Subnet: $SUBNET_ID"
+
+INSTANCE_ID=$(aws ec2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name spinifex-key \
+    --subnet-id "$SUBNET_ID" \
+    --count 1 \
+    --query 'Instances[0].InstanceId' --output text)
+
+echo "✅ Reset complete — instance $INSTANCE_ID launched ($INSTANCE_TYPE)"

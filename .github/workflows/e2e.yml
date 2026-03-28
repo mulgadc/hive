@@ -72,7 +72,7 @@ jobs:
           SSH_KEY=$(echo "$INVENTORY" | jq -r '.ssh_key_path')
           SSH_KEY="${SSH_KEY/#\~/$HOME}"
           ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${WAN_IP} \
-            'cd ~/Development/mulga/spinifex && ./tests/e2e/run-e2e.sh'
+            'cd ~/Development/mulga/spinifex && ./tests/e2e/run-e2e.sh && ./tests/e2e/run-cert-e2e.sh'
 
       - name: Teardown
         if: always()
@@ -207,7 +207,7 @@ jobs:
           done
 
           ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${NODE1_IP} \
-            "cd ~/Development/mulga/spinifex && ./tests/e2e/run-multinode-e2e.sh ${NODE_IPS}"
+            "cd ~/Development/mulga/spinifex && ./tests/e2e/run-multinode-e2e.sh ${NODE_IPS} && ./tests/e2e/run-cert-e2e.sh --multinode ${NODE_IPS}"
 
       - name: Teardown
         if: always()

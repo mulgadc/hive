@@ -172,9 +172,10 @@ func TestRunInstance_UniqueIDs(t *testing.T) {
 
 func TestCloudInitTemplateRendering(t *testing.T) {
 	tests := []struct {
-		name     string
-		data     CloudInitData
-		contains []string
+		name        string
+		data        CloudInitData
+		contains    []string
+		notContains []string
 	}{
 		{
 			name: "Basic SSH key and hostname",
@@ -218,6 +219,40 @@ func TestCloudInitTemplateRendering(t *testing.T) {
 				"echo hello",
 			},
 		},
+		{
+			name: "With CA certificate PEM",
+			data: CloudInitData{
+				Username: "ec2-user",
+				SSHKey:   "ssh-rsa AAAA...",
+				Hostname: "spinifex-vm-ca-test",
+				CACertPEM: "      -----BEGIN CERTIFICATE-----\n" +
+					"      MIIFazCCA1OgAwIBAgIUAbcdefg1234567890ABCDEFG=\n" +
+					"      -----END CERTIFICATE-----\n",
+			},
+			contains: []string{
+				"ca_certs:",
+				"trusted:",
+				"-----BEGIN CERTIFICATE-----",
+				"-----END CERTIFICATE-----",
+				"MIIFazCCA1OgAwIBAgIUAbcdefg1234567890ABCDEFG=",
+			},
+		},
+		{
+			name: "Without CA certificate PEM",
+			data: CloudInitData{
+				Username: "ec2-user",
+				SSHKey:   "ssh-rsa AAAA...",
+				Hostname: "spinifex-vm-no-ca",
+			},
+			contains: []string{
+				"#cloud-config",
+				"spinifex-vm-no-ca",
+			},
+			notContains: []string{
+				"ca_certs:",
+				"trusted:",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -230,6 +265,9 @@ func TestCloudInitTemplateRendering(t *testing.T) {
 			rendered := buf.String()
 			for _, s := range tt.contains {
 				assert.Contains(t, rendered, s)
+			}
+			for _, s := range tt.notContains {
+				assert.NotContains(t, rendered, s)
 			}
 		})
 	}

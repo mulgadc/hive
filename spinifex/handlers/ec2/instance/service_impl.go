@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/template"
 	"time"
@@ -50,6 +51,13 @@ ssh_pwauth: true
 
 hostname: {{.Hostname}}
 manage_etc_hosts: true
+
+{{if .CACertPEM}}
+ca_certs:
+  trusted:
+    - |
+{{.CACertPEM}}
+{{end}}
 
 {{if .UserDataCloudConfig}}
 {{.UserDataCloudConfig}}
@@ -122,6 +130,7 @@ type CloudInitData struct {
 	Hostname            string
 	UserDataCloudConfig string
 	UserDataScript      string
+	CACertPEM           string
 }
 
 type CloudInitMetaData struct {
@@ -633,10 +642,34 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 		}
 	}
 
+	// Read CA certificate for injection into guest cloud-init.
+	// Derive the config directory: BaseDir (e.g. ~/spinifex/spinifex/) sits one
+	// level below the data root; the CA cert is at <data-root>/config/ca.pem.
+	var caCertPEM string
+	dataRoot := filepath.Dir(strings.TrimSuffix(s.config.BaseDir, "/"))
+	caCertPath := filepath.Join(dataRoot, "config", "ca.pem")
+	if caBytes, err := os.ReadFile(caCertPath); err == nil {
+		// Indent each line by 6 spaces for YAML block scalar in ca_certs.trusted.
+		var indented strings.Builder
+		for line := range strings.SplitSeq(string(caBytes), "\n") {
+			if line != "" {
+				indented.WriteString("      ")
+				indented.WriteString(line)
+				indented.WriteByte('\n')
+			}
+		}
+		caCertPEM = indented.String()
+	} else if os.IsNotExist(err) {
+		slog.Warn("CA cert not found, guest VMs will not trust Spinifex services", "path", caCertPath)
+	} else {
+		slog.Error("failed to read CA cert for guest cloud-init injection", "path", caCertPath, "error", err)
+	}
+
 	userData := CloudInitData{
-		Username: "ec2-user",
-		SSHKey:   string(sshKey),
-		Hostname: hostname,
+		Username:  "ec2-user",
+		SSHKey:    string(sshKey),
+		Hostname:  hostname,
+		CACertPEM: caCertPEM,
 	}
 
 	// Decode and classify user-data from RunInstances (base64-encoded).

@@ -146,11 +146,27 @@ func (svc *Service) launchService() error {
 		return fmt.Errorf("key file not found: %s", svc.Config.TLSKey)
 	}
 
+	// Derive CA cert path from server cert directory.
+	caCertPath := filepath.Join(filepath.Dir(svc.Config.TLSCert), "ca.pem")
+
 	// Serve static files from embedded filesystem
 	fileServer := http.FileServer(http.FS(contentFS))
 
 	// SPA handler: try to serve the file, fallback to index.html
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Serve CA certificate download at /api/ca.pem.
+		if r.URL.Path == "/api/ca.pem" {
+			if _, err := os.Stat(caCertPath); os.IsNotExist(err) {
+				slog.Warn("CA certificate requested but not found", "path", caCertPath)
+				http.Error(w, "CA certificate not yet generated. Run 'spx admin init' to create it.", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/x-pem-file")
+			w.Header().Set("Content-Disposition", `attachment; filename="spinifex-ca.pem"`)
+			http.ServeFile(w, r, caCertPath)
+			return
+		}
+
 		// Clean the path
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path == "" {
