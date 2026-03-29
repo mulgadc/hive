@@ -380,6 +380,25 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		}
 	}
 
+	// Enforce multi-AZ for internet-facing ALBs in pool mode (non-dev networking).
+	// Dev mode (single node) gets a pass since there may only be one AZ.
+	if scheme == SchemeInternetFacing && s.vpcService != nil && !s.isDevNetworking() && len(subnets) > 0 {
+		azSet := make(map[string]bool, len(subnets))
+		for _, subnetID := range subnets {
+			sub, subErr := s.vpcService.GetSubnet(accountID, subnetID)
+			if subErr != nil {
+				return nil, errors.New(awserrors.ErrorELBv2SubnetNotFound)
+			}
+			if azSet[sub.AvailabilityZone] {
+				return nil, errors.New(awserrors.ErrorELBv2InvalidSubnetConfig)
+			}
+			azSet[sub.AvailabilityZone] = true
+		}
+		if len(azSet) < 2 {
+			return nil, errors.New(awserrors.ErrorELBv2InvalidSubnetConfig)
+		}
+	}
+
 	// Create ENIs in each subnet (when VPC service is available)
 	var eniIDs []string
 	var availZones []AvailZoneInfo
@@ -512,6 +531,12 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 	return &elbv2.CreateLoadBalancerOutput{
 		LoadBalancers: []*elbv2.LoadBalancer{s.lbRecordToSDK(record)},
 	}, nil
+}
+
+// isDevNetworking returns true when the daemon is running in dev networking
+// mode (single-node, QEMU hostfwd). Multi-AZ validation is relaxed in dev mode.
+func (s *ELBv2ServiceImpl) isDevNetworking() bool {
+	return s.config != nil && s.config.Daemon.DevNetworking
 }
 
 func (s *ELBv2ServiceImpl) DeleteLoadBalancer(input *elbv2.DeleteLoadBalancerInput, accountID string) (*elbv2.DeleteLoadBalancerOutput, error) {

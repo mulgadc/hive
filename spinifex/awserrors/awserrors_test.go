@@ -450,6 +450,7 @@ func TestErrorLookup(t *testing.T) {
 		{code: "InvalidScheme", http: 400, message: "The specified scheme is not valid. Specify 'internet-facing' or 'internal'."},
 		{code: "SubnetNotFound", http: 400, message: "The specified subnet does not exist."},
 		{code: "AvailabilityZoneNotSupported", http: 400, message: "The specified Availability Zone is not supported."},
+		{code: "InvalidConfigurationRequest", http: 400, message: "A load balancer cannot be attached to multiple subnets in the same Availability Zone. You must specify subnets in at least two different Availability Zones."},
 	}
 
 	if len(ErrorLookup) != len(expected) {
