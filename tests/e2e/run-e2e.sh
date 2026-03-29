@@ -2844,6 +2844,59 @@ if [ "$PUB_SSH_READY" = true ]; then
     else
         echo "WARN: Outbound internet test inconclusive (may depend on WAN gateway)"
     fi
+    # Verify cloud-init injected the Spinifex CA into the guest trust store.
+    # The guest should be able to curl Spinifex services (awsgw, predastore)
+    # WITHOUT --insecure, proving the CA cert was installed via ca_certs module.
+    echo ""
+    echo "Phase 8b Step 2b: In-guest TLS trust (cloud-init CA injection)"
+
+    # Test 1: Guest can reach awsgw via HTTPS without --insecure
+    set +e
+    GUEST_TLS_AWSGW=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+        -o ConnectTimeout=5 -o BatchMode=yes -i "test-key-1.pem" \
+        ec2-user@"$PUB_IP" "curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 https://${GATEWAY_HOST}:9999/ 2>/dev/null || echo 000" 2>/dev/null)
+    set -e
+
+    if [ -n "$GUEST_TLS_AWSGW" ] && [ "$GUEST_TLS_AWSGW" != "000" ]; then
+        echo "PASS: Guest VM trusts awsgw TLS (HTTP $GUEST_TLS_AWSGW) — cloud-init CA injection works"
+    else
+        echo "FAIL: Guest VM cannot reach awsgw via HTTPS without --insecure (got: $GUEST_TLS_AWSGW)"
+        echo "  This means cloud-init did not inject the Spinifex CA into the guest trust store."
+        echo "  Checking guest user-data for ca_certs block..."
+        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+            -o BatchMode=yes -i "test-key-1.pem" \
+            ec2-user@"$PUB_IP" "cat /var/lib/cloud/instance/user-data.txt 2>/dev/null | head -30" 2>/dev/null || true
+        exit 1
+    fi
+
+    # Test 2: Guest can reach predastore S3 via HTTPS without --insecure
+    set +e
+    GUEST_TLS_S3=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+        -o ConnectTimeout=5 -o BatchMode=yes -i "test-key-1.pem" \
+        ec2-user@"$PUB_IP" "curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 https://${GATEWAY_HOST}:8443/ 2>/dev/null || echo 000" 2>/dev/null)
+    set -e
+
+    if [ -n "$GUEST_TLS_S3" ] && [ "$GUEST_TLS_S3" != "000" ]; then
+        echo "PASS: Guest VM trusts predastore S3 TLS (HTTP $GUEST_TLS_S3)"
+    else
+        echo "WARN: Guest VM cannot reach predastore S3 at https://${GATEWAY_HOST}:8443 (got: $GUEST_TLS_S3)"
+        echo "  Predastore may use a separate self-signed cert (QUIC) — this is expected for now."
+    fi
+
+    # Test 3: Verify the ca_certs block exists in guest user-data
+    set +e
+    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+        -o BatchMode=yes -i "test-key-1.pem" \
+        ec2-user@"$PUB_IP" "sudo grep -q ca_certs /var/lib/cloud/instance/user-data.txt" 2>/dev/null
+    GREP_EXIT=$?
+    set -e
+
+    if [ "$GREP_EXIT" -eq 0 ]; then
+        echo "PASS: Guest user-data contains ca_certs block"
+    else
+        echo "FAIL: Guest user-data does NOT contain ca_certs block"
+        exit 1
+    fi
 else
     echo "WARN: SSH via public IP $PUB_IP not reachable (macvlan isolation or bridge not ready)"
     echo "Falling back to API-only verification (OVN state already validated above)"

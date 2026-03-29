@@ -18,6 +18,8 @@ import {
   ec2PlacementGroupQueryOptions,
   ec2PlacementGroupsQueryOptions,
   ec2RegionsQueryOptions,
+  ec2SecurityGroupQueryOptions,
+  ec2SecurityGroupsQueryOptions,
   ec2SnapshotQueryOptions,
   ec2SnapshotsQueryOptions,
   ec2SubnetQueryOptions,
@@ -133,6 +135,21 @@ describe("query keys", () => {
       "ec2",
       "placementGroups",
       "pg-123",
+    ])
+  })
+
+  it("ec2SecurityGroupsQueryOptions has correct key", () => {
+    expect(ec2SecurityGroupsQueryOptions.queryKey).toEqual([
+      "ec2",
+      "securityGroups",
+    ])
+  })
+
+  it("ec2SecurityGroupQueryOptions includes groupId in key", () => {
+    expect(ec2SecurityGroupQueryOptions("sg-123").queryKey).toEqual([
+      "ec2",
+      "securityGroups",
+      "sg-123",
     ])
   })
 })
@@ -347,6 +364,25 @@ describe("queryFn", () => {
     await queryFn({} as never)
     expect(mockSend.mock.calls[0]?.[0].input).toEqual({
       GroupIds: ["pg-123"],
+    })
+  })
+
+  it("ec2SecurityGroupsQueryOptions sends DescribeSecurityGroupsCommand", async () => {
+    const queryFn = ec2SecurityGroupsQueryOptions.queryFn as (
+      ctx: never,
+    ) => Promise<unknown>
+    await queryFn({} as never)
+    expect(mockSend).toHaveBeenCalledOnce()
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({})
+  })
+
+  it("ec2SecurityGroupQueryOptions sends DescribeSecurityGroupsCommand with ID", async () => {
+    const queryFn = ec2SecurityGroupQueryOptions("sg-123").queryFn as (
+      ctx: never,
+    ) => Promise<unknown>
+    await queryFn({} as never)
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      GroupIds: ["sg-123"],
     })
   })
 })

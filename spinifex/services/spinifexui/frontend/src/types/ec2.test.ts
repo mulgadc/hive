@@ -6,12 +6,16 @@ import {
   createInstanceSchema,
   createKeyPairSchema,
   createPlacementGroupSchema,
+  createSecurityGroupSchema,
   createSnapshotSchema,
   createSubnetSchema,
   createVolumeSchema,
   createVpcSchema,
+  createVpcWizardSchema,
+  formTagSchema,
   importKeyPairSchema,
   modifyVolumeSchema,
+  securityGroupRuleSchema,
 } from "./ec2"
 
 describe("createInstanceSchema", () => {
@@ -319,6 +323,363 @@ describe("createPlacementGroupSchema", () => {
   it("rejects missing group name", () => {
     const result = createPlacementGroupSchema.safeParse({
       strategy: "spread",
+    })
+    expect(result.success).toBe(false)
+  })
+})
+
+describe("formTagSchema", () => {
+  it("accepts valid tag with key and value", () => {
+    const result = formTagSchema.safeParse({ key: "Env", value: "prod" })
+    expect(result.success).toBe(true)
+  })
+
+  it("accepts tag with empty value", () => {
+    const result = formTagSchema.safeParse({ key: "Env", value: "" })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects tag with empty key", () => {
+    const result = formTagSchema.safeParse({ key: "", value: "prod" })
+    expect(result.success).toBe(false)
+  })
+})
+
+describe("createSecurityGroupSchema", () => {
+  it("accepts valid security group params", () => {
+    const result = createSecurityGroupSchema.safeParse({
+      groupName: "web-sg",
+      description: "Allow web traffic",
+      vpcId: "vpc-123",
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects empty group name", () => {
+    const result = createSecurityGroupSchema.safeParse({
+      groupName: "",
+      description: "Allow web traffic",
+      vpcId: "vpc-123",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects group name over 255 chars", () => {
+    const result = createSecurityGroupSchema.safeParse({
+      groupName: "a".repeat(256),
+      description: "Allow web traffic",
+      vpcId: "vpc-123",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("accepts group name at 255 chars", () => {
+    const result = createSecurityGroupSchema.safeParse({
+      groupName: "a".repeat(255),
+      description: "Allow web traffic",
+      vpcId: "vpc-123",
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects empty description", () => {
+    const result = createSecurityGroupSchema.safeParse({
+      groupName: "web-sg",
+      description: "",
+      vpcId: "vpc-123",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects description over 255 chars", () => {
+    const result = createSecurityGroupSchema.safeParse({
+      groupName: "web-sg",
+      description: "a".repeat(256),
+      vpcId: "vpc-123",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects empty vpcId", () => {
+    const result = createSecurityGroupSchema.safeParse({
+      groupName: "web-sg",
+      description: "Allow web traffic",
+      vpcId: "",
+    })
+    expect(result.success).toBe(false)
+  })
+})
+
+describe("securityGroupRuleSchema", () => {
+  it("accepts valid TCP rule", () => {
+    const result = securityGroupRuleSchema.safeParse({
+      ipProtocol: "tcp",
+      fromPort: 443,
+      toPort: 443,
+      cidrIp: "0.0.0.0/0",
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("accepts all-traffic protocol with port -1", () => {
+    const result = securityGroupRuleSchema.safeParse({
+      ipProtocol: "-1",
+      fromPort: -1,
+      toPort: -1,
+      cidrIp: "10.0.0.0/16",
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("accepts port 65535 (upper boundary)", () => {
+    const result = securityGroupRuleSchema.safeParse({
+      ipProtocol: "tcp",
+      fromPort: 65_535,
+      toPort: 65_535,
+      cidrIp: "0.0.0.0/0",
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects port 65536 (above boundary)", () => {
+    const result = securityGroupRuleSchema.safeParse({
+      ipProtocol: "tcp",
+      fromPort: 65_536,
+      toPort: 443,
+      cidrIp: "0.0.0.0/0",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects port -2 (below boundary)", () => {
+    const result = securityGroupRuleSchema.safeParse({
+      ipProtocol: "tcp",
+      fromPort: -2,
+      toPort: 443,
+      cidrIp: "0.0.0.0/0",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects fractional port", () => {
+    const result = securityGroupRuleSchema.safeParse({
+      ipProtocol: "tcp",
+      fromPort: 22.5,
+      toPort: 443,
+      cidrIp: "0.0.0.0/0",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects invalid CIDR format", () => {
+    const result = securityGroupRuleSchema.safeParse({
+      ipProtocol: "tcp",
+      fromPort: 22,
+      toPort: 22,
+      cidrIp: "not-a-cidr",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects empty CIDR", () => {
+    const result = securityGroupRuleSchema.safeParse({
+      ipProtocol: "tcp",
+      fromPort: 22,
+      toPort: 22,
+      cidrIp: "",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects empty protocol", () => {
+    const result = securityGroupRuleSchema.safeParse({
+      ipProtocol: "",
+      fromPort: 22,
+      toPort: 22,
+      cidrIp: "0.0.0.0/0",
+    })
+    expect(result.success).toBe(false)
+  })
+})
+
+describe("createVpcWizardSchema", () => {
+  const validBase = {
+    mode: "vpc-only" as const,
+    namePrefix: "test",
+    autoGenerateNames: true,
+    cidrBlock: "10.0.0.0/16",
+    tenancy: "default" as const,
+    publicSubnetCount: 0,
+    privateSubnetCount: 0,
+    publicSubnetCidrs: [],
+    privateSubnetCidrs: [],
+    tags: [],
+  }
+
+  it("accepts valid vpc-only mode with minimal fields", () => {
+    const result = createVpcWizardSchema.safeParse(validBase)
+    expect(result.success).toBe(true)
+  })
+
+  it("accepts valid vpc-and-more mode", () => {
+    const result = createVpcWizardSchema.safeParse({
+      ...validBase,
+      mode: "vpc-and-more",
+      publicSubnetCount: 1,
+      privateSubnetCount: 1,
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects invalid mode", () => {
+    const result = createVpcWizardSchema.safeParse({
+      ...validBase,
+      mode: "invalid",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects empty CIDR block", () => {
+    const result = createVpcWizardSchema.safeParse({
+      ...validBase,
+      cidrBlock: "",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects invalid CIDR format", () => {
+    const result = createVpcWizardSchema.safeParse({
+      ...validBase,
+      cidrBlock: "not-a-cidr",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects CIDR with out-of-range octets", () => {
+    const result = createVpcWizardSchema.safeParse({
+      ...validBase,
+      cidrBlock: "999.0.0.0/16",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects CIDR with prefix out of /16-/28 range", () => {
+    const result = createVpcWizardSchema.safeParse({
+      ...validBase,
+      cidrBlock: "10.0.0.0/8",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects invalid tenancy", () => {
+    const result = createVpcWizardSchema.safeParse({
+      ...validBase,
+      tenancy: "shared",
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects publicSubnetCount above 4", () => {
+    const result = createVpcWizardSchema.safeParse({
+      ...validBase,
+      publicSubnetCount: 5,
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects negative privateSubnetCount", () => {
+    const result = createVpcWizardSchema.safeParse({
+      ...validBase,
+      privateSubnetCount: -1,
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects fractional subnet count", () => {
+    const result = createVpcWizardSchema.safeParse({
+      ...validBase,
+      publicSubnetCount: 1.5,
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects invalid custom subnet CIDR in vpc-and-more mode", () => {
+    const result = createVpcWizardSchema.safeParse({
+      ...validBase,
+      mode: "vpc-and-more",
+      publicSubnetCount: 1,
+      publicSubnetCidrs: ["not-a-cidr"],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects subnet CIDR outside VPC range", () => {
+    const result = createVpcWizardSchema.safeParse({
+      ...validBase,
+      mode: "vpc-and-more",
+      publicSubnetCount: 1,
+      publicSubnetCidrs: ["192.168.0.0/20"],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const issue = result.error.issues.find(
+        (i) => i.path[0] === "publicSubnetCidrs",
+      )
+      expect(issue?.message).toContain("within the VPC CIDR")
+    }
+  })
+
+  it("rejects overlapping subnet CIDRs", () => {
+    const result = createVpcWizardSchema.safeParse({
+      ...validBase,
+      mode: "vpc-and-more",
+      publicSubnetCount: 1,
+      privateSubnetCount: 1,
+      publicSubnetCidrs: ["10.0.0.0/20"],
+      privateSubnetCidrs: ["10.0.0.0/20"],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const issue = result.error.issues.find((i) =>
+        i.message.includes("overlap"),
+      )
+      expect(issue).toBeDefined()
+    }
+  })
+
+  it("accepts valid custom subnet CIDRs within VPC range", () => {
+    const result = createVpcWizardSchema.safeParse({
+      ...validBase,
+      mode: "vpc-and-more",
+      publicSubnetCount: 1,
+      privateSubnetCount: 1,
+      publicSubnetCidrs: ["10.0.0.0/20"],
+      privateSubnetCidrs: ["10.0.128.0/20"],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("skips subnet CIDR validation in vpc-only mode", () => {
+    const result = createVpcWizardSchema.safeParse({
+      ...validBase,
+      mode: "vpc-only",
+      publicSubnetCidrs: ["not-a-cidr"],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("accepts valid tags", () => {
+    const result = createVpcWizardSchema.safeParse({
+      ...validBase,
+      tags: [{ key: "Env", value: "prod" }],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects tags with empty key", () => {
+    const result = createVpcWizardSchema.safeParse({
+      ...validBase,
+      tags: [{ key: "", value: "prod" }],
     })
     expect(result.success).toBe(false)
   })

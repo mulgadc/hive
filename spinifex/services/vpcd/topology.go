@@ -744,9 +744,14 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 	// A future NAT Gateway feature will add scoped SNAT for private subnets.
 
 	// 6. Add default route pointing to the WAN gateway
+	// OutputPort must be set explicitly because DHCP-sourced pools use a
+	// link-local gateway port (169.254.0.1/30) whose network does not contain
+	// the WAN nexthop (e.g. 192.168.1.1). Without it OVN northd silently
+	// drops the route from the southbound DB.
 	defaultRoute := &nbdb.LogicalRouterStaticRoute{
-		IPPrefix: "0.0.0.0/0",
-		Nexthop:  wanGateway,
+		IPPrefix:   "0.0.0.0/0",
+		Nexthop:    wanGateway,
+		OutputPort: &gwPortName,
 		ExternalIDs: map[string]string{
 			"spinifex:vpc_id": evt.VpcId,
 			"spinifex:igw_id": evt.InternetGatewayId,
@@ -1152,10 +1157,11 @@ func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId, igwId string)
 	// 5. No blanket SNAT — per-VM dnat_and_snat rules handle public instances.
 	// See handleIGWAttach comment for rationale (AWS parity).
 
-	// 6. Add default route
+	// 6. Add default route (OutputPort required for DHCP/link-local gateway ports)
 	defaultRoute := &nbdb.LogicalRouterStaticRoute{
-		IPPrefix: "0.0.0.0/0",
-		Nexthop:  wanGateway,
+		IPPrefix:   "0.0.0.0/0",
+		Nexthop:    wanGateway,
+		OutputPort: &gwPortName,
 		ExternalIDs: map[string]string{
 			"spinifex:vpc_id": vpcId,
 		},

@@ -1308,6 +1308,14 @@ fi
 
 echo "  Instance relaunch + terminate after restart passed"
 
+# Run certificate validation E2E while services are still up (before cleanup trap).
+echo ""
+echo "========================================"
+echo "Running Certificate E2E Tests"
+echo "========================================"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+"${SCRIPT_DIR}/run-cert-e2e.sh" --pseudo-multinode
+
 echo ""
 echo "========================================"
 echo "Multi-Node E2E Tests Completed Successfully"

@@ -158,6 +158,22 @@ var accountListCmd = &cobra.Command{
 	Run:   runAccountList,
 }
 
+var certCmd = &cobra.Command{
+	Use:   "cert",
+	Short: "Manage TLS certificates",
+	Long:  `Manage TLS certificates for the Spinifex platform.`,
+}
+
+var certRenewCmd = &cobra.Command{
+	Use:   "renew",
+	Short: "Regenerate the server certificate with current IPs",
+	Long: `Regenerate the server certificate signed by the existing CA.
+The new certificate will include all current network interface IPs
+and the machine hostname in its SANs. Use this after adding a new
+network interface or changing IP addresses.`,
+	Run: runCertRenew,
+}
+
 /*
 CLI ideas
 
@@ -195,6 +211,11 @@ func init() {
 	adminCmd.AddCommand(accountCmd)
 	accountCmd.AddCommand(accountCreateCmd)
 	accountCmd.AddCommand(accountListCmd)
+
+	adminCmd.AddCommand(certCmd)
+	certCmd.AddCommand(certRenewCmd)
+	certRenewCmd.Flags().StringSlice("extra-ip", nil, "Additional IP addresses to include in SANs")
+	certRenewCmd.Flags().StringSlice("extra-dns", nil, "Additional DNS names to include in SANs")
 	accountCreateCmd.Flags().String("name", "", "Account name (required)")
 	accountCreateCmd.MarkFlagRequired("name")
 
@@ -1766,6 +1787,33 @@ func runAccountList(cmd *cobra.Command, args []string) {
 		}
 		fmt.Printf("%-14s %-20s %-10s %s\n", a.AccountID, a.AccountName, a.Status, created)
 	}
+}
+
+func runCertRenew(cmd *cobra.Command, _ []string) {
+	configDir, _ := cmd.Root().Flags().GetString("config-dir")
+
+	// Verify CA files exist.
+	caCertPath := filepath.Join(configDir, "ca.pem")
+	caKeyPath := filepath.Join(configDir, "ca.key")
+	if !admin.FileExists(caCertPath) || !admin.FileExists(caKeyPath) {
+		fmt.Fprintf(os.Stderr, "Error: CA files not found in %s\nRun 'spx admin init' first.\n", configDir)
+		os.Exit(1)
+	}
+
+	extraIPs, _ := cmd.Flags().GetStringSlice("extra-ip")
+	extraDNS, _ := cmd.Flags().GetStringSlice("extra-dns")
+
+	serverCertPath := filepath.Join(configDir, "server.pem")
+	serverKeyPath := filepath.Join(configDir, "server.key")
+
+	if err := admin.GenerateSignedCertWithDNS(serverCertPath, serverKeyPath, caCertPath, caKeyPath, extraIPs, extraDNS); err != nil {
+		fmt.Fprintf(os.Stderr, "Error regenerating server certificate: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("✅ Server certificate regenerated with current IPs and hostname")
+	fmt.Printf("   Certificate: %s\n", serverCertPath)
+	fmt.Println("\n⚠️  Restart awsgw and daemon services to pick up the new certificate.")
 }
 
 // writeBootstrapResult holds the admin credentials so callers can

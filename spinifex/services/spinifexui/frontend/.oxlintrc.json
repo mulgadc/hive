@@ -26,6 +26,7 @@
     "@tanstack/router/route-param-names": "error",
     "eslint/complexity": "off",
     "eslint/func-style": "off",
+    "eslint/no-plusplus": ["error", { "allowForLoopAfterthoughts": true }],
     "eslint/no-use-before-define": "off",
     "eslint/prefer-destructuring": "off",
     "eslint/sort-imports": "off",
@@ -45,7 +46,8 @@
     "unicorn/filename-case": [
       "error",
       { "cases": { "kebabCase": true, "camelCase": true } }
-    ]
+    ],
+    "unicorn/number-literal-case": "off"
   },
   "overrides": [
     {

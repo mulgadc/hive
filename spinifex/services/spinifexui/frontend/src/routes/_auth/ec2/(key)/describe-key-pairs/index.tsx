@@ -56,7 +56,7 @@ function KeyPairs() {
               <ListCard
                 key={keyPair.KeyPairId}
                 params={{ id: keyPair.KeyPairId }}
-                subtitle={`${keyPair.KeyPairId} • ${keyPair.KeyType}`}
+                subtitle={keyPair.KeyPairId ?? ""}
                 title={keyPair.KeyName ?? ""}
                 to="/ec2/describe-key-pairs/$id"
               />

@@ -71,16 +71,7 @@ func TestDiscoverChassis_ParsesOutput(t *testing.T) {
 	defer func() { discoverChassis = orig }()
 
 	discoverChassis = func(sbAddr string) ([]string, error) {
-		// Simulate ovn-sbctl list-chassis output
-		output := "chassis-node1\nchassis-node2\nchassis-node3\n"
-		var names []string
-		for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
-			name := strings.TrimSpace(line)
-			if name != "" {
-				names = append(names, name)
-			}
-		}
-		return names, nil
+		return []string{"chassis-node1", "chassis-node2", "chassis-node3"}, nil
 	}
 
 	names, err := discoverChassis("")
@@ -103,15 +94,7 @@ func TestDiscoverChassis_SingleNode(t *testing.T) {
 	defer func() { discoverChassis = orig }()
 
 	discoverChassis = func(sbAddr string) ([]string, error) {
-		output := "chassis-spinifex-image-builder\n"
-		var names []string
-		for line := range strings.SplitSeq(strings.TrimSpace(output), "\n") {
-			name := strings.TrimSpace(line)
-			if name != "" {
-				names = append(names, name)
-			}
-		}
-		return names, nil
+		return []string{"chassis-spinifex-image-builder"}, nil
 	}
 
 	names, err := discoverChassis("")
@@ -158,6 +141,57 @@ func TestDiscoverChassis_Error_FallsBackToConfig(t *testing.T) {
 	chassisNames := []string{"chassis-node1"}
 	if len(chassisNames) != 1 || chassisNames[0] != "chassis-node1" {
 		t.Errorf("expected fallback to config names, got %v", chassisNames)
+	}
+}
+
+// TestParseChassisList_FiltersStaleLocal verifies that stale chassis entries on
+// the local host (same hostname, different system-id) are filtered out.
+func TestParseChassisList_FiltersStaleLocal(t *testing.T) {
+	// ovn-sbctl --bare --columns=name,hostname output: two chassis on
+	// the same host, "chassis-node1" is stale.
+	raw := "chassis-node1\njulian-wattle\n\nchassis-test\njulian-wattle\n"
+
+	names := parseChassisList(raw, "chassis-test", "julian-wattle")
+	if len(names) != 1 {
+		t.Fatalf("expected 1 chassis (stale filtered), got %d: %v", len(names), names)
+	}
+	if names[0] != "chassis-test" {
+		t.Errorf("expected chassis-test, got %s", names[0])
+	}
+}
+
+// TestParseChassisList_KeepsRemoteChassis verifies that chassis on other hosts
+// are preserved even if there are stale entries on the local host.
+func TestParseChassisList_KeepsRemoteChassis(t *testing.T) {
+	raw := "chassis-nodeA\nlocal-host\n\nchassis-old\nlocal-host\n\nchassis-nodeB\nremote-host\n"
+
+	names := parseChassisList(raw, "chassis-nodeA", "local-host")
+	if len(names) != 2 {
+		t.Fatalf("expected 2 chassis (stale filtered), got %d: %v", len(names), names)
+	}
+	expected := map[string]bool{"chassis-nodeA": true, "chassis-nodeB": true}
+	for _, n := range names {
+		if !expected[n] {
+			t.Errorf("unexpected chassis: %s", n)
+		}
+	}
+}
+
+// TestParseChassisList_AllRemote verifies no filtering when all chassis are remote.
+func TestParseChassisList_AllRemote(t *testing.T) {
+	raw := "chassis-node1\nhost-a\n\nchassis-node2\nhost-b\n\nchassis-node3\nhost-c\n"
+
+	names := parseChassisList(raw, "chassis-local", "host-local")
+	if len(names) != 3 {
+		t.Fatalf("expected 3 chassis, got %d: %v", len(names), names)
+	}
+}
+
+// TestParseChassisList_Empty verifies empty input returns nil.
+func TestParseChassisList_Empty(t *testing.T) {
+	names := parseChassisList("", "chassis-test", "local-host")
+	if len(names) != 0 {
+		t.Errorf("expected empty, got %v", names)
 	}
 }
 

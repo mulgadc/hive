@@ -3,9 +3,12 @@ import {
   DescribeImagesCommand,
   DescribeInstancesCommand,
   DescribeInstanceTypesCommand,
+  DescribeInternetGatewaysCommand,
   DescribeKeyPairsCommand,
   DescribePlacementGroupsCommand,
   DescribeRegionsCommand,
+  DescribeRouteTablesCommand,
+  DescribeSecurityGroupsCommand,
   DescribeSnapshotsCommand,
   DescribeSubnetsCommand,
   DescribeVolumesCommand,
@@ -151,6 +154,22 @@ export const ec2SnapshotQueryOptions = (snapshotId: string) =>
     refetchInterval: 5000,
   })
 
+export const ec2InternetGatewaysQueryOptions = queryOptions({
+  queryKey: ["ec2", "internetGateways"],
+  queryFn: () => {
+    const command = new DescribeInternetGatewaysCommand({})
+    return getEc2Client().send(command)
+  },
+})
+
+export const ec2RouteTablesQueryOptions = queryOptions({
+  queryKey: ["ec2", "routeTables"],
+  queryFn: () => {
+    const command = new DescribeRouteTablesCommand({})
+    return getEc2Client().send(command)
+  },
+})
+
 export const ec2VpcsQueryOptions = queryOptions({
   queryKey: ["ec2", "vpcs"],
   queryFn: () => {
@@ -183,6 +202,25 @@ export const ec2PlacementGroupQueryOptions = (groupId: string) =>
     queryKey: ["ec2", "placementGroups", groupId],
     queryFn: () => {
       const command = new DescribePlacementGroupsCommand({
+        GroupIds: [groupId],
+      })
+      return getEc2Client().send(command)
+    },
+  })
+
+export const ec2SecurityGroupsQueryOptions = queryOptions({
+  queryKey: ["ec2", "securityGroups"],
+  queryFn: () => {
+    const command = new DescribeSecurityGroupsCommand({})
+    return getEc2Client().send(command)
+  },
+})
+
+export const ec2SecurityGroupQueryOptions = (groupId: string) =>
+  queryOptions({
+    queryKey: ["ec2", "securityGroups", groupId],
+    queryFn: () => {
+      const command = new DescribeSecurityGroupsCommand({
         GroupIds: [groupId],
       })
       return getEc2Client().send(command)

@@ -427,53 +427,109 @@ func GenerateCACert(caCertPath, caKeyPath string) error {
 	return nil
 }
 
+// DiscoverLocalIPs enumerates all non-loopback network interface addresses on
+// this machine and returns them as strings. Link-local addresses are excluded.
+func DiscoverLocalIPs() []string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		slog.Warn("failed to enumerate network interfaces", "error", err)
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	var ips []string
+
+	for _, iface := range ifaces {
+		// Skip loopback and down interfaces.
+		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			slog.Debug("failed to get addresses for interface", "iface", iface.Name, "error", err)
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+				continue
+			}
+			s := ip.String()
+			if _, ok := seen[s]; !ok {
+				seen[s] = struct{}{}
+				ips = append(ips, s)
+			}
+		}
+	}
+	return ips
+}
+
+// DiscoverHostname returns the system hostname suitable for use as a DNS SAN.
+// Returns an empty string if the hostname cannot be determined or is "localhost".
+func DiscoverHostname() string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		slog.Warn("failed to determine system hostname", "error", err)
+		return ""
+	}
+	if hostname == "" || hostname == "localhost" {
+		return ""
+	}
+	return hostname
+}
+
 // GenerateSignedCert generates a server certificate signed by the CA.
 // extraIPs are additional IP addresses to include in the certificate's SANs.
+// All non-loopback interface IPs on the local machine are automatically included.
 func GenerateSignedCert(certPath, keyPath, caCertPath, caKeyPath string, extraIPs ...string) error {
-	// Load CA certificate
+	return GenerateSignedCertWithDNS(certPath, keyPath, caCertPath, caKeyPath, extraIPs, nil)
+}
+
+// GenerateSignedCertWithDNS generates a server certificate signed by the CA.
+// All non-loopback interface IPs and the machine hostname are automatically
+// included. extraIPs and extraDNS allow adding additional SANs.
+func GenerateSignedCertWithDNS(certPath, keyPath, caCertPath, caKeyPath string, extraIPs, extraDNS []string) error {
 	caCertPEM, err := os.ReadFile(caCertPath)
 	if err != nil {
 		return fmt.Errorf("failed to read CA cert: %w", err)
 	}
-
 	caCertBlock, _ := pem.Decode(caCertPEM)
 	if caCertBlock == nil {
 		return fmt.Errorf("failed to decode CA cert PEM")
 	}
-
 	caCert, err := x509.ParseCertificate(caCertBlock.Bytes)
 	if err != nil {
 		return fmt.Errorf("failed to parse CA cert: %w", err)
 	}
 
-	// Load CA private key
 	caKeyPEM, err := os.ReadFile(caKeyPath)
 	if err != nil {
 		return fmt.Errorf("failed to read CA key: %w", err)
 	}
-
 	caKeyBlock, _ := pem.Decode(caKeyPEM)
 	if caKeyBlock == nil {
 		return fmt.Errorf("failed to decode CA key PEM")
 	}
-
 	caPrivateKey, err := x509.ParsePKCS8PrivateKey(caKeyBlock.Bytes)
 	if err != nil {
 		return fmt.Errorf("failed to parse CA private key: %w", err)
 	}
-
 	caRSAKey, ok := caPrivateKey.(*rsa.PrivateKey)
 	if !ok {
 		return fmt.Errorf("CA key is not RSA")
 	}
 
-	// Generate server private key
 	serverPrivateKey, err := rsa.GenerateKey(rand.Reader, 4096)
 	if err != nil {
 		return fmt.Errorf("failed to generate server private key: %w", err)
 	}
 
-	// Create server certificate template
 	notBefore := time.Now()
 	notAfter := notBefore.Add(365 * 24 * time.Hour) // 1 year for server certs
 
@@ -482,20 +538,51 @@ func GenerateSignedCert(certPath, keyPath, caCertPath, caKeyPath string, extraIP
 		return fmt.Errorf("failed to generate serial number: %w", err)
 	}
 
-	// Build IP list: localhost IPs + any extra IPs (e.g., bind IP for multi-node)
+	// Build IP list: localhost IPs + auto-discovered interface IPs + explicit extras.
+	seen := map[string]struct{}{"127.0.0.1": {}, "::1": {}}
 	ipAddresses := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
+	addIP := func(s string) {
+		if s == "" || s == "0.0.0.0" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		if parsed := net.ParseIP(s); parsed != nil {
+			seen[s] = struct{}{}
+			ipAddresses = append(ipAddresses, parsed)
+		}
+	}
+	for _, ip := range DiscoverLocalIPs() {
+		addIP(ip)
+	}
 	for _, ip := range extraIPs {
-		if ip != "" && ip != "127.0.0.1" && ip != "::1" && ip != "0.0.0.0" {
-			if parsed := net.ParseIP(ip); parsed != nil {
-				ipAddresses = append(ipAddresses, parsed)
-			}
+		addIP(ip)
+	}
+
+	// Build DNS names: always include localhost, plus hostname if available.
+	dnsSeen := map[string]struct{}{"localhost": {}}
+	dnsNames := []string{"localhost"}
+	if hostname := DiscoverHostname(); hostname != "" {
+		if _, ok := dnsSeen[hostname]; !ok {
+			dnsSeen[hostname] = struct{}{}
+			dnsNames = append(dnsNames, hostname)
+		}
+	}
+	for _, dns := range extraDNS {
+		if dns == "" {
+			continue
+		}
+		if _, ok := dnsSeen[dns]; !ok {
+			dnsSeen[dns] = struct{}{}
+			dnsNames = append(dnsNames, dns)
 		}
 	}
 
 	serverTemplate := x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
-			CommonName:   "localhost",
+			CommonName:   "Spinifex Server",
 			Organization: []string{"Spinifex Platform"},
 		},
 		NotBefore:             notBefore,
@@ -503,39 +590,33 @@ func GenerateSignedCert(certPath, keyPath, caCertPath, caKeyPath string, extraIP
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
-		DNSNames:              []string{"localhost"},
+		DNSNames:              dnsNames,
 		IPAddresses:           ipAddresses,
 	}
 
-	// Sign the server certificate with the CA
 	serverDerBytes, err := x509.CreateCertificate(rand.Reader, &serverTemplate, caCert, &serverPrivateKey.PublicKey, caRSAKey)
 	if err != nil {
 		return fmt.Errorf("failed to create server certificate: %w", err)
 	}
 
-	// Write server certificate to file
 	certOut, err := os.Create(certPath)
 	if err != nil {
 		return fmt.Errorf("failed to create cert file: %w", err)
 	}
 	defer certOut.Close()
-
 	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: serverDerBytes}); err != nil {
 		return fmt.Errorf("failed to write cert: %w", err)
 	}
 
-	// Write server private key to file
 	keyOut, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to create key file: %w", err)
 	}
 	defer keyOut.Close()
-
 	privBytes, err := x509.MarshalPKCS8PrivateKey(serverPrivateKey)
 	if err != nil {
 		return fmt.Errorf("failed to marshal private key: %w", err)
 	}
-
 	if err := pem.Encode(keyOut, &pem.Block{Type: "PRIVATE KEY", Bytes: privBytes}); err != nil {
 		return fmt.Errorf("failed to write key: %w", err)
 	}

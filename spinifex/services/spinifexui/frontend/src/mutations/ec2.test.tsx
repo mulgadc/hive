@@ -9,19 +9,26 @@ vi.mock("@/lib/awsClient", () => ({
   getEc2Client: () => ({ send: mockSend }),
 }))
 
+import type { CreateVpcWizardFormData } from "@/types/ec2"
+
 import {
   useAttachVolume,
+  useAuthorizeSecurityGroupEgress,
+  useAuthorizeSecurityGroupIngress,
   useCopySnapshot,
   useCreateImage,
   useCreateInstance,
   useCreateKeyPair,
   useCreatePlacementGroup,
+  useCreateSecurityGroup,
   useCreateSnapshot,
   useCreateSubnet,
   useCreateVolume,
   useCreateVpc,
+  useCreateVpcWizard,
   useDeleteKeyPair,
   useDeletePlacementGroup,
+  useDeleteSecurityGroup,
   useDeleteSnapshot,
   useDeleteSubnet,
   useDeleteVolume,
@@ -32,6 +39,8 @@ import {
   useModifyInstanceAttribute,
   useModifyVolume,
   useRebootInstance,
+  useRevokeSecurityGroupEgress,
+  useRevokeSecurityGroupIngress,
   useStartInstance,
   useStopInstance,
   useTerminateInstance,
@@ -611,5 +620,440 @@ describe("useDeletePlacementGroup", () => {
     expect(spy).toHaveBeenCalledWith({
       queryKey: ["ec2", "placementGroups"],
     })
+  })
+})
+
+describe("useCreateSecurityGroup", () => {
+  it("sends CreateSecurityGroupCommand with form data", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCreateSecurityGroup(), { wrapper })
+
+    result.current.mutate({
+      groupName: "web-sg",
+      description: "Allow web traffic",
+      vpcId: "vpc-123",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      GroupName: "web-sg",
+      Description: "Allow web traffic",
+      VpcId: "vpc-123",
+    })
+  })
+
+  it("invalidates securityGroups query on success", async () => {
+    createQueryClient()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+    const { result } = renderHook(() => useCreateSecurityGroup(), { wrapper })
+
+    result.current.mutate({
+      groupName: "web-sg",
+      description: "Allow web traffic",
+      vpcId: "vpc-123",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["ec2", "securityGroups"],
+    })
+  })
+})
+
+describe("useDeleteSecurityGroup", () => {
+  it("sends DeleteSecurityGroupCommand with group ID", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useDeleteSecurityGroup(), { wrapper })
+
+    result.current.mutate("sg-123")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      GroupId: "sg-123",
+    })
+  })
+
+  it("invalidates securityGroups query on success", async () => {
+    createQueryClient()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+    const { result } = renderHook(() => useDeleteSecurityGroup(), { wrapper })
+
+    result.current.mutate("sg-123")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["ec2", "securityGroups"],
+    })
+  })
+})
+
+describe("useAuthorizeSecurityGroupIngress", () => {
+  const ruleParams = {
+    groupId: "sg-123",
+    ipProtocol: "tcp",
+    fromPort: 443,
+    toPort: 443,
+    cidrIp: "0.0.0.0/0",
+  }
+
+  it("sends AuthorizeSecurityGroupIngressCommand with IpPermissions", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useAuthorizeSecurityGroupIngress(), {
+      wrapper,
+    })
+
+    result.current.mutate(ruleParams)
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      GroupId: "sg-123",
+      IpPermissions: [
+        {
+          IpProtocol: "tcp",
+          FromPort: 443,
+          ToPort: 443,
+          IpRanges: [{ CidrIp: "0.0.0.0/0" }],
+        },
+      ],
+    })
+  })
+
+  it("invalidates securityGroups queries on success", async () => {
+    createQueryClient()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+    const { result } = renderHook(() => useAuthorizeSecurityGroupIngress(), {
+      wrapper,
+    })
+
+    result.current.mutate(ruleParams)
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["ec2", "securityGroups"],
+    })
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["ec2", "securityGroups", "sg-123"],
+    })
+  })
+})
+
+describe("useAuthorizeSecurityGroupEgress", () => {
+  it("sends AuthorizeSecurityGroupEgressCommand with IpPermissions", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useAuthorizeSecurityGroupEgress(), {
+      wrapper,
+    })
+
+    result.current.mutate({
+      groupId: "sg-456",
+      ipProtocol: "-1",
+      fromPort: -1,
+      toPort: -1,
+      cidrIp: "0.0.0.0/0",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      GroupId: "sg-456",
+      IpPermissions: [
+        {
+          IpProtocol: "-1",
+          FromPort: -1,
+          ToPort: -1,
+          IpRanges: [{ CidrIp: "0.0.0.0/0" }],
+        },
+      ],
+    })
+  })
+})
+
+describe("useRevokeSecurityGroupIngress", () => {
+  it("sends RevokeSecurityGroupIngressCommand with IpPermissions", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useRevokeSecurityGroupIngress(), {
+      wrapper,
+    })
+
+    result.current.mutate({
+      groupId: "sg-123",
+      ipProtocol: "tcp",
+      fromPort: 22,
+      toPort: 22,
+      cidrIp: "10.0.0.0/16",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      GroupId: "sg-123",
+      IpPermissions: [
+        {
+          IpProtocol: "tcp",
+          FromPort: 22,
+          ToPort: 22,
+          IpRanges: [{ CidrIp: "10.0.0.0/16" }],
+        },
+      ],
+    })
+  })
+
+  it("invalidates securityGroups queries on success", async () => {
+    createQueryClient()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+    const { result } = renderHook(() => useRevokeSecurityGroupIngress(), {
+      wrapper,
+    })
+
+    result.current.mutate({
+      groupId: "sg-123",
+      ipProtocol: "tcp",
+      fromPort: 22,
+      toPort: 22,
+      cidrIp: "10.0.0.0/16",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["ec2", "securityGroups"],
+    })
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["ec2", "securityGroups", "sg-123"],
+    })
+  })
+})
+
+describe("useRevokeSecurityGroupEgress", () => {
+  it("sends RevokeSecurityGroupEgressCommand with IpPermissions", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useRevokeSecurityGroupEgress(), {
+      wrapper,
+    })
+
+    result.current.mutate({
+      groupId: "sg-456",
+      ipProtocol: "udp",
+      fromPort: 53,
+      toPort: 53,
+      cidrIp: "0.0.0.0/0",
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      GroupId: "sg-456",
+      IpPermissions: [
+        {
+          IpProtocol: "udp",
+          FromPort: 53,
+          ToPort: 53,
+          IpRanges: [{ CidrIp: "0.0.0.0/0" }],
+        },
+      ],
+    })
+  })
+})
+
+describe("useCreateVpcWizard", () => {
+  const baseParams: CreateVpcWizardFormData = {
+    mode: "vpc-only",
+    namePrefix: "test",
+    autoGenerateNames: true,
+    cidrBlock: "10.0.0.0/16",
+    tenancy: "default",
+    publicSubnetCount: 0,
+    privateSubnetCount: 0,
+    publicSubnetCidrs: [],
+    privateSubnetCidrs: [],
+    tags: [],
+  }
+
+  it("sends only CreateVpcCommand in vpc-only mode", async () => {
+    createQueryClient()
+    mockSend.mockResolvedValueOnce({
+      Vpc: { VpcId: "vpc-111" },
+    })
+    const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
+
+    result.current.mutate(baseParams)
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend).toHaveBeenCalledOnce()
+    expect(mockSend.mock.calls[0]?.[0].input.CidrBlock).toBe("10.0.0.0/16")
+    expect(result.current.data?.vpcId).toBe("vpc-111")
+    expect(result.current.data?.created).toHaveLength(1)
+  })
+
+  it("includes TagSpecifications with auto-generated name", async () => {
+    createQueryClient()
+    mockSend.mockResolvedValueOnce({
+      Vpc: { VpcId: "vpc-111" },
+    })
+    const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
+
+    result.current.mutate({
+      ...baseParams,
+      namePrefix: "proj",
+      autoGenerateNames: true,
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    const tags = mockSend.mock.calls[0]?.[0].input.TagSpecifications
+    expect(tags?.[0]?.Tags).toContainEqual({
+      Key: "Name",
+      Value: "proj-vpc",
+    })
+  })
+
+  it("sends correct command sequence for vpc-and-more with 1 public + 1 private", async () => {
+    createQueryClient()
+    mockSend
+      .mockResolvedValueOnce({ Vpc: { VpcId: "vpc-111" } })
+      .mockResolvedValueOnce({ Subnet: { SubnetId: "subnet-pub-1" } })
+      .mockResolvedValueOnce({ Subnet: { SubnetId: "subnet-priv-1" } })
+      .mockResolvedValueOnce({
+        InternetGateway: { InternetGatewayId: "igw-111" },
+      })
+      // AttachInternetGateway
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({
+        RouteTable: { RouteTableId: "rtb-pub-1" },
+      })
+      // CreateRoute
+      .mockResolvedValueOnce({})
+      // AssociateRouteTable (public)
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({
+        RouteTable: { RouteTableId: "rtb-priv-1" },
+      })
+      // AssociateRouteTable (private)
+      .mockResolvedValueOnce({})
+
+    const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
+
+    result.current.mutate({
+      ...baseParams,
+      mode: "vpc-and-more",
+      publicSubnetCount: 1,
+      privateSubnetCount: 1,
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend).toHaveBeenCalledTimes(10)
+    expect(result.current.data?.vpcId).toBe("vpc-111")
+    expect(result.current.data?.created).toHaveLength(6)
+    expect(result.current.data?.error).toBeUndefined()
+  })
+
+  it("skips IGW and public route table when publicSubnetCount is 0", async () => {
+    createQueryClient()
+    mockSend
+      .mockResolvedValueOnce({ Vpc: { VpcId: "vpc-111" } })
+      .mockResolvedValueOnce({ Subnet: { SubnetId: "subnet-priv-1" } })
+      .mockResolvedValueOnce({
+        RouteTable: { RouteTableId: "rtb-priv-1" },
+      })
+      // AssociateRouteTable
+      .mockResolvedValueOnce({})
+
+    const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
+
+    result.current.mutate({
+      ...baseParams,
+      mode: "vpc-and-more",
+      publicSubnetCount: 0,
+      privateSubnetCount: 1,
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend).toHaveBeenCalledTimes(4)
+    const types = result.current.data?.created.map((r) => r.type)
+    expect(types).not.toContain("Internet Gateway")
+    expect(types).not.toContain("Public Route Table")
+  })
+
+  it("returns partial result with failedStep on error mid-orchestration", async () => {
+    createQueryClient()
+    mockSend
+      .mockResolvedValueOnce({ Vpc: { VpcId: "vpc-111" } })
+      .mockResolvedValueOnce({ Subnet: { SubnetId: "subnet-pub-1" } })
+      .mockRejectedValueOnce(new Error("CIDR conflict"))
+
+    const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
+
+    result.current.mutate({
+      ...baseParams,
+      mode: "vpc-and-more",
+      publicSubnetCount: 1,
+      privateSubnetCount: 1,
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data?.error?.message).toBe("CIDR conflict")
+    expect(result.current.data?.failedStep).toBe(
+      "Failed while creating private subnets",
+    )
+    expect(result.current.data?.vpcId).toBe("vpc-111")
+    expect(result.current.data?.created).toHaveLength(2)
+  })
+
+  it("returns error when VPC creation fails", async () => {
+    createQueryClient()
+    mockSend.mockRejectedValueOnce(new Error("Access denied"))
+
+    const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
+
+    result.current.mutate(baseParams)
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data?.error?.message).toBe("Access denied")
+    expect(result.current.data?.failedStep).toBe("Failed while creating VPC")
+    expect(result.current.data?.vpcId).toBeUndefined()
+    expect(result.current.data?.created).toHaveLength(0)
+  })
+
+  it("returns error when VPC is created but no ID returned", async () => {
+    createQueryClient()
+    mockSend.mockResolvedValueOnce({ Vpc: {} })
+
+    const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
+
+    result.current.mutate(baseParams)
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data?.error?.message).toContain(
+      "no VPC ID was returned",
+    )
+    expect(result.current.data?.failedStep).toBe("Failed while creating VPC")
+  })
+
+  it("invalidates related queries on success", async () => {
+    createQueryClient()
+    const spy = vi.spyOn(queryClient, "invalidateQueries")
+    mockSend.mockResolvedValueOnce({ Vpc: { VpcId: "vpc-111" } })
+    const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
+
+    result.current.mutate(baseParams)
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["ec2", "vpcs"] })
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["ec2", "subnets"] })
+    expect(spy).toHaveBeenCalledWith({
+      queryKey: ["ec2", "internetGateways"],
+    })
+    expect(spy).toHaveBeenCalledWith({ queryKey: ["ec2", "routeTables"] })
+  })
+
+  it("propagates extra tags to all resources", async () => {
+    createQueryClient()
+    mockSend.mockResolvedValueOnce({ Vpc: { VpcId: "vpc-111" } })
+
+    const { result } = renderHook(() => useCreateVpcWizard(), { wrapper })
+
+    result.current.mutate({
+      ...baseParams,
+      tags: [{ key: "Env", value: "prod" }],
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    const tags = mockSend.mock.calls[0]?.[0].input.TagSpecifications?.[0]?.Tags
+    expect(tags).toContainEqual({ Key: "Env", Value: "prod" })
   })
 })

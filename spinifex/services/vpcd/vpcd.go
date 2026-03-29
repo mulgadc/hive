@@ -182,30 +182,75 @@ var checkOVNController = func() error {
 	return fmt.Errorf("ovn-controller is not running: run ./scripts/setup-ovn.sh --management")
 }
 
+// localSystemID returns the OVS external-ids:system-id, which is the chassis
+// name that the local ovn-controller registers in the Southbound DB.
+var localSystemID = func() (string, error) {
+	out, err := sudoCommand("ovs-vsctl", "get", "open_vswitch", ".", "external-ids:system-id").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("ovs-vsctl get system-id: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	// ovs-vsctl wraps the value in quotes
+	return strings.Trim(strings.TrimSpace(string(out)), "\""), nil
+}
+
 // discoverChassis queries the OVN Southbound DB for registered chassis names.
-// This is the source of truth — whatever names setup-ovn.sh registered are what
-// we use for gateway scheduling. Eliminates the brittle coupling between
-// spinifex.toml node names and the OVS system-id set during OVN setup.
+// It cross-references with the local OVS system-id to filter out stale chassis
+// entries on this host. When the system-id is changed (e.g. setup-ovn.sh re-run),
+// the old Chassis row persists in the SBDB — using it for gateway scheduling
+// causes the gateway port to bind to a chassis that no ovn-controller owns.
 var discoverChassis = func(sbAddr string) ([]string, error) {
+	localID, err := localSystemID()
+	if err != nil {
+		return nil, fmt.Errorf("discover chassis: %w", err)
+	}
+	localHostname, _ := os.Hostname()
+
 	args := []string{"--no-leader-only"}
 	if sbAddr != "" {
 		args = append(args, "--db="+sbAddr)
 	}
 	// OVN 25.03+ removed the "list-chassis" convenience command.
-	// Use "--columns=name list Chassis" which works on all versions.
-	args = append(args, "--bare", "--columns=name", "list", "Chassis")
+	// Use "--columns=name,hostname list Chassis" which works on all versions.
+	args = append(args, "--bare", "--columns=name,hostname", "list", "Chassis")
 	out, err := sudoCommand("ovn-sbctl", args...).CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("ovn-sbctl list Chassis: %s: %w", strings.TrimSpace(string(out)), err)
 	}
+
+	return parseChassisList(string(out), localID, localHostname), nil
+}
+
+// parseChassisList parses ovn-sbctl --bare --columns=name,hostname output and
+// filters out stale chassis on the local host. The output format is pairs of
+// name/hostname lines separated by blank lines.
+func parseChassisList(raw, localID, localHostname string) []string {
 	var names []string
-	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
-		name := strings.TrimSpace(line)
-		if name != "" {
-			names = append(names, name)
+	var pair []string
+	for line := range strings.SplitSeq(strings.TrimSpace(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			// Blank line = row separator; process the accumulated pair
+			if len(pair) == 2 {
+				names = appendIfActive(names, pair[0], pair[1], localID, localHostname)
+			}
+			pair = pair[:0]
+			continue
 		}
+		pair = append(pair, line)
 	}
-	return names, nil
+	// Handle last row (no trailing blank line)
+	if len(pair) == 2 {
+		names = appendIfActive(names, pair[0], pair[1], localID, localHostname)
+	}
+	return names
+}
+
+func appendIfActive(names []string, name, hostname, localID, localHostname string) []string {
+	if hostname == localHostname && name != localID {
+		slog.Info("discoverChassis: skipping stale local chassis", "name", name, "hostname", hostname, "localID", localID)
+		return names
+	}
+	return append(names, name)
 }
 
 // preflightOVN runs all OVN preflight checks and returns the first failure.
