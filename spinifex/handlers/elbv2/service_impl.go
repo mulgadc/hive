@@ -357,7 +357,11 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 
 	lbID := utils.GenerateResourceID("lb")
 	lbArn := buildLBArn(s.region, accountID, name, lbID)
-	dnsName := fmt.Sprintf("%s-%s.%s.elb.spinifex.local", name, lbID, s.region)
+	dnsPrefix := ""
+	if scheme == SchemeInternal {
+		dnsPrefix = "internal-"
+	}
+	dnsName := fmt.Sprintf("%s%s-%s.%s.elb.spinifex.local", dnsPrefix, name, lbID, s.region)
 
 	var subnets []string
 	for _, sn := range input.Subnets {
@@ -483,7 +487,11 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		} else {
 			albInstanceID = out.InstanceID
 			hostPorts = out.HostfwdMap
-			slog.Info("CreateLoadBalancer: ALB VM launched", "lbId", lbID, "instanceId", albInstanceID, "ip", out.PrivateIP, "hostfwd", hostPorts)
+			// Record public IP on the first AZ entry for internet-facing ALBs.
+			if out.PublicIP != "" && len(availZones) > 0 {
+				availZones[0].PublicIP = out.PublicIP
+			}
+			slog.Info("CreateLoadBalancer: ALB VM launched", "lbId", lbID, "instanceId", albInstanceID, "ip", out.PrivateIP, "publicIp", out.PublicIP, "hostfwd", hostPorts)
 		}
 	}
 
@@ -1162,10 +1170,16 @@ func (s *ELBv2ServiceImpl) lbRecordToSDK(r *LoadBalancerRecord) *elbv2.LoadBalan
 	}
 
 	for _, az := range r.AvailZones {
-		lb.AvailabilityZones = append(lb.AvailabilityZones, &elbv2.AvailabilityZone{
+		sdkAZ := &elbv2.AvailabilityZone{
 			ZoneName: aws.String(az.ZoneName),
 			SubnetId: aws.String(az.SubnetId),
-		})
+		}
+		if az.PublicIP != "" {
+			sdkAZ.LoadBalancerAddresses = []*elbv2.LoadBalancerAddress{
+				{IpAddress: aws.String(az.PublicIP)},
+			}
+		}
+		lb.AvailabilityZones = append(lb.AvailabilityZones, sdkAZ)
 	}
 
 	return lb

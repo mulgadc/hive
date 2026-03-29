@@ -71,6 +71,7 @@ type LoadBalancerRecord struct {
 type AvailZoneInfo struct {
 	ZoneName string `json:"zone_name"`
 	SubnetId string `json:"subnet_id"`
+	PublicIP string `json:"public_ip,omitempty"` // Set for internet-facing ALBs
 }
 
 // TargetGroupRecord represents a stored Target Group.

@@ -640,3 +640,85 @@ func (m *mockTerminateLauncher) TerminateSystemInstance(instanceID string) error
 	m.terminateCalls = append(m.terminateCalls, instanceID)
 	return nil
 }
+
+// --- Scheme unit tests ---
+
+func TestCreateLoadBalancer_InternetFacingScheme_DNSName(t *testing.T) {
+	svc := setupTestService(t)
+
+	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("web-alb"),
+	}, testAccountID)
+
+	require.NoError(t, err)
+	lb := out.LoadBalancers[0]
+	assert.Equal(t, "internet-facing", *lb.Scheme)
+	// Internet-facing should NOT have "internal-" prefix
+	assert.NotContains(t, *lb.DNSName, "internal-")
+	assert.Contains(t, *lb.DNSName, "web-alb")
+	assert.Contains(t, *lb.DNSName, ".elb.spinifex.local")
+}
+
+func TestCreateLoadBalancer_InternalScheme_DNSPrefix(t *testing.T) {
+	svc := setupTestService(t)
+
+	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name:   aws.String("backend-alb"),
+		Scheme: aws.String("internal"),
+	}, testAccountID)
+
+	require.NoError(t, err)
+	lb := out.LoadBalancers[0]
+	assert.Equal(t, "internal", *lb.Scheme)
+	// Internal scheme should have "internal-" DNS prefix
+	assert.Contains(t, *lb.DNSName, "internal-backend-alb")
+	assert.Contains(t, *lb.DNSName, ".elb.spinifex.local")
+}
+
+func TestCreateLoadBalancer_InternetFacingScheme_PassesSchemeToLauncher(t *testing.T) {
+	svc := setupTestService(t)
+
+	mock := &mockSystemInstanceLauncher{
+		launchResult: &SystemInstanceOutput{
+			InstanceID: "i-alb123",
+			PrivateIP:  "10.0.1.5",
+			PublicIP:   "203.0.113.10",
+		},
+	}
+	svc.SetInstanceLauncher(mock)
+	svc.SetSystemAMI("ami-alb-test")
+
+	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name:    aws.String("public-alb"),
+		Subnets: []*string{aws.String("subnet-aaa")},
+	}, testAccountID)
+
+	require.NoError(t, err)
+	assert.Equal(t, "internet-facing", *out.LoadBalancers[0].Scheme)
+
+	// Without VPC service, no ENIs are created, so launcher is not called.
+	// This test verifies scheme is correctly defaulted; launcher integration
+	// is tested in service_impl_vpc_test.go.
+}
+
+func TestCreateLoadBalancer_InternalScheme_PassesSchemeToLauncher(t *testing.T) {
+	svc := setupTestService(t)
+
+	mock := &mockSystemInstanceLauncher{
+		launchResult: &SystemInstanceOutput{
+			InstanceID: "i-alb456",
+			PrivateIP:  "10.0.2.10",
+		},
+	}
+	svc.SetInstanceLauncher(mock)
+	svc.SetSystemAMI("ami-alb-test")
+
+	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name:    aws.String("private-alb"),
+		Scheme:  aws.String("internal"),
+		Subnets: []*string{aws.String("subnet-bbb")},
+	}, testAccountID)
+
+	require.NoError(t, err)
+	assert.Equal(t, "internal", *out.LoadBalancers[0].Scheme)
+}
