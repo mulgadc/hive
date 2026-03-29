@@ -98,24 +98,24 @@ var AvailableImages = map[string]Images{
 		Starred:      false,
 	},
 
-	/*
-		"alpine-3.22.2-x86_64":
-		// Alpine Linux (cloud init) x86_64
-		{
-			Name:         "alpine-3.22.2-x86_64",
-			Description:  "Alpine Linux 3.22.2 x86_64 cloud image",
-			Distro:       "alpine",
-			Version:      "3.22.2",
-			Arch:         "x86_64",
-			Platform:     "Linux/UNIX",
-			CreatedAt:    time.Date(2025, 10, 6, 0, 0, 0, 0, time.UTC),
-			URL:          "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/cloud/generic_alpine-3.22.2-x86_64-bios-cloudinit-r0.qcow2",
-			Checksum:     "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/cloud/generic_alpine-3.22.2-x86_64-bios-cloudinit-r0.qcow2.sha512",
-			ChecksumType: "sha512",
-			BootMode:     "bios",
-			Starred:      false,
-		},
+	"alb-alpine-3.21.6-x86_64":
+	// Alpine Linux (cloud init) x86_64
+	{
+		Name:         "alb-alpine-3.22.2-x86_64",
+		Description:  "ALB Alpine Linux 3.22.2 x86_64 cloud image",
+		Distro:       "alpine",
+		Version:      "3.21.6",
+		Arch:         "x86_64",
+		Platform:     "Linux/UNIX",
+		CreatedAt:    time.Date(2026, 03, 27, 0, 0, 0, 0, time.UTC),
+		URL:          "https://ap-southeast-2.console.aws.amazon.com/s3/object/spinifex-custom-ami-954212862497-ap-southeast-2-an?region=ap-southeast-2&prefix=alb-alpine-3.21.6-x86_64.raw",
+		Checksum:     "https://ap-southeast-2.console.aws.amazon.com/s3/object/spinifex-custom-ami-954212862497-ap-southeast-2-an?region=ap-southeast-2&prefix=alb-alpine-3.21.6-x86_64.raw.sha512",
+		ChecksumType: "sha512",
+		BootMode:     "bios",
+		Starred:      false,
+	},
 
+	/*
 		"alpine-3.22.2-arm64":
 		// Alpine Linux (cloud init) arm64 (Requires UEFI boot, TODO)
 		{
