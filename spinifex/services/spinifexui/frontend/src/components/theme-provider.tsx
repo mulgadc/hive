@@ -31,7 +31,7 @@ function getStoredTheme(storageKey: string, defaultTheme: Theme): Theme {
 
 export function ThemeProvider({
   children,
-  defaultTheme = "system",
+  defaultTheme = "dark",
   storageKey = "ui-theme",
 }: ThemeProviderProps) {
   const [theme, setThemeState] = useState<Theme>(() =>

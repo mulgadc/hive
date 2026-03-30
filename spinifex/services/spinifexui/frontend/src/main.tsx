@@ -41,7 +41,7 @@ if (rootElement && !rootElement.innerHTML) {
   const root = ReactDOM.createRoot(rootElement)
   root.render(
     <StrictMode>
-      <ThemeProvider defaultTheme="system" storageKey="spinifex-ui-theme">
+      <ThemeProvider defaultTheme="dark" storageKey="spinifex-ui-theme">
         <QueryClientProvider client={queryClient}>
           <AdminProvider>
             <SidebarProvider>
