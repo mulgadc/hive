@@ -714,6 +714,23 @@ func (d *Daemon) Start() error {
 		})
 	}
 
+	// Set up lazy instance type resolver — picks the smallest available type.
+	rm := d.resourceMgr
+	d.elbv2Service.SetSystemInstanceTypeFunc(func() string {
+		rm.mu.RLock()
+		defer rm.mu.RUnlock()
+		smallest := ""
+		var smallestVCPUs int64
+		for name, it := range rm.instanceTypes {
+			vcpus := instanceTypeVCPUs(it)
+			if smallest == "" || vcpus < smallestVCPUs {
+				smallest = name
+				smallestVCPUs = vcpus
+			}
+		}
+		return smallest
+	})
+
 	// Ensure default VPC exists for system and admin accounts
 	// (matches AWS: every account has a default VPC with IGW + default SG)
 	if d.vpcService != nil {

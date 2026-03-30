@@ -46,19 +46,21 @@ var _ ELBv2Service = (*ELBv2ServiceImpl)(nil)
 
 // ELBv2ServiceImpl implements ELBv2 operations with NATS JetStream persistence.
 type ELBv2ServiceImpl struct {
-	config           *config.Config
-	store            *Store
-	nc               *nats.Conn                       // NATS connection for publishing config to ALB VMs
-	vpcService       *handlers_ec2_vpc.VPCServiceImpl // nil-safe: ENI ops skipped when nil (e.g. in tests)
-	instanceLauncher SystemInstanceLauncher           // nil-safe: system VM ops skipped when nil
-	nodeID           string
-	region           string
-	systemAMI        string        // AMI ID for system VMs (ALB VMs); resolved lazily via systemAMIFunc
-	systemAMIFunc    func() string // returns the current system AMI ID (queries image store)
-	natsURL          string        // NATS URL for ALB VM cloud-init, set by daemon
-	ctx              context.Context
-	cancel           context.CancelFunc
-	hc               *healthChecker
+	config                 *config.Config
+	store                  *Store
+	nc                     *nats.Conn                       // NATS connection for publishing config to ALB VMs
+	vpcService             *handlers_ec2_vpc.VPCServiceImpl // nil-safe: ENI ops skipped when nil (e.g. in tests)
+	instanceLauncher       SystemInstanceLauncher           // nil-safe: system VM ops skipped when nil
+	nodeID                 string
+	region                 string
+	systemAMI              string        // AMI ID for system VMs (ALB VMs); resolved lazily via systemAMIFunc
+	systemAMIFunc          func() string // returns the current system AMI ID (queries image store)
+	systemInstanceType     string        // instance type for system VMs; resolved lazily via systemInstanceTypeFunc
+	systemInstanceTypeFunc func() string // returns the smallest available instance type
+	natsURL                string        // NATS URL for ALB VM cloud-init, set by daemon
+	ctx                    context.Context
+	cancel                 context.CancelFunc
+	hc                     *healthChecker
 }
 
 // NewELBv2ServiceImplWithNATS creates an ELBv2 service backed by JetStream KV.
@@ -135,6 +137,23 @@ func (s *ELBv2ServiceImpl) getSystemAMI() string {
 		s.systemAMI = s.systemAMIFunc()
 	}
 	return s.systemAMI
+}
+
+// SetSystemInstanceTypeFunc sets a function that resolves the smallest available
+// instance type. Called at request time so it adapts to node capacity.
+func (s *ELBv2ServiceImpl) SetSystemInstanceTypeFunc(fn func() string) {
+	s.systemInstanceTypeFunc = fn
+}
+
+// getSystemInstanceType returns the instance type for system VMs.
+func (s *ELBv2ServiceImpl) getSystemInstanceType() string {
+	if s.systemInstanceType != "" {
+		return s.systemInstanceType
+	}
+	if s.systemInstanceTypeFunc != nil {
+		s.systemInstanceType = s.systemInstanceTypeFunc()
+	}
+	return s.systemInstanceType
 }
 
 // SetNATSURL sets the NATS URL that ALB VMs use to connect back to the cluster.
@@ -466,7 +485,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 
 		userData := albVMUserData(lbID, s.natsURL)
 		out, launchErr := s.instanceLauncher.LaunchSystemInstance(&SystemInstanceInput{
-			InstanceType: "t3.nano",
+			InstanceType: s.getSystemInstanceType(),
 			ImageID:      s.getSystemAMI(),
 			SubnetID:     subnets[0],
 			UserData:     userData,
