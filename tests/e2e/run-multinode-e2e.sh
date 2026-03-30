@@ -1137,9 +1137,316 @@ fi
 echo ""
 
 # ==========================================================================
-# Phase 11: Cleanup
+# Phase 11: Spread Placement Group + NAT Gateway (multi-node)
 # ==========================================================================
-echo "Phase 11: Cleanup"
+echo "Phase 11: Spread Placement Group + NAT Gateway (multi-node)"
+echo "========================================"
+
+echo "Step 1: Creating VPC infrastructure..."
+NATGW_VPC_ID=$($AWS_EC2 create-vpc --cidr-block 10.100.0.0/16 \
+    --query 'Vpc.VpcId' --output text)
+echo "  VPC: $NATGW_VPC_ID"
+
+NATGW_PUB_SUBNET=$($AWS_EC2 create-subnet --vpc-id "$NATGW_VPC_ID" \
+    --cidr-block 10.100.1.0/24 --query 'Subnet.SubnetId' --output text)
+echo "  Public subnet: $NATGW_PUB_SUBNET"
+
+NATGW_PRIV_SUBNET=$($AWS_EC2 create-subnet --vpc-id "$NATGW_VPC_ID" \
+    --cidr-block 10.100.2.0/24 --query 'Subnet.SubnetId' --output text)
+echo "  Private subnet: $NATGW_PRIV_SUBNET"
+
+# Enable public IPs on public subnet
+$AWS_EC2 modify-subnet-attribute --subnet-id "$NATGW_PUB_SUBNET" \
+    --map-public-ip-on-launch 2>/dev/null || true
+
+NATGW_IGW_ID=$($AWS_EC2 create-internet-gateway \
+    --query 'InternetGateway.InternetGatewayId' --output text)
+$AWS_EC2 attach-internet-gateway --vpc-id "$NATGW_VPC_ID" \
+    --internet-gateway-id "$NATGW_IGW_ID"
+echo "  IGW: $NATGW_IGW_ID (attached)"
+
+# Add default route to IGW on main route table for public subnet
+NATGW_MAIN_RTB=$($AWS_EC2 describe-route-tables \
+    --filters "Name=vpc-id,Values=$NATGW_VPC_ID" \
+    --query 'RouteTables[0].RouteTableId' --output text)
+$AWS_EC2 create-route --route-table-id "$NATGW_MAIN_RTB" \
+    --destination-cidr-block 0.0.0.0/0 --gateway-id "$NATGW_IGW_ID" > /dev/null
+echo "  Main route table: 0.0.0.0/0 → $NATGW_IGW_ID"
+
+echo ""
+echo "Step 2: Launching bastion in public subnet..."
+NATGW_BASTION_ID=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" \
+    --subnet-id "$NATGW_PUB_SUBNET" --key-name spinifex-key \
+    --count 1 --query 'Instances[0].InstanceId' --output text)
+echo "  Bastion: $NATGW_BASTION_ID"
+wait_for_instance_state "$NATGW_BASTION_ID" "running" 120
+
+NATGW_BASTION_PUB_IP=$($AWS_EC2 describe-instances \
+    --instance-ids "$NATGW_BASTION_ID" \
+    --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+echo "  Bastion public IP: $NATGW_BASTION_PUB_IP"
+
+# Wait for bastion SSH
+echo "  Waiting for bastion SSH..."
+BASTION_OK=false
+for attempt in $(seq 1 30); do
+    if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+           -o LogLevel=ERROR -o ConnectTimeout=5 -o BatchMode=yes \
+           -i "$HOME/.ssh/spinifex-key" "ec2-user@$NATGW_BASTION_PUB_IP" "true" 2>/dev/null; then
+        BASTION_OK=true
+        break
+    fi
+    sleep 5
+done
+if [ "$BASTION_OK" != true ]; then
+    echo "  FAIL: Bastion SSH not reachable after 150s"
+    fail_test "NAT GW bastion SSH"
+else
+    echo "  PASS: Bastion SSH ready"
+
+    # Copy SSH key to bastion for private instance hops
+    scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+        -i "$HOME/.ssh/spinifex-key" "$HOME/.ssh/spinifex-key" \
+        "ec2-user@$NATGW_BASTION_PUB_IP:/tmp/key.pem" 2>/dev/null
+    ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+        -i "$HOME/.ssh/spinifex-key" "ec2-user@$NATGW_BASTION_PUB_IP" "chmod 600 /tmp/key.pem" 2>/dev/null
+
+    # Bastion SSH helper
+    bastion_ssh() {
+        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+            -o LogLevel=ERROR -o BatchMode=yes -o ConnectTimeout=10 \
+            -i "$HOME/.ssh/spinifex-key" "ec2-user@$NATGW_BASTION_PUB_IP" "$@"
+    }
+    priv_hop_cmd() {
+        local priv_ip="$1"; shift
+        echo "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10 -o BatchMode=yes -i /tmp/key.pem ec2-user@${priv_ip} '$*'"
+    }
+
+    echo ""
+    echo "Step 3: Creating spread placement group + launching 3 private VMs..."
+    $AWS_EC2 create-placement-group --group-name nat-spread --strategy spread > /dev/null
+    echo "  Placement group: nat-spread (spread)"
+
+    # Launch 3 instances in private subnet with spread placement
+    NATGW_PRIV_OUTPUT=$($AWS_EC2 run-instances \
+        --image-id "$AMI_ID" --instance-type "$INSTANCE_TYPE" \
+        --subnet-id "$NATGW_PRIV_SUBNET" --key-name spinifex-key \
+        --count 3 --placement "GroupName=nat-spread" --output json)
+    NATGW_PRIV_IDS=()
+    for i in 0 1 2; do
+        NATGW_PRIV_IDS+=("$(echo "$NATGW_PRIV_OUTPUT" | jq -r ".Instances[$i].InstanceId")")
+    done
+    echo "  Private instances: ${NATGW_PRIV_IDS[*]}"
+
+    # Wait for all running
+    ALL_RUNNING=true
+    for inst_id in "${NATGW_PRIV_IDS[@]}"; do
+        if ! wait_for_instance_state "$inst_id" "running" 120; then
+            ALL_RUNNING=false
+        fi
+    done
+
+    if [ "$ALL_RUNNING" = true ]; then
+        echo ""
+        echo "Step 4: Validating spread placement across nodes..."
+
+        # Use spx get vms to check node assignment
+        SPX_VMS=$($SPINIFEX_BIN get vms --config "$SPINIFEX_CONFIG" --timeout 5s 2>/dev/null)
+        echo "$SPX_VMS"
+
+        SPREAD_NODES=()
+        for inst_id in "${NATGW_PRIV_IDS[@]}"; do
+            NODE_NAME=$(echo "$SPX_VMS" | grep "$inst_id" | awk '{print $NF}' || echo "unknown")
+            # The node column is typically the second-to-last or identified by column header
+            # Use find_instance_node as fallback
+            if [ -z "$NODE_NAME" ] || [ "$NODE_NAME" = "unknown" ]; then
+                NODE_NAME=$(find_instance_node "$inst_id" || echo "unknown")
+            fi
+            SPREAD_NODES+=("$NODE_NAME")
+            echo "  $inst_id → $NODE_NAME"
+        done
+
+        # Count unique nodes
+        UNIQUE_NODES=$(printf '%s\n' "${SPREAD_NODES[@]}" | sort -u | wc -l)
+        echo "  Unique hosting nodes: $UNIQUE_NODES / ${#SPREAD_NODES[@]}"
+        if [ "$UNIQUE_NODES" -ge 3 ]; then
+            pass_test "Spread placement (3 instances on 3 nodes)"
+        elif [ "$UNIQUE_NODES" -ge 2 ]; then
+            echo "  WARN: Only $UNIQUE_NODES unique nodes (expected 3) — spread best-effort"
+            pass_test "Spread placement (best-effort: $UNIQUE_NODES nodes)"
+        else
+            fail_test "Spread placement ($UNIQUE_NODES unique nodes, expected 3)"
+        fi
+
+        # Get private IPs for SSH hop
+        NATGW_PRIV_PRIVATE_IPS=()
+        for inst_id in "${NATGW_PRIV_IDS[@]}"; do
+            PRIV_IP=$($AWS_EC2 describe-instances --instance-ids "$inst_id" \
+                --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text)
+            NATGW_PRIV_PRIVATE_IPS+=("$PRIV_IP")
+        done
+        echo "  Private IPs: ${NATGW_PRIV_PRIVATE_IPS[*]}"
+
+        # Wait for cloud-init on private instances via bastion
+        echo ""
+        echo "  Waiting for private instance SSH via bastion..."
+        PRIV_SSH_READY=true
+        for idx in "${!NATGW_PRIV_IDS[@]}"; do
+            priv_ip="${NATGW_PRIV_PRIVATE_IPS[$idx]}"
+            inst_id="${NATGW_PRIV_IDS[$idx]}"
+            SSH_OK=false
+            for attempt in $(seq 1 30); do
+                if bastion_ssh "$(priv_hop_cmd "$priv_ip" hostname)" 2>/dev/null; then
+                    SSH_OK=true
+                    break
+                fi
+                sleep 5
+            done
+            if [ "$SSH_OK" = true ]; then
+                echo "    $inst_id ($priv_ip): SSH ready"
+            else
+                echo "    $inst_id ($priv_ip): SSH FAILED after 150s"
+                PRIV_SSH_READY=false
+            fi
+        done
+
+        if [ "$PRIV_SSH_READY" = true ]; then
+            echo ""
+            echo "Step 5: Verify NO internet (pre-NAT)..."
+            PRE_NAT_OK=true
+            for idx in "${!NATGW_PRIV_IDS[@]}"; do
+                priv_ip="${NATGW_PRIV_PRIVATE_IPS[$idx]}"
+                inst_id="${NATGW_PRIV_IDS[$idx]}"
+                if bastion_ssh "$(priv_hop_cmd "$priv_ip" 'ping -c 1 -W 3 8.8.8.8')" 2>/dev/null; then
+                    echo "    FAIL: $inst_id can reach internet WITHOUT NAT GW"
+                    PRE_NAT_OK=false
+                else
+                    echo "    PASS: $inst_id has no internet (expected)"
+                fi
+            done
+
+            if [ "$PRE_NAT_OK" = true ]; then
+                pass_test "Private instances no internet (pre-NAT)"
+
+                echo ""
+                echo "Step 6: Creating NAT Gateway..."
+                NATGW_EIP_OUTPUT=$($AWS_EC2 allocate-address --domain vpc --output json)
+                NATGW_ALLOC_ID=$(echo "$NATGW_EIP_OUTPUT" | jq -r '.AllocationId')
+                NATGW_PUB_IP=$(echo "$NATGW_EIP_OUTPUT" | jq -r '.PublicIp')
+                echo "  Allocated EIP: $NATGW_PUB_IP ($NATGW_ALLOC_ID)"
+
+                NATGW_OUTPUT=$($AWS_EC2 create-nat-gateway \
+                    --subnet-id "$NATGW_PUB_SUBNET" \
+                    --allocation-id "$NATGW_ALLOC_ID" --output json)
+                NATGW_ID=$(echo "$NATGW_OUTPUT" | jq -r '.NatGateway.NatGatewayId')
+                echo "  NAT Gateway: $NATGW_ID"
+
+                # Create private route table + NAT GW route
+                NATGW_PRIV_RTB=$($AWS_EC2 create-route-table --vpc-id "$NATGW_VPC_ID" \
+                    --query 'RouteTable.RouteTableId' --output text)
+                NATGW_RTB_ASSOC=$($AWS_EC2 associate-route-table \
+                    --route-table-id "$NATGW_PRIV_RTB" \
+                    --subnet-id "$NATGW_PRIV_SUBNET" \
+                    --query 'AssociationId' --output text)
+                $AWS_EC2 create-route --route-table-id "$NATGW_PRIV_RTB" \
+                    --destination-cidr-block 0.0.0.0/0 \
+                    --nat-gateway-id "$NATGW_ID" > /dev/null
+                echo "  Route: 0.0.0.0/0 → $NATGW_ID (rtb: $NATGW_PRIV_RTB)"
+
+                # Poll for OVN SNAT rule
+                SNAT_FOUND=false
+                for attempt in $(seq 1 30); do
+                    NAT_RULES=$(sudo ovn-nbctl --no-leader-only lr-nat-list "vpc-${NATGW_VPC_ID}" 2>/dev/null || echo "")
+                    if echo "$NAT_RULES" | grep -q "snat.*${NATGW_PUB_IP}"; then
+                        SNAT_FOUND=true
+                        echo "  PASS: OVN SNAT rule created (after ${attempt}s)"
+                        break
+                    fi
+                    sleep 1
+                done
+                if [ "$SNAT_FOUND" = false ]; then
+                    echo "  WARN: OVN SNAT rule not found after 30s"
+                fi
+
+                echo ""
+                echo "Step 7: Verify internet via NAT Gateway (all 3 nodes)..."
+                NAT_GW_ALL_OK=true
+                for idx in "${!NATGW_PRIV_IDS[@]}"; do
+                    priv_ip="${NATGW_PRIV_PRIVATE_IPS[$idx]}"
+                    inst_id="${NATGW_PRIV_IDS[$idx]}"
+                    node="${SPREAD_NODES[$idx]}"
+                    CONN_OK=false
+                    for attempt in $(seq 1 10); do
+                        if bastion_ssh "$(priv_hop_cmd "$priv_ip" 'ping -c 2 -W 3 8.8.8.8')" 2>/dev/null; then
+                            CONN_OK=true
+                            echo "    PASS: $inst_id ($node) → internet via NAT GW (attempt $attempt)"
+                            break
+                        fi
+                        sleep 5
+                    done
+                    if [ "$CONN_OK" = false ]; then
+                        echo "    FAIL: $inst_id ($node) cannot reach internet via NAT GW"
+                        NAT_GW_ALL_OK=false
+                    fi
+                done
+
+                if [ "$NAT_GW_ALL_OK" = true ]; then
+                    pass_test "NAT Gateway multi-node connectivity (all 3 nodes)"
+                else
+                    fail_test "NAT Gateway multi-node connectivity"
+                    echo "  Dumping OVN NAT rules for debugging:"
+                    sudo ovn-nbctl --no-leader-only lr-nat-list "vpc-${NATGW_VPC_ID}" 2>/dev/null || true
+                fi
+
+                # Cleanup NAT GW resources
+                echo ""
+                echo "Step 8: Cleanup NAT Gateway..."
+                $AWS_EC2 delete-nat-gateway --nat-gateway-id "$NATGW_ID" > /dev/null 2>&1 || true
+                $AWS_EC2 disassociate-route-table --association-id "$NATGW_RTB_ASSOC" 2>/dev/null || true
+                $AWS_EC2 delete-route --route-table-id "$NATGW_PRIV_RTB" \
+                    --destination-cidr-block 0.0.0.0/0 2>/dev/null || true
+                $AWS_EC2 delete-route-table --route-table-id "$NATGW_PRIV_RTB" 2>/dev/null || true
+                $AWS_EC2 release-address --allocation-id "$NATGW_ALLOC_ID" 2>/dev/null || true
+                echo "  NAT GW resources cleaned up"
+            else
+                fail_test "Private instances no internet (pre-NAT)"
+            fi
+        else
+            fail_test "Private instance SSH via bastion"
+        fi
+    else
+        fail_test "Private instance launch (spread)"
+    fi
+
+    # Cleanup Phase 11 instances
+    echo ""
+    echo "Cleaning up Phase 11 instances..."
+    terminate_and_wait "$NATGW_BASTION_ID" "${NATGW_PRIV_IDS[@]}" 2>/dev/null || true
+    $AWS_EC2 delete-placement-group --group-name nat-spread 2>/dev/null || true
+
+    # Cleanup VPC resources
+    $AWS_EC2 delete-subnet --subnet-id "$NATGW_PRIV_SUBNET" 2>/dev/null || true
+    $AWS_EC2 delete-subnet --subnet-id "$NATGW_PUB_SUBNET" 2>/dev/null || true
+    $AWS_EC2 detach-internet-gateway --vpc-id "$NATGW_VPC_ID" \
+        --internet-gateway-id "$NATGW_IGW_ID" 2>/dev/null || true
+    $AWS_EC2 delete-internet-gateway --internet-gateway-id "$NATGW_IGW_ID" 2>/dev/null || true
+    # Delete non-main route tables
+    for rtb in $($AWS_EC2 describe-route-tables \
+        --filters "Name=vpc-id,Values=$NATGW_VPC_ID" \
+        --query 'RouteTables[?Associations[0].Main!=`true`].RouteTableId' --output text 2>/dev/null); do
+        $AWS_EC2 delete-route-table --route-table-id "$rtb" 2>/dev/null || true
+    done
+    $AWS_EC2 delete-vpc --vpc-id "$NATGW_VPC_ID" 2>/dev/null || true
+    echo "  Phase 11 cleanup complete"
+fi
+
+echo ""
+
+# ==========================================================================
+# Phase 12: Cleanup
+# ==========================================================================
+echo "Phase 12: Cleanup"
 echo "========================================"
 
 echo "Terminating all instances..."
