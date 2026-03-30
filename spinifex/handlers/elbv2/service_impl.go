@@ -85,7 +85,7 @@ func NewELBv2ServiceImplWithNATS(cfg *config.Config, nc *nats.Conn) (*ELBv2Servi
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	hc := newHealthChecker(store, nc)
+	hc := newHealthChecker(store)
 	if err := hc.start(); err != nil {
 		slog.Warn("Failed to start target health checker", "err", err)
 	} else {

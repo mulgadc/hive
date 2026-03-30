@@ -3,27 +3,32 @@ package handlers_elbv2
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"sync"
+	"time"
 
 	"github.com/mulgadc/spinifex/spinifex/albagent"
-	"github.com/nats-io/nats.go"
 )
 
-// healthChecker subscribes to health reports published by alb-agents running
-// inside ALB VMs. Each agent periodically queries HAProxy's stats socket and
-// publishes backend server status. This checker maps those statuses back to
-// registered targets and updates HealthState in the store.
+const healthPollInterval = 10 * time.Second
+
+// healthChecker polls ALB agents over HTTP for target health reports. Each
+// active ALB VM exposes GET /health which returns HAProxy backend server
+// status. This checker maps those statuses back to registered targets and
+// updates HealthState in the store.
 //
 // This mirrors the AWS model where the ALB itself health-checks the targets,
 // rather than the control plane probing them directly.
 type healthChecker struct {
-	store *Store
-	nc    *nats.Conn
+	store      *Store
+	httpClient *http.Client
+	agentURLFn func(vpcIP string) string // for testing: override agent URL resolution
 
 	mu       sync.Mutex
 	counters map[string]*targetCounter // key: "tgID:targetId:port"
-	sub      *nats.Subscription
+	stopCh   chan struct{}
 }
 
 // targetCounter tracks consecutive pass/fail counts for threshold logic.
@@ -32,40 +37,83 @@ type targetCounter struct {
 	consecutiveUnhealthy int64
 }
 
-func newHealthChecker(store *Store, nc *nats.Conn) *healthChecker {
+func newHealthChecker(store *Store) *healthChecker {
 	return &healthChecker{
-		store:    store,
-		nc:       nc,
-		counters: make(map[string]*targetCounter),
+		store:      store,
+		httpClient: &http.Client{Timeout: 5 * time.Second},
+		agentURLFn: agentURL,
+		counters:   make(map[string]*targetCounter),
+		stopCh:     make(chan struct{}),
 	}
 }
 
-// start subscribes to all ALB health report topics via a wildcard subscription.
+// start launches the background polling goroutine.
 func (hc *healthChecker) start() error {
-	if hc.nc == nil {
-		return nil
-	}
-
-	// Wildcard subscribe to all ALB health reports: elbv2.alb.*.health
-	sub, err := hc.nc.Subscribe("elbv2.alb.*.health", hc.handleHealthReport)
-	if err != nil {
-		return fmt.Errorf("subscribe to health reports: %w", err)
-	}
-	hc.sub = sub
+	go hc.pollLoop()
 	return nil
 }
 
-// stop unsubscribes from the health topic.
-func (hc *healthChecker) stop() {
-	if hc.sub != nil {
-		hc.sub.Unsubscribe()
+// pollLoop periodically queries each active ALB's /health endpoint.
+func (hc *healthChecker) pollLoop() {
+	ticker := time.NewTicker(healthPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-hc.stopCh:
+			return
+		case <-ticker.C:
+			hc.pollAll()
+		}
 	}
 }
 
+// pollAll fetches health from every active ALB that has a VPC IP.
+func (hc *healthChecker) pollAll() {
+	lbs, err := hc.store.ListLoadBalancers()
+	if err != nil {
+		slog.Debug("healthChecker: failed to list load balancers", "err", err)
+		return
+	}
+
+	for _, lb := range lbs {
+		if lb.State != StateActive || lb.VPCIP == "" {
+			continue
+		}
+		hc.pollOne(lb.VPCIP)
+	}
+}
+
+// pollOne fetches and processes the health report from a single ALB agent.
+func (hc *healthChecker) pollOne(vpcIP string) {
+	resp, err := hc.httpClient.Get(hc.agentURLFn(vpcIP) + "/health")
+	if err != nil {
+		slog.Debug("healthChecker: failed to poll ALB agent", "vpcIp", vpcIP, "err", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return
+	}
+
+	hc.handleHealthReport(data)
+}
+
+// stop signals the polling goroutine to exit.
+func (hc *healthChecker) stop() {
+	close(hc.stopCh)
+}
+
 // handleHealthReport processes a health report from an alb-agent.
-func (hc *healthChecker) handleHealthReport(msg *nats.Msg) {
+func (hc *healthChecker) handleHealthReport(data []byte) {
 	var report albagent.HealthReport
-	if err := json.Unmarshal(msg.Data, &report); err != nil {
+	if err := json.Unmarshal(data, &report); err != nil {
 		slog.Debug("healthChecker: invalid health report", "err", err)
 		return
 	}

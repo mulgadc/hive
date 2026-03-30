@@ -2,6 +2,8 @@ package handlers_elbv2
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -79,7 +81,7 @@ func TestEvaluateHealth_DrainingUnchanged(t *testing.T) {
 	assert.Equal(t, TargetHealthDraining, state)
 }
 
-// --- integration: handleHealthReport via NATS ---
+// --- integration: handleHealthReport directly ---
 
 func setupTestNATS(t *testing.T) (*nats.Conn, *Store) {
 	t.Helper()
@@ -107,11 +109,9 @@ func setupTestNATS(t *testing.T) (*nats.Conn, *Store) {
 }
 
 func TestHandleHealthReport_TransitionsInitialToHealthy(t *testing.T) {
-	nc, store := setupTestNATS(t)
+	_, store := setupTestNATS(t)
 
-	hc := newHealthChecker(store, nc)
-	require.NoError(t, hc.start())
-	t.Cleanup(func() { hc.stop() })
+	hc := newHealthChecker(store)
 
 	tg := &TargetGroupRecord{
 		TargetGroupArn: "arn:aws:elasticloadbalancing:us-east-1:000:targetgroup/test/tg-123",
@@ -124,7 +124,6 @@ func TestHandleHealthReport_TransitionsInitialToHealthy(t *testing.T) {
 	}
 	require.NoError(t, store.PutTargetGroup(tg))
 
-	// Publish a health report with the target UP
 	report := albagent.HealthReport{
 		LBID: "lb-test1",
 		Servers: []albagent.ServerStatus{
@@ -132,11 +131,7 @@ func TestHandleHealthReport_TransitionsInitialToHealthy(t *testing.T) {
 		},
 	}
 	data, _ := json.Marshal(report)
-	require.NoError(t, nc.Publish("elbv2.alb.lb-test1.health", data))
-	nc.Flush()
-
-	// Wait for the NATS message to be processed
-	time.Sleep(100 * time.Millisecond)
+	hc.handleHealthReport(data)
 
 	stored, err := store.GetTargetGroup("tg-123")
 	require.NoError(t, err)
@@ -144,11 +139,9 @@ func TestHandleHealthReport_TransitionsInitialToHealthy(t *testing.T) {
 }
 
 func TestHandleHealthReport_UnhealthyAfterThreshold(t *testing.T) {
-	nc, store := setupTestNATS(t)
+	_, store := setupTestNATS(t)
 
-	hc := newHealthChecker(store, nc)
-	require.NoError(t, hc.start())
-	t.Cleanup(func() { hc.stop() })
+	hc := newHealthChecker(store)
 
 	tg := &TargetGroupRecord{
 		TargetGroupArn: "arn:aws:elasticloadbalancing:us-east-1:000:targetgroup/test/tg-456",
@@ -175,9 +168,7 @@ func TestHandleHealthReport_UnhealthyAfterThreshold(t *testing.T) {
 			},
 		}
 		data, _ := json.Marshal(report)
-		require.NoError(t, nc.Publish("elbv2.alb.lb-test2.health", data))
-		nc.Flush()
-		time.Sleep(50 * time.Millisecond)
+		hc.handleHealthReport(data)
 	}
 
 	stored, err := store.GetTargetGroup("tg-456")
@@ -186,11 +177,9 @@ func TestHandleHealthReport_UnhealthyAfterThreshold(t *testing.T) {
 }
 
 func TestHandleHealthReport_SkipsDrainingTargets(t *testing.T) {
-	nc, store := setupTestNATS(t)
+	_, store := setupTestNATS(t)
 
-	hc := newHealthChecker(store, nc)
-	require.NoError(t, hc.start())
-	t.Cleanup(func() { hc.stop() })
+	hc := newHealthChecker(store)
 
 	tg := &TargetGroupRecord{
 		TargetGroupArn: "arn:aws:elasticloadbalancing:us-east-1:000:targetgroup/test/tg-789",
@@ -210,9 +199,7 @@ func TestHandleHealthReport_SkipsDrainingTargets(t *testing.T) {
 		},
 	}
 	data, _ := json.Marshal(report)
-	require.NoError(t, nc.Publish("elbv2.alb.lb-test3.health", data))
-	nc.Flush()
-	time.Sleep(100 * time.Millisecond)
+	hc.handleHealthReport(data)
 
 	stored, err := store.GetTargetGroup("tg-789")
 	require.NoError(t, err)
@@ -220,7 +207,7 @@ func TestHandleHealthReport_SkipsDrainingTargets(t *testing.T) {
 }
 
 func TestRemoveTarget(t *testing.T) {
-	hc := newHealthChecker(nil, nil)
+	hc := newHealthChecker(nil)
 
 	hc.mu.Lock()
 	hc.counters["tg-1:i-aaa:80"] = &targetCounter{consecutiveHealthy: 5}
@@ -232,4 +219,116 @@ func TestRemoveTarget(t *testing.T) {
 	_, exists := hc.counters["tg-1:i-aaa:80"]
 	hc.mu.Unlock()
 	assert.False(t, exists)
+}
+
+// --- pollAll / pollOne with httptest ---
+
+func TestPollAll_FetchesFromActiveALBs(t *testing.T) {
+	_, store := setupTestNATS(t)
+
+	// Fake ALB agent HTTP server
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		report := albagent.HealthReport{
+			LBID: "lb-poll1",
+			Servers: []albagent.ServerStatus{
+				{Backend: "bk_tg-poll", Server: sanitizeName("srv", "i-poll1"), Status: "UP"},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(report)
+	}))
+	defer ts.Close()
+
+	tg := &TargetGroupRecord{
+		TargetGroupArn: "arn:aws:elasticloadbalancing:us-east-1:000:targetgroup/test/tg-poll",
+		TargetGroupID:  "tg-poll",
+		Port:           80,
+		HealthCheck:    DefaultHealthCheck(),
+		Targets: []Target{
+			{Id: "i-poll1", Port: 80, HealthState: TargetHealthInitial, PrivateIP: "10.0.1.50"},
+		},
+	}
+	require.NoError(t, store.PutTargetGroup(tg))
+
+	// Seed an active LB whose VPCIP points to the test server.
+	// We override agentURLFn so pollOne hits the test server instead of a real IP.
+	lb := &LoadBalancerRecord{
+		LoadBalancerArn: "arn:aws:elasticloadbalancing:us-east-1:000:loadbalancer/app/test/lb-poll1",
+		LoadBalancerID:  "lb-poll1",
+		Name:            "test-lb",
+		State:           StateActive,
+		VPCIP:           "127.0.0.1", // placeholder — overridden below
+		InstanceID:      "i-sys-001",
+		AccountID:       "000",
+	}
+	require.NoError(t, store.PutLoadBalancer(lb))
+
+	hc := newHealthChecker(store)
+	// Override the agent URL resolver so it points to our test server
+	hc.agentURLFn = func(_ string) string { return ts.URL }
+
+	hc.pollAll()
+
+	stored, err := store.GetTargetGroup("tg-poll")
+	require.NoError(t, err)
+	assert.Equal(t, TargetHealthHealthy, stored.Targets[0].HealthState)
+}
+
+func TestPollAll_SkipsInactiveLBs(t *testing.T) {
+	_, store := setupTestNATS(t)
+
+	polled := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		polled = true
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(albagent.HealthReport{})
+	}))
+	defer ts.Close()
+
+	lb := &LoadBalancerRecord{
+		LoadBalancerArn: "arn:aws:elasticloadbalancing:us-east-1:000:loadbalancer/app/test/lb-skip",
+		LoadBalancerID:  "lb-skip",
+		Name:            "skip-lb",
+		State:           StateProvisioning, // not active — should be skipped
+		VPCIP:           "127.0.0.1",
+		InstanceID:      "i-sys-002",
+		AccountID:       "000",
+	}
+	require.NoError(t, store.PutLoadBalancer(lb))
+
+	hc := newHealthChecker(store)
+	hc.agentURLFn = func(_ string) string { return ts.URL }
+
+	hc.pollAll()
+
+	assert.False(t, polled, "should not poll a provisioning LB")
+}
+
+func TestPollOne_HandlesHTTPError(t *testing.T) {
+	_, store := setupTestNATS(t)
+
+	// Server that returns 503
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer ts.Close()
+
+	hc := newHealthChecker(store)
+	hc.agentURLFn = func(_ string) string { return ts.URL }
+
+	// Should not panic or error — just log and return
+	hc.pollOne("10.0.0.1")
+}
+
+func TestStartStop(t *testing.T) {
+	hc := newHealthChecker(nil)
+	require.NoError(t, hc.start())
+	hc.stop()
+	// Verify stop channel is closed (second close would panic)
+	select {
+	case <-hc.stopCh:
+		// expected — channel is closed
+	default:
+		t.Error("stopCh should be closed after stop()")
+	}
 }
