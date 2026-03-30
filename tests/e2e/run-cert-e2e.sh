@@ -34,11 +34,13 @@ case "${1:-}" in
     --pseudo-multinode)
         MODE="pseudo"
         NODE_IPS=("10.11.12.1" "10.11.12.2" "10.11.12.3")
+        SERVICE_IPS=("${NODE_IPS[@]}")
         ;;
     --multinode)
         shift
         MODE="multinode"
         NODE_IPS=("$@")
+        SERVICE_IPS=("${NODE_IPS[@]}")
         if [ ${#NODE_IPS[@]} -lt 2 ]; then
             echo "Usage: $0 --multinode <node1-ip> <node2-ip> [node3-ip ...]"
             exit 1
@@ -52,6 +54,16 @@ case "${1:-}" in
         while IFS= read -r ip; do
             NODE_IPS+=("$ip")
         done < <(ip -4 addr show scope global | grep -oP 'inet \K[\d.]+')
+        # SERVICE_IPS: only IPs where awsgw actually listens (bind IP from config).
+        # awsgw binds to the host specified in spinifex.toml, not all interfaces.
+        if [ -f "$HOME/spinifex/config/spinifex.toml" ]; then
+            AWSGW_BIND=$(grep -A5 '\.awsgw\]' "$HOME/spinifex/config/spinifex.toml" | grep 'host' | head -1 | sed 's/.*= *"\([^:]*\).*/\1/')
+        fi
+        if [ -n "${AWSGW_BIND:-}" ] && [ "$AWSGW_BIND" != "0.0.0.0" ]; then
+            SERVICE_IPS=("$AWSGW_BIND" "127.0.0.1")
+        else
+            SERVICE_IPS=("${NODE_IPS[@]}")
+        fi
         ;;
     *)
         echo "Unknown option: $1"
@@ -99,7 +111,8 @@ SYSTEM_CA_PATH="/usr/local/share/ca-certificates/spinifex-ca.crt"
 
 echo "Using CA cert: $CA_CERT"
 echo "Mode: $MODE"
-echo "Node IPs: ${NODE_IPS[*]}"
+echo "All IPs (SAN check): ${NODE_IPS[*]}"
+echo "Service IPs (TLS connect): ${SERVICE_IPS[*]}"
 echo ""
 
 # --- Test 1: Verify cert SANs contain expected IPs ---
@@ -182,7 +195,7 @@ fi
 echo ""
 echo "=== Test 3: TLS handshake with explicit CA trust (no --insecure) ==="
 
-for ip in "${NODE_IPS[@]}"; do
+for ip in "${SERVICE_IPS[@]}"; do
     HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
         --cacert "$CA_CERT" \
         --connect-timeout 5 \
@@ -220,7 +233,7 @@ fi
 
 # 4c: Verify curl works WITHOUT --cacert by relying on system trust store.
 # This confirms update-ca-certificates ran and the CA is in the trust bundle.
-TEST_IP="${NODE_IPS[0]}"
+TEST_IP="${SERVICE_IPS[0]}"
 HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
     --connect-timeout 5 \
     "https://$TEST_IP:$AWSGW_PORT/" 2>/dev/null || echo "000")
@@ -236,7 +249,7 @@ fi
 echo ""
 echo "=== Test 5: openssl s_client verify ==="
 
-for ip in "${NODE_IPS[@]}"; do
+for ip in "${SERVICE_IPS[@]}"; do
     VERIFY_OUTPUT=$(echo | openssl s_client \
         -CAfile "$CA_CERT" \
         -connect "$ip:$AWSGW_PORT" \
@@ -319,11 +332,11 @@ fi
 
 # --- Test 8: Cross-node cert isolation (multi-node only) ---
 
-if [ "$MODE" != "single" ] && [ ${#NODE_IPS[@]} -ge 2 ]; then
+if [ "$MODE" != "single" ] && [ ${#SERVICE_IPS[@]} -ge 2 ]; then
     echo ""
     echo "=== Test 8: Cross-node cert isolation ==="
 
-    for ip in "${NODE_IPS[@]}"; do
+    for ip in "${SERVICE_IPS[@]}"; do
         # Each node's cert should contain its own IP but served certs should all
         # chain to the same CA.
         CERT_ISSUER=$(echo | openssl s_client -connect "$ip:$AWSGW_PORT" 2>/dev/null \
