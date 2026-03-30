@@ -25,6 +25,12 @@ var _ handlers_elbv2.SystemInstanceLauncher = (*Daemon)(nil)
 // path, but skips the NATS request/response envelope and key pair validation.
 func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput) (*handlers_elbv2.SystemInstanceOutput, error) {
 	accountID := utils.GlobalAccountID
+	// ENI account may differ from system account — the ENI is created under
+	// the caller's account, so lookups/updates must use that account ID.
+	eniAccountID := input.AccountID
+	if eniAccountID == "" {
+		eniAccountID = accountID
+	}
 
 	// Validate instance type
 	instanceType, exists := d.resourceMgr.instanceTypes[input.InstanceType]
@@ -86,7 +92,7 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 		}
 		// Mark ENI as attached to this instance
 		if d.vpcService != nil {
-			if _, attachErr := d.vpcService.AttachENI(accountID, instance.ENIId, instance.ID, 0); attachErr != nil {
+			if _, attachErr := d.vpcService.AttachENI(eniAccountID, instance.ENIId, instance.ID, 0); attachErr != nil {
 				slog.Warn("LaunchSystemInstance: failed to attach ENI", "eniId", instance.ENIId, "instanceId", instance.ID, "err", attachErr)
 			}
 		}
@@ -127,14 +133,14 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 			slog.Warn("LaunchSystemInstance: failed to allocate public IP", "instanceId", instance.ID, "err", allocErr)
 		} else {
 			publicIP = allocatedIP
-			if updateErr := d.vpcService.UpdateENIPublicIP(accountID, instance.ENIId, publicIP, poolName); updateErr != nil {
+			if updateErr := d.vpcService.UpdateENIPublicIP(eniAccountID, instance.ENIId, publicIP, poolName); updateErr != nil {
 				slog.Warn("LaunchSystemInstance: failed to update ENI with public IP", "eniId", instance.ENIId, "err", updateErr)
 			}
 			// Look up VpcId from the ENI for the NAT event
 			vpcID := ""
 			result, descErr := d.vpcService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
 				NetworkInterfaceIds: []*string{aws.String(instance.ENIId)},
-			}, accountID)
+			}, eniAccountID)
 			if descErr == nil && len(result.NetworkInterfaces) > 0 && result.NetworkInterfaces[0].VpcId != nil {
 				vpcID = *result.NetworkInterfaces[0].VpcId
 			}

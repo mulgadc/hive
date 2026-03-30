@@ -460,6 +460,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 			ENIMac:       eniMAC,
 			ENIIP:        eniIP,
 			Scheme:       scheme,
+			AccountID:    accountID,
 			HostfwdPorts: []int{80, 443},
 		})
 		if launchErr != nil {

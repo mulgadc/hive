@@ -36,6 +36,10 @@ type SystemInstanceInput struct {
 	// Internet-facing ALBs get a public IP and NAT rules; internal ALBs do not.
 	Scheme string
 
+	// AccountID is the owner account of the ALB's ENI. Required so the daemon
+	// can look up and update the ENI record (which is keyed by account).
+	AccountID string
+
 	// HostfwdPorts specifies additional guest ports to forward from the host
 	// via the QEMU user-mode dev NIC (dev_networking mode only).
 	// Each entry is a guest port (e.g. 80, 443). The host port is auto-assigned.
