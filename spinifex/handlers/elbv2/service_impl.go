@@ -27,17 +27,23 @@ const (
 )
 
 // albVMUserData generates cloud-config user data for an ALB VM.
-// Uses #cloud-config format so it merges with the base cloud-init config
-// instead of going through write_files/runcmd (which requires /bin/bash on the
-// base template). HAProxy and alb-agent are pre-installed in the Alpine image
-// built by scripts/build-alb-image.sh.
+// Uses write_files to populate /etc/conf.d/alb-agent with the lb-id and NATS
+// URL, then runcmd starts the OpenRC service. This ordering is guaranteed by
+// cloud-init (write_files runs before runcmd). The service is NOT enabled at
+// boot in the image — cloud-init is the sole trigger so the env vars are
+// always present before the agent starts.
 func albVMUserData(lbID, natsURL string) string {
 	if natsURL == "" {
 		natsURL = "nats://127.0.0.1:4222"
 	}
 	return fmt.Sprintf(`#cloud-config
+write_files:
+  - path: /etc/conf.d/alb-agent
+    content: |
+      ALB_LB_ID=%s
+      ALB_NATS_URL=%s
 runcmd:
-  - [ "sh", "-c", "/usr/local/bin/alb-agent --lb-id=%s --nats=%s > /var/log/alb-agent.log 2>&1 &" ]
+  - [ "rc-service", "alb-agent", "start" ]
 `, lbID, natsURL)
 }
 

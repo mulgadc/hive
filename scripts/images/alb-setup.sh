@@ -44,3 +44,7 @@ depend() {
 }
 INITSCRIPT
 chmod 755 /etc/init.d/alb-agent
+
+# Do NOT enable alb-agent at boot — cloud-init must write
+# /etc/conf.d/alb-agent (with ALB_LB_ID and ALB_NATS_URL) before the
+# service starts. Cloud-init runcmd starts the service after write_files.

@@ -1,6 +1,7 @@
 package handlers_elbv2
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,13 +25,31 @@ func TestBuildListenerArn(t *testing.T) {
 func TestAlbVMUserData_DefaultNatsURL(t *testing.T) {
 	ud := albVMUserData("lb-abc123", "")
 	assert.Contains(t, ud, "#cloud-config")
-	assert.Contains(t, ud, "--lb-id=lb-abc123")
-	assert.Contains(t, ud, "--nats=nats://127.0.0.1:4222")
+	assert.Contains(t, ud, "write_files:")
+	assert.Contains(t, ud, "/etc/conf.d/alb-agent")
+	assert.Contains(t, ud, "ALB_LB_ID=lb-abc123")
+	assert.Contains(t, ud, "ALB_NATS_URL=nats://127.0.0.1:4222")
 }
 
 func TestAlbVMUserData_CustomNatsURL(t *testing.T) {
 	ud := albVMUserData("lb-xyz", "nats://10.0.0.5:4222")
-	assert.Contains(t, ud, "--lb-id=lb-xyz")
-	assert.Contains(t, ud, "--nats=nats://10.0.0.5:4222")
+	assert.Contains(t, ud, "ALB_LB_ID=lb-xyz")
+	assert.Contains(t, ud, "ALB_NATS_URL=nats://10.0.0.5:4222")
 	assert.NotContains(t, ud, "127.0.0.1")
+}
+
+func TestAlbVMUserData_WriteFilesThenRuncmd(t *testing.T) {
+	// Cloud-init guarantees write_files runs before runcmd. The agent is NOT
+	// enabled at boot via OpenRC — cloud-init is the sole trigger.
+	ud := albVMUserData("lb-test", "nats://10.0.2.2:4222")
+	assert.Contains(t, ud, "write_files:")
+	assert.Contains(t, ud, "/etc/conf.d/alb-agent")
+	assert.Contains(t, ud, "rc-service")
+	// Must not invoke the binary directly — OpenRC manages the process.
+	assert.NotContains(t, ud, "/usr/local/bin/alb-agent")
+
+	// write_files must appear before runcmd in the output
+	wfIdx := strings.Index(ud, "write_files:")
+	rcIdx := strings.Index(ud, "runcmd:")
+	assert.Greater(t, rcIdx, wfIdx, "write_files must precede runcmd")
 }

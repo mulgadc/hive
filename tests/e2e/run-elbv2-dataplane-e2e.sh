@@ -158,7 +158,7 @@ echo "Discovering AMIs..."
 # Use the Ubuntu AMI for app instances. The ALB system image (Alpine)
 # contains "alb" in its name — skip it and find a general-purpose image.
 ALL_IMAGES=$($AWS_EC2 describe-images --output json 2>&1)
-AMI_ID=$(echo "$ALL_IMAGES" | jq -r '[.Images[] | select(.Name | test("alb") | not)][0].ImageId // empty')
+AMI_ID=$(echo "$ALL_IMAGES" | jq -r '[.Images[] | select(.Name | test("alpine") | not)][0].ImageId // empty')
 if [ -z "$AMI_ID" ]; then
     AMI_ID=$(echo "$ALL_IMAGES" | jq -r '.Images[0].ImageId // empty')
 fi

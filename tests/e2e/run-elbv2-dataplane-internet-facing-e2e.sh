@@ -30,13 +30,7 @@ fi
 # ==========================================================================
 # Arguments
 # ==========================================================================
-if [ $# -lt 1 ]; then
-    echo "Usage: $0 <peer_node_ip>"
-    echo "  peer_node_ip: IP of another cluster node for external validation"
-    exit 1
-fi
-
-PEER_NODE_IP="$1"
+PEER_NODE_IP="${1:-}"
 
 ENDPOINT="${ENDPOINT:-https://127.0.0.1:9999}"
 export AWS_PROFILE=spinifex
@@ -162,7 +156,7 @@ echo "========================================"
 echo "ELBv2 (ALB) Internet-Facing Data Plane E2E"
 echo "========================================"
 echo "Endpoint:  $ENDPOINT"
-echo "Peer node: $PEER_NODE_IP"
+echo "Peer node: ${PEER_NODE_IP:-none (peer validation will be skipped)}"
 echo ""
 
 # ==========================================
@@ -171,13 +165,15 @@ echo ""
 echo "Phase 0: Prerequisites"
 echo "========================================"
 
-echo "Verifying SSH to peer node..."
-if peer_ssh "$PEER_NODE_IP" "hostname" > /dev/null 2>&1; then
-    pass "SSH to peer node $PEER_NODE_IP"
-else
-    fail "cannot SSH to peer node $PEER_NODE_IP"
-    echo "  External validation requires SSH access to a peer cluster node."
-    exit 1
+PEER_AVAILABLE=false
+if [ -n "$PEER_NODE_IP" ]; then
+    echo "Verifying SSH to peer node..."
+    if peer_ssh "$PEER_NODE_IP" "hostname" > /dev/null 2>&1; then
+        PEER_AVAILABLE=true
+        pass "SSH to peer node $PEER_NODE_IP"
+    else
+        echo "  ⚠ Cannot SSH to peer node $PEER_NODE_IP — peer validation will be skipped"
+    fi
 fi
 
 echo "Discovering instance types..."
@@ -191,7 +187,7 @@ pass "instance type: $INSTANCE_TYPE"
 
 echo "Discovering AMIs..."
 ALL_IMAGES=$($AWS_EC2 describe-images --output json 2>&1)
-AMI_ID=$(echo "$ALL_IMAGES" | jq -r '[.Images[] | select(.Name | test("alb") | not)][0].ImageId // empty')
+AMI_ID=$(echo "$ALL_IMAGES" | jq -r '[.Images[] | select(.Name | test("alpine") | not)][0].ImageId // empty')
 if [ -z "$AMI_ID" ]; then
     AMI_ID=$(echo "$ALL_IMAGES" | jq -r '.Images[0].ImageId // empty')
 fi
@@ -477,6 +473,13 @@ if [ "$ALB_ACTIVE" = true ]; then
     pass "ALB state: active (agent connected)"
 else
     fail "ALB did not reach active state (stuck in $LB_STATE)"
+    echo ""
+    echo "  Debug: daemon logs (ALB VM launch):"
+    grep -iE 'LaunchSystemInstance|ALB.VM|alb-agent|System AMI|QEMU.*alb|failed.*launch|launch.*failed' ~/spinifex/logs/*.log 2>/dev/null | tail -20 || echo "  (no matching log lines on local)"
+    if [ "$PEER_AVAILABLE" = true ]; then
+        echo "  Debug: PEER daemon logs:"
+        peer_ssh "$PEER_NODE_IP" "grep -iE 'LaunchSystemInstance|ALB.VM|alb-agent|System AMI|QEMU.*alb|failed.*launch|launch.*failed' ~/spinifex/logs/*.log 2>/dev/null | tail -20" 2>/dev/null || echo "  (no matching log lines on peer)"
+    fi
     exit 1
 fi
 
@@ -604,58 +607,64 @@ echo ""
 echo "Phase 9: External Validation (from Peer Node)"
 echo "========================================"
 
-echo "Testing ALB reachability from peer node $PEER_NODE_IP..."
-echo "  Peer will curl: http://${ALB_PUBLIC_IP}:80/"
+if [ "$PEER_AVAILABLE" = true ]; then
+    echo "Testing ALB reachability from peer node $PEER_NODE_IP..."
+    echo "  Peer will curl: http://${ALB_PUBLIC_IP}:80/"
 
-PEER_RESULT=$(peer_ssh "$PEER_NODE_IP" "curl -s --max-time 10 http://${ALB_PUBLIC_IP}:80/" 2>/dev/null) || true
+    PEER_RESULT=$(peer_ssh "$PEER_NODE_IP" "curl -s --max-time 10 http://${ALB_PUBLIC_IP}:80/" 2>/dev/null) || true
 
-if echo "$PEER_RESULT" | jq -r '.instance_id' 2>/dev/null | grep -q .; then
-    PEER_INSTANCE=$(echo "$PEER_RESULT" | jq -r '.instance_id')
-    pass "peer node reached ALB via public IP (responded: $PEER_INSTANCE)"
-else
-    fail "peer node could NOT reach ALB at http://${ALB_PUBLIC_IP}:80/"
-    echo "  Peer response: $PEER_RESULT"
-    echo "  This means the ALB is NOT externally accessible."
-fi
-
-# Send multiple requests from peer to verify balancing works externally too
-echo "Sending $NUM_REQUESTS requests from peer node..."
-declare -A PEER_COUNTS
-PEER_SUCCESS=0
-PEER_FAIL=0
-
-for i in $(seq 1 $NUM_REQUESTS); do
-    RESPONSE=$(peer_ssh "$PEER_NODE_IP" "curl -s --max-time 5 http://${ALB_PUBLIC_IP}:80/" 2>/dev/null) || {
-        PEER_FAIL=$((PEER_FAIL + 1))
-        continue
-    }
-
-    RESP_INSTANCE=$(echo "$RESPONSE" | jq -r '.instance_id // empty' 2>/dev/null)
-    if [ -n "$RESP_INSTANCE" ]; then
-        PEER_COUNTS[$RESP_INSTANCE]=$(( ${PEER_COUNTS[$RESP_INSTANCE]:-0} + 1 ))
-        PEER_SUCCESS=$((PEER_SUCCESS + 1))
+    if echo "$PEER_RESULT" | jq -r '.instance_id' 2>/dev/null | grep -q .; then
+        PEER_INSTANCE=$(echo "$PEER_RESULT" | jq -r '.instance_id')
+        pass "peer node reached ALB via public IP (responded: $PEER_INSTANCE)"
     else
-        PEER_FAIL=$((PEER_FAIL + 1))
+        fail "peer node could NOT reach ALB at http://${ALB_PUBLIC_IP}:80/"
+        echo "  Peer response: $PEER_RESULT"
+        echo "  This means the ALB is NOT externally accessible."
     fi
-done
 
-echo "  Results: $PEER_SUCCESS successful, $PEER_FAIL failed"
-echo "  Distribution:"
-for inst_id in "${!PEER_COUNTS[@]}"; do
-    echo "    $inst_id: ${PEER_COUNTS[$inst_id]} responses"
-done
+    # Send multiple requests from peer to verify balancing works externally too
+    echo "Sending $NUM_REQUESTS requests from peer node..."
+    declare -A PEER_COUNTS
+    PEER_SUCCESS=0
+    PEER_FAIL=0
 
-PEER_RESPONDERS=${#PEER_COUNTS[@]}
-if [ "$PEER_RESPONDERS" -ge 2 ]; then
-    pass "round-robin from peer: $PEER_RESPONDERS unique instances responded"
+    for i in $(seq 1 $NUM_REQUESTS); do
+        RESPONSE=$(peer_ssh "$PEER_NODE_IP" "curl -s --max-time 5 http://${ALB_PUBLIC_IP}:80/" 2>/dev/null) || {
+            PEER_FAIL=$((PEER_FAIL + 1))
+            continue
+        }
+
+        RESP_INSTANCE=$(echo "$RESPONSE" | jq -r '.instance_id // empty' 2>/dev/null)
+        if [ -n "$RESP_INSTANCE" ]; then
+            PEER_COUNTS[$RESP_INSTANCE]=$(( ${PEER_COUNTS[$RESP_INSTANCE]:-0} + 1 ))
+            PEER_SUCCESS=$((PEER_SUCCESS + 1))
+        else
+            PEER_FAIL=$((PEER_FAIL + 1))
+        fi
+    done
+
+    echo "  Results: $PEER_SUCCESS successful, $PEER_FAIL failed"
+    echo "  Distribution:"
+    for inst_id in "${!PEER_COUNTS[@]}"; do
+        echo "    $inst_id: ${PEER_COUNTS[$inst_id]} responses"
+    done
+
+    PEER_RESPONDERS=${#PEER_COUNTS[@]}
+    if [ "$PEER_RESPONDERS" -ge 2 ]; then
+        pass "round-robin from peer: $PEER_RESPONDERS unique instances responded"
+    else
+        fail "round-robin from peer: expected 2 unique responders, got $PEER_RESPONDERS"
+    fi
+
+    if [ "$PEER_SUCCESS" -ge $((NUM_REQUESTS / 2)) ]; then
+        pass "peer success rate: $PEER_SUCCESS/$NUM_REQUESTS requests succeeded"
+    else
+        fail "peer success rate: only $PEER_SUCCESS/$NUM_REQUESTS requests succeeded"
+    fi
 else
-    fail "round-robin from peer: expected 2 unique responders, got $PEER_RESPONDERS"
-fi
-
-if [ "$PEER_SUCCESS" -ge $((NUM_REQUESTS / 2)) ]; then
-    pass "peer success rate: $PEER_SUCCESS/$NUM_REQUESTS requests succeeded"
-else
-    fail "peer success rate: only $PEER_SUCCESS/$NUM_REQUESTS requests succeeded"
+    echo "  Skipped: no peer node available"
+    echo "  Run with a peer node IP to enable external validation:"
+    echo "    $0 <peer_node_ip>"
 fi
 
 echo ""

@@ -82,12 +82,14 @@ local-hostname: {{.Hostname}}
 
 // cloudInitNetworkConfigWildcard enables DHCP on all NICs via wildcard match.
 // Used when there's no dual-NIC setup (non-VPC or VPC without DEV_NETWORKING).
+// The "e*" glob matches both traditional names (eth0, eth1 — Alpine/older
+// kernels) and predictable names (ens3, enp0s3 — systemd-based distros).
 const cloudInitNetworkConfigWildcard = `network:
   version: 2
   ethernets:
     allnics:
       match:
-        name: "en*"
+        name: "e*"
       dhcp4: true
       dhcp-identifier: mac
 `

@@ -437,7 +437,7 @@ func TestCloudInitNetworkConfigWildcard(t *testing.T) {
 	assert.Contains(t, cfg, "version: 2")
 	assert.Contains(t, cfg, "dhcp4: true")
 	assert.Contains(t, cfg, "dhcp-identifier: mac")
-	assert.Contains(t, cfg, `name: "en*"`, "wildcard should match all en* interfaces")
+	assert.Contains(t, cfg, `name: "e*"`, "wildcard should match both eth* and en* interfaces")
 	assert.NotContains(t, cfg, "use-routes")
 }
 
@@ -460,18 +460,18 @@ func TestCloudInitNetworkConfigDualNIC(t *testing.T) {
 	assert.Contains(t, cfg, "use-dns: false")
 
 	// No wildcard match — per-interface only
-	assert.NotContains(t, cfg, `name: "en*"`)
+	assert.NotContains(t, cfg, `name: "e*"`)
 }
 
 func TestCloudInitNetworkConfigPartialMAC(t *testing.T) {
 	// Only ENI MAC (VPC without dev) → wildcard
 	cfg := generateNetworkConfig("02:00:00:61:ef:c2", "")
-	assert.Contains(t, cfg, `name: "en*"`)
+	assert.Contains(t, cfg, `name: "e*"`)
 	assert.NotContains(t, cfg, "use-routes")
 
 	// Only dev MAC (shouldn't happen, but defensive) → wildcard
 	cfg = generateNetworkConfig("", "02:de:00:60:83:0d")
-	assert.Contains(t, cfg, `name: "en*"`)
+	assert.Contains(t, cfg, `name: "e*"`)
 	assert.NotContains(t, cfg, "use-routes")
 }
 
