@@ -60,7 +60,7 @@ case "${1:-}" in
             AWSGW_BIND=$(grep -A5 '\.awsgw\]' "$HOME/spinifex/config/spinifex.toml" | grep 'host' | head -1 | sed 's/.*= *"\([^:]*\).*/\1/')
         fi
         if [ -n "${AWSGW_BIND:-}" ] && [ "$AWSGW_BIND" != "0.0.0.0" ]; then
-            SERVICE_IPS=("$AWSGW_BIND" "127.0.0.1")
+            SERVICE_IPS=("$AWSGW_BIND")
         else
             SERVICE_IPS=("${NODE_IPS[@]}")
         fi
