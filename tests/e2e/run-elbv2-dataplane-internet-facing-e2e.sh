@@ -418,6 +418,12 @@ else
     fail "ALB ENI does NOT have a public IP (internet-facing scheme should assign one)"
     echo "  ENI output:"
     echo "$ENI_OUTPUT" | jq .
+    echo ""
+    echo "  Debug: daemon logs (LaunchSystemInstance + IPAM):"
+    grep -E 'LaunchSystemInstance|externalIPAM|IPAM|UpdateENI|public.?[Ii][Pp]|AllocateIP' ~/spinifex/logs/*.log 2>/dev/null | tail -30 || echo "  (no matching log lines)"
+    echo ""
+    echo "  Debug: external_mode from config:"
+    grep -E 'external_mode|external_pool' ~/spinifex/config/spinifex.toml 2>/dev/null || echo "  (not found)"
     exit 1
 fi
 
