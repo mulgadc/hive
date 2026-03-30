@@ -9,4 +9,5 @@ type EIPService interface {
 	AssociateAddress(input *ec2.AssociateAddressInput, accountID string) (*ec2.AssociateAddressOutput, error)
 	DisassociateAddress(input *ec2.DisassociateAddressInput, accountID string) (*ec2.DisassociateAddressOutput, error)
 	DescribeAddresses(input *ec2.DescribeAddressesInput, accountID string) (*ec2.DescribeAddressesOutput, error)
+	DescribeAddressesAttribute(input *ec2.DescribeAddressesAttributeInput, accountID string) (*ec2.DescribeAddressesAttributeOutput, error)
 }

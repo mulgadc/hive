@@ -57,6 +57,18 @@ func TestDescribeAddresses_NilNATS(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// DescribeAddressesAttribute tests
+
+func TestDescribeAddressesAttribute_NilInput(t *testing.T) {
+	_, err := DescribeAddressesAttribute(nil, nil, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorInvalidParameterValue)
+}
+
+func TestDescribeAddressesAttribute_NilNATS(t *testing.T) {
+	_, err := DescribeAddressesAttribute(&ec2.DescribeAddressesAttributeInput{}, nil, testAccountID)
+	assert.Error(t, err)
+}
+
 // DisassociateAddress tests
 
 func TestDisassociateAddress_NilInput(t *testing.T) {

@@ -293,6 +293,46 @@ func TestEIP_FindByAssociationID_NotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "InvalidAssociationID.NotFound")
 }
 
+func TestEIP_DescribeAddressesAttribute(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	// Allocate multiple EIPs
+	out1, err := svc.AllocateAddress(&ec2.AllocateAddressInput{}, testAccountID)
+	require.NoError(t, err)
+	out2, err := svc.AllocateAddress(&ec2.AllocateAddressInput{}, testAccountID)
+	require.NoError(t, err)
+
+	// Describe all — should return both
+	desc, err := svc.DescribeAddressesAttribute(&ec2.DescribeAddressesAttributeInput{}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, desc.Addresses, 2)
+
+	// Each entry should have AllocationId and PublicIp populated
+	for _, addr := range desc.Addresses {
+		assert.NotNil(t, addr.AllocationId)
+		assert.NotNil(t, addr.PublicIp)
+		assert.Nil(t, addr.PtrRecord) // no reverse-DNS support
+	}
+
+	// Filter by specific allocation ID
+	desc2, err := svc.DescribeAddressesAttribute(&ec2.DescribeAddressesAttributeInput{
+		AllocationIds: []*string{out1.AllocationId},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, desc2.Addresses, 1)
+	assert.Equal(t, *out1.AllocationId, *desc2.Addresses[0].AllocationId)
+	assert.Equal(t, *out1.PublicIp, *desc2.Addresses[0].PublicIp)
+
+	// Filter by unknown allocation ID — returns empty, not error
+	desc3, err := svc.DescribeAddressesAttribute(&ec2.DescribeAddressesAttributeInput{
+		AllocationIds: []*string{aws.String("eipalloc-nonexistent")},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, desc3.Addresses)
+
+	_ = out2
+}
+
 func TestEIP_DescribeAddresses(t *testing.T) {
 	svc, _ := setupTestEIP(t)
 
