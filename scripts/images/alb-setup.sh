@@ -3,10 +3,13 @@
 #
 # Runs inside the Alpine image chroot after packages are installed.
 # Sets up HAProxy placeholder config and alb-agent OpenRC init script.
+# The alb-agent runs an HTTP server on :8405 that receives config pushes
+# and serves health/ping endpoints to the daemon over the VPC network.
 
 set -e
 
-# Create haproxy config directory and placeholder config
+# Create haproxy config directory and placeholder config.
+# Port 8405 is NOT bound here — the alb-agent owns it via its HTTP server.
 mkdir -p /etc/haproxy
 cat > /etc/haproxy/haproxy.cfg <<'EOF'
 # Placeholder config — replaced by alb-agent on first config push
@@ -19,10 +22,6 @@ defaults
     timeout connect 5s
     timeout client 30s
     timeout server 30s
-
-frontend health
-    bind *:8405
-    http-request return status 200 content-type text/plain string "ok"
 EOF
 
 # Create alb-agent OpenRC init script
@@ -30,9 +29,9 @@ mkdir -p /etc/init.d
 cat > /etc/init.d/alb-agent <<'INITSCRIPT'
 #!/sbin/openrc-run
 
-description="ALB NATS Config Agent"
+description="ALB HTTP Config Agent"
 command="/usr/local/bin/alb-agent"
-command_args="--lb-id=${ALB_LB_ID:-unknown} --nats=${ALB_NATS_URL:-nats://10.0.2.2:4222}"
+command_args="--lb-id=${ALB_LB_ID:-unknown} --listen=:8405"
 command_background=true
 pidfile="/run/alb-agent.pid"
 output_log="/var/log/alb-agent.log"
@@ -46,5 +45,5 @@ INITSCRIPT
 chmod 755 /etc/init.d/alb-agent
 
 # Do NOT enable alb-agent at boot — cloud-init must write
-# /etc/conf.d/alb-agent (with ALB_LB_ID and ALB_NATS_URL) before the
-# service starts. Cloud-init runcmd starts the service after write_files.
+# /etc/conf.d/alb-agent (with ALB_LB_ID) before the service starts.
+# Cloud-init runcmd starts the service after write_files.

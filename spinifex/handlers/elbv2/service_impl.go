@@ -494,7 +494,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		}
 
 		userData := albVMUserData(lbID)
-		out, launchErr := s.instanceLauncher.LaunchSystemInstance(&SystemInstanceInput{
+		launchInput := &SystemInstanceInput{
 			InstanceType: s.getSystemInstanceType(),
 			ImageID:      s.getSystemAMI(),
 			SubnetID:     subnets[0],
@@ -504,8 +504,13 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 			ENIIP:        eniIP,
 			Scheme:       scheme,
 			AccountID:    accountID,
-			HostfwdPorts: []int{80, 443},
-		})
+		}
+		// Dev-mode only: forward HTTP/HTTPS ports from host for local testing.
+		// In production (VPC networking), traffic reaches the ALB VM's VPC IP directly.
+		if s.config != nil && s.config.Daemon.DevNetworking {
+			launchInput.HostfwdPorts = []int{80, 443}
+		}
+		out, launchErr := s.instanceLauncher.LaunchSystemInstance(launchInput)
 		if launchErr != nil {
 			slog.Error("CreateLoadBalancer: failed to launch ALB VM", "lbId", lbID, "err", launchErr)
 			// Continue without VM — LB is created in provisioning state
