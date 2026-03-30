@@ -63,11 +63,6 @@ jobs:
           SPX_EXTERNAL_POOL="192.168.1.240-192.168.1.250" \
           ./bootstrap.sh env2 >> "$TOFU_LOG" 2>&1
 
-      - name: Import ALB AMI
-        working-directory: mulga/scripts/tofu-cluster
-        run: |
-          ~/Development/mulga/spinifex/bin/spx admin images import --name alb-alpine-3.21.6-x86_64
-
       - name: Run E2E Tests
         working-directory: mulga/scripts/tofu-cluster
         run: |
