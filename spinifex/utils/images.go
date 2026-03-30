@@ -101,8 +101,8 @@ var AvailableImages = map[string]Images{
 	"alb-alpine-3.21.6-x86_64":
 	// Alpine Linux (cloud init) x86_64
 	{
-		Name:         "alb-alpine-3.22.2-x86_64",
-		Description:  "ALB Alpine Linux 3.22.2 x86_64 cloud image",
+		Name:         "alb-alpine-3.21.6-x86_64",
+		Description:  "ALB Alpine Linux 3.21.6 x86_64 cloud image",
 		Distro:       "alpine",
 		Version:      "3.21.6",
 		Arch:         "x86_64",
