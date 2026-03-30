@@ -682,17 +682,8 @@ func (d *Daemon) Start() error {
 		d.elbv2Service.SetVPCService(d.vpcService)
 	}
 
-	// Wire ALB VM lifecycle: instance launcher + NATS URL for cloud-init.
-	// In dev mode (user-mode networking), VMs reach the host at 10.0.2.2
-	// (QEMU's default gateway). Replace 0.0.0.0 with this address.
+	// Wire ALB VM lifecycle: instance launcher for system VMs.
 	d.elbv2Service.SetInstanceLauncher(d)
-	if d.config != nil && d.config.NATS.Host != "" {
-		natsHost := d.config.NATS.Host
-		if d.config.Daemon.DevNetworking && strings.HasPrefix(natsHost, "0.0.0.0") {
-			natsHost = strings.Replace(natsHost, "0.0.0.0", "10.0.2.2", 1)
-		}
-		d.elbv2Service.SetNATSURL("nats://" + natsHost)
-	}
 	// Set up lazy system AMI discovery for ALB VMs. The image may not exist
 	// at daemon startup (imported later), so we resolve it at request time.
 	if d.imageService != nil {

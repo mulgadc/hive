@@ -22,26 +22,20 @@ func TestBuildListenerArn(t *testing.T) {
 	assert.Equal(t, "arn:aws:elasticloadbalancing:eu-west-1:999888777666:listener/app/my-alb/lbid123/listener456", arn)
 }
 
-func TestAlbVMUserData_DefaultNatsURL(t *testing.T) {
-	ud := albVMUserData("lb-abc123", "")
+func TestAlbVMUserData_ContainsLBID(t *testing.T) {
+	ud := albVMUserData("lb-abc123")
 	assert.Contains(t, ud, "#cloud-config")
 	assert.Contains(t, ud, "write_files:")
 	assert.Contains(t, ud, "/etc/conf.d/alb-agent")
 	assert.Contains(t, ud, "ALB_LB_ID=lb-abc123")
-	assert.Contains(t, ud, "ALB_NATS_URL=nats://127.0.0.1:4222")
-}
-
-func TestAlbVMUserData_CustomNatsURL(t *testing.T) {
-	ud := albVMUserData("lb-xyz", "nats://10.0.0.5:4222")
-	assert.Contains(t, ud, "ALB_LB_ID=lb-xyz")
-	assert.Contains(t, ud, "ALB_NATS_URL=nats://10.0.0.5:4222")
-	assert.NotContains(t, ud, "127.0.0.1")
+	// NATS URL should no longer be present
+	assert.NotContains(t, ud, "NATS")
 }
 
 func TestAlbVMUserData_WriteFilesThenRuncmd(t *testing.T) {
 	// Cloud-init guarantees write_files runs before runcmd. The agent is NOT
 	// enabled at boot via OpenRC — cloud-init is the sole trigger.
-	ud := albVMUserData("lb-test", "nats://10.0.2.2:4222")
+	ud := albVMUserData("lb-test")
 	assert.Contains(t, ud, "write_files:")
 	assert.Contains(t, ud, "/etc/conf.d/alb-agent")
 	assert.Contains(t, ud, "rc-service")
@@ -52,4 +46,8 @@ func TestAlbVMUserData_WriteFilesThenRuncmd(t *testing.T) {
 	wfIdx := strings.Index(ud, "write_files:")
 	rcIdx := strings.Index(ud, "runcmd:")
 	assert.Greater(t, rcIdx, wfIdx, "write_files must precede runcmd")
+}
+
+func TestAgentURL(t *testing.T) {
+	assert.Equal(t, "http://10.0.1.5:8405", agentURL("10.0.1.5"))
 }
