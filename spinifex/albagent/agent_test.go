@@ -3,27 +3,17 @@ package albagent
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
-	"time"
-
-	natsserver "github.com/nats-io/nats-server/v2/server"
-	natstest "github.com/nats-io/nats-server/v2/test"
-	"github.com/nats-io/nats.go"
 )
 
-func startTestNATS(t *testing.T) *natsserver.Server {
-	t.Helper()
-	opts := natstest.DefaultTestOptions
-	opts.Port = -1 // random port
-	ns := natstest.RunServer(&opts)
-	t.Cleanup(ns.Shutdown)
-	return ns
-}
-
 func TestNew(t *testing.T) {
-	agent, err := New("lb-test123", "nats://localhost:4222")
+	agent, err := New("lb-test123", ":8405")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -33,33 +23,277 @@ func TestNew(t *testing.T) {
 }
 
 func TestNew_EmptyLBID(t *testing.T) {
-	_, err := New("", "nats://localhost:4222")
+	_, err := New("", ":8405")
 	if err == nil {
 		t.Fatal("expected error for empty lbID")
 	}
 }
 
-func TestNew_DefaultNATSURL(t *testing.T) {
+func TestNew_DefaultListenAddr(t *testing.T) {
 	agent, err := New("lb-test", "")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if agent.natsURL != "nats://127.0.0.1:4222" {
-		t.Errorf("natsURL = %q, want default", agent.natsURL)
+	if agent.listenAddr != ":8405" {
+		t.Errorf("listenAddr = %q, want %q", agent.listenAddr, ":8405")
 	}
 }
 
-func TestConfigTopic(t *testing.T) {
-	topic := ConfigTopic("lb-abc123")
-	if topic != "elbv2.alb.lb-abc123.config" {
-		t.Errorf("ConfigTopic = %q, want %q", topic, "elbv2.alb.lb-abc123.config")
+func TestNew_SocketPath(t *testing.T) {
+	agent, err := New("lb-sock123", ":8405")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	expected := "/tmp/spinifex-haproxy/alb-lb-sock123.sock"
+	if agent.socketPath != expected {
+		t.Errorf("socketPath = %q, want %q", agent.socketPath, expected)
 	}
 }
 
-func TestPingTopic(t *testing.T) {
-	topic := PingTopic("lb-abc123")
-	if topic != "elbv2.alb.lb-abc123.ping" {
-		t.Errorf("PingTopic = %q, want %q", topic, "elbv2.alb.lb-abc123.ping")
+// newTestAgent creates an agent and returns it along with an httptest.Server
+// serving its handlers.
+func newTestAgent(t *testing.T, lbID string) (*Agent, *httptest.Server) {
+	t.Helper()
+	agent, err := New(lbID, ":0")
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /config", agent.handleConfig)
+	mux.HandleFunc("GET /ping", agent.handlePing)
+	mux.HandleFunc("GET /health", agent.handleHealth)
+
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	return agent, ts
+}
+
+func TestHandleConfig(t *testing.T) {
+	dir := t.TempDir()
+	agent, ts := newTestAgent(t, "lb-cfg123")
+	agent.configPath = filepath.Join(dir, "haproxy.cfg")
+	agent.pidPath = filepath.Join(dir, "haproxy.pid")
+
+	reloadCalled := false
+	agent.reloadFn = func(configPath, pidPath string) error {
+		reloadCalled = true
+		return nil
+	}
+
+	haproxyConfig := "global\n  log stdout\ndefaults\n  mode http\n"
+	resp, err := http.Post(ts.URL+"/config", "text/plain", strings.NewReader(haproxyConfig))
+	if err != nil {
+		t.Fatalf("POST /config: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	var body map[string]string
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body["status"] != "ok" {
+		t.Errorf("response status = %q, want %q", body["status"], "ok")
+	}
+
+	data, err := os.ReadFile(agent.configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != haproxyConfig {
+		t.Errorf("written config = %q, want %q", string(data), haproxyConfig)
+	}
+
+	if !reloadCalled {
+		t.Error("reload function was not called")
+	}
+}
+
+func TestHandleConfig_Empty(t *testing.T) {
+	agent, ts := newTestAgent(t, "lb-empty")
+	agent.reloadFn = func(_, _ string) error { return nil }
+
+	resp, err := http.Post(ts.URL+"/config", "text/plain", strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("POST /config: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+
+	var body map[string]string
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body["status"] != "error" {
+		t.Errorf("response status = %q, want %q", body["status"], "error")
+	}
+}
+
+func TestHandleConfig_ReloadError(t *testing.T) {
+	dir := t.TempDir()
+	agent, ts := newTestAgent(t, "lb-err")
+	agent.configPath = filepath.Join(dir, "haproxy.cfg")
+	agent.pidPath = filepath.Join(dir, "haproxy.pid")
+	agent.reloadFn = func(_, _ string) error {
+		return fmt.Errorf("haproxy binary not found")
+	}
+
+	resp, err := http.Post(ts.URL+"/config", "text/plain", strings.NewReader("some config"))
+	if err != nil {
+		t.Fatalf("POST /config: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusInternalServerError)
+	}
+
+	var body map[string]string
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body["status"] != "error" {
+		t.Errorf("response status = %q, want %q", body["status"], "error")
+	}
+	if body["error"] == "" {
+		t.Error("expected error message in response")
+	}
+}
+
+func TestHandleConfig_WrongMethod(t *testing.T) {
+	_, ts := newTestAgent(t, "lb-method")
+
+	resp, err := http.Get(ts.URL + "/config")
+	if err != nil {
+		t.Fatalf("GET /config: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		// Go 1.22+ ServeMux returns 405 for method mismatch
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestHandlePing(t *testing.T) {
+	dir := t.TempDir()
+	agent, ts := newTestAgent(t, "lb-ping123")
+	agent.configPath = filepath.Join(dir, "haproxy.cfg")
+	agent.pidPath = filepath.Join(dir, "haproxy.pid")
+
+	resp, err := http.Get(ts.URL + "/ping")
+	if err != nil {
+		t.Fatalf("GET /ping: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	var ping PingResponse
+	if err := json.NewDecoder(resp.Body).Decode(&ping); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+
+	if ping.Status != "ok" {
+		t.Errorf("status = %q, want %q", ping.Status, "ok")
+	}
+	if ping.LBID != "lb-ping123" {
+		t.Errorf("lb_id = %q, want %q", ping.LBID, "lb-ping123")
+	}
+	if ping.HAProxy {
+		t.Error("haproxy_running should be false (no PID file)")
+	}
+	if ping.ConfigAge != -1 {
+		t.Errorf("config_age = %d, want -1 (no config file)", ping.ConfigAge)
+	}
+}
+
+func TestHandleHealth(t *testing.T) {
+	agent, ts := newTestAgent(t, "lb-health1")
+	agent.statsFn = func(_ string) ([]ServerStatus, error) {
+		return []ServerStatus{
+			{Backend: "bk_tg1", Server: "srv_i-web1", Status: "UP"},
+			{Backend: "bk_tg1", Server: "srv_i-web2", Status: "DOWN"},
+		}, nil
+	}
+
+	resp, err := http.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatalf("GET /health: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	var report HealthReport
+	if err := json.NewDecoder(resp.Body).Decode(&report); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+
+	if report.LBID != "lb-health1" {
+		t.Errorf("LBID = %q, want %q", report.LBID, "lb-health1")
+	}
+	if len(report.Servers) != 2 {
+		t.Fatalf("got %d servers, want 2", len(report.Servers))
+	}
+	if report.Servers[0].Status != "UP" {
+		t.Errorf("server[0].Status = %q, want UP", report.Servers[0].Status)
+	}
+	if report.Servers[1].Status != "DOWN" {
+		t.Errorf("server[1].Status = %q, want DOWN", report.Servers[1].Status)
+	}
+}
+
+func TestHandleHealth_StatsError(t *testing.T) {
+	agent, ts := newTestAgent(t, "lb-health-err")
+	agent.statsFn = func(_ string) ([]ServerStatus, error) {
+		return nil, fmt.Errorf("socket not found")
+	}
+
+	resp, err := http.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatalf("GET /health: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
+	}
+
+	var body map[string]string
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body["status"] != "error" {
+		t.Errorf("response status = %q, want %q", body["status"], "error")
+	}
+}
+
+func TestHandleHealth_EmptyServers(t *testing.T) {
+	agent, ts := newTestAgent(t, "lb-health-empty")
+	agent.statsFn = func(_ string) ([]ServerStatus, error) {
+		return nil, nil
+	}
+
+	resp, err := http.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatalf("GET /health: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	var report HealthReport
+	json.Unmarshal(body, &report)
+	if report.LBID != "lb-health-empty" {
+		t.Errorf("LBID = %q, want %q", report.LBID, "lb-health-empty")
 	}
 }
 
@@ -98,12 +332,10 @@ func TestWriteConfig_Atomic(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "haproxy.cfg")
 
-	// Write initial config
 	if err := WriteConfig(path, "initial"); err != nil {
 		t.Fatalf("WriteConfig initial: %v", err)
 	}
 
-	// Overwrite with new config
 	if err := WriteConfig(path, "updated"); err != nil {
 		t.Fatalf("WriteConfig updated: %v", err)
 	}
@@ -113,7 +345,6 @@ func TestWriteConfig_Atomic(t *testing.T) {
 		t.Errorf("config = %q, want %q", string(data), "updated")
 	}
 
-	// No temp file left behind
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
 		t.Error("temp file should not exist after successful write")
 	}
@@ -123,12 +354,10 @@ func TestConfigAgeSeconds(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.cfg")
 
-	// Non-existent file
 	if age := configAgeSeconds(path); age != -1 {
 		t.Errorf("age of non-existent file = %d, want -1", age)
 	}
 
-	// Write file and check age
 	os.WriteFile(path, []byte("test"), 0o644)
 	age := configAgeSeconds(path)
 	if age < 0 || age > 2 {
@@ -156,187 +385,8 @@ func TestReadPID_DeadProcess(t *testing.T) {
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "haproxy.pid")
 
-	// Use a very high PID that's unlikely to be running
 	os.WriteFile(pidFile, []byte("999999999\n"), 0o644)
 	if pid := readPID(pidFile); pid != 0 {
 		t.Errorf("readPID = %d, want 0 for dead process", pid)
-	}
-}
-
-func TestAgent_StartStop(t *testing.T) {
-	ns := startTestNATS(t)
-
-	agent, err := New("lb-test123", ns.ClientURL())
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	if err := agent.Start(); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	// Verify agent is connected
-	if agent.nc == nil || !agent.nc.IsConnected() {
-		t.Fatal("agent not connected to NATS")
-	}
-
-	agent.Stop()
-
-	if agent.nc != nil {
-		t.Error("nc should be nil after Stop")
-	}
-}
-
-func TestAgent_HandleConfig(t *testing.T) {
-	ns := startTestNATS(t)
-	dir := t.TempDir()
-
-	agent, _ := New("lb-cfg123", ns.ClientURL())
-	agent.configPath = filepath.Join(dir, "haproxy.cfg")
-	agent.pidPath = filepath.Join(dir, "haproxy.pid")
-
-	// Mock reload to avoid needing real HAProxy
-	reloadCalled := false
-	agent.reloadFn = func(configPath, pidPath string) error {
-		reloadCalled = true
-		return nil
-	}
-
-	if err := agent.Start(); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer agent.Stop()
-
-	// Send a config update via a separate NATS connection
-	nc, err := nats.Connect(ns.ClientURL())
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	defer nc.Close()
-
-	haproxyConfig := "global\n  log stdout\ndefaults\n  mode http\n"
-	reply, err := nc.Request(ConfigTopic("lb-cfg123"), []byte(haproxyConfig), 2*time.Second)
-	if err != nil {
-		t.Fatalf("Request: %v", err)
-	}
-
-	// Check response
-	var resp map[string]string
-	json.Unmarshal(reply.Data, &resp)
-	if resp["status"] != "ok" {
-		t.Errorf("response status = %q, want %q", resp["status"], "ok")
-	}
-
-	// Verify config was written
-	data, err := os.ReadFile(agent.configPath)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if string(data) != haproxyConfig {
-		t.Errorf("written config = %q, want %q", string(data), haproxyConfig)
-	}
-
-	if !reloadCalled {
-		t.Error("reload function was not called")
-	}
-}
-
-func TestAgent_HandleConfig_Empty(t *testing.T) {
-	ns := startTestNATS(t)
-
-	agent, _ := New("lb-empty", ns.ClientURL())
-	agent.reloadFn = func(_, _ string) error { return nil }
-
-	if err := agent.Start(); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer agent.Stop()
-
-	nc, _ := nats.Connect(ns.ClientURL())
-	defer nc.Close()
-
-	reply, err := nc.Request(ConfigTopic("lb-empty"), []byte(""), 2*time.Second)
-	if err != nil {
-		t.Fatalf("Request: %v", err)
-	}
-
-	var resp map[string]string
-	json.Unmarshal(reply.Data, &resp)
-	if resp["status"] != "error" {
-		t.Errorf("response status = %q, want %q for empty config", resp["status"], "error")
-	}
-}
-
-func TestAgent_HandlePing(t *testing.T) {
-	ns := startTestNATS(t)
-	dir := t.TempDir()
-
-	agent, _ := New("lb-ping123", ns.ClientURL())
-	agent.configPath = filepath.Join(dir, "haproxy.cfg")
-	agent.pidPath = filepath.Join(dir, "haproxy.pid")
-
-	if err := agent.Start(); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer agent.Stop()
-
-	nc, _ := nats.Connect(ns.ClientURL())
-	defer nc.Close()
-
-	reply, err := nc.Request(PingTopic("lb-ping123"), nil, 2*time.Second)
-	if err != nil {
-		t.Fatalf("Request: %v", err)
-	}
-
-	var resp PingResponse
-	if err := json.Unmarshal(reply.Data, &resp); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-
-	if resp.Status != "ok" {
-		t.Errorf("status = %q, want %q", resp.Status, "ok")
-	}
-	if resp.LBID != "lb-ping123" {
-		t.Errorf("lb_id = %q, want %q", resp.LBID, "lb-ping123")
-	}
-	if resp.HAProxy {
-		t.Error("haproxy_running should be false (no PID file)")
-	}
-	if resp.ConfigAge != -1 {
-		t.Errorf("config_age = %d, want -1 (no config file)", resp.ConfigAge)
-	}
-}
-
-func TestAgent_HandleConfig_ReloadError(t *testing.T) {
-	ns := startTestNATS(t)
-	dir := t.TempDir()
-
-	agent, _ := New("lb-err", ns.ClientURL())
-	agent.configPath = filepath.Join(dir, "haproxy.cfg")
-	agent.pidPath = filepath.Join(dir, "haproxy.pid")
-	agent.reloadFn = func(_, _ string) error {
-		return fmt.Errorf("haproxy binary not found")
-	}
-
-	if err := agent.Start(); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	defer agent.Stop()
-
-	nc, _ := nats.Connect(ns.ClientURL())
-	defer nc.Close()
-
-	reply, err := nc.Request(ConfigTopic("lb-err"), []byte("some config"), 2*time.Second)
-	if err != nil {
-		t.Fatalf("Request: %v", err)
-	}
-
-	var resp map[string]string
-	json.Unmarshal(reply.Data, &resp)
-	if resp["status"] != "error" {
-		t.Errorf("response status = %q, want %q", resp["status"], "error")
-	}
-	if resp["error"] == "" {
-		t.Error("expected error message in response")
 	}
 }

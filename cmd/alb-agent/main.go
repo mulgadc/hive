@@ -1,20 +1,20 @@
 // alb-agent runs inside ALB VMs and manages HAProxy configuration.
 //
-// It connects to NATS, subscribes to config updates for its load balancer,
-// writes HAProxy configs to disk, and reloads HAProxy on changes. It also
-// responds to health pings so the daemon can verify the agent is alive.
+// It starts an HTTP server that accepts config pushes from the daemon,
+// responds to health pings, and reports HAProxy backend health.
 //
 // Usage:
 //
-//	alb-agent --lb-id=lb-xxxxx --nats=nats://10.0.0.1:4222
+//	alb-agent --lb-id=lb-xxxxx --listen=:8405
 //
 // The LB ID defaults to the hostname (set by cloud-init to the LB ID).
-// The NATS URL defaults to nats://127.0.0.1:4222.
+// The listen address defaults to :8405.
 package main
 
 import (
 	"flag"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -24,14 +24,14 @@ import (
 
 func main() {
 	var (
-		lbID    string
-		natsURL string
+		lbID       string
+		listenAddr string
 	)
 
 	hostname, _ := os.Hostname()
 
 	flag.StringVar(&lbID, "lb-id", hostname, "Load balancer ID (defaults to hostname)")
-	flag.StringVar(&natsURL, "nats", "nats://127.0.0.1:4222", "NATS server URL")
+	flag.StringVar(&listenAddr, "listen", ":8405", "HTTP listen address")
 	flag.Parse()
 
 	if lbID == "" {
@@ -39,24 +39,32 @@ func main() {
 		os.Exit(1)
 	}
 
-	slog.Info("Starting ALB agent", "lbId", lbID, "nats", natsURL)
+	slog.Info("Starting ALB agent", "lbId", lbID, "listen", listenAddr)
 
-	agent, err := albagent.New(lbID, natsURL)
+	agent, err := albagent.New(lbID, listenAddr)
 	if err != nil {
 		slog.Error("Failed to create agent", "err", err)
 		os.Exit(1)
 	}
 
-	if err := agent.Start(); err != nil {
-		slog.Error("Failed to start agent", "err", err)
-		os.Exit(1)
-	}
+	// Start HTTP server in a goroutine — it blocks until shutdown.
+	errCh := make(chan error, 1)
+	go func() {
+		if err := agent.Start(); err != nil && err != http.ErrServerClosed {
+			errCh <- err
+		}
+	}()
 
-	// Wait for shutdown signal
+	// Wait for shutdown signal or server error.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	sig := <-sigCh
 
-	slog.Info("Received signal, shutting down", "signal", sig)
+	select {
+	case sig := <-sigCh:
+		slog.Info("Received signal, shutting down", "signal", sig)
+	case err := <-errCh:
+		slog.Error("Server error", "err", err)
+	}
+
 	agent.Stop()
 }

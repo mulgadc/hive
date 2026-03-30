@@ -132,7 +132,7 @@ func TestHandleHealthReport_TransitionsInitialToHealthy(t *testing.T) {
 		},
 	}
 	data, _ := json.Marshal(report)
-	require.NoError(t, nc.Publish(albagent.HealthTopic("lb-test1"), data))
+	require.NoError(t, nc.Publish("elbv2.alb.lb-test1.health", data))
 	nc.Flush()
 
 	// Wait for the NATS message to be processed
@@ -175,7 +175,7 @@ func TestHandleHealthReport_UnhealthyAfterThreshold(t *testing.T) {
 			},
 		}
 		data, _ := json.Marshal(report)
-		require.NoError(t, nc.Publish(albagent.HealthTopic("lb-test2"), data))
+		require.NoError(t, nc.Publish("elbv2.alb.lb-test2.health", data))
 		nc.Flush()
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -210,7 +210,7 @@ func TestHandleHealthReport_SkipsDrainingTargets(t *testing.T) {
 		},
 	}
 	data, _ := json.Marshal(report)
-	require.NoError(t, nc.Publish(albagent.HealthTopic("lb-test3"), data))
+	require.NoError(t, nc.Publish("elbv2.alb.lb-test3.health", data))
 	nc.Flush()
 	time.Sleep(100 * time.Millisecond)
 

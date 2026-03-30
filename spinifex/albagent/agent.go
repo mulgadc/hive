@@ -1,22 +1,23 @@
-// Package albagent implements the NATS config agent that runs inside ALB VMs.
-// It subscribes to config updates, writes HAProxy configuration, and reloads
-// the HAProxy process.
+// Package albagent implements the HTTP config agent that runs inside ALB VMs.
+// It exposes an HTTP server for config pushes, health pings, and target health
+// queries. The daemon communicates with the agent over the VPC network.
 package albagent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
-
-	"github.com/nats-io/nats.go"
 )
 
 const (
@@ -24,26 +25,19 @@ const (
 	DefaultConfigPath = "/etc/haproxy/haproxy.cfg"
 	DefaultPIDPath    = "/run/haproxy.pid"
 
-	// NATS topic patterns.
-	configTopicPrefix    = "elbv2.alb."
-	configTopicSuffix    = ".config"
-	pingTopicSuffix      = ".ping"
-	healthTopicSuffix    = ".health"
-	healthReportInterval = 10 * time.Second
+	// maxConfigSize limits config POST bodies to 1 MiB.
+	maxConfigSize = 1 << 20
 )
 
 // Agent manages HAProxy configuration inside an ALB VM.
 type Agent struct {
 	lbID       string
-	natsURL    string
+	listenAddr string
 	configPath string
 	pidPath    string
 	socketPath string // HAProxy stats socket
 
-	nc   *nats.Conn
-	subs []*nats.Subscription
-	mu   sync.Mutex
-	stop chan struct{}
+	server *http.Server
 
 	// For testing: override the reload function.
 	reloadFn func(configPath, pidPath string) error
@@ -52,147 +46,92 @@ type Agent struct {
 }
 
 // New creates a new ALB agent for the given load balancer.
-func New(lbID, natsURL string) (*Agent, error) {
+func New(lbID, listenAddr string) (*Agent, error) {
 	if lbID == "" {
 		return nil, fmt.Errorf("lbID is required")
 	}
-	if natsURL == "" {
-		natsURL = "nats://127.0.0.1:4222"
+	if listenAddr == "" {
+		listenAddr = ":8405"
 	}
 
 	return &Agent{
 		lbID:       lbID,
-		natsURL:    natsURL,
+		listenAddr: listenAddr,
 		configPath: DefaultConfigPath,
 		pidPath:    DefaultPIDPath,
 		socketPath: fmt.Sprintf("/tmp/spinifex-haproxy/alb-%s.sock", lbID),
 		reloadFn:   reloadHAProxy,
 		statsFn:    queryHAProxyStats,
-		stop:       make(chan struct{}),
 	}, nil
 }
 
-// ConfigTopic returns the NATS topic for config updates.
-func ConfigTopic(lbID string) string {
-	return configTopicPrefix + lbID + configTopicSuffix
-}
-
-// PingTopic returns the NATS topic for health pings.
-func PingTopic(lbID string) string {
-	return configTopicPrefix + lbID + pingTopicSuffix
-}
-
-// HealthTopic returns the NATS topic for target health reports.
-func HealthTopic(lbID string) string {
-	return configTopicPrefix + lbID + healthTopicSuffix
-}
-
-// Start connects to NATS and subscribes to config and ping topics.
+// Start starts the HTTP server. It blocks until the server is shut down.
 func (a *Agent) Start() error {
-	nc, err := nats.Connect(a.natsURL,
-		nats.Name("alb-agent-"+a.lbID),
-		nats.MaxReconnects(-1),
-		nats.ReconnectWait(2*time.Second),
-		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
-			slog.Warn("NATS disconnected", "err", err)
-		}),
-		nats.ReconnectHandler(func(_ *nats.Conn) {
-			slog.Info("NATS reconnected")
-		}),
-	)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /config", a.handleConfig)
+	mux.HandleFunc("GET /ping", a.handlePing)
+	mux.HandleFunc("GET /health", a.handleHealth)
+
+	a.server = &http.Server{
+		Handler:      mux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	ln, err := net.Listen("tcp", a.listenAddr)
 	if err != nil {
-		return fmt.Errorf("connect to NATS at %s: %w", a.natsURL, err)
-	}
-	a.nc = nc
-
-	// Subscribe to config updates
-	configSub, err := nc.Subscribe(ConfigTopic(a.lbID), a.handleConfig)
-	if err != nil {
-		nc.Close()
-		return fmt.Errorf("subscribe to config topic: %w", err)
+		return fmt.Errorf("listen on %s: %w", a.listenAddr, err)
 	}
 
-	// Subscribe to health pings (request/reply)
-	pingSub, err := nc.Subscribe(PingTopic(a.lbID), a.handlePing)
-	if err != nil {
-		nc.Close()
-		return fmt.Errorf("subscribe to ping topic: %w", err)
-	}
-
-	a.mu.Lock()
-	a.subs = append(a.subs, configSub, pingSub)
-	a.mu.Unlock()
-
-	// Flush to ensure the server has processed our subscriptions before
-	// we report that the agent is started and ready.
-	if err := nc.Flush(); err != nil {
-		nc.Close()
-		return fmt.Errorf("flush subscriptions: %w", err)
-	}
-
-	// Start background goroutine that periodically queries HAProxy stats
-	// and publishes target health to the control plane via NATS.
-	go a.reportHealth()
-
-	slog.Info("Agent started",
-		"lbId", a.lbID,
-		"configTopic", ConfigTopic(a.lbID),
-		"pingTopic", PingTopic(a.lbID),
-		"healthTopic", HealthTopic(a.lbID),
-	)
-	return nil
+	slog.Info("Agent started", "lbId", a.lbID, "listen", ln.Addr().String())
+	return a.server.Serve(ln)
 }
 
-// Stop gracefully shuts down the agent.
+// Stop gracefully shuts down the HTTP server.
 func (a *Agent) Stop() {
-	close(a.stop)
-
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	for _, sub := range a.subs {
-		if err := sub.Unsubscribe(); err != nil {
-			slog.Warn("Failed to unsubscribe", "err", err)
-		}
+	if a.server == nil {
+		return
 	}
-	a.subs = nil
-
-	if a.nc != nil {
-		a.nc.Close()
-		a.nc = nil
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.server.Shutdown(ctx); err != nil {
+		slog.Warn("HTTP server shutdown error", "err", err)
 	}
-
 	slog.Info("Agent stopped", "lbId", a.lbID)
 }
 
-// handleConfig processes a config update message. The message payload is the
-// raw HAProxy config text. It writes the config to disk and reloads HAProxy.
-func (a *Agent) handleConfig(msg *nats.Msg) {
-	config := string(msg.Data)
+// handleConfig processes a config push. The request body is the raw HAProxy
+// config text. It writes the config to disk and reloads HAProxy.
+func (a *Agent) handleConfig(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxConfigSize))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "read body: " + err.Error()})
+		return
+	}
+
+	config := string(body)
 	if config == "" {
-		slog.Warn("Received empty config, ignoring")
-		a.respond(msg, "error", "empty config")
+		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "empty config"})
 		return
 	}
 
 	slog.Info("Received config update", "lbId", a.lbID, "size", len(config))
 
-	// Write config to disk
 	if err := WriteConfig(a.configPath, config); err != nil {
 		slog.Error("Failed to write config", "path", a.configPath, "err", err)
-		a.respond(msg, "error", err.Error())
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": err.Error()})
 		return
 	}
 
-	// Reload HAProxy
 	if err := a.reloadFn(a.configPath, a.pidPath); err != nil {
 		slog.Error("Failed to reload HAProxy", "err", err)
-		a.respond(msg, "error", err.Error())
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": err.Error()})
 		return
 	}
 
 	slog.Info("Config applied and HAProxy reloaded", "lbId", a.lbID)
-	a.respond(msg, "ok", "")
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // PingResponse is the JSON response to a health ping.
@@ -203,44 +142,40 @@ type PingResponse struct {
 	ConfigAge int64  `json:"config_age_seconds"`
 }
 
-// handlePing responds to health check requests.
-func (a *Agent) handlePing(msg *nats.Msg) {
-	haproxyRunning := isHAProxyRunning(a.pidPath)
-	configAge := configAgeSeconds(a.configPath)
-
+// handlePing responds to health check requests from the daemon.
+func (a *Agent) handlePing(w http.ResponseWriter, _ *http.Request) {
 	resp := PingResponse{
 		Status:    "ok",
 		LBID:      a.lbID,
-		HAProxy:   haproxyRunning,
-		ConfigAge: configAge,
+		HAProxy:   isHAProxyRunning(a.pidPath),
+		ConfigAge: configAgeSeconds(a.configPath),
 	}
-
-	data, err := json.Marshal(resp)
-	if err != nil {
-		slog.Error("Failed to marshal ping response", "err", err)
-		return
-	}
-	if err := msg.Respond(data); err != nil {
-		slog.Warn("Failed to respond to ping", "err", err)
-	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
-// respond sends a JSON reply to a NATS message if it has a reply subject.
-func (a *Agent) respond(msg *nats.Msg, status, errMsg string) {
-	if msg.Reply == "" {
-		return
-	}
-	resp := map[string]string{"status": status}
-	if errMsg != "" {
-		resp["error"] = errMsg
-	}
-	data, err := json.Marshal(resp)
+// handleHealth returns the current HAProxy backend server health by querying
+// the stats socket. The daemon polls this endpoint instead of receiving pushes.
+func (a *Agent) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	servers, err := a.statsFn(a.socketPath)
 	if err != nil {
-		slog.Error("Failed to marshal response", "err", err)
+		slog.Debug("Failed to query HAProxy stats", "err", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "error", "error": err.Error()})
 		return
 	}
-	if err := msg.Respond(data); err != nil {
-		slog.Warn("Failed to respond", "err", err)
+
+	report := HealthReport{
+		LBID:    a.lbID,
+		Servers: servers,
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+// writeJSON marshals v as JSON and writes it to w.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		slog.Error("Failed to write JSON response", "err", err)
 	}
 }
 

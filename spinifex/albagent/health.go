@@ -2,9 +2,7 @@ package albagent
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net"
 	"strings"
 	"time"
@@ -17,63 +15,11 @@ type ServerStatus struct {
 	Status  string `json:"status"` // "UP", "DOWN", "MAINT", etc.
 }
 
-// HealthReport is published to NATS so the ELBv2 service can update target state.
+// HealthReport is returned by the /health endpoint so the ELBv2 service can
+// update target state.
 type HealthReport struct {
 	LBID    string         `json:"lb_id"`
 	Servers []ServerStatus `json:"servers"`
-}
-
-// reportHealth periodically queries the HAProxy stats socket and publishes
-// a health report via NATS. Follows the heartbeat ticker pattern.
-func (a *Agent) reportHealth() {
-	// Wait for HAProxy to start before first check.
-	select {
-	case <-time.After(5 * time.Second):
-	case <-a.stop:
-		return
-	}
-
-	ticker := time.NewTicker(healthReportInterval)
-	defer ticker.Stop()
-
-	for {
-		a.publishHealth()
-
-		select {
-		case <-a.stop:
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
-// publishHealth queries HAProxy and publishes server health to NATS.
-func (a *Agent) publishHealth() {
-	servers, err := a.statsFn(a.socketPath)
-	if err != nil {
-		slog.Debug("Failed to query HAProxy stats", "err", err)
-		return
-	}
-
-	report := HealthReport{
-		LBID:    a.lbID,
-		Servers: servers,
-	}
-
-	data, err := json.Marshal(report)
-	if err != nil {
-		slog.Error("Failed to marshal health report", "err", err)
-		return
-	}
-
-	if a.nc == nil {
-		return
-	}
-	if err := a.nc.Publish(HealthTopic(a.lbID), data); err != nil {
-		slog.Warn("Failed to publish health report", "err", err)
-	} else {
-		slog.Debug("Published health report", "servers", len(servers))
-	}
 }
 
 // queryHAProxyStats connects to the HAProxy stats socket, runs "show stat",
