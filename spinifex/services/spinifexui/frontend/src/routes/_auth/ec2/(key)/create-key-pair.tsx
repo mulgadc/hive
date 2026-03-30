@@ -4,6 +4,10 @@ import { useState } from "react"
 import { useForm } from "react-hook-form"
 
 import { BackLink } from "@/components/back-link"
+import {
+  CliCommandPanel,
+  type CliCommand,
+} from "@/components/cli-command-panel"
 import { ErrorBanner } from "@/components/error-banner"
 import { FormActions } from "@/components/form-actions"
 import { PageHeading } from "@/components/page-heading"
@@ -36,6 +40,7 @@ function CreateKeyPair() {
   const {
     handleSubmit,
     register,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm({
     resolver: zodResolver(createKeyPairSchema),
@@ -80,6 +85,8 @@ function CreateKeyPair() {
           <FieldError errors={[errors.keyName]} />
         </Field>
 
+        <CliCommandPanel commands={buildCreateKeyPairCommands(watch)} />
+
         {/* Actions */}
         <FormActions
           isPending={createMutation.isPending}
@@ -100,4 +107,22 @@ function CreateKeyPair() {
       )}
     </>
   )
+}
+
+function buildCreateKeyPairCommands(
+  watch: (name?: string) => unknown,
+): CliCommand[] {
+  const rawKeyName = watch("keyName")
+  const keyName = typeof rawKeyName === "string" ? rawKeyName : ""
+
+  return [
+    {
+      label: "Create Key Pair",
+      parts: [
+        { type: "bin", value: "AWS_PROFILE=spinifex aws ec2 create-key-pair" },
+        { type: "flag", value: " --key-name" },
+        { type: "value", value: ` ${keyName || "<KeyName>"}` },
+      ],
+    },
+  ]
 }

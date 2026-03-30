@@ -44,6 +44,8 @@ type GatewayConfig struct {
 	Region         string     // Region this gateway is running in
 	AZ             string     // Availability zone this gateway is running in
 	IAMService     handlers_iam.IAMService
+	Version        string // Build-time version string (set from cmd.Version)
+	Commit         string // Build-time commit hash (set from cmd.Commit)
 }
 
 var supportedServices = map[string]bool{
@@ -51,6 +53,7 @@ var supportedServices = map[string]bool{
 	"iam":                  true,
 	"account":              true,
 	"elasticloadbalancing": true,
+	"spinifex":             true,
 }
 
 type ErrorResponse struct {
@@ -192,6 +195,8 @@ func (gw *GatewayConfig) Request(w http.ResponseWriter, r *http.Request) {
 		err = gw.IAM_Request(w, r)
 	case "elasticloadbalancing":
 		err = gw.ELBv2_Request(w, r)
+	case "spinifex":
+		err = gw.Spinifex_Request(w, r)
 	default:
 		err = errors.New(awserrors.ErrorUnsupportedOperation)
 	}

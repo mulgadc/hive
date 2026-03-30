@@ -3,6 +3,10 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useForm } from "react-hook-form"
 
 import { BackLink } from "@/components/back-link"
+import {
+  CliCommandPanel,
+  type CliCommand,
+} from "@/components/cli-command-panel"
 import { ErrorBanner } from "@/components/error-banner"
 import { FormActions } from "@/components/form-actions"
 import { PageHeading } from "@/components/page-heading"
@@ -29,6 +33,7 @@ function CreateBucket() {
   const {
     handleSubmit,
     register,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm({
     resolver: zodResolver(createBucketSchema),
@@ -67,6 +72,8 @@ function CreateBucket() {
           <FieldError errors={[errors.bucketName]} />
         </Field>
 
+        <CliCommandPanel commands={buildCreateBucketCommands(watch)} />
+
         <FormActions
           isPending={createMutation.isPending}
           isSubmitting={isSubmitting}
@@ -77,4 +84,22 @@ function CreateBucket() {
       </form>
     </>
   )
+}
+
+function buildCreateBucketCommands(
+  watch: (name?: string) => unknown,
+): CliCommand[] {
+  const rawBucket = watch("bucketName")
+  const bucket = typeof rawBucket === "string" ? rawBucket : ""
+
+  return [
+    {
+      label: "Create Bucket",
+      parts: [
+        { type: "bin", value: "AWS_PROFILE=spinifex aws s3api create-bucket" },
+        { type: "flag", value: " --bucket" },
+        { type: "value", value: ` ${bucket || "<BucketName>"}` },
+      ],
+    },
+  ]
 }

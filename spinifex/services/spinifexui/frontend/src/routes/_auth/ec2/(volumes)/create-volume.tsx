@@ -4,6 +4,10 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { Controller, useForm } from "react-hook-form"
 
 import { BackLink } from "@/components/back-link"
+import {
+  CliCommandPanel,
+  type CliCommand,
+} from "@/components/cli-command-panel"
 import { ErrorBanner } from "@/components/error-banner"
 import { FormActions } from "@/components/form-actions"
 import { PageHeading } from "@/components/page-heading"
@@ -46,6 +50,7 @@ function CreateVolume() {
     control,
     handleSubmit,
     register,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<CreateVolumeFormData>({
     resolver: zodResolver(createVolumeSchema),
@@ -121,6 +126,8 @@ function CreateVolume() {
           <FieldError errors={[errors.availabilityZone]} />
         </Field>
 
+        <CliCommandPanel commands={buildCreateVolumeCommands(watch)} />
+
         <FormActions
           isPending={createMutation.isPending}
           isSubmitting={isSubmitting}
@@ -131,4 +138,26 @@ function CreateVolume() {
       </form>
     </>
   )
+}
+
+function buildCreateVolumeCommands(
+  watch: (name?: string) => unknown,
+): CliCommand[] {
+  const rawSize = watch("size")
+  const size = typeof rawSize === "number" ? rawSize : 0
+  const rawAz = watch("availabilityZone")
+  const az = typeof rawAz === "string" ? rawAz : ""
+
+  return [
+    {
+      label: "Create Volume",
+      parts: [
+        { type: "bin", value: "AWS_PROFILE=spinifex aws ec2 create-volume" },
+        { type: "flag", value: " \\\n  --size" },
+        { type: "value", value: ` ${size || 1}` },
+        { type: "flag", value: " \\\n  --availability-zone" },
+        { type: "value", value: ` ${az || "<AvailabilityZone>"}` },
+      ],
+    },
+  ]
 }

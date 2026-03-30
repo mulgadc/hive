@@ -8,6 +8,10 @@ import {
 import { Controller, useForm } from "react-hook-form"
 
 import { BackLink } from "@/components/back-link"
+import {
+  CliCommandPanel,
+  type CliCommand,
+} from "@/components/cli-command-panel"
 import { ErrorBanner } from "@/components/error-banner"
 import { FormActions } from "@/components/form-actions"
 import { PageHeading } from "@/components/page-heading"
@@ -54,6 +58,7 @@ function CreateSnapshot() {
     control,
     handleSubmit,
     register,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<CreateSnapshotFormData>({
     resolver: zodResolver(createSnapshotSchema),
@@ -128,6 +133,8 @@ function CreateSnapshot() {
           />
         </Field>
 
+        <CliCommandPanel commands={buildCreateSnapshotCommands(watch)} />
+
         <FormActions
           isPending={createMutation.isPending}
           isSubmitting={isSubmitting}
@@ -138,4 +145,31 @@ function CreateSnapshot() {
       </form>
     </>
   )
+}
+
+function buildCreateSnapshotCommands(
+  watch: (name?: string) => unknown,
+): CliCommand[] {
+  const rawVolumeId = watch("volumeId")
+  const volumeId = typeof rawVolumeId === "string" ? rawVolumeId : ""
+  const rawDescription = watch("description")
+  const description = typeof rawDescription === "string" ? rawDescription : ""
+
+  const parts = [
+    {
+      type: "bin" as const,
+      value: "AWS_PROFILE=spinifex aws ec2 create-snapshot",
+    },
+    { type: "flag" as const, value: " \\\n  --volume-id" },
+    { type: "value" as const, value: ` ${volumeId || "<VolumeId>"}` },
+  ]
+
+  if (description) {
+    parts.push(
+      { type: "flag" as const, value: " \\\n  --description" },
+      { type: "value" as const, value: ` "${description}"` },
+    )
+  }
+
+  return [{ label: "Create Snapshot", parts }]
 }

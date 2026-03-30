@@ -3,6 +3,10 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useForm } from "react-hook-form"
 
 import { BackLink } from "@/components/back-link"
+import {
+  CliCommandPanel,
+  type CliCommand,
+} from "@/components/cli-command-panel"
 import { ErrorBanner } from "@/components/error-banner"
 import { FormActions } from "@/components/form-actions"
 import { PageHeading } from "@/components/page-heading"
@@ -30,6 +34,7 @@ function ImportKeyPair() {
   const {
     handleSubmit,
     register,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm({
     resolver: zodResolver(importKeyPairSchema),
@@ -89,6 +94,8 @@ function ImportKeyPair() {
           <FieldError errors={[errors.publicKeyMaterial]} />
         </Field>
 
+        <CliCommandPanel commands={buildImportKeyPairCommands(watch)} />
+
         {/* Actions */}
         <FormActions
           isPending={importMutation.isPending}
@@ -100,4 +107,24 @@ function ImportKeyPair() {
       </form>
     </>
   )
+}
+
+function buildImportKeyPairCommands(
+  watch: (name?: string) => unknown,
+): CliCommand[] {
+  const rawKeyName = watch("keyName")
+  const keyName = typeof rawKeyName === "string" ? rawKeyName : ""
+
+  return [
+    {
+      label: "Import Key Pair",
+      parts: [
+        { type: "bin", value: "AWS_PROFILE=spinifex aws ec2 import-key-pair" },
+        { type: "flag", value: " \\\n  --key-name" },
+        { type: "value", value: ` ${keyName || "<KeyName>"}` },
+        { type: "flag", value: " \\\n  --public-key-material" },
+        { type: "value", value: " fileb://path/to/key.pub" },
+      ],
+    },
+  ]
 }
