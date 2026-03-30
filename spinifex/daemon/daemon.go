@@ -692,11 +692,15 @@ func (d *Daemon) Start() error {
 		}
 		d.elbv2Service.SetNATSURL("nats://" + natsHost)
 	}
-	// Discover system AMI for ALB VMs. Prefer an image with "alb" in the
-	// name (pre-baked Alpine with HAProxy), fall back to first available.
+	// Set up lazy system AMI discovery for ALB VMs. The image may not exist
+	// at daemon startup (imported later), so we resolve it at request time.
 	if d.imageService != nil {
-		imagesOut, imgErr := d.imageService.DescribeImages(&ec2.DescribeImagesInput{}, utils.GlobalAccountID)
-		if imgErr == nil && len(imagesOut.Images) > 0 {
+		imgSvc := d.imageService
+		d.elbv2Service.SetSystemAMIFunc(func() string {
+			imagesOut, imgErr := imgSvc.DescribeImages(&ec2.DescribeImagesInput{}, utils.GlobalAccountID)
+			if imgErr != nil || len(imagesOut.Images) == 0 {
+				return ""
+			}
 			systemAMI := aws.StringValue(imagesOut.Images[0].ImageId)
 			for _, img := range imagesOut.Images {
 				name := aws.StringValue(img.Name)
@@ -705,9 +709,9 @@ func (d *Daemon) Start() error {
 					break
 				}
 			}
-			d.elbv2Service.SetSystemAMI(systemAMI)
-			slog.Info("System AMI set for ALB VMs", "amiId", systemAMI)
-		}
+			slog.Info("System AMI resolved for ALB VMs", "amiId", systemAMI)
+			return systemAMI
+		})
 	}
 
 	// Ensure default VPC exists for system and admin accounts

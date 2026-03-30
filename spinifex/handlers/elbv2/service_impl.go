@@ -53,8 +53,9 @@ type ELBv2ServiceImpl struct {
 	instanceLauncher SystemInstanceLauncher           // nil-safe: system VM ops skipped when nil
 	nodeID           string
 	region           string
-	systemAMI        string // AMI ID for system VMs (ALB VMs), set by daemon
-	natsURL          string // NATS URL for ALB VM cloud-init, set by daemon
+	systemAMI        string        // AMI ID for system VMs (ALB VMs); resolved lazily via systemAMIFunc
+	systemAMIFunc    func() string // returns the current system AMI ID (queries image store)
+	natsURL          string        // NATS URL for ALB VM cloud-init, set by daemon
 	ctx              context.Context
 	cancel           context.CancelFunc
 	hc               *healthChecker
@@ -118,9 +119,22 @@ func (s *ELBv2ServiceImpl) SetInstanceLauncher(launcher SystemInstanceLauncher) 
 	s.instanceLauncher = launcher
 }
 
-// SetSystemAMI sets the AMI ID used for system-managed VMs (ALB VMs).
-func (s *ELBv2ServiceImpl) SetSystemAMI(amiID string) {
-	s.systemAMI = amiID
+// SetSystemAMIFunc sets a function that resolves the current system AMI ID.
+// This is called at request time so the AMI is discovered even if imported
+// after the daemon starts.
+func (s *ELBv2ServiceImpl) SetSystemAMIFunc(fn func() string) {
+	s.systemAMIFunc = fn
+}
+
+// getSystemAMI returns the system AMI ID, resolving it lazily if needed.
+func (s *ELBv2ServiceImpl) getSystemAMI() string {
+	if s.systemAMI != "" {
+		return s.systemAMI
+	}
+	if s.systemAMIFunc != nil {
+		s.systemAMI = s.systemAMIFunc()
+	}
+	return s.systemAMI
 }
 
 // SetNATSURL sets the NATS URL that ALB VMs use to connect back to the cluster.
@@ -436,7 +450,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 	// Launch ALB VM with the first ENI (when instance launcher is available)
 	var albInstanceID string
 	var hostPorts map[int]int
-	if s.instanceLauncher != nil && s.systemAMI != "" && len(eniIDs) > 0 && len(subnets) > 0 {
+	if s.instanceLauncher != nil && s.getSystemAMI() != "" && len(eniIDs) > 0 && len(subnets) > 0 {
 		// Resolve the first ENI's details for the VM
 		eniIP := ""
 		eniMAC := ""
@@ -453,7 +467,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		userData := albVMUserData(lbID, s.natsURL)
 		out, launchErr := s.instanceLauncher.LaunchSystemInstance(&SystemInstanceInput{
 			InstanceType: "t3.nano",
-			ImageID:      s.systemAMI,
+			ImageID:      s.getSystemAMI(),
 			SubnetID:     subnets[0],
 			UserData:     userData,
 			ENIID:        eniIDs[0],
@@ -480,7 +494,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 	// ALB starts in provisioning until the agent inside the VM connects and
 	// responds to a ping. If no VM is expected (no launcher/AMI), set active.
 	state := StateActive
-	if s.instanceLauncher != nil && s.systemAMI != "" {
+	if s.instanceLauncher != nil && s.getSystemAMI() != "" {
 		state = StateProvisioning
 	}
 

@@ -686,7 +686,7 @@ func TestCreateLoadBalancer_InternetFacingScheme_PassesSchemeToLauncher(t *testi
 		},
 	}
 	svc.SetInstanceLauncher(mock)
-	svc.SetSystemAMI("ami-alb-test")
+	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
 
 	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("public-alb"),
@@ -711,7 +711,7 @@ func TestCreateLoadBalancer_InternalScheme_PassesSchemeToLauncher(t *testing.T) 
 		},
 	}
 	svc.SetInstanceLauncher(mock)
-	svc.SetSystemAMI("ami-alb-test")
+	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
 
 	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("private-alb"),

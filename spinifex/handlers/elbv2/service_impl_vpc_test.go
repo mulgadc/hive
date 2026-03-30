@@ -241,7 +241,7 @@ func TestCreateLoadBalancer_InternetFacing_AllocatesPublicIP(t *testing.T) {
 		},
 	}
 	svc.SetInstanceLauncher(mock)
-	svc.SetSystemAMI("ami-alb-test")
+	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
 
 	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("inet-alb"),
@@ -277,7 +277,7 @@ func TestCreateLoadBalancer_Internal_NoPublicIP(t *testing.T) {
 		},
 	}
 	svc.SetInstanceLauncher(mock)
-	svc.SetSystemAMI("ami-alb-test")
+	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
 
 	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("internal-only"),
@@ -313,7 +313,7 @@ func TestDeleteLoadBalancer_TerminatesVM_WithPublicIP(t *testing.T) {
 		},
 	}
 	svc.SetInstanceLauncher(mock)
-	svc.SetSystemAMI("ami-alb-test")
+	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
 
 	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("del-pub-alb"),
@@ -358,7 +358,7 @@ func TestDescribeLoadBalancers_InternetFacing_IncludesPublicIP(t *testing.T) {
 		},
 	}
 	svc.SetInstanceLauncher(mock)
-	svc.SetSystemAMI("ami-alb-test")
+	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
 
 	_, err = svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("desc-pub-alb"),
@@ -393,7 +393,7 @@ func TestDescribeLoadBalancers_Internal_NoPublicIP(t *testing.T) {
 		},
 	}
 	svc.SetInstanceLauncher(mock)
-	svc.SetSystemAMI("ami-alb-test")
+	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
 
 	_, err = svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("desc-int-alb"),
