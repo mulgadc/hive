@@ -71,7 +71,7 @@ peer_ssh() {
 
 # Track created resources for cleanup
 VPC_ID=""
-SUBNET_ID=""
+SUBNET_IDS=()
 IGW_ID=""
 APP_INSTANCE_IDS=()
 TG_ARN=""
@@ -133,10 +133,12 @@ cleanup() {
         $AWS_EC2 delete-internet-gateway --internet-gateway-id "$IGW_ID" 2>/dev/null || true
     fi
 
-    if [ -n "$SUBNET_ID" ]; then
-        echo "  Deleting subnet..."
-        $AWS_EC2 delete-subnet --subnet-id "$SUBNET_ID" 2>/dev/null || true
-    fi
+    for sid in "${SUBNET_IDS[@]}"; do
+        if [ -n "$sid" ]; then
+            echo "  Deleting subnet $sid..."
+            $AWS_EC2 delete-subnet --subnet-id "$sid" 2>/dev/null || true
+        fi
+    done
 
     if [ -n "$VPC_ID" ]; then
         echo "  Deleting VPC..."
@@ -234,15 +236,39 @@ $AWS_EC2 attach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_
 }
 pass "internet gateway: $IGW_ID (attached)"
 
-echo "Creating public subnet..."
-SUBNET_OUTPUT=$($AWS_EC2 create-subnet --vpc-id "$VPC_ID" --cidr-block 10.202.1.0/24 --output json) || {
-    fail "create-subnet"
+# Internet-facing ALBs require 2+ subnets in different AZs (pool mode).
+# Discover available AZs and create one subnet per AZ.
+echo "Discovering availability zones..."
+AZ_OUTPUT=$($AWS_EC2 describe-availability-zones --output json)
+AZ1=$(echo "$AZ_OUTPUT" | jq -r '.AvailabilityZones[0].ZoneName')
+AZ2=$(echo "$AZ_OUTPUT" | jq -r '.AvailabilityZones[1].ZoneName')
+if [ -z "$AZ1" ] || [ -z "$AZ2" ] || [ "$AZ1" == "null" ] || [ "$AZ2" == "null" ]; then
+    echo "ERROR: Need at least 2 availability zones, found: $AZ1, $AZ2"
+    exit 1
+fi
+pass "availability zones: $AZ1, $AZ2"
+
+echo "Creating subnet 1 in $AZ1..."
+SUBNET1_OUTPUT=$($AWS_EC2 create-subnet --vpc-id "$VPC_ID" --cidr-block 10.202.1.0/24 \
+    --availability-zone "$AZ1" --output json) || {
+    fail "create-subnet-1"
     exit 1
 }
-SUBNET_ID=$(echo "$SUBNET_OUTPUT" | jq -r '.Subnet.SubnetId')
-pass "create-subnet: $SUBNET_ID"
+SUBNET1_ID=$(echo "$SUBNET1_OUTPUT" | jq -r '.Subnet.SubnetId')
+SUBNET_IDS+=("$SUBNET1_ID")
+pass "create-subnet-1: $SUBNET1_ID ($AZ1)"
 
-pass "public subnet configured (IGW attached)"
+echo "Creating subnet 2 in $AZ2..."
+SUBNET2_OUTPUT=$($AWS_EC2 create-subnet --vpc-id "$VPC_ID" --cidr-block 10.202.2.0/24 \
+    --availability-zone "$AZ2" --output json) || {
+    fail "create-subnet-2"
+    exit 1
+}
+SUBNET2_ID=$(echo "$SUBNET2_OUTPUT" | jq -r '.Subnet.SubnetId')
+SUBNET_IDS+=("$SUBNET2_ID")
+pass "create-subnet-2: $SUBNET2_ID ($AZ2)"
+
+pass "public subnets configured (IGW attached)"
 
 # ==========================================
 # Phase 2: Launch App Instances
@@ -267,7 +293,7 @@ for i in 1 2; do
         --image-id "$AMI_ID" \
         --instance-type "$INSTANCE_TYPE" \
         --key-name dp-inet-test-key \
-        --subnet-id "$SUBNET_ID" \
+        --subnet-id "$SUBNET1_ID" \
         --user-data "$APP_USER_DATA" \
         --output json 2>&1) || {
         fail "run-instances (app $i)"
@@ -366,7 +392,7 @@ echo "Creating internet-facing ALB..."
 LB_OUTPUT=$($AWS_ELBV2 create-load-balancer \
     --name dp-inet-alb \
     --scheme internet-facing \
-    --subnets "$SUBNET_ID" \
+    --subnets "$SUBNET1_ID" "$SUBNET2_ID" \
     --output json 2>&1) || {
     fail "create-load-balancer"
     echo "  Output: $LB_OUTPUT"
