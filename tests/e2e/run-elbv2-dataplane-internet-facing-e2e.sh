@@ -419,8 +419,11 @@ else
     echo "  ENI output:"
     echo "$ENI_OUTPUT" | jq .
     echo ""
-    echo "  Debug: daemon logs (LaunchSystemInstance + IPAM):"
-    grep -E 'LaunchSystemInstance|externalIPAM|IPAM|UpdateENI|public.?[Ii][Pp]|AllocateIP' ~/spinifex/logs/*.log 2>/dev/null | tail -30 || echo "  (no matching log lines)"
+    echo "  Debug: LOCAL daemon logs (LaunchSystemInstance + IPAM + ALB):"
+    grep -E 'LaunchSystemInstance|IPAM|UpdateENI|public.?[Ii][Pp]|AllocateIP|System AMI|systemAMI|instanceLauncher|CreateLoadBalancer' ~/spinifex/logs/*.log 2>/dev/null | tail -30 || echo "  (no matching log lines on local node)"
+    echo ""
+    echo "  Debug: PEER daemon logs ($PEER_NODE_IP):"
+    peer_ssh "$PEER_NODE_IP" "grep -E 'LaunchSystemInstance|IPAM|UpdateENI|public.?[Ii][Pp]|AllocateIP|System AMI|CreateLoadBalancer' ~/spinifex/logs/*.log 2>/dev/null | tail -30" 2>/dev/null || echo "  (no matching log lines on peer)"
     echo ""
     echo "  Debug: external_mode from config:"
     grep -E 'external_mode|external_pool' ~/spinifex/config/spinifex.toml 2>/dev/null || echo "  (not found)"
