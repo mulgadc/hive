@@ -472,6 +472,7 @@ func (d *Daemon) subscribeAll() error {
 		{"spinifex.nodes.discover", d.handleNodeDiscover, ""},
 		{"spinifex.node.status", d.handleNodeStatus, ""},
 		{"spinifex.node.vms", d.handleNodeVMs, ""},
+		{"spinifex.storage.config", d.handleStorageConfig, ""},
 		// Account creation → create default VPC for new account
 		{"iam.account.created", d.handleAccountCreated, "spinifex-workers"},
 		// Coordinated cluster shutdown phases (fan-out, no queue group)

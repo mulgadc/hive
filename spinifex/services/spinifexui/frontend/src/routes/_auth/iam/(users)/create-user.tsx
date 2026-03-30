@@ -3,6 +3,10 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useForm } from "react-hook-form"
 
 import { BackLink } from "@/components/back-link"
+import {
+  CliCommandPanel,
+  type CliCommand,
+} from "@/components/cli-command-panel"
 import { ErrorBanner } from "@/components/error-banner"
 import { FormActions } from "@/components/form-actions"
 import { PageHeading } from "@/components/page-heading"
@@ -25,6 +29,7 @@ function CreateUser() {
   const {
     handleSubmit,
     register,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm({
     resolver: zodResolver(createUserSchema),
@@ -66,6 +71,8 @@ function CreateUser() {
           <FieldError errors={[errors.path]} />
         </Field>
 
+        <CliCommandPanel commands={buildCreateUserCommands(watch)} />
+
         <FormActions
           isPending={createMutation.isPending}
           isSubmitting={isSubmitting}
@@ -76,4 +83,28 @@ function CreateUser() {
       </form>
     </>
   )
+}
+
+function buildCreateUserCommands(
+  watch: (name?: string) => unknown,
+): CliCommand[] {
+  const rawUserName = watch("userName")
+  const userName = typeof rawUserName === "string" ? rawUserName : ""
+  const rawPath = watch("path")
+  const path = typeof rawPath === "string" ? rawPath : ""
+
+  const parts = [
+    { type: "bin" as const, value: "AWS_PROFILE=spinifex aws iam create-user" },
+    { type: "flag" as const, value: " --user-name" },
+    { type: "value" as const, value: ` ${userName || "<UserName>"}` },
+  ]
+
+  if (path && path !== "/") {
+    parts.push(
+      { type: "flag" as const, value: " --path" },
+      { type: "value" as const, value: ` ${path}` },
+    )
+  }
+
+  return [{ label: "Create User", parts }]
 }

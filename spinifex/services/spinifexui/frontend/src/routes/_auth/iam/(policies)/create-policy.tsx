@@ -3,6 +3,10 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useForm } from "react-hook-form"
 
 import { BackLink } from "@/components/back-link"
+import {
+  CliCommandPanel,
+  type CliCommand,
+} from "@/components/cli-command-panel"
 import { ErrorBanner } from "@/components/error-banner"
 import { FormActions } from "@/components/form-actions"
 import { PageHeading } from "@/components/page-heading"
@@ -41,6 +45,7 @@ function CreatePolicy() {
   const {
     handleSubmit,
     register,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm({
     resolver: zodResolver(createPolicySchema),
@@ -106,6 +111,8 @@ function CreatePolicy() {
           <FieldError errors={[errors.policyDocument]} />
         </Field>
 
+        <CliCommandPanel commands={buildCreatePolicyCommands(watch)} />
+
         <FormActions
           isPending={createMutation.isPending}
           isSubmitting={isSubmitting}
@@ -116,4 +123,38 @@ function CreatePolicy() {
       </form>
     </>
   )
+}
+
+function buildCreatePolicyCommands(
+  watch: (name?: string) => unknown,
+): CliCommand[] {
+  const rawName = watch("policyName")
+  const name = typeof rawName === "string" ? rawName : ""
+  const rawDesc = watch("description")
+  const desc = typeof rawDesc === "string" ? rawDesc : ""
+  const rawDoc = watch("policyDocument")
+  const doc = typeof rawDoc === "string" ? rawDoc : ""
+
+  const parts = [
+    {
+      type: "bin" as const,
+      value: "AWS_PROFILE=spinifex aws iam create-policy",
+    },
+    { type: "flag" as const, value: " \\\n  --policy-name" },
+    { type: "value" as const, value: ` ${name || "<PolicyName>"}` },
+  ]
+
+  if (desc) {
+    parts.push(
+      { type: "flag" as const, value: " \\\n  --description" },
+      { type: "value" as const, value: ` "${desc}"` },
+    )
+  }
+
+  parts.push(
+    { type: "flag" as const, value: " \\\n  --policy-document" },
+    { type: "value" as const, value: ` '${doc || "<PolicyDocument>"}'` },
+  )
+
+  return [{ label: "Create Policy", parts }]
 }

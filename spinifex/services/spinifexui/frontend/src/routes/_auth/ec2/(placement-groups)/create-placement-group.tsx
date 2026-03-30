@@ -3,6 +3,10 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { Controller, useForm } from "react-hook-form"
 
 import { BackLink } from "@/components/back-link"
+import {
+  CliCommandPanel,
+  type CliCommand,
+} from "@/components/cli-command-panel"
 import { ErrorBanner } from "@/components/error-banner"
 import { FormActions } from "@/components/form-actions"
 import { PageHeading } from "@/components/page-heading"
@@ -42,6 +46,7 @@ function CreatePlacementGroup() {
     control,
     handleSubmit,
     register,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<CreatePlacementGroupFormData>({
     resolver: zodResolver(createPlacementGroupSchema),
@@ -117,6 +122,8 @@ function CreatePlacementGroup() {
           <FieldError errors={[errors.strategy]} />
         </Field>
 
+        <CliCommandPanel commands={buildCreatePlacementGroupCommands(watch)} />
+
         <FormActions
           isPending={createMutation.isPending}
           isSubmitting={isSubmitting}
@@ -127,4 +134,29 @@ function CreatePlacementGroup() {
       </form>
     </>
   )
+}
+
+function buildCreatePlacementGroupCommands(
+  watch: (name?: string) => unknown,
+): CliCommand[] {
+  const rawName = watch("groupName")
+  const name = typeof rawName === "string" ? rawName : ""
+  const rawStrategy = watch("strategy")
+  const strategy = typeof rawStrategy === "string" ? rawStrategy : ""
+
+  return [
+    {
+      label: "Create Placement Group",
+      parts: [
+        {
+          type: "bin",
+          value: "AWS_PROFILE=spinifex aws ec2 create-placement-group",
+        },
+        { type: "flag", value: " \\\n  --group-name" },
+        { type: "value", value: ` ${name || "<GroupName>"}` },
+        { type: "flag", value: " \\\n  --strategy" },
+        { type: "value", value: ` ${strategy || "spread"}` },
+      ],
+    },
+  ]
 }

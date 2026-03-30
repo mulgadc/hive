@@ -5,6 +5,7 @@ import ReactDOM from "react-dom/client"
 
 import { ThemeProvider } from "@/components/theme-provider"
 import { SidebarProvider } from "@/components/ui/sidebar"
+import { AdminProvider } from "@/contexts/admin-context"
 
 import { routeTree } from "./routeTree.gen"
 
@@ -42,9 +43,11 @@ if (rootElement && !rootElement.innerHTML) {
     <StrictMode>
       <ThemeProvider defaultTheme="system" storageKey="spinifex-ui-theme">
         <QueryClientProvider client={queryClient}>
-          <SidebarProvider>
-            <RouterProvider router={router} />
-          </SidebarProvider>
+          <AdminProvider>
+            <SidebarProvider>
+              <RouterProvider router={router} />
+            </SidebarProvider>
+          </AdminProvider>
         </QueryClientProvider>
       </ThemeProvider>
     </StrictMode>,

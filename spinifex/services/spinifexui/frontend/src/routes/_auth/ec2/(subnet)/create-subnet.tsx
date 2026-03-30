@@ -4,6 +4,10 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { Controller, useForm } from "react-hook-form"
 
 import { BackLink } from "@/components/back-link"
+import {
+  CliCommandPanel,
+  type CliCommand,
+} from "@/components/cli-command-panel"
 import { ErrorBanner } from "@/components/error-banner"
 import { FormActions } from "@/components/form-actions"
 import { PageHeading } from "@/components/page-heading"
@@ -54,6 +58,7 @@ function CreateSubnet() {
     control,
     handleSubmit,
     register,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<CreateSubnetFormData>({
     resolver: zodResolver(createSubnetSchema),
@@ -170,6 +175,8 @@ function CreateSubnet() {
           />
         </Field>
 
+        <CliCommandPanel commands={buildCreateSubnetCommands(watch)} />
+
         <FormActions
           isPending={createMutation.isPending}
           isSubmitting={isSubmitting}
@@ -180,4 +187,35 @@ function CreateSubnet() {
       </form>
     </>
   )
+}
+
+function buildCreateSubnetCommands(
+  watch: (name?: string) => unknown,
+): CliCommand[] {
+  const rawVpcId = watch("vpcId")
+  const vpcId = typeof rawVpcId === "string" ? rawVpcId : ""
+  const rawCidr = watch("cidrBlock")
+  const cidr = typeof rawCidr === "string" ? rawCidr : ""
+  const rawAz = watch("availabilityZone")
+  const az = typeof rawAz === "string" ? rawAz : ""
+
+  const parts = [
+    {
+      type: "bin" as const,
+      value: "AWS_PROFILE=spinifex aws ec2 create-subnet",
+    },
+    { type: "flag" as const, value: " \\\n  --vpc-id" },
+    { type: "value" as const, value: ` ${vpcId || "<VpcId>"}` },
+    { type: "flag" as const, value: " \\\n  --cidr-block" },
+    { type: "value" as const, value: ` ${cidr || "<CidrBlock>"}` },
+  ]
+
+  if (az) {
+    parts.push(
+      { type: "flag" as const, value: " \\\n  --availability-zone" },
+      { type: "value" as const, value: ` ${az}` },
+    )
+  }
+
+  return [{ label: "Create Subnet", parts }]
 }

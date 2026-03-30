@@ -4,6 +4,10 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { Controller, useForm } from "react-hook-form"
 
 import { BackLink } from "@/components/back-link"
+import {
+  CliCommandPanel,
+  type CliCommand,
+} from "@/components/cli-command-panel"
 import { ErrorBanner } from "@/components/error-banner"
 import { FormActions } from "@/components/form-actions"
 import { PageHeading } from "@/components/page-heading"
@@ -51,6 +55,7 @@ function CreateSecurityGroup() {
     control,
     handleSubmit,
     register,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<CreateSecurityGroupFormData>({
     resolver: zodResolver(createSecurityGroupSchema),
@@ -153,6 +158,8 @@ function CreateSecurityGroup() {
           <FieldError errors={[errors.vpcId]} />
         </Field>
 
+        <CliCommandPanel commands={buildCreateSecurityGroupCommands(watch)} />
+
         <FormActions
           isPending={createMutation.isPending}
           isSubmitting={isSubmitting}
@@ -163,4 +170,35 @@ function CreateSecurityGroup() {
       </form>
     </>
   )
+}
+
+function buildCreateSecurityGroupCommands(
+  watch: (name?: string) => unknown,
+): CliCommand[] {
+  const rawName = watch("groupName")
+  const name = typeof rawName === "string" ? rawName : ""
+  const rawDesc = watch("description")
+  const desc = typeof rawDesc === "string" ? rawDesc : ""
+  const rawVpcId = watch("vpcId")
+  const vpcId = typeof rawVpcId === "string" ? rawVpcId : ""
+
+  const parts = [
+    {
+      type: "bin" as const,
+      value: "AWS_PROFILE=spinifex aws ec2 create-security-group",
+    },
+    { type: "flag" as const, value: " \\\n  --group-name" },
+    { type: "value" as const, value: ` ${name || "<GroupName>"}` },
+    { type: "flag" as const, value: " \\\n  --description" },
+    { type: "value" as const, value: ` "${desc || "<Description>"}"` },
+  ]
+
+  if (vpcId) {
+    parts.push(
+      { type: "flag" as const, value: " \\\n  --vpc-id" },
+      { type: "value" as const, value: ` ${vpcId}` },
+    )
+  }
+
+  return [{ label: "Create Security Group", parts }]
 }

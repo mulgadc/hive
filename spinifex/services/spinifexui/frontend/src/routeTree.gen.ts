@@ -12,6 +12,8 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthRouteRouteImport } from './routes/_auth/route'
 import { Route as AuthIndexRouteImport } from './routes/_auth/index'
+import { Route as AuthNodesRouteImport } from './routes/_auth/nodes'
+import { Route as AuthS3ServiceMetricsRouteImport } from './routes/_auth/s3/service-metrics'
 import { Route as AuthS3LsIndexRouteImport } from './routes/_auth/s3/ls/index'
 import { Route as AuthS3bucketsCreateBucketRouteImport } from './routes/_auth/s3/(buckets)/create-bucket'
 import { Route as AuthIamusersCreateUserRouteImport } from './routes/_auth/iam/(users)/create-user'
@@ -64,6 +66,16 @@ const AuthRouteRoute = AuthRouteRouteImport.update({
 const AuthIndexRoute = AuthIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => AuthRouteRoute,
+} as any)
+const AuthNodesRoute = AuthNodesRouteImport.update({
+  id: '/nodes',
+  path: '/nodes',
+  getParentRoute: () => AuthRouteRoute,
+} as any)
+const AuthS3ServiceMetricsRoute = AuthS3ServiceMetricsRouteImport.update({
+  id: '/s3/service-metrics',
+  path: '/s3/service-metrics',
   getParentRoute: () => AuthRouteRoute,
 } as any)
 const AuthS3LsIndexRoute = AuthS3LsIndexRouteImport.update({
@@ -296,6 +308,8 @@ const AuthEc2imagesDescribeImagesIdRoute =
 export interface FileRoutesByFullPath {
   '/': typeof AuthIndexRoute
   '/login': typeof LoginRoute
+  '/nodes': typeof AuthNodesRoute
+  '/s3/service-metrics': typeof AuthS3ServiceMetricsRoute
   '/s3/ls/$bucket': typeof AuthS3LsBucketRouteRouteWithChildren
   '/ec2/run-instances': typeof AuthEc2instancesRunInstancesRoute
   '/ec2/create-key-pair': typeof AuthEc2keyCreateKeyPairRoute
@@ -338,7 +352,9 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
+  '/nodes': typeof AuthNodesRoute
   '/': typeof AuthIndexRoute
+  '/s3/service-metrics': typeof AuthS3ServiceMetricsRoute
   '/ec2/run-instances': typeof AuthEc2instancesRunInstancesRoute
   '/ec2/create-key-pair': typeof AuthEc2keyCreateKeyPairRoute
   '/ec2/import-key-pair': typeof AuthEc2keyImportKeyPairRoute
@@ -382,7 +398,9 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_auth': typeof AuthRouteRouteWithChildren
   '/login': typeof LoginRoute
+  '/_auth/nodes': typeof AuthNodesRoute
   '/_auth/': typeof AuthIndexRoute
+  '/_auth/s3/service-metrics': typeof AuthS3ServiceMetricsRoute
   '/_auth/s3/ls/$bucket': typeof AuthS3LsBucketRouteRouteWithChildren
   '/_auth/ec2/(instances)/run-instances': typeof AuthEc2instancesRunInstancesRoute
   '/_auth/ec2/(key)/create-key-pair': typeof AuthEc2keyCreateKeyPairRoute
@@ -428,6 +446,8 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/login'
+    | '/nodes'
+    | '/s3/service-metrics'
     | '/s3/ls/$bucket'
     | '/ec2/run-instances'
     | '/ec2/create-key-pair'
@@ -470,7 +490,9 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
+    | '/nodes'
     | '/'
+    | '/s3/service-metrics'
     | '/ec2/run-instances'
     | '/ec2/create-key-pair'
     | '/ec2/import-key-pair'
@@ -513,7 +535,9 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_auth'
     | '/login'
+    | '/_auth/nodes'
     | '/_auth/'
+    | '/_auth/s3/service-metrics'
     | '/_auth/s3/ls/$bucket'
     | '/_auth/ec2/(instances)/run-instances'
     | '/_auth/ec2/(key)/create-key-pair'
@@ -581,6 +605,20 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof AuthIndexRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/_auth/nodes': {
+      id: '/_auth/nodes'
+      path: '/nodes'
+      fullPath: '/nodes'
+      preLoaderRoute: typeof AuthNodesRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/_auth/s3/service-metrics': {
+      id: '/_auth/s3/service-metrics'
+      path: '/s3/service-metrics'
+      fullPath: '/s3/service-metrics'
+      preLoaderRoute: typeof AuthS3ServiceMetricsRouteImport
       parentRoute: typeof AuthRouteRoute
     }
     '/_auth/s3/ls/': {
@@ -873,7 +911,9 @@ const AuthS3LsBucketRouteRouteWithChildren =
   AuthS3LsBucketRouteRoute._addFileChildren(AuthS3LsBucketRouteRouteChildren)
 
 interface AuthRouteRouteChildren {
+  AuthNodesRoute: typeof AuthNodesRoute
   AuthIndexRoute: typeof AuthIndexRoute
+  AuthS3ServiceMetricsRoute: typeof AuthS3ServiceMetricsRoute
   AuthS3LsBucketRouteRoute: typeof AuthS3LsBucketRouteRouteWithChildren
   AuthEc2instancesRunInstancesRoute: typeof AuthEc2instancesRunInstancesRoute
   AuthEc2keyCreateKeyPairRoute: typeof AuthEc2keyCreateKeyPairRoute
@@ -914,7 +954,9 @@ interface AuthRouteRouteChildren {
 }
 
 const AuthRouteRouteChildren: AuthRouteRouteChildren = {
+  AuthNodesRoute: AuthNodesRoute,
   AuthIndexRoute: AuthIndexRoute,
+  AuthS3ServiceMetricsRoute: AuthS3ServiceMetricsRoute,
   AuthS3LsBucketRouteRoute: AuthS3LsBucketRouteRouteWithChildren,
   AuthEc2instancesRunInstancesRoute: AuthEc2instancesRunInstancesRoute,
   AuthEc2keyCreateKeyPairRoute: AuthEc2keyCreateKeyPairRoute,

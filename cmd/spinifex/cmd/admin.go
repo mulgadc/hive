@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -236,6 +237,7 @@ func init() {
 	adminInitCmd.Flags().String("predastore-nodes", "", "Comma-separated IPs for multi-node Predastore cluster (e.g., 10.11.12.1,10.11.12.2,10.11.12.3). Requires >= 3 nodes.")
 	adminInitCmd.Flags().String("formation-timeout", "10m", "Timeout for cluster formation (e.g., 5m, 30s)")
 	adminInitCmd.Flags().String("cluster-name", "spinifex", "NATS cluster name")
+	adminInitCmd.Flags().Bool("no-telemetry", false, "Disable telemetry metrics sent during init (default: enabled)")
 	adminInitCmd.Flags().StringSlice("services", nil, "Services this node runs (default: all). Valid: nats,predastore,viperblock,daemon,awsgw,ui")
 
 	// External networking flags
@@ -259,6 +261,7 @@ func init() {
 	adminJoinCmd.Flags().String("cluster-bind", "", "IP address to bind NATS cluster services to (e.g., 10.11.12.1 for multi-node)")
 	adminJoinCmd.Flags().String("cluster-routes", "", "NATS cluster hosts for routing specify multiple with comma (e.g., 10.11.12.1:4248,10.11.12.2:4248 for multi-node)")
 	adminJoinCmd.Flags().StringSlice("services", nil, "Services this node runs (default: all)")
+	adminJoinCmd.Flags().Bool("no-telemetry", false, "Disable telemetry metrics sent during join (default: enabled)")
 	adminJoinCmd.MarkFlagRequired("node")
 	adminJoinCmd.MarkFlagRequired("host")
 
@@ -576,6 +579,31 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	externalPrefixLen, _ := cmd.Flags().GetInt("external-prefix-len")
 	gatewayIP, _ := cmd.Flags().GetString("gateway-ip")
 	noExternal, _ := cmd.Flags().GetBool("no-external")
+
+	// Fire telemetry in background (completes during init work, waited at end)
+	noTelemetry, _ := cmd.Flags().GetBool("no-telemetry")
+	if os.Getenv("SPX_NO_TELEMETRY") == "1" {
+		noTelemetry = true
+	}
+	var telemetryWg sync.WaitGroup
+	defer telemetryWg.Wait()
+	if !noTelemetry {
+		telemetryWg.Go(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			admin.SendTelemetry(ctx, admin.TelemetryPayload{
+				MachineID:    admin.ReadMachineID(),
+				Event:        "init",
+				Region:       region,
+				AZ:           az,
+				Node:         node,
+				Nodes:        nodes,
+				BindIP:       bindIP,
+				Version:      Version,
+				ExternalMode: externalMode,
+			})
+		})
+	}
 
 	// Auto-detect network topology
 	var poolStart, poolEnd string
@@ -1382,6 +1410,30 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	}
 
 	fmt.Printf("✅ Cluster formation complete! (%d nodes)\n\n", statusResp.Expected)
+
+	// Fire telemetry after formation (now we know the cluster topology)
+	noTelemetry, _ := cmd.Flags().GetBool("no-telemetry")
+	if os.Getenv("SPX_NO_TELEMETRY") == "1" {
+		noTelemetry = true
+	}
+	var telemetryWg sync.WaitGroup
+	defer telemetryWg.Wait()
+	if !noTelemetry {
+		telemetryWg.Go(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			admin.SendTelemetry(ctx, admin.TelemetryPayload{
+				MachineID: admin.ReadMachineID(),
+				Event:     "join",
+				Region:    region,
+				AZ:        az,
+				Node:      node,
+				Nodes:     statusResp.Expected,
+				BindIP:    bindIP,
+				Version:   Version,
+			})
+		})
+	}
 
 	// Extract credentials and CA from formation status
 	creds := statusResp.Credentials

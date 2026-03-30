@@ -4,6 +4,11 @@ import { useState } from "react"
 import { Controller, useForm } from "react-hook-form"
 
 import { BackLink } from "@/components/back-link"
+import {
+  CliCommandPanel,
+  type CliCommand,
+  type CommandPart,
+} from "@/components/cli-command-panel"
 import { ErrorBanner } from "@/components/error-banner"
 import { FormActions } from "@/components/form-actions"
 import { PageHeading } from "@/components/page-heading"
@@ -330,6 +335,10 @@ function CreateVpc() {
             </>
           )}
 
+          <CliCommandPanel
+            commands={buildCreateVpcCommands(watch, subnetCidrs)}
+          />
+
           <FormActions
             isPending={isPending}
             isSubmitting={isSubmitting}
@@ -352,4 +361,172 @@ function CreateVpc() {
       </div>
     </>
   )
+}
+
+function buildCreateVpcCommands(
+  watch: (name?: string) => unknown,
+  subnetCidrs: {
+    publicSubnets: { cidr: string }[]
+    privateSubnets: { cidr: string }[]
+  },
+): CliCommand[] {
+  const rawMode = watch("mode")
+  const mode = typeof rawMode === "string" ? rawMode : ""
+  const rawCidr = watch("cidrBlock")
+  const cidr = typeof rawCidr === "string" ? rawCidr : ""
+  const rawTenancy = watch("tenancy")
+  const tenancy = typeof rawTenancy === "string" ? rawTenancy : ""
+
+  if (mode === "vpc-only") {
+    const parts: CommandPart[] = [
+      { type: "bin", value: "AWS_PROFILE=spinifex aws ec2 create-vpc" },
+      { type: "flag", value: " \\\n  --cidr-block" },
+      { type: "value", value: ` ${cidr || "10.0.0.0/16"}` },
+    ]
+    if (tenancy && tenancy !== "default") {
+      parts.push(
+        { type: "flag", value: " \\\n  --instance-tenancy" },
+        { type: "value", value: ` ${tenancy}` },
+      )
+    }
+    return [{ label: "Create VPC", parts }]
+  }
+
+  // VPC-and-more: pasteable bash script
+  const commands: CliCommand[] = []
+  const allSubnets = [
+    ...subnetCidrs.publicSubnets.map((s, i) => ({
+      ...s,
+      name: `PUBLIC_SUBNET_${i + 1}`,
+    })),
+    ...subnetCidrs.privateSubnets.map((s, i) => ({
+      ...s,
+      name: `PRIVATE_SUBNET_${i + 1}`,
+    })),
+  ]
+
+  // Comment header
+  const commentParts: CommandPart[] = [
+    {
+      type: "comment",
+      value: "# Create VPC with subnets, internet gateway, and routing\n\n",
+    },
+  ]
+
+  // Create VPC
+  commands.push({
+    label: "Create VPC",
+    parts: [
+      ...commentParts,
+      { type: "variable", value: "VPC_ID=" },
+      { type: "bin", value: "$(AWS_PROFILE=spinifex aws ec2 create-vpc" },
+      { type: "flag", value: " \\\n  --cidr-block" },
+      { type: "value", value: ` ${cidr || "10.0.0.0/16"}` },
+      { type: "flag", value: " \\\n  --query" },
+      { type: "value", value: " 'Vpc.VpcId'" },
+      { type: "flag", value: " --output" },
+      { type: "value", value: " text)" },
+    ],
+  })
+
+  // Create subnets
+  for (const subnet of allSubnets) {
+    commands.push({
+      label: `Create Subnet (${subnet.name})`,
+      parts: [
+        { type: "variable", value: `${subnet.name}_ID=` },
+        { type: "bin", value: "$(AWS_PROFILE=spinifex aws ec2 create-subnet" },
+        { type: "flag", value: " \\\n  --vpc-id" },
+        { type: "variable", value: ' "$VPC_ID"' },
+        { type: "flag", value: " \\\n  --cidr-block" },
+        { type: "value", value: ` ${subnet.cidr}` },
+        { type: "flag", value: " \\\n  --query" },
+        { type: "value", value: " 'Subnet.SubnetId'" },
+        { type: "flag", value: " --output" },
+        { type: "value", value: " text)" },
+      ],
+    })
+  }
+
+  // Internet gateway (only if public subnets)
+  if (subnetCidrs.publicSubnets.length > 0) {
+    commands.push({
+      label: "Create Internet Gateway",
+      parts: [
+        { type: "variable", value: "IGW_ID=" },
+        {
+          type: "bin",
+          value: "$(AWS_PROFILE=spinifex aws ec2 create-internet-gateway",
+        },
+        { type: "flag", value: " \\\n  --query" },
+        { type: "value", value: " 'InternetGateway.InternetGatewayId'" },
+        { type: "flag", value: " --output" },
+        { type: "value", value: " text)" },
+      ],
+    })
+
+    commands.push({
+      label: "Attach Internet Gateway",
+      parts: [
+        {
+          type: "bin",
+          value: "AWS_PROFILE=spinifex aws ec2 attach-internet-gateway",
+        },
+        { type: "flag", value: " \\\n  --internet-gateway-id" },
+        { type: "variable", value: ' "$IGW_ID"' },
+        { type: "flag", value: " \\\n  --vpc-id" },
+        { type: "variable", value: ' "$VPC_ID"' },
+      ],
+    })
+
+    // Route table for public subnets
+    commands.push({
+      label: "Create Route Table",
+      parts: [
+        { type: "variable", value: "RT_ID=" },
+        {
+          type: "bin",
+          value: "$(AWS_PROFILE=spinifex aws ec2 create-route-table",
+        },
+        { type: "flag", value: " \\\n  --vpc-id" },
+        { type: "variable", value: ' "$VPC_ID"' },
+        { type: "flag", value: " \\\n  --query" },
+        { type: "value", value: " 'RouteTable.RouteTableId'" },
+        { type: "flag", value: " --output" },
+        { type: "value", value: " text)" },
+      ],
+    })
+
+    commands.push({
+      label: "Create Default Route",
+      parts: [
+        { type: "bin", value: "AWS_PROFILE=spinifex aws ec2 create-route" },
+        { type: "flag", value: " \\\n  --route-table-id" },
+        { type: "variable", value: ' "$RT_ID"' },
+        { type: "flag", value: " \\\n  --destination-cidr-block" },
+        { type: "value", value: " 0.0.0.0/0" },
+        { type: "flag", value: " \\\n  --gateway-id" },
+        { type: "variable", value: ' "$IGW_ID"' },
+      ],
+    })
+
+    // Associate route table with each public subnet
+    for (let i = 0; i < subnetCidrs.publicSubnets.length; i++) {
+      commands.push({
+        label: `Associate Route Table (PUBLIC_SUBNET_${i + 1})`,
+        parts: [
+          {
+            type: "bin",
+            value: "AWS_PROFILE=spinifex aws ec2 associate-route-table",
+          },
+          { type: "flag", value: " \\\n  --route-table-id" },
+          { type: "variable", value: ' "$RT_ID"' },
+          { type: "flag", value: " \\\n  --subnet-id" },
+          { type: "variable", value: ` "$PUBLIC_SUBNET_${i + 1}_ID"` },
+        ],
+      })
+    }
+  }
+
+  return commands
 }

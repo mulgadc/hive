@@ -4,6 +4,10 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { Controller, useForm } from "react-hook-form"
 
 import { BackLink } from "@/components/back-link"
+import {
+  CliCommandPanel,
+  type CliCommand,
+} from "@/components/cli-command-panel"
 import { ErrorBanner } from "@/components/error-banner"
 import { PageHeading } from "@/components/page-heading"
 import { Button } from "@/components/ui/button"
@@ -329,6 +333,8 @@ function CreateInstance() {
           <FieldError errors={[errors.count]} />
         </Field>
 
+        <CliCommandPanel commands={buildRunInstancesCommands(watch)} />
+
         {/* Actions */}
         <div className="flex gap-2">
           <Button
@@ -355,4 +361,57 @@ function CreateInstance() {
       </form>
     </>
   )
+}
+
+function buildRunInstancesCommands(
+  watch: (name?: string) => unknown,
+): CliCommand[] {
+  const rawImageId = watch("imageId")
+  const imageId = typeof rawImageId === "string" ? rawImageId : ""
+  const rawInstanceType = watch("instanceType")
+  const instanceType =
+    typeof rawInstanceType === "string" ? rawInstanceType : ""
+  const rawKeyName = watch("keyName")
+  const keyName = typeof rawKeyName === "string" ? rawKeyName : ""
+  const rawSubnetId = watch("subnetId")
+  const subnetId = typeof rawSubnetId === "string" ? rawSubnetId : ""
+  const rawPlacementGroupName = watch("placementGroupName")
+  const placementGroupName =
+    typeof rawPlacementGroupName === "string" ? rawPlacementGroupName : ""
+  const rawCount = watch("count")
+  const count = typeof rawCount === "number" ? rawCount : 0
+
+  const parts = [
+    {
+      type: "bin" as const,
+      value: "AWS_PROFILE=spinifex aws ec2 run-instances",
+    },
+    { type: "flag" as const, value: " \\\n  --image-id" },
+    { type: "value" as const, value: ` ${imageId || "<ImageId>"}` },
+    { type: "flag" as const, value: " \\\n  --instance-type" },
+    { type: "value" as const, value: ` ${instanceType || "<InstanceType>"}` },
+    { type: "flag" as const, value: " \\\n  --key-name" },
+    { type: "value" as const, value: ` ${keyName || "<KeyName>"}` },
+  ]
+
+  if (subnetId) {
+    parts.push(
+      { type: "flag" as const, value: " \\\n  --subnet-id" },
+      { type: "value" as const, value: ` ${subnetId}` },
+    )
+  }
+
+  if (placementGroupName) {
+    parts.push(
+      { type: "flag" as const, value: " \\\n  --placement" },
+      { type: "value" as const, value: ` GroupName=${placementGroupName}` },
+    )
+  }
+
+  parts.push(
+    { type: "flag" as const, value: " \\\n  --count" },
+    { type: "value" as const, value: ` ${count || 1}` },
+  )
+
+  return [{ label: "Run Instances", parts }]
 }

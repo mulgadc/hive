@@ -1,6 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query"
 import { Link, useLocation, useNavigate } from "@tanstack/react-router"
 import {
+  Activity,
+  BookOpen,
   Camera,
   HardDrive,
   Home,
@@ -33,11 +35,14 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupLabel,
+  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
+  SidebarSeparator,
 } from "@/components/ui/sidebar"
+import { useAdmin } from "@/contexts/admin-context"
 import { clearCredentials } from "@/lib/auth"
 import { clearClients } from "@/lib/awsClient"
 
@@ -47,6 +52,7 @@ export function SidebarLayout() {
   })
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const { isAdmin } = useAdmin()
 
   function handleLogout() {
     clearCredentials()
@@ -57,6 +63,16 @@ export function SidebarLayout() {
 
   return (
     <Sidebar collapsible="icon">
+      <SidebarHeader className="flex flex-row items-center gap-2 px-4 py-3">
+        <img
+          src="/mulga-logo.svg"
+          alt="Mulga"
+          className="size-6 shrink-0 dark:invert"
+        />
+        <span className="truncate text-sm font-semibold group-data-[collapsible=icon]:hidden">
+          Spinifex
+        </span>
+      </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
           <SidebarGroupLabel>General</SidebarGroupLabel>
@@ -72,6 +88,19 @@ export function SidebarLayout() {
                 </SidebarMenuButton>
               </Link>
             </SidebarMenuItem>
+            {isAdmin && (
+              <SidebarMenuItem>
+                <Link to="/nodes">
+                  <SidebarMenuButton
+                    isActive={pathname.startsWith("/nodes")}
+                    tooltip="Nodes"
+                  >
+                    <Server className="size-4" />
+                    <span>Nodes</span>
+                  </SidebarMenuButton>
+                </Link>
+              </SidebarMenuItem>
+            )}
           </SidebarMenu>
         </SidebarGroup>
 
@@ -292,11 +321,44 @@ export function SidebarLayout() {
                 </SidebarMenuButton>
               </Link>
             </SidebarMenuItem>
+            {isAdmin && (
+              <SidebarMenuItem>
+                <Link to="/s3/service-metrics">
+                  <SidebarMenuButton
+                    isActive={pathname.startsWith("/s3/service-metrics")}
+                    tooltip="Service Metrics"
+                  >
+                    <Activity className="size-4" />
+                    <span>Service Metrics</span>
+                  </SidebarMenuButton>
+                </Link>
+              </SidebarMenuItem>
+            )}
           </SidebarMenu>
         </SidebarGroup>
+        {isAdmin && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Documentation</SidebarGroupLabel>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <a
+                  href="https://docs.mulgadc.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <SidebarMenuButton tooltip="Documentation">
+                    <BookOpen className="size-4" />
+                    <span>Docs</span>
+                  </SidebarMenuButton>
+                </a>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroup>
+        )}
       </SidebarContent>
 
       <SidebarFooter>
+        <SidebarSeparator className="mx-0 w-full" />
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton onClick={handleLogout} tooltip="Sign out">

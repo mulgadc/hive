@@ -19,6 +19,20 @@ import (
 
 var serviceName = "awsgw"
 
+// Version and Commit are set by the cmd package before Start() to pass
+// build-time ldflags to the gateway without creating an import cycle.
+var (
+	version = "dev"
+	commit  = "unknown"
+)
+
+// SetBuildInfo sets the build-time version and commit for the gateway.
+// Call before Start().
+func SetBuildInfo(v, c string) {
+	version = v
+	commit = c
+}
+
 type Service struct {
 	Config *config.ClusterConfig
 }
@@ -129,6 +143,8 @@ func launchService(config *config.ClusterConfig) error {
 		Region:         nodeConfig.Region,
 		AZ:             nodeConfig.AZ,
 		IAMService:     iamService,
+		Version:        version,
+		Commit:         commit,
 	}
 
 	handler := gw.SetupRoutes()

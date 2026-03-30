@@ -3060,28 +3060,45 @@ echo "  PASS: Bastion → private instance SSH works (hostname: $PRIV_HOSTNAME)"
         --destination-cidr-block 0.0.0.0/0 --nat-gateway-id "$NAT_GW_ID" > /dev/null
     echo "  Route: 0.0.0.0/0 → $NAT_GW_ID (rtb: $NAT_RTB, assoc: $NAT_RTB_ASSOC)"
 
-    # Verify OVN SNAT rule exists
+    # Verify OVN SNAT rule exists (poll — NATS → vpcd → OVN can take several seconds)
     if [ "$HAS_OVN" = true ]; then
-        sleep 2  # brief wait for NATS event → vpcd → OVN
-        NAT_RULES=$(sudo ovn-nbctl --no-leader-only lr-nat-list "vpc-${DEFAULT_VPC}" 2>/dev/null || echo "")
-        if echo "$NAT_RULES" | grep -q "snat.*${NAT_PUB_IP}"; then
-            echo "  PASS: OVN SNAT rule created for NAT Gateway"
-        else
-            echo "  WARN: OVN SNAT rule not found yet (may need more time)"
+        SNAT_FOUND=false
+        for attempt in $(seq 1 30); do
+            NAT_RULES=$(sudo ovn-nbctl --no-leader-only lr-nat-list "vpc-${DEFAULT_VPC}" 2>/dev/null || echo "")
+            if echo "$NAT_RULES" | grep -q "snat.*${NAT_PUB_IP}"; then
+                SNAT_FOUND=true
+                echo "  PASS: OVN SNAT rule created for NAT Gateway (after ${attempt}s)"
+                break
+            fi
+            sleep 1
+        done
+        if [ "$SNAT_FOUND" = false ]; then
+            echo "  WARN: OVN SNAT rule not found after 30s"
             echo "  NAT rules: $NAT_RULES"
         fi
     fi
 
     # Step 4: Verify private instance CAN now reach internet
+    # OVN needs time to install datapath flows after the SNAT rule is created.
+    # Retry with increasing backoff rather than a fixed sleep.
     echo ""
     echo "Step 4: Verify outbound connectivity via NAT GW"
-    sleep 3  # allow SNAT rule to take effect
-    if $BASTION_SSH "$PRIV_SSH_CMD 'ping -c 3 -W 5 8.8.8.8'" 2>/dev/null; then
-        echo "  PASS: Private instance can reach internet via NAT Gateway"
-    else
-        echo "  FAIL: Private instance cannot reach internet WITH NAT GW"
+    NAT_GW_OK=false
+    for attempt in $(seq 1 10); do
+        if $BASTION_SSH "$PRIV_SSH_CMD 'ping -c 2 -W 3 8.8.8.8'" 2>/dev/null; then
+            NAT_GW_OK=true
+            echo "  PASS: Private instance can reach internet via NAT Gateway (attempt $attempt)"
+            break
+        fi
+        echo "  Attempt $attempt: NAT GW not routing yet, retrying in 5s..."
+        sleep 5
+    done
+    if [ "$NAT_GW_OK" = false ]; then
+        echo "  FAIL: Private instance cannot reach internet WITH NAT GW after 10 attempts"
         echo "  Dumping OVN NAT rules for debugging:"
         sudo ovn-nbctl --no-leader-only lr-nat-list "vpc-${DEFAULT_VPC}" 2>/dev/null || true
+        echo "  OVN routes:"
+        sudo ovn-nbctl --no-leader-only lr-route-list "vpc-${DEFAULT_VPC}" 2>/dev/null || true
         exit 1
     fi
 
@@ -3095,13 +3112,21 @@ echo "  PASS: Bastion → private instance SSH works (hostname: $PRIV_HOSTNAME)"
     aws ec2 release-address --allocation-id "$NAT_ALLOC_ID"
     echo "  NAT GW deleted, route table cleaned up, EIP released"
 
-    sleep 3  # allow SNAT rule removal to propagate
-
-    if $BASTION_SSH "$PRIV_SSH_CMD 'ping -c 1 -W 3 8.8.8.8'" 2>/dev/null; then
+    # Poll for SNAT removal — OVN datapath may cache the old flow briefly
+    SNAT_GONE=false
+    for attempt in $(seq 1 15); do
+        if ! $BASTION_SSH "$PRIV_SSH_CMD 'ping -c 1 -W 3 8.8.8.8'" 2>/dev/null; then
+            SNAT_GONE=true
+            echo "  PASS: Private instance lost internet after NAT GW deletion (after ${attempt}s)"
+            break
+        fi
+        echo "  Attempt $attempt: SNAT still cached, waiting..."
+        sleep 2
+    done
+    if [ "$SNAT_GONE" = false ]; then
         echo "  FAIL: Private instance still has internet after NAT GW deletion"
         exit 1
     fi
-    echo "  PASS: Private instance lost internet after NAT GW deletion"
 
     echo ""
     echo "Phase 8d: NAT Gateway E2E PASSED"
