@@ -1,4 +1,4 @@
-name: Spinifex E2E Tests
+name: ALB Internet-facing E2E Tests
 
 on:
   push:
@@ -78,8 +78,10 @@ jobs:
             NODE_IPS="${NODE_IPS} $(echo "$INVENTORY" | jq -r ".nodes[$i].wan_ip")"
           done
 
+          NODE2_IP=$(echo "$INVENTORY" | jq -r '.nodes[1].wan_ip')
+
           ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${NODE1_IP} \
-            "cd ~/Development/mulga/spinifex && ./tests/e2e/run-elbv2-dataplane-internet-facing-e2e.sh ${NODE_IPS} && ./tests/e2e/run-cert-e2e.sh --multinode ${NODE_IPS}"
+            "cd ~/Development/mulga/spinifex && ENDPOINT=https://${NODE1_IP}:9999 ./tests/e2e/run-elbv2-dataplane-internet-facing-e2e.sh ${NODE2_IP}"
 
       - name: Teardown
         if: always()
