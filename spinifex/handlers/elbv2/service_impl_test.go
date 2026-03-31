@@ -578,7 +578,7 @@ func TestDescribeListeners_AccountIsolation(t *testing.T) {
 
 func TestCreateListener_PushConfig_NoNATS(t *testing.T) {
 	// When NATS conn is nil, CreateListener should still succeed
-	// (pushConfig is a no-op when nc is nil or InstanceID is empty)
+	// (updateStoredConfig is a no-op when InstanceID is empty)
 	svc := setupTestService(t)
 
 	lb, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
@@ -599,7 +599,7 @@ func TestCreateListener_PushConfig_NoNATS(t *testing.T) {
 			{Type: aws.String("forward"), TargetGroupArn: tg.TargetGroups[0].TargetGroupArn},
 		},
 	}, testAccountID)
-	require.NoError(t, err) // No panic, no error — pushConfig skipped gracefully
+	require.NoError(t, err) // No panic, no error — updateStoredConfig skipped gracefully
 }
 
 func TestDeleteLoadBalancer_TerminatesALBVM(t *testing.T) {
@@ -721,4 +721,216 @@ func TestCreateLoadBalancer_InternalScheme_PassesSchemeToLauncher(t *testing.T) 
 
 	require.NoError(t, err)
 	assert.Equal(t, "internal", *out.LoadBalancers[0].Scheme)
+}
+
+// --- ALBAgentHeartbeat tests ---
+
+func TestALBAgentHeartbeat_TransitionsProvisioningToActive(t *testing.T) {
+	svc := setupTestService(t)
+
+	lb := &LoadBalancerRecord{
+		LoadBalancerArn: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/hb-lb/lb-hb1",
+		LoadBalancerID:  "lb-hb1",
+		Name:            "hb-lb",
+		State:           StateProvisioning,
+		InstanceID:      "i-sys-hb1",
+		VPCIP:           "10.0.1.100",
+		AccountID:       testAccountID,
+	}
+	require.NoError(t, svc.store.PutLoadBalancer(lb))
+
+	out, err := svc.ALBAgentHeartbeat(&ALBAgentHeartbeatInput{
+		LBID: aws.String("lb-hb1"),
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Equal(t, StateActive, *out.Status)
+
+	stored, err := svc.store.GetLoadBalancer("lb-hb1")
+	require.NoError(t, err)
+	assert.Equal(t, StateActive, stored.State)
+	assert.False(t, stored.LastHeartbeat.IsZero())
+}
+
+func TestALBAgentHeartbeat_ReturnsConfigHash(t *testing.T) {
+	svc := setupTestService(t)
+
+	lb := &LoadBalancerRecord{
+		LoadBalancerArn: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/hash-lb/lb-hash1",
+		LoadBalancerID:  "lb-hash1",
+		Name:            "hash-lb",
+		State:           StateActive,
+		InstanceID:      "i-sys-hash1",
+		ConfigHash:      "abc123def456",
+		AccountID:       testAccountID,
+	}
+	require.NoError(t, svc.store.PutLoadBalancer(lb))
+
+	out, err := svc.ALBAgentHeartbeat(&ALBAgentHeartbeatInput{
+		LBID: aws.String("lb-hash1"),
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Equal(t, "abc123def456", *out.ConfigHash)
+}
+
+func TestALBAgentHeartbeat_ProcessesHealthReport(t *testing.T) {
+	svc := setupTestService(t)
+
+	lb := &LoadBalancerRecord{
+		LoadBalancerArn: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/health-lb/lb-hr1",
+		LoadBalancerID:  "lb-hr1",
+		Name:            "health-lb",
+		State:           StateActive,
+		InstanceID:      "i-sys-hr1",
+		AccountID:       testAccountID,
+	}
+	require.NoError(t, svc.store.PutLoadBalancer(lb))
+
+	tg := &TargetGroupRecord{
+		TargetGroupArn: "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/health-tg/tg-hr1",
+		TargetGroupID:  "tg-hr1",
+		Port:           80,
+		HealthCheck:    DefaultHealthCheck(),
+		Targets: []Target{
+			{Id: "i-target1", Port: 80, HealthState: TargetHealthInitial, PrivateIP: "10.0.1.20"},
+		},
+		AccountID: testAccountID,
+	}
+	require.NoError(t, svc.store.PutTargetGroup(tg))
+
+	srvName := sanitizeName("srv", "i-target1")
+	_, err := svc.ALBAgentHeartbeat(&ALBAgentHeartbeatInput{
+		LBID: aws.String("lb-hr1"),
+		Servers: []*ALBAgentServerStatus{
+			{Backend: aws.String("bk_tg-hr1"), Server: aws.String(srvName), Status: aws.String("UP")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	stored, err := svc.store.GetTargetGroup("tg-hr1")
+	require.NoError(t, err)
+	assert.Equal(t, TargetHealthHealthy, stored.Targets[0].HealthState)
+}
+
+func TestALBAgentHeartbeat_MissingLBID(t *testing.T) {
+	svc := setupTestService(t)
+
+	_, err := svc.ALBAgentHeartbeat(&ALBAgentHeartbeatInput{}, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestALBAgentHeartbeat_LBNotFound(t *testing.T) {
+	svc := setupTestService(t)
+
+	_, err := svc.ALBAgentHeartbeat(&ALBAgentHeartbeatInput{
+		LBID: aws.String("lb-nonexistent"),
+	}, testAccountID)
+	assert.Error(t, err)
+}
+
+// --- GetALBConfig tests ---
+
+func TestGetALBConfig_ReturnsStoredConfig(t *testing.T) {
+	svc := setupTestService(t)
+
+	lb := &LoadBalancerRecord{
+		LoadBalancerArn: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/cfg-lb/lb-cfg1",
+		LoadBalancerID:  "lb-cfg1",
+		Name:            "cfg-lb",
+		State:           StateActive,
+		InstanceID:      "i-sys-cfg1",
+		ConfigText:      "global\n    log stdout\n",
+		ConfigHash:      "deadbeef",
+		AccountID:       testAccountID,
+	}
+	require.NoError(t, svc.store.PutLoadBalancer(lb))
+
+	out, err := svc.GetALBConfig(&GetALBConfigInput{
+		LBID: aws.String("lb-cfg1"),
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Equal(t, "global\n    log stdout\n", *out.ConfigText)
+	assert.Equal(t, "deadbeef", *out.ConfigHash)
+}
+
+func TestGetALBConfig_MissingLBID(t *testing.T) {
+	svc := setupTestService(t)
+
+	_, err := svc.GetALBConfig(&GetALBConfigInput{}, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestGetALBConfig_LBNotFound(t *testing.T) {
+	svc := setupTestService(t)
+
+	_, err := svc.GetALBConfig(&GetALBConfigInput{
+		LBID: aws.String("lb-missing"),
+	}, testAccountID)
+	assert.Error(t, err)
+}
+
+// --- updateStoredConfig tests ---
+
+func TestUpdateStoredConfig_StoresConfigAndHash(t *testing.T) {
+	svc := setupTestService(t)
+
+	lb := &LoadBalancerRecord{
+		LoadBalancerArn: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/upd-lb/lb-upd1",
+		LoadBalancerID:  "lb-upd1",
+		Name:            "upd-lb",
+		State:           StateActive,
+		InstanceID:      "i-sys-upd1",
+		AccountID:       testAccountID,
+	}
+	require.NoError(t, svc.store.PutLoadBalancer(lb))
+
+	tg := &TargetGroupRecord{
+		TargetGroupArn: "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/upd-tg/tg-upd1",
+		TargetGroupID:  "tg-upd1",
+		Port:           80,
+		HealthCheck:    DefaultHealthCheck(),
+		Targets: []Target{
+			{Id: "i-srv1", Port: 80, HealthState: TargetHealthHealthy, PrivateIP: "10.0.1.30"},
+		},
+		AccountID: testAccountID,
+	}
+	require.NoError(t, svc.store.PutTargetGroup(tg))
+
+	listener := &ListenerRecord{
+		ListenerArn:     "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/app/upd-lb/lb-upd1/lst-upd1",
+		ListenerID:      "lst-upd1",
+		LoadBalancerArn: lb.LoadBalancerArn,
+		Protocol:        ProtocolHTTP,
+		Port:            80,
+		DefaultActions:  []ListenerAction{{Type: ActionTypeForward, TargetGroupArn: tg.TargetGroupArn}},
+		AccountID:       testAccountID,
+	}
+	require.NoError(t, svc.store.PutListener(listener))
+
+	svc.updateStoredConfig(lb)
+
+	stored, err := svc.store.GetLoadBalancer("lb-upd1")
+	require.NoError(t, err)
+	assert.NotEmpty(t, stored.ConfigText)
+	assert.NotEmpty(t, stored.ConfigHash)
+	assert.Len(t, stored.ConfigHash, 64) // SHA256 hex
+}
+
+func TestUpdateStoredConfig_SkipsWhenNoInstance(t *testing.T) {
+	svc := setupTestService(t)
+
+	lb := &LoadBalancerRecord{
+		LoadBalancerArn: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/noinst/lb-noinst",
+		LoadBalancerID:  "lb-noinst",
+		Name:            "noinst-lb",
+		State:           StateActive,
+		AccountID:       testAccountID,
+	}
+	require.NoError(t, svc.store.PutLoadBalancer(lb))
+
+	svc.updateStoredConfig(lb)
+
+	stored, err := svc.store.GetLoadBalancer("lb-noinst")
+	require.NoError(t, err)
+	assert.Empty(t, stored.ConfigText)
+	assert.Empty(t, stored.ConfigHash)
 }

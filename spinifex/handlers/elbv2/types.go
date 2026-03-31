@@ -59,7 +59,10 @@ type LoadBalancerRecord struct {
 	AvailZones      []AvailZoneInfo   `json:"availability_zones"`
 	ENIs            []string          `json:"enis,omitempty"`        // ENI IDs created for this ALB (internal)
 	InstanceID      string            `json:"instance_id,omitempty"` // ALB VM instance ID (system-managed)
-	VPCIP           string            `json:"vpc_ip,omitempty"`      // VPC private IP of the ALB VM (for HTTP agent comms)
+	VPCIP           string            `json:"vpc_ip,omitempty"`      // VPC private IP of the ALB VM
+	ConfigText      string            `json:"config_text,omitempty"` // Pre-computed HAProxy config
+	ConfigHash      string            `json:"config_hash,omitempty"` // SHA256 of ConfigText
+	LastHeartbeat   time.Time         `json:"last_heartbeat"`        // Last agent heartbeat timestamp
 	HostPorts       map[int]int       `json:"host_ports,omitempty"`  // Dev mode: guest port → host port forwarding
 	NodeID          string            `json:"node_id"`               // Daemon node running this ALB
 	IPAddressType   string            `json:"ip_address_type"`       // "ipv4"

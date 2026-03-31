@@ -2,8 +2,6 @@ package handlers_elbv2
 
 import (
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -221,114 +219,9 @@ func TestRemoveTarget(t *testing.T) {
 	assert.False(t, exists)
 }
 
-// --- pollAll / pollOne with httptest ---
-
-func TestPollAll_FetchesFromActiveALBs(t *testing.T) {
-	_, store := setupTestNATS(t)
-
-	// Fake ALB agent HTTP server
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		report := albagent.HealthReport{
-			LBID: "lb-poll1",
-			Servers: []albagent.ServerStatus{
-				{Backend: "bk_tg-poll", Server: sanitizeName("srv", "i-poll1"), Status: "UP"},
-			},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(report)
-	}))
-	defer ts.Close()
-
-	tg := &TargetGroupRecord{
-		TargetGroupArn: "arn:aws:elasticloadbalancing:us-east-1:000:targetgroup/test/tg-poll",
-		TargetGroupID:  "tg-poll",
-		Port:           80,
-		HealthCheck:    DefaultHealthCheck(),
-		Targets: []Target{
-			{Id: "i-poll1", Port: 80, HealthState: TargetHealthInitial, PrivateIP: "10.0.1.50"},
-		},
-	}
-	require.NoError(t, store.PutTargetGroup(tg))
-
-	// Seed an active LB whose VPCIP points to the test server.
-	// We override agentURLFn so pollOne hits the test server instead of a real IP.
-	lb := &LoadBalancerRecord{
-		LoadBalancerArn: "arn:aws:elasticloadbalancing:us-east-1:000:loadbalancer/app/test/lb-poll1",
-		LoadBalancerID:  "lb-poll1",
-		Name:            "test-lb",
-		State:           StateActive,
-		VPCIP:           "127.0.0.1", // placeholder — overridden below
-		InstanceID:      "i-sys-001",
-		AccountID:       "000",
-	}
-	require.NoError(t, store.PutLoadBalancer(lb))
-
-	hc := newHealthChecker(store)
-	// Override the agent URL resolver so it points to our test server
-	hc.agentURLFn = func(_ string) string { return ts.URL }
-
-	hc.pollAll()
-
-	stored, err := store.GetTargetGroup("tg-poll")
-	require.NoError(t, err)
-	assert.Equal(t, TargetHealthHealthy, stored.Targets[0].HealthState)
-}
-
-func TestPollAll_SkipsInactiveLBs(t *testing.T) {
-	_, store := setupTestNATS(t)
-
-	polled := false
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		polled = true
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(albagent.HealthReport{})
-	}))
-	defer ts.Close()
-
-	lb := &LoadBalancerRecord{
-		LoadBalancerArn: "arn:aws:elasticloadbalancing:us-east-1:000:loadbalancer/app/test/lb-skip",
-		LoadBalancerID:  "lb-skip",
-		Name:            "skip-lb",
-		State:           StateProvisioning, // not active — should be skipped
-		VPCIP:           "127.0.0.1",
-		InstanceID:      "i-sys-002",
-		AccountID:       "000",
-	}
-	require.NoError(t, store.PutLoadBalancer(lb))
-
-	hc := newHealthChecker(store)
-	hc.agentURLFn = func(_ string) string { return ts.URL }
-
-	hc.pollAll()
-
-	assert.False(t, polled, "should not poll a provisioning LB")
-}
-
-func TestPollOne_HandlesHTTPError(t *testing.T) {
-	_, store := setupTestNATS(t)
-
-	// Server that returns 503
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer ts.Close()
-
-	hc := newHealthChecker(store)
-	hc.agentURLFn = func(_ string) string { return ts.URL }
-
-	// Should not panic or error — just log and return
-	hc.pollOne("10.0.0.1")
-}
-
 func TestStartStop(t *testing.T) {
 	hc := newHealthChecker(nil)
 	require.NoError(t, hc.start())
+	// stop is a no-op — should not panic
 	hc.stop()
-	// Verify stop channel is closed (second close would panic)
-	select {
-	case <-hc.stopCh:
-		// expected — channel is closed
-	default:
-		t.Error("stopCh should be closed after stop()")
-	}
 }

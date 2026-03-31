@@ -72,7 +72,3 @@ func TestAlbVMUserData_NoCACert(t *testing.T) {
 	ud := svc.albVMUserData("lb-noca")
 	assert.NotContains(t, ud, "ca_certs:")
 }
-
-func TestAgentURL(t *testing.T) {
-	assert.Equal(t, "http://10.0.1.5:8405", agentURL("10.0.1.5"))
-}

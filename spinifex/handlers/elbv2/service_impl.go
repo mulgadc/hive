@@ -1,13 +1,12 @@
 package handlers_elbv2
 
 import (
-	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -66,7 +65,6 @@ type ELBv2ServiceImpl struct {
 	systemAMIFunc          func() string // returns the current system AMI ID (queries image store)
 	systemInstanceType     string        // instance type for system VMs; resolved lazily via systemInstanceTypeFunc
 	systemInstanceTypeFunc func() string // returns the smallest available instance type
-	httpClient             *http.Client  // HTTP client for communicating with ALB agents
 	systemAccessKey        string        // System account access key for ALB agent SigV4 auth
 	systemSecretKey        string        // System account secret key for ALB agent SigV4 auth
 	gatewayURL             string        // AWS gateway URL for ALB agent outbound connections
@@ -100,19 +98,18 @@ func NewELBv2ServiceImplWithNATS(cfg *config.Config, nc *nats.Conn) (*ELBv2Servi
 	}
 
 	return &ELBv2ServiceImpl{
-		config:     cfg,
-		store:      store,
-		nc:         nc,
-		nodeID:     nodeID,
-		region:     region,
-		httpClient: &http.Client{Timeout: 10 * time.Second},
-		ctx:        ctx,
-		cancel:     cancel,
-		hc:         hc,
+		config: cfg,
+		store:  store,
+		nc:     nc,
+		nodeID: nodeID,
+		region: region,
+		ctx:    ctx,
+		cancel: cancel,
+		hc:     hc,
 	}, nil
 }
 
-// Close cancels background goroutines (e.g. waitForAgentReady).
+// Close cancels background goroutines and stops the health checker.
 func (s *ELBv2ServiceImpl) Close() {
 	if s.hc != nil {
 		s.hc.stop()
@@ -181,11 +178,6 @@ func (s *ELBv2ServiceImpl) SetGatewayURL(url string) {
 	s.gatewayURL = url
 }
 
-// agentURL returns the base URL for an ALB agent's HTTP server.
-func agentURL(vpcIP string) string {
-	return "http://" + vpcIP + ":8405"
-}
-
 // resolveENIBindAddr looks up the private IP of the first ENI belonging to the ALB.
 // Returns empty string if VPC service is unavailable or no ENIs exist.
 func (s *ELBv2ServiceImpl) resolveENIBindAddr(lb *LoadBalancerRecord) string {
@@ -207,68 +199,21 @@ func (s *ELBv2ServiceImpl) resolveENIBindAddr(lb *LoadBalancerRecord) string {
 	return ""
 }
 
-// waitForAgentReady polls the ALB agent's HTTP ping endpoint until it responds,
-// then transitions the LB state from provisioning to active. Runs in a
-// background goroutine started by CreateLoadBalancer.
-func (s *ELBv2ServiceImpl) waitForAgentReady(lbArn, lbID, vpcIP string) {
-	pingURL := agentURL(vpcIP) + "/ping"
-
-	for attempt := 1; attempt <= 90; attempt++ { // up to ~5 minutes
-		select {
-		case <-s.ctx.Done():
-			slog.Info("waitForAgentReady cancelled", "lbId", lbID)
-			return
-		default:
-		}
-		resp, err := s.httpClient.Get(pingURL)
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				slog.Info("ALB agent is ready", "lbId", lbID, "attempt", attempt)
-				lb, lbErr := s.store.GetLoadBalancerByArn(lbArn)
-				if lbErr == nil && lb != nil && lb.State == StateProvisioning {
-					lb.State = StateActive
-					if putErr := s.store.PutLoadBalancer(lb); putErr != nil {
-						slog.Error("Failed to update LB state to active", "lbId", lbID, "err", putErr)
-					} else {
-						slog.Info("ALB transitioned to active", "lbId", lbID)
-					}
-					// Push config now that agent is connected — earlier pushConfig
-					// calls during CreateListener may have been lost if the agent
-					// wasn't listening yet.
-					s.pushConfig(lb)
-				}
-				return
-			}
-		}
-		time.Sleep(time.Second)
-	}
-
-	slog.Error("ALB agent did not respond within timeout", "lbId", lbID)
-	lb, lbErr := s.store.GetLoadBalancerByArn(lbArn)
-	if lbErr == nil && lb != nil && lb.State == StateProvisioning {
-		lb.State = StateFailed
-		if putErr := s.store.PutLoadBalancer(lb); putErr != nil {
-			slog.Error("Failed to update LB state to failed", "lbId", lbID, "err", putErr)
-		}
-	}
-}
-
-// pushConfig generates the HAProxy config for an ALB and POSTs it to the ALB
-// agent's HTTP server. Safe to call when instanceLauncher is nil or the LB has
-// no VM/VPC IP.
-func (s *ELBv2ServiceImpl) pushConfig(lb *LoadBalancerRecord) {
-	if lb.InstanceID == "" || lb.VPCIP == "" {
+// updateStoredConfig generates the HAProxy config for an ALB, hashes it, and
+// stores both ConfigText and ConfigHash on the LB record. The agent pulls this
+// on its next heartbeat when it detects a hash change. Safe to call when
+// instanceLauncher is nil or the LB has no VM.
+func (s *ELBv2ServiceImpl) updateStoredConfig(lb *LoadBalancerRecord) {
+	if lb.InstanceID == "" {
 		return
 	}
 
 	listeners, err := s.store.ListListenersByLB(lb.LoadBalancerArn)
 	if err != nil {
-		slog.Error("pushConfig: failed to list listeners", "lbArn", lb.LoadBalancerArn, "err", err)
+		slog.Error("updateStoredConfig: failed to list listeners", "lbArn", lb.LoadBalancerArn, "err", err)
 		return
 	}
 
-	// HAProxy binds to all interfaces (*:port), so no specific bind address needed.
 	bindAddr := s.resolveENIBindAddr(lb)
 
 	// Collect target groups referenced by listeners
@@ -283,55 +228,41 @@ func (s *ELBv2ServiceImpl) pushConfig(lb *LoadBalancerRecord) {
 			}
 			tg, tgErr := s.store.GetTargetGroupByArn(a.TargetGroupArn)
 			if tgErr != nil || tg == nil {
-				slog.Debug("pushConfig: target group not found", "tgArn", a.TargetGroupArn)
+				slog.Debug("updateStoredConfig: target group not found", "tgArn", a.TargetGroupArn)
 				continue
 			}
 			tgByArn[a.TargetGroupArn] = tg
 		}
 	}
 
-	// Generate config
 	configContent, err := GenerateHAProxyConfig(lb, listeners, tgByArn, bindAddr)
 	if err != nil {
-		slog.Error("pushConfig: failed to generate config", "lbId", lb.LoadBalancerID, "err", err)
+		slog.Error("updateStoredConfig: failed to generate config", "lbId", lb.LoadBalancerID, "err", err)
 		return
 	}
 
-	// POST config to the ALB agent's HTTP endpoint.
-	configURL := agentURL(lb.VPCIP) + "/config"
-	resp, err := s.httpClient.Post(configURL, "text/plain", bytes.NewReader([]byte(configContent)))
-	if err != nil {
-		slog.Warn("pushConfig: agent did not respond (may still be booting)",
-			"lbId", lb.LoadBalancerID, "vpcIp", lb.VPCIP, "err", err)
-		return
-	}
-	defer resp.Body.Close()
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(configContent)))
+	lb.ConfigText = configContent
+	lb.ConfigHash = hash
 
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		slog.Warn("pushConfig: agent returned error",
-			"lbId", lb.LoadBalancerID, "status", resp.StatusCode, "body", string(body))
+	if err := s.store.PutLoadBalancer(lb); err != nil {
+		slog.Error("updateStoredConfig: failed to persist LB", "lbId", lb.LoadBalancerID, "err", err)
 		return
 	}
 
-	slog.Info("pushConfig: config applied by ALB agent",
-		"lbId", lb.LoadBalancerID, "vpcIp", lb.VPCIP, "size", len(configContent), "response", string(body))
+	slog.Info("updateStoredConfig: config stored",
+		"lbId", lb.LoadBalancerID, "hash", hash[:12], "size", len(configContent))
 }
 
-// pushConfigForTargetGroup finds all LBs that reference the given target group
-// (via listeners) and pushes updated config to their ALB VMs.
-func (s *ELBv2ServiceImpl) pushConfigForTargetGroup(tgArn, accountID string) {
-	if s.instanceLauncher == nil {
-		return
-	}
-
+// updateStoredConfigForTargetGroup finds all LBs that reference the given target
+// group (via listeners) and updates their stored config.
+func (s *ELBv2ServiceImpl) updateStoredConfigForTargetGroup(tgArn string) {
 	allListeners, err := s.store.ListListeners()
 	if err != nil {
-		slog.Error("pushConfigForTargetGroup: failed to list listeners", "err", err)
+		slog.Error("updateStoredConfigForTargetGroup: failed to list listeners", "err", err)
 		return
 	}
 
-	// Find unique LB ARNs that reference this TG
 	lbArns := make(map[string]bool)
 	for _, l := range allListeners {
 		for _, a := range l.DefaultActions {
@@ -346,8 +277,77 @@ func (s *ELBv2ServiceImpl) pushConfigForTargetGroup(tgArn, accountID string) {
 		if lbErr != nil || lb == nil {
 			continue
 		}
-		s.pushConfig(lb)
+		s.updateStoredConfig(lb)
 	}
+}
+
+// ALBAgentHeartbeat processes a heartbeat from an ALB agent. On first heartbeat,
+// transitions LB from provisioning → active. Always updates LastHeartbeat and
+// processes the health report. Returns the current config hash so the agent
+// knows whether to fetch new config.
+func (s *ELBv2ServiceImpl) ALBAgentHeartbeat(input *ALBAgentHeartbeatInput, accountID string) (*ALBAgentHeartbeatOutput, error) {
+	if input.LBID == nil || *input.LBID == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	lbID := *input.LBID
+	lb, err := s.store.GetLoadBalancer(lbID)
+	if err != nil {
+		slog.Error("ALBAgentHeartbeat: failed to get LB", "lbId", lbID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+	if lb == nil {
+		return nil, errors.New(awserrors.ErrorELBv2LoadBalancerNotFound)
+	}
+
+	// First heartbeat: transition provisioning → active
+	if lb.State == StateProvisioning {
+		lb.State = StateActive
+		slog.Info("ALB transitioned to active via heartbeat", "lbId", lbID)
+	}
+
+	lb.LastHeartbeat = time.Now().UTC()
+
+	if err := s.store.PutLoadBalancer(lb); err != nil {
+		slog.Error("ALBAgentHeartbeat: failed to persist LB", "lbId", lbID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	// Process health report via the existing health checker logic
+	if len(input.Servers) > 0 {
+		report := input.toHealthReport()
+		reportData, marshalErr := json.Marshal(report)
+		if marshalErr == nil {
+			s.hc.handleHealthReport(reportData)
+		}
+	}
+
+	return &ALBAgentHeartbeatOutput{
+		Status:     aws.String(lb.State),
+		ConfigHash: aws.String(lb.ConfigHash),
+	}, nil
+}
+
+// GetALBConfig returns the stored HAProxy config and hash for an ALB.
+func (s *ELBv2ServiceImpl) GetALBConfig(input *GetALBConfigInput, accountID string) (*GetALBConfigOutput, error) {
+	if input.LBID == nil || *input.LBID == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	lbID := *input.LBID
+	lb, err := s.store.GetLoadBalancer(lbID)
+	if err != nil {
+		slog.Error("GetALBConfig: failed to get LB", "lbId", lbID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+	if lb == nil {
+		return nil, errors.New(awserrors.ErrorELBv2LoadBalancerNotFound)
+	}
+
+	return &GetALBConfigOutput{
+		ConfigText: aws.String(lb.ConfigText),
+		ConfigHash: aws.String(lb.ConfigHash),
+	}, nil
 }
 
 // buildLBArn constructs an ALB ARN from components.
@@ -580,10 +580,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	// Start background goroutine to wait for ALB agent ping, then transition to active.
-	if record.State == StateProvisioning && record.InstanceID != "" && record.VPCIP != "" {
-		go s.waitForAgentReady(lbArn, lbID, record.VPCIP)
-	}
+	// Agent heartbeat will transition provisioning → active on first contact.
 
 	slog.Info("CreateLoadBalancer completed", "name", name, "lbArn", lbArn, "enis", len(eniIDs), "state", state, "accountID", accountID)
 
@@ -939,7 +936,7 @@ func (s *ELBv2ServiceImpl) RegisterTargets(input *elbv2.RegisterTargetsInput, ac
 	}
 
 	// Reload HAProxy for any LBs that reference this target group
-	s.pushConfigForTargetGroup(tg.TargetGroupArn, accountID)
+	s.updateStoredConfigForTargetGroup(tg.TargetGroupArn)
 
 	slog.Info("RegisterTargets completed", "tgArn", *input.TargetGroupArn, "targetsAdded", len(input.Targets), "accountID", accountID)
 
@@ -990,7 +987,7 @@ func (s *ELBv2ServiceImpl) DeregisterTargets(input *elbv2.DeregisterTargetsInput
 	}
 
 	// Reload HAProxy for any LBs that reference this target group
-	s.pushConfigForTargetGroup(tg.TargetGroupArn, accountID)
+	s.updateStoredConfigForTargetGroup(tg.TargetGroupArn)
 
 	slog.Info("DeregisterTargets completed", "tgArn", *input.TargetGroupArn, "targetsRemoved", len(input.Targets), "accountID", accountID)
 
@@ -1116,7 +1113,7 @@ func (s *ELBv2ServiceImpl) CreateListener(input *elbv2.CreateListenerInput, acco
 	}
 
 	// Start or reload HAProxy now that a listener exists
-	s.pushConfig(lb)
+	s.updateStoredConfig(lb)
 
 	slog.Info("CreateListener completed", "listenerArn", listenerArn, "lbArn", lb.LoadBalancerArn, "port", port, "accountID", accountID)
 
@@ -1147,7 +1144,7 @@ func (s *ELBv2ServiceImpl) DeleteListener(input *elbv2.DeleteListenerInput, acco
 	// Reload or stop HAProxy after listener removal
 	lb, lbErr := s.store.GetLoadBalancerByArn(listener.LoadBalancerArn)
 	if lbErr == nil && lb != nil {
-		s.pushConfig(lb)
+		s.updateStoredConfig(lb)
 	}
 
 	slog.Info("DeleteListener completed", "listenerArn", *input.ListenerArn, "accountID", accountID)

@@ -20,6 +20,8 @@ func TestELBv2ActionsMap_AllActionsRegistered(t *testing.T) {
 		"CreateListener",
 		"DeleteListener",
 		"DescribeListeners",
+		"ALBAgentHeartbeat",
+		"GetALBConfig",
 	}
 
 	for _, action := range expectedActions {

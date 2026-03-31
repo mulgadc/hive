@@ -3,32 +3,24 @@ package handlers_elbv2
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
 	"sync"
-	"time"
 
 	"github.com/mulgadc/spinifex/spinifex/albagent"
 )
 
-const healthPollInterval = 10 * time.Second
-
-// healthChecker polls ALB agents over HTTP for target health reports. Each
-// active ALB VM exposes GET /health which returns HAProxy backend server
-// status. This checker maps those statuses back to registered targets and
+// healthChecker processes target health reports from ALB agents. Reports arrive
+// via ALBAgentHeartbeat (the agent pushes health data on each heartbeat). This
+// checker maps HAProxy backend server statuses back to registered targets and
 // updates HealthState in the store.
 //
 // This mirrors the AWS model where the ALB itself health-checks the targets,
 // rather than the control plane probing them directly.
 type healthChecker struct {
-	store      *Store
-	httpClient *http.Client
-	agentURLFn func(vpcIP string) string // for testing: override agent URL resolution
+	store *Store
 
 	mu       sync.Mutex
 	counters map[string]*targetCounter // key: "tgID:targetId:port"
-	stopCh   chan struct{}
 }
 
 // targetCounter tracks consecutive pass/fail counts for threshold logic.
@@ -39,76 +31,19 @@ type targetCounter struct {
 
 func newHealthChecker(store *Store) *healthChecker {
 	return &healthChecker{
-		store:      store,
-		httpClient: &http.Client{Timeout: 5 * time.Second},
-		agentURLFn: agentURL,
-		counters:   make(map[string]*targetCounter),
-		stopCh:     make(chan struct{}),
+		store:    store,
+		counters: make(map[string]*targetCounter),
 	}
 }
 
-// start launches the background polling goroutine.
+// start is a no-op — health reports are now delivered directly by
+// ALBAgentHeartbeat rather than polled over HTTP.
 func (hc *healthChecker) start() error {
-	go hc.pollLoop()
 	return nil
 }
 
-// pollLoop periodically queries each active ALB's /health endpoint.
-func (hc *healthChecker) pollLoop() {
-	ticker := time.NewTicker(healthPollInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-hc.stopCh:
-			return
-		case <-ticker.C:
-			hc.pollAll()
-		}
-	}
-}
-
-// pollAll fetches health from every active ALB that has a VPC IP.
-func (hc *healthChecker) pollAll() {
-	lbs, err := hc.store.ListLoadBalancers()
-	if err != nil {
-		slog.Debug("healthChecker: failed to list load balancers", "err", err)
-		return
-	}
-
-	for _, lb := range lbs {
-		if lb.State != StateActive || lb.VPCIP == "" {
-			continue
-		}
-		hc.pollOne(lb.VPCIP)
-	}
-}
-
-// pollOne fetches and processes the health report from a single ALB agent.
-func (hc *healthChecker) pollOne(vpcIP string) {
-	resp, err := hc.httpClient.Get(hc.agentURLFn(vpcIP) + "/health")
-	if err != nil {
-		slog.Debug("healthChecker: failed to poll ALB agent", "vpcIp", vpcIP, "err", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return
-	}
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return
-	}
-
-	hc.handleHealthReport(data)
-}
-
-// stop signals the polling goroutine to exit.
-func (hc *healthChecker) stop() {
-	close(hc.stopCh)
-}
+// stop is a no-op — no background goroutine to stop.
+func (hc *healthChecker) stop() {}
 
 // handleHealthReport processes a health report from an alb-agent.
 func (hc *healthChecker) handleHealthReport(data []byte) {
