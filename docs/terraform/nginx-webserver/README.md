@@ -42,7 +42,7 @@ Deploy a complete Nginx web server on Spinifex using Terraform/OpenTofu. This wo
 
 **Prerequisites:**
 
-- Spinifex installed and running (see [Installing Spinifex](/docs/installing-spinifex))
+- Spinifex installed and running (see [Installing Spinifex](/docs/install))
 - A Debian 12 AMI imported (see [Setting Up Your Cluster](/docs/setting-up-your-cluster))
 - OpenTofu or Terraform installed
 - `AWS_PROFILE=spinifex` configured

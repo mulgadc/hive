@@ -54,7 +54,7 @@ Browser ──HTTP──▶ EC2 Instance (Flask webapp, port 80)
 
 **Prerequisites:**
 
-- Spinifex installed and running (see [Installing Spinifex](/docs/installing-spinifex))
+- Spinifex installed and running (see [Installing Spinifex](/docs/install))
 - Predastore running (S3 API on port 8443)
 - A Debian 12 AMI imported (see [Setting Up Your Cluster](/docs/setting-up-your-cluster))
 - OpenTofu or Terraform installed
