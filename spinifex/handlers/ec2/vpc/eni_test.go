@@ -704,3 +704,29 @@ func TestDeleteNetworkInterface_NoPublicIP_NoExternalIPAM(t *testing.T) {
 	}, testAccountID)
 	assert.ErrorContains(t, err, "InvalidNetworkInterfaceID.NotFound")
 }
+
+func TestMatchFilter(t *testing.T) {
+	// Exact match
+	assert.True(t, matchFilter("hello", "hello"))
+	assert.False(t, matchFilter("hello", "world"))
+
+	// Wildcard only
+	assert.True(t, matchFilter("anything", "*"))
+
+	// Trailing wildcard (AWS-style prefix match)
+	assert.True(t, matchFilter("ELB app/my-alb/lb-123", "ELB *"))
+	assert.True(t, matchFilter("ELB something", "ELB *"))
+	assert.False(t, matchFilter("NOT ELB", "ELB *"))
+
+	// Leading wildcard
+	assert.True(t, matchFilter("my-alb-123", "*123"))
+	assert.False(t, matchFilter("my-alb-456", "*123"))
+
+	// Middle wildcard
+	assert.True(t, matchFilter("ELB app/test/lb-1", "ELB */lb-1"))
+	assert.False(t, matchFilter("ELB app/test/lb-2", "ELB */lb-1"))
+
+	// No wildcard = exact
+	assert.True(t, matchFilter("exact", "exact"))
+	assert.False(t, matchFilter("exact!", "exact"))
+}

@@ -311,6 +311,7 @@ func TestDeleteLoadBalancer_TerminatesVM_WithPublicIP(t *testing.T) {
 			PrivateIP:  "10.0.1.7",
 			PublicIP:   "203.0.113.51",
 		},
+		terminateDone: make(chan struct{}),
 	}
 	svc.SetInstanceLauncher(mock)
 	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
@@ -331,12 +332,12 @@ func TestDeleteLoadBalancer_TerminatesVM_WithPublicIP(t *testing.T) {
 	}, testAccountID)
 	require.NoError(t, err)
 
-	// Verify VM termination was requested (async, but call is recorded)
-	// Give the goroutine a moment to execute
-	require.Eventually(t, func() bool {
-		return len(mock.terminateCalls) == 1
-	}, 2*time.Second, 10*time.Millisecond)
+	// Wait for async VM termination goroutine to complete
+	mock.waitTerminate()
+	mock.mu.Lock()
+	assert.Len(t, mock.terminateCalls, 1)
 	assert.Equal(t, "i-alb-del", mock.terminateCalls[0])
+	mock.mu.Unlock()
 
 	// Verify ENIs were cleaned up (public IP release happens inside DeleteNetworkInterface)
 	eniDesc, _ = vpcSvc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{}, testAccountID)
