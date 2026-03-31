@@ -5,6 +5,9 @@ import "time"
 const (
 	KVBucketNatGateways        = "spinifex-vpc-nat-gateways"
 	KVBucketNatGatewaysVersion = 1
+
+	KVBucketDeletedNatGateways        = "spinifex-vpc-deleted-nat-gateways"
+	KVBucketDeletedNatGatewaysVersion = 1
 )
 
 // NatGatewayRecord represents a stored NAT Gateway

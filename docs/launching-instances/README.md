@@ -20,8 +20,16 @@ resources:
 ## Table of Contents
 
 - [Overview](#overview)
-- [Instructions](#instructions)
+- [Launch](#launch)
+- [Manage](#manage)
+- [Reboot](#reboot)
+- [Modify Instance Attributes](#modify-instance-attributes)
+- [Console Output](#console-output)
+- [Instance Types](#instance-types)
+- [SSH (Development)](#ssh-development)
 - [Troubleshooting](#troubleshooting)
+  - [Instance Fails to Boot](#instance-fails-to-boot)
+  - [Cannot SSH Into Instance](#cannot-ssh-into-instance)
 
 ---
 
@@ -34,7 +42,11 @@ Spinifex provides EC2-compatible VM management built on QEMU/KVM. Instances supp
 - `run-instances` — Launch new VMs
 - `describe-instances` — Query state
 - `stop-instances` / `start-instances` — Lifecycle
+- `reboot-instances` — In-place restart (QMP reset)
 - `terminate-instances` — Permanent removal
+- `modify-instance-attribute` — Change type, user data, or source/dest check
+- `get-console-output` — Retrieve serial console log
+- `describe-instance-types` — List available instance types
 
 ## Instructions
 
@@ -44,9 +56,7 @@ Spinifex provides EC2-compatible VM management built on QEMU/KVM. Instances supp
 aws ec2 run-instances \
   --image-id $SPINIFEX_AMI \
   --instance-type t3.small \
-  --key-name spinifex-key \
-  --subnet-id $SPINIFEX_SUBNET \
-  --count 1
+  --key-name spinifex-key
 
 export INSTANCE_ID="i-XXX"
 ```
@@ -58,6 +68,59 @@ aws ec2 describe-instances --instance-ids $INSTANCE_ID
 aws ec2 stop-instances --instance-ids $INSTANCE_ID
 aws ec2 start-instances --instance-ids $INSTANCE_ID
 aws ec2 terminate-instances --instance-ids $INSTANCE_ID
+aws ec2 reboot-instances --instance-ids $INSTANCE_ID
+```
+
+## Modify Instance Attributes
+
+Change instance type, user data, or source/dest check. Instance type and user data require the instance to be **stopped** first.
+
+### Change Instance Type
+
+```bash
+aws ec2 stop-instances --instance-ids $INSTANCE_ID
+
+aws ec2 modify-instance-attribute \
+  --instance-id $INSTANCE_ID \
+  --instance-type t3.medium
+
+aws ec2 start-instances --instance-ids $INSTANCE_ID
+```
+
+## Console Output
+
+Retrieve the serial console log for a running instance. Output is base64-encoded.
+
+```bash
+aws ec2 get-console-output --instance-id $INSTANCE_ID
+```
+
+Decode the output:
+
+```bash
+aws ec2 get-console-output --instance-id $INSTANCE_ID \
+  --query 'Output' --output text | base64 -d
+```
+
+## Instance Types
+
+List instance types available on the current host. The catalog is generated from the host CPU (Intel, AMD, or ARM) and includes burstable (t-family), general purpose (m-family), compute optimised (c-family), and memory optimised (r-family) types.
+
+```bash
+aws ec2 describe-instance-types
+```
+
+Filter to a specific type:
+
+```bash
+aws ec2 describe-instance-types --instance-types t3.micro t3.small
+```
+
+Show capacity (how many of each type can still be launched):
+
+```bash
+aws ec2 describe-instance-types \
+  --filters Name=capacity,Values=true
 ```
 
 ## SSH (Development)

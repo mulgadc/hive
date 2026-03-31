@@ -78,7 +78,7 @@ sudo /usr/local/share/spinifex/setup-ovn.sh --management --macvlan --wan-iface=e
 ## Step 3. Initialize
 
 ```bash
-sudo spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
+sudo spx admin init --node node1 --nodes 1
 ```
 
 This auto-detects your network topology, generates configuration and TLS certificates, installs the CA into the system trust store, and configures AWS CLI credentials. Save the admin credentials printed during init — they will not be shown again.
