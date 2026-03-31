@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"strings"
 
@@ -28,6 +29,11 @@ const (
 	TopicDeleteNAT        = "vpc.delete-nat"
 	TopicAddNATGateway    = "vpc.add-nat-gateway"
 	TopicDeleteNATGateway = "vpc.delete-nat-gateway"
+
+	// TopicEnsureServiceRoute ensures a VPC has external connectivity and a
+	// /32 route for a specific service IP. Used by the ALB agent so VMs can
+	// reach the gateway without requiring an IGW on the VPC.
+	TopicEnsureServiceRoute = "vpc.ensure-service-route"
 )
 
 // VPCEvent is published on vpc.create after a VPC is persisted.
@@ -68,6 +74,14 @@ type NATGatewayEvent struct {
 	NatGatewayId string `json:"nat_gateway_id"`
 	PublicIp     string `json:"public_ip"`
 	SubnetCidr   string `json:"subnet_cidr"` // private subnet CIDR for SNAT rule
+}
+
+// ServiceRouteEvent is published on vpc.ensure-service-route to add a /32
+// route for a service IP (e.g. the AWS gateway) on a VPC's logical router.
+// Creates minimal external connectivity if the VPC has no IGW.
+type ServiceRouteEvent struct {
+	VpcId     string `json:"vpc_id"`
+	ServiceIP string `json:"service_ip"` // /32 destination (e.g. "192.168.1.200")
 }
 
 // Bridge mode constants for external connectivity.
@@ -197,6 +211,7 @@ func (h *TopologyHandler) Subscribe(nc *nats.Conn) ([]*nats.Subscription, error)
 		{TopicDeleteNAT, h.handleDeleteNAT, true},
 		{TopicAddNATGateway, h.handleAddNATGateway, true},
 		{TopicDeleteNATGateway, h.handleDeleteNATGateway, true},
+		{TopicEnsureServiceRoute, h.handleEnsureServiceRoute, true},
 		{TopicCreateSG, h.handleCreateSG, true},
 		{TopicDeleteSG, h.handleDeleteSG, true},
 		{TopicUpdateSG, h.handleUpdateSG, true},
@@ -589,7 +604,140 @@ func (h *TopologyHandler) handleDeletePort(msg *nats.Msg) {
 	respond(msg, nil)
 }
 
-// --- Internet Gateway (external connectivity + NAT) ---
+// --- External connectivity (shared by IGW + service routes) ---
+
+// externalConnResult holds the names and pool details resolved by
+// ensureExternalConnectivity so callers can add routes or NAT rules.
+type externalConnResult struct {
+	gwPortName string
+	wanGateway string
+	created    bool // true if new objects were created (false = already existed)
+}
+
+// ensureExternalConnectivity creates the external logical switch, localnet port,
+// gateway router port, and chassis bindings for a VPC — if they don't already
+// exist. Both IGW attach and service-route handlers share this.
+//
+// externalIDs are merged into every OVN object so the caller can tag them with
+// igw_id, service-route, etc.
+func (h *TopologyHandler) ensureExternalConnectivity(ctx context.Context, vpcId string, externalIDs map[string]string) (*externalConnResult, error) {
+	routerName := "vpc-" + vpcId
+	extSwitchName := "ext-" + vpcId
+	extPortName := "ext-port-" + vpcId
+	gwPortName := "gw-" + vpcId
+	switchGWPortName := "gw-port-" + vpcId
+
+	// Idempotent: if external switch already exists, connectivity is in place.
+	if _, err := h.ovn.GetLogicalSwitch(ctx, extSwitchName); err == nil {
+		pool := h.findExternalPool("", "")
+		wanGateway := "169.254.0.2"
+		if pool != nil {
+			wanGateway = pool.Gateway
+		}
+		return &externalConnResult{gwPortName: gwPortName, wanGateway: wanGateway, created: false}, nil
+	}
+
+	// Merge caller-supplied external IDs with base VPC ID
+	ids := map[string]string{"spinifex:vpc_id": vpcId}
+	maps.Copy(ids, externalIDs)
+
+	// 1. Create external logical switch (localnet for physical uplink)
+	extSwitch := &nbdb.LogicalSwitch{
+		Name:        extSwitchName,
+		ExternalIDs: copyIDs(ids, "spinifex:role", "external"),
+	}
+	if err := h.ovn.CreateLogicalSwitch(ctx, extSwitch); err != nil {
+		return nil, fmt.Errorf("create external switch %s: %w", extSwitchName, err)
+	}
+
+	// 2. Create localnet port on external switch (maps to physical network)
+	localnetOpts := map[string]string{"network_name": "external"}
+	if h.isMacvlanMode() {
+		localnetOpts["nat-addresses"] = "router"
+	}
+	localnetPort := &nbdb.LogicalSwitchPort{
+		Name:        extPortName,
+		Type:        "localnet",
+		Addresses:   []string{"unknown"},
+		Options:     localnetOpts,
+		ExternalIDs: ids,
+	}
+	if err := h.ovn.CreateLogicalSwitchPort(ctx, extSwitchName, localnetPort); err != nil {
+		_ = h.ovn.DeleteLogicalSwitch(ctx, extSwitchName)
+		return nil, fmt.Errorf("create localnet port %s: %w", extPortName, err)
+	}
+
+	// Resolve external pool
+	pool := h.findExternalPool("", "")
+	gatewayNetwork := "169.254.0.1/30"
+	wanGateway := "169.254.0.2"
+
+	if pool != nil {
+		gip := pool.GatewayIP
+		if gip == "" {
+			gip = pool.RangeStart
+		}
+		if gip != "" {
+			prefixLen := pool.PrefixLen
+			if prefixLen == 0 {
+				prefixLen = 24
+			}
+			gatewayNetwork = fmt.Sprintf("%s/%d", gip, prefixLen)
+		}
+		wanGateway = pool.Gateway
+	}
+
+	// 3. Create gateway router port
+	gwMAC := generateMAC("gw-" + vpcId)
+	lrp := &nbdb.LogicalRouterPort{
+		Name:        gwPortName,
+		MAC:         gwMAC,
+		Networks:    []string{gatewayNetwork},
+		ExternalIDs: copyIDs(ids, "spinifex:role", "gateway"),
+	}
+	if err := h.ovn.CreateLogicalRouterPort(ctx, routerName, lrp); err != nil {
+		_ = h.ovn.DeleteLogicalSwitch(ctx, extSwitchName)
+		return nil, fmt.Errorf("create gateway router port %s: %w", gwPortName, err)
+	}
+
+	// 4. Create switch port connecting external switch to router
+	switchGWPort := &nbdb.LogicalSwitchPort{
+		Name:        switchGWPortName,
+		Type:        "router",
+		Addresses:   []string{"router"},
+		Options:     map[string]string{"router-port": gwPortName},
+		ExternalIDs: ids,
+	}
+	if err := h.ovn.CreateLogicalSwitchPort(ctx, extSwitchName, switchGWPort); err != nil {
+		_ = h.ovn.DeleteLogicalRouterPort(ctx, routerName, gwPortName)
+		_ = h.ovn.DeleteLogicalSwitch(ctx, extSwitchName)
+		return nil, fmt.Errorf("create switch gateway port %s: %w", switchGWPortName, err)
+	}
+
+	// 5. Schedule gateway chassis for HA
+	if len(h.chassisNames) > 0 {
+		for i, chassis := range h.chassisNames {
+			priority := max(20-(i*5), 1)
+			if err := h.ovn.SetGatewayChassis(ctx, gwPortName, chassis, priority); err != nil {
+				slog.Warn("vpcd: failed to set gateway chassis", "port", gwPortName, "chassis", chassis, "priority", priority, "err", err)
+			}
+		}
+	} else {
+		slog.Warn("vpcd: no chassis names configured — gateway port has no chassis binding, external traffic will not flow")
+	}
+
+	return &externalConnResult{gwPortName: gwPortName, wanGateway: wanGateway, created: true}, nil
+}
+
+// copyIDs returns a shallow copy of base with an extra key/value pair added.
+func copyIDs(base map[string]string, key, value string) map[string]string {
+	out := make(map[string]string, len(base)+1)
+	maps.Copy(out, base)
+	out[key] = value
+	return out
+}
+
+// --- Internet Gateway ---
 
 func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 	if h.ovn == nil {
@@ -605,153 +753,31 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 	}
 
 	ctx := context.Background()
-	routerName := "vpc-" + evt.VpcId
-	extSwitchName := "ext-" + evt.VpcId
-	extPortName := "ext-port-" + evt.VpcId
-	gwPortName := "gw-" + evt.VpcId
-	switchGWPortName := "gw-port-" + evt.VpcId
+	conn, err := h.ensureExternalConnectivity(ctx, evt.VpcId, map[string]string{
+		"spinifex:igw_id": evt.InternetGatewayId,
+	})
+	if err != nil {
+		slog.Error("vpcd: failed to ensure external connectivity for IGW", "vpc_id", evt.VpcId, "err", err)
+		respond(msg, err)
+		return
+	}
 
-	// Idempotent: skip if external switch already exists
-	if _, err := h.ovn.GetLogicalSwitch(ctx, extSwitchName); err == nil {
-		slog.Debug("vpcd: IGW topology already exists, skipping", "switch", extSwitchName)
+	if !conn.created {
+		slog.Debug("vpcd: IGW topology already exists, skipping", "vpc_id", evt.VpcId)
 		respond(msg, nil)
 		return
 	}
 
-	// 1. Create external logical switch (localnet for physical uplink)
-	extSwitch := &nbdb.LogicalSwitch{
-		Name: extSwitchName,
-		ExternalIDs: map[string]string{
-			"spinifex:vpc_id": evt.VpcId,
-			"spinifex:igw_id": evt.InternetGatewayId,
-			"spinifex:role":   "external",
-		},
-	}
-	if err := h.ovn.CreateLogicalSwitch(ctx, extSwitch); err != nil {
-		slog.Error("vpcd: failed to create external switch", "switch", extSwitchName, "err", err)
-		respond(msg, err)
-		return
-	}
-
-	// 2. Create localnet port on external switch (maps to physical network)
-	localnetOpts := map[string]string{
-		"network_name": "external",
-	}
-	// nat-addresses=router: OVN sends gratuitous ARPs for all NAT external IPs
-	// using the router port MAC. Required for macvlan-based external bridges
-	// where the macvlan MAC matches the router MAC. Not needed for direct bridge
-	// since OVS sees all traffic on the wire without MAC filtering.
-	if h.isMacvlanMode() {
-		localnetOpts["nat-addresses"] = "router"
-	}
-	localnetPort := &nbdb.LogicalSwitchPort{
-		Name:      extPortName,
-		Type:      "localnet",
-		Addresses: []string{"unknown"},
-		Options:   localnetOpts,
-		ExternalIDs: map[string]string{
-			"spinifex:vpc_id": evt.VpcId,
-			"spinifex:igw_id": evt.InternetGatewayId,
-		},
-	}
-	if err := h.ovn.CreateLogicalSwitchPort(ctx, extSwitchName, localnetPort); err != nil {
-		slog.Error("vpcd: failed to create localnet port", "port", extPortName, "err", err)
-		_ = h.ovn.DeleteLogicalSwitch(ctx, extSwitchName)
-		respond(msg, err)
-		return
-	}
-
-	// Resolve external pool for this VPC's gateway
-	// TODO: use VPC's region/AZ once we track it; for now use first matching pool
-	pool := h.findExternalPool("", "")
-	gatewayIP := "169.254.0.1"
-	gatewayNetwork := "169.254.0.1/30"
-	wanGateway := "169.254.0.2"
-
-	if pool != nil {
-		gip := pool.GatewayIP
-		if gip == "" {
-			gip = pool.RangeStart // Default: first IP in range
-		}
-		if gip != "" {
-			// Static pool: use the pool's IP for the gateway router port
-			gatewayIP = gip
-			prefixLen := pool.PrefixLen
-			if prefixLen == 0 {
-				prefixLen = 24
-			}
-			gatewayNetwork = fmt.Sprintf("%s/%d", gip, prefixLen)
-		}
-		// DHCP-sourced pools have no GatewayIP/RangeStart — keep the
-		// link-local defaults for the OVN router port but still use the
-		// pool's WAN gateway for the default route.
-		wanGateway = pool.Gateway
-		slog.Info("vpcd: using external pool for IGW",
-			"pool", pool.Name,
-			"gateway_ip", gatewayIP,
-			"wan_gateway", wanGateway,
-		)
-	} else if h.externalMode == "pool" {
-		slog.Warn("vpcd: external mode is set but no matching pool found, using link-local fallback")
-	}
-
-	// 3. Create gateway router port on the VPC router connecting to external switch
-	gwMAC := generateMAC("gw-" + evt.VpcId)
-	lrp := &nbdb.LogicalRouterPort{
-		Name:     gwPortName,
-		MAC:      gwMAC,
-		Networks: []string{gatewayNetwork},
-		ExternalIDs: map[string]string{
-			"spinifex:vpc_id": evt.VpcId,
-			"spinifex:igw_id": evt.InternetGatewayId,
-			"spinifex:role":   "gateway",
-		},
-	}
-	if err := h.ovn.CreateLogicalRouterPort(ctx, routerName, lrp); err != nil {
-		slog.Error("vpcd: failed to create gateway router port", "port", gwPortName, "err", err)
-		_ = h.ovn.DeleteLogicalSwitch(ctx, extSwitchName)
-		respond(msg, err)
-		return
-	}
-
-	// 4. Create switch port connecting external switch to router
-	switchGWPort := &nbdb.LogicalSwitchPort{
-		Name:      switchGWPortName,
-		Type:      "router",
-		Addresses: []string{"router"},
-		Options: map[string]string{
-			"router-port": gwPortName,
-		},
-		ExternalIDs: map[string]string{
-			"spinifex:vpc_id": evt.VpcId,
-			"spinifex:igw_id": evt.InternetGatewayId,
-		},
-	}
-	if err := h.ovn.CreateLogicalSwitchPort(ctx, extSwitchName, switchGWPort); err != nil {
-		slog.Error("vpcd: failed to create switch gateway port", "port", switchGWPortName, "err", err)
-		_ = h.ovn.DeleteLogicalRouterPort(ctx, routerName, gwPortName)
-		_ = h.ovn.DeleteLogicalSwitch(ctx, extSwitchName)
-		respond(msg, err)
-		return
-	}
-
-	// 5. No blanket SNAT rule — AWS behavior requires that only instances with
-	// public IPs (via MapPublicIpOnLaunch or EIPs) can route through the IGW.
-	// Per-VM dnat_and_snat rules created by handleAddNAT provide both inbound
-	// DNAT and outbound SNAT for public instances. Private subnet instances
-	// (no public IP, no NAT rule) cannot reach the internet — their packets
-	// leave the router with a private source IP that the upstream router drops.
-	// A future NAT Gateway feature will add scoped SNAT for private subnets.
-
-	// 6. Add default route pointing to the WAN gateway
+	// Add default route pointing to the WAN gateway.
 	// OutputPort must be set explicitly because DHCP-sourced pools use a
 	// link-local gateway port (169.254.0.1/30) whose network does not contain
 	// the WAN nexthop (e.g. 192.168.1.1). Without it OVN northd silently
 	// drops the route from the southbound DB.
+	routerName := "vpc-" + evt.VpcId
 	defaultRoute := &nbdb.LogicalRouterStaticRoute{
 		IPPrefix:   "0.0.0.0/0",
-		Nexthop:    wanGateway,
-		OutputPort: &gwPortName,
+		Nexthop:    conn.wanGateway,
+		OutputPort: &conn.gwPortName,
 		ExternalIDs: map[string]string{
 			"spinifex:vpc_id": evt.VpcId,
 			"spinifex:igw_id": evt.InternetGatewayId,
@@ -761,30 +787,73 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 		slog.Warn("vpcd: failed to add default route", "router", routerName, "err", err)
 	}
 
-	// 7. Schedule gateway chassis for HA — tells OVN which hosts can handle external traffic
-	if len(h.chassisNames) > 0 {
-		for i, chassis := range h.chassisNames {
-			priority := max(
-				// First chassis gets highest priority
-				20-(i*5), 1)
-			if err := h.ovn.SetGatewayChassis(ctx, gwPortName, chassis, priority); err != nil {
-				slog.Warn("vpcd: failed to set gateway chassis", "port", gwPortName, "chassis", chassis, "priority", priority, "err", err)
-			} else {
-				slog.Info("vpcd: set gateway chassis", "port", gwPortName, "chassis", chassis, "priority", priority)
-			}
-		}
-	} else {
-		slog.Warn("vpcd: no chassis names configured — gateway port has no chassis binding, external traffic will not flow")
-	}
-
 	slog.Info("vpcd: attached internet gateway to VPC",
 		"igw_id", evt.InternetGatewayId,
 		"vpc_id", evt.VpcId,
-		"ext_switch", extSwitchName,
-		"gw_port", gwPortName,
-		"gateway_ip", gatewayIP,
-		"wan_gateway", wanGateway,
+		"gw_port", conn.gwPortName,
+		"wan_gateway", conn.wanGateway,
 		"chassis_count", len(h.chassisNames),
+	)
+	respond(msg, nil)
+}
+
+// --- Service routes (ALB agent gateway access) ---
+
+// handleEnsureServiceRoute ensures a VPC has external connectivity and a /32
+// static route for a specific service IP. Used by the daemon before launching
+// ALB VMs so the agent can reach the gateway without requiring an IGW.
+func (h *TopologyHandler) handleEnsureServiceRoute(msg *nats.Msg) {
+	if h.ovn == nil {
+		respond(msg, fmt.Errorf("OVN client not connected"))
+		return
+	}
+
+	var evt ServiceRouteEvent
+	if err := json.Unmarshal(msg.Data, &evt); err != nil {
+		slog.Error("vpcd: failed to unmarshal vpc.ensure-service-route event", "err", err)
+		respond(msg, err)
+		return
+	}
+
+	if net.ParseIP(evt.ServiceIP) == nil {
+		respond(msg, fmt.Errorf("invalid service IP: %s", evt.ServiceIP))
+		return
+	}
+
+	ctx := context.Background()
+	conn, err := h.ensureExternalConnectivity(ctx, evt.VpcId, map[string]string{
+		"spinifex:service_route": evt.ServiceIP,
+	})
+	if err != nil {
+		slog.Error("vpcd: failed to ensure external connectivity for service route", "vpc_id", evt.VpcId, "err", err)
+		respond(msg, err)
+		return
+	}
+
+	// Add /32 route for the service IP
+	routerName := "vpc-" + evt.VpcId
+	serviceRoute := &nbdb.LogicalRouterStaticRoute{
+		IPPrefix:   evt.ServiceIP + "/32",
+		Nexthop:    conn.wanGateway,
+		OutputPort: &conn.gwPortName,
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id":        evt.VpcId,
+			"spinifex:route_type":    "service",
+			"spinifex:service_route": evt.ServiceIP,
+		},
+	}
+	if err := h.ovn.AddStaticRoute(ctx, routerName, serviceRoute); err != nil {
+		slog.Warn("vpcd: failed to add service route", "router", routerName, "serviceIP", evt.ServiceIP, "err", err)
+		respond(msg, err)
+		return
+	}
+
+	slog.Info("vpcd: ensured service route",
+		"vpc_id", evt.VpcId,
+		"service_ip", evt.ServiceIP,
+		"gw_port", conn.gwPortName,
+		"wan_gateway", conn.wanGateway,
+		"ext_created", conn.created,
 	)
 	respond(msg, nil)
 }

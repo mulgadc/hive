@@ -1394,3 +1394,26 @@ func (d *Daemon) publishNATEvent(topic, vpcId, externalIP, logicalIP, portName, 
 		slog.Error("Failed to publish NAT event", "topic", topic, "err", err)
 	}
 }
+
+// publishServiceRouteEvent asks vpcd to ensure a VPC has a /32 service route
+// to the given IP. Used before launching ALB VMs so the agent can reach the
+// gateway without requiring an IGW on the VPC.
+func (d *Daemon) publishServiceRouteEvent(vpcID, serviceIP string) {
+	if d.natsConn == nil {
+		return
+	}
+	evt := struct {
+		VpcId     string `json:"vpc_id"`
+		ServiceIP string `json:"service_ip"`
+	}{VpcId: vpcID, ServiceIP: serviceIP}
+	data, err := json.Marshal(evt)
+	if err != nil {
+		slog.Error("Failed to marshal service route event", "err", err)
+		return
+	}
+	if err := d.natsConn.Publish("vpc.ensure-service-route", data); err != nil {
+		slog.Error("Failed to publish service route event", "vpcId", vpcID, "serviceIP", serviceIP, "err", err)
+	} else {
+		slog.Info("Published service route event", "vpcId", vpcID, "serviceIP", serviceIP)
+	}
+}

@@ -119,6 +119,17 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 		}
 	}
 
+	// Look up VpcId from the ENI — needed for NAT events and service routes.
+	vpcID := ""
+	if instance.ENIId != "" && d.vpcService != nil {
+		result, descErr := d.vpcService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+			NetworkInterfaceIds: []*string{aws.String(instance.ENIId)},
+		}, eniAccountID)
+		if descErr == nil && len(result.NetworkInterfaces) > 0 && result.NetworkInterfaces[0].VpcId != nil {
+			vpcID = *result.NetworkInterfaces[0].VpcId
+		}
+	}
+
 	// Allocate public IP for internet-facing ALBs
 	publicIP := ""
 	if input.Scheme == handlers_elbv2.SchemeInternetFacing && d.externalIPAM != nil && d.vpcService != nil && instance.ENIId != "" {
@@ -136,14 +147,6 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 			if updateErr := d.vpcService.UpdateENIPublicIP(eniAccountID, instance.ENIId, publicIP, poolName); updateErr != nil {
 				slog.Warn("LaunchSystemInstance: failed to update ENI with public IP", "eniId", instance.ENIId, "err", updateErr)
 			}
-			// Look up VpcId from the ENI for the NAT event
-			vpcID := ""
-			result, descErr := d.vpcService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
-				NetworkInterfaceIds: []*string{aws.String(instance.ENIId)},
-			}, eniAccountID)
-			if descErr == nil && len(result.NetworkInterfaces) > 0 && result.NetworkInterfaces[0].VpcId != nil {
-				vpcID = *result.NetworkInterfaces[0].VpcId
-			}
 			portName := "port-" + instance.ENIId
 			d.publishNATEvent("vpc.add-nat", vpcID, publicIP, privateIP, portName, instance.ENIMac)
 			instance.PublicIP = publicIP
@@ -154,6 +157,12 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 				"pool", poolName,
 			)
 		}
+	}
+
+	// Ensure VPC has a service route to the gateway so the ALB agent can
+	// reach it without requiring an IGW on the VPC.
+	if vpcID != "" && d.elbv2GatewayHost != "" {
+		d.publishServiceRouteEvent(vpcID, d.elbv2GatewayHost)
 	}
 
 	// Add to daemon state so LaunchInstance can find it
