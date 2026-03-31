@@ -134,9 +134,8 @@ type Daemon struct {
 	configPath    string
 
 	// System credentials for ALB agent SigV4 auth (loaded from system-credentials.json)
-	systemAccessKey  string
-	systemSecretKey  string
-	elbv2GatewayHost string // gateway IP (e.g. "192.168.1.200") for ALB agent service routes
+	systemAccessKey string
+	systemSecretKey string
 
 	// JetStream manager for KV state storage (nil if JetStream disabled)
 	jsManager *JetStreamManager
@@ -2882,7 +2881,6 @@ func (d *Daemon) wireALBAgentConfig() {
 	if gatewayHost != "" {
 		gatewayURL := fmt.Sprintf("https://%s:%s", gatewayHost, gatewayPort)
 		d.elbv2Service.SetGatewayURL(gatewayURL)
-		d.elbv2GatewayHost = gatewayHost
 		slog.Info("ALB agent gateway URL configured", "url", gatewayURL)
 	}
 }
