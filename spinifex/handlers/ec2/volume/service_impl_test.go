@@ -1538,3 +1538,299 @@ func TestDeleteVolume_NATSTimeout(t *testing.T) {
 	}, "")
 	require.NoError(t, err)
 }
+
+// --- DescribeVolumes filter tests ---
+
+func TestDescribeVolumes_FilterByStatus(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	createVolumeInStoreWithMeta(t, store, "vol-avail", viperblock.VolumeMetadata{
+		VolumeID: "vol-avail", SizeGiB: 10, State: "available", TenantID: "acct1",
+	})
+	createVolumeInStoreWithMeta(t, store, "vol-inuse", viperblock.VolumeMetadata{
+		VolumeID: "vol-inuse", SizeGiB: 20, State: "in-use", TenantID: "acct1",
+	})
+
+	out, err := svc.DescribeVolumes(&ec2.DescribeVolumesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("status"), Values: []*string{aws.String("available")}},
+		},
+	}, "acct1")
+	require.NoError(t, err)
+	assert.Len(t, out.Volumes, 1)
+	assert.Equal(t, "vol-avail", *out.Volumes[0].VolumeId)
+}
+
+func TestDescribeVolumes_FilterByVolumeType(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	createVolumeInStoreWithMeta(t, store, "vol-gp3", viperblock.VolumeMetadata{
+		VolumeID: "vol-gp3", SizeGiB: 10, State: "available", VolumeType: "gp3", TenantID: "acct1",
+	})
+	createVolumeInStoreWithMeta(t, store, "vol-io1", viperblock.VolumeMetadata{
+		VolumeID: "vol-io1", SizeGiB: 10, State: "available", VolumeType: "io1", TenantID: "acct1",
+	})
+
+	out, err := svc.DescribeVolumes(&ec2.DescribeVolumesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("volume-type"), Values: []*string{aws.String("gp3")}},
+		},
+	}, "acct1")
+	require.NoError(t, err)
+	assert.Len(t, out.Volumes, 1)
+	assert.Equal(t, "vol-gp3", *out.Volumes[0].VolumeId)
+}
+
+func TestDescribeVolumes_FilterBySize(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	createVolumeInStoreWithMeta(t, store, "vol-small", viperblock.VolumeMetadata{
+		VolumeID: "vol-small", SizeGiB: 10, State: "available", TenantID: "acct1",
+	})
+	createVolumeInStoreWithMeta(t, store, "vol-big", viperblock.VolumeMetadata{
+		VolumeID: "vol-big", SizeGiB: 100, State: "available", TenantID: "acct1",
+	})
+
+	out, err := svc.DescribeVolumes(&ec2.DescribeVolumesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("size"), Values: []*string{aws.String("100")}},
+		},
+	}, "acct1")
+	require.NoError(t, err)
+	assert.Len(t, out.Volumes, 1)
+	assert.Equal(t, "vol-big", *out.Volumes[0].VolumeId)
+}
+
+func TestDescribeVolumes_FilterByAttachmentInstanceId(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	createVolumeInStoreWithMeta(t, store, "vol-att", viperblock.VolumeMetadata{
+		VolumeID: "vol-att", SizeGiB: 10, State: "in-use",
+		AttachedInstance: "i-12345", DeviceName: "/dev/nbd0", TenantID: "acct1",
+	})
+	createVolumeInStoreWithMeta(t, store, "vol-free", viperblock.VolumeMetadata{
+		VolumeID: "vol-free", SizeGiB: 10, State: "available", TenantID: "acct1",
+	})
+
+	out, err := svc.DescribeVolumes(&ec2.DescribeVolumesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("attachment.instance-id"), Values: []*string{aws.String("i-12345")}},
+		},
+	}, "acct1")
+	require.NoError(t, err)
+	assert.Len(t, out.Volumes, 1)
+	assert.Equal(t, "vol-att", *out.Volumes[0].VolumeId)
+}
+
+func TestDescribeVolumes_FilterByAttachmentDevice(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	createVolumeInStoreWithMeta(t, store, "vol-nbd0", viperblock.VolumeMetadata{
+		VolumeID: "vol-nbd0", SizeGiB: 10, State: "in-use",
+		AttachedInstance: "i-12345", DeviceName: "/dev/nbd0", TenantID: "acct1",
+	})
+	createVolumeInStoreWithMeta(t, store, "vol-nbd1", viperblock.VolumeMetadata{
+		VolumeID: "vol-nbd1", SizeGiB: 10, State: "in-use",
+		AttachedInstance: "i-12345", DeviceName: "/dev/nbd1", TenantID: "acct1",
+	})
+
+	out, err := svc.DescribeVolumes(&ec2.DescribeVolumesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("attachment.device"), Values: []*string{aws.String("/dev/nbd1")}},
+		},
+	}, "acct1")
+	require.NoError(t, err)
+	assert.Len(t, out.Volumes, 1)
+	assert.Equal(t, "vol-nbd1", *out.Volumes[0].VolumeId)
+}
+
+func TestDescribeVolumes_FilterByAZ(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	createVolumeInStoreWithMeta(t, store, "vol-az1", viperblock.VolumeMetadata{
+		VolumeID: "vol-az1", SizeGiB: 10, State: "available",
+		AvailabilityZone: "ap-southeast-2a", TenantID: "acct1",
+	})
+	createVolumeInStoreWithMeta(t, store, "vol-az2", viperblock.VolumeMetadata{
+		VolumeID: "vol-az2", SizeGiB: 10, State: "available",
+		AvailabilityZone: "ap-southeast-2b", TenantID: "acct1",
+	})
+
+	out, err := svc.DescribeVolumes(&ec2.DescribeVolumesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("availability-zone"), Values: []*string{aws.String("ap-southeast-2a")}},
+		},
+	}, "acct1")
+	require.NoError(t, err)
+	assert.Len(t, out.Volumes, 1)
+	assert.Equal(t, "vol-az1", *out.Volumes[0].VolumeId)
+}
+
+func TestDescribeVolumes_FilterMultipleValues_OR(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	createVolumeInStoreWithMeta(t, store, "vol-avail", viperblock.VolumeMetadata{
+		VolumeID: "vol-avail", SizeGiB: 10, State: "available", TenantID: "acct1",
+	})
+	createVolumeInStoreWithMeta(t, store, "vol-inuse", viperblock.VolumeMetadata{
+		VolumeID: "vol-inuse", SizeGiB: 10, State: "in-use",
+		AttachedInstance: "i-1", DeviceName: "/dev/nbd0", TenantID: "acct1",
+	})
+	createVolumeInStoreWithMeta(t, store, "vol-del", viperblock.VolumeMetadata{
+		VolumeID: "vol-del", SizeGiB: 10, State: "deleted", TenantID: "acct1",
+	})
+
+	out, err := svc.DescribeVolumes(&ec2.DescribeVolumesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("status"), Values: []*string{aws.String("available"), aws.String("in-use")}},
+		},
+	}, "acct1")
+	require.NoError(t, err)
+	assert.Len(t, out.Volumes, 2)
+}
+
+func TestDescribeVolumes_FilterMultipleFilters_AND(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	createVolumeInStoreWithMeta(t, store, "vol-match", viperblock.VolumeMetadata{
+		VolumeID: "vol-match", SizeGiB: 10, State: "available",
+		VolumeType: "gp3", TenantID: "acct1",
+	})
+	createVolumeInStoreWithMeta(t, store, "vol-nomatch", viperblock.VolumeMetadata{
+		VolumeID: "vol-nomatch", SizeGiB: 10, State: "in-use",
+		VolumeType: "gp3", AttachedInstance: "i-1", DeviceName: "/dev/nbd0", TenantID: "acct1",
+	})
+
+	out, err := svc.DescribeVolumes(&ec2.DescribeVolumesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("status"), Values: []*string{aws.String("available")}},
+			{Name: aws.String("volume-type"), Values: []*string{aws.String("gp3")}},
+		},
+	}, "acct1")
+	require.NoError(t, err)
+	assert.Len(t, out.Volumes, 1)
+	assert.Equal(t, "vol-match", *out.Volumes[0].VolumeId)
+}
+
+func TestDescribeVolumes_FilterUnknownName_Error(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	_, err := svc.DescribeVolumes(&ec2.DescribeVolumesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("bogus-filter"), Values: []*string{aws.String("val")}},
+		},
+	}, "acct1")
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidParameterValue, err.Error())
+}
+
+func TestDescribeVolumes_FilterNoResults(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	createVolumeInStoreWithMeta(t, store, "vol-one", viperblock.VolumeMetadata{
+		VolumeID: "vol-one", SizeGiB: 10, State: "available", TenantID: "acct1",
+	})
+
+	out, err := svc.DescribeVolumes(&ec2.DescribeVolumesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("status"), Values: []*string{aws.String("deleted")}},
+		},
+	}, "acct1")
+	require.NoError(t, err)
+	assert.Empty(t, out.Volumes)
+}
+
+func TestDescribeVolumes_FilterNoFilters(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	createVolumeInStoreWithMeta(t, store, "vol-a", viperblock.VolumeMetadata{
+		VolumeID: "vol-a", SizeGiB: 10, State: "available", TenantID: "acct1",
+	})
+	createVolumeInStoreWithMeta(t, store, "vol-b", viperblock.VolumeMetadata{
+		VolumeID: "vol-b", SizeGiB: 20, State: "available", TenantID: "acct1",
+	})
+
+	out, err := svc.DescribeVolumes(&ec2.DescribeVolumesInput{}, "acct1")
+	require.NoError(t, err)
+	assert.Len(t, out.Volumes, 2)
+}
+
+func TestDescribeVolumes_FilterWildcard(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	createVolumeInStoreWithMeta(t, store, "vol-az1", viperblock.VolumeMetadata{
+		VolumeID: "vol-az1", SizeGiB: 10, State: "available",
+		AvailabilityZone: "ap-southeast-2a", TenantID: "acct1",
+	})
+	createVolumeInStoreWithMeta(t, store, "vol-az2", viperblock.VolumeMetadata{
+		VolumeID: "vol-az2", SizeGiB: 10, State: "available",
+		AvailabilityZone: "us-east-1a", TenantID: "acct1",
+	})
+
+	out, err := svc.DescribeVolumes(&ec2.DescribeVolumesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("availability-zone"), Values: []*string{aws.String("ap-*")}},
+		},
+	}, "acct1")
+	require.NoError(t, err)
+	assert.Len(t, out.Volumes, 1)
+	assert.Equal(t, "vol-az1", *out.Volumes[0].VolumeId)
+}
+
+func TestDescribeVolumes_FilterByTag(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	createVolumeInStoreWithMeta(t, store, "vol-tagged", viperblock.VolumeMetadata{
+		VolumeID: "vol-tagged", SizeGiB: 10, State: "available", TenantID: "acct1",
+		Tags: map[string]string{"Environment": "prod"},
+	})
+	createVolumeInStoreWithMeta(t, store, "vol-untagged", viperblock.VolumeMetadata{
+		VolumeID: "vol-untagged", SizeGiB: 10, State: "available", TenantID: "acct1",
+	})
+
+	out, err := svc.DescribeVolumes(&ec2.DescribeVolumesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("tag:Environment"), Values: []*string{aws.String("prod")}},
+		},
+	}, "acct1")
+	require.NoError(t, err)
+	assert.Len(t, out.Volumes, 1)
+	assert.Equal(t, "vol-tagged", *out.Volumes[0].VolumeId)
+}
+
+func TestDescribeVolumes_FilterWithVolumeIds(t *testing.T) {
+	store := objectstore.NewMemoryObjectStore()
+	svc := newTestVolumeServiceWithStore("ap-southeast-2a", store)
+
+	createVolumeInStoreWithMeta(t, store, "vol-a", viperblock.VolumeMetadata{
+		VolumeID: "vol-a", SizeGiB: 10, State: "available", TenantID: "acct1",
+	})
+	createVolumeInStoreWithMeta(t, store, "vol-b", viperblock.VolumeMetadata{
+		VolumeID: "vol-b", SizeGiB: 10, State: "in-use",
+		AttachedInstance: "i-1", DeviceName: "/dev/nbd0", TenantID: "acct1",
+	})
+
+	// Request both by ID but filter to only available
+	out, err := svc.DescribeVolumes(&ec2.DescribeVolumesInput{
+		VolumeIds: []*string{aws.String("vol-a"), aws.String("vol-b")},
+		Filters: []*ec2.Filter{
+			{Name: aws.String("status"), Values: []*string{aws.String("available")}},
+		},
+	}, "acct1")
+	require.NoError(t, err)
+	assert.Len(t, out.Volumes, 1)
+	assert.Equal(t, "vol-a", *out.Volumes[0].VolumeId)
+}

@@ -11,11 +11,14 @@ import (
 	"sync"
 	"time"
 
+	"strconv"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
+	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	"github.com/mulgadc/spinifex/spinifex/objectstore"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
@@ -224,6 +227,18 @@ func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput, accountID
 	return vol, nil
 }
 
+// describeVolumesValidFilters defines the set of filter names accepted by DescribeVolumes.
+var describeVolumesValidFilters = map[string]bool{
+	"volume-id":              true,
+	"status":                 true,
+	"size":                   true,
+	"volume-type":            true,
+	"attachment.instance-id": true,
+	"attachment.status":      true,
+	"attachment.device":      true,
+	"availability-zone":      true,
+}
+
 // DescribeVolumes lists EBS volumes by reading config.json files from S3
 func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput, accountID string) (*ec2.DescribeVolumesOutput, error) {
 	if input == nil {
@@ -231,6 +246,11 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput, acc
 	}
 
 	slog.Info("Describing volumes", "volumeIds", input.VolumeIds)
+
+	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeVolumesValidFilters)
+	if err != nil {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
 
 	var volumes []*ec2.Volume
 
@@ -248,6 +268,18 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput, acc
 		if len(volumes) != requested {
 			return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
 		}
+
+		// Apply filters to the fetched volumes
+		if len(parsedFilters) > 0 {
+			filtered := make([]*ec2.Volume, 0, len(volumes))
+			for _, vol := range volumes {
+				if volumeMatchesFilters(vol, parsedFilters) {
+					filtered = append(filtered, vol)
+				}
+			}
+			volumes = filtered
+		}
+
 		slog.Info("DescribeVolumes completed", "count", len(volumes))
 		return &ec2.DescribeVolumesOutput{Volumes: volumes}, nil
 	}
@@ -270,6 +302,10 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput, acc
 			continue
 		}
 
+		if len(parsedFilters) > 0 && !volumeMatchesFilters(result.volume, parsedFilters) {
+			continue
+		}
+
 		volumes = append(volumes, result.volume)
 	}
 
@@ -278,6 +314,106 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput, acc
 	return &ec2.DescribeVolumesOutput{
 		Volumes: volumes,
 	}, nil
+}
+
+// volumeMatchesFilters checks whether an ec2.Volume satisfies all parsed filters.
+func volumeMatchesFilters(vol *ec2.Volume, filters map[string][]string) bool {
+	for name, values := range filters {
+		if strings.HasPrefix(name, "tag:") {
+			continue
+		}
+
+		var field string
+		switch name {
+		case "volume-id":
+			if vol.VolumeId != nil {
+				field = *vol.VolumeId
+			}
+		case "status":
+			if vol.State != nil {
+				field = *vol.State
+			}
+		case "size":
+			if vol.Size != nil {
+				field = strconv.FormatInt(*vol.Size, 10)
+			}
+		case "volume-type":
+			if vol.VolumeType != nil {
+				field = *vol.VolumeType
+			}
+		case "attachment.instance-id":
+			if !volumeAttachmentMatchesAny(vol.Attachments, func(a *ec2.VolumeAttachment) string {
+				if a.InstanceId != nil {
+					return *a.InstanceId
+				}
+				return ""
+			}, values) {
+				return false
+			}
+			continue
+		case "attachment.status":
+			if !volumeAttachmentMatchesAny(vol.Attachments, func(a *ec2.VolumeAttachment) string {
+				if a.State != nil {
+					return *a.State
+				}
+				return ""
+			}, values) {
+				return false
+			}
+			continue
+		case "attachment.device":
+			if !volumeAttachmentMatchesAny(vol.Attachments, func(a *ec2.VolumeAttachment) string {
+				if a.Device != nil {
+					return *a.Device
+				}
+				return ""
+			}, values) {
+				return false
+			}
+			continue
+		case "availability-zone":
+			if vol.AvailabilityZone != nil {
+				field = *vol.AvailabilityZone
+			}
+		default:
+			continue
+		}
+
+		if !filterutil.MatchesAny(values, field) {
+			return false
+		}
+	}
+
+	// Check tag:Key filters
+	tags := volumeTagsToMap(vol.Tags)
+	return filterutil.MatchesTags(filters, tags)
+}
+
+// volumeAttachmentMatchesAny checks if any attachment's field matches any filter value.
+func volumeAttachmentMatchesAny(attachments []*ec2.VolumeAttachment, fieldFn func(*ec2.VolumeAttachment) string, values []string) bool {
+	if len(attachments) == 0 {
+		return false
+	}
+	for _, a := range attachments {
+		if filterutil.MatchesAny(values, fieldFn(a)) {
+			return true
+		}
+	}
+	return false
+}
+
+// volumeTagsToMap converts []*ec2.Tag to map[string]string for filterutil.MatchesTags.
+func volumeTagsToMap(tags []*ec2.Tag) map[string]string {
+	if len(tags) == 0 {
+		return nil
+	}
+	m := make(map[string]string, len(tags))
+	for _, t := range tags {
+		if t.Key != nil && t.Value != nil {
+			m[*t.Key] = *t.Value
+		}
+	}
+	return m
 }
 
 // DescribeVolumeStatus returns the status of one or more EBS volumes
