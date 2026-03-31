@@ -464,10 +464,10 @@ func TestCloudInitNetworkConfigDualNIC(t *testing.T) {
 }
 
 func TestCloudInitNetworkConfigPartialMAC(t *testing.T) {
-	// Only ENI MAC (VPC without dev) → wildcard
+	// Only ENI MAC (VPC without dev) → per-interface config with VPC NIC only
 	cfg := generateNetworkConfig("02:00:00:61:ef:c2", "", "", "")
-	assert.Contains(t, cfg, `name: "e*"`)
-	assert.NotContains(t, cfg, "use-routes")
+	assert.Contains(t, cfg, "vpc0:")
+	assert.NotContains(t, cfg, "dev0:")
 
 	// Only dev MAC (shouldn't happen, but defensive) → wildcard
 	cfg = generateNetworkConfig("", "02:de:00:60:83:0d", "", "")

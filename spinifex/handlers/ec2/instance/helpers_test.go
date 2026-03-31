@@ -15,7 +15,8 @@ func TestGenerateNetworkConfig_BothEmpty(t *testing.T) {
 
 func TestGenerateNetworkConfig_OneEmpty(t *testing.T) {
 	cfg := generateNetworkConfig("02:00:00:aa:bb:cc", "", "", "")
-	assert.Equal(t, cloudInitNetworkConfigWildcard, cfg, "should fall back to wildcard if devMAC empty")
+	assert.Contains(t, cfg, "vpc0:", "eniMAC alone should produce per-interface config")
+	assert.NotContains(t, cfg, "dev0:", "no dev NIC without devMAC")
 
 	cfg = generateNetworkConfig("", "02:00:00:dd:ee:ff", "", "")
 	assert.Equal(t, cloudInitNetworkConfigWildcard, cfg, "should fall back to wildcard if eniMAC empty")
@@ -47,9 +48,13 @@ func TestGenerateNetworkConfig_TripleNIC(t *testing.T) {
 }
 
 func TestGenerateNetworkConfig_MgmtWithoutDev(t *testing.T) {
-	// mgmt NIC only applies when dual-NIC setup is active (eniMAC + devMAC both present)
+	// System instances: eniMAC + mgmtMAC, no devMAC — should get per-interface config with mgmt NIC
 	cfg := generateNetworkConfig("02:00:00:aa:bb:cc", "", "02:a0:00:11:22:33", "10.15.8.101")
-	assert.Equal(t, cloudInitNetworkConfigWildcard, cfg, "should fall back to wildcard if devMAC empty even with mgmt")
+	assert.Contains(t, cfg, "vpc0:")
+	assert.NotContains(t, cfg, "dev0:", "no dev NIC without devMAC")
+	assert.Contains(t, cfg, "mgmt0:")
+	assert.Contains(t, cfg, `macaddress: "02:a0:00:11:22:33"`)
+	assert.Contains(t, cfg, `"10.15.8.101/24"`)
 }
 
 func TestGenerateNetworkConfig_MgmtMACWithoutIP(t *testing.T) {

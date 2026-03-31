@@ -96,15 +96,15 @@ const cloudInitNetworkConfigWildcard = `network:
 
 // generateNetworkConfig produces the cloud-init network-config for the instance.
 //
-// When both eniMAC and devMAC are provided (VPC + DEV_NETWORKING), it generates
-// per-interface config that suppresses the default route on the dev/hostfwd NIC.
-// Without this, both NICs get DHCP default routes at equal metric, causing
-// nondeterministic routing — SSH via hostfwd times out and VPC traffic leaks.
+// Per-interface config is generated when eniMAC is present (VPC NIC). This allows
+// adding the mgmt NIC with a static IP and optionally the dev NIC with route
+// suppression. Without per-interface config, the wildcard fallback does DHCP on
+// all NICs — which won't work for the mgmt NIC (no DHCP server on br-mgmt).
 //
 // The dev NIC still gets an IP via DHCP (needed for hostfwd port forwarding)
 // but dhcp4-overrides prevents it from installing routes or DNS.
 func generateNetworkConfig(eniMAC, devMAC, mgmtMAC, mgmtIP string) string {
-	if eniMAC == "" || devMAC == "" {
+	if eniMAC == "" {
 		return cloudInitNetworkConfigWildcard
 	}
 	cfg := fmt.Sprintf(`network:
@@ -115,7 +115,10 @@ func generateNetworkConfig(eniMAC, devMAC, mgmtMAC, mgmtIP string) string {
         macaddress: "%s"
       dhcp4: true
       dhcp-identifier: mac
-    dev0:
+`, eniMAC)
+
+	if devMAC != "" {
+		cfg += fmt.Sprintf(`    dev0:
       match:
         macaddress: "%s"
       dhcp4: true
@@ -123,7 +126,8 @@ func generateNetworkConfig(eniMAC, devMAC, mgmtMAC, mgmtIP string) string {
       dhcp4-overrides:
         use-routes: false
         use-dns: false
-`, eniMAC, devMAC)
+`, devMAC)
+	}
 
 	if mgmtMAC != "" && mgmtIP != "" {
 		cfg += fmt.Sprintf(`    mgmt0:
