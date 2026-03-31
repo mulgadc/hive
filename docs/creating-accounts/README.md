@@ -29,6 +29,14 @@ Spinifex supports multi-tenant account isolation. Each account gets its own IAM 
 
 ## Instructions
 
+## Prerequisites
+
+Ensure the AWS profile is set:
+
+```bash
+export AWS_PROFILE=spinifex
+```
+
 ## Create Account
 
 ```bash

@@ -50,6 +50,14 @@ Spinifex provides EC2-compatible VM management built on QEMU/KVM. Instances supp
 
 ## Instructions
 
+## Prerequisites
+
+Ensure the AWS profile is set:
+
+```bash
+export AWS_PROFILE=spinifex
+```
+
 ## Launch
 
 ```bash

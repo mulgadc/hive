@@ -29,6 +29,14 @@ Spinifex's hybrid mode enables bidirectional data synchronization between local 
 
 ## Instructions
 
+## Prerequisites
+
+Ensure the AWS profile is set:
+
+```bash
+export AWS_PROFILE=spinifex
+```
+
 ## Push Local to Cloud
 
 ```bash

@@ -48,6 +48,14 @@ The `partition` strategy is not supported.
 
 ## Instructions
 
+## Prerequisites
+
+Ensure the AWS profile is set:
+
+```bash
+export AWS_PROFILE=spinifex
+```
+
 ## Create
 
 ```bash

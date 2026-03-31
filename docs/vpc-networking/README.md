@@ -23,6 +23,14 @@ Instances can operate in two modes: **private** (overlay-only, no WAN access) or
 
 ## Instructions
 
+## Prerequisites
+
+Ensure the AWS profile is set:
+
+```bash
+export AWS_PROFILE=spinifex
+```
+
 ## How It Works
 
 Spinifex maps AWS VPC concepts directly to OVN constructs:
