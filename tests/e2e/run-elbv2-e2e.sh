@@ -518,17 +518,23 @@ else
 fi
 LB_ARN="" # Don't re-delete in cleanup
 
-# Verify ENIs were cleaned up
-echo "Verifying ALB ENIs cleaned up..."
-sleep 1 # Brief pause for async cleanup
-ENI_OUTPUT=$($AWS_EC2 describe-network-interfaces \
-    --filters "Name=description,Values=ELB *" \
-    --output json 2>&1) || true
-ENI_COUNT=$(echo "$ENI_OUTPUT" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('NetworkInterfaces', [])))" 2>/dev/null)
+# Verify ENIs were cleaned up (VM termination is async — poll until ENIs are gone)
+echo "Verifying ALB ENIs cleaned up (up to 30s)..."
+ENI_COUNT=""
+for i in $(seq 1 10); do
+    ENI_OUTPUT=$($AWS_EC2 describe-network-interfaces \
+        --filters "Name=description,Values=ELB *" \
+        --output json 2>&1) || true
+    ENI_COUNT=$(echo "$ENI_OUTPUT" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('NetworkInterfaces', [])))" 2>/dev/null)
+    if [ "$ENI_COUNT" = "0" ]; then
+        break
+    fi
+    sleep 3
+done
 if [ "$ENI_COUNT" = "0" ]; then
-    pass "ALB ENIs cleaned up: 0 remaining"
+    pass "ALB ENIs cleaned up: 0 remaining (after ${i} polls)"
 else
-    fail "ALB ENI cleanup: $ENI_COUNT ENIs still exist"
+    fail "ALB ENI cleanup: $ENI_COUNT ENIs still exist after 30s"
 fi
 
 # Delete second target group

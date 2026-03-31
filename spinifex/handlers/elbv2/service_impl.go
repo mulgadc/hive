@@ -626,8 +626,10 @@ func (s *ELBv2ServiceImpl) DeleteLoadBalancer(input *elbv2.DeleteLoadBalancerInp
 		}
 	}
 
-	// Delete system-managed ENIs
-	if s.vpcService != nil {
+	// Delete system-managed ENIs. When a VM was launched, the ENI is attached
+	// (in-use) and will be cleaned up by stopInstance after VM termination.
+	// Only delete ENIs here when no VM exists (e.g. launch failed or no launcher).
+	if s.vpcService != nil && lb.InstanceID == "" {
 		for _, eniID := range lb.ENIs {
 			_, eniErr := s.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
 				NetworkInterfaceId: aws.String(eniID),
