@@ -75,6 +75,14 @@ sudo /usr/local/share/spinifex/setup-ovn.sh --management --wan-bridge=br-wan --w
 sudo /usr/local/share/spinifex/setup-ovn.sh --management --macvlan --wan-iface=enp0s3
 ```
 
+**Separating VPC tunnel traffic from WAN:** If you want Geneve tunnel traffic (inter-VM east-west) to use a dedicated interface instead of the WAN IP, add `--encap-ip=<IP>` to specify the tunnel endpoint address:
+
+```bash
+sudo /usr/local/share/spinifex/setup-ovn.sh --management --encap-ip=10.0.0.1
+```
+
+This is recommended for production and required in multi-node deployments. See [Multi-Node Installation](/docs/installing-spinifex-multi-node) for details.
+
 ## Step 3. Initialize
 
 ```bash
