@@ -1,5 +1,5 @@
 ---
-title: "Installing Spinifex"
+title: "Single-Node Install"
 description: "Install Spinifex on a single server using the binary installer."
 category: "Getting Started"
 tags:
@@ -31,14 +31,14 @@ resources:
 
 Spinifex is an open-source infrastructure platform that brings core AWS services — EC2, VPC, EBS, and S3 — to bare-metal, edge, and on-prem environments.
 
-This guide installs Spinifex on a single server using the binary installer. For multi-server clusters, see [Multi-Node Installation](/docs/installing-spinifex-multi-node). To build from source, see [Source Install](/docs/source-install).
+This guide installs Spinifex on a single server using the binary installer. For multi-server clusters, see [Multi-Node Install](/docs/install-multi-node). To build from source, see [Source Install](/docs/install-source).
 
 **Supported Operating Systems:**
 
 - Ubuntu 22.04 / 24.04 / 25.10
 - Debian 12 / 13
 
-**What gets installed:**
+**What Gets Installed:**
 
 - Spinifex daemon and CLI
 - QEMU/KVM for virtual machine management
@@ -52,7 +52,7 @@ This guide installs Spinifex on a single server using the binary installer. For 
 ## Step 1. Install Spinifex
 
 ```bash
-curl https://install.mulgadc.com | bash
+curl -fsSL https://install.mulgadc.com | bash
 ```
 
 The installer downloads the Spinifex binary and bootstraps all dependencies (QEMU, OVN/OVS, AWS CLI).
@@ -70,10 +70,15 @@ If your WAN is a physical NIC, choose one:
 ```bash
 # Dedicated WAN NIC (not your SSH connection):
 sudo /usr/local/share/spinifex/setup-ovn.sh --management --wan-bridge=br-wan --wan-iface=eth1
-
-# Single-NIC host (SSH-safe macvlan):
-sudo /usr/local/share/spinifex/setup-ovn.sh --management --macvlan --wan-iface=enp0s3
 ```
+
+**Separating VPC tunnel traffic from WAN:** If you want Geneve tunnel traffic (inter-VM east-west for VPC traffic) to use a dedicated interface instead of the WAN IP, add `--encap-ip=<IP>` to specify the tunnel endpoint address:
+
+```bash
+sudo /usr/local/share/spinifex/setup-ovn.sh --management --encap-ip=10.0.0.1
+```
+
+This is recommended for production and required in multi-node deployments. See [Multi-Node Install](/docs/install-multi-node) for details.
 
 ## Step 3. Initialize
 

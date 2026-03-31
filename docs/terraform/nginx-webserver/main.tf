@@ -265,6 +265,10 @@ resource "aws_instance" "nginx" {
 # Outputs
 # ---------------------------------------------------------------------------
 
+output "note" {
+  value = "EC2 instances can take 30+ seconds to boot after apply. If SSH or HTTP is unreachable, wait and retry."
+}
+
 output "instance_id" {
   value = aws_instance.nginx.id
 }

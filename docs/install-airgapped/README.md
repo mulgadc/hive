@@ -1,5 +1,5 @@
 ---
-title: "Air-Gapped Installation"
+title: "Air-Gapped Install"
 description: "Deploy Spinifex in environments without internet connectivity. Covers offline package caching, USB deployment, and package verification."
 category: "Getting Started"
 tags:
@@ -85,7 +85,7 @@ cp -r /mnt/usb/spinifex-source ~/Development/mulga/spinifex
 cd ~/Development/mulga/spinifex && make build
 ```
 
-Then follow the [Source Install](/docs/source-install) guide from Step 3 (Setup OVN) onwards.
+Then follow the [Source Install](/docs/install-source) guide from Step 3 (Setup OVN) onwards.
 
 ## Troubleshooting
 

@@ -1,33 +1,28 @@
 # Example 2: Bastion Host with Private Subnet
 #
 # Deploys a VPC with both public and private subnets. A bastion host in the
-# public subnet provides SSH access to instances in the private subnet.
-# A NAT gateway gives private instances outbound internet access.
+# public subnet provides SSH access to an isolated instance in the private
+# subnet. The private instance has no internet connectivity — ideal for
+# sensitive workloads that must remain air-gapped from the internet.
 #
 # Architecture:
 #
 #   WAN ──SSH──▶ Bastion (public subnet)
 #                    │
 #                    ▼ SSH (private IP)
-#                 App Server (private subnet)
-#                    │
-#                    ▼ outbound via NAT GW
-#                 Internet (apt-get, etc.)
+#                 App Server (private subnet, no internet)
 #
 # Usage:
-#   cd spinifex/scripts/iac/aws/examples/02-bastion-private-subnet
 #   export AWS_PROFILE=spinifex
 #   tofu init && tofu apply
 #
 # After apply:
-#   # SSH to bastion
-#   ssh -i bastion-demo.pem ec2-user@<bastion_public_ip>
+#   # SSH to the bastion
+#   ssh -i bastion-demo.pem ec2-user@<bastion_ip>
 #
-#   # From bastion, SSH to private instance
-#   ssh -i /tmp/key.pem ec2-user@<private_ip>
-#
-#   # Or use SSH proxy jump (single command from your workstation)
-#   ssh -i bastion-demo.pem -J ec2-user@<bastion_ip> ec2-user@<private_ip>
+#   # From the bastion, SSH to the private instance
+#   # (the key is pre-installed at ~/.ssh/bastion-demo.pem via cloud-init)
+#   ssh -i ~/.ssh/bastion-demo.pem ec2-user@<private_ip>
 
 terraform {
   required_version = ">= 1.6.0"
@@ -144,7 +139,7 @@ resource "aws_vpc" "main" {
 }
 
 # ---------------------------------------------------------------------------
-# Internet Gateway
+# Internet Gateway — only the public subnet routes through this
 # ---------------------------------------------------------------------------
 
 resource "aws_internet_gateway" "igw" {
@@ -189,7 +184,7 @@ resource "aws_route_table_association" "public" {
 }
 
 # ---------------------------------------------------------------------------
-# Private Subnet — application instances live here (no public IPs)
+# Private Subnet — isolated instances live here (no public IPs, no internet)
 # ---------------------------------------------------------------------------
 
 resource "aws_subnet" "private" {
@@ -203,36 +198,9 @@ resource "aws_subnet" "private" {
   }
 }
 
-# ---------------------------------------------------------------------------
-# NAT Gateway — gives private subnet outbound internet access
-# ---------------------------------------------------------------------------
-
-resource "aws_eip" "nat" {
-  domain = "vpc"
-
-  tags = {
-    Name = "bastion-demo-nat-eip"
-  }
-}
-
-resource "aws_nat_gateway" "nat" {
-  allocation_id = aws_eip.nat.id
-  subnet_id     = aws_subnet.public.id
-
-  tags = {
-    Name = "bastion-demo-nat-gw"
-  }
-
-  depends_on = [aws_internet_gateway.igw]
-}
-
+# Private route table — no default route, no internet access
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
-
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.nat.id
-  }
 
   tags = {
     Name = "bastion-demo-private-rt"
@@ -290,11 +258,11 @@ resource "aws_security_group" "private" {
   }
 
   egress {
-    description = "All outbound"
+    description = "VPC internal only"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["10.20.0.0/16"]
   }
 
   tags = {
@@ -321,10 +289,10 @@ resource "aws_instance" "bastion" {
     #!/bin/bash
     set -euo pipefail
     mkdir -p /home/ec2-user/.ssh
-    cat > /home/ec2-user/.ssh/private-key.pem <<'KEY'
+    cat > /home/ec2-user/.ssh/bastion-demo.pem <<'KEY'
     ${tls_private_key.bastion.private_key_openssh}
     KEY
-    chmod 600 /home/ec2-user/.ssh/private-key.pem
+    chmod 600 /home/ec2-user/.ssh/bastion-demo.pem
     chown -R ec2-user:ec2-user /home/ec2-user/.ssh
   USERDATA
   )
@@ -335,7 +303,7 @@ resource "aws_instance" "bastion" {
 }
 
 # ---------------------------------------------------------------------------
-# Private Instance (private subnet — no public IP)
+# Private Instance (private subnet — no public IP, no internet)
 # ---------------------------------------------------------------------------
 
 resource "aws_instance" "private" {
@@ -355,6 +323,10 @@ resource "aws_instance" "private" {
 # Outputs
 # ---------------------------------------------------------------------------
 
+output "note" {
+  value = "EC2 instances can take 30+ seconds to boot after apply. If SSH is unreachable, wait and retry."
+}
+
 output "bastion_public_ip" {
   value = aws_instance.bastion.public_ip
 }
@@ -364,15 +336,11 @@ output "private_instance_ip" {
 }
 
 output "ssh_to_bastion" {
-  value = "ssh -i bastion-demo.pem ec2-user@${aws_instance.bastion.public_ip}"
+  description = "SSH to the bastion host"
+  value       = "ssh -i bastion-demo.pem ec2-user@${aws_instance.bastion.public_ip}"
 }
 
-output "ssh_to_private_via_bastion" {
-  description = "From your workstation, jump through the bastion to the private instance"
-  value       = "ssh -i bastion-demo.pem -J ec2-user@${aws_instance.bastion.public_ip} ec2-user@${aws_instance.private.private_ip}"
-}
-
-output "ssh_from_bastion_to_private" {
-  description = "Once on the bastion, SSH to the private instance"
-  value       = "ssh -i ~/.ssh/private-key.pem ec2-user@${aws_instance.private.private_ip}"
+output "ssh_to_private_from_bastion" {
+  description = "From the bastion, SSH to the private instance (key is pre-installed via cloud-init)"
+  value       = "ssh -i ~/.ssh/bastion-demo.pem ec2-user@${aws_instance.private.private_ip}"
 }

@@ -1,7 +1,7 @@
 ---
 title: "VPC Networking"
 description: "How Spinifex implements AWS-compatible VPC networking with public and private subnets, security groups, and Elastic IPs using OVN."
-category: "Environments"
+category: "Compute"
 tags:
   - vpc
   - networking
@@ -27,14 +27,14 @@ Instances can operate in two modes: **private** (overlay-only, no WAN access) or
 
 Spinifex maps AWS VPC concepts directly to OVN constructs:
 
-| AWS Concept | OVN Construct | What It Does |
-|-------------|---------------|--------------|
-| VPC | Logical Router | Isolates tenant networks, routes between subnets |
-| Subnet | Logical Switch + DHCP | L2 broadcast domain with automatic IP assignment |
-| ENI | Logical Switch Port | Per-instance network interface with MAC/IP binding |
-| Internet Gateway | External Switch + NAT | Connects VPC router to physical WAN |
-| Security Group | Port Group + ACLs | Stateful firewall rules enforced in OVS datapath |
-| Elastic IP | `dnat_and_snat` NAT rule | Static 1:1 NAT between public and private IP |
+| AWS Concept      | OVN Construct            | What It Does                                       |
+| ---------------- | ------------------------ | -------------------------------------------------- |
+| VPC              | Logical Router           | Isolates tenant networks, routes between subnets   |
+| Subnet           | Logical Switch + DHCP    | L2 broadcast domain with automatic IP assignment   |
+| ENI              | Logical Switch Port      | Per-instance network interface with MAC/IP binding |
+| Internet Gateway | External Switch + NAT    | Connects VPC router to physical WAN                |
+| Security Group   | Port Group + ACLs        | Stateful firewall rules enforced in OVS datapath   |
+| Elastic IP       | `dnat_and_snat` NAT rule | Static 1:1 NAT between public and private IP       |
 
 ## Network Path
 
@@ -112,14 +112,14 @@ Inbound:  203.0.113.10 ──→ DNAT ──→ arrives at 10.0.1.5
 
 ## Comparison
 
-| | Private Subnet | Public Subnet |
-|---|---|---|
-| Private IP | Yes | Yes |
-| Public IP | No | Auto-assigned from pool |
-| Outbound internet | Only if VPC has IGW (shared SNAT) | Yes (own public IP via SNAT) |
-| Inbound from WAN | No | Yes (via 1:1 NAT to public IP) |
-| Instance sees public IP? | N/A | No — only sees private IP |
-| Elastic IP support | Only if explicitly associated | Yes |
+|                          | Private Subnet                    | Public Subnet                  |
+| ------------------------ | --------------------------------- | ------------------------------ |
+| Private IP               | Yes                               | Yes                            |
+| Public IP                | No                                | Auto-assigned from pool        |
+| Outbound internet        | Only if VPC has IGW (shared SNAT) | Yes (own public IP via SNAT)   |
+| Inbound from WAN         | No                                | Yes (via 1:1 NAT to public IP) |
+| Instance sees public IP? | N/A                               | No — only sees private IP      |
+| Elastic IP support       | Only if explicitly associated     | Yes                            |
 
 ## External Connectivity Modes
 
@@ -213,14 +213,14 @@ is identical:
 
 ### Choosing Static vs DHCP
 
-| | Static Range | DHCP Source |
-|---|---|---|
-| **Public IPs from** | Admin-defined `range_start`..`range_end` | Router's DHCP server |
-| **IP predictability** | You know the exact range | Router assigns whatever is available |
-| **Setup effort** | Must reserve range, shrink router DHCP scope | Just set `source = "dhcp"` |
-| **Dependency** | None | Requires `dhclient` on host, working router DHCP |
-| **Best for** | Datacenters, ISP blocks, production | Homelabs, dev environments, shared networks |
-| **Capacity** | Exact: `range_end - range_start` IPs | Limited by router's DHCP pool size |
+|                       | Static Range                                 | DHCP Source                                      |
+| --------------------- | -------------------------------------------- | ------------------------------------------------ |
+| **Public IPs from**   | Admin-defined `range_start`..`range_end`     | Router's DHCP server                             |
+| **IP predictability** | You know the exact range                     | Router assigns whatever is available             |
+| **Setup effort**      | Must reserve range, shrink router DHCP scope | Just set `source = "dhcp"`                       |
+| **Dependency**        | None                                         | Requires `dhclient` on host, working router DHCP |
+| **Best for**          | Datacenters, ISP blocks, production          | Homelabs, dev environments, shared networks      |
+| **Capacity**          | Exact: `range_end - range_start` IPs         | Limited by router's DHCP pool size               |
 
 Both support the same AWS features: public subnets, Elastic IPs, security groups,
 DescribeInstances showing public IPs.
@@ -257,16 +257,16 @@ communicate within their VPC.
 
 ## Mode Comparison
 
-| Capability | `pool` (static) | `pool` (dhcp) | `nat` | Disabled |
-|------------|-----------------|---------------|-------|----------|
-| Outbound internet | Yes | Yes | Yes | No |
-| Inbound from WAN | Yes (1:1 NAT) | Yes (1:1 NAT) | No | No |
-| Public subnets | Yes | Yes | No | No |
-| Auto-assign public IPs | Yes | Yes | No | No |
-| Elastic IPs | Yes | Yes | No | No |
-| DescribeInstances shows public IP | Yes | Yes | No | No |
-| Admin must reserve IP range | Yes | No | No | No |
-| Needs router DHCP | No | Yes | Optional | No |
+| Capability                        | `pool` (static) | `pool` (dhcp) | `nat`    | Disabled |
+| --------------------------------- | --------------- | ------------- | -------- | -------- |
+| Outbound internet                 | Yes             | Yes           | Yes      | No       |
+| Inbound from WAN                  | Yes (1:1 NAT)   | Yes (1:1 NAT) | No       | No       |
+| Public subnets                    | Yes             | Yes           | No       | No       |
+| Auto-assign public IPs            | Yes             | Yes           | No       | No       |
+| Elastic IPs                       | Yes             | Yes           | No       | No       |
+| DescribeInstances shows public IP | Yes             | Yes           | No       | No       |
+| Admin must reserve IP range       | Yes             | No            | No       | No       |
+| Needs router DHCP                 | No              | Yes           | Optional | No       |
 
 If you start with `nat` and later need public subnets, switch to `pool` and
 define a range (or use `source = "dhcp"`) — no data migration needed.
@@ -286,10 +286,10 @@ the best approach:
 
 Every Spinifex node has two OVS bridges:
 
-| Bridge | Purpose | Ports |
-|--------|---------|-------|
-| `br-int` | VM overlay traffic (Geneve tunnels) | VM TAP devices, tunnel ports |
-| `br-wan` | WAN uplink for public subnet traffic | macvlan on WAN NIC |
+| Bridge   | Purpose                              | Ports                        |
+| -------- | ------------------------------------ | ---------------------------- |
+| `br-int` | VM overlay traffic (Geneve tunnels)  | VM TAP devices, tunnel ports |
+| `br-wan` | WAN uplink for public subnet traffic | macvlan on WAN NIC           |
 
 `br-int` is always created by `setup-ovn.sh`. `br-wan` is created only when
 a WAN bridge is configured (auto-detected or via `--wan-bridge`, required for public subnets / external connectivity).
@@ -322,6 +322,7 @@ used for SSH or management. Datacenter servers with separate management +
 public NICs. Homelab hosts with 2+ NICs.
 
 **Benefits over macvlan:**
+
 - **Distributed NAT**: DNAT processed on the VM's own chassis (no hairpin)
 - **No MAC workarounds**: OVS sees all frames, any MAC
 - **Host can reach VMs**: No macvlan parent↔child isolation
@@ -354,6 +355,7 @@ WAN NIC (host IP — unchanged)
 edge deployments. Adding the NIC directly to OVS would break host connectivity.
 
 **Limitations:**
+
 - Centralized NAT only (macvlan filters unicast not matching its MAC)
 - Host cannot reach VMs at their public IPs (macvlan isolation)
 - vpcd must align macvlan MAC with OVN router MAC on startup
@@ -365,23 +367,23 @@ sudo setup-ovn.sh --macvlan --wan-iface=eth0
 
 ### Mode Comparison
 
-| Capability | Direct bridge | Macvlan |
-|------------|--------------|---------|
-| NAT mode | Distributed (local DNAT) | Centralized (gateway hairpin) |
-| Multi-node external perf | Optimal | Hairpin through gateway chassis |
-| Host → VM public IP | Works | Blocked (kernel isolation) |
-| MAC alignment needed | No | Yes (fragile startup step) |
-| Gratuitous ARPs needed | No | Yes (`nat-addresses=router`) |
-| Works on single-NIC | No (breaks SSH) | Yes |
-| DHCP lease stability | Clean | Fragile (MAC changes post-lease) |
+| Capability               | Direct bridge            | Macvlan                          |
+| ------------------------ | ------------------------ | -------------------------------- |
+| NAT mode                 | Distributed (local DNAT) | Centralized (gateway hairpin)    |
+| Multi-node external perf | Optimal                  | Hairpin through gateway chassis  |
+| Host → VM public IP      | Works                    | Blocked (kernel isolation)       |
+| MAC alignment needed     | No                       | Yes (fragile startup step)       |
+| Gratuitous ARPs needed   | No                       | Yes (`nat-addresses=router`)     |
+| Works on single-NIC      | No (breaks SSH)          | Yes                              |
+| DHCP lease stability     | Clean                    | Fragile (MAC changes post-lease) |
 
 ### How setup-ovn.sh Decides
 
-| Flags | Result |
-|-------|--------|
-| `--wan-bridge=br-wan --wan-iface=eth1` | Direct bridge: NIC added to br-wan |
-| `--macvlan --wan-iface=eth0` | Macvlan: sub-interface created, added to br-wan |
-| (no WAN bridge) | Only br-int created, no WAN connectivity |
+| Flags                                  | Result                                          |
+| -------------------------------------- | ----------------------------------------------- |
+| `--wan-bridge=br-wan --wan-iface=eth1` | Direct bridge: NIC added to br-wan              |
+| `--macvlan --wan-iface=eth0`           | Macvlan: sub-interface created, added to br-wan |
+| (no WAN bridge)                        | Only br-int created, no WAN connectivity        |
 
 ### Setup (Macvlan Mode)
 
@@ -402,12 +404,12 @@ macvlan in `bridge` mode creates a virtual interface that shares the parent NIC'
 physical wire but has its own MAC address. The Linux kernel blocks direct L2
 frames between a parent interface and its macvlan children.
 
-| Path | Works? | Why |
-|------|--------|-----|
-| VM → internet | Yes | SNAT through OVN router → macvlan → WAN NIC → WAN |
-| LAN device → VM public IP | Yes | LAN → WAN NIC → macvlan → br-wan → OVN |
-| Host → VM public IP | No | macvlan isolation (kernel blocks parent↔child) |
-| Host → VM private IP | Yes | Overlay via br-int (unrelated to br-wan) |
+| Path                      | Works? | Why                                               |
+| ------------------------- | ------ | ------------------------------------------------- |
+| VM → internet             | Yes    | SNAT through OVN router → macvlan → WAN NIC → WAN |
+| LAN device → VM public IP | Yes    | LAN → WAN NIC → macvlan → br-wan → OVN            |
+| Host → VM public IP       | No     | macvlan isolation (kernel blocks parent↔child)    |
+| Host → VM private IP      | Yes    | Overlay via br-int (unrelated to br-wan)          |
 
 ## Per-Node Configuration
 
@@ -496,11 +498,11 @@ spinifex.toml
 external_mode = "pool"    # "pool", "nat", or "" (disabled)
 ```
 
-| Value | Behavior |
-|-------|----------|
-| `"pool"` | Full public networking — public subnets, auto-assign, Elastic IPs |
-| `"nat"` | Outbound-only SNAT — all VMs share one external IP |
-| `""` / omitted | Overlay-only — no external connectivity |
+| Value          | Behavior                                                          |
+| -------------- | ----------------------------------------------------------------- |
+| `"pool"`       | Full public networking — public subnets, auto-assign, Elastic IPs |
+| `"nat"`        | Outbound-only SNAT — all VMs share one external IP                |
+| `""` / omitted | Overlay-only — no external connectivity                           |
 
 ## IP Pools: network.external_pools
 
@@ -523,18 +525,18 @@ dns_servers = ["8.8.8.8"]           # DNS for VMs (optional)
 
 ### Field Details
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `name` | Yes | Unique pool name. Used as NATS KV key and in `AllocateAddress`. |
-| `source` | No | IP source: `"static"` (default) uses `range_start`/`range_end`. `"dhcp"` obtains IPs from the router's DHCP server on each VM launch. |
-| `range_start` | Static only | First IP in the range. First IP is reserved for OVN gateway SNAT (unless `gateway_ip` overrides). |
-| `range_end` | Static only | Last IP in the range. |
-| `gateway` | Yes | Physical router/switch — the WAN default gateway. OVN sets `0.0.0.0/0 → gateway`. |
-| `gateway_ip` | NAT mode | Static IP for OVN router SNAT. In pool mode, defaults to `range_start` (static) or first DHCP lease (dhcp). In NAT mode, this is the single external IP all VMs share. |
-| `prefix_len` | Yes | Subnet mask for the external network (e.g., 24 = /24). |
-| `region` | No | Scopes pool to a region. Instances in this region prefer this pool. |
-| `az` | No | Scopes pool to an AZ. More specific than region. |
-| `dns_servers` | No | DNS servers propagated to VMs via OVN DHCP. |
+| Field         | Required    | Description                                                                                                                                                            |
+| ------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`        | Yes         | Unique pool name. Used as NATS KV key and in `AllocateAddress`.                                                                                                        |
+| `source`      | No          | IP source: `"static"` (default) uses `range_start`/`range_end`. `"dhcp"` obtains IPs from the router's DHCP server on each VM launch.                                  |
+| `range_start` | Static only | First IP in the range. First IP is reserved for OVN gateway SNAT (unless `gateway_ip` overrides).                                                                      |
+| `range_end`   | Static only | Last IP in the range.                                                                                                                                                  |
+| `gateway`     | Yes         | Physical router/switch — the WAN default gateway. OVN sets `0.0.0.0/0 → gateway`.                                                                                      |
+| `gateway_ip`  | NAT mode    | Static IP for OVN router SNAT. In pool mode, defaults to `range_start` (static) or first DHCP lease (dhcp). In NAT mode, this is the single external IP all VMs share. |
+| `prefix_len`  | Yes         | Subnet mask for the external network (e.g., 24 = /24).                                                                                                                 |
+| `region`      | No          | Scopes pool to a region. Instances in this region prefer this pool.                                                                                                    |
+| `az`          | No          | Scopes pool to an AZ. More specific than region.                                                                                                                       |
+| `dns_servers` | No          | DNS servers propagated to VMs via OVN DHCP.                                                                                                                            |
 
 ### Why range_start/range_end Instead of CIDR?
 
@@ -561,8 +563,8 @@ ovn_sb_addr        = "tcp:10.1.3.181:6642"   # OVN Southbound DB
 external_interface = "eth1"                   # WAN NIC name
 ```
 
-| Field | Description |
-|-------|-------------|
+| Field                | Description                                                                                                                                                      |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `external_interface` | Physical NIC for WAN traffic. A macvlan sub-interface is created on this NIC for br-wan. Different servers may have different names (eth1, eno2, enp3s0, bond0). |
 
 ## Pool Selection Logic
@@ -588,8 +590,12 @@ name. Allocation uses CAS (Compare-And-Set) for lock-free concurrent access:
   "range_start": "192.168.1.150",
   "range_end": "192.168.1.250",
   "allocated": {
-    "192.168.1.150": {"type": "gateway"},
-    "192.168.1.151": {"type": "auto_assign", "eni_id": "eni-abc", "instance_id": "i-123"}
+    "192.168.1.150": { "type": "gateway" },
+    "192.168.1.151": {
+      "type": "auto_assign",
+      "eni_id": "eni-abc",
+      "instance_id": "i-123"
+    }
   }
 }
 ```
@@ -774,20 +780,21 @@ on the port group control traffic:
 ## Default Security Group
 
 Every VPC gets a default security group that:
+
 - Allows all inbound from instances in the same security group
 - Allows all outbound
 - Denies all other inbound
 
 ## AWS Rule → OVN ACL Translation
 
-| AWS Security Group Rule | OVN ACL Match |
-|------------------------|---------------|
-| Ingress TCP/22 from 0.0.0.0/0 | `outport == @sg && ip4 && tcp.dst == 22` |
+| AWS Security Group Rule         | OVN ACL Match                                                      |
+| ------------------------------- | ------------------------------------------------------------------ |
+| Ingress TCP/22 from 0.0.0.0/0   | `outport == @sg && ip4 && tcp.dst == 22`                           |
 | Ingress TCP/443 from 10.0.0.0/8 | `outport == @sg && ip4 && tcp.dst == 443 && ip4.src == 10.0.0.0/8` |
-| Ingress ALL from sg-other | `outport == @sg && ip4 && ip4.src == $sg_other_ip4` |
-| Ingress ICMP from anywhere | `outport == @sg && ip4 && icmp4` |
-| Egress ALL to 0.0.0.0/0 | `inport == @sg && ip4` |
-| Default deny inbound | `outport == @sg && ip4` (priority 900, action=drop) |
+| Ingress ALL from sg-other       | `outport == @sg && ip4 && ip4.src == $sg_other_ip4`                |
+| Ingress ICMP from anywhere      | `outport == @sg && ip4 && icmp4`                                   |
+| Egress ALL to 0.0.0.0/0         | `inport == @sg && ip4`                                             |
+| Default deny inbound            | `outport == @sg && ip4` (priority 900, action=drop)                |
 
 ## Example: Allow SSH + HTTP
 
@@ -1124,18 +1131,21 @@ ip route show
 ### Instance Has No Public IP
 
 1. Check subnet has `MapPublicIpOnLaunch`:
+
    ```bash
    aws ec2 describe-subnets --subnet-ids $SUBNET \
      --query 'Subnets[0].MapPublicIpOnLaunch'
    ```
 
 2. Check IGW is attached:
+
    ```bash
    aws ec2 describe-internet-gateways \
      --filters Name=attachment.vpc-id,Values=$VPC
    ```
 
 3. Check external IP pool:
+
    ```bash
    nats kv get spinifex-external-ipam wan
    ```
@@ -1272,6 +1282,7 @@ sudo systemctl start ovn-central ovn-controller
 `ovn-sbctl show`. Gateway traffic (SNAT/DNAT) doesn't work.
 
 **Cause:** Three names must align:
+
 1. OVS `external_ids:system-id` → what ovn-controller registers as
 2. OVN SB `Chassis.name` → what actually exists in the SB DB
 3. vpcd's chassis name → `chassis-{nodeName}` from config

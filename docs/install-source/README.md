@@ -13,7 +13,7 @@ resources:
     url: "https://go.dev/dl/"
 ---
 
-# Source Install
+# Source Installation
 
 > Build Spinifex from source for development, custom builds, or contributing.
 
@@ -27,7 +27,7 @@ resources:
 
 ## Overview
 
-This guide builds Spinifex from source. For production deployments, the [binary installer](/docs/installing-spinifex) is recommended.
+This guide builds Spinifex from source. For production deployments, the [binary installer](/docs/install) is recommended.
 
 **Requirements:**
 
@@ -57,15 +57,7 @@ cd spinifex
 
 Confirm `./bin/spx` exists.
 
-## Step 3. Initialize
-
-```bash
-sudo ./bin/spx admin init --node node1 --nodes 1
-```
-
-Save the admin credentials printed during init.
-
-## Step 4. Setup OVN
+## Step 3. Setup OVN
 
 If your WAN interface is already a bridge (e.g. `br-wan`), setup-ovn.sh auto-detects it:
 
@@ -82,6 +74,14 @@ If your WAN is a physical NIC, choose one:
 # Single-NIC host (SSH-safe macvlan):
 ./scripts/setup-ovn.sh --management --macvlan --wan-iface=enp0s3
 ```
+
+## Step 4. Initialize
+
+```bash
+sudo ./bin/spx admin init --node node1 --nodes 1
+```
+
+Save the admin credentials printed during init.
 
 ## Step 5. Start Services
 

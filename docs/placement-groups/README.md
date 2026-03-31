@@ -1,7 +1,7 @@
 ---
 title: "Placement Groups"
 description: "Create and manage spread and cluster placement groups for hardware-level instance placement control."
-category: "Environments"
+category: "Compute"
 tags:
   - ec2
   - placement
@@ -47,6 +47,14 @@ The `partition` strategy is not supported.
 - `delete-placement-group` — Remove an empty group
 
 ## Instructions
+
+## Prerequisites
+
+Ensure the AWS profile is set:
+
+```bash
+export AWS_PROFILE=spinifex
+```
 
 ## Create
 
@@ -99,7 +107,7 @@ aws ec2 delete-placement-group --group-name my-spread-group
 Not enough distinct physical hosts for a spread launch. Reduce `--count` or terminate existing instances to free host slots:
 
 ```bash
-./bin/spx admin nodes list
+spx admin nodes list
 ```
 
 ### Cannot Delete Placement Group
