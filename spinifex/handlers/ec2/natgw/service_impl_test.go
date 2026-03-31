@@ -234,6 +234,40 @@ func TestCreateNatGateway_MissingParams(t *testing.T) {
 	assert.EqualError(t, err, awserrors.ErrorMissingParameter)
 }
 
+func TestDescribeNatGateways_DeletedGatewayVisible(t *testing.T) {
+	svc := setupTestService(t)
+	createOut, err := svc.CreateNatGateway(&ec2.CreateNatGatewayInput{
+		SubnetId:     aws.String("subnet-pub1"),
+		AllocationId: aws.String("eipalloc-test1"),
+	}, testAccountID)
+	require.NoError(t, err)
+	natgwID := *createOut.NatGateway.NatGatewayId
+
+	_, err = svc.DeleteNatGateway(&ec2.DeleteNatGatewayInput{
+		NatGatewayId: aws.String(natgwID),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Describe by ID should return the deleted gateway with state=deleted
+	out, err := svc.DescribeNatGateways(&ec2.DescribeNatGatewaysInput{
+		NatGatewayIds: []*string{aws.String(natgwID)},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, out.NatGateways, 1)
+	assert.Equal(t, "deleted", *out.NatGateways[0].State)
+
+	// Describe without filter should NOT include deleted gateways
+	out, err = svc.DescribeNatGateways(&ec2.DescribeNatGatewaysInput{}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.NatGateways)
+
+	// Non-existent ID should still error
+	_, err = svc.DescribeNatGateways(&ec2.DescribeNatGatewaysInput{
+		NatGatewayIds: []*string{aws.String("nat-never-existed")},
+	}, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorInvalidNatGatewayIDNotFound)
+}
+
 func TestDescribeNatGateways_FilterByVpcId(t *testing.T) {
 	svc := setupTestService(t)
 	_, err := svc.CreateNatGateway(&ec2.CreateNatGatewayInput{

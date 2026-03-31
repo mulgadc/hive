@@ -22,11 +22,12 @@ var _ NatGatewayService = (*NatGatewayServiceImpl)(nil)
 
 // NatGatewayServiceImpl implements NAT Gateway operations with NATS JetStream persistence
 type NatGatewayServiceImpl struct {
-	natgwKV  nats.KeyValue
-	eipKV    nats.KeyValue
-	subnetKV nats.KeyValue
-	vpcKV    nats.KeyValue
-	natsConn *nats.Conn
+	natgwKV        nats.KeyValue
+	deletedNatgwKV nats.KeyValue
+	eipKV          nats.KeyValue
+	subnetKV       nats.KeyValue
+	vpcKV          nats.KeyValue
+	natsConn       *nats.Conn
 }
 
 // NewNatGatewayServiceImplWithNATS creates a NAT Gateway service
@@ -42,6 +43,24 @@ func NewNatGatewayServiceImplWithNATS(natsConn *nats.Conn) (*NatGatewayServiceIm
 	}
 	if err := utils.WriteVersion(natgwKV, KVBucketNatGatewaysVersion); err != nil {
 		return nil, fmt.Errorf("write version to %s: %w", KVBucketNatGateways, err)
+	}
+
+	// Deleted NAT Gateways bucket with 1-hour TTL — keys auto-expire.
+	// Terraform polls DescribeNatGateways after delete and expects state=deleted.
+	deletedKV, err := js.CreateKeyValue(&nats.KeyValueConfig{
+		Bucket:      KVBucketDeletedNatGateways,
+		Description: "Deleted NAT Gateways (auto-expire after 1 hour)",
+		History:     1,
+		TTL:         1 * time.Hour,
+	})
+	if err != nil {
+		deletedKV, err = js.KeyValue(KVBucketDeletedNatGateways)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketDeletedNatGateways, err)
+		}
+	}
+	if err := utils.WriteVersion(deletedKV, KVBucketDeletedNatGatewaysVersion); err != nil {
+		return nil, fmt.Errorf("write version to %s: %w", KVBucketDeletedNatGateways, err)
 	}
 
 	eipKV, err := utils.GetOrCreateKVBucket(js, handlers_ec2_eip.KVBucketEIPs, 10)
@@ -62,11 +81,12 @@ func NewNatGatewayServiceImplWithNATS(natsConn *nats.Conn) (*NatGatewayServiceIm
 	slog.Info("NatGateway service initialized with JetStream KV", "bucket", KVBucketNatGateways)
 
 	return &NatGatewayServiceImpl{
-		natgwKV:  natgwKV,
-		eipKV:    eipKV,
-		subnetKV: subnetKV,
-		vpcKV:    vpcKV,
-		natsConn: natsConn,
+		natgwKV:        natgwKV,
+		deletedNatgwKV: deletedKV,
+		eipKV:          eipKV,
+		subnetKV:       subnetKV,
+		vpcKV:          vpcKV,
+		natsConn:       natsConn,
 	}, nil
 }
 
@@ -170,9 +190,21 @@ func (s *NatGatewayServiceImpl) DeleteNatGateway(input *ec2.DeleteNatGatewayInpu
 	// and publish delete events for their SNAT rules
 	s.publishDeleteEventsForNatGateway(&record, accountID)
 
-	// Delete from KV
+	// Move to deleted bucket (auto-expires via TTL) so DescribeNatGateways can
+	// return state=deleted while Terraform polls after deletion.
+	record.State = "deleted"
+	deleted, err := json.Marshal(record)
+	if err != nil {
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+	if _, err := s.deletedNatgwKV.Put(key, deleted); err != nil {
+		slog.Error("Failed to write deleted NAT Gateway", "natGatewayId", natgwID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	// Remove from active bucket
 	if err := s.natgwKV.Delete(key); err != nil {
-		slog.Error("Failed to delete NAT Gateway", "natGatewayId", natgwID, "err", err)
+		slog.Error("Failed to delete NAT Gateway from active bucket", "natGatewayId", natgwID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -350,10 +382,24 @@ func (s *NatGatewayServiceImpl) DescribeNatGateways(input *ec2.DescribeNatGatewa
 		foundIDs[record.NatGatewayId] = true
 	}
 
+	// Check the deleted bucket for any requested IDs not found in the active bucket.
 	for id := range natgwIDs {
-		if !foundIDs[id] {
-			return nil, errors.New(awserrors.ErrorInvalidNatGatewayIDNotFound)
+		if foundIDs[id] {
+			continue
 		}
+		key := utils.AccountKey(accountID, id)
+		entry, err := s.deletedNatgwKV.Get(key)
+		if err != nil {
+			if errors.Is(err, nats.ErrKeyNotFound) {
+				return nil, errors.New(awserrors.ErrorInvalidNatGatewayIDNotFound)
+			}
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
+		var record NatGatewayRecord
+		if err := json.Unmarshal(entry.Value(), &record); err != nil {
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
+		natGateways = append(natGateways, recordToEC2(&record))
 	}
 
 	return &ec2.DescribeNatGatewaysOutput{
