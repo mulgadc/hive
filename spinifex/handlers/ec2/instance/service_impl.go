@@ -103,11 +103,11 @@ const cloudInitNetworkConfigWildcard = `network:
 //
 // The dev NIC still gets an IP via DHCP (needed for hostfwd port forwarding)
 // but dhcp4-overrides prevents it from installing routes or DNS.
-func generateNetworkConfig(eniMAC, devMAC string) string {
+func generateNetworkConfig(eniMAC, devMAC, mgmtMAC, mgmtIP string) string {
 	if eniMAC == "" || devMAC == "" {
 		return cloudInitNetworkConfigWildcard
 	}
-	return fmt.Sprintf(`network:
+	cfg := fmt.Sprintf(`network:
   version: 2
   ethernets:
     vpc0:
@@ -124,6 +124,17 @@ func generateNetworkConfig(eniMAC, devMAC string) string {
         use-routes: false
         use-dns: false
 `, eniMAC, devMAC)
+
+	if mgmtMAC != "" && mgmtIP != "" {
+		cfg += fmt.Sprintf(`    mgmt0:
+      match:
+        macaddress: "%s"
+      addresses:
+        - "%s/24"
+`, mgmtMAC, mgmtIP)
+	}
+
+	return cfg
 }
 
 type CloudInitData struct {
@@ -733,7 +744,7 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 
 	// Add network-config: per-interface when VPC+dev (suppresses dev default route),
 	// wildcard DHCP otherwise.
-	networkConfig := generateNetworkConfig(instance.ENIMac, instance.DevMAC)
+	networkConfig := generateNetworkConfig(instance.ENIMac, instance.DevMAC, instance.MgmtMAC, instance.MgmtIP)
 	err = writer.AddFile(strings.NewReader(networkConfig), "network-config")
 	if err != nil {
 		slog.Error("failed to add network-config file", "err", err)

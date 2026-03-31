@@ -180,6 +180,34 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 		instance.DevMAC = generateDevMAC(instance.ID)
 	}
 
+	// Management NIC: allocate IP, generate MAC, create TAP on br-mgmt
+	if d.mgmtIPAllocator != nil && d.mgmtBridgeIP != "" {
+		mgmtBridge := "br-mgmt"
+		if d.config.Daemon.MgmtBridge != "" {
+			mgmtBridge = d.config.Daemon.MgmtBridge
+		}
+
+		mgmtIP, allocErr := d.mgmtIPAllocator.Allocate(instance.ID)
+		if allocErr != nil {
+			slog.Warn("LaunchSystemInstance: failed to allocate mgmt IP, skipping mgmt NIC", "instanceId", instance.ID, "err", allocErr)
+		} else {
+			instance.MgmtMAC = generateMgmtMAC(instance.ID)
+			instance.MgmtIP = mgmtIP
+
+			tapName, tapErr := SetupMgmtTapDevice(instance.ID, instance.MgmtMAC, mgmtBridge)
+			if tapErr != nil {
+				slog.Error("LaunchSystemInstance: failed to setup mgmt tap", "instanceId", instance.ID, "err", tapErr)
+				d.mgmtIPAllocator.Release(instance.ID)
+				instance.MgmtMAC = ""
+				instance.MgmtIP = ""
+			} else {
+				instance.MgmtTap = tapName
+				slog.Info("LaunchSystemInstance: mgmt NIC configured",
+					"instanceId", instance.ID, "mgmtIP", mgmtIP, "mgmtMAC", instance.MgmtMAC, "mgmtTap", tapName)
+			}
+		}
+	}
+
 	// Store extra hostfwd ports (filled in by StartInstance with actual host ports)
 	if len(input.HostfwdPorts) > 0 {
 		instance.ExtraHostfwd = make(map[int]int, len(input.HostfwdPorts))
@@ -290,6 +318,16 @@ func (d *Daemon) TerminateSystemInstance(instanceID string) error {
 func (d *Daemon) cleanupFailedSystemInstance(instance *vm.VM, instanceType *ec2.InstanceTypeInfo) {
 	d.markInstanceFailed(instance, "system_instance_launch_failed")
 	d.resourceMgr.deallocate(instanceType)
+
+	// Clean up management TAP and release IP
+	if instance.MgmtTap != "" {
+		if err := CleanupMgmtTapDevice(instance.MgmtTap); err != nil {
+			slog.Warn("Failed to cleanup mgmt tap on failed launch", "tap", instance.MgmtTap, "err", err)
+		}
+		if d.mgmtIPAllocator != nil {
+			d.mgmtIPAllocator.Release(instance.ID)
+		}
+	}
 
 	// Clean up ENI if we auto-created one (not pre-created)
 	// Pre-created ENIs are managed by the caller (e.g. ELBv2 service)

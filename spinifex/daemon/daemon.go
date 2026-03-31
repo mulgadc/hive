@@ -150,6 +150,11 @@ type Daemon struct {
 	// NetworkPlumber handles tap device lifecycle for VPC networking
 	networkPlumber NetworkPlumber
 
+	// Management NIC infrastructure: bridge IP + IP allocator for system instances.
+	// Populated at startup when br-mgmt is detected; nil/empty otherwise.
+	mgmtBridgeIP    string
+	mgmtIPAllocator *MgmtIPAllocator
+
 	// shuttingDown is set to true during coordinated cluster shutdown (GATE phase)
 	// or during SIGTERM-based shutdown. When true, the daemon rejects new work,
 	// crash handlers bail out, and setupShutdown skips redundant VM stops.
@@ -760,6 +765,25 @@ func (d *Daemon) Start() error {
 		d.networkPlumber = &OVSNetworkPlumber{}
 	}
 
+	// Detect management bridge for system instance control plane NICs.
+	mgmtBridge := "br-mgmt"
+	if d.config.Daemon.MgmtBridge != "" {
+		mgmtBridge = d.config.Daemon.MgmtBridge
+	}
+	bridgeIP, bridgeErr := GetBridgeIPv4(mgmtBridge)
+	if bridgeErr != nil {
+		slog.Warn("Management bridge not detected, system instances will not get mgmt NIC", "bridge", mgmtBridge, "err", bridgeErr)
+	} else {
+		d.mgmtBridgeIP = bridgeIP
+		alloc, allocErr := NewMgmtIPAllocator(bridgeIP)
+		if allocErr != nil {
+			slog.Error("Failed to create mgmt IP allocator", "bridgeIP", bridgeIP, "err", allocErr)
+		} else {
+			d.mgmtIPAllocator = alloc
+			slog.Info("Management bridge detected", "bridge", mgmtBridge, "ip", bridgeIP)
+		}
+	}
+
 	// Protect daemon from OOM killer (prefer killing QEMU VMs instead)
 	if err := utils.SetOOMScore(os.Getpid(), -500); err != nil {
 		slog.Warn("Failed to set daemon OOM score", "err", err)
@@ -768,6 +792,15 @@ func (d *Daemon) Start() error {
 	d.waitForClusterReady()
 	d.upgradeJetStreamReplicas()
 	d.restoreInstances()
+
+	// Rebuild mgmt IP allocator from restored VMs so we don't re-allocate IPs
+	// that are already in use by running system instances.
+	if d.mgmtIPAllocator != nil {
+		d.Instances.Mu.Lock()
+		d.mgmtIPAllocator.Rebuild(d.Instances.VMS)
+		d.Instances.Mu.Unlock()
+		slog.Info("Rebuilt mgmt IP allocator from restored instances", "allocated", d.mgmtIPAllocator.AllocatedCount())
+	}
 
 	if err := d.subscribeAll(); err != nil {
 		return fmt.Errorf("failed to subscribe to NATS topics: %w", err)
@@ -1797,6 +1830,16 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				}
 			}
 
+			// Clean up management TAP and release IP
+			if instance.MgmtTap != "" {
+				if err := CleanupMgmtTapDevice(instance.MgmtTap); err != nil {
+					slog.Warn("Failed to clean up mgmt tap device", "tap", instance.MgmtTap, "instanceId", instance.ID, "err", err)
+				}
+				if d.mgmtIPAllocator != nil {
+					d.mgmtIPAllocator.Release(instance.ID)
+				}
+			}
+
 			// Release public IP before deleting ENI
 			if deleteVolume && instance.PublicIP != "" && instance.PublicIPPool != "" && d.externalIPAM != nil {
 				// Publish vpc.delete-nat to remove dnat_and_snat rule
@@ -2413,6 +2456,17 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		})
 	}
 
+	// Management NIC: system instances get a TAP on br-mgmt for control plane traffic.
+	if instance.MgmtMAC != "" && instance.MgmtTap != "" {
+		instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
+			Value: fmt.Sprintf("tap,id=mgmt0,ifname=%s,script=no,downscript=no", instance.MgmtTap),
+		})
+		instance.Config.Devices = append(instance.Config.Devices, vm.Device{
+			Value: fmt.Sprintf("virtio-net-pci,netdev=mgmt0,mac=%s", instance.MgmtMAC),
+		})
+		slog.Info("Management NIC configured", "tap", instance.MgmtTap, "mac", instance.MgmtMAC, "ip", instance.MgmtIP, "instanceId", instance.ID)
+	}
+
 	instance.Config.Devices = append(instance.Config.Devices, vm.Device{
 		Value: "virtio-rng-pci",
 	})
@@ -2850,14 +2904,17 @@ func (d *Daemon) wireALBAgentConfig() {
 	d.elbv2Service.SetSystemCredentials(creds.AccessKeyID, creds.SecretAccessKey)
 	slog.Info("System credentials loaded for ALB agent auth")
 
-	// Resolve gateway URL. In dev mode, VMs reach the host at 10.0.2.2 via
-	// QEMU SLIRP. In production, use the external IPAM pool's GatewayIP
-	// (the node's own IP on the WAN network).
+	// Resolve gateway URL.
+	// Priority: (1) br-mgmt IP — system instances reach the host via management NIC
+	//           (2) Dev mode — SLIRP 10.0.2.2
+	//           (3) External IPAM pool GatewayIP — legacy fallback
 	var gatewayHost string
-	if d.config.Daemon.DevNetworking {
+	if d.mgmtBridgeIP != "" {
+		gatewayHost = d.mgmtBridgeIP
+	} else if d.config.Daemon.DevNetworking {
 		gatewayHost = "10.0.2.2"
 	} else if d.externalIPAM != nil {
-		// Use the first pool's gateway IP as the node's external address.
+		// Fallback: use the first pool's gateway IP as the node's external address.
 		poolName := "wan"
 		if len(d.clusterConfig.Network.ExternalPools) > 0 {
 			poolName = d.clusterConfig.Network.ExternalPools[0].Name
