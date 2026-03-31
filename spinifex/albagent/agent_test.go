@@ -1,19 +1,18 @@
 package albagent
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestNew(t *testing.T) {
-	agent, err := New("lb-test123", ":8405")
+	agent, err := New("lb-test123", "https://gw:9999", "AKID", "SECRET")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -23,24 +22,32 @@ func TestNew(t *testing.T) {
 }
 
 func TestNew_EmptyLBID(t *testing.T) {
-	_, err := New("", ":8405")
+	_, err := New("", "https://gw:9999", "AKID", "SECRET")
 	if err == nil {
 		t.Fatal("expected error for empty lbID")
 	}
 }
 
-func TestNew_DefaultListenAddr(t *testing.T) {
-	agent, err := New("lb-test", "")
-	if err != nil {
-		t.Fatalf("New: %v", err)
+func TestNew_EmptyGatewayURL(t *testing.T) {
+	_, err := New("lb-test", "", "AKID", "SECRET")
+	if err == nil {
+		t.Fatal("expected error for empty gatewayURL")
 	}
-	if agent.listenAddr != ":8405" {
-		t.Errorf("listenAddr = %q, want %q", agent.listenAddr, ":8405")
+}
+
+func TestNew_EmptyCredentials(t *testing.T) {
+	_, err := New("lb-test", "https://gw:9999", "", "SECRET")
+	if err == nil {
+		t.Fatal("expected error for empty access key")
+	}
+	_, err = New("lb-test", "https://gw:9999", "AKID", "")
+	if err == nil {
+		t.Fatal("expected error for empty secret key")
 	}
 }
 
 func TestNew_SocketPath(t *testing.T) {
-	agent, err := New("lb-sock123", ":8405")
+	agent, err := New("lb-sock123", "https://gw:9999", "AKID", "SECRET")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -51,249 +58,250 @@ func TestNew_SocketPath(t *testing.T) {
 	}
 }
 
-// newTestAgent creates an agent and returns it along with an httptest.Server
-// serving its handlers.
-func newTestAgent(t *testing.T, lbID string) (*Agent, *httptest.Server) {
+// fakeGateway returns a test server that responds to ALBAgentHeartbeat and GetALBConfig.
+func fakeGateway(t *testing.T, configHash, configText, status string) *httptest.Server {
 	t.Helper()
-	agent, err := New(lbID, ":0")
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		action := r.FormValue("Action")
+		w.Header().Set("Content-Type", "text/xml")
+
+		switch action {
+		case "ALBAgentHeartbeat":
+			st := status
+			if st == "" {
+				st = "active"
+			}
+			fmt.Fprintf(w, `<ALBAgentHeartbeatResponse><ALBAgentHeartbeatResult><Status>%s</Status><ConfigHash>%s</ConfigHash></ALBAgentHeartbeatResult></ALBAgentHeartbeatResponse>`, st, configHash)
+		case "GetALBConfig":
+			fmt.Fprintf(w, `<GetALBConfigResponse><GetALBConfigResult><ConfigText>%s</ConfigText><ConfigHash>%s</ConfigHash></GetALBConfigResult></GetALBConfigResponse>`, configText, configHash)
+		default:
+			http.Error(w, "unknown action: "+action, http.StatusBadRequest)
+		}
+	}))
+}
+
+func newTestAgent(t *testing.T, gwURL string) *Agent {
+	t.Helper()
+	agent, err := New("lb-test", gwURL, "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /config", agent.handleConfig)
-	mux.HandleFunc("GET /ping", agent.handlePing)
-	mux.HandleFunc("GET /health", agent.handleHealth)
-
-	ts := httptest.NewServer(mux)
-	t.Cleanup(ts.Close)
-	return agent, ts
-}
-
-func TestHandleConfig(t *testing.T) {
 	dir := t.TempDir()
-	agent, ts := newTestAgent(t, "lb-cfg123")
 	agent.configPath = filepath.Join(dir, "haproxy.cfg")
 	agent.pidPath = filepath.Join(dir, "haproxy.pid")
+	agent.reloadFn = func(_, _ string) error { return nil }
+	agent.statsFn = func(_ string) ([]ServerStatus, error) { return nil, nil }
+	return agent
+}
+
+func TestHeartbeat_NoConfigChange(t *testing.T) {
+	gw := fakeGateway(t, "hash1", "", "active")
+	defer gw.Close()
+
+	agent := newTestAgent(t, gw.URL)
+	agent.localConfigHash = "hash1" // Already up to date
+
+	agent.tick()
+
+	// Config file should NOT exist since hash didn't change
+	if _, err := os.Stat(agent.configPath); !os.IsNotExist(err) {
+		t.Error("config file should not exist when hash matches")
+	}
+}
+
+func TestHeartbeat_ConfigChange(t *testing.T) {
+	configText := "global\n  log stdout\n"
+	gw := fakeGateway(t, "hash-new", configText, "active")
+	defer gw.Close()
+
+	agent := newTestAgent(t, gw.URL)
+	agent.localConfigHash = "hash-old"
 
 	reloadCalled := false
-	agent.reloadFn = func(configPath, pidPath string) error {
+	agent.reloadFn = func(_, _ string) error {
 		reloadCalled = true
 		return nil
 	}
 
-	haproxyConfig := "global\n  log stdout\ndefaults\n  mode http\n"
-	resp, err := http.Post(ts.URL+"/config", "text/plain", strings.NewReader(haproxyConfig))
+	agent.tick()
+
+	// Config should have been written
+	data, err := os.ReadFile(agent.configPath)
 	if err != nil {
-		t.Fatalf("POST /config: %v", err)
+		t.Fatalf("config not written: %v", err)
 	}
-	defer resp.Body.Close()
+	if string(data) != configText {
+		t.Errorf("config = %q, want %q", string(data), configText)
+	}
+	if !reloadCalled {
+		t.Error("reload was not called")
+	}
+	if agent.localConfigHash != "hash-new" {
+		t.Errorf("localConfigHash = %q, want %q", agent.localConfigHash, "hash-new")
+	}
+}
 
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
-	}
+func TestHeartbeat_FirstBoot(t *testing.T) {
+	configText := "frontend fe1\n  bind :80\n"
+	gw := fakeGateway(t, "hash-first", configText, "provisioning")
+	defer gw.Close()
 
-	var body map[string]string
-	json.NewDecoder(resp.Body).Decode(&body)
-	if body["status"] != "ok" {
-		t.Errorf("response status = %q, want %q", body["status"], "ok")
-	}
+	agent := newTestAgent(t, gw.URL)
+	// localConfigHash is "" (zero value) — different from "hash-first"
+
+	agent.tick()
 
 	data, err := os.ReadFile(agent.configPath)
 	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
+		t.Fatalf("config not written: %v", err)
 	}
-	if string(data) != haproxyConfig {
-		t.Errorf("written config = %q, want %q", string(data), haproxyConfig)
-	}
-
-	if !reloadCalled {
-		t.Error("reload function was not called")
+	if string(data) != configText {
+		t.Errorf("config = %q, want %q", string(data), configText)
 	}
 }
 
-func TestHandleConfig_Empty(t *testing.T) {
-	agent, ts := newTestAgent(t, "lb-empty")
-	agent.reloadFn = func(_, _ string) error { return nil }
+func TestHeartbeat_IncludesHealthReport(t *testing.T) {
+	var receivedBackend, receivedServer, receivedStatus string
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		action := r.FormValue("Action")
+		if action == "ALBAgentHeartbeat" {
+			receivedBackend = r.FormValue("Servers.member.1.Backend")
+			receivedServer = r.FormValue("Servers.member.1.Server")
+			receivedStatus = r.FormValue("Servers.member.1.Status")
+			fmt.Fprintf(w, `<ALBAgentHeartbeatResponse><ALBAgentHeartbeatResult><Status>active</Status><ConfigHash>h1</ConfigHash></ALBAgentHeartbeatResult></ALBAgentHeartbeatResponse>`)
+		} else {
+			http.Error(w, "unexpected", http.StatusBadRequest)
+		}
+	}))
+	defer gw.Close()
 
-	resp, err := http.Post(ts.URL+"/config", "text/plain", strings.NewReader(""))
-	if err != nil {
-		t.Fatalf("POST /config: %v", err)
+	agent := newTestAgent(t, gw.URL)
+	agent.localConfigHash = "h1" // match to avoid config fetch
+	agent.statsFn = func(_ string) ([]ServerStatus, error) {
+		return []ServerStatus{
+			{Backend: "bk_tg1", Server: "srv_i-web1", Status: "UP"},
+		}, nil
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	agent.tick()
+
+	if receivedBackend != "bk_tg1" {
+		t.Errorf("backend = %q, want %q", receivedBackend, "bk_tg1")
 	}
-
-	var body map[string]string
-	json.NewDecoder(resp.Body).Decode(&body)
-	if body["status"] != "error" {
-		t.Errorf("response status = %q, want %q", body["status"], "error")
+	if receivedServer != "srv_i-web1" {
+		t.Errorf("server = %q, want %q", receivedServer, "srv_i-web1")
+	}
+	if receivedStatus != "UP" {
+		t.Errorf("status = %q, want %q", receivedStatus, "UP")
 	}
 }
 
-func TestHandleConfig_ReloadError(t *testing.T) {
-	dir := t.TempDir()
-	agent, ts := newTestAgent(t, "lb-err")
-	agent.configPath = filepath.Join(dir, "haproxy.cfg")
-	agent.pidPath = filepath.Join(dir, "haproxy.pid")
+func TestHeartbeat_GatewayError(t *testing.T) {
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}))
+	defer gw.Close()
+
+	agent := newTestAgent(t, gw.URL)
+	agent.tick() // Should not panic, just log error
+}
+
+func TestHeartbeat_ReloadError(t *testing.T) {
+	configText := "global\n"
+	gw := fakeGateway(t, "hash-new", configText, "active")
+	defer gw.Close()
+
+	agent := newTestAgent(t, gw.URL)
 	agent.reloadFn = func(_, _ string) error {
 		return fmt.Errorf("haproxy binary not found")
 	}
 
-	resp, err := http.Post(ts.URL+"/config", "text/plain", strings.NewReader("some config"))
-	if err != nil {
-		t.Fatalf("POST /config: %v", err)
-	}
-	defer resp.Body.Close()
+	agent.tick()
 
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusInternalServerError)
-	}
-
-	var body map[string]string
-	json.NewDecoder(resp.Body).Decode(&body)
-	if body["status"] != "error" {
-		t.Errorf("response status = %q, want %q", body["status"], "error")
-	}
-	if body["error"] == "" {
-		t.Error("expected error message in response")
+	// localConfigHash should NOT be updated on reload failure
+	if agent.localConfigHash != "" {
+		t.Errorf("localConfigHash should be empty after reload failure, got %q", agent.localConfigHash)
 	}
 }
 
-func TestHandleConfig_WrongMethod(t *testing.T) {
-	_, ts := newTestAgent(t, "lb-method")
+func TestStartStop(t *testing.T) {
+	gw := fakeGateway(t, "h1", "", "active")
+	defer gw.Close()
 
-	resp, err := http.Get(ts.URL + "/config")
-	if err != nil {
-		t.Fatalf("GET /config: %v", err)
+	agent := newTestAgent(t, gw.URL)
+	agent.localConfigHash = "h1"
+
+	var started atomic.Bool
+	errCh := make(chan error, 1)
+	go func() {
+		started.Store(true)
+		errCh <- agent.Start()
+	}()
+
+	// Wait for the agent to start.
+	time.Sleep(100 * time.Millisecond)
+	if !started.Load() {
+		t.Fatal("agent did not start")
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		// Go 1.22+ ServeMux returns 405 for method mismatch
-		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
+	agent.Stop()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Start returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent did not stop in time")
 	}
 }
 
-func TestHandlePing(t *testing.T) {
-	dir := t.TempDir()
-	agent, ts := newTestAgent(t, "lb-ping123")
-	agent.configPath = filepath.Join(dir, "haproxy.cfg")
-	agent.pidPath = filepath.Join(dir, "haproxy.pid")
+func TestStopIdempotent(t *testing.T) {
+	gw := fakeGateway(t, "h1", "", "active")
+	defer gw.Close()
 
-	resp, err := http.Get(ts.URL + "/ping")
-	if err != nil {
-		t.Fatalf("GET /ping: %v", err)
-	}
-	defer resp.Body.Close()
+	agent := newTestAgent(t, gw.URL)
+	agent.localConfigHash = "h1"
 
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
-	}
+	go agent.Start()
+	time.Sleep(50 * time.Millisecond)
 
-	var ping PingResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ping); err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-
-	if ping.Status != "ok" {
-		t.Errorf("status = %q, want %q", ping.Status, "ok")
-	}
-	if ping.LBID != "lb-ping123" {
-		t.Errorf("lb_id = %q, want %q", ping.LBID, "lb-ping123")
-	}
-	if ping.HAProxy {
-		t.Error("haproxy_running should be false (no PID file)")
-	}
-	if ping.ConfigAge != -1 {
-		t.Errorf("config_age = %d, want -1 (no config file)", ping.ConfigAge)
-	}
+	// Calling Stop multiple times should not panic.
+	agent.Stop()
+	agent.Stop()
 }
 
-func TestHandleHealth(t *testing.T) {
-	agent, ts := newTestAgent(t, "lb-health1")
-	agent.statsFn = func(_ string) ([]ServerStatus, error) {
-		return []ServerStatus{
-			{Backend: "bk_tg1", Server: "srv_i-web1", Status: "UP"},
-			{Backend: "bk_tg1", Server: "srv_i-web2", Status: "DOWN"},
-		}, nil
-	}
+func TestHeartbeat_StatsError(t *testing.T) {
+	gw := fakeGateway(t, "h1", "", "active")
+	defer gw.Close()
 
-	resp, err := http.Get(ts.URL + "/health")
-	if err != nil {
-		t.Fatalf("GET /health: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
-	}
-
-	var report HealthReport
-	if err := json.NewDecoder(resp.Body).Decode(&report); err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-
-	if report.LBID != "lb-health1" {
-		t.Errorf("LBID = %q, want %q", report.LBID, "lb-health1")
-	}
-	if len(report.Servers) != 2 {
-		t.Fatalf("got %d servers, want 2", len(report.Servers))
-	}
-	if report.Servers[0].Status != "UP" {
-		t.Errorf("server[0].Status = %q, want UP", report.Servers[0].Status)
-	}
-	if report.Servers[1].Status != "DOWN" {
-		t.Errorf("server[1].Status = %q, want DOWN", report.Servers[1].Status)
-	}
-}
-
-func TestHandleHealth_StatsError(t *testing.T) {
-	agent, ts := newTestAgent(t, "lb-health-err")
+	agent := newTestAgent(t, gw.URL)
+	agent.localConfigHash = "h1"
 	agent.statsFn = func(_ string) ([]ServerStatus, error) {
 		return nil, fmt.Errorf("socket not found")
 	}
 
-	resp, err := http.Get(ts.URL + "/health")
-	if err != nil {
-		t.Fatalf("GET /health: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusServiceUnavailable {
-		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
-	}
-
-	var body map[string]string
-	json.NewDecoder(resp.Body).Decode(&body)
-	if body["status"] != "error" {
-		t.Errorf("response status = %q, want %q", body["status"], "error")
-	}
+	// Should still send heartbeat with empty servers, not panic
+	agent.tick()
 }
 
-func TestHandleHealth_EmptyServers(t *testing.T) {
-	agent, ts := newTestAgent(t, "lb-health-empty")
-	agent.statsFn = func(_ string) ([]ServerStatus, error) {
-		return nil, nil
-	}
+func TestHeartbeat_EmptyConfigHash(t *testing.T) {
+	// Gateway returns empty config hash (no config stored yet)
+	gw := fakeGateway(t, "", "", "provisioning")
+	defer gw.Close()
 
-	resp, err := http.Get(ts.URL + "/health")
-	if err != nil {
-		t.Fatalf("GET /health: %v", err)
-	}
-	defer resp.Body.Close()
+	agent := newTestAgent(t, gw.URL)
 
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
-	}
+	agent.tick()
 
-	body, _ := io.ReadAll(resp.Body)
-	var report HealthReport
-	json.Unmarshal(body, &report)
-	if report.LBID != "lb-health-empty" {
-		t.Errorf("LBID = %q, want %q", report.LBID, "lb-health-empty")
+	// Should not attempt config fetch when hash is empty
+	if _, err := os.Stat(agent.configPath); !os.IsNotExist(err) {
+		t.Error("config file should not exist when gateway returns empty hash")
 	}
 }
 
@@ -350,24 +358,9 @@ func TestWriteConfig_Atomic(t *testing.T) {
 	}
 }
 
-func TestConfigAgeSeconds(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "test.cfg")
-
-	if age := configAgeSeconds(path); age != -1 {
-		t.Errorf("age of non-existent file = %d, want -1", age)
-	}
-
-	os.WriteFile(path, []byte("test"), 0o644)
-	age := configAgeSeconds(path)
-	if age < 0 || age > 2 {
-		t.Errorf("age = %d, expected 0-2 seconds", age)
-	}
-}
-
 func TestIsHAProxyRunning_NoPIDFile(t *testing.T) {
-	if isHAProxyRunning("/nonexistent/haproxy.pid") {
-		t.Error("expected false for non-existent PID file")
+	if readPID("/nonexistent/haproxy.pid") != 0 {
+		t.Error("expected 0 for non-existent PID file")
 	}
 }
 
@@ -388,5 +381,116 @@ func TestReadPID_DeadProcess(t *testing.T) {
 	os.WriteFile(pidFile, []byte("999999999\n"), 0o644)
 	if pid := readPID(pidFile); pid != 0 {
 		t.Errorf("readPID = %d, want 0 for dead process", pid)
+	}
+}
+
+func TestHeartbeat_InvalidXMLResponse(t *testing.T) {
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/xml")
+		w.Write([]byte("not valid xml"))
+	}))
+	defer gw.Close()
+
+	agent := newTestAgent(t, gw.URL)
+	agent.tick() // Should not panic
+}
+
+func TestFetchConfig_EmptyConfigText(t *testing.T) {
+	// Gateway returns a config hash but empty config text
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		action := r.FormValue("Action")
+		w.Header().Set("Content-Type", "text/xml")
+		switch action {
+		case "ALBAgentHeartbeat":
+			fmt.Fprintf(w, `<ALBAgentHeartbeatResponse><ALBAgentHeartbeatResult><Status>active</Status><ConfigHash>hash-x</ConfigHash></ALBAgentHeartbeatResult></ALBAgentHeartbeatResponse>`)
+		case "GetALBConfig":
+			fmt.Fprintf(w, `<GetALBConfigResponse><GetALBConfigResult><ConfigText></ConfigText><ConfigHash>hash-x</ConfigHash></GetALBConfigResult></GetALBConfigResponse>`)
+		}
+	}))
+	defer gw.Close()
+
+	agent := newTestAgent(t, gw.URL)
+	agent.tick() // Should handle empty config gracefully
+
+	// Config should NOT be updated
+	if agent.localConfigHash != "" {
+		t.Errorf("localConfigHash should be empty, got %q", agent.localConfigHash)
+	}
+}
+
+func TestFetchConfig_GatewayErrorOnGetConfig(t *testing.T) {
+	callCount := 0
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		action := r.FormValue("Action")
+		w.Header().Set("Content-Type", "text/xml")
+		switch action {
+		case "ALBAgentHeartbeat":
+			fmt.Fprintf(w, `<ALBAgentHeartbeatResponse><ALBAgentHeartbeatResult><Status>active</Status><ConfigHash>hash-new</ConfigHash></ALBAgentHeartbeatResult></ALBAgentHeartbeatResponse>`)
+		case "GetALBConfig":
+			callCount++
+			http.Error(w, "server error", http.StatusInternalServerError)
+		}
+	}))
+	defer gw.Close()
+
+	agent := newTestAgent(t, gw.URL)
+	agent.tick()
+
+	if callCount != 1 {
+		t.Errorf("GetALBConfig called %d times, want 1", callCount)
+	}
+	if agent.localConfigHash != "" {
+		t.Errorf("localConfigHash should be empty after fetch failure, got %q", agent.localConfigHash)
+	}
+}
+
+func TestSendHeartbeat_MultipleServers(t *testing.T) {
+	var serverCount int
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		// Count server entries
+		for i := 1; ; i++ {
+			if r.FormValue(fmt.Sprintf("Servers.member.%d.Backend", i)) == "" {
+				serverCount = i - 1
+				break
+			}
+		}
+		w.Header().Set("Content-Type", "text/xml")
+		fmt.Fprintf(w, `<ALBAgentHeartbeatResponse><ALBAgentHeartbeatResult><Status>active</Status><ConfigHash>h1</ConfigHash></ALBAgentHeartbeatResult></ALBAgentHeartbeatResponse>`)
+	}))
+	defer gw.Close()
+
+	agent := newTestAgent(t, gw.URL)
+	agent.localConfigHash = "h1"
+	agent.statsFn = func(_ string) ([]ServerStatus, error) {
+		return []ServerStatus{
+			{Backend: "bk1", Server: "srv1", Status: "UP"},
+			{Backend: "bk1", Server: "srv2", Status: "DOWN"},
+			{Backend: "bk2", Server: "srv3", Status: "UP"},
+		}, nil
+	}
+
+	agent.tick()
+
+	if serverCount != 3 {
+		t.Errorf("server count = %d, want 3", serverCount)
+	}
+}
+
+func TestFetchConfig_WriteError(t *testing.T) {
+	configText := "global\n"
+	gw := fakeGateway(t, "hash-new", configText, "active")
+	defer gw.Close()
+
+	agent := newTestAgent(t, gw.URL)
+	// Point configPath to a read-only directory
+	agent.configPath = "/proc/nonexistent/haproxy.cfg"
+
+	agent.tick()
+
+	if agent.localConfigHash != "" {
+		t.Errorf("localConfigHash should be empty after write failure, got %q", agent.localConfigHash)
 	}
 }

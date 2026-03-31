@@ -1,16 +1,17 @@
-// Package albagent implements the HTTP config agent that runs inside ALB VMs.
-// It exposes an HTTP server for config pushes, health pings, and target health
-// queries. The daemon communicates with the agent over the VPC network.
+// Package albagent implements the ALB config agent that runs inside ALB VMs.
+// It polls the AWS gateway for config updates and reports health via heartbeats.
+// All communication uses SigV4-signed HTTP requests to the gateway.
 package albagent
 
 import (
-	"context"
-	"encoding/json"
+	"bytes"
+	"crypto/tls"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	v4 "github.com/aws/aws-sdk-go/aws/signer/v4"
 )
 
 const (
@@ -25,19 +29,23 @@ const (
 	DefaultConfigPath = "/etc/haproxy/haproxy.cfg"
 	DefaultPIDPath    = "/run/haproxy.pid"
 
-	// maxConfigSize limits config POST bodies to 1 MiB.
-	maxConfigSize = 1 << 20
+	// pollInterval is how often the agent sends a heartbeat.
+	pollInterval = 5 * time.Second
 )
 
-// Agent manages HAProxy configuration inside an ALB VM.
+// Agent manages HAProxy configuration inside an ALB VM by polling the gateway.
 type Agent struct {
 	lbID       string
-	listenAddr string
+	gatewayURL string
 	configPath string
 	pidPath    string
 	socketPath string // HAProxy stats socket
 
-	server *http.Server
+	signer *v4.Signer
+	client *http.Client
+
+	localConfigHash string
+	stopCh          chan struct{}
 
 	// For testing: override the reload function.
 	reloadFn func(configPath, pidPath string) error
@@ -46,137 +54,204 @@ type Agent struct {
 }
 
 // New creates a new ALB agent for the given load balancer.
-func New(lbID, listenAddr string) (*Agent, error) {
+func New(lbID, gatewayURL, accessKey, secretKey string) (*Agent, error) {
 	if lbID == "" {
 		return nil, fmt.Errorf("lbID is required")
 	}
-	if listenAddr == "" {
-		listenAddr = ":8405"
+	if gatewayURL == "" {
+		return nil, fmt.Errorf("gatewayURL is required")
+	}
+	if accessKey == "" || secretKey == "" {
+		return nil, fmt.Errorf("access key and secret key are required")
+	}
+
+	creds := credentials.NewStaticCredentials(accessKey, secretKey, "")
+	signer := v4.NewSigner(creds)
+
+	// Use system CA trust store (CA cert injected via cloud-init ca_certs).
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				MinVersion: tls.VersionTLS12,
+			},
+			MaxIdleConns:    2,
+			IdleConnTimeout: 30 * time.Second,
+		},
 	}
 
 	return &Agent{
 		lbID:       lbID,
-		listenAddr: listenAddr,
+		gatewayURL: strings.TrimRight(gatewayURL, "/"),
 		configPath: DefaultConfigPath,
 		pidPath:    DefaultPIDPath,
 		socketPath: fmt.Sprintf("/tmp/spinifex-haproxy/alb-%s.sock", lbID),
+		signer:     signer,
+		client:     client,
+		stopCh:     make(chan struct{}),
 		reloadFn:   reloadHAProxy,
 		statsFn:    queryHAProxyStats,
 	}, nil
 }
 
-// Start starts the HTTP server. It blocks until the server is shut down.
+// Start runs the poll loop. It blocks until Stop is called.
 func (a *Agent) Start() error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /config", a.handleConfig)
-	mux.HandleFunc("GET /ping", a.handlePing)
-	mux.HandleFunc("GET /health", a.handleHealth)
+	slog.Info("Agent started", "lbId", a.lbID, "gateway", a.gatewayURL)
 
-	a.server = &http.Server{
-		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  60 * time.Second,
+	// Run first tick immediately.
+	a.tick()
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-a.stopCh:
+			slog.Info("Agent stopped", "lbId", a.lbID)
+			return nil
+		case <-ticker.C:
+			a.tick()
+		}
 	}
-
-	ln, err := net.Listen("tcp", a.listenAddr)
-	if err != nil {
-		return fmt.Errorf("listen on %s: %w", a.listenAddr, err)
-	}
-
-	slog.Info("Agent started", "lbId", a.lbID, "listen", ln.Addr().String())
-	return a.server.Serve(ln)
 }
 
-// Stop gracefully shuts down the HTTP server.
+// Stop signals the poll loop to exit.
 func (a *Agent) Stop() {
-	if a.server == nil {
-		return
+	select {
+	case <-a.stopCh:
+	default:
+		close(a.stopCh)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := a.server.Shutdown(ctx); err != nil {
-		slog.Warn("HTTP server shutdown error", "err", err)
-	}
-	slog.Info("Agent stopped", "lbId", a.lbID)
 }
 
-// handleConfig processes a config push. The request body is the raw HAProxy
-// config text. It writes the config to disk and reloads HAProxy.
-func (a *Agent) handleConfig(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxConfigSize))
+// tick runs one heartbeat cycle: send health, check config hash, fetch if changed.
+func (a *Agent) tick() {
+	servers, err := a.statsFn(a.socketPath)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "read body: " + err.Error()})
+		slog.Debug("HAProxy stats unavailable", "err", err)
+	}
+
+	resp, err := a.sendHeartbeat(servers)
+	if err != nil {
+		slog.Error("Heartbeat failed", "err", err)
 		return
 	}
 
-	config := string(body)
-	if config == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"status": "error", "error": "empty config"})
-		return
+	slog.Debug("Heartbeat OK", "status", resp.Status, "configHash", resp.ConfigHash)
+
+	if resp.ConfigHash != "" && resp.ConfigHash != a.localConfigHash {
+		slog.Info("Config hash changed", "remote", resp.ConfigHash, "local", a.localConfigHash)
+		if err := a.fetchAndApplyConfig(); err != nil {
+			slog.Error("Config update failed", "err", err)
+			return
+		}
+	}
+}
+
+// heartbeatResponse is the parsed XML response from ALBAgentHeartbeat.
+type heartbeatResponse struct {
+	XMLName    xml.Name `xml:"ALBAgentHeartbeatResponse"`
+	Status     string   `xml:"ALBAgentHeartbeatResult>Status"`
+	ConfigHash string   `xml:"ALBAgentHeartbeatResult>ConfigHash"`
+}
+
+// configResponse is the parsed XML response from GetALBConfig.
+type configResponse struct {
+	XMLName    xml.Name `xml:"GetALBConfigResponse"`
+	ConfigText string   `xml:"GetALBConfigResult>ConfigText"`
+	ConfigHash string   `xml:"GetALBConfigResult>ConfigHash"`
+}
+
+// sendHeartbeat sends a heartbeat with health report to the gateway.
+func (a *Agent) sendHeartbeat(servers []ServerStatus) (*heartbeatResponse, error) {
+	params := url.Values{}
+	params.Set("Action", "ALBAgentHeartbeat")
+	params.Set("Version", "2015-12-01")
+	params.Set("LBID", a.lbID)
+
+	for i, s := range servers {
+		idx := strconv.Itoa(i + 1)
+		params.Set("Servers.member."+idx+".Backend", s.Backend)
+		params.Set("Servers.member."+idx+".Server", s.Server)
+		params.Set("Servers.member."+idx+".Status", s.Status)
 	}
 
-	slog.Info("Received config update", "lbId", a.lbID, "size", len(config))
+	body, err := a.signedPost(params)
+	if err != nil {
+		return nil, fmt.Errorf("heartbeat: %w", err)
+	}
 
-	if err := WriteConfig(a.configPath, config); err != nil {
-		slog.Error("Failed to write config", "path", a.configPath, "err", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": err.Error()})
-		return
+	var resp heartbeatResponse
+	if err := xml.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("parse heartbeat response: %w", err)
+	}
+	return &resp, nil
+}
+
+// fetchAndApplyConfig fetches the current config from the gateway and applies it.
+func (a *Agent) fetchAndApplyConfig() error {
+	params := url.Values{}
+	params.Set("Action", "GetALBConfig")
+	params.Set("Version", "2015-12-01")
+	params.Set("LBID", a.lbID)
+
+	body, err := a.signedPost(params)
+	if err != nil {
+		return fmt.Errorf("get config: %w", err)
+	}
+
+	var resp configResponse
+	if err := xml.Unmarshal(body, &resp); err != nil {
+		return fmt.Errorf("parse config response: %w", err)
+	}
+
+	if resp.ConfigText == "" {
+		return fmt.Errorf("empty config returned")
+	}
+
+	if err := WriteConfig(a.configPath, resp.ConfigText); err != nil {
+		return fmt.Errorf("write config: %w", err)
 	}
 
 	if err := a.reloadFn(a.configPath, a.pidPath); err != nil {
-		slog.Error("Failed to reload HAProxy", "err", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"status": "error", "error": err.Error()})
-		return
+		return fmt.Errorf("reload haproxy: %w", err)
 	}
 
-	slog.Info("Config applied and HAProxy reloaded", "lbId", a.lbID)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	a.localConfigHash = resp.ConfigHash
+	slog.Info("Config applied", "hash", resp.ConfigHash)
+	return nil
 }
 
-// PingResponse is the JSON response to a health ping.
-type PingResponse struct {
-	Status    string `json:"status"`
-	LBID      string `json:"lb_id"`
-	HAProxy   bool   `json:"haproxy_running"`
-	ConfigAge int64  `json:"config_age_seconds"`
-}
-
-// handlePing responds to health check requests from the daemon.
-func (a *Agent) handlePing(w http.ResponseWriter, _ *http.Request) {
-	resp := PingResponse{
-		Status:    "ok",
-		LBID:      a.lbID,
-		HAProxy:   isHAProxyRunning(a.pidPath),
-		ConfigAge: configAgeSeconds(a.configPath),
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
-// handleHealth returns the current HAProxy backend server health by querying
-// the stats socket. The daemon polls this endpoint instead of receiving pushes.
-func (a *Agent) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	servers, err := a.statsFn(a.socketPath)
+// signedPost sends a SigV4-signed POST to the gateway and returns the response body.
+func (a *Agent) signedPost(params url.Values) ([]byte, error) {
+	body := params.Encode()
+	req, err := http.NewRequest(http.MethodPost, a.gatewayURL, bytes.NewReader([]byte(body)))
 	if err != nil {
-		slog.Debug("Failed to query HAProxy stats", "err", err)
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "error", "error": err.Error()})
-		return
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	_, err = a.signer.Sign(req, bytes.NewReader([]byte(body)), "elasticloadbalancing", "us-east-1", time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("sign request: %w", err)
 	}
 
-	report := HealthReport{
-		LBID:    a.lbID,
-		Servers: servers,
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("send request: %w", err)
 	}
-	writeJSON(w, http.StatusOK, report)
-}
+	defer resp.Body.Close()
 
-// writeJSON marshals v as JSON and writes it to w.
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		slog.Error("Failed to write JSON response", "err", err)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
 	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("gateway returned %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	return respBody, nil
 }
 
 // WriteConfig atomically writes an HAProxy config file.
@@ -243,19 +318,4 @@ func readPID(pidPath string) int {
 		return 0
 	}
 	return pid
-}
-
-// isHAProxyRunning checks if HAProxy is running via its PID file.
-func isHAProxyRunning(pidPath string) bool {
-	return readPID(pidPath) > 0
-}
-
-// configAgeSeconds returns how many seconds since the config file was last modified.
-// Returns -1 if the file doesn't exist.
-func configAgeSeconds(configPath string) int64 {
-	info, err := os.Stat(configPath)
-	if err != nil {
-		return -1
-	}
-	return int64(time.Since(info.ModTime()).Seconds())
 }
