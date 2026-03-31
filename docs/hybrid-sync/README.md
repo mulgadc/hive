@@ -69,14 +69,3 @@ aws s3 sync s3://local-bucket/ s3://cloud-bucket/ \
 ```
 
 Only changed or missing files will be transferred on subsequent runs.
-
-## Permission Errors During Sync
-
-Verify your AWS credentials are configured for both the source and destination:
-
-```bash
-aws sts get-caller-identity --profile spinifex
-aws sts get-caller-identity --profile default
-```
-
-Ensure the IAM user has `s3:GetObject`, `s3:PutObject`, and `s3:ListBucket` permissions on both buckets.

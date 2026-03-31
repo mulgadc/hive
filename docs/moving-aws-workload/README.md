@@ -37,14 +37,6 @@ Spinifex provides drop-in compatibility with AWS APIs, making it possible to mig
 
 ## Instructions
 
-## Prerequisites
-
-Ensure the AWS profile is set:
-
-```bash
-export AWS_PROFILE=spinifex
-```
-
 ## Configure AWS CLI
 
 ```bash

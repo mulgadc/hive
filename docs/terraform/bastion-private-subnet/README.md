@@ -1,8 +1,7 @@
 ---
-title: "Terraform: Bastion with Private Subnet"
+title: "Bastion with Private Subnet"
 description: "Deploy a bastion host to access an isolated private compute instance with no internet connectivity."
 category: "Terraform Workbooks"
-badge: "Workbook"
 tags:
   - terraform
   - bastion

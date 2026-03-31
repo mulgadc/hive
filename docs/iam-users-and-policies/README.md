@@ -53,7 +53,6 @@ When you create an account with `spx admin account create`, Spinifex bootstraps 
 
 ```bash
 export AWS_PROFILE=spinifex-myteam
-aws sts get-caller-identity
 ```
 
 ## Users
@@ -68,13 +67,13 @@ The response includes the user's ARN, unique ID, and creation date:
 
 ```json
 {
-    "User": {
-        "UserName": "alice",
-        "UserId": "AIDA1A2B3C4D5E6F7890",
-        "Arn": "arn:aws:iam::000000000001:user/alice",
-        "Path": "/",
-        "CreateDate": "2026-03-24T10:00:00Z"
-    }
+  "User": {
+    "UserName": "alice",
+    "UserId": "AIDA1A2B3C4D5E6F7890",
+    "Arn": "arn:aws:iam::000000000001:user/alice",
+    "Path": "/",
+    "CreateDate": "2026-03-24T10:00:00Z"
+  }
 }
 ```
 
@@ -120,7 +119,6 @@ aws iam detach-user-policy --user-name alice \
 aws iam delete-user --user-name alice
 ```
 
-
 ## Access Keys
 
 Access keys are how users authenticate with the AWS CLI. Each user can have up to **2 access keys** at a time, allowing key rotation without downtime.
@@ -133,13 +131,13 @@ aws iam create-access-key --user-name alice
 
 ```json
 {
-    "AccessKey": {
-        "UserName": "alice",
-        "AccessKeyId": "AKIA1A2B3C4D5E6F7890ABCD",
-        "Status": "Active",
-        "SecretAccessKey": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-        "CreateDate": "2026-03-24T10:05:00Z"
-    }
+  "AccessKey": {
+    "UserName": "alice",
+    "AccessKeyId": "AKIA1A2B3C4D5E6F7890ABCD",
+    "Status": "Active",
+    "SecretAccessKey": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "CreateDate": "2026-03-24T10:05:00Z"
+  }
 }
 ```
 
@@ -152,7 +150,6 @@ Add the credentials to `~/.aws/credentials` under a new profile and set `AWS_PRO
 ```bash
 aws iam list-access-keys --user-name alice
 ```
-
 
 ### Rotate Access Keys
 
@@ -189,7 +186,6 @@ aws iam update-access-key --user-name alice \
   --status Active
 ```
 
-
 ## Policies
 
 Policies are JSON documents that define what actions a user can perform on which resources.
@@ -198,14 +194,14 @@ Policies are JSON documents that define what actions a user can perform on which
 
 ```json
 {
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": ["ec2:RunInstances", "ec2:DescribeInstances"],
-            "Resource": "*"
-        }
-    ]
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["ec2:RunInstances", "ec2:DescribeInstances"],
+      "Resource": "*"
+    }
+  ]
 }
 ```
 
@@ -249,17 +245,16 @@ aws iam create-policy \
 
 ```json
 {
-    "Policy": {
-        "PolicyName": "EC2ReadOnly",
-        "PolicyId": "ANPA1A2B3C4D5E6F7890",
-        "Arn": "arn:aws:iam::000000000001:policy/EC2ReadOnly",
-        "Path": "/",
-        "DefaultVersionId": "v1",
-        "CreateDate": "2026-03-24T10:10:00Z"
-    }
+  "Policy": {
+    "PolicyName": "EC2ReadOnly",
+    "PolicyId": "ANPA1A2B3C4D5E6F7890",
+    "Arn": "arn:aws:iam::000000000001:policy/EC2ReadOnly",
+    "Path": "/",
+    "DefaultVersionId": "v1",
+    "CreateDate": "2026-03-24T10:10:00Z"
+  }
 }
 ```
-
 
 ### Common Policy Examples
 
@@ -267,14 +262,14 @@ aws iam create-policy \
 
 ```json
 {
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": "*",
-            "Resource": "*"
-        }
-    ]
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "*",
+      "Resource": "*"
+    }
+  ]
 }
 ```
 
@@ -282,19 +277,19 @@ aws iam create-policy \
 
 ```json
 {
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": [
-                "s3:GetObject",
-                "s3:PutObject",
-                "s3:ListBucket",
-                "s3:DeleteObject"
-            ],
-            "Resource": "*"
-        }
-    ]
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:ListBucket",
+        "s3:DeleteObject"
+      ],
+      "Resource": "*"
+    }
+  ]
 }
 ```
 
@@ -302,21 +297,21 @@ aws iam create-policy \
 
 ```json
 {
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": [
-                "ec2:RunInstances",
-                "ec2:StartInstances",
-                "ec2:StopInstances",
-                "ec2:TerminateInstances",
-                "ec2:DescribeInstances",
-                "ec2:DescribeImages"
-            ],
-            "Resource": "*"
-        }
-    ]
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:RunInstances",
+        "ec2:StartInstances",
+        "ec2:StopInstances",
+        "ec2:TerminateInstances",
+        "ec2:DescribeInstances",
+        "ec2:DescribeImages"
+      ],
+      "Resource": "*"
+    }
+  ]
 }
 ```
 
@@ -324,14 +319,14 @@ aws iam create-policy \
 
 ```json
 {
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Deny",
-            "Action": "ec2:TerminateInstances",
-            "Resource": "*"
-        }
-    ]
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Deny",
+      "Action": "ec2:TerminateInstances",
+      "Resource": "*"
+    }
+  ]
 }
 ```
 
@@ -352,7 +347,6 @@ aws iam get-policy-version \
   --version-id v1
 ```
 
-
 ### List Policies
 
 ```bash
@@ -368,7 +362,6 @@ aws iam delete-policy \
   --policy-arn arn:aws:iam::000000000001:policy/EC2ReadOnly
 ```
 
-
 ## Attaching Policies
 
 Policies have no effect until attached to a user.
@@ -379,7 +372,6 @@ Policies have no effect until attached to a user.
 aws iam attach-user-policy --user-name alice \
   --policy-arn arn:aws:iam::000000000001:policy/EC2ReadOnly
 ```
-
 
 ### List a User's Policies
 
@@ -453,24 +445,24 @@ AWS_PROFILE=spinifex-carol aws ec2 terminate-instances --instance-ids i-123
 
 ## Command Reference
 
-| Command | Key Parameters | Notes |
-|---------|---------------|-------|
-| `create-user` | `--user-name`, `--path` | Path default: `/` |
-| `get-user` | `--user-name` | |
-| `list-users` | `--path-prefix` | |
-| `delete-user` | `--user-name` | Must have no keys or policies |
-| `create-access-key` | `--user-name` | Max 2 per user; secret shown once |
-| `list-access-keys` | `--user-name` | |
-| `delete-access-key` | `--user-name`, `--access-key-id` | |
-| `update-access-key` | `--user-name`, `--access-key-id`, `--status` | `Active` or `Inactive` |
-| `create-policy` | `--policy-name`, `--policy-document` | Max 6144 bytes |
-| `get-policy` | `--policy-arn` | Metadata only |
-| `get-policy-version` | `--policy-arn`, `--version-id` | Use `v1`; includes document |
-| `list-policies` | | |
-| `delete-policy` | `--policy-arn` | Must not be attached |
-| `attach-user-policy` | `--user-name`, `--policy-arn` | Idempotent |
-| `detach-user-policy` | `--user-name`, `--policy-arn` | |
-| `list-attached-user-policies` | `--user-name` | |
+| Command                       | Key Parameters                               | Notes                             |
+| ----------------------------- | -------------------------------------------- | --------------------------------- |
+| `create-user`                 | `--user-name`, `--path`                      | Path default: `/`                 |
+| `get-user`                    | `--user-name`                                |                                   |
+| `list-users`                  | `--path-prefix`                              |                                   |
+| `delete-user`                 | `--user-name`                                | Must have no keys or policies     |
+| `create-access-key`           | `--user-name`                                | Max 2 per user; secret shown once |
+| `list-access-keys`            | `--user-name`                                |                                   |
+| `delete-access-key`           | `--user-name`, `--access-key-id`             |                                   |
+| `update-access-key`           | `--user-name`, `--access-key-id`, `--status` | `Active` or `Inactive`            |
+| `create-policy`               | `--policy-name`, `--policy-document`         | Max 6144 bytes                    |
+| `get-policy`                  | `--policy-arn`                               | Metadata only                     |
+| `get-policy-version`          | `--policy-arn`, `--version-id`               | Use `v1`; includes document       |
+| `list-policies`               |                                              |                                   |
+| `delete-policy`               | `--policy-arn`                               | Must not be attached              |
+| `attach-user-policy`          | `--user-name`, `--policy-arn`                | Idempotent                        |
+| `detach-user-policy`          | `--user-name`, `--policy-arn`                |                                   |
+| `list-attached-user-policies` | `--user-name`                                |                                   |
 
 ## Troubleshooting
 

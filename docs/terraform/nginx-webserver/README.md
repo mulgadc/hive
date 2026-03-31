@@ -1,8 +1,7 @@
 ---
-title: "Terraform: Nginx Web Server"
+title: "Nginx Web Server"
 description: "Deploy a VPC with a public subnet and an EC2 instance running Nginx using Terraform on Spinifex."
 category: "Terraform Workbooks"
-badge: "Workbook"
 tags:
   - terraform
   - nginx

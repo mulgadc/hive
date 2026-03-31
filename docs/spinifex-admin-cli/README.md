@@ -33,14 +33,6 @@ All services in the Spinifex platform are managed through this single binary.
 
 ## Instructions
 
-## Prerequisites
-
-Ensure the AWS profile is set:
-
-```bash
-export AWS_PROFILE=spinifex
-```
-
 ## Account Management
 
 ```bash

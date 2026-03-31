@@ -1,8 +1,7 @@
 ---
-title: "Terraform: S3-Backed Web App"
+title: "S3-Backed Web App"
 description: "Deploy a Flask file-sharing web application backed by S3 (Predastore) using Terraform on Spinifex."
 category: "Terraform Workbooks"
-badge: "Workbook"
 tags:
   - terraform
   - s3
