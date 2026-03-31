@@ -1,5 +1,5 @@
 ---
-title: "Source Install"
+title: "Source Installation"
 description: "Build Spinifex from source for development, custom builds, or contributing."
 category: "Getting Started"
 tags:
@@ -13,7 +13,7 @@ resources:
     url: "https://go.dev/dl/"
 ---
 
-# Source Install
+# Source Installation
 
 > Build Spinifex from source for development, custom builds, or contributing.
 

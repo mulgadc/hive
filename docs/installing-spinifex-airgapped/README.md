@@ -85,7 +85,7 @@ cp -r /mnt/usb/spinifex-source ~/Development/mulga/spinifex
 cd ~/Development/mulga/spinifex && make build
 ```
 
-Then follow the [Source Install](/docs/source-install) guide from Step 3 (Setup OVN) onwards.
+Then follow the [Source Installation](/docs/source-installation) guide from Step 3 (Setup OVN) onwards.
 
 ## Troubleshooting
 

@@ -1,7 +1,7 @@
 ---
 title: "Placement Groups"
 description: "Create and manage spread and cluster placement groups for hardware-level instance placement control."
-category: "Environments"
+category: "Compute"
 tags:
   - ec2
   - placement

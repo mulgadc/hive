@@ -1,7 +1,7 @@
 ---
 title: "Launching Instances"
 description: "Launch, manage, and connect to EC2-compatible virtual machines on Spinifex."
-category: "Environments"
+category: "Compute"
 tags:
   - ec2
   - instances

@@ -35,7 +35,7 @@ resources:
 This guide assumes Spinifex is already installed and running. If not, follow one of the installation guides first:
 - [Binary Install (Single Node)](/docs/installing-spinifex)
 - [Multi-Node Installation](/docs/installing-spinifex-multi-node)
-- [Source Install](/docs/source-install)
+- [Source Installation](/docs/source-installation)
 
 ## Instructions
 

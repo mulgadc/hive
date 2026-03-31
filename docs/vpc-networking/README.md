@@ -1,7 +1,7 @@
 ---
 title: "VPC Networking"
 description: "How Spinifex implements AWS-compatible VPC networking with public and private subnets, security groups, and Elastic IPs using OVN."
-category: "Environments"
+category: "Compute"
 tags:
   - vpc
   - networking
