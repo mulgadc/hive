@@ -60,7 +60,7 @@ Confirm `./bin/spx` exists.
 ## Step 3. Initialize
 
 ```bash
-sudo ./bin/spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
+sudo ./bin/spx admin init --node node1 --nodes 1
 ```
 
 Save the admin credentials printed during init.
