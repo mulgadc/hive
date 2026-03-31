@@ -53,8 +53,6 @@ Spinifex provides EC2-compatible VM management built on QEMU/KVM. Instances supp
 ## Launch
 
 ```bash
-export AWS_PROFILE=spinifex
-
 aws ec2 run-instances \
   --image-id $SPINIFEX_AMI \
   --instance-type t3.small \
