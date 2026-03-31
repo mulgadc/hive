@@ -27,7 +27,7 @@ resources:
 
 The `spx` binary is the central administration tool for managing your Spinifex infrastructure. It provides commands for cluster initialization, account management, node operations, VM lifecycle, and service control.
 
-**Binary location:** `~/Development/mulga/spinifex/bin/spx`
+**Binary location:** `/usr/local/bin/spx` (binary install) or `~/Development/mulga/spinifex/bin/spx` (source install)
 
 All services in the Spinifex platform are managed through this single binary.
 
@@ -36,14 +36,14 @@ All services in the Spinifex platform are managed through this single binary.
 ## Account Management
 
 ```bash
-./bin/spx admin account create --name myteam
+spx admin account create --name myteam
 export AWS_PROFILE=spinifex-myteam
 ```
 
 ## Node Management
 
 ```bash
-./bin/spx get nodes
+spx get nodes
 ```
 
 ```
@@ -56,20 +56,20 @@ node3   Ready     127.0.0.3       ap-southeast-2   ap-southeast-2a  2m       0
 ## Monitor Resources
 
 ```bash
-./bin/spx top nodes
+spx top nodes
 ```
 
 ## Image Management
 
 ```bash
-./bin/spx admin images list
-./bin/spx admin images import --name debian-12-arm64
+spx admin images list
+spx admin images import --name debian-12-arm64
 ```
 
 ## Cluster Shutdown
 
 ```bash
-./bin/spx admin cluster shutdown
+spx admin cluster shutdown
 ```
 
 ## Troubleshooting
@@ -79,7 +79,7 @@ node3   Ready     127.0.0.3       ap-southeast-2   ap-southeast-2a  2m       0
 The binary may not be executable. Fix permissions:
 
 ```bash
-chmod +x ./bin/spx
+chmod +x /usr/local/bin/spx
 ```
 
 If you get permission errors during operations, ensure you're running with appropriate privileges. Some OVN and networking commands require `sudo`.

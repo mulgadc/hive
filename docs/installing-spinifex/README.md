@@ -38,7 +38,7 @@ This guide installs Spinifex on a single server using the binary installer. For 
 - Ubuntu 22.04 / 24.04 / 25.10
 - Debian 12 / 13
 
-**What gets installed:**
+**What Gets Installed:**
 
 - Spinifex daemon and CLI
 - QEMU/KVM for virtual machine management

@@ -99,7 +99,7 @@ aws ec2 delete-placement-group --group-name my-spread-group
 Not enough distinct physical hosts for a spread launch. Reduce `--count` or terminate existing instances to free host slots:
 
 ```bash
-./bin/spx admin nodes list
+spx admin nodes list
 ```
 
 ### Cannot Delete Placement Group
