@@ -697,6 +697,26 @@ func (d *Daemon) Start() error {
 	// Wire ALB VM lifecycle: instance launcher for system VMs.
 	d.elbv2Service.SetInstanceLauncher(d)
 
+	// Detect management bridge for system instance control plane NICs.
+	// Must run before wireALBAgentConfig so the gateway URL uses br-mgmt IP.
+	mgmtBridge := "br-mgmt"
+	if d.config.Daemon.MgmtBridge != "" {
+		mgmtBridge = d.config.Daemon.MgmtBridge
+	}
+	bridgeIP, bridgeErr := GetBridgeIPv4(mgmtBridge)
+	if bridgeErr != nil {
+		slog.Warn("Management bridge not detected, system instances will not get mgmt NIC", "bridge", mgmtBridge, "err", bridgeErr)
+	} else {
+		d.mgmtBridgeIP = bridgeIP
+		alloc, allocErr := NewMgmtIPAllocator(bridgeIP)
+		if allocErr != nil {
+			slog.Error("Failed to create mgmt IP allocator", "bridgeIP", bridgeIP, "err", allocErr)
+		} else {
+			d.mgmtIPAllocator = alloc
+			slog.Info("Management bridge detected", "bridge", mgmtBridge, "ip", bridgeIP)
+		}
+	}
+
 	// Wire system credentials + gateway URL for ALB agent SigV4 auth.
 	d.wireALBAgentConfig()
 
@@ -763,25 +783,6 @@ func (d *Daemon) Start() error {
 	// Initialize network plumber for VPC tap device management
 	if d.networkPlumber == nil {
 		d.networkPlumber = &OVSNetworkPlumber{}
-	}
-
-	// Detect management bridge for system instance control plane NICs.
-	mgmtBridge := "br-mgmt"
-	if d.config.Daemon.MgmtBridge != "" {
-		mgmtBridge = d.config.Daemon.MgmtBridge
-	}
-	bridgeIP, bridgeErr := GetBridgeIPv4(mgmtBridge)
-	if bridgeErr != nil {
-		slog.Warn("Management bridge not detected, system instances will not get mgmt NIC", "bridge", mgmtBridge, "err", bridgeErr)
-	} else {
-		d.mgmtBridgeIP = bridgeIP
-		alloc, allocErr := NewMgmtIPAllocator(bridgeIP)
-		if allocErr != nil {
-			slog.Error("Failed to create mgmt IP allocator", "bridgeIP", bridgeIP, "err", allocErr)
-		} else {
-			d.mgmtIPAllocator = alloc
-			slog.Info("Management bridge detected", "bridge", mgmtBridge, "ip", bridgeIP)
-		}
 	}
 
 	// Protect daemon from OOM killer (prefer killing QEMU VMs instead)
