@@ -11,7 +11,7 @@ require (
 	github.com/mulgadc/predastore v1.1.3
 	github.com/mulgadc/viperblock v1.1.5
 	github.com/nats-io/nats-server/v2 v2.12.6
-	github.com/nats-io/nats.go v1.49.0
+	github.com/nats-io/nats.go v1.50.0
 	github.com/ovn-kubernetes/libovsdb v0.8.1
 	github.com/pelletier/go-toml/v2 v2.3.0
 	github.com/pterm/pterm v0.12.83

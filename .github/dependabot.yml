@@ -42,6 +42,10 @@ updates:
       timezone: Australia/Sydney
     cooldown:
       default-days: 1
+    ignore:
+      - dependency-name: "@types/node"
+        update-types:
+          - "version-update:semver-major"
     groups:
       npm-dependencies:
         patterns:
