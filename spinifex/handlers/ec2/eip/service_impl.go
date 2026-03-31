@@ -370,49 +370,61 @@ func (s *EIPServiceImpl) DescribeAddresses(input *ec2.DescribeAddressesInput, ac
 
 // DescribeAddressesAttribute returns per-EIP attributes (e.g. domain-name).
 // Spinifex doesn't support reverse-DNS PTR records, so PtrRecord is left nil.
+// Unlike DescribeAddresses, this returns an empty list (not an error) when
+// requested AllocationIds are not found. This matches real AWS behavior.
 func (s *EIPServiceImpl) DescribeAddressesAttribute(input *ec2.DescribeAddressesAttributeInput, accountID string) (*ec2.DescribeAddressesAttributeOutput, error) {
-	allocIDs := make(map[string]bool)
-	for _, id := range input.AllocationIds {
-		if id != nil {
-			allocIDs[*id] = true
-		}
-	}
-
-	prefix := accountID + "."
-	keys, err := s.eipKV.Keys()
-	if err != nil && !errors.Is(err, nats.ErrNoKeysFound) {
-		return nil, errors.New(awserrors.ErrorServerInternal)
-	}
-
 	var addresses []*ec2.AddressAttribute
-	for _, k := range keys {
-		if k == utils.VersionKey {
-			continue
-		}
-		if !strings.HasPrefix(k, prefix) {
-			continue
-		}
 
-		entry, err := s.eipKV.Get(k)
-		if err != nil {
-			slog.Warn("Failed to get EIP record", "key", k, "error", err)
-			continue
+	if len(input.AllocationIds) > 0 {
+		// Direct lookups — O(n) on requested IDs rather than scanning all EIPs.
+		for _, id := range input.AllocationIds {
+			if id == nil {
+				continue
+			}
+			key := utils.AccountKey(accountID, *id)
+			entry, err := s.eipKV.Get(key)
+			if err != nil {
+				continue // not found, skip
+			}
+			var record EIPRecord
+			if err := json.Unmarshal(entry.Value(), &record); err != nil {
+				slog.Warn("Failed to unmarshal EIP record", "key", key, "error", err)
+				continue
+			}
+			addresses = append(addresses, &ec2.AddressAttribute{
+				AllocationId: aws.String(record.AllocationId),
+				PublicIp:     aws.String(record.PublicIp),
+			})
 		}
-
-		var record EIPRecord
-		if err := json.Unmarshal(entry.Value(), &record); err != nil {
-			slog.Warn("Failed to unmarshal EIP record", "key", k, "error", err)
-			continue
+	} else {
+		// No filter — scan all EIPs for this account.
+		prefix := accountID + "."
+		keys, err := s.eipKV.Keys()
+		if err != nil && !errors.Is(err, nats.ErrNoKeysFound) {
+			return nil, errors.New(awserrors.ErrorServerInternal)
 		}
-
-		if len(allocIDs) > 0 && !allocIDs[record.AllocationId] {
-			continue
+		for _, k := range keys {
+			if k == utils.VersionKey {
+				continue
+			}
+			if !strings.HasPrefix(k, prefix) {
+				continue
+			}
+			entry, err := s.eipKV.Get(k)
+			if err != nil {
+				slog.Warn("Failed to get EIP record", "key", k, "error", err)
+				continue
+			}
+			var record EIPRecord
+			if err := json.Unmarshal(entry.Value(), &record); err != nil {
+				slog.Warn("Failed to unmarshal EIP record", "key", k, "error", err)
+				continue
+			}
+			addresses = append(addresses, &ec2.AddressAttribute{
+				AllocationId: aws.String(record.AllocationId),
+				PublicIp:     aws.String(record.PublicIp),
+			})
 		}
-
-		addresses = append(addresses, &ec2.AddressAttribute{
-			AllocationId: aws.String(record.AllocationId),
-			PublicIp:     aws.String(record.PublicIp),
-		})
 	}
 
 	slog.Info("DescribeAddressesAttribute completed", "count", len(addresses), "accountID", accountID)
