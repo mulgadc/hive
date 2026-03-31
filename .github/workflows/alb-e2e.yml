@@ -3,7 +3,7 @@ name: ALB Internet-facing E2E Tests
 on:
   push:
     branches:
-      - feature/alb-scheme-networking
+      - main
     paths:
       - "**/*.go"
       - go.mod

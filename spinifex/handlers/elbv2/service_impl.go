@@ -30,20 +30,24 @@ const (
 )
 
 // albVMUserData generates cloud-config user data for an ALB VM.
-// Uses write_files to populate /etc/conf.d/alb-agent with the lb-id, then
-// runcmd starts the OpenRC service. This ordering is guaranteed by cloud-init
-// (write_files runs before runcmd). The service is NOT enabled at boot in the
-// image — cloud-init is the sole trigger so the env vars are always present
-// before the agent starts.
-func albVMUserData(lbID string) string {
+// Uses write_files to populate /etc/conf.d/alb-agent with the lb-id, gateway
+// URL, and system credentials for SigV4 auth. The CA cert is already injected
+// by the instance service's cloud-init template (same as regular EC2 VMs).
+// Cloud-init guarantees write_files runs before runcmd. The service is NOT
+// enabled at boot in the image — cloud-init is the sole trigger so the env
+// vars are always present before the agent starts.
+func (s *ELBv2ServiceImpl) albVMUserData(lbID string) string {
 	return fmt.Sprintf(`#cloud-config
 write_files:
   - path: /etc/conf.d/alb-agent
     content: |
       ALB_LB_ID=%s
+      ALB_GATEWAY_URL=%s
+      ALB_ACCESS_KEY=%s
+      ALB_SECRET_KEY=%s
 runcmd:
   - [ "rc-service", "alb-agent", "start" ]
-`, lbID)
+`, lbID, s.gatewayURL, s.systemAccessKey, s.systemSecretKey)
 }
 
 // Ensure ELBv2ServiceImpl implements ELBv2Service at compile time.
@@ -63,6 +67,9 @@ type ELBv2ServiceImpl struct {
 	systemInstanceType     string        // instance type for system VMs; resolved lazily via systemInstanceTypeFunc
 	systemInstanceTypeFunc func() string // returns the smallest available instance type
 	httpClient             *http.Client  // HTTP client for communicating with ALB agents
+	systemAccessKey        string        // System account access key for ALB agent SigV4 auth
+	systemSecretKey        string        // System account secret key for ALB agent SigV4 auth
+	gatewayURL             string        // AWS gateway URL for ALB agent outbound connections
 	ctx                    context.Context
 	cancel                 context.CancelFunc
 	hc                     *healthChecker
@@ -160,6 +167,18 @@ func (s *ELBv2ServiceImpl) getSystemInstanceType() string {
 		s.systemInstanceType = s.systemInstanceTypeFunc()
 	}
 	return s.systemInstanceType
+}
+
+// SetSystemCredentials sets the system account access key and secret key
+// used for ALB agent SigV4 authentication with the gateway.
+func (s *ELBv2ServiceImpl) SetSystemCredentials(accessKey, secretKey string) {
+	s.systemAccessKey = accessKey
+	s.systemSecretKey = secretKey
+}
+
+// SetGatewayURL sets the AWS gateway URL that ALB agents connect to.
+func (s *ELBv2ServiceImpl) SetGatewayURL(url string) {
+	s.gatewayURL = url
 }
 
 // agentURL returns the base URL for an ALB agent's HTTP server.
@@ -493,7 +512,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 			}
 		}
 
-		userData := albVMUserData(lbID)
+		userData := s.albVMUserData(lbID)
 		launchInput := &SystemInstanceInput{
 			InstanceType: s.getSystemInstanceType(),
 			ImageID:      s.getSystemAMI(),

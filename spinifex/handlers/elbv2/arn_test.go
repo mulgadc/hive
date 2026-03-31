@@ -23,11 +23,19 @@ func TestBuildListenerArn(t *testing.T) {
 }
 
 func TestAlbVMUserData_ContainsLBID(t *testing.T) {
-	ud := albVMUserData("lb-abc123")
+	svc := &ELBv2ServiceImpl{
+		gatewayURL:      "https://192.168.1.33:9999",
+		systemAccessKey: "AKIAIOSFODNN7EXAMPLE",
+		systemSecretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+	}
+	ud := svc.albVMUserData("lb-abc123")
 	assert.Contains(t, ud, "#cloud-config")
 	assert.Contains(t, ud, "write_files:")
 	assert.Contains(t, ud, "/etc/conf.d/alb-agent")
 	assert.Contains(t, ud, "ALB_LB_ID=lb-abc123")
+	assert.Contains(t, ud, "ALB_GATEWAY_URL=https://192.168.1.33:9999")
+	assert.Contains(t, ud, "ALB_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE")
+	assert.Contains(t, ud, "ALB_SECRET_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
 	// NATS URL should no longer be present
 	assert.NotContains(t, ud, "NATS")
 }
@@ -35,7 +43,12 @@ func TestAlbVMUserData_ContainsLBID(t *testing.T) {
 func TestAlbVMUserData_WriteFilesThenRuncmd(t *testing.T) {
 	// Cloud-init guarantees write_files runs before runcmd. The agent is NOT
 	// enabled at boot via OpenRC — cloud-init is the sole trigger.
-	ud := albVMUserData("lb-test")
+	svc := &ELBv2ServiceImpl{
+		gatewayURL:      "https://10.0.2.2:9999",
+		systemAccessKey: "AKID",
+		systemSecretKey: "SECRET",
+	}
+	ud := svc.albVMUserData("lb-test")
 	assert.Contains(t, ud, "write_files:")
 	assert.Contains(t, ud, "/etc/conf.d/alb-agent")
 	assert.Contains(t, ud, "rc-service")
@@ -46,6 +59,18 @@ func TestAlbVMUserData_WriteFilesThenRuncmd(t *testing.T) {
 	wfIdx := strings.Index(ud, "write_files:")
 	rcIdx := strings.Index(ud, "runcmd:")
 	assert.Greater(t, rcIdx, wfIdx, "write_files must precede runcmd")
+}
+
+func TestAlbVMUserData_NoCACert(t *testing.T) {
+	// CA cert is injected by the instance service's cloud-init template,
+	// not by albVMUserData — verify it's not duplicated here.
+	svc := &ELBv2ServiceImpl{
+		gatewayURL:      "https://192.168.1.33:9999",
+		systemAccessKey: "AKID",
+		systemSecretKey: "SECRET",
+	}
+	ud := svc.albVMUserData("lb-noca")
+	assert.NotContains(t, ud, "ca_certs:")
 }
 
 func TestAgentURL(t *testing.T) {

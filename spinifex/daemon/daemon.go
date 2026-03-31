@@ -133,6 +133,10 @@ type Daemon struct {
 	startTime     time.Time
 	configPath    string
 
+	// System credentials for ALB agent SigV4 auth (loaded from system-credentials.json)
+	systemAccessKey string
+	systemSecretKey string
+
 	// JetStream manager for KV state storage (nil if JetStream disabled)
 	jsManager *JetStreamManager
 
@@ -685,6 +689,10 @@ func (d *Daemon) Start() error {
 
 	// Wire ALB VM lifecycle: instance launcher for system VMs.
 	d.elbv2Service.SetInstanceLauncher(d)
+
+	// Wire system credentials + gateway URL for ALB agent SigV4 auth.
+	d.wireALBAgentConfig()
+
 	// Set up lazy system AMI discovery for ALB VMs. The image may not exist
 	// at daemon startup (imported later), so we resolve it at request time.
 	if d.imageService != nil {
@@ -2805,5 +2813,72 @@ func (rm *ResourceManager) updateInstanceSubscriptions() {
 				slog.Info("Unsubscribed from node-specific instance type (capacity full)", "topic", nodeTopic)
 			}
 		}
+	}
+}
+
+// wireALBAgentConfig loads system credentials, resolves the gateway URL,
+// reads the CA certificate, and wires them into the ELBv2 service so ALB
+// VMs get SigV4 credentials and gateway URL injected via cloud-init.
+func (d *Daemon) wireALBAgentConfig() {
+	if d.configPath == "" {
+		slog.Debug("No config path set, skipping ALB agent credential wiring")
+		return
+	}
+
+	configDir := filepath.Dir(d.configPath)
+
+	// Load system credentials from plaintext JSON file written by admin init.
+	credsPath := filepath.Join(configDir, "system-credentials.json")
+	credsData, err := os.ReadFile(credsPath)
+	if err != nil {
+		slog.Debug("System credentials file not found, ALB agent auth not configured", "path", credsPath, "err", err)
+		return
+	}
+
+	var creds struct {
+		AccessKeyID     string `json:"access_key_id"`
+		SecretAccessKey string `json:"secret_access_key"`
+	}
+	if err := json.Unmarshal(credsData, &creds); err != nil {
+		slog.Error("Failed to parse system credentials", "path", credsPath, "err", err)
+		return
+	}
+	d.systemAccessKey = creds.AccessKeyID
+	d.systemSecretKey = creds.SecretAccessKey
+	d.elbv2Service.SetSystemCredentials(creds.AccessKeyID, creds.SecretAccessKey)
+	slog.Info("System credentials loaded for ALB agent auth")
+
+	// Resolve gateway URL. In dev mode, VMs reach the host at 10.0.2.2 via
+	// QEMU SLIRP. In production, use the external IPAM pool's GatewayIP
+	// (the node's own IP on the WAN network).
+	var gatewayHost string
+	if d.config.Daemon.DevNetworking {
+		gatewayHost = "10.0.2.2"
+	} else if d.externalIPAM != nil {
+		// Use the first pool's gateway IP as the node's external address.
+		poolName := "wan"
+		if len(d.clusterConfig.Network.ExternalPools) > 0 {
+			poolName = d.clusterConfig.Network.ExternalPools[0].Name
+		}
+		record, poolErr := d.externalIPAM.GetPoolRecord(poolName)
+		if poolErr == nil && record != nil && record.GatewayIP != "" {
+			gatewayHost = record.GatewayIP
+		} else {
+			slog.Warn("Could not resolve gateway IP from external IPAM pool", "pool", poolName, "err", poolErr)
+		}
+	}
+
+	// Extract port from AWSGW host config (e.g. "0.0.0.0:9999" → "9999").
+	gatewayPort := "9999"
+	if d.config.AWSGW.Host != "" {
+		if _, port, splitErr := net.SplitHostPort(d.config.AWSGW.Host); splitErr == nil && port != "" {
+			gatewayPort = port
+		}
+	}
+
+	if gatewayHost != "" {
+		gatewayURL := fmt.Sprintf("https://%s:%s", gatewayHost, gatewayPort)
+		d.elbv2Service.SetGatewayURL(gatewayURL)
+		slog.Info("ALB agent gateway URL configured", "url", gatewayURL)
 	}
 }
