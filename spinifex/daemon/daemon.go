@@ -1868,15 +1868,13 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 			// On termination, detach and delete the auto-created ENI (releases IP
 			// back to IPAM, publishes vpc.delete-port for vpcd). On stop, ENI
 			// persists (AWS behavior). Must detach first to clear in-use status.
+			// Tolerate NotFound — ENI may have been cleaned up already.
 			if deleteVolume && instance.ENIId != "" && d.vpcService != nil {
-				if detachErr := d.vpcService.DetachENI(instance.AccountID, instance.ENIId); detachErr != nil {
-					slog.Warn("Failed to detach ENI on termination", "eni", instance.ENIId, "err", detachErr)
-				}
-				_, eniErr := d.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+				_ = d.vpcService.DetachENI(instance.AccountID, instance.ENIId)
+				if _, eniErr := d.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
 					NetworkInterfaceId: &instance.ENIId,
-				}, instance.AccountID)
-				if eniErr != nil {
-					slog.Error("Failed to delete ENI on termination", "eni", instance.ENIId, "err", eniErr)
+				}, instance.AccountID); eniErr != nil {
+					slog.Debug("ENI already cleaned up on termination", "eni", instance.ENIId, "err", eniErr)
 				} else {
 					slog.Info("Deleted ENI on termination", "eni", instance.ENIId, "instanceId", instance.ID)
 				}
