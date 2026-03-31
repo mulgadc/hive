@@ -112,6 +112,7 @@ type DaemonConfig struct {
 	TLSKey        string `mapstructure:"tlskey"`
 	TLSCert       string `mapstructure:"tlscert"`
 	DevNetworking bool   `mapstructure:"dev_networking"` // VPC instances get both TAP + hostfwd for SSH dev access
+	MgmtBridge    string `mapstructure:"mgmt_bridge"`    // Linux bridge for system instance control plane (default "br-mgmt")
 }
 
 // NATSConfig holds the NATS configuration
