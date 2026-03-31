@@ -934,3 +934,39 @@ func TestUpdateStoredConfig_SkipsWhenNoInstance(t *testing.T) {
 	assert.Empty(t, stored.ConfigText)
 	assert.Empty(t, stored.ConfigHash)
 }
+
+// --- Service lifecycle and setter tests ---
+
+func TestClose(t *testing.T) {
+	svc := setupTestService(t)
+	// Close should not panic; stops health checker and cancels context.
+	svc.Close()
+}
+
+func TestSetSystemCredentials(t *testing.T) {
+	svc := setupTestService(t)
+	svc.SetSystemCredentials("AKID123", "secret456")
+	assert.Equal(t, "AKID123", svc.systemAccessKey)
+	assert.Equal(t, "secret456", svc.systemSecretKey)
+}
+
+func TestSetGatewayURL(t *testing.T) {
+	svc := setupTestService(t)
+	svc.SetGatewayURL("https://10.15.8.1:9999")
+	assert.Equal(t, "https://10.15.8.1:9999", svc.gatewayURL)
+}
+
+func TestSetSystemInstanceTypeFunc(t *testing.T) {
+	svc := setupTestService(t)
+
+	// Before setting, should return empty
+	assert.Empty(t, svc.getSystemInstanceType())
+
+	// Set the resolver
+	svc.SetSystemInstanceTypeFunc(func() string { return "t3.micro" })
+	assert.Equal(t, "t3.micro", svc.getSystemInstanceType())
+
+	// Once resolved, caches the value
+	svc.systemInstanceTypeFunc = func() string { return "t3.large" }
+	assert.Equal(t, "t3.micro", svc.getSystemInstanceType())
+}
