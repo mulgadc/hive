@@ -1,7 +1,7 @@
 ---
 title: "Launching Instances"
 description: "Launch, manage, and connect to EC2-compatible virtual machines on Spinifex."
-category: "Environments"
+category: "Compute"
 tags:
   - ec2
   - instances
@@ -125,10 +125,14 @@ aws ec2 describe-instance-types \
 
 ## SSH (Development)
 
+In development mode, find the QEMU port forward and connect via localhost:
+
 ```bash
 ps auxw | grep $INSTANCE_ID
 ssh -i ~/.ssh/spinifex-key ec2-user@127.0.0.1 -p <port>
 ```
+
+For production SSH via public IPs, see [Setting Up Your Cluster](/docs/setting-up-your-cluster).
 
 ## Troubleshooting
 
@@ -144,8 +148,8 @@ aws ec2 describe-images --image-ids $SPINIFEX_AMI
 If the AMI is for a different architecture (e.g. arm64 on an x86_64 host), import the correct image:
 
 ```bash
-./bin/spx admin images list
-./bin/spx admin images import --name debian-12-x86_64
+spx admin images list
+spx admin images import --name debian-12-x86_64
 ```
 
 ### Cannot SSH Into Instance

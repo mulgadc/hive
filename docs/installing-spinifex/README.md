@@ -31,14 +31,14 @@ resources:
 
 Spinifex is an open-source infrastructure platform that brings core AWS services — EC2, VPC, EBS, and S3 — to bare-metal, edge, and on-prem environments.
 
-This guide installs Spinifex on a single server using the binary installer. For multi-server clusters, see [Multi-Node Installation](/docs/installing-spinifex-multi-node). To build from source, see [Source Install](/docs/source-install).
+This guide installs Spinifex on a single server using the binary installer. For multi-server clusters, see [Multi-Node Installation](/docs/installing-spinifex-multi-node). To build from source, see [Source Installation](/docs/source-installation).
 
 **Supported Operating Systems:**
 
 - Ubuntu 22.04 / 24.04 / 25.10
 - Debian 12 / 13
 
-**What gets installed:**
+**What Gets Installed:**
 
 - Spinifex daemon and CLI
 - QEMU/KVM for virtual machine management
@@ -74,6 +74,14 @@ sudo /usr/local/share/spinifex/setup-ovn.sh --management --wan-bridge=br-wan --w
 # Single-NIC host (SSH-safe macvlan):
 sudo /usr/local/share/spinifex/setup-ovn.sh --management --macvlan --wan-iface=enp0s3
 ```
+
+**Separating VPC tunnel traffic from WAN:** If you want Geneve tunnel traffic (inter-VM east-west) to use a dedicated interface instead of the WAN IP, add `--encap-ip=<IP>` to specify the tunnel endpoint address:
+
+```bash
+sudo /usr/local/share/spinifex/setup-ovn.sh --management --encap-ip=10.0.0.1
+```
+
+This is recommended for production and required in multi-node deployments. See [Multi-Node Installation](/docs/installing-spinifex-multi-node) for details.
 
 ## Step 3. Initialize
 
