@@ -1168,6 +1168,18 @@ func (d *Daemon) handleEC2ModifyInstanceAttribute(msg *nats.Msg) {
 
 	instanceID := *input.InstanceId
 
+	// SourceDestCheck is a networking concept that doesn't apply to bare-metal VMs.
+	// Accept the call as a no-op so Terraform and the AWS CLI don't error out.
+	// Unlike InstanceType/UserData, AWS allows this on running instances, so handle
+	// it before the stopped-state gate.
+	if input.SourceDestCheck != nil {
+		slog.Info("handleEC2ModifyInstanceAttribute: accepting SourceDestCheck (no-op on bare metal)", "instanceId", instanceID)
+		if err := msg.Respond([]byte(`{}`)); err != nil {
+			slog.Error("Failed to respond to NATS request", "err", err)
+		}
+		return
+	}
+
 	if d.jsManager == nil {
 		slog.Error("handleEC2ModifyInstanceAttribute: JetStream not available")
 		respondWithError(msg, awserrors.ErrorServerInternal)

@@ -1736,6 +1736,27 @@ func TestHandleEC2ModifyInstanceAttribute_ChangeUserData(t *testing.T) {
 	assert.Equal(t, "IyEvYmluL2Jhc2g=", *updated.RunInstancesInput.UserData)
 }
 
+func TestHandleEC2ModifyInstanceAttribute_SourceDestCheck(t *testing.T) {
+	natsURL := sharedJSNATSURL
+
+	daemon := createFullTestDaemonWithJetStream(t, natsURL)
+
+	sub, err := daemon.natsConn.QueueSubscribe("ec2.ModifyInstanceAttribute", "spinifex-workers", daemon.handleEC2ModifyInstanceAttribute)
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+
+	// SourceDestCheck is a no-op that succeeds without requiring a stopped instance
+	// in KV — Terraform sends this on running instances right after creation.
+	input := &ec2.ModifyInstanceAttributeInput{
+		InstanceId:      aws.String("i-modify-sdc-001"),
+		SourceDestCheck: &ec2.AttributeBooleanValue{Value: aws.Bool(false)},
+	}
+	reqData, _ := json.Marshal(input)
+	reply, err := natsRequest(daemon.natsConn, "ec2.ModifyInstanceAttribute", reqData, 5*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, `{}`, string(reply.Data))
+}
+
 func TestHandleEC2ModifyInstanceAttribute_InstanceNotFound(t *testing.T) {
 	natsURL := sharedJSNATSURL
 

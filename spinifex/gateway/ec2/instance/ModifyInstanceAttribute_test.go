@@ -95,6 +95,24 @@ func TestValidateModifyInstanceAttributeInput_ValidUserData(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestValidateModifyInstanceAttributeInput_ValidSourceDestCheck(t *testing.T) {
+	err := ValidateModifyInstanceAttributeInput(&ec2.ModifyInstanceAttributeInput{
+		InstanceId:      aws.String("i-abc123"),
+		SourceDestCheck: &ec2.AttributeBooleanValue{Value: aws.Bool(true)},
+	})
+	assert.NoError(t, err)
+}
+
+func TestValidateModifyInstanceAttributeInput_SourceDestCheckWithOtherAttribute(t *testing.T) {
+	err := ValidateModifyInstanceAttributeInput(&ec2.ModifyInstanceAttributeInput{
+		InstanceId:      aws.String("i-abc123"),
+		SourceDestCheck: &ec2.AttributeBooleanValue{Value: aws.Bool(false)},
+		InstanceType:    &ec2.AttributeValue{Value: aws.String("t3.micro")},
+	})
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidParameterValue, err.Error())
+}
+
 // --- Gateway function tests ---
 
 func TestModifyInstanceAttribute_Success(t *testing.T) {
@@ -111,6 +129,22 @@ func TestModifyInstanceAttribute_Success(t *testing.T) {
 	input := &ec2.ModifyInstanceAttributeInput{
 		InstanceId:   aws.String("i-test123"),
 		InstanceType: &ec2.AttributeValue{Value: aws.String("t3.medium")},
+	}
+
+	_, err := ModifyInstanceAttribute(input, nc, "123456789012")
+	assert.NoError(t, err)
+}
+
+func TestModifyInstanceAttribute_SourceDestCheck(t *testing.T) {
+	_, nc := startTestNATSServer(t)
+
+	nc.QueueSubscribe("ec2.ModifyInstanceAttribute", "spinifex-workers", func(msg *nats.Msg) {
+		msg.Respond([]byte(`{}`))
+	})
+
+	input := &ec2.ModifyInstanceAttributeInput{
+		InstanceId:      aws.String("i-test123"),
+		SourceDestCheck: &ec2.AttributeBooleanValue{Value: aws.Bool(true)},
 	}
 
 	_, err := ModifyInstanceAttribute(input, nc, "123456789012")
