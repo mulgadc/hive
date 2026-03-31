@@ -1,0 +1,263 @@
+package filterutil
+
+import (
+	"testing"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/ec2"
+)
+
+func TestParseFilters_NilInput(t *testing.T) {
+	result, err := ParseFilters(nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != nil {
+		t.Fatalf("expected nil, got %v", result)
+	}
+}
+
+func TestParseFilters_EmptyInput(t *testing.T) {
+	result, err := ParseFilters([]*ec2.Filter{}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != nil {
+		t.Fatalf("expected nil, got %v", result)
+	}
+}
+
+func TestParseFilters_ValidFilters(t *testing.T) {
+	valid := map[string]bool{"vpc-id": true, "state": true}
+	filters := []*ec2.Filter{
+		{Name: aws.String("vpc-id"), Values: []*string{aws.String("vpc-1"), aws.String("vpc-2")}},
+		{Name: aws.String("state"), Values: []*string{aws.String("running")}},
+	}
+
+	result, err := ParseFilters(filters, valid)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 filter keys, got %d", len(result))
+	}
+	if len(result["vpc-id"]) != 2 {
+		t.Fatalf("expected 2 vpc-id values, got %d", len(result["vpc-id"]))
+	}
+	if result["state"][0] != "running" {
+		t.Fatalf("expected state=running, got %s", result["state"][0])
+	}
+}
+
+func TestParseFilters_InvalidFilterName(t *testing.T) {
+	valid := map[string]bool{"vpc-id": true}
+	filters := []*ec2.Filter{
+		{Name: aws.String("bogus-filter"), Values: []*string{aws.String("x")}},
+	}
+
+	_, err := ParseFilters(filters, valid)
+	if err == nil {
+		t.Fatal("expected error for invalid filter name")
+	}
+}
+
+func TestParseFilters_TagFiltersAlwaysAccepted(t *testing.T) {
+	valid := map[string]bool{"vpc-id": true}
+	filters := []*ec2.Filter{
+		{Name: aws.String("tag:Environment"), Values: []*string{aws.String("prod")}},
+	}
+
+	result, err := ParseFilters(filters, valid)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result["tag:Environment"]) != 1 {
+		t.Fatalf("expected 1 tag filter value, got %d", len(result["tag:Environment"]))
+	}
+}
+
+func TestParseFilters_NilNameSkipped(t *testing.T) {
+	valid := map[string]bool{"vpc-id": true}
+	filters := []*ec2.Filter{
+		{Name: nil, Values: []*string{aws.String("x")}},
+		{Name: aws.String("vpc-id"), Values: []*string{aws.String("vpc-1")}},
+	}
+
+	result, err := ParseFilters(filters, valid)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 filter key, got %d", len(result))
+	}
+}
+
+func TestParseFilters_NilValuesSkipped(t *testing.T) {
+	valid := map[string]bool{"state": true}
+	filters := []*ec2.Filter{
+		{Name: aws.String("state"), Values: []*string{aws.String("running"), nil, aws.String("stopped")}},
+	}
+
+	result, err := ParseFilters(filters, valid)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result["state"]) != 2 {
+		t.Fatalf("expected 2 state values, got %d", len(result["state"]))
+	}
+}
+
+func TestMatchesAny_EmptyFilterValues(t *testing.T) {
+	if !MatchesAny(nil, "anything") {
+		t.Fatal("expected true for empty filter values")
+	}
+	if !MatchesAny([]string{}, "anything") {
+		t.Fatal("expected true for empty filter values")
+	}
+}
+
+func TestMatchesAny_ExactMatch(t *testing.T) {
+	if !MatchesAny([]string{"running", "stopped"}, "running") {
+		t.Fatal("expected match for 'running'")
+	}
+	if MatchesAny([]string{"running", "stopped"}, "terminated") {
+		t.Fatal("expected no match for 'terminated'")
+	}
+}
+
+func TestMatchesAny_WildcardStar(t *testing.T) {
+	if !MatchesAny([]string{"*"}, "anything") {
+		t.Fatal("expected * to match anything")
+	}
+}
+
+func TestMatchesAny_WildcardPrefix(t *testing.T) {
+	if !MatchesAny([]string{"prod-*"}, "prod-web") {
+		t.Fatal("expected prod-* to match prod-web")
+	}
+	if MatchesAny([]string{"prod-*"}, "staging-web") {
+		t.Fatal("expected prod-* to not match staging-web")
+	}
+}
+
+func TestMatchesAny_WildcardSuffix(t *testing.T) {
+	if !MatchesAny([]string{"*-web"}, "prod-web") {
+		t.Fatal("expected *-web to match prod-web")
+	}
+	if MatchesAny([]string{"*-web"}, "prod-api") {
+		t.Fatal("expected *-web to not match prod-api")
+	}
+}
+
+func TestMatchesAny_WildcardMiddle(t *testing.T) {
+	if !MatchesAny([]string{"prod-*-web"}, "prod-us-east-web") {
+		t.Fatal("expected prod-*-web to match prod-us-east-web")
+	}
+	if MatchesAny([]string{"prod-*-web"}, "prod-us-east-api") {
+		t.Fatal("expected prod-*-web to not match prod-us-east-api")
+	}
+}
+
+func TestMatchesAny_MultipleWildcards(t *testing.T) {
+	if !MatchesAny([]string{"*prod*web*"}, "my-prod-us-web-server") {
+		t.Fatal("expected *prod*web* to match")
+	}
+	if MatchesAny([]string{"*prod*web*"}, "my-staging-us-api-server") {
+		t.Fatal("expected *prod*web* to not match")
+	}
+}
+
+func TestMatchesAny_EmptyStringMatches(t *testing.T) {
+	if !MatchesAny([]string{""}, "") {
+		t.Fatal("expected empty string to match empty string")
+	}
+	if MatchesAny([]string{""}, "notempty") {
+		t.Fatal("expected empty string to not match non-empty")
+	}
+}
+
+func TestMatchesTags_NoTagFilters(t *testing.T) {
+	filters := map[string][]string{
+		"vpc-id": {"vpc-1"},
+	}
+	tags := map[string]string{"Environment": "prod"}
+	if !MatchesTags(filters, tags) {
+		t.Fatal("expected true when no tag: filters present")
+	}
+}
+
+func TestMatchesTags_MatchingSingleTag(t *testing.T) {
+	filters := map[string][]string{
+		"tag:Environment": {"prod"},
+	}
+	tags := map[string]string{"Environment": "prod"}
+	if !MatchesTags(filters, tags) {
+		t.Fatal("expected tag match")
+	}
+}
+
+func TestMatchesTags_NonMatchingTag(t *testing.T) {
+	filters := map[string][]string{
+		"tag:Environment": {"prod"},
+	}
+	tags := map[string]string{"Environment": "staging"}
+	if MatchesTags(filters, tags) {
+		t.Fatal("expected no tag match")
+	}
+}
+
+func TestMatchesTags_MissingTag(t *testing.T) {
+	filters := map[string][]string{
+		"tag:Environment": {"prod"},
+	}
+	tags := map[string]string{"Team": "infra"}
+	if MatchesTags(filters, tags) {
+		t.Fatal("expected no match when tag key is missing")
+	}
+}
+
+func TestMatchesTags_NilTags(t *testing.T) {
+	filters := map[string][]string{
+		"tag:Environment": {"prod"},
+	}
+	if MatchesTags(filters, nil) {
+		t.Fatal("expected no match with nil tags")
+	}
+}
+
+func TestMatchesTags_MultipleTagFiltersAND(t *testing.T) {
+	filters := map[string][]string{
+		"tag:Environment": {"prod"},
+		"tag:Team":        {"infra", "platform"},
+	}
+	// Matches both: Environment=prod AND Team in {infra, platform}
+	tags := map[string]string{"Environment": "prod", "Team": "infra"}
+	if !MatchesTags(filters, tags) {
+		t.Fatal("expected match for both tag filters")
+	}
+
+	// Fails second filter
+	tags2 := map[string]string{"Environment": "prod", "Team": "frontend"}
+	if MatchesTags(filters, tags2) {
+		t.Fatal("expected no match when second tag doesn't match")
+	}
+}
+
+func TestMatchesTags_WildcardValues(t *testing.T) {
+	filters := map[string][]string{
+		"tag:Name": {"prod-*"},
+	}
+	tags := map[string]string{"Name": "prod-web-01"}
+	if !MatchesTags(filters, tags) {
+		t.Fatal("expected wildcard tag match")
+	}
+}
+
+func TestMatchesTags_EmptyFilters(t *testing.T) {
+	if !MatchesTags(nil, nil) {
+		t.Fatal("expected true for nil filters")
+	}
+	if !MatchesTags(map[string][]string{}, nil) {
+		t.Fatal("expected true for empty filters")
+	}
+}
