@@ -37,3 +37,7 @@ func (s *NATSEIPService) DisassociateAddress(input *ec2.DisassociateAddressInput
 func (s *NATSEIPService) DescribeAddresses(input *ec2.DescribeAddressesInput, accountID string) (*ec2.DescribeAddressesOutput, error) {
 	return utils.NATSRequest[ec2.DescribeAddressesOutput](s.natsConn, "ec2.DescribeAddresses", input, 30*time.Second, accountID)
 }
+
+func (s *NATSEIPService) DescribeAddressesAttribute(input *ec2.DescribeAddressesAttributeInput, accountID string) (*ec2.DescribeAddressesAttributeOutput, error) {
+	return utils.NATSRequest[ec2.DescribeAddressesAttributeOutput](s.natsConn, "ec2.DescribeAddressesAttribute", input, 30*time.Second, accountID)
+}

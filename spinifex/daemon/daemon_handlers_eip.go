@@ -21,3 +21,7 @@ func (d *Daemon) handleEC2DisassociateAddress(msg *nats.Msg) {
 func (d *Daemon) handleEC2DescribeAddresses(msg *nats.Msg) {
 	handleNATSRequest(msg, d.eipService.DescribeAddresses)
 }
+
+func (d *Daemon) handleEC2DescribeAddressesAttribute(msg *nats.Msg) {
+	handleNATSRequest(msg, d.eipService.DescribeAddressesAttribute)
+}

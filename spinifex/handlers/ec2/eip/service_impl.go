@@ -368,6 +368,72 @@ func (s *EIPServiceImpl) DescribeAddresses(input *ec2.DescribeAddressesInput, ac
 	}, nil
 }
 
+// DescribeAddressesAttribute returns per-EIP attributes (e.g. domain-name).
+// Spinifex doesn't support reverse-DNS PTR records, so PtrRecord is left nil.
+// Unlike DescribeAddresses, this returns an empty list (not an error) when
+// requested AllocationIds are not found. This matches real AWS behavior.
+func (s *EIPServiceImpl) DescribeAddressesAttribute(input *ec2.DescribeAddressesAttributeInput, accountID string) (*ec2.DescribeAddressesAttributeOutput, error) {
+	var addresses []*ec2.AddressAttribute
+
+	if len(input.AllocationIds) > 0 {
+		// Direct lookups — O(n) on requested IDs rather than scanning all EIPs.
+		for _, id := range input.AllocationIds {
+			if id == nil {
+				continue
+			}
+			key := utils.AccountKey(accountID, *id)
+			entry, err := s.eipKV.Get(key)
+			if err != nil {
+				continue // not found, skip
+			}
+			var record EIPRecord
+			if err := json.Unmarshal(entry.Value(), &record); err != nil {
+				slog.Warn("Failed to unmarshal EIP record", "key", key, "error", err)
+				continue
+			}
+			addresses = append(addresses, &ec2.AddressAttribute{
+				AllocationId: aws.String(record.AllocationId),
+				PublicIp:     aws.String(record.PublicIp),
+			})
+		}
+	} else {
+		// No filter — scan all EIPs for this account.
+		prefix := accountID + "."
+		keys, err := s.eipKV.Keys()
+		if err != nil && !errors.Is(err, nats.ErrNoKeysFound) {
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
+		for _, k := range keys {
+			if k == utils.VersionKey {
+				continue
+			}
+			if !strings.HasPrefix(k, prefix) {
+				continue
+			}
+			entry, err := s.eipKV.Get(k)
+			if err != nil {
+				slog.Warn("Failed to get EIP record", "key", k, "error", err)
+				continue
+			}
+			var record EIPRecord
+			if err := json.Unmarshal(entry.Value(), &record); err != nil {
+				slog.Warn("Failed to unmarshal EIP record", "key", k, "error", err)
+				continue
+			}
+			addresses = append(addresses, &ec2.AddressAttribute{
+				AllocationId: aws.String(record.AllocationId),
+				PublicIp:     aws.String(record.PublicIp),
+			})
+		}
+	}
+
+	slog.Info("DescribeAddressesAttribute completed", "count", len(addresses), "accountID", accountID)
+
+	return &ec2.DescribeAddressesAttributeOutput{
+		Addresses: addresses,
+	}, nil
+}
+
 // lookupENI retrieves an ENI record by its ID using the VPC service.
 func (s *EIPServiceImpl) lookupENI(accountID, eniID string) (*handlers_ec2_vpc.ENIRecord, error) {
 	output, err := s.vpcService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{

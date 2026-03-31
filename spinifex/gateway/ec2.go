@@ -318,6 +318,9 @@ var ec2Actions = map[string]EC2Handler{
 	"DescribeAddresses": ec2Handler(func(input *ec2.DescribeAddressesInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_eip.DescribeAddresses(input, gw.NATSConn, accountID)
 	}),
+	"DescribeAddressesAttribute": ec2Handler(func(input *ec2.DescribeAddressesAttributeInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_eip.DescribeAddressesAttribute(input, gw.NATSConn, accountID)
+	}),
 	"CreateNatGateway": ec2Handler(func(input *ec2.CreateNatGatewayInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_natgw.CreateNatGateway(input, gw.NATSConn, accountID)
 	}),
