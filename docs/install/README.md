@@ -1,5 +1,5 @@
 ---
-title: "Installing Spinifex"
+title: "Single-Node Install"
 description: "Install Spinifex on a single server using the binary installer."
 category: "Getting Started"
 tags:
@@ -31,7 +31,7 @@ resources:
 
 Spinifex is an open-source infrastructure platform that brings core AWS services — EC2, VPC, EBS, and S3 — to bare-metal, edge, and on-prem environments.
 
-This guide installs Spinifex on a single server using the binary installer. For multi-server clusters, see [Multi-Node Installation](/docs/installing-spinifex-multi-node). To build from source, see [Source Installation](/docs/source-installation).
+This guide installs Spinifex on a single server using the binary installer. For multi-server clusters, see [Multi-Node Install](/docs/install-multi-node). To build from source, see [Source Install](/docs/install-source).
 
 **Supported Operating Systems:**
 
@@ -81,7 +81,7 @@ sudo /usr/local/share/spinifex/setup-ovn.sh --management --macvlan --wan-iface=e
 sudo /usr/local/share/spinifex/setup-ovn.sh --management --encap-ip=10.0.0.1
 ```
 
-This is recommended for production and required in multi-node deployments. See [Multi-Node Installation](/docs/installing-spinifex-multi-node) for details.
+This is recommended for production and required in multi-node deployments. See [Multi-Node Install](/docs/install-multi-node) for details.
 
 ## Step 3. Initialize
 

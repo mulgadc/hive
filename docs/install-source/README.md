@@ -1,5 +1,5 @@
 ---
-title: "Source Installation"
+title: "Source Install"
 description: "Build Spinifex from source for development, custom builds, or contributing."
 category: "Getting Started"
 tags:
@@ -27,7 +27,7 @@ resources:
 
 ## Overview
 
-This guide builds Spinifex from source. For production deployments, the [binary installer](/docs/installing-spinifex) is recommended.
+This guide builds Spinifex from source. For production deployments, the [binary installer](/docs/install) is recommended.
 
 **Requirements:**
 

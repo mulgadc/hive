@@ -1,5 +1,5 @@
 ---
-title: "Multi-Node Installation"
+title: "Multi-Node Install"
 description: "Deploy Spinifex across multiple servers to create an availability zone with high availability, data durability, and fault tolerance."
 category: "Getting Started"
 tags:
