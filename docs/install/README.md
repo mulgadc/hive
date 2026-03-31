@@ -70,12 +70,9 @@ If your WAN is a physical NIC, choose one:
 ```bash
 # Dedicated WAN NIC (not your SSH connection):
 sudo /usr/local/share/spinifex/setup-ovn.sh --management --wan-bridge=br-wan --wan-iface=eth1
-
-# Single-NIC host (SSH-safe macvlan):
-sudo /usr/local/share/spinifex/setup-ovn.sh --management --macvlan --wan-iface=enp0s3
 ```
 
-**Separating VPC tunnel traffic from WAN:** If you want Geneve tunnel traffic (inter-VM east-west) to use a dedicated interface instead of the WAN IP, add `--encap-ip=<IP>` to specify the tunnel endpoint address:
+**Separating VPC tunnel traffic from WAN:** If you want Geneve tunnel traffic (inter-VM east-west for VPC traffic) to use a dedicated interface instead of the WAN IP, add `--encap-ip=<IP>` to specify the tunnel endpoint address:
 
 ```bash
 sudo /usr/local/share/spinifex/setup-ovn.sh --management --encap-ip=10.0.0.1
