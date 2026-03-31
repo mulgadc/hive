@@ -495,6 +495,173 @@ func TestAttachInternetGateway_CrossAccountVPCRejected(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestDescribeInternetGateways_FilterByIGWId(t *testing.T) {
+	svc, _ := setupTestIGWService(t)
+	igwID := createTestIGW(t, svc)
+	createTestIGW(t, svc)
+
+	desc, err := svc.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("internet-gateway-id"), Values: []*string{aws.String(igwID)}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, desc.InternetGateways, 1)
+	assert.Equal(t, igwID, *desc.InternetGateways[0].InternetGatewayId)
+}
+
+func TestDescribeInternetGateways_FilterByAttachmentVpcId(t *testing.T) {
+	svc, _ := setupTestIGWService(t)
+	igwID := createTestIGW(t, svc)
+	createTestIGW(t, svc) // detached
+
+	// Attach first IGW
+	_, err := svc.AttachInternetGateway(&ec2.AttachInternetGatewayInput{
+		InternetGatewayId: aws.String(igwID),
+		VpcId:             aws.String("vpc-test123"),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	desc, err := svc.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("attachment.vpc-id"), Values: []*string{aws.String("vpc-test123")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, desc.InternetGateways, 1)
+	assert.Equal(t, igwID, *desc.InternetGateways[0].InternetGatewayId)
+}
+
+func TestDescribeInternetGateways_FilterByAttachmentState(t *testing.T) {
+	svc, _ := setupTestIGWService(t)
+	igwID := createTestIGW(t, svc)
+	createTestIGW(t, svc) // detached, won't match
+
+	// Attach
+	_, err := svc.AttachInternetGateway(&ec2.AttachInternetGatewayInput{
+		InternetGatewayId: aws.String(igwID),
+		VpcId:             aws.String("vpc-test123"),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	desc, err := svc.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("attachment.state"), Values: []*string{aws.String("available")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, desc.InternetGateways, 1)
+	assert.Equal(t, igwID, *desc.InternetGateways[0].InternetGatewayId)
+}
+
+func TestDescribeInternetGateways_FilterMultipleValues_OR(t *testing.T) {
+	svc, _ := setupTestIGWService(t)
+	igwID1 := createTestIGW(t, svc)
+	igwID2 := createTestIGW(t, svc)
+	createTestIGW(t, svc)
+
+	desc, err := svc.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("internet-gateway-id"), Values: []*string{aws.String(igwID1), aws.String(igwID2)}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, desc.InternetGateways, 2)
+}
+
+func TestDescribeInternetGateways_FilterMultipleFilters_AND(t *testing.T) {
+	svc, _ := setupTestIGWService(t)
+	igwID := createTestIGW(t, svc)
+	createTestIGW(t, svc) // detached
+
+	_, err := svc.AttachInternetGateway(&ec2.AttachInternetGatewayInput{
+		InternetGatewayId: aws.String(igwID),
+		VpcId:             aws.String("vpc-test123"),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Match both
+	desc, err := svc.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("internet-gateway-id"), Values: []*string{aws.String(igwID)}},
+			{Name: aws.String("attachment.vpc-id"), Values: []*string{aws.String("vpc-test123")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, desc.InternetGateways, 1)
+
+	// Mismatch
+	desc, err = svc.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("internet-gateway-id"), Values: []*string{aws.String(igwID)}},
+			{Name: aws.String("attachment.vpc-id"), Values: []*string{aws.String("vpc-wrong")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, desc.InternetGateways)
+}
+
+func TestDescribeInternetGateways_FilterUnknownName_Error(t *testing.T) {
+	svc, _ := setupTestIGWService(t)
+
+	_, err := svc.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("bogus-filter"), Values: []*string{aws.String("x")}},
+		},
+	}, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestDescribeInternetGateways_FilterWildcard(t *testing.T) {
+	svc, _ := setupTestIGWService(t)
+	igwID := createTestIGW(t, svc)
+
+	desc, err := svc.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("internet-gateway-id"), Values: []*string{aws.String("igw-*")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, desc.InternetGateways, 1)
+	assert.Equal(t, igwID, *desc.InternetGateways[0].InternetGatewayId)
+}
+
+func TestDescribeInternetGateways_FilterNoResults(t *testing.T) {
+	svc, _ := setupTestIGWService(t)
+	createTestIGW(t, svc)
+
+	desc, err := svc.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("internet-gateway-id"), Values: []*string{aws.String("igw-nonexistent")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, desc.InternetGateways)
+}
+
+func TestDescribeInternetGateways_FilterByTag(t *testing.T) {
+	svc, _ := setupTestIGWService(t)
+	out, err := svc.CreateInternetGateway(&ec2.CreateInternetGatewayInput{
+		TagSpecifications: []*ec2.TagSpecification{
+			{
+				ResourceType: aws.String("internet-gateway"),
+				Tags:         []*ec2.Tag{{Key: aws.String("Env"), Value: aws.String("prod")}},
+			},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	createTestIGW(t, svc) // untagged
+
+	desc, err := svc.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("tag:Env"), Values: []*string{aws.String("prod")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, desc.InternetGateways, 1)
+	assert.Equal(t, *out.InternetGateway.InternetGatewayId, *desc.InternetGateways[0].InternetGatewayId)
+}
+
 func TestDeleteInternetGateway_PublishesNoEvent(t *testing.T) {
 	svc, nc := setupTestIGWService(t)
 	igwID := createTestIGW(t, svc)

@@ -417,12 +417,24 @@ func volumeTagsToMap(tags []*ec2.Tag) map[string]string {
 }
 
 // DescribeVolumeStatus returns the status of one or more EBS volumes
+// describeVolumeStatusValidFilters defines the set of filter names accepted by DescribeVolumeStatus.
+var describeVolumeStatusValidFilters = map[string]bool{
+	"volume-id":            true,
+	"volume-status.status": true,
+	"availability-zone":    true,
+}
+
 func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatusInput, accountID string) (*ec2.DescribeVolumeStatusOutput, error) {
 	if input == nil {
 		input = &ec2.DescribeVolumeStatusInput{}
 	}
 
 	slog.Info("DescribeVolumeStatus", "volumeIds", input.VolumeIds)
+
+	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeVolumeStatusValidFilters)
+	if err != nil {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
 
 	var statusItems []*ec2.VolumeStatusItem
 
@@ -440,6 +452,9 @@ func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatus
 			// Skip volumes not owned by the caller's account
 			if tenantID != accountID {
 				return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
+			}
+			if len(parsedFilters) > 0 && !volumeStatusMatchesFilters(item, parsedFilters) {
+				continue
 			}
 			statusItems = append(statusItems, item)
 		}
@@ -465,6 +480,10 @@ func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatus
 			continue
 		}
 
+		if len(parsedFilters) > 0 && !volumeStatusMatchesFilters(item, parsedFilters) {
+			continue
+		}
+
 		statusItems = append(statusItems, item)
 	}
 
@@ -473,6 +492,34 @@ func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatus
 	return &ec2.DescribeVolumeStatusOutput{
 		VolumeStatuses: statusItems,
 	}, nil
+}
+
+// volumeStatusMatchesFilters checks whether a VolumeStatusItem satisfies all parsed filters.
+func volumeStatusMatchesFilters(item *ec2.VolumeStatusItem, filters map[string][]string) bool {
+	for name, values := range filters {
+		var field string
+		switch name {
+		case "volume-id":
+			if item.VolumeId != nil {
+				field = *item.VolumeId
+			}
+		case "volume-status.status":
+			if item.VolumeStatus != nil && item.VolumeStatus.Status != nil {
+				field = *item.VolumeStatus.Status
+			}
+		case "availability-zone":
+			if item.AvailabilityZone != nil {
+				field = *item.AvailabilityZone
+			}
+		default:
+			continue
+		}
+
+		if !filterutil.MatchesAny(values, field) {
+			return false
+		}
+	}
+	return true
 }
 
 // getVolumeStatusByID builds a VolumeStatusItem by reusing getVolumeByID

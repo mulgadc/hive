@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
+	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
@@ -152,6 +153,13 @@ func (s *IGWServiceImpl) DeleteInternetGateway(input *ec2.DeleteInternetGatewayI
 	return &ec2.DeleteInternetGatewayOutput{}, nil
 }
 
+// describeIGWValidFilters defines the set of filter names accepted by DescribeInternetGateways.
+var describeIGWValidFilters = map[string]bool{
+	"internet-gateway-id": true,
+	"attachment.vpc-id":   true,
+	"attachment.state":    true,
+}
+
 // DescribeInternetGateways lists Internet Gateways, optionally filtered by ID
 func (s *IGWServiceImpl) DescribeInternetGateways(input *ec2.DescribeInternetGatewaysInput, accountID string) (*ec2.DescribeInternetGatewaysOutput, error) {
 	var igws []*ec2.InternetGateway
@@ -161,6 +169,11 @@ func (s *IGWServiceImpl) DescribeInternetGateways(input *ec2.DescribeInternetGat
 		if id != nil {
 			igwIDs[*id] = true
 		}
+	}
+
+	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeIGWValidFilters)
+	if err != nil {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
 	prefix := accountID + "."
@@ -195,6 +208,10 @@ func (s *IGWServiceImpl) DescribeInternetGateways(input *ec2.DescribeInternetGat
 			continue
 		}
 
+		if len(parsedFilters) > 0 && !igwMatchesFilters(&record, parsedFilters) {
+			continue
+		}
+
 		igws = append(igws, s.recordToEC2(&record))
 		foundIDs[record.InternetGatewayId] = true
 	}
@@ -211,6 +228,36 @@ func (s *IGWServiceImpl) DescribeInternetGateways(input *ec2.DescribeInternetGat
 	return &ec2.DescribeInternetGatewaysOutput{
 		InternetGateways: igws,
 	}, nil
+}
+
+// igwMatchesFilters checks whether an IGWRecord satisfies all parsed filters.
+func igwMatchesFilters(record *IGWRecord, filters map[string][]string) bool {
+	for name, values := range filters {
+		if strings.HasPrefix(name, "tag:") {
+			continue
+		}
+
+		var field string
+		switch name {
+		case "internet-gateway-id":
+			field = record.InternetGatewayId
+		case "attachment.vpc-id":
+			field = record.VpcId
+		case "attachment.state":
+			field = record.State
+			if record.VpcId == "" {
+				field = "" // no attachment means no state to match
+			}
+		default:
+			continue
+		}
+
+		if !filterutil.MatchesAny(values, field) {
+			return false
+		}
+	}
+
+	return filterutil.MatchesTags(filters, record.Tags)
 }
 
 // AttachInternetGateway attaches an IGW to a VPC and publishes a NATS event

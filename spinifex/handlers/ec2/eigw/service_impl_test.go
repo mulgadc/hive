@@ -199,6 +199,97 @@ func TestDescribeEgressOnlyInternetGateways_Empty(t *testing.T) {
 	assert.Empty(t, desc.EgressOnlyInternetGateways)
 }
 
+func TestDescribeEgressOnlyInternetGateways_FilterByEIGWId(t *testing.T) {
+	svc := setupTestEIGWService(t)
+	eigwID := createTestEIGW(t, svc)
+	createTestEIGW(t, svc)
+
+	desc, err := svc.DescribeEgressOnlyInternetGateways(&ec2.DescribeEgressOnlyInternetGatewaysInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("egress-only-internet-gateway-id"), Values: []*string{aws.String(eigwID)}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, desc.EgressOnlyInternetGateways, 1)
+	assert.Equal(t, eigwID, *desc.EgressOnlyInternetGateways[0].EgressOnlyInternetGatewayId)
+}
+
+func TestDescribeEgressOnlyInternetGateways_FilterMultipleValues_OR(t *testing.T) {
+	svc := setupTestEIGWService(t)
+	eigwID1 := createTestEIGW(t, svc)
+	eigwID2 := createTestEIGW(t, svc)
+	createTestEIGW(t, svc)
+
+	desc, err := svc.DescribeEgressOnlyInternetGateways(&ec2.DescribeEgressOnlyInternetGatewaysInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("egress-only-internet-gateway-id"), Values: []*string{aws.String(eigwID1), aws.String(eigwID2)}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, desc.EgressOnlyInternetGateways, 2)
+}
+
+func TestDescribeEgressOnlyInternetGateways_FilterUnknownName_Error(t *testing.T) {
+	svc := setupTestEIGWService(t)
+
+	_, err := svc.DescribeEgressOnlyInternetGateways(&ec2.DescribeEgressOnlyInternetGatewaysInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("bogus-filter"), Values: []*string{aws.String("x")}},
+		},
+	}, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestDescribeEgressOnlyInternetGateways_FilterWildcard(t *testing.T) {
+	svc := setupTestEIGWService(t)
+	createTestEIGW(t, svc)
+
+	desc, err := svc.DescribeEgressOnlyInternetGateways(&ec2.DescribeEgressOnlyInternetGatewaysInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("egress-only-internet-gateway-id"), Values: []*string{aws.String("eigw-*")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, desc.EgressOnlyInternetGateways, 1)
+}
+
+func TestDescribeEgressOnlyInternetGateways_FilterNoResults(t *testing.T) {
+	svc := setupTestEIGWService(t)
+	createTestEIGW(t, svc)
+
+	desc, err := svc.DescribeEgressOnlyInternetGateways(&ec2.DescribeEgressOnlyInternetGatewaysInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("egress-only-internet-gateway-id"), Values: []*string{aws.String("eigw-nonexistent")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, desc.EgressOnlyInternetGateways)
+}
+
+func TestDescribeEgressOnlyInternetGateways_FilterByTag(t *testing.T) {
+	svc := setupTestEIGWService(t)
+	out, err := svc.CreateEgressOnlyInternetGateway(&ec2.CreateEgressOnlyInternetGatewayInput{
+		VpcId: aws.String("vpc-tagged"),
+		TagSpecifications: []*ec2.TagSpecification{
+			{
+				ResourceType: aws.String("egress-only-internet-gateway"),
+				Tags:         []*ec2.Tag{{Key: aws.String("Env"), Value: aws.String("prod")}},
+			},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	createTestEIGW(t, svc) // untagged
+
+	desc, err := svc.DescribeEgressOnlyInternetGateways(&ec2.DescribeEgressOnlyInternetGatewaysInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("tag:Env"), Values: []*string{aws.String("prod")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, desc.EgressOnlyInternetGateways, 1)
+	assert.Equal(t, *out.EgressOnlyInternetGateway.EgressOnlyInternetGatewayId, *desc.EgressOnlyInternetGateways[0].EgressOnlyInternetGatewayId)
+}
+
 // TestCreateEgressOnlyInternetGateway_CrossAccountVPCRejected tests that creating an EIGW in another account's VPC is rejected.
 func TestCreateEgressOnlyInternetGateway_CrossAccountVPCRejected(t *testing.T) {
 	// Set up with manual NATS to get VPC KV access

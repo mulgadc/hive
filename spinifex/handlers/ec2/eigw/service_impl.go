@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
+	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
@@ -149,6 +150,11 @@ func (s *EgressOnlyIGWServiceImpl) DeleteEgressOnlyInternetGateway(input *ec2.De
 	}, nil
 }
 
+// describeEIGWValidFilters defines the set of filter names accepted by DescribeEgressOnlyInternetGateways.
+var describeEIGWValidFilters = map[string]bool{
+	"egress-only-internet-gateway-id": true,
+}
+
 // DescribeEgressOnlyInternetGateways describes Egress-only Internet Gateways
 func (s *EgressOnlyIGWServiceImpl) DescribeEgressOnlyInternetGateways(input *ec2.DescribeEgressOnlyInternetGatewaysInput, accountID string) (*ec2.DescribeEgressOnlyInternetGatewaysOutput, error) {
 	var egressOnlyIGWs []*ec2.EgressOnlyInternetGateway
@@ -158,6 +164,11 @@ func (s *EgressOnlyIGWServiceImpl) DescribeEgressOnlyInternetGateways(input *ec2
 		if id != nil {
 			eigwIDs[*id] = true
 		}
+	}
+
+	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeEIGWValidFilters)
+	if err != nil {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
 	prefix := accountID + "."
@@ -190,6 +201,10 @@ func (s *EgressOnlyIGWServiceImpl) DescribeEgressOnlyInternetGateways(input *ec2
 			continue
 		}
 
+		if len(parsedFilters) > 0 && !eigwMatchesFilters(&record, parsedFilters) {
+			continue
+		}
+
 		egressOnlyIGWs = append(egressOnlyIGWs, s.recordToEC2(&record))
 	}
 
@@ -198,6 +213,29 @@ func (s *EgressOnlyIGWServiceImpl) DescribeEgressOnlyInternetGateways(input *ec2
 	return &ec2.DescribeEgressOnlyInternetGatewaysOutput{
 		EgressOnlyInternetGateways: egressOnlyIGWs,
 	}, nil
+}
+
+// eigwMatchesFilters checks whether an EgressOnlyIGWRecord satisfies all parsed filters.
+func eigwMatchesFilters(record *EgressOnlyIGWRecord, filters map[string][]string) bool {
+	for name, values := range filters {
+		if strings.HasPrefix(name, "tag:") {
+			continue
+		}
+
+		var field string
+		switch name {
+		case "egress-only-internet-gateway-id":
+			field = record.EgressOnlyInternetGatewayId
+		default:
+			continue
+		}
+
+		if !filterutil.MatchesAny(values, field) {
+			return false
+		}
+	}
+
+	return filterutil.MatchesTags(filters, record.Tags)
 }
 
 func (s *EgressOnlyIGWServiceImpl) recordToEC2(record *EgressOnlyIGWRecord) *ec2.EgressOnlyInternetGateway {

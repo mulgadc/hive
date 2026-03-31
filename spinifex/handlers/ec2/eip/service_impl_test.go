@@ -367,3 +367,212 @@ func TestEIP_DescribeAddresses(t *testing.T) {
 	_ = out2
 	_ = out3
 }
+
+func TestEIP_DescribeAddresses_FilterByAllocationId(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	out1, err := svc.AllocateAddress(&ec2.AllocateAddressInput{}, testAccountID)
+	require.NoError(t, err)
+	_, err = svc.AllocateAddress(&ec2.AllocateAddressInput{}, testAccountID)
+	require.NoError(t, err)
+
+	desc, err := svc.DescribeAddresses(&ec2.DescribeAddressesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("allocation-id"), Values: []*string{out1.AllocationId}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, desc.Addresses, 1)
+	assert.Equal(t, *out1.AllocationId, *desc.Addresses[0].AllocationId)
+}
+
+func TestEIP_DescribeAddresses_FilterByPublicIp(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	out1, err := svc.AllocateAddress(&ec2.AllocateAddressInput{}, testAccountID)
+	require.NoError(t, err)
+	_, err = svc.AllocateAddress(&ec2.AllocateAddressInput{}, testAccountID)
+	require.NoError(t, err)
+
+	desc, err := svc.DescribeAddresses(&ec2.DescribeAddressesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("public-ip"), Values: []*string{out1.PublicIp}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, desc.Addresses, 1)
+	assert.Equal(t, *out1.PublicIp, *desc.Addresses[0].PublicIp)
+}
+
+func TestEIP_DescribeAddresses_FilterByDomain(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	_, err := svc.AllocateAddress(&ec2.AllocateAddressInput{}, testAccountID)
+	require.NoError(t, err)
+
+	desc, err := svc.DescribeAddresses(&ec2.DescribeAddressesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("domain"), Values: []*string{aws.String("vpc")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, desc.Addresses, 1)
+
+	// Non-matching domain
+	desc, err = svc.DescribeAddresses(&ec2.DescribeAddressesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("domain"), Values: []*string{aws.String("standard")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, desc.Addresses)
+}
+
+func TestEIP_DescribeAddresses_FilterByInstanceId(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	out, err := svc.AllocateAddress(&ec2.AllocateAddressInput{}, testAccountID)
+	require.NoError(t, err)
+
+	// Manually set instance-id on the record
+	entry, err := svc.eipKV.Get(testAccountID + "." + *out.AllocationId)
+	require.NoError(t, err)
+	var record EIPRecord
+	require.NoError(t, json.Unmarshal(entry.Value(), &record))
+	record.InstanceId = "i-test123"
+	record.State = "associated"
+	data, err := json.Marshal(record)
+	require.NoError(t, err)
+	_, err = svc.eipKV.Update(testAccountID+"."+*out.AllocationId, data, entry.Revision())
+	require.NoError(t, err)
+
+	// Allocate another without association
+	_, err = svc.AllocateAddress(&ec2.AllocateAddressInput{}, testAccountID)
+	require.NoError(t, err)
+
+	desc, err := svc.DescribeAddresses(&ec2.DescribeAddressesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("instance-id"), Values: []*string{aws.String("i-test123")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, desc.Addresses, 1)
+	assert.Equal(t, "i-test123", *desc.Addresses[0].InstanceId)
+}
+
+func TestEIP_DescribeAddresses_FilterMultipleValues_OR(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	out1, err := svc.AllocateAddress(&ec2.AllocateAddressInput{}, testAccountID)
+	require.NoError(t, err)
+	out2, err := svc.AllocateAddress(&ec2.AllocateAddressInput{}, testAccountID)
+	require.NoError(t, err)
+	_, err = svc.AllocateAddress(&ec2.AllocateAddressInput{}, testAccountID)
+	require.NoError(t, err)
+
+	desc, err := svc.DescribeAddresses(&ec2.DescribeAddressesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("allocation-id"), Values: []*string{out1.AllocationId, out2.AllocationId}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, desc.Addresses, 2)
+}
+
+func TestEIP_DescribeAddresses_FilterMultipleFilters_AND(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	out, err := svc.AllocateAddress(&ec2.AllocateAddressInput{}, testAccountID)
+	require.NoError(t, err)
+	_, err = svc.AllocateAddress(&ec2.AllocateAddressInput{}, testAccountID)
+	require.NoError(t, err)
+
+	// Match both allocation-id and domain
+	desc, err := svc.DescribeAddresses(&ec2.DescribeAddressesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("allocation-id"), Values: []*string{out.AllocationId}},
+			{Name: aws.String("domain"), Values: []*string{aws.String("vpc")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, desc.Addresses, 1)
+
+	// Mismatch: correct allocation-id but wrong domain
+	desc, err = svc.DescribeAddresses(&ec2.DescribeAddressesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("allocation-id"), Values: []*string{out.AllocationId}},
+			{Name: aws.String("domain"), Values: []*string{aws.String("standard")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, desc.Addresses)
+}
+
+func TestEIP_DescribeAddresses_FilterUnknownName_Error(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	_, err := svc.DescribeAddresses(&ec2.DescribeAddressesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("bogus-filter"), Values: []*string{aws.String("x")}},
+		},
+	}, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestEIP_DescribeAddresses_FilterWildcard(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	out, err := svc.AllocateAddress(&ec2.AllocateAddressInput{}, testAccountID)
+	require.NoError(t, err)
+
+	desc, err := svc.DescribeAddresses(&ec2.DescribeAddressesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("allocation-id"), Values: []*string{aws.String("eipalloc-*")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, desc.Addresses, 1)
+	assert.Equal(t, *out.AllocationId, *desc.Addresses[0].AllocationId)
+}
+
+func TestEIP_DescribeAddresses_FilterNoResults(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	_, err := svc.AllocateAddress(&ec2.AllocateAddressInput{}, testAccountID)
+	require.NoError(t, err)
+
+	desc, err := svc.DescribeAddresses(&ec2.DescribeAddressesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("public-ip"), Values: []*string{aws.String("1.1.1.1")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, desc.Addresses)
+}
+
+func TestEIP_DescribeAddresses_FilterByTag(t *testing.T) {
+	svc, _ := setupTestEIP(t)
+
+	out, err := svc.AllocateAddress(&ec2.AllocateAddressInput{
+		TagSpecifications: []*ec2.TagSpecification{
+			{
+				ResourceType: aws.String("elastic-ip"),
+				Tags: []*ec2.Tag{
+					{Key: aws.String("Env"), Value: aws.String("prod")},
+				},
+			},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	_, err = svc.AllocateAddress(&ec2.AllocateAddressInput{}, testAccountID)
+	require.NoError(t, err)
+
+	desc, err := svc.DescribeAddresses(&ec2.DescribeAddressesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("tag:Env"), Values: []*string{aws.String("prod")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, desc.Addresses, 1)
+	assert.Equal(t, *out.AllocationId, *desc.Addresses[0].AllocationId)
+}
