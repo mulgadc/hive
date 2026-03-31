@@ -42,7 +42,7 @@ A Spinifex cluster distributes services across multiple servers for high availab
 ## Step 1. Install Spinifex on Each Server
 
 ```bash
-curl https://install.mulgadc.com | bash
+curl -fsSL https://install.mulgadc.com | bash
 ```
 
 ## Step 2. Set Node IP Variables
