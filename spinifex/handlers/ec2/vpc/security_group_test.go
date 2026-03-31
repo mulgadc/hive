@@ -463,3 +463,202 @@ func TestRemoveSGRules_NoMatch(t *testing.T) {
 	result := removeSGRules(existing, toRemove)
 	assert.Len(t, result, 1)
 }
+
+// --- DescribeSecurityGroups filter tests ---
+
+func TestDescribeSecurityGroups_FilterByGroupId(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	sgID := createTestSG(t, svc, vpcID, "target-sg")
+	createTestSG(t, svc, vpcID, "other-sg")
+
+	out, err := svc.DescribeSecurityGroups(&ec2.DescribeSecurityGroupsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("group-id"), Values: []*string{aws.String(sgID)}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.SecurityGroups, 1)
+	assert.Equal(t, sgID, *out.SecurityGroups[0].GroupId)
+}
+
+func TestDescribeSecurityGroups_FilterByDescription(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+
+	_, err := svc.CreateSecurityGroup(&ec2.CreateSecurityGroupInput{
+		GroupName:   aws.String("web-sg"),
+		Description: aws.String("Web server security group"),
+		VpcId:       aws.String(vpcID),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	_, err = svc.CreateSecurityGroup(&ec2.CreateSecurityGroupInput{
+		GroupName:   aws.String("db-sg"),
+		Description: aws.String("Database security group"),
+		VpcId:       aws.String(vpcID),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	out, err := svc.DescribeSecurityGroups(&ec2.DescribeSecurityGroupsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("description"), Values: []*string{aws.String("Web server security group")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.SecurityGroups, 1)
+	assert.Equal(t, "web-sg", *out.SecurityGroups[0].GroupName)
+}
+
+func TestDescribeSecurityGroups_FilterByVpcId(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpc1 := createTestVPC(t, svc, "10.0.0.0/16")
+	vpc2 := createTestVPC(t, svc, "172.16.0.0/16")
+	createTestSG(t, svc, vpc1, "sg-in-vpc1")
+	createTestSG(t, svc, vpc2, "sg-in-vpc2")
+
+	out, err := svc.DescribeSecurityGroups(&ec2.DescribeSecurityGroupsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("vpc-id"), Values: []*string{aws.String(vpc1)}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.SecurityGroups, 1)
+	assert.Equal(t, vpc1, *out.SecurityGroups[0].VpcId)
+}
+
+func TestDescribeSecurityGroups_FilterByIpPermissionCidr(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	sgID := createTestSG(t, svc, vpcID, "cidr-sg")
+
+	proto := "tcp"
+	_, err := svc.AuthorizeSecurityGroupIngress(&ec2.AuthorizeSecurityGroupIngressInput{
+		GroupId: aws.String(sgID),
+		IpPermissions: []*ec2.IpPermission{
+			{
+				IpProtocol: &proto,
+				FromPort:   aws.Int64(80),
+				ToPort:     aws.Int64(80),
+				IpRanges:   []*ec2.IpRange{{CidrIp: aws.String("10.0.0.0/8")}},
+			},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Create another SG without the ingress rule
+	createTestSG(t, svc, vpcID, "no-cidr-sg")
+
+	out, err := svc.DescribeSecurityGroups(&ec2.DescribeSecurityGroupsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("ip-permission.cidr"), Values: []*string{aws.String("10.0.0.0/8")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.SecurityGroups, 1)
+	assert.Equal(t, sgID, *out.SecurityGroups[0].GroupId)
+}
+
+func TestDescribeSecurityGroups_FilterMultipleValues_OR(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	createTestSG(t, svc, vpcID, "sg-alpha")
+	createTestSG(t, svc, vpcID, "sg-beta")
+	createTestSG(t, svc, vpcID, "sg-gamma")
+
+	out, err := svc.DescribeSecurityGroups(&ec2.DescribeSecurityGroupsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("group-name"), Values: []*string{aws.String("sg-alpha"), aws.String("sg-gamma")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.SecurityGroups, 2)
+}
+
+func TestDescribeSecurityGroups_FilterMultipleFilters_AND(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpc1 := createTestVPC(t, svc, "10.0.0.0/16")
+	vpc2 := createTestVPC(t, svc, "172.16.0.0/16")
+	createTestSG(t, svc, vpc1, "same-name")
+	createTestSG(t, svc, vpc2, "same-name")
+
+	out, err := svc.DescribeSecurityGroups(&ec2.DescribeSecurityGroupsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("group-name"), Values: []*string{aws.String("same-name")}},
+			{Name: aws.String("vpc-id"), Values: []*string{aws.String(vpc1)}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.SecurityGroups, 1)
+	assert.Equal(t, vpc1, *out.SecurityGroups[0].VpcId)
+}
+
+func TestDescribeSecurityGroups_FilterUnknownName_Error(t *testing.T) {
+	svc := setupTestVPCService(t)
+
+	_, err := svc.DescribeSecurityGroups(&ec2.DescribeSecurityGroupsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("bogus-filter"), Values: []*string{aws.String("x")}},
+		},
+	}, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestDescribeSecurityGroups_FilterWildcard(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	createTestSG(t, svc, vpcID, "prod-web")
+	createTestSG(t, svc, vpcID, "prod-api")
+	createTestSG(t, svc, vpcID, "staging-web")
+
+	out, err := svc.DescribeSecurityGroups(&ec2.DescribeSecurityGroupsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("group-name"), Values: []*string{aws.String("prod-*")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.SecurityGroups, 2)
+}
+
+func TestDescribeSecurityGroups_FilterByTag(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+
+	out, err := svc.CreateSecurityGroup(&ec2.CreateSecurityGroupInput{
+		GroupName:   aws.String("tagged-sg"),
+		Description: aws.String("tagged"),
+		VpcId:       aws.String(vpcID),
+		TagSpecifications: []*ec2.TagSpecification{
+			{
+				ResourceType: aws.String("security-group"),
+				Tags:         []*ec2.Tag{{Key: aws.String("Env"), Value: aws.String("prod")}},
+			},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	createTestSG(t, svc, vpcID, "untagged-sg")
+
+	desc, err := svc.DescribeSecurityGroups(&ec2.DescribeSecurityGroupsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("tag:Env"), Values: []*string{aws.String("prod")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, desc.SecurityGroups, 1)
+	assert.Equal(t, *out.GroupId, *desc.SecurityGroups[0].GroupId)
+}
+
+func TestDescribeSecurityGroups_FilterNoResults(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	createTestSG(t, svc, vpcID, "my-sg")
+
+	out, err := svc.DescribeSecurityGroups(&ec2.DescribeSecurityGroupsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("group-name"), Values: []*string{aws.String("nonexistent")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.SecurityGroups)
+}

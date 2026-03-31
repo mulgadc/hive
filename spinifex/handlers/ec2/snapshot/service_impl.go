@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
+	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	"github.com/mulgadc/spinifex/spinifex/objectstore"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
@@ -302,6 +303,15 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput, acc
 	return snapshotConfigToEC2(snapshotCfg), nil
 }
 
+// describeSnapshotsValidFilters defines the set of filter names accepted by DescribeSnapshots.
+var describeSnapshotsValidFilters = map[string]bool{
+	"snapshot-id": true,
+	"status":      true,
+	"volume-id":   true,
+	"volume-size": true,
+	"owner-id":    true,
+}
+
 // DescribeSnapshots lists snapshots matching the specified criteria, scoped to the caller's account.
 func (s *SnapshotServiceImpl) DescribeSnapshots(input *ec2.DescribeSnapshotsInput, accountID string) (*ec2.DescribeSnapshotsOutput, error) {
 	s.mutex.RLock()
@@ -314,6 +324,11 @@ func (s *SnapshotServiceImpl) DescribeSnapshots(input *ec2.DescribeSnapshotsInpu
 		if id != nil {
 			snapshotIDFilter[*id] = true
 		}
+	}
+
+	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeSnapshotsValidFilters)
+	if err != nil {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
 	listResult, err := s.store.ListObjectsV2(&s3.ListObjectsV2Input{
@@ -349,6 +364,10 @@ func (s *SnapshotServiceImpl) DescribeSnapshots(input *ec2.DescribeSnapshotsInpu
 			continue
 		}
 
+		if len(parsedFilters) > 0 && !snapshotMatchesFilters(cfg, parsedFilters) {
+			continue
+		}
+
 		snapshots = append(snapshots, snapshotConfigToEC2(cfg))
 	}
 
@@ -357,6 +376,37 @@ func (s *SnapshotServiceImpl) DescribeSnapshots(input *ec2.DescribeSnapshotsInpu
 	return &ec2.DescribeSnapshotsOutput{
 		Snapshots: snapshots,
 	}, nil
+}
+
+// snapshotMatchesFilters checks whether a SnapshotConfig satisfies all parsed filters.
+func snapshotMatchesFilters(cfg *SnapshotConfig, filters map[string][]string) bool {
+	for name, values := range filters {
+		if strings.HasPrefix(name, "tag:") {
+			continue
+		}
+
+		var field string
+		switch name {
+		case "snapshot-id":
+			field = cfg.SnapshotID
+		case "status":
+			field = cfg.State
+		case "volume-id":
+			field = cfg.VolumeID
+		case "volume-size":
+			field = fmt.Sprintf("%d", cfg.VolumeSize)
+		case "owner-id":
+			field = cfg.OwnerID
+		default:
+			continue
+		}
+
+		if !filterutil.MatchesAny(values, field) {
+			return false
+		}
+	}
+
+	return filterutil.MatchesTags(filters, cfg.Tags)
 }
 
 // snapshotInUseByVolumes checks if any volume was created from the given snapshot.

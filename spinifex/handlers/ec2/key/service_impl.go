@@ -21,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
+	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	"github.com/mulgadc/spinifex/spinifex/objectstore"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 )
@@ -452,12 +453,24 @@ func (s *KeyServiceImpl) DeleteKeyPair(input *ec2.DeleteKeyPairInput, accountID 
 }
 
 // DescribeKeyPairs lists available key pairs by reading metadata files from S3
+// describeKeyPairsValidFilters defines the set of filter names accepted by DescribeKeyPairs.
+var describeKeyPairsValidFilters = map[string]bool{
+	"key-pair-id": true,
+	"key-name":    true,
+	"fingerprint": true,
+}
+
 func (s *KeyServiceImpl) DescribeKeyPairs(input *ec2.DescribeKeyPairsInput, accountID string) (*ec2.DescribeKeyPairsOutput, error) {
 	if input == nil {
 		input = &ec2.DescribeKeyPairsInput{}
 	}
 
 	slog.Info("Describing key pairs", "filters", input.Filters)
+
+	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeKeyPairsValidFilters)
+	if err != nil {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
 
 	prefix := fmt.Sprintf("keys/%s/", accountID)
 
@@ -546,18 +559,22 @@ func (s *KeyServiceImpl) DescribeKeyPairs(input *ec2.DescribeKeyPairsInput, acco
 		}
 
 		// Build KeyPairInfo from metadata
-		// Note: CreateTime would need to be stored in metadata or use S3 object LastModified
 		keyPairInfo := &ec2.KeyPairInfo{
 			KeyPairId:      metadata.KeyPairId,
 			KeyFingerprint: metadata.KeyFingerprint,
 			KeyName:        metadata.KeyName,
 			KeyType:        aws.String(keyType),
-			Tags:           []*ec2.Tag{}, // TODO: Implement tag support
+			Tags:           []*ec2.Tag{},
 		}
 
 		// Use S3 object LastModified as CreateTime
 		if obj.LastModified != nil {
 			keyPairInfo.CreateTime = obj.LastModified
+		}
+
+		// Apply filters
+		if len(parsedFilters) > 0 && !keyPairMatchesFilters(keyPairInfo, parsedFilters) {
+			continue
 		}
 
 		keyPairs = append(keyPairs, keyPairInfo)
@@ -568,6 +585,39 @@ func (s *KeyServiceImpl) DescribeKeyPairs(input *ec2.DescribeKeyPairsInput, acco
 	return &ec2.DescribeKeyPairsOutput{
 		KeyPairs: keyPairs,
 	}, nil
+}
+
+// keyPairMatchesFilters checks whether a KeyPairInfo satisfies all parsed filters.
+func keyPairMatchesFilters(kp *ec2.KeyPairInfo, filters map[string][]string) bool {
+	for name, values := range filters {
+		if strings.HasPrefix(name, "tag:") {
+			continue
+		}
+
+		var field string
+		switch name {
+		case "key-pair-id":
+			if kp.KeyPairId != nil {
+				field = *kp.KeyPairId
+			}
+		case "key-name":
+			if kp.KeyName != nil {
+				field = *kp.KeyName
+			}
+		case "fingerprint":
+			if kp.KeyFingerprint != nil {
+				field = *kp.KeyFingerprint
+			}
+		default:
+			continue
+		}
+
+		if !filterutil.MatchesAny(values, field) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // ImportKeyPair imports an existing public key
