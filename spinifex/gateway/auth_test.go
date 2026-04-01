@@ -667,6 +667,34 @@ func TestSigV4Auth_DecryptFailure(t *testing.T) {
 	}
 }
 
+func TestSigV4Auth_RequestBodyTooLarge(t *testing.T) {
+	handler := setupTestApp(testAccessKey, testSecretKey)
+
+	// Create a body that exceeds maxBodySize (10 MB + 1 byte)
+	oversizedBody := strings.Repeat("x", maxBodySize+1)
+	authHeader, timestamp := generateTestAuthHeader(
+		"POST", "/", "", oversizedBody,
+		testAccessKey, testSecretKey, testRegion, testService,
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(oversizedBody))
+	req.Host = "localhost:9999"
+	req.Header.Set("Authorization", authHeader)
+	req.Header.Set("X-Amz-Date", timestamp)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp := doRequest(handler, req)
+
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Errorf("Expected status 413, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "RequestEntityTooLarge") {
+		t.Errorf("Expected RequestEntityTooLarge error, got: %s", string(body))
+	}
+}
+
 func TestCanonicalHeaderName(t *testing.T) {
 	testCases := []struct {
 		input    string

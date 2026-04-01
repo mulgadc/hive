@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,6 +22,9 @@ import (
 const (
 	// Maximum allowed clock skew for signature validation (5 minutes)
 	maxClockSkew = 5 * time.Minute
+
+	// Maximum request body size for signature validation (10 MB)
+	maxBodySize = 10 * 1024 * 1024
 )
 
 // SigV4AuthMiddleware returns stdlib middleware that validates AWS Signature V4 authentication.
@@ -139,9 +143,18 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() func(http.Handler) http.Handler {
 				return
 			}
 
+			// Limit request body size to prevent OOM from unauthenticated requests
+			r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+
 			// Read body once and re-buffer for downstream handlers
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
+				var maxBytesErr *http.MaxBytesError
+				if errors.As(err, &maxBytesErr) {
+					slog.Warn("Request body too large", "limit", maxBodySize)
+					gw.writeSigV4Error(w, r, awserrors.ErrorRequestEntityTooLarge)
+					return
+				}
 				slog.Error("Failed to read request body", "err", err)
 				gw.writeSigV4Error(w, r, awserrors.ErrorInternalError)
 				return
