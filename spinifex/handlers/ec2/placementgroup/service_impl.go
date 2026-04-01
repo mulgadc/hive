@@ -158,6 +158,7 @@ func (s *PlacementGroupServiceImpl) DeletePlacementGroup(input *ec2.DeletePlacem
 }
 
 var describePlacementGroupsValidFilters = map[string]bool{
+	"group-id":     true,
 	"strategy":     true,
 	"state":        true,
 	"spread-level": true,
@@ -254,6 +255,10 @@ func (s *PlacementGroupServiceImpl) DescribePlacementGroups(input *ec2.DescribeP
 func pgMatchesFilters(record *PlacementGroupRecord, filters map[string][]string) bool {
 	for name, values := range filters {
 		switch name {
+		case "group-id":
+			if !filterutil.MatchesAny(values, record.GroupId) {
+				return false
+			}
 		case "strategy":
 			if !filterutil.MatchesAny(values, record.Strategy) {
 				return false

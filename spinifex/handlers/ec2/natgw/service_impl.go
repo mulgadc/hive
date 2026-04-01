@@ -311,8 +311,10 @@ func mustJS(nc *nats.Conn) nats.JetStreamContext {
 }
 
 var describeNatGatewaysValidFilters = map[string]bool{
-	"vpc-id": true,
-	"state":  true,
+	"nat-gateway-id": true,
+	"subnet-id":      true,
+	"vpc-id":         true,
+	"state":          true,
 }
 
 // DescribeNatGateways lists NAT Gateways, optionally filtered
@@ -402,6 +404,14 @@ func natgwMatchesFilters(record *NatGatewayRecord, filters map[string][]string) 
 			continue
 		}
 		switch name {
+		case "nat-gateway-id":
+			if !filterutil.MatchesAny(values, record.NatGatewayId) {
+				return false
+			}
+		case "subnet-id":
+			if !filterutil.MatchesAny(values, record.SubnetId) {
+				return false
+			}
 		case "vpc-id":
 			if !filterutil.MatchesAny(values, record.VpcId) {
 				return false

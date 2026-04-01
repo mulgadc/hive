@@ -226,6 +226,40 @@ func TestDescribePlacementGroups_FilterByGroupId(t *testing.T) {
 	assert.Equal(t, *pg.GroupId, *out.PlacementGroups[0].GroupId)
 }
 
+func TestDescribePlacementGroups_FilterByGroupIdFilter(t *testing.T) {
+	svc := setupTestService(t)
+	pg := createTestGroup(t, svc, "gid-filter", "spread")
+	createTestGroup(t, svc, "other-group", "cluster")
+
+	// Exact match
+	out, err := svc.DescribePlacementGroups(&ec2.DescribePlacementGroupsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("group-id"), Values: []*string{pg.GroupId}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, out.PlacementGroups, 1)
+	assert.Equal(t, *pg.GroupId, *out.PlacementGroups[0].GroupId)
+
+	// Non-match
+	out, err = svc.DescribePlacementGroups(&ec2.DescribePlacementGroupsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("group-id"), Values: []*string{aws.String("pg-000000")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.PlacementGroups)
+
+	// Wildcard
+	out, err = svc.DescribePlacementGroups(&ec2.DescribePlacementGroupsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("group-id"), Values: []*string{aws.String("pg-*")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.PlacementGroups, 2)
+}
+
 func TestDescribePlacementGroups_FilterByStrategy(t *testing.T) {
 	svc := setupTestService(t)
 	createTestGroup(t, svc, "spread1", "spread")

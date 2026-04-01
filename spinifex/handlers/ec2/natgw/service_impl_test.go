@@ -268,6 +268,61 @@ func TestDescribeNatGateways_DeletedGatewayVisible(t *testing.T) {
 	assert.EqualError(t, err, awserrors.ErrorInvalidNatGatewayIDNotFound)
 }
 
+func TestDescribeNatGateways_FilterByNatGatewayId(t *testing.T) {
+	svc := setupTestService(t)
+	createOut, err := svc.CreateNatGateway(&ec2.CreateNatGatewayInput{
+		SubnetId:     aws.String("subnet-pub1"),
+		AllocationId: aws.String("eipalloc-test1"),
+	}, testAccountID)
+	require.NoError(t, err)
+	natgwID := *createOut.NatGateway.NatGatewayId
+
+	// Exact match
+	out, err := svc.DescribeNatGateways(&ec2.DescribeNatGatewaysInput{
+		Filter: []*ec2.Filter{{Name: aws.String("nat-gateway-id"), Values: []*string{aws.String(natgwID)}}},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, out.NatGateways, 1)
+	assert.Equal(t, natgwID, *out.NatGateways[0].NatGatewayId)
+
+	// Non-match
+	out, err = svc.DescribeNatGateways(&ec2.DescribeNatGatewaysInput{
+		Filter: []*ec2.Filter{{Name: aws.String("nat-gateway-id"), Values: []*string{aws.String("nat-000000")}}},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.NatGateways)
+
+	// Wildcard
+	out, err = svc.DescribeNatGateways(&ec2.DescribeNatGatewaysInput{
+		Filter: []*ec2.Filter{{Name: aws.String("nat-gateway-id"), Values: []*string{aws.String("nat-*")}}},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.NatGateways, 1)
+}
+
+func TestDescribeNatGateways_FilterBySubnetId(t *testing.T) {
+	svc := setupTestService(t)
+	_, err := svc.CreateNatGateway(&ec2.CreateNatGatewayInput{
+		SubnetId:     aws.String("subnet-pub1"),
+		AllocationId: aws.String("eipalloc-test1"),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Exact match
+	out, err := svc.DescribeNatGateways(&ec2.DescribeNatGatewaysInput{
+		Filter: []*ec2.Filter{{Name: aws.String("subnet-id"), Values: []*string{aws.String("subnet-pub1")}}},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.NatGateways, 1)
+
+	// Non-match
+	out, err = svc.DescribeNatGateways(&ec2.DescribeNatGatewaysInput{
+		Filter: []*ec2.Filter{{Name: aws.String("subnet-id"), Values: []*string{aws.String("subnet-000000")}}},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.NatGateways)
+}
+
 func TestDescribeNatGateways_FilterByVpcId(t *testing.T) {
 	svc := setupTestService(t)
 	_, err := svc.CreateNatGateway(&ec2.CreateNatGatewayInput{
