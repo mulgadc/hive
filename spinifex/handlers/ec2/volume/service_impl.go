@@ -285,13 +285,28 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput, acc
 		return &ec2.DescribeVolumesOutput{Volumes: volumes}, nil
 	}
 
-	// Slow path: list all volumes (no filter provided)
+	// Slow path: list all volumes (no specific IDs requested)
 	volumeIDs, err := s.listAllVolumeIDs()
 	if err != nil {
 		return nil, err
 	}
 
+	// Extract volume-id filter values for early skipping to avoid
+	// unnecessary S3 GetObject calls on non-matching volumes.
+	var volumeIDFilterValues []string
+	if parsedFilters != nil {
+		volumeIDFilterValues = parsedFilters["volume-id"]
+	}
+
 	for _, volumeID := range volumeIDs {
+		// Early skip: if volume-id filter is set, check the ID before
+		// fetching the full volume config from S3.
+		if len(volumeIDFilterValues) > 0 {
+			if !filterutil.MatchesAny(volumeIDFilterValues, volumeID) {
+				continue
+			}
+		}
+
 		result, err := s.getVolumeByID(volumeID)
 		if err != nil {
 			slog.Error("Failed to get volume", "volumeId", volumeID, "err", err)
@@ -377,7 +392,7 @@ func volumeMatchesFilters(vol *ec2.Volume, filters map[string][]string) bool {
 				field = *vol.AvailabilityZone
 			}
 		default:
-			continue
+			return false
 		}
 
 		if !filterutil.MatchesAny(values, field) {
@@ -450,13 +465,28 @@ func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatus
 		return &ec2.DescribeVolumeStatusOutput{VolumeStatuses: statusItems}, nil
 	}
 
-	// Slow path: list all volumes (no filter provided)
+	// Slow path: list all volumes (no specific IDs requested)
 	volumeIDs, err := s.listAllVolumeIDs()
 	if err != nil {
 		return nil, err
 	}
 
+	// Extract volume-id filter values for early skipping to avoid
+	// unnecessary S3 GetObject calls on non-matching volumes.
+	var volumeStatusIDFilterValues []string
+	if parsedFilters != nil {
+		volumeStatusIDFilterValues = parsedFilters["volume-id"]
+	}
+
 	for _, volumeID := range volumeIDs {
+		// Early skip: if volume-id filter is set, check the ID before
+		// fetching the full volume status from S3.
+		if len(volumeStatusIDFilterValues) > 0 {
+			if !filterutil.MatchesAny(volumeStatusIDFilterValues, volumeID) {
+				continue
+			}
+		}
+
 		item, tenantID, err := s.getVolumeStatusByID(volumeID)
 		if err != nil {
 			slog.Error("Failed to get volume status", "volumeId", volumeID, "err", err)
@@ -505,7 +535,7 @@ func volumeStatusMatchesFilters(item *ec2.VolumeStatusItem, filters map[string][
 				field = *item.AvailabilityZone
 			}
 		default:
-			continue
+			return false
 		}
 
 		if !filterutil.MatchesAny(values, field) {

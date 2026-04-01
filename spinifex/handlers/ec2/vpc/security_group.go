@@ -297,7 +297,7 @@ func sgMatchesFilters(record *SecurityGroupRecord, filters map[string][]string) 
 				return false
 			}
 		default:
-			continue
+			return false
 		}
 	}
 

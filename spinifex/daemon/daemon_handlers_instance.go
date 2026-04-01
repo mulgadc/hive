@@ -681,8 +681,9 @@ func instanceMatchesFilters(inst *vm.VM, ic *ec2.Instance, filters map[string][]
 			}
 			continue
 		default:
-			// Unknown filter names are rejected in ParseFilters; nothing to match here.
-			continue
+			// Filter name passed ParseFilters but has no case — treat as non-match
+			// to avoid silently ignoring it.
+			return false
 		}
 
 		if !filterutil.MatchesAny(values, field) {

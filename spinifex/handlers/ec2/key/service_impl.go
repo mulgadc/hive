@@ -628,7 +628,7 @@ func keyPairMatchesFilters(kp *ec2.KeyPairInfo, filters map[string][]string) boo
 				field = *kp.KeyFingerprint
 			}
 		default:
-			continue
+			return false
 		}
 
 		if !filterutil.MatchesAny(values, field) {

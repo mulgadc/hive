@@ -659,7 +659,7 @@ func vpcMatchesFilters(record *VPCRecord, accountID string, filters map[string][
 		case "owner-id":
 			field = accountID
 		default:
-			continue
+			return false
 		}
 
 		if !filterutil.MatchesAny(values, field) {
@@ -702,7 +702,7 @@ func subnetMatchesFilters(record *SubnetRecord, filters map[string][]string) boo
 		case "default-for-az":
 			field = fmt.Sprintf("%t", record.IsDefault)
 		default:
-			continue
+			return false
 		}
 
 		if !filterutil.MatchesAny(values, field) {

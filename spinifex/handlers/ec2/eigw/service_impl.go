@@ -228,7 +228,7 @@ func eigwMatchesFilters(record *EgressOnlyIGWRecord, filters map[string][]string
 		case "egress-only-internet-gateway-id":
 			field = record.EgressOnlyInternetGatewayId
 		default:
-			continue
+			return false
 		}
 
 		if !filterutil.MatchesAny(values, field) {

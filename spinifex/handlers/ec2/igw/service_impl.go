@@ -250,7 +250,7 @@ func igwMatchesFilters(record *IGWRecord, filters map[string][]string) bool {
 				field = "" // no attachment means no state to match
 			}
 		default:
-			continue
+			return false
 		}
 
 		if !filterutil.MatchesAny(values, field) {

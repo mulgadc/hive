@@ -408,7 +408,7 @@ func addressMatchesFilters(record *EIPRecord, filters map[string][]string) bool 
 		case "domain":
 			field = "vpc" // Spinifex only supports VPC domain
 		default:
-			continue
+			return false
 		}
 
 		if !filterutil.MatchesAny(values, field) {

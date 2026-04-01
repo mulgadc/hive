@@ -363,7 +363,7 @@ func imageMatchesFilters(image *ec2.Image, filters map[string][]string, tags map
 				field = *image.ImageType
 			}
 		default:
-			continue
+			return false
 		}
 
 		if !filterutil.MatchesAny(values, field) {

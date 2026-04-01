@@ -342,6 +342,13 @@ func (s *SnapshotServiceImpl) DescribeSnapshots(input *ec2.DescribeSnapshotsInpu
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
+	// Extract snapshot-id filter values for early prefix skipping to avoid
+	// unnecessary S3 GetObject calls on non-matching snapshots.
+	var snapshotIDFilterValues []string
+	if parsedFilters != nil {
+		snapshotIDFilterValues = parsedFilters["snapshot-id"]
+	}
+
 	var snapshots []*ec2.Snapshot
 	for _, prefix := range listResult.CommonPrefixes {
 		if prefix.Prefix == nil {
@@ -352,6 +359,14 @@ func (s *SnapshotServiceImpl) DescribeSnapshots(input *ec2.DescribeSnapshotsInpu
 
 		if len(snapshotIDFilter) > 0 && !snapshotIDFilter[snapshotID] {
 			continue
+		}
+
+		// Early skip: if snapshot-id filter is set, check the prefix against
+		// filter values before fetching config from S3.
+		if len(snapshotIDFilterValues) > 0 {
+			if !filterutil.MatchesAny(snapshotIDFilterValues, snapshotID) {
+				continue
+			}
 		}
 
 		cfg, err := s.getSnapshotConfig(snapshotID)
@@ -399,7 +414,7 @@ func snapshotMatchesFilters(cfg *SnapshotConfig, filters map[string][]string) bo
 		case "owner-id":
 			field = cfg.OwnerID
 		default:
-			continue
+			return false
 		}
 
 		if !filterutil.MatchesAny(values, field) {
