@@ -19,6 +19,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -1348,9 +1349,14 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // formation server uses ephemeral self-signed cert
+		},
+	}
 
-	joinURL := fmt.Sprintf("http://%s/formation/join", leaderHost)
+	joinURL := fmt.Sprintf("https://%s/formation/join", leaderHost)
 	resp, err := client.Post(joinURL, "application/json", bytes.NewBuffer(reqBody))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error connecting to formation server: %v\n", err)
@@ -1379,7 +1385,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	fmt.Printf("✅ Registered with formation server (%d/%d nodes joined)\n", joinResp.Joined, joinResp.Expected)
 
 	// Poll status until formation is complete
-	statusURL := fmt.Sprintf("http://%s/formation/status", leaderHost)
+	statusURL := fmt.Sprintf("https://%s/formation/status", leaderHost)
 	var statusResp formation.StatusResponse
 
 	for {
