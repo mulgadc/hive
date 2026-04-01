@@ -1,23 +1,44 @@
 #!/bin/bash
 set -e
 
-# ELBv2 (ALB) Data Plane E2E Test
-# Verifies that an ALB actually balances HTTP traffic across target instances.
-# Requires: VPC networking (OVN), external networking (pool mode).
+# ELBv2 (ALB) Internal Scheme Data Plane E2E Test
+# Verifies that an internal ALB works correctly. The ALB agent reaches
+# the gateway via the management NIC (br-mgmt), health checks reach targets
+# over the VPC's OVN L2 network, and traffic from a VPC client is balanced
+# across targets via the ALB's private IP.
+#
+# Key validations:
+#   - ALB reaches active state via mgmt NIC heartbeat
+#   - Scheme is "internal", DNS has "internal-" prefix
+#   - ENI has NO public IP
+#   - ALB health-checks targets within the VPC (OVN L2)
+#   - VPC client can reach ALB via private IP and gets round-robin responses
+#   - ENI cleanup on deletion
 #
 # Architecture:
-#   - 2 "app" instances run a Python HTTP responder (returns instance ID as JSON)
-#   - 1 ALB VM (created by CreateLoadBalancer) runs HAProxy inside a pre-baked Alpine image
+#   - 2 "app" instances run a Python HTTP responder (returns instance ID)
+#   - 1 internal ALB (HAProxy) balances traffic to the app instances
+#   - 1 "client" instance curls the ALB's private IP from inside the VPC,
+#     then serves the results via HTTP on its own public IP so the host can
+#     fetch them. This avoids needing SSH/hostfwd/dev_networking.
 #
-# Traffic is tested from the host via the ALB's public IP. Instances are in a
-# public subnet with an IGW route so the ALB VM can health-check them and the
-# host can reach the ALB.
+# Requires: Pool mode with external IPAM (NOT dev_networking).
 #
 # Usage:
-#   ./tests/e2e/run-elbv2-dataplane-e2e.sh                              # Default endpoint
-#   ENDPOINT=https://10.11.12.1:9999 ./tests/e2e/run-elbv2-dataplane-e2e.sh  # Custom endpoint
+#   ./tests/e2e/run-elbv2-dataplane-e2e.sh
+#   ENDPOINT=https://10.11.12.1:9999 ./tests/e2e/run-elbv2-dataplane-e2e.sh
 
 cd "$(dirname "$0")/../.."
+
+# Dev mode gate — skip when external IPAM is not available
+SPINIFEX_CONFIG="${HOME}/spinifex/config/spinifex.toml"
+if [ -f "$SPINIFEX_CONFIG" ]; then
+    if grep -q 'dev_networking = true' "$SPINIFEX_CONFIG"; then
+        echo "Skipping internal ALB E2E: dev_networking is enabled (no external IPAM)"
+        echo "  This test requires pool mode with external networking."
+        exit 0
+    fi
+fi
 
 ENDPOINT="${ENDPOINT:-https://127.0.0.1:9999}"
 export AWS_PROFILE=spinifex
@@ -42,6 +63,7 @@ VPC_ID=""
 SUBNET_ID=""
 IGW_ID=""
 APP_INSTANCE_IDS=()
+CLIENT_INSTANCE_ID=""
 TG_ARN=""
 LB_ARN=""
 LISTENER_ARN=""
@@ -51,38 +73,39 @@ cleanup() {
     echo ""
     echo "Cleanup..."
 
-    # Delete listener
     if [ -n "$LISTENER_ARN" ]; then
         echo "  Deleting listener..."
         $AWS_ELBV2 delete-listener --listener-arn "$LISTENER_ARN" 2>/dev/null || true
     fi
 
-    # Delete load balancer (cascade-deletes listeners, terminates ALB VM)
     if [ -n "$LB_ARN" ]; then
         echo "  Deleting load balancer..."
         $AWS_ELBV2 delete-load-balancer --load-balancer-arn "$LB_ARN" 2>/dev/null || true
     fi
 
-    # Deregister targets and delete target group
     if [ -n "$TG_ARN" ]; then
         echo "  Deleting target group..."
         $AWS_ELBV2 delete-target-group --target-group-arn "$TG_ARN" 2>/dev/null || true
     fi
 
-    # Terminate instances
-    for inst_id in "${APP_INSTANCE_IDS[@]}"; do
+    # Terminate all instances (app + client)
+    ALL_INSTANCES=("${APP_INSTANCE_IDS[@]}")
+    if [ -n "$CLIENT_INSTANCE_ID" ]; then
+        ALL_INSTANCES+=("$CLIENT_INSTANCE_ID")
+    fi
+
+    for inst_id in "${ALL_INSTANCES[@]}"; do
         if [ -n "$inst_id" ]; then
             echo "  Terminating instance $inst_id..."
             $AWS_EC2 terminate-instances --instance-ids "$inst_id" 2>/dev/null || true
         fi
     done
 
-    # Wait for instances to terminate before deleting subnet/VPC
-    if [ ${#APP_INSTANCE_IDS[@]} -gt 0 ]; then
+    if [ ${#ALL_INSTANCES[@]} -gt 0 ]; then
         echo "  Waiting for instances to terminate..."
         for attempt in $(seq 1 30); do
             ALL_TERMINATED=true
-            for inst_id in "${APP_INSTANCE_IDS[@]}"; do
+            for inst_id in "${ALL_INSTANCES[@]}"; do
                 STATE=$($AWS_EC2 describe-instances --instance-ids "$inst_id" \
                     --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null || echo "terminated")
                 if [ "$STATE" != "terminated" ]; then
@@ -97,24 +120,20 @@ cleanup() {
         done
     fi
 
-    # Delete key pair
     echo "  Deleting key pair..."
     $AWS_EC2 delete-key-pair --key-name dp-test-key 2>/dev/null || true
 
-    # Detach and delete IGW
     if [ -n "$IGW_ID" ] && [ -n "$VPC_ID" ]; then
         echo "  Detaching IGW..."
         $AWS_EC2 detach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_ID" 2>/dev/null || true
         $AWS_EC2 delete-internet-gateway --internet-gateway-id "$IGW_ID" 2>/dev/null || true
     fi
 
-    # Delete subnet
     if [ -n "$SUBNET_ID" ]; then
         echo "  Deleting subnet..."
         $AWS_EC2 delete-subnet --subnet-id "$SUBNET_ID" 2>/dev/null || true
     fi
 
-    # Delete VPC
     if [ -n "$VPC_ID" ]; then
         echo "  Deleting VPC..."
         $AWS_EC2 delete-vpc --vpc-id "$VPC_ID" 2>/dev/null || true
@@ -123,7 +142,7 @@ cleanup() {
     echo "Cleanup complete"
     echo ""
     echo "========================================"
-    echo "ELBv2 Data Plane E2E Results: $PASSED passed, $FAILED failed"
+    echo "Internal ALB Data Plane E2E Results: $PASSED passed, $FAILED failed"
     echo "========================================"
 
     if [ $FAILED -gt 0 ]; then
@@ -134,7 +153,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "========================================"
-echo "ELBv2 (ALB) Data Plane E2E Test"
+echo "ELBv2 (ALB) Internal Scheme Data Plane E2E"
 echo "========================================"
 echo "Endpoint: $ENDPOINT"
 echo ""
@@ -177,10 +196,10 @@ KEY_OUTPUT=$($AWS_EC2 create-key-pair --key-name dp-test-key --output json 2>&1)
 pass "key pair: dp-test-key"
 
 # ==========================================
-# Phase 1: VPC + Public Subnet Setup
+# Phase 1: VPC + Subnet Setup
 # ==========================================
 echo ""
-echo "Phase 1: VPC + Public Subnet Setup"
+echo "Phase 1: VPC + Subnet Setup"
 echo "========================================"
 
 echo "Creating VPC..."
@@ -191,7 +210,9 @@ VPC_OUTPUT=$($AWS_EC2 create-vpc --cidr-block 10.201.0.0/16 --output json) || {
 VPC_ID=$(echo "$VPC_OUTPUT" | jq -r '.Vpc.VpcId')
 pass "create-vpc: $VPC_ID"
 
-echo "Creating internet gateway..."
+# IGW provides external connectivity for the client VM to serve results to
+# the host. The internal ALB itself does NOT use the IGW (no public IP).
+echo "Creating internet gateway (for client VM access)..."
 IGW_OUTPUT=$($AWS_EC2 create-internet-gateway --output json) || {
     fail "create-internet-gateway"
     exit 1
@@ -201,9 +222,9 @@ $AWS_EC2 attach-internet-gateway --internet-gateway-id "$IGW_ID" --vpc-id "$VPC_
     fail "attach-internet-gateway"
     exit 1
 }
-pass "internet gateway: $IGW_ID (attached)"
+pass "internet gateway: $IGW_ID (attached — for client VM only)"
 
-echo "Creating public subnet..."
+echo "Creating subnet..."
 SUBNET_OUTPUT=$($AWS_EC2 create-subnet --vpc-id "$VPC_ID" --cidr-block 10.201.1.0/24 --output json) || {
     fail "create-subnet"
     exit 1
@@ -211,8 +232,15 @@ SUBNET_OUTPUT=$($AWS_EC2 create-subnet --vpc-id "$VPC_ID" --cidr-block 10.201.1.
 SUBNET_ID=$(echo "$SUBNET_OUTPUT" | jq -r '.Subnet.SubnetId')
 pass "create-subnet: $SUBNET_ID"
 
-# IGW attachment makes the subnet public — Spinifex routes via OVN/br-ext automatically.
-pass "public subnet configured (IGW attached)"
+# Enable auto-assign public IP so app + client instances get public IPs.
+# The IGW + MapPublicIpOnLaunch gives all instances external connectivity.
+# The internal ALB itself does NOT get a public IP (scheme=internal overrides).
+$AWS_EC2 modify-subnet-attribute --subnet-id "$SUBNET_ID" \
+    --map-public-ip-on-launch 2>&1 || {
+    fail "modify-subnet-attribute"
+    exit 1
+}
+pass "MapPublicIpOnLaunch enabled"
 
 # ==========================================
 # Phase 2: Launch App Instances
@@ -332,15 +360,16 @@ $AWS_ELBV2 register-targets \
 pass "registered 2 targets"
 
 # ==========================================
-# Phase 4: Create ALB + Listener
+# Phase 4: Create Internal ALB + Listener
 # ==========================================
 echo ""
-echo "Phase 4: ALB + Listener"
+echo "Phase 4: Internal ALB + Listener"
 echo "========================================"
 
-echo "Creating ALB..."
+echo "Creating internal ALB..."
 LB_OUTPUT=$($AWS_ELBV2 create-load-balancer \
     --name dp-test-alb \
+    --scheme internal \
     --subnets "$SUBNET_ID" \
     --output json 2>&1) || {
     fail "create-load-balancer"
@@ -348,50 +377,62 @@ LB_OUTPUT=$($AWS_ELBV2 create-load-balancer \
     exit 1
 }
 LB_ARN=$(echo "$LB_OUTPUT" | jq -r '.LoadBalancers[0].LoadBalancerArn')
+LB_SCHEME=$(echo "$LB_OUTPUT" | jq -r '.LoadBalancers[0].Scheme')
 LB_STATE=$(echo "$LB_OUTPUT" | jq -r '.LoadBalancers[0].State.Code')
-pass "create-load-balancer: $LB_ARN (state: $LB_STATE)"
+pass "create-load-balancer: $LB_ARN (scheme: $LB_SCHEME, state: $LB_STATE)"
 
-# Discover the ALB's reachable address. With dev_networking, the ALB VM has
-# port 80 forwarded to a random host port via QEMU hostfwd. Without it, use
-# the public IP from the external networking pool.
+if [ "$LB_SCHEME" == "internal" ]; then
+    pass "scheme confirmed: internal"
+else
+    fail "scheme mismatch: expected internal, got $LB_SCHEME"
+fi
+
+# ==========================================
+# Phase 5: Verify ALB ENI — No Public IP
+# ==========================================
+echo ""
+echo "Phase 5: Verify ALB ENI (No Public IP)"
+echo "========================================"
+
 LB_ID=$(echo "$LB_ARN" | sed 's|.*/||')
 LB_NAME="dp-test-alb"
-echo "Discovering ALB address..."
 
-ALB_URL=""
-
-# First try: find the ALB VM's hostfwd port for port 80 (dev_networking mode)
-# The ALB VM instance ID can be found from the LB record or QEMU process list.
+echo "Looking up ALB ENI..."
 sleep 3
-ALB_QEMU=$(ps auxw 2>/dev/null | grep "qemu-system" | grep -v grep | grep "hostfwd=.*-:80" | tail -1)
-if [ -n "$ALB_QEMU" ]; then
-    ALB_HOST_PORT=$(echo "$ALB_QEMU" | grep -oP 'hostfwd=tcp:[^:]+:\K[0-9]+(?=-:80)' | head -1)
-    if [ -n "$ALB_HOST_PORT" ]; then
-        ALB_URL="http://127.0.0.1:${ALB_HOST_PORT}"
-        pass "ALB reachable via hostfwd: $ALB_URL"
-    fi
+
+ENI_OUTPUT=$($AWS_EC2 describe-network-interfaces \
+    --filters "Name=description,Values=ELB app/${LB_NAME}/${LB_ID}" \
+    --output json 2>/dev/null)
+
+ALB_PUBLIC_IP=$(echo "$ENI_OUTPUT" | jq -r '.NetworkInterfaces[0].Association.PublicIp // empty' 2>/dev/null)
+ALB_PRIVATE_IP=$(echo "$ENI_OUTPUT" | jq -r '.NetworkInterfaces[0].PrivateIpAddress // empty' 2>/dev/null)
+ALB_ENI_ID=$(echo "$ENI_OUTPUT" | jq -r '.NetworkInterfaces[0].NetworkInterfaceId // empty' 2>/dev/null)
+
+echo "  ENI: $ALB_ENI_ID"
+echo "  Private IP: $ALB_PRIVATE_IP"
+echo "  Public IP: ${ALB_PUBLIC_IP:-(none)}"
+
+if [ -z "$ALB_PUBLIC_IP" ] || [ "$ALB_PUBLIC_IP" == "null" ]; then
+    pass "internal ALB has no public IP (correct)"
+else
+    fail "internal ALB should NOT have a public IP, but got: $ALB_PUBLIC_IP"
 fi
 
-# Second try: ALB ENI public IP (external networking mode)
-if [ -z "$ALB_URL" ]; then
-    ENI_OUTPUT=$($AWS_EC2 describe-network-interfaces \
-        --filters "Name=description,Values=ELB app/${LB_NAME}/${LB_ID}" \
-        --output json 2>/dev/null)
-    ALB_PUBLIC_IP=$(echo "$ENI_OUTPUT" | jq -r '.NetworkInterfaces[0].Association.PublicIp // empty' 2>/dev/null)
-    ALB_PRIVATE_IP=$(echo "$ENI_OUTPUT" | jq -r '.NetworkInterfaces[0].PrivateIpAddress // empty' 2>/dev/null)
-
-    if [ -n "$ALB_PUBLIC_IP" ] && [ "$ALB_PUBLIC_IP" != "null" ]; then
-        ALB_URL="http://${ALB_PUBLIC_IP}:80"
-        pass "ALB reachable via public IP: $ALB_URL"
-    elif [ -n "$ALB_PRIVATE_IP" ]; then
-        ALB_URL="http://${ALB_PRIVATE_IP}:80"
-        pass "ALB private IP: $ALB_PRIVATE_IP (may not be reachable from host)"
-    fi
-fi
-
-if [ -z "$ALB_URL" ]; then
-    fail "could not discover ALB address"
+if [ -n "$ALB_PRIVATE_IP" ] && [ "$ALB_PRIVATE_IP" != "null" ]; then
+    pass "ALB has private IP: $ALB_PRIVATE_IP"
+else
+    fail "ALB has no private IP"
     exit 1
+fi
+
+# Verify DNS name HAS internal- prefix
+LB_DNS=$($AWS_ELBV2 describe-load-balancers --load-balancer-arns "$LB_ARN" \
+    --query 'LoadBalancers[0].DNSName' --output text 2>/dev/null)
+echo "  DNS name: $LB_DNS"
+if echo "$LB_DNS" | grep -q "^internal-"; then
+    pass "DNS name has internal- prefix"
+else
+    fail "DNS name missing internal- prefix for internal ALB: $LB_DNS"
 fi
 
 echo "Creating listener (port 80 -> target group)..."
@@ -408,8 +449,14 @@ LISTENER_OUTPUT=$($AWS_ELBV2 create-listener \
 LISTENER_ARN=$(echo "$LISTENER_OUTPUT" | jq -r '.Listeners[0].ListenerArn')
 pass "create-listener: $LISTENER_ARN"
 
-# Wait for ALB to become active (Alpine VM boots fast, ~60s total)
-echo "Waiting for ALB to become active (agent ping)..."
+# ==========================================
+# Phase 6: ALB Reaches Active (mgmt NIC heartbeat)
+# ==========================================
+echo ""
+echo "Phase 6: ALB Active (mgmt NIC heartbeat)"
+echo "========================================"
+
+echo "Waiting for ALB to become active (agent heartbeat via mgmt NIC)..."
 ALB_ACTIVE=false
 for attempt in $(seq 1 90); do
     LB_STATE=$($AWS_ELBV2 describe-load-balancers --load-balancer-arns "$LB_ARN" \
@@ -425,44 +472,23 @@ for attempt in $(seq 1 90); do
 done
 
 if [ "$ALB_ACTIVE" = true ]; then
-    pass "ALB state: active (agent connected)"
+    pass "ALB state: active (agent heartbeat via mgmt NIC)"
 else
     fail "ALB did not reach active state (stuck in $LB_STATE)"
+    echo ""
+    echo "  The ALB agent must reach the gateway via the management NIC (br-mgmt),"
+    echo "  independent of VPC routing/IGW."
+    echo ""
+    echo "  Debug: daemon logs:"
+    grep -iE 'LaunchSystemInstance|ALB.VM|alb-agent|mgmt|MgmtTap|MgmtIP|heartbeat' ~/spinifex/logs/spinifex.log 2>/dev/null | tail -20 || echo "  (no matching log lines)"
     exit 1
 fi
 
 # ==========================================
-# Phase 5: Connectivity Pre-Check (from host)
+# Phase 7: Wait for Targets to Become Healthy
 # ==========================================
 echo ""
-echo "Phase 5: Connectivity Pre-Check"
-echo "========================================"
-
-echo "Testing connectivity from host to ALB at $ALB_URL..."
-CONNECTIVITY_OK=false
-for attempt in $(seq 1 20); do
-    if curl -s --max-time 3 "$ALB_URL/" 2>/dev/null | grep -q "instance_id"; then
-        CONNECTIVITY_OK=true
-        break
-    fi
-    echo "  Attempt $attempt/20: ALB not yet responding..."
-    sleep 5
-done
-
-if [ "$CONNECTIVITY_OK" = true ]; then
-    pass "host can reach ALB at $ALB_URL"
-else
-    fail "host cannot reach ALB at $ALB_URL"
-    echo "  Debug: trying to curl ALB directly..."
-    curl -v --max-time 5 "$ALB_URL/" 2>&1 | tail -10
-    exit 1
-fi
-
-# ==========================================
-# Phase 6: Wait for Targets to Become Healthy
-# ==========================================
-echo ""
-echo "Phase 6: Wait for Target Health"
+echo "Phase 7: Wait for Target Health (ALB -> targets via VPC)"
 echo "========================================"
 
 echo "Polling target health (timeout 120s)..."
@@ -493,7 +519,7 @@ while true; do
 done
 
 if [ "$TARGETS_HEALTHY" = true ]; then
-    pass "both targets healthy"
+    pass "both targets healthy (ALB health-checked targets via VPC network)"
 else
     echo "  Current target health:"
     echo "$HEALTH_OUTPUT" | jq -r '.TargetHealthDescriptions[] | "    \(.Target.Id): \(.TargetHealth.State) (\(.TargetHealth.Reason // "n/a"))"'
@@ -501,33 +527,135 @@ else
 fi
 
 # ==========================================
-# Phase 7: Traffic Balancing — Round Robin
+# Phase 8: Launch VPC Client + Traffic Balancing
 # ==========================================
 echo ""
-echo "Phase 7: Traffic Balancing"
+echo "Phase 8: Traffic Balancing (VPC client -> internal ALB)"
 echo "========================================"
 
-NUM_REQUESTS=20
-echo "Sending $NUM_REQUESTS requests to ALB at $ALB_URL ..."
+# Launch a client VM in the same subnet. Its cloud-init curls the ALB's
+# private IP from inside the VPC and serves results via HTTP. The client gets
+# a public IP (IGW is attached) so the host can fetch the results.
+echo "Launching client VM to test ALB from inside the VPC..."
 
+CLIENT_USER_DATA=$(cat <<USERDATA
+#!/bin/bash
+ALB_IP="${ALB_PRIVATE_IP}"
+NUM_REQUESTS=20
+
+mkdir -p /tmp/httpd
+cd /tmp/httpd
+
+# Wait for ALB to respond (up to 5 min)
+echo "waiting" > status.txt
+nohup python3 -m http.server 80 --bind 0.0.0.0 > /dev/null 2>&1 &
+
+for i in \$(seq 1 60); do
+    if curl -s --max-time 3 "http://\${ALB_IP}:80/" 2>/dev/null | grep -q instance_id; then
+        break
+    fi
+    sleep 5
+done
+
+# Send test requests and collect responses (one JSON per line)
+> results.txt
+for i in \$(seq 1 \$NUM_REQUESTS); do
+    curl -s --max-time 5 "http://\${ALB_IP}:80/" >> results.txt 2>/dev/null
+    echo "" >> results.txt
+done
+
+echo "done" > status.txt
+USERDATA
+)
+
+CLIENT_OUTPUT=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name dp-test-key \
+    --subnet-id "$SUBNET_ID" \
+    --user-data "$CLIENT_USER_DATA" \
+    --output json 2>&1) || {
+    fail "run-instances (client)"
+    echo "  Output: $CLIENT_OUTPUT"
+    exit 1
+}
+CLIENT_INSTANCE_ID=$(echo "$CLIENT_OUTPUT" | jq -r '.Instances[0].InstanceId')
+echo "  Client instance: $CLIENT_INSTANCE_ID"
+pass "launched client VM"
+
+# Wait for client to reach running state
+echo "Waiting for client to reach running state..."
+for attempt in $(seq 1 60); do
+    STATE=$($AWS_EC2 describe-instances --instance-ids "$CLIENT_INSTANCE_ID" \
+        --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null)
+    if [ "$STATE" == "running" ]; then
+        break
+    fi
+    if [ $attempt -eq 60 ]; then
+        fail "client instance did not reach running (stuck in $STATE)"
+        exit 1
+    fi
+    sleep 2
+done
+
+# Discover client's public IP
+CLIENT_ENI=$($AWS_EC2 describe-network-interfaces \
+    --filters "Name=attachment.instance-id,Values=$CLIENT_INSTANCE_ID" \
+    --output json 2>/dev/null)
+CLIENT_PUBLIC_IP=$(echo "$CLIENT_ENI" | jq -r '.NetworkInterfaces[0].Association.PublicIp // empty' 2>/dev/null)
+
+if [ -z "$CLIENT_PUBLIC_IP" ] || [ "$CLIENT_PUBLIC_IP" == "null" ]; then
+    fail "client VM has no public IP — cannot fetch results from host"
+    exit 1
+fi
+pass "client VM public IP: $CLIENT_PUBLIC_IP"
+
+# Wait for cloud-init + test script to complete
+echo "Waiting for client cloud-init + ALB test (~120s)..."
+CLIENT_DONE=false
+for attempt in $(seq 1 60); do
+    STATUS=$(curl -s --max-time 3 "http://${CLIENT_PUBLIC_IP}:80/status.txt" 2>/dev/null) || true
+    if [ "$STATUS" == "done" ]; then
+        CLIENT_DONE=true
+        break
+    fi
+    if [ $((attempt % 10)) -eq 0 ]; then
+        echo "  Client status: ${STATUS:-unreachable} (attempt $attempt/60)"
+    fi
+    sleep 5
+done
+
+if [ "$CLIENT_DONE" != true ]; then
+    fail "client VM test did not complete within timeout"
+    echo "  Last status: ${STATUS:-unreachable}"
+    exit 1
+fi
+pass "client VM test completed"
+
+# Fetch and analyse results
+echo "Fetching results from client VM..."
+RESULTS=$(curl -s --max-time 10 "http://${CLIENT_PUBLIC_IP}:80/results.txt" 2>/dev/null)
+
+if [ -z "$RESULTS" ]; then
+    fail "could not fetch results from client VM"
+    exit 1
+fi
+
+# Parse results: count unique instance_id values
 declare -A RESPONSE_COUNTS
 TOTAL_SUCCESS=0
 TOTAL_FAIL=0
 
-for i in $(seq 1 $NUM_REQUESTS); do
-    RESPONSE=$(curl -s --max-time 5 "$ALB_URL/" 2>/dev/null) || {
-        TOTAL_FAIL=$((TOTAL_FAIL + 1))
-        continue
-    }
-
-    RESP_INSTANCE=$(echo "$RESPONSE" | jq -r '.instance_id // empty' 2>/dev/null)
+while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    RESP_INSTANCE=$(echo "$line" | jq -r '.instance_id // empty' 2>/dev/null)
     if [ -n "$RESP_INSTANCE" ]; then
         RESPONSE_COUNTS[$RESP_INSTANCE]=$(( ${RESPONSE_COUNTS[$RESP_INSTANCE]:-0} + 1 ))
         TOTAL_SUCCESS=$((TOTAL_SUCCESS + 1))
     else
         TOTAL_FAIL=$((TOTAL_FAIL + 1))
     fi
-done
+done <<< "$RESULTS"
 
 echo "  Results: $TOTAL_SUCCESS successful, $TOTAL_FAIL failed"
 echo "  Distribution:"
@@ -538,124 +666,52 @@ done
 # Verify we got responses from BOTH instances
 UNIQUE_RESPONDERS=${#RESPONSE_COUNTS[@]}
 if [ "$UNIQUE_RESPONDERS" -ge 2 ]; then
-    pass "round-robin: $UNIQUE_RESPONDERS unique instances responded"
+    pass "round-robin via private IP: $UNIQUE_RESPONDERS unique instances responded"
 else
     fail "round-robin: expected 2 unique responders, got $UNIQUE_RESPONDERS"
 fi
 
-if [ "$TOTAL_SUCCESS" -ge $((NUM_REQUESTS / 2)) ]; then
-    pass "success rate: $TOTAL_SUCCESS/$NUM_REQUESTS requests succeeded"
+if [ "$TOTAL_SUCCESS" -ge 10 ]; then
+    pass "success rate: $TOTAL_SUCCESS/20 requests succeeded"
 else
-    fail "success rate: only $TOTAL_SUCCESS/$NUM_REQUESTS requests succeeded"
+    fail "success rate: only $TOTAL_SUCCESS/20 requests succeeded"
 fi
 
 # ==========================================
-# Phase 8: Deregister One Target — Single Target Verification
-# ==========================================
-echo ""
-echo "Phase 8: Single Target After Deregister"
-echo "========================================"
-
-DEREGISTERED_INSTANCE="${APP_INSTANCE_IDS[1]}"
-REMAINING_INSTANCE="${APP_INSTANCE_IDS[0]}"
-echo "Deregistering $DEREGISTERED_INSTANCE..."
-
-$AWS_ELBV2 deregister-targets \
-    --target-group-arn "$TG_ARN" \
-    --targets "Id=$DEREGISTERED_INSTANCE" \
-    --output json 2>&1 || {
-    fail "deregister-targets"
-}
-pass "deregistered $DEREGISTERED_INSTANCE"
-
-# Brief pause for HAProxy to reload
-sleep 3
-
-echo "Sending $NUM_REQUESTS requests after deregistration..."
-declare -A SINGLE_COUNTS
-SINGLE_SUCCESS=0
-
-for i in $(seq 1 $NUM_REQUESTS); do
-    RESPONSE=$(curl -s --max-time 5 "$ALB_URL/" 2>/dev/null) || continue
-
-    RESP_INSTANCE=$(echo "$RESPONSE" | jq -r '.instance_id // empty' 2>/dev/null)
-    if [ -n "$RESP_INSTANCE" ]; then
-        SINGLE_COUNTS[$RESP_INSTANCE]=$(( ${SINGLE_COUNTS[$RESP_INSTANCE]:-0} + 1 ))
-        SINGLE_SUCCESS=$((SINGLE_SUCCESS + 1))
-    fi
-done
-
-echo "  Results: $SINGLE_SUCCESS/$NUM_REQUESTS successful"
-echo "  Distribution:"
-for inst_id in "${!SINGLE_COUNTS[@]}"; do
-    echo "    $inst_id: ${SINGLE_COUNTS[$inst_id]} responses"
-done
-
-# Verify ONLY the remaining instance responds.
-# The HTTP server returns the VM hostname (spinifex-vm-XXXX), which is a prefix
-# of the instance ID (i-XXXX...). Extract the short ID to compare.
-REMAINING_SHORT=$(echo "$REMAINING_INSTANCE" | sed 's/^i-//' | cut -c1-8)
-SINGLE_RESPONDERS=${#SINGLE_COUNTS[@]}
-if [ "$SINGLE_RESPONDERS" -eq 1 ]; then
-    SOLE_RESPONDER="${!SINGLE_COUNTS[@]}"
-    if echo "$SOLE_RESPONDER" | grep -q "$REMAINING_SHORT"; then
-        pass "single target: only $REMAINING_INSTANCE responds after deregistration"
-    else
-        fail "single target: unexpected responder $SOLE_RESPONDER (expected $REMAINING_INSTANCE)"
-    fi
-else
-    fail "single target: expected 1 responder, got $SINGLE_RESPONDERS"
-fi
-
-if [ "$SINGLE_SUCCESS" -ge $((NUM_REQUESTS / 2)) ]; then
-    pass "single target success rate: $SINGLE_SUCCESS/$NUM_REQUESTS"
-else
-    fail "single target success rate: only $SINGLE_SUCCESS/$NUM_REQUESTS"
-fi
-
-# ==========================================
-# Phase 9: Re-register + Verify Recovery
+# Phase 9: Cleanup Verification — ENI removed after deletion
 # ==========================================
 echo ""
-echo "Phase 9: Re-register + Recovery"
+echo "Phase 9: Cleanup Verification"
 echo "========================================"
 
-echo "Re-registering $DEREGISTERED_INSTANCE..."
-$AWS_ELBV2 register-targets \
-    --target-group-arn "$TG_ARN" \
-    --targets "Id=$DEREGISTERED_INSTANCE" \
-    --output json 2>&1 || {
-    fail "re-register-targets"
+echo "Deleting internal ALB..."
+$AWS_ELBV2 delete-load-balancer --load-balancer-arn "$LB_ARN" 2>&1 || {
+    fail "delete-load-balancer"
 }
-pass "re-registered $DEREGISTERED_INSTANCE"
 
-# Wait for HAProxy reload + target to become routable
-sleep 5
-
-echo "Sending $NUM_REQUESTS requests after re-registration..."
-declare -A RECOVERY_COUNTS
-RECOVERY_SUCCESS=0
-
-for i in $(seq 1 $NUM_REQUESTS); do
-    RESPONSE=$(curl -s --max-time 5 "$ALB_URL/" 2>/dev/null) || continue
-
-    RESP_INSTANCE=$(echo "$RESPONSE" | jq -r '.instance_id // empty' 2>/dev/null)
-    if [ -n "$RESP_INSTANCE" ]; then
-        RECOVERY_COUNTS[$RESP_INSTANCE]=$(( ${RECOVERY_COUNTS[$RESP_INSTANCE]:-0} + 1 ))
-        RECOVERY_SUCCESS=$((RECOVERY_SUCCESS + 1))
+echo "Verifying ENI cleanup..."
+ENI_CLEANED=false
+for attempt in $(seq 1 10); do
+    ENI_CHECK=$($AWS_EC2 describe-network-interfaces \
+        --filters "Name=description,Values=ELB app/${LB_NAME}/${LB_ID}" \
+        --query 'NetworkInterfaces | length(@)' --output text 2>/dev/null)
+    if [ "$ENI_CHECK" == "0" ] || [ -z "$ENI_CHECK" ]; then
+        ENI_CLEANED=true
+        break
     fi
+    sleep 3
 done
 
-echo "  Distribution:"
-for inst_id in "${!RECOVERY_COUNTS[@]}"; do
-    echo "    $inst_id: ${RECOVERY_COUNTS[$inst_id]} responses"
-done
-
-RECOVERY_RESPONDERS=${#RECOVERY_COUNTS[@]}
-if [ "$RECOVERY_RESPONDERS" -ge 2 ]; then
-    pass "recovery: both instances responding again ($RECOVERY_RESPONDERS responders)"
+if [ "$ENI_CLEANED" = true ]; then
+    pass "ALB ENI cleaned up after deletion"
 else
-    fail "recovery: expected 2 responders after re-registration, got $RECOVERY_RESPONDERS"
+    fail "ALB ENI still exists after deletion"
 fi
+
+# Clear so cleanup trap doesn't try again
+LB_ARN=""
+LISTENER_ARN=""
+
+pass "internal ALB lifecycle complete"
 
 echo ""
