@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
+	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	"github.com/mulgadc/spinifex/spinifex/objectstore"
 )
 
@@ -94,15 +95,6 @@ func getTagsKey(accountID, resourceID string) string {
 // getTagsPrefix returns the S3 prefix for listing all tags for an account
 func getTagsPrefix(accountID string) string {
 	return "tags/" + accountID + "/"
-}
-
-// collectFilterValues adds non-nil string pointer values to the target map
-func collectFilterValues(values []*string, target map[string]bool) {
-	for _, v := range values {
-		if v != nil {
-			target[*v] = true
-		}
-	}
 }
 
 // getResourceTags retrieves tags for a specific resource from S3
@@ -198,8 +190,25 @@ func (s *TagsServiceImpl) CreateTags(input *ec2.CreateTagsInput, accountID strin
 	return &ec2.CreateTagsOutput{}, nil
 }
 
+var describeTagsValidFilters = map[string]bool{
+	"resource-id":   true,
+	"resource-type": true,
+	"key":           true,
+	"value":         true,
+}
+
 // DescribeTags returns tags matching the specified filters
 func (s *TagsServiceImpl) DescribeTags(input *ec2.DescribeTagsInput, accountID string) (*ec2.DescribeTagsOutput, error) {
+	var filters map[string][]string
+	if input != nil {
+		var err error
+		filters, err = filterutil.ParseFilters(input.Filters, describeTagsValidFilters)
+		if err != nil {
+			slog.Warn("DescribeTags: invalid filter", "err", err)
+			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+		}
+	}
+
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
 
@@ -217,32 +226,6 @@ func (s *TagsServiceImpl) DescribeTags(input *ec2.DescribeTagsInput, accountID s
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	// Build filter maps for efficient lookup
-	resourceIDFilter := make(map[string]bool)
-	resourceTypeFilter := make(map[string]bool)
-	keyFilter := make(map[string]bool)
-	valueFilter := make(map[string]bool)
-
-	if input != nil {
-		for _, filter := range input.Filters {
-			if filter.Name == nil {
-				continue
-			}
-			switch *filter.Name {
-			case "resource-id":
-				collectFilterValues(filter.Values, resourceIDFilter)
-			case "resource-type":
-				collectFilterValues(filter.Values, resourceTypeFilter)
-			case "key":
-				collectFilterValues(filter.Values, keyFilter)
-			case "value":
-				collectFilterValues(filter.Values, valueFilter)
-			default:
-				return nil, errors.New(awserrors.ErrorInvalidParameterValue)
-			}
-		}
-	}
-
 	// Process each tag file
 	for _, obj := range listResult.Contents {
 		if obj.Key == nil {
@@ -254,13 +237,10 @@ func (s *TagsServiceImpl) DescribeTags(input *ec2.DescribeTagsInput, accountID s
 		resourceID = strings.TrimSuffix(resourceID, ".json")
 		resourceType := getResourceType(resourceID)
 
-		// Apply resource-id filter
-		if len(resourceIDFilter) > 0 && !resourceIDFilter[resourceID] {
+		if !filterutil.MatchesAny(filters["resource-id"], resourceID) {
 			continue
 		}
-
-		// Apply resource-type filter
-		if len(resourceTypeFilter) > 0 && !resourceTypeFilter[resourceType] {
+		if !filterutil.MatchesAny(filters["resource-type"], resourceType) {
 			continue
 		}
 
@@ -272,13 +252,10 @@ func (s *TagsServiceImpl) DescribeTags(input *ec2.DescribeTagsInput, accountID s
 		}
 
 		for key, value := range resourceTags {
-			// Apply key filter
-			if len(keyFilter) > 0 && !keyFilter[key] {
+			if !filterutil.MatchesAny(filters["key"], key) {
 				continue
 			}
-
-			// Apply value filter
-			if len(valueFilter) > 0 && !valueFilter[value] {
+			if !filterutil.MatchesAny(filters["value"], value) {
 				continue
 			}
 
