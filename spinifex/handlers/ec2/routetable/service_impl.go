@@ -265,6 +265,10 @@ var describeRouteTablesValidFilters = map[string]bool{
 	"association.subnet-id":                  true,
 	"route.destination-cidr-block":           true,
 	"route.gateway-id":                       true,
+	"route.nat-gateway-id":                   true,
+	"route.state":                            true,
+	"route.origin":                           true,
+	"owner-id":                               true,
 }
 
 // DescribeRouteTables lists route tables, optionally filtered
@@ -829,6 +833,43 @@ func rtbMatchesFilters(record *RouteTableRecord, filters map[string][]string) bo
 				}
 			}
 			if !found {
+				return false
+			}
+		case "route.nat-gateway-id":
+			found := false
+			for _, r := range record.Routes {
+				if filterutil.MatchesAny(values, r.NatGatewayId) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+		case "route.state":
+			found := false
+			for _, r := range record.Routes {
+				if filterutil.MatchesAny(values, r.State) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+		case "route.origin":
+			found := false
+			for _, r := range record.Routes {
+				if filterutil.MatchesAny(values, r.Origin) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+		case "owner-id":
+			if !filterutil.MatchesAny(values, record.AccountID) {
 				return false
 			}
 		default:
