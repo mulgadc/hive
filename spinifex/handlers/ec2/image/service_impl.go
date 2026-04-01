@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
+	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	handlers_ec2_snapshot "github.com/mulgadc/spinifex/spinifex/handlers/ec2/snapshot"
 	"github.com/mulgadc/spinifex/spinifex/objectstore"
 	"github.com/mulgadc/spinifex/spinifex/types"
@@ -69,6 +70,18 @@ func NewImageServiceImplWithStore(store objectstore.ObjectStore, bucketName stri
 	}
 }
 
+// describeImagesValidFilters defines the set of filter names accepted by DescribeImages.
+var describeImagesValidFilters = map[string]bool{
+	"name":         true,
+	"state":        true,
+	"architecture": true,
+	"image-id":     true,
+	"is-public":    true,
+	"owner-id":     true,
+	"description":  true,
+	"image-type":   true,
+}
+
 // DescribeImages lists available AMI images by reading config.json files from S3
 func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accountID string) (*ec2.DescribeImagesOutput, error) {
 	if input == nil {
@@ -76,6 +89,12 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accoun
 	}
 
 	slog.Info("Describing images", "filters", input.Filters, "imageIds", input.ImageIds)
+
+	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeImagesValidFilters)
+	if err != nil {
+		slog.Warn("DescribeImages: invalid filter", "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
 
 	// List all prefixes in the bucket (AMIs are stored as ami-<id>/ directories)
 	result, err := s.store.ListObjectsV2(&s3.ListObjectsV2Input{
@@ -86,6 +105,13 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accoun
 	if err != nil {
 		slog.Error("Failed to list S3 objects", "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	// Extract image-id filter values for early prefix skipping to avoid
+	// unnecessary S3 GetObject calls on non-matching AMIs.
+	var imageIDFilterValues []string
+	if parsedFilters != nil {
+		imageIDFilterValues = parsedFilters["image-id"]
 	}
 
 	var images []*ec2.Image
@@ -102,6 +128,15 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accoun
 		// Only check prefixes that match pattern: ami-<id>/
 		if !strings.HasPrefix(prefixStr, "ami-") {
 			continue
+		}
+
+		// Early skip: if image-id filter is set, check the prefix (ami-xxx/)
+		// against filter values before fetching config from S3.
+		if len(imageIDFilterValues) > 0 {
+			amiID := strings.TrimSuffix(prefixStr, "/")
+			if !filterutil.MatchesAny(imageIDFilterValues, amiID) {
+				continue
+			}
 		}
 
 		// Construct path to config.json for this AMI directory
@@ -256,6 +291,11 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accoun
 			image.Tags = tags
 		}
 
+		// Apply filters against the fully-built image
+		if len(parsedFilters) > 0 && !imageMatchesFilters(image, parsedFilters, amiMeta.Tags) {
+			continue
+		}
+
 		images = append(images, image)
 	}
 
@@ -279,6 +319,59 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accoun
 	return &ec2.DescribeImagesOutput{
 		Images: images,
 	}, nil
+}
+
+// imageMatchesFilters checks whether an ec2.Image satisfies all parsed filters.
+func imageMatchesFilters(image *ec2.Image, filters map[string][]string, tags map[string]string) bool {
+	for name, values := range filters {
+		if strings.HasPrefix(name, "tag:") {
+			continue
+		}
+
+		var field string
+		switch name {
+		case "name":
+			if image.Name != nil {
+				field = *image.Name
+			}
+		case "state":
+			if image.State != nil {
+				field = *image.State
+			}
+		case "architecture":
+			if image.Architecture != nil {
+				field = *image.Architecture
+			}
+		case "image-id":
+			if image.ImageId != nil {
+				field = *image.ImageId
+			}
+		case "is-public":
+			if image.Public != nil {
+				field = fmt.Sprintf("%t", *image.Public)
+			}
+		case "owner-id":
+			if image.OwnerId != nil {
+				field = *image.OwnerId
+			}
+		case "description":
+			if image.Description != nil {
+				field = *image.Description
+			}
+		case "image-type":
+			if image.ImageType != nil {
+				field = *image.ImageType
+			}
+		default:
+			return false
+		}
+
+		if !filterutil.MatchesAny(values, field) {
+			return false
+		}
+	}
+
+	return filterutil.MatchesTags(filters, tags)
 }
 
 // CreateImage is the generic interface method — on the daemon side, the handler

@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
+	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -241,35 +242,35 @@ func (s *VPCServiceImpl) ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetwor
 	return &ec2.ModifyNetworkInterfaceAttributeOutput{}, nil
 }
 
+var describeNetworkInterfacesValidFilters = map[string]bool{
+	"network-interface-id":     true,
+	"subnet-id":                true,
+	"vpc-id":                   true,
+	"status":                   true,
+	"private-ip-address":       true,
+	"availability-zone":        true,
+	"group-id":                 true,
+	"mac-address":              true,
+	"description":              true,
+	"attachment.attachment-id": true,
+	"attachment.instance-id":   true,
+	"attachment.status":        true,
+}
+
 // DescribeNetworkInterfaces lists ENIs with optional filters
 func (s *VPCServiceImpl) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInterfacesInput, accountID string) (*ec2.DescribeNetworkInterfacesOutput, error) {
+	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeNetworkInterfacesValidFilters)
+	if err != nil {
+		slog.Warn("DescribeNetworkInterfaces: invalid filter", "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
 	enis := make([]*ec2.NetworkInterface, 0)
 
 	eniIDs := make(map[string]bool)
 	for _, id := range input.NetworkInterfaceIds {
 		if id != nil {
 			eniIDs[*id] = true
-		}
-	}
-
-	// Extract filters
-	subnetFilter := ""
-	vpcFilter := ""
-	descriptionFilter := ""
-	attachmentInstanceFilter := ""
-	for _, f := range input.Filters {
-		if f.Name == nil || len(f.Values) == 0 || f.Values[0] == nil {
-			continue
-		}
-		switch *f.Name {
-		case "subnet-id":
-			subnetFilter = *f.Values[0]
-		case "vpc-id":
-			vpcFilter = *f.Values[0]
-		case "description":
-			descriptionFilter = *f.Values[0]
-		case "attachment.instance-id":
-			attachmentInstanceFilter = *f.Values[0]
 		}
 	}
 
@@ -302,17 +303,7 @@ func (s *VPCServiceImpl) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInt
 		if len(eniIDs) > 0 && !eniIDs[record.NetworkInterfaceId] {
 			continue
 		}
-
-		if subnetFilter != "" && record.SubnetId != subnetFilter {
-			continue
-		}
-		if vpcFilter != "" && record.VpcId != vpcFilter {
-			continue
-		}
-		if descriptionFilter != "" && !matchFilter(record.Description, descriptionFilter) {
-			continue
-		}
-		if attachmentInstanceFilter != "" && record.InstanceId != attachmentInstanceFilter {
+		if !eniMatchesFilters(&record, parsedFilters) {
 			continue
 		}
 
@@ -339,6 +330,79 @@ func (s *VPCServiceImpl) DescribeNetworkInterfaces(input *ec2.DescribeNetworkInt
 	return &ec2.DescribeNetworkInterfacesOutput{
 		NetworkInterfaces: enis,
 	}, nil
+}
+
+// eniMatchesFilters checks whether an ENI record matches all parsed filters.
+func eniMatchesFilters(record *ENIRecord, filters map[string][]string) bool {
+	for name, values := range filters {
+		if strings.HasPrefix(name, "tag:") {
+			continue
+		}
+		switch name {
+		case "network-interface-id":
+			if !filterutil.MatchesAny(values, record.NetworkInterfaceId) {
+				return false
+			}
+		case "subnet-id":
+			if !filterutil.MatchesAny(values, record.SubnetId) {
+				return false
+			}
+		case "vpc-id":
+			if !filterutil.MatchesAny(values, record.VpcId) {
+				return false
+			}
+		case "status":
+			if !filterutil.MatchesAny(values, record.Status) {
+				return false
+			}
+		case "private-ip-address":
+			if !filterutil.MatchesAny(values, record.PrivateIpAddress) {
+				return false
+			}
+		case "availability-zone":
+			if !filterutil.MatchesAny(values, record.AvailabilityZone) {
+				return false
+			}
+		case "group-id":
+			found := false
+			for _, sgId := range record.SecurityGroupIds {
+				if filterutil.MatchesAny(values, sgId) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+		case "mac-address":
+			if !filterutil.MatchesAny(values, record.MacAddress) {
+				return false
+			}
+		case "description":
+			if !filterutil.MatchesAny(values, record.Description) {
+				return false
+			}
+		case "attachment.attachment-id":
+			if !filterutil.MatchesAny(values, record.AttachmentId) {
+				return false
+			}
+		case "attachment.instance-id":
+			if !filterutil.MatchesAny(values, record.InstanceId) {
+				return false
+			}
+		case "attachment.status":
+			status := "detached"
+			if record.InstanceId != "" {
+				status = "attached"
+			}
+			if !filterutil.MatchesAny(values, status) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return filterutil.MatchesTags(filters, record.Tags)
 }
 
 // AttachENI marks an ENI as attached to an instance (internal use by RunInstances).

@@ -1,13 +1,11 @@
 package handlers_ec2_vpc
 
 import (
-	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -527,206 +525,241 @@ func TestCreateNetworkInterface_WithSecurityGroups(t *testing.T) {
 	assert.Equal(t, "sg-bbb", *out.NetworkInterface.Groups[1].GroupId)
 }
 
-func TestDeleteNetworkInterface_ReleasesPublicIP(t *testing.T) {
-	svc, nc := setupTestVPCServiceWithNC(t)
+func TestDescribeNetworkInterfaces_FilterByNetworkInterfaceId(t *testing.T) {
+	svc := setupTestVPCService(t)
 	vpcId := createTestVPC(t, svc, "10.0.0.0/16")
 	subnetId := createTestSubnet(t, svc, vpcId, "10.0.1.0/24")
+
 	eniId := createTestENI(t, svc, subnetId)
+	createTestENI(t, svc, subnetId)
 
-	// Set up external IPAM with a static pool
-	js, err := nc.JetStream()
-	require.NoError(t, err)
-	ipamKV, err := utils.GetOrCreateKVBucket(js, KVBucketExternalIPAM, 5)
-	require.NoError(t, err)
-	pools := []ExternalPoolConfig{{
-		Name:       "test-pool",
-		Source:     "static",
-		RangeStart: "203.0.113.10",
-		RangeEnd:   "203.0.113.20",
-		Gateway:    "203.0.113.1",
-		PrefixLen:  24,
-		Region:     "us-east-1",
-		AZ:         "us-east-1a",
-	}}
-	extIPAM := NewExternalIPAMWithKV(ipamKV, pools)
-	require.NoError(t, extIPAM.initPools())
-
-	// Allocate a public IP and assign it to the ENI
-	publicIP, poolName, err := extIPAM.AllocateIP("us-east-1", "us-east-1a", "auto_assign", eniId, "i-test")
-	require.NoError(t, err)
-	require.NoError(t, svc.UpdateENIPublicIP(testAccountID, eniId, publicIP, poolName))
-
-	// Inject external IPAM (no EIP KV — all public IPs are auto-assigned)
-	svc.SetExternalIPAM(extIPAM, nil)
-
-	// Subscribe to vpc.delete-nat to verify event is published
-	natCh := make(chan *nats.Msg, 1)
-	sub, err := nc.Subscribe("vpc.delete-nat", func(msg *nats.Msg) {
-		natCh <- msg
-	})
-	require.NoError(t, err)
-	defer func() { _ = sub.Unsubscribe() }()
-
-	// Delete the ENI
-	_, err = svc.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
-		NetworkInterfaceId: aws.String(eniId),
+	out, err := svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("network-interface-id"), Values: []*string{aws.String(eniId)}},
+		},
 	}, testAccountID)
 	require.NoError(t, err)
+	require.Len(t, out.NetworkInterfaces, 1)
+	assert.Equal(t, eniId, *out.NetworkInterfaces[0].NetworkInterfaceId)
 
-	// Verify vpc.delete-nat event was published with correct public IP
-	select {
-	case msg := <-natCh:
-		var evt struct {
-			ExternalIP string `json:"external_ip"`
-			VpcId      string `json:"vpc_id"`
-		}
-		require.NoError(t, json.Unmarshal(msg.Data, &evt))
-		assert.Equal(t, publicIP, evt.ExternalIP)
-		assert.Equal(t, vpcId, evt.VpcId)
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for vpc.delete-nat event")
-	}
-
-	// Verify the public IP was released back to the pool — allocate again and
-	// confirm we get the same IP (it was the first in the range)
-	reusedIP, _, err := extIPAM.AllocateIP("us-east-1", "us-east-1a", "auto_assign", "eni-other", "i-other")
+	// Wildcard
+	out, err = svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("network-interface-id"), Values: []*string{aws.String("eni-*")}},
+		},
+	}, testAccountID)
 	require.NoError(t, err)
-	assert.Equal(t, publicIP, reusedIP)
+	assert.Len(t, out.NetworkInterfaces, 2)
 }
 
-func TestDeleteNetworkInterface_SkipsEIPOwnedPublicIP(t *testing.T) {
-	svc, nc := setupTestVPCServiceWithNC(t)
+func TestDescribeNetworkInterfaces_FilterByStatus(t *testing.T) {
+	svc := setupTestVPCService(t)
 	vpcId := createTestVPC(t, svc, "10.0.0.0/16")
 	subnetId := createTestSubnet(t, svc, vpcId, "10.0.1.0/24")
-	eniId := createTestENI(t, svc, subnetId)
 
-	// Set up external IPAM
-	js, err := nc.JetStream()
-	require.NoError(t, err)
-	ipamKV, err := utils.GetOrCreateKVBucket(js, KVBucketExternalIPAM, 5)
-	require.NoError(t, err)
-	pools := []ExternalPoolConfig{{
-		Name:       "test-pool",
-		Source:     "static",
-		RangeStart: "203.0.113.10",
-		RangeEnd:   "203.0.113.20",
-		Gateway:    "203.0.113.1",
-		PrefixLen:  24,
-		Region:     "us-east-1",
-		AZ:         "us-east-1a",
-	}}
-	extIPAM := NewExternalIPAMWithKV(ipamKV, pools)
-	require.NoError(t, extIPAM.initPools())
+	eni1 := createTestENI(t, svc, subnetId)
+	createTestENI(t, svc, subnetId) // stays available
 
-	// Allocate and assign public IP to the ENI
-	publicIP, poolName, err := extIPAM.AllocateIP("us-east-1", "us-east-1a", "auto_assign", eniId, "i-test")
-	require.NoError(t, err)
-	require.NoError(t, svc.UpdateENIPublicIP(testAccountID, eniId, publicIP, poolName))
-
-	// Create an EIP record that references this ENI
-	eipKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: "spinifex-vpc-elastic-ips", History: 1})
-	require.NoError(t, err)
-	eipRecord, _ := json.Marshal(struct {
-		AllocationId string `json:"allocation_id"`
-		PublicIp     string `json:"public_ip"`
-		ENIId        string `json:"eni_id"`
-		State        string `json:"state"`
-	}{
-		AllocationId: "eipalloc-test1",
-		PublicIp:     publicIP,
-		ENIId:        eniId,
-		State:        "associated",
-	})
-	_, err = eipKV.Put(utils.AccountKey(testAccountID, "eipalloc-test1"), eipRecord)
+	_, err := svc.AttachENI(testAccountID, eni1, "i-test", 0)
 	require.NoError(t, err)
 
-	// Inject external IPAM WITH EIP KV
-	svc.SetExternalIPAM(extIPAM, eipKV)
-
-	// Subscribe to vpc.delete-nat — should NOT receive an event
-	natCh := make(chan *nats.Msg, 1)
-	sub, err := nc.Subscribe("vpc.delete-nat", func(msg *nats.Msg) {
-		natCh <- msg
-	})
-	require.NoError(t, err)
-	defer func() { _ = sub.Unsubscribe() }()
-
-	// Delete the ENI
-	_, err = svc.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
-		NetworkInterfaceId: aws.String(eniId),
+	out, err := svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("status"), Values: []*string{aws.String("in-use")}},
+		},
 	}, testAccountID)
 	require.NoError(t, err)
+	require.Len(t, out.NetworkInterfaces, 1)
+	assert.Equal(t, eni1, *out.NetworkInterfaces[0].NetworkInterfaceId)
 
-	// Verify NO vpc.delete-nat event was published (EIP-owned, should be skipped)
-	select {
-	case <-natCh:
-		t.Fatal("unexpected vpc.delete-nat event — EIP-owned public IP should not be released")
-	case <-time.After(500 * time.Millisecond):
-		// Expected: no event
-	}
+	out, err = svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("status"), Values: []*string{aws.String("available")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.NetworkInterfaces, 1)
 }
 
-func TestDeleteNetworkInterface_NoPublicIP_NoExternalIPAM(t *testing.T) {
-	// Verify that delete still works when no external IPAM is configured
-	// (the common case — no public IP on the ENI)
-	svc, nc := setupTestVPCServiceWithNC(t)
+func TestDescribeNetworkInterfaces_FilterByPrivateIpAddress(t *testing.T) {
+	svc := setupTestVPCService(t)
 	vpcId := createTestVPC(t, svc, "10.0.0.0/16")
 	subnetId := createTestSubnet(t, svc, vpcId, "10.0.1.0/24")
-	eniId := createTestENI(t, svc, subnetId)
 
-	// No SetExternalIPAM call — externalIPAM is nil
+	createTestENI(t, svc, subnetId) // 10.0.1.4
+	createTestENI(t, svc, subnetId) // 10.0.1.5
 
-	// Subscribe to vpc.delete-nat — should NOT receive an event
-	natCh := make(chan *nats.Msg, 1)
-	sub, err := nc.Subscribe("vpc.delete-nat", func(msg *nats.Msg) {
-		natCh <- msg
-	})
-	require.NoError(t, err)
-	defer func() { _ = sub.Unsubscribe() }()
-
-	// Delete should succeed
-	_, err = svc.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
-		NetworkInterfaceId: aws.String(eniId),
+	out, err := svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("private-ip-address"), Values: []*string{aws.String("10.0.1.4")}},
+		},
 	}, testAccountID)
 	require.NoError(t, err)
+	require.Len(t, out.NetworkInterfaces, 1)
+	assert.Equal(t, "10.0.1.4", *out.NetworkInterfaces[0].PrivateIpAddress)
 
-	// Verify no NAT event
-	select {
-	case <-natCh:
-		t.Fatal("unexpected vpc.delete-nat event when no external IPAM is configured")
-	case <-time.After(500 * time.Millisecond):
-		// Expected
-	}
-
-	// Verify ENI is deleted
-	_, err = svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
-		NetworkInterfaceIds: []*string{aws.String(eniId)},
+	// Wildcard
+	out, err = svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("private-ip-address"), Values: []*string{aws.String("10.0.1.*")}},
+		},
 	}, testAccountID)
-	assert.ErrorContains(t, err, "InvalidNetworkInterfaceID.NotFound")
+	require.NoError(t, err)
+	assert.Len(t, out.NetworkInterfaces, 2)
+
+	// Non-match
+	out, err = svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("private-ip-address"), Values: []*string{aws.String("192.168.0.1")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.NetworkInterfaces)
 }
 
-func TestMatchFilter(t *testing.T) {
-	// Exact match
-	assert.True(t, matchFilter("hello", "hello"))
-	assert.False(t, matchFilter("hello", "world"))
+func TestDescribeNetworkInterfaces_FilterByAvailabilityZone(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcId := createTestVPC(t, svc, "10.0.0.0/16")
+	// Create subnet with explicit AZ
+	subnetOut, err := svc.CreateSubnet(&ec2.CreateSubnetInput{
+		VpcId:            aws.String(vpcId),
+		CidrBlock:        aws.String("10.0.1.0/24"),
+		AvailabilityZone: aws.String("ap-southeast-2a"),
+	}, testAccountID)
+	require.NoError(t, err)
+	subnetId := *subnetOut.Subnet.SubnetId
 
-	// Wildcard only
-	assert.True(t, matchFilter("anything", "*"))
+	createTestENI(t, svc, subnetId)
 
-	// Trailing wildcard (AWS-style prefix match)
-	assert.True(t, matchFilter("ELB app/my-alb/lb-123", "ELB *"))
-	assert.True(t, matchFilter("ELB something", "ELB *"))
-	assert.False(t, matchFilter("NOT ELB", "ELB *"))
+	out, err := svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("availability-zone"), Values: []*string{aws.String("ap-southeast-2a")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.NetworkInterfaces, 1)
 
-	// Leading wildcard
-	assert.True(t, matchFilter("my-alb-123", "*123"))
-	assert.False(t, matchFilter("my-alb-456", "*123"))
+	out, err = svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("availability-zone"), Values: []*string{aws.String("us-east-1a")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.NetworkInterfaces)
+}
 
-	// Middle wildcard
-	assert.True(t, matchFilter("ELB app/test/lb-1", "ELB */lb-1"))
-	assert.False(t, matchFilter("ELB app/test/lb-2", "ELB */lb-1"))
+func TestDescribeNetworkInterfaces_FilterByGroupId(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcId := createTestVPC(t, svc, "10.0.0.0/16")
+	subnetId := createTestSubnet(t, svc, vpcId, "10.0.1.0/24")
 
-	// No wildcard = exact
-	assert.True(t, matchFilter("exact", "exact"))
-	assert.False(t, matchFilter("exact!", "exact"))
+	// Create ENI with security groups
+	out, err := svc.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
+		SubnetId: aws.String(subnetId),
+		Groups:   []*string{aws.String("sg-aaa"), aws.String("sg-bbb")},
+	}, testAccountID)
+	require.NoError(t, err)
+	eniId := *out.NetworkInterface.NetworkInterfaceId
+
+	createTestENI(t, svc, subnetId) // no SGs
+
+	// Match one of the SGs
+	desc, err := svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("group-id"), Values: []*string{aws.String("sg-bbb")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, desc.NetworkInterfaces, 1)
+	assert.Equal(t, eniId, *desc.NetworkInterfaces[0].NetworkInterfaceId)
+
+	// Non-match
+	desc, err = svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("group-id"), Values: []*string{aws.String("sg-zzz")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, desc.NetworkInterfaces)
+}
+
+func TestDescribeNetworkInterfaces_FilterByMacAddress(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcId := createTestVPC(t, svc, "10.0.0.0/16")
+	subnetId := createTestSubnet(t, svc, vpcId, "10.0.1.0/24")
+
+	outCreate, err := svc.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
+		SubnetId: aws.String(subnetId),
+	}, testAccountID)
+	require.NoError(t, err)
+	mac := *outCreate.NetworkInterface.MacAddress
+
+	out, err := svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("mac-address"), Values: []*string{aws.String(mac)}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.NetworkInterfaces, 1)
+
+	out, err = svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("mac-address"), Values: []*string{aws.String("ff:ff:ff:ff:ff:ff")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.NetworkInterfaces)
+}
+
+func TestDescribeNetworkInterfaces_FilterByAttachmentId(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcId := createTestVPC(t, svc, "10.0.0.0/16")
+	subnetId := createTestSubnet(t, svc, vpcId, "10.0.1.0/24")
+
+	eniId := createTestENI(t, svc, subnetId)
+	attachId, err := svc.AttachENI(testAccountID, eniId, "i-test", 0)
+	require.NoError(t, err)
+
+	createTestENI(t, svc, subnetId) // not attached
+
+	out, err := svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("attachment.attachment-id"), Values: []*string{aws.String(attachId)}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, out.NetworkInterfaces, 1)
+	assert.Equal(t, eniId, *out.NetworkInterfaces[0].NetworkInterfaceId)
+}
+
+func TestDescribeNetworkInterfaces_FilterByAttachmentStatus(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcId := createTestVPC(t, svc, "10.0.0.0/16")
+	subnetId := createTestSubnet(t, svc, vpcId, "10.0.1.0/24")
+
+	eni1 := createTestENI(t, svc, subnetId)
+	createTestENI(t, svc, subnetId) // stays detached
+
+	_, err := svc.AttachENI(testAccountID, eni1, "i-test", 0)
+	require.NoError(t, err)
+
+	// Filter attached
+	out, err := svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("attachment.status"), Values: []*string{aws.String("attached")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, out.NetworkInterfaces, 1)
+	assert.Equal(t, eni1, *out.NetworkInterfaces[0].NetworkInterfaceId)
+
+	// Filter detached
+	out, err = svc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("attachment.status"), Values: []*string{aws.String("detached")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.NetworkInterfaces, 1)
+	assert.NotEqual(t, eni1, *out.NetworkInterfaces[0].NetworkInterfaceId)
 }

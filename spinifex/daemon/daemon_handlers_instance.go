@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
+	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	handlers_ec2_placementgroup "github.com/mulgadc/spinifex/spinifex/handlers/ec2/placementgroup"
 	"github.com/mulgadc/spinifex/spinifex/qmp"
 	"github.com/mulgadc/spinifex/spinifex/types"
@@ -632,6 +633,89 @@ func (d *Daemon) handleStopOrTerminateInstance(msg *nats.Msg, command types.EC2I
 	}(instance, command.Attributes)
 }
 
+// describeInstancesValidFilters defines the set of filter names accepted by DescribeInstances.
+var describeInstancesValidFilters = map[string]bool{
+	"instance-state-name": true,
+	"instance-id":         true,
+	"instance-type":       true,
+	"vpc-id":              true,
+	"subnet-id":           true,
+	"tag-key":             true,
+	"tag-value":           true,
+}
+
+// instanceMatchesFilters checks whether a VM + its built ec2.Instance copy satisfy all parsed filters.
+func instanceMatchesFilters(inst *vm.VM, ic *ec2.Instance, filters map[string][]string) bool {
+	for name, values := range filters {
+		if strings.HasPrefix(name, "tag:") {
+			// tag:Key filters are handled after all field filters.
+			continue
+		}
+
+		var field string
+		switch name {
+		case "instance-state-name":
+			if ic.State != nil && ic.State.Name != nil {
+				field = *ic.State.Name
+			}
+		case "instance-id":
+			field = inst.ID
+		case "instance-type":
+			field = inst.InstanceType
+		case "vpc-id":
+			if ic.VpcId != nil {
+				field = *ic.VpcId
+			}
+		case "subnet-id":
+			if ic.SubnetId != nil {
+				field = *ic.SubnetId
+			}
+		case "tag-key":
+			if !matchTagKey(ic.Tags, values) {
+				return false
+			}
+			continue
+		case "tag-value":
+			if !matchTagValue(ic.Tags, values) {
+				return false
+			}
+			continue
+		default:
+			// Filter name passed ParseFilters but has no case — treat as non-match
+			// to avoid silently ignoring it.
+			return false
+		}
+
+		if !filterutil.MatchesAny(values, field) {
+			return false
+		}
+	}
+
+	// Check tag:Key filters via the instance's Tag slice.
+	tags := filterutil.EC2TagsToMap(ic.Tags)
+	return filterutil.MatchesTags(filters, tags)
+}
+
+// matchTagKey returns true if any tag key on the resource matches any of the filter values.
+func matchTagKey(tags []*ec2.Tag, values []string) bool {
+	for _, t := range tags {
+		if t.Key != nil && filterutil.MatchesAny(values, *t.Key) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchTagValue returns true if any tag value on the resource matches any of the filter values.
+func matchTagValue(tags []*ec2.Tag, values []string) bool {
+	for _, t := range tags {
+		if t.Value != nil && filterutil.MatchesAny(values, *t.Value) {
+			return true
+		}
+	}
+	return false
+}
+
 // handleEC2DescribeInstances processes incoming EC2 DescribeInstances requests
 // This handler responds with instances running on this node owned by the caller's account
 func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
@@ -669,6 +753,14 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 				instanceIDFilter[*id] = true
 			}
 		}
+	}
+
+	// Parse filters (returns error for unknown filter names)
+	parsedFilters, err := filterutil.ParseFilters(describeInstancesInput.Filters, describeInstancesValidFilters)
+	if err != nil {
+		slog.Warn("DescribeInstances: invalid filter", "err", err)
+		respondWithError(msg, awserrors.ErrorInvalidParameterValue)
+		return
 	}
 
 	// Group instances by reservation ID (AWS returns instances grouped by reservation)
@@ -731,6 +823,11 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 					GroupName:        aws.String(instance.PlacementGroupName),
 					AvailabilityZone: aws.String(d.config.AZ),
 				}
+			}
+
+			// Apply filters against the fully-built instance copy
+			if len(parsedFilters) > 0 && !instanceMatchesFilters(instance, &instanceCopy, parsedFilters) {
+				continue
 			}
 
 			// Add instance to its reservation
@@ -1091,6 +1188,13 @@ func (d *Daemon) describeInstancesFromKV(msg *nats.Msg, listFn func() ([]*vm.VM,
 		}
 	}
 
+	parsedFilters, filterErr := filterutil.ParseFilters(describeInput.Filters, describeInstancesValidFilters)
+	if filterErr != nil {
+		slog.Warn(handlerName+": invalid filter", "err", filterErr)
+		respondWithError(msg, awserrors.ErrorInvalidParameterValue)
+		return
+	}
+
 	instances, err := listFn()
 	if err != nil {
 		slog.Error(handlerName+": failed to list instances", "err", err)
@@ -1136,6 +1240,10 @@ func (d *Daemon) describeInstancesFromKV(msg *nats.Msg, listFn func() ([]*vm.VM,
 		} else {
 			instanceCopy.State.SetCode(fallbackCode)
 			instanceCopy.State.SetName(fallbackName)
+		}
+
+		if len(parsedFilters) > 0 && !instanceMatchesFilters(instance, &instanceCopy, parsedFilters) {
+			continue
 		}
 
 		reservationMap[resID].Instances = append(reservationMap[resID].Instances, &instanceCopy)

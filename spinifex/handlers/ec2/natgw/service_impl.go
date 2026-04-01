@@ -5,13 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
+	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	handlers_ec2_eip "github.com/mulgadc/spinifex/spinifex/handlers/ec2/eip"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
 	"github.com/mulgadc/spinifex/spinifex/utils"
@@ -310,24 +310,25 @@ func mustJS(nc *nats.Conn) nats.JetStreamContext {
 	return js
 }
 
+var describeNatGatewaysValidFilters = map[string]bool{
+	"nat-gateway-id": true,
+	"subnet-id":      true,
+	"vpc-id":         true,
+	"state":          true,
+}
+
 // DescribeNatGateways lists NAT Gateways, optionally filtered
 func (s *NatGatewayServiceImpl) DescribeNatGateways(input *ec2.DescribeNatGatewaysInput, accountID string) (*ec2.DescribeNatGatewaysOutput, error) {
+	parsedFilters, err := filterutil.ParseFilters(input.Filter, describeNatGatewaysValidFilters)
+	if err != nil {
+		slog.Warn("DescribeNatGateways: invalid filter", "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
 	natgwIDs := make(map[string]bool)
 	for _, id := range input.NatGatewayIds {
 		if id != nil {
 			natgwIDs[*id] = true
-		}
-	}
-
-	// Build filter map
-	filters := make(map[string][]string)
-	for _, f := range input.Filter {
-		if f.Name != nil {
-			for _, v := range f.Values {
-				if v != nil {
-					filters[*f.Name] = append(filters[*f.Name], *v)
-				}
-			}
 		}
 	}
 
@@ -363,19 +364,8 @@ func (s *NatGatewayServiceImpl) DescribeNatGateways(input *ec2.DescribeNatGatewa
 		if len(natgwIDs) > 0 && !natgwIDs[record.NatGatewayId] {
 			continue
 		}
-
-		// Apply filters
-		if vpcFilter, ok := filters["vpc-id"]; ok {
-			found := slices.Contains(vpcFilter, record.VpcId)
-			if !found {
-				continue
-			}
-		}
-		if stateFilter, ok := filters["state"]; ok {
-			found := slices.Contains(stateFilter, record.State)
-			if !found {
-				continue
-			}
+		if !natgwMatchesFilters(&record, parsedFilters) {
+			continue
 		}
 
 		natGateways = append(natGateways, recordToEC2(&record))
@@ -405,6 +395,36 @@ func (s *NatGatewayServiceImpl) DescribeNatGateways(input *ec2.DescribeNatGatewa
 	return &ec2.DescribeNatGatewaysOutput{
 		NatGateways: natGateways,
 	}, nil
+}
+
+// natgwMatchesFilters checks whether a NAT Gateway record matches all parsed filters.
+func natgwMatchesFilters(record *NatGatewayRecord, filters map[string][]string) bool {
+	for name, values := range filters {
+		if strings.HasPrefix(name, "tag:") {
+			continue
+		}
+		switch name {
+		case "nat-gateway-id":
+			if !filterutil.MatchesAny(values, record.NatGatewayId) {
+				return false
+			}
+		case "subnet-id":
+			if !filterutil.MatchesAny(values, record.SubnetId) {
+				return false
+			}
+		case "vpc-id":
+			if !filterutil.MatchesAny(values, record.VpcId) {
+				return false
+			}
+		case "state":
+			if !filterutil.MatchesAny(values, record.State) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return filterutil.MatchesTags(filters, record.Tags)
 }
 
 // PublishAddEvent publishes a vpc.add-nat-gateway event for vpcd to create the SNAT rule.

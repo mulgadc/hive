@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
+	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -156,9 +157,23 @@ func (s *PlacementGroupServiceImpl) DeletePlacementGroup(input *ec2.DeletePlacem
 	return &ec2.DeletePlacementGroupOutput{}, nil
 }
 
+var describePlacementGroupsValidFilters = map[string]bool{
+	"group-id":     true,
+	"strategy":     true,
+	"state":        true,
+	"spread-level": true,
+	"group-name":   true,
+}
+
 // DescribePlacementGroups lists placement groups with optional filters.
 func (s *PlacementGroupServiceImpl) DescribePlacementGroups(input *ec2.DescribePlacementGroupsInput, accountID string) (*ec2.DescribePlacementGroupsOutput, error) {
-	// Build filter maps
+	parsedFilters, err := filterutil.ParseFilters(input.Filters, describePlacementGroupsValidFilters)
+	if err != nil {
+		slog.Warn("DescribePlacementGroups: invalid filter", "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
+	// Build filter maps for GroupNames/GroupIds parameters
 	nameSet := make(map[string]bool)
 	for _, name := range input.GroupNames {
 		if name != nil {
@@ -169,27 +184,6 @@ func (s *PlacementGroupServiceImpl) DescribePlacementGroups(input *ec2.DescribeP
 	for _, id := range input.GroupIds {
 		if id != nil {
 			idSet[*id] = true
-		}
-	}
-
-	// Extract filter values
-	filterStrategy := ""
-	filterState := ""
-	filterSpreadLevel := ""
-	filterGroupName := ""
-	for _, f := range input.Filters {
-		if f.Name == nil || len(f.Values) == 0 || f.Values[0] == nil {
-			continue
-		}
-		switch *f.Name {
-		case "strategy":
-			filterStrategy = *f.Values[0]
-		case "state":
-			filterState = *f.Values[0]
-		case "spread-level":
-			filterSpreadLevel = *f.Values[0]
-		case "group-name":
-			filterGroupName = *f.Values[0]
 		}
 	}
 
@@ -228,17 +222,7 @@ func (s *PlacementGroupServiceImpl) DescribePlacementGroups(input *ec2.DescribeP
 		if len(idSet) > 0 && !idSet[record.GroupId] {
 			continue
 		}
-		// Apply Filters
-		if filterStrategy != "" && record.Strategy != filterStrategy {
-			continue
-		}
-		if filterState != "" && record.State != filterState {
-			continue
-		}
-		if filterSpreadLevel != "" && record.SpreadLevel != filterSpreadLevel {
-			continue
-		}
-		if filterGroupName != "" && record.GroupName != filterGroupName {
+		if !pgMatchesFilters(&record, parsedFilters) {
 			continue
 		}
 
@@ -265,6 +249,37 @@ func (s *PlacementGroupServiceImpl) DescribePlacementGroups(input *ec2.DescribeP
 	return &ec2.DescribePlacementGroupsOutput{
 		PlacementGroups: groups,
 	}, nil
+}
+
+// pgMatchesFilters checks whether a placement group record matches all parsed filters.
+func pgMatchesFilters(record *PlacementGroupRecord, filters map[string][]string) bool {
+	for name, values := range filters {
+		switch name {
+		case "group-id":
+			if !filterutil.MatchesAny(values, record.GroupId) {
+				return false
+			}
+		case "strategy":
+			if !filterutil.MatchesAny(values, record.Strategy) {
+				return false
+			}
+		case "state":
+			if !filterutil.MatchesAny(values, record.State) {
+				return false
+			}
+		case "spread-level":
+			if !filterutil.MatchesAny(values, record.SpreadLevel) {
+				return false
+			}
+		case "group-name":
+			if !filterutil.MatchesAny(values, record.GroupName) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // GetPlacementGroupRecord reads a placement group record from KV with its revision for CAS operations.

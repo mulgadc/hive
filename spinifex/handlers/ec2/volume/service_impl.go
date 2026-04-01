@@ -11,11 +11,14 @@ import (
 	"sync"
 	"time"
 
+	"strconv"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
+	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	"github.com/mulgadc/spinifex/spinifex/objectstore"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
@@ -224,6 +227,18 @@ func (s *VolumeServiceImpl) CreateVolume(input *ec2.CreateVolumeInput, accountID
 	return vol, nil
 }
 
+// describeVolumesValidFilters defines the set of filter names accepted by DescribeVolumes.
+var describeVolumesValidFilters = map[string]bool{
+	"volume-id":              true,
+	"status":                 true,
+	"size":                   true,
+	"volume-type":            true,
+	"attachment.instance-id": true,
+	"attachment.status":      true,
+	"attachment.device":      true,
+	"availability-zone":      true,
+}
+
 // DescribeVolumes lists EBS volumes by reading config.json files from S3
 func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput, accountID string) (*ec2.DescribeVolumesOutput, error) {
 	if input == nil {
@@ -231,6 +246,12 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput, acc
 	}
 
 	slog.Info("Describing volumes", "volumeIds", input.VolumeIds)
+
+	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeVolumesValidFilters)
+	if err != nil {
+		slog.Warn("DescribeVolumes: invalid filter", "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
 
 	var volumes []*ec2.Volume
 
@@ -248,17 +269,44 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput, acc
 		if len(volumes) != requested {
 			return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
 		}
+
+		// Apply filters to the fetched volumes
+		if len(parsedFilters) > 0 {
+			filtered := make([]*ec2.Volume, 0, len(volumes))
+			for _, vol := range volumes {
+				if volumeMatchesFilters(vol, parsedFilters) {
+					filtered = append(filtered, vol)
+				}
+			}
+			volumes = filtered
+		}
+
 		slog.Info("DescribeVolumes completed", "count", len(volumes))
 		return &ec2.DescribeVolumesOutput{Volumes: volumes}, nil
 	}
 
-	// Slow path: list all volumes (no filter provided)
+	// Slow path: list all volumes (no specific IDs requested)
 	volumeIDs, err := s.listAllVolumeIDs()
 	if err != nil {
 		return nil, err
 	}
 
+	// Extract volume-id filter values for early skipping to avoid
+	// unnecessary S3 GetObject calls on non-matching volumes.
+	var volumeIDFilterValues []string
+	if parsedFilters != nil {
+		volumeIDFilterValues = parsedFilters["volume-id"]
+	}
+
 	for _, volumeID := range volumeIDs {
+		// Early skip: if volume-id filter is set, check the ID before
+		// fetching the full volume config from S3.
+		if len(volumeIDFilterValues) > 0 {
+			if !filterutil.MatchesAny(volumeIDFilterValues, volumeID) {
+				continue
+			}
+		}
+
 		result, err := s.getVolumeByID(volumeID)
 		if err != nil {
 			slog.Error("Failed to get volume", "volumeId", volumeID, "err", err)
@@ -267,6 +315,10 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput, acc
 
 		// Skip volumes not owned by the caller's account.
 		if result.tenantID != accountID {
+			continue
+		}
+
+		if len(parsedFilters) > 0 && !volumeMatchesFilters(result.volume, parsedFilters) {
 			continue
 		}
 
@@ -280,13 +332,112 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput, acc
 	}, nil
 }
 
+// volumeMatchesFilters checks whether an ec2.Volume satisfies all parsed filters.
+func volumeMatchesFilters(vol *ec2.Volume, filters map[string][]string) bool {
+	for name, values := range filters {
+		if strings.HasPrefix(name, "tag:") {
+			continue
+		}
+
+		var field string
+		switch name {
+		case "volume-id":
+			if vol.VolumeId != nil {
+				field = *vol.VolumeId
+			}
+		case "status":
+			if vol.State != nil {
+				field = *vol.State
+			}
+		case "size":
+			if vol.Size != nil {
+				field = strconv.FormatInt(*vol.Size, 10)
+			}
+		case "volume-type":
+			if vol.VolumeType != nil {
+				field = *vol.VolumeType
+			}
+		case "attachment.instance-id":
+			if !volumeAttachmentMatchesAny(vol.Attachments, func(a *ec2.VolumeAttachment) string {
+				if a.InstanceId != nil {
+					return *a.InstanceId
+				}
+				return ""
+			}, values) {
+				return false
+			}
+			continue
+		case "attachment.status":
+			if !volumeAttachmentMatchesAny(vol.Attachments, func(a *ec2.VolumeAttachment) string {
+				if a.State != nil {
+					return *a.State
+				}
+				return ""
+			}, values) {
+				return false
+			}
+			continue
+		case "attachment.device":
+			if !volumeAttachmentMatchesAny(vol.Attachments, func(a *ec2.VolumeAttachment) string {
+				if a.Device != nil {
+					return *a.Device
+				}
+				return ""
+			}, values) {
+				return false
+			}
+			continue
+		case "availability-zone":
+			if vol.AvailabilityZone != nil {
+				field = *vol.AvailabilityZone
+			}
+		default:
+			return false
+		}
+
+		if !filterutil.MatchesAny(values, field) {
+			return false
+		}
+	}
+
+	// Check tag:Key filters
+	tags := filterutil.EC2TagsToMap(vol.Tags)
+	return filterutil.MatchesTags(filters, tags)
+}
+
+// volumeAttachmentMatchesAny checks if any attachment's field matches any filter value.
+func volumeAttachmentMatchesAny(attachments []*ec2.VolumeAttachment, fieldFn func(*ec2.VolumeAttachment) string, values []string) bool {
+	if len(attachments) == 0 {
+		return false
+	}
+	for _, a := range attachments {
+		if filterutil.MatchesAny(values, fieldFn(a)) {
+			return true
+		}
+	}
+	return false
+}
+
 // DescribeVolumeStatus returns the status of one or more EBS volumes
+// describeVolumeStatusValidFilters defines the set of filter names accepted by DescribeVolumeStatus.
+var describeVolumeStatusValidFilters = map[string]bool{
+	"volume-id":            true,
+	"volume-status.status": true,
+	"availability-zone":    true,
+}
+
 func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatusInput, accountID string) (*ec2.DescribeVolumeStatusOutput, error) {
 	if input == nil {
 		input = &ec2.DescribeVolumeStatusInput{}
 	}
 
 	slog.Info("DescribeVolumeStatus", "volumeIds", input.VolumeIds)
+
+	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeVolumeStatusValidFilters)
+	if err != nil {
+		slog.Warn("DescribeVolumeStatus: invalid filter", "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
 
 	var statusItems []*ec2.VolumeStatusItem
 
@@ -305,19 +456,37 @@ func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatus
 			if tenantID != accountID {
 				return nil, errors.New(awserrors.ErrorInvalidVolumeNotFound)
 			}
+			if len(parsedFilters) > 0 && !volumeStatusMatchesFilters(item, parsedFilters) {
+				continue
+			}
 			statusItems = append(statusItems, item)
 		}
 		slog.Info("DescribeVolumeStatus completed", "count", len(statusItems))
 		return &ec2.DescribeVolumeStatusOutput{VolumeStatuses: statusItems}, nil
 	}
 
-	// Slow path: list all volumes (no filter provided)
+	// Slow path: list all volumes (no specific IDs requested)
 	volumeIDs, err := s.listAllVolumeIDs()
 	if err != nil {
 		return nil, err
 	}
 
+	// Extract volume-id filter values for early skipping to avoid
+	// unnecessary S3 GetObject calls on non-matching volumes.
+	var volumeStatusIDFilterValues []string
+	if parsedFilters != nil {
+		volumeStatusIDFilterValues = parsedFilters["volume-id"]
+	}
+
 	for _, volumeID := range volumeIDs {
+		// Early skip: if volume-id filter is set, check the ID before
+		// fetching the full volume status from S3.
+		if len(volumeStatusIDFilterValues) > 0 {
+			if !filterutil.MatchesAny(volumeStatusIDFilterValues, volumeID) {
+				continue
+			}
+		}
+
 		item, tenantID, err := s.getVolumeStatusByID(volumeID)
 		if err != nil {
 			slog.Error("Failed to get volume status", "volumeId", volumeID, "err", err)
@@ -329,6 +498,10 @@ func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatus
 			continue
 		}
 
+		if len(parsedFilters) > 0 && !volumeStatusMatchesFilters(item, parsedFilters) {
+			continue
+		}
+
 		statusItems = append(statusItems, item)
 	}
 
@@ -337,6 +510,39 @@ func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatus
 	return &ec2.DescribeVolumeStatusOutput{
 		VolumeStatuses: statusItems,
 	}, nil
+}
+
+// volumeStatusMatchesFilters checks whether a VolumeStatusItem satisfies all parsed filters.
+func volumeStatusMatchesFilters(item *ec2.VolumeStatusItem, filters map[string][]string) bool {
+	for name, values := range filters {
+		if strings.HasPrefix(name, "tag:") {
+			// VolumeStatusItems don't have tags; any tag filter means no match.
+			return false
+		}
+
+		var field string
+		switch name {
+		case "volume-id":
+			if item.VolumeId != nil {
+				field = *item.VolumeId
+			}
+		case "volume-status.status":
+			if item.VolumeStatus != nil && item.VolumeStatus.Status != nil {
+				field = *item.VolumeStatus.Status
+			}
+		case "availability-zone":
+			if item.AvailabilityZone != nil {
+				field = *item.AvailabilityZone
+			}
+		default:
+			return false
+		}
+
+		if !filterutil.MatchesAny(values, field) {
+			return false
+		}
+	}
+	return true
 }
 
 // getVolumeStatusByID builds a VolumeStatusItem by reusing getVolumeByID

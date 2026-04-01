@@ -194,6 +194,87 @@ func TestDescribeRouteTables_FilterByMain(t *testing.T) {
 	assert.True(t, *out.RouteTables[0].Associations[0].Main)
 }
 
+func TestDescribeRouteTables_FilterByRouteState(t *testing.T) {
+	svc := setupTestService(t)
+	createTestRtb(t, svc) // has local route with state=active
+
+	// Exact match
+	out, err := svc.DescribeRouteTables(&ec2.DescribeRouteTablesInput{
+		Filters: []*ec2.Filter{{Name: aws.String("route.state"), Values: []*string{aws.String("active")}}},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.RouteTables, 1)
+
+	// Non-match
+	out, err = svc.DescribeRouteTables(&ec2.DescribeRouteTablesInput{
+		Filters: []*ec2.Filter{{Name: aws.String("route.state"), Values: []*string{aws.String("blackhole")}}},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.RouteTables)
+}
+
+func TestDescribeRouteTables_FilterByRouteOrigin(t *testing.T) {
+	svc := setupTestService(t)
+	createTestRtb(t, svc) // local route has origin=CreateRouteTable
+
+	out, err := svc.DescribeRouteTables(&ec2.DescribeRouteTablesInput{
+		Filters: []*ec2.Filter{{Name: aws.String("route.origin"), Values: []*string{aws.String("CreateRouteTable")}}},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.RouteTables, 1)
+
+	out, err = svc.DescribeRouteTables(&ec2.DescribeRouteTablesInput{
+		Filters: []*ec2.Filter{{Name: aws.String("route.origin"), Values: []*string{aws.String("CreateRoute")}}},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.RouteTables)
+}
+
+func TestDescribeRouteTables_FilterByRouteNatGatewayId(t *testing.T) {
+	svc := setupTestService(t)
+	createTestRtb(t, svc) // no NAT GW route
+
+	// No match — no routes have a nat-gateway-id
+	out, err := svc.DescribeRouteTables(&ec2.DescribeRouteTablesInput{
+		Filters: []*ec2.Filter{{Name: aws.String("route.nat-gateway-id"), Values: []*string{aws.String("nat-000000")}}},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.RouteTables)
+
+	// Wildcard on empty field should not match
+	out, err = svc.DescribeRouteTables(&ec2.DescribeRouteTablesInput{
+		Filters: []*ec2.Filter{{Name: aws.String("route.nat-gateway-id"), Values: []*string{aws.String("nat-*")}}},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.RouteTables)
+}
+
+func TestDescribeRouteTables_FilterByOwnerId(t *testing.T) {
+	svc := setupTestService(t)
+	createTestRtb(t, svc)
+
+	// Exact match
+	out, err := svc.DescribeRouteTables(&ec2.DescribeRouteTablesInput{
+		Filters: []*ec2.Filter{{Name: aws.String("owner-id"), Values: []*string{aws.String(testAccountID)}}},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.RouteTables, 1)
+
+	// Non-match
+	out, err = svc.DescribeRouteTables(&ec2.DescribeRouteTablesInput{
+		Filters: []*ec2.Filter{{Name: aws.String("owner-id"), Values: []*string{aws.String("999999999999")}}},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.RouteTables)
+
+	// Wildcard
+	out, err = svc.DescribeRouteTables(&ec2.DescribeRouteTablesInput{
+		Filters: []*ec2.Filter{{Name: aws.String("owner-id"), Values: []*string{aws.String("1234*")}}},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.RouteTables, 1)
+}
+
 func TestCreateRoute(t *testing.T) {
 	svc := setupTestService(t)
 	rtbID := createTestRtb(t, svc)

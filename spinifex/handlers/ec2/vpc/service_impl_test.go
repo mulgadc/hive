@@ -1214,3 +1214,417 @@ func TestVpc_ModifyVpcAttribute_InvalidVpcID(t *testing.T) {
 	}, testAccountID)
 	assert.Error(t, err)
 }
+
+// --- DescribeVpcs filter tests ---
+
+func TestDescribeVpcs_FilterByCidr(t *testing.T) {
+	svc := setupTestVPCService(t)
+	createTestVPC(t, svc, "10.0.0.0/16")
+	createTestVPC(t, svc, "172.16.0.0/16")
+
+	out, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("cidr-block"), Values: []*string{aws.String("10.0.0.0/16")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Vpcs, 1)
+	assert.Equal(t, "10.0.0.0/16", *out.Vpcs[0].CidrBlock)
+}
+
+func TestDescribeVpcs_FilterByState(t *testing.T) {
+	svc := setupTestVPCService(t)
+	createTestVPC(t, svc, "10.0.0.0/16")
+
+	// VPCs are always "available"
+	out, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("state"), Values: []*string{aws.String("available")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Vpcs, 1)
+
+	out, err = svc.DescribeVpcs(&ec2.DescribeVpcsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("state"), Values: []*string{aws.String("pending")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.Vpcs)
+}
+
+func TestDescribeVpcs_FilterByIsDefault(t *testing.T) {
+	svc := setupTestVPCService(t)
+	createTestVPC(t, svc, "10.0.0.0/16")
+
+	out, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("is-default"), Values: []*string{aws.String("false")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Vpcs, 1)
+
+	out, err = svc.DescribeVpcs(&ec2.DescribeVpcsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("is-default"), Values: []*string{aws.String("true")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.Vpcs)
+}
+
+func TestDescribeVpcs_FilterMultipleValues_OR(t *testing.T) {
+	svc := setupTestVPCService(t)
+	createTestVPC(t, svc, "10.0.0.0/16")
+	createTestVPC(t, svc, "172.16.0.0/16")
+	createTestVPC(t, svc, "192.168.0.0/16")
+
+	out, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("cidr-block"), Values: []*string{aws.String("10.0.0.0/16"), aws.String("192.168.0.0/16")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Vpcs, 2)
+}
+
+func TestDescribeVpcs_FilterMultipleFilters_AND(t *testing.T) {
+	svc := setupTestVPCService(t)
+	createTestVPC(t, svc, "10.0.0.0/16")
+
+	// Both match
+	out, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("cidr-block"), Values: []*string{aws.String("10.0.0.0/16")}},
+			{Name: aws.String("state"), Values: []*string{aws.String("available")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Vpcs, 1)
+
+	// One doesn't match
+	out, err = svc.DescribeVpcs(&ec2.DescribeVpcsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("cidr-block"), Values: []*string{aws.String("10.0.0.0/16")}},
+			{Name: aws.String("state"), Values: []*string{aws.String("pending")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.Vpcs)
+}
+
+func TestDescribeVpcs_FilterUnknownName_Error(t *testing.T) {
+	svc := setupTestVPCService(t)
+	_, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("bogus-filter"), Values: []*string{aws.String("val")}},
+		},
+	}, testAccountID)
+	require.Error(t, err)
+}
+
+func TestDescribeVpcs_FilterWildcard(t *testing.T) {
+	svc := setupTestVPCService(t)
+	createTestVPC(t, svc, "10.0.0.0/16")
+	createTestVPC(t, svc, "10.1.0.0/16")
+	createTestVPC(t, svc, "172.16.0.0/16")
+
+	out, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("cidr-block"), Values: []*string{aws.String("10.*")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Vpcs, 2)
+}
+
+func TestDescribeVpcs_FilterNoResults(t *testing.T) {
+	svc := setupTestVPCService(t)
+	createTestVPC(t, svc, "10.0.0.0/16")
+
+	out, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("cidr-block"), Values: []*string{aws.String("99.99.99.99/32")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.Vpcs)
+}
+
+func TestDescribeVpcs_FilterNoFilters(t *testing.T) {
+	svc := setupTestVPCService(t)
+	createTestVPC(t, svc, "10.0.0.0/16")
+	createTestVPC(t, svc, "172.16.0.0/16")
+
+	out, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Vpcs, 2)
+}
+
+func TestDescribeVpcs_FilterByTag(t *testing.T) {
+	svc := setupTestVPCService(t)
+
+	out, err := svc.CreateVpc(&ec2.CreateVpcInput{
+		CidrBlock: aws.String("10.0.0.0/16"),
+		TagSpecifications: []*ec2.TagSpecification{
+			{
+				ResourceType: aws.String("vpc"),
+				Tags: []*ec2.Tag{
+					{Key: aws.String("Environment"), Value: aws.String("prod")},
+				},
+			},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	_ = *out.Vpc.VpcId
+
+	createTestVPC(t, svc, "172.16.0.0/16")
+
+	desc, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("tag:Environment"), Values: []*string{aws.String("prod")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, desc.Vpcs, 1)
+	assert.Equal(t, "10.0.0.0/16", *desc.Vpcs[0].CidrBlock)
+}
+
+func TestDescribeVpcs_FilterByVpcId(t *testing.T) {
+	svc := setupTestVPCService(t)
+	id1 := createTestVPC(t, svc, "10.0.0.0/16")
+	createTestVPC(t, svc, "172.16.0.0/16")
+
+	out, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("vpc-id"), Values: []*string{aws.String(id1)}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Vpcs, 1)
+	assert.Equal(t, id1, *out.Vpcs[0].VpcId)
+}
+
+func TestDescribeVpcs_FilterByOwnerId(t *testing.T) {
+	svc := setupTestVPCService(t)
+	createTestVPC(t, svc, "10.0.0.0/16")
+
+	out, err := svc.DescribeVpcs(&ec2.DescribeVpcsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("owner-id"), Values: []*string{aws.String(testAccountID)}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Vpcs, 1)
+
+	out, err = svc.DescribeVpcs(&ec2.DescribeVpcsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("owner-id"), Values: []*string{aws.String("999999999999")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.Vpcs)
+}
+
+// --- DescribeSubnets filter tests ---
+
+func TestDescribeSubnets_FilterByVpcId(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpc1 := createTestVPC(t, svc, "10.0.0.0/16")
+	vpc2 := createTestVPC(t, svc, "172.16.0.0/16")
+	createTestSubnet(t, svc, vpc1, "10.0.1.0/24")
+	createTestSubnet(t, svc, vpc2, "172.16.1.0/24")
+
+	out, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("vpc-id"), Values: []*string{aws.String(vpc1)}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Subnets, 1)
+	assert.Equal(t, vpc1, *out.Subnets[0].VpcId)
+}
+
+func TestDescribeSubnets_FilterByCidr(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	createTestSubnet(t, svc, vpcID, "10.0.1.0/24")
+	createTestSubnet(t, svc, vpcID, "10.0.2.0/24")
+
+	out, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("cidr-block"), Values: []*string{aws.String("10.0.1.0/24")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Subnets, 1)
+	assert.Equal(t, "10.0.1.0/24", *out.Subnets[0].CidrBlock)
+}
+
+func TestDescribeSubnets_FilterByState(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	createTestSubnet(t, svc, vpcID, "10.0.1.0/24")
+
+	out, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("state"), Values: []*string{aws.String("available")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Subnets, 1)
+
+	out, err = svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("state"), Values: []*string{aws.String("pending")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.Subnets)
+}
+
+func TestDescribeSubnets_FilterBySubnetId(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	subnetID := createTestSubnet(t, svc, vpcID, "10.0.1.0/24")
+	createTestSubnet(t, svc, vpcID, "10.0.2.0/24")
+
+	out, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("subnet-id"), Values: []*string{aws.String(subnetID)}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Subnets, 1)
+	assert.Equal(t, subnetID, *out.Subnets[0].SubnetId)
+}
+
+func TestDescribeSubnets_FilterByDefaultForAz(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	createTestSubnet(t, svc, vpcID, "10.0.1.0/24")
+
+	out, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("default-for-az"), Values: []*string{aws.String("false")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Subnets, 1)
+}
+
+func TestDescribeSubnets_FilterMultipleValues_OR(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	createTestSubnet(t, svc, vpcID, "10.0.1.0/24")
+	createTestSubnet(t, svc, vpcID, "10.0.2.0/24")
+	createTestSubnet(t, svc, vpcID, "10.0.3.0/24")
+
+	out, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("cidr-block"), Values: []*string{aws.String("10.0.1.0/24"), aws.String("10.0.3.0/24")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Subnets, 2)
+}
+
+func TestDescribeSubnets_FilterMultipleFilters_AND(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpc1 := createTestVPC(t, svc, "10.0.0.0/16")
+	vpc2 := createTestVPC(t, svc, "172.16.0.0/16")
+	createTestSubnet(t, svc, vpc1, "10.0.1.0/24")
+	createTestSubnet(t, svc, vpc2, "172.16.1.0/24")
+
+	// Both filters match subnet in vpc1
+	out, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("vpc-id"), Values: []*string{aws.String(vpc1)}},
+			{Name: aws.String("cidr-block"), Values: []*string{aws.String("10.0.1.0/24")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Subnets, 1)
+
+	// Mismatched: vpc1 + wrong cidr
+	out, err = svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("vpc-id"), Values: []*string{aws.String(vpc1)}},
+			{Name: aws.String("cidr-block"), Values: []*string{aws.String("172.16.1.0/24")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.Subnets)
+}
+
+func TestDescribeSubnets_FilterUnknownName_Error(t *testing.T) {
+	svc := setupTestVPCService(t)
+
+	_, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("bogus-filter"), Values: []*string{aws.String("x")}},
+		},
+	}, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestDescribeSubnets_FilterWildcard(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	createTestSubnet(t, svc, vpcID, "10.0.1.0/24")
+	createTestSubnet(t, svc, vpcID, "10.0.2.0/24")
+
+	out, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("cidr-block"), Values: []*string{aws.String("10.0.*")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Subnets, 2)
+}
+
+func TestDescribeSubnets_FilterNoResults(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+	createTestSubnet(t, svc, vpcID, "10.0.1.0/24")
+
+	out, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("cidr-block"), Values: []*string{aws.String("192.168.0.0/16")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.Subnets)
+}
+
+func TestDescribeSubnets_FilterByTag(t *testing.T) {
+	svc := setupTestVPCService(t)
+	vpcID := createTestVPC(t, svc, "10.0.0.0/16")
+
+	// Create subnet with tags
+	out, err := svc.CreateSubnet(&ec2.CreateSubnetInput{
+		VpcId:     aws.String(vpcID),
+		CidrBlock: aws.String("10.0.1.0/24"),
+		TagSpecifications: []*ec2.TagSpecification{
+			{
+				ResourceType: aws.String("subnet"),
+				Tags:         []*ec2.Tag{{Key: aws.String("Env"), Value: aws.String("prod")}},
+			},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Create another without tag
+	createTestSubnet(t, svc, vpcID, "10.0.2.0/24")
+
+	desc, err := svc.DescribeSubnets(&ec2.DescribeSubnetsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("tag:Env"), Values: []*string{aws.String("prod")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, desc.Subnets, 1)
+	assert.Equal(t, *out.Subnet.SubnetId, *desc.Subnets[0].SubnetId)
+}

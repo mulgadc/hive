@@ -765,3 +765,220 @@ func TestCreateSnapshot_PrePhase4VolumeAllowed(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, otherAccountID, *result.OwnerId)
 }
+
+// --- DescribeSnapshots filter tests ---
+
+// createTestSnapshot creates a snapshot and returns its ID.
+func createTestSnapshot(t *testing.T, svc *SnapshotServiceImpl, store *objectstore.MemoryObjectStore, volumeID string, sizeGiB int, tags map[string]string) string {
+	t.Helper()
+	createTestVolume(t, store, volumeID, sizeGiB)
+
+	tagSpecs := []*ec2.TagSpecification{}
+	if len(tags) > 0 {
+		ec2Tags := make([]*ec2.Tag, 0, len(tags))
+		for k, v := range tags {
+			ec2Tags = append(ec2Tags, &ec2.Tag{Key: aws.String(k), Value: aws.String(v)})
+		}
+		tagSpecs = append(tagSpecs, &ec2.TagSpecification{
+			ResourceType: aws.String("snapshot"),
+			Tags:         ec2Tags,
+		})
+	}
+
+	result, err := svc.CreateSnapshot(&ec2.CreateSnapshotInput{
+		VolumeId:          aws.String(volumeID),
+		TagSpecifications: tagSpecs,
+	}, testAccountID)
+	require.NoError(t, err)
+	return *result.SnapshotId
+}
+
+func TestDescribeSnapshots_FilterByStatus(t *testing.T) {
+	svc, store := setupTestSnapshotService(t)
+	createTestSnapshot(t, svc, store, "vol-1", 10, nil)
+
+	out, err := svc.DescribeSnapshots(&ec2.DescribeSnapshotsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("status"), Values: []*string{aws.String("completed")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Snapshots, 1)
+
+	out, err = svc.DescribeSnapshots(&ec2.DescribeSnapshotsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("status"), Values: []*string{aws.String("pending")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.Snapshots)
+}
+
+func TestDescribeSnapshots_FilterByVolumeId(t *testing.T) {
+	svc, store := setupTestSnapshotService(t)
+	createTestSnapshot(t, svc, store, "vol-a", 10, nil)
+	createTestSnapshot(t, svc, store, "vol-b", 20, nil)
+
+	out, err := svc.DescribeSnapshots(&ec2.DescribeSnapshotsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("volume-id"), Values: []*string{aws.String("vol-a")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Snapshots, 1)
+	assert.Equal(t, "vol-a", *out.Snapshots[0].VolumeId)
+}
+
+func TestDescribeSnapshots_FilterByVolumeSize(t *testing.T) {
+	svc, store := setupTestSnapshotService(t)
+	createTestSnapshot(t, svc, store, "vol-small", 10, nil)
+	createTestSnapshot(t, svc, store, "vol-big", 100, nil)
+
+	out, err := svc.DescribeSnapshots(&ec2.DescribeSnapshotsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("volume-size"), Values: []*string{aws.String("100")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Snapshots, 1)
+	assert.Equal(t, int64(100), *out.Snapshots[0].VolumeSize)
+}
+
+func TestDescribeSnapshots_FilterBySnapshotId(t *testing.T) {
+	svc, store := setupTestSnapshotService(t)
+	snapID := createTestSnapshot(t, svc, store, "vol-1", 10, nil)
+	createTestSnapshot(t, svc, store, "vol-2", 20, nil)
+
+	out, err := svc.DescribeSnapshots(&ec2.DescribeSnapshotsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("snapshot-id"), Values: []*string{aws.String(snapID)}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Snapshots, 1)
+	assert.Equal(t, snapID, *out.Snapshots[0].SnapshotId)
+}
+
+func TestDescribeSnapshots_FilterByOwnerId(t *testing.T) {
+	svc, store := setupTestSnapshotService(t)
+	createTestSnapshot(t, svc, store, "vol-1", 10, nil)
+
+	out, err := svc.DescribeSnapshots(&ec2.DescribeSnapshotsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("owner-id"), Values: []*string{aws.String(testAccountID)}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Snapshots, 1)
+
+	out, err = svc.DescribeSnapshots(&ec2.DescribeSnapshotsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("owner-id"), Values: []*string{aws.String("999999999999")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.Snapshots)
+}
+
+func TestDescribeSnapshots_FilterMultipleValues_OR(t *testing.T) {
+	svc, store := setupTestSnapshotService(t)
+	createTestSnapshot(t, svc, store, "vol-a", 10, nil)
+	createTestSnapshot(t, svc, store, "vol-b", 20, nil)
+	createTestSnapshot(t, svc, store, "vol-c", 30, nil)
+
+	out, err := svc.DescribeSnapshots(&ec2.DescribeSnapshotsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("volume-id"), Values: []*string{aws.String("vol-a"), aws.String("vol-c")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Snapshots, 2)
+}
+
+func TestDescribeSnapshots_FilterMultipleFilters_AND(t *testing.T) {
+	svc, store := setupTestSnapshotService(t)
+	createTestSnapshot(t, svc, store, "vol-a", 10, nil)
+	createTestSnapshot(t, svc, store, "vol-b", 20, nil)
+
+	// Both match
+	out, err := svc.DescribeSnapshots(&ec2.DescribeSnapshotsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("volume-id"), Values: []*string{aws.String("vol-a")}},
+			{Name: aws.String("volume-size"), Values: []*string{aws.String("10")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Snapshots, 1)
+
+	// Mismatch
+	out, err = svc.DescribeSnapshots(&ec2.DescribeSnapshotsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("volume-id"), Values: []*string{aws.String("vol-a")}},
+			{Name: aws.String("volume-size"), Values: []*string{aws.String("20")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.Snapshots)
+}
+
+func TestDescribeSnapshots_FilterUnknownName_Error(t *testing.T) {
+	svc, _ := setupTestSnapshotService(t)
+
+	_, err := svc.DescribeSnapshots(&ec2.DescribeSnapshotsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("bogus-filter"), Values: []*string{aws.String("x")}},
+		},
+	}, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestDescribeSnapshots_FilterWildcard(t *testing.T) {
+	svc, store := setupTestSnapshotService(t)
+	createTestSnapshot(t, svc, store, "vol-prod-1", 10, nil)
+	createTestSnapshot(t, svc, store, "vol-staging-1", 20, nil)
+
+	out, err := svc.DescribeSnapshots(&ec2.DescribeSnapshotsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("volume-id"), Values: []*string{aws.String("vol-prod-*")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Snapshots, 1)
+}
+
+func TestDescribeSnapshots_FilterNoResults(t *testing.T) {
+	svc, store := setupTestSnapshotService(t)
+	createTestSnapshot(t, svc, store, "vol-1", 10, nil)
+
+	out, err := svc.DescribeSnapshots(&ec2.DescribeSnapshotsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("volume-id"), Values: []*string{aws.String("vol-nonexistent")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.Snapshots)
+}
+
+func TestDescribeSnapshots_FilterByTag(t *testing.T) {
+	svc, store := setupTestSnapshotService(t)
+	createTestSnapshot(t, svc, store, "vol-tagged", 10, map[string]string{"Env": "prod"})
+	createTestSnapshot(t, svc, store, "vol-untagged", 20, nil)
+
+	out, err := svc.DescribeSnapshots(&ec2.DescribeSnapshotsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("tag:Env"), Values: []*string{aws.String("prod")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Snapshots, 1)
+}
+
+func TestDescribeSnapshots_FilterNoFilters(t *testing.T) {
+	svc, store := setupTestSnapshotService(t)
+	createTestSnapshot(t, svc, store, "vol-1", 10, nil)
+	createTestSnapshot(t, svc, store, "vol-2", 20, nil)
+
+	out, err := svc.DescribeSnapshots(&ec2.DescribeSnapshotsInput{}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Snapshots, 2)
+}
