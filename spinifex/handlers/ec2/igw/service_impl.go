@@ -173,6 +173,7 @@ func (s *IGWServiceImpl) DescribeInternetGateways(input *ec2.DescribeInternetGat
 
 	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeIGWValidFilters)
 	if err != nil {
+		slog.Warn("DescribeInternetGateways: invalid filter", "err", err)
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 

@@ -249,6 +249,7 @@ func (s *VolumeServiceImpl) DescribeVolumes(input *ec2.DescribeVolumesInput, acc
 
 	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeVolumesValidFilters)
 	if err != nil {
+		slog.Warn("DescribeVolumes: invalid filter", "err", err)
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
@@ -385,7 +386,7 @@ func volumeMatchesFilters(vol *ec2.Volume, filters map[string][]string) bool {
 	}
 
 	// Check tag:Key filters
-	tags := volumeTagsToMap(vol.Tags)
+	tags := filterutil.EC2TagsToMap(vol.Tags)
 	return filterutil.MatchesTags(filters, tags)
 }
 
@@ -400,20 +401,6 @@ func volumeAttachmentMatchesAny(attachments []*ec2.VolumeAttachment, fieldFn fun
 		}
 	}
 	return false
-}
-
-// volumeTagsToMap converts []*ec2.Tag to map[string]string for filterutil.MatchesTags.
-func volumeTagsToMap(tags []*ec2.Tag) map[string]string {
-	if len(tags) == 0 {
-		return nil
-	}
-	m := make(map[string]string, len(tags))
-	for _, t := range tags {
-		if t.Key != nil && t.Value != nil {
-			m[*t.Key] = *t.Value
-		}
-	}
-	return m
 }
 
 // DescribeVolumeStatus returns the status of one or more EBS volumes
@@ -433,6 +420,7 @@ func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatus
 
 	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeVolumeStatusValidFilters)
 	if err != nil {
+		slog.Warn("DescribeVolumeStatus: invalid filter", "err", err)
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
@@ -497,6 +485,11 @@ func (s *VolumeServiceImpl) DescribeVolumeStatus(input *ec2.DescribeVolumeStatus
 // volumeStatusMatchesFilters checks whether a VolumeStatusItem satisfies all parsed filters.
 func volumeStatusMatchesFilters(item *ec2.VolumeStatusItem, filters map[string][]string) bool {
 	for name, values := range filters {
+		if strings.HasPrefix(name, "tag:") {
+			// VolumeStatusItems don't have tags; any tag filter means no match.
+			return false
+		}
+
 		var field string
 		switch name {
 		case "volume-id":

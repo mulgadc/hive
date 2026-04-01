@@ -168,6 +168,7 @@ func (s *EgressOnlyIGWServiceImpl) DescribeEgressOnlyInternetGateways(input *ec2
 
 	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeEIGWValidFilters)
 	if err != nil {
+		slog.Warn("DescribeEgressOnlyInternetGateways: invalid filter", "err", err)
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 

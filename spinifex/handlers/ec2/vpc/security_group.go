@@ -205,6 +205,7 @@ func (s *VPCServiceImpl) DescribeSecurityGroups(input *ec2.DescribeSecurityGroup
 
 	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeSecurityGroupsValidFilters)
 	if err != nil {
+		slog.Warn("DescribeSecurityGroups: invalid filter", "err", err)
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 

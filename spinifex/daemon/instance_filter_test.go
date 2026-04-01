@@ -203,16 +203,16 @@ func TestParseFilters_UnknownFilterName(t *testing.T) {
 	assert.Contains(t, err.Error(), "InvalidParameterValue")
 }
 
-func TestEc2TagsToMap(t *testing.T) {
+func TestEC2TagsToMap(t *testing.T) {
 	tags := []*ec2.Tag{
 		{Key: aws.String("a"), Value: aws.String("1")},
 		{Key: aws.String("b"), Value: aws.String("2")},
 	}
-	m := ec2TagsToMap(tags)
+	m := filterutil.EC2TagsToMap(tags)
 	assert.Equal(t, "1", m["a"])
 	assert.Equal(t, "2", m["b"])
 }
 
-func TestEc2TagsToMap_Nil(t *testing.T) {
-	assert.Nil(t, ec2TagsToMap(nil))
+func TestEC2TagsToMap_Nil(t *testing.T) {
+	assert.Nil(t, filterutil.EC2TagsToMap(nil))
 }

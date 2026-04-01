@@ -321,6 +321,7 @@ func (s *EIPServiceImpl) DescribeAddresses(input *ec2.DescribeAddressesInput, ac
 
 	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeAddressesValidFilters)
 	if err != nil {
+		slog.Warn("DescribeAddresses: invalid filter", "err", err)
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 

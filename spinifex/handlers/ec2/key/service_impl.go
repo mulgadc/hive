@@ -469,6 +469,7 @@ func (s *KeyServiceImpl) DescribeKeyPairs(input *ec2.DescribeKeyPairsInput, acco
 
 	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeKeyPairsValidFilters)
 	if err != nil {
+		slog.Warn("DescribeKeyPairs: invalid filter", "err", err)
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
@@ -484,6 +485,14 @@ func (s *KeyServiceImpl) DescribeKeyPairs(input *ec2.DescribeKeyPairsInput, acco
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
+	// Extract key-pair-id filter values for early S3 skip. The metadata
+	// filename is keys/<account>/<keyPairID>.json, so we can match the ID
+	// from the path before fetching the object.
+	var keyPairIDFilterValues []string
+	if parsedFilters != nil {
+		keyPairIDFilterValues = parsedFilters["key-pair-id"]
+	}
+
 	var keyPairs []*ec2.KeyPairInfo
 
 	// Check each .json metadata file
@@ -495,6 +504,16 @@ func (s *KeyServiceImpl) DescribeKeyPairs(input *ec2.DescribeKeyPairsInput, acco
 		// Only check .json files (metadata files)
 		if !strings.HasSuffix(*obj.Key, ".json") {
 			continue
+		}
+
+		// Early skip: if key-pair-id filter is set, derive the ID from the
+		// S3 object path (keys/<account>/<keyPairID>.json) before fetching.
+		if len(keyPairIDFilterValues) > 0 {
+			objKey := *obj.Key
+			kpID := strings.TrimSuffix(strings.TrimPrefix(objKey, prefix), ".json")
+			if !filterutil.MatchesAny(keyPairIDFilterValues, kpID) {
+				continue
+			}
 		}
 
 		// Get the metadata file
@@ -617,7 +636,9 @@ func keyPairMatchesFilters(kp *ec2.KeyPairInfo, filters map[string][]string) boo
 		}
 	}
 
-	return true
+	// Check tag:Key filters
+	tags := filterutil.EC2TagsToMap(kp.Tags)
+	return filterutil.MatchesTags(filters, tags)
 }
 
 // ImportKeyPair imports an existing public key

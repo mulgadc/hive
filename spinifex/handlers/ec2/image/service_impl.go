@@ -92,6 +92,7 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accoun
 
 	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeImagesValidFilters)
 	if err != nil {
+		slog.Warn("DescribeImages: invalid filter", "err", err)
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
@@ -104,6 +105,13 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accoun
 	if err != nil {
 		slog.Error("Failed to list S3 objects", "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	// Extract image-id filter values for early prefix skipping to avoid
+	// unnecessary S3 GetObject calls on non-matching AMIs.
+	var imageIDFilterValues []string
+	if parsedFilters != nil {
+		imageIDFilterValues = parsedFilters["image-id"]
 	}
 
 	var images []*ec2.Image
@@ -120,6 +128,15 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accoun
 		// Only check prefixes that match pattern: ami-<id>/
 		if !strings.HasPrefix(prefixStr, "ami-") {
 			continue
+		}
+
+		// Early skip: if image-id filter is set, check the prefix (ami-xxx/)
+		// against filter values before fetching config from S3.
+		if len(imageIDFilterValues) > 0 {
+			amiID := strings.TrimSuffix(prefixStr, "/")
+			if !filterutil.MatchesAny(imageIDFilterValues, amiID) {
+				continue
+			}
 		}
 
 		// Construct path to config.json for this AMI directory

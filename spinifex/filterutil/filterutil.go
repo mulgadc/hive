@@ -2,6 +2,7 @@ package filterutil
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -20,6 +21,7 @@ func ParseFilters(filters []*ec2.Filter, validNames map[string]bool) (map[string
 	result := make(map[string][]string, len(filters))
 	for _, f := range filters {
 		if f.Name == nil {
+			slog.Warn("ParseFilters: skipping filter with nil Name")
 			continue
 		}
 		name := *f.Name
@@ -73,6 +75,20 @@ func MatchesTags(filters map[string][]string, tags map[string]string) bool {
 	return true
 }
 
+// EC2TagsToMap converts []*ec2.Tag to map[string]string for MatchesTags.
+func EC2TagsToMap(tags []*ec2.Tag) map[string]string {
+	if len(tags) == 0 {
+		return nil
+	}
+	m := make(map[string]string, len(tags))
+	for _, t := range tags {
+		if t.Key != nil && t.Value != nil {
+			m[*t.Key] = *t.Value
+		}
+	}
+	return m
+}
+
 // matchWildcard matches value against a pattern where * matches zero or more
 // characters. This implements the AWS filter wildcard convention.
 func matchWildcard(pattern, value string) bool {
@@ -84,18 +100,26 @@ func matchWildcard(pattern, value string) bool {
 	}
 
 	parts := strings.Split(pattern, "*")
+	last := len(parts) - 1
 
 	// Check that value starts with the first part and ends with the last.
 	if !strings.HasPrefix(value, parts[0]) {
 		return false
 	}
-	if !strings.HasSuffix(value, parts[len(parts)-1]) {
+	if !strings.HasSuffix(value, parts[last]) {
 		return false
 	}
 
-	// Walk through middle parts in order.
+	// Trim prefix and suffix from the search region so middle parts
+	// cannot consume characters reserved for the anchored ends.
 	remaining := value[len(parts[0]):]
-	for i := 1; i < len(parts); i++ {
+	if len(remaining) < len(parts[last]) {
+		return false
+	}
+	remaining = remaining[:len(remaining)-len(parts[last])]
+
+	// Walk through middle parts in order.
+	for i := 1; i < last; i++ {
 		idx := strings.Index(remaining, parts[i])
 		if idx < 0 {
 			return false

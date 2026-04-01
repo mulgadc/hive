@@ -332,6 +332,7 @@ func (s *VPCServiceImpl) DescribeVpcs(input *ec2.DescribeVpcsInput, accountID st
 
 	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeVpcsValidFilters)
 	if err != nil {
+		slog.Warn("DescribeVpcs: invalid filter", "err", err)
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
@@ -567,6 +568,7 @@ func (s *VPCServiceImpl) DescribeSubnets(input *ec2.DescribeSubnetsInput, accoun
 
 	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeSubnetsValidFilters)
 	if err != nil {
+		slog.Warn("DescribeSubnets: invalid filter", "err", err)
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 

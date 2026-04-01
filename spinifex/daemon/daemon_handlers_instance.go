@@ -691,22 +691,8 @@ func instanceMatchesFilters(inst *vm.VM, ic *ec2.Instance, filters map[string][]
 	}
 
 	// Check tag:Key filters via the instance's Tag slice.
-	tags := ec2TagsToMap(ic.Tags)
+	tags := filterutil.EC2TagsToMap(ic.Tags)
 	return filterutil.MatchesTags(filters, tags)
-}
-
-// ec2TagsToMap converts []*ec2.Tag to map[string]string for filterutil.MatchesTags.
-func ec2TagsToMap(tags []*ec2.Tag) map[string]string {
-	if len(tags) == 0 {
-		return nil
-	}
-	m := make(map[string]string, len(tags))
-	for _, t := range tags {
-		if t.Key != nil && t.Value != nil {
-			m[*t.Key] = *t.Value
-		}
-	}
-	return m
 }
 
 // matchTagKey returns true if any tag key on the resource matches any of the filter values.
@@ -771,6 +757,7 @@ func (d *Daemon) handleEC2DescribeInstances(msg *nats.Msg) {
 	// Parse filters (returns error for unknown filter names)
 	parsedFilters, err := filterutil.ParseFilters(describeInstancesInput.Filters, describeInstancesValidFilters)
 	if err != nil {
+		slog.Warn("DescribeInstances: invalid filter", "err", err)
 		respondWithError(msg, awserrors.ErrorInvalidParameterValue)
 		return
 	}
@@ -1202,6 +1189,7 @@ func (d *Daemon) describeInstancesFromKV(msg *nats.Msg, listFn func() ([]*vm.VM,
 
 	parsedFilters, filterErr := filterutil.ParseFilters(describeInput.Filters, describeInstancesValidFilters)
 	if filterErr != nil {
+		slog.Warn(handlerName+": invalid filter", "err", filterErr)
 		respondWithError(msg, awserrors.ErrorInvalidParameterValue)
 		return
 	}

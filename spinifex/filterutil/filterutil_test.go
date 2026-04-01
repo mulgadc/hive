@@ -261,3 +261,47 @@ func TestMatchesTags_EmptyFilters(t *testing.T) {
 		t.Fatal("expected true for empty filters")
 	}
 }
+
+func TestEC2TagsToMap(t *testing.T) {
+	tags := []*ec2.Tag{
+		{Key: aws.String("Env"), Value: aws.String("prod")},
+		{Key: aws.String("Team"), Value: aws.String("infra")},
+	}
+	m := EC2TagsToMap(tags)
+	if m["Env"] != "prod" || m["Team"] != "infra" {
+		t.Fatalf("unexpected map: %v", m)
+	}
+}
+
+func TestEC2TagsToMap_NilAndEmpty(t *testing.T) {
+	if EC2TagsToMap(nil) != nil {
+		t.Fatal("expected nil for nil tags")
+	}
+	if EC2TagsToMap([]*ec2.Tag{}) != nil {
+		t.Fatal("expected nil for empty tags")
+	}
+}
+
+func TestMatchWildcard_OverlappingSuffixNotDoubled(t *testing.T) {
+	// Pattern "a*b*ab" — the suffix "ab" must not be consumed by the
+	// middle "b" match, leaving nothing for the suffix anchor.
+	if !MatchesAny([]string{"a*b*ab"}, "abab") {
+		t.Fatal("expected a*b*ab to match abab")
+	}
+	if MatchesAny([]string{"a*b*ab"}, "ab") {
+		t.Fatal("expected a*b*ab to NOT match ab (suffix overlap)")
+	}
+}
+
+func TestMatchWildcard_TwoPartPattern(t *testing.T) {
+	// Simple two-part: prefix + suffix, no middle parts.
+	if !MatchesAny([]string{"a*a"}, "aa") {
+		t.Fatal("expected a*a to match aa")
+	}
+	if !MatchesAny([]string{"a*a"}, "aXa") {
+		t.Fatal("expected a*a to match aXa")
+	}
+	if MatchesAny([]string{"a*a"}, "a") {
+		t.Fatal("expected a*a to NOT match a")
+	}
+}

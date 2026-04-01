@@ -328,6 +328,7 @@ func (s *SnapshotServiceImpl) DescribeSnapshots(input *ec2.DescribeSnapshotsInpu
 
 	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeSnapshotsValidFilters)
 	if err != nil {
+		slog.Warn("DescribeSnapshots: invalid filter", "err", err)
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
