@@ -7,9 +7,8 @@ set -euo pipefail
 # Usage: scripts/diff-coverage.sh <coverprofile> [--base <ref>] [--threshold <pct>]
 #
 # Base ref auto-detection:
-#   dev branch    → origin/main
 #   main branch   → HEAD~1
-#   other branch  → origin/dev
+#   other branch  → origin/main
 
 PROFILE=""
 BASE_REF=""
@@ -45,8 +44,7 @@ if [[ -z "$BASE_REF" ]]; then
     BRANCH="${GITHUB_REF_NAME:-$(git rev-parse --abbrev-ref HEAD)}"
     case "$BRANCH" in
         main) BASE_REF="HEAD~1" ;;
-        dev)  BASE_REF="origin/main" ;;
-        *)    BASE_REF="origin/dev" ;;
+        *)    BASE_REF="origin/main" ;;
     esac
     [[ -z "$QUIET" ]] && echo "Base ref: $BASE_REF (branch: $BRANCH)"
 fi
