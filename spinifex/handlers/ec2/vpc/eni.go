@@ -227,10 +227,18 @@ func (s *VPCServiceImpl) ModifyNetworkInterfaceAttribute(input *ec2.ModifyNetwor
 }
 
 var describeNetworkInterfacesValidFilters = map[string]bool{
-	"subnet-id":              true,
-	"vpc-id":                 true,
-	"description":            true,
-	"attachment.instance-id": true,
+	"network-interface-id":     true,
+	"subnet-id":                true,
+	"vpc-id":                   true,
+	"status":                   true,
+	"private-ip-address":       true,
+	"availability-zone":        true,
+	"group-id":                 true,
+	"mac-address":              true,
+	"description":              true,
+	"attachment.attachment-id": true,
+	"attachment.instance-id":   true,
+	"attachment.status":        true,
 }
 
 // DescribeNetworkInterfaces lists ENIs with optional filters
@@ -315,6 +323,10 @@ func eniMatchesFilters(record *ENIRecord, filters map[string][]string) bool {
 			continue
 		}
 		switch name {
+		case "network-interface-id":
+			if !filterutil.MatchesAny(values, record.NetworkInterfaceId) {
+				return false
+			}
 		case "subnet-id":
 			if !filterutil.MatchesAny(values, record.SubnetId) {
 				return false
@@ -323,12 +335,51 @@ func eniMatchesFilters(record *ENIRecord, filters map[string][]string) bool {
 			if !filterutil.MatchesAny(values, record.VpcId) {
 				return false
 			}
+		case "status":
+			if !filterutil.MatchesAny(values, record.Status) {
+				return false
+			}
+		case "private-ip-address":
+			if !filterutil.MatchesAny(values, record.PrivateIpAddress) {
+				return false
+			}
+		case "availability-zone":
+			if !filterutil.MatchesAny(values, record.AvailabilityZone) {
+				return false
+			}
+		case "group-id":
+			found := false
+			for _, sgId := range record.SecurityGroupIds {
+				if filterutil.MatchesAny(values, sgId) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+		case "mac-address":
+			if !filterutil.MatchesAny(values, record.MacAddress) {
+				return false
+			}
 		case "description":
 			if !filterutil.MatchesAny(values, record.Description) {
 				return false
 			}
+		case "attachment.attachment-id":
+			if !filterutil.MatchesAny(values, record.AttachmentId) {
+				return false
+			}
 		case "attachment.instance-id":
 			if !filterutil.MatchesAny(values, record.InstanceId) {
+				return false
+			}
+		case "attachment.status":
+			status := "detached"
+			if record.InstanceId != "" {
+				status = "attached"
+			}
+			if !filterutil.MatchesAny(values, status) {
 				return false
 			}
 		default:
