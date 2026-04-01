@@ -28,16 +28,6 @@ jobs:
     env:
       TOFU_LOG: /tmp/e2e-tofu-single-${{ github.run_id }}.log
     steps:
-      - name: Set Pending Status
-        if: inputs.sha
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api "repos/${{ github.repository }}/statuses/${{ inputs.sha }}" \
-            -f state=pending \
-            -f context=e2e \
-            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-
       - name: Clean Workspace
         run: rm -rf "$GITHUB_WORKSPACE"/*
 
