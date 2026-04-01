@@ -11,12 +11,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	handlers_iam "github.com/mulgadc/spinifex/spinifex/handlers/iam"
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/mulgadc/spinifex/spinifex/types"
-	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -264,25 +263,7 @@ func TestErrorHandler_ContentTypeXML(t *testing.T) {
 
 func startTestNATS(t *testing.T) *nats.Conn {
 	t.Helper()
-	ns, err := server.NewServer(&server.Options{
-		Host:   "127.0.0.1",
-		Port:   -1,
-		NoLog:  true,
-		NoSigs: true,
-	})
-	require.NoError(t, err)
-
-	go ns.Start()
-	require.True(t, ns.ReadyForConnections(5*time.Second), "NATS server failed to start")
-
-	nc, err := nats.Connect(ns.ClientURL())
-	require.NoError(t, err)
-
-	t.Cleanup(func() {
-		nc.Close()
-		ns.Shutdown()
-	})
-
+	_, nc := testutil.StartTestNATS(t)
 	return nc
 }
 

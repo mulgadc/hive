@@ -2,14 +2,12 @@ package handlers_ec2_eigw
 
 import (
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/mulgadc/spinifex/spinifex/utils"
-	"github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,33 +16,14 @@ const testAccountID = "123456789012"
 
 func setupTestEIGWService(t *testing.T) *EgressOnlyIGWServiceImpl {
 	t.Helper()
-	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		JetStream: true,
-		StoreDir:  t.TempDir(),
-		NoLog:     true,
-		NoSigs:    true,
-	}
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err)
-	go ns.Start()
-	require.True(t, ns.ReadyForConnections(5*time.Second))
-	t.Cleanup(func() { ns.Shutdown() })
-
-	nc, err := nats.Connect(ns.ClientURL())
-	require.NoError(t, err)
-	t.Cleanup(func() { nc.Close() })
+	_, nc, js := testutil.StartTestJetStream(t)
 
 	// Create VPC KV bucket and register test VPCs so fail-closed ownership checks pass
-	js, err := nc.JetStream()
-	require.NoError(t, err)
-	vpcKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketVPCs, History: 1})
-	require.NoError(t, err)
+	vpcEntries := map[string][]byte{}
 	for _, vpcID := range []string{"vpc-test123", "vpc-tagged", "vpc-tagged2"} {
-		_, err = vpcKV.Put(utils.AccountKey(testAccountID, vpcID), []byte(`{"vpc_id":"`+vpcID+`","state":"available"}`))
-		require.NoError(t, err)
+		vpcEntries[utils.AccountKey(testAccountID, vpcID)] = []byte(`{"vpc_id":"` + vpcID + `","state":"available"}`)
 	}
+	testutil.SeedKV(t, js, handlers_ec2_vpc.KVBucketVPCs, vpcEntries)
 
 	svc, err := NewEgressOnlyIGWServiceImplWithNATS(nil, nc)
 	require.NoError(t, err)
@@ -293,32 +272,15 @@ func TestDescribeEgressOnlyInternetGateways_FilterByTag(t *testing.T) {
 // TestCreateEgressOnlyInternetGateway_CrossAccountVPCRejected tests that creating an EIGW in another account's VPC is rejected.
 func TestCreateEgressOnlyInternetGateway_CrossAccountVPCRejected(t *testing.T) {
 	// Set up with manual NATS to get VPC KV access
-	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		JetStream: true,
-		StoreDir:  t.TempDir(),
-		NoLog:     true,
-		NoSigs:    true,
-	}
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err)
-	go ns.Start()
-	require.True(t, ns.ReadyForConnections(5*time.Second))
-	t.Cleanup(func() { ns.Shutdown() })
-
-	nc, err := nats.Connect(ns.ClientURL())
-	require.NoError(t, err)
-	t.Cleanup(func() { nc.Close() })
+	_, nc, js := testutil.StartTestJetStream(t)
 
 	// Create VPC KV bucket with a VPC owned by testAccountID
-	js, err := nc.JetStream()
-	require.NoError(t, err)
-	vpcKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketVPCs, History: 1})
-	require.NoError(t, err)
-
 	vpcID := "vpc-alpha456"
-	_, err = vpcKV.Put(utils.AccountKey(testAccountID, vpcID), []byte(`{"vpc_id":"vpc-alpha456","state":"available"}`))
+	testutil.SeedKV(t, js, handlers_ec2_vpc.KVBucketVPCs, map[string][]byte{
+		utils.AccountKey(testAccountID, vpcID): []byte(`{"vpc_id":"vpc-alpha456","state":"available"}`),
+	})
+
+	var err error
 	require.NoError(t, err)
 
 	// Create EIGW service (VPC KV will be populated since we created it before EIGW init)

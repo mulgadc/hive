@@ -7,8 +7,8 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/mulgadc/spinifex/spinifex/utils"
-	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,33 +16,14 @@ import (
 
 func setupTestIGWService(t *testing.T) (*IGWServiceImpl, *nats.Conn) {
 	t.Helper()
-	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		JetStream: true,
-		StoreDir:  t.TempDir(),
-		NoLog:     true,
-		NoSigs:    true,
-	}
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err)
-	go ns.Start()
-	require.True(t, ns.ReadyForConnections(5*time.Second))
-	t.Cleanup(func() { ns.Shutdown() })
-
-	nc, err := nats.Connect(ns.ClientURL())
-	require.NoError(t, err)
-	t.Cleanup(func() { nc.Close() })
+	_, nc, js := testutil.StartTestJetStream(t)
 
 	// Create VPC KV bucket and register test VPCs so fail-closed ownership checks pass
-	js, err := nc.JetStream()
-	require.NoError(t, err)
-	vpcKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketVPCs, History: 1})
-	require.NoError(t, err)
+	vpcEntries := map[string][]byte{}
 	for _, vpcID := range []string{"vpc-test123", "vpc-other", "vpc-lifecycle", "vpc-event-test"} {
-		_, err = vpcKV.Put(utils.AccountKey(testAccountID, vpcID), []byte(`{"vpc_id":"`+vpcID+`","state":"available"}`))
-		require.NoError(t, err)
+		vpcEntries[utils.AccountKey(testAccountID, vpcID)] = []byte(`{"vpc_id":"` + vpcID + `","state":"available"}`)
 	}
+	testutil.SeedKV(t, js, handlers_ec2_vpc.KVBucketVPCs, vpcEntries)
 
 	svc, err := NewIGWServiceImplWithNATS(nil, nc)
 	require.NoError(t, err)

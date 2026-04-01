@@ -2,16 +2,14 @@ package handlers_ec2_natgw
 
 import (
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	handlers_ec2_eip "github.com/mulgadc/spinifex/spinifex/handlers/ec2/eip"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/mulgadc/spinifex/spinifex/utils"
-	"github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,46 +18,23 @@ const testAccountID = "123456789012"
 
 func setupTestService(t *testing.T) *NatGatewayServiceImpl {
 	t.Helper()
-	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		JetStream: true,
-		StoreDir:  t.TempDir(),
-		NoLog:     true,
-		NoSigs:    true,
-	}
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err)
-	go ns.Start()
-	require.True(t, ns.ReadyForConnections(5*time.Second))
-	t.Cleanup(func() { ns.Shutdown() })
-
-	nc, err := nats.Connect(ns.ClientURL())
-	require.NoError(t, err)
-	t.Cleanup(func() { nc.Close() })
-
-	js, err := nc.JetStream()
-	require.NoError(t, err)
+	_, nc, js := testutil.StartTestJetStream(t)
 
 	// Seed VPC KV
-	vpcKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketVPCs, History: 1})
-	require.NoError(t, err)
-	_, err = vpcKV.Put(utils.AccountKey(testAccountID, "vpc-test1"), []byte(`{"vpc_id":"vpc-test1","cidr_block":"10.0.0.0/16","state":"available"}`))
-	require.NoError(t, err)
+	testutil.SeedKV(t, js, handlers_ec2_vpc.KVBucketVPCs, map[string][]byte{
+		utils.AccountKey(testAccountID, "vpc-test1"): []byte(`{"vpc_id":"vpc-test1","cidr_block":"10.0.0.0/16","state":"available"}`),
+	})
 
 	// Seed subnet KV (public subnet)
-	subnetKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketSubnets, History: 1})
-	require.NoError(t, err)
-	_, err = subnetKV.Put(utils.AccountKey(testAccountID, "subnet-pub1"), []byte(`{"subnet_id":"subnet-pub1","vpc_id":"vpc-test1","cidr_block":"10.0.1.0/24","state":"available","map_public_ip_on_launch":true}`))
-	require.NoError(t, err)
+	testutil.SeedKV(t, js, handlers_ec2_vpc.KVBucketSubnets, map[string][]byte{
+		utils.AccountKey(testAccountID, "subnet-pub1"): []byte(`{"subnet_id":"subnet-pub1","vpc_id":"vpc-test1","cidr_block":"10.0.1.0/24","state":"available","map_public_ip_on_launch":true}`),
+	})
 
 	// Seed EIP KV
-	eipKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_eip.KVBucketEIPs, History: 1})
-	require.NoError(t, err)
-	_, err = eipKV.Put(utils.AccountKey(testAccountID, "eipalloc-test1"), []byte(`{"allocation_id":"eipalloc-test1","public_ip":"203.0.113.50","state":"allocated"}`))
-	require.NoError(t, err)
-	_, err = eipKV.Put(utils.AccountKey(testAccountID, "eipalloc-used"), []byte(`{"allocation_id":"eipalloc-used","public_ip":"203.0.113.51","state":"associated","association_id":"eipassoc-xxx"}`))
-	require.NoError(t, err)
+	testutil.SeedKV(t, js, handlers_ec2_eip.KVBucketEIPs, map[string][]byte{
+		utils.AccountKey(testAccountID, "eipalloc-test1"): []byte(`{"allocation_id":"eipalloc-test1","public_ip":"203.0.113.50","state":"allocated"}`),
+		utils.AccountKey(testAccountID, "eipalloc-used"):  []byte(`{"allocation_id":"eipalloc-used","public_ip":"203.0.113.51","state":"associated","association_id":"eipassoc-xxx"}`),
+	})
 
 	svc, err := NewNatGatewayServiceImplWithNATS(nc)
 	require.NoError(t, err)

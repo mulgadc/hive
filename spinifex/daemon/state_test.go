@@ -10,10 +10,9 @@ import (
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/config"
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/vm"
-	"github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,23 +22,7 @@ import (
 func createDaemonWithJetStream(t *testing.T) *Daemon {
 	t.Helper()
 
-	jsTmpDir := t.TempDir()
-
-	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		JetStream: true,
-		StoreDir:  jsTmpDir,
-		NoLog:     true,
-		NoSigs:    true,
-	}
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err)
-	go ns.Start()
-	require.True(t, ns.ReadyForConnections(5*time.Second), "NATS server failed to start")
-	t.Cleanup(func() { ns.Shutdown() })
-
-	natsURL := ns.ClientURL()
+	_, nc, _ := testutil.StartTestJetStream(t)
 
 	tmpDir := t.TempDir()
 
@@ -50,10 +33,6 @@ func createDaemonWithJetStream(t *testing.T) *Daemon {
 	daemon, err := NewDaemon(clusterCfg)
 	require.NoError(t, err)
 	daemon.config = &config.Config{BaseDir: tmpDir}
-
-	nc, err := nats.Connect(natsURL)
-	require.NoError(t, err)
-	t.Cleanup(func() { nc.Close() })
 
 	daemon.natsConn = nc
 	daemon.jsManager, err = NewJetStreamManager(nc, 1)

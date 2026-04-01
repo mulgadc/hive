@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mulgadc/spinifex/spinifex/services/vpcd/nbdb"
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -14,31 +15,7 @@ import (
 // startTestNATS starts an embedded NATS server for testing.
 func startTestNATS(t *testing.T) (*server.Server, *nats.Conn) {
 	t.Helper()
-	opts := &server.Options{
-		Host: "127.0.0.1",
-		Port: -1, // auto-assign
-	}
-	ns, err := server.NewServer(opts)
-	if err != nil {
-		t.Fatalf("start NATS server: %v", err)
-	}
-	go ns.Start()
-	if !ns.ReadyForConnections(5_000_000_000) { // 5s
-		t.Fatal("NATS server not ready")
-	}
-
-	nc, err := nats.Connect(ns.ClientURL())
-	if err != nil {
-		ns.Shutdown()
-		t.Fatalf("connect to NATS: %v", err)
-	}
-
-	t.Cleanup(func() {
-		nc.Close()
-		ns.Shutdown()
-	})
-
-	return ns, nc
+	return testutil.StartTestNATS(t)
 }
 
 func TestTopologyHandler_VPCCreate(t *testing.T) {
