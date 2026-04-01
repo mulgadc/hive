@@ -220,18 +220,8 @@ func (s *VPCServiceImpl) CreateVpc(input *ec2.CreateVpcInput, accountID string) 
 		VNI:                vni,
 		EnableDnsSupport:   true,  // AWS default
 		EnableDnsHostnames: false, // AWS default
-		Tags:               make(map[string]string),
+		Tags:               utils.ExtractTags(input.TagSpecifications, "vpc"),
 		CreatedAt:          time.Now(),
-	}
-
-	for _, tagSpec := range input.TagSpecifications {
-		if tagSpec.ResourceType != nil && *tagSpec.ResourceType == "vpc" {
-			for _, tag := range tagSpec.Tags {
-				if tag.Key != nil && tag.Value != nil {
-					record.Tags[*tag.Key] = *tag.Value
-				}
-			}
-		}
 	}
 
 	data, err := json.Marshal(record)
@@ -494,18 +484,8 @@ func (s *VPCServiceImpl) CreateSubnet(input *ec2.CreateSubnetInput, accountID st
 		AvailabilityZone: az,
 		State:            "available",
 		IsDefault:        false,
-		Tags:             make(map[string]string),
+		Tags:             utils.ExtractTags(input.TagSpecifications, "subnet"),
 		CreatedAt:        time.Now(),
-	}
-
-	for _, tagSpec := range input.TagSpecifications {
-		if tagSpec.ResourceType != nil && *tagSpec.ResourceType == "subnet" {
-			for _, tag := range tagSpec.Tags {
-				if tag.Key != nil && tag.Value != nil {
-					record.Tags[*tag.Key] = *tag.Value
-				}
-			}
-		}
 	}
 
 	data, err := json.Marshal(record)

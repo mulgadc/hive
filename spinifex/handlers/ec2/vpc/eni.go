@@ -100,18 +100,8 @@ func (s *VPCServiceImpl) CreateNetworkInterface(input *ec2.CreateNetworkInterfac
 		Description:        description,
 		Status:             "available",
 		SecurityGroupIds:   sgIds,
-		Tags:               make(map[string]string),
+		Tags:               utils.ExtractTags(input.TagSpecifications, "network-interface"),
 		CreatedAt:          time.Now(),
-	}
-
-	for _, tagSpec := range input.TagSpecifications {
-		if tagSpec.ResourceType != nil && *tagSpec.ResourceType == "network-interface" {
-			for _, tag := range tagSpec.Tags {
-				if tag.Key != nil && tag.Value != nil {
-					record.Tags[*tag.Key] = *tag.Value
-				}
-			}
-		}
 	}
 
 	data, err := json.Marshal(record)

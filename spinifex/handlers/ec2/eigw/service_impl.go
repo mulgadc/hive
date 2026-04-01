@@ -94,18 +94,8 @@ func (s *EgressOnlyIGWServiceImpl) CreateEgressOnlyInternetGateway(input *ec2.Cr
 		EgressOnlyInternetGatewayId: eigwID,
 		VpcId:                       *input.VpcId,
 		State:                       "attached",
-		Tags:                        make(map[string]string),
+		Tags:                        utils.ExtractTags(input.TagSpecifications, "egress-only-internet-gateway"),
 		CreatedAt:                   time.Now(),
-	}
-
-	for _, tagSpec := range input.TagSpecifications {
-		if tagSpec.ResourceType != nil && *tagSpec.ResourceType == "egress-only-internet-gateway" {
-			for _, tag := range tagSpec.Tags {
-				if tag.Key != nil && tag.Value != nil {
-					record.Tags[*tag.Key] = *tag.Value
-				}
-			}
-		}
 	}
 
 	data, err := json.Marshal(record)

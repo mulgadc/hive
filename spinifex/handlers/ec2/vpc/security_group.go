@@ -112,18 +112,8 @@ func (s *VPCServiceImpl) CreateSecurityGroup(input *ec2.CreateSecurityGroupInput
 		VpcId:        vpcId,
 		IngressRules: []SGRule{},
 		EgressRules:  defaultEgress,
-		Tags:         make(map[string]string),
+		Tags:         utils.ExtractTags(input.TagSpecifications, "security-group"),
 		CreatedAt:    time.Now(),
-	}
-
-	for _, tagSpec := range input.TagSpecifications {
-		if tagSpec.ResourceType != nil && *tagSpec.ResourceType == "security-group" {
-			for _, tag := range tagSpec.Tags {
-				if tag.Key != nil && tag.Value != nil {
-					record.Tags[*tag.Key] = *tag.Value
-				}
-			}
-		}
 	}
 
 	data, err := json.Marshal(record)

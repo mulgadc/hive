@@ -93,19 +93,8 @@ func (s *EIPServiceImpl) AllocateAddress(input *ec2.AllocateAddressInput, accoun
 		PublicIp:     publicIP,
 		PoolName:     poolName,
 		State:        "allocated",
-		Tags:         make(map[string]string),
+		Tags:         utils.ExtractTags(input.TagSpecifications, "elastic-ip"),
 		CreatedAt:    time.Now(),
-	}
-
-	// Store tags from input.
-	for _, tagSpec := range input.TagSpecifications {
-		if tagSpec.ResourceType != nil && *tagSpec.ResourceType == "elastic-ip" {
-			for _, tag := range tagSpec.Tags {
-				if tag.Key != nil && tag.Value != nil {
-					record.Tags[*tag.Key] = *tag.Value
-				}
-			}
-		}
 	}
 
 	data, err := json.Marshal(record)

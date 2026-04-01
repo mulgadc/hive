@@ -268,21 +268,11 @@ func (s *SnapshotServiceImpl) CreateSnapshot(input *ec2.CreateSnapshotInput, acc
 		Encrypted:        volumeConfig.VolumeMetadata.IsEncrypted,
 		OwnerID:          accountID,
 		AvailabilityZone: volumeConfig.VolumeMetadata.AvailabilityZone,
-		Tags:             make(map[string]string),
+		Tags:             utils.ExtractTags(input.TagSpecifications, "snapshot"),
 	}
 
 	if input.Description != nil {
 		snapshotCfg.Description = *input.Description
-	}
-
-	for _, tagSpec := range input.TagSpecifications {
-		if tagSpec.ResourceType != nil && *tagSpec.ResourceType == "snapshot" {
-			for _, tag := range tagSpec.Tags {
-				if tag.Key != nil && tag.Value != nil {
-					snapshotCfg.Tags[*tag.Key] = *tag.Value
-				}
-			}
-		}
 	}
 
 	// Track the volume→snapshot dependency in KV before persisting to S3.

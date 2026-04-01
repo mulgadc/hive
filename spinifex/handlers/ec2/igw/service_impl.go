@@ -91,18 +91,8 @@ func (s *IGWServiceImpl) createIGW(input *ec2.CreateInternetGatewayInput, accoun
 	record := IGWRecord{
 		InternetGatewayId: igwID,
 		State:             "available",
-		Tags:              make(map[string]string),
+		Tags:              utils.ExtractTags(input.TagSpecifications, "internet-gateway"),
 		CreatedAt:         time.Now(),
-	}
-
-	for _, tagSpec := range input.TagSpecifications {
-		if tagSpec.ResourceType != nil && *tagSpec.ResourceType == "internet-gateway" {
-			for _, tag := range tagSpec.Tags {
-				if tag.Key != nil && tag.Value != nil {
-					record.Tags[*tag.Key] = *tag.Value
-				}
-			}
-		}
 	}
 
 	data, err := json.Marshal(record)
