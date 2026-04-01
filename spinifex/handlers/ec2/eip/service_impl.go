@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
+	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
@@ -293,6 +294,15 @@ func (s *EIPServiceImpl) DisassociateAddress(input *ec2.DisassociateAddressInput
 	return &ec2.DisassociateAddressOutput{}, nil
 }
 
+// describeAddressesValidFilters defines the set of filter names accepted by DescribeAddresses.
+var describeAddressesValidFilters = map[string]bool{
+	"allocation-id":  true,
+	"public-ip":      true,
+	"instance-id":    true,
+	"association-id": true,
+	"domain":         true,
+}
+
 // DescribeAddresses lists Elastic IPs with optional filtering by allocation ID.
 func (s *EIPServiceImpl) DescribeAddresses(input *ec2.DescribeAddressesInput, accountID string) (*ec2.DescribeAddressesOutput, error) {
 	allocIDs := make(map[string]bool)
@@ -307,6 +317,12 @@ func (s *EIPServiceImpl) DescribeAddresses(input *ec2.DescribeAddressesInput, ac
 		if ip != nil {
 			publicIPs[*ip] = true
 		}
+	}
+
+	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeAddressesValidFilters)
+	if err != nil {
+		slog.Warn("DescribeAddresses: invalid filter", "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
 	prefix := accountID + "."
@@ -343,6 +359,10 @@ func (s *EIPServiceImpl) DescribeAddresses(input *ec2.DescribeAddressesInput, ac
 			continue
 		}
 
+		if len(parsedFilters) > 0 && !addressMatchesFilters(&record, parsedFilters) {
+			continue
+		}
+
 		addresses = append(addresses, s.eipRecordToEC2(&record))
 	}
 
@@ -366,6 +386,37 @@ func (s *EIPServiceImpl) DescribeAddresses(input *ec2.DescribeAddressesInput, ac
 	return &ec2.DescribeAddressesOutput{
 		Addresses: addresses,
 	}, nil
+}
+
+// addressMatchesFilters checks whether an EIPRecord satisfies all parsed filters.
+func addressMatchesFilters(record *EIPRecord, filters map[string][]string) bool {
+	for name, values := range filters {
+		if strings.HasPrefix(name, "tag:") {
+			continue
+		}
+
+		var field string
+		switch name {
+		case "allocation-id":
+			field = record.AllocationId
+		case "public-ip":
+			field = record.PublicIp
+		case "instance-id":
+			field = record.InstanceId
+		case "association-id":
+			field = record.AssociationId
+		case "domain":
+			field = "vpc" // Spinifex only supports VPC domain
+		default:
+			return false
+		}
+
+		if !filterutil.MatchesAny(values, field) {
+			return false
+		}
+	}
+
+	return filterutil.MatchesTags(filters, record.Tags)
 }
 
 // DescribeAddressesAttribute returns per-EIP attributes (e.g. domain-name).

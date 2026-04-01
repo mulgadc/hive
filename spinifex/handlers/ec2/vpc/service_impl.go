@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
+	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -309,6 +310,15 @@ func (s *VPCServiceImpl) DeleteVpc(input *ec2.DeleteVpcInput, accountID string) 
 	return &ec2.DeleteVpcOutput{}, nil
 }
 
+// describeVpcsValidFilters defines the set of filter names accepted by DescribeVpcs.
+var describeVpcsValidFilters = map[string]bool{
+	"vpc-id":     true,
+	"state":      true,
+	"cidr-block": true,
+	"is-default": true,
+	"owner-id":   true,
+}
+
 // DescribeVpcs describes VPCs
 func (s *VPCServiceImpl) DescribeVpcs(input *ec2.DescribeVpcsInput, accountID string) (*ec2.DescribeVpcsOutput, error) {
 	var vpcs []*ec2.Vpc
@@ -318,6 +328,12 @@ func (s *VPCServiceImpl) DescribeVpcs(input *ec2.DescribeVpcsInput, accountID st
 		if id != nil {
 			vpcIDs[*id] = true
 		}
+	}
+
+	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeVpcsValidFilters)
+	if err != nil {
+		slog.Warn("DescribeVpcs: invalid filter", "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
 	prefix := accountID + "."
@@ -347,6 +363,10 @@ func (s *VPCServiceImpl) DescribeVpcs(input *ec2.DescribeVpcsInput, accountID st
 		}
 
 		if len(vpcIDs) > 0 && !vpcIDs[record.VpcId] {
+			continue
+		}
+
+		if len(parsedFilters) > 0 && !vpcMatchesFilters(&record, accountID, parsedFilters) {
 			continue
 		}
 
@@ -546,12 +566,10 @@ func (s *VPCServiceImpl) DescribeSubnets(input *ec2.DescribeSubnetsInput, accoun
 		}
 	}
 
-	// Extract VPC ID filter if present
-	vpcIDFilter := ""
-	for _, f := range input.Filters {
-		if f.Name != nil && *f.Name == "vpc-id" && len(f.Values) > 0 && f.Values[0] != nil {
-			vpcIDFilter = *f.Values[0]
-		}
+	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeSubnetsValidFilters)
+	if err != nil {
+		slog.Warn("DescribeSubnets: invalid filter", "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
 	prefix := accountID + "."
@@ -584,8 +602,7 @@ func (s *VPCServiceImpl) DescribeSubnets(input *ec2.DescribeSubnetsInput, accoun
 			continue
 		}
 
-		// Apply VPC ID filter
-		if vpcIDFilter != "" && record.VpcId != vpcIDFilter {
+		if len(parsedFilters) > 0 && !subnetMatchesFilters(&record, parsedFilters) {
 			continue
 		}
 
@@ -620,6 +637,80 @@ func (s *VPCServiceImpl) DescribeSubnets(input *ec2.DescribeSubnetsInput, accoun
 	return &ec2.DescribeSubnetsOutput{
 		Subnets: subnets,
 	}, nil
+}
+
+// vpcMatchesFilters checks whether a VPCRecord satisfies all parsed filters.
+func vpcMatchesFilters(record *VPCRecord, accountID string, filters map[string][]string) bool {
+	for name, values := range filters {
+		if strings.HasPrefix(name, "tag:") {
+			continue
+		}
+
+		var field string
+		switch name {
+		case "vpc-id":
+			field = record.VpcId
+		case "state":
+			field = record.State
+		case "cidr-block":
+			field = record.CidrBlock
+		case "is-default":
+			field = fmt.Sprintf("%t", record.IsDefault)
+		case "owner-id":
+			field = accountID
+		default:
+			return false
+		}
+
+		if !filterutil.MatchesAny(values, field) {
+			return false
+		}
+	}
+
+	return filterutil.MatchesTags(filters, record.Tags)
+}
+
+// describeSubnetsValidFilters defines the set of filter names accepted by DescribeSubnets.
+var describeSubnetsValidFilters = map[string]bool{
+	"subnet-id":         true,
+	"vpc-id":            true,
+	"availability-zone": true,
+	"cidr-block":        true,
+	"state":             true,
+	"default-for-az":    true,
+}
+
+// subnetMatchesFilters checks whether a SubnetRecord satisfies all parsed filters.
+func subnetMatchesFilters(record *SubnetRecord, filters map[string][]string) bool {
+	for name, values := range filters {
+		if strings.HasPrefix(name, "tag:") {
+			continue
+		}
+
+		var field string
+		switch name {
+		case "subnet-id":
+			field = record.SubnetId
+		case "vpc-id":
+			field = record.VpcId
+		case "availability-zone":
+			field = record.AvailabilityZone
+		case "cidr-block":
+			field = record.CidrBlock
+		case "state":
+			field = record.State
+		case "default-for-az":
+			field = fmt.Sprintf("%t", record.IsDefault)
+		default:
+			return false
+		}
+
+		if !filterutil.MatchesAny(values, field) {
+			return false
+		}
+	}
+
+	return filterutil.MatchesTags(filters, record.Tags)
 }
 
 func (s *VPCServiceImpl) vpcRecordToEC2(record *VPCRecord, accountID string) *ec2.Vpc {

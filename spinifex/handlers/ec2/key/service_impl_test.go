@@ -677,3 +677,113 @@ func TestCalculateFingerprint_InvalidBase64(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to decode public key")
 }
+
+// --- DescribeKeyPairs AWS filter tests ---
+
+func TestDescribeKeyPairs_AWSFilterByKeyName(t *testing.T) {
+	svc, _ := newTestKeyService()
+	importTestKey(t, svc, "key-alpha")
+	importTestKey(t, svc, "key-beta")
+
+	out, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("key-name"), Values: []*string{aws.String("key-alpha")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.KeyPairs, 1)
+	assert.Equal(t, "key-alpha", *out.KeyPairs[0].KeyName)
+}
+
+func TestDescribeKeyPairs_AWSFilterByKeyPairId(t *testing.T) {
+	svc, _ := newTestKeyService()
+	imported := importTestKey(t, svc, "key-target")
+	importTestKey(t, svc, "key-other")
+
+	out, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("key-pair-id"), Values: []*string{imported.KeyPairId}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.KeyPairs, 1)
+	assert.Equal(t, *imported.KeyPairId, *out.KeyPairs[0].KeyPairId)
+}
+
+func TestDescribeKeyPairs_AWSFilterByFingerprint(t *testing.T) {
+	svc, _ := newTestKeyService()
+	imported := importTestKey(t, svc, "key-fp")
+
+	out, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("fingerprint"), Values: []*string{imported.KeyFingerprint}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.KeyPairs, 1)
+	assert.Equal(t, *imported.KeyFingerprint, *out.KeyPairs[0].KeyFingerprint)
+}
+
+func TestDescribeKeyPairs_AWSFilterMultipleValues_OR(t *testing.T) {
+	svc, _ := newTestKeyService()
+	importTestKey(t, svc, "key-a")
+	importTestKey(t, svc, "key-b")
+	importTestKey(t, svc, "key-c")
+
+	out, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("key-name"), Values: []*string{aws.String("key-a"), aws.String("key-c")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.KeyPairs, 2)
+}
+
+func TestDescribeKeyPairs_AWSFilterUnknownName_Error(t *testing.T) {
+	svc, _ := newTestKeyService()
+
+	_, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("bogus-filter"), Values: []*string{aws.String("x")}},
+		},
+	}, testAccountID)
+	assert.Error(t, err)
+}
+
+func TestDescribeKeyPairs_AWSFilterWildcard(t *testing.T) {
+	svc, _ := newTestKeyService()
+	importTestKey(t, svc, "prod-web")
+	importTestKey(t, svc, "prod-api")
+	importTestKey(t, svc, "staging-web")
+
+	out, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("key-name"), Values: []*string{aws.String("prod-*")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.KeyPairs, 2)
+}
+
+func TestDescribeKeyPairs_AWSFilterNoResults(t *testing.T) {
+	svc, _ := newTestKeyService()
+	importTestKey(t, svc, "my-key")
+
+	out, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("key-name"), Values: []*string{aws.String("nonexistent")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.KeyPairs)
+}
+
+func TestDescribeKeyPairs_AWSFilterNoFilters(t *testing.T) {
+	svc, _ := newTestKeyService()
+	importTestKey(t, svc, "key-1")
+	importTestKey(t, svc, "key-2")
+
+	out, err := svc.DescribeKeyPairs(&ec2.DescribeKeyPairsInput{}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.KeyPairs, 2)
+}

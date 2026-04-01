@@ -677,3 +677,190 @@ func TestUnimplementedMethods(t *testing.T) {
 	_, err = svc.ResetImageAttribute(nil, "")
 	assert.Error(t, err)
 }
+
+// --- DescribeImages filter tests ---
+
+// createTestAMIConfigFull creates an AMI with all metadata fields for filter testing.
+func createTestAMIConfigFull(t *testing.T, store *objectstore.MemoryObjectStore, meta viperblock.AMIMetadata) {
+	t.Helper()
+	amiState := viperblock.VBState{
+		VolumeConfig: viperblock.VolumeConfig{
+			AMIMetadata: meta,
+		},
+	}
+	data, err := json.Marshal(amiState)
+	require.NoError(t, err)
+	_, err = store.PutObject(&awss3.PutObjectInput{
+		Bucket:      aws.String(testBucket),
+		Key:         aws.String(meta.ImageID + "/config.json"),
+		Body:        strings.NewReader(string(data)),
+		ContentType: aws.String("application/json"),
+	})
+	require.NoError(t, err)
+}
+
+func TestDescribeImages_FilterByName(t *testing.T) {
+	svc, store := setupTestImageService(t)
+	createTestAMIConfigWithName(t, store, "ami-aaa", "debian-12")
+	createTestAMIConfigWithName(t, store, "ami-bbb", "ubuntu-22")
+
+	out, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("name"), Values: []*string{aws.String("debian-12")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Images, 1)
+	assert.Equal(t, "ami-aaa", *out.Images[0].ImageId)
+}
+
+func TestDescribeImages_FilterByArchitecture(t *testing.T) {
+	svc, store := setupTestImageService(t)
+	createTestAMIConfigFull(t, store, viperblock.AMIMetadata{
+		ImageID: "ami-x86", Name: "x86-img", Architecture: "x86_64",
+		RootDeviceType: "ebs", VolumeSizeGiB: 8,
+	})
+	createTestAMIConfigFull(t, store, viperblock.AMIMetadata{
+		ImageID: "ami-arm", Name: "arm-img", Architecture: "arm64",
+		RootDeviceType: "ebs", VolumeSizeGiB: 8,
+	})
+
+	out, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("architecture"), Values: []*string{aws.String("arm64")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Images, 1)
+	assert.Equal(t, "ami-arm", *out.Images[0].ImageId)
+}
+
+func TestDescribeImages_FilterMultipleValues_OR(t *testing.T) {
+	svc, store := setupTestImageService(t)
+	createTestAMIConfigWithName(t, store, "ami-aaa", "debian-12")
+	createTestAMIConfigWithName(t, store, "ami-bbb", "ubuntu-22")
+	createTestAMIConfigWithName(t, store, "ami-ccc", "centos-9")
+
+	out, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("name"), Values: []*string{aws.String("debian-12"), aws.String("centos-9")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Images, 2)
+}
+
+func TestDescribeImages_FilterMultipleNames_AND(t *testing.T) {
+	svc, store := setupTestImageService(t)
+	createTestAMIConfigFull(t, store, viperblock.AMIMetadata{
+		ImageID: "ami-match", Name: "debian-12", Architecture: "x86_64",
+		RootDeviceType: "ebs", VolumeSizeGiB: 8,
+	})
+	createTestAMIConfigFull(t, store, viperblock.AMIMetadata{
+		ImageID: "ami-nomatch", Name: "debian-12", Architecture: "arm64",
+		RootDeviceType: "ebs", VolumeSizeGiB: 8,
+	})
+
+	out, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("name"), Values: []*string{aws.String("debian-12")}},
+			{Name: aws.String("architecture"), Values: []*string{aws.String("x86_64")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Images, 1)
+	assert.Equal(t, "ami-match", *out.Images[0].ImageId)
+}
+
+func TestDescribeImages_FilterUnknownName_Error(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+	_, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("bogus-filter"), Values: []*string{aws.String("val")}},
+		},
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidParameterValue, err.Error())
+}
+
+func TestDescribeImages_FilterWildcard(t *testing.T) {
+	svc, store := setupTestImageService(t)
+	createTestAMIConfigWithName(t, store, "ami-aaa", "prod-web-server")
+	createTestAMIConfigWithName(t, store, "ami-bbb", "prod-api-server")
+	createTestAMIConfigWithName(t, store, "ami-ccc", "dev-web-server")
+
+	out, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("name"), Values: []*string{aws.String("prod-*")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Images, 2)
+}
+
+func TestDescribeImages_FilterNoResults(t *testing.T) {
+	svc, store := setupTestImageService(t)
+	createTestAMIConfigWithName(t, store, "ami-aaa", "debian-12")
+
+	out, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("name"), Values: []*string{aws.String("nonexistent")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.Images)
+}
+
+func TestDescribeImages_FilterNoFilters(t *testing.T) {
+	svc, store := setupTestImageService(t)
+	createTestAMIConfigWithName(t, store, "ami-aaa", "debian-12")
+	createTestAMIConfigWithName(t, store, "ami-bbb", "ubuntu-22")
+
+	out, err := svc.DescribeImages(&ec2.DescribeImagesInput{}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Images, 2)
+}
+
+func TestDescribeImages_FilterByTag(t *testing.T) {
+	svc, store := setupTestImageService(t)
+	createTestAMIConfigFull(t, store, viperblock.AMIMetadata{
+		ImageID: "ami-tagged", Name: "tagged-img", Architecture: "x86_64",
+		RootDeviceType: "ebs", VolumeSizeGiB: 8,
+		Tags: map[string]string{"Environment": "prod"},
+	})
+	createTestAMIConfigFull(t, store, viperblock.AMIMetadata{
+		ImageID: "ami-untagged", Name: "untagged-img", Architecture: "x86_64",
+		RootDeviceType: "ebs", VolumeSizeGiB: 8,
+	})
+
+	out, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("tag:Environment"), Values: []*string{aws.String("prod")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Images, 1)
+	assert.Equal(t, "ami-tagged", *out.Images[0].ImageId)
+}
+
+func TestDescribeImages_FilterByState(t *testing.T) {
+	svc, store := setupTestImageService(t)
+	createTestAMIConfigWithName(t, store, "ami-aaa", "test")
+
+	// All images have state "available"
+	out, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("state"), Values: []*string{aws.String("available")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, out.Images, 1)
+
+	out, err = svc.DescribeImages(&ec2.DescribeImagesInput{
+		Filters: []*ec2.Filter{
+			{Name: aws.String("state"), Values: []*string{aws.String("deregistered")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Empty(t, out.Images)
+}

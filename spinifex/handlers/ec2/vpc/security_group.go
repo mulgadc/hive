@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
+	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -182,6 +183,15 @@ func (s *VPCServiceImpl) DeleteSecurityGroup(input *ec2.DeleteSecurityGroupInput
 	return &ec2.DeleteSecurityGroupOutput{}, nil
 }
 
+// describeSecurityGroupsValidFilters defines the set of filter names accepted by DescribeSecurityGroups.
+var describeSecurityGroupsValidFilters = map[string]bool{
+	"group-id":           true,
+	"group-name":         true,
+	"vpc-id":             true,
+	"description":        true,
+	"ip-permission.cidr": true,
+}
+
 // DescribeSecurityGroups lists security groups with optional filters.
 func (s *VPCServiceImpl) DescribeSecurityGroups(input *ec2.DescribeSecurityGroupsInput, accountID string) (*ec2.DescribeSecurityGroupsOutput, error) {
 	var groups []*ec2.SecurityGroup
@@ -193,19 +203,10 @@ func (s *VPCServiceImpl) DescribeSecurityGroups(input *ec2.DescribeSecurityGroup
 		}
 	}
 
-	// Extract VPC ID filter
-	vpcIDFilter := ""
-	groupNameFilter := ""
-	for _, f := range input.Filters {
-		if f.Name == nil || len(f.Values) == 0 || f.Values[0] == nil {
-			continue
-		}
-		switch *f.Name {
-		case "vpc-id":
-			vpcIDFilter = *f.Values[0]
-		case "group-name":
-			groupNameFilter = *f.Values[0]
-		}
+	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeSecurityGroupsValidFilters)
+	if err != nil {
+		slog.Warn("DescribeSecurityGroups: invalid filter", "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
 	prefix := accountID + "."
@@ -237,10 +238,8 @@ func (s *VPCServiceImpl) DescribeSecurityGroups(input *ec2.DescribeSecurityGroup
 		if len(groupIDs) > 0 && !groupIDs[record.GroupId] {
 			continue
 		}
-		if vpcIDFilter != "" && record.VpcId != vpcIDFilter {
-			continue
-		}
-		if groupNameFilter != "" && record.GroupName != groupNameFilter {
+
+		if len(parsedFilters) > 0 && !sgMatchesFilters(&record, parsedFilters) {
 			continue
 		}
 
@@ -267,6 +266,52 @@ func (s *VPCServiceImpl) DescribeSecurityGroups(input *ec2.DescribeSecurityGroup
 	return &ec2.DescribeSecurityGroupsOutput{
 		SecurityGroups: groups,
 	}, nil
+}
+
+// sgMatchesFilters checks whether a SecurityGroupRecord satisfies all parsed filters.
+func sgMatchesFilters(record *SecurityGroupRecord, filters map[string][]string) bool {
+	for name, values := range filters {
+		if strings.HasPrefix(name, "tag:") {
+			continue
+		}
+
+		switch name {
+		case "group-id":
+			if !filterutil.MatchesAny(values, record.GroupId) {
+				return false
+			}
+		case "group-name":
+			if !filterutil.MatchesAny(values, record.GroupName) {
+				return false
+			}
+		case "vpc-id":
+			if !filterutil.MatchesAny(values, record.VpcId) {
+				return false
+			}
+		case "description":
+			if !filterutil.MatchesAny(values, record.Description) {
+				return false
+			}
+		case "ip-permission.cidr":
+			if !sgIngressCIDRMatchesAny(record.IngressRules, values) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+
+	return filterutil.MatchesTags(filters, record.Tags)
+}
+
+// sgIngressCIDRMatchesAny checks if any ingress rule's CIDR matches any of the filter values.
+func sgIngressCIDRMatchesAny(rules []SGRule, values []string) bool {
+	for _, rule := range rules {
+		if rule.CidrIp != "" && filterutil.MatchesAny(values, rule.CidrIp) {
+			return true
+		}
+	}
+	return false
 }
 
 // AuthorizeSecurityGroupIngress adds ingress rules to a security group.

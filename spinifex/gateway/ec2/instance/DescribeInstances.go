@@ -2,12 +2,14 @@ package gateway_ec2_instance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -48,6 +50,7 @@ func DescribeInstances(input *ec2.DescribeInstancesInput, natsConn *nats.Conn, e
 	deadline := time.Now().Add(timeout)
 
 	var allReservations []*ec2.Reservation
+	var clientError string // first client error code from any node (e.g. InvalidParameterValue)
 	responsesReceived := 0
 
 	// If expectedNodes is not configured (0), fall back to timeout-based collection
@@ -86,8 +89,19 @@ func DescribeInstances(input *ec2.DescribeInstancesInput, natsConn *nats.Conn, e
 		// Check if response is an error
 		responseError, err := utils.ValidateErrorPayload(msg.Data)
 		if err != nil {
-			// Response is an error payload - log but continue collecting from other nodes
-			slog.Warn("DescribeInstances: Received error from node", "code", responseError.Code, "responses_received", responsesReceived)
+			code := ""
+			if responseError.Code != nil {
+				code = *responseError.Code
+			}
+			// Capture the first client error (e.g. InvalidParameterValue). Client errors
+			// are deterministic — all nodes return the same error for the same invalid
+			// request — so we propagate them to the caller after collection completes.
+			if clientError == "" && code != "" {
+				if info, known := awserrors.ErrorLookup[code]; known && info.HTTPCode >= 400 && info.HTTPCode < 500 {
+					clientError = code
+				}
+			}
+			slog.Warn("DescribeInstances: Received error from node", "code", code, "responses_received", responsesReceived)
 			continue
 		}
 
@@ -122,6 +136,12 @@ func DescribeInstances(input *ec2.DescribeInstancesInput, natsConn *nats.Conn, e
 		}(topic)
 	}
 	kvWg.Wait()
+
+	// If every node returned a client error and we collected no data, propagate
+	// the error to the caller so the HTTP response carries the correct status.
+	if clientError != "" && len(allReservations) == 0 {
+		return nil, errors.New(clientError)
+	}
 
 	// Build final aggregated response
 	output := &ec2.DescribeInstancesOutput{
