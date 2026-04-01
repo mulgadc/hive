@@ -8,120 +8,102 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- containsString ---
+// --- rtbMatchesFilters ---
 
-func TestContainsString_Found(t *testing.T) {
-	assert.True(t, containsString([]string{"a", "b", "c"}, "b"))
-}
-
-func TestContainsString_NotFound(t *testing.T) {
-	assert.False(t, containsString([]string{"a", "b", "c"}, "d"))
-}
-
-func TestContainsString_EmptySlice(t *testing.T) {
-	assert.False(t, containsString([]string{}, "a"))
-}
-
-func TestContainsString_NilSlice(t *testing.T) {
-	assert.False(t, containsString(nil, "a"))
-}
-
-// --- matchesFilters ---
-
-func TestMatchesFilters_EmptyFilters(t *testing.T) {
+func TestRtbMatchesFilters_EmptyFilters(t *testing.T) {
 	record := &RouteTableRecord{RouteTableId: "rtb-1", VpcId: "vpc-1"}
-	assert.True(t, matchesFilters(record, map[string][]string{}))
+	assert.True(t, rtbMatchesFilters(record, map[string][]string{}))
 }
 
-func TestMatchesFilters_VpcId(t *testing.T) {
+func TestRtbMatchesFilters_VpcId(t *testing.T) {
 	record := &RouteTableRecord{RouteTableId: "rtb-1", VpcId: "vpc-aaa"}
-	assert.True(t, matchesFilters(record, map[string][]string{"vpc-id": {"vpc-aaa"}}))
-	assert.False(t, matchesFilters(record, map[string][]string{"vpc-id": {"vpc-bbb"}}))
+	assert.True(t, rtbMatchesFilters(record, map[string][]string{"vpc-id": {"vpc-aaa"}}))
+	assert.False(t, rtbMatchesFilters(record, map[string][]string{"vpc-id": {"vpc-bbb"}}))
 }
 
-func TestMatchesFilters_RouteTableId(t *testing.T) {
+func TestRtbMatchesFilters_RouteTableId(t *testing.T) {
 	record := &RouteTableRecord{RouteTableId: "rtb-xyz", VpcId: "vpc-1"}
-	assert.True(t, matchesFilters(record, map[string][]string{"route-table-id": {"rtb-xyz"}}))
-	assert.False(t, matchesFilters(record, map[string][]string{"route-table-id": {"rtb-other"}}))
+	assert.True(t, rtbMatchesFilters(record, map[string][]string{"route-table-id": {"rtb-xyz"}}))
+	assert.False(t, rtbMatchesFilters(record, map[string][]string{"route-table-id": {"rtb-other"}}))
 }
 
-func TestMatchesFilters_AssociationMain_True(t *testing.T) {
+func TestRtbMatchesFilters_AssociationMain_True(t *testing.T) {
 	record := &RouteTableRecord{
 		Associations: []AssociationRecord{
 			{AssociationId: "rtbassoc-1", Main: true},
 		},
 	}
-	assert.True(t, matchesFilters(record, map[string][]string{"association.main": {"true"}}))
-	assert.False(t, matchesFilters(record, map[string][]string{"association.main": {"false"}}))
+	assert.True(t, rtbMatchesFilters(record, map[string][]string{"association.main": {"true"}}))
+	assert.False(t, rtbMatchesFilters(record, map[string][]string{"association.main": {"false"}}))
 }
 
-func TestMatchesFilters_AssociationMain_False(t *testing.T) {
+func TestRtbMatchesFilters_AssociationMain_False(t *testing.T) {
 	record := &RouteTableRecord{
 		Associations: []AssociationRecord{
 			{AssociationId: "rtbassoc-1", Main: false},
 		},
 	}
-	assert.False(t, matchesFilters(record, map[string][]string{"association.main": {"true"}}))
+	assert.False(t, rtbMatchesFilters(record, map[string][]string{"association.main": {"true"}}))
 }
 
-func TestMatchesFilters_AssociationId(t *testing.T) {
+func TestRtbMatchesFilters_AssociationId(t *testing.T) {
 	record := &RouteTableRecord{
 		Associations: []AssociationRecord{
 			{AssociationId: "rtbassoc-abc"},
 		},
 	}
-	assert.True(t, matchesFilters(record, map[string][]string{
+	assert.True(t, rtbMatchesFilters(record, map[string][]string{
 		"association.route-table-association-id": {"rtbassoc-abc"},
 	}))
-	assert.False(t, matchesFilters(record, map[string][]string{
+	assert.False(t, rtbMatchesFilters(record, map[string][]string{
 		"association.route-table-association-id": {"rtbassoc-other"},
 	}))
 }
 
-func TestMatchesFilters_AssociationSubnetId(t *testing.T) {
+func TestRtbMatchesFilters_AssociationSubnetId(t *testing.T) {
 	record := &RouteTableRecord{
 		Associations: []AssociationRecord{
 			{AssociationId: "rtbassoc-1", SubnetId: "subnet-aaa"},
 		},
 	}
-	assert.True(t, matchesFilters(record, map[string][]string{
+	assert.True(t, rtbMatchesFilters(record, map[string][]string{
 		"association.subnet-id": {"subnet-aaa"},
 	}))
-	assert.False(t, matchesFilters(record, map[string][]string{
+	assert.False(t, rtbMatchesFilters(record, map[string][]string{
 		"association.subnet-id": {"subnet-bbb"},
 	}))
 }
 
-func TestMatchesFilters_RouteDestinationCidr(t *testing.T) {
+func TestRtbMatchesFilters_RouteDestinationCidr(t *testing.T) {
 	record := &RouteTableRecord{
 		Routes: []RouteRecord{
 			{DestinationCidrBlock: "10.0.0.0/16", GatewayId: "local", State: "active"},
 			{DestinationCidrBlock: "0.0.0.0/0", GatewayId: "igw-123", State: "active"},
 		},
 	}
-	assert.True(t, matchesFilters(record, map[string][]string{
+	assert.True(t, rtbMatchesFilters(record, map[string][]string{
 		"route.destination-cidr-block": {"0.0.0.0/0"},
 	}))
-	assert.False(t, matchesFilters(record, map[string][]string{
+	assert.False(t, rtbMatchesFilters(record, map[string][]string{
 		"route.destination-cidr-block": {"192.168.0.0/16"},
 	}))
 }
 
-func TestMatchesFilters_RouteGatewayId(t *testing.T) {
+func TestRtbMatchesFilters_RouteGatewayId(t *testing.T) {
 	record := &RouteTableRecord{
 		Routes: []RouteRecord{
 			{DestinationCidrBlock: "0.0.0.0/0", GatewayId: "igw-abc", State: "active"},
 		},
 	}
-	assert.True(t, matchesFilters(record, map[string][]string{
+	assert.True(t, rtbMatchesFilters(record, map[string][]string{
 		"route.gateway-id": {"igw-abc"},
 	}))
-	assert.False(t, matchesFilters(record, map[string][]string{
+	assert.False(t, rtbMatchesFilters(record, map[string][]string{
 		"route.gateway-id": {"igw-other"},
 	}))
 }
 
-func TestMatchesFilters_MultipleFilters(t *testing.T) {
+func TestRtbMatchesFilters_MultipleFilters(t *testing.T) {
 	record := &RouteTableRecord{
 		RouteTableId: "rtb-1",
 		VpcId:        "vpc-aaa",
@@ -130,35 +112,66 @@ func TestMatchesFilters_MultipleFilters(t *testing.T) {
 		},
 	}
 	// Both match -> true
-	assert.True(t, matchesFilters(record, map[string][]string{
+	assert.True(t, rtbMatchesFilters(record, map[string][]string{
 		"vpc-id":           {"vpc-aaa"},
 		"route.gateway-id": {"igw-123"},
 	}))
 	// One mismatches -> false
-	assert.False(t, matchesFilters(record, map[string][]string{
+	assert.False(t, rtbMatchesFilters(record, map[string][]string{
 		"vpc-id":           {"vpc-aaa"},
 		"route.gateway-id": {"igw-other"},
 	}))
 }
 
-func TestMatchesFilters_MultipleValues(t *testing.T) {
+func TestRtbMatchesFilters_MultipleValues(t *testing.T) {
 	record := &RouteTableRecord{VpcId: "vpc-bbb"}
-	assert.True(t, matchesFilters(record, map[string][]string{
+	assert.True(t, rtbMatchesFilters(record, map[string][]string{
 		"vpc-id": {"vpc-aaa", "vpc-bbb", "vpc-ccc"},
 	}))
 }
 
-func TestMatchesFilters_NoAssociations(t *testing.T) {
+func TestRtbMatchesFilters_NoAssociations(t *testing.T) {
 	record := &RouteTableRecord{RouteTableId: "rtb-1"}
-	assert.False(t, matchesFilters(record, map[string][]string{
+	assert.False(t, rtbMatchesFilters(record, map[string][]string{
 		"association.subnet-id": {"subnet-1"},
 	}))
 }
 
-func TestMatchesFilters_NoRoutes(t *testing.T) {
+func TestRtbMatchesFilters_NoRoutes(t *testing.T) {
 	record := &RouteTableRecord{RouteTableId: "rtb-1"}
-	assert.False(t, matchesFilters(record, map[string][]string{
+	assert.False(t, rtbMatchesFilters(record, map[string][]string{
 		"route.destination-cidr-block": {"0.0.0.0/0"},
+	}))
+}
+
+func TestRtbMatchesFilters_UnknownFilter(t *testing.T) {
+	record := &RouteTableRecord{RouteTableId: "rtb-1", VpcId: "vpc-1"}
+	assert.False(t, rtbMatchesFilters(record, map[string][]string{
+		"bogus-filter": {"value"},
+	}))
+}
+
+func TestRtbMatchesFilters_Wildcard(t *testing.T) {
+	record := &RouteTableRecord{RouteTableId: "rtb-1", VpcId: "vpc-aaa"}
+	assert.True(t, rtbMatchesFilters(record, map[string][]string{
+		"vpc-id": {"vpc-*"},
+	}))
+}
+
+func TestRtbMatchesFilters_TagFilter(t *testing.T) {
+	record := &RouteTableRecord{
+		RouteTableId: "rtb-1",
+		VpcId:        "vpc-1",
+		Tags:         map[string]string{"Name": "my-rt", "env": "prod"},
+	}
+	assert.True(t, rtbMatchesFilters(record, map[string][]string{
+		"tag:Name": {"my-rt"},
+	}))
+	assert.False(t, rtbMatchesFilters(record, map[string][]string{
+		"tag:Name": {"other"},
+	}))
+	assert.False(t, rtbMatchesFilters(record, map[string][]string{
+		"tag:missing": {"value"},
 	}))
 }
 
