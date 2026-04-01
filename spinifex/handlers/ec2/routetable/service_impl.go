@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
+	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	handlers_ec2_igw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/igw"
 	handlers_ec2_natgw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/natgw"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
@@ -257,6 +257,16 @@ func (s *RouteTableServiceImpl) DeleteRouteTable(input *ec2.DeleteRouteTableInpu
 	return &ec2.DeleteRouteTableOutput{}, nil
 }
 
+var describeRouteTablesValidFilters = map[string]bool{
+	"vpc-id":                                 true,
+	"route-table-id":                         true,
+	"association.main":                       true,
+	"association.route-table-association-id": true,
+	"association.subnet-id":                  true,
+	"route.destination-cidr-block":           true,
+	"route.gateway-id":                       true,
+}
+
 // DescribeRouteTables lists route tables, optionally filtered
 func (s *RouteTableServiceImpl) DescribeRouteTables(input *ec2.DescribeRouteTablesInput, accountID string) (*ec2.DescribeRouteTablesOutput, error) {
 	rtbIDs := make(map[string]bool)
@@ -266,16 +276,10 @@ func (s *RouteTableServiceImpl) DescribeRouteTables(input *ec2.DescribeRouteTabl
 		}
 	}
 
-	// Build filter map
-	filters := make(map[string][]string)
-	for _, f := range input.Filters {
-		if f.Name != nil {
-			for _, v := range f.Values {
-				if v != nil {
-					filters[*f.Name] = append(filters[*f.Name], *v)
-				}
-			}
-		}
+	parsedFilters, err := filterutil.ParseFilters(input.Filters, describeRouteTablesValidFilters)
+	if err != nil {
+		slog.Warn("DescribeRouteTables: invalid filter", "err", err)
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
 	prefix := accountID + "."
@@ -311,7 +315,7 @@ func (s *RouteTableServiceImpl) DescribeRouteTables(input *ec2.DescribeRouteTabl
 			continue
 		}
 
-		if !matchesFilters(&record, filters) {
+		if !rtbMatchesFilters(&record, parsedFilters) {
 			continue
 		}
 
@@ -756,20 +760,22 @@ func (s *RouteTableServiceImpl) ReplaceRouteTableAssociation(input *ec2.ReplaceR
 	return nil, errors.New(awserrors.ErrorInvalidAssociationIDNotFound)
 }
 
-// matchesFilters checks if a route table record matches the given DescribeRouteTables filters
-func matchesFilters(record *RouteTableRecord, filters map[string][]string) bool {
+// rtbMatchesFilters checks if a route table record matches all parsed filters.
+func rtbMatchesFilters(record *RouteTableRecord, filters map[string][]string) bool {
 	for name, values := range filters {
+		if strings.HasPrefix(name, "tag:") {
+			continue
+		}
 		switch name {
 		case "vpc-id":
-			if !containsString(values, record.VpcId) {
+			if !filterutil.MatchesAny(values, record.VpcId) {
 				return false
 			}
 		case "route-table-id":
-			if !containsString(values, record.RouteTableId) {
+			if !filterutil.MatchesAny(values, record.RouteTableId) {
 				return false
 			}
 		case "association.main":
-			wantMain := containsString(values, "true")
 			hasMain := false
 			for _, a := range record.Associations {
 				if a.Main {
@@ -777,13 +783,14 @@ func matchesFilters(record *RouteTableRecord, filters map[string][]string) bool 
 					break
 				}
 			}
+			wantMain := filterutil.MatchesAny(values, "true")
 			if wantMain != hasMain {
 				return false
 			}
 		case "association.route-table-association-id":
 			found := false
 			for _, a := range record.Associations {
-				if containsString(values, a.AssociationId) {
+				if filterutil.MatchesAny(values, a.AssociationId) {
 					found = true
 					break
 				}
@@ -794,7 +801,7 @@ func matchesFilters(record *RouteTableRecord, filters map[string][]string) bool 
 		case "association.subnet-id":
 			found := false
 			for _, a := range record.Associations {
-				if containsString(values, a.SubnetId) {
+				if filterutil.MatchesAny(values, a.SubnetId) {
 					found = true
 					break
 				}
@@ -805,7 +812,7 @@ func matchesFilters(record *RouteTableRecord, filters map[string][]string) bool 
 		case "route.destination-cidr-block":
 			found := false
 			for _, r := range record.Routes {
-				if containsString(values, r.DestinationCidrBlock) {
+				if filterutil.MatchesAny(values, r.DestinationCidrBlock) {
 					found = true
 					break
 				}
@@ -816,7 +823,7 @@ func matchesFilters(record *RouteTableRecord, filters map[string][]string) bool 
 		case "route.gateway-id":
 			found := false
 			for _, r := range record.Routes {
-				if containsString(values, r.GatewayId) {
+				if filterutil.MatchesAny(values, r.GatewayId) {
 					found = true
 					break
 				}
@@ -824,13 +831,11 @@ func matchesFilters(record *RouteTableRecord, filters map[string][]string) bool 
 			if !found {
 				return false
 			}
+		default:
+			return false
 		}
 	}
-	return true
-}
-
-func containsString(slice []string, s string) bool {
-	return slices.Contains(slice, s)
+	return filterutil.MatchesTags(filters, record.Tags)
 }
 
 // publishNatGatewayEvents publishes vpc.add-nat-gateway events for each subnet
