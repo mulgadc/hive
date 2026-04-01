@@ -8,7 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/config"
-	"github.com/nats-io/nats-server/v2/server"
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,23 +18,7 @@ const testAccountID = "123456789012"
 
 func setupTestVPCServiceWithNC(t *testing.T) (*VPCServiceImpl, *nats.Conn) {
 	t.Helper()
-	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		JetStream: true,
-		StoreDir:  t.TempDir(),
-		NoLog:     true,
-		NoSigs:    true,
-	}
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err)
-	go ns.Start()
-	require.True(t, ns.ReadyForConnections(5*time.Second))
-	t.Cleanup(func() { ns.Shutdown() })
-
-	nc, err := nats.Connect(ns.ClientURL())
-	require.NoError(t, err)
-	t.Cleanup(func() { nc.Close() })
+	_, nc, _ := testutil.StartTestJetStream(t)
 
 	svc, err := NewVPCServiceImplWithNATS(nil, nc)
 	require.NoError(t, err)
@@ -795,23 +779,7 @@ func TestDeleteSubnet_PublishesEvent(t *testing.T) {
 
 func TestEnsureDefaultVPC_WithConfigAZ(t *testing.T) {
 	// Create a service with custom config that has AZ set
-	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		JetStream: true,
-		StoreDir:  t.TempDir(),
-		NoLog:     true,
-		NoSigs:    true,
-	}
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err)
-	go ns.Start()
-	require.True(t, ns.ReadyForConnections(5*time.Second))
-	t.Cleanup(func() { ns.Shutdown() })
-
-	nc, err := nats.Connect(ns.ClientURL())
-	require.NoError(t, err)
-	t.Cleanup(func() { nc.Close() })
+	_, nc, _ := testutil.StartTestJetStream(t)
 
 	cfg := &config.Config{AZ: "us-west-2b"}
 	svc, err := NewVPCServiceImplWithNATS(cfg, nc)

@@ -391,13 +391,7 @@ func (s *IGWServiceImpl) recordToEC2(record *IGWRecord) *ec2.InternetGateway {
 		}
 	}
 
-	if len(record.Tags) > 0 {
-		tags := make([]*ec2.Tag, 0, len(record.Tags))
-		for k, v := range record.Tags {
-			tags = append(tags, &ec2.Tag{Key: aws.String(k), Value: aws.String(v)})
-		}
-		igw.Tags = tags
-	}
+	igw.Tags = utils.MapToEC2Tags(record.Tags)
 
 	return igw
 }

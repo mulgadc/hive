@@ -52,14 +52,7 @@ func (svc *Service) Stop() (err error) {
 }
 
 func (svc *Service) Status() (string, error) {
-	pid, err := utils.ReadPidFileFrom(svc.Config.DataDir, serviceName)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "stopped", nil
-		}
-		return "", fmt.Errorf("read pid file: %w", err)
-	}
-	return fmt.Sprintf("running (pid: %d)", pid), nil
+	return utils.ServiceStatus(svc.Config.DataDir, serviceName)
 }
 
 func (svc *Service) Shutdown() (err error) {

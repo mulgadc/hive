@@ -3,9 +3,8 @@ package handlers_ec2_vpc
 import (
 	"fmt"
 	"testing"
-	"time"
 
-	"github.com/nats-io/nats-server/v2/server"
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,26 +12,7 @@ import (
 
 func setupTestIPAM(t *testing.T) *IPAM {
 	t.Helper()
-	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		JetStream: true,
-		StoreDir:  t.TempDir(),
-		NoLog:     true,
-		NoSigs:    true,
-	}
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err)
-	go ns.Start()
-	require.True(t, ns.ReadyForConnections(5*time.Second))
-	t.Cleanup(func() { ns.Shutdown() })
-
-	nc, err := nats.Connect(ns.ClientURL())
-	require.NoError(t, err)
-	t.Cleanup(func() { nc.Close() })
-
-	js, err := nc.JetStream()
-	require.NoError(t, err)
+	_, _, js := testutil.StartTestJetStream(t)
 
 	ipam, err := NewIPAM(js)
 	require.NoError(t, err)
@@ -186,26 +166,7 @@ func TestIPAM_LargerSubnet(t *testing.T) {
 }
 
 func TestIPAM_NewIPAMWithKV(t *testing.T) {
-	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		JetStream: true,
-		StoreDir:  t.TempDir(),
-		NoLog:     true,
-		NoSigs:    true,
-	}
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err)
-	go ns.Start()
-	require.True(t, ns.ReadyForConnections(5*time.Second))
-	t.Cleanup(func() { ns.Shutdown() })
-
-	nc, err := nats.Connect(ns.ClientURL())
-	require.NoError(t, err)
-	t.Cleanup(func() { nc.Close() })
-
-	js, err := nc.JetStream()
-	require.NoError(t, err)
+	_, _, js := testutil.StartTestJetStream(t)
 
 	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{
 		Bucket: "test-ipam-kv",

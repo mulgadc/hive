@@ -2,16 +2,14 @@ package handlers_ec2_routetable
 
 import (
 	"testing"
-	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	handlers_ec2_igw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/igw"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/mulgadc/spinifex/spinifex/utils"
-	"github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,44 +18,22 @@ const testAccountID = "123456789012"
 
 func setupTestService(t *testing.T) *RouteTableServiceImpl {
 	t.Helper()
-	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		JetStream: true,
-		StoreDir:  t.TempDir(),
-		NoLog:     true,
-		NoSigs:    true,
-	}
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err)
-	go ns.Start()
-	require.True(t, ns.ReadyForConnections(5*time.Second))
-	t.Cleanup(func() { ns.Shutdown() })
-
-	nc, err := nats.Connect(ns.ClientURL())
-	require.NoError(t, err)
-	t.Cleanup(func() { nc.Close() })
-
-	js, err := nc.JetStream()
-	require.NoError(t, err)
+	_, nc, js := testutil.StartTestJetStream(t)
 
 	// Seed VPC KV
-	vpcKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketVPCs, History: 1})
-	require.NoError(t, err)
-	_, err = vpcKV.Put(utils.AccountKey(testAccountID, "vpc-test1"), []byte(`{"vpc_id":"vpc-test1","cidr_block":"10.0.0.0/16","state":"available"}`))
-	require.NoError(t, err)
+	testutil.SeedKV(t, js, handlers_ec2_vpc.KVBucketVPCs, map[string][]byte{
+		utils.AccountKey(testAccountID, "vpc-test1"): []byte(`{"vpc_id":"vpc-test1","cidr_block":"10.0.0.0/16","state":"available"}`),
+	})
 
 	// Seed IGW KV (attached to vpc-test1)
-	igwKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_igw.KVBucketIGW, History: 1})
-	require.NoError(t, err)
-	_, err = igwKV.Put(utils.AccountKey(testAccountID, "igw-test1"), []byte(`{"internet_gateway_id":"igw-test1","vpc_id":"vpc-test1","state":"attached"}`))
-	require.NoError(t, err)
+	testutil.SeedKV(t, js, handlers_ec2_igw.KVBucketIGW, map[string][]byte{
+		utils.AccountKey(testAccountID, "igw-test1"): []byte(`{"internet_gateway_id":"igw-test1","vpc_id":"vpc-test1","state":"attached"}`),
+	})
 
 	// Seed subnet KV
-	subnetKV, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: handlers_ec2_vpc.KVBucketSubnets, History: 1})
-	require.NoError(t, err)
-	_, err = subnetKV.Put(utils.AccountKey(testAccountID, "subnet-test1"), []byte(`{"subnet_id":"subnet-test1","vpc_id":"vpc-test1","cidr_block":"10.0.1.0/24","state":"available"}`))
-	require.NoError(t, err)
+	testutil.SeedKV(t, js, handlers_ec2_vpc.KVBucketSubnets, map[string][]byte{
+		utils.AccountKey(testAccountID, "subnet-test1"): []byte(`{"subnet_id":"subnet-test1","vpc_id":"vpc-test1","cidr_block":"10.0.1.0/24","state":"available"}`),
+	})
 
 	svc, err := NewRouteTableServiceImplWithNATS(nil, nc)
 	require.NoError(t, err)

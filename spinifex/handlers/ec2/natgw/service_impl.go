@@ -287,20 +287,12 @@ func (s *NatGatewayServiceImpl) publishDeleteEventsForNatGateway(record *NatGate
 				continue
 			}
 
-			evt := natGatewayEvent{
+			utils.PublishEvent(s.natsConn, "vpc.delete-nat-gateway", natGatewayEvent{
 				VpcId:        record.VpcId,
 				NatGatewayId: record.NatGatewayId,
 				PublicIp:     record.PublicIp,
 				SubnetCidr:   subnet.CidrBlock,
-			}
-			eventData, err := json.Marshal(evt)
-			if err != nil {
-				slog.Warn("Failed to marshal NAT GW delete event", "err", err)
-				continue
-			}
-			if err := s.natsConn.Publish("vpc.delete-nat-gateway", eventData); err != nil {
-				slog.Warn("Failed to publish NAT GW delete event", "subnet", subnet.CidrBlock, "err", err)
-			}
+			})
 		}
 	}
 }
@@ -430,44 +422,22 @@ func natgwMatchesFilters(record *NatGatewayRecord, filters map[string][]string) 
 // PublishAddEvent publishes a vpc.add-nat-gateway event for vpcd to create the SNAT rule.
 // Called by the route table service when CreateRoute targets a NAT GW.
 func (s *NatGatewayServiceImpl) PublishAddEvent(vpcId, natGatewayId, publicIp, subnetCidr string) {
-	if s.natsConn == nil {
-		return
-	}
-	evt := natGatewayEvent{
+	utils.PublishEvent(s.natsConn, "vpc.add-nat-gateway", natGatewayEvent{
 		VpcId:        vpcId,
 		NatGatewayId: natGatewayId,
 		PublicIp:     publicIp,
 		SubnetCidr:   subnetCidr,
-	}
-	eventData, err := json.Marshal(evt)
-	if err != nil {
-		slog.Error("Failed to marshal NAT GW add event", "err", err)
-		return
-	}
-	if err := s.natsConn.Publish("vpc.add-nat-gateway", eventData); err != nil {
-		slog.Warn("Failed to publish NAT GW add event", "err", err)
-	}
+	})
 }
 
 // PublishDeleteEvent publishes a vpc.delete-nat-gateway event for vpcd to remove the SNAT rule.
 func (s *NatGatewayServiceImpl) PublishDeleteEvent(vpcId, natGatewayId, publicIp, subnetCidr string) {
-	if s.natsConn == nil {
-		return
-	}
-	evt := natGatewayEvent{
+	utils.PublishEvent(s.natsConn, "vpc.delete-nat-gateway", natGatewayEvent{
 		VpcId:        vpcId,
 		NatGatewayId: natGatewayId,
 		PublicIp:     publicIp,
 		SubnetCidr:   subnetCidr,
-	}
-	eventData, err := json.Marshal(evt)
-	if err != nil {
-		slog.Error("Failed to marshal NAT GW delete event", "err", err)
-		return
-	}
-	if err := s.natsConn.Publish("vpc.delete-nat-gateway", eventData); err != nil {
-		slog.Warn("Failed to publish NAT GW delete event", "err", err)
-	}
+	})
 }
 
 // GetNatGateway retrieves a NAT Gateway record by ID
@@ -505,13 +475,7 @@ func recordToEC2(record *NatGatewayRecord) *ec2.NatGateway {
 		}
 	}
 
-	if len(record.Tags) > 0 {
-		tags := make([]*ec2.Tag, 0, len(record.Tags))
-		for k, v := range record.Tags {
-			tags = append(tags, &ec2.Tag{Key: aws.String(k), Value: aws.String(v)})
-		}
-		ngw.Tags = tags
-	}
+	ngw.Tags = utils.MapToEC2Tags(record.Tags)
 
 	return ngw
 }

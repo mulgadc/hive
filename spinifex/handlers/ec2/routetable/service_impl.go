@@ -960,13 +960,7 @@ func recordToEC2(record *RouteTableRecord) *ec2.RouteTable {
 		rtb.Associations = append(rtb.Associations, assoc)
 	}
 
-	if len(record.Tags) > 0 {
-		tags := make([]*ec2.Tag, 0, len(record.Tags))
-		for k, v := range record.Tags {
-			tags = append(tags, &ec2.Tag{Key: aws.String(k), Value: aws.String(v)})
-		}
-		rtb.Tags = tags
-	}
+	rtb.Tags = utils.MapToEC2Tags(record.Tags)
 
 	return rtb
 }

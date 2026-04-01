@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -13,21 +14,7 @@ import (
 
 func startTestNATSServer(t *testing.T) *server.Server {
 	t.Helper()
-
-	opts := &server.Options{
-		Host:   "127.0.0.1",
-		Port:   -1,
-		NoLog:  true,
-		NoSigs: true,
-	}
-
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err)
-
-	go ns.Start()
-	require.True(t, ns.ReadyForConnections(5*time.Second), "NATS server failed to start")
-
-	t.Cleanup(func() { ns.Shutdown() })
+	ns, _ := testutil.StartTestNATS(t)
 	return ns
 }
 

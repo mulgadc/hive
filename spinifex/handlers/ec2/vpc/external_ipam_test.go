@@ -3,36 +3,15 @@ package handlers_ec2_vpc
 import (
 	"sync"
 	"testing"
-	"time"
 
-	"github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func setupTestExternalIPAM(t *testing.T, pools []ExternalPoolConfig) *ExternalIPAM {
 	t.Helper()
-	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		JetStream: true,
-		StoreDir:  t.TempDir(),
-		NoLog:     true,
-		NoSigs:    true,
-	}
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err)
-	go ns.Start()
-	require.True(t, ns.ReadyForConnections(5*time.Second))
-	t.Cleanup(func() { ns.Shutdown() })
-
-	nc, err := nats.Connect(ns.ClientURL())
-	require.NoError(t, err)
-	t.Cleanup(func() { nc.Close() })
-
-	js, err := nc.JetStream()
-	require.NoError(t, err)
+	_, _, js := testutil.StartTestJetStream(t)
 
 	ipam, err := NewExternalIPAM(js, pools)
 	require.NoError(t, err)
@@ -355,26 +334,7 @@ func TestExternalIPAM_RangeValidation(t *testing.T) {
 func TestExternalIPAM_InitFromConfig(t *testing.T) {
 	pool := testPool()
 	// Create IPAM twice — second init should be idempotent
-	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		JetStream: true,
-		StoreDir:  t.TempDir(),
-		NoLog:     true,
-		NoSigs:    true,
-	}
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err)
-	go ns.Start()
-	require.True(t, ns.ReadyForConnections(5*time.Second))
-	t.Cleanup(func() { ns.Shutdown() })
-
-	nc, err := nats.Connect(ns.ClientURL())
-	require.NoError(t, err)
-	t.Cleanup(func() { nc.Close() })
-
-	js, err := nc.JetStream()
-	require.NoError(t, err)
+	_, _, js := testutil.StartTestJetStream(t)
 
 	// First init
 	ipam1, err := NewExternalIPAM(js, []ExternalPoolConfig{pool})

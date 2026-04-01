@@ -240,13 +240,7 @@ func (s *EgressOnlyIGWServiceImpl) recordToEC2(record *EgressOnlyIGWRecord) *ec2
 		},
 	}
 
-	if len(record.Tags) > 0 {
-		tags := make([]*ec2.Tag, 0, len(record.Tags))
-		for k, v := range record.Tags {
-			tags = append(tags, &ec2.Tag{Key: aws.String(k), Value: aws.String(v)})
-		}
-		eigw.Tags = tags
-	}
+	eigw.Tags = utils.MapToEC2Tags(record.Tags)
 
 	return eigw
 }

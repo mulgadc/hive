@@ -722,16 +722,7 @@ func (s *VolumeServiceImpl) getVolumeByID(volumeID string) (*volumeResult, error
 		}
 	}
 
-	if len(volMeta.Tags) > 0 {
-		tags := make([]*ec2.Tag, 0, len(volMeta.Tags))
-		for key, value := range volMeta.Tags {
-			tags = append(tags, &ec2.Tag{
-				Key:   aws.String(key),
-				Value: aws.String(value),
-			})
-		}
-		volume.Tags = tags
-	}
+	volume.Tags = utils.MapToEC2Tags(volMeta.Tags)
 
 	return &volumeResult{volume: volume, tenantID: volMeta.TenantID}, nil
 }

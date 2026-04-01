@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	handlers_ec2_igw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/igw"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -20,34 +21,7 @@ const testIGWAccountID = "123456789012"
 // startTestJetStreamNATS starts an embedded NATS server with JetStream for integration tests.
 func startTestJetStreamNATS(t *testing.T) (*server.Server, *nats.Conn) {
 	t.Helper()
-	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		JetStream: true,
-		StoreDir:  t.TempDir(),
-		NoLog:     true,
-		NoSigs:    true,
-	}
-	ns, err := server.NewServer(opts)
-	if err != nil {
-		t.Fatalf("start NATS server: %v", err)
-	}
-	go ns.Start()
-	if !ns.ReadyForConnections(5_000_000_000) {
-		t.Fatal("NATS server not ready")
-	}
-
-	nc, err := nats.Connect(ns.ClientURL())
-	if err != nil {
-		ns.Shutdown()
-		t.Fatalf("connect to NATS: %v", err)
-	}
-
-	t.Cleanup(func() {
-		nc.Close()
-		ns.Shutdown()
-	})
-
+	ns, nc, _ := testutil.StartTestJetStream(t)
 	return ns, nc
 }
 
