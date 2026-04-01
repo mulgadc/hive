@@ -2215,74 +2215,18 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	consoleLogPath := filepath.Join(runtimeDir, fmt.Sprintf("console-%s.log", instance.ID))
 	serialSocket := filepath.Join(runtimeDir, fmt.Sprintf("serial-%s.sock", instance.ID))
 
-	instance.Config = vm.Config{
-		Name:           instance.ID,
-		PIDFile:        pidFile,
-		EnableKVM:      true, // If available, if kvm fails, will use cpu max
-		NoGraphic:      true,
-		MachineType:    "q35",
-		ConsoleLogPath: consoleLogPath,
-		SerialSocket:   serialSocket,
-		CPUType:        "host", // If available, if kvm fails, will use cpu max
-		Memory:         int(memoryMiB),
-		CPUCount:       vCPUs,
-		Architecture:   architecture,
-	}
+	instance.Config = buildBaseVMConfig(instance.ID, pidFile, consoleLogPath, serialSocket, architecture, vCPUs, int(memoryMiB))
 
-	// Add PCIe root ports for volume hotplug (Q35 requires explicit root ports).
-	// 11 ports for /dev/sd[f-p] hotplug slots, starting at chassis 1.
-	for i := 1; i <= 11; i++ {
-		instance.Config.Devices = append(instance.Config.Devices, vm.Device{
-			Value: fmt.Sprintf("pcie-root-port,id=hotplug%d,chassis=%d,slot=0", i, i),
-		})
-	}
-
-	// Loop through each volume in volumes
+	// Build QEMU drives from EBS volume requests.
 	instance.EBSRequests.Mu.Lock()
-
-	for _, v := range instance.EBSRequests.Requests {
-		drive := vm.Drive{}
-
-		// Use the NBDURI from mount response - contains socket path or TCP address
-		// NBDURI format: "nbd:unix:/path/to/socket.sock" or "nbd://host:port"
-		if v.NBDURI == "" {
-			slog.Error("NBDURI not set for volume", "volume", v.Name)
-			return fmt.Errorf("NBDURI not set for volume %s - was volume mounted?", v.Name)
-		}
-		drive.File = v.NBDURI
-		slog.Info("Using NBD URI for drive", "volume", v.Name, "uri", v.NBDURI)
-
-		if v.Boot {
-			drive.Format = "raw"
-			drive.If = "none"
-			drive.Media = "disk"
-			drive.ID = "os"
-			drive.Cache = "none"
-
-			iothreadID := "ioth-os"
-			instance.Config.IOThreads = append(instance.Config.IOThreads, vm.IOThread{ID: iothreadID})
-
-			instance.Config.Devices = append(instance.Config.Devices, vm.Device{
-				Value: fmt.Sprintf("virtio-blk-pci,drive=%s,iothread=%s,num-queues=%d,bootindex=1",
-					drive.ID, iothreadID, instance.Config.CPUCount),
-			})
-		}
-
-		if v.CloudInit {
-			drive.Format = "raw"
-			drive.If = "virtio"
-			drive.Media = "cdrom"
-			drive.ID = "cloudinit"
-		}
-
-		// TODO: Add EFI support
-		if v.EFI {
-			continue
-		}
-
-		instance.Config.Drives = append(instance.Config.Drives, drive)
-	}
+	drives, iothreads, devices, err := buildDrives(instance.EBSRequests.Requests, vCPUs)
 	instance.EBSRequests.Mu.Unlock()
+	if err != nil {
+		return err
+	}
+	instance.Config.Drives = append(instance.Config.Drives, drives...)
+	instance.Config.IOThreads = append(instance.Config.IOThreads, iothreads...)
+	instance.Config.Devices = append(instance.Config.Devices, devices...)
 
 	// VPC tap networking vs user-mode fallback
 	if instance.ENIId != "" && d.networkPlumber != nil {
@@ -2521,6 +2465,83 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 	}
 
 	return nil
+}
+
+// buildBaseVMConfig creates a vm.Config with base QEMU settings and PCIe
+// hotplug root ports. Architecture, vCPU, and memory come from the caller
+// (resolved from instance type info).
+func buildBaseVMConfig(instanceID, pidFile, consoleLogPath, serialSocket, architecture string, vCPUs, memoryMiB int) vm.Config {
+	cfg := vm.Config{
+		Name:           instanceID,
+		PIDFile:        pidFile,
+		EnableKVM:      true,
+		NoGraphic:      true,
+		MachineType:    "q35",
+		ConsoleLogPath: consoleLogPath,
+		SerialSocket:   serialSocket,
+		CPUType:        "host",
+		Memory:         memoryMiB,
+		CPUCount:       vCPUs,
+		Architecture:   architecture,
+	}
+
+	// Add PCIe root ports for volume hotplug (Q35 requires explicit root ports).
+	// 11 ports for /dev/sd[f-p] hotplug slots, starting at chassis 1.
+	for i := 1; i <= 11; i++ {
+		cfg.Devices = append(cfg.Devices, vm.Device{
+			Value: fmt.Sprintf("pcie-root-port,id=hotplug%d,chassis=%d,slot=0", i, i),
+		})
+	}
+
+	return cfg
+}
+
+// buildDrives converts EBS volume requests into QEMU drive, iothread, and device
+// configurations. Returns an error if any non-EFI volume is missing its NBDURI.
+func buildDrives(requests []types.EBSRequest, cpuCount int) ([]vm.Drive, []vm.IOThread, []vm.Device, error) {
+	var drives []vm.Drive
+	var iothreads []vm.IOThread
+	var devices []vm.Device
+
+	for _, v := range requests {
+		// TODO: Add EFI support
+		if v.EFI {
+			continue
+		}
+
+		if v.NBDURI == "" {
+			return nil, nil, nil, fmt.Errorf("NBDURI not set for volume %s - was volume mounted?", v.Name)
+		}
+
+		drive := vm.Drive{File: v.NBDURI}
+
+		if v.Boot {
+			drive.Format = "raw"
+			drive.If = "none"
+			drive.Media = "disk"
+			drive.ID = "os"
+			drive.Cache = "none"
+
+			iothreadID := "ioth-os"
+			iothreads = append(iothreads, vm.IOThread{ID: iothreadID})
+			devices = append(devices, vm.Device{
+				Value: fmt.Sprintf("virtio-blk-pci,drive=%s,iothread=%s,num-queues=%d,bootindex=1",
+					drive.ID, iothreadID, cpuCount),
+			})
+		}
+
+		if v.CloudInit {
+			drive.Format = "raw"
+			drive.If = "virtio"
+			drive.Media = "cdrom"
+			drive.ID = "cloudinit"
+		}
+
+		slog.Info("Using NBD URI for drive", "volume", v.Name, "uri", v.NBDURI)
+		drives = append(drives, drive)
+	}
+
+	return drives, iothreads, devices, nil
 }
 
 // ebsTopic returns a node-specific EBS NATS topic, e.g. "ebs.node1.mount".
