@@ -39,15 +39,8 @@ users:
     sudo: "ALL=(ALL) NOPASSWD:ALL"
     ssh_authorized_keys:
       - {{.SSHKey}}
-{{else}}
-chpasswd:
-  expire: false
-  users:
-    - name: root
-      password: spinifex
-      type: text
-ssh_pwauth: true
 {{end}}
+ssh_pwauth: false
 
 hostname: {{.Hostname}}
 manage_etc_hosts: true
@@ -613,7 +606,9 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 	// Generate instance metadata
 	hostname := generateHostname(instance.ID)
 
-	// Retrieve SSH pubkey from S3 (optional — system instances may not have a key)
+	// Retrieve SSH pubkey from S3 — required for instance access.
+	// Password authentication is not supported; instances without a key
+	// pair have no remote access method.
 	keyName := ""
 	if input.KeyName != nil {
 		keyName = *input.KeyName
