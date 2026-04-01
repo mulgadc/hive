@@ -151,6 +151,22 @@ func NATSScatterGather[Out any](conn *nats.Conn, subject string, input any, time
 	return nil, fmt.Errorf("scatter-gather timeout: no responses received for %s", subject)
 }
 
+// PublishEvent marshals event as JSON and publishes it to the given NATS topic.
+// Errors are logged but not returned (fire-and-forget). A nil connection is a no-op.
+func PublishEvent(nc *nats.Conn, topic string, event any) {
+	if nc == nil {
+		return
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		slog.Warn("Failed to marshal event", "topic", topic, "error", err)
+		return
+	}
+	if err := nc.Publish(topic, data); err != nil {
+		slog.Warn("Failed to publish event", "topic", topic, "error", err)
+	}
+}
+
 // AccountIDFromMsg extracts the caller's account ID from a NATS message header.
 // Returns the account ID, or empty string if the header is not set.
 func AccountIDFromMsg(msg *nats.Msg) string {

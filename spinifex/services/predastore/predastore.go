@@ -106,14 +106,7 @@ func (svc *Service) Stop() error {
 
 // Status returns the status of the predastore service
 func (svc *Service) Status() (string, error) {
-	pid, err := utils.ReadPidFileFrom(svc.Config.BasePath, serviceName)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "stopped", nil
-		}
-		return "", fmt.Errorf("read pid file: %w", err)
-	}
-	return fmt.Sprintf("running (pid: %d)", pid), nil
+	return utils.ServiceStatus(svc.Config.BasePath, serviceName)
 }
 
 // Shutdown gracefully shuts down the predastore service
