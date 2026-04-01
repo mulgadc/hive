@@ -17,6 +17,9 @@ on:
         description: "PR head SHA to report status on"
         required: false
 
+permissions:
+  statuses: write
+
 env:
   GIT_BRANCH: ${{ github.ref_name }}
 
