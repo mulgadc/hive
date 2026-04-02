@@ -11,6 +11,8 @@ ExecStart=/usr/local/bin/spx service spinifex-ui start
 Restart=on-failure
 RestartSec=5
 OOMScoreAdjust=-500
+Environment=SPINIFEX_UI_TLS_CERT=/etc/spinifex/server.pem
+Environment=SPINIFEX_UI_TLS_KEY=/etc/spinifex/server.key
 
 [Install]
 WantedBy=spinifex.target
