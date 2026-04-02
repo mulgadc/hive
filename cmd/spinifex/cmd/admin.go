@@ -1246,6 +1246,16 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 	admin.CreateServiceDirectories(spxRoot)
 
+	// In production layout (running as root), fix ownership so the service user
+	// can read config and write data. SUDO_USER identifies the operator account.
+	if os.Getuid() == 0 {
+		sudoUser := os.Getenv("SUDO_USER")
+		if sudoUser != "" {
+			admin.ChownRecursive(configDir, sudoUser)
+			admin.ChownRecursive(spxRoot, sudoUser)
+		}
+	}
+
 	// Keep formation server running briefly so joining nodes can fetch complete status
 	fmt.Println("\n⏳ Waiting for joining nodes to fetch cluster data...")
 	time.Sleep(15 * time.Second)
@@ -1637,6 +1647,16 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	}
 
 	admin.CreateServiceDirectories(dataDir)
+
+	// In production layout (running as root), fix ownership so the service user
+	// can read config and write data. SUDO_USER identifies the operator account.
+	if os.Getuid() == 0 {
+		sudoUser := os.Getenv("SUDO_USER")
+		if sudoUser != "" {
+			admin.ChownRecursive(configDir, sudoUser)
+			admin.ChownRecursive(dataDir, sudoUser)
+		}
+	}
 
 	// Print cluster summary
 	fmt.Println("\n🎉 Node successfully joined cluster!")
