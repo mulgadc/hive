@@ -7,7 +7,7 @@ import (
 )
 
 // DefaultConfigDir returns the default configuration directory.
-// Production: /etc/spinifex (when running as root AND /etc/spinifex exists)
+// Production: /etc/spinifex (when /etc/spinifex exists)
 // Development: ~/spinifex/config
 func DefaultConfigDir() string {
 	if isProductionLayout() {
@@ -45,13 +45,12 @@ func DefaultConfigFile() string {
 }
 
 // isProductionLayout returns true when running in a production install.
-// Detected by: running as root AND /etc/spinifex directory already exists
-// (created by setup.sh during binary install).
+// Detected by: /etc/spinifex directory exists (created by setup.sh during
+// binary install). No root check — allows non-root users (e.g. tf-user) to
+// run CLI commands like `spx get nodes` without sudo or --config flags.
 func isProductionLayout() bool {
-	if os.Getuid() == 0 {
-		if info, err := os.Stat("/etc/spinifex"); err == nil && info.IsDir() {
-			return true
-		}
+	if info, err := os.Stat("/etc/spinifex"); err == nil && info.IsDir() {
+		return true
 	}
 	return false
 }

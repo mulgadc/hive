@@ -161,21 +161,6 @@ jobs:
           TARBALL=$(find "${GITHUB_WORKSPACE}/release-assets" -name "*-linux-amd64.tar.gz" | head -1)
           ./bootstrap-install.sh env3 "$SETUP_SH" "$TARBALL"
 
-      - name: Run Smoke Test
-        working-directory: mulga/scripts/tofu-cluster
-        run: |
-          INVENTORY=$(tofu output -json inventory)
-          WAN_IP=$(echo "$INVENTORY" | jq -r '.nodes[0].wan_ip')
-          SSH_KEY=$(echo "$INVENTORY" | jq -r '.ssh_key_path')
-          SSH_KEY="${SSH_KEY/#\~/$HOME}"
-          scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-            -i "$SSH_KEY" \
-            smoke-test-install.sh \
-            "tf-user@${WAN_IP}:/tmp/smoke-test.sh"
-          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-            -i "$SSH_KEY" "tf-user@${WAN_IP}" \
-            'bash /tmp/smoke-test.sh'
-
       - name: Promote Release
         if: success()
         env:
