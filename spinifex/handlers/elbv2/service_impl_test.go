@@ -716,6 +716,242 @@ func TestDescribeListeners_AccountIsolation(t *testing.T) {
 	assert.Empty(t, desc.Listeners)
 }
 
+// --- NLB Listener tests ---
+
+func TestCreateListener_NLB_TCPProtocol(t *testing.T) {
+	svc := setupTestService(t)
+
+	lbOut, _ := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("nlb-tcp-lst"),
+		Type: aws.String("network"),
+	}, testAccountID)
+	tgOut, _ := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+		Name:     aws.String("tcp-tg-lst"),
+		Protocol: aws.String("TCP"),
+		Port:     aws.Int64(5432),
+	}, testAccountID)
+
+	out, err := svc.CreateListener(&elbv2.CreateListenerInput{
+		LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+		Protocol:        aws.String("TCP"),
+		Port:            aws.Int64(5432),
+		DefaultActions: []*elbv2.Action{
+			{Type: aws.String("forward"), TargetGroupArn: tgOut.TargetGroups[0].TargetGroupArn},
+		},
+	}, testAccountID)
+
+	require.NoError(t, err)
+	require.Len(t, out.Listeners, 1)
+	l := out.Listeners[0]
+	assert.Equal(t, "TCP", *l.Protocol)
+	assert.Equal(t, int64(5432), *l.Port)
+	assert.Equal(t, *lbOut.LoadBalancers[0].LoadBalancerArn, *l.LoadBalancerArn)
+}
+
+func TestCreateListener_NLB_AllProtocols(t *testing.T) {
+	for _, proto := range []string{"TCP", "UDP", "TLS", "TCP_UDP"} {
+		t.Run(proto, func(t *testing.T) {
+			svc := setupTestService(t)
+
+			lbOut, _ := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+				Name: aws.String("nlb-" + proto),
+				Type: aws.String("network"),
+			}, testAccountID)
+			tgOut, _ := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+				Name:     aws.String("tg-" + proto),
+				Protocol: aws.String(proto),
+				Port:     aws.Int64(8080),
+			}, testAccountID)
+
+			out, err := svc.CreateListener(&elbv2.CreateListenerInput{
+				LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+				Protocol:        aws.String(proto),
+				Port:            aws.Int64(8080),
+				DefaultActions: []*elbv2.Action{
+					{Type: aws.String("forward"), TargetGroupArn: tgOut.TargetGroups[0].TargetGroupArn},
+				},
+			}, testAccountID)
+
+			require.NoError(t, err)
+			assert.Equal(t, proto, *out.Listeners[0].Protocol)
+		})
+	}
+}
+
+func TestCreateListener_NLB_RejectsHTTPProtocol(t *testing.T) {
+	svc := setupTestService(t)
+
+	lbOut, _ := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("nlb-no-http"),
+		Type: aws.String("network"),
+	}, testAccountID)
+	tgOut, _ := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+		Name: aws.String("tg-http-nlb"),
+	}, testAccountID)
+
+	_, err := svc.CreateListener(&elbv2.CreateListenerInput{
+		LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+		Protocol:        aws.String("HTTP"),
+		DefaultActions: []*elbv2.Action{
+			{Type: aws.String("forward"), TargetGroupArn: tgOut.TargetGroups[0].TargetGroupArn},
+		},
+	}, testAccountID)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidParameterValue")
+}
+
+func TestCreateListener_NLB_RejectsHTTPSProtocol(t *testing.T) {
+	svc := setupTestService(t)
+
+	lbOut, _ := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("nlb-no-https"),
+		Type: aws.String("network"),
+	}, testAccountID)
+	tgOut, _ := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+		Name: aws.String("tg-https-nlb"),
+	}, testAccountID)
+
+	_, err := svc.CreateListener(&elbv2.CreateListenerInput{
+		LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+		Protocol:        aws.String("HTTPS"),
+		DefaultActions: []*elbv2.Action{
+			{Type: aws.String("forward"), TargetGroupArn: tgOut.TargetGroups[0].TargetGroupArn},
+		},
+	}, testAccountID)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidParameterValue")
+}
+
+func TestCreateListener_ALB_RejectsTCPProtocol(t *testing.T) {
+	svc := setupTestService(t)
+
+	lbOut, _ := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("alb-no-tcp"),
+	}, testAccountID)
+	tgOut, _ := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+		Name:     aws.String("tg-tcp-alb"),
+		Protocol: aws.String("TCP"),
+		Port:     aws.Int64(8080),
+	}, testAccountID)
+
+	_, err := svc.CreateListener(&elbv2.CreateListenerInput{
+		LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+		Protocol:        aws.String("TCP"),
+		DefaultActions: []*elbv2.Action{
+			{Type: aws.String("forward"), TargetGroupArn: tgOut.TargetGroups[0].TargetGroupArn},
+		},
+	}, testAccountID)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidParameterValue")
+}
+
+func TestCreateListener_NLB_ProtocolCompatibility_TLSToTCP(t *testing.T) {
+	svc := setupTestService(t)
+
+	lbOut, _ := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("nlb-tls-tcp"),
+		Type: aws.String("network"),
+	}, testAccountID)
+	tgOut, _ := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+		Name:     aws.String("tg-tcp-compat"),
+		Protocol: aws.String("TCP"),
+		Port:     aws.Int64(443),
+	}, testAccountID)
+
+	// TLS listener -> TCP target group is valid
+	out, err := svc.CreateListener(&elbv2.CreateListenerInput{
+		LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+		Protocol:        aws.String("TLS"),
+		Port:            aws.Int64(443),
+		DefaultActions: []*elbv2.Action{
+			{Type: aws.String("forward"), TargetGroupArn: tgOut.TargetGroups[0].TargetGroupArn},
+		},
+	}, testAccountID)
+
+	require.NoError(t, err)
+	assert.Equal(t, "TLS", *out.Listeners[0].Protocol)
+}
+
+func TestCreateListener_NLB_ProtocolIncompatible_TCPToUDP(t *testing.T) {
+	svc := setupTestService(t)
+
+	lbOut, _ := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("nlb-tcp-udp"),
+		Type: aws.String("network"),
+	}, testAccountID)
+	tgOut, _ := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+		Name:     aws.String("tg-udp-incompat"),
+		Protocol: aws.String("UDP"),
+		Port:     aws.Int64(53),
+	}, testAccountID)
+
+	// TCP listener -> UDP target group is invalid
+	_, err := svc.CreateListener(&elbv2.CreateListenerInput{
+		LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+		Protocol:        aws.String("TCP"),
+		Port:            aws.Int64(53),
+		DefaultActions: []*elbv2.Action{
+			{Type: aws.String("forward"), TargetGroupArn: tgOut.TargetGroups[0].TargetGroupArn},
+		},
+	}, testAccountID)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidParameterValue")
+}
+
+func TestCreateListener_NLB_ProtocolIncompatible_UDPToTCP(t *testing.T) {
+	svc := setupTestService(t)
+
+	lbOut, _ := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("nlb-udp-tcp"),
+		Type: aws.String("network"),
+	}, testAccountID)
+	tgOut, _ := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+		Name:     aws.String("tg-tcp-incompat"),
+		Protocol: aws.String("TCP"),
+		Port:     aws.Int64(8080),
+	}, testAccountID)
+
+	// UDP listener -> TCP target group is invalid
+	_, err := svc.CreateListener(&elbv2.CreateListenerInput{
+		LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+		Protocol:        aws.String("UDP"),
+		Port:            aws.Int64(8080),
+		DefaultActions: []*elbv2.Action{
+			{Type: aws.String("forward"), TargetGroupArn: tgOut.TargetGroups[0].TargetGroupArn},
+		},
+	}, testAccountID)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidParameterValue")
+}
+
+func TestCreateListener_NLB_DefaultProtocol_Rejected(t *testing.T) {
+	// When no protocol is specified, it defaults to HTTP which is invalid for NLB
+	svc := setupTestService(t)
+
+	lbOut, _ := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("nlb-default-proto"),
+		Type: aws.String("network"),
+	}, testAccountID)
+	tgOut, _ := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+		Name: aws.String("tg-default-proto"),
+	}, testAccountID)
+
+	_, err := svc.CreateListener(&elbv2.CreateListenerInput{
+		LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+		DefaultActions: []*elbv2.Action{
+			{Type: aws.String("forward"), TargetGroupArn: tgOut.TargetGroups[0].TargetGroupArn},
+		},
+	}, testAccountID)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidParameterValue")
+}
+
 // --- HAProxy sync tests ---
 
 func TestCreateListener_PushConfig_NoNATS(t *testing.T) {
