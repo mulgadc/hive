@@ -477,8 +477,8 @@ func (d *Daemon) subscribeAll() error {
 		{"elbv2.CreateListener", d.handleELBv2CreateListener, "spinifex-workers"},
 		{"elbv2.DeleteListener", d.handleELBv2DeleteListener, "spinifex-workers"},
 		{"elbv2.DescribeListeners", d.handleELBv2DescribeListeners, "spinifex-workers"},
-		{"elbv2.ALBAgentHeartbeat", d.handleELBv2ALBAgentHeartbeat, "spinifex-workers"},
-		{"elbv2.GetALBConfig", d.handleELBv2GetALBConfig, "spinifex-workers"},
+		{"elbv2.LBAgentHeartbeat", d.handleELBv2LBAgentHeartbeat, "spinifex-workers"},
+		{"elbv2.GetLBConfig", d.handleELBv2GetLBConfig, "spinifex-workers"},
 		{fmt.Sprintf("spinifex.admin.%s.health", d.node), d.handleHealthCheck, ""},
 		{"spinifex.nodes.discover", d.handleNodeDiscover, ""},
 		{"spinifex.node.status", d.handleNodeStatus, ""},
@@ -694,11 +694,11 @@ func (d *Daemon) Start() error {
 		d.elbv2Service.SetVPCService(d.vpcService)
 	}
 
-	// Wire ALB VM lifecycle: instance launcher for system VMs.
+	// Wire LB VM lifecycle: instance launcher for system VMs.
 	d.elbv2Service.SetInstanceLauncher(d)
 
 	// Detect management bridge for system instance control plane NICs.
-	// Must run before wireALBAgentConfig so the gateway URL uses br-mgmt IP.
+	// Must run before wireLBAgentConfig so the gateway URL uses br-mgmt IP.
 	mgmtBridge := "br-mgmt"
 	if d.config.Daemon.MgmtBridge != "" {
 		mgmtBridge = d.config.Daemon.MgmtBridge
@@ -717,10 +717,10 @@ func (d *Daemon) Start() error {
 		}
 	}
 
-	// Wire system credentials + gateway URL for ALB agent SigV4 auth.
-	d.wireALBAgentConfig()
+	// Wire system credentials + gateway URL for LB agent SigV4 auth.
+	d.wireLBAgentConfig()
 
-	// Set up lazy system AMI discovery for ALB VMs. The image may not exist
+	// Set up lazy system AMI discovery for LB VMs. The image may not exist
 	// at daemon startup (imported later), so we resolve it at request time.
 	if d.imageService != nil {
 		imgSvc := d.imageService
@@ -2896,12 +2896,12 @@ func (rm *ResourceManager) updateInstanceSubscriptions() {
 	}
 }
 
-// wireALBAgentConfig loads system credentials, resolves the gateway URL,
-// reads the CA certificate, and wires them into the ELBv2 service so ALB
+// wireLBAgentConfig loads system credentials, resolves the gateway URL,
+// reads the CA certificate, and wires them into the ELBv2 service so LB
 // VMs get SigV4 credentials and gateway URL injected via cloud-init.
-func (d *Daemon) wireALBAgentConfig() {
+func (d *Daemon) wireLBAgentConfig() {
 	if d.configPath == "" {
-		slog.Debug("No config path set, skipping ALB agent credential wiring")
+		slog.Debug("No config path set, skipping LB agent credential wiring")
 		return
 	}
 
@@ -2911,7 +2911,7 @@ func (d *Daemon) wireALBAgentConfig() {
 	credsPath := filepath.Join(configDir, "system-credentials.json")
 	credsData, err := os.ReadFile(credsPath)
 	if err != nil {
-		slog.Debug("System credentials file not found, ALB agent auth not configured", "path", credsPath, "err", err)
+		slog.Debug("System credentials file not found, LB agent auth not configured", "path", credsPath, "err", err)
 		return
 	}
 
@@ -2926,7 +2926,7 @@ func (d *Daemon) wireALBAgentConfig() {
 	d.systemAccessKey = creds.AccessKeyID
 	d.systemSecretKey = creds.SecretAccessKey
 	d.elbv2Service.SetSystemCredentials(creds.AccessKeyID, creds.SecretAccessKey)
-	slog.Info("System credentials loaded for ALB agent auth")
+	slog.Info("System credentials loaded for LB agent auth")
 
 	// Resolve gateway URL.
 	// Priority: (1) br-mgmt IP — system instances reach the host via management NIC
@@ -2962,6 +2962,6 @@ func (d *Daemon) wireALBAgentConfig() {
 	if gatewayHost != "" {
 		gatewayURL := fmt.Sprintf("https://%s:%s", gatewayHost, gatewayPort)
 		d.elbv2Service.SetGatewayURL(gatewayURL)
-		slog.Info("ALB agent gateway URL configured", "url", gatewayURL)
+		slog.Info("LB agent gateway URL configured", "url", gatewayURL)
 	}
 }

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mulgadc/spinifex/spinifex/albagent"
+	"github.com/mulgadc/spinifex/spinifex/lbagent"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -122,9 +122,9 @@ func TestHandleHealthReport_TransitionsInitialToHealthy(t *testing.T) {
 	}
 	require.NoError(t, store.PutTargetGroup(tg))
 
-	report := albagent.HealthReport{
+	report := lbagent.HealthReport{
 		LBID: "lb-test1",
-		Servers: []albagent.ServerStatus{
+		Servers: []lbagent.ServerStatus{
 			{Backend: "bk_tg-123", Server: sanitizeName("srv", "i-aaa111"), Status: "UP"},
 		},
 	}
@@ -159,9 +159,9 @@ func TestHandleHealthReport_UnhealthyAfterThreshold(t *testing.T) {
 
 	// Send 2 DOWN reports to hit the unhealthy threshold of 2
 	for range 2 {
-		report := albagent.HealthReport{
+		report := lbagent.HealthReport{
 			LBID: "lb-test2",
-			Servers: []albagent.ServerStatus{
+			Servers: []lbagent.ServerStatus{
 				{Backend: "bk_tg-456", Server: srvName, Status: "DOWN"},
 			},
 		}
@@ -190,9 +190,9 @@ func TestHandleHealthReport_SkipsDrainingTargets(t *testing.T) {
 	}
 	require.NoError(t, store.PutTargetGroup(tg))
 
-	report := albagent.HealthReport{
+	report := lbagent.HealthReport{
 		LBID: "lb-test3",
-		Servers: []albagent.ServerStatus{
+		Servers: []lbagent.ServerStatus{
 			{Backend: "bk_tg-789", Server: sanitizeName("srv", "i-drain"), Status: "UP"},
 		},
 	}

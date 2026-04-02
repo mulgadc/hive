@@ -628,36 +628,3 @@ func (s *VPCServiceImpl) isEIPOwned(eniId, accountID string) bool {
 	}
 	return false
 }
-
-// matchFilter checks if value matches an AWS-style filter pattern.
-// Supports * as a wildcard that matches any sequence of characters.
-func matchFilter(value, pattern string) bool {
-	if pattern == "*" {
-		return true
-	}
-	if !strings.Contains(pattern, "*") {
-		return value == pattern
-	}
-	// Split on * and check that all parts appear in order
-	parts := strings.Split(pattern, "*")
-	pos := 0
-	for i, part := range parts {
-		if part == "" {
-			continue
-		}
-		idx := strings.Index(value[pos:], part)
-		if idx < 0 {
-			return false
-		}
-		// First part must match at start if pattern doesn't start with *
-		if i == 0 && idx != 0 {
-			return false
-		}
-		pos += idx + len(part)
-	}
-	// Last part must match at end if pattern doesn't end with *
-	if parts[len(parts)-1] != "" && pos != len(value) {
-		return false
-	}
-	return true
-}

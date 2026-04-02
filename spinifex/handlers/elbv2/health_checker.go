@@ -6,15 +6,15 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/mulgadc/spinifex/spinifex/albagent"
+	"github.com/mulgadc/spinifex/spinifex/lbagent"
 )
 
-// healthChecker processes target health reports from ALB agents. Reports arrive
-// via ALBAgentHeartbeat (the agent pushes health data on each heartbeat). This
+// healthChecker processes target health reports from LB agents. Reports arrive
+// via LBAgentHeartbeat (the agent pushes health data on each heartbeat). This
 // checker maps HAProxy backend server statuses back to registered targets and
 // updates HealthState in the store.
 //
-// This mirrors the AWS model where the ALB itself health-checks the targets,
+// This mirrors the AWS model where the LB itself health-checks the targets,
 // rather than the control plane probing them directly.
 type healthChecker struct {
 	store *Store
@@ -37,7 +37,7 @@ func newHealthChecker(store *Store) *healthChecker {
 }
 
 // start is a no-op — health reports are now delivered directly by
-// ALBAgentHeartbeat rather than polled over HTTP.
+// LBAgentHeartbeat rather than polled over HTTP.
 func (hc *healthChecker) start() error {
 	return nil
 }
@@ -45,9 +45,9 @@ func (hc *healthChecker) start() error {
 // stop is a no-op — no background goroutine to stop.
 func (hc *healthChecker) stop() {}
 
-// handleHealthReport processes a health report from an alb-agent.
+// handleHealthReport processes a health report from an lb-agent.
 func (hc *healthChecker) handleHealthReport(data []byte) {
-	var report albagent.HealthReport
+	var report lbagent.HealthReport
 	if err := json.Unmarshal(data, &report); err != nil {
 		slog.Debug("healthChecker: invalid health report", "err", err)
 		return

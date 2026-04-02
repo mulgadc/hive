@@ -28,24 +28,24 @@ const (
 	elbv2LBTag = "spinifex:lb-arn"
 )
 
-// albVMUserData generates cloud-config user data for an ALB VM.
-// Uses write_files to populate /etc/conf.d/alb-agent with the lb-id, gateway
+// lbVMUserData generates cloud-config user data for a load balancer VM.
+// Uses write_files to populate /etc/conf.d/lb-agent with the lb-id, gateway
 // URL, and system credentials for SigV4 auth. The CA cert is already injected
 // by the instance service's cloud-init template (same as regular EC2 VMs).
 // Cloud-init guarantees write_files runs before runcmd. The service is NOT
 // enabled at boot in the image — cloud-init is the sole trigger so the env
 // vars are always present before the agent starts.
-func (s *ELBv2ServiceImpl) albVMUserData(lbID string) string {
+func (s *ELBv2ServiceImpl) lbVMUserData(lbID string) string {
 	return fmt.Sprintf(`#cloud-config
 write_files:
-  - path: /etc/conf.d/alb-agent
+  - path: /etc/conf.d/lb-agent
     content: |
-      ALB_LB_ID=%s
-      ALB_GATEWAY_URL=%s
-      ALB_ACCESS_KEY=%s
-      ALB_SECRET_KEY=%s
+      LB_LB_ID=%s
+      LB_GATEWAY_URL=%s
+      LB_ACCESS_KEY=%s
+      LB_SECRET_KEY=%s
 runcmd:
-  - [ "rc-service", "alb-agent", "start" ]
+  - [ "rc-service", "lb-agent", "start" ]
 `, lbID, s.gatewayURL, s.systemAccessKey, s.systemSecretKey)
 }
 
@@ -281,11 +281,11 @@ func (s *ELBv2ServiceImpl) updateStoredConfigForTargetGroup(tgArn string) {
 	}
 }
 
-// ALBAgentHeartbeat processes a heartbeat from an ALB agent. On first heartbeat,
+// LBAgentHeartbeat processes a heartbeat from an LB agent. On first heartbeat,
 // transitions LB from provisioning → active. Always updates LastHeartbeat and
 // processes the health report. Returns the current config hash so the agent
 // knows whether to fetch new config.
-func (s *ELBv2ServiceImpl) ALBAgentHeartbeat(input *ALBAgentHeartbeatInput, accountID string) (*ALBAgentHeartbeatOutput, error) {
+func (s *ELBv2ServiceImpl) LBAgentHeartbeat(input *LBAgentHeartbeatInput, accountID string) (*LBAgentHeartbeatOutput, error) {
 	if input.LBID == nil || *input.LBID == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
@@ -293,7 +293,7 @@ func (s *ELBv2ServiceImpl) ALBAgentHeartbeat(input *ALBAgentHeartbeatInput, acco
 	lbID := *input.LBID
 	lb, err := s.store.GetLoadBalancer(lbID)
 	if err != nil {
-		slog.Error("ALBAgentHeartbeat: failed to get LB", "lbId", lbID, "err", err)
+		slog.Error("LBAgentHeartbeat: failed to get LB", "lbId", lbID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 	if lb == nil {
@@ -303,13 +303,13 @@ func (s *ELBv2ServiceImpl) ALBAgentHeartbeat(input *ALBAgentHeartbeatInput, acco
 	// First heartbeat: transition provisioning → active
 	if lb.State == StateProvisioning {
 		lb.State = StateActive
-		slog.Info("ALB transitioned to active via heartbeat", "lbId", lbID)
+		slog.Info("LB transitioned to active via heartbeat", "lbId", lbID)
 	}
 
 	lb.LastHeartbeat = time.Now().UTC()
 
 	if err := s.store.PutLoadBalancer(lb); err != nil {
-		slog.Error("ALBAgentHeartbeat: failed to persist LB", "lbId", lbID, "err", err)
+		slog.Error("LBAgentHeartbeat: failed to persist LB", "lbId", lbID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
@@ -322,14 +322,14 @@ func (s *ELBv2ServiceImpl) ALBAgentHeartbeat(input *ALBAgentHeartbeatInput, acco
 		}
 	}
 
-	return &ALBAgentHeartbeatOutput{
+	return &LBAgentHeartbeatOutput{
 		Status:     aws.String(lb.State),
 		ConfigHash: aws.String(lb.ConfigHash),
 	}, nil
 }
 
-// GetALBConfig returns the stored HAProxy config and hash for an ALB.
-func (s *ELBv2ServiceImpl) GetALBConfig(input *GetALBConfigInput, accountID string) (*GetALBConfigOutput, error) {
+// GetLBConfig returns the stored HAProxy config and hash for a load balancer.
+func (s *ELBv2ServiceImpl) GetLBConfig(input *GetLBConfigInput, accountID string) (*GetLBConfigOutput, error) {
 	if input.LBID == nil || *input.LBID == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
@@ -337,14 +337,14 @@ func (s *ELBv2ServiceImpl) GetALBConfig(input *GetALBConfigInput, accountID stri
 	lbID := *input.LBID
 	lb, err := s.store.GetLoadBalancer(lbID)
 	if err != nil {
-		slog.Error("GetALBConfig: failed to get LB", "lbId", lbID, "err", err)
+		slog.Error("GetLBConfig: failed to get LB", "lbId", lbID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 	if lb == nil {
 		return nil, errors.New(awserrors.ErrorELBv2LoadBalancerNotFound)
 	}
 
-	return &GetALBConfigOutput{
+	return &GetLBConfigOutput{
 		ConfigText: aws.String(lb.ConfigText),
 		ConfigHash: aws.String(lb.ConfigHash),
 	}, nil
@@ -560,7 +560,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 			}
 		}
 
-		userData := s.albVMUserData(lbID)
+		userData := s.lbVMUserData(lbID)
 		launchInput := &SystemInstanceInput{
 			InstanceType: s.getSystemInstanceType(),
 			ImageID:      s.getSystemAMI(),

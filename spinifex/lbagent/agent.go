@@ -1,7 +1,7 @@
-// Package albagent implements the ALB config agent that runs inside ALB VMs.
+// Package lbagent implements the LB config agent that runs inside load balancer VMs.
 // It polls the AWS gateway for config updates and reports health via heartbeats.
 // All communication uses SigV4-signed HTTP requests to the gateway.
-package albagent
+package lbagent
 
 import (
 	"bytes"
@@ -33,7 +33,7 @@ const (
 	pollInterval = 5 * time.Second
 )
 
-// Agent manages HAProxy configuration inside an ALB VM by polling the gateway.
+// Agent manages HAProxy configuration inside an LB VM by polling the gateway.
 type Agent struct {
 	lbID       string
 	gatewayURL string
@@ -53,7 +53,7 @@ type Agent struct {
 	statsFn func(socketPath string) ([]ServerStatus, error)
 }
 
-// New creates a new ALB agent for the given load balancer.
+// New creates a new LB agent for the given load balancer.
 func New(lbID, gatewayURL, accessKey, secretKey string) (*Agent, error) {
 	if lbID == "" {
 		return nil, fmt.Errorf("lbID is required")
@@ -85,7 +85,7 @@ func New(lbID, gatewayURL, accessKey, secretKey string) (*Agent, error) {
 		gatewayURL: strings.TrimRight(gatewayURL, "/"),
 		configPath: DefaultConfigPath,
 		pidPath:    DefaultPIDPath,
-		socketPath: fmt.Sprintf("/tmp/spinifex-haproxy/alb-%s.sock", lbID),
+		socketPath: fmt.Sprintf("/tmp/spinifex-haproxy/lb-%s.sock", lbID),
 		signer:     signer,
 		client:     client,
 		stopCh:     make(chan struct{}),
@@ -148,24 +148,24 @@ func (a *Agent) tick() {
 	}
 }
 
-// heartbeatResponse is the parsed XML response from ALBAgentHeartbeat.
+// heartbeatResponse is the parsed XML response from LBAgentHeartbeat.
 type heartbeatResponse struct {
-	XMLName    xml.Name `xml:"ALBAgentHeartbeatResponse"`
-	Status     string   `xml:"ALBAgentHeartbeatResult>Status"`
-	ConfigHash string   `xml:"ALBAgentHeartbeatResult>ConfigHash"`
+	XMLName    xml.Name `xml:"LBAgentHeartbeatResponse"`
+	Status     string   `xml:"LBAgentHeartbeatResult>Status"`
+	ConfigHash string   `xml:"LBAgentHeartbeatResult>ConfigHash"`
 }
 
-// configResponse is the parsed XML response from GetALBConfig.
+// configResponse is the parsed XML response from GetLBConfig.
 type configResponse struct {
-	XMLName    xml.Name `xml:"GetALBConfigResponse"`
-	ConfigText string   `xml:"GetALBConfigResult>ConfigText"`
-	ConfigHash string   `xml:"GetALBConfigResult>ConfigHash"`
+	XMLName    xml.Name `xml:"GetLBConfigResponse"`
+	ConfigText string   `xml:"GetLBConfigResult>ConfigText"`
+	ConfigHash string   `xml:"GetLBConfigResult>ConfigHash"`
 }
 
 // sendHeartbeat sends a heartbeat with health report to the gateway.
 func (a *Agent) sendHeartbeat(servers []ServerStatus) (*heartbeatResponse, error) {
 	params := url.Values{}
-	params.Set("Action", "ALBAgentHeartbeat")
+	params.Set("Action", "LBAgentHeartbeat")
 	params.Set("Version", "2015-12-01")
 	params.Set("LBID", a.lbID)
 
@@ -191,7 +191,7 @@ func (a *Agent) sendHeartbeat(servers []ServerStatus) (*heartbeatResponse, error
 // fetchAndApplyConfig fetches the current config from the gateway and applies it.
 func (a *Agent) fetchAndApplyConfig() error {
 	params := url.Values{}
-	params.Set("Action", "GetALBConfig")
+	params.Set("Action", "GetLBConfig")
 	params.Set("Version", "2015-12-01")
 	params.Set("LBID", a.lbID)
 

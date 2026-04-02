@@ -32,25 +32,25 @@ func TestBuildListenerArn_NLB(t *testing.T) {
 	assert.Equal(t, "arn:aws:elasticloadbalancing:eu-west-1:999888777666:listener/net/my-nlb/lbid123/listener456", arn)
 }
 
-func TestAlbVMUserData_ContainsLBID(t *testing.T) {
+func TestLbVMUserData_ContainsLBID(t *testing.T) {
 	svc := &ELBv2ServiceImpl{
 		gatewayURL:      "https://192.168.1.33:9999",
 		systemAccessKey: "AKIAIOSFODNN7EXAMPLE",
 		systemSecretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 	}
-	ud := svc.albVMUserData("lb-abc123")
+	ud := svc.lbVMUserData("lb-abc123")
 	assert.Contains(t, ud, "#cloud-config")
 	assert.Contains(t, ud, "write_files:")
-	assert.Contains(t, ud, "/etc/conf.d/alb-agent")
-	assert.Contains(t, ud, "ALB_LB_ID=lb-abc123")
-	assert.Contains(t, ud, "ALB_GATEWAY_URL=https://192.168.1.33:9999")
-	assert.Contains(t, ud, "ALB_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE")
-	assert.Contains(t, ud, "ALB_SECRET_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+	assert.Contains(t, ud, "/etc/conf.d/lb-agent")
+	assert.Contains(t, ud, "LB_LB_ID=lb-abc123")
+	assert.Contains(t, ud, "LB_GATEWAY_URL=https://192.168.1.33:9999")
+	assert.Contains(t, ud, "LB_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE")
+	assert.Contains(t, ud, "LB_SECRET_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
 	// NATS URL should no longer be present
 	assert.NotContains(t, ud, "NATS")
 }
 
-func TestAlbVMUserData_WriteFilesThenRuncmd(t *testing.T) {
+func TestLbVMUserData_WriteFilesThenRuncmd(t *testing.T) {
 	// Cloud-init guarantees write_files runs before runcmd. The agent is NOT
 	// enabled at boot via OpenRC — cloud-init is the sole trigger.
 	svc := &ELBv2ServiceImpl{
@@ -58,12 +58,12 @@ func TestAlbVMUserData_WriteFilesThenRuncmd(t *testing.T) {
 		systemAccessKey: "AKID",
 		systemSecretKey: "SECRET",
 	}
-	ud := svc.albVMUserData("lb-test")
+	ud := svc.lbVMUserData("lb-test")
 	assert.Contains(t, ud, "write_files:")
-	assert.Contains(t, ud, "/etc/conf.d/alb-agent")
+	assert.Contains(t, ud, "/etc/conf.d/lb-agent")
 	assert.Contains(t, ud, "rc-service")
 	// Must not invoke the binary directly — OpenRC manages the process.
-	assert.NotContains(t, ud, "/usr/local/bin/alb-agent")
+	assert.NotContains(t, ud, "/usr/local/bin/lb-agent")
 
 	// write_files must appear before runcmd in the output
 	wfIdx := strings.Index(ud, "write_files:")
@@ -71,14 +71,14 @@ func TestAlbVMUserData_WriteFilesThenRuncmd(t *testing.T) {
 	assert.Greater(t, rcIdx, wfIdx, "write_files must precede runcmd")
 }
 
-func TestAlbVMUserData_NoCACert(t *testing.T) {
+func TestLbVMUserData_NoCACert(t *testing.T) {
 	// CA cert is injected by the instance service's cloud-init template,
-	// not by albVMUserData — verify it's not duplicated here.
+	// not by lbVMUserData — verify it's not duplicated here.
 	svc := &ELBv2ServiceImpl{
 		gatewayURL:      "https://192.168.1.33:9999",
 		systemAccessKey: "AKID",
 		systemSecretKey: "SECRET",
 	}
-	ud := svc.albVMUserData("lb-noca")
+	ud := svc.lbVMUserData("lb-noca")
 	assert.NotContains(t, ud, "ca_certs:")
 }

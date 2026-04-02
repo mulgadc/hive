@@ -50,10 +50,10 @@ func (d *Daemon) handleELBv2DescribeListeners(msg *nats.Msg) {
 	handleNATSRequest(msg, d.elbv2Service.DescribeListeners)
 }
 
-func (d *Daemon) handleELBv2ALBAgentHeartbeat(msg *nats.Msg) {
-	handleNATSRequest(msg, d.elbv2Service.ALBAgentHeartbeat)
+func (d *Daemon) handleELBv2LBAgentHeartbeat(msg *nats.Msg) {
+	handleNATSRequest(msg, d.elbv2Service.LBAgentHeartbeat)
 }
 
-func (d *Daemon) handleELBv2GetALBConfig(msg *nats.Msg) {
-	handleNATSRequest(msg, d.elbv2Service.GetALBConfig)
+func (d *Daemon) handleELBv2GetLBConfig(msg *nats.Msg) {
+	handleNATSRequest(msg, d.elbv2Service.GetLBConfig)
 }

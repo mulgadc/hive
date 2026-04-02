@@ -8,9 +8,9 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// GetALBConfig handles the ELBv2 GetALBConfig API call.
-func GetALBConfig(input *handlers_elbv2.GetALBConfigInput, natsConn *nats.Conn, accountID string) (handlers_elbv2.GetALBConfigOutput, error) {
-	var output handlers_elbv2.GetALBConfigOutput
+// LBAgentHeartbeat handles the ELBv2 LBAgentHeartbeat API call.
+func LBAgentHeartbeat(input *handlers_elbv2.LBAgentHeartbeatInput, natsConn *nats.Conn, accountID string) (handlers_elbv2.LBAgentHeartbeatOutput, error) {
+	var output handlers_elbv2.LBAgentHeartbeatOutput
 
 	if input == nil {
 		return output, errors.New(awserrors.ErrorInvalidParameterValue)
@@ -20,7 +20,7 @@ func GetALBConfig(input *handlers_elbv2.GetALBConfigInput, natsConn *nats.Conn, 
 	}
 
 	svc := handlers_elbv2.NewNATSELBv2Service(natsConn)
-	result, err := svc.GetALBConfig(input, accountID)
+	result, err := svc.LBAgentHeartbeat(input, accountID)
 	if err != nil {
 		return output, err
 	}

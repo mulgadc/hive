@@ -451,6 +451,7 @@ func TestErrorLookup(t *testing.T) {
 		{code: "InvalidScheme", http: 400, message: "The specified scheme is not valid. Specify 'internet-facing' or 'internal'."},
 		{code: "SubnetNotFound", http: 400, message: "The specified subnet does not exist."},
 		{code: "AvailabilityZoneNotSupported", http: 400, message: "The specified Availability Zone is not supported."},
+		{code: "InvalidConfigurationRequest", http: 400, message: "Security groups are not supported for load balancers with type 'network'."},
 	}
 
 	if len(ErrorLookup) != len(expected) {

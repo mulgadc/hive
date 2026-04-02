@@ -1,4 +1,4 @@
-package albagent
+package lbagent
 
 import (
 	"fmt"
@@ -52,13 +52,13 @@ func TestNew_SocketPath(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	expected := "/tmp/spinifex-haproxy/alb-lb-sock123.sock"
+	expected := "/tmp/spinifex-haproxy/lb-lb-sock123.sock"
 	if agent.socketPath != expected {
 		t.Errorf("socketPath = %q, want %q", agent.socketPath, expected)
 	}
 }
 
-// fakeGateway returns a test server that responds to ALBAgentHeartbeat and GetALBConfig.
+// fakeGateway returns a test server that responds to LBAgentHeartbeat and GetLBConfig.
 func fakeGateway(t *testing.T, configHash, configText, status string) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -70,14 +70,14 @@ func fakeGateway(t *testing.T, configHash, configText, status string) *httptest.
 		w.Header().Set("Content-Type", "text/xml")
 
 		switch action {
-		case "ALBAgentHeartbeat":
+		case "LBAgentHeartbeat":
 			st := status
 			if st == "" {
 				st = "active"
 			}
-			fmt.Fprintf(w, `<ALBAgentHeartbeatResponse><ALBAgentHeartbeatResult><Status>%s</Status><ConfigHash>%s</ConfigHash></ALBAgentHeartbeatResult></ALBAgentHeartbeatResponse>`, st, configHash)
-		case "GetALBConfig":
-			fmt.Fprintf(w, `<GetALBConfigResponse><GetALBConfigResult><ConfigText>%s</ConfigText><ConfigHash>%s</ConfigHash></GetALBConfigResult></GetALBConfigResponse>`, configText, configHash)
+			fmt.Fprintf(w, `<LBAgentHeartbeatResponse><LBAgentHeartbeatResult><Status>%s</Status><ConfigHash>%s</ConfigHash></LBAgentHeartbeatResult></LBAgentHeartbeatResponse>`, st, configHash)
+		case "GetLBConfig":
+			fmt.Fprintf(w, `<GetLBConfigResponse><GetLBConfigResult><ConfigText>%s</ConfigText><ConfigHash>%s</ConfigHash></GetLBConfigResult></GetLBConfigResponse>`, configText, configHash)
 		default:
 			http.Error(w, "unknown action: "+action, http.StatusBadRequest)
 		}
@@ -169,11 +169,11 @@ func TestHeartbeat_IncludesHealthReport(t *testing.T) {
 	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
 		action := r.FormValue("Action")
-		if action == "ALBAgentHeartbeat" {
+		if action == "LBAgentHeartbeat" {
 			receivedBackend = r.FormValue("Servers.member.1.Backend")
 			receivedServer = r.FormValue("Servers.member.1.Server")
 			receivedStatus = r.FormValue("Servers.member.1.Status")
-			fmt.Fprintf(w, `<ALBAgentHeartbeatResponse><ALBAgentHeartbeatResult><Status>active</Status><ConfigHash>h1</ConfigHash></ALBAgentHeartbeatResult></ALBAgentHeartbeatResponse>`)
+			fmt.Fprintf(w, `<LBAgentHeartbeatResponse><LBAgentHeartbeatResult><Status>active</Status><ConfigHash>h1</ConfigHash></LBAgentHeartbeatResult></LBAgentHeartbeatResponse>`)
 		} else {
 			http.Error(w, "unexpected", http.StatusBadRequest)
 		}
@@ -402,10 +402,10 @@ func TestFetchConfig_EmptyConfigText(t *testing.T) {
 		action := r.FormValue("Action")
 		w.Header().Set("Content-Type", "text/xml")
 		switch action {
-		case "ALBAgentHeartbeat":
-			fmt.Fprintf(w, `<ALBAgentHeartbeatResponse><ALBAgentHeartbeatResult><Status>active</Status><ConfigHash>hash-x</ConfigHash></ALBAgentHeartbeatResult></ALBAgentHeartbeatResponse>`)
-		case "GetALBConfig":
-			fmt.Fprintf(w, `<GetALBConfigResponse><GetALBConfigResult><ConfigText></ConfigText><ConfigHash>hash-x</ConfigHash></GetALBConfigResult></GetALBConfigResponse>`)
+		case "LBAgentHeartbeat":
+			fmt.Fprintf(w, `<LBAgentHeartbeatResponse><LBAgentHeartbeatResult><Status>active</Status><ConfigHash>hash-x</ConfigHash></LBAgentHeartbeatResult></LBAgentHeartbeatResponse>`)
+		case "GetLBConfig":
+			fmt.Fprintf(w, `<GetLBConfigResponse><GetLBConfigResult><ConfigText></ConfigText><ConfigHash>hash-x</ConfigHash></GetLBConfigResult></GetLBConfigResponse>`)
 		}
 	}))
 	defer gw.Close()
@@ -426,9 +426,9 @@ func TestFetchConfig_GatewayErrorOnGetConfig(t *testing.T) {
 		action := r.FormValue("Action")
 		w.Header().Set("Content-Type", "text/xml")
 		switch action {
-		case "ALBAgentHeartbeat":
-			fmt.Fprintf(w, `<ALBAgentHeartbeatResponse><ALBAgentHeartbeatResult><Status>active</Status><ConfigHash>hash-new</ConfigHash></ALBAgentHeartbeatResult></ALBAgentHeartbeatResponse>`)
-		case "GetALBConfig":
+		case "LBAgentHeartbeat":
+			fmt.Fprintf(w, `<LBAgentHeartbeatResponse><LBAgentHeartbeatResult><Status>active</Status><ConfigHash>hash-new</ConfigHash></LBAgentHeartbeatResult></LBAgentHeartbeatResponse>`)
+		case "GetLBConfig":
 			callCount++
 			http.Error(w, "server error", http.StatusInternalServerError)
 		}
@@ -439,7 +439,7 @@ func TestFetchConfig_GatewayErrorOnGetConfig(t *testing.T) {
 	agent.tick()
 
 	if callCount != 1 {
-		t.Errorf("GetALBConfig called %d times, want 1", callCount)
+		t.Errorf("GetLBConfig called %d times, want 1", callCount)
 	}
 	if agent.localConfigHash != "" {
 		t.Errorf("localConfigHash should be empty after fetch failure, got %q", agent.localConfigHash)
@@ -458,7 +458,7 @@ func TestSendHeartbeat_MultipleServers(t *testing.T) {
 			}
 		}
 		w.Header().Set("Content-Type", "text/xml")
-		fmt.Fprintf(w, `<ALBAgentHeartbeatResponse><ALBAgentHeartbeatResult><Status>active</Status><ConfigHash>h1</ConfigHash></ALBAgentHeartbeatResult></ALBAgentHeartbeatResponse>`)
+		fmt.Fprintf(w, `<LBAgentHeartbeatResponse><LBAgentHeartbeatResult><Status>active</Status><ConfigHash>h1</ConfigHash></LBAgentHeartbeatResult></LBAgentHeartbeatResponse>`)
 	}))
 	defer gw.Close()
 

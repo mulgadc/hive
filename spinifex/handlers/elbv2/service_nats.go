@@ -68,10 +68,10 @@ func (s *NATSELBv2Service) DescribeListeners(input *elbv2.DescribeListenersInput
 	return utils.NATSRequest[elbv2.DescribeListenersOutput](s.natsConn, "elbv2.DescribeListeners", input, defaultTimeout, accountID)
 }
 
-func (s *NATSELBv2Service) ALBAgentHeartbeat(input *ALBAgentHeartbeatInput, accountID string) (*ALBAgentHeartbeatOutput, error) {
-	return utils.NATSRequest[ALBAgentHeartbeatOutput](s.natsConn, "elbv2.ALBAgentHeartbeat", input, defaultTimeout, accountID)
+func (s *NATSELBv2Service) LBAgentHeartbeat(input *LBAgentHeartbeatInput, accountID string) (*LBAgentHeartbeatOutput, error) {
+	return utils.NATSRequest[LBAgentHeartbeatOutput](s.natsConn, "elbv2.LBAgentHeartbeat", input, defaultTimeout, accountID)
 }
 
-func (s *NATSELBv2Service) GetALBConfig(input *GetALBConfigInput, accountID string) (*GetALBConfigOutput, error) {
-	return utils.NATSRequest[GetALBConfigOutput](s.natsConn, "elbv2.GetALBConfig", input, defaultTimeout, accountID)
+func (s *NATSELBv2Service) GetLBConfig(input *GetLBConfigInput, accountID string) (*GetLBConfigOutput, error) {
+	return utils.NATSRequest[GetLBConfigOutput](s.natsConn, "elbv2.GetLBConfig", input, defaultTimeout, accountID)
 }

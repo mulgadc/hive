@@ -1,4 +1,4 @@
-package albagent
+package lbagent
 
 import (
 	"bufio"

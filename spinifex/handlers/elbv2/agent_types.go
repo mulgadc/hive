@@ -1,49 +1,49 @@
 package handlers_elbv2
 
-import "github.com/mulgadc/spinifex/spinifex/albagent"
+import "github.com/mulgadc/spinifex/spinifex/lbagent"
 
-// ALBAgentHeartbeatInput is sent by the ALB agent on each heartbeat tick.
+// LBAgentHeartbeatInput is sent by the LB agent on each heartbeat tick.
 // The agent includes its health report (HAProxy backend server statuses) so
 // the daemon can update target health without polling.
-type ALBAgentHeartbeatInput struct {
-	LBID    *string                 `locationName:"LBID" type:"string"`
-	Servers []*ALBAgentServerStatus `locationName:"Servers" type:"list"`
+type LBAgentHeartbeatInput struct {
+	LBID    *string                `locationName:"LBID" type:"string"`
+	Servers []*LBAgentServerStatus `locationName:"Servers" type:"list"`
 }
 
-// ALBAgentServerStatus represents a single backend server's health status
-// as reported by the ALB agent. Maps to albagent.ServerStatus for processing.
-type ALBAgentServerStatus struct {
+// LBAgentServerStatus represents a single backend server's health status
+// as reported by the LB agent. Maps to lbagent.ServerStatus for processing.
+type LBAgentServerStatus struct {
 	Backend *string `locationName:"Backend" type:"string"`
 	Server  *string `locationName:"Server" type:"string"`
 	Status  *string `locationName:"Status" type:"string"`
 }
 
-// ALBAgentHeartbeatOutput is returned to the agent after processing a heartbeat.
-type ALBAgentHeartbeatOutput struct {
+// LBAgentHeartbeatOutput is returned to the agent after processing a heartbeat.
+type LBAgentHeartbeatOutput struct {
 	Status     *string `type:"string"`
 	ConfigHash *string `type:"string"`
 }
 
-// GetALBConfigInput is sent by the agent when it detects a config hash change.
-type GetALBConfigInput struct {
+// GetLBConfigInput is sent by the agent when it detects a config hash change.
+type GetLBConfigInput struct {
 	LBID *string `locationName:"LBID" type:"string"`
 }
 
-// GetALBConfigOutput returns the pre-computed HAProxy config and its hash.
-type GetALBConfigOutput struct {
+// GetLBConfigOutput returns the pre-computed HAProxy config and its hash.
+type GetLBConfigOutput struct {
 	ConfigText *string `type:"string"`
 	ConfigHash *string `type:"string"`
 }
 
-// toHealthReport converts the heartbeat input's server list to the albagent
+// toHealthReport converts the heartbeat input's server list to the lbagent
 // HealthReport format used by handleHealthReport.
-func (in *ALBAgentHeartbeatInput) toHealthReport() albagent.HealthReport {
-	report := albagent.HealthReport{}
+func (in *LBAgentHeartbeatInput) toHealthReport() lbagent.HealthReport {
+	report := lbagent.HealthReport{}
 	if in.LBID != nil {
 		report.LBID = *in.LBID
 	}
 	for _, s := range in.Servers {
-		srv := albagent.ServerStatus{}
+		srv := lbagent.ServerStatus{}
 		if s.Backend != nil {
 			srv.Backend = *s.Backend
 		}

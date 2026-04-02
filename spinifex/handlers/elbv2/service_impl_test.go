@@ -1101,9 +1101,9 @@ func TestCreateLoadBalancer_InternalScheme_PassesSchemeToLauncher(t *testing.T) 
 	assert.Equal(t, "internal", *out.LoadBalancers[0].Scheme)
 }
 
-// --- ALBAgentHeartbeat tests ---
+// --- LBAgentHeartbeat tests ---
 
-func TestALBAgentHeartbeat_TransitionsProvisioningToActive(t *testing.T) {
+func TestLBAgentHeartbeat_TransitionsProvisioningToActive(t *testing.T) {
 	svc := setupTestService(t)
 
 	lb := &LoadBalancerRecord{
@@ -1117,7 +1117,7 @@ func TestALBAgentHeartbeat_TransitionsProvisioningToActive(t *testing.T) {
 	}
 	require.NoError(t, svc.store.PutLoadBalancer(lb))
 
-	out, err := svc.ALBAgentHeartbeat(&ALBAgentHeartbeatInput{
+	out, err := svc.LBAgentHeartbeat(&LBAgentHeartbeatInput{
 		LBID: aws.String("lb-hb1"),
 	}, testAccountID)
 	require.NoError(t, err)
@@ -1129,7 +1129,7 @@ func TestALBAgentHeartbeat_TransitionsProvisioningToActive(t *testing.T) {
 	assert.False(t, stored.LastHeartbeat.IsZero())
 }
 
-func TestALBAgentHeartbeat_ReturnsConfigHash(t *testing.T) {
+func TestLBAgentHeartbeat_ReturnsConfigHash(t *testing.T) {
 	svc := setupTestService(t)
 
 	lb := &LoadBalancerRecord{
@@ -1143,14 +1143,14 @@ func TestALBAgentHeartbeat_ReturnsConfigHash(t *testing.T) {
 	}
 	require.NoError(t, svc.store.PutLoadBalancer(lb))
 
-	out, err := svc.ALBAgentHeartbeat(&ALBAgentHeartbeatInput{
+	out, err := svc.LBAgentHeartbeat(&LBAgentHeartbeatInput{
 		LBID: aws.String("lb-hash1"),
 	}, testAccountID)
 	require.NoError(t, err)
 	assert.Equal(t, "abc123def456", *out.ConfigHash)
 }
 
-func TestALBAgentHeartbeat_ProcessesHealthReport(t *testing.T) {
+func TestLBAgentHeartbeat_ProcessesHealthReport(t *testing.T) {
 	svc := setupTestService(t)
 
 	lb := &LoadBalancerRecord{
@@ -1176,9 +1176,9 @@ func TestALBAgentHeartbeat_ProcessesHealthReport(t *testing.T) {
 	require.NoError(t, svc.store.PutTargetGroup(tg))
 
 	srvName := sanitizeName("srv", "i-target1")
-	_, err := svc.ALBAgentHeartbeat(&ALBAgentHeartbeatInput{
+	_, err := svc.LBAgentHeartbeat(&LBAgentHeartbeatInput{
 		LBID: aws.String("lb-hr1"),
-		Servers: []*ALBAgentServerStatus{
+		Servers: []*LBAgentServerStatus{
 			{Backend: aws.String("bk_tg-hr1"), Server: aws.String(srvName), Status: aws.String("UP")},
 		},
 	}, testAccountID)
@@ -1189,25 +1189,25 @@ func TestALBAgentHeartbeat_ProcessesHealthReport(t *testing.T) {
 	assert.Equal(t, TargetHealthHealthy, stored.Targets[0].HealthState)
 }
 
-func TestALBAgentHeartbeat_MissingLBID(t *testing.T) {
+func TestLBAgentHeartbeat_MissingLBID(t *testing.T) {
 	svc := setupTestService(t)
 
-	_, err := svc.ALBAgentHeartbeat(&ALBAgentHeartbeatInput{}, testAccountID)
+	_, err := svc.LBAgentHeartbeat(&LBAgentHeartbeatInput{}, testAccountID)
 	assert.Error(t, err)
 }
 
-func TestALBAgentHeartbeat_LBNotFound(t *testing.T) {
+func TestLBAgentHeartbeat_LBNotFound(t *testing.T) {
 	svc := setupTestService(t)
 
-	_, err := svc.ALBAgentHeartbeat(&ALBAgentHeartbeatInput{
+	_, err := svc.LBAgentHeartbeat(&LBAgentHeartbeatInput{
 		LBID: aws.String("lb-nonexistent"),
 	}, testAccountID)
 	assert.Error(t, err)
 }
 
-// --- GetALBConfig tests ---
+// --- GetLBConfig tests ---
 
-func TestGetALBConfig_ReturnsStoredConfig(t *testing.T) {
+func TestGetLBConfig_ReturnsStoredConfig(t *testing.T) {
 	svc := setupTestService(t)
 
 	lb := &LoadBalancerRecord{
@@ -1222,7 +1222,7 @@ func TestGetALBConfig_ReturnsStoredConfig(t *testing.T) {
 	}
 	require.NoError(t, svc.store.PutLoadBalancer(lb))
 
-	out, err := svc.GetALBConfig(&GetALBConfigInput{
+	out, err := svc.GetLBConfig(&GetLBConfigInput{
 		LBID: aws.String("lb-cfg1"),
 	}, testAccountID)
 	require.NoError(t, err)
@@ -1230,17 +1230,17 @@ func TestGetALBConfig_ReturnsStoredConfig(t *testing.T) {
 	assert.Equal(t, "deadbeef", *out.ConfigHash)
 }
 
-func TestGetALBConfig_MissingLBID(t *testing.T) {
+func TestGetLBConfig_MissingLBID(t *testing.T) {
 	svc := setupTestService(t)
 
-	_, err := svc.GetALBConfig(&GetALBConfigInput{}, testAccountID)
+	_, err := svc.GetLBConfig(&GetLBConfigInput{}, testAccountID)
 	assert.Error(t, err)
 }
 
-func TestGetALBConfig_LBNotFound(t *testing.T) {
+func TestGetLBConfig_LBNotFound(t *testing.T) {
 	svc := setupTestService(t)
 
-	_, err := svc.GetALBConfig(&GetALBConfigInput{
+	_, err := svc.GetLBConfig(&GetLBConfigInput{
 		LBID: aws.String("lb-missing"),
 	}, testAccountID)
 	assert.Error(t, err)
