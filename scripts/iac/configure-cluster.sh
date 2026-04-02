@@ -110,7 +110,7 @@ INIT_PID=$!
 # Wait for formation server to be ready
 echo "    Waiting for formation server on $NODE1_IP..."
 attempts=0
-while ! curl -s --connect-timeout 3 "http://$NODE1_IP:4432/formation/health" >/dev/null 2>&1; do
+while ! curl -sk --connect-timeout 3 "https://$NODE1_IP:4432/formation/health" >/dev/null 2>&1; do
     attempts=$((attempts + 1))
     if [ $attempts -ge 60 ]; then
         echo "Error: Formation server did not start on $NODE1_IP after 5 minutes"

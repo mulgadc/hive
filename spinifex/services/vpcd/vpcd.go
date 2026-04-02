@@ -127,14 +127,7 @@ func (svc *Service) Stop() error {
 
 // Status returns the vpcd service status.
 func (svc *Service) Status() (string, error) {
-	pid, err := utils.ReadPidFileFrom(svc.Config.BaseDir, serviceName)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "stopped", nil
-		}
-		return "", fmt.Errorf("read pid file: %w", err)
-	}
-	return fmt.Sprintf("running (pid: %d)", pid), nil
+	return utils.ServiceStatus(svc.Config.BaseDir, serviceName)
 }
 
 // Shutdown gracefully shuts down the vpcd service.

@@ -231,18 +231,8 @@ func (s *VPCServiceImpl) CreateVpc(input *ec2.CreateVpcInput, accountID string) 
 		VNI:                vni,
 		EnableDnsSupport:   true,  // AWS default
 		EnableDnsHostnames: false, // AWS default
-		Tags:               make(map[string]string),
+		Tags:               utils.ExtractTags(input.TagSpecifications, "vpc"),
 		CreatedAt:          time.Now(),
-	}
-
-	for _, tagSpec := range input.TagSpecifications {
-		if tagSpec.ResourceType != nil && *tagSpec.ResourceType == "vpc" {
-			for _, tag := range tagSpec.Tags {
-				if tag.Key != nil && tag.Value != nil {
-					record.Tags[*tag.Key] = *tag.Value
-				}
-			}
-		}
 	}
 
 	data, err := json.Marshal(record)
@@ -505,18 +495,8 @@ func (s *VPCServiceImpl) CreateSubnet(input *ec2.CreateSubnetInput, accountID st
 		AvailabilityZone: az,
 		State:            "available",
 		IsDefault:        false,
-		Tags:             make(map[string]string),
+		Tags:             utils.ExtractTags(input.TagSpecifications, "subnet"),
 		CreatedAt:        time.Now(),
-	}
-
-	for _, tagSpec := range input.TagSpecifications {
-		if tagSpec.ResourceType != nil && *tagSpec.ResourceType == "subnet" {
-			for _, tag := range tagSpec.Tags {
-				if tag.Key != nil && tag.Value != nil {
-					record.Tags[*tag.Key] = *tag.Value
-				}
-			}
-		}
 	}
 
 	data, err := json.Marshal(record)
@@ -744,13 +724,7 @@ func (s *VPCServiceImpl) vpcRecordToEC2(record *VPCRecord, accountID string) *ec
 		InstanceTenancy: aws.String("default"),
 	}
 
-	if len(record.Tags) > 0 {
-		tags := make([]*ec2.Tag, 0, len(record.Tags))
-		for k, v := range record.Tags {
-			tags = append(tags, &ec2.Tag{Key: aws.String(k), Value: aws.String(v)})
-		}
-		vpc.Tags = tags
-	}
+	vpc.Tags = utils.MapToEC2Tags(record.Tags)
 
 	return vpc
 }
@@ -768,13 +742,7 @@ func (s *VPCServiceImpl) subnetRecordToEC2(record *SubnetRecord, availableIPs in
 		MapPublicIpOnLaunch:     aws.Bool(record.MapPublicIpOnLaunch),
 	}
 
-	if len(record.Tags) > 0 {
-		tags := make([]*ec2.Tag, 0, len(record.Tags))
-		for k, v := range record.Tags {
-			tags = append(tags, &ec2.Tag{Key: aws.String(k), Value: aws.String(v)})
-		}
-		subnet.Tags = tags
-	}
+	subnet.Tags = utils.MapToEC2Tags(record.Tags)
 
 	return subnet
 }
@@ -1167,42 +1135,18 @@ func (s *VPCServiceImpl) GetSubnet(accountID, subnetId string) (*SubnetRecord, e
 // publishVPCEvent publishes a VPC lifecycle event to NATS for vpcd consumption.
 // This is fire-and-forget; errors are logged but do not fail the API response.
 func (s *VPCServiceImpl) publishVPCEvent(topic, vpcId, cidrBlock string, vni int64) {
-	if s.natsConn == nil {
-		return
-	}
-	evt := struct {
+	utils.PublishEvent(s.natsConn, topic, struct {
 		VpcId     string `json:"vpc_id"`
 		CidrBlock string `json:"cidr_block"`
 		VNI       int64  `json:"vni"`
-	}{VpcId: vpcId, CidrBlock: cidrBlock, VNI: vni}
-
-	data, err := json.Marshal(evt)
-	if err != nil {
-		slog.Error("Failed to marshal VPC event", "topic", topic, "err", err)
-		return
-	}
-	if err := s.natsConn.Publish(topic, data); err != nil {
-		slog.Error("Failed to publish VPC event", "topic", topic, "err", err)
-	}
+	}{VpcId: vpcId, CidrBlock: cidrBlock, VNI: vni})
 }
 
 // publishSubnetEvent publishes a subnet lifecycle event to NATS for vpcd consumption.
 func (s *VPCServiceImpl) publishSubnetEvent(topic, subnetId, vpcId, cidrBlock string) {
-	if s.natsConn == nil {
-		return
-	}
-	evt := struct {
+	utils.PublishEvent(s.natsConn, topic, struct {
 		SubnetId  string `json:"subnet_id"`
 		VpcId     string `json:"vpc_id"`
 		CidrBlock string `json:"cidr_block"`
-	}{SubnetId: subnetId, VpcId: vpcId, CidrBlock: cidrBlock}
-
-	data, err := json.Marshal(evt)
-	if err != nil {
-		slog.Error("Failed to marshal subnet event", "topic", topic, "err", err)
-		return
-	}
-	if err := s.natsConn.Publish(topic, data); err != nil {
-		slog.Error("Failed to publish subnet event", "topic", topic, "err", err)
-	}
+	}{SubnetId: subnetId, VpcId: vpcId, CidrBlock: cidrBlock})
 }

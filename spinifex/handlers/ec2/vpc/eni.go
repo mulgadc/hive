@@ -100,18 +100,8 @@ func (s *VPCServiceImpl) CreateNetworkInterface(input *ec2.CreateNetworkInterfac
 		Description:        description,
 		Status:             "available",
 		SecurityGroupIds:   sgIds,
-		Tags:               make(map[string]string),
+		Tags:               utils.ExtractTags(input.TagSpecifications, "network-interface"),
 		CreatedAt:          time.Now(),
-	}
-
-	for _, tagSpec := range input.TagSpecifications {
-		if tagSpec.ResourceType != nil && *tagSpec.ResourceType == "network-interface" {
-			for _, tag := range tagSpec.Tags {
-				if tag.Key != nil && tag.Value != nil {
-					record.Tags[*tag.Key] = *tag.Value
-				}
-			}
-		}
 	}
 
 	data, err := json.Marshal(record)
@@ -553,13 +543,7 @@ func (s *VPCServiceImpl) eniRecordToEC2(record *ENIRecord, accountID string) *ec
 		}
 	}
 
-	if len(record.Tags) > 0 {
-		tags := make([]*ec2.Tag, 0, len(record.Tags))
-		for k, v := range record.Tags {
-			tags = append(tags, &ec2.Tag{Key: aws.String(k), Value: aws.String(v)})
-		}
-		eni.TagSet = tags
-	}
+	eni.TagSet = utils.MapToEC2Tags(record.Tags)
 
 	return eni
 }
@@ -575,10 +559,7 @@ func generateENIMac(eniId string) string {
 
 // publishENIEvent publishes an ENI lifecycle event to NATS for vpcd consumption.
 func (s *VPCServiceImpl) publishENIEvent(topic, eniId, subnetId, vpcId, privateIP, macAddr string) {
-	if s.natsConn == nil {
-		return
-	}
-	evt := struct {
+	utils.PublishEvent(s.natsConn, topic, struct {
 		NetworkInterfaceId string `json:"network_interface_id"`
 		SubnetId           string `json:"subnet_id"`
 		VpcId              string `json:"vpc_id"`
@@ -590,16 +571,7 @@ func (s *VPCServiceImpl) publishENIEvent(topic, eniId, subnetId, vpcId, privateI
 		VpcId:              vpcId,
 		PrivateIpAddress:   privateIP,
 		MacAddress:         macAddr,
-	}
-
-	data, err := json.Marshal(evt)
-	if err != nil {
-		slog.Error("Failed to marshal ENI event", "topic", topic, "err", err)
-		return
-	}
-	if err := s.natsConn.Publish(topic, data); err != nil {
-		slog.Error("Failed to publish ENI event", "topic", topic, "err", err)
-	}
+	})
 }
 
 // publishNATEvent publishes a NAT lifecycle event (vpc.add-nat or vpc.delete-nat) to NATS.

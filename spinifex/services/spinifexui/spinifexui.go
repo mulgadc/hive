@@ -98,14 +98,7 @@ func (svc *Service) Stop() error {
 
 // Status returns the status of the spinifex-ui service
 func (svc *Service) Status() (string, error) {
-	pid, err := utils.ReadPidFile(serviceName)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "stopped", nil
-		}
-		return "", fmt.Errorf("read pid file: %w", err)
-	}
-	return fmt.Sprintf("running (pid: %d)", pid), nil
+	return utils.ServiceStatus("", serviceName)
 }
 
 // Shutdown gracefully shuts down the spinifex-ui service

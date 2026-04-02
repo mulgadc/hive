@@ -112,18 +112,8 @@ func (s *VPCServiceImpl) CreateSecurityGroup(input *ec2.CreateSecurityGroupInput
 		VpcId:        vpcId,
 		IngressRules: []SGRule{},
 		EgressRules:  defaultEgress,
-		Tags:         make(map[string]string),
+		Tags:         utils.ExtractTags(input.TagSpecifications, "security-group"),
 		CreatedAt:    time.Now(),
-	}
-
-	for _, tagSpec := range input.TagSpecifications {
-		if tagSpec.ResourceType != nil && *tagSpec.ResourceType == "security-group" {
-			for _, tag := range tagSpec.Tags {
-				if tag.Key != nil && tag.Value != nil {
-					record.Tags[*tag.Key] = *tag.Value
-				}
-			}
-		}
 	}
 
 	data, err := json.Marshal(record)
@@ -504,13 +494,7 @@ func (s *VPCServiceImpl) sgRecordToEC2(record *SecurityGroupRecord, accountID st
 		IpPermissionsEgress: sgRulesToIpPermissions(record.EgressRules),
 	}
 
-	if len(record.Tags) > 0 {
-		tags := make([]*ec2.Tag, 0, len(record.Tags))
-		for k, v := range record.Tags {
-			tags = append(tags, &ec2.Tag{Key: aws.String(k), Value: aws.String(v)})
-		}
-		sg.Tags = tags
-	}
+	sg.Tags = utils.MapToEC2Tags(record.Tags)
 
 	return sg
 }
@@ -638,15 +622,5 @@ func sgRuleKey(r SGRule) string {
 
 // publishSGEvent publishes a security group lifecycle event to NATS for vpcd consumption.
 func (s *VPCServiceImpl) publishSGEvent(topic string, evt SGEvent) {
-	if s.natsConn == nil {
-		return
-	}
-	data, err := json.Marshal(evt)
-	if err != nil {
-		slog.Error("Failed to marshal SG event", "topic", topic, "err", err)
-		return
-	}
-	if err := s.natsConn.Publish(topic, data); err != nil {
-		slog.Error("Failed to publish SG event", "topic", topic, "err", err)
-	}
+	utils.PublishEvent(s.natsConn, topic, evt)
 }

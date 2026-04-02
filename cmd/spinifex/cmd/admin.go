@@ -19,6 +19,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
@@ -1250,6 +1251,16 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 	admin.CreateServiceDirectories(spxRoot)
 
+	// In production layout (running as root), fix ownership so the service user
+	// can read config and write data. SUDO_USER identifies the operator account.
+	if os.Getuid() == 0 {
+		sudoUser := os.Getenv("SUDO_USER")
+		if sudoUser != "" {
+			admin.ChownRecursive(configDir, sudoUser)
+			admin.ChownRecursive(spxRoot, sudoUser)
+		}
+	}
+
 	// Keep formation server running briefly so joining nodes can fetch complete status
 	fmt.Println("\n⏳ Waiting for joining nodes to fetch cluster data...")
 	time.Sleep(15 * time.Second)
@@ -1353,9 +1364,14 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // formation server uses ephemeral self-signed cert
+		},
+	}
 
-	joinURL := fmt.Sprintf("http://%s/formation/join", leaderHost)
+	joinURL := fmt.Sprintf("https://%s/formation/join", leaderHost)
 	resp, err := client.Post(joinURL, "application/json", bytes.NewBuffer(reqBody))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error connecting to formation server: %v\n", err)
@@ -1384,7 +1400,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	fmt.Printf("✅ Registered with formation server (%d/%d nodes joined)\n", joinResp.Joined, joinResp.Expected)
 
 	// Poll status until formation is complete
-	statusURL := fmt.Sprintf("http://%s/formation/status", leaderHost)
+	statusURL := fmt.Sprintf("https://%s/formation/status", leaderHost)
 	var statusResp formation.StatusResponse
 
 	for {
@@ -1640,6 +1656,16 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	}
 
 	admin.CreateServiceDirectories(dataDir)
+
+	// In production layout (running as root), fix ownership so the service user
+	// can read config and write data. SUDO_USER identifies the operator account.
+	if os.Getuid() == 0 {
+		sudoUser := os.Getenv("SUDO_USER")
+		if sudoUser != "" {
+			admin.ChownRecursive(configDir, sudoUser)
+			admin.ChownRecursive(dataDir, sudoUser)
+		}
+	}
 
 	// Print cluster summary
 	fmt.Println("\n🎉 Node successfully joined cluster!")

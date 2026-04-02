@@ -93,19 +93,8 @@ func (s *EIPServiceImpl) AllocateAddress(input *ec2.AllocateAddressInput, accoun
 		PublicIp:     publicIP,
 		PoolName:     poolName,
 		State:        "allocated",
-		Tags:         make(map[string]string),
+		Tags:         utils.ExtractTags(input.TagSpecifications, "elastic-ip"),
 		CreatedAt:    time.Now(),
-	}
-
-	// Store tags from input.
-	for _, tagSpec := range input.TagSpecifications {
-		if tagSpec.ResourceType != nil && *tagSpec.ResourceType == "elastic-ip" {
-			for _, tag := range tagSpec.Tags {
-				if tag.Key != nil && tag.Value != nil {
-					record.Tags[*tag.Key] = *tag.Value
-				}
-			}
-		}
 	}
 
 	data, err := json.Marshal(record)
@@ -580,26 +569,13 @@ func (s *EIPServiceImpl) findByAssociationID(accountID, associationID string) (*
 // publishNATEvent publishes a NAT lifecycle event to NATS for vpcd consumption.
 // This is fire-and-forget; errors are logged but do not fail the API response.
 func (s *EIPServiceImpl) publishNATEvent(topic, vpcID, externalIP, logicalIP, eniID, mac string) {
-	if s.natsConn == nil {
-		return
-	}
-
-	evt := natEvent{
+	utils.PublishEvent(s.natsConn, topic, natEvent{
 		VpcId:      vpcID,
 		ExternalIP: externalIP,
 		LogicalIP:  logicalIP,
 		PortName:   eniID,
 		MAC:        mac,
-	}
-
-	data, err := json.Marshal(evt)
-	if err != nil {
-		slog.Error("Failed to marshal NAT event", "topic", topic, "err", err)
-		return
-	}
-	if err := s.natsConn.Publish(topic, data); err != nil {
-		slog.Error("Failed to publish NAT event", "topic", topic, "err", err)
-	}
+	})
 }
 
 // eipRecordToEC2 converts an EIPRecord to an EC2 Address.
@@ -624,13 +600,7 @@ func (s *EIPServiceImpl) eipRecordToEC2(record *EIPRecord) *ec2.Address {
 		addr.PrivateIpAddress = aws.String(record.PrivateIp)
 	}
 
-	if len(record.Tags) > 0 {
-		tags := make([]*ec2.Tag, 0, len(record.Tags))
-		for k, v := range record.Tags {
-			tags = append(tags, &ec2.Tag{Key: aws.String(k), Value: aws.String(v)})
-		}
-		addr.Tags = tags
-	}
+	addr.Tags = utils.MapToEC2Tags(record.Tags)
 
 	return addr
 }

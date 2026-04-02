@@ -196,7 +196,8 @@ download_spinifex() {
         fi
         info "Checksum verified"
     else
-        warn "Checksum not available, skipping verification"
+        rm -rf "$SPINIFEX_TMPDIR"
+        fatal "Checksum not available at $CHECKSUM_URL. Cannot verify download integrity."
     fi
 
     # Extract

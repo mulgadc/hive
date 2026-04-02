@@ -12,6 +12,13 @@ on:
       - tests/e2e/**
       - .github/workflows/e2e.yml
   workflow_dispatch:
+    inputs:
+      sha:
+        description: "PR head SHA to report status on"
+        required: false
+
+permissions:
+  statuses: write
 
 env:
   GIT_BRANCH: ${{ github.ref_name }}
@@ -24,7 +31,7 @@ jobs:
     env:
       TOFU_LOG: /tmp/e2e-tofu-single-${{ github.run_id }}.log
     steps:
-      - name: Clean workspace
+      - name: Clean Workspace
         run: rm -rf "$GITHUB_WORKSPACE"/*
 
       - uses: actions/create-github-app-token@v3
@@ -88,7 +95,7 @@ jobs:
     env:
       TOFU_LOG: /tmp/e2e-tofu-pseudo-${{ github.run_id }}.log
     steps:
-      - name: Clean workspace
+      - name: Clean Workspace
         run: rm -rf "$GITHUB_WORKSPACE"/*
 
       - uses: actions/create-github-app-token@v3
@@ -151,7 +158,7 @@ jobs:
     env:
       TOFU_LOG: /tmp/e2e-tofu-multi-${{ github.run_id }}.log
     steps:
-      - name: Clean workspace
+      - name: Clean Workspace
         run: rm -rf "$GITHUB_WORKSPACE"/*
 
       - uses: actions/create-github-app-token@v3
@@ -215,3 +222,29 @@ jobs:
           tofu workspace select -or-create env2 >> "$TOFU_LOG" 2>&1
           tofu destroy -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
           ./scrub-env.sh env2 >> "$TOFU_LOG" 2>&1 || true
+
+  e2e_status:
+    name: Report E2E Status
+    if: always() && inputs.sha
+    needs: [e2e_single, e2e_pseudo_multi, e2e_real_multi]
+    runs-on: [self-hosted, ci-single]
+    timeout-minutes: 5
+    steps:
+      - name: Report status to PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "${{ needs.e2e_single.result }}" == "success" && \
+                "${{ needs.e2e_pseudo_multi.result }}" == "success" && \
+                "${{ needs.e2e_real_multi.result }}" == "success" ]]; then
+            STATE="success"
+            DESC="All E2E suites passed"
+          else
+            STATE="failure"
+            DESC="E2E failed: single=${{ needs.e2e_single.result }} pseudo=${{ needs.e2e_pseudo_multi.result }} multi=${{ needs.e2e_real_multi.result }}"
+          fi
+          gh api "repos/${{ github.repository }}/statuses/${{ inputs.sha }}" \
+            -f state="$STATE" \
+            -f context=e2e \
+            -f description="$DESC" \
+            -f target_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

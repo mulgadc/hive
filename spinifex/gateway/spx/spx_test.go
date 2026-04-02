@@ -3,8 +3,8 @@ package spx
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -52,23 +52,7 @@ func TestGetVersion_Dev(t *testing.T) {
 // startEmbeddedNATS starts an in-process NATS server for testing.
 func startEmbeddedNATS(t *testing.T) (*server.Server, *nats.Conn) {
 	t.Helper()
-	opts := &server.Options{
-		Host: "127.0.0.1",
-		Port: -1, // random port
-	}
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err)
-	go ns.Start()
-	if !ns.ReadyForConnections(2 * time.Second) {
-		t.Fatal("NATS server not ready")
-	}
-	nc, err := nats.Connect(ns.ClientURL())
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		nc.Close()
-		ns.Shutdown()
-	})
-	return ns, nc
+	return testutil.StartTestNATS(t)
 }
 
 func TestGetNodes_NoResponders(t *testing.T) {

@@ -12,7 +12,7 @@ set -euo pipefail
 
 PROFILE=""
 BASE_REF=""
-THRESHOLD=60
+THRESHOLD=65
 QUIET="${QUIET:-}"
 
 while [[ $# -gt 0 ]]; do

@@ -113,6 +113,19 @@ func RemovePidFileAt(dir string, name string) error {
 	return os.Remove(filepath.Join(dir, fmt.Sprintf("%s.pid", name)))
 }
 
+// ServiceStatus returns a human-readable status string for a service by
+// checking its PID file. If dir is empty, the default pidPath() is used.
+func ServiceStatus(dir, name string) (string, error) {
+	pid, err := ReadPidFileFrom(dir, name)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "stopped", nil
+		}
+		return "", fmt.Errorf("read pid file: %w", err)
+	}
+	return fmt.Sprintf("running (pid: %d)", pid), nil
+}
+
 // StopProcessAt stops a process using a PID file in a specific directory.
 // If dir is empty, falls back to the default pidPath(). The PID file is
 // always removed, even if the process is already dead, to prevent stale

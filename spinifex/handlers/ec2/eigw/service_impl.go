@@ -94,18 +94,8 @@ func (s *EgressOnlyIGWServiceImpl) CreateEgressOnlyInternetGateway(input *ec2.Cr
 		EgressOnlyInternetGatewayId: eigwID,
 		VpcId:                       *input.VpcId,
 		State:                       "attached",
-		Tags:                        make(map[string]string),
+		Tags:                        utils.ExtractTags(input.TagSpecifications, "egress-only-internet-gateway"),
 		CreatedAt:                   time.Now(),
-	}
-
-	for _, tagSpec := range input.TagSpecifications {
-		if tagSpec.ResourceType != nil && *tagSpec.ResourceType == "egress-only-internet-gateway" {
-			for _, tag := range tagSpec.Tags {
-				if tag.Key != nil && tag.Value != nil {
-					record.Tags[*tag.Key] = *tag.Value
-				}
-			}
-		}
 	}
 
 	data, err := json.Marshal(record)
@@ -250,13 +240,7 @@ func (s *EgressOnlyIGWServiceImpl) recordToEC2(record *EgressOnlyIGWRecord) *ec2
 		},
 	}
 
-	if len(record.Tags) > 0 {
-		tags := make([]*ec2.Tag, 0, len(record.Tags))
-		for k, v := range record.Tags {
-			tags = append(tags, &ec2.Tag{Key: aws.String(k), Value: aws.String(v)})
-		}
-		eigw.Tags = tags
-	}
+	eigw.Tags = utils.MapToEC2Tags(record.Tags)
 
 	return eigw
 }
