@@ -245,13 +245,13 @@ var viperblockStartCmd = &cobra.Command{
 
 		accessKey := viper.GetString("access-key")
 		if accessKey != "" {
-			fmt.Println("Overwriting access-key:", accessKey)
+			fmt.Println("Overwriting access-key: ****")
 			nodeConfig.Predastore.AccessKey = accessKey
 		}
 
 		secretKey := viper.GetString("secret-key")
 		if secretKey != "" {
-			fmt.Println("Overwriting secret-key:", secretKey)
+			fmt.Println("Overwriting secret-key: ****")
 			nodeConfig.Predastore.SecretKey = secretKey
 		}
 
