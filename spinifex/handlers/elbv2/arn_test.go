@@ -23,8 +23,13 @@ func TestBuildTGArn(t *testing.T) {
 }
 
 func TestBuildListenerArn(t *testing.T) {
-	arn := buildListenerArn("eu-west-1", "999888777666", "my-alb", "lbid123", "listener456")
+	arn := buildListenerArn("eu-west-1", "999888777666", "my-alb", "lbid123", "listener456", LoadBalancerTypeApplication)
 	assert.Equal(t, "arn:aws:elasticloadbalancing:eu-west-1:999888777666:listener/app/my-alb/lbid123/listener456", arn)
+}
+
+func TestBuildListenerArn_NLB(t *testing.T) {
+	arn := buildListenerArn("eu-west-1", "999888777666", "my-nlb", "lbid123", "listener456", LoadBalancerTypeNetwork)
+	assert.Equal(t, "arn:aws:elasticloadbalancing:eu-west-1:999888777666:listener/net/my-nlb/lbid123/listener456", arn)
 }
 
 func TestAlbVMUserData_ContainsLBID(t *testing.T) {

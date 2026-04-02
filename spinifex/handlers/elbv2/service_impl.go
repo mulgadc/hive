@@ -390,8 +390,33 @@ func buildTGArn(region, accountID, name, tgID string) string {
 }
 
 // buildListenerArn constructs a listener ARN from components.
-func buildListenerArn(region, accountID, lbName, lbID, listenerID string) string {
-	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:listener/app/%s/%s/%s", region, accountID, lbName, lbID, listenerID)
+// ALBs use the /app/ path segment; NLBs use /net/.
+func buildListenerArn(region, accountID, lbName, lbID, listenerID, lbType string) string {
+	pathSegment := "app"
+	if lbType == LoadBalancerTypeNetwork {
+		pathSegment = "net"
+	}
+	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:listener/%s/%s/%s/%s", region, accountID, pathSegment, lbName, lbID, listenerID)
+}
+
+// isCompatibleProtocol checks whether a listener protocol is compatible with a
+// target group protocol. ALB: HTTP/HTTPS listeners can forward to HTTP or HTTPS
+// TGs. NLB: TCP→TCP, UDP→UDP, TLS→TCP or TLS, TCP_UDP→TCP_UDP.
+func isCompatibleProtocol(listenerProto, tgProto string) bool {
+	switch listenerProto {
+	case ProtocolHTTP, ProtocolHTTPS:
+		return tgProto == ProtocolHTTP || tgProto == ProtocolHTTPS
+	case ProtocolTCP:
+		return tgProto == ProtocolTCP
+	case ProtocolUDP:
+		return tgProto == ProtocolUDP
+	case ProtocolTLS:
+		return tgProto == ProtocolTCP || tgProto == ProtocolTLS
+	case ProtocolTCPUDP:
+		return tgProto == ProtocolTCPUDP
+	default:
+		return false
+	}
 }
 
 // --- Load Balancer operations ---
@@ -1103,6 +1128,24 @@ func (s *ELBv2ServiceImpl) CreateListener(input *elbv2.CreateListenerInput, acco
 		protocol = *input.Protocol
 	}
 
+	// Validate protocol is appropriate for the LB type.
+	switch lb.Type {
+	case LoadBalancerTypeNetwork:
+		switch protocol {
+		case ProtocolTCP, ProtocolUDP, ProtocolTLS, ProtocolTCPUDP:
+			// valid NLB protocols
+		default:
+			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+		}
+	default: // application
+		switch protocol {
+		case ProtocolHTTP, ProtocolHTTPS:
+			// valid ALB protocols
+		default:
+			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+		}
+	}
+
 	port := int64(80)
 	if input.Port != nil {
 		port = *input.Port
@@ -1120,8 +1163,25 @@ func (s *ELBv2ServiceImpl) CreateListener(input *elbv2.CreateListenerInput, acco
 		}
 	}
 
+	// Validate listener-to-target-group protocol compatibility.
+	for _, a := range input.DefaultActions {
+		if a.Type != nil && *a.Type == ActionTypeForward && a.TargetGroupArn != nil {
+			tg, tgErr := s.store.GetTargetGroupByArn(*a.TargetGroupArn)
+			if tgErr != nil {
+				slog.Error("CreateListener: failed to get target group", "arn", *a.TargetGroupArn, "err", tgErr)
+				return nil, errors.New(awserrors.ErrorServerInternal)
+			}
+			if tg == nil {
+				return nil, errors.New(awserrors.ErrorELBv2TargetGroupNotFound)
+			}
+			if !isCompatibleProtocol(protocol, tg.Protocol) {
+				return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+			}
+		}
+	}
+
 	listenerID := utils.GenerateResourceID("lst")
-	listenerArn := buildListenerArn(s.region, accountID, lb.Name, lb.LoadBalancerID, listenerID)
+	listenerArn := buildListenerArn(s.region, accountID, lb.Name, lb.LoadBalancerID, listenerID, lb.Type)
 
 	var actions []ListenerAction
 	for _, a := range input.DefaultActions {
