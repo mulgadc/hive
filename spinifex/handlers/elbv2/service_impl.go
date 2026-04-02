@@ -726,6 +726,14 @@ func (s *ELBv2ServiceImpl) CreateTargetGroup(input *elbv2.CreateTargetGroupInput
 		protocol = *input.Protocol
 	}
 
+	// Validate protocol.
+	switch protocol {
+	case ProtocolHTTP, ProtocolHTTPS, ProtocolTCP, ProtocolUDP, ProtocolTLS, ProtocolTCPUDP:
+		// valid
+	default:
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
 	port := int64(80)
 	if input.Port != nil {
 		port = *input.Port
@@ -751,7 +759,14 @@ func (s *ELBv2ServiceImpl) CreateTargetGroup(input *elbv2.CreateTargetGroupInput
 		targetType = *input.TargetType
 	}
 
-	hc := DefaultHealthCheck()
+	// Use NLB health check defaults for NLB protocols.
+	var hc HealthCheckConfig
+	switch protocol {
+	case ProtocolTCP, ProtocolUDP, ProtocolTLS, ProtocolTCPUDP:
+		hc = DefaultNLBHealthCheck()
+	default:
+		hc = DefaultHealthCheck()
+	}
 	if input.HealthCheckProtocol != nil {
 		hc.Protocol = *input.HealthCheckProtocol
 	}

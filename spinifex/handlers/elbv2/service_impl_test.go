@@ -313,6 +313,86 @@ func TestCreateTargetGroup_CustomHealthCheck(t *testing.T) {
 	assert.Equal(t, "200-299", *tg.Matcher.HttpCode)
 }
 
+func TestCreateTargetGroup_TCPProtocol(t *testing.T) {
+	svc := setupTestService(t)
+
+	out, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+		Name:     aws.String("tcp-tg"),
+		Protocol: aws.String("TCP"),
+		Port:     aws.Int64(5432),
+		VpcId:    aws.String("vpc-test"),
+	}, testAccountID)
+
+	require.NoError(t, err)
+	require.Len(t, out.TargetGroups, 1)
+	tg := out.TargetGroups[0]
+	assert.Equal(t, "tcp-tg", *tg.TargetGroupName)
+	assert.Equal(t, "TCP", *tg.Protocol)
+	assert.Equal(t, int64(5432), *tg.Port)
+	// NLB health check defaults: TCP protocol, no path, no matcher.
+	assert.Equal(t, "TCP", *tg.HealthCheckProtocol)
+	assert.Equal(t, "", *tg.HealthCheckPath)
+	assert.Equal(t, "", *tg.Matcher.HttpCode)
+	assert.Equal(t, int64(10), *tg.HealthCheckTimeoutSeconds)
+	assert.Equal(t, int64(3), *tg.HealthyThresholdCount)
+	assert.Equal(t, int64(3), *tg.UnhealthyThresholdCount)
+}
+
+func TestCreateTargetGroup_NLBProtocols(t *testing.T) {
+	for _, proto := range []string{"TCP", "UDP", "TLS", "TCP_UDP"} {
+		t.Run(proto, func(t *testing.T) {
+			svc := setupTestService(t)
+
+			out, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+				Name:     aws.String("tg-" + proto),
+				Protocol: aws.String(proto),
+				Port:     aws.Int64(8080),
+			}, testAccountID)
+
+			require.NoError(t, err)
+			require.Len(t, out.TargetGroups, 1)
+			assert.Equal(t, proto, *out.TargetGroups[0].Protocol)
+			// All NLB protocols get NLB health check defaults.
+			assert.Equal(t, "TCP", *out.TargetGroups[0].HealthCheckProtocol)
+		})
+	}
+}
+
+func TestCreateTargetGroup_InvalidProtocol(t *testing.T) {
+	svc := setupTestService(t)
+
+	_, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+		Name:     aws.String("bad-proto-tg"),
+		Protocol: aws.String("SCTP"),
+	}, testAccountID)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidParameterValue")
+}
+
+func TestCreateTargetGroup_TCPWithCustomHealthCheck(t *testing.T) {
+	svc := setupTestService(t)
+
+	out, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+		Name:                       aws.String("tcp-custom-hc"),
+		Protocol:                   aws.String("TCP"),
+		Port:                       aws.Int64(3306),
+		HealthCheckProtocol:        aws.String("HTTP"),
+		HealthCheckPath:            aws.String("/health"),
+		HealthCheckIntervalSeconds: aws.Int64(15),
+		Matcher:                    &elbv2.Matcher{HttpCode: aws.String("200")},
+	}, testAccountID)
+
+	require.NoError(t, err)
+	tg := out.TargetGroups[0]
+	assert.Equal(t, "TCP", *tg.Protocol)
+	// User overrides should take effect even on NLB target groups.
+	assert.Equal(t, "HTTP", *tg.HealthCheckProtocol)
+	assert.Equal(t, "/health", *tg.HealthCheckPath)
+	assert.Equal(t, "200", *tg.Matcher.HttpCode)
+	assert.Equal(t, int64(15), *tg.HealthCheckIntervalSeconds)
+}
+
 func TestCreateTargetGroup_DuplicateName(t *testing.T) {
 	svc := setupTestService(t)
 
