@@ -8,6 +8,7 @@ Requires=spinifex-nats.service
 Type=simple
 User=spinifex
 Group=spinifex
+ExecStartPre=/bin/sh -c 'NATS_HOST=$(grep "^listen:" /etc/spinifex/nats/nats.conf | sed "s/listen: *//;s/:.*//"); for i in $(seq 1 30); do nc -z ${NATS_HOST:-127.0.0.1} 4222 && exit 0; sleep 1; done; exit 1'
 ExecStart=/usr/local/bin/spx service awsgw start
 Restart=on-failure
 RestartSec=5
