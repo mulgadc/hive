@@ -25,7 +25,7 @@ env:
 
 jobs:
   e2e_single:
-    name: Single-Node E2E (Binary Install)
+    name: Single-Node E2E
     runs-on: [self-hosted, ci-single]
     timeout-minutes: 25
     env:
