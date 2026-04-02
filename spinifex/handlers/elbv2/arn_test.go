@@ -8,8 +8,13 @@ import (
 )
 
 func TestBuildLBArn(t *testing.T) {
-	arn := buildLBArn("us-east-1", "123456789012", "my-alb", "50dc6c495c0c9188")
+	arn := buildLBArn("us-east-1", "123456789012", "my-alb", "50dc6c495c0c9188", LoadBalancerTypeApplication)
 	assert.Equal(t, "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/my-alb/50dc6c495c0c9188", arn)
+}
+
+func TestBuildLBArn_Network(t *testing.T) {
+	arn := buildLBArn("us-east-1", "123456789012", "my-nlb", "50dc6c495c0c9188", LoadBalancerTypeNetwork)
+	assert.Equal(t, "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/net/my-nlb/50dc6c495c0c9188", arn)
 }
 
 func TestBuildTGArn(t *testing.T) {

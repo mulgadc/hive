@@ -350,9 +350,14 @@ func (s *ELBv2ServiceImpl) GetALBConfig(input *GetALBConfigInput, accountID stri
 	}, nil
 }
 
-// buildLBArn constructs an ALB ARN from components.
-func buildLBArn(region, accountID, name, lbID string) string {
-	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:loadbalancer/app/%s/%s", region, accountID, name, lbID)
+// buildLBArn constructs a load balancer ARN from components.
+// ALBs use the /app/ path segment; NLBs use /net/.
+func buildLBArn(region, accountID, name, lbID, lbType string) string {
+	pathSegment := "app"
+	if lbType == LoadBalancerTypeNetwork {
+		pathSegment = "net"
+	}
+	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:loadbalancer/%s/%s/%s", region, accountID, pathSegment, name, lbID)
 }
 
 // resolveTargetIP looks up the private IP for an instance by finding its primary ENI.
@@ -408,6 +413,20 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		return nil, errors.New(awserrors.ErrorELBv2DuplicateLoadBalancer)
 	}
 
+	// Resolve load balancer type — default to application (ALB).
+	lbType := LoadBalancerTypeApplication
+	if input.Type != nil && *input.Type != "" {
+		lbType = *input.Type
+		if lbType != LoadBalancerTypeApplication && lbType != LoadBalancerTypeNetwork {
+			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+		}
+	}
+
+	// NLBs do not support security groups.
+	if lbType == LoadBalancerTypeNetwork && len(input.SecurityGroups) > 0 {
+		return nil, errors.New(awserrors.ErrorELBv2InvalidConfigurationRequest)
+	}
+
 	scheme := SchemeInternetFacing
 	if input.Scheme != nil && *input.Scheme != "" {
 		scheme = *input.Scheme
@@ -417,7 +436,11 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 	}
 
 	lbID := utils.GenerateResourceID("lb")
-	lbArn := buildLBArn(s.region, accountID, name, lbID)
+	lbArn := buildLBArn(s.region, accountID, name, lbID, lbType)
+	arnPathSegment := "app"
+	if lbType == LoadBalancerTypeNetwork {
+		arnPathSegment = "net"
+	}
 	dnsPrefix := ""
 	if scheme == SchemeInternal {
 		dnsPrefix = "internal-"
@@ -453,7 +476,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		for _, subnetID := range subnets {
 			eniOut, eniErr := s.vpcService.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
 				SubnetId:    aws.String(subnetID),
-				Description: aws.String(fmt.Sprintf("ELB app/%s/%s", name, lbID)),
+				Description: aws.String(fmt.Sprintf("ELB %s/%s/%s", arnPathSegment, name, lbID)),
 				TagSpecifications: []*ec2.TagSpecification{
 					{
 						ResourceType: aws.String("network-interface"),
@@ -553,26 +576,27 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 	}
 
 	record := &LoadBalancerRecord{
-		LoadBalancerArn: lbArn,
-		LoadBalancerID:  lbID,
-		DNSName:         dnsName,
-		Name:            name,
-		Scheme:          scheme,
-		Type:            LoadBalancerTypeApplication,
-		State:           state,
-		VpcId:           vpcID,
-		SecurityGroups:  securityGroups,
-		Subnets:         subnets,
-		AvailZones:      availZones,
-		ENIs:            eniIDs,
-		InstanceID:      albInstanceID,
-		VPCIP:           albVPCIP,
-		HostPorts:       hostPorts,
-		IPAddressType:   IPAddressTypeIPv4,
-		NodeID:          s.nodeID,
-		Tags:            tags,
-		AccountID:       accountID,
-		CreatedAt:       time.Now().UTC(),
+		LoadBalancerArn:  lbArn,
+		LoadBalancerID:   lbID,
+		DNSName:          dnsName,
+		Name:             name,
+		Scheme:           scheme,
+		Type:             lbType,
+		CrossZoneEnabled: lbType == LoadBalancerTypeApplication,
+		State:            state,
+		VpcId:            vpcID,
+		SecurityGroups:   securityGroups,
+		Subnets:          subnets,
+		AvailZones:       availZones,
+		ENIs:             eniIDs,
+		InstanceID:       albInstanceID,
+		VPCIP:            albVPCIP,
+		HostPorts:        hostPorts,
+		IPAddressType:    IPAddressTypeIPv4,
+		NodeID:           s.nodeID,
+		Tags:             tags,
+		AccountID:        accountID,
+		CreatedAt:        time.Now().UTC(),
 	}
 
 	if err := s.store.PutLoadBalancer(record); err != nil {

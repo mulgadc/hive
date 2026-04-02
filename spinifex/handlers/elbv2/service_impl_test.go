@@ -107,6 +107,86 @@ func TestCreateLoadBalancer_WithTags(t *testing.T) {
 	assert.Equal(t, *out.LoadBalancers[0].LoadBalancerArn, *desc.LoadBalancers[0].LoadBalancerArn)
 }
 
+func TestCreateLoadBalancer_NetworkType(t *testing.T) {
+	svc := setupTestService(t)
+
+	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("my-nlb"),
+		Type: aws.String("network"),
+	}, testAccountID)
+
+	require.NoError(t, err)
+	require.Len(t, out.LoadBalancers, 1)
+	lb := out.LoadBalancers[0]
+	assert.Equal(t, "network", *lb.Type)
+	assert.Contains(t, *lb.LoadBalancerArn, "loadbalancer/net/my-nlb")
+	assert.Equal(t, "active", *lb.State.Code)
+}
+
+func TestCreateLoadBalancer_NetworkType_RejectsSecurityGroups(t *testing.T) {
+	svc := setupTestService(t)
+
+	_, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name:           aws.String("nlb-with-sg"),
+		Type:           aws.String("network"),
+		SecurityGroups: []*string{aws.String("sg-111")},
+	}, testAccountID)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidConfigurationRequest")
+}
+
+func TestCreateLoadBalancer_NetworkType_CrossZoneDisabled(t *testing.T) {
+	svc := setupTestService(t)
+
+	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("nlb-cz"),
+		Type: aws.String("network"),
+	}, testAccountID)
+
+	require.NoError(t, err)
+	// Verify the stored record has CrossZoneEnabled=false
+	lb, err := svc.store.GetLoadBalancerByName("nlb-cz", testAccountID)
+	require.NoError(t, err)
+	assert.False(t, lb.CrossZoneEnabled)
+
+	// ALB should default to CrossZoneEnabled=true
+	_, err = svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("alb-cz"),
+	}, testAccountID)
+	require.NoError(t, err)
+	albRec, err := svc.store.GetLoadBalancerByName("alb-cz", testAccountID)
+	require.NoError(t, err)
+	assert.True(t, albRec.CrossZoneEnabled)
+
+	_ = out // suppress unused warning
+}
+
+func TestCreateLoadBalancer_InvalidType(t *testing.T) {
+	svc := setupTestService(t)
+
+	_, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("bad-type"),
+		Type: aws.String("gateway"),
+	}, testAccountID)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "InvalidParameterValue")
+}
+
+func TestCreateLoadBalancer_ALB_AllowsSecurityGroups(t *testing.T) {
+	svc := setupTestService(t)
+
+	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name:           aws.String("alb-with-sg"),
+		SecurityGroups: []*string{aws.String("sg-111")},
+	}, testAccountID)
+
+	require.NoError(t, err)
+	assert.Equal(t, "application", *out.LoadBalancers[0].Type)
+	assert.Contains(t, *out.LoadBalancers[0].LoadBalancerArn, "loadbalancer/app/alb-with-sg")
+}
+
 func TestDeleteLoadBalancer(t *testing.T) {
 	svc := setupTestService(t)
 
