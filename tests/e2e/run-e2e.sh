@@ -1835,7 +1835,7 @@ echo "Phase 8 Step 1: Account Setup"
 echo "----------------------------------------"
 
 echo "  Creating Team Alpha account..."
-ALPHA_OUTPUT=$(sudo spx admin account create --name "Team Alpha" 2>&1)
+ALPHA_OUTPUT=$(spx admin account create --name "Team Alpha" 2>&1)
 echo "$ALPHA_OUTPUT"
 ALPHA_ACCOUNT=$(echo "$ALPHA_OUTPUT" | grep "Account ID:" | awk '{print $NF}')
 ALPHA_KEY_ID=$(echo "$ALPHA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
@@ -1849,7 +1849,7 @@ echo "  Team Alpha: account=$ALPHA_ACCOUNT key=$ALPHA_KEY_ID"
 setup_test_profile spx-team-alpha "$ALPHA_KEY_ID" "$ALPHA_SECRET"
 
 echo "  Creating Team Beta account..."
-BETA_OUTPUT=$(sudo spx admin account create --name "Team Beta" 2>&1)
+BETA_OUTPUT=$(spx admin account create --name "Team Beta" 2>&1)
 echo "$BETA_OUTPUT"
 BETA_ACCOUNT=$(echo "$BETA_OUTPUT" | grep "Account ID:" | awk '{print $NF}')
 BETA_KEY_ID=$(echo "$BETA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
@@ -2384,7 +2384,7 @@ echo "----------------------------------------"
 
 # Empty account (Gamma)
 echo "  Creating empty Gamma account..."
-GAMMA_OUTPUT=$(sudo spx admin account create --name "Team Gamma" 2>&1)
+GAMMA_OUTPUT=$(spx admin account create --name "Team Gamma" 2>&1)
 GAMMA_KEY_ID=$(echo "$GAMMA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
 GAMMA_SECRET=$(echo "$GAMMA_OUTPUT" | grep "Secret Access Key:" | awk '{print $NF}')
 setup_test_profile spx-team-gamma "$GAMMA_KEY_ID" "$GAMMA_SECRET"
