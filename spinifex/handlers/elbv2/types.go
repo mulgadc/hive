@@ -5,6 +5,7 @@ import "time"
 const (
 	// LoadBalancer types
 	LoadBalancerTypeApplication = "application"
+	LoadBalancerTypeNetwork     = "network"
 
 	// LoadBalancer schemes
 	SchemeInternetFacing = "internet-facing"
@@ -22,14 +23,20 @@ const (
 	TargetHealthDraining  = "draining"
 	TargetHealthUnused    = "unused"
 
-	// Listener protocols
+	// Listener protocols (ALB)
 	ProtocolHTTP  = "HTTP"
 	ProtocolHTTPS = "HTTPS"
+
+	// Listener protocols (NLB)
+	ProtocolTCP    = "TCP"
+	ProtocolUDP    = "UDP"
+	ProtocolTLS    = "TLS"
+	ProtocolTCPUDP = "TCP_UDP"
 
 	// Listener action types
 	ActionTypeForward = "forward"
 
-	// Default health check values
+	// Default health check values (ALB)
 	DefaultHealthCheckInterval           = 30
 	DefaultHealthCheckTimeout            = 5
 	DefaultHealthyThreshold              = 5
@@ -40,35 +47,44 @@ const (
 	DefaultHealthCheckMatcher            = "200"
 	DefaultTargetDeregistrationDelaySecs = 300
 
+	// Default health check values (NLB)
+	DefaultNLBHealthCheckInterval = 30
+	DefaultNLBHealthCheckTimeout  = 10
+	DefaultNLBHealthyThreshold    = 3
+	DefaultNLBUnhealthyThreshold  = 3
+	DefaultNLBHealthCheckProtocol = ProtocolTCP
+	DefaultNLBHealthCheckPort     = "traffic-port"
+
 	// IP address type
 	IPAddressTypeIPv4 = "ipv4"
 )
 
-// LoadBalancerRecord represents a stored Application Load Balancer.
+// LoadBalancerRecord represents a stored load balancer (ALB or NLB).
 type LoadBalancerRecord struct {
-	LoadBalancerArn string            `json:"load_balancer_arn"`
-	LoadBalancerID  string            `json:"load_balancer_id"` // Short ID (hex suffix)
-	DNSName         string            `json:"dns_name"`
-	Name            string            `json:"name"`
-	Scheme          string            `json:"scheme"` // "internet-facing" or "internal"
-	Type            string            `json:"type"`   // Always "application"
-	State           string            `json:"state"`  // "provisioning", "active", "failed"
-	VpcId           string            `json:"vpc_id"`
-	SecurityGroups  []string          `json:"security_groups"`
-	Subnets         []string          `json:"subnets"`
-	AvailZones      []AvailZoneInfo   `json:"availability_zones"`
-	ENIs            []string          `json:"enis,omitempty"`        // ENI IDs created for this ALB (internal)
-	InstanceID      string            `json:"instance_id,omitempty"` // ALB VM instance ID (system-managed)
-	VPCIP           string            `json:"vpc_ip,omitempty"`      // VPC private IP of the ALB VM
-	ConfigText      string            `json:"config_text,omitempty"` // Pre-computed HAProxy config
-	ConfigHash      string            `json:"config_hash,omitempty"` // SHA256 of ConfigText
-	LastHeartbeat   time.Time         `json:"last_heartbeat"`        // Last agent heartbeat timestamp
-	HostPorts       map[int]int       `json:"host_ports,omitempty"`  // Dev mode: guest port → host port forwarding
-	NodeID          string            `json:"node_id"`               // Daemon node running this ALB
-	IPAddressType   string            `json:"ip_address_type"`       // "ipv4"
-	Tags            map[string]string `json:"tags,omitempty"`
-	AccountID       string            `json:"account_id"`
-	CreatedAt       time.Time         `json:"created_at"`
+	LoadBalancerArn  string            `json:"load_balancer_arn"`
+	LoadBalancerID   string            `json:"load_balancer_id"` // Short ID (hex suffix)
+	DNSName          string            `json:"dns_name"`
+	Name             string            `json:"name"`
+	Scheme           string            `json:"scheme"` // "internet-facing" or "internal"
+	Type             string            `json:"type"`   // Always "application"
+	State            string            `json:"state"`  // "provisioning", "active", "failed"
+	VpcId            string            `json:"vpc_id"`
+	SecurityGroups   []string          `json:"security_groups"`
+	Subnets          []string          `json:"subnets"`
+	AvailZones       []AvailZoneInfo   `json:"availability_zones"`
+	ENIs             []string          `json:"enis,omitempty"`        // ENI IDs created for this ALB (internal)
+	InstanceID       string            `json:"instance_id,omitempty"` // ALB VM instance ID (system-managed)
+	VPCIP            string            `json:"vpc_ip,omitempty"`      // VPC private IP of the ALB VM
+	ConfigText       string            `json:"config_text,omitempty"` // Pre-computed HAProxy config
+	ConfigHash       string            `json:"config_hash,omitempty"` // SHA256 of ConfigText
+	LastHeartbeat    time.Time         `json:"last_heartbeat"`        // Last agent heartbeat timestamp
+	HostPorts        map[int]int       `json:"host_ports,omitempty"`  // Dev mode: guest port → host port forwarding
+	NodeID           string            `json:"node_id"`               // Daemon node running this ALB
+	IPAddressType    string            `json:"ip_address_type"`       // "ipv4"
+	CrossZoneEnabled bool              `json:"cross_zone_enabled"`    // Default false for NLB, true for ALB
+	Tags             map[string]string `json:"tags,omitempty"`
+	AccountID        string            `json:"account_id"`
+	CreatedAt        time.Time         `json:"created_at"`
 }
 
 // AvailZoneInfo tracks subnet-to-AZ mapping for a load balancer.
@@ -106,7 +122,7 @@ type HealthCheckConfig struct {
 	Matcher            string `json:"matcher"` // HTTP codes e.g. "200" or "200-299"
 }
 
-// DefaultHealthCheck returns a HealthCheckConfig with AWS default values.
+// DefaultHealthCheck returns a HealthCheckConfig with ALB default values.
 func DefaultHealthCheck() HealthCheckConfig {
 	return HealthCheckConfig{
 		Protocol:           DefaultHealthCheckProtocol,
@@ -117,6 +133,19 @@ func DefaultHealthCheck() HealthCheckConfig {
 		HealthyThreshold:   DefaultHealthyThreshold,
 		UnhealthyThreshold: DefaultUnhealthyThreshold,
 		Matcher:            DefaultHealthCheckMatcher,
+	}
+}
+
+// DefaultNLBHealthCheck returns a HealthCheckConfig with NLB default values.
+// NLB uses TCP health checks by default (no path or matcher).
+func DefaultNLBHealthCheck() HealthCheckConfig {
+	return HealthCheckConfig{
+		Protocol:           DefaultNLBHealthCheckProtocol,
+		Port:               DefaultNLBHealthCheckPort,
+		IntervalSeconds:    DefaultNLBHealthCheckInterval,
+		TimeoutSeconds:     DefaultNLBHealthCheckTimeout,
+		HealthyThreshold:   DefaultNLBHealthyThreshold,
+		UnhealthyThreshold: DefaultNLBUnhealthyThreshold,
 	}
 }
 
