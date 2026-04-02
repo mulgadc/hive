@@ -59,10 +59,17 @@ func New(config any) (*Service, error) {
 		cfg.Host = "0.0.0.0"
 	}
 
-	// Default TLS paths from home directory if not specified
+	// Default TLS paths: production layout (/etc/spinifex/) if it exists,
+	// otherwise fall back to dev layout (~/spinifex/config/).
 	if cfg.TLSCert == "" || cfg.TLSKey == "" {
-		homeDir, err := os.UserHomeDir()
-		if err == nil {
+		if info, err := os.Stat("/etc/spinifex"); err == nil && info.IsDir() {
+			if cfg.TLSCert == "" {
+				cfg.TLSCert = "/etc/spinifex/server.pem"
+			}
+			if cfg.TLSKey == "" {
+				cfg.TLSKey = "/etc/spinifex/server.key"
+			}
+		} else if homeDir, err := os.UserHomeDir(); err == nil {
 			if cfg.TLSCert == "" {
 				cfg.TLSCert = filepath.Join(homeDir, "spinifex", "config", "server.pem")
 			}
