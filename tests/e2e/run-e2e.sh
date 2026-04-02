@@ -40,7 +40,11 @@ if [ -n "$ENDPOINT_URL" ]; then
 fi
 DETECTED_PS_HOST=$(awk -F'"' '/\[nodes\..*\.predastore\]/{found=1} found && /^host/{print $2; exit}' /etc/spinifex/spinifex.toml)
 if [ -n "$DETECTED_PS_HOST" ]; then
-    PREDASTORE_HOST="${DETECTED_PS_HOST%%:*}"
+    PS_IP="${DETECTED_PS_HOST%%:*}"
+    # 0.0.0.0 means "all interfaces" — use localhost for S3 client calls
+    if [ "$PS_IP" != "0.0.0.0" ]; then
+        PREDASTORE_HOST="$PS_IP"
+    fi
 fi
 
 # Helper: set up an AWS CLI profile with credentials + endpoint/CA config from the spinifex profile
