@@ -235,14 +235,6 @@ install_files() {
         info "  /usr/local/share/spinifex/setup-ovn.sh"
     fi
 
-    # Service helper scripts
-    if [ -d "$EXTRACT_DIR/scripts" ]; then
-        for script in "$EXTRACT_DIR"/scripts/*.sh; do
-            $SUDO install -o "$SPINIFEX_USER" -g "$SPINIFEX_GROUP" -m 0755 \
-                "$script" "/var/lib/spinifex/$(basename "$script")"
-            info "  /var/lib/spinifex/$(basename "$script")"
-        done
-    fi
 }
 
 # --- Create directories ---
@@ -282,6 +274,15 @@ SPINIFEX_VIPERBLOCK_PLUGIN_PATH=${PLUGINDIR}/nbdkit-viperblock-plugin.so
 EOF
     $SUDO chown "$SPINIFEX_USER:$SPINIFEX_GROUP" /etc/spinifex/systemd.env
     info "Generated /etc/spinifex/systemd.env"
+
+    # Service helper scripts
+    if [ -d "$EXTRACT_DIR/scripts" ]; then
+        for script in "$EXTRACT_DIR"/scripts/*.sh; do
+            $SUDO install -o "$SPINIFEX_USER" -g "$SPINIFEX_GROUP" -m 0755 \
+                "$script" "/var/lib/spinifex/$(basename "$script")"
+            info "  /var/lib/spinifex/$(basename "$script")"
+        done
+    fi
 }
 
 # --- Install systemd units ---
