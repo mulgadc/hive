@@ -7,9 +7,9 @@ import (
 )
 
 func TestDefaultConfigDir_Dev(t *testing.T) {
-	// Non-root user without /etc/spinifex should get dev paths
-	if os.Getuid() == 0 {
-		t.Skip("test requires non-root user")
+	// Without /etc/spinifex should get dev paths
+	if _, err := os.Stat("/etc/spinifex"); err == nil {
+		t.Skip("test requires /etc/spinifex to not exist")
 	}
 
 	homeDir, _ := os.UserHomeDir()
@@ -21,8 +21,8 @@ func TestDefaultConfigDir_Dev(t *testing.T) {
 }
 
 func TestDefaultDataDir_Dev(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("test requires non-root user")
+	if _, err := os.Stat("/etc/spinifex"); err == nil {
+		t.Skip("test requires /etc/spinifex to not exist")
 	}
 
 	homeDir, _ := os.UserHomeDir()
@@ -34,8 +34,8 @@ func TestDefaultDataDir_Dev(t *testing.T) {
 }
 
 func TestDefaultConfigFile(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("test requires non-root user")
+	if _, err := os.Stat("/etc/spinifex"); err == nil {
+		t.Skip("test requires /etc/spinifex to not exist")
 	}
 
 	got := DefaultConfigFile()
@@ -46,12 +46,12 @@ func TestDefaultConfigFile(t *testing.T) {
 	}
 }
 
-func TestIsProductionLayout_NonRoot(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("test requires non-root user")
+func TestIsProductionLayout_NoEtcSpinifex(t *testing.T) {
+	if _, err := os.Stat("/etc/spinifex"); err == nil {
+		t.Skip("test requires /etc/spinifex to not exist")
 	}
 
 	if isProductionLayout() {
-		t.Error("isProductionLayout() = true for non-root user, want false")
+		t.Error("isProductionLayout() = true without /etc/spinifex, want false")
 	}
 }

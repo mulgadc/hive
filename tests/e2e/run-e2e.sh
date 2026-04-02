@@ -1,53 +1,25 @@
 #!/bin/bash
+# run-e2e.sh — Single-node E2E test suite (production binary install).
+#
+# Assumes services are already running via systemd (bootstrap-install.sh).
+# Uses production paths: /etc/spinifex, /var/log/spinifex, spx from PATH.
 set -e
 
-# Ensure Go is on PATH (SSH non-interactive shells don't source .bashrc)
-export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
-
-# Ensure we are in the project root
-cd "$(dirname "$0")/../.."
+# Run from the directory containing this script (~/e2e-tests/)
+cd "$(dirname "$0")"
 
 # Source helper functions
-source ./tests/e2e/lib/multinode-helpers.sh
+source ./lib/multinode-helpers.sh
 
-# Ensure services are stopped on exit and print logs on failure
+# Dump journald logs on failure
 cleanup() {
     EXIT_CODE=$?
     if [ $EXIT_CODE -ne 0 ]; then
-        echo ""
-        echo "=== NATS Service Log ==="
-        if [ -f ~/spinifex/logs/nats.log ]; then
-            tail -100 ~/spinifex/logs/nats.log 2>/dev/null
-        fi
-        echo ""
-        echo "=== Predastore Service Log ==="
-        if [ -f ~/spinifex/logs/predastore.log ]; then
-            tail -100 ~/spinifex/logs/predastore.log 2>/dev/null
-        fi
-        echo ""
-        echo "=== Viperblock Service Log ==="
-        if [ -f ~/spinifex/logs/viperblock.log ]; then
-            tail -100 ~/spinifex/logs/viperblock.log 2>/dev/null
-        fi
-        echo ""
-        echo "=== Spinifex Daemon Log ==="
-        if [ -f ~/spinifex/logs/spinifex.log ]; then
-            tail -200 ~/spinifex/logs/spinifex.log 2>/dev/null
-        fi
-        echo ""
-        echo "=== AWS Gateway Log ==="
-        if [ -f ~/spinifex/logs/awsgw.log ]; then
-            tail -200 ~/spinifex/logs/awsgw.log 2>/dev/null
-        fi
-        echo ""
-        echo "=== vpcd Log ==="
-        if [ -f ~/spinifex/logs/vpcd.log ]; then
-            tail -200 ~/spinifex/logs/vpcd.log 2>/dev/null
-        fi
-    fi
-    # Only stop services if we started them (not when bootstrapped)
-    if [ "$BOOTSTRAPPED" != "true" ]; then
-        ./scripts/stop-dev.sh
+        for svc in spinifex-nats spinifex-predastore spinifex-viperblock \
+                   spinifex-daemon spinifex-awsgw spinifex-vpcd; do
+            echo "=== ${svc} ==="
+            sudo journalctl -u "${svc}" --no-pager -n 200 2>/dev/null || true
+        done
     fi
     exit $EXIT_CODE
 }
@@ -56,31 +28,19 @@ trap cleanup EXIT
 # Use Spinifex profile (spx admin init sets endpoint_url, ca_bundle, region in ~/.aws/config)
 export AWS_PROFILE=spinifex
 
-# Detect bootstrapped environment from spinifex.toml config
-BOOTSTRAPPED="false"
+# Resolve gateway and predastore hosts from config
 GATEWAY_HOST="localhost"
 PREDASTORE_HOST="localhost"
-if [ -f ~/spinifex/config/spinifex.toml ]; then
-    # Resolve gateway host from AWS profile endpoint_url (set by spx admin init)
-    ENDPOINT_URL=$(aws configure get endpoint_url 2>/dev/null || true)
-    if [ -n "$ENDPOINT_URL" ]; then
-        DETECTED_GW_HOST=$(echo "$ENDPOINT_URL" | sed 's|https\?://||;s|:.*||')
-        if [ -n "$DETECTED_GW_HOST" ]; then
-            GATEWAY_HOST="$DETECTED_GW_HOST"
-        fi
+ENDPOINT_URL=$(aws configure get endpoint_url 2>/dev/null || true)
+if [ -n "$ENDPOINT_URL" ]; then
+    DETECTED_GW_HOST=$(echo "$ENDPOINT_URL" | sed 's|https\?://||;s|:.*||')
+    if [ -n "$DETECTED_GW_HOST" ]; then
+        GATEWAY_HOST="$DETECTED_GW_HOST"
     fi
-    # Resolve predastore host from spinifex.toml
-    DETECTED_PS_HOST=$(awk -F'"' '/\[nodes\..*\.predastore\]/{found=1} found && /^host/{print $2; exit}' ~/spinifex/config/spinifex.toml)
-    if [ -n "$DETECTED_PS_HOST" ]; then
-        PREDASTORE_HOST="${DETECTED_PS_HOST%%:*}"
-    fi
-    # Check if gateway is actually responding
-    if curl -sk "https://${GATEWAY_HOST}:9999" > /dev/null 2>&1; then
-        BOOTSTRAPPED="true"
-        echo "Detected bootstrapped environment — skipping cluster setup"
-        echo "  Gateway host: $GATEWAY_HOST"
-        echo "  Predastore host: $PREDASTORE_HOST"
-    fi
+fi
+DETECTED_PS_HOST=$(awk -F'"' '/\[nodes\..*\.predastore\]/{found=1} found && /^host/{print $2; exit}' /etc/spinifex/spinifex.toml)
+if [ -n "$DETECTED_PS_HOST" ]; then
+    PREDASTORE_HOST="${DETECTED_PS_HOST%%:*}"
 fi
 
 # Helper: set up an AWS CLI profile with credentials + endpoint/CA config from the spinifex profile
@@ -96,7 +56,7 @@ setup_test_profile() {
 # Phase 1: Environment Setup
 echo "Phase 1: Environment Setup"
 
-# Check for KVM support inside the container
+# Check for KVM support
 echo "Checking for KVM support..."
 if [ -e /dev/kvm ]; then
     echo "✅ /dev/kvm exists"
@@ -107,26 +67,8 @@ if [ -e /dev/kvm ]; then
         exit 1
     fi
 else
-    echo "❌ /dev/kvm does NOT exist. Ensure --privileged and -v /dev/kvm:/dev/kvm are used."
+    echo "❌ /dev/kvm does NOT exist."
     exit 1
-fi
-
-if [ "$BOOTSTRAPPED" != "true" ]; then
-    INIT_FLAGS="--region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1"
-    if [ -n "${SPX_EXTERNAL_POOL:-}" ]; then
-        INIT_FLAGS="$INIT_FLAGS --external-mode=pool --external-pool=$SPX_EXTERNAL_POOL"
-    fi
-    ./bin/spx admin init $INIT_FLAGS
-
-    # Trust the Spinifex CA certificate for AWS CLI SSL verification
-    echo "Adding Spinifex CA certificate to system trust store..."
-    sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
-    sudo update-ca-certificates
-
-    # Start all services
-    # Ensure logs directory exists for start-dev.sh
-    mkdir -p ~/spinifex/logs
-    ./scripts/start-dev.sh
 fi
 
 # Wait for health checks on AWS Gateway
@@ -160,7 +102,7 @@ echo "Phase 1b: Cluster Stats CLI"
 
 # Test spx get nodes — should show node1 as Ready
 echo "Testing spx get nodes..."
-GET_NODES_OUTPUT=$(./bin/spx get nodes --config ~/spinifex/config/spinifex.toml --timeout 5s 2>/dev/null)
+GET_NODES_OUTPUT=$(spx get nodes --timeout 5s 2>/dev/null)
 echo "$GET_NODES_OUTPUT"
 if ! echo "$GET_NODES_OUTPUT" | grep -q "Ready"; then
     echo "spx get nodes did not show any Ready nodes"
@@ -170,7 +112,7 @@ echo "spx get nodes passed"
 
 # Test spx top nodes — should show CPU/MEM stats
 echo "Testing spx top nodes..."
-TOP_NODES_OUTPUT=$(./bin/spx top nodes --config ~/spinifex/config/spinifex.toml --timeout 5s 2>/dev/null)
+TOP_NODES_OUTPUT=$(spx top nodes --timeout 5s 2>/dev/null)
 echo "$TOP_NODES_OUTPUT"
 if ! echo "$TOP_NODES_OUTPUT" | grep -q "0/"; then
     echo "spx top nodes did not show resource stats"
@@ -180,7 +122,7 @@ echo "spx top nodes passed"
 
 # Test spx get vms — should show no VMs yet
 echo "Testing spx get vms (empty)..."
-GET_VMS_OUTPUT=$(./bin/spx get vms --config ~/spinifex/config/spinifex.toml --timeout 5s 2>/dev/null)
+GET_VMS_OUTPUT=$(spx get vms --timeout 5s 2>/dev/null)
 echo "$GET_VMS_OUTPUT"
 if ! echo "$GET_VMS_OUTPUT" | grep -q "No VMs found"; then
     echo "spx get vms should show 'No VMs found' before any launches"
@@ -303,21 +245,9 @@ else
 fi
 echo "Using image: $IMAGE_NAME"
 
-# Import the pre-downloaded Ubuntu image using file-based import
-# When bootstrapped, the image is already imported — discover the existing AMI
-if [ "$BOOTSTRAPPED" = "true" ]; then
-    echo "Discovering existing AMI (imported by bootstrap)..."
-    AMI_ID=$(aws ec2 describe-images --query 'Images[0].ImageId' --output text)
-else
-    echo "Importing pre-cached Ubuntu image..."
-    IMPORT_LOG=$(./bin/spx admin images import \
-        --file ~/images/ubuntu-24.04.img \
-        --arch "$ARCH" \
-        --distro ubuntu \
-        --version 24.04 \
-        --force 2>/dev/null)
-    AMI_ID=$(echo "$IMPORT_LOG" | grep -o 'ami-[a-z0-9]\+')
-fi
+# AMI already imported by bootstrap-install.sh — discover the existing AMI
+echo "Discovering existing AMI (imported by bootstrap)..."
+AMI_ID=$(aws ec2 describe-images --query 'Images[0].ImageId' --output text)
 
 if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
     echo "Failed to capture AMI ID"
@@ -395,7 +325,7 @@ fi
 
 # Phase 5a-pre: Verify spx get vms shows running instance
 echo "Phase 5a-pre: Cluster Stats CLI (with running VM)"
-GET_VMS_OUTPUT=$(./bin/spx get vms --config ~/spinifex/config/spinifex.toml --timeout 5s 2>/dev/null)
+GET_VMS_OUTPUT=$(spx get vms --timeout 5s 2>/dev/null)
 echo "$GET_VMS_OUTPUT"
 if ! echo "$GET_VMS_OUTPUT" | grep -q "$INSTANCE_ID"; then
     echo "spx get vms did not show running instance $INSTANCE_ID"
@@ -1901,7 +1831,7 @@ echo "Phase 8 Step 1: Account Setup"
 echo "----------------------------------------"
 
 echo "  Creating Team Alpha account..."
-ALPHA_OUTPUT=$(./bin/spx admin account create --name "Team Alpha" 2>&1)
+ALPHA_OUTPUT=$(spx admin account create --name "Team Alpha" 2>&1)
 echo "$ALPHA_OUTPUT"
 ALPHA_ACCOUNT=$(echo "$ALPHA_OUTPUT" | grep "Account ID:" | awk '{print $NF}')
 ALPHA_KEY_ID=$(echo "$ALPHA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
@@ -1915,7 +1845,7 @@ echo "  Team Alpha: account=$ALPHA_ACCOUNT key=$ALPHA_KEY_ID"
 setup_test_profile spx-team-alpha "$ALPHA_KEY_ID" "$ALPHA_SECRET"
 
 echo "  Creating Team Beta account..."
-BETA_OUTPUT=$(./bin/spx admin account create --name "Team Beta" 2>&1)
+BETA_OUTPUT=$(spx admin account create --name "Team Beta" 2>&1)
 echo "$BETA_OUTPUT"
 BETA_ACCOUNT=$(echo "$BETA_OUTPUT" | grep "Account ID:" | awk '{print $NF}')
 BETA_KEY_ID=$(echo "$BETA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
@@ -2450,7 +2380,7 @@ echo "----------------------------------------"
 
 # Empty account (Gamma)
 echo "  Creating empty Gamma account..."
-GAMMA_OUTPUT=$(./bin/spx admin account create --name "Team Gamma" 2>&1)
+GAMMA_OUTPUT=$(spx admin account create --name "Team Gamma" 2>&1)
 GAMMA_KEY_ID=$(echo "$GAMMA_OUTPUT" | grep "Access Key ID:" | awk '{print $NF}')
 GAMMA_SECRET=$(echo "$GAMMA_OUTPUT" | grep "Secret Access Key:" | awk '{print $NF}')
 setup_test_profile spx-team-gamma "$GAMMA_KEY_ID" "$GAMMA_SECRET"
@@ -2723,7 +2653,7 @@ echo "========================================"
 
 # Check if external networking is configured
 HAS_EXTERNAL=false
-if grep -q 'external_mode = "pool"' ~/spinifex/config/spinifex.toml 2>/dev/null; then
+if grep -q 'external_mode = "pool"' /etc/spinifex/spinifex.toml 2>/dev/null; then
     HAS_EXTERNAL=true
 fi
 

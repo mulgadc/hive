@@ -25,7 +25,7 @@ env:
 
 jobs:
   e2e_single:
-    name: Single-Node E2E
+    name: Single-Node E2E (Binary Install)
     runs-on: [self-hosted, ci-single]
     timeout-minutes: 25
     env:
@@ -48,9 +48,13 @@ jobs:
           sparse-checkout: scripts/tofu-cluster
           path: mulga
 
-      - name: Clone and build
+      - name: Build install artifacts
         working-directory: mulga/scripts/tofu-cluster
-        run: ./build-artifacts.sh "${GIT_BRANCH}" "${RUNNER_TEMP}/spinifex-artifacts.tar"
+        run: |
+          ./build-install-artifacts.sh "${GIT_BRANCH}" \
+            "${RUNNER_TEMP}/spinifex-distro.tar.gz" \
+            "${RUNNER_TEMP}/setup.sh" \
+            "${RUNNER_TEMP}/spinifex-tests.tar"
 
       - name: Provision VM
         working-directory: mulga/scripts/tofu-cluster
@@ -62,13 +66,14 @@ jobs:
           ./scrub-env.sh env3 >> "$TOFU_LOG" 2>&1 || true
           tofu apply -var-file=envs/env3.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
-      - name: Bootstrap Cluster
+      - name: Bootstrap via Binary Install
         working-directory: mulga/scripts/tofu-cluster
         run: |
-          SPX_PREBUILT=true \
-          SPX_ARTIFACT_TAR="${RUNNER_TEMP}/spinifex-artifacts.tar" \
           SPX_EXTERNAL_POOL="192.168.1.230-192.168.1.240" \
-          ./bootstrap.sh env3 >> "$TOFU_LOG" 2>&1
+          ./bootstrap-install.sh env3 \
+            "${RUNNER_TEMP}/setup.sh" \
+            "${RUNNER_TEMP}/spinifex-distro.tar.gz" \
+            --test-tar "${RUNNER_TEMP}/spinifex-tests.tar"
 
       - name: Run E2E Tests
         working-directory: mulga/scripts/tofu-cluster
@@ -78,7 +83,7 @@ jobs:
           SSH_KEY=$(echo "$INVENTORY" | jq -r '.ssh_key_path')
           SSH_KEY="${SSH_KEY/#\~/$HOME}"
           ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${WAN_IP} \
-            'cd ~/Development/mulga/spinifex && ./tests/e2e/run-e2e.sh && ./tests/e2e/run-cert-e2e.sh'
+            'cd ~/e2e-tests && ./run-e2e.sh && ./run-cert-e2e.sh'
 
       - name: Teardown
         if: always()

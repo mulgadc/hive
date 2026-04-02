@@ -56,8 +56,12 @@ case "${1:-}" in
         done < <(ip -4 addr show scope global | grep -oP 'inet \K[\d.]+')
         # SERVICE_IPS: only IPs where awsgw actually listens (bind IP from config).
         # awsgw binds to the host specified in spinifex.toml, not all interfaces.
-        if [ -f "$HOME/spinifex/config/spinifex.toml" ]; then
-            AWSGW_BIND=$(grep -A5 '\.awsgw\]' "$HOME/spinifex/config/spinifex.toml" | grep 'host' | head -1 | sed 's/.*= *"\([^:]*\).*/\1/')
+        CONFIG_FILE="/etc/spinifex/spinifex.toml"
+        if [ ! -f "$CONFIG_FILE" ]; then
+            CONFIG_FILE="$HOME/spinifex/config/spinifex.toml"
+        fi
+        if [ -f "$CONFIG_FILE" ]; then
+            AWSGW_BIND=$(grep -A5 '\.awsgw\]' "$CONFIG_FILE" | grep 'host' | head -1 | sed 's/.*= *"\([^:]*\).*/\1/')
         fi
         if [ -n "${AWSGW_BIND:-}" ] && [ "$AWSGW_BIND" != "0.0.0.0" ]; then
             SERVICE_IPS=("$AWSGW_BIND")
@@ -89,6 +93,7 @@ fail() {
 # Resolve the Spinifex config CA cert path (not the system copy).
 resolve_ca_cert() {
     for candidate in \
+        "/etc/spinifex/ca.pem" \
         "$HOME/spinifex/config/ca.pem" \
         "$HOME/node1/config/ca.pem"; do
         if [ -f "$candidate" ]; then
@@ -109,6 +114,13 @@ fi
 
 SYSTEM_CA_PATH="/usr/local/share/ca-certificates/spinifex-ca.crt"
 
+# Resolve single-node config dir (production or dev)
+if [ -d /etc/spinifex ]; then
+    SINGLE_CONFIG_DIR="/etc/spinifex"
+else
+    SINGLE_CONFIG_DIR="$HOME/spinifex/config"
+fi
+
 echo "Using CA cert: $CA_CERT"
 echo "Mode: $MODE"
 echo "All IPs (SAN check): ${NODE_IPS[*]}"
@@ -123,7 +135,7 @@ for ip in "${NODE_IPS[@]}"; do
     # Determine which node's cert to check.
     case "$MODE" in
         single)
-            CERT_PATH="$HOME/spinifex/config/server.pem"
+            CERT_PATH="$SINGLE_CONFIG_DIR/server.pem"
             ;;
         pseudo)
             # Each pseudo node has its own config dir.
@@ -166,7 +178,7 @@ HOSTNAME=$(hostname)
 if [ "$HOSTNAME" != "localhost" ] && [ -n "$HOSTNAME" ]; then
     case "$MODE" in
         single)
-            CERT_PATH="$HOME/spinifex/config/server.pem"
+            CERT_PATH="$SINGLE_CONFIG_DIR/server.pem"
             ;;
         pseudo)
             CERT_PATH="$HOME/node1/config/server.pem"
@@ -298,7 +310,7 @@ echo ""
 echo "=== Test 7: Certificate metadata ==="
 
 case "$MODE" in
-    single) CERT_PATH="$HOME/spinifex/config/server.pem" ;;
+    single) CERT_PATH="$SINGLE_CONFIG_DIR/server.pem" ;;
     pseudo) CERT_PATH="$HOME/node1/config/server.pem" ;;
     *) CERT_PATH="" ;;
 esac
