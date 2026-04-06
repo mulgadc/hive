@@ -1546,7 +1546,18 @@ func (d *Daemon) ClusterManager() error {
 	})
 
 	// Load TLS certificate (C-5: serve over HTTPS instead of plaintext HTTP)
-	cert, err := tls.LoadX509KeyPair(d.config.Daemon.TLSCert, d.config.Daemon.TLSKey)
+	// Resolve relative cert paths against BaseDir (config stores them as e.g. "config/server.pem")
+	tlsCert := d.config.Daemon.TLSCert
+	tlsKey := d.config.Daemon.TLSKey
+	if d.config.BaseDir != "" {
+		if !filepath.IsAbs(tlsCert) {
+			tlsCert = filepath.Join(d.config.BaseDir, tlsCert)
+		}
+		if !filepath.IsAbs(tlsKey) {
+			tlsKey = filepath.Join(d.config.BaseDir, tlsKey)
+		}
+	}
+	cert, err := tls.LoadX509KeyPair(tlsCert, tlsKey)
 	if err != nil {
 		return fmt.Errorf("cluster manager load TLS cert: %w", err)
 	}
