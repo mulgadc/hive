@@ -1546,15 +1546,18 @@ func (d *Daemon) ClusterManager() error {
 	})
 
 	// Load TLS certificate (C-5: serve over HTTPS instead of plaintext HTTP)
-	// Resolve relative cert paths against BaseDir (config stores them as e.g. "config/server.pem")
+	// Resolve relative cert paths against config directory (cert lives alongside spinifex.toml).
+	// For binary installs, systemd sets absolute paths via env vars; for dev, the config
+	// stores relative paths like "config/server.pem" which need resolution.
 	tlsCert := d.config.Daemon.TLSCert
 	tlsKey := d.config.Daemon.TLSKey
-	if d.config.BaseDir != "" {
+	if d.configPath != "" {
+		configDir := filepath.Dir(d.configPath)
 		if !filepath.IsAbs(tlsCert) {
-			tlsCert = filepath.Join(d.config.BaseDir, tlsCert)
+			tlsCert = filepath.Join(configDir, filepath.Base(tlsCert))
 		}
 		if !filepath.IsAbs(tlsKey) {
-			tlsKey = filepath.Join(d.config.BaseDir, tlsKey)
+			tlsKey = filepath.Join(configDir, filepath.Base(tlsKey))
 		}
 	}
 	cert, err := tls.LoadX509KeyPair(tlsCert, tlsKey)
