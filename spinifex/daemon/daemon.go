@@ -265,7 +265,10 @@ func (rm *ResourceManager) GetInstanceTypeInfos() []*ec2.InstanceTypeInfo {
 	defer rm.mu.RUnlock()
 
 	var infos []*ec2.InstanceTypeInfo
-	for _, it := range rm.instanceTypes {
+	for name, it := range rm.instanceTypes {
+		if instancetypes.IsSystemType(name) {
+			continue
+		}
 		infos = append(infos, it)
 	}
 	return infos
@@ -280,7 +283,11 @@ func (rm *ResourceManager) GetAvailableInstanceTypeInfos(showCapacity bool) []*e
 
 	var infos []*ec2.InstanceTypeInfo
 
-	for _, it := range rm.instanceTypes {
+	for name, it := range rm.instanceTypes {
+		if instancetypes.IsSystemType(name) {
+			continue
+		}
+
 		vCPUs := instanceTypeVCPUs(it)
 		memMiB := instanceTypeMemoryMiB(it)
 
@@ -323,7 +330,10 @@ func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64
 	remainingVCPU := rm.availableVCPU - rm.allocatedVCPU
 	remainingMem := rm.availableMem - rm.allocatedMem
 
-	for _, it := range rm.instanceTypes {
+	for name, it := range rm.instanceTypes {
+		if instancetypes.IsSystemType(name) {
+			continue
+		}
 		typeCap := resourceStatsForType(remainingVCPU, remainingMem, it)
 		if typeCap.VCPU == 0 || typeCap.MemoryGB == 0 {
 			continue
@@ -742,21 +752,9 @@ func (d *Daemon) Start() error {
 		})
 	}
 
-	// Set up lazy instance type resolver — picks the smallest available type.
-	rm := d.resourceMgr
+	// System VMs (LB, NAT GW) use the dedicated sys.micro instance type.
 	d.elbv2Service.SetSystemInstanceTypeFunc(func() string {
-		rm.mu.RLock()
-		defer rm.mu.RUnlock()
-		smallest := ""
-		var smallestVCPUs int64
-		for name, it := range rm.instanceTypes {
-			vcpus := instanceTypeVCPUs(it)
-			if smallest == "" || vcpus < smallestVCPUs {
-				smallest = name
-				smallestVCPUs = vcpus
-			}
-		}
-		return smallest
+		return "sys.micro"
 	})
 
 	// Ensure default VPC exists for system and admin accounts
@@ -2852,6 +2850,10 @@ func (rm *ResourceManager) updateInstanceSubscriptions() {
 	defer rm.subsMu.Unlock()
 
 	for typeName, typeInfo := range rm.instanceTypes {
+		// System types (sys.micro, etc.) are internal-only — not routable via customer API.
+		if instancetypes.IsSystemType(typeName) {
+			continue
+		}
 		queueTopic := fmt.Sprintf("ec2.RunInstances.%s", typeName)
 		canFit := rm.canAllocate(typeInfo, 1) >= 1
 

@@ -1,6 +1,7 @@
 package instancetypes
 
 import (
+	"maps"
 	"strings"
 	"testing"
 
@@ -26,6 +27,39 @@ func countFamily(types map[string]*ec2.InstanceTypeInfo, prefix string) int {
 		}
 	}
 	return count
+}
+
+func TestIsSystemType(t *testing.T) {
+	assert.True(t, IsSystemType("sys.micro"))
+	assert.True(t, IsSystemType("sys.small"))
+	assert.False(t, IsSystemType("t3.micro"))
+	assert.False(t, IsSystemType("m5.large"))
+	assert.False(t, IsSystemType("system.large"))
+}
+
+func TestGenerateSystemTypes(t *testing.T) {
+	types := generateSystemTypes("x86_64")
+	require.Len(t, types, 1, "should have exactly 1 system type (sys.micro)")
+
+	sysMicro, ok := types["sys.micro"]
+	require.True(t, ok, "sys.micro must exist")
+	assert.Equal(t, int64(1), *sysMicro.VCpuInfo.DefaultVCpus, "sys.micro should have 1 vCPU")
+	assert.Equal(t, int64(128), *sysMicro.MemoryInfo.SizeInMiB, "sys.micro should have 128 MiB")
+	assert.False(t, *sysMicro.BurstablePerformanceSupported, "sys.micro should not be burstable")
+}
+
+func TestDetectAndGenerate_IncludesSystemTypes(t *testing.T) {
+	// Use any generation — system types should always be present
+	types := generateForGeneration(genIntelSkylake, "x86_64")
+	_, hasSys := types["sys.micro"]
+	assert.False(t, hasSys, "generateForGeneration alone should not include system types")
+
+	// DetectAndGenerate merges system types in
+	// We can't easily call DetectAndGenerate in tests (needs real CPU),
+	// so verify generateSystemTypes output merges correctly.
+	maps.Copy(types, generateSystemTypes("x86_64"))
+	_, hasSys = types["sys.micro"]
+	assert.True(t, hasSys, "merged map should include sys.micro")
 }
 
 func TestGenerateInstanceTypes_IntelIceLake(t *testing.T) {
