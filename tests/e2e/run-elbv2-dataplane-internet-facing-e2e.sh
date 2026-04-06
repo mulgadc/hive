@@ -475,10 +475,10 @@ else
     fail "ALB did not reach active state (stuck in $LB_STATE)"
     echo ""
     echo "  Debug: daemon logs (ALB VM launch):"
-    grep -iE 'LaunchSystemInstance|ALB.VM|alb-agent|System AMI|QEMU.*alb|failed.*launch|launch.*failed' ~/spinifex/logs/*.log 2>/dev/null | tail -20 || echo "  (no matching log lines on local)"
+    grep -iE 'LaunchSystemInstance|LB.VM|ALB.VM|lb-agent|alb-agent|System AMI|QEMU.*lb|failed.*launch|launch.*failed' ~/spinifex/logs/*.log 2>/dev/null | tail -20 || echo "  (no matching log lines on local)"
     if [ "$PEER_AVAILABLE" = true ]; then
         echo "  Debug: PEER daemon logs:"
-        peer_ssh "$PEER_NODE_IP" "grep -iE 'LaunchSystemInstance|ALB.VM|alb-agent|System AMI|QEMU.*alb|failed.*launch|launch.*failed' ~/spinifex/logs/*.log 2>/dev/null | tail -20" 2>/dev/null || echo "  (no matching log lines on peer)"
+        peer_ssh "$PEER_NODE_IP" "grep -iE 'LaunchSystemInstance|LB.VM|ALB.VM|lb-agent|alb-agent|System AMI|QEMU.*lb|failed.*launch|launch.*failed' ~/spinifex/logs/*.log 2>/dev/null | tail -20" 2>/dev/null || echo "  (no matching log lines on peer)"
     fi
     exit 1
 fi

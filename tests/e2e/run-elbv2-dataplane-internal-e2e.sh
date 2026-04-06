@@ -480,7 +480,7 @@ else
     echo "  independent of VPC routing/IGW."
     echo ""
     echo "  Debug: daemon logs:"
-    grep -iE 'LaunchSystemInstance|ALB.VM|alb-agent|mgmt|MgmtTap|MgmtIP|heartbeat' ~/spinifex/logs/spinifex.log 2>/dev/null | tail -20 || echo "  (no matching log lines)"
+    grep -iE 'LaunchSystemInstance|LB.VM|ALB.VM|lb-agent|alb-agent|mgmt|MgmtTap|MgmtIP|heartbeat' ~/spinifex/logs/spinifex.log 2>/dev/null | tail -20 || echo "  (no matching log lines)"
     exit 1
 fi
 
