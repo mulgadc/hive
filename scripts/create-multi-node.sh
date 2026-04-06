@@ -92,7 +92,7 @@ sleep 5
 
 echo "Daemon health:"
 for IP in 127.0.0.1 127.0.0.2 127.0.0.3; do
-  echo "  $IP: $(curl -s http://$IP:4432/health | head -c 100)"
+  echo "  $IP: $(curl -sk https://$IP:4432/health | head -c 100)"
 done
 
 echo ""
