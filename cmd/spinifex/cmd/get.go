@@ -76,9 +76,15 @@ func loadConfigAndConnect() (*config.ClusterConfig, *nats.Conn, error) {
 	}
 
 	// Backfill BaseDir from config file path when not set in the config.
-	// Config lives at <baseDir>/config/spinifex.toml, so baseDir is two levels up.
 	if nodeConfig, ok := cfg.Nodes[cfg.Node]; ok && nodeConfig.BaseDir == "" {
-		nodeConfig.BaseDir = filepath.Dir(filepath.Dir(cfgPath))
+		if isProductionLayout() {
+			// Production: BaseDir is /var/lib/spinifex (data dir).
+			// /var/lib/spinifex/config is a symlink to /etc/spinifex.
+			nodeConfig.BaseDir = DefaultDataDir()
+		} else {
+			// Dev: config lives at <baseDir>/config/spinifex.toml, so baseDir is two levels up.
+			nodeConfig.BaseDir = filepath.Dir(filepath.Dir(cfgPath))
+		}
 		cfg.Nodes[cfg.Node] = nodeConfig
 	}
 
