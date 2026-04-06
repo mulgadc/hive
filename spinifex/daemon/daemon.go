@@ -1551,6 +1551,9 @@ func (d *Daemon) ClusterManager() error {
 	// stores relative paths like "config/server.pem" which need resolution.
 	tlsCert := d.config.Daemon.TLSCert
 	tlsKey := d.config.Daemon.TLSKey
+	if tlsCert == "" || tlsKey == "" {
+		return fmt.Errorf("cluster manager TLS not configured: set daemon.tlscert and daemon.tlskey in config")
+	}
 	if d.configPath != "" {
 		configDir := filepath.Dir(d.configPath)
 		if !filepath.IsAbs(tlsCert) {

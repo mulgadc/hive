@@ -1,9 +1,19 @@
 package daemon
 
 import (
+	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -4025,4 +4035,138 @@ func TestBuildDrives_CloudInitVolume(t *testing.T) {
 	assert.Equal(t, "virtio", d.If)
 	assert.Equal(t, "cdrom", d.Media)
 	assert.Equal(t, "cloudinit", d.ID)
+}
+
+// --- ClusterManager TLS ---
+
+func TestClusterManager_TLSServesHTTPS(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Generate self-signed cert for testing
+	certPEM, keyPEM := generateTestCert(t)
+	certPath := filepath.Join(tmpDir, "server.pem")
+	keyPath := filepath.Join(tmpDir, "server.key")
+	require.NoError(t, os.WriteFile(certPath, certPEM, 0600))
+	require.NoError(t, os.WriteFile(keyPath, keyPEM, 0600))
+
+	// Find a free port
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	ln.Close()
+
+	cfg := &config.ClusterConfig{
+		Node: "node-1",
+		Nodes: map[string]config.Config{
+			"node-1": {
+				BaseDir: tmpDir,
+				Daemon: config.DaemonConfig{
+					Host:    addr,
+					TLSCert: certPath,
+					TLSKey:  keyPath,
+				},
+			},
+		},
+	}
+
+	daemon, err := NewDaemon(cfg)
+	require.NoError(t, err)
+	daemon.configPath = filepath.Join(tmpDir, "spinifex.toml")
+
+	err = daemon.ClusterManager()
+	require.NoError(t, err)
+	defer daemon.clusterServer.Close()
+
+	// Plain HTTP should fail
+	_, err = net.DialTimeout("tcp", addr, time.Second)
+	require.NoError(t, err) // TCP connects, but HTTP won't work
+
+	// HTTPS with InsecureSkipVerify should succeed
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+		Timeout: 2 * time.Second,
+	}
+	resp, err := client.Get(fmt.Sprintf("https://%s/health", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestClusterManager_EmptyCertReturnsError(t *testing.T) {
+	cfg := &config.ClusterConfig{
+		Node: "node-1",
+		Nodes: map[string]config.Config{
+			"node-1": {
+				Daemon: config.DaemonConfig{
+					Host: "127.0.0.1:0",
+				},
+			},
+		},
+	}
+
+	daemon, err := NewDaemon(cfg)
+	require.NoError(t, err)
+
+	err = daemon.ClusterManager()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "TLS not configured")
+}
+
+func TestClusterManager_InvalidCertReturnsError(t *testing.T) {
+	tmpDir := t.TempDir()
+	certPath := filepath.Join(tmpDir, "bad.pem")
+	keyPath := filepath.Join(tmpDir, "bad.key")
+	require.NoError(t, os.WriteFile(certPath, []byte("not a cert"), 0600))
+	require.NoError(t, os.WriteFile(keyPath, []byte("not a key"), 0600))
+
+	cfg := &config.ClusterConfig{
+		Node: "node-1",
+		Nodes: map[string]config.Config{
+			"node-1": {
+				Daemon: config.DaemonConfig{
+					Host:    "127.0.0.1:0",
+					TLSCert: certPath,
+					TLSKey:  keyPath,
+				},
+			},
+		},
+	}
+
+	daemon, err := NewDaemon(cfg)
+	require.NoError(t, err)
+
+	err = daemon.ClusterManager()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cluster manager load TLS cert")
+}
+
+// generateTestCert creates a self-signed certificate for testing.
+func generateTestCert(t *testing.T) (certPEM, keyPEM []byte) {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test"},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(time.Hour),
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	require.NoError(t, err)
+
+	certBuf := &bytes.Buffer{}
+	require.NoError(t, pem.Encode(certBuf, &pem.Block{Type: "CERTIFICATE", Bytes: certDER}))
+
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	require.NoError(t, err)
+	keyBuf := &bytes.Buffer{}
+	require.NoError(t, pem.Encode(keyBuf, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
+
+	return certBuf.Bytes(), keyBuf.Bytes()
 }
