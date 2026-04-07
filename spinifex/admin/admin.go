@@ -311,6 +311,24 @@ func SetServiceOwnership() {
 		ChownRecursive(path, u)
 	}
 
+	// Shared data directories — root:spinifex 0770 so daemon + admin CLI can write
+	for _, dir := range []string{
+		"/var/lib/spinifex/images",
+		"/var/lib/spinifex/amis",
+		"/var/lib/spinifex/volumes",
+		"/var/lib/spinifex/state",
+	} {
+		if _, err := os.Stat(dir); err != nil {
+			continue
+		}
+		if err := os.Lchown(dir, 0, gid); err != nil {
+			slog.Warn("SetServiceOwnership: chown failed", "path", dir, "err", err)
+		}
+		if err := os.Chmod(dir, 0770); err != nil { //nolint:gosec // directories need group-write for daemon + admin CLI
+			slog.Warn("SetServiceOwnership: chmod failed", "path", dir, "err", err)
+		}
+	}
+
 	// Shared config files — root:spinifex, ca.key stays root:root 0600
 	for path, mode := range map[string]os.FileMode{
 		"/etc/spinifex/spinifex.toml":  0640,
