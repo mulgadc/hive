@@ -313,11 +313,12 @@ func SetServiceOwnership() {
 
 	// Shared config files — root:spinifex, ca.key stays root:root 0600
 	for path, mode := range map[string]os.FileMode{
-		"/etc/spinifex/spinifex.toml": 0640,
-		"/etc/spinifex/master.key":    0640,
-		"/etc/spinifex/server.pem":    0644,
-		"/etc/spinifex/server.key":    0640,
-		"/etc/spinifex/ca.pem":        0644,
+		"/etc/spinifex/spinifex.toml":  0640,
+		"/etc/spinifex/master.key":     0640,
+		"/etc/spinifex/bootstrap.json": 0640,
+		"/etc/spinifex/server.pem":     0644,
+		"/etc/spinifex/server.key":     0640,
+		"/etc/spinifex/ca.pem":         0644,
 	} {
 		if _, err := os.Stat(path); err != nil {
 			continue
