@@ -212,6 +212,7 @@ func CreateServiceDirectories(spxRoot string) {
 		filepath.Join(spxRoot, "nats"),
 		filepath.Join(spxRoot, "predastore"),
 		filepath.Join(spxRoot, "viperblock"),
+		filepath.Join(spxRoot, "vpcd"),
 		filepath.Join(spxRoot, "spinifex"),
 	}
 
@@ -259,9 +260,12 @@ func ChownRecursive(path, username string) {
 	// Falls back to direct chown if os.Root is not available.
 	root, rootErr := os.OpenRoot(path)
 	if rootErr != nil {
-		// Fallback: direct chown on the top-level path only
+		// Fallback: direct chown on the top-level path only — subdirectory contents
+		// will retain their original ownership.
+		slog.Warn("ChownRecursive: OpenRoot not available, only top-level directory ownership changed",
+			"path", path, "err", rootErr)
 		if chownErr := os.Chown(path, uid, gid); chownErr != nil { // #nosec G122
-			slog.Debug("chown failed", "path", path, "err", chownErr)
+			slog.Warn("chown failed", "path", path, "err", chownErr)
 		}
 		return
 	}
@@ -286,12 +290,14 @@ func ChownRecursive(path, username string) {
 func SetServiceOwnership() {
 	grp, err := user.LookupGroup("spinifex")
 	if err != nil {
-		slog.Warn("SetServiceOwnership: spinifex group not found, skipping", "err", err)
+		slog.Error("SetServiceOwnership: spinifex group not found, skipping all ownership changes", "err", err)
+		fmt.Fprintln(os.Stderr, "WARNING: spinifex group not found — service ownership not set. Run setup.sh first or create the group manually.")
 		return
 	}
 	gid, err := strconv.Atoi(grp.Gid)
 	if err != nil {
-		slog.Warn("SetServiceOwnership: invalid spinifex group GID", "gid", grp.Gid, "err", err)
+		slog.Error("SetServiceOwnership: invalid spinifex group GID", "gid", grp.Gid, "err", err)
+		fmt.Fprintln(os.Stderr, "WARNING: invalid spinifex group GID — service ownership not set.")
 		return
 	}
 
@@ -333,7 +339,7 @@ func SetServiceOwnership() {
 	for path, mode := range map[string]os.FileMode{
 		"/etc/spinifex/spinifex.toml":  0640,
 		"/etc/spinifex/master.key":     0640,
-		"/etc/spinifex/bootstrap.json": 0640,
+		"/etc/spinifex/bootstrap.json": 0660, // group-write so awsgw can consume and truncate
 		"/etc/spinifex/server.pem":     0644,
 		"/etc/spinifex/server.key":     0640,
 		"/etc/spinifex/ca.pem":         0644,

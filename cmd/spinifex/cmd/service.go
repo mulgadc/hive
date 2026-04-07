@@ -735,6 +735,7 @@ var vpcdStartCmd = &cobra.Command{
 
 		baseDir := viper.GetString("base-dir")
 		if baseDir != "" {
+			fmt.Println("Overwriting vpcd base-dir to:", baseDir)
 			nodeConfig.BaseDir = baseDir
 		}
 
