@@ -22,7 +22,7 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 PrivateDevices=yes
 ReadOnlyPaths=/etc/spinifex/spinifex.toml /etc/spinifex/systemd.env
-ReadWritePaths=/var/lib/spinifex/viperblock /var/log/spinifex
+ReadWritePaths=/var/lib/spinifex/viperblock /var/log/spinifex /tmp
 
 # Hardening
 ProtectHome=yes

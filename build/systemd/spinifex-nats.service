@@ -22,7 +22,7 @@ ReadWritePaths=/var/lib/spinifex/nats /var/log/spinifex
 
 # Hardening
 ProtectHome=yes
-PrivateTmp=yes
+PrivateTmp=no
 RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictRealtime=yes
