@@ -280,6 +280,49 @@ func TestCreateLoadBalancer_Internal_NoPublicIP(t *testing.T) {
 	assert.Empty(t, lb.AvailabilityZones[0].LoadBalancerAddresses)
 }
 
+func TestCreateLoadBalancer_NLB_Internal_NoPublicIP(t *testing.T) {
+	svc, vpcSvc := setupTestServiceWithVPC(t)
+
+	subnets, err := vpcSvc.DescribeSubnets(&ec2.DescribeSubnetsInput{}, testAccountID)
+	require.NoError(t, err)
+	subnetID := *subnets.Subnets[0].SubnetId
+
+	mock := &mockSystemInstanceLauncher{
+		launchResult: &SystemInstanceOutput{
+			InstanceID: "i-nlb-priv",
+			PrivateIP:  "10.0.1.10",
+			// No PublicIP — internal scheme
+		},
+	}
+	svc.SetInstanceLauncher(mock)
+	svc.SetSystemAMIFunc(func() string { return "ami-nlb-test" })
+
+	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name:    aws.String("nlb-internal"),
+		Type:    aws.String("network"),
+		Scheme:  aws.String("internal"),
+		Subnets: []*string{aws.String(subnetID)},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	lb := out.LoadBalancers[0]
+	assert.Equal(t, "internal", *lb.Scheme)
+	assert.Equal(t, "network", *lb.Type)
+	assert.Contains(t, *lb.DNSName, "internal-")
+	assert.Contains(t, *lb.LoadBalancerArn, "loadbalancer/net/nlb-internal")
+
+	// Verify launcher was called with internal scheme
+	require.Len(t, mock.launchCalls, 1)
+	assert.Equal(t, SchemeInternal, mock.launchCalls[0].Scheme)
+
+	// Verify AZ does NOT include public IP
+	require.Len(t, lb.AvailabilityZones, 1)
+	assert.Empty(t, lb.AvailabilityZones[0].LoadBalancerAddresses)
+
+	// Verify no security groups (NLBs don't support them)
+	assert.Empty(t, lb.SecurityGroups)
+}
+
 func TestDeleteLoadBalancer_TerminatesVM_WithPublicIP(t *testing.T) {
 	svc, vpcSvc := setupTestServiceWithVPC(t)
 

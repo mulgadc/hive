@@ -52,11 +52,30 @@ APP_INSTANCE_IDS=()
 TG_ARN=""
 LB_ARN=""
 LISTENER_ARN=""
+INT_LB_ARN=""
+INT_LISTENER_ARN=""
+INT_TG_ARN=""
+CLIENT_INSTANCE_ID=""
 
 cleanup() {
     local exit_code=$?
     echo ""
     echo "Cleanup..."
+
+    if [ -n "$INT_LISTENER_ARN" ]; then
+        echo "  Deleting internal listener..."
+        $AWS_ELBV2 delete-listener --listener-arn "$INT_LISTENER_ARN" 2>/dev/null || true
+    fi
+
+    if [ -n "$INT_LB_ARN" ]; then
+        echo "  Deleting internal load balancer..."
+        $AWS_ELBV2 delete-load-balancer --load-balancer-arn "$INT_LB_ARN" 2>/dev/null || true
+    fi
+
+    if [ -n "$INT_TG_ARN" ]; then
+        echo "  Deleting internal target group..."
+        $AWS_ELBV2 delete-target-group --target-group-arn "$INT_TG_ARN" 2>/dev/null || true
+    fi
 
     if [ -n "$LISTENER_ARN" ]; then
         echo "  Deleting listener..."
@@ -71,6 +90,11 @@ cleanup() {
     if [ -n "$TG_ARN" ]; then
         echo "  Deleting target group..."
         $AWS_ELBV2 delete-target-group --target-group-arn "$TG_ARN" 2>/dev/null || true
+    fi
+
+    if [ -n "$CLIENT_INSTANCE_ID" ]; then
+        echo "  Terminating client instance $CLIENT_INSTANCE_ID..."
+        $AWS_EC2 terminate-instances --instance-ids "$CLIENT_INSTANCE_ID" 2>/dev/null || true
     fi
 
     for inst_id in "${APP_INSTANCE_IDS[@]}"; do
@@ -726,6 +750,430 @@ $AWS_ELBV2 delete-target-group --target-group-arn "$TG_ARN" 2>&1 && {
     TG_ARN=""
 } || {
     fail "delete-target-group"
+}
+
+# ==========================================
+# Phase 10: Create Internal NLB + TCP Target Group
+# ==========================================
+echo ""
+echo "Phase 10: Internal NLB + TCP Target Group"
+echo "========================================"
+
+echo "Creating TCP target group for internal NLB (port 9000, TCP health check)..."
+INT_TG_OUTPUT=$($AWS_ELBV2 create-target-group \
+    --name nlb-int-tg \
+    --protocol TCP \
+    --port 9000 \
+    --vpc-id "$VPC_ID" \
+    --health-check-protocol TCP \
+    --health-check-interval-seconds 10 \
+    --healthy-threshold-count 2 \
+    --unhealthy-threshold-count 2 \
+    --output json 2>&1) || {
+    fail "create-target-group (internal)"
+    echo "  Output: $INT_TG_OUTPUT"
+    exit 1
+}
+INT_TG_ARN=$(echo "$INT_TG_OUTPUT" | jq -r '.TargetGroups[0].TargetGroupArn')
+pass "create-target-group (internal): $INT_TG_ARN"
+
+echo "Registering both app instances as targets..."
+$AWS_ELBV2 register-targets \
+    --target-group-arn "$INT_TG_ARN" \
+    --targets "Id=${APP_INSTANCE_IDS[0]}" "Id=${APP_INSTANCE_IDS[1]}" \
+    --output json 2>&1 || {
+    fail "register-targets (internal)"
+    exit 1
+}
+pass "registered 2 targets (internal)"
+
+echo "Creating internal NLB (type=network, scheme=internal)..."
+INT_LB_OUTPUT=$($AWS_ELBV2 create-load-balancer \
+    --name nlb-int-test \
+    --type network \
+    --scheme internal \
+    --subnets "$SUBNET_ID" \
+    --output json 2>&1) || {
+    fail "create-load-balancer (internal)"
+    echo "  Output: $INT_LB_OUTPUT"
+    exit 1
+}
+INT_LB_ARN=$(echo "$INT_LB_OUTPUT" | jq -r '.LoadBalancers[0].LoadBalancerArn')
+INT_LB_TYPE=$(echo "$INT_LB_OUTPUT" | jq -r '.LoadBalancers[0].Type')
+INT_LB_SCHEME=$(echo "$INT_LB_OUTPUT" | jq -r '.LoadBalancers[0].Scheme')
+INT_LB_STATE=$(echo "$INT_LB_OUTPUT" | jq -r '.LoadBalancers[0].State.Code')
+pass "create-load-balancer (internal): $INT_LB_ARN (type: $INT_LB_TYPE, scheme: $INT_LB_SCHEME, state: $INT_LB_STATE)"
+
+if [ "$INT_LB_TYPE" == "network" ]; then
+    pass "internal NLB type: network"
+else
+    fail "internal NLB type: expected 'network', got '$INT_LB_TYPE'"
+fi
+
+if [ "$INT_LB_SCHEME" == "internal" ]; then
+    pass "scheme confirmed: internal"
+else
+    fail "scheme mismatch: expected internal, got $INT_LB_SCHEME"
+fi
+
+# ==========================================
+# Phase 11: Verify Internal NLB ENI — No Public IP
+# ==========================================
+echo ""
+echo "Phase 11: Verify Internal NLB ENI (No Public IP)"
+echo "========================================"
+
+INT_LB_ID=$(echo "$INT_LB_ARN" | sed 's|.*/||')
+INT_LB_NAME="nlb-int-test"
+
+echo "Looking up internal NLB ENI..."
+sleep 3
+
+INT_ENI_OUTPUT=$($AWS_EC2 describe-network-interfaces \
+    --filters "Name=description,Values=ELB net/${INT_LB_NAME}/${INT_LB_ID}" \
+    --output json 2>/dev/null)
+
+INT_NLB_PUBLIC_IP=$(echo "$INT_ENI_OUTPUT" | jq -r '.NetworkInterfaces[0].Association.PublicIp // empty' 2>/dev/null)
+INT_NLB_PRIVATE_IP=$(echo "$INT_ENI_OUTPUT" | jq -r '.NetworkInterfaces[0].PrivateIpAddress // empty' 2>/dev/null)
+INT_NLB_ENI_ID=$(echo "$INT_ENI_OUTPUT" | jq -r '.NetworkInterfaces[0].NetworkInterfaceId // empty' 2>/dev/null)
+
+echo "  ENI: $INT_NLB_ENI_ID"
+echo "  Private IP: $INT_NLB_PRIVATE_IP"
+echo "  Public IP: ${INT_NLB_PUBLIC_IP:-(none)}"
+
+if [ -z "$INT_NLB_PUBLIC_IP" ] || [ "$INT_NLB_PUBLIC_IP" == "null" ]; then
+    pass "internal NLB has no public IP (correct)"
+else
+    fail "internal NLB should NOT have a public IP, but got: $INT_NLB_PUBLIC_IP"
+fi
+
+if [ -n "$INT_NLB_PRIVATE_IP" ] && [ "$INT_NLB_PRIVATE_IP" != "null" ]; then
+    pass "internal NLB has private IP: $INT_NLB_PRIVATE_IP"
+else
+    fail "internal NLB has no private IP"
+    exit 1
+fi
+
+# Verify DNS name HAS internal- prefix
+INT_LB_DNS=$($AWS_ELBV2 describe-load-balancers --load-balancer-arns "$INT_LB_ARN" \
+    --query 'LoadBalancers[0].DNSName' --output text 2>/dev/null)
+echo "  DNS name: $INT_LB_DNS"
+if echo "$INT_LB_DNS" | grep -q "^internal-"; then
+    pass "DNS name has internal- prefix"
+else
+    fail "DNS name missing internal- prefix for internal NLB: $INT_LB_DNS"
+fi
+
+# Verify ARN contains /net/ path segment
+if echo "$INT_LB_ARN" | grep -q "/net/"; then
+    pass "internal NLB ARN contains /net/ path segment"
+else
+    fail "internal NLB ARN missing /net/ path segment: $INT_LB_ARN"
+fi
+
+echo "Creating TCP listener on internal NLB (port 9000 -> target group)..."
+INT_LISTENER_OUTPUT=$($AWS_ELBV2 create-listener \
+    --load-balancer-arn "$INT_LB_ARN" \
+    --protocol TCP \
+    --port 9000 \
+    --default-actions "Type=forward,TargetGroupArn=$INT_TG_ARN" \
+    --output json 2>&1) || {
+    fail "create-listener (internal)"
+    echo "  Output: $INT_LISTENER_OUTPUT"
+    exit 1
+}
+INT_LISTENER_ARN=$(echo "$INT_LISTENER_OUTPUT" | jq -r '.Listeners[0].ListenerArn')
+pass "create-listener (internal): $INT_LISTENER_ARN"
+
+# ==========================================
+# Phase 12: Internal NLB Reaches Active
+# ==========================================
+echo ""
+echo "Phase 12: Internal NLB Active (agent heartbeat)"
+echo "========================================"
+
+echo "Waiting for internal NLB to become active (up to 270s)..."
+INT_NLB_ACTIVE=false
+for attempt in $(seq 1 90); do
+    INT_LB_STATE=$($AWS_ELBV2 describe-load-balancers --load-balancer-arns "$INT_LB_ARN" \
+        --query 'LoadBalancers[0].State.Code' --output text 2>/dev/null)
+    if [ "$INT_LB_STATE" == "active" ]; then
+        INT_NLB_ACTIVE=true
+        break
+    fi
+    if [ $((attempt % 10)) -eq 0 ]; then
+        echo "  Internal NLB state: $INT_LB_STATE (attempt $attempt/90)"
+    fi
+    sleep 3
+done
+
+if [ "$INT_NLB_ACTIVE" = true ]; then
+    pass "internal NLB state: active (agent heartbeat received)"
+else
+    fail "internal NLB did not reach active state (stuck in $INT_LB_STATE)"
+    echo ""
+    echo "  Debug: daemon logs:"
+    grep -iE 'LaunchSystemInstance|LB.VM|NLB|lb-agent|alb-agent|mgmt|heartbeat' ~/spinifex/logs/spinifex.log 2>/dev/null | tail -20 || echo "  (no matching log lines)"
+    exit 1
+fi
+
+# Wait for targets to become healthy
+echo "Polling target health for internal NLB (timeout 120s)..."
+HEALTH_TIMEOUT=120
+HEALTH_START=$(date +%s)
+INT_TARGETS_HEALTHY=false
+
+while true; do
+    ELAPSED=$(( $(date +%s) - HEALTH_START ))
+    if [ $ELAPSED -ge $HEALTH_TIMEOUT ]; then
+        break
+    fi
+
+    INT_HEALTH_OUTPUT=$($AWS_ELBV2 describe-target-health \
+        --target-group-arn "$INT_TG_ARN" \
+        --output json 2>/dev/null) || continue
+
+    HEALTHY_COUNT=$(echo "$INT_HEALTH_OUTPUT" | jq '[.TargetHealthDescriptions[] | select(.TargetHealth.State == "healthy")] | length')
+    TOTAL_COUNT=$(echo "$INT_HEALTH_OUTPUT" | jq '.TargetHealthDescriptions | length')
+
+    echo "  ${ELAPSED}s: $HEALTHY_COUNT/$TOTAL_COUNT targets healthy"
+
+    if [ "$HEALTHY_COUNT" -eq 2 ]; then
+        INT_TARGETS_HEALTHY=true
+        break
+    fi
+    sleep 5
+done
+
+if [ "$INT_TARGETS_HEALTHY" = true ]; then
+    pass "both targets healthy via internal NLB (TCP health checks passing)"
+else
+    echo "  Current target health:"
+    echo "$INT_HEALTH_OUTPUT" | jq -r '.TargetHealthDescriptions[] | "    \(.Target.Id): \(.TargetHealth.State) (\(.TargetHealth.Reason // "n/a"))"'
+    fail "internal NLB targets did not become healthy within ${HEALTH_TIMEOUT}s"
+fi
+
+# ==========================================
+# Phase 13: TCP Traffic Through Internal NLB (VPC client)
+# ==========================================
+echo ""
+echo "Phase 13: TCP Traffic Through Internal NLB (VPC client)"
+echo "========================================"
+
+# Launch a client VM in the same subnet to send TCP traffic to the internal NLB
+# via its private IP. The client collects results and serves them over HTTP
+# so the host can fetch them via the client's public IP.
+echo "Launching client VM to test internal NLB from inside the VPC..."
+
+CLIENT_USER_DATA=$(cat <<USERDATA
+#!/bin/bash
+NLB_IP="${INT_NLB_PRIVATE_IP}"
+NUM_REQUESTS=20
+
+mkdir -p /tmp/httpd
+cd /tmp/httpd
+
+# Wait for NLB to respond via TCP (up to 5 min)
+echo "waiting" > status.txt
+nohup python3 -m http.server 80 --bind 0.0.0.0 > /dev/null 2>&1 &
+
+for i in \$(seq 1 60); do
+    PROBE=\$(echo "" | nc -w3 \${NLB_IP} 9000 2>/dev/null || true)
+    if [ -n "\$PROBE" ]; then
+        break
+    fi
+    sleep 5
+done
+
+# Send test requests and collect responses (one line per response)
+> results.txt
+for i in \$(seq 1 \$NUM_REQUESTS); do
+    RESP=\$(echo "" | nc -w2 \${NLB_IP} 9000 2>/dev/null || true)
+    echo "\$RESP" >> results.txt
+done
+
+echo "done" > status.txt
+USERDATA
+)
+
+CLIENT_OUTPUT=$($AWS_EC2 run-instances \
+    --image-id "$AMI_ID" \
+    --instance-type "$INSTANCE_TYPE" \
+    --key-name nlb-test-key \
+    --subnet-id "$SUBNET_ID" \
+    --user-data "$CLIENT_USER_DATA" \
+    --output json 2>&1) || {
+    fail "run-instances (client)"
+    echo "  Output: $CLIENT_OUTPUT"
+    exit 1
+}
+CLIENT_INSTANCE_ID=$(echo "$CLIENT_OUTPUT" | jq -r '.Instances[0].InstanceId')
+echo "  Client instance: $CLIENT_INSTANCE_ID"
+pass "launched client VM"
+
+# Wait for client to reach running state
+echo "Waiting for client to reach running state..."
+for attempt in $(seq 1 60); do
+    STATE=$($AWS_EC2 describe-instances --instance-ids "$CLIENT_INSTANCE_ID" \
+        --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null)
+    if [ "$STATE" == "running" ]; then
+        break
+    fi
+    if [ $attempt -eq 60 ]; then
+        fail "client instance did not reach running (stuck in $STATE)"
+        exit 1
+    fi
+    sleep 2
+done
+
+# Discover client's public IP
+CLIENT_ENI=$($AWS_EC2 describe-network-interfaces \
+    --filters "Name=attachment.instance-id,Values=$CLIENT_INSTANCE_ID" \
+    --output json 2>/dev/null)
+CLIENT_PUBLIC_IP=$(echo "$CLIENT_ENI" | jq -r '.NetworkInterfaces[0].Association.PublicIp // empty' 2>/dev/null)
+
+if [ -z "$CLIENT_PUBLIC_IP" ] || [ "$CLIENT_PUBLIC_IP" == "null" ]; then
+    fail "client VM has no public IP — cannot fetch results from host"
+    exit 1
+fi
+pass "client VM public IP: $CLIENT_PUBLIC_IP"
+
+# Wait for cloud-init + test script to complete
+echo "Waiting for client cloud-init + NLB test (~120s)..."
+CLIENT_DONE=false
+for attempt in $(seq 1 60); do
+    STATUS=$(curl -s --max-time 3 "http://${CLIENT_PUBLIC_IP}:80/status.txt" 2>/dev/null) || true
+    if [ "$STATUS" == "done" ]; then
+        CLIENT_DONE=true
+        break
+    fi
+    if [ $((attempt % 10)) -eq 0 ]; then
+        echo "  Client status: ${STATUS:-unreachable} (attempt $attempt/60)"
+    fi
+    sleep 5
+done
+
+if [ "$CLIENT_DONE" != true ]; then
+    fail "client VM test did not complete within timeout"
+    echo "  Last status: ${STATUS:-unreachable}"
+    exit 1
+fi
+pass "client VM test completed"
+
+# Fetch and analyse results
+echo "Fetching results from client VM..."
+INT_RESULTS=$(curl -s --max-time 10 "http://${CLIENT_PUBLIC_IP}:80/results.txt" 2>/dev/null)
+
+if [ -z "$INT_RESULTS" ]; then
+    fail "could not fetch results from client VM"
+    exit 1
+fi
+
+# Parse results: count unique hostnames returned by TCP echo server
+declare -A INT_RESPONSE_COUNTS
+INT_TOTAL_SUCCESS=0
+INT_TOTAL_FAIL=0
+
+while IFS= read -r line; do
+    line=$(echo "$line" | tr -d '[:space:]')
+    [ -z "$line" ] && continue
+    INT_RESPONSE_COUNTS[$line]=$(( ${INT_RESPONSE_COUNTS[$line]:-0} + 1 ))
+    INT_TOTAL_SUCCESS=$((INT_TOTAL_SUCCESS + 1))
+done <<< "$INT_RESULTS"
+
+echo "  Results: $INT_TOTAL_SUCCESS successful, $INT_TOTAL_FAIL failed"
+echo "  Distribution:"
+for inst_id in "${!INT_RESPONSE_COUNTS[@]}"; do
+    echo "    $inst_id: ${INT_RESPONSE_COUNTS[$inst_id]} responses"
+done
+
+INT_UNIQUE_RESPONDERS=${#INT_RESPONSE_COUNTS[@]}
+if [ "$INT_UNIQUE_RESPONDERS" -ge 2 ]; then
+    pass "round-robin via private IP (TCP): $INT_UNIQUE_RESPONDERS unique instances responded"
+elif [ "$INT_UNIQUE_RESPONDERS" -eq 1 ]; then
+    pass "TCP traffic forwarded via private IP: 1 instance responded ($INT_TOTAL_SUCCESS/20 successful)"
+else
+    fail "TCP traffic via private IP: no successful responses"
+fi
+
+if [ "$INT_TOTAL_SUCCESS" -ge 10 ]; then
+    pass "internal NLB TCP success rate: $INT_TOTAL_SUCCESS/20 requests succeeded"
+else
+    fail "internal NLB TCP success rate: only $INT_TOTAL_SUCCESS/20 requests succeeded"
+fi
+
+# ==========================================
+# Phase 14: Internal NLB Cleanup
+# ==========================================
+echo ""
+echo "Phase 14: Internal NLB Cleanup"
+echo "========================================"
+
+# Terminate client VM
+echo "Terminating client VM..."
+$AWS_EC2 terminate-instances --instance-ids "$CLIENT_INSTANCE_ID" 2>/dev/null || true
+CLIENT_INSTANCE_ID=""
+pass "client VM terminated"
+
+# Delete internal listener
+echo "Deleting internal listener..."
+$AWS_ELBV2 delete-listener --listener-arn "$INT_LISTENER_ARN" 2>&1 && {
+    pass "delete-listener (internal): $INT_LISTENER_ARN"
+    INT_LISTENER_ARN=""
+} || {
+    fail "delete-listener (internal)"
+}
+
+# Delete internal NLB
+echo "Deleting internal NLB..."
+$AWS_ELBV2 delete-load-balancer --load-balancer-arn "$INT_LB_ARN" 2>&1 && {
+    pass "delete-load-balancer (internal): $INT_LB_ARN"
+} || {
+    fail "delete-load-balancer (internal)"
+}
+
+# Verify internal NLB is gone
+DESC_LB_OUTPUT=$($AWS_ELBV2 describe-load-balancers --output json 2>&1) || true
+INT_LB_REMAINING=$(echo "$DESC_LB_OUTPUT" | jq "[.LoadBalancers[] | select(.LoadBalancerArn == \"$INT_LB_ARN\")] | length")
+if [ "$INT_LB_REMAINING" == "0" ]; then
+    pass "internal NLB deleted: no longer in describe-load-balancers"
+else
+    fail "internal NLB still exists after deletion"
+fi
+INT_LB_ARN=""
+
+# Verify internal NLB ENIs cleaned up
+echo "Verifying internal NLB ENIs cleaned up (up to 30s)..."
+INT_ENI_COUNT=""
+for i in $(seq 1 10); do
+    INT_ENI_OUTPUT=$($AWS_EC2 describe-network-interfaces \
+        --filters "Name=description,Values=ELB net/${INT_LB_NAME}/${INT_LB_ID}" \
+        --output json 2>&1) || true
+    INT_ENI_COUNT=$(echo "$INT_ENI_OUTPUT" | jq '.NetworkInterfaces | length')
+    if [ "$INT_ENI_COUNT" == "0" ]; then
+        break
+    fi
+    sleep 3
+done
+if [ "$INT_ENI_COUNT" == "0" ]; then
+    pass "internal NLB ENIs cleaned up: 0 remaining (after ${i} polls)"
+else
+    fail "internal NLB ENI cleanup: $INT_ENI_COUNT ENIs still exist after 30s"
+fi
+
+# Deregister targets and delete internal TG
+echo "Deregistering targets from internal target group..."
+$AWS_ELBV2 deregister-targets \
+    --target-group-arn "$INT_TG_ARN" \
+    --targets "Id=${APP_INSTANCE_IDS[0]}" "Id=${APP_INSTANCE_IDS[1]}" \
+    --output json 2>&1 || true
+
+echo "Deleting internal target group..."
+$AWS_ELBV2 delete-target-group --target-group-arn "$INT_TG_ARN" 2>&1 && {
+    pass "delete-target-group (internal): $INT_TG_ARN"
+    INT_TG_ARN=""
+} || {
+    fail "delete-target-group (internal)"
 }
 
 echo ""
