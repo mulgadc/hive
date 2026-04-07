@@ -239,6 +239,7 @@ func (fs *FormationServer) Shutdown(ctx context.Context) error {
 }
 
 func (fs *FormationServer) handleJoin(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1*1024*1024) // 1 MB limit
 	var req JoinRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, JoinResponse{

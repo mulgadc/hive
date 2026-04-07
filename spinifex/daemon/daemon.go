@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -1616,21 +1617,47 @@ func (d *Daemon) ClusterManager() error {
 		}
 	})
 
-	// Start HTTP server in goroutine — use a channel to propagate bind errors
-	// back to the caller so Start() fails visibly instead of silently.
+	// Load TLS certificate (C-5: serve over HTTPS instead of plaintext HTTP)
+	// Resolve relative cert paths against config directory (cert lives alongside spinifex.toml).
+	// For binary installs, systemd sets absolute paths via env vars; for dev, the config
+	// stores relative paths like "config/server.pem" which need resolution.
+	tlsCert := d.config.Daemon.TLSCert
+	tlsKey := d.config.Daemon.TLSKey
+	if tlsCert == "" || tlsKey == "" {
+		return fmt.Errorf("cluster manager TLS not configured: set daemon.tlscert and daemon.tlskey in config")
+	}
+	if d.configPath != "" {
+		configDir := filepath.Dir(d.configPath)
+		if !filepath.IsAbs(tlsCert) {
+			tlsCert = filepath.Join(configDir, filepath.Base(tlsCert))
+		}
+		if !filepath.IsAbs(tlsKey) {
+			tlsKey = filepath.Join(configDir, filepath.Base(tlsKey))
+		}
+	}
+	cert, err := tls.LoadX509KeyPair(tlsCert, tlsKey)
+	if err != nil {
+		return fmt.Errorf("cluster manager load TLS cert: %w", err)
+	}
+
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+	}
+
 	d.clusterServer = &http.Server{
 		Addr:              daemonHost,
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
+		TLSConfig:         tlsConfig,
 	}
 
-	ln, err := net.Listen("tcp", daemonHost)
+	ln, err := tls.Listen("tcp", daemonHost, tlsConfig)
 	if err != nil {
 		return fmt.Errorf("cluster manager listen on %s: %w", daemonHost, err)
 	}
 
 	go func() {
-		slog.Info("Starting cluster manager", "host", daemonHost)
+		slog.Info("Starting cluster manager (TLS)", "host", daemonHost)
 		if err := d.clusterServer.Serve(ln); err != nil && err != http.ErrServerClosed {
 			slog.Error("Cluster manager failed", "error", err)
 		}
