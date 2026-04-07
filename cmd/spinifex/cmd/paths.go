@@ -26,6 +26,16 @@ func DefaultDataDir() string {
 	return filepath.Join(realUserHomeDir(), "spinifex")
 }
 
+// DefaultLogDir returns the default log directory.
+// Production: /var/log/spinifex (matches systemd ReadWritePaths)
+// Development: ~/spinifex/logs
+func DefaultLogDir() string {
+	if isProductionLayout() {
+		return "/var/log/spinifex"
+	}
+	return filepath.Join(realUserHomeDir(), "spinifex", "logs")
+}
+
 // realUserHomeDir returns the home directory of the real (non-sudo) user.
 // When running under sudo, SUDO_USER is set to the invoking user — resolve
 // their home directory so config/data land in the right place.

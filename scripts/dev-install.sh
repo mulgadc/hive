@@ -28,6 +28,28 @@ cp "$PROJECT_ROOT/build/scripts/"* "$STAGING/scripts/"
 cp "$PROJECT_ROOT/build/logrotate/spinifex" "$STAGING/logrotate-spinifex"
 tar czf /tmp/spinifex-local.tar.gz -C "$STAGING" .
 
+echo "=== Cleaning stale state from previous installs ==="
+# Stop any running services before modifying files
+sudo systemctl stop spinifex.target 2>/dev/null || true
+sudo systemctl reset-failed 2>/dev/null || true
+
+# Remove stale files owned by the dev user in production paths.
+# Previous dev-mode installs (admin init without sudo, start-dev.sh) leave
+# files owned by tf-user that service users (spinifex-nats, etc.) can't read
+# under systemd's ProtectSystem=strict sandboxing.
+for dir in /var/lib/spinifex /var/log/spinifex /etc/spinifex; do
+    if [ -d "$dir" ]; then
+        # Remove PID files, stale logs, and the legacy ~/spinifex/config symlink
+        sudo find "$dir" -name '*.pid' -delete 2>/dev/null || true
+        sudo find "$dir" -name '*.log' -delete 2>/dev/null || true
+        sudo find "$dir" -name '*.log.*' -delete 2>/dev/null || true
+    fi
+done
+# Remove legacy data dir contents that conflict with production layout
+if [ -d /var/lib/spinifex/config ]; then
+    sudo rm -rf /var/lib/spinifex/config
+fi
+
 echo "=== Running setup.sh (creates users, dirs, systemd units) ==="
 sudo INSTALL_SPINIFEX_TARBALL=/tmp/spinifex-local.tar.gz bash "$PROJECT_ROOT/scripts/setup.sh"
 rm -f /tmp/spinifex-local.tar.gz
