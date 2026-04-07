@@ -13,7 +13,6 @@ ExecStart=/usr/local/bin/spx service viperblock start
 Restart=on-failure
 RestartSec=5
 OOMScoreAdjust=-500
-UMask=0002
 EnvironmentFile=/etc/spinifex/systemd.env
 Environment=SPINIFEX_CONFIG_PATH=/etc/spinifex/spinifex.toml
 Environment=SPINIFEX_BASE_DIR=/var/lib/spinifex/viperblock/
