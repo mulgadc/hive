@@ -6,7 +6,7 @@ Wants=spinifex-nats.service
 
 [Service]
 Type=simple
-User=spinifex
+User=spinifex-viperblock
 Group=spinifex
 ExecStartPre=/var/lib/spinifex/wait-for-nats.sh
 ExecStart=/usr/local/bin/spx service viperblock start
@@ -16,6 +16,28 @@ OOMScoreAdjust=-500
 EnvironmentFile=/etc/spinifex/systemd.env
 Environment=SPINIFEX_CONFIG_PATH=/etc/spinifex/spinifex.toml
 Environment=SPINIFEX_BASE_DIR=/var/lib/spinifex/viperblock/
+
+# Filesystem access
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateDevices=yes
+ReadOnlyPaths=/etc/spinifex/spinifex.toml /etc/spinifex/systemd.env
+ReadWritePaths=/var/lib/spinifex/viperblock /var/log/spinifex /tmp
+
+# Hardening
+ProtectHome=yes
+PrivateTmp=no
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=spinifex.target

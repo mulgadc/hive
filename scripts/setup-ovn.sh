@@ -565,21 +565,13 @@ else
     echo "  systemd override: already exists"
 fi
 
-# Create sudoers rule for network commands that always need root
-# (ip tuntap, ip link set — NET_ADMIN operations)
+# Sudoers rules for spinifex-daemon and spinifex-vpcd are managed by setup.sh
+# (install_sudoers). Skip writing here to avoid conflicts.
 SUDOERS_FILE="/etc/sudoers.d/spinifex-network"
-if [ ! -f "$SUDOERS_FILE" ]; then
-    CURRENT_USER=$(whoami)
-    sudo tee "$SUDOERS_FILE" >/dev/null <<EOF
-# Spinifex VPC networking: allow non-root daemon to manage tap devices and OVS
-$CURRENT_USER ALL=(root) NOPASSWD: /sbin/ip, /usr/sbin/ip
-$CURRENT_USER ALL=(root) NOPASSWD: /usr/bin/ovs-vsctl, /usr/bin/ovs-appctl
-$CURRENT_USER ALL=(root) NOPASSWD: /usr/bin/ovn-nbctl, /usr/bin/ovn-sbctl
-EOF
-    sudo chmod 0440 "$SUDOERS_FILE"
-    echo "  sudoers rule: created ($SUDOERS_FILE)"
+if [ -f "$SUDOERS_FILE" ]; then
+    echo "  sudoers rule: already exists ($SUDOERS_FILE, managed by setup.sh)"
 else
-    echo "  sudoers rule: already exists"
+    echo "  sudoers rule: not found — run setup.sh first, or install manually"
 fi
 
 # --- Step 9: Configure OVN log rotation ---
