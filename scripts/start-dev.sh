@@ -11,6 +11,11 @@
 
 set -euo pipefail
 
+echo "WARNING: start-dev.sh is deprecated for local development." >&2
+echo "  Use 'make deploy' for daily iteration or 'scripts/dev-install.sh' for first-time setup." >&2
+echo "  start-dev.sh is retained only for pseudo-multinode CI (e2e_pseudo_multi)." >&2
+echo "" >&2
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 MULGA_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"

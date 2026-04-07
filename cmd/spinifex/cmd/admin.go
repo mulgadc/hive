@@ -933,6 +933,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		Region:    region,
 		NatsToken: natsToken,
 		DataDir:   spxRoot,
+		LogDir:    DefaultLogDir(),
 		ConfigDir: configDir,
 
 		Node:          node,
@@ -1167,6 +1168,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		Region:    region,
 		NatsToken: natsToken,
 		DataDir:   spxRoot,
+		LogDir:    DefaultLogDir(),
 		ConfigDir: configDir,
 
 		Node:          node,
@@ -1561,6 +1563,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		Region:    creds.Region,
 		NatsToken: creds.NatsToken,
 		DataDir:   dataDir,
+		LogDir:    DefaultLogDir(),
 		ConfigDir: configDir,
 
 		Node:          node,

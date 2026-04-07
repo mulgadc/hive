@@ -40,6 +40,7 @@ type ConfigSettings struct {
 	Region    string
 	NatsToken string
 	DataDir   string
+	LogDir    string
 	ConfigDir string
 
 	// Add more fields as needed
