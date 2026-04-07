@@ -116,6 +116,17 @@ run:
 	$(MAKE) go_build
 	$(MAKE) go_run
 
+# Fast iteration: build + install binary + restart all services
+deploy: build
+	sudo install -m 755 bin/spx /usr/local/bin/spx
+	sudo systemctl daemon-reload
+	sudo systemctl restart spinifex.target
+
+# Re-run setup.sh after changing systemd units, helper scripts, or logrotate config.
+# Not needed for code-only changes — use deploy for those.
+reinstall:
+	scripts/dev-install.sh
+
 clean:
 	rm -f ./bin/$(GO_PROJECT_NAME)
 	rm -rf spinifex/services/spinifexui/frontend/dist
@@ -207,7 +218,8 @@ distro-arm64:
 distro-clean:
 	rm -rf dist/
 
-.PHONY: build build-ui build-alb-agent build-system-image build-alb-image go_build go_run preflight test test-cover test-race diff-coverage bench run clean \
+.PHONY: build build-ui build-alb-agent build-system-image build-alb-image go_build go_run preflight test test-cover test-race diff-coverage bench run \
+	deploy reinstall clean \
 	install-system install-go install-aws quickinstall \
 	lint fix govulncheck \
 	distro distro-amd64 distro-arm64 distro-clean

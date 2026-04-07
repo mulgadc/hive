@@ -11,9 +11,6 @@ set -euo pipefail
 # Ensure Go is on PATH (SSH non-interactive shells don't source .bashrc)
 export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
 
-# Ensure we are in the spinifex project root
-cd "$(dirname "$0")/../.."
-
 # ==========================================================================
 # Argument parsing
 # ==========================================================================
@@ -36,14 +33,12 @@ NATS_MONITOR_PORT=8222
 PREDASTORE_PORT=8443
 AWSGW_PORT=9999
 SSH_KEY_PATH="$HOME/.ssh/tf-user-ap-southeast-2"
-SPINIFEX_DATA_DIR="$HOME/spinifex"
-SPINIFEX_CONFIG="$SPINIFEX_DATA_DIR/config/spinifex.toml"
-SPINIFEX_BIN="./bin/spx"
+SPINIFEX_BIN="spx"
 
 # Use Spinifex profile for AWS CLI
 export AWS_PROFILE=spinifex
 # Trust Spinifex CA for AWS CLI v2 (bundles its own Python/certifi, ignores system CA store)
-export AWS_CA_BUNDLE="$SPINIFEX_DATA_DIR/config/ca.pem"
+export AWS_CA_BUNDLE="/etc/spinifex/ca.pem"
 
 # Track test results
 TESTS_PASSED=0
@@ -106,19 +101,15 @@ dump_all_node_logs() {
         local ip="${NODE_IPS[$i]}"
         echo ""
         echo "=== Node $((i+1)) ($ip) ==="
-        if [ "$ip" = "$LOCAL_IP" ]; then
-            for f in "$SPINIFEX_DATA_DIR/logs/"*.log; do
-                [ -f "$f" ] || continue
-                echo "--- $(basename "$f") (last 50 lines) ---"
-                tail -50 "$f" 2>/dev/null || echo "(not found)"
-            done
-        else
-            peer_ssh "$ip" 'for f in ~/spinifex/logs/*.log; do
-                [ -f "$f" ] || continue
-                echo "--- $(basename "$f") (last 50 lines) ---"
-                tail -50 "$f" 2>/dev/null || echo "(not found)"
-            done' || echo "(node unreachable)"
-        fi
+        for svc in spinifex-nats spinifex-predastore spinifex-viperblock \
+                   spinifex-daemon spinifex-awsgw spinifex-vpcd; do
+            echo "--- ${svc} (last 50 lines) ---"
+            if [ "$ip" = "$LOCAL_IP" ]; then
+                sudo journalctl -u "$svc" --no-pager -n 50 2>/dev/null || echo "(not found)"
+            else
+                peer_ssh "$ip" "sudo journalctl -u $svc --no-pager -n 50" 2>/dev/null || echo "(node unreachable)"
+            fi
+        done
     done
     echo ""
     echo "=========================================="
@@ -403,7 +394,7 @@ pass_test "Daemon readiness"
 
 # Spinifex CLI: get nodes
 echo "Checking spx get nodes..."
-GET_NODES_OUTPUT=$($SPINIFEX_BIN get nodes --config "$SPINIFEX_CONFIG" --timeout 5s 2>/dev/null)
+GET_NODES_OUTPUT=$($SPINIFEX_BIN get nodes --timeout 5s 2>/dev/null)
 echo "$GET_NODES_OUTPUT"
 READY_COUNT=$(echo "$GET_NODES_OUTPUT" | grep -c "Ready" || true)
 if [ "$READY_COUNT" -ge 3 ]; then
@@ -415,7 +406,7 @@ fi
 
 # Spinifex CLI: get vms (should be empty)
 echo "Checking spx get vms (empty)..."
-GET_VMS_OUTPUT=$($SPINIFEX_BIN get vms --config "$SPINIFEX_CONFIG" --timeout 5s 2>/dev/null)
+GET_VMS_OUTPUT=$($SPINIFEX_BIN get vms --timeout 5s 2>/dev/null)
 echo "$GET_VMS_OUTPUT"
 pass_test "spx get vms (empty)"
 
@@ -500,7 +491,7 @@ fi
 # Verify spx get vms shows all instances
 echo ""
 echo "Verifying spx get vms..."
-GET_VMS_OUTPUT=$($SPINIFEX_BIN get vms --config "$SPINIFEX_CONFIG" --timeout 5s 2>/dev/null)
+GET_VMS_OUTPUT=$($SPINIFEX_BIN get vms --timeout 5s 2>/dev/null)
 echo "$GET_VMS_OUTPUT"
 for instance_id in "${INSTANCE_IDS[@]}"; do
     if ! echo "$GET_VMS_OUTPUT" | grep -q "$instance_id"; then
@@ -787,8 +778,8 @@ echo "Stopping services on node2 ($NODE2_IP) to simulate node failure..."
 
 # Stop services on node2 only — SPINIFEX_FORCE_LOCAL_STOP prevents coordinated
 # cluster shutdown which would kill all nodes via NATS
-peer_ssh "$NODE2_IP" "cd ~/Development/mulga/spinifex && SPINIFEX_FORCE_LOCAL_STOP=1 ./scripts/stop-dev.sh" || {
-    echo "  WARNING: stop-dev.sh returned non-zero (may be expected)"
+peer_ssh "$NODE2_IP" "sudo systemctl stop spinifex.target" || {
+    echo "  WARNING: systemctl stop returned non-zero (may be expected)"
 }
 
 # Wait for NATS cluster to detect the failure and reform
@@ -848,7 +839,7 @@ echo "Phase 9: Node Recovery"
 echo "========================================"
 echo "Restarting services on node2 ($NODE2_IP)..."
 
-peer_ssh "$NODE2_IP" "cd ~/Development/mulga/spinifex && ./scripts/start-dev.sh" || {
+peer_ssh "$NODE2_IP" "sudo systemctl start spinifex.target" || {
     echo "  ERROR: Failed to restart services on node2"
     fail_test "Node2 restart"
 }
@@ -899,7 +890,7 @@ fi
 
 # Verify spx get nodes shows 3 Ready again
 echo "  Checking spx get nodes after recovery..."
-GET_NODES_RECOVER=$($SPINIFEX_BIN get nodes --config "$SPINIFEX_CONFIG" --timeout 10s 2>/dev/null || echo "")
+GET_NODES_RECOVER=$($SPINIFEX_BIN get nodes --timeout 10s 2>/dev/null || echo "")
 echo "$GET_NODES_RECOVER"
 READY_RECOVER=$(echo "$GET_NODES_RECOVER" | grep -c "Ready" || true)
 if [ "$READY_RECOVER" -ge 3 ]; then
@@ -1252,7 +1243,7 @@ else
         echo "Step 4: Validating spread placement across nodes..."
 
         # Use spx get vms to check node assignment
-        SPX_VMS=$($SPINIFEX_BIN get vms --config "$SPINIFEX_CONFIG" --timeout 5s 2>/dev/null)
+        SPX_VMS=$($SPINIFEX_BIN get vms --timeout 5s 2>/dev/null)
         echo "$SPX_VMS"
 
         SPREAD_NODES=()
