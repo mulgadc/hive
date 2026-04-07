@@ -111,8 +111,19 @@ func installSpinifex(cfg *Config) error {
 	}
 
 	// Run setup.sh inside a chroot to install dependencies and systemd units.
+	// INSTALL_SPINIFEX_SKIP_APT and INSTALL_SPINIFEX_SKIP_AWS are set because
+	// all packages are already present in the ISO's live environment and will
+	// be available in the chroot after debootstrap bind-mounts.
 	setupSh := "/usr/local/share/spinifex/setup.sh"
-	return run("chroot", mountRoot, "bash", setupSh, "--offline")
+	cmd := exec.Command("chroot", mountRoot, "bash", setupSh)
+	cmd.Env = append(os.Environ(),
+		"INSTALL_SPINIFEX_SKIP_APT=1",
+		"INSTALL_SPINIFEX_SKIP_AWS=1",
+		"INSTALL_SPINIFEX_TARBALL=/usr/local/share/spinifex/spinifex.tar.gz",
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func writeNetworkConfig(cfg *Config) error {
