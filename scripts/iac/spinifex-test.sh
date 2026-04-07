@@ -185,7 +185,7 @@ cmd_status() {
         printf "  %-20s mgmt=%-16s data=%-16s " "$name" "$ip" "$data_ip"
 
         local health
-        if health=$(curl -s --connect-timeout 3 "http://$ip:4432/health" 2>/dev/null); then
+        if health=$(curl -sk --connect-timeout 3 "https://$ip:4432/health" 2>/dev/null); then
             echo "health=$health"
         else
             echo "health=unreachable"

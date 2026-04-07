@@ -457,7 +457,7 @@ if is_multinode; then
         attempts=0
         max_attempts=5
         while [ $attempts -lt $max_attempts ]; do
-            if curl -s --connect-timeout 3 "http://$peer/health" > /dev/null 2>&1; then
+            if curl -sk --connect-timeout 3 "https://$peer/health" > /dev/null 2>&1; then
                 echo "   $peer: healthy"
                 break
             fi

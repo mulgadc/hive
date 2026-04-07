@@ -176,7 +176,7 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     printf "    node%d (%s): " "$((i + 1))" "$ip"
     attempts=0
     while true; do
-        health=$(curl -s --connect-timeout 3 "http://$ip:4432/health" 2>/dev/null || echo "")
+        health=$(curl -sk --connect-timeout 3 "https://$ip:4432/health" 2>/dev/null || echo "")
         if [ -n "$health" ]; then
             echo "healthy"
             break

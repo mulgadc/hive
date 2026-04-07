@@ -940,9 +940,9 @@ All nodes should show `Ready` status. Use `./bin/spx get vms` to see running ins
 Check individual daemon health endpoints:
 
 ```bash
-curl -s http://$SPINIFEX_NODE1:4432/health
-curl -s http://$SPINIFEX_NODE2:4432/health
-curl -s http://$SPINIFEX_NODE3:4432/health
+curl -sk https://$SPINIFEX_NODE1:4432/health
+curl -sk https://$SPINIFEX_NODE2:4432/health
+curl -sk https://$SPINIFEX_NODE3:4432/health
 ```
 
 Check NATS cluster routing (from any node):

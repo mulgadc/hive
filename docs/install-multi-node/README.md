@@ -152,7 +152,7 @@ Continue to [Setting Up Your Cluster](/docs/setting-up-your-cluster) to import a
 The init command must still be running when join executes. If init exited, re-run with `--force`.
 
 ```bash
-curl -s http://$SPINIFEX_NODE1:4432/health
+curl -sk https://$SPINIFEX_NODE1:4432/health
 ```
 
 ### OVN Chassis Not Registering
