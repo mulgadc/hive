@@ -18,7 +18,7 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 PrivateDevices=yes
 ReadOnlyPaths=/etc/spinifex/nats
-ReadWritePaths=/var/lib/spinifex/nats /var/log/spinifex
+ReadWritePaths=/var/lib/spinifex/nats /var/log/spinifex /tmp
 
 # Hardening
 ProtectHome=yes
