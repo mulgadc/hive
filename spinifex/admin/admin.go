@@ -303,6 +303,7 @@ func SetServiceOwnership() {
 		"/var/lib/spinifex/predastore": "spinifex-storage",
 		"/var/lib/spinifex/spinifex":   "spinifex-daemon",
 		"/var/lib/spinifex/viperblock": "spinifex-viperblock",
+		"/var/lib/spinifex/vpcd":       "spinifex-vpcd",
 	} {
 		if _, err := os.Stat(path); err != nil {
 			continue

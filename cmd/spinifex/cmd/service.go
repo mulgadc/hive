@@ -733,6 +733,11 @@ var vpcdStartCmd = &cobra.Command{
 			}
 		}
 
+		baseDir := viper.GetString("base-dir")
+		if baseDir != "" {
+			nodeConfig.BaseDir = baseDir
+		}
+
 		svc, err := service.New("vpcd", &vpcd.Config{
 			NatsHost:          nodeConfig.NATS.Host,
 			NatsToken:         nodeConfig.NATS.ACL.Token,

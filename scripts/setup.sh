@@ -286,7 +286,8 @@ create_directories() {
     $SUDO chown "root:$SPINIFEX_GROUP" /etc/spinifex
 
     $SUDO mkdir -p /var/lib/spinifex
-    $SUDO chmod 0750 /var/lib/spinifex
+    # TODO: tighten to 0750 once awsgw gets its own data dir (currently writes awsgw.pid here)
+    $SUDO chmod 0770 /var/lib/spinifex
     $SUDO chown "root:$SPINIFEX_GROUP" /var/lib/spinifex
 
     # Symlink so services that expect BaseDir/config/ can find /etc/spinifex/
@@ -332,6 +333,10 @@ create_directories() {
     $SUDO mkdir -p /var/lib/spinifex/viperblock
     $SUDO chown "spinifex-viperblock:$SPINIFEX_GROUP" /var/lib/spinifex/viperblock
     $SUDO chmod 0700 /var/lib/spinifex/viperblock
+
+    $SUDO mkdir -p /var/lib/spinifex/vpcd
+    $SUDO chown "spinifex-vpcd:$SPINIFEX_GROUP" /var/lib/spinifex/vpcd
+    $SUDO chmod 0700 /var/lib/spinifex/vpcd
 
     # Top-level config files (root-owned, group-readable)
     # Generate environment file with install-specific values (e.g. arch-dependent paths)
