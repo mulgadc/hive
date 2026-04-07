@@ -26,14 +26,14 @@ func DefaultDataDir() string {
 	return filepath.Join(realUserHomeDir(), "spinifex")
 }
 
-// DefaultLogDir returns the default log directory.
+// LogDirFor returns the log directory for a given data directory.
 // Production: /var/log/spinifex (matches systemd ReadWritePaths)
-// Development: ~/spinifex/logs
-func DefaultLogDir() string {
+// Development: <dataDir>/logs (supports custom per-node data dirs)
+func LogDirFor(dataDir string) string {
 	if isProductionLayout() {
 		return "/var/log/spinifex"
 	}
-	return filepath.Join(realUserHomeDir(), "spinifex", "logs")
+	return filepath.Join(dataDir, "logs")
 }
 
 // realUserHomeDir returns the home directory of the real (non-sudo) user.
