@@ -19,7 +19,7 @@ Environment=SPINIFEX_WAL_DIR=/var/lib/spinifex/spinifex/
 
 # Filesystem access — NoNewPrivileges omitted (daemon uses sudo for ip, ovs-vsctl, dhcpcd)
 ProtectSystem=full
-PrivateDevices=yes
+PrivateDevices=no
 DevicePolicy=closed
 DeviceAllow=/dev/kvm rw
 DeviceAllow=/dev/net/tun rw

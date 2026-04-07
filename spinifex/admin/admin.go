@@ -244,8 +244,16 @@ func ChownRecursive(path, username string) {
 		slog.Warn("ChownRecursive: user lookup failed, skipping", "user", username, "path", path, "err", err)
 		return
 	}
-	uid, _ := strconv.Atoi(u.Uid)
-	gid, _ := strconv.Atoi(u.Gid)
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		slog.Warn("ChownRecursive: invalid UID, skipping", "user", username, "uid", u.Uid, "err", err)
+		return
+	}
+	gid, err := strconv.Atoi(u.Gid)
+	if err != nil {
+		slog.Warn("ChownRecursive: invalid GID, skipping", "user", username, "gid", u.Gid, "err", err)
+		return
+	}
 
 	// Use os.Root to scope filesystem operations and avoid symlink TOCTOU races.
 	// Falls back to direct chown if os.Root is not available.
@@ -272,23 +280,53 @@ func ChownRecursive(path, username string) {
 	})
 }
 
-// SetServiceOwnership sets per-service ownership on data and config directories.
-// Belt-and-suspenders for the setup.sh re-chown — called at the end of admin init
-// and admin join to ensure correct ownership after directory creation.
+// SetServiceOwnership sets per-service ownership on data/config directories
+// and shared config files to root:spinifex with correct modes.
+// Keep in sync with setup.sh create_directories() and plan doc section 2.
 func SetServiceOwnership() {
-	ownerMap := map[string]string{
+	grp, err := user.LookupGroup("spinifex")
+	if err != nil {
+		slog.Warn("SetServiceOwnership: spinifex group not found, skipping", "err", err)
+		return
+	}
+	gid, err := strconv.Atoi(grp.Gid)
+	if err != nil {
+		slog.Warn("SetServiceOwnership: invalid spinifex group GID", "gid", grp.Gid, "err", err)
+		return
+	}
+
+	// Per-service directory trees
+	for path, u := range map[string]string{
 		"/etc/spinifex/nats":           "spinifex-nats",
 		"/var/lib/spinifex/nats":       "spinifex-nats",
 		"/etc/spinifex/predastore":     "spinifex-storage",
 		"/var/lib/spinifex/predastore": "spinifex-storage",
 		"/var/lib/spinifex/spinifex":   "spinifex-daemon",
 		"/var/lib/spinifex/viperblock": "spinifex-viperblock",
-	}
-	for path, user := range ownerMap {
+	} {
 		if _, err := os.Stat(path); err != nil {
-			continue // directory doesn't exist yet, skip
+			continue
 		}
-		ChownRecursive(path, user)
+		ChownRecursive(path, u)
+	}
+
+	// Shared config files — root:spinifex, ca.key stays root:root 0600
+	for path, mode := range map[string]os.FileMode{
+		"/etc/spinifex/spinifex.toml": 0640,
+		"/etc/spinifex/master.key":    0640,
+		"/etc/spinifex/server.pem":    0644,
+		"/etc/spinifex/server.key":    0640,
+		"/etc/spinifex/ca.pem":        0644,
+	} {
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		if err := os.Lchown(path, 0, gid); err != nil {
+			slog.Warn("SetServiceOwnership: chown failed", "path", path, "err", err)
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			slog.Warn("SetServiceOwnership: chmod failed", "path", path, "err", err)
+		}
 	}
 }
 

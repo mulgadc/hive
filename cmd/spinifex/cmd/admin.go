@@ -1014,14 +1014,9 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 	admin.CreateServiceDirectories(spxRoot)
 
-	// In production layout (running as root), fix ownership so the service user
-	// can read config and write data. SUDO_USER identifies the operator account.
+	// In production layout (running as root), set per-service ownership on
+	// directories and shared config files (root:spinifex with correct modes).
 	if os.Getuid() == 0 {
-		sudoUser := os.Getenv("SUDO_USER")
-		if sudoUser != "" {
-			admin.ChownRecursive(configDir, sudoUser)
-			admin.ChownRecursive(spxRoot, sudoUser)
-		}
 		admin.SetServiceOwnership()
 	}
 
@@ -1247,14 +1242,9 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 	admin.CreateServiceDirectories(spxRoot)
 
-	// In production layout (running as root), fix ownership so the service user
-	// can read config and write data. SUDO_USER identifies the operator account.
+	// In production layout (running as root), set per-service ownership on
+	// directories and shared config files (root:spinifex with correct modes).
 	if os.Getuid() == 0 {
-		sudoUser := os.Getenv("SUDO_USER")
-		if sudoUser != "" {
-			admin.ChownRecursive(configDir, sudoUser)
-			admin.ChownRecursive(spxRoot, sudoUser)
-		}
 		admin.SetServiceOwnership()
 	}
 
@@ -1650,14 +1640,9 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 
 	admin.CreateServiceDirectories(dataDir)
 
-	// In production layout (running as root), fix ownership so the service user
-	// can read config and write data. SUDO_USER identifies the operator account.
+	// In production layout (running as root), set per-service ownership on
+	// directories and shared config files (root:spinifex with correct modes).
 	if os.Getuid() == 0 {
-		sudoUser := os.Getenv("SUDO_USER")
-		if sudoUser != "" {
-			admin.ChownRecursive(configDir, sudoUser)
-			admin.ChownRecursive(dataDir, sudoUser)
-		}
 		admin.SetServiceOwnership()
 	}
 
