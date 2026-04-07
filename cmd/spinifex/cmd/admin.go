@@ -1022,6 +1022,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 			admin.ChownRecursive(configDir, sudoUser)
 			admin.ChownRecursive(spxRoot, sudoUser)
 		}
+		admin.SetServiceOwnership()
 	}
 
 	// Print success message
@@ -1254,6 +1255,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 			admin.ChownRecursive(configDir, sudoUser)
 			admin.ChownRecursive(spxRoot, sudoUser)
 		}
+		admin.SetServiceOwnership()
 	}
 
 	// Keep formation server running briefly so joining nodes can fetch complete status
@@ -1656,6 +1658,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 			admin.ChownRecursive(configDir, sudoUser)
 			admin.ChownRecursive(dataDir, sudoUser)
 		}
+		admin.SetServiceOwnership()
 	}
 
 	// Print cluster summary

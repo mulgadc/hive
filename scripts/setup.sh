@@ -89,27 +89,66 @@ detect_arch() {
     info "Detected architecture: $MACHINE ($ARCH)"
 }
 
-# --- Detect service user ---
-detect_service_user() {
-    # Use the real user — either the current user, or SUDO_USER if running via sudo
-    SPINIFEX_USER="${SUDO_USER:-$(whoami)}"
-    SPINIFEX_GROUP="$(id -gn "$SPINIFEX_USER")"
+# --- Create per-service system users ---
+create_service_users() {
+    SPINIFEX_GROUP="spinifex"
 
-    if [ "$SPINIFEX_USER" = "root" ]; then
-        fatal "Cannot determine service user. Do not run as root directly — use: curl ... | bash (as a normal user)"
+    # Create shared group
+    if ! getent group "$SPINIFEX_GROUP" > /dev/null 2>&1; then
+        $SUDO groupadd --system "$SPINIFEX_GROUP"
     fi
 
-    info "Services will run as: $SPINIFEX_USER:$SPINIFEX_GROUP"
+    # Create per-service users with correct home directories
+    declare -A SERVICE_HOMES=(
+        [nats]="/var/lib/spinifex/nats"
+        [gw]="/var/lib/spinifex"
+        [daemon]="/var/lib/spinifex/spinifex"
+        [storage]="/var/lib/spinifex/predastore"
+        [viperblock]="/var/lib/spinifex/viperblock"
+        [vpcd]="/var/lib/spinifex"
+        [ui]="/var/lib/spinifex"
+    )
+    for svc in nats gw daemon storage viperblock vpcd ui; do
+        local user="spinifex-${svc}"
+        if ! id "$user" > /dev/null 2>&1; then
+            $SUDO useradd --system --no-create-home \
+                --home-dir "${SERVICE_HOMES[$svc]}" \
+                --gid "$SPINIFEX_GROUP" \
+                --shell /usr/sbin/nologin \
+                "$user"
+        fi
+    done
 
-    # Allow the service user to manage OVN/OVS and tap devices
-    $SUDO tee /etc/sudoers.d/spinifex-network > /dev/null << SUDOERS
-# Spinifex VPC networking: allow service user to manage tap devices, OVS, and OVN
-${SPINIFEX_USER} ALL=(root) NOPASSWD: /sbin/ip, /usr/sbin/ip
-${SPINIFEX_USER} ALL=(root) NOPASSWD: /usr/bin/ovs-vsctl, /usr/bin/ovs-appctl
-${SPINIFEX_USER} ALL=(root) NOPASSWD: /usr/bin/ovn-nbctl, /usr/bin/ovn-sbctl
+    # Add invoking user to spinifex group for admin CLI access
+    ADMIN_USER="${SUDO_USER:-$(whoami)}"
+    if [ "$ADMIN_USER" != "root" ]; then
+        $SUDO usermod -aG "$SPINIFEX_GROUP" "$ADMIN_USER"
+    fi
+
+    # KVM access for daemon
+    if getent group kvm > /dev/null 2>&1; then
+        $SUDO usermod -aG kvm spinifex-daemon
+    fi
+
+    info "Service users created (spinifex-{nats,gw,daemon,storage,viperblock,vpcd,ui})"
+}
+
+# --- Install scoped sudoers rules ---
+install_sudoers() {
+    $SUDO tee /etc/sudoers.d/spinifex-network > /dev/null << 'SUDOERS'
+# Spinifex daemon: tap devices, OVS bridge management, and DHCP for external IPs
+spinifex-daemon ALL=(root) NOPASSWD: /sbin/ip, /usr/sbin/ip
+spinifex-daemon ALL=(root) NOPASSWD: /usr/bin/ovs-vsctl, /usr/bin/ovs-appctl
+spinifex-daemon ALL=(root) NOPASSWD: /usr/sbin/dhcpcd
+
+# Spinifex VPC daemon: OVN and OVS read/write, OVN controller status check
+spinifex-vpcd ALL=(root) NOPASSWD: /usr/bin/ovs-vsctl, /usr/bin/ovs-appctl
+spinifex-vpcd ALL=(root) NOPASSWD: /usr/bin/ovn-nbctl, /usr/bin/ovn-sbctl
+spinifex-vpcd ALL=(root) NOPASSWD: /usr/bin/systemctl is-active *
 SUDOERS
     $SUDO chmod 0440 /etc/sudoers.d/spinifex-network
-    info "Sudoers rules installed for $SPINIFEX_USER"
+    $SUDO visudo -cf /etc/sudoers.d/spinifex-network || fatal "Invalid sudoers syntax in spinifex-network"
+    info "Scoped sudoers rules installed for spinifex-daemon and spinifex-vpcd"
 }
 
 # --- Install apt dependencies ---
@@ -241,12 +280,14 @@ install_files() {
 create_directories() {
     info "Creating directories..."
 
+    # Top-level directories (root-owned, group-readable by spinifex)
     $SUDO mkdir -p /etc/spinifex
-    $SUDO chmod 0700 /etc/spinifex
-    $SUDO chown "$SPINIFEX_USER:$SPINIFEX_GROUP" /etc/spinifex
+    $SUDO chmod 0750 /etc/spinifex
+    $SUDO chown "root:$SPINIFEX_GROUP" /etc/spinifex
 
     $SUDO mkdir -p /var/lib/spinifex
-    $SUDO chown "$SPINIFEX_USER:$SPINIFEX_GROUP" /var/lib/spinifex
+    $SUDO chmod 0750 /var/lib/spinifex
+    $SUDO chown "root:$SPINIFEX_GROUP" /var/lib/spinifex
 
     # Symlink so services that expect BaseDir/config/ can find /etc/spinifex/
     if [ ! -e /var/lib/spinifex/config ]; then
@@ -259,26 +300,53 @@ create_directories() {
     fi
 
     $SUDO mkdir -p /var/log/spinifex
-    $SUDO chown "$SPINIFEX_USER:$SPINIFEX_GROUP" /var/log/spinifex
+    $SUDO chmod 0775 /var/log/spinifex
+    $SUDO chown "root:$SPINIFEX_GROUP" /var/log/spinifex
 
     $SUDO mkdir -p /run/spinifex
-    $SUDO chown "$SPINIFEX_USER:$SPINIFEX_GROUP" /run/spinifex
+    $SUDO chmod 0775 /run/spinifex
+    $SUDO chown "root:$SPINIFEX_GROUP" /run/spinifex
+
+    # Per-service config directories
+    $SUDO mkdir -p /etc/spinifex/nats
+    $SUDO chown "spinifex-nats:$SPINIFEX_GROUP" /etc/spinifex/nats
+    $SUDO chmod 0750 /etc/spinifex/nats
+
+    $SUDO mkdir -p /etc/spinifex/predastore
+    $SUDO chown "spinifex-storage:$SPINIFEX_GROUP" /etc/spinifex/predastore
+    $SUDO chmod 0750 /etc/spinifex/predastore
+
+    # Per-service data directories
+    $SUDO mkdir -p /var/lib/spinifex/nats
+    $SUDO chown "spinifex-nats:$SPINIFEX_GROUP" /var/lib/spinifex/nats
+    $SUDO chmod 0700 /var/lib/spinifex/nats
+
+    $SUDO mkdir -p /var/lib/spinifex/spinifex
+    $SUDO chown "spinifex-daemon:$SPINIFEX_GROUP" /var/lib/spinifex/spinifex
+    $SUDO chmod 0700 /var/lib/spinifex/spinifex
+
+    $SUDO mkdir -p /var/lib/spinifex/predastore
+    $SUDO chown "spinifex-storage:$SPINIFEX_GROUP" /var/lib/spinifex/predastore
+    $SUDO chmod 0700 /var/lib/spinifex/predastore
 
     $SUDO mkdir -p /var/lib/spinifex/viperblock
-    $SUDO chown "$SPINIFEX_USER:$SPINIFEX_GROUP" /var/lib/spinifex/viperblock
+    $SUDO chown "spinifex-viperblock:$SPINIFEX_GROUP" /var/lib/spinifex/viperblock
+    $SUDO chmod 0700 /var/lib/spinifex/viperblock
 
+    # Top-level config files (root-owned, group-readable)
     # Generate environment file with install-specific values (e.g. arch-dependent paths)
     $SUDO tee /etc/spinifex/systemd.env > /dev/null << EOF
 # Generated by setup.sh — install-specific environment variables
 SPINIFEX_VIPERBLOCK_PLUGIN_PATH=${PLUGINDIR}/nbdkit-viperblock-plugin.so
 EOF
-    $SUDO chown "$SPINIFEX_USER:$SPINIFEX_GROUP" /etc/spinifex/systemd.env
+    $SUDO chown "spinifex-viperblock:$SPINIFEX_GROUP" /etc/spinifex/systemd.env
+    $SUDO chmod 0640 /etc/spinifex/systemd.env
     info "Generated /etc/spinifex/systemd.env"
 
-    # Service helper scripts
+    # Service helper scripts (root-owned, group-executable by all service users)
     if [ -d "$EXTRACT_DIR/scripts" ]; then
         for script in "$EXTRACT_DIR"/scripts/*.sh; do
-            $SUDO install -o "$SPINIFEX_USER" -g "$SPINIFEX_GROUP" -m 0755 \
+            $SUDO install -o root -g "$SPINIFEX_GROUP" -m 0755 \
                 "$script" "/var/lib/spinifex/$(basename "$script")"
             info "  /var/lib/spinifex/$(basename "$script")"
         done
@@ -294,15 +362,12 @@ install_systemd() {
     fi
 
     for unit in "$EXTRACT_DIR"/systemd/*; do
-        # Substitute User= and Group= with the detected service user
-        sed "s/^User=spinifex$/User=$SPINIFEX_USER/;s/^Group=spinifex$/Group=$SPINIFEX_GROUP/" \
-            "$unit" | $SUDO tee "/etc/systemd/system/$(basename "$unit")" > /dev/null
-        $SUDO chmod 0644 "/etc/systemd/system/$(basename "$unit")"
+        $SUDO install -m 0644 "$unit" "/etc/systemd/system/$(basename "$unit")"
         info "  /etc/systemd/system/$(basename "$unit")"
     done
 
     $SUDO systemctl daemon-reload
-    info "Systemd units installed (running as $SPINIFEX_USER:$SPINIFEX_GROUP)"
+    info "Systemd units installed (per-service users)"
 }
 
 # --- Install logrotate ---
@@ -343,7 +408,7 @@ print_summary() {
     echo ""
     echo "  Version:      $INSTALLED_VERSION"
     echo "  Architecture: $ARCH"
-    echo "  Service user: $SPINIFEX_USER"
+    echo "  Service users: spinifex-{nats,gw,daemon,storage,viperblock,vpcd,ui}"
     echo "  Binary:       /usr/local/bin/spx"
     echo "  Config:       /etc/spinifex/"
     echo "  Data:         /var/lib/spinifex/"
@@ -384,7 +449,8 @@ main() {
     handle_upgrade
     install_apt_deps
     install_aws_cli
-    detect_service_user
+    create_service_users
+    install_sudoers
     download_spinifex
     install_files
     create_directories

@@ -5,13 +5,35 @@ Before=spinifex-predastore.service spinifex-daemon.service spinifex-awsgw.servic
 
 [Service]
 Type=simple
-User=spinifex
+User=spinifex-nats
 Group=spinifex
 ExecStart=/usr/local/bin/spx service nats start
 Restart=on-failure
 RestartSec=5
 OOMScoreAdjust=-500
 Environment=SPINIFEX_CONFIG_PATH=/etc/spinifex/nats/nats.conf
+
+# Filesystem access
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateDevices=yes
+ReadOnlyPaths=/etc/spinifex/nats
+ReadWritePaths=/var/lib/spinifex/nats /var/log/spinifex
+
+# Hardening
+ProtectHome=yes
+PrivateTmp=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=spinifex.target

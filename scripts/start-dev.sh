@@ -33,6 +33,8 @@ echo "Using configuration directory: $CONFIG_DIR"
 LOGS_DIR="$DATA_DIR/logs"
 WAL_DIR="$DATA_DIR/spinifex"
 
+echo "⚠️  Dev mode: all services run as $(whoami) without privilege separation"
+echo ""
 echo "🚀 Starting Spinifex development environment..."
 echo "Project root: $PROJECT_ROOT"
 echo "Data directory: $DATA_DIR"

@@ -241,6 +241,7 @@ func FileExists(path string) bool {
 func ChownRecursive(path, username string) {
 	u, err := user.Lookup(username)
 	if err != nil {
+		slog.Warn("ChownRecursive: user lookup failed, skipping", "user", username, "path", path, "err", err)
 		return
 	}
 	uid, _ := strconv.Atoi(u.Uid)
@@ -269,6 +270,26 @@ func ChownRecursive(path, username string) {
 		}
 		return nil
 	})
+}
+
+// SetServiceOwnership sets per-service ownership on data and config directories.
+// Belt-and-suspenders for the setup.sh re-chown — called at the end of admin init
+// and admin join to ensure correct ownership after directory creation.
+func SetServiceOwnership() {
+	ownerMap := map[string]string{
+		"/etc/spinifex/nats":           "spinifex-nats",
+		"/var/lib/spinifex/nats":       "spinifex-nats",
+		"/etc/spinifex/predastore":     "spinifex-storage",
+		"/var/lib/spinifex/predastore": "spinifex-storage",
+		"/var/lib/spinifex/spinifex":   "spinifex-daemon",
+		"/var/lib/spinifex/viperblock": "spinifex-viperblock",
+	}
+	for path, user := range ownerMap {
+		if _, err := os.Stat(path); err != nil {
+			continue // directory doesn't exist yet, skip
+		}
+		ChownRecursive(path, user)
+	}
 }
 
 // updateAWSINIFile updates or creates an AWS INI file section with given key-value pairs
