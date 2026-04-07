@@ -36,7 +36,7 @@ echo "=== Setting up OVN ==="
 sudo /usr/local/share/spinifex/setup-ovn.sh --management
 
 echo "=== Initializing ==="
-sudo spx admin init --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
+sudo spx admin init --force --region ap-southeast-2 --az ap-southeast-2a --node node1 --nodes 1
 
 echo "=== Installing CA certificate ==="
 sudo cp /etc/spinifex/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
