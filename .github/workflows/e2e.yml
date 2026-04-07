@@ -180,9 +180,13 @@ jobs:
           sparse-checkout: scripts/tofu-cluster
           path: mulga
 
-      - name: Clone and build
+      - name: Build Install Artifacts
         working-directory: mulga/scripts/tofu-cluster
-        run: ./build-artifacts.sh "${GIT_BRANCH}" "${RUNNER_TEMP}/spinifex-artifacts.tar"
+        run: |
+          ./build-install-artifacts.sh "${GIT_BRANCH}" \
+            "${RUNNER_TEMP}/spinifex-distro.tar.gz" \
+            "${RUNNER_TEMP}/setup.sh" \
+            "${RUNNER_TEMP}/spinifex-tests.tar"
 
       - name: Provision VMs
         working-directory: mulga/scripts/tofu-cluster
@@ -194,13 +198,14 @@ jobs:
           ./scrub-env.sh env2 >> "$TOFU_LOG" 2>&1 || true
           tofu apply -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
-      - name: Bootstrap Cluster
+      - name: Bootstrap via Binary Install
         working-directory: mulga/scripts/tofu-cluster
         run: |
-          SPX_PREBUILT=true \
-          SPX_ARTIFACT_TAR="${RUNNER_TEMP}/spinifex-artifacts.tar" \
           SPX_EXTERNAL_POOL="192.168.1.240-192.168.1.250" \
-          ./bootstrap.sh env2 >> "$TOFU_LOG" 2>&1
+          ./bootstrap-install.sh env2 \
+            "${RUNNER_TEMP}/setup.sh" \
+            "${RUNNER_TEMP}/spinifex-distro.tar.gz" \
+            --test-tar "${RUNNER_TEMP}/spinifex-tests.tar"
 
       - name: Run E2E Tests
         working-directory: mulga/scripts/tofu-cluster
@@ -220,7 +225,7 @@ jobs:
           NODE2_IP=$(echo "$INVENTORY" | jq -r '.nodes[1].wan_ip')
 
           ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${NODE1_IP} \
-            "cd ~/Development/mulga/spinifex && ./tests/e2e/run-multinode-e2e.sh ${NODE_IPS} && ./tests/e2e/run-cert-e2e.sh --multinode ${NODE_IPS} && ENDPOINT=https://${NODE1_IP}:9999 ./tests/e2e/run-lb-e2e.sh --peer ${NODE2_IP}"
+            "cd ~/e2e-tests && ./run-multinode-e2e.sh ${NODE_IPS} && ./run-cert-e2e.sh --multinode ${NODE_IPS} && ENDPOINT=https://${NODE1_IP}:9999 ./run-lb-e2e.sh --peer ${NODE2_IP}"
 
       - name: Teardown
         if: always()

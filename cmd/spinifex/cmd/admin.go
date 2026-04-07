@@ -938,6 +938,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		Region:    region,
 		NatsToken: natsToken,
 		DataDir:   spxRoot,
+		LogDir:    LogDirFor(spxRoot),
 		ConfigDir: configDir,
 
 		Node:          node,
@@ -1019,14 +1020,10 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 	admin.CreateServiceDirectories(spxRoot)
 
-	// In production layout (running as root), fix ownership so the service user
-	// can read config and write data. SUDO_USER identifies the operator account.
+	// In production layout (running as root), set per-service ownership on
+	// directories and shared config files (root:spinifex with correct modes).
 	if os.Getuid() == 0 {
-		sudoUser := os.Getenv("SUDO_USER")
-		if sudoUser != "" {
-			admin.ChownRecursive(configDir, sudoUser)
-			admin.ChownRecursive(spxRoot, sudoUser)
-		}
+		admin.SetServiceOwnership()
 	}
 
 	// Print success message
@@ -1176,6 +1173,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		Region:    region,
 		NatsToken: natsToken,
 		DataDir:   spxRoot,
+		LogDir:    LogDirFor(spxRoot),
 		ConfigDir: configDir,
 
 		Node:          node,
@@ -1251,14 +1249,10 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 	admin.CreateServiceDirectories(spxRoot)
 
-	// In production layout (running as root), fix ownership so the service user
-	// can read config and write data. SUDO_USER identifies the operator account.
+	// In production layout (running as root), set per-service ownership on
+	// directories and shared config files (root:spinifex with correct modes).
 	if os.Getuid() == 0 {
-		sudoUser := os.Getenv("SUDO_USER")
-		if sudoUser != "" {
-			admin.ChownRecursive(configDir, sudoUser)
-			admin.ChownRecursive(spxRoot, sudoUser)
-		}
+		admin.SetServiceOwnership()
 	}
 
 	// Keep formation server running briefly so joining nodes can fetch complete status
@@ -1578,6 +1572,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		Region:    creds.Region,
 		NatsToken: creds.NatsToken,
 		DataDir:   dataDir,
+		LogDir:    LogDirFor(dataDir),
 		ConfigDir: configDir,
 
 		Node:          node,
@@ -1657,14 +1652,10 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 
 	admin.CreateServiceDirectories(dataDir)
 
-	// In production layout (running as root), fix ownership so the service user
-	// can read config and write data. SUDO_USER identifies the operator account.
+	// In production layout (running as root), set per-service ownership on
+	// directories and shared config files (root:spinifex with correct modes).
 	if os.Getuid() == 0 {
-		sudoUser := os.Getenv("SUDO_USER")
-		if sudoUser != "" {
-			admin.ChownRecursive(configDir, sudoUser)
-			admin.ChownRecursive(dataDir, sudoUser)
-		}
+		admin.SetServiceOwnership()
 	}
 
 	// Print cluster summary

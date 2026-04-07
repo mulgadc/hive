@@ -601,6 +601,14 @@ func launchService(cfg *Config) (err error) {
 			slog.Info("NBDKit started successfully and is running")
 		}
 
+		// NBDKit creates the socket with its own umask (typically 0755).
+		// The daemon (different user, same group) needs write access to connect.
+		if nbdSocket != "" {
+			if err := os.Chmod(nbdSocket, 0770); err != nil { //nolint:gosec // socket needs group-write for cross-service access
+				slog.Warn("Failed to chmod NBD socket", "socket", nbdSocket, "err", err)
+			}
+		}
+
 		ebsResponse.Mounted = true
 		ebsResponse.URI = nbdURI
 
