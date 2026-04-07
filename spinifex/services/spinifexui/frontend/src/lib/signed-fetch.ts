@@ -18,19 +18,19 @@ export async function signedFetch<T>({
   credentials,
   service = "spinifex",
 }: SignedFetchOptions): Promise<T> {
-  const hostname = window.location.hostname
-  const port = GATEWAY_PORT
   const protocol = window.location.protocol.replace(":", "")
   const body = `Action=${action}`
 
+  // Sign the request against the real backend (localhost:9999) so the
+  // gateway's SigV4 verification sees the host value it expects.
   const request = new HttpRequest({
     method: "POST",
     protocol,
-    hostname,
-    port,
+    hostname: "localhost",
+    port: GATEWAY_PORT,
     path: "/",
     headers: {
-      host: `${hostname}:${port}`,
+      host: `localhost:${GATEWAY_PORT}`,
       "content-type": "application/x-www-form-urlencoded",
     },
     body,
@@ -55,8 +55,10 @@ export async function signedFetch<T>({
     }
   }
 
-  const url = `${protocol}://${hostname}:${port}/`
-  const response = await fetch(url, {
+  // Send the request through the same-origin reverse proxy instead of
+  // directly to the gateway, eliminating cross-origin requests.
+  const proxyUrl = `${window.location.protocol}//${window.location.host}/proxy/awsgw/`
+  const response = await fetch(proxyUrl, {
     method: "POST",
     headers,
     body,

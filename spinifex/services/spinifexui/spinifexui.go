@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"embed"
 	"fmt"
 	"io"
@@ -13,6 +14,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -149,24 +152,17 @@ func (svc *Service) launchService() error {
 	// Derive CA cert path from server cert directory.
 	caCertPath := filepath.Join(filepath.Dir(svc.Config.TLSCert), "ca.pem")
 
+	// Build TLS transport for reverse proxies using the same CA the UI trusts.
+	proxyTransport, err := newProxyTransport(caCertPath)
+	if err != nil {
+		return fmt.Errorf("proxy transport: %w", err)
+	}
+
 	// Serve static files from embedded filesystem
 	fileServer := http.FileServer(http.FS(contentFS))
 
 	// SPA handler: try to serve the file, fallback to index.html
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Serve CA certificate download at /api/ca.pem.
-		if r.URL.Path == "/api/ca.pem" {
-			if _, err := os.Stat(caCertPath); os.IsNotExist(err) {
-				slog.Warn("CA certificate requested but not found", "path", caCertPath)
-				http.Error(w, "CA certificate not yet generated. Run 'spx admin init' to create it.", http.StatusNotFound)
-				return
-			}
-			w.Header().Set("Content-Type", "application/x-pem-file")
-			w.Header().Set("Content-Disposition", `attachment; filename="spinifex-ca.pem"`)
-			http.ServeFile(w, r, caCertPath)
-			return
-		}
-
+	spaHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Clean the path
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path == "" {
@@ -197,8 +193,29 @@ func (svc *Service) launchService() error {
 		}
 	})
 
+	mux := http.NewServeMux()
+
+	// Reverse proxy routes — must be registered before the SPA catch-all.
+	mux.Handle("/proxy/awsgw/", newReverseProxy("localhost:9999", "/proxy/awsgw", proxyTransport))
+	mux.Handle("/proxy/s3/", newReverseProxy("localhost:8443", "/proxy/s3", proxyTransport))
+
+	// CA certificate download.
+	mux.HandleFunc("/api/ca.pem", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := os.Stat(caCertPath); os.IsNotExist(err) {
+			slog.Warn("CA certificate requested but not found", "path", caCertPath)
+			http.Error(w, "CA certificate not yet generated. Run 'spx admin init' to create it.", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-pem-file")
+		w.Header().Set("Content-Disposition", `attachment; filename="spinifex-ca.pem"`)
+		http.ServeFile(w, r, caCertPath)
+	})
+
+	// SPA catch-all.
+	mux.Handle("/", spaHandler)
+
 	// Wrap handler with security headers and gzip compression
-	finalHandler := securityHeadersMiddleware(gzipMiddleware(handler))
+	finalHandler := securityHeadersMiddleware(gzipMiddleware(mux))
 
 	addr := fmt.Sprintf("%s:%d", svc.Config.Host, svc.Config.Port)
 
@@ -206,7 +223,7 @@ func (svc *Service) launchService() error {
 		Addr:              addr,
 		Handler:           finalHandler,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
+		WriteTimeout:      120 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -269,51 +286,69 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// getLocalIPs returns all non-loopback IPv4 addresses on the machine.
-func getLocalIPs() []string {
-	var ips []string
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		slog.Warn("Failed to get network interfaces for CSP", "error", err)
-		return ips
-	}
-	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, addr := range addrs {
-			var ip net.IP
-			switch v := addr.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
-			}
-			if ip == nil || ip.IsLoopback() || ip.To4() == nil {
-				continue
-			}
-			ips = append(ips, ip.String())
-		}
-	}
-	return ips
+// buildCSP constructs the Content-Security-Policy header. All API requests are
+// proxied through the same origin so connect-src only needs 'self'.
+func buildCSP() string {
+	return "default-src 'self'; script-src 'self'; style-src 'self'; " +
+		"img-src 'self'; font-src 'self' data:; connect-src 'self'; " +
+		"object-src 'none'; base-uri 'self'; form-action 'self'; " +
+		"frame-ancestors 'none'; upgrade-insecure-requests;"
 }
 
-// buildCSP constructs the Content-Security-Policy header, dynamically adding
-// each local IP with the AWS Gateway (:9999) and daemon (:8443) ports to connect-src.
-func buildCSP() string {
-	var b strings.Builder
-	b.WriteString("'self' https://localhost:9999 https://localhost:8443")
-	for _, ip := range getLocalIPs() {
-		fmt.Fprintf(&b, " https://%s:9999 https://%s:8443", ip, ip)
+// newProxyTransport creates an *http.Transport that trusts the given CA
+// certificate so the reverse proxy can connect to backend services using
+// self-signed TLS certificates.
+func newProxyTransport(caCertPath string) (*http.Transport, error) {
+	caCert, err := os.ReadFile(caCertPath)
+	if err != nil {
+		return nil, fmt.Errorf("read CA cert %s: %w", caCertPath, err)
 	}
-	return fmt.Sprintf(
-		"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; font-src 'self' data:; connect-src %s; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests;",
-		b.String(),
-	)
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caCert) {
+		return nil, fmt.Errorf("failed to parse CA cert from %s", caCertPath)
+	}
+	return &http.Transport{
+		TLSClientConfig: &tls.Config{
+			RootCAs: pool,
+		},
+	}, nil
+}
+
+// newReverseProxy creates a reverse proxy that forwards requests to the given
+// backend host:port after stripping the pathPrefix from the request path.
+// The proxy sets req.Host to the backend address so SigV4 signature verification
+// succeeds (the gateway uses r.Host for the canonical host header).
+func newReverseProxy(backendHost, pathPrefix string, transport *http.Transport) http.Handler {
+	target := &url.URL{
+		Scheme: "https",
+		Host:   backendHost,
+	}
+
+	proxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.URL.Scheme = target.Scheme
+			req.URL.Host = target.Host
+			req.Host = target.Host
+
+			// Strip the proxy path prefix.
+			req.URL.Path = strings.TrimPrefix(req.URL.Path, pathPrefix)
+			if req.URL.Path == "" {
+				req.URL.Path = "/"
+			}
+			req.URL.RawPath = ""
+		},
+		Transport: transport,
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			slog.Warn("Proxy error", "backend", backendHost, "path", r.URL.Path, "error", err)
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusBadGateway)
+			fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>`+
+				`<Error><Code>BadGateway</Code>`+
+				`<Message>upstream connection failed</Message></Error>`)
+		},
+	}
+
+	return proxy
 }
 
 // gzipContentTypes lists the MIME types eligible for gzip compression.

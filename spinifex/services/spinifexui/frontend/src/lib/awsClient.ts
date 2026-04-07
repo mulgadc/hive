@@ -5,8 +5,42 @@ import { S3Client } from "@aws-sdk/client-s3"
 import { getCredentials } from "./auth"
 
 const AWS_REGION = "ap-southeast-2"
-const awsEndpoint = `${window.location.protocol}//${window.location.hostname}:9999`
-const s3Endpoint = `${window.location.protocol}//${window.location.hostname}:8443`
+
+// SDK signs against the real backend host so the SigV4 signature includes
+// the correct Host header value. Middleware below rewrites the outgoing URL
+// to route through the same-origin reverse proxy.
+const AWSGW_SIGN_ENDPOINT = `${window.location.protocol}//localhost:9999`
+const S3_SIGN_ENDPOINT = `${window.location.protocol}//localhost:8443`
+
+interface ProxyRequest {
+  hostname?: string
+  port?: number
+  path?: string
+}
+
+interface MiddlewareAddable {
+  // oxlint-disable-next-line typescript/no-explicit-any -- all AWS SDK clients share this shape but with incompatible generics
+  middlewareStack: { add: (...args: any[]) => void }
+}
+
+// addProxyRewrite appends a finalizeRequest middleware that redirects the
+// actual HTTP request through the UI's reverse proxy after signing is complete.
+function addProxyRewrite(client: MiddlewareAddable, proxyPrefix: string): void {
+  client.middlewareStack.add(
+    // oxlint-disable-next-line typescript/no-explicit-any -- smithy middleware types are generic per-client
+    (next: (args: any) => any) => (args: { request?: ProxyRequest }) => {
+      const request = args.request
+      if (request?.hostname) {
+        request.hostname = window.location.hostname
+        request.port = Number(window.location.port) || 443
+        request.path = `${proxyPrefix}${request.path ?? "/"}`
+      }
+      // oxlint-disable-next-line typescript/no-unsafe-return -- smithy middleware return type is opaque
+      return next(args)
+    },
+    { step: "finalizeRequest", name: "proxyRewrite", override: true },
+  )
+}
 
 // Cached singleton clients
 let ec2Client: EC2Client | null = null
@@ -20,13 +54,14 @@ export function getEc2Client(): EC2Client {
       throw new Error("AWS credentials not configured")
     }
     ec2Client = new EC2Client({
-      endpoint: awsEndpoint,
+      endpoint: AWSGW_SIGN_ENDPOINT,
       region: AWS_REGION,
       credentials: {
         accessKeyId: credentials.accessKeyId,
         secretAccessKey: credentials.secretAccessKey,
       },
     })
+    addProxyRewrite(ec2Client, "/proxy/awsgw")
   }
   return ec2Client
 }
@@ -38,13 +73,14 @@ export function getIamClient(): IAMClient {
       throw new Error("AWS credentials not configured")
     }
     iamClient = new IAMClient({
-      endpoint: awsEndpoint,
+      endpoint: AWSGW_SIGN_ENDPOINT,
       region: AWS_REGION,
       credentials: {
         accessKeyId: credentials.accessKeyId,
         secretAccessKey: credentials.secretAccessKey,
       },
     })
+    addProxyRewrite(iamClient, "/proxy/awsgw")
   }
   return iamClient
 }
@@ -56,7 +92,7 @@ export function getS3Client(): S3Client {
       throw new Error("AWS credentials not configured")
     }
     s3Client = new S3Client({
-      endpoint: s3Endpoint,
+      endpoint: S3_SIGN_ENDPOINT,
       region: AWS_REGION,
       credentials: {
         accessKeyId: credentials.accessKeyId,
@@ -82,6 +118,7 @@ export function getS3Client(): S3Client {
         )
       },
     })
+    addProxyRewrite(s3Client, "/proxy/s3")
   }
   return s3Client
 }

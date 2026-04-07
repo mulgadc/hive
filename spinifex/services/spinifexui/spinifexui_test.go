@@ -244,32 +244,16 @@ func TestGzipMiddleware_IgnoresNonTextContent(t *testing.T) {
 	assert.NotEqual(t, "gzip", resp.Header.Get("Content-Encoding"))
 }
 
-func TestGetLocalIPs_ReturnsNonLoopback(t *testing.T) {
-	ips := getLocalIPs()
-	for _, ip := range ips {
-		assert.NotEqual(t, "127.0.0.1", ip, "should not include loopback")
-	}
-}
-
 func TestBuildCSP_ContainsSelf(t *testing.T) {
 	csp := buildCSP()
 	assert.Contains(t, csp, "connect-src 'self'")
 	assert.Contains(t, csp, "default-src 'self'")
 }
 
-func TestBuildCSP_ContainsLocalIPs(t *testing.T) {
-	ips := getLocalIPs()
+func TestBuildCSP_NoExternalPorts(t *testing.T) {
 	csp := buildCSP()
-	for _, ip := range ips {
-		assert.Contains(t, csp, "https://"+ip+":9999")
-		assert.Contains(t, csp, "https://"+ip+":8443")
-	}
-}
-
-func TestBuildCSP_ContainsLocalhost(t *testing.T) {
-	csp := buildCSP()
-	assert.Contains(t, csp, "https://localhost:9999")
-	assert.Contains(t, csp, "https://localhost:8443")
+	assert.NotContains(t, csp, ":9999", "proxy removes need for direct gateway access")
+	assert.NotContains(t, csp, ":8443", "proxy removes need for direct predastore access")
 }
 
 func TestShutdown_WithServer(t *testing.T) {
