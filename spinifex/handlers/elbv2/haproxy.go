@@ -155,11 +155,8 @@ func generateNLBConfig(lb *LoadBalancerRecord, listeners []*ListenerRecord, tgBy
 // buildHAProxyConfig constructs the HAProxyConfig struct shared by ALB and NLB generation.
 func buildHAProxyConfig(lb *LoadBalancerRecord, listeners []*ListenerRecord, tgByArn map[string]*TargetGroupRecord, bindAddr string, isTCP bool) HAProxyConfig {
 	socketDir := filepath.Join(os.TempDir(), "spinifex-haproxy")
-	prefix := "alb"
-	if isTCP {
-		prefix = "nlb"
-	}
-	socketPath := filepath.Join(socketDir, fmt.Sprintf("%s-%s.sock", prefix, lb.LoadBalancerID))
+	// Use "lb" prefix for both ALB and NLB — must match the agent's socket path.
+	socketPath := filepath.Join(socketDir, fmt.Sprintf("lb-%s.sock", lb.LoadBalancerID))
 
 	cfg := HAProxyConfig{
 		SocketPath: socketPath,

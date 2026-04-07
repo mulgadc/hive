@@ -51,7 +51,7 @@ func TestGenerateHAProxyConfig_SingleListenerAndBackend(t *testing.T) {
 
 	// Verify global section
 	assert.Contains(t, config, "stats socket")
-	assert.Contains(t, config, "alb-lb-abc123.sock")
+	assert.Contains(t, config, "lb-lb-abc123.sock")
 
 	// Verify frontend
 	assert.Contains(t, config, "bind *:80")
@@ -397,8 +397,8 @@ func TestGenerateNLBConfig_TCPHealthCheck(t *testing.T) {
 	assert.NotContains(t, config, "mode http")
 	assert.NotContains(t, config, "option httplog")
 
-	// Verify NLB socket name
-	assert.Contains(t, config, "nlb-lb-nlb001.sock")
+	// Verify socket name uses generic lb- prefix (matches agent expectation)
+	assert.Contains(t, config, "lb-lb-nlb001.sock")
 
 	// Verify TCP health check
 	assert.Contains(t, config, "option tcp-check")

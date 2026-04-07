@@ -740,14 +740,18 @@ func (d *Daemon) Start() error {
 				return ""
 			}
 			systemAMI := aws.StringValue(imagesOut.Images[0].ImageId)
+			// Prefer the new "-lb-" image name, fall back to legacy "-alb-" name.
 			for _, img := range imagesOut.Images {
 				name := aws.StringValue(img.Name)
-				if strings.Contains(name, "alb") {
+				if strings.Contains(name, "-lb-") {
 					systemAMI = aws.StringValue(img.ImageId)
 					break
 				}
+				if strings.Contains(name, "-alb-") {
+					systemAMI = aws.StringValue(img.ImageId)
+				}
 			}
-			slog.Info("System AMI resolved for ALB VMs", "amiId", systemAMI)
+			slog.Info("System AMI resolved for LB VMs", "amiId", systemAMI)
 			return systemAMI
 		})
 	}

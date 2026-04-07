@@ -785,3 +785,61 @@ for pseudo-multinode or real multi-node environments.
 - Wait for HAProxy reload (5s)
 - `curl` ALB 20 times
 - Verify BOTH instances responding again
+
+## ELBv2 / NLB Data Plane (`run-nlb-e2e.sh`)
+
+NLB (Network Load Balancer) E2E test. Exercises the full NLB lifecycle with TCP
+target groups, TCP health checks, and TCP traffic forwarding. Requires pool mode
+with external IPAM (NOT dev_networking).
+
+### Phase 0: Prerequisites
+- Discover instance types (nano)
+- Discover AMI (non-Alpine)
+- Create key pair (nlb-test-key)
+
+### Phase 1: VPC + Subnet Setup
+- `create-vpc` (10.203.0.0/16)
+- `create-internet-gateway` + attach
+- `create-subnet` + MapPublicIpOnLaunch
+
+### Phase 2: Launch App Instances (TCP Echo Servers)
+- `run-instances` x2 (Python3 TCP echo on port 9000 + HTTP on port 80)
+- Poll until running state
+- Collect private IPs
+- Wait for cloud-init (~100s)
+
+### Phase 3: TCP Target Group + Registration
+- `create-target-group` (protocol=TCP, port=9000, health-check-protocol=TCP)
+- Verify TG protocol = TCP, HC protocol = TCP
+- `register-targets` (2 instances)
+
+### Phase 4: Create NLB + TCP Listener
+- `create-load-balancer` (type=network)
+- Verify type = network, ARN contains `/net/`
+- Verify NLB rejects security groups
+- `create-listener` (protocol=TCP, port=9000)
+- Verify listener fields (port=9000, protocol=TCP)
+
+### Phase 5: NLB Active (Agent Heartbeat)
+- Poll `describe-load-balancers` until state = active (up to 270s)
+- Look up NLB ENI private IP
+
+### Phase 6: Target Health (TCP Checks)
+- Poll `describe-target-health` until 2/2 healthy (timeout 120s)
+
+### Phase 7: TCP Traffic Through NLB
+- TCP connections (via `nc`) to NLB public IP:9000, 20 requests
+- Verify responses contain instance IDs
+- Verify round-robin distribution (or at least 1 responder)
+- Verify success rate >= 10/20
+
+### Phase 8: Deregister Target + Verify
+- `deregister-targets` (first instance)
+- Verify target count reduced or draining state
+
+### Phase 9: Cleanup Verification
+- `delete-listener`
+- `delete-load-balancer`
+- Verify NLB gone from describe
+- Verify ENI cleaned up (poll 30s)
+- `delete-target-group`
