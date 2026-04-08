@@ -325,17 +325,15 @@ func newReverseProxy(backendHost, pathPrefix string, transport *http.Transport) 
 	}
 
 	proxy := &httputil.ReverseProxy{
-		Director: func(req *http.Request) {
-			req.URL.Scheme = target.Scheme
-			req.URL.Host = target.Host
-			req.Host = target.Host
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(target)
+			pr.Out.Host = target.Host
 
 			// Strip the proxy path prefix.
-			req.URL.Path = strings.TrimPrefix(req.URL.Path, pathPrefix)
-			if req.URL.Path == "" {
-				req.URL.Path = "/"
+			pr.Out.URL.Path = strings.TrimPrefix(pr.In.URL.Path, pathPrefix)
+			if pr.Out.URL.Path == "" {
+				pr.Out.URL.Path = "/"
 			}
-			req.URL.RawPath = ""
 		},
 		Transport: transport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
