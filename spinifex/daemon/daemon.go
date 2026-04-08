@@ -2944,26 +2944,20 @@ func (d *Daemon) wireLBAgentConfig() {
 		slog.Info("System credentials loaded for LB agent auth")
 	}
 
-	// Resolve gateway URL.
+	// Resolve gateway URL — the address LB VMs use to reach the AWS gateway.
 	// Priority: (1) br-mgmt IP — system instances reach the host via management NIC
 	//           (2) Dev mode — SLIRP 10.0.2.2
-	//           (3) External IPAM pool GatewayIP — legacy fallback
+	//           (3) AWSGW bind IP — the node's own gateway address
 	var gatewayHost string
 	if d.mgmtBridgeIP != "" {
 		gatewayHost = d.mgmtBridgeIP
 	} else if d.config.Daemon.DevNetworking {
 		gatewayHost = "10.0.2.2"
-	} else if d.externalIPAM != nil {
-		// Fallback: use the first pool's gateway IP as the node's external address.
-		poolName := "wan"
-		if len(d.clusterConfig.Network.ExternalPools) > 0 {
-			poolName = d.clusterConfig.Network.ExternalPools[0].Name
-		}
-		record, poolErr := d.externalIPAM.GetPoolRecord(poolName)
-		if poolErr == nil && record != nil && record.GatewayIP != "" {
-			gatewayHost = record.GatewayIP
-		} else {
-			slog.Warn("Could not resolve gateway IP from external IPAM pool", "pool", poolName, "err", poolErr)
+	} else if d.config.AWSGW.Host != "" {
+		// Use the awsgw bind address — LB VMs on the OVN overlay can reach
+		// the host node's WAN IP where the gateway listens.
+		if host, _, splitErr := net.SplitHostPort(d.config.AWSGW.Host); splitErr == nil && host != "" && host != "0.0.0.0" {
+			gatewayHost = host
 		}
 	}
 
