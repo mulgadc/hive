@@ -131,6 +131,31 @@ exec 9>"$NBD_LOCK"
 flock 9
 echo "Lock acquired"
 
+# If the raw image was built recently (< 10 min), skip the entire build.
+# This avoids duplicate work when concurrent CI jobs build the same image.
+if [[ -f "$OUTPUT_RAW" ]] && [[ $(( $(date +%s) - $(stat -c %Y "$OUTPUT_RAW") )) -lt 600 ]]; then
+    echo "=== Skipping build — $OUTPUT_RAW is fresh (< 10 min old) ==="
+
+    # Restore stdout if suppressed, then jump to import
+    if [[ "$QUIET" == true ]]; then
+        exec 1>&3 3>&-
+    fi
+
+    echo ""
+    echo "=== Build complete (cached) ==="
+    echo "  raw: $OUTPUT_RAW ($(du -h "$OUTPUT_RAW" | cut -f1))"
+
+    if [[ "$DO_IMPORT" == true ]]; then
+        echo "Importing as AMI..."
+        (cd "$PROJECT_DIR" && ./bin/spx admin images import \
+            --file "$OUTPUT_RAW" \
+            --distro alpine \
+            --version "${ALPINE_VERSION}-${IMAGE_NAME}" \
+            --arch x86_64)
+    fi
+    exit 0
+fi
+
 mkdir -p "$BUILD_DIR" "$MOUNT_DIR"
 
 # Step 1: Download Alpine cloud image
