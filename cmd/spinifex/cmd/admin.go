@@ -1917,6 +1917,9 @@ func writeBootstrapFiles(configDir, bootstrapDir string, masterKey []byte, acces
 // admin credentials. master.key goes to configDir, bootstrap.json goes to
 // bootstrapDir (the awsgw data directory) so it stays outside /etc/spinifex.
 func writeBootstrapFilesWithAdmin(configDir, bootstrapDir string, masterKey []byte, accessKey, secretKey, accountID, adminAccessKey, adminSecretKey string) error {
+	if err := os.MkdirAll(bootstrapDir, 0700); err != nil {
+		return fmt.Errorf("create bootstrap directory %s: %w", bootstrapDir, err)
+	}
 	if err := handlers_iam.SaveMasterKey(filepath.Join(configDir, "master.key"), masterKey); err != nil {
 		return fmt.Errorf("saving master key: %w", err)
 	}
