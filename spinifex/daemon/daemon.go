@@ -2933,33 +2933,16 @@ func (rm *ResourceManager) updateInstanceSubscriptions() {
 // reads the CA certificate, and wires them into the ELBv2 service so LB
 // VMs get SigV4 credentials and gateway URL injected via cloud-init.
 func (d *Daemon) wireLBAgentConfig() {
-	if d.configPath == "" {
-		slog.Debug("No config path set, skipping LB agent credential wiring")
-		return
+	// Use system credentials from spinifex.toml (predastore section).
+	// These are the same service-to-service credentials written by admin init
+	// into both spinifex.toml and system-credentials.json. Reading from the
+	// config avoids file permission issues with the separate JSON file.
+	if d.config.Predastore.AccessKey != "" && d.config.Predastore.SecretKey != "" {
+		d.systemAccessKey = d.config.Predastore.AccessKey
+		d.systemSecretKey = d.config.Predastore.SecretKey
+		d.elbv2Service.SetSystemCredentials(d.config.Predastore.AccessKey, d.config.Predastore.SecretKey)
+		slog.Info("System credentials loaded for LB agent auth")
 	}
-
-	configDir := filepath.Dir(d.configPath)
-
-	// Load system credentials from plaintext JSON file written by admin init.
-	credsPath := filepath.Join(configDir, "system-credentials.json")
-	credsData, err := os.ReadFile(credsPath)
-	if err != nil {
-		slog.Debug("System credentials file not found, LB agent auth not configured", "path", credsPath, "err", err)
-		return
-	}
-
-	var creds struct {
-		AccessKeyID     string `json:"access_key_id"`
-		SecretAccessKey string `json:"secret_access_key"`
-	}
-	if err := json.Unmarshal(credsData, &creds); err != nil {
-		slog.Error("Failed to parse system credentials", "path", credsPath, "err", err)
-		return
-	}
-	d.systemAccessKey = creds.AccessKeyID
-	d.systemSecretKey = creds.SecretAccessKey
-	d.elbv2Service.SetSystemCredentials(creds.AccessKeyID, creds.SecretAccessKey)
-	slog.Info("System credentials loaded for LB agent auth")
 
 	// Resolve gateway URL.
 	// Priority: (1) br-mgmt IP — system instances reach the host via management NIC
