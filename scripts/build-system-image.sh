@@ -123,6 +123,14 @@ if [[ -n "${INSTALL_BINARIES:-}" ]]; then
     done
 fi
 
+# Serialize the entire image build with flock — concurrent builds on the same
+# host (e.g. CI single-node + multi-node jobs) share /dev/nbd0 and BUILD_DIR.
+NBD_LOCK="/tmp/build-system-image.lock"
+echo "Acquiring build lock..."
+exec 9>"$NBD_LOCK"
+flock 9
+echo "Lock acquired"
+
 mkdir -p "$BUILD_DIR" "$MOUNT_DIR"
 
 # Step 1: Download Alpine cloud image
@@ -150,14 +158,6 @@ cp "${BUILD_DIR}/${ALPINE_IMAGE}" "$OUTPUT_IMAGE"
 
 # Resize the image (Alpine cloud images are ~200MB, need room for packages)
 qemu-img resize "$OUTPUT_IMAGE" "$IMAGE_SIZE"
-
-# Steps 3-7 use /dev/nbd0 exclusively — serialize with flock so concurrent
-# builds on the same host (e.g. CI single-node + multi-node) don't collide.
-NBD_LOCK="/tmp/nbd0.lock"
-echo "Acquiring nbd lock..."
-exec 9>"$NBD_LOCK"
-flock 9
-echo "Lock acquired"
 
 # Step 3: Connect via qemu-nbd
 echo "Connecting image via qemu-nbd..."
@@ -274,9 +274,6 @@ sudo rm -f "${MOUNT_DIR}/etc/resolv.conf"
 echo "Unmounting..."
 sudo umount "$MOUNT_DIR"
 sudo qemu-nbd --disconnect "${NBD_DEV}"
-
-# Release nbd lock
-exec 9>&-
 
 # Step 7: Convert to raw for import
 echo "Converting to raw format..."
