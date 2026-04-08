@@ -433,7 +433,7 @@ func TestMockInstanceService(t *testing.T) {
 
 func TestCloudInitNetworkConfigWildcard(t *testing.T) {
 	// No MACs → wildcard config (non-VPC or VPC without DEV_NETWORKING)
-	cfg := generateNetworkConfig("", "", "", "")
+	cfg := generateNetworkConfig("", "", "", "", "", "")
 	assert.Contains(t, cfg, "version: 2")
 	assert.Contains(t, cfg, "dhcp4: true")
 	assert.Contains(t, cfg, "dhcp-identifier: mac")
@@ -445,7 +445,7 @@ func TestCloudInitNetworkConfigDualNIC(t *testing.T) {
 	eniMAC := "02:00:00:61:ef:c2"
 	devMAC := "02:de:00:60:83:0d"
 
-	cfg := generateNetworkConfig(eniMAC, devMAC, "", "")
+	cfg := generateNetworkConfig(eniMAC, devMAC, "", "", "", "")
 
 	// Both MACs present in config
 	assert.Contains(t, cfg, eniMAC)
@@ -465,12 +465,12 @@ func TestCloudInitNetworkConfigDualNIC(t *testing.T) {
 
 func TestCloudInitNetworkConfigPartialMAC(t *testing.T) {
 	// Only ENI MAC (VPC without dev) → per-interface config with VPC NIC only
-	cfg := generateNetworkConfig("02:00:00:61:ef:c2", "", "", "")
+	cfg := generateNetworkConfig("02:00:00:61:ef:c2", "", "", "", "", "")
 	assert.Contains(t, cfg, "vpc0:")
 	assert.NotContains(t, cfg, "dev0:")
 
 	// Only dev MAC (shouldn't happen, but defensive) → wildcard
-	cfg = generateNetworkConfig("", "02:de:00:60:83:0d", "", "")
+	cfg = generateNetworkConfig("", "02:de:00:60:83:0d", "", "", "", "")
 	assert.Contains(t, cfg, `name: "e*"`)
 	assert.NotContains(t, cfg, "use-routes")
 }

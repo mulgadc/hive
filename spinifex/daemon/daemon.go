@@ -155,6 +155,9 @@ type Daemon struct {
 	// Populated at startup when br-mgmt is detected; nil/empty otherwise.
 	mgmtBridgeIP    string
 	mgmtIPAllocator *MgmtIPAllocator
+	// mgmtRouteVia is the AWSGW bind IP that system instances must route via the
+	// management NIC. Set when AWSGW binds to a specific IP (multi-node).
+	mgmtRouteVia string
 
 	// shuttingDown is set to true during coordinated cluster shutdown (GATE phase)
 	// or during SIGTERM-based shutdown. When true, the daemon rejects new work,
@@ -2945,20 +2948,32 @@ func (d *Daemon) wireLBAgentConfig() {
 	}
 
 	// Resolve gateway URL — the address LB VMs use to reach the AWS gateway.
-	// Priority: (1) br-mgmt IP — system instances reach the host via management NIC
-	//           (2) Dev mode — SLIRP 10.0.2.2
-	//           (3) AWSGW bind IP — the node's own gateway address
+	// Internet-facing LB VMs reach it via VPC networking; internal LB VMs
+	// reach it via the management NIC (br-mgmt) with a host route added
+	// to their cloud-init when AWSGW binds to a specific WAN IP.
 	var gatewayHost string
+	awsgwBindIP := ""
+	if d.config.AWSGW.Host != "" {
+		if h, _, splitErr := net.SplitHostPort(d.config.AWSGW.Host); splitErr == nil {
+			awsgwBindIP = h
+		}
+	}
+
 	if d.mgmtBridgeIP != "" {
-		gatewayHost = d.mgmtBridgeIP
+		if awsgwBindIP != "" && awsgwBindIP != "0.0.0.0" {
+			// Multi-node: AWSGW listens on a specific WAN IP. Use that IP
+			// as the gateway URL. Internal LBs will get a host route via
+			// br-mgmt to reach it (see LaunchSystemInstance).
+			gatewayHost = awsgwBindIP
+			d.mgmtRouteVia = awsgwBindIP
+		} else {
+			// Single-node: AWSGW listens on all interfaces — br-mgmt IP works.
+			gatewayHost = d.mgmtBridgeIP
+		}
 	} else if d.config.Daemon.DevNetworking {
 		gatewayHost = "10.0.2.2"
-	} else if d.config.AWSGW.Host != "" {
-		// Use the awsgw bind address — LB VMs on the OVN overlay can reach
-		// the host node's WAN IP where the gateway listens.
-		if host, _, splitErr := net.SplitHostPort(d.config.AWSGW.Host); splitErr == nil && host != "" && host != "0.0.0.0" {
-			gatewayHost = host
-		}
+	} else if awsgwBindIP != "" && awsgwBindIP != "0.0.0.0" {
+		gatewayHost = awsgwBindIP
 	}
 
 	// Extract port from AWSGW host config (e.g. "0.0.0.0:9999" → "9999").

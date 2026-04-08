@@ -202,6 +202,13 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 				instance.MgmtIP = ""
 			} else {
 				instance.MgmtTap = tapName
+				// Internal LBs can only reach the AWSGW via the management NIC,
+				// so they need a host route to the AWSGW bind IP through br-mgmt.
+				// Internet-facing LBs reach the AWSGW via the VPC/external network.
+				if input.Scheme != handlers_elbv2.SchemeInternetFacing && d.mgmtRouteVia != "" {
+					instance.MgmtGateway = d.mgmtBridgeIP
+					instance.MgmtRouteVia = d.mgmtRouteVia
+				}
 				slog.Info("LaunchSystemInstance: mgmt NIC configured",
 					"instanceId", instance.ID, "mgmtIP", mgmtIP, "mgmtMAC", instance.MgmtMAC, "mgmtTap", tapName)
 			}

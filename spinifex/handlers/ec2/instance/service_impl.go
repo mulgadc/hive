@@ -96,7 +96,7 @@ const cloudInitNetworkConfigWildcard = `network:
 //
 // The dev NIC still gets an IP via DHCP (needed for hostfwd port forwarding)
 // but dhcp4-overrides prevents it from installing routes or DNS.
-func generateNetworkConfig(eniMAC, devMAC, mgmtMAC, mgmtIP string) string {
+func generateNetworkConfig(eniMAC, devMAC, mgmtMAC, mgmtIP, mgmtGateway, mgmtRouteVia string) string {
 	if eniMAC == "" {
 		return cloudInitNetworkConfigWildcard
 	}
@@ -129,6 +129,14 @@ func generateNetworkConfig(eniMAC, devMAC, mgmtMAC, mgmtIP string) string {
       addresses:
         - "%s/24"
 `, mgmtMAC, mgmtIP)
+		// When the AWSGW binds to a specific IP (multi-node), add a host route
+		// so the LB agent inside the VM can reach the gateway via br-mgmt.
+		if mgmtRouteVia != "" && mgmtGateway != "" {
+			cfg += fmt.Sprintf(`      routes:
+        - to: "%s/32"
+          via: "%s"
+`, mgmtRouteVia, mgmtGateway)
+		}
 	}
 
 	return cfg
@@ -743,7 +751,7 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 
 	// Add network-config: per-interface when VPC+dev (suppresses dev default route),
 	// wildcard DHCP otherwise.
-	networkConfig := generateNetworkConfig(instance.ENIMac, instance.DevMAC, instance.MgmtMAC, instance.MgmtIP)
+	networkConfig := generateNetworkConfig(instance.ENIMac, instance.DevMAC, instance.MgmtMAC, instance.MgmtIP, instance.MgmtGateway, instance.MgmtRouteVia)
 	err = writer.AddFile(strings.NewReader(networkConfig), "network-config")
 	if err != nil {
 		slog.Error("failed to add network-config file", "err", err)
