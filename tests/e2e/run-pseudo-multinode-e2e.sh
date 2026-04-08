@@ -134,10 +134,6 @@ wait $JOIN3_PID || { echo "ERROR: Node 3 join failed"; exit 1; }
 wait $LEADER_INIT_PID || { echo "ERROR: Leader init failed"; exit 1; }
 echo "Cluster formation complete — all configs generated"
 
-# admin init/join run as sudo, so data dirs are root-owned.
-# Chown back to current user so services and AWS CLI run unprivileged.
-sudo chown -R "$(id -u):$(id -g)" "$HOME/node1" "$HOME/node2" "$HOME/node3"
-
 # Now start services (configs exist for all nodes)
 echo ""
 echo "Starting node services..."

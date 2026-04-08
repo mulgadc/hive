@@ -777,7 +777,7 @@ init_leader_node() {
 
     # Start init in background — formation server will wait for joins
     # shellcheck disable=SC2086
-    sudo ./bin/spx admin init \
+    ./bin/spx admin init \
         --node node1 \
         --bind "${NODE1_IP}" \
         --cluster-bind "${NODE1_IP}" \
@@ -818,7 +818,7 @@ join_follower_node() {
     rm -rf "$data_dir/"
 
     # Route to node1 (seed node) - other nodes discovered via NATS gossip
-    sudo ./bin/spx admin join \
+    ./bin/spx admin join \
         --node "node$node_num" \
         --bind "$node_ip" \
         --cluster-bind "$node_ip" \
