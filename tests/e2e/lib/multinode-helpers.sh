@@ -77,8 +77,7 @@ start_node_services() {
 
     # Start all services - each node's config binds to its specific IP
     # UI is not needed for E2E tests and fails in pseudo multi-node (wrong cert path)
-    # Services run as root (admin init/join require sudo)
-    sudo UI=false ./scripts/start-dev.sh "$data_dir"
+    UI=false ./scripts/start-dev.sh "$data_dir"
 
     echo "Node$node_num services started"
 }
@@ -92,8 +91,7 @@ stop_node_services() {
     echo "Stopping services for node$node_num..."
 
     # Stop using PID files in the node's log directory
-    # Services run as root (admin init/join require sudo), so stop must also be root
-    sudo ./scripts/stop-dev.sh "$data_dir"
+    ./scripts/stop-dev.sh "$data_dir"
 
     echo "Node$node_num services stopped"
 }
@@ -685,9 +683,9 @@ force_cleanup_all_nodes() {
                 if [ -f "$pidfile" ]; then
                     local pid
                     pid=$(cat "$pidfile" 2>/dev/null || true)
-                    if [ -n "$pid" ] && sudo kill -0 "$pid" 2>/dev/null; then
+                    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
                         echo "  Node$i: killing $svc (PID $pid)..."
-                        sudo kill -TERM "$pid" 2>/dev/null || true
+                        kill -TERM "$pid" 2>/dev/null || true
                     fi
                 fi
             done
@@ -708,17 +706,17 @@ force_cleanup_all_nodes() {
                 if [ -f "$pidfile" ]; then
                     local pid
                     pid=$(cat "$pidfile" 2>/dev/null || true)
-                    if [ -n "$pid" ] && sudo kill -0 "$pid" 2>/dev/null; then
+                    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
                         echo "  Node$i: force-killing $svc (PID $pid)..."
-                        sudo kill -9 "$pid" 2>/dev/null || true
+                        kill -9 "$pid" 2>/dev/null || true
                     fi
                 fi
             done
         fi
     done
 
-    # Kill any remaining QEMU processes (root-owned since services run as root)
-    sudo pkill -9 -x qemu-system-x86_64 2>/dev/null || true
+    # Kill any remaining QEMU processes
+    pkill -9 -x qemu-system-x86_64 2>/dev/null || true
 
     sleep 1
 
@@ -733,7 +731,7 @@ force_cleanup_all_nodes() {
             if [ -n "$lock_files" ]; then
                 echo "  Node$i: removing stale badger LOCK files..."
                 echo "$lock_files" | while read -r f; do
-                    sudo rm -f "$f"
+                    rm -f "$f"
                     echo "    removed $f"
                 done
             fi
