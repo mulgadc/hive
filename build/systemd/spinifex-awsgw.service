@@ -14,7 +14,7 @@ Restart=on-failure
 RestartSec=5
 OOMScoreAdjust=-500
 Environment=SPINIFEX_CONFIG_PATH=/etc/spinifex/spinifex.toml
-Environment=SPINIFEX_BASE_DIR=/var/lib/spinifex/
+Environment=SPINIFEX_BASE_DIR=/var/lib/spinifex/awsgw/
 Environment=SPINIFEX_AWSGW_TLS_CERT=/etc/spinifex/server.pem
 Environment=SPINIFEX_AWSGW_TLS_KEY=/etc/spinifex/server.key
 
@@ -23,7 +23,7 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 PrivateDevices=yes
 ReadOnlyPaths=/etc/spinifex/spinifex.toml /etc/spinifex/master.key /etc/spinifex/server.pem /etc/spinifex/server.key
-ReadWritePaths=/var/lib/spinifex /var/log/spinifex /etc/spinifex /tmp
+ReadWritePaths=/var/lib/spinifex/awsgw /var/log/spinifex /etc/spinifex/bootstrap.json /tmp
 
 # Hardening
 ProtectHome=yes

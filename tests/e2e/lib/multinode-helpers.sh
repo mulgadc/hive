@@ -77,8 +77,7 @@ start_node_services() {
 
     # Start all services - each node's config binds to its specific IP
     # UI is not needed for E2E tests and fails in pseudo multi-node (wrong cert path)
-    # Services run as root (admin init/join require sudo)
-    sudo UI=false ./scripts/start-dev.sh "$data_dir"
+    UI=false ./scripts/start-dev.sh "$data_dir"
 
     echo "Node$node_num services started"
 }
@@ -92,8 +91,7 @@ stop_node_services() {
     echo "Stopping services for node$node_num..."
 
     # Stop using PID files in the node's log directory
-    # Services run as root (admin init/join require sudo), so stop must also be root
-    sudo ./scripts/stop-dev.sh "$data_dir"
+    ./scripts/stop-dev.sh "$data_dir"
 
     echo "Node$node_num services stopped"
 }
@@ -532,21 +530,36 @@ dump_all_node_logs() {
     echo "DUMPING LOGS FROM ALL NODES"
     echo "=========================================="
 
+    # Show running spx/nats processes for context
+    echo ""
+    echo "--- Running processes ---"
+    ps auxw | grep -E 'spx|nats-server' | grep -v grep || echo "(none)"
+
     for i in 1 2 3; do
         local data_dir="$HOME/node$i"
         local logs_dir="$data_dir/logs"
 
-        if [ -d "$logs_dir" ]; then
-            echo ""
-            echo "=== Node$i Logs ==="
+        echo ""
+        echo "=== Node$i ==="
+
+        # Show directory structure
+        echo "--- $data_dir contents ---"
+        sudo ls -la "$data_dir/" 2>/dev/null || echo "(dir not found)"
+
+        if sudo test -d "$logs_dir"; then
+            echo "--- $logs_dir contents ---"
+            sudo ls -la "$logs_dir/" 2>/dev/null || true
 
             for log in nats predastore viperblock spinifex awsgw; do
-                if [ -f "$logs_dir/$log.log" ]; then
+                if sudo test -f "$logs_dir/$log.log"; then
                     echo ""
                     echo "--- $log.log (last 50 lines) ---"
-                    tail -50 "$logs_dir/$log.log" 2>/dev/null || echo "(empty or not accessible)"
+                    sudo tail -50 "$logs_dir/$log.log" 2>/dev/null || echo "(empty or not accessible)"
                 fi
             done
+        else
+            echo "--- $logs_dir not found, checking PID files ---"
+            sudo find "$data_dir" -name '*.pid' -o -name '*.log' 2>/dev/null || true
         fi
     done
 
@@ -670,9 +683,9 @@ force_cleanup_all_nodes() {
                 if [ -f "$pidfile" ]; then
                     local pid
                     pid=$(cat "$pidfile" 2>/dev/null || true)
-                    if [ -n "$pid" ] && sudo kill -0 "$pid" 2>/dev/null; then
+                    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
                         echo "  Node$i: killing $svc (PID $pid)..."
-                        sudo kill -TERM "$pid" 2>/dev/null || true
+                        kill -TERM "$pid" 2>/dev/null || true
                     fi
                 fi
             done
@@ -693,17 +706,17 @@ force_cleanup_all_nodes() {
                 if [ -f "$pidfile" ]; then
                     local pid
                     pid=$(cat "$pidfile" 2>/dev/null || true)
-                    if [ -n "$pid" ] && sudo kill -0 "$pid" 2>/dev/null; then
+                    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
                         echo "  Node$i: force-killing $svc (PID $pid)..."
-                        sudo kill -9 "$pid" 2>/dev/null || true
+                        kill -9 "$pid" 2>/dev/null || true
                     fi
                 fi
             done
         fi
     done
 
-    # Kill any remaining QEMU processes (root-owned since services run as root)
-    sudo pkill -9 -x qemu-system-x86_64 2>/dev/null || true
+    # Kill any remaining QEMU processes
+    pkill -9 -x qemu-system-x86_64 2>/dev/null || true
 
     sleep 1
 
@@ -718,7 +731,7 @@ force_cleanup_all_nodes() {
             if [ -n "$lock_files" ]; then
                 echo "  Node$i: removing stale badger LOCK files..."
                 echo "$lock_files" | while read -r f; do
-                    sudo rm -f "$f"
+                    rm -f "$f"
                     echo "    removed $f"
                 done
             fi
@@ -764,7 +777,7 @@ init_leader_node() {
 
     # Start init in background — formation server will wait for joins
     # shellcheck disable=SC2086
-    sudo ./bin/spx admin init \
+    ./bin/spx admin init \
         --node node1 \
         --bind "${NODE1_IP}" \
         --cluster-bind "${NODE1_IP}" \
@@ -805,7 +818,7 @@ join_follower_node() {
     rm -rf "$data_dir/"
 
     # Route to node1 (seed node) - other nodes discovered via NATS gossip
-    sudo ./bin/spx admin join \
+    ./bin/spx admin join \
         --node "node$node_num" \
         --bind "$node_ip" \
         --cluster-bind "$node_ip" \

@@ -25,15 +25,15 @@ cleanup() {
         dump_all_node_logs
     fi
 
-    # Kill any lingering formation background processes (root-owned via sudo)
-    [ -n "$LEADER_INIT_PID" ] && sudo kill "$LEADER_INIT_PID" 2>/dev/null || true
-    [ -n "$JOIN2_PID" ] && sudo kill "$JOIN2_PID" 2>/dev/null || true
-    [ -n "$JOIN3_PID" ] && sudo kill "$JOIN3_PID" 2>/dev/null || true
+    # Kill any lingering formation background processes
+    [ -n "$LEADER_INIT_PID" ] && kill "$LEADER_INIT_PID" 2>/dev/null || true
+    [ -n "$JOIN2_PID" ] && kill "$JOIN2_PID" 2>/dev/null || true
+    [ -n "$JOIN3_PID" ] && kill "$JOIN3_PID" 2>/dev/null || true
 
     # Try coordinated shutdown first (only if NATS is likely still up)
     if [ "$CLUSTER_SERVICES_STARTED" = "true" ]; then
         echo "Attempting coordinated cluster shutdown..."
-        if timeout 60 sudo ./bin/spx admin cluster shutdown --force --timeout 30s --config "$HOME/node1/config/spinifex.toml" 2>/dev/null; then
+        if timeout 60 ./bin/spx admin cluster shutdown --force --timeout 30s --config "$HOME/node1/config/spinifex.toml" 2>/dev/null; then
             echo "Coordinated shutdown succeeded"
         else
             echo "Coordinated shutdown failed, falling back to per-node stop..."

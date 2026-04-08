@@ -546,9 +546,9 @@ func runimagesListCmd(cmd *cobra.Command, args []string) {
 // TODO: Move all logic to a module, use minimal application logic in viper commands
 func runAdminInit(cmd *cobra.Command, args []string) {
 	if os.Getuid() != 0 {
-		fmt.Fprintln(os.Stderr, "❌ Error: 'spx admin init' must be run as root (sudo).")
-		fmt.Fprintln(os.Stderr, "   Root is required for user/service setup and CA certificate installation.")
-		os.Exit(1)
+		fmt.Fprintln(os.Stderr, "⚠️  Warning: 'spx admin init' is not running as root.")
+		fmt.Fprintln(os.Stderr, "   Service user setup and CA certificate installation will be skipped.")
+		fmt.Fprintln(os.Stderr, "   For production deployments, run with sudo.")
 	}
 
 	force, _ := cmd.Flags().GetBool("force")
@@ -1273,9 +1273,9 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 func runAdminJoin(cmd *cobra.Command, args []string) {
 	if os.Getuid() != 0 {
-		fmt.Fprintln(os.Stderr, "❌ Error: 'spx admin join' must be run as root (sudo).")
-		fmt.Fprintln(os.Stderr, "   Root is required for user/service setup and CA certificate installation.")
-		os.Exit(1)
+		fmt.Fprintln(os.Stderr, "⚠️  Warning: 'spx admin join' is not running as root.")
+		fmt.Fprintln(os.Stderr, "   Service user setup and CA certificate installation will be skipped.")
+		fmt.Fprintln(os.Stderr, "   For production deployments, run with sudo.")
 	}
 
 	node, _ := cmd.Flags().GetString("node")

@@ -215,6 +215,7 @@ func CreateServiceDirectories(spxRoot string) {
 		filepath.Join(spxRoot, "viperblock"),
 		filepath.Join(spxRoot, "vpcd"),
 		filepath.Join(spxRoot, "spinifex"),
+		filepath.Join(spxRoot, "awsgw"),
 	}
 
 	fmt.Println("\n📁 Creating directory structure...")
@@ -311,6 +312,7 @@ func SetServiceOwnership() {
 		"/var/lib/spinifex/spinifex":   "spinifex-daemon",
 		"/var/lib/spinifex/viperblock": "spinifex-viperblock",
 		"/var/lib/spinifex/vpcd":       "spinifex-vpcd",
+		"/var/lib/spinifex/awsgw":      "spinifex-gw",
 	} {
 		if _, err := os.Stat(path); err != nil {
 			continue
