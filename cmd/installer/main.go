@@ -19,13 +19,16 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/mulgadc/spinifex/cmd/installer/install"
 	"github.com/mulgadc/spinifex/cmd/installer/ui"
 )
 
 func main() {
-	cfg, err := ui.Run()
+	ttyPath := detectTTY()
+
+	cfg, err := ui.Run(ttyPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "installer: %v\n", err)
 		os.Exit(1)
@@ -35,4 +38,23 @@ func main() {
 		fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// detectTTY returns the TTY device path the installer should attach to.
+// It reads SPINIFEX_CONSOLE from the kernel cmdline (/proc/cmdline) so that
+// spinifex-init can direct the installer to the correct console (ttyS0 for
+// serial, tty1 for VGA). Falls back to tty1.
+func detectTTY() string {
+	data, err := os.ReadFile("/proc/cmdline")
+	if err == nil {
+		for param := range strings.FieldsSeq(string(data)) {
+			if after, ok := strings.CutPrefix(param, "SPINIFEX_CONSOLE="); ok {
+				val := after
+				if val != "" && val != "auto" {
+					return "/dev/" + val
+				}
+			}
+		}
+	}
+	return "/dev/tty1"
 }
