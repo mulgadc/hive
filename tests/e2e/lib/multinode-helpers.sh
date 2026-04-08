@@ -541,12 +541,15 @@ dump_all_node_logs() {
             echo "=== Node$i Logs ==="
 
             for log in nats predastore viperblock spinifex awsgw; do
-                if [ -f "$logs_dir/$log.log" ]; then
+                if sudo test -f "$logs_dir/$log.log"; then
                     echo ""
                     echo "--- $log.log (last 50 lines) ---"
-                    tail -50 "$logs_dir/$log.log" 2>/dev/null || echo "(empty or not accessible)"
+                    sudo tail -50 "$logs_dir/$log.log" 2>/dev/null || echo "(empty or not accessible)"
                 fi
             done
+        else
+            echo ""
+            echo "=== Node$i: $logs_dir not found ==="
         fi
     done
 
