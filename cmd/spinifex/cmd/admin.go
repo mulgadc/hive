@@ -546,9 +546,9 @@ func runimagesListCmd(cmd *cobra.Command, args []string) {
 // TODO: Move all logic to a module, use minimal application logic in viper commands
 func runAdminInit(cmd *cobra.Command, args []string) {
 	if os.Getuid() != 0 {
-		fmt.Fprintln(os.Stderr, "⚠️  Not running as root — CA certificate will not be installed to system trust store.")
-		fmt.Fprintln(os.Stderr, "   Run with sudo, or manually: sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt && sudo update-ca-certificates")
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "❌ Error: 'spx admin init' must be run as root (sudo).")
+		fmt.Fprintln(os.Stderr, "   Root is required for user/service setup and CA certificate installation.")
+		os.Exit(1)
 	}
 
 	force, _ := cmd.Flags().GetBool("force")
@@ -1278,8 +1278,9 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 func runAdminJoin(cmd *cobra.Command, args []string) {
 	if os.Getuid() != 0 {
-		fmt.Fprintln(os.Stderr, "⚠️  Not running as root — CA certificate will not be installed to system trust store.")
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "❌ Error: 'spx admin join' must be run as root (sudo).")
+		fmt.Fprintln(os.Stderr, "   Root is required for user/service setup and CA certificate installation.")
+		os.Exit(1)
 	}
 
 	node, _ := cmd.Flags().GetString("node")
@@ -1665,10 +1666,6 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	for name, n := range statusResp.Nodes {
 		fmt.Printf("     - %s (%s)\n", name, n.BindIP)
 	}
-	fmt.Println("\n📋 Next steps:")
-	fmt.Println("   1. Start services:")
-	fmt.Println("      ./scripts/start-dev.sh")
-	fmt.Println()
 }
 
 // buildRemoteNodes converts formation NodeInfo into RemoteNode entries,
