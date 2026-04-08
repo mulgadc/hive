@@ -20,7 +20,7 @@ const keyNameField = z
 export const createInstanceSchema = z.object({
   imageId: z.string("Please select an Image"),
   instanceType: z.string("Please select an instance type"),
-  keyName: z.string("Please select a key pair"),
+  keyName: z.string("Please select a key pair").min(1, "Key pair is required"),
   subnetId: z.string().optional(),
   placementGroupName: z.string().optional(),
   count: z
