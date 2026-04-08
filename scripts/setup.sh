@@ -101,7 +101,7 @@ create_service_users() {
     # Create per-service users with correct home directories
     declare -A SERVICE_HOMES=(
         [nats]="/var/lib/spinifex/nats"
-        [gw]="/var/lib/spinifex"
+        [gw]="/var/lib/spinifex/awsgw"
         [daemon]="/var/lib/spinifex/spinifex"
         [storage]="/var/lib/spinifex/predastore"
         [viperblock]="/var/lib/spinifex/viperblock"
@@ -286,8 +286,7 @@ create_directories() {
     $SUDO chown "root:$SPINIFEX_GROUP" /etc/spinifex
 
     $SUDO mkdir -p /var/lib/spinifex
-    # TODO: tighten to 0750 once awsgw gets its own data dir (currently writes awsgw.pid here)
-    $SUDO chmod 0770 /var/lib/spinifex
+    $SUDO chmod 0750 /var/lib/spinifex
     $SUDO chown "root:$SPINIFEX_GROUP" /var/lib/spinifex
 
     # Symlink so services that expect BaseDir/config/ can find /etc/spinifex/
@@ -337,6 +336,15 @@ create_directories() {
     $SUDO mkdir -p /var/lib/spinifex/vpcd
     $SUDO chown "spinifex-vpcd:$SPINIFEX_GROUP" /var/lib/spinifex/vpcd
     $SUDO chmod 0700 /var/lib/spinifex/vpcd
+
+    $SUDO mkdir -p /var/lib/spinifex/awsgw
+    $SUDO chown "spinifex-gw:$SPINIFEX_GROUP" /var/lib/spinifex/awsgw
+    $SUDO chmod 0700 /var/lib/spinifex/awsgw
+
+    # Symlink so awsgw's {BaseDir}/config/ paths resolve to /etc/spinifex/
+    if [ ! -e /var/lib/spinifex/awsgw/config ]; then
+        $SUDO ln -s /etc/spinifex /var/lib/spinifex/awsgw/config
+    fi
 
     # Top-level config files (root-owned, group-readable)
     # Generate environment file with install-specific values (e.g. arch-dependent paths)
