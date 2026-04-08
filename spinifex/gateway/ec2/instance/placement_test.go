@@ -572,6 +572,7 @@ func TestRunInstances_SingleInstanceDistributes(t *testing.T) {
 	input := &ec2.RunInstancesInput{
 		ImageId:      aws.String("ami-test"),
 		InstanceType: aws.String("t3.micro"),
+		KeyName:      aws.String("test-key"),
 		MinCount:     aws.Int64(1),
 		MaxCount:     aws.Int64(1),
 	}
@@ -1073,6 +1074,7 @@ func TestRunInstances_ClusterPlacementGroupRouting(t *testing.T) {
 	input := &ec2.RunInstancesInput{
 		ImageId:      aws.String("ami-test"),
 		InstanceType: aws.String("t3.micro"),
+		KeyName:      aws.String("test-key"),
 		MinCount:     aws.Int64(2),
 		MaxCount:     aws.Int64(2),
 		Placement: &ec2.Placement{
@@ -1123,6 +1125,7 @@ func TestRunInstances_MultiInstanceUsesDistribution(t *testing.T) {
 	input := &ec2.RunInstancesInput{
 		ImageId:      aws.String("ami-test"),
 		InstanceType: aws.String("t3.micro"),
+		KeyName:      aws.String("test-key"),
 		MinCount:     aws.Int64(2),
 		MaxCount:     aws.Int64(2),
 	}

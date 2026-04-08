@@ -107,8 +107,12 @@ func launchService(config *config.ClusterConfig) error {
 		return fmt.Errorf("initialize IAM service: %w", err)
 	}
 
-	// First boot: consume bootstrap.json → seed IAM users into NATS KV → delete file
+	// First boot: consume bootstrap.json → seed IAM users into NATS KV → delete file.
+	// Resolve symlinks so the path matches systemd ReadWritePaths for deletion.
 	bootstrapPath := filepath.Join(nodeConfig.BaseDir, "config", "bootstrap.json")
+	if resolved, err := filepath.EvalSymlinks(bootstrapPath); err == nil {
+		bootstrapPath = resolved
+	}
 	data, err := handlers_iam.LoadBootstrapData(bootstrapPath)
 	switch {
 	case err == nil:
@@ -118,8 +122,9 @@ func launchService(config *config.ClusterConfig) error {
 		}
 		if err := os.Remove(bootstrapPath); err != nil {
 			slog.Warn("Failed to delete bootstrap file", "path", bootstrapPath, "err", err)
+		} else {
+			slog.Info("Bootstrap complete, bootstrap.json deleted")
 		}
-		slog.Info("Bootstrap complete, bootstrap.json deleted")
 	case os.IsNotExist(err):
 		// No bootstrap file — normal after first boot
 	default:

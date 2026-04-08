@@ -23,7 +23,7 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 PrivateDevices=yes
 ReadOnlyPaths=/etc/spinifex/spinifex.toml /etc/spinifex/master.key /etc/spinifex/server.pem /etc/spinifex/server.key
-ReadWritePaths=/var/lib/spinifex /var/log/spinifex /etc/spinifex/bootstrap.json /tmp
+ReadWritePaths=/var/lib/spinifex /var/log/spinifex /etc/spinifex /tmp
 
 # Hardening
 ProtectHome=yes

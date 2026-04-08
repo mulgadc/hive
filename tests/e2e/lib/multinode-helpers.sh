@@ -77,7 +77,8 @@ start_node_services() {
 
     # Start all services - each node's config binds to its specific IP
     # UI is not needed for E2E tests and fails in pseudo multi-node (wrong cert path)
-    UI=false ./scripts/start-dev.sh "$data_dir"
+    # Services run as root (admin init/join require sudo)
+    sudo UI=false ./scripts/start-dev.sh "$data_dir"
 
     echo "Node$node_num services started"
 }
@@ -91,7 +92,8 @@ stop_node_services() {
     echo "Stopping services for node$node_num..."
 
     # Stop using PID files in the node's log directory
-    ./scripts/stop-dev.sh "$data_dir"
+    # Services run as root (admin init/join require sudo), so stop must also be root
+    sudo ./scripts/stop-dev.sh "$data_dir"
 
     echo "Node$node_num services stopped"
 }
@@ -668,9 +670,9 @@ force_cleanup_all_nodes() {
                 if [ -f "$pidfile" ]; then
                     local pid
                     pid=$(cat "$pidfile" 2>/dev/null || true)
-                    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                    if [ -n "$pid" ] && sudo kill -0 "$pid" 2>/dev/null; then
                         echo "  Node$i: killing $svc (PID $pid)..."
-                        kill -TERM "$pid" 2>/dev/null || true
+                        sudo kill -TERM "$pid" 2>/dev/null || true
                     fi
                 fi
             done
@@ -691,17 +693,17 @@ force_cleanup_all_nodes() {
                 if [ -f "$pidfile" ]; then
                     local pid
                     pid=$(cat "$pidfile" 2>/dev/null || true)
-                    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                    if [ -n "$pid" ] && sudo kill -0 "$pid" 2>/dev/null; then
                         echo "  Node$i: force-killing $svc (PID $pid)..."
-                        kill -9 "$pid" 2>/dev/null || true
+                        sudo kill -9 "$pid" 2>/dev/null || true
                     fi
                 fi
             done
         fi
     done
 
-    # Kill any remaining QEMU processes
-    pkill -9 -x qemu-system-x86_64 2>/dev/null || true
+    # Kill any remaining QEMU processes (root-owned since services run as root)
+    sudo pkill -9 -x qemu-system-x86_64 2>/dev/null || true
 
     sleep 1
 
@@ -716,7 +718,7 @@ force_cleanup_all_nodes() {
             if [ -n "$lock_files" ]; then
                 echo "  Node$i: removing stale badger LOCK files..."
                 echo "$lock_files" | while read -r f; do
-                    rm -f "$f"
+                    sudo rm -f "$f"
                     echo "    removed $f"
                 done
             fi
@@ -762,7 +764,7 @@ init_leader_node() {
 
     # Start init in background — formation server will wait for joins
     # shellcheck disable=SC2086
-    ./bin/spx admin init \
+    sudo ./bin/spx admin init \
         --node node1 \
         --bind "${NODE1_IP}" \
         --cluster-bind "${NODE1_IP}" \
@@ -803,7 +805,7 @@ join_follower_node() {
     rm -rf "$data_dir/"
 
     # Route to node1 (seed node) - other nodes discovered via NATS gossip
-    ./bin/spx admin join \
+    sudo ./bin/spx admin join \
         --node "node$node_num" \
         --bind "$node_ip" \
         --cluster-bind "$node_ip" \

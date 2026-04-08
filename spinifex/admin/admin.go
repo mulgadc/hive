@@ -336,6 +336,12 @@ func SetServiceOwnership() {
 		}
 	}
 
+	// /etc/spinifex needs group-write so awsgw (spinifex-gw) can delete
+	// bootstrap.json after consuming it on first boot.
+	if err := os.Chmod("/etc/spinifex", 0770); err != nil { //nolint:gosec // directory needs group-write for bootstrap.json deletion
+		slog.Warn("SetServiceOwnership: chmod /etc/spinifex failed", "err", err)
+	}
+
 	// Shared config files — root:spinifex, ca.key stays root:root 0600
 	for path, mode := range map[string]os.FileMode{
 		"/etc/spinifex/spinifex.toml":  0640,

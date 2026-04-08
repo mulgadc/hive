@@ -11,7 +11,7 @@ vi.mock("@/lib/awsClient", () => ({
 
 vi.mock("@aws-sdk/lib-storage", () => ({
   Upload: class MockUpload {
-    private key: string
+    private readonly key: string
     constructor({ params }: { params: { Key: string } }) {
       this.key = params.Key
     }

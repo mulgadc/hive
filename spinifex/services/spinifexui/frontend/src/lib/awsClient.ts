@@ -1,12 +1,17 @@
 import { EC2Client } from "@aws-sdk/client-ec2"
 import { IAMClient } from "@aws-sdk/client-iam"
 import { S3Client } from "@aws-sdk/client-s3"
+import { HttpRequest } from "@smithy/protocol-http"
 
 import { getCredentials } from "./auth"
 
 const AWS_REGION = "ap-southeast-2"
-const awsEndpoint = `${window.location.protocol}//${window.location.hostname}:9999`
-const s3Endpoint = `${window.location.protocol}//${window.location.hostname}:8443`
+
+// SDK signs against the real backend host so the SigV4 signature includes
+// the correct Host header value. Middleware rewrites the outgoing URL
+// to route through the same-origin reverse proxy after signing is complete.
+const AWSGW_SIGN_ENDPOINT = `${window.location.protocol}//localhost:9999`
+const S3_SIGN_ENDPOINT = `${window.location.protocol}//localhost:8443`
 
 // Cached singleton clients
 let ec2Client: EC2Client | null = null
@@ -20,13 +25,24 @@ export function getEc2Client(): EC2Client {
       throw new Error("AWS credentials not configured")
     }
     ec2Client = new EC2Client({
-      endpoint: awsEndpoint,
+      endpoint: AWSGW_SIGN_ENDPOINT,
       region: AWS_REGION,
       credentials: {
         accessKeyId: credentials.accessKeyId,
         secretAccessKey: credentials.secretAccessKey,
       },
     })
+    ec2Client.middlewareStack.add(
+      (next) => (args) => {
+        if (HttpRequest.isInstance(args.request)) {
+          args.request.hostname = window.location.hostname
+          args.request.port = Number(window.location.port) || 443
+          args.request.path = `/proxy/awsgw${args.request.path}`
+        }
+        return next(args)
+      },
+      { step: "finalizeRequest", name: "proxyRewrite", override: true },
+    )
   }
   return ec2Client
 }
@@ -38,13 +54,24 @@ export function getIamClient(): IAMClient {
       throw new Error("AWS credentials not configured")
     }
     iamClient = new IAMClient({
-      endpoint: awsEndpoint,
+      endpoint: AWSGW_SIGN_ENDPOINT,
       region: AWS_REGION,
       credentials: {
         accessKeyId: credentials.accessKeyId,
         secretAccessKey: credentials.secretAccessKey,
       },
     })
+    iamClient.middlewareStack.add(
+      (next) => (args) => {
+        if (HttpRequest.isInstance(args.request)) {
+          args.request.hostname = window.location.hostname
+          args.request.port = Number(window.location.port) || 443
+          args.request.path = `/proxy/awsgw${args.request.path}`
+        }
+        return next(args)
+      },
+      { step: "finalizeRequest", name: "proxyRewrite", override: true },
+    )
   }
   return iamClient
 }
@@ -56,7 +83,7 @@ export function getS3Client(): S3Client {
       throw new Error("AWS credentials not configured")
     }
     s3Client = new S3Client({
-      endpoint: s3Endpoint,
+      endpoint: S3_SIGN_ENDPOINT,
       region: AWS_REGION,
       credentials: {
         accessKeyId: credentials.accessKeyId,
@@ -67,21 +94,30 @@ export function getS3Client(): S3Client {
     // Remove trailing slashes from request paths to fix compatibility with
     // path-style S3 endpoints where a trailing slash causes the request to
     // be interpreted as GetObject instead of ListObjects
-    s3Client.middlewareStack.use({
-      applyToStack: (stack) => {
-        stack.add(
-          (next) => (args) => {
-            // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- smithy middleware args.request is typed as unknown
-            const request = (args as { request?: { path?: string } }).request
-            if (request?.path?.endsWith("/") && request.path !== "/") {
-              request.path = request.path.slice(0, -1)
-            }
-            return next(args)
-          },
-          { step: "build", name: "removeTrailingSlash" },
-        )
+    s3Client.middlewareStack.add(
+      (next) => (args) => {
+        if (
+          HttpRequest.isInstance(args.request) &&
+          args.request.path.endsWith("/") &&
+          args.request.path !== "/"
+        ) {
+          args.request.path = args.request.path.slice(0, -1)
+        }
+        return next(args)
       },
-    })
+      { step: "build", name: "removeTrailingSlash" },
+    )
+    s3Client.middlewareStack.add(
+      (next) => (args) => {
+        if (HttpRequest.isInstance(args.request)) {
+          args.request.hostname = window.location.hostname
+          args.request.port = Number(window.location.port) || 443
+          args.request.path = `/proxy/s3${args.request.path}`
+        }
+        return next(args)
+      },
+      { step: "finalizeRequest", name: "proxyRewrite", override: true },
+    )
   }
   return s3Client
 }
