@@ -3133,6 +3133,14 @@ if [ -n "$CUSTOM_AMI_SNAP_ID" ]; then
     echo "CreateImage snapshot deleted"
 fi
 
+# Remove the custom AMI from predastore so later test suites (e.g. run-lb-e2e.sh)
+# don't discover an AMI whose backing snapshot has been deleted.
+if [ -n "$CUSTOM_AMI_ID" ]; then
+    echo "Removing custom AMI $CUSTOM_AMI_ID from predastore..."
+    $AWS_S3 rm "s3://predastore/$CUSTOM_AMI_ID/" --recursive 2>/dev/null || true
+    echo "Custom AMI removed"
+fi
+
 # Terminate instance (terminate-instances) and verify termination (describe-instances)
 echo "Terminating instance..."
 aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"

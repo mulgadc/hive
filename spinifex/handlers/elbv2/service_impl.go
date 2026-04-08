@@ -579,8 +579,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		}
 		out, launchErr := s.instanceLauncher.LaunchSystemInstance(launchInput)
 		if launchErr != nil {
-			slog.Error("CreateLoadBalancer: failed to launch ALB VM", "lbId", lbID, "err", launchErr)
-			// Continue without VM — LB is created in provisioning state
+			slog.Error("CreateLoadBalancer: failed to launch ALB VM — LB will start as active without data-plane agent", "lbId", lbID, "err", launchErr)
 		} else {
 			albInstanceID = out.InstanceID
 			albVPCIP = out.PrivateIP
@@ -594,9 +593,10 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 	}
 
 	// ALB starts in provisioning until the agent inside the VM connects and
-	// responds to a ping. If no VM is expected (no launcher/AMI), set active.
+	// responds to a ping. If no VM was launched (no launcher/AMI or launch
+	// failed), set active immediately to avoid a stuck provisioning state.
 	state := StateActive
-	if s.instanceLauncher != nil && s.getSystemAMI() != "" {
+	if albInstanceID != "" {
 		state = StateProvisioning
 	}
 

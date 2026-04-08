@@ -190,7 +190,12 @@ pass "instance type: $INSTANCE_TYPE"
 
 echo "Discovering AMIs..."
 ALL_IMAGES=$($AWS_EC2 describe-images --output json 2>&1)
-AMI_ID=$(echo "$ALL_IMAGES" | jq -r '[.Images[] | select(.Name | test("alpine") | not)][0].ImageId // empty')
+# Prefer the system-imported ubuntu AMI (name starts with "ami-ubuntu").
+# Fall back to any non-alpine image, then any image at all.
+AMI_ID=$(echo "$ALL_IMAGES" | jq -r '[.Images[] | select(.Name | test("^ami-ubuntu"))][0].ImageId // empty')
+if [ -z "$AMI_ID" ]; then
+    AMI_ID=$(echo "$ALL_IMAGES" | jq -r '[.Images[] | select(.Name | test("alpine") | not)][0].ImageId // empty')
+fi
 if [ -z "$AMI_ID" ]; then
     AMI_ID=$(echo "$ALL_IMAGES" | jq -r '.Images[0].ImageId // empty')
 fi
@@ -342,7 +347,11 @@ wait_for_lb_active() {
     else
         fail "$label did not reach active state (stuck in $state)"
         echo "  Debug: daemon logs:"
-        grep -iE 'LaunchSystemInstance|LB.VM|lb-agent|alb-agent|mgmt|heartbeat' ~/spinifex/logs/spinifex.log 2>/dev/null | tail -20 || echo "  (no matching log lines)"
+        sudo journalctl -u spinifex-daemon --no-pager -n 50 2>/dev/null \
+            | grep -iE 'LaunchSystemInstance|LB.VM|lb-agent|alb-agent|mgmt|heartbeat|GenerateVolumes|volume_preparation' \
+            | tail -20 || \
+            grep -iE 'LaunchSystemInstance|LB.VM|lb-agent|alb-agent|mgmt|heartbeat|GenerateVolumes|volume_preparation' ~/spinifex/logs/spinifex.log 2>/dev/null \
+            | tail -20 || echo "  (no matching log lines)"
         return 1
     fi
 }
