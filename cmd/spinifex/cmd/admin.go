@@ -785,14 +785,15 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "Error generating IAM master key: %v\n", err)
 		os.Exit(1)
 	}
-	bootstrapResult, err := writeBootstrapFiles(configDir, masterKey, accessKey, secretKey, accountID)
+	bootstrapDir := filepath.Join(spxRoot, "awsgw")
+	bootstrapResult, err := writeBootstrapFiles(configDir, bootstrapDir, masterKey, accessKey, secretKey, accountID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing bootstrap files: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println("\n🔐 Generated IAM master key")
 	fmt.Printf("   Master key: %s\n", filepath.Join(configDir, "master.key"))
-	fmt.Printf("   Bootstrap: %s\n", filepath.Join(configDir, "bootstrap.json"))
+	fmt.Printf("   Bootstrap: %s\n", filepath.Join(bootstrapDir, "bootstrap.json"))
 
 	fmt.Printf("\n🔑 Generated admin credentials (save these — they won't be shown again):\n")
 	fmt.Printf("   Access Key:  %s\n", bootstrapResult.AdminAccessKey)
@@ -1048,13 +1049,14 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		fmt.Fprintf(os.Stderr, "❌ Error generating IAM master key: %v\n", err)
 		os.Exit(1)
 	}
-	bootstrapResult, err := writeBootstrapFiles(configDir, masterKey, accessKey, secretKey, accountID)
+	bootstrapDir := filepath.Join(spxRoot, "awsgw")
+	bootstrapResult, err := writeBootstrapFiles(configDir, bootstrapDir, masterKey, accessKey, secretKey, accountID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error writing bootstrap files: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println("\n🔐 Generated IAM master key")
-	fmt.Printf("   Bootstrap: %s\n", filepath.Join(configDir, "bootstrap.json"))
+	fmt.Printf("   Bootstrap: %s\n", filepath.Join(bootstrapDir, "bootstrap.json"))
 
 	// Read CA cert/key for distribution to joining nodes
 	caCertData, err := os.ReadFile(filepath.Join(configDir, "ca.pem"))
@@ -1495,12 +1497,13 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "❌ Error decoding master key: %v\n", err)
 		os.Exit(1)
 	}
-	if err := writeBootstrapFilesWithAdmin(configDir, masterKeyBytes, creds.AccessKey, creds.SecretKey, creds.AccountID, creds.AdminAccessKey, creds.AdminSecretKey); err != nil {
+	bootstrapDir := filepath.Join(dataDir, "awsgw")
+	if err := writeBootstrapFilesWithAdmin(configDir, bootstrapDir, masterKeyBytes, creds.AccessKey, creds.SecretKey, creds.AccountID, creds.AdminAccessKey, creds.AdminSecretKey); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error writing bootstrap files: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println("✅ IAM master key received from leader")
-	fmt.Printf("✅ Bootstrap file written: %s\n", filepath.Join(configDir, "bootstrap.json"))
+	fmt.Printf("✅ Bootstrap file written: %s\n", filepath.Join(bootstrapDir, "bootstrap.json"))
 
 	// Generate server cert signed by CA with this node's bind IP
 	if err := admin.GenerateServerCertOnly(configDir, bindIP); err != nil {
@@ -1890,8 +1893,9 @@ type writeBootstrapResult struct {
 }
 
 // writeBootstrapFiles generates new admin credentials and writes the bootstrap
-// files (master.key + bootstrap.json). Used by init flows (single and multi-node).
-func writeBootstrapFiles(configDir string, masterKey []byte, accessKey, secretKey, accountID string) (*writeBootstrapResult, error) {
+// files (master.key to configDir, bootstrap.json to bootstrapDir).
+// Used by init flows (single and multi-node).
+func writeBootstrapFiles(configDir, bootstrapDir string, masterKey []byte, accessKey, secretKey, accountID string) (*writeBootstrapResult, error) {
 	adminAccessKey, err := admin.GenerateAWSAccessKey()
 	if err != nil {
 		return nil, fmt.Errorf("generate admin access key: %w", err)
@@ -1900,7 +1904,7 @@ func writeBootstrapFiles(configDir string, masterKey []byte, accessKey, secretKe
 	if err != nil {
 		return nil, fmt.Errorf("generate admin secret key: %w", err)
 	}
-	if err := writeBootstrapFilesWithAdmin(configDir, masterKey, accessKey, secretKey, accountID, adminAccessKey, adminSecretKey); err != nil {
+	if err := writeBootstrapFilesWithAdmin(configDir, bootstrapDir, masterKey, accessKey, secretKey, accountID, adminAccessKey, adminSecretKey); err != nil {
 		return nil, err
 	}
 	return &writeBootstrapResult{
@@ -1910,8 +1914,12 @@ func writeBootstrapFiles(configDir string, masterKey []byte, accessKey, secretKe
 }
 
 // writeBootstrapFilesWithAdmin writes the bootstrap files using the provided
-// admin credentials. Used by join flows where admin creds come from the leader.
-func writeBootstrapFilesWithAdmin(configDir string, masterKey []byte, accessKey, secretKey, accountID, adminAccessKey, adminSecretKey string) error {
+// admin credentials. master.key goes to configDir, bootstrap.json goes to
+// bootstrapDir (the awsgw data directory) so it stays outside /etc/spinifex.
+func writeBootstrapFilesWithAdmin(configDir, bootstrapDir string, masterKey []byte, accessKey, secretKey, accountID, adminAccessKey, adminSecretKey string) error {
+	if err := os.MkdirAll(bootstrapDir, 0700); err != nil {
+		return fmt.Errorf("create bootstrap directory %s: %w", bootstrapDir, err)
+	}
 	if err := handlers_iam.SaveMasterKey(filepath.Join(configDir, "master.key"), masterKey); err != nil {
 		return fmt.Errorf("saving master key: %w", err)
 	}
@@ -1939,7 +1947,7 @@ func writeBootstrapFilesWithAdmin(configDir string, masterKey []byte, accessKey,
 		},
 	}
 
-	return handlers_iam.SaveBootstrapData(filepath.Join(configDir, "bootstrap.json"), bd)
+	return handlers_iam.SaveBootstrapData(filepath.Join(bootstrapDir, "bootstrap.json"), bd)
 }
 
 // detectedWanBridge returns the OVS bridge name that OVN bridge-mappings should

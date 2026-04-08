@@ -108,11 +108,9 @@ func launchService(config *config.ClusterConfig) error {
 	}
 
 	// First boot: consume bootstrap.json → seed IAM users into NATS KV → delete file.
-	// Resolve symlinks so the path matches systemd ReadWritePaths for deletion.
-	bootstrapPath := filepath.Join(nodeConfig.BaseDir, "config", "bootstrap.json")
-	if resolved, err := filepath.EvalSymlinks(bootstrapPath); err == nil {
-		bootstrapPath = resolved
-	}
+	// Check data directory first (production: /var/lib/spinifex/awsgw/), then
+	// awsgw subdir (dev: ~/spinifex/awsgw/), then legacy config dir.
+	bootstrapPath := findBootstrapFile(nodeConfig.BaseDir)
 	data, err := handlers_iam.LoadBootstrapData(bootstrapPath)
 	switch {
 	case err == nil:
@@ -227,4 +225,22 @@ func initIAMService(natsConn *nats.Conn, masterKey []byte, clusterSize int) (*ha
 		time.Sleep(retryDelay)
 		retryDelay = min(retryDelay*2, 10*time.Second)
 	}
+}
+
+// findBootstrapFile returns the path to bootstrap.json, checking the data
+// directory first (production), then the awsgw subdir (dev mode), then the
+// legacy config dir. Returns the first path that exists, or the primary
+// location if none exist (so the caller gets a clean "not found" error).
+func findBootstrapFile(baseDir string) string {
+	candidates := []string{
+		filepath.Join(baseDir, "bootstrap.json"),
+		filepath.Join(baseDir, "awsgw", "bootstrap.json"),
+		filepath.Join(baseDir, "config", "bootstrap.json"),
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return candidates[0]
 }
