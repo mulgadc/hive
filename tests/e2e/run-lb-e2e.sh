@@ -288,8 +288,14 @@ for inst_id in "${APP_INSTANCE_IDS[@]}"; do
         STATE=$($AWS_EC2 describe-instances --instance-ids "$inst_id" \
             --query 'Reservations[0].Instances[0].State.Name' --output text 2>/dev/null)
         if [ "$STATE" == "running" ]; then break; fi
-        if [ $attempt -eq 60 ]; then
-            fail "instance $inst_id did not reach running (stuck in $STATE)"; exit 1
+        if [ "$STATE" == "terminated" ] || [ $attempt -eq 60 ]; then
+            REASON=$($AWS_EC2 describe-instances --instance-ids "$inst_id" \
+                --query 'Reservations[0].Instances[0].StateReason.Message' --output text 2>/dev/null || echo "unknown")
+            fail "instance $inst_id did not reach running (stuck in $STATE, reason: $REASON)"
+            # Dump daemon log tail for debugging
+            echo "  Daemon log tail:"
+            sudo journalctl -u spinifex-daemon --no-pager -n 30 2>/dev/null || tail -30 ~/spinifex/logs/spinifex.log 2>/dev/null || echo "  (no logs available)"
+            exit 1
         fi
         sleep 2
     done
