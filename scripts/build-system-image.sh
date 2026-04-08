@@ -161,6 +161,14 @@ if [[ ! -e "${NBD_DEV}" ]]; then
 fi
 sudo qemu-nbd --disconnect "${NBD_DEV}" 2>/dev/null || true
 sudo qemu-nbd --connect="${NBD_DEV}" "$OUTPUT_IMAGE"
+
+# Wait for the nbd device to be ready (kernel needs time to scan the block device)
+for i in $(seq 1 10); do
+    if sudo blockdev --getsize64 "${NBD_DEV}" &>/dev/null; then
+        break
+    fi
+    sleep 1
+done
 sleep 1
 
 # Alpine cloud images have ext4 directly on the block device (no partition table).
