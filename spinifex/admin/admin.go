@@ -215,6 +215,7 @@ func CreateServiceDirectories(spxRoot string) {
 		filepath.Join(spxRoot, "viperblock"),
 		filepath.Join(spxRoot, "vpcd"),
 		filepath.Join(spxRoot, "spinifex"),
+		filepath.Join(spxRoot, "awsgw"),
 	}
 
 	fmt.Println("\n📁 Creating directory structure...")
@@ -311,6 +312,7 @@ func SetServiceOwnership() {
 		"/var/lib/spinifex/spinifex":   "spinifex-daemon",
 		"/var/lib/spinifex/viperblock": "spinifex-viperblock",
 		"/var/lib/spinifex/vpcd":       "spinifex-vpcd",
+		"/var/lib/spinifex/awsgw":      "spinifex-gw",
 	} {
 		if _, err := os.Stat(path); err != nil {
 			continue
@@ -337,13 +339,14 @@ func SetServiceOwnership() {
 	}
 
 	// Shared config files — root:spinifex, ca.key stays root:root 0600
+	// bootstrap.json lives in the awsgw data dir (not /etc/spinifex),
+	// so /etc/spinifex stays at 0750 (no group-write needed).
 	for path, mode := range map[string]os.FileMode{
-		"/etc/spinifex/spinifex.toml":  0640,
-		"/etc/spinifex/master.key":     0640,
-		"/etc/spinifex/bootstrap.json": 0660, // group-write so awsgw can consume and truncate
-		"/etc/spinifex/server.pem":     0644,
-		"/etc/spinifex/server.key":     0640,
-		"/etc/spinifex/ca.pem":         0644,
+		"/etc/spinifex/spinifex.toml": 0640,
+		"/etc/spinifex/master.key":    0640,
+		"/etc/spinifex/server.pem":    0644,
+		"/etc/spinifex/server.key":    0640,
+		"/etc/spinifex/ca.pem":        0644,
 	} {
 		if _, err := os.Stat(path); err != nil {
 			continue

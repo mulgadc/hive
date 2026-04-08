@@ -12,7 +12,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import { Textarea } from "@/components/ui/textarea"
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard"
 
 interface PrivateKeyModalProps {
@@ -59,10 +58,10 @@ export function PrivateKeyModal({
         </AlertDialogHeader>
 
         <div className="space-y-3">
-          <Textarea
-            className="font-mono text-xs"
+          <textarea
+            className="w-full resize-none overflow-y-auto rounded-md border border-input bg-input/20 px-2 py-2 font-mono text-xs"
             readOnly
-            rows={12}
+            rows={4}
             value={keyMaterial}
           />
 

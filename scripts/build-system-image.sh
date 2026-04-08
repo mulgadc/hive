@@ -143,6 +143,9 @@ else
 fi
 
 # Step 2: Copy image for customization
+# Disconnect any stale nbd from a previous run (releases file lock on output image)
+sudo qemu-nbd --disconnect "${NBD_DEV}" 2>/dev/null || true
+rm -f "$OUTPUT_IMAGE"
 echo "Copying image for customization..."
 cp "${BUILD_DIR}/${ALPINE_IMAGE}" "$OUTPUT_IMAGE"
 
