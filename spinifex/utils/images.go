@@ -98,11 +98,11 @@ var AvailableImages = map[string]Images{
 		Starred:      false,
 	},
 
-	"alb-alpine-3.21.6-x86_64":
-	// Alpine Linux (cloud init) x86_64
+	"lb-alpine-3.21.6-x86_64":
+	// Alpine Linux (cloud init) x86_64 — LB system image with HAProxy and lb-agent
 	{
-		Name:         "alb-alpine-3.21.6-x86_64",
-		Description:  "ALB Alpine Linux 3.21.6 x86_64 cloud image",
+		Name:         "lb-alpine-3.21.6-x86_64",
+		Description:  "LB Alpine Linux 3.21.6 x86_64 system image",
 		Distro:       "alpine",
 		Version:      "3.21.6",
 		Arch:         "x86_64",

@@ -34,9 +34,13 @@ if [[ ! -f "$MANIFEST" ]]; then
 fi
 
 DO_IMPORT=false
-if [[ "${1:-}" == "--import" ]]; then
-    DO_IMPORT=true
-fi
+QUIET=false
+for arg in "$@"; do
+    case "$arg" in
+        --import) DO_IMPORT=true ;;
+        --quiet)  QUIET=true ;;
+    esac
+done
 
 # Source the manifest
 # shellcheck source=/dev/null
@@ -66,6 +70,12 @@ cleanup() {
     echo "Done."
 }
 trap cleanup EXIT
+
+# In quiet mode, redirect build output to /dev/null (import output still shown)
+if [[ "$QUIET" == true ]]; then
+    exec 3>&1         # save original stdout
+    exec 1>/dev/null  # suppress build output
+fi
 
 echo "=== System Image Builder ==="
 echo "Image:   ${IMAGE_NAME} — ${IMAGE_DESCRIPTION:-}"
@@ -251,6 +261,11 @@ sudo qemu-nbd --disconnect "${NBD_DEV}"
 echo "Converting to raw format..."
 qemu-img convert -f qcow2 -O raw "$OUTPUT_IMAGE" "$OUTPUT_RAW"
 
+# Restore stdout if suppressed
+if [[ "$QUIET" == true ]]; then
+    exec 1>&3 3>&-
+fi
+
 echo ""
 echo "=== Build complete ==="
 echo "  Image: ${IMAGE_NAME}"
@@ -264,12 +279,10 @@ if [[ "$DO_IMPORT" == true ]]; then
         --file "$OUTPUT_RAW" \
         --distro alpine \
         --version "${ALPINE_VERSION}-${IMAGE_NAME}" \
-        --arch x86_64 \
-        --config "$HOME/spinifex/config/spinifex.toml")
+        --arch x86_64)
 else
     echo "To import as AMI, run:"
     echo "  cd $PROJECT_DIR && ./bin/spx admin images import \\"
     echo "    --file $OUTPUT_RAW \\"
-    echo "    --distro alpine --version ${ALPINE_VERSION}-${IMAGE_NAME} --arch x86_64 \\"
-    echo "    --config \$HOME/spinifex/config/spinifex.toml"
+    echo "    --distro alpine --version ${ALPINE_VERSION}-${IMAGE_NAME} --arch x86_64"
 fi
