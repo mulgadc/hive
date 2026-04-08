@@ -31,12 +31,6 @@ const (
 func (gw *GatewayConfig) SigV4AuthMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Skip OPTIONS requests (CORS preflight)
-			if r.Method == http.MethodOptions {
-				next.ServeHTTP(w, r)
-				return
-			}
-
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" {
 				gw.writeSigV4Error(w, r, awserrors.ErrorMissingAuthenticationToken)
