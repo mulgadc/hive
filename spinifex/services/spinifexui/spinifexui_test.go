@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -172,14 +173,15 @@ func TestSecurityHeadersMiddleware_PassesThrough(t *testing.T) {
 	assert.NotEmpty(t, resp.Header.Get("Content-Security-Policy"))
 }
 
-func TestGzipMiddleware_CompressesEligibleContent(t *testing.T) {
+func TestChiCompress_CompressesEligibleContent(t *testing.T) {
 	body := "Hello, this is some text content that should be compressed if long enough."
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.Write([]byte(body))
 	})
 
-	handler := gzipMiddleware(inner)
+	compressor := middleware.NewCompressor(5, "text/html")
+	handler := compressor.Handler(inner)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	rec := httptest.NewRecorder()
@@ -189,8 +191,6 @@ func TestGzipMiddleware_CompressesEligibleContent(t *testing.T) {
 	resp := rec.Result()
 	defer resp.Body.Close()
 
-	// The gzip handler may or may not compress depending on content size,
-	// but the handler should still return a valid response.
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	if resp.Header.Get("Content-Encoding") == "gzip" {
@@ -203,16 +203,16 @@ func TestGzipMiddleware_CompressesEligibleContent(t *testing.T) {
 	}
 }
 
-func TestGzipMiddleware_NoCompressionWithoutHeader(t *testing.T) {
+func TestChiCompress_NoCompressionWithoutHeader(t *testing.T) {
 	body := "uncompressed response body"
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.Write([]byte(body))
 	})
 
-	handler := gzipMiddleware(inner)
+	compressor := middleware.NewCompressor(5, "text/html")
+	handler := compressor.Handler(inner)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	// No Accept-Encoding header
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -227,13 +227,14 @@ func TestGzipMiddleware_NoCompressionWithoutHeader(t *testing.T) {
 	assert.Equal(t, body, string(respBody))
 }
 
-func TestGzipMiddleware_IgnoresNonTextContent(t *testing.T) {
+func TestChiCompress_IgnoresNonTextContent(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
 		w.Write([]byte("fake image data"))
 	})
 
-	handler := gzipMiddleware(inner)
+	compressor := middleware.NewCompressor(5, "text/html", "application/json")
+	handler := compressor.Handler(inner)
 	req := httptest.NewRequest(http.MethodGet, "/image.png", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	rec := httptest.NewRecorder()
@@ -244,18 +245,15 @@ func TestGzipMiddleware_IgnoresNonTextContent(t *testing.T) {
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	// image/png not in the allowed content types — should not be compressed
 	assert.NotEqual(t, "gzip", resp.Header.Get("Content-Encoding"))
 }
 
-func TestBuildCSP_ContainsSelf(t *testing.T) {
-	csp := buildCSP()
+func TestCSP_ContainsSelf(t *testing.T) {
 	assert.Contains(t, csp, "connect-src 'self'")
 	assert.Contains(t, csp, "default-src 'self'")
 }
 
-func TestBuildCSP_NoExternalPorts(t *testing.T) {
-	csp := buildCSP()
+func TestCSP_NoExternalPorts(t *testing.T) {
 	assert.NotContains(t, csp, ":9999", "proxy removes need for direct gateway access")
 	assert.NotContains(t, csp, ":8443", "proxy removes need for direct predastore access")
 }
@@ -309,11 +307,6 @@ func TestNewReverseProxy_StripsPrefixAndSetsHost(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			backendHost := tt.wantHost
-			if backendHost == "" {
-				backendHost = "localhost:9999"
-			}
-
 			// Start a mock backend to capture the forwarded request.
 			var gotPath, gotHost, gotQuery string
 			backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

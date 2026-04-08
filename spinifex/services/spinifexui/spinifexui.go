@@ -1,21 +1,14 @@
 package spinifexui
 
 import (
-	"bufio"
-	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"embed"
 	"fmt"
-	"io"
 	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -24,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 )
 
@@ -216,13 +210,15 @@ func (svc *Service) launchService() error {
 		http.ServeFile(w, r, caCertPath)
 	})
 
-	// SPA catch-all — gzip only applies here, not to proxy routes (proxied
-	// responses need http.Flusher for streaming and backends handle their own
-	// compression).
-	mux.Handle("/", gzipMiddleware(spaHandler))
+	// SPA catch-all.
+	mux.Handle("/", spaHandler)
 
-	// Security headers apply to all routes.
-	finalHandler := securityHeadersMiddleware(mux)
+	// Chi's Compress middleware handles http.Flusher passthrough for streaming
+	// proxy responses and skips already-compressed content types.
+	compressor := middleware.NewCompressor(5, "text/html", "text/css",
+		"application/javascript", "text/javascript", "application/json",
+		"image/svg+xml", "text/plain")
+	finalHandler := securityHeadersMiddleware(compressor.Handler(mux))
 
 	addr := fmt.Sprintf("%s:%d", svc.Config.Host, svc.Config.Port)
 
@@ -280,8 +276,14 @@ func (svc *Service) launchService() error {
 	return server.Serve(splitLn)
 }
 
+// Content-Security-Policy header. All API requests are proxied through the
+// same origin so connect-src only needs 'self'.
+const csp = "default-src 'self'; script-src 'self'; style-src 'self'; " +
+	"img-src 'self'; font-src 'self' data:; connect-src 'self'; " +
+	"object-src 'none'; base-uri 'self'; form-action 'self'; " +
+	"frame-ancestors 'none'; upgrade-insecure-requests;"
+
 func securityHeadersMiddleware(next http.Handler) http.Handler {
-	csp := buildCSP()
 	slog.Info("Content-Security-Policy configured", "csp", csp)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", csp)
@@ -291,227 +293,4 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		next.ServeHTTP(w, r)
 	})
-}
-
-// buildCSP constructs the Content-Security-Policy header. All API requests are
-// proxied through the same origin so connect-src only needs 'self'.
-func buildCSP() string {
-	return "default-src 'self'; script-src 'self'; style-src 'self'; " +
-		"img-src 'self'; font-src 'self' data:; connect-src 'self'; " +
-		"object-src 'none'; base-uri 'self'; form-action 'self'; " +
-		"frame-ancestors 'none'; upgrade-insecure-requests;"
-}
-
-// newProxyTransport creates an *http.Transport that trusts the given CA
-// certificate so the reverse proxy can connect to backend services using
-// self-signed TLS certificates.
-func newProxyTransport(caCertPath string) (*http.Transport, error) {
-	caCert, err := os.ReadFile(caCertPath)
-	if err != nil {
-		return nil, fmt.Errorf("read CA cert %s: %w", caCertPath, err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caCert) {
-		return nil, fmt.Errorf("failed to parse CA cert from %s", caCertPath)
-	}
-	return &http.Transport{
-		TLSClientConfig: &tls.Config{
-			RootCAs: pool,
-		},
-		DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
-		TLSHandshakeTimeout:   5 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second,
-		MaxIdleConnsPerHost:   10,
-		IdleConnTimeout:       90 * time.Second,
-	}, nil
-}
-
-// newReverseProxy creates a reverse proxy that forwards requests to the given
-// backend host:port after stripping the pathPrefix from the request path.
-// The proxy sets req.Host to the backend address so SigV4 signature verification
-// succeeds (the gateway uses r.Host for the canonical host header).
-func newReverseProxy(backendHost, pathPrefix string, transport *http.Transport) http.Handler {
-	target := &url.URL{
-		Scheme: "https",
-		Host:   backendHost,
-	}
-
-	proxy := &httputil.ReverseProxy{
-		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(target)
-			pr.Out.Host = target.Host
-
-			// Strip the proxy path prefix.
-			pr.Out.URL.Path = strings.TrimPrefix(pr.In.URL.Path, pathPrefix)
-			if pr.Out.URL.Path == "" {
-				pr.Out.URL.Path = "/"
-			}
-		},
-		Transport: transport,
-		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			slog.Error("Proxy error", "backend", backendHost, "path", r.URL.Path, "error", err)
-			w.Header().Set("Content-Type", "application/xml")
-			w.WriteHeader(http.StatusBadGateway)
-			fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>`+
-				`<Error><Code>BadGateway</Code>`+
-				`<Message>upstream connection to %s failed</Message></Error>`, backendHost)
-		},
-	}
-
-	return proxy
-}
-
-// gzipContentTypes lists the MIME types eligible for gzip compression.
-var gzipContentTypes = map[string]bool{
-	"text/html":              true,
-	"text/css":               true,
-	"application/javascript": true,
-	"text/javascript":        true,
-	"application/json":       true,
-	"image/svg+xml":          true,
-	"text/plain":             true,
-}
-
-// gzipResponseWriter wraps http.ResponseWriter to compress eligible responses.
-type gzipResponseWriter struct {
-	http.ResponseWriter
-
-	gw          *gzip.Writer
-	wroteHeader bool
-	compress    bool
-}
-
-func (w *gzipResponseWriter) Write(b []byte) (int, error) {
-	if !w.wroteHeader {
-		w.WriteHeader(http.StatusOK)
-	}
-	if w.compress {
-		return w.gw.Write(b)
-	}
-	return w.ResponseWriter.Write(b)
-}
-
-func (w *gzipResponseWriter) WriteHeader(code int) {
-	if w.wroteHeader {
-		return
-	}
-	w.wroteHeader = true
-
-	ct := w.ResponseWriter.Header().Get("Content-Type")
-	// Strip parameters (e.g. "text/html; charset=utf-8" → "text/html")
-	if idx := strings.IndexByte(ct, ';'); idx != -1 {
-		ct = strings.TrimSpace(ct[:idx])
-	}
-	if gzipContentTypes[ct] {
-		w.compress = true
-		w.ResponseWriter.Header().Set("Content-Encoding", "gzip")
-		w.ResponseWriter.Header().Del("Content-Length")
-	}
-	w.ResponseWriter.WriteHeader(code)
-}
-
-func gzipMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		gz, _ := gzip.NewWriterLevel(w, gzip.DefaultCompression)
-		defer gz.Close()
-
-		grw := &gzipResponseWriter{ResponseWriter: w, gw: gz}
-		next.ServeHTTP(grw, r)
-	})
-}
-
-const tlsRecordTypeHandshake = 0x16
-
-// tlsSplitListener accepts connections and reads the first byte. If it looks
-// like a TLS ClientHello (0x16), the connection is wrapped with TLS. Otherwise,
-// a plain-HTTP redirect to HTTPS is sent and the connection is closed.
-type tlsSplitListener struct {
-	net.Listener
-
-	port   int
-	tlsCfg *tls.Config
-}
-
-func (ln *tlsSplitListener) Accept() (net.Conn, error) {
-	for {
-		conn, err := ln.Listener.Accept()
-		if err != nil {
-			return nil, err
-		}
-
-		// Set a deadline for the initial protocol detection byte so a
-		// slow/malicious client cannot block the accept loop.
-		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-
-		var buf [1]byte
-		if _, err := io.ReadFull(conn, buf[:]); err != nil {
-			_ = conn.Close()
-			continue
-		}
-
-		// Clear the deadline before handing off the connection.
-		_ = conn.SetReadDeadline(time.Time{})
-
-		if buf[0] == tlsRecordTypeHandshake {
-			// Prepend the peeked byte and upgrade to TLS.
-			merged := &prefixConn{
-				Conn: conn,
-				r:    io.MultiReader(bytes.NewReader(buf[:]), conn),
-			}
-			return tls.Server(merged, ln.tlsCfg), nil
-		}
-
-		// Plain HTTP — send redirect and close.
-		go ln.redirectHTTP(conn, buf[0])
-	}
-}
-
-// redirectHTTP reads an HTTP request from conn (with the first byte already
-// consumed into firstByte), writes a 301 redirect to HTTPS, and closes conn.
-func (ln *tlsSplitListener) redirectHTTP(conn net.Conn, firstByte byte) {
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-
-	br := bufio.NewReader(io.MultiReader(bytes.NewReader([]byte{firstByte}), conn))
-	req, err := http.ReadRequest(br)
-	if err != nil {
-		return
-	}
-	defer req.Body.Close()
-
-	host := req.Host
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-
-	// Sanitize host to prevent header injection via CRLF.
-	if strings.ContainsAny(host, "\r\n") {
-		return
-	}
-
-	target := fmt.Sprintf("https://%s:%d%s", host, ln.port, req.URL.RequestURI())
-	resp := &http.Response{
-		StatusCode: http.StatusMovedPermanently,
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Header:     http.Header{"Location": {target}, "Connection": {"close"}},
-		Body:       http.NoBody,
-	}
-	_ = resp.Write(conn)
-}
-
-// prefixConn wraps a net.Conn with a reader that replays prefixed bytes.
-type prefixConn struct {
-	net.Conn
-
-	r io.Reader
-}
-
-func (c *prefixConn) Read(b []byte) (int, error) {
-	return c.r.Read(b)
 }
