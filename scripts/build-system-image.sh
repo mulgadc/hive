@@ -67,6 +67,7 @@ cleanup() {
     echo "Cleaning up..."
     sudo umount "${MOUNT_DIR}" 2>/dev/null || true
     sudo qemu-nbd --disconnect "${NBD_DEV}" 2>/dev/null || true
+    exec 9>&- 2>/dev/null || true  # release nbd lock if held
     echo "Done."
 }
 trap cleanup EXIT
@@ -143,14 +144,20 @@ else
 fi
 
 # Step 2: Copy image for customization
-# Disconnect any stale nbd from a previous run (releases file lock on output image)
-sudo qemu-nbd --disconnect "${NBD_DEV}" 2>/dev/null || true
 rm -f "$OUTPUT_IMAGE"
 echo "Copying image for customization..."
 cp "${BUILD_DIR}/${ALPINE_IMAGE}" "$OUTPUT_IMAGE"
 
 # Resize the image (Alpine cloud images are ~200MB, need room for packages)
 qemu-img resize "$OUTPUT_IMAGE" "$IMAGE_SIZE"
+
+# Steps 3-7 use /dev/nbd0 exclusively — serialize with flock so concurrent
+# builds on the same host (e.g. CI single-node + multi-node) don't collide.
+NBD_LOCK="/tmp/nbd0.lock"
+echo "Acquiring nbd lock..."
+exec 9>"$NBD_LOCK"
+flock 9
+echo "Lock acquired"
 
 # Step 3: Connect via qemu-nbd
 echo "Connecting image via qemu-nbd..."
@@ -267,6 +274,9 @@ sudo rm -f "${MOUNT_DIR}/etc/resolv.conf"
 echo "Unmounting..."
 sudo umount "$MOUNT_DIR"
 sudo qemu-nbd --disconnect "${NBD_DEV}"
+
+# Release nbd lock
+exec 9>&-
 
 # Step 7: Convert to raw for import
 echo "Converting to raw format..."
