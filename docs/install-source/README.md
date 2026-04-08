@@ -32,7 +32,7 @@ This guide builds Spinifex from source. For production deployments, the [binary 
 **Requirements:**
 
 - Ubuntu 22.04+ / Debian 12+
-- Go 1.26.1+
+- Go 1.26.2+
 - GCC, make, pkg-config
 - QEMU/KVM, OVN/Open vSwitch, AWS CLI v2, dhcpcd-base
 

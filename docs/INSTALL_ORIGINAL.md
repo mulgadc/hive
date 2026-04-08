@@ -48,7 +48,7 @@ sudo apt install nbdkit nbdkit-plugin-dev pkg-config qemu-system qemu-utils qemu
 
 **Note:** OVN and Open vSwitch are required for VPC networking (virtual switches, routers, DHCP, Geneve overlay). The packages are installed above, but the setup and configuration step (`setup-ovn.sh`) is covered later — see the [Setup OVN](#setup-ovn) section below.
 
-Ensure the Go toolkit is installed for version 1.26.1 or higher. Recommended to install the latest directly from [https://go.dev/dl/](https://go.dev/dl/).
+Ensure the Go toolkit is installed for version 1.26.2 or higher. Recommended to install the latest directly from [https://go.dev/dl/](https://go.dev/dl/).
 
 Confirm Go is correctly installed, and set in your $PATH.
 
