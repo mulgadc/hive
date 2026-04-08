@@ -2,10 +2,14 @@ package spinifexui
 
 import (
 	"compress/gzip"
+	"crypto/tls"
+	"encoding/pem"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -254,6 +258,154 @@ func TestBuildCSP_NoExternalPorts(t *testing.T) {
 	csp := buildCSP()
 	assert.NotContains(t, csp, ":9999", "proxy removes need for direct gateway access")
 	assert.NotContains(t, csp, ":8443", "proxy removes need for direct predastore access")
+}
+
+func TestNewReverseProxy_StripsPrefixAndSetsHost(t *testing.T) {
+	tests := []struct {
+		name      string
+		reqPath   string
+		prefix    string
+		wantPath  string
+		wantHost  string
+		wantQuery string
+	}{
+		{
+			name:     "strips awsgw prefix",
+			reqPath:  "/proxy/awsgw/",
+			prefix:   "/proxy/awsgw",
+			wantPath: "/",
+			wantHost: "localhost:9999",
+		},
+		{
+			name:     "strips prefix with subpath",
+			reqPath:  "/proxy/awsgw/some/path",
+			prefix:   "/proxy/awsgw",
+			wantPath: "/some/path",
+			wantHost: "localhost:9999",
+		},
+		{
+			name:     "strips s3 prefix with bucket key",
+			reqPath:  "/proxy/s3/bucket/key",
+			prefix:   "/proxy/s3",
+			wantPath: "/bucket/key",
+			wantHost: "localhost:8443",
+		},
+		{
+			name:     "empty path after strip becomes root",
+			reqPath:  "/proxy/awsgw",
+			prefix:   "/proxy/awsgw",
+			wantPath: "/",
+			wantHost: "localhost:9999",
+		},
+		{
+			name:      "preserves query string",
+			reqPath:   "/proxy/s3/bucket?list-type=2&prefix=foo",
+			prefix:    "/proxy/s3",
+			wantPath:  "/bucket",
+			wantHost:  "localhost:8443",
+			wantQuery: "list-type=2&prefix=foo",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backendHost := tt.wantHost
+			if backendHost == "" {
+				backendHost = "localhost:9999"
+			}
+
+			// Start a mock backend to capture the forwarded request.
+			var gotPath, gotHost, gotQuery string
+			backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.Path
+				gotHost = r.Host
+				gotQuery = r.URL.RawQuery
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer backend.Close()
+
+			// Use the test server's TLS transport.
+			transport := backend.Client().Transport.(*http.Transport)
+
+			// Point the proxy at the test server instead of the real backend.
+			backendAddr := backend.Listener.Addr().String()
+			proxy := newReverseProxy(backendAddr, tt.prefix, transport)
+
+			req := httptest.NewRequest(http.MethodPost, tt.reqPath, nil)
+			rec := httptest.NewRecorder()
+			proxy.ServeHTTP(rec, req)
+
+			assert.Equal(t, http.StatusOK, rec.Code)
+			assert.Equal(t, tt.wantPath, gotPath, "backend should see stripped path")
+			assert.Equal(t, backendAddr, gotHost, "backend should see proxy-set Host")
+			if tt.wantQuery != "" {
+				assert.Equal(t, tt.wantQuery, gotQuery, "query string should be preserved")
+			}
+		})
+	}
+}
+
+func TestNewReverseProxy_ErrorHandler(t *testing.T) {
+	// Use a transport that will fail to connect (no backend listening).
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+
+	proxy := newReverseProxy("localhost:19999", "/proxy/awsgw", transport)
+
+	req := httptest.NewRequest(http.MethodPost, "/proxy/awsgw/", nil)
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadGateway, rec.Code)
+	assert.Equal(t, "application/xml", rec.Header().Get("Content-Type"))
+	body := rec.Body.String()
+	assert.Contains(t, body, "<Code>BadGateway</Code>")
+	assert.Contains(t, body, "localhost:19999")
+}
+
+func TestNewProxyTransport_ValidCert(t *testing.T) {
+	// Use the test TLS server's CA cert.
+	backend := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	// Extract the CA cert from the test server's TLS config and write to a temp file.
+	certPEM := backend.Certificate()
+	require.NotNil(t, certPEM)
+
+	dir := t.TempDir()
+	caPath := filepath.Join(dir, "ca.pem")
+
+	// httptest TLS server uses a self-signed cert; encode it as PEM.
+	pemData := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: certPEM.Raw,
+	})
+	require.NoError(t, os.WriteFile(caPath, pemData, 0o644))
+
+	transport, err := newProxyTransport(caPath)
+	require.NoError(t, err)
+	assert.NotNil(t, transport)
+	assert.NotNil(t, transport.TLSClientConfig)
+	assert.NotNil(t, transport.TLSClientConfig.RootCAs)
+}
+
+func TestNewProxyTransport_MissingFile(t *testing.T) {
+	_, err := newProxyTransport("/nonexistent/ca.pem")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "read CA cert")
+}
+
+func TestNewProxyTransport_InvalidPEM(t *testing.T) {
+	dir := t.TempDir()
+	caPath := filepath.Join(dir, "bad.pem")
+	require.NoError(t, os.WriteFile(caPath, []byte("not a cert"), 0o644))
+
+	_, err := newProxyTransport(caPath)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse CA cert")
 }
 
 func TestShutdown_WithServer(t *testing.T) {

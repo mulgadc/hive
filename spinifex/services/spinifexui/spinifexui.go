@@ -201,9 +201,14 @@ func (svc *Service) launchService() error {
 
 	// CA certificate download.
 	mux.HandleFunc("/api/ca.pem", func(w http.ResponseWriter, r *http.Request) {
-		if _, err := os.Stat(caCertPath); os.IsNotExist(err) {
-			slog.Warn("CA certificate requested but not found", "path", caCertPath)
-			http.Error(w, "CA certificate not yet generated. Run 'spx admin init' to create it.", http.StatusNotFound)
+		if _, err := os.Stat(caCertPath); err != nil {
+			if os.IsNotExist(err) {
+				slog.Warn("CA certificate requested but not found", "path", caCertPath)
+				http.Error(w, "CA certificate not yet generated. Run 'spx admin init' to create it.", http.StatusNotFound)
+			} else {
+				slog.Error("CA certificate stat failed", "path", caCertPath, "error", err)
+				http.Error(w, "Unable to read CA certificate", http.StatusInternalServerError)
+			}
 			return
 		}
 		w.Header().Set("Content-Type", "application/x-pem-file")
@@ -211,11 +216,13 @@ func (svc *Service) launchService() error {
 		http.ServeFile(w, r, caCertPath)
 	})
 
-	// SPA catch-all.
-	mux.Handle("/", spaHandler)
+	// SPA catch-all — gzip only applies here, not to proxy routes (proxied
+	// responses need http.Flusher for streaming and backends handle their own
+	// compression).
+	mux.Handle("/", gzipMiddleware(spaHandler))
 
-	// Wrap handler with security headers and gzip compression
-	finalHandler := securityHeadersMiddleware(gzipMiddleware(mux))
+	// Security headers apply to all routes.
+	finalHandler := securityHeadersMiddleware(mux)
 
 	addr := fmt.Sprintf("%s:%d", svc.Config.Host, svc.Config.Port)
 
@@ -311,6 +318,11 @@ func newProxyTransport(caCertPath string) (*http.Transport, error) {
 		TLSClientConfig: &tls.Config{
 			RootCAs: pool,
 		},
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		MaxIdleConnsPerHost:   10,
+		IdleConnTimeout:       90 * time.Second,
 	}, nil
 }
 
@@ -337,12 +349,12 @@ func newReverseProxy(backendHost, pathPrefix string, transport *http.Transport) 
 		},
 		Transport: transport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			slog.Warn("Proxy error", "backend", backendHost, "path", r.URL.Path, "error", err)
+			slog.Error("Proxy error", "backend", backendHost, "path", r.URL.Path, "error", err)
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusBadGateway)
 			fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>`+
 				`<Error><Code>BadGateway</Code>`+
-				`<Message>upstream connection failed</Message></Error>`)
+				`<Message>upstream connection to %s failed</Message></Error>`, backendHost)
 		},
 	}
 

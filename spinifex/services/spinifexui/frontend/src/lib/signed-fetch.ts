@@ -65,7 +65,10 @@ export async function signedFetch<T>({
   })
 
   if (!response.ok) {
-    throw new Error(`${action} failed: ${response.status}`)
+    const detail = await response.text().catch(() => "")
+    throw new Error(
+      `${action} failed: ${response.status}${detail ? ` - ${detail}` : ""}`,
+    )
   }
 
   // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- response.json() returns Promise<any>
