@@ -251,7 +251,7 @@ echo "Using image: $IMAGE_NAME"
 
 # AMI already imported by bootstrap-install.sh — discover the existing AMI
 echo "Discovering existing AMI (imported by bootstrap)..."
-AMI_ID=$(aws ec2 describe-images --query 'Images[0].ImageId' --output text)
+AMI_ID=$(aws ec2 describe-images --filters "Name=name,Values=ami-${IMAGE_NAME}" --query 'Images[0].ImageId' --output text)
 
 if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
     echo "Failed to capture AMI ID"
