@@ -22,6 +22,7 @@ linters:
     - errname # checks that sentinel errors are prefixed with Err, error types suffixed with Error
     - exptostd # detects golang.org/x/exp/ functions replaceable by stdlib
     - fatcontext # detects nested contexts in loops
+    - forcetypeassert # flags unchecked type assertions that can panic
     - gocheckcompilerdirectives # validates go compiler directive comments (//go:)
     - goprintffuncname # checks that printf-like functions are named with f at the end
     - gosec # inspects source code for security problems
