@@ -2124,6 +2124,105 @@ func TestTopologyHandler_AddNAT_MacvlanMode_CentralizedNAT(t *testing.T) {
 	}
 }
 
+func TestTopologyHandler_IGWAttach_VethMode_HasNatAddresses(t *testing.T) {
+	// In veth mode, the localnet port SHOULD have nat-addresses=router (centralized NAT)
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeVeth))
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name: "vpc-vpc-veth1",
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id": "vpc-veth1",
+			"spinifex:cidr":   "10.0.0.0/16",
+		},
+	})
+
+	evt := types.IGWEvent{InternetGatewayId: "igw-veth1", VpcId: "vpc-veth1"}
+	data, _ := json.Marshal(evt)
+	resp, err := nc.Request(TopicIGWAttach, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request vpc.igw-attach: %v", err)
+	}
+	assertSuccess(t, resp, "attach IGW veth")
+
+	port, err := mock.GetLogicalSwitchPort(ctx, "ext-port-vpc-veth1")
+	if err != nil {
+		t.Fatalf("expected localnet port: %v", err)
+	}
+	if port.Options["nat-addresses"] != "router" {
+		t.Errorf("veth mode should have nat-addresses=router, got %q", port.Options["nat-addresses"])
+	}
+}
+
+func TestTopologyHandler_AddNAT_VethMode_CentralizedNAT(t *testing.T) {
+	// In veth mode, DNAT rules should NOT have ExternalMAC/LogicalPort (centralized NAT)
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeVeth))
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name: "vpc-vpc-vnat1",
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id": "vpc-vnat1",
+			"spinifex:cidr":   "10.0.0.0/16",
+		},
+	})
+
+	evt := NATEvent{
+		VpcId:      "vpc-vnat1",
+		ExternalIP: "192.168.1.201",
+		LogicalIP:  "10.0.1.5",
+		PortName:   "port-eni-veth1",
+		MAC:        "02:00:00:aa:bb:cc",
+	}
+	data, _ := json.Marshal(evt)
+	resp, err := nc.Request(TopicAddNAT, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request vpc.add-nat: %v", err)
+	}
+	assertSuccess(t, resp, "add NAT veth")
+
+	router, err := mock.GetLogicalRouter(ctx, "vpc-vpc-vnat1")
+	if err != nil {
+		t.Fatalf("expected router: %v", err)
+	}
+	if len(router.NAT) != 1 {
+		t.Fatalf("expected 1 NAT rule, got %d", len(router.NAT))
+	}
+	nat := mock.nats[router.NAT[0]]
+	if nat.ExternalMAC != nil {
+		t.Errorf("veth mode should NOT have ExternalMAC, got %v", *nat.ExternalMAC)
+	}
+	if nat.LogicalPort != nil {
+		t.Errorf("veth mode should NOT have LogicalPort, got %v", *nat.LogicalPort)
+	}
+}
+
 func TestTopologyHandler_DefaultBridgeMode_IsMacvlan(t *testing.T) {
 	// When no bridge mode is set, it should default to macvlan behavior
 	topo := NewTopologyHandler(nil)
