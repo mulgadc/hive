@@ -75,9 +75,10 @@ func (hc *healthChecker) handleHealthReportDirect(report lbagent.HealthReport) {
 		return
 	}
 
+	// Collect changed TGs under the lock, then persist outside to avoid
+	// holding the mutex across KV store network I/O.
 	hc.mu.Lock()
-	defer hc.mu.Unlock()
-
+	var changedTGs []*TargetGroupRecord
 	for _, tg := range tgs {
 		changed := false
 		for i := range tg.Targets {
@@ -128,9 +129,14 @@ func (hc *healthChecker) handleHealthReportDirect(report lbagent.HealthReport) {
 		}
 
 		if changed {
-			if err := hc.store.PutTargetGroup(tg); err != nil {
-				slog.Error("healthChecker: failed to persist target group", "tgId", tg.TargetGroupID, "err", err)
-			}
+			changedTGs = append(changedTGs, tg)
+		}
+	}
+	hc.mu.Unlock()
+
+	for _, tg := range changedTGs {
+		if err := hc.store.PutTargetGroup(tg); err != nil {
+			slog.Error("healthChecker: failed to persist target group", "tgId", tg.TargetGroupID, "err", err)
 		}
 	}
 }
