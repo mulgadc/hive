@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -252,7 +253,7 @@ func waitForServer(timeout time.Duration) bool {
 
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		resp, err := client.Get(fmt.Sprintf("https://%s:%d/", testHost, testPort))
+		resp, err := client.Get("https://" + net.JoinHostPort(testHost, strconv.Itoa(testPort)) + "/")
 		if err == nil {
 			resp.Body.Close()
 			// Give a bit more time for config to load
@@ -273,7 +274,7 @@ func createS3Client(accessKey, secretKey string) *s3.S3 {
 
 	sess := session.Must(session.NewSession(&aws.Config{
 		Region:           aws.String(testRegion),
-		Endpoint:         aws.String(fmt.Sprintf("https://%s:%d", testHost, testPort)),
+		Endpoint:         aws.String("https://" + net.JoinHostPort(testHost, strconv.Itoa(testPort))),
 		Credentials:      credentials.NewStaticCredentials(accessKey, secretKey, ""),
 		S3ForcePathStyle: aws.Bool(true),
 		DisableSSL:       aws.Bool(false),

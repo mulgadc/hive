@@ -318,7 +318,8 @@ func TestNewReverseProxy_StripsPrefixAndSetsHost(t *testing.T) {
 			defer backend.Close()
 
 			// Use the test server's TLS transport.
-			transport := backend.Client().Transport.(*http.Transport)
+			transport, ok := backend.Client().Transport.(*http.Transport)
+			require.True(t, ok, "expected *http.Transport")
 
 			// Point the proxy at the test server instead of the real backend.
 			backendAddr := backend.Listener.Addr().String()

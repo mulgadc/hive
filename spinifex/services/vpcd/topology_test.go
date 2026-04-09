@@ -95,7 +95,9 @@ func TestTopologyHandler_VPCDelete(t *testing.T) {
 		t.Fatalf("request vpc.delete: %v", err)
 	}
 
-	var result struct{ Success bool }
+	var result struct {
+		Success bool `json:"Success"`
+	}
 	_ = json.Unmarshal(resp.Data, &result)
 	if !result.Success {
 		t.Fatal("vpc.delete failed")
