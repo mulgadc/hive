@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/mulgadc/spinifex/spinifex/utils"
 )
 
 // sudoCommand wraps exec.Command with sudo when running as non-root.
@@ -115,23 +117,14 @@ func OVSIfaceID(eniId string) string {
 
 // generateDevMAC creates a locally-administered unicast MAC for the dev/hostfwd NIC.
 // Uses prefix 02:de:00 to distinguish from ENI MACs (02:00:00).
-// All octets must be valid hex for QEMU's virtio-net-pci mac property.
 func generateDevMAC(instanceId string) string {
-	h := uint32(0)
-	for _, c := range instanceId {
-		h = h*31 + uint32(c) // #nosec G115 -- intentional overflow for hashing
-	}
-	return fmt.Sprintf("02:de:00:%02x:%02x:%02x", (h>>16)&0xff, (h>>8)&0xff, h&0xff)
+	return utils.HashMAC("02:de:00", instanceId)
 }
 
 // generateMgmtMAC creates a locally-administered unicast MAC for the management NIC.
 // Uses prefix 02:a0:00 to distinguish from ENI MACs (02:00:00) and dev MACs (02:de:00).
 func generateMgmtMAC(instanceId string) string {
-	h := uint32(0)
-	for _, c := range instanceId {
-		h = h*31 + uint32(c) // #nosec G115 -- intentional overflow for hashing
-	}
-	return fmt.Sprintf("02:a0:00:%02x:%02x:%02x", (h>>16)&0xff, (h>>8)&0xff, h&0xff)
+	return utils.HashMAC("02:a0:00", instanceId)
 }
 
 // MgmtTapName returns the Linux TAP device name for a management NIC.
