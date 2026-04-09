@@ -130,7 +130,9 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 		}
 		allocatedIP, poolName, allocErr := d.externalIPAM.AllocateIP(region, az, "auto_assign", instance.ENIId, instance.ID)
 		if allocErr != nil {
-			slog.Warn("LaunchSystemInstance: failed to allocate public IP", "instanceId", instance.ID, "err", allocErr)
+			slog.Error("LaunchSystemInstance: failed to allocate public IP for internet-facing ALB", "instanceId", instance.ID, "err", allocErr)
+			d.cleanupFailedSystemInstance(instance, instanceType)
+			return nil, fmt.Errorf("allocate public IP for internet-facing ALB: %w", allocErr)
 		} else {
 			publicIP = allocatedIP
 			if updateErr := d.vpcService.UpdateENIPublicIP(eniAccountID, instance.ENIId, publicIP, poolName); updateErr != nil {
