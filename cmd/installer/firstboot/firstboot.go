@@ -51,7 +51,10 @@ func Write(root string, cfg Config) error {
 	if err := writeBannerUnit(root); err != nil {
 		return fmt.Errorf("banner unit: %w", err)
 	}
-	return enableBannerUnit(root)
+	if err := enableBannerUnit(root); err != nil {
+		return err
+	}
+	return writeGettyDropIn(root)
 }
 
 func writeScript(root string, cfg Config) error {
@@ -137,15 +140,14 @@ func buildClusterCmd(cfg Config) string {
 }
 
 // writeBannerUnit writes the spinifex-banner.service unit that runs
-// `spx admin banner --boot-check` on every boot. This replaces the old
-// spinifex-banner.sh bash script with the CLI command, which also handles
-// management IP change detection.
+// `spx admin banner --boot-check` on every boot after spinifex.target is up.
+// Running After=spinifex.target ensures the banner reflects a settled system
+// state and that the IP check/restart happens once services are already running.
 func writeBannerUnit(root string) error {
 	unit := `[Unit]
 Description=Spinifex console banner and boot health check
-After=network-online.target
-Before=spinifex.target
-Wants=network-online.target
+After=spinifex.target
+Wants=spinifex.target
 
 [Service]
 Type=oneshot
@@ -170,4 +172,22 @@ func enableBannerUnit(root string) error {
 	target := "/etc/systemd/system/spinifex-banner.service"
 	_ = os.Remove(link)
 	return os.Symlink(target, link)
+}
+
+// writeGettyDropIn makes all getty instances (tty1, ttyS0, etc.) wait for
+// spinifex-banner.service before showing the login prompt. This ensures:
+//   - All spinifex services have settled (banner runs After=spinifex.target)
+//   - The /etc/motd banner is written before the user sees the login prompt
+//   - Service startup messages finish scrolling before the prompt appears
+func writeGettyDropIn(root string) error {
+	dropIn := `[Unit]
+After=spinifex-banner.service
+Wants=spinifex-banner.service
+`
+	// Drop-in on getty@.service applies to all instances: tty1, ttyS0, etc.
+	dropInDir := filepath.Join(root, "etc/systemd/system/getty@.service.d")
+	if err := os.MkdirAll(dropInDir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dropInDir, "spinifex-wait.conf"), []byte(dropIn), 0o644)
 }

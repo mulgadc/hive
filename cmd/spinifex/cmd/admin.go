@@ -2100,8 +2100,10 @@ func installCACertificate(caPemPath string) {
 	fmt.Printf("✅ CA certificate installed to system trust store\n")
 }
 
-// runAdminBanner writes the Spinifex console banner to /etc/issue and /etc/motd.
+// runAdminBanner writes the Spinifex console banner to /etc/motd.
 // With --boot-check it also detects management IP changes and updates node.conf.
+// All errors are logged as warnings — the command always exits 0 so a banner
+// failure never blocks the boot sequence.
 func runAdminBanner(cmd *cobra.Command, _ []string) {
 	bootCheck, _ := cmd.Flags().GetBool("boot-check")
 
@@ -2119,16 +2121,16 @@ func runAdminBanner(cmd *cobra.Command, _ []string) {
 		}
 	}
 
-	// Resolve current IP from the management interface.
+	// Resolve current IP from the management interface at runtime.
 	currentIP := resolveIfaceIP(iface)
 	if currentIP == "" {
-		currentIP = recordedIP // fall back to recorded value
+		currentIP = recordedIP // fall back to value recorded at install time
 	}
 	if currentIP == "" {
 		currentIP = "<unknown>"
 	}
 
-	if bootCheck && iface != "" && currentIP != recordedIP && recordedIP != "" {
+	if bootCheck && iface != "" && recordedIP != "" && currentIP != recordedIP {
 		slog.Info("Management IP changed", "old", recordedIP, "new", currentIP)
 		conf["MANAGEMENT_IP"] = currentIP
 		if err := writeNodeConf(nodeConf, conf); err != nil {
@@ -2136,8 +2138,8 @@ func runAdminBanner(cmd *cobra.Command, _ []string) {
 		} else {
 			slog.Info("Updated node.conf with new management IP", "ip", currentIP)
 		}
-		// Restart services that bind to the management IP.
-		restartCmd := exec.Command("systemctl", "restart", "spinifex.target")
+		// try-restart is safe even if the target isn't active yet.
+		restartCmd := exec.Command("systemctl", "try-restart", "spinifex.target")
 		restartCmd.Stdout = os.Stdout
 		restartCmd.Stderr = os.Stderr
 		if err := restartCmd.Run(); err != nil {
@@ -2164,14 +2166,37 @@ func runAdminBanner(cmd *cobra.Command, _ []string) {
 		"root@"+currentIP,
 	)
 
-	// Write to /etc/issue (shown before login on physical/serial console).
-	if err := os.WriteFile("/etc/issue", []byte(banner), 0o644); err != nil {
-		slog.Warn("Failed to write /etc/issue", "err", err)
-	}
-	// Write to /etc/motd (shown after SSH login).
-	if err := os.WriteFile("/etc/motd", []byte(banner), 0o644); err != nil {
+	// Append banner to /etc/motd, preserving any existing content (e.g. the
+	// Debian "ABSOLUTELY NO WARRANTY" disclaimer). A sentinel marks the start
+	// of our section so re-runs replace it cleanly rather than accumulating.
+	if err := appendBannerToMotd(banner); err != nil {
 		slog.Warn("Failed to write /etc/motd", "err", err)
 	}
+}
+
+// appendBannerToMotd appends the Spinifex banner to /etc/motd, preserving any
+// existing content. A sentinel line marks the start of the Spinifex section so
+// repeated runs replace only our section rather than accumulating duplicates.
+func appendBannerToMotd(banner string) error {
+	const (
+		motdPath = "/etc/motd"
+		sentinel = "# --- Spinifex ---\n"
+	)
+	existing, _ := os.ReadFile(motdPath)
+	base := string(existing)
+	// Strip any previous Spinifex section from the sentinel onwards.
+	if idx := strings.Index(base, sentinel); idx >= 0 {
+		base = base[:idx]
+	}
+	// Ensure a blank line separates the existing content from our banner.
+	if len(strings.TrimSpace(base)) > 0 && !strings.HasSuffix(base, "\n\n") {
+		if strings.HasSuffix(base, "\n") {
+			base += "\n"
+		} else {
+			base += "\n\n"
+		}
+	}
+	return os.WriteFile(motdPath, []byte(base+sentinel+banner), 0o644)
 }
 
 // parseNodeConf reads a KEY=VALUE shell-format file and returns a map.
