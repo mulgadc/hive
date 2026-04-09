@@ -266,7 +266,7 @@ func ChownRecursive(path, username string) {
 		// will retain their original ownership.
 		slog.Warn("ChownRecursive: OpenRoot not available, only top-level directory ownership changed",
 			"path", path, "err", rootErr)
-		if chownErr := os.Chown(path, uid, gid); chownErr != nil { // #nosec G122
+		if chownErr := os.Lchown(path, uid, gid); chownErr != nil {
 			slog.Warn("chown failed", "path", path, "err", chownErr)
 		}
 		return
