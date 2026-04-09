@@ -1,6 +1,9 @@
 package handlers_elbv2
 
-import "github.com/mulgadc/spinifex/spinifex/lbagent"
+import (
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/mulgadc/spinifex/spinifex/lbagent"
+)
 
 // LBAgentHeartbeatInput is sent by the LB agent on each heartbeat tick.
 // The agent includes its health report (HAProxy backend server statuses) so
@@ -38,22 +41,15 @@ type GetLBConfigOutput struct {
 // toHealthReport converts the heartbeat input's server list to the lbagent
 // HealthReport format used by handleHealthReportDirect.
 func (in *LBAgentHeartbeatInput) toHealthReport() lbagent.HealthReport {
-	report := lbagent.HealthReport{}
-	if in.LBID != nil {
-		report.LBID = *in.LBID
+	report := lbagent.HealthReport{
+		LBID: aws.StringValue(in.LBID),
 	}
 	for _, s := range in.Servers {
-		srv := lbagent.ServerStatus{}
-		if s.Backend != nil {
-			srv.Backend = *s.Backend
-		}
-		if s.Server != nil {
-			srv.Server = *s.Server
-		}
-		if s.Status != nil {
-			srv.Status = *s.Status
-		}
-		report.Servers = append(report.Servers, srv)
+		report.Servers = append(report.Servers, lbagent.ServerStatus{
+			Backend: aws.StringValue(s.Backend),
+			Server:  aws.StringValue(s.Server),
+			Status:  aws.StringValue(s.Status),
+		})
 	}
 	return report
 }
