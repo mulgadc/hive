@@ -3,19 +3,19 @@ package types
 import "sync"
 
 type EBSRequests struct {
-	Requests []EBSRequest `mapstructure:"ebs_requests"`
+	Requests []EBSRequest `json:"Requests" mapstructure:"ebs_requests"`
 	Mu       sync.Mutex   `json:"-"`
 }
 
 type EBSRequest struct {
-	Name                string
-	VolType             string
-	Boot                bool
-	EFI                 bool
-	CloudInit           bool
-	DeleteOnTermination bool
-	NBDURI              string // NBD URI - socket path (nbd:unix:/path.sock) or TCP (nbd://host:port)
-	DeviceName          string // AWS API device name (e.g. /dev/sdf) for hot-plugged volumes
+	Name                string `json:"Name"`
+	VolType             string `json:"VolType"`
+	Boot                bool   `json:"Boot"`
+	EFI                 bool   `json:"EFI"`
+	CloudInit           bool   `json:"CloudInit"`
+	DeleteOnTermination bool   `json:"DeleteOnTermination"`
+	NBDURI              string `json:"NBDURI"`     // NBD URI - socket path (nbd:unix:/path.sock) or TCP (nbd://host:port)
+	DeviceName          string `json:"DeviceName"` // AWS API device name (e.g. /dev/sdf) for hot-plugged volumes
 }
 
 // NBDTransport defines the transport type for NBD connections
@@ -29,44 +29,44 @@ const (
 )
 
 type EBSMountResponse struct {
-	URI     string
-	Mounted bool
-	Error   string
+	URI     string `json:"URI"`
+	Mounted bool   `json:"Mounted"`
+	Error   string `json:"Error"`
 }
 
 type EBSUnMountResponse struct {
-	Volume  string
-	Mounted bool
-	Error   string
+	Volume  string `json:"Volume"`
+	Mounted bool   `json:"Mounted"`
+	Error   string `json:"Error"`
 }
 
 type EBSSyncRequest struct {
-	Volume string
+	Volume string `json:"Volume"`
 }
 
 type EBSSyncResponse struct {
-	Volume string
-	Synced bool
-	Error  string
+	Volume string `json:"Volume"`
+	Synced bool   `json:"Synced"`
+	Error  string `json:"Error"`
 }
 
 type EBSDeleteRequest struct {
-	Volume string
+	Volume string `json:"Volume"`
 }
 
 type EBSDeleteResponse struct {
-	Volume  string
-	Success bool
-	Error   string
+	Volume  string `json:"Volume"`
+	Success bool   `json:"Success"`
+	Error   string `json:"Error"`
 }
 
 type EBSSnapshotRequest struct {
-	Volume     string
-	SnapshotID string
+	Volume     string `json:"Volume"`
+	SnapshotID string `json:"SnapshotID"`
 }
 
 type EBSSnapshotResponse struct {
-	SnapshotID string
-	Success    bool
-	Error      string
+	SnapshotID string `json:"SnapshotID"`
+	Success    bool   `json:"Success"`
+	Error      string `json:"Error"`
 }

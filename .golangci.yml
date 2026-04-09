@@ -22,6 +22,7 @@ linters:
     - errname # checks that sentinel errors are prefixed with Err, error types suffixed with Error
     - exptostd # detects golang.org/x/exp/ functions replaceable by stdlib
     - fatcontext # detects nested contexts in loops
+    - forcetypeassert # flags unchecked type assertions that can panic
     - gocheckcompilerdirectives # validates go compiler directive comments (//go:)
     - goprintffuncname # checks that printf-like functions are named with f at the end
     - gosec # inspects source code for security problems
@@ -29,11 +30,13 @@ linters:
     - ineffassign # detects assignments to existing variables that are not used
     - makezero # finds slice declarations with non-zero initial length followed by append
     - mirror # catches wrong mirror patterns in bytes/strings usage
+    - musttag # checks structs passed to marshal/unmarshal have proper tags
     - modernize # modernizes code to use newer Go idioms (go fix analyzers)
     - nakedret # finds naked returns in functions
     - nilerr # catches code that returns nil even after checking err != nil
     - nilnesserr # catches returning a different nil error variable after err != nil check
     - nolintlint # reports ill-formed or insufficient nolint directives
+    - nosprintfhostport # flags fmt.Sprintf host:port — use net.JoinHostPort for IPv6 safety
     - predeclared # catches shadowing of Go builtins (len, cap, error, etc.)
     - reassign # checks that package variables are not reassigned
     - recvcheck # checks for receiver type consistency (pointer vs value)

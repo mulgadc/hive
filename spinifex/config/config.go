@@ -55,81 +55,81 @@ type BootstrapConfig struct {
 // Config holds all configuration for the application
 type Config struct {
 	// Node config
-	Node     string   `mapstructure:"node"`
-	Host     string   `mapstructure:"host"` // Unique hostname or IP of this node
-	Region   string   `mapstructure:"region"`
-	AZ       string   `mapstructure:"az"`
-	DataDir  string   `mapstructure:"data_dir"`
-	Services []string `mapstructure:"services"` // Which services this node runs locally
+	Node     string   `json:"Node" mapstructure:"node"`
+	Host     string   `json:"Host" mapstructure:"host"` // Unique hostname or IP of this node
+	Region   string   `json:"Region" mapstructure:"region"`
+	AZ       string   `json:"AZ" mapstructure:"az"`
+	DataDir  string   `json:"DataDir" mapstructure:"data_dir"`
+	Services []string `json:"Services" mapstructure:"services"` // Which services this node runs locally
 
-	Daemon     DaemonConfig     `mapstructure:"daemon"`
-	NATS       NATSConfig       `mapstructure:"nats"`
-	Predastore PredastoreConfig `mapstructure:"predastore"`
-	Viperblock ViperblockConfig `mapstructure:"viperblock"`
-	AWSGW      AWSGWConfig      `mapstructure:"awsgw"`
-	VPCD       VPCDConfig       `mapstructure:"vpcd"`
+	Daemon     DaemonConfig     `json:"Daemon" mapstructure:"daemon"`
+	NATS       NATSConfig       `json:"NATS" mapstructure:"nats"`
+	Predastore PredastoreConfig `json:"Predastore" mapstructure:"predastore"`
+	Viperblock ViperblockConfig `json:"Viperblock" mapstructure:"viperblock"`
+	AWSGW      AWSGWConfig      `json:"AWSGW" mapstructure:"awsgw"`
+	VPCD       VPCDConfig       `json:"VPCD" mapstructure:"vpcd"`
 
-	BaseDir string `mapstructure:"base_dir"`
-	WalDir  string `mapstructure:"wal_dir"`
+	BaseDir string `json:"BaseDir" mapstructure:"base_dir"`
+	WalDir  string `json:"WalDir" mapstructure:"wal_dir"`
 }
 
 type AWSGWConfig struct {
-	Host    string `mapstructure:"host"`
-	TLSKey  string `mapstructure:"tlskey"`
-	TLSCert string `mapstructure:"tlscert"`
-	Config  string `mapstructure:"config"`
+	Host    string `json:"Host" mapstructure:"host"`
+	TLSKey  string `json:"TLSKey" mapstructure:"tlskey"`
+	TLSCert string `json:"TLSCert" mapstructure:"tlscert"`
+	Config  string `json:"Config" mapstructure:"config"`
 
-	Debug         bool `mapstructure:"debug"`
-	ExpectedNodes int  `mapstructure:"expected_nodes"` // TODO: Replace with root cluster config
+	Debug         bool `json:"Debug" mapstructure:"debug"`
+	ExpectedNodes int  `json:"ExpectedNodes" mapstructure:"expected_nodes"` // TODO: Replace with root cluster config
 }
 
 type ViperblockConfig struct {
-	ShardWAL *bool `mapstructure:"shardwal"` // Enable sharded WAL (default false when nil)
+	ShardWAL *bool `json:"ShardWAL" mapstructure:"shardwal"` // Enable sharded WAL (default false when nil)
 }
 
 // VPCDConfig holds the VPC daemon (vpcd) configuration.
 type VPCDConfig struct {
-	OVNNBAddr         string `mapstructure:"ovn_nb_addr"`        // OVN Northbound DB address (e.g., "tcp:127.0.0.1:6641")
-	OVNSBAddr         string `mapstructure:"ovn_sb_addr"`        // OVN Southbound DB address (e.g., "tcp:127.0.0.1:6642")
-	ExternalInterface string `mapstructure:"external_interface"` // WAN NIC name (e.g., "eth1", "enp0s3") — the physical NIC on the WAN bridge
-	WanBridge         string `mapstructure:"wan_bridge"`         // OVS bridge for WAN traffic (default "br-wan", maps to OVN "external" network)
-	BridgeMode        string `mapstructure:"bridge_mode"`        // "direct" or "macvlan" (auto-detected if empty)
+	OVNNBAddr         string `json:"OVNNBAddr" mapstructure:"ovn_nb_addr"`                // OVN Northbound DB address (e.g., "tcp:127.0.0.1:6641")
+	OVNSBAddr         string `json:"OVNSBAddr" mapstructure:"ovn_sb_addr"`                // OVN Southbound DB address (e.g., "tcp:127.0.0.1:6642")
+	ExternalInterface string `json:"ExternalInterface" mapstructure:"external_interface"` // WAN NIC name (e.g., "eth1", "enp0s3") — the physical NIC on the WAN bridge
+	WanBridge         string `json:"WanBridge" mapstructure:"wan_bridge"`                 // OVS bridge for WAN traffic (default "br-wan", maps to OVN "external" network)
+	BridgeMode        string `json:"BridgeMode" mapstructure:"bridge_mode"`               // "direct" or "macvlan" (auto-detected if empty)
 }
 
 type PredastoreConfig struct {
-	Host      string `mapstructure:"host"`
-	Bucket    string `mapstructure:"bucket"`
-	Region    string `mapstructure:"region"`
-	AccessKey string `mapstructure:"accesskey"`
-	SecretKey string `mapstructure:"secretkey"`
-	BaseDir   string `mapstructure:"base_dir"`
-	NodeID    int    `mapstructure:"node_id"`
+	Host      string `json:"Host" mapstructure:"host"`
+	Bucket    string `json:"Bucket" mapstructure:"bucket"`
+	Region    string `json:"Region" mapstructure:"region"`
+	AccessKey string `json:"AccessKey" mapstructure:"accesskey"`
+	SecretKey string `json:"SecretKey" mapstructure:"secretkey"`
+	BaseDir   string `json:"BaseDir" mapstructure:"base_dir"`
+	NodeID    int    `json:"NodeID" mapstructure:"node_id"`
 }
 
 // DaemonConfig holds the daemon configuration
 type DaemonConfig struct {
-	Host          string `mapstructure:"host"`
-	TLSKey        string `mapstructure:"tlskey"`
-	TLSCert       string `mapstructure:"tlscert"`
-	DevNetworking bool   `mapstructure:"dev_networking"` // VPC instances get both TAP + hostfwd for SSH dev access
-	MgmtBridge    string `mapstructure:"mgmt_bridge"`    // Linux bridge for system instance control plane (default "br-mgmt")
+	Host          string `json:"Host" mapstructure:"host"`
+	TLSKey        string `json:"TLSKey" mapstructure:"tlskey"`
+	TLSCert       string `json:"TLSCert" mapstructure:"tlscert"`
+	DevNetworking bool   `json:"DevNetworking" mapstructure:"dev_networking"` // VPC instances get both TAP + hostfwd for SSH dev access
+	MgmtBridge    string `json:"MgmtBridge" mapstructure:"mgmt_bridge"`       // Linux bridge for system instance control plane (default "br-mgmt")
 }
 
 // NATSConfig holds the NATS configuration
 type NATSConfig struct {
-	Host string  `mapstructure:"host"`
-	ACL  NATSACL `mapstructure:"acl"`
-	Sub  NATSSub `mapstructure:"sub"`
+	Host string  `json:"Host" mapstructure:"host"`
+	ACL  NATSACL `json:"ACL" mapstructure:"acl"`
+	Sub  NATSSub `json:"Sub" mapstructure:"sub"`
 }
 
 // NATSACL holds the NATS ACL configuration
 type NATSACL struct {
-	Token string `mapstructure:"token"`
+	Token string `json:"Token" mapstructure:"token"`
 }
 
 // NATSSub holds the NATS subscription configuration
 type NATSSub struct {
-	Subject string `mapstructure:"subject"`
+	Subject string `json:"Subject" mapstructure:"subject"`
 }
 
 // NodeBaseDir returns the BaseDir for the current node, or "" if the config

@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -117,7 +119,7 @@ func queryDBNodeStatus(ctx context.Context, out *DBNodeStatus, host string, port
 	}
 
 	// Query /health
-	healthURL := fmt.Sprintf("https://%s:%d/health", queryHost, port)
+	healthURL := "https://" + net.JoinHostPort(queryHost, strconv.Itoa(port)) + "/health"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
 	if err != nil {
 		return
@@ -131,7 +133,7 @@ func queryDBNodeStatus(ctx context.Context, out *DBNodeStatus, host string, port
 	out.Healthy = resp.StatusCode == http.StatusOK
 
 	// Query /status
-	statusURL := fmt.Sprintf("https://%s:%d/status", queryHost, port)
+	statusURL := "https://" + net.JoinHostPort(queryHost, strconv.Itoa(port)) + "/status"
 	req, err = http.NewRequestWithContext(ctx, http.MethodGet, statusURL, nil)
 	if err != nil {
 		return

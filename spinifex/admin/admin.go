@@ -843,7 +843,7 @@ func SetupAWSCredentials(accessKey, secretKey, region, certPath, bindIP string) 
 
 	if err := UpdateAWSINIFile(configPath, configSection, map[string]string{
 		"region":       region,
-		"endpoint_url": fmt.Sprintf("https://%s:9999", endpointHost),
+		"endpoint_url": "https://" + net.JoinHostPort(endpointHost, "9999"),
 		"ca_bundle":    certPath,
 		"output":       "json",
 	}); err != nil {

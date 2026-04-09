@@ -1801,7 +1801,7 @@ func runAccountCreate(cmd *cobra.Command, args []string) {
 			endpointHost = h
 		}
 	}
-	endpointURL := fmt.Sprintf("https://%s:9999", endpointHost)
+	endpointURL := "https://" + net.JoinHostPort(endpointHost, "9999")
 
 	credPath := filepath.Join(homeDir, ".aws", "credentials")
 	configPath := filepath.Join(homeDir, ".aws", "config")
