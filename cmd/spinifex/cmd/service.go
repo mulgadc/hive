@@ -287,6 +287,7 @@ var viperblockStartCmd = &cobra.Command{
 
 		service, err := service.New("viperblock", &viperblockd.Config{
 			NatsHost:   nodeConfig.NATS.Host,
+			NatsToken:  nodeConfig.NATS.ACL.Token,
 			PluginPath: pluginPath,
 			S3Host:     nodeConfig.Predastore.Host,
 			Bucket:     nodeConfig.Predastore.Bucket,
