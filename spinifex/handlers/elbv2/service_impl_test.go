@@ -7,6 +7,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/elbv2"
 	"github.com/mulgadc/spinifex/spinifex/testutil"
+	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1256,6 +1257,86 @@ func TestGetLBConfig_LBNotFound(t *testing.T) {
 		LBID: aws.String("lb-missing"),
 	}, testAccountID)
 	assert.Error(t, err)
+}
+
+func TestLBAgentHeartbeat_WrongAccount(t *testing.T) {
+	svc := setupTestService(t)
+
+	lb := &LoadBalancerRecord{
+		LoadBalancerArn: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/auth-lb/lb-auth1",
+		LoadBalancerID:  "lb-auth1",
+		Name:            "auth-lb",
+		State:           StateActive,
+		AccountID:       testAccountID,
+	}
+	require.NoError(t, svc.store.PutLoadBalancer(lb))
+
+	_, err := svc.LBAgentHeartbeat(&LBAgentHeartbeatInput{
+		LBID: aws.String("lb-auth1"),
+	}, "999999999999")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "LoadBalancerNotFound")
+}
+
+func TestLBAgentHeartbeat_SystemAccountAllowed(t *testing.T) {
+	svc := setupTestService(t)
+
+	lb := &LoadBalancerRecord{
+		LoadBalancerArn: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/sys-lb/lb-sys1",
+		LoadBalancerID:  "lb-sys1",
+		Name:            "sys-lb",
+		State:           StateActive,
+		AccountID:       testAccountID,
+	}
+	require.NoError(t, svc.store.PutLoadBalancer(lb))
+
+	out, err := svc.LBAgentHeartbeat(&LBAgentHeartbeatInput{
+		LBID: aws.String("lb-sys1"),
+	}, utils.GlobalAccountID)
+	require.NoError(t, err)
+	assert.Equal(t, StateActive, *out.Status)
+}
+
+func TestGetLBConfig_WrongAccount(t *testing.T) {
+	svc := setupTestService(t)
+
+	lb := &LoadBalancerRecord{
+		LoadBalancerArn: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/auth-cfg/lb-authcfg1",
+		LoadBalancerID:  "lb-authcfg1",
+		Name:            "auth-cfg",
+		State:           StateActive,
+		ConfigText:      "global\n",
+		ConfigHash:      "aaa",
+		AccountID:       testAccountID,
+	}
+	require.NoError(t, svc.store.PutLoadBalancer(lb))
+
+	_, err := svc.GetLBConfig(&GetLBConfigInput{
+		LBID: aws.String("lb-authcfg1"),
+	}, "999999999999")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "LoadBalancerNotFound")
+}
+
+func TestGetLBConfig_SystemAccountAllowed(t *testing.T) {
+	svc := setupTestService(t)
+
+	lb := &LoadBalancerRecord{
+		LoadBalancerArn: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/sys-cfg/lb-syscfg1",
+		LoadBalancerID:  "lb-syscfg1",
+		Name:            "sys-cfg",
+		State:           StateActive,
+		ConfigText:      "global\n    log stdout\n",
+		ConfigHash:      "bbb",
+		AccountID:       testAccountID,
+	}
+	require.NoError(t, svc.store.PutLoadBalancer(lb))
+
+	out, err := svc.GetLBConfig(&GetLBConfigInput{
+		LBID: aws.String("lb-syscfg1"),
+	}, utils.GlobalAccountID)
+	require.NoError(t, err)
+	assert.Equal(t, "global\n    log stdout\n", *out.ConfigText)
 }
 
 // --- updateStoredConfig tests ---
