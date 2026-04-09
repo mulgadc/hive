@@ -12,42 +12,52 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	agent, err := New("lb-test123", "https://gw:9999", "AKID", "SECRET")
+	agent, err := New("lb-test123", "https://gw:9999", "AKID", "SECRET", "us-east-1")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	if agent.lbID != "lb-test123" {
 		t.Errorf("lbID = %q, want %q", agent.lbID, "lb-test123")
 	}
+	if agent.region != "us-east-1" {
+		t.Errorf("region = %q, want %q", agent.region, "us-east-1")
+	}
 }
 
 func TestNew_EmptyLBID(t *testing.T) {
-	_, err := New("", "https://gw:9999", "AKID", "SECRET")
+	_, err := New("", "https://gw:9999", "AKID", "SECRET", "us-east-1")
 	if err == nil {
 		t.Fatal("expected error for empty lbID")
 	}
 }
 
 func TestNew_EmptyGatewayURL(t *testing.T) {
-	_, err := New("lb-test", "", "AKID", "SECRET")
+	_, err := New("lb-test", "", "AKID", "SECRET", "us-east-1")
 	if err == nil {
 		t.Fatal("expected error for empty gatewayURL")
 	}
 }
 
 func TestNew_EmptyCredentials(t *testing.T) {
-	_, err := New("lb-test", "https://gw:9999", "", "SECRET")
+	_, err := New("lb-test", "https://gw:9999", "", "SECRET", "us-east-1")
 	if err == nil {
 		t.Fatal("expected error for empty access key")
 	}
-	_, err = New("lb-test", "https://gw:9999", "AKID", "")
+	_, err = New("lb-test", "https://gw:9999", "AKID", "", "us-east-1")
 	if err == nil {
 		t.Fatal("expected error for empty secret key")
 	}
 }
 
+func TestNew_EmptyRegion(t *testing.T) {
+	_, err := New("lb-test", "https://gw:9999", "AKID", "SECRET", "")
+	if err == nil {
+		t.Fatal("expected error for empty region")
+	}
+}
+
 func TestNew_SocketPath(t *testing.T) {
-	agent, err := New("lb-sock123", "https://gw:9999", "AKID", "SECRET")
+	agent, err := New("lb-sock123", "https://gw:9999", "AKID", "SECRET", "us-east-1")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -86,7 +96,7 @@ func fakeGateway(t *testing.T, configHash, configText, status string) *httptest.
 
 func newTestAgent(t *testing.T, gwURL string) *Agent {
 	t.Helper()
-	agent, err := New("lb-test", gwURL, "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+	agent, err := New("lb-test", gwURL, "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "us-east-1")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

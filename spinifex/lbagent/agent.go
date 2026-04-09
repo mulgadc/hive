@@ -37,6 +37,7 @@ const (
 type Agent struct {
 	lbID       string
 	gatewayURL string
+	region     string // SigV4 signing region
 	configPath string
 	pidPath    string
 	socketPath string // HAProxy stats socket
@@ -54,7 +55,7 @@ type Agent struct {
 }
 
 // New creates a new LB agent for the given load balancer.
-func New(lbID, gatewayURL, accessKey, secretKey string) (*Agent, error) {
+func New(lbID, gatewayURL, accessKey, secretKey, region string) (*Agent, error) {
 	if lbID == "" {
 		return nil, fmt.Errorf("lbID is required")
 	}
@@ -63,6 +64,9 @@ func New(lbID, gatewayURL, accessKey, secretKey string) (*Agent, error) {
 	}
 	if accessKey == "" || secretKey == "" {
 		return nil, fmt.Errorf("access key and secret key are required")
+	}
+	if region == "" {
+		return nil, fmt.Errorf("region is required")
 	}
 
 	creds := credentials.NewStaticCredentials(accessKey, secretKey, "")
@@ -83,6 +87,7 @@ func New(lbID, gatewayURL, accessKey, secretKey string) (*Agent, error) {
 	return &Agent{
 		lbID:       lbID,
 		gatewayURL: strings.TrimRight(gatewayURL, "/"),
+		region:     region,
 		configPath: DefaultConfigPath,
 		pidPath:    DefaultPIDPath,
 		socketPath: fmt.Sprintf("/tmp/spinifex-haproxy/lb-%s.sock", lbID),
@@ -231,7 +236,7 @@ func (a *Agent) signedPost(params url.Values) ([]byte, error) {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	_, err = a.signer.Sign(req, bytes.NewReader([]byte(body)), "elasticloadbalancing", "us-east-1", time.Now())
+	_, err = a.signer.Sign(req, bytes.NewReader([]byte(body)), "elasticloadbalancing", a.region, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("sign request: %w", err)
 	}

@@ -8,7 +8,7 @@
 //	lb-agent --lb-id=lb-xxxxx --gateway=https://192.168.1.33:9999 --access-key=AKIA... --secret-key=...
 //
 // Flags default to environment variables set by cloud-init:
-// LB_LB_ID, LB_GATEWAY_URL, LB_ACCESS_KEY, LB_SECRET_KEY.
+// LB_LB_ID, LB_GATEWAY_URL, LB_ACCESS_KEY, LB_SECRET_KEY, LB_REGION.
 package main
 
 import (
@@ -27,6 +27,7 @@ func main() {
 		gatewayURL string
 		accessKey  string
 		secretKey  string
+		region     string
 	)
 
 	hostname, _ := os.Hostname()
@@ -35,6 +36,7 @@ func main() {
 	flag.StringVar(&gatewayURL, "gateway", os.Getenv("LB_GATEWAY_URL"), "Gateway URL (e.g. https://192.168.1.33:9999)")
 	flag.StringVar(&accessKey, "access-key", os.Getenv("LB_ACCESS_KEY"), "AWS access key ID")
 	flag.StringVar(&secretKey, "secret-key", os.Getenv("LB_SECRET_KEY"), "AWS secret access key")
+	flag.StringVar(&region, "region", envOrDefault("LB_REGION", "us-east-1"), "AWS region for SigV4 signing")
 	flag.Parse()
 
 	if lbID == "" {
@@ -52,7 +54,7 @@ func main() {
 
 	slog.Info("Starting LB agent", "lbId", lbID, "gateway", gatewayURL)
 
-	agent, err := lbagent.New(lbID, gatewayURL, accessKey, secretKey)
+	agent, err := lbagent.New(lbID, gatewayURL, accessKey, secretKey, region)
 	if err != nil {
 		slog.Error("Failed to create agent", "err", err)
 		os.Exit(1)

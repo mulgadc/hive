@@ -49,7 +49,8 @@ write_files:
       LB_GATEWAY_URL=%s
       LB_ACCESS_KEY=%s
       LB_SECRET_KEY=%s
-`, lbID, s.gatewayURL, s.systemAccessKey, s.systemSecretKey)
+      LB_REGION=%s
+`, lbID, s.gatewayURL, s.systemAccessKey, s.systemSecretKey, s.region)
 
 	// When AWSGW binds to a specific IP (multi-node), add a host route via
 	// the management NIC so the agent can reach the gateway. bootcmd runs

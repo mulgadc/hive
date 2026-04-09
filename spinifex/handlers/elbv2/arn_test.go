@@ -38,6 +38,7 @@ func TestLbVMUserData_ContainsLBID(t *testing.T) {
 		gatewayURL:      "https://192.168.1.33:9999",
 		systemAccessKey: "AKIAIOSFODNN7EXAMPLE",
 		systemSecretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+		region:          "ap-southeast-2",
 	}
 	ud, err := svc.lbVMUserData("lb-abc123")
 	require.NoError(t, err)
@@ -48,6 +49,7 @@ func TestLbVMUserData_ContainsLBID(t *testing.T) {
 	assert.Contains(t, ud, "LB_GATEWAY_URL=https://192.168.1.33:9999")
 	assert.Contains(t, ud, "LB_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE")
 	assert.Contains(t, ud, "LB_SECRET_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+	assert.Contains(t, ud, "LB_REGION=ap-southeast-2")
 	// NATS URL should no longer be present
 	assert.NotContains(t, ud, "NATS")
 }
