@@ -3,11 +3,9 @@ package handlers_elbv2
 import (
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/mulgadc/spinifex/spinifex/lbagent"
-	"github.com/nats-io/nats-server/v2/server"
-	"github.com/nats-io/nats.go"
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -81,29 +79,12 @@ func TestEvaluateHealth_DrainingUnchanged(t *testing.T) {
 
 // --- integration: handleHealthReport directly ---
 
-func setupTestNATS(t *testing.T) (*nats.Conn, *Store) {
+func setupTestNATS(t *testing.T) *Store {
 	t.Helper()
-	opts := &server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		JetStream: true,
-		StoreDir:  t.TempDir(),
-		NoLog:     true,
-		NoSigs:    true,
-	}
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err)
-	go ns.Start()
-	require.True(t, ns.ReadyForConnections(5*time.Second))
-	t.Cleanup(func() { ns.Shutdown() })
-
-	nc, err := nats.Connect(ns.ClientURL())
-	require.NoError(t, err)
-	t.Cleanup(func() { nc.Close() })
-
+	_, nc, _ := testutil.StartTestJetStream(t)
 	store, err := NewStore(nc)
 	require.NoError(t, err)
-	return nc, store
+	return store
 }
 
 // setupLBWithTG creates a load balancer, listener, and target group wired
@@ -130,7 +111,7 @@ func setupLBWithTG(t *testing.T, store *Store, lbID string, tg *TargetGroupRecor
 }
 
 func TestHandleHealthReport_TransitionsInitialToHealthy(t *testing.T) {
-	_, store := setupTestNATS(t)
+	store := setupTestNATS(t)
 
 	hc := newHealthChecker(store)
 
@@ -161,7 +142,7 @@ func TestHandleHealthReport_TransitionsInitialToHealthy(t *testing.T) {
 }
 
 func TestHandleHealthReport_UnhealthyAfterThreshold(t *testing.T) {
-	_, store := setupTestNATS(t)
+	store := setupTestNATS(t)
 
 	hc := newHealthChecker(store)
 
@@ -200,7 +181,7 @@ func TestHandleHealthReport_UnhealthyAfterThreshold(t *testing.T) {
 }
 
 func TestHandleHealthReport_SkipsDrainingTargets(t *testing.T) {
-	_, store := setupTestNATS(t)
+	store := setupTestNATS(t)
 
 	hc := newHealthChecker(store)
 
@@ -253,7 +234,7 @@ func TestStartStop(t *testing.T) {
 }
 
 func TestHandleHealthReport_InvalidJSON(t *testing.T) {
-	_, store := setupTestNATS(t)
+	store := setupTestNATS(t)
 	hc := newHealthChecker(store)
 
 	// Should not panic — invalid JSON is silently discarded.
@@ -261,7 +242,7 @@ func TestHandleHealthReport_InvalidJSON(t *testing.T) {
 }
 
 func TestHandleHealthReport_EmptyServers(t *testing.T) {
-	_, store := setupTestNATS(t)
+	store := setupTestNATS(t)
 	hc := newHealthChecker(store)
 
 	report := lbagent.HealthReport{LBID: "lb-empty", Servers: nil}
@@ -271,7 +252,7 @@ func TestHandleHealthReport_EmptyServers(t *testing.T) {
 }
 
 func TestHandleHealthReport_TargetPortZeroUsesTGPort(t *testing.T) {
-	_, store := setupTestNATS(t)
+	store := setupTestNATS(t)
 	hc := newHealthChecker(store)
 
 	tg := &TargetGroupRecord{
@@ -307,7 +288,7 @@ func TestHandleHealthReport_TargetPortZeroUsesTGPort(t *testing.T) {
 }
 
 func TestHandleHealthReportDirect_TransitionsInitialToHealthy(t *testing.T) {
-	_, store := setupTestNATS(t)
+	store := setupTestNATS(t)
 	hc := newHealthChecker(store)
 
 	tg := &TargetGroupRecord{
@@ -336,7 +317,7 @@ func TestHandleHealthReportDirect_TransitionsInitialToHealthy(t *testing.T) {
 }
 
 func TestHandleHealthReportDirect_EmptyServersIsNoOp(t *testing.T) {
-	_, store := setupTestNATS(t)
+	store := setupTestNATS(t)
 	hc := newHealthChecker(store)
 
 	// Should return immediately without touching the store.
@@ -344,7 +325,7 @@ func TestHandleHealthReportDirect_EmptyServersIsNoOp(t *testing.T) {
 }
 
 func TestHandleHealthReport_OnlyProcessesTGsForReportingLB(t *testing.T) {
-	_, store := setupTestNATS(t)
+	store := setupTestNATS(t)
 	hc := newHealthChecker(store)
 
 	// TG attached to lb-A
@@ -391,7 +372,7 @@ func TestHandleHealthReport_OnlyProcessesTGsForReportingLB(t *testing.T) {
 }
 
 func TestHandleHealthReport_FallbackListTargetGroups(t *testing.T) {
-	_, store := setupTestNATS(t)
+	store := setupTestNATS(t)
 	hc := newHealthChecker(store)
 
 	// Store a TG with a target — no LB linkage needed because empty LBID
