@@ -1176,6 +1176,17 @@ func TestLBAgentHeartbeat_ProcessesHealthReport(t *testing.T) {
 	}
 	require.NoError(t, svc.store.PutTargetGroup(tg))
 
+	// Wire LB → listener → TG so the health checker can resolve the TG from the LBID.
+	require.NoError(t, svc.store.PutListener(&ListenerRecord{
+		ListenerArn:     lb.LoadBalancerArn + "/listener-1",
+		ListenerID:      "lst-hr1",
+		LoadBalancerArn: lb.LoadBalancerArn,
+		Protocol:        "HTTP",
+		Port:            80,
+		DefaultActions:  []ListenerAction{{Type: ActionTypeForward, TargetGroupArn: tg.TargetGroupArn}},
+		AccountID:       testAccountID,
+	}))
+
 	srvName := sanitizeName("srv", "i-target1")
 	_, err := svc.LBAgentHeartbeat(&LBAgentHeartbeatInput{
 		LBID: aws.String("lb-hr1"),

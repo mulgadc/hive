@@ -106,6 +106,29 @@ func setupTestNATS(t *testing.T) (*nats.Conn, *Store) {
 	return nc, store
 }
 
+// setupLBWithTG creates a load balancer, listener, and target group wired
+// together so that TargetGroupsForLB can resolve TGs from the LBID.
+func setupLBWithTG(t *testing.T, store *Store, lbID string, tg *TargetGroupRecord) {
+	t.Helper()
+	lbArn := "arn:aws:elasticloadbalancing:us-east-1:000:loadbalancer/app/test/" + lbID
+	require.NoError(t, store.PutLoadBalancer(&LoadBalancerRecord{
+		LoadBalancerArn: lbArn,
+		LoadBalancerID:  lbID,
+		Name:            "test-lb",
+		State:           StateActive,
+	}))
+	require.NoError(t, store.PutListener(&ListenerRecord{
+		ListenerArn:     lbArn + "/listener-1",
+		ListenerID:      lbID + "-lis",
+		LoadBalancerArn: lbArn,
+		Protocol:        "HTTP",
+		Port:            80,
+		DefaultActions: []ListenerAction{
+			{Type: ActionTypeForward, TargetGroupArn: tg.TargetGroupArn},
+		},
+	}))
+}
+
 func TestHandleHealthReport_TransitionsInitialToHealthy(t *testing.T) {
 	_, store := setupTestNATS(t)
 
@@ -121,6 +144,7 @@ func TestHandleHealthReport_TransitionsInitialToHealthy(t *testing.T) {
 		},
 	}
 	require.NoError(t, store.PutTargetGroup(tg))
+	setupLBWithTG(t, store, "lb-test1", tg)
 
 	report := lbagent.HealthReport{
 		LBID: "lb-test1",
@@ -154,6 +178,7 @@ func TestHandleHealthReport_UnhealthyAfterThreshold(t *testing.T) {
 		},
 	}
 	require.NoError(t, store.PutTargetGroup(tg))
+	setupLBWithTG(t, store, "lb-test2", tg)
 
 	srvName := sanitizeName("srv", "i-bbb222")
 
@@ -189,6 +214,7 @@ func TestHandleHealthReport_SkipsDrainingTargets(t *testing.T) {
 		},
 	}
 	require.NoError(t, store.PutTargetGroup(tg))
+	setupLBWithTG(t, store, "lb-test3", tg)
 
 	report := lbagent.HealthReport{
 		LBID: "lb-test3",
@@ -258,6 +284,7 @@ func TestHandleHealthReport_TargetPortZeroUsesTGPort(t *testing.T) {
 		},
 	}
 	require.NoError(t, store.PutTargetGroup(tg))
+	setupLBWithTG(t, store, "lb-p0", tg)
 
 	report := lbagent.HealthReport{
 		LBID: "lb-p0",
@@ -293,6 +320,7 @@ func TestHandleHealthReportDirect_TransitionsInitialToHealthy(t *testing.T) {
 		},
 	}
 	require.NoError(t, store.PutTargetGroup(tg))
+	setupLBWithTG(t, store, "lb-direct", tg)
 
 	// Call handleHealthReportDirect with a struct — no JSON round-trip.
 	hc.handleHealthReportDirect(lbagent.HealthReport{
@@ -313,6 +341,53 @@ func TestHandleHealthReportDirect_EmptyServersIsNoOp(t *testing.T) {
 
 	// Should return immediately without touching the store.
 	hc.handleHealthReportDirect(lbagent.HealthReport{LBID: "lb-empty", Servers: nil})
+}
+
+func TestHandleHealthReport_OnlyProcessesTGsForReportingLB(t *testing.T) {
+	_, store := setupTestNATS(t)
+	hc := newHealthChecker(store)
+
+	// TG attached to lb-A
+	tgA := &TargetGroupRecord{
+		TargetGroupArn: "arn:aws:elasticloadbalancing:us-east-1:000:targetgroup/test/tg-a",
+		TargetGroupID:  "tg-a",
+		Port:           80,
+		HealthCheck:    DefaultHealthCheck(),
+		Targets: []Target{
+			{Id: "i-shared", Port: 80, HealthState: TargetHealthInitial, PrivateIP: "10.0.0.1"},
+		},
+	}
+	require.NoError(t, store.PutTargetGroup(tgA))
+	setupLBWithTG(t, store, "lb-A", tgA)
+
+	// TG attached to lb-B — same target ID, different TG
+	tgB := &TargetGroupRecord{
+		TargetGroupArn: "arn:aws:elasticloadbalancing:us-east-1:000:targetgroup/test/tg-b",
+		TargetGroupID:  "tg-b",
+		Port:           80,
+		HealthCheck:    DefaultHealthCheck(),
+		Targets: []Target{
+			{Id: "i-shared", Port: 80, HealthState: TargetHealthInitial, PrivateIP: "10.0.0.2"},
+		},
+	}
+	require.NoError(t, store.PutTargetGroup(tgB))
+	setupLBWithTG(t, store, "lb-B", tgB)
+
+	// Report from lb-A — only tg-a should be updated.
+	hc.handleHealthReportDirect(lbagent.HealthReport{
+		LBID: "lb-A",
+		Servers: []lbagent.ServerStatus{
+			{Backend: "bk_tg-a", Server: sanitizeName("srv", "i-shared"), Status: "UP"},
+		},
+	})
+
+	storedA, err := store.GetTargetGroup("tg-a")
+	require.NoError(t, err)
+	assert.Equal(t, TargetHealthHealthy, storedA.Targets[0].HealthState, "tg-a should be updated")
+
+	storedB, err := store.GetTargetGroup("tg-b")
+	require.NoError(t, err)
+	assert.Equal(t, TargetHealthInitial, storedB.Targets[0].HealthState, "tg-b must NOT be updated by lb-A's report")
 }
 
 func TestEvaluateHealth_ZeroThresholdsUsesDefaults(t *testing.T) {

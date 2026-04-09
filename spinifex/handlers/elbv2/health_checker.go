@@ -70,10 +70,17 @@ func (hc *healthChecker) handleHealthReportDirect(report lbagent.HealthReport) {
 		serverUp[srv.Server] = srv.Status == "UP"
 	}
 
-	// Find all target groups and match servers by name
-	tgs, err := hc.store.ListTargetGroups()
+	// Look up only the target groups attached to this LB's listeners.
+	// Falls back to scanning all target groups if LBID is missing.
+	var tgs []*TargetGroupRecord
+	var err error
+	if report.LBID != "" {
+		tgs, err = hc.store.TargetGroupsForLB(report.LBID)
+	} else {
+		tgs, err = hc.store.ListTargetGroups()
+	}
 	if err != nil {
-		slog.Debug("healthChecker: failed to list target groups", "err", err)
+		slog.Debug("healthChecker: failed to list target groups", "lbId", report.LBID, "err", err)
 		return
 	}
 
