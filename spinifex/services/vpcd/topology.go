@@ -916,11 +916,13 @@ func (h *TopologyHandler) handleAddNAT(msg *nats.Msg) {
 	}
 
 	// Remove any stale NAT rule for the same external IP before adding the new
-	// one. This prevents duplicate DNAT rules when a public IP is reused quickly
-	// (e.g. instance terminated, IP returned to pool, new LB allocated same IP
-	// before the fire-and-forget vpc.delete-nat was processed).
-	if err := h.ovn.DeleteNATByExternalIP(ctx, routerName, "dnat_and_snat", evt.ExternalIP); err != nil {
-		slog.Debug("vpcd: no existing NAT rule to clean up for external IP", "external_ip", evt.ExternalIP, "err", err)
+	// one. Search ALL routers, not just the target — stale rules may exist on a
+	// different VPC's router when vpc.delete-nat (fire-and-forget) hasn't been
+	// processed before the IP was reused by a new VPC.
+	if removed, err := h.ovn.DeleteAllNATsByExternalIP(ctx, "dnat_and_snat", evt.ExternalIP); err != nil {
+		slog.Warn("vpcd: failed to clean up stale NAT rules for external IP", "external_ip", evt.ExternalIP, "err", err)
+	} else if removed > 0 {
+		slog.Info("vpcd: cleaned up stale NAT rules before re-add", "external_ip", evt.ExternalIP, "removed", removed)
 	}
 
 	if err := h.ovn.AddNAT(ctx, routerName, natRule); err != nil {

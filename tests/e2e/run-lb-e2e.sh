@@ -677,7 +677,21 @@ if [ "$PEER_AVAILABLE" = true ]; then
         echo "  Attempt $attempt/20: ALB not yet responding..."
         sleep 5
     done
-    if [ "$CONNECTIVITY_OK" = true ]; then pass "host can reach ALB via public IP"; else fail "host cannot reach ALB at $ALB_URL"; fi
+    if [ "$CONNECTIVITY_OK" = true ]; then
+        pass "host can reach ALB via public IP"
+    else
+        fail "host cannot reach ALB at $ALB_URL"
+        echo "  --- Host connectivity diagnostics ---"
+        echo "  ARP table for ALB IP:"
+        ip neigh show to "$ALB_PUBLIC_IP" 2>/dev/null || arp -n "$ALB_PUBLIC_IP" 2>/dev/null || echo "    (no entry)"
+        echo "  Route to ALB IP:"
+        ip route get "$ALB_PUBLIC_IP" 2>/dev/null || true
+        echo "  OVN NAT rules for $ALB_PUBLIC_IP:"
+        sudo ovn-nbctl --columns=external_ip,logical_ip,type find NAT external_ip="$ALB_PUBLIC_IP" 2>/dev/null || echo "    (ovn-nbctl not available)"
+        echo "  br-ext ports:"
+        sudo ovs-vsctl list-ports br-ext 2>/dev/null || true
+        echo "  ---"
+    fi
 
     run_http_traffic_test "$ALB_URL" "ALB inet (host)"
 
@@ -690,7 +704,19 @@ if [ "$PEER_AVAILABLE" = true ]; then
             echo "  Attempt $attempt/20..."
             sleep 5
         done
-        if [ "$NLB_RESPONDING" = true ]; then pass "NLB responding via public IP"; else fail "NLB not responding at ${NLB_PUBLIC_IP}:9000"; fi
+        if [ "$NLB_RESPONDING" = true ]; then
+            pass "NLB responding via public IP"
+        else
+            fail "NLB not responding at ${NLB_PUBLIC_IP}:9000"
+            echo "  --- Host connectivity diagnostics ---"
+            echo "  ARP table for NLB IP:"
+            ip neigh show to "$NLB_PUBLIC_IP" 2>/dev/null || arp -n "$NLB_PUBLIC_IP" 2>/dev/null || echo "    (no entry)"
+            echo "  Route to NLB IP:"
+            ip route get "$NLB_PUBLIC_IP" 2>/dev/null || true
+            echo "  OVN NAT rules for $NLB_PUBLIC_IP:"
+            sudo ovn-nbctl --columns=external_ip,logical_ip,type find NAT external_ip="$NLB_PUBLIC_IP" 2>/dev/null || echo "    (ovn-nbctl not available)"
+            echo "  ---"
+        fi
 
         run_tcp_traffic_test "$NLB_PUBLIC_IP" 9000 "NLB inet (host)"
     fi

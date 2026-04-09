@@ -403,6 +403,43 @@ func (m *MockOVNClient) DeleteNATByExternalIP(_ context.Context, routerName stri
 	return nil
 }
 
+func (m *MockOVNClient) DeleteAllNATsByExternalIP(_ context.Context, natType, externalIP string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Find all matching NAT rules.
+	var foundUUIDs []string
+	for uuid, n := range m.nats {
+		if n.Type == natType && n.ExternalIP == externalIP {
+			foundUUIDs = append(foundUUIDs, uuid)
+		}
+	}
+	if len(foundUUIDs) == 0 {
+		return 0, nil
+	}
+
+	// Remove from all routers that reference them.
+	uuidSet := make(map[string]struct{}, len(foundUUIDs))
+	for _, u := range foundUUIDs {
+		uuidSet[u] = struct{}{}
+	}
+	for _, lr := range m.routers {
+		filtered := lr.NAT[:0]
+		for _, uuid := range lr.NAT {
+			if _, stale := uuidSet[uuid]; !stale {
+				filtered = append(filtered, uuid)
+			}
+		}
+		lr.NAT = filtered
+	}
+
+	// Delete the NAT rows.
+	for _, u := range foundUUIDs {
+		delete(m.nats, u)
+	}
+	return len(foundUUIDs), nil
+}
+
 // Static Routes
 
 func (m *MockOVNClient) AddStaticRoute(_ context.Context, routerName string, route *nbdb.LogicalRouterStaticRoute) error {
