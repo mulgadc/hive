@@ -915,6 +915,14 @@ func (h *TopologyHandler) handleAddNAT(msg *nats.Msg) {
 			"external_ip", evt.ExternalIP, "port", evt.PortName, "mac", evt.MAC)
 	}
 
+	// Remove any stale NAT rule for the same external IP before adding the new
+	// one. This prevents duplicate DNAT rules when a public IP is reused quickly
+	// (e.g. instance terminated, IP returned to pool, new LB allocated same IP
+	// before the fire-and-forget vpc.delete-nat was processed).
+	if err := h.ovn.DeleteNATByExternalIP(ctx, routerName, "dnat_and_snat", evt.ExternalIP); err != nil {
+		slog.Debug("vpcd: no existing NAT rule to clean up for external IP", "external_ip", evt.ExternalIP, "err", err)
+	}
+
 	if err := h.ovn.AddNAT(ctx, routerName, natRule); err != nil {
 		slog.Error("vpcd: failed to add dnat_and_snat rule", "router", routerName, "externalIP", evt.ExternalIP, "logicalIP", evt.LogicalIP, "err", err)
 		respond(msg, err)

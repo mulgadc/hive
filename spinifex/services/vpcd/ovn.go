@@ -75,6 +75,7 @@ type OVNClient interface {
 	// NAT rules
 	AddNAT(ctx context.Context, routerName string, nat *nbdb.NAT) error
 	DeleteNAT(ctx context.Context, routerName string, natType, logicalIP string) error
+	DeleteNATByExternalIP(ctx context.Context, routerName string, natType, externalIP string) error
 
 	// Static routes
 	AddStaticRoute(ctx context.Context, routerName string, route *nbdb.LogicalRouterStaticRoute) error
@@ -627,6 +628,50 @@ func (c *LiveOVNClient) DeleteNAT(ctx context.Context, routerName string, natTyp
 	err = c.transactOps(ctx, ops)
 	if err != nil {
 		return fmt.Errorf("delete NAT transact: %w", err)
+	}
+	return nil
+}
+
+// DeleteNATByExternalIP removes a NAT rule matching the given external IP.
+// Returns an error if no matching rule is found (callers can ignore this).
+func (c *LiveOVNClient) DeleteNATByExternalIP(ctx context.Context, routerName string, natType, externalIP string) error {
+	var nats []nbdb.NAT
+	err := c.client.WhereCache(func(n *nbdb.NAT) bool {
+		return n.Type == natType && n.ExternalIP == externalIP
+	}).List(ctx, &nats)
+	if err != nil {
+		return fmt.Errorf("find NAT by external IP: %w", err)
+	}
+	if len(nats) == 0 {
+		return fmt.Errorf("NAT %s external_ip=%s not found", natType, externalIP)
+	}
+
+	lr, err := c.GetLogicalRouter(ctx, routerName)
+	if err != nil {
+		return fmt.Errorf("get logical router for NAT delete: %w", err)
+	}
+
+	var allOps []ovsdb.Operation
+	for i := range nats {
+		nat := &nats[i]
+		mutateOps, mErr := c.client.Where(lr).Mutate(lr, model.Mutation{
+			Field:   &lr.NAT,
+			Mutator: "delete",
+			Value:   []string{nat.UUID},
+		})
+		if mErr != nil {
+			return fmt.Errorf("mutate router NAT ops: %w", mErr)
+		}
+		deleteOps, dErr := c.client.Where(nat).Delete()
+		if dErr != nil {
+			return fmt.Errorf("delete NAT ops: %w", dErr)
+		}
+		allOps = append(allOps, mutateOps...)
+		allOps = append(allOps, deleteOps...)
+	}
+
+	if err := c.transactOps(ctx, allOps); err != nil {
+		return fmt.Errorf("delete NAT by external IP transact: %w", err)
 	}
 	return nil
 }

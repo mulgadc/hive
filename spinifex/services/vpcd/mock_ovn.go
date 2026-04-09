@@ -375,6 +375,34 @@ func (m *MockOVNClient) DeleteNAT(_ context.Context, routerName string, natType,
 	return nil
 }
 
+func (m *MockOVNClient) DeleteNATByExternalIP(_ context.Context, routerName string, natType, externalIP string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lr, exists := m.routers[routerName]
+	if !exists {
+		return fmt.Errorf("logical router %q not found", routerName)
+	}
+	var foundUUIDs []string
+	for uuid, n := range m.nats {
+		if n.Type == natType && n.ExternalIP == externalIP {
+			foundUUIDs = append(foundUUIDs, uuid)
+		}
+	}
+	if len(foundUUIDs) == 0 {
+		return fmt.Errorf("NAT %s external_ip=%s not found", natType, externalIP)
+	}
+	for _, foundUUID := range foundUUIDs {
+		for i, uuid := range lr.NAT {
+			if uuid == foundUUID {
+				lr.NAT = append(lr.NAT[:i], lr.NAT[i+1:]...)
+				break
+			}
+		}
+		delete(m.nats, foundUUID)
+	}
+	return nil
+}
+
 // Static Routes
 
 func (m *MockOVNClient) AddStaticRoute(_ context.Context, routerName string, route *nbdb.LogicalRouterStaticRoute) error {
