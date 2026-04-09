@@ -1508,6 +1508,55 @@ func TestGetSystemAMI(t *testing.T) {
 	assert.Equal(t, "ami-system-001", svc.getSystemAMI())
 }
 
+func TestGetSystemAMI_RetryOnEmpty(t *testing.T) {
+	svc := setupTestService(t)
+
+	calls := 0
+	svc.SetSystemAMIFunc(func() string {
+		calls++
+		if calls < 3 {
+			return "" // simulate image not imported yet
+		}
+		return "ami-system-001"
+	})
+
+	// First two calls return empty — should NOT be cached
+	assert.Empty(t, svc.getSystemAMI())
+	assert.Empty(t, svc.getSystemAMI())
+	assert.Equal(t, 2, calls)
+
+	// Third call finds the image — should be cached from now on
+	assert.Equal(t, "ami-system-001", svc.getSystemAMI())
+	assert.Equal(t, 3, calls)
+
+	// Subsequent calls return cached value without calling the func again
+	assert.Equal(t, "ami-system-001", svc.getSystemAMI())
+	assert.Equal(t, 3, calls)
+}
+
+func TestGetSystemInstanceType_RetryOnEmpty(t *testing.T) {
+	svc := setupTestService(t)
+
+	calls := 0
+	svc.SetSystemInstanceTypeFunc(func() string {
+		calls++
+		if calls < 2 {
+			return ""
+		}
+		return "t3.micro"
+	})
+
+	assert.Empty(t, svc.getSystemInstanceType())
+	assert.Equal(t, 1, calls)
+
+	assert.Equal(t, "t3.micro", svc.getSystemInstanceType())
+	assert.Equal(t, 2, calls)
+
+	// Cached
+	assert.Equal(t, "t3.micro", svc.getSystemInstanceType())
+	assert.Equal(t, 2, calls)
+}
+
 func TestGetSystemAMI_Concurrent(t *testing.T) {
 	svc := setupTestService(t)
 	svc.SetSystemAMIFunc(func() string { return "ami-system-001" })

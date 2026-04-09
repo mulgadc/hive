@@ -77,27 +77,29 @@ var _ ELBv2Service = (*ELBv2ServiceImpl)(nil)
 
 // ELBv2ServiceImpl implements ELBv2 operations with NATS JetStream persistence.
 type ELBv2ServiceImpl struct {
-	config                 *config.Config
-	store                  *Store
-	nc                     *nats.Conn                       // NATS connection for JetStream KV store
-	vpcService             *handlers_ec2_vpc.VPCServiceImpl // nil-safe: ENI ops skipped when nil (e.g. in tests)
-	instanceLauncher       SystemInstanceLauncher           // nil-safe: system VM ops skipped when nil
-	nodeID                 string
-	region                 string
-	systemAMI              string        // AMI ID for system VMs (ALB VMs); resolved lazily via systemAMIFunc
-	systemAMIFunc          func() string // returns the current system AMI ID (queries image store)
-	systemAMIOnce          sync.Once     // guards lazy resolution of systemAMI
-	systemInstanceType     string        // instance type for system VMs; resolved lazily via systemInstanceTypeFunc
-	systemInstanceTypeFunc func() string // returns the smallest available instance type
-	systemInstanceTypeOnce sync.Once     // guards lazy resolution of systemInstanceType
-	systemAccessKey        string        // System account access key for ALB agent SigV4 auth
-	systemSecretKey        string        // System account secret key for ALB agent SigV4 auth
-	gatewayURL             string        // AWS gateway URL for ALB agent outbound connections
-	mgmtRouteGateway       string        // br-mgmt IP (next-hop for mgmt route); empty when AWSGW is on 0.0.0.0
-	mgmtRouteTarget        string        // AWSGW bind IP to route via mgmt NIC
-	ctx                    context.Context
-	cancel                 context.CancelFunc
-	hc                     *healthChecker
+	config                     *config.Config
+	store                      *Store
+	nc                         *nats.Conn                       // NATS connection for JetStream KV store
+	vpcService                 *handlers_ec2_vpc.VPCServiceImpl // nil-safe: ENI ops skipped when nil (e.g. in tests)
+	instanceLauncher           SystemInstanceLauncher           // nil-safe: system VM ops skipped when nil
+	nodeID                     string
+	region                     string
+	systemAMI                  string        // AMI ID for system VMs (ALB VMs); resolved lazily via systemAMIFunc
+	systemAMIFunc              func() string // returns the current system AMI ID (queries image store)
+	systemAMIMu                sync.Mutex    // guards lazy resolution of systemAMI
+	systemAMIResolved          bool          // true once systemAMI has been resolved to a non-empty value
+	systemInstanceType         string        // instance type for system VMs; resolved lazily via systemInstanceTypeFunc
+	systemInstanceTypeFunc     func() string // returns the smallest available instance type
+	systemInstanceTypeMu       sync.Mutex    // guards lazy resolution of systemInstanceType
+	systemInstanceTypeResolved bool          // true once systemInstanceType has been resolved to a non-empty value
+	systemAccessKey            string        // System account access key for ALB agent SigV4 auth
+	systemSecretKey            string        // System account secret key for ALB agent SigV4 auth
+	gatewayURL                 string        // AWS gateway URL for ALB agent outbound connections
+	mgmtRouteGateway           string        // br-mgmt IP (next-hop for mgmt route); empty when AWSGW is on 0.0.0.0
+	mgmtRouteTarget            string        // AWSGW bind IP to route via mgmt NIC
+	ctx                        context.Context
+	cancel                     context.CancelFunc
+	hc                         *healthChecker
 }
 
 // NewELBv2ServiceImplWithNATS creates an ELBv2 service backed by JetStream KV.
@@ -162,34 +164,56 @@ func (s *ELBv2ServiceImpl) SetInstanceLauncher(launcher SystemInstanceLauncher) 
 // This is called at request time so the AMI is discovered even if imported
 // after the daemon starts.
 func (s *ELBv2ServiceImpl) SetSystemAMIFunc(fn func() string) {
+	s.systemAMIMu.Lock()
+	defer s.systemAMIMu.Unlock()
 	s.systemAMIFunc = fn
-	s.systemAMIOnce = sync.Once{}
+	s.systemAMI = ""
+	s.systemAMIResolved = false
 }
 
 // getSystemAMI returns the system AMI ID, resolving it lazily if needed.
+// Only caches non-empty results so the resolver retries when the image
+// has not been imported yet.
 func (s *ELBv2ServiceImpl) getSystemAMI() string {
-	s.systemAMIOnce.Do(func() {
-		if s.systemAMIFunc != nil {
-			s.systemAMI = s.systemAMIFunc()
-		}
-	})
+	s.systemAMIMu.Lock()
+	defer s.systemAMIMu.Unlock()
+	if s.systemAMIResolved {
+		return s.systemAMI
+	}
+	if s.systemAMIFunc != nil {
+		s.systemAMI = s.systemAMIFunc()
+	}
+	if s.systemAMI != "" {
+		s.systemAMIResolved = true
+	}
 	return s.systemAMI
 }
 
 // SetSystemInstanceTypeFunc sets a function that resolves the smallest available
 // instance type. Called at request time so it adapts to node capacity.
 func (s *ELBv2ServiceImpl) SetSystemInstanceTypeFunc(fn func() string) {
+	s.systemInstanceTypeMu.Lock()
+	defer s.systemInstanceTypeMu.Unlock()
 	s.systemInstanceTypeFunc = fn
-	s.systemInstanceTypeOnce = sync.Once{}
+	s.systemInstanceType = ""
+	s.systemInstanceTypeResolved = false
 }
 
 // getSystemInstanceType returns the instance type for system VMs.
+// Only caches non-empty results so the resolver retries when no capacity
+// is available yet.
 func (s *ELBv2ServiceImpl) getSystemInstanceType() string {
-	s.systemInstanceTypeOnce.Do(func() {
-		if s.systemInstanceTypeFunc != nil {
-			s.systemInstanceType = s.systemInstanceTypeFunc()
-		}
-	})
+	s.systemInstanceTypeMu.Lock()
+	defer s.systemInstanceTypeMu.Unlock()
+	if s.systemInstanceTypeResolved {
+		return s.systemInstanceType
+	}
+	if s.systemInstanceTypeFunc != nil {
+		s.systemInstanceType = s.systemInstanceTypeFunc()
+	}
+	if s.systemInstanceType != "" {
+		s.systemInstanceTypeResolved = true
+	}
 	return s.systemInstanceType
 }
 

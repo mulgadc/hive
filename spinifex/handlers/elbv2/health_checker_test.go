@@ -390,6 +390,37 @@ func TestHandleHealthReport_OnlyProcessesTGsForReportingLB(t *testing.T) {
 	assert.Equal(t, TargetHealthInitial, storedB.Targets[0].HealthState, "tg-b must NOT be updated by lb-A's report")
 }
 
+func TestHandleHealthReport_FallbackListTargetGroups(t *testing.T) {
+	_, store := setupTestNATS(t)
+	hc := newHealthChecker(store)
+
+	// Store a TG with a target — no LB linkage needed because empty LBID
+	// triggers the ListTargetGroups fallback path.
+	tg := &TargetGroupRecord{
+		TargetGroupArn: "arn:aws:elasticloadbalancing:us-east-1:000:targetgroup/test/tg-fb",
+		TargetGroupID:  "tg-fb",
+		Port:           80,
+		HealthCheck:    DefaultHealthCheck(),
+		Targets: []Target{
+			{Id: "i-fallback", Port: 80, HealthState: TargetHealthInitial, PrivateIP: "10.0.0.99"},
+		},
+	}
+	require.NoError(t, store.PutTargetGroup(tg))
+
+	// Report with empty LBID → should fall back to ListTargetGroups
+	hc.handleHealthReportDirect(lbagent.HealthReport{
+		LBID: "",
+		Servers: []lbagent.ServerStatus{
+			{Backend: "bk_tg-fb", Server: sanitizeName("srv", "i-fallback"), Status: "UP"},
+			{Backend: "bk_tg-fb", Server: "srv_unknown", Status: "UP"}, // unknown server → skipped
+		},
+	})
+
+	stored, err := store.GetTargetGroup("tg-fb")
+	require.NoError(t, err)
+	assert.Equal(t, TargetHealthHealthy, stored.Targets[0].HealthState)
+}
+
 func TestEvaluateHealth_ZeroThresholdsUsesDefaults(t *testing.T) {
 	cfg := HealthCheckConfig{} // all zeros
 

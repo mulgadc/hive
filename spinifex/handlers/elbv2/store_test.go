@@ -389,3 +389,37 @@ func TestPutLoadBalancer_Update(t *testing.T) {
 	assert.Equal(t, StateFailed, got.State)
 	assert.Equal(t, []string{"eni-111", "eni-222"}, got.ENIs)
 }
+
+func TestTargetGroupsForLB(t *testing.T) {
+	store := setupTestStore(t)
+
+	// Non-existent LB returns nil, nil
+	tgs, err := store.TargetGroupsForLB("nonexistent")
+	require.NoError(t, err)
+	assert.Nil(t, tgs)
+
+	// Create LB, TG, and listener linking them
+	lb := newTestLB("tgflb1", "my-alb")
+	tg := newTestTG("tg001", "my-tg")
+	require.NoError(t, store.PutLoadBalancer(lb))
+	require.NoError(t, store.PutTargetGroup(tg))
+
+	listener := &ListenerRecord{
+		ListenerArn:     "arn:aws:elasticloadbalancing:us-east-1:" + testAccountID + ":listener/app/my-alb/tgflb1/lst1",
+		ListenerID:      "lst1",
+		LoadBalancerArn: lb.LoadBalancerArn,
+		Protocol:        ProtocolHTTP,
+		Port:            80,
+		DefaultActions: []ListenerAction{
+			{Type: ActionTypeForward, TargetGroupArn: tg.TargetGroupArn},
+			{Type: ActionTypeForward, TargetGroupArn: ""}, // empty ARN should be skipped
+		},
+		AccountID: testAccountID,
+	}
+	require.NoError(t, store.PutListener(listener))
+
+	tgs, err = store.TargetGroupsForLB("tgflb1")
+	require.NoError(t, err)
+	require.Len(t, tgs, 1)
+	assert.Equal(t, "tg001", tgs[0].TargetGroupID)
+}
