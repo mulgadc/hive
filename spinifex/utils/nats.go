@@ -77,6 +77,17 @@ func NATSRequest[Out any](conn *nats.Conn, subject string, input any, timeout ti
 	return &output, nil
 }
 
+const (
+	// maxScatterGatherResponseSize is the maximum allowed size for a single
+	// scatter-gather response payload (10 MB). Responses exceeding this are
+	// skipped to prevent OOM from buggy nodes.
+	maxScatterGatherResponseSize = 10 * 1024 * 1024
+
+	// maxScatterGatherUnboundedResponses is the hard cap on responses collected
+	// when expectedNodes is 0 (unbounded fan-out).
+	maxScatterGatherUnboundedResponses = 256
+)
+
 // NATSScatterGather publishes a fan-out request and collects responses from
 // multiple nodes. It returns the first successful (non-error) response. Error
 // payloads from individual nodes are skipped. If all responses are errors, the
@@ -108,8 +119,13 @@ func NATSScatterGather[Out any](conn *nats.Conn, subject string, input any, time
 	responsesReceived := 0
 	var lastErr error
 
+	maxResponses := maxScatterGatherUnboundedResponses
+	if expectedNodes > 0 {
+		maxResponses = expectedNodes
+	}
+
 	for time.Now().Before(deadline) {
-		if expectedNodes > 0 && responsesReceived >= expectedNodes {
+		if responsesReceived >= maxResponses {
 			break
 		}
 
@@ -124,6 +140,11 @@ func NATSScatterGather[Out any](conn *nats.Conn, subject string, input any, time
 				break
 			}
 			return nil, fmt.Errorf("scatter-gather receive error: %w", err)
+		}
+
+		if len(msg.Data) > maxScatterGatherResponseSize {
+			slog.Warn("ScatterGather: skipping oversized response", "subject", subject, "size", len(msg.Data))
+			continue
 		}
 
 		responsesReceived++

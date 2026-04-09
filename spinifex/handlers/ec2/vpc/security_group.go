@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -325,6 +326,11 @@ func (s *VPCServiceImpl) AuthorizeSecurityGroupIngress(input *ec2.AuthorizeSecur
 
 	// Convert AWS IpPermissions to SGRules
 	newRules := ipPermissionsToSGRules(input.IpPermissions)
+	for _, nr := range newRules {
+		if slices.Contains(record.IngressRules, nr) {
+			return nil, errors.New(awserrors.ErrorInvalidPermissionDuplicate)
+		}
+	}
 	record.IngressRules = append(record.IngressRules, newRules...)
 
 	data, err := json.Marshal(record)
@@ -370,6 +376,11 @@ func (s *VPCServiceImpl) AuthorizeSecurityGroupEgress(input *ec2.AuthorizeSecuri
 	}
 
 	newRules := ipPermissionsToSGRules(input.IpPermissions)
+	for _, nr := range newRules {
+		if slices.Contains(record.EgressRules, nr) {
+			return nil, errors.New(awserrors.ErrorInvalidPermissionDuplicate)
+		}
+	}
 	record.EgressRules = append(record.EgressRules, newRules...)
 
 	data, err := json.Marshal(record)
