@@ -1483,22 +1483,11 @@ func (d *Daemon) handleEC2DescribeInstanceAttribute(msg *nats.Msg) {
 
 // publishNATEvent publishes a NAT lifecycle event (vpc.add-nat or vpc.delete-nat) to NATS.
 func (d *Daemon) publishNATEvent(topic, vpcId, externalIP, logicalIP, portName, mac string) {
-	if d.natsConn == nil {
-		return
-	}
-	evt := struct {
+	utils.PublishEvent(d.natsConn, topic, struct {
 		VpcId      string `json:"vpc_id"`
 		ExternalIP string `json:"external_ip"`
 		LogicalIP  string `json:"logical_ip"`
 		PortName   string `json:"port_name"`
 		MAC        string `json:"mac"`
-	}{VpcId: vpcId, ExternalIP: externalIP, LogicalIP: logicalIP, PortName: portName, MAC: mac}
-	data, err := json.Marshal(evt)
-	if err != nil {
-		slog.Error("Failed to marshal NAT event", "topic", topic, "err", err)
-		return
-	}
-	if err := d.natsConn.Publish(topic, data); err != nil {
-		slog.Error("Failed to publish NAT event", "topic", topic, "err", err)
-	}
+	}{VpcId: vpcId, ExternalIP: externalIP, LogicalIP: logicalIP, PortName: portName, MAC: mac})
 }

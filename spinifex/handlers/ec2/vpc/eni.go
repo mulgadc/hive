@@ -155,7 +155,10 @@ func (s *VPCServiceImpl) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfac
 	// Release auto-assigned public IP (if any) and remove NAT rule.
 	// Skip if the public IP belongs to an EIP — those are managed independently.
 	if record.PublicIpAddress != "" && s.externalIPAM != nil {
-		if s.isEIPOwned(eniId, accountID) {
+		owned, err := s.isEIPOwned(eniId, accountID)
+		if err != nil {
+			slog.Error("DeleteNetworkInterface: failed to check EIP ownership, skipping public IP release to avoid data loss", "eniId", eniId, "err", err)
+		} else if owned {
 			slog.Debug("DeleteNetworkInterface: public IP owned by EIP, skipping release", "eniId", eniId, "publicIp", record.PublicIpAddress)
 		} else {
 			portName := "port-" + eniId
@@ -576,36 +579,28 @@ func (s *VPCServiceImpl) publishENIEvent(topic, eniId, subnetId, vpcId, privateI
 
 // publishNATEvent publishes a NAT lifecycle event (vpc.add-nat or vpc.delete-nat) to NATS.
 func (s *VPCServiceImpl) publishNATEvent(topic, vpcId, externalIP, logicalIP, portName, mac string) {
-	if s.natsConn == nil {
-		return
-	}
-	evt := struct {
+	utils.PublishEvent(s.natsConn, topic, struct {
 		VpcId      string `json:"vpc_id"`
 		ExternalIP string `json:"external_ip"`
 		LogicalIP  string `json:"logical_ip"`
 		PortName   string `json:"port_name"`
 		MAC        string `json:"mac"`
-	}{VpcId: vpcId, ExternalIP: externalIP, LogicalIP: logicalIP, PortName: portName, MAC: mac}
-	data, err := json.Marshal(evt)
-	if err != nil {
-		slog.Error("Failed to marshal NAT event", "topic", topic, "err", err)
-		return
-	}
-	if err := s.natsConn.Publish(topic, data); err != nil {
-		slog.Error("Failed to publish NAT event", "topic", topic, "err", err)
-	}
+	}{VpcId: vpcId, ExternalIP: externalIP, LogicalIP: logicalIP, PortName: portName, MAC: mac})
 }
 
 // isEIPOwned checks whether the given ENI's public IP is owned by an Elastic IP.
-// Returns true if an EIP record references this ENI, meaning the public IP should
-// not be released when the ENI is deleted.
-func (s *VPCServiceImpl) isEIPOwned(eniId, accountID string) bool {
+// Returns (true, nil) if an EIP record references this ENI, (false, nil) if none
+// match, or (false, err) if the KV store could not be read.
+func (s *VPCServiceImpl) isEIPOwned(eniId, accountID string) (bool, error) {
 	if s.eipKV == nil {
-		return false
+		return false, nil
 	}
 	keys, err := s.eipKV.Keys()
 	if err != nil {
-		return false
+		if errors.Is(err, nats.ErrNoKeysFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("eipKV.Keys: %w", err)
 	}
 	prefix := accountID + "."
 	for _, k := range keys {
@@ -614,17 +609,18 @@ func (s *VPCServiceImpl) isEIPOwned(eniId, accountID string) bool {
 		}
 		entry, err := s.eipKV.Get(k)
 		if err != nil {
-			continue
+			return false, fmt.Errorf("eipKV.Get(%s): %w", k, err)
 		}
 		var record struct {
 			ENIId string `json:"eni_id"`
 		}
 		if err := json.Unmarshal(entry.Value(), &record); err != nil {
+			slog.Warn("isEIPOwned: malformed EIP record", "key", k, "err", err)
 			continue
 		}
 		if record.ENIId == eniId {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
