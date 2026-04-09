@@ -1348,3 +1348,82 @@ func TestSetSystemInstanceTypeFunc(t *testing.T) {
 	svc.systemInstanceTypeFunc = func() string { return "t3.large" }
 	assert.Equal(t, "t3.micro", svc.getSystemInstanceType())
 }
+
+func TestSetMgmtRoute(t *testing.T) {
+	svc := setupTestService(t)
+	svc.SetMgmtRoute("10.15.8.1", "10.15.8.100")
+	assert.Equal(t, "10.15.8.1", svc.mgmtRouteGateway)
+	assert.Equal(t, "10.15.8.100", svc.mgmtRouteTarget)
+}
+
+func TestLBVMUserData_MgmtRoute(t *testing.T) {
+	svc := setupTestService(t)
+	svc.SetMgmtRoute("10.15.8.1", "10.15.8.100")
+	svc.SetGatewayURL("https://10.15.8.100:9999")
+	svc.SetSystemCredentials("AK", "SK")
+
+	data := svc.lbVMUserData("lb-test1")
+	assert.Contains(t, data, "bootcmd:")
+	assert.Contains(t, data, `"10.15.8.100/32"`)
+	assert.Contains(t, data, `"10.15.8.1"`)
+}
+
+func TestIsCompatibleProtocol_UnknownListenerProtocol(t *testing.T) {
+	assert.False(t, isCompatibleProtocol("SCTP", ProtocolTCP))
+	assert.False(t, isCompatibleProtocol("", ProtocolHTTP))
+}
+
+func TestCreateListener_TargetGroupNotFound(t *testing.T) {
+	svc := setupTestService(t)
+
+	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("tg-missing-lb"),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	_, err = svc.CreateListener(&elbv2.CreateListenerInput{
+		LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+		Protocol:        aws.String(ProtocolHTTP),
+		Port:            aws.Int64(80),
+		DefaultActions: []*elbv2.Action{
+			{
+				Type:           aws.String(ActionTypeForward),
+				TargetGroupArn: aws.String("arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/no-exist/tg-nope"),
+			},
+		},
+	}, testAccountID)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "TargetGroupNotFound")
+}
+
+func TestUpdateStoredConfig_MissingTargetGroup(t *testing.T) {
+	svc := setupTestService(t)
+
+	lb := &LoadBalancerRecord{
+		LoadBalancerArn: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/miss-tg/lb-misstg",
+		LoadBalancerID:  "lb-misstg",
+		Name:            "miss-tg",
+		State:           StateActive,
+		InstanceID:      "i-sys-misstg",
+		AccountID:       testAccountID,
+	}
+	require.NoError(t, svc.store.PutLoadBalancer(lb))
+
+	listener := &ListenerRecord{
+		ListenerArn:     "arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/app/miss-tg/lb-misstg/lst-misstg",
+		ListenerID:      "lst-misstg",
+		LoadBalancerArn: lb.LoadBalancerArn,
+		Protocol:        ProtocolHTTP,
+		Port:            80,
+		DefaultActions:  []ListenerAction{{Type: ActionTypeForward, TargetGroupArn: "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/gone/tg-gone"}},
+		AccountID:       testAccountID,
+	}
+	require.NoError(t, svc.store.PutListener(listener))
+
+	// Should not panic — skips missing TG and generates config with no backends
+	svc.updateStoredConfig(lb)
+
+	stored, err := svc.store.GetLoadBalancer("lb-misstg")
+	require.NoError(t, err)
+	assert.NotEmpty(t, stored.ConfigHash)
+}

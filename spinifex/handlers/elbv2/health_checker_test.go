@@ -225,3 +225,70 @@ func TestStartStop(t *testing.T) {
 	// stop is a no-op — should not panic
 	hc.stop()
 }
+
+func TestHandleHealthReport_InvalidJSON(t *testing.T) {
+	_, store := setupTestNATS(t)
+	hc := newHealthChecker(store)
+
+	// Should not panic — invalid JSON is silently discarded.
+	hc.handleHealthReport([]byte(`{bad json`))
+}
+
+func TestHandleHealthReport_EmptyServers(t *testing.T) {
+	_, store := setupTestNATS(t)
+	hc := newHealthChecker(store)
+
+	report := lbagent.HealthReport{LBID: "lb-empty", Servers: nil}
+	data, _ := json.Marshal(report)
+	// Should return early without touching the store.
+	hc.handleHealthReport(data)
+}
+
+func TestHandleHealthReport_TargetPortZeroUsesTGPort(t *testing.T) {
+	_, store := setupTestNATS(t)
+	hc := newHealthChecker(store)
+
+	tg := &TargetGroupRecord{
+		TargetGroupArn: "arn:aws:elasticloadbalancing:us-east-1:000:targetgroup/test/tg-p0",
+		TargetGroupID:  "tg-p0",
+		Port:           8080,
+		HealthCheck:    DefaultHealthCheck(),
+		Targets: []Target{
+			{Id: "i-port0", Port: 0, HealthState: TargetHealthInitial, PrivateIP: "10.0.0.50"},
+		},
+	}
+	require.NoError(t, store.PutTargetGroup(tg))
+
+	report := lbagent.HealthReport{
+		LBID: "lb-p0",
+		Servers: []lbagent.ServerStatus{
+			{Backend: "bk_tg-p0", Server: sanitizeName("srv", "i-port0"), Status: "UP"},
+		},
+	}
+	data, _ := json.Marshal(report)
+	hc.handleHealthReport(data)
+
+	stored, err := store.GetTargetGroup("tg-p0")
+	require.NoError(t, err)
+	assert.Equal(t, TargetHealthHealthy, stored.Targets[0].HealthState)
+
+	// Verify the counter key uses the TG port (8080) not target port (0)
+	hc.mu.Lock()
+	_, ok := hc.counters["tg-p0:i-port0:8080"]
+	hc.mu.Unlock()
+	assert.True(t, ok, "counter key should use TG default port 8080")
+}
+
+func TestEvaluateHealth_ZeroThresholdsUsesDefaults(t *testing.T) {
+	cfg := HealthCheckConfig{} // all zeros
+
+	// Unhealthy→healthy should require DefaultHealthyThreshold consecutive healthy
+	ctr := &targetCounter{consecutiveHealthy: DefaultHealthyThreshold}
+	state, _ := evaluateHealth(TargetHealthUnhealthy, ctr, cfg)
+	assert.Equal(t, TargetHealthHealthy, state)
+
+	// Healthy→unhealthy should require DefaultUnhealthyThreshold consecutive unhealthy
+	ctr2 := &targetCounter{consecutiveUnhealthy: DefaultUnhealthyThreshold}
+	state2, _ := evaluateHealth(TargetHealthHealthy, ctr2, cfg)
+	assert.Equal(t, TargetHealthUnhealthy, state2)
+}
