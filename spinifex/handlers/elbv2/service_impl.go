@@ -261,15 +261,15 @@ func (s *ELBv2ServiceImpl) resolveENIBindAddr(lb *LoadBalancerRecord) string {
 // stores both ConfigText and ConfigHash on the LB record. The agent pulls this
 // on its next heartbeat when it detects a hash change. Safe to call when
 // instanceLauncher is nil or the LB has no VM.
-func (s *ELBv2ServiceImpl) updateStoredConfig(lb *LoadBalancerRecord) {
+func (s *ELBv2ServiceImpl) updateStoredConfig(lb *LoadBalancerRecord) error {
 	if lb.InstanceID == "" {
-		return
+		return nil
 	}
 
 	listeners, err := s.store.ListListenersByLB(lb.LoadBalancerArn)
 	if err != nil {
 		slog.Error("updateStoredConfig: failed to list listeners", "lbArn", lb.LoadBalancerArn, "err", err)
-		return
+		return fmt.Errorf("list listeners: %w", err)
 	}
 
 	bindAddr := s.resolveENIBindAddr(lb)
@@ -296,7 +296,7 @@ func (s *ELBv2ServiceImpl) updateStoredConfig(lb *LoadBalancerRecord) {
 	configContent, err := GenerateHAProxyConfig(lb, listeners, tgByArn, bindAddr)
 	if err != nil {
 		slog.Error("updateStoredConfig: failed to generate config", "lbId", lb.LoadBalancerID, "err", err)
-		return
+		return fmt.Errorf("generate config: %w", err)
 	}
 
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(configContent)))
@@ -305,20 +305,21 @@ func (s *ELBv2ServiceImpl) updateStoredConfig(lb *LoadBalancerRecord) {
 
 	if err := s.store.PutLoadBalancer(lb); err != nil {
 		slog.Error("updateStoredConfig: failed to persist LB", "lbId", lb.LoadBalancerID, "err", err)
-		return
+		return fmt.Errorf("persist LB: %w", err)
 	}
 
 	slog.Info("updateStoredConfig: config stored",
 		"lbId", lb.LoadBalancerID, "hash", hash[:12], "size", len(configContent))
+	return nil
 }
 
 // updateStoredConfigForTargetGroup finds all LBs that reference the given target
 // group (via listeners) and updates their stored config.
-func (s *ELBv2ServiceImpl) updateStoredConfigForTargetGroup(tgArn string) {
+func (s *ELBv2ServiceImpl) updateStoredConfigForTargetGroup(tgArn string) error {
 	allListeners, err := s.store.ListListeners()
 	if err != nil {
 		slog.Error("updateStoredConfigForTargetGroup: failed to list listeners", "err", err)
-		return
+		return fmt.Errorf("list listeners: %w", err)
 	}
 
 	lbArns := make(map[string]bool)
@@ -335,8 +336,11 @@ func (s *ELBv2ServiceImpl) updateStoredConfigForTargetGroup(tgArn string) {
 		if lbErr != nil || lb == nil {
 			continue
 		}
-		s.updateStoredConfig(lb)
+		if err := s.updateStoredConfig(lb); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // LBAgentHeartbeat processes a heartbeat from an LB agent. On first heartbeat,
@@ -1071,7 +1075,10 @@ func (s *ELBv2ServiceImpl) RegisterTargets(input *elbv2.RegisterTargetsInput, ac
 	}
 
 	// Reload HAProxy for any LBs that reference this target group
-	s.updateStoredConfigForTargetGroup(tg.TargetGroupArn)
+	if err := s.updateStoredConfigForTargetGroup(tg.TargetGroupArn); err != nil {
+		slog.Error("RegisterTargets: failed to update config", "arn", *input.TargetGroupArn, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
 
 	slog.Info("RegisterTargets completed", "tgArn", *input.TargetGroupArn, "targetsAdded", len(input.Targets), "accountID", accountID)
 
@@ -1122,7 +1129,10 @@ func (s *ELBv2ServiceImpl) DeregisterTargets(input *elbv2.DeregisterTargetsInput
 	}
 
 	// Reload HAProxy for any LBs that reference this target group
-	s.updateStoredConfigForTargetGroup(tg.TargetGroupArn)
+	if err := s.updateStoredConfigForTargetGroup(tg.TargetGroupArn); err != nil {
+		slog.Error("DeregisterTargets: failed to update config", "arn", *input.TargetGroupArn, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
 
 	slog.Info("DeregisterTargets completed", "tgArn", *input.TargetGroupArn, "targetsRemoved", len(input.Targets), "accountID", accountID)
 
@@ -1283,7 +1293,10 @@ func (s *ELBv2ServiceImpl) CreateListener(input *elbv2.CreateListenerInput, acco
 	}
 
 	// Start or reload HAProxy now that a listener exists
-	s.updateStoredConfig(lb)
+	if err := s.updateStoredConfig(lb); err != nil {
+		slog.Error("CreateListener: failed to update config", "listenerId", listenerID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
 
 	slog.Info("CreateListener completed", "listenerArn", listenerArn, "lbArn", lb.LoadBalancerArn, "port", port, "accountID", accountID)
 
@@ -1314,7 +1327,10 @@ func (s *ELBv2ServiceImpl) DeleteListener(input *elbv2.DeleteListenerInput, acco
 	// Reload or stop HAProxy after listener removal
 	lb, lbErr := s.store.GetLoadBalancerByArn(listener.LoadBalancerArn)
 	if lbErr == nil && lb != nil {
-		s.updateStoredConfig(lb)
+		if err := s.updateStoredConfig(lb); err != nil {
+			slog.Error("DeleteListener: failed to update config", "listenerArn", *input.ListenerArn, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
 	}
 
 	slog.Info("DeleteListener completed", "listenerArn", *input.ListenerArn, "accountID", accountID)

@@ -1428,7 +1428,7 @@ func TestUpdateStoredConfig_StoresConfigAndHash(t *testing.T) {
 	}
 	require.NoError(t, svc.store.PutListener(listener))
 
-	svc.updateStoredConfig(lb)
+	require.NoError(t, svc.updateStoredConfig(lb))
 
 	stored, err := svc.store.GetLoadBalancer("lb-upd1")
 	require.NoError(t, err)
@@ -1449,7 +1449,7 @@ func TestUpdateStoredConfig_SkipsWhenNoInstance(t *testing.T) {
 	}
 	require.NoError(t, svc.store.PutLoadBalancer(lb))
 
-	svc.updateStoredConfig(lb)
+	require.NoError(t, svc.updateStoredConfig(lb))
 
 	stored, err := svc.store.GetLoadBalancer("lb-noinst")
 	require.NoError(t, err)
@@ -1657,8 +1657,8 @@ func TestUpdateStoredConfig_MissingTargetGroup(t *testing.T) {
 	}
 	require.NoError(t, svc.store.PutListener(listener))
 
-	// Should not panic — skips missing TG and generates config with no backends
-	svc.updateStoredConfig(lb)
+	// Should not error — skips missing TG and generates config with no backends
+	require.NoError(t, svc.updateStoredConfig(lb))
 
 	stored, err := svc.store.GetLoadBalancer("lb-misstg")
 	require.NoError(t, err)
