@@ -3,6 +3,7 @@ package utils
 import (
 	"errors"
 	"fmt"
+	"net"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -69,7 +70,7 @@ func FormatNBDSocketURI(socketPath string) string {
 // FormatNBDTCPURI formats a host:port as an NBD URI for QEMU.
 // Returns format: nbd://host:port
 func FormatNBDTCPURI(host string, port int) string {
-	return fmt.Sprintf("nbd://%s:%d", host, port)
+	return "nbd://" + net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 // ParseNBDURI parses an NBD URI into its components for QMP blockdev-add.

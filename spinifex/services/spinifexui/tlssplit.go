@@ -4,10 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/tls"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -81,7 +81,7 @@ func (ln *tlsSplitListener) redirectHTTP(conn net.Conn, firstByte byte) {
 		return
 	}
 
-	target := fmt.Sprintf("https://%s:%d%s", host, ln.port, req.URL.RequestURI())
+	target := "https://" + net.JoinHostPort(host, strconv.Itoa(ln.port)) + req.URL.RequestURI()
 	resp := &http.Response{
 		StatusCode: http.StatusMovedPermanently,
 		ProtoMajor: 1,

@@ -34,6 +34,7 @@ linters:
     - nilerr # catches code that returns nil even after checking err != nil
     - nilnesserr # catches returning a different nil error variable after err != nil check
     - nolintlint # reports ill-formed or insufficient nolint directives
+    - nosprintfhostport # flags fmt.Sprintf host:port — use net.JoinHostPort for IPv6 safety
     - predeclared # catches shadowing of Go builtins (len, cap, error, etc.)
     - reassign # checks that package variables are not reassigned
     - recvcheck # checks for receiver type consistency (pointer vs value)
