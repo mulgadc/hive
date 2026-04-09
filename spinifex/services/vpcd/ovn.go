@@ -683,28 +683,26 @@ func (c *LiveOVNClient) DeleteNATByExternalIP(ctx context.Context, routerName st
 // before an IP is reused by a different VPC. Returns the number of rules deleted.
 func (c *LiveOVNClient) DeleteAllNATsByExternalIP(ctx context.Context, natType, externalIP string) (int, error) {
 	var nats []nbdb.NAT
-	err := c.client.WhereCache(func(n *nbdb.NAT) bool {
+	if err := c.client.WhereCache(func(n *nbdb.NAT) bool {
 		return n.Type == natType && n.ExternalIP == externalIP
-	}).List(ctx, &nats)
-	if err != nil {
+	}).List(ctx, &nats); err != nil {
 		return 0, fmt.Errorf("find NAT by external IP: %w", err)
 	}
 	if len(nats) == 0 {
 		return 0, nil
 	}
 
-	// Build a set of stale NAT UUIDs for fast lookup.
-	staleUUIDs := make(map[string]struct{}, len(nats))
-	for _, n := range nats {
-		staleUUIDs[n.UUID] = struct{}{}
-	}
-
-	// Find all routers that reference any of these NAT rules.
 	routers, err := c.ListLogicalRouters(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("list routers for stale NAT cleanup: %w", err)
 	}
 
+	staleUUIDs := make(map[string]struct{}, len(nats))
+	for _, n := range nats {
+		staleUUIDs[n.UUID] = struct{}{}
+	}
+
+	// Build a single transaction: remove NAT refs from all routers, then delete NAT rows.
 	var allOps []ovsdb.Operation
 	for i := range routers {
 		lr := &routers[i]
@@ -712,33 +710,24 @@ func (c *LiveOVNClient) DeleteAllNATsByExternalIP(ctx context.Context, natType, 
 			if _, stale := staleUUIDs[natUUID]; !stale {
 				continue
 			}
-			mutateOps, mErr := c.client.Where(lr).Mutate(lr, model.Mutation{
-				Field:   &lr.NAT,
-				Mutator: "delete",
-				Value:   []string{natUUID},
+			ops, err := c.client.Where(lr).Mutate(lr, model.Mutation{
+				Field: &lr.NAT, Mutator: "delete", Value: []string{natUUID},
 			})
-			if mErr != nil {
-				return 0, fmt.Errorf("mutate router %s NAT ops: %w", lr.Name, mErr)
+			if err != nil {
+				return 0, fmt.Errorf("mutate router %s: %w", lr.Name, err)
 			}
-			allOps = append(allOps, mutateOps...)
+			allOps = append(allOps, ops...)
 		}
 	}
-
-	// Delete the NAT rows themselves.
 	for i := range nats {
-		deleteOps, dErr := c.client.Where(&nats[i]).Delete()
-		if dErr != nil {
-			return 0, fmt.Errorf("delete NAT ops: %w", dErr)
+		ops, err := c.client.Where(&nats[i]).Delete()
+		if err != nil {
+			return 0, fmt.Errorf("delete NAT row: %w", err)
 		}
-		allOps = append(allOps, deleteOps...)
+		allOps = append(allOps, ops...)
 	}
-
-	if len(allOps) == 0 {
-		return 0, nil
-	}
-
 	if err := c.transactOps(ctx, allOps); err != nil {
-		return 0, fmt.Errorf("delete all NATs by external IP transact: %w", err)
+		return 0, fmt.Errorf("delete all NATs by external IP: %w", err)
 	}
 	return len(nats), nil
 }

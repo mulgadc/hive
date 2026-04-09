@@ -10,8 +10,8 @@ set -e
 #
 # Usage:
 #   ./tests/e2e/run-lb-e2e.sh                         # internal-only (single-node)
-#   ./tests/e2e/run-lb-e2e.sh --peer <ip>             # all 4 variants (multi-node)
-#   ENDPOINT=https://10.11.12.1:9999 ./tests/e2e/run-lb-e2e.sh --peer <ip>
+#   ./tests/e2e/run-lb-e2e.sh --peer <ip>             # all 4 variants (multi-node, legacy)
+#   ./tests/e2e/run-lb-e2e.sh --nodes <ip1> <ip2> ... # all 4 variants (multi-node, preferred)
 
 cd "$(dirname "$0")/../.."
 
@@ -30,12 +30,18 @@ fi
 # Arguments
 # ==========================================================================
 PEER_NODE_IP=""
+ALL_NODE_IPS=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --peer) PEER_NODE_IP="$2"; shift 2 ;;
+        --nodes) shift; while [ $# -gt 0 ] && [[ "$1" != --* ]]; do ALL_NODE_IPS+=("$1"); shift; done ;;
         *) echo "Unknown arg: $1"; exit 1 ;;
     esac
 done
+# --nodes supersedes --peer; fall back to --peer for backwards compat
+if [ ${#ALL_NODE_IPS[@]} -gt 0 ] && [ -z "$PEER_NODE_IP" ]; then
+    PEER_NODE_IP="${ALL_NODE_IPS[1]:-}"
+fi
 
 ENDPOINT="${ENDPOINT:-https://127.0.0.1:9999}"
 export AWS_PROFILE=spinifex
@@ -65,6 +71,44 @@ peer_ssh() {
         -o ConnectTimeout=10 \
         -o LogLevel=ERROR \
         "tf-user@${ip}" "$@"
+}
+
+# find_lb_host <eni_id> — discover which node hosts the LB system instance by
+# checking for its OVS tap device. Prints the node's WAN IP; returns 1 if not found.
+find_lb_host() {
+    local eni_id="$1"
+    local tap_prefix
+    tap_prefix="tap${eni_id#eni-}"
+    tap_prefix="${tap_prefix:0:15}"
+
+    local my_ip
+    my_ip=$(ip -4 -o addr show br-wan 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+
+    for node_ip in "${ALL_NODE_IPS[@]}"; do
+        local found
+        if [ "$node_ip" = "$my_ip" ]; then
+            found=$(ip link show "$tap_prefix" 2>/dev/null || true)
+        else
+            found=$(peer_ssh "$node_ip" "ip link show '$tap_prefix'" 2>/dev/null || true)
+        fi
+        if [ -n "$found" ]; then
+            echo "$node_ip"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# pick_peer <host_ip> — return the first node IP that is NOT the given host.
+pick_peer() {
+    local host_ip="$1"
+    for node_ip in "${ALL_NODE_IPS[@]}"; do
+        if [ "$node_ip" != "$host_ip" ]; then
+            echo "$node_ip"
+            return 0
+        fi
+    done
+    return 1
 }
 
 # ==========================================================================
@@ -614,6 +658,7 @@ if [ "$PEER_AVAILABLE" = true ]; then
         --filters "Name=description,Values=ELB app/lb-e2e-alb-inet/${ALB_LB_ID}" \
         --output json 2>/dev/null)
     ALB_PUBLIC_IP=$(echo "$ENI_OUTPUT" | jq -r '.NetworkInterfaces[0].Association.PublicIp // empty' 2>/dev/null)
+    ALB_ENI_ID=$(echo "$ENI_OUTPUT" | jq -r '.NetworkInterfaces[0].NetworkInterfaceId // empty' 2>/dev/null)
     if [ -n "$ALB_PUBLIC_IP" ] && [ "$ALB_PUBLIC_IP" != "null" ]; then
         pass "ALB ENI has public IP: $ALB_PUBLIC_IP"
     else
@@ -624,6 +669,7 @@ if [ "$PEER_AVAILABLE" = true ]; then
         --filters "Name=description,Values=ELB net/lb-e2e-nlb-inet/${NLB_LB_ID}" \
         --output json 2>/dev/null)
     NLB_PUBLIC_IP=$(echo "$ENI_OUTPUT" | jq -r '.NetworkInterfaces[0].Association.PublicIp // empty' 2>/dev/null)
+    NLB_ENI_ID=$(echo "$ENI_OUTPUT" | jq -r '.NetworkInterfaces[0].NetworkInterfaceId // empty' 2>/dev/null)
     if [ -n "$NLB_PUBLIC_IP" ] && [ "$NLB_PUBLIC_IP" != "null" ]; then
         pass "NLB ENI has public IP: $NLB_PUBLIC_IP"
     else
@@ -666,101 +712,178 @@ if [ "$PEER_AVAILABLE" = true ]; then
     wait_for_targets_healthy "$ALB_TG_ARN" 2 "ALB internet-facing"
     wait_for_targets_healthy "$NLB_TG_ARN" 2 "NLB internet-facing"
 
-    # --- Host connectivity + traffic tests ---
-    ALB_URL="http://${ALB_PUBLIC_IP}:80"
-    echo "Testing host connectivity to ALB at $ALB_URL..."
-    CONNECTIVITY_OK=false
-    for attempt in $(seq 1 20); do
-        if curl -s --max-time 3 "$ALB_URL/" 2>/dev/null | grep -q "instance_id"; then
-            CONNECTIVITY_OK=true; break
+    # --- Discover hosting nodes for each LB ---
+    # The LB VM can land on any node via NATS queue group distribution.
+    # "Local" tests run from the hosting node; "remote" tests from another node.
+    ALB_HOST=""
+    NLB_HOST=""
+    ALB_REMOTE=""
+    NLB_REMOTE=""
+    LOCAL_IP=$(ip -4 -o addr show br-wan 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+
+    if [ ${#ALL_NODE_IPS[@]} -gt 1 ]; then
+        echo "Discovering LB hosting nodes..."
+        if [ -n "$ALB_ENI_ID" ]; then
+            ALB_HOST=$(find_lb_host "$ALB_ENI_ID") || true
         fi
-        echo "  Attempt $attempt/20: ALB not yet responding..."
-        sleep 5
-    done
-    if [ "$CONNECTIVITY_OK" = true ]; then
-        pass "host can reach ALB via public IP"
+        if [ -n "$NLB_ENI_ID" ]; then
+            NLB_HOST=$(find_lb_host "$NLB_ENI_ID") || true
+        fi
+        if [ -n "$ALB_HOST" ]; then
+            ALB_REMOTE=$(pick_peer "$ALB_HOST")
+            echo "  ALB VM on $ALB_HOST (remote test from $ALB_REMOTE)"
+        else
+            echo "  ALB VM host: unknown (falling back to local=$LOCAL_IP, remote=$PEER_NODE_IP)"
+            ALB_HOST="$LOCAL_IP"
+            ALB_REMOTE="$PEER_NODE_IP"
+        fi
+        if [ -n "$NLB_HOST" ]; then
+            NLB_REMOTE=$(pick_peer "$NLB_HOST")
+            echo "  NLB VM on $NLB_HOST (remote test from $NLB_REMOTE)"
+        else
+            echo "  NLB VM host: unknown (falling back to local=$LOCAL_IP, remote=$PEER_NODE_IP)"
+            NLB_HOST="$LOCAL_IP"
+            NLB_REMOTE="$PEER_NODE_IP"
+        fi
     else
-        fail "host cannot reach ALB at $ALB_URL"
-        echo "  --- Host connectivity diagnostics ---"
-        echo "  ARP table for ALB IP:"
-        ip neigh show to "$ALB_PUBLIC_IP" 2>/dev/null || arp -n "$ALB_PUBLIC_IP" 2>/dev/null || echo "    (no entry)"
-        echo "  Route to ALB IP:"
-        ip route get "$ALB_PUBLIC_IP" 2>/dev/null || true
-        echo "  OVN NAT rules for $ALB_PUBLIC_IP:"
-        sudo ovn-nbctl --columns=external_ip,logical_ip,type find NAT external_ip="$ALB_PUBLIC_IP" 2>/dev/null || echo "    (ovn-nbctl not available)"
-        echo "  br-ext ports:"
-        sudo ovs-vsctl list-ports br-ext 2>/dev/null || true
-        echo "  ---"
+        ALB_HOST="$LOCAL_IP"
+        NLB_HOST="$LOCAL_IP"
     fi
 
-    run_http_traffic_test "$ALB_URL" "ALB inet (host)"
-
-    if [ -n "$NLB_PUBLIC_IP" ] && [ "$NLB_PUBLIC_IP" != "null" ]; then
-        echo "Waiting for NLB to respond at ${NLB_PUBLIC_IP}:9000..."
-        NLB_RESPONDING=false
+    # --- Helper: run a connectivity test from a specific node ---
+    # test_http_from <node_ip> <url> <label>
+    test_http_from() {
+        local node_ip="$1" url="$2" label="$3"
+        echo "Testing $label at $url from $node_ip..."
+        local ok=false
         for attempt in $(seq 1 20); do
-            PROBE=$(echo "" | nc -w5 ${NLB_PUBLIC_IP} 9000 2>/dev/null || true)
-            if [ -n "$PROBE" ]; then NLB_RESPONDING=true; break; fi
+            local result
+            if [ "$node_ip" = "$LOCAL_IP" ]; then
+                result=$(curl -s --max-time 3 "$url/" 2>/dev/null || true)
+            else
+                result=$(peer_ssh "$node_ip" "curl -s --max-time 3 '$url/'" 2>/dev/null || true)
+            fi
+            if echo "$result" | grep -q "instance_id"; then
+                ok=true; break
+            fi
+            echo "  Attempt $attempt/20: not yet responding..."
+            sleep 5
+        done
+        if [ "$ok" = true ]; then pass "$label reachable"; else fail "$label unreachable at $url from $node_ip"; fi
+        echo "$ok"
+    }
+
+    # test_tcp_from <node_ip> <ip> <port> <label>
+    test_tcp_from() {
+        local node_ip="$1" target_ip="$2" port="$3" label="$4"
+        echo "Testing $label at ${target_ip}:${port} from $node_ip..."
+        local ok=false
+        for attempt in $(seq 1 20); do
+            local probe
+            if [ "$node_ip" = "$LOCAL_IP" ]; then
+                probe=$(echo "" | nc -w5 "$target_ip" "$port" 2>/dev/null || true)
+            else
+                probe=$(peer_ssh "$node_ip" "echo '' | nc -w5 '$target_ip' '$port'" 2>/dev/null || true)
+            fi
+            if [ -n "$probe" ]; then ok=true; break; fi
             echo "  Attempt $attempt/20..."
             sleep 5
         done
-        if [ "$NLB_RESPONDING" = true ]; then
-            pass "NLB responding via public IP"
+        if [ "$ok" = true ]; then pass "$label reachable"; else fail "$label unreachable at ${target_ip}:${port} from $node_ip"; fi
+        echo "$ok"
+    }
+
+    # --- ALB: local connectivity (from hosting node) ---
+    ALB_URL="http://${ALB_PUBLIC_IP}:80"
+    ALB_LOCAL_OK=$(test_http_from "$ALB_HOST" "$ALB_URL" "ALB inet (local)")
+
+    # ALB traffic test from hosting node
+    if [ "$ALB_LOCAL_OK" = "true" ]; then
+        if [ "$ALB_HOST" = "$LOCAL_IP" ]; then
+            run_http_traffic_test "$ALB_URL" "ALB inet (local)"
         else
-            fail "NLB not responding at ${NLB_PUBLIC_IP}:9000"
-            echo "  --- Host connectivity diagnostics ---"
-            echo "  ARP table for NLB IP:"
-            ip neigh show to "$NLB_PUBLIC_IP" 2>/dev/null || arp -n "$NLB_PUBLIC_IP" 2>/dev/null || echo "    (no entry)"
-            echo "  Route to NLB IP:"
-            ip route get "$NLB_PUBLIC_IP" 2>/dev/null || true
-            echo "  OVN NAT rules for $NLB_PUBLIC_IP:"
-            sudo ovn-nbctl --columns=external_ip,logical_ip,type find NAT external_ip="$NLB_PUBLIC_IP" 2>/dev/null || echo "    (ovn-nbctl not available)"
-            echo "  ---"
+            # Run traffic test via SSH on the hosting node
+            declare -A ALB_LOCAL_COUNTS
+            ALB_LOCAL_TOTAL=0
+            for i in $(seq 1 20); do
+                RESPONSE=$(peer_ssh "$ALB_HOST" "curl -s --max-time 5 '$ALB_URL/'" 2>/dev/null) || continue
+                RESP_INSTANCE=$(echo "$RESPONSE" | jq -r '.instance_id // empty' 2>/dev/null)
+                if [ -n "$RESP_INSTANCE" ]; then
+                    ALB_LOCAL_COUNTS[$RESP_INSTANCE]=$(( ${ALB_LOCAL_COUNTS[$RESP_INSTANCE]:-0} + 1 ))
+                    ALB_LOCAL_TOTAL=$((ALB_LOCAL_TOTAL + 1))
+                fi
+            done
+            echo "  Distribution:"
+            for inst_id in "${!ALB_LOCAL_COUNTS[@]}"; do echo "    $inst_id: ${ALB_LOCAL_COUNTS[$inst_id]} responses"; done
+            if [ "${#ALB_LOCAL_COUNTS[@]}" -ge 2 ]; then pass "ALB inet (local) round-robin: ${#ALB_LOCAL_COUNTS[@]} unique instances"; else fail "ALB inet (local) round-robin: expected 2 unique responders, got ${#ALB_LOCAL_COUNTS[@]}"; fi
+            if [ "$ALB_LOCAL_TOTAL" -ge 10 ]; then pass "ALB inet (local) success rate: $ALB_LOCAL_TOTAL/20"; else fail "ALB inet (local) success rate: only $ALB_LOCAL_TOTAL/20"; fi
         fi
-
-        run_tcp_traffic_test "$NLB_PUBLIC_IP" 9000 "NLB inet (host)"
     fi
 
-    # --- Peer validation ---
-    echo "Testing ALB reachability from peer node $PEER_NODE_IP..."
-    PEER_RESULT=$(peer_ssh "$PEER_NODE_IP" "curl -s --max-time 10 http://${ALB_PUBLIC_IP}:80/" 2>/dev/null) || true
-    if echo "$PEER_RESULT" | jq -r '.instance_id' 2>/dev/null | grep -q .; then
-        pass "peer reached ALB via public IP"
-    else
-        fail "peer could NOT reach ALB"
-    fi
-
-    echo "Sending 20 HTTP requests from peer..."
-    declare -A PEER_HTTP_COUNTS
-    PEER_HTTP_OK=0
-    for i in $(seq 1 20); do
-        RESPONSE=$(peer_ssh "$PEER_NODE_IP" "curl -s --max-time 5 http://${ALB_PUBLIC_IP}:80/" 2>/dev/null) || continue
-        RESP_INSTANCE=$(echo "$RESPONSE" | jq -r '.instance_id // empty' 2>/dev/null)
-        if [ -n "$RESP_INSTANCE" ]; then
-            PEER_HTTP_COUNTS[$RESP_INSTANCE]=$(( ${PEER_HTTP_COUNTS[$RESP_INSTANCE]:-0} + 1 ))
-            PEER_HTTP_OK=$((PEER_HTTP_OK + 1))
-        fi
-    done
-    echo "  Distribution:"
-    for inst_id in "${!PEER_HTTP_COUNTS[@]}"; do echo "    $inst_id: ${PEER_HTTP_COUNTS[$inst_id]} responses"; done
-    if [ "${#PEER_HTTP_COUNTS[@]}" -ge 2 ]; then pass "peer ALB round-robin: ${#PEER_HTTP_COUNTS[@]} unique"; else fail "peer ALB round-robin: ${#PEER_HTTP_COUNTS[@]} unique"; fi
-    if [ "$PEER_HTTP_OK" -ge 10 ]; then pass "peer ALB success rate: $PEER_HTTP_OK/20"; else fail "peer ALB success rate: $PEER_HTTP_OK/20"; fi
-
+    # --- NLB: local connectivity (from hosting node) ---
     if [ -n "$NLB_PUBLIC_IP" ] && [ "$NLB_PUBLIC_IP" != "null" ]; then
-        echo "Testing NLB reachability from peer node..."
-        PEER_NLB_OK=false
-        for attempt in $(seq 1 10); do
-            PEER_TCP=$(peer_ssh "$PEER_NODE_IP" "echo '' | nc -w5 ${NLB_PUBLIC_IP} 9000" 2>/dev/null || true)
-            if [ -n "$(echo "$PEER_TCP" | tr -d '[:space:]')" ]; then
-                PEER_NLB_OK=true; break
+        NLB_LOCAL_OK=$(test_tcp_from "$NLB_HOST" "$NLB_PUBLIC_IP" 9000 "NLB inet (local)")
+        if [ "$NLB_LOCAL_OK" = "true" ]; then
+            if [ "$NLB_HOST" = "$LOCAL_IP" ]; then
+                run_tcp_traffic_test "$NLB_PUBLIC_IP" 9000 "NLB inet (local)"
+            else
+                declare -A NLB_LOCAL_COUNTS
+                NLB_LOCAL_TOTAL=0
+                for i in $(seq 1 20); do
+                    RESPONSE=$(peer_ssh "$NLB_HOST" "echo '' | nc -w5 '$NLB_PUBLIC_IP' 9000" 2>/dev/null) || continue
+                    RESP_INSTANCE=$(echo "$(echo "$RESPONSE" | tr -d '[:space:]')")
+                    if [ -n "$RESP_INSTANCE" ]; then
+                        NLB_LOCAL_COUNTS[$RESP_INSTANCE]=$(( ${NLB_LOCAL_COUNTS[$RESP_INSTANCE]:-0} + 1 ))
+                        NLB_LOCAL_TOTAL=$((NLB_LOCAL_TOTAL + 1))
+                    fi
+                done
+                echo "  Distribution:"
+                for inst_id in "${!NLB_LOCAL_COUNTS[@]}"; do echo "    $inst_id: ${NLB_LOCAL_COUNTS[$inst_id]} responses"; done
+                if [ "${#NLB_LOCAL_COUNTS[@]}" -ge 2 ]; then pass "NLB inet (local) round-robin: ${#NLB_LOCAL_COUNTS[@]} unique instances"; else fail "NLB inet (local) round-robin: expected 2 unique responders, got ${#NLB_LOCAL_COUNTS[@]}"; fi
+                if [ "$NLB_LOCAL_TOTAL" -ge 10 ]; then pass "NLB inet (local) success rate: $NLB_LOCAL_TOTAL/20"; else fail "NLB inet (local) success rate: only $NLB_LOCAL_TOTAL/20"; fi
             fi
-            echo "  Attempt $attempt/10: peer NLB not yet responding..."
-            sleep 3
-        done
-        if [ "$PEER_NLB_OK" = true ]; then
-            pass "peer reached NLB via public IP"
-        else
-            fail "peer could NOT reach NLB at ${NLB_PUBLIC_IP}:9000"
+        fi
+    fi
+
+    # --- ALB: remote connectivity (from a different node) ---
+    if [ -n "$ALB_REMOTE" ]; then
+        ALB_REMOTE_OK=$(test_http_from "$ALB_REMOTE" "$ALB_URL" "ALB inet (remote)")
+        if [ "$ALB_REMOTE_OK" = "true" ]; then
+            declare -A ALB_REMOTE_COUNTS
+            ALB_REMOTE_TOTAL=0
+            for i in $(seq 1 20); do
+                RESPONSE=$(peer_ssh "$ALB_REMOTE" "curl -s --max-time 5 '$ALB_URL/'" 2>/dev/null) || continue
+                RESP_INSTANCE=$(echo "$RESPONSE" | jq -r '.instance_id // empty' 2>/dev/null)
+                if [ -n "$RESP_INSTANCE" ]; then
+                    ALB_REMOTE_COUNTS[$RESP_INSTANCE]=$(( ${ALB_REMOTE_COUNTS[$RESP_INSTANCE]:-0} + 1 ))
+                    ALB_REMOTE_TOTAL=$((ALB_REMOTE_TOTAL + 1))
+                fi
+            done
+            echo "  Distribution:"
+            for inst_id in "${!ALB_REMOTE_COUNTS[@]}"; do echo "    $inst_id: ${ALB_REMOTE_COUNTS[$inst_id]} responses"; done
+            if [ "${#ALB_REMOTE_COUNTS[@]}" -ge 2 ]; then pass "ALB inet (remote) round-robin: ${#ALB_REMOTE_COUNTS[@]} unique"; else fail "ALB inet (remote) round-robin: ${#ALB_REMOTE_COUNTS[@]} unique"; fi
+            if [ "$ALB_REMOTE_TOTAL" -ge 10 ]; then pass "ALB inet (remote) success rate: $ALB_REMOTE_TOTAL/20"; else fail "ALB inet (remote) success rate: $ALB_REMOTE_TOTAL/20"; fi
+        fi
+    fi
+
+    # --- NLB: remote connectivity (from a different node) ---
+    if [ -n "$NLB_REMOTE" ] && [ -n "$NLB_PUBLIC_IP" ] && [ "$NLB_PUBLIC_IP" != "null" ]; then
+        NLB_REMOTE_OK=$(test_tcp_from "$NLB_REMOTE" "$NLB_PUBLIC_IP" 9000 "NLB inet (remote)")
+        if [ "$NLB_REMOTE_OK" = "true" ]; then
+            declare -A NLB_REMOTE_COUNTS
+            NLB_REMOTE_TOTAL=0
+            for i in $(seq 1 20); do
+                RESPONSE=$(peer_ssh "$NLB_REMOTE" "echo '' | nc -w5 '$NLB_PUBLIC_IP' 9000" 2>/dev/null) || continue
+                RESP_INSTANCE=$(echo "$(echo "$RESPONSE" | tr -d '[:space:]')")
+                if [ -n "$RESP_INSTANCE" ]; then
+                    NLB_REMOTE_COUNTS[$RESP_INSTANCE]=$(( ${NLB_REMOTE_COUNTS[$RESP_INSTANCE]:-0} + 1 ))
+                    NLB_REMOTE_TOTAL=$((NLB_REMOTE_TOTAL + 1))
+                fi
+            done
+            echo "  Distribution:"
+            for inst_id in "${!NLB_REMOTE_COUNTS[@]}"; do echo "    $inst_id: ${NLB_REMOTE_COUNTS[$inst_id]} responses"; done
+            if [ "${#NLB_REMOTE_COUNTS[@]}" -ge 2 ]; then pass "NLB inet (remote) round-robin: ${#NLB_REMOTE_COUNTS[@]} unique"; else fail "NLB inet (remote) round-robin: ${#NLB_REMOTE_COUNTS[@]} unique"; fi
+            if [ "$NLB_REMOTE_TOTAL" -ge 10 ]; then pass "NLB inet (remote) success rate: $NLB_REMOTE_TOTAL/20"; else fail "NLB inet (remote) success rate: $NLB_REMOTE_TOTAL/20"; fi
         fi
     fi
 
