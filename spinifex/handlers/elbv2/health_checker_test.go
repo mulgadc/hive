@@ -226,13 +226,6 @@ func TestRemoveTarget(t *testing.T) {
 	assert.False(t, exists)
 }
 
-func TestStartStop(t *testing.T) {
-	hc := newHealthChecker(nil)
-	require.NoError(t, hc.start())
-	// stop is a no-op — should not panic
-	hc.stop()
-}
-
 func TestHandleHealthReport_InvalidJSON(t *testing.T) {
 	store := setupTestNATS(t)
 	hc := newHealthChecker(store)

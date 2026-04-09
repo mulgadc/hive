@@ -988,7 +988,7 @@ func TestDeleteLoadBalancer_TerminatesALBVM(t *testing.T) {
 
 	// Set up a mock instance launcher
 	mock := &mockTerminateLauncher{}
-	svc.SetInstanceLauncher(mock)
+	svc.InstanceLauncher = mock
 
 	lb, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name: aws.String("del-lb"),
@@ -1066,7 +1066,7 @@ func TestCreateLoadBalancer_InternetFacingScheme_PassesSchemeToLauncher(t *testi
 			PublicIP:   "203.0.113.10",
 		},
 	}
-	svc.SetInstanceLauncher(mock)
+	svc.InstanceLauncher = mock
 	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
 
 	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
@@ -1091,7 +1091,7 @@ func TestCreateLoadBalancer_InternalScheme_PassesSchemeToLauncher(t *testing.T) 
 			PrivateIP:  "10.0.2.10",
 		},
 	}
-	svc.SetInstanceLauncher(mock)
+	svc.InstanceLauncher = mock
 	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
 
 	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
@@ -1465,17 +1465,18 @@ func TestClose(t *testing.T) {
 	svc.Close()
 }
 
-func TestSetSystemCredentials(t *testing.T) {
+func TestSystemCredentialsFields(t *testing.T) {
 	svc := setupTestService(t)
-	svc.SetSystemCredentials("AKID123", "secret456")
-	assert.Equal(t, "AKID123", svc.systemAccessKey)
-	assert.Equal(t, "secret456", svc.systemSecretKey)
+	svc.SystemAccessKey = "AKID123"
+	svc.SystemSecretKey = "secret456"
+	assert.Equal(t, "AKID123", svc.SystemAccessKey)
+	assert.Equal(t, "secret456", svc.SystemSecretKey)
 }
 
-func TestSetGatewayURL(t *testing.T) {
+func TestGatewayURLField(t *testing.T) {
 	svc := setupTestService(t)
-	svc.SetGatewayURL("https://10.15.8.1:9999")
-	assert.Equal(t, "https://10.15.8.1:9999", svc.gatewayURL)
+	svc.GatewayURL = "https://10.15.8.1:9999"
+	assert.Equal(t, "https://10.15.8.1:9999", svc.GatewayURL)
 }
 
 func TestSetSystemInstanceTypeFunc(t *testing.T) {
@@ -1585,18 +1586,21 @@ func TestGetSystemInstanceType_Concurrent(t *testing.T) {
 	wg.Wait()
 }
 
-func TestSetMgmtRoute(t *testing.T) {
+func TestMgmtRouteFields(t *testing.T) {
 	svc := setupTestService(t)
-	svc.SetMgmtRoute("10.15.8.1", "10.15.8.100")
-	assert.Equal(t, "10.15.8.1", svc.mgmtRouteGateway)
-	assert.Equal(t, "10.15.8.100", svc.mgmtRouteTarget)
+	svc.MgmtRouteGateway = "10.15.8.1"
+	svc.MgmtRouteTarget = "10.15.8.100"
+	assert.Equal(t, "10.15.8.1", svc.MgmtRouteGateway)
+	assert.Equal(t, "10.15.8.100", svc.MgmtRouteTarget)
 }
 
 func TestLBVMUserData_MgmtRoute(t *testing.T) {
 	svc := setupTestService(t)
-	svc.SetMgmtRoute("10.15.8.1", "10.15.8.100")
-	svc.SetGatewayURL("https://10.15.8.100:9999")
-	svc.SetSystemCredentials("AK", "SK")
+	svc.MgmtRouteGateway = "10.15.8.1"
+	svc.MgmtRouteTarget = "10.15.8.100"
+	svc.GatewayURL = "https://10.15.8.100:9999"
+	svc.SystemAccessKey = "AK"
+	svc.SystemSecretKey = "SK"
 
 	data, err := svc.lbVMUserData("lb-test1")
 	require.NoError(t, err)

@@ -22,7 +22,6 @@ permissions:
 
 env:
   GIT_BRANCH: ${{ github.ref_name }}
-  SPX_ENABLE_LB: "true"
 
 jobs:
   e2e_single:

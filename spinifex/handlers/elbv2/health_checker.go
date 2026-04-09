@@ -36,15 +36,6 @@ func newHealthChecker(store *Store) *healthChecker {
 	}
 }
 
-// start is a no-op — health reports are now delivered directly by
-// LBAgentHeartbeat rather than polled over HTTP.
-func (hc *healthChecker) start() error {
-	return nil
-}
-
-// stop is a no-op — no background goroutine to stop.
-func (hc *healthChecker) stop() {}
-
 // handleHealthReport unmarshals a JSON-encoded health report and processes it.
 // This is the []byte entry point used by tests and any future wire-format callers.
 func (hc *healthChecker) handleHealthReport(data []byte) {

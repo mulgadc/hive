@@ -573,15 +573,20 @@ func (s *VPCServiceImpl) publishENIEvent(topic, eniId, subnetId, vpcId, privateI
 	})
 }
 
+// NATEvent represents a NAT lifecycle event published to NATS.
+type NATEvent struct {
+	VpcId      string `json:"vpc_id"`
+	ExternalIP string `json:"external_ip"`
+	LogicalIP  string `json:"logical_ip"`
+	PortName   string `json:"port_name"`
+	MAC        string `json:"mac"`
+}
+
 // publishNATEvent publishes a NAT lifecycle event (vpc.add-nat or vpc.delete-nat) to NATS.
 func (s *VPCServiceImpl) publishNATEvent(topic, vpcId, externalIP, logicalIP, portName, mac string) {
-	utils.PublishEvent(s.natsConn, topic, struct {
-		VpcId      string `json:"vpc_id"`
-		ExternalIP string `json:"external_ip"`
-		LogicalIP  string `json:"logical_ip"`
-		PortName   string `json:"port_name"`
-		MAC        string `json:"mac"`
-	}{VpcId: vpcId, ExternalIP: externalIP, LogicalIP: logicalIP, PortName: portName, MAC: mac})
+	utils.PublishEvent(s.natsConn, topic, NATEvent{
+		VpcId: vpcId, ExternalIP: externalIP, LogicalIP: logicalIP, PortName: portName, MAC: mac,
+	})
 }
 
 // isEIPOwned checks whether the given ENI's public IP is owned by an Elastic IP.

@@ -35,9 +35,9 @@ func TestBuildListenerArn_NLB(t *testing.T) {
 
 func TestLbVMUserData_ContainsLBID(t *testing.T) {
 	svc := &ELBv2ServiceImpl{
-		gatewayURL:      "https://192.168.1.33:9999",
-		systemAccessKey: "AKIAIOSFODNN7EXAMPLE",
-		systemSecretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+		GatewayURL:      "https://192.168.1.33:9999",
+		SystemAccessKey: "AKIAIOSFODNN7EXAMPLE",
+		SystemSecretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 		region:          "ap-southeast-2",
 	}
 	ud, err := svc.lbVMUserData("lb-abc123")
@@ -58,9 +58,9 @@ func TestLbVMUserData_WriteFilesThenRuncmd(t *testing.T) {
 	// Cloud-init guarantees write_files runs before runcmd. The agent is NOT
 	// enabled at boot via OpenRC — cloud-init is the sole trigger.
 	svc := &ELBv2ServiceImpl{
-		gatewayURL:      "https://10.0.2.2:9999",
-		systemAccessKey: "AKID",
-		systemSecretKey: "SECRET",
+		GatewayURL:      "https://10.0.2.2:9999",
+		SystemAccessKey: "AKID",
+		SystemSecretKey: "SECRET",
 	}
 	ud, err := svc.lbVMUserData("lb-test")
 	require.NoError(t, err)
@@ -80,9 +80,9 @@ func TestLbVMUserData_NoCACert(t *testing.T) {
 	// CA cert is injected by the instance service's cloud-init template,
 	// not by lbVMUserData — verify it's not duplicated here.
 	svc := &ELBv2ServiceImpl{
-		gatewayURL:      "https://192.168.1.33:9999",
-		systemAccessKey: "AKID",
-		systemSecretKey: "SECRET",
+		GatewayURL:      "https://192.168.1.33:9999",
+		SystemAccessKey: "AKID",
+		SystemSecretKey: "SECRET",
 	}
 	ud, err := svc.lbVMUserData("lb-noca")
 	require.NoError(t, err)
@@ -91,8 +91,8 @@ func TestLbVMUserData_NoCACert(t *testing.T) {
 
 func TestLbVMUserData_EmptyGatewayURL(t *testing.T) {
 	svc := &ELBv2ServiceImpl{
-		systemAccessKey: "AKID",
-		systemSecretKey: "SECRET",
+		SystemAccessKey: "AKID",
+		SystemSecretKey: "SECRET",
 	}
 	_, err := svc.lbVMUserData("lb-test")
 	require.Error(t, err)
@@ -101,8 +101,8 @@ func TestLbVMUserData_EmptyGatewayURL(t *testing.T) {
 
 func TestLbVMUserData_EmptyAccessKey(t *testing.T) {
 	svc := &ELBv2ServiceImpl{
-		gatewayURL:      "https://10.0.0.1:9999",
-		systemSecretKey: "SECRET",
+		GatewayURL:      "https://10.0.0.1:9999",
+		SystemSecretKey: "SECRET",
 	}
 	_, err := svc.lbVMUserData("lb-test")
 	require.Error(t, err)
@@ -111,8 +111,8 @@ func TestLbVMUserData_EmptyAccessKey(t *testing.T) {
 
 func TestLbVMUserData_EmptySecretKey(t *testing.T) {
 	svc := &ELBv2ServiceImpl{
-		gatewayURL:      "https://10.0.0.1:9999",
-		systemAccessKey: "AKID",
+		GatewayURL:      "https://10.0.0.1:9999",
+		SystemAccessKey: "AKID",
 	}
 	_, err := svc.lbVMUserData("lb-test")
 	require.Error(t, err)

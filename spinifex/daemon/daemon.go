@@ -705,11 +705,11 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to initialize ELBv2 service: %w", err)
 	}
 	if d.vpcService != nil {
-		d.elbv2Service.SetVPCService(d.vpcService)
+		d.elbv2Service.VPCService = d.vpcService
 	}
 
 	// Wire LB VM lifecycle: instance launcher for system VMs.
-	d.elbv2Service.SetInstanceLauncher(d)
+	d.elbv2Service.InstanceLauncher = d
 
 	// Detect management bridge for system instance control plane NICs.
 	// Must run before wireLBAgentConfig so the gateway URL uses br-mgmt IP.
@@ -2945,7 +2945,8 @@ func (d *Daemon) wireLBAgentConfig() {
 	if d.config.Predastore.AccessKey != "" && d.config.Predastore.SecretKey != "" {
 		d.systemAccessKey = d.config.Predastore.AccessKey
 		d.systemSecretKey = d.config.Predastore.SecretKey
-		d.elbv2Service.SetSystemCredentials(d.config.Predastore.AccessKey, d.config.Predastore.SecretKey)
+		d.elbv2Service.SystemAccessKey = d.config.Predastore.AccessKey
+		d.elbv2Service.SystemSecretKey = d.config.Predastore.SecretKey
 		slog.Info("System credentials loaded for LB agent auth")
 	}
 
@@ -2988,7 +2989,7 @@ func (d *Daemon) wireLBAgentConfig() {
 
 	if gatewayHost != "" {
 		gatewayURL := "https://" + net.JoinHostPort(gatewayHost, gatewayPort)
-		d.elbv2Service.SetGatewayURL(gatewayURL)
+		d.elbv2Service.GatewayURL = gatewayURL
 		slog.Info("LB agent gateway URL configured", "url", gatewayURL)
 	} else {
 		slog.Warn("LB agent gateway URL not configured: no reachable host found, LB agents will not connect")
@@ -2997,6 +2998,7 @@ func (d *Daemon) wireLBAgentConfig() {
 	// Pass mgmt route info so lbVMUserData can add a bootcmd route for
 	// internal LBs that reach the AWSGW via the management NIC.
 	if d.mgmtRouteVia != "" {
-		d.elbv2Service.SetMgmtRoute(d.mgmtBridgeIP, d.mgmtRouteVia)
+		d.elbv2Service.MgmtRouteGateway = d.mgmtBridgeIP
+		d.elbv2Service.MgmtRouteTarget = d.mgmtRouteVia
 	}
 }

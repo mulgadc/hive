@@ -742,9 +742,6 @@ ALB internal, NLB internet-facing, NLB internal. Shares a single VPC, subnet,
 and set of dual-purpose app instances (HTTP:80 + TCP:9000) across all suites.
 Requires pool mode with external IPAM (NOT dev_networking).
 
-Replaces: `run-elbv2-dataplane-internet-facing-e2e.sh`,
-`run-elbv2-dataplane-internal-e2e.sh`, `run-nlb-e2e.sh`.
-
 ### Phase 0: Prerequisites
 - Dev-mode gate (skip if dev_networking enabled)
 - SSH to peer node (if `--peer` provided)

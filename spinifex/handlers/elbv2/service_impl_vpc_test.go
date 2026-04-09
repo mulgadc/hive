@@ -28,7 +28,7 @@ func setupTestServiceWithVPC(t *testing.T) (*ELBv2ServiceImpl, *handlers_ec2_vpc
 	cfg := &config.Config{Daemon: config.DaemonConfig{DevNetworking: true}}
 	elbv2Svc, err := NewELBv2ServiceImplWithNATS(cfg, nc)
 	require.NoError(t, err)
-	elbv2Svc.SetVPCService(vpcSvc)
+	elbv2Svc.VPCService = vpcSvc
 
 	// Create a VPC and subnet for tests
 	vpcOut, err := vpcSvc.CreateVpc(&ec2.CreateVpcInput{
@@ -222,10 +222,11 @@ func TestCreateLoadBalancer_InternetFacing_AllocatesPublicIP(t *testing.T) {
 			PublicIP:   "203.0.113.50",
 		},
 	}
-	svc.SetInstanceLauncher(mock)
+	svc.InstanceLauncher = mock
 	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
-	svc.SetGatewayURL("https://10.0.0.1:9999")
-	svc.SetSystemCredentials("AKID", "SECRET")
+	svc.GatewayURL = "https://10.0.0.1:9999"
+	svc.SystemAccessKey = "AKID"
+	svc.SystemSecretKey = "SECRET"
 
 	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("inet-alb"),
@@ -260,10 +261,11 @@ func TestCreateLoadBalancer_Internal_NoPublicIP(t *testing.T) {
 			// No PublicIP — internal scheme
 		},
 	}
-	svc.SetInstanceLauncher(mock)
+	svc.InstanceLauncher = mock
 	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
-	svc.SetGatewayURL("https://10.0.0.1:9999")
-	svc.SetSystemCredentials("AKID", "SECRET")
+	svc.GatewayURL = "https://10.0.0.1:9999"
+	svc.SystemAccessKey = "AKID"
+	svc.SystemSecretKey = "SECRET"
 
 	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("internal-only"),
@@ -298,10 +300,11 @@ func TestCreateLoadBalancer_NLB_Internal_NoPublicIP(t *testing.T) {
 			// No PublicIP — internal scheme
 		},
 	}
-	svc.SetInstanceLauncher(mock)
+	svc.InstanceLauncher = mock
 	svc.SetSystemAMIFunc(func() string { return "ami-nlb-test" })
-	svc.SetGatewayURL("https://10.0.0.1:9999")
-	svc.SetSystemCredentials("AKID", "SECRET")
+	svc.GatewayURL = "https://10.0.0.1:9999"
+	svc.SystemAccessKey = "AKID"
+	svc.SystemSecretKey = "SECRET"
 
 	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("nlb-internal"),
@@ -344,10 +347,11 @@ func TestDeleteLoadBalancer_TerminatesVM_WithPublicIP(t *testing.T) {
 		},
 		terminateDone: make(chan struct{}),
 	}
-	svc.SetInstanceLauncher(mock)
+	svc.InstanceLauncher = mock
 	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
-	svc.SetGatewayURL("https://10.0.0.1:9999")
-	svc.SetSystemCredentials("AKID", "SECRET")
+	svc.GatewayURL = "https://10.0.0.1:9999"
+	svc.SystemAccessKey = "AKID"
+	svc.SystemSecretKey = "SECRET"
 
 	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("del-pub-alb"),
@@ -391,10 +395,11 @@ func TestDescribeLoadBalancers_InternetFacing_IncludesPublicIP(t *testing.T) {
 			PublicIP:   "203.0.113.52",
 		},
 	}
-	svc.SetInstanceLauncher(mock)
+	svc.InstanceLauncher = mock
 	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
-	svc.SetGatewayURL("https://10.0.0.1:9999")
-	svc.SetSystemCredentials("AKID", "SECRET")
+	svc.GatewayURL = "https://10.0.0.1:9999"
+	svc.SystemAccessKey = "AKID"
+	svc.SystemSecretKey = "SECRET"
 
 	_, err = svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("desc-pub-alb"),
@@ -428,10 +433,11 @@ func TestDescribeLoadBalancers_Internal_NoPublicIP(t *testing.T) {
 			PrivateIP:  "10.0.1.9",
 		},
 	}
-	svc.SetInstanceLauncher(mock)
+	svc.InstanceLauncher = mock
 	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
-	svc.SetGatewayURL("https://10.0.0.1:9999")
-	svc.SetSystemCredentials("AKID", "SECRET")
+	svc.GatewayURL = "https://10.0.0.1:9999"
+	svc.SystemAccessKey = "AKID"
+	svc.SystemSecretKey = "SECRET"
 
 	_, err = svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("desc-int-alb"),
@@ -463,10 +469,11 @@ func TestCreateLoadBalancer_LaunchFailure_SetsStateFailed(t *testing.T) {
 	mock := &mockSystemInstanceLauncher{
 		launchErr: assert.AnError,
 	}
-	svc.SetInstanceLauncher(mock)
+	svc.InstanceLauncher = mock
 	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
-	svc.SetGatewayURL("https://10.0.0.1:9999")
-	svc.SetSystemCredentials("AKID", "SECRET")
+	svc.GatewayURL = "https://10.0.0.1:9999"
+	svc.SystemAccessKey = "AKID"
+	svc.SystemSecretKey = "SECRET"
 
 	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("fail-launch-alb"),
@@ -491,7 +498,7 @@ func TestCreateLoadBalancer_MissingCredentials_SetsStateFailed(t *testing.T) {
 			PrivateIP:  "10.0.1.99",
 		},
 	}
-	svc.SetInstanceLauncher(mock)
+	svc.InstanceLauncher = mock
 	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
 	// Deliberately NOT setting credentials
 

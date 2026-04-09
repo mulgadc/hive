@@ -41,9 +41,9 @@ const (
 // enabled at boot in the image — cloud-init is the sole trigger so the env
 // vars are always present before the agent starts.
 func (s *ELBv2ServiceImpl) lbVMUserData(lbID string) (string, error) {
-	if s.gatewayURL == "" || s.systemAccessKey == "" || s.systemSecretKey == "" {
+	if s.GatewayURL == "" || s.SystemAccessKey == "" || s.SystemSecretKey == "" {
 		return "", fmt.Errorf("missing system credentials: gatewayURL=%q accessKey=%q secretKey-set=%t",
-			s.gatewayURL, s.systemAccessKey, s.systemSecretKey != "")
+			s.GatewayURL, s.SystemAccessKey, s.SystemSecretKey != "")
 	}
 
 	cfg := fmt.Sprintf(`#cloud-config
@@ -55,15 +55,15 @@ write_files:
       LB_ACCESS_KEY=%s
       LB_SECRET_KEY=%s
       LB_REGION=%s
-`, lbID, s.gatewayURL, s.systemAccessKey, s.systemSecretKey, s.region)
+`, lbID, s.GatewayURL, s.SystemAccessKey, s.SystemSecretKey, s.region)
 
 	// When AWSGW binds to a specific IP (multi-node), add a host route via
 	// the management NIC so the agent can reach the gateway. bootcmd runs
 	// early enough that networking is configured before lb-agent starts.
-	if s.mgmtRouteGateway != "" && s.mgmtRouteTarget != "" {
+	if s.MgmtRouteGateway != "" && s.MgmtRouteTarget != "" {
 		cfg += fmt.Sprintf(`bootcmd:
   - [ "ip", "route", "add", "%s/32", "via", "%s" ]
-`, s.mgmtRouteTarget, s.mgmtRouteGateway)
+`, s.MgmtRouteTarget, s.MgmtRouteGateway)
 	}
 
 	cfg += `runcmd:
@@ -80,8 +80,13 @@ type ELBv2ServiceImpl struct {
 	config                     *config.Config
 	store                      *Store
 	nc                         *nats.Conn                       // NATS connection for JetStream KV store
-	vpcService                 *handlers_ec2_vpc.VPCServiceImpl // nil-safe: ENI ops skipped when nil (e.g. in tests)
-	instanceLauncher           SystemInstanceLauncher           // nil-safe: system VM ops skipped when nil
+	VPCService                 *handlers_ec2_vpc.VPCServiceImpl // nil-safe: ENI ops skipped when nil (e.g. in tests)
+	InstanceLauncher           SystemInstanceLauncher           // nil-safe: system VM ops skipped when nil
+	SystemAccessKey            string                           // System account access key for ALB agent SigV4 auth
+	SystemSecretKey            string                           // System account secret key for ALB agent SigV4 auth
+	GatewayURL                 string                           // AWS gateway URL for ALB agent outbound connections
+	MgmtRouteGateway           string                           // br-mgmt IP (next-hop for mgmt route); empty when AWSGW is on 0.0.0.0
+	MgmtRouteTarget            string                           // AWSGW bind IP to route via mgmt NIC
 	nodeID                     string
 	region                     string
 	systemAMI                  string        // AMI ID for system VMs (ALB VMs); resolved lazily via systemAMIFunc
@@ -92,11 +97,6 @@ type ELBv2ServiceImpl struct {
 	systemInstanceTypeFunc     func() string // returns the smallest available instance type
 	systemInstanceTypeMu       sync.Mutex    // guards lazy resolution of systemInstanceType
 	systemInstanceTypeResolved bool          // true once systemInstanceType has been resolved to a non-empty value
-	systemAccessKey            string        // System account access key for ALB agent SigV4 auth
-	systemSecretKey            string        // System account secret key for ALB agent SigV4 auth
-	gatewayURL                 string        // AWS gateway URL for ALB agent outbound connections
-	mgmtRouteGateway           string        // br-mgmt IP (next-hop for mgmt route); empty when AWSGW is on 0.0.0.0
-	mgmtRouteTarget            string        // AWSGW bind IP to route via mgmt NIC
 	ctx                        context.Context
 	cancel                     context.CancelFunc
 	hc                         *healthChecker
@@ -120,11 +120,6 @@ func NewELBv2ServiceImplWithNATS(cfg *config.Config, nc *nats.Conn) (*ELBv2Servi
 
 	ctx, cancel := context.WithCancel(context.Background())
 	hc := newHealthChecker(store)
-	if err := hc.start(); err != nil {
-		slog.Warn("Failed to start target health checker", "err", err)
-	} else {
-		slog.Info("Target health checker started")
-	}
 
 	return &ELBv2ServiceImpl{
 		config: cfg,
@@ -138,26 +133,11 @@ func NewELBv2ServiceImplWithNATS(cfg *config.Config, nc *nats.Conn) (*ELBv2Servi
 	}, nil
 }
 
-// Close cancels background goroutines and stops the health checker.
+// Close cancels background goroutines.
 func (s *ELBv2ServiceImpl) Close() {
-	if s.hc != nil {
-		s.hc.stop()
-	}
 	if s.cancel != nil {
 		s.cancel()
 	}
-}
-
-// SetVPCService sets the VPC service for ENI management. Called by the daemon
-// after both services are initialized.
-func (s *ELBv2ServiceImpl) SetVPCService(vpcService *handlers_ec2_vpc.VPCServiceImpl) {
-	s.vpcService = vpcService
-}
-
-// SetInstanceLauncher sets the system instance launcher for ALB VM lifecycle.
-// Called by the daemon after initialization.
-func (s *ELBv2ServiceImpl) SetInstanceLauncher(launcher SystemInstanceLauncher) {
-	s.instanceLauncher = launcher
 }
 
 // SetSystemAMIFunc sets a function that resolves the current system AMI ID.
@@ -217,33 +197,14 @@ func (s *ELBv2ServiceImpl) getSystemInstanceType() string {
 	return s.systemInstanceType
 }
 
-// SetSystemCredentials sets the system account access key and secret key
-// used for ALB agent SigV4 authentication with the gateway.
-func (s *ELBv2ServiceImpl) SetSystemCredentials(accessKey, secretKey string) {
-	s.systemAccessKey = accessKey
-	s.systemSecretKey = secretKey
-}
-
-// SetGatewayURL sets the AWS gateway URL that ALB agents connect to.
-func (s *ELBv2ServiceImpl) SetGatewayURL(url string) {
-	s.gatewayURL = url
-}
-
-// SetMgmtRoute stores the host route that internal LB VMs add via bootcmd
-// so the agent can reach the AWSGW through the management NIC.
-func (s *ELBv2ServiceImpl) SetMgmtRoute(gateway, target string) {
-	s.mgmtRouteGateway = gateway
-	s.mgmtRouteTarget = target
-}
-
 // resolveENIBindAddr looks up the private IP of the first ENI belonging to the ALB.
 // Returns empty string if VPC service is unavailable or no ENIs exist.
 func (s *ELBv2ServiceImpl) resolveENIBindAddr(lb *LoadBalancerRecord) string {
-	if s.vpcService == nil || len(lb.ENIs) == 0 {
+	if s.VPCService == nil || len(lb.ENIs) == 0 {
 		return ""
 	}
 
-	result, err := s.vpcService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+	result, err := s.VPCService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
 		NetworkInterfaceIds: []*string{aws.String(lb.ENIs[0])},
 	}, lb.AccountID)
 	if err != nil || len(result.NetworkInterfaces) == 0 {
@@ -433,11 +394,11 @@ func buildLBArn(region, accountID, name, lbID, lbType string) string {
 // resolveTargetIP looks up the private IP for an instance by finding its primary ENI.
 // Returns empty string if VPC service is unavailable or no ENI found.
 func (s *ELBv2ServiceImpl) resolveTargetIP(instanceID, accountID string) string {
-	if s.vpcService == nil {
+	if s.VPCService == nil {
 		return ""
 	}
 
-	result, err := s.vpcService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+	result, err := s.VPCService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
 		Filters: []*ec2.Filter{
 			{Name: aws.String("attachment.instance-id"), Values: []*string{aws.String(instanceID)}},
 		},
@@ -559,9 +520,9 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 	var eniIDs []string
 	var availZones []AvailZoneInfo
 	vpcID := ""
-	if s.vpcService != nil && len(subnets) > 0 {
+	if s.VPCService != nil && len(subnets) > 0 {
 		for _, subnetID := range subnets {
-			eniOut, eniErr := s.vpcService.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
+			eniOut, eniErr := s.VPCService.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
 				SubnetId:    aws.String(subnetID),
 				Description: aws.String(fmt.Sprintf("ELB %s/%s/%s", arnPathSegment, name, lbID)),
 				TagSpecifications: []*ec2.TagSpecification{
@@ -577,7 +538,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 			if eniErr != nil {
 				// Rollback: delete any ENIs already created
 				for _, rollbackENI := range eniIDs {
-					if _, delErr := s.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+					if _, delErr := s.VPCService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
 						NetworkInterfaceId: aws.String(rollbackENI),
 					}, accountID); delErr != nil {
 						slog.Error("CreateLoadBalancer: rollback failed to delete ENI", "eni", rollbackENI, "err", delErr)
@@ -609,12 +570,12 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 	var albVPCIP string
 	var hostPorts map[int]int
 	var launchFailed bool
-	if s.instanceLauncher != nil && s.getSystemAMI() != "" && len(eniIDs) > 0 && len(subnets) > 0 {
+	if s.InstanceLauncher != nil && s.getSystemAMI() != "" && len(eniIDs) > 0 && len(subnets) > 0 {
 		// Resolve the first ENI's details for the VM
 		eniIP := ""
 		eniMAC := ""
-		if s.vpcService != nil {
-			result, descErr := s.vpcService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		if s.VPCService != nil {
+			result, descErr := s.VPCService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
 				NetworkInterfaceIds: []*string{aws.String(eniIDs[0])},
 			}, accountID)
 			if descErr == nil && len(result.NetworkInterfaces) > 0 {
@@ -644,7 +605,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 			if s.config != nil && s.config.Daemon.DevNetworking {
 				launchInput.HostfwdPorts = []int{80, 443}
 			}
-			out, launchErr := s.instanceLauncher.LaunchSystemInstance(launchInput)
+			out, launchErr := s.InstanceLauncher.LaunchSystemInstance(launchInput)
 			if launchErr != nil {
 				slog.Error("CreateLoadBalancer: failed to launch ALB VM", "lbId", lbID, "err", launchErr)
 				launchFailed = true
@@ -726,10 +687,10 @@ func (s *ELBv2ServiceImpl) DeleteLoadBalancer(input *elbv2.DeleteLoadBalancerInp
 	// Terminate ALB VM in background (VM termination also cleans up tap device).
 	// Must be async because VM shutdown can take seconds (QMP powerdown + QEMU exit)
 	// and we don't want to block the NATS request handler.
-	if lb.InstanceID != "" && s.instanceLauncher != nil {
+	if lb.InstanceID != "" && s.InstanceLauncher != nil {
 		instanceID := lb.InstanceID
 		go func() {
-			if err := s.instanceLauncher.TerminateSystemInstance(instanceID); err != nil {
+			if err := s.InstanceLauncher.TerminateSystemInstance(instanceID); err != nil {
 				slog.Warn("Failed to terminate ALB VM during LB deletion", "lbId", lb.LoadBalancerID, "instanceId", instanceID, "err", err)
 			}
 		}()
@@ -747,10 +708,10 @@ func (s *ELBv2ServiceImpl) DeleteLoadBalancer(input *elbv2.DeleteLoadBalancerInp
 	}
 
 	// Delete system-managed ENIs. Detach first to clear in-use status.
-	if s.vpcService != nil {
+	if s.VPCService != nil {
 		for _, eniID := range lb.ENIs {
-			_ = s.vpcService.DetachENI(accountID, eniID)
-			if _, eniErr := s.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+			_ = s.VPCService.DetachENI(accountID, eniID)
+			if _, eniErr := s.VPCService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
 				NetworkInterfaceId: aws.String(eniID),
 			}, accountID); eniErr != nil {
 				slog.Warn("Failed to delete ALB ENI during cleanup", "eniId", eniID, "err", eniErr)
