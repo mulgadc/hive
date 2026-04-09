@@ -18,11 +18,11 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 PrivateDevices=yes
 ReadOnlyPaths=/etc/spinifex/nats
-ReadWritePaths=/var/lib/spinifex/nats /var/log/spinifex /tmp
+ReadWritePaths=/var/lib/spinifex/nats /var/log/spinifex
 
 # Hardening
 ProtectHome=yes
-PrivateTmp=no
+PrivateTmp=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictRealtime=yes
@@ -34,6 +34,15 @@ ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectProc=invisible
 SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+CapabilityBoundingSet=
+ProtectHostname=yes
+KeyringMode=private
+RemoveIPC=yes
+LimitCORE=0
+LimitNOFILE=65536
+LimitNPROC=4096
 
 [Install]
 WantedBy=spinifex.target
