@@ -45,14 +45,21 @@ func (hc *healthChecker) start() error {
 // stop is a no-op — no background goroutine to stop.
 func (hc *healthChecker) stop() {}
 
-// handleHealthReport processes a health report from an lb-agent.
+// handleHealthReport unmarshals a JSON-encoded health report and processes it.
+// This is the []byte entry point used by tests and any future wire-format callers.
 func (hc *healthChecker) handleHealthReport(data []byte) {
 	var report lbagent.HealthReport
 	if err := json.Unmarshal(data, &report); err != nil {
-		slog.Debug("healthChecker: invalid health report", "err", err)
+		slog.Warn("healthChecker: invalid health report", "err", err)
 		return
 	}
 
+	hc.handleHealthReportDirect(report)
+}
+
+// handleHealthReportDirect processes a health report from an lb-agent without
+// an intermediate JSON round-trip. Called directly from LBAgentHeartbeat.
+func (hc *healthChecker) handleHealthReportDirect(report lbagent.HealthReport) {
 	if len(report.Servers) == 0 {
 		return
 	}

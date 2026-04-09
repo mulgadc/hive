@@ -36,7 +36,7 @@ type GetLBConfigOutput struct {
 }
 
 // toHealthReport converts the heartbeat input's server list to the lbagent
-// HealthReport format used by handleHealthReport.
+// HealthReport format used by handleHealthReportDirect.
 func (in *LBAgentHeartbeatInput) toHealthReport() lbagent.HealthReport {
 	report := lbagent.HealthReport{}
 	if in.LBID != nil {

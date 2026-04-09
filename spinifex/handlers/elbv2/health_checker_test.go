@@ -279,6 +279,42 @@ func TestHandleHealthReport_TargetPortZeroUsesTGPort(t *testing.T) {
 	assert.True(t, ok, "counter key should use TG default port 8080")
 }
 
+func TestHandleHealthReportDirect_TransitionsInitialToHealthy(t *testing.T) {
+	_, store := setupTestNATS(t)
+	hc := newHealthChecker(store)
+
+	tg := &TargetGroupRecord{
+		TargetGroupArn: "arn:aws:elasticloadbalancing:us-east-1:000:targetgroup/test/tg-direct",
+		TargetGroupID:  "tg-direct",
+		Port:           80,
+		HealthCheck:    DefaultHealthCheck(),
+		Targets: []Target{
+			{Id: "i-direct1", Port: 80, HealthState: TargetHealthInitial, PrivateIP: "10.0.1.20"},
+		},
+	}
+	require.NoError(t, store.PutTargetGroup(tg))
+
+	// Call handleHealthReportDirect with a struct — no JSON round-trip.
+	hc.handleHealthReportDirect(lbagent.HealthReport{
+		LBID: "lb-direct",
+		Servers: []lbagent.ServerStatus{
+			{Backend: "bk_tg-direct", Server: sanitizeName("srv", "i-direct1"), Status: "UP"},
+		},
+	})
+
+	stored, err := store.GetTargetGroup("tg-direct")
+	require.NoError(t, err)
+	assert.Equal(t, TargetHealthHealthy, stored.Targets[0].HealthState)
+}
+
+func TestHandleHealthReportDirect_EmptyServersIsNoOp(t *testing.T) {
+	_, store := setupTestNATS(t)
+	hc := newHealthChecker(store)
+
+	// Should return immediately without touching the store.
+	hc.handleHealthReportDirect(lbagent.HealthReport{LBID: "lb-empty", Servers: nil})
+}
+
 func TestEvaluateHealth_ZeroThresholdsUsesDefaults(t *testing.T) {
 	cfg := HealthCheckConfig{} // all zeros
 

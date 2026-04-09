@@ -3,7 +3,6 @@ package handlers_elbv2
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -35,7 +34,12 @@ const (
 // Cloud-init guarantees write_files runs before runcmd. The service is NOT
 // enabled at boot in the image — cloud-init is the sole trigger so the env
 // vars are always present before the agent starts.
-func (s *ELBv2ServiceImpl) lbVMUserData(lbID string) string {
+func (s *ELBv2ServiceImpl) lbVMUserData(lbID string) (string, error) {
+	if s.gatewayURL == "" || s.systemAccessKey == "" || s.systemSecretKey == "" {
+		return "", fmt.Errorf("missing system credentials: gatewayURL=%q accessKey=%q secretKey-set=%t",
+			s.gatewayURL, s.systemAccessKey, s.systemSecretKey != "")
+	}
+
 	cfg := fmt.Sprintf(`#cloud-config
 write_files:
   - path: /etc/conf.d/lb-agent
@@ -58,7 +62,7 @@ write_files:
 	cfg += `runcmd:
   - [ "rc-service", "lb-agent", "start" ]
 `
-	return cfg
+	return cfg, nil
 }
 
 // Ensure ELBv2ServiceImpl implements ELBv2Service at compile time.
@@ -334,13 +338,9 @@ func (s *ELBv2ServiceImpl) LBAgentHeartbeat(input *LBAgentHeartbeatInput, accoun
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	// Process health report via the existing health checker logic
+	// Process health report directly — no JSON round-trip needed.
 	if len(input.Servers) > 0 {
-		report := input.toHealthReport()
-		reportData, marshalErr := json.Marshal(report)
-		if marshalErr == nil {
-			s.hc.handleHealthReport(reportData)
-		}
+		s.hc.handleHealthReportDirect(input.toHealthReport())
 	}
 
 	return &LBAgentHeartbeatOutput{
@@ -567,6 +567,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 	var albInstanceID string
 	var albVPCIP string
 	var hostPorts map[int]int
+	var launchFailed bool
 	if s.instanceLauncher != nil && s.getSystemAMI() != "" && len(eniIDs) > 0 && len(subnets) > 0 {
 		// Resolve the first ENI's details for the VM
 		eniIP := ""
@@ -581,44 +582,52 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 			}
 		}
 
-		userData := s.lbVMUserData(lbID)
-		launchInput := &SystemInstanceInput{
-			InstanceType: s.getSystemInstanceType(),
-			ImageID:      s.getSystemAMI(),
-			SubnetID:     subnets[0],
-			UserData:     userData,
-			ENIID:        eniIDs[0],
-			ENIMac:       eniMAC,
-			ENIIP:        eniIP,
-			Scheme:       scheme,
-			AccountID:    accountID,
-		}
-		// Dev-mode only: forward HTTP/HTTPS ports from host for local testing.
-		// In production (VPC networking), traffic reaches the ALB VM's VPC IP directly.
-		if s.config != nil && s.config.Daemon.DevNetworking {
-			launchInput.HostfwdPorts = []int{80, 443}
-		}
-		out, launchErr := s.instanceLauncher.LaunchSystemInstance(launchInput)
-		if launchErr != nil {
-			slog.Error("CreateLoadBalancer: failed to launch ALB VM — LB will start as active without data-plane agent", "lbId", lbID, "err", launchErr)
+		userData, udErr := s.lbVMUserData(lbID)
+		if udErr != nil {
+			slog.Error("CreateLoadBalancer: system credentials not configured — cannot launch ALB VM", "lbId", lbID, "err", udErr)
+			launchFailed = true
 		} else {
-			albInstanceID = out.InstanceID
-			albVPCIP = out.PrivateIP
-			hostPorts = out.HostfwdMap
-			// Record public IP on the first AZ entry for internet-facing ALBs.
-			if out.PublicIP != "" && len(availZones) > 0 {
-				availZones[0].PublicIP = out.PublicIP
+			launchInput := &SystemInstanceInput{
+				InstanceType: s.getSystemInstanceType(),
+				ImageID:      s.getSystemAMI(),
+				SubnetID:     subnets[0],
+				UserData:     userData,
+				ENIID:        eniIDs[0],
+				ENIMac:       eniMAC,
+				ENIIP:        eniIP,
+				Scheme:       scheme,
+				AccountID:    accountID,
 			}
-			slog.Info("CreateLoadBalancer: ALB VM launched", "lbId", lbID, "instanceId", albInstanceID, "ip", out.PrivateIP, "publicIp", out.PublicIP, "hostfwd", hostPorts)
+			// Dev-mode only: forward HTTP/HTTPS ports from host for local testing.
+			// In production (VPC networking), traffic reaches the ALB VM's VPC IP directly.
+			if s.config != nil && s.config.Daemon.DevNetworking {
+				launchInput.HostfwdPorts = []int{80, 443}
+			}
+			out, launchErr := s.instanceLauncher.LaunchSystemInstance(launchInput)
+			if launchErr != nil {
+				slog.Error("CreateLoadBalancer: failed to launch ALB VM", "lbId", lbID, "err", launchErr)
+				launchFailed = true
+			} else {
+				albInstanceID = out.InstanceID
+				albVPCIP = out.PrivateIP
+				hostPorts = out.HostfwdMap
+				// Record public IP on the first AZ entry for internet-facing ALBs.
+				if out.PublicIP != "" && len(availZones) > 0 {
+					availZones[0].PublicIP = out.PublicIP
+				}
+				slog.Info("CreateLoadBalancer: ALB VM launched", "lbId", lbID, "instanceId", albInstanceID, "ip", out.PrivateIP, "publicIp", out.PublicIP, "hostfwd", hostPorts)
+			}
 		}
 	}
 
 	// ALB starts in provisioning until the agent inside the VM connects and
 	// responds to a ping. If no VM was launched (no launcher/AMI or launch
-	// failed), set active immediately to avoid a stuck provisioning state.
+	// failed), set state to failed so the API reflects the broken data-plane.
 	state := StateActive
 	if albInstanceID != "" {
 		state = StateProvisioning
+	} else if launchFailed {
+		state = StateFailed
 	}
 
 	record := &LoadBalancerRecord{
