@@ -720,6 +720,8 @@ func (d *Daemon) Start() error {
 	bridgeIP, bridgeErr := GetBridgeIPv4(mgmtBridge)
 	if bridgeErr != nil {
 		slog.Warn("Management bridge not detected, system instances will not get mgmt NIC", "bridge", mgmtBridge, "err", bridgeErr)
+	} else if bridgeIP == "" {
+		slog.Warn("Management bridge not found, system instances will not get mgmt NIC", "bridge", mgmtBridge)
 	} else {
 		d.mgmtBridgeIP = bridgeIP
 		alloc, allocErr := NewMgmtIPAllocator(bridgeIP)
@@ -2988,6 +2990,8 @@ func (d *Daemon) wireLBAgentConfig() {
 		gatewayURL := "https://" + net.JoinHostPort(gatewayHost, gatewayPort)
 		d.elbv2Service.SetGatewayURL(gatewayURL)
 		slog.Info("LB agent gateway URL configured", "url", gatewayURL)
+	} else {
+		slog.Warn("LB agent gateway URL not configured: no reachable host found, LB agents will not connect")
 	}
 
 	// Pass mgmt route info so lbVMUserData can add a bootcmd route for

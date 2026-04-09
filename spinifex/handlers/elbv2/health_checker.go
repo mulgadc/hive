@@ -80,7 +80,7 @@ func (hc *healthChecker) handleHealthReportDirect(report lbagent.HealthReport) {
 		tgs, err = hc.store.ListTargetGroups()
 	}
 	if err != nil {
-		slog.Debug("healthChecker: failed to list target groups", "lbId", report.LBID, "err", err)
+		slog.Warn("healthChecker: failed to list target groups", "lbId", report.LBID, "err", err)
 		return
 	}
 

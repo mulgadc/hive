@@ -133,7 +133,7 @@ func (a *Agent) Stop() {
 func (a *Agent) tick() {
 	servers, err := a.statsFn(a.socketPath)
 	if err != nil {
-		slog.Debug("HAProxy stats unavailable", "err", err)
+		slog.Warn("HAProxy stats unavailable", "err", err)
 	}
 
 	resp, err := a.sendHeartbeat(servers)

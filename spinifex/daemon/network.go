@@ -177,8 +177,12 @@ func SetupMgmtTapDevice(instanceID, mac, bridge string) (string, error) {
 	// Clean up stale TAP if present
 	if _, err := os.Stat("/sys/class/net/" + tapName); err == nil {
 		slog.Warn("Stale mgmt tap found, cleaning up", "tap", tapName)
-		_ = sudoCommand("ip", "link", "set", tapName, "nomaster").Run()
-		_ = sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run()
+		if err := sudoCommand("ip", "link", "set", tapName, "nomaster").Run(); err != nil {
+			slog.Warn("Failed to remove stale mgmt tap from bridge", "tap", tapName, "err", err)
+		}
+		if err := sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run(); err != nil {
+			slog.Warn("Failed to delete stale mgmt tap", "tap", tapName, "err", err)
+		}
 	}
 
 	// Create TAP

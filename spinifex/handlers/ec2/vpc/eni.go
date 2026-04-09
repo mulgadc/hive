@@ -159,7 +159,7 @@ func (s *VPCServiceImpl) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfac
 		if err != nil {
 			slog.Error("DeleteNetworkInterface: failed to check EIP ownership, skipping public IP release to avoid data loss", "eniId", eniId, "err", err)
 		} else if owned {
-			slog.Debug("DeleteNetworkInterface: public IP owned by EIP, skipping release", "eniId", eniId, "publicIp", record.PublicIpAddress)
+			slog.Info("DeleteNetworkInterface: public IP owned by EIP, skipping release", "eniId", eniId, "publicIp", record.PublicIpAddress)
 		} else {
 			portName := "port-" + eniId
 			s.publishNATEvent("vpc.delete-nat", record.VpcId, record.PublicIpAddress, record.PrivateIpAddress, portName, record.MacAddress)
