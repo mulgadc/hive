@@ -48,9 +48,6 @@ func Write(root string, cfg Config) error {
 	if err := enableUnit(root); err != nil {
 		return err
 	}
-	if err := writeBannerScript(root, cfg); err != nil {
-		return fmt.Errorf("banner script: %w", err)
-	}
 	if err := writeBannerUnit(root); err != nil {
 		return fmt.Errorf("banner unit: %w", err)
 	}
@@ -139,59 +136,20 @@ func buildClusterCmd(cfg Config) string {
 	}
 }
 
-func writeBannerScript(root string, _ Config) error {
-	// The banner reads IP and interface at runtime from /etc/spinifex/node.conf
-	// so it stays correct if the operator changes the IP after install.
-	script := `#!/bin/bash
-# Spinifex console banner — printed to tty1 on every boot after services start.
-
-# Load node config written by the installer.
-# shellcheck source=/etc/spinifex/node.conf
-. /etc/spinifex/node.conf 2>/dev/null || true
-
-# Resolve the current IP from the management interface at runtime.
-IP=""
-if [ -n "${MANAGEMENT_IFACE:-}" ]; then
-    IP=$(ip -4 addr show "$MANAGEMENT_IFACE" 2>/dev/null \
-        | awk '/inet /{gsub(/\/.*/, "", $2); print $2; exit}')
-fi
-# Fall back to the IP recorded at install time.
-IP="${IP:-${MANAGEMENT_IP:-<unknown>}}"
-HOST="${NODE_HOSTNAME:-$(hostname)}"
-
-{
-    echo ""
-    echo "  +----------------------------------------------------+"
-    echo "  |         Spinifex  —  Mulga Defense Corporation     |"
-    echo "  +----------------------------------------------------+"
-    printf "  |  Node:      %-40s|\n" "$HOST"
-    printf "  |  Dashboard: %-40s|\n" "https://$IP:3000"
-    printf "  |  API:       %-40s|\n" "https://$IP:9999"
-    printf "  |  SSH:       %-40s|\n" "root@$IP"
-    echo "  +----------------------------------------------------+"
-    echo "  |  Login credentials (AWS Access Key + Secret Key)   |"
-    echo "  |    cat /root/spinifex-credentials.txt              |"
-    if [ ! -f /root/spinifex-credentials.txt ]; then
-        echo "  |  (credentials file not found — check firstboot)    |"
-    fi
-    echo "  +----------------------------------------------------+"
-    echo ""
-} | tee /dev/tty1 > /etc/motd
-`
-
-	path := filepath.Join(root, "usr/local/bin/spinifex-banner.sh")
-	return os.WriteFile(path, []byte(script), 0o755)
-}
-
+// writeBannerUnit writes the spinifex-banner.service unit that runs
+// `spx admin banner --boot-check` on every boot. This replaces the old
+// spinifex-banner.sh bash script with the CLI command, which also handles
+// management IP change detection.
 func writeBannerUnit(root string) error {
 	unit := `[Unit]
-Description=Spinifex console banner
-After=spinifex.target
-Wants=spinifex.target
+Description=Spinifex console banner and boot health check
+After=network-online.target
+Before=spinifex.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/spinifex-banner.sh
+ExecStart=/usr/local/bin/spx admin banner --boot-check
 RemainAfterExit=yes
 StandardOutput=journal
 StandardError=journal
