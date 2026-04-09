@@ -43,6 +43,12 @@ depend() {
 INITSCRIPT
 chmod 755 /etc/init.d/lb-agent
 
+# Move networking from boot to default runlevel so cloud-init can write
+# the network config before the networking service starts. Without this,
+# Alpine's networking service races cloud-init and starts with no config.
+rc-update del networking boot 2>/dev/null || true
+rc-update add networking default
+
 # Do NOT enable lb-agent at boot — cloud-init must write
 # /etc/conf.d/lb-agent (with LB_LB_ID, LB_GATEWAY_URL, LB_ACCESS_KEY,
 # LB_SECRET_KEY) before the service starts.

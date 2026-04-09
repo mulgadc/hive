@@ -9,21 +9,21 @@ import (
 // --- generateNetworkConfig ---
 
 func TestGenerateNetworkConfig_BothEmpty(t *testing.T) {
-	cfg := generateNetworkConfig("", "", "", "", "", "")
+	cfg := generateNetworkConfig("", "", "", "")
 	assert.Equal(t, cloudInitNetworkConfigWildcard, cfg)
 }
 
 func TestGenerateNetworkConfig_OneEmpty(t *testing.T) {
-	cfg := generateNetworkConfig("02:00:00:aa:bb:cc", "", "", "", "", "")
+	cfg := generateNetworkConfig("02:00:00:aa:bb:cc", "", "", "")
 	assert.Contains(t, cfg, "vpc0:", "eniMAC alone should produce per-interface config")
 	assert.NotContains(t, cfg, "dev0:", "no dev NIC without devMAC")
 
-	cfg = generateNetworkConfig("", "02:00:00:dd:ee:ff", "", "", "", "")
+	cfg = generateNetworkConfig("", "02:00:00:dd:ee:ff", "", "")
 	assert.Equal(t, cloudInitNetworkConfigWildcard, cfg, "should fall back to wildcard if eniMAC empty")
 }
 
 func TestGenerateNetworkConfig_DualNIC(t *testing.T) {
-	cfg := generateNetworkConfig("02:00:00:aa:bb:cc", "02:00:00:dd:ee:ff", "", "", "", "")
+	cfg := generateNetworkConfig("02:00:00:aa:bb:cc", "02:00:00:dd:ee:ff", "", "")
 	assert.Contains(t, cfg, "version: 2")
 	assert.Contains(t, cfg, `macaddress: "02:00:00:aa:bb:cc"`)
 	assert.Contains(t, cfg, `macaddress: "02:00:00:dd:ee:ff"`)
@@ -35,7 +35,7 @@ func TestGenerateNetworkConfig_DualNIC(t *testing.T) {
 }
 
 func TestGenerateNetworkConfig_TripleNIC(t *testing.T) {
-	cfg := generateNetworkConfig("02:00:00:aa:bb:cc", "02:de:00:dd:ee:ff", "02:a0:00:11:22:33", "10.15.8.101", "", "")
+	cfg := generateNetworkConfig("02:00:00:aa:bb:cc", "02:de:00:dd:ee:ff", "02:a0:00:11:22:33", "10.15.8.101")
 	assert.Contains(t, cfg, "version: 2")
 	assert.Contains(t, cfg, `macaddress: "02:00:00:aa:bb:cc"`)
 	assert.Contains(t, cfg, `macaddress: "02:de:00:dd:ee:ff"`)
@@ -49,7 +49,7 @@ func TestGenerateNetworkConfig_TripleNIC(t *testing.T) {
 
 func TestGenerateNetworkConfig_MgmtWithoutDev(t *testing.T) {
 	// System instances: eniMAC + mgmtMAC, no devMAC — should get per-interface config with mgmt NIC
-	cfg := generateNetworkConfig("02:00:00:aa:bb:cc", "", "02:a0:00:11:22:33", "10.15.8.101", "", "")
+	cfg := generateNetworkConfig("02:00:00:aa:bb:cc", "", "02:a0:00:11:22:33", "10.15.8.101")
 	assert.Contains(t, cfg, "vpc0:")
 	assert.NotContains(t, cfg, "dev0:", "no dev NIC without devMAC")
 	assert.Contains(t, cfg, "mgmt0:")
@@ -58,27 +58,14 @@ func TestGenerateNetworkConfig_MgmtWithoutDev(t *testing.T) {
 }
 
 func TestGenerateNetworkConfig_MgmtMACWithoutIP(t *testing.T) {
-	cfg := generateNetworkConfig("02:00:00:aa:bb:cc", "02:de:00:dd:ee:ff", "02:a0:00:11:22:33", "", "", "")
+	cfg := generateNetworkConfig("02:00:00:aa:bb:cc", "02:de:00:dd:ee:ff", "02:a0:00:11:22:33", "")
 	assert.NotContains(t, cfg, "mgmt0:", "mgmt NIC should not appear without IP")
 }
 
 func TestGenerateNetworkConfig_MgmtIPWithoutMAC(t *testing.T) {
-	cfg := generateNetworkConfig("02:00:00:aa:bb:cc", "02:de:00:dd:ee:ff", "", "10.15.8.101", "", "")
+	cfg := generateNetworkConfig("02:00:00:aa:bb:cc", "02:de:00:dd:ee:ff", "", "10.15.8.101")
 	assert.NotContains(t, cfg, "mgmt0:", "mgmt NIC should not appear without MAC")
 }
 
-func TestGenerateNetworkConfig_MgmtWithRoute(t *testing.T) {
-	cfg := generateNetworkConfig("02:00:00:aa:bb:cc", "", "02:a0:00:11:22:33", "10.15.8.101", "10.15.8.1", "192.168.1.26")
-	assert.Contains(t, cfg, "mgmt0:")
-	assert.Contains(t, cfg, `"10.15.8.101/24"`)
-	assert.Contains(t, cfg, "routes:")
-	assert.Contains(t, cfg, `"192.168.1.26/32"`)
-	assert.Contains(t, cfg, `"10.15.8.1"`)
-}
-
-func TestGenerateNetworkConfig_MgmtWithoutRoute(t *testing.T) {
-	// When AWSGW binds to 0.0.0.0, no route is needed
-	cfg := generateNetworkConfig("02:00:00:aa:bb:cc", "", "02:a0:00:11:22:33", "10.15.8.101", "", "")
-	assert.Contains(t, cfg, "mgmt0:")
-	assert.NotContains(t, cfg, "routes:")
-}
+// Route for multi-node is handled via bootcmd in lbVMUserData, not
+// in the network-config (Alpine cloud-init doesn't support v2 routes).

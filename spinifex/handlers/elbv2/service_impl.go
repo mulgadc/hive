@@ -36,7 +36,7 @@ const (
 // enabled at boot in the image — cloud-init is the sole trigger so the env
 // vars are always present before the agent starts.
 func (s *ELBv2ServiceImpl) lbVMUserData(lbID string) string {
-	return fmt.Sprintf(`#cloud-config
+	cfg := fmt.Sprintf(`#cloud-config
 write_files:
   - path: /etc/conf.d/lb-agent
     content: |
@@ -44,9 +44,21 @@ write_files:
       LB_GATEWAY_URL=%s
       LB_ACCESS_KEY=%s
       LB_SECRET_KEY=%s
-runcmd:
-  - [ "rc-service", "lb-agent", "start" ]
 `, lbID, s.gatewayURL, s.systemAccessKey, s.systemSecretKey)
+
+	// When AWSGW binds to a specific IP (multi-node), add a host route via
+	// the management NIC so the agent can reach the gateway. bootcmd runs
+	// early enough that networking is configured before lb-agent starts.
+	if s.mgmtRouteGateway != "" && s.mgmtRouteTarget != "" {
+		cfg += fmt.Sprintf(`bootcmd:
+  - [ "ip", "route", "add", "%s/32", "via", "%s" ]
+`, s.mgmtRouteTarget, s.mgmtRouteGateway)
+	}
+
+	cfg += `runcmd:
+  - [ "rc-service", "lb-agent", "start" ]
+`
+	return cfg
 }
 
 // Ensure ELBv2ServiceImpl implements ELBv2Service at compile time.
@@ -68,6 +80,8 @@ type ELBv2ServiceImpl struct {
 	systemAccessKey        string        // System account access key for ALB agent SigV4 auth
 	systemSecretKey        string        // System account secret key for ALB agent SigV4 auth
 	gatewayURL             string        // AWS gateway URL for ALB agent outbound connections
+	mgmtRouteGateway       string        // br-mgmt IP (next-hop for mgmt route); empty when AWSGW is on 0.0.0.0
+	mgmtRouteTarget        string        // AWSGW bind IP to route via mgmt NIC
 	ctx                    context.Context
 	cancel                 context.CancelFunc
 	hc                     *healthChecker
@@ -176,6 +190,13 @@ func (s *ELBv2ServiceImpl) SetSystemCredentials(accessKey, secretKey string) {
 // SetGatewayURL sets the AWS gateway URL that ALB agents connect to.
 func (s *ELBv2ServiceImpl) SetGatewayURL(url string) {
 	s.gatewayURL = url
+}
+
+// SetMgmtRoute stores the host route that internal LB VMs add via bootcmd
+// so the agent can reach the AWSGW through the management NIC.
+func (s *ELBv2ServiceImpl) SetMgmtRoute(gateway, target string) {
+	s.mgmtRouteGateway = gateway
+	s.mgmtRouteTarget = target
 }
 
 // resolveENIBindAddr looks up the private IP of the first ENI belonging to the ALB.

@@ -2989,4 +2989,10 @@ func (d *Daemon) wireLBAgentConfig() {
 		d.elbv2Service.SetGatewayURL(gatewayURL)
 		slog.Info("LB agent gateway URL configured", "url", gatewayURL)
 	}
+
+	// Pass mgmt route info so lbVMUserData can add a bootcmd route for
+	// internal LBs that reach the AWSGW via the management NIC.
+	if d.mgmtRouteVia != "" {
+		d.elbv2Service.SetMgmtRoute(d.mgmtBridgeIP, d.mgmtRouteVia)
+	}
 }
