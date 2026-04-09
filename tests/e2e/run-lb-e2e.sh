@@ -722,8 +722,16 @@ if [ "$PEER_AVAILABLE" = true ]; then
 
     if [ -n "$NLB_PUBLIC_IP" ] && [ "$NLB_PUBLIC_IP" != "null" ]; then
         echo "Testing NLB reachability from peer node..."
-        PEER_TCP=$(peer_ssh "$PEER_NODE_IP" "echo '' | nc -w3 ${NLB_PUBLIC_IP} 9000" 2>/dev/null || true)
-        if [ -n "$(echo "$PEER_TCP" | tr -d '[:space:]')" ]; then
+        PEER_NLB_OK=false
+        for attempt in $(seq 1 10); do
+            PEER_TCP=$(peer_ssh "$PEER_NODE_IP" "echo '' | nc -w3 ${NLB_PUBLIC_IP} 9000" 2>/dev/null || true)
+            if [ -n "$(echo "$PEER_TCP" | tr -d '[:space:]')" ]; then
+                PEER_NLB_OK=true; break
+            fi
+            echo "  Attempt $attempt/10: peer NLB not yet responding..."
+            sleep 3
+        done
+        if [ "$PEER_NLB_OK" = true ]; then
             pass "peer reached NLB via public IP"
         else
             fail "peer could NOT reach NLB at ${NLB_PUBLIC_IP}:9000"
