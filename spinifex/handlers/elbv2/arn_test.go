@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildLBArn(t *testing.T) {
@@ -38,7 +39,8 @@ func TestLbVMUserData_ContainsLBID(t *testing.T) {
 		systemAccessKey: "AKIAIOSFODNN7EXAMPLE",
 		systemSecretKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
 	}
-	ud := svc.lbVMUserData("lb-abc123")
+	ud, err := svc.lbVMUserData("lb-abc123")
+	require.NoError(t, err)
 	assert.Contains(t, ud, "#cloud-config")
 	assert.Contains(t, ud, "write_files:")
 	assert.Contains(t, ud, "/etc/conf.d/lb-agent")
@@ -58,7 +60,8 @@ func TestLbVMUserData_WriteFilesThenRuncmd(t *testing.T) {
 		systemAccessKey: "AKID",
 		systemSecretKey: "SECRET",
 	}
-	ud := svc.lbVMUserData("lb-test")
+	ud, err := svc.lbVMUserData("lb-test")
+	require.NoError(t, err)
 	assert.Contains(t, ud, "write_files:")
 	assert.Contains(t, ud, "/etc/conf.d/lb-agent")
 	assert.Contains(t, ud, "rc-service")
@@ -79,6 +82,37 @@ func TestLbVMUserData_NoCACert(t *testing.T) {
 		systemAccessKey: "AKID",
 		systemSecretKey: "SECRET",
 	}
-	ud := svc.lbVMUserData("lb-noca")
+	ud, err := svc.lbVMUserData("lb-noca")
+	require.NoError(t, err)
 	assert.NotContains(t, ud, "ca_certs:")
+}
+
+func TestLbVMUserData_EmptyGatewayURL(t *testing.T) {
+	svc := &ELBv2ServiceImpl{
+		systemAccessKey: "AKID",
+		systemSecretKey: "SECRET",
+	}
+	_, err := svc.lbVMUserData("lb-test")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing system credentials")
+}
+
+func TestLbVMUserData_EmptyAccessKey(t *testing.T) {
+	svc := &ELBv2ServiceImpl{
+		gatewayURL:      "https://10.0.0.1:9999",
+		systemSecretKey: "SECRET",
+	}
+	_, err := svc.lbVMUserData("lb-test")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing system credentials")
+}
+
+func TestLbVMUserData_EmptySecretKey(t *testing.T) {
+	svc := &ELBv2ServiceImpl{
+		gatewayURL:      "https://10.0.0.1:9999",
+		systemAccessKey: "AKID",
+	}
+	_, err := svc.lbVMUserData("lb-test")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing system credentials")
 }

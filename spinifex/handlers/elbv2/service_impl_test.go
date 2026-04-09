@@ -1362,7 +1362,8 @@ func TestLBVMUserData_MgmtRoute(t *testing.T) {
 	svc.SetGatewayURL("https://10.15.8.100:9999")
 	svc.SetSystemCredentials("AK", "SK")
 
-	data := svc.lbVMUserData("lb-test1")
+	data, err := svc.lbVMUserData("lb-test1")
+	require.NoError(t, err)
 	assert.Contains(t, data, "bootcmd:")
 	assert.Contains(t, data, `"10.15.8.100/32"`)
 	assert.Contains(t, data, `"10.15.8.1"`)

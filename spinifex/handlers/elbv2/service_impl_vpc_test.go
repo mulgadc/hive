@@ -224,6 +224,8 @@ func TestCreateLoadBalancer_InternetFacing_AllocatesPublicIP(t *testing.T) {
 	}
 	svc.SetInstanceLauncher(mock)
 	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
+	svc.SetGatewayURL("https://10.0.0.1:9999")
+	svc.SetSystemCredentials("AKID", "SECRET")
 
 	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("inet-alb"),
@@ -260,6 +262,8 @@ func TestCreateLoadBalancer_Internal_NoPublicIP(t *testing.T) {
 	}
 	svc.SetInstanceLauncher(mock)
 	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
+	svc.SetGatewayURL("https://10.0.0.1:9999")
+	svc.SetSystemCredentials("AKID", "SECRET")
 
 	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("internal-only"),
@@ -296,6 +300,8 @@ func TestCreateLoadBalancer_NLB_Internal_NoPublicIP(t *testing.T) {
 	}
 	svc.SetInstanceLauncher(mock)
 	svc.SetSystemAMIFunc(func() string { return "ami-nlb-test" })
+	svc.SetGatewayURL("https://10.0.0.1:9999")
+	svc.SetSystemCredentials("AKID", "SECRET")
 
 	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("nlb-internal"),
@@ -340,6 +346,8 @@ func TestDeleteLoadBalancer_TerminatesVM_WithPublicIP(t *testing.T) {
 	}
 	svc.SetInstanceLauncher(mock)
 	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
+	svc.SetGatewayURL("https://10.0.0.1:9999")
+	svc.SetSystemCredentials("AKID", "SECRET")
 
 	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("del-pub-alb"),
@@ -385,6 +393,8 @@ func TestDescribeLoadBalancers_InternetFacing_IncludesPublicIP(t *testing.T) {
 	}
 	svc.SetInstanceLauncher(mock)
 	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
+	svc.SetGatewayURL("https://10.0.0.1:9999")
+	svc.SetSystemCredentials("AKID", "SECRET")
 
 	_, err = svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("desc-pub-alb"),
@@ -420,6 +430,8 @@ func TestDescribeLoadBalancers_Internal_NoPublicIP(t *testing.T) {
 	}
 	svc.SetInstanceLauncher(mock)
 	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
+	svc.SetGatewayURL("https://10.0.0.1:9999")
+	svc.SetSystemCredentials("AKID", "SECRET")
 
 	_, err = svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("desc-int-alb"),
@@ -439,6 +451,60 @@ func TestDescribeLoadBalancers_Internal_NoPublicIP(t *testing.T) {
 	assert.Empty(t, lb.AvailabilityZones[0].LoadBalancerAddresses)
 	// Verify DNS has internal prefix
 	assert.Contains(t, *lb.DNSName, "internal-desc-int-alb")
+}
+
+func TestCreateLoadBalancer_LaunchFailure_SetsStateFailed(t *testing.T) {
+	svc, vpcSvc := setupTestServiceWithVPC(t)
+
+	subnets, err := vpcSvc.DescribeSubnets(&ec2.DescribeSubnetsInput{}, testAccountID)
+	require.NoError(t, err)
+	subnetID := *subnets.Subnets[0].SubnetId
+
+	mock := &mockSystemInstanceLauncher{
+		launchErr: assert.AnError,
+	}
+	svc.SetInstanceLauncher(mock)
+	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
+	svc.SetGatewayURL("https://10.0.0.1:9999")
+	svc.SetSystemCredentials("AKID", "SECRET")
+
+	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name:    aws.String("fail-launch-alb"),
+		Subnets: []*string{aws.String(subnetID)},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	lb := out.LoadBalancers[0]
+	assert.Equal(t, StateFailed, *lb.State.Code)
+}
+
+func TestCreateLoadBalancer_MissingCredentials_SetsStateFailed(t *testing.T) {
+	svc, vpcSvc := setupTestServiceWithVPC(t)
+
+	subnets, err := vpcSvc.DescribeSubnets(&ec2.DescribeSubnetsInput{}, testAccountID)
+	require.NoError(t, err)
+	subnetID := *subnets.Subnets[0].SubnetId
+
+	mock := &mockSystemInstanceLauncher{
+		launchResult: &SystemInstanceOutput{
+			InstanceID: "i-should-not-launch",
+			PrivateIP:  "10.0.1.99",
+		},
+	}
+	svc.SetInstanceLauncher(mock)
+	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
+	// Deliberately NOT setting credentials
+
+	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name:    aws.String("no-creds-alb"),
+		Subnets: []*string{aws.String(subnetID)},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	lb := out.LoadBalancers[0]
+	assert.Equal(t, StateFailed, *lb.State.Code)
+	// Verify launcher was never called
+	assert.Empty(t, mock.launchCalls)
 }
 
 func TestENI_RequesterManagedFlag(t *testing.T) {
