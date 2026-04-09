@@ -230,7 +230,7 @@ func TestErrorHandler_EC2Service(t *testing.T) {
 	assert.NotContains(t, xmlStr, "<ErrorResponse>")
 }
 
-func TestErrorHandler_UsesRequestIDHeader(t *testing.T) {
+func TestErrorHandler_IgnoresClientRequestID(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -244,7 +244,8 @@ func TestErrorHandler_UsesRequestIDHeader(t *testing.T) {
 	resp := doRequest(handler, req)
 
 	body, _ := io.ReadAll(resp.Body)
-	assert.Contains(t, string(body), "custom-req-id-123")
+	assert.NotContains(t, string(body), "custom-req-id-123")
+	assert.Contains(t, string(body), "<RequestID>")
 }
 
 func TestErrorHandler_ContentTypeXML(t *testing.T) {
