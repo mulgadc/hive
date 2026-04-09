@@ -22,11 +22,11 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 PrivateDevices=yes
 ReadOnlyPaths=/etc/spinifex/spinifex.toml /etc/spinifex/systemd.env
-ReadWritePaths=/var/lib/spinifex/viperblock /var/log/spinifex /tmp
+ReadWritePaths=/var/lib/spinifex/viperblock /var/log/spinifex /run/spinifex/nbd
 
 # Hardening
 ProtectHome=yes
-PrivateTmp=no
+PrivateTmp=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictRealtime=yes

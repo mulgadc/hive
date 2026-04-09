@@ -307,6 +307,10 @@ create_directories() {
     $SUDO chmod 0775 /run/spinifex
     $SUDO chown "root:$SPINIFEX_GROUP" /run/spinifex
 
+    $SUDO mkdir -p /run/spinifex/nbd
+    $SUDO chmod 0770 /run/spinifex/nbd
+    $SUDO chown "root:$SPINIFEX_GROUP" /run/spinifex/nbd
+
     # Per-service config directories
     $SUDO mkdir -p /etc/spinifex/nats
     $SUDO chown "spinifex-nats:$SPINIFEX_GROUP" /etc/spinifex/nats

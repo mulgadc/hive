@@ -326,6 +326,7 @@ func SetServiceOwnership() {
 		"/var/lib/spinifex/amis",
 		"/var/lib/spinifex/volumes",
 		"/var/lib/spinifex/state",
+		"/run/spinifex/nbd",
 	} {
 		if _, err := os.Stat(dir); err != nil {
 			continue
