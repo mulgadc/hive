@@ -1481,13 +1481,25 @@ func (d *Daemon) handleEC2DescribeInstanceAttribute(msg *nats.Msg) {
 	respondWithJSON(msg, output)
 }
 
-// publishNATEvent publishes a NAT lifecycle event (vpc.add-nat or vpc.delete-nat) to NATS.
+// publishNATEvent sends a NAT lifecycle event (vpc.add-nat or vpc.delete-nat) to NATS.
+// For vpc.add-nat, it uses request-reply to ensure the OVN NAT rule is committed
+// before returning, preventing ARP propagation races. For vpc.delete-nat, it
+// uses fire-and-forget since the caller doesn't need to wait.
 func (d *Daemon) publishNATEvent(topic, vpcId, externalIP, logicalIP, portName, mac string) {
-	utils.PublishEvent(d.natsConn, topic, struct {
+	evt := struct {
 		VpcId      string `json:"vpc_id"`
 		ExternalIP string `json:"external_ip"`
 		LogicalIP  string `json:"logical_ip"`
 		PortName   string `json:"port_name"`
 		MAC        string `json:"mac"`
-	}{VpcId: vpcId, ExternalIP: externalIP, LogicalIP: logicalIP, PortName: portName, MAC: mac})
+	}{VpcId: vpcId, ExternalIP: externalIP, LogicalIP: logicalIP, PortName: portName, MAC: mac}
+
+	if topic == "vpc.add-nat" {
+		if err := utils.RequestEvent(d.natsConn, topic, evt, 10*time.Second); err != nil {
+			slog.Warn("publishNATEvent: failed to add NAT rule (will retry via reconciliation)",
+				"topic", topic, "externalIP", externalIP, "logicalIP", logicalIP, "err", err)
+		}
+		return
+	}
+	utils.PublishEvent(d.natsConn, topic, evt)
 }

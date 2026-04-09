@@ -460,7 +460,7 @@ run_tcp_traffic_test() {
     local total_ok=0 total_fail=0
     for i in $(seq 1 $num_requests); do
         local resp
-        resp=$(echo "" | nc -w2 "$ip" "$port" 2>/dev/null || true)
+        resp=$(echo "" | nc -w5 "$ip" "$port" 2>/dev/null || true)
         resp=$(echo "$resp" | tr -d '[:space:]')
         if [ -n "$resp" ]; then
             counts[$resp]=$(( ${counts[$resp]:-0} + 1 ))
@@ -685,7 +685,7 @@ if [ "$PEER_AVAILABLE" = true ]; then
         echo "Waiting for NLB to respond at ${NLB_PUBLIC_IP}:9000..."
         NLB_RESPONDING=false
         for attempt in $(seq 1 20); do
-            PROBE=$(echo "" | nc -w3 ${NLB_PUBLIC_IP} 9000 2>/dev/null || true)
+            PROBE=$(echo "" | nc -w5 ${NLB_PUBLIC_IP} 9000 2>/dev/null || true)
             if [ -n "$PROBE" ]; then NLB_RESPONDING=true; break; fi
             echo "  Attempt $attempt/20..."
             sleep 5
@@ -724,7 +724,7 @@ if [ "$PEER_AVAILABLE" = true ]; then
         echo "Testing NLB reachability from peer node..."
         PEER_NLB_OK=false
         for attempt in $(seq 1 10); do
-            PEER_TCP=$(peer_ssh "$PEER_NODE_IP" "echo '' | nc -w3 ${NLB_PUBLIC_IP} 9000" 2>/dev/null || true)
+            PEER_TCP=$(peer_ssh "$PEER_NODE_IP" "echo '' | nc -w5 ${NLB_PUBLIC_IP} 9000" 2>/dev/null || true)
             if [ -n "$(echo "$PEER_TCP" | tr -d '[:space:]')" ]; then
                 PEER_NLB_OK=true; break
             fi
