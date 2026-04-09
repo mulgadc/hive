@@ -74,6 +74,11 @@ backend {{.Name}}
 {{end}}
 `
 
+var (
+	haproxyHTTPTmpl = template.Must(template.New("haproxy").Parse(haproxyConfigTemplate))
+	haproxyTCPTmpl  = template.Must(template.New("haproxy-tcp").Parse(haproxyTCPConfigTemplate))
+)
+
 // HAProxyConfig holds the full configuration for rendering the HAProxy template.
 type HAProxyConfig struct {
 	SocketPath string
@@ -122,13 +127,8 @@ func GenerateHAProxyConfig(lb *LoadBalancerRecord, listeners []*ListenerRecord, 
 func generateALBConfig(lb *LoadBalancerRecord, listeners []*ListenerRecord, tgByArn map[string]*TargetGroupRecord, bindAddr string) (string, error) {
 	cfg := buildHAProxyConfig(lb, listeners, tgByArn, bindAddr, false)
 
-	tmpl, err := template.New("haproxy").Parse(haproxyConfigTemplate)
-	if err != nil {
-		return "", fmt.Errorf("parse haproxy template: %w", err)
-	}
-
 	var buf strings.Builder
-	if err := tmpl.Execute(&buf, cfg); err != nil {
+	if err := haproxyHTTPTmpl.Execute(&buf, cfg); err != nil {
 		return "", fmt.Errorf("execute haproxy template: %w", err)
 	}
 
@@ -139,13 +139,8 @@ func generateALBConfig(lb *LoadBalancerRecord, listeners []*ListenerRecord, tgBy
 func generateNLBConfig(lb *LoadBalancerRecord, listeners []*ListenerRecord, tgByArn map[string]*TargetGroupRecord, bindAddr string) (string, error) {
 	cfg := buildHAProxyConfig(lb, listeners, tgByArn, bindAddr, true)
 
-	tmpl, err := template.New("haproxy-tcp").Parse(haproxyTCPConfigTemplate)
-	if err != nil {
-		return "", fmt.Errorf("parse haproxy tcp template: %w", err)
-	}
-
 	var buf strings.Builder
-	if err := tmpl.Execute(&buf, cfg); err != nil {
+	if err := haproxyTCPTmpl.Execute(&buf, cfg); err != nil {
 		return "", fmt.Errorf("execute haproxy tcp template: %w", err)
 	}
 
