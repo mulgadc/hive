@@ -710,7 +710,9 @@ func (s *ELBv2ServiceImpl) DeleteLoadBalancer(input *elbv2.DeleteLoadBalancerInp
 	// Delete system-managed ENIs. Detach first to clear in-use status.
 	if s.VPCService != nil {
 		for _, eniID := range lb.ENIs {
-			_ = s.VPCService.DetachENI(accountID, eniID)
+			if detachErr := s.VPCService.DetachENI(accountID, eniID); detachErr != nil {
+				slog.Warn("Failed to detach ALB ENI during cleanup", "eniId", eniID, "err", detachErr)
+			}
 			if _, eniErr := s.VPCService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
 				NetworkInterfaceId: aws.String(eniID),
 			}, accountID); eniErr != nil {

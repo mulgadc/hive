@@ -1906,7 +1906,9 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 			// Other errors (KV failures, permission issues, in-use) are real
 			// failures that could leak IPAM addresses.
 			if deleteVolume && instance.ENIId != "" && d.vpcService != nil {
-				_ = d.vpcService.DetachENI(instance.AccountID, instance.ENIId)
+				if detachErr := d.vpcService.DetachENI(instance.AccountID, instance.ENIId); detachErr != nil {
+					slog.Warn("Failed to detach ENI on termination", "eni", instance.ENIId, "instanceId", instance.ID, "err", detachErr)
+				}
 				if _, eniErr := d.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
 					NetworkInterfaceId: &instance.ENIId,
 				}, instance.AccountID); eniErr != nil {
@@ -2954,6 +2956,8 @@ func (d *Daemon) wireLBAgentConfig() {
 		d.elbv2Service.SystemAccessKey = d.config.Predastore.AccessKey
 		d.elbv2Service.SystemSecretKey = d.config.Predastore.SecretKey
 		slog.Info("System credentials loaded for LB agent auth")
+	} else {
+		slog.Warn("System credentials missing from spinifex.toml predastore section — LB VMs will not have SigV4 credentials for agent auth")
 	}
 
 	// Resolve gateway URL — the address LB VMs use to reach the AWS gateway.
