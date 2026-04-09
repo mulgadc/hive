@@ -120,6 +120,17 @@ run:
 	$(MAKE) go_build
 	$(MAKE) go_run
 
+# Fast iteration: build + install binary + restart all services
+deploy: build
+	sudo install -m 755 bin/spx /usr/local/bin/spx
+	sudo systemctl daemon-reload
+	sudo systemctl restart spinifex.target
+
+# Re-run setup.sh after changing systemd units, helper scripts, or logrotate config.
+# Not needed for code-only changes — use deploy for those.
+reinstall:
+	scripts/dev-install.sh
+
 clean:
 	rm -f ./bin/$(GO_PROJECT_NAME)
 	rm -rf spinifex/services/spinifexui/frontend/dist
@@ -136,9 +147,9 @@ install-system:
 		ovn-central ovn-host openvswitch-switch dhcpcd-base
 
 install-go:
-	@echo -e "\n....Installing Go 1.26.1 for $(ARCH) ($(GO_ARCH))...."
+	@echo -e "\n....Installing Go 1.26.2 for $(ARCH) ($(GO_ARCH))...."
 	@if [ ! -d "/usr/local/go" ]; then \
-		curl -L https://go.dev/dl/go1.26.1.linux-$(GO_ARCH).tar.gz | tar -C /usr/local -xz; \
+		curl -L https://go.dev/dl/go1.26.2.linux-$(GO_ARCH).tar.gz | tar -C /usr/local -xz; \
 	else \
 		echo "Go already installed in /usr/local/go"; \
 	fi
@@ -211,7 +222,8 @@ distro-arm64:
 distro-clean:
 	rm -rf dist/
 
-.PHONY: build build-ui build-installer build-alb-agent build-system-image build-alb-image go_build go_run preflight test test-cover test-race diff-coverage bench run clean \
+.PHONY: build build-ui build-installer build-alb-agent build-system-image build-alb-image go_build go_run preflight test test-cover test-race diff-coverage bench run \
+	deploy reinstall clean \
 	install-system install-go install-aws quickinstall \
 	lint fix govulncheck \
 	distro distro-amd64 distro-arm64 distro-clean

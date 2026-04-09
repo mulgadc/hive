@@ -481,7 +481,19 @@ echo "  ovn-encap-type: geneve"
 echo ""
 echo "Step 5: Starting ovn-controller..."
 
-sudo systemctl start ovn-controller
+# Set ovn-controller file log level to WARN so it doesn't spam the log with
+# connection-retry INFO messages ("OVNSB commit failed") when the SB DB
+# isn't running. Uses a systemd ExecStartPost so it persists across restarts.
+OVN_CTRL_OVERRIDE="/etc/systemd/system/ovn-controller.service.d/log-level.conf"
+sudo mkdir -p "$(dirname "$OVN_CTRL_OVERRIDE")"
+sudo tee "$OVN_CTRL_OVERRIDE" >/dev/null <<'OVERRIDE'
+[Service]
+ExecStartPost=/bin/sh -c 'OVS_RUNDIR=/var/run/ovn exec /usr/bin/ovs-appctl -t ovn-controller vlog/set file:warn'
+OVERRIDE
+sudo systemctl daemon-reload
+echo "  ovn-controller log level: file:warn (via systemd drop-in)"
+
+sudo systemctl restart ovn-controller
 echo "  ovn-controller: started"
 
 # --- Step 6: Sysctl tuning ---
@@ -565,59 +577,43 @@ else
     echo "  systemd override: already exists"
 fi
 
-# Create sudoers rule for network commands that always need root
-# (ip tuntap, ip link set — NET_ADMIN operations)
+# Sudoers rules for spinifex-daemon and spinifex-vpcd are managed by setup.sh
+# (install_sudoers). Skip writing here to avoid conflicts.
 SUDOERS_FILE="/etc/sudoers.d/spinifex-network"
-if [ ! -f "$SUDOERS_FILE" ]; then
-    CURRENT_USER=$(whoami)
-    sudo tee "$SUDOERS_FILE" >/dev/null <<EOF
-# Spinifex VPC networking: allow non-root daemon to manage tap devices and OVS
-$CURRENT_USER ALL=(root) NOPASSWD: /sbin/ip, /usr/sbin/ip
-$CURRENT_USER ALL=(root) NOPASSWD: /usr/bin/ovs-vsctl, /usr/bin/ovs-appctl
-$CURRENT_USER ALL=(root) NOPASSWD: /usr/bin/ovn-nbctl, /usr/bin/ovn-sbctl
-EOF
-    sudo chmod 0440 "$SUDOERS_FILE"
-    echo "  sudoers rule: created ($SUDOERS_FILE)"
+if [ -f "$SUDOERS_FILE" ]; then
+    echo "  sudoers rule: already exists ($SUDOERS_FILE, managed by setup.sh)"
 else
-    echo "  sudoers rule: already exists"
+    echo "  sudoers rule: not found — run setup.sh first, or install manually"
 fi
 
 # --- Step 9: Configure OVN log rotation ---
-# OVN has built-in rotation that renames foo.log → foo.log.log. A previous
-# logrotate config used a *.log glob that caught those .log.log files too,
-# creating .log.log.1 files that accumulated to 27GB. Fix: use explicit
-# filenames so logrotate only touches the primary logs, not OVN's backups.
+# The ovn-common package provides /etc/logrotate.d/ovn-common which handles
+# rotation and vlog/reopen. We just add maxsize + rotate to cap disk usage.
 echo ""
 echo "Step 9: Configuring OVN log rotation..."
 
-# Clean up stale .log.log files from the old double-rotation bug
-if ls /var/log/ovn/*.log.log* 1>/dev/null 2>&1; then
-    sudo rm -f /var/log/ovn/*.log.log*
-    echo "  cleaned up stale .log.log files"
+OVN_LOGROTATE="/etc/logrotate.d/ovn-common"
+if [ -f "$OVN_LOGROTATE" ]; then
+    if ! grep -q 'maxsize' "$OVN_LOGROTATE"; then
+        sudo sed -i '/^\/var\/log\/ovn\/\*\.log {/a\    rotate 5\n    maxsize 100M' "$OVN_LOGROTATE"
+        echo "  added maxsize 100M + rotate 5 to $OVN_LOGROTATE"
+    else
+        echo "  $OVN_LOGROTATE already has maxsize configured"
+    fi
+else
+    echo "  WARNING: $OVN_LOGROTATE not found — install ovn-common package"
 fi
 
-LOGROTATE_FILE="/etc/logrotate.d/ovn-spinifex"
-sudo tee "$LOGROTATE_FILE" >/dev/null <<'LOGROTATE'
-/var/log/ovn/ovn-controller.log
-/var/log/ovn/ovn-northd.log
-/var/log/ovn/ovsdb-server-nb.log
-/var/log/ovn/ovsdb-server-sb.log
-{
-    daily
-    rotate 3
-    maxsize 100M
-    compress
-    missingok
-    notifempty
-    copytruncate
-}
-LOGROTATE
-echo "  logrotate config: $LOGROTATE_FILE (daily, 100M max, 3 rotations, explicit filenames)"
+# Remove our old custom config if present (superseded by patching ovn-common)
+if [ -f /etc/logrotate.d/ovn-spinifex ]; then
+    sudo rm -f /etc/logrotate.d/ovn-spinifex
+    echo "  removed obsolete /etc/logrotate.d/ovn-spinifex"
+fi
 
 # --- Step 10: Enable auto-start on boot ---
-# OVN services should start with the system in production. ovn-controller uses
-# exponential backoff if the SB DB isn't ready yet, so CPU impact is negligible.
-# In dev, stop-dev.sh explicitly stops OVN when not needed.
+# OVN services should start with the system in production. ovn-controller
+# retries when the SB DB isn't ready; file log level is set to WARN (Step 5)
+# to prevent log spam during those retries.
 echo ""
 echo "Step 10: Enabling OVN auto-start on boot..."
 sudo systemctl enable openvswitch-switch 2>/dev/null || true

@@ -40,6 +40,7 @@ type ConfigSettings struct {
 	Region    string
 	NatsToken string
 	DataDir   string
+	LogDir    string
 	ConfigDir string
 
 	// Add more fields as needed
@@ -212,7 +213,9 @@ func CreateServiceDirectories(spxRoot string) {
 		filepath.Join(spxRoot, "nats"),
 		filepath.Join(spxRoot, "predastore"),
 		filepath.Join(spxRoot, "viperblock"),
+		filepath.Join(spxRoot, "vpcd"),
 		filepath.Join(spxRoot, "spinifex"),
+		filepath.Join(spxRoot, "awsgw"),
 	}
 
 	fmt.Println("\n📁 Creating directory structure...")
@@ -241,18 +244,30 @@ func FileExists(path string) bool {
 func ChownRecursive(path, username string) {
 	u, err := user.Lookup(username)
 	if err != nil {
+		slog.Warn("ChownRecursive: user lookup failed, skipping", "user", username, "path", path, "err", err)
 		return
 	}
-	uid, _ := strconv.Atoi(u.Uid)
-	gid, _ := strconv.Atoi(u.Gid)
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		slog.Warn("ChownRecursive: invalid UID, skipping", "user", username, "uid", u.Uid, "err", err)
+		return
+	}
+	gid, err := strconv.Atoi(u.Gid)
+	if err != nil {
+		slog.Warn("ChownRecursive: invalid GID, skipping", "user", username, "gid", u.Gid, "err", err)
+		return
+	}
 
 	// Use os.Root to scope filesystem operations and avoid symlink TOCTOU races.
 	// Falls back to direct chown if os.Root is not available.
 	root, rootErr := os.OpenRoot(path)
 	if rootErr != nil {
-		// Fallback: direct chown on the top-level path only
-		if chownErr := os.Chown(path, uid, gid); chownErr != nil { // #nosec G122
-			slog.Debug("chown failed", "path", path, "err", chownErr)
+		// Fallback: direct chown on the top-level path only — subdirectory contents
+		// will retain their original ownership.
+		slog.Warn("ChownRecursive: OpenRoot not available, only top-level directory ownership changed",
+			"path", path, "err", rootErr)
+		if chownErr := os.Lchown(path, uid, gid); chownErr != nil {
+			slog.Warn("chown failed", "path", path, "err", chownErr)
 		}
 		return
 	}
@@ -269,6 +284,81 @@ func ChownRecursive(path, username string) {
 		}
 		return nil
 	})
+}
+
+// SetServiceOwnership sets per-service ownership on data/config directories
+// and shared config files to root:spinifex with correct modes.
+// Keep in sync with setup.sh create_directories() and plan doc section 2.
+func SetServiceOwnership() {
+	grp, err := user.LookupGroup("spinifex")
+	if err != nil {
+		slog.Error("SetServiceOwnership: spinifex group not found, skipping all ownership changes", "err", err)
+		fmt.Fprintln(os.Stderr, "WARNING: spinifex group not found — service ownership not set. Run setup.sh first or create the group manually.")
+		return
+	}
+	gid, err := strconv.Atoi(grp.Gid)
+	if err != nil {
+		slog.Error("SetServiceOwnership: invalid spinifex group GID", "gid", grp.Gid, "err", err)
+		fmt.Fprintln(os.Stderr, "WARNING: invalid spinifex group GID — service ownership not set.")
+		return
+	}
+
+	// Per-service directory trees
+	for path, u := range map[string]string{
+		"/etc/spinifex/nats":           "spinifex-nats",
+		"/var/lib/spinifex/nats":       "spinifex-nats",
+		"/etc/spinifex/predastore":     "spinifex-storage",
+		"/var/lib/spinifex/predastore": "spinifex-storage",
+		"/var/lib/spinifex/spinifex":   "spinifex-daemon",
+		"/var/lib/spinifex/viperblock": "spinifex-viperblock",
+		"/var/lib/spinifex/vpcd":       "spinifex-vpcd",
+		"/var/lib/spinifex/awsgw":      "spinifex-gw",
+	} {
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		ChownRecursive(path, u)
+	}
+
+	// Shared data directories — root:spinifex 0770 so daemon + admin CLI can write
+	for _, dir := range []string{
+		"/var/lib/spinifex/images",
+		"/var/lib/spinifex/amis",
+		"/var/lib/spinifex/volumes",
+		"/var/lib/spinifex/state",
+		"/run/spinifex/nbd",
+	} {
+		if _, err := os.Stat(dir); err != nil {
+			continue
+		}
+		if err := os.Lchown(dir, 0, gid); err != nil {
+			slog.Warn("SetServiceOwnership: chown failed", "path", dir, "err", err)
+		}
+		if err := os.Chmod(dir, 0770); err != nil { //nolint:gosec // directories need group-write for daemon + admin CLI
+			slog.Warn("SetServiceOwnership: chmod failed", "path", dir, "err", err)
+		}
+	}
+
+	// Shared config files — root:spinifex, ca.key stays root:root 0600
+	// bootstrap.json lives in the awsgw data dir (not /etc/spinifex),
+	// so /etc/spinifex stays at 0750 (no group-write needed).
+	for path, mode := range map[string]os.FileMode{
+		"/etc/spinifex/spinifex.toml": 0640,
+		"/etc/spinifex/master.key":    0640,
+		"/etc/spinifex/server.pem":    0644,
+		"/etc/spinifex/server.key":    0640,
+		"/etc/spinifex/ca.pem":        0644,
+	} {
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		if err := os.Lchown(path, 0, gid); err != nil {
+			slog.Warn("SetServiceOwnership: chown failed", "path", path, "err", err)
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			slog.Warn("SetServiceOwnership: chmod failed", "path", path, "err", err)
+		}
+	}
 }
 
 // updateAWSINIFile updates or creates an AWS INI file section with given key-value pairs
@@ -753,7 +843,7 @@ func SetupAWSCredentials(accessKey, secretKey, region, certPath, bindIP string) 
 
 	if err := UpdateAWSINIFile(configPath, configSection, map[string]string{
 		"region":       region,
-		"endpoint_url": fmt.Sprintf("https://%s:9999", endpointHost),
+		"endpoint_url": "https://" + net.JoinHostPort(endpointHost, "9999"),
 		"ca_bundle":    certPath,
 		"output":       "json",
 	}); err != nil {

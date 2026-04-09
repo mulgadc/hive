@@ -233,11 +233,13 @@ func TestMatchWildcard(t *testing.T) {
 		{"ec2:*", "ec2:RunInstances", true},
 		{"ec2:*", "ec2:DescribeInstances", true},
 		{"ec2:*", "s3:GetObject", false},
+		{"EC2:*", "ec2:RunInstances", true},
 
 		// Prefix wildcard
 		{"s3:Get*", "s3:GetObject", true},
 		{"s3:Get*", "s3:GetBucketPolicy", true},
 		{"s3:Get*", "s3:PutObject", false},
+		{"S3:get*", "s3:GetObject", true},
 
 		// Exact match
 		{"ec2:RunInstances", "ec2:RunInstances", true},

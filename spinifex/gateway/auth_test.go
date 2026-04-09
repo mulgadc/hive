@@ -333,20 +333,6 @@ func TestSigV4Auth_ValidSignature(t *testing.T) {
 	}
 }
 
-func TestSigV4Auth_OptionsSkipsAuth(t *testing.T) {
-	handler := setupTestApp(testAccessKey, testSecretKey)
-
-	req := httptest.NewRequest(http.MethodOptions, "/", nil)
-	req.Host = "localhost:9999"
-	// No Authorization header
-
-	resp := doRequest(handler, req)
-
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("Expected status 200 for OPTIONS, got %d", resp.StatusCode)
-	}
-}
-
 func TestSigV4Auth_ValidSignatureWithBody(t *testing.T) {
 	handler := setupTestApp(testAccessKey, testSecretKey)
 

@@ -561,9 +561,9 @@ func runimagesListCmd(cmd *cobra.Command, args []string) {
 // TODO: Move all logic to a module, use minimal application logic in viper commands
 func runAdminInit(cmd *cobra.Command, args []string) {
 	if os.Getuid() != 0 {
-		fmt.Fprintln(os.Stderr, "⚠️  Not running as root — CA certificate will not be installed to system trust store.")
-		fmt.Fprintln(os.Stderr, "   Run with sudo, or manually: sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt && sudo update-ca-certificates")
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "⚠️  Warning: 'spx admin init' is not running as root.")
+		fmt.Fprintln(os.Stderr, "   Service user setup and CA certificate installation will be skipped.")
+		fmt.Fprintln(os.Stderr, "   For production deployments, run with sudo.")
 	}
 
 	force, _ := cmd.Flags().GetBool("force")
@@ -800,14 +800,15 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "Error generating IAM master key: %v\n", err)
 		os.Exit(1)
 	}
-	bootstrapResult, err := writeBootstrapFiles(configDir, masterKey, accessKey, secretKey, accountID)
+	bootstrapDir := filepath.Join(spxRoot, "awsgw")
+	bootstrapResult, err := writeBootstrapFiles(configDir, bootstrapDir, masterKey, accessKey, secretKey, accountID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error writing bootstrap files: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println("\n🔐 Generated IAM master key")
 	fmt.Printf("   Master key: %s\n", filepath.Join(configDir, "master.key"))
-	fmt.Printf("   Bootstrap: %s\n", filepath.Join(configDir, "bootstrap.json"))
+	fmt.Printf("   Bootstrap: %s\n", filepath.Join(bootstrapDir, "bootstrap.json"))
 
 	fmt.Printf("\n🔑 Generated admin credentials (save these — they won't be shown again):\n")
 	fmt.Printf("   Access Key:  %s\n", bootstrapResult.AdminAccessKey)
@@ -948,6 +949,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		Region:    region,
 		NatsToken: natsToken,
 		DataDir:   spxRoot,
+		LogDir:    LogDirFor(spxRoot),
 		ConfigDir: configDir,
 
 		Node:          node,
@@ -1029,14 +1031,10 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 	admin.CreateServiceDirectories(spxRoot)
 
-	// In production layout (running as root), fix ownership so the service user
-	// can read config and write data. SUDO_USER identifies the operator account.
+	// In production layout (running as root), set per-service ownership on
+	// directories and shared config files (root:spinifex with correct modes).
 	if os.Getuid() == 0 {
-		sudoUser := os.Getenv("SUDO_USER")
-		if sudoUser != "" {
-			admin.ChownRecursive(configDir, sudoUser)
-			admin.ChownRecursive(spxRoot, sudoUser)
-		}
+		admin.SetServiceOwnership()
 	}
 
 	// Print success message
@@ -1066,13 +1064,14 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		fmt.Fprintf(os.Stderr, "❌ Error generating IAM master key: %v\n", err)
 		os.Exit(1)
 	}
-	bootstrapResult, err := writeBootstrapFiles(configDir, masterKey, accessKey, secretKey, accountID)
+	bootstrapDir := filepath.Join(spxRoot, "awsgw")
+	bootstrapResult, err := writeBootstrapFiles(configDir, bootstrapDir, masterKey, accessKey, secretKey, accountID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error writing bootstrap files: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println("\n🔐 Generated IAM master key")
-	fmt.Printf("   Bootstrap: %s\n", filepath.Join(configDir, "bootstrap.json"))
+	fmt.Printf("   Bootstrap: %s\n", filepath.Join(bootstrapDir, "bootstrap.json"))
 
 	// Read CA cert/key for distribution to joining nodes
 	caCertData, err := os.ReadFile(filepath.Join(configDir, "ca.pem"))
@@ -1186,6 +1185,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		Region:    region,
 		NatsToken: natsToken,
 		DataDir:   spxRoot,
+		LogDir:    LogDirFor(spxRoot),
 		ConfigDir: configDir,
 
 		Node:          node,
@@ -1261,14 +1261,10 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 	admin.CreateServiceDirectories(spxRoot)
 
-	// In production layout (running as root), fix ownership so the service user
-	// can read config and write data. SUDO_USER identifies the operator account.
+	// In production layout (running as root), set per-service ownership on
+	// directories and shared config files (root:spinifex with correct modes).
 	if os.Getuid() == 0 {
-		sudoUser := os.Getenv("SUDO_USER")
-		if sudoUser != "" {
-			admin.ChownRecursive(configDir, sudoUser)
-			admin.ChownRecursive(spxRoot, sudoUser)
-		}
+		admin.SetServiceOwnership()
 	}
 
 	// Keep formation server running briefly so joining nodes can fetch complete status
@@ -1294,8 +1290,9 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 func runAdminJoin(cmd *cobra.Command, args []string) {
 	if os.Getuid() != 0 {
-		fmt.Fprintln(os.Stderr, "⚠️  Not running as root — CA certificate will not be installed to system trust store.")
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "⚠️  Warning: 'spx admin join' is not running as root.")
+		fmt.Fprintln(os.Stderr, "   Service user setup and CA certificate installation will be skipped.")
+		fmt.Fprintln(os.Stderr, "   For production deployments, run with sudo.")
 	}
 
 	node, _ := cmd.Flags().GetString("node")
@@ -1515,12 +1512,13 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "❌ Error decoding master key: %v\n", err)
 		os.Exit(1)
 	}
-	if err := writeBootstrapFilesWithAdmin(configDir, masterKeyBytes, creds.AccessKey, creds.SecretKey, creds.AccountID, creds.AdminAccessKey, creds.AdminSecretKey); err != nil {
+	bootstrapDir := filepath.Join(dataDir, "awsgw")
+	if err := writeBootstrapFilesWithAdmin(configDir, bootstrapDir, masterKeyBytes, creds.AccessKey, creds.SecretKey, creds.AccountID, creds.AdminAccessKey, creds.AdminSecretKey); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error writing bootstrap files: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Println("✅ IAM master key received from leader")
-	fmt.Printf("✅ Bootstrap file written: %s\n", filepath.Join(configDir, "bootstrap.json"))
+	fmt.Printf("✅ Bootstrap file written: %s\n", filepath.Join(bootstrapDir, "bootstrap.json"))
 
 	// Generate server cert signed by CA with this node's bind IP
 	if err := admin.GenerateServerCertOnly(configDir, bindIP); err != nil {
@@ -1584,6 +1582,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		Region:    creds.Region,
 		NatsToken: creds.NatsToken,
 		DataDir:   dataDir,
+		LogDir:    LogDirFor(dataDir),
 		ConfigDir: configDir,
 
 		Node:          node,
@@ -1663,14 +1662,10 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 
 	admin.CreateServiceDirectories(dataDir)
 
-	// In production layout (running as root), fix ownership so the service user
-	// can read config and write data. SUDO_USER identifies the operator account.
+	// In production layout (running as root), set per-service ownership on
+	// directories and shared config files (root:spinifex with correct modes).
 	if os.Getuid() == 0 {
-		sudoUser := os.Getenv("SUDO_USER")
-		if sudoUser != "" {
-			admin.ChownRecursive(configDir, sudoUser)
-			admin.ChownRecursive(dataDir, sudoUser)
-		}
+		admin.SetServiceOwnership()
 	}
 
 	// Print cluster summary
@@ -1680,10 +1675,6 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	for name, n := range statusResp.Nodes {
 		fmt.Printf("     - %s (%s)\n", name, n.BindIP)
 	}
-	fmt.Println("\n📋 Next steps:")
-	fmt.Println("   1. Start services:")
-	fmt.Println("      ./scripts/start-dev.sh")
-	fmt.Println()
 }
 
 // buildRemoteNodes converts formation NodeInfo into RemoteNode entries,
@@ -1816,7 +1807,7 @@ func runAccountCreate(cmd *cobra.Command, args []string) {
 			endpointHost = h
 		}
 	}
-	endpointURL := fmt.Sprintf("https://%s:9999", endpointHost)
+	endpointURL := "https://" + net.JoinHostPort(endpointHost, "9999")
 
 	credPath := filepath.Join(homeDir, ".aws", "credentials")
 	configPath := filepath.Join(homeDir, ".aws", "config")
@@ -1917,8 +1908,9 @@ type writeBootstrapResult struct {
 }
 
 // writeBootstrapFiles generates new admin credentials and writes the bootstrap
-// files (master.key + bootstrap.json). Used by init flows (single and multi-node).
-func writeBootstrapFiles(configDir string, masterKey []byte, accessKey, secretKey, accountID string) (*writeBootstrapResult, error) {
+// files (master.key to configDir, bootstrap.json to bootstrapDir).
+// Used by init flows (single and multi-node).
+func writeBootstrapFiles(configDir, bootstrapDir string, masterKey []byte, accessKey, secretKey, accountID string) (*writeBootstrapResult, error) {
 	adminAccessKey, err := admin.GenerateAWSAccessKey()
 	if err != nil {
 		return nil, fmt.Errorf("generate admin access key: %w", err)
@@ -1927,7 +1919,7 @@ func writeBootstrapFiles(configDir string, masterKey []byte, accessKey, secretKe
 	if err != nil {
 		return nil, fmt.Errorf("generate admin secret key: %w", err)
 	}
-	if err := writeBootstrapFilesWithAdmin(configDir, masterKey, accessKey, secretKey, accountID, adminAccessKey, adminSecretKey); err != nil {
+	if err := writeBootstrapFilesWithAdmin(configDir, bootstrapDir, masterKey, accessKey, secretKey, accountID, adminAccessKey, adminSecretKey); err != nil {
 		return nil, err
 	}
 	return &writeBootstrapResult{
@@ -1937,8 +1929,12 @@ func writeBootstrapFiles(configDir string, masterKey []byte, accessKey, secretKe
 }
 
 // writeBootstrapFilesWithAdmin writes the bootstrap files using the provided
-// admin credentials. Used by join flows where admin creds come from the leader.
-func writeBootstrapFilesWithAdmin(configDir string, masterKey []byte, accessKey, secretKey, accountID, adminAccessKey, adminSecretKey string) error {
+// admin credentials. master.key goes to configDir, bootstrap.json goes to
+// bootstrapDir (the awsgw data directory) so it stays outside /etc/spinifex.
+func writeBootstrapFilesWithAdmin(configDir, bootstrapDir string, masterKey []byte, accessKey, secretKey, accountID, adminAccessKey, adminSecretKey string) error {
+	if err := os.MkdirAll(bootstrapDir, 0700); err != nil {
+		return fmt.Errorf("create bootstrap directory %s: %w", bootstrapDir, err)
+	}
 	if err := handlers_iam.SaveMasterKey(filepath.Join(configDir, "master.key"), masterKey); err != nil {
 		return fmt.Errorf("saving master key: %w", err)
 	}
@@ -1966,7 +1962,7 @@ func writeBootstrapFilesWithAdmin(configDir string, masterKey []byte, accessKey,
 		},
 	}
 
-	return handlers_iam.SaveBootstrapData(filepath.Join(configDir, "bootstrap.json"), bd)
+	return handlers_iam.SaveBootstrapData(filepath.Join(bootstrapDir, "bootstrap.json"), bd)
 }
 
 // detectedWanBridge returns the OVS bridge name that OVN bridge-mappings should

@@ -1,6 +1,6 @@
 import { DescribeInstancesCommand } from "@aws-sdk/client-ec2"
 import { zodResolver } from "@hookform/resolvers/zod"
-import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router"
+import { createFileRoute, redirect } from "@tanstack/react-router"
 import { useState } from "react"
 import { useForm } from "react-hook-form"
 
@@ -37,7 +37,6 @@ export const Route = createFileRoute("/login")({
 })
 
 function LoginPage() {
-  const navigate = useNavigate()
   const [authError, setAuthError] = useState<string | null>(null)
   const {
     register,
@@ -54,7 +53,7 @@ function LoginPage() {
     setCredentials(data)
     try {
       await getEc2Client().send(new DescribeInstancesCommand({}))
-      navigate({ to: "/" })
+      window.location.href = "/"
     } catch {
       clearCredentials()
       clearClients()

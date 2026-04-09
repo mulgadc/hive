@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -202,7 +203,7 @@ func (d *Daemon) queryNATSRole() string {
 	if !d.config.HasService("nats") {
 		return ""
 	}
-	url := fmt.Sprintf("http://%s:%d/varz", d.daemonIP(), natsMonitorPort)
+	url := "http://" + net.JoinHostPort(d.daemonIP(), strconv.Itoa(natsMonitorPort)) + "/varz"
 	return fetchNATSRole(url, roleHTTPClient)
 }
 
@@ -212,7 +213,7 @@ func (d *Daemon) queryPredastoreRole() string {
 	if !d.config.HasService("predastore") {
 		return ""
 	}
-	url := fmt.Sprintf("https://%s:%d/status", d.daemonIP(), predastoreDBPort)
+	url := "https://" + net.JoinHostPort(d.daemonIP(), strconv.Itoa(predastoreDBPort)) + "/status"
 	return fetchPredastoreRole(url, roleTLSHTTPClient)
 }
 

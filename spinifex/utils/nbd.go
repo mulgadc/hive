@@ -3,6 +3,7 @@ package utils
 import (
 	"errors"
 	"fmt"
+	"net"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -33,14 +34,25 @@ func GenerateUniqueSocketFile(volname string) (string, error) {
 		return "", errors.New("volume name is required")
 	}
 
-	pidPath := pidPath()
-	if pidPath == "" {
-		return "", errors.New("pid path is empty")
+	dir := NBDSocketDir()
+	if dir == "" {
+		return "", errors.New("nbd socket directory is empty")
 	}
 
 	timestamp := time.Now().UnixNano()
 	filename := fmt.Sprintf("nbd-%s-%d.sock", volname, timestamp)
-	return filepath.Join(pidPath, filename), nil
+	return filepath.Join(dir, filename), nil
+}
+
+// NBDSocketDir returns the directory for NBD Unix sockets.
+// Under systemd installs, this is /run/spinifex/nbd/.
+// In dev mode (no /run/spinifex/nbd/), falls back to pidPath().
+func NBDSocketDir() string {
+	const systemdNBDDir = "/run/spinifex/nbd"
+	if dirExists(systemdNBDDir) {
+		return systemdNBDDir
+	}
+	return pidPath()
 }
 
 // IsSocketURI returns true if the NBD URI is a Unix socket path.
@@ -58,7 +70,7 @@ func FormatNBDSocketURI(socketPath string) string {
 // FormatNBDTCPURI formats a host:port as an NBD URI for QEMU.
 // Returns format: nbd://host:port
 func FormatNBDTCPURI(host string, port int) string {
-	return fmt.Sprintf("nbd://%s:%d", host, port)
+	return "nbd://" + net.JoinHostPort(host, strconv.Itoa(port))
 }
 
 // ParseNBDURI parses an NBD URI into its components for QMP blockdev-add.
