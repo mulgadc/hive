@@ -26,6 +26,11 @@ const (
 	elbv2ManagedByValue = "elbv2"
 	// elbv2LBTag is the tag key storing the parent LB ARN on managed ENIs.
 	elbv2LBTag = "spinifex:lb-arn"
+
+	// heartbeatPersistInterval controls how often a no-op heartbeat (no state
+	// change) writes the full LoadBalancerRecord back to KV. State transitions
+	// always persist immediately.
+	heartbeatPersistInterval = 60 * time.Second
 )
 
 // lbVMUserData generates cloud-config user data for a load balancer VM.
@@ -330,16 +335,24 @@ func (s *ELBv2ServiceImpl) LBAgentHeartbeat(input *LBAgentHeartbeatInput, accoun
 	}
 
 	// First heartbeat: transition provisioning → active
+	stateChanged := false
 	if lb.State == StateProvisioning {
 		lb.State = StateActive
+		stateChanged = true
 		slog.Info("LB transitioned to active via heartbeat", "lbId", lbID)
 	}
 
-	lb.LastHeartbeat = time.Now().UTC()
+	now := time.Now().UTC()
 
-	if err := s.store.PutLoadBalancer(lb); err != nil {
-		slog.Error("LBAgentHeartbeat: failed to persist LB", "lbId", lbID, "err", err)
-		return nil, errors.New(awserrors.ErrorServerInternal)
+	// Only persist to KV on state transitions or when the stored heartbeat
+	// timestamp is stale. This avoids writing the full record (including
+	// ConfigText) every 5 seconds when nothing changed.
+	if stateChanged || now.Sub(lb.LastHeartbeat) >= heartbeatPersistInterval {
+		lb.LastHeartbeat = now
+		if err := s.store.PutLoadBalancer(lb); err != nil {
+			slog.Error("LBAgentHeartbeat: failed to persist LB", "lbId", lbID, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
 	}
 
 	// Process health report directly — no JSON round-trip needed.

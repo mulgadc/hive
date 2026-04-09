@@ -3,6 +3,7 @@ package handlers_elbv2
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/elbv2"
@@ -1295,6 +1296,56 @@ func TestLBAgentHeartbeat_SystemAccountAllowed(t *testing.T) {
 	}, utils.GlobalAccountID)
 	require.NoError(t, err)
 	assert.Equal(t, StateActive, *out.Status)
+}
+
+func TestLBAgentHeartbeat_SkipsWriteWhenHeartbeatFresh(t *testing.T) {
+	svc := setupTestService(t)
+
+	recentHeartbeat := time.Now().UTC().Add(-10 * time.Second) // well within 60s threshold
+	lb := &LoadBalancerRecord{
+		LoadBalancerArn: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/fresh-lb/lb-fresh1",
+		LoadBalancerID:  "lb-fresh1",
+		Name:            "fresh-lb",
+		State:           StateActive,
+		LastHeartbeat:   recentHeartbeat,
+		AccountID:       testAccountID,
+	}
+	require.NoError(t, svc.store.PutLoadBalancer(lb))
+
+	_, err := svc.LBAgentHeartbeat(&LBAgentHeartbeatInput{
+		LBID: aws.String("lb-fresh1"),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// LastHeartbeat should NOT have been updated because the stored value is fresh.
+	stored, err := svc.store.GetLoadBalancer("lb-fresh1")
+	require.NoError(t, err)
+	assert.Equal(t, recentHeartbeat, stored.LastHeartbeat)
+}
+
+func TestLBAgentHeartbeat_PersistsWhenHeartbeatStale(t *testing.T) {
+	svc := setupTestService(t)
+
+	staleHeartbeat := time.Now().UTC().Add(-2 * time.Minute) // beyond 60s threshold
+	lb := &LoadBalancerRecord{
+		LoadBalancerArn: "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/stale-lb/lb-stale1",
+		LoadBalancerID:  "lb-stale1",
+		Name:            "stale-lb",
+		State:           StateActive,
+		LastHeartbeat:   staleHeartbeat,
+		AccountID:       testAccountID,
+	}
+	require.NoError(t, svc.store.PutLoadBalancer(lb))
+
+	_, err := svc.LBAgentHeartbeat(&LBAgentHeartbeatInput{
+		LBID: aws.String("lb-stale1"),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// LastHeartbeat should have been refreshed.
+	stored, err := svc.store.GetLoadBalancer("lb-stale1")
+	require.NoError(t, err)
+	assert.True(t, stored.LastHeartbeat.After(staleHeartbeat))
 }
 
 func TestGetLBConfig_WrongAccount(t *testing.T) {
