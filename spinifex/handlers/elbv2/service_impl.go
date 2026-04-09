@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -79,8 +80,10 @@ type ELBv2ServiceImpl struct {
 	region                 string
 	systemAMI              string        // AMI ID for system VMs (ALB VMs); resolved lazily via systemAMIFunc
 	systemAMIFunc          func() string // returns the current system AMI ID (queries image store)
+	systemAMIOnce          sync.Once     // guards lazy resolution of systemAMI
 	systemInstanceType     string        // instance type for system VMs; resolved lazily via systemInstanceTypeFunc
 	systemInstanceTypeFunc func() string // returns the smallest available instance type
+	systemInstanceTypeOnce sync.Once     // guards lazy resolution of systemInstanceType
 	systemAccessKey        string        // System account access key for ALB agent SigV4 auth
 	systemSecretKey        string        // System account secret key for ALB agent SigV4 auth
 	gatewayURL             string        // AWS gateway URL for ALB agent outbound connections
@@ -154,16 +157,16 @@ func (s *ELBv2ServiceImpl) SetInstanceLauncher(launcher SystemInstanceLauncher) 
 // after the daemon starts.
 func (s *ELBv2ServiceImpl) SetSystemAMIFunc(fn func() string) {
 	s.systemAMIFunc = fn
+	s.systemAMIOnce = sync.Once{}
 }
 
 // getSystemAMI returns the system AMI ID, resolving it lazily if needed.
 func (s *ELBv2ServiceImpl) getSystemAMI() string {
-	if s.systemAMI != "" {
-		return s.systemAMI
-	}
-	if s.systemAMIFunc != nil {
-		s.systemAMI = s.systemAMIFunc()
-	}
+	s.systemAMIOnce.Do(func() {
+		if s.systemAMIFunc != nil {
+			s.systemAMI = s.systemAMIFunc()
+		}
+	})
 	return s.systemAMI
 }
 
@@ -171,16 +174,16 @@ func (s *ELBv2ServiceImpl) getSystemAMI() string {
 // instance type. Called at request time so it adapts to node capacity.
 func (s *ELBv2ServiceImpl) SetSystemInstanceTypeFunc(fn func() string) {
 	s.systemInstanceTypeFunc = fn
+	s.systemInstanceTypeOnce = sync.Once{}
 }
 
 // getSystemInstanceType returns the instance type for system VMs.
 func (s *ELBv2ServiceImpl) getSystemInstanceType() string {
-	if s.systemInstanceType != "" {
-		return s.systemInstanceType
-	}
-	if s.systemInstanceTypeFunc != nil {
-		s.systemInstanceType = s.systemInstanceTypeFunc()
-	}
+	s.systemInstanceTypeOnce.Do(func() {
+		if s.systemInstanceTypeFunc != nil {
+			s.systemInstanceType = s.systemInstanceTypeFunc()
+		}
+	})
 	return s.systemInstanceType
 }
 

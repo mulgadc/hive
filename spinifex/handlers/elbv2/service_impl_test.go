@@ -1,6 +1,7 @@
 package handlers_elbv2
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -1347,6 +1348,49 @@ func TestSetSystemInstanceTypeFunc(t *testing.T) {
 	// Once resolved, caches the value
 	svc.systemInstanceTypeFunc = func() string { return "t3.large" }
 	assert.Equal(t, "t3.micro", svc.getSystemInstanceType())
+}
+
+func TestGetSystemAMI(t *testing.T) {
+	svc := setupTestService(t)
+
+	// Before setting, should return empty
+	assert.Empty(t, svc.getSystemAMI())
+
+	// Set the resolver
+	svc.SetSystemAMIFunc(func() string { return "ami-system-001" })
+	assert.Equal(t, "ami-system-001", svc.getSystemAMI())
+
+	// Once resolved, caches the value
+	svc.systemAMIFunc = func() string { return "ami-system-002" }
+	assert.Equal(t, "ami-system-001", svc.getSystemAMI())
+}
+
+func TestGetSystemAMI_Concurrent(t *testing.T) {
+	svc := setupTestService(t)
+	svc.SetSystemAMIFunc(func() string { return "ami-system-001" })
+
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Go(func() {
+			got := svc.getSystemAMI()
+			assert.Equal(t, "ami-system-001", got)
+		})
+	}
+	wg.Wait()
+}
+
+func TestGetSystemInstanceType_Concurrent(t *testing.T) {
+	svc := setupTestService(t)
+	svc.SetSystemInstanceTypeFunc(func() string { return "t3.micro" })
+
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Go(func() {
+			got := svc.getSystemInstanceType()
+			assert.Equal(t, "t3.micro", got)
+		})
+	}
+	wg.Wait()
 }
 
 func TestSetMgmtRoute(t *testing.T) {

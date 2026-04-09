@@ -2985,7 +2985,7 @@ func (d *Daemon) wireLBAgentConfig() {
 	}
 
 	if gatewayHost != "" {
-		gatewayURL := fmt.Sprintf("https://%s:%s", gatewayHost, gatewayPort)
+		gatewayURL := "https://" + net.JoinHostPort(gatewayHost, gatewayPort)
 		d.elbv2Service.SetGatewayURL(gatewayURL)
 		slog.Info("LB agent gateway URL configured", "url", gatewayURL)
 	}
