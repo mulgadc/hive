@@ -1903,12 +1903,18 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 			// back to IPAM, publishes vpc.delete-port for vpcd). On stop, ENI
 			// persists (AWS behavior). Must detach first to clear in-use status.
 			// Tolerate NotFound — ENI may have been cleaned up already.
+			// Other errors (KV failures, permission issues, in-use) are real
+			// failures that could leak IPAM addresses.
 			if deleteVolume && instance.ENIId != "" && d.vpcService != nil {
 				_ = d.vpcService.DetachENI(instance.AccountID, instance.ENIId)
 				if _, eniErr := d.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
 					NetworkInterfaceId: &instance.ENIId,
 				}, instance.AccountID); eniErr != nil {
-					slog.Debug("ENI already cleaned up on termination", "eni", instance.ENIId, "err", eniErr)
+					if strings.Contains(eniErr.Error(), awserrors.ErrorInvalidNetworkInterfaceIDNotFound) {
+						slog.Debug("ENI already cleaned up on termination", "eni", instance.ENIId)
+					} else {
+						slog.Error("Failed to delete ENI on termination", "eni", instance.ENIId, "instanceId", instance.ID, "err", eniErr)
+					}
 				} else {
 					slog.Info("Deleted ENI on termination", "eni", instance.ENIId, "instanceId", instance.ID)
 				}
@@ -2992,7 +2998,7 @@ func (d *Daemon) wireLBAgentConfig() {
 		d.elbv2Service.GatewayURL = gatewayURL
 		slog.Info("LB agent gateway URL configured", "url", gatewayURL)
 	} else {
-		slog.Warn("LB agent gateway URL not configured: no reachable host found, LB agents will not connect")
+		slog.Error("LB agent gateway URL not configured: no reachable host found — all CreateLoadBalancer calls will fail")
 	}
 
 	// Pass mgmt route info so lbVMUserData can add a bootcmd route for
