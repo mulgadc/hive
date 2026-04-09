@@ -416,14 +416,18 @@ func (s *ELBv2ServiceImpl) GetLBConfig(input *GetLBConfigInput, accountID string
 	}, nil
 }
 
-// buildLBArn constructs a load balancer ARN from components.
-// ALBs use the /app/ path segment; NLBs use /net/.
-func buildLBArn(region, accountID, name, lbID, lbType string) string {
-	pathSegment := "app"
+// lbArnPathSegment returns the ARN path segment for the given LB type:
+// "app" for application LBs, "net" for network LBs.
+func lbArnPathSegment(lbType string) string {
 	if lbType == LoadBalancerTypeNetwork {
-		pathSegment = "net"
+		return "net"
 	}
-	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:loadbalancer/%s/%s/%s", region, accountID, pathSegment, name, lbID)
+	return "app"
+}
+
+// buildLBArn constructs a load balancer ARN from components.
+func buildLBArn(region, accountID, name, lbID, lbType string) string {
+	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:loadbalancer/%s/%s/%s", region, accountID, lbArnPathSegment(lbType), name, lbID)
 }
 
 // resolveTargetIP looks up the private IP for an instance by finding its primary ENI.
@@ -456,13 +460,8 @@ func buildTGArn(region, accountID, name, tgID string) string {
 }
 
 // buildListenerArn constructs a listener ARN from components.
-// ALBs use the /app/ path segment; NLBs use /net/.
 func buildListenerArn(region, accountID, lbName, lbID, listenerID, lbType string) string {
-	pathSegment := "app"
-	if lbType == LoadBalancerTypeNetwork {
-		pathSegment = "net"
-	}
-	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:listener/%s/%s/%s/%s", region, accountID, pathSegment, lbName, lbID, listenerID)
+	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:listener/%s/%s/%s/%s", region, accountID, lbArnPathSegment(lbType), lbName, lbID, listenerID)
 }
 
 // isCompatibleProtocol checks whether a listener protocol is compatible with a
@@ -528,10 +527,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 
 	lbID := utils.GenerateResourceID("lb")
 	lbArn := buildLBArn(s.region, accountID, name, lbID, lbType)
-	arnPathSegment := "app"
-	if lbType == LoadBalancerTypeNetwork {
-		arnPathSegment = "net"
-	}
+	arnPathSegment := lbArnPathSegment(lbType)
 	dnsPrefix := ""
 	if scheme == SchemeInternal {
 		dnsPrefix = "internal-"
