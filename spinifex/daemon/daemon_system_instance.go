@@ -191,6 +191,10 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 
 		mgmtIP, allocErr := d.mgmtIPAllocator.Allocate(instance.ID)
 		if allocErr != nil {
+			if input.Scheme == handlers_elbv2.SchemeInternal {
+				d.cleanupFailedSystemInstance(instance, instanceType)
+				return nil, fmt.Errorf("allocate mgmt IP for internal-scheme ALB: %w", allocErr)
+			}
 			slog.Warn("LaunchSystemInstance: failed to allocate mgmt IP, skipping mgmt NIC", "instanceId", instance.ID, "err", allocErr)
 		} else {
 			instance.MgmtMAC = generateMgmtMAC(instance.ID)
@@ -198,10 +202,14 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 
 			tapName, tapErr := SetupMgmtTapDevice(instance.ID, instance.MgmtMAC, mgmtBridge)
 			if tapErr != nil {
-				slog.Error("LaunchSystemInstance: failed to setup mgmt tap", "instanceId", instance.ID, "err", tapErr)
 				d.mgmtIPAllocator.Release(instance.ID)
 				instance.MgmtMAC = ""
 				instance.MgmtIP = ""
+				if input.Scheme == handlers_elbv2.SchemeInternal {
+					d.cleanupFailedSystemInstance(instance, instanceType)
+					return nil, fmt.Errorf("setup mgmt tap for internal-scheme ALB: %w", tapErr)
+				}
+				slog.Error("LaunchSystemInstance: failed to setup mgmt tap", "instanceId", instance.ID, "err", tapErr)
 			} else {
 				instance.MgmtTap = tapName
 				slog.Info("LaunchSystemInstance: mgmt NIC configured",
