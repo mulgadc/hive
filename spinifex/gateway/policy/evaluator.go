@@ -86,8 +86,8 @@ func matchWildcard(pattern, value string) bool {
 		return true
 	}
 	if strings.HasSuffix(pattern, "*") {
-		prefix := pattern[:len(pattern)-1]
-		return strings.HasPrefix(value, prefix)
+		prefix := strings.ToLower(pattern[:len(pattern)-1])
+		return strings.HasPrefix(strings.ToLower(value), prefix)
 	}
 	return strings.EqualFold(pattern, value)
 }
