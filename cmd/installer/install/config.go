@@ -42,4 +42,7 @@ type Config struct {
 	// CA certificate (PEM), optional.
 	HasCACert bool
 	CACert    string
+
+	// RootPassword is the password to set for the root account on the installed system.
+	RootPassword string
 }

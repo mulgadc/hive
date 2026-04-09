@@ -41,6 +41,7 @@ const (
 	screenDiskConfirm
 	screenNetwork
 	screenIdentity
+	screenPassword
 	screenJoinConfig
 	screenCACertPrompt
 	screenCACert
@@ -71,10 +72,11 @@ type model struct {
 	eraseInput textinput.Model
 
 	// Network
-	netInputs [3]textinput.Model // IP, mask, gateway
-	netFocus  networkField
-	nics      []string
-	nicCursor int
+	netInputs      [3]textinput.Model // IP, mask, gateway
+	netFocus       networkField
+	nics           []string
+	nicCursor      int
+	nicManualInput textinput.Model // used when no NICs are auto-detected
 
 	// Identity
 	hostnameInput textinput.Model
@@ -83,6 +85,11 @@ type model struct {
 	// Join config
 	joinIPInput   textinput.Model
 	joinPortInput textinput.Model
+
+	// Password
+	passwordInput        textinput.Model
+	passwordConfirmInput textinput.Model
+	passwordFocus        int // 0 = password, 1 = confirm
 
 	// CA cert
 	hasCACert   int // 0 = no, 1 = yes
@@ -146,11 +153,15 @@ func newModel(disks []diskInfo, nics []string) model {
 	ipIn.Placeholder = "192.168.1.10"
 
 	maskIn := textinput.New()
-	maskIn.Placeholder = "255.255.255.0"
+	maskIn.Placeholder = "255.255.255.0 or 24"
 
 	gwIn := textinput.New()
 	gwIn.Placeholder = "192.168.1.1"
 	ipIn.Focus()
+
+	nicManualIn := textinput.New()
+	nicManualIn.Placeholder = "e.g. eth0, enp0s1"
+	nicManualIn.CharLimit = 32
 
 	hostnameIn := textinput.New()
 	hostnameIn.Placeholder = "node1"
@@ -163,20 +174,33 @@ func newModel(disks []diskInfo, nics []string) model {
 	joinPortIn.Placeholder = "4432"
 	joinPortIn.CharLimit = 5
 
+	passIn := textinput.New()
+	passIn.Placeholder = "Root password"
+	passIn.EchoMode = textinput.EchoPassword
+	passIn.CharLimit = 128
+
+	passConfirmIn := textinput.New()
+	passConfirmIn.Placeholder = "Confirm password"
+	passConfirmIn.EchoMode = textinput.EchoPassword
+	passConfirmIn.CharLimit = 128
+
 	caCertIn := textinput.New()
 	caCertIn.Placeholder = "-----BEGIN CERTIFICATE-----"
 	caCertIn.CharLimit = 0
 
 	return model{
-		screen:        screenWelcome,
-		disks:         disks,
-		nics:          nics,
-		eraseInput:    eraseIn,
-		netInputs:     [3]textinput.Model{ipIn, maskIn, gwIn},
-		hostnameInput: hostnameIn,
-		joinIPInput:   joinIPIn,
-		joinPortInput: joinPortIn,
-		caCertInput:   caCertIn,
+		screen:               screenWelcome,
+		disks:                disks,
+		nics:                 nics,
+		eraseInput:           eraseIn,
+		netInputs:            [3]textinput.Model{ipIn, maskIn, gwIn},
+		nicManualInput:       nicManualIn,
+		hostnameInput:        hostnameIn,
+		passwordInput:        passIn,
+		passwordConfirmInput: passConfirmIn,
+		joinIPInput:          joinIPIn,
+		joinPortInput:        joinPortIn,
+		caCertInput:          caCertIn,
 	}
 }
 
@@ -321,8 +345,8 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.validationErr = "Invalid management IP address"
 				return m, nil
 			}
-			if net.ParseIP(mask) == nil {
-				m.validationErr = "Invalid subnet mask"
+			if !validSubnetMask(mask) {
+				m.validationErr = "Invalid subnet mask (e.g. 255.255.255.0 or /24)"
 				return m, nil
 			}
 			if net.ParseIP(gw) == nil {
@@ -330,23 +354,30 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if len(m.nics) == 0 {
-				m.validationErr = "No network interfaces available"
-				return m, nil
+				if strings.TrimSpace(m.nicManualInput.Value()) == "" {
+					m.validationErr = "Enter interface name (e.g. eth0, enp0s1)"
+					return m, nil
+				}
 			}
 			m.screen = screenIdentity
 			m.hostnameInput.Focus()
 		case "left", "h":
-			if m.netFocus == fieldNIC && m.nicCursor > 0 {
+			if m.netFocus == fieldNIC && len(m.nics) > 0 && m.nicCursor > 0 {
 				m.nicCursor--
 			}
 		case "right", "l":
-			if m.netFocus == fieldNIC && m.nicCursor < len(m.nics)-1 {
+			if m.netFocus == fieldNIC && len(m.nics) > 0 && m.nicCursor < len(m.nics)-1 {
 				m.nicCursor++
 			}
 		default:
 			if m.netFocus < fieldNIC {
 				var cmd tea.Cmd
 				m.netInputs[m.netFocus], cmd = m.netInputs[m.netFocus].Update(msg)
+				return m, cmd
+			}
+			if m.netFocus == fieldNIC && len(m.nics) == 0 {
+				var cmd tea.Cmd
+				m.nicManualInput, cmd = m.nicManualInput.Update(msg)
 				return m, cmd
 			}
 		}
@@ -359,13 +390,17 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				m.hostnameInput.Focus()
 			}
-		case "left", "h", "right", "l":
-			if !m.hostnameInput.Focused() {
-				if key == "left" || key == "h" {
-					m.clusterRole = 0
-				} else {
-					m.clusterRole = 1
-				}
+		case "left", "right":
+			if m.hostnameInput.Focused() {
+				// cursor movement inside the hostname field
+				var cmd tea.Cmd
+				m.hostnameInput, cmd = m.hostnameInput.Update(msg)
+				return m, cmd
+			}
+			if key == "left" {
+				m.clusterRole = 0
+			} else {
+				m.clusterRole = 1
 			}
 		case "enter":
 			if m.hostnameInput.Focused() {
@@ -376,18 +411,82 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.hostnameInput.Blur()
 				return m, nil
 			}
-			if m.clusterRole == 1 {
-				m.screen = screenJoinConfig
-				m.joinIPInput.Focus()
-			} else {
-				m.screen = screenCACertPrompt
+			if strings.TrimSpace(m.hostnameInput.Value()) == "" {
+				m.validationErr = "Hostname is required"
+				m.hostnameInput.Focus()
+				return m, nil
 			}
+			m.screen = screenPassword
+			m.passwordInput.Focus()
+			m.passwordFocus = 0
 		default:
 			if m.hostnameInput.Focused() {
 				var cmd tea.Cmd
 				m.hostnameInput, cmd = m.hostnameInput.Update(msg)
 				return m, cmd
 			}
+		}
+
+	case screenPassword:
+		switch key {
+		case "tab", "down":
+			m.passwordInput.Blur()
+			m.passwordConfirmInput.Blur()
+			if m.passwordFocus == 0 {
+				m.passwordConfirmInput.Focus()
+				m.passwordFocus = 1
+			} else {
+				m.passwordInput.Focus()
+				m.passwordFocus = 0
+			}
+		case "shift+tab", "up":
+			m.passwordInput.Blur()
+			m.passwordConfirmInput.Blur()
+			if m.passwordFocus == 1 {
+				m.passwordInput.Focus()
+				m.passwordFocus = 0
+			} else {
+				m.passwordConfirmInput.Focus()
+				m.passwordFocus = 1
+			}
+		case "enter":
+			if m.passwordFocus == 0 {
+				// Move to confirm field on first enter
+				m.passwordInput.Blur()
+				m.passwordConfirmInput.Focus()
+				m.passwordFocus = 1
+				return m, nil
+			}
+			pw := m.passwordInput.Value()
+			confirm := m.passwordConfirmInput.Value()
+			if pw == "" {
+				m.validationErr = "Password is required"
+				return m, nil
+			}
+			if pw != confirm {
+				m.validationErr = "Passwords do not match"
+				return m, nil
+			}
+			m.validationErr = ""
+			if m.clusterRole == 1 {
+				m.screen = screenJoinConfig
+				m.joinIPInput.Focus()
+			} else {
+				m.screen = screenCACertPrompt
+			}
+		case "esc":
+			m.passwordInput.Blur()
+			m.passwordConfirmInput.Blur()
+			m.screen = screenIdentity
+			m.hostnameInput.Focus()
+		default:
+			var cmd tea.Cmd
+			if m.passwordFocus == 0 {
+				m.passwordInput, cmd = m.passwordInput.Update(msg)
+			} else {
+				m.passwordConfirmInput, cmd = m.passwordConfirmInput.Update(msg)
+			}
+			return m, cmd
 		}
 
 	case screenJoinConfig:
@@ -481,6 +580,12 @@ func (m model) withFocusedNetworkField() model {
 			m.netInputs[i].Blur()
 		}
 	}
+	// When no NICs were auto-detected, the NIC field is a text input.
+	if m.netFocus == fieldNIC && len(m.nics) == 0 {
+		m.nicManualInput.Focus()
+	} else {
+		m.nicManualInput.Blur()
+	}
 	return m
 }
 
@@ -497,12 +602,25 @@ func (m model) updateActiveInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.netInputs[m.netFocus], cmd = m.netInputs[m.netFocus].Update(msg)
 			return m, cmd
 		}
+		if m.netFocus == fieldNIC && len(m.nics) == 0 {
+			var cmd tea.Cmd
+			m.nicManualInput, cmd = m.nicManualInput.Update(msg)
+			return m, cmd
+		}
 	case screenIdentity:
 		if m.hostnameInput.Focused() {
 			var cmd tea.Cmd
 			m.hostnameInput, cmd = m.hostnameInput.Update(msg)
 			return m, cmd
 		}
+	case screenPassword:
+		var cmd tea.Cmd
+		if m.passwordFocus == 0 {
+			m.passwordInput, cmd = m.passwordInput.Update(msg)
+		} else {
+			m.passwordConfirmInput, cmd = m.passwordConfirmInput.Update(msg)
+		}
+		return m, cmd
 	}
 	return m, nil
 }
@@ -527,6 +645,8 @@ func (m model) View() string {
 		content = m.viewNetwork(w)
 	case screenIdentity:
 		content = m.viewIdentity(w)
+	case screenPassword:
+		content = m.viewPassword(w)
 	case screenJoinConfig:
 		content = m.viewJoinConfig(w)
 	case screenCACertPrompt:
@@ -620,11 +740,11 @@ func (m model) viewNetwork(w int) string {
 		}
 	}
 
-	// NIC selector
+	// NIC selector (or manual input if no NICs were auto-detected)
 	nicLabel := styleLabel.Render("OVN network interface")
 	var nicLine string
 	if len(m.nics) == 0 {
-		nicLine = styleError.Render("no interfaces found")
+		nicLine = m.nicManualInput.View()
 	} else {
 		var parts []string
 		for i, nic := range m.nics {
@@ -647,7 +767,13 @@ func (m model) viewNetwork(w int) string {
 		errLine = []string{"", styleError.Render(m.validationErr)}
 	}
 
-	help := styleHelp.Render("Tab/↑↓ to move • ←/→ to select NIC • Enter to proceed")
+	var helpText string
+	if len(m.nics) == 0 {
+		helpText = "Tab/↑↓ to move • Enter to proceed"
+	} else {
+		helpText = "Tab/↑↓ to move • ←/→ to select NIC • Enter to proceed"
+	}
+	help := styleHelp.Render(helpText)
 	all := append([]string{title, ""}, append(rows, append(errLine, "", help)...)...)
 	body := lipgloss.JoinVertical(lipgloss.Left, all...)
 
@@ -680,6 +806,24 @@ func (m model) viewIdentity(w int) string {
 		lines = append(lines, "", styleError.Render(m.validationErr))
 	}
 	lines = append(lines, styleHelp.Render("Tab to toggle focus • ←/→ to select role • Enter to proceed"))
+
+	body := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return lipgloss.Place(w, m.height, lipgloss.Center, lipgloss.Center,
+		styleBox.Width(min(w-4, 64)).Render(body),
+	)
+}
+
+func (m model) viewPassword(w int) string {
+	title := styleTitle.Render("Root Password")
+	passLabel := styleLabel.Render("Password")
+	confirmLabel := styleLabel.Render("Confirm password")
+
+	var lines []string
+	lines = append(lines, title, "", passLabel, m.passwordInput.View(), "", confirmLabel, m.passwordConfirmInput.View())
+	if m.validationErr != "" {
+		lines = append(lines, "", styleError.Render(m.validationErr))
+	}
+	lines = append(lines, "", styleHelp.Render("Tab to move • Enter to proceed • Esc to go back"))
 
 	body := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	return lipgloss.Place(w, m.height, lipgloss.Center, lipgloss.Center,
@@ -810,6 +954,8 @@ func (m model) buildConfig() *install.Config {
 	cfg.Gateway = strings.TrimSpace(m.netInputs[fieldGateway].Value())
 	if len(m.nics) > m.nicCursor {
 		cfg.OVNInterface = m.nics[m.nicCursor]
+	} else {
+		cfg.OVNInterface = strings.TrimSpace(m.nicManualInput.Value())
 	}
 	cfg.Hostname = strings.TrimSpace(m.hostnameInput.Value())
 	if m.clusterRole == 0 {
@@ -824,6 +970,7 @@ func (m model) buildConfig() *install.Config {
 	}
 	cfg.HasCACert = m.hasCACert == 1
 	cfg.CACert = strings.TrimSpace(m.caCertInput.Value())
+	cfg.RootPassword = m.passwordInput.Value()
 	return cfg
 }
 
@@ -881,6 +1028,19 @@ func formatSectors(sectors string) string {
 	default:
 		return fmt.Sprintf("%dB", bytes)
 	}
+}
+
+// validSubnetMask accepts dotted-decimal (255.255.255.0) or CIDR prefix (/24 or 24).
+func validSubnetMask(s string) bool {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "/")
+	// CIDR prefix form: 0–32
+	var prefix int
+	if _, err := fmt.Sscan(s, &prefix); err == nil && len(s) <= 2 {
+		return prefix >= 0 && prefix <= 32
+	}
+	// Dotted-decimal form
+	return net.ParseIP(s) != nil
 }
 
 func availableNICs() ([]string, error) {
