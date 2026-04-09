@@ -24,7 +24,7 @@ ReadWritePaths=/var/lib/spinifex/vpcd /var/log/spinifex
 
 # Hardening
 ProtectHome=yes
-PrivateTmp=no
+PrivateTmp=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 RestrictRealtime=yes
