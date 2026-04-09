@@ -30,6 +30,7 @@ linters:
     - ineffassign # detects assignments to existing variables that are not used
     - makezero # finds slice declarations with non-zero initial length followed by append
     - mirror # catches wrong mirror patterns in bytes/strings usage
+    - musttag # checks structs passed to marshal/unmarshal have proper tags
     - modernize # modernizes code to use newer Go idioms (go fix analyzers)
     - nakedret # finds naked returns in functions
     - nilerr # catches code that returns nil even after checking err != nil
