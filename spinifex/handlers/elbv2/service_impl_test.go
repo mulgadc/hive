@@ -1,6 +1,7 @@
 package handlers_elbv2
 
 import (
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -1983,4 +1984,83 @@ func TestModifyLoadBalancerAttributes_SkipsInvalidEntries(t *testing.T) {
 		attrMap[*a.Key] = *a.Value
 	}
 	assert.Equal(t, "75", attrMap["idle_timeout.timeout_seconds"])
+}
+
+// TestDescribeTargetGroupAttributes_SortedOrder verifies that attributes are
+// returned in a stable, sorted-by-key order. Go map iteration is randomised,
+// so without explicit sorting Terraform would see spurious plan diffs between
+// back-to-back describe calls.
+func TestDescribeTargetGroupAttributes_SortedOrder(t *testing.T) {
+	svc := setupTestService(t)
+	tgOut, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{Name: aws.String("tg-attr-sorted")}, testAccountID)
+	require.NoError(t, err)
+	arn := tgOut.TargetGroups[0].TargetGroupArn
+
+	// Modify a few attributes to ensure the merged map contains both defaults
+	// and overrides.
+	_, err = svc.ModifyTargetGroupAttributes(&elbv2.ModifyTargetGroupAttributesInput{
+		TargetGroupArn: arn,
+		Attributes: []*elbv2.TargetGroupAttribute{
+			{Key: aws.String("stickiness.enabled"), Value: aws.String("true")},
+			{Key: aws.String("deregistration_delay.timeout_seconds"), Value: aws.String("45")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Call Describe multiple times; each result must be identical and sorted.
+	var firstKeys []string
+	for i := range 5 {
+		descOut, err := svc.DescribeTargetGroupAttributes(&elbv2.DescribeTargetGroupAttributesInput{
+			TargetGroupArn: arn,
+		}, testAccountID)
+		require.NoError(t, err)
+
+		keys := make([]string, len(descOut.Attributes))
+		for j, a := range descOut.Attributes {
+			keys[j] = *a.Key
+		}
+		assert.True(t, sort.StringsAreSorted(keys), "attributes must be sorted by key, got %v", keys)
+		if i == 0 {
+			firstKeys = keys
+		} else {
+			assert.Equal(t, firstKeys, keys, "attribute order must be stable across calls")
+		}
+	}
+}
+
+// TestDescribeLoadBalancerAttributes_SortedOrder mirrors the TG test: LB
+// describe responses must be sorted and stable across repeated calls.
+func TestDescribeLoadBalancerAttributes_SortedOrder(t *testing.T) {
+	svc := setupTestService(t)
+	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{Name: aws.String("lb-attr-sorted")}, testAccountID)
+	require.NoError(t, err)
+	arn := lbOut.LoadBalancers[0].LoadBalancerArn
+
+	_, err = svc.ModifyLoadBalancerAttributes(&elbv2.ModifyLoadBalancerAttributesInput{
+		LoadBalancerArn: arn,
+		Attributes: []*elbv2.LoadBalancerAttribute{
+			{Key: aws.String("idle_timeout.timeout_seconds"), Value: aws.String("90")},
+			{Key: aws.String("deletion_protection.enabled"), Value: aws.String("true")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	var firstKeys []string
+	for i := range 5 {
+		descOut, err := svc.DescribeLoadBalancerAttributes(&elbv2.DescribeLoadBalancerAttributesInput{
+			LoadBalancerArn: arn,
+		}, testAccountID)
+		require.NoError(t, err)
+
+		keys := make([]string, len(descOut.Attributes))
+		for j, a := range descOut.Attributes {
+			keys[j] = *a.Key
+		}
+		assert.True(t, sort.StringsAreSorted(keys), "attributes must be sorted by key, got %v", keys)
+		if i == 0 {
+			firstKeys = keys
+		} else {
+			assert.Equal(t, firstKeys, keys, "attribute order must be stable across calls")
+		}
+	}
 }

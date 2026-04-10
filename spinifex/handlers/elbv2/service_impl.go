@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -1406,11 +1407,14 @@ func (s *ELBv2ServiceImpl) DescribeTargetGroupAttributes(input *elbv2.DescribeTa
 	merged := DefaultTargetGroupAttributes()
 	maps.Copy(merged, tg.Attributes)
 
-	var attrs []*elbv2.TargetGroupAttribute
-	for k, v := range merged {
+	// Sort keys for deterministic output — Terraform diffs and snapshot tests
+	// depend on stable attribute ordering.
+	keys := slices.Sorted(maps.Keys(merged))
+	attrs := make([]*elbv2.TargetGroupAttribute, 0, len(keys))
+	for _, k := range keys {
 		attrs = append(attrs, &elbv2.TargetGroupAttribute{
 			Key:   aws.String(k),
-			Value: aws.String(v),
+			Value: aws.String(merged[k]),
 		})
 	}
 
@@ -1481,11 +1485,14 @@ func (s *ELBv2ServiceImpl) DescribeLoadBalancerAttributes(input *elbv2.DescribeL
 	merged := DefaultLoadBalancerAttributes()
 	maps.Copy(merged, lb.Attributes)
 
-	var attrs []*elbv2.LoadBalancerAttribute
-	for k, v := range merged {
+	// Sort keys for deterministic output — Terraform diffs and snapshot tests
+	// depend on stable attribute ordering.
+	keys := slices.Sorted(maps.Keys(merged))
+	attrs := make([]*elbv2.LoadBalancerAttribute, 0, len(keys))
+	for _, k := range keys {
 		attrs = append(attrs, &elbv2.LoadBalancerAttribute{
 			Key:   aws.String(k),
-			Value: aws.String(v),
+			Value: aws.String(merged[k]),
 		})
 	}
 
