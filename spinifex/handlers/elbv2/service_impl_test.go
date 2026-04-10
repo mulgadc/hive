@@ -144,27 +144,44 @@ func TestCreateLoadBalancer_NetworkType_RejectsSecurityGroups(t *testing.T) {
 func TestCreateLoadBalancer_CrossZoneAttributes(t *testing.T) {
 	svc := setupTestService(t)
 
-	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+	// NLB: no stored attributes, Describe should return default cross-zone=false.
+	nlbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name: aws.String("nlb-cz"),
 		Type: aws.String("network"),
 	}, testAccountID)
-
 	require.NoError(t, err)
-	// NLB should have no seeded attributes (falls through to default false)
-	lb, err := svc.store.GetLoadBalancerByName("nlb-cz", testAccountID)
+	nlbRec, err := svc.store.GetLoadBalancerByName("nlb-cz", testAccountID)
 	require.NoError(t, err)
-	assert.Nil(t, lb.Attributes)
+	assert.Nil(t, nlbRec.Attributes, "NLB should store nil attributes — defaults come from the handler")
 
-	// ALB should seed cross-zone enabled=true in attributes
-	_, err = svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+	nlbDesc, err := svc.DescribeLoadBalancerAttributes(&elbv2.DescribeLoadBalancerAttributesInput{
+		LoadBalancerArn: nlbOut.LoadBalancers[0].LoadBalancerArn,
+	}, testAccountID)
+	require.NoError(t, err)
+	nlbAttrs := make(map[string]string)
+	for _, a := range nlbDesc.Attributes {
+		nlbAttrs[*a.Key] = *a.Value
+	}
+	assert.Equal(t, "false", nlbAttrs["load_balancing.cross_zone.enabled"])
+
+	// ALB: no stored attributes either, Describe should return default cross-zone=true.
+	albOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name: aws.String("alb-cz"),
 	}, testAccountID)
 	require.NoError(t, err)
 	albRec, err := svc.store.GetLoadBalancerByName("alb-cz", testAccountID)
 	require.NoError(t, err)
-	assert.Equal(t, "true", albRec.Attributes["load_balancing.cross_zone.enabled"])
+	assert.Nil(t, albRec.Attributes, "ALB should no longer seed attributes at create time")
 
-	_ = out // suppress unused warning
+	albDesc, err := svc.DescribeLoadBalancerAttributes(&elbv2.DescribeLoadBalancerAttributesInput{
+		LoadBalancerArn: albOut.LoadBalancers[0].LoadBalancerArn,
+	}, testAccountID)
+	require.NoError(t, err)
+	albAttrs := make(map[string]string)
+	for _, a := range albDesc.Attributes {
+		albAttrs[*a.Key] = *a.Value
+	}
+	assert.Equal(t, "true", albAttrs["load_balancing.cross_zone.enabled"])
 }
 
 func TestCreateLoadBalancer_InvalidType(t *testing.T) {
@@ -1704,13 +1721,13 @@ func TestDescribeLoadBalancerAttributes_ALBDefaults(t *testing.T) {
 	}, testAccountID)
 	require.NoError(t, err)
 
-	defaults := DefaultLoadBalancerAttributes()
+	defaults := DefaultLoadBalancerAttributes(LoadBalancerTypeApplication)
 	assert.Len(t, out.Attributes, len(defaults))
 	attrMap := make(map[string]string)
 	for _, a := range out.Attributes {
 		attrMap[*a.Key] = *a.Value
 	}
-	// ALB seeds cross-zone=true, overriding the default false
+	// ALB default cross-zone is true — comes from the per-type default, not seeding.
 	assert.Equal(t, "true", attrMap["load_balancing.cross_zone.enabled"])
 }
 

@@ -666,12 +666,9 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		state = StateFailed
 	}
 
-	// ALBs default cross-zone to true; NLBs fall through to the false default.
-	var attrs map[string]string
-	if lbType == LoadBalancerTypeApplication {
-		attrs = map[string]string{"load_balancing.cross_zone.enabled": "true"}
-	}
-
+	// Attributes are intentionally left nil — DescribeLoadBalancerAttributes
+	// derives per-type defaults from lb.Type via DefaultLoadBalancerAttributes.
+	// Callers that want a non-default value must call ModifyLoadBalancerAttributes.
 	record := &LoadBalancerRecord{
 		LoadBalancerArn: lbArn,
 		LoadBalancerID:  lbID,
@@ -690,7 +687,6 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		HostPorts:       hostPorts,
 		IPAddressType:   IPAddressTypeIPv4,
 		NodeID:          s.nodeID,
-		Attributes:      attrs,
 		Tags:            tags,
 		AccountID:       accountID,
 		CreatedAt:       time.Now().UTC(),
@@ -1618,7 +1614,7 @@ func (s *ELBv2ServiceImpl) DescribeLoadBalancerAttributes(input *elbv2.DescribeL
 		return nil, errors.New(awserrors.ErrorELBv2LoadBalancerNotFound)
 	}
 
-	merged := DefaultLoadBalancerAttributes()
+	merged := DefaultLoadBalancerAttributes(lb.Type)
 	maps.Copy(merged, lb.Attributes)
 
 	// Sort keys for deterministic output — Terraform diffs and snapshot tests

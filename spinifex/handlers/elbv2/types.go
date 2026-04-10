@@ -177,12 +177,20 @@ type ListenerAction struct {
 	TargetGroupArn string `json:"target_group_arn"`
 }
 
-// DefaultLoadBalancerAttributes returns the default attribute set for load balancers.
-// ALBs override load_balancing.cross_zone.enabled to "true" at create time.
-func DefaultLoadBalancerAttributes() map[string]string {
+// DefaultLoadBalancerAttributes returns the default attribute set for a load
+// balancer of the given type. ALBs default load_balancing.cross_zone.enabled to
+// "true"; NLBs (and any unknown type) default it to "false". This is the single
+// source of truth — CreateLoadBalancer no longer seeds attributes, and
+// DescribeLoadBalancerAttributes derives the per-type defaults from lb.Type on
+// read.
+func DefaultLoadBalancerAttributes(lbType string) map[string]string {
+	crossZone := "false"
+	if lbType == LoadBalancerTypeApplication {
+		crossZone = "true"
+	}
 	return map[string]string{
 		"deletion_protection.enabled":                     "false",
-		"load_balancing.cross_zone.enabled":               "false",
+		"load_balancing.cross_zone.enabled":               crossZone,
 		"access_logs.s3.enabled":                          "false",
 		"access_logs.s3.bucket":                           "",
 		"access_logs.s3.prefix":                           "",
