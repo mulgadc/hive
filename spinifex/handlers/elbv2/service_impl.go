@@ -1354,7 +1354,7 @@ func (s *ELBv2ServiceImpl) ModifyTargetGroupAttributes(input *elbv2.ModifyTarget
 		slog.Error("ModifyTargetGroupAttributes: failed to get TG", "arn", *input.TargetGroupArn, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
-	if tg == nil {
+	if tg == nil || tg.AccountID != accountID {
 		return nil, errors.New(awserrors.ErrorELBv2TargetGroupNotFound)
 	}
 
@@ -1393,7 +1393,7 @@ func (s *ELBv2ServiceImpl) DescribeTargetGroupAttributes(input *elbv2.DescribeTa
 		slog.Error("DescribeTargetGroupAttributes: failed to get TG", "arn", *input.TargetGroupArn, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
-	if tg == nil {
+	if tg == nil || tg.AccountID != accountID {
 		return nil, errors.New(awserrors.ErrorELBv2TargetGroupNotFound)
 	}
 
@@ -1423,7 +1423,7 @@ func (s *ELBv2ServiceImpl) ModifyLoadBalancerAttributes(input *elbv2.ModifyLoadB
 		slog.Error("ModifyLoadBalancerAttributes: failed to get LB", "arn", *input.LoadBalancerArn, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
-	if lb == nil {
+	if lb == nil || lb.AccountID != accountID {
 		return nil, errors.New(awserrors.ErrorELBv2LoadBalancerNotFound)
 	}
 
@@ -1462,7 +1462,7 @@ func (s *ELBv2ServiceImpl) DescribeLoadBalancerAttributes(input *elbv2.DescribeL
 		slog.Error("DescribeLoadBalancerAttributes: failed to get LB", "arn", *input.LoadBalancerArn, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
-	if lb == nil {
+	if lb == nil || lb.AccountID != accountID {
 		return nil, errors.New(awserrors.ErrorELBv2LoadBalancerNotFound)
 	}
 

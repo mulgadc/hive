@@ -1863,3 +1863,53 @@ func TestDescribeLoadBalancerAttributes_MissingArn(t *testing.T) {
 	_, err := svc.DescribeLoadBalancerAttributes(&elbv2.DescribeLoadBalancerAttributesInput{}, testAccountID)
 	assert.EqualError(t, err, awserrors.ErrorMissingParameter)
 }
+
+func TestModifyTargetGroupAttributes_WrongAccount(t *testing.T) {
+	svc := setupTestService(t)
+	tgOut, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{Name: aws.String("tg-attr-wrong-acct")}, testAccountID)
+	require.NoError(t, err)
+
+	_, err = svc.ModifyTargetGroupAttributes(&elbv2.ModifyTargetGroupAttributesInput{
+		TargetGroupArn: tgOut.TargetGroups[0].TargetGroupArn,
+		Attributes: []*elbv2.TargetGroupAttribute{
+			{Key: aws.String("stickiness.enabled"), Value: aws.String("true")},
+		},
+	}, "999999999999")
+	assert.EqualError(t, err, awserrors.ErrorELBv2TargetGroupNotFound)
+}
+
+func TestDescribeTargetGroupAttributes_WrongAccount(t *testing.T) {
+	svc := setupTestService(t)
+	tgOut, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{Name: aws.String("tg-desc-attr-wrong-acct")}, testAccountID)
+	require.NoError(t, err)
+
+	_, err = svc.DescribeTargetGroupAttributes(&elbv2.DescribeTargetGroupAttributesInput{
+		TargetGroupArn: tgOut.TargetGroups[0].TargetGroupArn,
+	}, "999999999999")
+	assert.EqualError(t, err, awserrors.ErrorELBv2TargetGroupNotFound)
+}
+
+func TestModifyLoadBalancerAttributes_WrongAccount(t *testing.T) {
+	svc := setupTestService(t)
+	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{Name: aws.String("lb-attr-wrong-acct")}, testAccountID)
+	require.NoError(t, err)
+
+	_, err = svc.ModifyLoadBalancerAttributes(&elbv2.ModifyLoadBalancerAttributesInput{
+		LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+		Attributes: []*elbv2.LoadBalancerAttribute{
+			{Key: aws.String("idle_timeout.timeout_seconds"), Value: aws.String("30")},
+		},
+	}, "999999999999")
+	assert.EqualError(t, err, awserrors.ErrorELBv2LoadBalancerNotFound)
+}
+
+func TestDescribeLoadBalancerAttributes_WrongAccount(t *testing.T) {
+	svc := setupTestService(t)
+	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{Name: aws.String("lb-desc-attr-wrong-acct")}, testAccountID)
+	require.NoError(t, err)
+
+	_, err = svc.DescribeLoadBalancerAttributes(&elbv2.DescribeLoadBalancerAttributesInput{
+		LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+	}, "999999999999")
+	assert.EqualError(t, err, awserrors.ErrorELBv2LoadBalancerNotFound)
+}
