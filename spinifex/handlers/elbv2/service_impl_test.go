@@ -1913,3 +1913,74 @@ func TestDescribeLoadBalancerAttributes_WrongAccount(t *testing.T) {
 	}, "999999999999")
 	assert.EqualError(t, err, awserrors.ErrorELBv2LoadBalancerNotFound)
 }
+
+// TestModifyTargetGroupAttributes_SkipsInvalidEntries verifies that nil slice
+// elements, nil Keys, and nil Values are skipped (with a warning) rather than
+// panicking or being silently dropped. Valid attributes in the same call must
+// still be applied.
+func TestModifyTargetGroupAttributes_SkipsInvalidEntries(t *testing.T) {
+	svc := setupTestService(t)
+	tgOut, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{Name: aws.String("tg-attr-skip")}, testAccountID)
+	require.NoError(t, err)
+	arn := tgOut.TargetGroups[0].TargetGroupArn
+
+	modOut, err := svc.ModifyTargetGroupAttributes(&elbv2.ModifyTargetGroupAttributesInput{
+		TargetGroupArn: arn,
+		Attributes: []*elbv2.TargetGroupAttribute{
+			nil, // nil element must not panic
+			{Key: nil, Value: aws.String("v")},
+			{Key: aws.String("k"), Value: nil},
+			{Key: aws.String("stickiness.enabled"), Value: aws.String("true")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	// Only the one valid attribute should be returned.
+	require.Len(t, modOut.Attributes, 1)
+	assert.Equal(t, "stickiness.enabled", *modOut.Attributes[0].Key)
+	assert.Equal(t, "true", *modOut.Attributes[0].Value)
+
+	// The valid attribute should have been persisted.
+	descOut, err := svc.DescribeTargetGroupAttributes(&elbv2.DescribeTargetGroupAttributesInput{
+		TargetGroupArn: arn,
+	}, testAccountID)
+	require.NoError(t, err)
+	attrMap := make(map[string]string)
+	for _, a := range descOut.Attributes {
+		attrMap[*a.Key] = *a.Value
+	}
+	assert.Equal(t, "true", attrMap["stickiness.enabled"])
+}
+
+// TestModifyLoadBalancerAttributes_SkipsInvalidEntries mirrors the TG case for
+// the LB handler: nil elements and nil Key/Value fields must be skipped, not
+// panic or swallow valid attributes in the same request.
+func TestModifyLoadBalancerAttributes_SkipsInvalidEntries(t *testing.T) {
+	svc := setupTestService(t)
+	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{Name: aws.String("lb-attr-skip")}, testAccountID)
+	require.NoError(t, err)
+	arn := lbOut.LoadBalancers[0].LoadBalancerArn
+
+	modOut, err := svc.ModifyLoadBalancerAttributes(&elbv2.ModifyLoadBalancerAttributesInput{
+		LoadBalancerArn: arn,
+		Attributes: []*elbv2.LoadBalancerAttribute{
+			nil, // nil element must not panic
+			{Key: nil, Value: aws.String("v")},
+			{Key: aws.String("k"), Value: nil},
+			{Key: aws.String("idle_timeout.timeout_seconds"), Value: aws.String("75")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, modOut.Attributes, 1)
+	assert.Equal(t, "idle_timeout.timeout_seconds", *modOut.Attributes[0].Key)
+	assert.Equal(t, "75", *modOut.Attributes[0].Value)
+
+	descOut, err := svc.DescribeLoadBalancerAttributes(&elbv2.DescribeLoadBalancerAttributesInput{
+		LoadBalancerArn: arn,
+	}, testAccountID)
+	require.NoError(t, err)
+	attrMap := make(map[string]string)
+	for _, a := range descOut.Attributes {
+		attrMap[*a.Key] = *a.Value
+	}
+	assert.Equal(t, "75", attrMap["idle_timeout.timeout_seconds"])
+}

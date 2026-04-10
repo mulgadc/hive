@@ -1364,13 +1364,19 @@ func (s *ELBv2ServiceImpl) ModifyTargetGroupAttributes(input *elbv2.ModifyTarget
 
 	var submitted []*elbv2.TargetGroupAttribute
 	for _, attr := range input.Attributes {
-		if attr.Key != nil && attr.Value != nil {
-			tg.Attributes[*attr.Key] = *attr.Value
-			submitted = append(submitted, &elbv2.TargetGroupAttribute{
-				Key:   attr.Key,
-				Value: attr.Value,
-			})
+		if attr == nil {
+			slog.Warn("ModifyTargetGroupAttributes: skipping nil attribute element", "arn", *input.TargetGroupArn)
+			continue
 		}
+		if attr.Key == nil || attr.Value == nil {
+			slog.Warn("ModifyTargetGroupAttributes: skipping attribute with nil Key or Value", "arn", *input.TargetGroupArn)
+			continue
+		}
+		tg.Attributes[*attr.Key] = *attr.Value
+		submitted = append(submitted, &elbv2.TargetGroupAttribute{
+			Key:   attr.Key,
+			Value: attr.Value,
+		})
 	}
 
 	if err := s.store.PutTargetGroup(tg); err != nil {
@@ -1433,13 +1439,19 @@ func (s *ELBv2ServiceImpl) ModifyLoadBalancerAttributes(input *elbv2.ModifyLoadB
 
 	var submitted []*elbv2.LoadBalancerAttribute
 	for _, attr := range input.Attributes {
-		if attr.Key != nil && attr.Value != nil {
-			lb.Attributes[*attr.Key] = *attr.Value
-			submitted = append(submitted, &elbv2.LoadBalancerAttribute{
-				Key:   attr.Key,
-				Value: attr.Value,
-			})
+		if attr == nil {
+			slog.Warn("ModifyLoadBalancerAttributes: skipping nil attribute element", "arn", *input.LoadBalancerArn)
+			continue
 		}
+		if attr.Key == nil || attr.Value == nil {
+			slog.Warn("ModifyLoadBalancerAttributes: skipping attribute with nil Key or Value", "arn", *input.LoadBalancerArn)
+			continue
+		}
+		lb.Attributes[*attr.Key] = *attr.Value
+		submitted = append(submitted, &elbv2.LoadBalancerAttribute{
+			Key:   attr.Key,
+			Value: attr.Value,
+		})
 	}
 
 	if err := s.store.PutLoadBalancer(lb); err != nil {
