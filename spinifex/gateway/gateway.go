@@ -231,11 +231,8 @@ func (gw *GatewayConfig) ErrorHandler(w http.ResponseWriter, r *http.Request, er
 	svc, _ := gw.GetService(r)
 	slog.Debug("ErrorHandler", "service", svc, "error", err.Error())
 
-	// Get the request ID
+	// Generate a server-side request ID — never trust client-provided values
 	var requestId = uuid.NewString()
-	if rid := r.Header.Get("X-Amz-Request-Id"); rid != "" {
-		requestId = rid
-	}
 
 	var errorMsg = awserrors.ErrorMessage{}
 

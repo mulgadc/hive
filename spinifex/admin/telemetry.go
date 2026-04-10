@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -93,7 +93,7 @@ func ReadMachineID() string {
 	hostname, _ := os.Hostname()
 	mac := firstMAC()
 	hash := sha256.Sum256([]byte(hostname + mac))
-	return fmt.Sprintf("%x", hash[:16])
+	return hex.EncodeToString(hash[:16])
 }
 
 // firstMAC returns the MAC address of the first non-loopback, up interface.
