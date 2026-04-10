@@ -1,6 +1,6 @@
 # Spinifex: An Open Source AWS-Compatible Stack for Bare-Metal, Edge, and On-Prem Deployments
 
-(Developer Preview) - Spinifex developed by [Mulga Defense Corporation](https://mulgadc.com/) is an open source infrastructure platform that brings the core services of AWS—like EC2, VPC, EBS, and S3—to environments where running in the cloud isn't an option. Whether you're deploying to edge sites, private data-centers, or need to operate in low-connectivity or highly contested environments, Spinifex gives you AWS-style workflows on your own hardware.
+Spinifex developed by [Mulga Defense Corporation](https://mulgadc.com) is an open source infrastructure platform that brings the core services of AWS—like EC2, VPC, EBS, and S3—to environments where running in the cloud isn't an option. Whether you're deploying to edge sites, private data-centers, or need to operate in low-connectivity or highly contested environments, Spinifex gives you AWS-style workflows on your own hardware.
 
 ## What is Spinifex?
 
@@ -61,11 +61,11 @@ Installation requires an Ubuntu / Debian system. See the detailed documentation 
 The installation is straightforward to set up and running on a single node for testing purposes.
 
 ```bash
-curl https://install.mulgadc.com | bash
+curl -fsSL https://install.mulgadc.com | bash
 
 sudo /usr/local/share/spinifex/setup-ovn.sh --management
 
-sudo spx admin init
+sudo spx admin init --node node1 --nodes 1
 
 sudo systemctl start spinifex.target
 
@@ -76,7 +76,7 @@ aws ec2 describe-instance-types
 
 ### Development Setup
 
-For a complete development environment see the [Source Install](https://docs.mulgadc.com/docs/source-install/) documentation
+For a complete development environment see the [Source Install](https://docs.mulgadc.com/docs/install-source) documentation
 
 ### Component Repositories
 
