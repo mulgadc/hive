@@ -57,3 +57,19 @@ func (d *Daemon) handleELBv2LBAgentHeartbeat(msg *nats.Msg) {
 func (d *Daemon) handleELBv2GetLBConfig(msg *nats.Msg) {
 	handleNATSRequest(msg, d.elbv2Service.GetLBConfig)
 }
+
+func (d *Daemon) handleELBv2ModifyTargetGroupAttributes(msg *nats.Msg) {
+	handleNATSRequest(msg, d.elbv2Service.ModifyTargetGroupAttributes)
+}
+
+func (d *Daemon) handleELBv2DescribeTargetGroupAttributes(msg *nats.Msg) {
+	handleNATSRequest(msg, d.elbv2Service.DescribeTargetGroupAttributes)
+}
+
+func (d *Daemon) handleELBv2ModifyLoadBalancerAttributes(msg *nats.Msg) {
+	handleNATSRequest(msg, d.elbv2Service.ModifyLoadBalancerAttributes)
+}
+
+func (d *Daemon) handleELBv2DescribeLoadBalancerAttributes(msg *nats.Msg) {
+	handleNATSRequest(msg, d.elbv2Service.DescribeLoadBalancerAttributes)
+}
