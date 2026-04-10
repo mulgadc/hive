@@ -50,10 +50,30 @@ func (d *Daemon) handleELBv2DescribeListeners(msg *nats.Msg) {
 	handleNATSRequest(msg, d.elbv2Service.DescribeListeners)
 }
 
+func (d *Daemon) handleELBv2DescribeTags(msg *nats.Msg) {
+	handleNATSRequest(msg, d.elbv2Service.DescribeTags)
+}
+
 func (d *Daemon) handleELBv2LBAgentHeartbeat(msg *nats.Msg) {
 	handleNATSRequest(msg, d.elbv2Service.LBAgentHeartbeat)
 }
 
 func (d *Daemon) handleELBv2GetLBConfig(msg *nats.Msg) {
 	handleNATSRequest(msg, d.elbv2Service.GetLBConfig)
+}
+
+func (d *Daemon) handleELBv2ModifyTargetGroupAttributes(msg *nats.Msg) {
+	handleNATSRequest(msg, d.elbv2Service.ModifyTargetGroupAttributes)
+}
+
+func (d *Daemon) handleELBv2DescribeTargetGroupAttributes(msg *nats.Msg) {
+	handleNATSRequest(msg, d.elbv2Service.DescribeTargetGroupAttributes)
+}
+
+func (d *Daemon) handleELBv2ModifyLoadBalancerAttributes(msg *nats.Msg) {
+	handleNATSRequest(msg, d.elbv2Service.ModifyLoadBalancerAttributes)
+}
+
+func (d *Daemon) handleELBv2DescribeLoadBalancerAttributes(msg *nats.Msg) {
+	handleNATSRequest(msg, d.elbv2Service.DescribeLoadBalancerAttributes)
 }

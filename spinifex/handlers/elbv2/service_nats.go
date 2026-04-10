@@ -68,6 +68,26 @@ func (s *NATSELBv2Service) DescribeListeners(input *elbv2.DescribeListenersInput
 	return utils.NATSRequest[elbv2.DescribeListenersOutput](s.natsConn, "elbv2.DescribeListeners", input, defaultTimeout, accountID)
 }
 
+func (s *NATSELBv2Service) DescribeTags(input *elbv2.DescribeTagsInput, accountID string) (*elbv2.DescribeTagsOutput, error) {
+	return utils.NATSRequest[elbv2.DescribeTagsOutput](s.natsConn, "elbv2.DescribeTags", input, defaultTimeout, accountID)
+}
+
+func (s *NATSELBv2Service) ModifyTargetGroupAttributes(input *elbv2.ModifyTargetGroupAttributesInput, accountID string) (*elbv2.ModifyTargetGroupAttributesOutput, error) {
+	return utils.NATSRequest[elbv2.ModifyTargetGroupAttributesOutput](s.natsConn, "elbv2.ModifyTargetGroupAttributes", input, defaultTimeout, accountID)
+}
+
+func (s *NATSELBv2Service) DescribeTargetGroupAttributes(input *elbv2.DescribeTargetGroupAttributesInput, accountID string) (*elbv2.DescribeTargetGroupAttributesOutput, error) {
+	return utils.NATSRequest[elbv2.DescribeTargetGroupAttributesOutput](s.natsConn, "elbv2.DescribeTargetGroupAttributes", input, defaultTimeout, accountID)
+}
+
+func (s *NATSELBv2Service) ModifyLoadBalancerAttributes(input *elbv2.ModifyLoadBalancerAttributesInput, accountID string) (*elbv2.ModifyLoadBalancerAttributesOutput, error) {
+	return utils.NATSRequest[elbv2.ModifyLoadBalancerAttributesOutput](s.natsConn, "elbv2.ModifyLoadBalancerAttributes", input, defaultTimeout, accountID)
+}
+
+func (s *NATSELBv2Service) DescribeLoadBalancerAttributes(input *elbv2.DescribeLoadBalancerAttributesInput, accountID string) (*elbv2.DescribeLoadBalancerAttributesOutput, error) {
+	return utils.NATSRequest[elbv2.DescribeLoadBalancerAttributesOutput](s.natsConn, "elbv2.DescribeLoadBalancerAttributes", input, defaultTimeout, accountID)
+}
+
 func (s *NATSELBv2Service) LBAgentHeartbeat(input *LBAgentHeartbeatInput, accountID string) (*LBAgentHeartbeatOutput, error) {
 	return utils.NATSRequest[LBAgentHeartbeatOutput](s.natsConn, "elbv2.LBAgentHeartbeat", input, defaultTimeout, accountID)
 }

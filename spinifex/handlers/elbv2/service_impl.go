@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -425,6 +428,37 @@ func buildListenerArn(region, accountID, lbName, lbID, listenerID, lbType string
 	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:listener/%s/%s/%s/%s", region, accountID, lbArnPathSegment(lbType), lbName, lbID, listenerID)
 }
 
+// ELBv2 resource types as they appear in the resource segment of an ARN.
+const (
+	elbv2ResourceLoadBalancer = "loadbalancer"
+	elbv2ResourceTargetGroup  = "targetgroup"
+	elbv2ResourceListener     = "listener"
+)
+
+// elbv2ResourceTypeFromArn extracts the resource type from an ELBv2 ARN.
+// ELBv2 ARNs have the form
+// "arn:aws:elasticloadbalancing:{region}:{account}:{type}/...". Returns one
+// of "loadbalancer", "targetgroup", "listener" — anything else yields
+// ErrorInvalidParameterValue so callers can surface a proper API error.
+func elbv2ResourceTypeFromArn(arn string) (string, error) {
+	parts := strings.SplitN(arn, ":", 6)
+	if len(parts) < 6 || parts[0] != "arn" || parts[2] != "elasticloadbalancing" {
+		return "", errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	resourceSegment := parts[5]
+	slash := strings.Index(resourceSegment, "/")
+	if slash <= 0 {
+		return "", errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	resourceType := resourceSegment[:slash]
+	switch resourceType {
+	case elbv2ResourceLoadBalancer, elbv2ResourceTargetGroup, elbv2ResourceListener:
+		return resourceType, nil
+	default:
+		return "", errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+}
+
 // isCompatibleProtocol checks whether a listener protocol is compatible with a
 // target group protocol. ALB: HTTP/HTTPS listeners can forward to HTTP or HTTPS
 // TGs. NLB: TCP→TCP, UDP→UDP, TLS→TCP or TLS, TCP_UDP→TCP_UDP.
@@ -632,28 +666,30 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		state = StateFailed
 	}
 
+	// Attributes are intentionally left nil — DescribeLoadBalancerAttributes
+	// derives per-type defaults from lb.Type via DefaultLoadBalancerAttributes.
+	// Callers that want a non-default value must call ModifyLoadBalancerAttributes.
 	record := &LoadBalancerRecord{
-		LoadBalancerArn:  lbArn,
-		LoadBalancerID:   lbID,
-		DNSName:          dnsName,
-		Name:             name,
-		Scheme:           scheme,
-		Type:             lbType,
-		CrossZoneEnabled: lbType == LoadBalancerTypeApplication,
-		State:            state,
-		VpcId:            vpcID,
-		SecurityGroups:   securityGroups,
-		Subnets:          subnets,
-		AvailZones:       availZones,
-		ENIs:             eniIDs,
-		InstanceID:       albInstanceID,
-		VPCIP:            albVPCIP,
-		HostPorts:        hostPorts,
-		IPAddressType:    IPAddressTypeIPv4,
-		NodeID:           s.nodeID,
-		Tags:             tags,
-		AccountID:        accountID,
-		CreatedAt:        time.Now().UTC(),
+		LoadBalancerArn: lbArn,
+		LoadBalancerID:  lbID,
+		DNSName:         dnsName,
+		Name:            name,
+		Scheme:          scheme,
+		Type:            lbType,
+		State:           state,
+		VpcId:           vpcID,
+		SecurityGroups:  securityGroups,
+		Subnets:         subnets,
+		AvailZones:      availZones,
+		ENIs:            eniIDs,
+		InstanceID:      albInstanceID,
+		VPCIP:           albVPCIP,
+		HostPorts:       hostPorts,
+		IPAddressType:   IPAddressTypeIPv4,
+		NodeID:          s.nodeID,
+		Tags:            tags,
+		AccountID:       accountID,
+		CreatedAt:       time.Now().UTC(),
 	}
 
 	if err := s.store.PutLoadBalancer(record); err != nil {
@@ -1335,7 +1371,313 @@ func (s *ELBv2ServiceImpl) DescribeListeners(input *elbv2.DescribeListenersInput
 	}, nil
 }
 
+// --- Tag operations ---
+
+// DescribeTags returns tags for one or more ELBv2 resources (load balancers,
+// target groups, listeners). Tag data is read from the existing record stores
+// — Spinifex doesn't have a separate tag KV. Listeners currently never store
+// tags, so they always return an empty Tags slice (matches AWS behaviour for
+// untagged resources). Cross-account or unknown ARNs return the per-resource
+// not-found error so existence isn't leaked across accounts.
+func (s *ELBv2ServiceImpl) DescribeTags(input *elbv2.DescribeTagsInput, accountID string) (*elbv2.DescribeTagsOutput, error) {
+	if input == nil || len(input.ResourceArns) == 0 {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	descriptions := make([]*elbv2.TagDescription, 0, len(input.ResourceArns))
+	for _, arnPtr := range input.ResourceArns {
+		if arnPtr == nil || *arnPtr == "" {
+			return nil, errors.New(awserrors.ErrorMissingParameter)
+		}
+		arn := *arnPtr
+
+		resourceType, err := elbv2ResourceTypeFromArn(arn)
+		if err != nil {
+			return nil, err
+		}
+
+		var (
+			tags          map[string]string
+			ownerAccount  string
+			notFoundError string
+			found         bool
+		)
+		switch resourceType {
+		case elbv2ResourceLoadBalancer:
+			notFoundError = awserrors.ErrorELBv2LoadBalancerNotFound
+			lb, lbErr := s.store.GetLoadBalancerByArn(arn)
+			if lbErr != nil {
+				slog.Error("DescribeTags: failed to get LB", "arn", arn, "err", lbErr)
+				return nil, errors.New(awserrors.ErrorServerInternal)
+			}
+			if lb != nil {
+				found = true
+				tags = lb.Tags
+				ownerAccount = lb.AccountID
+			}
+		case elbv2ResourceTargetGroup:
+			notFoundError = awserrors.ErrorELBv2TargetGroupNotFound
+			tg, tgErr := s.store.GetTargetGroupByArn(arn)
+			if tgErr != nil {
+				slog.Error("DescribeTags: failed to get target group", "arn", arn, "err", tgErr)
+				return nil, errors.New(awserrors.ErrorServerInternal)
+			}
+			if tg != nil {
+				found = true
+				tags = tg.Tags
+				ownerAccount = tg.AccountID
+			}
+		case elbv2ResourceListener:
+			notFoundError = awserrors.ErrorELBv2ListenerNotFound
+			l, lErr := s.store.GetListenerByArn(arn)
+			if lErr != nil {
+				slog.Error("DescribeTags: failed to get listener", "arn", arn, "err", lErr)
+				return nil, errors.New(awserrors.ErrorServerInternal)
+			}
+			if l != nil {
+				found = true
+				ownerAccount = l.AccountID
+				// Listeners don't store tags yet — leave map nil.
+			}
+		}
+
+		if !found || ownerAccount != accountID {
+			return nil, errors.New(notFoundError)
+		}
+
+		descriptions = append(descriptions, &elbv2.TagDescription{
+			ResourceArn: aws.String(arn),
+			Tags:        tagsMapToSDK(tags),
+		})
+	}
+
+	return &elbv2.DescribeTagsOutput{
+		TagDescriptions: descriptions,
+	}, nil
+}
+
+// tagsMapToSDK converts a tag map into the SDK Tag slice with deterministic
+// (sorted-by-key) ordering. Returns nil for empty/nil input so the response
+// matches AWS for untagged resources.
+func tagsMapToSDK(tags map[string]string) []*elbv2.Tag {
+	if len(tags) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(tags))
+	for k := range tags {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	out := make([]*elbv2.Tag, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, &elbv2.Tag{Key: aws.String(k), Value: aws.String(tags[k])})
+	}
+	return out
+}
+
 // --- SDK type conversion helpers ---
+
+func (s *ELBv2ServiceImpl) ModifyTargetGroupAttributes(input *elbv2.ModifyTargetGroupAttributesInput, accountID string) (*elbv2.ModifyTargetGroupAttributesOutput, error) {
+	if input.TargetGroupArn == nil || *input.TargetGroupArn == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	tg, err := s.store.GetTargetGroupByArn(*input.TargetGroupArn)
+	if err != nil {
+		slog.Error("ModifyTargetGroupAttributes: failed to get TG", "arn", *input.TargetGroupArn, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+	if tg == nil || tg.AccountID != accountID {
+		return nil, errors.New(awserrors.ErrorELBv2TargetGroupNotFound)
+	}
+
+	knownTGAttrs := DefaultTargetGroupAttributes()
+	var submitted []*elbv2.TargetGroupAttribute
+	dirty := false
+	for _, attr := range input.Attributes {
+		if attr == nil {
+			slog.Warn("ModifyTargetGroupAttributes: skipping nil attribute element", "arn", *input.TargetGroupArn)
+			continue
+		}
+		if attr.Key == nil || attr.Value == nil {
+			slog.Warn("ModifyTargetGroupAttributes: skipping attribute with nil Key or Value", "arn", *input.TargetGroupArn)
+			continue
+		}
+		if _, ok := knownTGAttrs[*attr.Key]; !ok {
+			slog.Warn("ModifyTargetGroupAttributes: rejecting unknown attribute key", "arn", *input.TargetGroupArn, "key", *attr.Key)
+			return nil, errors.New(awserrors.ErrorValidationError)
+		}
+		submitted = append(submitted, &elbv2.TargetGroupAttribute{
+			Key:   attr.Key,
+			Value: attr.Value,
+		})
+		existing, exists := tg.Attributes[*attr.Key]
+		if exists && existing == *attr.Value {
+			continue // value already matches stored — no mutation needed
+		}
+		if tg.Attributes == nil {
+			tg.Attributes = make(map[string]string)
+		}
+		tg.Attributes[*attr.Key] = *attr.Value
+		dirty = true
+	}
+
+	// If the caller sent attributes but every single one was rejected by the
+	// nil guard above, surface that as an error instead of silently returning
+	// a successful empty response — otherwise the caller thinks the write
+	// landed when nothing was actually applied.
+	if len(input.Attributes) > 0 && len(submitted) == 0 {
+		slog.Warn("ModifyTargetGroupAttributes: all submitted attributes were invalid", "arn", *input.TargetGroupArn, "submitted_count", len(input.Attributes))
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
+	// Skip the NATS/KV write when nothing changed. Terraform re-applies the same
+	// attribute set on every drift check, so this kills ~all Modify traffic
+	// during steady state and narrows the read-modify-write race window.
+	if dirty {
+		if err := s.store.PutTargetGroup(tg); err != nil {
+			slog.Error("ModifyTargetGroupAttributes: failed to persist TG", "arn", *input.TargetGroupArn, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
+	}
+
+	return &elbv2.ModifyTargetGroupAttributesOutput{
+		Attributes: submitted,
+	}, nil
+}
+
+func (s *ELBv2ServiceImpl) DescribeTargetGroupAttributes(input *elbv2.DescribeTargetGroupAttributesInput, accountID string) (*elbv2.DescribeTargetGroupAttributesOutput, error) {
+	if input.TargetGroupArn == nil || *input.TargetGroupArn == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	tg, err := s.store.GetTargetGroupByArn(*input.TargetGroupArn)
+	if err != nil {
+		slog.Error("DescribeTargetGroupAttributes: failed to get TG", "arn", *input.TargetGroupArn, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+	if tg == nil || tg.AccountID != accountID {
+		return nil, errors.New(awserrors.ErrorELBv2TargetGroupNotFound)
+	}
+
+	merged := DefaultTargetGroupAttributes()
+	maps.Copy(merged, tg.Attributes)
+
+	// Sort keys for deterministic output — Terraform diffs and snapshot tests
+	// depend on stable attribute ordering.
+	keys := slices.Sorted(maps.Keys(merged))
+	attrs := make([]*elbv2.TargetGroupAttribute, 0, len(keys))
+	for _, k := range keys {
+		attrs = append(attrs, &elbv2.TargetGroupAttribute{
+			Key:   aws.String(k),
+			Value: aws.String(merged[k]),
+		})
+	}
+
+	return &elbv2.DescribeTargetGroupAttributesOutput{
+		Attributes: attrs,
+	}, nil
+}
+
+func (s *ELBv2ServiceImpl) ModifyLoadBalancerAttributes(input *elbv2.ModifyLoadBalancerAttributesInput, accountID string) (*elbv2.ModifyLoadBalancerAttributesOutput, error) {
+	if input.LoadBalancerArn == nil || *input.LoadBalancerArn == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	lb, err := s.store.GetLoadBalancerByArn(*input.LoadBalancerArn)
+	if err != nil {
+		slog.Error("ModifyLoadBalancerAttributes: failed to get LB", "arn", *input.LoadBalancerArn, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+	if lb == nil || lb.AccountID != accountID {
+		return nil, errors.New(awserrors.ErrorELBv2LoadBalancerNotFound)
+	}
+
+	knownLBAttrs := DefaultLoadBalancerAttributes(lb.Type)
+	var submitted []*elbv2.LoadBalancerAttribute
+	dirty := false
+	for _, attr := range input.Attributes {
+		if attr == nil {
+			slog.Warn("ModifyLoadBalancerAttributes: skipping nil attribute element", "arn", *input.LoadBalancerArn)
+			continue
+		}
+		if attr.Key == nil || attr.Value == nil {
+			slog.Warn("ModifyLoadBalancerAttributes: skipping attribute with nil Key or Value", "arn", *input.LoadBalancerArn)
+			continue
+		}
+		if _, ok := knownLBAttrs[*attr.Key]; !ok {
+			slog.Warn("ModifyLoadBalancerAttributes: rejecting unknown attribute key", "arn", *input.LoadBalancerArn, "key", *attr.Key, "lbType", lb.Type)
+			return nil, errors.New(awserrors.ErrorValidationError)
+		}
+		submitted = append(submitted, &elbv2.LoadBalancerAttribute{
+			Key:   attr.Key,
+			Value: attr.Value,
+		})
+		existing, exists := lb.Attributes[*attr.Key]
+		if exists && existing == *attr.Value {
+			continue
+		}
+		if lb.Attributes == nil {
+			lb.Attributes = make(map[string]string)
+		}
+		lb.Attributes[*attr.Key] = *attr.Value
+		dirty = true
+	}
+
+	// If the caller sent attributes but every single one was rejected by the
+	// nil guard above, surface that as an error instead of silently returning
+	// a successful empty response.
+	if len(input.Attributes) > 0 && len(submitted) == 0 {
+		slog.Warn("ModifyLoadBalancerAttributes: all submitted attributes were invalid", "arn", *input.LoadBalancerArn, "submitted_count", len(input.Attributes))
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
+	// Skip the NATS/KV write when nothing changed. See
+	// ModifyTargetGroupAttributes for the Terraform-drift-check motivation.
+	if dirty {
+		if err := s.store.PutLoadBalancer(lb); err != nil {
+			slog.Error("ModifyLoadBalancerAttributes: failed to persist LB", "arn", *input.LoadBalancerArn, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
+	}
+
+	return &elbv2.ModifyLoadBalancerAttributesOutput{
+		Attributes: submitted,
+	}, nil
+}
+
+func (s *ELBv2ServiceImpl) DescribeLoadBalancerAttributes(input *elbv2.DescribeLoadBalancerAttributesInput, accountID string) (*elbv2.DescribeLoadBalancerAttributesOutput, error) {
+	if input.LoadBalancerArn == nil || *input.LoadBalancerArn == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	lb, err := s.store.GetLoadBalancerByArn(*input.LoadBalancerArn)
+	if err != nil {
+		slog.Error("DescribeLoadBalancerAttributes: failed to get LB", "arn", *input.LoadBalancerArn, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+	if lb == nil || lb.AccountID != accountID {
+		return nil, errors.New(awserrors.ErrorELBv2LoadBalancerNotFound)
+	}
+
+	merged := DefaultLoadBalancerAttributes(lb.Type)
+	maps.Copy(merged, lb.Attributes)
+
+	// Sort keys for deterministic output — Terraform diffs and snapshot tests
+	// depend on stable attribute ordering.
+	keys := slices.Sorted(maps.Keys(merged))
+	attrs := make([]*elbv2.LoadBalancerAttribute, 0, len(keys))
+	for _, k := range keys {
+		attrs = append(attrs, &elbv2.LoadBalancerAttribute{
+			Key:   aws.String(k),
+			Value: aws.String(merged[k]),
+		})
+	}
+
+	return &elbv2.DescribeLoadBalancerAttributesOutput{
+		Attributes: attrs,
+	}, nil
+}
 
 func (s *ELBv2ServiceImpl) lbRecordToSDK(r *LoadBalancerRecord) *elbv2.LoadBalancer {
 	lb := &elbv2.LoadBalancer{
