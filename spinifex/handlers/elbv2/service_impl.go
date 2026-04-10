@@ -1491,12 +1491,9 @@ func (s *ELBv2ServiceImpl) ModifyTargetGroupAttributes(input *elbv2.ModifyTarget
 		return nil, errors.New(awserrors.ErrorELBv2TargetGroupNotFound)
 	}
 
-	if tg.Attributes == nil {
-		tg.Attributes = make(map[string]string)
-	}
-
 	knownTGAttrs := DefaultTargetGroupAttributes()
 	var submitted []*elbv2.TargetGroupAttribute
+	dirty := false
 	for _, attr := range input.Attributes {
 		if attr == nil {
 			slog.Warn("ModifyTargetGroupAttributes: skipping nil attribute element", "arn", *input.TargetGroupArn)
@@ -1510,11 +1507,19 @@ func (s *ELBv2ServiceImpl) ModifyTargetGroupAttributes(input *elbv2.ModifyTarget
 			slog.Warn("ModifyTargetGroupAttributes: rejecting unknown attribute key", "arn", *input.TargetGroupArn, "key", *attr.Key)
 			return nil, errors.New(awserrors.ErrorValidationError)
 		}
-		tg.Attributes[*attr.Key] = *attr.Value
 		submitted = append(submitted, &elbv2.TargetGroupAttribute{
 			Key:   attr.Key,
 			Value: attr.Value,
 		})
+		existing, exists := tg.Attributes[*attr.Key]
+		if exists && existing == *attr.Value {
+			continue // value already matches stored — no mutation needed
+		}
+		if tg.Attributes == nil {
+			tg.Attributes = make(map[string]string)
+		}
+		tg.Attributes[*attr.Key] = *attr.Value
+		dirty = true
 	}
 
 	// If the caller sent attributes but every single one was rejected by the
@@ -1526,9 +1531,14 @@ func (s *ELBv2ServiceImpl) ModifyTargetGroupAttributes(input *elbv2.ModifyTarget
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
-	if err := s.store.PutTargetGroup(tg); err != nil {
-		slog.Error("ModifyTargetGroupAttributes: failed to persist TG", "arn", *input.TargetGroupArn, "err", err)
-		return nil, errors.New(awserrors.ErrorServerInternal)
+	// Skip the NATS/KV write when nothing changed. Terraform re-applies the same
+	// attribute set on every drift check, so this kills ~all Modify traffic
+	// during steady state and narrows the read-modify-write race window.
+	if dirty {
+		if err := s.store.PutTargetGroup(tg); err != nil {
+			slog.Error("ModifyTargetGroupAttributes: failed to persist TG", "arn", *input.TargetGroupArn, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
 	}
 
 	return &elbv2.ModifyTargetGroupAttributesOutput{
@@ -1583,12 +1593,9 @@ func (s *ELBv2ServiceImpl) ModifyLoadBalancerAttributes(input *elbv2.ModifyLoadB
 		return nil, errors.New(awserrors.ErrorELBv2LoadBalancerNotFound)
 	}
 
-	if lb.Attributes == nil {
-		lb.Attributes = make(map[string]string)
-	}
-
 	knownLBAttrs := DefaultLoadBalancerAttributes(lb.Type)
 	var submitted []*elbv2.LoadBalancerAttribute
+	dirty := false
 	for _, attr := range input.Attributes {
 		if attr == nil {
 			slog.Warn("ModifyLoadBalancerAttributes: skipping nil attribute element", "arn", *input.LoadBalancerArn)
@@ -1602,11 +1609,19 @@ func (s *ELBv2ServiceImpl) ModifyLoadBalancerAttributes(input *elbv2.ModifyLoadB
 			slog.Warn("ModifyLoadBalancerAttributes: rejecting unknown attribute key", "arn", *input.LoadBalancerArn, "key", *attr.Key, "lbType", lb.Type)
 			return nil, errors.New(awserrors.ErrorValidationError)
 		}
-		lb.Attributes[*attr.Key] = *attr.Value
 		submitted = append(submitted, &elbv2.LoadBalancerAttribute{
 			Key:   attr.Key,
 			Value: attr.Value,
 		})
+		existing, exists := lb.Attributes[*attr.Key]
+		if exists && existing == *attr.Value {
+			continue
+		}
+		if lb.Attributes == nil {
+			lb.Attributes = make(map[string]string)
+		}
+		lb.Attributes[*attr.Key] = *attr.Value
+		dirty = true
 	}
 
 	// If the caller sent attributes but every single one was rejected by the
@@ -1617,9 +1632,13 @@ func (s *ELBv2ServiceImpl) ModifyLoadBalancerAttributes(input *elbv2.ModifyLoadB
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
-	if err := s.store.PutLoadBalancer(lb); err != nil {
-		slog.Error("ModifyLoadBalancerAttributes: failed to persist LB", "arn", *input.LoadBalancerArn, "err", err)
-		return nil, errors.New(awserrors.ErrorServerInternal)
+	// Skip the NATS/KV write when nothing changed. See
+	// ModifyTargetGroupAttributes for the Terraform-drift-check motivation.
+	if dirty {
+		if err := s.store.PutLoadBalancer(lb); err != nil {
+			slog.Error("ModifyLoadBalancerAttributes: failed to persist LB", "arn", *input.LoadBalancerArn, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
 	}
 
 	return &elbv2.ModifyLoadBalancerAttributesOutput{

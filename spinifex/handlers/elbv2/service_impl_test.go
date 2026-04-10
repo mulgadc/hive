@@ -2040,6 +2040,90 @@ func TestModifyLoadBalancerAttributes_AllInvalidReturnsError(t *testing.T) {
 	assert.EqualError(t, err, awserrors.ErrorInvalidParameterValue)
 }
 
+// TestModifyTargetGroupAttributes_NoopSkipsPersist verifies that a
+// re-submission of the same attribute values does not bump the underlying KV
+// revision — Terraform's drift check hits Modify on every apply, so the
+// steady-state path must be a no-op at the storage layer.
+func TestModifyTargetGroupAttributes_NoopSkipsPersist(t *testing.T) {
+	svc := setupTestService(t)
+	tgOut, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{Name: aws.String("tg-noop")}, testAccountID)
+	require.NoError(t, err)
+	tgArn := tgOut.TargetGroups[0].TargetGroupArn
+
+	// First modify — must hit the store.
+	_, err = svc.ModifyTargetGroupAttributes(&elbv2.ModifyTargetGroupAttributesInput{
+		TargetGroupArn: tgArn,
+		Attributes: []*elbv2.TargetGroupAttribute{
+			{Key: aws.String("stickiness.enabled"), Value: aws.String("true")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Capture KV revision after the first write.
+	tg, err := svc.store.GetTargetGroupByArn(*tgArn)
+	require.NoError(t, err)
+	entry, err := svc.store.kv.Get(KeyPrefixTG + tg.TargetGroupID)
+	require.NoError(t, err)
+	revBefore := entry.Revision()
+
+	// Second modify with identical values — must skip the Put.
+	modOut, err := svc.ModifyTargetGroupAttributes(&elbv2.ModifyTargetGroupAttributesInput{
+		TargetGroupArn: tgArn,
+		Attributes: []*elbv2.TargetGroupAttribute{
+			{Key: aws.String("stickiness.enabled"), Value: aws.String("true")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, modOut.Attributes, 1)
+
+	entry, err = svc.store.kv.Get(KeyPrefixTG + tg.TargetGroupID)
+	require.NoError(t, err)
+	assert.Equal(t, revBefore, entry.Revision(), "identical modify must not increment KV revision")
+
+	// Empty attribute list is also a no-op.
+	_, err = svc.ModifyTargetGroupAttributes(&elbv2.ModifyTargetGroupAttributesInput{
+		TargetGroupArn: tgArn,
+	}, testAccountID)
+	require.NoError(t, err)
+	entry, err = svc.store.kv.Get(KeyPrefixTG + tg.TargetGroupID)
+	require.NoError(t, err)
+	assert.Equal(t, revBefore, entry.Revision(), "empty modify must not increment KV revision")
+}
+
+// TestModifyLoadBalancerAttributes_NoopSkipsPersist mirrors the TG case.
+func TestModifyLoadBalancerAttributes_NoopSkipsPersist(t *testing.T) {
+	svc := setupTestService(t)
+	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{Name: aws.String("lb-noop")}, testAccountID)
+	require.NoError(t, err)
+	lbArn := lbOut.LoadBalancers[0].LoadBalancerArn
+
+	_, err = svc.ModifyLoadBalancerAttributes(&elbv2.ModifyLoadBalancerAttributesInput{
+		LoadBalancerArn: lbArn,
+		Attributes: []*elbv2.LoadBalancerAttribute{
+			{Key: aws.String("idle_timeout.timeout_seconds"), Value: aws.String("75")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	lb, err := svc.store.GetLoadBalancerByArn(*lbArn)
+	require.NoError(t, err)
+	entry, err := svc.store.kv.Get(KeyPrefixLB + lb.LoadBalancerID)
+	require.NoError(t, err)
+	revBefore := entry.Revision()
+
+	_, err = svc.ModifyLoadBalancerAttributes(&elbv2.ModifyLoadBalancerAttributesInput{
+		LoadBalancerArn: lbArn,
+		Attributes: []*elbv2.LoadBalancerAttribute{
+			{Key: aws.String("idle_timeout.timeout_seconds"), Value: aws.String("75")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	entry, err = svc.store.kv.Get(KeyPrefixLB + lb.LoadBalancerID)
+	require.NoError(t, err)
+	assert.Equal(t, revBefore, entry.Revision(), "identical modify must not increment KV revision")
+}
+
 // TestModifyTargetGroupAttributes_RejectsUnknownKey guards against silently
 // persisting typo'd or cross-product attribute keys. AWS rejects unknown keys
 // with ValidationError; we must match that so Terraform surfaces the typo at
