@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/mulgadc/spinifex/spinifex/migrate"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -38,8 +39,8 @@ func NewStore(nc *nats.Conn) (*Store, error) {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketELBv2, err)
 	}
 
-	if err := utils.WriteVersion(kv, KVBucketELBv2Version); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketELBv2, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketELBv2, kv, KVBucketELBv2Version); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketELBv2, err)
 	}
 
 	slog.Info("ELBv2 store initialized", "bucket", KVBucketELBv2)

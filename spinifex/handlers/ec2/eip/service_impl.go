@@ -13,6 +13,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
+	"github.com/mulgadc/spinifex/spinifex/migrate"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -48,8 +49,8 @@ func NewEIPServiceImpl(natsConn *nats.Conn, externalIPAM *handlers_ec2_vpc.Exter
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketEIPs, err)
 	}
-	if err := utils.WriteVersion(eipKV, KVBucketEIPsVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketEIPs, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketEIPs, eipKV, KVBucketEIPsVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketEIPs, err)
 	}
 
 	slog.Info("EIP service initialized with JetStream KV", "bucket", KVBucketEIPs)

@@ -217,6 +217,9 @@ func init() {
 
 	adminCmd.AddCommand(certCmd)
 	certCmd.AddCommand(certRenewCmd)
+
+	adminCmd.AddCommand(upgradeCmd)
+	upgradeCmd.Flags().Bool("yes", false, "Apply migrations without prompting")
 	certRenewCmd.Flags().StringSlice("extra-ip", nil, "Additional IP addresses to include in SANs")
 	certRenewCmd.Flags().StringSlice("extra-dns", nil, "Additional DNS names to include in SANs")
 	accountCreateCmd.Flags().String("name", "", "Account name (required)")

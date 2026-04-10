@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"text/template"
 	"time"
@@ -85,4 +86,18 @@ func TestRenderedConfig_EnforcesAuth(t *testing.T) {
 		defer nc.Close()
 		assert.True(t, nc.IsConnected())
 	})
+}
+
+// TestRenderedConfig_HasMigrationVersionMarker ensures the nats.conf template
+// stamps the current migration version on the first line. Without this marker,
+// the migration framework treats fresh installs as version 0 and tries to run
+// the 0→1 migration on next upgrade. The marker must be the literal first line
+// — NATSConfVersionReader only checks line 0.
+func TestRenderedConfig_HasMigrationVersionMarker(t *testing.T) {
+	raw, err := os.ReadFile(templatePath(t))
+	require.NoError(t, err)
+
+	firstLine := strings.SplitN(string(raw), "\n", 2)[0]
+	assert.Equal(t, "# spinifex-config-version: 1", firstLine,
+		"nats.conf template must start with the current migration version marker")
 }

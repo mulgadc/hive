@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mulgadc/spinifex/spinifex/migrate"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/mulgadc/spinifex/spinifex/vm"
 	"github.com/nats-io/nats.go"
@@ -83,8 +84,8 @@ func (m *JetStreamManager) InitKVBucket() error {
 	}
 
 	m.kv = kv
-	if err := utils.WriteVersion(kv, InstanceStateBucketVersion); err != nil {
-		return fmt.Errorf("write version to %s: %w", InstanceStateBucket, err)
+	if err := migrate.DefaultRegistry.RunKV(InstanceStateBucket, kv, InstanceStateBucketVersion); err != nil {
+		return fmt.Errorf("migrate %s: %w", InstanceStateBucket, err)
 	}
 	return nil
 }
@@ -113,8 +114,8 @@ func (m *JetStreamManager) InitClusterStateBucket() error {
 	}
 
 	m.clusterKV = kv
-	if err := utils.WriteVersion(kv, ClusterStateBucketVersion); err != nil {
-		return fmt.Errorf("write version to %s: %w", ClusterStateBucket, err)
+	if err := migrate.DefaultRegistry.RunKV(ClusterStateBucket, kv, ClusterStateBucketVersion); err != nil {
+		return fmt.Errorf("migrate %s: %w", ClusterStateBucket, err)
 	}
 	return nil
 }
@@ -144,8 +145,8 @@ func (m *JetStreamManager) InitTerminatedInstanceBucket() error {
 	}
 
 	m.terminatedKV = kv
-	if err := utils.WriteVersion(kv, TerminatedInstanceBucketVersion); err != nil {
-		return fmt.Errorf("write version to %s: %w", TerminatedInstanceBucket, err)
+	if err := migrate.DefaultRegistry.RunKV(TerminatedInstanceBucket, kv, TerminatedInstanceBucketVersion); err != nil {
+		return fmt.Errorf("migrate %s: %w", TerminatedInstanceBucket, err)
 	}
 	return nil
 }
@@ -199,8 +200,9 @@ func (m *JetStreamManager) recoverBucket(cfg *nats.KeyValueConfig, field *nats.K
 		return nil, err
 	}
 
-	if err := utils.WriteVersion(kv, version); err != nil {
-		slog.Error("Failed to write version to recreated bucket", "bucket", cfg.Bucket, "err", err)
+	if err := migrate.DefaultRegistry.RunKV(cfg.Bucket, kv, version); err != nil {
+		slog.Error("Failed to run migrations on recreated bucket", "bucket", cfg.Bucket, "err", err)
+		return nil, fmt.Errorf("migrate recreated bucket %s: %w", cfg.Bucket, err)
 	}
 
 	*field = kv

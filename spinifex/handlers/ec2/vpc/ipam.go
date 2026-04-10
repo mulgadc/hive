@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net"
 
+	"github.com/mulgadc/spinifex/spinifex/migrate"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -35,8 +36,8 @@ func NewIPAM(js nats.JetStreamContext) (*IPAM, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create IPAM KV bucket: %w", err)
 	}
-	if err := utils.WriteVersion(kv, KVBucketIPAMVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketIPAM, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketIPAM, kv, KVBucketIPAMVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketIPAM, err)
 	}
 	return &IPAM{kv: kv}, nil
 }
