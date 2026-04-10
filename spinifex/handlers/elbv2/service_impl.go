@@ -1495,6 +1495,7 @@ func (s *ELBv2ServiceImpl) ModifyTargetGroupAttributes(input *elbv2.ModifyTarget
 		tg.Attributes = make(map[string]string)
 	}
 
+	knownTGAttrs := DefaultTargetGroupAttributes()
 	var submitted []*elbv2.TargetGroupAttribute
 	for _, attr := range input.Attributes {
 		if attr == nil {
@@ -1504,6 +1505,10 @@ func (s *ELBv2ServiceImpl) ModifyTargetGroupAttributes(input *elbv2.ModifyTarget
 		if attr.Key == nil || attr.Value == nil {
 			slog.Warn("ModifyTargetGroupAttributes: skipping attribute with nil Key or Value", "arn", *input.TargetGroupArn)
 			continue
+		}
+		if _, ok := knownTGAttrs[*attr.Key]; !ok {
+			slog.Warn("ModifyTargetGroupAttributes: rejecting unknown attribute key", "arn", *input.TargetGroupArn, "key", *attr.Key)
+			return nil, errors.New(awserrors.ErrorValidationError)
 		}
 		tg.Attributes[*attr.Key] = *attr.Value
 		submitted = append(submitted, &elbv2.TargetGroupAttribute{
@@ -1582,6 +1587,7 @@ func (s *ELBv2ServiceImpl) ModifyLoadBalancerAttributes(input *elbv2.ModifyLoadB
 		lb.Attributes = make(map[string]string)
 	}
 
+	knownLBAttrs := DefaultLoadBalancerAttributes(lb.Type)
 	var submitted []*elbv2.LoadBalancerAttribute
 	for _, attr := range input.Attributes {
 		if attr == nil {
@@ -1591,6 +1597,10 @@ func (s *ELBv2ServiceImpl) ModifyLoadBalancerAttributes(input *elbv2.ModifyLoadB
 		if attr.Key == nil || attr.Value == nil {
 			slog.Warn("ModifyLoadBalancerAttributes: skipping attribute with nil Key or Value", "arn", *input.LoadBalancerArn)
 			continue
+		}
+		if _, ok := knownLBAttrs[*attr.Key]; !ok {
+			slog.Warn("ModifyLoadBalancerAttributes: rejecting unknown attribute key", "arn", *input.LoadBalancerArn, "key", *attr.Key, "lbType", lb.Type)
+			return nil, errors.New(awserrors.ErrorValidationError)
 		}
 		lb.Attributes[*attr.Key] = *attr.Value
 		submitted = append(submitted, &elbv2.LoadBalancerAttribute{

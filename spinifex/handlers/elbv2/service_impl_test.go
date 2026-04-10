@@ -2040,6 +2040,49 @@ func TestModifyLoadBalancerAttributes_AllInvalidReturnsError(t *testing.T) {
 	assert.EqualError(t, err, awserrors.ErrorInvalidParameterValue)
 }
 
+// TestModifyTargetGroupAttributes_RejectsUnknownKey guards against silently
+// persisting typo'd or cross-product attribute keys. AWS rejects unknown keys
+// with ValidationError; we must match that so Terraform surfaces the typo at
+// plan time instead of letting it drift into KV forever.
+func TestModifyTargetGroupAttributes_RejectsUnknownKey(t *testing.T) {
+	svc := setupTestService(t)
+	tgOut, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{Name: aws.String("tg-unknown-key")}, testAccountID)
+	require.NoError(t, err)
+
+	_, err = svc.ModifyTargetGroupAttributes(&elbv2.ModifyTargetGroupAttributesInput{
+		TargetGroupArn: tgOut.TargetGroups[0].TargetGroupArn,
+		Attributes: []*elbv2.TargetGroupAttribute{
+			{Key: aws.String("stickness.enabled"), Value: aws.String("true")}, // typo of "stickiness"
+		},
+	}, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorValidationError)
+
+	// The rejected key must not have been persisted.
+	descOut, err := svc.DescribeTargetGroupAttributes(&elbv2.DescribeTargetGroupAttributesInput{
+		TargetGroupArn: tgOut.TargetGroups[0].TargetGroupArn,
+	}, testAccountID)
+	require.NoError(t, err)
+	for _, a := range descOut.Attributes {
+		assert.NotEqual(t, "stickness.enabled", *a.Key, "unknown key must not appear in Describe")
+	}
+}
+
+// TestModifyLoadBalancerAttributes_RejectsUnknownKey mirrors the TG case.
+func TestModifyLoadBalancerAttributes_RejectsUnknownKey(t *testing.T) {
+	svc := setupTestService(t)
+	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{Name: aws.String("lb-unknown-key")}, testAccountID)
+	require.NoError(t, err)
+
+	_, err = svc.ModifyLoadBalancerAttributes(&elbv2.ModifyLoadBalancerAttributesInput{
+		LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+		Attributes: []*elbv2.LoadBalancerAttribute{
+			// Valid TG attribute key sent to LB handler — common cross-product mistake.
+			{Key: aws.String("stickiness.enabled"), Value: aws.String("true")},
+		},
+	}, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorValidationError)
+}
+
 // TestDescribeTargetGroupAttributes_SortedOrder verifies that attributes are
 // returned in a stable, sorted-by-key order. Go map iteration is randomised,
 // so without explicit sorting Terraform would see spurious plan diffs between
