@@ -1012,7 +1012,7 @@ func TestWriteSigV4Error_ResponseFormat(t *testing.T) {
 	}
 }
 
-func TestWriteSigV4Error_PreservesRequestID(t *testing.T) {
+func TestWriteSigV4Error_IgnoresClientRequestID(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true, Region: testRegion}
 
 	w := httptest.NewRecorder()
@@ -1022,8 +1022,11 @@ func TestWriteSigV4Error_PreservesRequestID(t *testing.T) {
 	gw.writeSigV4Error(w, req, awserrors.ErrorIncompleteSignature)
 
 	body, _ := io.ReadAll(w.Result().Body)
-	if !strings.Contains(string(body), "<RequestID>test-request-id-123</RequestID>") {
-		t.Errorf("Expected preserved request ID, got: %s", string(body))
+	if strings.Contains(string(body), "test-request-id-123") {
+		t.Errorf("Expected server-generated request ID, but client ID was used: %s", string(body))
+	}
+	if !strings.Contains(string(body), "<RequestID>") {
+		t.Errorf("Expected RequestID in response, got: %s", string(body))
 	}
 }
 
