@@ -139,7 +139,7 @@ func TestCreateLoadBalancer_NetworkType_RejectsSecurityGroups(t *testing.T) {
 	assert.Contains(t, err.Error(), "InvalidConfigurationRequest")
 }
 
-func TestCreateLoadBalancer_NetworkType_CrossZoneDisabled(t *testing.T) {
+func TestCreateLoadBalancer_CrossZoneAttributes(t *testing.T) {
 	svc := setupTestService(t)
 
 	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
@@ -148,19 +148,19 @@ func TestCreateLoadBalancer_NetworkType_CrossZoneDisabled(t *testing.T) {
 	}, testAccountID)
 
 	require.NoError(t, err)
-	// Verify the stored record has CrossZoneEnabled=false
+	// NLB should have no seeded attributes (falls through to default false)
 	lb, err := svc.store.GetLoadBalancerByName("nlb-cz", testAccountID)
 	require.NoError(t, err)
-	assert.False(t, lb.CrossZoneEnabled)
+	assert.Nil(t, lb.Attributes)
 
-	// ALB should default to CrossZoneEnabled=true
+	// ALB should seed cross-zone enabled=true in attributes
 	_, err = svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name: aws.String("alb-cz"),
 	}, testAccountID)
 	require.NoError(t, err)
 	albRec, err := svc.store.GetLoadBalancerByName("alb-cz", testAccountID)
 	require.NoError(t, err)
-	assert.True(t, albRec.CrossZoneEnabled)
+	assert.Equal(t, "true", albRec.Attributes["load_balancing.cross_zone.enabled"])
 
 	_ = out // suppress unused warning
 }

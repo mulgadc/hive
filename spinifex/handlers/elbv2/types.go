@@ -61,30 +61,30 @@ const (
 
 // LoadBalancerRecord represents a stored load balancer (ALB or NLB).
 type LoadBalancerRecord struct {
-	LoadBalancerArn  string            `json:"load_balancer_arn"`
-	LoadBalancerID   string            `json:"load_balancer_id"` // Short ID (hex suffix)
-	DNSName          string            `json:"dns_name"`
-	Name             string            `json:"name"`
-	Scheme           string            `json:"scheme"` // "internet-facing" or "internal"
-	Type             string            `json:"type"`   // Always "application"
-	State            string            `json:"state"`  // "provisioning", "active", "failed"
-	VpcId            string            `json:"vpc_id"`
-	SecurityGroups   []string          `json:"security_groups"`
-	Subnets          []string          `json:"subnets"`
-	AvailZones       []AvailZoneInfo   `json:"availability_zones"`
-	ENIs             []string          `json:"enis,omitempty"`        // ENI IDs created for this ALB (internal)
-	InstanceID       string            `json:"instance_id,omitempty"` // ALB VM instance ID (system-managed)
-	VPCIP            string            `json:"vpc_ip,omitempty"`      // VPC private IP of the ALB VM
-	ConfigText       string            `json:"config_text,omitempty"` // Pre-computed HAProxy config
-	ConfigHash       string            `json:"config_hash,omitempty"` // SHA256 of ConfigText
-	LastHeartbeat    time.Time         `json:"last_heartbeat"`        // Last agent heartbeat timestamp
-	HostPorts        map[int]int       `json:"host_ports,omitempty"`  // Dev mode: guest port → host port forwarding
-	NodeID           string            `json:"node_id"`               // Daemon node running this ALB
-	IPAddressType    string            `json:"ip_address_type"`       // "ipv4"
-	CrossZoneEnabled bool              `json:"cross_zone_enabled"`    // Default false for NLB, true for ALB
-	Tags             map[string]string `json:"tags,omitempty"`
-	AccountID        string            `json:"account_id"`
-	CreatedAt        time.Time         `json:"created_at"`
+	LoadBalancerArn string            `json:"load_balancer_arn"`
+	LoadBalancerID  string            `json:"load_balancer_id"` // Short ID (hex suffix)
+	DNSName         string            `json:"dns_name"`
+	Name            string            `json:"name"`
+	Scheme          string            `json:"scheme"` // "internet-facing" or "internal"
+	Type            string            `json:"type"`   // Always "application"
+	State           string            `json:"state"`  // "provisioning", "active", "failed"
+	VpcId           string            `json:"vpc_id"`
+	SecurityGroups  []string          `json:"security_groups"`
+	Subnets         []string          `json:"subnets"`
+	AvailZones      []AvailZoneInfo   `json:"availability_zones"`
+	ENIs            []string          `json:"enis,omitempty"`        // ENI IDs created for this ALB (internal)
+	InstanceID      string            `json:"instance_id,omitempty"` // ALB VM instance ID (system-managed)
+	VPCIP           string            `json:"vpc_ip,omitempty"`      // VPC private IP of the ALB VM
+	ConfigText      string            `json:"config_text,omitempty"` // Pre-computed HAProxy config
+	ConfigHash      string            `json:"config_hash,omitempty"` // SHA256 of ConfigText
+	LastHeartbeat   time.Time         `json:"last_heartbeat"`        // Last agent heartbeat timestamp
+	HostPorts       map[int]int       `json:"host_ports,omitempty"`  // Dev mode: guest port → host port forwarding
+	NodeID          string            `json:"node_id"`               // Daemon node running this ALB
+	IPAddressType   string            `json:"ip_address_type"`       // "ipv4"
+	Attributes      map[string]string `json:"attributes,omitempty"`
+	Tags            map[string]string `json:"tags,omitempty"`
+	AccountID       string            `json:"account_id"`
+	CreatedAt       time.Time         `json:"created_at"`
 }
 
 // AvailZoneInfo tracks subnet-to-AZ mapping for a load balancer.
@@ -105,6 +105,7 @@ type TargetGroupRecord struct {
 	TargetType     string            `json:"target_type"` // "instance" for v1
 	HealthCheck    HealthCheckConfig `json:"health_check"`
 	Targets        []Target          `json:"targets"`
+	Attributes     map[string]string `json:"attributes,omitempty"`
 	Tags           map[string]string `json:"tags,omitempty"`
 	AccountID      string            `json:"account_id"`
 	CreatedAt      time.Time         `json:"created_at"`
@@ -174,4 +175,33 @@ type ListenerRecord struct {
 type ListenerAction struct {
 	Type           string `json:"type"` // "forward"
 	TargetGroupArn string `json:"target_group_arn"`
+}
+
+// DefaultLoadBalancerAttributes returns the default attribute set for load balancers.
+// ALBs override load_balancing.cross_zone.enabled to "true" at create time.
+func DefaultLoadBalancerAttributes() map[string]string {
+	return map[string]string{
+		"deletion_protection.enabled":                     "false",
+		"load_balancing.cross_zone.enabled":               "false",
+		"access_logs.s3.enabled":                          "false",
+		"access_logs.s3.bucket":                           "",
+		"access_logs.s3.prefix":                           "",
+		"idle_timeout.timeout_seconds":                    "60",
+		"routing.http.drop_invalid_header_fields.enabled": "false",
+		"routing.http2.enabled":                           "true",
+		"client_keep_alive.seconds":                       "3600",
+	}
+}
+
+// DefaultTargetGroupAttributes returns the default attribute set for target groups.
+func DefaultTargetGroupAttributes() map[string]string {
+	return map[string]string{
+		"deregistration_delay.timeout_seconds":  "300",
+		"stickiness.enabled":                    "false",
+		"stickiness.type":                       "lb_cookie",
+		"stickiness.lb_cookie.duration_seconds": "86400",
+		"load_balancing.cross_zone.enabled":     "use_load_balancer_configuration",
+		"load_balancing.algorithm.type":         "round_robin",
+		"slow_start.duration_seconds":           "0",
+	}
 }

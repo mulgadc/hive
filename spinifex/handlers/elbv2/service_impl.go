@@ -632,28 +632,34 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		state = StateFailed
 	}
 
+	// ALBs default cross-zone to true; NLBs fall through to the false default.
+	var attrs map[string]string
+	if lbType == LoadBalancerTypeApplication {
+		attrs = map[string]string{"load_balancing.cross_zone.enabled": "true"}
+	}
+
 	record := &LoadBalancerRecord{
-		LoadBalancerArn:  lbArn,
-		LoadBalancerID:   lbID,
-		DNSName:          dnsName,
-		Name:             name,
-		Scheme:           scheme,
-		Type:             lbType,
-		CrossZoneEnabled: lbType == LoadBalancerTypeApplication,
-		State:            state,
-		VpcId:            vpcID,
-		SecurityGroups:   securityGroups,
-		Subnets:          subnets,
-		AvailZones:       availZones,
-		ENIs:             eniIDs,
-		InstanceID:       albInstanceID,
-		VPCIP:            albVPCIP,
-		HostPorts:        hostPorts,
-		IPAddressType:    IPAddressTypeIPv4,
-		NodeID:           s.nodeID,
-		Tags:             tags,
-		AccountID:        accountID,
-		CreatedAt:        time.Now().UTC(),
+		LoadBalancerArn: lbArn,
+		LoadBalancerID:  lbID,
+		DNSName:         dnsName,
+		Name:            name,
+		Scheme:          scheme,
+		Type:            lbType,
+		State:           state,
+		VpcId:           vpcID,
+		SecurityGroups:  securityGroups,
+		Subnets:         subnets,
+		AvailZones:      availZones,
+		ENIs:            eniIDs,
+		InstanceID:      albInstanceID,
+		VPCIP:           albVPCIP,
+		HostPorts:       hostPorts,
+		IPAddressType:   IPAddressTypeIPv4,
+		NodeID:          s.nodeID,
+		Attributes:      attrs,
+		Tags:            tags,
+		AccountID:       accountID,
+		CreatedAt:       time.Now().UTC(),
 	}
 
 	if err := s.store.PutLoadBalancer(record); err != nil {
