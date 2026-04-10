@@ -2059,6 +2059,123 @@ func TestModifyLoadBalancerAttributes_AllInvalidReturnsError(t *testing.T) {
 	assert.EqualError(t, err, awserrors.ErrorInvalidParameterValue)
 }
 
+// TestModifyTargetGroupAttributes_SequentialMerge verifies that successive
+// Modify calls accumulate keys instead of replacing the entire attribute map.
+// A future refactor that did `tg.Attributes = newMap` would pass every other
+// test (single-call round-trip covers the happy path) but silently wipe
+// previous attributes on every subsequent Modify — the most likely real-world
+// ALB/TG bug.
+func TestModifyTargetGroupAttributes_SequentialMerge(t *testing.T) {
+	svc := setupTestService(t)
+	tgOut, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{Name: aws.String("tg-seq-merge")}, testAccountID)
+	require.NoError(t, err)
+	arn := tgOut.TargetGroups[0].TargetGroupArn
+
+	// Call 1: set deregistration_delay.timeout_seconds.
+	_, err = svc.ModifyTargetGroupAttributes(&elbv2.ModifyTargetGroupAttributesInput{
+		TargetGroupArn: arn,
+		Attributes: []*elbv2.TargetGroupAttribute{
+			{Key: aws.String("deregistration_delay.timeout_seconds"), Value: aws.String("45")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Call 2: set a different key; must not wipe the first one.
+	_, err = svc.ModifyTargetGroupAttributes(&elbv2.ModifyTargetGroupAttributesInput{
+		TargetGroupArn: arn,
+		Attributes: []*elbv2.TargetGroupAttribute{
+			{Key: aws.String("stickiness.enabled"), Value: aws.String("true")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	descOut, err := svc.DescribeTargetGroupAttributes(&elbv2.DescribeTargetGroupAttributesInput{
+		TargetGroupArn: arn,
+	}, testAccountID)
+	require.NoError(t, err)
+	attrMap := make(map[string]string)
+	for _, a := range descOut.Attributes {
+		attrMap[*a.Key] = *a.Value
+	}
+	assert.Equal(t, "45", attrMap["deregistration_delay.timeout_seconds"], "first-call key must survive second Modify")
+	assert.Equal(t, "true", attrMap["stickiness.enabled"], "second-call key must be present")
+
+	// Call 3: overwrite the same key with a new value.
+	_, err = svc.ModifyTargetGroupAttributes(&elbv2.ModifyTargetGroupAttributesInput{
+		TargetGroupArn: arn,
+		Attributes: []*elbv2.TargetGroupAttribute{
+			{Key: aws.String("stickiness.enabled"), Value: aws.String("false")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	descOut, err = svc.DescribeTargetGroupAttributes(&elbv2.DescribeTargetGroupAttributesInput{
+		TargetGroupArn: arn,
+	}, testAccountID)
+	require.NoError(t, err)
+	attrMap = make(map[string]string)
+	for _, a := range descOut.Attributes {
+		attrMap[*a.Key] = *a.Value
+	}
+	assert.Equal(t, "false", attrMap["stickiness.enabled"], "same-key overwrite must replace the value")
+	assert.Equal(t, "45", attrMap["deregistration_delay.timeout_seconds"], "unrelated key must still survive")
+}
+
+// TestModifyLoadBalancerAttributes_SequentialMerge mirrors the TG case.
+func TestModifyLoadBalancerAttributes_SequentialMerge(t *testing.T) {
+	svc := setupTestService(t)
+	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{Name: aws.String("lb-seq-merge")}, testAccountID)
+	require.NoError(t, err)
+	arn := lbOut.LoadBalancers[0].LoadBalancerArn
+
+	_, err = svc.ModifyLoadBalancerAttributes(&elbv2.ModifyLoadBalancerAttributesInput{
+		LoadBalancerArn: arn,
+		Attributes: []*elbv2.LoadBalancerAttribute{
+			{Key: aws.String("idle_timeout.timeout_seconds"), Value: aws.String("120")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	_, err = svc.ModifyLoadBalancerAttributes(&elbv2.ModifyLoadBalancerAttributesInput{
+		LoadBalancerArn: arn,
+		Attributes: []*elbv2.LoadBalancerAttribute{
+			{Key: aws.String("deletion_protection.enabled"), Value: aws.String("true")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	descOut, err := svc.DescribeLoadBalancerAttributes(&elbv2.DescribeLoadBalancerAttributesInput{
+		LoadBalancerArn: arn,
+	}, testAccountID)
+	require.NoError(t, err)
+	attrMap := make(map[string]string)
+	for _, a := range descOut.Attributes {
+		attrMap[*a.Key] = *a.Value
+	}
+	assert.Equal(t, "120", attrMap["idle_timeout.timeout_seconds"], "first-call key must survive second Modify")
+	assert.Equal(t, "true", attrMap["deletion_protection.enabled"], "second-call key must be present")
+
+	// Same-key overwrite.
+	_, err = svc.ModifyLoadBalancerAttributes(&elbv2.ModifyLoadBalancerAttributesInput{
+		LoadBalancerArn: arn,
+		Attributes: []*elbv2.LoadBalancerAttribute{
+			{Key: aws.String("idle_timeout.timeout_seconds"), Value: aws.String("90")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	descOut, err = svc.DescribeLoadBalancerAttributes(&elbv2.DescribeLoadBalancerAttributesInput{
+		LoadBalancerArn: arn,
+	}, testAccountID)
+	require.NoError(t, err)
+	attrMap = make(map[string]string)
+	for _, a := range descOut.Attributes {
+		attrMap[*a.Key] = *a.Value
+	}
+	assert.Equal(t, "90", attrMap["idle_timeout.timeout_seconds"], "same-key overwrite must replace the value")
+	assert.Equal(t, "true", attrMap["deletion_protection.enabled"], "unrelated key must still survive")
+}
+
 // TestModifyTargetGroupAttributes_NoopSkipsPersist verifies that a
 // re-submission of the same attribute values does not bump the underlying KV
 // revision — Terraform's drift check hits Modify on every apply, so the
