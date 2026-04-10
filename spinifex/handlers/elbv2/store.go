@@ -89,18 +89,29 @@ func (s *Store) ListLoadBalancers() ([]*LoadBalancerRecord, error) {
 	return listByPrefix[LoadBalancerRecord](s.kv, KeyPrefixLB)
 }
 
-// GetLoadBalancerByArn finds a load balancer by its ARN.
+// GetLoadBalancerByArn finds a load balancer by its ARN via a direct KV lookup
+// on the short ID embedded in the ARN's final path segment. Falls back to a
+// linear scan only if the ARN can't be parsed. Terraform hits Describe*Attributes
+// on every plan/refresh so this must be O(1), not O(n).
 func (s *Store) GetLoadBalancerByArn(arn string) (*LoadBalancerRecord, error) {
-	lbs, err := s.ListLoadBalancers()
+	// ELBv2 LB ARN: arn:aws:elasticloadbalancing:{region}:{account}:loadbalancer/{app,net}/{name}/{lbID}
+	idx := strings.LastIndex(arn, "/")
+	if idx < 0 || idx == len(arn)-1 {
+		return nil, nil
+	}
+	lbID := arn[idx+1:]
+	lb, err := s.GetLoadBalancer(lbID)
 	if err != nil {
 		return nil, err
 	}
-	for _, lb := range lbs {
-		if lb.LoadBalancerArn == arn {
-			return lb, nil
-		}
+	// Defence-in-depth: ensure the record actually belongs to this ARN.
+	// Short IDs are random hex, so collisions are effectively impossible, but
+	// a mismatch here would indicate KV corruption and must not be silently
+	// served as a successful lookup.
+	if lb == nil || lb.LoadBalancerArn != arn {
+		return nil, nil
 	}
-	return nil, nil
+	return lb, nil
 }
 
 // GetLoadBalancerByName finds a load balancer by name within an account.
@@ -159,18 +170,25 @@ func (s *Store) ListTargetGroups() ([]*TargetGroupRecord, error) {
 	return listByPrefix[TargetGroupRecord](s.kv, KeyPrefixTG)
 }
 
-// GetTargetGroupByArn finds a target group by its ARN.
+// GetTargetGroupByArn finds a target group by its ARN via a direct KV lookup
+// on the short ID embedded in the ARN's final path segment. See
+// GetLoadBalancerByArn for the motivation — Terraform's per-plan
+// DescribeTargetGroupAttributes storm must be O(1).
 func (s *Store) GetTargetGroupByArn(arn string) (*TargetGroupRecord, error) {
-	tgs, err := s.ListTargetGroups()
+	// ELBv2 TG ARN: arn:aws:elasticloadbalancing:{region}:{account}:targetgroup/{name}/{tgID}
+	idx := strings.LastIndex(arn, "/")
+	if idx < 0 || idx == len(arn)-1 {
+		return nil, nil
+	}
+	tgID := arn[idx+1:]
+	tg, err := s.GetTargetGroup(tgID)
 	if err != nil {
 		return nil, err
 	}
-	for _, tg := range tgs {
-		if tg.TargetGroupArn == arn {
-			return tg, nil
-		}
+	if tg == nil || tg.TargetGroupArn != arn {
+		return nil, nil
 	}
-	return nil, nil
+	return tg, nil
 }
 
 // TargetGroupsForLB returns only the target groups attached to a load balancer
