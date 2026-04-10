@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -221,7 +222,7 @@ func runGetNodes(cmd *cobra.Command, args []string) {
 				resp.Region,
 				resp.AZ,
 				formatUptime(resp.Uptime),
-				fmt.Sprintf("%d", resp.VMCount),
+				strconv.Itoa(resp.VMCount),
 				strings.Join(resp.Services, ","),
 			})
 		} else {
@@ -301,7 +302,7 @@ func runGetVMs(cmd *cobra.Command, args []string) {
 			v.InstanceID,
 			v.Status,
 			v.InstanceType,
-			fmt.Sprintf("%d", v.VCPU),
+			strconv.Itoa(v.VCPU),
 			formatMemGB(v.MemoryGB),
 			v.Node,
 			v.Host,

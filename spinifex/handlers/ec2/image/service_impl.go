@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -348,7 +349,7 @@ func imageMatchesFilters(image *ec2.Image, filters map[string][]string, tags map
 			}
 		case "is-public":
 			if image.Public != nil {
-				field = fmt.Sprintf("%t", *image.Public)
+				field = strconv.FormatBool(*image.Public)
 			}
 		case "owner-id":
 			if image.OwnerId != nil {

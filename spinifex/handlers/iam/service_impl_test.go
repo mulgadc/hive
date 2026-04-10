@@ -1,7 +1,7 @@
 package handlers_iam
 
 import (
-	"fmt"
+	"encoding/hex"
 	"log/slog"
 	"strings"
 	"testing"
@@ -1572,7 +1572,7 @@ func TestSensitiveDataNotLogged_MasterKey(t *testing.T) {
 	svc := setupTestIAMService(t)
 
 	logOutput := buf.String()
-	masterKeyHex := fmt.Sprintf("%x", svc.masterKey)
+	masterKeyHex := hex.EncodeToString(svc.masterKey)
 
 	assert.NotContains(t, logOutput, masterKeyHex,
 		"master key hex must not appear in log output")

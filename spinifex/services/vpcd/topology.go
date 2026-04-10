@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/mulgadc/spinifex/spinifex/services/vpcd/nbdb"
@@ -265,7 +266,7 @@ func (h *TopologyHandler) handleVPCCreate(msg *nats.Msg) {
 		Name: routerName,
 		ExternalIDs: map[string]string{
 			"spinifex:vpc_id": evt.VpcId,
-			"spinifex:vni":    fmt.Sprintf("%d", evt.VNI),
+			"spinifex:vni":    strconv.FormatInt(evt.VNI, 10),
 		},
 	}
 
