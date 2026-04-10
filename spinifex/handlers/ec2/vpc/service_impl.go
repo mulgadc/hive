@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -646,7 +647,7 @@ func vpcMatchesFilters(record *VPCRecord, accountID string, filters map[string][
 		case "cidr-block":
 			field = record.CidrBlock
 		case "is-default":
-			field = fmt.Sprintf("%t", record.IsDefault)
+			field = strconv.FormatBool(record.IsDefault)
 		case "owner-id":
 			field = accountID
 		default:
@@ -691,7 +692,7 @@ func subnetMatchesFilters(record *SubnetRecord, filters map[string][]string) boo
 		case "state":
 			field = record.State
 		case "default-for-az":
-			field = fmt.Sprintf("%t", record.IsDefault)
+			field = strconv.FormatBool(record.IsDefault)
 		default:
 			return false
 		}
