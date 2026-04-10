@@ -464,10 +464,8 @@ func (s *IAMServiceImpl) DeleteAccessKey(accountID string, input *iam.DeleteAcce
 		return nil, errors.New(awserrors.ErrorIAMNoSuchEntity)
 	}
 
-	if err := s.accessKeysBucket.Delete(accessKeyID); err != nil {
-		return nil, fmt.Errorf("delete access key: %w", err)
-	}
-
+	// Update user record first, then delete the key. This avoids orphaning the
+	// reference if a crash occurs between the two operations.
 	user.AccessKeys = remaining
 	userData, err := json.Marshal(user)
 	if err != nil {
@@ -476,6 +474,10 @@ func (s *IAMServiceImpl) DeleteAccessKey(accountID string, input *iam.DeleteAcce
 
 	if _, err := s.usersBucket.Put(userKVKey, userData); err != nil {
 		return nil, fmt.Errorf("update user: %w", err)
+	}
+
+	if err := s.accessKeysBucket.Delete(accessKeyID); err != nil {
+		return nil, fmt.Errorf("delete access key: %w", err)
 	}
 
 	slog.Info("IAM access key deleted", "accountID", accountID, "userName", userName, "accessKeyID", accessKeyID)

@@ -32,6 +32,7 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -882,7 +883,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	portStr := fmt.Sprintf("%d", port)
+	portStr := strconv.Itoa(port)
 
 	// Parse multi-node predastore configuration (legacy flag-based approach for single-node)
 	var predastoreNodeID int
@@ -1148,7 +1149,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		}
 	}
 
-	portStr := fmt.Sprintf("%d", port)
+	portStr := strconv.Itoa(port)
 
 	// Generate multi-node predastore config
 	var predastoreNodeID int
@@ -1543,7 +1544,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	portStr := fmt.Sprintf("%d", port)
+	portStr := strconv.Itoa(port)
 
 	// Generate multi-node predastore config
 	var predastoreNodeID int

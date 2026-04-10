@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -401,7 +402,7 @@ func snapshotMatchesFilters(cfg *SnapshotConfig, filters map[string][]string) bo
 		case "volume-id":
 			field = cfg.VolumeID
 		case "volume-size":
-			field = fmt.Sprintf("%d", cfg.VolumeSize)
+			field = strconv.FormatInt(cfg.VolumeSize, 10)
 		case "owner-id":
 			field = cfg.OwnerID
 		default:

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -145,7 +146,7 @@ func (d *Daemon) handleAttachVolume(msg *nats.Msg, command types.EC2InstanceComm
 	if serverType == "unix" {
 		serverArg = map[string]any{"type": "unix", "path": socketPath}
 	} else {
-		serverArg = map[string]any{"type": "inet", "host": nbdHost, "port": fmt.Sprintf("%d", nbdPort)}
+		serverArg = map[string]any{"type": "inet", "host": nbdHost, "port": strconv.Itoa(nbdPort)}
 	}
 
 	nodeName := fmt.Sprintf("nbd-%s", volumeID)
