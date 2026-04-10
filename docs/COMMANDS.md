@@ -589,6 +589,12 @@ All ELBv2 resources are stored in the `spinifex-elbv2` JetStream KV bucket. Key 
 | `delete-listener` | `--listener-arn` | `--dry-run` | Listener must exist | Gateway validates ListenerArn (required) → NATS `elbv2.DeleteListener` → daemon verifies listener exists and belongs to account → deletes from KV → fetches parent LB → calls `pushConfig(lb)` to regenerate HAProxy config without this listener → returns success | 1. Delete listener<br>2. Not found (ListenerNotFound) | **DONE** |
 | `describe-listeners` | `--load-balancer-arn`, `--listener-arns` | `--page-size`, `--marker`, `--dry-run` | None | NATS `elbv2.DescribeListeners` → daemon lists listeners → if LoadBalancerArn specified, filters to that LB → applies ARN filter → account isolation → returns Listener list | 1. Filter by LB ARN<br>2. Account isolation | **DONE** |
 
+#### ELBv2 - Tags
+
+| Command | Implemented Flags | Missing Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------------------|---------------|---------------|-------------|------------|--------|
+| `describe-tags` | `--resource-arns` (loadbalancer, targetgroup, listener) | — | Resource(s) must exist | Gateway validates non-empty ResourceArns → NATS `elbv2.DescribeTags` → daemon parses each ARN's resource segment to dispatch by type → looks up record (LB/TG/listener) → enforces account isolation (cross-account → not-found) → returns TagDescriptions in input order with sorted-by-key Tag list. Listener records don't store tags yet, so they always return an empty Tags slice (matches AWS behaviour for untagged resources). Required by Terraform AWS provider post-create refresh on `aws_lb`, `aws_lb_target_group`, and `aws_lb_listener`. | 1. LB tags round-trip<br>2. TG tags round-trip<br>3. Listener returns empty Tags (no error)<br>4. Multiple ARNs in one call<br>5. Unknown LB/TG/listener (per-type not-found)<br>6. Cross-account ARN (not-found, no leak)<br>7. Invalid/non-ELBv2 ARN (InvalidParameterValue)<br>8. Empty/nil ResourceArns (MissingParameter)<br>9. Untagged LB returns empty Tags | **DONE** |
+
 #### ELBv2 - Not Implemented
 
 | Feature | Description | Priority | Status |

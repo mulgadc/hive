@@ -68,6 +68,10 @@ func (s *NATSELBv2Service) DescribeListeners(input *elbv2.DescribeListenersInput
 	return utils.NATSRequest[elbv2.DescribeListenersOutput](s.natsConn, "elbv2.DescribeListeners", input, defaultTimeout, accountID)
 }
 
+func (s *NATSELBv2Service) DescribeTags(input *elbv2.DescribeTagsInput, accountID string) (*elbv2.DescribeTagsOutput, error) {
+	return utils.NATSRequest[elbv2.DescribeTagsOutput](s.natsConn, "elbv2.DescribeTags", input, defaultTimeout, accountID)
+}
+
 func (s *NATSELBv2Service) ModifyTargetGroupAttributes(input *elbv2.ModifyTargetGroupAttributesInput, accountID string) (*elbv2.ModifyTargetGroupAttributesOutput, error) {
 	return utils.NATSRequest[elbv2.ModifyTargetGroupAttributesOutput](s.natsConn, "elbv2.ModifyTargetGroupAttributes", input, defaultTimeout, accountID)
 }

@@ -76,6 +76,9 @@ var elbv2Actions = map[string]ELBv2Handler{
 	"DescribeListeners": elbv2Handler(func(input *elbv2.DescribeListenersInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_elbv2.DescribeListeners(input, gw.NATSConn, accountID)
 	}),
+	"DescribeTags": elbv2Handler(func(input *elbv2.DescribeTagsInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_elbv2.DescribeTags(input, gw.NATSConn, accountID)
+	}),
 	"LBAgentHeartbeat": elbv2Handler(func(input *handlers_elbv2.LBAgentHeartbeatInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_elbv2.LBAgentHeartbeat(input, gw.NATSConn, accountID)
 	}),

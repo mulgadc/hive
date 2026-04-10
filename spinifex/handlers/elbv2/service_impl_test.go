@@ -2064,3 +2064,217 @@ func TestDescribeLoadBalancerAttributes_SortedOrder(t *testing.T) {
 		}
 	}
 }
+
+// --- DescribeTags tests ---
+
+func TestDescribeTags_LoadBalancer(t *testing.T) {
+	svc := setupTestService(t)
+	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("tags-lb"),
+		Tags: []*elbv2.Tag{
+			{Key: aws.String("Env"), Value: aws.String("prod")},
+			{Key: aws.String("App"), Value: aws.String("nginx")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	out, err := svc.DescribeTags(&elbv2.DescribeTagsInput{
+		ResourceArns: []*string{lbOut.LoadBalancers[0].LoadBalancerArn},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, out.TagDescriptions, 1)
+
+	td := out.TagDescriptions[0]
+	assert.Equal(t, *lbOut.LoadBalancers[0].LoadBalancerArn, *td.ResourceArn)
+	require.Len(t, td.Tags, 2)
+	// Sorted by key: App, Env
+	assert.Equal(t, "App", *td.Tags[0].Key)
+	assert.Equal(t, "nginx", *td.Tags[0].Value)
+	assert.Equal(t, "Env", *td.Tags[1].Key)
+	assert.Equal(t, "prod", *td.Tags[1].Value)
+}
+
+func TestDescribeTags_TargetGroup(t *testing.T) {
+	svc := setupTestService(t)
+	tgOut, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+		Name: aws.String("tags-tg"),
+		Tags: []*elbv2.Tag{
+			{Key: aws.String("Owner"), Value: aws.String("team-a")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	out, err := svc.DescribeTags(&elbv2.DescribeTagsInput{
+		ResourceArns: []*string{tgOut.TargetGroups[0].TargetGroupArn},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, out.TagDescriptions, 1)
+	require.Len(t, out.TagDescriptions[0].Tags, 1)
+	assert.Equal(t, "Owner", *out.TagDescriptions[0].Tags[0].Key)
+	assert.Equal(t, "team-a", *out.TagDescriptions[0].Tags[0].Value)
+}
+
+func TestDescribeTags_Listener_NoTags(t *testing.T) {
+	svc := setupTestService(t)
+	lbOut, _ := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{Name: aws.String("tags-lst-lb")}, testAccountID)
+	tgOut, _ := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{Name: aws.String("tags-lst-tg")}, testAccountID)
+	lstOut, err := svc.CreateListener(&elbv2.CreateListenerInput{
+		LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+		Protocol:        aws.String("HTTP"),
+		Port:            aws.Int64(80),
+		DefaultActions: []*elbv2.Action{
+			{Type: aws.String("forward"), TargetGroupArn: tgOut.TargetGroups[0].TargetGroupArn},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Listeners don't store tags yet — must still return a TagDescription
+	// (with an empty Tags slice), not an error. This is the case the
+	// Terraform AWS provider hits during post-create refresh.
+	out, err := svc.DescribeTags(&elbv2.DescribeTagsInput{
+		ResourceArns: []*string{lstOut.Listeners[0].ListenerArn},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, out.TagDescriptions, 1)
+	assert.Equal(t, *lstOut.Listeners[0].ListenerArn, *out.TagDescriptions[0].ResourceArn)
+	assert.Empty(t, out.TagDescriptions[0].Tags)
+}
+
+func TestDescribeTags_MultipleArns(t *testing.T) {
+	svc := setupTestService(t)
+	lbOut, _ := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("multi-lb"),
+		Tags: []*elbv2.Tag{{Key: aws.String("Name"), Value: aws.String("lb")}},
+	}, testAccountID)
+	tgOut, _ := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{
+		Name: aws.String("multi-tg"),
+		Tags: []*elbv2.Tag{{Key: aws.String("Name"), Value: aws.String("tg")}},
+	}, testAccountID)
+	lstOut, _ := svc.CreateListener(&elbv2.CreateListenerInput{
+		LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+		Protocol:        aws.String("HTTP"),
+		Port:            aws.Int64(80),
+		DefaultActions: []*elbv2.Action{
+			{Type: aws.String("forward"), TargetGroupArn: tgOut.TargetGroups[0].TargetGroupArn},
+		},
+	}, testAccountID)
+
+	out, err := svc.DescribeTags(&elbv2.DescribeTagsInput{
+		ResourceArns: []*string{
+			lbOut.LoadBalancers[0].LoadBalancerArn,
+			tgOut.TargetGroups[0].TargetGroupArn,
+			lstOut.Listeners[0].ListenerArn,
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, out.TagDescriptions, 3)
+
+	// Order matches input order
+	assert.Equal(t, *lbOut.LoadBalancers[0].LoadBalancerArn, *out.TagDescriptions[0].ResourceArn)
+	assert.Equal(t, *tgOut.TargetGroups[0].TargetGroupArn, *out.TagDescriptions[1].ResourceArn)
+	assert.Equal(t, *lstOut.Listeners[0].ListenerArn, *out.TagDescriptions[2].ResourceArn)
+
+	assert.Equal(t, "lb", *out.TagDescriptions[0].Tags[0].Value)
+	assert.Equal(t, "tg", *out.TagDescriptions[1].Tags[0].Value)
+	assert.Empty(t, out.TagDescriptions[2].Tags)
+}
+
+func TestDescribeTags_LoadBalancerNotFound(t *testing.T) {
+	svc := setupTestService(t)
+	_, err := svc.DescribeTags(&elbv2.DescribeTagsInput{
+		ResourceArns: []*string{
+			aws.String("arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/missing/lb-deadbeef"),
+		},
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorELBv2LoadBalancerNotFound)
+}
+
+func TestDescribeTags_TargetGroupNotFound(t *testing.T) {
+	svc := setupTestService(t)
+	_, err := svc.DescribeTags(&elbv2.DescribeTagsInput{
+		ResourceArns: []*string{
+			aws.String("arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/missing/tg-deadbeef"),
+		},
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorELBv2TargetGroupNotFound)
+}
+
+func TestDescribeTags_ListenerNotFound(t *testing.T) {
+	svc := setupTestService(t)
+	_, err := svc.DescribeTags(&elbv2.DescribeTagsInput{
+		ResourceArns: []*string{
+			aws.String("arn:aws:elasticloadbalancing:us-east-1:123456789012:listener/app/missing/lb-x/lst-deadbeef"),
+		},
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorELBv2ListenerNotFound)
+}
+
+func TestDescribeTags_CrossAccount(t *testing.T) {
+	svc := setupTestService(t)
+	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("xa-lb"),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Same ARN, different account => not-found (no existence leak)
+	_, err = svc.DescribeTags(&elbv2.DescribeTagsInput{
+		ResourceArns: []*string{lbOut.LoadBalancers[0].LoadBalancerArn},
+	}, "999999999999")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorELBv2LoadBalancerNotFound)
+}
+
+func TestDescribeTags_InvalidArn(t *testing.T) {
+	svc := setupTestService(t)
+	cases := []string{
+		"not-an-arn",
+		"arn:aws:s3:::my-bucket", // wrong service
+		"arn:aws:elasticloadbalancing:us-east-1:123:capacityreservation/abc", // unknown ELBv2 resource type
+		"arn:aws:elasticloadbalancing:us-east-1:123:loadbalancer",            // missing slash
+	}
+	for _, arn := range cases {
+		_, err := svc.DescribeTags(&elbv2.DescribeTagsInput{
+			ResourceArns: []*string{aws.String(arn)},
+		}, testAccountID)
+		require.Error(t, err, "arn=%q should be rejected", arn)
+		assert.Contains(t, err.Error(), awserrors.ErrorInvalidParameterValue, "arn=%q", arn)
+	}
+}
+
+func TestDescribeTags_MissingParameter(t *testing.T) {
+	svc := setupTestService(t)
+
+	// Empty ResourceArns
+	_, err := svc.DescribeTags(&elbv2.DescribeTagsInput{}, testAccountID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorMissingParameter)
+
+	// Nil entry inside a non-empty list
+	_, err = svc.DescribeTags(&elbv2.DescribeTagsInput{
+		ResourceArns: []*string{nil},
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorMissingParameter)
+}
+
+func TestDescribeTags_UntaggedLoadBalancer(t *testing.T) {
+	svc := setupTestService(t)
+	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("untagged-lb"),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Bare LB with no Tags input must still return a TagDescription with
+	// the ARN and an empty/nil Tags slice — exercises the exact path the
+	// failing nginx-alb terraform demo hits.
+	out, err := svc.DescribeTags(&elbv2.DescribeTagsInput{
+		ResourceArns: []*string{lbOut.LoadBalancers[0].LoadBalancerArn},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, out.TagDescriptions, 1)
+	assert.Equal(t, *lbOut.LoadBalancers[0].LoadBalancerArn, *out.TagDescriptions[0].ResourceArn)
+	assert.Empty(t, out.TagDescriptions[0].Tags)
+}

@@ -24,6 +24,8 @@ type ELBv2Service interface {
 	DeleteListener(input *elbv2.DeleteListenerInput, accountID string) (*elbv2.DeleteListenerOutput, error)
 	DescribeListeners(input *elbv2.DescribeListenersInput, accountID string) (*elbv2.DescribeListenersOutput, error)
 
+	DescribeTags(input *elbv2.DescribeTagsInput, accountID string) (*elbv2.DescribeTagsOutput, error)
+
 	LBAgentHeartbeat(input *LBAgentHeartbeatInput, accountID string) (*LBAgentHeartbeatOutput, error)
 	GetLBConfig(input *GetLBConfigInput, accountID string) (*GetLBConfigOutput, error)
 }

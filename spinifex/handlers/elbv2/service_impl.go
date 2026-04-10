@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -425,6 +426,37 @@ func buildTGArn(region, accountID, name, tgID string) string {
 // buildListenerArn constructs a listener ARN from components.
 func buildListenerArn(region, accountID, lbName, lbID, listenerID, lbType string) string {
 	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:listener/%s/%s/%s/%s", region, accountID, lbArnPathSegment(lbType), lbName, lbID, listenerID)
+}
+
+// ELBv2 resource types as they appear in the resource segment of an ARN.
+const (
+	elbv2ResourceLoadBalancer = "loadbalancer"
+	elbv2ResourceTargetGroup  = "targetgroup"
+	elbv2ResourceListener     = "listener"
+)
+
+// elbv2ResourceTypeFromArn extracts the resource type from an ELBv2 ARN.
+// ELBv2 ARNs have the form
+// "arn:aws:elasticloadbalancing:{region}:{account}:{type}/...". Returns one
+// of "loadbalancer", "targetgroup", "listener" — anything else yields
+// ErrorInvalidParameterValue so callers can surface a proper API error.
+func elbv2ResourceTypeFromArn(arn string) (string, error) {
+	parts := strings.SplitN(arn, ":", 6)
+	if len(parts) < 6 || parts[0] != "arn" || parts[2] != "elasticloadbalancing" {
+		return "", errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	resourceSegment := parts[5]
+	slash := strings.Index(resourceSegment, "/")
+	if slash <= 0 {
+		return "", errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+	resourceType := resourceSegment[:slash]
+	switch resourceType {
+	case elbv2ResourceLoadBalancer, elbv2ResourceTargetGroup, elbv2ResourceListener:
+		return resourceType, nil
+	default:
+		return "", errors.New(awserrors.ErrorInvalidParameterValue)
+	}
 }
 
 // isCompatibleProtocol checks whether a listener protocol is compatible with a
@@ -1341,6 +1373,110 @@ func (s *ELBv2ServiceImpl) DescribeListeners(input *elbv2.DescribeListenersInput
 	return &elbv2.DescribeListenersOutput{
 		Listeners: result,
 	}, nil
+}
+
+// --- Tag operations ---
+
+// DescribeTags returns tags for one or more ELBv2 resources (load balancers,
+// target groups, listeners). Tag data is read from the existing record stores
+// — Spinifex doesn't have a separate tag KV. Listeners currently never store
+// tags, so they always return an empty Tags slice (matches AWS behaviour for
+// untagged resources). Cross-account or unknown ARNs return the per-resource
+// not-found error so existence isn't leaked across accounts.
+func (s *ELBv2ServiceImpl) DescribeTags(input *elbv2.DescribeTagsInput, accountID string) (*elbv2.DescribeTagsOutput, error) {
+	if input == nil || len(input.ResourceArns) == 0 {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	descriptions := make([]*elbv2.TagDescription, 0, len(input.ResourceArns))
+	for _, arnPtr := range input.ResourceArns {
+		if arnPtr == nil || *arnPtr == "" {
+			return nil, errors.New(awserrors.ErrorMissingParameter)
+		}
+		arn := *arnPtr
+
+		resourceType, err := elbv2ResourceTypeFromArn(arn)
+		if err != nil {
+			return nil, err
+		}
+
+		var (
+			tags          map[string]string
+			ownerAccount  string
+			notFoundError string
+			found         bool
+		)
+		switch resourceType {
+		case elbv2ResourceLoadBalancer:
+			notFoundError = awserrors.ErrorELBv2LoadBalancerNotFound
+			lb, lbErr := s.store.GetLoadBalancerByArn(arn)
+			if lbErr != nil {
+				slog.Error("DescribeTags: failed to get LB", "arn", arn, "err", lbErr)
+				return nil, errors.New(awserrors.ErrorServerInternal)
+			}
+			if lb != nil {
+				found = true
+				tags = lb.Tags
+				ownerAccount = lb.AccountID
+			}
+		case elbv2ResourceTargetGroup:
+			notFoundError = awserrors.ErrorELBv2TargetGroupNotFound
+			tg, tgErr := s.store.GetTargetGroupByArn(arn)
+			if tgErr != nil {
+				slog.Error("DescribeTags: failed to get target group", "arn", arn, "err", tgErr)
+				return nil, errors.New(awserrors.ErrorServerInternal)
+			}
+			if tg != nil {
+				found = true
+				tags = tg.Tags
+				ownerAccount = tg.AccountID
+			}
+		case elbv2ResourceListener:
+			notFoundError = awserrors.ErrorELBv2ListenerNotFound
+			l, lErr := s.store.GetListenerByArn(arn)
+			if lErr != nil {
+				slog.Error("DescribeTags: failed to get listener", "arn", arn, "err", lErr)
+				return nil, errors.New(awserrors.ErrorServerInternal)
+			}
+			if l != nil {
+				found = true
+				ownerAccount = l.AccountID
+				// Listeners don't store tags yet — leave map nil.
+			}
+		}
+
+		if !found || ownerAccount != accountID {
+			return nil, errors.New(notFoundError)
+		}
+
+		descriptions = append(descriptions, &elbv2.TagDescription{
+			ResourceArn: aws.String(arn),
+			Tags:        tagsMapToSDK(tags),
+		})
+	}
+
+	return &elbv2.DescribeTagsOutput{
+		TagDescriptions: descriptions,
+	}, nil
+}
+
+// tagsMapToSDK converts a tag map into the SDK Tag slice with deterministic
+// (sorted-by-key) ordering. Returns nil for empty/nil input so the response
+// matches AWS for untagged resources.
+func tagsMapToSDK(tags map[string]string) []*elbv2.Tag {
+	if len(tags) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(tags))
+	for k := range tags {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	out := make([]*elbv2.Tag, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, &elbv2.Tag{Key: aws.String(k), Value: aws.String(tags[k])})
+	}
+	return out
 }
 
 // --- SDK type conversion helpers ---

@@ -491,6 +491,7 @@ func (d *Daemon) subscribeAll() error {
 		{"elbv2.CreateListener", d.handleELBv2CreateListener, "spinifex-workers"},
 		{"elbv2.DeleteListener", d.handleELBv2DeleteListener, "spinifex-workers"},
 		{"elbv2.DescribeListeners", d.handleELBv2DescribeListeners, "spinifex-workers"},
+		{"elbv2.DescribeTags", d.handleELBv2DescribeTags, "spinifex-workers"},
 		{"elbv2.LBAgentHeartbeat", d.handleELBv2LBAgentHeartbeat, "spinifex-workers"},
 		{"elbv2.GetLBConfig", d.handleELBv2GetLBConfig, "spinifex-workers"},
 		{"elbv2.ModifyTargetGroupAttributes", d.handleELBv2ModifyTargetGroupAttributes, "spinifex-workers"},
