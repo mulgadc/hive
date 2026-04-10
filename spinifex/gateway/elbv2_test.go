@@ -22,6 +22,10 @@ func TestELBv2ActionsMap_AllActionsRegistered(t *testing.T) {
 		"DescribeListeners",
 		"LBAgentHeartbeat",
 		"GetLBConfig",
+		"ModifyTargetGroupAttributes",
+		"DescribeTargetGroupAttributes",
+		"ModifyLoadBalancerAttributes",
+		"DescribeLoadBalancerAttributes",
 	}
 
 	for _, action := range expectedActions {

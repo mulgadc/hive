@@ -82,6 +82,18 @@ var elbv2Actions = map[string]ELBv2Handler{
 	"GetLBConfig": elbv2Handler(func(input *handlers_elbv2.GetLBConfigInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_elbv2.GetLBConfig(input, gw.NATSConn, accountID)
 	}),
+	"ModifyTargetGroupAttributes": elbv2Handler(func(input *elbv2.ModifyTargetGroupAttributesInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_elbv2.ModifyTargetGroupAttributes(input, gw.NATSConn, accountID)
+	}),
+	"DescribeTargetGroupAttributes": elbv2Handler(func(input *elbv2.DescribeTargetGroupAttributesInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_elbv2.DescribeTargetGroupAttributes(input, gw.NATSConn, accountID)
+	}),
+	"ModifyLoadBalancerAttributes": elbv2Handler(func(input *elbv2.ModifyLoadBalancerAttributesInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_elbv2.ModifyLoadBalancerAttributes(input, gw.NATSConn, accountID)
+	}),
+	"DescribeLoadBalancerAttributes": elbv2Handler(func(input *elbv2.DescribeLoadBalancerAttributesInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_elbv2.DescribeLoadBalancerAttributes(input, gw.NATSConn, accountID)
+	}),
 }
 
 func (gw *GatewayConfig) ELBv2_Request(w http.ResponseWriter, r *http.Request) error {

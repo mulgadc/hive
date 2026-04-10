@@ -7,6 +7,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/elbv2"
+	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/stretchr/testify/assert"
@@ -1667,4 +1668,198 @@ func TestUpdateStoredConfig_MissingTargetGroup(t *testing.T) {
 	stored, err := svc.store.GetLoadBalancer("lb-misstg")
 	require.NoError(t, err)
 	assert.NotEmpty(t, stored.ConfigHash)
+}
+
+// --- Attribute tests ---
+
+func TestDescribeTargetGroupAttributes_Defaults(t *testing.T) {
+	svc := setupTestService(t)
+	tgOut, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{Name: aws.String("tg-attr-defaults")}, testAccountID)
+	require.NoError(t, err)
+
+	out, err := svc.DescribeTargetGroupAttributes(&elbv2.DescribeTargetGroupAttributesInput{
+		TargetGroupArn: tgOut.TargetGroups[0].TargetGroupArn,
+	}, testAccountID)
+	require.NoError(t, err)
+
+	defaults := DefaultTargetGroupAttributes()
+	assert.Len(t, out.Attributes, len(defaults))
+	attrMap := make(map[string]string)
+	for _, a := range out.Attributes {
+		attrMap[*a.Key] = *a.Value
+	}
+	for k, v := range defaults {
+		assert.Equal(t, v, attrMap[k], "default mismatch for key %s", k)
+	}
+}
+
+func TestDescribeLoadBalancerAttributes_ALBDefaults(t *testing.T) {
+	svc := setupTestService(t)
+	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{Name: aws.String("alb-attr-defaults")}, testAccountID)
+	require.NoError(t, err)
+
+	out, err := svc.DescribeLoadBalancerAttributes(&elbv2.DescribeLoadBalancerAttributesInput{
+		LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+	}, testAccountID)
+	require.NoError(t, err)
+
+	defaults := DefaultLoadBalancerAttributes()
+	assert.Len(t, out.Attributes, len(defaults))
+	attrMap := make(map[string]string)
+	for _, a := range out.Attributes {
+		attrMap[*a.Key] = *a.Value
+	}
+	// ALB seeds cross-zone=true, overriding the default false
+	assert.Equal(t, "true", attrMap["load_balancing.cross_zone.enabled"])
+}
+
+func TestDescribeLoadBalancerAttributes_NLBDefaults(t *testing.T) {
+	svc := setupTestService(t)
+	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name: aws.String("nlb-attr-defaults"),
+		Type: aws.String("network"),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	out, err := svc.DescribeLoadBalancerAttributes(&elbv2.DescribeLoadBalancerAttributesInput{
+		LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+	}, testAccountID)
+	require.NoError(t, err)
+
+	attrMap := make(map[string]string)
+	for _, a := range out.Attributes {
+		attrMap[*a.Key] = *a.Value
+	}
+	// NLB should fall through to default false
+	assert.Equal(t, "false", attrMap["load_balancing.cross_zone.enabled"])
+}
+
+func TestModifyDescribeTargetGroupAttributes_RoundTrip(t *testing.T) {
+	svc := setupTestService(t)
+	tgOut, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{Name: aws.String("tg-attr-rt")}, testAccountID)
+	require.NoError(t, err)
+	arn := tgOut.TargetGroups[0].TargetGroupArn
+
+	modOut, err := svc.ModifyTargetGroupAttributes(&elbv2.ModifyTargetGroupAttributesInput{
+		TargetGroupArn: arn,
+		Attributes: []*elbv2.TargetGroupAttribute{
+			{Key: aws.String("deregistration_delay.timeout_seconds"), Value: aws.String("60")},
+			{Key: aws.String("stickiness.enabled"), Value: aws.String("true")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, modOut.Attributes, 2)
+
+	descOut, err := svc.DescribeTargetGroupAttributes(&elbv2.DescribeTargetGroupAttributesInput{
+		TargetGroupArn: arn,
+	}, testAccountID)
+	require.NoError(t, err)
+	attrMap := make(map[string]string)
+	for _, a := range descOut.Attributes {
+		attrMap[*a.Key] = *a.Value
+	}
+	assert.Equal(t, "60", attrMap["deregistration_delay.timeout_seconds"])
+	assert.Equal(t, "true", attrMap["stickiness.enabled"])
+	// Unmodified defaults should still be present
+	assert.Equal(t, "lb_cookie", attrMap["stickiness.type"])
+}
+
+func TestModifyDescribeLoadBalancerAttributes_RoundTrip(t *testing.T) {
+	svc := setupTestService(t)
+	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{Name: aws.String("lb-attr-rt")}, testAccountID)
+	require.NoError(t, err)
+	arn := lbOut.LoadBalancers[0].LoadBalancerArn
+
+	modOut, err := svc.ModifyLoadBalancerAttributes(&elbv2.ModifyLoadBalancerAttributesInput{
+		LoadBalancerArn: arn,
+		Attributes: []*elbv2.LoadBalancerAttribute{
+			{Key: aws.String("idle_timeout.timeout_seconds"), Value: aws.String("120")},
+			{Key: aws.String("deletion_protection.enabled"), Value: aws.String("true")},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+	assert.Len(t, modOut.Attributes, 2)
+
+	descOut, err := svc.DescribeLoadBalancerAttributes(&elbv2.DescribeLoadBalancerAttributesInput{
+		LoadBalancerArn: arn,
+	}, testAccountID)
+	require.NoError(t, err)
+	attrMap := make(map[string]string)
+	for _, a := range descOut.Attributes {
+		attrMap[*a.Key] = *a.Value
+	}
+	assert.Equal(t, "120", attrMap["idle_timeout.timeout_seconds"])
+	assert.Equal(t, "true", attrMap["deletion_protection.enabled"])
+	// Unmodified defaults should still be present
+	assert.Equal(t, "true", attrMap["routing.http2.enabled"])
+}
+
+func TestModifyTargetGroupAttributes_NotFound(t *testing.T) {
+	svc := setupTestService(t)
+	_, err := svc.ModifyTargetGroupAttributes(&elbv2.ModifyTargetGroupAttributesInput{
+		TargetGroupArn: aws.String("arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/missing/tg-missing"),
+		Attributes: []*elbv2.TargetGroupAttribute{
+			{Key: aws.String("stickiness.enabled"), Value: aws.String("true")},
+		},
+	}, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorELBv2TargetGroupNotFound)
+}
+
+func TestDescribeTargetGroupAttributes_NotFound(t *testing.T) {
+	svc := setupTestService(t)
+	_, err := svc.DescribeTargetGroupAttributes(&elbv2.DescribeTargetGroupAttributesInput{
+		TargetGroupArn: aws.String("arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/missing/tg-missing"),
+	}, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorELBv2TargetGroupNotFound)
+}
+
+func TestModifyLoadBalancerAttributes_NotFound(t *testing.T) {
+	svc := setupTestService(t)
+	_, err := svc.ModifyLoadBalancerAttributes(&elbv2.ModifyLoadBalancerAttributesInput{
+		LoadBalancerArn: aws.String("arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/missing/lb-missing"),
+		Attributes: []*elbv2.LoadBalancerAttribute{
+			{Key: aws.String("idle_timeout.timeout_seconds"), Value: aws.String("30")},
+		},
+	}, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorELBv2LoadBalancerNotFound)
+}
+
+func TestDescribeLoadBalancerAttributes_NotFound(t *testing.T) {
+	svc := setupTestService(t)
+	_, err := svc.DescribeLoadBalancerAttributes(&elbv2.DescribeLoadBalancerAttributesInput{
+		LoadBalancerArn: aws.String("arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/missing/lb-missing"),
+	}, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorELBv2LoadBalancerNotFound)
+}
+
+func TestModifyTargetGroupAttributes_MissingArn(t *testing.T) {
+	svc := setupTestService(t)
+	_, err := svc.ModifyTargetGroupAttributes(&elbv2.ModifyTargetGroupAttributesInput{
+		Attributes: []*elbv2.TargetGroupAttribute{
+			{Key: aws.String("stickiness.enabled"), Value: aws.String("true")},
+		},
+	}, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorMissingParameter)
+}
+
+func TestDescribeTargetGroupAttributes_MissingArn(t *testing.T) {
+	svc := setupTestService(t)
+	_, err := svc.DescribeTargetGroupAttributes(&elbv2.DescribeTargetGroupAttributesInput{}, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorMissingParameter)
+}
+
+func TestModifyLoadBalancerAttributes_MissingArn(t *testing.T) {
+	svc := setupTestService(t)
+	_, err := svc.ModifyLoadBalancerAttributes(&elbv2.ModifyLoadBalancerAttributesInput{
+		Attributes: []*elbv2.LoadBalancerAttribute{
+			{Key: aws.String("idle_timeout.timeout_seconds"), Value: aws.String("30")},
+		},
+	}, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorMissingParameter)
+}
+
+func TestDescribeLoadBalancerAttributes_MissingArn(t *testing.T) {
+	svc := setupTestService(t)
+	_, err := svc.DescribeLoadBalancerAttributes(&elbv2.DescribeLoadBalancerAttributesInput{}, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorMissingParameter)
 }
