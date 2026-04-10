@@ -72,6 +72,12 @@ Operational commands for inspecting cluster state. These fan out NATS requests t
 |---------|-------|---------------|-------------|------------|--------|
 | `spx admin cert renew` | `--extra-ip` (additional IPs for SANs), `--extra-dns` (additional DNS names for SANs) | Existing CA from `spx admin init` | Reads existing CA → regenerates server certificate with all current network interface IPs and machine hostname in SANs → writes new cert. Use after adding a new network interface or changing IP addresses. | 1. Renew with auto-detected IPs<br>2. Renew with extra IPs<br>3. Renew with extra DNS names | **DONE** |
 
+### Upgrade Management
+
+| Command | Flags | Prerequisites | Basic Logic | Test Cases | Status |
+|---------|-------|---------------|-------------|------------|--------|
+| `spx admin upgrade` | `--yes` (apply without prompting), `--config-dir` (persistent, default: `~/spinifex/config`), `--spinifex-dir` (persistent, default: `~/spinifex`) | Existing installation (`spinifex.toml` must exist in config dir) | Reads current config versions from registry → computes pending config migrations (from→to per target) → prints version summary and pending list → prompts for confirmation unless `--yes` → runs `migrate.DefaultRegistry.RunAllConfig()` to apply migrations to config files. Intended for upgrades between Spinifex versions. Operators can skip migrations during install by setting `INSTALL_SPINIFEX_SKIP_MIGRATE=1`, then run `spx admin upgrade` manually to review and apply. After completion, services must be restarted with `sudo systemctl restart spinifex.target`. Invoked non-interactively by `scripts/setup.sh` with `--yes`. | 1. No installation present (error, suggests `spx admin init`)<br>2. No pending migrations (prints "No pending config migrations")<br>3. Pending migrations with interactive confirmation (y/yes applies, anything else aborts)<br>4. Pending migrations with `--yes` (applies without prompt)<br>5. Migration failure surfaces error and exits non-zero | **DONE** |
+
 ### Account Management
 
 | Command | Flags | Prerequisites | Basic Logic | Test Cases | Status |
