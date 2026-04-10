@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -17,21 +18,7 @@ import (
 // startTestNATS starts an embedded NATS server with JetStream for testing.
 func startTestNATS(t *testing.T) (*server.Server, *nats.Conn) {
 	t.Helper()
-	dir := t.TempDir()
-	opts := &server.Options{
-		Port:      -1,
-		JetStream: true,
-		StoreDir:  dir,
-	}
-	ns, err := server.NewServer(opts)
-	require.NoError(t, err)
-	ns.Start()
-	t.Cleanup(ns.Shutdown)
-
-	nc, err := nats.Connect(ns.ClientURL())
-	require.NoError(t, err)
-	t.Cleanup(nc.Close)
-
+	ns, nc, _ := testutil.StartTestJetStream(t)
 	return ns, nc
 }
 
@@ -625,4 +612,92 @@ func TestPendingConfig_NoPending(t *testing.T) {
 	pending, err := r.PendingConfig(dir)
 	require.NoError(t, err)
 	assert.Empty(t, pending)
+}
+
+// --- Config migration error and chain tests ---
+
+func TestRunConfig_StopsOnFailure_VersionNotBumped(t *testing.T) {
+	dir := t.TempDir()
+	natsDir := filepath.Join(dir, "nats")
+	require.NoError(t, os.MkdirAll(natsDir, 0o755))
+	confPath := filepath.Join(natsDir, "nats.conf")
+	require.NoError(t, os.WriteFile(confPath, []byte(`# NATS Server Configuration
+listen: 0.0.0.0:4222
+`), 0o640))
+
+	r := NewRegistry()
+	r.RegisterConfigTarget("nats.conf", "nats/nats.conf", &NATSConfVersionReader{})
+	r.RegisterConfig("nats.conf", ConfigMigration{
+		FromVersion: 0,
+		ToVersion:   1,
+		Description: "fails",
+		Run:         func(ConfigContext) error { return errors.New("migration error") },
+	})
+
+	err := r.RunConfig("nats.conf", dir, dir)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "migration error")
+
+	// Version should remain at 0 (no version marker).
+	reader := &NATSConfVersionReader{}
+	v, err := reader.ReadVersion(confPath)
+	require.NoError(t, err)
+	assert.Equal(t, 0, v)
+}
+
+func TestRunConfig_ExecutesMultiStepChainInOrder(t *testing.T) {
+	dir := t.TempDir()
+	natsDir := filepath.Join(dir, "nats")
+	require.NoError(t, os.MkdirAll(natsDir, 0o755))
+	confPath := filepath.Join(natsDir, "nats.conf")
+	require.NoError(t, os.WriteFile(confPath, []byte(`# NATS Server Configuration
+listen: 0.0.0.0:4222
+`), 0o640))
+
+	var order []int
+	r := NewRegistry()
+	r.RegisterConfigTarget("nats.conf", "nats/nats.conf", &NATSConfVersionReader{})
+	r.RegisterConfig("nats.conf", ConfigMigration{
+		FromVersion: 0, ToVersion: 1, Description: "step 1",
+		Run: func(ConfigContext) error { order = append(order, 1); return nil },
+	})
+	r.RegisterConfig("nats.conf", ConfigMigration{
+		FromVersion: 1, ToVersion: 2, Description: "step 2",
+		Run: func(ConfigContext) error { order = append(order, 2); return nil },
+	})
+
+	err := r.RunConfig("nats.conf", dir, dir)
+	require.NoError(t, err)
+	assert.Equal(t, []int{1, 2}, order)
+
+	// Verify final version is 2.
+	reader := &NATSConfVersionReader{}
+	v, err := reader.ReadVersion(confPath)
+	require.NoError(t, err)
+	assert.Equal(t, 2, v)
+}
+
+func TestRunConfig_RejectsChainGap(t *testing.T) {
+	dir := t.TempDir()
+	natsDir := filepath.Join(dir, "nats")
+	require.NoError(t, os.MkdirAll(natsDir, 0o755))
+	confPath := filepath.Join(natsDir, "nats.conf")
+	require.NoError(t, os.WriteFile(confPath, []byte(`# NATS Server Configuration
+listen: 0.0.0.0:4222
+`), 0o640))
+
+	r := NewRegistry()
+	r.RegisterConfigTarget("nats.conf", "nats/nats.conf", &NATSConfVersionReader{})
+	r.RegisterConfig("nats.conf", ConfigMigration{
+		FromVersion: 0, ToVersion: 1, Description: "step 1",
+		Run: func(ConfigContext) error { return nil },
+	})
+	r.RegisterConfig("nats.conf", ConfigMigration{
+		FromVersion: 3, ToVersion: 4, Description: "gap",
+		Run: func(ConfigContext) error { return nil },
+	})
+
+	err := r.RunConfig("nats.conf", dir, dir)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "gap")
 }

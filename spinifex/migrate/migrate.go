@@ -179,8 +179,11 @@ func (r *Registry) RunConfig(target string, configDir, dataDir string) error {
 	fullPath := filepath.Join(configDir, t.path)
 
 	// If the config file doesn't exist (fresh install), skip migrations.
-	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-		return nil
+	if _, err := os.Stat(fullPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat config file %s: %w", fullPath, err)
 	}
 
 	current, err := t.reader.ReadVersion(fullPath)
@@ -197,6 +200,15 @@ func (r *Registry) RunConfig(target string, configDir, dataDir string) error {
 
 	if len(pending) == 0 {
 		return nil
+	}
+
+	// Validate contiguous chain (same check as RunKV).
+	expected := current
+	for _, m := range pending {
+		if m.FromVersion != expected {
+			return fmt.Errorf("config migration chain gap for %s: expected from %d, got from %d", target, expected, m.FromVersion)
+		}
+		expected = m.ToVersion
 	}
 
 	logger := slog.Default()
@@ -240,8 +252,11 @@ func (r *Registry) PendingConfig(configDir string) ([]PendingMigration, error) {
 	for name, t := range r.configTargets {
 		fullPath := filepath.Join(configDir, t.path)
 
-		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-			continue
+		if _, err := os.Stat(fullPath); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("stat config file %s: %w", fullPath, err)
 		}
 
 		current, err := t.reader.ReadVersion(fullPath)
@@ -269,8 +284,11 @@ func (r *Registry) ConfigVersions(configDir string) (map[string]int, error) {
 	versions := make(map[string]int)
 	for name, t := range r.configTargets {
 		fullPath := filepath.Join(configDir, t.path)
-		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-			continue
+		if _, err := os.Stat(fullPath); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("stat config file %s: %w", fullPath, err)
 		}
 		v, err := t.reader.ReadVersion(fullPath)
 		if err != nil {

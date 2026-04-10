@@ -68,7 +68,10 @@ func init() {
 			}
 
 			// Post-migration validation.
-			result, _ := os.ReadFile(path)
+			result, err := os.ReadFile(path)
+			if err != nil {
+				return fmt.Errorf("nats.conf migration: post-migration validation read failed: %w", err)
+			}
 			if !uncommentedRe.Match(result) {
 				return fmt.Errorf("nats.conf migration failed: token line not found after uncommenting")
 			}

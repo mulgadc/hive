@@ -200,8 +200,8 @@ func (m *JetStreamManager) recoverBucket(cfg *nats.KeyValueConfig, field *nats.K
 		return nil, err
 	}
 
-	if err := utils.WriteVersion(kv, version); err != nil {
-		slog.Error("Failed to write version to recreated bucket", "bucket", cfg.Bucket, "err", err)
+	if err := migrate.DefaultRegistry.RunKV(cfg.Bucket, kv, version); err != nil {
+		slog.Error("Failed to run migrations on recreated bucket", "bucket", cfg.Bucket, "err", err)
 	}
 
 	*field = kv

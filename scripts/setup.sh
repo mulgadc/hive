@@ -383,38 +383,56 @@ fix_file_ownership() {
         vpcd:spinifex-vpcd \
         awsgw:spinifex-gw; do
         IFS=: read -r dir svc_user <<< "$entry"
-        [ -d "/var/lib/spinifex/$dir" ] && \
-            $SUDO chown -R "$svc_user:$SPINIFEX_GROUP" "/var/lib/spinifex/$dir"
+        if [ -d "/var/lib/spinifex/$dir" ]; then
+            $SUDO chown -R "$svc_user:$SPINIFEX_GROUP" "/var/lib/spinifex/$dir" \
+                || fatal "Failed to set ownership on /var/lib/spinifex/$dir"
+        fi
     done
 
     # Per-service config dirs — recursive chown
-    [ -d /etc/spinifex/nats ] && \
-        $SUDO chown -R "spinifex-nats:$SPINIFEX_GROUP" /etc/spinifex/nats
-    [ -d /etc/spinifex/predastore ] && \
-        $SUDO chown -R "spinifex-storage:$SPINIFEX_GROUP" /etc/spinifex/predastore
+    if [ -d /etc/spinifex/nats ]; then
+        $SUDO chown -R "spinifex-nats:$SPINIFEX_GROUP" /etc/spinifex/nats \
+            || fatal "Failed to set ownership on /etc/spinifex/nats"
+    fi
+    if [ -d /etc/spinifex/predastore ]; then
+        $SUDO chown -R "spinifex-storage:$SPINIFEX_GROUP" /etc/spinifex/predastore \
+            || fatal "Failed to set ownership on /etc/spinifex/predastore"
+    fi
 
     # Shared config files — root:spinifex with per-file modes
     for f in spinifex.toml master.key server.key; do
-        [ -f "/etc/spinifex/$f" ] && \
-            $SUDO chown "root:$SPINIFEX_GROUP" "/etc/spinifex/$f" && \
-            $SUDO chmod 0640 "/etc/spinifex/$f"
+        if [ -f "/etc/spinifex/$f" ]; then
+            $SUDO chown "root:$SPINIFEX_GROUP" "/etc/spinifex/$f" \
+                || fatal "Failed to set ownership on /etc/spinifex/$f"
+            $SUDO chmod 0640 "/etc/spinifex/$f" \
+                || fatal "Failed to set permissions on /etc/spinifex/$f"
+        fi
     done
     for f in server.pem ca.pem; do
-        [ -f "/etc/spinifex/$f" ] && \
-            $SUDO chown "root:$SPINIFEX_GROUP" "/etc/spinifex/$f" && \
-            $SUDO chmod 0644 "/etc/spinifex/$f"
+        if [ -f "/etc/spinifex/$f" ]; then
+            $SUDO chown "root:$SPINIFEX_GROUP" "/etc/spinifex/$f" \
+                || fatal "Failed to set ownership on /etc/spinifex/$f"
+            $SUDO chmod 0644 "/etc/spinifex/$f" \
+                || fatal "Failed to set permissions on /etc/spinifex/$f"
+        fi
     done
 
     # CA private key — root-only
-    [ -f /etc/spinifex/ca.key ] && \
-        $SUDO chown root:root /etc/spinifex/ca.key && \
-        $SUDO chmod 0600 /etc/spinifex/ca.key
+    if [ -f /etc/spinifex/ca.key ]; then
+        $SUDO chown root:root /etc/spinifex/ca.key \
+            || fatal "Failed to set ownership on /etc/spinifex/ca.key"
+        $SUDO chmod 0600 /etc/spinifex/ca.key \
+            || fatal "Failed to set permissions on /etc/spinifex/ca.key"
+    fi
 
     # Shared data dirs — root:spinifex 0770 (daemon + admin CLI write, services read)
     for d in images amis volumes state; do
-        [ -d "/var/lib/spinifex/$d" ] && \
-            $SUDO chown -R "root:$SPINIFEX_GROUP" "/var/lib/spinifex/$d" && \
-            $SUDO chmod 0770 "/var/lib/spinifex/$d"
+        if [ -d "/var/lib/spinifex/$d" ]; then
+            $SUDO chown -R "root:$SPINIFEX_GROUP" "/var/lib/spinifex/$d" \
+                || fatal "Failed to set ownership on /var/lib/spinifex/$d"
+            $SUDO chmod 0770 "/var/lib/spinifex/$d" \
+                || fatal "Failed to set permissions on /var/lib/spinifex/$d"
+        fi
     done
 
     info "File ownership updated"
@@ -435,7 +453,8 @@ run_migrations() {
     fi
 
     info "Running config migrations..."
-    $SUDO /usr/local/bin/spx admin upgrade --yes
+    $SUDO /usr/local/bin/spx admin upgrade --yes \
+        || fatal "Config migration failed. See errors above."
 }
 
 # --- Install systemd units ---
