@@ -1766,7 +1766,17 @@ func TestModifyDescribeTargetGroupAttributes_RoundTrip(t *testing.T) {
 		},
 	}, testAccountID)
 	require.NoError(t, err)
-	assert.Len(t, modOut.Attributes, 2)
+	// Assert the exact echoed key/value pairs, not just the length — a regression
+	// that pointed at the wrong source or dropped Value would pass a length check.
+	require.Len(t, modOut.Attributes, 2)
+	modMap := make(map[string]string, len(modOut.Attributes))
+	for _, a := range modOut.Attributes {
+		require.NotNil(t, a.Key)
+		require.NotNil(t, a.Value)
+		modMap[*a.Key] = *a.Value
+	}
+	assert.Equal(t, "60", modMap["deregistration_delay.timeout_seconds"])
+	assert.Equal(t, "true", modMap["stickiness.enabled"])
 
 	descOut, err := svc.DescribeTargetGroupAttributes(&elbv2.DescribeTargetGroupAttributesInput{
 		TargetGroupArn: arn,
@@ -1796,7 +1806,16 @@ func TestModifyDescribeLoadBalancerAttributes_RoundTrip(t *testing.T) {
 		},
 	}, testAccountID)
 	require.NoError(t, err)
-	assert.Len(t, modOut.Attributes, 2)
+	// Assert the exact echoed key/value pairs, not just the length.
+	require.Len(t, modOut.Attributes, 2)
+	modMap := make(map[string]string, len(modOut.Attributes))
+	for _, a := range modOut.Attributes {
+		require.NotNil(t, a.Key)
+		require.NotNil(t, a.Value)
+		modMap[*a.Key] = *a.Value
+	}
+	assert.Equal(t, "120", modMap["idle_timeout.timeout_seconds"])
+	assert.Equal(t, "true", modMap["deletion_protection.enabled"])
 
 	descOut, err := svc.DescribeLoadBalancerAttributes(&elbv2.DescribeLoadBalancerAttributesInput{
 		LoadBalancerArn: arn,
