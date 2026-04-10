@@ -1512,6 +1512,15 @@ func (s *ELBv2ServiceImpl) ModifyTargetGroupAttributes(input *elbv2.ModifyTarget
 		})
 	}
 
+	// If the caller sent attributes but every single one was rejected by the
+	// nil guard above, surface that as an error instead of silently returning
+	// a successful empty response — otherwise the caller thinks the write
+	// landed when nothing was actually applied.
+	if len(input.Attributes) > 0 && len(submitted) == 0 {
+		slog.Warn("ModifyTargetGroupAttributes: all submitted attributes were invalid", "arn", *input.TargetGroupArn, "submitted_count", len(input.Attributes))
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
 	if err := s.store.PutTargetGroup(tg); err != nil {
 		slog.Error("ModifyTargetGroupAttributes: failed to persist TG", "arn", *input.TargetGroupArn, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
@@ -1588,6 +1597,14 @@ func (s *ELBv2ServiceImpl) ModifyLoadBalancerAttributes(input *elbv2.ModifyLoadB
 			Key:   attr.Key,
 			Value: attr.Value,
 		})
+	}
+
+	// If the caller sent attributes but every single one was rejected by the
+	// nil guard above, surface that as an error instead of silently returning
+	// a successful empty response.
+	if len(input.Attributes) > 0 && len(submitted) == 0 {
+		slog.Warn("ModifyLoadBalancerAttributes: all submitted attributes were invalid", "arn", *input.LoadBalancerArn, "submitted_count", len(input.Attributes))
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
 	if err := s.store.PutLoadBalancer(lb); err != nil {

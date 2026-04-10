@@ -2003,6 +2003,43 @@ func TestModifyLoadBalancerAttributes_SkipsInvalidEntries(t *testing.T) {
 	assert.Equal(t, "75", attrMap["idle_timeout.timeout_seconds"])
 }
 
+// TestModifyTargetGroupAttributes_AllInvalidReturnsError guards against the
+// silent-success case where every submitted attribute trips the nil guard and
+// the handler returned 200 OK with an empty response body — the caller would
+// think the write landed when nothing was actually applied.
+func TestModifyTargetGroupAttributes_AllInvalidReturnsError(t *testing.T) {
+	svc := setupTestService(t)
+	tgOut, err := svc.CreateTargetGroup(&elbv2.CreateTargetGroupInput{Name: aws.String("tg-all-invalid")}, testAccountID)
+	require.NoError(t, err)
+
+	_, err = svc.ModifyTargetGroupAttributes(&elbv2.ModifyTargetGroupAttributesInput{
+		TargetGroupArn: tgOut.TargetGroups[0].TargetGroupArn,
+		Attributes: []*elbv2.TargetGroupAttribute{
+			nil,
+			{Key: nil, Value: aws.String("v")},
+			{Key: aws.String("k"), Value: nil},
+		},
+	}, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorInvalidParameterValue)
+}
+
+// TestModifyLoadBalancerAttributes_AllInvalidReturnsError mirrors the TG case.
+func TestModifyLoadBalancerAttributes_AllInvalidReturnsError(t *testing.T) {
+	svc := setupTestService(t)
+	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{Name: aws.String("lb-all-invalid")}, testAccountID)
+	require.NoError(t, err)
+
+	_, err = svc.ModifyLoadBalancerAttributes(&elbv2.ModifyLoadBalancerAttributesInput{
+		LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+		Attributes: []*elbv2.LoadBalancerAttribute{
+			nil,
+			{Key: nil, Value: aws.String("v")},
+			{Key: aws.String("k"), Value: nil},
+		},
+	}, testAccountID)
+	assert.EqualError(t, err, awserrors.ErrorInvalidParameterValue)
+}
+
 // TestDescribeTargetGroupAttributes_SortedOrder verifies that attributes are
 // returned in a stable, sorted-by-key order. Go map iteration is randomised,
 // so without explicit sorting Terraform would see spurious plan diffs between
