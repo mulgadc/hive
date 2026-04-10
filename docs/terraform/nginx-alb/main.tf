@@ -399,6 +399,10 @@ output "alb_url" {
   value = "http://${aws_lb.web.dns_name}"
 }
 
+output "alb_public_ip" {
+  value = aws_lb.web.public_ip
+}
+
 output "instance_1_id" {
   value = aws_instance.nginx_1.id
 }
