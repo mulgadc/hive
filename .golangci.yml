@@ -127,5 +127,3 @@ linters:
         linters: [gosec] # subprocess execution — legitimate in VM orchestration
       - text: "G304"
         linters: [gosec] # file path from variable — necessary for config loading
-      - text: "G402"
-        linters: [gosec] # TLS config — we handle TLS ourselves
