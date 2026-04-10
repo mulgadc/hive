@@ -202,6 +202,7 @@ func (m *JetStreamManager) recoverBucket(cfg *nats.KeyValueConfig, field *nats.K
 
 	if err := migrate.DefaultRegistry.RunKV(cfg.Bucket, kv, version); err != nil {
 		slog.Error("Failed to run migrations on recreated bucket", "bucket", cfg.Bucket, "err", err)
+		return nil, fmt.Errorf("migrate recreated bucket %s: %w", cfg.Bucket, err)
 	}
 
 	*field = kv

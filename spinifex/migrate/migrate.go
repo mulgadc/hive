@@ -101,12 +101,13 @@ func (r *Registry) RegisterConfig(target string, m ConfigMigration) {
 // It reads the current version via utils.ReadVersion, runs each migration in
 // order, and stamps the version via utils.WriteVersion after each step.
 //
-// For fresh buckets (version 0, no data to migrate) the target version is
-// stamped directly without running migrations.
+// When no migrations are registered for a bucket, RunKV stamps targetVersion
+// directly — equivalent to a bare utils.WriteVersion. This is the common case
+// for buckets that have not yet needed a schema change.
 //
-// If targetVersion is ahead of the registered migration chain for an existing
-// bucket, RunKV returns an error — migration authors must register migrations
-// before bumping version constants.
+// If targetVersion is ahead of the registered migration chain, RunKV returns
+// an error — migration authors must register migrations before bumping version
+// constants.
 func (r *Registry) RunKV(bucket string, kv nats.KeyValue, targetVersion int) error {
 	current, err := utils.ReadVersion(kv)
 	if err != nil {
@@ -117,13 +118,21 @@ func (r *Registry) RunKV(bucket string, kv nats.KeyValue, targetVersion int) err
 		return nil
 	}
 
-	// Fresh bucket — no data to migrate, stamp initial version.
-	if current == 0 {
+	all := r.kvMigrations[bucket]
+
+	// Fresh bucket with no registered migrations — stamp directly. This is
+	// the common first-init path for buckets that have not yet needed a
+	// schema change. Equivalent to the pre-framework utils.WriteVersion call.
+	// Note: we do NOT stamp directly for a non-fresh bucket with no migrations
+	// (e.g. someone bumped a BucketVersion constant from 1 to 2 without adding
+	// a migration) — that case falls through and errors with "no migrations
+	// registered" to force the author to add the migration.
+	if current == 0 && len(all) == 0 {
 		return utils.WriteVersion(kv, targetVersion)
 	}
 
-	// Existing bucket — require a complete migration chain.
-	all := r.kvMigrations[bucket]
+	// Migrations are registered (or an existing bucket has a missing chain) —
+	// require a complete chain from current to target.
 	var pending []KVMigration
 	for _, m := range all {
 		if m.FromVersion >= current && m.ToVersion <= targetVersion {

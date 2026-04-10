@@ -374,7 +374,10 @@ EOF
 fix_file_ownership() {
     info "Fixing file ownership for privilege separation..."
 
-    # Per-service data dirs — recursive chown so existing files are accessible
+    # Per-service data dirs — recursive chown so existing files are accessible.
+    # Guard against repeated recursion by checking top-level ownership first: on
+    # a v1 upgrade the top dir is still alice:alice, so the recursive walk runs
+    # once; on subsequent runs it's already $svc_user:$SPINIFEX_GROUP and we skip.
     for entry in \
         nats:spinifex-nats \
         predastore:spinifex-storage \
@@ -383,9 +386,13 @@ fix_file_ownership() {
         vpcd:spinifex-vpcd \
         awsgw:spinifex-gw; do
         IFS=: read -r dir svc_user <<< "$entry"
-        if [ -d "/var/lib/spinifex/$dir" ]; then
-            $SUDO chown -R "$svc_user:$SPINIFEX_GROUP" "/var/lib/spinifex/$dir" \
-                || fatal "Failed to set ownership on /var/lib/spinifex/$dir"
+        path="/var/lib/spinifex/$dir"
+        if [ -d "$path" ]; then
+            cur_owner=$(stat -c '%U:%G' "$path" 2>/dev/null || echo "")
+            if [ "$cur_owner" != "$svc_user:$SPINIFEX_GROUP" ]; then
+                $SUDO chown -R "$svc_user:$SPINIFEX_GROUP" "$path" \
+                    || fatal "Failed to set ownership on $path"
+            fi
         fi
     done
 
@@ -425,13 +432,20 @@ fix_file_ownership() {
             || fatal "Failed to set permissions on /etc/spinifex/ca.key"
     fi
 
-    # Shared data dirs — root:spinifex 0770 (daemon + admin CLI write, services read)
+    # Shared data dirs — root:spinifex 0770 (daemon + admin CLI write, services read).
+    # These can hold multi-GB VM images and thousands of volume files; guard the
+    # recursive chown with a top-level owner check so it only walks the tree on
+    # the one-time v1 upgrade.
     for d in images amis volumes state; do
-        if [ -d "/var/lib/spinifex/$d" ]; then
-            $SUDO chown -R "root:$SPINIFEX_GROUP" "/var/lib/spinifex/$d" \
-                || fatal "Failed to set ownership on /var/lib/spinifex/$d"
-            $SUDO chmod 0770 "/var/lib/spinifex/$d" \
-                || fatal "Failed to set permissions on /var/lib/spinifex/$d"
+        path="/var/lib/spinifex/$d"
+        if [ -d "$path" ]; then
+            cur_owner=$(stat -c '%U:%G' "$path" 2>/dev/null || echo "")
+            if [ "$cur_owner" != "root:$SPINIFEX_GROUP" ]; then
+                $SUDO chown -R "root:$SPINIFEX_GROUP" "$path" \
+                    || fatal "Failed to set ownership on $path"
+            fi
+            $SUDO chmod 0770 "$path" \
+                || fatal "Failed to set permissions on $path"
         fi
     done
 
