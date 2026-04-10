@@ -426,8 +426,8 @@ if [ -z "$INSTANCE_TYPE" ]; then
 fi
 echo "Using instance type: $INSTANCE_TYPE"
 
-# Discover AMI
-AMI_ID=$($AWS_EC2 describe-images --query 'Images[0].ImageId' --output text)
+# Discover Ubuntu AMI (filter to avoid picking up the LB Alpine image)
+AMI_ID=$($AWS_EC2 describe-images --filters "Name=name,Values=ami-ubuntu-*" --query 'Images[0].ImageId' --output text)
 if [ -z "$AMI_ID" ] || [ "$AMI_ID" == "None" ]; then
     echo "ERROR: No AMI found (bootstrap should have imported one)"
     exit 1

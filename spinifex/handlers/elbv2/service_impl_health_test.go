@@ -23,7 +23,7 @@ func setupTestServiceWithInstance(t *testing.T, instanceID, instanceIP string) (
 
 	elbv2Svc, err := NewELBv2ServiceImplWithNATS(nil, nc)
 	require.NoError(t, err)
-	elbv2Svc.SetVPCService(vpcSvc)
+	elbv2Svc.VPCService = vpcSvc
 
 	// Create VPC + subnet
 	vpcOut, err := vpcSvc.CreateVpc(&ec2.CreateVpcInput{

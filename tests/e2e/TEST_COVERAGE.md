@@ -735,53 +735,77 @@ for ALB ENI creation. Configurable endpoint via `ENDPOINT` env var.
 
 ---
 
-## ELBv2 / ALB Data Plane (`run-elbv2-dataplane-e2e.sh`)
+## Consolidated LB Data Plane (`run-lb-e2e.sh`)
 
-Data plane test that verifies ALBs actually balance HTTP traffic across instances.
-Requires VPC networking (OVN), HAProxy on daemon node, and imported AMI. Designed
-for pseudo-multinode or real multi-node environments.
+Consolidated LB data plane test covering all 4 variants: ALB internet-facing,
+ALB internal, NLB internet-facing, NLB internal. Shares a single VPC, subnet,
+and set of dual-purpose app instances (HTTP:80 + TCP:9000) across all suites.
+Requires pool mode with external IPAM (NOT dev_networking).
 
 ### Phase 0: Prerequisites
-- Discover nano instance type
-- Discover AMI (must be pre-imported)
+- Dev-mode gate (skip if dev_networking enabled)
+- SSH to peer node (if `--peer` provided)
+- Discover instance types (nano), AMI (non-Alpine)
+- Create key pair (lb-e2e-key)
 
-### Phase 1: VPC + Subnet Setup
-- `create-vpc` (10.201.0.0/16)
-- `create-subnet` (10.201.1.0/24)
+### Phase 1: Shared VPC + Subnet
+- `create-vpc` (10.200.0.0/16)
+- `create-internet-gateway` + attach
+- `create-subnet` (10.200.1.0/24) + MapPublicIpOnLaunch
 
-### Phase 2: Launch Instances
-- `run-instances` x2 with cloud-init HTTP responder (Python http.server on port 80)
-- Cloud-init serves `{"instance_id": "<hostname>"}` on each instance
-- Poll both instances to running state
-- Verify both have `PrivateIpAddress` assigned
+### Phase 2: Launch App Instances
+- `run-instances` x2 with dual-purpose cloud-init (HTTP on 80, TCP echo on 9000)
+- Poll instances to running state, collect private IPs
+- Poll app ports for readiness (replaces `sleep 100`)
 
-### Phase 3: Target Group + Registration
-- `create-target-group` (HTTP, port 80, health check on /index.html, 5s interval)
-- `register-targets` (both instances)
+### Phase 3a: ALB Internet-Facing [skip if no --peer]
+- Create HTTP target group, register 2 targets
+- `create-load-balancer` (scheme=internet-facing), verify scheme
+- Verify ENI has public IP, DNS has no `internal-` prefix
+- `create-listener` (HTTP:80)
+- Wait for ALB active (agent heartbeat)
+- Host HTTP traffic test (curl 20x, verify round-robin)
+- Peer validation (curl from --peer node, 20x)
+- Cleanup: delete listener, LB, verify ENI removal, delete TG
 
-### Phase 4: ALB + Listener
-- `create-load-balancer` (ALB with subnet)
-- Resolve ALB ENI private IP (via describe-network-interfaces)
-- `create-listener` (port 80, forward to target group)
+### Phase 3b: ALB Internal
+- Create HTTP target group, register 2 targets
+- `create-load-balancer` (scheme=internal), verify scheme
+- Verify ENI has NO public IP, DNS has `internal-` prefix
+- `create-listener` (HTTP:80)
+- Wait for ALB active (mgmt NIC heartbeat)
+- Wait for targets healthy
+- Launch client VM (cloud-init curls ALB private IP, serves results)
+- Poll client status.txt, fetch results, verify round-robin
+- Terminate client VM
+- Cleanup: delete LB, verify ENI removal, delete TG
 
-### Phase 5: Wait for Target Health
-- Poll `describe-target-health` until both targets healthy (120s timeout)
-- Continue even if targets stay in "initial" (HAProxy may still forward)
+### Phase 3c: NLB Internet-Facing [skip if no --peer]
+- Create TCP target group (port 9000), verify protocol=TCP
+- Register 2 targets
+- `create-load-balancer` (type=network), verify type, ARN `/net/`
+- `create-listener` (TCP:9000)
+- Wait for NLB active (agent heartbeat)
+- Verify ENI has public IP
+- Wait for targets healthy (TCP health check)
+- Host TCP traffic test (nc 20x, verify round-robin)
+- Peer validation (nc from --peer node)
+- Deregister target, verify draining state
+- Cleanup: delete listener, LB, verify ENI removal, delete TG
 
-### Phase 6: Traffic Balancing — Round Robin
-- `curl` ALB ENI IP 20 times, parse `instance_id` from JSON response
-- Verify responses contain BOTH instance IDs (round-robin distribution)
-- Verify success rate >= 50%
+### Phase 3d: NLB Internal
+- Create TCP target group (port 9000), register 2 targets
+- `create-load-balancer` (type=network, scheme=internal)
+- Verify type=network, scheme=internal, ARN `/net/`
+- Verify ENI has NO public IP, DNS has `internal-` prefix
+- `create-listener` (TCP:9000)
+- Wait for NLB active (mgmt NIC heartbeat)
+- Wait for targets healthy (TCP health check)
+- Launch client VM (cloud-init nc's NLB private IP, serves results)
+- Poll client status.txt, fetch results, verify TCP responses
+- Terminate client VM
+- Cleanup: delete LB, verify ENI removal, delete TG
 
-### Phase 7: Single Target After Deregister
-- `deregister-targets` (remove second instance)
-- Wait for HAProxy reload (3s)
-- `curl` ALB 20 times
-- Verify ONLY the remaining instance responds
-- Verify success rate >= 50%
-
-### Phase 8: Re-register + Recovery
-- `register-targets` (re-add deregistered instance)
-- Wait for HAProxy reload (5s)
-- `curl` ALB 20 times
-- Verify BOTH instances responding again
+### Phase 4: Cleanup (trap)
+- Terminate app instances, wait for terminated
+- Delete key pair, subnet, IGW, VPC

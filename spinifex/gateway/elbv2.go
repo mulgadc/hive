@@ -10,6 +10,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/awsec2query"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	gateway_elbv2 "github.com/mulgadc/spinifex/spinifex/gateway/elbv2"
+	handlers_elbv2 "github.com/mulgadc/spinifex/spinifex/handlers/elbv2"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 )
 
@@ -74,6 +75,12 @@ var elbv2Actions = map[string]ELBv2Handler{
 	}),
 	"DescribeListeners": elbv2Handler(func(input *elbv2.DescribeListenersInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_elbv2.DescribeListeners(input, gw.NATSConn, accountID)
+	}),
+	"LBAgentHeartbeat": elbv2Handler(func(input *handlers_elbv2.LBAgentHeartbeatInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_elbv2.LBAgentHeartbeat(input, gw.NATSConn, accountID)
+	}),
+	"GetLBConfig": elbv2Handler(func(input *handlers_elbv2.GetLBConfigInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_elbv2.GetLBConfig(input, gw.NATSConn, accountID)
 	}),
 }
 

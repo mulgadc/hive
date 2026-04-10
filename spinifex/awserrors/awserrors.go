@@ -451,6 +451,7 @@ var (
 	ErrorELBv2InvalidScheme                = "InvalidScheme"
 	ErrorELBv2SubnetNotFound               = "SubnetNotFound"
 	ErrorELBv2AvailabilityZoneNotSupported = "AvailabilityZoneNotSupported"
+	ErrorELBv2InvalidConfigurationRequest  = "InvalidConfigurationRequest"
 )
 
 // ValidErrorCode returns the error code if it exists in ErrorLookup,
@@ -908,4 +909,5 @@ var ErrorLookup = map[string]ErrorMessage{
 	ErrorELBv2InvalidScheme:                {HTTPCode: 400, Message: "The specified scheme is not valid. Specify 'internet-facing' or 'internal'."},
 	ErrorELBv2SubnetNotFound:               {HTTPCode: 400, Message: "The specified subnet does not exist."},
 	ErrorELBv2AvailabilityZoneNotSupported: {HTTPCode: 400, Message: "The specified Availability Zone is not supported."},
+	ErrorELBv2InvalidConfigurationRequest:  {HTTPCode: 400, Message: "Security groups are not supported for load balancers with type 'network'."},
 }

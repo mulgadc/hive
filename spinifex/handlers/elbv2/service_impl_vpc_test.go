@@ -6,6 +6,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/elbv2"
+	"github.com/mulgadc/spinifex/spinifex/config"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
 	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/stretchr/testify/assert"
@@ -22,10 +23,12 @@ func setupTestServiceWithVPC(t *testing.T) (*ELBv2ServiceImpl, *handlers_ec2_vpc
 	vpcSvc, err := handlers_ec2_vpc.NewVPCServiceImplWithNATS(nil, nc)
 	require.NoError(t, err)
 
-	// Create ELBv2 service with VPC wired in
-	elbv2Svc, err := NewELBv2ServiceImplWithNATS(nil, nc)
+	// Create ELBv2 service with VPC wired in.
+	// Use DevNetworking=true so single-subnet tests aren't blocked by multi-AZ validation.
+	cfg := &config.Config{Daemon: config.DaemonConfig{DevNetworking: true}}
+	elbv2Svc, err := NewELBv2ServiceImplWithNATS(cfg, nc)
 	require.NoError(t, err)
-	elbv2Svc.SetVPCService(vpcSvc)
+	elbv2Svc.VPCService = vpcSvc
 
 	// Create a VPC and subnet for tests
 	vpcOut, err := vpcSvc.CreateVpc(&ec2.CreateVpcInput{
@@ -201,6 +204,314 @@ func TestCreateLoadBalancer_WithoutVPCService(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, out.LoadBalancers[0].VpcId)
 	assert.Empty(t, out.LoadBalancers[0].AvailabilityZones)
+}
+
+// --- Scheme networking integration tests ---
+
+func TestCreateLoadBalancer_InternetFacing_AllocatesPublicIP(t *testing.T) {
+	svc, vpcSvc := setupTestServiceWithVPC(t)
+
+	subnets, err := vpcSvc.DescribeSubnets(&ec2.DescribeSubnetsInput{}, testAccountID)
+	require.NoError(t, err)
+	subnetID := *subnets.Subnets[0].SubnetId
+
+	mock := &mockSystemInstanceLauncher{
+		launchResult: &SystemInstanceOutput{
+			InstanceID: "i-alb-pub",
+			PrivateIP:  "10.0.1.5",
+			PublicIP:   "203.0.113.50",
+		},
+	}
+	svc.InstanceLauncher = mock
+	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
+	svc.GatewayURL = "https://10.0.0.1:9999"
+	svc.SystemAccessKey = "AKID"
+	svc.SystemSecretKey = "SECRET"
+
+	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name:    aws.String("inet-alb"),
+		Subnets: []*string{aws.String(subnetID)},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	lb := out.LoadBalancers[0]
+	assert.Equal(t, "internet-facing", *lb.Scheme)
+
+	// Verify launcher was called with internet-facing scheme
+	require.Len(t, mock.launchCalls, 1)
+	assert.Equal(t, SchemeInternetFacing, mock.launchCalls[0].Scheme)
+
+	// Verify AZ includes public IP for internet-facing
+	require.Len(t, lb.AvailabilityZones, 1)
+	require.NotEmpty(t, lb.AvailabilityZones[0].LoadBalancerAddresses)
+	assert.Equal(t, "203.0.113.50", *lb.AvailabilityZones[0].LoadBalancerAddresses[0].IpAddress)
+}
+
+func TestCreateLoadBalancer_Internal_NoPublicIP(t *testing.T) {
+	svc, vpcSvc := setupTestServiceWithVPC(t)
+
+	subnets, err := vpcSvc.DescribeSubnets(&ec2.DescribeSubnetsInput{}, testAccountID)
+	require.NoError(t, err)
+	subnetID := *subnets.Subnets[0].SubnetId
+
+	mock := &mockSystemInstanceLauncher{
+		launchResult: &SystemInstanceOutput{
+			InstanceID: "i-alb-priv",
+			PrivateIP:  "10.0.1.6",
+			// No PublicIP — internal scheme
+		},
+	}
+	svc.InstanceLauncher = mock
+	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
+	svc.GatewayURL = "https://10.0.0.1:9999"
+	svc.SystemAccessKey = "AKID"
+	svc.SystemSecretKey = "SECRET"
+
+	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name:    aws.String("internal-only"),
+		Scheme:  aws.String("internal"),
+		Subnets: []*string{aws.String(subnetID)},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	lb := out.LoadBalancers[0]
+	assert.Equal(t, "internal", *lb.Scheme)
+
+	// Verify launcher was called with internal scheme
+	require.Len(t, mock.launchCalls, 1)
+	assert.Equal(t, SchemeInternal, mock.launchCalls[0].Scheme)
+
+	// Verify AZ does NOT include public IP
+	require.Len(t, lb.AvailabilityZones, 1)
+	assert.Empty(t, lb.AvailabilityZones[0].LoadBalancerAddresses)
+}
+
+func TestCreateLoadBalancer_NLB_Internal_NoPublicIP(t *testing.T) {
+	svc, vpcSvc := setupTestServiceWithVPC(t)
+
+	subnets, err := vpcSvc.DescribeSubnets(&ec2.DescribeSubnetsInput{}, testAccountID)
+	require.NoError(t, err)
+	subnetID := *subnets.Subnets[0].SubnetId
+
+	mock := &mockSystemInstanceLauncher{
+		launchResult: &SystemInstanceOutput{
+			InstanceID: "i-nlb-priv",
+			PrivateIP:  "10.0.1.10",
+			// No PublicIP — internal scheme
+		},
+	}
+	svc.InstanceLauncher = mock
+	svc.SetSystemAMIFunc(func() string { return "ami-nlb-test" })
+	svc.GatewayURL = "https://10.0.0.1:9999"
+	svc.SystemAccessKey = "AKID"
+	svc.SystemSecretKey = "SECRET"
+
+	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name:    aws.String("nlb-internal"),
+		Type:    aws.String("network"),
+		Scheme:  aws.String("internal"),
+		Subnets: []*string{aws.String(subnetID)},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	lb := out.LoadBalancers[0]
+	assert.Equal(t, "internal", *lb.Scheme)
+	assert.Equal(t, "network", *lb.Type)
+	assert.Contains(t, *lb.DNSName, "internal-")
+	assert.Contains(t, *lb.LoadBalancerArn, "loadbalancer/net/nlb-internal")
+
+	// Verify launcher was called with internal scheme
+	require.Len(t, mock.launchCalls, 1)
+	assert.Equal(t, SchemeInternal, mock.launchCalls[0].Scheme)
+
+	// Verify AZ does NOT include public IP
+	require.Len(t, lb.AvailabilityZones, 1)
+	assert.Empty(t, lb.AvailabilityZones[0].LoadBalancerAddresses)
+
+	// Verify no security groups (NLBs don't support them)
+	assert.Empty(t, lb.SecurityGroups)
+}
+
+func TestDeleteLoadBalancer_TerminatesVM_WithPublicIP(t *testing.T) {
+	svc, vpcSvc := setupTestServiceWithVPC(t)
+
+	subnets, err := vpcSvc.DescribeSubnets(&ec2.DescribeSubnetsInput{}, testAccountID)
+	require.NoError(t, err)
+	subnetID := *subnets.Subnets[0].SubnetId
+
+	mock := &mockSystemInstanceLauncher{
+		launchResult: &SystemInstanceOutput{
+			InstanceID: "i-alb-del",
+			PrivateIP:  "10.0.1.7",
+			PublicIP:   "203.0.113.51",
+		},
+		terminateDone: make(chan struct{}),
+	}
+	svc.InstanceLauncher = mock
+	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
+	svc.GatewayURL = "https://10.0.0.1:9999"
+	svc.SystemAccessKey = "AKID"
+	svc.SystemSecretKey = "SECRET"
+
+	lbOut, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name:    aws.String("del-pub-alb"),
+		Subnets: []*string{aws.String(subnetID)},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Verify ENI exists before delete
+	eniDesc, _ := vpcSvc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{}, testAccountID)
+	assert.Len(t, eniDesc.NetworkInterfaces, 1)
+
+	// Delete ALB
+	_, err = svc.DeleteLoadBalancer(&elbv2.DeleteLoadBalancerInput{
+		LoadBalancerArn: lbOut.LoadBalancers[0].LoadBalancerArn,
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Wait for async VM termination goroutine to complete
+	mock.waitTerminate()
+	mock.mu.Lock()
+	assert.Len(t, mock.terminateCalls, 1)
+	assert.Equal(t, "i-alb-del", mock.terminateCalls[0])
+	mock.mu.Unlock()
+
+	// Verify ENIs were cleaned up (detach + delete happens in DeleteLoadBalancer)
+	eniDesc, _ = vpcSvc.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{}, testAccountID)
+	assert.Empty(t, eniDesc.NetworkInterfaces)
+}
+
+func TestDescribeLoadBalancers_InternetFacing_IncludesPublicIP(t *testing.T) {
+	svc, vpcSvc := setupTestServiceWithVPC(t)
+
+	subnets, err := vpcSvc.DescribeSubnets(&ec2.DescribeSubnetsInput{}, testAccountID)
+	require.NoError(t, err)
+	subnetID := *subnets.Subnets[0].SubnetId
+
+	mock := &mockSystemInstanceLauncher{
+		launchResult: &SystemInstanceOutput{
+			InstanceID: "i-alb-desc",
+			PrivateIP:  "10.0.1.8",
+			PublicIP:   "203.0.113.52",
+		},
+	}
+	svc.InstanceLauncher = mock
+	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
+	svc.GatewayURL = "https://10.0.0.1:9999"
+	svc.SystemAccessKey = "AKID"
+	svc.SystemSecretKey = "SECRET"
+
+	_, err = svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name:    aws.String("desc-pub-alb"),
+		Subnets: []*string{aws.String(subnetID)},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	// Describe and verify public IP is in the response
+	desc, err := svc.DescribeLoadBalancers(&elbv2.DescribeLoadBalancersInput{
+		Names: []*string{aws.String("desc-pub-alb")},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, desc.LoadBalancers, 1)
+
+	lb := desc.LoadBalancers[0]
+	require.Len(t, lb.AvailabilityZones, 1)
+	require.NotEmpty(t, lb.AvailabilityZones[0].LoadBalancerAddresses)
+	assert.Equal(t, "203.0.113.52", *lb.AvailabilityZones[0].LoadBalancerAddresses[0].IpAddress)
+}
+
+func TestDescribeLoadBalancers_Internal_NoPublicIP(t *testing.T) {
+	svc, vpcSvc := setupTestServiceWithVPC(t)
+
+	subnets, err := vpcSvc.DescribeSubnets(&ec2.DescribeSubnetsInput{}, testAccountID)
+	require.NoError(t, err)
+	subnetID := *subnets.Subnets[0].SubnetId
+
+	mock := &mockSystemInstanceLauncher{
+		launchResult: &SystemInstanceOutput{
+			InstanceID: "i-alb-int",
+			PrivateIP:  "10.0.1.9",
+		},
+	}
+	svc.InstanceLauncher = mock
+	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
+	svc.GatewayURL = "https://10.0.0.1:9999"
+	svc.SystemAccessKey = "AKID"
+	svc.SystemSecretKey = "SECRET"
+
+	_, err = svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name:    aws.String("desc-int-alb"),
+		Scheme:  aws.String("internal"),
+		Subnets: []*string{aws.String(subnetID)},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	desc, err := svc.DescribeLoadBalancers(&elbv2.DescribeLoadBalancersInput{
+		Names: []*string{aws.String("desc-int-alb")},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, desc.LoadBalancers, 1)
+
+	lb := desc.LoadBalancers[0]
+	require.Len(t, lb.AvailabilityZones, 1)
+	assert.Empty(t, lb.AvailabilityZones[0].LoadBalancerAddresses)
+	// Verify DNS has internal prefix
+	assert.Contains(t, *lb.DNSName, "internal-desc-int-alb")
+}
+
+func TestCreateLoadBalancer_LaunchFailure_SetsStateFailed(t *testing.T) {
+	svc, vpcSvc := setupTestServiceWithVPC(t)
+
+	subnets, err := vpcSvc.DescribeSubnets(&ec2.DescribeSubnetsInput{}, testAccountID)
+	require.NoError(t, err)
+	subnetID := *subnets.Subnets[0].SubnetId
+
+	mock := &mockSystemInstanceLauncher{
+		launchErr: assert.AnError,
+	}
+	svc.InstanceLauncher = mock
+	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
+	svc.GatewayURL = "https://10.0.0.1:9999"
+	svc.SystemAccessKey = "AKID"
+	svc.SystemSecretKey = "SECRET"
+
+	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name:    aws.String("fail-launch-alb"),
+		Subnets: []*string{aws.String(subnetID)},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	lb := out.LoadBalancers[0]
+	assert.Equal(t, StateFailed, *lb.State.Code)
+}
+
+func TestCreateLoadBalancer_MissingCredentials_SetsStateFailed(t *testing.T) {
+	svc, vpcSvc := setupTestServiceWithVPC(t)
+
+	subnets, err := vpcSvc.DescribeSubnets(&ec2.DescribeSubnetsInput{}, testAccountID)
+	require.NoError(t, err)
+	subnetID := *subnets.Subnets[0].SubnetId
+
+	mock := &mockSystemInstanceLauncher{
+		launchResult: &SystemInstanceOutput{
+			InstanceID: "i-should-not-launch",
+			PrivateIP:  "10.0.1.99",
+		},
+	}
+	svc.InstanceLauncher = mock
+	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
+	// Deliberately NOT setting credentials
+
+	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
+		Name:    aws.String("no-creds-alb"),
+		Subnets: []*string{aws.String(subnetID)},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	lb := out.LoadBalancers[0]
+	assert.Equal(t, StateFailed, *lb.State.Code)
+	// Verify launcher was never called
+	assert.Empty(t, mock.launchCalls)
 }
 
 func TestENI_RequesterManagedFlag(t *testing.T) {

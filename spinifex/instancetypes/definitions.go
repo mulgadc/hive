@@ -101,6 +101,12 @@ var memorySizes = []instanceSize{
 // memorySizesSmall is memorySizes without 12xlarge and 24xlarge (older/ARM families).
 var memorySizesSmall = slices.Clone(memorySizes[:6])
 
+// systemSizes defines internal-only instance types for system VMs (LB, NAT GW, etc.).
+// These are registered in the type map for allocation but excluded from DescribeInstanceTypes.
+var systemSizes = []instanceSize{
+	{"micro", 1, 0.125}, // 1 vCPU, 128 MB
+}
+
 // instanceFamilyDefs defines all supported instance families with their vendor and sizes.
 //
 // We support the core families across burstable, general purpose, compute optimized,
@@ -154,6 +160,9 @@ var instanceFamilyDefs = []instanceFamilyDef{
 	{name: "c8i", sizes: computeSizes, currentGen: true},
 	{name: "c8a", sizes: computeSizes, currentGen: true},
 	{name: "c8g", sizes: computeSizesSmall, currentGen: true},
+
+	// System (internal-only, not exposed via DescribeInstanceTypes)
+	{name: "sys", sizes: systemSizes, currentGen: true},
 
 	// Memory Optimized (1:8 vCPU:memory)
 	{name: "r4", sizes: memorySizesSmall, currentGen: false},

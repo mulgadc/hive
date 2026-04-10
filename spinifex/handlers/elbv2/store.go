@@ -172,6 +172,49 @@ func (s *Store) GetTargetGroupByArn(arn string) (*TargetGroupRecord, error) {
 	return nil, nil
 }
 
+// TargetGroupsForLB returns only the target groups attached to a load balancer
+// via its listeners. It follows LB ID → LB ARN → listeners → TG ARNs → TGs.
+func (s *Store) TargetGroupsForLB(lbID string) ([]*TargetGroupRecord, error) {
+	lb, err := s.GetLoadBalancer(lbID)
+	if err != nil {
+		return nil, fmt.Errorf("get load balancer %s: %w", lbID, err)
+	}
+	if lb == nil {
+		return nil, nil
+	}
+
+	listeners, err := s.ListListenersByLB(lb.LoadBalancerArn)
+	if err != nil {
+		return nil, fmt.Errorf("list listeners for %s: %w", lbID, err)
+	}
+
+	// Collect unique TG IDs from listener actions.
+	seen := make(map[string]struct{})
+	for _, l := range listeners {
+		for _, a := range l.DefaultActions {
+			if a.TargetGroupArn == "" {
+				continue
+			}
+			// TG ARN format: arn:aws:elasticloadbalancing:{region}:{account}:targetgroup/{name}/{tgID}
+			if idx := strings.LastIndex(a.TargetGroupArn, "/"); idx >= 0 {
+				seen[a.TargetGroupArn[idx+1:]] = struct{}{}
+			}
+		}
+	}
+
+	tgs := make([]*TargetGroupRecord, 0, len(seen))
+	for tgID := range seen {
+		tg, err := s.GetTargetGroup(tgID)
+		if err != nil {
+			return nil, fmt.Errorf("get target group %s: %w", tgID, err)
+		}
+		if tg != nil {
+			tgs = append(tgs, tg)
+		}
+	}
+	return tgs, nil
+}
+
 // GetTargetGroupByName finds a target group by name within a VPC.
 func (s *Store) GetTargetGroupByName(name, vpcID string) (*TargetGroupRecord, error) {
 	tgs, err := s.ListTargetGroups()

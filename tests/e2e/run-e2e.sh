@@ -251,7 +251,7 @@ echo "Using image: $IMAGE_NAME"
 
 # AMI already imported by bootstrap-install.sh — discover the existing AMI
 echo "Discovering existing AMI (imported by bootstrap)..."
-AMI_ID=$(aws ec2 describe-images --query 'Images[0].ImageId' --output text)
+AMI_ID=$(aws ec2 describe-images --filters "Name=name,Values=ami-${IMAGE_NAME}" --query 'Images[0].ImageId' --output text)
 
 if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
     echo "Failed to capture AMI ID"
@@ -3131,6 +3131,14 @@ if [ -n "$CUSTOM_AMI_SNAP_ID" ]; then
     echo "Deleting CreateImage backing snapshot $CUSTOM_AMI_SNAP_ID before termination..."
     aws ec2 delete-snapshot --snapshot-id "$CUSTOM_AMI_SNAP_ID"
     echo "CreateImage snapshot deleted"
+fi
+
+# Remove the custom AMI from predastore so later test suites (e.g. run-lb-e2e.sh)
+# don't discover an AMI whose backing snapshot has been deleted.
+if [ -n "$CUSTOM_AMI_ID" ]; then
+    echo "Removing custom AMI $CUSTOM_AMI_ID from predastore..."
+    $AWS_S3 rm "s3://predastore/$CUSTOM_AMI_ID/" --recursive 2>/dev/null || true
+    echo "Custom AMI removed"
 fi
 
 # Terminate instance (terminate-instances) and verify termination (describe-instances)

@@ -49,3 +49,11 @@ func (d *Daemon) handleELBv2DeleteListener(msg *nats.Msg) {
 func (d *Daemon) handleELBv2DescribeListeners(msg *nats.Msg) {
 	handleNATSRequest(msg, d.elbv2Service.DescribeListeners)
 }
+
+func (d *Daemon) handleELBv2LBAgentHeartbeat(msg *nats.Msg) {
+	handleNATSRequest(msg, d.elbv2Service.LBAgentHeartbeat)
+}
+
+func (d *Daemon) handleELBv2GetLBConfig(msg *nats.Msg) {
+	handleNATSRequest(msg, d.elbv2Service.GetLBConfig)
+}

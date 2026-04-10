@@ -320,6 +320,17 @@ func humanBytes(b uint64) string {
 	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTPEZY"[exp])
 }
 
+// HashMAC generates a deterministic locally-administered unicast MAC address.
+// prefix is the first 3 octets (e.g. "02:00:00"), id is hashed to produce the
+// remaining 3 octets.
+func HashMAC(prefix, id string) string {
+	h := uint32(0)
+	for _, c := range id {
+		h = h*31 + uint32(c) // #nosec G115 -- intentional overflow for hashing
+	}
+	return fmt.Sprintf("%s:%02x:%02x:%02x", prefix, (h>>16)&0xff, (h>>8)&0xff, h&0xff)
+}
+
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {

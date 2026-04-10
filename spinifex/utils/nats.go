@@ -167,6 +167,36 @@ func PublishEvent(nc *nats.Conn, topic string, event any) {
 	}
 }
 
+// RequestEvent marshals event as JSON and sends a NATS request, waiting for a
+// response. This ensures the subscriber has processed the event before the
+// caller continues. Returns an error if the request times out or the responder
+// reports an error.
+func RequestEvent(nc *nats.Conn, topic string, event any, timeout time.Duration) error {
+	if nc == nil {
+		return nil
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("marshal %s event: %w", topic, err)
+	}
+	resp, err := nc.Request(topic, data, timeout)
+	if err != nil {
+		return fmt.Errorf("%s request: %w", topic, err)
+	}
+	// vpcd responds with {"success":true} or {"success":false,"error":"..."}.
+	var result struct {
+		Success bool   `json:"success"`
+		Error   string `json:"error,omitempty"`
+	}
+	if jsonErr := json.Unmarshal(resp.Data, &result); jsonErr != nil {
+		return fmt.Errorf("%s: unmarshal response: %w", topic, jsonErr)
+	}
+	if !result.Success {
+		return fmt.Errorf("%s: %s", topic, result.Error)
+	}
+	return nil
+}
+
 // AccountIDFromMsg extracts the caller's account ID from a NATS message header.
 // Returns the account ID, or empty string if the header is not set.
 func AccountIDFromMsg(msg *nats.Msg) string {
