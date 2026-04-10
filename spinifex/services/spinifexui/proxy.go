@@ -64,9 +64,9 @@ func newReverseProxy(backendHost, pathPrefix string, transport *http.Transport) 
 			slog.Error("Proxy error", "backend", backendHost, "path", r.URL.Path, "error", err)
 			w.Header().Set("Content-Type", "application/xml")
 			w.WriteHeader(http.StatusBadGateway)
-			fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>`+
+			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>`+
 				`<Error><Code>BadGateway</Code>`+
-				`<Message>upstream connection to %s failed</Message></Error>`, backendHost)
+				`<Message>upstream connection failed</Message></Error>`)
 		},
 	}
 

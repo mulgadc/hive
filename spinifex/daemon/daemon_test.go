@@ -28,6 +28,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/config"
 	handlers_ec2_instance "github.com/mulgadc/spinifex/spinifex/handlers/ec2/instance"
 	handlers_ec2_volume "github.com/mulgadc/spinifex/spinifex/handlers/ec2/volume"
+	"github.com/mulgadc/spinifex/spinifex/instancetypes"
 	"github.com/mulgadc/spinifex/spinifex/objectstore"
 	"github.com/mulgadc/spinifex/spinifex/qmp"
 	"github.com/mulgadc/spinifex/spinifex/types"
@@ -816,7 +817,10 @@ func TestHandleEC2DescribeInstanceTypes(t *testing.T) {
 		// With 2 vCPUs and 16GB, every type with 2 vCPUs and <=16GB memory should have 1 slot.
 		// Calculate expected by counting fitting types directly.
 		expectedSlots := 0
-		for _, it := range daemon.resourceMgr.instanceTypes {
+		for name, it := range daemon.resourceMgr.instanceTypes {
+			if instancetypes.IsSystemType(name) {
+				continue
+			}
 			vcpus := *it.VCpuInfo.DefaultVCpus
 			memGB := float64(*it.MemoryInfo.SizeInMiB) / 1024.0
 			if vcpus <= 2 && memGB <= 16.0 {
@@ -1406,9 +1410,12 @@ func TestInstanceTypeSubscriptions(t *testing.T) {
 		handler := func(msg *nats.Msg) {}
 		rm.initSubscriptions(nc, handler, "test-node")
 
-		// Count how many types actually fit on this machine
+		// Count how many types actually fit on this machine (excluding system types)
 		fittableTypes := 0
-		for _, typeInfo := range rm.instanceTypes {
+		for name, typeInfo := range rm.instanceTypes {
+			if instancetypes.IsSystemType(name) {
+				continue
+			}
 			if rm.canAllocate(typeInfo, 1) >= 1 {
 				fittableTypes++
 			}

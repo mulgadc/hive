@@ -2,16 +2,19 @@ package handlers_elbv2
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 )
 
 // mockSystemInstanceLauncher implements SystemInstanceLauncher for tests.
 type mockSystemInstanceLauncher struct {
+	mu             sync.Mutex
 	launchCalls    []*SystemInstanceInput
 	terminateCalls []string
 	launchResult   *SystemInstanceOutput
 	launchErr      error
 	terminateErr   error
+	terminateDone  chan struct{} // closed after TerminateSystemInstance completes
 }
 
 func (m *mockSystemInstanceLauncher) LaunchSystemInstance(input *SystemInstanceInput) (*SystemInstanceOutput, error) {
@@ -20,8 +23,20 @@ func (m *mockSystemInstanceLauncher) LaunchSystemInstance(input *SystemInstanceI
 }
 
 func (m *mockSystemInstanceLauncher) TerminateSystemInstance(instanceID string) error {
+	m.mu.Lock()
 	m.terminateCalls = append(m.terminateCalls, instanceID)
+	m.mu.Unlock()
+	if m.terminateDone != nil {
+		close(m.terminateDone)
+	}
 	return m.terminateErr
+}
+
+// waitTerminate blocks until TerminateSystemInstance has been called.
+func (m *mockSystemInstanceLauncher) waitTerminate() {
+	if m.terminateDone != nil {
+		<-m.terminateDone
+	}
 }
 
 func TestSystemInstanceInput_Fields(t *testing.T) {

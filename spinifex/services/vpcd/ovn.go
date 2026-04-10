@@ -75,6 +75,8 @@ type OVNClient interface {
 	// NAT rules
 	AddNAT(ctx context.Context, routerName string, nat *nbdb.NAT) error
 	DeleteNAT(ctx context.Context, routerName string, natType, logicalIP string) error
+	DeleteNATByExternalIP(ctx context.Context, routerName string, natType, externalIP string) error
+	DeleteAllNATsByExternalIP(ctx context.Context, natType, externalIP string) (int, error)
 
 	// Static routes
 	AddStaticRoute(ctx context.Context, routerName string, route *nbdb.LogicalRouterStaticRoute) error
@@ -629,6 +631,105 @@ func (c *LiveOVNClient) DeleteNAT(ctx context.Context, routerName string, natTyp
 		return fmt.Errorf("delete NAT transact: %w", err)
 	}
 	return nil
+}
+
+// DeleteNATByExternalIP removes a NAT rule matching the given external IP.
+// Returns an error if no matching rule is found (callers can ignore this).
+func (c *LiveOVNClient) DeleteNATByExternalIP(ctx context.Context, routerName string, natType, externalIP string) error {
+	var nats []nbdb.NAT
+	err := c.client.WhereCache(func(n *nbdb.NAT) bool {
+		return n.Type == natType && n.ExternalIP == externalIP
+	}).List(ctx, &nats)
+	if err != nil {
+		return fmt.Errorf("find NAT by external IP: %w", err)
+	}
+	if len(nats) == 0 {
+		return fmt.Errorf("NAT %s external_ip=%s not found", natType, externalIP)
+	}
+
+	lr, err := c.GetLogicalRouter(ctx, routerName)
+	if err != nil {
+		return fmt.Errorf("get logical router for NAT delete: %w", err)
+	}
+
+	var allOps []ovsdb.Operation
+	for i := range nats {
+		nat := &nats[i]
+		mutateOps, mErr := c.client.Where(lr).Mutate(lr, model.Mutation{
+			Field:   &lr.NAT,
+			Mutator: "delete",
+			Value:   []string{nat.UUID},
+		})
+		if mErr != nil {
+			return fmt.Errorf("mutate router NAT ops: %w", mErr)
+		}
+		deleteOps, dErr := c.client.Where(nat).Delete()
+		if dErr != nil {
+			return fmt.Errorf("delete NAT ops: %w", dErr)
+		}
+		allOps = append(allOps, mutateOps...)
+		allOps = append(allOps, deleteOps...)
+	}
+
+	if err := c.transactOps(ctx, allOps); err != nil {
+		return fmt.Errorf("delete NAT by external IP transact: %w", err)
+	}
+	return nil
+}
+
+// DeleteAllNATsByExternalIP removes all NAT rules matching the given external
+// IP from every router that references them. This handles cross-VPC stale NAT
+// rules that remain when vpc.delete-nat (fire-and-forget) hasn't been processed
+// before an IP is reused by a different VPC. Returns the number of rules deleted.
+func (c *LiveOVNClient) DeleteAllNATsByExternalIP(ctx context.Context, natType, externalIP string) (int, error) {
+	var nats []nbdb.NAT
+	if err := c.client.WhereCache(func(n *nbdb.NAT) bool {
+		return n.Type == natType && n.ExternalIP == externalIP
+	}).List(ctx, &nats); err != nil {
+		return 0, fmt.Errorf("find NAT by external IP: %w", err)
+	}
+	if len(nats) == 0 {
+		return 0, nil
+	}
+
+	routers, err := c.ListLogicalRouters(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("list routers for stale NAT cleanup: %w", err)
+	}
+
+	staleUUIDs := make(map[string]struct{}, len(nats))
+	for _, n := range nats {
+		staleUUIDs[n.UUID] = struct{}{}
+	}
+
+	// Build a single transaction: remove NAT refs from all routers, then delete NAT rows.
+	var allOps []ovsdb.Operation
+	for i := range routers {
+		lr := &routers[i]
+		for _, natUUID := range lr.NAT {
+			if _, stale := staleUUIDs[natUUID]; !stale {
+				continue
+			}
+			ops, err := c.client.Where(lr).Mutate(lr, model.Mutation{
+				Field: &lr.NAT, Mutator: "delete", Value: []string{natUUID},
+			})
+			if err != nil {
+				return 0, fmt.Errorf("mutate router %s: %w", lr.Name, err)
+			}
+			allOps = append(allOps, ops...)
+		}
+	}
+	for i := range nats {
+		ops, err := c.client.Where(&nats[i]).Delete()
+		if err != nil {
+			return 0, fmt.Errorf("delete NAT row: %w", err)
+		}
+		allOps = append(allOps, ops...)
+	}
+	if err := c.transactOps(ctx, allOps); err != nil {
+		return 0, fmt.Errorf("delete all NATs by external IP: %w", err)
+	}
+	return len(nats), nil
 }
 
 func (c *LiveOVNClient) AddStaticRoute(ctx context.Context, routerName string, route *nbdb.LogicalRouterStaticRoute) error {

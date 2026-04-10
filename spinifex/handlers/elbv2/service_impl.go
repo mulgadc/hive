@@ -2,9 +2,11 @@ package handlers_elbv2
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -24,21 +26,50 @@ const (
 	elbv2ManagedByValue = "elbv2"
 	// elbv2LBTag is the tag key storing the parent LB ARN on managed ENIs.
 	elbv2LBTag = "spinifex:lb-arn"
+
+	// heartbeatPersistInterval controls how often a no-op heartbeat (no state
+	// change) writes the full LoadBalancerRecord back to KV. State transitions
+	// always persist immediately.
+	heartbeatPersistInterval = 60 * time.Second
 )
 
-// albVMUserData generates cloud-config user data for an ALB VM.
-// Uses #cloud-config format so it merges with the base cloud-init config
-// instead of going through write_files/runcmd (which requires /bin/bash on the
-// base template). HAProxy and alb-agent are pre-installed in the Alpine image
-// built by scripts/build-alb-image.sh.
-func albVMUserData(lbID, natsURL string) string {
-	if natsURL == "" {
-		natsURL = "nats://127.0.0.1:4222"
+// lbVMUserData generates cloud-config user data for a load balancer VM.
+// Uses write_files to populate /etc/conf.d/lb-agent with the lb-id, gateway
+// URL, and system credentials for SigV4 auth. The CA cert is already injected
+// by the instance service's cloud-init template (same as regular EC2 VMs).
+// Cloud-init guarantees write_files runs before runcmd. The service is NOT
+// enabled at boot in the image — cloud-init is the sole trigger so the env
+// vars are always present before the agent starts.
+func (s *ELBv2ServiceImpl) lbVMUserData(lbID string) (string, error) {
+	if s.GatewayURL == "" || s.SystemAccessKey == "" || s.SystemSecretKey == "" {
+		return "", fmt.Errorf("missing system credentials: gatewayURL=%q accessKey=%q secretKey-set=%t",
+			s.GatewayURL, s.SystemAccessKey, s.SystemSecretKey != "")
 	}
-	return fmt.Sprintf(`#cloud-config
-runcmd:
-  - [ "sh", "-c", "/usr/local/bin/alb-agent --lb-id=%s --nats=%s > /var/log/alb-agent.log 2>&1 &" ]
-`, lbID, natsURL)
+
+	cfg := fmt.Sprintf(`#cloud-config
+write_files:
+  - path: /etc/conf.d/lb-agent
+    content: |
+      LB_LB_ID=%s
+      LB_GATEWAY_URL=%s
+      LB_ACCESS_KEY=%s
+      LB_SECRET_KEY=%s
+      LB_REGION=%s
+`, lbID, s.GatewayURL, s.SystemAccessKey, s.SystemSecretKey, s.region)
+
+	// When AWSGW binds to a specific IP (multi-node), add a host route via
+	// the management NIC so the agent can reach the gateway. bootcmd runs
+	// early enough that networking is configured before lb-agent starts.
+	if s.MgmtRouteGateway != "" && s.MgmtRouteTarget != "" {
+		cfg += fmt.Sprintf(`bootcmd:
+  - [ "ip", "route", "add", "%s/32", "via", "%s" ]
+`, s.MgmtRouteTarget, s.MgmtRouteGateway)
+	}
+
+	cfg += `runcmd:
+  - [ "rc-service", "lb-agent", "start" ]
+`
+	return cfg, nil
 }
 
 // Ensure ELBv2ServiceImpl implements ELBv2Service at compile time.
@@ -46,17 +77,29 @@ var _ ELBv2Service = (*ELBv2ServiceImpl)(nil)
 
 // ELBv2ServiceImpl implements ELBv2 operations with NATS JetStream persistence.
 type ELBv2ServiceImpl struct {
-	config           *config.Config
-	store            *Store
-	nc               *nats.Conn                       // NATS connection for publishing config to ALB VMs
-	vpcService       *handlers_ec2_vpc.VPCServiceImpl // nil-safe: ENI ops skipped when nil (e.g. in tests)
-	instanceLauncher SystemInstanceLauncher           // nil-safe: system VM ops skipped when nil
-	nodeID           string
-	region           string
-	systemAMI        string // AMI ID for system VMs (ALB VMs), set by daemon
-	natsURL          string // NATS URL for ALB VM cloud-init, set by daemon
-	ctx              context.Context
-	cancel           context.CancelFunc
+	config                     *config.Config
+	store                      *Store
+	nc                         *nats.Conn                       // NATS connection for JetStream KV store
+	VPCService                 *handlers_ec2_vpc.VPCServiceImpl // nil-safe: ENI ops skipped when nil (e.g. in tests)
+	InstanceLauncher           SystemInstanceLauncher           // nil-safe: system VM ops skipped when nil
+	SystemAccessKey            string                           // System account access key for ALB agent SigV4 auth
+	SystemSecretKey            string                           // System account secret key for ALB agent SigV4 auth
+	GatewayURL                 string                           // AWS gateway URL for ALB agent outbound connections
+	MgmtRouteGateway           string                           // br-mgmt IP (next-hop for mgmt route); empty when AWSGW is on 0.0.0.0
+	MgmtRouteTarget            string                           // AWSGW bind IP to route via mgmt NIC
+	nodeID                     string
+	region                     string
+	systemAMI                  string        // AMI ID for system VMs (ALB VMs); resolved lazily via systemAMIFunc
+	systemAMIFunc              func() string // returns the current system AMI ID (queries image store)
+	systemAMIMu                sync.Mutex    // guards lazy resolution of systemAMI
+	systemAMIResolved          bool          // true once systemAMI has been resolved to a non-empty value
+	systemInstanceType         string        // instance type for system VMs; resolved lazily via systemInstanceTypeFunc
+	systemInstanceTypeFunc     func() string // returns the smallest available instance type
+	systemInstanceTypeMu       sync.Mutex    // guards lazy resolution of systemInstanceType
+	systemInstanceTypeResolved bool          // true once systemInstanceType has been resolved to a non-empty value
+	ctx                        context.Context
+	cancel                     context.CancelFunc
+	hc                         *healthChecker
 }
 
 // NewELBv2ServiceImplWithNATS creates an ELBv2 service backed by JetStream KV.
@@ -76,6 +119,8 @@ func NewELBv2ServiceImplWithNATS(cfg *config.Config, nc *nats.Conn) (*ELBv2Servi
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	hc := newHealthChecker(store)
+
 	return &ELBv2ServiceImpl{
 		config: cfg,
 		store:  store,
@@ -84,46 +129,82 @@ func NewELBv2ServiceImplWithNATS(cfg *config.Config, nc *nats.Conn) (*ELBv2Servi
 		region: region,
 		ctx:    ctx,
 		cancel: cancel,
+		hc:     hc,
 	}, nil
 }
 
-// Close cancels background goroutines (e.g. waitForAgentReady).
+// Close cancels background goroutines.
 func (s *ELBv2ServiceImpl) Close() {
 	if s.cancel != nil {
 		s.cancel()
 	}
 }
 
-// SetVPCService sets the VPC service for ENI management. Called by the daemon
-// after both services are initialized.
-func (s *ELBv2ServiceImpl) SetVPCService(vpcService *handlers_ec2_vpc.VPCServiceImpl) {
-	s.vpcService = vpcService
+// SetSystemAMIFunc sets a function that resolves the current system AMI ID.
+// This is called at request time so the AMI is discovered even if imported
+// after the daemon starts.
+func (s *ELBv2ServiceImpl) SetSystemAMIFunc(fn func() string) {
+	s.systemAMIMu.Lock()
+	defer s.systemAMIMu.Unlock()
+	s.systemAMIFunc = fn
+	s.systemAMI = ""
+	s.systemAMIResolved = false
 }
 
-// SetInstanceLauncher sets the system instance launcher for ALB VM lifecycle.
-// Called by the daemon after initialization.
-func (s *ELBv2ServiceImpl) SetInstanceLauncher(launcher SystemInstanceLauncher) {
-	s.instanceLauncher = launcher
+// getSystemAMI returns the system AMI ID, resolving it lazily if needed.
+// Only caches non-empty results so the resolver retries when the image
+// has not been imported yet.
+func (s *ELBv2ServiceImpl) getSystemAMI() string {
+	s.systemAMIMu.Lock()
+	defer s.systemAMIMu.Unlock()
+	if s.systemAMIResolved {
+		return s.systemAMI
+	}
+	if s.systemAMIFunc != nil {
+		s.systemAMI = s.systemAMIFunc()
+	}
+	if s.systemAMI != "" {
+		s.systemAMIResolved = true
+	}
+	return s.systemAMI
 }
 
-// SetSystemAMI sets the AMI ID used for system-managed VMs (ALB VMs).
-func (s *ELBv2ServiceImpl) SetSystemAMI(amiID string) {
-	s.systemAMI = amiID
+// SetSystemInstanceTypeFunc sets a function that resolves the smallest available
+// instance type. Called at request time so it adapts to node capacity.
+func (s *ELBv2ServiceImpl) SetSystemInstanceTypeFunc(fn func() string) {
+	s.systemInstanceTypeMu.Lock()
+	defer s.systemInstanceTypeMu.Unlock()
+	s.systemInstanceTypeFunc = fn
+	s.systemInstanceType = ""
+	s.systemInstanceTypeResolved = false
 }
 
-// SetNATSURL sets the NATS URL that ALB VMs use to connect back to the cluster.
-func (s *ELBv2ServiceImpl) SetNATSURL(url string) {
-	s.natsURL = url
+// getSystemInstanceType returns the instance type for system VMs.
+// Only caches non-empty results so the resolver retries when no capacity
+// is available yet.
+func (s *ELBv2ServiceImpl) getSystemInstanceType() string {
+	s.systemInstanceTypeMu.Lock()
+	defer s.systemInstanceTypeMu.Unlock()
+	if s.systemInstanceTypeResolved {
+		return s.systemInstanceType
+	}
+	if s.systemInstanceTypeFunc != nil {
+		s.systemInstanceType = s.systemInstanceTypeFunc()
+	}
+	if s.systemInstanceType != "" {
+		s.systemInstanceTypeResolved = true
+	}
+	return s.systemInstanceType
 }
 
 // resolveENIBindAddr looks up the private IP of the first ENI belonging to the ALB.
 // Returns empty string if VPC service is unavailable or no ENIs exist.
 func (s *ELBv2ServiceImpl) resolveENIBindAddr(lb *LoadBalancerRecord) string {
-	if s.vpcService == nil || len(lb.ENIs) == 0 {
+	if s.VPCService == nil || len(lb.ENIs) == 0 {
 		return ""
 	}
 
-	result, err := s.vpcService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+	result, err := s.VPCService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
 		NetworkInterfaceIds: []*string{aws.String(lb.ENIs[0])},
 	}, lb.AccountID)
 	if err != nil || len(result.NetworkInterfaces) == 0 {
@@ -137,69 +218,21 @@ func (s *ELBv2ServiceImpl) resolveENIBindAddr(lb *LoadBalancerRecord) string {
 	return ""
 }
 
-// waitForAgentReady polls the ALB agent's ping topic until it responds, then
-// transitions the LB state from provisioning to active. Runs in a background
-// goroutine started by CreateLoadBalancer.
-func (s *ELBv2ServiceImpl) waitForAgentReady(lbArn, lbID string) {
-	pingTopic := "elbv2.alb." + lbID + ".ping"
-	timeout := 3 * time.Second
-
-	for attempt := 1; attempt <= 90; attempt++ { // up to ~5 minutes
-		select {
-		case <-s.ctx.Done():
-			slog.Info("waitForAgentReady cancelled", "lbId", lbID)
-			return
-		default:
-		}
-		if s.nc == nil {
-			return
-		}
-		msg, err := s.nc.Request(pingTopic, []byte("ping"), timeout)
-		if err == nil && msg != nil {
-			slog.Info("ALB agent is ready", "lbId", lbID, "attempt", attempt)
-			lb, lbErr := s.store.GetLoadBalancerByArn(lbArn)
-			if lbErr == nil && lb != nil && lb.State == StateProvisioning {
-				lb.State = StateActive
-				if putErr := s.store.PutLoadBalancer(lb); putErr != nil {
-					slog.Error("Failed to update LB state to active", "lbId", lbID, "err", putErr)
-				} else {
-					slog.Info("ALB transitioned to active", "lbId", lbID)
-				}
-				// Push config now that agent is connected — earlier pushConfig
-				// calls during CreateListener may have been lost if the agent
-				// wasn't subscribed yet.
-				s.pushConfig(lb)
-			}
-			return
-		}
-		time.Sleep(time.Second)
-	}
-
-	slog.Error("ALB agent did not respond within timeout", "lbId", lbID)
-	lb, lbErr := s.store.GetLoadBalancerByArn(lbArn)
-	if lbErr == nil && lb != nil && lb.State == StateProvisioning {
-		lb.State = StateFailed
-		if putErr := s.store.PutLoadBalancer(lb); putErr != nil {
-			slog.Error("Failed to update LB state to failed", "lbId", lbID, "err", putErr)
-		}
-	}
-}
-
-// pushConfig generates the HAProxy config for an ALB and publishes it to the
-// ALB VM's NATS config agent. The agent inside the VM writes the config to disk
-// and reloads HAProxy. Safe to call when nc or instanceLauncher is nil.
-func (s *ELBv2ServiceImpl) pushConfig(lb *LoadBalancerRecord) {
-	if s.nc == nil || lb.InstanceID == "" {
-		return
+// updateStoredConfig generates the HAProxy config for an ALB, hashes it, and
+// stores both ConfigText and ConfigHash on the LB record. The agent pulls this
+// on its next heartbeat when it detects a hash change. Safe to call when
+// instanceLauncher is nil or the LB has no VM.
+func (s *ELBv2ServiceImpl) updateStoredConfig(lb *LoadBalancerRecord) error {
+	if lb.InstanceID == "" {
+		return nil
 	}
 
 	listeners, err := s.store.ListListenersByLB(lb.LoadBalancerArn)
 	if err != nil {
-		slog.Error("pushConfig: failed to list listeners", "lbArn", lb.LoadBalancerArn, "err", err)
-		return
+		slog.Error("updateStoredConfig: failed to list listeners", "lbArn", lb.LoadBalancerArn, "err", err)
+		return fmt.Errorf("list listeners: %w", err)
 	}
 
-	// HAProxy binds to all interfaces (*:port), so no specific bind address needed.
 	bindAddr := s.resolveENIBindAddr(lb)
 
 	// Collect target groups referenced by listeners
@@ -214,51 +247,42 @@ func (s *ELBv2ServiceImpl) pushConfig(lb *LoadBalancerRecord) {
 			}
 			tg, tgErr := s.store.GetTargetGroupByArn(a.TargetGroupArn)
 			if tgErr != nil || tg == nil {
-				slog.Debug("pushConfig: target group not found", "tgArn", a.TargetGroupArn)
+				slog.Debug("updateStoredConfig: target group not found", "tgArn", a.TargetGroupArn)
 				continue
 			}
 			tgByArn[a.TargetGroupArn] = tg
 		}
 	}
 
-	// Generate config
 	configContent, err := GenerateHAProxyConfig(lb, listeners, tgByArn, bindAddr)
 	if err != nil {
-		slog.Error("pushConfig: failed to generate config", "lbId", lb.LoadBalancerID, "err", err)
-		return
+		slog.Error("updateStoredConfig: failed to generate config", "lbId", lb.LoadBalancerID, "err", err)
+		return fmt.Errorf("generate config: %w", err)
 	}
 
-	// Send config to the ALB VM's NATS agent via request-reply so we know it
-	// was received and applied. Falls back to fire-and-forget publish if the
-	// agent hasn't connected yet (e.g. VM still booting).
-	topic := "elbv2.alb." + lb.LoadBalancerID + ".config"
-	resp, err := s.nc.Request(topic, []byte(configContent), 10*time.Second)
-	if err != nil {
-		slog.Warn("pushConfig: agent did not ACK config (may still be booting), falling back to publish",
-			"lbId", lb.LoadBalancerID, "topic", topic, "err", err)
-		if pubErr := s.nc.Publish(topic, []byte(configContent)); pubErr != nil {
-			slog.Error("pushConfig: publish fallback also failed", "lbId", lb.LoadBalancerID, "err", pubErr)
-		}
-		return
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(configContent)))
+	lb.ConfigText = configContent
+	lb.ConfigHash = hash
+
+	if err := s.store.PutLoadBalancer(lb); err != nil {
+		slog.Error("updateStoredConfig: failed to persist LB", "lbId", lb.LoadBalancerID, "err", err)
+		return fmt.Errorf("persist LB: %w", err)
 	}
 
-	slog.Info("pushConfig: config applied by ALB agent", "lbId", lb.LoadBalancerID, "topic", topic, "size", len(configContent), "response", string(resp.Data))
+	slog.Info("updateStoredConfig: config stored",
+		"lbId", lb.LoadBalancerID, "hash", hash[:12], "size", len(configContent))
+	return nil
 }
 
-// pushConfigForTargetGroup finds all LBs that reference the given target group
-// (via listeners) and pushes updated config to their ALB VMs.
-func (s *ELBv2ServiceImpl) pushConfigForTargetGroup(tgArn, accountID string) {
-	if s.nc == nil {
-		return
-	}
-
+// updateStoredConfigForTargetGroup finds all LBs that reference the given target
+// group (via listeners) and updates their stored config.
+func (s *ELBv2ServiceImpl) updateStoredConfigForTargetGroup(tgArn string) error {
 	allListeners, err := s.store.ListListeners()
 	if err != nil {
-		slog.Error("pushConfigForTargetGroup: failed to list listeners", "err", err)
-		return
+		slog.Error("updateStoredConfigForTargetGroup: failed to list listeners", "err", err)
+		return fmt.Errorf("list listeners: %w", err)
 	}
 
-	// Find unique LB ARNs that reference this TG
 	lbArns := make(map[string]bool)
 	for _, l := range allListeners {
 		for _, a := range l.DefaultActions {
@@ -273,23 +297,108 @@ func (s *ELBv2ServiceImpl) pushConfigForTargetGroup(tgArn, accountID string) {
 		if lbErr != nil || lb == nil {
 			continue
 		}
-		s.pushConfig(lb)
+		if err := s.updateStoredConfig(lb); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-// buildLBArn constructs an ALB ARN from components.
-func buildLBArn(region, accountID, name, lbID string) string {
-	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:loadbalancer/app/%s/%s", region, accountID, name, lbID)
+// LBAgentHeartbeat processes a heartbeat from an LB agent. On first heartbeat,
+// transitions LB from provisioning → active. Always updates LastHeartbeat and
+// processes the health report. Returns the current config hash so the agent
+// knows whether to fetch new config.
+func (s *ELBv2ServiceImpl) LBAgentHeartbeat(input *LBAgentHeartbeatInput, accountID string) (*LBAgentHeartbeatOutput, error) {
+	if input.LBID == nil || *input.LBID == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	lbID := *input.LBID
+	lb, err := s.store.GetLoadBalancer(lbID)
+	if err != nil {
+		slog.Error("LBAgentHeartbeat: failed to get LB", "lbId", lbID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+	if lb == nil || (lb.AccountID != accountID && accountID != utils.GlobalAccountID) {
+		return nil, errors.New(awserrors.ErrorELBv2LoadBalancerNotFound)
+	}
+
+	// First heartbeat: transition provisioning → active
+	stateChanged := false
+	if lb.State == StateProvisioning {
+		lb.State = StateActive
+		stateChanged = true
+		slog.Info("LB transitioned to active via heartbeat", "lbId", lbID)
+	}
+
+	now := time.Now().UTC()
+
+	// Only persist to KV on state transitions or when the stored heartbeat
+	// timestamp is stale. This avoids writing the full record (including
+	// ConfigText) every 5 seconds when nothing changed.
+	if stateChanged || now.Sub(lb.LastHeartbeat) >= heartbeatPersistInterval {
+		lb.LastHeartbeat = now
+		if err := s.store.PutLoadBalancer(lb); err != nil {
+			slog.Error("LBAgentHeartbeat: failed to persist LB", "lbId", lbID, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
+	}
+
+	// Process health report directly — no JSON round-trip needed.
+	if len(input.Servers) > 0 {
+		s.hc.handleHealthReportDirect(input.toHealthReport())
+	}
+
+	return &LBAgentHeartbeatOutput{
+		Status:     aws.String(lb.State),
+		ConfigHash: aws.String(lb.ConfigHash),
+	}, nil
+}
+
+// GetLBConfig returns the stored HAProxy config and hash for a load balancer.
+func (s *ELBv2ServiceImpl) GetLBConfig(input *GetLBConfigInput, accountID string) (*GetLBConfigOutput, error) {
+	if input.LBID == nil || *input.LBID == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	lbID := *input.LBID
+	lb, err := s.store.GetLoadBalancer(lbID)
+	if err != nil {
+		slog.Error("GetLBConfig: failed to get LB", "lbId", lbID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+	if lb == nil || (lb.AccountID != accountID && accountID != utils.GlobalAccountID) {
+		return nil, errors.New(awserrors.ErrorELBv2LoadBalancerNotFound)
+	}
+
+	return &GetLBConfigOutput{
+		ConfigText: aws.String(lb.ConfigText),
+		ConfigHash: aws.String(lb.ConfigHash),
+	}, nil
+}
+
+// lbArnPathSegment returns the ARN path segment for the given LB type:
+// "app" for application LBs, "net" for network LBs.
+func lbArnPathSegment(lbType string) string {
+	if lbType == LoadBalancerTypeNetwork {
+		return "net"
+	}
+	return "app"
+}
+
+// buildLBArn constructs a load balancer ARN from components.
+func buildLBArn(region, accountID, name, lbID, lbType string) string {
+	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:loadbalancer/%s/%s/%s", region, accountID, lbArnPathSegment(lbType), name, lbID)
 }
 
 // resolveTargetIP looks up the private IP for an instance by finding its primary ENI.
 // Returns empty string if VPC service is unavailable or no ENI found.
 func (s *ELBv2ServiceImpl) resolveTargetIP(instanceID, accountID string) string {
-	if s.vpcService == nil {
+	if s.VPCService == nil {
 		return ""
 	}
 
-	result, err := s.vpcService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+	result, err := s.VPCService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
 		Filters: []*ec2.Filter{
 			{Name: aws.String("attachment.instance-id"), Values: []*string{aws.String(instanceID)}},
 		},
@@ -312,8 +421,28 @@ func buildTGArn(region, accountID, name, tgID string) string {
 }
 
 // buildListenerArn constructs a listener ARN from components.
-func buildListenerArn(region, accountID, lbName, lbID, listenerID string) string {
-	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:listener/app/%s/%s/%s", region, accountID, lbName, lbID, listenerID)
+func buildListenerArn(region, accountID, lbName, lbID, listenerID, lbType string) string {
+	return fmt.Sprintf("arn:aws:elasticloadbalancing:%s:%s:listener/%s/%s/%s/%s", region, accountID, lbArnPathSegment(lbType), lbName, lbID, listenerID)
+}
+
+// isCompatibleProtocol checks whether a listener protocol is compatible with a
+// target group protocol. ALB: HTTP/HTTPS listeners can forward to HTTP or HTTPS
+// TGs. NLB: TCP→TCP, UDP→UDP, TLS→TCP or TLS, TCP_UDP→TCP_UDP.
+func isCompatibleProtocol(listenerProto, tgProto string) bool {
+	switch listenerProto {
+	case ProtocolHTTP, ProtocolHTTPS:
+		return tgProto == ProtocolHTTP || tgProto == ProtocolHTTPS
+	case ProtocolTCP:
+		return tgProto == ProtocolTCP
+	case ProtocolUDP:
+		return tgProto == ProtocolUDP
+	case ProtocolTLS:
+		return tgProto == ProtocolTCP || tgProto == ProtocolTLS
+	case ProtocolTCPUDP:
+		return tgProto == ProtocolTCPUDP
+	default:
+		return false
+	}
 }
 
 // --- Load Balancer operations ---
@@ -335,6 +464,20 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		return nil, errors.New(awserrors.ErrorELBv2DuplicateLoadBalancer)
 	}
 
+	// Resolve load balancer type — default to application (ALB).
+	lbType := LoadBalancerTypeApplication
+	if input.Type != nil && *input.Type != "" {
+		lbType = *input.Type
+		if lbType != LoadBalancerTypeApplication && lbType != LoadBalancerTypeNetwork {
+			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+		}
+	}
+
+	// NLBs do not support security groups.
+	if lbType == LoadBalancerTypeNetwork && len(input.SecurityGroups) > 0 {
+		return nil, errors.New(awserrors.ErrorELBv2InvalidConfigurationRequest)
+	}
+
 	scheme := SchemeInternetFacing
 	if input.Scheme != nil && *input.Scheme != "" {
 		scheme = *input.Scheme
@@ -344,8 +487,13 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 	}
 
 	lbID := utils.GenerateResourceID("lb")
-	lbArn := buildLBArn(s.region, accountID, name, lbID)
-	dnsName := fmt.Sprintf("%s-%s.%s.elb.spinifex.local", name, lbID, s.region)
+	lbArn := buildLBArn(s.region, accountID, name, lbID, lbType)
+	arnPathSegment := lbArnPathSegment(lbType)
+	dnsPrefix := ""
+	if scheme == SchemeInternal {
+		dnsPrefix = "internal-"
+	}
+	dnsName := fmt.Sprintf("%s%s-%s.%s.elb.spinifex.local", dnsPrefix, name, lbID, s.region)
 
 	var subnets []string
 	for _, sn := range input.Subnets {
@@ -372,11 +520,11 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 	var eniIDs []string
 	var availZones []AvailZoneInfo
 	vpcID := ""
-	if s.vpcService != nil && len(subnets) > 0 {
+	if s.VPCService != nil && len(subnets) > 0 {
 		for _, subnetID := range subnets {
-			eniOut, eniErr := s.vpcService.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
+			eniOut, eniErr := s.VPCService.CreateNetworkInterface(&ec2.CreateNetworkInterfaceInput{
 				SubnetId:    aws.String(subnetID),
-				Description: aws.String(fmt.Sprintf("ELB app/%s/%s", name, lbID)),
+				Description: aws.String(fmt.Sprintf("ELB %s/%s/%s", arnPathSegment, name, lbID)),
 				TagSpecifications: []*ec2.TagSpecification{
 					{
 						ResourceType: aws.String("network-interface"),
@@ -390,7 +538,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 			if eniErr != nil {
 				// Rollback: delete any ENIs already created
 				for _, rollbackENI := range eniIDs {
-					if _, delErr := s.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+					if _, delErr := s.VPCService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
 						NetworkInterfaceId: aws.String(rollbackENI),
 					}, accountID); delErr != nil {
 						slog.Error("CreateLoadBalancer: rollback failed to delete ENI", "eni", rollbackENI, "err", delErr)
@@ -419,13 +567,15 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 
 	// Launch ALB VM with the first ENI (when instance launcher is available)
 	var albInstanceID string
+	var albVPCIP string
 	var hostPorts map[int]int
-	if s.instanceLauncher != nil && s.systemAMI != "" && len(eniIDs) > 0 && len(subnets) > 0 {
+	var launchFailed bool
+	if s.InstanceLauncher != nil && s.getSystemAMI() != "" && len(eniIDs) > 0 && len(subnets) > 0 {
 		// Resolve the first ENI's details for the VM
 		eniIP := ""
 		eniMAC := ""
-		if s.vpcService != nil {
-			result, descErr := s.vpcService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+		if s.VPCService != nil {
+			result, descErr := s.VPCService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
 				NetworkInterfaceIds: []*string{aws.String(eniIDs[0])},
 			}, accountID)
 			if descErr == nil && len(result.NetworkInterfaces) > 0 {
@@ -434,54 +584,76 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 			}
 		}
 
-		userData := albVMUserData(lbID, s.natsURL)
-		out, launchErr := s.instanceLauncher.LaunchSystemInstance(&SystemInstanceInput{
-			InstanceType: "t3.nano",
-			ImageID:      s.systemAMI,
-			SubnetID:     subnets[0],
-			UserData:     userData,
-			ENIID:        eniIDs[0],
-			ENIMac:       eniMAC,
-			ENIIP:        eniIP,
-			HostfwdPorts: []int{80, 443},
-		})
-		if launchErr != nil {
-			slog.Error("CreateLoadBalancer: failed to launch ALB VM", "lbId", lbID, "err", launchErr)
-			// Continue without VM — LB is created in provisioning state
+		userData, udErr := s.lbVMUserData(lbID)
+		if udErr != nil {
+			slog.Error("CreateLoadBalancer: system credentials not configured — cannot launch ALB VM", "lbId", lbID, "err", udErr)
+			launchFailed = true
 		} else {
-			albInstanceID = out.InstanceID
-			hostPorts = out.HostfwdMap
-			slog.Info("CreateLoadBalancer: ALB VM launched", "lbId", lbID, "instanceId", albInstanceID, "ip", out.PrivateIP, "hostfwd", hostPorts)
+			launchInput := &SystemInstanceInput{
+				InstanceType: s.getSystemInstanceType(),
+				ImageID:      s.getSystemAMI(),
+				SubnetID:     subnets[0],
+				UserData:     userData,
+				ENIID:        eniIDs[0],
+				ENIMac:       eniMAC,
+				ENIIP:        eniIP,
+				Scheme:       scheme,
+				AccountID:    accountID,
+			}
+			// Dev-mode only: forward HTTP/HTTPS ports from host for local testing.
+			// In production (VPC networking), traffic reaches the ALB VM's VPC IP directly.
+			if s.config != nil && s.config.Daemon.DevNetworking {
+				launchInput.HostfwdPorts = []int{80, 443}
+			}
+			out, launchErr := s.InstanceLauncher.LaunchSystemInstance(launchInput)
+			if launchErr != nil {
+				slog.Error("CreateLoadBalancer: failed to launch ALB VM", "lbId", lbID, "err", launchErr)
+				launchFailed = true
+			} else {
+				albInstanceID = out.InstanceID
+				albVPCIP = out.PrivateIP
+				hostPorts = out.HostfwdMap
+				// Record public IP on the first AZ entry for internet-facing ALBs.
+				if out.PublicIP != "" && len(availZones) > 0 {
+					availZones[0].PublicIP = out.PublicIP
+				}
+				slog.Info("CreateLoadBalancer: ALB VM launched", "lbId", lbID, "instanceId", albInstanceID, "ip", out.PrivateIP, "publicIp", out.PublicIP, "hostfwd", hostPorts)
+			}
 		}
 	}
 
 	// ALB starts in provisioning until the agent inside the VM connects and
-	// responds to a ping. If no VM is expected (no launcher/AMI), set active.
+	// responds to a ping. If no VM was launched (no launcher/AMI or launch
+	// failed), set state to failed so the API reflects the broken data-plane.
 	state := StateActive
-	if s.instanceLauncher != nil && s.systemAMI != "" {
+	if albInstanceID != "" {
 		state = StateProvisioning
+	} else if launchFailed {
+		state = StateFailed
 	}
 
 	record := &LoadBalancerRecord{
-		LoadBalancerArn: lbArn,
-		LoadBalancerID:  lbID,
-		DNSName:         dnsName,
-		Name:            name,
-		Scheme:          scheme,
-		Type:            LoadBalancerTypeApplication,
-		State:           state,
-		VpcId:           vpcID,
-		SecurityGroups:  securityGroups,
-		Subnets:         subnets,
-		AvailZones:      availZones,
-		ENIs:            eniIDs,
-		InstanceID:      albInstanceID,
-		HostPorts:       hostPorts,
-		IPAddressType:   IPAddressTypeIPv4,
-		NodeID:          s.nodeID,
-		Tags:            tags,
-		AccountID:       accountID,
-		CreatedAt:       time.Now().UTC(),
+		LoadBalancerArn:  lbArn,
+		LoadBalancerID:   lbID,
+		DNSName:          dnsName,
+		Name:             name,
+		Scheme:           scheme,
+		Type:             lbType,
+		CrossZoneEnabled: lbType == LoadBalancerTypeApplication,
+		State:            state,
+		VpcId:            vpcID,
+		SecurityGroups:   securityGroups,
+		Subnets:          subnets,
+		AvailZones:       availZones,
+		ENIs:             eniIDs,
+		InstanceID:       albInstanceID,
+		VPCIP:            albVPCIP,
+		HostPorts:        hostPorts,
+		IPAddressType:    IPAddressTypeIPv4,
+		NodeID:           s.nodeID,
+		Tags:             tags,
+		AccountID:        accountID,
+		CreatedAt:        time.Now().UTC(),
 	}
 
 	if err := s.store.PutLoadBalancer(record); err != nil {
@@ -489,10 +661,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	// Start background goroutine to wait for ALB agent ping, then transition to active.
-	if record.State == StateProvisioning && record.InstanceID != "" {
-		go s.waitForAgentReady(lbArn, lbID)
-	}
+	// Agent heartbeat will transition provisioning → active on first contact.
 
 	slog.Info("CreateLoadBalancer completed", "name", name, "lbArn", lbArn, "enis", len(eniIDs), "state", state, "accountID", accountID)
 
@@ -518,10 +687,10 @@ func (s *ELBv2ServiceImpl) DeleteLoadBalancer(input *elbv2.DeleteLoadBalancerInp
 	// Terminate ALB VM in background (VM termination also cleans up tap device).
 	// Must be async because VM shutdown can take seconds (QMP powerdown + QEMU exit)
 	// and we don't want to block the NATS request handler.
-	if lb.InstanceID != "" && s.instanceLauncher != nil {
+	if lb.InstanceID != "" && s.InstanceLauncher != nil {
 		instanceID := lb.InstanceID
 		go func() {
-			if err := s.instanceLauncher.TerminateSystemInstance(instanceID); err != nil {
+			if err := s.InstanceLauncher.TerminateSystemInstance(instanceID); err != nil {
 				slog.Warn("Failed to terminate ALB VM during LB deletion", "lbId", lb.LoadBalancerID, "instanceId", instanceID, "err", err)
 			}
 		}()
@@ -538,13 +707,15 @@ func (s *ELBv2ServiceImpl) DeleteLoadBalancer(input *elbv2.DeleteLoadBalancerInp
 		}
 	}
 
-	// Delete system-managed ENIs
-	if s.vpcService != nil {
+	// Delete system-managed ENIs. Detach first to clear in-use status.
+	if s.VPCService != nil {
 		for _, eniID := range lb.ENIs {
-			_, eniErr := s.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+			if detachErr := s.VPCService.DetachENI(accountID, eniID); detachErr != nil {
+				slog.Warn("Failed to detach ALB ENI during cleanup", "eniId", eniID, "err", detachErr)
+			}
+			if _, eniErr := s.VPCService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
 				NetworkInterfaceId: aws.String(eniID),
-			}, accountID)
-			if eniErr != nil {
+			}, accountID); eniErr != nil {
 				slog.Warn("Failed to delete ALB ENI during cleanup", "eniId", eniID, "err", eniErr)
 			}
 		}
@@ -614,6 +785,14 @@ func (s *ELBv2ServiceImpl) CreateTargetGroup(input *elbv2.CreateTargetGroupInput
 		protocol = *input.Protocol
 	}
 
+	// Validate protocol.
+	switch protocol {
+	case ProtocolHTTP, ProtocolHTTPS, ProtocolTCP, ProtocolUDP, ProtocolTLS, ProtocolTCPUDP:
+		// valid
+	default:
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
 	port := int64(80)
 	if input.Port != nil {
 		port = *input.Port
@@ -639,7 +818,14 @@ func (s *ELBv2ServiceImpl) CreateTargetGroup(input *elbv2.CreateTargetGroupInput
 		targetType = *input.TargetType
 	}
 
-	hc := DefaultHealthCheck()
+	// Use NLB health check defaults for NLB protocols.
+	var hc HealthCheckConfig
+	switch protocol {
+	case ProtocolTCP, ProtocolUDP, ProtocolTLS, ProtocolTCPUDP:
+		hc = DefaultNLBHealthCheck()
+	default:
+		hc = DefaultHealthCheck()
+	}
 	if input.HealthCheckProtocol != nil {
 		hc.Protocol = *input.HealthCheckProtocol
 	}
@@ -848,7 +1034,10 @@ func (s *ELBv2ServiceImpl) RegisterTargets(input *elbv2.RegisterTargetsInput, ac
 	}
 
 	// Reload HAProxy for any LBs that reference this target group
-	s.pushConfigForTargetGroup(tg.TargetGroupArn, accountID)
+	if err := s.updateStoredConfigForTargetGroup(tg.TargetGroupArn); err != nil {
+		slog.Error("RegisterTargets: failed to update config", "arn", *input.TargetGroupArn, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
 
 	slog.Info("RegisterTargets completed", "tgArn", *input.TargetGroupArn, "targetsAdded", len(input.Targets), "accountID", accountID)
 
@@ -885,7 +1074,9 @@ func (s *ELBv2ServiceImpl) DeregisterTargets(input *elbv2.DeregisterTargetsInput
 	var remaining []Target
 	for _, t := range tg.Targets {
 		key := fmt.Sprintf("%s:%d", t.Id, t.Port)
-		if !removeSet[key] {
+		if removeSet[key] {
+			s.hc.removeTarget(tg.TargetGroupID, t.Id, t.Port)
+		} else {
 			remaining = append(remaining, t)
 		}
 	}
@@ -897,7 +1088,10 @@ func (s *ELBv2ServiceImpl) DeregisterTargets(input *elbv2.DeregisterTargetsInput
 	}
 
 	// Reload HAProxy for any LBs that reference this target group
-	s.pushConfigForTargetGroup(tg.TargetGroupArn, accountID)
+	if err := s.updateStoredConfigForTargetGroup(tg.TargetGroupArn); err != nil {
+		slog.Error("DeregisterTargets: failed to update config", "arn", *input.TargetGroupArn, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
 
 	slog.Info("DeregisterTargets completed", "tgArn", *input.TargetGroupArn, "targetsRemoved", len(input.Targets), "accountID", accountID)
 
@@ -974,6 +1168,24 @@ func (s *ELBv2ServiceImpl) CreateListener(input *elbv2.CreateListenerInput, acco
 		protocol = *input.Protocol
 	}
 
+	// Validate protocol is appropriate for the LB type.
+	switch lb.Type {
+	case LoadBalancerTypeNetwork:
+		switch protocol {
+		case ProtocolTCP, ProtocolUDP, ProtocolTLS, ProtocolTCPUDP:
+			// valid NLB protocols
+		default:
+			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+		}
+	default: // application
+		switch protocol {
+		case ProtocolHTTP, ProtocolHTTPS:
+			// valid ALB protocols
+		default:
+			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+		}
+	}
+
 	port := int64(80)
 	if input.Port != nil {
 		port = *input.Port
@@ -991,8 +1203,25 @@ func (s *ELBv2ServiceImpl) CreateListener(input *elbv2.CreateListenerInput, acco
 		}
 	}
 
+	// Validate listener-to-target-group protocol compatibility.
+	for _, a := range input.DefaultActions {
+		if a.Type != nil && *a.Type == ActionTypeForward && a.TargetGroupArn != nil {
+			tg, tgErr := s.store.GetTargetGroupByArn(*a.TargetGroupArn)
+			if tgErr != nil {
+				slog.Error("CreateListener: failed to get target group", "arn", *a.TargetGroupArn, "err", tgErr)
+				return nil, errors.New(awserrors.ErrorServerInternal)
+			}
+			if tg == nil {
+				return nil, errors.New(awserrors.ErrorELBv2TargetGroupNotFound)
+			}
+			if !isCompatibleProtocol(protocol, tg.Protocol) {
+				return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+			}
+		}
+	}
+
 	listenerID := utils.GenerateResourceID("lst")
-	listenerArn := buildListenerArn(s.region, accountID, lb.Name, lb.LoadBalancerID, listenerID)
+	listenerArn := buildListenerArn(s.region, accountID, lb.Name, lb.LoadBalancerID, listenerID, lb.Type)
 
 	var actions []ListenerAction
 	for _, a := range input.DefaultActions {
@@ -1023,7 +1252,10 @@ func (s *ELBv2ServiceImpl) CreateListener(input *elbv2.CreateListenerInput, acco
 	}
 
 	// Start or reload HAProxy now that a listener exists
-	s.pushConfig(lb)
+	if err := s.updateStoredConfig(lb); err != nil {
+		slog.Error("CreateListener: failed to update config", "listenerId", listenerID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
 
 	slog.Info("CreateListener completed", "listenerArn", listenerArn, "lbArn", lb.LoadBalancerArn, "port", port, "accountID", accountID)
 
@@ -1054,7 +1286,10 @@ func (s *ELBv2ServiceImpl) DeleteListener(input *elbv2.DeleteListenerInput, acco
 	// Reload or stop HAProxy after listener removal
 	lb, lbErr := s.store.GetLoadBalancerByArn(listener.LoadBalancerArn)
 	if lbErr == nil && lb != nil {
-		s.pushConfig(lb)
+		if err := s.updateStoredConfig(lb); err != nil {
+			slog.Error("DeleteListener: failed to update config", "listenerArn", *input.ListenerArn, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
 	}
 
 	slog.Info("DeleteListener completed", "listenerArn", *input.ListenerArn, "accountID", accountID)
@@ -1122,10 +1357,16 @@ func (s *ELBv2ServiceImpl) lbRecordToSDK(r *LoadBalancerRecord) *elbv2.LoadBalan
 	}
 
 	for _, az := range r.AvailZones {
-		lb.AvailabilityZones = append(lb.AvailabilityZones, &elbv2.AvailabilityZone{
+		sdkAZ := &elbv2.AvailabilityZone{
 			ZoneName: aws.String(az.ZoneName),
 			SubnetId: aws.String(az.SubnetId),
-		})
+		}
+		if az.PublicIP != "" {
+			sdkAZ.LoadBalancerAddresses = []*elbv2.LoadBalancerAddress{
+				{IpAddress: aws.String(az.PublicIP)},
+			}
+		}
+		lb.AvailabilityZones = append(lb.AvailabilityZones, sdkAZ)
 	}
 
 	return lb

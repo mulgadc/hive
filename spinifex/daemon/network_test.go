@@ -435,3 +435,85 @@ func TestOVSIfaceID_Format(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateMgmtMAC(t *testing.T) {
+	tests := []string{
+		"i-abc123",
+		"i-def456",
+		"i-ghi789",
+	}
+
+	seen := make(map[string]bool)
+	for _, id := range tests {
+		mac := generateMgmtMAC(id)
+		if !strings.HasPrefix(mac, "02:a0:00:") {
+			t.Errorf("generateMgmtMAC(%q) = %q, want prefix '02:a0:00:'", id, mac)
+		}
+		if len(mac) != 17 {
+			t.Errorf("generateMgmtMAC(%q) = %q, expected 17 chars", id, mac)
+		}
+		if seen[mac] {
+			t.Errorf("generateMgmtMAC(%q) = %q, duplicate MAC", id, mac)
+		}
+		seen[mac] = true
+	}
+
+	// Deterministic
+	mac1 := generateMgmtMAC("i-test123")
+	mac2 := generateMgmtMAC("i-test123")
+	if mac1 != mac2 {
+		t.Errorf("generateMgmtMAC not deterministic: %q != %q", mac1, mac2)
+	}
+
+	// Different from dev MAC for same instance
+	devMAC := generateDevMAC("i-test123")
+	mgmtMAC := generateMgmtMAC("i-test123")
+	if devMAC == mgmtMAC {
+		t.Errorf("dev and mgmt MACs should differ for same instance: both %q", devMAC)
+	}
+}
+
+func TestMgmtTapName(t *testing.T) {
+	tests := []struct {
+		instanceID string
+		expected   string
+	}{
+		{"i-abc123", "mgabc123"},
+		{"i-abc123def456789", "mgabc123def4567"}, // Truncated to 15 chars
+		{"i-a", "mga"},
+		{"abc123", "mgabc123"}, // No i- prefix
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.instanceID, func(t *testing.T) {
+			got := MgmtTapName(tt.instanceID)
+			if got != tt.expected {
+				t.Errorf("MgmtTapName(%q) = %q, want %q", tt.instanceID, got, tt.expected)
+			}
+			if len(got) > 15 {
+				t.Errorf("MgmtTapName(%q) = %q (len %d), exceeds IFNAMSIZ limit of 15", tt.instanceID, got, len(got))
+			}
+		})
+	}
+}
+
+func TestGetBridgeIPv4_Loopback(t *testing.T) {
+	// "lo" is always present and has 127.0.0.1
+	ip, err := GetBridgeIPv4("lo")
+	if err != nil {
+		t.Fatalf("GetBridgeIPv4(lo): %v", err)
+	}
+	if ip != "127.0.0.1" {
+		t.Errorf("GetBridgeIPv4(lo) = %q, want 127.0.0.1", ip)
+	}
+}
+
+func TestGetBridgeIPv4_NonexistentBridge(t *testing.T) {
+	ip, err := GetBridgeIPv4("br-nonexistent-test-xyz")
+	if err != nil {
+		t.Fatalf("expected nil error for absent bridge, got: %v", err)
+	}
+	if ip != "" {
+		t.Errorf("expected empty IP for absent bridge, got %q", ip)
+	}
+}

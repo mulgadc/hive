@@ -27,7 +27,7 @@ jobs:
   e2e_single:
     name: Single-Node E2E
     runs-on: [self-hosted, ci-single]
-    timeout-minutes: 25
+    timeout-minutes: 30
     env:
       TOFU_LOG: /tmp/e2e-tofu-single-${{ github.run_id }}.log
     steps:
@@ -83,7 +83,7 @@ jobs:
           SSH_KEY=$(echo "$INVENTORY" | jq -r '.ssh_key_path')
           SSH_KEY="${SSH_KEY/#\~/$HOME}"
           ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${WAN_IP} \
-            'cd ~/e2e-tests && ./run-e2e.sh && ./run-cert-e2e.sh'
+            'cd ~/e2e-tests && ./run-e2e.sh && ./run-cert-e2e.sh  && ./run-lb-e2e.sh'
 
       - name: Teardown
         if: always()
@@ -159,7 +159,7 @@ jobs:
   e2e_real_multi:
     name: Real Multi-Node E2E
     runs-on: [self-hosted, ci-multi]
-    timeout-minutes: 25
+    timeout-minutes: 35
     env:
       TOFU_LOG: /tmp/e2e-tofu-multi-${{ github.run_id }}.log
     steps:
@@ -222,8 +222,10 @@ jobs:
             NODE_IPS="${NODE_IPS} $(echo "$INVENTORY" | jq -r ".nodes[$i].wan_ip")"
           done
 
+          NODE2_IP=$(echo "$INVENTORY" | jq -r '.nodes[1].wan_ip')
+
           ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${NODE1_IP} \
-            "cd ~/e2e-tests && ./run-multinode-e2e.sh ${NODE_IPS} && ./run-cert-e2e.sh --multinode ${NODE_IPS}"
+            "cd ~/e2e-tests && ./run-multinode-e2e.sh ${NODE_IPS} && ./run-cert-e2e.sh --multinode ${NODE_IPS} && ENDPOINT=https://${NODE1_IP}:9999 ./run-lb-e2e.sh --nodes ${NODE_IPS}"
 
       - name: Teardown
         if: always()

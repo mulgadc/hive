@@ -70,9 +70,10 @@ type Config struct {
 	// Typically "br-ext" (veth mode linking Linux bridge to OVS) or the
 	// bridge name itself when the default route is already on an OVS bridge.
 	WanBridge string
-	// BridgeMode is "direct" or "macvlan". Direct bridge adds the WAN NIC
-	// directly to the WAN bridge; macvlan creates a sub-interface. When empty,
-	// auto-detected from the WAN bridge port type at startup.
+	// BridgeMode is "direct", "macvlan", or "veth". Direct bridge adds the WAN
+	// NIC directly to the OVS bridge; macvlan creates a sub-interface; veth uses
+	// a veth pair to link a Linux bridge to OVS. When empty, auto-detected at
+	// startup.
 	BridgeMode string
 }
 
@@ -373,9 +374,10 @@ func launchService(cfg *Config) error {
 	return nil
 }
 
-// detectBridgeMode checks how the WAN bridge is wired. If a macvlan interface
-// (spx-ext-{iface}) exists, we're in macvlan mode. Otherwise, the physical
-// NIC is added directly to the WAN bridge (direct bridge mode).
+// detectBridgeMode checks how the WAN bridge is wired:
+//   - macvlan: spx-ext-{iface} macvlan sub-interface exists
+//   - veth: veth-wan-ovs interface exists (Linux bridge linked to OVS via veth pair)
+//   - direct: physical NIC is added directly to the OVS bridge
 func detectBridgeMode(externalIface string) string {
 	macvlanName := "spx-ext-" + externalIface
 	out, err := exec.Command("ip", "-d", "link", "show", macvlanName).CombinedOutput()
@@ -383,7 +385,13 @@ func detectBridgeMode(externalIface string) string {
 		slog.Debug("vpcd: detected macvlan interface on WAN bridge", "iface", macvlanName)
 		return BridgeModeMacvlan
 	}
-	slog.Debug("vpcd: no macvlan found, assuming direct bridge mode", "checked", macvlanName)
+	// Check for veth pair linking a Linux bridge to OVS (setup-ovn.sh creates
+	// veth-wan-br ↔ veth-wan-ovs when the default route is on a Linux bridge).
+	if _, vethErr := exec.Command("ip", "link", "show", "veth-wan-ovs").CombinedOutput(); vethErr == nil {
+		slog.Debug("vpcd: detected veth pair linking Linux bridge to OVS")
+		return BridgeModeVeth
+	}
+	slog.Debug("vpcd: no macvlan or veth found, assuming direct bridge mode", "checked", macvlanName)
 	return BridgeModeDirect
 }
 
