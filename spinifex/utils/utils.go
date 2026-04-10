@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
@@ -194,23 +193,12 @@ func ValidateKeyPairName(name string) error {
 }
 
 func CreateS3Client(cfg *config.Config) *s3.S3 {
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-			NextProtos:         []string{"h2", "http/1.1"},
-		},
-		ForceAttemptHTTP2: true,
-	}
-
-	httpClient := &http.Client{Transport: tr}
-
 	sess := session.Must(session.NewSession(&aws.Config{
 		Region:           aws.String(cfg.Predastore.Region),
 		Endpoint:         aws.String(fmt.Sprintf("https://%s", cfg.Predastore.Host)),
 		Credentials:      credentials.NewStaticCredentials(cfg.Predastore.AccessKey, cfg.Predastore.SecretKey, ""),
 		S3ForcePathStyle: aws.Bool(true),
 		DisableSSL:       aws.Bool(false),
-		HTTPClient:       httpClient,
 	}))
 
 	return s3.New(sess)
