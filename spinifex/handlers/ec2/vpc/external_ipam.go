@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net"
 
+	"github.com/mulgadc/spinifex/spinifex/migrate"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -71,8 +72,8 @@ func NewExternalIPAM(js nats.JetStreamContext, pools []ExternalPoolConfig) (*Ext
 	if err != nil {
 		return nil, fmt.Errorf("create external IPAM KV bucket: %w", err)
 	}
-	if err := utils.WriteVersion(kv, KVBucketExternalIPAMVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketExternalIPAM, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketExternalIPAM, kv, KVBucketExternalIPAMVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketExternalIPAM, err)
 	}
 	ipam := &ExternalIPAM{kv: kv, pools: pools}
 	if err := ipam.initPools(); err != nil {

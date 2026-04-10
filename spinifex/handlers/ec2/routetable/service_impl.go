@@ -16,6 +16,7 @@ import (
 	handlers_ec2_igw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/igw"
 	handlers_ec2_natgw "github.com/mulgadc/spinifex/spinifex/handlers/ec2/natgw"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
+	"github.com/mulgadc/spinifex/spinifex/migrate"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -45,8 +46,8 @@ func NewRouteTableServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketRouteTables, err)
 	}
-	if err := utils.WriteVersion(rtbKV, KVBucketRouteTablesVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketRouteTables, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketRouteTables, rtbKV, KVBucketRouteTablesVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketRouteTables, err)
 	}
 
 	vpcKV, err := utils.GetOrCreateKVBucket(js, handlers_ec2_vpc.KVBucketVPCs, 10)

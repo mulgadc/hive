@@ -17,6 +17,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
 	"github.com/mulgadc/spinifex/spinifex/filterutil"
+	"github.com/mulgadc/spinifex/spinifex/migrate"
 	"github.com/mulgadc/spinifex/spinifex/objectstore"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
@@ -74,8 +75,8 @@ func NewSnapshotServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*S
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketVolumeSnapshots, err)
 	}
-	if err := utils.WriteVersion(kv, KVBucketVolumeSnapshotsVersion); err != nil {
-		return nil, nil, fmt.Errorf("write version to %s: %w", KVBucketVolumeSnapshots, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketVolumeSnapshots, kv, KVBucketVolumeSnapshotsVersion); err != nil {
+		return nil, nil, fmt.Errorf("migrate %s: %w", KVBucketVolumeSnapshots, err)
 	}
 
 	slog.Info("Snapshot service initialized with JetStream KV", "bucket", KVBucketVolumeSnapshots)

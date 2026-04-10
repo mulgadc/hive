@@ -13,6 +13,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
 	"github.com/mulgadc/spinifex/spinifex/filterutil"
+	"github.com/mulgadc/spinifex/spinifex/migrate"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -57,8 +58,8 @@ func NewPlacementGroupServiceImplWithNATS(cfg *config.Config, natsConn *nats.Con
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketPlacementGroups, err)
 	}
-	if err := utils.WriteVersion(kv, KVBucketPlacementGroupsVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketPlacementGroups, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketPlacementGroups, kv, KVBucketPlacementGroupsVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketPlacementGroups, err)
 	}
 
 	slog.Info("Placement group service initialized with JetStream KV", "bucket", KVBucketPlacementGroups)

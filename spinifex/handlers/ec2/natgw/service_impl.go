@@ -14,6 +14,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	handlers_ec2_eip "github.com/mulgadc/spinifex/spinifex/handlers/ec2/eip"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
+	"github.com/mulgadc/spinifex/spinifex/migrate"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -41,8 +42,8 @@ func NewNatGatewayServiceImplWithNATS(natsConn *nats.Conn) (*NatGatewayServiceIm
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketNatGateways, err)
 	}
-	if err := utils.WriteVersion(natgwKV, KVBucketNatGatewaysVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketNatGateways, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketNatGateways, natgwKV, KVBucketNatGatewaysVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketNatGateways, err)
 	}
 
 	// Deleted NAT Gateways bucket with 1-hour TTL — keys auto-expire.
@@ -59,8 +60,8 @@ func NewNatGatewayServiceImplWithNATS(natsConn *nats.Conn) (*NatGatewayServiceIm
 			return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketDeletedNatGateways, err)
 		}
 	}
-	if err := utils.WriteVersion(deletedKV, KVBucketDeletedNatGatewaysVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketDeletedNatGateways, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketDeletedNatGateways, deletedKV, KVBucketDeletedNatGatewaysVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketDeletedNatGateways, err)
 	}
 
 	eipKV, err := utils.GetOrCreateKVBucket(js, handlers_ec2_eip.KVBucketEIPs, 10)

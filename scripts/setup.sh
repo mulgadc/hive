@@ -370,6 +370,74 @@ EOF
     fi
 }
 
+# --- Fix file ownership for upgrades from v1 ---
+fix_file_ownership() {
+    info "Fixing file ownership for privilege separation..."
+
+    # Per-service data dirs — recursive chown so existing files are accessible
+    for entry in \
+        nats:spinifex-nats \
+        predastore:spinifex-storage \
+        spinifex:spinifex-daemon \
+        viperblock:spinifex-viperblock \
+        vpcd:spinifex-vpcd \
+        awsgw:spinifex-gw; do
+        IFS=: read -r dir svc_user <<< "$entry"
+        [ -d "/var/lib/spinifex/$dir" ] && \
+            $SUDO chown -R "$svc_user:$SPINIFEX_GROUP" "/var/lib/spinifex/$dir"
+    done
+
+    # Per-service config dirs — recursive chown
+    [ -d /etc/spinifex/nats ] && \
+        $SUDO chown -R "spinifex-nats:$SPINIFEX_GROUP" /etc/spinifex/nats
+    [ -d /etc/spinifex/predastore ] && \
+        $SUDO chown -R "spinifex-storage:$SPINIFEX_GROUP" /etc/spinifex/predastore
+
+    # Shared config files — root:spinifex with per-file modes
+    for f in spinifex.toml master.key server.key; do
+        [ -f "/etc/spinifex/$f" ] && \
+            $SUDO chown "root:$SPINIFEX_GROUP" "/etc/spinifex/$f" && \
+            $SUDO chmod 0640 "/etc/spinifex/$f"
+    done
+    for f in server.pem ca.pem; do
+        [ -f "/etc/spinifex/$f" ] && \
+            $SUDO chown "root:$SPINIFEX_GROUP" "/etc/spinifex/$f" && \
+            $SUDO chmod 0644 "/etc/spinifex/$f"
+    done
+
+    # CA private key — root-only
+    [ -f /etc/spinifex/ca.key ] && \
+        $SUDO chown root:root /etc/spinifex/ca.key && \
+        $SUDO chmod 0600 /etc/spinifex/ca.key
+
+    # Shared data dirs — root:spinifex 0770 (daemon + admin CLI write, services read)
+    for d in images amis volumes state; do
+        [ -d "/var/lib/spinifex/$d" ] && \
+            $SUDO chown -R "root:$SPINIFEX_GROUP" "/var/lib/spinifex/$d" && \
+            $SUDO chmod 0770 "/var/lib/spinifex/$d"
+    done
+
+    info "File ownership updated"
+}
+
+# --- Run config migrations ---
+run_migrations() {
+    # Only run if spinifex is already initialized (config exists)
+    if [ ! -f /etc/spinifex/spinifex.toml ]; then
+        info "Fresh install detected, skipping migrations"
+        return
+    fi
+
+    if [ "${INSTALL_SPINIFEX_SKIP_MIGRATE:-0}" = "1" ]; then
+        info "INSTALL_SPINIFEX_SKIP_MIGRATE=1, skipping migrations"
+        info "Run 'spx admin upgrade' manually to apply pending migrations"
+        return
+    fi
+
+    info "Running config migrations..."
+    $SUDO /usr/local/bin/spx admin upgrade --yes
+}
+
 # --- Install systemd units ---
 install_systemd() {
     info "Installing systemd units..."
@@ -471,7 +539,9 @@ main() {
     download_spinifex
     install_files
     create_directories
+    fix_file_ownership
     install_systemd
+    run_migrations
     install_logrotate
     rm -rf "$SPINIFEX_TMPDIR"
     restart_if_needed
