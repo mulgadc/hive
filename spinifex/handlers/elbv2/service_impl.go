@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"sync"
 	"time"
 
@@ -1342,6 +1343,144 @@ func (s *ELBv2ServiceImpl) DescribeListeners(input *elbv2.DescribeListenersInput
 }
 
 // --- SDK type conversion helpers ---
+
+func (s *ELBv2ServiceImpl) ModifyTargetGroupAttributes(input *elbv2.ModifyTargetGroupAttributesInput, accountID string) (*elbv2.ModifyTargetGroupAttributesOutput, error) {
+	if input.TargetGroupArn == nil || *input.TargetGroupArn == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	tg, err := s.store.GetTargetGroupByArn(*input.TargetGroupArn)
+	if err != nil {
+		slog.Error("ModifyTargetGroupAttributes: failed to get TG", "arn", *input.TargetGroupArn, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+	if tg == nil {
+		return nil, errors.New(awserrors.ErrorELBv2TargetGroupNotFound)
+	}
+
+	if tg.Attributes == nil {
+		tg.Attributes = make(map[string]string)
+	}
+
+	var submitted []*elbv2.TargetGroupAttribute
+	for _, attr := range input.Attributes {
+		if attr.Key != nil && attr.Value != nil {
+			tg.Attributes[*attr.Key] = *attr.Value
+			submitted = append(submitted, &elbv2.TargetGroupAttribute{
+				Key:   attr.Key,
+				Value: attr.Value,
+			})
+		}
+	}
+
+	if err := s.store.PutTargetGroup(tg); err != nil {
+		slog.Error("ModifyTargetGroupAttributes: failed to persist TG", "arn", *input.TargetGroupArn, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	return &elbv2.ModifyTargetGroupAttributesOutput{
+		Attributes: submitted,
+	}, nil
+}
+
+func (s *ELBv2ServiceImpl) DescribeTargetGroupAttributes(input *elbv2.DescribeTargetGroupAttributesInput, accountID string) (*elbv2.DescribeTargetGroupAttributesOutput, error) {
+	if input.TargetGroupArn == nil || *input.TargetGroupArn == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	tg, err := s.store.GetTargetGroupByArn(*input.TargetGroupArn)
+	if err != nil {
+		slog.Error("DescribeTargetGroupAttributes: failed to get TG", "arn", *input.TargetGroupArn, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+	if tg == nil {
+		return nil, errors.New(awserrors.ErrorELBv2TargetGroupNotFound)
+	}
+
+	merged := DefaultTargetGroupAttributes()
+	maps.Copy(merged, tg.Attributes)
+
+	var attrs []*elbv2.TargetGroupAttribute
+	for k, v := range merged {
+		attrs = append(attrs, &elbv2.TargetGroupAttribute{
+			Key:   aws.String(k),
+			Value: aws.String(v),
+		})
+	}
+
+	return &elbv2.DescribeTargetGroupAttributesOutput{
+		Attributes: attrs,
+	}, nil
+}
+
+func (s *ELBv2ServiceImpl) ModifyLoadBalancerAttributes(input *elbv2.ModifyLoadBalancerAttributesInput, accountID string) (*elbv2.ModifyLoadBalancerAttributesOutput, error) {
+	if input.LoadBalancerArn == nil || *input.LoadBalancerArn == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	lb, err := s.store.GetLoadBalancerByArn(*input.LoadBalancerArn)
+	if err != nil {
+		slog.Error("ModifyLoadBalancerAttributes: failed to get LB", "arn", *input.LoadBalancerArn, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+	if lb == nil {
+		return nil, errors.New(awserrors.ErrorELBv2LoadBalancerNotFound)
+	}
+
+	if lb.Attributes == nil {
+		lb.Attributes = make(map[string]string)
+	}
+
+	var submitted []*elbv2.LoadBalancerAttribute
+	for _, attr := range input.Attributes {
+		if attr.Key != nil && attr.Value != nil {
+			lb.Attributes[*attr.Key] = *attr.Value
+			submitted = append(submitted, &elbv2.LoadBalancerAttribute{
+				Key:   attr.Key,
+				Value: attr.Value,
+			})
+		}
+	}
+
+	if err := s.store.PutLoadBalancer(lb); err != nil {
+		slog.Error("ModifyLoadBalancerAttributes: failed to persist LB", "arn", *input.LoadBalancerArn, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	return &elbv2.ModifyLoadBalancerAttributesOutput{
+		Attributes: submitted,
+	}, nil
+}
+
+func (s *ELBv2ServiceImpl) DescribeLoadBalancerAttributes(input *elbv2.DescribeLoadBalancerAttributesInput, accountID string) (*elbv2.DescribeLoadBalancerAttributesOutput, error) {
+	if input.LoadBalancerArn == nil || *input.LoadBalancerArn == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	lb, err := s.store.GetLoadBalancerByArn(*input.LoadBalancerArn)
+	if err != nil {
+		slog.Error("DescribeLoadBalancerAttributes: failed to get LB", "arn", *input.LoadBalancerArn, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+	if lb == nil {
+		return nil, errors.New(awserrors.ErrorELBv2LoadBalancerNotFound)
+	}
+
+	merged := DefaultLoadBalancerAttributes()
+	maps.Copy(merged, lb.Attributes)
+
+	var attrs []*elbv2.LoadBalancerAttribute
+	for k, v := range merged {
+		attrs = append(attrs, &elbv2.LoadBalancerAttribute{
+			Key:   aws.String(k),
+			Value: aws.String(v),
+		})
+	}
+
+	return &elbv2.DescribeLoadBalancerAttributesOutput{
+		Attributes: attrs,
+	}, nil
+}
 
 func (s *ELBv2ServiceImpl) lbRecordToSDK(r *LoadBalancerRecord) *elbv2.LoadBalancer {
 	lb := &elbv2.LoadBalancer{
