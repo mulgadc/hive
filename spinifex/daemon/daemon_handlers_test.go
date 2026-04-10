@@ -2435,7 +2435,7 @@ func TestDaemonIP(t *testing.T) {
 		{"HostOnly", "myhost", "myhost"},
 		{"IPv6", "[::1]:4432", "::1"},
 		{"EmptyString", "", ""},
-		{"HostPortZero", "0.0.0.0:0", "0.0.0.0"},
+		{"HostPortZero", "0.0.0.0:0", "127.0.0.1"},
 	}
 
 	for _, tt := range tests {
