@@ -13,7 +13,7 @@ func init() {
 	DefaultRegistry.RegisterConfig("nats.conf", ConfigMigration{
 		FromVersion: 0,
 		ToVersion:   1,
-		Description: "Enable NATS authorization token",
+		Description: "Enable NATS auth token and relocate log_file to /var/log/spinifex",
 		Run: func(ctx ConfigContext) error {
 			path := filepath.Join(ctx.ConfigDir, "nats", "nats.conf")
 			content, err := os.ReadFile(path)
@@ -54,6 +54,18 @@ func init() {
 				}
 			}
 
+			// 3. Relocate log_file from data dir to /var/log/spinifex.
+			// v1.0.2 rendered: log_file: "/var/lib/spinifex/logs/nats.log"
+			// New location:    log_file: "/var/log/spinifex/nats.log"
+			// The new systemd unit sandbox only permits writes under /var/log/spinifex,
+			// so leaving the old path causes nats to crash-loop on "permission denied".
+			oldLogRe := regexp.MustCompile(`(?m)^log_file:\s*"/var/lib/spinifex/logs/nats\.log"`)
+			newLogLine := `log_file: "/var/log/spinifex/nats.log"`
+			if oldLogRe.Match(updated) {
+				updated = oldLogRe.ReplaceAll(updated, []byte(newLogLine))
+				changed = true
+			}
+
 			if !changed {
 				ctx.Logger.Info("nats.conf: already migrated, skipping")
 				return nil
@@ -74,6 +86,10 @@ func init() {
 			}
 			if !uncommentedRe.Match(result) {
 				return fmt.Errorf("nats.conf migration failed: token line not found after uncommenting")
+			}
+			// Validate log_file no longer points at the old data-dir location.
+			if oldLogRe.Match(result) {
+				return fmt.Errorf("nats.conf migration failed: log_file still points to /var/lib/spinifex/logs after rewrite")
 			}
 			return nil
 		},

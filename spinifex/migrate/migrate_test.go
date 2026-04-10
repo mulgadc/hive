@@ -525,6 +525,41 @@ authorization {
 	require.NoError(t, err)
 }
 
+func TestNATSTokenMigration_RewritesLogFilePath(t *testing.T) {
+	dir := t.TempDir()
+	natsDir := filepath.Join(dir, "nats")
+	require.NoError(t, os.MkdirAll(natsDir, 0o755))
+	confPath := filepath.Join(natsDir, "nats.conf")
+	// Simulates a v1.0.2-rendered nats.conf — the log_file path lives under the
+	// data dir, which the new systemd sandbox blocks writes to.
+	require.NoError(t, os.WriteFile(confPath, []byte(`# NATS Server Configuration
+authorization {
+#  token: "mytoken123"
+}
+log_file: "/var/lib/spinifex/logs/nats.log"
+`), 0o640))
+
+	r := NewRegistry()
+	r.RegisterConfigTarget("nats.conf", "nats/nats.conf", &NATSConfVersionReader{})
+	r.RegisterConfig("nats.conf", ConfigMigration{
+		FromVersion: 0,
+		ToVersion:   1,
+		Description: "Enable NATS auth token and relocate log_file",
+		Run:         DefaultRegistry.configMigrations["nats.conf"][0].Run,
+	})
+
+	err := r.RunConfig("nats.conf", dir, dir)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(confPath)
+	require.NoError(t, err)
+	content := string(data)
+	assert.Contains(t, content, `log_file: "/var/log/spinifex/nats.log"`)
+	assert.NotContains(t, content, `"/var/lib/spinifex/logs/nats.log"`)
+	// Token rewrite still applied alongside the log_file rewrite.
+	assert.Contains(t, content, `  token: "mytoken123"`)
+}
+
 func TestNATSTokenMigration_ToleratesWhitespaceVariations(t *testing.T) {
 	dir := t.TempDir()
 	natsDir := filepath.Join(dir, "nats")
