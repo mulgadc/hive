@@ -488,7 +488,7 @@ func GenerateCACert(caCertPath, caKeyPath string) error {
 	}
 
 	// Write CA certificate to file
-	caCertOut, err := os.OpenFile(caCertPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	caCertOut, err := os.Create(caCertPath)
 	if err != nil {
 		return fmt.Errorf("failed to create CA cert file: %w", err)
 	}
