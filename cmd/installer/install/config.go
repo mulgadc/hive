@@ -24,11 +24,27 @@ type Config struct {
 	// Disk is the block device path to install onto (e.g. /dev/sda).
 	Disk string
 
-	// Network
-	ManagementIP string
-	SubnetMask   string
-	Gateway      string
-	OVNInterface string
+	// WAN interface — always present. The management IP lives on br-wan (a Linux
+	// bridge over the NIC), not on the physical NIC itself. This allows OVN/OVS
+	// to safely attach to the bridge without disrupting host connectivity.
+	WANInterface string
+	WANDHCPMode  bool
+	WANAddress   string   // empty if WANDHCPMode
+	WANMask      string   // empty if WANDHCPMode
+	WANGateway   string   // empty if WANDHCPMode
+	WANDNS       []string // empty if WANDHCPMode; e.g. ["1.1.1.1", "8.8.8.8"]
+	WANWiFiSSID  string   // non-empty if a WiFi NIC was selected
+	WANWiFiPass  string   // non-empty if a WiFi NIC was selected
+
+	// LAN interface — only set when 2+ NICs are present. The Geneve encap IP
+	// for OVN tunnels lives on br-lan. When empty, the WAN address is used.
+	LANInterface string
+	LANDHCPMode  bool
+	LANAddress   string
+	LANMask      string
+	LANDNS       []string
+	LANWiFiSSID  string
+	LANWiFiPass  string
 
 	// Node identity
 	Hostname string

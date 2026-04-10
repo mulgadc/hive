@@ -27,9 +27,11 @@ import (
 
 // Config holds the values the firstboot service needs to configure the node.
 type Config struct {
-	Hostname     string
-	OVNInterface string
-	ManagementIP string
+	Hostname string
+	// EncapIP is the Geneve tunnel IP for OVN. Set to the LAN bridge IP when a
+	// dedicated LAN NIC is present, otherwise the WAN bridge IP. Empty when DHCP
+	// is used — setup-ovn.sh auto-detects the IP from the default route in that case.
+	EncapIP string
 	// ClusterRole is "init" or "join".
 	ClusterRole string
 	// JoinAddr is host:port of the primary node, only used when ClusterRole is "join".
@@ -60,6 +62,13 @@ func Write(root string, cfg Config) error {
 func writeScript(root string, cfg Config) error {
 	clusterCmd := buildClusterCmd(cfg)
 
+	// --encap-ip is optional: when DHCP is used the IP is unknown at install time
+	// and setup-ovn.sh auto-detects it from the default route at boot.
+	setupOVN := "/usr/local/bin/spinifex-setup-ovn.sh \\\n  --management"
+	if cfg.EncapIP != "" {
+		setupOVN += fmt.Sprintf(" \\\n  --encap-ip=%s", cfg.EncapIP)
+	}
+
 	script := fmt.Sprintf(`#!/bin/bash
 # Spinifex firstboot — runs once after ISO installation, then disables itself.
 set -euo pipefail
@@ -68,13 +77,10 @@ set -euo pipefail
 hostnamectl set-hostname %s
 
 # Configure OVN networking.
-# --macvlan creates a virtual sub-interface (spx-ext-<NIC>) off the management
-# NIC so OVN gets its own L2 path without stealing the host IP (SSH-safe).
-/usr/local/bin/spinifex-setup-ovn.sh \
-  --management \
-  --macvlan \
-  --wan-iface=%s \
-  --encap-ip=%s
+# br-wan (and br-lan if present) are Linux bridges created by the installer.
+# setup-ovn.sh auto-detects br-wan as the default route device (Linux bridge)
+# and wires it to OVS via a veth pair — non-destructive, SSH-safe.
+%s
 
 # Cluster formation — capture credentials to file for display on console.
 %s 2>&1 | tee /root/spinifex-credentials.txt
@@ -90,7 +96,7 @@ systemctl start spinifex.target
 
 # Disable this service so it never runs again
 systemctl disable spinifex-firstboot.service
-`, cfg.Hostname, cfg.OVNInterface, cfg.ManagementIP, clusterCmd)
+`, cfg.Hostname, setupOVN, clusterCmd)
 
 	path := filepath.Join(root, "usr/local/bin/spinifex-firstboot.sh")
 	return os.WriteFile(path, []byte(script), 0o755)
