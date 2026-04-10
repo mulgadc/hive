@@ -1,7 +1,9 @@
 # Example: Nginx Web Servers with ALB on Spinifex
 #
-# Deploys a VPC with two public subnets, two EC2 instances running Nginx,
-# and an Application Load Balancer distributing HTTP traffic between them.
+# Deploys a VPC with two subnets, two EC2 instances running Nginx with
+# private-only IPs, and an internet-facing Application Load Balancer
+# distributing HTTP traffic between them. The ALB reaches the instances
+# over the private VPC network, so the instances do not need public IPs.
 # Demonstrates: VPC, subnets, internet gateway, route table, security group,
 # key pair, cloud-init user-data, EC2 instances, ALB, target group, and listener.
 #
@@ -10,11 +12,15 @@
 #   export AWS_PROFILE=spinifex
 #   tofu init && tofu apply
 #
-# After apply:
-#   curl http://<alb_dns_name>     # Load-balanced Nginx
-#   curl http://<public_ip_1>      # Direct to instance 1
-#   curl http://<public_ip_2>      # Direct to instance 2
-#   ssh -i nginx-alb-demo.pem ec2-user@<public_ip>
+# After apply, fetch the ALB's public IP (the *.elb.spinifex.local DNS
+# name does not resolve from your host):
+#
+#   aws elbv2 describe-load-balancers --names nginx-alb \
+#     --query 'LoadBalancers[0].AvailabilityZones[].LoadBalancerAddresses[].IpAddress' \
+#     --output text
+#
+# Then:
+#   curl http://<alb_public_ip>    # Load-balanced Nginx (alternates between instances)
 
 terraform {
   required_version = ">= 1.6.0"
@@ -58,9 +64,9 @@ provider "aws" {
   region = var.region
 
   endpoints {
-    ec2            = var.spinifex_endpoint
-    iam            = var.spinifex_endpoint
-    sts            = var.spinifex_endpoint
+    ec2                    = var.spinifex_endpoint
+    iam                    = var.spinifex_endpoint
+    sts                    = var.spinifex_endpoint
     elasticloadbalancingv2 = var.spinifex_endpoint
   }
 
@@ -138,10 +144,9 @@ resource "aws_internet_gateway" "igw" {
 # ---------------------------------------------------------------------------
 
 resource "aws_subnet" "public_a" {
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.20.1.0/24"
-  availability_zone       = data.aws_availability_zones.available.names[0]
-  map_public_ip_on_launch = true
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = "10.20.1.0/24"
+  availability_zone = data.aws_availability_zones.available.names[0]
 
   tags = {
     Name = "nginx-alb-public-a"
@@ -149,10 +154,9 @@ resource "aws_subnet" "public_a" {
 }
 
 resource "aws_subnet" "public_b" {
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.20.2.0/24"
-  availability_zone       = data.aws_availability_zones.available.names[0]
-  map_public_ip_on_launch = true
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = "10.20.2.0/24"
+  availability_zone = data.aws_availability_zones.available.names[0]
 
   tags = {
     Name = "nginx-alb-public-b"
@@ -236,8 +240,6 @@ resource "aws_instance" "nginx_1" {
   vpc_security_group_ids = [aws_security_group.web.id]
   key_name               = aws_key_pair.nginx.key_name
 
-  associate_public_ip_address = true
-
   user_data_base64 = base64encode(<<-USERDATA
     #!/bin/bash
     set -euo pipefail
@@ -277,8 +279,6 @@ resource "aws_instance" "nginx_2" {
   subnet_id              = aws_subnet.public_b.id
   vpc_security_group_ids = [aws_security_group.web.id]
   key_name               = aws_key_pair.nginx.key_name
-
-  associate_public_ip_address = true
 
   user_data_base64 = base64encode(<<-USERDATA
     #!/bin/bash
@@ -388,41 +388,46 @@ resource "aws_lb_listener" "http" {
 # ---------------------------------------------------------------------------
 
 output "note" {
-  value = "EC2 instances can take 30+ seconds to boot after apply. If SSH or HTTP is unreachable, wait and retry."
+  value = <<-EOT
+    EC2 instances can take 30+ seconds to boot after apply — if HTTP is
+    unreachable, wait and retry.
+
+    The Nginx instances have private IPs only. The ALB DNS name ends in
+    .elb.spinifex.local and will not resolve from your host, so fetch the
+    ALB's public IP with:
+
+      aws elbv2 describe-load-balancers --names nginx-alb \
+        --query 'LoadBalancers[0].AvailabilityZones[].LoadBalancerAddresses[].IpAddress' \
+        --output text
+
+    Then: curl http://<that-ip>
+  EOT
+}
+
+output "alb_name" {
+  value = aws_lb.web.name
+}
+
+output "alb_arn" {
+  value = aws_lb.web.arn
 }
 
 output "alb_dns_name" {
   value = aws_lb.web.dns_name
 }
 
-output "alb_url" {
-  value = "http://${aws_lb.web.dns_name}"
-}
-
-output "alb_public_ip" {
-  value = aws_lb.web.public_ip
-}
-
 output "instance_1_id" {
   value = aws_instance.nginx_1.id
 }
 
-output "instance_1_public_ip" {
-  value = aws_instance.nginx_1.public_ip
+output "instance_1_private_ip" {
+  value = aws_instance.nginx_1.private_ip
 }
 
 output "instance_2_id" {
   value = aws_instance.nginx_2.id
 }
 
-output "instance_2_public_ip" {
-  value = aws_instance.nginx_2.public_ip
-}
-
-output "ssh_command_1" {
-  value = "ssh -i nginx-alb-demo.pem ec2-user@${aws_instance.nginx_1.public_ip}"
-}
-
-output "ssh_command_2" {
-  value = "ssh -i nginx-alb-demo.pem ec2-user@${aws_instance.nginx_2.public_ip}"
+output "instance_2_private_ip" {
+  value = aws_instance.nginx_2.private_ip
 }
