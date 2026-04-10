@@ -302,7 +302,6 @@ pass "create-load-balancer: $LB_ARN"
 # Verify ALB fields
 echo "Verifying ALB fields..."
 LB_TYPE=$(echo "$LB_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['LoadBalancers'][0].get('Type', ''))" 2>/dev/null)
-LB_STATE=$(echo "$LB_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['LoadBalancers'][0].get('State', {}).get('Code', ''))" 2>/dev/null)
 LB_DNS=$(echo "$LB_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['LoadBalancers'][0].get('DNSName', ''))" 2>/dev/null)
 LB_SCHEME=$(echo "$LB_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['LoadBalancers'][0].get('Scheme', ''))" 2>/dev/null)
 
@@ -312,10 +311,23 @@ else
     fail "ALB type: expected 'application', got '$LB_TYPE'"
 fi
 
+# Wait for ALB to transition from provisioning to active.
+# The ALB VM needs to boot and the HTTP agent must respond to a ping.
+echo "Waiting for ALB to become active (up to 120s)..."
+LB_STATE=""
+for i in $(seq 1 40); do
+    DESCRIBE_LB=$($AWS_ELBV2 describe-load-balancers --load-balancer-arns "$LB_ARN" --output json 2>/dev/null)
+    LB_STATE=$(echo "$DESCRIBE_LB" | python3 -c "import sys,json; print(json.load(sys.stdin)['LoadBalancers'][0].get('State', {}).get('Code', ''))" 2>/dev/null)
+    if [ "$LB_STATE" = "active" ]; then
+        break
+    fi
+    sleep 3
+done
+
 if [ "$LB_STATE" = "active" ]; then
-    pass "ALB state: active"
+    pass "ALB state: active (after ${i} polls)"
 else
-    fail "ALB state: expected 'active', got '$LB_STATE'"
+    fail "ALB state: expected 'active', got '$LB_STATE' after 120s"
 fi
 
 if [ -n "$LB_DNS" ]; then
@@ -506,17 +518,23 @@ else
 fi
 LB_ARN="" # Don't re-delete in cleanup
 
-# Verify ENIs were cleaned up
-echo "Verifying ALB ENIs cleaned up..."
-sleep 1 # Brief pause for async cleanup
-ENI_OUTPUT=$($AWS_EC2 describe-network-interfaces \
-    --filters "Name=description,Values=ELB *" \
-    --output json 2>&1) || true
-ENI_COUNT=$(echo "$ENI_OUTPUT" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('NetworkInterfaces', [])))" 2>/dev/null)
+# Verify ENIs were cleaned up (VM termination is async — poll until ENIs are gone)
+echo "Verifying ALB ENIs cleaned up (up to 30s)..."
+ENI_COUNT=""
+for i in $(seq 1 10); do
+    ENI_OUTPUT=$($AWS_EC2 describe-network-interfaces \
+        --filters "Name=description,Values=ELB *" \
+        --output json 2>&1) || true
+    ENI_COUNT=$(echo "$ENI_OUTPUT" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('NetworkInterfaces', [])))" 2>/dev/null)
+    if [ "$ENI_COUNT" = "0" ]; then
+        break
+    fi
+    sleep 3
+done
 if [ "$ENI_COUNT" = "0" ]; then
-    pass "ALB ENIs cleaned up: 0 remaining"
+    pass "ALB ENIs cleaned up: 0 remaining (after ${i} polls)"
 else
-    fail "ALB ENI cleanup: $ENI_COUNT ENIs still exist"
+    fail "ALB ENI cleanup: $ENI_COUNT ENIs still exist after 30s"
 fi
 
 # Delete second target group

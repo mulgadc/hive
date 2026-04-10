@@ -2124,6 +2124,105 @@ func TestTopologyHandler_AddNAT_MacvlanMode_CentralizedNAT(t *testing.T) {
 	}
 }
 
+func TestTopologyHandler_IGWAttach_VethMode_HasNatAddresses(t *testing.T) {
+	// In veth mode, the localnet port SHOULD have nat-addresses=router (centralized NAT)
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeVeth))
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name: "vpc-vpc-veth1",
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id": "vpc-veth1",
+			"spinifex:cidr":   "10.0.0.0/16",
+		},
+	})
+
+	evt := types.IGWEvent{InternetGatewayId: "igw-veth1", VpcId: "vpc-veth1"}
+	data, _ := json.Marshal(evt)
+	resp, err := nc.Request(TopicIGWAttach, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request vpc.igw-attach: %v", err)
+	}
+	assertSuccess(t, resp, "attach IGW veth")
+
+	port, err := mock.GetLogicalSwitchPort(ctx, "ext-port-vpc-veth1")
+	if err != nil {
+		t.Fatalf("expected localnet port: %v", err)
+	}
+	if port.Options["nat-addresses"] != "router" {
+		t.Errorf("veth mode should have nat-addresses=router, got %q", port.Options["nat-addresses"])
+	}
+}
+
+func TestTopologyHandler_AddNAT_VethMode_CentralizedNAT(t *testing.T) {
+	// In veth mode, DNAT rules should NOT have ExternalMAC/LogicalPort (centralized NAT)
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeVeth))
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name: "vpc-vpc-vnat1",
+		ExternalIDs: map[string]string{
+			"spinifex:vpc_id": "vpc-vnat1",
+			"spinifex:cidr":   "10.0.0.0/16",
+		},
+	})
+
+	evt := NATEvent{
+		VpcId:      "vpc-vnat1",
+		ExternalIP: "192.168.1.201",
+		LogicalIP:  "10.0.1.5",
+		PortName:   "port-eni-veth1",
+		MAC:        "02:00:00:aa:bb:cc",
+	}
+	data, _ := json.Marshal(evt)
+	resp, err := nc.Request(TopicAddNAT, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request vpc.add-nat: %v", err)
+	}
+	assertSuccess(t, resp, "add NAT veth")
+
+	router, err := mock.GetLogicalRouter(ctx, "vpc-vpc-vnat1")
+	if err != nil {
+		t.Fatalf("expected router: %v", err)
+	}
+	if len(router.NAT) != 1 {
+		t.Fatalf("expected 1 NAT rule, got %d", len(router.NAT))
+	}
+	nat := mock.nats[router.NAT[0]]
+	if nat.ExternalMAC != nil {
+		t.Errorf("veth mode should NOT have ExternalMAC, got %v", *nat.ExternalMAC)
+	}
+	if nat.LogicalPort != nil {
+		t.Errorf("veth mode should NOT have LogicalPort, got %v", *nat.LogicalPort)
+	}
+}
+
 func TestTopologyHandler_DefaultBridgeMode_IsMacvlan(t *testing.T) {
 	// When no bridge mode is set, it should default to macvlan behavior
 	topo := NewTopologyHandler(nil)
@@ -2134,5 +2233,93 @@ func TestTopologyHandler_DefaultBridgeMode_IsMacvlan(t *testing.T) {
 	topoDirect := NewTopologyHandler(nil, WithBridgeMode(BridgeModeDirect))
 	if topoDirect.isMacvlanMode() {
 		t.Error("expected direct bridge mode to NOT be macvlan")
+	}
+}
+
+func TestTopologyHandler_AddNAT_CleansStaleRulesFromOtherVPCs(t *testing.T) {
+	// When a public IP is reused across VPCs (e.g. instance terminated in the
+	// default VPC, IP returned to pool, then LB allocates it in a new VPC),
+	// the fire-and-forget vpc.delete-nat for the old instance may not have been
+	// processed. handleAddNAT must clean up stale NAT rules from ALL routers,
+	// not just the target VPC's router.
+	_, nc := startTestNATS(t)
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	topo := NewTopologyHandler(mock, WithBridgeMode(BridgeModeVeth))
+	subs, err := topo.Subscribe(nc)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() {
+		for _, s := range subs {
+			_ = s.Unsubscribe()
+		}
+	}()
+
+	// Create two VPC routers (simulating default VPC and a new test VPC).
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name:        "vpc-vpc-default",
+		ExternalIDs: map[string]string{"spinifex:vpc_id": "vpc-default", "spinifex:cidr": "10.0.0.0/16"},
+	})
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name:        "vpc-vpc-new",
+		ExternalIDs: map[string]string{"spinifex:vpc_id": "vpc-new", "spinifex:cidr": "10.200.0.0/16"},
+	})
+
+	// Simulate: instance in default VPC got public IP 192.168.1.243.
+	// Add NAT rule to default VPC's router (as if vpc.add-nat was processed).
+	oldEvt := NATEvent{
+		VpcId:      "vpc-default",
+		ExternalIP: "192.168.1.243",
+		LogicalIP:  "10.0.1.5",
+		PortName:   "port-eni-old",
+		MAC:        "02:00:00:aa:aa:aa",
+	}
+	data, _ := json.Marshal(oldEvt)
+	resp, err := nc.Request(TopicAddNAT, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request vpc.add-nat (old): %v", err)
+	}
+	assertSuccess(t, resp, "add old NAT")
+
+	// Verify the stale NAT exists on the default VPC's router.
+	defaultRouter, _ := mock.GetLogicalRouter(ctx, "vpc-vpc-default")
+	if len(defaultRouter.NAT) != 1 {
+		t.Fatalf("expected 1 NAT on default router, got %d", len(defaultRouter.NAT))
+	}
+
+	// Simulate: instance terminated, IP returned to pool, and a new LB in
+	// the new VPC re-allocates the same IP. vpc.delete-nat was NOT processed
+	// (fire-and-forget race). Now vpc.add-nat fires for the new VPC.
+	newEvt := NATEvent{
+		VpcId:      "vpc-new",
+		ExternalIP: "192.168.1.243",
+		LogicalIP:  "10.200.1.10",
+		PortName:   "port-eni-new",
+		MAC:        "02:00:00:bb:bb:bb",
+	}
+	data, _ = json.Marshal(newEvt)
+	resp, err = nc.Request(TopicAddNAT, data, 5_000_000_000)
+	if err != nil {
+		t.Fatalf("request vpc.add-nat (new): %v", err)
+	}
+	assertSuccess(t, resp, "add new NAT (should clean stale)")
+
+	// The stale NAT rule on the default VPC's router must be gone.
+	defaultRouter, _ = mock.GetLogicalRouter(ctx, "vpc-vpc-default")
+	if len(defaultRouter.NAT) != 0 {
+		t.Errorf("stale NAT rule was NOT cleaned from default VPC's router; got %d NAT rules", len(defaultRouter.NAT))
+	}
+
+	// The new VPC's router must have exactly 1 NAT rule with the new logical IP.
+	newRouter, _ := mock.GetLogicalRouter(ctx, "vpc-vpc-new")
+	if len(newRouter.NAT) != 1 {
+		t.Fatalf("expected 1 NAT on new router, got %d", len(newRouter.NAT))
+	}
+	newNAT := mock.nats[newRouter.NAT[0]]
+	if newNAT.LogicalIP != "10.200.1.10" {
+		t.Errorf("new NAT logical IP = %q, want 10.200.1.10", newNAT.LogicalIP)
 	}
 }

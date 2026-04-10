@@ -994,3 +994,14 @@ func TestReadPidFileFrom_EmptyDir(t *testing.T) {
 	_, err := ReadPidFileFrom("", fmt.Sprintf("nonexistent-service-%d", time.Now().UnixNano()))
 	assert.Error(t, err)
 }
+
+func TestHashMAC(t *testing.T) {
+	mac := HashMAC("02:00:00", "test-id")
+	assert.Regexp(t, `^02:00:00:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}$`, mac)
+
+	// Deterministic: same input → same output
+	assert.Equal(t, mac, HashMAC("02:00:00", "test-id"))
+
+	// Different input → different output
+	assert.NotEqual(t, mac, HashMAC("02:00:00", "other-id"))
+}

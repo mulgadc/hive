@@ -448,6 +448,60 @@ func TestMockOVNClient_InterfaceCompliance(t *testing.T) {
 	var _ OVNClient = (*LiveOVNClient)(nil)
 }
 
+func TestMockOVNClient_DeleteAllNATsByExternalIP(t *testing.T) {
+	mock := NewMockOVNClient()
+	_ = mock.Connect(context.Background())
+	ctx := context.Background()
+
+	// Create two routers with NAT rules sharing the same external IP.
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name:        "vpc-r1",
+		ExternalIDs: map[string]string{"spinifex:vpc_id": "r1"},
+	})
+	_ = mock.CreateLogicalRouter(ctx, &nbdb.LogicalRouter{
+		Name:        "vpc-r2",
+		ExternalIDs: map[string]string{"spinifex:vpc_id": "r2"},
+	})
+
+	_ = mock.AddNAT(ctx, "vpc-r1", &nbdb.NAT{
+		Type: "dnat_and_snat", ExternalIP: "192.168.1.50", LogicalIP: "10.0.0.1",
+	})
+	_ = mock.AddNAT(ctx, "vpc-r2", &nbdb.NAT{
+		Type: "dnat_and_snat", ExternalIP: "192.168.1.50", LogicalIP: "10.200.0.1",
+	})
+	// Unrelated NAT on r1 that should be untouched.
+	_ = mock.AddNAT(ctx, "vpc-r1", &nbdb.NAT{
+		Type: "dnat_and_snat", ExternalIP: "192.168.1.99", LogicalIP: "10.0.0.2",
+	})
+
+	removed, err := mock.DeleteAllNATsByExternalIP(ctx, "dnat_and_snat", "192.168.1.50")
+	if err != nil {
+		t.Fatalf("DeleteAllNATsByExternalIP: %v", err)
+	}
+	if removed != 2 {
+		t.Errorf("expected 2 removed, got %d", removed)
+	}
+
+	r1, _ := mock.GetLogicalRouter(ctx, "vpc-r1")
+	if len(r1.NAT) != 1 {
+		t.Errorf("r1 should retain 1 unrelated NAT, got %d", len(r1.NAT))
+	}
+
+	r2, _ := mock.GetLogicalRouter(ctx, "vpc-r2")
+	if len(r2.NAT) != 0 {
+		t.Errorf("r2 should have 0 NAT rules, got %d", len(r2.NAT))
+	}
+
+	// Deleting again should be a no-op.
+	removed, err = mock.DeleteAllNATsByExternalIP(ctx, "dnat_and_snat", "192.168.1.50")
+	if err != nil {
+		t.Fatalf("second DeleteAllNATsByExternalIP: %v", err)
+	}
+	if removed != 0 {
+		t.Errorf("expected 0 removed on second call, got %d", removed)
+	}
+}
+
 func TestNBDB_FullDatabaseModel(t *testing.T) {
 	dbModel, err := nbdb.FullDatabaseModel()
 	if err != nil {

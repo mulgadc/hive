@@ -791,9 +791,14 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "Error writing bootstrap files: %v\n", err)
 		os.Exit(1)
 	}
+	if err := writeSystemCredentials(configDir, accessKey, secretKey); err != nil {
+		fmt.Fprintf(os.Stderr, "Error writing system credentials: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Println("\n🔐 Generated IAM master key")
 	fmt.Printf("   Master key: %s\n", filepath.Join(configDir, "master.key"))
 	fmt.Printf("   Bootstrap: %s\n", filepath.Join(bootstrapDir, "bootstrap.json"))
+	fmt.Printf("   System creds: %s\n", filepath.Join(configDir, "system-credentials.json"))
 
 	fmt.Printf("\n🔑 Generated admin credentials (save these — they won't be shown again):\n")
 	fmt.Printf("   Access Key:  %s\n", bootstrapResult.AdminAccessKey)
@@ -1502,6 +1507,10 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		fmt.Fprintf(os.Stderr, "❌ Error writing bootstrap files: %v\n", err)
 		os.Exit(1)
 	}
+	if err := writeSystemCredentials(configDir, creds.AccessKey, creds.SecretKey); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error writing system credentials: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Println("✅ IAM master key received from leader")
 	fmt.Printf("✅ Bootstrap file written: %s\n", filepath.Join(bootstrapDir, "bootstrap.json"))
 
@@ -1911,6 +1920,24 @@ func writeBootstrapFiles(configDir, bootstrapDir string, masterKey []byte, acces
 		AdminAccessKey: adminAccessKey,
 		AdminSecretKey: adminSecretKey,
 	}, nil
+}
+
+// writeSystemCredentials writes the system access key to a plaintext JSON file.
+// The daemon reads this at startup to inject credentials into ALB VM cloud-init
+// for SigV4-authenticated communication with the AWS gateway.
+func writeSystemCredentials(configDir, accessKey, secretKey string) error {
+	creds := struct {
+		AccessKeyID     string `json:"access_key_id"`
+		SecretAccessKey string `json:"secret_access_key"`
+	}{
+		AccessKeyID:     accessKey,
+		SecretAccessKey: secretKey,
+	}
+	data, err := json.MarshalIndent(creds, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshalling system credentials: %w", err)
+	}
+	return os.WriteFile(filepath.Join(configDir, "system-credentials.json"), data, 0600)
 }
 
 // writeBootstrapFilesWithAdmin writes the bootstrap files using the provided

@@ -147,9 +147,28 @@ func (s *VPCServiceImpl) DeleteNetworkInterface(input *ec2.DeleteNetworkInterfac
 		return nil, errors.New(awserrors.ErrorInvalidNetworkInterfaceInUse)
 	}
 
-	// Release the IP back to the IPAM pool
+	// Release the private IP back to the IPAM pool
 	if err := s.ipam.ReleaseIP(record.SubnetId, record.PrivateIpAddress); err != nil {
 		slog.Warn("Failed to release IP during ENI delete", "eni", eniId, "ip", record.PrivateIpAddress, "err", err)
+	}
+
+	// Release auto-assigned public IP (if any) and remove NAT rule.
+	// Skip if the public IP belongs to an EIP — those are managed independently.
+	if record.PublicIpAddress != "" && s.externalIPAM != nil {
+		owned, err := s.isEIPOwned(eniId, accountID)
+		if err != nil {
+			slog.Error("DeleteNetworkInterface: failed to check EIP ownership, skipping public IP release to avoid data loss", "eniId", eniId, "err", err)
+		} else if owned {
+			slog.Info("DeleteNetworkInterface: public IP owned by EIP, skipping release", "eniId", eniId, "publicIp", record.PublicIpAddress)
+		} else {
+			portName := "port-" + eniId
+			s.publishNATEvent("vpc.delete-nat", record.VpcId, record.PublicIpAddress, record.PrivateIpAddress, portName, record.MacAddress)
+			if err := s.externalIPAM.ReleaseIP(record.PublicIpPool, record.PublicIpAddress); err != nil {
+				slog.Warn("Failed to release public IP during ENI delete", "eni", eniId, "ip", record.PublicIpAddress, "pool", record.PublicIpPool, "err", err)
+			} else {
+				slog.Info("Released auto-assigned public IP during ENI delete", "eniId", eniId, "publicIp", record.PublicIpAddress, "pool", record.PublicIpPool)
+			}
+		}
 	}
 
 	if err := s.eniKV.Delete(key); err != nil {
@@ -534,11 +553,7 @@ func (s *VPCServiceImpl) eniRecordToEC2(record *ENIRecord, accountID string) *ec
 
 // generateENIMac creates a locally-administered unicast MAC address from an ENI ID.
 func generateENIMac(eniId string) string {
-	h := uint32(0)
-	for _, c := range eniId {
-		h = h*31 + uint32(c) // #nosec G115 -- intentional overflow for hashing
-	}
-	return fmt.Sprintf("02:00:00:%02x:%02x:%02x", (h>>16)&0xff, (h>>8)&0xff, h&0xff)
+	return utils.HashMAC("02:00:00", eniId)
 }
 
 // publishENIEvent publishes an ENI lifecycle event to NATS for vpcd consumption.
@@ -556,4 +571,57 @@ func (s *VPCServiceImpl) publishENIEvent(topic, eniId, subnetId, vpcId, privateI
 		PrivateIpAddress:   privateIP,
 		MacAddress:         macAddr,
 	})
+}
+
+// NATEvent represents a NAT lifecycle event published to NATS.
+type NATEvent struct {
+	VpcId      string `json:"vpc_id"`
+	ExternalIP string `json:"external_ip"`
+	LogicalIP  string `json:"logical_ip"`
+	PortName   string `json:"port_name"`
+	MAC        string `json:"mac"`
+}
+
+// publishNATEvent publishes a NAT lifecycle event (vpc.add-nat or vpc.delete-nat) to NATS.
+func (s *VPCServiceImpl) publishNATEvent(topic, vpcId, externalIP, logicalIP, portName, mac string) {
+	utils.PublishEvent(s.natsConn, topic, NATEvent{
+		VpcId: vpcId, ExternalIP: externalIP, LogicalIP: logicalIP, PortName: portName, MAC: mac,
+	})
+}
+
+// isEIPOwned checks whether the given ENI's public IP is owned by an Elastic IP.
+// Returns (true, nil) if an EIP record references this ENI, (false, nil) if none
+// match, or (false, err) if the KV store could not be read.
+func (s *VPCServiceImpl) isEIPOwned(eniId, accountID string) (bool, error) {
+	if s.eipKV == nil {
+		return false, nil
+	}
+	keys, err := s.eipKV.Keys()
+	if err != nil {
+		if errors.Is(err, nats.ErrNoKeysFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("eipKV.Keys: %w", err)
+	}
+	prefix := accountID + "."
+	for _, k := range keys {
+		if len(k) < len(prefix) || k[:len(prefix)] != prefix {
+			continue
+		}
+		entry, err := s.eipKV.Get(k)
+		if err != nil {
+			return false, fmt.Errorf("eipKV.Get(%s): %w", k, err)
+		}
+		var record struct {
+			ENIId string `json:"eni_id"`
+		}
+		if err := json.Unmarshal(entry.Value(), &record); err != nil {
+			slog.Warn("isEIPOwned: malformed EIP record", "key", k, "err", err)
+			continue
+		}
+		if record.ENIId == eniId {
+			return true, nil
+		}
+	}
+	return false, nil
 }

@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/mulgadc/spinifex/spinifex/utils"
 )
 
 // sudoCommand wraps exec.Command with sudo when running as non-root.
@@ -115,13 +117,106 @@ func OVSIfaceID(eniId string) string {
 
 // generateDevMAC creates a locally-administered unicast MAC for the dev/hostfwd NIC.
 // Uses prefix 02:de:00 to distinguish from ENI MACs (02:00:00).
-// All octets must be valid hex for QEMU's virtio-net-pci mac property.
 func generateDevMAC(instanceId string) string {
-	h := uint32(0)
-	for _, c := range instanceId {
-		h = h*31 + uint32(c) // #nosec G115 -- intentional overflow for hashing
+	return utils.HashMAC("02:de:00", instanceId)
+}
+
+// generateMgmtMAC creates a locally-administered unicast MAC for the management NIC.
+// Uses prefix 02:a0:00 to distinguish from ENI MACs (02:00:00) and dev MACs (02:de:00).
+func generateMgmtMAC(instanceId string) string {
+	return utils.HashMAC("02:a0:00", instanceId)
+}
+
+// MgmtTapName returns the Linux TAP device name for a management NIC.
+// Uses "mg" prefix + truncated instance ID to stay within 15-char IFNAMSIZ.
+func MgmtTapName(instanceID string) string {
+	id := strings.TrimPrefix(instanceID, "i-")
+	name := "mg" + id
+	if len(name) > 15 {
+		name = name[:15]
 	}
-	return fmt.Sprintf("02:de:00:%02x:%02x:%02x", (h>>16)&0xff, (h>>8)&0xff, h&0xff)
+	return name
+}
+
+// GetBridgeIPv4 returns the first IPv4 address on the named Linux bridge.
+// Returns "", nil if the bridge does not exist.
+func GetBridgeIPv4(bridgeName string) (string, error) {
+	iface, err := net.InterfaceByName(bridgeName)
+	if err != nil {
+		// "no such network interface" means the bridge doesn't exist yet — expected.
+		// Other errors (permission denied on /sys/class/net/, etc.) are real failures.
+		if strings.Contains(err.Error(), "no such network interface") {
+			return "", nil
+		}
+		return "", fmt.Errorf("lookup %s: %w", bridgeName, err)
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return "", fmt.Errorf("list addrs on %s: %w", bridgeName, err)
+	}
+	for _, addr := range addrs {
+		ipNet, ok := addr.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ipNet.IP.To4() != nil {
+			return ipNet.IP.String(), nil
+		}
+	}
+	return "", fmt.Errorf("no IPv4 address on %s", bridgeName)
+}
+
+// SetupMgmtTapDevice creates a TAP device and adds it to the management Linux bridge.
+// Unlike VPC TAPs (OVS/OVN), this is a plain Linux bridge TAP.
+func SetupMgmtTapDevice(instanceID, mac, bridge string) (string, error) {
+	tapName := MgmtTapName(instanceID)
+
+	// Clean up stale TAP if present
+	if _, err := os.Stat("/sys/class/net/" + tapName); err == nil {
+		slog.Warn("Stale mgmt tap found, cleaning up", "tap", tapName)
+		if err := sudoCommand("ip", "link", "set", tapName, "nomaster").Run(); err != nil {
+			slog.Warn("Failed to remove stale mgmt tap from bridge", "tap", tapName, "err", err)
+		}
+		if err := sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run(); err != nil {
+			slog.Warn("Failed to delete stale mgmt tap", "tap", tapName, "err", err)
+		}
+	}
+
+	// Create TAP
+	if out, err := sudoCommand("ip", "tuntap", "add", "dev", tapName, "mode", "tap").CombinedOutput(); err != nil {
+		return "", fmt.Errorf("create mgmt tap %s: %s: %w", tapName, strings.TrimSpace(string(out)), err)
+	}
+
+	// Bring up
+	if out, err := sudoCommand("ip", "link", "set", tapName, "up").CombinedOutput(); err != nil {
+		_ = sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run()
+		return "", fmt.Errorf("bring up mgmt tap %s: %s: %w", tapName, strings.TrimSpace(string(out)), err)
+	}
+
+	// Add to Linux bridge
+	if out, err := sudoCommand("ip", "link", "set", tapName, "master", bridge).CombinedOutput(); err != nil {
+		_ = sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run()
+		return "", fmt.Errorf("add mgmt tap to %s: %s: %w", bridge, strings.TrimSpace(string(out)), err)
+	}
+
+	slog.Info("Management TAP created", "tap", tapName, "bridge", bridge, "mac", mac)
+	return tapName, nil
+}
+
+// CleanupMgmtTapDevice removes a management TAP device from its bridge and deletes it.
+func CleanupMgmtTapDevice(tapName string) error {
+	// Remove from bridge
+	if out, err := sudoCommand("ip", "link", "set", tapName, "nomaster").CombinedOutput(); err != nil {
+		slog.Warn("Failed to remove mgmt tap from bridge", "tap", tapName, "err", err, "out", strings.TrimSpace(string(out)))
+	}
+
+	// Delete TAP
+	if out, err := sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").CombinedOutput(); err != nil {
+		return fmt.Errorf("delete mgmt tap %s: %s: %w", tapName, strings.TrimSpace(string(out)), err)
+	}
+
+	slog.Info("Management TAP cleaned up", "tap", tapName)
+	return nil
 }
 
 // OVNHealthStatus reports the readiness of OVN networking on this compute node.
