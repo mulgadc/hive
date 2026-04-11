@@ -1868,6 +1868,12 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				if err := d.networkPlumber.CleanupTapDevice(instance.ENIId); err != nil {
 					slog.Warn("Failed to clean up tap device", "eni", instance.ENIId, "err", err)
 				}
+				// Clean up any extra ENI tap devices (multi-subnet ALB VMs).
+				for _, extra := range instance.ExtraENIs {
+					if err := d.networkPlumber.CleanupTapDevice(extra.ENIID); err != nil {
+						slog.Warn("Failed to clean up extra ENI tap device", "eni", extra.ENIID, "err", err)
+					}
+				}
 			}
 
 			// Clean up management TAP and release IP
@@ -1924,6 +1930,26 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 					}
 				} else {
 					slog.Info("Deleted ENI on termination", "eni", instance.ENIId, "instanceId", instance.ID)
+				}
+				// Detach + delete any extra ENIs (multi-subnet ALB VMs).
+				// Ordering matches the primary ENI: detach first, then delete.
+				// NotFound is tolerated because DeleteLoadBalancer may have
+				// already reaped the ENI via its own cleanup loop.
+				for _, extra := range instance.ExtraENIs {
+					if detachErr := d.vpcService.DetachENI(instance.AccountID, extra.ENIID); detachErr != nil {
+						slog.Warn("Failed to detach extra ENI on termination", "eni", extra.ENIID, "instanceId", instance.ID, "err", detachErr)
+					}
+					if _, eniErr := d.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+						NetworkInterfaceId: aws.String(extra.ENIID),
+					}, instance.AccountID); eniErr != nil {
+						if strings.Contains(eniErr.Error(), awserrors.ErrorInvalidNetworkInterfaceIDNotFound) {
+							slog.Debug("Extra ENI already cleaned up on termination", "eni", extra.ENIID)
+						} else {
+							slog.Error("Failed to delete extra ENI on termination", "eni", extra.ENIID, "instanceId", instance.ID, "err", eniErr)
+						}
+					} else {
+						slog.Info("Deleted extra ENI on termination", "eni", extra.ENIID, "instanceId", instance.ID)
+					}
 				}
 			}
 
@@ -2374,6 +2400,26 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		})
 
 		slog.Info("VPC networking configured", "tap", tapName, "eni", instance.ENIId, "mac", instance.ENIMac)
+
+		// Additional VPC NICs for multi-subnet system VMs (e.g. ALBs with
+		// subnets across multiple AZs). Each extra ENI gets its own tap on
+		// br-int and a matching virtio-net device. Cloud-init brings up the
+		// interfaces via per-MAC DHCP blocks written by generateNetworkConfig.
+		for idx, extra := range instance.ExtraENIs {
+			if err := d.networkPlumber.SetupTapDevice(extra.ENIID, extra.ENIMac); err != nil {
+				slog.Error("Failed to set up tap device for extra ENI", "eni", extra.ENIID, "err", err)
+				return fmt.Errorf("setup tap device for extra ENI %s: %w", extra.ENIID, err)
+			}
+			extraTapName := TapDeviceName(extra.ENIID)
+			netID := fmt.Sprintf("net%d", idx+1)
+			instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
+				Value: fmt.Sprintf("tap,id=%s,ifname=%s,script=no,downscript=no", netID, extraTapName),
+			})
+			instance.Config.Devices = append(instance.Config.Devices, vm.Device{
+				Value: fmt.Sprintf("virtio-net-pci,netdev=%s,mac=%s", netID, extra.ENIMac),
+			})
+			slog.Info("Extra VPC NIC configured", "tap", extraTapName, "eni", extra.ENIID, "mac", extra.ENIMac, "subnet", extra.SubnetID)
+		}
 
 		// DEV_NETWORKING: add a second NIC with hostfwd for SSH dev access
 		if d.config.Daemon.DevNetworking {

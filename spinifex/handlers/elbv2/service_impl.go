@@ -599,23 +599,54 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		}
 	}
 
-	// Launch ALB VM with the first ENI (when instance launcher is available)
+	// Launch ALB VM with every ENI (when instance launcher is available).
+	// The first ENI is the primary NIC; any additional ENIs are passed as
+	// ExtraENIs so the daemon sets up a tap + QEMU NIC for each, giving the
+	// ALB VM data-plane presence in every subnet the LB spans.
 	var albInstanceID string
 	var albVPCIP string
 	var hostPorts map[int]int
 	var launchFailed bool
 	if s.InstanceLauncher != nil && s.getSystemAMI() != "" && len(eniIDs) > 0 && len(subnets) > 0 {
-		// Resolve the first ENI's details for the VM
-		eniIP := ""
-		eniMAC := ""
+		// Resolve MAC/IP for every ENI in one describe call.
+		eniDetails := make(map[string]*ec2.NetworkInterface, len(eniIDs))
 		if s.VPCService != nil {
-			result, descErr := s.VPCService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
-				NetworkInterfaceIds: []*string{aws.String(eniIDs[0])},
-			}, accountID)
-			if descErr == nil && len(result.NetworkInterfaces) > 0 {
-				eniIP = aws.StringValue(result.NetworkInterfaces[0].PrivateIpAddress)
-				eniMAC = aws.StringValue(result.NetworkInterfaces[0].MacAddress)
+			eniPtrs := make([]*string, 0, len(eniIDs))
+			for _, id := range eniIDs {
+				eniPtrs = append(eniPtrs, aws.String(id))
 			}
+			result, descErr := s.VPCService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
+				NetworkInterfaceIds: eniPtrs,
+			}, accountID)
+			if descErr == nil {
+				for _, eni := range result.NetworkInterfaces {
+					if eni.NetworkInterfaceId != nil {
+						eniDetails[*eni.NetworkInterfaceId] = eni
+					}
+				}
+			}
+		}
+
+		primary := eniDetails[eniIDs[0]]
+		primaryIP := ""
+		primaryMAC := ""
+		if primary != nil {
+			primaryIP = aws.StringValue(primary.PrivateIpAddress)
+			primaryMAC = aws.StringValue(primary.MacAddress)
+		}
+
+		extraENIInputs := make([]ExtraENIInput, 0, len(eniIDs)-1)
+		for i := 1; i < len(eniIDs); i++ {
+			eni := eniDetails[eniIDs[i]]
+			if eni == nil {
+				continue
+			}
+			extraENIInputs = append(extraENIInputs, ExtraENIInput{
+				ENIID:    eniIDs[i],
+				ENIMac:   aws.StringValue(eni.MacAddress),
+				ENIIP:    aws.StringValue(eni.PrivateIpAddress),
+				SubnetID: aws.StringValue(eni.SubnetId),
+			})
 		}
 
 		userData, udErr := s.lbVMUserData(lbID)
@@ -629,8 +660,9 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 				SubnetID:     subnets[0],
 				UserData:     userData,
 				ENIID:        eniIDs[0],
-				ENIMac:       eniMAC,
-				ENIIP:        eniIP,
+				ENIMac:       primaryMAC,
+				ENIIP:        primaryIP,
+				ExtraENIs:    extraENIInputs,
 				Scheme:       scheme,
 				AccountID:    accountID,
 			}
