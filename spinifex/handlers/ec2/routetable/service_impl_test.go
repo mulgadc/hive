@@ -572,3 +572,48 @@ func TestDisassociateRouteTable_PublishesNatGatewayDeleteEvent(t *testing.T) {
 	natgwID, _ := receiveNatGWEvent(t, delSub, "10.0.11.0/24")
 	assert.Equal(t, "nat-test1", natgwID)
 }
+
+// TestReplaceRouteTableAssociation_PublishesNatGatewayEvents covers the move
+// path: subnet leaves a NAT-routed table for a NAT-free table. We expect a
+// delete event against the old table's NAT GW route and no add event.
+func TestReplaceRouteTableAssociation_PublishesNatGatewayEvents(t *testing.T) {
+	svc := setupTestService(t)
+	addSub, err := svc.natsConn.SubscribeSync("vpc.add-nat-gateway")
+	require.NoError(t, err)
+	defer func() { _ = addSub.Unsubscribe() }()
+	delSub, err := svc.natsConn.SubscribeSync("vpc.delete-nat-gateway")
+	require.NoError(t, err)
+	defer func() { _ = delSub.Unsubscribe() }()
+
+	oldRtb := createTestRtb(t, svc)
+	newRtb := createTestRtb(t, svc)
+
+	_, err = svc.CreateRoute(&ec2.CreateRouteInput{
+		RouteTableId:         aws.String(oldRtb),
+		DestinationCidrBlock: aws.String("0.0.0.0/0"),
+		NatGatewayId:         aws.String("nat-test1"),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	assocOut, err := svc.AssociateRouteTable(&ec2.AssociateRouteTableInput{
+		RouteTableId: aws.String(oldRtb),
+		SubnetId:     aws.String("subnet-priv1"),
+	}, testAccountID)
+	require.NoError(t, err)
+	// Drain the add event from the initial association.
+	_, err = addSub.NextMsg(time.Second)
+	require.NoError(t, err)
+
+	_, err = svc.ReplaceRouteTableAssociation(&ec2.ReplaceRouteTableAssociationInput{
+		AssociationId: assocOut.AssociationId,
+		RouteTableId:  aws.String(newRtb),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	natgwID, _ := receiveNatGWEvent(t, delSub, "10.0.11.0/24")
+	assert.Equal(t, "nat-test1", natgwID)
+
+	// New table has no NAT GW routes → no add event.
+	_, err = addSub.NextMsg(100 * time.Millisecond)
+	assert.Error(t, err, "Replace must not publish add when new table has no NAT GW routes")
+}

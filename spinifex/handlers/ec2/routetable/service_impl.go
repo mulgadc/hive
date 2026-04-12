@@ -740,6 +740,11 @@ func (s *RouteTableServiceImpl) ReplaceRouteTableAssociation(input *ec2.ReplaceR
 				return nil, err
 			}
 
+			// Tear down SNAT for any NAT GW routes on the old table — the
+			// subnet is leaving so its per-CIDR rules must be removed before
+			// the new table's rules take effect.
+			s.publishNatGatewayEventsForAssociation(accountID, "vpc.delete-nat-gateway", &oldRecord, assoc.SubnetId)
+
 			// Add to new table with new ID
 			newAssocID := utils.GenerateResourceID("rtbassoc")
 			newRecord.Associations = append(newRecord.Associations, AssociationRecord{
@@ -757,6 +762,9 @@ func (s *RouteTableServiceImpl) ReplaceRouteTableAssociation(input *ec2.ReplaceR
 				}
 				return nil, err
 			}
+
+			// Install SNAT for any NAT GW routes on the new table.
+			s.publishNatGatewayEventsForAssociation(accountID, "vpc.add-nat-gateway", newRecord, assoc.SubnetId)
 
 			slog.Info("ReplaceRouteTableAssociation completed",
 				"oldAssociationId", assocID, "newAssociationId", newAssocID,
