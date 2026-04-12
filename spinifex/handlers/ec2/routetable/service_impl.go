@@ -596,6 +596,11 @@ func (s *RouteTableServiceImpl) AssociateRouteTable(input *ec2.AssociateRouteTab
 		return nil, err
 	}
 
+	// Terraform commonly creates the route table + NAT GW route before associating
+	// subnets. CreateRoute runs against a table with zero associations so no SNAT
+	// events fire, so we must emit them here once the subnet joins.
+	s.publishNatGatewayEventsForAssociation(accountID, "vpc.add-nat-gateway", record, subnetID)
+
 	slog.Info("AssociateRouteTable completed", "routeTableId", rtbID, "subnetId", subnetID, "associationId", assocID, "accountID", accountID)
 
 	return &ec2.AssociateRouteTableOutput{
@@ -650,10 +655,14 @@ func (s *RouteTableServiceImpl) DisassociateRouteTable(input *ec2.DisassociateRo
 				if assoc.Main {
 					return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 				}
+				departingSubnetID := assoc.SubnetId
 				record.Associations = append(record.Associations[:i], record.Associations[i+1:]...)
 				if err := s.putRouteTable(accountID, &record); err != nil {
 					return nil, err
 				}
+
+				// Tear down per-subnet SNAT rules for any NAT GW routes on this table.
+				s.publishNatGatewayEventsForAssociation(accountID, "vpc.delete-nat-gateway", &record, departingSubnetID)
 
 				slog.Info("DisassociateRouteTable completed", "associationId", assocID, "routeTableId", record.RouteTableId, "accountID", accountID)
 				return &ec2.DisassociateRouteTableOutput{}, nil
@@ -881,7 +890,9 @@ func rtbMatchesFilters(record *RouteTableRecord, filters map[string][]string) bo
 }
 
 // publishNatGatewayEvents publishes vpc.add-nat-gateway events for each subnet
-// associated with this route table, so vpcd creates the SNAT rules.
+// associated with this route table, so vpcd creates the SNAT rules. Called by
+// CreateRoute when a NAT GW route is added to a table that may already have
+// subnet associations.
 func (s *RouteTableServiceImpl) publishNatGatewayEvents(accountID string, record *RouteTableRecord, vpcID, natgwID, publicIp string) {
 	if s.natsConn == nil {
 		return
@@ -890,37 +901,78 @@ func (s *RouteTableServiceImpl) publishNatGatewayEvents(accountID string, record
 		if assoc.SubnetId == "" || assoc.Main {
 			continue
 		}
-		subnetEntry, err := s.subnetKV.Get(utils.AccountKey(accountID, assoc.SubnetId))
-		if err != nil {
-			continue
-		}
-		var subnet handlers_ec2_vpc.SubnetRecord
-		if err := json.Unmarshal(subnetEntry.Value(), &subnet); err != nil {
-			continue
-		}
-
-		evt := struct {
-			VpcId        string `json:"vpc_id"`
-			NatGatewayId string `json:"nat_gateway_id"`
-			PublicIp     string `json:"public_ip"`
-			SubnetCidr   string `json:"subnet_cidr"`
-		}{
-			VpcId:        vpcID,
-			NatGatewayId: natgwID,
-			PublicIp:     publicIp,
-			SubnetCidr:   subnet.CidrBlock,
-		}
-		eventData, err := json.Marshal(evt)
-		if err != nil {
-			slog.Warn("Failed to marshal NAT GW add event", "err", err)
-			continue
-		}
-		if err := s.natsConn.Publish("vpc.add-nat-gateway", eventData); err != nil {
-			slog.Warn("Failed to publish NAT GW add event", "subnet", assoc.SubnetId, "err", err)
-		} else {
-			slog.Info("Published NAT GW add event", "subnetCidr", subnet.CidrBlock, "publicIp", publicIp)
-		}
+		s.publishNatGatewayEventForSubnet(accountID, "vpc.add-nat-gateway", assoc.SubnetId, vpcID, natgwID, publicIp)
 	}
+}
+
+// publishNatGatewayEventsForAssociation emits one NAT GW SNAT event per NAT GW
+// route on the table, scoped to a single subnet. Called when a subnet joins or
+// leaves a route table that already has NAT GW routes so OVN SNAT state tracks
+// association lifecycle (terraform creates the route first, then associates).
+func (s *RouteTableServiceImpl) publishNatGatewayEventsForAssociation(accountID, topic string, record *RouteTableRecord, subnetID string) {
+	if s.natsConn == nil || subnetID == "" {
+		return
+	}
+	for _, r := range record.Routes {
+		if r.NatGatewayId == "" {
+			continue
+		}
+		natgwEntry, err := s.natgwKV.Get(utils.AccountKey(accountID, r.NatGatewayId))
+		if err != nil {
+			slog.Warn("NAT GW event: natgw lookup failed", "topic", topic, "natGatewayId", r.NatGatewayId, "err", err)
+			continue
+		}
+		var natgw struct {
+			NatGatewayId string `json:"nat_gateway_id"`
+			VpcId        string `json:"vpc_id"`
+			PublicIp     string `json:"public_ip"`
+		}
+		if err := json.Unmarshal(natgwEntry.Value(), &natgw); err != nil {
+			slog.Warn("NAT GW event: natgw unmarshal failed", "topic", topic, "natGatewayId", r.NatGatewayId, "err", err)
+			continue
+		}
+		s.publishNatGatewayEventForSubnet(accountID, topic, subnetID, natgw.VpcId, natgw.NatGatewayId, natgw.PublicIp)
+	}
+}
+
+// publishNatGatewayEventForSubnet publishes a single vpc.{add,delete}-nat-gateway
+// event for the given subnet. Side-effect only — logs and swallows errors so a
+// missing subnet record doesn't fail the caller's API response.
+func (s *RouteTableServiceImpl) publishNatGatewayEventForSubnet(accountID, topic, subnetID, vpcID, natgwID, publicIp string) {
+	if s.natsConn == nil {
+		return
+	}
+	subnetEntry, err := s.subnetKV.Get(utils.AccountKey(accountID, subnetID))
+	if err != nil {
+		slog.Warn("NAT GW event: subnet lookup failed", "topic", topic, "subnetId", subnetID, "err", err)
+		return
+	}
+	var subnet handlers_ec2_vpc.SubnetRecord
+	if err := json.Unmarshal(subnetEntry.Value(), &subnet); err != nil {
+		slog.Warn("NAT GW event: subnet unmarshal failed", "topic", topic, "subnetId", subnetID, "err", err)
+		return
+	}
+	evt := struct {
+		VpcId        string `json:"vpc_id"`
+		NatGatewayId string `json:"nat_gateway_id"`
+		PublicIp     string `json:"public_ip"`
+		SubnetCidr   string `json:"subnet_cidr"`
+	}{
+		VpcId:        vpcID,
+		NatGatewayId: natgwID,
+		PublicIp:     publicIp,
+		SubnetCidr:   subnet.CidrBlock,
+	}
+	data, err := json.Marshal(evt)
+	if err != nil {
+		slog.Warn("NAT GW event: marshal failed", "topic", topic, "err", err)
+		return
+	}
+	if err := s.natsConn.Publish(topic, data); err != nil {
+		slog.Warn("NAT GW event: publish failed", "topic", topic, "subnetId", subnetID, "err", err)
+		return
+	}
+	slog.Info("NAT GW event published", "topic", topic, "subnetCidr", subnet.CidrBlock, "publicIp", publicIp)
 }
 
 // recordToEC2 converts an internal record to an AWS SDK RouteTable struct
