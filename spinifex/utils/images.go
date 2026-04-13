@@ -31,6 +31,10 @@ type Images struct {
 	ChecksumType string    `json:"checksum_type"`
 	BootMode     string    `json:"boot_mode"`
 	Starred      bool      `json:"starred"`
+	// Tags are copied onto the imported AMI's AMIMetadata.Tags so the UI
+	// can filter/classify the image. Used to mark system-owned AMIs
+	// (e.g. the LB/HAProxy image) via spinifex:managed-by.
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 var AvailableImages = map[string]Images{
@@ -113,6 +117,11 @@ var AvailableImages = map[string]Images{
 		ChecksumType: "sha512",
 		BootMode:     "bios",
 		Starred:      false,
+		// Marked system-managed: the UI hides this AMI from the Images
+		// page so customers don't mistake it for a bootable OS image.
+		Tags: map[string]string{
+			"spinifex:managed-by": "elbv2",
+		},
 	},
 
 	/*

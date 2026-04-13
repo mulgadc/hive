@@ -293,6 +293,7 @@ func (d *Daemon) handleNodeVMs(msg *nats.Msg) {
 			InstanceID:   v.ID,
 			Status:       string(v.Status),
 			InstanceType: v.InstanceType,
+			ManagedBy:    v.ManagedBy,
 		}
 		// Get vCPU/memory from the resource manager's instance type info
 		if it, ok := d.resourceMgr.instanceTypes[v.InstanceType]; ok {

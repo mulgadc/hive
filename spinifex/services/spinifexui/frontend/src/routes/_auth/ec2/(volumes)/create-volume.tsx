@@ -132,7 +132,7 @@ function CreateVolume() {
           isPending={createMutation.isPending}
           isSubmitting={isSubmitting}
           onCancel={() => navigate({ to: "/ec2/describe-volumes" })}
-          pendingLabel="Creating\u2026"
+          pendingLabel="Creating…"
           submitLabel="Create Volume"
         />
       </form>

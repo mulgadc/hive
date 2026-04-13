@@ -5,9 +5,31 @@ import (
 	"log/slog"
 	"os/exec"
 	"strings"
+	"sync"
 )
 
 const dhcpcdBin = "/usr/sbin/dhcpcd"
+
+// bridgeMu serialises dhcpcd invocations per bridge. Concurrent invocations on
+// the same bridge race: the second one sees the first still running and is
+// treated by dhcpcd as a control command rather than a fresh DISCOVER, so we
+// scrape stdout and find no lease. Serialising per bridge costs us nothing
+// (DHCP is inherently slow) and eliminates the race.
+var (
+	bridgeMuMap   = map[string]*sync.Mutex{}
+	bridgeMuGuard sync.Mutex
+)
+
+func bridgeLock(bridge string) *sync.Mutex {
+	bridgeMuGuard.Lock()
+	defer bridgeMuGuard.Unlock()
+	mu, ok := bridgeMuMap[bridge]
+	if !ok {
+		mu = &sync.Mutex{}
+		bridgeMuMap[bridge] = mu
+	}
+	return mu
+}
 
 // ObtainDHCPLease requests a DHCP lease from the router on the given OVS bridge
 // using a unique client ID. Returns the leased IP. The lease is obtained with
@@ -20,6 +42,10 @@ func ObtainDHCPLease(bridge, clientID string) (string, error) {
 	if clientID == "" {
 		return "", fmt.Errorf("DHCP lease: client ID is required")
 	}
+
+	mu := bridgeLock(bridge)
+	mu.Lock()
+	defer mu.Unlock()
 
 	// Run dhcpcd with:
 	//   --noconfigure   = don't add IP to interface (OVN handles traffic)
@@ -60,6 +86,10 @@ func ReleaseDHCPLease(bridge, clientID string) error {
 	if bridge == "" || clientID == "" {
 		return nil
 	}
+
+	mu := bridgeLock(bridge)
+	mu.Lock()
+	defer mu.Unlock()
 
 	cmd := exec.Command("sudo", dhcpcdBin,
 		"--release",

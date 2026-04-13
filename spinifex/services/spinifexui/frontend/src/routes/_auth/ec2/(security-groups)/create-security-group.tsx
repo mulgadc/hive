@@ -164,7 +164,7 @@ function CreateSecurityGroup() {
           isPending={createMutation.isPending}
           isSubmitting={isSubmitting}
           onCancel={() => navigate({ to: "/ec2/describe-security-groups" })}
-          pendingLabel="Creating\u2026"
+          pendingLabel="Creating…"
           submitLabel="Create Security Group"
         />
       </form>

@@ -67,6 +67,15 @@ sudo update-ca-certificates
 echo "=== Starting services ==="
 sudo systemctl start spinifex.target
 
+# Check if user needs to re-login for spinifex group membership
+if ! id -Gn 2>/dev/null | grep -qw spinifex; then
+    newgrp spinifex
+    # echo ""
+    # echo "NOTE: You were added to the 'spinifex' group but your current"
+    # echo "session doesn't reflect it yet. Log out and back in, or run:"
+    # echo "  newgrp spinifex"
+fi
+
 echo "=== Building and importing LB image ==="
 cd "$PROJECT_ROOT" && make build-lb-agent
 "$PROJECT_ROOT/scripts/build-system-image.sh" "$PROJECT_ROOT/scripts/images/lb.conf" --import --quiet
@@ -76,11 +85,3 @@ echo "Services: sudo systemctl status spinifex.target"
 echo "Logs:     journalctl -u 'spinifex-*' -f"
 echo "Test:     AWS_PROFILE=spinifex aws ec2 describe-instances"
 echo "Iterate:  make deploy (rebuild + restart all)"
-
-# Check if user needs to re-login for spinifex group membership
-if ! id -Gn 2>/dev/null | grep -qw spinifex; then
-    echo ""
-    echo "NOTE: You were added to the 'spinifex' group but your current"
-    echo "session doesn't reflect it yet. Log out and back in, or run:"
-    echo "  newgrp spinifex"
-fi

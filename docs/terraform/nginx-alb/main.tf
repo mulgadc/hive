@@ -53,6 +53,11 @@ variable "region" {
   default = "ap-southeast-2"
 }
 
+variable "instance_type" {
+  type = string
+  default = "t3.small"
+}
+
 variable "spinifex_endpoint" {
   type        = string
   default     = "https://localhost:9999"
@@ -311,7 +316,7 @@ resource "aws_security_group" "web" {
 
 resource "aws_instance" "nginx_1" {
   ami           = data.aws_ami.debian12.id
-  instance_type = "t3.small"
+  instance_type = var.instance_type
 
   subnet_id              = aws_subnet.private_a.id
   vpc_security_group_ids = [aws_security_group.web.id]
@@ -355,7 +360,7 @@ resource "aws_instance" "nginx_1" {
 
 resource "aws_instance" "nginx_2" {
   ami           = data.aws_ami.debian12.id
-  instance_type = "t3.small"
+  instance_type = var.instance_type
 
   subnet_id              = aws_subnet.private_b.id
   vpc_security_group_ids = [aws_security_group.web.id]

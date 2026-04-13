@@ -78,7 +78,7 @@ function CreateBucket() {
           isPending={createMutation.isPending}
           isSubmitting={isSubmitting}
           onCancel={() => navigate({ to: "/s3/ls" })}
-          pendingLabel="Creating\u2026"
+          pendingLabel="Creating…"
           submitLabel="Create Bucket"
         />
       </form>

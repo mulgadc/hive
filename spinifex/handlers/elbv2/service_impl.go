@@ -18,17 +18,18 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
+	"github.com/mulgadc/spinifex/spinifex/tags"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
 
 const (
-	// elbv2ManagedByTag is the tag key used to mark ENIs as system-managed by ELBv2.
-	elbv2ManagedByTag = "spinifex:managed-by"
-	// elbv2ManagedByValue is the tag value for ELBv2-managed ENIs.
-	elbv2ManagedByValue = "elbv2"
+	// elbv2ManagedByTag is an alias for the shared tag key (kept for readability).
+	elbv2ManagedByTag = tags.ManagedByKey
+	// elbv2ManagedByValue is the tag value for ELBv2-managed resources.
+	elbv2ManagedByValue = tags.ManagedByELBv2
 	// elbv2LBTag is the tag key storing the parent LB ARN on managed ENIs.
-	elbv2LBTag = "spinifex:lb-arn"
+	elbv2LBTag = tags.LBARNKey
 
 	// heartbeatPersistInterval controls how often a no-op heartbeat (no state
 	// change) writes the full LoadBalancerRecord back to KV. State transitions

@@ -1,4 +1,5 @@
 import { EC2Client } from "@aws-sdk/client-ec2"
+import { ElasticLoadBalancingV2Client } from "@aws-sdk/client-elastic-load-balancing-v2"
 import { IAMClient } from "@aws-sdk/client-iam"
 import { S3Client } from "@aws-sdk/client-s3"
 import { HttpRequest } from "@smithy/protocol-http"
@@ -15,6 +16,7 @@ const S3_SIGN_ENDPOINT = `${window.location.protocol}//localhost:8443`
 
 // Cached singleton clients
 let ec2Client: EC2Client | null = null
+let elbv2Client: ElasticLoadBalancingV2Client | null = null
 let iamClient: IAMClient | null = null
 let s3Client: S3Client | null = null
 
@@ -45,6 +47,35 @@ export function getEc2Client(): EC2Client {
     )
   }
   return ec2Client
+}
+
+export function getElbv2Client(): ElasticLoadBalancingV2Client {
+  if (!elbv2Client) {
+    const credentials = getCredentials()
+    if (!credentials) {
+      throw new Error("AWS credentials not configured")
+    }
+    elbv2Client = new ElasticLoadBalancingV2Client({
+      endpoint: AWSGW_SIGN_ENDPOINT,
+      region: AWS_REGION,
+      credentials: {
+        accessKeyId: credentials.accessKeyId,
+        secretAccessKey: credentials.secretAccessKey,
+      },
+    })
+    elbv2Client.middlewareStack.add(
+      (next) => (args) => {
+        if (HttpRequest.isInstance(args.request)) {
+          args.request.hostname = window.location.hostname
+          args.request.port = Number(window.location.port) || 443
+          args.request.path = `/proxy/awsgw${args.request.path}`
+        }
+        return next(args)
+      },
+      { step: "finalizeRequest", name: "proxyRewrite", override: true },
+    )
+  }
+  return elbv2Client
 }
 
 export function getIamClient(): IAMClient {
@@ -125,6 +156,7 @@ export function getS3Client(): S3Client {
 // Call on logout to clear cached clients
 export function clearClients(): void {
   ec2Client = null
+  elbv2Client = null
   iamClient = null
   s3Client = null
 }

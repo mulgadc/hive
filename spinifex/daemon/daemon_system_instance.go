@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	handlers_elbv2 "github.com/mulgadc/spinifex/spinifex/handlers/elbv2"
+	"github.com/mulgadc/spinifex/spinifex/tags"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/mulgadc/spinifex/spinifex/vm"
 )
@@ -51,12 +52,22 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 		return nil, fmt.Errorf("insufficient capacity for %s: %w", input.InstanceType, err)
 	}
 
-	// Build a RunInstancesInput for the instance service
+	// Build a RunInstancesInput for the instance service.
+	// Tag the instance as ELBv2-managed so the UI hides it from
+	// customer-facing listings (Nodes page).
 	runInput := &ec2.RunInstancesInput{
 		InstanceType: aws.String(input.InstanceType),
 		ImageId:      aws.String(input.ImageID),
 		MinCount:     aws.Int64(1),
 		MaxCount:     aws.Int64(1),
+		TagSpecifications: []*ec2.TagSpecification{
+			{
+				ResourceType: aws.String("instance"),
+				Tags: []*ec2.Tag{
+					{Key: aws.String(tags.ManagedByKey), Value: aws.String(tags.ManagedByELBv2)},
+				},
+			},
+		},
 	}
 	if input.SubnetID != "" {
 		runInput.SubnetId = aws.String(input.SubnetID)
@@ -74,6 +85,10 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 	}
 
 	instance.AccountID = accountID
+	instance.ManagedBy = tags.ManagedByELBv2
+	ec2Instance.Tags = []*ec2.Tag{
+		{Key: aws.String(tags.ManagedByKey), Value: aws.String(tags.ManagedByELBv2)},
+	}
 	instance.Reservation = &ec2.Reservation{}
 	instance.Reservation.SetReservationId(utils.GenerateResourceID("r"))
 	instance.Reservation.SetOwnerId(accountID)
@@ -147,7 +162,7 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 			region = d.config.Region
 			az = d.config.AZ
 		}
-		allocatedIP, poolName, allocErr := d.externalIPAM.AllocateIP(region, az, "auto_assign", instance.ENIId, instance.ID)
+		allocatedIP, poolName, allocErr := d.externalIPAM.AllocateIP(region, az, "auto_assign", "", instance.ENIId, instance.ID)
 		if allocErr != nil {
 			slog.Error("LaunchSystemInstance: failed to allocate public IP for internet-facing ALB", "instanceId", instance.ID, "err", allocErr)
 			d.cleanupFailedSystemInstance(instance, instanceType)

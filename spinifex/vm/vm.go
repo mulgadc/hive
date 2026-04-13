@@ -104,6 +104,11 @@ type VM struct {
 	// via the QEMU user-mode dev NIC. Used by ALB VMs to expose HTTP ports.
 	// Maps guest port → host port (host port filled in by StartInstance).
 	ExtraHostfwd map[int]int `json:"extra_hostfwd,omitempty"`
+
+	// ManagedBy identifies the Spinifex platform component that owns this
+	// VM (e.g. "elbv2"). Empty for customer-launched instances. The UI
+	// filters out tagged VMs from customer-facing listings.
+	ManagedBy string `json:"managed_by,omitempty"`
 }
 
 // ResetNodeLocalState zeroes out fields that are specific to the daemon node

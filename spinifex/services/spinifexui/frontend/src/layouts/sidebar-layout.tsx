@@ -4,6 +4,7 @@ import {
   Activity,
   BookOpen,
   Camera,
+  Crosshair,
   HardDrive,
   Home,
   Image,
@@ -16,6 +17,7 @@ import {
   Shield,
   ShieldCheck,
   Users,
+  Waypoints,
 } from "lucide-react"
 
 // import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -188,6 +190,36 @@ export function SidebarLayout() {
                 >
                   <Layers className="size-4" />
                   <span>Placement Groups</span>
+                </SidebarMenuButton>
+              </Link>
+            </SidebarMenuItem>
+
+            <SidebarMenuItem>
+              <Link to="/ec2/describe-load-balancers">
+                <SidebarMenuButton
+                  isActive={
+                    pathname.startsWith("/ec2/describe-load-balancers") ||
+                    pathname.startsWith("/ec2/create-load-balancer")
+                  }
+                  tooltip="Load Balancers"
+                >
+                  <Waypoints className="size-4" />
+                  <span>Load Balancers</span>
+                </SidebarMenuButton>
+              </Link>
+            </SidebarMenuItem>
+
+            <SidebarMenuItem>
+              <Link to="/ec2/describe-target-groups">
+                <SidebarMenuButton
+                  isActive={
+                    pathname.startsWith("/ec2/describe-target-groups") ||
+                    pathname.startsWith("/ec2/create-target-group")
+                  }
+                  tooltip="Target Groups"
+                >
+                  <Crosshair className="size-4" />
+                  <span>Target Groups</span>
                 </SidebarMenuButton>
               </Link>
             </SidebarMenuItem>

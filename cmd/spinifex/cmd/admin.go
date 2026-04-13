@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -440,6 +441,13 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	manifest.AMIMetadata.Virtualization = "hvm"
 	manifest.AMIMetadata.ImageOwnerAlias = "system"
 	manifest.AMIMetadata.VolumeSizeGiB = utils.SafeInt64ToUint64(imageStat.Size() / 1024 / 1024 / 1024)
+
+	// Copy catalog-provided tags (e.g. spinifex:managed-by for system AMIs)
+	// onto the imported AMI so the UI can filter them out.
+	if len(image.Tags) > 0 {
+		manifest.AMIMetadata.Tags = make(map[string]string, len(image.Tags))
+		maps.Copy(manifest.AMIMetadata.Tags, image.Tags)
+	}
 
 	// Volume Data
 	manifest.VolumeMetadata.VolumeID = volumeId // TODO: Confirm if unique, e.g vol-, if ami- used

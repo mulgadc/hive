@@ -5,6 +5,7 @@ import { createFileRoute } from "@tanstack/react-router"
 import { ListCard } from "@/components/list-card"
 import { PageHeading } from "@/components/page-heading"
 import { StateBadge } from "@/components/state-badge"
+import { isSystemManagedImage } from "@/lib/system-managed"
 import { ec2ImagesQueryOptions } from "@/queries/ec2"
 
 export const Route = createFileRoute("/_auth/ec2/(images)/describe-images/")({
@@ -24,7 +25,9 @@ export const Route = createFileRoute("/_auth/ec2/(images)/describe-images/")({
 function Images() {
   const { data } = useSuspenseQuery(ec2ImagesQueryOptions)
 
-  const images = data.Images ?? []
+  const images = (data.Images ?? []).filter(
+    (image) => !isSystemManagedImage(image),
+  )
 
   return (
     <>

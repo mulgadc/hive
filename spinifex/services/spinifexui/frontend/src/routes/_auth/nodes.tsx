@@ -14,9 +14,6 @@ import {
 } from "@/queries/admin"
 
 export const Route = createFileRoute("/_auth/nodes")({
-  beforeLoad: () => {
-    // Route exists but admin check is done in component
-  },
   head: () => ({
     meta: [{ title: "Nodes | Mulga" }],
   }),
@@ -75,7 +72,7 @@ function NodesPage() {
   }
 
   const nodes = nodesData?.nodes ?? []
-  const vms = vmsData?.vms ?? []
+  const vms = (vmsData?.vms ?? []).filter((vm) => !vm.managed_by)
 
   // Aggregate instance type capacity across all nodes
   const typeMap = new Map<
