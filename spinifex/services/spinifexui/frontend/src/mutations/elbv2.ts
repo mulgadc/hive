@@ -1,12 +1,15 @@
 import {
   type Action,
   type Tag,
+  type TargetDescription,
   CreateListenerCommand,
   CreateLoadBalancerCommand,
   CreateTargetGroupCommand,
   DeleteListenerCommand,
   DeleteLoadBalancerCommand,
   DeleteTargetGroupCommand,
+  DeregisterTargetsCommand,
+  RegisterTargetsCommand,
 } from "@aws-sdk/client-elastic-load-balancing-v2"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 
@@ -312,14 +315,55 @@ export function useCreateLoadBalancerWizard() {
   })
 }
 
+export interface TargetInput {
+  id: string
+  port?: number
+}
+
+export interface RegisterTargetsParams {
+  targetGroupArn: string
+  targets: TargetInput[]
+}
+
+function toTargetDescriptions(targets: TargetInput[]): TargetDescription[] {
+  return targets.map((t) => ({
+    Id: t.id,
+    Port: t.port,
+  }))
+}
+
 export function useRegisterTargets() {
+  const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: () => notImplemented("useRegisterTargets"),
+    mutationFn: (params: RegisterTargetsParams) => {
+      const command = new RegisterTargetsCommand({
+        TargetGroupArn: params.targetGroupArn,
+        Targets: toTargetDescriptions(params.targets),
+      })
+      return getElbv2Client().send(command)
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ["elbv2", "targetGroups", variables.targetGroupArn, "health"],
+      })
+    },
   })
 }
 
 export function useDeregisterTargets() {
+  const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: () => notImplemented("useDeregisterTargets"),
+    mutationFn: (params: RegisterTargetsParams) => {
+      const command = new DeregisterTargetsCommand({
+        TargetGroupArn: params.targetGroupArn,
+        Targets: toTargetDescriptions(params.targets),
+      })
+      return getElbv2Client().send(command)
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ["elbv2", "targetGroups", variables.targetGroupArn, "health"],
+      })
+    },
   })
 }

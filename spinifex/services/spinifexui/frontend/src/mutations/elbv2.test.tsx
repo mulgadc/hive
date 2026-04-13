@@ -25,6 +25,8 @@ import {
   useRegisterTargets,
 } from "./elbv2"
 
+const TG_ARN = "arn:aws:elasticloadbalancing:tg/app/foo/abc"
+
 let queryClient: QueryClient
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -50,8 +52,6 @@ function createQueryClient() {
 const stubs = [
   ["useModifyLoadBalancerAttributes", useModifyLoadBalancerAttributes],
   ["useModifyTargetGroupAttributes", useModifyTargetGroupAttributes],
-  ["useRegisterTargets", useRegisterTargets],
-  ["useDeregisterTargets", useDeregisterTargets],
 ] as const
 
 describe("elbv2 mutation stubs throw until implemented", () => {
@@ -221,6 +221,60 @@ describe("useCreateListener", () => {
       Protocol: "HTTP",
       Port: 80,
       DefaultActions: [{ Type: "forward", TargetGroupArn: "arn:tg:1" }],
+    })
+  })
+})
+
+describe("useRegisterTargets", () => {
+  it("sends RegisterTargetsCommand with id-only targets when port omitted", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useRegisterTargets(), { wrapper })
+
+    result.current.mutate({
+      targetGroupArn: TG_ARN,
+      targets: [{ id: "i-aaa" }, { id: "i-bbb" }],
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      TargetGroupArn: TG_ARN,
+      Targets: [
+        { Id: "i-aaa", Port: undefined },
+        { Id: "i-bbb", Port: undefined },
+      ],
+    })
+  })
+
+  it("passes per-target port override through", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useRegisterTargets(), { wrapper })
+
+    result.current.mutate({
+      targetGroupArn: TG_ARN,
+      targets: [{ id: "i-aaa", port: 8080 }],
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input.Targets).toEqual([
+      { Id: "i-aaa", Port: 8080 },
+    ])
+  })
+})
+
+describe("useDeregisterTargets", () => {
+  it("sends DeregisterTargetsCommand with target id and port", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useDeregisterTargets(), { wrapper })
+
+    result.current.mutate({
+      targetGroupArn: TG_ARN,
+      targets: [{ id: "i-aaa", port: 80 }],
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      TargetGroupArn: TG_ARN,
+      Targets: [{ Id: "i-aaa", Port: 80 }],
     })
   })
 })

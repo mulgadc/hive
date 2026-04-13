@@ -11,11 +11,13 @@ import { BackLink } from "@/components/back-link"
 import { DeleteConfirmationDialog } from "@/components/delete-confirmation-dialog"
 import { DetailCard } from "@/components/detail-card"
 import { DetailRow } from "@/components/detail-row"
+import { TargetsTab } from "@/components/elbv2/targets-tab"
 import { ErrorBanner } from "@/components/error-banner"
 import { PageHeading } from "@/components/page-heading"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { useDeleteTargetGroup } from "@/mutations/elbv2"
+import { ec2InstancesQueryOptions } from "@/queries/ec2"
 import {
   elbv2TagsQueryOptions,
   elbv2TargetGroupAttributesQueryOptions,
@@ -33,6 +35,7 @@ export const Route = createFileRoute(
         elbv2TargetGroupAttributesQueryOptions(arn),
       ),
       context.queryClient.ensureQueryData(elbv2TagsQueryOptions([arn])),
+      context.queryClient.ensureQueryData(ec2InstancesQueryOptions),
     ])
   },
   head: ({ params }) => ({
@@ -57,6 +60,7 @@ function TargetGroupDetail() {
 
   const deleteMutation = useDeleteTargetGroup()
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [activeTab, setActiveTab] = useState("overview")
 
   const tg = tgData.TargetGroups?.[0]
 
@@ -113,7 +117,7 @@ function TargetGroupDetail() {
           title={tg.TargetGroupName ?? tg.TargetGroupArn}
         />
 
-        <Tabs defaultValue="overview">
+        <Tabs onValueChange={setActiveTab} value={activeTab}>
           <TabsList>
             <TabsTab value="overview">Overview</TabsTab>
             <TabsTab value="targets">Targets</TabsTab>
@@ -141,9 +145,12 @@ function TargetGroupDetail() {
           </TabsPanel>
 
           <TabsPanel value="targets">
-            <p className="text-muted-foreground">
-              Register/deregister targets lands in slice 5.
-            </p>
+            <TargetsTab
+              defaultPort={tg.Port ?? 80}
+              isActive={activeTab === "targets"}
+              targetGroupArn={tg.TargetGroupArn}
+              vpcId={tg.VpcId}
+            />
           </TabsPanel>
 
           <TabsPanel value="health-checks">
