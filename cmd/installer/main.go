@@ -21,11 +21,28 @@ import (
 	"os"
 	"strings"
 
+	"github.com/mulgadc/spinifex/cmd/installer/autoinstall"
 	"github.com/mulgadc/spinifex/cmd/installer/install"
 	"github.com/mulgadc/spinifex/cmd/installer/ui"
 )
 
 func main() {
+	// Check for a headless autoinstall config on the boot media before
+	// launching the interactive TUI. If found and enabled, run without
+	// any user input then eject the USB and reboot.
+	if cfg, err := autoinstall.Load(); err != nil {
+		fmt.Fprintf(os.Stderr, "autoinstall: %v\n", err)
+		os.Exit(1)
+	} else if cfg != nil {
+		if err := install.Run(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "install failed: %v\n", err)
+			os.Exit(1)
+		}
+		autoinstall.EjectAndReboot()
+		return
+	}
+
+	// Normal interactive path.
 	ttyPath := detectTTY()
 
 	cfg, err := ui.Run(ttyPath)
