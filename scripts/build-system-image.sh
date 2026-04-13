@@ -318,7 +318,7 @@ echo ""
 
 if [[ "$DO_IMPORT" == true ]]; then
     echo "Importing as AMI..."
-    (cd "$PROJECT_DIR" && ./bin/spx admin images import \
+    (cd "$PROJECT_DIR" && sudo -u spinifex-storage ./bin/spx admin images import \
         --file "$OUTPUT_RAW" \
         --distro alpine \
         --version "${ALPINE_VERSION}-${IMAGE_NAME}" \

@@ -75,21 +75,23 @@ If your WAN is a physical NIC, choose one:
 ./scripts/setup-ovn.sh --management --macvlan --wan-iface=enp0s3
 ```
 
-## Step 4. Initialize
+## Step 4. Development initialisation
 
 ```bash
-sudo ./bin/spx admin init --node node1 --nodes 1
+./scripts/dev-install.sh
 ```
 
-Save the admin credentials printed during init.
+Note, this will bootstrap a single node development environment
 
-## Step 5. Start Services
+## Step 5. Start services
 
 ```bash
-./scripts/start-dev.sh
+sudo systemctl status spinifex.target
 ```
 
-## Step 6. Verify
+Start all services
+
+## Step 6. Verify Installation
 
 ```bash
 export AWS_PROFILE=spinifex
