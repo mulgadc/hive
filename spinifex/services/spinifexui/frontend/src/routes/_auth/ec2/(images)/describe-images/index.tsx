@@ -1,6 +1,6 @@
 import type { Image } from "@aws-sdk/client-ec2"
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { createFileRoute, type SearchSchemaInput } from "@tanstack/react-router"
+import { createFileRoute } from "@tanstack/react-router"
 
 import { ListCard } from "@/components/list-card"
 import { PageHeading } from "@/components/page-heading"
@@ -9,10 +9,6 @@ import { isSystemManagedImage } from "@/lib/system-managed"
 import { ec2ImagesQueryOptions } from "@/queries/ec2"
 
 export const Route = createFileRoute("/_auth/ec2/(images)/describe-images/")({
-  validateSearch: (search: { system?: string } & SearchSchemaInput) => ({
-    system: search.system === "1" ? "1" : undefined,
-  }),
-  // ?system=1 reveals platform-managed AMIs (e.g. the HAProxy/LB image).
   loader: async ({ context }) => {
     await context.queryClient.ensureQueryData(ec2ImagesQueryOptions)
   },
@@ -28,14 +24,10 @@ export const Route = createFileRoute("/_auth/ec2/(images)/describe-images/")({
 
 function Images() {
   const { data } = useSuspenseQuery(ec2ImagesQueryOptions)
-  const { system } = Route.useSearch()
-  const showSystem = system === "1"
 
-  const allImages = data.Images ?? []
-  const images = showSystem
-    ? allImages
-    : allImages.filter((image) => !isSystemManagedImage(image))
-  const hiddenCount = allImages.length - images.length
+  const images = (data.Images ?? []).filter(
+    (image) => !isSystemManagedImage(image),
+  )
 
   return (
     <>
@@ -61,12 +53,6 @@ function Images() {
         </div>
       ) : (
         <p className="text-muted-foreground">No images found.</p>
-      )}
-      {!showSystem && hiddenCount > 0 && (
-        <p className="mt-4 text-xs text-muted-foreground">
-          {hiddenCount} platform-managed image{hiddenCount === 1 ? "" : "s"}{" "}
-          hidden. Append <code>?system=1</code> to the URL to show them.
-        </p>
       )}
     </>
   )

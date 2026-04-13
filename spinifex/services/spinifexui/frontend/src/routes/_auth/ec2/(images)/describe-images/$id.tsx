@@ -1,5 +1,5 @@
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { createFileRoute, type SearchSchemaInput } from "@tanstack/react-router"
+import { createFileRoute } from "@tanstack/react-router"
 
 import { BackLink } from "@/components/back-link"
 import { PageHeading } from "@/components/page-heading"
@@ -11,10 +11,6 @@ import { AmiDetails } from "../../-components/ami-details"
 
 export const Route = createFileRoute("/_auth/ec2/(images)/describe-images/$id")(
   {
-    validateSearch: (search: { system?: string } & SearchSchemaInput) => ({
-      system: search.system === "1" ? "1" : undefined,
-    }),
-    // ?system=1 reveals platform-managed AMIs that the listing hides.
     loader: async ({ context, params }) =>
       await context.queryClient.ensureQueryData(
         ec2ImageQueryOptions(params.id),
@@ -32,15 +28,10 @@ export const Route = createFileRoute("/_auth/ec2/(images)/describe-images/$id")(
 
 function ImageDetail() {
   const { id } = Route.useParams()
-  const { system } = Route.useSearch()
-  const showSystem = system === "1"
   const { data } = useSuspenseQuery(ec2ImageQueryOptions(id))
   const image = data?.Images?.[0]
 
-  const hiddenAsSystem =
-    !showSystem && image !== undefined && isSystemManagedImage(image)
-
-  if (!image?.ImageId || hiddenAsSystem) {
+  if (!image?.ImageId || isSystemManagedImage(image)) {
     return (
       <>
         <BackLink to="/ec2/describe-images">Back to images</BackLink>
