@@ -75,6 +75,9 @@ export const createListenerSchema = z.object({
 
 export type CreateListenerFormData = z.infer<typeof createListenerSchema>
 
+// LB wizard form. The inline "new target group" option is driven by a separate
+// `useForm<CreateTargetGroupFormData>` instance at the route level, so this
+// schema only validates the existing-TG branch. See create-load-balancer.tsx.
 export const createLoadBalancerSchema = z.object({
   name: lbNameField,
   scheme: z.enum(["internet-facing", "internal"]),
@@ -90,14 +93,16 @@ export const createLoadBalancerSchema = z.object({
       port: portField,
       targetGroupMode: z.enum(["new", "existing"]),
       existingTargetGroupArn: z.string().optional(),
-      newTargetGroup: createTargetGroupSchema.optional(),
     })
     .refine(
       (value) =>
-        value.targetGroupMode === "new"
-          ? value.newTargetGroup !== undefined
-          : !!value.existingTargetGroupArn,
-      { error: "Target group selection is required" },
+        value.targetGroupMode === "existing"
+          ? !!value.existingTargetGroupArn
+          : true,
+      {
+        error: "Target group is required",
+        path: ["existingTargetGroupArn"],
+      },
     ),
 })
 

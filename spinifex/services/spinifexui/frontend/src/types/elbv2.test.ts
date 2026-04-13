@@ -116,7 +116,7 @@ describe("createLoadBalancerSchema", () => {
     expect(result.success).toBe(false)
   })
 
-  it("rejects listener with mode=new but no newTargetGroup", () => {
+  it("accepts listener with mode=new without existingTargetGroupArn", () => {
     const result = createLoadBalancerSchema.safeParse({
       name: "my-alb",
       scheme: "internet-facing",
@@ -128,6 +128,23 @@ describe("createLoadBalancerSchema", () => {
         protocol: "HTTP",
         port: 80,
         targetGroupMode: "new",
+      },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects listener with mode=existing but no existingTargetGroupArn", () => {
+    const result = createLoadBalancerSchema.safeParse({
+      name: "my-alb",
+      scheme: "internet-facing",
+      vpcId: "vpc-1",
+      subnetIds: ["subnet-a", "subnet-b"],
+      securityGroupIds: [],
+      tags: [],
+      listener: {
+        protocol: "HTTP",
+        port: 80,
+        targetGroupMode: "existing",
       },
     })
     expect(result.success).toBe(false)

@@ -25,6 +25,7 @@ import { Route as AuthEc2subnetCreateSubnetRouteImport } from './routes/_auth/ec
 import { Route as AuthEc2snapshotsCreateSnapshotRouteImport } from './routes/_auth/ec2/(snapshots)/create-snapshot'
 import { Route as AuthEc2securityGroupsCreateSecurityGroupRouteImport } from './routes/_auth/ec2/(security-groups)/create-security-group'
 import { Route as AuthEc2placementGroupsCreatePlacementGroupRouteImport } from './routes/_auth/ec2/(placement-groups)/create-placement-group'
+import { Route as AuthEc2loadBalancersCreateLoadBalancerRouteImport } from './routes/_auth/ec2/(load-balancers)/create-load-balancer'
 import { Route as AuthEc2keyImportKeyPairRouteImport } from './routes/_auth/ec2/(key)/import-key-pair'
 import { Route as AuthEc2keyCreateKeyPairRouteImport } from './routes/_auth/ec2/(key)/create-key-pair'
 import { Route as AuthEc2instancesRunInstancesRouteImport } from './routes/_auth/ec2/(instances)/run-instances'
@@ -144,6 +145,12 @@ const AuthEc2placementGroupsCreatePlacementGroupRoute =
   AuthEc2placementGroupsCreatePlacementGroupRouteImport.update({
     id: '/ec2/(placement-groups)/create-placement-group',
     path: '/ec2/create-placement-group',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
+const AuthEc2loadBalancersCreateLoadBalancerRoute =
+  AuthEc2loadBalancersCreateLoadBalancerRouteImport.update({
+    id: '/ec2/(load-balancers)/create-load-balancer',
+    path: '/ec2/create-load-balancer',
     getParentRoute: () => AuthRouteRoute,
   } as any)
 const AuthEc2keyImportKeyPairRoute = AuthEc2keyImportKeyPairRouteImport.update({
@@ -349,6 +356,7 @@ export interface FileRoutesByFullPath {
   '/ec2/run-instances': typeof AuthEc2instancesRunInstancesRoute
   '/ec2/create-key-pair': typeof AuthEc2keyCreateKeyPairRoute
   '/ec2/import-key-pair': typeof AuthEc2keyImportKeyPairRoute
+  '/ec2/create-load-balancer': typeof AuthEc2loadBalancersCreateLoadBalancerRoute
   '/ec2/create-placement-group': typeof AuthEc2placementGroupsCreatePlacementGroupRoute
   '/ec2/create-security-group': typeof AuthEc2securityGroupsCreateSecurityGroupRoute
   '/ec2/create-snapshot': typeof AuthEc2snapshotsCreateSnapshotRoute
@@ -398,6 +406,7 @@ export interface FileRoutesByTo {
   '/ec2/run-instances': typeof AuthEc2instancesRunInstancesRoute
   '/ec2/create-key-pair': typeof AuthEc2keyCreateKeyPairRoute
   '/ec2/import-key-pair': typeof AuthEc2keyImportKeyPairRoute
+  '/ec2/create-load-balancer': typeof AuthEc2loadBalancersCreateLoadBalancerRoute
   '/ec2/create-placement-group': typeof AuthEc2placementGroupsCreatePlacementGroupRoute
   '/ec2/create-security-group': typeof AuthEc2securityGroupsCreateSecurityGroupRoute
   '/ec2/create-snapshot': typeof AuthEc2snapshotsCreateSnapshotRoute
@@ -450,6 +459,7 @@ export interface FileRoutesById {
   '/_auth/ec2/(instances)/run-instances': typeof AuthEc2instancesRunInstancesRoute
   '/_auth/ec2/(key)/create-key-pair': typeof AuthEc2keyCreateKeyPairRoute
   '/_auth/ec2/(key)/import-key-pair': typeof AuthEc2keyImportKeyPairRoute
+  '/_auth/ec2/(load-balancers)/create-load-balancer': typeof AuthEc2loadBalancersCreateLoadBalancerRoute
   '/_auth/ec2/(placement-groups)/create-placement-group': typeof AuthEc2placementGroupsCreatePlacementGroupRoute
   '/_auth/ec2/(security-groups)/create-security-group': typeof AuthEc2securityGroupsCreateSecurityGroupRoute
   '/_auth/ec2/(snapshots)/create-snapshot': typeof AuthEc2snapshotsCreateSnapshotRoute
@@ -502,6 +512,7 @@ export interface FileRouteTypes {
     | '/ec2/run-instances'
     | '/ec2/create-key-pair'
     | '/ec2/import-key-pair'
+    | '/ec2/create-load-balancer'
     | '/ec2/create-placement-group'
     | '/ec2/create-security-group'
     | '/ec2/create-snapshot'
@@ -551,6 +562,7 @@ export interface FileRouteTypes {
     | '/ec2/run-instances'
     | '/ec2/create-key-pair'
     | '/ec2/import-key-pair'
+    | '/ec2/create-load-balancer'
     | '/ec2/create-placement-group'
     | '/ec2/create-security-group'
     | '/ec2/create-snapshot'
@@ -602,6 +614,7 @@ export interface FileRouteTypes {
     | '/_auth/ec2/(instances)/run-instances'
     | '/_auth/ec2/(key)/create-key-pair'
     | '/_auth/ec2/(key)/import-key-pair'
+    | '/_auth/ec2/(load-balancers)/create-load-balancer'
     | '/_auth/ec2/(placement-groups)/create-placement-group'
     | '/_auth/ec2/(security-groups)/create-security-group'
     | '/_auth/ec2/(snapshots)/create-snapshot'
@@ -761,6 +774,13 @@ declare module '@tanstack/react-router' {
       path: '/ec2/create-placement-group'
       fullPath: '/ec2/create-placement-group'
       preLoaderRoute: typeof AuthEc2placementGroupsCreatePlacementGroupRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/_auth/ec2/(load-balancers)/create-load-balancer': {
+      id: '/_auth/ec2/(load-balancers)/create-load-balancer'
+      path: '/ec2/create-load-balancer'
+      fullPath: '/ec2/create-load-balancer'
+      preLoaderRoute: typeof AuthEc2loadBalancersCreateLoadBalancerRouteImport
       parentRoute: typeof AuthRouteRoute
     }
     '/_auth/ec2/(key)/import-key-pair': {
@@ -1018,6 +1038,7 @@ interface AuthRouteRouteChildren {
   AuthEc2instancesRunInstancesRoute: typeof AuthEc2instancesRunInstancesRoute
   AuthEc2keyCreateKeyPairRoute: typeof AuthEc2keyCreateKeyPairRoute
   AuthEc2keyImportKeyPairRoute: typeof AuthEc2keyImportKeyPairRoute
+  AuthEc2loadBalancersCreateLoadBalancerRoute: typeof AuthEc2loadBalancersCreateLoadBalancerRoute
   AuthEc2placementGroupsCreatePlacementGroupRoute: typeof AuthEc2placementGroupsCreatePlacementGroupRoute
   AuthEc2securityGroupsCreateSecurityGroupRoute: typeof AuthEc2securityGroupsCreateSecurityGroupRoute
   AuthEc2snapshotsCreateSnapshotRoute: typeof AuthEc2snapshotsCreateSnapshotRoute
@@ -1066,6 +1087,8 @@ const AuthRouteRouteChildren: AuthRouteRouteChildren = {
   AuthEc2instancesRunInstancesRoute: AuthEc2instancesRunInstancesRoute,
   AuthEc2keyCreateKeyPairRoute: AuthEc2keyCreateKeyPairRoute,
   AuthEc2keyImportKeyPairRoute: AuthEc2keyImportKeyPairRoute,
+  AuthEc2loadBalancersCreateLoadBalancerRoute:
+    AuthEc2loadBalancersCreateLoadBalancerRoute,
   AuthEc2placementGroupsCreatePlacementGroupRoute:
     AuthEc2placementGroupsCreatePlacementGroupRoute,
   AuthEc2securityGroupsCreateSecurityGroupRoute:

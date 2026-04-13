@@ -40,7 +40,7 @@ function LoadBalancers() {
     <>
       <PageHeading
         actions={
-          <Button disabled title="Coming in slice 4">
+          <Button onClick={() => navigate({ to: "/ec2/create-load-balancer" })}>
             Create load balancer
           </Button>
         }
