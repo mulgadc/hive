@@ -1,6 +1,5 @@
 import type { Subnet } from "@aws-sdk/client-ec2"
 import type {
-  Listener,
   LoadBalancerAttribute,
   Tag,
 } from "@aws-sdk/client-elastic-load-balancing-v2"
@@ -13,6 +12,7 @@ import { BackLink } from "@/components/back-link"
 import { DeleteConfirmationDialog } from "@/components/delete-confirmation-dialog"
 import { DetailCard } from "@/components/detail-card"
 import { DetailRow } from "@/components/detail-row"
+import { ListenersTab } from "@/components/elbv2/listeners-tab"
 import { ErrorBanner } from "@/components/error-banner"
 import { PageHeading } from "@/components/page-heading"
 import { StateBadge } from "@/components/state-badge"
@@ -26,6 +26,7 @@ import {
   elbv2LoadBalancerAttributesQueryOptions,
   elbv2LoadBalancerQueryOptions,
   elbv2TagsQueryOptions,
+  elbv2TargetGroupsQueryOptions,
 } from "@/queries/elbv2"
 
 export const Route = createFileRoute(
@@ -40,6 +41,7 @@ export const Route = createFileRoute(
         elbv2LoadBalancerAttributesQueryOptions(arn),
       ),
       context.queryClient.ensureQueryData(elbv2TagsQueryOptions([arn])),
+      context.queryClient.ensureQueryData(elbv2TargetGroupsQueryOptions),
       context.queryClient.ensureQueryData(ec2SubnetsQueryOptions),
     ])
   },
@@ -53,25 +55,11 @@ export const Route = createFileRoute(
   component: LoadBalancerDetail,
 })
 
-function formatDefaultAction(listener: Listener): string {
-  const action = listener.DefaultActions?.[0]
-  if (!action) {
-    return "—"
-  }
-  if (action.Type === "forward" && action.TargetGroupArn) {
-    return `forward → ${action.TargetGroupArn}`
-  }
-  return action.Type ?? "—"
-}
-
 function LoadBalancerDetail() {
   const { id } = Route.useParams()
   const arn = decodeURIComponent(id)
   const navigate = useNavigate()
   const { data: lbData } = useSuspenseQuery(elbv2LoadBalancerQueryOptions(arn))
-  const { data: listenersData } = useSuspenseQuery(
-    elbv2ListenersQueryOptions(arn),
-  )
   const { data: attrsData } = useSuspenseQuery(
     elbv2LoadBalancerAttributesQueryOptions(arn),
   )
@@ -114,7 +102,6 @@ function LoadBalancerDetail() {
     return name ? `${subnetId} — ${name}${cidr}` : `${subnetId}${cidr}`
   }
 
-  const listeners = listenersData.Listeners ?? []
   const attributes = attrsData.Attributes ?? []
   const lbTags =
     tagsData?.TagDescriptions?.find((td) => td.ResourceArn === arn)?.Tags ?? []
@@ -214,42 +201,7 @@ function LoadBalancerDetail() {
           </TabsPanel>
 
           <TabsPanel value="listeners">
-            <p className="mb-3 text-sm text-muted-foreground">
-              Listeners cannot be edited. Delete and re-add to change.
-            </p>
-            {listeners.length > 0 ? (
-              <div className="overflow-x-auto rounded-lg border bg-card">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-left text-muted-foreground">
-                      <th className="px-4 py-2 font-medium">Protocol</th>
-                      <th className="px-4 py-2 font-medium">Port</th>
-                      <th className="px-4 py-2 font-medium">Default action</th>
-                      <th className="px-4 py-2 font-medium">Listener ARN</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {listeners.map((listener: Listener) => (
-                      <tr
-                        className="border-b last:border-0"
-                        key={listener.ListenerArn ?? ""}
-                      >
-                        <td className="px-4 py-2">{listener.Protocol}</td>
-                        <td className="px-4 py-2">{listener.Port}</td>
-                        <td className="px-4 py-2 font-mono text-xs">
-                          {formatDefaultAction(listener)}
-                        </td>
-                        <td className="px-4 py-2 font-mono text-xs">
-                          {listener.ListenerArn}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <p className="text-muted-foreground">No listeners configured.</p>
-            )}
+            <ListenersTab loadBalancerArn={arn} vpcId={lb.VpcId} />
           </TabsPanel>
 
           <TabsPanel value="attributes">
