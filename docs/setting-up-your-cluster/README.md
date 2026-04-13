@@ -166,14 +166,25 @@ Query available instance types for your hardware:
 aws ec2 describe-instance-types
 ```
 
-Launch an instance in the public subnet:
+Launch an instance in the public subnet, note this will select an instance type with 2 VCPU and 1024MB of memory.
+
+> **Note:** Replace `AMI_NAME` with the previously imported image above with the `ami-` prefix.
 
 ```bash
-AMI_ID=$(aws ec2 describe-images --query 'Images[0].ImageId' --output text)
+AMI_NAME="ami-ubuntu-24.04-x86_64"
+
+AMI_ID=$(aws ec2 describe-images \
+  --filters "Name=name,Values=$AMI_NAME" \
+  --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
+  --output text)
+
+INSTANCE_TYPE=$(aws ec2 describe-instance-types \
+  --query "sort_by(InstanceTypes[?VCpuInfo.DefaultVCpus==\`2\` && MemoryInfo.SizeInMiB>=\`1024\`], &MemoryInfo.SizeInMiB)[0].InstanceType" \
+  --output text)
 
 INSTANCE_ID=$(aws ec2 run-instances \
   --image-id $AMI_ID \
-  --instance-type t3.small \
+  --instance-type $INSTANCE_TYPE \
   --key-name spinifex-key \
   --subnet-id $SUBNET_ID \
   --count 1 \
