@@ -181,7 +181,7 @@ function CreateSubnet() {
           isPending={createMutation.isPending}
           isSubmitting={isSubmitting}
           onCancel={() => navigate({ to: "/ec2/describe-subnets" })}
-          pendingLabel="Creating\u2026"
+          pendingLabel="Creating…"
           submitLabel="Create Subnet"
         />
       </form>

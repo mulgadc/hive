@@ -586,7 +586,7 @@ function CreateLoadBalancer() {
           isPending={wizardMutation.isPending}
           isSubmitting={isSubmitting}
           onCancel={() => navigate({ to: "/ec2/describe-load-balancers" })}
-          pendingLabel="Creating\u2026"
+          pendingLabel="Creating…"
           submitLabel="Create load balancer"
         />
       </form>

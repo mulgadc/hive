@@ -139,7 +139,7 @@ function CreateSnapshot() {
           isPending={createMutation.isPending}
           isSubmitting={isSubmitting}
           onCancel={() => navigate({ to: "/ec2/describe-snapshots" })}
-          pendingLabel="Creating\u2026"
+          pendingLabel="Creating…"
           submitLabel="Create Snapshot"
         />
       </form>

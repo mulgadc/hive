@@ -128,7 +128,7 @@ function CreatePlacementGroup() {
           isPending={createMutation.isPending}
           isSubmitting={isSubmitting}
           onCancel={() => navigate({ to: "/ec2/describe-placement-groups" })}
-          pendingLabel="Creating\u2026"
+          pendingLabel="Creating…"
           submitLabel="Create Placement Group"
         />
       </form>
