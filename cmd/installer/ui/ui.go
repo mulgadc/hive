@@ -248,7 +248,7 @@ func newModel(disks []diskInfo, nics []nicInfo) model {
 	joinPortIn.CharLimit = 5
 
 	passIn := textinput.New()
-	passIn.Placeholder = "Root password"
+	passIn.Placeholder = "Admin password"
 	passIn.EchoMode = textinput.EchoPassword
 	passIn.CharLimit = 128
 
@@ -421,6 +421,15 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case screenIdentity:
 		switch key {
+		case "esc":
+			m.hostnameInput.Blur()
+			if len(m.nics) > 1 {
+				m.screen = screenNetworkLAN
+				m = m.withFocusedLANField()
+			} else {
+				m.screen = screenNetworkWAN
+				m = m.withFocusedWANField()
+			}
 		case "tab", "down":
 			if m.hostnameInput.Focused() {
 				m.hostnameInput.Blur()
@@ -547,7 +556,11 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.screen = screenCACertPrompt
 		case "esc":
-			m.screen = screenIdentity
+			m.joinIPInput.Blur()
+			m.joinPortInput.Blur()
+			m.screen = screenPassword
+			m.passwordConfirmInput.Focus()
+			m.passwordFocus = 1
 		default:
 			var cmd tea.Cmd
 			if m.joinIPInput.Focused() {
@@ -560,6 +573,16 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case screenCACertPrompt:
 		switch key {
+		case "esc":
+			if m.clusterRole == 1 {
+				m.screen = screenJoinConfig
+				m.joinIPInput.Focus()
+				m.joinPortInput.Blur()
+			} else {
+				m.screen = screenPassword
+				m.passwordInput.Focus()
+				m.passwordFocus = 0
+			}
 		case "left", "h", "right", "l":
 			if m.hasCACert == 0 {
 				m.hasCACert = 1
@@ -643,32 +666,32 @@ func (m model) handleWANKey(key string, msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m = m.withFocusedWANField()
 		}
 
+	case "esc":
+		m.screen = screenDiskConfirm
+		m = m.withFocusedWANField()
+		return m, nil
+
 	case "enter":
-		// On picker/toggle rows, enter advances focus rather than submitting.
-		if m.wanFocus == wanFieldNIC || m.wanFocus == wanFieldMethod {
-			m.wanFocus = m.wanNextFocus(m.wanFocus, true)
-			m = m.withFocusedWANField()
+		// Always check last-field first: if we're on it, validate and advance screen.
+		if m.wanFocus == m.wanLastFocus() {
+			if errMsg := m.validateWAN(); errMsg != "" {
+				m.validationErr = errMsg
+				return m, nil
+			}
+			if len(m.nics) > 1 {
+				m.screen = screenNetworkLAN
+				m.lanFocus = lanFieldNIC
+				m.lanNicCursor = m.initialLANCursor()
+				m = m.withFocusedLANField()
+			} else {
+				m.screen = screenIdentity
+				m.hostnameInput.Focus()
+			}
 			return m, nil
 		}
-		// On a text field that isn't the last: advance.
-		if m.wanFocus != m.wanLastFocus() {
-			m.wanFocus = m.wanNextFocus(m.wanFocus, true)
-			m = m.withFocusedWANField()
-			return m, nil
-		}
-		// Last field — validate then advance to LAN or identity screen.
-		if errMsg := m.validateWAN(); errMsg != "" {
-			m.validationErr = errMsg
-			return m, nil
-		}
-		if len(m.nics) > 1 {
-			m.screen = screenNetworkLAN
-			m.lanFocus = lanFieldNIC
-			m = m.withFocusedLANField()
-		} else {
-			m.screen = screenIdentity
-			m.hostnameInput.Focus()
-		}
+		// Otherwise advance to the next field.
+		m.wanFocus = m.wanNextFocus(m.wanFocus, true)
+		m = m.withFocusedWANField()
 
 	default:
 		// Forward keystrokes to the active text input.
@@ -836,23 +859,23 @@ func (m model) handleLANKey(key string, msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m = m.withFocusedLANField()
 		}
 
+	case "esc":
+		m.screen = screenNetworkWAN
+		m = m.withFocusedWANField()
+		return m, nil
+
 	case "enter":
-		if m.lanFocus == lanFieldNIC || m.lanFocus == lanFieldMethod {
-			m.lanFocus = m.lanNextFocus(m.lanFocus, true)
-			m = m.withFocusedLANField()
+		if m.lanFocus == m.lanLastFocus() {
+			if errMsg := m.validateLAN(); errMsg != "" {
+				m.validationErr = errMsg
+				return m, nil
+			}
+			m.screen = screenIdentity
+			m.hostnameInput.Focus()
 			return m, nil
 		}
-		if m.lanFocus != m.lanLastFocus() {
-			m.lanFocus = m.lanNextFocus(m.lanFocus, true)
-			m = m.withFocusedLANField()
-			return m, nil
-		}
-		if errMsg := m.validateLAN(); errMsg != "" {
-			m.validationErr = errMsg
-			return m, nil
-		}
-		m.screen = screenIdentity
-		m.hostnameInput.Focus()
+		m.lanFocus = m.lanNextFocus(m.lanFocus, true)
+		m = m.withFocusedLANField()
 
 	default:
 		switch m.lanFocus {
@@ -937,22 +960,33 @@ func (m model) withFocusedLANField() model {
 	return m
 }
 
-// moveLANCursorLeft/Right skip the WAN NIC position so it can't be selected.
+// initialLANCursor returns the first NIC index that is not the WAN NIC.
+func (m model) initialLANCursor() int {
+	for i := range m.nics {
+		if i != m.wanNicCursor {
+			return i
+		}
+	}
+	return 0
+}
+
+// moveLANCursorLeft/Right skip the WAN NIC so it can never be selected.
+// If no valid position exists in that direction, the cursor stays put.
 func (m model) moveLANCursorLeft() model {
-	for m.lanNicCursor > 0 {
-		m.lanNicCursor--
-		if m.lanNicCursor != m.wanNicCursor {
-			break
+	for i := m.lanNicCursor - 1; i >= 0; i-- {
+		if i != m.wanNicCursor {
+			m.lanNicCursor = i
+			return m
 		}
 	}
 	return m
 }
 
 func (m model) moveLANCursorRight() model {
-	for m.lanNicCursor < len(m.nics)-1 {
-		m.lanNicCursor++
-		if m.lanNicCursor != m.wanNicCursor {
-			break
+	for i := m.lanNicCursor + 1; i < len(m.nics); i++ {
+		if i != m.wanNicCursor {
+			m.lanNicCursor = i
+			return m
 		}
 	}
 	return m

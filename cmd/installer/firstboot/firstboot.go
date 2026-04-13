@@ -64,9 +64,9 @@ func writeScript(root string, cfg Config) error {
 
 	// --encap-ip is optional: when DHCP is used the IP is unknown at install time
 	// and setup-ovn.sh auto-detects it from the default route at boot.
-	setupOVN := "/usr/local/bin/spinifex-setup-ovn.sh \\\n  --management"
+	setupOVN := "/usr/local/bin/setup-ovn.sh --management"
 	if cfg.EncapIP != "" {
-		setupOVN += fmt.Sprintf(" \\\n  --encap-ip=%s", cfg.EncapIP)
+		setupOVN += fmt.Sprintf(" --encap-ip=%s", cfg.EncapIP)
 	}
 
 	script := fmt.Sprintf(`#!/bin/bash
@@ -76,6 +76,22 @@ set -euo pipefail
 # Set hostname
 hostnamectl set-hostname %s
 
+# Pre-start OVS and OVN central so their databases are initialised before
+# setup-ovn.sh runs. On physical hardware, first-boot DB initialisation takes
+# longer than setup-ovn.sh's internal 15-second timeout allows. Starting them
+# here and waiting until the NB DB is ready means setup-ovn.sh sees a live DB
+# the moment it starts — no races, no timeout failures.
+systemctl start openvswitch-switch
+systemctl start ovn-central
+echo "Waiting for OVN NB DB to initialise..."
+for _i in $(seq 1 120); do
+    if ovn-nbctl --timeout=2 get-connection >/dev/null 2>&1; then
+        echo "OVN NB DB ready (${_i}s)"
+        break
+    fi
+    sleep 1
+done
+
 # Configure OVN networking.
 # br-wan (and br-lan if present) are Linux bridges created by the installer.
 # setup-ovn.sh auto-detects br-wan as the default route device (Linux bridge)
@@ -83,13 +99,41 @@ hostnamectl set-hostname %s
 %s
 
 # Cluster formation — capture credentials to file for display on console.
-%s 2>&1 | tee /root/spinifex-credentials.txt
-chmod 600 /root/spinifex-credentials.txt
+%s 2>&1
+
+# Copy AWS credentials to the spinifex user's home directory.
+# spx admin init runs with HOME=/root (set by the systemd unit), so credentials
+# land in /root/.aws/. Copy them to the spinifex user's home so the operator
+# can use the AWS CLI without sudo.
+if [ -f /root/.aws/credentials ]; then
+    mkdir -p /home/spinifex/.aws
+    cp /root/.aws/credentials /home/spinifex/.aws/credentials
+    cp /root/.aws/config /home/spinifex/.aws/config 2>/dev/null || true
+    chown -R spinifex:spinifex /home/spinifex/.aws
+    chmod 700 /home/spinifex/.aws
+    chmod 600 /home/spinifex/.aws/credentials
+    [ -f /home/spinifex/.aws/config ] && chmod 600 /home/spinifex/.aws/config
+fi
 
 # Fix ownership: spx admin init runs as root (no SUDO_USER in systemd context)
-# so config and data files are created as root:root. Hand them to the service
-# user so systemd units running as spinifex can read them.
-chown -R spinifex:spinifex /etc/spinifex /var/lib/spinifex
+# so config and data files land as root:root. Fix up per-service ownership so
+# each service user can read/write only its own directory.
+chown root:spinifex /etc/spinifex && chmod 750 /etc/spinifex
+find /etc/spinifex -type f -exec chmod 640 {} \;
+chown root:spinifex /var/lib/spinifex && chmod 750 /var/lib/spinifex
+chown -R spinifex-gw:spinifex        /var/lib/spinifex/awsgw
+chown -R spinifex-daemon:spinifex    /var/lib/spinifex/spinifex
+chown -R spinifex-nats:spinifex      /var/lib/spinifex/nats
+chown -R spinifex-storage:spinifex   /var/lib/spinifex/predastore
+chown -R spinifex-viperblock:spinifex /var/lib/spinifex/viperblock
+chown -R spinifex-vpcd:spinifex      /var/lib/spinifex/vpcd
+mkdir -p /var/log/spinifex && chown root:spinifex /var/log/spinifex && chmod 775 /var/log/spinifex
+
+# awsgw looks for master.key at <BaseDir>/config/master.key. In production
+# BaseDir is /var/lib/spinifex/awsgw/ (set by SPINIFEX_BASE_DIR), but the key
+# lives in /etc/spinifex/. Symlink so both paths resolve to the same file.
+mkdir -p /var/lib/spinifex/awsgw/config
+ln -sf /etc/spinifex/master.key /var/lib/spinifex/awsgw/config/master.key
 
 # Start services
 systemctl start spinifex.target
@@ -180,20 +224,30 @@ func enableBannerUnit(root string) error {
 	return os.Symlink(target, link)
 }
 
-// writeGettyDropIn makes all getty instances (tty1, ttyS0, etc.) wait for
-// spinifex-banner.service before showing the login prompt. This ensures:
-//   - All spinifex services have settled (banner runs After=spinifex.target)
-//   - The /etc/motd banner is written before the user sees the login prompt
-//   - Service startup messages finish scrolling before the prompt appears
+// writeGettyDropIn holds the primary consoles (tty1 and ttyS0) until
+// spinifex-banner.service completes, so the MOTD banner is visible before the
+// login prompt appears. The default getty ExecStart is left intact — the user
+// is prompted for their password normally.
+//
+// Drop-ins are written to instance-specific directories (getty@tty1.service.d
+// and serial-getty@ttyS0.service.d) rather than the template directories
+// (getty@.service.d / serial-getty@.service.d). This is deliberate: scoping
+// to named instances leaves tty2, tty3, etc. unaffected so they start
+// immediately and are always available as a rescue terminal — even when
+// spinifex.target or the banner service is stuck.
 func writeGettyDropIn(root string) error {
 	dropIn := `[Unit]
 After=spinifex-banner.service
 Wants=spinifex-banner.service
 `
-	// Drop-in on getty@.service applies to all instances: tty1, ttyS0, etc.
-	dropInDir := filepath.Join(root, "etc/systemd/system/getty@.service.d")
-	if err := os.MkdirAll(dropInDir, 0o755); err != nil {
-		return err
+	for _, svc := range []string{"getty@tty1", "serial-getty@ttyS0"} {
+		dropInDir := filepath.Join(root, "etc/systemd/system/"+svc+".service.d")
+		if err := os.MkdirAll(dropInDir, 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dropInDir, "spinifex-wait.conf"), []byte(dropIn), 0o644); err != nil {
+			return err
+		}
 	}
-	return os.WriteFile(filepath.Join(dropInDir, "spinifex-wait.conf"), []byte(dropIn), 0o644)
+	return nil
 }
