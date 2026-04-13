@@ -1,5 +1,9 @@
 import { useQuery } from "@tanstack/react-query"
-import { createFileRoute, redirect } from "@tanstack/react-router"
+import {
+  createFileRoute,
+  redirect,
+  type SearchSchemaInput,
+} from "@tanstack/react-router"
 
 import { PageHeading } from "@/components/page-heading"
 import { Badge } from "@/components/ui/badge"
@@ -14,6 +18,10 @@ import {
 } from "@/queries/admin"
 
 export const Route = createFileRoute("/_auth/nodes")({
+  validateSearch: (search: { system?: string } & SearchSchemaInput) => ({
+    system: search.system === "1" ? "1" : undefined,
+  }),
+  // ?system=1 reveals platform-managed VMs (HAProxy/LB) for debugging.
   beforeLoad: () => {
     // Route exists but admin check is done in component
   },
@@ -59,6 +67,8 @@ function formatAge(launchTime: number): string {
 
 function NodesPage() {
   const { isAdmin } = useAdmin()
+  const { system } = Route.useSearch()
+  const showSystem = system === "1"
   const { data: nodesData } = useQuery({
     ...adminNodesQueryOptions,
     enabled: isAdmin,
@@ -75,7 +85,9 @@ function NodesPage() {
   }
 
   const nodes = nodesData?.nodes ?? []
-  const vms = vmsData?.vms ?? []
+  const allVms = vmsData?.vms ?? []
+  const vms = showSystem ? allVms : allVms.filter((vm) => !vm.managed_by)
+  const hiddenCount = allVms.length - vms.length
 
   // Aggregate instance type capacity across all nodes
   const typeMap = new Map<
@@ -134,6 +146,12 @@ function NodesPage() {
               </p>
             ) : (
               <VMsTable vms={vms} />
+            )}
+            {!showSystem && hiddenCount > 0 && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                {hiddenCount} platform-managed VM{hiddenCount === 1 ? "" : "s"}{" "}
+                hidden. Append <code>?system=1</code> to the URL to show them.
+              </p>
             )}
           </CardContent>
         </Card>

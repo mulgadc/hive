@@ -41,6 +41,7 @@ interface VMInfo {
   memory_gb: number
   node: string
   launch_time: number
+  managed_by?: string
 }
 
 interface GetVMsOutput {

@@ -1,0 +1,1 @@
+function e(e){return e.Tags?.some(e=>e.Key===`spinifex:managed-by`)??!1}export{e as t};

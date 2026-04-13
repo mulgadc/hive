@@ -42,6 +42,10 @@ type VMInfo struct {
 	VCPU         int     `json:"vcpu"`
 	MemoryGB     float64 `json:"memory_gb"`
 	LaunchTime   int64   `json:"launch_time"`
+	// ManagedBy is the Spinifex platform component that owns this VM
+	// (e.g. "elbv2"). Empty for customer VMs. The UI uses this to filter
+	// system-managed resources out of customer-facing listings.
+	ManagedBy string `json:"managed_by,omitempty"`
 }
 
 // NodeVMsResponse is returned by the spinifex.node.vms NATS topic (fan-out).

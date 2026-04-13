@@ -1,0 +1,19 @@
+// Package tags defines tag keys and values used to mark
+// Spinifex system-owned resources (ENIs, EC2 instances, AMIs).
+//
+// The UI filters resources carrying these tags out of customer-facing
+// listings. Operators can append ?system=1 to the URL to surface them.
+package tags
+
+const (
+	// ManagedByKey marks a resource as managed by a Spinifex
+	// platform component. The value identifies the component.
+	ManagedByKey = "spinifex:managed-by"
+
+	// ManagedByELBv2 identifies ELBv2/ALB-owned resources
+	// (HAProxy VMs, their ENIs, the LB AMI).
+	ManagedByELBv2 = "elbv2"
+
+	// LBARNKey stores the parent LB ARN on ELBv2-managed ENIs.
+	LBARNKey = "spinifex:lb-arn"
+)
