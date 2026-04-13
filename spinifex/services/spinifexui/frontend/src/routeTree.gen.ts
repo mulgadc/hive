@@ -33,10 +33,12 @@ import { Route as AuthIamusersListUsersIndexRouteImport } from './routes/_auth/i
 import { Route as AuthIampoliciesListPoliciesIndexRouteImport } from './routes/_auth/iam/(policies)/list-policies/index'
 import { Route as AuthEc2vpcDescribeVpcsIndexRouteImport } from './routes/_auth/ec2/(vpc)/describe-vpcs/index'
 import { Route as AuthEc2volumesDescribeVolumesIndexRouteImport } from './routes/_auth/ec2/(volumes)/describe-volumes/index'
+import { Route as AuthEc2targetGroupsDescribeTargetGroupsIndexRouteImport } from './routes/_auth/ec2/(target-groups)/describe-target-groups/index'
 import { Route as AuthEc2subnetDescribeSubnetsIndexRouteImport } from './routes/_auth/ec2/(subnet)/describe-subnets/index'
 import { Route as AuthEc2snapshotsDescribeSnapshotsIndexRouteImport } from './routes/_auth/ec2/(snapshots)/describe-snapshots/index'
 import { Route as AuthEc2securityGroupsDescribeSecurityGroupsIndexRouteImport } from './routes/_auth/ec2/(security-groups)/describe-security-groups/index'
 import { Route as AuthEc2placementGroupsDescribePlacementGroupsIndexRouteImport } from './routes/_auth/ec2/(placement-groups)/describe-placement-groups/index'
+import { Route as AuthEc2loadBalancersDescribeLoadBalancersIndexRouteImport } from './routes/_auth/ec2/(load-balancers)/describe-load-balancers/index'
 import { Route as AuthEc2keyDescribeKeyPairsIndexRouteImport } from './routes/_auth/ec2/(key)/describe-key-pairs/index'
 import { Route as AuthEc2instancesDescribeInstancesIndexRouteImport } from './routes/_auth/ec2/(instances)/describe-instances/index'
 import { Route as AuthEc2imagesDescribeImagesIndexRouteImport } from './routes/_auth/ec2/(images)/describe-images/index'
@@ -185,6 +187,12 @@ const AuthEc2volumesDescribeVolumesIndexRoute =
     path: '/ec2/describe-volumes/',
     getParentRoute: () => AuthRouteRoute,
   } as any)
+const AuthEc2targetGroupsDescribeTargetGroupsIndexRoute =
+  AuthEc2targetGroupsDescribeTargetGroupsIndexRouteImport.update({
+    id: '/ec2/(target-groups)/describe-target-groups/',
+    path: '/ec2/describe-target-groups/',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
 const AuthEc2subnetDescribeSubnetsIndexRoute =
   AuthEc2subnetDescribeSubnetsIndexRouteImport.update({
     id: '/ec2/(subnet)/describe-subnets/',
@@ -207,6 +215,12 @@ const AuthEc2placementGroupsDescribePlacementGroupsIndexRoute =
   AuthEc2placementGroupsDescribePlacementGroupsIndexRouteImport.update({
     id: '/ec2/(placement-groups)/describe-placement-groups/',
     path: '/ec2/describe-placement-groups/',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
+const AuthEc2loadBalancersDescribeLoadBalancersIndexRoute =
+  AuthEc2loadBalancersDescribeLoadBalancersIndexRouteImport.update({
+    id: '/ec2/(load-balancers)/describe-load-balancers/',
+    path: '/ec2/describe-load-balancers/',
     getParentRoute: () => AuthRouteRoute,
   } as any)
 const AuthEc2keyDescribeKeyPairsIndexRoute =
@@ -340,10 +354,12 @@ export interface FileRoutesByFullPath {
   '/ec2/describe-images/': typeof AuthEc2imagesDescribeImagesIndexRoute
   '/ec2/describe-instances/': typeof AuthEc2instancesDescribeInstancesIndexRoute
   '/ec2/describe-key-pairs/': typeof AuthEc2keyDescribeKeyPairsIndexRoute
+  '/ec2/describe-load-balancers/': typeof AuthEc2loadBalancersDescribeLoadBalancersIndexRoute
   '/ec2/describe-placement-groups/': typeof AuthEc2placementGroupsDescribePlacementGroupsIndexRoute
   '/ec2/describe-security-groups/': typeof AuthEc2securityGroupsDescribeSecurityGroupsIndexRoute
   '/ec2/describe-snapshots/': typeof AuthEc2snapshotsDescribeSnapshotsIndexRoute
   '/ec2/describe-subnets/': typeof AuthEc2subnetDescribeSubnetsIndexRoute
+  '/ec2/describe-target-groups/': typeof AuthEc2targetGroupsDescribeTargetGroupsIndexRoute
   '/ec2/describe-volumes/': typeof AuthEc2volumesDescribeVolumesIndexRoute
   '/ec2/describe-vpcs/': typeof AuthEc2vpcDescribeVpcsIndexRoute
   '/iam/list-policies/': typeof AuthIampoliciesListPoliciesIndexRoute
@@ -384,10 +400,12 @@ export interface FileRoutesByTo {
   '/ec2/describe-images': typeof AuthEc2imagesDescribeImagesIndexRoute
   '/ec2/describe-instances': typeof AuthEc2instancesDescribeInstancesIndexRoute
   '/ec2/describe-key-pairs': typeof AuthEc2keyDescribeKeyPairsIndexRoute
+  '/ec2/describe-load-balancers': typeof AuthEc2loadBalancersDescribeLoadBalancersIndexRoute
   '/ec2/describe-placement-groups': typeof AuthEc2placementGroupsDescribePlacementGroupsIndexRoute
   '/ec2/describe-security-groups': typeof AuthEc2securityGroupsDescribeSecurityGroupsIndexRoute
   '/ec2/describe-snapshots': typeof AuthEc2snapshotsDescribeSnapshotsIndexRoute
   '/ec2/describe-subnets': typeof AuthEc2subnetDescribeSubnetsIndexRoute
+  '/ec2/describe-target-groups': typeof AuthEc2targetGroupsDescribeTargetGroupsIndexRoute
   '/ec2/describe-volumes': typeof AuthEc2volumesDescribeVolumesIndexRoute
   '/ec2/describe-vpcs': typeof AuthEc2vpcDescribeVpcsIndexRoute
   '/iam/list-policies': typeof AuthIampoliciesListPoliciesIndexRoute
@@ -431,10 +449,12 @@ export interface FileRoutesById {
   '/_auth/ec2/(images)/describe-images/': typeof AuthEc2imagesDescribeImagesIndexRoute
   '/_auth/ec2/(instances)/describe-instances/': typeof AuthEc2instancesDescribeInstancesIndexRoute
   '/_auth/ec2/(key)/describe-key-pairs/': typeof AuthEc2keyDescribeKeyPairsIndexRoute
+  '/_auth/ec2/(load-balancers)/describe-load-balancers/': typeof AuthEc2loadBalancersDescribeLoadBalancersIndexRoute
   '/_auth/ec2/(placement-groups)/describe-placement-groups/': typeof AuthEc2placementGroupsDescribePlacementGroupsIndexRoute
   '/_auth/ec2/(security-groups)/describe-security-groups/': typeof AuthEc2securityGroupsDescribeSecurityGroupsIndexRoute
   '/_auth/ec2/(snapshots)/describe-snapshots/': typeof AuthEc2snapshotsDescribeSnapshotsIndexRoute
   '/_auth/ec2/(subnet)/describe-subnets/': typeof AuthEc2subnetDescribeSubnetsIndexRoute
+  '/_auth/ec2/(target-groups)/describe-target-groups/': typeof AuthEc2targetGroupsDescribeTargetGroupsIndexRoute
   '/_auth/ec2/(volumes)/describe-volumes/': typeof AuthEc2volumesDescribeVolumesIndexRoute
   '/_auth/ec2/(vpc)/describe-vpcs/': typeof AuthEc2vpcDescribeVpcsIndexRoute
   '/_auth/iam/(policies)/list-policies/': typeof AuthIampoliciesListPoliciesIndexRoute
@@ -478,10 +498,12 @@ export interface FileRouteTypes {
     | '/ec2/describe-images/'
     | '/ec2/describe-instances/'
     | '/ec2/describe-key-pairs/'
+    | '/ec2/describe-load-balancers/'
     | '/ec2/describe-placement-groups/'
     | '/ec2/describe-security-groups/'
     | '/ec2/describe-snapshots/'
     | '/ec2/describe-subnets/'
+    | '/ec2/describe-target-groups/'
     | '/ec2/describe-volumes/'
     | '/ec2/describe-vpcs/'
     | '/iam/list-policies/'
@@ -522,10 +544,12 @@ export interface FileRouteTypes {
     | '/ec2/describe-images'
     | '/ec2/describe-instances'
     | '/ec2/describe-key-pairs'
+    | '/ec2/describe-load-balancers'
     | '/ec2/describe-placement-groups'
     | '/ec2/describe-security-groups'
     | '/ec2/describe-snapshots'
     | '/ec2/describe-subnets'
+    | '/ec2/describe-target-groups'
     | '/ec2/describe-volumes'
     | '/ec2/describe-vpcs'
     | '/iam/list-policies'
@@ -568,10 +592,12 @@ export interface FileRouteTypes {
     | '/_auth/ec2/(images)/describe-images/'
     | '/_auth/ec2/(instances)/describe-instances/'
     | '/_auth/ec2/(key)/describe-key-pairs/'
+    | '/_auth/ec2/(load-balancers)/describe-load-balancers/'
     | '/_auth/ec2/(placement-groups)/describe-placement-groups/'
     | '/_auth/ec2/(security-groups)/describe-security-groups/'
     | '/_auth/ec2/(snapshots)/describe-snapshots/'
     | '/_auth/ec2/(subnet)/describe-subnets/'
+    | '/_auth/ec2/(target-groups)/describe-target-groups/'
     | '/_auth/ec2/(volumes)/describe-volumes/'
     | '/_auth/ec2/(vpc)/describe-vpcs/'
     | '/_auth/iam/(policies)/list-policies/'
@@ -754,6 +780,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthEc2volumesDescribeVolumesIndexRouteImport
       parentRoute: typeof AuthRouteRoute
     }
+    '/_auth/ec2/(target-groups)/describe-target-groups/': {
+      id: '/_auth/ec2/(target-groups)/describe-target-groups/'
+      path: '/ec2/describe-target-groups'
+      fullPath: '/ec2/describe-target-groups/'
+      preLoaderRoute: typeof AuthEc2targetGroupsDescribeTargetGroupsIndexRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
     '/_auth/ec2/(subnet)/describe-subnets/': {
       id: '/_auth/ec2/(subnet)/describe-subnets/'
       path: '/ec2/describe-subnets'
@@ -780,6 +813,13 @@ declare module '@tanstack/react-router' {
       path: '/ec2/describe-placement-groups'
       fullPath: '/ec2/describe-placement-groups/'
       preLoaderRoute: typeof AuthEc2placementGroupsDescribePlacementGroupsIndexRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/_auth/ec2/(load-balancers)/describe-load-balancers/': {
+      id: '/_auth/ec2/(load-balancers)/describe-load-balancers/'
+      path: '/ec2/describe-load-balancers'
+      fullPath: '/ec2/describe-load-balancers/'
+      preLoaderRoute: typeof AuthEc2loadBalancersDescribeLoadBalancersIndexRouteImport
       parentRoute: typeof AuthRouteRoute
     }
     '/_auth/ec2/(key)/describe-key-pairs/': {
@@ -943,10 +983,12 @@ interface AuthRouteRouteChildren {
   AuthEc2imagesDescribeImagesIndexRoute: typeof AuthEc2imagesDescribeImagesIndexRoute
   AuthEc2instancesDescribeInstancesIndexRoute: typeof AuthEc2instancesDescribeInstancesIndexRoute
   AuthEc2keyDescribeKeyPairsIndexRoute: typeof AuthEc2keyDescribeKeyPairsIndexRoute
+  AuthEc2loadBalancersDescribeLoadBalancersIndexRoute: typeof AuthEc2loadBalancersDescribeLoadBalancersIndexRoute
   AuthEc2placementGroupsDescribePlacementGroupsIndexRoute: typeof AuthEc2placementGroupsDescribePlacementGroupsIndexRoute
   AuthEc2securityGroupsDescribeSecurityGroupsIndexRoute: typeof AuthEc2securityGroupsDescribeSecurityGroupsIndexRoute
   AuthEc2snapshotsDescribeSnapshotsIndexRoute: typeof AuthEc2snapshotsDescribeSnapshotsIndexRoute
   AuthEc2subnetDescribeSubnetsIndexRoute: typeof AuthEc2subnetDescribeSubnetsIndexRoute
+  AuthEc2targetGroupsDescribeTargetGroupsIndexRoute: typeof AuthEc2targetGroupsDescribeTargetGroupsIndexRoute
   AuthEc2volumesDescribeVolumesIndexRoute: typeof AuthEc2volumesDescribeVolumesIndexRoute
   AuthEc2vpcDescribeVpcsIndexRoute: typeof AuthEc2vpcDescribeVpcsIndexRoute
   AuthIampoliciesListPoliciesIndexRoute: typeof AuthIampoliciesListPoliciesIndexRoute
@@ -994,6 +1036,8 @@ const AuthRouteRouteChildren: AuthRouteRouteChildren = {
   AuthEc2instancesDescribeInstancesIndexRoute:
     AuthEc2instancesDescribeInstancesIndexRoute,
   AuthEc2keyDescribeKeyPairsIndexRoute: AuthEc2keyDescribeKeyPairsIndexRoute,
+  AuthEc2loadBalancersDescribeLoadBalancersIndexRoute:
+    AuthEc2loadBalancersDescribeLoadBalancersIndexRoute,
   AuthEc2placementGroupsDescribePlacementGroupsIndexRoute:
     AuthEc2placementGroupsDescribePlacementGroupsIndexRoute,
   AuthEc2securityGroupsDescribeSecurityGroupsIndexRoute:
@@ -1002,6 +1046,8 @@ const AuthRouteRouteChildren: AuthRouteRouteChildren = {
     AuthEc2snapshotsDescribeSnapshotsIndexRoute,
   AuthEc2subnetDescribeSubnetsIndexRoute:
     AuthEc2subnetDescribeSubnetsIndexRoute,
+  AuthEc2targetGroupsDescribeTargetGroupsIndexRoute:
+    AuthEc2targetGroupsDescribeTargetGroupsIndexRoute,
   AuthEc2volumesDescribeVolumesIndexRoute:
     AuthEc2volumesDescribeVolumesIndexRoute,
   AuthEc2vpcDescribeVpcsIndexRoute: AuthEc2vpcDescribeVpcsIndexRoute,
