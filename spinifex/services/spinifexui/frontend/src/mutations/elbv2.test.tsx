@@ -49,23 +49,50 @@ function createQueryClient() {
   return queryClient
 }
 
-const stubs = [
-  ["useModifyLoadBalancerAttributes", useModifyLoadBalancerAttributes],
-  ["useModifyTargetGroupAttributes", useModifyTargetGroupAttributes],
-] as const
-
-describe("elbv2 mutation stubs throw until implemented", () => {
-  for (const [name, useMutationHook] of stubs) {
-    it(`${name} fires 'not implemented'`, async () => {
-      createQueryClient()
-      const { result } = renderHook(() => useMutationHook(), { wrapper })
-
-      result.current.mutate(undefined as never)
-
-      await waitFor(() => expect(result.current.isError).toBe(true))
-      expect(result.current.error?.message).toMatch(/not implemented/)
+describe("useModifyLoadBalancerAttributes", () => {
+  it("sends ModifyLoadBalancerAttributesCommand with arn + changed attributes", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useModifyLoadBalancerAttributes(), {
+      wrapper,
     })
-  }
+
+    result.current.mutate({
+      loadBalancerArn: "arn:lb:1",
+      attributes: [
+        { key: "deletion_protection.enabled", value: "true" },
+        { key: "idle_timeout.timeout_seconds", value: "120" },
+      ],
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      LoadBalancerArn: "arn:lb:1",
+      Attributes: [
+        { Key: "deletion_protection.enabled", Value: "true" },
+        { Key: "idle_timeout.timeout_seconds", Value: "120" },
+      ],
+    })
+  })
+})
+
+describe("useModifyTargetGroupAttributes", () => {
+  it("sends ModifyTargetGroupAttributesCommand with arn + changed attributes", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useModifyTargetGroupAttributes(), {
+      wrapper,
+    })
+
+    result.current.mutate({
+      targetGroupArn: TG_ARN,
+      attributes: [{ key: "stickiness.enabled", value: "true" }],
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      TargetGroupArn: TG_ARN,
+      Attributes: [{ Key: "stickiness.enabled", Value: "true" }],
+    })
+  })
 })
 
 describe("useDeleteLoadBalancer", () => {

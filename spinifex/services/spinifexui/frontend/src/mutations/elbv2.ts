@@ -9,6 +9,8 @@ import {
   DeleteLoadBalancerCommand,
   DeleteTargetGroupCommand,
   DeregisterTargetsCommand,
+  ModifyLoadBalancerAttributesCommand,
+  ModifyTargetGroupAttributesCommand,
   RegisterTargetsCommand,
 } from "@aws-sdk/client-elastic-load-balancing-v2"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
@@ -18,13 +20,6 @@ import type {
   CreateLoadBalancerFormData,
   CreateTargetGroupFormData,
 } from "@/types/elbv2"
-
-// Mutations are filled in per slice (2/3/4/5/6/7). Remaining stubs throw so an
-// accidental caller fails loudly rather than silently.
-
-const notImplemented = (name: string): never => {
-  throw new Error(`elbv2 mutation '${name}' not implemented yet`)
-}
 
 export interface CreateLoadBalancerParams {
   name: string
@@ -76,9 +71,34 @@ export function useDeleteLoadBalancer() {
   })
 }
 
+export interface ModifyLoadBalancerAttributesParams {
+  loadBalancerArn: string
+  attributes: { key: string; value: string }[]
+}
+
 export function useModifyLoadBalancerAttributes() {
+  const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: () => notImplemented("useModifyLoadBalancerAttributes"),
+    mutationFn: (params: ModifyLoadBalancerAttributesParams) => {
+      const command = new ModifyLoadBalancerAttributesCommand({
+        LoadBalancerArn: params.loadBalancerArn,
+        Attributes: params.attributes.map((a) => ({
+          Key: a.key,
+          Value: a.value,
+        })),
+      })
+      return getElbv2Client().send(command)
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: [
+          "elbv2",
+          "loadBalancers",
+          variables.loadBalancerArn,
+          "attributes",
+        ],
+      })
+    },
   })
 }
 
@@ -128,9 +148,34 @@ export function useDeleteTargetGroup() {
   })
 }
 
+export interface ModifyTargetGroupAttributesParams {
+  targetGroupArn: string
+  attributes: { key: string; value: string }[]
+}
+
 export function useModifyTargetGroupAttributes() {
+  const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: () => notImplemented("useModifyTargetGroupAttributes"),
+    mutationFn: (params: ModifyTargetGroupAttributesParams) => {
+      const command = new ModifyTargetGroupAttributesCommand({
+        TargetGroupArn: params.targetGroupArn,
+        Attributes: params.attributes.map((a) => ({
+          Key: a.key,
+          Value: a.value,
+        })),
+      })
+      return getElbv2Client().send(command)
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: [
+          "elbv2",
+          "targetGroups",
+          variables.targetGroupArn,
+          "attributes",
+        ],
+      })
+    },
   })
 }
 

@@ -1,8 +1,5 @@
 import type { Subnet } from "@aws-sdk/client-ec2"
-import type {
-  LoadBalancerAttribute,
-  Tag,
-} from "@aws-sdk/client-elastic-load-balancing-v2"
+import type { Tag } from "@aws-sdk/client-elastic-load-balancing-v2"
 import { useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { Trash2 } from "lucide-react"
@@ -12,6 +9,10 @@ import { BackLink } from "@/components/back-link"
 import { DeleteConfirmationDialog } from "@/components/delete-confirmation-dialog"
 import { DetailCard } from "@/components/detail-card"
 import { DetailRow } from "@/components/detail-row"
+import {
+  albAttributeSpecs,
+  AttributesEditor,
+} from "@/components/elbv2/attributes-editor"
 import { ListenersTab } from "@/components/elbv2/listeners-tab"
 import { ErrorBanner } from "@/components/error-banner"
 import { PageHeading } from "@/components/page-heading"
@@ -19,7 +20,10 @@ import { StateBadge } from "@/components/state-badge"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import { getNameTag } from "@/lib/utils"
-import { useDeleteLoadBalancer } from "@/mutations/elbv2"
+import {
+  useDeleteLoadBalancer,
+  useModifyLoadBalancerAttributes,
+} from "@/mutations/elbv2"
 import { ec2SubnetsQueryOptions } from "@/queries/ec2"
 import {
   elbv2ListenersQueryOptions,
@@ -67,6 +71,7 @@ function LoadBalancerDetail() {
   const { data: subnetsData } = useSuspenseQuery(ec2SubnetsQueryOptions)
 
   const deleteMutation = useDeleteLoadBalancer()
+  const modifyAttrsMutation = useModifyLoadBalancerAttributes()
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
 
   const lb = lbData.LoadBalancers?.[0]
@@ -205,22 +210,19 @@ function LoadBalancerDetail() {
           </TabsPanel>
 
           <TabsPanel value="attributes">
-            {attributes.length > 0 ? (
-              <DetailCard>
-                <DetailCard.Header>Attributes</DetailCard.Header>
-                <DetailCard.Content>
-                  {attributes.map((attr: LoadBalancerAttribute) => (
-                    <DetailRow
-                      key={attr.Key ?? ""}
-                      label={attr.Key ?? ""}
-                      value={attr.Value}
-                    />
-                  ))}
-                </DetailCard.Content>
-              </DetailCard>
-            ) : (
-              <p className="text-muted-foreground">No attributes reported.</p>
-            )}
+            <AttributesEditor
+              attributes={attributes}
+              error={modifyAttrsMutation.error}
+              isPending={modifyAttrsMutation.isPending}
+              isSuccess={modifyAttrsMutation.isSuccess}
+              onSubmit={(changed) => {
+                modifyAttrsMutation.mutate({
+                  loadBalancerArn: arn,
+                  attributes: changed,
+                })
+              }}
+              specs={albAttributeSpecs}
+            />
           </TabsPanel>
 
           <TabsPanel value="tags">

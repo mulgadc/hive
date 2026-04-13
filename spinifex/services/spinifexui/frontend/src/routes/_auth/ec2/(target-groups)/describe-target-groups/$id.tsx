@@ -1,7 +1,4 @@
-import type {
-  Tag,
-  TargetGroupAttribute,
-} from "@aws-sdk/client-elastic-load-balancing-v2"
+import type { Tag } from "@aws-sdk/client-elastic-load-balancing-v2"
 import { useSuspenseQuery } from "@tanstack/react-query"
 import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { Trash2 } from "lucide-react"
@@ -11,12 +8,19 @@ import { BackLink } from "@/components/back-link"
 import { DeleteConfirmationDialog } from "@/components/delete-confirmation-dialog"
 import { DetailCard } from "@/components/detail-card"
 import { DetailRow } from "@/components/detail-row"
+import {
+  AttributesEditor,
+  targetGroupAttributeSpecs,
+} from "@/components/elbv2/attributes-editor"
 import { TargetsTab } from "@/components/elbv2/targets-tab"
 import { ErrorBanner } from "@/components/error-banner"
 import { PageHeading } from "@/components/page-heading"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
-import { useDeleteTargetGroup } from "@/mutations/elbv2"
+import {
+  useDeleteTargetGroup,
+  useModifyTargetGroupAttributes,
+} from "@/mutations/elbv2"
 import { ec2InstancesQueryOptions } from "@/queries/ec2"
 import {
   elbv2TagsQueryOptions,
@@ -59,6 +63,7 @@ function TargetGroupDetail() {
   const { data: tagsData } = useSuspenseQuery(elbv2TagsQueryOptions([arn]))
 
   const deleteMutation = useDeleteTargetGroup()
+  const modifyAttrsMutation = useModifyTargetGroupAttributes()
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [activeTab, setActiveTab] = useState("overview")
 
@@ -197,22 +202,19 @@ function TargetGroupDetail() {
           </TabsPanel>
 
           <TabsPanel value="attributes">
-            {attributes.length > 0 ? (
-              <DetailCard>
-                <DetailCard.Header>Attributes</DetailCard.Header>
-                <DetailCard.Content>
-                  {attributes.map((attr: TargetGroupAttribute) => (
-                    <DetailRow
-                      key={attr.Key ?? ""}
-                      label={attr.Key ?? ""}
-                      value={attr.Value}
-                    />
-                  ))}
-                </DetailCard.Content>
-              </DetailCard>
-            ) : (
-              <p className="text-muted-foreground">No attributes reported.</p>
-            )}
+            <AttributesEditor
+              attributes={attributes}
+              error={modifyAttrsMutation.error}
+              isPending={modifyAttrsMutation.isPending}
+              isSuccess={modifyAttrsMutation.isSuccess}
+              onSubmit={(changed) => {
+                modifyAttrsMutation.mutate({
+                  targetGroupArn: arn,
+                  attributes: changed,
+                })
+              }}
+              specs={targetGroupAttributeSpecs}
+            />
           </TabsPanel>
 
           <TabsPanel value="tags">
