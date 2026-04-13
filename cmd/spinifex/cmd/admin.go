@@ -2148,6 +2148,7 @@ func runAdminBanner(cmd *cobra.Command, _ []string) {
   |         Spinifex  —  Mulga Defense Corporation     |
   +----------------------------------------------------+
   |  Node:      %-40s|
+  |  Login:     %-40s|
   |  Dashboard: %-40s|
   |  API:       %-40s|
   |  SSH:       %-40s|
@@ -2157,14 +2158,21 @@ func runAdminBanner(cmd *cobra.Command, _ []string) {
 
 `,
 		hostname,
+		"spinifex",
 		"https://"+currentIP+":3000",
 		"https://"+currentIP+":9999",
-		"root@"+currentIP,
+		"spinifex@"+currentIP,
 	)
 
-	// Append banner to /etc/motd, preserving any existing content (e.g. the
-	// Debian "ABSOLUTELY NO WARRANTY" disclaimer). A sentinel marks the start
-	// of our section so re-runs replace it cleanly rather than accumulating.
+	// Write to /etc/issue — displayed on the console before the login prompt.
+	// Overwrite entirely; this is a purpose-built appliance so we own this file.
+	if err := os.WriteFile("/etc/issue", []byte(banner), 0o644); err != nil {
+		slog.Warn("Failed to write /etc/issue", "err", err)
+	}
+
+	// Append to /etc/motd — displayed after SSH login, preserving any existing
+	// content (e.g. the Debian disclaimer). A sentinel marks our section so
+	// re-runs replace it cleanly rather than accumulating.
 	if err := appendBannerToMotd(banner); err != nil {
 		slog.Warn("Failed to write /etc/motd", "err", err)
 	}

@@ -15,9 +15,9 @@ You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
-// Package autoinstall scans boot media for an autoinstall.toml and, when
-// headless mode is enabled, converts it into an install.Config that the
-// installer can run without any user interaction.
+// Package autoinstall reads headless install parameters from environment
+// variables exported by spinifex-init.sh from the kernel cmdline.
+// Parameters are set in the GRUB "Headless" menu entry in grub.cfg.
 package autoinstall
 
 import (
@@ -26,112 +26,36 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mulgadc/spinifex/cmd/installer/install"
-	"github.com/pelletier/go-toml/v2"
 )
 
-const configFileName = "autoinstall.toml"
-
-// fileConfig mirrors the structure of autoinstall.toml.
-type fileConfig struct {
-	Autoinstall struct {
-		Enabled bool `toml:"enabled"`
-	} `toml:"autoinstall"`
-
-	Node struct {
-		Hostname string `toml:"hostname"`
-		Password string `toml:"password"`
-	} `toml:"node"`
-
-	Disk struct {
-		Target string `toml:"target"`
-	} `toml:"disk"`
-
-	Network struct {
-		WAN ifaceConfig `toml:"wan"`
-		LAN ifaceConfig `toml:"lan"`
-	} `toml:"network"`
-
-	Cluster struct {
-		Role     string `toml:"role"`
-		JoinAddr string `toml:"join_addr"`
-	} `toml:"cluster"`
-}
-
-type ifaceConfig struct {
-	Interface string   `toml:"interface"`
-	Mode      string   `toml:"mode"`    // "dhcp" or "static"
-	Address   string   `toml:"address"` // static only
-	Mask      string   `toml:"mask"`    // static only
-	Gateway   string   `toml:"gateway"` // static only, WAN only
-	DNS       []string `toml:"dns"`     // static only
-}
-
-// Load scans boot media for an autoinstall.toml. Returns nil if the file is
-// not found or enabled = false. Returns an error only if a config was found
-// but could not be parsed or is invalid.
+// Load returns an install.Config built from SPINIFEX_* environment variables,
+// or nil if SPINIFEX_AUTO is not set to "1" (interactive mode).
 func Load() (*install.Config, error) {
-	path, mountpoint, err := findConfigFile()
-	if err != nil {
-		slog.Debug("autoinstall scan failed", "err", err)
-		return nil, nil
-	}
-	if path == "" {
-		slog.Debug("autoinstall: no config found, using interactive mode")
+	if os.Getenv("SPINIFEX_AUTO") != "1" {
 		return nil, nil
 	}
 
-	data, err := os.ReadFile(path)
+	slog.Info("autoinstall: headless mode enabled via kernel cmdline")
+
+	cfg, err := buildConfig()
 	if err != nil {
-		return nil, fmt.Errorf("read autoinstall config: %w", err)
+		return nil, fmt.Errorf("autoinstall config: %w", err)
 	}
-
-	var fc fileConfig
-	if err := toml.Unmarshal(data, &fc); err != nil {
-		return nil, fmt.Errorf("parse autoinstall config: %w", err)
-	}
-
-	if !fc.Autoinstall.Enabled {
-		slog.Info("autoinstall: config found but enabled = false, using interactive mode")
-		return nil, nil
-	}
-
-	slog.Info("autoinstall: headless mode enabled", "config", path)
-
-	cfg, err := toInstallConfig(fc)
-	if err != nil {
-		return nil, fmt.Errorf("autoinstall config invalid: %w", err)
-	}
-
-	// Persist the mountpoint so EjectAndReboot knows which device to eject.
-	if mountpoint != "" {
-		_ = os.WriteFile("/run/spinifex-autoinstall-src", []byte(mountpoint), 0o600)
-	}
-
 	return cfg, nil
 }
 
-// EjectAndReboot ejects the USB that provided the autoinstall config (if
-// identifiable) then reboots. Call this after a successful headless install to
-// prevent the node looping back into the installer on next boot.
+// EjectAndReboot ejects the boot device (best-effort) then reboots.
 func EjectAndReboot() {
-	mp, _ := os.ReadFile("/run/spinifex-autoinstall-src")
-	mountpoint := strings.TrimSpace(string(mp))
-	if mountpoint != "" {
-		if dev := deviceForMountpoint(mountpoint); dev != "" {
-			// Walk up from partition (/dev/sdb1) to the whole disk (/dev/sdb).
-			disk := strings.TrimRight(dev, "0123456789")
-			slog.Info("autoinstall: ejecting source device", "disk", disk)
-			_ = exec.Command("eject", disk).Run()
-		}
-		_ = exec.Command("umount", mountpoint).Run()
-		_ = os.Remove(mountpoint)
+	srcDev, _ := os.ReadFile("/run/iso-dev")
+	if disk := strings.TrimRight(strings.TrimSpace(string(srcDev)), "0123456789"); disk != "" {
+		slog.Info("autoinstall: ejecting boot device", "device", disk)
+		_ = exec.Command("eject", disk).Run()
 	}
 
 	fmt.Println()
@@ -142,218 +66,123 @@ func EjectAndReboot() {
 	_ = exec.Command("reboot").Run()
 }
 
-// findConfigFile returns the path of autoinstall.toml and its mountpoint (if
-// the scanner had to mount a partition to find it). Skips iso9660 mounts so
-// the read-only reference copy bundled in the ISO never triggers headless mode.
-func findConfigFile() (path, mountpoint string, err error) {
-	// Prefer a file on a writable (non-iso9660) already-mounted filesystem.
-	mounts, _ := os.ReadFile("/proc/mounts")
-	for line := range strings.SplitSeq(string(mounts), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			continue
-		}
-		fstype := fields[2]
-		mp := fields[1]
-		// Skip virtual and read-only filesystems.
-		switch fstype {
-		case "iso9660", "squashfs", "tmpfs", "proc", "sysfs", "devtmpfs", "devpts":
-			continue
-		}
-		candidate := filepath.Join(mp, configFileName)
-		if _, statErr := os.Stat(candidate); statErr == nil {
-			return candidate, "", nil
-		}
+func buildConfig() (*install.Config, error) {
+	password := os.Getenv("SPINIFEX_PASSWORD")
+	if password == "" {
+		return nil, fmt.Errorf("SPINIFEX_PASSWORD is required")
 	}
 
-	// Fall back to scanning the USB that the ISO was loaded from.
-	srcDev, _ := os.ReadFile("/run/iso-dev")
-	baseDev := strings.TrimSpace(string(srcDev))
-	if baseDev == "" {
-		return "", "", nil
-	}
-	// Strip partition suffix to get the disk name (e.g. /dev/sdb1 → sdb).
-	diskName := filepath.Base(strings.TrimRight(baseDev, "0123456789"))
-
-	partEntries, readErr := os.ReadDir("/sys/block/" + diskName)
-	if readErr != nil {
-		return "", "", nil
-	}
-	for _, pe := range partEntries {
-		partName := pe.Name()
-		if !strings.HasPrefix(partName, diskName) {
-			continue
-		}
-		partDev := "/dev/" + partName
-
-		// Skip if already mounted as iso9660.
-		if mountedAs(partDev) == "iso9660" {
-			continue
-		}
-
-		mp, err := mountReadOnly(partDev)
-		if err != nil {
-			continue
-		}
-
-		candidate := filepath.Join(mp, configFileName)
-		if _, statErr := os.Stat(candidate); statErr == nil {
-			return candidate, mp, nil
-		}
-
-		// Not here — unmount and try next partition.
-		_ = exec.Command("umount", mp).Run()
-		_ = os.Remove(mp)
-	}
-
-	return "", "", nil
-}
-
-// mountReadOnly mounts partDev read-only under a temporary directory, trying
-// vfat (EFI) then ext4 then a generic auto-detect. Returns the mountpoint.
-func mountReadOnly(partDev string) (string, error) {
-	mp := "/tmp/spinifex-cfg-" + filepath.Base(partDev)
-	if err := os.MkdirAll(mp, 0o700); err != nil {
-		return "", err
-	}
-	for _, fstype := range []string{"vfat", "ext4", "auto"} {
-		args := []string{"-t", fstype, "-o", "ro", partDev, mp}
-		if fstype == "auto" {
-			args = []string{"-o", "ro", partDev, mp}
-		}
-		if exec.Command("mount", args...).Run() == nil {
-			return mp, nil
-		}
-	}
-	_ = os.Remove(mp)
-	return "", fmt.Errorf("could not mount %s", partDev)
-}
-
-// mountedAs returns the filesystem type that partDev is currently mounted with,
-// or an empty string if it is not mounted.
-func mountedAs(partDev string) string {
-	data, _ := os.ReadFile("/proc/mounts")
-	for line := range strings.SplitSeq(string(data), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 3 && fields[0] == partDev {
-			return fields[2]
-		}
-	}
-	return ""
-}
-
-// deviceForMountpoint returns the block device mounted at mp, or empty string.
-func deviceForMountpoint(mp string) string {
-	data, _ := os.ReadFile("/proc/mounts")
-	for line := range strings.SplitSeq(string(data), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[1] == mp {
-			return fields[0]
-		}
-	}
-	return ""
-}
-
-// toInstallConfig converts a parsed fileConfig into an install.Config,
-// applying defaults and validating required fields.
-func toInstallConfig(fc fileConfig) (*install.Config, error) {
-	if fc.Node.Password == "" {
-		return nil, fmt.Errorf("node.password is required")
-	}
-
-	hostname := fc.Node.Hostname
+	hostname := os.Getenv("SPINIFEX_HOSTNAME")
 	if hostname == "" {
 		hostname = "spinifex-node"
 	}
 
-	disk, err := resolveDisk(fc.Disk.Target)
+	disk, err := resolveDisk(os.Getenv("SPINIFEX_DISK"))
 	if err != nil {
 		return nil, fmt.Errorf("disk: %w", err)
 	}
 
-	wanNIC, err := resolveNIC(fc.Network.WAN.Interface, "")
+	wanIface, err := resolveNIC(os.Getenv("SPINIFEX_WAN_IFACE"), "")
 	if err != nil {
-		return nil, fmt.Errorf("network.wan.interface: %w", err)
+		return nil, fmt.Errorf("WAN NIC: %w", err)
 	}
 
 	cfg := &install.Config{
 		Disk:         disk,
 		Hostname:     hostname,
-		RootPassword: fc.Node.Password,
-		WANInterface: wanNIC,
-		WANDHCPMode:  strings.ToLower(fc.Network.WAN.Mode) != "static",
+		RootPassword: password,
+		WANInterface: wanIface,
+		WANDHCPMode:  strings.ToLower(os.Getenv("SPINIFEX_WAN_MODE")) != "static",
 	}
 
 	if !cfg.WANDHCPMode {
-		if fc.Network.WAN.Address == "" || fc.Network.WAN.Mask == "" || fc.Network.WAN.Gateway == "" {
-			return nil, fmt.Errorf("network.wan: address, mask, and gateway are required for mode = \"static\"")
+		ip := os.Getenv("SPINIFEX_WAN_IP")
+		mask := os.Getenv("SPINIFEX_WAN_MASK")
+		gw := os.Getenv("SPINIFEX_WAN_GW")
+		if ip == "" || mask == "" || gw == "" {
+			return nil, fmt.Errorf("SPINIFEX_WAN_IP, SPINIFEX_WAN_MASK, SPINIFEX_WAN_GW required for static mode")
 		}
-		cfg.WANAddress = fc.Network.WAN.Address
-		cfg.WANMask = fc.Network.WAN.Mask
-		cfg.WANGateway = fc.Network.WAN.Gateway
-		cfg.WANDNS = fc.Network.WAN.DNS
+		cfg.WANAddress = ip
+		cfg.WANMask = mask
+		cfg.WANGateway = gw
+		if dns := os.Getenv("SPINIFEX_WAN_DNS"); dns != "" {
+			cfg.WANDNS = strings.Split(dns, ",")
+		}
 	}
 
-	// LAN is optional — only configured when interface is specified.
-	if fc.Network.LAN.Interface != "" {
-		lanNIC, err := resolveNIC(fc.Network.LAN.Interface, wanNIC)
+	if lanIface := os.Getenv("SPINIFEX_LAN_IFACE"); lanIface != "" {
+		lan, err := resolveNIC(lanIface, wanIface)
 		if err != nil {
-			return nil, fmt.Errorf("network.lan.interface: %w", err)
+			return nil, fmt.Errorf("LAN NIC: %w", err)
 		}
-		cfg.LANInterface = lanNIC
-		cfg.LANDHCPMode = strings.ToLower(fc.Network.LAN.Mode) != "static"
+		cfg.LANInterface = lan
+		cfg.LANDHCPMode = strings.ToLower(os.Getenv("SPINIFEX_LAN_MODE")) != "static"
 		if !cfg.LANDHCPMode {
-			if fc.Network.LAN.Address == "" || fc.Network.LAN.Mask == "" {
-				return nil, fmt.Errorf("network.lan: address and mask are required for mode = \"static\"")
+			cfg.LANAddress = os.Getenv("SPINIFEX_LAN_IP")
+			cfg.LANMask = os.Getenv("SPINIFEX_LAN_MASK")
+			if dns := os.Getenv("SPINIFEX_LAN_DNS"); dns != "" {
+				cfg.LANDNS = strings.Split(dns, ",")
 			}
-			cfg.LANAddress = fc.Network.LAN.Address
-			cfg.LANMask = fc.Network.LAN.Mask
-			cfg.LANDNS = fc.Network.LAN.DNS
 		}
 	}
 
-	role := strings.ToLower(fc.Cluster.Role)
+	role := strings.ToLower(os.Getenv("SPINIFEX_ROLE"))
 	if role == "" {
 		role = "init"
 	}
 	cfg.ClusterRole = role
 	if role == "join" {
-		if fc.Cluster.JoinAddr == "" {
-			return nil, fmt.Errorf("cluster.join_addr is required when role = \"join\"")
+		joinAddr := os.Getenv("SPINIFEX_JOIN_ADDR")
+		if joinAddr == "" {
+			return nil, fmt.Errorf("SPINIFEX_JOIN_ADDR required when SPINIFEX_ROLE=join")
 		}
-		cfg.JoinAddr = fc.Cluster.JoinAddr
+		cfg.JoinAddr = joinAddr
 	}
 
 	return cfg, nil
 }
 
-// resolveDisk returns the block device path to install onto. "auto" or empty
-// selects the largest non-removable, non-optical disk.
+// resolveDisk maps the spx_disk value from grub.cfg to a block device path.
+//
+// Supported values:
+//
+//	auto            — use the only non-removable disk; fail if multiple found
+//	largest         — largest non-removable disk (explicit opt-in)
+//	smallest        — smallest non-removable disk (typical OS-on-SSD pattern)
+//	nvme            — the only NVMe disk; fail if multiple found
+//	/dev/sda (etc.) — exact device path; fail if not present
 func resolveDisk(target string) (string, error) {
-	if target != "" && target != "auto" {
+	switch strings.ToLower(target) {
+	case "", "auto":
+		return singleDisk()
+	case "largest":
+		return diskBySize(true)
+	case "smallest":
+		return diskBySize(false)
+	case "nvme":
+		return nvmeDisk()
+	default:
 		if _, err := os.Stat(target); err != nil {
 			return "", fmt.Errorf("%q not found", target)
 		}
 		return target, nil
 	}
-	return largestNonRemovableDisk()
 }
 
-func largestNonRemovableDisk() (string, error) {
+type diskCandidate struct {
+	dev   string
+	bytes int64
+}
+
+// nonRemovableDisks returns all non-removable, non-virtual block devices.
+func nonRemovableDisks() ([]diskCandidate, error) {
 	entries, err := os.ReadDir("/sys/block")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-
-	type candidate struct {
-		dev   string
-		bytes int64
-	}
-	var candidates []candidate
-
+	var out []diskCandidate
 	for _, e := range entries {
 		dev := e.Name()
-		// Skip virtual/optical devices.
 		switch {
 		case strings.HasPrefix(dev, "loop"),
 			strings.HasPrefix(dev, "ram"),
@@ -366,23 +195,95 @@ func largestNonRemovableDisk() (string, error) {
 			continue
 		}
 		sizeRaw, _ := os.ReadFile("/sys/block/" + dev + "/size")
-		sectors, err := strconv.ParseInt(strings.TrimSpace(string(sizeRaw)), 10, 64)
-		if err != nil || sectors == 0 {
+		sectors, parseErr := strconv.ParseInt(strings.TrimSpace(string(sizeRaw)), 10, 64)
+		if parseErr != nil || sectors == 0 {
 			continue
 		}
-		candidates = append(candidates, candidate{dev: dev, bytes: sectors * 512})
+		out = append(out, diskCandidate{dev: dev, bytes: sectors * 512})
 	}
+	return out, nil
+}
 
-	if len(candidates) == 0 {
-		return "", fmt.Errorf("no suitable disk found (all disks are removable or virtual)")
+// diskList returns a human-readable list of candidates for error messages.
+func diskList(disks []diskCandidate) string {
+	lines := make([]string, len(disks))
+	for i, d := range disks {
+		lines[i] = fmt.Sprintf("  /dev/%s (%dG)", d.dev, d.bytes>>30)
 	}
+	return strings.Join(lines, "\n")
+}
 
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].bytes > candidates[j].bytes
+// singleDisk selects the only non-removable disk, or fails listing all found.
+func singleDisk() (string, error) {
+	disks, err := nonRemovableDisks()
+	if err != nil {
+		return "", err
+	}
+	switch len(disks) {
+	case 0:
+		return "", fmt.Errorf("no non-removable disks found")
+	case 1:
+		slog.Info("autoinstall: single disk selected", "disk", disks[0].dev, "size_gb", disks[0].bytes>>30)
+		return "/dev/" + disks[0].dev, nil
+	default:
+		return "", fmt.Errorf(
+			"multiple disks found — set SPINIFEX_DISK to one of:\n%s\n"+
+				"  largest   (largest disk)\n"+
+				"  smallest  (smallest disk)\n"+
+				"  nvme      (NVMe only)\n"+
+				"  /dev/sdX  (exact path)",
+			diskList(disks),
+		)
+	}
+}
+
+// diskBySize selects the largest (largest=true) or smallest non-removable disk.
+func diskBySize(largest bool) (string, error) {
+	disks, err := nonRemovableDisks()
+	if err != nil {
+		return "", err
+	}
+	if len(disks) == 0 {
+		return "", fmt.Errorf("no non-removable disks found")
+	}
+	sort.Slice(disks, func(i, j int) bool {
+		if largest {
+			return disks[i].bytes > disks[j].bytes
+		}
+		return disks[i].bytes < disks[j].bytes
 	})
-	slog.Info("autoinstall: selected target disk", "disk", candidates[0].dev, "size_gb",
-		candidates[0].bytes>>30)
-	return "/dev/" + candidates[0].dev, nil
+	label := "smallest"
+	if largest {
+		label = "largest"
+	}
+	slog.Info("autoinstall: disk selected by size", "mode", label, "disk", disks[0].dev, "size_gb", disks[0].bytes>>30)
+	return "/dev/" + disks[0].dev, nil
+}
+
+// nvmeDisk selects the only NVMe disk, or fails listing all NVMe disks found.
+func nvmeDisk() (string, error) {
+	disks, err := nonRemovableDisks()
+	if err != nil {
+		return "", err
+	}
+	var nvmes []diskCandidate
+	for _, d := range disks {
+		if strings.HasPrefix(d.dev, "nvme") {
+			nvmes = append(nvmes, d)
+		}
+	}
+	switch len(nvmes) {
+	case 0:
+		return "", fmt.Errorf("no NVMe disks found")
+	case 1:
+		slog.Info("autoinstall: NVMe disk selected", "disk", nvmes[0].dev, "size_gb", nvmes[0].bytes>>30)
+		return "/dev/" + nvmes[0].dev, nil
+	default:
+		return "", fmt.Errorf(
+			"multiple NVMe disks found — set SPINIFEX_DISK to one of:\n%s",
+			diskList(nvmes),
+		)
+	}
 }
 
 // resolveNIC returns the interface name to use. "auto" or empty picks the
