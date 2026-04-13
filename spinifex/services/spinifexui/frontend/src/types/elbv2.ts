@@ -32,44 +32,43 @@ const portField = z
 
 export const tagSchema = z.object({
   key: z.string().min(1, "Tag key is required").max(128),
-  value: z.string().max(256).default(""),
+  value: z.string().max(256),
 })
 
 export type TagFormData = z.infer<typeof tagSchema>
 
 // ALB health-check config. NLB variant lands with slice 9.
 export const healthCheckSchema = z.object({
-  protocol: z.enum(["HTTP"]).default("HTTP"),
-  path: z.string().min(1, "Path is required").max(1024).default("/"),
-  port: z.string().min(1).default("traffic-port"),
-  intervalSeconds: z.number().int().min(5).max(300).default(30),
-  timeoutSeconds: z.number().int().min(2).max(120).default(5),
-  healthyThresholdCount: z.number().int().min(2).max(10).default(5),
-  unhealthyThresholdCount: z.number().int().min(2).max(10).default(2),
+  protocol: z.enum(["HTTP"]),
+  path: z.string().min(1, "Path is required").max(1024),
+  port: z.string().min(1),
+  intervalSeconds: z.number().int().min(5).max(300),
+  timeoutSeconds: z.number().int().min(2).max(120),
+  healthyThresholdCount: z.number().int().min(2).max(10),
+  unhealthyThresholdCount: z.number().int().min(2).max(10),
   matcher: z
     .string()
     .regex(
       /^\d{3}(?:[-,]\d{3})*$/,
       "Matcher must be HTTP codes like 200 or 200-299 or 200,201",
-    )
-    .default("200"),
+    ),
 })
 
 export type HealthCheckFormData = z.infer<typeof healthCheckSchema>
 
 export const createTargetGroupSchema = z.object({
   name: tgNameField,
-  protocol: z.enum(["HTTP"]).default("HTTP"),
+  protocol: z.enum(["HTTP"]),
   port: portField,
   vpcId: z.string().min(1, "VPC is required"),
   healthCheck: healthCheckSchema,
-  tags: z.array(tagSchema).default([]),
+  tags: z.array(tagSchema),
 })
 
 export type CreateTargetGroupFormData = z.infer<typeof createTargetGroupSchema>
 
 export const createListenerSchema = z.object({
-  protocol: z.enum(["HTTP"]).default("HTTP"),
+  protocol: z.enum(["HTTP"]),
   port: portField,
   defaultTargetGroupArn: z.string().min(1, "Target group is required"),
 })
@@ -78,18 +77,18 @@ export type CreateListenerFormData = z.infer<typeof createListenerSchema>
 
 export const createLoadBalancerSchema = z.object({
   name: lbNameField,
-  scheme: z.enum(["internet-facing", "internal"]).default("internet-facing"),
+  scheme: z.enum(["internet-facing", "internal"]),
   vpcId: z.string().min(1, "VPC is required"),
   subnetIds: z
     .array(z.string())
     .min(2, "At least 2 subnets are required for an ALB"),
-  securityGroupIds: z.array(z.string()).default([]),
-  tags: z.array(tagSchema).default([]),
+  securityGroupIds: z.array(z.string()),
+  tags: z.array(tagSchema),
   listener: z
     .object({
-      protocol: z.enum(["HTTP"]).default("HTTP"),
-      port: portField.default(80),
-      targetGroupMode: z.enum(["new", "existing"]).default("new"),
+      protocol: z.enum(["HTTP"]),
+      port: portField,
+      targetGroupMode: z.enum(["new", "existing"]),
       existingTargetGroupArn: z.string().optional(),
       newTargetGroup: createTargetGroupSchema.optional(),
     })

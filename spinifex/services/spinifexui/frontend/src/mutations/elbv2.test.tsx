@@ -9,6 +9,8 @@ vi.mock("@/lib/awsClient", () => ({
   getElbv2Client: () => ({ send: mockSend }),
 }))
 
+import type { CreateTargetGroupFormData } from "@/types/elbv2"
+
 import {
   useCreateListener,
   useCreateLoadBalancer,
@@ -47,8 +49,6 @@ function createQueryClient() {
 const stubs = [
   ["useCreateLoadBalancer", useCreateLoadBalancer],
   ["useModifyLoadBalancerAttributes", useModifyLoadBalancerAttributes],
-  ["useCreateTargetGroup", useCreateTargetGroup],
-  ["useDeleteTargetGroup", useDeleteTargetGroup],
   ["useModifyTargetGroupAttributes", useModifyTargetGroupAttributes],
   ["useCreateListener", useCreateListener],
   ["useDeleteListener", useDeleteListener],
@@ -81,5 +81,82 @@ describe("useDeleteLoadBalancer", () => {
     expect(mockSend.mock.calls[0]?.[0].input).toEqual({
       LoadBalancerArn: "arn:aws:elasticloadbalancing:lb/app/foo/abc",
     })
+  })
+})
+
+describe("useDeleteTargetGroup", () => {
+  it("sends DeleteTargetGroupCommand with target group ARN", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useDeleteTargetGroup(), { wrapper })
+
+    result.current.mutate("arn:aws:elasticloadbalancing:tg/app/foo/abc")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      TargetGroupArn: "arn:aws:elasticloadbalancing:tg/app/foo/abc",
+    })
+  })
+})
+
+describe("useCreateTargetGroup", () => {
+  const baseParams: CreateTargetGroupFormData = {
+    name: "my-tg",
+    protocol: "HTTP",
+    port: 80,
+    vpcId: "vpc-123",
+    healthCheck: {
+      protocol: "HTTP",
+      path: "/health",
+      port: "traffic-port",
+      intervalSeconds: 30,
+      timeoutSeconds: 5,
+      healthyThresholdCount: 5,
+      unhealthyThresholdCount: 2,
+      matcher: "200",
+    },
+    tags: [],
+  }
+
+  it("sends CreateTargetGroupCommand with form data and hardcoded instance target type", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCreateTargetGroup(), { wrapper })
+
+    result.current.mutate(baseParams)
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      Name: "my-tg",
+      Protocol: "HTTP",
+      Port: 80,
+      VpcId: "vpc-123",
+      TargetType: "instance",
+      HealthCheckProtocol: "HTTP",
+      HealthCheckPath: "/health",
+      HealthCheckPort: "traffic-port",
+      HealthCheckIntervalSeconds: 30,
+      HealthCheckTimeoutSeconds: 5,
+      HealthyThresholdCount: 5,
+      UnhealthyThresholdCount: 2,
+      Matcher: { HttpCode: "200" },
+      Tags: undefined,
+    })
+  })
+
+  it("passes non-empty tags through and skips empty keys", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useCreateTargetGroup(), { wrapper })
+
+    result.current.mutate({
+      ...baseParams,
+      tags: [
+        { key: "env", value: "prod" },
+        { key: "", value: "ignored" },
+      ],
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input.Tags).toEqual([
+      { Key: "env", Value: "prod" },
+    ])
   })
 })

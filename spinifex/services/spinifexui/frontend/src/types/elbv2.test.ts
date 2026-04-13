@@ -8,6 +8,17 @@ import {
   registerTargetsSchema,
 } from "./elbv2"
 
+const defaultHealthCheck = {
+  protocol: "HTTP" as const,
+  path: "/",
+  port: "traffic-port",
+  intervalSeconds: 30,
+  timeoutSeconds: 5,
+  healthyThresholdCount: 5,
+  unhealthyThresholdCount: 2,
+  matcher: "200",
+}
+
 describe("createTargetGroupSchema", () => {
   it("accepts a valid HTTP target group", () => {
     const result = createTargetGroupSchema.safeParse({
@@ -15,7 +26,8 @@ describe("createTargetGroupSchema", () => {
       protocol: "HTTP",
       port: 80,
       vpcId: "vpc-123",
-      healthCheck: healthCheckSchema.parse({}),
+      healthCheck: defaultHealthCheck,
+      tags: [],
     })
     expect(result.success).toBe(true)
   })
@@ -26,7 +38,8 @@ describe("createTargetGroupSchema", () => {
       protocol: "HTTP",
       port: 80,
       vpcId: "vpc-123",
-      healthCheck: healthCheckSchema.parse({}),
+      healthCheck: defaultHealthCheck,
+      tags: [],
     })
     expect(result.success).toBe(false)
   })
@@ -37,7 +50,8 @@ describe("createTargetGroupSchema", () => {
       protocol: "HTTP",
       port: 80,
       vpcId: "vpc-123",
-      healthCheck: healthCheckSchema.parse({}),
+      healthCheck: defaultHealthCheck,
+      tags: [],
     })
     expect(result.success).toBe(false)
   })
@@ -48,7 +62,8 @@ describe("createTargetGroupSchema", () => {
       protocol: "HTTP",
       port: 70_000,
       vpcId: "vpc-123",
-      healthCheck: healthCheckSchema.parse({}),
+      healthCheck: defaultHealthCheck,
+      tags: [],
     })
     expect(result.success).toBe(false)
   })
@@ -81,6 +96,8 @@ describe("createLoadBalancerSchema", () => {
       scheme: "internet-facing",
       vpcId: "vpc-1",
       subnetIds: ["subnet-a"],
+      securityGroupIds: [],
+      tags: [],
       listener: baseListener,
     })
     expect(result.success).toBe(false)
@@ -92,6 +109,8 @@ describe("createLoadBalancerSchema", () => {
       scheme: "internal",
       vpcId: "vpc-1",
       subnetIds: ["subnet-a", "subnet-b"],
+      securityGroupIds: [],
+      tags: [],
       listener: baseListener,
     })
     expect(result.success).toBe(false)
@@ -103,6 +122,8 @@ describe("createLoadBalancerSchema", () => {
       scheme: "internet-facing",
       vpcId: "vpc-1",
       subnetIds: ["subnet-a", "subnet-b"],
+      securityGroupIds: [],
+      tags: [],
       listener: {
         protocol: "HTTP",
         port: 80,
@@ -147,18 +168,26 @@ describe("registerTargetsSchema", () => {
   })
 })
 
-describe("healthCheckSchema defaults", () => {
-  it("applies documented defaults", () => {
-    const result = healthCheckSchema.parse({})
-    expect(result).toEqual({
-      protocol: "HTTP",
-      path: "/",
-      port: "traffic-port",
-      intervalSeconds: 30,
-      timeoutSeconds: 5,
-      healthyThresholdCount: 5,
-      unhealthyThresholdCount: 2,
-      matcher: "200",
+describe("healthCheckSchema", () => {
+  it("accepts the documented default values", () => {
+    expect(healthCheckSchema.parse(defaultHealthCheck)).toEqual(
+      defaultHealthCheck,
+    )
+  })
+
+  it("rejects an out-of-range interval", () => {
+    const result = healthCheckSchema.safeParse({
+      ...defaultHealthCheck,
+      intervalSeconds: 1,
     })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects a malformed matcher", () => {
+    const result = healthCheckSchema.safeParse({
+      ...defaultHealthCheck,
+      matcher: "OK",
+    })
+    expect(result.success).toBe(false)
   })
 })

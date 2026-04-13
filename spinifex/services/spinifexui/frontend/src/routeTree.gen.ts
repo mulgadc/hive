@@ -20,6 +20,7 @@ import { Route as AuthIamusersCreateUserRouteImport } from './routes/_auth/iam/(
 import { Route as AuthIampoliciesCreatePolicyRouteImport } from './routes/_auth/iam/(policies)/create-policy'
 import { Route as AuthEc2vpcCreateVpcRouteImport } from './routes/_auth/ec2/(vpc)/create-vpc'
 import { Route as AuthEc2volumesCreateVolumeRouteImport } from './routes/_auth/ec2/(volumes)/create-volume'
+import { Route as AuthEc2targetGroupsCreateTargetGroupRouteImport } from './routes/_auth/ec2/(target-groups)/create-target-group'
 import { Route as AuthEc2subnetCreateSubnetRouteImport } from './routes/_auth/ec2/(subnet)/create-subnet'
 import { Route as AuthEc2snapshotsCreateSnapshotRouteImport } from './routes/_auth/ec2/(snapshots)/create-snapshot'
 import { Route as AuthEc2securityGroupsCreateSecurityGroupRouteImport } from './routes/_auth/ec2/(security-groups)/create-security-group'
@@ -48,6 +49,7 @@ import { Route as AuthIampoliciesListPoliciesPolicyArnRouteImport } from './rout
 import { Route as AuthEc2vpcDescribeVpcsIdRouteImport } from './routes/_auth/ec2/(vpc)/describe-vpcs/$id'
 import { Route as AuthEc2volumesModifyVolumeIdRouteImport } from './routes/_auth/ec2/(volumes)/modify-volume/$id'
 import { Route as AuthEc2volumesDescribeVolumesIdRouteImport } from './routes/_auth/ec2/(volumes)/describe-volumes/$id'
+import { Route as AuthEc2targetGroupsDescribeTargetGroupsIdRouteImport } from './routes/_auth/ec2/(target-groups)/describe-target-groups/$id'
 import { Route as AuthEc2subnetDescribeSubnetsIdRouteImport } from './routes/_auth/ec2/(subnet)/describe-subnets/$id'
 import { Route as AuthEc2snapshotsDescribeSnapshotsIdRouteImport } from './routes/_auth/ec2/(snapshots)/describe-snapshots/$id'
 import { Route as AuthEc2securityGroupsDescribeSecurityGroupsIdRouteImport } from './routes/_auth/ec2/(security-groups)/describe-security-groups/$id'
@@ -112,6 +114,12 @@ const AuthEc2volumesCreateVolumeRoute =
   AuthEc2volumesCreateVolumeRouteImport.update({
     id: '/ec2/(volumes)/create-volume',
     path: '/ec2/create-volume',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
+const AuthEc2targetGroupsCreateTargetGroupRoute =
+  AuthEc2targetGroupsCreateTargetGroupRouteImport.update({
+    id: '/ec2/(target-groups)/create-target-group',
+    path: '/ec2/create-target-group',
     getParentRoute: () => AuthRouteRoute,
   } as any)
 const AuthEc2subnetCreateSubnetRoute =
@@ -277,6 +285,12 @@ const AuthEc2volumesDescribeVolumesIdRoute =
     path: '/ec2/describe-volumes/$id',
     getParentRoute: () => AuthRouteRoute,
   } as any)
+const AuthEc2targetGroupsDescribeTargetGroupsIdRoute =
+  AuthEc2targetGroupsDescribeTargetGroupsIdRouteImport.update({
+    id: '/ec2/(target-groups)/describe-target-groups/$id',
+    path: '/ec2/describe-target-groups/$id',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
 const AuthEc2subnetDescribeSubnetsIdRoute =
   AuthEc2subnetDescribeSubnetsIdRouteImport.update({
     id: '/ec2/(subnet)/describe-subnets/$id',
@@ -339,6 +353,7 @@ export interface FileRoutesByFullPath {
   '/ec2/create-security-group': typeof AuthEc2securityGroupsCreateSecurityGroupRoute
   '/ec2/create-snapshot': typeof AuthEc2snapshotsCreateSnapshotRoute
   '/ec2/create-subnet': typeof AuthEc2subnetCreateSubnetRoute
+  '/ec2/create-target-group': typeof AuthEc2targetGroupsCreateTargetGroupRoute
   '/ec2/create-volume': typeof AuthEc2volumesCreateVolumeRoute
   '/ec2/create-vpc': typeof AuthEc2vpcCreateVpcRoute
   '/iam/create-policy': typeof AuthIampoliciesCreatePolicyRoute
@@ -353,6 +368,7 @@ export interface FileRoutesByFullPath {
   '/ec2/describe-security-groups/$id': typeof AuthEc2securityGroupsDescribeSecurityGroupsIdRoute
   '/ec2/describe-snapshots/$id': typeof AuthEc2snapshotsDescribeSnapshotsIdRoute
   '/ec2/describe-subnets/$id': typeof AuthEc2subnetDescribeSubnetsIdRoute
+  '/ec2/describe-target-groups/$id': typeof AuthEc2targetGroupsDescribeTargetGroupsIdRoute
   '/ec2/describe-volumes/$id': typeof AuthEc2volumesDescribeVolumesIdRoute
   '/ec2/modify-volume/$id': typeof AuthEc2volumesModifyVolumeIdRoute
   '/ec2/describe-vpcs/$id': typeof AuthEc2vpcDescribeVpcsIdRoute
@@ -386,6 +402,7 @@ export interface FileRoutesByTo {
   '/ec2/create-security-group': typeof AuthEc2securityGroupsCreateSecurityGroupRoute
   '/ec2/create-snapshot': typeof AuthEc2snapshotsCreateSnapshotRoute
   '/ec2/create-subnet': typeof AuthEc2subnetCreateSubnetRoute
+  '/ec2/create-target-group': typeof AuthEc2targetGroupsCreateTargetGroupRoute
   '/ec2/create-volume': typeof AuthEc2volumesCreateVolumeRoute
   '/ec2/create-vpc': typeof AuthEc2vpcCreateVpcRoute
   '/iam/create-policy': typeof AuthIampoliciesCreatePolicyRoute
@@ -400,6 +417,7 @@ export interface FileRoutesByTo {
   '/ec2/describe-security-groups/$id': typeof AuthEc2securityGroupsDescribeSecurityGroupsIdRoute
   '/ec2/describe-snapshots/$id': typeof AuthEc2snapshotsDescribeSnapshotsIdRoute
   '/ec2/describe-subnets/$id': typeof AuthEc2subnetDescribeSubnetsIdRoute
+  '/ec2/describe-target-groups/$id': typeof AuthEc2targetGroupsDescribeTargetGroupsIdRoute
   '/ec2/describe-volumes/$id': typeof AuthEc2volumesDescribeVolumesIdRoute
   '/ec2/modify-volume/$id': typeof AuthEc2volumesModifyVolumeIdRoute
   '/ec2/describe-vpcs/$id': typeof AuthEc2vpcDescribeVpcsIdRoute
@@ -436,6 +454,7 @@ export interface FileRoutesById {
   '/_auth/ec2/(security-groups)/create-security-group': typeof AuthEc2securityGroupsCreateSecurityGroupRoute
   '/_auth/ec2/(snapshots)/create-snapshot': typeof AuthEc2snapshotsCreateSnapshotRoute
   '/_auth/ec2/(subnet)/create-subnet': typeof AuthEc2subnetCreateSubnetRoute
+  '/_auth/ec2/(target-groups)/create-target-group': typeof AuthEc2targetGroupsCreateTargetGroupRoute
   '/_auth/ec2/(volumes)/create-volume': typeof AuthEc2volumesCreateVolumeRoute
   '/_auth/ec2/(vpc)/create-vpc': typeof AuthEc2vpcCreateVpcRoute
   '/_auth/iam/(policies)/create-policy': typeof AuthIampoliciesCreatePolicyRoute
@@ -450,6 +469,7 @@ export interface FileRoutesById {
   '/_auth/ec2/(security-groups)/describe-security-groups/$id': typeof AuthEc2securityGroupsDescribeSecurityGroupsIdRoute
   '/_auth/ec2/(snapshots)/describe-snapshots/$id': typeof AuthEc2snapshotsDescribeSnapshotsIdRoute
   '/_auth/ec2/(subnet)/describe-subnets/$id': typeof AuthEc2subnetDescribeSubnetsIdRoute
+  '/_auth/ec2/(target-groups)/describe-target-groups/$id': typeof AuthEc2targetGroupsDescribeTargetGroupsIdRoute
   '/_auth/ec2/(volumes)/describe-volumes/$id': typeof AuthEc2volumesDescribeVolumesIdRoute
   '/_auth/ec2/(volumes)/modify-volume/$id': typeof AuthEc2volumesModifyVolumeIdRoute
   '/_auth/ec2/(vpc)/describe-vpcs/$id': typeof AuthEc2vpcDescribeVpcsIdRoute
@@ -486,6 +506,7 @@ export interface FileRouteTypes {
     | '/ec2/create-security-group'
     | '/ec2/create-snapshot'
     | '/ec2/create-subnet'
+    | '/ec2/create-target-group'
     | '/ec2/create-volume'
     | '/ec2/create-vpc'
     | '/iam/create-policy'
@@ -500,6 +521,7 @@ export interface FileRouteTypes {
     | '/ec2/describe-security-groups/$id'
     | '/ec2/describe-snapshots/$id'
     | '/ec2/describe-subnets/$id'
+    | '/ec2/describe-target-groups/$id'
     | '/ec2/describe-volumes/$id'
     | '/ec2/modify-volume/$id'
     | '/ec2/describe-vpcs/$id'
@@ -533,6 +555,7 @@ export interface FileRouteTypes {
     | '/ec2/create-security-group'
     | '/ec2/create-snapshot'
     | '/ec2/create-subnet'
+    | '/ec2/create-target-group'
     | '/ec2/create-volume'
     | '/ec2/create-vpc'
     | '/iam/create-policy'
@@ -547,6 +570,7 @@ export interface FileRouteTypes {
     | '/ec2/describe-security-groups/$id'
     | '/ec2/describe-snapshots/$id'
     | '/ec2/describe-subnets/$id'
+    | '/ec2/describe-target-groups/$id'
     | '/ec2/describe-volumes/$id'
     | '/ec2/modify-volume/$id'
     | '/ec2/describe-vpcs/$id'
@@ -582,6 +606,7 @@ export interface FileRouteTypes {
     | '/_auth/ec2/(security-groups)/create-security-group'
     | '/_auth/ec2/(snapshots)/create-snapshot'
     | '/_auth/ec2/(subnet)/create-subnet'
+    | '/_auth/ec2/(target-groups)/create-target-group'
     | '/_auth/ec2/(volumes)/create-volume'
     | '/_auth/ec2/(vpc)/create-vpc'
     | '/_auth/iam/(policies)/create-policy'
@@ -596,6 +621,7 @@ export interface FileRouteTypes {
     | '/_auth/ec2/(security-groups)/describe-security-groups/$id'
     | '/_auth/ec2/(snapshots)/describe-snapshots/$id'
     | '/_auth/ec2/(subnet)/describe-subnets/$id'
+    | '/_auth/ec2/(target-groups)/describe-target-groups/$id'
     | '/_auth/ec2/(volumes)/describe-volumes/$id'
     | '/_auth/ec2/(volumes)/modify-volume/$id'
     | '/_auth/ec2/(vpc)/describe-vpcs/$id'
@@ -700,6 +726,13 @@ declare module '@tanstack/react-router' {
       path: '/ec2/create-volume'
       fullPath: '/ec2/create-volume'
       preLoaderRoute: typeof AuthEc2volumesCreateVolumeRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
+    '/_auth/ec2/(target-groups)/create-target-group': {
+      id: '/_auth/ec2/(target-groups)/create-target-group'
+      path: '/ec2/create-target-group'
+      fullPath: '/ec2/create-target-group'
+      preLoaderRoute: typeof AuthEc2targetGroupsCreateTargetGroupRouteImport
       parentRoute: typeof AuthRouteRoute
     }
     '/_auth/ec2/(subnet)/create-subnet': {
@@ -898,6 +931,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthEc2volumesDescribeVolumesIdRouteImport
       parentRoute: typeof AuthRouteRoute
     }
+    '/_auth/ec2/(target-groups)/describe-target-groups/$id': {
+      id: '/_auth/ec2/(target-groups)/describe-target-groups/$id'
+      path: '/ec2/describe-target-groups/$id'
+      fullPath: '/ec2/describe-target-groups/$id'
+      preLoaderRoute: typeof AuthEc2targetGroupsDescribeTargetGroupsIdRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
     '/_auth/ec2/(subnet)/describe-subnets/$id': {
       id: '/_auth/ec2/(subnet)/describe-subnets/$id'
       path: '/ec2/describe-subnets/$id'
@@ -982,6 +1022,7 @@ interface AuthRouteRouteChildren {
   AuthEc2securityGroupsCreateSecurityGroupRoute: typeof AuthEc2securityGroupsCreateSecurityGroupRoute
   AuthEc2snapshotsCreateSnapshotRoute: typeof AuthEc2snapshotsCreateSnapshotRoute
   AuthEc2subnetCreateSubnetRoute: typeof AuthEc2subnetCreateSubnetRoute
+  AuthEc2targetGroupsCreateTargetGroupRoute: typeof AuthEc2targetGroupsCreateTargetGroupRoute
   AuthEc2volumesCreateVolumeRoute: typeof AuthEc2volumesCreateVolumeRoute
   AuthEc2vpcCreateVpcRoute: typeof AuthEc2vpcCreateVpcRoute
   AuthIampoliciesCreatePolicyRoute: typeof AuthIampoliciesCreatePolicyRoute
@@ -996,6 +1037,7 @@ interface AuthRouteRouteChildren {
   AuthEc2securityGroupsDescribeSecurityGroupsIdRoute: typeof AuthEc2securityGroupsDescribeSecurityGroupsIdRoute
   AuthEc2snapshotsDescribeSnapshotsIdRoute: typeof AuthEc2snapshotsDescribeSnapshotsIdRoute
   AuthEc2subnetDescribeSubnetsIdRoute: typeof AuthEc2subnetDescribeSubnetsIdRoute
+  AuthEc2targetGroupsDescribeTargetGroupsIdRoute: typeof AuthEc2targetGroupsDescribeTargetGroupsIdRoute
   AuthEc2volumesDescribeVolumesIdRoute: typeof AuthEc2volumesDescribeVolumesIdRoute
   AuthEc2volumesModifyVolumeIdRoute: typeof AuthEc2volumesModifyVolumeIdRoute
   AuthEc2vpcDescribeVpcsIdRoute: typeof AuthEc2vpcDescribeVpcsIdRoute
@@ -1030,6 +1072,8 @@ const AuthRouteRouteChildren: AuthRouteRouteChildren = {
     AuthEc2securityGroupsCreateSecurityGroupRoute,
   AuthEc2snapshotsCreateSnapshotRoute: AuthEc2snapshotsCreateSnapshotRoute,
   AuthEc2subnetCreateSubnetRoute: AuthEc2subnetCreateSubnetRoute,
+  AuthEc2targetGroupsCreateTargetGroupRoute:
+    AuthEc2targetGroupsCreateTargetGroupRoute,
   AuthEc2volumesCreateVolumeRoute: AuthEc2volumesCreateVolumeRoute,
   AuthEc2vpcCreateVpcRoute: AuthEc2vpcCreateVpcRoute,
   AuthIampoliciesCreatePolicyRoute: AuthIampoliciesCreatePolicyRoute,
@@ -1049,6 +1093,8 @@ const AuthRouteRouteChildren: AuthRouteRouteChildren = {
   AuthEc2snapshotsDescribeSnapshotsIdRoute:
     AuthEc2snapshotsDescribeSnapshotsIdRoute,
   AuthEc2subnetDescribeSubnetsIdRoute: AuthEc2subnetDescribeSubnetsIdRoute,
+  AuthEc2targetGroupsDescribeTargetGroupsIdRoute:
+    AuthEc2targetGroupsDescribeTargetGroupsIdRoute,
   AuthEc2volumesDescribeVolumesIdRoute: AuthEc2volumesDescribeVolumesIdRoute,
   AuthEc2volumesModifyVolumeIdRoute: AuthEc2volumesModifyVolumeIdRoute,
   AuthEc2vpcDescribeVpcsIdRoute: AuthEc2vpcDescribeVpcsIdRoute,

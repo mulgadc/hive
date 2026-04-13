@@ -145,19 +145,35 @@ describe("elbv2 implemented queries send the right command", () => {
       ResourceArns: ["arn:lb"],
     })
   })
-})
 
-describe("elbv2 remaining query stubs throw until implemented", () => {
-  it("targetGroups queryFn throws not-implemented", () => {
-    expect(() => callQueryFn(elbv2TargetGroupsQueryOptions.queryFn)).toThrow(
-      /not implemented/,
-    )
+  it("targetGroups list sends DescribeTargetGroupsCommand", async () => {
+    mockSend.mockResolvedValueOnce({ TargetGroups: [] })
+    await callQueryFn(elbv2TargetGroupsQueryOptions.queryFn)
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({})
   })
 
-  it("targetHealth queryFn throws not-implemented", () => {
-    expect(() =>
-      callQueryFn(elbv2TargetHealthQueryOptions("arn:tg").queryFn),
-    ).toThrow(/not implemented/)
+  it("targetGroup detail filters by ARN", async () => {
+    mockSend.mockResolvedValueOnce({ TargetGroups: [] })
+    await callQueryFn(elbv2TargetGroupQueryOptions("arn:tg").queryFn)
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      TargetGroupArns: ["arn:tg"],
+    })
+  })
+
+  it("targetGroup attributes sends arn", async () => {
+    mockSend.mockResolvedValueOnce({ Attributes: [] })
+    await callQueryFn(elbv2TargetGroupAttributesQueryOptions("arn:tg").queryFn)
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      TargetGroupArn: "arn:tg",
+    })
+  })
+
+  it("targetHealth sends target group arn", async () => {
+    mockSend.mockResolvedValueOnce({ TargetHealthDescriptions: [] })
+    await callQueryFn(elbv2TargetHealthQueryOptions("arn:tg").queryFn)
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      TargetGroupArn: "arn:tg",
+    })
   })
 })
 

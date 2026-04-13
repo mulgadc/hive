@@ -3,19 +3,15 @@ import {
   DescribeLoadBalancerAttributesCommand,
   DescribeLoadBalancersCommand,
   DescribeTagsCommand,
+  DescribeTargetGroupAttributesCommand,
+  DescribeTargetGroupsCommand,
+  DescribeTargetHealthCommand,
 } from "@aws-sdk/client-elastic-load-balancing-v2"
 import { queryOptions } from "@tanstack/react-query"
 
 import { getElbv2Client } from "@/lib/awsClient"
 
 const PROVISIONING_POLL_MS = 5000
-
-// Slice 1/2 — real implementations for LB list/detail/listeners/attrs/tags.
-// Target-group + target-health queries remain stubs until slices 3/5.
-
-const notImplemented = (name: string): never => {
-  throw new Error(`elbv2 query '${name}' not implemented yet`)
-}
 
 export const elbv2LoadBalancersQueryOptions = queryOptions({
   queryKey: ["elbv2", "loadBalancers"],
@@ -58,19 +54,32 @@ export const elbv2LoadBalancerAttributesQueryOptions = (arn: string) =>
 
 export const elbv2TargetGroupsQueryOptions = queryOptions({
   queryKey: ["elbv2", "targetGroups"],
-  queryFn: () => notImplemented("elbv2TargetGroupsQueryOptions"),
+  queryFn: () => {
+    const command = new DescribeTargetGroupsCommand({})
+    return getElbv2Client().send(command)
+  },
 })
 
 export const elbv2TargetGroupQueryOptions = (arn: string) =>
   queryOptions({
     queryKey: ["elbv2", "targetGroups", arn],
-    queryFn: () => notImplemented("elbv2TargetGroupQueryOptions"),
+    queryFn: () => {
+      const command = new DescribeTargetGroupsCommand({
+        TargetGroupArns: [arn],
+      })
+      return getElbv2Client().send(command)
+    },
   })
 
 export const elbv2TargetGroupAttributesQueryOptions = (arn: string) =>
   queryOptions({
     queryKey: ["elbv2", "targetGroups", arn, "attributes"],
-    queryFn: () => notImplemented("elbv2TargetGroupAttributesQueryOptions"),
+    queryFn: () => {
+      const command = new DescribeTargetGroupAttributesCommand({
+        TargetGroupArn: arn,
+      })
+      return getElbv2Client().send(command)
+    },
   })
 
 export const elbv2ListenersQueryOptions = (loadBalancerArn: string) =>
@@ -84,10 +93,17 @@ export const elbv2ListenersQueryOptions = (loadBalancerArn: string) =>
     },
   })
 
+// Polling is opt-in by the caller (slice 5 enables 5s refetch while the Targets
+// tab is visible). List page uses this as a one-shot for the health summary.
 export const elbv2TargetHealthQueryOptions = (targetGroupArn: string) =>
   queryOptions({
     queryKey: ["elbv2", "targetGroups", targetGroupArn, "health"],
-    queryFn: () => notImplemented("elbv2TargetHealthQueryOptions"),
+    queryFn: () => {
+      const command = new DescribeTargetHealthCommand({
+        TargetGroupArn: targetGroupArn,
+      })
+      return getElbv2Client().send(command)
+    },
   })
 
 export const elbv2TagsQueryOptions = (resourceArns: string[]) =>
