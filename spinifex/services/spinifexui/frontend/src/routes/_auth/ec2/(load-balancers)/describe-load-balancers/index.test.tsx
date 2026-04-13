@@ -1,3 +1,4 @@
+import type { Image } from "@aws-sdk/client-ec2"
 import type { LoadBalancer } from "@aws-sdk/client-elastic-load-balancing-v2"
 import { screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
@@ -80,6 +81,12 @@ const LBS: LoadBalancer[] = [
   },
 ]
 
+const LB_IMAGE: Image = {
+  ImageId: "ami-lb",
+  Name: "lb-alpine-3.21.6-x86_64",
+  Tags: [{ Key: "spinifex:managed-by", Value: "elbv2" }],
+}
+
 describe("describe-load-balancers list route", () => {
   beforeEach(() => sdk.reset())
   afterEach(() => vi.clearAllMocks())
@@ -87,6 +94,7 @@ describe("describe-load-balancers list route", () => {
   it("renders load-balancer rows with resolved fields", () => {
     const qc = createTestQueryClient()
     qc.setQueryData(["elbv2", "loadBalancers"], { LoadBalancers: LBS })
+    qc.setQueryData(["ec2", "images"], { Images: [LB_IMAGE] })
 
     renderWithClient(<DescribeLoadBalancersPage />, qc)
 
@@ -94,14 +102,58 @@ describe("describe-load-balancers list route", () => {
     expect(screen.getByText("lb-one.example")).toBeInTheDocument()
     expect(screen.getByText("application")).toBeInTheDocument()
     expect(screen.getByText("internet-facing")).toBeInTheDocument()
+    expect(
+      screen.queryByText("Load balancer image not imported"),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Create load balancer" }),
+    ).not.toBeDisabled()
   })
 
   it("shows empty state when no load balancers", () => {
     const qc = createTestQueryClient()
     qc.setQueryData(["elbv2", "loadBalancers"], { LoadBalancers: [] })
+    qc.setQueryData(["ec2", "images"], { Images: [LB_IMAGE] })
 
     renderWithClient(<DescribeLoadBalancersPage />, qc)
 
     expect(screen.getByText("No load balancers found.")).toBeInTheDocument()
+  })
+
+  it("shows import banner and disables Create button when LB AMI missing", () => {
+    const qc = createTestQueryClient()
+    qc.setQueryData(["elbv2", "loadBalancers"], { LoadBalancers: [] })
+    qc.setQueryData(["ec2", "images"], { Images: [] })
+
+    renderWithClient(<DescribeLoadBalancersPage />, qc)
+
+    expect(
+      screen.getByText("Load balancer image not imported"),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/spx admin images import --name lb-alpine/),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Create load balancer" }),
+    ).toBeDisabled()
+  })
+
+  it("treats non-LB system images as missing", () => {
+    const qc = createTestQueryClient()
+    qc.setQueryData(["elbv2", "loadBalancers"], { LoadBalancers: [] })
+    qc.setQueryData(["ec2", "images"], {
+      Images: [
+        {
+          ImageId: "ami-customer",
+          Tags: [{ Key: "Name", Value: "ubuntu" }],
+        },
+      ],
+    })
+
+    renderWithClient(<DescribeLoadBalancersPage />, qc)
+
+    expect(
+      screen.getByText("Load balancer image not imported"),
+    ).toBeInTheDocument()
   })
 })
