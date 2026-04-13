@@ -162,7 +162,7 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 			region = d.config.Region
 			az = d.config.AZ
 		}
-		allocatedIP, poolName, allocErr := d.externalIPAM.AllocateIP(region, az, "auto_assign", instance.ENIId, instance.ID)
+		allocatedIP, poolName, allocErr := d.externalIPAM.AllocateIP(region, az, "auto_assign", "", instance.ENIId, instance.ID)
 		if allocErr != nil {
 			slog.Error("LaunchSystemInstance: failed to allocate public IP for internet-facing ALB", "instanceId", instance.ID, "err", allocErr)
 			d.cleanupFailedSystemInstance(instance, instanceType)

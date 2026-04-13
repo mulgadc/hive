@@ -108,6 +108,34 @@ Or create a `main.tf` file and paste the full configuration below.
 ```bash
 export AWS_PROFILE=spinifex
 tofu init
+```
+
+
+### Step 3. Specify instance and apply
+
+Next, depending on your architecture and CPU/memory requirements you must specify an instance type to launch.
+
+Either specify an instance type directly (e.g Intel)
+
+```bash
+# AMD instance
+export TF_VAR_instance_type="t3a.small"
+
+# Or, Intel
+export TF_VAR_instance_type="t3.small"
+```
+
+Or alternatively, using the AWS CLI tool query your instance for available types (e.g Intel, AMD, ARM) that support 2 vCPUs and 1 GB RAM.
+
+```bash
+TF_VAR_instance_type=$(aws ec2 describe-instance-types \
+  --query "sort_by(InstanceTypes[?VCpuInfo.DefaultVCpus==\`2\` && MemoryInfo.SizeInMiB>=\`1024\`], &MemoryInfo.SizeInMiB)[0].InstanceType" \
+  --output text)
+```
+
+Next, apply and launch the template:
+
+```bash
 tofu apply
 ```
 
@@ -138,7 +166,13 @@ The Nginx instances themselves only have private IPs (see the `instance_1_privat
 Check target health via AWS CLI:
 
 ```bash
-aws elbv2 describe-target-health --target-group-arn <tg_arn>
+TG_ARN=$(aws elbv2 describe-target-groups \
+  --query 'TargetGroups[0].TargetGroupArn' \
+  --output text)
+
+echo "Target Group ARN: $TG_ARN"
+
+aws elbv2 describe-target-health --target-group-arn $TG_ARN
 ```
 
 ### Cleanup
@@ -155,6 +189,12 @@ Ensure you have imported a Debian 12 image. Check available AMIs:
 
 ```bash
 aws ec2 describe-images --owners 000000000000 --profile spinifex
+```
+
+If missing import:
+
+```bash
+spx admin images import --name debian-12-x86_64
 ```
 
 ### Provider Connection Refused

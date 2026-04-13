@@ -8,7 +8,16 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-const defaultTimeout = 30 * time.Second
+const (
+	defaultTimeout = 30 * time.Second
+	// longRunningTimeout covers operations that synchronously launch or tear
+	// down ALB frontend VMs (DHCP lease + QEMU boot / QMP shutdown + QEMU exit).
+	// A healthy launch is ~45s on a warm box; shutdown can take tens of seconds
+	// if QMP is slow. Until CreateLoadBalancer is made fully async, we keep a
+	// wide margin so Terraform's AWS provider doesn't retry mid-flight and then
+	// hit DuplicateLoadBalancerName on the second attempt.
+	longRunningTimeout = 5 * time.Minute
+)
 
 // NATSELBv2Service handles ELBv2 operations via NATS messaging.
 type NATSELBv2Service struct {
@@ -21,7 +30,7 @@ func NewNATSELBv2Service(conn *nats.Conn) ELBv2Service {
 }
 
 func (s *NATSELBv2Service) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInput, accountID string) (*elbv2.CreateLoadBalancerOutput, error) {
-	return utils.NATSRequest[elbv2.CreateLoadBalancerOutput](s.natsConn, "elbv2.CreateLoadBalancer", input, defaultTimeout, accountID)
+	return utils.NATSRequest[elbv2.CreateLoadBalancerOutput](s.natsConn, "elbv2.CreateLoadBalancer", input, longRunningTimeout, accountID)
 }
 
 func (s *NATSELBv2Service) DeleteLoadBalancer(input *elbv2.DeleteLoadBalancerInput, accountID string) (*elbv2.DeleteLoadBalancerOutput, error) {

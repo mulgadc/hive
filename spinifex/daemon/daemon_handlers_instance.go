@@ -238,7 +238,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 						region = d.config.Region
 						az = d.config.AZ
 					}
-					publicIP, poolName, allocErr := d.externalIPAM.AllocateIP(region, az, "auto_assign", *eni.NetworkInterfaceId, instance.ID)
+					publicIP, poolName, allocErr := d.externalIPAM.AllocateIP(region, az, "auto_assign", "", *eni.NetworkInterfaceId, instance.ID)
 					if allocErr != nil {
 						slog.Warn("Failed to allocate public IP for instance", "instanceId", instance.ID, "err", allocErr)
 					} else {
