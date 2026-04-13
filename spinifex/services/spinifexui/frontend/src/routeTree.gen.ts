@@ -52,6 +52,7 @@ import { Route as AuthEc2subnetDescribeSubnetsIdRouteImport } from './routes/_au
 import { Route as AuthEc2snapshotsDescribeSnapshotsIdRouteImport } from './routes/_auth/ec2/(snapshots)/describe-snapshots/$id'
 import { Route as AuthEc2securityGroupsDescribeSecurityGroupsIdRouteImport } from './routes/_auth/ec2/(security-groups)/describe-security-groups/$id'
 import { Route as AuthEc2placementGroupsDescribePlacementGroupsIdRouteImport } from './routes/_auth/ec2/(placement-groups)/describe-placement-groups/$id'
+import { Route as AuthEc2loadBalancersDescribeLoadBalancersIdRouteImport } from './routes/_auth/ec2/(load-balancers)/describe-load-balancers/$id'
 import { Route as AuthEc2keyDescribeKeyPairsIdRouteImport } from './routes/_auth/ec2/(key)/describe-key-pairs/$id'
 import { Route as AuthEc2instancesDescribeInstancesIdRouteImport } from './routes/_auth/ec2/(instances)/describe-instances/$id'
 import { Route as AuthEc2imagesDescribeImagesIdRouteImport } from './routes/_auth/ec2/(images)/describe-images/$id'
@@ -300,6 +301,12 @@ const AuthEc2placementGroupsDescribePlacementGroupsIdRoute =
     path: '/ec2/describe-placement-groups/$id',
     getParentRoute: () => AuthRouteRoute,
   } as any)
+const AuthEc2loadBalancersDescribeLoadBalancersIdRoute =
+  AuthEc2loadBalancersDescribeLoadBalancersIdRouteImport.update({
+    id: '/ec2/(load-balancers)/describe-load-balancers/$id',
+    path: '/ec2/describe-load-balancers/$id',
+    getParentRoute: () => AuthRouteRoute,
+  } as any)
 const AuthEc2keyDescribeKeyPairsIdRoute =
   AuthEc2keyDescribeKeyPairsIdRouteImport.update({
     id: '/ec2/(key)/describe-key-pairs/$id',
@@ -341,6 +348,7 @@ export interface FileRoutesByFullPath {
   '/ec2/describe-images/$id': typeof AuthEc2imagesDescribeImagesIdRoute
   '/ec2/describe-instances/$id': typeof AuthEc2instancesDescribeInstancesIdRoute
   '/ec2/describe-key-pairs/$id': typeof AuthEc2keyDescribeKeyPairsIdRoute
+  '/ec2/describe-load-balancers/$id': typeof AuthEc2loadBalancersDescribeLoadBalancersIdRoute
   '/ec2/describe-placement-groups/$id': typeof AuthEc2placementGroupsDescribePlacementGroupsIdRoute
   '/ec2/describe-security-groups/$id': typeof AuthEc2securityGroupsDescribeSecurityGroupsIdRoute
   '/ec2/describe-snapshots/$id': typeof AuthEc2snapshotsDescribeSnapshotsIdRoute
@@ -387,6 +395,7 @@ export interface FileRoutesByTo {
   '/ec2/describe-images/$id': typeof AuthEc2imagesDescribeImagesIdRoute
   '/ec2/describe-instances/$id': typeof AuthEc2instancesDescribeInstancesIdRoute
   '/ec2/describe-key-pairs/$id': typeof AuthEc2keyDescribeKeyPairsIdRoute
+  '/ec2/describe-load-balancers/$id': typeof AuthEc2loadBalancersDescribeLoadBalancersIdRoute
   '/ec2/describe-placement-groups/$id': typeof AuthEc2placementGroupsDescribePlacementGroupsIdRoute
   '/ec2/describe-security-groups/$id': typeof AuthEc2securityGroupsDescribeSecurityGroupsIdRoute
   '/ec2/describe-snapshots/$id': typeof AuthEc2snapshotsDescribeSnapshotsIdRoute
@@ -436,6 +445,7 @@ export interface FileRoutesById {
   '/_auth/ec2/(images)/describe-images/$id': typeof AuthEc2imagesDescribeImagesIdRoute
   '/_auth/ec2/(instances)/describe-instances/$id': typeof AuthEc2instancesDescribeInstancesIdRoute
   '/_auth/ec2/(key)/describe-key-pairs/$id': typeof AuthEc2keyDescribeKeyPairsIdRoute
+  '/_auth/ec2/(load-balancers)/describe-load-balancers/$id': typeof AuthEc2loadBalancersDescribeLoadBalancersIdRoute
   '/_auth/ec2/(placement-groups)/describe-placement-groups/$id': typeof AuthEc2placementGroupsDescribePlacementGroupsIdRoute
   '/_auth/ec2/(security-groups)/describe-security-groups/$id': typeof AuthEc2securityGroupsDescribeSecurityGroupsIdRoute
   '/_auth/ec2/(snapshots)/describe-snapshots/$id': typeof AuthEc2snapshotsDescribeSnapshotsIdRoute
@@ -485,6 +495,7 @@ export interface FileRouteTypes {
     | '/ec2/describe-images/$id'
     | '/ec2/describe-instances/$id'
     | '/ec2/describe-key-pairs/$id'
+    | '/ec2/describe-load-balancers/$id'
     | '/ec2/describe-placement-groups/$id'
     | '/ec2/describe-security-groups/$id'
     | '/ec2/describe-snapshots/$id'
@@ -531,6 +542,7 @@ export interface FileRouteTypes {
     | '/ec2/describe-images/$id'
     | '/ec2/describe-instances/$id'
     | '/ec2/describe-key-pairs/$id'
+    | '/ec2/describe-load-balancers/$id'
     | '/ec2/describe-placement-groups/$id'
     | '/ec2/describe-security-groups/$id'
     | '/ec2/describe-snapshots/$id'
@@ -579,6 +591,7 @@ export interface FileRouteTypes {
     | '/_auth/ec2/(images)/describe-images/$id'
     | '/_auth/ec2/(instances)/describe-instances/$id'
     | '/_auth/ec2/(key)/describe-key-pairs/$id'
+    | '/_auth/ec2/(load-balancers)/describe-load-balancers/$id'
     | '/_auth/ec2/(placement-groups)/describe-placement-groups/$id'
     | '/_auth/ec2/(security-groups)/describe-security-groups/$id'
     | '/_auth/ec2/(snapshots)/describe-snapshots/$id'
@@ -913,6 +926,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthEc2placementGroupsDescribePlacementGroupsIdRouteImport
       parentRoute: typeof AuthRouteRoute
     }
+    '/_auth/ec2/(load-balancers)/describe-load-balancers/$id': {
+      id: '/_auth/ec2/(load-balancers)/describe-load-balancers/$id'
+      path: '/ec2/describe-load-balancers/$id'
+      fullPath: '/ec2/describe-load-balancers/$id'
+      preLoaderRoute: typeof AuthEc2loadBalancersDescribeLoadBalancersIdRouteImport
+      parentRoute: typeof AuthRouteRoute
+    }
     '/_auth/ec2/(key)/describe-key-pairs/$id': {
       id: '/_auth/ec2/(key)/describe-key-pairs/$id'
       path: '/ec2/describe-key-pairs/$id'
@@ -971,6 +991,7 @@ interface AuthRouteRouteChildren {
   AuthEc2imagesDescribeImagesIdRoute: typeof AuthEc2imagesDescribeImagesIdRoute
   AuthEc2instancesDescribeInstancesIdRoute: typeof AuthEc2instancesDescribeInstancesIdRoute
   AuthEc2keyDescribeKeyPairsIdRoute: typeof AuthEc2keyDescribeKeyPairsIdRoute
+  AuthEc2loadBalancersDescribeLoadBalancersIdRoute: typeof AuthEc2loadBalancersDescribeLoadBalancersIdRoute
   AuthEc2placementGroupsDescribePlacementGroupsIdRoute: typeof AuthEc2placementGroupsDescribePlacementGroupsIdRoute
   AuthEc2securityGroupsDescribeSecurityGroupsIdRoute: typeof AuthEc2securityGroupsDescribeSecurityGroupsIdRoute
   AuthEc2snapshotsDescribeSnapshotsIdRoute: typeof AuthEc2snapshotsDescribeSnapshotsIdRoute
@@ -1019,6 +1040,8 @@ const AuthRouteRouteChildren: AuthRouteRouteChildren = {
   AuthEc2instancesDescribeInstancesIdRoute:
     AuthEc2instancesDescribeInstancesIdRoute,
   AuthEc2keyDescribeKeyPairsIdRoute: AuthEc2keyDescribeKeyPairsIdRoute,
+  AuthEc2loadBalancersDescribeLoadBalancersIdRoute:
+    AuthEc2loadBalancersDescribeLoadBalancersIdRoute,
   AuthEc2placementGroupsDescribePlacementGroupsIdRoute:
     AuthEc2placementGroupsDescribePlacementGroupsIdRoute,
   AuthEc2securityGroupsDescribeSecurityGroupsIdRoute:

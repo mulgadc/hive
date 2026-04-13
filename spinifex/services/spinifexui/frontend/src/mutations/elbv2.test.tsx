@@ -1,7 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { renderHook, waitFor } from "@testing-library/react"
 import type { ReactNode } from "react"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
+
+const mockSend = vi.fn().mockResolvedValue({})
+
+vi.mock("@/lib/awsClient", () => ({
+  getElbv2Client: () => ({ send: mockSend }),
+}))
 
 import {
   useCreateListener,
@@ -16,23 +22,30 @@ import {
   useRegisterTargets,
 } from "./elbv2"
 
-function createWrapper() {
-  const queryClient = new QueryClient({
+let queryClient: QueryClient
+
+function wrapper({ children }: { children: ReactNode }) {
+  return (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  )
+}
+
+afterEach(() => {
+  mockSend.mockClear()
+})
+
+function createQueryClient() {
+  queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   })
-  return function Wrapper({ children }: { children: ReactNode }) {
-    return (
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    )
-  }
+  return queryClient
 }
 
 const stubs = [
   ["useCreateLoadBalancer", useCreateLoadBalancer],
-  ["useDeleteLoadBalancer", useDeleteLoadBalancer],
   ["useModifyLoadBalancerAttributes", useModifyLoadBalancerAttributes],
   ["useCreateTargetGroup", useCreateTargetGroup],
   ["useDeleteTargetGroup", useDeleteTargetGroup],
@@ -46,7 +59,7 @@ const stubs = [
 describe("elbv2 mutation stubs throw until implemented", () => {
   for (const [name, useMutationHook] of stubs) {
     it(`${name} fires 'not implemented'`, async () => {
-      const wrapper = createWrapper()
+      createQueryClient()
       const { result } = renderHook(() => useMutationHook(), { wrapper })
 
       result.current.mutate(undefined as never)
@@ -55,4 +68,18 @@ describe("elbv2 mutation stubs throw until implemented", () => {
       expect(result.current.error?.message).toMatch(/not implemented/)
     })
   }
+})
+
+describe("useDeleteLoadBalancer", () => {
+  it("sends DeleteLoadBalancerCommand with load balancer ARN", async () => {
+    createQueryClient()
+    const { result } = renderHook(() => useDeleteLoadBalancer(), { wrapper })
+
+    result.current.mutate("arn:aws:elasticloadbalancing:lb/app/foo/abc")
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      LoadBalancerArn: "arn:aws:elasticloadbalancing:lb/app/foo/abc",
+    })
+  })
 })

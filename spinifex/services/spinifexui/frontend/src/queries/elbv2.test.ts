@@ -1,4 +1,10 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
+
+const mockSend = vi.fn()
+
+vi.mock("@/lib/awsClient", () => ({
+  getElbv2Client: () => ({ send: mockSend }),
+}))
 
 import {
   elbv2ListenersQueryOptions,
@@ -11,6 +17,10 @@ import {
   elbv2TargetGroupsQueryOptions,
   elbv2TargetHealthQueryOptions,
 } from "./elbv2"
+
+afterEach(() => {
+  mockSend.mockReset()
+})
 
 describe("elbv2 query keys", () => {
   it("elbv2LoadBalancersQueryOptions has correct key", () => {
@@ -96,16 +106,85 @@ function callQueryFn(queryFn: unknown): Promise<unknown> {
   })
 }
 
-describe("elbv2 query stubs throw until implemented", () => {
-  it("loadBalancers queryFn throws not-implemented", () => {
-    expect(() => callQueryFn(elbv2LoadBalancersQueryOptions.queryFn)).toThrow(
-      /not implemented/,
-    )
+describe("elbv2 implemented queries send the right command", () => {
+  it("loadBalancers list sends DescribeLoadBalancersCommand", async () => {
+    mockSend.mockResolvedValueOnce({ LoadBalancers: [] })
+    await callQueryFn(elbv2LoadBalancersQueryOptions.queryFn)
+    expect(mockSend).toHaveBeenCalledOnce()
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({})
   })
 
+  it("loadBalancer detail filters by ARN", async () => {
+    mockSend.mockResolvedValueOnce({ LoadBalancers: [] })
+    await callQueryFn(elbv2LoadBalancerQueryOptions("arn:lb").queryFn)
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      LoadBalancerArns: ["arn:lb"],
+    })
+  })
+
+  it("loadBalancer attributes sends arn", async () => {
+    mockSend.mockResolvedValueOnce({ Attributes: [] })
+    await callQueryFn(elbv2LoadBalancerAttributesQueryOptions("arn:lb").queryFn)
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      LoadBalancerArn: "arn:lb",
+    })
+  })
+
+  it("listeners filters by load balancer arn", async () => {
+    mockSend.mockResolvedValueOnce({ Listeners: [] })
+    await callQueryFn(elbv2ListenersQueryOptions("arn:lb").queryFn)
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      LoadBalancerArn: "arn:lb",
+    })
+  })
+
+  it("tags sends resource arns", async () => {
+    mockSend.mockResolvedValueOnce({ TagDescriptions: [] })
+    await callQueryFn(elbv2TagsQueryOptions(["arn:lb"]).queryFn)
+    expect(mockSend.mock.calls[0]?.[0].input).toEqual({
+      ResourceArns: ["arn:lb"],
+    })
+  })
+})
+
+describe("elbv2 remaining query stubs throw until implemented", () => {
   it("targetGroups queryFn throws not-implemented", () => {
     expect(() => callQueryFn(elbv2TargetGroupsQueryOptions.queryFn)).toThrow(
       /not implemented/,
     )
+  })
+
+  it("targetHealth queryFn throws not-implemented", () => {
+    expect(() =>
+      callQueryFn(elbv2TargetHealthQueryOptions("arn:tg").queryFn),
+    ).toThrow(/not implemented/)
+  })
+})
+
+describe("elbv2 load balancer list poll cadence", () => {
+  it("polls every 5s while any lb is provisioning", () => {
+    const refetch = elbv2LoadBalancersQueryOptions.refetchInterval
+    if (typeof refetch !== "function") {
+      throw new TypeError("expected refetchInterval to be a function")
+    }
+    const result = refetch({
+      state: {
+        data: { LoadBalancers: [{ State: { Code: "provisioning" } }] },
+      },
+    } as never)
+    expect(result).toBe(5000)
+  })
+
+  it("does not poll once all lbs are active", () => {
+    const refetch = elbv2LoadBalancersQueryOptions.refetchInterval
+    if (typeof refetch !== "function") {
+      throw new TypeError("expected refetchInterval to be a function")
+    }
+    const result = refetch({
+      state: {
+        data: { LoadBalancers: [{ State: { Code: "active" } }] },
+      },
+    } as never)
+    expect(result).toBe(false)
   })
 })

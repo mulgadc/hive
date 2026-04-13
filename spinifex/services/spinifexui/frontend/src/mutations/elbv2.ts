@@ -1,7 +1,10 @@
-import { useMutation } from "@tanstack/react-query"
+import { DeleteLoadBalancerCommand } from "@aws-sdk/client-elastic-load-balancing-v2"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 
-// Slice 1 — stubs. Filled in per slice (3/4/5/6/7).
-// Each mutationFn throws so an accidental caller fails loudly.
+import { getElbv2Client } from "@/lib/awsClient"
+
+// Mutations are filled in per slice (2/3/4/5/6/7). Remaining stubs throw so an
+// accidental caller fails loudly rather than silently.
 
 const notImplemented = (name: string): never => {
   throw new Error(`elbv2 mutation '${name}' not implemented yet`)
@@ -14,8 +17,17 @@ export function useCreateLoadBalancer() {
 }
 
 export function useDeleteLoadBalancer() {
+  const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: () => notImplemented("useDeleteLoadBalancer"),
+    mutationFn: (loadBalancerArn: string) => {
+      const command = new DeleteLoadBalancerCommand({
+        LoadBalancerArn: loadBalancerArn,
+      })
+      return getElbv2Client().send(command)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["elbv2", "loadBalancers"] })
+    },
   })
 }
 
