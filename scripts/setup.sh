@@ -425,12 +425,14 @@ fix_file_ownership() {
             || fatal "Failed to set permissions on /etc/spinifex/ca.key"
     fi
 
-    # Shared data dirs — root:spinifex 0770 (daemon + admin CLI write, services read)
+    # Shared data dirs — root:spinifex 0770 (daemon + admin CLI write, services read).
+    # chmod must be recursive so pre-existing files (e.g. imported images originally
+    # written as 0600 by another user) become group-readable.
     for d in images amis volumes state; do
         if [ -d "/var/lib/spinifex/$d" ]; then
             $SUDO chown -R "root:$SPINIFEX_GROUP" "/var/lib/spinifex/$d" \
                 || fatal "Failed to set ownership on /var/lib/spinifex/$d"
-            $SUDO chmod 0770 "/var/lib/spinifex/$d" \
+            $SUDO chmod -R u+rwX,g+rwX,o-rwx "/var/lib/spinifex/$d" \
                 || fatal "Failed to set permissions on /var/lib/spinifex/$d"
         fi
     done
