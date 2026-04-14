@@ -143,7 +143,7 @@ open https://YOUR_NODE_IP:3000
 - **Single sign-on against your AWS credentials.** Log in with the access keys from `~/.aws/credentials` on the node where Spinifex is installed — no separate user database.
 - **Self-hosted, works offline.** The UI is embedded in the Spinifex binary and served from the node itself. No external CDN, no analytics calls, no cloud dependency.
 
-For the full walkthrough — first-time TLS certificate trust, login, and feature tour — see [**Launching the Web UI**](docs/setting-up-your-cluster/README.md#7-launching-the-web-ui) in the cluster setup guide.
+For the full walkthrough — first-time TLS certificate trust, login, and feature tour — see [**Launching the Web UI**](https://docs.mulgadc.com/docs/setting-up-your-cluster#7-launching-the-web-ui) in the cluster setup guide.
 
 ## Development Philosophy
 
