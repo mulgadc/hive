@@ -370,6 +370,95 @@ EOF
     fi
 }
 
+# --- Fix file ownership for upgrades from v1 ---
+fix_file_ownership() {
+    info "Fixing file ownership for privilege separation..."
+
+    # Per-service data dirs — recursive chown so existing files are accessible
+    for entry in \
+        nats:spinifex-nats \
+        predastore:spinifex-storage \
+        spinifex:spinifex-daemon \
+        viperblock:spinifex-viperblock \
+        vpcd:spinifex-vpcd \
+        awsgw:spinifex-gw; do
+        IFS=: read -r dir svc_user <<< "$entry"
+        if [ -d "/var/lib/spinifex/$dir" ]; then
+            $SUDO chown -R "$svc_user:$SPINIFEX_GROUP" "/var/lib/spinifex/$dir" \
+                || fatal "Failed to set ownership on /var/lib/spinifex/$dir"
+        fi
+    done
+
+    # Per-service config dirs — recursive chown
+    if [ -d /etc/spinifex/nats ]; then
+        $SUDO chown -R "spinifex-nats:$SPINIFEX_GROUP" /etc/spinifex/nats \
+            || fatal "Failed to set ownership on /etc/spinifex/nats"
+    fi
+    if [ -d /etc/spinifex/predastore ]; then
+        $SUDO chown -R "spinifex-storage:$SPINIFEX_GROUP" /etc/spinifex/predastore \
+            || fatal "Failed to set ownership on /etc/spinifex/predastore"
+    fi
+
+    # Shared config files — root:spinifex with per-file modes
+    for f in spinifex.toml master.key server.key; do
+        if [ -f "/etc/spinifex/$f" ]; then
+            $SUDO chown "root:$SPINIFEX_GROUP" "/etc/spinifex/$f" \
+                || fatal "Failed to set ownership on /etc/spinifex/$f"
+            $SUDO chmod 0640 "/etc/spinifex/$f" \
+                || fatal "Failed to set permissions on /etc/spinifex/$f"
+        fi
+    done
+    for f in server.pem ca.pem; do
+        if [ -f "/etc/spinifex/$f" ]; then
+            $SUDO chown "root:$SPINIFEX_GROUP" "/etc/spinifex/$f" \
+                || fatal "Failed to set ownership on /etc/spinifex/$f"
+            $SUDO chmod 0644 "/etc/spinifex/$f" \
+                || fatal "Failed to set permissions on /etc/spinifex/$f"
+        fi
+    done
+
+    # CA private key — root-only
+    if [ -f /etc/spinifex/ca.key ]; then
+        $SUDO chown root:root /etc/spinifex/ca.key \
+            || fatal "Failed to set ownership on /etc/spinifex/ca.key"
+        $SUDO chmod 0600 /etc/spinifex/ca.key \
+            || fatal "Failed to set permissions on /etc/spinifex/ca.key"
+    fi
+
+    # Shared data dirs — root:spinifex 0770 (daemon + admin CLI write, services read).
+    # chmod must be recursive so pre-existing files (e.g. imported images originally
+    # written as 0600 by another user) become group-readable.
+    for d in images amis volumes state; do
+        if [ -d "/var/lib/spinifex/$d" ]; then
+            $SUDO chown -R "root:$SPINIFEX_GROUP" "/var/lib/spinifex/$d" \
+                || fatal "Failed to set ownership on /var/lib/spinifex/$d"
+            $SUDO chmod -R u+rwX,g+rwX,o-rwx "/var/lib/spinifex/$d" \
+                || fatal "Failed to set permissions on /var/lib/spinifex/$d"
+        fi
+    done
+
+    info "File ownership updated"
+}
+
+# --- Run config migrations ---
+run_migrations() {
+    # Only run if spinifex is already initialized (config exists)
+    if [ ! -f /etc/spinifex/spinifex.toml ]; then
+        info "Fresh install detected, skipping migrations"
+        return
+    fi
+
+    if [ "${INSTALL_SPINIFEX_SKIP_MIGRATE:-0}" = "1" ]; then
+        info "INSTALL_SPINIFEX_SKIP_MIGRATE=1, skipping migrations"
+        info "Run 'spx admin upgrade' manually to apply pending migrations"
+        return
+    fi
+
+    info "Running config migrations..."
+    $SUDO /usr/local/bin/spx admin upgrade --yes \
+        || fatal "Config migration failed. See errors above."
+}
+
 # --- Install systemd units ---
 install_systemd() {
     info "Installing systemd units..."
@@ -384,7 +473,8 @@ install_systemd() {
     done
 
     $SUDO systemctl daemon-reload
-    info "Systemd units installed (per-service users)"
+    $SUDO systemctl enable spinifex.target
+    info "Systemd units installed and enabled (per-service users)"
 }
 
 # --- Install logrotate ---
@@ -440,8 +530,6 @@ print_summary() {
     echo "     If your WAN is a physical NIC:"
     echo "       # Dedicated WAN NIC (not your SSH connection):"
     echo "       sudo /usr/local/share/spinifex/setup-ovn.sh --management --wan-bridge=br-wan --wan-iface=eth1"
-    echo "       # Single-NIC host (SSH-safe macvlan):"
-    echo "       sudo /usr/local/share/spinifex/setup-ovn.sh --management --macvlan --wan-iface=enp0s3"
     echo ""
     echo "  2. Initialize:"
     echo "     sudo spx admin init --node node1 --nodes 1"
@@ -471,11 +559,25 @@ main() {
     download_spinifex
     install_files
     create_directories
+    fix_file_ownership
     install_systemd
+    run_migrations
     install_logrotate
     rm -rf "$SPINIFEX_TMPDIR"
     restart_if_needed
     print_summary
+
+    # Activate spinifex group membership in the invoking shell. Under curl|bash
+    # stdin is the drained pipe, so redirect from /dev/tty and exec so the new
+    # shell becomes the foreground process. Skip when we can't actually open
+    # /dev/tty (CI, cloud-init, ssh -T — stat passes but open fails with ENXIO).
+    if ! id -Gn 2>/dev/null | grep -qw "$SPINIFEX_GROUP" \
+        && ( : </dev/tty ) 2>/dev/null; then
+        echo ""
+        echo "  Activating '$SPINIFEX_GROUP' group in a subshell — type 'exit' when done."
+        echo ""
+        exec newgrp "$SPINIFEX_GROUP" < /dev/tty
+    fi
 }
 
 main "$@"

@@ -3,12 +3,19 @@ package instancetypes
 import (
 	"fmt"
 	"log/slog"
+	"maps"
 	"runtime"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 )
+
+// IsSystemType returns true if the instance type name is a system-internal type
+// (e.g. "sys.micro") that should not be exposed via DescribeInstanceTypes.
+func IsSystemType(name string) bool {
+	return strings.HasPrefix(name, "sys.")
+}
 
 // generateForGeneration creates the instance type map for the given CPU generation.
 // It generates all instance families matching the generation's family list across
@@ -56,6 +63,38 @@ func generateForGeneration(gen cpuGeneration, arch string) map[string]*ec2.Insta
 	return instanceTypes
 }
 
+// generateSystemTypes creates the instance type map for system-internal types
+// (e.g. sys.micro). These are always generated regardless of CPU generation.
+func generateSystemTypes(arch string) map[string]*ec2.InstanceTypeInfo {
+	types := make(map[string]*ec2.InstanceTypeInfo)
+	for _, def := range instanceFamilyDefs {
+		if !IsSystemType(def.name + ".") {
+			continue
+		}
+		for _, size := range def.sizes {
+			name := fmt.Sprintf("%s.%s", def.name, size.suffix)
+			types[name] = &ec2.InstanceTypeInfo{
+				InstanceType: aws.String(name),
+				VCpuInfo: &ec2.VCpuInfo{
+					DefaultVCpus: aws.Int64(int64(size.vcpus)),
+				},
+				MemoryInfo: &ec2.MemoryInfo{
+					SizeInMiB: aws.Int64(int64(size.memoryGB * 1024)),
+				},
+				ProcessorInfo: &ec2.ProcessorInfo{
+					SupportedArchitectures: []*string{aws.String(arch)},
+				},
+				CurrentGeneration:             aws.Bool(def.currentGen),
+				BurstablePerformanceSupported: aws.Bool(false),
+				Hypervisor:                    aws.String("kvm"),
+				SupportedVirtualizationTypes:  []*string{aws.String("hvm")},
+				SupportedRootDeviceTypes:      []*string{aws.String("ebs")},
+			}
+		}
+	}
+	return types
+}
+
 // DetectAndGenerate detects the host CPU generation and generates matching instance types.
 func DetectAndGenerate(cpu CPUInfo, arch string) map[string]*ec2.InstanceTypeInfo {
 	// Normalize Go's "amd64" to the Linux/AWS convention "x86_64".
@@ -65,6 +104,9 @@ func DetectAndGenerate(cpu CPUInfo, arch string) map[string]*ec2.InstanceTypeInf
 
 	gen := detectCPUGeneration(cpu, arch)
 	types := generateForGeneration(gen, arch)
+
+	// Merge in system types (always available regardless of CPU generation).
+	maps.Copy(types, generateSystemTypes(arch))
 
 	if len(types) == 0 {
 		slog.Error("No instance types generated, daemon will be unable to run VMs",

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/mulgadc/spinifex/spinifex/migrate"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -38,8 +39,8 @@ func NewStore(nc *nats.Conn) (*Store, error) {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketELBv2, err)
 	}
 
-	if err := utils.WriteVersion(kv, KVBucketELBv2Version); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketELBv2, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketELBv2, kv, KVBucketELBv2Version); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketELBv2, err)
 	}
 
 	slog.Info("ELBv2 store initialized", "bucket", KVBucketELBv2)
@@ -88,18 +89,29 @@ func (s *Store) ListLoadBalancers() ([]*LoadBalancerRecord, error) {
 	return listByPrefix[LoadBalancerRecord](s.kv, KeyPrefixLB)
 }
 
-// GetLoadBalancerByArn finds a load balancer by its ARN.
+// GetLoadBalancerByArn finds a load balancer by its ARN via a direct KV lookup
+// on the short ID embedded in the ARN's final path segment. Falls back to a
+// linear scan only if the ARN can't be parsed. Terraform hits Describe*Attributes
+// on every plan/refresh so this must be O(1), not O(n).
 func (s *Store) GetLoadBalancerByArn(arn string) (*LoadBalancerRecord, error) {
-	lbs, err := s.ListLoadBalancers()
+	// ELBv2 LB ARN: arn:aws:elasticloadbalancing:{region}:{account}:loadbalancer/{app,net}/{name}/{lbID}
+	idx := strings.LastIndex(arn, "/")
+	if idx < 0 || idx == len(arn)-1 {
+		return nil, nil
+	}
+	lbID := arn[idx+1:]
+	lb, err := s.GetLoadBalancer(lbID)
 	if err != nil {
 		return nil, err
 	}
-	for _, lb := range lbs {
-		if lb.LoadBalancerArn == arn {
-			return lb, nil
-		}
+	// Defence-in-depth: ensure the record actually belongs to this ARN.
+	// Short IDs are random hex, so collisions are effectively impossible, but
+	// a mismatch here would indicate KV corruption and must not be silently
+	// served as a successful lookup.
+	if lb == nil || lb.LoadBalancerArn != arn {
+		return nil, nil
 	}
-	return nil, nil
+	return lb, nil
 }
 
 // GetLoadBalancerByName finds a load balancer by name within an account.
@@ -158,18 +170,68 @@ func (s *Store) ListTargetGroups() ([]*TargetGroupRecord, error) {
 	return listByPrefix[TargetGroupRecord](s.kv, KeyPrefixTG)
 }
 
-// GetTargetGroupByArn finds a target group by its ARN.
+// GetTargetGroupByArn finds a target group by its ARN via a direct KV lookup
+// on the short ID embedded in the ARN's final path segment. See
+// GetLoadBalancerByArn for the motivation — Terraform's per-plan
+// DescribeTargetGroupAttributes storm must be O(1).
 func (s *Store) GetTargetGroupByArn(arn string) (*TargetGroupRecord, error) {
-	tgs, err := s.ListTargetGroups()
+	// ELBv2 TG ARN: arn:aws:elasticloadbalancing:{region}:{account}:targetgroup/{name}/{tgID}
+	idx := strings.LastIndex(arn, "/")
+	if idx < 0 || idx == len(arn)-1 {
+		return nil, nil
+	}
+	tgID := arn[idx+1:]
+	tg, err := s.GetTargetGroup(tgID)
 	if err != nil {
 		return nil, err
 	}
-	for _, tg := range tgs {
-		if tg.TargetGroupArn == arn {
-			return tg, nil
+	if tg == nil || tg.TargetGroupArn != arn {
+		return nil, nil
+	}
+	return tg, nil
+}
+
+// TargetGroupsForLB returns only the target groups attached to a load balancer
+// via its listeners. It follows LB ID → LB ARN → listeners → TG ARNs → TGs.
+func (s *Store) TargetGroupsForLB(lbID string) ([]*TargetGroupRecord, error) {
+	lb, err := s.GetLoadBalancer(lbID)
+	if err != nil {
+		return nil, fmt.Errorf("get load balancer %s: %w", lbID, err)
+	}
+	if lb == nil {
+		return nil, nil
+	}
+
+	listeners, err := s.ListListenersByLB(lb.LoadBalancerArn)
+	if err != nil {
+		return nil, fmt.Errorf("list listeners for %s: %w", lbID, err)
+	}
+
+	// Collect unique TG IDs from listener actions.
+	seen := make(map[string]struct{})
+	for _, l := range listeners {
+		for _, a := range l.DefaultActions {
+			if a.TargetGroupArn == "" {
+				continue
+			}
+			// TG ARN format: arn:aws:elasticloadbalancing:{region}:{account}:targetgroup/{name}/{tgID}
+			if idx := strings.LastIndex(a.TargetGroupArn, "/"); idx >= 0 {
+				seen[a.TargetGroupArn[idx+1:]] = struct{}{}
+			}
 		}
 	}
-	return nil, nil
+
+	tgs := make([]*TargetGroupRecord, 0, len(seen))
+	for tgID := range seen {
+		tg, err := s.GetTargetGroup(tgID)
+		if err != nil {
+			return nil, fmt.Errorf("get target group %s: %w", tgID, err)
+		}
+		if tg != nil {
+			tgs = append(tgs, tg)
+		}
+	}
+	return tgs, nil
 }
 
 // GetTargetGroupByName finds a target group by name within a VPC.

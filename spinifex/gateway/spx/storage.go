@@ -2,7 +2,6 @@ package spx
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -48,9 +47,6 @@ type StorageEncodingOutput struct {
 
 var storageHTTPClient = &http.Client{
 	Timeout: 1 * time.Second,
-	Transport: &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	},
 }
 
 // GetStorageStatus fetches predastore topology via NATS, then queries each DB

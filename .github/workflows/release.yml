@@ -98,7 +98,7 @@ jobs:
           path: artifacts
 
       - name: Create Draft GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           draft: true
           files: |
@@ -166,8 +166,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release edit "$TAG" --repo "$REPO" --draft=false
-          echo "Release ${TAG} promoted to latest"
+          if [[ "$TAG" =~ -(dev|rc|alpha|beta) ]]; then
+            gh release edit "$TAG" --repo "$REPO" --draft=false --prerelease
+            echo "Release ${TAG} promoted as prerelease"
+          else
+            gh release edit "$TAG" --repo "$REPO" --draft=false
+            echo "Release ${TAG} promoted to latest"
+          fi
 
       - name: Mark Release Failed
         if: failure()

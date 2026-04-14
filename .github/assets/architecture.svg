@@ -1,0 +1,225 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="620" viewBox="0 0 900 620">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0a0a"/>
+      <stop offset="100%" style="stop-color:#0d1117"/>
+    </linearGradient>
+    <linearGradient id="bar-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#161b22"/>
+      <stop offset="45%" style="stop-color:#1f2028"/>
+      <stop offset="100%" style="stop-color:#161b22"/>
+    </linearGradient>
+    <linearGradient id="client-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3fb95022"/>
+      <stop offset="100%" style="stop-color:#3fb95008"/>
+    </linearGradient>
+    <linearGradient id="gw-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#DC262633"/>
+      <stop offset="100%" style="stop-color:#7F1D1D14"/>
+    </linearGradient>
+    <linearGradient id="nats-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#F87171"/>
+      <stop offset="50%" style="stop-color:#DC2626"/>
+      <stop offset="100%" style="stop-color:#7F1D1D"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="900" height="620" fill="url(#bg)" rx="12"/>
+
+  <!-- Title bar -->
+  <text x="24" y="30" font-family="'Segoe UI', system-ui, sans-serif" font-size="11" fill="#a1a1aa" letter-spacing="2.5" font-weight="600">SPINIFEX ARCHITECTURE</text>
+  <text x="24" y="52" font-family="'Segoe UI', system-ui, sans-serif" font-size="16" fill="#f5f5f5" font-weight="500">AWS SDK → Gateway → NATS → Service daemons</text>
+  <text x="876" y="30" font-family="'SF Mono', ui-monospace, monospace" font-size="10" fill="#71717a" text-anchor="end">stateless · message-driven · horizontally scalable</text>
+
+  <!-- ═══ CLIENT LAYER ════════════════════════════════════ -->
+  <rect x="16" y="72" width="868" height="78" rx="8" fill="url(#client-grad)" stroke="#3fb950" stroke-width="1" stroke-opacity="0.5"/>
+  <text x="32" y="93" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#3fb950" font-weight="700" letter-spacing="1">CLIENTS</text>
+  <text x="32" y="108" font-family="'Segoe UI', sans-serif" font-size="10" fill="#a1a1aa">Standard AWS tooling — unmodified, no shims, no custom SDK</text>
+
+  <g transform="translate(32, 120)" font-family="'SF Mono', ui-monospace, monospace" font-size="10">
+    <rect x="0" y="0" width="86" height="22" rx="4" fill="#3fb950" fill-opacity="0.12" stroke="#3fb950" stroke-opacity="0.5" stroke-width="0.8"/>
+    <text x="43" y="15" fill="#7ee787" text-anchor="middle">aws-cli</text>
+
+    <rect x="94" y="0" width="96" height="22" rx="4" fill="#3fb950" fill-opacity="0.12" stroke="#3fb950" stroke-opacity="0.5" stroke-width="0.8"/>
+    <text x="142" y="15" fill="#7ee787" text-anchor="middle">Terraform</text>
+
+    <rect x="198" y="0" width="76" height="22" rx="4" fill="#3fb950" fill-opacity="0.12" stroke="#3fb950" stroke-opacity="0.5" stroke-width="0.8"/>
+    <text x="236" y="15" fill="#7ee787" text-anchor="middle">boto3</text>
+
+    <rect x="282" y="0" width="98" height="22" rx="4" fill="#3fb950" fill-opacity="0.12" stroke="#3fb950" stroke-opacity="0.5" stroke-width="0.8"/>
+    <text x="331" y="15" fill="#7ee787" text-anchor="middle">aws-sdk-go</text>
+
+    <rect x="388" y="0" width="86" height="22" rx="4" fill="#3fb950" fill-opacity="0.12" stroke="#3fb950" stroke-opacity="0.5" stroke-width="0.8"/>
+    <text x="431" y="15" fill="#7ee787" text-anchor="middle">kubectl</text>
+
+    <rect x="482" y="0" width="86" height="22" rx="4" fill="#3fb950" fill-opacity="0.12" stroke="#3fb950" stroke-opacity="0.5" stroke-width="0.8"/>
+    <text x="525" y="15" fill="#7ee787" text-anchor="middle">Packer</text>
+
+    <rect x="576" y="0" width="120" height="22" rx="4" fill="#3fb950" fill-opacity="0.12" stroke="#3fb950" stroke-opacity="0.5" stroke-width="0.8"/>
+    <text x="636" y="15" fill="#7ee787" text-anchor="middle">your application</text>
+  </g>
+
+  <!-- ═══ HTTPS + SigV4 connector ═══════════════════════════ -->
+  <line x1="450" y1="150" x2="450" y2="178" stroke="#DC2626" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.7"/>
+  <rect x="390" y="154" width="120" height="18" rx="9" fill="#0a0a0a" stroke="#DC2626" stroke-width="0.8" stroke-opacity="0.5"/>
+  <text x="450" y="166" font-family="'SF Mono', ui-monospace, monospace" font-size="9" fill="#F87171" text-anchor="middle">HTTPS · SigV4 · :9999</text>
+
+  <!-- ═══ AWS GATEWAY ════════════════════════════════════ -->
+  <rect x="16" y="178" width="868" height="68" rx="8" fill="url(#gw-grad)" stroke="#DC2626" stroke-width="1.3" stroke-opacity="0.75"/>
+  <text x="32" y="200" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#F87171" font-weight="700" letter-spacing="1">AWS GATEWAY</text>
+  <text x="32" y="215" font-family="'Segoe UI', sans-serif" font-size="10" fill="#a1a1aa">spinifex/services/awsgw · TLS termination · SigV4 verification · IAM policy eval · NATS routing</text>
+
+  <g transform="translate(32, 224)" font-family="'SF Mono', ui-monospace, monospace" font-size="9">
+    <rect x="0" y="0" width="78" height="16" rx="3" fill="#7F1D1D" fill-opacity="0.3" stroke="#DC2626" stroke-opacity="0.5" stroke-width="0.6"/>
+    <text x="39" y="11" fill="#FCA5A5" text-anchor="middle">TLS 1.3</text>
+
+    <rect x="86" y="0" width="78" height="16" rx="3" fill="#7F1D1D" fill-opacity="0.3" stroke="#DC2626" stroke-opacity="0.5" stroke-width="0.6"/>
+    <text x="125" y="11" fill="#FCA5A5" text-anchor="middle">SigV4 auth</text>
+
+    <rect x="172" y="0" width="98" height="16" rx="3" fill="#7F1D1D" fill-opacity="0.3" stroke="#DC2626" stroke-opacity="0.5" stroke-width="0.6"/>
+    <text x="221" y="11" fill="#FCA5A5" text-anchor="middle">policy eval</text>
+
+    <rect x="278" y="0" width="98" height="16" rx="3" fill="#7F1D1D" fill-opacity="0.3" stroke="#DC2626" stroke-opacity="0.5" stroke-width="0.6"/>
+    <text x="327" y="11" fill="#FCA5A5" text-anchor="middle">req routing</text>
+
+    <rect x="384" y="0" width="88" height="16" rx="3" fill="#7F1D1D" fill-opacity="0.3" stroke="#DC2626" stroke-opacity="0.5" stroke-width="0.6"/>
+    <text x="428" y="11" fill="#FCA5A5" text-anchor="middle">rate-limit</text>
+
+    <rect x="480" y="0" width="98" height="16" rx="3" fill="#7F1D1D" fill-opacity="0.3" stroke="#DC2626" stroke-opacity="0.5" stroke-width="0.6"/>
+    <text x="529" y="11" fill="#FCA5A5" text-anchor="middle">audit log</text>
+  </g>
+
+  <!-- ═══ NATS BUS ═══════════════════════════════════════ -->
+  <line x1="450" y1="246" x2="450" y2="272" stroke="#DC2626" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.7"/>
+  <rect x="16" y="272" width="868" height="34" rx="6" fill="url(#nats-grad)" opacity="0.92"/>
+  <text x="32" y="293" font-family="'SF Mono', ui-monospace, monospace" font-size="12" fill="#f5f5f5" font-weight="700" letter-spacing="1.5">NATS BUS</text>
+  <text x="140" y="293" font-family="'SF Mono', ui-monospace, monospace" font-size="10" fill="#fee2e2" opacity="0.95">ec2.*   ebs.*   s3.*   vpc.*   iam.*</text>
+  <text x="876" y="293" font-family="'SF Mono', ui-monospace, monospace" font-size="9" fill="#fee2e2" text-anchor="end" opacity="0.9">queue groups · fan-out · request/reply</text>
+
+  <!-- ═══ DAEMON FANOUT CONNECTORS ═══════════════════════ -->
+  <g stroke="#DC2626" stroke-width="0.9" stroke-dasharray="3,3" opacity="0.55" fill="none">
+    <line x1="100" y1="306" x2="100" y2="328"/>
+    <line x1="275" y1="306" x2="275" y2="328"/>
+    <line x1="450" y1="306" x2="450" y2="328"/>
+    <line x1="625" y1="306" x2="625" y2="328"/>
+    <line x1="800" y1="306" x2="800" y2="328"/>
+  </g>
+
+  <!-- ═══ SERVICE DAEMONS ROW ═══════════════════════════ -->
+  <!-- EC2 -->
+  <g transform="translate(28, 328)">
+    <rect width="144" height="82" rx="7" fill="#7F1D1D" fill-opacity="0.14" stroke="#DC2626" stroke-width="1.2" stroke-opacity="0.7"/>
+    <text x="72" y="22" font-family="'SF Mono', ui-monospace, monospace" font-size="13" fill="#F87171" text-anchor="middle" font-weight="700">ec2.* daemon</text>
+    <line x1="16" y1="30" x2="128" y2="30" stroke="#DC2626" stroke-opacity="0.25" stroke-width="0.5"/>
+    <text x="72" y="48" font-family="'Segoe UI', sans-serif" font-size="10" fill="#f5f5f5" text-anchor="middle">RunInstances</text>
+    <text x="72" y="62" font-family="'Segoe UI', sans-serif" font-size="10" fill="#f5f5f5" text-anchor="middle">TerminateInstances</text>
+    <text x="72" y="76" font-family="'Segoe UI', sans-serif" font-size="9" fill="#a1a1aa" text-anchor="middle">QMP · cloud-init</text>
+  </g>
+
+  <!-- EBS -->
+  <g transform="translate(204, 328)">
+    <rect width="144" height="82" rx="7" fill="#7F1D1D" fill-opacity="0.14" stroke="#DC2626" stroke-width="1.2" stroke-opacity="0.7"/>
+    <text x="72" y="22" font-family="'SF Mono', ui-monospace, monospace" font-size="13" fill="#F87171" text-anchor="middle" font-weight="700">ebs.* daemon</text>
+    <line x1="16" y1="30" x2="128" y2="30" stroke="#DC2626" stroke-opacity="0.25" stroke-width="0.5"/>
+    <text x="72" y="48" font-family="'Segoe UI', sans-serif" font-size="10" fill="#f5f5f5" text-anchor="middle">CreateVolume</text>
+    <text x="72" y="62" font-family="'Segoe UI', sans-serif" font-size="10" fill="#f5f5f5" text-anchor="middle">AttachVolume</text>
+    <text x="72" y="76" font-family="'Segoe UI', sans-serif" font-size="9" fill="#a1a1aa" text-anchor="middle">snapshots · WAL</text>
+  </g>
+
+  <!-- S3 -->
+  <g transform="translate(380, 328)">
+    <rect width="144" height="82" rx="7" fill="#7F1D1D" fill-opacity="0.14" stroke="#DC2626" stroke-width="1.2" stroke-opacity="0.7"/>
+    <text x="72" y="22" font-family="'SF Mono', ui-monospace, monospace" font-size="13" fill="#F87171" text-anchor="middle" font-weight="700">s3.* daemon</text>
+    <line x1="16" y1="30" x2="128" y2="30" stroke="#DC2626" stroke-opacity="0.25" stroke-width="0.5"/>
+    <text x="72" y="48" font-family="'Segoe UI', sans-serif" font-size="10" fill="#f5f5f5" text-anchor="middle">PutObject · GetObject</text>
+    <text x="72" y="62" font-family="'Segoe UI', sans-serif" font-size="10" fill="#f5f5f5" text-anchor="middle">Multipart · presigned</text>
+    <text x="72" y="76" font-family="'Segoe UI', sans-serif" font-size="9" fill="#a1a1aa" text-anchor="middle">erasure-coded</text>
+  </g>
+
+  <!-- VPC -->
+  <g transform="translate(556, 328)">
+    <rect width="144" height="82" rx="7" fill="#7F1D1D" fill-opacity="0.14" stroke="#DC2626" stroke-width="1.2" stroke-opacity="0.7"/>
+    <text x="72" y="22" font-family="'SF Mono', ui-monospace, monospace" font-size="13" fill="#F87171" text-anchor="middle" font-weight="700">vpc.* daemon</text>
+    <line x1="16" y1="30" x2="128" y2="30" stroke="#DC2626" stroke-opacity="0.25" stroke-width="0.5"/>
+    <text x="72" y="48" font-family="'Segoe UI', sans-serif" font-size="10" fill="#f5f5f5" text-anchor="middle">Subnets · SGs · RTs</text>
+    <text x="72" y="62" font-family="'Segoe UI', sans-serif" font-size="10" fill="#f5f5f5" text-anchor="middle">ALB · NAT · IGW</text>
+    <text x="72" y="76" font-family="'Segoe UI', sans-serif" font-size="9" fill="#a1a1aa" text-anchor="middle">OVN · OVS</text>
+  </g>
+
+  <!-- IAM -->
+  <g transform="translate(732, 328)">
+    <rect width="144" height="82" rx="7" fill="#7F1D1D" fill-opacity="0.14" stroke="#DC2626" stroke-width="1.2" stroke-opacity="0.7"/>
+    <text x="72" y="22" font-family="'SF Mono', ui-monospace, monospace" font-size="13" fill="#F87171" text-anchor="middle" font-weight="700">iam.* daemon</text>
+    <line x1="16" y1="30" x2="128" y2="30" stroke="#DC2626" stroke-opacity="0.25" stroke-width="0.5"/>
+    <text x="72" y="48" font-family="'Segoe UI', sans-serif" font-size="10" fill="#f5f5f5" text-anchor="middle">Users · Roles · Keys</text>
+    <text x="72" y="62" font-family="'Segoe UI', sans-serif" font-size="10" fill="#f5f5f5" text-anchor="middle">Policy evaluation</text>
+    <text x="72" y="76" font-family="'Segoe UI', sans-serif" font-size="9" fill="#a1a1aa" text-anchor="middle">audit trail</text>
+  </g>
+
+  <!-- ═══ DAEMON → BACKEND CONNECTORS ═══════════════════ -->
+  <g stroke="#71717a" stroke-width="0.8" stroke-dasharray="2,3" opacity="0.55" fill="none">
+    <line x1="100" y1="410" x2="100" y2="440"/>
+    <line x1="276" y1="410" x2="276" y2="440"/>
+    <line x1="452" y1="410" x2="452" y2="440"/>
+    <line x1="628" y1="410" x2="628" y2="440"/>
+    <line x1="804" y1="410" x2="804" y2="440"/>
+  </g>
+
+  <!-- ═══ BACKEND RESOURCES BAR ═════════════════════════ -->
+  <rect x="16" y="440" width="868" height="26" rx="5" fill="url(#bar-grad)"/>
+  <text x="450" y="458" font-family="'SF Mono', ui-monospace, monospace" font-size="10" fill="#a1a1aa" text-anchor="middle" letter-spacing="1.5">BACKEND RESOURCES · local hardware · no cloud dependency</text>
+
+  <!-- ═══ BACKEND ROW ═══════════════════════════════════ -->
+  <!-- QEMU/KVM -->
+  <g transform="translate(28, 474)">
+    <rect width="144" height="62" rx="7" fill="#27272a" fill-opacity="0.7" stroke="#71717a" stroke-width="1" stroke-opacity="0.6"/>
+    <text x="72" y="22" font-family="'SF Mono', ui-monospace, monospace" font-size="12" fill="#e4e4e7" text-anchor="middle" font-weight="600">QEMU / KVM</text>
+    <text x="72" y="40" font-family="'Segoe UI', sans-serif" font-size="10" fill="#a1a1aa" text-anchor="middle">hypervisor</text>
+    <text x="72" y="54" font-family="'Segoe UI', sans-serif" font-size="9" fill="#71717a" text-anchor="middle">host kernel · virtio</text>
+  </g>
+
+  <!-- Viperblock -->
+  <g transform="translate(204, 474)">
+    <rect width="144" height="62" rx="7" fill="#27272a" fill-opacity="0.7" stroke="#71717a" stroke-width="1" stroke-opacity="0.6"/>
+    <text x="72" y="22" font-family="'SF Mono', ui-monospace, monospace" font-size="12" fill="#e4e4e7" text-anchor="middle" font-weight="600">Viperblock</text>
+    <text x="72" y="40" font-family="'Segoe UI', sans-serif" font-size="10" fill="#a1a1aa" text-anchor="middle">block storage</text>
+    <text x="72" y="54" font-family="'Segoe UI', sans-serif" font-size="9" fill="#71717a" text-anchor="middle">NVMe WAL · NBD</text>
+  </g>
+
+  <!-- Predastore -->
+  <g transform="translate(380, 474)">
+    <rect width="144" height="62" rx="7" fill="#27272a" fill-opacity="0.7" stroke="#71717a" stroke-width="1" stroke-opacity="0.6"/>
+    <text x="72" y="22" font-family="'SF Mono', ui-monospace, monospace" font-size="12" fill="#e4e4e7" text-anchor="middle" font-weight="600">Predastore</text>
+    <text x="72" y="40" font-family="'Segoe UI', sans-serif" font-size="10" fill="#a1a1aa" text-anchor="middle">object storage</text>
+    <text x="72" y="54" font-family="'Segoe UI', sans-serif" font-size="9" fill="#71717a" text-anchor="middle">Reed–Solomon</text>
+  </g>
+
+  <!-- OVN/OVS -->
+  <g transform="translate(556, 474)">
+    <rect width="144" height="62" rx="7" fill="#27272a" fill-opacity="0.7" stroke="#71717a" stroke-width="1" stroke-opacity="0.6"/>
+    <text x="72" y="22" font-family="'SF Mono', ui-monospace, monospace" font-size="12" fill="#e4e4e7" text-anchor="middle" font-weight="600">OVN / OVS</text>
+    <text x="72" y="40" font-family="'Segoe UI', sans-serif" font-size="10" fill="#a1a1aa" text-anchor="middle">SDN fabric</text>
+    <text x="72" y="54" font-family="'Segoe UI', sans-serif" font-size="9" fill="#71717a" text-anchor="middle">overlays · flow rules</text>
+  </g>
+
+  <!-- IAM store -->
+  <g transform="translate(732, 474)">
+    <rect width="144" height="62" rx="7" fill="#27272a" fill-opacity="0.7" stroke="#71717a" stroke-width="1" stroke-opacity="0.6"/>
+    <text x="72" y="22" font-family="'SF Mono', ui-monospace, monospace" font-size="12" fill="#e4e4e7" text-anchor="middle" font-weight="600">Identity store</text>
+    <text x="72" y="40" font-family="'Segoe UI', sans-serif" font-size="10" fill="#a1a1aa" text-anchor="middle">users · keys · rules</text>
+    <text x="72" y="54" font-family="'Segoe UI', sans-serif" font-size="9" fill="#71717a" text-anchor="middle">local · audit-logged</text>
+  </g>
+
+  <!-- ═══ FOOTER NOTES ══════════════════════════════════ -->
+  <g transform="translate(16, 558)">
+    <rect width="868" height="48" rx="6" fill="#0a0a0a" stroke="#27272a" stroke-width="0.8"/>
+    <text x="24" y="20" font-family="'Segoe UI', sans-serif" font-size="10" fill="#a1a1aa">
+      <tspan fill="#F87171" font-weight="600">Queue groups</tspan> load-balance ops across daemon replicas.
+      <tspan fill="#F87171" font-weight="600"> Fan-out</tspan> (no queue group) dispatches describe calls to every node.
+    </text>
+    <text x="24" y="38" font-family="'Segoe UI', sans-serif" font-size="10" fill="#a1a1aa">
+      Daemons are <tspan fill="#F87171" font-weight="600">stateless</tspan> — scale horizontally by starting more.
+      No etcd, no Kubernetes, no external control plane. Systemd units, a NATS cluster, and your hardware.
+    </text>
+  </g>
+</svg>

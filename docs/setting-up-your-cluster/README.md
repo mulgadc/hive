@@ -26,6 +26,7 @@ resources:
 - [4. Launch an Instance](#4-launch-an-instance)
 - [5. Connect via SSH](#5-connect-via-ssh)
 - [6. Managing Instances](#6-managing-instances)
+- [7. Launching the Web UI](#7-launching-the-web-ui)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -166,14 +167,25 @@ Query available instance types for your hardware:
 aws ec2 describe-instance-types
 ```
 
-Launch an instance in the public subnet:
+Launch an instance in the public subnet, note this will select an instance type with 2 VCPU and 1024MB of memory.
+
+> **Note:** Replace `AMI_NAME` with the previously imported image above with the `ami-` prefix.
 
 ```bash
-AMI_ID=$(aws ec2 describe-images --query 'Images[0].ImageId' --output text)
+AMI_NAME="ami-ubuntu-24.04-x86_64"
+
+AMI_ID=$(aws ec2 describe-images \
+  --filters "Name=name,Values=$AMI_NAME" \
+  --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
+  --output text)
+
+INSTANCE_TYPE=$(aws ec2 describe-instance-types \
+  --query "sort_by(InstanceTypes[?VCpuInfo.DefaultVCpus==\`2\` && MemoryInfo.SizeInMiB>=\`1024\`], &MemoryInfo.SizeInMiB)[0].InstanceType" \
+  --output text)
 
 INSTANCE_ID=$(aws ec2 run-instances \
   --image-id $AMI_ID \
-  --instance-type t3.small \
+  --instance-type $INSTANCE_TYPE \
   --key-name spinifex-key \
   --subnet-id $SUBNET_ID \
   --count 1 \
@@ -256,6 +268,51 @@ On a multi-node cluster, instances are distributed across nodes:
 spx get vms
 ```
 
+## 7. Launching the Web UI
+
+Spinifex ships with a built-in web console — an alternative to the AWS CLI, SDKs, and Terraform, analogous to the AWS Management Console. Every action in the UI is a standard AWS SigV4 API call, so the same IAM policies and audit behaviour apply.
+
+![Spinifex Web UI](../spinifex-ui.jpg)
+
+### Open the Console
+
+The UI is served by each node on port `3000` over TLS. Replace `YOUR_NODE_IP` with the address of the node you installed Spinifex on (or `localhost` if you're on the node itself):
+
+```
+https://YOUR_NODE_IP:3000
+```
+
+### Trust the Self-Signed Certificate (required)
+
+On first load, your browser will show a TLS warning — Spinifex generates a self-signed certificate at install time. This is expected.
+
+1. Accept the warning to reach the login page (exact wording varies by browser — e.g. Chrome: *Advanced → Proceed to ...*, Firefox: *Advanced → Accept the Risk and Continue*).
+2. On the login page, click **Download Certificate** and save `spinifex-ca.pem` to your machine.
+3. Install the certificate as a **trusted root** on your workstation:
+
+   - **macOS:** open `spinifex-ca.pem` in Keychain Access → *System* keychain → set *Trust* to **Always Trust**.
+   - **Linux:** `sudo cp spinifex-ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt && sudo update-ca-certificates`
+   - **Windows:** double-click the file → *Install Certificate* → *Local Machine* → *Trusted Root Certification Authorities*.
+   - **Browser-only (Firefox):** *Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import* and tick *Trust this CA to identify websites*.
+
+4. Restart your browser and reload `https://YOUR_NODE_IP:3000`. The padlock should now show a valid certificate.
+
+> **Why this is required:** the UI logs in by reading your AWS credentials through a trusted TLS channel. Browsers refuse to send credentials over an untrusted connection, so the certificate must be installed as trusted — temporary "Proceed anyway" exceptions won't work for login.
+
+### Log In with AWS Credentials
+
+The console authenticates against the AWS credentials in `~/.aws/credentials` on the node where Spinifex is installed:
+
+```ini
+[spinifex]
+aws_access_key_id     = AKIA...
+aws_secret_access_key = ...
+```
+
+At the Spinifex login screen, paste the **Access Key ID** and **Secret Access Key** from the `[spinifex]` profile (or whichever profile maps to the IAM user or role you want to use). Additional users and policies can be managed through the UI or via `aws iam` commands — see [IAM Users and Policies](/docs/iam-users-and-policies).
+
+Once logged in, you have browser-based access to every Spinifex feature: launch and manage instances, attach EBS volumes, browse S3 buckets, configure VPCs and security groups, and manage IAM users and keys — all backed by the same AWS-compatible control plane the CLI uses.
+
 ## Additional Options
 
 ### Private Subnets (No Public IP)
@@ -279,10 +336,6 @@ Create isolated accounts with their own resources:
 spx admin account create --name myteam
 export AWS_PROFILE=spinifex-myteam
 ```
-
-### Web UI
-
-The Spinifex web interface is available at `https://localhost:3000` when services are running.
 
 ## Troubleshooting
 

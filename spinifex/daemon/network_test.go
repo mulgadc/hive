@@ -238,6 +238,139 @@ func TestNetworkPlumber_InterfaceCompliance(t *testing.T) {
 	var _ NetworkPlumber = &MockNetworkPlumber{}
 }
 
+func TestSetupExtraENINICs_AppendsOnePerExtra(t *testing.T) {
+	mock := &MockNetworkPlumber{}
+	d := &Daemon{networkPlumber: mock}
+	instance := &vm.VM{
+		ID: "i-multi",
+		ExtraENIs: []vm.ExtraENI{
+			{ENIID: "eni-aaa", ENIMac: "02:00:00:aa:aa:aa", ENIIP: "10.0.1.4", SubnetID: "subnet-a"},
+			{ENIID: "eni-bbb", ENIMac: "02:00:00:bb:bb:bb", ENIIP: "10.0.2.4", SubnetID: "subnet-b"},
+		},
+	}
+
+	if err := d.setupExtraENINICs(instance); err != nil {
+		t.Fatalf("setupExtraENINICs failed: %v", err)
+	}
+
+	// One SetupTapDevice call per extra ENI.
+	if len(mock.SetupCalls) != 2 {
+		t.Fatalf("expected 2 SetupTapDevice calls, got %d", len(mock.SetupCalls))
+	}
+	if mock.SetupCalls[0].ENIId != "eni-aaa" || mock.SetupCalls[0].MAC != "02:00:00:aa:aa:aa" {
+		t.Errorf("first setup call = %+v, want eni-aaa/02:00:00:aa:aa:aa", mock.SetupCalls[0])
+	}
+	if mock.SetupCalls[1].ENIId != "eni-bbb" || mock.SetupCalls[1].MAC != "02:00:00:bb:bb:bb" {
+		t.Errorf("second setup call = %+v, want eni-bbb/02:00:00:bb:bb:bb", mock.SetupCalls[1])
+	}
+
+	// NetDevs and Devices each get one entry per extra ENI, named net1/net2.
+	if len(instance.Config.NetDevs) != 2 || len(instance.Config.Devices) != 2 {
+		t.Fatalf("expected 2 netdevs + 2 devices, got %d + %d",
+			len(instance.Config.NetDevs), len(instance.Config.Devices))
+	}
+	if !strings.Contains(instance.Config.NetDevs[0].Value, "id=net1") {
+		t.Errorf("netdev[0] = %q, want id=net1", instance.Config.NetDevs[0].Value)
+	}
+	if !strings.Contains(instance.Config.NetDevs[1].Value, "id=net2") {
+		t.Errorf("netdev[1] = %q, want id=net2", instance.Config.NetDevs[1].Value)
+	}
+	if !strings.Contains(instance.Config.Devices[0].Value, "mac=02:00:00:aa:aa:aa") {
+		t.Errorf("device[0] = %q, missing primary MAC", instance.Config.Devices[0].Value)
+	}
+	if !strings.Contains(instance.Config.Devices[1].Value, "mac=02:00:00:bb:bb:bb") {
+		t.Errorf("device[1] = %q, missing second MAC", instance.Config.Devices[1].Value)
+	}
+}
+
+func TestSetupExtraENINICs_NoExtras_NoOp(t *testing.T) {
+	mock := &MockNetworkPlumber{}
+	d := &Daemon{networkPlumber: mock}
+	instance := &vm.VM{ID: "i-single"}
+
+	if err := d.setupExtraENINICs(instance); err != nil {
+		t.Fatalf("setupExtraENINICs failed: %v", err)
+	}
+	if len(mock.SetupCalls) != 0 {
+		t.Errorf("expected zero setup calls for no extras, got %d", len(mock.SetupCalls))
+	}
+	if len(instance.Config.NetDevs) != 0 || len(instance.Config.Devices) != 0 {
+		t.Errorf("expected no netdevs/devices, got %d/%d",
+			len(instance.Config.NetDevs), len(instance.Config.Devices))
+	}
+}
+
+func TestSetupExtraENINICs_TapSetupErrorReturns(t *testing.T) {
+	mock := &MockNetworkPlumber{SetupErr: fmt.Errorf("simulated tap failure")}
+	d := &Daemon{networkPlumber: mock}
+	instance := &vm.VM{
+		ID: "i-multi-err",
+		ExtraENIs: []vm.ExtraENI{
+			{ENIID: "eni-aaa", ENIMac: "02:00:00:aa:aa:aa"},
+			{ENIID: "eni-bbb", ENIMac: "02:00:00:bb:bb:bb"},
+		},
+	}
+
+	err := d.setupExtraENINICs(instance)
+	if err == nil {
+		t.Fatal("expected error from failing tap setup, got nil")
+	}
+	if !strings.Contains(err.Error(), "eni-aaa") {
+		t.Errorf("error = %v, want it to mention the failing ENI", err)
+	}
+	// Must bail on first failure — second ENI should not be touched.
+	if len(mock.SetupCalls) != 1 {
+		t.Errorf("expected 1 setup call before bailout, got %d", len(mock.SetupCalls))
+	}
+	// No NIC config appended for a failed setup.
+	if len(instance.Config.NetDevs) != 0 {
+		t.Errorf("expected no netdevs on failure, got %d", len(instance.Config.NetDevs))
+	}
+}
+
+func TestCleanupExtraENITaps_CallsCleanupPerExtra(t *testing.T) {
+	mock := &MockNetworkPlumber{}
+	d := &Daemon{networkPlumber: mock}
+	instance := &vm.VM{
+		ID: "i-multi-clean",
+		ExtraENIs: []vm.ExtraENI{
+			{ENIID: "eni-111"},
+			{ENIID: "eni-222"},
+			{ENIID: "eni-333"},
+		},
+	}
+
+	d.cleanupExtraENITaps(instance)
+
+	if len(mock.CleanupCalls) != 3 {
+		t.Fatalf("expected 3 cleanup calls, got %d", len(mock.CleanupCalls))
+	}
+	for i, want := range []string{"eni-111", "eni-222", "eni-333"} {
+		if mock.CleanupCalls[i] != want {
+			t.Errorf("cleanup[%d] = %q, want %q", i, mock.CleanupCalls[i], want)
+		}
+	}
+}
+
+func TestCleanupExtraENITaps_ErrorsAreLogged(t *testing.T) {
+	mock := &MockNetworkPlumber{CleanupErr: fmt.Errorf("simulated cleanup failure")}
+	d := &Daemon{networkPlumber: mock}
+	instance := &vm.VM{
+		ID: "i-multi-clean-err",
+		ExtraENIs: []vm.ExtraENI{
+			{ENIID: "eni-111"},
+			{ENIID: "eni-222"},
+		},
+	}
+
+	// Must not panic or return — errors are swallowed by design so partial
+	// cleanup still frees later entries.
+	d.cleanupExtraENITaps(instance)
+	if len(mock.CleanupCalls) != 2 {
+		t.Errorf("expected both extras to be attempted, got %d cleanup calls", len(mock.CleanupCalls))
+	}
+}
+
 func TestOVNHealthStatus_Fields(t *testing.T) {
 	// Verify OVNHealthStatus struct can be used for health reporting
 	status := OVNHealthStatus{
@@ -433,5 +566,87 @@ func TestOVSIfaceID_Format(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("OVSIfaceID(%q) = %q, want %q", tt.eniId, got, tt.expected)
 		}
+	}
+}
+
+func TestGenerateMgmtMAC(t *testing.T) {
+	tests := []string{
+		"i-abc123",
+		"i-def456",
+		"i-ghi789",
+	}
+
+	seen := make(map[string]bool)
+	for _, id := range tests {
+		mac := generateMgmtMAC(id)
+		if !strings.HasPrefix(mac, "02:a0:00:") {
+			t.Errorf("generateMgmtMAC(%q) = %q, want prefix '02:a0:00:'", id, mac)
+		}
+		if len(mac) != 17 {
+			t.Errorf("generateMgmtMAC(%q) = %q, expected 17 chars", id, mac)
+		}
+		if seen[mac] {
+			t.Errorf("generateMgmtMAC(%q) = %q, duplicate MAC", id, mac)
+		}
+		seen[mac] = true
+	}
+
+	// Deterministic
+	mac1 := generateMgmtMAC("i-test123")
+	mac2 := generateMgmtMAC("i-test123")
+	if mac1 != mac2 {
+		t.Errorf("generateMgmtMAC not deterministic: %q != %q", mac1, mac2)
+	}
+
+	// Different from dev MAC for same instance
+	devMAC := generateDevMAC("i-test123")
+	mgmtMAC := generateMgmtMAC("i-test123")
+	if devMAC == mgmtMAC {
+		t.Errorf("dev and mgmt MACs should differ for same instance: both %q", devMAC)
+	}
+}
+
+func TestMgmtTapName(t *testing.T) {
+	tests := []struct {
+		instanceID string
+		expected   string
+	}{
+		{"i-abc123", "mgabc123"},
+		{"i-abc123def456789", "mgabc123def4567"}, // Truncated to 15 chars
+		{"i-a", "mga"},
+		{"abc123", "mgabc123"}, // No i- prefix
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.instanceID, func(t *testing.T) {
+			got := MgmtTapName(tt.instanceID)
+			if got != tt.expected {
+				t.Errorf("MgmtTapName(%q) = %q, want %q", tt.instanceID, got, tt.expected)
+			}
+			if len(got) > 15 {
+				t.Errorf("MgmtTapName(%q) = %q (len %d), exceeds IFNAMSIZ limit of 15", tt.instanceID, got, len(got))
+			}
+		})
+	}
+}
+
+func TestGetBridgeIPv4_Loopback(t *testing.T) {
+	// "lo" is always present and has 127.0.0.1
+	ip, err := GetBridgeIPv4("lo")
+	if err != nil {
+		t.Fatalf("GetBridgeIPv4(lo): %v", err)
+	}
+	if ip != "127.0.0.1" {
+		t.Errorf("GetBridgeIPv4(lo) = %q, want 127.0.0.1", ip)
+	}
+}
+
+func TestGetBridgeIPv4_NonexistentBridge(t *testing.T) {
+	ip, err := GetBridgeIPv4("br-nonexistent-test-xyz")
+	if err != nil {
+		t.Fatalf("expected nil error for absent bridge, got: %v", err)
+	}
+	if ip != "" {
+		t.Errorf("expected empty IP for absent bridge, got %q", ip)
 	}
 }

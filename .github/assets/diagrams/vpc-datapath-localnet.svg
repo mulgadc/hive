@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="110" viewBox="0 0 900 110">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0a0a"/>
+      <stop offset="100%" style="stop-color:#0d1117"/>
+    </linearGradient>
+  </defs>
+  <rect width="900" height="110" fill="url(#bg)" rx="10"/>
+
+  <text x="24" y="22" font-family="'Segoe UI', system-ui, sans-serif" font-size="10" fill="#a1a1aa" letter-spacing="2" font-weight="600">DATA PATH · VM to WAN via OVN localnet</text>
+
+  <!-- VM TAP -->
+  <g transform="translate(24, 40)">
+    <rect width="118" height="48" rx="7" fill="#a855f71a" stroke="#a855f7" stroke-width="1.1" stroke-opacity="0.6"/>
+    <text x="59" y="22" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#c084fc" text-anchor="middle" font-weight="700">VM TAP</text>
+    <text x="59" y="38" font-family="'Segoe UI', sans-serif" font-size="9.5" fill="#a1a1aa" text-anchor="middle">guest interface</text>
+  </g>
+  <polygon points="148,60 160,64 148,68" fill="#71717a" opacity="0.7"/>
+  <line x1="142" y1="64" x2="148" y2="64" stroke="#71717a" stroke-width="1" opacity="0.5"/>
+
+  <!-- br-int -->
+  <g transform="translate(166, 40)">
+    <rect width="102" height="48" rx="7" fill="#58a6ff1a" stroke="#58a6ff" stroke-width="1.1" stroke-opacity="0.6"/>
+    <text x="51" y="22" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#58a6ff" text-anchor="middle" font-weight="700">br-int</text>
+    <text x="51" y="38" font-family="'Segoe UI', sans-serif" font-size="9.5" fill="#a1a1aa" text-anchor="middle">OVS bridge</text>
+  </g>
+  <polygon points="274,60 286,64 274,68" fill="#71717a" opacity="0.7"/>
+  <line x1="268" y1="64" x2="274" y2="64" stroke="#71717a" stroke-width="1" opacity="0.5"/>
+
+  <!-- OVN logical pipeline -->
+  <g transform="translate(292, 40)">
+    <rect width="192" height="48" rx="7" fill="#DC26261a" stroke="#DC2626" stroke-width="1.1" stroke-opacity="0.65"/>
+    <text x="96" y="22" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#F87171" text-anchor="middle" font-weight="700">OVN logical pipeline</text>
+    <text x="96" y="38" font-family="'Segoe UI', sans-serif" font-size="9.5" fill="#FCA5A5" text-anchor="middle">switch → router → SNAT/DNAT</text>
+  </g>
+  <polygon points="490,60 502,64 490,68" fill="#71717a" opacity="0.7"/>
+  <line x1="484" y1="64" x2="490" y2="64" stroke="#71717a" stroke-width="1" opacity="0.5"/>
+
+  <!-- localnet -->
+  <g transform="translate(508, 40)">
+    <rect width="120" height="48" rx="7" fill="#DC26260d" stroke="#DC2626" stroke-width="1" stroke-opacity="0.5" stroke-dasharray="4,3"/>
+    <text x="60" y="22" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#F87171" text-anchor="middle" font-weight="700">localnet</text>
+    <text x="60" y="38" font-family="'Segoe UI', sans-serif" font-size="9.5" fill="#FCA5A5" text-anchor="middle">OVN port type</text>
+  </g>
+  <polygon points="634,60 646,64 634,68" fill="#71717a" opacity="0.7"/>
+  <line x1="628" y1="64" x2="634" y2="64" stroke="#71717a" stroke-width="1" opacity="0.5"/>
+
+  <!-- br-wan -->
+  <g transform="translate(652, 40)">
+    <rect width="110" height="48" rx="7" fill="#58a6ff1a" stroke="#58a6ff" stroke-width="1.1" stroke-opacity="0.6"/>
+    <text x="55" y="22" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#58a6ff" text-anchor="middle" font-weight="700">br-wan</text>
+    <text x="55" y="38" font-family="'Segoe UI', sans-serif" font-size="9.5" fill="#a1a1aa" text-anchor="middle">OVS bridge</text>
+  </g>
+  <polygon points="768,60 780,64 768,68" fill="#71717a" opacity="0.7"/>
+  <line x1="762" y1="64" x2="768" y2="64" stroke="#71717a" stroke-width="1" opacity="0.5"/>
+
+  <!-- WAN -->
+  <g transform="translate(786, 40)">
+    <rect width="90" height="48" rx="7" fill="#3fb9501a" stroke="#3fb950" stroke-width="1.1" stroke-opacity="0.6"/>
+    <text x="45" y="22" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#3fb950" text-anchor="middle" font-weight="700">WAN</text>
+    <text x="45" y="38" font-family="'Segoe UI', sans-serif" font-size="9.5" fill="#a1a1aa" text-anchor="middle">uplink</text>
+  </g>
+</svg>

@@ -1,7 +1,7 @@
 package handlers_ec2_vpc
 
 import (
-	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/mulgadc/spinifex/spinifex/testutil"
@@ -195,5 +195,5 @@ func TestIPAM_IpToIntNil(t *testing.T) {
 }
 
 func itoa(i int) string {
-	return fmt.Sprintf("%d", i)
+	return strconv.Itoa(i)
 }

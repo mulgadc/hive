@@ -4,6 +4,7 @@ import { createFileRoute } from "@tanstack/react-router"
 import { BackLink } from "@/components/back-link"
 import { PageHeading } from "@/components/page-heading"
 import { StateBadge } from "@/components/state-badge"
+import { isSystemManagedImage } from "@/lib/system-managed"
 import { ec2ImageQueryOptions } from "@/queries/ec2"
 
 import { AmiDetails } from "../../-components/ami-details"
@@ -30,7 +31,7 @@ function ImageDetail() {
   const { data } = useSuspenseQuery(ec2ImageQueryOptions(id))
   const image = data?.Images?.[0]
 
-  if (!image?.ImageId) {
+  if (!image?.ImageId || isSystemManagedImage(image)) {
     return (
       <>
         <BackLink to="/ec2/describe-images">Back to images</BackLink>

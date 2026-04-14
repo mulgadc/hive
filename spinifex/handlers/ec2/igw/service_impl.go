@@ -14,6 +14,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/config"
 	"github.com/mulgadc/spinifex/spinifex/filterutil"
 	handlers_ec2_vpc "github.com/mulgadc/spinifex/spinifex/handlers/ec2/vpc"
+	"github.com/mulgadc/spinifex/spinifex/migrate"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
@@ -55,8 +56,8 @@ func NewIGWServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*IGWSer
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketIGW, err)
 	}
-	if err := utils.WriteVersion(igwKV, KVBucketIGWVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketIGW, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketIGW, igwKV, KVBucketIGWVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketIGW, err)
 	}
 
 	// Get or create VPC KV bucket for cross-resource ownership validation

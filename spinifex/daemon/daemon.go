@@ -50,6 +50,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/instancetypes"
 	"github.com/mulgadc/spinifex/spinifex/objectstore"
 	"github.com/mulgadc/spinifex/spinifex/qmp"
+	"github.com/mulgadc/spinifex/spinifex/tags"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/mulgadc/spinifex/spinifex/vm"
@@ -134,6 +135,10 @@ type Daemon struct {
 	startTime     time.Time
 	configPath    string
 
+	// System credentials for ALB agent SigV4 auth (loaded from system-credentials.json)
+	systemAccessKey string
+	systemSecretKey string
+
 	// JetStream manager for KV state storage (nil if JetStream disabled)
 	jsManager *JetStreamManager
 
@@ -146,6 +151,14 @@ type Daemon struct {
 
 	// NetworkPlumber handles tap device lifecycle for VPC networking
 	networkPlumber NetworkPlumber
+
+	// Management NIC infrastructure: bridge IP + IP allocator for system instances.
+	// Populated at startup when br-mgmt is detected; nil/empty otherwise.
+	mgmtBridgeIP    string
+	mgmtIPAllocator *MgmtIPAllocator
+	// mgmtRouteVia is the AWSGW bind IP that system instances must route via the
+	// management NIC. Set when AWSGW binds to a specific IP (multi-node).
+	mgmtRouteVia string
 
 	// shuttingDown is set to true during coordinated cluster shutdown (GATE phase)
 	// or during SIGTERM-based shutdown. When true, the daemon rejects new work,
@@ -257,7 +270,10 @@ func (rm *ResourceManager) GetInstanceTypeInfos() []*ec2.InstanceTypeInfo {
 	defer rm.mu.RUnlock()
 
 	var infos []*ec2.InstanceTypeInfo
-	for _, it := range rm.instanceTypes {
+	for name, it := range rm.instanceTypes {
+		if instancetypes.IsSystemType(name) {
+			continue
+		}
 		infos = append(infos, it)
 	}
 	return infos
@@ -272,7 +288,11 @@ func (rm *ResourceManager) GetAvailableInstanceTypeInfos(showCapacity bool) []*e
 
 	var infos []*ec2.InstanceTypeInfo
 
-	for _, it := range rm.instanceTypes {
+	for name, it := range rm.instanceTypes {
+		if instancetypes.IsSystemType(name) {
+			continue
+		}
+
 		vCPUs := instanceTypeVCPUs(it)
 		memMiB := instanceTypeMemoryMiB(it)
 
@@ -315,7 +335,10 @@ func (rm *ResourceManager) GetResourceStats() (totalVCPU int, totalMemGB float64
 	remainingVCPU := rm.availableVCPU - rm.allocatedVCPU
 	remainingMem := rm.availableMem - rm.allocatedMem
 
-	for _, it := range rm.instanceTypes {
+	for name, it := range rm.instanceTypes {
+		if instancetypes.IsSystemType(name) {
+			continue
+		}
 		typeCap := resourceStatsForType(remainingVCPU, remainingMem, it)
 		if typeCap.VCPU == 0 || typeCap.MemoryGB == 0 {
 			continue
@@ -469,6 +492,13 @@ func (d *Daemon) subscribeAll() error {
 		{"elbv2.CreateListener", d.handleELBv2CreateListener, "spinifex-workers"},
 		{"elbv2.DeleteListener", d.handleELBv2DeleteListener, "spinifex-workers"},
 		{"elbv2.DescribeListeners", d.handleELBv2DescribeListeners, "spinifex-workers"},
+		{"elbv2.DescribeTags", d.handleELBv2DescribeTags, "spinifex-workers"},
+		{"elbv2.LBAgentHeartbeat", d.handleELBv2LBAgentHeartbeat, "spinifex-workers"},
+		{"elbv2.GetLBConfig", d.handleELBv2GetLBConfig, "spinifex-workers"},
+		{"elbv2.ModifyTargetGroupAttributes", d.handleELBv2ModifyTargetGroupAttributes, "spinifex-workers"},
+		{"elbv2.DescribeTargetGroupAttributes", d.handleELBv2DescribeTargetGroupAttributes, "spinifex-workers"},
+		{"elbv2.ModifyLoadBalancerAttributes", d.handleELBv2ModifyLoadBalancerAttributes, "spinifex-workers"},
+		{"elbv2.DescribeLoadBalancerAttributes", d.handleELBv2DescribeLoadBalancerAttributes, "spinifex-workers"},
 		{fmt.Sprintf("spinifex.admin.%s.health", d.node), d.handleHealthCheck, ""},
 		{"spinifex.nodes.discover", d.handleNodeDiscover, ""},
 		{"spinifex.node.status", d.handleNodeStatus, ""},
@@ -651,6 +681,20 @@ func (d *Daemon) Start() error {
 			d.eipService = eipSvc
 			slog.Info("EIP service initialized")
 		}
+
+		// Inject external IPAM + EIP KV into VPC service so DeleteNetworkInterface
+		// can release auto-assigned public IPs and NAT rules.
+		eipJS, eipJSErr := d.natsConn.JetStream()
+		if eipJSErr != nil {
+			slog.Warn("Failed to get JetStream for VPC external IPAM injection", "err", eipJSErr)
+		} else {
+			eipKV, eipKVErr := utils.GetOrCreateKVBucket(eipJS, handlers_ec2_eip.KVBucketEIPs, 10)
+			if eipKVErr != nil {
+				slog.Warn("Failed to get EIP KV bucket for VPC service", "err", eipKVErr)
+			} else {
+				d.vpcService.SetExternalIPAM(d.externalIPAM, eipKV)
+			}
+		}
 	}
 
 	d.accountService, err = initServiceWithRetry("account settings service", func() (*handlers_ec2_account.AccountSettingsServiceImpl, error) {
@@ -667,37 +711,64 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to initialize ELBv2 service: %w", err)
 	}
 	if d.vpcService != nil {
-		d.elbv2Service.SetVPCService(d.vpcService)
+		d.elbv2Service.VPCService = d.vpcService
 	}
 
-	// Wire ALB VM lifecycle: instance launcher + NATS URL for cloud-init.
-	// In dev mode (user-mode networking), VMs reach the host at 10.0.2.2
-	// (QEMU's default gateway). Replace 0.0.0.0 with this address.
-	d.elbv2Service.SetInstanceLauncher(d)
-	if d.config != nil && d.config.NATS.Host != "" {
-		natsHost := d.config.NATS.Host
-		if d.config.Daemon.DevNetworking && strings.HasPrefix(natsHost, "0.0.0.0") {
-			natsHost = strings.Replace(natsHost, "0.0.0.0", "10.0.2.2", 1)
-		}
-		d.elbv2Service.SetNATSURL("nats://" + natsHost)
+	// Wire LB VM lifecycle: instance launcher for system VMs.
+	d.elbv2Service.InstanceLauncher = d
+
+	// Detect management bridge for system instance control plane NICs.
+	// Must run before wireLBAgentConfig so the gateway URL uses br-mgmt IP.
+	mgmtBridge := "br-mgmt"
+	if d.config.Daemon.MgmtBridge != "" {
+		mgmtBridge = d.config.Daemon.MgmtBridge
 	}
-	// Discover system AMI for ALB VMs. Prefer an image with "alb" in the
-	// name (pre-baked Alpine with HAProxy), fall back to first available.
+	bridgeIP, bridgeErr := GetBridgeIPv4(mgmtBridge)
+	if bridgeErr != nil {
+		slog.Warn("Management bridge not detected, system instances will not get mgmt NIC", "bridge", mgmtBridge, "err", bridgeErr)
+	} else if bridgeIP == "" {
+		slog.Warn("Management bridge not found, system instances will not get mgmt NIC", "bridge", mgmtBridge)
+	} else {
+		d.mgmtBridgeIP = bridgeIP
+		alloc, allocErr := NewMgmtIPAllocator(bridgeIP)
+		if allocErr != nil {
+			slog.Error("Failed to create mgmt IP allocator", "bridgeIP", bridgeIP, "err", allocErr)
+		} else {
+			d.mgmtIPAllocator = alloc
+			slog.Info("Management bridge detected", "bridge", mgmtBridge, "ip", bridgeIP)
+		}
+	}
+
+	// Wire system credentials + gateway URL for LB agent SigV4 auth.
+	d.wireLBAgentConfig()
+
+	// Set up lazy system AMI discovery for LB VMs. The image may not exist
+	// at daemon startup (imported later), so we resolve it at request time.
 	if d.imageService != nil {
-		imagesOut, imgErr := d.imageService.DescribeImages(&ec2.DescribeImagesInput{}, utils.GlobalAccountID)
-		if imgErr == nil && len(imagesOut.Images) > 0 {
-			systemAMI := aws.StringValue(imagesOut.Images[0].ImageId)
-			for _, img := range imagesOut.Images {
-				name := aws.StringValue(img.Name)
-				if strings.Contains(name, "alb") {
-					systemAMI = aws.StringValue(img.ImageId)
-					break
-				}
+		imgSvc := d.imageService
+		d.elbv2Service.SetSystemAMIFunc(func() (string, error) {
+			imagesOut, imgErr := imgSvc.DescribeImages(&ec2.DescribeImagesInput{
+				Filters: []*ec2.Filter{{
+					Name:   aws.String("tag:" + tags.ManagedByKey),
+					Values: []*string{aws.String(tags.ManagedByELBv2)},
+				}},
+			}, utils.GlobalAccountID)
+			if imgErr != nil {
+				return "", fmt.Errorf("describe LB system images: %w", imgErr)
 			}
-			d.elbv2Service.SetSystemAMI(systemAMI)
-			slog.Info("System AMI set for ALB VMs", "amiId", systemAMI)
-		}
+			if len(imagesOut.Images) == 0 {
+				return "", errors.New("LB system image not imported; run: spx admin images import --name lb-alpine-3.21.6-x86_64")
+			}
+			amiID := aws.StringValue(imagesOut.Images[0].ImageId)
+			slog.Info("System AMI resolved for LB VMs", "amiId", amiID, "name", aws.StringValue(imagesOut.Images[0].Name))
+			return amiID, nil
+		})
 	}
+
+	// System VMs (LB, NAT GW) use the dedicated sys.micro instance type.
+	d.elbv2Service.SetSystemInstanceTypeFunc(func() string {
+		return "sys.micro"
+	})
 
 	// Ensure default VPC exists for system and admin accounts
 	// (matches AWS: every account has a default VPC with IGW + default SG)
@@ -733,6 +804,15 @@ func (d *Daemon) Start() error {
 	d.waitForClusterReady()
 	d.upgradeJetStreamReplicas()
 	d.restoreInstances()
+
+	// Rebuild mgmt IP allocator from restored VMs so we don't re-allocate IPs
+	// that are already in use by running system instances.
+	if d.mgmtIPAllocator != nil {
+		d.Instances.Mu.Lock()
+		d.mgmtIPAllocator.Rebuild(d.Instances.VMS)
+		d.Instances.Mu.Unlock()
+		slog.Info("Rebuilt mgmt IP allocator from restored instances", "allocated", d.mgmtIPAllocator.AllocatedCount())
+	}
 
 	if err := d.subscribeAll(); err != nil {
 		return fmt.Errorf("failed to subscribe to NATS topics: %w", err)
@@ -1786,6 +1866,18 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				if err := d.networkPlumber.CleanupTapDevice(instance.ENIId); err != nil {
 					slog.Warn("Failed to clean up tap device", "eni", instance.ENIId, "err", err)
 				}
+				// Clean up any extra ENI tap devices (multi-subnet ALB VMs).
+				d.cleanupExtraENITaps(instance)
+			}
+
+			// Clean up management TAP and release IP
+			if instance.MgmtTap != "" {
+				if err := CleanupMgmtTapDevice(instance.MgmtTap); err != nil {
+					slog.Warn("Failed to clean up mgmt tap device", "tap", instance.MgmtTap, "instanceId", instance.ID, "err", err)
+				}
+				if d.mgmtIPAllocator != nil {
+					d.mgmtIPAllocator.Release(instance.ID)
+				}
 			}
 
 			// Release public IP before deleting ENI
@@ -1812,17 +1904,30 @@ func (d *Daemon) stopInstance(instances map[string]*vm.VM, deleteVolume bool) er
 				}
 			}
 
-			// On termination, delete the auto-created ENI (releases IP back to IPAM,
-			// publishes vpc.delete-port for vpcd). On stop, ENI persists (AWS behavior).
+			// On termination, detach and delete the auto-created ENI (releases IP
+			// back to IPAM, publishes vpc.delete-port for vpcd). On stop, ENI
+			// persists (AWS behavior). Must detach first to clear in-use status.
+			// Tolerate NotFound — ENI may have been cleaned up already.
+			// Other errors (KV failures, permission issues, in-use) are real
+			// failures that could leak IPAM addresses.
 			if deleteVolume && instance.ENIId != "" && d.vpcService != nil {
-				_, eniErr := d.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
+				if detachErr := d.vpcService.DetachENI(instance.AccountID, instance.ENIId); detachErr != nil {
+					slog.Warn("Failed to detach ENI on termination", "eni", instance.ENIId, "instanceId", instance.ID, "err", detachErr)
+				}
+				if _, eniErr := d.vpcService.DeleteNetworkInterface(&ec2.DeleteNetworkInterfaceInput{
 					NetworkInterfaceId: &instance.ENIId,
-				}, instance.AccountID)
-				if eniErr != nil {
-					slog.Error("Failed to delete ENI on termination", "eni", instance.ENIId, "err", eniErr)
+				}, instance.AccountID); eniErr != nil {
+					if strings.Contains(eniErr.Error(), awserrors.ErrorInvalidNetworkInterfaceIDNotFound) {
+						slog.Debug("ENI already cleaned up on termination", "eni", instance.ENIId)
+					} else {
+						slog.Error("Failed to delete ENI on termination", "eni", instance.ENIId, "instanceId", instance.ID, "err", eniErr)
+					}
 				} else {
 					slog.Info("Deleted ENI on termination", "eni", instance.ENIId, "instanceId", instance.ID)
 				}
+				// Extra ENIs (multi-subnet ALB VMs) are cleaned up by
+				// DeleteLoadBalancer via its own lb.ENIs loop — the daemon
+				// doesn't duplicate that teardown here.
 			}
 
 			// Deallocate resources
@@ -2273,6 +2378,12 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 
 		slog.Info("VPC networking configured", "tap", tapName, "eni", instance.ENIId, "mac", instance.ENIMac)
 
+		// Additional VPC NICs for multi-subnet system VMs (e.g. ALBs with
+		// subnets across multiple AZs).
+		if err := d.setupExtraENINICs(instance); err != nil {
+			return err
+		}
+
 		// DEV_NETWORKING: add a second NIC with hostfwd for SSH dev access
 		if d.config.Daemon.DevNetworking {
 			sshDebugAddr, err := viperblock.FindFreePort()
@@ -2346,6 +2457,17 @@ func (d *Daemon) StartInstance(instance *vm.VM) error {
 		instance.Config.Devices = append(instance.Config.Devices, vm.Device{
 			Value: "virtio-net-pci,netdev=net0",
 		})
+	}
+
+	// Management NIC: system instances get a TAP on br-mgmt for control plane traffic.
+	if instance.MgmtMAC != "" && instance.MgmtTap != "" {
+		instance.Config.NetDevs = append(instance.Config.NetDevs, vm.NetDev{
+			Value: fmt.Sprintf("tap,id=mgmt0,ifname=%s,script=no,downscript=no", instance.MgmtTap),
+		})
+		instance.Config.Devices = append(instance.Config.Devices, vm.Device{
+			Value: fmt.Sprintf("virtio-net-pci,netdev=mgmt0,mac=%s", instance.MgmtMAC),
+		})
+		slog.Info("Management NIC configured", "tap", instance.MgmtTap, "mac", instance.MgmtMAC, "ip", instance.MgmtIP, "instanceId", instance.ID)
 	}
 
 	instance.Config.Devices = append(instance.Config.Devices, vm.Device{
@@ -2786,6 +2908,10 @@ func (rm *ResourceManager) updateInstanceSubscriptions() {
 	defer rm.subsMu.Unlock()
 
 	for typeName, typeInfo := range rm.instanceTypes {
+		// System types (sys.micro, etc.) are internal-only — not routable via customer API.
+		if instancetypes.IsSystemType(typeName) {
+			continue
+		}
 		queueTopic := fmt.Sprintf("ec2.RunInstances.%s", typeName)
 		canFit := rm.canAllocate(typeInfo, 1) >= 1
 
@@ -2827,5 +2953,76 @@ func (rm *ResourceManager) updateInstanceSubscriptions() {
 				slog.Info("Unsubscribed from node-specific instance type (capacity full)", "topic", nodeTopic)
 			}
 		}
+	}
+}
+
+// wireLBAgentConfig loads system credentials, resolves the gateway URL,
+// reads the CA certificate, and wires them into the ELBv2 service so LB
+// VMs get SigV4 credentials and gateway URL injected via cloud-init.
+func (d *Daemon) wireLBAgentConfig() {
+	// Use system credentials from spinifex.toml (predastore section).
+	// These are the same service-to-service credentials written by admin init
+	// into both spinifex.toml and system-credentials.json. Reading from the
+	// config avoids file permission issues with the separate JSON file.
+	if d.config.Predastore.AccessKey != "" && d.config.Predastore.SecretKey != "" {
+		d.systemAccessKey = d.config.Predastore.AccessKey
+		d.systemSecretKey = d.config.Predastore.SecretKey
+		d.elbv2Service.SystemAccessKey = d.config.Predastore.AccessKey
+		d.elbv2Service.SystemSecretKey = d.config.Predastore.SecretKey
+		slog.Info("System credentials loaded for LB agent auth")
+	} else {
+		slog.Warn("System credentials missing from spinifex.toml predastore section — LB VMs will not have SigV4 credentials for agent auth")
+	}
+
+	// Resolve gateway URL — the address LB VMs use to reach the AWS gateway.
+	// Internet-facing LB VMs reach it via VPC networking; internal LB VMs
+	// reach it via the management NIC (br-mgmt) with a host route added
+	// to their cloud-init when AWSGW binds to a specific WAN IP.
+	var gatewayHost string
+	awsgwBindIP := ""
+	if d.config.AWSGW.Host != "" {
+		if h, _, splitErr := net.SplitHostPort(d.config.AWSGW.Host); splitErr == nil {
+			awsgwBindIP = h
+		}
+	}
+
+	if d.mgmtBridgeIP != "" {
+		if awsgwBindIP != "" && awsgwBindIP != "0.0.0.0" {
+			// Multi-node: AWSGW listens on a specific WAN IP. Use that IP
+			// as the gateway URL. Internal LBs will get a host route via
+			// br-mgmt to reach it (see LaunchSystemInstance).
+			gatewayHost = awsgwBindIP
+			d.mgmtRouteVia = awsgwBindIP
+		} else {
+			// Single-node: AWSGW listens on all interfaces — br-mgmt IP works.
+			gatewayHost = d.mgmtBridgeIP
+		}
+	} else if d.config.Daemon.DevNetworking {
+		gatewayHost = "10.0.2.2"
+	} else if awsgwBindIP != "" && awsgwBindIP != "0.0.0.0" {
+		gatewayHost = awsgwBindIP
+	}
+
+	// Extract port from AWSGW host config (e.g. "0.0.0.0:9999" → "9999").
+	gatewayPort := "9999"
+	if d.config.AWSGW.Host != "" {
+		if _, port, splitErr := net.SplitHostPort(d.config.AWSGW.Host); splitErr == nil && port != "" {
+			gatewayPort = port
+		}
+	}
+
+	if gatewayHost != "" {
+		gatewayURL := "https://" + net.JoinHostPort(gatewayHost, gatewayPort)
+		d.elbv2Service.GatewayURL = gatewayURL
+		slog.Info("LB agent gateway URL configured", "url", gatewayURL)
+	} else {
+		slog.Error("LB agent gateway URL not configured: no reachable host found — all CreateLoadBalancer calls will fail")
+	}
+
+	// Pass mgmt route info so lbVMUserData can add a bootcmd route for
+	// internal LBs that reach the AWSGW via the management NIC.
+	if d.mgmtRouteVia != "" {
+		d.elbv2Service.MgmtRouteGateway = d.mgmtBridgeIP
+		d.elbv2Service.MgmtRouteTarget = d.mgmtRouteVia
 	}
 }

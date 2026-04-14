@@ -355,7 +355,8 @@ func TestNewReverseProxy_ErrorHandler(t *testing.T) {
 	assert.Equal(t, "application/xml", rec.Header().Get("Content-Type"))
 	body := rec.Body.String()
 	assert.Contains(t, body, "<Code>BadGateway</Code>")
-	assert.Contains(t, body, "localhost:19999")
+	assert.Contains(t, body, "upstream connection failed")
+	assert.NotContains(t, body, "localhost:19999")
 }
 
 func TestNewProxyTransport_ValidCert(t *testing.T) {

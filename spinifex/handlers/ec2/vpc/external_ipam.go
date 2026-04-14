@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net"
 
+	"github.com/mulgadc/spinifex/spinifex/migrate"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -71,8 +72,8 @@ func NewExternalIPAM(js nats.JetStreamContext, pools []ExternalPoolConfig) (*Ext
 	if err != nil {
 		return nil, fmt.Errorf("create external IPAM KV bucket: %w", err)
 	}
-	if err := utils.WriteVersion(kv, KVBucketExternalIPAMVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketExternalIPAM, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketExternalIPAM, kv, KVBucketExternalIPAMVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketExternalIPAM, err)
 	}
 	ipam := &ExternalIPAM{kv: kv, pools: pools}
 	if err := ipam.initPools(); err != nil {
@@ -155,12 +156,13 @@ func (m *ExternalIPAM) initPool(pool ExternalPoolConfig) error {
 
 // AllocateIP allocates the next available external IP from the best pool
 // matching the given region/AZ. Returns the allocated IP and pool name.
-func (m *ExternalIPAM) AllocateIP(region, az, allocType, eniID, instanceID string) (string, string, error) {
+// allocID is the EIP allocation ID (for elastic IPs); pass "" for other types.
+func (m *ExternalIPAM) AllocateIP(region, az, allocType, allocID, eniID, instanceID string) (string, string, error) {
 	pool := m.findPool(region, az)
 	if pool == nil {
 		return "", "", fmt.Errorf("InsufficientAddressCapacity: no external pool available for region=%q az=%q", region, az)
 	}
-	ip, err := m.allocateFromPool(pool.Name, allocType, eniID, instanceID)
+	ip, err := m.allocateFromPool(pool.Name, allocType, allocID, eniID, instanceID)
 	if err != nil {
 		return "", "", err
 	}
@@ -168,12 +170,23 @@ func (m *ExternalIPAM) AllocateIP(region, az, allocType, eniID, instanceID strin
 }
 
 // AllocateFromPool allocates an IP from a specific named pool.
-func (m *ExternalIPAM) AllocateFromPool(poolName, allocType, eniID, instanceID string) (string, error) {
-	return m.allocateFromPool(poolName, allocType, eniID, instanceID)
+func (m *ExternalIPAM) AllocateFromPool(poolName, allocType, allocID, eniID, instanceID string) (string, error) {
+	return m.allocateFromPool(poolName, allocType, allocID, eniID, instanceID)
 }
 
-func (m *ExternalIPAM) allocateFromPool(poolName, allocType, eniID, instanceID string) (string, error) {
+func (m *ExternalIPAM) allocateFromPool(poolName, allocType, allocID, eniID, instanceID string) (string, error) {
 	pool := m.findPoolByName(poolName)
+
+	// DHCP client-id: prefer allocID (EIPs), then eniID (ENIs), then instanceID.
+	// At least one must be non-empty for DHCP pools — the upstream DHCP server
+	// uses this to keep per-client leases distinct.
+	clientID := allocID
+	if clientID == "" {
+		clientID = eniID
+	}
+	if clientID == "" {
+		clientID = instanceID
+	}
 
 	for attempt := range 5 {
 		record, revision, err := m.getRecord(poolName)
@@ -183,12 +196,6 @@ func (m *ExternalIPAM) allocateFromPool(poolName, allocType, eniID, instanceID s
 
 		var ip string
 		if pool != nil && pool.IsDHCP() {
-			// DHCP source: obtain a lease from the router's DHCP server.
-			// Use ENI ID as the client identifier so each VM gets a unique lease.
-			clientID := eniID
-			if clientID == "" {
-				clientID = instanceID
-			}
 			ip, err = ObtainDHCPLease(pool.WanBridge, clientID)
 			if err != nil {
 				return "", fmt.Errorf("DHCP lease for %s: %w", clientID, err)
@@ -202,9 +209,10 @@ func (m *ExternalIPAM) allocateFromPool(poolName, allocType, eniID, instanceID s
 		}
 
 		record.Allocated[ip] = ExternalIPAllocation{
-			Type:       allocType,
-			ENIId:      eniID,
-			InstanceId: instanceID,
+			Type:         allocType,
+			AllocationID: allocID,
+			ENIId:        eniID,
+			InstanceId:   instanceID,
 		}
 
 		data, err := json.Marshal(record)
@@ -215,7 +223,7 @@ func (m *ExternalIPAM) allocateFromPool(poolName, allocType, eniID, instanceID s
 		if _, err := m.kv.Update(poolName, data, revision); err != nil {
 			// CAS conflict — if we obtained a DHCP lease, release it before retrying
 			if pool != nil && pool.IsDHCP() {
-				_ = ReleaseDHCPLease(pool.WanBridge, eniID)
+				_ = ReleaseDHCPLease(pool.WanBridge, clientID)
 			}
 			slog.Debug("external IPAM CAS conflict, retrying", "pool", poolName, "attempt", attempt)
 			continue

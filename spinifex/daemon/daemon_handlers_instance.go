@@ -238,7 +238,7 @@ func (d *Daemon) handleEC2RunInstances(msg *nats.Msg) {
 						region = d.config.Region
 						az = d.config.AZ
 					}
-					publicIP, poolName, allocErr := d.externalIPAM.AllocateIP(region, az, "auto_assign", *eni.NetworkInterfaceId, instance.ID)
+					publicIP, poolName, allocErr := d.externalIPAM.AllocateIP(region, az, "auto_assign", "", *eni.NetworkInterfaceId, instance.ID)
 					if allocErr != nil {
 						slog.Warn("Failed to allocate public IP for instance", "instanceId", instance.ID, "err", allocErr)
 					} else {
@@ -1481,11 +1481,11 @@ func (d *Daemon) handleEC2DescribeInstanceAttribute(msg *nats.Msg) {
 	respondWithJSON(msg, output)
 }
 
-// publishNATEvent publishes a NAT lifecycle event (vpc.add-nat or vpc.delete-nat) to NATS.
+// publishNATEvent sends a NAT lifecycle event (vpc.add-nat or vpc.delete-nat) to NATS.
+// For vpc.add-nat, it uses request-reply to ensure the OVN NAT rule is committed
+// before returning, preventing ARP propagation races. For vpc.delete-nat, it
+// uses fire-and-forget since the caller doesn't need to wait.
 func (d *Daemon) publishNATEvent(topic, vpcId, externalIP, logicalIP, portName, mac string) {
-	if d.natsConn == nil {
-		return
-	}
 	evt := struct {
 		VpcId      string `json:"vpc_id"`
 		ExternalIP string `json:"external_ip"`
@@ -1493,12 +1493,13 @@ func (d *Daemon) publishNATEvent(topic, vpcId, externalIP, logicalIP, portName, 
 		PortName   string `json:"port_name"`
 		MAC        string `json:"mac"`
 	}{VpcId: vpcId, ExternalIP: externalIP, LogicalIP: logicalIP, PortName: portName, MAC: mac}
-	data, err := json.Marshal(evt)
-	if err != nil {
-		slog.Error("Failed to marshal NAT event", "topic", topic, "err", err)
+
+	if topic == "vpc.add-nat" {
+		if err := utils.RequestEvent(d.natsConn, topic, evt, 10*time.Second); err != nil {
+			slog.Warn("publishNATEvent: failed to add NAT rule (will retry via reconciliation)",
+				"topic", topic, "externalIP", externalIP, "logicalIP", logicalIP, "err", err)
+		}
 		return
 	}
-	if err := d.natsConn.Publish(topic, data); err != nil {
-		slog.Error("Failed to publish NAT event", "topic", topic, "err", err)
-	}
+	utils.PublishEvent(d.natsConn, topic, evt)
 }

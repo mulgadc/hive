@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
@@ -194,23 +193,12 @@ func ValidateKeyPairName(name string) error {
 }
 
 func CreateS3Client(cfg *config.Config) *s3.S3 {
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-			NextProtos:         []string{"h2", "http/1.1"},
-		},
-		ForceAttemptHTTP2: true,
-	}
-
-	httpClient := &http.Client{Transport: tr}
-
 	sess := session.Must(session.NewSession(&aws.Config{
 		Region:           aws.String(cfg.Predastore.Region),
 		Endpoint:         aws.String(fmt.Sprintf("https://%s", cfg.Predastore.Host)),
 		Credentials:      credentials.NewStaticCredentials(cfg.Predastore.AccessKey, cfg.Predastore.SecretKey, ""),
 		S3ForcePathStyle: aws.Bool(true),
 		DisableSSL:       aws.Bool(false),
-		HTTPClient:       httpClient,
 	}))
 
 	return s3.New(sess)
@@ -318,6 +306,17 @@ func humanBytes(b uint64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTPEZY"[exp])
+}
+
+// HashMAC generates a deterministic locally-administered unicast MAC address.
+// prefix is the first 3 octets (e.g. "02:00:00"), id is hashed to produce the
+// remaining 3 octets.
+func HashMAC(prefix, id string) string {
+	h := uint32(0)
+	for _, c := range id {
+		h = h*31 + uint32(c) // #nosec G115 -- intentional overflow for hashing
+	}
+	return fmt.Sprintf("%s:%02x:%02x:%02x", prefix, (h>>16)&0xff, (h>>8)&0xff, h&0xff)
 }
 
 func dirExists(path string) bool {

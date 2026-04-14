@@ -635,153 +635,77 @@ Runs on a real 3-node libvirt cluster provisioned by OpenTofu (`scripts/tofu-clu
 
 ---
 
-## VPC (`run-vpc-e2e.sh`)
+## Consolidated LB Data Plane (`run-lb-e2e.sh`)
 
-Standalone VPC networking test suite. Runs against a running Spinifex endpoint (configurable via `ENDPOINT` env var). OVN topology tests are skipped when OVN is unavailable.
-
-### Phase 1: VPC CRUD
-- `create-vpc` (10.99.0.0/16, verify VpcId)
-- `describe-vpcs` (by ID, verify exactly 1 returned)
-
-### Phase 2: Subnet CRUD
-- `create-subnet` (10.99.1.0/24 in VPC, verify SubnetId)
-- `describe-subnets` (by ID, verify exactly 1 returned)
-
-### Phase 3: Internet Gateway CRUD
-- `create-internet-gateway` (verify InternetGatewayId)
-- `describe-internet-gateways` (by ID, verify exactly 1 returned)
-
-### Phase 4: Internet Gateway Attach / Detach
-- `attach-internet-gateway` (IGW to VPC)
-- `describe-internet-gateways` (verify attachment VpcId)
-- `delete-internet-gateway` on attached IGW (expect `DependencyViolation` or rejection)
-- `detach-internet-gateway` (IGW from VPC)
-- `describe-internet-gateways` (verify no attachments)
-
-### Phase 5: OVN Topology Verification (requires OVN)
-- Re-attach IGW for topology inspection
-- Verify OVN logical switch exists for subnet
-- Verify OVN logical router exists for VPC
-- Verify OVN external switch exists (IGW attached)
-- Verify SNAT rule on VPC router
-- Verify default route (0.0.0.0/0) on VPC router
-- Dump full OVN NB DB topology for debugging
-- Detach IGW
-- Skipped when `ovn-nbctl` is not available
-
-### Phase 6: Cleanup
-- `delete-internet-gateway`
-- `delete-subnet`
-- `delete-vpc`
-- Verify OVN cleanup (no VPC routers remaining, when OVN available)
-
----
-
-## ELBv2 / ALB (`run-elbv2-e2e.sh`)
-
-Standalone ELBv2 (Application Load Balancer) E2E test suite. Requires VPC networking
-for ALB ENI creation. Configurable endpoint via `ENDPOINT` env var.
-
-### Phase 0: VPC + Subnet Setup
-- `create-vpc` (10.200.0.0/16, prerequisite for ALB)
-- `create-subnet` (10.200.1.0/24)
-
-### Phase 1: Target Group CRUD
-- `create-target-group` (HTTP, port 80, verify health check defaults)
-- `describe-target-groups` (by ARN, verify single result)
-- `create-target-group` (second TG, port 8080)
-- `describe-target-groups` (all, verify >= 2)
-- Duplicate name detection (same name → error)
-
-### Phase 2: Target Registration
-- `register-targets` (2 fake instances)
-- `describe-target-health` (verify 2 targets, initial state)
-- `deregister-targets` (remove 1 target)
-- `describe-target-health` (verify 1 target remains)
-
-### Phase 3: Load Balancer CRUD
-- `create-load-balancer` (ALB with subnet)
-- Verify fields: type=application, state=active, DNS name, scheme=internet-facing
-- Verify ENIs created (describe-network-interfaces with ELB filter)
-- `describe-load-balancers` (by ARN, verify single result)
-- Duplicate name detection (same name → error)
-
-### Phase 4: Listener CRUD
-- `create-listener` (port 80, forward to TG)
-- Verify fields: port=80, protocol=HTTP
-- `describe-listeners` (by LB ARN, verify single result)
-- Duplicate port detection (same port → error)
-
-### Phase 5: In-Use Protection
-- `delete-target-group` while referenced by listener → error (ResourceInUse)
-
-### Phase 6: Listener Deletion
-- `delete-listener`
-- Verify 0 listeners remain
-- `delete-target-group` (now succeeds after listener removed)
-
-### Phase 7: Load Balancer Deletion
-- `delete-load-balancer`
-- Verify ALB gone from describe
-- Verify ENIs cleaned up
-- `delete-target-group` (second TG)
-
-### Phase 8: Error Path Tests
-- Describe non-existent ALB → empty result
-- Delete non-existent ALB → error
-- Delete non-existent TG → error
-- Create TG without name → error
-- Create listener on non-existent ALB → error
-
----
-
-## ELBv2 / ALB Data Plane (`run-elbv2-dataplane-e2e.sh`)
-
-Data plane test that verifies ALBs actually balance HTTP traffic across instances.
-Requires VPC networking (OVN), HAProxy on daemon node, and imported AMI. Designed
-for pseudo-multinode or real multi-node environments.
+Consolidated LB data plane test covering all 4 variants: ALB internet-facing,
+ALB internal, NLB internet-facing, NLB internal. Shares a single VPC, subnet,
+and set of dual-purpose app instances (HTTP:80 + TCP:9000) across all suites.
+Requires pool mode with external IPAM (NOT dev_networking).
 
 ### Phase 0: Prerequisites
-- Discover nano instance type
-- Discover AMI (must be pre-imported)
+- Dev-mode gate (skip if dev_networking enabled)
+- SSH to peer node (if `--peer` provided)
+- Discover instance types (nano), AMI (non-Alpine)
+- Create key pair (lb-e2e-key)
 
-### Phase 1: VPC + Subnet Setup
-- `create-vpc` (10.201.0.0/16)
-- `create-subnet` (10.201.1.0/24)
+### Phase 1: Shared VPC + Subnet
+- `create-vpc` (10.200.0.0/16)
+- `create-internet-gateway` + attach
+- `create-subnet` (10.200.1.0/24) + MapPublicIpOnLaunch
 
-### Phase 2: Launch Instances
-- `run-instances` x2 with cloud-init HTTP responder (Python http.server on port 80)
-- Cloud-init serves `{"instance_id": "<hostname>"}` on each instance
-- Poll both instances to running state
-- Verify both have `PrivateIpAddress` assigned
+### Phase 2: Launch App Instances
+- `run-instances` x2 with dual-purpose cloud-init (HTTP on 80, TCP echo on 9000)
+- Poll instances to running state, collect private IPs
+- Poll app ports for readiness (replaces `sleep 100`)
 
-### Phase 3: Target Group + Registration
-- `create-target-group` (HTTP, port 80, health check on /index.html, 5s interval)
-- `register-targets` (both instances)
+### Phase 3a: ALB Internet-Facing [skip if no --peer]
+- Create HTTP target group, register 2 targets
+- `create-load-balancer` (scheme=internet-facing), verify scheme
+- Verify ENI has public IP, DNS has no `internal-` prefix
+- `create-listener` (HTTP:80)
+- Wait for ALB active (agent heartbeat)
+- Host HTTP traffic test (curl 20x, verify round-robin)
+- Peer validation (curl from --peer node, 20x)
+- Cleanup: delete listener, LB, verify ENI removal, delete TG
 
-### Phase 4: ALB + Listener
-- `create-load-balancer` (ALB with subnet)
-- Resolve ALB ENI private IP (via describe-network-interfaces)
-- `create-listener` (port 80, forward to target group)
+### Phase 3b: ALB Internal
+- Create HTTP target group, register 2 targets
+- `create-load-balancer` (scheme=internal), verify scheme
+- Verify ENI has NO public IP, DNS has `internal-` prefix
+- `create-listener` (HTTP:80)
+- Wait for ALB active (mgmt NIC heartbeat)
+- Wait for targets healthy
+- Launch client VM (cloud-init curls ALB private IP, serves results)
+- Poll client status.txt, fetch results, verify round-robin
+- Terminate client VM
+- Cleanup: delete LB, verify ENI removal, delete TG
 
-### Phase 5: Wait for Target Health
-- Poll `describe-target-health` until both targets healthy (120s timeout)
-- Continue even if targets stay in "initial" (HAProxy may still forward)
+### Phase 3c: NLB Internet-Facing [skip if no --peer]
+- Create TCP target group (port 9000), verify protocol=TCP
+- Register 2 targets
+- `create-load-balancer` (type=network), verify type, ARN `/net/`
+- `create-listener` (TCP:9000)
+- Wait for NLB active (agent heartbeat)
+- Verify ENI has public IP
+- Wait for targets healthy (TCP health check)
+- Host TCP traffic test (nc 20x, verify round-robin)
+- Peer validation (nc from --peer node)
+- Deregister target, verify draining state
+- Cleanup: delete listener, LB, verify ENI removal, delete TG
 
-### Phase 6: Traffic Balancing — Round Robin
-- `curl` ALB ENI IP 20 times, parse `instance_id` from JSON response
-- Verify responses contain BOTH instance IDs (round-robin distribution)
-- Verify success rate >= 50%
+### Phase 3d: NLB Internal
+- Create TCP target group (port 9000), register 2 targets
+- `create-load-balancer` (type=network, scheme=internal)
+- Verify type=network, scheme=internal, ARN `/net/`
+- Verify ENI has NO public IP, DNS has `internal-` prefix
+- `create-listener` (TCP:9000)
+- Wait for NLB active (mgmt NIC heartbeat)
+- Wait for targets healthy (TCP health check)
+- Launch client VM (cloud-init nc's NLB private IP, serves results)
+- Poll client status.txt, fetch results, verify TCP responses
+- Terminate client VM
+- Cleanup: delete LB, verify ENI removal, delete TG
 
-### Phase 7: Single Target After Deregister
-- `deregister-targets` (remove second instance)
-- Wait for HAProxy reload (3s)
-- `curl` ALB 20 times
-- Verify ONLY the remaining instance responds
-- Verify success rate >= 50%
-
-### Phase 8: Re-register + Recovery
-- `register-targets` (re-add deregistered instance)
-- Wait for HAProxy reload (5s)
-- `curl` ALB 20 times
-- Verify BOTH instances responding again
+### Phase 4: Cleanup (trap)
+- Terminate app instances, wait for terminated
+- Delete key pair, subnet, IGW, VPC

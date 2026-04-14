@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/mulgadc/spinifex/spinifex/types"
@@ -99,7 +100,7 @@ func runTopNodes(cmd *cobra.Command, args []string) {
 				resp.Node,
 				fmt.Sprintf("%d/%d", resp.AllocVCPU, resp.TotalVCPU),
 				fmt.Sprintf("%s/%s", formatMemGB(resp.AllocMemGB), formatMemGB(resp.TotalMemGB)),
-				fmt.Sprintf("%d", resp.VMCount),
+				strconv.Itoa(resp.VMCount),
 			})
 
 			for _, cap := range resp.InstanceTypes {
@@ -146,8 +147,8 @@ func runTopNodes(cmd *cobra.Command, args []string) {
 		agg := capacityMap[name]
 		capTable = append(capTable, []string{
 			name,
-			fmt.Sprintf("%d", agg.Available),
-			fmt.Sprintf("%d", agg.VCPU),
+			strconv.Itoa(agg.Available),
+			strconv.Itoa(agg.VCPU),
 			formatMemGB(agg.MemoryGB),
 		})
 	}

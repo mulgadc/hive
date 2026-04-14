@@ -38,38 +38,9 @@ Spinifex maps AWS VPC concepts directly to OVN constructs:
 
 ## Network Path
 
-```
-                        Physical Network (WAN)
-                               │
-                        ┌──────┴──────┐
-                        │ br-wan │  OVS bridge (physical uplink)
-                        └──────┬──────┘
-                               │  ovn-bridge-mappings: external:br-wan
-                               │
-                    ┌──────────┴───────────────────────────┐
-                    │     VPC Logical Router               │
-                    │                                      │
-                    │  Gateway port ──── ext switch ─────── localnet port
-                    │    (public IP)     (OVN)              (maps to br-wan)
-                    │                                      │
-                    │  NAT rules:                          │
-                    │    SNAT: VPC CIDR → gateway IP       │
-                    │    dnat_and_snat: public ↔ private   │
-                    │                                      │
-                    │  Routes:                             │
-                    │    0.0.0.0/0 → WAN gateway           │
-                    │                                      │
-                    ├────────────┬──────────────┤          │
-                    │            │              │          │
-              ┌─────┴────┐ ┌─────┴────┐         │          │
-              │ subnet-a │ │ subnet-b │         │          │
-              │ (public) │ │ (private)│         │          │
-              │10.0.1/24 │ │10.0.2/24 │         │          │
-              │  eni-1   │ │  eni-3   │         │          │
-              │  eni-2   │ │  eni-4   │         │          │
-              └──────────┘ └──────────┘         │          │
-                                                └──────────┘
-```
+<p align="center">
+  <img src="../../.github/assets/diagrams/vpc-network-path.svg" alt="VPC logical topology — WAN, br-wan, VPC logical router, subnets, ENIs" width="900">
+</p>
 
 Cross-host traffic uses **Geneve tunnels** (UDP 6081) over the management/overlay
 NIC. Each host runs `ovn-controller` which programs OpenFlow rules on `br-int`
@@ -86,9 +57,9 @@ Instances get a private IP only. They can communicate with other instances in th
 same VPC (even across subnets and hosts via the overlay). They cannot reach the
 internet or be reached from the WAN.
 
-```
-Instance (10.0.2.5) ──→ VPC Router ──→ [no default route] ──→ dropped
-```
+<p align="center">
+  <img src="../../.github/assets/diagrams/vpc-private-subnet-flow.svg" alt="Private subnet — instance hits router, no default route, packet dropped" width="900">
+</p>
 
 If the VPC has an IGW attached, private subnet instances CAN reach the internet
 via the VPC router's SNAT rule (outbound only — they share the gateway IP). They
@@ -99,10 +70,9 @@ still cannot be reached from the WAN because they have no public IP.
 Instances get both a private IP and a public IP. The public IP is a 1:1 NAT
 managed by OVN — the instance OS only sees its private IP.
 
-```
-Outbound: Instance (10.0.1.5) ──→ SNAT ──→ exits as 203.0.113.10
-Inbound:  203.0.113.10 ──→ DNAT ──→ arrives at 10.0.1.5
-```
+<p align="center">
+  <img src="../../.github/assets/diagrams/vpc-public-subnet-flow.svg" alt="Public subnet — outbound SNAT and inbound DNAT between private and public IPs" width="900">
+</p>
 
 **Requirements for a public subnet:**
 
@@ -191,25 +161,9 @@ dns_servers = ["192.168.1.1", "8.8.8.8"]
 Regardless of whether IPs come from a static range or DHCP, the OVN behavior
 is identical:
 
-```
-                          Two DHCP conversations (completely independent):
-
- ┌─────────────────────────────────────────────────────────────────────┐
- │ HOST ↔ ROUTER DHCP (on br-ext, via veth pair → br-wan)              │
- │   Spinifex asks router: "give me a public IP for this VM"           │
- │   Router responds: 192.168.1.75                                     │
- │   Spinifex stores IP, tells OVN: dnat_and_snat(192.168.1.75 ↔       │
- │                                                 172.31.0.4)         │
- │   (Only used in DHCP source mode. Static mode picks from range.)    │
- └─────────────────────────────────────────────────────────────────────┘
-
- ┌─────────────────────────────────────────────────────────────────────┐
- │ VM ↔ OVN DHCP (on tap → br-int → OVN logical switch)                │
- │   cloud-init asks: "what's my IP?"                                  │
- │   OVN DHCP responds: "you are 172.31.0.4"                           │
- │   VM never sees 192.168.1.x or the router                           │
- └─────────────────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="../../.github/assets/diagrams/vpc-dhcp-conversations.svg" alt="Two independent DHCP conversations — host-to-router and VM-to-OVN" width="900">
+</p>
 
 ### Choosing Static vs DHCP
 
@@ -297,9 +251,9 @@ a WAN bridge is configured (auto-detected or via `--wan-bridge`, required for pu
 The connection between them is logical, not physical — OVN's `localnet` port type
 maps the logical external switch to `br-wan` via `ovn-bridge-mappings`.
 
-```
-VM TAP ──→ br-int ──→ OVN logical pipeline ──→ localnet ──→ br-wan ──→ WAN
-```
+<p align="center">
+  <img src="../../.github/assets/diagrams/vpc-datapath-localnet.svg" alt="Data path — VM TAP through br-int, OVN pipeline, localnet, br-wan, WAN" width="900">
+</p>
 
 ## Bridge Modes
 
@@ -312,10 +266,9 @@ is the fallback for single-NIC hosts where the WAN NIC is also the SSH NIC.
 The WAN NIC is added directly to `br-wan` as an OVS port. OVS sees all
 traffic on the wire — any MAC, any protocol. No filtering, no workarounds.
 
-```
-Management NIC (host IP, SSH)
-WAN NIC ──→ br-wan (OVS port) ──→ OVN localnet
-```
+<p align="center">
+  <img src="../../.github/assets/diagrams/vpc-direct-bridge.svg" alt="Direct bridge mode — dedicated WAN NIC added directly to br-wan" width="900">
+</p>
 
 **Use when:** The host has a NIC dedicated to external/WAN traffic that is NOT
 used for SSH or management. Datacenter servers with separate management +
@@ -339,17 +292,9 @@ A macvlan sub-interface is created in bridge mode off the WAN NIC, and that
 macvlan is added to br-wan. The host keeps its IP on the original NIC —
 SSH stays up.
 
-```
-WAN NIC (host IP — unchanged)
-  │
-  ├── host traffic (SSH, management, overlay)
-  │
-  └── spx-ext-{nic} (macvlan, bridge mode, no IP)
-        │
-   br-wan
-        │
-   localnet → OVN ext switch
-```
+<p align="center">
+  <img src="../../.github/assets/diagrams/vpc-macvlan.svg" alt="Macvlan mode — WAN NIC shared between host traffic and macvlan child on br-wan" width="900">
+</p>
 
 **Use when:** The WAN NIC is the same NIC used for SSH. Single-NIC homelabs,
 edge deployments. Adding the NIC directly to OVS would break host connectivity.
@@ -451,24 +396,9 @@ ip link show spx-ext-eth0
 
 ## Network Flow Diagram
 
-```
-┌───────────────────────────────────────────────────┐
-│ Bare-Metal Host                                   │
-│                                                   │
-│  ┌──────────┐         ┌──────────┐                │
-│  │ br-int   │         │br-wan.   │                │
-│  │ (overlay)│         │  (WAN)   │                │
-│  │          │         │          │                │
-│  │ tap-eni1 │  OVN    │spx-ext-  │                │
-│  │ tap-eni2 ├──NAT───→│{nic}     │                │
-│  │ tap-eni3 │pipeline │(macvlan) │                │
-│  └──────────┘         └────┬─────┘                │
-│                            │ macvlan bridge mode  │
-│                        WAN NIC (host IP unchanged)│
-└───────────────────────┼───────────────────────────┘
-                        │
-                   Physical WAN
-```
+<p align="center">
+  <img src="../../.github/assets/diagrams/vpc-host-flow.svg" alt="Bare-metal host — br-int overlay, br-wan WAN bridge with macvlan, OVN NAT pipeline" width="900">
+</p>
 
 ## Configuration Reference
 
@@ -477,19 +407,9 @@ levels: cluster-wide mode, IP pool definitions, and per-node NIC settings.
 
 ## Configuration Levels
 
-```
-spinifex.toml
-├── [network]                        # Cluster-wide: which mode?
-│   └── external_mode = "pool"
-│
-├── [[network.external_pools]]       # IP ranges: what IPs to use?
-│   ├── name, range_start, range_end
-│   ├── gateway, prefix_len
-│   └── region, az (optional)
-│
-└── [nodes.NAME.vpcd]                # Per-node: which NIC?
-    └── external_interface
-```
+<p align="center">
+  <img src="../../.github/assets/diagrams/vpc-config-layers.svg" alt="spinifex.toml configuration layers — cluster mode, IP pools, per-node NIC" width="900">
+</p>
 
 ## Cluster-Wide: external_mode
 

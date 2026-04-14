@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="170" viewBox="0 0 900 170">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0a0a"/>
+      <stop offset="100%" style="stop-color:#0d1117"/>
+    </linearGradient>
+  </defs>
+  <rect width="900" height="170" fill="url(#bg)" rx="10"/>
+
+  <text x="24" y="24" font-family="'Segoe UI', system-ui, sans-serif" font-size="10" fill="#a1a1aa" letter-spacing="2" font-weight="600">PUBLIC SUBNET · 1:1 NAT managed by OVN</text>
+
+  <!-- OUTBOUND row -->
+  <text x="24" y="52" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#3fb950" font-weight="700">Outbound</text>
+
+  <g transform="translate(112, 38)">
+    <rect width="180" height="40" rx="6" fill="#3fb9501a" stroke="#3fb950" stroke-width="1.1" stroke-opacity="0.6"/>
+    <text x="90" y="18" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#7ee787" text-anchor="middle" font-weight="700">Instance</text>
+    <text x="90" y="32" font-family="'SF Mono', ui-monospace, monospace" font-size="10" fill="#a1a1aa" text-anchor="middle">10.0.1.5</text>
+  </g>
+
+  <g stroke="#3fb950" stroke-width="1.1" opacity="0.6" fill="none">
+    <line x1="292" y1="58" x2="352" y2="58" stroke-dasharray="3,3"/>
+  </g>
+  <polygon points="352,54 360,58 352,62" fill="#3fb950" opacity="0.7"/>
+
+  <g transform="translate(368, 38)">
+    <rect width="130" height="40" rx="6" fill="#DC26261a" stroke="#DC2626" stroke-width="1.1" stroke-opacity="0.65"/>
+    <text x="65" y="25" font-family="'SF Mono', ui-monospace, monospace" font-size="12" fill="#F87171" text-anchor="middle" font-weight="700">SNAT</text>
+  </g>
+
+  <g stroke="#3fb950" stroke-width="1.1" opacity="0.6" fill="none">
+    <line x1="498" y1="58" x2="558" y2="58" stroke-dasharray="3,3"/>
+  </g>
+  <polygon points="558,54 566,58 558,62" fill="#3fb950" opacity="0.7"/>
+
+  <g transform="translate(574, 38)">
+    <rect width="272" height="40" rx="6" fill="#3fb9501a" stroke="#3fb950" stroke-width="1.1" stroke-opacity="0.6"/>
+    <text x="136" y="18" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#7ee787" text-anchor="middle" font-weight="700">exits as 203.0.113.10</text>
+    <text x="136" y="32" font-family="'SF Mono', ui-monospace, monospace" font-size="10" fill="#a1a1aa" text-anchor="middle">source IP rewritten</text>
+  </g>
+
+  <!-- INBOUND row -->
+  <text x="24" y="110" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#58a6ff" font-weight="700">Inbound</text>
+
+  <g transform="translate(112, 96)">
+    <rect width="180" height="40" rx="6" fill="#58a6ff1a" stroke="#58a6ff" stroke-width="1.1" stroke-opacity="0.6"/>
+    <text x="90" y="18" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#8ab4f8" text-anchor="middle" font-weight="700">WAN client</text>
+    <text x="90" y="32" font-family="'SF Mono', ui-monospace, monospace" font-size="10" fill="#a1a1aa" text-anchor="middle">→ 203.0.113.10</text>
+  </g>
+
+  <g stroke="#58a6ff" stroke-width="1.1" opacity="0.6" fill="none">
+    <line x1="292" y1="116" x2="352" y2="116" stroke-dasharray="3,3"/>
+  </g>
+  <polygon points="352,112 360,116 352,120" fill="#58a6ff" opacity="0.7"/>
+
+  <g transform="translate(368, 96)">
+    <rect width="130" height="40" rx="6" fill="#DC26261a" stroke="#DC2626" stroke-width="1.1" stroke-opacity="0.65"/>
+    <text x="65" y="25" font-family="'SF Mono', ui-monospace, monospace" font-size="12" fill="#F87171" text-anchor="middle" font-weight="700">DNAT</text>
+  </g>
+
+  <g stroke="#58a6ff" stroke-width="1.1" opacity="0.6" fill="none">
+    <line x1="498" y1="116" x2="558" y2="116" stroke-dasharray="3,3"/>
+  </g>
+  <polygon points="558,112 566,116 558,120" fill="#58a6ff" opacity="0.7"/>
+
+  <g transform="translate(574, 96)">
+    <rect width="272" height="40" rx="6" fill="#58a6ff1a" stroke="#58a6ff" stroke-width="1.1" stroke-opacity="0.6"/>
+    <text x="136" y="18" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#8ab4f8" text-anchor="middle" font-weight="700">arrives at 10.0.1.5</text>
+    <text x="136" y="32" font-family="'SF Mono', ui-monospace, monospace" font-size="10" fill="#a1a1aa" text-anchor="middle">dest IP rewritten</text>
+  </g>
+
+  <!-- Footnote -->
+  <text x="24" y="158" font-family="'Segoe UI', sans-serif" font-size="9" fill="#71717a">The instance OS only sees its private IP (10.0.1.5) — the public address is managed entirely by OVN's dnat_and_snat rule.</text>
+</svg>

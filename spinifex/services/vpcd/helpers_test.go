@@ -75,3 +75,30 @@ func TestIsMacvlanMode_Macvlan(t *testing.T) {
 	h := NewTopologyHandler(nil, WithBridgeMode(BridgeModeMacvlan))
 	assert.True(t, h.isMacvlanMode())
 }
+
+func TestIsMacvlanMode_Veth(t *testing.T) {
+	h := NewTopologyHandler(nil, WithBridgeMode(BridgeModeVeth))
+	assert.False(t, h.isMacvlanMode(), "veth mode is not macvlan")
+}
+
+// --- useCentralizedNAT ---
+
+func TestUseCentralizedNAT_Default(t *testing.T) {
+	h := NewTopologyHandler(nil)
+	assert.True(t, h.useCentralizedNAT(), "default (empty) should use centralized NAT")
+}
+
+func TestUseCentralizedNAT_Macvlan(t *testing.T) {
+	h := NewTopologyHandler(nil, WithBridgeMode(BridgeModeMacvlan))
+	assert.True(t, h.useCentralizedNAT())
+}
+
+func TestUseCentralizedNAT_Veth(t *testing.T) {
+	h := NewTopologyHandler(nil, WithBridgeMode(BridgeModeVeth))
+	assert.True(t, h.useCentralizedNAT(), "veth mode should use centralized NAT")
+}
+
+func TestUseCentralizedNAT_Direct(t *testing.T) {
+	h := NewTopologyHandler(nil, WithBridgeMode(BridgeModeDirect))
+	assert.False(t, h.useCentralizedNAT(), "direct bridge should use distributed NAT")
+}

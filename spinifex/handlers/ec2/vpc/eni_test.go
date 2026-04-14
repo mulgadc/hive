@@ -1,11 +1,13 @@
 package handlers_ec2_vpc
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/mulgadc/spinifex/spinifex/testutil"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -762,4 +764,95 @@ func TestDescribeNetworkInterfaces_FilterByAttachmentStatus(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, out.NetworkInterfaces, 1)
 	assert.NotEqual(t, eni1, *out.NetworkInterfaces[0].NetworkInterfaceId)
+}
+
+// --- isEIPOwned tests ---
+
+// setupEIPTestService creates a VPC service with an EIP KV bucket wired in.
+func setupEIPTestService(t *testing.T) (*VPCServiceImpl, nats.KeyValue) {
+	t.Helper()
+	_, nc, js := testutil.StartTestJetStream(t)
+
+	svc, err := NewVPCServiceImplWithNATS(nil, nc)
+	require.NoError(t, err)
+
+	kv, err := js.CreateKeyValue(&nats.KeyValueConfig{Bucket: "eip-test"})
+	require.NoError(t, err)
+	svc.eipKV = kv
+
+	return svc, kv
+}
+
+func putEIPRecord(t *testing.T, kv nats.KeyValue, key, eniID string) {
+	t.Helper()
+	data, err := json.Marshal(struct {
+		ENIId string `json:"eni_id"`
+	}{ENIId: eniID})
+	require.NoError(t, err)
+	_, err = kv.Put(key, data)
+	require.NoError(t, err)
+}
+
+func TestIsEIPOwned_NilKV(t *testing.T) {
+	svc := &VPCServiceImpl{eipKV: nil}
+
+	owned, err := svc.isEIPOwned("eni-111", testAccountID)
+	assert.NoError(t, err)
+	assert.False(t, owned)
+}
+
+func TestIsEIPOwned_NoKeys(t *testing.T) {
+	svc, _ := setupEIPTestService(t)
+
+	owned, err := svc.isEIPOwned("eni-111", testAccountID)
+	assert.NoError(t, err)
+	assert.False(t, owned)
+}
+
+func TestIsEIPOwned_MatchingENI(t *testing.T) {
+	svc, kv := setupEIPTestService(t)
+	putEIPRecord(t, kv, testAccountID+".eipalloc-001", "eni-111")
+
+	owned, err := svc.isEIPOwned("eni-111", testAccountID)
+	assert.NoError(t, err)
+	assert.True(t, owned)
+}
+
+func TestIsEIPOwned_NonMatchingENI(t *testing.T) {
+	svc, kv := setupEIPTestService(t)
+	putEIPRecord(t, kv, testAccountID+".eipalloc-001", "eni-222")
+
+	owned, err := svc.isEIPOwned("eni-111", testAccountID)
+	assert.NoError(t, err)
+	assert.False(t, owned)
+}
+
+func TestIsEIPOwned_WrongAccountPrefix(t *testing.T) {
+	svc, kv := setupEIPTestService(t)
+	putEIPRecord(t, kv, "999999999999.eipalloc-001", "eni-111")
+
+	owned, err := svc.isEIPOwned("eni-111", testAccountID)
+	assert.NoError(t, err)
+	assert.False(t, owned)
+}
+
+func TestIsEIPOwned_MalformedJSON(t *testing.T) {
+	svc, kv := setupEIPTestService(t)
+	_, err := kv.Put(testAccountID+".eipalloc-001", []byte("not json"))
+	require.NoError(t, err)
+
+	owned, err := svc.isEIPOwned("eni-111", testAccountID)
+	assert.NoError(t, err)
+	assert.False(t, owned)
+}
+
+func TestIsEIPOwned_MultipleRecords_OneMatches(t *testing.T) {
+	svc, kv := setupEIPTestService(t)
+	putEIPRecord(t, kv, testAccountID+".eipalloc-001", "eni-aaa")
+	putEIPRecord(t, kv, testAccountID+".eipalloc-002", "eni-target")
+	putEIPRecord(t, kv, testAccountID+".eipalloc-003", "eni-bbb")
+
+	owned, err := svc.isEIPOwned("eni-target", testAccountID)
+	assert.NoError(t, err)
+	assert.True(t, owned)
 }

@@ -67,18 +67,18 @@ build-installer:
 	@echo -e "\n....Building spinifex-installer"
 	go build -ldflags "-s -w" -o ./bin/spinifex-installer cmd/installer/main.go
 
-build-alb-agent:
-	@echo -e "\n....Building alb-agent (static)"
-	CGO_ENABLED=0 go build -ldflags "-s -w" -o ./bin/alb-agent cmd/alb-agent/main.go
+build-lb-agent:
+	@echo -e "\n....Building lb-agent (static)"
+	CGO_ENABLED=0 go build -ldflags "-s -w" -o ./bin/lb-agent cmd/lb-agent/main.go
 
-build-system-image: ## Build a system image from manifest (use IMAGE=alb)
+build-system-image: ## Build a system image from manifest (use IMAGE=lb)
 ifndef IMAGE
-	$(error IMAGE is required. Usage: make build-system-image IMAGE=alb)
+	$(error IMAGE is required. Usage: make build-system-image IMAGE=lb)
 endif
 	./scripts/build-system-image.sh scripts/images/$(IMAGE).conf
 
-build-alb-image: ## Build ALB Alpine image
-	$(MAKE) build-system-image IMAGE=alb
+build-lb-image: ## Build LB Alpine image
+	$(MAKE) build-system-image IMAGE=lb
 
 go_run:
 	@echo -e "\n....Running $(GO_PROJECT_NAME)...."
@@ -222,7 +222,7 @@ distro-arm64:
 distro-clean:
 	rm -rf dist/
 
-.PHONY: build build-ui build-installer build-alb-agent build-system-image build-alb-image go_build go_run preflight test test-cover test-race diff-coverage bench run \
+.PHONY: build build-ui build-installer build-lb-agent build-system-image build-lb-image go_build go_run preflight test test-cover test-race diff-coverage bench run \
 	deploy reinstall clean \
 	install-system install-go install-aws quickinstall \
 	lint fix govulncheck \

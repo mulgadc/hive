@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/mulgadc/spinifex/spinifex/config"
+	"github.com/mulgadc/spinifex/spinifex/migrate"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -44,8 +45,8 @@ func NewAccountSettingsServiceImplWithNATS(cfg *config.Config, natsConn *nats.Co
 	if err != nil {
 		return nil, fmt.Errorf("failed to create account settings KV bucket: %w", err)
 	}
-	if err := utils.WriteVersion(settingsKV, KVBucketAccountSettingsVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketAccountSettings, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketAccountSettings, settingsKV, KVBucketAccountSettingsVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketAccountSettings, err)
 	}
 
 	slog.Info("Account settings service initialized with JetStream KV", "bucket", KVBucketAccountSettings)

@@ -8,7 +8,16 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-const defaultTimeout = 30 * time.Second
+const (
+	defaultTimeout = 30 * time.Second
+	// longRunningTimeout covers operations that synchronously launch or tear
+	// down ALB frontend VMs (DHCP lease + QEMU boot / QMP shutdown + QEMU exit).
+	// A healthy launch is ~45s on a warm box; shutdown can take tens of seconds
+	// if QMP is slow. Until CreateLoadBalancer is made fully async, we keep a
+	// wide margin so Terraform's AWS provider doesn't retry mid-flight and then
+	// hit DuplicateLoadBalancerName on the second attempt.
+	longRunningTimeout = 5 * time.Minute
+)
 
 // NATSELBv2Service handles ELBv2 operations via NATS messaging.
 type NATSELBv2Service struct {
@@ -21,7 +30,7 @@ func NewNATSELBv2Service(conn *nats.Conn) ELBv2Service {
 }
 
 func (s *NATSELBv2Service) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInput, accountID string) (*elbv2.CreateLoadBalancerOutput, error) {
-	return utils.NATSRequest[elbv2.CreateLoadBalancerOutput](s.natsConn, "elbv2.CreateLoadBalancer", input, defaultTimeout, accountID)
+	return utils.NATSRequest[elbv2.CreateLoadBalancerOutput](s.natsConn, "elbv2.CreateLoadBalancer", input, longRunningTimeout, accountID)
 }
 
 func (s *NATSELBv2Service) DeleteLoadBalancer(input *elbv2.DeleteLoadBalancerInput, accountID string) (*elbv2.DeleteLoadBalancerOutput, error) {
@@ -66,4 +75,32 @@ func (s *NATSELBv2Service) DeleteListener(input *elbv2.DeleteListenerInput, acco
 
 func (s *NATSELBv2Service) DescribeListeners(input *elbv2.DescribeListenersInput, accountID string) (*elbv2.DescribeListenersOutput, error) {
 	return utils.NATSRequest[elbv2.DescribeListenersOutput](s.natsConn, "elbv2.DescribeListeners", input, defaultTimeout, accountID)
+}
+
+func (s *NATSELBv2Service) DescribeTags(input *elbv2.DescribeTagsInput, accountID string) (*elbv2.DescribeTagsOutput, error) {
+	return utils.NATSRequest[elbv2.DescribeTagsOutput](s.natsConn, "elbv2.DescribeTags", input, defaultTimeout, accountID)
+}
+
+func (s *NATSELBv2Service) ModifyTargetGroupAttributes(input *elbv2.ModifyTargetGroupAttributesInput, accountID string) (*elbv2.ModifyTargetGroupAttributesOutput, error) {
+	return utils.NATSRequest[elbv2.ModifyTargetGroupAttributesOutput](s.natsConn, "elbv2.ModifyTargetGroupAttributes", input, defaultTimeout, accountID)
+}
+
+func (s *NATSELBv2Service) DescribeTargetGroupAttributes(input *elbv2.DescribeTargetGroupAttributesInput, accountID string) (*elbv2.DescribeTargetGroupAttributesOutput, error) {
+	return utils.NATSRequest[elbv2.DescribeTargetGroupAttributesOutput](s.natsConn, "elbv2.DescribeTargetGroupAttributes", input, defaultTimeout, accountID)
+}
+
+func (s *NATSELBv2Service) ModifyLoadBalancerAttributes(input *elbv2.ModifyLoadBalancerAttributesInput, accountID string) (*elbv2.ModifyLoadBalancerAttributesOutput, error) {
+	return utils.NATSRequest[elbv2.ModifyLoadBalancerAttributesOutput](s.natsConn, "elbv2.ModifyLoadBalancerAttributes", input, defaultTimeout, accountID)
+}
+
+func (s *NATSELBv2Service) DescribeLoadBalancerAttributes(input *elbv2.DescribeLoadBalancerAttributesInput, accountID string) (*elbv2.DescribeLoadBalancerAttributesOutput, error) {
+	return utils.NATSRequest[elbv2.DescribeLoadBalancerAttributesOutput](s.natsConn, "elbv2.DescribeLoadBalancerAttributes", input, defaultTimeout, accountID)
+}
+
+func (s *NATSELBv2Service) LBAgentHeartbeat(input *LBAgentHeartbeatInput, accountID string) (*LBAgentHeartbeatOutput, error) {
+	return utils.NATSRequest[LBAgentHeartbeatOutput](s.natsConn, "elbv2.LBAgentHeartbeat", input, defaultTimeout, accountID)
+}
+
+func (s *NATSELBv2Service) GetLBConfig(input *GetLBConfigInput, accountID string) (*GetLBConfigOutput, error) {
+	return utils.NATSRequest[GetLBConfigOutput](s.natsConn, "elbv2.GetLBConfig", input, defaultTimeout, accountID)
 }

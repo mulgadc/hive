@@ -4,55 +4,9 @@ Spinifex is an AWS-compatible infrastructure platform for bare-metal, edge, and 
 
 ## High-Level Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              AWS SDK / CLI                                  │
-│                    (aws ec2 run-instances --endpoint-url ...)               │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                      │
-                                      │ HTTPS (SigV4 Auth)
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           AWS Gateway (Port 9999)                           │
-│                                                                             │
-│   • TLS termination                    • AWS SigV4 authentication           │
-│   • EC2 Query Protocol parsing         • Routes to service handlers         │
-│   • XML response generation            • NATS client connection             │
-│                                                                             │
-│   File: spinifex/services/awsgw/awsgw.go                                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                      │
-                                      │ JSON over NATS
-                                      ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            NATS Message Broker                              │
-│                                                                             │
-│   Topics:                              Queue Groups:                        │
-│   • ec2.RunInstances                   • spinifex-workers (load balanced)       │
-│   • ec2.DescribeInstances              • No queue (fan-out to all nodes)    │
-│   • ec2.cmd.{instanceID}              (per-instance start/stop/terminate)   │
-│   • ebs.mount / ebs.unmount                                                 │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                      │
-                    ┌─────────────────┼─────────────────┐
-                    ▼                 ▼                 ▼
-┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐
-│   Spinifex Daemon        │ │   Spinifex Daemon        │ │   Spinifex Daemon        │
-│   (Node 1)           │ │   (Node 2)           │ │   (Node N)           │
-│                      │ │                      │ │                      │
-│ • NATS subscriber    │ │ • NATS subscriber    │ │ • NATS subscriber    │
-│ • Resource manager   │ │ • Resource manager   │ │ • Resource manager   │
-│ • QEMU/KVM launcher  │ │ • QEMU/KVM launcher  │ │ • QEMU/KVM launcher  │
-│ • QMP monitoring     │ │ • QMP monitoring     │ │ • QMP monitoring     │
-│                      │ │                      │ │                      │
-│ File: daemon.go      │ │ File: daemon.go      │ │ File: daemon.go      │
-└──────────────────────┘ └──────────────────────┘ └──────────────────────┘
-          │                       │                       │
-          ▼                       ▼                       ▼
-┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐
-│   QEMU/KVM VMs       │ │   QEMU/KVM VMs       │ │   QEMU/KVM VMs       │
-└──────────────────────┘ └──────────────────────┘ └──────────────────────┘
-```
+<p align="center">
+  <img src="../.github/assets/design-architecture.svg" alt="Spinifex high-level architecture — AWS SDK, gateway, NATS broker, per-node daemons, QEMU/KVM VMs" width="900">
+</p>
 
 ## Request Flow
 

@@ -34,9 +34,13 @@ if [[ ! -f "$MANIFEST" ]]; then
 fi
 
 DO_IMPORT=false
-if [[ "${1:-}" == "--import" ]]; then
-    DO_IMPORT=true
-fi
+QUIET=false
+for arg in "$@"; do
+    case "$arg" in
+        --import) DO_IMPORT=true ;;
+        --quiet)  QUIET=true ;;
+    esac
+done
 
 # Source the manifest
 # shellcheck source=/dev/null
@@ -63,9 +67,16 @@ cleanup() {
     echo "Cleaning up..."
     sudo umount "${MOUNT_DIR}" 2>/dev/null || true
     sudo qemu-nbd --disconnect "${NBD_DEV}" 2>/dev/null || true
+    exec 9>&- 2>/dev/null || true  # release nbd lock if held
     echo "Done."
 }
 trap cleanup EXIT
+
+# In quiet mode, redirect build output to /dev/null (import output still shown)
+if [[ "$QUIET" == true ]]; then
+    exec 3>&1         # save original stdout
+    exec 1>/dev/null  # suppress build output
+fi
 
 echo "=== System Image Builder ==="
 echo "Image:   ${IMAGE_NAME} — ${IMAGE_DESCRIPTION:-}"
@@ -112,6 +123,39 @@ if [[ -n "${INSTALL_BINARIES:-}" ]]; then
     done
 fi
 
+# Serialize the entire image build with flock — concurrent builds on the same
+# host (e.g. CI single-node + multi-node jobs) share /dev/nbd0 and BUILD_DIR.
+NBD_LOCK="/tmp/build-system-image.lock"
+echo "Acquiring build lock..."
+exec 9>"$NBD_LOCK"
+flock 9
+echo "Lock acquired"
+
+# If the raw image was built recently (< 10 min), skip the entire build.
+# This avoids duplicate work when concurrent CI jobs build the same image.
+if [[ -f "$OUTPUT_RAW" ]] && [[ $(( $(date +%s) - $(stat -c %Y "$OUTPUT_RAW") )) -lt 600 ]]; then
+    echo "=== Skipping build — $OUTPUT_RAW is fresh (< 10 min old) ==="
+
+    # Restore stdout if suppressed, then jump to import
+    if [[ "$QUIET" == true ]]; then
+        exec 1>&3 3>&-
+    fi
+
+    echo ""
+    echo "=== Build complete (cached) ==="
+    echo "  raw: $OUTPUT_RAW ($(du -h "$OUTPUT_RAW" | cut -f1))"
+
+    if [[ "$DO_IMPORT" == true ]]; then
+        echo "Importing as AMI..."
+        IMPORT_ARGS=(--file "$OUTPUT_RAW" --distro alpine --version "${ALPINE_VERSION}" --arch x86_64)
+        if [[ -n "${SYSTEM_TAG:-}" ]]; then
+            IMPORT_ARGS+=(--tag "$SYSTEM_TAG")
+        fi
+        (cd "$PROJECT_DIR" && ./bin/spx admin images import "${IMPORT_ARGS[@]}")
+    fi
+    exit 0
+fi
+
 mkdir -p "$BUILD_DIR" "$MOUNT_DIR"
 
 # Step 1: Download Alpine cloud image
@@ -133,6 +177,7 @@ else
 fi
 
 # Step 2: Copy image for customization
+rm -f "$OUTPUT_IMAGE"
 echo "Copying image for customization..."
 cp "${BUILD_DIR}/${ALPINE_IMAGE}" "$OUTPUT_IMAGE"
 
@@ -148,6 +193,14 @@ if [[ ! -e "${NBD_DEV}" ]]; then
 fi
 sudo qemu-nbd --disconnect "${NBD_DEV}" 2>/dev/null || true
 sudo qemu-nbd --connect="${NBD_DEV}" "$OUTPUT_IMAGE"
+
+# Wait for the nbd device to be ready (kernel needs time to scan the block device)
+for i in $(seq 1 10); do
+    if sudo blockdev --getsize64 "${NBD_DEV}" &>/dev/null; then
+        break
+    fi
+    sleep 1
+done
 sleep 1
 
 # Alpine cloud images have ext4 directly on the block device (no partition table).
@@ -251,6 +304,11 @@ sudo qemu-nbd --disconnect "${NBD_DEV}"
 echo "Converting to raw format..."
 qemu-img convert -f qcow2 -O raw "$OUTPUT_IMAGE" "$OUTPUT_RAW"
 
+# Restore stdout if suppressed
+if [[ "$QUIET" == true ]]; then
+    exec 1>&3 3>&-
+fi
+
 echo ""
 echo "=== Build complete ==="
 echo "  Image: ${IMAGE_NAME}"
@@ -260,16 +318,19 @@ echo ""
 
 if [[ "$DO_IMPORT" == true ]]; then
     echo "Importing as AMI..."
-    (cd "$PROJECT_DIR" && ./bin/spx admin images import \
-        --file "$OUTPUT_RAW" \
-        --distro alpine \
-        --version "${ALPINE_VERSION}-${IMAGE_NAME}" \
-        --arch x86_64 \
-        --config "$HOME/spinifex/config/spinifex.toml")
+    IMPORT_ARGS=(--file "$OUTPUT_RAW" --distro alpine --version "${ALPINE_VERSION}" --arch x86_64)
+    if [[ -n "${SYSTEM_TAG:-}" ]]; then
+        IMPORT_ARGS+=(--tag "$SYSTEM_TAG")
+    fi
+    (cd "$PROJECT_DIR" && sudo -u spinifex-storage ./bin/spx admin images import "${IMPORT_ARGS[@]}")
 else
     echo "To import as AMI, run:"
     echo "  cd $PROJECT_DIR && ./bin/spx admin images import \\"
     echo "    --file $OUTPUT_RAW \\"
-    echo "    --distro alpine --version ${ALPINE_VERSION}-${IMAGE_NAME} --arch x86_64 \\"
-    echo "    --config \$HOME/spinifex/config/spinifex.toml"
+    if [[ -n "${SYSTEM_TAG:-}" ]]; then
+        echo "    --distro alpine --version ${ALPINE_VERSION} --arch x86_64 \\"
+        echo "    --tag ${SYSTEM_TAG}"
+    else
+        echo "    --distro alpine --version ${ALPINE_VERSION} --arch x86_64"
+    fi
 fi

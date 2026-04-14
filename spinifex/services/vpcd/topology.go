@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/mulgadc/spinifex/spinifex/services/vpcd/nbdb"
@@ -79,6 +80,10 @@ const (
 	// Enables distributed NAT and avoids macvlan workarounds. Only safe when
 	// the WAN NIC is NOT the SSH/management NIC.
 	BridgeModeDirect = "direct"
+	// BridgeModeVeth uses a veth pair to link a Linux bridge (br-wan) to an
+	// OVS bridge (br-ext). Requires centralized NAT like macvlan because the
+	// Linux bridge intermediary breaks distributed NAT hairpin routing.
+	BridgeModeVeth = "veth"
 )
 
 // TopologyHandler translates VPC lifecycle NATS events into OVN NB DB operations.
@@ -117,8 +122,8 @@ func WithChassisNames(names []string) TopologyOption {
 	}
 }
 
-// WithBridgeMode sets the external bridge mode ("direct" or "macvlan").
-// Direct bridge enables distributed NAT; macvlan uses centralized NAT.
+// WithBridgeMode sets the external bridge mode ("direct", "macvlan", or "veth").
+// Direct bridge enables distributed NAT; macvlan and veth use centralized NAT.
 // Defaults to macvlan if not set (backward-compatible).
 func WithBridgeMode(mode string) TopologyOption {
 	return func(h *TopologyHandler) {
@@ -129,6 +134,14 @@ func WithBridgeMode(mode string) TopologyOption {
 // isMacvlanMode returns true if the external bridge uses a macvlan interface.
 // This is the default when bridgeMode is unset for backward compatibility.
 func (h *TopologyHandler) isMacvlanMode() bool {
+	return h.bridgeMode == BridgeModeMacvlan || h.bridgeMode == ""
+}
+
+// useCentralizedNAT returns true if the bridge mode requires centralized NAT.
+// Macvlan and veth modes both need centralized NAT — macvlan because of MAC
+// filtering, veth because the Linux bridge intermediary breaks distributed NAT
+// hairpin routing. Only direct bridge mode supports distributed NAT.
+func (h *TopologyHandler) useCentralizedNAT() bool {
 	return h.bridgeMode != BridgeModeDirect
 }
 
@@ -253,7 +266,7 @@ func (h *TopologyHandler) handleVPCCreate(msg *nats.Msg) {
 		Name: routerName,
 		ExternalIDs: map[string]string{
 			"spinifex:vpc_id": evt.VpcId,
-			"spinifex:vni":    fmt.Sprintf("%d", evt.VNI),
+			"spinifex:vni":    strconv.FormatInt(evt.VNI, 10),
 		},
 	}
 
@@ -638,10 +651,11 @@ func (h *TopologyHandler) handleIGWAttach(msg *nats.Msg) {
 		"network_name": "external",
 	}
 	// nat-addresses=router: OVN sends gratuitous ARPs for all NAT external IPs
-	// using the router port MAC. Required for macvlan-based external bridges
-	// where the macvlan MAC matches the router MAC. Not needed for direct bridge
-	// since OVS sees all traffic on the wire without MAC filtering.
-	if h.isMacvlanMode() {
+	// using the router port MAC. Required for centralized NAT modes (macvlan,
+	// veth) so that ARP replies for NAT IPs reach hosts correctly. Not needed
+	// for direct bridge since OVS sees all traffic on the wire without MAC
+	// filtering and distributed NAT handles ARP per-chassis.
+	if h.useCentralizedNAT() {
 		localnetOpts["nat-addresses"] = "router"
 	}
 	localnetPort := &nbdb.LogicalSwitchPort{
@@ -895,11 +909,21 @@ func (h *TopologyHandler) handleAddNAT(msg *nats.Msg) {
 			"spinifex:public_ip": evt.ExternalIP,
 		},
 	}
-	if !h.isMacvlanMode() && evt.MAC != "" && evt.PortName != "" {
+	if !h.useCentralizedNAT() && evt.MAC != "" && evt.PortName != "" {
 		natRule.ExternalMAC = &evt.MAC
 		natRule.LogicalPort = &evt.PortName
 		slog.Debug("vpcd: using distributed NAT (direct bridge)",
 			"external_ip", evt.ExternalIP, "port", evt.PortName, "mac", evt.MAC)
+	}
+
+	// Remove any stale NAT rule for the same external IP before adding the new
+	// one. Search ALL routers, not just the target — stale rules may exist on a
+	// different VPC's router when vpc.delete-nat (fire-and-forget) hasn't been
+	// processed before the IP was reused by a new VPC.
+	if removed, err := h.ovn.DeleteAllNATsByExternalIP(ctx, "dnat_and_snat", evt.ExternalIP); err != nil {
+		slog.Warn("vpcd: failed to clean up stale NAT rules for external IP", "external_ip", evt.ExternalIP, "err", err)
+	} else if removed > 0 {
+		slog.Info("vpcd: cleaned up stale NAT rules before re-add", "external_ip", evt.ExternalIP, "removed", removed)
 	}
 
 	if err := h.ovn.AddNAT(ctx, routerName, natRule); err != nil {
@@ -1107,7 +1131,7 @@ func (h *TopologyHandler) reconcileIGW(ctx context.Context, vpcId, igwId string)
 	reconcileLocalnetOpts := map[string]string{
 		"network_name": "external",
 	}
-	if h.isMacvlanMode() {
+	if h.useCentralizedNAT() {
 		reconcileLocalnetOpts["nat-addresses"] = "router"
 	}
 	localnetPort := &nbdb.LogicalSwitchPort{

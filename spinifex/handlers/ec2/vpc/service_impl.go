@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/config"
 	"github.com/mulgadc/spinifex/spinifex/filterutil"
+	"github.com/mulgadc/spinifex/spinifex/migrate"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -71,6 +73,17 @@ type VPCServiceImpl struct {
 	sgKV     nats.KeyValue
 	rtbKV    nats.KeyValue // route table bucket for auto-creating main route table
 	ipam     *IPAM
+
+	// Optional: injected after construction for public IP cleanup in DeleteNetworkInterface.
+	externalIPAM *ExternalIPAM
+	eipKV        nats.KeyValue
+}
+
+// SetExternalIPAM injects external IPAM and EIP KV store references so that
+// DeleteNetworkInterface can release auto-assigned public IPs and NAT rules.
+func (s *VPCServiceImpl) SetExternalIPAM(ipam *ExternalIPAM, eipKV nats.KeyValue) {
+	s.externalIPAM = ipam
+	s.eipKV = eipKV
 }
 
 // NewVPCServiceImplWithNATS creates a VPC service with NATS JetStream for persistence
@@ -84,40 +97,40 @@ func NewVPCServiceImplWithNATS(cfg *config.Config, natsConn *nats.Conn) (*VPCSer
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketVPCs, err)
 	}
-	if err := utils.WriteVersion(vpcKV, KVBucketVPCsVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketVPCs, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketVPCs, vpcKV, KVBucketVPCsVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketVPCs, err)
 	}
 
 	subnetKV, err := utils.GetOrCreateKVBucket(js, KVBucketSubnets, 10)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketSubnets, err)
 	}
-	if err := utils.WriteVersion(subnetKV, KVBucketSubnetsVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketSubnets, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketSubnets, subnetKV, KVBucketSubnetsVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketSubnets, err)
 	}
 
 	vniKV, err := utils.GetOrCreateKVBucket(js, KVBucketVNICounter, 10)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketVNICounter, err)
 	}
-	if err := utils.WriteVersion(vniKV, KVBucketVNICounterVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketVNICounter, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketVNICounter, vniKV, KVBucketVNICounterVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketVNICounter, err)
 	}
 
 	eniKV, err := utils.GetOrCreateKVBucket(js, KVBucketENIs, 10)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketENIs, err)
 	}
-	if err := utils.WriteVersion(eniKV, KVBucketENIsVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketENIs, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketENIs, eniKV, KVBucketENIsVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketENIs, err)
 	}
 
 	sgKV, err := utils.GetOrCreateKVBucket(js, KVBucketSecurityGroups, 10)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create KV bucket %s: %w", KVBucketSecurityGroups, err)
 	}
-	if err := utils.WriteVersion(sgKV, KVBucketSecurityGroupsVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketSecurityGroups, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketSecurityGroups, sgKV, KVBucketSecurityGroupsVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketSecurityGroups, err)
 	}
 
 	rtbKV, err := utils.GetOrCreateKVBucket(js, "spinifex-vpc-route-tables", 10)
@@ -635,7 +648,7 @@ func vpcMatchesFilters(record *VPCRecord, accountID string, filters map[string][
 		case "cidr-block":
 			field = record.CidrBlock
 		case "is-default":
-			field = fmt.Sprintf("%t", record.IsDefault)
+			field = strconv.FormatBool(record.IsDefault)
 		case "owner-id":
 			field = accountID
 		default:
@@ -680,7 +693,7 @@ func subnetMatchesFilters(record *SubnetRecord, filters map[string][]string) boo
 		case "state":
 			field = record.State
 		case "default-for-az":
-			field = fmt.Sprintf("%t", record.IsDefault)
+			field = strconv.FormatBool(record.IsDefault)
 		default:
 			return false
 		}

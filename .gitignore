@@ -7,6 +7,9 @@
 !example.tfvars
 scripts/iac/proxmox/clusters/
 
+# Generated SSH private keys from terraform examples (e.g. local_file.nginx_pem)
+*.pem
+
 # Go workspace
 go.work
 go.work.sum

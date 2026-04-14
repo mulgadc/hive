@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/mulgadc/spinifex/spinifex/admin"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
+	"github.com/mulgadc/spinifex/spinifex/migrate"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
 )
@@ -69,40 +70,40 @@ func NewIAMServiceImpl(natsConn *nats.Conn, masterKey []byte, clusterSize int) (
 	if err != nil {
 		return nil, fmt.Errorf("init users bucket: %w", err)
 	}
-	if err := utils.WriteVersion(usersBucket, KVBucketUsersVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketUsers, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketUsers, usersBucket, KVBucketUsersVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketUsers, err)
 	}
 
 	accessKeysBucket, err := getOrCreateBucket(js, KVBucketAccessKeys, 5, replicas)
 	if err != nil {
 		return nil, fmt.Errorf("init access keys bucket: %w", err)
 	}
-	if err := utils.WriteVersion(accessKeysBucket, KVBucketAccessKeysVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketAccessKeys, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketAccessKeys, accessKeysBucket, KVBucketAccessKeysVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketAccessKeys, err)
 	}
 
 	policiesBucket, err := getOrCreateBucket(js, KVBucketPolicies, 10, replicas)
 	if err != nil {
 		return nil, fmt.Errorf("init policies bucket: %w", err)
 	}
-	if err := utils.WriteVersion(policiesBucket, KVBucketPoliciesVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketPolicies, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketPolicies, policiesBucket, KVBucketPoliciesVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketPolicies, err)
 	}
 
 	accountsBucket, err := getOrCreateBucket(js, KVBucketAccounts, 5, replicas)
 	if err != nil {
 		return nil, fmt.Errorf("init accounts bucket: %w", err)
 	}
-	if err := utils.WriteVersion(accountsBucket, KVBucketAccountsVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketAccounts, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketAccounts, accountsBucket, KVBucketAccountsVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketAccounts, err)
 	}
 
 	accountCounterBucket, err := getOrCreateBucket(js, KVBucketAccountCounter, 5, replicas)
 	if err != nil {
 		return nil, fmt.Errorf("init account counter bucket: %w", err)
 	}
-	if err := utils.WriteVersion(accountCounterBucket, KVBucketAccountCounterVersion); err != nil {
-		return nil, fmt.Errorf("write version to %s: %w", KVBucketAccountCounter, err)
+	if err := migrate.DefaultRegistry.RunKV(KVBucketAccountCounter, accountCounterBucket, KVBucketAccountCounterVersion); err != nil {
+		return nil, fmt.Errorf("migrate %s: %w", KVBucketAccountCounter, err)
 	}
 
 	decrypter, err := NewDecrypter(masterKey)
@@ -463,10 +464,8 @@ func (s *IAMServiceImpl) DeleteAccessKey(accountID string, input *iam.DeleteAcce
 		return nil, errors.New(awserrors.ErrorIAMNoSuchEntity)
 	}
 
-	if err := s.accessKeysBucket.Delete(accessKeyID); err != nil {
-		return nil, fmt.Errorf("delete access key: %w", err)
-	}
-
+	// Update user record first, then delete the key. This avoids orphaning the
+	// reference if a crash occurs between the two operations.
 	user.AccessKeys = remaining
 	userData, err := json.Marshal(user)
 	if err != nil {
@@ -475,6 +474,10 @@ func (s *IAMServiceImpl) DeleteAccessKey(accountID string, input *iam.DeleteAcce
 
 	if _, err := s.usersBucket.Put(userKVKey, userData); err != nil {
 		return nil, fmt.Errorf("update user: %w", err)
+	}
+
+	if err := s.accessKeysBucket.Delete(accessKeyID); err != nil {
+		return nil, fmt.Errorf("delete access key: %w", err)
 	}
 
 	slog.Info("IAM access key deleted", "accountID", accountID, "userName", userName, "accessKeyID", accessKeyID)

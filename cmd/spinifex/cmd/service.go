@@ -287,6 +287,7 @@ var viperblockStartCmd = &cobra.Command{
 
 		service, err := service.New("viperblock", &viperblockd.Config{
 			NatsHost:   nodeConfig.NATS.Host,
+			NatsToken:  nodeConfig.NATS.ACL.Token,
 			PluginPath: pluginPath,
 			S3Host:     nodeConfig.Predastore.Host,
 			Bucket:     nodeConfig.Predastore.Bucket,
@@ -866,7 +867,7 @@ func init() {
 
 	serviceCmd.AddCommand(viperblockCmd)
 
-	viperblockCmd.PersistentFlags().String("s3-host", "0.0.0.0:8443", "Predastore (S3) host URI")
+	viperblockCmd.PersistentFlags().String("s3-host", "", "Predastore (S3) host URI")
 	viper.BindEnv("s3-host", "SPINIFEX_VIPERBLOCK_S3_HOST")
 	viper.BindPFlag("s3-host", predastoreCmd.PersistentFlags().Lookup("s3-host"))
 

@@ -10,6 +10,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/awsec2query"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	gateway_elbv2 "github.com/mulgadc/spinifex/spinifex/gateway/elbv2"
+	handlers_elbv2 "github.com/mulgadc/spinifex/spinifex/handlers/elbv2"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 )
 
@@ -74,6 +75,27 @@ var elbv2Actions = map[string]ELBv2Handler{
 	}),
 	"DescribeListeners": elbv2Handler(func(input *elbv2.DescribeListenersInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_elbv2.DescribeListeners(input, gw.NATSConn, accountID)
+	}),
+	"DescribeTags": elbv2Handler(func(input *elbv2.DescribeTagsInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_elbv2.DescribeTags(input, gw.NATSConn, accountID)
+	}),
+	"LBAgentHeartbeat": elbv2Handler(func(input *handlers_elbv2.LBAgentHeartbeatInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_elbv2.LBAgentHeartbeat(input, gw.NATSConn, accountID)
+	}),
+	"GetLBConfig": elbv2Handler(func(input *handlers_elbv2.GetLBConfigInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_elbv2.GetLBConfig(input, gw.NATSConn, accountID)
+	}),
+	"ModifyTargetGroupAttributes": elbv2Handler(func(input *elbv2.ModifyTargetGroupAttributesInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_elbv2.ModifyTargetGroupAttributes(input, gw.NATSConn, accountID)
+	}),
+	"DescribeTargetGroupAttributes": elbv2Handler(func(input *elbv2.DescribeTargetGroupAttributesInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_elbv2.DescribeTargetGroupAttributes(input, gw.NATSConn, accountID)
+	}),
+	"ModifyLoadBalancerAttributes": elbv2Handler(func(input *elbv2.ModifyLoadBalancerAttributesInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_elbv2.ModifyLoadBalancerAttributes(input, gw.NATSConn, accountID)
+	}),
+	"DescribeLoadBalancerAttributes": elbv2Handler(func(input *elbv2.DescribeLoadBalancerAttributesInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_elbv2.DescribeLoadBalancerAttributes(input, gw.NATSConn, accountID)
 	}),
 }
 

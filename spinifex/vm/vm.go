@@ -24,6 +24,15 @@ type InstanceHealthState struct {
 	FirstCrashTime  time.Time `json:"first_crash_time"`
 }
 
+// ExtraENI describes an additional VPC network interface attached to a VM
+// beyond the primary ENI. Only system VMs (ALBs) use multiple ENIs today.
+type ExtraENI struct {
+	ENIID    string `json:"eni_id"`
+	ENIMac   string `json:"eni_mac"`
+	ENIIP    string `json:"eni_ip"`
+	SubnetID string `json:"subnet_id,omitempty"`
+}
+
 type VM struct {
 	ID           string        `json:"id"`
 	PID          int           `json:"pid"`
@@ -68,6 +77,12 @@ type VM struct {
 	ENIId  string `json:"eni_id,omitempty"`
 	ENIMac string `json:"eni_mac,omitempty"`
 
+	// ExtraENIs lists additional VPC NICs beyond the primary ENIId/ENIMac.
+	// Used by multi-AZ system VMs (ALBs with subnets in multiple subnets) —
+	// each entry gets its own tap device on br-int and its own QEMU NIC.
+	// Empty for customer EC2 instances and single-subnet ALBs.
+	ExtraENIs []ExtraENI `json:"extra_enis,omitempty"`
+
 	// Public IP auto-assigned from external IPAM pool (released on termination)
 	PublicIP     string `json:"public_ip,omitempty"`
 	PublicIPPool string `json:"public_ip_pool,omitempty"`
@@ -75,6 +90,11 @@ type VM struct {
 	// DevMAC is the MAC for the dev/hostfwd NIC (DEV_NETWORKING mode).
 	// Set before cloud-init ISO generation so netplan can suppress its default route.
 	DevMAC string `json:"dev_mac,omitempty"`
+
+	// Management NIC for system instance control plane (reaches host via br-mgmt).
+	MgmtMAC string `json:"mgmt_mac,omitempty"` // MAC address (02:a0:00 prefix)
+	MgmtIP  string `json:"mgmt_ip,omitempty"`  // Static IP on management subnet
+	MgmtTap string `json:"mgmt_tap,omitempty"` // TAP device name on host
 
 	// Placement group tracking (set during RunInstances when a placement group is specified)
 	PlacementGroupName string `json:"placement_group_name,omitempty"`
@@ -84,6 +104,11 @@ type VM struct {
 	// via the QEMU user-mode dev NIC. Used by ALB VMs to expose HTTP ports.
 	// Maps guest port → host port (host port filled in by StartInstance).
 	ExtraHostfwd map[int]int `json:"extra_hostfwd,omitempty"`
+
+	// ManagedBy identifies the Spinifex platform component that owns this
+	// VM (e.g. "elbv2"). Empty for customer-launched instances. The UI
+	// filters out tagged VMs from customer-facing listings.
+	ManagedBy string `json:"managed_by,omitempty"`
 }
 
 // ResetNodeLocalState zeroes out fields that are specific to the daemon node

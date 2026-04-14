@@ -75,30 +75,36 @@ local-hostname: {{.Hostname}}
 
 // cloudInitNetworkConfigWildcard enables DHCP on all NICs via wildcard match.
 // Used when there's no dual-NIC setup (non-VPC or VPC without DEV_NETWORKING).
+// The "e*" glob matches both traditional names (eth0, eth1 — Alpine/older
+// kernels) and predictable names (ens3, enp0s3 — systemd-based distros).
 const cloudInitNetworkConfigWildcard = `network:
   version: 2
   ethernets:
     allnics:
       match:
-        name: "en*"
+        name: "e*"
       dhcp4: true
       dhcp-identifier: mac
 `
 
 // generateNetworkConfig produces the cloud-init network-config for the instance.
 //
-// When both eniMAC and devMAC are provided (VPC + DEV_NETWORKING), it generates
-// per-interface config that suppresses the default route on the dev/hostfwd NIC.
-// Without this, both NICs get DHCP default routes at equal metric, causing
-// nondeterministic routing — SSH via hostfwd times out and VPC traffic leaks.
+// Per-interface config is generated when eniMAC is present (VPC NIC). This allows
+// adding the mgmt NIC with a static IP and optionally the dev NIC with route
+// suppression. Without per-interface config, the wildcard fallback does DHCP on
+// all NICs — which won't work for the mgmt NIC (no DHCP server on br-mgmt).
+//
+// extraENIMACs configures additional VPC NICs for multi-subnet system VMs
+// (e.g. multi-AZ ALB VMs). Each extra MAC produces a DHCP ethernet block named
+// vpc1, vpc2, ... so each interface pulls its address from the subnet it lives in.
 //
 // The dev NIC still gets an IP via DHCP (needed for hostfwd port forwarding)
 // but dhcp4-overrides prevents it from installing routes or DNS.
-func generateNetworkConfig(eniMAC, devMAC string) string {
-	if eniMAC == "" || devMAC == "" {
+func generateNetworkConfig(eniMAC, devMAC, mgmtMAC, mgmtIP string, extraENIMACs []string) string {
+	if eniMAC == "" {
 		return cloudInitNetworkConfigWildcard
 	}
-	return fmt.Sprintf(`network:
+	cfg := fmt.Sprintf(`network:
   version: 2
   ethernets:
     vpc0:
@@ -106,7 +112,22 @@ func generateNetworkConfig(eniMAC, devMAC string) string {
         macaddress: "%s"
       dhcp4: true
       dhcp-identifier: mac
-    dev0:
+`, eniMAC)
+
+	for i, mac := range extraENIMACs {
+		if mac == "" {
+			continue
+		}
+		cfg += fmt.Sprintf(`    vpc%d:
+      match:
+        macaddress: "%s"
+      dhcp4: true
+      dhcp-identifier: mac
+`, i+1, mac)
+	}
+
+	if devMAC != "" {
+		cfg += fmt.Sprintf(`    dev0:
       match:
         macaddress: "%s"
       dhcp4: true
@@ -114,7 +135,21 @@ func generateNetworkConfig(eniMAC, devMAC string) string {
       dhcp4-overrides:
         use-routes: false
         use-dns: false
-`, eniMAC, devMAC)
+`, devMAC)
+	}
+
+	if mgmtMAC != "" && mgmtIP != "" {
+		cfg += fmt.Sprintf(`    mgmt0:
+      match:
+        macaddress: "%s"
+      addresses:
+        - "%s/24"
+`, mgmtMAC, mgmtIP)
+		// Route for multi-node is added via bootcmd in lbVMUserData (Alpine
+		// cloud-init does not support v2 routes under ethernets).
+	}
+
+	return cfg
 }
 
 type CloudInitData struct {
@@ -725,8 +760,13 @@ func (s *InstanceServiceImpl) createCloudInitISO(input *ec2.RunInstancesInput, i
 	}
 
 	// Add network-config: per-interface when VPC+dev (suppresses dev default route),
-	// wildcard DHCP otherwise.
-	networkConfig := generateNetworkConfig(instance.ENIMac, instance.DevMAC)
+	// wildcard DHCP otherwise. Extra ENI MACs produce additional DHCP NICs for
+	// multi-subnet system VMs (multi-AZ ALBs).
+	extraMACs := make([]string, 0, len(instance.ExtraENIs))
+	for _, extra := range instance.ExtraENIs {
+		extraMACs = append(extraMACs, extra.ENIMac)
+	}
+	networkConfig := generateNetworkConfig(instance.ENIMac, instance.DevMAC, instance.MgmtMAC, instance.MgmtIP, extraMACs)
 	err = writer.AddFile(strings.NewReader(networkConfig), "network-config")
 	if err != nil {
 		slog.Error("failed to add network-config file", "err", err)

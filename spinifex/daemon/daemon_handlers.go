@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -141,10 +140,15 @@ func (d *Daemon) handleNodeDiscover(msg *nats.Msg) {
 }
 
 // daemonIP extracts the IP portion from the daemon host (host:port format).
+// Returns 127.0.0.1 when the host is 0.0.0.0 since that bind address is not
+// a valid connect address and is excluded from cert SANs.
 func (d *Daemon) daemonIP() string {
 	host := d.config.Daemon.Host
 	if h, _, err := net.SplitHostPort(host); err == nil {
-		return h
+		host = h
+	}
+	if host == "0.0.0.0" {
+		return "127.0.0.1"
 	}
 	return host
 }
@@ -221,9 +225,6 @@ var roleHTTPClient = &http.Client{Timeout: 500 * time.Millisecond}
 
 var roleTLSHTTPClient = &http.Client{
 	Timeout: 500 * time.Millisecond,
-	Transport: &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // local self-signed cert
-	},
 }
 
 // fetchNATSRole queries a NATS /varz endpoint and returns "leader", "follower", or "".
@@ -292,6 +293,7 @@ func (d *Daemon) handleNodeVMs(msg *nats.Msg) {
 			InstanceID:   v.ID,
 			Status:       string(v.Status),
 			InstanceType: v.InstanceType,
+			ManagedBy:    v.ManagedBy,
 		}
 		// Get vCPU/memory from the resource manager's instance type info
 		if it, ok := d.resourceMgr.instanceTypes[v.InstanceType]; ok {
