@@ -53,9 +53,9 @@ func Load() (*install.Config, error) {
 // EjectAndReboot ejects the boot device (best-effort) then reboots.
 func EjectAndReboot() {
 	srcDev, _ := os.ReadFile("/run/iso-dev")
-	if disk := strings.TrimRight(strings.TrimSpace(string(srcDev)), "0123456789"); disk != "" {
-		slog.Info("autoinstall: ejecting boot device", "device", disk)
-		_ = exec.Command("eject", disk).Run()
+	if dev := strings.TrimSpace(string(srcDev)); dev != "" {
+		slog.Info("autoinstall: ejecting boot device", "device", dev)
+		_ = exec.Command("eject", dev).Run()
 	}
 
 	fmt.Println()
