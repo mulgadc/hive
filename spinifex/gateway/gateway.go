@@ -43,8 +43,9 @@ type GatewayConfig struct {
 	Region         string     // Region this gateway is running in
 	AZ             string     // Availability zone this gateway is running in
 	IAMService     handlers_iam.IAMService
-	Version        string // Build-time version string (set from cmd.Version)
-	Commit         string // Build-time commit hash (set from cmd.Commit)
+	RateLimiter    *AuthRateLimiter // Per-IP auth failure rate limiter
+	Version        string           // Build-time version string (set from cmd.Version)
+	Commit         string           // Build-time commit hash (set from cmd.Commit)
 }
 
 var supportedServices = map[string]bool{
@@ -90,6 +91,11 @@ func (gw *GatewayConfig) SetupRoutes() http.Handler {
 
 	// Set it as the default logger
 	slog.SetDefault(slogger)
+
+	// Initialize auth rate limiter if not already set (e.g. by tests).
+	if gw.RateLimiter == nil {
+		gw.RateLimiter = NewAuthRateLimiter()
+	}
 
 	r := chi.NewRouter()
 
