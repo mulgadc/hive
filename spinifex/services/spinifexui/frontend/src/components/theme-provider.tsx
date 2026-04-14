@@ -34,7 +34,7 @@ export function ThemeProvider({
   defaultTheme = "dark",
   storageKey = "ui-theme",
 }: ThemeProviderProps) {
-  const [theme, setThemeState] = useState<Theme>(() =>
+  const [theme, setTheme] = useState<Theme>(() =>
     getStoredTheme(storageKey, defaultTheme),
   )
 
@@ -65,7 +65,7 @@ export function ThemeProvider({
         } catch {
           // localStorage might be disabled - still update state
         }
-        setThemeState(newTheme)
+        setTheme(newTheme)
       },
     }),
     [theme, storageKey],
