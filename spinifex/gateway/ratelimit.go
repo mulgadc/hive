@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"log/slog"
 	"net"
 	"net/http"
@@ -40,34 +41,44 @@ type ipRecord struct {
 // AuthRateLimiter tracks per-IP authentication failure rates and enforces
 // escalating lockouts after repeated failures.
 type AuthRateLimiter struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	records map[string]*ipRecord
 	stop    chan struct{}
 	done    chan struct{}
 }
 
 // NewAuthRateLimiter creates and starts an AuthRateLimiter with background GC.
-func NewAuthRateLimiter() *AuthRateLimiter {
+// The GC goroutine stops when ctx is cancelled or Stop is called.
+func NewAuthRateLimiter(ctx context.Context) *AuthRateLimiter {
 	rl := &AuthRateLimiter{
 		records: make(map[string]*ipRecord),
 		stop:    make(chan struct{}),
 		done:    make(chan struct{}),
 	}
 	go rl.gcLoop()
+	go func() {
+		<-ctx.Done()
+		rl.Stop()
+	}()
 	return rl
 }
 
 // Stop cancels the background GC goroutine and waits for it to exit.
 func (rl *AuthRateLimiter) Stop() {
-	close(rl.stop)
+	select {
+	case <-rl.stop:
+		// Already stopped.
+	default:
+		close(rl.stop)
+	}
 	<-rl.done
 }
 
 // CheckIP returns nil if the IP is allowed to proceed, or an error string
 // matching ErrorRequestLimitExceeded if the IP is currently locked out.
 func (rl *AuthRateLimiter) CheckIP(ip string) string {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
 
 	rec, ok := rl.records[ip]
 	if !ok {
@@ -102,7 +113,7 @@ func (rl *AuthRateLimiter) RecordFailure(ip string) {
 
 	rec.failures = append(rec.failures, now)
 
-	if len(rec.failures) >= maxFailures {
+	if len(rec.failures) >= maxFailures && (rec.lockedUntil.IsZero() || now.After(rec.lockedUntil)) {
 		// Calculate lockout duration with escalating backoff.
 		lockout := initialLockout
 		for range rec.lockouts {
@@ -114,10 +125,11 @@ func (rl *AuthRateLimiter) RecordFailure(ip string) {
 		}
 		rec.lockedUntil = now.Add(lockout)
 		rec.lockouts++
+		rec.failures = nil // Reset for the next window after lockout.
 
 		slog.Warn("Rate limit: IP locked out",
 			"ip", ip,
-			"failures", len(rec.failures),
+			"failures", maxFailures,
 			"lockout_duration", lockout,
 		)
 	}

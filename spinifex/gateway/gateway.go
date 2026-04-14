@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -92,9 +93,9 @@ func (gw *GatewayConfig) SetupRoutes() http.Handler {
 	// Set it as the default logger
 	slog.SetDefault(slogger)
 
-	// Initialize auth rate limiter if not already set (e.g. by tests).
+	// Initialize auth rate limiter if not already set.
 	if gw.RateLimiter == nil {
-		gw.RateLimiter = NewAuthRateLimiter()
+		gw.RateLimiter = NewAuthRateLimiter(context.Background())
 	}
 
 	r := chi.NewRouter()
