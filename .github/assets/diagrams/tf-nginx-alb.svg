@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="480" viewBox="0 0 900 480">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0a0a"/>
+      <stop offset="100%" style="stop-color:#0d1117"/>
+    </linearGradient>
+    <linearGradient id="inet-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#3fb95022"/>
+      <stop offset="100%" style="stop-color:#3fb95008"/>
+    </linearGradient>
+    <linearGradient id="pub-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#3fb9501f"/>
+      <stop offset="100%" style="stop-color:#3fb95008"/>
+    </linearGradient>
+    <linearGradient id="priv-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#a855f71f"/>
+      <stop offset="100%" style="stop-color:#a855f708"/>
+    </linearGradient>
+  </defs>
+  <rect width="900" height="480" fill="url(#bg)" rx="12"/>
+
+  <text x="24" y="30" font-family="'Segoe UI', system-ui, sans-serif" font-size="11" fill="#a1a1aa" letter-spacing="2.5" font-weight="600">NGINX + ALB · VPC WITH PUBLIC AND PRIVATE SUBNETS</text>
+  <text x="876" y="30" font-family="'SF Mono', ui-monospace, monospace" font-size="10" fill="#71717a" text-anchor="end">10.20.0.0/16 · multi-AZ</text>
+
+  <!-- Internet -->
+  <rect x="350" y="54" width="200" height="40" rx="8" fill="url(#inet-grad)" stroke="#3fb950" stroke-width="1.1" stroke-opacity="0.55"/>
+  <text x="450" y="78" font-family="'SF Mono', ui-monospace, monospace" font-size="13" fill="#3fb950" text-anchor="middle" font-weight="700">Internet</text>
+
+  <!-- connector to IGW -->
+  <line x1="450" y1="94" x2="450" y2="116" stroke="#71717a" stroke-width="1" opacity="0.5"/>
+  <polygon points="446,112 454,112 450,120" fill="#71717a" opacity="0.7"/>
+
+  <!-- IGW -->
+  <rect x="380" y="122" width="140" height="44" rx="7" fill="#DC26261a" stroke="#DC2626" stroke-width="1.2" stroke-opacity="0.65"/>
+  <text x="450" y="142" font-family="'SF Mono', ui-monospace, monospace" font-size="13" fill="#F87171" text-anchor="middle" font-weight="700">IGW</text>
+  <text x="450" y="158" font-family="'Segoe UI', sans-serif" font-size="10" fill="#FCA5A5" text-anchor="middle">nginx-alb-igw</text>
+
+  <!-- Fan-out to two public subnets -->
+  <line x1="450" y1="166" x2="450" y2="184" stroke="#DC2626" stroke-width="1" stroke-dasharray="3,3" opacity="0.6"/>
+  <line x1="230" y1="184" x2="670" y2="184" stroke="#DC2626" stroke-width="1" stroke-dasharray="3,3" opacity="0.6"/>
+  <line x1="230" y1="184" x2="230" y2="202" stroke="#DC2626" stroke-width="1" stroke-dasharray="3,3" opacity="0.6"/>
+  <line x1="670" y1="184" x2="670" y2="202" stroke="#DC2626" stroke-width="1" stroke-dasharray="3,3" opacity="0.6"/>
+
+  <!-- public_a -->
+  <g transform="translate(108, 202)">
+    <rect width="244" height="104" rx="8" fill="url(#pub-grad)" stroke="#3fb950" stroke-width="1.2" stroke-opacity="0.55"/>
+    <text x="20" y="24" font-family="'SF Mono', ui-monospace, monospace" font-size="12" fill="#3fb950" font-weight="700">public_a</text>
+    <text x="224" y="24" font-family="'Segoe UI', sans-serif" font-size="9.5" fill="#7ee787" text-anchor="end">az-a</text>
+    <line x1="16" y1="32" x2="228" y2="32" stroke="#3fb950" stroke-opacity="0.3" stroke-width="0.5"/>
+
+    <rect x="20" y="42" width="200" height="22" rx="4" fill="#3fb9501a" stroke="#3fb950" stroke-opacity="0.5" stroke-width="0.6"/>
+    <text x="120" y="57" font-family="'SF Mono', ui-monospace, monospace" font-size="10.5" fill="#7ee787" text-anchor="middle" font-weight="600">ALB ENI</text>
+
+    <rect x="20" y="70" width="200" height="22" rx="4" fill="#3fb9501a" stroke="#3fb950" stroke-opacity="0.5" stroke-width="0.6"/>
+    <text x="120" y="85" font-family="'SF Mono', ui-monospace, monospace" font-size="10.5" fill="#7ee787" text-anchor="middle" font-weight="600">NAT GW</text>
+  </g>
+
+  <!-- public_b -->
+  <g transform="translate(548, 202)">
+    <rect width="244" height="104" rx="8" fill="url(#pub-grad)" stroke="#3fb950" stroke-width="1.2" stroke-opacity="0.55"/>
+    <text x="20" y="24" font-family="'SF Mono', ui-monospace, monospace" font-size="12" fill="#3fb950" font-weight="700">public_b</text>
+    <text x="224" y="24" font-family="'Segoe UI', sans-serif" font-size="9.5" fill="#7ee787" text-anchor="end">az-b</text>
+    <line x1="16" y1="32" x2="228" y2="32" stroke="#3fb950" stroke-opacity="0.3" stroke-width="0.5"/>
+
+    <rect x="20" y="56" width="200" height="22" rx="4" fill="#3fb9501a" stroke="#3fb950" stroke-opacity="0.5" stroke-width="0.6"/>
+    <text x="120" y="71" font-family="'SF Mono', ui-monospace, monospace" font-size="10.5" fill="#7ee787" text-anchor="middle" font-weight="600">ALB ENI</text>
+  </g>
+
+  <!-- SNAT arrow from public_a NAT → private row -->
+  <line x1="230" y1="306" x2="230" y2="340" stroke="#F87171" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.65"/>
+  <polygon points="226,336 234,336 230,344" fill="#F87171" opacity="0.8"/>
+  <rect x="256" y="314" width="240" height="20" rx="10" fill="#0a0a0a" stroke="#F87171" stroke-width="0.6" stroke-opacity="0.55"/>
+  <text x="376" y="328" font-family="'SF Mono', ui-monospace, monospace" font-size="10" fill="#FCA5A5" text-anchor="middle">SNAT for private subnets (egress)</text>
+
+  <!-- private_a -->
+  <g transform="translate(108, 350)">
+    <rect width="244" height="104" rx="8" fill="url(#priv-grad)" stroke="#a855f7" stroke-width="1.2" stroke-opacity="0.55"/>
+    <text x="20" y="24" font-family="'SF Mono', ui-monospace, monospace" font-size="12" fill="#c084fc" font-weight="700">private_a</text>
+    <text x="224" y="24" font-family="'Segoe UI', sans-serif" font-size="9.5" fill="#d8b4fe" text-anchor="end">az-a</text>
+    <line x1="16" y1="32" x2="228" y2="32" stroke="#a855f7" stroke-opacity="0.3" stroke-width="0.5"/>
+
+    <rect x="20" y="44" width="200" height="48" rx="5" fill="#a855f71a" stroke="#a855f7" stroke-opacity="0.5" stroke-width="0.6"/>
+    <text x="120" y="64" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#d8b4fe" text-anchor="middle" font-weight="700">nginx_1</text>
+    <text x="120" y="80" font-family="'Segoe UI', sans-serif" font-size="9.5" fill="#a1a1aa" text-anchor="middle">Debian 12 · cloud-init</text>
+  </g>
+
+  <!-- private_b -->
+  <g transform="translate(548, 350)">
+    <rect width="244" height="104" rx="8" fill="url(#priv-grad)" stroke="#a855f7" stroke-width="1.2" stroke-opacity="0.55"/>
+    <text x="20" y="24" font-family="'SF Mono', ui-monospace, monospace" font-size="12" fill="#c084fc" font-weight="700">private_b</text>
+    <text x="224" y="24" font-family="'Segoe UI', sans-serif" font-size="9.5" fill="#d8b4fe" text-anchor="end">az-b</text>
+    <line x1="16" y1="32" x2="228" y2="32" stroke="#a855f7" stroke-opacity="0.3" stroke-width="0.5"/>
+
+    <rect x="20" y="44" width="200" height="48" rx="5" fill="#a855f71a" stroke="#a855f7" stroke-opacity="0.5" stroke-width="0.6"/>
+    <text x="120" y="64" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#d8b4fe" text-anchor="middle" font-weight="700">nginx_2</text>
+    <text x="120" y="80" font-family="'Segoe UI', sans-serif" font-size="9.5" fill="#a1a1aa" text-anchor="middle">Debian 12 · cloud-init</text>
+  </g>
+</svg>

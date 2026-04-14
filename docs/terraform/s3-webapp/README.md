@@ -38,12 +38,9 @@ Deploy an EC2 instance running a Flask file-sharing web application backed by S3
 
 **Architecture:**
 
-```
-Browser ──HTTP──▶ EC2 Instance (Flask webapp, port 80)
-                      │
-                      ▼ S3 API (boto3)
-                  Predastore (port 8443)
-```
+<p align="center">
+  <img src="../../../.github/assets/diagrams/tf-s3-webapp.svg" alt="S3 webapp — browser to Flask EC2 instance to Predastore via S3 API" width="900">
+</p>
 
 **What you'll learn:**
 

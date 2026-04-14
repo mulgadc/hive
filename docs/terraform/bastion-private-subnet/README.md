@@ -36,12 +36,9 @@ Deploy a VPC with public and private subnets where the private subnet has no int
 
 **Architecture:**
 
-```
-WAN ──SSH──▶ Bastion (public subnet)
-                 │
-                 ▼ SSH (private IP)
-              App Server (private subnet, no internet)
-```
+<p align="center">
+  <img src="../../../.github/assets/diagrams/tf-bastion.svg" alt="Bastion architecture — WAN reaches bastion in public subnet, SSH hop to app server in private subnet" width="900">
+</p>
 
 **What you'll learn:**
 

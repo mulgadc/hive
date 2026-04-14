@@ -1,3 +1,25 @@
+<p align="center">
+  <img src=".github/assets/banner.svg" alt="Spinifex — AWS-Compatible Infrastructure Stack" width="900">
+</p>
+
+<p align="center">
+  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-3fb950?style=flat-square" alt="License"></a>
+  <a href="https://docs.mulgadc.com"><img src="https://img.shields.io/badge/Docs-mulgadc.com-DC2626?style=flat-square" alt="Docs"></a>
+  <a href="https://github.com/mulgadc/spinifex/actions"><img src="https://img.shields.io/badge/CI-e2e-58a6ff?style=flat-square" alt="CI"></a>
+</p>
+
+<p align="center">
+  <a href="#what-is-spinifex">What is Spinifex?</a> ·
+  <a href="#the-platform">Platform</a> ·
+  <a href="#core-components">Components</a> ·
+  <a href="#architecture-at-a-glance">Architecture</a> ·
+  <a href="#installation">Installation</a> ·
+  <a href="https://docs.mulgadc.com">Docs</a>
+</p>
+
+---
+
 # Spinifex: An Open Source AWS-Compatible Stack for Bare-Metal, Edge, and On-Prem Deployments
 
 Spinifex developed by [Mulga Defense Corporation](https://mulgadc.com) is an open source infrastructure platform that brings the core services of AWS—like EC2, VPC, EBS, and S3—to environments where running in the cloud isn't an option. Whether you're deploying to edge sites, private data-centers, or need to operate in low-connectivity or highly contested environments, Spinifex gives you AWS-style workflows on your own hardware.
@@ -6,20 +28,28 @@ Spinifex developed by [Mulga Defense Corporation](https://mulgadc.com) is an ope
 
 Spinifex replicates essential AWS primitives—virtual machines, block volumes, and object storage—using lightweight, self-contained components that are easy to deploy and integrate.
 
-It’s designed for developers and operators who need:
+It's designed for developers and operators who need:
 
 - Cloud-like infrastructure without the cloud
 - Minimal dependencies, full control
 - Drop-in compatibility with tools like the AWS CLI, SDKs, and Terraform
 - A secure cloud environment you control and own the entire hardware, network and software stack
 
-You can run Spinifex on a few servers in a rack, a field site, or anywhere centralized cloud services aren’t feasible.
+You can run Spinifex on a few servers in a rack, a field site, or anywhere centralized cloud services aren't feasible.
+
+## The Platform
+
+<p align="center">
+  <img src=".github/assets/platform.svg" alt="The Mulga Platform — Hardware to Applications" width="900">
+</p>
+
+From commodity hardware up to unmodified AWS tooling, every layer is replaceable and yours to own.
 
 ## Core Components
 
 ### Spinifex (Compute Service – EC2 Alternative)
 
-Spinifex is a minimal VM orchestration layer built on top of QEMU, exposing APIs similar to EC2. It manages lifecycle operations like start, stop, and terminate, using QEMU’s QMP interface. Designed to be straightforward and scriptable, Spinifex lets you launch VMs using the AWS CLI, SDKs, or Terraform—without needing Kubernetes or heavyweight orchestrators. Keep in mind, you can also setup a Kubernetes environment using Spinifex with underlying instances.
+Spinifex is a minimal VM orchestration layer built on top of QEMU, exposing APIs similar to EC2. It manages lifecycle operations like start, stop, and terminate, using QEMU's QMP interface. Designed to be straightforward and scriptable, Spinifex lets you launch VMs using the AWS CLI, SDKs, or Terraform—without needing Kubernetes or heavyweight orchestrators. Keep in mind, you can also setup a Kubernetes environment using Spinifex with underlying instances.
 
 - EC2-like VM management on bare metal
 - Launches with cloud-init metadata support
@@ -27,7 +57,7 @@ Spinifex is a minimal VM orchestration layer built on top of QEMU, exposing APIs
 
 ### Viperblock (Block Storage – EBS Alternative)
 
-[Viperblock](https://github.com/mulgadc/viperblock) is a high-performance, WAL-backed block storage service that replicates volumes across multiple nodes. It’s built for reliability and speed, with support for snapshots, recovery, and direct connection to QEMU instances using NBD or virtio-blk.
+[Viperblock](https://github.com/mulgadc/viperblock) is a high-performance, WAL-backed block storage service that replicates volumes across multiple nodes. It's built for reliability and speed, with support for snapshots, recovery, and direct connection to QEMU instances using NBD or virtio-blk.
 
 - Fast, durable virtual disks
 - Replication for resilience
@@ -43,11 +73,19 @@ Spinifex is a minimal VM orchestration layer built on top of QEMU, exposing APIs
 - Multipart uploads, streaming reads/writes
 - Data redundancy with Reed-Solomon encoding
 
+## Architecture at a Glance
+
+<p align="center">
+  <img src=".github/assets/architecture.svg" alt="Spinifex message-driven architecture — AWS Gateway, NATS bus, service daemons" width="900">
+</p>
+
+Every AWS API call is authenticated at the gateway, published to a NATS subject, and answered by whichever daemon claims it. Daemons are stateless — scale horizontally by starting more. No etcd, no Kubernetes, no external control plane. Deep dive: **[`docs/DESIGN.md`](docs/DESIGN.md)**.
+
 ## Key Features
 
 AWS-Compatible Interfaces – Provision infrastructure with awscli, Terraform, or SDKs you already use.
 
-- Designed for Control – Run on your own terms, whether that’s in a datacenter, remote site, or sensitive environment.
+- Designed for Control – Run on your own terms, whether that's in a datacenter, remote site, or sensitive environment.
 - Minimal Dependencies – Each service is standalone and avoids complex orchestration layers.
 - Works Offline – No reliance on centralized cloud services or external networks.
 - Open Source – Licensed under AGPL 3.0. Fork it, extend it, or deploy it as-is.
@@ -86,6 +124,26 @@ Spinifex coordinates these independent components:
 - **[Viperblock](https://github.com/mulgadc/viperblock)** - EBS-compatible block storage
 
 Each component can be developed independently. See component-specific documentation for focused development guides.
+
+## Spinifex UI
+
+Spinifex ships with a built-in web console — an optional alternative to the AWS CLI, SDKs, and Terraform. If you're familiar with the AWS Management Console, the Spinifex UI fills the same role: a browser-based view of your instances, volumes, buckets, VPCs, and IAM resources, without leaving your own network.
+
+<p align="center">
+  <img src="docs/spinifex-ui.jpg" alt="Spinifex web console — dashboard view" width="900">
+</p>
+
+The console is served by each node on port `3000` over TLS, and becomes available as soon as `spinifex.target` is up:
+
+```bash
+open https://YOUR_NODE_IP:3000
+```
+
+- **Same API, different surface.** Every action in the UI is the same AWS SigV4 call the CLI makes — so RBAC, audit trails, and IAM policies apply uniformly.
+- **Single sign-on against your AWS credentials.** Log in with the access keys from `~/.aws/credentials` on the node where Spinifex is installed — no separate user database.
+- **Self-hosted, works offline.** The UI is embedded in the Spinifex binary and served from the node itself. No external CDN, no analytics calls, no cloud dependency.
+
+For the full walkthrough — first-time TLS certificate trust, login, and feature tour — see [**Launching the Web UI**](docs/setting-up-your-cluster/README.md#7-launching-the-web-ui) in the cluster setup guide.
 
 ## Development Philosophy
 

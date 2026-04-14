@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="560" viewBox="0 0 900 560">
+  <defs>
+    <linearGradient id="pf-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0a0a"/>
+      <stop offset="100%" style="stop-color:#0d1117"/>
+    </linearGradient>
+    <linearGradient id="hw-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#52525b;stop-opacity:0.18"/>
+      <stop offset="100%" style="stop-color:#52525b;stop-opacity:0.06"/>
+    </linearGradient>
+    <linearGradient id="os-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#a855f7;stop-opacity:0.18"/>
+      <stop offset="100%" style="stop-color:#a855f7;stop-opacity:0.05"/>
+    </linearGradient>
+    <linearGradient id="spx-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#DC2626;stop-opacity:0.28"/>
+      <stop offset="100%" style="stop-color:#7F1D1D;stop-opacity:0.1"/>
+    </linearGradient>
+    <linearGradient id="app-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#3fb950;stop-opacity:0.18"/>
+      <stop offset="100%" style="stop-color:#3fb950;stop-opacity:0.05"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="900" height="560" fill="url(#pf-bg)" rx="12"/>
+
+  <!-- Subtle mesh dots background -->
+  <g opacity="0.12" fill="#7F1D1D">
+    <circle cx="40" cy="40" r="1"/><circle cx="120" cy="30" r="1"/><circle cx="220" cy="50" r="1"/>
+    <circle cx="320" cy="25" r="1"/><circle cx="440" cy="45" r="1"/><circle cx="560" cy="30" r="1"/>
+    <circle cx="680" cy="50" r="1"/><circle cx="780" cy="30" r="1"/><circle cx="860" cy="45" r="1"/>
+    <circle cx="60" cy="530" r="1"/><circle cx="160" cy="520" r="1"/><circle cx="260" cy="540" r="1"/>
+    <circle cx="380" cy="525" r="1"/><circle cx="500" cy="540" r="1"/><circle cx="620" cy="520" r="1"/>
+    <circle cx="740" cy="540" r="1"/><circle cx="840" cy="525" r="1"/>
+  </g>
+
+  <!-- Title -->
+  <text x="450" y="32" font-family="'Segoe UI', system-ui, sans-serif" font-size="11" fill="#a1a1aa" text-anchor="middle" letter-spacing="2.8">THE MULGA PLATFORM</text>
+  <text x="450" y="58" font-family="'Segoe UI', system-ui, sans-serif" font-size="20" font-weight="600" fill="#f5f5f5" text-anchor="middle">AWS-style workflows, on your own stack</text>
+
+  <!-- Layer 4: Applications (top) -->
+  <g transform="translate(60, 95)">
+    <rect width="780" height="88" rx="10" fill="url(#app-grad)" stroke="#3fb950" stroke-width="1.2" stroke-opacity="0.55"/>
+    <text x="20" y="26" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#3fb950" letter-spacing="1.5" font-weight="600">LAYER 4 · APPLICATIONS &amp; TOOLING</text>
+    <text x="20" y="48" font-family="'Segoe UI', sans-serif" font-size="15" fill="#f5f5f5" font-weight="500">Your workloads — unmodified AWS tooling</text>
+
+    <g transform="translate(20, 60)" font-family="'Segoe UI', sans-serif" font-size="10.5">
+      <rect x="0" y="0" width="70" height="20" rx="10" fill="#3fb950" fill-opacity="0.14" stroke="#3fb950" stroke-opacity="0.45" stroke-width="0.5"/>
+      <text x="35" y="14" fill="#7ee787" text-anchor="middle">aws-cli</text>
+
+      <rect x="78" y="0" width="78" height="20" rx="10" fill="#3fb950" fill-opacity="0.14" stroke="#3fb950" stroke-opacity="0.45" stroke-width="0.5"/>
+      <text x="117" y="14" fill="#7ee787" text-anchor="middle">Terraform</text>
+
+      <rect x="164" y="0" width="88" height="20" rx="10" fill="#3fb950" fill-opacity="0.14" stroke="#3fb950" stroke-opacity="0.45" stroke-width="0.5"/>
+      <text x="208" y="14" fill="#7ee787" text-anchor="middle">AWS SDKs</text>
+
+      <rect x="260" y="0" width="88" height="20" rx="10" fill="#3fb950" fill-opacity="0.14" stroke="#3fb950" stroke-opacity="0.45" stroke-width="0.5"/>
+      <text x="304" y="14" fill="#7ee787" text-anchor="middle">Kubernetes</text>
+
+      <rect x="356" y="0" width="70" height="20" rx="10" fill="#3fb950" fill-opacity="0.14" stroke="#3fb950" stroke-opacity="0.45" stroke-width="0.5"/>
+      <text x="391" y="14" fill="#7ee787" text-anchor="middle">Packer</text>
+
+      <rect x="434" y="0" width="98" height="20" rx="10" fill="#3fb950" fill-opacity="0.14" stroke="#3fb950" stroke-opacity="0.45" stroke-width="0.5"/>
+      <text x="483" y="14" fill="#7ee787" text-anchor="middle">Your Services</text>
+    </g>
+  </g>
+
+  <!-- Down arrow -->
+  <g transform="translate(450, 188)" opacity="0.45">
+    <line x1="0" y1="0" x2="0" y2="14" stroke="#a1a1aa" stroke-width="1"/>
+    <polygon points="-4,12 4,12 0,18" fill="#a1a1aa"/>
+  </g>
+
+  <!-- Layer 3: Spinifex (highlighted) -->
+  <g transform="translate(60, 215)">
+    <rect width="780" height="140" rx="10" fill="url(#spx-grad)" stroke="#DC2626" stroke-width="1.5" stroke-opacity="0.75"/>
+    <text x="20" y="26" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#F87171" letter-spacing="1.5" font-weight="600">LAYER 3 · SPINIFEX · AWS ORCHESTRATION</text>
+    <text x="20" y="50" font-family="'Segoe UI', sans-serif" font-size="15" fill="#f5f5f5" font-weight="500">AWS Gateway → NATS → Service Daemons · SigV4, IAM, VPC-aware</text>
+
+    <g transform="translate(20, 66)" font-family="'Segoe UI', sans-serif">
+      <!-- EC2 -->
+      <rect x="0" y="0" width="118" height="58" rx="6" fill="#DC2626" fill-opacity="0.1" stroke="#DC2626" stroke-opacity="0.6" stroke-width="1"/>
+      <text x="59" y="18" font-size="13" fill="#F87171" text-anchor="middle" font-weight="600">EC2</text>
+      <text x="59" y="34" font-size="9.5" fill="#f5f5f5" text-anchor="middle">QEMU/KVM VMs</text>
+      <text x="59" y="48" font-size="9.5" fill="#a1a1aa" text-anchor="middle">cloud-init · AMIs</text>
+
+      <!-- EBS -->
+      <rect x="126" y="0" width="118" height="58" rx="6" fill="#DC2626" fill-opacity="0.1" stroke="#DC2626" stroke-opacity="0.6" stroke-width="1"/>
+      <text x="185" y="18" font-size="13" fill="#F87171" text-anchor="middle" font-weight="600">EBS</text>
+      <text x="185" y="34" font-size="9.5" fill="#f5f5f5" text-anchor="middle">Viperblock</text>
+      <text x="185" y="48" font-size="9.5" fill="#a1a1aa" text-anchor="middle">WAL · NBD · snapshots</text>
+
+      <!-- S3 -->
+      <rect x="252" y="0" width="118" height="58" rx="6" fill="#DC2626" fill-opacity="0.1" stroke="#DC2626" stroke-opacity="0.6" stroke-width="1"/>
+      <text x="311" y="18" font-size="13" fill="#F87171" text-anchor="middle" font-weight="600">S3</text>
+      <text x="311" y="34" font-size="9.5" fill="#f5f5f5" text-anchor="middle">Predastore</text>
+      <text x="311" y="48" font-size="9.5" fill="#a1a1aa" text-anchor="middle">Reed–Solomon EC</text>
+
+      <!-- VPC -->
+      <rect x="378" y="0" width="118" height="58" rx="6" fill="#7F1D1D" fill-opacity="0.22" stroke="#F87171" stroke-opacity="0.55" stroke-width="1"/>
+      <text x="437" y="18" font-size="13" fill="#FCA5A5" text-anchor="middle" font-weight="600">VPC</text>
+      <text x="437" y="34" font-size="9.5" fill="#f5f5f5" text-anchor="middle">OVN / OVS</text>
+      <text x="437" y="48" font-size="9.5" fill="#a1a1aa" text-anchor="middle">subnets · SG · ALB</text>
+
+      <!-- IAM -->
+      <rect x="504" y="0" width="118" height="58" rx="6" fill="#7F1D1D" fill-opacity="0.22" stroke="#F87171" stroke-opacity="0.55" stroke-width="1"/>
+      <text x="563" y="18" font-size="13" fill="#FCA5A5" text-anchor="middle" font-weight="600">IAM</text>
+      <text x="563" y="34" font-size="9.5" fill="#f5f5f5" text-anchor="middle">SigV4 · policies</text>
+      <text x="563" y="48" font-size="9.5" fill="#a1a1aa" text-anchor="middle">users · roles · keys</text>
+
+      <!-- Control -->
+      <rect x="630" y="0" width="110" height="58" rx="6" fill="#27272a" fill-opacity="0.8" stroke="#71717a" stroke-opacity="0.6" stroke-width="1"/>
+      <text x="685" y="18" font-size="13" fill="#e4e4e7" text-anchor="middle" font-weight="600">Control</text>
+      <text x="685" y="34" font-size="9.5" fill="#f5f5f5" text-anchor="middle">NATS bus</text>
+      <text x="685" y="48" font-size="9.5" fill="#a1a1aa" text-anchor="middle">spx · daemons</text>
+    </g>
+  </g>
+
+  <!-- Down arrow -->
+  <g transform="translate(450, 360)" opacity="0.45">
+    <line x1="0" y1="0" x2="0" y2="14" stroke="#a1a1aa" stroke-width="1"/>
+    <polygon points="-4,12 4,12 0,18" fill="#a1a1aa"/>
+  </g>
+
+  <!-- Layer 2: OS -->
+  <g transform="translate(60, 387)">
+    <rect width="780" height="62" rx="10" fill="url(#os-grad)" stroke="#a855f7" stroke-width="1.2" stroke-opacity="0.5"/>
+    <text x="20" y="22" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#c084fc" letter-spacing="1.5" font-weight="600">LAYER 2 · OPERATING SYSTEM</text>
+    <text x="20" y="44" font-family="'Segoe UI', sans-serif" font-size="14" fill="#f5f5f5">Debian / Ubuntu LTS · systemd · KVM · Linux bridge · headless autoinstall</text>
+  </g>
+
+  <!-- Down arrow -->
+  <g transform="translate(450, 454)" opacity="0.45">
+    <line x1="0" y1="0" x2="0" y2="14" stroke="#a1a1aa" stroke-width="1"/>
+    <polygon points="-4,12 4,12 0,18" fill="#a1a1aa"/>
+  </g>
+
+  <!-- Layer 1: Hardware -->
+  <g transform="translate(60, 481)">
+    <rect width="780" height="62" rx="10" fill="url(#hw-grad)" stroke="#71717a" stroke-width="1.2" stroke-opacity="0.6"/>
+    <text x="20" y="22" font-family="'SF Mono', ui-monospace, monospace" font-size="11" fill="#a1a1aa" letter-spacing="1.5" font-weight="600">LAYER 1 · HARDWARE</text>
+    <text x="20" y="44" font-family="'Segoe UI', sans-serif" font-size="14" fill="#f5f5f5">Single node · multi-node cluster · edge appliance · air-gapped rack · commodity x86 / ARM</text>
+  </g>
+</svg>

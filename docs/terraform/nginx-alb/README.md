@@ -35,25 +35,9 @@ resources:
 
 Deploy two Nginx web servers behind an internet-facing Application Load Balancer on Spinifex using Terraform/OpenTofu. This workbook provisions a VPC with public and private subnets, an internet gateway and NAT Gateway, route tables, security group, SSH key pair, an application load balancer (ALB) and two EC2 instances with cloud-init user-data that installs and starts Nginx. Only the ALB is reachable from outside the VPC — the Nginx instances live in the **private subnets** and reach the internet only for cloud-init bootstrapping via the NAT Gateway.
 
-```
-                Internet
-                    │
-               ┌────▼────┐
-               │   IGW   │
-               └────┬────┘
-         ┌──────────┼──────────┐
-         │                     │
-  ┌──────▼─────┐         ┌─────▼──────┐
-  │  public_a  │         │  public_b  │
-  │  ALB ENI   │         │  ALB ENI   │
-  │  NAT GW    │         └────────────┘
-  └──────┬─────┘
-         │ SNAT for private subnets
-  ┌──────▼─────┐         ┌────────────┐
-  │ private_a  │         │ private_b  │
-  │  nginx_1   │         │  nginx_2   │
-  └────────────┘         └────────────┘
-```
+<p align="center">
+  <img src="../../../.github/assets/diagrams/tf-nginx-alb.svg" alt="Nginx + ALB VPC — IGW, two public subnets with ALB ENIs and NAT GW, two private subnets hosting nginx" width="900">
+</p>
 
 **What you'll learn:**
 
@@ -103,7 +87,15 @@ Or create a `main.tf` file and paste the full configuration below.
 
 <!-- INCLUDE: main.tf lang:hcl -->
 
-### Step 2. Deploy
+### Step 2. Install Load Balancer AMI
+
+Next install the load balancer AMI images, which is used as the AMI disk image for launching the load-balancer and a requirement.
+
+```bash
+spx admin images import --name lb-alpine-3.21.6-x86_64
+```
+
+### Step 3. Deploy
 
 ```bash
 export AWS_PROFILE=spinifex
@@ -111,7 +103,7 @@ tofu init
 ```
 
 
-### Step 3. Specify instance and apply
+### Step 4. Specify instance and apply
 
 Next, depending on your architecture and CPU/memory requirements you must specify an instance type to launch.
 
@@ -139,7 +131,7 @@ Next, apply and launch the template:
 tofu apply
 ```
 
-### Step 3. Verify
+### Step 5. Verify
 
 > **Note:** EC2 instances can take 30+ seconds to boot after apply, and the NAT Gateway must be `available` before cloud-init on the workers can reach the apt repository. If the ALB returns 5xx or HTTP is unreachable, wait and retry — the target group health checks need a moment to mark both instances healthy once Nginx has installed.
 
