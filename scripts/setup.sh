@@ -527,8 +527,6 @@ print_summary() {
     echo "     If your WAN is a physical NIC:"
     echo "       # Dedicated WAN NIC (not your SSH connection):"
     echo "       sudo /usr/local/share/spinifex/setup-ovn.sh --management --wan-bridge=br-wan --wan-iface=eth1"
-    echo "       # Single-NIC host (SSH-safe macvlan):"
-    echo "       sudo /usr/local/share/spinifex/setup-ovn.sh --management --macvlan --wan-iface=enp0s3"
     echo ""
     echo "  2. Initialize:"
     echo "     sudo spx admin init --node node1 --nodes 1"
@@ -565,6 +563,17 @@ main() {
     rm -rf "$SPINIFEX_TMPDIR"
     restart_if_needed
     print_summary
+
+    # Activate spinifex group membership in the invoking shell. Under curl|bash
+    # stdin is the drained pipe, so redirect from /dev/tty and exec so the new
+    # shell becomes the foreground process. Skip when no tty (CI, cloud-init).
+    if ! id -Gn 2>/dev/null | grep -qw "$SPINIFEX_GROUP" \
+        && [ -r /dev/tty ] && [ -w /dev/tty ]; then
+        echo ""
+        echo "  Activating '$SPINIFEX_GROUP' group in a subshell — type 'exit' when done."
+        echo ""
+        exec newgrp "$SPINIFEX_GROUP" < /dev/tty
+    fi
 }
 
 main "$@"
