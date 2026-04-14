@@ -70,8 +70,8 @@ func (rl *AuthRateLimiter) Stop() {
 	<-rl.done
 }
 
-// CheckIP returns nil if the IP is allowed to proceed, or an error string
-// matching ErrorRequestLimitExceeded if the IP is currently locked out.
+// CheckIP returns an empty string if the IP is allowed to proceed, or an error
+// code matching ErrorRequestLimitExceeded if the IP is currently locked out.
 func (rl *AuthRateLimiter) CheckIP(ip string) string {
 	rl.mu.RLock()
 	defer rl.mu.RUnlock()
