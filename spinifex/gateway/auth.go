@@ -29,8 +29,18 @@ const (
 
 // SigV4AuthMiddleware returns stdlib middleware that validates AWS Signature V4 authentication.
 func (gw *GatewayConfig) SigV4AuthMiddleware() func(http.Handler) http.Handler {
+	if gw.RateLimiter == nil {
+		gw.RateLimiter = NewAuthRateLimiter()
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Rate-limit check: reject locked-out IPs before any crypto work.
+			clientIP := extractClientIP(r)
+			if errCode := gw.RateLimiter.CheckIP(clientIP); errCode != "" {
+				gw.writeSigV4Error(w, r, errCode)
+				return
+			}
+
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" {
 				gw.writeSigV4Error(w, r, awserrors.ErrorMissingAuthenticationToken)
@@ -97,6 +107,7 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() func(http.Handler) http.Handler {
 			if err != nil {
 				if strings.Contains(err.Error(), awserrors.ErrorIAMNoSuchEntity) {
 					slog.Debug("Access key not found", "accessKeyID", accessKey)
+					gw.RateLimiter.RecordFailure(clientIP)
 					gw.writeSigV4Error(w, r, awserrors.ErrorInvalidClientTokenId)
 					return
 				}
@@ -106,6 +117,7 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() func(http.Handler) http.Handler {
 			}
 			if ak.Status != handlers_iam.AccessKeyStatusActive {
 				slog.Debug("Access key inactive", "accessKeyID", accessKey)
+				gw.RateLimiter.RecordFailure(clientIP)
 				gw.writeSigV4Error(w, r, awserrors.ErrorInvalidClientTokenId)
 				return
 			}
@@ -163,6 +175,7 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() func(http.Handler) http.Handler {
 				slog.Debug("Signature mismatch",
 					"accessKeyId", accessKey,
 				)
+				gw.RateLimiter.RecordFailure(clientIP)
 				gw.writeSigV4Error(w, r, awserrors.ErrorSignatureDoesNotMatch)
 				return
 			}
@@ -176,6 +189,7 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() func(http.Handler) http.Handler {
 			ctx = context.WithValue(ctx, ctxAccessKey, accessKey)
 
 			slog.Debug("SigV4 authentication successful", "accessKey", accessKey, "identity", ak.UserName)
+			gw.RateLimiter.RecordSuccess(clientIP)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

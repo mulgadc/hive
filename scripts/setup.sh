@@ -8,6 +8,7 @@
 #   INSTALL_SPINIFEX_TARBALL   Path to local tarball (skips download, for testing/air-gapped)
 #   INSTALL_SPINIFEX_SKIP_APT  Set to 1 to skip apt dependency install
 #   INSTALL_SPINIFEX_SKIP_AWS  Set to 1 to skip AWS CLI install
+#   INSTALL_SPINIFEX_SKIP_NEWGRP  Set to 1 to skip newgrp exec at end (for callers like dev-install.sh)
 
 set -e
 
@@ -571,7 +572,8 @@ main() {
     # stdin is the drained pipe, so redirect from /dev/tty and exec so the new
     # shell becomes the foreground process. Skip when we can't actually open
     # /dev/tty (CI, cloud-init, ssh -T — stat passes but open fails with ENXIO).
-    if ! id -Gn 2>/dev/null | grep -qw "$SPINIFEX_GROUP" \
+    if [ "${INSTALL_SPINIFEX_SKIP_NEWGRP:-0}" != "1" ] \
+        && ! id -Gn 2>/dev/null | grep -qw "$SPINIFEX_GROUP" \
         && ( : </dev/tty ) 2>/dev/null; then
         echo ""
         echo "  Activating '$SPINIFEX_GROUP' group in a subshell — type 'exit' when done."
