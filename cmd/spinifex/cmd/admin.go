@@ -279,6 +279,7 @@ func init() {
 	imagesImportCmd.Flags().String("version", "", "Specified distro version (e.g 12)")
 	imagesImportCmd.Flags().String("arch", "", "Specified distro arch (e.g aarch64, arm64, x86_64)")
 	imagesImportCmd.Flags().String("platform", "Linux/UNIX", "Specified platform (e.g Linux/UNIX, Windows)")
+	imagesImportCmd.Flags().StringSlice("tag", nil, "Tag to apply to the imported AMI as key=value (repeatable; e.g. --tag spinifex:managed-by=elbv2)")
 	imagesImportCmd.Flags().Bool("force", false, "Force command execution (overwrites existing files)")
 }
 
@@ -313,35 +314,54 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Determine, if name specified, or file
+	// --name pulls metadata (including Tags) from the catalog; --file supplies
+	// the local image source. When both are set, the catalog provides metadata
+	// and the file is used directly (no download). When only --file is set,
+	// metadata comes from flags and no catalog tags are applied.
 	imageName, _ := cmd.Flags().GetString("name")
+	localFile, _ := cmd.Flags().GetString("file")
+
+	if imageName == "" && localFile == "" {
+		fmt.Fprintf(os.Stderr, "Either --name or --file is required to import an image\n")
+		os.Exit(1)
+	}
 
 	if imageName != "" {
 		var exists bool
-		// Confirm the image exists
 		image, exists = utils.AvailableImages[imageName]
-
 		if !exists {
 			fmt.Fprintf(os.Stderr, "Image name not found in available images")
 			os.Exit(1)
 		}
-	} else {
-		imageFile, _ = cmd.Flags().GetString("file")
+	}
 
-		if imageFile == "" {
-			fmt.Fprintf(os.Stderr, "File required to import image")
-			os.Exit(1)
-		}
-
-		if _, err := os.Stat(imageFile); err != nil {
+	if localFile != "" {
+		if _, err := os.Stat(localFile); err != nil {
 			fmt.Fprintf(os.Stderr, "File could not be found: %s", err)
 			os.Exit(1)
 		}
+		imageFile = localFile
+		if imageName == "" {
+			image.Distro, _ = cmd.Flags().GetString("distro")
+			image.Version, _ = cmd.Flags().GetString("version")
+			image.Arch, _ = cmd.Flags().GetString("arch")
+			image.Platform, _ = cmd.Flags().GetString("platform")
+		}
+	}
 
-		image.Distro, _ = cmd.Flags().GetString("distro")
-		image.Version, _ = cmd.Flags().GetString("version")
-		image.Arch, _ = cmd.Flags().GetString("arch")
-		image.Platform, _ = cmd.Flags().GetString("platform")
+	// --tag k=v (repeatable) merges user-supplied tags into the AMI. Overrides
+	// catalog tags on key collision so operators can re-tag a known image.
+	tagFlags, _ := cmd.Flags().GetStringSlice("tag")
+	for _, kv := range tagFlags {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			fmt.Fprintf(os.Stderr, "Invalid --tag %q: expected key=value\n", kv)
+			os.Exit(1)
+		}
+		if image.Tags == nil {
+			image.Tags = map[string]string{}
+		}
+		image.Tags[k] = v
 	}
 
 	if image.Distro == "" {
@@ -377,7 +397,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	fmt.Printf("✅ Created config directory: %s\n", imagePath)
 
 	// Next, if the file is selected to download, fetch it, extract disk image, and save to path
-	if imageName != "" {
+	if imageName != "" && localFile == "" {
 		// Download the file to the image path
 		filename := path.Base(image.URL)
 		imageFile = fmt.Sprintf("%s/%s", imagePath, filename)
