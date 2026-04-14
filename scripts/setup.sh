@@ -567,9 +567,10 @@ main() {
 
     # Activate spinifex group membership in the invoking shell. Under curl|bash
     # stdin is the drained pipe, so redirect from /dev/tty and exec so the new
-    # shell becomes the foreground process. Skip when no tty (CI, cloud-init).
+    # shell becomes the foreground process. Skip when we can't actually open
+    # /dev/tty (CI, cloud-init, ssh -T — stat passes but open fails with ENXIO).
     if ! id -Gn 2>/dev/null | grep -qw "$SPINIFEX_GROUP" \
-        && [ -r /dev/tty ] && [ -w /dev/tty ]; then
+        && ( : </dev/tty ) 2>/dev/null; then
         echo ""
         echo "  Activating '$SPINIFEX_GROUP' group in a subshell — type 'exit' when done."
         echo ""
