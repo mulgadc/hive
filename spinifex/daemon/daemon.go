@@ -50,6 +50,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/instancetypes"
 	"github.com/mulgadc/spinifex/spinifex/objectstore"
 	"github.com/mulgadc/spinifex/spinifex/qmp"
+	"github.com/mulgadc/spinifex/spinifex/tags"
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/mulgadc/spinifex/spinifex/vm"
@@ -745,25 +746,22 @@ func (d *Daemon) Start() error {
 	// at daemon startup (imported later), so we resolve it at request time.
 	if d.imageService != nil {
 		imgSvc := d.imageService
-		d.elbv2Service.SetSystemAMIFunc(func() string {
-			imagesOut, imgErr := imgSvc.DescribeImages(&ec2.DescribeImagesInput{}, utils.GlobalAccountID)
-			if imgErr != nil || len(imagesOut.Images) == 0 {
-				return ""
+		d.elbv2Service.SetSystemAMIFunc(func() (string, error) {
+			imagesOut, imgErr := imgSvc.DescribeImages(&ec2.DescribeImagesInput{
+				Filters: []*ec2.Filter{{
+					Name:   aws.String("tag:" + tags.ManagedByKey),
+					Values: []*string{aws.String(tags.ManagedByELBv2)},
+				}},
+			}, utils.GlobalAccountID)
+			if imgErr != nil {
+				return "", fmt.Errorf("describe LB system images: %w", imgErr)
 			}
-			systemAMI := aws.StringValue(imagesOut.Images[0].ImageId)
-			// Prefer the new "-lb-" image name, fall back to legacy "-alb-" name.
-			for _, img := range imagesOut.Images {
-				name := aws.StringValue(img.Name)
-				if strings.Contains(name, "-lb-") {
-					systemAMI = aws.StringValue(img.ImageId)
-					break
-				}
-				if strings.Contains(name, "-alb-") {
-					systemAMI = aws.StringValue(img.ImageId)
-				}
+			if len(imagesOut.Images) == 0 {
+				return "", errors.New("LB system image not imported; run: spx admin images import --name lb-alpine-3.21.6-x86_64")
 			}
-			slog.Info("System AMI resolved for LB VMs", "amiId", systemAMI)
-			return systemAMI
+			amiID := aws.StringValue(imagesOut.Images[0].ImageId)
+			slog.Info("System AMI resolved for LB VMs", "amiId", amiID, "name", aws.StringValue(imagesOut.Images[0].Name))
+			return amiID, nil
 		})
 	}
 

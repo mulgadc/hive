@@ -147,11 +147,11 @@ if [[ -f "$OUTPUT_RAW" ]] && [[ $(( $(date +%s) - $(stat -c %Y "$OUTPUT_RAW") ))
 
     if [[ "$DO_IMPORT" == true ]]; then
         echo "Importing as AMI..."
-        (cd "$PROJECT_DIR" && ./bin/spx admin images import \
-            --file "$OUTPUT_RAW" \
-            --distro alpine \
-            --version "${ALPINE_VERSION}-${IMAGE_NAME}" \
-            --arch x86_64)
+        IMPORT_ARGS=(--file "$OUTPUT_RAW" --distro alpine --version "${ALPINE_VERSION}" --arch x86_64)
+        if [[ -n "${SYSTEM_TAG:-}" ]]; then
+            IMPORT_ARGS+=(--tag "$SYSTEM_TAG")
+        fi
+        (cd "$PROJECT_DIR" && ./bin/spx admin images import "${IMPORT_ARGS[@]}")
     fi
     exit 0
 fi
@@ -318,14 +318,19 @@ echo ""
 
 if [[ "$DO_IMPORT" == true ]]; then
     echo "Importing as AMI..."
-    (cd "$PROJECT_DIR" && sudo -u spinifex-storage ./bin/spx admin images import \
-        --file "$OUTPUT_RAW" \
-        --distro alpine \
-        --version "${ALPINE_VERSION}-${IMAGE_NAME}" \
-        --arch x86_64)
+    IMPORT_ARGS=(--file "$OUTPUT_RAW" --distro alpine --version "${ALPINE_VERSION}" --arch x86_64)
+    if [[ -n "${SYSTEM_TAG:-}" ]]; then
+        IMPORT_ARGS+=(--tag "$SYSTEM_TAG")
+    fi
+    (cd "$PROJECT_DIR" && sudo -u spinifex-storage ./bin/spx admin images import "${IMPORT_ARGS[@]}")
 else
     echo "To import as AMI, run:"
     echo "  cd $PROJECT_DIR && ./bin/spx admin images import \\"
     echo "    --file $OUTPUT_RAW \\"
-    echo "    --distro alpine --version ${ALPINE_VERSION}-${IMAGE_NAME} --arch x86_64"
+    if [[ -n "${SYSTEM_TAG:-}" ]]; then
+        echo "    --distro alpine --version ${ALPINE_VERSION} --arch x86_64 \\"
+        echo "    --tag ${SYSTEM_TAG}"
+    else
+        echo "    --distro alpine --version ${ALPINE_VERSION} --arch x86_64"
+    fi
 fi

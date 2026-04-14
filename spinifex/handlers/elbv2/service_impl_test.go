@@ -1,6 +1,7 @@
 package handlers_elbv2
 
 import (
+	"errors"
 	"sort"
 	"sync"
 	"testing"
@@ -1086,7 +1087,7 @@ func TestCreateLoadBalancer_InternetFacingScheme_PassesSchemeToLauncher(t *testi
 		},
 	}
 	svc.InstanceLauncher = mock
-	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
+	svc.SetSystemAMIFunc(func() (string, error) { return "ami-alb-test", nil })
 
 	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("public-alb"),
@@ -1111,7 +1112,7 @@ func TestCreateLoadBalancer_InternalScheme_PassesSchemeToLauncher(t *testing.T) 
 		},
 	}
 	svc.InstanceLauncher = mock
-	svc.SetSystemAMIFunc(func() string { return "ami-alb-test" })
+	svc.SetSystemAMIFunc(func() (string, error) { return "ami-alb-test", nil })
 
 	out, err := svc.CreateLoadBalancer(&elbv2.CreateLoadBalancerInput{
 		Name:    aws.String("private-alb"),
@@ -1516,41 +1517,53 @@ func TestSetSystemInstanceTypeFunc(t *testing.T) {
 func TestGetSystemAMI(t *testing.T) {
 	svc := setupTestService(t)
 
-	// Before setting, should return empty
-	assert.Empty(t, svc.getSystemAMI())
+	// Before setting, should return empty with no error
+	ami, err := svc.getSystemAMI()
+	require.NoError(t, err)
+	assert.Empty(t, ami)
 
 	// Set the resolver
-	svc.SetSystemAMIFunc(func() string { return "ami-system-001" })
-	assert.Equal(t, "ami-system-001", svc.getSystemAMI())
+	svc.SetSystemAMIFunc(func() (string, error) { return "ami-system-001", nil })
+	ami, err = svc.getSystemAMI()
+	require.NoError(t, err)
+	assert.Equal(t, "ami-system-001", ami)
 
 	// Once resolved, caches the value
-	svc.systemAMIFunc = func() string { return "ami-system-002" }
-	assert.Equal(t, "ami-system-001", svc.getSystemAMI())
+	svc.systemAMIFunc = func() (string, error) { return "ami-system-002", nil }
+	ami, err = svc.getSystemAMI()
+	require.NoError(t, err)
+	assert.Equal(t, "ami-system-001", ami)
 }
 
-func TestGetSystemAMI_RetryOnEmpty(t *testing.T) {
+func TestGetSystemAMI_RetryOnError(t *testing.T) {
 	svc := setupTestService(t)
 
 	calls := 0
-	svc.SetSystemAMIFunc(func() string {
+	svc.SetSystemAMIFunc(func() (string, error) {
 		calls++
 		if calls < 3 {
-			return "" // simulate image not imported yet
+			return "", errors.New("LB system image not imported")
 		}
-		return "ami-system-001"
+		return "ami-system-001", nil
 	})
 
-	// First two calls return empty — should NOT be cached
-	assert.Empty(t, svc.getSystemAMI())
-	assert.Empty(t, svc.getSystemAMI())
+	// First two calls error — must NOT be cached
+	_, err := svc.getSystemAMI()
+	require.Error(t, err)
+	_, err = svc.getSystemAMI()
+	require.Error(t, err)
 	assert.Equal(t, 2, calls)
 
-	// Third call finds the image — should be cached from now on
-	assert.Equal(t, "ami-system-001", svc.getSystemAMI())
+	// Third call succeeds — cached from now on
+	ami, err := svc.getSystemAMI()
+	require.NoError(t, err)
+	assert.Equal(t, "ami-system-001", ami)
 	assert.Equal(t, 3, calls)
 
-	// Subsequent calls return cached value without calling the func again
-	assert.Equal(t, "ami-system-001", svc.getSystemAMI())
+	// Subsequent calls return cached value without re-invoking
+	ami, err = svc.getSystemAMI()
+	require.NoError(t, err)
+	assert.Equal(t, "ami-system-001", ami)
 	assert.Equal(t, 3, calls)
 }
 
@@ -1579,12 +1592,13 @@ func TestGetSystemInstanceType_RetryOnEmpty(t *testing.T) {
 
 func TestGetSystemAMI_Concurrent(t *testing.T) {
 	svc := setupTestService(t)
-	svc.SetSystemAMIFunc(func() string { return "ami-system-001" })
+	svc.SetSystemAMIFunc(func() (string, error) { return "ami-system-001", nil })
 
 	var wg sync.WaitGroup
 	for range 50 {
 		wg.Go(func() {
-			got := svc.getSystemAMI()
+			got, err := svc.getSystemAMI()
+			assert.NoError(t, err)
 			assert.Equal(t, "ami-system-001", got)
 		})
 	}

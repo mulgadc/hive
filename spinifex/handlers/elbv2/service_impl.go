@@ -93,14 +93,14 @@ type ELBv2ServiceImpl struct {
 	MgmtRouteTarget            string                           // AWSGW bind IP to route via mgmt NIC
 	nodeID                     string
 	region                     string
-	systemAMI                  string        // AMI ID for system VMs (ALB VMs); resolved lazily via systemAMIFunc
-	systemAMIFunc              func() string // returns the current system AMI ID (queries image store)
-	systemAMIMu                sync.Mutex    // guards lazy resolution of systemAMI
-	systemAMIResolved          bool          // true once systemAMI has been resolved to a non-empty value
-	systemInstanceType         string        // instance type for system VMs; resolved lazily via systemInstanceTypeFunc
-	systemInstanceTypeFunc     func() string // returns the smallest available instance type
-	systemInstanceTypeMu       sync.Mutex    // guards lazy resolution of systemInstanceType
-	systemInstanceTypeResolved bool          // true once systemInstanceType has been resolved to a non-empty value
+	systemAMI                  string                 // AMI ID for system VMs (ALB VMs); resolved lazily via systemAMIFunc
+	systemAMIFunc              func() (string, error) // returns the current system AMI ID (queries image store)
+	systemAMIMu                sync.Mutex             // guards lazy resolution of systemAMI
+	systemAMIResolved          bool                   // true once systemAMI has been resolved to a non-empty value
+	systemInstanceType         string                 // instance type for system VMs; resolved lazily via systemInstanceTypeFunc
+	systemInstanceTypeFunc     func() string          // returns the smallest available instance type
+	systemInstanceTypeMu       sync.Mutex             // guards lazy resolution of systemInstanceType
+	systemInstanceTypeResolved bool                   // true once systemInstanceType has been resolved to a non-empty value
 	ctx                        context.Context
 	cancel                     context.CancelFunc
 	hc                         *healthChecker
@@ -147,7 +147,7 @@ func (s *ELBv2ServiceImpl) Close() {
 // SetSystemAMIFunc sets a function that resolves the current system AMI ID.
 // This is called at request time so the AMI is discovered even if imported
 // after the daemon starts.
-func (s *ELBv2ServiceImpl) SetSystemAMIFunc(fn func() string) {
+func (s *ELBv2ServiceImpl) SetSystemAMIFunc(fn func() (string, error)) {
 	s.systemAMIMu.Lock()
 	defer s.systemAMIMu.Unlock()
 	s.systemAMIFunc = fn
@@ -156,21 +156,25 @@ func (s *ELBv2ServiceImpl) SetSystemAMIFunc(fn func() string) {
 }
 
 // getSystemAMI returns the system AMI ID, resolving it lazily if needed.
-// Only caches non-empty results so the resolver retries when the image
-// has not been imported yet.
-func (s *ELBv2ServiceImpl) getSystemAMI() string {
+// Caches only successful resolutions so the resolver retries after errors.
+func (s *ELBv2ServiceImpl) getSystemAMI() (string, error) {
 	s.systemAMIMu.Lock()
 	defer s.systemAMIMu.Unlock()
 	if s.systemAMIResolved {
-		return s.systemAMI
+		return s.systemAMI, nil
 	}
-	if s.systemAMIFunc != nil {
-		s.systemAMI = s.systemAMIFunc()
+	if s.systemAMIFunc == nil {
+		return "", nil
 	}
-	if s.systemAMI != "" {
+	ami, err := s.systemAMIFunc()
+	if err != nil {
+		return "", err
+	}
+	if ami != "" {
+		s.systemAMI = ami
 		s.systemAMIResolved = true
 	}
-	return s.systemAMI
+	return ami, nil
 }
 
 // SetSystemInstanceTypeFunc sets a function that resolves the smallest available
@@ -608,7 +612,16 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 	var albVPCIP string
 	var hostPorts map[int]int
 	var launchFailed bool
-	if s.InstanceLauncher != nil && s.getSystemAMI() != "" && len(eniIDs) > 0 && len(subnets) > 0 {
+	if s.InstanceLauncher != nil && len(eniIDs) > 0 && len(subnets) > 0 {
+		systemAMI, amiErr := s.getSystemAMI()
+		if amiErr != nil {
+			slog.Error("CreateLoadBalancer: cannot resolve LB system AMI", "lbId", lbID, "err", amiErr)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
+		if systemAMI == "" {
+			slog.Error("CreateLoadBalancer: LB system AMI not resolved", "lbId", lbID)
+			return nil, errors.New(awserrors.ErrorServerInternal)
+		}
 		// Resolve MAC/IP for every ENI in one describe call.
 		eniDetails := make(map[string]*ec2.NetworkInterface, len(eniIDs))
 		if s.VPCService != nil {
@@ -657,7 +670,7 @@ func (s *ELBv2ServiceImpl) CreateLoadBalancer(input *elbv2.CreateLoadBalancerInp
 		} else {
 			launchInput := &SystemInstanceInput{
 				InstanceType: s.getSystemInstanceType(),
-				ImageID:      s.getSystemAMI(),
+				ImageID:      systemAMI,
 				SubnetID:     subnets[0],
 				UserData:     userData,
 				ENIID:        eniIDs[0],
