@@ -51,7 +51,7 @@ if [ -d /var/lib/spinifex/config ]; then
 fi
 
 echo "=== Running setup.sh (creates users, dirs, systemd units) ==="
-sudo INSTALL_SPINIFEX_TARBALL=/tmp/spinifex-local.tar.gz bash "$PROJECT_ROOT/scripts/setup.sh"
+sudo INSTALL_SPINIFEX_TARBALL=/tmp/spinifex-local.tar.gz INSTALL_SPINIFEX_SKIP_NEWGRP=1 bash "$PROJECT_ROOT/scripts/setup.sh"
 rm -f /tmp/spinifex-local.tar.gz
 
 echo "=== Setting up OVN ==="
@@ -70,10 +70,6 @@ sudo systemctl start spinifex.target
 # Check if user needs to re-login for spinifex group membership
 if ! id -Gn 2>/dev/null | grep -qw spinifex; then
     newgrp spinifex
-    # echo ""
-    # echo "NOTE: You were added to the 'spinifex' group but your current"
-    # echo "session doesn't reflect it yet. Log out and back in, or run:"
-    # echo "  newgrp spinifex"
 fi
 
 echo "=== Building and importing LB image ==="
