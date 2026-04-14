@@ -15,7 +15,7 @@ const (
 	failureWindow = 60 * time.Second
 
 	// maxFailures is the number of consecutive failures within the window before lockout.
-	maxFailures = 5
+	maxFailures = 10
 
 	// initialLockout is the first lockout duration after hitting the threshold.
 	initialLockout = 30 * time.Second
