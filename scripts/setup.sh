@@ -425,12 +425,14 @@ fix_file_ownership() {
             || fatal "Failed to set permissions on /etc/spinifex/ca.key"
     fi
 
-    # Shared data dirs — root:spinifex 0770 (daemon + admin CLI write, services read)
+    # Shared data dirs — root:spinifex 0770 (daemon + admin CLI write, services read).
+    # chmod must be recursive so pre-existing files (e.g. imported images originally
+    # written as 0600 by another user) become group-readable.
     for d in images amis volumes state; do
         if [ -d "/var/lib/spinifex/$d" ]; then
             $SUDO chown -R "root:$SPINIFEX_GROUP" "/var/lib/spinifex/$d" \
                 || fatal "Failed to set ownership on /var/lib/spinifex/$d"
-            $SUDO chmod 0770 "/var/lib/spinifex/$d" \
+            $SUDO chmod -R u+rwX,g+rwX,o-rwx "/var/lib/spinifex/$d" \
                 || fatal "Failed to set permissions on /var/lib/spinifex/$d"
         fi
     done
@@ -471,7 +473,8 @@ install_systemd() {
     done
 
     $SUDO systemctl daemon-reload
-    info "Systemd units installed (per-service users)"
+    $SUDO systemctl enable spinifex.target
+    info "Systemd units installed and enabled (per-service users)"
 }
 
 # --- Install logrotate ---
@@ -527,8 +530,6 @@ print_summary() {
     echo "     If your WAN is a physical NIC:"
     echo "       # Dedicated WAN NIC (not your SSH connection):"
     echo "       sudo /usr/local/share/spinifex/setup-ovn.sh --management --wan-bridge=br-wan --wan-iface=eth1"
-    echo "       # Single-NIC host (SSH-safe macvlan):"
-    echo "       sudo /usr/local/share/spinifex/setup-ovn.sh --management --macvlan --wan-iface=enp0s3"
     echo ""
     echo "  2. Initialize:"
     echo "     sudo spx admin init --node node1 --nodes 1"
@@ -565,6 +566,18 @@ main() {
     rm -rf "$SPINIFEX_TMPDIR"
     restart_if_needed
     print_summary
+
+    # Activate spinifex group membership in the invoking shell. Under curl|bash
+    # stdin is the drained pipe, so redirect from /dev/tty and exec so the new
+    # shell becomes the foreground process. Skip when we can't actually open
+    # /dev/tty (CI, cloud-init, ssh -T — stat passes but open fails with ENXIO).
+    if ! id -Gn 2>/dev/null | grep -qw "$SPINIFEX_GROUP" \
+        && ( : </dev/tty ) 2>/dev/null; then
+        echo ""
+        echo "  Activating '$SPINIFEX_GROUP' group in a subshell — type 'exit' when done."
+        echo ""
+        exec newgrp "$SPINIFEX_GROUP" < /dev/tty
+    fi
 }
 
 main "$@"
