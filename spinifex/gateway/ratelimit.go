@@ -55,11 +55,7 @@ func NewAuthRateLimiter(ctx context.Context) *AuthRateLimiter {
 		stop:    make(chan struct{}),
 		done:    make(chan struct{}),
 	}
-	go rl.gcLoop()
-	go func() {
-		<-ctx.Done()
-		rl.Stop()
-	}()
+	go rl.gcLoop(ctx)
 	return rl
 }
 
@@ -138,17 +134,23 @@ func (rl *AuthRateLimiter) RecordFailure(ip string) {
 // RecordSuccess clears all failure state for the given IP, immediately
 // restoring access for legitimate clients.
 func (rl *AuthRateLimiter) RecordSuccess(ip string) {
+	rl.mu.RLock()
+	_, ok := rl.records[ip]
+	rl.mu.RUnlock()
+	if !ok {
+		return
+	}
+
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-
 	if _, ok := rl.records[ip]; ok {
 		slog.Info("Rate limit: IP lockout cleared on success", "ip", ip)
 		delete(rl.records, ip)
 	}
 }
 
-// gcLoop runs cleanup on a fixed interval until Stop is called.
-func (rl *AuthRateLimiter) gcLoop() {
+// gcLoop runs cleanup on a fixed interval until Stop is called or ctx is cancelled.
+func (rl *AuthRateLimiter) gcLoop(ctx context.Context) {
 	defer close(rl.done)
 	ticker := time.NewTicker(gcInterval)
 	defer ticker.Stop()
@@ -156,6 +158,8 @@ func (rl *AuthRateLimiter) gcLoop() {
 	for {
 		select {
 		case <-rl.stop:
+			return
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			rl.cleanup()

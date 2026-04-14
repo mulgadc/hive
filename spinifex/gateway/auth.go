@@ -118,6 +118,9 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() func(http.Handler) http.Handler {
 			}
 			if ak.Status != handlers_iam.AccessKeyStatusActive {
 				slog.Debug("Access key inactive", "accessKeyID", accessKey)
+				if gw.RateLimiter != nil {
+					gw.RateLimiter.RecordFailure(clientIP)
+				}
 				gw.writeSigV4Error(w, r, awserrors.ErrorInvalidClientTokenId)
 				return
 			}
