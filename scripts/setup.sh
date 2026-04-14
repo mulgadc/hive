@@ -471,7 +471,8 @@ install_systemd() {
     done
 
     $SUDO systemctl daemon-reload
-    info "Systemd units installed (per-service users)"
+    $SUDO systemctl enable spinifex.target
+    info "Systemd units installed and enabled (per-service users)"
 }
 
 # --- Install logrotate ---
