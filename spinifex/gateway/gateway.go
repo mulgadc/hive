@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"context"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
@@ -95,7 +94,7 @@ func (gw *GatewayConfig) SetupRoutes() http.Handler {
 
 	// Initialize auth rate limiter if not already set.
 	if gw.RateLimiter == nil {
-		gw.RateLimiter = NewAuthRateLimiter(context.Background())
+		gw.RateLimiter = NewAuthRateLimiter()
 	}
 
 	r := chi.NewRouter()

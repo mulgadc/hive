@@ -30,7 +30,7 @@ const (
 // SigV4AuthMiddleware returns stdlib middleware that validates AWS Signature V4 authentication.
 func (gw *GatewayConfig) SigV4AuthMiddleware() func(http.Handler) http.Handler {
 	if gw.RateLimiter == nil {
-		gw.RateLimiter = NewAuthRateLimiter(context.Background())
+		gw.RateLimiter = NewAuthRateLimiter()
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

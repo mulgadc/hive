@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"context"
 	"log/slog"
 	"net"
 	"net/http"
@@ -48,14 +47,14 @@ type AuthRateLimiter struct {
 }
 
 // NewAuthRateLimiter creates and starts an AuthRateLimiter with background GC.
-// The GC goroutine stops when ctx is cancelled or Stop is called.
-func NewAuthRateLimiter(ctx context.Context) *AuthRateLimiter {
+// Call Stop to shut down the GC goroutine.
+func NewAuthRateLimiter() *AuthRateLimiter {
 	rl := &AuthRateLimiter{
 		records: make(map[string]*ipRecord),
 		stop:    make(chan struct{}),
 		done:    make(chan struct{}),
 	}
-	go rl.gcLoop(ctx)
+	go rl.gcLoop()
 	return rl
 }
 
@@ -149,8 +148,8 @@ func (rl *AuthRateLimiter) RecordSuccess(ip string) {
 	}
 }
 
-// gcLoop runs cleanup on a fixed interval until Stop is called or ctx is cancelled.
-func (rl *AuthRateLimiter) gcLoop(ctx context.Context) {
+// gcLoop runs cleanup on a fixed interval until Stop is called.
+func (rl *AuthRateLimiter) gcLoop() {
 	defer close(rl.done)
 	ticker := time.NewTicker(gcInterval)
 	defer ticker.Stop()
@@ -158,8 +157,6 @@ func (rl *AuthRateLimiter) gcLoop(ctx context.Context) {
 	for {
 		select {
 		case <-rl.stop:
-			return
-		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			rl.cleanup()

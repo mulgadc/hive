@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +15,7 @@ import (
 )
 
 func TestCheckIP_AllowsUnknownIP(t *testing.T) {
-	rl := NewAuthRateLimiter(context.Background())
+	rl := NewAuthRateLimiter()
 	defer rl.Stop()
 
 	if errCode := rl.CheckIP("10.0.0.1"); errCode != "" {
@@ -25,7 +24,7 @@ func TestCheckIP_AllowsUnknownIP(t *testing.T) {
 }
 
 func TestRecordFailure_BelowThreshold(t *testing.T) {
-	rl := NewAuthRateLimiter(context.Background())
+	rl := NewAuthRateLimiter()
 	defer rl.Stop()
 
 	ip := "10.0.0.2"
@@ -39,7 +38,7 @@ func TestRecordFailure_BelowThreshold(t *testing.T) {
 }
 
 func TestRecordFailure_AtThreshold(t *testing.T) {
-	rl := NewAuthRateLimiter(context.Background())
+	rl := NewAuthRateLimiter()
 	defer rl.Stop()
 
 	ip := "10.0.0.3"
@@ -53,7 +52,7 @@ func TestRecordFailure_AtThreshold(t *testing.T) {
 }
 
 func TestCheckIP_RejectsLockedIP(t *testing.T) {
-	rl := NewAuthRateLimiter(context.Background())
+	rl := NewAuthRateLimiter()
 	defer rl.Stop()
 
 	ip := "10.0.0.4"
@@ -73,7 +72,7 @@ func TestCheckIP_RejectsLockedIP(t *testing.T) {
 }
 
 func TestRecordSuccess_ClearsState(t *testing.T) {
-	rl := NewAuthRateLimiter(context.Background())
+	rl := NewAuthRateLimiter()
 	defer rl.Stop()
 
 	ip := "10.0.0.5"
@@ -95,7 +94,7 @@ func TestRecordSuccess_ClearsState(t *testing.T) {
 }
 
 func TestRecordSuccess_ClearsLockout(t *testing.T) {
-	rl := NewAuthRateLimiter(context.Background())
+	rl := NewAuthRateLimiter()
 	defer rl.Stop()
 
 	ip := "10.0.0.6"
@@ -117,7 +116,7 @@ func TestRecordSuccess_ClearsLockout(t *testing.T) {
 }
 
 func TestEscalatingBackoff(t *testing.T) {
-	rl := NewAuthRateLimiter(context.Background())
+	rl := NewAuthRateLimiter()
 	defer rl.Stop()
 
 	ip := "10.0.0.7"
@@ -213,7 +212,7 @@ func TestEscalatingBackoff(t *testing.T) {
 }
 
 func TestFailureWindowSliding(t *testing.T) {
-	rl := NewAuthRateLimiter(context.Background())
+	rl := NewAuthRateLimiter()
 	defer rl.Stop()
 
 	ip := "10.0.0.8"
@@ -237,7 +236,7 @@ func TestFailureWindowSliding(t *testing.T) {
 }
 
 func TestCleanup_EvictsStaleEntries(t *testing.T) {
-	rl := NewAuthRateLimiter(context.Background())
+	rl := NewAuthRateLimiter()
 	defer rl.Stop()
 
 	ip := "10.0.0.9"
@@ -263,7 +262,7 @@ func TestCleanup_EvictsStaleEntries(t *testing.T) {
 }
 
 func TestCleanup_KeepsActiveEntries(t *testing.T) {
-	rl := NewAuthRateLimiter(context.Background())
+	rl := NewAuthRateLimiter()
 	defer rl.Stop()
 
 	ip := "10.0.0.10"
@@ -289,7 +288,7 @@ func TestCleanup_KeepsActiveEntries(t *testing.T) {
 }
 
 func TestConcurrentAccess(t *testing.T) {
-	rl := NewAuthRateLimiter(context.Background())
+	rl := NewAuthRateLimiter()
 	defer rl.Stop()
 
 	var wg sync.WaitGroup
@@ -369,7 +368,7 @@ func setupTestAppWithRateLimiter(accessKey, secretKey string, rl *AuthRateLimite
 }
 
 func TestRateLimitIntegration_LockedIPGets503(t *testing.T) {
-	rl := NewAuthRateLimiter(context.Background())
+	rl := NewAuthRateLimiter()
 	defer rl.Stop()
 
 	handler := setupTestAppWithRateLimiter(testAccessKey, testSecretKey, rl)
@@ -403,7 +402,7 @@ func TestRateLimitIntegration_LockedIPGets503(t *testing.T) {
 }
 
 func TestRateLimitIntegration_SuccessResetsLockout(t *testing.T) {
-	rl := NewAuthRateLimiter(context.Background())
+	rl := NewAuthRateLimiter()
 	defer rl.Stop()
 
 	handler := setupTestAppWithRateLimiter(testAccessKey, testSecretKey, rl)
