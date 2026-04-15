@@ -21,6 +21,7 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"strings"
@@ -168,7 +169,13 @@ func Run(ttyPath string) (*install.Config, error) {
 	if ttyPath != "" {
 		tty, err := os.OpenFile(ttyPath, os.O_RDWR, 0)
 		if err != nil {
-			return nil, fmt.Errorf("open console %s: %w", ttyPath, err)
+			// Requested TTY unavailable (e.g. serial console selected but no
+			// serial port present). Fall back to tty1 rather than aborting so
+			// the installer remains usable on the display.
+			slog.Warn("ui: could not open requested TTY, falling back to tty1", "tty", ttyPath, "err", err)
+			if tty, err = os.OpenFile("/dev/tty1", os.O_RDWR, 0); err != nil {
+				return nil, fmt.Errorf("open fallback console /dev/tty1: %w", err)
+			}
 		}
 		opts = append(opts, tea.WithInput(tty), tea.WithOutput(tty))
 	}
