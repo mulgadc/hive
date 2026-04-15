@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mulgadc/predastore/ratelimit"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	handlers_iam "github.com/mulgadc/spinifex/spinifex/handlers/iam"
 	"github.com/mulgadc/spinifex/spinifex/testutil"
@@ -1031,4 +1032,182 @@ func TestParseArgsToStruct(t *testing.T) {
 		assert.Error(t, err)
 		assert.Equal(t, "InvalidParameter", err.Error())
 	})
+}
+
+// --- Throttle middleware integration tests ---
+
+func TestThrottleKeyFuncs_ExtractsAccountAndAction(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true}
+	keyFuncs := gw.throttleKeyFuncs()
+	require.Len(t, keyFuncs, 2)
+
+	body := "Action=DescribeInstances&Version=2016-11-15"
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	ctx := context.WithValue(req.Context(), ctxAccountID, "123456789012")
+	req = req.WithContext(ctx)
+
+	acct, err := keyFuncs[0](req)
+	require.NoError(t, err)
+	assert.Equal(t, "123456789012", acct)
+
+	action, err := keyFuncs[1](req)
+	require.NoError(t, err)
+	assert.Equal(t, "DescribeInstances", action)
+
+	// Body should be re-buffered for downstream handlers.
+	downstream, _ := io.ReadAll(req.Body)
+	assert.Equal(t, body, string(downstream))
+}
+
+func TestThrottleKeyFuncs_UnknownAction(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true}
+	keyFuncs := gw.throttleKeyFuncs()
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("NoActionHere=1"))
+	ctx := context.WithValue(req.Context(), ctxAccountID, "123")
+	req = req.WithContext(ctx)
+
+	action, err := keyFuncs[1](req)
+	require.NoError(t, err)
+	assert.Equal(t, "unknown", action)
+}
+
+func TestWriteThrottleError_EC2(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true}
+
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	ctx := context.WithValue(req.Context(), ctxService, "ec2")
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	gw.writeThrottleError(w, req)
+
+	resp := w.Result()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, 503, resp.StatusCode)
+	assert.Equal(t, "application/xml", resp.Header.Get("Content-Type"))
+	assert.Contains(t, string(body), "<Code>RequestLimitExceeded</Code>")
+	assert.Contains(t, string(body), "<Response>")
+}
+
+func TestWriteThrottleError_IAM(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true}
+
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	ctx := context.WithValue(req.Context(), ctxService, "iam")
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	gw.writeThrottleError(w, req)
+
+	resp := w.Result()
+	body, _ := io.ReadAll(resp.Body)
+	assert.Equal(t, 400, resp.StatusCode)
+	assert.Contains(t, string(body), "<Code>Throttling</Code>")
+	assert.Contains(t, string(body), "<ErrorResponse>")
+}
+
+func TestThrottleMiddleware_Integration(t *testing.T) {
+	cfg := ratelimit.Config{
+		Enabled: true,
+		Rate:    1,
+		Burst:   2,
+	}
+	throttler := ratelimit.New(cfg)
+	defer throttler.Stop()
+
+	gw := &GatewayConfig{
+		DisableLogging: true,
+		Throttler:      throttler,
+	}
+
+	// Build a minimal handler that the throttle middleware wraps.
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mw := throttler.Middleware(gw.throttleKeyFuncs(), gw.writeThrottleError)
+	handler := mw(inner)
+
+	makeReq := func() *http.Response {
+		body := "Action=DescribeInstances&Version=2016-11-15"
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+		ctx := context.WithValue(req.Context(), ctxAccountID, "acct1")
+		ctx = context.WithValue(ctx, ctxService, "ec2")
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		return w.Result()
+	}
+
+	// First two requests should succeed (burst=2).
+	resp1 := makeReq()
+	assert.Equal(t, 200, resp1.StatusCode)
+	resp2 := makeReq()
+	assert.Equal(t, 200, resp2.StatusCode)
+
+	// Third request should be throttled.
+	resp3 := makeReq()
+	assert.Equal(t, 503, resp3.StatusCode)
+	assert.NotEmpty(t, resp3.Header.Get("Retry-After"))
+
+	body3, _ := io.ReadAll(resp3.Body)
+	assert.Contains(t, string(body3), "RequestLimitExceeded")
+}
+
+func TestThrottleMiddleware_DisabledConfig(t *testing.T) {
+	// When Throttler is nil, SetupRoutes skips middleware entirely.
+	gw := &GatewayConfig{DisableLogging: true, Throttler: nil}
+	handler := gw.SetupRoutes()
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("Action=DescribeInstances"))
+	ctx := context.WithValue(req.Context(), ctxAccountID, "acct1")
+	ctx = context.WithValue(ctx, ctxService, "ec2")
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	// Without auth it'll fail on SigV4, not on throttling — that's expected.
+	// The key assertion: no panic from nil Throttler.
+	resp := w.Result()
+	assert.NotEqual(t, 503, resp.StatusCode)
+}
+
+func TestThrottleMiddleware_PerActionIsolation(t *testing.T) {
+	cfg := ratelimit.Config{
+		Enabled: true,
+		Rate:    1,
+		Burst:   1,
+	}
+	throttler := ratelimit.New(cfg)
+	defer throttler.Stop()
+
+	gw := &GatewayConfig{DisableLogging: true}
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mw := throttler.Middleware(gw.throttleKeyFuncs(), gw.writeThrottleError)
+	handler := mw(inner)
+
+	makeReq := func(action string) *http.Response {
+		body := "Action=" + action
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+		ctx := context.WithValue(req.Context(), ctxAccountID, "acct1")
+		ctx = context.WithValue(ctx, ctxService, "ec2")
+		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		return w.Result()
+	}
+
+	// Exhaust DescribeInstances.
+	resp := makeReq("DescribeInstances")
+	assert.Equal(t, 200, resp.StatusCode)
+	resp = makeReq("DescribeInstances")
+	assert.Equal(t, 503, resp.StatusCode)
+
+	// RunInstances should be independent.
+	resp = makeReq("RunInstances")
+	assert.Equal(t, 200, resp.StatusCode)
 }

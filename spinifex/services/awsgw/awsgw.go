@@ -151,7 +151,8 @@ func launchService(config *config.ClusterConfig) error {
 	}
 
 	// Load API throttle config from awsgw.toml [ratelimit] section.
-	throttleCfg, err := loadThrottleConfig(nodeConfig.AWSGW.Config)
+	awsgwTomlPath := filepath.Join(nodeConfig.BaseDir, "config", "awsgw", "awsgw.toml")
+	throttleCfg, err := loadThrottleConfig(awsgwTomlPath)
 	if err != nil {
 		slog.Warn("Failed to load throttle config, throttling disabled", "err", err)
 	}
