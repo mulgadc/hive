@@ -1,12 +1,10 @@
 package gateway
 
 import (
-	"bytes"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -35,6 +33,7 @@ const (
 	ctxService   contextKey = "sigv4.service"
 	ctxRegion    contextKey = "sigv4.region"
 	ctxAccessKey contextKey = "sigv4.accessKey"
+	ctxAction    contextKey = "sigv4.action"
 )
 
 type GatewayConfig struct {
@@ -126,21 +125,19 @@ func (gw *GatewayConfig) SetupRoutes() http.Handler {
 
 // throttleKeyFuncs returns the KeyFunc slice for the API throttle middleware.
 // The first func extracts the account-id (set by SigV4 auth), the second
-// extracts the action from the EC2/IAM/ELBv2 query-protocol body.
+// extracts the action from context (set by SigV4 auth from the request body).
 func (gw *GatewayConfig) throttleKeyFuncs() []ratelimit.KeyFunc {
 	return []ratelimit.KeyFunc{
 		func(r *http.Request) (string, error) {
-			acct, _ := r.Context().Value(ctxAccountID).(string)
+			acct, ok := r.Context().Value(ctxAccountID).(string)
+			if !ok || acct == "" {
+				return "", fmt.Errorf("account-id missing from request context")
+			}
 			return acct, nil
 		},
 		func(r *http.Request) (string, error) {
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				return "", fmt.Errorf("read body for action extraction: %w", err)
-			}
-			r.Body = io.NopCloser(bytes.NewReader(body))
-			args := ParseAWSQueryArgs(string(body))
-			if action := args["Action"]; action != "" {
+			action, _ := r.Context().Value(ctxAction).(string)
+			if action != "" {
 				return action, nil
 			}
 			return "unknown", nil

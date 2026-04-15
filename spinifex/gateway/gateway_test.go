@@ -1041,9 +1041,9 @@ func TestThrottleKeyFuncs_ExtractsAccountAndAction(t *testing.T) {
 	keyFuncs := gw.throttleKeyFuncs()
 	require.Len(t, keyFuncs, 2)
 
-	body := "Action=DescribeInstances&Version=2016-11-15"
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	ctx := context.WithValue(req.Context(), ctxAccountID, "123456789012")
+	ctx = context.WithValue(ctx, ctxAction, "DescribeInstances")
 	req = req.WithContext(ctx)
 
 	acct, err := keyFuncs[0](req)
@@ -1053,23 +1053,32 @@ func TestThrottleKeyFuncs_ExtractsAccountAndAction(t *testing.T) {
 	action, err := keyFuncs[1](req)
 	require.NoError(t, err)
 	assert.Equal(t, "DescribeInstances", action)
-
-	// Body should be re-buffered for downstream handlers.
-	downstream, _ := io.ReadAll(req.Body)
-	assert.Equal(t, body, string(downstream))
 }
 
 func TestThrottleKeyFuncs_UnknownAction(t *testing.T) {
 	gw := &GatewayConfig{DisableLogging: true}
 	keyFuncs := gw.throttleKeyFuncs()
 
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("NoActionHere=1"))
+	// No ctxAction in context — should return "unknown".
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	ctx := context.WithValue(req.Context(), ctxAccountID, "123")
 	req = req.WithContext(ctx)
 
 	action, err := keyFuncs[1](req)
 	require.NoError(t, err)
 	assert.Equal(t, "unknown", action)
+}
+
+func TestThrottleKeyFuncs_MissingAccountID(t *testing.T) {
+	gw := &GatewayConfig{DisableLogging: true}
+	keyFuncs := gw.throttleKeyFuncs()
+
+	// No ctxAccountID in context — should return an error.
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+
+	_, err := keyFuncs[0](req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "account-id missing")
 }
 
 func TestWriteThrottleError_EC2(t *testing.T) {
@@ -1130,10 +1139,10 @@ func TestThrottleMiddleware_Integration(t *testing.T) {
 	handler := mw(inner)
 
 	makeReq := func() *http.Response {
-		body := "Action=DescribeInstances&Version=2016-11-15"
-		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/", nil)
 		ctx := context.WithValue(req.Context(), ctxAccountID, "acct1")
 		ctx = context.WithValue(ctx, ctxService, "ec2")
+		ctx = context.WithValue(ctx, ctxAction, "DescribeInstances")
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -1191,10 +1200,10 @@ func TestThrottleMiddleware_PerActionIsolation(t *testing.T) {
 	handler := mw(inner)
 
 	makeReq := func(action string) *http.Response {
-		body := "Action=" + action
-		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/", nil)
 		ctx := context.WithValue(req.Context(), ctxAccountID, "acct1")
 		ctx = context.WithValue(ctx, ctxService, "ec2")
+		ctx = context.WithValue(ctx, ctxAction, action)
 		req = req.WithContext(ctx)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
