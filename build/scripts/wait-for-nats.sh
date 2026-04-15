@@ -7,7 +7,7 @@ CONF=/etc/spinifex/spinifex.toml
 NATS_CONF=/etc/spinifex/nats/nats.conf
 NATS_HOST=""
 NATS_PORT="4222"
-TIMEOUT=90
+TIMEOUT=30
 
 # Try spinifex.toml first
 if [ -f "$CONF" ]; then

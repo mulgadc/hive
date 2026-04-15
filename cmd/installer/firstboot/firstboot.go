@@ -80,6 +80,16 @@ trap 'systemctl disable spinifex-firstboot.service' EXIT
 # Set hostname
 hostnamectl set-hostname %s
 
+# Run setup.sh with the embedded tarball (air-gapped, idempotent).
+# This creates service users, directories, sudoers rules, installs and enables
+# the systemd units — the same path as the online curl|bash installer.
+# Apt deps and AWS CLI are pre-installed in the squashfs so both are skipped.
+INSTALL_SPINIFEX_TARBALL=/opt/spinifex/spinifex.tar.gz \
+INSTALL_SPINIFEX_SKIP_APT=1 \
+INSTALL_SPINIFEX_SKIP_AWS=1 \
+INSTALL_SPINIFEX_SKIP_NEWGRP=1 \
+bash /usr/local/share/spinifex/setup.sh
+
 # Pre-start OVS and OVN central so their databases are initialised before
 # setup-ovn.sh runs. On physical hardware, first-boot DB initialisation takes
 # longer than setup-ovn.sh's internal 15-second timeout allows. Starting them
@@ -118,26 +128,6 @@ if [ -f /root/.aws/credentials ]; then
     chmod 600 /home/spinifex/.aws/credentials
     [ -f /home/spinifex/.aws/config ] && chmod 600 /home/spinifex/.aws/config
 fi
-
-# Fix ownership: spx admin init runs as root (no SUDO_USER in systemd context)
-# so config and data files land as root:root. Fix up per-service ownership so
-# each service user can read/write only its own directory.
-chown root:spinifex /etc/spinifex && chmod 750 /etc/spinifex
-find /etc/spinifex -type f -exec chmod 640 {} \;
-chown root:spinifex /var/lib/spinifex && chmod 750 /var/lib/spinifex
-chown -R spinifex-gw:spinifex        /var/lib/spinifex/awsgw
-chown -R spinifex-daemon:spinifex    /var/lib/spinifex/spinifex
-chown -R spinifex-nats:spinifex      /var/lib/spinifex/nats
-chown -R spinifex-storage:spinifex   /var/lib/spinifex/predastore
-chown -R spinifex-viperblock:spinifex /var/lib/spinifex/viperblock
-chown -R spinifex-vpcd:spinifex      /var/lib/spinifex/vpcd
-mkdir -p /var/log/spinifex && chown root:spinifex /var/log/spinifex && chmod 775 /var/log/spinifex
-
-# awsgw looks for master.key at <BaseDir>/config/master.key. In production
-# BaseDir is /var/lib/spinifex/awsgw/ (set by SPINIFEX_BASE_DIR), but the key
-# lives in /etc/spinifex/. Symlink so both paths resolve to the same file.
-mkdir -p /var/lib/spinifex/awsgw/config
-ln -sf /etc/spinifex/master.key /var/lib/spinifex/awsgw/config/master.key
 
 # Start services
 systemctl start spinifex.target
