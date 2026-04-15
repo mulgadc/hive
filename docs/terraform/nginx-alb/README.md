@@ -120,7 +120,7 @@ export TF_VAR_instance_type="t3.small"
 Or alternatively, using the AWS CLI tool query your instance for available types (e.g Intel, AMD, ARM) that support 2 vCPUs and 1 GB RAM.
 
 ```bash
-TF_VAR_instance_type=$(aws ec2 describe-instance-types \
+export TF_VAR_instance_type=$(aws ec2 describe-instance-types \
   --query "sort_by(InstanceTypes[?VCpuInfo.DefaultVCpus==\`2\` && MemoryInfo.SizeInMiB>=\`1024\`], &MemoryInfo.SizeInMiB)[0].InstanceType" \
   --output text)
 ```
