@@ -1,5 +1,5 @@
 # AWS Gateway configuration file in TOML format.
-version = 2
+version = "2"
 region = "{{.Region}}"
 
 # Enable verbose debugging

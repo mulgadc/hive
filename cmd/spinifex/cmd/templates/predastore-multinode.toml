@@ -1,6 +1,6 @@
 # Predastore S3-compatible storage configuration file in TOML format.
 # Generated for multi-node cluster
-version = 2
+version = "2"
 region = "{{.Region}}"
 
 host = "0.0.0.0"

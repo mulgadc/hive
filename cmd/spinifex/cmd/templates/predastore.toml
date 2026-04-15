@@ -1,6 +1,6 @@
 # Predastore S3-compatible storage configuration file in TOML format.
 # MULTI NODE used for testing
-version = 2
+version = "2"
 region = "{{.Region}}"
 
 # Optionally configure port and host, or specify via daemon CLI options
