@@ -188,6 +188,14 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() func(http.Handler) http.Handler {
 			ctx = context.WithValue(ctx, ctxRegion, region)
 			ctx = context.WithValue(ctx, ctxAccessKey, accessKey)
 
+			// Extract the Action parameter from the already-buffered body
+			// so downstream middleware (throttle) can read it from context
+			// instead of re-reading/re-parsing the body.
+			args := ParseAWSQueryArgs(string(body))
+			if action := args["Action"]; action != "" {
+				ctx = context.WithValue(ctx, ctxAction, action)
+			}
+
 			slog.Debug("SigV4 authentication successful", "accessKey", accessKey, "identity", ak.UserName)
 			gw.RateLimiter.RecordSuccess(clientIP)
 			next.ServeHTTP(w, r.WithContext(ctx))

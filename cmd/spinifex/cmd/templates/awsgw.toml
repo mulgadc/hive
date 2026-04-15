@@ -1,6 +1,28 @@
 # AWS Gateway configuration file in TOML format.
-version = "1.0"
+version = "2"
 region = "{{.Region}}"
 
 # Enable verbose debugging
 debug = false
+
+# API request throttling (per-account, per-action token bucket)
+[ratelimit]
+enabled = false
+rate = 20           # Default sustained requests per second per account per action
+burst = 100         # Default maximum burst capacity
+
+[ratelimit.action.RunInstances]
+rate = 2
+burst = 40
+
+[ratelimit.action.TerminateInstances]
+rate = 2
+burst = 40
+
+[ratelimit.action.StartInstances]
+rate = 2
+burst = 40
+
+[ratelimit.action.StopInstances]
+rate = 2
+burst = 40
