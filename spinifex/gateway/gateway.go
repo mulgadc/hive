@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/mulgadc/predastore/ratelimit"
 	"github.com/mulgadc/spinifex/spinifex/awsec2query"
 	"github.com/mulgadc/spinifex/spinifex/awserrors"
 	"github.com/mulgadc/spinifex/spinifex/gateway/policy"
@@ -32,6 +33,7 @@ const (
 	ctxService   contextKey = "sigv4.service"
 	ctxRegion    contextKey = "sigv4.region"
 	ctxAccessKey contextKey = "sigv4.accessKey"
+	ctxAction    contextKey = "sigv4.action"
 )
 
 type GatewayConfig struct {
@@ -43,9 +45,10 @@ type GatewayConfig struct {
 	Region         string     // Region this gateway is running in
 	AZ             string     // Availability zone this gateway is running in
 	IAMService     handlers_iam.IAMService
-	RateLimiter    *AuthRateLimiter // Per-IP auth failure rate limiter
-	Version        string           // Build-time version string (set from cmd.Version)
-	Commit         string           // Build-time commit hash (set from cmd.Commit)
+	RateLimiter    *AuthRateLimiter     // Per-IP auth failure rate limiter
+	Throttler      *ratelimit.Throttler // Per-account+action API request throttler
+	Version        string               // Build-time version string (set from cmd.Version)
+	Commit         string               // Build-time commit hash (set from cmd.Commit)
 }
 
 var supportedServices = map[string]bool{
@@ -106,10 +109,63 @@ func (gw *GatewayConfig) SetupRoutes() http.Handler {
 	// AWS SigV4 authentication middleware
 	r.Use(gw.SigV4AuthMiddleware())
 
+	// API request throttling (post-auth, per-account+action token bucket)
+	if gw.Throttler != nil {
+		r.Use(gw.Throttler.Middleware(
+			gw.throttleKeyFuncs(),
+			gw.writeThrottleError,
+		))
+	}
+
 	// Catch-all routes
 	r.HandleFunc("/*", gw.Request)
 
 	return r
+}
+
+// throttleKeyFuncs returns the KeyFunc slice for the API throttle middleware.
+// The first func extracts the account-id (set by SigV4 auth), the second
+// extracts the action from context (set by SigV4 auth from the request body).
+func (gw *GatewayConfig) throttleKeyFuncs() []ratelimit.KeyFunc {
+	return []ratelimit.KeyFunc{
+		func(r *http.Request) (string, error) {
+			acct, ok := r.Context().Value(ctxAccountID).(string)
+			if !ok || acct == "" {
+				return "", fmt.Errorf("account-id missing from request context")
+			}
+			return acct, nil
+		},
+		func(r *http.Request) (string, error) {
+			action, _ := r.Context().Value(ctxAction).(string)
+			if action != "" {
+				return action, nil
+			}
+			return "unknown", nil
+		},
+	}
+}
+
+// writeThrottleError writes the service-appropriate throttle rejection response.
+func (gw *GatewayConfig) writeThrottleError(w http.ResponseWriter, r *http.Request) {
+	requestID := uuid.NewString()
+	svc, _ := r.Context().Value(ctxService).(string)
+
+	var xmlErr []byte
+	var statusCode int
+	switch svc {
+	case "iam":
+		xmlErr = GenerateIAMErrorResponse(awserrors.ErrorThrottling, "Rate exceeded", requestID)
+		statusCode = 400
+	default: // ec2, elasticloadbalancing, account, spinifex
+		xmlErr = GenerateEC2ErrorResponse(awserrors.ErrorRequestLimitExceeded, "Request limit exceeded.", requestID)
+		statusCode = 503
+	}
+
+	w.Header().Set("Content-Type", "application/xml")
+	w.WriteHeader(statusCode)
+	if _, err := w.Write(xmlErr); err != nil {
+		slog.Error("Failed to write throttle error response", "err", err)
+	}
 }
 
 // Note, custom endpoints can be configured via ENV vars to the AWS SDK/CLI tool, with individual endpoints depending the service

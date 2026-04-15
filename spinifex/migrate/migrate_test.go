@@ -263,7 +263,7 @@ port = 8080
 
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
-	assert.Contains(t, string(data), "version = 2")
+	assert.Contains(t, string(data), `version = "2"`)
 	assert.NotContains(t, string(data), `"1.0"`)
 	assert.Contains(t, string(data), "port = 8080") // rest preserved
 }

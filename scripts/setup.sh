@@ -322,6 +322,10 @@ create_directories() {
     $SUDO chown "spinifex-storage:$SPINIFEX_GROUP" /etc/spinifex/predastore
     $SUDO chmod 0750 /etc/spinifex/predastore
 
+    $SUDO mkdir -p /etc/spinifex/awsgw
+    $SUDO chown "spinifex-gw:$SPINIFEX_GROUP" /etc/spinifex/awsgw
+    $SUDO chmod 0750 /etc/spinifex/awsgw
+
     # Per-service data directories
     $SUDO mkdir -p /var/lib/spinifex/nats
     $SUDO chown "spinifex-nats:$SPINIFEX_GROUP" /var/lib/spinifex/nats
@@ -399,6 +403,10 @@ fix_file_ownership() {
     if [ -d /etc/spinifex/predastore ]; then
         $SUDO chown -R "spinifex-storage:$SPINIFEX_GROUP" /etc/spinifex/predastore \
             || fatal "Failed to set ownership on /etc/spinifex/predastore"
+    fi
+    if [ -d /etc/spinifex/awsgw ]; then
+        $SUDO chown -R "spinifex-gw:$SPINIFEX_GROUP" /etc/spinifex/awsgw \
+            || fatal "Failed to set ownership on /etc/spinifex/awsgw"
     fi
 
     # Shared config files — root:spinifex with per-file modes
