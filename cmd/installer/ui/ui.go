@@ -45,8 +45,6 @@ const (
 	screenIdentity
 	screenPassword
 	screenJoinConfig
-	screenCACertPrompt
-	screenCACert
 	screenConfirm
 	screenDone // signals completion; program exits
 )
@@ -132,10 +130,6 @@ type model struct {
 	passwordInput        textinput.Model
 	passwordConfirmInput textinput.Model
 	passwordFocus        int // 0 = password, 1 = confirm
-
-	// CA cert
-	hasCACert   int // 0 = no, 1 = yes
-	caCertInput textinput.Model
 
 	// Accumulated validation error shown on current screen
 	validationErr string
@@ -265,10 +259,6 @@ func newModel(disks []diskInfo, nics []nicInfo) model {
 	passConfirmIn.EchoMode = textinput.EchoPassword
 	passConfirmIn.CharLimit = 128
 
-	caCertIn := textinput.New()
-	caCertIn.Placeholder = "-----BEGIN CERTIFICATE-----"
-	caCertIn.CharLimit = 0
-
 	// Initial LAN cursor: first NIC that is not the WAN NIC (cursor 0).
 	lanCursor := 0
 	if len(nics) > 1 {
@@ -300,7 +290,6 @@ func newModel(disks []diskInfo, nics []nicInfo) model {
 		passwordConfirmInput: passConfirmIn,
 		joinIPInput:          joinIPIn,
 		joinPortInput:        joinPortIn,
-		caCertInput:          caCertIn,
 	}
 }
 
@@ -524,7 +513,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.screen = screenJoinConfig
 				m.joinIPInput.Focus()
 			} else {
-				m.screen = screenCACertPrompt
+				m.screen = screenConfirm
 			}
 		case "esc":
 			m.passwordInput.Blur()
@@ -562,7 +551,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.validationErr = "Invalid primary node IP"
 				return m, nil
 			}
-			m.screen = screenCACertPrompt
+			m.screen = screenConfirm
 		case "esc":
 			m.joinIPInput.Blur()
 			m.joinPortInput.Blur()
@@ -579,8 +568,15 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
-	case screenCACertPrompt:
+	case screenConfirm:
 		switch key {
+		case "enter", "y", "Y":
+			m.result = m.buildConfig()
+			m.screen = screenDone
+			return m, tea.Quit
+		case "n", "N":
+			m.err = errors.New("installation cancelled")
+			return m, tea.Quit
 		case "esc":
 			if m.clusterRole == 1 {
 				m.screen = screenJoinConfig
@@ -591,47 +587,6 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.passwordInput.Focus()
 				m.passwordFocus = 0
 			}
-		case "left", "h", "right", "l":
-			if m.hasCACert == 0 {
-				m.hasCACert = 1
-			} else {
-				m.hasCACert = 0
-			}
-		case "enter":
-			if m.hasCACert == 1 {
-				m.screen = screenCACert
-				m.caCertInput.Focus()
-			} else {
-				m.screen = screenConfirm
-			}
-		}
-
-	case screenCACert:
-		switch key {
-		case "enter":
-			cert := strings.TrimSpace(m.caCertInput.Value())
-			if !strings.Contains(cert, "BEGIN CERTIFICATE") {
-				m.validationErr = "Does not look like a PEM certificate"
-				return m, nil
-			}
-			m.screen = screenConfirm
-		case "esc":
-			m.screen = screenCACertPrompt
-		default:
-			var cmd tea.Cmd
-			m.caCertInput, cmd = m.caCertInput.Update(msg)
-			return m, cmd
-		}
-
-	case screenConfirm:
-		switch key {
-		case "enter", "y", "Y":
-			m.result = m.buildConfig()
-			m.screen = screenDone
-			return m, tea.Quit
-		case "n", "N", "esc":
-			m.err = errors.New("installation cancelled")
-			return m, tea.Quit
 		}
 	}
 
@@ -1146,10 +1101,6 @@ func (m model) View() string {
 		content = m.viewPassword(w)
 	case screenJoinConfig:
 		content = m.viewJoinConfig(w)
-	case screenCACertPrompt:
-		content = m.viewCACertPrompt(w)
-	case screenCACert:
-		content = m.viewCACert(w)
 	case screenConfirm:
 		content = m.viewConfirm(w)
 	case screenDone:
@@ -1448,47 +1399,6 @@ func (m model) viewJoinConfig(w int) string {
 	)
 }
 
-func (m model) viewCACertPrompt(w int) string {
-	title := styleTitle.Render("Custom CA Certificate")
-	subtitle := styleMuted.Render("Required for air-gapped deployments with a private CA.")
-
-	options := []string{"No", "Yes"}
-	var parts []string
-	for i, o := range options {
-		if i == m.hasCACert {
-			parts = append(parts, styleSelected.Render(" "+o+" "))
-		} else {
-			parts = append(parts, styleMuted.Render(o))
-		}
-	}
-
-	body := lipgloss.JoinVertical(lipgloss.Left,
-		title, subtitle, "", styleLabel.Render("Install a custom CA certificate?"),
-		"", strings.Join(parts, "  "),
-		"", styleHelp.Render("←/→ to select • Enter to proceed"),
-	)
-	return lipgloss.Place(w, m.height, lipgloss.Center, lipgloss.Center,
-		styleBox.Width(min(w-4, 64)).Render(body),
-	)
-}
-
-func (m model) viewCACert(w int) string {
-	title := styleTitle.Render("CA Certificate (PEM)")
-	subtitle := styleMuted.Render("Paste the full PEM certificate block.")
-
-	var lines []string
-	lines = append(lines, title, subtitle, "", m.caCertInput.View())
-	if m.validationErr != "" {
-		lines = append(lines, "", styleError.Render(m.validationErr))
-	}
-	lines = append(lines, styleHelp.Render("Enter to confirm • Esc to go back"))
-
-	body := lipgloss.JoinVertical(lipgloss.Left, lines...)
-	return lipgloss.Place(w, m.height, lipgloss.Center, lipgloss.Center,
-		styleBox.Width(min(w-4, 64)).Render(body),
-	)
-}
-
 func (m model) viewConfirm(w int) string {
 	title := styleTitle.Render("Confirm Installation")
 
@@ -1538,7 +1448,7 @@ func (m model) viewConfirm(w int) string {
 		title, "",
 		strings.Join(rows, "\n"), "",
 		warning, "",
-		styleHelp.Render("Enter/Y to install • N/Esc to cancel"),
+		styleHelp.Render("Enter/Y to install • N to cancel • Esc to go back"),
 	)
 	return lipgloss.Place(w, m.height, lipgloss.Center, lipgloss.Center,
 		styleBox.Width(min(w-4, 72)).Render(body),
@@ -1608,8 +1518,6 @@ func (m model) buildConfig() *install.Config {
 		}
 		cfg.JoinAddr = net.JoinHostPort(strings.TrimSpace(m.joinIPInput.Value()), port)
 	}
-	cfg.HasCACert = m.hasCACert == 1
-	cfg.CACert = strings.TrimSpace(m.caCertInput.Value())
 	cfg.RootPassword = m.passwordInput.Value()
 	return cfg
 }
