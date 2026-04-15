@@ -18,6 +18,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 package install
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"log/slog"
@@ -26,6 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/mulgadc/spinifex/cmd/installer/firstboot"
 	"github.com/mulgadc/spinifex/cmd/installer/systemd"
@@ -73,7 +75,8 @@ func Run(cfg *Config) error {
 		}
 	}
 
-	slog.Info("installation complete — rebooting")
+	slog.Info("installation complete")
+	promptRemoveUSB()
 	return reboot()
 }
 
@@ -119,7 +122,7 @@ func mountPartitions(disk string) error {
 // rsync. This is the air-gapped alternative to debootstrap — all packages are
 // already embedded in the ISO so no network access is required.
 func copyRootfs() error {
-	if err := run("rsync", "-aHAX", "--delete",
+	if err := run("rsync", "-aHAX", "--delete", "--info=progress2",
 		"--exclude=/proc",
 		"--exclude=/sys",
 		"--exclude=/dev",
@@ -403,8 +406,9 @@ GRUB_TIMEOUT=5
 GRUB_DISTRIBUTOR=Spinifex
 GRUB_CMDLINE_LINUX_DEFAULT=""
 GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8 systemd.show_status=1"
-GRUB_TERMINAL="serial console"
+GRUB_TERMINAL="gfxterm serial"
 GRUB_SERIAL_COMMAND="serial --unit=0 --speed=115200 --word=8 --parity=no --stop=1"
+GRUB_GFXMODE=auto
 GRUB_BACKGROUND=/boot/grub/splash.png
 `
 	if err := os.WriteFile(filepath.Join(mountRoot, "etc/default/grub"), []byte(grubDefault), 0o644); err != nil {
@@ -442,6 +446,26 @@ func installCACert(cfg *Config) error {
 		return err
 	}
 	return run("chroot", mountRoot, "update-ca-certificates")
+}
+
+// promptRemoveUSB prints a removal reminder and waits up to 10 seconds for
+// the user to press Enter before rebooting. Reading from os.Stdin works because
+// spinifex-init redirects the installer's stdin from $CONSOLE_DEV.
+func promptRemoveUSB() {
+	fmt.Println("\n\033[1mInstallation complete.\033[0m")
+	fmt.Println("Remove the USB drive, then press Enter to reboot (auto-rebooting in 10 seconds)...")
+
+	done := make(chan struct{})
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		scanner.Scan()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+	}
 }
 
 func reboot() error {
