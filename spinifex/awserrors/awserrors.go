@@ -379,6 +379,7 @@ var (
 	ErrorSubnetLimitExceeded                                   = "SubnetLimitExceeded"
 	ErrorTagLimitExceeded                                      = "TagLimitExceeded"
 	ErrorTagPolicyViolation                                    = "TagPolicyViolation"
+	ErrorThrottling                                            = "Throttling"
 	ErrorTargetCapacityLimitExceededException                  = "TargetCapacityLimitExceededException"
 	ErrorTrafficMirrorFilterInUse                              = "TrafficMirrorFilterInUse"
 	ErrorTrafficMirrorFilterLimitExceeded                      = "TrafficMirrorFilterLimitExceeded"
@@ -838,6 +839,7 @@ var ErrorLookup = map[string]ErrorMessage{
 	ErrorSubnetLimitExceeded:                                   {HTTPCode: 400, Message: "You've reached the limit on the number of subnets that you can create for the specified VPC. For more information, see Amazon VPC quotas."},
 	ErrorTagLimitExceeded:                                      {HTTPCode: 400, Message: "You've reached the limit on the number of tags that you can assign to the specified resource. For more information, see Tag restrictions."},
 	ErrorTagPolicyViolation:                                    {HTTPCode: 400, Message: "You attempted to create or update a resource with tags that are not compliant with the tag policy requirements for this account. For more information, see Grant permission to tag resources during creation."},
+	ErrorThrottling:                                            {HTTPCode: 400, Message: "Rate exceeded."},
 	ErrorTargetCapacityLimitExceededException:                  {HTTPCode: 400, Message: "The value for targetCapacity exceeds your limit on the amount of Spot placement target capacity you can explore. Reduce the targetCapacity value, and try again. For more information, see Spot placement score."},
 	ErrorTrafficMirrorFilterInUse:                              {HTTPCode: 400, Message: "The Traffic Mirror filter cannot be deleted because a Traffic Mirror session is currently using it."},
 	ErrorTrafficMirrorFilterLimitExceeded:                      {HTTPCode: 400, Message: "The maximum number of Traffic Mirror filters has been exceeded."},

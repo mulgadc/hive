@@ -16,7 +16,7 @@ type ConfigVersionReader interface {
 
 // TOMLVersionReader reads/writes the version field in TOML config files.
 // Handles both legacy string values ("1.0" → 1) and integer values (2 → 2).
-// New writes always use integers (version = 2).
+// New writes always use quoted strings (version = "2").
 type TOMLVersionReader struct{}
 
 var tomlVersionRe = regexp.MustCompile(`(?m)^version\s*=\s*(?:"([^"]+)"|(\d+))\s*$`)
@@ -57,7 +57,7 @@ func (r *TOMLVersionReader) WriteVersion(path string, version int) error {
 		return err
 	}
 
-	replacement := fmt.Sprintf("version = %d", version)
+	replacement := fmt.Sprintf("version = \"%d\"", version)
 
 	if tomlVersionRe.Match(data) {
 		data = tomlVersionRe.ReplaceAll(data, []byte(replacement))

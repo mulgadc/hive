@@ -382,6 +382,7 @@ func TestErrorLookup(t *testing.T) {
 		{code: "TagLimitExceeded", http: 400, message: "You've reached the limit on the number of tags that you can assign to the specified resource. For more information, see Tag restrictions."},
 		{code: "TagPolicyViolation", http: 400, message: "You attempted to create or update a resource with tags that are not compliant with the tag policy requirements for this account. For more information, see Grant permission to tag resources during creation."},
 		{code: "TargetCapacityLimitExceededException", http: 400, message: "The value for targetCapacity exceeds your limit on the amount of Spot placement target capacity you can explore. Reduce the targetCapacity value, and try again. For more information, see Spot placement score."},
+		{code: "Throttling", http: 400, message: "Rate exceeded."},
 		{code: "TrafficMirrorFilterInUse", http: 400, message: "The Traffic Mirror filter cannot be deleted because a Traffic Mirror session is currently using it."},
 		{code: "TrafficMirrorFilterLimitExceeded", http: 400, message: "The maximum number of Traffic Mirror filters has been exceeded."},
 		{code: "TrafficMirrorFilterRuleAlreadyExists", http: 409, message: "The Traffic Mirror filter rule already exists."},
