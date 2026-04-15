@@ -142,7 +142,8 @@ spinifex-daemon ALL=(root) NOPASSWD: /sbin/ip, /usr/sbin/ip
 spinifex-daemon ALL=(root) NOPASSWD: /usr/bin/ovs-vsctl, /usr/bin/ovs-appctl
 spinifex-daemon ALL=(root) NOPASSWD: /usr/sbin/dhcpcd
 
-# Spinifex VPC daemon: OVN and OVS read/write, OVN controller status check
+# Spinifex VPC daemon: OVN and OVS read/write, OVN controller status check and DHCP
+spinifex-vpcd ALL=(root) NOPASSWD: /usr/sbin/dhcpcd
 spinifex-vpcd ALL=(root) NOPASSWD: /usr/bin/ovs-vsctl, /usr/bin/ovs-appctl
 spinifex-vpcd ALL=(root) NOPASSWD: /usr/bin/ovn-nbctl, /usr/bin/ovn-sbctl
 spinifex-vpcd ALL=(root) NOPASSWD: /usr/bin/systemctl is-active --quiet ovn-controller
