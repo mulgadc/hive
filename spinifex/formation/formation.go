@@ -2,7 +2,10 @@ package formation
 
 import (
 	"context"
+	crypto_rand "crypto/rand"
+	"crypto/subtle"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -98,12 +101,25 @@ type FormationServer struct {
 	caKey         string
 	masterKey     string
 	networkConfig *NetworkConfig
+	joinToken     string
+	tokenExpiry   time.Time
 	done          chan struct{}
 	server        *http.Server
 }
 
+// GenerateJoinToken returns a token of the form "spx_join_<16 base64url chars>".
+// Uses crypto/rand for 12 random bytes (96 bits entropy), base64 URL-safe encoded.
+func GenerateJoinToken() (string, error) {
+	b := make([]byte, 12)
+	if _, err := crypto_rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate join token: %w", err)
+	}
+	return "spx_join_" + base64.RawURLEncoding.EncodeToString(b), nil
+}
+
 // NewFormationServer creates a new formation server expecting the given number of nodes.
-func NewFormationServer(expected int, creds *SharedCredentials, caCert, caKey string, networkConfig *NetworkConfig) *FormationServer {
+func NewFormationServer(expected int, creds *SharedCredentials, caCert, caKey string,
+	networkConfig *NetworkConfig, joinToken string, tokenTTL time.Duration) *FormationServer {
 	return &FormationServer{
 		expected:      expected,
 		nodes:         make(map[string]NodeInfo),
@@ -111,6 +127,8 @@ func NewFormationServer(expected int, creds *SharedCredentials, caCert, caKey st
 		caCert:        caCert,
 		caKey:         caKey,
 		networkConfig: networkConfig,
+		joinToken:     joinToken,
+		tokenExpiry:   time.Now().Add(tokenTTL),
 		done:          make(chan struct{}),
 	}
 }
@@ -238,7 +256,44 @@ func (fs *FormationServer) Shutdown(ctx context.Context) error {
 	return fs.server.Shutdown(ctx)
 }
 
+// validateToken checks the Authorization header against the join token.
+// Returns an error if the token is missing, invalid, or expired.
+func (fs *FormationServer) validateToken(r *http.Request) error {
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+
+	if time.Now().After(fs.tokenExpiry) {
+		return fmt.Errorf("join token has expired")
+	}
+
+	auth := r.Header.Get("Authorization")
+	if auth == "" {
+		return fmt.Errorf("missing Authorization header")
+	}
+
+	const prefix = "Bearer "
+	if len(auth) < len(prefix) || auth[:len(prefix)] != prefix {
+		return fmt.Errorf("invalid Authorization header format")
+	}
+	token := auth[len(prefix):]
+
+	if subtle.ConstantTimeCompare([]byte(token), []byte(fs.joinToken)) != 1 {
+		return fmt.Errorf("invalid join token")
+	}
+
+	return nil
+}
+
 func (fs *FormationServer) handleJoin(w http.ResponseWriter, r *http.Request) {
+	if err := fs.validateToken(r); err != nil {
+		slog.Warn("Formation join rejected", "error", err, "remote_addr", r.RemoteAddr)
+		writeJSON(w, http.StatusUnauthorized, JoinResponse{
+			Success: false,
+			Message: "unauthorized: " + err.Error(),
+		})
+		return
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, 1*1024*1024) // 1 MB limit
 	var req JoinRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -270,6 +325,12 @@ func (fs *FormationServer) handleJoin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (fs *FormationServer) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if err := fs.validateToken(r); err != nil {
+		slog.Warn("Formation status rejected", "error", err, "remote_addr", r.RemoteAddr)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	fs.mu.RLock()
 	defer fs.mu.RUnlock()
 

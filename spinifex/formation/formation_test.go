@@ -12,6 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testToken = "spx_join_dGVzdHRva2VuMTIz"
+const testTokenTTL = 1 * time.Hour
+
 func testCreds() *SharedCredentials {
 	return &SharedCredentials{
 		AccessKey:   "AKIATEST1234567890AB",
@@ -33,9 +36,53 @@ func testNode(name, ip string) NodeInfo {
 	}
 }
 
+func testServer(t *testing.T, fs *FormationServer) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /formation/join", fs.handleJoin)
+	mux.HandleFunc("GET /formation/status", fs.handleStatus)
+	mux.HandleFunc("GET /formation/health", fs.handleHealth)
+	return httptest.NewServer(mux)
+}
+
+func authPost(t *testing.T, url, token string, body []byte) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	return resp
+}
+
+func authGet(t *testing.T, url, token string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	return resp
+}
+
+func TestGenerateJoinToken(t *testing.T) {
+	t.Parallel()
+	token1, err := GenerateJoinToken()
+	require.NoError(t, err)
+
+	assert.True(t, len(token1) > len("spx_join_"))
+	assert.Equal(t, "spx_join_", token1[:9])
+	assert.Len(t, token1[9:], 16)
+
+	token2, err := GenerateJoinToken()
+	require.NoError(t, err)
+	assert.NotEqual(t, token1, token2)
+}
+
 func TestNewFormationServer(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(3, testCreds(), "ca-cert-pem", "ca-key-pem", nil)
+	fs := NewFormationServer(3, testCreds(), "ca-cert-pem", "ca-key-pem", nil, testToken, testTokenTTL)
 
 	assert.Equal(t, 3, fs.expected)
 	assert.Empty(t, fs.nodes)
@@ -44,7 +91,7 @@ func TestNewFormationServer(t *testing.T) {
 
 func TestRegisterNode(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(3, testCreds(), "", "", nil)
+	fs := NewFormationServer(3, testCreds(), "", "", nil, testToken, testTokenTTL)
 
 	err := fs.RegisterNode(testNode("node1", "10.0.0.1"))
 	require.NoError(t, err)
@@ -56,7 +103,7 @@ func TestRegisterNode(t *testing.T) {
 
 func TestRegisterDuplicateName(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(3, testCreds(), "", "", nil)
+	fs := NewFormationServer(3, testCreds(), "", "", nil, testToken, testTokenTTL)
 
 	require.NoError(t, fs.RegisterNode(testNode("node1", "10.0.0.1")))
 	err := fs.RegisterNode(testNode("node1", "10.0.0.2"))
@@ -66,7 +113,7 @@ func TestRegisterDuplicateName(t *testing.T) {
 
 func TestRegisterDuplicateIP(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(3, testCreds(), "", "", nil)
+	fs := NewFormationServer(3, testCreds(), "", "", nil, testToken, testTokenTTL)
 
 	require.NoError(t, fs.RegisterNode(testNode("node1", "10.0.0.1")))
 	err := fs.RegisterNode(testNode("node2", "10.0.0.1"))
@@ -76,7 +123,7 @@ func TestRegisterDuplicateIP(t *testing.T) {
 
 func TestIsComplete(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(2, testCreds(), "", "", nil)
+	fs := NewFormationServer(2, testCreds(), "", "", nil, testToken, testTokenTTL)
 
 	assert.False(t, fs.IsComplete())
 	require.NoError(t, fs.RegisterNode(testNode("node1", "10.0.0.1")))
@@ -87,7 +134,7 @@ func TestIsComplete(t *testing.T) {
 
 func TestWaitForCompletion(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(2, testCreds(), "", "", nil)
+	fs := NewFormationServer(2, testCreds(), "", "", nil, testToken, testTokenTTL)
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
@@ -102,7 +149,7 @@ func TestWaitForCompletion(t *testing.T) {
 
 func TestWaitForCompletionTimeout(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(3, testCreds(), "", "", nil)
+	fs := NewFormationServer(3, testCreds(), "", "", nil, testToken, testTokenTTL)
 
 	require.NoError(t, fs.RegisterNode(testNode("node1", "10.0.0.1")))
 
@@ -111,24 +158,81 @@ func TestWaitForCompletionTimeout(t *testing.T) {
 	assert.Contains(t, err.Error(), "timed out")
 }
 
-func testServer(t *testing.T, fs *FormationServer) *httptest.Server {
-	t.Helper()
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /formation/join", fs.handleJoin)
-	mux.HandleFunc("GET /formation/status", fs.handleStatus)
-	mux.HandleFunc("GET /formation/health", fs.handleHealth)
-	return httptest.NewServer(mux)
+func TestValidateToken_Valid(t *testing.T) {
+	t.Parallel()
+	fs := NewFormationServer(2, testCreds(), "", "", nil, testToken, testTokenTTL)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	assert.NoError(t, fs.validateToken(req))
 }
 
-func TestJoinEndpoint(t *testing.T) {
+func TestValidateToken_Missing(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(3, testCreds(), "", "", nil)
+	fs := NewFormationServer(2, testCreds(), "", "", nil, testToken, testTokenTTL)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	err := fs.validateToken(req)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "missing Authorization header")
+}
+
+func TestValidateToken_Invalid(t *testing.T) {
+	t.Parallel()
+	fs := NewFormationServer(2, testCreds(), "", "", nil, testToken, testTokenTTL)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	err := fs.validateToken(req)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid join token")
+}
+
+func TestValidateToken_Expired(t *testing.T) {
+	t.Parallel()
+	fs := NewFormationServer(2, testCreds(), "", "", nil, testToken, 1*time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	err := fs.validateToken(req)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "expired")
+}
+
+func TestValidateToken_BadFormat(t *testing.T) {
+	t.Parallel()
+	fs := NewFormationServer(2, testCreds(), "", "", nil, testToken, testTokenTTL)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Basic "+testToken)
+	err := fs.validateToken(req)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid Authorization header format")
+}
+
+func TestJoinEndpoint_Unauthorized(t *testing.T) {
+	t.Parallel()
+	fs := NewFormationServer(3, testCreds(), "", "", nil, testToken, testTokenTTL)
 	ts := testServer(t, fs)
 	defer ts.Close()
 
 	body, _ := json.Marshal(JoinRequest{NodeInfo: testNode("node1", "10.0.0.1")})
 	resp, err := http.Post(ts.URL+"/formation/join", "application/json", bytes.NewReader(body))
 	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+func TestJoinEndpoint_WithToken(t *testing.T) {
+	t.Parallel()
+	fs := NewFormationServer(3, testCreds(), "", "", nil, testToken, testTokenTTL)
+	ts := testServer(t, fs)
+	defer ts.Close()
+
+	body, _ := json.Marshal(JoinRequest{NodeInfo: testNode("node1", "10.0.0.1")})
+	resp := authPost(t, ts.URL+"/formation/join", testToken, body)
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -142,33 +246,43 @@ func TestJoinEndpoint(t *testing.T) {
 
 func TestJoinEndpointDuplicate(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(3, testCreds(), "", "", nil)
+	fs := NewFormationServer(3, testCreds(), "", "", nil, testToken, testTokenTTL)
 	ts := testServer(t, fs)
 	defer ts.Close()
 
 	body, _ := json.Marshal(JoinRequest{NodeInfo: testNode("node1", "10.0.0.1")})
 
-	resp1, err := http.Post(ts.URL+"/formation/join", "application/json", bytes.NewReader(body))
-	require.NoError(t, err)
+	resp1 := authPost(t, ts.URL+"/formation/join", testToken, body)
 	resp1.Body.Close()
 	assert.Equal(t, http.StatusOK, resp1.StatusCode)
 
-	resp2, err := http.Post(ts.URL+"/formation/join", "application/json", bytes.NewReader(body))
-	require.NoError(t, err)
+	resp2 := authPost(t, ts.URL+"/formation/join", testToken, body)
 	defer resp2.Body.Close()
 	assert.Equal(t, http.StatusConflict, resp2.StatusCode)
 }
 
+func TestStatusEndpoint_Unauthorized(t *testing.T) {
+	t.Parallel()
+	fs := NewFormationServer(3, testCreds(), "ca-cert", "ca-key", nil, testToken, testTokenTTL)
+	ts := testServer(t, fs)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/formation/status")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
 func TestStatusEndpointIncomplete(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(3, testCreds(), "ca-cert", "ca-key", nil)
+	fs := NewFormationServer(3, testCreds(), "ca-cert", "ca-key", nil, testToken, testTokenTTL)
 	ts := testServer(t, fs)
 	defer ts.Close()
 
 	require.NoError(t, fs.RegisterNode(testNode("node1", "10.0.0.1")))
 
-	resp, err := http.Get(ts.URL + "/formation/status")
-	require.NoError(t, err)
+	resp := authGet(t, ts.URL+"/formation/status", testToken)
 	defer resp.Body.Close()
 
 	var sr StatusResponse
@@ -184,15 +298,14 @@ func TestStatusEndpointIncomplete(t *testing.T) {
 func TestStatusEndpointComplete(t *testing.T) {
 	t.Parallel()
 	creds := testCreds()
-	fs := NewFormationServer(2, creds, "ca-cert-data", "ca-key-data", nil)
+	fs := NewFormationServer(2, creds, "ca-cert-data", "ca-key-data", nil, testToken, testTokenTTL)
 	ts := testServer(t, fs)
 	defer ts.Close()
 
 	require.NoError(t, fs.RegisterNode(testNode("node1", "10.0.0.1")))
 	require.NoError(t, fs.RegisterNode(testNode("node2", "10.0.0.2")))
 
-	resp, err := http.Get(ts.URL + "/formation/status")
-	require.NoError(t, err)
+	resp := authGet(t, ts.URL+"/formation/status", testToken)
 	defer resp.Body.Close()
 
 	var sr StatusResponse
@@ -209,14 +322,13 @@ func TestStatusEndpointComplete(t *testing.T) {
 
 func TestStatusEndpointMasterKey(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(2, testCreds(), "ca-cert", "ca-key", nil)
+	fs := NewFormationServer(2, testCreds(), "ca-cert", "ca-key", nil, testToken, testTokenTTL)
 	fs.SetMasterKey("dGVzdC1tYXN0ZXIta2V5LWJhc2U2NC1lbmNvZGVk")
 	ts := testServer(t, fs)
 	defer ts.Close()
 
 	// Before completion: master key should not be exposed
-	resp, err := http.Get(ts.URL + "/formation/status")
-	require.NoError(t, err)
+	resp := authGet(t, ts.URL+"/formation/status", testToken)
 	var sr StatusResponse
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&sr))
 	resp.Body.Close()
@@ -227,17 +339,16 @@ func TestStatusEndpointMasterKey(t *testing.T) {
 	require.NoError(t, fs.RegisterNode(testNode("node2", "10.0.0.2")))
 
 	// After completion: master key should be present
-	resp, err = http.Get(ts.URL + "/formation/status")
-	require.NoError(t, err)
+	resp = authGet(t, ts.URL+"/formation/status", testToken)
 	defer resp.Body.Close()
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&sr))
 	assert.True(t, sr.Complete)
 	assert.Equal(t, "dGVzdC1tYXN0ZXIta2V5LWJhc2U2NC1lbmNvZGVk", sr.MasterKey)
 }
 
-func TestHealthEndpoint(t *testing.T) {
+func TestHealthEndpoint_NoAuth(t *testing.T) {
 	t.Parallel()
-	fs := NewFormationServer(1, testCreds(), "", "", nil)
+	fs := NewFormationServer(1, testCreds(), "", "", nil, testToken, testTokenTTL)
 	ts := testServer(t, fs)
 	defer ts.Close()
 
@@ -289,22 +400,21 @@ func TestBuildPredastoreNodes(t *testing.T) {
 	assert.Equal(t, "10.0.0.3", pnodes[2].Host)
 }
 
-func TestFullFormationFlow(t *testing.T) {
+func TestFullFormationFlow_WithToken(t *testing.T) {
 	t.Parallel()
 	creds := testCreds()
-	fs := NewFormationServer(3, creds, "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----", "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----", nil)
+	fs := NewFormationServer(3, creds, "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----", "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----", nil, testToken, testTokenTTL)
 	ts := testServer(t, fs)
 	defer ts.Close()
 
-	// 3 nodes join sequentially
+	// 3 nodes join sequentially with auth
 	for i, n := range []struct{ name, ip string }{
 		{"node1", "10.0.0.1"},
 		{"node2", "10.0.0.2"},
 		{"node3", "10.0.0.3"},
 	} {
 		body, _ := json.Marshal(JoinRequest{NodeInfo: testNode(n.name, n.ip)})
-		resp, err := http.Post(ts.URL+"/formation/join", "application/json", bytes.NewReader(body))
-		require.NoError(t, err)
+		resp := authPost(t, ts.URL+"/formation/join", testToken, body)
 
 		var jr JoinResponse
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&jr))
@@ -314,9 +424,8 @@ func TestFullFormationFlow(t *testing.T) {
 		assert.Equal(t, i+1, jr.Joined)
 	}
 
-	// All nodes poll status — should be complete
-	resp, err := http.Get(ts.URL + "/formation/status")
-	require.NoError(t, err)
+	// All nodes poll status with auth — should be complete
+	resp := authGet(t, ts.URL+"/formation/status", testToken)
 	defer resp.Body.Close()
 
 	var sr StatusResponse
