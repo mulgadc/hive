@@ -327,7 +327,7 @@ func (fs *FormationServer) handleJoin(w http.ResponseWriter, r *http.Request) {
 func (fs *FormationServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if err := fs.validateToken(r); err != nil {
 		slog.Warn("Formation status rejected", "error", err, "remote_addr", r.RemoteAddr)
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
 		return
 	}
 

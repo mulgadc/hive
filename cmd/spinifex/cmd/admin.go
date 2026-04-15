@@ -23,8 +23,10 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net"
 	"net/http"
@@ -1089,8 +1091,8 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		fmt.Fprintf(os.Stderr, "❌ Error: Invalid --token-ttl: %v\n", err)
 		os.Exit(1)
 	}
-	if tokenTTL < formationTimeout {
-		fmt.Fprintf(os.Stderr, "❌ Error: --token-ttl (%s) must be >= --formation-timeout (%s)\n", tokenTTL, formationTimeout)
+	if tokenTTL < formationTimeout+1*time.Minute {
+		fmt.Fprintf(os.Stderr, "❌ Error: --token-ttl (%s) must be >= --formation-timeout + 1m (%s)\n", tokenTTL, formationTimeout+1*time.Minute)
 		os.Exit(1)
 	}
 
@@ -1181,6 +1183,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 	if err := fs.WaitForCompletion(formationTimeout); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		fs.Shutdown(context.Background())
+		os.Remove(tokenPath)
 		os.Exit(1)
 	}
 
@@ -1324,7 +1327,9 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 	// Shutdown formation server
 	fs.Shutdown(context.Background())
-	os.Remove(tokenPath) // token is expired/useless, don't leave on disk
+	if err := os.Remove(tokenPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		slog.Warn("Failed to remove join token file", "path", tokenPath, "error", err)
+	}
 
 	// Print cluster summary
 	fmt.Println("\n🎉 Cluster formation complete!")
@@ -1492,8 +1497,17 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 			os.Exit(1)
 		}
 
+		if sResp.StatusCode == http.StatusUnauthorized {
+			fmt.Fprintf(os.Stderr, "❌ Error: join token rejected by formation server (expired or invalid)\n")
+			os.Exit(1)
+		}
+		if sResp.StatusCode != http.StatusOK {
+			fmt.Fprintf(os.Stderr, "❌ Error: unexpected status %d from formation server\n", sResp.StatusCode)
+			os.Exit(1)
+		}
+
 		if err := json.Unmarshal(sBody, &statusResp); err != nil {
-			fmt.Fprintf(os.Stderr, "Error parsing status response: %v\n", err)
+			fmt.Fprintf(os.Stderr, "❌ Error parsing status response: %v\n", err)
 			os.Exit(1)
 		}
 
