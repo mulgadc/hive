@@ -121,6 +121,14 @@ while ! curl -sk --connect-timeout 3 "https://$NODE1_IP:4432/formation/health" >
 done
 echo "    Formation server ready"
 
+# Read join token from init node
+JOIN_TOKEN=$(remote "$NODE1_IP" "cat ~/spinifex/config/join-token")
+if [ -z "$JOIN_TOKEN" ]; then
+    echo "Error: Failed to read join token from $NODE1_IP"
+    exit 1
+fi
+echo "    Join token loaded from node1"
+
 # Nodes 2..N: join
 if [ "$NODE_COUNT" -gt 1 ]; then
     JOIN_PIDS=()
@@ -134,6 +142,7 @@ if [ "$NODE_COUNT" -gt 1 ]; then
             --cluster-bind $ip \
             --cluster-routes $NODE1_IP:4248 \
             --host $NODE1_IP:4432 \
+            --token $JOIN_TOKEN \
             --data-dir ~/spinifex/ \
             --config-dir ~/spinifex/config/ \
             --region $REGION \

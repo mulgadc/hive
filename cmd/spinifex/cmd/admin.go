@@ -23,8 +23,10 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net"
 	"net/http"
@@ -242,6 +244,7 @@ func init() {
 	adminInitCmd.Flags().String("cluster-routes", "", "NATS cluster hosts for routing specify multiple with comma (e.g., 10.11.12.1:4248,10.11.12.2:4248 for multi-node)")
 	adminInitCmd.Flags().String("predastore-nodes", "", "Comma-separated IPs for multi-node Predastore cluster (e.g., 10.11.12.1,10.11.12.2,10.11.12.3). Requires >= 3 nodes.")
 	adminInitCmd.Flags().String("formation-timeout", "10m", "Timeout for cluster formation (e.g., 5m, 30s)")
+	adminInitCmd.Flags().String("token-ttl", "30m", "Join token validity duration (e.g. 30m, 1h, 2h)")
 	adminInitCmd.Flags().String("cluster-name", "spinifex", "NATS cluster name")
 	adminInitCmd.Flags().Bool("no-telemetry", false, "Disable telemetry metrics sent during init (default: enabled)")
 	adminInitCmd.Flags().StringSlice("services", nil, "Services this node runs (default: all). Valid: nats,predastore,viperblock,daemon,awsgw,ui")
@@ -266,10 +269,12 @@ func init() {
 	adminJoinCmd.Flags().String("bind", "0.0.0.0", "IP address to bind services to (e.g., 10.11.12.2 for multi-node on single host)")
 	adminJoinCmd.Flags().String("cluster-bind", "", "IP address to bind NATS cluster services to (e.g., 10.11.12.1 for multi-node)")
 	adminJoinCmd.Flags().String("cluster-routes", "", "NATS cluster hosts for routing specify multiple with comma (e.g., 10.11.12.1:4248,10.11.12.2:4248 for multi-node)")
+	adminJoinCmd.Flags().String("token", "", "Join token from the init node (required)")
 	adminJoinCmd.Flags().StringSlice("services", nil, "Services this node runs (default: all)")
 	adminJoinCmd.Flags().Bool("no-telemetry", false, "Disable telemetry metrics sent during join (default: enabled)")
 	adminJoinCmd.MarkFlagRequired("node")
 	adminJoinCmd.MarkFlagRequired("host")
+	adminJoinCmd.MarkFlagRequired("token")
 
 	imagesImportCmd.Flags().String("tmp-dir", os.TempDir(), "Temporary directory for image import processing")
 
@@ -600,6 +605,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	}
 	predastoreNodesStr, _ := cmd.Flags().GetString("predastore-nodes")
 	formationTimeoutStr, _ := cmd.Flags().GetString("formation-timeout")
+	tokenTTLStr, _ := cmd.Flags().GetString("token-ttl")
 	clusterName, _ := cmd.Flags().GetString("cluster-name")
 	services, _ := cmd.Flags().GetStringSlice("services")
 
@@ -889,7 +895,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 		runAdminInitMultiNode(cmd, accessKey, secretKey, accountID, natsToken, clusterName,
 			configDir, spxRoot, certPath, region, az, node, bindIP, clusterBind,
-			port, nodes, formationTimeoutStr, services, networkConfig)
+			port, nodes, formationTimeoutStr, tokenTTLStr, services, networkConfig)
 		return
 	}
 
@@ -1073,10 +1079,26 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 // then generates configs with complete cluster topology.
 func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, natsToken, clusterName,
 	configDir, spxRoot, certPath, region, az, node, bindIP, clusterBind string,
-	port, expectedNodes int, formationTimeoutStr string, services []string, networkConfig *formation.NetworkConfig) {
+	port, expectedNodes int, formationTimeoutStr, tokenTTLStr string, services []string, networkConfig *formation.NetworkConfig) {
 	formationTimeout, err := time.ParseDuration(formationTimeoutStr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error: Invalid --formation-timeout: %v\n", err)
+		os.Exit(1)
+	}
+
+	tokenTTL, err := time.ParseDuration(tokenTTLStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error: Invalid --token-ttl: %v\n", err)
+		os.Exit(1)
+	}
+	if tokenTTL < formationTimeout+1*time.Minute {
+		fmt.Fprintf(os.Stderr, "❌ Error: --token-ttl (%s) must be >= --formation-timeout + 1m (%s)\n", tokenTTL, formationTimeout+1*time.Minute)
+		os.Exit(1)
+	}
+
+	joinToken, err := formation.GenerateJoinToken()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error generating join token: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -1118,7 +1140,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		AdminSecretKey: bootstrapResult.AdminSecretKey,
 	}
 
-	fs := formation.NewFormationServer(expectedNodes, creds, string(caCertData), string(caKeyData), networkConfig)
+	fs := formation.NewFormationServer(expectedNodes, creds, string(caCertData), string(caKeyData), networkConfig, joinToken, tokenTTL)
 
 	// Include master key in formation server for distribution to joining nodes
 	fs.SetMasterKey(base64.StdEncoding.EncodeToString(masterKey))
@@ -1137,6 +1159,13 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		os.Exit(1)
 	}
 
+	// Write join token to file for automated workflows
+	tokenPath := filepath.Join(configDir, "join-token")
+	if err := os.WriteFile(tokenPath, []byte(joinToken), 0600); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error writing join token: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Start formation server
 	formationAddr := fmt.Sprintf("%s:%d", bindIP, port)
 	if err := fs.Start(formationAddr); err != nil {
@@ -1146,12 +1175,15 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 	fmt.Printf("\n📡 Formation server started on %s\n", formationAddr)
 	fmt.Printf("   Waiting for %d more node(s) to join...\n", expectedNodes-1)
-	fmt.Printf("   Other nodes should run: spx admin join --host %s --node <name> --bind <ip>\n\n", formationAddr)
+	fmt.Printf("   Token expires in %s\n\n", tokenTTL)
+	fmt.Printf("   Other nodes should run:\n")
+	fmt.Printf("   spx admin join --host %s --token %s --node <name> --bind <ip>\n\n", formationAddr, joinToken)
 
 	// Wait for all nodes to register
 	if err := fs.WaitForCompletion(formationTimeout); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		fs.Shutdown(context.Background())
+		os.Remove(tokenPath)
 		os.Exit(1)
 	}
 
@@ -1295,6 +1327,9 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 	// Shutdown formation server
 	fs.Shutdown(context.Background())
+	if err := os.Remove(tokenPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		slog.Warn("Failed to remove join token file", "path", tokenPath, "error", err)
+	}
 
 	// Print cluster summary
 	fmt.Println("\n🎉 Cluster formation complete!")
@@ -1319,6 +1354,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 
 	node, _ := cmd.Flags().GetString("node")
 	leaderHost, _ := cmd.Flags().GetString("host")
+	joinToken, _ := cmd.Flags().GetString("token")
 	region, _ := cmd.Flags().GetString("region")
 	az, _ := cmd.Flags().GetString("az")
 	dataDir, _ := cmd.Flags().GetString("data-dir")
@@ -1401,7 +1437,15 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	}
 
 	joinURL := fmt.Sprintf("https://%s/formation/join", leaderHost)
-	resp, err := client.Post(joinURL, "application/json", bytes.NewBuffer(reqBody))
+	req, err := http.NewRequest(http.MethodPost, joinURL, bytes.NewBuffer(reqBody))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error creating join request: %v\n", err)
+		os.Exit(1)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+joinToken)
+
+	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error connecting to formation server: %v\n", err)
 		fmt.Fprintf(os.Stderr, "Make sure the leader node has run 'spx admin init' and is accessible at %s\n", leaderHost)
@@ -1433,7 +1477,14 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	var statusResp formation.StatusResponse
 
 	for {
-		sResp, err := client.Get(statusURL)
+		statusReq, err := http.NewRequest(http.MethodGet, statusURL, nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Error creating status request: %v\n", err)
+			os.Exit(1)
+		}
+		statusReq.Header.Set("Authorization", "Bearer "+joinToken)
+
+		sResp, err := client.Do(statusReq)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "❌ Error polling formation status: %v\n", err)
 			os.Exit(1)
@@ -1446,8 +1497,17 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 			os.Exit(1)
 		}
 
+		if sResp.StatusCode == http.StatusUnauthorized {
+			fmt.Fprintf(os.Stderr, "❌ Error: join token rejected by formation server (expired or invalid)\n")
+			os.Exit(1)
+		}
+		if sResp.StatusCode != http.StatusOK {
+			fmt.Fprintf(os.Stderr, "❌ Error: unexpected status %d from formation server\n", sResp.StatusCode)
+			os.Exit(1)
+		}
+
 		if err := json.Unmarshal(sBody, &statusResp); err != nil {
-			fmt.Fprintf(os.Stderr, "Error parsing status response: %v\n", err)
+			fmt.Fprintf(os.Stderr, "❌ Error parsing status response: %v\n", err)
 			os.Exit(1)
 		}
 

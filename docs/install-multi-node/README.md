@@ -106,12 +106,24 @@ sudo spx admin init \
 
 Save the admin credentials — they will not be shown again.
 
+The init output displays the join command including the token:
+
+```
+📡 Formation server started on 10.0.0.1:4432
+   Waiting for 2 more node(s) to join...
+   Token expires in 30m0s
+
+   Other nodes should run:
+   spx admin join --host 10.0.0.1:4432 --token spx_join_a8Bf3x9Kz2mN --node <name> --bind <ip>
+```
+
 **Server 2 — Join** (while init is running):
 
 ```bash
 sudo spx admin join \
   --node node2 --bind $SPINIFEX_NODE2 --cluster-bind $SPINIFEX_NODE2 \
-  --host $SPINIFEX_NODE1:4432 --region $AWS_REGION --az $AWS_AZ
+  --host $SPINIFEX_NODE1:4432 --token <token-from-init-output> \
+  --region $AWS_REGION --az $AWS_AZ
 ```
 
 **Server 3 — Join** (while init is running):
@@ -119,8 +131,12 @@ sudo spx admin join \
 ```bash
 sudo spx admin join \
   --node node3 --bind $SPINIFEX_NODE3 --cluster-bind $SPINIFEX_NODE3 \
-  --host $SPINIFEX_NODE1:4432 --region $AWS_REGION --az $AWS_AZ
+  --host $SPINIFEX_NODE1:4432 --token <token-from-init-output> \
+  --region $AWS_REGION --az $AWS_AZ
 ```
+
+> **Note:** The join token expires 30 minutes after init by default. For larger deployments
+> with slower provisioning, use `--token-ttl 2h` on the init command.
 
 ## Step 5. Start Services
 

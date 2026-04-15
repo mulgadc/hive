@@ -796,6 +796,16 @@ init_leader_node() {
     for i in $(seq 1 60); do
         if curl -sk "https://${NODE1_IP}:${CLUSTER_PORT}/formation/health" > /dev/null 2>&1; then
             echo "  Formation server is ready (PID: $LEADER_INIT_PID)"
+
+            # Read join token written by admin init
+            JOIN_TOKEN=$(cat "$HOME/node1/config/join-token")
+            if [ -z "$JOIN_TOKEN" ]; then
+                echo "  ERROR: Join token file is empty"
+                return 1
+            fi
+            echo "  Join token loaded"
+            export JOIN_TOKEN
+
             return 0
         fi
         sleep 1
@@ -824,6 +834,7 @@ join_follower_node() {
         --cluster-bind "$node_ip" \
         --cluster-routes "${NODE1_IP}:${NATS_CLUSTER_PORT}" \
         --host "${NODE1_IP}:${CLUSTER_PORT}" \
+        --token "$JOIN_TOKEN" \
         --data-dir "$data_dir/" \
         --config-dir "$data_dir/config/" \
         --region ap-southeast-2 \

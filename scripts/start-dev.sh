@@ -329,7 +329,11 @@ if has_service "predastore"; then
     PREDASTORE_CMD="./bin/spx service predastore start"
     start_service "predastore" "$PREDASTORE_CMD"
     set_oom_score "predastore" "-500"
-    check_service "Predastore" "$SPINIFEX_PREDASTORE_HOST" "$SPINIFEX_PREDASTORE_PORT"
+    if is_multinode; then
+        echo "   ⏭️  Skipping Predastore connectivity check (multi-node: needs quorum from peer nodes)"
+    else
+        check_service "Predastore" "$SPINIFEX_PREDASTORE_HOST" "$SPINIFEX_PREDASTORE_PORT"
+    fi
 else
     echo "2️⃣  Skipping Predastore (not a local service)"
 fi
