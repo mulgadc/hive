@@ -255,8 +255,8 @@ github.com/modern-go/concurrent v0.0.0-20180228061459-e0a39a4cb421/go.mod h1:6dJ
 github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd/go.mod h1:6dJC0mAP4ikYIbvyc7fijjWJddQyLn8Ig3JB5CqoB9Q=
 github.com/modern-go/reflect2 v0.0.0-20180701023420-4b7aa43c6742/go.mod h1:bx2lNnkwVCuqBIxFjflWJWanXIb3RllmbCylyMrvgv0=
 github.com/modern-go/reflect2 v1.0.1/go.mod h1:bx2lNnkwVCuqBIxFjflWJWanXIb3RllmbCylyMrvgv0=
-github.com/mulgadc/predastore v1.1.5 h1:BjTEP2xbzIh0FswuCvnVcq9uy6l235lcIOwkGG/Z+f4=
-github.com/mulgadc/predastore v1.1.5/go.mod h1:la4jzK8lSLfUyUR5wNdVrkXXq8JQMGiKFvp/eXT0wjM=
+github.com/mulgadc/predastore v1.1.6 h1:67rF2wa5BXges5cVJlFqYurYXnlkYleF3XJ1RyB+ZXk=
+github.com/mulgadc/predastore v1.1.6/go.mod h1:WO6lNV8oxsYZGN2BzHROyX42+raOLflvX7iiirvpteA=
 github.com/mulgadc/viperblock v1.1.6 h1:SzvpZIFWZVpWWdUSPD9k7fgmVAOsyXj9Ra686MyFsRc=
 github.com/mulgadc/viperblock v1.1.6/go.mod h1:KoJH5WFaZdIEYQ/uxugFKhQRLcMa9gmNOtyZjRHf/wI=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
