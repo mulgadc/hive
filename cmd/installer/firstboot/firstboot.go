@@ -88,7 +88,6 @@ hostnamectl set-hostname %s
 # Apt deps and AWS CLI are pre-installed in the squashfs so both are skipped.
 INSTALL_SPINIFEX_TARBALL=/opt/spinifex/spinifex.tar.gz \
 INSTALL_SPINIFEX_SKIP_APT=1 \
-INSTALL_SPINIFEX_SKIP_AWS=1 \
 INSTALL_SPINIFEX_SKIP_NEWGRP=1 \
 bash /usr/local/share/spinifex/setup.sh
 
