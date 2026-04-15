@@ -940,12 +940,18 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 			os.Exit(1)
 		}
 
-		nodeID, err := generateMultiNodePredastore(dirs.Predastore, predastoreNodes, accessKey, secretKey, region, natsToken, configDir, bindIP)
+		// Generate multi-node predastore.toml
+		predastoreContent, err := admin.GenerateMultiNodePredastoreConfig(predastoreMultiNodeTemplate, predastoreNodes, accessKey, secretKey, region, natsToken, configDir, bindIP)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error generating multi-node predastore config: %v\n", err)
 			os.Exit(1)
 		}
-		predastoreNodeID = nodeID
+
+		predastorePath := filepath.Join(dirs.Predastore, "predastore.toml")
+		if err := os.WriteFile(predastorePath, []byte(predastoreContent), 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing predastore config: %v\n", err)
+			os.Exit(1)
+		}
 		fmt.Printf("✅ Created: multi-node predastore.toml (node ID: %d)\n", predastoreNodeID)
 	}
 
@@ -1169,12 +1175,19 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 	var predastoreNodeID int
 	hasPredastoreConfig := len(predastoreNodes) >= 3
 	if hasPredastoreConfig {
-		nodeID, err := generateMultiNodePredastore(dirs.Predastore, predastoreNodes, accessKey, secretKey, region, natsToken, configDir, bindIP)
+		predastoreContent, err := admin.GenerateMultiNodePredastoreConfig(predastoreMultiNodeTemplate, predastoreNodes, accessKey, secretKey, region, natsToken, configDir, bindIP)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error generating multi-node predastore config: %v\n", err)
 			os.Exit(1)
 		}
-		predastoreNodeID = nodeID
+
+		predastorePath := filepath.Join(dirs.Predastore, "predastore.toml")
+		if err := os.WriteFile(predastorePath, []byte(predastoreContent), 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing predastore config: %v\n", err)
+			os.Exit(1)
+		}
+
+		predastoreNodeID = admin.FindNodeIDByIP(predastoreNodes, bindIP)
 		fmt.Printf("✅ Created: multi-node predastore.toml (node ID: %d)\n", predastoreNodeID)
 	}
 
@@ -1529,12 +1542,19 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	hasPredastoreConfig := len(predastoreNodes) >= 3
 
 	if hasPredastoreConfig {
-		nodeID, err := generateMultiNodePredastore(dirs.Predastore, predastoreNodes, creds.AccessKey, creds.SecretKey, creds.Region, creds.NatsToken, configDir, bindIP)
+		predastoreContent, err := admin.GenerateMultiNodePredastoreConfig(predastoreMultiNodeTemplate, predastoreNodes, creds.AccessKey, creds.SecretKey, creds.Region, creds.NatsToken, configDir, bindIP)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error generating multi-node predastore config: %v\n", err)
 			os.Exit(1)
 		}
-		predastoreNodeID = nodeID
+
+		predastorePath := filepath.Join(dirs.Predastore, "predastore.toml")
+		if err := os.WriteFile(predastorePath, []byte(predastoreContent), 0600); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing predastore config: %v\n", err)
+			os.Exit(1)
+		}
+
+		predastoreNodeID = admin.FindNodeIDByIP(predastoreNodes, bindIP)
 		if predastoreNodeID == 0 {
 			fmt.Fprintf(os.Stderr, "❌ Error: bind IP %s not found in predastore node list\n", bindIP)
 			os.Exit(1)
@@ -1899,21 +1919,6 @@ func applyNetworkConfig(settings *admin.ConfigSettings, nc *formation.NetworkCon
 			settings.WanBridge = detectedWanBridge(detected)
 		}
 	}
-}
-
-// generateMultiNodePredastore writes a multi-node predastore.toml and returns
-// the node ID for the local bind IP.
-func generateMultiNodePredastore(predastoreDir string, nodes []admin.PredastoreNodeConfig, accessKey, secretKey, region, natsToken, configDir, bindIP string) (int, error) {
-	content, err := admin.GenerateMultiNodePredastoreConfig(predastoreMultiNodeTemplate, nodes, accessKey, secretKey, region, natsToken, configDir, bindIP)
-	if err != nil {
-		return 0, fmt.Errorf("generate multi-node predastore config: %w", err)
-	}
-	predastorePath := filepath.Join(predastoreDir, "predastore.toml")
-	if err := os.WriteFile(predastorePath, []byte(content), 0600); err != nil {
-		return 0, fmt.Errorf("write predastore config: %w", err)
-	}
-	nodeID := admin.FindNodeIDByIP(nodes, bindIP)
-	return nodeID, nil
 }
 
 // writeBootstrapResult holds the admin credentials so callers can
