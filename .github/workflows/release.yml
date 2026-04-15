@@ -149,17 +149,17 @@ jobs:
         working-directory: mulga/scripts/tofu-cluster
         run: |
           tofu init -input=false >> "$TOFU_LOG" 2>&1
-          tofu workspace select -or-create env3 >> "$TOFU_LOG" 2>&1
-          tofu destroy -var-file=envs/env3.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
-          ./scrub-env.sh env3 >> "$TOFU_LOG" 2>&1 || true
-          tofu apply -var-file=envs/env3.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+          tofu workspace select -or-create "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1
+          tofu destroy -var-file=envs/${SPINIFEX_CI_ENV}.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
+          ./scrub-env.sh "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1 || true
+          tofu apply -var-file=envs/${SPINIFEX_CI_ENV}.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
       - name: Bootstrap via Binary Install
         working-directory: mulga/scripts/tofu-cluster
         run: |
           SETUP_SH=$(find "${GITHUB_WORKSPACE}/release-assets" -name "setup.sh" | head -1)
           TARBALL=$(find "${GITHUB_WORKSPACE}/release-assets" -name "*-linux-amd64.tar.gz" | head -1)
-          ./bootstrap-install.sh env3 "$SETUP_SH" "$TARBALL"
+          ./bootstrap-install.sh "${SPINIFEX_CI_ENV}" "$SETUP_SH" "$TARBALL"
 
       - name: Promote Release
         if: success()
@@ -189,6 +189,6 @@ jobs:
         if: always()
         working-directory: mulga/scripts/tofu-cluster
         run: |
-          tofu workspace select -or-create env3 >> "$TOFU_LOG" 2>&1
-          tofu destroy -var-file=envs/env3.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
-          ./scrub-env.sh env3 >> "$TOFU_LOG" 2>&1 || true
+          tofu workspace select -or-create "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1
+          tofu destroy -var-file=envs/${SPINIFEX_CI_ENV}.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+          ./scrub-env.sh "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1 || true

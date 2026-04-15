@@ -61,16 +61,16 @@ jobs:
         run: |
           export TF_VAR_git_branch="${GIT_BRANCH}"
           tofu init -input=false >> "$TOFU_LOG" 2>&1
-          tofu workspace select -or-create env3 >> "$TOFU_LOG" 2>&1
-          tofu destroy -var-file=envs/env3.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
-          ./scrub-env.sh env3 >> "$TOFU_LOG" 2>&1 || true
-          tofu apply -var-file=envs/env3.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+          tofu workspace select -or-create "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1
+          tofu destroy -var-file=envs/${SPINIFEX_CI_ENV}.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
+          ./scrub-env.sh "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1 || true
+          tofu apply -var-file=envs/${SPINIFEX_CI_ENV}.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
       - name: Bootstrap via Binary Install
         working-directory: mulga/scripts/tofu-cluster
         run: |
-          SPX_EXTERNAL_POOL="192.168.1.230-192.168.1.240" \
-          ./bootstrap-install.sh env3 \
+          SPX_EXTERNAL_POOL="${SPINIFEX_CI_POOL}" \
+          ./bootstrap-install.sh "${SPINIFEX_CI_ENV}" \
             "${RUNNER_TEMP}/setup.sh" \
             "${RUNNER_TEMP}/spinifex-distro.tar.gz" \
             --test-tar "${RUNNER_TEMP}/spinifex-tests.tar"
@@ -89,9 +89,9 @@ jobs:
         if: always()
         working-directory: mulga/scripts/tofu-cluster
         run: |
-          tofu workspace select -or-create env3 >> "$TOFU_LOG" 2>&1
-          tofu destroy -var-file=envs/env3.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
-          ./scrub-env.sh env3 >> "$TOFU_LOG" 2>&1 || true
+          tofu workspace select -or-create "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1
+          tofu destroy -var-file=envs/${SPINIFEX_CI_ENV}.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+          ./scrub-env.sh "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1 || true
 
   e2e_pseudo_multi:
     name: Pseudo Multi-Node E2E
@@ -126,17 +126,17 @@ jobs:
         run: |
           export TF_VAR_git_branch="${GIT_BRANCH}"
           tofu init -input=false >> "$TOFU_LOG" 2>&1
-          tofu workspace select -or-create env4 >> "$TOFU_LOG" 2>&1
-          tofu destroy -var-file=envs/env4.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
-          ./scrub-env.sh env4 >> "$TOFU_LOG" 2>&1 || true
-          tofu apply -var-file=envs/env4.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+          tofu workspace select -or-create "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1
+          tofu destroy -var-file=envs/${SPINIFEX_CI_ENV}.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
+          ./scrub-env.sh "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1 || true
+          tofu apply -var-file=envs/${SPINIFEX_CI_ENV}.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
       - name: Bootstrap Cluster
         working-directory: mulga/scripts/tofu-cluster
         run: |
           SPX_PREBUILT=true \
           SPX_ARTIFACT_TAR="${RUNNER_TEMP}/spinifex-artifacts.tar" \
-          ./bootstrap.sh env4 >> "$TOFU_LOG" 2>&1
+          ./bootstrap.sh "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1
 
       - name: Run E2E Tests
         working-directory: mulga/scripts/tofu-cluster
@@ -146,15 +146,15 @@ jobs:
           SSH_KEY=$(echo "$INVENTORY" | jq -r '.ssh_key_path')
           SSH_KEY="${SSH_KEY/#\~/$HOME}"
           ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${WAN_IP} \
-            'cd ~/Development/mulga/spinifex && SPX_EXTERNAL_POOL="192.168.1.220-192.168.1.229" ./tests/e2e/run-pseudo-multinode-e2e.sh'
+            "cd ~/Development/mulga/spinifex && SPX_EXTERNAL_POOL=\"${SPINIFEX_CI_POOL}\" ./tests/e2e/run-pseudo-multinode-e2e.sh"
 
       - name: Teardown
         if: always()
         working-directory: mulga/scripts/tofu-cluster
         run: |
-          tofu workspace select -or-create env4 >> "$TOFU_LOG" 2>&1
-          tofu destroy -var-file=envs/env4.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
-          ./scrub-env.sh env4 >> "$TOFU_LOG" 2>&1 || true
+          tofu workspace select -or-create "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1
+          tofu destroy -var-file=envs/${SPINIFEX_CI_ENV}.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+          ./scrub-env.sh "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1 || true
 
   e2e_real_multi:
     name: Real Multi-Node E2E
@@ -193,16 +193,16 @@ jobs:
         run: |
           export TF_VAR_git_branch="${GIT_BRANCH}"
           tofu init -input=false >> "$TOFU_LOG" 2>&1
-          tofu workspace select -or-create env2 >> "$TOFU_LOG" 2>&1
-          tofu destroy -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
-          ./scrub-env.sh env2 >> "$TOFU_LOG" 2>&1 || true
-          tofu apply -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+          tofu workspace select -or-create "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1
+          tofu destroy -var-file=envs/${SPINIFEX_CI_ENV}.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1 || true
+          ./scrub-env.sh "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1 || true
+          tofu apply -var-file=envs/${SPINIFEX_CI_ENV}.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
 
       - name: Bootstrap via Binary Install
         working-directory: mulga/scripts/tofu-cluster
         run: |
-          SPX_EXTERNAL_POOL="192.168.1.240-192.168.1.250" \
-          ./bootstrap-install.sh env2 \
+          SPX_EXTERNAL_POOL="${SPINIFEX_CI_POOL}" \
+          ./bootstrap-install.sh "${SPINIFEX_CI_ENV}" \
             "${RUNNER_TEMP}/setup.sh" \
             "${RUNNER_TEMP}/spinifex-distro.tar.gz" \
             --test-tar "${RUNNER_TEMP}/spinifex-tests.tar"
@@ -231,9 +231,9 @@ jobs:
         if: always()
         working-directory: mulga/scripts/tofu-cluster
         run: |
-          tofu workspace select -or-create env2 >> "$TOFU_LOG" 2>&1
-          tofu destroy -var-file=envs/env2.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
-          ./scrub-env.sh env2 >> "$TOFU_LOG" 2>&1 || true
+          tofu workspace select -or-create "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1
+          tofu destroy -var-file=envs/${SPINIFEX_CI_ENV}.tfvars -auto-approve -input=false >> "$TOFU_LOG" 2>&1
+          ./scrub-env.sh "${SPINIFEX_CI_ENV}" >> "$TOFU_LOG" 2>&1 || true
 
   e2e_status:
     name: Report E2E Status
