@@ -29,6 +29,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/mulgadc/spinifex/cmd/installer/install"
@@ -63,7 +64,11 @@ func EjectAndReboot() {
 	fmt.Println("Remove the USB drive now if it was not ejected automatically.")
 	fmt.Println("Rebooting in 10 seconds...")
 	time.Sleep(10 * time.Second)
-	_ = exec.Command("reboot").Run()
+	// Use the kernel syscall directly — the live environment runs spinifex-init
+	// as PID 1 (not systemd), so exec("reboot") fails trying to reach D-Bus.
+	if err := syscall.Reboot(syscall.LINUX_REBOOT_CMD_RESTART); err != nil {
+		slog.Error("autoinstall: reboot syscall failed", "err", err)
+	}
 }
 
 func buildConfig() (*install.Config, error) {
@@ -286,8 +291,17 @@ func nvmeDisk() (string, error) {
 	}
 }
 
+// virtualNICPrefixes lists interface name prefixes that identify non-physical
+// interfaces (bridges, tunnels, container/OVS veth pairs, etc.). These are
+// skipped when auto-selecting a NIC so we don't configure docker0 or
+// ovs-system as the management interface on a machine that previously ran
+// Docker or OVN.
+var virtualNICPrefixes = []string{
+	"docker", "veth", "virbr", "br-", "ovs-", "vxlan", "genev", "tun", "tap",
+}
+
 // resolveNIC returns the interface name to use. "auto" or empty picks the
-// first physical (non-loopback) interface that is not exclude.
+// first physical (non-loopback, non-virtual) interface that is not exclude.
 func resolveNIC(name, exclude string) (string, error) {
 	if name != "" && name != "auto" {
 		return name, nil
@@ -300,10 +314,30 @@ func resolveNIC(name, exclude string) (string, error) {
 		if iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
+		// Require broadcast capability — filters out point-to-point tunnels.
+		if iface.Flags&net.FlagBroadcast == 0 {
+			continue
+		}
+		// Require a MAC address — virtual/tunnel interfaces have none.
+		if len(iface.HardwareAddr) == 0 {
+			continue
+		}
 		if iface.Name == exclude {
 			continue
 		}
+		// Skip known virtual interface prefixes.
+		virtual := false
+		for _, pfx := range virtualNICPrefixes {
+			if strings.HasPrefix(iface.Name, pfx) {
+				virtual = true
+				break
+			}
+		}
+		if virtual {
+			continue
+		}
+		slog.Info("autoinstall: NIC resolved", "mode", "auto", "selected", iface.Name)
 		return iface.Name, nil
 	}
-	return "", fmt.Errorf("no suitable NIC found")
+	return "", fmt.Errorf("no suitable physical NIC found (non-loopback, broadcast-capable, with MAC)")
 }

@@ -167,9 +167,10 @@ func Run(ttyPath string) (*install.Config, error) {
 
 	if ttyPath != "" {
 		tty, err := os.OpenFile(ttyPath, os.O_RDWR, 0)
-		if err == nil {
-			opts = append(opts, tea.WithInput(tty), tea.WithOutput(tty))
+		if err != nil {
+			return nil, fmt.Errorf("open console %s: %w", ttyPath, err)
 		}
+		opts = append(opts, tea.WithInput(tty), tea.WithOutput(tty))
 	}
 
 	p := tea.NewProgram(m, opts...)

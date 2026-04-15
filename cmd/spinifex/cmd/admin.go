@@ -2198,7 +2198,8 @@ func runAdminBanner(cmd *cobra.Command, _ []string) {
 		restartCmd.Stdout = os.Stdout
 		restartCmd.Stderr = os.Stderr
 		if err := restartCmd.Run(); err != nil {
-			slog.Warn("Failed to restart spinifex.target after IP change", "err", err)
+			// Services are still bound to the old IP — operator must act.
+			slog.Error("Failed to restart spinifex.target after IP change — services may be unreachable on new IP", "err", err)
 		}
 	}
 
@@ -2206,11 +2207,11 @@ func runAdminBanner(cmd *cobra.Command, _ []string) {
   +----------------------------------------------------+
   |         Spinifex  —  Mulga Defense Corporation     |
   +----------------------------------------------------+
-  |  Node:      %-40s|
-  |  Login:     %-40s|
-  |  Dashboard: %-40s|
-  |  API:       %-40s|
-  |  SSH:       %-40s|
+  |  Node:      %-39s|
+  |  Login:     %-39s|
+  |  Dashboard: %-39s|
+  |  API:       %-39s|
+  |  SSH:       %-39s|
   +----------------------------------------------------+
   |  AWS credentials:  cat ~/.aws/credentials          |
   +----------------------------------------------------+
@@ -2268,6 +2269,9 @@ func parseNodeConf(path string) map[string]string {
 	result := make(map[string]string)
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("parseNodeConf: could not read node.conf", "path", path, "err", err)
+		}
 		return result
 	}
 	for line := range strings.SplitSeq(string(data), "\n") {

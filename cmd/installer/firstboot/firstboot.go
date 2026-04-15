@@ -73,6 +73,10 @@ func writeScript(root string, cfg Config) error {
 # Spinifex firstboot — runs once after ISO installation, then disables itself.
 set -euo pipefail
 
+# Always disable this service on exit, even on failure, so a partial run
+# does not cause an infinite retry loop on subsequent reboots.
+trap 'systemctl disable spinifex-firstboot.service' EXIT
+
 # Set hostname
 hostnamectl set-hostname %s
 
@@ -137,9 +141,6 @@ ln -sf /etc/spinifex/master.key /var/lib/spinifex/awsgw/config/master.key
 
 # Start services
 systemctl start spinifex.target
-
-# Disable this service so it never runs again
-systemctl disable spinifex-firstboot.service
 `, cfg.Hostname, setupOVN, clusterCmd)
 
 	path := filepath.Join(root, "usr/local/bin/spinifex-firstboot.sh")
@@ -168,16 +169,21 @@ WantedBy=multi-user.target
 	return os.WriteFile(path, []byte(unit), 0o644)
 }
 
-func enableUnit(root string) error {
+func enableSystemdUnit(root, serviceName string) error {
 	wantsDir := filepath.Join(root, "etc/systemd/system/multi-user.target.wants")
 	if err := os.MkdirAll(wantsDir, 0o755); err != nil {
 		return err
 	}
-	link := filepath.Join(wantsDir, "spinifex-firstboot.service")
-	target := "/etc/systemd/system/spinifex-firstboot.service"
-	// Remove stale symlink if present.
-	_ = os.Remove(link)
+	link := filepath.Join(wantsDir, serviceName)
+	target := "/etc/systemd/system/" + serviceName
+	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale symlink %s: %w", link, err)
+	}
 	return os.Symlink(target, link)
+}
+
+func enableUnit(root string) error {
+	return enableSystemdUnit(root, "spinifex-firstboot.service")
 }
 
 func buildClusterCmd(cfg Config) string {
@@ -214,14 +220,7 @@ WantedBy=multi-user.target
 }
 
 func enableBannerUnit(root string) error {
-	wantsDir := filepath.Join(root, "etc/systemd/system/multi-user.target.wants")
-	if err := os.MkdirAll(wantsDir, 0o755); err != nil {
-		return err
-	}
-	link := filepath.Join(wantsDir, "spinifex-banner.service")
-	target := "/etc/systemd/system/spinifex-banner.service"
-	_ = os.Remove(link)
-	return os.Symlink(target, link)
+	return enableSystemdUnit(root, "spinifex-banner.service")
 }
 
 // writeGettyDropIn holds the primary consoles (tty1 and ttyS0) until

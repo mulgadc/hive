@@ -40,6 +40,14 @@ func Run(cfg *Config) error {
 	// The live environment may not have /sbin or /usr/sbin in PATH. Set it
 	// explicitly so exec.Command's LookPath finds system binaries like grub-install.
 	_ = os.Setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+
+	// Unmount unconditionally on exit so a failed step never leaves partitions
+	// mounted in the live environment, which would cause a retry to double-mount.
+	defer func() {
+		_ = run("umount", efiPart)
+		_ = run("umount", mountRoot)
+	}()
+
 	steps := []struct {
 		name string
 		fn   func() error
@@ -54,7 +62,6 @@ func Run(cfg *Config) error {
 		{"write firstboot service", func() error { return firstboot.Write(mountRoot, cfg.toFirstbootConfig()) }},
 		{"install bootloader", func() error { return installBootloader(cfg.Disk) }},
 		{"install CA cert", func() error { return installCACert(cfg) }},
-		{"unmount", unmount},
 	}
 
 	for _, s := range steps {
@@ -125,6 +132,20 @@ func copyRootfs() error {
 		return err
 	}
 
+	// Verify critical paths exist before proceeding. rsync exits 0 on ENOSPC
+	// for individual file writes on some filesystems, which would produce a
+	// partial rootfs that boots into a panic.
+	critical := []string{
+		filepath.Join(mountRoot, "bin/bash"),
+		filepath.Join(mountRoot, "lib/systemd/systemd"),
+		filepath.Join(mountRoot, "usr/local/bin/spx"),
+	}
+	for _, p := range critical {
+		if _, err := os.Stat(p); err != nil {
+			return fmt.Errorf("copyRootfs: critical path missing after rsync (%s): %w", p, err)
+		}
+	}
+
 	// rsync skips excluded paths entirely — recreate the virtual filesystem
 	// mount points that systemd expects to exist on the installed system.
 	mountPoints := []struct {
@@ -156,8 +177,13 @@ func installSpinifex(cfg *Config) error {
 	machineIDPath := filepath.Join(mountRoot, "etc/machine-id")
 	_ = os.Remove(machineIDPath)
 	if err := run("chroot", mountRoot, "systemd-machine-id-setup"); err != nil {
-		// Fallback: write empty file so systemd generates one on first boot.
-		_ = os.WriteFile(machineIDPath, []byte(""), 0o444)
+		// Fallback: write empty file (mode 0600, writable) so systemd-machine-id-commit
+		// can persist the generated ID on first boot. Mode 0444 would prevent the
+		// commit and cause the ID to change on every reboot.
+		slog.Warn("installSpinifex: systemd-machine-id-setup failed, writing uninitialized marker", "err", err)
+		if writeErr := os.WriteFile(machineIDPath, []byte(""), 0o600); writeErr != nil {
+			return fmt.Errorf("write machine-id marker: %w", writeErr)
+		}
 	}
 
 	// Hostname.
@@ -372,7 +398,9 @@ WantedBy=multi-user.target
 		return err
 	}
 	link := filepath.Join(wantsDir, "spinifex-lan-bridge.service")
-	_ = os.Remove(link)
+	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale symlink %s: %w", link, err)
+	}
 	return os.Symlink("/etc/systemd/system/spinifex-lan-bridge.service", link)
 }
 
@@ -383,23 +411,28 @@ func installBootloader(disk string) error {
 	bootDir := filepath.Join(mountRoot, "boot")
 	efiDir := filepath.Join(mountRoot, "boot", "efi")
 
-	if err := run("grub-install",
+	efiErr := run("grub-install",
 		"--target=x86_64-efi",
 		"--efi-directory="+efiDir,
 		"--boot-directory="+bootDir,
 		"--bootloader-id=spinifex",
 		"--removable",
 		"--recheck",
-	); err != nil {
-		slog.Warn("installBootloader: EFI install failed (may not be EFI system)", "err", err)
+	)
+	if efiErr != nil {
+		slog.Warn("installBootloader: EFI install failed", "err", efiErr)
 	}
-	if err := run("grub-install",
+	if biosErr := run("grub-install",
 		"--target=i386-pc",
 		"--boot-directory="+bootDir,
 		"--recheck",
 		disk,
-	); err != nil {
-		return err
+	); biosErr != nil {
+		if efiErr != nil {
+			// Both targets failed — the system will not boot.
+			return fmt.Errorf("both bootloader targets failed (EFI: %v; BIOS: %w)", efiErr, biosErr)
+		}
+		return biosErr
 	}
 	// Configure serial console in the installed system's GRUB so the boot menu
 	// and kernel output are visible over serial (ttyS0) as well as VGA.
@@ -448,13 +481,6 @@ func installCACert(cfg *Config) error {
 	return run("chroot", mountRoot, "update-ca-certificates")
 }
 
-func unmount() error {
-	if err := run("umount", efiPart); err != nil {
-		return err
-	}
-	return run("umount", mountRoot)
-}
-
 func reboot() error {
 	// sync filesystems before reboot so nothing is lost.
 	_ = run("sync")
@@ -501,9 +527,13 @@ func writeFstab(disk string) error {
 func partUUID(dev string) (string, error) {
 	out, err := exec.Command("blkid", "-s", "UUID", "-o", "value", dev).Output()
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("blkid %s: %w", dev, err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	uuid := strings.TrimSpace(string(out))
+	if uuid == "" {
+		return "", fmt.Errorf("blkid returned no UUID for %s — partition may not have a filesystem yet", dev)
+	}
+	return uuid, nil
 }
 
 // partitionPaths returns the EFI and root partition device paths for a given
