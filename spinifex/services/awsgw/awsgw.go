@@ -10,11 +10,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mulgadc/predastore/ratelimit"
 	"github.com/mulgadc/spinifex/spinifex/config"
 	"github.com/mulgadc/spinifex/spinifex/gateway"
 	handlers_iam "github.com/mulgadc/spinifex/spinifex/handlers/iam"
 	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/nats-io/nats.go"
+	toml "github.com/pelletier/go-toml/v2"
 )
 
 var serviceName = "awsgw"
@@ -76,6 +78,25 @@ func (svc *Service) Reload() (err error) {
 	return nil
 }
 
+// awsgwTOML is the top-level structure of awsgw.toml used to extract the
+// ratelimit section. Other fields are parsed elsewhere (e.g. region, debug).
+type awsgwTOML struct {
+	Ratelimit ratelimit.Config `toml:"ratelimit"`
+}
+
+// loadThrottleConfig parses the [ratelimit] section from the awsgw TOML config.
+func loadThrottleConfig(path string) (ratelimit.Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ratelimit.Config{}, fmt.Errorf("read awsgw config %s: %w", path, err)
+	}
+	var cfg awsgwTOML
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return ratelimit.Config{}, fmt.Errorf("parse awsgw config %s: %w", path, err)
+	}
+	return cfg.Ratelimit, nil
+}
+
 func launchService(config *config.ClusterConfig) error {
 	nodeConfig := config.Nodes[config.Node]
 
@@ -129,6 +150,12 @@ func launchService(config *config.ClusterConfig) error {
 		return fmt.Errorf("load bootstrap from %s: %w", bootstrapPath, err)
 	}
 
+	// Load API throttle config from awsgw.toml [ratelimit] section.
+	throttleCfg, err := loadThrottleConfig(nodeConfig.AWSGW.Config)
+	if err != nil {
+		slog.Warn("Failed to load throttle config, throttling disabled", "err", err)
+	}
+
 	// Create gateway with NATS connection
 	gw := gateway.GatewayConfig{
 		Debug:          nodeConfig.AWSGW.Debug,
@@ -141,6 +168,11 @@ func launchService(config *config.ClusterConfig) error {
 		IAMService:     iamService,
 		Version:        version,
 		Commit:         commit,
+	}
+
+	if throttleCfg.Enabled {
+		gw.Throttler = ratelimit.New(throttleCfg)
+		defer gw.Throttler.Stop()
 	}
 
 	handler := gw.SetupRoutes()

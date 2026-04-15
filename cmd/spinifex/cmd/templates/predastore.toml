@@ -1,6 +1,6 @@
 # Predastore S3-compatible storage configuration file in TOML format.
 # MULTI NODE used for testing
-version = "1.0"
+version = 2
 region = "{{.Region}}"
 
 # Optionally configure port and host, or specify via daemon CLI options
@@ -80,6 +80,20 @@ secret_access_key = "{{.SecretKey}}"
 policy = [
   { bucket = "predastore", actions = ["s3:ListBucket",  "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListAllMyBuckets"] },
 ]
+
+# API request throttling (per-account, per-action token bucket)
+[ratelimit]
+enabled = false
+rate = 100          # Default sustained requests per second per account per action
+burst = 500         # Default maximum burst capacity
+
+[ratelimit.action."s3:PutObject"]
+rate = 50
+burst = 200
+
+[ratelimit.action."s3:DeleteObject"]
+rate = 50
+burst = 200
 
 # IAM authentication via NATS KV (enables multi-account S3 access)
 [iam]
