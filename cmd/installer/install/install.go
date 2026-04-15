@@ -19,6 +19,7 @@ package install
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -27,6 +28,7 @@ import (
 	"syscall"
 
 	"github.com/mulgadc/spinifex/cmd/installer/firstboot"
+	"github.com/mulgadc/spinifex/cmd/installer/systemd"
 )
 
 const (
@@ -245,16 +247,7 @@ func installSpinifex(cfg *Config) error {
 		return err
 	}
 
-	// networking.service drop-in: treat exit code 1 as success so that a
-	// secondary interface failure (e.g. br-lan DHCP timeout when no cable is
-	// plugged in) does not block network-online.target and therefore
-	// spinifex-firstboot.service.
-	netDropInDir := filepath.Join(mountRoot, "etc/systemd/system/networking.service.d")
-	if err := os.MkdirAll(netDropInDir, 0o755); err != nil {
-		return err
-	}
-	netDropIn := "[Service]\nSuccessExitStatus=0 1\n"
-	return os.WriteFile(filepath.Join(netDropInDir, "spinifex-optional-ifaces.conf"), []byte(netDropIn), 0o644)
+	return systemd.WriteNetworkingDropIn(mountRoot)
 }
 
 func writeNetworkConfig(cfg *Config) error {
@@ -319,7 +312,7 @@ func writeNetworkConfig(cfg *Config) error {
 	// Write a non-critical systemd unit for br-lan so it comes up after
 	// network-online.target without blocking the boot path.
 	if cfg.LANInterface != "" {
-		if err := writeLANBridgeUnit(mountRoot); err != nil {
+		if err := systemd.WriteLANBridgeUnit(mountRoot); err != nil {
 			return fmt.Errorf("lan bridge unit: %w", err)
 		}
 	}
@@ -369,41 +362,6 @@ func writeNetworkConfig(cfg *Config) error {
 	return nil
 }
 
-// writeLANBridgeUnit installs a non-critical oneshot service that brings up
-// br-lan *after* network-online.target. This keeps br-lan out of
-// networking.service entirely — a missing LAN cable or DHCP timeout on the
-// secondary bridge can never stall the management interface or firstboot.
-func writeLANBridgeUnit(root string) error {
-	unit := `[Unit]
-Description=Spinifex LAN bridge (non-critical)
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/sbin/ifup br-lan
-RemainAfterExit=yes
-# Failure is non-critical — cable unplugged or switch not ready at boot.
-SuccessExitStatus=0 1
-
-[Install]
-WantedBy=multi-user.target
-`
-	unitPath := filepath.Join(root, "etc/systemd/system/spinifex-lan-bridge.service")
-	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil {
-		return err
-	}
-	wantsDir := filepath.Join(root, "etc/systemd/system/multi-user.target.wants")
-	if err := os.MkdirAll(wantsDir, 0o755); err != nil {
-		return err
-	}
-	link := filepath.Join(wantsDir, "spinifex-lan-bridge.service")
-	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove stale symlink %s: %w", link, err)
-	}
-	return os.Symlink("/etc/systemd/system/spinifex-lan-bridge.service", link)
-}
-
 func installBootloader(disk string) error {
 	// grub-install runs in the live environment (not chroot) using the
 	// grub-pc-bin and grub-efi-amd64-bin packages already present on the ISO.
@@ -434,6 +392,10 @@ func installBootloader(disk string) error {
 		}
 		return biosErr
 	}
+	// Copy splash image from the ISO (mounted at /cdrom) so the installed GRUB
+	// shows the same branded background as the installer GRUB.
+	copySplashImage(mountRoot)
+
 	// Configure serial console in the installed system's GRUB so the boot menu
 	// and kernel output are visible over serial (ttyS0) as well as VGA.
 	grubDefault := `GRUB_DEFAULT=0
@@ -443,6 +405,7 @@ GRUB_CMDLINE_LINUX_DEFAULT=""
 GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8 systemd.show_status=1"
 GRUB_TERMINAL="serial console"
 GRUB_SERIAL_COMMAND="serial --unit=0 --speed=115200 --word=8 --parity=no --stop=1"
+GRUB_BACKGROUND=/boot/grub/splash.png
 `
 	if err := os.WriteFile(filepath.Join(mountRoot, "etc/default/grub"), []byte(grubDefault), 0o644); err != nil {
 		return fmt.Errorf("write /etc/default/grub: %w", err)
@@ -546,6 +509,34 @@ func partitionPaths(disk string) (efi, root string) {
 		return disk + "p2", disk + "p3"
 	}
 	return disk + "2", disk + "3"
+}
+
+// copySplashImage copies the GRUB splash from the live ISO (/cdrom/boot/grub/splash.png)
+// into the installed system so the post-install GRUB shows the same branded background
+// as the installer. Non-fatal — a missing or unreadable source is logged and skipped.
+func copySplashImage(root string) {
+	const src = "/cdrom/boot/grub/splash.png"
+	in, err := os.Open(src)
+	if err != nil {
+		slog.Warn("copySplashImage: splash not found on ISO, skipping", "path", src)
+		return
+	}
+	defer in.Close()
+
+	dstDir := filepath.Join(root, "boot/grub")
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		slog.Warn("copySplashImage: cannot create boot/grub dir", "err", err)
+		return
+	}
+	out, err := os.OpenFile(filepath.Join(dstDir, "splash.png"), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		slog.Warn("copySplashImage: cannot open destination", "err", err)
+		return
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		slog.Warn("copySplashImage: copy failed", "err", err)
+	}
 }
 
 func run(name string, args ...string) error {

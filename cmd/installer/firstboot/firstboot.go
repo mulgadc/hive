@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/mulgadc/spinifex/cmd/installer/systemd"
 )
 
 // Config holds the values the firstboot service needs to configure the node.
@@ -44,19 +46,19 @@ func Write(root string, cfg Config) error {
 	if err := writeScript(root, cfg); err != nil {
 		return fmt.Errorf("firstboot script: %w", err)
 	}
-	if err := writeUnit(root); err != nil {
+	if err := systemd.WriteFirstbootUnit(root); err != nil {
 		return fmt.Errorf("firstboot unit: %w", err)
 	}
-	if err := enableUnit(root); err != nil {
+	if err := systemd.EnableUnit(root, "spinifex-firstboot.service"); err != nil {
 		return err
 	}
-	if err := writeBannerUnit(root); err != nil {
+	if err := systemd.WriteBannerUnit(root); err != nil {
 		return fmt.Errorf("banner unit: %w", err)
 	}
-	if err := enableBannerUnit(root); err != nil {
+	if err := systemd.EnableUnit(root, "spinifex-banner.service"); err != nil {
 		return err
 	}
-	return writeGettyDropIn(root)
+	return systemd.WriteGettyDropIn(root)
 }
 
 func writeScript(root string, cfg Config) error {
@@ -137,45 +139,6 @@ systemctl start spinifex.target
 	return os.WriteFile(path, []byte(script), 0o755)
 }
 
-func writeUnit(root string) error {
-	unit := `[Unit]
-Description=Spinifex first-boot provisioning
-After=network-online.target
-Wants=network-online.target
-ConditionPathExists=/usr/local/bin/spinifex-firstboot.sh
-
-[Service]
-Type=oneshot
-Environment=HOME=/root
-ExecStart=/usr/local/bin/spinifex-firstboot.sh
-RemainAfterExit=yes
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-`
-	path := filepath.Join(root, "etc/systemd/system/spinifex-firstboot.service")
-	return os.WriteFile(path, []byte(unit), 0o644)
-}
-
-func enableSystemdUnit(root, serviceName string) error {
-	wantsDir := filepath.Join(root, "etc/systemd/system/multi-user.target.wants")
-	if err := os.MkdirAll(wantsDir, 0o755); err != nil {
-		return err
-	}
-	link := filepath.Join(wantsDir, serviceName)
-	target := "/etc/systemd/system/" + serviceName
-	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove stale symlink %s: %w", link, err)
-	}
-	return os.Symlink(target, link)
-}
-
-func enableUnit(root string) error {
-	return enableSystemdUnit(root, "spinifex-firstboot.service")
-}
-
 func buildClusterCmd(cfg Config) string {
 	switch cfg.ClusterRole {
 	case "join":
@@ -183,60 +146,4 @@ func buildClusterCmd(cfg Config) string {
 	default:
 		return fmt.Sprintf("spx admin init --node %s --nodes 1", cfg.Hostname)
 	}
-}
-
-// writeBannerUnit writes the spinifex-banner.service unit that runs
-// `spx admin banner --boot-check` on every boot after spinifex.target is up.
-// Running After=spinifex.target ensures the banner reflects a settled system
-// state and that the IP check/restart happens once services are already running.
-func writeBannerUnit(root string) error {
-	unit := `[Unit]
-Description=Spinifex console banner and boot health check
-After=spinifex.target
-Wants=spinifex.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/spx admin banner --boot-check
-RemainAfterExit=yes
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-`
-	path := filepath.Join(root, "etc/systemd/system/spinifex-banner.service")
-	return os.WriteFile(path, []byte(unit), 0o644)
-}
-
-func enableBannerUnit(root string) error {
-	return enableSystemdUnit(root, "spinifex-banner.service")
-}
-
-// writeGettyDropIn holds the primary consoles (tty1 and ttyS0) until
-// spinifex-banner.service completes, so the MOTD banner is visible before the
-// login prompt appears. The default getty ExecStart is left intact — the user
-// is prompted for their password normally.
-//
-// Drop-ins are written to instance-specific directories (getty@tty1.service.d
-// and serial-getty@ttyS0.service.d) rather than the template directories
-// (getty@.service.d / serial-getty@.service.d). This is deliberate: scoping
-// to named instances leaves tty2, tty3, etc. unaffected so they start
-// immediately and are always available as a rescue terminal — even when
-// spinifex.target or the banner service is stuck.
-func writeGettyDropIn(root string) error {
-	dropIn := `[Unit]
-After=spinifex-banner.service
-Wants=spinifex-banner.service
-`
-	for _, svc := range []string{"getty@tty1", "serial-getty@ttyS0"} {
-		dropInDir := filepath.Join(root, "etc/systemd/system/"+svc+".service.d")
-		if err := os.MkdirAll(dropInDir, 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(dropInDir, "spinifex-wait.conf"), []byte(dropIn), 0o644); err != nil {
-			return err
-		}
-	}
-	return nil
 }
