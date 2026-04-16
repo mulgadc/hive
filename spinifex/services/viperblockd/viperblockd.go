@@ -39,6 +39,7 @@ type Config struct {
 	Debug          bool
 	NatsHost       string
 	NatsToken      string
+	NatsCACert     string
 	MountedVolumes []MountedVolume
 	S3Host         string
 	Bucket         string
@@ -169,7 +170,7 @@ func (svc *Service) Reload() (err error) {
 
 func launchService(cfg *Config) (err error) {
 	// Connect to NATS
-	nc, err := utils.ConnectNATS(cfg.NatsHost, cfg.NatsToken)
+	nc, err := utils.ConnectNATS(cfg.NatsHost, cfg.NatsToken, cfg.NatsCACert)
 	if err != nil {
 		slog.Error("Failed to connect to NATS", "err", err)
 		return err

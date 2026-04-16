@@ -102,7 +102,7 @@ func launchService(config *config.ClusterConfig) error {
 
 	// Connect to NATS for service communication. On concurrent startup the
 	// local NATS server may not be listening yet, so retry with backoff.
-	natsConn, err := connectNATS(nodeConfig.NATS.Host, nodeConfig.NATS.ACL.Token)
+	natsConn, err := connectNATS(nodeConfig.NATS.Host, nodeConfig.NATS.ACL.Token, nodeConfig.NATS.CACert)
 	if err != nil {
 		return err
 	}
@@ -205,13 +205,13 @@ func launchService(config *config.ClusterConfig) error {
 
 // connectNATS establishes a connection to NATS with retry/backoff. On concurrent
 // startup the local NATS server may not be listening yet.
-func connectNATS(host, token string) (*nats.Conn, error) {
+func connectNATS(host, token, caCertPath string) (*nats.Conn, error) {
 	const maxWait = 5 * time.Minute
 	retryDelay := 500 * time.Millisecond
 	start := time.Now()
 
 	for {
-		nc, err := utils.ConnectNATS(host, token)
+		nc, err := utils.ConnectNATS(host, token, caCertPath)
 		if err == nil {
 			if time.Since(start) > time.Second {
 				slog.Info("NATS connection established", "elapsed", time.Since(start).Round(time.Second))

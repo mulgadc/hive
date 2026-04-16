@@ -21,7 +21,7 @@ func startTestNATSServer(t *testing.T) *server.Server {
 func TestConnectNATS_Success(t *testing.T) {
 	ns := startTestNATSServer(t)
 
-	nc, err := ConnectNATS(ns.ClientURL(), "")
+	nc, err := ConnectNATS(ns.ClientURL(), "", "")
 	require.NoError(t, err)
 	defer nc.Close()
 
@@ -44,7 +44,7 @@ func TestConnectNATS_WithToken(t *testing.T) {
 	t.Cleanup(func() { ns.Shutdown() })
 
 	// With correct token — should succeed
-	nc, err := ConnectNATS(ns.ClientURL(), "test-token-123")
+	nc, err := ConnectNATS(ns.ClientURL(), "test-token-123", "")
 	require.NoError(t, err)
 	defer nc.Close()
 	assert.True(t, nc.IsConnected())
@@ -65,13 +65,13 @@ func TestConnectNATS_WrongToken(t *testing.T) {
 	require.True(t, ns.ReadyForConnections(5*time.Second))
 	t.Cleanup(func() { ns.Shutdown() })
 
-	_, err = ConnectNATS(ns.ClientURL(), "wrong-token")
+	_, err = ConnectNATS(ns.ClientURL(), "wrong-token", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "NATS connect failed")
 }
 
 func TestConnectNATS_BadAddress(t *testing.T) {
-	_, err := ConnectNATS("nats://127.0.0.1:1", "")
+	_, err := ConnectNATS("nats://127.0.0.1:1", "", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "NATS connect failed")
 }

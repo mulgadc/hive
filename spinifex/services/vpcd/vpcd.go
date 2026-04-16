@@ -44,6 +44,8 @@ type Config struct {
 	NatsHost string
 	// NatsToken is the NATS authentication token.
 	NatsToken string
+	// NatsCACert is the path to the CA certificate for NATS TLS.
+	NatsCACert string
 	// OVNNBAddr is the OVN Northbound DB address (e.g., "tcp:127.0.0.1:6641").
 	OVNNBAddr string
 	// OVNSBAddr is the OVN Southbound DB address (e.g., "tcp:127.0.0.1:6642"), used for monitoring.
@@ -272,7 +274,7 @@ func launchService(cfg *Config) error {
 	slog.Info("OVN preflight passed (br-int exists, ovn-controller running)")
 
 	// Connect to NATS
-	nc, err := utils.ConnectNATS(cfg.NatsHost, cfg.NatsToken)
+	nc, err := utils.ConnectNATS(cfg.NatsHost, cfg.NatsToken, cfg.NatsCACert)
 	if err != nil {
 		slog.Error("Failed to connect to NATS", "err", err)
 		return err

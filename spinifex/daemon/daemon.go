@@ -851,7 +851,7 @@ func (d *Daemon) connectNATS() error {
 	start := time.Now()
 
 	for {
-		nc, err := utils.ConnectNATS(d.config.NATS.Host, d.config.NATS.ACL.Token)
+		nc, err := utils.ConnectNATS(d.config.NATS.Host, d.config.NATS.ACL.Token, d.config.NATS.CACert)
 		if err == nil {
 			d.natsConn = nc
 			if time.Since(start) > time.Second {
