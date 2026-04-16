@@ -98,6 +98,6 @@ func TestRenderedConfig_HasMigrationVersionMarker(t *testing.T) {
 	require.NoError(t, err)
 
 	firstLine := strings.SplitN(string(raw), "\n", 2)[0]
-	assert.Equal(t, "# spinifex-config-version: 1", firstLine,
+	assert.Equal(t, "# spinifex-config-version: 2", firstLine,
 		"nats.conf template must start with the current migration version marker")
 }
