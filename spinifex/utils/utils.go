@@ -249,9 +249,7 @@ func DownloadFileWithProgress(url string, name string, filename string, timeout 
 			WithTotal(int(cl)).
 			Start()
 
-		var written int64
 		reader := io.TeeReader(resp.Body, progressWriter(func(n int) {
-			written += int64(n)
 			// Update progress bar with the number of bytes read in this chunk
 			bar.Add(n)
 		}))
@@ -261,8 +259,6 @@ func DownloadFileWithProgress(url string, name string, filename string, timeout 
 		if err != nil {
 			return fmt.Errorf("copy error: %v", err)
 		}
-
-		pterm.Printf("Saved %s (%s)\n", filename, humanBytes(SafeInt64ToUint64(written)))
 		return err
 	} else {
 		// Unknown size: spinner that shows bytes downloaded
@@ -280,8 +276,6 @@ func DownloadFileWithProgress(url string, name string, filename string, timeout 
 		if err != nil {
 			return fmt.Errorf("copy error: %v", err)
 		}
-
-		pterm.Printf("Saved %s (%s)\n", filename, humanBytes(SafeInt64ToUint64(written)))
 	}
 
 	return nil

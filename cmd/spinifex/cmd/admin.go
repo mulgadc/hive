@@ -401,15 +401,11 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("✅ Created config directory: %s\n", imagePath)
-
 	// Next, if the file is selected to download, fetch it, extract disk image, and save to path
 	if imageName != "" && localFile == "" {
 		// Download the file to the image path
 		filename := path.Base(image.URL)
 		imageFile = fmt.Sprintf("%s/%s", imagePath, filename)
-
-		fmt.Printf("Downloading image %s to %s\n", image.URL, imageFile)
 
 		// If image path exists, skip
 		if admin.FileExists(imageFile) && !forceCmd {
@@ -429,8 +425,6 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		// operator can inspect; recover with --force.
 		if skipVerify {
 			fmt.Fprintf(os.Stderr, "⚠️  --skip-verify set: checksum verification skipped for %s\n", imageName)
-			slog.Warn("image integrity verification skipped via --skip-verify",
-				"image", imageName, "file", imageFile, "reason", "skip-verify-flag")
 		} else {
 			if image.Checksum == "" || image.ChecksumType == "" {
 				fmt.Fprintf(os.Stderr, "Catalog entry %q is missing Checksum/ChecksumType; refusing import.\n", imageName)
@@ -461,9 +455,6 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	}
 
 	extractedImagePath, err := utils.ExtractDiskImageFromFile(imageFile, imagePath)
-
-	fmt.Println("Extracted image to:", extractedImagePath)
-
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not extract image: %v\n", err)
 		os.Exit(1)
