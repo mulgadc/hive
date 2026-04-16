@@ -40,10 +40,44 @@ func TestSecurity_CreatePortGroup(t *testing.T) {
 	assert.NotNil(t, pg)
 
 	// Verify default deny ACLs were created (2 deny ACLs at priority 900)
+	// and that each has logging enabled per CMMC SC.L1-3.13.1.
+	type aclSnapshot struct {
+		action   string
+		log      bool
+		severity string
+		name     string
+	}
+	var snapshots []aclSnapshot
 	mock.mu.Lock()
 	aclCount := len(pg.ACLs)
+	for _, aclUUID := range pg.ACLs {
+		a := mock.acls[aclUUID]
+		if a == nil {
+			continue
+		}
+		snap := aclSnapshot{action: a.Action, log: a.Log}
+		if a.Severity != nil {
+			snap.severity = *a.Severity
+		}
+		if a.Name != nil {
+			snap.name = *a.Name
+		}
+		snapshots = append(snapshots, snap)
+	}
 	mock.mu.Unlock()
+
 	assert.Equal(t, 2, aclCount, "should have 2 default deny ACLs (ingress + egress)")
+	denyCount := 0
+	for _, s := range snapshots {
+		if s.action != "drop" {
+			continue
+		}
+		denyCount++
+		assert.True(t, s.log, "default deny ACL must have log=true for boundary monitoring")
+		assert.Equal(t, "info", s.severity, "default deny ACL must use info severity")
+		assert.Contains(t, s.name, "sg_abc123-deny-", "default deny ACL must have a name for syslog correlation")
+	}
+	assert.Equal(t, 2, denyCount, "should have 2 drop ACLs")
 }
 
 func TestSecurity_DeletePortGroup(t *testing.T) {
@@ -123,30 +157,41 @@ func TestSecurity_UpdateSGAddRules(t *testing.T) {
 	assertSuccess(t, resp, "update SG with ingress rules")
 
 	// Verify ACLs were created: 2 default deny + 2 ingress allow = 4
+	type aclSnapshot struct {
+		action string
+		match  string
+		log    bool
+	}
+	var snapshots []aclSnapshot
 	mock.mu.Lock()
 	pg := mock.portGroups["sg_upd1"]
 	aclCount := len(pg.ACLs)
-
-	// Collect match strings from the ACLs
-	var matches []string
 	for _, aclUUID := range pg.ACLs {
-		acl := mock.acls[aclUUID]
-		if acl != nil {
-			matches = append(matches, acl.Match)
+		a := mock.acls[aclUUID]
+		if a == nil {
+			continue
 		}
+		snapshots = append(snapshots, aclSnapshot{action: a.Action, match: a.Match, log: a.Log})
 	}
 	mock.mu.Unlock()
 
 	assert.Equal(t, 4, aclCount, "should have 4 ACLs (2 deny + 2 ingress allow)")
 
-	// Check that at least one match contains tcp.dst == 22
+	// Check that at least one match contains tcp.dst == 22. Also verify
+	// logging policy: denies logged, allows not logged (CMMC SC.L1-3.13.1).
 	foundSSH := false
 	foundHTTPS := false
-	for _, m := range matches {
-		if containsAll(m, "tcp.dst == 22", "ip4.src == 10.0.0.0/8") {
+	for _, s := range snapshots {
+		switch s.action {
+		case "drop":
+			assert.True(t, s.log, "deny ACL must be logged")
+		case "allow-related":
+			assert.False(t, s.log, "allow ACL must not be logged (high volume, low signal)")
+		}
+		if containsAll(s.match, "tcp.dst == 22", "ip4.src == 10.0.0.0/8") {
 			foundSSH = true
 		}
-		if containsAll(m, "tcp.dst == 443") {
+		if containsAll(s.match, "tcp.dst == 443") {
 			foundHTTPS = true
 		}
 	}
