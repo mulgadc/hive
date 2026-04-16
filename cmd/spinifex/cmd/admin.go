@@ -239,7 +239,7 @@ func init() {
 	adminInitCmd.Flags().Int("nodes", 3, "Number of nodes to expect for cluster")
 	adminInitCmd.Flags().String("host", "", "Leader node to join (if not specified, tries multicast discovery)")
 	adminInitCmd.Flags().Int("port", 4432, "Port to bind cluster services on")
-	adminInitCmd.Flags().String("bind", "0.0.0.0", "IP address to bind services to (e.g., 10.11.12.1 for multi-node)")
+	adminInitCmd.Flags().String("bind", "127.0.0.1", "IP address to bind services to (e.g., 10.11.12.1 for multi-node)")
 	adminInitCmd.Flags().String("cluster-bind", "", "IP address to bind NATS cluster services to (e.g., 10.11.12.1 for multi-node)")
 	adminInitCmd.Flags().String("cluster-routes", "", "NATS cluster hosts for routing specify multiple with comma (e.g., 10.11.12.1:4248,10.11.12.2:4248 for multi-node)")
 	adminInitCmd.Flags().String("predastore-nodes", "", "Comma-separated IPs for multi-node Predastore cluster (e.g., 10.11.12.1,10.11.12.2,10.11.12.3). Requires >= 3 nodes.")
@@ -864,7 +864,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	spxRoot = filepath.Clean(spxRoot)
 
 	// Determine if this is a multi-node formation
-	isMultiNode := nodes >= 2 && bindIP != "0.0.0.0"
+	isMultiNode := nodes >= 2 && bindIP != "0.0.0.0" && bindIP != "127.0.0.1"
 
 	if isMultiNode {
 		// Build cluster-wide network config for propagation to joining nodes

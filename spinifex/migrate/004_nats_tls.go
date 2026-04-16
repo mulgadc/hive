@@ -85,6 +85,10 @@ func init() {
 				return nil
 			}
 
+			// Rewrite 0.0.0.0 → 127.0.0.1 for the NATS host. 0.0.0.0 is a valid
+			// bind address but not a valid TLS connect address (certs have real IPs).
+			text = strings.ReplaceAll(text, `host = "0.0.0.0:4222"`, `host = "127.0.0.1:4222"`)
+
 			// Insert cacert after each host line under [nodes.*.nats].
 			// Pattern: host = "x.x.x.x:4222" followed by a newline.
 			caPath := fmt.Sprintf("%s/ca.pem", ctx.ConfigDir)
