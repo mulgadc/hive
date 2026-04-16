@@ -56,7 +56,6 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/vm"
 	"github.com/mulgadc/viperblock/viperblock"
 	"github.com/nats-io/nats.go"
-	"github.com/pelletier/go-toml/v2"
 )
 
 type BlockDeviceMapping struct {
@@ -1388,27 +1387,6 @@ func (d *Daemon) computeConfigHash() (string, error) {
 	return hex.EncodeToString(hash[:]), nil
 }
 
-// saveClusterConfig writes the cluster config to disk in TOML format
-func (d *Daemon) saveClusterConfig() error {
-	if d.configPath == "" {
-		return fmt.Errorf("config path not set")
-	}
-
-	// Marshal to TOML
-	configTOML, err := toml.Marshal(d.clusterConfig)
-	if err != nil {
-		return fmt.Errorf("failed to marshal config to TOML: %w", err)
-	}
-
-	// Write to config file
-	if err := os.WriteFile(d.configPath, configTOML, 0600); err != nil {
-		return fmt.Errorf("failed to write config: %w", err)
-	}
-
-	slog.Info("Cluster config saved", "path", d.configPath, "epoch", d.clusterConfig.Epoch)
-	return nil
-}
-
 // ClusterManager starts the HTTP cluster management server
 func (d *Daemon) ClusterManager() error {
 	// Get daemon host from config
@@ -1476,160 +1454,6 @@ func (d *Daemon) ClusterManager() error {
 		}
 	})
 
-	// Join endpoint - accepts new nodes joining the cluster
-	r.Post("/join", func(w http.ResponseWriter, r *http.Request) {
-		var req types.NodeJoinRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
-				Success: false,
-				Message: "invalid request body",
-			}); err != nil {
-				slog.Error("Failed to encode join error response", "error", err)
-			}
-			return
-		}
-
-		slog.Info("Node join request received", "node", req.Node, "region", req.Region, "az", req.AZ)
-
-		// Validate request
-		if req.Node == "" || req.Region == "" || req.AZ == "" {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
-				Success: false,
-				Message: "node, region, and az are required",
-			}); err != nil {
-				slog.Error("Failed to encode join validation response", "error", err)
-			}
-			return
-		}
-
-		// Check if node already exists
-		if _, exists := d.clusterConfig.Nodes[req.Node]; exists {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusConflict)
-			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
-				Success: false,
-				Message: fmt.Sprintf("node %s already exists in cluster", req.Node),
-			}); err != nil {
-				slog.Error("Failed to encode join conflict response", "error", err)
-			}
-			return
-		}
-
-		// Add new node to cluster config
-		d.mu.Lock()
-		newNodeConfig := config.Config{
-			Node:    req.Node,
-			Region:  req.Region,
-			AZ:      req.AZ,
-			DataDir: req.DataDir,
-			Daemon: config.DaemonConfig{
-				Host: req.DaemonHost,
-			},
-			// Copy shared config from current node
-			NATS:       d.config.NATS,
-			Predastore: d.config.Predastore,
-			AWSGW:      d.config.AWSGW,
-			BaseDir:    req.DataDir,
-		}
-
-		d.clusterConfig.Nodes[req.Node] = newNodeConfig
-		d.clusterConfig.Epoch++ // Increment epoch for version tracking
-		d.mu.Unlock()
-
-		// Save updated config
-		if err := d.saveClusterConfig(); err != nil {
-			slog.Error("Failed to save cluster config", "error", err)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusInternalServerError)
-			if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
-				Success: false,
-				Message: "failed to save cluster config",
-			}); err != nil {
-				slog.Error("Failed to encode join save-error response", "error", err)
-			}
-			return
-		}
-
-		configHash, _ := d.computeConfigHash()
-
-		slog.Info("Node joined cluster", "node", req.Node, "epoch", d.clusterConfig.Epoch)
-
-		// Update JetStream KV replicas to match new cluster size
-		// This may fail if the new node's NATS server isn't running yet - that's OK,
-		// replicas can be updated later when the cluster is fully formed
-		if d.jsManager != nil {
-			newReplicaCount := len(d.clusterConfig.Nodes)
-			if err := d.jsManager.UpdateReplicas(newReplicaCount); err != nil {
-				slog.Warn("Failed to update JetStream replicas (new node NATS may not be ready yet)", "targetReplicas", newReplicaCount, "error", err)
-			}
-		}
-
-		// Send only shared cluster data (exclude node-specific top-level fields)
-		sharedData := &types.SharedClusterData{
-			Epoch:   d.clusterConfig.Epoch,
-			Version: d.clusterConfig.Version,
-			Nodes:   d.clusterConfig.Nodes,
-		}
-
-		// Read CA certificate and key to share with joining node for per-node cert generation
-		configDir := filepath.Dir(d.configPath)
-		caCertPath := filepath.Join(configDir, "ca.pem")
-		caKeyPath := filepath.Join(configDir, "ca.key")
-
-		var caCert, caKey string
-		if caCertPEM, err := os.ReadFile(caCertPath); err == nil {
-			caCert = string(caCertPEM)
-		} else {
-			slog.Warn("Could not read CA cert for join response", "error", err)
-		}
-
-		if caKeyPEM, err := os.ReadFile(caKeyPath); err == nil {
-			caKey = string(caKeyPEM)
-		} else {
-			slog.Warn("Could not read CA key for join response", "error", err)
-		}
-
-		// Read predastore.toml to share with joining node (for multi-node predastore)
-		var predastoreConfig string
-		predastorePath := filepath.Join(configDir, "predastore", "predastore.toml")
-		if content, err := os.ReadFile(predastorePath); err == nil {
-			predastoreConfig = string(content)
-		} else {
-			slog.Warn("Could not read predastore.toml for join response", "path", predastorePath, "error", err)
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(types.NodeJoinResponse{
-			Success:          true,
-			Message:          fmt.Sprintf("node %s successfully joined cluster", req.Node),
-			SharedData:       sharedData,
-			ConfigHash:       configHash,
-			JoiningNode:      req.Node,
-			CACert:           caCert,
-			CAKey:            caKey,
-			PredastoreConfig: predastoreConfig,
-		}); err != nil {
-			slog.Error("Failed to encode join success response", "error", err)
-		}
-	})
-
-	// Get cluster config endpoint
-	r.Get("/config", func(w http.ResponseWriter, r *http.Request) {
-		configHash, _ := d.computeConfigHash()
-
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(map[string]any{
-			"config":      d.clusterConfig,
-			"config_hash": configHash,
-		}); err != nil {
-			slog.Error("Failed to encode config response", "error", err)
-		}
-	})
-
 	// Load TLS certificate (C-5: serve over HTTPS instead of plaintext HTTP)
 	// Resolve relative cert paths against config directory (cert lives alongside spinifex.toml).
 	// For binary installs, systemd sets absolute paths via env vars; for dev, the config
@@ -1655,6 +1479,7 @@ func (d *Daemon) ClusterManager() error {
 
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
 	}
 
 	d.clusterServer = &http.Server{
