@@ -41,43 +41,23 @@ func TestSecurity_CreatePortGroup(t *testing.T) {
 
 	// Verify default deny ACLs were created (2 deny ACLs at priority 900)
 	// and that each has logging enabled per CMMC SC.L1-3.13.1.
-	type aclSnapshot struct {
-		action   string
-		log      bool
-		severity string
-		name     string
-	}
-	var snapshots []aclSnapshot
-	mock.mu.Lock()
-	aclCount := len(pg.ACLs)
-	for _, aclUUID := range pg.ACLs {
-		a := mock.acls[aclUUID]
-		if a == nil {
-			continue
-		}
-		snap := aclSnapshot{action: a.Action, log: a.Log}
-		if a.Severity != nil {
-			snap.severity = *a.Severity
-		}
-		if a.Name != nil {
-			snap.name = *a.Name
-		}
-		snapshots = append(snapshots, snap)
-	}
-	mock.mu.Unlock()
+	snapshots := snapshotACLs(t, mock, "sg_abc123")
+	assert.Equal(t, 2, len(snapshots), "should have 2 default deny ACLs (ingress + egress)")
 
-	assert.Equal(t, 2, aclCount, "should have 2 default deny ACLs (ingress + egress)")
-	denyCount := 0
+	byDirection := map[string]aclSnapshot{}
 	for _, s := range snapshots {
-		if s.action != "drop" {
-			continue
-		}
-		denyCount++
+		assert.Equal(t, "drop", s.action, "default ACLs must all be drop")
 		assert.True(t, s.log, "default deny ACL must have log=true for boundary monitoring")
 		assert.Equal(t, "info", s.severity, "default deny ACL must use info severity")
-		assert.Contains(t, s.name, "sg_abc123-deny-", "default deny ACL must have a name for syslog correlation")
+		byDirection[s.direction] = s
 	}
-	assert.Equal(t, 2, denyCount, "should have 2 drop ACLs")
+
+	ingress, hasIngress := byDirection["to-lport"]
+	egress, hasEgress := byDirection["from-lport"]
+	require.True(t, hasIngress, "must have a to-lport (ingress) deny ACL")
+	require.True(t, hasEgress, "must have a from-lport (egress) deny ACL")
+	assert.Equal(t, "sg_abc123-deny-ingress", ingress.name, "ingress deny ACL must be named <pg>-deny-ingress for syslog correlation")
+	assert.Equal(t, "sg_abc123-deny-egress", egress.name, "egress deny ACL must be named <pg>-deny-egress for syslog correlation")
 }
 
 func TestSecurity_DeletePortGroup(t *testing.T) {
@@ -157,34 +137,22 @@ func TestSecurity_UpdateSGAddRules(t *testing.T) {
 	assertSuccess(t, resp, "update SG with ingress rules")
 
 	// Verify ACLs were created: 2 default deny + 2 ingress allow = 4
-	type aclSnapshot struct {
-		action string
-		match  string
-		log    bool
-	}
-	var snapshots []aclSnapshot
-	mock.mu.Lock()
-	pg := mock.portGroups["sg_upd1"]
-	aclCount := len(pg.ACLs)
-	for _, aclUUID := range pg.ACLs {
-		a := mock.acls[aclUUID]
-		if a == nil {
-			continue
-		}
-		snapshots = append(snapshots, aclSnapshot{action: a.Action, match: a.Match, log: a.Log})
-	}
-	mock.mu.Unlock()
-
-	assert.Equal(t, 4, aclCount, "should have 4 ACLs (2 deny + 2 ingress allow)")
+	snapshots := snapshotACLs(t, mock, "sg_upd1")
+	assert.Equal(t, 4, len(snapshots), "should have 4 ACLs (2 deny + 2 ingress allow)")
 
 	// Check that at least one match contains tcp.dst == 22. Also verify
-	// logging policy: denies logged, allows not logged (CMMC SC.L1-3.13.1).
+	// logging policy: denies logged with name+severity, allows not logged
+	// (CMMC SC.L1-3.13.1). The severity/name checks here guard against a
+	// regression where handleUpdateSG re-adds denies without them.
 	foundSSH := false
 	foundHTTPS := false
+	byDirection := map[string]aclSnapshot{}
 	for _, s := range snapshots {
 		switch s.action {
 		case "drop":
 			assert.True(t, s.log, "deny ACL must be logged")
+			assert.Equal(t, "info", s.severity, "deny ACL must use info severity on update path")
+			byDirection[s.direction] = s
 		case "allow-related":
 			assert.False(t, s.log, "allow ACL must not be logged (high volume, low signal)")
 		}
@@ -197,6 +165,58 @@ func TestSecurity_UpdateSGAddRules(t *testing.T) {
 	}
 	assert.True(t, foundSSH, "should have SSH ACL with source CIDR")
 	assert.True(t, foundHTTPS, "should have HTTPS ACL")
+
+	ingress, hasIngress := byDirection["to-lport"]
+	egress, hasEgress := byDirection["from-lport"]
+	require.True(t, hasIngress, "update path must re-add to-lport deny ACL")
+	require.True(t, hasEgress, "update path must re-add from-lport deny ACL")
+	assert.Equal(t, "sg_upd1-deny-ingress", ingress.name, "update path must re-add ingress deny with correct name")
+	assert.Equal(t, "sg_upd1-deny-egress", egress.name, "update path must re-add egress deny with correct name")
+}
+
+// aclSnapshot is a copy of the ACL fields tests assert on. Captured under the
+// mock's lock so assertions can run after unlock.
+type aclSnapshot struct {
+	direction string
+	action    string
+	match     string
+	log       bool
+	severity  string
+	name      string
+}
+
+// snapshotACLs copies the ACLs attached to a port group into a slice of
+// aclSnapshots. Holds mock.mu for the shortest window possible; lets each
+// test assert on whichever fields it cares about.
+func snapshotACLs(t *testing.T, mock *MockOVNClient, pgName string) []aclSnapshot {
+	t.Helper()
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	pg, ok := mock.portGroups[pgName]
+	if !ok {
+		return nil
+	}
+	out := make([]aclSnapshot, 0, len(pg.ACLs))
+	for _, uuid := range pg.ACLs {
+		a := mock.acls[uuid]
+		if a == nil {
+			continue
+		}
+		snap := aclSnapshot{
+			direction: a.Direction,
+			action:    a.Action,
+			match:     a.Match,
+			log:       a.Log,
+		}
+		if a.Severity != nil {
+			snap.severity = *a.Severity
+		}
+		if a.Name != nil {
+			snap.name = *a.Name
+		}
+		out = append(out, snap)
+	}
+	return out
 }
 
 // containsAll checks if s contains all substrings.

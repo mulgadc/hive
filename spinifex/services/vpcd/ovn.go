@@ -35,7 +35,8 @@ func (c *LiveOVNClient) transactOps(ctx context.Context, ops []ovsdb.Operation) 
 }
 
 // ACLSpec describes an OVN ACL rule for attachment to a port group.
-// Name, Severity, and Meter are optional — set Severity when Log is true.
+// Name is optional. Severity is required when Log is true (OVN rejects an
+// ACL with log=true and no severity).
 type ACLSpec struct {
 	Direction string // "to-lport" or "from-lport"
 	Priority  int
@@ -44,6 +45,17 @@ type ACLSpec struct {
 	Name      string
 	Log       bool
 	Severity  string // "alert", "warning", "notice", "info", "debug"
+}
+
+// Validate enforces invariants that OVN itself would reject at transaction
+// time. Keeping the check at the client boundary means both the mock and the
+// live client surface violations the same way instead of only showing up as
+// an opaque OVSDB constraint error.
+func (s ACLSpec) Validate() error {
+	if s.Log && s.Severity == "" {
+		return fmt.Errorf("ACLSpec: Severity must be set when Log is true")
+	}
+	return nil
 }
 
 // OVNClient defines the interface for interacting with the OVN Northbound Database.
@@ -833,7 +845,10 @@ func (c *LiveOVNClient) SetPortGroupPorts(_ context.Context, _ string, _ []strin
 	return fmt.Errorf("SetPortGroupPorts: not yet implemented for live OVN client")
 }
 
-func (c *LiveOVNClient) AddACL(_ context.Context, _ string, _ ACLSpec) error {
+func (c *LiveOVNClient) AddACL(_ context.Context, _ string, spec ACLSpec) error {
+	if err := spec.Validate(); err != nil {
+		return err
+	}
 	return fmt.Errorf("AddACL: not yet implemented for live OVN client")
 }
 

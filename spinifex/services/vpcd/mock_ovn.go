@@ -533,6 +533,9 @@ func (m *MockOVNClient) SetPortGroupPorts(_ context.Context, name string, ports 
 // ACLs
 
 func (m *MockOVNClient) AddACL(_ context.Context, portGroupName string, spec ACLSpec) error {
+	if err := spec.Validate(); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	pg, exists := m.portGroups[portGroupName]
