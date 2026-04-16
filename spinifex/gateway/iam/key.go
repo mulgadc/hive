@@ -8,11 +8,11 @@ import (
 	handlers_iam "github.com/mulgadc/spinifex/spinifex/handlers/iam"
 )
 
-func CreateAccessKey(accountID string, input *iam.CreateAccessKeyInput, svc handlers_iam.IAMService) (*iam.CreateAccessKeyOutput, error) {
+func CreateAccessKey(accountID string, input *iam.CreateAccessKeyInput, expiresAt string, svc handlers_iam.IAMService) (*iam.CreateAccessKeyOutput, error) {
 	if input.UserName == nil || *input.UserName == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
-	return svc.CreateAccessKey(accountID, input)
+	return svc.CreateAccessKey(accountID, input, expiresAt)
 }
 
 func ListAccessKeys(accountID string, input *iam.ListAccessKeysInput, svc handlers_iam.IAMService) (*iam.ListAccessKeysOutput, error) {
@@ -32,12 +32,12 @@ func DeleteAccessKey(accountID string, input *iam.DeleteAccessKeyInput, svc hand
 	return svc.DeleteAccessKey(accountID, input)
 }
 
-func UpdateAccessKey(accountID string, input *iam.UpdateAccessKeyInput, svc handlers_iam.IAMService) (*iam.UpdateAccessKeyOutput, error) {
+func UpdateAccessKey(accountID string, input *iam.UpdateAccessKeyInput, expiresAt string, svc handlers_iam.IAMService) (*iam.UpdateAccessKeyOutput, error) {
 	if input.AccessKeyId == nil || *input.AccessKeyId == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
 	if input.Status == nil || *input.Status == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
 	}
-	return svc.UpdateAccessKey(accountID, input)
+	return svc.UpdateAccessKey(accountID, input, expiresAt)
 }

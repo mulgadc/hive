@@ -51,7 +51,7 @@ func (m *mockIAMService) ListUsers(_ string, _ *iam.ListUsersInput) (*iam.ListUs
 func (m *mockIAMService) DeleteUser(_ string, _ *iam.DeleteUserInput) (*iam.DeleteUserOutput, error) {
 	return nil, nil
 }
-func (m *mockIAMService) CreateAccessKey(_ string, _ *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error) {
+func (m *mockIAMService) CreateAccessKey(_ string, _ *iam.CreateAccessKeyInput, _ string) (*iam.CreateAccessKeyOutput, error) {
 	return nil, nil
 }
 func (m *mockIAMService) ListAccessKeys(_ string, _ *iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error) {
@@ -60,7 +60,7 @@ func (m *mockIAMService) ListAccessKeys(_ string, _ *iam.ListAccessKeysInput) (*
 func (m *mockIAMService) DeleteAccessKey(_ string, _ *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error) {
 	return nil, nil
 }
-func (m *mockIAMService) UpdateAccessKey(_ string, _ *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error) {
+func (m *mockIAMService) UpdateAccessKey(_ string, _ *iam.UpdateAccessKeyInput, _ string) (*iam.UpdateAccessKeyOutput, error) {
 	return nil, nil
 }
 func (m *mockIAMService) CreatePolicy(_ string, _ *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error) {
@@ -1946,5 +1946,193 @@ func TestCheckPolicy_RootNonGlobalAccount_StillEvaluated(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("Expected status 403, got %d, body: %s", resp.StatusCode, string(body))
+	}
+}
+
+// setupTTLTestHandler builds a handler with a single access key whose
+// ExpiresAt is set to the provided RFC3339 string (empty = no expiry).
+func setupTTLTestHandler(t *testing.T, expiresAt string) http.Handler {
+	t.Helper()
+	encryptedSecret, err := handlers_iam.EncryptSecret(testSecretKey, testMasterKey)
+	if err != nil {
+		t.Fatalf("EncryptSecret: %v", err)
+	}
+	mockSvc := &mockIAMService{
+		masterKey: testMasterKey,
+		accessKeys: map[string]*handlers_iam.AccessKey{
+			testAccessKey: {
+				AccessKeyID:     testAccessKey,
+				SecretAccessKey: encryptedSecret,
+				UserName:        "root",
+				Status:          handlers_iam.AccessKeyStatusActive,
+				ExpiresAt:       expiresAt,
+			},
+		},
+	}
+	gw := &GatewayConfig{
+		DisableLogging: true,
+		Region:         testRegion,
+		IAMService:     mockSvc,
+	}
+	r := chi.NewRouter()
+	r.Use(gw.SigV4AuthMiddleware())
+	r.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("OK"))
+	})
+	return r
+}
+
+func TestSigV4Auth_ExpiredAccessKey(t *testing.T) {
+	past := time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339)
+	handler := setupTTLTestHandler(t, past)
+
+	authHeader, timestamp := generateTestAuthHeader(
+		"GET", "/", "", "",
+		testAccessKey, testSecretKey, testRegion, testService,
+	)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "localhost:9999"
+	req.Header.Set("Authorization", authHeader)
+	req.Header.Set("X-Amz-Date", timestamp)
+
+	resp := doRequest(handler, req)
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("Expected 403 for expired key, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), awserrors.ErrorExpiredToken) {
+		t.Errorf("Expected ExpiredToken error, got: %s", string(body))
+	}
+}
+
+func TestSigV4Auth_FutureExpiryAccepted(t *testing.T) {
+	future := time.Now().UTC().Add(1 * time.Hour).Format(time.RFC3339)
+	handler := setupTTLTestHandler(t, future)
+
+	authHeader, timestamp := generateTestAuthHeader(
+		"GET", "/", "", "",
+		testAccessKey, testSecretKey, testRegion, testService,
+	)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "localhost:9999"
+	req.Header.Set("Authorization", authHeader)
+	req.Header.Set("X-Amz-Date", timestamp)
+
+	resp := doRequest(handler, req)
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Errorf("Expected 200 for non-expired key, got %d, body: %s", resp.StatusCode, string(body))
+	}
+}
+
+func TestSigV4Auth_NoExpiryAccepted(t *testing.T) {
+	// Empty ExpiresAt (default) means the key never expires — existing
+	// unrestricted-lifetime behaviour.
+	handler := setupTTLTestHandler(t, "")
+
+	authHeader, timestamp := generateTestAuthHeader(
+		"GET", "/", "", "",
+		testAccessKey, testSecretKey, testRegion, testService,
+	)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "localhost:9999"
+	req.Header.Set("Authorization", authHeader)
+	req.Header.Set("X-Amz-Date", timestamp)
+
+	resp := doRequest(handler, req)
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Errorf("Expected 200 for no-expiry key, got %d, body: %s", resp.StatusCode, string(body))
+	}
+}
+
+func TestSigV4Auth_MalformedExpiresAtRejected(t *testing.T) {
+	// A stored ExpiresAt that fails to parse is a data-corruption signal;
+	// the key should be rejected as an invalid credential (not treated as
+	// "no expiry" which would be a fail-open).
+	handler := setupTTLTestHandler(t, "not-a-timestamp")
+
+	authHeader, timestamp := generateTestAuthHeader(
+		"GET", "/", "", "",
+		testAccessKey, testSecretKey, testRegion, testService,
+	)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "localhost:9999"
+	req.Header.Set("Authorization", authHeader)
+	req.Header.Set("X-Amz-Date", timestamp)
+
+	resp := doRequest(handler, req)
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("Expected 403 for malformed ExpiresAt, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), awserrors.ErrorInvalidClientTokenId) {
+		t.Errorf("Expected InvalidClientTokenId error, got: %s", string(body))
+	}
+}
+
+func TestSigV4Auth_ExpiredKeyRecordsRateLimitFailure(t *testing.T) {
+	past := time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339)
+	encryptedSecret, err := handlers_iam.EncryptSecret(testSecretKey, testMasterKey)
+	if err != nil {
+		t.Fatalf("EncryptSecret: %v", err)
+	}
+	mockSvc := &mockIAMService{
+		masterKey: testMasterKey,
+		accessKeys: map[string]*handlers_iam.AccessKey{
+			testAccessKey: {
+				AccessKeyID:     testAccessKey,
+				SecretAccessKey: encryptedSecret,
+				UserName:        "root",
+				Status:          handlers_iam.AccessKeyStatusActive,
+				ExpiresAt:       past,
+			},
+		},
+	}
+	rl := NewAuthRateLimiter()
+	gw := &GatewayConfig{
+		DisableLogging: true,
+		Region:         testRegion,
+		IAMService:     mockSvc,
+		RateLimiter:    rl,
+	}
+	r := chi.NewRouter()
+	r.Use(gw.SigV4AuthMiddleware())
+	r.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("OK"))
+	})
+
+	authHeader, timestamp := generateTestAuthHeader(
+		"GET", "/", "", "",
+		testAccessKey, testSecretKey, testRegion, testService,
+	)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "localhost:9999"
+	req.Header.Set("Authorization", authHeader)
+	req.Header.Set("X-Amz-Date", timestamp)
+	req.RemoteAddr = "10.0.0.42:1234"
+
+	resp := doRequest(r, req)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("Expected 403 for expired key, got %d", resp.StatusCode)
+	}
+
+	// RateLimiter should have recorded the failure against the source IP.
+	rl.mu.RLock()
+	rec, ok := rl.records["10.0.0.42"]
+	var count int
+	if ok {
+		count = len(rec.failures)
+	}
+	rl.mu.RUnlock()
+	if !ok {
+		t.Fatalf("Expected rate limiter to have a record for 10.0.0.42, got none")
+	}
+	if count != 1 {
+		t.Errorf("Expected 1 recorded failure for 10.0.0.42, got %d", count)
 	}
 }

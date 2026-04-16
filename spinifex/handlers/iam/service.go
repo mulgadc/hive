@@ -12,11 +12,13 @@ type IAMService interface {
 	ListUsers(accountID string, input *iam.ListUsersInput) (*iam.ListUsersOutput, error)
 	DeleteUser(accountID string, input *iam.DeleteUserInput) (*iam.DeleteUserOutput, error)
 
-	// Access key lifecycle — account-scoped
-	CreateAccessKey(accountID string, input *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error)
+	// Access key lifecycle — account-scoped.
+	// expiresAt is a Spinifex extension: RFC3339 timestamp when the key expires,
+	// or empty string for no expiry (Create) / preserve existing (Update).
+	CreateAccessKey(accountID string, input *iam.CreateAccessKeyInput, expiresAt string) (*iam.CreateAccessKeyOutput, error)
 	ListAccessKeys(accountID string, input *iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error)
 	DeleteAccessKey(accountID string, input *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error)
-	UpdateAccessKey(accountID string, input *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error)
+	UpdateAccessKey(accountID string, input *iam.UpdateAccessKeyInput, expiresAt string) (*iam.UpdateAccessKeyOutput, error)
 
 	// Policy CRUD — account-scoped
 	CreatePolicy(accountID string, input *iam.CreatePolicyInput) (*iam.CreatePolicyOutput, error)

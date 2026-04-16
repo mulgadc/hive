@@ -22,10 +22,10 @@ type flexMockIAMService struct {
 	getUserFn         func(string, *iam.GetUserInput) (*iam.GetUserOutput, error)
 	listUsersFn       func(string, *iam.ListUsersInput) (*iam.ListUsersOutput, error)
 	deleteUserFn      func(string, *iam.DeleteUserInput) (*iam.DeleteUserOutput, error)
-	createAccessKeyFn func(string, *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error)
+	createAccessKeyFn func(string, *iam.CreateAccessKeyInput, string) (*iam.CreateAccessKeyOutput, error)
 	listAccessKeysFn  func(string, *iam.ListAccessKeysInput) (*iam.ListAccessKeysOutput, error)
 	deleteAccessKeyFn func(string, *iam.DeleteAccessKeyInput) (*iam.DeleteAccessKeyOutput, error)
-	updateAccessKeyFn func(string, *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error)
+	updateAccessKeyFn func(string, *iam.UpdateAccessKeyInput, string) (*iam.UpdateAccessKeyOutput, error)
 }
 
 func (m *flexMockIAMService) CreateUser(accountID string, input *iam.CreateUserInput) (*iam.CreateUserOutput, error) {
@@ -56,9 +56,9 @@ func (m *flexMockIAMService) DeleteUser(accountID string, input *iam.DeleteUserI
 	return &iam.DeleteUserOutput{}, nil
 }
 
-func (m *flexMockIAMService) CreateAccessKey(accountID string, input *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error) {
+func (m *flexMockIAMService) CreateAccessKey(accountID string, input *iam.CreateAccessKeyInput, expiresAt string) (*iam.CreateAccessKeyOutput, error) {
 	if m.createAccessKeyFn != nil {
-		return m.createAccessKeyFn(accountID, input)
+		return m.createAccessKeyFn(accountID, input, expiresAt)
 	}
 	return &iam.CreateAccessKeyOutput{}, nil
 }
@@ -77,9 +77,9 @@ func (m *flexMockIAMService) DeleteAccessKey(accountID string, input *iam.Delete
 	return &iam.DeleteAccessKeyOutput{}, nil
 }
 
-func (m *flexMockIAMService) UpdateAccessKey(accountID string, input *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error) {
+func (m *flexMockIAMService) UpdateAccessKey(accountID string, input *iam.UpdateAccessKeyInput, expiresAt string) (*iam.UpdateAccessKeyOutput, error) {
 	if m.updateAccessKeyFn != nil {
-		return m.updateAccessKeyFn(accountID, input)
+		return m.updateAccessKeyFn(accountID, input, expiresAt)
 	}
 	return &iam.UpdateAccessKeyOutput{}, nil
 }

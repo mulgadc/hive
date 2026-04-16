@@ -31,7 +31,7 @@ func (s *stubIAMService) DeleteUser(_ string, _ *iam.DeleteUserInput) (*iam.Dele
 	return &iam.DeleteUserOutput{}, nil
 }
 
-func (s *stubIAMService) CreateAccessKey(_ string, _ *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error) {
+func (s *stubIAMService) CreateAccessKey(_ string, _ *iam.CreateAccessKeyInput, _ string) (*iam.CreateAccessKeyOutput, error) {
 	return &iam.CreateAccessKeyOutput{}, nil
 }
 
@@ -43,7 +43,7 @@ func (s *stubIAMService) DeleteAccessKey(_ string, _ *iam.DeleteAccessKeyInput) 
 	return &iam.DeleteAccessKeyOutput{}, nil
 }
 
-func (s *stubIAMService) UpdateAccessKey(_ string, _ *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error) {
+func (s *stubIAMService) UpdateAccessKey(_ string, _ *iam.UpdateAccessKeyInput, _ string) (*iam.UpdateAccessKeyOutput, error) {
 	return &iam.UpdateAccessKeyOutput{}, nil
 }
 
@@ -188,7 +188,7 @@ func TestCreateAccessKey(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := CreateAccessKey(testAccountID, tc.input, svc)
+			_, err := CreateAccessKey(testAccountID, tc.input, "", svc)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Equal(t, tc.wantErr, err.Error())
@@ -264,7 +264,7 @@ func TestUpdateAccessKey(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := UpdateAccessKey(testAccountID, tc.input, svc)
+			_, err := UpdateAccessKey(testAccountID, tc.input, "", svc)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Equal(t, tc.wantErr, err.Error())

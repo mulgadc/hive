@@ -38,6 +38,28 @@ func iamHandler[In any](handler func(string, *In, handlers_iam.IAMService) (any,
 	}
 }
 
+// iamAccessKeyHandler is a variant of iamHandler that additionally reads the
+// Spinifex-specific "ExpiresAt" extension query parameter (RFC3339, optional)
+// and passes it through to the service alongside the SDK input struct.
+func iamAccessKeyHandler[In any](handler func(string, *In, string, handlers_iam.IAMService) (any, error)) IAMHandler {
+	return func(action string, q map[string]string, gw *GatewayConfig, accountID string) ([]byte, error) {
+		input := new(In)
+		if err := awsec2query.QueryParamsToStruct(q, input); err != nil {
+			return nil, errors.New(awserrors.ErrorIAMInvalidInput)
+		}
+		output, err := handler(accountID, input, q["ExpiresAt"], gw.IAMService)
+		if err != nil {
+			return nil, err
+		}
+		payload := utils.GenerateIAMXMLPayload(action, output)
+		xmlOutput, err := utils.MarshalToXML(payload)
+		if err != nil {
+			return nil, errors.New(awserrors.ErrorInternalError)
+		}
+		return xmlOutput, nil
+	}
+}
+
 var iamActions = map[string]IAMHandler{
 	"CreateUser": iamHandler(func(accountID string, input *iam.CreateUserInput, svc handlers_iam.IAMService) (any, error) {
 		return gateway_iam.CreateUser(accountID, input, svc)
@@ -51,8 +73,11 @@ var iamActions = map[string]IAMHandler{
 	"DeleteUser": iamHandler(func(accountID string, input *iam.DeleteUserInput, svc handlers_iam.IAMService) (any, error) {
 		return gateway_iam.DeleteUser(accountID, input, svc)
 	}),
-	"CreateAccessKey": iamHandler(func(accountID string, input *iam.CreateAccessKeyInput, svc handlers_iam.IAMService) (any, error) {
-		return gateway_iam.CreateAccessKey(accountID, input, svc)
+	// CreateAccessKey / UpdateAccessKey accept a Spinifex extension query parameter
+	// "ExpiresAt" (RFC3339) that is not part of the AWS IAM SDK input structs, so
+	// we read it from the raw query map rather than the generic iamHandler wrapper.
+	"CreateAccessKey": iamAccessKeyHandler(func(accountID string, input *iam.CreateAccessKeyInput, expiresAt string, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.CreateAccessKey(accountID, input, expiresAt, svc)
 	}),
 	"ListAccessKeys": iamHandler(func(accountID string, input *iam.ListAccessKeysInput, svc handlers_iam.IAMService) (any, error) {
 		return gateway_iam.ListAccessKeys(accountID, input, svc)
@@ -60,8 +85,8 @@ var iamActions = map[string]IAMHandler{
 	"DeleteAccessKey": iamHandler(func(accountID string, input *iam.DeleteAccessKeyInput, svc handlers_iam.IAMService) (any, error) {
 		return gateway_iam.DeleteAccessKey(accountID, input, svc)
 	}),
-	"UpdateAccessKey": iamHandler(func(accountID string, input *iam.UpdateAccessKeyInput, svc handlers_iam.IAMService) (any, error) {
-		return gateway_iam.UpdateAccessKey(accountID, input, svc)
+	"UpdateAccessKey": iamAccessKeyHandler(func(accountID string, input *iam.UpdateAccessKeyInput, expiresAt string, svc handlers_iam.IAMService) (any, error) {
+		return gateway_iam.UpdateAccessKey(accountID, input, expiresAt, svc)
 	}),
 
 	// Policy CRUD

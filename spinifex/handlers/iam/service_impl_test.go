@@ -192,7 +192,7 @@ func TestDeleteUser_WithAccessKeys(t *testing.T) {
 
 	_, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("userWithKeys"),
-	})
+	}, "")
 	require.NoError(t, err)
 
 	_, err = svc.DeleteUser(testAccountID, &iam.DeleteUserInput{
@@ -303,7 +303,7 @@ func TestCreateAccessKey(t *testing.T) {
 
 	out, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("keyuser"),
-	})
+	}, "")
 	require.NoError(t, err)
 	require.NotNil(t, out.AccessKey)
 
@@ -320,7 +320,7 @@ func TestCreateAccessKey_SecretIsDecryptable(t *testing.T) {
 
 	out, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("decryptuser"),
-	})
+	}, "")
 	require.NoError(t, err)
 
 	plaintextSecret := *out.AccessKey.SecretAccessKey
@@ -340,7 +340,7 @@ func TestCreateAccessKey_UserNotFound(t *testing.T) {
 
 	_, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("nonexistent"),
-	})
+	}, "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), awserrors.ErrorIAMNoSuchEntity)
 }
@@ -351,18 +351,18 @@ func TestCreateAccessKey_MaxLimit(t *testing.T) {
 
 	_, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("limituser"),
-	})
+	}, "")
 	require.NoError(t, err)
 
 	_, err = svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("limituser"),
-	})
+	}, "")
 	require.NoError(t, err)
 
 	// Third key should fail (AWS limit is 2)
 	_, err = svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("limituser"),
-	})
+	}, "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), awserrors.ErrorIAMLimitExceeded)
 }
@@ -374,12 +374,12 @@ func TestAccessKeyQuota_Recovery(t *testing.T) {
 	// Create 2 keys (at limit)
 	key1, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("quotauser"),
-	})
+	}, "")
 	require.NoError(t, err)
 
 	_, err = svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("quotauser"),
-	})
+	}, "")
 	require.NoError(t, err)
 
 	// Delete 1
@@ -392,7 +392,7 @@ func TestAccessKeyQuota_Recovery(t *testing.T) {
 	// Create another — should succeed (back under quota)
 	_, err = svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("quotauser"),
-	})
+	}, "")
 	assert.NoError(t, err, "should be able to create key after deleting one")
 }
 
@@ -402,13 +402,13 @@ func TestAccessKeyQuota_PerUser(t *testing.T) {
 	createTestUser(t, svc, "user2")
 
 	// Fill user1's quota
-	_, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{UserName: aws.String("user1")})
+	_, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{UserName: aws.String("user1")}, "")
 	require.NoError(t, err)
-	_, err = svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{UserName: aws.String("user1")})
+	_, err = svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{UserName: aws.String("user1")}, "")
 	require.NoError(t, err)
 
 	// user2 should still be able to create keys
-	_, err = svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{UserName: aws.String("user2")})
+	_, err = svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{UserName: aws.String("user2")}, "")
 	assert.NoError(t, err, "user2 quota should be independent of user1")
 }
 
@@ -418,10 +418,10 @@ func TestListAccessKeys(t *testing.T) {
 
 	key1, _ := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("listkeysuser"),
-	})
+	}, "")
 	key2, _ := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("listkeysuser"),
-	})
+	}, "")
 
 	out, err := svc.ListAccessKeys(testAccountID, &iam.ListAccessKeysInput{
 		UserName: aws.String("listkeysuser"),
@@ -443,7 +443,7 @@ func TestDeleteAccessKey(t *testing.T) {
 
 	keyOut, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("delkeyuser"),
-	})
+	}, "")
 	require.NoError(t, err)
 	keyID := *keyOut.AccessKey.AccessKeyId
 
@@ -484,14 +484,14 @@ func TestUpdateAccessKey(t *testing.T) {
 
 	keyOut, _ := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("updatekeyuser"),
-	})
+	}, "")
 	keyID := *keyOut.AccessKey.AccessKeyId
 
 	// Deactivate
 	_, err := svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
 		AccessKeyId: aws.String(keyID),
 		Status:      aws.String("Inactive"),
-	})
+	}, "")
 	require.NoError(t, err)
 
 	// Verify status changed
@@ -504,7 +504,7 @@ func TestUpdateAccessKey(t *testing.T) {
 	_, err = svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
 		AccessKeyId: aws.String(keyID),
 		Status:      aws.String("Active"),
-	})
+	}, "")
 	require.NoError(t, err)
 
 	listOut, _ = svc.ListAccessKeys(testAccountID, &iam.ListAccessKeysInput{
@@ -519,12 +519,12 @@ func TestUpdateAccessKey_InvalidStatus(t *testing.T) {
 
 	keyOut, _ := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("invalidstatususer"),
-	})
+	}, "")
 
 	_, err := svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
 		AccessKeyId: keyOut.AccessKey.AccessKeyId,
 		Status:      aws.String("Invalid"),
-	})
+	}, "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), awserrors.ErrorIAMInvalidInput)
 }
@@ -535,7 +535,7 @@ func TestUpdateAccessKey_NotFound(t *testing.T) {
 	_, err := svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
 		AccessKeyId: aws.String("AKIANONEXISTENT12345"),
 		Status:      aws.String("Inactive"),
-	})
+	}, "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), awserrors.ErrorIAMNoSuchEntity)
 }
@@ -546,27 +546,27 @@ func TestUpdateAccessKey_CaseSensitiveStatus(t *testing.T) {
 
 	keyOut, _ := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("caseuser"),
-	})
+	}, "")
 
 	// "active" (lowercase) should be rejected — must be "Active"
 	_, err := svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
 		AccessKeyId: keyOut.AccessKey.AccessKeyId,
 		Status:      aws.String("active"),
-	})
+	}, "")
 	assert.Error(t, err, "lowercase 'active' should be rejected")
 
 	// "inactive" (lowercase) should be rejected
 	_, err = svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
 		AccessKeyId: keyOut.AccessKey.AccessKeyId,
 		Status:      aws.String("inactive"),
-	})
+	}, "")
 	assert.Error(t, err, "lowercase 'inactive' should be rejected")
 
 	// "ACTIVE" (uppercase) should be rejected
 	_, err = svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
 		AccessKeyId: keyOut.AccessKey.AccessKeyId,
 		Status:      aws.String("ACTIVE"),
-	})
+	}, "")
 	assert.Error(t, err, "uppercase 'ACTIVE' should be rejected")
 }
 
@@ -583,15 +583,122 @@ func TestUpdateAccessKey_CrossAccountBlocked(t *testing.T) {
 
 	keyOut, err := svc.CreateAccessKey(accA.AccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("alice"),
-	})
+	}, "")
 	require.NoError(t, err)
 
 	// Account B trying to update Account A's key should fail
 	_, err = svc.UpdateAccessKey(accB.AccountID, &iam.UpdateAccessKeyInput{
 		AccessKeyId: keyOut.AccessKey.AccessKeyId,
 		Status:      aws.String("Inactive"),
-	})
+	}, "")
 	assert.Error(t, err, "cross-account key update should be blocked")
+}
+
+// ============================================================================
+// Access Key TTL Tests (CMMC 1.2.2)
+// ============================================================================
+
+func TestCreateAccessKey_WithExpiresAt(t *testing.T) {
+	svc := setupTestIAMService(t)
+	createTestUser(t, svc, "ttluser")
+
+	expiresAt := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
+	out, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
+		UserName: aws.String("ttluser"),
+	}, expiresAt)
+	require.NoError(t, err)
+
+	ak, err := svc.LookupAccessKey(*out.AccessKey.AccessKeyId)
+	require.NoError(t, err)
+	assert.Equal(t, expiresAt, ak.ExpiresAt, "persisted ExpiresAt should match input")
+}
+
+func TestCreateAccessKey_NoExpiryByDefault(t *testing.T) {
+	svc := setupTestIAMService(t)
+	createTestUser(t, svc, "noexpuser")
+
+	out, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
+		UserName: aws.String("noexpuser"),
+	}, "")
+	require.NoError(t, err)
+
+	ak, err := svc.LookupAccessKey(*out.AccessKey.AccessKeyId)
+	require.NoError(t, err)
+	assert.Empty(t, ak.ExpiresAt, "default access key should have no expiry")
+}
+
+func TestCreateAccessKey_InvalidExpiresAtRejected(t *testing.T) {
+	svc := setupTestIAMService(t)
+	createTestUser(t, svc, "badttluser")
+
+	_, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
+		UserName: aws.String("badttluser"),
+	}, "not-an-rfc3339")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMInvalidInput)
+}
+
+func TestUpdateAccessKey_SetsExpiresAt(t *testing.T) {
+	svc := setupTestIAMService(t)
+	createTestUser(t, svc, "updttluser")
+
+	keyOut, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
+		UserName: aws.String("updttluser"),
+	}, "")
+	require.NoError(t, err)
+	keyID := *keyOut.AccessKey.AccessKeyId
+
+	newExpiry := time.Now().UTC().Add(48 * time.Hour).Format(time.RFC3339)
+	_, err = svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
+		AccessKeyId: aws.String(keyID),
+		Status:      aws.String(AccessKeyStatusActive),
+	}, newExpiry)
+	require.NoError(t, err)
+
+	ak, err := svc.LookupAccessKey(keyID)
+	require.NoError(t, err)
+	assert.Equal(t, newExpiry, ak.ExpiresAt)
+}
+
+func TestUpdateAccessKey_EmptyExpiryPreservesExisting(t *testing.T) {
+	svc := setupTestIAMService(t)
+	createTestUser(t, svc, "preserveuser")
+
+	originalExpiry := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
+	keyOut, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
+		UserName: aws.String("preserveuser"),
+	}, originalExpiry)
+	require.NoError(t, err)
+	keyID := *keyOut.AccessKey.AccessKeyId
+
+	// Update status only (empty expiresAt arg) — existing expiry must be preserved.
+	_, err = svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
+		AccessKeyId: aws.String(keyID),
+		Status:      aws.String(AccessKeyStatusInactive),
+	}, "")
+	require.NoError(t, err)
+
+	ak, err := svc.LookupAccessKey(keyID)
+	require.NoError(t, err)
+	assert.Equal(t, originalExpiry, ak.ExpiresAt, "empty expiresAt arg must not clear existing expiry")
+}
+
+func TestUpdateAccessKey_InvalidExpiresAtRejected(t *testing.T) {
+	svc := setupTestIAMService(t)
+	createTestUser(t, svc, "badupdttluser")
+
+	keyOut, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
+		UserName: aws.String("badupdttluser"),
+	}, "")
+	require.NoError(t, err)
+	keyID := *keyOut.AccessKey.AccessKeyId
+
+	_, err = svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
+		AccessKeyId: aws.String(keyID),
+		Status:      aws.String(AccessKeyStatusActive),
+	}, "garbage")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), awserrors.ErrorIAMInvalidInput)
 }
 
 // ============================================================================
@@ -604,7 +711,7 @@ func TestLookupAccessKey(t *testing.T) {
 
 	keyOut, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("lookupuser"),
-	})
+	}, "")
 	require.NoError(t, err)
 
 	ak, err := svc.LookupAccessKey(*keyOut.AccessKey.AccessKeyId)
@@ -628,13 +735,13 @@ func TestLookupAccessKey_InactiveKey(t *testing.T) {
 
 	keyOut, _ := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("inactiveuser"),
-	})
+	}, "")
 	keyID := *keyOut.AccessKey.AccessKeyId
 
 	svc.UpdateAccessKey(testAccountID, &iam.UpdateAccessKeyInput{
 		AccessKeyId: aws.String(keyID),
 		Status:      aws.String("Inactive"),
-	})
+	}, "")
 
 	// LookupAccessKey should still return the key — status check is the caller's job
 	ak, err := svc.LookupAccessKey(keyID)
@@ -1543,7 +1650,7 @@ func TestSensitiveDataNotLogged_CreateAccessKey(t *testing.T) {
 
 	akOut, err := svc.CreateAccessKey(testAccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("loguser"),
-	})
+	}, "")
 	require.NoError(t, err)
 
 	secretKey := *akOut.AccessKey.SecretAccessKey

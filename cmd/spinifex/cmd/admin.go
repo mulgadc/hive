@@ -1702,7 +1702,7 @@ func runAccountCreate(cmd *cobra.Command, args []string) {
 	// 3. Create access key for admin user
 	akOut, err := svc.CreateAccessKey(accountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("admin"),
-	})
+	}, "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating access key: %v\n", err)
 		os.Exit(1)

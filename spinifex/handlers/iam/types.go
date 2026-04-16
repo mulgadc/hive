@@ -29,6 +29,9 @@ type User struct {
 // AccessKey represents an IAM access key stored in JetStream KV.
 // SecretAccessKey is AES-256-GCM encrypted (base64-encoded), not hashed,
 // so the SigV4 middleware can recover the plaintext for signature verification.
+// ExpiresAt is empty for keys with no expiry (default); when set, it is an
+// RFC3339 timestamp after which the SigV4 middleware rejects the key with
+// ExpiredToken.
 type AccessKey struct {
 	AccessKeyID     string `json:"access_key_id"`
 	SecretAccessKey string `json:"secret_access_key"` // AES-256-GCM encrypted, base64-encoded
@@ -36,6 +39,7 @@ type AccessKey struct {
 	AccountID       string `json:"account_id"`
 	Status          string `json:"status"` // Active or Inactive
 	CreatedAt       string `json:"created_at"`
+	ExpiresAt       string `json:"expires_at,omitempty"` // RFC3339, empty = no expiry
 }
 
 // Tag represents a key-value tag on an IAM resource.

@@ -45,6 +45,7 @@ func TestErrorLookup(t *testing.T) {
 		{code: "DuplicateSubnetsInSameZone", http: 400, message: "For an interface VPC endpoint, you can specify only one subnet per Availability Zone."},
 		{code: "EncryptedVolumesNotSupported", http: 400, message: "Encrypted Amazon EBS volumes may only be attached to instances that support Amazon EBS encryption. For more information, see Amazon EBS encryption."},
 		{code: "ExistingVpcEndpointConnections", http: 400, message: "You cannot delete a VPC endpoint service configuration or change the load balancers for the endpoint service if there are endpoints attached to the service."},
+		{code: "ExpiredToken", http: 403, message: "The security token included in the request is expired."},
 		{code: "FilterLimitExceeded", http: 400, message: "The request uses too many filters or too many filter values."},
 		{code: "FleetNotInModifiableState", http: 400, message: "The Spot Fleet request must be in the active state in order to modify it. For more information, see Spot Fleet request types."},
 		{code: "FlowLogAlreadyExists", http: 409, message: "A flow log with the specified configuration already exists."},

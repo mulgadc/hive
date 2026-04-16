@@ -324,9 +324,13 @@ func (s *IAMServiceImpl) DeleteUser(accountID string, input *iam.DeleteUserInput
 // Access Key Lifecycle
 // ---------------------------------------------------------------------------
 
-func (s *IAMServiceImpl) CreateAccessKey(accountID string, input *iam.CreateAccessKeyInput) (*iam.CreateAccessKeyOutput, error) {
+func (s *IAMServiceImpl) CreateAccessKey(accountID string, input *iam.CreateAccessKeyInput, expiresAt string) (*iam.CreateAccessKeyOutput, error) {
 	userName := *input.UserName
 	userKVKey := accountID + "." + userName
+
+	if err := validateExpiresAt(expiresAt); err != nil {
+		return nil, err
+	}
 
 	user, err := s.getUser(accountID, userName)
 	if err != nil {
@@ -358,6 +362,7 @@ func (s *IAMServiceImpl) CreateAccessKey(accountID string, input *iam.CreateAcce
 		AccountID:       accountID,
 		Status:          AccessKeyStatusActive,
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
+		ExpiresAt:       expiresAt,
 	}
 
 	akData, err := json.Marshal(ak)
@@ -484,10 +489,14 @@ func (s *IAMServiceImpl) DeleteAccessKey(accountID string, input *iam.DeleteAcce
 	return &iam.DeleteAccessKeyOutput{}, nil
 }
 
-func (s *IAMServiceImpl) UpdateAccessKey(accountID string, input *iam.UpdateAccessKeyInput) (*iam.UpdateAccessKeyOutput, error) {
+func (s *IAMServiceImpl) UpdateAccessKey(accountID string, input *iam.UpdateAccessKeyInput, expiresAt string) (*iam.UpdateAccessKeyOutput, error) {
 	status := *input.Status
 	if status != AccessKeyStatusActive && status != AccessKeyStatusInactive {
 		return nil, errors.New(awserrors.ErrorIAMInvalidInput)
+	}
+
+	if err := validateExpiresAt(expiresAt); err != nil {
+		return nil, err
 	}
 
 	accessKeyID := *input.AccessKeyId
@@ -510,6 +519,11 @@ func (s *IAMServiceImpl) UpdateAccessKey(accountID string, input *iam.UpdateAcce
 	}
 
 	ak.Status = status
+	// Empty expiresAt preserves the existing value; callers that want to clear
+	// it must recreate the key.
+	if expiresAt != "" {
+		ak.ExpiresAt = expiresAt
+	}
 	data, err := json.Marshal(ak)
 	if err != nil {
 		return nil, fmt.Errorf("marshal access key: %w", err)
@@ -519,8 +533,20 @@ func (s *IAMServiceImpl) UpdateAccessKey(accountID string, input *iam.UpdateAcce
 		return nil, fmt.Errorf("update access key: %w", err)
 	}
 
-	slog.Info("IAM access key updated", "accountID", accountID, "accessKeyID", accessKeyID, "status", status)
+	slog.Info("IAM access key updated", "accountID", accountID, "accessKeyID", accessKeyID, "status", status, "expiresAt", ak.ExpiresAt)
 	return &iam.UpdateAccessKeyOutput{}, nil
+}
+
+// validateExpiresAt returns nil if expiresAt is empty (no expiry) or a valid
+// RFC3339 timestamp. Invalid formats map to ErrorIAMInvalidInput.
+func validateExpiresAt(expiresAt string) error {
+	if expiresAt == "" {
+		return nil
+	}
+	if _, err := time.Parse(time.RFC3339, expiresAt); err != nil {
+		return errors.New(awserrors.ErrorIAMInvalidInput)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

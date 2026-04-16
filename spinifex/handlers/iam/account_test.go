@@ -211,7 +211,7 @@ func TestAccessKeyReturnsAccountID(t *testing.T) {
 
 	akOut, err := svc.CreateAccessKey(acc.AccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("keyuser"),
-	})
+	}, "")
 	require.NoError(t, err)
 
 	// LookupAccessKey should return the correct account ID
@@ -270,7 +270,7 @@ func TestCrossAccount_AccessKeyIsolation(t *testing.T) {
 
 	akOut, err := svc.CreateAccessKey(accA.AccountID, &iam.CreateAccessKeyInput{
 		UserName: aws.String("keyuser"),
-	})
+	}, "")
 	require.NoError(t, err)
 
 	// LookupAccessKey returns Account A's ID, not Account B's
@@ -325,9 +325,9 @@ func TestCrossAccount_LookupAccessKeyReturnsCorrectAccount(t *testing.T) {
 	_, err = svc.CreateUser(accB.AccountID, &iam.CreateUserInput{UserName: aws.String("shared")})
 	require.NoError(t, err)
 
-	akA, err := svc.CreateAccessKey(accA.AccountID, &iam.CreateAccessKeyInput{UserName: aws.String("shared")})
+	akA, err := svc.CreateAccessKey(accA.AccountID, &iam.CreateAccessKeyInput{UserName: aws.String("shared")}, "")
 	require.NoError(t, err)
-	akB, err := svc.CreateAccessKey(accB.AccountID, &iam.CreateAccessKeyInput{UserName: aws.String("shared")})
+	akB, err := svc.CreateAccessKey(accB.AccountID, &iam.CreateAccessKeyInput{UserName: aws.String("shared")}, "")
 	require.NoError(t, err)
 
 	// Each key resolves to its own account
