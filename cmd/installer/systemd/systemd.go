@@ -87,6 +87,10 @@ Type=oneshot
 Environment=HOME=/root
 ExecStart=/usr/local/bin/spinifex-firstboot.sh
 RemainAfterExit=yes
+# Cap total firstboot runtime so a hang in setup-ovn.sh / spx admin init /
+# ovn-central startup cannot wedge multi-user.target and keep getty from
+# ever reaching the login prompt.
+TimeoutStartSec=180s
 StandardOutput=journal
 StandardError=journal
 
@@ -111,6 +115,9 @@ Wants=spinifex.target
 Type=oneshot
 ExecStart=/usr/local/bin/spx admin banner --boot-check
 RemainAfterExit=yes
+# Banner is oneshot; cap it so a stuck boot-check (IP detection, try-restart)
+# cannot block getty via the spinifex-wait.conf drop-in.
+TimeoutStartSec=30s
 StandardOutput=journal
 StandardError=journal
 
