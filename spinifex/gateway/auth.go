@@ -106,7 +106,7 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() func(http.Handler) http.Handler {
 			ak, err := gw.IAMService.LookupAccessKey(accessKey)
 			if err != nil {
 				if strings.Contains(err.Error(), awserrors.ErrorIAMNoSuchEntity) {
-					slog.Debug("Access key not found", "accessKeyID", accessKey)
+					slog.Warn("Auth failure: access key not found", "accessKeyID", accessKey, "sourceIP", clientIP)
 					gw.RateLimiter.RecordFailure(clientIP)
 					gw.writeSigV4Error(w, r, awserrors.ErrorInvalidClientTokenId)
 					return
@@ -116,7 +116,7 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() func(http.Handler) http.Handler {
 				return
 			}
 			if ak.Status != handlers_iam.AccessKeyStatusActive {
-				slog.Debug("Access key inactive", "accessKeyID", accessKey)
+				slog.Warn("Auth failure: access key inactive", "accessKeyID", accessKey, "sourceIP", clientIP)
 				gw.RateLimiter.RecordFailure(clientIP)
 				gw.writeSigV4Error(w, r, awserrors.ErrorInvalidClientTokenId)
 				return
@@ -172,8 +172,9 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() func(http.Handler) http.Handler {
 
 			// Compare signatures using constant-time comparison to prevent timing attacks
 			if subtle.ConstantTimeCompare([]byte(expectedSignature), []byte(providedSignature)) != 1 {
-				slog.Debug("Signature mismatch",
-					"accessKeyId", accessKey,
+				slog.Warn("Auth failure: signature mismatch",
+					"accessKeyID", accessKey,
+					"sourceIP", clientIP,
 				)
 				gw.RateLimiter.RecordFailure(clientIP)
 				gw.writeSigV4Error(w, r, awserrors.ErrorSignatureDoesNotMatch)
