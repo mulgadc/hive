@@ -1,7 +1,18 @@
 package utils
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
+	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -74,6 +85,145 @@ func TestConnectNATS_BadAddress(t *testing.T) {
 	_, err := ConnectNATS("nats://127.0.0.1:1", "", "")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "NATS connect failed")
+}
+
+func TestConnectNATS_MissingCACert(t *testing.T) {
+	_, err := ConnectNATS("nats://127.0.0.1:4222", "", "/nonexistent/ca.pem")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read CA cert")
+	assert.Contains(t, err.Error(), "/nonexistent/ca.pem")
+}
+
+func TestConnectNATS_MalformedCACert(t *testing.T) {
+	tmp := t.TempDir()
+	badCert := filepath.Join(tmp, "bad-ca.pem")
+	require.NoError(t, os.WriteFile(badCert, []byte("not a PEM certificate"), 0o644))
+
+	_, err := ConnectNATS("nats://127.0.0.1:4222", "", badCert)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse CA cert")
+}
+
+// generateTestCA creates an ephemeral CA cert+key and writes PEM files to dir.
+func generateTestCA(t *testing.T, dir, name string) (certPath, keyPath string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: name},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+
+	certPath = filepath.Join(dir, name+".pem")
+	keyPath = filepath.Join(dir, name+".key")
+	require.NoError(t, os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644))
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600))
+	return certPath, keyPath
+}
+
+// generateTestServerCert creates a server cert signed by the given CA.
+func generateTestServerCert(t *testing.T, dir, caCertPath, caKeyPath string) (certPath, keyPath string) {
+	t.Helper()
+	caCertPEM, err := os.ReadFile(caCertPath)
+	require.NoError(t, err)
+	block, _ := pem.Decode(caCertPEM)
+	caCert, err := x509.ParseCertificate(block.Bytes)
+	require.NoError(t, err)
+
+	caKeyPEM, err := os.ReadFile(caKeyPath)
+	require.NoError(t, err)
+	keyBlock, _ := pem.Decode(caKeyPEM)
+	caKey, err := x509.ParseECPrivateKey(keyBlock.Bytes)
+	require.NoError(t, err)
+
+	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &serverKey.PublicKey, caKey)
+	require.NoError(t, err)
+
+	certPath = filepath.Join(dir, "server.pem")
+	keyPath = filepath.Join(dir, "server.key")
+	require.NoError(t, os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644))
+	keyDER, err := x509.MarshalECPrivateKey(serverKey)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600))
+	return certPath, keyPath
+}
+
+// startTLSNATSServer starts a NATS server with TLS using the given cert files.
+func startTLSNATSServer(t *testing.T, serverCertPath, serverKeyPath, caCertPath string) *server.Server {
+	t.Helper()
+	cert, err := tls.LoadX509KeyPair(serverCertPath, serverKeyPath)
+	require.NoError(t, err)
+	caPEM, err := os.ReadFile(caCertPath)
+	require.NoError(t, err)
+	pool := x509.NewCertPool()
+	require.True(t, pool.AppendCertsFromPEM(caPEM))
+
+	tlsCfg := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		ClientCAs:    pool,
+	}
+
+	opts := &server.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		NoLog:     true,
+		NoSigs:    true,
+		TLSConfig: tlsCfg,
+	}
+
+	ns, err := server.NewServer(opts)
+	require.NoError(t, err)
+	go ns.Start()
+	require.True(t, ns.ReadyForConnections(5*time.Second))
+	t.Cleanup(func() { ns.Shutdown() })
+	return ns
+}
+
+func TestConnectNATS_TLSSuccess(t *testing.T) {
+	tmp := t.TempDir()
+	caCertPath, caKeyPath := generateTestCA(t, tmp, "ca")
+	serverCertPath, serverKeyPath := generateTestServerCert(t, tmp, caCertPath, caKeyPath)
+
+	ns := startTLSNATSServer(t, serverCertPath, serverKeyPath, caCertPath)
+
+	nc, err := ConnectNATS(ns.ClientURL(), "", caCertPath)
+	require.NoError(t, err)
+	defer nc.Close()
+	assert.True(t, nc.IsConnected())
+}
+
+func TestConnectNATS_WrongCA(t *testing.T) {
+	tmp := t.TempDir()
+	caCertPath, caKeyPath := generateTestCA(t, tmp, "ca")
+	serverCertPath, serverKeyPath := generateTestServerCert(t, tmp, caCertPath, caKeyPath)
+	wrongCACertPath, _ := generateTestCA(t, tmp, "wrong-ca")
+
+	ns := startTLSNATSServer(t, serverCertPath, serverKeyPath, caCertPath)
+
+	_, err := ConnectNATS(ns.ClientURL(), "", wrongCACertPath)
+	assert.Error(t, err, "connection with wrong CA should fail")
 }
 
 func TestNATSRequest_Success(t *testing.T) {

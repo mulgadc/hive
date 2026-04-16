@@ -33,16 +33,16 @@ func init() {
 			keyFile := fmt.Sprintf("%s/server.key", ctx.ConfigDir)
 			caFile := fmt.Sprintf("%s/ca.pem", ctx.ConfigDir)
 
-			// 1. Inject client TLS block after the listen line.
+			// 1. Inject client TLS block after the top-level listen line (port 4222 only,
+			// not the cluster listen on 4248).
 			clientTLS := fmt.Sprintf("\n\ntls {\n  cert_file: \"%s\"\n  key_file:  \"%s\"\n  ca_file:   \"%s\"\n}", certFile, keyFile, caFile)
 
-			listenRe := regexp.MustCompile(`(?m)^listen:\s*.+$`)
+			listenRe := regexp.MustCompile(`(?m)^listen:\s*\S+:4222\s*$`)
 			if !listenRe.MatchString(text) {
-				return fmt.Errorf("nats.conf: listen line not found")
+				return fmt.Errorf("nats.conf: client listen line (port 4222) not found")
 			}
-			text = listenRe.ReplaceAllStringFunc(text, func(match string) string {
-				return match + clientTLS
-			})
+			loc := listenRe.FindStringIndex(text)
+			text = text[:loc[1]] + clientTLS + text[loc[1]:]
 
 			// 2. Inject cluster TLS block inside the cluster {} block, after the listen line.
 			clusterTLS := fmt.Sprintf("\n\n  tls {\n    cert_file: \"%s\"\n    key_file:  \"%s\"\n    ca_file:   \"%s\"\n    verify:    true\n  }", certFile, keyFile, caFile)
@@ -89,6 +89,9 @@ func init() {
 			// Pattern: host = "x.x.x.x:4222" followed by a newline.
 			caPath := fmt.Sprintf("%s/ca.pem", ctx.ConfigDir)
 			natsHostRe := regexp.MustCompile(`(?m)^(host\s*=\s*"[^"]+:4222")\s*$`)
+			if !natsHostRe.MatchString(text) {
+				return fmt.Errorf("spinifex.toml: NATS host line (host = \"...:4222\") not found, cannot insert cacert")
+			}
 			text = natsHostRe.ReplaceAllStringFunc(text, func(match string) string {
 				return strings.TrimRight(match, "\n") + fmt.Sprintf("\ncacert = \"%s\"", caPath)
 			})
@@ -124,6 +127,9 @@ func init() {
 			// Insert nats_ca_cert after the nats_token line.
 			caPath := fmt.Sprintf("%s/ca.pem", ctx.ConfigDir)
 			natsTokenRe := regexp.MustCompile(`(?m)^(nats_token\s*=\s*"[^"]*")\s*$`)
+			if !natsTokenRe.MatchString(text) {
+				return fmt.Errorf("predastore.toml: nats_token line not found, cannot insert nats_ca_cert")
+			}
 			text = natsTokenRe.ReplaceAllStringFunc(text, func(match string) string {
 				return strings.TrimRight(match, "\n") + fmt.Sprintf("\nnats_ca_cert = \"%s\"", caPath)
 			})

@@ -860,6 +860,11 @@ func (d *Daemon) connectNATS() error {
 			return nil
 		}
 
+		// TLS configuration errors are permanent — retrying will not help.
+		if strings.Contains(err.Error(), "CA cert") {
+			return fmt.Errorf("NATS TLS configuration error: %w", err)
+		}
+
 		elapsed := time.Since(start)
 		if elapsed >= maxWait {
 			return fmt.Errorf("NATS connect failed after %s: %w", elapsed.Round(time.Second), err)

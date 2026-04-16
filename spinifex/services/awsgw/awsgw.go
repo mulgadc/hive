@@ -219,6 +219,11 @@ func connectNATS(host, token, caCertPath string) (*nats.Conn, error) {
 			return nc, nil
 		}
 
+		// TLS configuration errors are permanent — retrying will not help.
+		if strings.Contains(err.Error(), "CA cert") {
+			return nil, fmt.Errorf("NATS TLS configuration error: %w", err)
+		}
+
 		elapsed := time.Since(start)
 		if elapsed >= maxWait {
 			return nil, fmt.Errorf("NATS connect failed after %s: %w", elapsed.Round(time.Second), err)
