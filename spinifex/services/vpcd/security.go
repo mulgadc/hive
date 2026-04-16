@@ -16,6 +16,12 @@ const (
 	TopicUpdateSG = "vpc.update-sg"
 )
 
+// denyACLSeverity is the syslog severity OVN uses when a packet matches a
+// default-deny ACL. "info" is loud enough to be captured by a syslog forwarder
+// yet quiet enough to avoid paging on every dropped scan packet. Operators can
+// promote it at their log collector if they want higher-priority alerts.
+const denyACLSeverity = "info"
+
 // SGEvent carries security group state from the handler to vpcd.
 type SGEvent struct {
 	GroupId      string         `json:"group_id"`
@@ -48,11 +54,13 @@ func (h *TopologyHandler) handleCreateSG(msg *nats.Msg) {
 		return
 	}
 
-	// Add default deny ACL (priority 900) — drop all traffic not explicitly allowed
-	if err := h.ovn.AddACL(ctx, pgName, "to-lport", 900, fmt.Sprintf("outport == @%s && ip4", pgName), "drop"); err != nil {
+	// Add default deny ACLs (priority 900) — drop all traffic not explicitly
+	// allowed. Logging is enabled so boundary communications are observable via
+	// syslog (CMMC SC.L1-3.13.1).
+	if err := h.ovn.AddACL(ctx, pgName, denyIngressACL(pgName)); err != nil {
 		slog.Warn("vpcd: failed to add default deny ingress ACL", "pg", pgName, "err", err)
 	}
-	if err := h.ovn.AddACL(ctx, pgName, "from-lport", 900, fmt.Sprintf("inport == @%s && ip4", pgName), "drop"); err != nil {
+	if err := h.ovn.AddACL(ctx, pgName, denyEgressACL(pgName)); err != nil {
 		slog.Warn("vpcd: failed to add default deny egress ACL", "pg", pgName, "err", err)
 	}
 
@@ -127,11 +135,11 @@ func (h *TopologyHandler) handleUpdateSG(msg *nats.Msg) {
 		slog.Warn("vpcd: failed to clear ACLs for update", "pg", pgName, "err", err)
 	}
 
-	// Re-add default deny ACLs (priority 900)
-	if err := h.ovn.AddACL(ctx, pgName, "to-lport", 900, fmt.Sprintf("outport == @%s && ip4", pgName), "drop"); err != nil {
+	// Re-add default deny ACLs (priority 900) with logging enabled.
+	if err := h.ovn.AddACL(ctx, pgName, denyIngressACL(pgName)); err != nil {
 		slog.Warn("vpcd: failed to re-add default deny ingress ACL", "pg", pgName, "err", err)
 	}
-	if err := h.ovn.AddACL(ctx, pgName, "from-lport", 900, fmt.Sprintf("inport == @%s && ip4", pgName), "drop"); err != nil {
+	if err := h.ovn.AddACL(ctx, pgName, denyEgressACL(pgName)); err != nil {
 		slog.Warn("vpcd: failed to re-add default deny egress ACL", "pg", pgName, "err", err)
 	}
 
@@ -150,18 +158,49 @@ func (h *TopologyHandler) handleUpdateSG(msg *nats.Msg) {
 
 // addRuleACLs adds OVN ACLs for a set of ingress and egress rules at priority 1000
 // (higher than the default deny at 900, so allow rules take precedence).
+// Allow rules are not logged — accept logging on a private network is
+// high-volume and low-signal. Only denies carry Log=true.
 func (h *TopologyHandler) addRuleACLs(ctx context.Context, pgName string, ingress, egress []SGRuleForACL) {
 	for _, rule := range ingress {
 		match := BuildIngressACLMatch(pgName, rule)
-		if err := h.ovn.AddACL(ctx, pgName, "to-lport", 1000, match, "allow-related"); err != nil {
+		spec := ACLSpec{Direction: "to-lport", Priority: 1000, Match: match, Action: "allow-related"}
+		if err := h.ovn.AddACL(ctx, pgName, spec); err != nil {
 			slog.Warn("vpcd: failed to add ingress ACL", "pg", pgName, "match", match, "err", err)
 		}
 	}
 
 	for _, rule := range egress {
 		match := BuildEgressACLMatch(pgName, rule)
-		if err := h.ovn.AddACL(ctx, pgName, "from-lport", 1000, match, "allow-related"); err != nil {
+		spec := ACLSpec{Direction: "from-lport", Priority: 1000, Match: match, Action: "allow-related"}
+		if err := h.ovn.AddACL(ctx, pgName, spec); err != nil {
 			slog.Warn("vpcd: failed to add egress ACL", "pg", pgName, "match", match, "err", err)
 		}
+	}
+}
+
+// denyIngressACL builds the default-deny ingress ACL for a port group with
+// logging enabled (CMMC SC.L1-3.13.1 boundary monitoring).
+func denyIngressACL(pgName string) ACLSpec {
+	return ACLSpec{
+		Direction: "to-lport",
+		Priority:  900,
+		Match:     fmt.Sprintf("outport == @%s && ip4", pgName),
+		Action:    "drop",
+		Name:      pgName + "-deny-ingress",
+		Log:       true,
+		Severity:  denyACLSeverity,
+	}
+}
+
+// denyEgressACL is the egress counterpart to denyIngressACL.
+func denyEgressACL(pgName string) ACLSpec {
+	return ACLSpec{
+		Direction: "from-lport",
+		Priority:  900,
+		Match:     fmt.Sprintf("inport == @%s && ip4", pgName),
+		Action:    "drop",
+		Name:      pgName + "-deny-egress",
+		Log:       true,
+		Severity:  denyACLSeverity,
 	}
 }
