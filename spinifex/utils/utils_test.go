@@ -1221,6 +1221,46 @@ func TestVerifyImageChecksum(t *testing.T) {
 		assert.Contains(t, err.Error(), "exceeds")
 	})
 
+	t.Run("context deadline exceeded wraps fetch failure", func(t *testing.T) {
+		img := writeTempImage(t, debianName, debianBytes)
+		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			<-r.Context().Done()
+		}))
+		t.Cleanup(srv.Close)
+		trustTestServer(t, srv)
+
+		prev := checksumFetchTimeout
+		checksumFetchTimeout = 100 * time.Millisecond
+		t.Cleanup(func() { checksumFetchTimeout = prev })
+
+		err := VerifyImageChecksum(img, srv.URL+"/SUMS", "sha512")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrChecksumFetchFailed)
+	})
+
+	t.Run("digest length mismatch rejected before hashing", func(t *testing.T) {
+		// sha256 digest served, caller declares sha512: algorithm disagreement,
+		// not tampering. Must be distinct from ErrChecksumMismatch.
+		img := writeTempImage(t, debianName, debianBytes)
+		body := fmt.Sprintf("%s  %s\n", sha256Hex(debianBytes), debianName)
+		url := newSumsServer(t, body)
+		err := VerifyImageChecksum(img, url, "sha512")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrChecksumFetchFailed)
+		assert.NotErrorIs(t, err, ErrChecksumMismatch)
+		assert.Contains(t, err.Error(), "digest length")
+	})
+
+	t.Run("empty image file rejected with clear error", func(t *testing.T) {
+		img := writeTempImage(t, debianName, nil)
+		body := fmt.Sprintf("%s  %s\n", sha512Hex(nil), debianName)
+		url := newSumsServer(t, body)
+		err := VerifyImageChecksum(img, url, "sha512")
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, ErrChecksumMismatch)
+		assert.Contains(t, err.Error(), "empty")
+	})
+
 	t.Run("transport error wrapped", func(t *testing.T) {
 		img := writeTempImage(t, debianName, debianBytes)
 		// Stand up a TLS server, trust it, then close immediately so any

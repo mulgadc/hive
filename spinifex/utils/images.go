@@ -47,6 +47,10 @@ var (
 // client uses the system trust store.
 var checksumExtraRootCAs *x509.CertPool
 
+// checksumFetchTimeout is a var (not const) so tests can shrink it to exercise
+// the context-deadline path without waiting 30s.
+var checksumFetchTimeout = 30 * time.Second
+
 // VerifyImageChecksum fetches the sums file at checksumURL, locates the entry
 // for imagePath's basename, hashes imagePath with the algorithm named by
 // checksumType ("sha256" or "sha512"), and compares digests.
@@ -67,6 +71,13 @@ func VerifyImageChecksum(imagePath, checksumURL, checksumType string) error {
 	if err != nil {
 		slog.Error("image checksum fetch failed", "source", checksumURL, "err", err)
 		return err
+	}
+
+	// Distinct error for a catalog/sums-file algorithm mismatch — without this
+	// it'd surface as "tampering" via ConstantTimeCompare's length-0 return.
+	if len(expected) != hasher.Size()*2 {
+		return fmt.Errorf("%w: digest length %d from sums file does not match %s output length %d",
+			ErrChecksumFetchFailed, len(expected), checksumType, hasher.Size()*2)
 	}
 
 	actual, err := hashImageFile(imagePath, hasher)
@@ -117,7 +128,7 @@ func fetchExpectedDigest(checksumURL, filename string) (string, error) {
 		return "", fmt.Errorf("%w: non-https checksum url scheme %q", ErrChecksumFetchFailed, parsed.Scheme)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), checksumFetchTimeout)
 	defer cancel()
 	intCh := make(chan os.Signal, 1)
 	signal.Notify(intCh, os.Interrupt)
@@ -135,7 +146,7 @@ func fetchExpectedDigest(checksumURL, filename string) (string, error) {
 		transport.TLSClientConfig = &tls.Config{RootCAs: checksumExtraRootCAs}
 	}
 	client := &http.Client{
-		Timeout:   30 * time.Second,
+		Timeout:   checksumFetchTimeout,
 		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
@@ -225,8 +236,10 @@ func parseSumsFile(body []byte, filename string) (string, error) {
 	return "", fmt.Errorf("%w: %s", ErrChecksumNotFound, filename)
 }
 
-// hashImageFile streams the image through hasher with a pterm progress bar.
-// Returns the digest as lowercase hex.
+// hashImageFile streams the image through hasher with a pterm progress bar
+// and returns the digest as lowercase hex. Zero-byte files are rejected
+// outright so a truncated download surfaces as an explicit error rather than
+// an opaque "checksum mismatch".
 func hashImageFile(imagePath string, hasher hash.Hash) (string, error) {
 	f, err := os.Open(imagePath)
 	if err != nil {
@@ -240,23 +253,36 @@ func hashImageFile(imagePath string, hasher hash.Hash) (string, error) {
 	}
 
 	size := stat.Size()
-	if size > 0 {
-		bar, _ := pterm.DefaultProgressbar.
-			WithTitle(fmt.Sprintf("Hashing %s", filepath.Base(imagePath))).
-			WithTotal(int(size)).
-			Start()
-		reader := io.TeeReader(f, progressWriter(func(n int) {
-			bar.Add(n)
-		}))
-		if _, err := io.Copy(hasher, reader); err != nil {
-			return "", err
-		}
-		_, _ = bar.Stop()
-	} else {
-		if _, err := io.Copy(hasher, f); err != nil {
-			return "", err
-		}
+	if size == 0 {
+		return "", fmt.Errorf("image file %s is empty (likely a truncated or failed download)", imagePath)
 	}
+
+	bar, _ := pterm.DefaultProgressbar.
+		WithTitle(fmt.Sprintf("Hashing %s", filepath.Base(imagePath))).
+		WithTotal(int(size)).
+		Start()
+
+	// Coalesce ~32 KiB-sized io.Copy reads into one bar.Add per MiB/100ms so
+	// a 3 GB image doesn't trigger ~100k terminal redraws.
+	const flushBytes = 1 * 1024 * 1024
+	const flushInterval = 100 * time.Millisecond
+	var pending int
+	lastFlush := time.Now()
+	reader := io.TeeReader(f, progressWriter(func(n int) {
+		pending += n
+		if pending >= flushBytes || time.Since(lastFlush) >= flushInterval {
+			bar.Add(pending)
+			pending = 0
+			lastFlush = time.Now()
+		}
+	}))
+	if _, err := io.Copy(hasher, reader); err != nil {
+		return "", err
+	}
+	if pending > 0 {
+		bar.Add(pending)
+	}
+	_, _ = bar.Stop()
 
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
