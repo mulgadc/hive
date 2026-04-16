@@ -85,14 +85,50 @@ func partitionDisk(disk string) error {
 	//   p1: 1MiB BIOS Boot Partition — required for grub-install i386-pc on GPT
 	//   p2: 512MiB EFI System Partition
 	//   p3: remainder as root (ext4)
-	return run("parted", "--script", disk,
+	if err := run("parted", "--script", disk,
 		"mklabel", "gpt",
 		"mkpart", "bios_boot", "1MiB", "2MiB",
 		"set", "1", "bios_grub", "on",
 		"mkpart", "ESP", "fat32", "2MiB", "514MiB",
 		"set", "2", "esp", "on",
 		"mkpart", "root", "ext4", "514MiB", "100%",
-	)
+	); err != nil {
+		return err
+	}
+	// Force the kernel to re-read the partition table and wait for udev to
+	// create the partition device nodes. Without this, mkfs.fat in the next
+	// step may race and fail with "No such file or directory" on /dev/sda2 —
+	// the kernel has accepted the new layout but /dev hasn't been populated
+	// yet. Trixie's udev seems slower at this than Bookworm's was.
+	return waitForPartitions(disk)
+}
+
+// waitForPartitions ensures the EFI and root partition device nodes exist
+// after parted creates them. It runs partprobe (kernel re-read) and
+// udevadm settle (wait for queued events), then polls /dev for the files.
+func waitForPartitions(disk string) error {
+	// Best-effort: partprobe failure isn't fatal — udev may still pick up
+	// the change from the BLKRRPART ioctl that parted itself issued.
+	if err := run("partprobe", disk); err != nil {
+		slog.Warn("partprobe failed, continuing", "disk", disk, "err", err)
+	}
+	if err := run("udevadm", "settle", "--timeout=10"); err != nil {
+		slog.Warn("udevadm settle failed, continuing", "err", err)
+	}
+	efi, root := partitionPaths(disk)
+	deadline := time.Now().Add(15 * time.Second)
+	for _, part := range []string{efi, root} {
+		for {
+			if _, err := os.Stat(part); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("partition device %s did not appear within timeout — kernel/udev did not pick up new partition table", part)
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	return nil
 }
 
 func formatPartitions(disk string) error {
@@ -178,6 +214,14 @@ func installSpinifex(cfg *Config) error {
 	// /usr/local/bin/ — no binary copy needed. Regenerate machine-specific
 	// identity files so each installed node is unique.
 
+	// Bind-mount /dev, /proc, /sys into the chroot so PAM (chpasswd),
+	// systemd-machine-id-setup, and other chroot commands work correctly.
+	// Trixie's PAM requires /proc and /dev/urandom for password hashing.
+	if err := bindChrootMounts(); err != nil {
+		return err
+	}
+	defer unbindChrootMounts()
+
 	// Fresh machine-id (required by systemd and dbus).
 	machineIDPath := filepath.Join(mountRoot, "etc/machine-id")
 	_ = os.Remove(machineIDPath)
@@ -203,24 +247,29 @@ func installSpinifex(cfg *Config) error {
 		return err
 	}
 
-	// Set root password via chpasswd inside the chroot.
+	// Set root + spinifex passwords. We invoke chpasswd from the LIVE
+	// installer (not via `chroot`), passing the target root with -R and
+	// forcing -c YESCRYPT. This deliberately bypasses PAM:
+	//   * `chroot ... chpasswd` uses /etc/pam.d/chpasswd → common-password →
+	//     pam_unix.so with the "obscure" option, which can return
+	//     "Authentication token manipulation error" inside a chroot for
+	//     reasons that are awkward to diagnose (audit subsystem, locked
+	//     shadow entries from useradd, etc.).
+	//   * -c YESCRYPT tells chpasswd to hash locally with libcrypt and write
+	//     directly to <root>/etc/shadow — no PAM stack involved. YESCRYPT
+	//     matches Trixie's ENCRYPT_METHOD so subsequent logins use the same
+	//     algorithm.
+	//   * -R <root> opens the target's passwd/shadow directly; no bind
+	//     mounts of /dev/urandom or /proc are needed for the password step.
 	if cfg.RootPassword != "" {
-		cmd := exec.Command("chroot", mountRoot, "chpasswd")
-		cmd.Stdin = strings.NewReader("root:" + cfg.RootPassword)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
+		if err := setShadowPassword("root", cfg.RootPassword); err != nil {
 			return fmt.Errorf("set root password: %w", err)
 		}
-
-		// Set the spinifex login user password. The spinifex account is the
-		// default interactive login on the node (autologin on console, SSH
-		// access). Root SSH is disabled, so this is the sole remote entry point.
-		cmd = exec.Command("chroot", mountRoot, "chpasswd")
-		cmd.Stdin = strings.NewReader("spinifex:" + cfg.RootPassword)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
+		// The spinifex account is the default interactive login on the
+		// node (console + SSH). Root SSH is disabled, so this is the sole
+		// remote entry point. The user itself is created at rootfs build
+		// time (build-rootfs.sh) — here we just set its password.
+		if err := setShadowPassword("spinifex", cfg.RootPassword); err != nil {
 			return fmt.Errorf("set spinifex password: %w", err)
 		}
 	}
@@ -248,6 +297,13 @@ func installSpinifex(cfg *Config) error {
 	dhcpcdConf := "# Generated by Spinifex installer\ninterface br-lan\ntimeout 10\n"
 	if err := os.WriteFile(filepath.Join(mountRoot, "etc/dhcpcd.conf"), []byte(dhcpcdConf), 0o644); err != nil {
 		return err
+	}
+
+	// Mask dhcpcd.service so only ifupdown controls DHCP on the bridges.
+	// Trixie's dhcpcd-base ships a standalone dhcpcd.service that races with
+	// ifupdown's own dhcpcd invocations, causing duplicate leases or IP flapping.
+	if err := maskSystemdUnit(mountRoot, "dhcpcd.service"); err != nil {
+		slog.Warn("installSpinifex: failed to mask dhcpcd.service", "err", err)
 	}
 
 	return systemd.WriteNetworkingDropIn(mountRoot)
@@ -416,24 +472,11 @@ GRUB_BACKGROUND=/boot/grub/splash.png
 	}
 
 	// update-grub (grub-mkconfig) runs inside the installed system's chroot and
-	// needs /dev, /proc, and /sys to probe devices. Bind-mount them in and
-	// unmount regardless of outcome.
-	chrootMounts := []string{"dev", "proc", "sys"}
-	for _, m := range chrootMounts {
-		dst := filepath.Join(mountRoot, m)
-		if err := os.MkdirAll(dst, 0o755); err != nil {
-			return fmt.Errorf("create chroot mountpoint /%s: %w", m, err)
-		}
-		if err := run("mount", "--bind", "/"+m, dst); err != nil {
-			return fmt.Errorf("bind-mount /%s into chroot: %w", m, err)
-		}
+	// needs /dev, /proc, and /sys to probe devices.
+	if err := bindChrootMounts(); err != nil {
+		return err
 	}
-	defer func() {
-		// Unmount in reverse order; ignore errors (best-effort cleanup).
-		for i := len(chrootMounts) - 1; i >= 0; i-- {
-			_ = run("umount", filepath.Join(mountRoot, chrootMounts[i]))
-		}
-	}()
+	defer unbindChrootMounts()
 	return run("chroot", mountRoot, "update-grub")
 }
 
@@ -445,6 +488,10 @@ func installCACert(cfg *Config) error {
 	if err := os.WriteFile(certPath, []byte(cfg.CACert), 0o644); err != nil {
 		return err
 	}
+	if err := bindChrootMounts(); err != nil {
+		return err
+	}
+	defer unbindChrootMounts()
 	return run("chroot", mountRoot, "update-ca-certificates")
 }
 
@@ -560,6 +607,54 @@ func copySplashImage(root string) {
 	defer out.Close()
 	if _, err := io.Copy(out, in); err != nil {
 		slog.Warn("copySplashImage: copy failed", "err", err)
+	}
+}
+
+// maskSystemdUnit creates a symlink to /dev/null for the given unit, which is
+// the standard way to permanently disable a unit so systemd will never start it.
+func maskSystemdUnit(root, unit string) error {
+	unitPath := filepath.Join(root, "etc/systemd/system", unit)
+	_ = os.Remove(unitPath)
+	return os.Symlink("/dev/null", unitPath)
+}
+
+// setShadowPassword sets a Unix password on the installed system without
+// going through PAM. See the long comment in installSpinifex for the
+// rationale.
+func setShadowPassword(user, password string) error {
+	cmd := exec.Command("chpasswd", "-c", "YESCRYPT", "-R", mountRoot)
+	cmd.Stdin = strings.NewReader(user + ":" + password)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// chrootMountPaths lists virtual filesystems to bind-mount into the chroot.
+// Order matters: unbind in reverse.
+var chrootMountPaths = []string{"dev", "proc", "sys"}
+
+// bindChrootMounts bind-mounts /dev, /proc, and /sys into the installed rootfs
+// so chroot commands (chpasswd, systemd-machine-id-setup, update-grub) can
+// access hardware, process info, and entropy sources. Idempotent — already-
+// mounted paths are skipped.
+func bindChrootMounts() error {
+	for _, m := range chrootMountPaths {
+		dst := filepath.Join(mountRoot, m)
+		if err := os.MkdirAll(dst, 0o755); err != nil {
+			return fmt.Errorf("create chroot mountpoint /%s: %w", m, err)
+		}
+		if err := run("mount", "--bind", "/"+m, dst); err != nil {
+			return fmt.Errorf("bind-mount /%s into chroot: %w", m, err)
+		}
+	}
+	return nil
+}
+
+// unbindChrootMounts unmounts the virtual filesystems in reverse order.
+// Errors are logged but not returned — this is best-effort cleanup.
+func unbindChrootMounts() {
+	for i := len(chrootMountPaths) - 1; i >= 0; i-- {
+		_ = run("umount", filepath.Join(mountRoot, chrootMountPaths[i]))
 	}
 }
 

@@ -58,10 +58,19 @@ func main() {
 }
 
 // detectTTY returns the TTY device path the installer should attach to.
-// It reads SPINIFEX_CONSOLE from the kernel cmdline (/proc/cmdline) so that
-// spinifex-init can direct the installer to the correct console (ttyS0 for
-// serial, tty1 for VGA). Falls back to tty1.
+// It first checks the SPINIFEX_CONSOLE environment variable (set by
+// spinifex-init.sh after console fallback logic), then falls back to parsing
+// /proc/cmdline. spinifex-init.sh may override the GRUB-set value (e.g. when
+// GRUB says tty1 but no framebuffer exists, it falls back to ttyS0 and
+// exports the corrected value).
 func detectTTY() string {
+	// Prefer the env var — spinifex-init.sh sets this after resolving the
+	// actual console (including headless/framebuffer fallback).
+	if val := os.Getenv("SPINIFEX_CONSOLE"); val != "" && val != "auto" {
+		return "/dev/" + val
+	}
+
+	// Fall back to kernel cmdline for direct invocation without spinifex-init.
 	data, err := os.ReadFile("/proc/cmdline")
 	if err == nil {
 		for param := range strings.FieldsSeq(string(data)) {

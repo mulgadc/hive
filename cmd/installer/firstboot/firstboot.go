@@ -82,14 +82,15 @@ trap 'systemctl disable spinifex-firstboot.service' EXIT
 # Set hostname
 hostnamectl set-hostname %s
 
-# Run setup.sh with the embedded tarball (air-gapped, idempotent).
-# This creates service users, directories, sudoers rules, installs and enables
-# the systemd units — the same path as the online curl|bash installer.
-# Apt deps and AWS CLI are pre-installed in the squashfs so both are skipped.
-INSTALL_SPINIFEX_TARBALL=/opt/spinifex/spinifex.tar.gz \
-INSTALL_SPINIFEX_SKIP_APT=1 \
-INSTALL_SPINIFEX_SKIP_NEWGRP=1 \
-bash /usr/local/share/spinifex/setup.sh
+# NOTE: We do NOT invoke /usr/local/share/spinifex/setup.sh here. The ISO
+# rootfs (scripts/iso-builder/build/build-rootfs.sh) already pre-stages
+# everything setup.sh would do at install time: spx binary, viperblock
+# nbdkit plugin, service users (spinifex-{nats,gw,daemon,storage,viperblock,
+# vpcd,ui}), data directories with per-service ownership, sudoers rules,
+# systemd units, and tmpfiles.d entries. Calling setup.sh would also fail
+# in the air-gapped boot environment because no tarball is staged at
+# /opt/spinifex/spinifex.tar.gz — the firstboot would never complete and
+# every spinifex-* service depending on it would refuse to start.
 
 # Pre-start OVS and OVN central so their databases are initialised before
 # setup-ovn.sh runs. On physical hardware, first-boot DB initialisation takes
@@ -115,6 +116,29 @@ done
 
 # Cluster formation — capture credentials to file for display on console.
 %s 2>&1
+
+# Fix ownership of files spx admin init created. spx runs as root (no
+# SUDO_USER under systemd), so /etc/spinifex/{spinifex.toml,master.key} and
+# any per-service files written under /var/lib/spinifex/* land as root:root.
+# Re-chown them so each service can read/write its own subtree at
+# Type=notify start. The directories themselves were pre-created with the
+# correct ownership in build-rootfs.sh — these chowns only affect the
+# runtime-generated config and key files inside them.
+chown root:spinifex /etc/spinifex && chmod 750 /etc/spinifex
+find /etc/spinifex -type f -exec chmod 640 {} \;
+chown -R spinifex-gw:spinifex         /var/lib/spinifex/awsgw
+chown -R spinifex-daemon:spinifex     /var/lib/spinifex/spinifex
+chown -R spinifex-nats:spinifex       /var/lib/spinifex/nats
+chown -R spinifex-storage:spinifex    /var/lib/spinifex/predastore
+chown -R spinifex-viperblock:spinifex /var/lib/spinifex/viperblock
+chown -R spinifex-vpcd:spinifex       /var/lib/spinifex/vpcd
+
+# awsgw looks for master.key at <BaseDir>/config/master.key. In production
+# BaseDir is /var/lib/spinifex/awsgw/ (set by SPINIFEX_BASE_DIR), but the
+# key lives in /etc/spinifex/. Symlink so both paths resolve to the same
+# file. spx admin init writes the key, so this must run after it.
+mkdir -p /var/lib/spinifex/awsgw/config
+ln -sf /etc/spinifex/master.key /var/lib/spinifex/awsgw/config/master.key
 
 # Copy AWS credentials to the spinifex user's home directory.
 # spx admin init runs with HOME=/root (set by the systemd unit), so credentials
