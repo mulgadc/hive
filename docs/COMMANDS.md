@@ -89,8 +89,31 @@ Operational commands for inspecting cluster state. These fan out NATS requests t
 
 | Command | Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------|---------------|-------------|------------|--------|
-| `spx admin images import` | `--name` | Cluster must be running, image file must exist locally | Imports a local disk image (QCOW2) as an AMI → uploads to Predastore S3 → registers as available AMI | 1. Import valid QCOW2 image<br>2. Image appears in `describe-images` | **DONE** |
+| `spx admin images import` | `--name`, `--file`, `--force` | Cluster must be running; either `--name` (catalog download) or `--file` (operator-supplied media) | Catalog imports (`--name`) download the image, fetch the catalog `Checksum` URL, and verify the SHA-256/SHA-512 digest before extraction. Mismatch fails closed; the cached file is left on disk and `--force` re-downloads. `--file` imports skip verification — operator-supplied media is outside Spinifex's trust boundary, and the skip is logged at INFO for audit. | 1. Import valid catalog image (verifies checksum)<br>2. Tampered cache hit fails with `ErrChecksumMismatch`<br>3. `--force` recovers after a mismatch<br>4. `--file` import skips verification | **DONE** |
 | `spx admin images list` | — | None | Lists available OS images that can be imported or downloaded | 1. List available images | **DONE** |
+
+#### Image integrity verification (CMMC SI.L1-3.14.2)
+
+Catalog imports (`spx admin images import --name <name>`) verify the image
+against the catalog-declared SHA-256/SHA-512 digest before extraction. The sums
+file is fetched from the catalog `Checksum` URL over HTTPS only (cross-scheme
+redirects refused), and verification runs on both fresh downloads and cache
+hits so a poisoned cache is caught on the next import.
+
+On mismatch the import exits non-zero, the cached file is left on disk for
+inspection, and the printed guidance is `spx admin images import --name <name>
+--force` to re-download.
+
+`--file` imports skip verification by design: operator-supplied media is
+outside Spinifex's trust boundary and the operator is responsible for
+integrity (e.g. `sha256sum` against a trusted upstream digest before import).
+The skip is recorded as an INFO `slog` event with `reason=local-file-import`
+so a CMMC assessor can audit the decision from journald.
+
+**Limitation:** verification confirms the image matches the digest the mirror
+served. A mirror compromise that swaps both image and sums file is not
+detected; closing that gap requires GPG signature verification of the sums
+file, deferred to a later phase.
 
 ## AWS Commands
 

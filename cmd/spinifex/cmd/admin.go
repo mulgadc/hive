@@ -421,8 +421,27 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 			}
 		}
 
-		// Update image file path for later extraction
-		//imagePath = imageFilePath
+		// Verify before extract: the catalog digest is of the artifact as it
+		// sits on the mirror (.tar.xz/.img/.raw). Also catches a poisoned
+		// cache on the re-run path — failure leaves the file on disk so the
+		// operator can inspect; recover with --force.
+		if image.Checksum == "" || image.ChecksumType == "" {
+			fmt.Fprintf(os.Stderr, "Catalog entry %q is missing Checksum/ChecksumType; refusing import.\n", imageName)
+			os.Exit(1)
+		}
+		if err := utils.VerifyImageChecksum(imageFile, image.Checksum, image.ChecksumType); err != nil {
+			printChecksumError(os.Stderr, imageFile, imageName, image, err)
+			os.Exit(1)
+		}
+		fmt.Printf("✅ Verified image checksum (%s)\n", image.ChecksumType)
+	}
+
+	// --file path: operator-supplied media is outside Spinifex's trust
+	// boundary. Log the skip at INFO so a CMMC assessor can audit the
+	// decision from journald. See cmmc-level1-vm-image-integrity.md §3.
+	if localFile != "" {
+		slog.Info("image integrity verification skipped for operator-supplied file",
+			"path", localFile, "reason", "local-file-import")
 	}
 
 	// Next, validate if the image is raw, tar, gz, xv, etc. We need to upload the raw image
@@ -2133,4 +2152,19 @@ func installCACertificate(caPemPath string) {
 	}
 
 	fmt.Printf("✅ CA certificate installed to system trust store\n")
+}
+
+// printChecksumError writes a human-readable failure with the exact --force
+// re-run command. The cached image file is left on disk on purpose: an
+// implicit auto-delete would mutate state inside a "verify" call, and a
+// tampered artifact is forensically useful intact.
+func printChecksumError(w io.Writer, imageFile, imageName string, image utils.Images, err error) {
+	fmt.Fprintf(w, "Image integrity verification failed: %v\n", err)
+	fmt.Fprintf(w, "  file:     %s\n", imageFile)
+	if errors.Is(err, utils.ErrChecksumMismatch) {
+		fmt.Fprintf(w, "  source:   %s\n", image.Checksum)
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "The cached file was left in place. To re-download and retry:")
+	fmt.Fprintf(w, "  spx admin images import --name %s --force\n", imageName)
 }
