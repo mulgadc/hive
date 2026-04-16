@@ -438,14 +438,6 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	// --file path: operator-supplied media is outside Spinifex's trust
-	// boundary. Log the skip at INFO so a CMMC assessor can audit the
-	// decision from journald. See cmmc-level1-vm-image-integrity.md §3.
-	if localFile != "" {
-		slog.Info("image integrity verification skipped for operator-supplied file",
-			"path", localFile, "reason", "local-file-import")
-	}
-
 	// Next, validate if the image is raw, tar, gz, xv, etc. We need to upload the raw image
 	tmpDir, err := os.MkdirTemp(ostmpDir, "spinifex-image-tmp-*")
 
