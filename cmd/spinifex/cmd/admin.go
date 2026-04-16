@@ -286,6 +286,7 @@ func init() {
 	imagesImportCmd.Flags().String("platform", "Linux/UNIX", "Specified platform (e.g Linux/UNIX, Windows)")
 	imagesImportCmd.Flags().StringSlice("tag", nil, "Tag to apply to the imported AMI as key=value (repeatable; e.g. --tag spinifex:managed-by=elbv2)")
 	imagesImportCmd.Flags().Bool("force", false, "Force command execution (overwrites existing files)")
+	imagesImportCmd.Flags().Bool("skip-verify", false, "Skip catalog-image checksum verification (INSECURE; operator assumes integrity responsibility)")
 }
 
 func runimagesImportCmd(cmd *cobra.Command, args []string) {
@@ -297,6 +298,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 
 	cfgFile, _ := cmd.Flags().GetString("config")
 	forceCmd, _ := cmd.Flags().GetBool("force")
+	skipVerify, _ := cmd.Flags().GetBool("skip-verify")
 	ostmpDir, _ := cmd.Flags().GetString("tmp-dir")
 
 	// Use default config path
@@ -425,15 +427,21 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		// sits on the mirror (.tar.xz/.img/.raw). Also catches a poisoned
 		// cache on the re-run path — failure leaves the file on disk so the
 		// operator can inspect; recover with --force.
-		if image.Checksum == "" || image.ChecksumType == "" {
-			fmt.Fprintf(os.Stderr, "Catalog entry %q is missing Checksum/ChecksumType; refusing import.\n", imageName)
-			os.Exit(1)
+		if skipVerify {
+			fmt.Fprintf(os.Stderr, "⚠️  --skip-verify set: checksum verification skipped for %s\n", imageName)
+			slog.Warn("image integrity verification skipped via --skip-verify",
+				"image", imageName, "file", imageFile, "reason", "skip-verify-flag")
+		} else {
+			if image.Checksum == "" || image.ChecksumType == "" {
+				fmt.Fprintf(os.Stderr, "Catalog entry %q is missing Checksum/ChecksumType; refusing import.\n", imageName)
+				os.Exit(1)
+			}
+			if err := utils.VerifyImageChecksum(imageFile, image.Checksum, image.ChecksumType); err != nil {
+				printChecksumError(os.Stderr, imageFile, imageName, image, err)
+				os.Exit(1)
+			}
+			fmt.Printf("✅ Verified image checksum (%s)\n", image.ChecksumType)
 		}
-		if err := utils.VerifyImageChecksum(imageFile, image.Checksum, image.ChecksumType); err != nil {
-			printChecksumError(os.Stderr, imageFile, imageName, image, err)
-			os.Exit(1)
-		}
-		fmt.Printf("✅ Verified image checksum (%s)\n", image.ChecksumType)
 	}
 
 	// --file path: operator-supplied media is outside Spinifex's trust

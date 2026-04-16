@@ -89,7 +89,7 @@ Operational commands for inspecting cluster state. These fan out NATS requests t
 
 | Command | Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------|---------------|-------------|------------|--------|
-| `spx admin images import` | `--name`, `--file`, `--force` | Cluster must be running; either `--name` (catalog download) or `--file` (operator-supplied media) | Catalog imports (`--name`) download the image, fetch the catalog `Checksum` URL, and verify the SHA-256/SHA-512 digest before extraction. Mismatch fails closed; the cached file is left on disk and `--force` re-downloads. `--file` imports skip verification — operator-supplied media is outside Spinifex's trust boundary, and the skip is logged at INFO for audit. | 1. Import valid catalog image (verifies checksum)<br>2. Tampered cache hit fails with `ErrChecksumMismatch`<br>3. `--force` recovers after a mismatch<br>4. `--file` import skips verification | **DONE** |
+| `spx admin images import` | `--name`, `--file`, `--force`, `--skip-verify` | Cluster must be running; either `--name` (catalog download) or `--file` (operator-supplied media) | Catalog imports (`--name`) download the image, fetch the catalog `Checksum` URL, and verify the SHA-256/SHA-512 digest before extraction. Mismatch fails closed; the cached file is left on disk and `--force` re-downloads. `--file` imports skip verification — operator-supplied media is outside Spinifex's trust boundary, and the skip is logged at INFO for audit. `--skip-verify` bypasses verification for catalog imports and emits a WARN slog + stderr notice; use only for debugging or when upstream mirrors are confirmed-broken. | 1. Import valid catalog image (verifies checksum)<br>2. Tampered cache hit fails with `ErrChecksumMismatch`<br>3. `--force` recovers after a mismatch<br>4. `--file` import skips verification<br>5. `--skip-verify` bypasses checksum with WARN | **DONE** |
 | `spx admin images list` | — | None | Lists available OS images that can be imported or downloaded | 1. List available images | **DONE** |
 
 #### Image integrity verification (CMMC SI.L1-3.14.2)
@@ -109,6 +109,14 @@ outside Spinifex's trust boundary and the operator is responsible for
 integrity (e.g. `sha256sum` against a trusted upstream digest before import).
 The skip is recorded as an INFO `slog` event with `reason=local-file-import`
 so a CMMC assessor can audit the decision from journald.
+
+`--skip-verify` bypasses the checksum step for catalog imports. The command
+still downloads via the catalog URL but does not compare the image digest
+against the sums file. Intended for narrow cases such as debugging upstream
+mirror issues or running against a transiently-broken `latest/` path; the
+skip is logged at WARN with `reason=skip-verify-flag` and printed to stderr
+so operators and assessors see it. Prefer `--file` with an out-of-band
+verified image over `--skip-verify` whenever possible.
 
 **Limitation:** verification confirms the image matches the digest the mirror
 served. A mirror compromise that swaps both image and sums file is not
