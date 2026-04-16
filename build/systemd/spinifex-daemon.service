@@ -24,6 +24,7 @@ DevicePolicy=closed
 DeviceAllow=/dev/kvm rw
 DeviceAllow=/dev/net/tun rw
 ReadOnlyPaths=/etc/spinifex/spinifex.toml /etc/spinifex/server.pem /etc/spinifex/server.key
+RuntimeDirectory=spinifex spinifex/nbd
 ReadWritePaths=/var/lib/spinifex/spinifex /var/log/spinifex /run/spinifex /run/spinifex/nbd
 
 # Hardening
