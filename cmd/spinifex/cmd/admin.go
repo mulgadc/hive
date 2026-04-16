@@ -904,17 +904,10 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	// Create config files from embedded templates
 	fmt.Println("\n📝 Creating configuration files...")
 
-	// Create subdirectories
-	awsgwDir := filepath.Join(configDir, "awsgw")
-	predastoreDir := filepath.Join(configDir, "predastore")
-	natsDir := filepath.Join(configDir, "nats")
-	spinifexDir := filepath.Join(configDir, "spinifex")
-
-	for _, dir := range []string{awsgwDir, predastoreDir, natsDir, spinifexDir} {
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating directory %s: %v\n", dir, err)
-			os.Exit(1)
-		}
+	dirs, err := createConfigSubdirs(configDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating config subdirectories: %v\n", err)
+		os.Exit(1)
 	}
 
 	portStr := strconv.Itoa(port)
@@ -954,7 +947,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 			os.Exit(1)
 		}
 
-		predastorePath := filepath.Join(predastoreDir, "predastore.toml")
+		predastorePath := filepath.Join(dirs.Predastore, "predastore.toml")
 		if err := os.WriteFile(predastorePath, []byte(predastoreContent), 0600); err != nil {
 			fmt.Fprintf(os.Stderr, "Error writing predastore config: %v\n", err)
 			os.Exit(1)
@@ -1032,38 +1025,12 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	}
 
 	// Generate config files
-	configs := []admin.ConfigFile{
-		{Name: "spinifex.toml", Path: spinifexTomlPath, Template: spinifexTomlTemplate},
-		{Name: filepath.Join(awsgwDir, "awsgw.toml"), Path: filepath.Join(awsgwDir, "awsgw.toml"), Template: awsgwTomlTemplate},
-		{Name: filepath.Join(natsDir, "nats.conf"), Path: filepath.Join(natsDir, "nats.conf"), Template: natsConfTemplate},
-	}
-	// Skip template-based predastore.toml if multi-node was already generated
-	if predastoreNodesStr == "" {
-		configs = append(configs, admin.ConfigFile{
-			Name: filepath.Join(predastoreDir, "predastore.toml"), Path: filepath.Join(predastoreDir, "predastore.toml"), Template: predastoreTomlTemplate,
-		})
-	}
-
-	if err := admin.GenerateConfigFiles(configs, configSettings); err != nil {
+	if err := generateAndWriteConfigs(dirs, spinifexTomlPath, configSettings, predastoreNodesStr != ""); err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating configuration files: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Update ~/.aws/credentials and ~/.aws/config with admin credentials (not system)
-	fmt.Println("\n🔧 Configuring AWS credentials...")
-	if err := admin.SetupAWSCredentials(bootstrapResult.AdminAccessKey, bootstrapResult.AdminSecretKey, region, certPath, bindIP); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Could not update AWS credentials: %v\n", err)
-	} else {
-		fmt.Println("✅ AWS credentials configured")
-	}
-
-	admin.CreateServiceDirectories(spxRoot)
-
-	// In production layout (running as root), set per-service ownership on
-	// directories and shared config files (root:spinifex with correct modes).
-	if os.Getuid() == 0 {
-		admin.SetServiceOwnership()
-	}
+	finalizeNodeSetup(spxRoot, certPath, bootstrapResult.AdminAccessKey, bootstrapResult.AdminSecretKey, region, bindIP)
 
 	// Print success message
 	fmt.Println("\n🎉 Spinifex initialization complete!")
@@ -1196,31 +1163,25 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 	fmt.Println("\n📝 Creating configuration files...")
 
-	// Create subdirectories
-	awsgwDir := filepath.Join(configDir, "awsgw")
-	predastoreDir := filepath.Join(configDir, "predastore")
-	natsDir := filepath.Join(configDir, "nats")
-	spinifexDir := filepath.Join(configDir, "spinifex")
-
-	for _, dir := range []string{awsgwDir, predastoreDir, natsDir, spinifexDir} {
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating directory %s: %v\n", dir, err)
-			os.Exit(1)
-		}
+	dirs, err := createConfigSubdirs(configDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating config subdirectories: %v\n", err)
+		os.Exit(1)
 	}
 
 	portStr := strconv.Itoa(port)
 
 	// Generate multi-node predastore config
 	var predastoreNodeID int
-	if len(predastoreNodes) >= 3 {
+	hasPredastoreConfig := len(predastoreNodes) >= 3
+	if hasPredastoreConfig {
 		predastoreContent, err := admin.GenerateMultiNodePredastoreConfig(predastoreMultiNodeTemplate, predastoreNodes, accessKey, secretKey, region, natsToken, configDir, bindIP)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error generating multi-node predastore config: %v\n", err)
 			os.Exit(1)
 		}
 
-		predastorePath := filepath.Join(predastoreDir, "predastore.toml")
+		predastorePath := filepath.Join(dirs.Predastore, "predastore.toml")
 		if err := os.WriteFile(predastorePath, []byte(predastoreContent), 0600); err != nil {
 			fmt.Fprintf(os.Stderr, "Error writing predastore config: %v\n", err)
 			os.Exit(1)
@@ -1259,67 +1220,16 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		OVNSBAddr: "tcp:127.0.0.1:6642",
 	}
 
-	// Apply cluster-wide network config to init node's config
 	if networkConfig != nil {
-		configSettings.ExternalMode = networkConfig.ExternalMode
-		configSettings.ExternalDHCP = networkConfig.ExternalDHCP
-		configSettings.PoolName = networkConfig.PoolName
-		configSettings.PoolSource = networkConfig.PoolSource
-		configSettings.PoolStart = networkConfig.PoolStart
-		configSettings.PoolEnd = networkConfig.PoolEnd
-		configSettings.PoolGateway = networkConfig.PoolGateway
-		configSettings.PoolGatewayIP = networkConfig.PoolGatewayIP
-		configSettings.PoolPrefixLen = networkConfig.PoolPrefixLen
-		configSettings.PoolDNSServers = networkConfig.PoolDNSServers
-
-		configSettings.BootstrapAccountId = networkConfig.BootstrapAccountId
-		configSettings.BootstrapVpcId = networkConfig.BootstrapVpcId
-		configSettings.BootstrapSubnetId = networkConfig.BootstrapSubnetId
-		configSettings.BootstrapIgwId = networkConfig.BootstrapIgwId
-		configSettings.BootstrapCidr = networkConfig.BootstrapCidr
-		configSettings.BootstrapSubnetCidr = networkConfig.BootstrapSubnetCidr
-
-		// Auto-detect local network topology for per-node config
-		detected, err := admin.DetectNetwork()
-		if err == nil && detected.WAN != nil {
-			configSettings.ExternalIface = detected.WAN.Name
-			configSettings.WanBridge = detectedWanBridge(detected)
-		}
+		applyNetworkConfig(&configSettings, networkConfig)
 	}
 
-	// Generate config files
-	configs := []admin.ConfigFile{
-		{Name: "spinifex.toml", Path: spinifexTomlPath, Template: spinifexTomlTemplate},
-		{Name: filepath.Join(awsgwDir, "awsgw.toml"), Path: filepath.Join(awsgwDir, "awsgw.toml"), Template: awsgwTomlTemplate},
-		{Name: filepath.Join(natsDir, "nats.conf"), Path: filepath.Join(natsDir, "nats.conf"), Template: natsConfTemplate},
-	}
-	// Skip template-based predastore.toml if multi-node was generated
-	if len(predastoreNodes) < 3 {
-		configs = append(configs, admin.ConfigFile{
-			Name: filepath.Join(predastoreDir, "predastore.toml"), Path: filepath.Join(predastoreDir, "predastore.toml"), Template: predastoreTomlTemplate,
-		})
-	}
-
-	if err := admin.GenerateConfigFiles(configs, configSettings); err != nil {
+	if err := generateAndWriteConfigs(dirs, spinifexTomlPath, configSettings, hasPredastoreConfig); err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating configuration files: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Update ~/.aws/credentials and ~/.aws/config with admin credentials (not system)
-	fmt.Println("\n🔧 Configuring AWS credentials...")
-	if err := admin.SetupAWSCredentials(bootstrapResult.AdminAccessKey, bootstrapResult.AdminSecretKey, region, certPath, bindIP); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Could not update AWS credentials: %v\n", err)
-	} else {
-		fmt.Println("✅ AWS credentials configured")
-	}
-
-	admin.CreateServiceDirectories(spxRoot)
-
-	// In production layout (running as root), set per-service ownership on
-	// directories and shared config files (root:spinifex with correct modes).
-	if os.Getuid() == 0 {
-		admin.SetServiceOwnership()
-	}
+	finalizeNodeSetup(spxRoot, certPath, bootstrapResult.AdminAccessKey, bootstrapResult.AdminSecretKey, region, bindIP)
 
 	// Keep formation server running briefly so joining nodes can fetch complete status
 	fmt.Println("\n⏳ Waiting for joining nodes to fetch cluster data...")
@@ -1619,17 +1529,10 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 
 	fmt.Println("📝 Creating configuration files...")
 
-	// Create subdirectories
-	awsgwDir := filepath.Join(configDir, "awsgw")
-	predastoreDir := filepath.Join(configDir, "predastore")
-	natsDir := filepath.Join(configDir, "nats")
-	spinifexDir := filepath.Join(configDir, "spinifex")
-
-	for _, dir := range []string{awsgwDir, predastoreDir, natsDir, spinifexDir} {
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating directory %s: %v\n", dir, err)
-			os.Exit(1)
-		}
+	dirs, err := createConfigSubdirs(configDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating config subdirectories: %v\n", err)
+		os.Exit(1)
 	}
 
 	portStr := strconv.Itoa(port)
@@ -1645,7 +1548,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 			os.Exit(1)
 		}
 
-		predastorePath := filepath.Join(predastoreDir, "predastore.toml")
+		predastorePath := filepath.Join(dirs.Predastore, "predastore.toml")
 		if err := os.WriteFile(predastorePath, []byte(predastoreContent), 0600); err != nil {
 			fmt.Fprintf(os.Stderr, "Error writing predastore config: %v\n", err)
 			os.Exit(1)
@@ -1688,71 +1591,16 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		OVNSBAddr: fmt.Sprintf("tcp:%s:6642", leaderIP),
 	}
 
-	// Apply cluster-wide network config from leader
 	if statusResp.NetworkConfig != nil {
-		nc := statusResp.NetworkConfig
-		configSettings.ExternalMode = nc.ExternalMode
-		configSettings.ExternalDHCP = nc.ExternalDHCP
-		configSettings.PoolName = nc.PoolName
-		configSettings.PoolSource = nc.PoolSource
-		configSettings.PoolStart = nc.PoolStart
-		configSettings.PoolEnd = nc.PoolEnd
-		configSettings.PoolGateway = nc.PoolGateway
-		configSettings.PoolGatewayIP = nc.PoolGatewayIP
-		configSettings.PoolPrefixLen = nc.PoolPrefixLen
-		configSettings.PoolDNSServers = nc.PoolDNSServers
-
-		configSettings.BootstrapAccountId = nc.BootstrapAccountId
-		configSettings.BootstrapVpcId = nc.BootstrapVpcId
-		configSettings.BootstrapSubnetId = nc.BootstrapSubnetId
-		configSettings.BootstrapIgwId = nc.BootstrapIgwId
-		configSettings.BootstrapCidr = nc.BootstrapCidr
-		configSettings.BootstrapSubnetCidr = nc.BootstrapSubnetCidr
-
-		// Auto-detect local network topology for per-node config
-		if nc.ExternalMode != "" {
-			detected, err := admin.DetectNetwork()
-			if err == nil && detected.WAN != nil {
-				configSettings.ExternalIface = detected.WAN.Name
-				configSettings.WanBridge = detectedWanBridge(detected)
-			}
-		}
+		applyNetworkConfig(&configSettings, statusResp.NetworkConfig)
 	}
 
-	// Generate config files
-	configs := []admin.ConfigFile{
-		{Name: "spinifex.toml", Path: spinifexTomlPath, Template: spinifexTomlTemplate},
-		{Name: filepath.Join(awsgwDir, "awsgw.toml"), Path: filepath.Join(awsgwDir, "awsgw.toml"), Template: awsgwTomlTemplate},
-		{Name: filepath.Join(natsDir, "nats.conf"), Path: filepath.Join(natsDir, "nats.conf"), Template: natsConfTemplate},
-	}
-	// Skip template-based predastore.toml if multi-node was generated
-	if !hasPredastoreConfig {
-		configs = append(configs, admin.ConfigFile{
-			Name: filepath.Join(predastoreDir, "predastore.toml"), Path: filepath.Join(predastoreDir, "predastore.toml"), Template: predastoreTomlTemplate,
-		})
-	}
-
-	err = admin.GenerateConfigFiles(configs, configSettings)
-	if err != nil {
+	if err := generateAndWriteConfigs(dirs, spinifexTomlPath, configSettings, hasPredastoreConfig); err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating configuration files: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Update ~/.aws/credentials and ~/.aws/config with admin credentials (not system)
-	fmt.Println("\n🔧 Configuring AWS credentials...")
-	if err := admin.SetupAWSCredentials(creds.AdminAccessKey, creds.AdminSecretKey, creds.Region, caCertPath, bindIP); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Could not update AWS credentials: %v\n", err)
-	} else {
-		fmt.Println("✅ AWS credentials configured")
-	}
-
-	admin.CreateServiceDirectories(dataDir)
-
-	// In production layout (running as root), set per-service ownership on
-	// directories and shared config files (root:spinifex with correct modes).
-	if os.Getuid() == 0 {
-		admin.SetServiceOwnership()
-	}
+	finalizeNodeSetup(dataDir, caCertPath, creds.AdminAccessKey, creds.AdminSecretKey, creds.Region, bindIP)
 
 	// Print cluster summary
 	fmt.Println("\n🎉 Node successfully joined cluster!")
@@ -1984,6 +1832,93 @@ func runCertRenew(cmd *cobra.Command, _ []string) {
 	fmt.Println("✅ Server certificate regenerated with current IPs and hostname")
 	fmt.Printf("   Certificate: %s\n", serverCertPath)
 	fmt.Println("\n⚠️  Restart awsgw and daemon services to pick up the new certificate.")
+}
+
+// configDirs holds the paths to config subdirectories created by createConfigSubdirs.
+type configDirs struct {
+	AWSGW      string
+	Predastore string
+	NATS       string
+	Spinifex   string
+}
+
+// createConfigSubdirs creates the standard config subdirectories under configDir.
+func createConfigSubdirs(configDir string) (configDirs, error) {
+	dirs := configDirs{
+		AWSGW:      filepath.Join(configDir, "awsgw"),
+		Predastore: filepath.Join(configDir, "predastore"),
+		NATS:       filepath.Join(configDir, "nats"),
+		Spinifex:   filepath.Join(configDir, "spinifex"),
+	}
+	for _, dir := range []string{dirs.AWSGW, dirs.Predastore, dirs.NATS, dirs.Spinifex} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return configDirs{}, fmt.Errorf("create directory %s: %w", dir, err)
+		}
+	}
+	return dirs, nil
+}
+
+// generateAndWriteConfigs renders the standard config files (spinifex.toml,
+// awsgw.toml, nats.conf, and optionally predastore.toml) from templates.
+func generateAndWriteConfigs(dirs configDirs, spinifexTomlPath string, settings admin.ConfigSettings, skipPredastore bool) error {
+	configs := []admin.ConfigFile{
+		{Name: "spinifex.toml", Path: spinifexTomlPath, Template: spinifexTomlTemplate},
+		{Name: filepath.Join(dirs.AWSGW, "awsgw.toml"), Path: filepath.Join(dirs.AWSGW, "awsgw.toml"), Template: awsgwTomlTemplate},
+		{Name: filepath.Join(dirs.NATS, "nats.conf"), Path: filepath.Join(dirs.NATS, "nats.conf"), Template: natsConfTemplate},
+	}
+	if !skipPredastore {
+		configs = append(configs, admin.ConfigFile{
+			Name: filepath.Join(dirs.Predastore, "predastore.toml"), Path: filepath.Join(dirs.Predastore, "predastore.toml"), Template: predastoreTomlTemplate,
+		})
+	}
+	return admin.GenerateConfigFiles(configs, settings)
+}
+
+// finalizeNodeSetup configures AWS credentials, creates service directories,
+// and sets ownership when running as root.
+func finalizeNodeSetup(dataDir, certPath, adminAccessKey, adminSecretKey, region, bindIP string) {
+	fmt.Println("\n🔧 Configuring AWS credentials...")
+	if err := admin.SetupAWSCredentials(adminAccessKey, adminSecretKey, region, certPath, bindIP); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Could not update AWS credentials: %v\n", err)
+	} else {
+		fmt.Println("✅ AWS credentials configured")
+	}
+
+	admin.CreateServiceDirectories(dataDir)
+
+	if os.Getuid() == 0 {
+		admin.SetServiceOwnership()
+	}
+}
+
+// applyNetworkConfig copies cluster-wide network settings from a formation
+// NetworkConfig into ConfigSettings and auto-detects the local WAN interface.
+func applyNetworkConfig(settings *admin.ConfigSettings, nc *formation.NetworkConfig) {
+	settings.ExternalMode = nc.ExternalMode
+	settings.ExternalDHCP = nc.ExternalDHCP
+	settings.PoolName = nc.PoolName
+	settings.PoolSource = nc.PoolSource
+	settings.PoolStart = nc.PoolStart
+	settings.PoolEnd = nc.PoolEnd
+	settings.PoolGateway = nc.PoolGateway
+	settings.PoolGatewayIP = nc.PoolGatewayIP
+	settings.PoolPrefixLen = nc.PoolPrefixLen
+	settings.PoolDNSServers = nc.PoolDNSServers
+
+	settings.BootstrapAccountId = nc.BootstrapAccountId
+	settings.BootstrapVpcId = nc.BootstrapVpcId
+	settings.BootstrapSubnetId = nc.BootstrapSubnetId
+	settings.BootstrapIgwId = nc.BootstrapIgwId
+	settings.BootstrapCidr = nc.BootstrapCidr
+	settings.BootstrapSubnetCidr = nc.BootstrapSubnetCidr
+
+	if nc.ExternalMode != "" {
+		detected, err := admin.DetectNetwork()
+		if err == nil && detected.WAN != nil {
+			settings.ExternalIface = detected.WAN.Name
+			settings.WanBridge = detectedWanBridge(detected)
+		}
+	}
 }
 
 // writeBootstrapResult holds the admin credentials so callers can
