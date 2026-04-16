@@ -24,8 +24,6 @@ import (
 	"runtime"
 	"strings"
 	"time"
-
-	"github.com/pterm/pterm"
 )
 
 // Helper functions for OS images
@@ -96,11 +94,6 @@ func VerifyImageChecksum(imagePath, checksumURL, checksumType string) error {
 		return fmt.Errorf("%w: expected %s got %s", ErrChecksumMismatch, expected, actual)
 	}
 
-	slog.Info("image checksum verified",
-		"image", imagePath,
-		"algorithm", checksumType,
-		"digest", actual,
-	)
 	return nil
 }
 
@@ -236,10 +229,10 @@ func parseSumsFile(body []byte, filename string) (string, error) {
 	return "", fmt.Errorf("%w: %s", ErrChecksumNotFound, filename)
 }
 
-// hashImageFile streams the image through hasher with a pterm progress bar
-// and returns the digest as lowercase hex. Zero-byte files are rejected
-// outright so a truncated download surfaces as an explicit error rather than
-// an opaque "checksum mismatch".
+// hashImageFile streams the image through hasher and returns the digest as
+// lowercase hex. Zero-byte files are rejected outright so a truncated
+// download surfaces as an explicit error rather than an opaque "checksum
+// mismatch".
 func hashImageFile(imagePath string, hasher hash.Hash) (string, error) {
 	f, err := os.Open(imagePath)
 	if err != nil {
@@ -251,39 +244,13 @@ func hashImageFile(imagePath string, hasher hash.Hash) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
-	size := stat.Size()
-	if size == 0 {
+	if stat.Size() == 0 {
 		return "", fmt.Errorf("image file %s is empty (likely a truncated or failed download)", imagePath)
 	}
 
-	bar, _ := pterm.DefaultProgressbar.
-		WithTitle(fmt.Sprintf("Hashing %s", filepath.Base(imagePath))).
-		WithTotal(int(size)).
-		Start()
-
-	// Coalesce ~32 KiB-sized io.Copy reads into one bar.Add per MiB/100ms so
-	// a 3 GB image doesn't trigger ~100k terminal redraws.
-	const flushBytes = 1 * 1024 * 1024
-	const flushInterval = 100 * time.Millisecond
-	var pending int
-	lastFlush := time.Now()
-	reader := io.TeeReader(f, progressWriter(func(n int) {
-		pending += n
-		if pending >= flushBytes || time.Since(lastFlush) >= flushInterval {
-			bar.Add(pending)
-			pending = 0
-			lastFlush = time.Now()
-		}
-	}))
-	if _, err := io.Copy(hasher, reader); err != nil {
+	if _, err := io.Copy(hasher, f); err != nil {
 		return "", err
 	}
-	if pending > 0 {
-		bar.Add(pending)
-	}
-	_, _ = bar.Stop()
-
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
