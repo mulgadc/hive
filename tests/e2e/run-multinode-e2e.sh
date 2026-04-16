@@ -333,7 +333,7 @@ echo "========================================"
 
 # NATS cluster: verify 2 unique peers from node1
 echo "Checking NATS cluster..."
-NATS_INFO=$(curl -s "http://${LOCAL_IP}:${NATS_MONITOR_PORT}/routez" 2>/dev/null) || {
+NATS_INFO=$(curl -s "http://127.0.0.1:${NATS_MONITOR_PORT}/routez" 2>/dev/null) || {
     echo "  ERROR: Cannot reach NATS monitoring endpoint"
     exit 1
 }
@@ -809,7 +809,7 @@ else
 fi
 
 # Check NATS degraded state (should have 1 route instead of 2)
-NATS_DEGRADED=$(curl -s "http://${LOCAL_IP}:${NATS_MONITOR_PORT}/routez" 2>/dev/null)
+NATS_DEGRADED=$(curl -s "http://127.0.0.1:${NATS_MONITOR_PORT}/routez" 2>/dev/null)
 DEGRADED_PEERS=$(echo "$NATS_DEGRADED" | jq -r '[.routes[].remote_name] | unique | length' 2>/dev/null || echo "0")
 echo "  NATS peers during failure: $DEGRADED_PEERS (expected: 1)"
 if [ "$DEGRADED_PEERS" -eq 1 ]; then
@@ -849,7 +849,7 @@ echo "  Waiting for NATS cluster to reform..."
 ATTEMPT=0
 REFORMED=false
 while [ $ATTEMPT -lt 60 ]; do
-    NATS_RECOVER=$(curl -s "http://${LOCAL_IP}:${NATS_MONITOR_PORT}/routez" 2>/dev/null)
+    NATS_RECOVER=$(curl -s "http://127.0.0.1:${NATS_MONITOR_PORT}/routez" 2>/dev/null)
     RECOVER_PEERS=$(echo "$NATS_RECOVER" | jq -r '[.routes[].remote_name] | unique | length' 2>/dev/null || echo "0")
     if [ "$RECOVER_PEERS" -ge 2 ]; then
         echo "  NATS cluster reformed ($RECOVER_PEERS peers)"

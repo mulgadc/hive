@@ -120,7 +120,7 @@ verify_nats_cluster() {
 
     # Check cluster info via monitoring endpoint on node1
     local cluster_info
-    cluster_info=$(curl -s "http://${NODE1_IP}:${NATS_MONITOR_PORT}/routez" 2>/dev/null) || {
+    cluster_info=$(curl -s "http://127.0.0.1:${NATS_MONITOR_PORT}/routez" 2>/dev/null) || {
         echo "  ERROR: Cannot reach NATS monitoring endpoint"
         return 1
     }
@@ -645,8 +645,8 @@ verify_all_services_down() {
             all_down=false
         fi
 
-        # Check NATS
-        if curl -s --connect-timeout 2 "http://${node_ip}:${NATS_MONITOR_PORT}" > /dev/null 2>&1; then
+        # Check NATS (client port — monitoring is localhost-only)
+        if nc -z -w 2 "${node_ip}" ${NATS_CLIENT_PORT} 2>/dev/null; then
             echo "  Node$i: NATS still responding"
             all_down=false
         fi

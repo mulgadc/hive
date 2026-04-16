@@ -207,7 +207,7 @@ func (d *Daemon) queryNATSRole() string {
 	if !d.config.HasService("nats") {
 		return ""
 	}
-	url := "http://" + net.JoinHostPort(d.daemonIP(), strconv.Itoa(natsMonitorPort)) + "/varz"
+	url := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(natsMonitorPort)) + "/varz"
 	return fetchNATSRole(url, roleHTTPClient)
 }
 

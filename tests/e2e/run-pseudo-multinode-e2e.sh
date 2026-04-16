@@ -134,6 +134,12 @@ wait $JOIN3_PID || { echo "ERROR: Node 3 join failed"; exit 1; }
 wait $LEADER_INIT_PID || { echo "ERROR: Leader init failed"; exit 1; }
 echo "Cluster formation complete — all configs generated"
 
+# Disable monitoring on non-primary nodes to avoid port conflict on 127.0.0.1:8222
+for i in 2 3; do
+    sed -i '/^http:\s*127\.0\.0\.1:8222/d' "$HOME/node${i}/config/nats/nats.conf"
+    echo "  Stripped NATS monitoring from node$i (avoids 127.0.0.1:8222 conflict)"
+done
+
 # Now start services (configs exist for all nodes)
 echo ""
 echo "Starting node services..."
