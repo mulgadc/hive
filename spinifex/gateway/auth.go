@@ -122,16 +122,16 @@ func (gw *GatewayConfig) SigV4AuthMiddleware() func(http.Handler) http.Handler {
 				return
 			}
 
-			// Enforce access key TTL. Empty ExpiresAt means the key has no expiry.
 			if ak.ExpiresAt != "" {
 				expiry, err := time.Parse(time.RFC3339, ak.ExpiresAt)
 				if err != nil {
+					// Server-side data corruption, not a client failure — return
+					// 500 and do not rate-limit the caller.
 					slog.Error("Auth failure: malformed ExpiresAt in stored access key", "accessKeyID", accessKey, "expiresAt", ak.ExpiresAt, "err", err)
-					gw.RateLimiter.RecordFailure(clientIP)
-					gw.writeSigV4Error(w, r, awserrors.ErrorInvalidClientTokenId)
+					gw.writeSigV4Error(w, r, awserrors.ErrorInternalError)
 					return
 				}
-				if time.Now().After(expiry) {
+				if !time.Now().Before(expiry) {
 					slog.Warn("Auth failure: access key expired", "accessKeyID", accessKey, "sourceIP", clientIP, "expiresAt", ak.ExpiresAt)
 					gw.RateLimiter.RecordFailure(clientIP)
 					gw.writeSigV4Error(w, r, awserrors.ErrorExpiredToken)

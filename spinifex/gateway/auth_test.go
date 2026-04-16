@@ -2050,10 +2050,39 @@ func TestSigV4Auth_NoExpiryAccepted(t *testing.T) {
 }
 
 func TestSigV4Auth_MalformedExpiresAtRejected(t *testing.T) {
-	// A stored ExpiresAt that fails to parse is a data-corruption signal;
-	// the key should be rejected as an invalid credential (not treated as
-	// "no expiry" which would be a fail-open).
-	handler := setupTTLTestHandler(t, "not-a-timestamp")
+	// A stored ExpiresAt that fails to parse is a server-side data-corruption
+	// signal, not a client failure: middleware must return 500 InternalError
+	// and MUST NOT rate-limit the caller (which would lock out a legitimate
+	// user for a server bug).
+	past := "not-a-timestamp"
+	encryptedSecret, err := handlers_iam.EncryptSecret(testSecretKey, testMasterKey)
+	if err != nil {
+		t.Fatalf("EncryptSecret: %v", err)
+	}
+	mockSvc := &mockIAMService{
+		masterKey: testMasterKey,
+		accessKeys: map[string]*handlers_iam.AccessKey{
+			testAccessKey: {
+				AccessKeyID:     testAccessKey,
+				SecretAccessKey: encryptedSecret,
+				UserName:        "root",
+				Status:          handlers_iam.AccessKeyStatusActive,
+				ExpiresAt:       past,
+			},
+		},
+	}
+	rl := NewAuthRateLimiter()
+	gw := &GatewayConfig{
+		DisableLogging: true,
+		Region:         testRegion,
+		IAMService:     mockSvc,
+		RateLimiter:    rl,
+	}
+	r := chi.NewRouter()
+	r.Use(gw.SigV4AuthMiddleware())
+	r.HandleFunc("/*", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("OK"))
+	})
 
 	authHeader, timestamp := generateTestAuthHeader(
 		"GET", "/", "", "",
@@ -2063,15 +2092,23 @@ func TestSigV4Auth_MalformedExpiresAtRejected(t *testing.T) {
 	req.Host = "localhost:9999"
 	req.Header.Set("Authorization", authHeader)
 	req.Header.Set("X-Amz-Date", timestamp)
+	req.RemoteAddr = "10.0.0.43:1234"
 
-	resp := doRequest(handler, req)
+	resp := doRequest(r, req)
 
-	if resp.StatusCode != http.StatusForbidden {
-		t.Errorf("Expected 403 for malformed ExpiresAt, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("Expected 500 for malformed ExpiresAt, got %d", resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), awserrors.ErrorInvalidClientTokenId) {
-		t.Errorf("Expected InvalidClientTokenId error, got: %s", string(body))
+	if !strings.Contains(string(body), awserrors.ErrorInternalError) {
+		t.Errorf("Expected InternalError response, got: %s", string(body))
+	}
+
+	rl.mu.RLock()
+	_, hasRecord := rl.records["10.0.0.43"]
+	rl.mu.RUnlock()
+	if hasRecord {
+		t.Errorf("Rate limiter must not record a failure for server-side data corruption")
 	}
 }
 
@@ -2134,5 +2171,90 @@ func TestSigV4Auth_ExpiredKeyRecordsRateLimitFailure(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("Expected 1 recorded failure for 10.0.0.42, got %d", count)
+	}
+}
+
+// TestSigV4Auth_ExpiresAtTimezoneOffset verifies that an RFC3339 timestamp
+// with a non-UTC offset (e.g. +10:00) is compared correctly against wall clock.
+func TestSigV4Auth_ExpiresAtTimezoneOffset(t *testing.T) {
+	tests := []struct {
+		name       string
+		expiresAt  string
+		wantStatus int
+	}{
+		{
+			name:       "future expiry with +10:00 offset accepted",
+			expiresAt:  time.Now().Add(1 * time.Hour).In(time.FixedZone("AEST", 10*3600)).Format(time.RFC3339),
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "past expiry with +10:00 offset rejected",
+			expiresAt:  time.Now().Add(-1 * time.Hour).In(time.FixedZone("AEST", 10*3600)).Format(time.RFC3339),
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "future expiry with -05:00 offset accepted",
+			expiresAt:  time.Now().Add(1 * time.Hour).In(time.FixedZone("EST", -5*3600)).Format(time.RFC3339),
+			wantStatus: http.StatusOK,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := setupTTLTestHandler(t, tc.expiresAt)
+			authHeader, timestamp := generateTestAuthHeader(
+				"GET", "/", "", "",
+				testAccessKey, testSecretKey, testRegion, testService,
+			)
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Host = "localhost:9999"
+			req.Header.Set("Authorization", authHeader)
+			req.Header.Set("X-Amz-Date", timestamp)
+
+			resp := doRequest(handler, req)
+			if resp.StatusCode != tc.wantStatus {
+				body, _ := io.ReadAll(resp.Body)
+				t.Errorf("ExpiresAt=%q: expected status %d, got %d, body: %s",
+					tc.expiresAt, tc.wantStatus, resp.StatusCode, string(body))
+			}
+		})
+	}
+}
+
+// TestSigV4Auth_ExpiresAtBoundary pins the comparison operator. Because
+// time.RFC3339 has second precision, expiresAt == time.Now().Format(RFC3339)
+// parses back to the start of the current wall-clock second, which is at or
+// before "now" and therefore rejected — this guards against a future refactor
+// that swaps !Before for After (subtly different at the exact-equal boundary).
+func TestSigV4Auth_ExpiresAtBoundary(t *testing.T) {
+	tests := []struct {
+		name       string
+		offset     time.Duration
+		wantStatus int
+	}{
+		{name: "1 hour in past rejected", offset: -1 * time.Hour, wantStatus: http.StatusForbidden},
+		{name: "1 second in past rejected", offset: -1 * time.Second, wantStatus: http.StatusForbidden},
+		{name: "current second boundary rejected", offset: 0, wantStatus: http.StatusForbidden},
+		{name: "30 seconds in future accepted", offset: 30 * time.Second, wantStatus: http.StatusOK},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			expiresAt := time.Now().UTC().Add(tc.offset).Format(time.RFC3339)
+			handler := setupTTLTestHandler(t, expiresAt)
+			authHeader, timestamp := generateTestAuthHeader(
+				"GET", "/", "", "",
+				testAccessKey, testSecretKey, testRegion, testService,
+			)
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Host = "localhost:9999"
+			req.Header.Set("Authorization", authHeader)
+			req.Header.Set("X-Amz-Date", timestamp)
+
+			resp := doRequest(handler, req)
+			if resp.StatusCode != tc.wantStatus {
+				body, _ := io.ReadAll(resp.Body)
+				t.Errorf("offset=%v expiresAt=%q: expected status %d, got %d, body: %s",
+					tc.offset, expiresAt, tc.wantStatus, resp.StatusCode, string(body))
+			}
+		})
 	}
 }

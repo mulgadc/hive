@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/iam"
@@ -313,4 +314,83 @@ func TestIAMRequest_ValidationError(t *testing.T) {
 
 	body, _ := io.ReadAll(resp.Body)
 	assert.Contains(t, string(body), "MissingParameter")
+}
+
+// TestIAMRequest_CreateAccessKey_ExpiresAtPropagates verifies that the Spinifex
+// extension query parameter "ExpiresAt" is lifted out of the raw body and
+// forwarded to the service layer. Without this test, a refactor back to the
+// generic iamHandler would silently drop the TTL feature.
+func TestIAMRequest_CreateAccessKey_ExpiresAtPropagates(t *testing.T) {
+	var gotExpiresAt string
+	svc := &flexMockIAMService{
+		createAccessKeyFn: func(_ string, input *iam.CreateAccessKeyInput, expiresAt string) (*iam.CreateAccessKeyOutput, error) {
+			gotExpiresAt = expiresAt
+			return &iam.CreateAccessKeyOutput{
+				AccessKey: &iam.AccessKey{
+					AccessKeyId:     aws.String("AKIATEST"),
+					SecretAccessKey: aws.String("secret"),
+					UserName:        input.UserName,
+					Status:          aws.String("Active"),
+				},
+			}, nil
+		},
+	}
+	handler := setupIAMRequestHandler(svc)
+
+	// Note: "+" in the offset must be URL-encoded as "%2B" to survive form decoding.
+	req := httptest.NewRequest(http.MethodPost, "/",
+		strings.NewReader("Action=CreateAccessKey&UserName=alice&ExpiresAt=2030-01-01T00:00:00%2B10:00"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp := doRequest(handler, req)
+	assert.Equal(t, 200, resp.StatusCode)
+	assert.Equal(t, "2030-01-01T00:00:00+10:00", gotExpiresAt,
+		"service must receive the exact ExpiresAt string from the request body")
+}
+
+func TestIAMRequest_UpdateAccessKey_ExpiresAtPropagates(t *testing.T) {
+	var gotExpiresAt string
+	svc := &flexMockIAMService{
+		updateAccessKeyFn: func(_ string, _ *iam.UpdateAccessKeyInput, expiresAt string) (*iam.UpdateAccessKeyOutput, error) {
+			gotExpiresAt = expiresAt
+			return &iam.UpdateAccessKeyOutput{}, nil
+		},
+	}
+	handler := setupIAMRequestHandler(svc)
+
+	req := httptest.NewRequest(http.MethodPost, "/",
+		strings.NewReader("Action=UpdateAccessKey&AccessKeyId=AKIATEST&Status=Active&ExpiresAt=2030-01-01T00:00:00Z"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp := doRequest(handler, req)
+	assert.Equal(t, 200, resp.StatusCode)
+	assert.Equal(t, "2030-01-01T00:00:00Z", gotExpiresAt)
+}
+
+func TestIAMRequest_CreateAccessKey_MalformedExpiresAtRejected(t *testing.T) {
+	// The gateway forwards the raw ExpiresAt to the service; the service
+	// validates RFC3339 and returns IAMInvalidInput. Here we simulate that
+	// validator in the mock to verify the gateway correctly propagates the
+	// error as a 400 response.
+	svc := &flexMockIAMService{
+		createAccessKeyFn: func(_ string, _ *iam.CreateAccessKeyInput, expiresAt string) (*iam.CreateAccessKeyOutput, error) {
+			if expiresAt != "" {
+				if _, err := time.Parse(time.RFC3339, expiresAt); err != nil {
+					return nil, errors.New(awserrors.ErrorIAMInvalidInput)
+				}
+			}
+			return &iam.CreateAccessKeyOutput{}, nil
+		},
+	}
+	handler := setupIAMRequestHandler(svc)
+
+	req := httptest.NewRequest(http.MethodPost, "/",
+		strings.NewReader("Action=CreateAccessKey&UserName=alice&ExpiresAt=not-a-timestamp"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp := doRequest(handler, req)
+	assert.Equal(t, 400, resp.StatusCode)
+
+	body, _ := io.ReadAll(resp.Body)
+	assert.Contains(t, string(body), awserrors.ErrorIAMInvalidInput)
 }

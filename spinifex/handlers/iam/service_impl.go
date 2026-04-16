@@ -391,7 +391,7 @@ func (s *IAMServiceImpl) CreateAccessKey(accountID string, input *iam.CreateAcce
 		return nil, fmt.Errorf("update user: %w", err)
 	}
 
-	slog.Info("IAM access key created", "accountID", accountID, "userName", userName, "accessKeyID", accessKeyID)
+	slog.Info("IAM access key created", "accountID", accountID, "userName", userName, "accessKeyID", accessKeyID, "expiresAt", ak.ExpiresAt)
 
 	createdAt := parseCreatedAt(ak.CreatedAt)
 	return &iam.CreateAccessKeyOutput{
