@@ -136,7 +136,7 @@ echo "Cluster formation complete — all configs generated"
 
 # Disable monitoring on non-primary nodes to avoid port conflict on 127.0.0.1:8222
 for i in 2 3; do
-    sed -i '/^http:/d' "$HOME/node${i}/config/nats/nats.conf"
+    sed -i '/^http:\s*127\.0\.0\.1:8222/d' "$HOME/node${i}/config/nats/nats.conf"
     echo "  Stripped NATS monitoring from node$i (avoids 127.0.0.1:8222 conflict)"
 done
 

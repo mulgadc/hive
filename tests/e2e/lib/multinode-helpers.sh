@@ -646,7 +646,7 @@ verify_all_services_down() {
         fi
 
         # Check NATS (client port — monitoring is localhost-only)
-        if nc -z -w 2 "${node_ip}" 4222 2>/dev/null; then
+        if nc -z -w 2 "${node_ip}" ${NATS_CLIENT_PORT} 2>/dev/null; then
             echo "  Node$i: NATS still responding"
             all_down=false
         fi
