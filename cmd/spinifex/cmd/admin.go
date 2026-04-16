@@ -286,6 +286,7 @@ func init() {
 	imagesImportCmd.Flags().String("platform", "Linux/UNIX", "Specified platform (e.g Linux/UNIX, Windows)")
 	imagesImportCmd.Flags().StringSlice("tag", nil, "Tag to apply to the imported AMI as key=value (repeatable; e.g. --tag spinifex:managed-by=elbv2)")
 	imagesImportCmd.Flags().Bool("force", false, "Force command execution (overwrites existing files)")
+	imagesImportCmd.Flags().Bool("skip-verify", false, "Skip catalog-image checksum verification (INSECURE; operator assumes integrity responsibility)")
 }
 
 func runimagesImportCmd(cmd *cobra.Command, args []string) {
@@ -297,6 +298,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 
 	cfgFile, _ := cmd.Flags().GetString("config")
 	forceCmd, _ := cmd.Flags().GetBool("force")
+	skipVerify, _ := cmd.Flags().GetBool("skip-verify")
 	ostmpDir, _ := cmd.Flags().GetString("tmp-dir")
 
 	// Use default config path
@@ -399,15 +401,11 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("✅ Created config directory: %s\n", imagePath)
-
 	// Next, if the file is selected to download, fetch it, extract disk image, and save to path
 	if imageName != "" && localFile == "" {
 		// Download the file to the image path
 		filename := path.Base(image.URL)
 		imageFile = fmt.Sprintf("%s/%s", imagePath, filename)
-
-		fmt.Printf("Downloading image %s to %s\n", image.URL, imageFile)
 
 		// If image path exists, skip
 		if admin.FileExists(imageFile) && !forceCmd {
@@ -421,8 +419,23 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 			}
 		}
 
-		// Update image file path for later extraction
-		//imagePath = imageFilePath
+		// Verify before extract: the catalog digest is of the artifact as it
+		// sits on the mirror (.tar.xz/.img/.raw). Also catches a poisoned
+		// cache on the re-run path — failure leaves the file on disk so the
+		// operator can inspect; recover with --force.
+		if skipVerify {
+			fmt.Fprintf(os.Stderr, "⚠️  --skip-verify set: checksum verification skipped for %s\n", imageName)
+		} else {
+			if image.Checksum == "" || image.ChecksumType == "" {
+				fmt.Fprintf(os.Stderr, "Catalog entry %q is missing Checksum/ChecksumType; refusing import.\n", imageName)
+				os.Exit(1)
+			}
+			if err := utils.VerifyImageChecksum(imageFile, image.Checksum, image.ChecksumType); err != nil {
+				printChecksumError(os.Stderr, imageFile, imageName, image, err)
+				os.Exit(1)
+			}
+			fmt.Printf("✅ Verified image checksum (%s)\n", image.ChecksumType)
+		}
 	}
 
 	// Next, validate if the image is raw, tar, gz, xv, etc. We need to upload the raw image
@@ -434,9 +447,6 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	}
 
 	extractedImagePath, err := utils.ExtractDiskImageFromFile(imageFile, imagePath)
-
-	fmt.Println("Extracted image to:", extractedImagePath)
-
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not extract image: %v\n", err)
 		os.Exit(1)
@@ -2133,4 +2143,18 @@ func installCACertificate(caPemPath string) {
 	}
 
 	fmt.Printf("✅ CA certificate installed to system trust store\n")
+}
+
+// printChecksumError writes the failure, the source URL (printed for every
+// error kind so 404/non-HTTPS/size-cap failures tell the operator which URL
+// to investigate), and the exact --force recovery command. The cached file
+// is left in place: an implicit auto-delete would mutate state inside
+// "verify", and a tampered artifact is forensically useful intact.
+func printChecksumError(w io.Writer, imageFile, imageName string, image utils.Images, err error) {
+	fmt.Fprintf(w, "Image integrity verification failed: %v\n", err)
+	fmt.Fprintf(w, "  file:     %s\n", imageFile)
+	fmt.Fprintf(w, "  source:   %s\n", image.Checksum)
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "The cached file was left in place. To re-download and retry:")
+	fmt.Fprintf(w, "  spx admin images import --name %s --force\n", imageName)
 }
