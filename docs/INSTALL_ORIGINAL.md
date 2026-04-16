@@ -766,6 +766,20 @@ Start services on each node (in separate terminals or background):
 ./scripts/start-dev.sh ~/node3/
 ```
 
+**Note:** NATS monitoring (port 8222) is bound to `127.0.0.1` by default for security. When running multiple nodes on the same machine, only the first node can bind this port — nodes 2 and 3 will fail to start NATS. To fix this, edit each node's `nats.conf` to either bind monitoring to the node's unique IP or disable it:
+
+```bash
+# Option 1: Bind to node-specific IP
+sed -i 's|^http: 127.0.0.1:8222|http: 127.0.0.2:8222|' ~/node2/config/nats/nats.conf
+sed -i 's|^http: 127.0.0.1:8222|http: 127.0.0.3:8222|' ~/node3/config/nats/nats.conf
+
+# Option 2: Disable monitoring on nodes 2 and 3
+sed -i '/^http:/d' ~/node2/config/nats/nats.conf
+sed -i '/^http:/d' ~/node3/config/nats/nats.conf
+```
+
+This only applies to simulated mode — real multi-server deployments have one node per machine with no port conflict.
+
 ### Option B: Real Multi-Node (Physical Servers)
 
 For production or production-like deployments across multiple physical servers or VMs.
