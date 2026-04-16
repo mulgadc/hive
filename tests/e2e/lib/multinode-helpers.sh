@@ -779,10 +779,9 @@ init_leader_node() {
     # shellcheck disable=SC2086
     ./bin/spx admin init \
         --node node1 \
+        --nodes 3 \
         --bind "${NODE1_IP}" \
         --cluster-bind "${NODE1_IP}" \
-        --cluster-routes "${NODE1_IP}:${NATS_CLUSTER_PORT}" \
-        --predastore-nodes "${NODE1_IP},${NODE2_IP},${NODE3_IP}" \
         --port ${CLUSTER_PORT} \
         --region ap-southeast-2 \
         --az ap-southeast-2a \
@@ -827,12 +826,10 @@ join_follower_node() {
     # Remove old node directory
     rm -rf "$data_dir/"
 
-    # Route to node1 (seed node) - other nodes discovered via NATS gossip
     ./bin/spx admin join \
         --node "node$node_num" \
         --bind "$node_ip" \
         --cluster-bind "$node_ip" \
-        --cluster-routes "${NODE1_IP}:${NATS_CLUSTER_PORT}" \
         --host "${NODE1_IP}:${CLUSTER_PORT}" \
         --token "$JOIN_TOKEN" \
         --data-dir "$data_dir/" \

@@ -17,7 +17,7 @@ Environment=SPINIFEX_CONFIG_PATH=/etc/spinifex/nats/nats.conf
 NoNewPrivileges=yes
 ProtectSystem=strict
 PrivateDevices=yes
-ReadOnlyPaths=/etc/spinifex/nats
+ReadOnlyPaths=/etc/spinifex/nats /etc/spinifex/server.pem /etc/spinifex/server.key /etc/spinifex/ca.pem
 ReadWritePaths=/var/lib/spinifex/nats /var/log/spinifex
 
 # Hardening

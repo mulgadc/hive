@@ -9,6 +9,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/mulgadc/spinifex/spinifex/admin"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -34,6 +35,14 @@ func TestRenderedConfig_EnforcesAuth(t *testing.T) {
 	tmpDir := t.TempDir()
 	confPath := filepath.Join(tmpDir, "nats.conf")
 
+	// Generate test CA and server certs for TLS.
+	caCertPath := filepath.Join(tmpDir, "ca.pem")
+	caKeyPath := filepath.Join(tmpDir, "ca.key")
+	require.NoError(t, admin.GenerateCACert(caCertPath, caKeyPath))
+	serverCertPath := filepath.Join(tmpDir, "server.pem")
+	serverKeyPath := filepath.Join(tmpDir, "server.key")
+	require.NoError(t, admin.GenerateSignedCert(serverCertPath, serverKeyPath, caCertPath, caKeyPath, "127.0.0.1"))
+
 	// Read and render the production template.
 	raw, err := os.ReadFile(templatePath(t))
 	require.NoError(t, err)
@@ -50,6 +59,7 @@ func TestRenderedConfig_EnforcesAuth(t *testing.T) {
 		"NatsToken": token,
 		"DataDir":   tmpDir,
 		"LogDir":    tmpDir,
+		"ConfigDir": tmpDir,
 	})
 	f.Close()
 	require.NoError(t, err)
@@ -70,21 +80,29 @@ func TestRenderedConfig_EnforcesAuth(t *testing.T) {
 	require.True(t, ns.ReadyForConnections(5*time.Second))
 	t.Cleanup(func() { ns.Shutdown() })
 
+	// Build TLS option using the test CA cert for client connections.
+	tlsOpt := nats.RootCAs(caCertPath)
+
 	t.Run("no token rejected", func(t *testing.T) {
-		_, err := nats.Connect(ns.ClientURL(), nats.MaxReconnects(0))
+		_, err := nats.Connect(ns.ClientURL(), tlsOpt, nats.MaxReconnects(0))
 		assert.Error(t, err, "unauthenticated connection should be rejected")
 	})
 
 	t.Run("wrong token rejected", func(t *testing.T) {
-		_, err := nats.Connect(ns.ClientURL(), nats.Token("wrong-token"), nats.MaxReconnects(0))
+		_, err := nats.Connect(ns.ClientURL(), tlsOpt, nats.Token("wrong-token"), nats.MaxReconnects(0))
 		assert.Error(t, err, "wrong token should be rejected")
 	})
 
 	t.Run("correct token accepted", func(t *testing.T) {
-		nc, err := nats.Connect(ns.ClientURL(), nats.Token(token), nats.MaxReconnects(0))
+		nc, err := nats.Connect(ns.ClientURL(), tlsOpt, nats.Token(token), nats.MaxReconnects(0))
 		require.NoError(t, err, "correct token should be accepted")
 		defer nc.Close()
 		assert.True(t, nc.IsConnected())
+	})
+
+	t.Run("plaintext rejected", func(t *testing.T) {
+		_, err := nats.Connect(ns.ClientURL(), nats.Token(token), nats.MaxReconnects(0))
+		assert.Error(t, err, "plaintext connection should be rejected when TLS is enabled")
 	})
 }
 
@@ -98,6 +116,6 @@ func TestRenderedConfig_HasMigrationVersionMarker(t *testing.T) {
 	require.NoError(t, err)
 
 	firstLine := strings.SplitN(string(raw), "\n", 2)[0]
-	assert.Equal(t, "# spinifex-config-version: 2", firstLine,
+	assert.Equal(t, "# spinifex-config-version: 3", firstLine,
 		"nats.conf template must start with the current migration version marker")
 }

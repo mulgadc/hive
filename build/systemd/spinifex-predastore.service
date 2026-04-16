@@ -22,7 +22,7 @@ Environment=SPINIFEX_PREDASTORE_TLS_KEY=/etc/spinifex/server.key
 NoNewPrivileges=yes
 ProtectSystem=strict
 PrivateDevices=yes
-ReadOnlyPaths=/etc/spinifex/predastore /etc/spinifex/spinifex.toml /etc/spinifex/master.key /etc/spinifex/server.pem /etc/spinifex/server.key
+ReadOnlyPaths=/etc/spinifex/predastore /etc/spinifex/spinifex.toml /etc/spinifex/master.key /etc/spinifex/server.pem /etc/spinifex/server.key /etc/spinifex/ca.pem
 ReadWritePaths=/var/lib/spinifex/predastore /var/log/spinifex
 
 # Hardening

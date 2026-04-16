@@ -66,7 +66,7 @@ trap 'rm -rf "$TMPDIR"' EXIT
 # Only non-test .go files that were added or modified.
 # -M enables rename detection so file splits/moves only count truly changed lines.
 # -C enables copy detection for the same reason (file split = partial copy).
-git diff "${BASE_REF}" HEAD --unified=0 -M -C --diff-filter=AM -- '*.go' ':!*_test.go' | awk '
+git diff "${BASE_REF}" HEAD --unified=0 -M -C --diff-filter=AM -- '*.go' ':!*_test.go' ':!spinifex/migrate/*' | awk '
     /^\+\+\+ / {
         file = substr($2, 3)
         next
