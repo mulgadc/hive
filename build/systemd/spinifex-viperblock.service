@@ -22,7 +22,6 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 PrivateDevices=yes
 ReadOnlyPaths=/etc/spinifex/spinifex.toml /etc/spinifex/systemd.env
-RuntimeDirectory=spinifex spinifex/nbd
 ReadWritePaths=/var/lib/spinifex/viperblock /var/log/spinifex /run/spinifex/nbd
 
 # Hardening
