@@ -532,7 +532,7 @@ func (m *MockOVNClient) SetPortGroupPorts(_ context.Context, name string, ports 
 
 // ACLs
 
-func (m *MockOVNClient) AddACL(_ context.Context, portGroupName string, direction string, priority int, match string, action string) error {
+func (m *MockOVNClient) AddACL(_ context.Context, portGroupName string, spec ACLSpec) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	pg, exists := m.portGroups[portGroupName]
@@ -541,10 +541,19 @@ func (m *MockOVNClient) AddACL(_ context.Context, portGroupName string, directio
 	}
 	acl := &nbdb.ACL{
 		UUID:      utils.GenerateResourceID("acl"),
-		Direction: direction,
-		Priority:  priority,
-		Match:     match,
-		Action:    action,
+		Direction: spec.Direction,
+		Priority:  spec.Priority,
+		Match:     spec.Match,
+		Action:    spec.Action,
+		Log:       spec.Log,
+	}
+	if spec.Name != "" {
+		name := spec.Name
+		acl.Name = &name
+	}
+	if spec.Severity != "" {
+		severity := spec.Severity
+		acl.Severity = &severity
 	}
 	m.acls[acl.UUID] = acl
 	pg.ACLs = append(pg.ACLs, acl.UUID)

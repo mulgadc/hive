@@ -65,14 +65,11 @@ If your WAN interface is already a bridge (e.g. `br-wan`), setup-ovn.sh auto-det
 ./scripts/setup-ovn.sh --management
 ```
 
-If your WAN is a physical NIC, choose one:
+If your WAN is a physical NIC:
 
 ```bash
 # Dedicated WAN NIC (not your SSH connection):
 ./scripts/setup-ovn.sh --management --wan-bridge=br-wan --wan-iface=eth1
-
-# Single-NIC host (SSH-safe macvlan):
-./scripts/setup-ovn.sh --management --macvlan --wan-iface=enp0s3
 ```
 
 ## Step 4. Development initialisation

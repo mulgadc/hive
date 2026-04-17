@@ -712,6 +712,67 @@ listen: 0.0.0.0:4222
 	assert.Equal(t, 2, v)
 }
 
+// --- NATS monitoring localhost migration tests ---
+
+func TestNATSMonitorLocalhost(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			"BindIP 0.0.0.0",
+			"# spinifex-config-version: 1\n# NATS\nhttp: 0.0.0.0:8222\n",
+			"http: 127.0.0.1:8222",
+		},
+		{
+			"BindIP specific IP",
+			"# spinifex-config-version: 1\n# NATS\nhttp: 10.0.0.1:8222\n",
+			"http: 127.0.0.1:8222",
+		},
+		{
+			"no BindIP (http_port)",
+			"# spinifex-config-version: 1\n# NATS\nhttp_port: 8222\n",
+			"http: 127.0.0.1:8222",
+		},
+		{
+			"already migrated (idempotent)",
+			"# spinifex-config-version: 1\n# NATS\nhttp: 127.0.0.1:8222\n",
+			"http: 127.0.0.1:8222",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			natsDir := filepath.Join(dir, "nats")
+			require.NoError(t, os.MkdirAll(natsDir, 0o755))
+			confPath := filepath.Join(natsDir, "nats.conf")
+			require.NoError(t, os.WriteFile(confPath, []byte(tt.input), 0o640))
+
+			r := NewRegistry()
+			r.RegisterConfigTarget("nats.conf", "nats/nats.conf", &NATSConfVersionReader{})
+			r.RegisterConfig("nats.conf", ConfigMigration{
+				FromVersion: 1,
+				ToVersion:   2,
+				Description: "Bind NATS monitoring to localhost only",
+				Run:         DefaultRegistry.configMigrations["nats.conf"][1].Run,
+			})
+
+			err := r.RunConfig("nats.conf", dir, dir)
+			require.NoError(t, err)
+
+			data, err := os.ReadFile(confPath)
+			require.NoError(t, err)
+			assert.Contains(t, string(data), tt.expected)
+			// Verify no leftover non-localhost monitoring lines
+			assert.NotContains(t, string(data), "0.0.0.0:8222")
+			assert.NotContains(t, string(data), "10.0.0.1:8222")
+			assert.NotContains(t, string(data), "http_port:")
+		})
+	}
+}
+
 func TestRunConfig_RejectsChainGap(t *testing.T) {
 	dir := t.TempDir()
 	natsDir := filepath.Join(dir, "nats")

@@ -83,7 +83,7 @@ jobs:
           SSH_KEY=$(echo "$INVENTORY" | jq -r '.ssh_key_path')
           SSH_KEY="${SSH_KEY/#\~/$HOME}"
           ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" tf-user@${WAN_IP} \
-            'cd ~/e2e-tests && ./run-e2e.sh && ./run-cert-e2e.sh  && ./run-lb-e2e.sh'
+            "cd ~/e2e-tests && ./run-e2e.sh && ./run-cert-e2e.sh && ENDPOINT=https://${WAN_IP}:9999 ./run-lb-e2e.sh"
 
       - name: Teardown
         if: always()

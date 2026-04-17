@@ -23,6 +23,7 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -252,11 +253,12 @@ func init() {
 	adminInitCmd.Flags().Int("nodes", 3, "Number of nodes to expect for cluster")
 	adminInitCmd.Flags().String("host", "", "Leader node to join (if not specified, tries multicast discovery)")
 	adminInitCmd.Flags().Int("port", 4432, "Port to bind cluster services on")
-	adminInitCmd.Flags().String("bind", "0.0.0.0", "IP address to bind services to (e.g., 10.11.12.1 for multi-node)")
+	adminInitCmd.Flags().String("bind", "127.0.0.1", "IP address to bind services to (e.g., 10.11.12.1 for multi-node)")
 	adminInitCmd.Flags().String("cluster-bind", "", "IP address to bind NATS cluster services to (e.g., 10.11.12.1 for multi-node)")
 	adminInitCmd.Flags().String("cluster-routes", "", "NATS cluster hosts for routing specify multiple with comma (e.g., 10.11.12.1:4248,10.11.12.2:4248 for multi-node)")
 	adminInitCmd.Flags().String("predastore-nodes", "", "Comma-separated IPs for multi-node Predastore cluster (e.g., 10.11.12.1,10.11.12.2,10.11.12.3). Requires >= 3 nodes.")
 	adminInitCmd.Flags().String("formation-timeout", "10m", "Timeout for cluster formation (e.g., 5m, 30s)")
+	adminInitCmd.Flags().String("token-ttl", "30m", "Join token validity duration (e.g. 30m, 1h, 2h)")
 	adminInitCmd.Flags().String("cluster-name", "spinifex", "NATS cluster name")
 	adminInitCmd.Flags().Bool("no-telemetry", false, "Disable telemetry metrics sent during init (default: enabled)")
 	adminInitCmd.Flags().StringSlice("services", nil, "Services this node runs (default: all). Valid: nats,predastore,viperblock,daemon,awsgw,ui")
@@ -281,10 +283,12 @@ func init() {
 	adminJoinCmd.Flags().String("bind", "0.0.0.0", "IP address to bind services to (e.g., 10.11.12.2 for multi-node on single host)")
 	adminJoinCmd.Flags().String("cluster-bind", "", "IP address to bind NATS cluster services to (e.g., 10.11.12.1 for multi-node)")
 	adminJoinCmd.Flags().String("cluster-routes", "", "NATS cluster hosts for routing specify multiple with comma (e.g., 10.11.12.1:4248,10.11.12.2:4248 for multi-node)")
+	adminJoinCmd.Flags().String("token", "", "Join token from the init node (required)")
 	adminJoinCmd.Flags().StringSlice("services", nil, "Services this node runs (default: all)")
 	adminJoinCmd.Flags().Bool("no-telemetry", false, "Disable telemetry metrics sent during join (default: enabled)")
 	adminJoinCmd.MarkFlagRequired("node")
 	adminJoinCmd.MarkFlagRequired("host")
+	adminJoinCmd.MarkFlagRequired("token")
 
 	imagesImportCmd.Flags().String("tmp-dir", os.TempDir(), "Temporary directory for image import processing")
 
@@ -296,6 +300,7 @@ func init() {
 	imagesImportCmd.Flags().String("platform", "Linux/UNIX", "Specified platform (e.g Linux/UNIX, Windows)")
 	imagesImportCmd.Flags().StringSlice("tag", nil, "Tag to apply to the imported AMI as key=value (repeatable; e.g. --tag spinifex:managed-by=elbv2)")
 	imagesImportCmd.Flags().Bool("force", false, "Force command execution (overwrites existing files)")
+	imagesImportCmd.Flags().Bool("skip-verify", false, "Skip catalog-image checksum verification (INSECURE; operator assumes integrity responsibility)")
 }
 
 func runimagesImportCmd(cmd *cobra.Command, args []string) {
@@ -307,6 +312,7 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 
 	cfgFile, _ := cmd.Flags().GetString("config")
 	forceCmd, _ := cmd.Flags().GetBool("force")
+	skipVerify, _ := cmd.Flags().GetBool("skip-verify")
 	ostmpDir, _ := cmd.Flags().GetString("tmp-dir")
 
 	// Use default config path
@@ -409,15 +415,11 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("✅ Created config directory: %s\n", imagePath)
-
 	// Next, if the file is selected to download, fetch it, extract disk image, and save to path
 	if imageName != "" && localFile == "" {
 		// Download the file to the image path
 		filename := path.Base(image.URL)
 		imageFile = fmt.Sprintf("%s/%s", imagePath, filename)
-
-		fmt.Printf("Downloading image %s to %s\n", image.URL, imageFile)
 
 		// If image path exists, skip
 		if admin.FileExists(imageFile) && !forceCmd {
@@ -431,8 +433,23 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 			}
 		}
 
-		// Update image file path for later extraction
-		//imagePath = imageFilePath
+		// Verify before extract: the catalog digest is of the artifact as it
+		// sits on the mirror (.tar.xz/.img/.raw). Also catches a poisoned
+		// cache on the re-run path — failure leaves the file on disk so the
+		// operator can inspect; recover with --force.
+		if skipVerify {
+			fmt.Fprintf(os.Stderr, "⚠️  --skip-verify set: checksum verification skipped for %s\n", imageName)
+		} else {
+			if image.Checksum == "" || image.ChecksumType == "" {
+				fmt.Fprintf(os.Stderr, "Catalog entry %q is missing Checksum/ChecksumType; refusing import.\n", imageName)
+				os.Exit(1)
+			}
+			if err := utils.VerifyImageChecksum(imageFile, image.Checksum, image.ChecksumType); err != nil {
+				printChecksumError(os.Stderr, imageFile, imageName, image, err)
+				os.Exit(1)
+			}
+			fmt.Printf("✅ Verified image checksum (%s)\n", image.ChecksumType)
+		}
 	}
 
 	// Next, validate if the image is raw, tar, gz, xv, etc. We need to upload the raw image
@@ -444,9 +461,6 @@ func runimagesImportCmd(cmd *cobra.Command, args []string) {
 	}
 
 	extractedImagePath, err := utils.ExtractDiskImageFromFile(imageFile, imagePath)
-
-	fmt.Println("Extracted image to:", extractedImagePath)
-
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not extract image: %v\n", err)
 		os.Exit(1)
@@ -615,6 +629,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	}
 	predastoreNodesStr, _ := cmd.Flags().GetString("predastore-nodes")
 	formationTimeoutStr, _ := cmd.Flags().GetString("formation-timeout")
+	tokenTTLStr, _ := cmd.Flags().GetString("token-ttl")
 	clusterName, _ := cmd.Flags().GetString("cluster-name")
 	services, _ := cmd.Flags().GetStringSlice("services")
 
@@ -873,7 +888,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	spxRoot = filepath.Clean(spxRoot)
 
 	// Determine if this is a multi-node formation
-	isMultiNode := nodes >= 2 && bindIP != "0.0.0.0"
+	isMultiNode := nodes >= 2 && bindIP != "0.0.0.0" && bindIP != "127.0.0.1"
 
 	if isMultiNode {
 		// Build cluster-wide network config for propagation to joining nodes
@@ -904,7 +919,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 
 		runAdminInitMultiNode(cmd, accessKey, secretKey, accountID, natsToken, clusterName,
 			configDir, spxRoot, certPath, region, az, node, bindIP, clusterBind,
-			port, nodes, formationTimeoutStr, services, networkConfig)
+			port, nodes, formationTimeoutStr, tokenTTLStr, services, networkConfig)
 		return
 	}
 
@@ -913,17 +928,10 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	// Create config files from embedded templates
 	fmt.Println("\n📝 Creating configuration files...")
 
-	// Create subdirectories
-	awsgwDir := filepath.Join(configDir, "awsgw")
-	predastoreDir := filepath.Join(configDir, "predastore")
-	natsDir := filepath.Join(configDir, "nats")
-	spinifexDir := filepath.Join(configDir, "spinifex")
-
-	for _, dir := range []string{awsgwDir, predastoreDir, natsDir, spinifexDir} {
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating directory %s: %v\n", dir, err)
-			os.Exit(1)
-		}
+	dirs, err := createConfigSubdirs(configDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating config subdirectories: %v\n", err)
+		os.Exit(1)
 	}
 
 	portStr := strconv.Itoa(port)
@@ -963,7 +971,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 			os.Exit(1)
 		}
 
-		predastorePath := filepath.Join(predastoreDir, "predastore.toml")
+		predastorePath := filepath.Join(dirs.Predastore, "predastore.toml")
 		if err := os.WriteFile(predastorePath, []byte(predastoreContent), 0600); err != nil {
 			fmt.Fprintf(os.Stderr, "Error writing predastore config: %v\n", err)
 			os.Exit(1)
@@ -1041,38 +1049,12 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	}
 
 	// Generate config files
-	configs := []admin.ConfigFile{
-		{Name: "spinifex.toml", Path: spinifexTomlPath, Template: spinifexTomlTemplate},
-		{Name: filepath.Join(awsgwDir, "awsgw.toml"), Path: filepath.Join(awsgwDir, "awsgw.toml"), Template: awsgwTomlTemplate},
-		{Name: filepath.Join(natsDir, "nats.conf"), Path: filepath.Join(natsDir, "nats.conf"), Template: natsConfTemplate},
-	}
-	// Skip template-based predastore.toml if multi-node was already generated
-	if predastoreNodesStr == "" {
-		configs = append(configs, admin.ConfigFile{
-			Name: filepath.Join(predastoreDir, "predastore.toml"), Path: filepath.Join(predastoreDir, "predastore.toml"), Template: predastoreTomlTemplate,
-		})
-	}
-
-	if err := admin.GenerateConfigFiles(configs, configSettings); err != nil {
+	if err := generateAndWriteConfigs(dirs, spinifexTomlPath, configSettings, predastoreNodesStr != ""); err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating configuration files: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Update ~/.aws/credentials and ~/.aws/config with admin credentials (not system)
-	fmt.Println("\n🔧 Configuring AWS credentials...")
-	if err := admin.SetupAWSCredentials(bootstrapResult.AdminAccessKey, bootstrapResult.AdminSecretKey, region, certPath, bindIP); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Could not update AWS credentials: %v\n", err)
-	} else {
-		fmt.Println("✅ AWS credentials configured")
-	}
-
-	admin.CreateServiceDirectories(spxRoot)
-
-	// In production layout (running as root), set per-service ownership on
-	// directories and shared config files (root:spinifex with correct modes).
-	if os.Getuid() == 0 {
-		admin.SetServiceOwnership()
-	}
+	finalizeNodeSetup(spxRoot, certPath, bootstrapResult.AdminAccessKey, bootstrapResult.AdminSecretKey, region, bindIP)
 
 	// Print success message
 	fmt.Println("\n🎉 Spinifex initialization complete!")
@@ -1088,10 +1070,26 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 // then generates configs with complete cluster topology.
 func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, natsToken, clusterName,
 	configDir, spxRoot, certPath, region, az, node, bindIP, clusterBind string,
-	port, expectedNodes int, formationTimeoutStr string, services []string, networkConfig *formation.NetworkConfig) {
+	port, expectedNodes int, formationTimeoutStr, tokenTTLStr string, services []string, networkConfig *formation.NetworkConfig) {
 	formationTimeout, err := time.ParseDuration(formationTimeoutStr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error: Invalid --formation-timeout: %v\n", err)
+		os.Exit(1)
+	}
+
+	tokenTTL, err := time.ParseDuration(tokenTTLStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error: Invalid --token-ttl: %v\n", err)
+		os.Exit(1)
+	}
+	if tokenTTL < formationTimeout+1*time.Minute {
+		fmt.Fprintf(os.Stderr, "❌ Error: --token-ttl (%s) must be >= --formation-timeout + 1m (%s)\n", tokenTTL, formationTimeout+1*time.Minute)
+		os.Exit(1)
+	}
+
+	joinToken, err := formation.GenerateJoinToken()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error generating join token: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -1133,7 +1131,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		AdminSecretKey: bootstrapResult.AdminSecretKey,
 	}
 
-	fs := formation.NewFormationServer(expectedNodes, creds, string(caCertData), string(caKeyData), networkConfig)
+	fs := formation.NewFormationServer(expectedNodes, creds, string(caCertData), string(caKeyData), networkConfig, joinToken, tokenTTL)
 
 	// Include master key in formation server for distribution to joining nodes
 	fs.SetMasterKey(base64.StdEncoding.EncodeToString(masterKey))
@@ -1152,6 +1150,13 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		os.Exit(1)
 	}
 
+	// Write join token to file for automated workflows
+	tokenPath := filepath.Join(configDir, "join-token")
+	if err := os.WriteFile(tokenPath, []byte(joinToken), 0600); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error writing join token: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Start formation server
 	formationAddr := fmt.Sprintf("%s:%d", bindIP, port)
 	if err := fs.Start(formationAddr); err != nil {
@@ -1161,12 +1166,15 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 	fmt.Printf("\n📡 Formation server started on %s\n", formationAddr)
 	fmt.Printf("   Waiting for %d more node(s) to join...\n", expectedNodes-1)
-	fmt.Printf("   Other nodes should run: spx admin join --host %s --node <name> --bind <ip>\n\n", formationAddr)
+	fmt.Printf("   Token expires in %s\n\n", tokenTTL)
+	fmt.Printf("   Other nodes should run:\n")
+	fmt.Printf("   spx admin join --host %s --token %s --node <name> --bind <ip>\n\n", formationAddr, joinToken)
 
 	// Wait for all nodes to register
 	if err := fs.WaitForCompletion(formationTimeout); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 		fs.Shutdown(context.Background())
+		os.Remove(tokenPath)
 		os.Exit(1)
 	}
 
@@ -1179,31 +1187,25 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 	fmt.Println("\n📝 Creating configuration files...")
 
-	// Create subdirectories
-	awsgwDir := filepath.Join(configDir, "awsgw")
-	predastoreDir := filepath.Join(configDir, "predastore")
-	natsDir := filepath.Join(configDir, "nats")
-	spinifexDir := filepath.Join(configDir, "spinifex")
-
-	for _, dir := range []string{awsgwDir, predastoreDir, natsDir, spinifexDir} {
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating directory %s: %v\n", dir, err)
-			os.Exit(1)
-		}
+	dirs, err := createConfigSubdirs(configDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating config subdirectories: %v\n", err)
+		os.Exit(1)
 	}
 
 	portStr := strconv.Itoa(port)
 
 	// Generate multi-node predastore config
 	var predastoreNodeID int
-	if len(predastoreNodes) >= 3 {
+	hasPredastoreConfig := len(predastoreNodes) >= 3
+	if hasPredastoreConfig {
 		predastoreContent, err := admin.GenerateMultiNodePredastoreConfig(predastoreMultiNodeTemplate, predastoreNodes, accessKey, secretKey, region, natsToken, configDir, bindIP)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error generating multi-node predastore config: %v\n", err)
 			os.Exit(1)
 		}
 
-		predastorePath := filepath.Join(predastoreDir, "predastore.toml")
+		predastorePath := filepath.Join(dirs.Predastore, "predastore.toml")
 		if err := os.WriteFile(predastorePath, []byte(predastoreContent), 0600); err != nil {
 			fmt.Fprintf(os.Stderr, "Error writing predastore config: %v\n", err)
 			os.Exit(1)
@@ -1242,67 +1244,16 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		OVNSBAddr: "tcp:127.0.0.1:6642",
 	}
 
-	// Apply cluster-wide network config to init node's config
 	if networkConfig != nil {
-		configSettings.ExternalMode = networkConfig.ExternalMode
-		configSettings.ExternalDHCP = networkConfig.ExternalDHCP
-		configSettings.PoolName = networkConfig.PoolName
-		configSettings.PoolSource = networkConfig.PoolSource
-		configSettings.PoolStart = networkConfig.PoolStart
-		configSettings.PoolEnd = networkConfig.PoolEnd
-		configSettings.PoolGateway = networkConfig.PoolGateway
-		configSettings.PoolGatewayIP = networkConfig.PoolGatewayIP
-		configSettings.PoolPrefixLen = networkConfig.PoolPrefixLen
-		configSettings.PoolDNSServers = networkConfig.PoolDNSServers
-
-		configSettings.BootstrapAccountId = networkConfig.BootstrapAccountId
-		configSettings.BootstrapVpcId = networkConfig.BootstrapVpcId
-		configSettings.BootstrapSubnetId = networkConfig.BootstrapSubnetId
-		configSettings.BootstrapIgwId = networkConfig.BootstrapIgwId
-		configSettings.BootstrapCidr = networkConfig.BootstrapCidr
-		configSettings.BootstrapSubnetCidr = networkConfig.BootstrapSubnetCidr
-
-		// Auto-detect local network topology for per-node config
-		detected, err := admin.DetectNetwork()
-		if err == nil && detected.WAN != nil {
-			configSettings.ExternalIface = detected.WAN.Name
-			configSettings.WanBridge = detectedWanBridge(detected)
-		}
+		applyNetworkConfig(&configSettings, networkConfig)
 	}
 
-	// Generate config files
-	configs := []admin.ConfigFile{
-		{Name: "spinifex.toml", Path: spinifexTomlPath, Template: spinifexTomlTemplate},
-		{Name: filepath.Join(awsgwDir, "awsgw.toml"), Path: filepath.Join(awsgwDir, "awsgw.toml"), Template: awsgwTomlTemplate},
-		{Name: filepath.Join(natsDir, "nats.conf"), Path: filepath.Join(natsDir, "nats.conf"), Template: natsConfTemplate},
-	}
-	// Skip template-based predastore.toml if multi-node was generated
-	if len(predastoreNodes) < 3 {
-		configs = append(configs, admin.ConfigFile{
-			Name: filepath.Join(predastoreDir, "predastore.toml"), Path: filepath.Join(predastoreDir, "predastore.toml"), Template: predastoreTomlTemplate,
-		})
-	}
-
-	if err := admin.GenerateConfigFiles(configs, configSettings); err != nil {
+	if err := generateAndWriteConfigs(dirs, spinifexTomlPath, configSettings, hasPredastoreConfig); err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating configuration files: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Update ~/.aws/credentials and ~/.aws/config with admin credentials (not system)
-	fmt.Println("\n🔧 Configuring AWS credentials...")
-	if err := admin.SetupAWSCredentials(bootstrapResult.AdminAccessKey, bootstrapResult.AdminSecretKey, region, certPath, bindIP); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Could not update AWS credentials: %v\n", err)
-	} else {
-		fmt.Println("✅ AWS credentials configured")
-	}
-
-	admin.CreateServiceDirectories(spxRoot)
-
-	// In production layout (running as root), set per-service ownership on
-	// directories and shared config files (root:spinifex with correct modes).
-	if os.Getuid() == 0 {
-		admin.SetServiceOwnership()
-	}
+	finalizeNodeSetup(spxRoot, certPath, bootstrapResult.AdminAccessKey, bootstrapResult.AdminSecretKey, region, bindIP)
 
 	// Keep formation server running briefly so joining nodes can fetch complete status
 	fmt.Println("\n⏳ Waiting for joining nodes to fetch cluster data...")
@@ -1310,6 +1261,9 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 
 	// Shutdown formation server
 	fs.Shutdown(context.Background())
+	if err := os.Remove(tokenPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		slog.Warn("Failed to remove join token file", "path", tokenPath, "error", err)
+	}
 
 	// Print cluster summary
 	fmt.Println("\n🎉 Cluster formation complete!")
@@ -1334,6 +1288,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 
 	node, _ := cmd.Flags().GetString("node")
 	leaderHost, _ := cmd.Flags().GetString("host")
+	joinToken, _ := cmd.Flags().GetString("token")
 	region, _ := cmd.Flags().GetString("region")
 	az, _ := cmd.Flags().GetString("az")
 	dataDir, _ := cmd.Flags().GetString("data-dir")
@@ -1416,7 +1371,15 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	}
 
 	joinURL := fmt.Sprintf("https://%s/formation/join", leaderHost)
-	resp, err := client.Post(joinURL, "application/json", bytes.NewBuffer(reqBody))
+	req, err := http.NewRequest(http.MethodPost, joinURL, bytes.NewBuffer(reqBody))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error creating join request: %v\n", err)
+		os.Exit(1)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+joinToken)
+
+	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Error connecting to formation server: %v\n", err)
 		fmt.Fprintf(os.Stderr, "Make sure the leader node has run 'spx admin init' and is accessible at %s\n", leaderHost)
@@ -1448,7 +1411,14 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	var statusResp formation.StatusResponse
 
 	for {
-		sResp, err := client.Get(statusURL)
+		statusReq, err := http.NewRequest(http.MethodGet, statusURL, nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Error creating status request: %v\n", err)
+			os.Exit(1)
+		}
+		statusReq.Header.Set("Authorization", "Bearer "+joinToken)
+
+		sResp, err := client.Do(statusReq)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "❌ Error polling formation status: %v\n", err)
 			os.Exit(1)
@@ -1461,8 +1431,17 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 			os.Exit(1)
 		}
 
+		if sResp.StatusCode == http.StatusUnauthorized {
+			fmt.Fprintf(os.Stderr, "❌ Error: join token rejected by formation server (expired or invalid)\n")
+			os.Exit(1)
+		}
+		if sResp.StatusCode != http.StatusOK {
+			fmt.Fprintf(os.Stderr, "❌ Error: unexpected status %d from formation server\n", sResp.StatusCode)
+			os.Exit(1)
+		}
+
 		if err := json.Unmarshal(sBody, &statusResp); err != nil {
-			fmt.Fprintf(os.Stderr, "Error parsing status response: %v\n", err)
+			fmt.Fprintf(os.Stderr, "❌ Error parsing status response: %v\n", err)
 			os.Exit(1)
 		}
 
@@ -1574,17 +1553,10 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 
 	fmt.Println("📝 Creating configuration files...")
 
-	// Create subdirectories
-	awsgwDir := filepath.Join(configDir, "awsgw")
-	predastoreDir := filepath.Join(configDir, "predastore")
-	natsDir := filepath.Join(configDir, "nats")
-	spinifexDir := filepath.Join(configDir, "spinifex")
-
-	for _, dir := range []string{awsgwDir, predastoreDir, natsDir, spinifexDir} {
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating directory %s: %v\n", dir, err)
-			os.Exit(1)
-		}
+	dirs, err := createConfigSubdirs(configDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating config subdirectories: %v\n", err)
+		os.Exit(1)
 	}
 
 	portStr := strconv.Itoa(port)
@@ -1600,7 +1572,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 			os.Exit(1)
 		}
 
-		predastorePath := filepath.Join(predastoreDir, "predastore.toml")
+		predastorePath := filepath.Join(dirs.Predastore, "predastore.toml")
 		if err := os.WriteFile(predastorePath, []byte(predastoreContent), 0600); err != nil {
 			fmt.Fprintf(os.Stderr, "Error writing predastore config: %v\n", err)
 			os.Exit(1)
@@ -1643,71 +1615,16 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		OVNSBAddr: fmt.Sprintf("tcp:%s:6642", leaderIP),
 	}
 
-	// Apply cluster-wide network config from leader
 	if statusResp.NetworkConfig != nil {
-		nc := statusResp.NetworkConfig
-		configSettings.ExternalMode = nc.ExternalMode
-		configSettings.ExternalDHCP = nc.ExternalDHCP
-		configSettings.PoolName = nc.PoolName
-		configSettings.PoolSource = nc.PoolSource
-		configSettings.PoolStart = nc.PoolStart
-		configSettings.PoolEnd = nc.PoolEnd
-		configSettings.PoolGateway = nc.PoolGateway
-		configSettings.PoolGatewayIP = nc.PoolGatewayIP
-		configSettings.PoolPrefixLen = nc.PoolPrefixLen
-		configSettings.PoolDNSServers = nc.PoolDNSServers
-
-		configSettings.BootstrapAccountId = nc.BootstrapAccountId
-		configSettings.BootstrapVpcId = nc.BootstrapVpcId
-		configSettings.BootstrapSubnetId = nc.BootstrapSubnetId
-		configSettings.BootstrapIgwId = nc.BootstrapIgwId
-		configSettings.BootstrapCidr = nc.BootstrapCidr
-		configSettings.BootstrapSubnetCidr = nc.BootstrapSubnetCidr
-
-		// Auto-detect local network topology for per-node config
-		if nc.ExternalMode != "" {
-			detected, err := admin.DetectNetwork()
-			if err == nil && detected.WAN != nil {
-				configSettings.ExternalIface = detected.WAN.Name
-				configSettings.WanBridge = detectedWanBridge(detected)
-			}
-		}
+		applyNetworkConfig(&configSettings, statusResp.NetworkConfig)
 	}
 
-	// Generate config files
-	configs := []admin.ConfigFile{
-		{Name: "spinifex.toml", Path: spinifexTomlPath, Template: spinifexTomlTemplate},
-		{Name: filepath.Join(awsgwDir, "awsgw.toml"), Path: filepath.Join(awsgwDir, "awsgw.toml"), Template: awsgwTomlTemplate},
-		{Name: filepath.Join(natsDir, "nats.conf"), Path: filepath.Join(natsDir, "nats.conf"), Template: natsConfTemplate},
-	}
-	// Skip template-based predastore.toml if multi-node was generated
-	if !hasPredastoreConfig {
-		configs = append(configs, admin.ConfigFile{
-			Name: filepath.Join(predastoreDir, "predastore.toml"), Path: filepath.Join(predastoreDir, "predastore.toml"), Template: predastoreTomlTemplate,
-		})
-	}
-
-	err = admin.GenerateConfigFiles(configs, configSettings)
-	if err != nil {
+	if err := generateAndWriteConfigs(dirs, spinifexTomlPath, configSettings, hasPredastoreConfig); err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating configuration files: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Update ~/.aws/credentials and ~/.aws/config with admin credentials (not system)
-	fmt.Println("\n🔧 Configuring AWS credentials...")
-	if err := admin.SetupAWSCredentials(creds.AdminAccessKey, creds.AdminSecretKey, creds.Region, caCertPath, bindIP); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Could not update AWS credentials: %v\n", err)
-	} else {
-		fmt.Println("✅ AWS credentials configured")
-	}
-
-	admin.CreateServiceDirectories(dataDir)
-
-	// In production layout (running as root), set per-service ownership on
-	// directories and shared config files (root:spinifex with correct modes).
-	if os.Getuid() == 0 {
-		admin.SetServiceOwnership()
-	}
+	finalizeNodeSetup(dataDir, caCertPath, creds.AdminAccessKey, creds.AdminSecretKey, creds.Region, bindIP)
 
 	// Print cluster summary
 	fmt.Println("\n🎉 Node successfully joined cluster!")
@@ -1939,6 +1856,93 @@ func runCertRenew(cmd *cobra.Command, _ []string) {
 	fmt.Println("✅ Server certificate regenerated with current IPs and hostname")
 	fmt.Printf("   Certificate: %s\n", serverCertPath)
 	fmt.Println("\n⚠️  Restart awsgw and daemon services to pick up the new certificate.")
+}
+
+// configDirs holds the paths to config subdirectories created by createConfigSubdirs.
+type configDirs struct {
+	AWSGW      string
+	Predastore string
+	NATS       string
+	Spinifex   string
+}
+
+// createConfigSubdirs creates the standard config subdirectories under configDir.
+func createConfigSubdirs(configDir string) (configDirs, error) {
+	dirs := configDirs{
+		AWSGW:      filepath.Join(configDir, "awsgw"),
+		Predastore: filepath.Join(configDir, "predastore"),
+		NATS:       filepath.Join(configDir, "nats"),
+		Spinifex:   filepath.Join(configDir, "spinifex"),
+	}
+	for _, dir := range []string{dirs.AWSGW, dirs.Predastore, dirs.NATS, dirs.Spinifex} {
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return configDirs{}, fmt.Errorf("create directory %s: %w", dir, err)
+		}
+	}
+	return dirs, nil
+}
+
+// generateAndWriteConfigs renders the standard config files (spinifex.toml,
+// awsgw.toml, nats.conf, and optionally predastore.toml) from templates.
+func generateAndWriteConfigs(dirs configDirs, spinifexTomlPath string, settings admin.ConfigSettings, skipPredastore bool) error {
+	configs := []admin.ConfigFile{
+		{Name: "spinifex.toml", Path: spinifexTomlPath, Template: spinifexTomlTemplate},
+		{Name: filepath.Join(dirs.AWSGW, "awsgw.toml"), Path: filepath.Join(dirs.AWSGW, "awsgw.toml"), Template: awsgwTomlTemplate},
+		{Name: filepath.Join(dirs.NATS, "nats.conf"), Path: filepath.Join(dirs.NATS, "nats.conf"), Template: natsConfTemplate},
+	}
+	if !skipPredastore {
+		configs = append(configs, admin.ConfigFile{
+			Name: filepath.Join(dirs.Predastore, "predastore.toml"), Path: filepath.Join(dirs.Predastore, "predastore.toml"), Template: predastoreTomlTemplate,
+		})
+	}
+	return admin.GenerateConfigFiles(configs, settings)
+}
+
+// finalizeNodeSetup configures AWS credentials, creates service directories,
+// and sets ownership when running as root.
+func finalizeNodeSetup(dataDir, certPath, adminAccessKey, adminSecretKey, region, bindIP string) {
+	fmt.Println("\n🔧 Configuring AWS credentials...")
+	if err := admin.SetupAWSCredentials(adminAccessKey, adminSecretKey, region, certPath, bindIP); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Could not update AWS credentials: %v\n", err)
+	} else {
+		fmt.Println("✅ AWS credentials configured")
+	}
+
+	admin.CreateServiceDirectories(dataDir)
+
+	if os.Getuid() == 0 {
+		admin.SetServiceOwnership()
+	}
+}
+
+// applyNetworkConfig copies cluster-wide network settings from a formation
+// NetworkConfig into ConfigSettings and auto-detects the local WAN interface.
+func applyNetworkConfig(settings *admin.ConfigSettings, nc *formation.NetworkConfig) {
+	settings.ExternalMode = nc.ExternalMode
+	settings.ExternalDHCP = nc.ExternalDHCP
+	settings.PoolName = nc.PoolName
+	settings.PoolSource = nc.PoolSource
+	settings.PoolStart = nc.PoolStart
+	settings.PoolEnd = nc.PoolEnd
+	settings.PoolGateway = nc.PoolGateway
+	settings.PoolGatewayIP = nc.PoolGatewayIP
+	settings.PoolPrefixLen = nc.PoolPrefixLen
+	settings.PoolDNSServers = nc.PoolDNSServers
+
+	settings.BootstrapAccountId = nc.BootstrapAccountId
+	settings.BootstrapVpcId = nc.BootstrapVpcId
+	settings.BootstrapSubnetId = nc.BootstrapSubnetId
+	settings.BootstrapIgwId = nc.BootstrapIgwId
+	settings.BootstrapCidr = nc.BootstrapCidr
+	settings.BootstrapSubnetCidr = nc.BootstrapSubnetCidr
+
+	if nc.ExternalMode != "" {
+		detected, err := admin.DetectNetwork()
+		if err == nil && detected.WAN != nil {
+			settings.ExternalIface = detected.WAN.Name
+			settings.WanBridge = detectedWanBridge(detected)
+		}
+	}
 }
 
 // writeBootstrapResult holds the admin credentials so callers can
@@ -2336,4 +2340,18 @@ func resolveIfaceIP(iface string) string {
 		}
 	}
 	return ""
+}
+
+// printChecksumError writes the failure, the source URL (printed for every
+// error kind so 404/non-HTTPS/size-cap failures tell the operator which URL
+// to investigate), and the exact --force recovery command. The cached file
+// is left in place: an implicit auto-delete would mutate state inside
+// "verify", and a tampered artifact is forensically useful intact.
+func printChecksumError(w io.Writer, imageFile, imageName string, image utils.Images, err error) {
+	fmt.Fprintf(w, "Image integrity verification failed: %v\n", err)
+	fmt.Fprintf(w, "  file:     %s\n", imageFile)
+	fmt.Fprintf(w, "  source:   %s\n", image.Checksum)
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "The cached file was left in place. To re-download and retry:")
+	fmt.Fprintf(w, "  spx admin images import --name %s --force\n", imageName)
 }

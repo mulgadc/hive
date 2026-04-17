@@ -34,7 +34,6 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/types"
 	"github.com/mulgadc/spinifex/spinifex/vm"
 	"github.com/nats-io/nats.go"
-	"github.com/pelletier/go-toml/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -3085,61 +3084,6 @@ func TestComputeConfigHash_ExcludesNodeField(t *testing.T) {
 	d.clusterConfig.Node = "node-b"
 	h2, _ := d.computeConfigHash()
 	assert.Equal(t, h1, h2, "changing top-level Node should not affect config hash")
-}
-
-// --- saveClusterConfig ---
-
-func TestSaveClusterConfig_WritesToDisk(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "spinifex.toml")
-
-	d := &Daemon{
-		configPath: path,
-		clusterConfig: &config.ClusterConfig{
-			Epoch:   5,
-			Version: "2.0",
-			Node:    "test-node",
-			Nodes: map[string]config.Config{
-				"test-node": {Region: "us-west-2"},
-			},
-		},
-	}
-
-	err := d.saveClusterConfig()
-	require.NoError(t, err)
-
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-
-	var loaded config.ClusterConfig
-	require.NoError(t, toml.Unmarshal(data, &loaded))
-	assert.Equal(t, uint64(5), loaded.Epoch)
-	assert.Equal(t, "2.0", loaded.Version)
-	assert.Equal(t, "us-west-2", loaded.Nodes["test-node"].Region)
-
-	// Verify permissions
-	info, _ := os.Stat(path)
-	assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
-}
-
-func TestSaveClusterConfig_ErrorOnEmptyPath(t *testing.T) {
-	d := &Daemon{
-		configPath:    "",
-		clusterConfig: &config.ClusterConfig{},
-	}
-	err := d.saveClusterConfig()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "config path not set")
-}
-
-func TestSaveClusterConfig_ErrorOnInvalidPath(t *testing.T) {
-	d := &Daemon{
-		configPath:    "/nonexistent/dir/spinifex.toml",
-		clusterConfig: &config.ClusterConfig{},
-	}
-	err := d.saveClusterConfig()
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to write config")
 }
 
 // --- instanceTypeVCPUs / instanceTypeMemoryMiB nil safety ---

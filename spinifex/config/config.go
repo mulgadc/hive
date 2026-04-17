@@ -117,9 +117,10 @@ type DaemonConfig struct {
 
 // NATSConfig holds the NATS configuration
 type NATSConfig struct {
-	Host string  `json:"Host" mapstructure:"host"`
-	ACL  NATSACL `json:"ACL" mapstructure:"acl"`
-	Sub  NATSSub `json:"Sub" mapstructure:"sub"`
+	Host   string  `json:"Host" mapstructure:"host"`
+	CACert string  `json:"CACert" mapstructure:"cacert"`
+	ACL    NATSACL `json:"ACL" mapstructure:"acl"`
+	Sub    NATSSub `json:"Sub" mapstructure:"sub"`
 }
 
 // NATSACL holds the NATS ACL configuration

@@ -120,7 +120,7 @@ verify_nats_cluster() {
 
     # Check cluster info via monitoring endpoint on node1
     local cluster_info
-    cluster_info=$(curl -s "http://${NODE1_IP}:${NATS_MONITOR_PORT}/routez" 2>/dev/null) || {
+    cluster_info=$(curl -s "http://127.0.0.1:${NATS_MONITOR_PORT}/routez" 2>/dev/null) || {
         echo "  ERROR: Cannot reach NATS monitoring endpoint"
         return 1
     }
@@ -645,8 +645,8 @@ verify_all_services_down() {
             all_down=false
         fi
 
-        # Check NATS
-        if curl -s --connect-timeout 2 "http://${node_ip}:${NATS_MONITOR_PORT}" > /dev/null 2>&1; then
+        # Check NATS (client port — monitoring is localhost-only)
+        if nc -z -w 2 "${node_ip}" ${NATS_CLIENT_PORT} 2>/dev/null; then
             echo "  Node$i: NATS still responding"
             all_down=false
         fi
@@ -779,10 +779,9 @@ init_leader_node() {
     # shellcheck disable=SC2086
     ./bin/spx admin init \
         --node node1 \
+        --nodes 3 \
         --bind "${NODE1_IP}" \
         --cluster-bind "${NODE1_IP}" \
-        --cluster-routes "${NODE1_IP}:${NATS_CLUSTER_PORT}" \
-        --predastore-nodes "${NODE1_IP},${NODE2_IP},${NODE3_IP}" \
         --port ${CLUSTER_PORT} \
         --region ap-southeast-2 \
         --az ap-southeast-2a \
@@ -796,6 +795,16 @@ init_leader_node() {
     for i in $(seq 1 60); do
         if curl -sk "https://${NODE1_IP}:${CLUSTER_PORT}/formation/health" > /dev/null 2>&1; then
             echo "  Formation server is ready (PID: $LEADER_INIT_PID)"
+
+            # Read join token written by admin init
+            JOIN_TOKEN=$(cat "$HOME/node1/config/join-token")
+            if [ -z "$JOIN_TOKEN" ]; then
+                echo "  ERROR: Join token file is empty"
+                return 1
+            fi
+            echo "  Join token loaded"
+            export JOIN_TOKEN
+
             return 0
         fi
         sleep 1
@@ -817,13 +826,12 @@ join_follower_node() {
     # Remove old node directory
     rm -rf "$data_dir/"
 
-    # Route to node1 (seed node) - other nodes discovered via NATS gossip
     ./bin/spx admin join \
         --node "node$node_num" \
         --bind "$node_ip" \
         --cluster-bind "$node_ip" \
-        --cluster-routes "${NODE1_IP}:${NATS_CLUSTER_PORT}" \
         --host "${NODE1_IP}:${CLUSTER_PORT}" \
+        --token "$JOIN_TOKEN" \
         --data-dir "$data_dir/" \
         --config-dir "$data_dir/config/" \
         --region ap-southeast-2 \

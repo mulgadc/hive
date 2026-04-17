@@ -39,7 +39,26 @@ echo "Starting init node (127.0.0.1) and joining nodes (127.0.0.2, 127.0.0.3)...
 INIT_PID=$!
 
 # Wait for formation server to start
-sleep 2
+echo "Waiting for formation server..."
+for i in $(seq 1 30); do
+  if curl -sk "https://127.0.0.1:4432/formation/health" > /dev/null 2>&1; then
+    echo "Formation server ready"
+    break
+  fi
+  if [ "$i" -eq 30 ]; then
+    echo "ERROR: Formation server failed to start"
+    kill $INIT_PID 2>/dev/null || true
+    exit 1
+  fi
+  sleep 1
+done
+
+# Read join token
+JOIN_TOKEN=$(cat ~/node1/config/join-token)
+if [ -z "$JOIN_TOKEN" ]; then
+  echo "ERROR: Join token file is empty"
+  exit 1
+fi
 
 # Join nodes concurrently
 ./bin/spx admin join \
@@ -47,6 +66,7 @@ sleep 2
   --bind 127.0.0.2 \
   --cluster-bind 127.0.0.2 \
   --host 127.0.0.1:4432 \
+  --token "$JOIN_TOKEN" \
   --data-dir ~/node2/ \
   --config-dir ~/node2/config/ \
   --region ap-southeast-2 \
@@ -58,6 +78,7 @@ JOIN2_PID=$!
   --bind 127.0.0.3 \
   --cluster-bind 127.0.0.3 \
   --host 127.0.0.1:4432 \
+  --token "$JOIN_TOKEN" \
   --data-dir ~/node3/ \
   --config-dir ~/node3/config/ \
   --region ap-southeast-2 \

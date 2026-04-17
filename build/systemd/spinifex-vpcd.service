@@ -19,7 +19,7 @@ Environment=SPINIFEX_BASE_DIR=/var/lib/spinifex/vpcd/
 # Filesystem access — NoNewPrivileges omitted (vpcd uses sudo for ovs-vsctl, ovn-nbctl, systemctl)
 ProtectSystem=full
 PrivateDevices=yes
-ReadOnlyPaths=/etc/spinifex/spinifex.toml
+ReadOnlyPaths=/etc/spinifex/spinifex.toml /etc/spinifex/ca.pem
 ReadWritePaths=/var/lib/spinifex/vpcd /var/log/spinifex
 
 # Hardening
