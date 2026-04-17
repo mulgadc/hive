@@ -345,7 +345,7 @@ export AWS_PROFILE=spinifex-myteam
 ### Instance Stuck in Pending
 
 ```bash
-cat ~/spinifex/logs/spinifex.log
+journalctl -u spinifex-daemon -f
 aws ec2 describe-images
 ```
 

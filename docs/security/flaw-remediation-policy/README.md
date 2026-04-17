@@ -129,7 +129,7 @@ Operators own remediation for layers Spinifex does not ship:
 | Host OS + kernel | Track distribution advisories (Debian DSA, Ubuntu USN) at matching cadence. |
 | OVN / OVS | Patched via the operator's package channel alongside the OS. |
 | QEMU / KVM / libvirt | As above — hypervisor CVEs affect tenant isolation. |
-| Host AV / EDR agent | See [Malware Protection §2](/docs/security/malware-protection). |
+| Host AV / EDR agent | See [Malware Protection §2](/docs/security/malware-protection#2-update-requirements-sil1-3144). |
 
 Operators should subscribe to the `mulgadc/spinifex` release feed (Watch → Custom → Releases + Security Advisories) so Critical/High advisories arrive via GitHub's notification channel rather than polling.
 

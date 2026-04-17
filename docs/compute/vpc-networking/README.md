@@ -1014,13 +1014,13 @@ sudo tcpdump -i {nic} -n "host {public_ip}"
 
 ```bash
 # vpcd log (reconcile, NAT, topology operations)
-cat ~/spinifex/logs/vpcd.log
+journalctl -u spinifex-vpcd -f
 
 # ovn-controller log (port binding, commit failures)
 sudo cat /var/log/ovn/ovn-controller.log | tail -50
 
 # Daemon log (instance launch, network setup)
-cat ~/spinifex/logs/spinifex.log
+journalctl -u spinifex-daemon -f
 ```
 
 ### VPC Creation Fails
@@ -1029,7 +1029,7 @@ Check OVN services and vpcd daemon:
 
 ```bash
 sudo systemctl is-active ovn-controller
-cat ~/spinifex/logs/vpcd.log
+journalctl -u spinifex-vpcd -f
 ```
 
 ### Instances Cannot Reach Each Other
@@ -1218,7 +1218,7 @@ sudo ovs-vsctl get Open_vSwitch . external-ids:system-id
 # What SB registered
 sudo ovn-sbctl list Chassis | grep name
 # What vpcd expects
-grep node ~/spinifex/config/spinifex.toml | head -1
+grep node /etc/spinifex/spinifex.toml | head -1
 ```
 
 **Fix:** `reset-dev-env.sh` passes `--chassis-id=chassis-node1` to

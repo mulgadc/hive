@@ -149,7 +149,7 @@ For production SSH via public IPs, see [Setting Up Your Cluster](/docs/setting-u
 Check QEMU logs for the instance and verify the AMI architecture matches your host:
 
 ```bash
-cat ~/spinifex/logs/spinifex.log
+journalctl -u spinifex-daemon -f
 aws ec2 describe-images --image-ids $SPINIFEX_AMI
 ```
 
