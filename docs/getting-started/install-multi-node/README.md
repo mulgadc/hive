@@ -59,7 +59,7 @@ export AWS_AZ=us-east-1a
 
 ## Step 3. Setup OVN Networking
 
-Server 1 runs OVN central and must be set up first. If your WAN interface is already a bridge (e.g. `br-wan`), setup-ovn.sh auto-detects it. Otherwise use `--wan-bridge=br-wan --wan-iface=eth1` (dedicated WAN NIC) or `--macvlan --wan-iface=eth0` (single-NIC).
+Server 1 runs OVN central and must be set up first. If your WAN interface is already a bridge (e.g. `br-wan`), setup-ovn.sh auto-detects it. Otherwise use `--wan-bridge=br-wan --wan-iface=eth1` (dedicated WAN NIC).
 
 **Server 1:**
 
