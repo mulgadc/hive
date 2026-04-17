@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go"></a>
+  <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-3fb950?style=flat-square" alt="License"></a>
   <a href="https://docs.mulgadc.com"><img src="https://img.shields.io/badge/Docs-mulgadc.com-DC2626?style=flat-square" alt="Docs"></a>
   <a href="https://github.com/mulgadc/spinifex/actions"><img src="https://img.shields.io/badge/CI-e2e-58a6ff?style=flat-square" alt="CI"></a>
@@ -130,7 +130,7 @@ Each component can be developed independently. See component-specific documentat
 Spinifex ships with a built-in web console — an optional alternative to the AWS CLI, SDKs, and Terraform. If you're familiar with the AWS Management Console, the Spinifex UI fills the same role: a browser-based view of your instances, volumes, buckets, VPCs, and IAM resources, without leaving your own network.
 
 <p align="center">
-  <img src="docs/spinifex-ui.jpg" alt="Spinifex web console — dashboard view" width="900">
+  <img src=".github/assets/spinifex-ui.jpg" alt="Spinifex web console — dashboard view" width="900">
 </p>
 
 The console is served by each node on port `3000` over TLS, and becomes available as soon as `spinifex.target` is up:
