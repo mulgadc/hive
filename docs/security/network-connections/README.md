@@ -114,7 +114,7 @@ Spinifex nodes initiate a small, fixed set of outbound connections.
 
 **Update checks and metadata.** Spinifex does not check for updates and does not consume a cloud metadata service (`169.254.169.254` is served *by* the cluster to guest VMs). Node software updates come from the operator's OS package channel. The install-telemetry endpoint above is the only vendor-operated destination contacted by a node; closed-egress deployments should disable it and record the opt-out in the security plan.
 
-**Air-gapped deployments.** The three image URLs are the only destinations needed for the standard image catalogue. Mirror them locally and use `spx admin images import --file` with pre-staged files. Telemetry must also be disabled. See [Air-gapped install](https://docs.mulgadc.com/docs/install-airgapped).
+**Air-gapped deployments.** The three image URLs are the only destinations needed for the standard image catalogue. Mirror them locally and use `spx admin images import --file` with pre-staged files. Telemetry must also be disabled. See [Air-Gapped Install](/docs/install-airgapped).
 
 ## 3. Cross-Node (Internal) Connections
 

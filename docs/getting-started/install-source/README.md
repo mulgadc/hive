@@ -52,43 +52,17 @@ export PATH=$PATH:/usr/local/go/bin
 ```bash
 cd spinifex
 ./scripts/clone-deps.sh
-./scripts/dev-setup.sh
 ```
 
-Confirm `./bin/spx` exists.
-
-## Step 3. Setup OVN
-
-If your WAN interface is already a bridge (e.g. `br-wan`), setup-ovn.sh auto-detects it:
-
-```bash
-./scripts/setup-ovn.sh --management
-```
-
-If your WAN is a physical NIC:
-
-```bash
-# Dedicated WAN NIC (not your SSH connection):
-./scripts/setup-ovn.sh --management --wan-bridge=br-wan --wan-iface=eth1
-```
-
-## Step 4. Development initialisation
+## Step 3. Development Initialisation
 
 ```bash
 ./scripts/dev-install.sh
 ```
 
-Note, this will bootstrap a single node development environment
+This bootstraps a single-node development environment: builds binaries, configures OVN, initialises the cluster, installs the CA certificate, and starts all services.
 
-## Step 5. Start services
-
-```bash
-sudo systemctl status spinifex.target
-```
-
-Start all services
-
-## Step 6. Verify Installation
+## Step 4. Verify Installation
 
 ```bash
 export AWS_PROFILE=spinifex
@@ -109,15 +83,9 @@ Continue to [Setting Up Your Cluster](/docs/setting-up-your-cluster) to import a
 export PATH=$PATH:/usr/local/go/bin
 ```
 
-### ./bin/spx Missing After Build
-
-```bash
-./scripts/dev-setup.sh
-```
-
 ### CA Certificate Not Trusted
 
 ```bash
-sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
+sudo cp /etc/spinifex/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
 sudo update-ca-certificates
 ```

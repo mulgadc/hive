@@ -1154,7 +1154,7 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 	fmt.Printf("   Waiting for %d more node(s) to join...\n", expectedNodes-1)
 	fmt.Printf("   Token expires in %s\n\n", tokenTTL)
 	fmt.Printf("   Other nodes should run:\n")
-	fmt.Printf("   spx admin join --host %s --token %s --node <name> --bind <ip>\n\n", formationAddr, joinToken)
+	fmt.Printf("   sudo spx admin join --host %s --token %s --node <name> --bind <ip>\n\n", formationAddr, joinToken)
 
 	// Wait for all nodes to register
 	if err := fs.WaitForCompletion(formationTimeout); err != nil {
