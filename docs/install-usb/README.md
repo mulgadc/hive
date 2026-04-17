@@ -14,14 +14,14 @@ For this tutorial, a USB drive with at least 8GB of memory is required. Note tha
 
 For this tutorial download Balena Etcher to simplify the ISO burning process.
 
-* Balena Etcher: https://etcher.balena.io
+* [Balena Etcher](https://etcher.balena.io)
 
 
 ## Download Spinifex ISO
 
 Next, download the Spinifex ISO (x86)
 
-* Spinifex ISO - cloudflare link here.
+* [Spinifex ISO](cloudflare link here)
 
 ## Flash Media
 Once installed, open Balena Etcher.
@@ -30,7 +30,8 @@ Select "Flash From Image," then select the downloaded spinifex.iso file (it shou
 
 Next, click "Select target" and choose the USB drive to be used as the boot media. Then click "Flash!"
 
-Balena Etcher will now flash the USB drive with the spinifex.iso file. If completed successfully, it will look like this: image
+Balena Etcher will now flash the USB drive with the spinifex.iso file. If completed successfully, it will look like this: ![Balena complete](../../.github/assets/images/balena-complete.png)
+
 
 You can now safely eject the USB drive if it was not ejected automatically.
 
@@ -51,7 +52,7 @@ The device will reboot and spend ~2-5 minutes configuring the Spinifex node. The
 * Login: spinifex
 * Password: Set by user during installation
 
-Both before and after login, a banner will be printed specifying important info, such as details for SSHing into the node and accessing the web UI for further configuration of the node.
+Both before and after login, a banner will be printed specifying important info, such as details for SSHing into the node and accessing the web UI for further configuration of the node. ![banner](../../.github/assets/images/banner1.png)
 
 ## Setup Complete
 
