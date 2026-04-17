@@ -74,23 +74,33 @@ func WriteNetworkingDropIn(root string) error {
 }
 
 // WriteFirstbootUnit writes the spinifex-firstboot.service oneshot unit that
-// runs the firstboot provisioning script on the first real boot after installation.
+// runs the firstboot provisioning script on the first real boot after
+// installation. The script writes /var/lib/spinifex/.firstboot-done on
+// success; ConditionPathExists=! on that marker condition-skips the unit on
+// every subsequent boot so it never re-runs (replacing the previous
+// "disable on EXIT" trap which couldn't distinguish success from failure).
 func WriteFirstbootUnit(root string) error {
 	unit := `[Unit]
 Description=Spinifex first-boot provisioning
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=/usr/local/bin/spinifex-firstboot.sh
+ConditionPathExists=!/var/lib/spinifex/.firstboot-done
 
 [Service]
 Type=oneshot
 Environment=HOME=/root
 ExecStart=/usr/local/bin/spinifex-firstboot.sh
 RemainAfterExit=yes
+# On non-zero exit, overwrite /etc/issue with a hint so the operator sees
+# the failure on the console — the banner unit is never enabled in that
+# case (firstboot didn't reach its enable --now line), so /etc/issue would
+# otherwise stay at the Debian default with no signal that anything is wrong.
+ExecStopPost=/bin/sh -c 'if [ "$EXIT_STATUS" != "0" ]; then printf "\n*** Spinifex firstboot FAILED ***\nLogin as spinifex, then run:\n  sudo journalctl -u spinifex-firstboot.service\n\n" > /etc/issue; fi'
 # Cap total firstboot runtime so a hang in setup-ovn.sh / spx admin init /
 # ovn-central startup cannot wedge multi-user.target and keep getty from
 # ever reaching the login prompt.
-TimeoutStartSec=180s
+TimeoutStartSec=300s
 StandardOutput=journal
 StandardError=journal
 
@@ -105,11 +115,20 @@ WantedBy=multi-user.target
 // `spx admin banner --boot-check` on every boot after spinifex.target is up.
 // Running After=spinifex.target ensures the banner reflects a settled system
 // state and that the IP check/restart happens once services are already running.
+//
+// The unit file is written by the installer but NOT enabled at install time.
+// firstboot enables it (along with spinifex.target) at the end of its first
+// run via `systemctl enable --now`. On every subsequent boot both units are
+// driven by the multi-user.target.wants/ symlinks firstboot installed.
+//
+// Note: only After=spinifex.target — no Wants=. A Wants= would implicitly
+// pull spinifex.target up at boot, which is exactly the race this whole
+// change is fixing. After= alone is a no-op when the target isn't started,
+// which is correct on first boot before firstboot has provisioned configs.
 func WriteBannerUnit(root string) error {
 	unit := `[Unit]
 Description=Spinifex console banner and boot health check
-After=spinifex.target
-Wants=spinifex.target
+After=network-online.target
 
 [Service]
 Type=oneshot
@@ -129,13 +148,21 @@ WantedBy=multi-user.target
 }
 
 // WriteGettyDropIn holds the primary consoles (tty1 and ttyS0) until
-// spinifex-banner.service completes, so the MOTD banner is visible before the
-// login prompt appears. Drop-ins are scoped to named instances (getty@tty1,
-// serial-getty@ttyS0) so tty2, tty3, etc. remain available as rescue terminals.
+// spinifex-banner.service completes (when banner is enabled), so the MOTD
+// banner is visible before the login prompt appears. Drop-ins are scoped to
+// named instances (getty@tty1, serial-getty@ttyS0) so tty2, tty3, etc.
+// remain available as rescue terminals.
+//
+// Only After=, not Wants=. A Wants= would implicitly start the (un-enabled)
+// banner on the very first boot, partially undoing the "only firstboot is
+// enabled on first boot" guarantee. On first boot, banner is not enabled,
+// so After= is a no-op and login appears immediately with the default
+// /etc/issue. Once firstboot completes and enables the banner, subsequent
+// boots have banner enabled at multi-user.target and After= correctly
+// orders getty after the banner has rendered /etc/issue.
 func WriteGettyDropIn(root string) error {
 	dropIn := `[Unit]
-After=spinifex-banner.service
-Wants=spinifex-banner.service
+After=spinifex-firstboot.service
 `
 	for _, svc := range []string{"getty@tty1", "serial-getty@ttyS0"} {
 		dropInDir := filepath.Join(root, "etc/systemd/system/"+svc+".service.d")

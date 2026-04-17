@@ -52,11 +52,13 @@ func Write(root string, cfg Config) error {
 	if err := systemd.EnableUnit(root, "spinifex-firstboot.service"); err != nil {
 		return err
 	}
+	// Banner unit is written but NOT enabled here. firstboot enables it
+	// (along with spinifex.target) at the end of its run, so on the first
+	// boot the only spinifex unit running is firstboot itself — no implicit
+	// pull of spinifex.target via the banner's Wants= relationship, which
+	// was the root cause of the boot-time race against firstboot.
 	if err := systemd.WriteBannerUnit(root); err != nil {
 		return fmt.Errorf("banner unit: %w", err)
-	}
-	if err := systemd.EnableUnit(root, "spinifex-banner.service"); err != nil {
-		return err
 	}
 	return systemd.WriteGettyDropIn(root)
 }
@@ -72,12 +74,25 @@ func writeScript(root string, cfg Config) error {
 	}
 
 	script := fmt.Sprintf(`#!/bin/bash
-# Spinifex firstboot — runs once after ISO installation, then disables itself.
+# Spinifex firstboot — runs once after ISO installation. On success, writes
+# /var/lib/spinifex/.firstboot-done and the systemd unit's
+# ConditionPathExists=! prevents re-execution on subsequent boots. A partial
+# run leaves no marker, so the next reboot retries from the top — safe
+# because every step below is idempotent (hostnamectl, setup-ovn.sh, spx
+# admin init are all "set if not set"; systemctl enable on an already-enabled
+# unit is a no-op).
 set -euo pipefail
 
-# Always disable this service on exit, even on failure, so a partial run
-# does not cause an infinite retry loop on subsequent reboots.
-trap 'systemctl disable spinifex-firstboot.service' EXIT
+DONE_MARKER=/var/lib/spinifex/.firstboot-done
+
+# Idempotency: bail early if a previous run completed successfully. The unit
+# also has ConditionPathExists=!$DONE_MARKER so we shouldn't get here on
+# subsequent boots, but defend in depth in case the unit is re-triggered
+# manually before the operator notices the marker exists.
+if [ -f "$DONE_MARKER" ]; then
+    echo "[firstboot] already complete — skipping"
+    exit 0
+fi
 
 # Set hostname
 hostnamectl set-hostname %s
@@ -113,6 +128,9 @@ done
 # setup-ovn.sh auto-detects br-wan as the default route device (Linux bridge)
 # and wires it to OVS via a veth pair — non-destructive, SSH-safe.
 %s
+
+# Write the banner (first time, spinifex-banner service will do this on reboot)
+/usr/local/bin/spx admin banner --boot-check
 
 # Cluster formation — capture credentials to file for display on console.
 %s 2>&1
@@ -154,7 +172,23 @@ if [ -f /root/.aws/credentials ]; then
     [ -f /home/spinifex/.aws/config ] && chmod 600 /home/spinifex/.aws/config
 fi
 
-# Start services
+# Enable + activate spinifex.target and the banner now that all configs are
+# in place. "enable --now" creates the multi-user.target.wants/ symlinks (so
+# they start directly on every subsequent boot — no longer dependent on
+# firstboot running each time, since firstboot is condition-skipped after
+# this run via the marker) and activates them in this boot.
+# NOTE: Moved to firstinstall to enable
+#systemctl enable --now spinifex.target spinifex-banner.service
+
+# Enable services to start, on reboot
+systemctl enable spinifex.target spinifex-banner.service
+
+# Mark complete only after every step above has succeeded. Until this point,
+# any failure (set -e) leaves the marker absent and the next reboot retries
+# firstboot from the top.
+mkdir -p "$(dirname "$DONE_MARKER")"
+touch "$DONE_MARKER"
+
 systemctl start spinifex.target
 `, cfg.Hostname, setupOVN, clusterCmd)
 

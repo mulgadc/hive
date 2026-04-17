@@ -46,8 +46,7 @@ else
   _SECQ  = 2>&1 | tee
 endif
 
-build:
-	$(MAKE) go_build
+build: go_build build-installer build-lb-agent
 
 # Build spinifex-ui frontend (requires pnpm)
 build-ui:
