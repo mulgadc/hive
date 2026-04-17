@@ -108,17 +108,16 @@ Spinifex nodes initiate a small, fixed set of outbound connections:
 | `https://cdimage.debian.org/cdimage/cloud/bookworm/latest/` | Debian 12 cloud image download during `spx admin images import` | HTTPS | TLS (system trust store) + SHA256/SHA512 checksum verification against published manifest |
 | `https://cloud-images.ubuntu.com/noble/current/` | Ubuntu 24.04 LTS cloud image download | HTTPS | TLS + checksum verification |
 | `https://d2yp8ipz5jfqcw.cloudfront.net/` | Alpine-based system image used for the managed HAProxy load-balancer | HTTPS | TLS + checksum verification |
+| `https://install.mulgadc.com/install` | Mulga install telemetry. One-shot POST on `spx admin init` and `spx admin join`. Payload: machine ID (from `/etc/machine-id`), event type, region/AZ, node name, node count, bind IP, Spinifex version, OS/arch. | HTTPS | TLS (system trust store). Opt out with `--no-telemetry` on the `admin` command or set `SPX_NO_TELEMETRY=1` in the environment. |
 | Peer nodes, TCP 4248 | NATS cluster route federation | NATS + TLS | Cluster CA-validated TLS + cluster token |
 | Peer nodes, TCP 8443 | Predastore S3 reads/writes (AMIs, snapshots, cross-node object access) | HTTPS | Cluster CA-validated TLS + AWS SigV4 |
 | Peer nodes, TCP 6641/6642 | OVN NB/SB database reads/writes from `vpcd` | OVSDB/TCP | Cluster-internal; TLS planned |
-| Loopback `127.0.0.1:6660` | Daemon → Predastore Raft status probe | HTTPS | TLS (loopback) |
-| Loopback `127.0.0.1:8222` | Daemon → NATS monitoring probe | HTTP | Loopback only |
+| Node bind IP, TCP 6660 | Daemon → local Predastore Raft status probe (`/status`) | HTTPS | TLS (cluster CA) |
+| Loopback `127.0.0.1:8222` | Daemon → NATS monitoring probe (`/varz`) | HTTP | Loopback only |
 
-**What Spinifex does not do.** Spinifex does not phone home, does not check for updates, does not emit telemetry to any vendor-operated endpoint, and does not consume a cloud metadata service. Node software updates are delivered through the operator's OS package channel, not through a Spinifex-operated endpoint.
+**Update checks and metadata.** Spinifex does not check for updates and does not consume a cloud metadata service (`169.254.169.254` is served *by* the cluster to guest VMs, not consumed by nodes). Node software updates are delivered through the operator's OS package channel. The only vendor-operated endpoint the node contacts is the install-telemetry endpoint listed above; compliance deployments that require a closed egress profile should disable it via `SPX_NO_TELEMETRY=1` or `--no-telemetry` and record the opt-out in the system security plan.
 
-**Cloud-init metadata.** The link-local address `169.254.169.254` is served *by* the cluster (via `vpcd` and the EC2 metadata handler) to guest VMs. Spinifex nodes themselves do not consume it.
-
-**Air-gapped deployments.** The three image URLs above are the only destinations needed for the standard image catalogue. Operators running an air-gapped install mirror these artifacts locally and repoint `utils/images.go`'s catalogue or use `spx admin images import --file` with a pre-staged image file. See `docs/getting-started/install-airgapped`.
+**Air-gapped deployments.** The three image URLs above are the only destinations needed for the standard image catalogue. Operators running an air-gapped install mirror these artifacts locally and repoint `utils/images.go`'s catalogue or use `spx admin images import --file` with a pre-staged image file. Telemetry (above) must also be disabled. See [Air-gapped install](https://docs.mulgadc.com/docs/install-airgapped).
 
 ## 3. Cross-Node (Internal) Connections
 
@@ -145,9 +144,9 @@ This section maps each connection class to the CMMC AC.L1-3.1.20 objective it sa
 |------------|-----------------------|
 | AWS Gateway (9999) inbound | TLS terminated with the per-node cert issued by the cluster CA. All requests authenticated via AWS SigV4 against IAM user access keys. |
 | Spinifex UI (3000) inbound | TLS cert + operator session. |
-| NATS client/cluster (4222/4248) | Mutually authenticated via TLS against the cluster CA pool; cluster token required on every connect. Every internal TLS dial validates against the cluster CA. |
+| NATS client/cluster (4222/4248) | Mutually authenticated via TLS against the cluster CA pool; cluster token required on every connect. Steady-state internal TLS dials (NATS, awsgw, predastore, daemon cluster-manager) validate against the cluster CA. |
 | Predastore (8443) | TLS + AWS SigV4. |
-| Formation (4432) | Short-lived bearer token with configurable TTL (default 30 minutes, set via `spx admin init --token-ttl`). |
+| Formation (4432) | Short-lived bearer token with configurable TTL (default 30 minutes, set via `spx admin init --token-ttl`). The joining node does not validate the formation server's TLS cert (the server presents an ephemeral self-signed cert that pre-dates trust bootstrap); authenticity of the exchange rests on (a) the operator supplying the correct leader address out-of-band and (b) possession of the bearer token. This is the only production client dial with `InsecureSkipVerify`. |
 | Image downloads (outbound HTTPS) | TLS against the system trust store, HTTPS-only (HTTP redirects rejected), and published-manifest SHA256/SHA512 checksum verified before the image is registered. |
 | OVN NB/SB (6641/6642) | TLS is not yet enabled; currently relies on cluster-network isolation. Tracked as an L2-readiness item (SC.L2-3.13.8). |
 
@@ -184,11 +183,12 @@ Every listener and outbound destination above is controlled by one of these file
 
 | File | Keys | Controls |
 |------|------|----------|
-| `/etc/spinifex/spinifex.toml` | `nodes.<node>.awsgw.host`, `nodes.<node>.ui.host`, `nodes.<node>.nats.host`, `nodes.<node>.predastore.host`, `nodes.<node>.daemon.host`, `nodes.<node>.vpcd.ovn_nb_addr`, `nodes.<node>.vpcd.ovn_sb_addr` | Listener bind addresses and ports for each Spinifex service on this node. |
+| `/etc/spinifex/spinifex.toml` | `nodes.<node>.awsgw.host`, `nodes.<node>.nats.host`, `nodes.<node>.predastore.host`, `nodes.<node>.daemon.host`, `nodes.<node>.vpcd.ovn_nb_addr`, `nodes.<node>.vpcd.ovn_sb_addr`, `nodes.<node>.daemon.dev_networking` | Listener bind addresses and ports for each Spinifex service on this node; dev-mode QEMU port forwarding. |
 | `/etc/spinifex/nats.conf` | `listen`, `cluster.listen`, `cluster.routes`, `http`, `tls`, `cluster.authorization` | NATS client/cluster/monitoring listeners, peer routes, TLS config, cluster token. |
 | `/etc/spinifex/predastore.toml` | `host`, `port`, `[[db]].port`, `[[nodes]].port`, `tls.*` | Predastore S3 listener, Raft ports, shard ports, TLS certs. |
 | OVN packages (`ovn-central`, `ovn-host`) | `ovn-nb-db`, `ovn-sb-db` connection strings (`ovs-vsctl set open_vswitch …`) | OVN DB bind addresses. |
-| `spx admin init` / `spx admin join` CLI flags | `--port`, `--token-ttl` | Formation server port and token lifetime. |
+| Spinifex UI service | Built-in defaults: `host = "0.0.0.0"`, `port = 3000`. No `spinifex.toml` block today; override requires code change or service-level config. | UI listener. |
+| `spx admin init` / `spx admin join` CLI flags | `--port`, `--token-ttl`, `--no-telemetry` (or env `SPX_NO_TELEMETRY=1`) | Formation server port, token lifetime, install-telemetry opt-out. |
 | `utils/images.go` `AvailableImages` | Image catalogue URLs | Outbound HTTPS destinations for image downloads. Air-gapped operators should change or disable. |
 
 ## 6. Operator Checklist
@@ -200,6 +200,7 @@ Use this list to confirm a node meets AC.L1-3.1.20 before it is admitted to a pr
 - Cluster subnet is isolated from tenant guest VM networks and from the public internet.
 - Formation port 4432 is closed on nodes that are not actively running a bootstrap token.
 - Outbound HTTPS is either restricted to the three image-catalogue hosts in §2 or replaced with an air-gapped image import workflow.
+- Install telemetry (`install.mulgadc.com`) is either permitted and recorded in the security plan, or disabled via `SPX_NO_TELEMETRY=1` / `--no-telemetry`.
 - OVN NB/SB (6641/6642) exposure is limited to the cluster subnet pending the L2 TLS work.
 - SSH (22) is configured to operator-managed keys only; password auth disabled in `sshd_config`.
 - Periodic review (at least annually, and after any network topology change) confirms the inventory here still matches the deployed configuration.
