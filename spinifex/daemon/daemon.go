@@ -549,8 +549,8 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to connect to NATS: %w", err)
 	}
 
-	// ClusterManager must start before JetStream init so other nodes can join
-	// via /join endpoint and help form the NATS cluster.
+	// ClusterManager must start before JetStream init so peers can reach
+	// /health during bootstrap.
 	if err := d.ClusterManager(); err != nil {
 		return fmt.Errorf("failed to start cluster manager: %w", err)
 	}
