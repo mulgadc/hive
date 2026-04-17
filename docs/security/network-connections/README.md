@@ -1,6 +1,6 @@
 ---
 title: "External Connection Inventory"
-description: "Operator inventory of inbound listeners and outbound connections on Spinifex nodes, for CMMC AC.L1-3.1.20 compliance"
+description: "Operator inventory of inbound listeners and outbound connections on Spinifex nodes"
 category: "Security"
 sections:
   - overview
@@ -22,7 +22,7 @@ resources:
 
 # External Connection Inventory
 
-> Operator inventory of inbound listeners and outbound connections on Spinifex nodes, for CMMC AC.L1-3.1.20 compliance
+> Operator inventory of inbound listeners and outbound connections on Spinifex nodes
 
 ## Table of Contents
 
@@ -67,7 +67,7 @@ Spinifex has a small, enumerable set of network surfaces:
 2. **Outbound connections** — the destinations the node's services reach out to. Today this is a short list: peer Spinifex nodes, OS image mirrors, and install telemetry.
 3. **Cross-node connections** — inter-node control- and data-plane traffic inside the cluster subnet.
 
-The inventory in §1–§2 satisfies objectives [a]/[b]. The **Auth / Verification** columns throughout satisfy [c]/[d]. §4 and §5 satisfy [e]/[f]. The default install meets [c]–[f] for every listed connection; the operator's remaining work is to record the inventory in the system security plan, apply host/network firewall rules per §4, and audit §5 on a recurring schedule.
+The inventory in [§1](#1-inbound-listeners)–[§2](#2-outbound-connections) satisfies objectives [a]/[b]. The **Auth / Verification** columns throughout satisfy [c]/[d]. [§4](#4-limiting-controls) and [§5](#5-configuration-surface) satisfy [e]/[f]. The default install meets [c]–[f] for every listed connection; the operator's remaining work is to record the inventory in the system security plan, apply host/network firewall rules per [§4](#4-limiting-controls), and audit [§5](#5-configuration-surface) on a recurring schedule.
 
 ## 1. Inbound Listeners
 
@@ -105,12 +105,12 @@ Spinifex nodes initiate a small, fixed set of outbound connections.
 
 | Destination | Purpose | Protocol | Verification |
 |-------------|---------|----------|--------------|
-| `https://cdimage.debian.org/cdimage/cloud/bookworm/latest/` | Debian 12 cloud image download (`spx admin images import`) | HTTPS | TLS (system trust store) + SHA256/SHA512 checksum against published manifest |
-| `https://cloud-images.ubuntu.com/noble/current/` | Ubuntu 24.04 LTS cloud image download | HTTPS | TLS + checksum verification |
+| `https://cdimage.debian.org/cdimage/cloud/bookworm/latest` | Debian 12 cloud image download | HTTPS | TLS + checksum verification |
+| `https://cloud-images.ubuntu.com/noble/current` | Ubuntu 24.04 LTS cloud image download | HTTPS | TLS + checksum verification |
 | `https://d2yp8ipz5jfqcw.cloudfront.net` | Alpine image for managed HAProxy load-balancer | HTTPS | TLS + checksum verification |
-| `https://install.mulgadc.com/install` | One-shot install telemetry POST on `spx admin init` / `join`. Payload: machine ID, event type, region/AZ, node name, node count, bind IP, Spinifex version, OS/arch. | HTTPS | TLS (system trust store). Opt out via `--no-telemetry` or `SPX_NO_TELEMETRY=1`. |
+| `https://install.mulgadc.com/install` | One-shot install telemetry POST on `spx admin init` / `join`. | HTTPS | TLS |
 
-**To peer nodes (cluster-internal):** NATS federation (4248), Predastore S3 (8443), OVN NB/SB (6641/6642) — see §3 for encryption and verification of each. The daemon also probes local Predastore Raft status at `<bind IP>:6660/status` (TLS, cluster CA) and local NATS monitoring at `127.0.0.1:8222/varz` (loopback HTTP).
+**To peer nodes (cluster-internal):** NATS federation (4248), Predastore S3 (8443), OVN NB/SB (6641/6642) — see [§3](#3-cross-node-internal-connections) for encryption and verification of each. The daemon also probes local Predastore Raft status at `<bind IP>:6660/status` (TLS, cluster CA) and local NATS monitoring at `127.0.0.1:8222/varz` (loopback HTTP).
 
 **Update checks and metadata.** Spinifex does not check for updates and does not consume a cloud metadata service (`169.254.169.254` is served *by* the cluster to guest VMs). Node software updates come from the operator's OS package channel. The install-telemetry endpoint above is the only vendor-operated destination contacted by a node; closed-egress deployments should disable it and record the opt-out in the security plan.
 
@@ -118,7 +118,7 @@ Spinifex nodes initiate a small, fixed set of outbound connections.
 
 ## 3. Cross-Node (Internal) Connections
 
-Control- and data-plane traffic between Spinifex nodes, for completeness and firewall planning:
+Control-plane and data-plane traffic between Spinifex nodes, for completeness and firewall planning:
 
 | Connection | Port(s) | Encryption / Auth | Notes |
 |-----------|---------|-------------------|-------|
@@ -148,7 +148,7 @@ tcp dport 0-65535 drop
 udp dport 0-65535 drop
 ```
 
-Port 4432 must be closed outside the bootstrap window; `spx admin join` opens it transiently. Outbound egress can be limited to the image-catalogue hostnames in §2 plus the operator's OS package repositories; on air-gapped nodes, block all outbound HTTPS and use `spx admin images import --file`.
+Port 4432 must be closed outside the bootstrap window; `spx admin join` opens it transiently. Outbound egress can be limited to the image-catalogue hostnames in [§2](#2-outbound-connections) plus the operator's OS package repositories; on air-gapped nodes, block all outbound HTTPS and use `spx admin images import --file`.
 
 ## 5. Configuration Surface
 
@@ -166,11 +166,11 @@ Every listener and outbound destination is controlled by one of these files. Cha
 
 ## 6. Operator Checklist
 
-- Inventory recorded in the system security plan — inbound (§1), outbound (§2), cross-node (§3) — matches what is observed on the node (`ss -tlnp`, `ss -unlp`).
-- Host firewall enforces the external/cluster/localhost split in §4: external surface limited to 9999, 3000, 22 (and 4432 only during bootstrap).
+- Inventory recorded in the system security plan — inbound ([§1](#1-inbound-listeners)), outbound ([§2](#2-outbound-connections)), cross-node ([§3](#3-cross-node-internal-connections)) — matches what is observed on the node (`ss -tlnp`, `ss -unlp`).
+- Host firewall enforces the external/cluster/localhost split in [§4](#4-limiting-controls): external surface limited to 9999, 3000, 22 (and 4432 only during bootstrap).
 - Cluster subnet is isolated from tenant guest VM networks and from the public internet.
 - Formation port 4432 is closed on nodes not actively running a bootstrap token.
-- Outbound HTTPS restricted to the §2 image-catalogue hosts, or replaced with air-gapped import.
+- Outbound HTTPS restricted to the [§2](#2-outbound-connections) image-catalogue hosts, or replaced with air-gapped import.
 - Install telemetry (`install.mulgadc.com`) is either permitted and recorded in the security plan, or disabled via `SPX_NO_TELEMETRY=1` / `--no-telemetry`.
 - OVN NB/SB (6641/6642) exposure limited to the cluster subnet pending the L2 TLS work.
 - SSH (22) configured to operator-managed keys only; password auth disabled in `sshd_config`.
