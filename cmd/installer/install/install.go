@@ -451,28 +451,48 @@ func installBootloader(disk string) error {
 		}
 		return biosErr
 	}
-	// Copy splash image from the ISO (mounted at /cdrom) so the installed GRUB
-	// shows the same branded background as the installer GRUB.
 	copySplashImage(mountRoot)
+	copyGrubFont(mountRoot)
 
-	// Configure serial console in the installed system's GRUB so the boot menu
-	// and kernel output are visible over serial (ttyS0) as well as VGA.
+	// Kernel cmdline and basic defaults only — graphics/serial handled by 05_spinifex below.
 	grubDefault := `GRUB_DEFAULT=0
 GRUB_TIMEOUT=5
 GRUB_DISTRIBUTOR=Spinifex
 GRUB_CMDLINE_LINUX_DEFAULT=""
 GRUB_CMDLINE_LINUX="console=tty0 console=ttyS0,115200n8 systemd.show_status=1"
-GRUB_TERMINAL="gfxterm serial"
-GRUB_SERIAL_COMMAND="serial --unit=0 --speed=115200 --word=8 --parity=no --stop=1"
-GRUB_GFXMODE=auto
-GRUB_BACKGROUND=/boot/grub/splash.png
 `
 	if err := os.WriteFile(filepath.Join(mountRoot, "etc/default/grub"), []byte(grubDefault), 0o644); err != nil {
 		return fmt.Errorf("write /etc/default/grub: %w", err)
 	}
 
-	// update-grub (grub-mkconfig) runs inside the installed system's chroot and
-	// needs /dev, /proc, and /sys to probe devices.
+	// Mirror the ISO grub.cfg graphical block exactly so the installed GRUB menu
+	// looks identical to the installer menu. gfxterm MUST be activated before
+	// serial is appended — background_image silently does nothing in text mode.
+	// Using exec tail so update-grub includes everything from line 3 as raw GRUB config.
+	grubTheme := `#!/bin/sh
+exec tail -n +3 $0
+insmod all_video
+insmod font
+if loadfont /boot/grub/fonts/unicode.pf2; then
+  set gfxmode=auto
+  insmod gfxterm
+  terminal_output gfxterm
+fi
+insmod serial
+if serial --unit=0 --speed=115200 --timeout=1; then
+  terminal_input  --append serial
+  terminal_output --append serial
+fi
+insmod png
+if background_image /boot/grub/splash.png; then
+  set color_normal=white/black
+  set color_highlight=black/white
+fi
+`
+	if err := os.WriteFile(filepath.Join(mountRoot, "etc/grub.d/05_spinifex"), []byte(grubTheme), 0o755); err != nil {
+		return fmt.Errorf("write /etc/grub.d/05_spinifex: %w", err)
+	}
+
 	if err := bindChrootMounts(); err != nil {
 		return err
 	}
@@ -582,14 +602,14 @@ func partitionPaths(disk string) (efi, root string) {
 	return disk + "2", disk + "3"
 }
 
-// copySplashImage copies the GRUB splash from the live ISO (/cdrom/boot/grub/splash.png)
-// into the installed system so the post-install GRUB shows the same branded background
-// as the installer. Non-fatal — a missing or unreadable source is logged and skipped.
+// copySplashImage copies the GRUB splash (embedded in the squashfs at build time by
+// inject-bins.sh) into the installed system so the post-install GRUB shows the same
+// branded background as the installer GRUB. Non-fatal — missing source is logged and skipped.
 func copySplashImage(root string) {
-	const src = "/cdrom/boot/grub/splash.png"
+	const src = "/usr/share/spinifex/grub-splash.png"
 	in, err := os.Open(src)
 	if err != nil {
-		slog.Warn("copySplashImage: splash not found on ISO, skipping", "path", src)
+		slog.Warn("copySplashImage: splash not found, skipping", "path", src)
 		return
 	}
 	defer in.Close()
@@ -607,6 +627,34 @@ func copySplashImage(root string) {
 	defer out.Close()
 	if _, err := io.Copy(out, in); err != nil {
 		slog.Warn("copySplashImage: copy failed", "err", err)
+	}
+}
+
+// copyGrubFont copies the unicode font into the installed system's
+// /boot/grub/fonts/ so the loadfont path in 05_spinifex resolves at boot.
+// grub-install does not copy fonts; we mirror what build-iso.sh does.
+func copyGrubFont(root string) {
+	const src = "/usr/share/grub/unicode.pf2"
+	in, err := os.Open(src)
+	if err != nil {
+		slog.Warn("copyGrubFont: font not found, graphical GRUB may not work", "path", src)
+		return
+	}
+	defer in.Close()
+
+	dstDir := filepath.Join(root, "boot/grub/fonts")
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		slog.Warn("copyGrubFont: cannot create fonts dir", "err", err)
+		return
+	}
+	out, err := os.OpenFile(filepath.Join(dstDir, "unicode.pf2"), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		slog.Warn("copyGrubFont: cannot open destination", "err", err)
+		return
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		slog.Warn("copyGrubFont: copy failed", "err", err)
 	}
 }
 
