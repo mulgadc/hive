@@ -72,8 +72,11 @@ This policy defines how quickly those signals must be triaged and what the publi
 | Dependabot (`.github/dependabot.yml`) | Weekly (Monday, Australia/Sydney) | Go modules, GitHub Actions, `spinifex/services/spinifexui/frontend` npm packages |
 | `govulncheck` (CI `lint_and_security` job) | Every pull request and push to `main` | Go standard library and module CVEs reachable in the Spinifex binary |
 | GitHub Security Advisories | Continuous (email/notification) | `mulgadc/spinifex`, `mulgadc/predastore`, `mulgadc/viperblock` |
-| Third-party reports | Ad hoc | Submissions to `security@mulgadc.com` (PGP key published on the mulgadc website) |
+| Third-party reports (sensitive) | Ad hoc | [GitHub private vulnerability reporting](https://github.com/mulgadc/spinifex/security/advisories/new) on `mulgadc/spinifex`, `mulgadc/predastore`, or `mulgadc/viperblock` |
+| Third-party reports (non-sensitive) | Ad hoc | Public GitHub issue on the relevant `mulgadc/*` repository, labelled `security` |
 | Internal discovery | Ad hoc | Findings from internal review, audit, red team, or incident response |
+
+**Reporter guidance.** If a finding could be exploited before a patch ships — anything plausibly Critical or High — use the private vulnerability reporting link above, not a public issue. For lower-impact findings (hardening suggestions, defence-in-depth, non-exploitable bugs) a public GitHub issue is fine and gets triaged on the same SLA.
 
 A flaw is considered **identified** when it appears in any of the above channels with enough detail to score CVSS.
 
@@ -111,7 +114,7 @@ Clocks start at the moment of identification ([§1](#1-identification-sources)).
 
 ## 4. Reporting Workflow
 
-1. **Intake** — A finding from any source in [§1](#1-identification-sources) is recorded as a BEADS task (`bd create --type=bug --priority=…`) with the CVSS score, affected components, and link to the upstream advisory. Private disclosures use GitHub's private vulnerability reporting; they are mirrored into BEADS only after a public advisory is drafted.
+1. **Intake** — External findings arrive via the GitHub channels in [§1](#1-identification-sources): private vulnerability reports for sensitive issues, public GitHub issues for non-sensitive ones. Maintainers mirror each finding into the project's internal tracker with the CVSS score, affected components, and link to the upstream advisory. Private disclosures stay private until a public advisory is drafted.
 2. **Triage** — A maintainer validates severity within the identify-SLA window above, confirms whether the vulnerable code path is reachable in Spinifex, and either closes the issue as not-applicable (with justification) or proceeds to fix.
 3. **Fix** — A feature branch lands a patch on `main` via the normal PR + E2E workflow. The commit message references the CVE / GHSA ID.
 4. **Release** — A tagged release is cut. Release notes state the affected versions, CVSS score, and upgrade guidance. For Critical/High severity, a GHSA is published on `mulgadc/spinifex` (or the relevant sub-repository).
@@ -137,7 +140,7 @@ Operators should subscribe to the `mulgadc/spinifex` release feed (Watch → Cus
 
 For CMMC assessment, retain the following for at least 12 months:
 
-- The tracking issue for every identified flaw (BEADS ID or GHSA ID), showing timestamps for identification, triage, and closure.
+- The tracking record for every identified flaw (GitHub issue, GHSA, or internal tracker ID), showing timestamps for identification, triage, and closure.
 - Dependabot run history and CI logs for `govulncheck` (both available via GitHub Actions retention; export before they expire if shorter than 12 months).
 - Release notes and GHSA entries published for each corrected flaw.
 - For operator deployments: patch-apply records (change tickets or configuration-management run logs) showing the release was deployed within the correction SLA.
