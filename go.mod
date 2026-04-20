@@ -10,8 +10,8 @@ require (
 	github.com/klauspost/cpuid/v2 v2.3.0
 	github.com/mulgadc/predastore v1.1.6
 	github.com/mulgadc/viperblock v1.1.6
-	github.com/nats-io/nats-server/v2 v2.12.6
-	github.com/nats-io/nats.go v1.50.0
+	github.com/nats-io/nats-server/v2 v2.12.7
+	github.com/nats-io/nats.go v1.51.0
 	github.com/ovn-kubernetes/libovsdb v0.8.1
 	github.com/pelletier/go-toml/v2 v2.3.0
 	github.com/pterm/pterm v0.12.83
