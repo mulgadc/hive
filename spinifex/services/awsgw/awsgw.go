@@ -2,6 +2,7 @@ package awsgw
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -220,7 +221,7 @@ func connectNATS(host, token, caCertPath string) (*nats.Conn, error) {
 		}
 
 		// TLS configuration errors are permanent — retrying will not help.
-		if strings.Contains(err.Error(), "CA cert") {
+		if errors.Is(err, utils.ErrCACertRead) || errors.Is(err, utils.ErrCACertParse) {
 			return nil, fmt.Errorf("NATS TLS configuration error: %w", err)
 		}
 

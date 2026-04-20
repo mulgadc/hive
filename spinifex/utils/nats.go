@@ -13,6 +13,14 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// Sentinel errors for TLS certificate configuration failures in ConnectNATS.
+// Callers can use errors.Is to detect permanent TLS errors without relying
+// on error message text.
+var (
+	ErrCACertRead  = errors.New("failed to read CA cert")
+	ErrCACertParse = errors.New("failed to parse CA cert")
+)
+
 // ConnectNATS establishes a connection to a NATS server with standard reconnect
 // handling and logging. If token is non-empty, token authentication is used.
 // If caCertPath is non-empty, TLS is enabled using the given CA certificate.
@@ -35,11 +43,11 @@ func ConnectNATS(host, token, caCertPath string) (*nats.Conn, error) {
 	if caCertPath != "" {
 		caCert, err := os.ReadFile(caCertPath)
 		if err != nil {
-			return nil, fmt.Errorf("read CA cert %s: %w", caCertPath, err)
+			return nil, fmt.Errorf("%w %s: %v", ErrCACertRead, caCertPath, err)
 		}
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(caCert) {
-			return nil, fmt.Errorf("failed to parse CA cert from %s", caCertPath)
+			return nil, fmt.Errorf("%w from %s", ErrCACertParse, caCertPath)
 		}
 		opts = append(opts, nats.Secure(&tls.Config{
 			RootCAs: pool,

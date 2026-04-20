@@ -90,7 +90,7 @@ func TestConnectNATS_BadAddress(t *testing.T) {
 func TestConnectNATS_MissingCACert(t *testing.T) {
 	_, err := ConnectNATS("nats://127.0.0.1:4222", "", "/nonexistent/ca.pem")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "read CA cert")
+	assert.ErrorIs(t, err, ErrCACertRead)
 	assert.Contains(t, err.Error(), "/nonexistent/ca.pem")
 }
 
@@ -101,7 +101,7 @@ func TestConnectNATS_MalformedCACert(t *testing.T) {
 
 	_, err := ConnectNATS("nats://127.0.0.1:4222", "", badCert)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to parse CA cert")
+	assert.ErrorIs(t, err, ErrCACertParse)
 }
 
 // generateTestCA creates an ephemeral CA cert+key and writes PEM files to dir.
