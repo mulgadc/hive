@@ -234,6 +234,9 @@ sudo update-ca-certificates
 echo "==> Starting spinifex.target"
 sudo systemctl start spinifex.target
 
+# Wait for services to start
+sleep 5
+
 # --- Build + import LB image (needs services running) ---
 echo "==> Building and importing LB image"
 cd "$PROJECT_ROOT" && make build-lb-agent
@@ -283,8 +286,6 @@ else
     sudo /usr/local/bin/spx admin images import --name "$IMAGE_NAME"
 fi
 
-aws ec2 describe-images
-
 # --- Smoke-test instance ---
 echo "==> Launching smoke-test instance"
 if grep -q 'AuthenticAMD' /proc/cpuinfo; then
@@ -300,7 +301,6 @@ if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
 fi
 
 SUBNET_ID=$(aws ec2 describe-subnets \
-    --filters "Name=map-public-ip-on-launch,Values=true" \
     --query "Subnets[0].SubnetId" --output text 2>/dev/null)
 if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" = "None" ]; then
     SUBNET_ID=$(aws ec2 describe-subnets --query "Subnets[0].SubnetId" --output text)
