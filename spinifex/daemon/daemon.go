@@ -144,9 +144,8 @@ type Daemon struct {
 	// Delay after QMP device_del before blockdev-del (default 1s, 0 in tests)
 	detachDelay time.Duration
 
-	// NATS connect retry parameters (zero values use defaults: 5min max, 500ms initial delay)
-	natsMaxWait    time.Duration
-	natsRetryDelay time.Duration
+	// NATS connect retry options (nil uses defaults: 5min max, 500ms initial delay)
+	natsRetryOpts []utils.RetryOption
 
 	// NetworkPlumber handles tap device lifecycle for VPC networking
 	networkPlumber NetworkPlumber
@@ -839,40 +838,12 @@ func (d *Daemon) Start() error {
 // be ready immediately after daemon start (e.g. if start-dev.sh is still
 // launching services). This retries for up to 5 minutes before giving up.
 func (d *Daemon) connectNATS() error {
-	maxWait := 5 * time.Minute
-	retryDelay := 500 * time.Millisecond
-	if d.natsMaxWait > 0 {
-		maxWait = d.natsMaxWait
+	nc, err := utils.ConnectNATSWithRetry(d.config.NATS.Host, d.config.NATS.ACL.Token, d.config.NATS.CACert, d.natsRetryOpts...)
+	if err != nil {
+		return err
 	}
-	if d.natsRetryDelay > 0 {
-		retryDelay = d.natsRetryDelay
-	}
-	start := time.Now()
-
-	for {
-		nc, err := utils.ConnectNATS(d.config.NATS.Host, d.config.NATS.ACL.Token, d.config.NATS.CACert)
-		if err == nil {
-			d.natsConn = nc
-			if time.Since(start) > time.Second {
-				slog.Info("NATS connection established", "elapsed", time.Since(start))
-			}
-			return nil
-		}
-
-		// TLS configuration errors are permanent — retrying will not help.
-		if strings.Contains(err.Error(), "CA cert") {
-			return fmt.Errorf("NATS TLS configuration error: %w", err)
-		}
-
-		elapsed := time.Since(start)
-		if elapsed >= maxWait {
-			return fmt.Errorf("NATS connect failed after %s: %w", elapsed.Round(time.Second), err)
-		}
-
-		slog.Warn("NATS not ready, retrying...", "error", err, "elapsed", elapsed.Round(time.Second), "retryIn", retryDelay)
-		time.Sleep(retryDelay)
-		retryDelay = min(retryDelay*2, 10*time.Second)
-	}
+	d.natsConn = nc
+	return nil
 }
 
 // initJetStream initializes JetStream with retry/backoff and upgrades replicas
