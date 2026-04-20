@@ -79,6 +79,12 @@ type ConfigSettings struct {
 	PoolPrefixLen  int      // Subnet prefix length (default 24)
 	PoolDNSServers []string // DNS servers for VM DHCP (auto-detected from host)
 
+	// OperatorEmail is the address collected at install time (TUI, SPINIFEX_EMAIL,
+	// or `spx admin init --email`). Written under [operator] in spinifex.toml so
+	// reset-dev-env.sh can preserve it across wipes. Empty means no operator
+	// identity was supplied.
+	OperatorEmail string
+
 	// Other nodes in the cluster (for config source of truth)
 	RemoteNodes []RemoteNode
 

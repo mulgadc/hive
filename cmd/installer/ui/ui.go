@@ -31,6 +31,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mulgadc/spinifex/cmd/installer/branding"
 	"github.com/mulgadc/spinifex/cmd/installer/install"
+	"github.com/mulgadc/spinifex/spinifex/admin"
 )
 
 // screen represents which step of the wizard is active.
@@ -126,10 +127,11 @@ type model struct {
 	joinIPInput   textinput.Model
 	joinPortInput textinput.Model
 
-	// Password
+	// Credentials (email + password)
+	emailInput           textinput.Model
 	passwordInput        textinput.Model
 	passwordConfirmInput textinput.Model
-	passwordFocus        int // 0 = password, 1 = confirm
+	credsFocus           int // 0 = email, 1 = password, 2 = confirm
 
 	// Accumulated validation error shown on current screen
 	validationErr string
@@ -249,6 +251,11 @@ func newModel(disks []diskInfo, nics []nicInfo) model {
 	joinPortIn.Placeholder = "4432"
 	joinPortIn.CharLimit = 5
 
+	emailIn := textinput.New()
+	emailIn.Placeholder = "admin@mydomain.com"
+	emailIn.CharLimit = 254 // RFC 5321 upper bound
+	emailIn.Width = 40
+
 	passIn := textinput.New()
 	passIn.Placeholder = "Admin password"
 	passIn.EchoMode = textinput.EchoPassword
@@ -286,6 +293,7 @@ func newModel(disks []diskInfo, nics []nicInfo) model {
 		lanSSID:              lanSSIDIn,
 		lanWiFiPass:          lanWiFiPassIn,
 		hostnameInput:        hostnameIn,
+		emailInput:           emailIn,
 		passwordInput:        passIn,
 		passwordConfirmInput: passConfirmIn,
 		joinIPInput:          joinIPIn,
@@ -459,8 +467,8 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.screen = screenPassword
-			m.passwordInput.Focus()
-			m.passwordFocus = 0
+			m.emailInput.Focus()
+			m.credsFocus = 0
 		default:
 			if m.hostnameInput.Focused() {
 				var cmd tea.Cmd
@@ -472,36 +480,37 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case screenPassword:
 		switch key {
 		case "tab", "down":
-			m.passwordInput.Blur()
-			m.passwordConfirmInput.Blur()
-			if m.passwordFocus == 0 {
-				m.passwordConfirmInput.Focus()
-				m.passwordFocus = 1
-			} else {
-				m.passwordInput.Focus()
-				m.passwordFocus = 0
-			}
+			m = m.setCredsFocus((m.credsFocus + 1) % 3)
 		case "shift+tab", "up":
-			m.passwordInput.Blur()
-			m.passwordConfirmInput.Blur()
-			if m.passwordFocus == 1 {
-				m.passwordInput.Focus()
-				m.passwordFocus = 0
-			} else {
-				m.passwordConfirmInput.Focus()
-				m.passwordFocus = 1
-			}
+			m = m.setCredsFocus((m.credsFocus + 2) % 3)
 		case "enter":
-			if m.passwordFocus == 0 {
-				m.passwordInput.Blur()
-				m.passwordConfirmInput.Focus()
-				m.passwordFocus = 1
+			// On email field: validate, then advance to password.
+			if m.credsFocus == 0 {
+				if err := admin.ValidateEmail(m.emailInput.Value()); err != nil {
+					m.validationErr = err.Error()
+					return m, nil
+				}
+				m.validationErr = ""
+				m = m.setCredsFocus(1)
+				return m, nil
+			}
+			// On password field: just advance (defer validation to confirm).
+			if m.credsFocus == 1 {
+				m = m.setCredsFocus(2)
+				return m, nil
+			}
+			// On confirm: validate email (again, in case user tabbed past),
+			// then validate password + match.
+			if err := admin.ValidateEmail(m.emailInput.Value()); err != nil {
+				m.validationErr = err.Error()
+				m = m.setCredsFocus(0)
 				return m, nil
 			}
 			pw := m.passwordInput.Value()
 			confirm := m.passwordConfirmInput.Value()
 			if pw == "" {
 				m.validationErr = "Password is required"
+				m = m.setCredsFocus(1)
 				return m, nil
 			}
 			if pw != confirm {
@@ -516,15 +525,19 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.screen = screenConfirm
 			}
 		case "esc":
+			m.emailInput.Blur()
 			m.passwordInput.Blur()
 			m.passwordConfirmInput.Blur()
 			m.screen = screenIdentity
 			m.hostnameInput.Focus()
 		default:
 			var cmd tea.Cmd
-			if m.passwordFocus == 0 {
+			switch m.credsFocus {
+			case 0:
+				m.emailInput, cmd = m.emailInput.Update(msg)
+			case 1:
 				m.passwordInput, cmd = m.passwordInput.Update(msg)
-			} else {
+			default:
 				m.passwordConfirmInput, cmd = m.passwordConfirmInput.Update(msg)
 			}
 			return m, cmd
@@ -556,8 +569,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.joinIPInput.Blur()
 			m.joinPortInput.Blur()
 			m.screen = screenPassword
-			m.passwordConfirmInput.Focus()
-			m.passwordFocus = 1
+			m = m.setCredsFocus(2)
 		default:
 			var cmd tea.Cmd
 			if m.joinIPInput.Focused() {
@@ -584,13 +596,34 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.joinPortInput.Blur()
 			} else {
 				m.screen = screenPassword
-				m.passwordInput.Focus()
-				m.passwordFocus = 0
+				m = m.setCredsFocus(0)
 			}
 		}
 	}
 
 	return m, nil
+}
+
+// setCredsFocus moves focus among the three credential inputs (email,
+// password, confirm) and ensures exactly one is focused. Returns the
+// updated model — callers must reassign (m = m.setCredsFocus(...)).
+// Value receiver keeps model's method set consistent with the other
+// bubbletea View/buildConfig methods (avoids golangci-lint recvcheck).
+func (m model) setCredsFocus(i int) model {
+	m.emailInput.Blur()
+	m.passwordInput.Blur()
+	m.passwordConfirmInput.Blur()
+	switch i {
+	case 0:
+		m.emailInput.Focus()
+	case 1:
+		m.passwordInput.Focus()
+	default:
+		m.passwordConfirmInput.Focus()
+		i = 2
+	}
+	m.credsFocus = i
+	return m
 }
 
 // ── WAN screen key handling ───────────────────────────────────────────────────
@@ -1065,9 +1098,12 @@ func (m model) updateActiveInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case screenPassword:
 		var cmd tea.Cmd
-		if m.passwordFocus == 0 {
+		switch m.credsFocus {
+		case 0:
+			m.emailInput, cmd = m.emailInput.Update(msg)
+		case 1:
 			m.passwordInput, cmd = m.passwordInput.Update(msg)
-		} else {
+		default:
 			m.passwordConfirmInput, cmd = m.passwordConfirmInput.Update(msg)
 		}
 		return m, cmd
@@ -1364,12 +1400,19 @@ func (m model) viewIdentity(w int) string {
 }
 
 func (m model) viewPassword(w int) string {
-	title := styleTitle.Render("Root Password")
+	title := styleTitle.Render("Administrator Credentials")
+	emailLabel := styleLabel.Render("Email")
+	emailHelp := styleHelp.Render("Used to notify of important system updates to Spinifex or security announcements")
 	passLabel := styleLabel.Render("Password")
 	confirmLabel := styleLabel.Render("Confirm password")
 
 	var lines []string
-	lines = append(lines, title, "", passLabel, m.passwordInput.View(), "", confirmLabel, m.passwordConfirmInput.View())
+	lines = append(lines,
+		title, "",
+		emailLabel, m.emailInput.View(), emailHelp, "",
+		passLabel, m.passwordInput.View(), "",
+		confirmLabel, m.passwordConfirmInput.View(),
+	)
 	if m.validationErr != "" {
 		lines = append(lines, "", styleError.Render(m.validationErr))
 	}
@@ -1519,6 +1562,7 @@ func (m model) buildConfig() *install.Config {
 		cfg.JoinAddr = net.JoinHostPort(strings.TrimSpace(m.joinIPInput.Value()), port)
 	}
 	cfg.RootPassword = m.passwordInput.Value()
+	cfg.Email = strings.TrimSpace(m.emailInput.Value())
 	return cfg
 }
 

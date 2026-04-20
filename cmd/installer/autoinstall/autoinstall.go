@@ -96,6 +96,9 @@ func buildConfig() (*install.Config, error) {
 		Disk:         disk,
 		Hostname:     hostname,
 		RootPassword: password,
+		// Optional on the headless path — empty means no --email passed to
+		// spx admin init, which omits the operator identity from telemetry.
+		Email:        strings.TrimSpace(os.Getenv("SPINIFEX_EMAIL")),
 		WANInterface: wanIface,
 		WANDHCPMode:  strings.ToLower(os.Getenv("SPINIFEX_WAN_MODE")) != "static",
 	}

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/mulgadc/spinifex/cmd/installer/systemd"
 )
@@ -38,6 +39,10 @@ type Config struct {
 	ClusterRole string
 	// JoinAddr is host:port of the primary node, only used when ClusterRole is "join".
 	JoinAddr string
+	// Email is the operator email collected by the TUI or SPINIFEX_EMAIL on
+	// the headless path. Passed to `spx admin init --email=<value>` when set;
+	// omitted entirely when empty.
+	Email string
 }
 
 // Write drops the firstboot script and systemd unit into root, which should be
@@ -179,10 +184,24 @@ systemctl start spinifex.target
 }
 
 func buildClusterCmd(cfg Config) string {
+	emailFlag := ""
+	if cfg.Email != "" {
+		// shellEscapeSingle keeps the email safe if it ever contains a
+		// character shell treats specially — belt-and-braces; the regex
+		// validator already rejects whitespace and @-chains.
+		emailFlag = " --email=" + shellEscapeSingle(cfg.Email)
+	}
 	switch cfg.ClusterRole {
 	case "join":
-		return fmt.Sprintf("spx admin join --node %s --host %s", cfg.Hostname, cfg.JoinAddr)
+		return fmt.Sprintf("spx admin join --node %s --host %s%s", cfg.Hostname, cfg.JoinAddr, emailFlag)
 	default:
-		return fmt.Sprintf("spx admin init --node %s --nodes 1", cfg.Hostname)
+		return fmt.Sprintf("spx admin init --node %s --nodes 1%s", cfg.Hostname, emailFlag)
 	}
+}
+
+// shellEscapeSingle wraps s in single quotes with any embedded single
+// quotes escaped. Minimal — we only need this because the email value is
+// interpolated into a shell script written by Write().
+func shellEscapeSingle(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

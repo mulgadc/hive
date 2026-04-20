@@ -61,4 +61,10 @@ type Config struct {
 
 	// RootPassword is the password to set for the root account on the installed system.
 	RootPassword string
+
+	// Email is the operator's email address, used by the call-home telemetry
+	// endpoint to notify of important system updates and security advisories.
+	// Required on interactive installs; may be empty on headless/CI installs
+	// when SPINIFEX_EMAIL is not supplied on the kernel cmdline.
+	Email string
 }

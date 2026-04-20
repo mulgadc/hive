@@ -568,6 +568,7 @@ func (c *Config) toFirstbootConfig() firstboot.Config {
 		EncapIP:     encapIP,
 		ClusterRole: c.ClusterRole,
 		JoinAddr:    c.JoinAddr,
+		Email:       c.Email,
 	}
 }
 

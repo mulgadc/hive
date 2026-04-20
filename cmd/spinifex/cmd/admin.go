@@ -261,6 +261,7 @@ func init() {
 	adminInitCmd.Flags().String("token-ttl", "30m", "Join token validity duration (e.g. 30m, 1h, 2h)")
 	adminInitCmd.Flags().String("cluster-name", "spinifex", "NATS cluster name")
 	adminInitCmd.Flags().Bool("no-telemetry", false, "Disable telemetry metrics sent during init (default: enabled)")
+	adminInitCmd.Flags().String("email", "", "Operator email address (used for update and security notifications)")
 	adminInitCmd.Flags().StringSlice("services", nil, "Services this node runs (default: all). Valid: nats,predastore,viperblock,daemon,awsgw,ui")
 
 	// External networking flags
@@ -286,6 +287,7 @@ func init() {
 	adminJoinCmd.Flags().String("token", "", "Join token from the init node (required)")
 	adminJoinCmd.Flags().StringSlice("services", nil, "Services this node runs (default: all)")
 	adminJoinCmd.Flags().Bool("no-telemetry", false, "Disable telemetry metrics sent during join (default: enabled)")
+	adminJoinCmd.Flags().String("email", "", "Operator email address (used for update and security notifications)")
 	adminJoinCmd.MarkFlagRequired("node")
 	adminJoinCmd.MarkFlagRequired("host")
 	adminJoinCmd.MarkFlagRequired("token")
@@ -633,6 +635,19 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 	clusterName, _ := cmd.Flags().GetString("cluster-name")
 	services, _ := cmd.Flags().GetStringSlice("services")
 
+	// Optional operator email — validated up-front so a bad address fails
+	// before we touch any config state. Empty is allowed here; reset / repeat
+	// inits on a box that already has an email in /etc/spinifex/spinifex.toml
+	// should preserve it (see config-preservation below).
+	email, _ := cmd.Flags().GetString("email")
+	email = strings.TrimSpace(email)
+	if email != "" {
+		if err := admin.ValidateEmail(email); err != nil {
+			fmt.Fprintf(os.Stderr, "--email: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	// External networking flags
 	externalMode, _ := cmd.Flags().GetString("external-mode")
 	externalIface, _ := cmd.Flags().GetString("external-iface")
@@ -664,6 +679,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 				BindIP:       bindIP,
 				Version:      Version,
 				ExternalMode: externalMode,
+				Email:        email,
 			})
 		})
 	}
@@ -821,6 +837,13 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		os.Exit(0)
 	}
 
+	// Preserve the previously-captured operator email across --force re-inits
+	// when --email is omitted (e.g. reset-dev-env.sh workflows). Without this
+	// a reset would silently blank the address.
+	if email == "" && admin.FileExists(spinifexTomlPath) {
+		email = admin.ReadOperatorEmail(spinifexTomlPath)
+	}
+
 	// Create config directory
 	if err := os.MkdirAll(configDir, 0700); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating config directory: %v\n", err)
@@ -918,7 +941,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		}
 
 		runAdminInitMultiNode(cmd, accessKey, secretKey, accountID, natsToken, clusterName,
-			configDir, spxRoot, certPath, region, az, node, bindIP, clusterBind,
+			configDir, spxRoot, certPath, region, az, node, bindIP, clusterBind, email,
 			port, nodes, formationTimeoutStr, tokenTTLStr, services, networkConfig)
 		return
 	}
@@ -1024,6 +1047,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 		PoolPrefixLen:  externalPrefixLen,
 		PoolDNSServers: dnsServers,
 
+		OperatorEmail:       email,
 		BootstrapAccountId:  admin.DefaultAccountID(),
 		BootstrapVpcId:      bootstrapVpcId,
 		BootstrapSubnetId:   bootstrapSubnetId,
@@ -1069,7 +1093,7 @@ func runAdminInit(cmd *cobra.Command, args []string) {
 // It starts a formation server, registers this node, waits for all nodes to join,
 // then generates configs with complete cluster topology.
 func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, natsToken, clusterName,
-	configDir, spxRoot, certPath, region, az, node, bindIP, clusterBind string,
+	configDir, spxRoot, certPath, region, az, node, bindIP, clusterBind, email string,
 	port, expectedNodes int, formationTimeoutStr, tokenTTLStr string, services []string, networkConfig *formation.NetworkConfig) {
 	formationTimeout, err := time.ParseDuration(formationTimeoutStr)
 	if err != nil {
@@ -1239,6 +1263,8 @@ func runAdminInitMultiNode(cmd *cobra.Command, accessKey, secretKey, accountID, 
 		Services:         services,
 		RemoteNodes:      buildRemoteNodes(allNodes, node),
 
+		OperatorEmail: email,
+
 		// Init node runs ovn-central locally
 		OVNNBAddr: "tcp:127.0.0.1:6641",
 		OVNSBAddr: "tcp:127.0.0.1:6642",
@@ -1297,6 +1323,17 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 	configDir, _ := cmd.Flags().GetString("config-dir")
 	clusterBind, _ := cmd.Flags().GetString("cluster-bind")
 	services, _ := cmd.Flags().GetStringSlice("services")
+
+	email, _ := cmd.Flags().GetString("email")
+	email = strings.TrimSpace(email)
+	if email != "" {
+		if err := admin.ValidateEmail(email); err != nil {
+			fmt.Fprintf(os.Stderr, "--email: %v\n", err)
+			os.Exit(1)
+		}
+	} else if admin.FileExists(filepath.Join(configDir, "spinifex.toml")) {
+		email = admin.ReadOperatorEmail(filepath.Join(configDir, "spinifex.toml"))
+	}
 
 	// Validate required parameters
 	if node == "" {
@@ -1475,6 +1512,7 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 				Nodes:     statusResp.Expected,
 				BindIP:    bindIP,
 				Version:   Version,
+				Email:     email,
 			})
 		})
 	}
@@ -1609,6 +1647,8 @@ func runAdminJoin(cmd *cobra.Command, args []string) {
 		PredastoreNodeID: predastoreNodeID,
 		Services:         services,
 		RemoteNodes:      buildRemoteNodes(statusResp.Nodes, node),
+
+		OperatorEmail: email,
 
 		// Joining nodes connect to the init node's OVN NB/SB DB
 		OVNNBAddr: fmt.Sprintf("tcp:%s:6641", leaderIP),

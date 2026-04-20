@@ -57,6 +57,7 @@ POOL_START=""
 POOL_END=""
 EXT_GATEWAY=""
 EXT_PREFIX=""
+OPERATOR_EMAIL=""
 
 if sudo test -f "$CONFIG_FILE"; then
     # Copy config to a temp file we can read without sudo for cleaner parsing.
@@ -87,7 +88,12 @@ if sudo test -f "$CONFIG_FILE"; then
     POOL_END=$(toml_scalar    '^\[\[network\.external_pools\]\]' 'range_end')
     EXT_GATEWAY=$(toml_scalar '^\[\[network\.external_pools\]\]' 'gateway')
     EXT_PREFIX=$(toml_scalar  '^\[\[network\.external_pools\]\]' 'prefix_len')
+    OPERATOR_EMAIL=$(toml_scalar '^\[operator\]' 'email')
 fi
+
+# Allow operator to override on the command line (e.g. first reset on a box
+# installed before --email existed): SPINIFEX_EMAIL=me@example.com ./reset-dev-env.sh
+OPERATOR_EMAIL="${SPINIFEX_EMAIL:-$OPERATOR_EMAIL}"
 
 # Defaults
 REGION="${REGION:-ap-southeast-2}"
@@ -97,6 +103,9 @@ EXT_MODE="${EXT_MODE:-pool}"
 echo "Preserving: region=$REGION az=$AZ external_mode=$EXT_MODE"
 if [ "$EXT_MODE" = "pool" ] && [ -n "$POOL_START" ]; then
     echo "  pool: $POOL_START - $POOL_END  gw=$EXT_GATEWAY  prefix=$EXT_PREFIX"
+fi
+if [ -n "$OPERATOR_EMAIL" ]; then
+    echo "  operator email: $OPERATOR_EMAIL"
 fi
 
 # --- Shutdown services ---
@@ -220,10 +229,14 @@ esac
 
 # --- Initialize platform ---
 echo "==> Initializing platform (region=$REGION az=$AZ)"
+EMAIL_INIT_ARG=""
+if [ -n "$OPERATOR_EMAIL" ]; then
+    EMAIL_INIT_ARG="--email=$OPERATOR_EMAIL"
+fi
 # shellcheck disable=SC2086  # intentional word-splitting for arg list
 sudo /usr/local/bin/spx admin init --force \
     --region "$REGION" --az "$AZ" --node node1 --nodes 1 \
-    $EXTERNAL_INIT_ARGS
+    $EXTERNAL_INIT_ARGS $EMAIL_INIT_ARG
 
 # --- Install CA cert into system trust store ---
 echo "==> Installing CA certificate"
