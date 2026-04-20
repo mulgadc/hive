@@ -32,6 +32,7 @@ import (
 	"github.com/mulgadc/spinifex/spinifex/objectstore"
 	"github.com/mulgadc/spinifex/spinifex/qmp"
 	"github.com/mulgadc/spinifex/spinifex/types"
+	"github.com/mulgadc/spinifex/spinifex/utils"
 	"github.com/mulgadc/spinifex/spinifex/vm"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -3744,8 +3745,10 @@ func TestConnectNATS_RetriesOnFailure(t *testing.T) {
 	clusterCfg.Nodes["node-1"] = cfg
 	daemon, err := NewDaemon(clusterCfg)
 	require.NoError(t, err)
-	daemon.natsMaxWait = 500 * time.Millisecond
-	daemon.natsRetryDelay = 50 * time.Millisecond
+	daemon.natsRetryOpts = []utils.RetryOption{
+		utils.WithMaxWait(500 * time.Millisecond),
+		utils.WithRetryDelay(50 * time.Millisecond),
+	}
 
 	start := time.Now()
 	err = daemon.connectNATS()

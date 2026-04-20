@@ -63,6 +63,64 @@ func ConnectNATS(host, token, caCertPath string) (*nats.Conn, error) {
 	return nc, nil
 }
 
+// retryConfig holds parameters for ConnectNATSWithRetry.
+type retryConfig struct {
+	maxWait    time.Duration
+	retryDelay time.Duration
+}
+
+// RetryOption configures ConnectNATSWithRetry behavior.
+type RetryOption func(*retryConfig)
+
+// WithMaxWait sets the maximum total time to keep retrying before giving up.
+func WithMaxWait(d time.Duration) RetryOption {
+	return func(c *retryConfig) { c.maxWait = d }
+}
+
+// WithRetryDelay sets the initial delay between retries (doubles each attempt, capped at 10s).
+func WithRetryDelay(d time.Duration) RetryOption {
+	return func(c *retryConfig) { c.retryDelay = d }
+}
+
+// ConnectNATSWithRetry calls ConnectNATS in a retry loop with exponential
+// backoff. It retries for up to 5 minutes (default) before giving up. TLS
+// configuration errors (ErrCACertRead, ErrCACertParse) are permanent and
+// cause an immediate return without retrying.
+func ConnectNATSWithRetry(host, token, caCertPath string, opts ...RetryOption) (*nats.Conn, error) {
+	cfg := retryConfig{
+		maxWait:    5 * time.Minute,
+		retryDelay: 500 * time.Millisecond,
+	}
+	for _, o := range opts {
+		o(&cfg)
+	}
+
+	start := time.Now()
+	for {
+		nc, err := ConnectNATS(host, token, caCertPath)
+		if err == nil {
+			if time.Since(start) > time.Second {
+				slog.Info("NATS connection established", "elapsed", time.Since(start).Round(time.Second))
+			}
+			return nc, nil
+		}
+
+		// TLS configuration errors are permanent — retrying will not help.
+		if errors.Is(err, ErrCACertRead) || errors.Is(err, ErrCACertParse) {
+			return nil, fmt.Errorf("NATS TLS configuration error: %w", err)
+		}
+
+		elapsed := time.Since(start)
+		if elapsed >= cfg.maxWait {
+			return nil, fmt.Errorf("NATS connect failed after %s: %w", elapsed.Round(time.Second), err)
+		}
+
+		slog.Warn("NATS not ready, retrying...", "error", err, "elapsed", elapsed.Round(time.Second), "retryIn", cfg.retryDelay)
+		time.Sleep(cfg.retryDelay)
+		cfg.retryDelay = min(cfg.retryDelay*2, 10*time.Second)
+	}
+}
+
 // AccountIDHeader is the NATS message header key used to pass the caller's
 // AWS account ID from the gateway to daemon handlers.
 const AccountIDHeader = "X-Account-ID"

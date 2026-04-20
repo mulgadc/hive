@@ -535,3 +535,41 @@ func TestAccountIDFromMsg_NilHeader(t *testing.T) {
 	msg := &nats.Msg{Subject: "test"}
 	assert.Equal(t, "", AccountIDFromMsg(msg))
 }
+
+// --- ConnectNATSWithRetry tests ---
+
+func TestConnectNATSWithRetry_Success(t *testing.T) {
+	ns := startTestNATSServer(t)
+
+	nc, err := ConnectNATSWithRetry(ns.ClientURL(), "", "")
+	require.NoError(t, err)
+	defer nc.Close()
+	assert.True(t, nc.IsConnected())
+}
+
+func TestConnectNATSWithRetry_RetriesOnFailure(t *testing.T) {
+	start := time.Now()
+	_, err := ConnectNATSWithRetry("nats://127.0.0.1:14222", "", "",
+		WithMaxWait(500*time.Millisecond),
+		WithRetryDelay(50*time.Millisecond),
+	)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NATS connect failed")
+	assert.GreaterOrEqual(t, elapsed, 100*time.Millisecond, "should have retried at least once")
+	assert.Less(t, elapsed, 5*time.Second, "should fail within a few seconds")
+}
+
+func TestConnectNATSWithRetry_TLSErrorNoRetry(t *testing.T) {
+	start := time.Now()
+	_, err := ConnectNATSWithRetry("nats://127.0.0.1:4222", "", "/nonexistent/ca.pem",
+		WithMaxWait(5*time.Second),
+	)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrCACertRead)
+	assert.Contains(t, err.Error(), "NATS TLS configuration error")
+	assert.Less(t, elapsed, time.Second, "should fail immediately without retrying")
+}

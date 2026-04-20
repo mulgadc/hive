@@ -2,7 +2,6 @@ package awsgw
 
 import (
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -103,7 +102,7 @@ func launchService(config *config.ClusterConfig) error {
 
 	// Connect to NATS for service communication. On concurrent startup the
 	// local NATS server may not be listening yet, so retry with backoff.
-	natsConn, err := connectNATS(nodeConfig.NATS.Host, nodeConfig.NATS.ACL.Token, nodeConfig.NATS.CACert)
+	natsConn, err := utils.ConnectNATSWithRetry(nodeConfig.NATS.Host, nodeConfig.NATS.ACL.Token, nodeConfig.NATS.CACert)
 	if err != nil {
 		return err
 	}
@@ -202,38 +201,6 @@ func launchService(config *config.ClusterConfig) error {
 	}
 
 	return nil
-}
-
-// connectNATS establishes a connection to NATS with retry/backoff. On concurrent
-// startup the local NATS server may not be listening yet.
-func connectNATS(host, token, caCertPath string) (*nats.Conn, error) {
-	const maxWait = 5 * time.Minute
-	retryDelay := 500 * time.Millisecond
-	start := time.Now()
-
-	for {
-		nc, err := utils.ConnectNATS(host, token, caCertPath)
-		if err == nil {
-			if time.Since(start) > time.Second {
-				slog.Info("NATS connection established", "elapsed", time.Since(start).Round(time.Second))
-			}
-			return nc, nil
-		}
-
-		// TLS configuration errors are permanent — retrying will not help.
-		if errors.Is(err, utils.ErrCACertRead) || errors.Is(err, utils.ErrCACertParse) {
-			return nil, fmt.Errorf("NATS TLS configuration error: %w", err)
-		}
-
-		elapsed := time.Since(start)
-		if elapsed >= maxWait {
-			return nil, fmt.Errorf("NATS connect failed after %s: %w", elapsed.Round(time.Second), err)
-		}
-
-		slog.Warn("NATS not ready, retrying...", "error", err, "elapsed", elapsed.Round(time.Second), "retryIn", retryDelay)
-		time.Sleep(retryDelay)
-		retryDelay = min(retryDelay*2, 10*time.Second)
-	}
 }
 
 // initIAMService initializes the IAM service with retry/backoff. On multi-node
