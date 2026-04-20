@@ -123,6 +123,10 @@ for _i in $(seq 1 120); do
     sleep 1
 done
 
+# Create default nameservers if DHCP server returns blank
+printf "nameserver 1.1.1.1\nnameserver 8.8.8.8\n" > /etc/resolvconf/resolv.conf.d/base
+resolvconf -u
+
 # Configure OVN networking.
 # br-wan (and br-lan if present) are Linux bridges created by the installer.
 # setup-ovn.sh auto-detects br-wan as the default route device (Linux bridge)
