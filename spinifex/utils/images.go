@@ -3,11 +3,23 @@ package utils
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"crypto/sha512"
+	"crypto/subtle"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
+	"log/slog"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -17,6 +29,230 @@ import (
 // Helper functions for OS images
 
 var ErrQCOWDetected = errors.New("qcow format detected")
+
+const sumsFileMaxSize = 1 * 1024 * 1024 // 1 MB, matches formation.go JoinRequest cap.
+
+var (
+	ErrChecksumMismatch        = errors.New("image checksum mismatch")
+	ErrChecksumNotFound        = errors.New("checksum entry for image filename not found")
+	ErrUnsupportedChecksumType = errors.New("unsupported checksum type")
+	ErrChecksumFetchFailed     = errors.New("checksum fetch failed")
+)
+
+// checksumExtraRootCAs is a test-only hook so unit tests can stand up an
+// httptest.NewTLSServer (which uses a self-signed cert) without relaxing the
+// HTTPS enforcement. Production builds leave this nil and the verification
+// client uses the system trust store.
+var checksumExtraRootCAs *x509.CertPool
+
+// checksumFetchTimeout is a var (not const) so tests can shrink it to exercise
+// the context-deadline path without waiting 30s.
+var checksumFetchTimeout = 30 * time.Second
+
+// VerifyImageChecksum fetches the sums file at checksumURL, locates the entry
+// for imagePath's basename, hashes imagePath with the algorithm named by
+// checksumType ("sha256" or "sha512"), and compares digests.
+//
+// Fails closed: every error path returns without accepting the image. A
+// non-HTTPS scheme, non-2xx status, transport error, response over 1 MB, or
+// cross-scheme redirect all wrap ErrChecksumFetchFailed. Unknown algorithm
+// wraps ErrUnsupportedChecksumType. Missing filename entry wraps
+// ErrChecksumNotFound. Digest mismatch wraps ErrChecksumMismatch and the
+// wrapped error's %v includes expected and actual hex.
+func VerifyImageChecksum(imagePath, checksumURL, checksumType string) error {
+	hasher, err := newHasher(checksumType)
+	if err != nil {
+		return err
+	}
+
+	expected, err := fetchExpectedDigest(checksumURL, filepath.Base(imagePath))
+	if err != nil {
+		slog.Error("image checksum fetch failed", "source", checksumURL, "err", err)
+		return err
+	}
+
+	// Distinct error for a catalog/sums-file algorithm mismatch — without this
+	// it'd surface as "tampering" via ConstantTimeCompare's length-0 return.
+	if len(expected) != hasher.Size()*2 {
+		return fmt.Errorf("%w: digest length %d from sums file does not match %s output length %d",
+			ErrChecksumFetchFailed, len(expected), checksumType, hasher.Size()*2)
+	}
+
+	actual, err := hashImageFile(imagePath, hasher)
+	if err != nil {
+		return fmt.Errorf("hash image file: %w", err)
+	}
+
+	if subtle.ConstantTimeCompare([]byte(expected), []byte(actual)) != 1 {
+		slog.Error("image checksum mismatch",
+			"image", imagePath,
+			"algorithm", checksumType,
+			"expected", expected,
+			"actual", actual,
+			"source", checksumURL,
+		)
+		return fmt.Errorf("%w: expected %s got %s", ErrChecksumMismatch, expected, actual)
+	}
+
+	return nil
+}
+
+func newHasher(checksumType string) (hash.Hash, error) {
+	switch strings.ToLower(checksumType) {
+	case "sha256":
+		return sha256.New(), nil
+	case "sha512":
+		return sha512.New(), nil
+	default:
+		return nil, fmt.Errorf("%w: %q", ErrUnsupportedChecksumType, checksumType)
+	}
+}
+
+// fetchExpectedDigest downloads the sums file and returns the hex digest for
+// the given filename. Enforces HTTPS on initial URL and every redirect hop,
+// caps redirects at 10, and truncates response at sumsFileMaxSize+1 so the
+// size check is unambiguous.
+func fetchExpectedDigest(checksumURL, filename string) (string, error) {
+	parsed, err := url.Parse(checksumURL)
+	if err != nil {
+		return "", fmt.Errorf("%w: parse url: %v", ErrChecksumFetchFailed, err)
+	}
+	if parsed.Scheme != "https" {
+		return "", fmt.Errorf("%w: non-https checksum url scheme %q", ErrChecksumFetchFailed, parsed.Scheme)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), checksumFetchTimeout)
+	defer cancel()
+	intCh := make(chan os.Signal, 1)
+	signal.Notify(intCh, os.Interrupt)
+	defer signal.Stop(intCh)
+	go func() {
+		select {
+		case <-intCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	transport := &http.Transport{}
+	if checksumExtraRootCAs != nil {
+		transport.TLSClientConfig = &tls.Config{RootCAs: checksumExtraRootCAs}
+	}
+	client := &http.Client{
+		Timeout:   checksumFetchTimeout,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if req.URL.Scheme != "https" {
+				return fmt.Errorf("refusing non-https redirect to %s", req.URL.Redacted())
+			}
+			return nil
+		},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checksumURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("%w: build request: %v", ErrChecksumFetchFailed, err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrChecksumFetchFailed, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return "", fmt.Errorf("%w: unexpected status %s", ErrChecksumFetchFailed, resp.Status)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, sumsFileMaxSize+1))
+	if err != nil {
+		return "", fmt.Errorf("%w: read body: %v", ErrChecksumFetchFailed, err)
+	}
+	if len(body) > sumsFileMaxSize {
+		return "", fmt.Errorf("%w: sums file exceeds %d byte limit", ErrChecksumFetchFailed, sumsFileMaxSize)
+	}
+
+	digest, err := parseSumsFile(body, filename)
+	if err != nil {
+		return "", err
+	}
+	return digest, nil
+}
+
+// parseSumsFile scans a coreutils-style sums file and returns the hex digest
+// matching filename. Filename match is case-sensitive: upstream Debian/Ubuntu/
+// Alpine sums are consistently lowercase and a divergence is a real signal.
+//
+// Accepts three on-the-wire shapes: "<hex>  <name>" (text mode), "<hex> *<name>"
+// (binary mode), and a bare single-token "<hex>" line (single-file .sha512 from
+// Alpine, which does not carry a filename).
+func parseSumsFile(body []byte, filename string) (string, error) {
+	var bareDigest string
+	bareCount := 0
+	scanner := bufio.NewScanner(bytes.NewReader(body))
+	scanner.Buffer(make([]byte, 0, 64*1024), sumsFileMaxSize+1)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		switch len(fields) {
+		case 1:
+			bareDigest = fields[0]
+			bareCount++
+		case 2:
+			name := strings.TrimPrefix(fields[1], "*")
+			if name == filename {
+				return fields[0], nil
+			}
+		default:
+			// More than two fields: not a format we recognise. Skip rather than
+			// reject outright — signed sums files occasionally have trailing
+			// commentary we want to tolerate.
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("%w: scan sums file: %v", ErrChecksumFetchFailed, err)
+	}
+
+	// Alpine single-file .sha512 fallback: exactly one bare-digest line in the
+	// whole file. Any more and we refuse, because we can't tell which line is
+	// the right one without a filename.
+	if bareCount == 1 {
+		return bareDigest, nil
+	}
+
+	return "", fmt.Errorf("%w: %s", ErrChecksumNotFound, filename)
+}
+
+// hashImageFile streams the image through hasher and returns the digest as
+// lowercase hex. Zero-byte files are rejected outright so a truncated
+// download surfaces as an explicit error rather than an opaque "checksum
+// mismatch".
+func hashImageFile(imagePath string, hasher hash.Hash) (string, error) {
+	f, err := os.Open(imagePath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
+	if stat.Size() == 0 {
+		return "", fmt.Errorf("image file %s is empty (likely a truncated or failed download)", imagePath)
+	}
+
+	if _, err := io.Copy(hasher, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
 
 type Images struct {
 	Name         string    `json:"name"`

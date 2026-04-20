@@ -34,6 +34,18 @@ func (c *LiveOVNClient) transactOps(ctx context.Context, ops []ovsdb.Operation) 
 	return err
 }
 
+// ACLSpec describes an OVN ACL rule for attachment to a port group.
+// Name, Severity, and Meter are optional — set Severity when Log is true.
+type ACLSpec struct {
+	Direction string // "to-lport" or "from-lport"
+	Priority  int
+	Match     string
+	Action    string // "allow-related", "drop", "allow", "reject"
+	Name      string
+	Log       bool
+	Severity  string // "alert", "warning", "notice", "info", "debug"
+}
+
 // OVNClient defines the interface for interacting with the OVN Northbound Database.
 // This abstraction allows for mock implementations in tests.
 type OVNClient interface {
@@ -88,7 +100,7 @@ type OVNClient interface {
 	SetPortGroupPorts(ctx context.Context, name string, ports []string) error
 
 	// ACLs (attached to port groups)
-	AddACL(ctx context.Context, portGroupName string, direction string, priority int, match string, action string) error
+	AddACL(ctx context.Context, portGroupName string, spec ACLSpec) error
 	ClearACLs(ctx context.Context, portGroupName string) error
 
 	// Gateway Chassis (HA scheduling for gateway router ports)
@@ -821,7 +833,7 @@ func (c *LiveOVNClient) SetPortGroupPorts(_ context.Context, _ string, _ []strin
 	return fmt.Errorf("SetPortGroupPorts: not yet implemented for live OVN client")
 }
 
-func (c *LiveOVNClient) AddACL(_ context.Context, _ string, _ string, _ int, _ string, _ string) error {
+func (c *LiveOVNClient) AddACL(_ context.Context, _ string, _ ACLSpec) error {
 	return fmt.Errorf("AddACL: not yet implemented for live OVN client")
 }
 

@@ -288,6 +288,7 @@ var viperblockStartCmd = &cobra.Command{
 		service, err := service.New("viperblock", &viperblockd.Config{
 			NatsHost:   nodeConfig.NATS.Host,
 			NatsToken:  nodeConfig.NATS.ACL.Token,
+			NatsCACert: nodeConfig.NATS.CACert,
 			PluginPath: pluginPath,
 			S3Host:     nodeConfig.Predastore.Host,
 			Bucket:     nodeConfig.Predastore.Bucket,
@@ -743,6 +744,7 @@ var vpcdStartCmd = &cobra.Command{
 		svc, err := service.New("vpcd", &vpcd.Config{
 			NatsHost:          nodeConfig.NATS.Host,
 			NatsToken:         nodeConfig.NATS.ACL.Token,
+			NatsCACert:        nodeConfig.NATS.CACert,
 			OVNNBAddr:         nodeConfig.VPCD.OVNNBAddr,
 			OVNSBAddr:         nodeConfig.VPCD.OVNSBAddr,
 			BaseDir:           nodeConfig.BaseDir,

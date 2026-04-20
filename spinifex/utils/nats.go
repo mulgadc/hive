@@ -1,10 +1,13 @@
 package utils
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -12,7 +15,8 @@ import (
 
 // ConnectNATS establishes a connection to a NATS server with standard reconnect
 // handling and logging. If token is non-empty, token authentication is used.
-func ConnectNATS(host, token string) (*nats.Conn, error) {
+// If caCertPath is non-empty, TLS is enabled using the given CA certificate.
+func ConnectNATS(host, token, caCertPath string) (*nats.Conn, error) {
 	opts := []nats.Option{
 		nats.ReconnectWait(time.Second),
 		nats.MaxReconnects(-1),
@@ -26,6 +30,20 @@ func ConnectNATS(host, token string) (*nats.Conn, error) {
 
 	if token != "" {
 		opts = append(opts, nats.Token(token))
+	}
+
+	if caCertPath != "" {
+		caCert, err := os.ReadFile(caCertPath)
+		if err != nil {
+			return nil, fmt.Errorf("read CA cert %s: %w", caCertPath, err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("failed to parse CA cert from %s", caCertPath)
+		}
+		opts = append(opts, nats.Secure(&tls.Config{
+			RootCAs: pool,
+		}))
 	}
 
 	nc, err := nats.Connect(host, opts...)

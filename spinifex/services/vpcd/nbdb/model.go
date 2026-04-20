@@ -104,10 +104,14 @@ type PortGroup struct {
 // ACL represents an OVN ACL rule attached to a port group or logical switch.
 type ACL struct {
 	UUID        string            `ovsdb:"_uuid"`
+	Name        *string           `ovsdb:"name"`
 	Direction   string            `ovsdb:"direction"` // "to-lport" or "from-lport"
 	Priority    int               `ovsdb:"priority"`
 	Match       string            `ovsdb:"match"`
 	Action      string            `ovsdb:"action"` // "allow-related", "drop", "allow", "reject"
+	Log         bool              `ovsdb:"log"`
+	Severity    *string           `ovsdb:"severity"` // "alert", "warning", "notice", "info", "debug"
+	Meter       *string           `ovsdb:"meter"`
 	ExternalIDs map[string]string `ovsdb:"external_ids"`
 }
 

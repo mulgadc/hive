@@ -271,19 +271,33 @@ if has_service "nats"; then
     # Wait for NATS JetStream to be ready before Predastore starts.
     # Predastore lazily opens IAM KV buckets — it starts with config-only auth
     # and activates IAM auth once the spinifex daemon creates the KV buckets.
-    echo "🔍 Waiting for NATS JetStream..."
-    NATS_JS_READY=false
-    for i in $(seq 1 15); do
-        # Send a NATS INFO probe — JetStream-enabled servers include "jetstream" in the INFO response
-        if echo "" | nc -w 1 "$NATS_CHECK_HOST" 4222 2>/dev/null | grep -q "jetstream"; then
-            echo "   ✅ NATS JetStream is ready"
-            NATS_JS_READY=true
-            break
+    # Wait for NATS JetStream to be ready before Predastore starts.
+    # Predastore lazily opens IAM KV buckets — it starts with config-only auth
+    # and activates IAM auth once the spinifex daemon creates the KV buckets.
+    # Use the monitoring HTTP endpoint (plaintext nc probe doesn't work with TLS).
+    # Monitoring is only on the primary node; secondary nodes skip this check.
+    NATS_HAS_MONITORING=false
+    if [ -f "$CONFIG_DIR/nats/nats.conf" ] && grep -q '^http:' "$CONFIG_DIR/nats/nats.conf"; then
+        NATS_HAS_MONITORING=true
+    fi
+
+    if [ "$NATS_HAS_MONITORING" = "true" ]; then
+        echo "🔍 Waiting for NATS JetStream..."
+        NATS_JS_READY=false
+        for i in $(seq 1 15); do
+            if curl -sf "http://127.0.0.1:8222/jsz" > /dev/null 2>&1; then
+                echo "   ✅ NATS JetStream is ready"
+                NATS_JS_READY=true
+                break
+            fi
+            sleep 1
+        done
+        if [ "$NATS_JS_READY" = "false" ]; then
+            echo "   ⚠️  NATS JetStream not confirmed ready — Predastore may fall back to config-only auth"
         fi
-        sleep 1
-    done
-    if [ "$NATS_JS_READY" = "false" ]; then
-        echo "   ⚠️  NATS JetStream not confirmed ready — Predastore may fall back to config-only auth"
+    else
+        echo "🔍 NATS monitoring not configured — skipping JetStream readiness check"
+        sleep 2
     fi
 else
     echo "1️⃣  Skipping NATS (not a local service)"
@@ -329,7 +343,11 @@ if has_service "predastore"; then
     PREDASTORE_CMD="./bin/spx service predastore start"
     start_service "predastore" "$PREDASTORE_CMD"
     set_oom_score "predastore" "-500"
-    check_service "Predastore" "$SPINIFEX_PREDASTORE_HOST" "$SPINIFEX_PREDASTORE_PORT"
+    if is_multinode; then
+        echo "   ⏭️  Skipping Predastore connectivity check (multi-node: needs quorum from peer nodes)"
+    else
+        check_service "Predastore" "$SPINIFEX_PREDASTORE_HOST" "$SPINIFEX_PREDASTORE_PORT"
+    fi
 else
     echo "2️⃣  Skipping Predastore (not a local service)"
 fi

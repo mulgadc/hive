@@ -13,7 +13,12 @@ if [[ ! -s "$PROFILE" ]]; then
     exit 1
 fi
 
-TOTAL=$(go tool cover -func="$PROFILE" | tail -1 | awk '{print $NF}' | tr -d '%')
+# Filter out packages excluded from coverage requirements (e.g. migrations)
+FILTERED=$(mktemp)
+trap 'rm -f "$FILTERED"' EXIT
+awk 'NR==1 || !/\/migrate\//' "$PROFILE" > "$FILTERED"
+
+TOTAL=$(go tool cover -func="$FILTERED" | tail -1 | awk '{print $NF}' | tr -d '%')
 
 if [[ -z "$TOTAL" ]]; then
     echo "ERROR: No coverage data generated — tests may have failed to compile"

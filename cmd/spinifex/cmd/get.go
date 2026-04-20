@@ -90,7 +90,7 @@ func loadConfigAndConnect() (*config.ClusterConfig, *nats.Conn, error) {
 	}
 
 	nodeConfig := cfg.Nodes[cfg.Node]
-	nc, err := utils.ConnectNATS(nodeConfig.NATS.Host, nodeConfig.NATS.ACL.Token)
+	nc, err := utils.ConnectNATS(nodeConfig.NATS.Host, nodeConfig.NATS.ACL.Token, nodeConfig.NATS.CACert)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to connect to NATS: %w", err)
 	}

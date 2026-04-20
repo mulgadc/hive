@@ -1,5 +1,5 @@
 # Domain configuration file in TOML format.
-version = "1.0"
+version = "2"
 epoch = 1
 node = "{{.Node}}"
 {{- if .ExternalMode}}
@@ -69,6 +69,7 @@ config = "awsgw/awsgw.toml"
 
 [nodes.{{.Node}}.nats]
 host = "{{.BindIP}}:4222"
+cacert = "{{.ConfigDir}}/ca.pem"
 
 [nodes.{{.Node}}.nats.acl]
 token = "{{.NatsToken}}"

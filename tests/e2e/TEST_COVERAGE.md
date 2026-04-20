@@ -306,11 +306,11 @@ Tests that EC2 resources are properly isolated between tenant accounts (Alpha, B
 - Simulated network IPs (no ramdisk — start-dev.sh uses disk-backed WAL/VB in CI)
 
 ### Phase 2: Cluster Initialization
-- `spx admin init` (leader node1)
+- `spx admin init` (leader node1) — generates join token, writes to `~/node1/config/join-token`
 - CA certificate trust
-- Start node1 services
-- `spx admin join` (node2, node3)
-- Start node2 + node3 services
+- Read join token from node1 config
+- `spx admin join` with `--token` (node2, node3 — concurrent)
+- Start all 3 node services concurrently
 
 ### Phase 3: Cluster Health Verification
 - Verify NATS cluster (3 nodes)
@@ -562,7 +562,7 @@ Runs on a real 3-node libvirt cluster provisioned by OpenTofu (`scripts/tofu-clu
 4. `git fetch` + checkout test branch on all nodes (all 3 repos)
 5. `make build` on all nodes (parallel)
 6. `setup-ovn.sh` — primary gets `--management`, secondaries connect to primary's OVN central
-7. `spx admin init` on primary, `spx admin join` on secondaries (formation server handshake)
+7. `spx admin init` on primary (generates join token), read token via SSH, `spx admin join --token` on secondaries
 8. `start-dev.sh` on all nodes
 9. Wait for `/health` (awsgw=ok) on all nodes
 10. Install Spinifex CA certificate on all nodes

@@ -51,8 +51,8 @@ Operational commands for inspecting cluster state. These fan out NATS requests t
 
 | Command | Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------|---------------|-------------|------------|--------|
-| `spx admin init` | `--nodes`, `--node`, `--bind`, `--port`, `--region`, `--az`, `--cluster-name`, `--cluster-bind`, `--cluster-routes`, `--predastore-nodes`, `--services`, `--formation-timeout`, `--force` | None (first-time setup) | Generates root IAM credentials (AKIA-prefixed access key + secret) → creates master.key (AES-256, 32 bytes, 0600) → writes bootstrap.json (consumed on first start) → generates CA + server TLS certificates → creates NATS config with auth token → writes spinifex.toml, awsgw.toml, predastore.toml → configures AWS CLI `spx` profile → creates directory structure under `~/spinifex/` | 1. Init creates all config files<br>2. Root credentials printed once<br>3. master.key is 32 bytes, mode 0600<br>4. bootstrap.json consumed on first start<br>5. `--force` re-initializes existing config<br>6. AWS CLI profile `spx` auto-configured | **DONE** |
-| `spx admin join` | `--host` (required), `--node` (required), `--bind`, `--port`, `--region`, `--az`, `--cluster-bind`, `--cluster-routes`, `--data-dir`, `--services` | Leader node must be running | Connects to leader node → retrieves cluster configuration → configures local node to join cluster and participate in distributed operations | 1. Join existing cluster<br>2. Missing host (error)<br>3. Missing node name (error) | **DONE** |
+| `spx admin init` | `--nodes`, `--node`, `--bind`, `--port`, `--region`, `--az`, `--cluster-name`, `--cluster-bind`, `--cluster-routes`, `--predastore-nodes`, `--services`, `--formation-timeout`, `--token-ttl`, `--force` | None (first-time setup) | Generates root IAM credentials (AKIA-prefixed access key + secret) → creates master.key (AES-256, 32 bytes, 0600) → writes bootstrap.json (consumed on first start) → generates CA + server TLS certificates → generates join token (written to `join-token` file, displayed in join command) → creates NATS config with auth token → writes spinifex.toml, awsgw.toml, predastore.toml → configures AWS CLI `spx` profile → creates directory structure under `~/spinifex/` | 1. Init creates all config files<br>2. Root credentials printed once<br>3. master.key is 32 bytes, mode 0600<br>4. bootstrap.json consumed on first start<br>5. `--force` re-initializes existing config<br>6. AWS CLI profile `spx` auto-configured<br>7. Multi-node init generates join token and writes to `<config-dir>/join-token` | **DONE** |
+| `spx admin join` | `--host` (required), `--node` (required), `--token` (required), `--bind`, `--port`, `--region`, `--az`, `--cluster-bind`, `--cluster-routes`, `--data-dir`, `--services` | Leader node must be running | Connects to leader node with join token (Authorization: Bearer header) → retrieves cluster configuration → configures local node to join cluster and participate in distributed operations | 1. Join existing cluster<br>2. Missing host (error)<br>3. Missing node name (error)<br>4. Missing token (error)<br>5. Invalid token (401)<br>6. Expired token (401) | **DONE** |
 
 ### Version
 
@@ -89,8 +89,39 @@ Operational commands for inspecting cluster state. These fan out NATS requests t
 
 | Command | Flags | Prerequisites | Basic Logic | Test Cases | Status |
 |---------|-------|---------------|-------------|------------|--------|
-| `spx admin images import` | `--name` | Cluster must be running, image file must exist locally | Imports a local disk image (QCOW2) as an AMI → uploads to Predastore S3 → registers as available AMI | 1. Import valid QCOW2 image<br>2. Image appears in `describe-images` | **DONE** |
+| `spx admin images import` | `--name`, `--file`, `--force`, `--skip-verify` | Cluster must be running; either `--name` (catalog download) or `--file` (operator-supplied media) | Catalog imports (`--name`) download the image, fetch the catalog `Checksum` URL, and verify the SHA-256/SHA-512 digest before extraction. Mismatch fails closed; the cached file is left on disk and `--force` re-downloads. `--file` imports skip verification — operator-supplied media is outside Spinifex's trust boundary, and the skip is logged at INFO for audit. `--skip-verify` bypasses verification for catalog imports and emits a WARN slog + stderr notice; use only for debugging or when upstream mirrors are confirmed-broken. | 1. Import valid catalog image (verifies checksum)<br>2. Tampered cache hit fails with `ErrChecksumMismatch`<br>3. `--force` recovers after a mismatch<br>4. `--file` import skips verification<br>5. `--skip-verify` bypasses checksum with WARN | **DONE** |
 | `spx admin images list` | — | None | Lists available OS images that can be imported or downloaded | 1. List available images | **DONE** |
+
+#### Image integrity verification (CMMC SI.L1-3.14.2)
+
+Catalog imports (`spx admin images import --name <name>`) verify the image
+against the catalog-declared SHA-256/SHA-512 digest before extraction. The sums
+file is fetched from the catalog `Checksum` URL over HTTPS only (cross-scheme
+redirects refused), and verification runs on both fresh downloads and cache
+hits so a poisoned cache is caught on the next import.
+
+On mismatch the import exits non-zero, the cached file is left on disk for
+inspection, and the printed guidance is `spx admin images import --name <name>
+--force` to re-download.
+
+`--file` imports skip verification by design: operator-supplied media is
+outside Spinifex's trust boundary and the operator is responsible for
+integrity (e.g. `sha256sum` against a trusted upstream digest before import).
+The skip is recorded as an INFO `slog` event with `reason=local-file-import`
+so a CMMC assessor can audit the decision from journald.
+
+`--skip-verify` bypasses the checksum step for catalog imports. The command
+still downloads via the catalog URL but does not compare the image digest
+against the sums file. Intended for narrow cases such as debugging upstream
+mirror issues or running against a transiently-broken `latest/` path; the
+skip is logged at WARN with `reason=skip-verify-flag` and printed to stderr
+so operators and assessors see it. Prefer `--file` with an out-of-band
+verified image over `--skip-verify` whenever possible.
+
+**Limitation:** verification confirms the image matches the digest the mirror
+served. A mirror compromise that swaps both image and sums file is not
+detected; closing that gap requires GPG signature verification of the sums
+file, deferred to a later phase.
 
 ## AWS Commands
 
