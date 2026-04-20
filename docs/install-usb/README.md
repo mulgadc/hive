@@ -25,7 +25,6 @@ Next, download the Spinifex ISO (x86)
 
 ## Flash Media
 Once installed, open Balena Etcher.
-(etcher image)
 Select "Flash From Image," then select the downloaded spinifex.iso file (it should be in your Downloads folder).
 
 Next, click "Select target" and choose the USB drive to be used as the boot media. Then click "Flash!"
@@ -38,10 +37,14 @@ You can now safely eject the USB drive if it was not ejected automatically.
 ## Boot From USB drive
 Insert your newly flashed USB drive into the target device and turn it on. As it boots, quickly press the correct key for your device to bring up the BIOS/UEFI menu (commonly F2, F10, F12, ESC or DEL) (image) and change the boot order such that the flashed USB drive has first priority, then continue to boot.
 
-If done succesfully, the Spinifex ISO GRUB menu will appear. From this menu you can select which method of install is used (console recommended). Headless mode can be configured by mounting the USB on a host device after flashing and editing the grub.cfg file with the desired values.
+If done succesfully, the Spinifex ISO GRUB menu will appear.
+![GRUB](../../.github/assets/images/GRUB.png)
+From this menu you can select which method of install is used (console recommended). Headless mode can be configured by mounting the USB on a host device after flashing and editing the grub.cfg file with the desired values.
 
 ## Setting up the Spinifex Node
 In console mode, follow the installation prompts to set the required networking values for the Spinifex node. We recommend using automatic IP (DHCP) but this can also be configured manually. Set a hostname (eg node1) and admin password.
+
+![Installer complete](../../.github/assets/images/installer-complete.png)
 
 The installer will then complete the installation of Spinifex onto the target device. Once complete, you will be prompted to remove the USB drive from the device before automatic reboot.
 
@@ -52,7 +55,7 @@ The device will reboot and spend ~2-5 minutes configuring the Spinifex node. The
 * Login: spinifex
 * Password: Set by user during installation
 
-Both before and after login, a banner will be printed specifying important info, such as details for SSHing into the node and accessing the web UI for further configuration of the node. ![banner](../../.github/assets/images/banner1.png)
+Both before and after login, a banner will be printed specifying important info, such as details for SSH into the node and accessing the web UI for further configuration of the node. ![banner](../../.github/assets/images/banner1.png)
 
 ## Setup Complete
 
