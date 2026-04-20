@@ -166,6 +166,11 @@ func copyRootfs() error {
 		"--exclude=/tmp",
 		"--exclude=/cdrom",
 		"--exclude=/mnt",
+		"--exclude=/etc/machine-id",
+		"--exclude=/var/lib/dbus/",
+		"--exclude=/etc/openvswitch/",
+		"--exclude=/var/lib/openvswitch/",
+		"--exclude=/var/lib/dhcpcd/",
 		"--exclude=/lost+found",
 		"--exclude=/boot/efi",
 		"/", mountRoot+"/",
@@ -214,26 +219,32 @@ func installSpinifex(cfg *Config) error {
 	// /usr/local/bin/ — no binary copy needed. Regenerate machine-specific
 	// identity files so each installed node is unique.
 
-	// Bind-mount /dev, /proc, /sys into the chroot so PAM (chpasswd),
-	// systemd-machine-id-setup, and other chroot commands work correctly.
-	// Trixie's PAM requires /proc and /dev/urandom for password hashing.
+	// Bind-mount /dev, /proc, /sys into the chroot so PAM (chpasswd) and
+	// other chroot commands work correctly. Trixie's PAM requires /proc and
+	// /dev/urandom for password hashing.
 	if err := bindChrootMounts(); err != nil {
 		return err
 	}
 	defer unbindChrootMounts()
 
-	// Fresh machine-id (required by systemd and dbus).
+	// Generate a unique machine-id from the kernel CSPRNG. We do not use
+	// systemd-machine-id-setup in the chroot: it reads the SMBIOS UUID via
+	// the bind-mounted /sys, which is identical on cloned VMs or hosts with
+	// absent/zeroed DMI data, and falls back to non-unique sources (MAC,
+	// hostname) when that also fails — producing the same ID on every node.
+	// /proc/sys/kernel/random/uuid is always unique and requires no chroot.
 	machineIDPath := filepath.Join(mountRoot, "etc/machine-id")
-	_ = os.Remove(machineIDPath)
-	if err := run("chroot", mountRoot, "systemd-machine-id-setup"); err != nil {
-		// Fallback: write empty file (mode 0600, writable) so systemd-machine-id-commit
-		// can persist the generated ID on first boot. Mode 0444 would prevent the
-		// commit and cause the ID to change on every reboot.
-		slog.Warn("installSpinifex: systemd-machine-id-setup failed, writing uninitialized marker", "err", err)
-		if writeErr := os.WriteFile(machineIDPath, []byte(""), 0o600); writeErr != nil {
-			return fmt.Errorf("write machine-id marker: %w", writeErr)
-		}
+	rawUUID, err := os.ReadFile("/proc/sys/kernel/random/uuid")
+	if err != nil {
+		return fmt.Errorf("installSpinifex: read kernel uuid: %w", err)
 	}
+	machineID := strings.ReplaceAll(strings.TrimSpace(string(rawUUID)), "-", "") + "\n"
+	if err := os.WriteFile(machineIDPath, []byte(machineID), 0o444); err != nil {
+		return fmt.Errorf("installSpinifex: write machine-id: %w", err)
+	}
+	// dbus mirrors /etc/machine-id; remove it so it is re-created from the
+	// new ID on first boot rather than carrying a stale value.
+	_ = os.Remove(filepath.Join(mountRoot, "var/lib/dbus/machine-id"))
 
 	// Hostname.
 	hostnamePath := filepath.Join(mountRoot, "etc/hostname")
