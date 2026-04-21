@@ -78,7 +78,7 @@ if [ -z "$AMI_ID" ] || [ "$AMI_ID" = "None" ]; then
     exit 1
 fi
 
-SUBNET_ID=$(aws ec2 describe-subnets --query "Subnets[0].SubnetId" --output text)
+SUBNET_ID=$(aws ec2 describe-subnets --query 'Subnets[?MapPublicIpOnLaunch==`true`].SubnetId | [0]' --output text)
 if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" = "None" ]; then
     echo "❌ No subnet found"
     exit 1
@@ -94,4 +94,90 @@ INSTANCE_ID=$(aws ec2 run-instances \
     --count 1 \
     --query 'Instances[0].InstanceId' --output text)
 
-echo "✅ Smoke test passed — instance $INSTANCE_ID launched ($INSTANCE_TYPE)"
+if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "None" ] || [ "$INSTANCE_ID" = "null" ]; then
+    echo "❌ run-instances returned no InstanceId"
+    exit 1
+fi
+echo "  Instance ID: $INSTANCE_ID"
+
+# --- Wait for running state ---
+echo "==> Waiting for instance to reach running state"
+COUNT=0
+STATE="unknown"
+while [ $COUNT -lt 60 ]; do
+    DESCRIBE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" 2>/dev/null) || {
+        sleep 2; COUNT=$((COUNT + 1)); continue
+    }
+    STATE=$(echo "$DESCRIBE" | jq -r '.Reservations[0].Instances[0].State.Name // "not-found"')
+    [ "$STATE" = "running" ] && break
+    if [ "$STATE" = "terminated" ]; then
+        echo "❌ Instance terminated unexpectedly"
+        exit 1
+    fi
+    sleep 2
+    COUNT=$((COUNT + 1))
+done
+if [ "$STATE" != "running" ]; then
+    echo "❌ Instance failed to reach running state (last: $STATE)"
+    exit 1
+fi
+echo "  Instance is running"
+
+# --- Resolve SSH endpoint (public IP or QEMU hostfwd) ---
+echo "==> Resolving SSH endpoint"
+INST_PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+    --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null || echo "None")
+
+SSH_INST_PORT=22
+if [ -n "$INST_PUBLIC_IP" ] && [ "$INST_PUBLIC_IP" != "None" ] && [ "$INST_PUBLIC_IP" != "null" ]; then
+    SSH_INST_HOST="$INST_PUBLIC_IP"
+    echo "  SSH via public IP: $SSH_INST_HOST"
+else
+    # Production OVN networking — instance is reachable via its private IP from this node.
+    SSH_INST_HOST=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+        --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text 2>/dev/null || echo "")
+    if [ -z "$SSH_INST_HOST" ] || [ "$SSH_INST_HOST" = "None" ] || [ "$SSH_INST_HOST" = "null" ]; then
+        echo "❌ Could not determine IP for $INSTANCE_ID"
+        exit 1
+    fi
+    echo "  SSH via private IP (OVN): $SSH_INST_HOST"
+fi
+
+# --- Wait for SSH ---
+echo "==> Waiting for SSH on $SSH_INST_HOST:$SSH_INST_PORT"
+SSH_READY=0
+for _i in $(seq 1 300); do
+    if ssh -o StrictHostKeyChecking=no \
+           -o UserKnownHostsFile=/dev/null \
+           -o ConnectTimeout=2 \
+           -o BatchMode=yes \
+           -p "$SSH_INST_PORT" \
+           -i "$SSH_KEY" \
+           ec2-user@"$SSH_INST_HOST" 'echo ready' >/dev/null 2>&1; then
+        SSH_READY=1
+        break
+    fi
+    sleep 1
+done
+if [ $SSH_READY -eq 0 ]; then
+    echo "❌ SSH not ready after 300s"
+    exit 1
+fi
+echo "  SSH is ready"
+
+# --- Verify instance identity via SSH ---
+echo "==> Verifying instance"
+SSH_OUT=$(ssh -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    -o ConnectTimeout=5 \
+    -o BatchMode=yes \
+    -p "$SSH_INST_PORT" \
+    -i "$SSH_KEY" \
+    ec2-user@"$SSH_INST_HOST" 'id && hostname' 2>&1)
+echo "  $SSH_OUT"
+if ! echo "$SSH_OUT" | grep -q "ec2-user"; then
+    echo "❌ Expected ec2-user in SSH output"
+    exit 1
+fi
+
+echo "✅ Smoke test passed — instance $INSTANCE_ID launched, running, and SSH-verified"

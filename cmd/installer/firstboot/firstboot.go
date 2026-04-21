@@ -177,6 +177,24 @@ mkdir -p "$(dirname "$DONE_MARKER")"
 touch "$DONE_MARKER"
 
 systemctl start spinifex.target
+
+# Wait for the daemon to bring up external networking. When external_mode=pool
+# is configured the daemon creates br-ext (the OVN external bridge) during
+# startup; launching instances before it is ready results in no public IP being
+# assigned. ip link requires no root and avoids parsing daemon logs.
+if grep -q 'external_mode.*pool' /etc/spinifex/spinifex.toml 2>/dev/null; then
+    echo "[firstboot] waiting for external networking (br-ext)..."
+    for _i in $(seq 1 30); do
+        if ip link show br-ext >/dev/null 2>&1; then
+            echo "[firstboot] br-ext ready (${_i}s)"
+            break
+        fi
+        sleep 1
+    done
+    if ! ip link show br-ext >/dev/null 2>&1; then
+        echo "[firstboot] warning: br-ext not up after 30s — external networking may be delayed"
+    fi
+fi
 `, cfg.Hostname, setupOVN, clusterCmd)
 
 	path := filepath.Join(root, "usr/local/bin/spinifex-firstboot.sh")
