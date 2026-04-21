@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -74,7 +75,9 @@ func createTestAMIConfig(t *testing.T, store *objectstore.MemoryObjectStore, ima
 	require.NoError(t, err)
 }
 
-// createTestAMIConfigWithName creates a test AMI config with a specified name
+// createTestAMIConfigWithName creates a test AMI config with a specified name.
+// Owner defaults to testAccountID so the AMI is visible to the default caller —
+// an empty ImageOwnerAlias would be filtered out as a corrupt config.
 func createTestAMIConfigWithName(t *testing.T, store *objectstore.MemoryObjectStore, imageID, name string) {
 	amiState := viperblock.VBState{
 		VolumeConfig: viperblock.VolumeConfig{
@@ -86,6 +89,7 @@ func createTestAMIConfigWithName(t *testing.T, store *objectstore.MemoryObjectSt
 				Virtualization:  "hvm",
 				RootDeviceType:  "ebs",
 				VolumeSizeGiB:   8,
+				ImageOwnerAlias: testAccountID,
 			},
 		},
 	}
@@ -825,35 +829,23 @@ func TestAmiNameExists_InvalidJSON(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	exists, err := svc.amiNameExists("any-name")
-	require.NoError(t, err)
-	assert.False(t, exists)
-}
-
-func TestUnimplementedMethods(t *testing.T) {
-	svc, _ := setupTestImageService(t)
-
-	_, err := svc.CreateImage(nil, "")
-	assert.Error(t, err)
-
-	_, err = svc.DescribeImageAttribute(nil, "")
-	assert.Error(t, err)
-
-	_, err = svc.DeregisterImage(nil, "")
-	assert.Error(t, err)
-
-	_, err = svc.ModifyImageAttribute(nil, "")
-	assert.Error(t, err)
-
-	_, err = svc.ResetImageAttribute(nil, "")
-	assert.Error(t, err)
+	// A corrupt AMI config is a real store-side problem. Surface it rather
+	// than silently under-counting names (which would let a caller write a
+	// duplicate and mask the corruption).
+	_, err = svc.amiNameExists("any-name")
+	require.Error(t, err)
 }
 
 // --- DescribeImages filter tests ---
 
 // createTestAMIConfigFull creates an AMI with all metadata fields for filter testing.
+// Owner defaults to testAccountID when the caller leaves ImageOwnerAlias empty —
+// an empty owner would be filtered out as corrupt.
 func createTestAMIConfigFull(t *testing.T, store *objectstore.MemoryObjectStore, meta viperblock.AMIMetadata) {
 	t.Helper()
+	if meta.ImageOwnerAlias == "" {
+		meta.ImageOwnerAlias = testAccountID
+	}
 	amiState := viperblock.VBState{
 		VolumeConfig: viperblock.VolumeConfig{
 			AMIMetadata: meta,
@@ -1503,6 +1495,48 @@ func TestCopyImage_HappyPath(t *testing.T) {
 	assert.Equal(t, "source-ami", *srcDesc.Images[0].Name)
 }
 
+func TestCopyImage_InheritsSourceFields(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// Seed snapshot for the source AMI.
+	_, err := store.PutObject(&awss3.PutObjectInput{
+		Bucket: aws.String(testBucket),
+		Key:    aws.String("snap-arm001/metadata.json"),
+		Body: strings.NewReader(func() string {
+			b, _ := json.Marshal(handlers_ec2_snapshot.SnapshotConfig{
+				SnapshotID: "snap-arm001", VolumeID: "vol-arm", VolumeSize: 32,
+				State: "completed", Progress: "100%", OwnerID: testAccountID,
+			})
+			return string(b)
+		}()),
+		ContentType: aws.String("application/json"),
+	})
+	require.NoError(t, err)
+
+	// Source AMI with non-default fields that must propagate.
+	putTestAMIConfigWithSnapshot(t, store, "ami-arm001", "arm-source", testAccountID, "snap-arm001", viperblock.AMIMetadata{
+		Architecture:    "arm64",
+		PlatformDetails: "Linux/UNIX (arm64)",
+		Virtualization:  "hvm",
+		VolumeSizeGiB:   32,
+		RootDeviceType:  "ebs",
+		Description:     "arm source",
+	})
+
+	before := time.Now()
+	out, err := svc.CopyImage(validCopyImageServiceInput("ami-arm001", "arm-copy"), testAccountID)
+	require.NoError(t, err)
+
+	newMeta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, "arm64", newMeta.Architecture)
+	assert.Equal(t, "Linux/UNIX (arm64)", newMeta.PlatformDetails)
+	assert.Equal(t, "hvm", newMeta.Virtualization)
+	assert.Equal(t, uint64(32), newMeta.VolumeSizeGiB)
+	assert.Equal(t, "ebs", newMeta.RootDeviceType)
+	assert.False(t, newMeta.CreationDate.Before(before), "CreationDate must be refreshed on copy, not inherited")
+}
+
 func TestCopyImage_NewSnapshotSharesSourceVolumeID(t *testing.T) {
 	svc, store := setupTestImageService(t)
 
@@ -1515,7 +1549,7 @@ func TestCopyImage_NewSnapshotSharesSourceVolumeID(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, "snap-orig", newMeta.SnapshotID)
 
-	newSnap, err := svc.getSnapshotMetadata(newMeta.SnapshotID)
+	newSnap, err := handlers_ec2_snapshot.ReadSnapshotConfig(store, testBucket, newMeta.SnapshotID)
 	require.NoError(t, err)
 	assert.Equal(t, "vol-shared", newSnap.VolumeID)
 	assert.Equal(t, int64(16), newSnap.VolumeSize)

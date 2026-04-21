@@ -53,8 +53,10 @@ func ValidateModifyImageAttributeInput(input *ec2.ModifyImageAttributeInput) err
 	}
 
 	hasTopLevelDescription := input.Description != nil
-	hasStructured := (input.Attribute != nil && *input.Attribute != "") ||
-		(input.Value != nil && *input.Value != "")
+	// Value alone (no Attribute) is a malformed request — treat any set Value
+	// as "structured shape" so it can't be silently discarded by the
+	// top-level branch. Nil vs empty-string are kept distinct.
+	hasStructured := (input.Attribute != nil && *input.Attribute != "") || input.Value != nil
 
 	switch {
 	case hasTopLevelDescription && hasStructured:
