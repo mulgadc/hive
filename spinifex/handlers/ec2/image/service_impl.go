@@ -758,8 +758,174 @@ func (s *ImageServiceImpl) DescribeImageAttribute(input *ec2.DescribeImageAttrib
 	return nil, errors.New("DescribeImageAttribute not yet implemented")
 }
 
+// RegisterImage creates an AMI metadata record that points at an existing
+// snapshot. It is pointer-only: it never moves, copies, or writes block data.
+// Validation done in the gateway layer guarantees the input shape; here we
+// only enforce semantic checks (name uniqueness, snapshot existence/ownership,
+// volume sizing).
 func (s *ImageServiceImpl) RegisterImage(input *ec2.RegisterImageInput, accountID string) (*ec2.RegisterImageOutput, error) {
-	return nil, errors.New("RegisterImage not yet implemented")
+	if input == nil || input.Name == nil || *input.Name == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	name := *input.Name
+
+	if exists, err := s.amiNameExists(name); err != nil {
+		slog.Error("RegisterImage: failed to check AMI name uniqueness", "name", name, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	} else if exists {
+		return nil, errors.New(awserrors.ErrorInvalidAMINameDuplicate)
+	}
+
+	rootBDM := pickRootSnapshotBDM(input.BlockDeviceMappings, input.RootDeviceName)
+	if rootBDM == nil {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+	snapshotID := *rootBDM.Ebs.SnapshotId
+
+	snapCfg, err := s.getSnapshotMetadata(snapshotID)
+	if err != nil {
+		if objectstore.IsNoSuchKeyError(err) {
+			return nil, errors.New(awserrors.ErrorInvalidSnapshotNotFound)
+		}
+		slog.Error("RegisterImage: failed to read snapshot metadata", "snapshotId", snapshotID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	// Snapshot ownership: callers can only register from their own snapshots
+	// or from system snapshots (non-account-ID owner, mirroring system AMIs).
+	if utils.IsAccountID(snapCfg.OwnerID) && snapCfg.OwnerID != accountID {
+		return nil, errors.New(awserrors.ErrorUnauthorizedOperation)
+	}
+
+	snapSizeGiB := uint64(0)
+	if snapCfg.VolumeSize > 0 {
+		snapSizeGiB = uint64(snapCfg.VolumeSize)
+	}
+
+	volumeSizeGiB := snapSizeGiB
+	if rootBDM.Ebs.VolumeSize != nil && *rootBDM.Ebs.VolumeSize > 0 {
+		requested := uint64(*rootBDM.Ebs.VolumeSize)
+		if requested < snapSizeGiB {
+			return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+		}
+		volumeSizeGiB = requested
+	}
+
+	architecture := "x86_64"
+	if input.Architecture != nil && *input.Architecture != "" {
+		architecture = *input.Architecture
+	}
+	virtualization := "hvm"
+	if input.VirtualizationType != nil && *input.VirtualizationType != "" {
+		virtualization = *input.VirtualizationType
+	}
+	description := ""
+	if input.Description != nil {
+		description = *input.Description
+	}
+
+	tags := tagsFromImageSpecifications(input.TagSpecifications)
+
+	amiID := utils.GenerateResourceID("ami")
+	meta := viperblock.AMIMetadata{
+		ImageID:         amiID,
+		Name:            name,
+		Description:     description,
+		SnapshotID:      snapshotID,
+		Architecture:    architecture,
+		PlatformDetails: "Linux/UNIX",
+		Virtualization:  virtualization,
+		VolumeSizeGiB:   volumeSizeGiB,
+		RootDeviceType:  "ebs",
+		ImageOwnerAlias: accountID,
+		CreationDate:    time.Now(),
+		Tags:            tags,
+	}
+
+	if err := s.putAMIConfig(amiID, meta); err != nil {
+		slog.Error("RegisterImage: failed to write AMI config", "amiId", amiID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	slog.Info("RegisterImage completed", "amiId", amiID, "snapshotId", snapshotID, "accountId", accountID)
+	return &ec2.RegisterImageOutput{ImageId: aws.String(amiID)}, nil
+}
+
+// pickRootSnapshotBDM finds the BDM that backs the root volume and carries an
+// EBS snapshot reference. When RootDeviceName is set, only the matching device
+// counts; otherwise the first BDM with a snapshot wins. Returns nil when no
+// suitable entry exists — mirroring the gateway's validation but applied again
+// at the service boundary so direct callers (tests, future internal users)
+// don't bypass the check.
+func pickRootSnapshotBDM(mappings []*ec2.BlockDeviceMapping, rootDeviceName *string) *ec2.BlockDeviceMapping {
+	wantName := ""
+	if rootDeviceName != nil {
+		wantName = *rootDeviceName
+	}
+
+	for _, bdm := range mappings {
+		if bdm == nil || bdm.Ebs == nil || bdm.Ebs.SnapshotId == nil || *bdm.Ebs.SnapshotId == "" {
+			continue
+		}
+		if wantName != "" {
+			if bdm.DeviceName == nil || *bdm.DeviceName != wantName {
+				continue
+			}
+		}
+		return bdm
+	}
+	return nil
+}
+
+// tagsFromImageSpecifications flattens TagSpecifications entries with
+// ResourceType=="image" into a key→value map. Non-image specifications and
+// nil/empty entries are skipped.
+func tagsFromImageSpecifications(specs []*ec2.TagSpecification) map[string]string {
+	if len(specs) == 0 {
+		return nil
+	}
+	tags := make(map[string]string)
+	for _, spec := range specs {
+		if spec == nil || spec.ResourceType == nil || *spec.ResourceType != "image" {
+			continue
+		}
+		for _, tag := range spec.Tags {
+			if tag == nil || tag.Key == nil {
+				continue
+			}
+			value := ""
+			if tag.Value != nil {
+				value = *tag.Value
+			}
+			tags[*tag.Key] = value
+		}
+	}
+	if len(tags) == 0 {
+		return nil
+	}
+	return tags
+}
+
+// getSnapshotMetadata reads the SnapshotConfig stored at {snapshotId}/metadata.json.
+// Returns the underlying object-store error (preserving NoSuchKey detectability)
+// so callers can map it to AWS-specific errors as appropriate.
+func (s *ImageServiceImpl) getSnapshotMetadata(snapshotID string) (*handlers_ec2_snapshot.SnapshotConfig, error) {
+	key := fmt.Sprintf("%s/metadata.json", snapshotID)
+	result, err := s.store.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer result.Body.Close()
+
+	var cfg handlers_ec2_snapshot.SnapshotConfig
+	if err := json.NewDecoder(result.Body).Decode(&cfg); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
 }
 
 // DeregisterImage hard-deletes the AMI's config.json. The backing snapshot is

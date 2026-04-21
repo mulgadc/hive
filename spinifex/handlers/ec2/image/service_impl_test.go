@@ -842,9 +842,6 @@ func TestUnimplementedMethods(t *testing.T) {
 	_, err = svc.DescribeImageAttribute(nil, "")
 	assert.Error(t, err)
 
-	_, err = svc.RegisterImage(nil, "")
-	assert.Error(t, err)
-
 	_, err = svc.DeregisterImage(nil, "")
 	assert.Error(t, err)
 
@@ -1040,4 +1037,361 @@ func TestDescribeImages_FilterByState(t *testing.T) {
 	}, testAccountID)
 	require.NoError(t, err)
 	assert.Empty(t, out.Images)
+}
+
+// --- RegisterImage tests ---
+
+// putTestSnapshotConfig writes a SnapshotConfig at {snapshotID}/metadata.json,
+// matching the layout that the snapshot service uses.
+func putTestSnapshotConfig(t *testing.T, store *objectstore.MemoryObjectStore, snapshotID string, sizeGiB int64, ownerID string) {
+	t.Helper()
+	cfg := handlers_ec2_snapshot.SnapshotConfig{
+		SnapshotID: snapshotID,
+		VolumeID:   "vol-source-" + snapshotID,
+		VolumeSize: sizeGiB,
+		State:      "completed",
+		Progress:   "100%",
+		OwnerID:    ownerID,
+	}
+	data, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	_, err = store.PutObject(&awss3.PutObjectInput{
+		Bucket:      aws.String(testBucket),
+		Key:         aws.String(snapshotID + "/metadata.json"),
+		Body:        strings.NewReader(string(data)),
+		ContentType: aws.String("application/json"),
+	})
+	require.NoError(t, err)
+}
+
+func validRegisterImageServiceInput(snapshotID string) *ec2.RegisterImageInput {
+	return &ec2.RegisterImageInput{
+		Name:           aws.String("registered-ami"),
+		RootDeviceName: aws.String("/dev/sda1"),
+		BlockDeviceMappings: []*ec2.BlockDeviceMapping{
+			{
+				DeviceName: aws.String("/dev/sda1"),
+				Ebs: &ec2.EbsBlockDevice{
+					SnapshotId: aws.String(snapshotID),
+				},
+			},
+		},
+	}
+}
+
+func TestRegisterImage_HappyPath(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	snapID := "snap-happy001"
+	putTestSnapshotConfig(t, store, snapID, 8, testAccountID)
+
+	out, err := svc.RegisterImage(validRegisterImageServiceInput(snapID), testAccountID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	require.NotNil(t, out.ImageId)
+	assert.True(t, strings.HasPrefix(*out.ImageId, "ami-"))
+
+	// AMI should be visible via DescribeImages with correct defaults.
+	desc, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		ImageIds: []*string{out.ImageId},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, desc.Images, 1)
+	img := desc.Images[0]
+	assert.Equal(t, "registered-ami", *img.Name)
+	assert.Equal(t, "x86_64", *img.Architecture)
+	assert.Equal(t, "hvm", *img.VirtualizationType)
+	assert.Equal(t, "ebs", *img.RootDeviceType)
+	assert.Equal(t, testAccountID, *img.OwnerId)
+}
+
+func TestRegisterImage_DuplicateName(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	createTestAMIConfigWithOwner(t, store, "ami-existing01", "registered-ami", testAccountID)
+	putTestSnapshotConfig(t, store, "snap-dup01", 8, testAccountID)
+
+	_, err := svc.RegisterImage(validRegisterImageServiceInput("snap-dup01"), testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMINameDuplicate, err.Error())
+}
+
+func TestRegisterImage_SnapshotNotFound(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+
+	_, err := svc.RegisterImage(validRegisterImageServiceInput("snap-missing"), testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidSnapshotNotFound, err.Error())
+}
+
+func TestRegisterImage_CrossAccountSnapshot(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	putTestSnapshotConfig(t, store, "snap-other01", 8, "000000000002")
+
+	_, err := svc.RegisterImage(validRegisterImageServiceInput("snap-other01"), testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorUnauthorizedOperation, err.Error())
+}
+
+func TestRegisterImage_SystemSnapshotAllowed(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// System-owned snapshot (non-account-ID owner) is launchable by anyone,
+	// matching how system AMIs work.
+	putTestSnapshotConfig(t, store, "snap-sys01", 8, "spinifex")
+
+	out, err := svc.RegisterImage(validRegisterImageServiceInput("snap-sys01"), testAccountID)
+	require.NoError(t, err)
+	require.NotNil(t, out.ImageId)
+
+	meta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, testAccountID, meta.ImageOwnerAlias)
+}
+
+func TestRegisterImage_ArchitectureAndVirtualizationDefaults(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	putTestSnapshotConfig(t, store, "snap-defaults", 8, testAccountID)
+
+	input := validRegisterImageServiceInput("snap-defaults")
+	out, err := svc.RegisterImage(input, testAccountID)
+	require.NoError(t, err)
+
+	meta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, "x86_64", meta.Architecture)
+	assert.Equal(t, "hvm", meta.Virtualization)
+	assert.Equal(t, "Linux/UNIX", meta.PlatformDetails)
+	assert.Equal(t, "ebs", meta.RootDeviceType)
+}
+
+func TestRegisterImage_ExplicitArchitecture(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	putTestSnapshotConfig(t, store, "snap-arm64", 8, testAccountID)
+
+	input := validRegisterImageServiceInput("snap-arm64")
+	input.Architecture = aws.String("arm64")
+	out, err := svc.RegisterImage(input, testAccountID)
+	require.NoError(t, err)
+
+	meta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, "arm64", meta.Architecture)
+}
+
+func TestRegisterImage_VolumeSizeSmallerThanSnapshotRejected(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	putTestSnapshotConfig(t, store, "snap-big", 20, testAccountID)
+
+	input := validRegisterImageServiceInput("snap-big")
+	input.BlockDeviceMappings[0].Ebs.VolumeSize = aws.Int64(8)
+
+	_, err := svc.RegisterImage(input, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidParameterValue, err.Error())
+}
+
+func TestRegisterImage_VolumeSizeLargerThanSnapshotHonoured(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	putTestSnapshotConfig(t, store, "snap-grow", 8, testAccountID)
+
+	input := validRegisterImageServiceInput("snap-grow")
+	input.BlockDeviceMappings[0].Ebs.VolumeSize = aws.Int64(20)
+
+	out, err := svc.RegisterImage(input, testAccountID)
+	require.NoError(t, err)
+
+	meta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(20), meta.VolumeSizeGiB)
+}
+
+func TestRegisterImage_VolumeSizeFromSnapshot(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	putTestSnapshotConfig(t, store, "snap-size", 16, testAccountID)
+
+	out, err := svc.RegisterImage(validRegisterImageServiceInput("snap-size"), testAccountID)
+	require.NoError(t, err)
+
+	meta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(16), meta.VolumeSizeGiB)
+}
+
+func TestRegisterImage_TagsPersisted(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	putTestSnapshotConfig(t, store, "snap-tags01", 8, testAccountID)
+
+	input := validRegisterImageServiceInput("snap-tags01")
+	input.TagSpecifications = []*ec2.TagSpecification{
+		{
+			ResourceType: aws.String("image"),
+			Tags: []*ec2.Tag{
+				{Key: aws.String("Env"), Value: aws.String("prod")},
+				{Key: aws.String("Owner"), Value: aws.String("team-a")},
+			},
+		},
+		{
+			// Non-image resource type — tags must be ignored.
+			ResourceType: aws.String("snapshot"),
+			Tags: []*ec2.Tag{
+				{Key: aws.String("ShouldNotAppear"), Value: aws.String("x")},
+			},
+		},
+	}
+
+	out, err := svc.RegisterImage(input, testAccountID)
+	require.NoError(t, err)
+
+	meta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, "prod", meta.Tags["Env"])
+	assert.Equal(t, "team-a", meta.Tags["Owner"])
+	_, ok := meta.Tags["ShouldNotAppear"]
+	assert.False(t, ok)
+}
+
+func TestRegisterImage_DescriptionPersisted(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	putTestSnapshotConfig(t, store, "snap-desc01", 8, testAccountID)
+
+	input := validRegisterImageServiceInput("snap-desc01")
+	input.Description = aws.String("hand-built golden image")
+
+	out, err := svc.RegisterImage(input, testAccountID)
+	require.NoError(t, err)
+
+	meta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, "hand-built golden image", meta.Description)
+}
+
+func TestRegisterImage_RootDeviceNameSelectsBDM(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	putTestSnapshotConfig(t, store, "snap-data", 4, testAccountID)
+	putTestSnapshotConfig(t, store, "snap-root", 8, testAccountID)
+
+	input := &ec2.RegisterImageInput{
+		Name:           aws.String("multi-bdm-ami"),
+		RootDeviceName: aws.String("/dev/xvda"),
+		BlockDeviceMappings: []*ec2.BlockDeviceMapping{
+			{
+				DeviceName: aws.String("/dev/xvdb"),
+				Ebs:        &ec2.EbsBlockDevice{SnapshotId: aws.String("snap-data")},
+			},
+			{
+				DeviceName: aws.String("/dev/xvda"),
+				Ebs:        &ec2.EbsBlockDevice{SnapshotId: aws.String("snap-root")},
+			},
+		},
+	}
+
+	out, err := svc.RegisterImage(input, testAccountID)
+	require.NoError(t, err)
+
+	meta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, "snap-root", meta.SnapshotID)
+	assert.Equal(t, uint64(8), meta.VolumeSizeGiB)
+}
+
+func TestRegisterImage_NilInput(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+
+	_, err := svc.RegisterImage(nil, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
+}
+
+func TestRegisterImage_NoBlockDeviceMappings(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+
+	_, err := svc.RegisterImage(&ec2.RegisterImageInput{
+		Name: aws.String("no-bdms"),
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
+}
+
+func TestRegisterImage_BDMWithoutMatchingRootDevice(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	putTestSnapshotConfig(t, store, "snap-mismatch", 8, testAccountID)
+
+	// Root device name doesn't match any BDM device name.
+	_, err := svc.RegisterImage(&ec2.RegisterImageInput{
+		Name:           aws.String("mismatched-root"),
+		RootDeviceName: aws.String("/dev/xvda"),
+		BlockDeviceMappings: []*ec2.BlockDeviceMapping{
+			{
+				DeviceName: aws.String("/dev/sdb"),
+				Ebs:        &ec2.EbsBlockDevice{SnapshotId: aws.String("snap-mismatch")},
+			},
+			nil,
+			{Ebs: nil}, // skipped: no Ebs
+		},
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
+}
+
+func TestRegisterImage_ExplicitVirtualizationType(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	putTestSnapshotConfig(t, store, "snap-virt", 8, testAccountID)
+
+	input := validRegisterImageServiceInput("snap-virt")
+	input.VirtualizationType = aws.String("hvm")
+
+	out, err := svc.RegisterImage(input, testAccountID)
+	require.NoError(t, err)
+
+	meta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, "hvm", meta.Virtualization)
+}
+
+func TestRegisterImage_NoRootDeviceNameUsesFirstSnapshotBDM(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	putTestSnapshotConfig(t, store, "snap-first", 8, testAccountID)
+
+	out, err := svc.RegisterImage(&ec2.RegisterImageInput{
+		Name: aws.String("no-rootdevname"),
+		// No RootDeviceName set; first BDM with a snapshot wins.
+		BlockDeviceMappings: []*ec2.BlockDeviceMapping{
+			{Ebs: nil}, // skipped
+			{Ebs: &ec2.EbsBlockDevice{SnapshotId: aws.String("snap-first")}},
+		},
+	}, testAccountID)
+	require.NoError(t, err)
+
+	meta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, "snap-first", meta.SnapshotID)
+}
+
+func TestRegisterImage_OwnerSetToCaller(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// Snapshot owned by caller; resulting AMI must record caller as owner.
+	putTestSnapshotConfig(t, store, "snap-own", 8, testAccountID)
+
+	out, err := svc.RegisterImage(validRegisterImageServiceInput("snap-own"), testAccountID)
+	require.NoError(t, err)
+
+	meta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, testAccountID, meta.ImageOwnerAlias)
+	assert.False(t, meta.CreationDate.IsZero())
 }
