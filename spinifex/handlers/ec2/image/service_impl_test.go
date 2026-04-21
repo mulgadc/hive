@@ -1617,6 +1617,43 @@ func TestCopyImage_SystemAMICopiedIntoCallerAccount(t *testing.T) {
 	assert.Equal(t, "spinifex", srcMeta.ImageOwnerAlias)
 }
 
+// Bundled system AMIs (admin-imported) have no standalone snap-xxx/metadata.json
+// — their SnapshotID refers to a viperblock-internal snap, and blocks live under
+// ami-xxx/. CopyImage must still succeed (AWS parity: copy of a public AMI works),
+// falling back to synthesizing a snap view where VolumeID = sourceImageID.
+func TestCopyImage_BundledSystemAMINoStandaloneSnap(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// Seed only the AMI config, no snap-xxx/metadata.json object — matches the
+	// on-disk layout produced by `spx admin images import`.
+	putTestAMIConfigWithSnapshot(t, store, "ami-bundled01", "alpine-bundled",
+		"system", "snap-ami-bundled01", viperblock.AMIMetadata{
+			VolumeSizeGiB: 8,
+			Description:   "bundled source",
+		})
+
+	out, err := svc.CopyImage(validCopyImageServiceInput("ami-bundled01", "my-alpine"), testAccountID)
+	require.NoError(t, err)
+	require.NotNil(t, out.ImageId)
+
+	newMeta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, testAccountID, newMeta.ImageOwnerAlias)
+	assert.Equal(t, uint64(8), newMeta.VolumeSizeGiB)
+
+	// New snap must exist in predastore, be owned by the caller, and point at
+	// the bundled AMI's prefix (VolumeID = sourceImageID), not at the borrowed
+	// snap-ami-bundled01 viperblock reference.
+	require.NotEqual(t, "snap-ami-bundled01", newMeta.SnapshotID,
+		"copy must mint a new user-owned snap id, not borrow the source's")
+	newSnap, err := handlers_ec2_snapshot.ReadSnapshotConfig(store, testBucket, newMeta.SnapshotID)
+	require.NoError(t, err)
+	assert.Equal(t, "ami-bundled01", newSnap.VolumeID,
+		"bundled fallback must point the new snap at the source AMI's prefix")
+	assert.Equal(t, int64(8), newSnap.VolumeSize)
+	assert.Equal(t, testAccountID, newSnap.OwnerID)
+}
+
 func TestCopyImage_CrossAccountHidesExistence(t *testing.T) {
 	svc, store := setupTestImageService(t)
 

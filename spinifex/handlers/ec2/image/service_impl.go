@@ -756,12 +756,25 @@ func (s *ImageServiceImpl) CopyImage(input *ec2.CopyImageInput, accountID string
 	}
 	srcSnap, err := handlers_ec2_snapshot.ReadSnapshotConfig(s.store, s.bucketName, srcMeta.SnapshotID)
 	if err != nil {
-		if objectstore.IsNoSuchKeyError(err) || errors.Is(err, handlers_ec2_snapshot.ErrCorruptSnapshotMetadata) {
+		// Bundled system AMIs (admin-imported via `spx admin images import`)
+		// store blocks under ami-xxx/ with no standalone snap-xxx/metadata.json
+		// — the SnapshotID field is a viperblock-internal snap reference. To
+		// keep copy-image AWS-compatible (copy of a public/shared AMI must
+		// succeed), synthesize a minimal snap view from the AMI itself: the
+		// bundled prefix IS the volume, so VolumeID = sourceImageID.
+		if objectstore.IsNoSuchKeyError(err) && srcMeta.ImageOwnerAlias != "" && !utils.IsAccountID(srcMeta.ImageOwnerAlias) {
+			srcSnap = &handlers_ec2_snapshot.SnapshotConfig{
+				SnapshotID: srcMeta.SnapshotID,
+				VolumeID:   sourceImageID,
+				VolumeSize: utils.SafeUint64ToInt64(srcMeta.VolumeSizeGiB),
+			}
+		} else if objectstore.IsNoSuchKeyError(err) || errors.Is(err, handlers_ec2_snapshot.ErrCorruptSnapshotMetadata) {
 			return nil, errors.New(awserrors.ErrorInvalidAMIIDNotFound)
+		} else {
+			slog.Error("CopyImage: failed to read source snapshot metadata",
+				"sourceImageId", sourceImageID, "snapshotId", srcMeta.SnapshotID, "err", err)
+			return nil, errors.New(awserrors.ErrorServerInternal)
 		}
-		slog.Error("CopyImage: failed to read source snapshot metadata",
-			"sourceImageId", sourceImageID, "snapshotId", srcMeta.SnapshotID, "err", err)
-		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
 	if exists, err := s.amiNameExists(name); err != nil {
