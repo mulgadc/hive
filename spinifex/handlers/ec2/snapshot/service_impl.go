@@ -104,54 +104,67 @@ func NewSnapshotServiceImplWithStore(cfg *config.Config, store objectstore.Objec
 	return svc
 }
 
-// getSnapshotKey returns the S3 key for storing snapshot metadata.
-// Uses metadata.json to avoid conflicting with viperblock's config.json
-// which stores the SnapshotState (block map references, source volume, etc).
-func getSnapshotKey(snapshotID string) string {
+// GetSnapshotKey uses metadata.json to avoid colliding with viperblock's
+// config.json (which stores SnapshotState: block map, source volume, etc).
+func GetSnapshotKey(snapshotID string) string {
 	return fmt.Sprintf("%s/metadata.json", snapshotID)
 }
 
-// getSnapshotConfig retrieves snapshot config from S3
-func (s *SnapshotServiceImpl) getSnapshotConfig(snapshotID string) (*SnapshotConfig, error) {
-	key := getSnapshotKey(snapshotID)
+// ErrCorruptSnapshotMetadata lets callers distinguish a missing snapshot from
+// one whose metadata.json can't be parsed.
+var ErrCorruptSnapshotMetadata = errors.New("corrupt snapshot metadata")
 
-	result, err := s.store.GetObject(&s3.GetObjectInput{
-		Bucket: aws.String(s.config.Predastore.Bucket),
+// ReadSnapshotConfig reads {snapshotID}/metadata.json. Object-store errors are
+// returned unchanged; callers map NoSuchKey to their preferred AWS error.
+// Decode failures wrap ErrCorruptSnapshotMetadata.
+func ReadSnapshotConfig(store objectstore.ObjectStore, bucket, snapshotID string) (*SnapshotConfig, error) {
+	key := GetSnapshotKey(snapshotID)
+	result, err := store.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		if objectstore.IsNoSuchKeyError(err) {
-			return nil, errors.New(awserrors.ErrorInvalidSnapshotNotFound)
-		}
 		return nil, err
 	}
 	defer result.Body.Close()
 
 	var cfg SnapshotConfig
 	if err := json.NewDecoder(result.Body).Decode(&cfg); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrCorruptSnapshotMetadata, err)
 	}
-
 	return &cfg, nil
 }
 
-// putSnapshotConfig stores snapshot config to S3
-func (s *SnapshotServiceImpl) putSnapshotConfig(snapshotID string, cfg *SnapshotConfig) error {
-	key := getSnapshotKey(snapshotID)
-
+// WriteSnapshotConfig writes the SnapshotConfig to {snapshotID}/metadata.json.
+func WriteSnapshotConfig(store objectstore.ObjectStore, bucket, snapshotID string, cfg *SnapshotConfig) error {
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		return err
 	}
-
-	_, err = s.store.PutObject(&s3.PutObjectInput{
-		Bucket:      aws.String(s.config.Predastore.Bucket),
-		Key:         aws.String(key),
+	_, err = store.PutObject(&s3.PutObjectInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(GetSnapshotKey(snapshotID)),
 		Body:        bytes.NewReader(data),
 		ContentType: aws.String("application/json"),
 	})
-
 	return err
+}
+
+// getSnapshotConfig translates NoSuchKey to InvalidSnapshot.NotFound.
+func (s *SnapshotServiceImpl) getSnapshotConfig(snapshotID string) (*SnapshotConfig, error) {
+	cfg, err := ReadSnapshotConfig(s.store, s.config.Predastore.Bucket, snapshotID)
+	if err != nil {
+		if objectstore.IsNoSuchKeyError(err) {
+			return nil, errors.New(awserrors.ErrorInvalidSnapshotNotFound)
+		}
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// putSnapshotConfig stores snapshot config to S3
+func (s *SnapshotServiceImpl) putSnapshotConfig(snapshotID string, cfg *SnapshotConfig) error {
+	return WriteSnapshotConfig(s.store, s.config.Predastore.Bucket, snapshotID, cfg)
 }
 
 // snapshotConfigToEC2 converts a SnapshotConfig to an EC2 Snapshot response object
