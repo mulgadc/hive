@@ -203,15 +203,17 @@ func GetBridgeIPv4(bridgeName string) (string, error) {
 	return "", fmt.Errorf("no IPv4 address on %s", bridgeName)
 }
 
-// SetupMgmtTapDevice creates a TAP device and adds it to the management Linux bridge.
-// Unlike VPC TAPs (OVS/OVN), this is a plain Linux bridge TAP.
+// SetupMgmtTapDevice creates a TAP device and attaches it to the management
+// OVS bridge (provisioned by scripts/setup-ovn.sh). br-mgmt uses
+// fail-mode=standalone and is excluded from ovn-bridge-mappings, so it
+// behaves as a plain L2 switch outside the OVN overlay.
 func SetupMgmtTapDevice(instanceID, mac, bridge string) (string, error) {
 	tapName := MgmtTapName(instanceID)
 
 	// Clean up stale TAP if present
 	if _, err := os.Stat("/sys/class/net/" + tapName); err == nil {
 		slog.Warn("Stale mgmt tap found, cleaning up", "tap", tapName)
-		if err := sudoCommand("ip", "link", "set", tapName, "nomaster").Run(); err != nil {
+		if err := sudoCommand("ovs-vsctl", "--if-exists", "del-port", bridge, tapName).Run(); err != nil {
 			slog.Warn("Failed to remove stale mgmt tap from bridge", "tap", tapName, "err", err)
 		}
 		if err := sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run(); err != nil {
@@ -230,8 +232,8 @@ func SetupMgmtTapDevice(instanceID, mac, bridge string) (string, error) {
 		return "", fmt.Errorf("bring up mgmt tap %s: %s: %w", tapName, strings.TrimSpace(string(out)), err)
 	}
 
-	// Add to Linux bridge
-	if out, err := sudoCommand("ip", "link", "set", tapName, "master", bridge).CombinedOutput(); err != nil {
+	// Attach to OVS mgmt bridge
+	if out, err := sudoCommand("ovs-vsctl", "--may-exist", "add-port", bridge, tapName).CombinedOutput(); err != nil {
 		_ = sudoCommand("ip", "tuntap", "del", "dev", tapName, "mode", "tap").Run()
 		return "", fmt.Errorf("add mgmt tap to %s: %s: %w", bridge, strings.TrimSpace(string(out)), err)
 	}
@@ -240,10 +242,11 @@ func SetupMgmtTapDevice(instanceID, mac, bridge string) (string, error) {
 	return tapName, nil
 }
 
-// CleanupMgmtTapDevice removes a management TAP device from its bridge and deletes it.
+// CleanupMgmtTapDevice removes a management TAP device from the mgmt OVS
+// bridge and deletes it.
 func CleanupMgmtTapDevice(tapName string) error {
-	// Remove from bridge
-	if out, err := sudoCommand("ip", "link", "set", tapName, "nomaster").CombinedOutput(); err != nil {
+	// Detach from whichever OVS bridge holds this tap (usually br-mgmt)
+	if out, err := sudoCommand("ovs-vsctl", "--if-exists", "del-port", tapName).CombinedOutput(); err != nil {
 		slog.Warn("Failed to remove mgmt tap from bridge", "tap", tapName, "err", err, "out", strings.TrimSpace(string(out)))
 	}
 
