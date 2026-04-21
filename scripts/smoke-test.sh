@@ -123,25 +123,24 @@ if [ "$STATE" != "running" ]; then
 fi
 echo "  Instance is running"
 
-# --- Resolve SSH endpoint (public IP or QEMU hostfwd) ---
-echo "==> Resolving SSH endpoint"
-INST_PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
-    --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null || echo "None")
-
+# --- Wait for public IP ---
+echo "==> Waiting for public IP assignment (up to 300s)"
 SSH_INST_PORT=22
-if [ -n "$INST_PUBLIC_IP" ] && [ "$INST_PUBLIC_IP" != "None" ] && [ "$INST_PUBLIC_IP" != "null" ]; then
-    SSH_INST_HOST="$INST_PUBLIC_IP"
-    echo "  SSH via public IP: $SSH_INST_HOST"
-else
-    # Production OVN networking — instance is reachable via its private IP from this node.
-    SSH_INST_HOST=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
-        --query 'Reservations[0].Instances[0].PrivateIpAddress' --output text 2>/dev/null || echo "")
-    if [ -z "$SSH_INST_HOST" ] || [ "$SSH_INST_HOST" = "None" ] || [ "$SSH_INST_HOST" = "null" ]; then
-        echo "❌ Could not determine IP for $INSTANCE_ID"
-        exit 1
+SSH_INST_HOST=""
+for _i in $(seq 1 300); do
+    _ip=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+        --query 'Reservations[0].Instances[0].PublicIpAddress' --output text 2>/dev/null || true)
+    if [ -n "$_ip" ] && [ "$_ip" != "None" ] && [ "$_ip" != "null" ]; then
+        SSH_INST_HOST="$_ip"
+        break
     fi
-    echo "  SSH via private IP (OVN): $SSH_INST_HOST"
+    sleep 1
+done
+if [ -z "$SSH_INST_HOST" ]; then
+    echo "❌ No public IP assigned after 300s — external networking not working"
+    exit 1
 fi
+echo "  Public IP: $SSH_INST_HOST"
 
 # --- Wait for SSH ---
 echo "==> Waiting for SSH on $SSH_INST_HOST:$SSH_INST_PORT"
