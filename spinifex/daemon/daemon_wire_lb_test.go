@@ -116,10 +116,10 @@ func TestWireLBAgentConfig_GatewayURL_AWSGWBindOnly(t *testing.T) {
 
 func TestWireLBAgentConfig_GatewayURL_LoopbackBindNoMgmtBridge(t *testing.T) {
 	// Production single-node without br-mgmt (mulga-siv-6 regression guard):
-	// awsgw.host defaults to 127.0.0.1 and the host has no mgmt bridge. The
-	// fallback must NOT write 127.0.0.1 into LB VM cloud-init — the VM's
-	// loopback is its own, not the host's. GatewayURL stays empty and the
-	// daemon logs an error (handled downstream).
+	// operator explicitly passed --bind 127.0.0.1 and the host has no mgmt
+	// bridge. The fallback must NOT write 127.0.0.1 into LB VM cloud-init —
+	// the VM's loopback is its own, not the host's. GatewayURL stays empty
+	// and the daemon logs an error (handled downstream).
 	cfg := &config.Config{
 		AWSGW: config.AWSGWConfig{Host: "127.0.0.1:9999"},
 	}
