@@ -35,7 +35,9 @@ Balena Etcher will now flash the USB drive with the spinifex.iso file. If comple
 You can now safely eject the USB drive if it was not ejected automatically.
 
 ## Boot From USB drive
-Insert your newly flashed USB drive into the target device and turn it on. As it boots, quickly press the correct key for your device to bring up the BIOS/UEFI menu (commonly F2, F10, F12, ESC or DEL) (image) and change the boot order such that the flashed USB drive has first priority, then continue to boot.
+Insert your newly flashed USB drive into the target device and turn it on.
+![ASUS Box](../../.github/assets/images/asus-box.jpeg)
+As it boots, quickly press the correct key for your device to bring up the BIOS/UEFI menu (commonly F2, F10, F12, ESC or DEL) (image) and change the boot order such that the flashed USB drive has first priority, then continue to boot.
 
 If done succesfully, the Spinifex ISO GRUB menu will appear.
 ![GRUB](../../.github/assets/images/GRUB.png)
