@@ -3,10 +3,9 @@
 </p>
 
 <p align="center">
-  <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go"></a>
+  <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.26+-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-3fb950?style=flat-square" alt="License"></a>
-  <a href="https://docs.mulgadc.com"><img src="https://img.shields.io/badge/Docs-mulgadc.com-DC2626?style=flat-square" alt="Docs"></a>
-  <a href="https://github.com/mulgadc/spinifex/actions"><img src="https://img.shields.io/badge/CI-e2e-58a6ff?style=flat-square" alt="CI"></a>
+  <a href="https://docs.mulgadc.com"><img src="https://img.shields.io/badge/Docs-docs.mulgadc.com-DC2626?style=flat-square" alt="Docs"></a>
 </p>
 
 <p align="center">
