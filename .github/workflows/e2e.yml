@@ -26,7 +26,7 @@ env:
 jobs:
   e2e_single:
     name: Single-Node E2E
-    runs-on: [self-hosted, ci-single]
+    runs-on: [ self-hosted, ci-single ]
     timeout-minutes: 30
     env:
       TOFU_LOG: /tmp/e2e-tofu-single-${{ github.run_id }}.log
@@ -41,14 +41,29 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           repositories: mulga
 
+      - name: Resolve Mulga Branch
+        id: mulga-branch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          if gh api "repos/mulgadc/mulga/branches/${BRANCH}" >/dev/null 2>&1; then
+            echo "ref=${BRANCH}" >> "$GITHUB_OUTPUT"
+            echo "mulga: using branch ${BRANCH}"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+            echo "mulga: branch ${BRANCH} not found, falling back to main"
+          fi
+
       - uses: actions/checkout@v6
         with:
           repository: mulgadc/mulga
+          ref: ${{ steps.mulga-branch.outputs.ref }}
           token: ${{ steps.app-token.outputs.token }}
           sparse-checkout: scripts/tofu-cluster
           path: mulga
 
-      - name: Build install artifacts
+      - name: Build Install Artifacts
         working-directory: mulga/scripts/tofu-cluster
         run: |
           ./build-install-artifacts.sh "${GIT_BRANCH}" \
@@ -95,7 +110,7 @@ jobs:
 
   e2e_pseudo_multi:
     name: Pseudo Multi-Node E2E
-    runs-on: [self-hosted, ci-pseudo]
+    runs-on: [ self-hosted, ci-pseudo ]
     timeout-minutes: 30
     env:
       TOFU_LOG: /tmp/e2e-tofu-pseudo-${{ github.run_id }}.log
@@ -110,16 +125,32 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           repositories: mulga
 
+      - name: Resolve Mulga Branch
+        id: mulga-branch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          if gh api "repos/mulgadc/mulga/branches/${BRANCH}" >/dev/null 2>&1; then
+            echo "ref=${BRANCH}" >> "$GITHUB_OUTPUT"
+            echo "mulga: using branch ${BRANCH}"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+            echo "mulga: branch ${BRANCH} not found, falling back to main"
+          fi
+
       - uses: actions/checkout@v6
         with:
           repository: mulgadc/mulga
+          ref: ${{ steps.mulga-branch.outputs.ref }}
           token: ${{ steps.app-token.outputs.token }}
           sparse-checkout: scripts/tofu-cluster
           path: mulga
 
-      - name: Clone and build
+      - name: Clone and Build
         working-directory: mulga/scripts/tofu-cluster
-        run: ./build-artifacts.sh "${GIT_BRANCH}" "${RUNNER_TEMP}/spinifex-artifacts.tar"
+        run: ./build-artifacts.sh "${GIT_BRANCH}"
+          "${RUNNER_TEMP}/spinifex-artifacts.tar"
 
       - name: Provision VM
         working-directory: mulga/scripts/tofu-cluster
@@ -158,7 +189,7 @@ jobs:
 
   e2e_real_multi:
     name: Real Multi-Node E2E
-    runs-on: [self-hosted, ci-multi]
+    runs-on: [ self-hosted, ci-multi ]
     timeout-minutes: 35
     env:
       TOFU_LOG: /tmp/e2e-tofu-multi-${{ github.run_id }}.log
@@ -173,9 +204,24 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           repositories: mulga
 
+      - name: Resolve Mulga Branch
+        id: mulga-branch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          if gh api "repos/mulgadc/mulga/branches/${BRANCH}" >/dev/null 2>&1; then
+            echo "ref=${BRANCH}" >> "$GITHUB_OUTPUT"
+            echo "mulga: using branch ${BRANCH}"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+            echo "mulga: branch ${BRANCH} not found, falling back to main"
+          fi
+
       - uses: actions/checkout@v6
         with:
           repository: mulgadc/mulga
+          ref: ${{ steps.mulga-branch.outputs.ref }}
           token: ${{ steps.app-token.outputs.token }}
           sparse-checkout: scripts/tofu-cluster
           path: mulga
@@ -238,11 +284,11 @@ jobs:
   e2e_status:
     name: Report E2E Status
     if: always() && inputs.sha
-    needs: [e2e_single, e2e_pseudo_multi, e2e_real_multi]
-    runs-on: [self-hosted, ci-single]
+    needs: [ e2e_single, e2e_pseudo_multi, e2e_real_multi ]
+    runs-on: [ self-hosted, ci-single ]
     timeout-minutes: 5
     steps:
-      - name: Report status to PR
+      - name: Report Status to PR
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
