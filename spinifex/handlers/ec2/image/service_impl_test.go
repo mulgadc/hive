@@ -375,6 +375,183 @@ func TestCreateImageFromInstance_UniqueNameAllowed(t *testing.T) {
 	assert.Equal(t, awserrors.ErrorServerInternal, err.Error())
 }
 
+func TestPutAMIConfig_RoundTrip(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+
+	meta := viperblock.AMIMetadata{
+		ImageID:         "ami-roundtrip01",
+		Name:            "round-trip",
+		Description:     "hello",
+		SnapshotID:      "snap-rt01",
+		Architecture:    "x86_64",
+		PlatformDetails: "Linux/UNIX",
+		Virtualization:  "hvm",
+		VolumeSizeGiB:   16,
+		RootDeviceType:  "ebs",
+		ImageOwnerAlias: testAccountID,
+	}
+
+	require.NoError(t, svc.putAMIConfig(meta.ImageID, meta))
+
+	got, err := svc.GetAMIConfig(meta.ImageID)
+	require.NoError(t, err)
+	assert.Equal(t, meta.Name, got.Name)
+	assert.Equal(t, meta.Description, got.Description)
+	assert.Equal(t, meta.SnapshotID, got.SnapshotID)
+	assert.Equal(t, meta.VolumeSizeGiB, got.VolumeSizeGiB)
+	assert.Equal(t, meta.ImageOwnerAlias, got.ImageOwnerAlias)
+}
+
+func TestCheckAMIOwnership(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+
+	caller := "000000000001"
+	other := "000000000002"
+
+	tests := []struct {
+		name    string
+		owner   string
+		wantErr bool
+	}{
+		{"OwnedByCaller", caller, false},
+		{"OwnedByOtherAccount", other, true},
+		{"SystemAMI", "spinifex", true},
+		{"EmptyOwner", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := svc.checkAMIOwnership(viperblock.AMIMetadata{ImageOwnerAlias: tt.owner}, caller)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Equal(t, awserrors.ErrorUnauthorizedOperation, err.Error())
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestDeregisterImage_HappyPath(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	amiID := "ami-dereg001"
+	createTestAMIConfigWithOwner(t, store, amiID, "ami-to-delete", testAccountID)
+
+	out, err := svc.DeregisterImage(&ec2.DeregisterImageInput{ImageId: aws.String(amiID)}, testAccountID)
+	require.NoError(t, err)
+	assert.NotNil(t, out)
+
+	// AMI config gone from S3
+	_, getErr := store.GetObject(&awss3.GetObjectInput{
+		Bucket: aws.String(testBucket),
+		Key:    aws.String(amiID + "/config.json"),
+	})
+	require.Error(t, getErr)
+	assert.True(t, objectstore.IsNoSuchKeyError(getErr))
+
+	// DescribeImages no longer returns it
+	_, descErr := svc.DescribeImages(&ec2.DescribeImagesInput{
+		ImageIds: []*string{aws.String(amiID)},
+	}, testAccountID)
+	require.Error(t, descErr)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, descErr.Error())
+}
+
+func TestDeregisterImage_NotFound(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+
+	_, err := svc.DeregisterImage(&ec2.DeregisterImageInput{
+		ImageId: aws.String("ami-doesnotexist"),
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
+}
+
+func TestDeregisterImage_Idempotent(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	amiID := "ami-idem001"
+	createTestAMIConfigWithOwner(t, store, amiID, "idempotent", testAccountID)
+
+	_, err := svc.DeregisterImage(&ec2.DeregisterImageInput{ImageId: aws.String(amiID)}, testAccountID)
+	require.NoError(t, err)
+
+	_, err = svc.DeregisterImage(&ec2.DeregisterImageInput{ImageId: aws.String(amiID)}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
+}
+
+func TestDeregisterImage_CrossAccount(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	amiID := "ami-other001"
+	createTestAMIConfigWithOwner(t, store, amiID, "other-acct", "000000000002")
+
+	_, err := svc.DeregisterImage(&ec2.DeregisterImageInput{ImageId: aws.String(amiID)}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorUnauthorizedOperation, err.Error())
+
+	// Confirm AMI still present after rejected mutation.
+	_, getErr := store.GetObject(&awss3.GetObjectInput{
+		Bucket: aws.String(testBucket),
+		Key:    aws.String(amiID + "/config.json"),
+	})
+	require.NoError(t, getErr)
+}
+
+func TestDeregisterImage_SystemAMI(t *testing.T) {
+	svc, store := setupTestImageService(t)
+	createTestAMIConfigWithOwner(t, store, "ami-sys001", "system-ami", "spinifex")
+
+	_, err := svc.DeregisterImage(&ec2.DeregisterImageInput{ImageId: aws.String("ami-sys001")}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorUnauthorizedOperation, err.Error())
+}
+
+func TestDeregisterImage_DoesNotTouchSnapshot(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	amiID := "ami-keepsnap001"
+	snapID := "snap-keep001"
+
+	// AMI pointing at a snapshot
+	amiState := viperblock.VBState{
+		VolumeConfig: viperblock.VolumeConfig{
+			AMIMetadata: viperblock.AMIMetadata{
+				ImageID:         amiID,
+				Name:            "with-snapshot",
+				SnapshotID:      snapID,
+				ImageOwnerAlias: testAccountID,
+				Architecture:    "x86_64",
+				Virtualization:  "hvm",
+				RootDeviceType:  "ebs",
+				VolumeSizeGiB:   8,
+			},
+		},
+	}
+	data, err := json.Marshal(amiState)
+	require.NoError(t, err)
+	_, err = store.PutObject(&awss3.PutObjectInput{
+		Bucket: aws.String(testBucket),
+		Key:    aws.String(amiID + "/config.json"),
+		Body:   strings.NewReader(string(data)),
+	})
+	require.NoError(t, err)
+
+	// Backing snapshot metadata
+	require.NoError(t, svc.putSnapshotMetadata(snapID, "vol-keep", 8, testAccountID))
+
+	_, err = svc.DeregisterImage(&ec2.DeregisterImageInput{ImageId: aws.String(amiID)}, testAccountID)
+	require.NoError(t, err)
+
+	// Snapshot metadata still present
+	_, snapErr := store.GetObject(&awss3.GetObjectInput{
+		Bucket: aws.String(testBucket),
+		Key:    aws.String(snapID + "/metadata.json"),
+	})
+	require.NoError(t, snapErr)
+}
+
 func TestDescribeImages_AccountScoping(t *testing.T) {
 	svc, store := setupTestImageService(t)
 

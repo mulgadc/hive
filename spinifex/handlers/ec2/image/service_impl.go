@@ -665,6 +665,64 @@ func (s *ImageServiceImpl) GetAMIConfig(imageID string) (viperblock.AMIMetadata,
 	return vbState.VolumeConfig.AMIMetadata, nil
 }
 
+// putAMIConfig writes AMI metadata to s3://{bucket}/{imageID}/config.json,
+// preserving the same VBState wrapper used by GetAMIConfig.
+func (s *ImageServiceImpl) putAMIConfig(imageID string, meta viperblock.AMIMetadata) error {
+	state := viperblock.VBState{
+		VolumeConfig: viperblock.VolumeConfig{
+			AMIMetadata: meta,
+		},
+	}
+
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+
+	configKey := fmt.Sprintf("%s/config.json", imageID)
+	_, err = s.store.PutObject(&s3.PutObjectInput{
+		Bucket:      aws.String(s.bucketName),
+		Key:         aws.String(configKey),
+		Body:        bytes.NewReader(data),
+		ContentType: aws.String("application/json"),
+	})
+	return err
+}
+
+// checkAMIOwnership returns ErrorUnauthorizedOperation if accountID cannot
+// mutate the AMI. System AMIs (non-account owner) are immutable via this
+// API regardless of caller.
+func (s *ImageServiceImpl) checkAMIOwnership(meta viperblock.AMIMetadata, accountID string) error {
+	if !utils.IsAccountID(meta.ImageOwnerAlias) || meta.ImageOwnerAlias != accountID {
+		return errors.New(awserrors.ErrorUnauthorizedOperation)
+	}
+	return nil
+}
+
+// loadAMIForMutation validates the ID format, fetches the config, converts
+// NoSuchKey to InvalidAMIID.NotFound, and runs the ownership check. Used by
+// deregister, modify, and reset paths where cross-account callers must see
+// UnauthorizedOperation rather than NotFound (the caller already knows the ID).
+func (s *ImageServiceImpl) loadAMIForMutation(imageID, accountID string) (viperblock.AMIMetadata, error) {
+	if !strings.HasPrefix(imageID, "ami-") {
+		return viperblock.AMIMetadata{}, errors.New(awserrors.ErrorInvalidAMIIDMalformed)
+	}
+
+	meta, err := s.GetAMIConfig(imageID)
+	if err != nil {
+		if objectstore.IsNoSuchKeyError(err) {
+			return viperblock.AMIMetadata{}, errors.New(awserrors.ErrorInvalidAMIIDNotFound)
+		}
+		slog.Error("loadAMIForMutation: failed to read AMI config", "imageId", imageID, "err", err)
+		return viperblock.AMIMetadata{}, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	if err := s.checkAMIOwnership(meta, accountID); err != nil {
+		return viperblock.AMIMetadata{}, err
+	}
+	return meta, nil
+}
+
 // putSnapshotMetadata stores snapshot metadata in S3 using the canonical SnapshotConfig type
 func (s *ImageServiceImpl) putSnapshotMetadata(snapshotID, volumeID string, volumeSizeGiB uint64, accountID string) error {
 	cfg := handlers_ec2_snapshot.SnapshotConfig{
@@ -704,8 +762,31 @@ func (s *ImageServiceImpl) RegisterImage(input *ec2.RegisterImageInput, accountI
 	return nil, errors.New("RegisterImage not yet implemented")
 }
 
+// DeregisterImage hard-deletes the AMI's config.json. The backing snapshot is
+// untouched (matches AWS: deregister does not delete EBS snapshots). Operators
+// must run delete-snapshot separately to reclaim block storage.
 func (s *ImageServiceImpl) DeregisterImage(input *ec2.DeregisterImageInput, accountID string) (*ec2.DeregisterImageOutput, error) {
-	return nil, errors.New("DeregisterImage not yet implemented")
+	if input == nil || input.ImageId == nil || *input.ImageId == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	imageID := *input.ImageId
+
+	if _, err := s.loadAMIForMutation(imageID, accountID); err != nil {
+		return nil, err
+	}
+
+	configKey := fmt.Sprintf("%s/config.json", imageID)
+	if _, err := s.store.DeleteObject(&s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucketName),
+		Key:    aws.String(configKey),
+	}); err != nil {
+		slog.Error("DeregisterImage: failed to delete AMI config", "imageId", imageID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	slog.Info("DeregisterImage completed", "imageId", imageID, "accountId", accountID)
+	return &ec2.DeregisterImageOutput{}, nil
 }
 
 func (s *ImageServiceImpl) ModifyImageAttribute(input *ec2.ModifyImageAttributeInput, accountID string) (*ec2.ModifyImageAttributeOutput, error) {

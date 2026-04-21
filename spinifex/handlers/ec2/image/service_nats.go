@@ -43,7 +43,7 @@ func (s *NATSImageService) RegisterImage(input *ec2.RegisterImageInput, accountI
 }
 
 func (s *NATSImageService) DeregisterImage(input *ec2.DeregisterImageInput, accountID string) (*ec2.DeregisterImageOutput, error) {
-	return nil, errors.New("DeregisterImage not yet implemented")
+	return utils.NATSRequest[ec2.DeregisterImageOutput](s.natsConn, "ec2.DeregisterImage", input, 30*time.Second, accountID)
 }
 
 func (s *NATSImageService) ModifyImageAttribute(input *ec2.ModifyImageAttributeInput, accountID string) (*ec2.ModifyImageAttributeOutput, error) {

@@ -401,6 +401,7 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.ImportKeyPair", d.handleEC2ImportKeyPair, "spinifex-workers"},
 		{"ec2.DescribeImages", d.handleEC2DescribeImages, "spinifex-workers"},
 		{"ec2.CreateImage", d.handleEC2CreateImage, ""},
+		{"ec2.DeregisterImage", d.handleEC2DeregisterImage, "spinifex-workers"},
 		{"ec2.CreateVolume", d.handleEC2CreateVolume, "spinifex-workers"},
 		{"ec2.DescribeVolumes", d.handleEC2DescribeVolumes, "spinifex-workers"},
 		{"ec2.ModifyVolume", d.handleEC2ModifyVolume, "spinifex-workers"},
