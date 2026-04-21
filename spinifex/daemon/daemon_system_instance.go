@@ -153,26 +153,70 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 		}
 	}
 
-	// Allocate public IP for internet-facing ALBs
+	// Allocate public IP for internet-facing ALBs. Route through the EIP
+	// service when available so an EIPRecord is created in the KV bucket —
+	// otherwise AWS SDK callers (OpenTofu) can't observe the EIP via
+	// DescribeAddresses and their provisioning flow hangs. Falls back to
+	// direct IPAM allocation for daemons where the EIP service isn't wired.
 	publicIP := ""
-	if input.Scheme == handlers_elbv2.SchemeInternetFacing && d.externalIPAM != nil && d.vpcService != nil && instance.ENIId != "" {
-		region := ""
-		az := ""
-		if d.config != nil {
-			region = d.config.Region
-			az = d.config.AZ
-		}
-		allocatedIP, poolName, allocErr := d.externalIPAM.AllocateIP(region, az, "auto_assign", "", instance.ENIId, instance.ID)
-		if allocErr != nil {
-			slog.Error("LaunchSystemInstance: failed to allocate public IP for internet-facing ALB", "instanceId", instance.ID, "err", allocErr)
-			d.cleanupFailedSystemInstance(instance, instanceType)
-			return nil, fmt.Errorf("allocate public IP for internet-facing ALB: %w", allocErr)
-		} else {
+	if input.Scheme == handlers_elbv2.SchemeInternetFacing && d.vpcService != nil && instance.ENIId != "" {
+		if d.eipService != nil {
+			allocOut, allocErr := d.eipService.AllocateAddress(&ec2.AllocateAddressInput{}, eniAccountID)
+			if allocErr != nil {
+				slog.Error("LaunchSystemInstance: EIP AllocateAddress failed", "instanceId", instance.ID, "err", allocErr)
+				d.cleanupFailedSystemInstance(instance, instanceType)
+				return nil, fmt.Errorf("allocate public IP for internet-facing ALB: %w", allocErr)
+			}
+			publicIP = aws.StringValue(allocOut.PublicIp)
+			poolName := aws.StringValue(allocOut.PublicIpv4Pool)
+			allocID := aws.StringValue(allocOut.AllocationId)
+
+			assocOut, assocErr := d.eipService.AssociateAddress(&ec2.AssociateAddressInput{
+				AllocationId:       allocOut.AllocationId,
+				NetworkInterfaceId: aws.String(instance.ENIId),
+			}, eniAccountID)
+			if assocErr != nil {
+				slog.Error("LaunchSystemInstance: EIP AssociateAddress failed", "instanceId", instance.ID, "allocationId", allocID, "err", assocErr)
+				if _, relErr := d.eipService.ReleaseAddress(&ec2.ReleaseAddressInput{
+					AllocationId: allocOut.AllocationId,
+				}, eniAccountID); relErr != nil {
+					slog.Warn("LaunchSystemInstance: failed to release EIP after associate failure", "allocationId", allocID, "err", relErr)
+				}
+				d.cleanupFailedSystemInstance(instance, instanceType)
+				return nil, fmt.Errorf("associate public IP for internet-facing ALB: %w", assocErr)
+			}
+
+			if updateErr := d.vpcService.UpdateENIPublicIP(eniAccountID, instance.ENIId, publicIP, poolName); updateErr != nil {
+				slog.Warn("LaunchSystemInstance: failed to update ENI with public IP", "eniId", instance.ENIId, "err", updateErr)
+			}
+			instance.PublicIP = publicIP
+			instance.PublicIPPool = poolName
+			instance.PublicIPAllocID = allocID
+			instance.PublicIPAssocID = aws.StringValue(assocOut.AssociationId)
+			slog.Info("LaunchSystemInstance: allocated public IP via EIP service",
+				"instanceId", instance.ID,
+				"publicIp", publicIP,
+				"pool", poolName,
+				"allocationId", allocID,
+				"associationId", instance.PublicIPAssocID,
+			)
+		} else if d.externalIPAM != nil {
+			region := ""
+			az := ""
+			if d.config != nil {
+				region = d.config.Region
+				az = d.config.AZ
+			}
+			allocatedIP, poolName, allocErr := d.externalIPAM.AllocateIP(region, az, "auto_assign", "", instance.ENIId, instance.ID)
+			if allocErr != nil {
+				slog.Error("LaunchSystemInstance: failed to allocate public IP for internet-facing ALB", "instanceId", instance.ID, "err", allocErr)
+				d.cleanupFailedSystemInstance(instance, instanceType)
+				return nil, fmt.Errorf("allocate public IP for internet-facing ALB: %w", allocErr)
+			}
 			publicIP = allocatedIP
 			if updateErr := d.vpcService.UpdateENIPublicIP(eniAccountID, instance.ENIId, publicIP, poolName); updateErr != nil {
 				slog.Warn("LaunchSystemInstance: failed to update ENI with public IP", "eniId", instance.ENIId, "err", updateErr)
 			}
-			// Look up VpcId from the ENI for the NAT event
 			vpcID := ""
 			result, descErr := d.vpcService.DescribeNetworkInterfaces(&ec2.DescribeNetworkInterfacesInput{
 				NetworkInterfaceIds: []*string{aws.String(instance.ENIId)},
@@ -184,7 +228,7 @@ func (d *Daemon) LaunchSystemInstance(input *handlers_elbv2.SystemInstanceInput)
 			d.publishNATEvent("vpc.add-nat", vpcID, publicIP, privateIP, portName, instance.ENIMac)
 			instance.PublicIP = publicIP
 			instance.PublicIPPool = poolName
-			slog.Info("LaunchSystemInstance: allocated public IP",
+			slog.Info("LaunchSystemInstance: allocated public IP via direct IPAM",
 				"instanceId", instance.ID,
 				"publicIp", publicIP,
 				"pool", poolName,
@@ -314,6 +358,32 @@ func (d *Daemon) TerminateSystemInstance(instanceID string) error {
 	// Transition to shutting-down
 	if err := d.TransitionState(instance, vm.StateShuttingDown); err != nil {
 		return fmt.Errorf("transition to shutting-down: %w", err)
+	}
+
+	// Release EIP through the EIP service for system VMs whose public IP was
+	// allocated via AllocateAddress (internet-facing ALBs). Clears the fields
+	// so the generic teardown path in stopInstance doesn't try to
+	// double-release the same IP through externalIPAM directly.
+	if instance.PublicIPAllocID != "" && d.eipService != nil {
+		eniAccount := instance.AccountID
+		if instance.PublicIPAssocID != "" {
+			if _, err := d.eipService.DisassociateAddress(&ec2.DisassociateAddressInput{
+				AssociationId: aws.String(instance.PublicIPAssocID),
+			}, eniAccount); err != nil {
+				slog.Warn("TerminateSystemInstance: DisassociateAddress failed", "instanceId", instanceID, "associationId", instance.PublicIPAssocID, "err", err)
+			}
+		}
+		if _, err := d.eipService.ReleaseAddress(&ec2.ReleaseAddressInput{
+			AllocationId: aws.String(instance.PublicIPAllocID),
+		}, eniAccount); err != nil {
+			slog.Warn("TerminateSystemInstance: ReleaseAddress failed", "instanceId", instanceID, "allocationId", instance.PublicIPAllocID, "err", err)
+		} else {
+			slog.Info("TerminateSystemInstance: released EIP", "instanceId", instanceID, "ip", instance.PublicIP, "allocationId", instance.PublicIPAllocID)
+		}
+		instance.PublicIP = ""
+		instance.PublicIPPool = ""
+		instance.PublicIPAllocID = ""
+		instance.PublicIPAssocID = ""
 	}
 
 	// Stop the VM (QEMU shutdown, volume unmount, tap cleanup)
