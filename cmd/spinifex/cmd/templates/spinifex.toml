@@ -61,7 +61,7 @@ dev_networking = true
 {{- end}}
 
 [nodes.{{.Node}}.awsgw]
-host = "{{.BindIP}}:9999"
+host = "0.0.0.0:9999"
 tlskey = "config/server.key"
 tlscert = "config/server.pem"
 debug = true
@@ -90,7 +90,7 @@ wan_bridge = "{{.WanBridge}}"
 {{- end}}
 
 [nodes.{{.Node}}.predastore]
-host = "{{.BindIP}}:8443"
+host = "0.0.0.0:8443"
 region = "{{.Region}}"
 bucket = "predastore"
 accesskey = "{{.AccessKey}}"
