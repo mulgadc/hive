@@ -27,6 +27,18 @@ func (d *Daemon) handleEC2CopyImage(msg *nats.Msg) {
 	handleNATSRequest(msg, d.imageService.CopyImage)
 }
 
+func (d *Daemon) handleEC2DescribeImageAttribute(msg *nats.Msg) {
+	handleNATSRequest(msg, d.imageService.DescribeImageAttribute)
+}
+
+func (d *Daemon) handleEC2ModifyImageAttribute(msg *nats.Msg) {
+	handleNATSRequest(msg, d.imageService.ModifyImageAttribute)
+}
+
+func (d *Daemon) handleEC2ResetImageAttribute(msg *nats.Msg) {
+	handleNATSRequest(msg, d.imageService.ResetImageAttribute)
+}
+
 // handleEC2CreateImage is a stateful handler that extracts instance context
 // (root volume ID, source AMI, running state) before delegating to the image service.
 func (d *Daemon) handleEC2CreateImage(msg *nats.Msg) {

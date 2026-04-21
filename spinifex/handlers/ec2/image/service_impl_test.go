@@ -1736,3 +1736,413 @@ func TestCopyImage_MissingRequiredFields(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
 }
+
+// --- Image attribute tests ---
+
+func createTestAMIConfigRich(t *testing.T, store *objectstore.MemoryObjectStore, meta viperblock.AMIMetadata) {
+	t.Helper()
+	state := viperblock.VBState{
+		VolumeConfig: viperblock.VolumeConfig{AMIMetadata: meta},
+	}
+	data, err := json.Marshal(state)
+	require.NoError(t, err)
+
+	_, err = store.PutObject(&awss3.PutObjectInput{
+		Bucket:      aws.String(testBucket),
+		Key:         aws.String(meta.ImageID + "/config.json"),
+		Body:        strings.NewReader(string(data)),
+		ContentType: aws.String("application/json"),
+	})
+	require.NoError(t, err)
+}
+
+func TestDescribeImageAttribute_Description(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	createTestAMIConfigRich(t, store, viperblock.AMIMetadata{
+		ImageID:         "ami-desc01",
+		Name:            "desc-ami",
+		Description:     "the stored description",
+		Architecture:    "x86_64",
+		PlatformDetails: "Linux/UNIX",
+		Virtualization:  "hvm",
+		RootDeviceType:  "ebs",
+		VolumeSizeGiB:   8,
+		ImageOwnerAlias: testAccountID,
+	})
+
+	out, err := svc.DescribeImageAttribute(&ec2.DescribeImageAttributeInput{
+		ImageId:   aws.String("ami-desc01"),
+		Attribute: aws.String("description"),
+	}, testAccountID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	require.NotNil(t, out.ImageId)
+	assert.Equal(t, "ami-desc01", *out.ImageId)
+	require.NotNil(t, out.Description)
+	require.NotNil(t, out.Description.Value)
+	assert.Equal(t, "the stored description", *out.Description.Value)
+	assert.Nil(t, out.BlockDeviceMappings)
+}
+
+func TestDescribeImageAttribute_BlockDeviceMapping(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	createTestAMIConfigRich(t, store, viperblock.AMIMetadata{
+		ImageID:         "ami-bdm01",
+		Name:            "bdm-ami",
+		SnapshotID:      "snap-bdm01",
+		Architecture:    "x86_64",
+		PlatformDetails: "Linux/UNIX",
+		Virtualization:  "hvm",
+		RootDeviceType:  "ebs",
+		VolumeSizeGiB:   20,
+		ImageOwnerAlias: testAccountID,
+	})
+
+	out, err := svc.DescribeImageAttribute(&ec2.DescribeImageAttributeInput{
+		ImageId:   aws.String("ami-bdm01"),
+		Attribute: aws.String("blockDeviceMapping"),
+	}, testAccountID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	require.Len(t, out.BlockDeviceMappings, 1)
+	bdm := out.BlockDeviceMappings[0]
+	require.NotNil(t, bdm.DeviceName)
+	assert.Equal(t, "/dev/sda1", *bdm.DeviceName)
+	require.NotNil(t, bdm.Ebs)
+	require.NotNil(t, bdm.Ebs.SnapshotId)
+	assert.Equal(t, "snap-bdm01", *bdm.Ebs.SnapshotId)
+	require.NotNil(t, bdm.Ebs.VolumeSize)
+	assert.Equal(t, int64(20), *bdm.Ebs.VolumeSize)
+	assert.Nil(t, out.Description)
+}
+
+func TestDescribeImageAttribute_MissingParameters(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+
+	_, err := svc.DescribeImageAttribute(nil, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
+
+	_, err = svc.DescribeImageAttribute(&ec2.DescribeImageAttributeInput{
+		ImageId: aws.String("ami-xx"),
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
+
+	_, err = svc.DescribeImageAttribute(&ec2.DescribeImageAttributeInput{
+		Attribute: aws.String("description"),
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
+}
+
+func TestDescribeImageAttribute_NotFound(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+
+	_, err := svc.DescribeImageAttribute(&ec2.DescribeImageAttributeInput{
+		ImageId:   aws.String("ami-missing"),
+		Attribute: aws.String("description"),
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
+}
+
+func TestDescribeImageAttribute_CrossAccountHidesExistence(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	createTestAMIConfigRich(t, store, viperblock.AMIMetadata{
+		ImageID:         "ami-cross01",
+		Name:            "cross-ami",
+		Description:     "secret",
+		RootDeviceType:  "ebs",
+		ImageOwnerAlias: "000000000002",
+	})
+
+	_, err := svc.DescribeImageAttribute(&ec2.DescribeImageAttributeInput{
+		ImageId:   aws.String("ami-cross01"),
+		Attribute: aws.String("description"),
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
+}
+
+func TestDescribeImageAttribute_SystemAMIReadable(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	createTestAMIConfigRich(t, store, viperblock.AMIMetadata{
+		ImageID:         "ami-sys01",
+		Name:            "system-ami",
+		Description:     "baked-in",
+		RootDeviceType:  "ebs",
+		ImageOwnerAlias: "system",
+	})
+
+	out, err := svc.DescribeImageAttribute(&ec2.DescribeImageAttributeInput{
+		ImageId:   aws.String("ami-sys01"),
+		Attribute: aws.String("description"),
+	}, testAccountID)
+	require.NoError(t, err)
+	require.NotNil(t, out.Description)
+	require.NotNil(t, out.Description.Value)
+	assert.Equal(t, "baked-in", *out.Description.Value)
+}
+
+func TestDescribeImageAttribute_UnsupportedAttribute(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	createTestAMIConfigWithOwner(t, store, "ami-unsup01", "u", testAccountID)
+
+	for _, attr := range []string{"launchPermission", "bootMode", "kernel", "ramdisk"} {
+		t.Run(attr, func(t *testing.T) {
+			_, err := svc.DescribeImageAttribute(&ec2.DescribeImageAttributeInput{
+				ImageId:   aws.String("ami-unsup01"),
+				Attribute: aws.String(attr),
+			}, testAccountID)
+			require.Error(t, err)
+			assert.Equal(t, awserrors.ErrorInvalidParameterValue, err.Error())
+		})
+	}
+}
+
+func TestModifyImageAttribute_Description(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	createTestAMIConfigRich(t, store, viperblock.AMIMetadata{
+		ImageID:         "ami-mod01",
+		Name:            "mod-ami",
+		Description:     "old",
+		RootDeviceType:  "ebs",
+		ImageOwnerAlias: testAccountID,
+	})
+
+	_, err := svc.ModifyImageAttribute(&ec2.ModifyImageAttributeInput{
+		ImageId:   aws.String("ami-mod01"),
+		Attribute: aws.String("description"),
+		Value:     aws.String("new description"),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	meta, err := svc.GetAMIConfig("ami-mod01")
+	require.NoError(t, err)
+	assert.Equal(t, "new description", meta.Description)
+
+	// Round-trips via DescribeImageAttribute.
+	out, err := svc.DescribeImageAttribute(&ec2.DescribeImageAttributeInput{
+		ImageId:   aws.String("ami-mod01"),
+		Attribute: aws.String("description"),
+	}, testAccountID)
+	require.NoError(t, err)
+	require.NotNil(t, out.Description)
+	require.NotNil(t, out.Description.Value)
+	assert.Equal(t, "new description", *out.Description.Value)
+}
+
+func TestModifyImageAttribute_DescriptionEmptyValueClears(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	createTestAMIConfigRich(t, store, viperblock.AMIMetadata{
+		ImageID:         "ami-modclr01",
+		Name:            "modclr-ami",
+		Description:     "will-be-cleared",
+		RootDeviceType:  "ebs",
+		ImageOwnerAlias: testAccountID,
+	})
+
+	_, err := svc.ModifyImageAttribute(&ec2.ModifyImageAttributeInput{
+		ImageId:   aws.String("ami-modclr01"),
+		Attribute: aws.String("description"),
+		Value:     aws.String(""),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	meta, err := svc.GetAMIConfig("ami-modclr01")
+	require.NoError(t, err)
+	assert.Equal(t, "", meta.Description)
+}
+
+func TestModifyImageAttribute_CrossAccount(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	createTestAMIConfigRich(t, store, viperblock.AMIMetadata{
+		ImageID:         "ami-modx01",
+		Name:            "modx-ami",
+		Description:     "dont-touch",
+		RootDeviceType:  "ebs",
+		ImageOwnerAlias: "000000000002",
+	})
+
+	_, err := svc.ModifyImageAttribute(&ec2.ModifyImageAttributeInput{
+		ImageId:   aws.String("ami-modx01"),
+		Attribute: aws.String("description"),
+		Value:     aws.String("evil"),
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorUnauthorizedOperation, err.Error())
+
+	// Value untouched on S3.
+	meta, err := svc.GetAMIConfig("ami-modx01")
+	require.NoError(t, err)
+	assert.Equal(t, "dont-touch", meta.Description)
+}
+
+func TestModifyImageAttribute_SystemAMIImmutable(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	createTestAMIConfigRich(t, store, viperblock.AMIMetadata{
+		ImageID:         "ami-modsys01",
+		Name:            "sys-ami",
+		Description:     "baked-in",
+		RootDeviceType:  "ebs",
+		ImageOwnerAlias: "system",
+	})
+
+	_, err := svc.ModifyImageAttribute(&ec2.ModifyImageAttributeInput{
+		ImageId:   aws.String("ami-modsys01"),
+		Attribute: aws.String("description"),
+		Value:     aws.String("tampered"),
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorUnauthorizedOperation, err.Error())
+}
+
+func TestModifyImageAttribute_NotFound(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+
+	_, err := svc.ModifyImageAttribute(&ec2.ModifyImageAttributeInput{
+		ImageId:   aws.String("ami-missing"),
+		Attribute: aws.String("description"),
+		Value:     aws.String("x"),
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
+}
+
+func TestModifyImageAttribute_UnsupportedAttribute(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	createTestAMIConfigWithOwner(t, store, "ami-modunsup01", "u", testAccountID)
+
+	for _, attr := range []string{"bootMode", "launchPermission", "blockDeviceMapping"} {
+		t.Run(attr, func(t *testing.T) {
+			_, err := svc.ModifyImageAttribute(&ec2.ModifyImageAttributeInput{
+				ImageId:   aws.String("ami-modunsup01"),
+				Attribute: aws.String(attr),
+				Value:     aws.String("x"),
+			}, testAccountID)
+			require.Error(t, err)
+			assert.Equal(t, awserrors.ErrorInvalidParameterValue, err.Error())
+		})
+	}
+}
+
+func TestModifyImageAttribute_MissingParameters(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+
+	_, err := svc.ModifyImageAttribute(nil, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
+
+	_, err = svc.ModifyImageAttribute(&ec2.ModifyImageAttributeInput{
+		ImageId: aws.String("ami-x"),
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
+}
+
+func TestResetImageAttribute_Description(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	createTestAMIConfigRich(t, store, viperblock.AMIMetadata{
+		ImageID:         "ami-reset01",
+		Name:            "reset-ami",
+		Description:     "will-be-cleared",
+		RootDeviceType:  "ebs",
+		ImageOwnerAlias: testAccountID,
+	})
+
+	_, err := svc.ResetImageAttribute(&ec2.ResetImageAttributeInput{
+		ImageId:   aws.String("ami-reset01"),
+		Attribute: aws.String("description"),
+	}, testAccountID)
+	require.NoError(t, err)
+
+	meta, err := svc.GetAMIConfig("ami-reset01")
+	require.NoError(t, err)
+	assert.Equal(t, "", meta.Description)
+
+	out, err := svc.DescribeImageAttribute(&ec2.DescribeImageAttributeInput{
+		ImageId:   aws.String("ami-reset01"),
+		Attribute: aws.String("description"),
+	}, testAccountID)
+	require.NoError(t, err)
+	require.NotNil(t, out.Description)
+	require.NotNil(t, out.Description.Value)
+	assert.Equal(t, "", *out.Description.Value)
+}
+
+func TestResetImageAttribute_CrossAccount(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	createTestAMIConfigRich(t, store, viperblock.AMIMetadata{
+		ImageID:         "ami-rstx01",
+		Name:            "rstx",
+		Description:     "dont-touch",
+		RootDeviceType:  "ebs",
+		ImageOwnerAlias: "000000000002",
+	})
+
+	_, err := svc.ResetImageAttribute(&ec2.ResetImageAttributeInput{
+		ImageId:   aws.String("ami-rstx01"),
+		Attribute: aws.String("description"),
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorUnauthorizedOperation, err.Error())
+
+	meta, err := svc.GetAMIConfig("ami-rstx01")
+	require.NoError(t, err)
+	assert.Equal(t, "dont-touch", meta.Description)
+}
+
+func TestResetImageAttribute_NotFound(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+
+	_, err := svc.ResetImageAttribute(&ec2.ResetImageAttributeInput{
+		ImageId:   aws.String("ami-missing"),
+		Attribute: aws.String("description"),
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
+}
+
+func TestResetImageAttribute_UnsupportedAttribute(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	createTestAMIConfigWithOwner(t, store, "ami-rstunsup01", "u", testAccountID)
+
+	for _, attr := range []string{"launchPermission", "bootMode", "blockDeviceMapping"} {
+		t.Run(attr, func(t *testing.T) {
+			_, err := svc.ResetImageAttribute(&ec2.ResetImageAttributeInput{
+				ImageId:   aws.String("ami-rstunsup01"),
+				Attribute: aws.String(attr),
+			}, testAccountID)
+			require.Error(t, err)
+			assert.Equal(t, awserrors.ErrorInvalidParameterValue, err.Error())
+		})
+	}
+}
+
+func TestResetImageAttribute_MissingParameters(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+
+	_, err := svc.ResetImageAttribute(nil, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
+
+	_, err = svc.ResetImageAttribute(&ec2.ResetImageAttributeInput{
+		ImageId: aws.String("ami-x"),
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
+}

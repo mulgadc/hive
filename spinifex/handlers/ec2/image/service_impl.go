@@ -876,8 +876,75 @@ func mergeCopyImageTags(srcTags map[string]string, specs []*ec2.TagSpecification
 	return merged
 }
 
+// DescribeImageAttribute returns a single AMI attribute. Only description and
+// blockDeviceMapping are supported; the gateway validator should reject the
+// rest, but we re-check here so direct callers (tests, future internal users)
+// can't bypass the allowlist.
+//
+// Cross-account / orphan reads are hidden as InvalidAMIID.NotFound, mirroring
+// DescribeImages' silent cross-account filter — the caller shouldn't learn
+// that the ID exists in another account.
 func (s *ImageServiceImpl) DescribeImageAttribute(input *ec2.DescribeImageAttributeInput, accountID string) (*ec2.DescribeImageAttributeOutput, error) {
-	return nil, errors.New("DescribeImageAttribute not yet implemented")
+	if input == nil || input.ImageId == nil || *input.ImageId == "" ||
+		input.Attribute == nil || *input.Attribute == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	imageID := *input.ImageId
+	attribute := *input.Attribute
+
+	meta, err := s.GetAMIConfig(imageID)
+	if err != nil {
+		if objectstore.IsNoSuchKeyError(err) {
+			return nil, errors.New(awserrors.ErrorInvalidAMIIDNotFound)
+		}
+		slog.Error("DescribeImageAttribute: failed to read AMI config", "imageId", imageID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	// Visibility check matches DescribeImages: caller owns it OR it's a
+	// system AMI. Cross-account reads hide existence.
+	if utils.IsAccountID(meta.ImageOwnerAlias) && meta.ImageOwnerAlias != accountID {
+		return nil, errors.New(awserrors.ErrorInvalidAMIIDNotFound)
+	}
+
+	output := &ec2.DescribeImageAttributeOutput{
+		ImageId: aws.String(imageID),
+	}
+
+	switch attribute {
+	case ec2.ImageAttributeNameDescription:
+		output.Description = &ec2.AttributeValue{Value: aws.String(meta.Description)}
+	case ec2.ImageAttributeNameBlockDeviceMapping:
+		output.BlockDeviceMappings = synthesizeRootBlockDeviceMapping(meta)
+	default:
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
+	slog.Info("DescribeImageAttribute completed", "imageId", imageID, "attribute", attribute, "accountId", accountID)
+	return output, nil
+}
+
+// synthesizeRootBlockDeviceMapping builds the single-root BDM that DescribeImages
+// would report for this AMI. EBS-backed AMIs get /dev/sda1 with the snapshot
+// pointer and size from AMIMetadata; non-EBS or empty AMIs get nil.
+func synthesizeRootBlockDeviceMapping(meta viperblock.AMIMetadata) []*ec2.BlockDeviceMapping {
+	if meta.RootDeviceType != "ebs" {
+		return nil
+	}
+	ebs := &ec2.EbsBlockDevice{
+		VolumeSize:          aws.Int64(utils.SafeUint64ToInt64(meta.VolumeSizeGiB)),
+		VolumeType:          aws.String("gp3"),
+		DeleteOnTermination: aws.Bool(true),
+		Encrypted:           aws.Bool(false),
+	}
+	if meta.SnapshotID != "" {
+		ebs.SnapshotId = aws.String(meta.SnapshotID)
+	}
+	return []*ec2.BlockDeviceMapping{{
+		DeviceName: aws.String("/dev/sda1"),
+		Ebs:        ebs,
+	}}
 }
 
 // RegisterImage creates an AMI metadata record that points at an existing
@@ -1077,10 +1144,71 @@ func (s *ImageServiceImpl) DeregisterImage(input *ec2.DeregisterImageInput, acco
 	return &ec2.DeregisterImageOutput{}, nil
 }
 
+// ModifyImageAttribute persists a new value for a modifiable AMI attribute.
+// The gateway validator normalises the input so we only ever see the
+// Attribute+Value pair (top-level Description is folded in upstream). Today
+// only description is writable — everything else is refused.
 func (s *ImageServiceImpl) ModifyImageAttribute(input *ec2.ModifyImageAttributeInput, accountID string) (*ec2.ModifyImageAttributeOutput, error) {
-	return nil, errors.New("ModifyImageAttribute not yet implemented")
+	if input == nil || input.ImageId == nil || *input.ImageId == "" ||
+		input.Attribute == nil || *input.Attribute == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	imageID := *input.ImageId
+	attribute := *input.Attribute
+
+	if attribute != ec2.ImageAttributeNameDescription {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
+	meta, err := s.loadAMIForMutation(imageID, accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	newValue := ""
+	if input.Value != nil {
+		newValue = *input.Value
+	}
+	meta.Description = newValue
+
+	if err := s.putAMIConfig(imageID, meta); err != nil {
+		slog.Error("ModifyImageAttribute: failed to write AMI config", "imageId", imageID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	slog.Info("ModifyImageAttribute completed", "imageId", imageID, "attribute", attribute, "accountId", accountID)
+	return &ec2.ModifyImageAttributeOutput{}, nil
 }
 
+// ResetImageAttribute restores an AMI attribute to its default. Only
+// description is supported; it resets to empty string. launchPermission (AWS's
+// default reset target) is out of scope.
 func (s *ImageServiceImpl) ResetImageAttribute(input *ec2.ResetImageAttributeInput, accountID string) (*ec2.ResetImageAttributeOutput, error) {
-	return nil, errors.New("ResetImageAttribute not yet implemented")
+	if input == nil || input.ImageId == nil || *input.ImageId == "" ||
+		input.Attribute == nil || *input.Attribute == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	imageID := *input.ImageId
+	attribute := *input.Attribute
+
+	if attribute != ec2.ImageAttributeNameDescription {
+		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
+	}
+
+	meta, err := s.loadAMIForMutation(imageID, accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	meta.Description = ""
+
+	if err := s.putAMIConfig(imageID, meta); err != nil {
+		slog.Error("ResetImageAttribute: failed to write AMI config", "imageId", imageID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	slog.Info("ResetImageAttribute completed", "imageId", imageID, "attribute", attribute, "accountId", accountID)
+	return &ec2.ResetImageAttributeOutput{}, nil
 }

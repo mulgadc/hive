@@ -1,7 +1,6 @@
 package handlers_ec2_image
 
 import (
-	"errors"
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -35,7 +34,7 @@ func (s *NATSImageService) CopyImage(input *ec2.CopyImageInput, accountID string
 }
 
 func (s *NATSImageService) DescribeImageAttribute(input *ec2.DescribeImageAttributeInput, accountID string) (*ec2.DescribeImageAttributeOutput, error) {
-	return nil, errors.New("DescribeImageAttribute not yet implemented")
+	return utils.NATSRequest[ec2.DescribeImageAttributeOutput](s.natsConn, "ec2.DescribeImageAttribute", input, 30*time.Second, accountID)
 }
 
 func (s *NATSImageService) RegisterImage(input *ec2.RegisterImageInput, accountID string) (*ec2.RegisterImageOutput, error) {
@@ -47,9 +46,9 @@ func (s *NATSImageService) DeregisterImage(input *ec2.DeregisterImageInput, acco
 }
 
 func (s *NATSImageService) ModifyImageAttribute(input *ec2.ModifyImageAttributeInput, accountID string) (*ec2.ModifyImageAttributeOutput, error) {
-	return nil, errors.New("ModifyImageAttribute not yet implemented")
+	return utils.NATSRequest[ec2.ModifyImageAttributeOutput](s.natsConn, "ec2.ModifyImageAttribute", input, 30*time.Second, accountID)
 }
 
 func (s *NATSImageService) ResetImageAttribute(input *ec2.ResetImageAttributeInput, accountID string) (*ec2.ResetImageAttributeOutput, error) {
-	return nil, errors.New("ResetImageAttribute not yet implemented")
+	return utils.NATSRequest[ec2.ResetImageAttributeOutput](s.natsConn, "ec2.ResetImageAttribute", input, 30*time.Second, accountID)
 }

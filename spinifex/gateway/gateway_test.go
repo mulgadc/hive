@@ -919,6 +919,7 @@ func TestEC2ActionMapCompleteness(t *testing.T) {
 		"ModifyInstanceAttribute", "DescribeInstanceAttribute",
 		"CreateKeyPair", "DeleteKeyPair", "DescribeKeyPairs", "ImportKeyPair",
 		"DescribeImages", "CreateImage", "DeregisterImage", "RegisterImage", "CopyImage",
+		"DescribeImageAttribute", "ModifyImageAttribute", "ResetImageAttribute",
 		"DescribeRegions", "DescribeAvailabilityZones",
 		"DescribeVolumes", "ModifyVolume", "CreateVolume", "DeleteVolume",
 		"AttachVolume", "DescribeVolumeStatus", "DetachVolume",

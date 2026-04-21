@@ -123,6 +123,15 @@ var ec2Actions = map[string]EC2Handler{
 	"CopyImage": ec2Handler(func(input *ec2.CopyImageInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_image.CopyImage(input, gw.NATSConn, gw.Region, accountID)
 	}),
+	"DescribeImageAttribute": ec2Handler(func(input *ec2.DescribeImageAttributeInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_image.DescribeImageAttribute(input, gw.NATSConn, accountID)
+	}),
+	"ModifyImageAttribute": ec2Handler(func(input *ec2.ModifyImageAttributeInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_image.ModifyImageAttribute(input, gw.NATSConn, accountID)
+	}),
+	"ResetImageAttribute": ec2Handler(func(input *ec2.ResetImageAttributeInput, gw *GatewayConfig, accountID string) (any, error) {
+		return gateway_ec2_image.ResetImageAttribute(input, gw.NATSConn, accountID)
+	}),
 	"DescribeRegions": ec2Handler(func(input *ec2.DescribeRegionsInput, gw *GatewayConfig, accountID string) (any, error) {
 		return gateway_ec2_zone.DescribeRegions(input, gw.Region)
 	}),
