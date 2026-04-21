@@ -10,23 +10,17 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// validRegisterImageArchitectures is the set of architectures accepted by
-// RegisterImage. Spinifex only schedules x86_64 and arm64 today, but we accept
-// i386 to match the AWS SDK enum so callers passing it through unchanged don't
-// fail validation.
+// i386 is accepted (not scheduled) so pass-through callers don't fail validation.
 var validRegisterImageArchitectures = map[string]bool{
 	"x86_64": true,
 	"arm64":  true,
 	"i386":   true,
 }
 
-// ValidateRegisterImageInput validates the input parameters for RegisterImage.
-//
-// AMI registration in spinifex is a pointer-only operation: the caller already
-// has a snapshot in Predastore and is asking us to write a config.json that
-// references it. We reject every input that asks for behaviour we don't have
-// (PV virtualization, S3 bundle import, kernel/ramdisk, IMDS/TPM/ENA hints)
-// rather than silently accepting and discarding it.
+// ValidateRegisterImageInput rejects inputs that ask for behaviour spinifex
+// doesn't have (PV, S3 bundles, kernel/ramdisk, IMDS/TPM/ENA hints) rather
+// than silently discarding them. Registration is pointer-only: caller supplies
+// a snapshot and we write a config.json that references it.
 func ValidateRegisterImageInput(input *ec2.RegisterImageInput) error {
 	if input == nil {
 		return errors.New(awserrors.ErrorMissingParameter)
@@ -53,7 +47,6 @@ func ValidateRegisterImageInput(input *ec2.RegisterImageInput) error {
 		return errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
-	// Reject hints we don't honour rather than silently accepting them.
 	if input.BootMode != nil && *input.BootMode != "" {
 		return errors.New(awserrors.ErrorInvalidParameterValue)
 	}
@@ -91,9 +84,8 @@ func ValidateRegisterImageInput(input *ec2.RegisterImageInput) error {
 	return nil
 }
 
-// selectRootBlockDeviceMapping picks the BDM entry that backs the root volume.
-// If RootDeviceName is set, return the entry whose DeviceName matches; otherwise
-// the first entry that carries an EBS snapshot reference.
+// selectRootBlockDeviceMapping returns the BDM matching RootDeviceName if set,
+// else the first BDM carrying an EBS snapshot reference.
 func selectRootBlockDeviceMapping(mappings []*ec2.BlockDeviceMapping, rootDeviceName *string) *ec2.BlockDeviceMapping {
 	wantName := ""
 	if rootDeviceName != nil {
@@ -121,7 +113,6 @@ func selectRootBlockDeviceMapping(mappings []*ec2.BlockDeviceMapping, rootDevice
 	return nil
 }
 
-// RegisterImage handles the EC2 RegisterImage API call.
 func RegisterImage(input *ec2.RegisterImageInput, natsConn *nats.Conn, accountID string) (ec2.RegisterImageOutput, error) {
 	var output ec2.RegisterImageOutput
 
@@ -134,9 +125,5 @@ func RegisterImage(input *ec2.RegisterImageInput, natsConn *nats.Conn, accountID
 	if err != nil {
 		return output, err
 	}
-	if result == nil {
-		return output, errors.New(awserrors.ErrorServerInternal)
-	}
-
 	return *result, nil
 }

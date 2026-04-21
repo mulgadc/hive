@@ -197,14 +197,11 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accoun
 			}
 		}
 
-		// Determine AMI ownership. Phase4+ AMIs store the creator's account ID
-		// in ImageOwnerAlias. Pre-phase4 AMIs have non-account values like "self"
-		// or "spinifex" and are treated as system/public images visible to all.
+		// AMIs with a non-account-ID owner (e.g. "spinifex") are system AMIs
+		// visible to all; account-ID owners are private.
 		amiOwner := amiMeta.ImageOwnerAlias
 		isSystemAMI := amiOwner != "" && !utils.IsAccountID(amiOwner)
 
-		// Visibility check: callers see their own AMIs and system AMIs only.
-		// Empty-owner (corrupt) configs are filtered out here too.
 		if !callerCanReadAMI(amiMeta, accountID) {
 			continue
 		}
@@ -265,33 +262,12 @@ func (s *ImageServiceImpl) DescribeImages(input *ec2.DescribeImagesInput, accoun
 			Hypervisor:         aws.String("xen"), // Default hypervisor
 		}
 
-		// Add root device mapping
-		if amiMeta.RootDeviceType == "ebs" {
+		if bdms := synthesizeRootBlockDeviceMapping(amiMeta); bdms != nil {
 			image.RootDeviceName = aws.String("/dev/sda1")
-			image.BlockDeviceMappings = []*ec2.BlockDeviceMapping{
-				{
-					DeviceName: aws.String("/dev/sda1"),
-					Ebs: &ec2.EbsBlockDevice{
-						VolumeSize:          aws.Int64(utils.SafeUint64ToInt64(amiMeta.VolumeSizeGiB)),
-						VolumeType:          aws.String("gp3"),
-						DeleteOnTermination: aws.Bool(true),
-						Encrypted:           aws.Bool(false),
-					},
-				},
-			}
+			image.BlockDeviceMappings = bdms
 		}
 
-		// Add tags if available
-		if len(amiMeta.Tags) > 0 {
-			tags := make([]*ec2.Tag, 0, len(amiMeta.Tags))
-			for key, value := range amiMeta.Tags {
-				tags = append(tags, &ec2.Tag{
-					Key:   aws.String(key),
-					Value: aws.String(value),
-				})
-			}
-			image.Tags = tags
-		}
+		image.Tags = utils.MapToEC2Tags(amiMeta.Tags)
 
 		// Apply filters against the fully-built image
 		if len(parsedFilters) > 0 && !imageMatchesFilters(image, parsedFilters, amiMeta.Tags) {
@@ -589,10 +565,8 @@ func (s *ImageServiceImpl) getVolumeConfig(volumeID string) (*viperblock.VolumeC
 }
 
 // amiNameExists checks if any existing AMI already uses the given name.
-// NoSuchKey on a per-AMI config.json is treated as "not present" and skipped
-// (a concurrent deregister can race with us). Any other GetObject failure or
-// JSON decode error is surfaced — we'd rather return ServerInternal than
-// silently under-count names and allow a duplicate.
+// NoSuchKey is skipped (concurrent deregister race); any other read/decode
+// error is surfaced so we don't silently allow a duplicate.
 func (s *ImageServiceImpl) amiNameExists(name string) (bool, error) {
 	listResult, err := s.store.ListObjectsV2(&s3.ListObjectsV2Input{
 		Bucket:    aws.String(s.bucketName),
@@ -635,13 +609,12 @@ func (s *ImageServiceImpl) amiNameExists(name string) (bool, error) {
 }
 
 // ErrCorruptAMIConfig wraps JSON decode failures on AMI config.json so callers
-// can distinguish a truly-missing AMI from one whose config.json exists but
-// can't be parsed. Use errors.Is to detect. Mirrors ErrCorruptSnapshotMetadata.
+// can distinguish a truly-missing AMI from one whose config exists but can't
+// be parsed.
 var ErrCorruptAMIConfig = errors.New("corrupt AMI config")
 
-// GetAMIConfig retrieves the AMI metadata for a given image ID from S3.
-// Returns NoSuchKeyError if the AMI does not exist; wraps ErrCorruptAMIConfig
-// on decode failure with the config key in the error message.
+// GetAMIConfig returns NoSuchKeyError if the AMI is missing, or an error
+// wrapping ErrCorruptAMIConfig on decode failure.
 func (s *ImageServiceImpl) GetAMIConfig(imageID string) (viperblock.AMIMetadata, error) {
 	configKey := fmt.Sprintf("%s/config.json", imageID)
 	result, err := s.store.GetObject(&s3.GetObjectInput{
@@ -660,8 +633,8 @@ func (s *ImageServiceImpl) GetAMIConfig(imageID string) (viperblock.AMIMetadata,
 	return vbState.VolumeConfig.AMIMetadata, nil
 }
 
-// putAMIConfig writes AMI metadata to s3://{bucket}/{imageID}/config.json,
-// preserving the same VBState wrapper used by GetAMIConfig.
+// putAMIConfig writes AMI metadata to {imageID}/config.json, preserving the
+// VBState wrapper used by GetAMIConfig.
 func (s *ImageServiceImpl) putAMIConfig(imageID string, meta viperblock.AMIMetadata) error {
 	state := viperblock.VBState{
 		VolumeConfig: viperblock.VolumeConfig{
@@ -684,11 +657,8 @@ func (s *ImageServiceImpl) putAMIConfig(imageID string, meta viperblock.AMIMetad
 	return err
 }
 
-// checkAMIOwnership returns ErrorUnauthorizedOperation if accountID cannot
-// mutate the AMI. System AMIs (non-account owner) are immutable via this API
-// regardless of caller. An empty owner indicates a corrupt config — surface
-// that as ServerInternal so operators see the real failure, not a misleading
-// 403.
+// checkAMIOwnership rejects cross-account and system-AMI mutations. Empty
+// owner is ServerInternal (corrupt config) rather than a misleading 403.
 func (s *ImageServiceImpl) checkAMIOwnership(meta viperblock.AMIMetadata, accountID string) error {
 	owner := meta.ImageOwnerAlias
 	if owner == "" {
@@ -701,10 +671,8 @@ func (s *ImageServiceImpl) checkAMIOwnership(meta viperblock.AMIMetadata, accoun
 	return nil
 }
 
-// callerCanReadAMI returns true when accountID is allowed to see the AMI.
-// Empty owner is treated as invisible (corrupt state should not leak). A
-// non-account-ID owner ("spinifex", "system", …) is a system AMI, visible
-// to everyone; an account-ID owner is visible only to that account.
+// callerCanReadAMI: empty owner is invisible (corrupt); non-account owner is
+// a system AMI visible to all; account owner is private to that account.
 func callerCanReadAMI(meta viperblock.AMIMetadata, accountID string) bool {
 	owner := meta.ImageOwnerAlias
 	if owner == "" {
@@ -716,18 +684,9 @@ func callerCanReadAMI(meta viperblock.AMIMetadata, accountID string) bool {
 	return owner == accountID
 }
 
-// loadAMIForMutation validates the ID format, fetches the config, converts
-// NoSuchKey to InvalidAMIID.NotFound, and runs the ownership check. Used by
-// deregister, modify, and reset paths where cross-account callers must see
-// UnauthorizedOperation rather than NotFound (the caller already knows the ID).
-//
-// TOCTOU: the returned metadata reflects a read-at-this-instant view. Callers
-// that subsequently PutObject (Modify/Reset) or DeleteObject (Deregister) race
-// against concurrent mutators on the same imageID — the underlying Predastore
-// PUT/DELETE has no If-Match/CAS plumbing here, so two concurrent modifies on
-// different fields of the same AMI will last-write-wins on the whole struct.
-// Acceptable at current single-operator scale; revisit when multi-writer
-// workflows emerge.
+// loadAMIForMutation fetches the AMI and enforces ownership. Cross-account
+// callers see UnauthorizedOperation, not NotFound (they already know the ID).
+// No CAS: concurrent writers last-write-wins on the full struct.
 func (s *ImageServiceImpl) loadAMIForMutation(imageID, accountID string) (viperblock.AMIMetadata, error) {
 	if !strings.HasPrefix(imageID, "ami-") {
 		return viperblock.AMIMetadata{}, errors.New(awserrors.ErrorInvalidAMIIDMalformed)
@@ -762,15 +721,10 @@ func (s *ImageServiceImpl) putSnapshotMetadata(snapshotID, volumeID string, volu
 	return handlers_ec2_snapshot.WriteSnapshotConfig(s.store, s.bucketName, snapshotID, &cfg)
 }
 
-// CopyImage clones an AMI into a new one owned by the caller. Same-region,
-// metadata-only: the new snapshot shares the source's VolumeID (no block
-// copy), and a fresh `ami-xxx/config.json` points at it. Mirrors the narrow
-// scope. cross-region / encryption / Outposts are rejected at the gateway before we
-// get here.
-//
-// Source-existence and visibility are checked before the O(n) name-uniqueness
-// scan so common fast-fail cases (typo'd source, cross-account source) return
-// without reading every AMI config.
+// CopyImage clones an AMI same-region, metadata-only: the new snapshot shares
+// the source's VolumeID and a fresh config.json points at it.
+// Source visibility is checked before the O(n) name-uniqueness scan so typos
+// and cross-account sources fast-fail without a full AMI listing.
 func (s *ImageServiceImpl) CopyImage(input *ec2.CopyImageInput, accountID string) (*ec2.CopyImageOutput, error) {
 	if input == nil || input.Name == nil || *input.Name == "" ||
 		input.SourceImageId == nil || *input.SourceImageId == "" {
@@ -782,26 +736,21 @@ func (s *ImageServiceImpl) CopyImage(input *ec2.CopyImageInput, accountID string
 
 	srcMeta, err := s.GetAMIConfig(sourceImageID)
 	if err != nil {
+		// Corrupt source is treated as NotFound so callers can't tell which
+		// half of the AMI/snapshot pair is broken.
 		if objectstore.IsNoSuchKeyError(err) || errors.Is(err, ErrCorruptAMIConfig) {
-			// Corrupt source config is treated as if the AMI doesn't exist —
-			// consistent with how corrupt source snapshot metadata is handled
-			// below, so callers can't tell which half of the pair is broken.
 			return nil, errors.New(awserrors.ErrorInvalidAMIIDNotFound)
 		}
 		slog.Error("CopyImage: failed to read source AMI config", "sourceImageId", sourceImageID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	// Visibility check: callers see their own AMIs or system AMIs. Anything
-	// else hides existence by returning NotFound, mirroring DescribeImages.
 	if !callerCanReadAMI(srcMeta, accountID) {
 		return nil, errors.New(awserrors.ErrorInvalidAMIIDNotFound)
 	}
 
-	// Orphaned source: either the AMI doesn't record a SnapshotID (admin-
-	// imported bundled-storage AMIs are not copyable by this API), the
-	// snapshot is gone, or its metadata is corrupt. Either way we treat it
-	// as if the AMI were missing — don't leak the half-broken state.
+	// Orphaned source (missing SnapshotID, or snapshot gone/corrupt) is
+	// reported as NotFound — don't leak the half-broken state.
 	if srcMeta.SnapshotID == "" {
 		return nil, errors.New(awserrors.ErrorInvalidAMIIDNotFound)
 	}
@@ -825,7 +774,7 @@ func (s *ImageServiceImpl) CopyImage(input *ec2.CopyImageInput, accountID string
 	newSnapshotID := utils.GenerateResourceID("snap")
 	newImageID := utils.GenerateResourceID("ami")
 
-	// New snap inherits source VolumeID — blocks are shared, no copy runs.
+	// New snap shares source VolumeID — no block copy.
 	snapSizeGiB := uint64(0)
 	if srcSnap.VolumeSize > 0 {
 		snapSizeGiB = uint64(srcSnap.VolumeSize)
@@ -865,9 +814,7 @@ func (s *ImageServiceImpl) CopyImage(input *ec2.CopyImageInput, accountID string
 	if err := s.putAMIConfig(newImageID, meta); err != nil {
 		slog.Error("CopyImage: failed to write AMI config",
 			"amiId", newImageID, "orphanSnapshotId", newSnapshotID, "err", err)
-		// The new snapshot metadata we wrote above is now orphaned (no AMI
-		// refers to it). Best-effort delete so it doesn't linger. If this
-		// cleanup itself fails, log so operators can find the orphan.
+		// Best-effort rollback of the orphaned snapshot metadata.
 		snapKey := handlers_ec2_snapshot.GetSnapshotKey(newSnapshotID)
 		if _, delErr := s.store.DeleteObject(&s3.DeleteObjectInput{
 			Bucket: aws.String(s.bucketName),
@@ -887,10 +834,9 @@ func (s *ImageServiceImpl) CopyImage(input *ec2.CopyImageInput, accountID string
 	return &ec2.CopyImageOutput{ImageId: aws.String(newImageID)}, nil
 }
 
-// mergeCopyImageTags returns the tag map for the copied AMI. When CopyImageTags
-// is true the source's tags seed the result; explicit image-resource tags in
-// TagSpecifications override any colliding source keys. Non-image tag specs
-// are ignored (matches RegisterImage's behaviour).
+// mergeCopyImageTags seeds with source tags when copyImageTags is true, then
+// lets image-resource TagSpecifications override colliding keys. Non-image tag
+// specs are ignored.
 func mergeCopyImageTags(srcTags map[string]string, specs []*ec2.TagSpecification, copyImageTags bool) map[string]string {
 	merged := make(map[string]string)
 	if copyImageTags {
@@ -903,14 +849,9 @@ func mergeCopyImageTags(srcTags map[string]string, specs []*ec2.TagSpecification
 	return merged
 }
 
-// DescribeImageAttribute returns a single AMI attribute. Only description and
-// blockDeviceMapping are supported; the gateway validator should reject the
-// rest, but we re-check here so direct callers (tests, future internal users)
-// can't bypass the allowlist.
-//
-// Cross-account / orphan reads are hidden as InvalidAMIID.NotFound, mirroring
-// DescribeImages' silent cross-account filter — the caller shouldn't learn
-// that the ID exists in another account.
+// DescribeImageAttribute supports description and blockDeviceMapping only.
+// Cross-account reads return NotFound so the caller can't learn the ID exists
+// in another account.
 func (s *ImageServiceImpl) DescribeImageAttribute(input *ec2.DescribeImageAttributeInput, accountID string) (*ec2.DescribeImageAttributeOutput, error) {
 	if input == nil || input.ImageId == nil || *input.ImageId == "" ||
 		input.Attribute == nil || *input.Attribute == "" {
@@ -929,8 +870,6 @@ func (s *ImageServiceImpl) DescribeImageAttribute(input *ec2.DescribeImageAttrib
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	// Visibility check matches DescribeImages: caller owns it OR it's a
-	// system AMI. Cross-account reads hide existence.
 	if !callerCanReadAMI(meta, accountID) {
 		return nil, errors.New(awserrors.ErrorInvalidAMIIDNotFound)
 	}
@@ -952,9 +891,8 @@ func (s *ImageServiceImpl) DescribeImageAttribute(input *ec2.DescribeImageAttrib
 	return output, nil
 }
 
-// synthesizeRootBlockDeviceMapping builds the single-root BDM that DescribeImages
-// would report for this AMI. EBS-backed AMIs get /dev/sda1 with the snapshot
-// pointer and size from AMIMetadata; non-EBS or empty AMIs get nil.
+// synthesizeRootBlockDeviceMapping returns /dev/sda1 with size+snapshot from
+// AMIMetadata, or nil for non-EBS AMIs.
 func synthesizeRootBlockDeviceMapping(meta viperblock.AMIMetadata) []*ec2.BlockDeviceMapping {
 	if meta.RootDeviceType != "ebs" {
 		return nil
@@ -974,14 +912,9 @@ func synthesizeRootBlockDeviceMapping(meta viperblock.AMIMetadata) []*ec2.BlockD
 	}}
 }
 
-// RegisterImage creates an AMI metadata record that points at an existing
-// snapshot. It is pointer-only: it never moves, copies, or writes block data.
-// Validation done in the gateway layer guarantees the input shape; here we
-// only enforce semantic checks (snapshot existence/ownership, volume sizing,
-// name uniqueness).
-//
-// The snapshot read runs before the O(n) amiNameExists scan so a missing
-// snapshot fast-fails without paying for a full AMI listing.
+// RegisterImage writes AMI metadata pointing at an existing snapshot. Never
+// touches block data. The snapshot read runs before the O(n) name-uniqueness
+// scan so a missing snapshot fast-fails.
 func (s *ImageServiceImpl) RegisterImage(input *ec2.RegisterImageInput, accountID string) (*ec2.RegisterImageOutput, error) {
 	if input == nil || input.Name == nil || *input.Name == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
@@ -997,17 +930,15 @@ func (s *ImageServiceImpl) RegisterImage(input *ec2.RegisterImageInput, accountI
 
 	snapCfg, err := handlers_ec2_snapshot.ReadSnapshotConfig(s.store, s.bucketName, snapshotID)
 	if err != nil {
+		// Corrupt snapshot is surfaced as NotFound, same as CopyImage.
 		if objectstore.IsNoSuchKeyError(err) || errors.Is(err, handlers_ec2_snapshot.ErrCorruptSnapshotMetadata) {
-			// A corrupt snapshot record is indistinguishable from a missing
-			// one from the caller's perspective — mirrors CopyImage's handling.
 			return nil, errors.New(awserrors.ErrorInvalidSnapshotNotFound)
 		}
 		slog.Error("RegisterImage: failed to read snapshot metadata", "snapshotId", snapshotID, "err", err)
 		return nil, errors.New(awserrors.ErrorServerInternal)
 	}
 
-	// Snapshot ownership: callers can only register from their own snapshots
-	// or from system snapshots (non-account-ID owner, mirroring system AMIs).
+	// Only the snapshot owner (or any caller for system snapshots) can register.
 	if utils.IsAccountID(snapCfg.OwnerID) && snapCfg.OwnerID != accountID {
 		slog.Warn("RegisterImage: rejected cross-account snapshot",
 			"snapshotId", snapshotID, "snapshotOwner", snapCfg.OwnerID, "accountId", accountID)
@@ -1075,12 +1006,8 @@ func (s *ImageServiceImpl) RegisterImage(input *ec2.RegisterImageInput, accountI
 	return &ec2.RegisterImageOutput{ImageId: aws.String(amiID)}, nil
 }
 
-// pickRootSnapshotBDM finds the BDM that backs the root volume and carries an
-// EBS snapshot reference. When RootDeviceName is set, only the matching device
-// counts; otherwise the first BDM with a snapshot wins. Returns nil when no
-// suitable entry exists — mirroring the gateway's validation but applied again
-// at the service boundary so direct callers (tests, future internal users)
-// don't bypass the check.
+// pickRootSnapshotBDM returns the BDM matching RootDeviceName (if set) that
+// carries a non-empty EBS snapshot reference, else the first such BDM.
 func pickRootSnapshotBDM(mappings []*ec2.BlockDeviceMapping, rootDeviceName *string) *ec2.BlockDeviceMapping {
 	wantName := ""
 	if rootDeviceName != nil {
@@ -1101,9 +1028,8 @@ func pickRootSnapshotBDM(mappings []*ec2.BlockDeviceMapping, rootDeviceName *str
 	return nil
 }
 
-// DeregisterImage hard-deletes the AMI's config.json. The backing snapshot is
-// untouched (matches AWS: deregister does not delete EBS snapshots). Operators
-// must run delete-snapshot separately to reclaim block storage.
+// DeregisterImage hard-deletes config.json. Backing snapshot is untouched, so
+// operators run delete-snapshot separately to reclaim block storage.
 func (s *ImageServiceImpl) DeregisterImage(input *ec2.DeregisterImageInput, accountID string) (*ec2.DeregisterImageOutput, error) {
 	if input == nil || input.ImageId == nil || *input.ImageId == "" {
 		return nil, errors.New(awserrors.ErrorMissingParameter)
@@ -1128,14 +1054,10 @@ func (s *ImageServiceImpl) DeregisterImage(input *ec2.DeregisterImageInput, acco
 	return &ec2.DeregisterImageOutput{}, nil
 }
 
-// ModifyImageAttribute persists a new value for a modifiable AMI attribute.
-// The gateway validator normalises the input so we only ever see the
-// Attribute+Value pair (top-level Description is folded in upstream). Today
-// only description is writable — everything else is refused.
-//
-// Ownership is checked before the attribute switch so cross-account callers
-// consistently see UnauthorizedOperation regardless of whether the attribute
-// name is one we support.
+// ModifyImageAttribute writes a modifiable AMI attribute. Gateway normalises
+// into Attribute+Value; only description is writable. Ownership is checked
+// before the attribute switch so cross-account callers always see
+// UnauthorizedOperation.
 func (s *ImageServiceImpl) ModifyImageAttribute(input *ec2.ModifyImageAttributeInput, accountID string) (*ec2.ModifyImageAttributeOutput, error) {
 	if input == nil || input.ImageId == nil || *input.ImageId == "" ||
 		input.Attribute == nil || *input.Attribute == "" {
@@ -1158,8 +1080,7 @@ func (s *ImageServiceImpl) ModifyImageAttribute(input *ec2.ModifyImageAttributeI
 	if input.Value != nil {
 		newValue = *input.Value
 	}
-	// Skip the PutObject when nothing changes — drift-refresh loops (Terraform
-	// aws_ami read + replay) would otherwise churn out no-op writes.
+	// No-op guard: Terraform aws_ami refresh otherwise churns out no-op writes.
 	if meta.Description == newValue {
 		slog.Info("ModifyImageAttribute no-op", "imageId", imageID, "attribute", attribute, "accountId", accountID)
 		return &ec2.ModifyImageAttributeOutput{}, nil
@@ -1175,12 +1096,8 @@ func (s *ImageServiceImpl) ModifyImageAttribute(input *ec2.ModifyImageAttributeI
 	return &ec2.ModifyImageAttributeOutput{}, nil
 }
 
-// ResetImageAttribute restores an AMI attribute to its default. Only
-// description is supported; it resets to empty string. launchPermission (AWS's
-// default reset target) is out of scope.
-//
-// Ownership is checked before the attribute switch so cross-account callers
-// consistently see UnauthorizedOperation.
+// ResetImageAttribute clears the description (the only supported attribute).
+// launchPermission — AWS's default reset target — is out of scope.
 func (s *ImageServiceImpl) ResetImageAttribute(input *ec2.ResetImageAttributeInput, accountID string) (*ec2.ResetImageAttributeOutput, error) {
 	if input == nil || input.ImageId == nil || *input.ImageId == "" ||
 		input.Attribute == nil || *input.Attribute == "" {
@@ -1199,7 +1116,6 @@ func (s *ImageServiceImpl) ResetImageAttribute(input *ec2.ResetImageAttributeInp
 		return nil, errors.New(awserrors.ErrorInvalidParameterValue)
 	}
 
-	// Skip the PutObject when the description is already empty.
 	if meta.Description == "" {
 		slog.Info("ResetImageAttribute no-op", "imageId", imageID, "attribute", attribute, "accountId", accountID)
 		return &ec2.ResetImageAttributeOutput{}, nil

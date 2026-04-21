@@ -10,9 +10,8 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// ValidateResetImageAttributeInput validates the input for ResetImageAttribute.
-// Only description is resettable — launchPermission (AWS's only reset target in
-// the SDK enum) is deliberately out of scope here.
+// ValidateResetImageAttributeInput accepts only description; launchPermission
+// is out of scope.
 func ValidateResetImageAttributeInput(input *ec2.ResetImageAttributeInput) error {
 	if input == nil {
 		return errors.New(awserrors.ErrorMissingParameter)
@@ -32,7 +31,6 @@ func ValidateResetImageAttributeInput(input *ec2.ResetImageAttributeInput) error
 	return nil
 }
 
-// ResetImageAttribute handles the EC2 ResetImageAttribute API call.
 func ResetImageAttribute(input *ec2.ResetImageAttributeInput, natsConn *nats.Conn, accountID string) (ec2.ResetImageAttributeOutput, error) {
 	var output ec2.ResetImageAttributeOutput
 
@@ -45,9 +43,5 @@ func ResetImageAttribute(input *ec2.ResetImageAttributeInput, natsConn *nats.Con
 	if err != nil {
 		return output, err
 	}
-	if result == nil {
-		return output, errors.New(awserrors.ErrorServerInternal)
-	}
-
 	return *result, nil
 }

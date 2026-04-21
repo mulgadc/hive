@@ -104,21 +104,19 @@ func NewSnapshotServiceImplWithStore(cfg *config.Config, store objectstore.Objec
 	return svc
 }
 
-// GetSnapshotKey returns the S3 key for storing snapshot metadata.
-// Uses metadata.json to avoid conflicting with viperblock's config.json
-// which stores the SnapshotState (block map references, source volume, etc).
+// GetSnapshotKey uses metadata.json to avoid colliding with viperblock's
+// config.json (which stores SnapshotState: block map, source volume, etc).
 func GetSnapshotKey(snapshotID string) string {
 	return fmt.Sprintf("%s/metadata.json", snapshotID)
 }
 
-// ErrCorruptSnapshotMetadata wraps JSON decode failures on snapshot metadata so
-// callers can distinguish a truly-missing snapshot from one whose metadata.json
-// exists but can't be parsed. Use errors.Is to detect.
+// ErrCorruptSnapshotMetadata lets callers distinguish a missing snapshot from
+// one whose metadata.json can't be parsed.
 var ErrCorruptSnapshotMetadata = errors.New("corrupt snapshot metadata")
 
-// ReadSnapshotConfig reads {snapshotID}/metadata.json from the store without
-// translating object-store errors. Callers map NoSuchKey to their preferred
-// AWS error. Decode failures wrap ErrCorruptSnapshotMetadata.
+// ReadSnapshotConfig reads {snapshotID}/metadata.json. Object-store errors are
+// returned unchanged; callers map NoSuchKey to their preferred AWS error.
+// Decode failures wrap ErrCorruptSnapshotMetadata.
 func ReadSnapshotConfig(store objectstore.ObjectStore, bucket, snapshotID string) (*SnapshotConfig, error) {
 	key := GetSnapshotKey(snapshotID)
 	result, err := store.GetObject(&s3.GetObjectInput{
@@ -152,8 +150,7 @@ func WriteSnapshotConfig(store objectstore.ObjectStore, bucket, snapshotID strin
 	return err
 }
 
-// getSnapshotConfig retrieves snapshot config from S3, translating NoSuchKey
-// to InvalidSnapshot.NotFound (the snapshot service's standard error mapping).
+// getSnapshotConfig translates NoSuchKey to InvalidSnapshot.NotFound.
 func (s *SnapshotServiceImpl) getSnapshotConfig(snapshotID string) (*SnapshotConfig, error) {
 	cfg, err := ReadSnapshotConfig(s.store, s.config.Predastore.Bucket, snapshotID)
 	if err != nil {

@@ -10,7 +10,6 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// ValidateDeregisterImageInput validates the input parameters for DeregisterImage.
 func ValidateDeregisterImageInput(input *ec2.DeregisterImageInput) error {
 	if input == nil || input.ImageId == nil || *input.ImageId == "" {
 		return errors.New(awserrors.ErrorMissingParameter)
@@ -21,7 +20,6 @@ func ValidateDeregisterImageInput(input *ec2.DeregisterImageInput) error {
 	return nil
 }
 
-// DeregisterImage handles the EC2 DeregisterImage API call.
 func DeregisterImage(input *ec2.DeregisterImageInput, natsConn *nats.Conn, accountID string) (ec2.DeregisterImageOutput, error) {
 	var output ec2.DeregisterImageOutput
 
@@ -34,9 +32,5 @@ func DeregisterImage(input *ec2.DeregisterImageInput, natsConn *nats.Conn, accou
 	if err != nil {
 		return output, err
 	}
-	if result == nil {
-		return output, errors.New(awserrors.ErrorServerInternal)
-	}
-
 	return *result, nil
 }

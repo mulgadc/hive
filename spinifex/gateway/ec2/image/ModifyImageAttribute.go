@@ -11,18 +11,11 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// ValidateModifyImageAttributeInput validates and normalises the input for
-// ModifyImageAttribute.
-//
-// AWS accepts two shapes for modifying description:
-//
-//	--description Value=foo                    → input.Description={Value:"foo"}
-//	--attribute description --value foo        → input.Attribute="description", input.Value="foo"
-//
-// We normalise the first form into the second so the daemon only ever has to
-// look at Attribute+Value. Anything else we don't support (launchPermission,
-// imdsSupport, productCodes, …) is refused at the boundary rather than
-// silently accepted.
+// ValidateModifyImageAttributeInput validates and normalises the two AWS
+// shapes for modifying description (top-level `--description Value=…` and
+// structured `--attribute description --value …`) into Attribute+Value.
+// Unsupported top-level shortcuts (launchPermission, imdsSupport, productCodes)
+// are rejected rather than silently accepted.
 func ValidateModifyImageAttributeInput(input *ec2.ModifyImageAttributeInput) error {
 	if input == nil {
 		return errors.New(awserrors.ErrorMissingParameter)
@@ -34,9 +27,6 @@ func ValidateModifyImageAttributeInput(input *ec2.ModifyImageAttributeInput) err
 		return errors.New(awserrors.ErrorInvalidAMIIDMalformed)
 	}
 
-	// Refuse every top-level shortcut we don't implement. Multi-account AMI
-	// sharing (launchPermission) is a separate design problem; imdsSupport is
-	// launch-time and not wired today; productCodes is not supported.
 	if input.LaunchPermission != nil {
 		return errors.New(awserrors.ErrorInvalidParameterValue)
 	}
@@ -53,9 +43,8 @@ func ValidateModifyImageAttributeInput(input *ec2.ModifyImageAttributeInput) err
 	}
 
 	hasTopLevelDescription := input.Description != nil
-	// Value alone (no Attribute) is a malformed request — treat any set Value
-	// as "structured shape" so it can't be silently discarded by the
-	// top-level branch. Nil vs empty-string are kept distinct.
+	// Treat any set Value (even without Attribute) as structured shape so it
+	// isn't silently discarded by the top-level branch.
 	hasStructured := (input.Attribute != nil && *input.Attribute != "") || input.Value != nil
 
 	switch {
@@ -82,7 +71,6 @@ func ValidateModifyImageAttributeInput(input *ec2.ModifyImageAttributeInput) err
 	return nil
 }
 
-// ModifyImageAttribute handles the EC2 ModifyImageAttribute API call.
 func ModifyImageAttribute(input *ec2.ModifyImageAttributeInput, natsConn *nats.Conn, accountID string) (ec2.ModifyImageAttributeOutput, error) {
 	var output ec2.ModifyImageAttributeOutput
 
@@ -95,9 +83,5 @@ func ModifyImageAttribute(input *ec2.ModifyImageAttributeInput, natsConn *nats.C
 	if err != nil {
 		return output, err
 	}
-	if result == nil {
-		return output, errors.New(awserrors.ErrorServerInternal)
-	}
-
 	return *result, nil
 }

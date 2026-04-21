@@ -11,12 +11,8 @@ import (
 )
 
 // ValidateCopyImageInput validates the input parameters for CopyImage.
-//
-// Spinifex is single-region and the copy is metadata-only (the new snapshot
-// inherits the source's VolumeID, so no block copy runs). We reject flags that
-// imply behaviour we don't support — cross-region, encryption, Outposts — at
-// the gateway so the daemon never has to think about them. ClientToken is
-// accepted but not honoured; retries produce distinct AMIs.
+// Copy is single-region and metadata-only; cross-region, encryption, and
+// Outposts are rejected here. ClientToken is accepted but not honoured.
 func ValidateCopyImageInput(input *ec2.CopyImageInput, gwRegion string) error {
 	if input == nil {
 		return errors.New(awserrors.ErrorMissingParameter)
@@ -69,9 +65,5 @@ func CopyImage(input *ec2.CopyImageInput, natsConn *nats.Conn, gwRegion, account
 	if err != nil {
 		return output, err
 	}
-	if result == nil {
-		return output, errors.New(awserrors.ErrorServerInternal)
-	}
-
 	return *result, nil
 }

@@ -10,16 +10,14 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// supportedImageAttributes is the set of AMI attribute names spinifex exposes.
-// description is modifiable; blockDeviceMapping is a read-only synthesis from
-// AMIMetadata. Every other AWS-defined attribute is refused rather than padded
-// with an empty response — see plan "Known limitation" on launchPermission.
+// supportedImageAttributes lists the AMI attributes spinifex exposes.
+// description is modifiable; blockDeviceMapping is synthesised read-only from
+// AMIMetadata. Any other attribute is rejected rather than returning empty.
 var supportedImageAttributes = map[string]bool{
 	ec2.ImageAttributeNameDescription:        true,
 	ec2.ImageAttributeNameBlockDeviceMapping: true,
 }
 
-// ValidateDescribeImageAttributeInput validates the input for DescribeImageAttribute.
 func ValidateDescribeImageAttributeInput(input *ec2.DescribeImageAttributeInput) error {
 	if input == nil {
 		return errors.New(awserrors.ErrorMissingParameter)
@@ -39,7 +37,6 @@ func ValidateDescribeImageAttributeInput(input *ec2.DescribeImageAttributeInput)
 	return nil
 }
 
-// DescribeImageAttribute handles the EC2 DescribeImageAttribute API call.
 func DescribeImageAttribute(input *ec2.DescribeImageAttributeInput, natsConn *nats.Conn, accountID string) (ec2.DescribeImageAttributeOutput, error) {
 	var output ec2.DescribeImageAttributeOutput
 
@@ -52,9 +49,5 @@ func DescribeImageAttribute(input *ec2.DescribeImageAttributeInput, natsConn *na
 	if err != nil {
 		return output, err
 	}
-	if result == nil {
-		return output, errors.New(awserrors.ErrorServerInternal)
-	}
-
 	return *result, nil
 }
