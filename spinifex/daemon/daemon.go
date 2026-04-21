@@ -401,6 +401,12 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.ImportKeyPair", d.handleEC2ImportKeyPair, "spinifex-workers"},
 		{"ec2.DescribeImages", d.handleEC2DescribeImages, "spinifex-workers"},
 		{"ec2.CreateImage", d.handleEC2CreateImage, ""},
+		{"ec2.DeregisterImage", d.handleEC2DeregisterImage, "spinifex-workers"},
+		{"ec2.RegisterImage", d.handleEC2RegisterImage, "spinifex-workers"},
+		{"ec2.CopyImage", d.handleEC2CopyImage, "spinifex-workers"},
+		{"ec2.DescribeImageAttribute", d.handleEC2DescribeImageAttribute, "spinifex-workers"},
+		{"ec2.ModifyImageAttribute", d.handleEC2ModifyImageAttribute, "spinifex-workers"},
+		{"ec2.ResetImageAttribute", d.handleEC2ResetImageAttribute, "spinifex-workers"},
 		{"ec2.CreateVolume", d.handleEC2CreateVolume, "spinifex-workers"},
 		{"ec2.DescribeVolumes", d.handleEC2DescribeVolumes, "spinifex-workers"},
 		{"ec2.ModifyVolume", d.handleEC2ModifyVolume, "spinifex-workers"},
@@ -2788,7 +2794,7 @@ func (d *Daemon) wireLBAgentConfig() {
 	}
 
 	if d.mgmtBridgeIP != "" {
-		if awsgwBindIP != "" && awsgwBindIP != "0.0.0.0" {
+		if awsgwBindIP != "" && awsgwBindIP != "0.0.0.0" && !net.ParseIP(awsgwBindIP).IsLoopback() {
 			// Multi-node: AWSGW listens on a specific WAN IP. Use that IP
 			// as the gateway URL. Internal LBs will get a host route via
 			// br-mgmt to reach it (see LaunchSystemInstance).
