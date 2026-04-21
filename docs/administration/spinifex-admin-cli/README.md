@@ -35,12 +35,24 @@ All services in the Spinifex platform are managed through this single binary.
 
 ## Account Management
 
+Create a new isolated account with an admin user and AdministratorAccess policy:
+
 ```bash
 spx admin account create --name myteam
 export AWS_PROFILE=spinifex-myteam
 ```
 
+List all accounts:
+
+```bash
+spx admin account list
+```
+
+
+
 ## Node Management
+
+List nodes in the cluster:
 
 ```bash
 spx get nodes
@@ -59,6 +71,8 @@ node3   Ready     127.0.0.3       ap-southeast-2   ap-southeast-2a  2m       0
 spx top nodes
 ```
 
+Prints per-node CPU/memory usage and cluster-wide instance type availability.
+
 ## Image Management
 
 ```bash
@@ -66,7 +80,12 @@ spx admin images list
 spx admin images import --name debian-12-arm64
 ```
 
+Catalog imports verify the image against the catalog-declared SHA-256/SHA-512 digest before extraction. Use `--file` to import operator-supplied media (verification skipped — operator is responsible for integrity), or `--force` to re-download after a checksum mismatch.
+
+
 ## Cluster Shutdown
+
+Coordinated, phased shutdown of the entire cluster (API/UI → VMs → viperblock → predastore → NATS/daemon):
 
 ```bash
 spx admin cluster shutdown
@@ -86,11 +105,12 @@ If you get permission errors during operations, ensure you're running with appro
 
 ### Services Fail to Start
 
-Check the daemon logs for specific errors:
+Check the daemon logs for specific errors via `systemctl`/`journalctl`:
 
 ```bash
-ls ~/spinifex/logs/
-cat ~/spinifex/logs/spinifex.log
+systemctl status 'spinifex-*'
+journalctl -u spinifex-daemon -f
+journalctl -u 'spinifex-*' -f
 ```
 
 Common causes include port conflicts, missing OVN configuration, or untrusted CA certificates.

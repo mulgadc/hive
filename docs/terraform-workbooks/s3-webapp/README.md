@@ -55,7 +55,6 @@ Deploy an EC2 instance running a Flask file-sharing web application backed by S3
 - Predastore running (S3 API on port 8443)
 - A Debian 12 AMI imported (see [Setting Up Your Cluster](/docs/setting-up-your-cluster))
 - OpenTofu or Terraform installed
-- `AWS_PROFILE=spinifex` configured
 - The EC2 instance must be able to reach Predastore — use the host's br-wan IP, not localhost
 
 ## Instructions

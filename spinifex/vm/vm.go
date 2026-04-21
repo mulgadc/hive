@@ -87,6 +87,14 @@ type VM struct {
 	PublicIP     string `json:"public_ip,omitempty"`
 	PublicIPPool string `json:"public_ip_pool,omitempty"`
 
+	// PublicIPAllocID / PublicIPAssocID are set when the public IP was
+	// allocated through the EIP service (handlers/ec2/eip) rather than
+	// directly via externalIPAM. Presence signals that teardown must go
+	// back through the EIP service (DisassociateAddress + ReleaseAddress)
+	// so the EIP KV record is removed.
+	PublicIPAllocID string `json:"public_ip_alloc_id,omitempty"`
+	PublicIPAssocID string `json:"public_ip_assoc_id,omitempty"`
+
 	// DevMAC is the MAC for the dev/hostfwd NIC (DEV_NETWORKING mode).
 	// Set before cloud-init ISO generation so netplan can suppress its default route.
 	DevMAC string `json:"dev_mac,omitempty"`

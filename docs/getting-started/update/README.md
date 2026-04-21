@@ -1,7 +1,7 @@
 ---
 title: "Updating Spinifex"
 description: "Upgrade an existing Spinifex installation to the latest release."
-category: "Getting Started"
+category: "Administration"
 tags:
   - update
   - upgrade
@@ -10,7 +10,7 @@ resources:
   - title: "Spinifex Repository"
     url: "https://github.com/mulgadc/spinifex"
   - title: "Single-Node Install"
-    url: "https://docs.mulgadc.com/docs/install"
+    url: "/docs/install"
 ---
 
 # Updating Spinifex

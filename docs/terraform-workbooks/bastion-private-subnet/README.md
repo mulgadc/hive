@@ -58,7 +58,6 @@ Deploy a VPC with public and private subnets where the private subnet has no int
 - Spinifex installed and running (see [Installing Spinifex](/docs/install))
 - A Debian 12 AMI imported (see [Setting Up Your Cluster](/docs/setting-up-your-cluster))
 - OpenTofu or Terraform installed
-- `AWS_PROFILE=spinifex` configured
 
 ## Instructions
 

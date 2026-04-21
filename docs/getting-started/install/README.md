@@ -29,7 +29,7 @@ resources:
 
 ## Overview
 
-Spinifex is an open-source infrastructure platform that brings core AWS services — EC2, VPC, EBS, and S3 — to bare-metal, edge, and on-prem environments.
+Spinifex is an open-source infrastructure platform that brings core AWS services to bare-metal, edge, and on-prem environments.
 
 This guide installs Spinifex on a single server using the binary installer. For multi-server clusters, see [Multi-Node Install](/docs/install-multi-node). To build from source, see [Source Install](/docs/install-source).
 
@@ -65,10 +65,9 @@ If your WAN interface is already a bridge (e.g. `br-wan`), setup-ovn.sh auto-det
 sudo /usr/local/share/spinifex/setup-ovn.sh --management
 ```
 
-If your WAN is a physical NIC, choose one:
+If your WAN is a physical NIC:
 
 ```bash
-# Dedicated WAN NIC (not your SSH connection):
 sudo /usr/local/share/spinifex/setup-ovn.sh --management --wan-bridge=br-wan --wan-iface=eth1
 ```
 
@@ -86,7 +85,7 @@ This is recommended for production and required in multi-node deployments. See [
 sudo spx admin init --node node1 --nodes 1
 ```
 
-This auto-detects your network topology, generates configuration and TLS certificates, installs the CA into the system trust store, and configures AWS CLI credentials. Save the admin credentials printed during init — they will not be shown again.
+This auto-detects your network topology, generates configuration and TLS certificates, installs the CA into the system trust store, and configures AWS CLI credentials (saved in `~/.aws/credentials`)
 
 ## Step 4. Start Services
 
