@@ -34,7 +34,7 @@ resources:
 ## Overview
 
 This guide assumes Spinifex is already installed and running. If not, follow one of the installation guides first:
-- [Binary Install (Single Node)](/docs/install)
+- [Single-Node Install)](/docs/install)
 - [Multi-Node Install](/docs/install-multi-node)
 - [Source Install](/docs/install-source)
 
@@ -57,11 +57,12 @@ spx admin images list
 ```
 
 ```
-NAME                 | DISTRO | VERSION | ARCH   | BOOT
-debian-12-arm64      | debian | 12      | arm64  | bios
-debian-12-x86_64     | debian | 12      | x86_64 | bios
-ubuntu-24.04-arm64   | ubuntu | 24.04   | arm64  | bios
-ubuntu-24.04-x86_64  | ubuntu | 24.04   | x86_64 | bios
+NAME                    | DISTRO | VERSION | ARCH   | BOOT
+debian-12-arm64         | debian | 12      | arm64  | bios
+debian-12-x86_64        | debian | 12      | x86_64 | bios
+lb-alpine-3.21.6-x86_64 | alpine | 3.21.6  | x86_64 | bios
+ubuntu-24.04-arm64      | ubuntu | 24.04   | arm64  | bios
+ubuntu-24.04-x86_64     | ubuntu | 24.04   | x86_64 | bios
 ```
 
 Import an image:
@@ -344,7 +345,7 @@ export AWS_PROFILE=spinifex-myteam
 ### Instance Stuck in Pending
 
 ```bash
-cat ~/spinifex/logs/spinifex.log
+journalctl -u spinifex-daemon -f
 aws ec2 describe-images
 ```
 

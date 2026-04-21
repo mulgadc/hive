@@ -1,14 +1,18 @@
 # Example: Nginx Web Servers with ALB on Spinifex
 #
-# Deploys a VPC with two public subnets (ALB + NAT Gateway) and two private
-# subnets hosting Nginx EC2 instances. An internet-facing Application Load
-# Balancer distributes HTTP traffic between the private workers, and the
-# NAT Gateway gives them outbound internet access so cloud-init can install
-# Nginx from the Debian apt repository.
+# Deploys a VPC with two public subnets hosting Nginx EC2 instances and an
+# internet-facing Application Load Balancer. Workers sit in public subnets
+# with auto-assigned public IPs purely so cloud-init can apt-install nginx.
+# The ALB targets them by primary private IP (target_type=instance), so
+# load-balanced traffic stays on the private VPC network.
 #
-# Demonstrates: VPC, public and private subnets, internet gateway, NAT
-# Gateway with Elastic IP, route tables, security group, key pair, cloud-init
-# user-data, EC2 instances, ALB, target group, and listener.
+# In a production deployment, workers would be in private subnets with
+# nginx baked into a custom AMI (or installed via a private repository
+# mirror), and a NAT Gateway would be unnecessary for this workload.
+#
+# Demonstrates: VPC, public subnets, internet gateway, route tables,
+# security group, key pair, cloud-init user-data, EC2 instances with
+# auto-assigned public IPs, ALB, target group, and listener.
 #
 # Usage:
 #   cd spinifex/docs/terraform/nginx-alb
@@ -152,9 +156,10 @@ resource "aws_internet_gateway" "igw" {
 # ---------------------------------------------------------------------------
 
 resource "aws_subnet" "public_a" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.20.1.0/24"
-  availability_zone = data.aws_availability_zones.available.names[0]
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.20.1.0/24"
+  availability_zone       = data.aws_availability_zones.available.names[0]
+  map_public_ip_on_launch = true
 
   tags = {
     Name = "nginx-alb-public-a"
@@ -162,9 +167,10 @@ resource "aws_subnet" "public_a" {
 }
 
 resource "aws_subnet" "public_b" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.20.2.0/24"
-  availability_zone = data.aws_availability_zones.available.names[0]
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.20.2.0/24"
+  availability_zone       = data.aws_availability_zones.available.names[0]
+  map_public_ip_on_launch = true
 
   tags = {
     Name = "nginx-alb-public-b"
@@ -172,58 +178,7 @@ resource "aws_subnet" "public_b" {
 }
 
 # ---------------------------------------------------------------------------
-# Private Subnets (two AZs for the Nginx workers)
-# ---------------------------------------------------------------------------
-
-resource "aws_subnet" "private_a" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.20.11.0/24"
-  availability_zone = data.aws_availability_zones.available.names[0]
-
-  tags = {
-    Name = "nginx-alb-private-a"
-  }
-}
-
-resource "aws_subnet" "private_b" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.20.12.0/24"
-  availability_zone = data.aws_availability_zones.available.names[0]
-
-  tags = {
-    Name = "nginx-alb-private-b"
-  }
-}
-
-# ---------------------------------------------------------------------------
-# NAT Gateway — outbound internet for the private subnets
-#
-# Background plumbing: the private-subnet workers need outbound connectivity
-# during cloud-init so apt-get can install Nginx. A single NAT Gateway in
-# public_a provides SNAT for both private subnets via the private route table.
-# ---------------------------------------------------------------------------
-
-resource "aws_eip" "nat" {
-  domain = "vpc"
-
-  tags = {
-    Name = "nginx-alb-nat-eip"
-  }
-}
-
-resource "aws_nat_gateway" "main" {
-  allocation_id = aws_eip.nat.id
-  subnet_id     = aws_subnet.public_a.id
-
-  tags = {
-    Name = "nginx-alb-nat"
-  }
-
-  depends_on = [aws_internet_gateway.igw]
-}
-
-# ---------------------------------------------------------------------------
-# Route Tables — public subnets egress via IGW, private subnets via NAT GW
+# Route Table — public subnets egress via IGW
 # ---------------------------------------------------------------------------
 
 resource "aws_route_table" "public" {
@@ -247,29 +202,6 @@ resource "aws_route_table_association" "public_a" {
 resource "aws_route_table_association" "public_b" {
   subnet_id      = aws_subnet.public_b.id
   route_table_id = aws_route_table.public.id
-}
-
-resource "aws_route_table" "private" {
-  vpc_id = aws_vpc.main.id
-
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main.id
-  }
-
-  tags = {
-    Name = "nginx-alb-private-rt"
-  }
-}
-
-resource "aws_route_table_association" "private_a" {
-  subnet_id      = aws_subnet.private_a.id
-  route_table_id = aws_route_table.private.id
-}
-
-resource "aws_route_table_association" "private_b" {
-  subnet_id      = aws_subnet.private_b.id
-  route_table_id = aws_route_table.private.id
 }
 
 # ---------------------------------------------------------------------------
@@ -318,13 +250,9 @@ resource "aws_instance" "nginx_1" {
   ami           = data.aws_ami.debian12.id
   instance_type = var.instance_type
 
-  subnet_id              = aws_subnet.private_a.id
+  subnet_id              = aws_subnet.public_a.id
   vpc_security_group_ids = [aws_security_group.web.id]
   key_name               = aws_key_pair.nginx.key_name
-
-  # Workers pull nginx from apt via the NAT Gateway — creation must wait
-  # until the NAT Gateway is available so cloud-init can reach the repos.
-  depends_on = [aws_nat_gateway.main]
 
   user_data_base64 = base64encode(<<-USERDATA
     #!/bin/bash
@@ -362,13 +290,9 @@ resource "aws_instance" "nginx_2" {
   ami           = data.aws_ami.debian12.id
   instance_type = var.instance_type
 
-  subnet_id              = aws_subnet.private_b.id
+  subnet_id              = aws_subnet.public_b.id
   vpc_security_group_ids = [aws_security_group.web.id]
   key_name               = aws_key_pair.nginx.key_name
-
-  # Workers pull nginx from apt via the NAT Gateway — creation must wait
-  # until the NAT Gateway is available so cloud-init can reach the repos.
-  depends_on = [aws_nat_gateway.main]
 
   user_data_base64 = base64encode(<<-USERDATA
     #!/bin/bash

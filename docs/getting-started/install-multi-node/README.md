@@ -31,7 +31,7 @@ resources:
 
 A Spinifex cluster distributes services across multiple servers for high availability, data durability, and fault tolerance. Cluster formation is automatic — the init node waits for peers to join, then distributes credentials, CA certificates, and configuration.
 
-**Network requirements:**
+**Network Requirements:**
 
 - Minimum 1 NIC per server (2 recommended for production)
 - UDP port 6081 open between hosts (Geneve tunnels)
@@ -59,7 +59,7 @@ export AWS_AZ=us-east-1a
 
 ## Step 3. Setup OVN Networking
 
-Server 1 runs OVN central and must be set up first. If your WAN interface is already a bridge (e.g. `br-wan`), setup-ovn.sh auto-detects it. Otherwise use `--wan-bridge=br-wan --wan-iface=eth1` (dedicated WAN NIC).
+Server 1 runs OVN central and must be set up first. If your WAN interface is already a bridge, setup-ovn.sh auto-detects it. Otherwise use `--wan-bridge=br-wan --wan-iface=eth1` (dedicated WAN NIC).
 
 **Server 1:**
 
@@ -104,8 +104,6 @@ sudo spx admin init \
   --port 4432 --region $AWS_REGION --az $AWS_AZ
 ```
 
-Save the admin credentials — they will not be shown again.
-
 The init output displays the join command including the token:
 
 ```
@@ -114,7 +112,7 @@ The init output displays the join command including the token:
    Token expires in 30m0s
 
    Other nodes should run:
-   spx admin join --host 10.0.0.1:4432 --token spx_join_a8Bf3x9Kz2mN --node <name> --bind <ip>
+   sudo spx admin join --host 10.0.0.1:4432 --token spx_join_a8Bf3x9Kz2mN --node <name> --bind <ip>
 ```
 
 **Server 2 — Join** (while init is running):
@@ -135,8 +133,7 @@ sudo spx admin join \
   --region $AWS_REGION --az $AWS_AZ
 ```
 
-> **Note:** The join token expires 30 minutes after init by default. For larger deployments
-> with slower provisioning, use `--token-ttl 2h` on the init command.
+**Note:** The join token expires 30 minutes after init by default. For larger deployments with slower provisioning, use `--token-ttl 2h`
 
 ## Step 5. Start Services
 
@@ -181,7 +178,7 @@ sudo ss -tlnp | grep 6642
 ### CA Certificate Not Trusted
 
 ```bash
-sudo cp ~/spinifex/config/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
+sudo cp /etc/spinifex/ca.pem /usr/local/share/ca-certificates/spinifex-ca.crt
 sudo update-ca-certificates
 ```
 

@@ -1,6 +1,6 @@
 ---
 title: "Air-Gapped Install"
-description: "Deploy Spinifex in environments without internet connectivity. Covers offline package caching, USB deployment, and package verification."
+description: "Deploy Spinifex in environments without internet connectivity. Covers using a pre-built release tarball, mirrored APT packages, and locally-staged cloud images."
 category: "Getting Started"
 tags:
   - install
@@ -9,8 +9,8 @@ tags:
 resources:
   - title: "Spinifex Repository"
     url: "https://github.com/mulgadc/spinifex"
-  - title: "apt-cacher-ng"
-    url: "https://wiki.debian.org/AptCacherNg"
+  - title: "External Connection Inventory"
+    url: "/docs/security/network-connections"
 ---
 
 # Air-Gapped Installation
@@ -29,103 +29,158 @@ resources:
 
 In air-gapped or disconnected environments, Spinifex can be deployed without internet access. This guide covers preparing offline packages on a connected machine, creating USB deployment media, and installing on the target server with package verification.
 
-**Deployment methods:**
-- **apt-cacher-ng** — Local APT cache for Debian/Ubuntu packages
-- **Go module cache** — Pre-downloaded Go dependencies
-- **USB deployment** — Portable installation media with all dependencies
-- **GPG verification** — Cryptographic package integrity checks
-
 ## Instructions
 
-## Step 1. Prepare Packages (on a connected machine)
+## Step 1. Download the Release (on a connected machine)
 
-Set up a local APT cache to collect all required packages:
+Each Spinifex release publishes a self-contained tarball, the matching `setup.sh`, and a SHA-256 checksum to GitHub Releases. Resolve the latest tag and download the assets for your architecture:
 
 ```bash
-sudo apt install apt-cacher-ng
-sudo systemctl enable --now apt-cacher-ng
+ARCH=amd64   # or arm64
+TAG=$(curl -fsSL https://api.github.com/repos/mulgadc/spinifex/releases/latest \
+  | grep '"tag_name"' | cut -d'"' -f4)
+
+BASE="https://github.com/mulgadc/spinifex/releases/download/${TAG}"
+curl -fsSLO "${BASE}/spinifex-${TAG}-linux-${ARCH}.tar.gz"
+curl -fsSLO "${BASE}/spinifex-${TAG}-linux-${ARCH}.tar.gz.sha256"
+curl -fsSLO "${BASE}/setup.sh"
+
+sha256sum -c "spinifex-${TAG}-linux-${ARCH}.tar.gz.sha256"
 ```
 
-Pre-download all Spinifex dependencies:
+## Step 2. Stage Dependencies (on the connected machine)
+
+Pre-download the APT packages installed by the production setup. `apt install --download-only` writes `.deb` files to `/var/cache/apt/archives/` without installing them, so the connected machine isn't modified:
 
 ```bash
-sudo apt install --download-only nbdkit nbdkit-plugin-dev pkg-config \
-  qemu-system qemu-utils qemu-kvm libvirt-daemon-system \
-  libvirt-clients libvirt-dev make gcc unzip xz-utils file \
-  ovn-central ovn-host openvswitch-switch
+sudo apt update
+sudo apt install --download-only -y \
+  nbdkit nbdkit-plugin-dev pkg-config \
+  qemu-system-x86 qemu-utils qemu-kvm \
+  libvirt-daemon-system libvirt-clients libvirt-dev \
+  ovn-central ovn-host openvswitch-switch \
+  dhcpcd-base make gcc jq curl iproute2 netcat-openbsd \
+  wget unzip xz-utils file
 ```
 
-## Step 2. Create USB Deployment Media
+Download AWS CLI v2:
 
 ```bash
-mkdir -p /media/spinifex-deploy/{apt-packages,go-cache,spinifex-source}
+curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" \
+  -o awscliv2.zip
+```
+
+Mirror the cloud image you intend to run as guest VMs:
+
+```bash
+mkdir -p images
+curl -fsSL "https://cdimage.debian.org/cdimage/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2" \
+  -o images/debian-12-amd64.qcow2
+```
+
+## Step 3. Assemble Transfer Media
+
+```bash
+mkdir -p /media/spinifex-deploy/{tarball,apt-packages,aws,images}
+cp spinifex-${TAG}-linux-${ARCH}.tar.gz /media/spinifex-deploy/tarball/
+cp setup.sh /media/spinifex-deploy/
 cp /var/cache/apt/archives/*.deb /media/spinifex-deploy/apt-packages/
-cp -r ~/go/pkg/mod/cache/ /media/spinifex-deploy/go-cache/
-cp -r ~/Development/mulga/spinifex /media/spinifex-deploy/spinifex-source/
+cp awscliv2.zip /media/spinifex-deploy/aws/
+cp images/*.qcow2 /media/spinifex-deploy/images/
 ```
 
-## Step 3. Verify Package Integrity
+## Step 4. Install on the Air-Gapped Target
 
-Sign and verify packages before transferring to the target:
-
-```bash
-gpg --import /media/spinifex-deploy/mulga-signing-key.asc
-gpg --verify spinifex-v1.0.tar.gz.sig spinifex-v1.0.tar.gz
-sha256sum -c /media/spinifex-deploy/checksums.sha256
-```
-
-## Step 4. Install on the Target Server
-
-Mount the USB and install:
+Mount the media, install APT dependencies, install AWS CLI, then run `setup.sh` with the local tarball:
 
 ```bash
 sudo mount /dev/sdb1 /mnt/usb
+
 sudo dpkg -i /mnt/usb/apt-packages/*.deb
-cp -r /mnt/usb/spinifex-source ~/Development/mulga/spinifex
-cd ~/Development/mulga/spinifex && make build
+sudo apt-get install -f --no-download   # resolve any leftover deps from local cache
+
+cd /tmp && unzip /mnt/usb/aws/awscliv2.zip && sudo ./aws/install
+
+INSTALL_SPINIFEX_TARBALL=/mnt/usb/tarball/spinifex-*-linux-*.tar.gz \
+INSTALL_SPINIFEX_SKIP_APT=1 \
+INSTALL_SPINIFEX_SKIP_AWS=1 \
+bash /mnt/usb/setup.sh
 ```
 
-Then follow the [Source Install](/docs/install-source) guide from Step 3 (Setup OVN) onwards.
+Run `setup.sh` without `sudo` — the script handles privilege escalation internally and ends by `exec`-ing into a `newgrp spinifex` subshell so your current shell picks up `spinifex` group membership. Without that membership, AWS CLI cannot traverse `/etc/spinifex/` (mode `0750`) to read `ca.pem` and Step 9 will fail with a TLS error. Type `exit` to leave the subshell when finished.
+
+## Step 5. Setup OVN Networking
+
+`spx admin init` requires OVN/OVS to be configured before the daemon can manage tenant networks. `setup-ovn.sh` ships in the tarball and runs purely against local commands (no network access required):
+
+```bash
+sudo /usr/local/share/spinifex/setup-ovn.sh --management
+```
+
+If your WAN interface is a physical NIC rather than a bridge, pass `--wan-bridge=br-wan --wan-iface=<nic>`.
+
+## Step 6. Initialize Without Telemetry
+
+```bash
+sudo spx admin init --node node1 --nodes 1 --no-telemetry
+```
+
+This generates the cluster configuration, TLS certificates, installs the CA into the system trust store, and writes AWS CLI credentials. See [Single-Node Install](/docs/install) for what `spx admin init` does.
+
+## Step 7. Start Services
+
+`setup.sh` enables `spinifex.target` but does not start it on a fresh install. Start it now so predastore is online before you import images:
+
+```bash
+sudo systemctl start spinifex.target
+```
+
+## Step 8. Import Cloud Images
+
+Register the pre-staged image with Spinifex:
+
+```bash
+sudo spx admin images import --file /mnt/usb/images/debian-12-amd64.qcow2 \
+  --distro debian --version 12 --arch x86_64
+```
+
+## Step 9. Verify
+
+```bash
+export AWS_PROFILE=spinifex
+aws ec2 describe-instance-types
+aws ec2 describe-images
+```
+
+If both calls return data, your air-gapped install is working. Continue to [Setting Up Your Cluster](/docs/setting-up-your-cluster) to launch your first instance.
 
 ## Troubleshooting
 
-### Missing Dependencies After dpkg Install
+### Missing APT Dependencies
 
-Some packages may have unresolved dependencies. Fix with:
-
-```bash
-sudo dpkg -i /mnt/usb/apt-packages/*.deb
-sudo apt-get install -f
-```
-
-The `-f` flag tells apt to fix broken dependencies using what's available locally.
-
-### GPG Verification Fails
-
-The signing key may not match or the download was corrupted. Re-import the key and verify:
+`dpkg -i` does not resolve transitive dependencies. After installing, run:
 
 ```bash
-gpg --import /media/spinifex-deploy/mulga-signing-key.asc
-gpg --verify spinifex-v1.0.tar.gz.sig spinifex-v1.0.tar.gz
+sudo apt-get install -f --no-download
 ```
 
-If verification still fails, re-download the package on the connected machine and compare checksums:
+The `--no-download` flag forces apt to use only what's in the local cache. If a dependency is genuinely missing, add it to the `apt --download-only` step on the connected machine and re-stage.
+
+### Setup.sh Tries to Download Anyway
+
+Confirm both skip flags are exported and that `INSTALL_SPINIFEX_TARBALL` points at a readable file:
 
 ```bash
-sha256sum spinifex-v1.0.tar.gz
+sudo INSTALL_SPINIFEX_TARBALL=/mnt/usb/tarball/spinifex-...tar.gz \
+     INSTALL_SPINIFEX_SKIP_APT=1 \
+     INSTALL_SPINIFEX_SKIP_AWS=1 \
+     bash -x /mnt/usb/setup.sh
 ```
 
-### Go Module Cache Errors
+### Init Telemetry Attempted
 
-The Go module cache may have been incompletely copied. On the connected machine, re-export the full cache:
+`spx admin init` posts a one-shot record to `https://install.mulgadc.com/install`. Pass `--no-telemetry` on every `init` and `join` invocation, or export `SPX_NO_TELEMETRY=1` in the operator's shell profile.
 
-```bash
-cp -r ~/go/pkg/mod/cache/ /media/spinifex-deploy/go-cache/
-```
+### Image Import Fails
 
-On the target, restore it:
-
-```bash
-mkdir -p ~/go/pkg/mod/
-cp -r /mnt/usb/go-cache ~/go/pkg/mod/cache
-```
+`spx admin images import --file` requires the distro/version/arch flags so the image registers in the catalogue. If the import succeeds but `aws ec2 describe-images` returns empty, check `journalctl -u spinifex-daemon -f` for predastore upload errors.
