@@ -2794,7 +2794,7 @@ func (d *Daemon) wireLBAgentConfig() {
 	}
 
 	if d.mgmtBridgeIP != "" {
-		if awsgwBindIP != "" && awsgwBindIP != "0.0.0.0" {
+		if awsgwBindIP != "" && awsgwBindIP != "0.0.0.0" && !net.ParseIP(awsgwBindIP).IsLoopback() {
 			// Multi-node: AWSGW listens on a specific WAN IP. Use that IP
 			// as the gateway URL. Internal LBs will get a host route via
 			// br-mgmt to reach it (see LaunchSystemInstance).
