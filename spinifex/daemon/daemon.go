@@ -403,6 +403,7 @@ func (d *Daemon) subscribeAll() error {
 		{"ec2.CreateImage", d.handleEC2CreateImage, ""},
 		{"ec2.DeregisterImage", d.handleEC2DeregisterImage, "spinifex-workers"},
 		{"ec2.RegisterImage", d.handleEC2RegisterImage, "spinifex-workers"},
+		{"ec2.CopyImage", d.handleEC2CopyImage, "spinifex-workers"},
 		{"ec2.CreateVolume", d.handleEC2CreateVolume, "spinifex-workers"},
 		{"ec2.DescribeVolumes", d.handleEC2DescribeVolumes, "spinifex-workers"},
 		{"ec2.ModifyVolume", d.handleEC2ModifyVolume, "spinifex-workers"},

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -750,8 +751,129 @@ func (s *ImageServiceImpl) putSnapshotMetadata(snapshotID, volumeID string, volu
 	return err
 }
 
+// CopyImage clones an AMI into a new one owned by the caller. Same-region,
+// metadata-only: the new snapshot shares the source's VolumeID (no block
+// copy), and a fresh `ami-xxx/config.json` points at it. Mirrors the narrow
+// scope. cross-region / encryption / Outposts are rejected at the gateway before we
+// get here.
 func (s *ImageServiceImpl) CopyImage(input *ec2.CopyImageInput, accountID string) (*ec2.CopyImageOutput, error) {
-	return nil, errors.New("CopyImage not yet implemented")
+	if input == nil || input.Name == nil || *input.Name == "" ||
+		input.SourceImageId == nil || *input.SourceImageId == "" {
+		return nil, errors.New(awserrors.ErrorMissingParameter)
+	}
+
+	name := *input.Name
+	sourceImageID := *input.SourceImageId
+
+	if exists, err := s.amiNameExists(name); err != nil {
+		slog.Error("CopyImage: failed to check AMI name uniqueness", "name", name, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	} else if exists {
+		return nil, errors.New(awserrors.ErrorInvalidAMINameDuplicate)
+	}
+
+	srcMeta, err := s.GetAMIConfig(sourceImageID)
+	if err != nil {
+		if objectstore.IsNoSuchKeyError(err) {
+			return nil, errors.New(awserrors.ErrorInvalidAMIIDNotFound)
+		}
+		slog.Error("CopyImage: failed to read source AMI config", "sourceImageId", sourceImageID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	// Visibility check: the caller must own the source OR the source must be
+	// a system AMI (non-account-ID owner). Anything else hides existence by
+	// returning NotFound, mirroring DescribeImages' silent cross-account
+	// filter.
+	srcOwner := srcMeta.ImageOwnerAlias
+	if utils.IsAccountID(srcOwner) && srcOwner != accountID {
+		return nil, errors.New(awserrors.ErrorInvalidAMIIDNotFound)
+	}
+
+	// Orphaned source: either the AMI doesn't record a SnapshotID (admin-
+	// imported bundled-storage AMIs are not copyable by this API) or the
+	// snapshot itself is gone. Either way we treat it as if the AMI were
+	// missing — don't leak the half-broken state to the caller.
+	if srcMeta.SnapshotID == "" {
+		return nil, errors.New(awserrors.ErrorInvalidAMIIDNotFound)
+	}
+	srcSnap, err := s.getSnapshotMetadata(srcMeta.SnapshotID)
+	if err != nil {
+		if objectstore.IsNoSuchKeyError(err) {
+			return nil, errors.New(awserrors.ErrorInvalidAMIIDNotFound)
+		}
+		slog.Error("CopyImage: failed to read source snapshot metadata",
+			"sourceImageId", sourceImageID, "snapshotId", srcMeta.SnapshotID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	newSnapshotID := utils.GenerateResourceID("snap")
+	newImageID := utils.GenerateResourceID("ami")
+
+	// New snap inherits source VolumeID — blocks are shared, no copy runs.
+	snapSizeGiB := uint64(0)
+	if srcSnap.VolumeSize > 0 {
+		snapSizeGiB = uint64(srcSnap.VolumeSize)
+	}
+	if err := s.putSnapshotMetadata(newSnapshotID, srcSnap.VolumeID, snapSizeGiB, accountID); err != nil {
+		slog.Error("CopyImage: failed to write snapshot metadata", "snapshotId", newSnapshotID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	description := srcMeta.Description
+	if input.Description != nil {
+		description = *input.Description
+	}
+
+	rootDeviceType := srcMeta.RootDeviceType
+	if rootDeviceType == "" {
+		rootDeviceType = "ebs"
+	}
+
+	tags := mergeCopyImageTags(srcMeta.Tags, input.TagSpecifications, aws.BoolValue(input.CopyImageTags))
+
+	meta := viperblock.AMIMetadata{
+		ImageID:         newImageID,
+		Name:            name,
+		Description:     description,
+		SnapshotID:      newSnapshotID,
+		Architecture:    srcMeta.Architecture,
+		PlatformDetails: srcMeta.PlatformDetails,
+		Virtualization:  srcMeta.Virtualization,
+		VolumeSizeGiB:   srcMeta.VolumeSizeGiB,
+		RootDeviceType:  rootDeviceType,
+		ImageOwnerAlias: accountID,
+		CreationDate:    time.Now(),
+		Tags:            tags,
+	}
+
+	if err := s.putAMIConfig(newImageID, meta); err != nil {
+		slog.Error("CopyImage: failed to write AMI config", "amiId", newImageID, "err", err)
+		return nil, errors.New(awserrors.ErrorServerInternal)
+	}
+
+	slog.Info("CopyImage completed",
+		"sourceImageId", sourceImageID, "newImageId", newImageID,
+		"sourceSnapshotId", srcMeta.SnapshotID, "newSnapshotId", newSnapshotID,
+		"accountId", accountID)
+
+	return &ec2.CopyImageOutput{ImageId: aws.String(newImageID)}, nil
+}
+
+// mergeCopyImageTags returns the tag map for the copied AMI. When CopyImageTags
+// is true the source's tags seed the result; explicit image-resource tags in
+// TagSpecifications override any colliding source keys. Non-image tag specs
+// are ignored (matches RegisterImage's behaviour).
+func mergeCopyImageTags(srcTags map[string]string, specs []*ec2.TagSpecification, copyImageTags bool) map[string]string {
+	merged := make(map[string]string)
+	if copyImageTags {
+		maps.Copy(merged, srcTags)
+	}
+	maps.Copy(merged, tagsFromImageSpecifications(specs))
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
 }
 
 func (s *ImageServiceImpl) DescribeImageAttribute(input *ec2.DescribeImageAttributeInput, accountID string) (*ec2.DescribeImageAttributeOutput, error) {

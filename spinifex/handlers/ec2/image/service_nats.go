@@ -31,7 +31,7 @@ func (s *NATSImageService) CreateImage(input *ec2.CreateImageInput, accountID st
 }
 
 func (s *NATSImageService) CopyImage(input *ec2.CopyImageInput, accountID string) (*ec2.CopyImageOutput, error) {
-	return nil, errors.New("CopyImage not yet implemented")
+	return utils.NATSRequest[ec2.CopyImageOutput](s.natsConn, "ec2.CopyImage", input, 30*time.Second, accountID)
 }
 
 func (s *NATSImageService) DescribeImageAttribute(input *ec2.DescribeImageAttributeInput, accountID string) (*ec2.DescribeImageAttributeOutput, error) {

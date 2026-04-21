@@ -836,9 +836,6 @@ func TestUnimplementedMethods(t *testing.T) {
 	_, err := svc.CreateImage(nil, "")
 	assert.Error(t, err)
 
-	_, err = svc.CopyImage(nil, "")
-	assert.Error(t, err)
-
 	_, err = svc.DescribeImageAttribute(nil, "")
 	assert.Error(t, err)
 
@@ -1394,4 +1391,348 @@ func TestRegisterImage_OwnerSetToCaller(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, testAccountID, meta.ImageOwnerAlias)
 	assert.False(t, meta.CreationDate.IsZero())
+}
+
+// --- CopyImage tests ---
+
+// putTestAMIConfigWithSnapshot seeds an AMI config that carries a real
+// SnapshotID — distinct from createTestAMIConfigWithOwner which sets no
+// snapshot and would be treated as orphaned by CopyImage.
+func putTestAMIConfigWithSnapshot(t *testing.T, store *objectstore.MemoryObjectStore, imageID, name, owner, snapshotID string, meta viperblock.AMIMetadata) {
+	t.Helper()
+	meta.ImageID = imageID
+	meta.Name = name
+	meta.ImageOwnerAlias = owner
+	meta.SnapshotID = snapshotID
+	if meta.Architecture == "" {
+		meta.Architecture = "x86_64"
+	}
+	if meta.PlatformDetails == "" {
+		meta.PlatformDetails = "Linux/UNIX"
+	}
+	if meta.Virtualization == "" {
+		meta.Virtualization = "hvm"
+	}
+	if meta.RootDeviceType == "" {
+		meta.RootDeviceType = "ebs"
+	}
+	if meta.VolumeSizeGiB == 0 {
+		meta.VolumeSizeGiB = 8
+	}
+	amiState := viperblock.VBState{
+		VolumeConfig: viperblock.VolumeConfig{AMIMetadata: meta},
+	}
+	data, err := json.Marshal(amiState)
+	require.NoError(t, err)
+	_, err = store.PutObject(&awss3.PutObjectInput{
+		Bucket:      aws.String(testBucket),
+		Key:         aws.String(imageID + "/config.json"),
+		Body:        strings.NewReader(string(data)),
+		ContentType: aws.String("application/json"),
+	})
+	require.NoError(t, err)
+}
+
+// seedCopyableAMI writes a matching (snapshot, AMI) pair so CopyImage can
+// complete end-to-end. Returns the AMI metadata that was persisted (callers
+// can customise fields before seeding by tweaking the returned VolumeID /
+// tags via preceding calls, but the helper takes the simple path for the
+// happy case).
+func seedCopyableAMI(t *testing.T, store *objectstore.MemoryObjectStore, imageID, name, owner, snapshotID, volumeID string, sizeGiB int64) {
+	t.Helper()
+	cfg := handlers_ec2_snapshot.SnapshotConfig{
+		SnapshotID: snapshotID,
+		VolumeID:   volumeID,
+		VolumeSize: sizeGiB,
+		State:      "completed",
+		Progress:   "100%",
+		OwnerID:    owner,
+	}
+	data, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	_, err = store.PutObject(&awss3.PutObjectInput{
+		Bucket:      aws.String(testBucket),
+		Key:         aws.String(snapshotID + "/metadata.json"),
+		Body:        strings.NewReader(string(data)),
+		ContentType: aws.String("application/json"),
+	})
+	require.NoError(t, err)
+
+	putTestAMIConfigWithSnapshot(t, store, imageID, name, owner, snapshotID, viperblock.AMIMetadata{
+		VolumeSizeGiB: uint64(sizeGiB),
+		Description:   "source desc",
+	})
+}
+
+func validCopyImageServiceInput(sourceImageID, newName string) *ec2.CopyImageInput {
+	return &ec2.CopyImageInput{
+		Name:          aws.String(newName),
+		SourceImageId: aws.String(sourceImageID),
+		SourceRegion:  aws.String("ap-southeast-2"),
+	}
+}
+
+func TestCopyImage_HappyPath(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	seedCopyableAMI(t, store, "ami-src001", "source-ami", testAccountID, "snap-src001", "vol-src001", 8)
+
+	out, err := svc.CopyImage(validCopyImageServiceInput("ami-src001", "copy-of-source"), testAccountID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	require.NotNil(t, out.ImageId)
+	assert.True(t, strings.HasPrefix(*out.ImageId, "ami-"))
+	assert.NotEqual(t, "ami-src001", *out.ImageId)
+
+	// New AMI visible via DescribeImages, owned by caller.
+	desc, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		ImageIds: []*string{out.ImageId},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, desc.Images, 1)
+	img := desc.Images[0]
+	assert.Equal(t, "copy-of-source", *img.Name)
+	assert.Equal(t, testAccountID, *img.OwnerId)
+
+	// Source untouched.
+	srcDesc, err := svc.DescribeImages(&ec2.DescribeImagesInput{
+		ImageIds: []*string{aws.String("ami-src001")},
+	}, testAccountID)
+	require.NoError(t, err)
+	require.Len(t, srcDesc.Images, 1)
+	assert.Equal(t, "source-ami", *srcDesc.Images[0].Name)
+}
+
+func TestCopyImage_NewSnapshotSharesSourceVolumeID(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	seedCopyableAMI(t, store, "ami-shareblocks", "shareblocks", testAccountID, "snap-orig", "vol-shared", 16)
+
+	out, err := svc.CopyImage(validCopyImageServiceInput("ami-shareblocks", "shared-copy"), testAccountID)
+	require.NoError(t, err)
+
+	newMeta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	require.NotEqual(t, "snap-orig", newMeta.SnapshotID)
+
+	newSnap, err := svc.getSnapshotMetadata(newMeta.SnapshotID)
+	require.NoError(t, err)
+	assert.Equal(t, "vol-shared", newSnap.VolumeID)
+	assert.Equal(t, int64(16), newSnap.VolumeSize)
+	assert.Equal(t, testAccountID, newSnap.OwnerID)
+}
+
+func TestCopyImage_SystemAMICopiedIntoCallerAccount(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// System AMI (non-account-ID owner) with a snapshot also owned by system.
+	seedCopyableAMI(t, store, "ami-system001", "debian-system", "spinifex", "snap-system001", "vol-sys", 8)
+
+	out, err := svc.CopyImage(validCopyImageServiceInput("ami-system001", "my-debian"), testAccountID)
+	require.NoError(t, err)
+
+	newMeta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, testAccountID, newMeta.ImageOwnerAlias)
+
+	// Source unchanged — still owned by "spinifex".
+	srcMeta, err := svc.GetAMIConfig("ami-system001")
+	require.NoError(t, err)
+	assert.Equal(t, "spinifex", srcMeta.ImageOwnerAlias)
+}
+
+func TestCopyImage_CrossAccountHidesExistence(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	seedCopyableAMI(t, store, "ami-other001", "other-acct", "000000000002", "snap-other001", "vol-other", 8)
+
+	_, err := svc.CopyImage(validCopyImageServiceInput("ami-other001", "stolen-copy"), testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
+}
+
+func TestCopyImage_SourceNotFound(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+
+	_, err := svc.CopyImage(validCopyImageServiceInput("ami-missing", "copy"), testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
+}
+
+func TestCopyImage_OrphanedSource_MissingSnapshot(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// AMI config points at a snapshot that doesn't exist on S3.
+	putTestAMIConfigWithSnapshot(t, store, "ami-orphan", "orphan", testAccountID, "snap-ghost", viperblock.AMIMetadata{})
+
+	_, err := svc.CopyImage(validCopyImageServiceInput("ami-orphan", "orphan-copy"), testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
+}
+
+func TestCopyImage_OrphanedSource_NoSnapshotID(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	// Admin-imported bundled-storage AMI: no SnapshotID. Not copyable by this API.
+	createTestAMIConfigWithOwner(t, store, "ami-bundled", "bundled", testAccountID)
+
+	_, err := svc.CopyImage(validCopyImageServiceInput("ami-bundled", "bundled-copy"), testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMIIDNotFound, err.Error())
+}
+
+func TestCopyImage_DuplicateName(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	seedCopyableAMI(t, store, "ami-dup-src", "source", testAccountID, "snap-dup-src", "vol-dup", 8)
+	createTestAMIConfigWithOwner(t, store, "ami-collide", "already-taken", testAccountID)
+
+	_, err := svc.CopyImage(validCopyImageServiceInput("ami-dup-src", "already-taken"), testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorInvalidAMINameDuplicate, err.Error())
+}
+
+func TestCopyImage_CopyImageTagsInheritsSourceTags(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	seedCopyableAMI(t, store, "ami-tagged-src", "tagged", testAccountID, "snap-tagged", "vol-tagged", 8)
+
+	// Overlay source tags on the seeded AMI.
+	srcMeta, err := svc.GetAMIConfig("ami-tagged-src")
+	require.NoError(t, err)
+	srcMeta.Tags = map[string]string{"Env": "prod", "Owner": "team-a"}
+	require.NoError(t, svc.putAMIConfig("ami-tagged-src", srcMeta))
+
+	input := validCopyImageServiceInput("ami-tagged-src", "copy-inherit-tags")
+	input.CopyImageTags = aws.Bool(true)
+
+	out, err := svc.CopyImage(input, testAccountID)
+	require.NoError(t, err)
+
+	newMeta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, "prod", newMeta.Tags["Env"])
+	assert.Equal(t, "team-a", newMeta.Tags["Owner"])
+}
+
+func TestCopyImage_ExplicitTagsOverrideSourceTags(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	seedCopyableAMI(t, store, "ami-merge-src", "merge-src", testAccountID, "snap-merge", "vol-merge", 8)
+
+	srcMeta, err := svc.GetAMIConfig("ami-merge-src")
+	require.NoError(t, err)
+	srcMeta.Tags = map[string]string{"Env": "prod", "Owner": "team-a"}
+	require.NoError(t, svc.putAMIConfig("ami-merge-src", srcMeta))
+
+	input := validCopyImageServiceInput("ami-merge-src", "merge-copy")
+	input.CopyImageTags = aws.Bool(true)
+	input.TagSpecifications = []*ec2.TagSpecification{
+		{
+			ResourceType: aws.String("image"),
+			Tags: []*ec2.Tag{
+				// Override a source tag and add a new one.
+				{Key: aws.String("Env"), Value: aws.String("staging")},
+				{Key: aws.String("Region"), Value: aws.String("apse2")},
+			},
+		},
+		{
+			// Non-image specs are ignored.
+			ResourceType: aws.String("snapshot"),
+			Tags: []*ec2.Tag{
+				{Key: aws.String("ShouldNotAppear"), Value: aws.String("x")},
+			},
+		},
+	}
+
+	out, err := svc.CopyImage(input, testAccountID)
+	require.NoError(t, err)
+
+	newMeta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, "staging", newMeta.Tags["Env"])  // overridden
+	assert.Equal(t, "team-a", newMeta.Tags["Owner"]) // inherited
+	assert.Equal(t, "apse2", newMeta.Tags["Region"]) // added
+	_, ok := newMeta.Tags["ShouldNotAppear"]
+	assert.False(t, ok)
+}
+
+func TestCopyImage_CopyImageTagsFalseDropsSourceTags(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	seedCopyableAMI(t, store, "ami-drop-src", "drop-src", testAccountID, "snap-drop", "vol-drop", 8)
+
+	srcMeta, err := svc.GetAMIConfig("ami-drop-src")
+	require.NoError(t, err)
+	srcMeta.Tags = map[string]string{"Env": "prod"}
+	require.NoError(t, svc.putAMIConfig("ami-drop-src", srcMeta))
+
+	input := validCopyImageServiceInput("ami-drop-src", "drop-copy")
+	// CopyImageTags unset — default behaviour drops source tags.
+	input.TagSpecifications = []*ec2.TagSpecification{
+		{
+			ResourceType: aws.String("image"),
+			Tags: []*ec2.Tag{
+				{Key: aws.String("New"), Value: aws.String("yes")},
+			},
+		},
+	}
+
+	out, err := svc.CopyImage(input, testAccountID)
+	require.NoError(t, err)
+
+	newMeta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, "yes", newMeta.Tags["New"])
+	_, hasEnv := newMeta.Tags["Env"]
+	assert.False(t, hasEnv)
+}
+
+func TestCopyImage_DescriptionInheritedWhenUnset(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	seedCopyableAMI(t, store, "ami-desc-src", "desc-src", testAccountID, "snap-desc", "vol-desc", 8)
+
+	out, err := svc.CopyImage(validCopyImageServiceInput("ami-desc-src", "desc-inherit"), testAccountID)
+	require.NoError(t, err)
+
+	newMeta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, "source desc", newMeta.Description)
+}
+
+func TestCopyImage_DescriptionOverriddenWhenSet(t *testing.T) {
+	svc, store := setupTestImageService(t)
+
+	seedCopyableAMI(t, store, "ami-desc-ov", "desc-ov", testAccountID, "snap-ov", "vol-ov", 8)
+
+	input := validCopyImageServiceInput("ami-desc-ov", "desc-override")
+	input.Description = aws.String("explicit override")
+
+	out, err := svc.CopyImage(input, testAccountID)
+	require.NoError(t, err)
+
+	newMeta, err := svc.GetAMIConfig(*out.ImageId)
+	require.NoError(t, err)
+	assert.Equal(t, "explicit override", newMeta.Description)
+}
+
+func TestCopyImage_MissingRequiredFields(t *testing.T) {
+	svc, _ := setupTestImageService(t)
+
+	_, err := svc.CopyImage(nil, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
+
+	_, err = svc.CopyImage(&ec2.CopyImageInput{
+		SourceImageId: aws.String("ami-123"),
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
+
+	_, err = svc.CopyImage(&ec2.CopyImageInput{
+		Name: aws.String("only-name"),
+	}, testAccountID)
+	require.Error(t, err)
+	assert.Equal(t, awserrors.ErrorMissingParameter, err.Error())
 }
